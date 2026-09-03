@@ -1,0 +1,28 @@
+[Unit]
+Description=RDK Sim2Real protocol-only Mock worker (no CUDA, no RL)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+Group=root
+WorkingDirectory=/opt/sim2real-web/current
+Environment=NODE_ENV=production
+Environment=RDK_SIM2REAL_MOCK_BIND_HOST=127.0.0.1
+Environment=RDK_SIM2REAL_MOCK_PORT=19090
+Environment=RDK_SIM2REAL_MOCK_DATA_DIR=/opt/sim2real-web/mock-worker-data
+Environment=PATH=/opt/node-v22.16.0-linux-x64/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin
+ExecStart=/opt/node-v22.16.0-linux-x64/bin/node /opt/sim2real-web/current/mock-local-worker.mjs
+Restart=always
+RestartSec=3
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=strict
+PrivateDevices=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+ReadWritePaths=/opt/sim2real-web/mock-worker-data
+
+[Install]
+WantedBy=multi-user.target

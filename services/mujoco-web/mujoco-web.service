@@ -1,0 +1,23 @@
+[Unit]
+Description=RDK Studio MuJoCo Web Playground
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=mujoco
+Group=mujoco
+WorkingDirectory=/opt/mujoco-web/current
+Environment=MUJOCO_GL=egl
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/opt/mujoco-web/venv/bin/uvicorn app:app --host 127.0.0.1 --port 18100 --workers 1
+Restart=always
+RestartSec=3
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=strict
+ReadWritePaths=/opt/mujoco-web
+
+[Install]
+WantedBy=multi-user.target

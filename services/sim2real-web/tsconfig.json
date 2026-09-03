@@ -1,0 +1,14 @@
+{
+  "extends": "../../tsconfig.json",
+  "compilerOptions": {
+    "outDir": "../../dist-sim2real-web",
+    "rootDir": "../.."
+  },
+  "include": ["./server.ts", "../../server/**/*.ts", "../../shared/**/*.ts"],
+  "exclude": [
+    "../../server/**/*.test.ts",
+    "../../server/**/*.spec.ts",
+    "../../shared/**/*.test.ts",
+    "../../shared/**/*.spec.ts"
+  ]
+}

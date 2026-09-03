@@ -1,0 +1,4 @@
+fastapi==0.141.1
+uvicorn[standard]==0.52.4
+mujoco==3.12.0
+Pillow==12.3.0

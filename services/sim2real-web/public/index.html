@@ -1,0 +1,1135 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="description" content="面向 RDK X5 的 Duck 仿真、训练与部署平台" />
+    <title>RDK Duck Sim2Real Lab</title>
+    <link rel="stylesheet" href="./styles.css?v=duck-lab-02" />
+  </head>
+  <body>
+    <div class="app-shell">
+      <header class="topbar">
+        <a class="brand" href="./" aria-label="RDK Duck Sim2Real Lab 首页">
+          <span class="brand-mark">D</span>
+          <span
+            ><span class="brand-kicker">RDK X5 · SIM2REAL PLATFORM</span
+            ><strong>Sim2Real Lab</strong></span
+          >
+        </a>
+        <div class="topbar-context">
+          <span class="context-label">当前项目</span
+          ><strong id="current-project-name">MicroDuck · X5 Starter</strong
+          ><span class="account-pill" id="account-status" hidden></span
+          ><span class="context-divider" id="account-divider" hidden></span
+          ><span class="service-pill"
+            ><i class="status-dot"></i><span id="service-status">连接中</span></span
+          >
+        </div>
+        <div class="top-actions">
+          <a
+            class="button button-primary"
+            id="login-link"
+            href="/rdkstudio/"
+            target="_blank"
+            rel="noreferrer"
+            hidden
+            >登录工作区</a
+          ><button class="button button-ghost" id="refresh-button" type="button">刷新</button
+          ><a class="button button-ghost" href="/rdkstudio/" target="_blank" rel="noreferrer"
+            >RDK Studio ↗</a
+          >
+        </div>
+      </header>
+
+      <div class="shell-layout">
+        <aside class="sidebar" aria-label="平台导航">
+          <div class="sidebar-project">
+            <span class="sidebar-project-icon">◇</span>
+            <div>
+              <strong id="sidebar-product-name">MicroDuck</strong
+              ><span id="sidebar-kit-name">RDK X5 Starter Kit</span>
+            </div>
+            <span class="sidebar-project-state">LIVE</span>
+          </div>
+          <div class="nav-label">Sim2Real 工作流</div>
+          <nav class="workflow-nav" aria-label="Duck 工作流">
+            <button
+              class="nav-item is-active"
+              type="button"
+              data-view-target="overview"
+              aria-current="page"
+            >
+              <span class="nav-index">01</span
+              ><span><strong>总览</strong><small>下一步做什么</small></span>
+            </button>
+            <button class="nav-item" type="button" data-view-target="simulate">
+              <span class="nav-index">02</span
+              ><span><strong>仿真与录制</strong><small>演示、记录、回放</small></span>
+            </button>
+            <button class="nav-item" type="button" data-view-target="train">
+              <span class="nav-index">03</span
+              ><span><strong>训练与模型</strong><small>本地或 RoboGo</small></span>
+            </button>
+            <button class="nav-item" type="button" data-view-target="evaluate">
+              <span class="nav-index">04</span
+              ><span><strong>评测与效果</strong><small>仿真 / 真机对比</small></span>
+            </button>
+            <button class="nav-item" type="button" data-view-target="deploy">
+              <span class="nav-index">05</span
+              ><span><strong>部署到 X5</strong><small>预检、Canary、Live</small></span>
+            </button>
+            <button class="nav-item" type="button" data-view-target="records">
+              <span class="nav-index">06</span
+              ><span><strong>记录与版本</strong><small>模型、运行、审计</small></span>
+            </button>
+          </nav>
+          <div class="sidebar-divider"></div>
+          <div class="nav-label">平台模块</div>
+          <nav class="module-nav" aria-label="平台模块">
+            <button class="module-item" type="button" data-view-target="contract">
+              <span class="module-icon">◇</span
+              ><span><strong>套件与契约</strong><small>机器人、配件、模型</small></span>
+            </button>
+            <button class="module-item" type="button" data-view-target="simulate">
+              <span class="module-icon">◉</span
+              ><span><strong>仿真与数据</strong><small>场景、录制、回放</small></span>
+            </button>
+            <button class="module-item" type="button" data-view-target="train">
+              <span class="module-icon">⌁</span
+              ><span><strong>训练中心</strong><small>本地、Mock、RoboGo</small></span>
+            </button>
+            <button class="module-item" type="button" data-view-target="evaluate">
+              <span class="module-icon">↗</span
+              ><span><strong>评测中心</strong><small>指标、对比、报告</small></span>
+            </button>
+            <button class="module-item" type="button" data-view-target="deploy">
+              <span class="module-icon">⌂</span
+              ><span><strong>设备与发布</strong><small>预检、Canary、Live</small></span>
+            </button>
+            <button class="module-item" type="button" data-view-target="records">
+              <span class="module-icon">▣</span
+              ><span><strong>记录与审计</strong><small>版本、制品、事件</small></span>
+            </button>
+          </nav>
+          <div class="sidebar-divider sidebar-divider-compact"></div>
+          <div class="nav-label">快速入口</div>
+          <a class="side-link" href="/mujoco/microduck/" target="_blank" rel="noreferrer"
+            ><span>↗</span> 独立打开仿真</a
+          >
+          <a class="side-link" href="https://robogo.d-robotics.cc" target="_blank" rel="noreferrer"
+            ><span>↗</span> RoboGo 训练</a
+          >
+          <div class="sidebar-bottom">
+            <div class="safety-mini">
+              <span>✓</span>
+              <div><strong>安全模式</strong><small>网页不会直接开电机</small></div>
+            </div>
+            <a href="/rdkstudio/" class="studio-link">在 RDK Studio 中使用 ↗</a>
+          </div>
+        </aside>
+
+        <main class="main-content">
+          <section class="hero">
+            <div class="hero-copy">
+              <p class="eyebrow">SIM2REAL · SIMULATE · TRAIN · DEPLOY</p>
+              <h1>让一个动作，<em>走完</em>仿真到真机。</h1>
+              <p class="hero-lede">
+                面向 RDK X5 和配件的 Duck 一站式工作台。先在浏览器看懂动作，再选择本地或 RoboGo
+                训练，最后经过安全预检部署到板端。
+              </p>
+              <div class="hero-actions">
+                <button
+                  class="button button-primary button-large"
+                  type="button"
+                  data-view-target="simulate"
+                >
+                  开始第一个动作 <span>→</span></button
+                ><button class="button button-quiet" type="button" data-view-target="overview">
+                  查看工作流
+                </button>
+              </div>
+            </div>
+            <div class="hero-meta">
+              <span class="hero-meta-label">CURRENT CONTRACT</span
+              ><strong id="hero-contract-id">microduck-policy-v1</strong
+              ><span id="hero-updated">等待服务响应</span>
+              <div class="hero-target">
+                <span class="target-dot"></span><span>目标板卡</span><b>RDK X5</b>
+              </div>
+            </div>
+          </section>
+
+          <section class="auth-gate" id="auth-gate" aria-live="polite" hidden>
+            <span class="auth-gate-icon">↪</span>
+            <div class="auth-gate-copy">
+              <strong>登录后加载你的工作区</strong>
+              <p>
+                模型、设备、运行记录和 RoboGo 资源按账号隔离。登录 RDK Studio（或直接通过 SSO
+                登录）后，回到本页点击“重新加载”。
+              </p>
+              <div class="auth-gate-actions">
+                <a
+                  class="button button-primary button-small"
+                  id="auth-login-button"
+                  href="/rdkstudio/"
+                  target="_blank"
+                  rel="noreferrer"
+                  >登录 RDK 账号（SSO）↗</a
+                ><button
+                  class="button button-ghost button-small"
+                  id="auth-retry-button"
+                  type="button"
+                >
+                  我已登录，重新加载
+                </button>
+              </div>
+            </div>
+          </section>
+          <section class="safety-banner" aria-label="安全边界">
+            <span class="banner-icon">✓</span>
+            <div>
+              <strong>安全边界已开启</strong>
+              <p>仿真和预检可以直接执行；训练、上传、Canary、Live 都需要明确选择和审批。</p>
+            </div>
+            <span class="banner-tag">FAIL-CLOSED</span>
+          </section>
+
+          <section class="context-strip" aria-label="当前工作区选择">
+            <div class="context-field context-field-product">
+              <span class="field-label">产品线</span>
+              <select id="product-select" aria-label="选择产品线">
+                <option value="microduck">MicroDuck · 官方参考</option>
+                <option value="rdk-duck">RDK Duck · X5 产品</option>
+              </select>
+            </div>
+            <div class="context-field context-field-task">
+              <span class="field-label">当前动作任务</span>
+              <select id="task-select" aria-label="选择动作任务">
+                <option value="walk">行走</option>
+                <option value="turn">转向</option>
+                <option value="sit">坐下 / 站起</option>
+                <option value="recover">自恢复</option>
+                <option value="kick">踢球</option>
+                <option value="custom">自定义动作</option>
+              </select>
+            </div>
+            <div class="context-field context-field-wide">
+              <span class="field-label">当前模型</span
+              ><select id="model-select" aria-label="选择模型"></select>
+            </div>
+            <div class="context-field">
+              <span class="field-label">目标设备</span
+              ><select id="device-select" aria-label="选择板卡"></select>
+            </div>
+            <div class="context-health">
+              <span class="health-ring">●</span>
+              <div><span>工作区状态</span><strong id="status-storage">检查中</strong></div>
+            </div>
+            <span id="model-count" class="sr-only">0 个模型</span
+            ><span id="device-count" class="sr-only">0 块板卡</span>
+          </section>
+
+          <nav class="workflow-strip" aria-label="动作交付流程">
+            <span class="workflow-strip-label">交付流程</span>
+            <button class="workflow-node" type="button" data-view-target="simulate">
+              <span class="workflow-node-index">01</span><span>仿真与录制</span>
+            </button>
+            <span class="workflow-arrow" aria-hidden="true">→</span>
+            <button class="workflow-node" type="button" data-view-target="train">
+              <span class="workflow-node-index">02</span><span>训练与导出</span>
+            </button>
+            <span class="workflow-arrow" aria-hidden="true">→</span>
+            <button class="workflow-node" type="button" data-view-target="evaluate">
+              <span class="workflow-node-index">03</span><span>评测与效果</span>
+            </button>
+            <span class="workflow-arrow" aria-hidden="true">→</span>
+            <button class="workflow-node" type="button" data-view-target="deploy">
+              <span class="workflow-node-index">04</span><span>预检与上板</span>
+            </button>
+          </nav>
+
+          <section
+            class="view-section"
+            data-view-section="overview"
+            aria-labelledby="overview-title"
+          >
+            <div class="section-heading">
+              <div>
+                <span class="section-kicker">YOUR NEXT MOVE</span>
+                <h2 id="overview-title">现在，从这里开始</h2>
+              </div>
+              <span class="section-caption">一条任务流，六个独立模块</span>
+            </div>
+            <div class="next-card">
+              <div class="next-card-main">
+                <span class="next-badge">START HERE</span>
+                <h3 id="next-action-title">从一个动作任务开始</h3>
+                <p id="next-action-copy">
+                  先选择产品线和模型契约，再进入仿真、训练、评测与部署。每个模块都可以单独重跑。
+                </p>
+                <button
+                  class="button button-primary"
+                  id="next-action-button"
+                  type="button"
+                  data-view-target="simulate"
+                >
+                  进入仿真与录制 →
+                </button>
+              </div>
+              <div class="next-visual" aria-hidden="true">
+                <div class="orbit orbit-one"></div>
+                <div class="orbit orbit-two"></div>
+                <div class="duck-mark">D</div>
+                <span class="visual-label label-sim">SIM</span
+                ><span class="visual-label label-real">X5</span>
+              </div>
+            </div>
+            <div class="module-grid" aria-label="平台模块">
+              <article class="module-card module-card-highlight">
+                <div class="module-card-top">
+                  <span class="module-card-icon">◇</span><span class="module-card-state">核心</span>
+                </div>
+                <h3>套件与契约</h3>
+                <p>选择 MicroDuck / RDK Duck，登记模型、配件和输入输出契约。</p>
+                <button class="module-card-link" type="button" data-view-target="contract">
+                  打开模块 →
+                </button>
+              </article>
+              <article class="module-card">
+                <div class="module-card-top">
+                  <span class="module-card-icon">◉</span><span class="module-card-state">01</span>
+                </div>
+                <h3>仿真与数据</h3>
+                <p>运行场景、录制动作、查看轨迹和准备训练数据。</p>
+                <button class="module-card-link" type="button" data-view-target="simulate">
+                  打开模块 →
+                </button>
+              </article>
+              <article class="module-card">
+                <div class="module-card-top">
+                  <span class="module-card-icon">⌁</span><span class="module-card-state">02</span>
+                </div>
+                <h3>训练中心</h3>
+                <p>选择本地、Mock 或 RoboGo，跟踪运行和 checkpoint。</p>
+                <button class="module-card-link" type="button" data-view-target="train">
+                  打开模块 →
+                </button>
+              </article>
+              <article class="module-card">
+                <div class="module-card-top">
+                  <span class="module-card-icon">↗</span><span class="module-card-state">03</span>
+                </div>
+                <h3>评测中心</h3>
+                <p>比较仿真与真机效果，确认是否达到发布门槛。</p>
+                <button class="module-card-link" type="button" data-view-target="evaluate">
+                  打开模块 →
+                </button>
+              </article>
+              <article class="module-card">
+                <div class="module-card-top">
+                  <span class="module-card-icon">⌂</span><span class="module-card-state">04</span>
+                </div>
+                <h3>设备与发布</h3>
+                <p>连接 X5、执行只读预检、安排 Canary 和受控发布。</p>
+                <button class="module-card-link" type="button" data-view-target="deploy">
+                  打开模块 →
+                </button>
+              </article>
+              <article class="module-card">
+                <div class="module-card-top">
+                  <span class="module-card-icon">▣</span><span class="module-card-state">LOG</span>
+                </div>
+                <h3>记录与审计</h3>
+                <p>查看版本、制品、运行记录、评测报告和操作事件。</p>
+                <button class="module-card-link" type="button" data-view-target="records">
+                  打开模块 →
+                </button>
+              </article>
+            </div>
+            <div class="status-grid" id="status-grid" aria-label="集成状态">
+              <article class="status-card">
+                <span class="card-kicker">01 / SIMULATOR</span>
+                <div class="status-card-main">
+                  <span class="status-icon status-icon-blue">◉</span
+                  ><strong id="status-simulator">浏览器仿真</strong>
+                </div>
+                <p id="status-simulator-detail">固定参考策略</p>
+              </article>
+              <article class="status-card">
+                <span class="card-kicker">02 / TRAINING</span>
+                <div class="status-card-main">
+                  <span class="status-icon status-icon-violet">⌁</span
+                  ><strong id="status-robogo">训练后端检查中</strong>
+                </div>
+                <p id="status-robogo-detail">本地优先，RoboGo 可选</p>
+              </article>
+              <article class="status-card">
+                <span class="card-kicker">03 / TARGET</span>
+                <div class="status-card-main">
+                  <span class="status-icon status-icon-green">⌂</span
+                  ><strong id="status-board">尚未选择板卡</strong>
+                </div>
+                <p id="status-board-detail">连接后进行预检</p>
+              </article>
+              <article class="status-card">
+                <span class="card-kicker">04 / LEDGER</span>
+                <div class="status-card-main">
+                  <span class="status-icon status-icon-orange">▣</span
+                  ><strong id="status-storage-card">按账号隔离</strong>
+                </div>
+                <p id="status-storage-detail">模型和运行可追溯</p>
+              </article>
+            </div>
+            <div class="overview-columns">
+              <article class="panel overview-panel">
+                <div class="panel-heading">
+                  <div>
+                    <span class="card-kicker">THE LOOP</span>
+                    <h2>一条动作流水线</h2>
+                  </div>
+                  <span class="panel-caption">可暂停、可回退</span>
+                </div>
+                <div class="pipeline pipeline-vertical">
+                  <div class="pipeline-step pipeline-step-active">
+                    <span class="pipeline-number">01</span>
+                    <div><strong>仿真与录制</strong><small>看懂动作，留下轨迹</small></div>
+                    <span class="step-state">进行中</span>
+                  </div>
+                  <div class="pipeline-connector"></div>
+                  <div class="pipeline-step">
+                    <span class="pipeline-number">02</span>
+                    <div><strong>训练与导出</strong><small>本地 / RoboGo</small></div>
+                  </div>
+                  <div class="pipeline-connector"></div>
+                  <div class="pipeline-step">
+                    <span class="pipeline-number">03</span>
+                    <div><strong>评测与契约</strong><small>输入、动作、频率一致</small></div>
+                  </div>
+                  <div class="pipeline-connector"></div>
+                  <div class="pipeline-step pipeline-step-gated">
+                    <span class="pipeline-number">04</span>
+                    <div><strong>预检与上板</strong><small>无电机 Canary → Live</small></div>
+                  </div>
+                </div>
+              </article>
+              <article class="panel kit-panel">
+                <div class="panel-heading">
+                  <div>
+                    <span class="card-kicker">STARTER KIT</span>
+                    <h2>RDK X5 Duck</h2>
+                  </div>
+                  <span class="kit-status"><i class="status-dot"></i> READY</span>
+                </div>
+                <div class="kit-illustration">
+                  <div class="kit-grid"></div>
+                  <div class="kit-duck">D</div>
+                </div>
+                <div class="kit-specs">
+                  <span><b>相机</b>视觉输入</span><span><b>IMU</b>姿态输入</span
+                  ><span><b>舵机</b>动作输出</span><span><b>BPU</b>感知加速</span>
+                </div>
+                <button
+                  class="button button-ghost button-small"
+                  type="button"
+                  data-view-target="deploy"
+                >
+                  查看设备预检 →
+                </button>
+              </article>
+            </div>
+          </section>
+
+          <section
+            class="view-section"
+            data-view-section="contract"
+            hidden
+            aria-labelledby="contract-title"
+          >
+            <div class="section-heading">
+              <div>
+                <span class="section-kicker">PLATFORM MODULE · CONTRACT</span>
+                <h2 id="contract-title">套件与契约</h2>
+              </div>
+              <span class="section-caption">先把产品、配件和模型说清楚</span>
+            </div>
+            <div class="records-layout">
+              <article class="panel manifest-panel">
+                <div class="panel-heading">
+                  <div>
+                    <span class="card-kicker">MODEL MANIFEST</span>
+                    <h2>登记你的模型</h2>
+                  </div>
+                  <span class="panel-caption">metadata-only</span>
+                </div>
+                <p class="panel-intro">
+                  导入 ONNX + manifest 只登记元数据和哈希，不执行上传的 Python、XML 或 shell。
+                </p>
+                <textarea
+                  id="manifest-editor"
+                  spellcheck="false"
+                  aria-label="模型 manifest JSON"
+                ></textarea>
+                <div class="editor-actions">
+                  <button
+                    class="button button-ghost button-small"
+                    id="template-button"
+                    type="button"
+                  >
+                    载入模板</button
+                  ><label class="button button-ghost button-small file-input-button"
+                    >导入 manifest JSON<input
+                      id="manifest-file-input"
+                      type="file"
+                      accept=".json,application/json" /></label
+                  ><button
+                    class="button button-primary button-small"
+                    id="validate-button"
+                    type="button"
+                  >
+                    校验清单</button
+                  ><button
+                    class="button button-ghost button-small"
+                    id="register-button"
+                    type="button"
+                  >
+                    登记版本
+                  </button>
+                </div>
+                <div class="validation-result" id="validation-result" role="status">尚未校验</div>
+              </article>
+              <article class="panel contract-guide-panel">
+                <div class="panel-heading">
+                  <div>
+                    <span class="card-kicker">CONTRACT GATE</span>
+                    <h2>契约检查清单</h2>
+                  </div>
+                  <span class="state-badge state-neutral">FAIL-CLOSED</span>
+                </div>
+                <ul class="contract-check-list">
+                  <li>
+                    <span>01</span>
+                    <div>
+                      <strong>产品标识</strong><small>MicroDuck 与 RDK Duck 不共用机器人维度</small>
+                    </div>
+                  </li>
+                  <li>
+                    <span>02</span>
+                    <div>
+                      <strong>观测 / 动作布局</strong
+                      ><small>字段顺序、形状和控制频率必须自洽</small>
+                    </div>
+                  </li>
+                  <li>
+                    <span>03</span>
+                    <div>
+                      <strong>运行时分工</strong
+                      ><small>运控 CPU ONNX 单线程，感知制品走 X5 BPU</small>
+                    </div>
+                  </li>
+                  <li>
+                    <span>04</span>
+                    <div>
+                      <strong>制品引用</strong
+                      ><small>只接受不透明 artifact 引用和可追溯校验和</small>
+                    </div>
+                  </li>
+                </ul>
+                <div class="tip-box">
+                  <strong>为什么单独做契约模块？</strong>
+                  <p>
+                    契约是仿真、训练、评测和上板共同依赖的边界；先校验它，后续模块才能复用同一份上下文。
+                  </p>
+                </div>
+              </article>
+            </div>
+          </section>
+
+          <section
+            class="view-section"
+            data-view-section="simulate"
+            hidden
+            aria-labelledby="simulate-title"
+          >
+            <div class="section-heading">
+              <div>
+                <span class="section-kicker">STEP 01 · SIMULATE</span>
+                <h2 id="simulate-title">仿真与录制</h2>
+              </div>
+              <span class="section-caption">先验证动作，再进入训练</span>
+            </div>
+            <div class="sim-layout">
+              <article class="panel simulator-panel">
+                <div class="panel-heading">
+                  <div>
+                    <span class="card-kicker">BROWSER SIMULATION</span>
+                    <h2>MicroDuck 仿真场</h2>
+                  </div>
+                  <span class="live-label"><i class="status-dot"></i> 参考策略</span>
+                </div>
+                <div class="simulator-frame-wrap">
+                  <iframe
+                    id="simulator-frame"
+                    title="MicroDuck 浏览器仿真"
+                    src="/mujoco/microduck/?cb=duck-lab-01"
+                    loading="lazy"
+                    allow="autoplay; fullscreen"
+                    allowfullscreen
+                  ></iframe>
+                  <div class="simulator-product-gate" id="simulator-product-gate" hidden>
+                    <span class="gate-icon">◇</span>
+                    <strong>RDK Duck 仿真适配器待配置</strong>
+                    <p>
+                      当前产品线不会复用 MicroDuck 的浏览器场景。请先导入真实契约
+                      manifest，或使用本地 headless 仿真 worker。
+                    </p>
+                    <button
+                      class="button button-primary button-small"
+                      type="button"
+                      data-view-target="train"
+                    >
+                      去训练与模型 →
+                    </button>
+                  </div>
+                  <div class="simulator-fallback">
+                    <strong>动作录制</strong>
+                    <p>
+                      进入仿真后，左下角会出现录制面板。录制文件可下载为 JSONL，用于复盘或后续训练。
+                    </p>
+                    <a
+                      class="button button-primary button-small"
+                      href="/mujoco/microduck/"
+                      target="_blank"
+                      rel="noreferrer"
+                      >新标签页打开 ↗</a
+                    >
+                  </div>
+                </div>
+                <div class="simulator-footer">
+                  <span id="simulator-run-status">参考策略可用</span
+                  ><span class="mono">MuJoCo WASM · 50Hz</span>
+                </div>
+              </article>
+              <aside class="panel guide-panel">
+                <span class="card-kicker">HOW TO USE</span>
+                <h2>三步完成一次演示</h2>
+                <ol class="howto-list">
+                  <li>
+                    <span>1</span>
+                    <div>
+                      <strong>点击开始录制</strong><small>先按你要验证的动作操作机器人</small>
+                    </div>
+                  </li>
+                  <li>
+                    <span>2</span>
+                    <div>
+                      <strong>点击停止并下载</strong><small>文件包含观测、动作和按键事件</small>
+                    </div>
+                  </li>
+                  <li>
+                    <span>3</span>
+                    <div><strong>回到训练页</strong><small>选择本地、Mock 或 RoboGo</small></div>
+                  </li>
+                </ol>
+                <div class="tip-box">
+                  <strong>为什么先录制？</strong>
+                  <p>它能快速发现按键、动作映射和观察量是否正确，不需要先花算力训练。</p>
+                </div>
+                <div class="sim-action-library" aria-label="当前模型动作库">
+                  <div class="sim-action-library-heading">
+                    <div>
+                      <span class="card-kicker">ACTION LIBRARY</span>
+                      <strong>当前模型可用动作</strong>
+                    </div>
+                    <span class="panel-caption">按键映射来自 manifest</span>
+                  </div>
+                  <div id="sim-action-list" class="sim-action-list"></div>
+                  <p id="sim-action-empty" class="small-note">
+                    选择一个模型后，这里会显示动作和按键。
+                  </p>
+                </div>
+                <button
+                  class="button button-primary button-block"
+                  type="button"
+                  data-view-target="train"
+                >
+                  下一步：选择训练方式 →
+                </button>
+              </aside>
+            </div>
+          </section>
+
+          <section
+            class="view-section"
+            data-view-section="train"
+            hidden
+            aria-labelledby="train-title"
+          >
+            <div class="section-heading">
+              <div>
+                <span class="section-kicker">STEP 02 · TRAIN</span>
+                <h2 id="train-title">训练与模型</h2>
+              </div>
+              <span class="section-caption">同一份契约，两个训练后端</span>
+            </div>
+            <div class="train-layout">
+              <article class="panel model-panel">
+                <div class="panel-heading">
+                  <div>
+                    <span class="card-kicker">MODEL REGISTRY</span>
+                    <h2>模型版本</h2>
+                  </div>
+                  <button
+                    class="button button-ghost button-small"
+                    id="contract-run-button"
+                    type="button"
+                  >
+                    校验契约
+                  </button>
+                </div>
+                <p class="panel-intro">
+                  运控策略使用 CPU ONNX 单线程；视觉、语音等感知模型使用 X5 对应的 BPU 制品。
+                </p>
+                <div class="model-summary" id="model-summary">
+                  <div class="empty-inline">等待模型台账加载</div>
+                </div>
+                <div class="artifact-list" id="artifact-list"></div>
+                <div class="compatibility-list" id="compatibility-list"></div>
+                <div class="model-actions">
+                  <button class="button button-primary" id="browser-run-button" type="button">
+                    浏览器回放</button
+                  ><button class="button button-primary" id="local-run-button" type="button">
+                    发起本地训练</button
+                  ><button class="button button-ghost" id="robogo-run-button" type="button">
+                    登记 RoboGo 训练
+                  </button>
+                </div>
+                <div class="run-progress-card" id="run-progress-card" hidden>
+                  <div class="run-progress-heading">
+                    <div>
+                      <span class="card-kicker">LATEST RUN</span>
+                      <strong id="run-progress-title">等待训练任务</strong>
+                    </div>
+                    <span class="state-badge state-neutral" id="run-progress-status">—</span>
+                  </div>
+                  <div class="run-progress-meta" id="run-progress-meta"></div>
+                  <div class="run-progress-warning" id="run-progress-warning" hidden>
+                    Mock 只验证协议和台账，不会生成可部署模型。
+                  </div>
+                  <button
+                    class="button button-ghost button-small"
+                    id="run-progress-detail"
+                    type="button"
+                  >
+                    查看运行详情 →
+                  </button>
+                </div>
+                <details class="training-controls">
+                  <summary>训练参数与续训</summary>
+                  <div class="training-grid">
+                    <label class="field-label" for="training-profile">训练档位</label
+                    ><select id="training-profile" aria-label="选择训练档位">
+                      <option value="smoke">冒烟 · 64 环境 / 5 轮</option>
+                      <option value="low-vram">低显存 · 64 环境起步</option>
+                      <option value="standard" selected>标准 · 1024 环境</option>
+                      <option value="high-vram">高显存 · 4096 环境</option></select
+                    ><label class="field-label" for="resume-checkpoint-id"
+                      >续训 checkpoint（可选）</label
+                    ><input
+                      id="resume-checkpoint-id"
+                      type="text"
+                      placeholder="checkpoint-1500"
+                      autocomplete="off"
+                    /><input
+                      id="resume-artifact-ref"
+                      type="text"
+                      placeholder="artifact://model/checkpoint-1500"
+                      aria-label="续训制品引用"
+                      autocomplete="off"
+                    />
+                  </div>
+                  <p class="small-note">
+                    没有 CUDA 时可以先跑 Mock 验证协议；它不会伪造可部署模型。
+                  </p>
+                </details>
+              </article>
+              <article class="panel robogo-panel">
+                <div class="panel-heading">
+                  <div>
+                    <span class="card-kicker">TRAINING CONNECTOR</span>
+                    <h2>算力后端</h2>
+                  </div>
+                  <span id="robogo-state-badge" class="state-badge state-neutral">检查中</span>
+                </div>
+                <div class="backend-choice">
+                  <div class="backend-choice-card is-primary">
+                    <span class="backend-icon">⌂</span>
+                    <div><strong>本地服务器</strong><small>无 RoboGo 账号也能运行</small></div>
+                    <span class="choice-tag">默认</span>
+                  </div>
+                  <div class="backend-choice-card">
+                    <span class="backend-icon">☁</span>
+                    <div><strong>RoboGo</strong><small>云端算力，可选接入</small></div>
+                  </div>
+                </div>
+                <div class="robogo-numbers">
+                  <div><span>可见算力资源</span><strong id="robogo-board-count">—</strong></div>
+                  <div><span>开发机</span><strong id="robogo-machine-count">—</strong></div>
+                </div>
+                <p id="robogo-message" class="panel-intro">
+                  本地 worker 为首选；RoboGo 仅在显式登录时读取聚合状态。
+                </p>
+                <div class="robogo-actions">
+                  <button
+                    class="button button-ghost button-small"
+                    id="robogo-refresh-button"
+                    type="button"
+                  >
+                    重新检查</button
+                  ><a
+                    class="text-link"
+                    href="https://robogo.d-robotics.cc"
+                    target="_blank"
+                    rel="noreferrer"
+                    >打开 RoboGo ↗</a
+                  >
+                </div>
+              </article>
+            </div>
+          </section>
+
+          <section
+            class="view-section"
+            data-view-section="evaluate"
+            hidden
+            aria-labelledby="evaluate-title"
+          >
+            <div class="section-heading">
+              <div>
+                <span class="section-kicker">STEP 03 · EVALUATE</span>
+                <h2 id="evaluate-title">评测与效果</h2>
+              </div>
+              <span class="section-caption">先看证据，再决定是否上板</span>
+            </div>
+            <div class="evaluation-banner">
+              <div class="evaluation-status-mark" id="eval-status-mark">○</div>
+              <div>
+                <strong id="eval-run-status">尚未产生评测结果</strong>
+                <p id="eval-run-name">训练完成后，这里会显示最新一次运行的仿真/真机指标。</p>
+              </div>
+              <button
+                class="button button-ghost button-small"
+                type="button"
+                data-view-target="records"
+              >
+                查看运行记录 →
+              </button>
+            </div>
+            <div class="evaluation-grid">
+              <article class="panel metrics-panel">
+                <div class="panel-heading">
+                  <div>
+                    <span class="card-kicker">KEY METRICS</span>
+                    <h2>关键指标</h2>
+                  </div>
+                  <span class="panel-caption">没有数据时保持为空</span>
+                </div>
+                <div class="metric-grid metric-grid-large">
+                  <div class="metric metric-contract">
+                    <strong id="eval-contract">—</strong><span>契约状态</span>
+                  </div>
+                  <div class="metric"><strong id="eval-success">—</strong><span>成功率</span></div>
+                  <div class="metric"><strong id="eval-fall">—</strong><span>跌倒率</span></div>
+                  <div class="metric">
+                    <strong id="eval-latency">—</strong><span>控制延迟</span>
+                  </div>
+                </div>
+                <p class="small-note">
+                  真实成功率、跌倒率和延迟需要训练 worker 或 X5 Agent
+                  回写指标；平台不会用默认值冒充评测结果。
+                </p>
+              </article>
+              <article class="panel comparison-panel">
+                <div class="panel-heading">
+                  <div>
+                    <span class="card-kicker">SIM → REAL</span>
+                    <h2>效果对比</h2>
+                  </div>
+                  <span class="panel-caption">同一模型、同一版本</span>
+                </div>
+                <div class="comparison-chart" aria-label="仿真与真机效果对比">
+                  <div class="chart-row">
+                    <span>仿真</span>
+                    <div class="chart-track">
+                      <i class="chart-bar chart-bar-sim" id="eval-sim-bar"></i>
+                    </div>
+                    <b id="eval-sim-label">—</b>
+                  </div>
+                  <div class="chart-row">
+                    <span>真机</span>
+                    <div class="chart-track">
+                      <i class="chart-bar chart-bar-real" id="eval-real-bar"></i>
+                    </div>
+                    <b id="eval-real-label">—</b>
+                  </div>
+                </div>
+                <div class="compare-note">
+                  <span class="compare-dot compare-dot-sim"></span> 浏览器 / 离线 MuJoCo
+                  <span class="compare-dot compare-dot-real"></span> RDK X5 Agent
+                </div>
+              </article>
+            </div>
+            <article class="panel telemetry-panel" aria-labelledby="telemetry-title">
+              <div class="panel-heading">
+                <div>
+                  <span class="card-kicker">SIMREAL EVIDENCE</span>
+                  <h2 id="telemetry-title">遥测回放与证据</h2>
+                </div>
+                <span class="state-badge state-neutral" id="telemetry-state">尚未导入</span>
+              </div>
+              <div class="telemetry-intro">
+                <p>
+                  把 X5 Board Agent 或浏览器录制的 JSONL
+                  拖进来，先在浏览器本地检查时序、频率和跌倒事件；原始数据不会自动上传。
+                </p>
+                <label
+                  class="button button-ghost button-small file-input-button telemetry-file-button"
+                >
+                  导入遥测 JSONL<input
+                    id="telemetry-file-input"
+                    type="file"
+                    accept=".jsonl,.json,.ndjson,application/json,text/plain"
+                  />
+                </label>
+              </div>
+              <div class="telemetry-summary" id="telemetry-summary">
+                <div class="empty-inline">等待导入遥测；训练完成后可用它做仿真 / 真机对照。</div>
+              </div>
+              <div class="telemetry-timeline" id="telemetry-timeline" hidden>
+                <div class="telemetry-timeline-track"><i id="telemetry-timeline-fill"></i></div>
+                <div class="telemetry-timeline-meta">
+                  <span id="telemetry-timeline-start">0.00s</span
+                  ><span id="telemetry-timeline-end">0.00s</span>
+                </div>
+              </div>
+              <div class="telemetry-actions">
+                <button
+                  class="button button-primary button-small"
+                  type="button"
+                  id="telemetry-publish-button"
+                  disabled
+                >
+                  上传到当前 Run 并评测
+                </button>
+                <button
+                  class="button button-ghost button-small"
+                  type="button"
+                  id="telemetry-clear-button"
+                  disabled
+                >
+                  清除本地证据
+                </button>
+                <span class="small-note">只显示聚合统计，不替代正式评测报告。</span>
+              </div>
+            </article>
+            <div class="evaluation-next">
+              <span class="next-line" id="evaluation-next-line"></span>
+              <div>
+                <strong id="evaluation-next-title">下一步：通过评测后生成 X5 预检计划</strong
+                ><small id="evaluation-next-copy"
+                  >没有真实指标时，只能回到训练或继续仿真，不能直接进入 Live。</small
+                >
+              </div>
+              <button
+                class="button button-primary button-small"
+                id="evaluation-next-button"
+                type="button"
+                data-view-target="deploy"
+              >
+                去做预检 →
+              </button>
+            </div>
+          </section>
+
+          <section
+            class="view-section"
+            data-view-section="deploy"
+            hidden
+            aria-labelledby="deploy-title"
+          >
+            <div class="section-heading">
+              <div>
+                <span class="section-kicker">STEP 04 · DEPLOY</span>
+                <h2 id="deploy-title">部署到 RDK X5</h2>
+              </div>
+              <span class="section-caption">先预检，再让真机接管</span>
+            </div>
+            <div class="deploy-layout">
+              <article class="panel board-panel">
+                <div class="panel-heading">
+                  <div>
+                    <span class="card-kicker">RDK TARGET</span>
+                    <h2>设备预检</h2>
+                  </div>
+                  <span class="deploy-safe">NO MOTOR</span>
+                </div>
+                <div class="board-summary" id="board-summary">
+                  <div class="empty-inline">没有可用板卡；先在设备管理中登记</div>
+                </div>
+                <div class="board-actions">
+                  <button class="button button-ghost" id="detect-button" type="button">
+                    探测板型</button
+                  ><button class="button button-primary" id="plan-button" type="button">
+                    生成预检计划</button
+                  ><button class="button button-ghost" id="preflight-button" type="button">
+                    执行只读预检
+                  </button>
+                </div>
+                <p class="small-note">
+                  预检只读取架构、系统目录和磁盘信息；不会下发模型、启动节点或驱动电机。
+                </p>
+              </article>
+              <article class="panel deploy-flow-panel">
+                <span class="card-kicker">RELEASE GATE</span>
+                <h2>上线闸门</h2>
+                <div class="release-steps">
+                  <div class="release-step is-ready" data-release-step="contract">
+                    <span class="release-step-index">✓</span>
+                    <div><strong>契约通过</strong><small>观测、动作、频率一致</small></div>
+                  </div>
+                  <div class="release-step" data-release-step="evaluation">
+                    <span class="release-step-index">02</span>
+                    <div>
+                      <strong>评测与板端预检</strong><small>指标达标后确认 X5 环境和运行时</small>
+                    </div>
+                  </div>
+                  <div class="release-step is-locked" data-release-step="canary">
+                    <span class="release-step-index">03</span>
+                    <div><strong>无电机 Canary</strong><small>需要板端 Agent</small></div>
+                  </div>
+                  <div class="release-step is-locked" data-release-step="live">
+                    <span class="release-step-index">04</span>
+                    <div><strong>Live</strong><small>人工批准后开放</small></div>
+                  </div>
+                </div>
+                <div class="tip-box">
+                  <strong>部署原则</strong>
+                  <p>网页只负责计划和证据展示；真正的下发和执行由受控 X5 Agent 完成。</p>
+                </div>
+              </article>
+            </div>
+          </section>
+
+          <section
+            class="view-section"
+            data-view-section="records"
+            hidden
+            aria-labelledby="records-title"
+          >
+            <div class="section-heading">
+              <div>
+                <span class="section-kicker">EVIDENCE & VERSIONS</span>
+                <h2 id="records-title">记录与版本</h2>
+              </div>
+              <span class="section-caption">每一次运行都有证据</span>
+            </div>
+            <div class="records-layout records-single">
+              <article class="panel history-panel">
+                <div class="panel-heading">
+                  <div>
+                    <span class="card-kicker">AUDIT TRAIL</span>
+                    <h2>运行与发布记录</h2>
+                  </div>
+                  <span class="panel-caption" id="records-count">最近 30 条</span>
+                </div>
+                <div class="records-toolbar" role="toolbar" aria-label="记录筛选">
+                  <div class="record-tabs" role="tablist" aria-label="记录类型">
+                    <button
+                      class="record-tab is-active"
+                      type="button"
+                      data-record-tab="all"
+                      role="tab"
+                      aria-selected="true"
+                    >
+                      全部
+                    </button>
+                    <button
+                      class="record-tab"
+                      type="button"
+                      data-record-tab="run"
+                      role="tab"
+                      aria-selected="false"
+                    >
+                      Runs
+                    </button>
+                    <button
+                      class="record-tab"
+                      type="button"
+                      data-record-tab="deploy"
+                      role="tab"
+                      aria-selected="false"
+                    >
+                      发布
+                    </button>
+                    <button
+                      class="record-tab"
+                      type="button"
+                      data-record-tab="artifact"
+                      role="tab"
+                      aria-selected="false"
+                    >
+                      制品
+                    </button>
+                    <button
+                      class="record-tab"
+                      type="button"
+                      data-record-tab="telemetry"
+                      role="tab"
+                      aria-selected="false"
+                    >
+                      遥测
+                    </button>
+                  </div>
+                  <input
+                    id="record-search"
+                    type="search"
+                    placeholder="搜索模型、状态或后端"
+                    aria-label="搜索记录"
+                  />
+                </div>
+                <div class="history-list" id="history-list">
+                  <div class="empty-state">还没有运行记录。先打开仿真或发起一次训练。</div>
+                </div>
+              </article>
+            </div>
+          </section>
+        </main>
+      </div>
+      <footer class="footer">
+        <span>RDK Duck Lab · standalone web service</span
+        ><span
+          ><a href="/rdkstudio/">RDK Studio</a> · <a href="/mujoco/microduck/">MicroDuck</a> ·
+          <a href="https://developer.d-robotics.cc/" target="_blank" rel="noreferrer"
+            >RDK 文档 ↗</a
+          ></span
+        >
+      </footer>
+    </div>
+    <dialog class="run-dialog" id="run-detail-dialog" aria-labelledby="run-detail-title">
+      <div class="run-dialog-heading">
+        <div>
+          <span class="card-kicker">RUN DETAIL</span>
+          <h2 id="run-detail-title">运行详情</h2>
+        </div>
+        <button class="button button-ghost button-small" id="run-detail-close" type="button">
+          关闭
+        </button>
+      </div>
+      <div id="run-detail-body" class="run-detail-body">
+        <div class="empty-inline">选择一条运行记录查看详情。</div>
+      </div>
+    </dialog>
+    <div class="toast-region" id="toast-region" aria-live="polite" aria-atomic="true"></div>
+    <script src="./app.js?v=duck-lab-02" type="module"></script>
+  </body>
+</html>

@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>MuJoCo Web Playground</title>
+    <link rel="stylesheet" href="./static/styles.css" />
+  </head>
+  <body>
+    <main class="shell">
+      <header class="topbar">
+        <div>
+          <p class="eyebrow">RDK STUDIO · PHYSICS LAB</p>
+          <h1>MuJoCo Playground</h1>
+          <p class="subtitle">在浏览器里直接运行 MuJoCo 物理仿真，服务端计算、实时渲染。</p>
+        </div>
+        <div class="engine-badge"><span class="pulse"></span> MuJoCo <span id="engine-version">loading</span></div>
+      </header>
+
+      <section class="workspace">
+        <div class="stage-card">
+          <div class="stage-head">
+            <div>
+              <span class="label">LIVE SIMULATION</span>
+              <h2 id="model-title">正在载入模型…</h2>
+            </div>
+            <div class="status" id="status">连接中</div>
+          </div>
+          <div class="canvas-wrap">
+            <img id="frame" alt="MuJoCo simulation frame" />
+            <div class="frame-overlay"><span id="sim-time">t = 0.000 s</span><span>640 × 480</span></div>
+          </div>
+          <div class="transport">
+            <button class="primary" id="run">▶ 运行</button>
+            <button id="step">单步</button>
+            <button id="reset">重置</button>
+            <label class="speed">速度 <input id="speed" type="range" min="1" max="8" value="3" /><span id="speed-value">3×</span></label>
+          </div>
+        </div>
+
+        <aside class="control-card">
+          <div class="control-section">
+            <span class="label">MODEL</span>
+            <select id="model-select"></select>
+            <p id="model-description" class="muted"></p>
+          </div>
+          <div class="control-section">
+            <div class="section-title"><span class="label">ACTUATORS</span><span class="muted">-1 … +1</span></div>
+            <div id="actuators" class="actuators"><p class="muted">载入控制器…</p></div>
+          </div>
+          <div class="readouts">
+            <div><span>物理时间</span><strong id="readout-time">0.000 s</strong></div>
+            <div><span>关节自由度</span><strong id="readout-dof">—</strong></div>
+            <div><span>会话</span><strong id="readout-session">—</strong></div>
+          </div>
+          <p class="safety-note">固定示例模型 · 不执行上传的 XML、Python 或 shell 命令</p>
+        </aside>
+      </section>
+
+      <footer>MuJoCo server playground · 适合教学、控制器原型和动力学快速验证</footer>
+    </main>
+    <script src="./static/app.js" type="module"></script>
+  </body>
+</html>

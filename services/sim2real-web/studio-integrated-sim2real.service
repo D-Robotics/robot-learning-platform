@@ -1,0 +1,50 @@
+# Studio-host integration variant. For a fully independent deployment use
+# standalone-sim2real.service; keep this unit only when verified SSO adapters
+# are supplied by the host application.
+[Unit]
+Description=RDK standalone Sim2Real web platform
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+# The main Web Cloud service is root-owned and the encrypted SSO cookie's
+# revocation tombstones live in its data directory. Run this narrowly scoped
+# process with the same read-only auth view; systemd blocks writes everywhere
+# except the standalone ledger below.
+User=root
+Group=root
+WorkingDirectory=/opt/sim2real-web/current
+# The standalone process must be able to decrypt the same stateless web-cloud
+# SSO cookie as the main service.  This is a dedicated root-only file containing
+# only the cookie secret (never load the main .env wholesale into this process).
+EnvironmentFile=-/etc/sim2real-web-auth.env
+EnvironmentFile=-/etc/sim2real-web-runner.env
+EnvironmentFile=-/etc/rdkstudio-web.env
+Environment=NODE_ENV=production
+Environment=SSO_REQUIRED=1
+Environment=EXPRESS_TRUST_PROXY=1
+Environment=RDK_STUDIO_DEPLOYMENT_PROFILE=web-cloud
+Environment=RDK_STUDIO_APP_ROOT=/opt/sim2real-web/current
+Environment=RDK_STUDIO_REQUIRE_DIST=1
+Environment=RDK_STUDIO_DISABLE_TYPEC_DIRECT=1
+Environment=RDK_STUDIO_WEB_PUBLIC_ORIGIN=https://rdkstudio.d-robotics.cc
+Environment=RDK_DATA_DIR=/opt/rdkstudio-web-opt/data
+Environment=RDK_SIM2REAL_BIND_HOST=127.0.0.1
+Environment=RDK_SIM2REAL_PORT=18102
+Environment=RDK_SIM2REAL_STORAGE_DIR=/opt/sim2real-web/data
+Environment=PATH=/opt/node-v22.16.0-linux-x64/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin
+ExecStart=/opt/node-v22.16.0-linux-x64/bin/node /opt/sim2real-web/current/dist-server/services/sim2real-web/server.js
+Restart=always
+RestartSec=3
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=strict
+PrivateDevices=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+ReadOnlyPaths=/opt/rdstudio-web-opt/data
+ReadWritePaths=/opt/sim2real-web/data
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,27 @@
+{
+  "name": "@d-robotics/robot-learning-platform",
+  "version": "0.1.0",
+  "private": false,
+  "description": "RDK robot learning and Sim2Real workflow platform for MicroDuck and RDK-X5.",
+  "type": "module",
+  "engines": { "node": ">=20" },
+  "scripts": {
+    "dev:sim2real": "tsx services/sim2real-web/server.ts",
+    "dev:mock-worker": "node services/sim2real-web/mock-local-worker.mjs",
+    "test": "vitest run",
+    "verify:ui": "node services/sim2real-web/ui-ia.spec.mjs",
+    "verify:recorder": "node services/mujoco-web/microduck-community-overlay.test.mjs",
+    "verify": "npm run verify:ui && npm run verify:recorder && node services/sim2real-web/server-wiring.spec.mjs && npm test"
+  },
+  "dependencies": {
+    "express": "^5.2.1"
+  },
+  "devDependencies": {
+    "@types/express": "^5.0.3",
+    "@types/node": "^22.13.10",
+    "jsdom": "^29.1.1",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.3",
+    "vitest": "^3.2.4"
+  }
+}

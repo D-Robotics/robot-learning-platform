@@ -1,0 +1,14 @@
+node_modules/
+dist/
+dist-server/
+coverage/
+.data/
+.venv/
+__pycache__/
+*.py[cod]
+.DS_Store
+.env
+.env.*
+!.env.example
+*.log
+artifacts/
