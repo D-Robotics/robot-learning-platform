@@ -1,0 +1,67 @@
+{
+  "schemaVersion": 1,
+  "modelId": "rdk-duck-walk-demo",
+  "displayName": "RDK Duck 行走示例",
+  "version": "0.1.0",
+  "robot": {
+    "id": "rdk-duck",
+    "variant": "x5-kit"
+  },
+  "contract": {
+    "id": "rdk-duck-policy-v1",
+    "robotId": "rdk-duck",
+    "jointCount": 12,
+    "observationSize": 8,
+    "actionSize": 12,
+    "controlHz": 100,
+    "physicsTimestepSeconds": 0.002,
+    "decimation": 1,
+    "observationLayout": [
+      { "name": "imu", "size": 3 },
+      { "name": "command", "size": 5 }
+    ]
+  },
+  "simulator": {
+    "backends": ["local"],
+    "policyArtifactId": "rdk-duck-policy-onnx",
+    "policyBundle": {
+      "defaultPolicyId": "walking",
+      "policies": [
+        {
+          "id": "walking",
+          "label": "行走",
+          "artifactId": "rdk-duck-policy-onnx",
+          "keys": ["ArrowUp", "ArrowDown", "A", "E"]
+        }
+      ]
+    }
+  },
+  "artifacts": [
+    {
+      "id": "rdk-duck-policy-onnx",
+      "role": "policy",
+      "name": "policy.onnx",
+      "kind": "source",
+      "format": "onnx",
+      "runtime": "cpu-onnx",
+      "workload": "locomotion",
+      "threads": 1,
+      "ref": "artifact://example/rdk-duck-walk-demo/0.1.0/policy.onnx"
+    },
+    {
+      "id": "rdk-duck-x5-compiled",
+      "role": "compiled-policy",
+      "name": "policy.x5.bin",
+      "kind": "compiled",
+      "format": "bin",
+      "runtime": "bpu",
+      "workload": "locomotion",
+      "targetPlatforms": ["rdk-x5"],
+      "ref": "artifact://example/rdk-duck-walk-demo/0.1.0/policy.x5.bin"
+    }
+  ],
+  "metadata": {
+    "source": "public example",
+    "notes": "仅用于契约和流程演示，不包含真实权重。"
+  }
+}

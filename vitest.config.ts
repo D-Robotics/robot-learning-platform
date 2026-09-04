@@ -5,7 +5,7 @@ import { defineConfig } from 'vitest/config';
 // public `verify` script runs both sets.
 export default defineConfig({
   test: {
-    include: ['server/**/*.test.ts', 'shared/**/*.test.ts'],
+    include: ['server/**/*.test.ts', 'shared/**/*.test.ts', 'services/**/*.test.ts'],
     exclude: ['node_modules/**'],
   },
 });

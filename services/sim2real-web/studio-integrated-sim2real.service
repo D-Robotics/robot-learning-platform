@@ -1,10 +1,13 @@
 # Studio-host integration variant. For a fully independent deployment use
-# standalone-sim2real.service; keep this unit only when verified SSO adapters
-# are supplied by the host application.
+# standalone-sim2real.service. This file is a reference template only: the
+# adapter marker and operator review are mandatory before enabling it.
 [Unit]
 Description=RDK standalone Sim2Real web platform
 After=network-online.target
 Wants=network-online.target
+ConditionPathExists=/etc/rdkstudio-sim2real-adapter.ready
+ConditionPathExists=/opt/sim2real-web/current/dist-server/services/sim2real-web/server.js
+ConditionPathExists=/etc/sim2real-web-auth.env
 
 [Service]
 Type=simple
@@ -18,11 +21,14 @@ WorkingDirectory=/opt/sim2real-web/current
 # The standalone process must be able to decrypt the same stateless web-cloud
 # SSO cookie as the main service.  This is a dedicated root-only file containing
 # only the cookie secret (never load the main .env wholesale into this process).
-EnvironmentFile=-/etc/sim2real-web-auth.env
+EnvironmentFile=/etc/sim2real-web-auth.env
 EnvironmentFile=-/etc/sim2real-web-runner.env
-EnvironmentFile=-/etc/rdkstudio-web.env
+# Do not load the main Studio .env here. The operator must provide a narrow,
+# root-only adapter file and review every variable before enabling this sample.
 Environment=NODE_ENV=production
 Environment=SSO_REQUIRED=1
+Environment=RDK_SIM2REAL_SSO_REQUIRED=1
+Environment=RDK_SIM2REAL_AUTH_MODE=trusted-proxy
 Environment=EXPRESS_TRUST_PROXY=1
 Environment=RDK_STUDIO_DEPLOYMENT_PROFILE=web-cloud
 Environment=RDK_STUDIO_APP_ROOT=/opt/sim2real-web/current
@@ -32,8 +38,19 @@ Environment=RDK_STUDIO_WEB_PUBLIC_ORIGIN=https://rdkstudio.d-robotics.cc
 Environment=RDK_DATA_DIR=/opt/rdkstudio-web-opt/data
 Environment=RDK_SIM2REAL_BIND_HOST=127.0.0.1
 Environment=RDK_SIM2REAL_PORT=18102
+Environment=RDK_SIM2REAL_PUBLIC_BASE_PATH=/sim2real
 Environment=RDK_SIM2REAL_STORAGE_DIR=/opt/sim2real-web/data
 Environment=PATH=/opt/node-v22.16.0-linux-x64/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin
+ExecStartPre=/usr/bin/test -s /etc/rdkstudio-sim2real-adapter.ready
+ExecStartPre=/usr/bin/grep -qx 'RDK_SIM2REAL_ADAPTER_READY=1' /etc/rdkstudio-sim2real-adapter.ready
+ExecStartPre=/usr/bin/test -s /etc/sim2real-web-auth.env
+ExecStartPre=/usr/bin/test ${RDK_SIM2REAL_AUTH_MODE} = trusted-proxy
+ExecStartPre=/bin/sh -c 'test -n "$${RDK_SIM2REAL_TRUSTED_PROXY_SECRET}"'
+ExecStartPre=/opt/node-v22.16.0-linux-x64/bin/node -e "if (Buffer.byteLength(process.env.RDK_SIM2REAL_TRUSTED_PROXY_SECRET || '', 'utf8') < 32) process.exit(1)"
+ExecStartPre=/usr/bin/test ${RDK_SIM2REAL_BIND_HOST} = 127.0.0.1
+ExecStartPre=/usr/bin/test ${RDK_SIM2REAL_PORT} = 18102
+ExecStartPre=/usr/bin/test ${RDK_SIM2REAL_PUBLIC_BASE_PATH} = /sim2real
+ExecStartPre=/usr/bin/test ${RDK_SIM2REAL_STORAGE_DIR} = /opt/sim2real-web/data
 ExecStart=/opt/node-v22.16.0-linux-x64/bin/node /opt/sim2real-web/current/dist-server/services/sim2real-web/server.js
 Restart=always
 RestartSec=3
@@ -43,7 +60,7 @@ ProtectHome=true
 ProtectSystem=strict
 PrivateDevices=true
 RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
-ReadOnlyPaths=/opt/rdstudio-web-opt/data
+ReadOnlyPaths=/opt/rdkstudio-web-opt/data
 ReadWritePaths=/opt/sim2real-web/data
 
 [Install]

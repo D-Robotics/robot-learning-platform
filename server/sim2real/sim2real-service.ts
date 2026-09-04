@@ -1,3 +1,6 @@
+import fs from 'node:fs';
+import path from 'node:path';
+
 import type { Device } from '../../shared/types.js';
 import { ALL_RDK_PLATFORMS, type RdkPlatform } from '../../shared/board-types.js';
 import type { ModelArtifactDescriptor } from '../../shared/model-artifacts.js';
@@ -12,11 +15,19 @@ import {
 import {
   collectSandboxBoards,
   createStandaloneRobogoApiClient,
+  isStandaloneMultiUserMode,
 } from './standalone-adapters.js';
 import { evaluateModelCompatibility } from './standalone-compatibility.js';
 import { sim2RealStorageInfo } from './sim2real-store.js';
 import { isRobogoRunnerConfigured } from './robogo-runner.js';
 import { isLocalRunnerConfigured } from './local-runner.js';
+
+function publicPath(pathname: string): string {
+  const rawBase = String(process.env.RDK_SIM2REAL_PUBLIC_BASE_PATH ?? '').trim();
+  const base = rawBase && rawBase !== '/' ? `/${rawBase.replace(/^\/+|\/+$/g, '')}` : '';
+  if (!base || !pathname.startsWith('/') || pathname.startsWith(`${base}/`)) return pathname;
+  return `${base}${pathname}`;
+}
 
 /**
  * Compatibility is evaluated against the compiled policy first.  An ONNX
@@ -82,15 +93,24 @@ export function compatibilityForManifest(
     };
   }
   const cpuOnnxLocomotion =
+    platformId === 'rdk-x5' &&
     selected.artifact.role === 'policy' &&
     selected.artifact.runtime === 'cpu-onnx' &&
     selected.artifact.workload === 'locomotion' &&
     selected.artifact.threads === 1;
+  const cpuOnnxMetadataCompatible =
+    cpuOnnxLocomotion &&
+    (!selected.artifact.targetPlatforms?.length ||
+      selected.artifact.targetPlatforms.includes(platformId)) &&
+    (!selected.artifact.toolchainTarget ||
+      selected.artifact.toolchainTarget.trim() === platformId) &&
+    (!selected.artifact.acceleratorArchitecture ||
+      selected.artifact.acceleratorArchitecture.trim().toLowerCase() === 'bayes-e');
   // A locomotion ONNX policy is intentionally allowed to run on the X5 CPU
   // when the manifest opts into the one-thread runtime. The generic artifact
   // matrix treats ONNX as requiring BPU conversion, so promote only this
   // explicitly declared safe path to a compatible result.
-  const selectedResult = cpuOnnxLocomotion
+  const selectedResult = cpuOnnxMetadataCompatible
     ? {
         ...selected.result,
         status: 'compatible' as const,
@@ -101,9 +121,9 @@ export function compatibilityForManifest(
     : selected.result;
   const deployable =
     selectedResult.status === 'compatible' &&
-    (selected.artifact.role === 'compiled-policy' || cpuOnnxLocomotion);
+    (selected.artifact.role === 'compiled-policy' || cpuOnnxMetadataCompatible);
   const reason = deployable
-    ? cpuOnnxLocomotion
+    ? cpuOnnxMetadataCompatible
       ? `Locomotion policy ${selected.artifact.name} runs as CPU ONNX with one thread on ${platformId}; BPU remains available for perception.`
       : `Compiled policy ${selected.artifact.name} matches ${platformId}.`
     : selectedResult.status === 'requires-conversion'
@@ -210,6 +230,7 @@ function countNamedArray(value: unknown, names: readonly string[]): number | und
 export async function probeRobogoIntegration(
   accountId: string,
   requestToken?: string | null,
+  options: { multiUser?: boolean } = {},
 ): Promise<Sim2RealRobogoIntegration> {
   if (!accountId.trim()) {
     return {
@@ -222,9 +243,20 @@ export async function probeRobogoIntegration(
   let client: ReturnType<typeof createStandaloneRobogoApiClient>;
   try {
     const token = String(requestToken ?? '').trim();
+    // The auth adapter is the source of truth for tenant mode.  Do not infer
+    // whether a process-wide token is safe solely from deployment env flags:
+    // an extracted service may inject a custom multi-user OIDC adapter while
+    // retaining a local-looking deployment profile.
+    const multiUser = options.multiUser ?? isStandaloneMultiUserMode();
     // A verified auth adapter may provide a short-lived request token. It is
     // used only for this call and is never persisted or returned to the UI.
-    client = createStandaloneRobogoApiClient({ requestToken: token || undefined });
+    client = createStandaloneRobogoApiClient({
+      requestToken: token || undefined,
+      // A process-wide token is only permitted for a private local service.
+      // Shared/trusted-proxy deployments must forward a verified, short-lived
+      // token for the current account on every request.
+      allowEnvironmentToken: !multiUser,
+    });
   } catch {
     return {
       state: 'unavailable',
@@ -270,8 +302,60 @@ export async function probeRobogoIntegration(
   };
 }
 
+function microduckBrowserSurface(): {
+  available: boolean;
+  entryUrl: string;
+  state: 'mounted' | 'redirect' | 'missing';
+  reason: string;
+} {
+  const root = String(process.env.RDK_SIM2REAL_MICRODUCK_ROOT ?? '').trim();
+  if (root && path.isAbsolute(root) && fs.existsSync(path.join(root, 'index.html'))) {
+    return {
+      available: true,
+      entryUrl: publicPath('/mujoco/microduck/'),
+      state: 'mounted',
+      reason: 'MicroDuck 静态仿真资源已挂载。',
+    };
+  }
+  const rawUrl = String(process.env.RDK_SIM2REAL_MICRODUCK_URL ?? '').trim();
+  if (rawUrl) {
+    try {
+      const parsed = new URL(rawUrl);
+      const loopback = ['localhost', '127.0.0.1', '::1'].includes(parsed.hostname);
+      if (
+        !parsed.username &&
+        !parsed.password &&
+        !parsed.search &&
+        !parsed.hash &&
+        (parsed.protocol === 'https:' || (parsed.protocol === 'http:' && loopback))
+      ) {
+        return {
+          available: true,
+          entryUrl: parsed.toString(),
+          state: 'redirect',
+          reason: 'MicroDuck 由独立仿真服务提供。',
+        };
+      }
+    } catch {
+      // Fall through to the explicit missing state.
+    }
+  }
+  return {
+    available: false,
+    entryUrl: publicPath('/mujoco/microduck/'),
+    state: 'missing',
+    reason: 'MicroDuck 静态资源未挂载；请配置 RDK_SIM2REAL_MICRODUCK_ROOT 或 URL。',
+  };
+}
+
 export function simulatorIntegration(): {
-  browser: { available: true; entryUrl: string };
+  browser: {
+    available: boolean;
+    entryUrl: string;
+    state: 'mounted' | 'redirect' | 'missing';
+    reason: string;
+  };
+  boardAgent: { available: boolean; reason: string };
   robogo: { available: boolean; reason: string };
   local: { available: boolean; reason: string; mock?: boolean };
 } {
@@ -279,7 +363,11 @@ export function simulatorIntegration(): {
   const localRunnerConfigured = isLocalRunnerConfigured();
   const localRunnerMock = process.env.RDK_SIM2REAL_LOCAL_RUNNER_MODE === 'mock';
   return {
-    browser: { available: true, entryUrl: '/mujoco/microduck/' },
+    browser: microduckBrowserSurface(),
+    boardAgent: {
+      available: false,
+      reason: '公开发行版未注入 BoardAgent；板型探测和真机执行保持只读占位。',
+    },
     robogo: {
       available: runnerConfigured,
       reason: runnerConfigured

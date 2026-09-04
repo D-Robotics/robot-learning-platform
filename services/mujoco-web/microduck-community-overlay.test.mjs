@@ -5,6 +5,11 @@ import { JSDOM } from 'jsdom';
 
 const overlaySource = await readFile(new URL('./microduck-community-overlay.js', import.meta.url), 'utf8');
 
+test('control legend uses the simulator Q/E kick contract', () => {
+  assert.match(overlaySource, /<kbd>Q · E<\/kbd><span>左 \/ 右踢球<\/span>/);
+  assert.doesNotMatch(overlaySource, /<kbd>A \/ Q · E<\/kbd>/);
+});
+
 test('browser recorder captures contract observations and actions from window.rl', async () => {
   const dom = new JSDOM(
     '<!doctype html><html><head></head><body><main>MicroDuck simulation</main></body></html>',
@@ -18,6 +23,7 @@ test('browser recorder captures contract observations and actions from window.rl
   window.matchMedia = () => ({ matches: false });
   window.URL.createObjectURL = () => 'blob:microduck-test';
   window.URL.revokeObjectURL = () => {};
+  const controllerActions = [];
   window.rl = {
     buildObs: () => Float32Array.from({ length: 61 }, (_, index) => index / 100),
     lastAction: Float32Array.from({ length: 14 }, (_, index) => index / 10),
@@ -27,6 +33,12 @@ test('browser recorder captures contract observations and actions from window.rl
     data: {
       qpos: Float32Array.from({ length: 20 }, (_, index) => index),
       qvel: Float32Array.from({ length: 20 }, (_, index) => index / 2),
+    },
+    controller: {
+      sources: [{
+        id: 'keyboard',
+        onAction: (action) => controllerActions.push(action),
+      }],
     },
   };
 
@@ -45,6 +57,22 @@ test('browser recorder captures contract observations and actions from window.rl
   assert.equal(recorder.lastHeader.contractId, 'microduck-policy-v1');
   assert.equal(recorder.lastHeader.observationSize, 61);
   assert.equal(recorder.lastHeader.actionSize, 14);
+
+  // The upstream keyboard source has no B binding.  The overlay owns B as a
+  // desktop convenience and must route it through the controller action bus
+  // when the touch button is not mounted.
+  window.dispatchEvent(new window.KeyboardEvent('keydown', {
+    bubbles: true,
+    cancelable: true,
+    code: 'KeyB',
+    key: 'b',
+  }));
+  assert.ok(controllerActions.includes('quack'), 'desktop B should dispatch the quack action');
+
+  const alternateKick = window.document.querySelector('[data-mobile-action="alternate-kick"]');
+  assert.ok(alternateKick, 'mobile action panel should expose alternate kick');
+  alternateKick.click();
+  assert.ok(controllerActions.includes('alternateKick'), 'alternate kick should use the controller fallback');
 
   recorder.clear();
   assert.equal(recorder.sampleCount, 0);

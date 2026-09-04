@@ -39,14 +39,29 @@ assert.equal(
 assert.match(app, /function renderNextAction\(\)/);
 assert.match(app, /function openRecordDetails\(record\)/);
 assert.match(app, /function renderActionLibrary\(\)/);
+assert.match(app, /simulator\.controls/, 'action library must consume the manifest control map');
+assert.match(app, /kick-left.*keys: \['Q'\]/, 'MicroDuck template must publish the Q left-kick binding');
+assert.match(app, /kick-right.*keys: \['E'\]/, 'MicroDuck template must publish the E right-kick binding');
+assert.doesNotMatch(
+  app,
+  /keys: \['ArrowUp', 'ArrowDown', 'A', 'E', 'Space'\]/,
+  'the old A/E/Space mapping must not regress into the public template',
+);
 assert.match(app, /function renderTelemetryEvidence\(\)/);
 assert.match(app, /function parseTelemetryText\(text\)/);
+assert.match(app, /function safeLaunchUrl\(value\)/, 'browser launch targets must be validated');
+assert.match(app, /const launchUrl = safeLaunchUrl\(run\.launchUrl\)/, 'external simulator URLs must open safely');
+assert.match(app, /configuredBrowserEntry = safeLaunchUrl\(simulator\.browser\?\.entryUrl/, 'configured simulator entry must drive the iframe');
+assert.match(html, /id="microduck-entry-link"/);
+assert.match(html, /id="microduck-footer-link"/);
+assert.match(app, /microduck-entry-link/);
 assert.match(
   html,
   /id="telemetry-publish-button"/,
   'telemetry evidence must have an explicit publish action',
 );
 assert.match(app, /function publishTelemetry\(\)/, 'telemetry publish flow must be wired');
+assert.match(app, /headers: \{ 'Idempotency-Key': requestKey \}/, 'deployment plans must be idempotent');
 assert.match(
   app,
   /sim2real\/runs\/.*telemetry/,
@@ -68,6 +83,16 @@ assert.match(
   app,
   /const robogoAccountReady = robogo\.state === 'ready'/,
   'RoboGo action label must include account readiness',
+);
+assert.match(
+  app,
+  /const robogoLoginRequired = robogo\.state === 'login_required'/,
+  'RoboGo login gating must distinguish missing login from a degraded read-only probe',
+);
+assert.match(
+  app,
+  /if \(loginRequired\)[\s\S]*?runModel\('robogo'\)/,
+  'a degraded RoboGo probe must defer authorization to the server-side launch gate',
 );
 assert.doesNotMatch(
   app,

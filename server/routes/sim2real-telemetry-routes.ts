@@ -1,21 +1,23 @@
+import { createHash } from 'node:crypto';
 import { type Request, type Response, type Router } from 'express';
 
 import type { Device } from '../../shared/types.js';
-import type {
-  Sim2RealEvaluationSummary,
-  Sim2RealTelemetryRecord,
-  Sim2RealTelemetrySample,
-  Sim2RealTelemetrySource,
+import {
+  SIM2REAL_CONTRACT_LIMITS,
+  type Sim2RealEvaluationSummary,
+  type Sim2RealTelemetryRecord,
+  type Sim2RealTelemetrySample,
+  type Sim2RealTelemetrySource,
 } from '../../shared/sim2real.js';
 import { sendApiError, wrapAsync } from '../sim2real/http-helpers.js';
 import { requestOwnsDevice } from '../sim2real/standalone-adapters.js';
 import {
-  appendSim2RealTelemetry,
-  findSim2RealTelemetryByIdempotency,
+  appendSim2RealTelemetryWithResult,
+  evaluateSim2RealRun,
   getSim2RealRun,
   getSim2RealModel,
   listSim2RealTelemetry,
-  updateSim2RealRun,
+  SIM2REAL_TELEMETRY_RECORD_CAP,
 } from '../sim2real/sim2real-store.js';
 import type { Sim2RealAuthPort } from '../sim2real/sim2real-auth.js';
 
@@ -30,10 +32,47 @@ export interface Sim2RealTelemetryRouteDeps {
   storageError: StorageError;
 }
 
+export interface Sim2RealTelemetryRouteOptions {
+  /** API prefix supplied by the owning Sim2Real router. */
+  prefix?: string;
+}
+
+const DEFAULT_SIM2REAL_API_PREFIX = '/api/sim2real';
+
+function normalizeTelemetryApiPrefix(value: string | undefined): string {
+  const prefix = String(value ?? DEFAULT_SIM2REAL_API_PREFIX).trim();
+  if (!/^\/[A-Za-z0-9._~-]+(?:\/[A-Za-z0-9._~-]+)*$/.test(prefix)) {
+    throw new Error(`Invalid Sim2Real telemetry API prefix: ${prefix}`);
+  }
+  return prefix;
+}
+
+/**
+ * Validation failure raised from the atomic evaluation callback.  It is kept
+ * distinct from storage/runner errors so the route can preserve its existing
+ * deterministic 409 response without accidentally persisting a partial
+ * evaluation.
+ */
+class Sim2RealEvaluationValidationError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'Sim2RealEvaluationValidationError';
+  }
+}
+
 const TELEMETRY_SAMPLE_CAP = 5_000;
-const TELEMETRY_VECTOR_CAP = 256;
+// Keep transport validation aligned with the manifest contract limits.  The
+// browser and board adapters may use small vectors today, but RDK Duck
+// contracts are explicitly allowed to declare up to 4096 dimensions; a
+// smaller transport cap would make those otherwise-valid contracts
+// impossible to evaluate.
+const TELEMETRY_VECTOR_CAP = Math.max(
+  SIM2REAL_CONTRACT_LIMITS.maxObservationSize,
+  SIM2REAL_CONTRACT_LIMITS.maxActionSize,
+);
 const TELEMETRY_BODY_CAP = 2_000_000;
 const SAFE_TELEMETRY_ID = /^[a-zA-Z0-9][a-zA-Z0-9._:-]{0,127}$/;
+const SAFE_IDEMPOTENCY_KEY = /^[\x21-\x7e]{1,128}$/;
 
 function noStore(response: Response): void {
   response.setHeader('Cache-Control', 'no-store');
@@ -64,7 +103,10 @@ function normalizeTelemetrySample(
     return { error: `samples[${index}] must be an object` };
   }
   const source = value as Record<string, unknown>;
-  const t = Number(source.t ?? source.timestamp);
+  // `time` is emitted by a few simulator/exporter versions; keep the
+  // canonical stored field as `t` while accepting the timestamp aliases at
+  // the HTTP boundary for backwards compatibility.
+  const t = Number(source.t ?? source.time ?? source.timestamp);
   if (!Number.isFinite(t) || t < 0 || t > 86_400) {
     return { error: `samples[${index}].t must be between 0 and 86400 seconds` };
   }
@@ -146,6 +188,68 @@ function safeNonNegativeInteger(value: unknown, label: string): { value?: number
   return { value: parsed };
 }
 
+function requestIdempotencyKey(
+  request: Request,
+  body: Record<string, unknown>,
+): { value?: string; error?: string } {
+  const rawHeader = request.headers['idempotency-key'];
+  const header = Array.isArray(rawHeader)
+    ? rawHeader.join(',').trim()
+    : String(rawHeader ?? '').trim();
+  const bodyValue = body.idempotencyKey == null ? '' : String(body.idempotencyKey).trim();
+  if (header && !SAFE_IDEMPOTENCY_KEY.test(header)) {
+    return { error: 'Idempotency-Key 请求头格式无效' };
+  }
+  if (bodyValue && !SAFE_IDEMPOTENCY_KEY.test(bodyValue)) {
+    return { error: 'idempotencyKey 格式无效' };
+  }
+  if (header && bodyValue && header !== bodyValue) {
+    return { error: 'Idempotency-Key 请求头与 body.idempotencyKey 不一致' };
+  }
+  return { value: header || bodyValue || undefined };
+}
+
+function validateContractDimensions(
+  samples: readonly Sim2RealTelemetrySample[],
+  contract: { observationSize: number; actionSize: number },
+): string | undefined {
+  for (const [index, sample] of samples.entries()) {
+    if (sample.observation && sample.observation.length !== contract.observationSize) {
+      return `samples[${index}].observation must contain exactly ${contract.observationSize} values`;
+    }
+    if (sample.action && sample.action.length !== contract.actionSize) {
+      return `samples[${index}].action must contain exactly ${contract.actionSize} values`;
+    }
+  }
+  return undefined;
+}
+
+function telemetryFingerprint(input: {
+  runId: string;
+  modelId: string;
+  source: Sim2RealTelemetrySource;
+  deviceId?: string;
+  contractId?: string;
+  sequence?: number;
+  droppedCount?: number;
+  samples: readonly Sim2RealTelemetrySample[];
+}): string {
+  return createHash('sha256')
+    .update(
+      JSON.stringify({
+        runId: input.runId,
+        modelId: input.modelId,
+        source: input.source,
+        deviceId: input.deviceId || null,
+        contractId: input.contractId || null,
+        sequence: input.sequence ?? null,
+        droppedCount: input.droppedCount ?? null,
+        samples: input.samples,
+      }),
+    )
+    .digest('hex');
+}
+
 function vectorErrors(
   actual: readonly Sim2RealTelemetrySample[],
   reference: readonly Sim2RealTelemetrySample[],
@@ -159,7 +263,11 @@ function vectorErrors(
     const left = actual[index]?.[field];
     const right = reference[index]?.[field];
     if (!left || !right) continue;
-    const dimensions = Math.min(left.length, right.length);
+    // Contract dimensions are validated before evaluation. Keep this guard as
+    // a second line of defence for legacy ledger records so a malformed pair
+    // never produces a deceptively small MAE/RMSE.
+    if (left.length !== right.length) continue;
+    const dimensions = left.length;
     for (let dimension = 0; dimension < dimensions; dimension += 1) {
       const error = Number(left[dimension]) - Number(right[dimension]);
       absolute += Math.abs(error);
@@ -233,7 +341,10 @@ function findVisibleDevice(devices: readonly OwnedDevice[], id: string): OwnedDe
 export function registerSim2RealTelemetryRoutes(
   router: Router,
   deps: Sim2RealTelemetryRouteDeps,
+  options: Sim2RealTelemetryRouteOptions = {},
 ): void {
+  const prefix = normalizeTelemetryApiPrefix(options.prefix);
+  const api = (suffix: string): string => `${prefix}${suffix}`;
   const ingestTelemetry = async (
     request: Request,
     response: Response,
@@ -304,7 +415,15 @@ export function registerSim2RealTelemetryRoutes(
     }
     if (source === 'board-agent' && deviceId) {
       const device = findVisibleDevice(await deps.visibleDevices(owner), deviceId);
-      if (!device || !requestOwnsDevice(request, device)) {
+      if (
+        !device ||
+        !requestOwnsDevice(
+          request,
+          device,
+          owner ? `sso:${owner}:web` : null,
+          deps.auth.isMultiUserDeployment(),
+        )
+      ) {
         response.status(404).json({ ok: false, error: 'SIM2REAL_DEVICE_NOT_FOUND' });
         return;
       }
@@ -316,13 +435,22 @@ export function registerSim2RealTelemetryRoutes(
       });
       return;
     }
+    const model = await getSim2RealModel(run.modelId, owner);
     if (contractId) {
-      const model = await getSim2RealModel(run.modelId, owner);
       if (model && contractId !== model.manifest.contract.id) {
         response.status(409).json({
           ok: false,
           error: 'SIM2REAL_CONTRACT_MISMATCH',
           message: '遥测 contractId 与训练模型契约不匹配。',
+        });
+        return;
+      }
+    }
+    if (model) {
+      const dimensionError = validateContractDimensions(parsed.samples, model.manifest.contract);
+      if (dimensionError) {
+        sendApiError(response, 400, 'SIM2REAL_CONTRACT_DIMENSION_MISMATCH', dimensionError, {
+          retryable: false,
         });
         return;
       }
@@ -341,53 +469,58 @@ export function registerSim2RealTelemetryRoutes(
       });
       return;
     }
-    const idempotencyKey = String(body.idempotencyKey ?? '').trim();
-    if (idempotencyKey && !SAFE_TELEMETRY_ID.test(idempotencyKey)) {
-      sendApiError(response, 400, 'SIM2REAL_INVALID_TELEMETRY', 'idempotencyKey 格式无效', {
+    const idempotency = requestIdempotencyKey(request, body);
+    if (idempotency.error) {
+      sendApiError(response, 400, 'SIM2REAL_INVALID_TELEMETRY', idempotency.error, {
         retryable: false,
       });
       return;
     }
-    if (idempotencyKey) {
-      const duplicate = await findSim2RealTelemetryByIdempotency(runId, idempotencyKey, owner);
-      if (duplicate) {
-        response.status(200).json({ ok: true, duplicate: true, telemetry: duplicate });
-        return;
-      }
-    }
+    const idempotencyKey = idempotency.value;
+    const normalizedTelemetry = {
+      runId,
+      modelId: run.modelId,
+      source,
+      ...(deviceId ? { deviceId } : {}),
+      ...(contractId ? { contractId } : {}),
+      ...(sequence.value == null ? {} : { sequence: sequence.value }),
+      samples: parsed.samples,
+      ...(droppedCount.value == null ? {} : { droppedCount: droppedCount.value }),
+    };
     try {
-      const telemetry = await appendSim2RealTelemetry(
+      const appended = await appendSim2RealTelemetryWithResult(
         {
-          runId,
-          modelId: run.modelId,
-          source,
-          ...(deviceId ? { deviceId } : {}),
-          ...(contractId ? { contractId } : {}),
-          ...(sequence.value == null ? {} : { sequence: sequence.value }),
-          samples: parsed.samples,
-          ...(droppedCount.value == null ? {} : { droppedCount: droppedCount.value }),
+          ...normalizedTelemetry,
           ...(idempotencyKey ? { idempotencyKey } : {}),
+          ...(idempotencyKey
+            ? { _requestFingerprint: telemetryFingerprint(normalizedTelemetry) }
+            : {}),
         },
         owner,
       );
-      response.status(201).json({ ok: true, telemetry, acceptedSamples: telemetry.samples.length });
+      if (idempotencyKey) response.setHeader('Idempotency-Key', idempotencyKey);
+      response.status(appended.duplicate ? 200 : 201).json({
+        ok: true,
+        telemetry: appended.telemetry,
+        ...(appended.duplicate ? { duplicate: true } : { acceptedSamples: appended.telemetry.samples.length }),
+      });
     } catch (error) {
       deps.storageError(request, response, error, 'sim2real-telemetry-ingest');
     }
   };
 
   router.post(
-    '/api/sim2real/telemetry',
+    api('/telemetry'),
     wrapAsync(async (request, response) => ingestTelemetry(request, response)),
   );
   router.post(
-    '/api/sim2real/runs/:id/telemetry',
+    api('/runs/:id/telemetry'),
     wrapAsync(async (request, response) =>
       ingestTelemetry(request, response, String(request.params.id || '').trim()),
     ),
   );
   router.get(
-    '/api/sim2real/runs/:id/telemetry',
+    api('/runs/:id/telemetry'),
     wrapAsync(async (request, response) => {
       const owner = deps.requestOwner(request, response);
       if (owner === null) return;
@@ -404,7 +537,7 @@ export function registerSim2RealTelemetryRoutes(
     }),
   );
   router.get(
-    '/api/sim2real/runs/:id/replay',
+    api('/runs/:id/replay'),
     wrapAsync(async (request, response) => {
       const owner = deps.requestOwner(request, response);
       if (owner === null) return;
@@ -415,19 +548,26 @@ export function registerSim2RealTelemetryRoutes(
         response.status(404).json({ ok: false, error: 'SIM2REAL_RUN_NOT_FOUND' });
         return;
       }
-      const telemetry = await listSim2RealTelemetry(runId, owner, 500);
+      // Evaluation/replay must consume every accepted chunk. The store's
+      // record cap is an explicit rejection guard, never a silent truncation.
+      const telemetry = await listSim2RealTelemetry(
+        runId,
+        owner,
+        SIM2REAL_TELEMETRY_RECORD_CAP,
+      );
       const evaluation = run.evaluation ?? buildEvaluation(telemetry, undefined);
       response.json({ ok: true, runId, replay: evaluation.replay, evaluation });
     }),
   );
   router.post(
-    '/api/sim2real/runs/:id/evaluate',
+    api('/runs/:id/evaluate'),
     wrapAsync(async (request, response) => {
       const owner = deps.requestOwner(request, response);
       if (owner === null) return;
       noStore(response);
       const runId = String(request.params.id || '').trim();
-      if (!(await getSim2RealRun(runId, owner))) {
+      const run = await getSim2RealRun(runId, owner);
+      if (!run) {
         response.status(404).json({ ok: false, error: 'SIM2REAL_RUN_NOT_FOUND' });
         return;
       }
@@ -463,12 +603,63 @@ export function registerSim2RealTelemetryRoutes(
         }
         reference = parsed.samples;
       }
-      const telemetry = await listSim2RealTelemetry(runId, owner, 500);
-      const evaluation = buildEvaluation(telemetry, reference);
+      const model = await getSim2RealModel(run.modelId, owner);
+      if (!model) {
+        response.status(409).json({
+          ok: false,
+          error: 'SIM2REAL_MODEL_NOT_FOUND',
+          message: '该运行关联的模型制品已不可用，无法进行契约评测。',
+        });
+        return;
+      }
+      if (reference) {
+        const referenceDimensionError = validateContractDimensions(
+          reference,
+          model.manifest.contract,
+        );
+        if (referenceDimensionError) {
+          sendApiError(
+            response,
+            400,
+            'SIM2REAL_REFERENCE_DIMENSION_MISMATCH',
+            referenceDimensionError,
+            { retryable: false },
+          );
+          return;
+        }
+      }
       try {
-        const updated = await updateSim2RealRun(runId, { evaluation }, owner);
-        response.json({ ok: true, run: updated, evaluation });
+        // Read, compute, and persist inside the store's serialized write
+        // chain.  If telemetry arrives concurrently, either it is observed
+        // by this callback or it runs afterwards and clears the freshly
+        // written evaluation; an older summary can never overwrite newer
+        // samples.
+        const evaluated = await evaluateSim2RealRun(runId, owner, ({ telemetry }) => {
+          const telemetryDimensionError = validateContractDimensions(
+            telemetry.flatMap((record) => record.samples),
+            model.manifest.contract,
+          );
+          if (telemetryDimensionError) {
+            throw new Sim2RealEvaluationValidationError(telemetryDimensionError);
+          }
+          return buildEvaluation(telemetry, reference);
+        });
+        if (!evaluated) {
+          response.status(404).json({ ok: false, error: 'SIM2REAL_RUN_NOT_FOUND' });
+          return;
+        }
+        response.json({ ok: true, run: evaluated.run, evaluation: evaluated.evaluation });
       } catch (error) {
+        if (error instanceof Sim2RealEvaluationValidationError) {
+          sendApiError(
+            response,
+            409,
+            'SIM2REAL_TELEMETRY_DIMENSION_MISMATCH',
+            error.message,
+            { retryable: false },
+          );
+          return;
+        }
         deps.storageError(request, response, error, 'sim2real-run-evaluate');
       }
     }),

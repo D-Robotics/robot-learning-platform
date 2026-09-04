@@ -1,20 +1,38 @@
 [Unit]
 Description=RDK Robot Learning Platform standalone Sim2Real web service
+Conflicts=studio-integrated-sim2real.service
 After=network-online.target
 Wants=network-online.target
+ConditionPathExists=/opt/rdk-robot-learning-platform/current/dist-server/services/sim2real-web/server.js
+ConditionPathExists=/usr/bin/env
 
 [Service]
 Type=simple
 User=sim2real
 Group=sim2real
 WorkingDirectory=/opt/rdk-robot-learning-platform/current
-EnvironmentFile=-/etc/rdk-robot-learning-platform.env
+EnvironmentFile=/etc/rdk-robot-learning-platform-sim2real.env
 Environment=NODE_ENV=production
+Environment=RDK_SIM2REAL_DEPLOYMENT=web-cloud
+Environment=RDK_SIM2REAL_SSO_REQUIRED=1
+Environment=RDK_SIM2REAL_AUTH_MODE=trusted-proxy
+Environment=RDK_SIM2REAL_PUBLIC_BASE_PATH=/sim2real
 Environment=RDK_SIM2REAL_BIND_HOST=127.0.0.1
 Environment=RDK_SIM2REAL_PORT=18102
-Environment=RDK_SIM2REAL_STORAGE_DIR=/var/lib/rdk-robot-learning-platform
+Environment=RDK_SIM2REAL_STORAGE_DIR=/var/lib/rdk-robot-learning-platform/sim2real
 Environment=PATH=/usr/local/bin:/usr/bin:/bin
-ExecStart=/usr/bin/node --import tsx/esm /opt/rdk-robot-learning-platform/current/services/sim2real-web/server.ts
+ExecStartPre=/usr/bin/test ${RDK_SIM2REAL_DEPLOYMENT} = web-cloud
+ExecStartPre=/usr/bin/test ${NODE_ENV} = production
+ExecStartPre=/usr/bin/test ${RDK_SIM2REAL_SSO_REQUIRED} = 1
+ExecStartPre=/usr/bin/test ${RDK_SIM2REAL_AUTH_MODE} = trusted-proxy
+ExecStartPre=/bin/sh -c 'test -n "$${RDK_SIM2REAL_TRUSTED_PROXY_SECRET}"'
+ExecStartPre=/usr/bin/env node -e "if (Buffer.byteLength(process.env.RDK_SIM2REAL_TRUSTED_PROXY_SECRET || '', 'utf8') < 32) process.exit(1)"
+ExecStartPre=/usr/bin/test ${RDK_SIM2REAL_BIND_HOST} = 127.0.0.1
+ExecStartPre=/usr/bin/test ${RDK_SIM2REAL_PORT} = 18102
+ExecStartPre=/usr/bin/test ${RDK_SIM2REAL_PUBLIC_BASE_PATH} = /sim2real
+ExecStartPre=/usr/bin/test ${RDK_SIM2REAL_STORAGE_DIR} = /var/lib/rdk-robot-learning-platform/sim2real
+ExecStartPre=/usr/bin/env node --version
+ExecStart=/usr/bin/env node /opt/rdk-robot-learning-platform/current/dist-server/services/sim2real-web/server.js
 Restart=always
 RestartSec=3
 NoNewPrivileges=true
@@ -23,7 +41,7 @@ ProtectHome=true
 ProtectSystem=strict
 PrivateDevices=true
 RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
-ReadWritePaths=/var/lib/rdk-robot-learning-platform
+ReadWritePaths=/var/lib/rdk-robot-learning-platform/sim2real
 
 [Install]
 WantedBy=multi-user.target

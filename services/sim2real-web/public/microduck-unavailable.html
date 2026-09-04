@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>MicroDuck 仿真资源未挂载</title>
+    <style>
+      :root { color-scheme: dark; font-family: Inter, system-ui, sans-serif; }
+      body { margin: 0; min-height: 100vh; display: grid; place-items: center; background: #090b10; color: #f5f7fb; }
+      main { width: min(620px, calc(100% - 40px)); padding: 32px; border: 1px solid #26303d; border-radius: 20px; background: #111720; box-shadow: 0 24px 80px #0008; }
+      h1 { margin: 0 0 12px; font-size: 26px; }
+      p { color: #aeb8c6; line-height: 1.7; }
+      code { color: #ff9b45; }
+      a { display: inline-block; margin-top: 12px; padding: 11px 16px; border-radius: 10px; background: #ff7a24; color: #111; font-weight: 700; text-decoration: none; }
+      .note { padding: 14px 16px; border-left: 3px solid #ff7a24; background: #191e26; }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>MicroDuck 仿真资源尚未挂载</h1>
+      <p>Sim2Real 服务已正常运行，但浏览器版 MicroDuck 是一个独立发布的静态资源包，当前服务器还没有配置它。</p>
+      <p class="note">管理员：将上游 release 解压到 <code>RDK_SIM2REAL_MICRODUCK_ROOT</code> 指定目录，或配置经过校验的 <code>RDK_SIM2REAL_MICRODUCK_URL</code>，然后重启服务。</p>
+      <p>在仿真资源就绪前，你仍可以在工作台中登记模型、校验契约、运行无 CUDA Mock 流程和查看部署预检计划。</p>
+      <!-- Works for both the local root (/mujoco/microduck/) and the
+           reverse-proxied /sim2real/mujoco/microduck/ path. -->
+      <a href="../../#simulate">返回 Sim2Real 工作台</a>
+    </main>
+  </body>
+</html>

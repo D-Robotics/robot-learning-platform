@@ -4,7 +4,7 @@ import type {
   Sim2RealTrainingSpec,
 } from '../../shared/sim2real.js';
 import {
-  isRobogoRunnerConfigured,
+  isLocalRunnerConfigured as isRunnerConfigured,
   requestRobogoTraining,
   requestRobogoTrainingStatus,
   type Sim2RealRobogoRunResult,
@@ -16,7 +16,7 @@ import {
  * deployment choice explicit without duplicating payload validation.
  */
 export function isLocalRunnerConfigured(raw?: string): boolean {
-  return isRobogoRunnerConfigured(raw ?? process.env.RDK_SIM2REAL_LOCAL_RUNNER_URL ?? '');
+  return isRunnerConfigured(raw ?? process.env.RDK_SIM2REAL_LOCAL_RUNNER_URL ?? '');
 }
 
 export function requestLocalTraining(input: {
@@ -26,6 +26,7 @@ export function requestLocalTraining(input: {
   training?: Sim2RealTrainingSpec;
   resumeFrom?: Sim2RealCheckpointRef;
   taskId?: string;
+  idempotencyKey?: string;
   fetchImpl?: typeof fetch;
   runnerUrl?: string;
   timeoutMs?: number;
@@ -39,6 +40,8 @@ export function requestLocalTraining(input: {
     // Pass an explicit empty value when the local endpoint is unset so the
     // generic adapter can never fall back to the RoboGo endpoint.
     runnerUrl: input.runnerUrl ?? process.env.RDK_SIM2REAL_LOCAL_RUNNER_URL ?? '',
+    allowPrivateHttp: true,
+    allowEnvironmentToken: false,
   });
 }
 
@@ -55,5 +58,7 @@ export function requestLocalTrainingStatus(input: {
     ...input,
     requestToken: undefined,
     runnerUrl: input.runnerUrl ?? process.env.RDK_SIM2REAL_LOCAL_RUNNER_URL ?? '',
+    allowPrivateHttp: true,
+    allowEnvironmentToken: false,
   });
 }

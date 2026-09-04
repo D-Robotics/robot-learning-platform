@@ -114,7 +114,12 @@
           </nav>
           <div class="sidebar-divider sidebar-divider-compact"></div>
           <div class="nav-label">快速入口</div>
-          <a class="side-link" href="/mujoco/microduck/" target="_blank" rel="noreferrer"
+          <a
+            class="side-link"
+            id="microduck-entry-link"
+            href="./mujoco/microduck/"
+            target="_blank"
+            rel="noreferrer"
             ><span>↗</span> 独立打开仿真</a
           >
           <a class="side-link" href="https://robogo.d-robotics.cc" target="_blank" rel="noreferrer"
@@ -571,25 +576,35 @@
                   <iframe
                     id="simulator-frame"
                     title="MicroDuck 浏览器仿真"
-                    src="/mujoco/microduck/?cb=duck-lab-01"
+                    src="./mujoco/microduck/?cb=duck-lab-01"
                     loading="lazy"
                     allow="autoplay; fullscreen"
                     allowfullscreen
                   ></iframe>
                   <div class="simulator-product-gate" id="simulator-product-gate" hidden>
                     <span class="gate-icon">◇</span>
-                    <strong>RDK Duck 仿真适配器待配置</strong>
-                    <p>
+                    <strong id="simulator-gate-title">RDK Duck 仿真适配器待配置</strong>
+                    <p id="simulator-gate-copy">
                       当前产品线不会复用 MicroDuck 的浏览器场景。请先导入真实契约
                       manifest，或使用本地 headless 仿真 worker。
                     </p>
                     <button
+                      id="simulator-gate-train"
                       class="button button-primary button-small"
                       type="button"
                       data-view-target="train"
                     >
                       去训练与模型 →
                     </button>
+                    <a
+                      id="simulator-gate-install"
+                      class="button button-primary button-small"
+                      href="./mujoco/microduck/"
+                      target="_blank"
+                      rel="noreferrer"
+                      hidden
+                      >查看 MicroDuck 安装指引 ↗</a
+                    >
                   </div>
                   <div class="simulator-fallback">
                     <strong>动作录制</strong>
@@ -598,7 +613,7 @@
                     </p>
                     <a
                       class="button button-primary button-small"
-                      href="/mujoco/microduck/"
+                      href="./mujoco/microduck/"
                       target="_blank"
                       rel="noreferrer"
                       >新标签页打开 ↗</a
@@ -1108,7 +1123,8 @@
       <footer class="footer">
         <span>RDK Duck Lab · standalone web service</span
         ><span
-          ><a href="/rdkstudio/">RDK Studio</a> · <a href="/mujoco/microduck/">MicroDuck</a> ·
+          ><a href="/rdkstudio/">RDK Studio</a> ·
+          <a id="microduck-footer-link" href="./mujoco/microduck/">MicroDuck</a> ·
           <a href="https://developer.d-robotics.cc/" target="_blank" rel="noreferrer"
             >RDK 文档 ↗</a
           ></span

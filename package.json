@@ -4,14 +4,18 @@
   "private": false,
   "description": "RDK robot learning and Sim2Real workflow platform for MicroDuck and RDK-X5.",
   "type": "module",
-  "engines": { "node": ">=20" },
+  "engines": { "node": "^20.19.0 || ^22.12.0 || >=24.0.0" },
   "scripts": {
-    "dev:sim2real": "tsx services/sim2real-web/server.ts",
-    "dev:mock-worker": "node services/sim2real-web/mock-local-worker.mjs",
+    "dev:sim2real": "node scripts/run-with-env.mjs node --import tsx/esm services/sim2real-web/server.ts",
+    "dev:mock-worker": "node scripts/run-with-env.mjs node services/sim2real-web/mock-local-worker.mjs",
+    "build": "tsc -p tsconfig.build.json && npm run build:assets",
+    "build:assets": "node scripts/copy-server-assets.mjs",
     "test": "vitest run",
     "verify:ui": "node services/sim2real-web/ui-ia.spec.mjs",
     "verify:recorder": "node services/mujoco-web/microduck-community-overlay.test.mjs",
-    "verify": "npm run verify:ui && npm run verify:recorder && node services/sim2real-web/server-wiring.spec.mjs && npm test"
+    "verify:deployment": "node scripts/verify-deployment-assets.mjs",
+    "verify:examples": "node scripts/verify-examples.mjs",
+    "verify": "npm run verify:ui && npm run verify:recorder && npm run verify:deployment && npm run verify:examples && node services/sim2real-web/server-wiring.spec.mjs && npm test"
   },
   "dependencies": {
     "express": "^5.2.1"

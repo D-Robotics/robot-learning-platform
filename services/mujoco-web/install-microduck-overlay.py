@@ -10,6 +10,7 @@ from __future__ import annotations
 import hashlib
 import os
 import shutil
+import time
 from pathlib import Path
 
 
@@ -27,6 +28,35 @@ def target_root() -> Path:
 def script_tag(source: Path) -> str:
     digest = hashlib.sha256(source.read_bytes()).hexdigest()[:12]
     return f'<script src="./microduck-community-overlay.js?v={digest}" defer></script>'
+
+
+def atomic_replace_text(target: Path, content: str, mode: int) -> None:
+    """Replace a release file atomically and preserve its mode."""
+    temporary = target.with_name(
+        f".{target.name}.codex-overlay-{os.getpid()}-{time.time_ns()}.tmp"
+    )
+    descriptor = -1
+    try:
+        descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, mode)
+        with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+            descriptor = -1
+            handle.write(content)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.chmod(temporary, mode)
+        os.replace(temporary, target)
+        directory = os.open(target.parent, os.O_RDONLY)
+        try:
+            os.fsync(directory)
+        finally:
+            os.close(directory)
+    finally:
+        if descriptor != -1:
+            os.close(descriptor)
+        try:
+            temporary.unlink()
+        except FileNotFoundError:
+            pass
 
 
 def main() -> None:
@@ -49,7 +79,7 @@ def main() -> None:
         if "</body>" not in content:
             raise SystemExit("MicroDuck index has no </body> insertion point")
         content = content.replace("</body>", f"  {tag}\n</body>", 1)
-        index.write_text(content, encoding="utf-8")
+        atomic_replace_text(index, content, index.stat().st_mode & 0o7777)
         print(f"installed overlay script into {index}")
     else:
         print(f"overlay script already present in {index}")

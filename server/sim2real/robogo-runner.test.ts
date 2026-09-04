@@ -2,12 +2,23 @@ import { describe, expect, it } from 'vitest';
 
 import { BUILTIN_MICRODUCK_MODEL } from '../../shared/sim2real.js';
 import {
+  isSim2RealRunnerOutcomeUnknown,
   isRobogoRunnerConfigured,
+  normalizeRunnerUrl,
   requestRobogoTraining,
   requestRobogoTrainingStatus,
 } from './robogo-runner.js';
 
 describe('RoboGo Sim2Real runner adapter', () => {
+  it('requires HTTPS for RoboGo, while local adapters explicitly opt into private HTTP', () => {
+    expect(() => normalizeRunnerUrl('http://127.0.0.1:19090/train')).toThrow(
+      'sim2real_robogo_runner_url_must_be_https',
+    );
+    expect(normalizeRunnerUrl('http://127.0.0.1:19090/train', { localHttp: true })).toBe(
+      'http://127.0.0.1:19090/train',
+    );
+  });
+
   it('fails closed when no explicit runner URL is configured', async () => {
     await expect(
       requestRobogoTraining({
@@ -17,6 +28,39 @@ describe('RoboGo Sim2Real runner adapter', () => {
       }),
     ).rejects.toThrow('sim2real_robogo_runner_not_configured');
     expect(isRobogoRunnerConfigured('')).toBe(false);
+  });
+
+  it('only uses a process-wide RoboGo token when the caller explicitly allows private mode', async () => {
+    const previous = process.env.RDK_SIM2REAL_ROBOGO_TOKEN;
+    process.env.RDK_SIM2REAL_ROBOGO_TOKEN = 'private-env-token';
+    const authorizations: string[] = [];
+    const fetchImpl = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+      authorizations.push(String(new Headers(init?.headers).get('authorization') || ''));
+      return new Response(JSON.stringify({ status: 'completed' }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      });
+    }) as typeof fetch;
+    try {
+      await requestRobogoTraining({
+        accountId: 'alice',
+        manifest: BUILTIN_MICRODUCK_MODEL.manifest,
+        runnerUrl: 'https://runner.example.test/train',
+        allowEnvironmentToken: true,
+        fetchImpl,
+      });
+      await requestRobogoTraining({
+        accountId: 'alice',
+        manifest: BUILTIN_MICRODUCK_MODEL.manifest,
+        runnerUrl: 'https://runner.example.test/train',
+        allowEnvironmentToken: false,
+        fetchImpl,
+      });
+      expect(authorizations).toEqual(['Bearer private-env-token', '']);
+    } finally {
+      if (previous === undefined) delete process.env.RDK_SIM2REAL_ROBOGO_TOKEN;
+      else process.env.RDK_SIM2REAL_ROBOGO_TOKEN = previous;
+    }
   });
 
   it('posts only the normalized manifest and preserves the runner job id', async () => {
@@ -83,9 +127,9 @@ describe('RoboGo Sim2Real runner adapter', () => {
     const result = await requestRobogoTraining({
       accountId: 'alice',
       manifest: BUILTIN_MICRODUCK_MODEL.manifest,
-      runnerUrl: 'http://127.0.0.1:18199/run',
+      runnerUrl: 'https://runner.example.test/run',
       fetchImpl: (async () =>
-        new Response(JSON.stringify({ status: 'queued', url: 'javascript:alert(1)' }), {
+        new Response(JSON.stringify({ status: 'queued', runId: 'safe-run-1', url: 'javascript:alert(1)' }), {
           status: 200,
           headers: { 'content-type': 'application/json' },
         })) as typeof fetch,
@@ -93,6 +137,52 @@ describe('RoboGo Sim2Real runner adapter', () => {
 
     expect(result).toMatchObject({ status: 'queued' });
     expect(result.launchUrl).toBeUndefined();
+  });
+
+  it('marks transport and 5xx responses as outcome-unknown but keeps 4xx rejection deterministic', async () => {
+    const request = {
+      accountId: 'alice',
+      manifest: BUILTIN_MICRODUCK_MODEL.manifest,
+      runnerUrl: 'https://runner.example.test/train',
+    } as const;
+    await expect(
+      requestRobogoTraining({
+        ...request,
+        fetchImpl: (async () => {
+          throw new Error('socket closed');
+        }) as typeof fetch,
+      }),
+    ).rejects.toSatisfy((error: unknown) => isSim2RealRunnerOutcomeUnknown(error));
+    await expect(
+      requestRobogoTraining({
+        ...request,
+        fetchImpl: (async () =>
+          new Response(JSON.stringify({ error: 'invalid request' }), {
+            status: 400,
+            headers: { 'content-type': 'application/json' },
+          })) as typeof fetch,
+      }),
+    ).rejects.toSatisfy((error: unknown) => !isSim2RealRunnerOutcomeUnknown(error));
+    await expect(
+      requestRobogoTraining({
+        ...request,
+        fetchImpl: (async () =>
+          new Response('not-json', {
+            status: 400,
+            headers: { 'content-type': 'text/plain' },
+          })) as typeof fetch,
+      }),
+    ).rejects.toSatisfy((error: unknown) => !isSim2RealRunnerOutcomeUnknown(error));
+    await expect(
+      requestRobogoTraining({
+        ...request,
+        fetchImpl: (async () =>
+          new Response(JSON.stringify({ error: 'gateway timeout' }), {
+            status: 504,
+            headers: { 'content-type': 'application/json' },
+          })) as typeof fetch,
+      }),
+    ).rejects.toSatisfy((error: unknown) => isSim2RealRunnerOutcomeUnknown(error));
   });
 
   it('normalizes common runner terminal states without hiding failures', async () => {
@@ -103,7 +193,7 @@ describe('RoboGo Sim2Real runner adapter', () => {
         await requestRobogoTraining({
           accountId: 'alice',
           manifest: BUILTIN_MICRODUCK_MODEL.manifest,
-          runnerUrl: 'http://127.0.0.1:18199/run',
+          runnerUrl: 'https://runner.example.test/run',
           fetchImpl: (async () =>
             new Response(JSON.stringify({ status }), {
               status: 200,
@@ -125,7 +215,7 @@ describe('RoboGo Sim2Real runner adapter', () => {
       accountId: 'alice',
       requestToken: 'Bearer session-token',
       externalRunId: 'mock-run-42',
-      runnerUrl: 'http://127.0.0.1:19090/train',
+      runnerUrl: 'https://runner.example.test/train',
       fetchImpl: (async (input, init) => {
         capturedUrl = String(input);
         expect(init?.method).toBe('GET');
@@ -166,7 +256,7 @@ describe('RoboGo Sim2Real runner adapter', () => {
       }) as typeof fetch,
     });
 
-    expect(capturedUrl).toBe('http://127.0.0.1:19090/runs/mock-run-42');
+    expect(capturedUrl).toBe('https://runner.example.test/runs/mock-run-42');
     expect(result).toMatchObject({
       status: 'completed',
       externalRunId: 'mock-run-42',

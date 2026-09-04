@@ -55,9 +55,10 @@
 `accountId` 和当前请求的服务端令牌。Sim2Real 自己维护模型、run、artifact、设备和部署台账，
 所有记录按 `accountId` 隔离；未登录的共享部署请求返回 401。
 
-当前仓内 `studio-sso-auth.ts` 只是组合根适配器，负责把现有 Studio SSO 会话转换成这个端口；
-同域模式因此不需要二次登录。Sim2Real 的业务路由不直接引用 Studio SSO 实现，未来拆成独立域名/仓库
-或接入标准 OIDC 时，只替换身份适配器，不改业务模块。RoboGo token 只在服务端为当前账号的显式训练请求使用。
+当前仓内 `services/sim2real-web/studio-sso-auth.ts` 只是组合根适配器，提供匿名单用户和签名
+`trusted-proxy` 参考模式，不直接解密 Studio Cookie 或终止 OIDC。生产同域部署需要由经过验证的
+Studio SSO 网关/adapter 注入身份；未来拆成独立域名/仓库或接入标准 OIDC 时，只替换身份适配器，
+不改业务模块。RoboGo token 只在服务端为当前账号的显式训练请求使用。
 
 ### 两个产品如何兼容
 
@@ -74,12 +75,12 @@
 
 ## 独立平台总架构：一站式体验，不是一进程
 
-最合理的边界是“平台独立、入口互通”。Sim2Real Lab 自己拥有项目、模型、运行和部署台账；RDK Studio 通过 Skill / MCP / API 调用它，但不复制一套业务逻辑。RoboGo 是可插拔的云端训练后端，本地 Agent 负责 GPU、文件、USB/SSH 和 RDK 板卡等需要在用户环境执行的动作。
+最合理的边界是“平台独立、入口互通”。Sim2Real Lab 自己拥有项目、模型、运行和部署台账；RDK Studio 可以通过外部 Skill / MCP / API 调用它，但不复制一套业务逻辑。RoboGo 是可插拔的云端训练后端，本地 Agent 负责 GPU、文件、USB/SSH 和 RDK 板卡等需要在用户环境执行的动作。本公开仓库只提供 API 与适配契约，不包含 `duck-lab-mcp`、`microduck-mcp` 或 DSH Skill 实现；未装配这些外部组件时，网页和 CLI 仍可独立运行。
 
 ```text
 RDK Studio（可选入口）
-  → 账号隔离的 DSH Skill（流程剧本）
-  → microduck-mcp（AI 适配器，只包装 API）
+  → 外部 DSH Skill（可选流程剧本）
+  → 外部 MCP 适配器（可选，只包装 API）
   → Sim2Real API（唯一业务契约）
   → 台账 / 事件 / 权限（owner、幂等、审计）
        ├─ Local Agent：本地 GPU、文件、真实 RL；无 GPU 时 Mock
@@ -98,15 +99,15 @@ RDK Studio（可选入口）
 
 ### API、MCP、Skill 分工
 
-- **API 是机器契约**：当前由 `/api/sim2real/...` 提供统一接口，后续可平滑映射到版本化 `/api/v1/duck/...`；网页、CLI、RDK Studio 和未来客户端都不直接调用 runner。
-- **MCP 是 AI 适配器**：`microduck-mcp` 只转发 API 并投影状态/证据；Plan/Spec 只读，Execute 的训练、上传、Canary、Live 等变更动作必须审批。
-- **Skill 是流程剧本**：用账号隔离的 DSH Skill 描述“先仿真、再训练、再预检”的步骤，不把模型校验、权限和业务状态塞进 Skill 文本。
+- **API 是机器契约**：公共客户端使用版本化 `/api/v1/duck/...`；现有 `/api/sim2real/...` 保留为向后兼容别名。两套路径由同一业务路由和同一台账/鉴权适配器提供，网页、CLI、RDK Studio 和未来客户端都不直接调用 runner。
+- **MCP 是 AI 适配器**：部署方可让 `microduck-mcp` 转发 API 并投影状态/证据；Plan/Spec 只读，Execute 的训练、上传、Canary、Live 等变更动作必须审批。该 MCP 不随本公开仓库发布。
+- **Skill 是流程剧本**：部署方可用账号隔离的 DSH Skill 描述“先仿真、再训练、再预检”的步骤，不把模型校验、权限和业务状态塞进 Skill 文本。该 Skill 不随本公开仓库发布。
 
 ### 在 RDK Studio 里的一次完整操作
 
 1. 规划阶段通过 MCP 只读读取项目、manifest、板卡和历史 run，生成可审阅的 Spec/Plan。
 2. 执行前明确选择 `local` 或 `robogo`，训练、上传、Canary、Live 等变更动作等待用户批准。
-3. Skill 调 MCP，MCP 调版本化 API；服务端返回 `runId`，事件或轮询持续更新状态。
+3. Skill 调 MCP，MCP 调版本化 `/api/v1/duck/...` API；服务端返回 `runId`，事件或轮询持续更新状态。
 4. 状态、artifact、参数、日志摘要和失败原因同时写入平台台账并投影到 Studio。
 5. 通过 preflight 和 no-motor Canary 后，才允许受控硬件 Agent 在人工批准下进入 Live；网页永远不直接开电机。
 
@@ -126,18 +127,34 @@ RDK Studio（可选入口）
 
 | 层            | 平台做什么                                                                           | 当前状态  |
 | ------------- | ------------------------------------------------------------------------------------ | --------- |
-| 浏览器仿真    | 打开官方 MicroDuck WASM/ONNX 仿真                                                    | 已上线    |
-| 模型契约      | MicroDuck 严格校验固定契约；RDK Duck 校验 manifest 自洽契约                          | 已上线    |
-| manifest      | 登记模型版本、policy bundle 和不透明 artifact 引用                                   | 已上线    |
-| 训练协议      | 统一 `queued/running/completed`，运行详情轮询和 checkpoint/artifact/metrics 返回格式 | 已上线    |
-| 台账          | 按账号记录 run、训练参数、checkpoint 和状态                                          | 已上线    |
-| 遥测与评测    | JSON/JSONL ingest、幂等补传、回放摘要、MAE/RMSE 和跌倒/奖励统计                      | 已上线    |
-| 板端预检      | 读取板型、系统、TROS、磁盘等信息，不开电机                                           | 已上线    |
+| 浏览器仿真    | 打开官方 MicroDuck WASM/ONNX 仿真                                                    | 协议已验证；需挂载上游 release |
+| 模型契约      | MicroDuck 严格校验固定契约；RDK Duck 校验 manifest 自洽契约                          | 控制面已验证 |
+| manifest      | 登记模型版本、policy bundle 和不透明 artifact 引用                                   | 控制面已验证 |
+| 训练协议      | 统一 `queued/running/completed`，运行详情轮询和 checkpoint/artifact/metrics 返回格式 | Mock 已验证；真实 worker 待接入 |
+| 台账          | 按账号记录 run、训练参数、checkpoint 和状态                                          | 单实例 ledger 已验证 |
+| 遥测与评测    | JSON/JSONL ingest、幂等补传、回放摘要、MAE/RMSE 和跌倒/奖励统计                      | 平台侧已验证 |
+| 板端预检      | 读取板型、系统、TROS、磁盘等信息，不开电机                                           | 只读接口已验证；BoardAgent 待接入 |
 | Canary / Live | Canary 只做无电机验证；网页不直接开启 Live                                           | 受控/阻断 |
 
 运控策略可使用 `cpu-onnx + locomotion + threads=1`，由 CPU 单线程推理；视觉、语音和感知模型继续走 RDK BPU。普通 ONNX 不会被冒充成目标板的 BPU 编译制品。
 
 当前 JSON ledger 适合单实例多人 MVP；正式横向扩容前，应替换为带 `accountId/projectId` 行级约束的共享数据库或对象存储 adapter。
+
+遥测 ingest 还有保护性配额：单 run 默认最多 100,000 个样本/128 MiB，单账号最多 500,000 个样本/512 MiB；超限返回 `413 SIM2REAL_TELEMETRY_QUOTA_EXCEEDED`。整个 ledger 的 768 MiB 字节上限返回 `507 SIM2REAL_STORAGE_QUOTA_EXCEEDED`；这不是对象存储的长期容量方案。
+
+控制面还设有单实例元数据保护上限：最多 100 个自定义模型、10,000 个 run、200 个部署计划；
+达到上限返回 `SIM2REAL_LEDGER_QUOTA_EXCEEDED`（HTTP 507），不会静默删除历史。local/RoboGo
+的 queued/running 任务按账号共享默认 4 个并发，可用 `RDK_SIM2REAL_MAX_ACTIVE_RUNS` 调整（最大 100）；
+预留、幂等和并发检查在同一写入链中完成。正式多人部署仍需 PostgreSQL/对象存储的租户配额与跨副本锁。
+
+为覆盖 runner 接受后进程崩溃的窄窗口，保留的 queued run 可以通过
+`POST /api/v1/duck/runs/:id/reconcile` 恢复（旧客户端也可使用同路径下的
+`/api/sim2real/runs/:id/reconcile` 兼容别名）：提交
+`{"externalRunId":"…","confirm":true}` 后，服务只读查询对应 runner 并原子写回状态、checkpoint
+和 artifact，不会重新发起任务；runner 不可达时返回可重试的
+`503 SIM2REAL_RUN_RECONCILE_UNAVAILABLE`。没有 `externalRunId` 的崩溃窗口预留默认在 24 小时后、
+下一次提交训练时自动终止并释放名额，可用 `RDK_SIM2REAL_ACTIVE_RUN_TTL_SECONDS` 调整（5 分钟至
+7 天）；已关联真实 runner 的任务不受影响。
 
 ## 路径 A：不用 RoboGo
 
@@ -148,11 +165,11 @@ RDK Studio（可选入口）
 
 ```text
 Sim2Real 页面
-  → POST /api/sim2real/runs（backend=local）
+  → POST /api/v1/duck/runs（backend=local）
   → local-runner
   → http://127.0.0.1:19090/train
   → Mock worker（queued）
-  → GET /api/sim2real/runs/:id（running → completed）
+  → GET /api/v1/duck/runs/:id（running → completed）
   → run 记录 + mock checkpoint/artifact/metrics
 ```
 
@@ -169,7 +186,7 @@ Sim2Real 页面
 ```
 
 训练完成后，平台可以将浏览器导出的 JSONL 或 Board Agent 上报的同格式数据提交到
-`POST /api/sim2real/runs/:id/telemetry`，再调用 `POST /api/sim2real/runs/:id/evaluate` 生成回放摘要和
+`POST /api/v1/duck/runs/:id/telemetry`，再调用 `POST /api/v1/duck/runs/:id/evaluate` 生成回放摘要和
 action/observation 的 MAE/RMSE。当前数据仍保存在本地 owner-scoped ledger，尚未接入 X5 的 Protobuf Agent。
 
 将来接入本地 GPU 时，只需要让真实 worker 实现同一个 `/train` 协议，并把 `RDK_SIM2REAL_LOCAL_RUNNER_URL` 指向它；页面和 API 不需要改。
@@ -182,7 +199,7 @@ action/observation 的 MAE/RMSE。当前数据仍保存在本地 owner-scoped le
 
 ```text
 Sim2Real 页面
-  → POST /api/sim2real/runs（backend=robogo）
+  → POST /api/v1/duck/runs（backend=robogo）
   → robogo-runner
   → RoboGo 训练 API
   → queued / running / completed
@@ -192,14 +209,18 @@ Sim2Real 页面
 
 RoboGo 是显式可选后端。只有配置 `RDK_SIM2REAL_ROBOGO_RUNNER_URL` 后，平台才会发起请求，不会自动申请计费机器。请求只携带已校验的模型契约、机器人变体、artifact 引用和归一化训练参数，不携带 Python/XML/shell。
 
-当前 RoboGo 分支已经有独立 adapter、状态解析、checkpoint 解析和失败保护，但生产环境没有配置真实 runner，所以尚未做真实云端训练验证。RoboGo 不可用时，本地分支也不会偷偷 fallback。
+当前 RoboGo 分支已经有独立 adapter、状态解析、checkpoint 解析和失败保护，但生产环境没有配置真实 runner，所以尚未做真实云端训练验证。RoboGo 不可用时，本地分支也不会偷偷 fallback；状态查询暂时失败会返回可重试的 `503 SIM2REAL_RUN_STATUS_UNAVAILABLE`，保留最后已知状态，不会擅自标记完成或失败。
+
+如果 RoboGo 已受理请求但提交响应超时/连接断开，或服务在写回 `externalRunId` 前崩溃，先在
+RoboGo 控制面确认任务归属，再使用上面的 reconcile 接口补回 `externalRunId`；这类 outcome
+unknown 不应直接重试提交。该接口不重试提交，也不绕过当前账号的短期 token 校验。
 
 ## 两条路径的差异
 
 | 维度              | 不用 RoboGo              | 使用 RoboGo              |
 | ----------------- | ------------------------ | ------------------------ |
 | 算力位置          | 本地服务器 / 本地 GPU    | RoboGo 云端              |
-| 当前状态          | Mock 已上线并实测        | 接口已预留，待配置       |
+| 当前状态          | 本仓库 Mock 可运行并已实测 | 接口已预留，待配置       |
 | 账号与费用        | 不需要 RoboGo 账号       | 需要显式登录/计费确认    |
 | 请求入口          | local runner `/train`    | RoboGo runner            |
 | 模型契约          | 按产品选择；两者均先校验 | 按产品选择；两者均先校验 |
@@ -231,8 +252,8 @@ status: completed
 mock: true
 cuda: false
 externalRunId: mock-microduck-90fc2a90-e465-4216-814d-758398699705
-checkpoint.iteration: 0
-artifactRef: artifact://mock/microduck/.../checkpoint-0
+checkpoint.iteration: 5
+artifactRef: artifact://mock/microduck/.../checkpoint-5
 ```
 
 同一条链路还验证了 `low-vram / 128 env / 12 iterations` 的自定义参数，台账文件成功写入。错误的 `contractId` 会被 Mock worker 拒绝并返回 HTTP 400，说明它不是无条件伪造成功。
@@ -241,7 +262,7 @@ artifactRef: artifact://mock/microduck/.../checkpoint-0
 
 ```text
 release: 20260903-sim2real-mock-mvp-05
-sim2real-web.service: active
+standalone-sim2real.service: active
 sim2real-mock-worker.service: active
 公网页面: https://rdkstudio.d-robotics.cc/sim2real/
 ```
@@ -250,7 +271,7 @@ sim2real-mock-worker.service: active
 
 ### 现在能做
 
-1. 打开 MicroDuck 浏览器仿真。
+1. 在已挂载 MicroDuck release 的部署中打开浏览器仿真；干净源码 checkout 会显示安装指引页。
 2. 在产品选择器切换 MicroDuck / RDK Duck。
 3. 校验和登记对应产品的模型 manifest；RDK Duck 不会复用 MicroDuck 维度。
 4. 选择 smoke / low-vram / standard / high-vram 训练档位。

@@ -5,6 +5,7 @@ let modelCatalog = [];
 let running = false;
 let frameBusy = false;
 let controls = [];
+let frameObjectUrl = null;
 
 async function request(path, options = {}) {
   const response = await fetch(`./api/${path}`, {
@@ -64,7 +65,11 @@ async function refreshFrame() {
       fetch(`./api/sessions/${session.id}/frame.jpg?ts=${Date.now()}`),
     ]);
     if (!image.ok) throw new Error(`frame HTTP ${image.status}`);
-    $("#frame").src = URL.createObjectURL(await image.blob());
+    const nextObjectUrl = URL.createObjectURL(await image.blob());
+    const previousObjectUrl = frameObjectUrl;
+    frameObjectUrl = nextObjectUrl;
+    $("#frame").src = nextObjectUrl;
+    if (previousObjectUrl) URL.revokeObjectURL(previousObjectUrl);
     updateReadouts(state);
   } finally {
     frameBusy = false;
@@ -146,4 +151,9 @@ async function boot() {
 boot().catch((error) => {
   setStatus(error.message, true);
   $("#model-title").textContent = "无法连接 MuJoCo 服务";
+});
+
+window.addEventListener("beforeunload", () => {
+  if (frameObjectUrl) URL.revokeObjectURL(frameObjectUrl);
+  frameObjectUrl = null;
 });

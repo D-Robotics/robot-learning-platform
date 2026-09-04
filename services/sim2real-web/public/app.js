@@ -1,6 +1,13 @@
 const CONTRACT_ID = 'microduck-policy-v1';
 const SIMULATOR_PATH = '/mujoco/microduck/';
 const BASE_PATH = window.location.pathname.startsWith('/sim2real') ? '/sim2real' : '';
+
+function appRelativePath(value) {
+  const raw = String(value || '').trim();
+  if (!raw || raw.startsWith('//') || /^https?:\/\//i.test(raw)) return raw;
+  if (BASE_PATH && raw.startsWith('/mujoco/')) return BASE_PATH + raw;
+  return raw;
+}
 const PRODUCT_PROFILES = Object.freeze({
   microduck: {
     id: 'microduck',
@@ -19,6 +26,23 @@ const PRODUCT_PROFILES = Object.freeze({
     simulatorPath: '',
   },
 });
+
+// Keep the MicroDuck template aligned with the upstream physical-key map and
+// the overlay. These are runtime/UI bindings, not claims that every action
+// has a separate ONNX artifact.
+const MICRODUCK_CONTROLS = Object.freeze([
+  { id: 'move', label: '移动', keys: ['W', 'A', 'S', 'D', '↑', '↓', '←', '→'], description: 'W/A/S/D 或方向键：前进、后退、左转、右转。', source: 'keyboard' },
+  { id: 'kick-left', label: '左脚踢球', keys: ['Q'], description: '触发左脚踢球动作。', source: 'keyboard' },
+  { id: 'kick-right', label: '右脚踢球', keys: ['E'], description: '触发右脚踢球动作。', source: 'keyboard' },
+  { id: 'alternate-kick', label: '换脚踢球', keys: ['F'], description: '由仿真引擎自动选择下一只脚。', source: 'keyboard' },
+  { id: 'sit-toggle', label: '坐下 / 站起', keys: ['R'], description: '切换坐下与站立状态。', source: 'keyboard' },
+  { id: 'ground-pick', label: '拾取', keys: ['G'], description: '触发喙朝地面的拾取动作。', source: 'keyboard' },
+  { id: 'chase-camera', label: '跟随视角', keys: ['C'], description: '切换跟随镜头，不是相机硬件控制。', source: 'keyboard' },
+  { id: 'locomotion-mode', label: '移动模式', keys: ['M'], description: '在双足与滚轮模式之间切换。', source: 'keyboard' },
+  { id: 'quack', label: '叫一声', keys: ['B'], description: '平台覆盖层快捷键（上游桌面键盘未绑定）；移动端按钮和手柄也可触发。', source: 'ui' },
+  { id: 'reset', label: '重置仿真', keys: ['Space'], description: '重新开始当前仿真。', source: 'keyboard' },
+  { id: 'spawn-ball', label: '生成球', description: '通过移动端完整控制面板或仿真 API 触发。', source: 'ui' },
+]);
 
 const ACTION_TASKS = Object.freeze({
   walk: { label: '行走', hint: '稳定步态与速度控制' },
@@ -66,9 +90,14 @@ const state = {
   selectedRecord: null,
   telemetry: null,
   publishingTelemetry: false,
+  runSubmitting: false,
+  deploymentSubmitting: false,
 };
 
 let overviewPollTimer = null;
+const runStatusFailures = new Map();
+let runStatusBackoffUntil = 0;
+let runStatusNoticeAt = 0;
 
 const $ = (id) => document.getElementById(id);
 
@@ -113,12 +142,52 @@ function showToast(message, tone = 'normal') {
   window.setTimeout(() => toast.remove(), 4800);
 }
 
+function safeLoginUrl(value) {
+  const raw = String(value || '').trim();
+  if (!raw) return '/rdkstudio/';
+  try {
+    const parsed = new URL(raw, window.location.origin);
+    const sameOrigin = parsed.origin === window.location.origin;
+    if (parsed.username || parsed.password || (!sameOrigin && parsed.protocol !== 'https:')) {
+      return '/rdkstudio/';
+    }
+    return sameOrigin
+      ? parsed.pathname + parsed.search + parsed.hash
+      : parsed.toString();
+  } catch {
+    return '/rdkstudio/';
+  }
+}
+
+function safeLaunchUrl(value) {
+  const raw = String(value || '').trim();
+  if (!raw || raw.startsWith('//')) return null;
+  try {
+    const parsed = new URL(raw, window.location.origin);
+    if (parsed.username || parsed.password || parsed.protocol === 'javascript:') return null;
+    const sameOrigin = parsed.origin === window.location.origin;
+    if (!sameOrigin && parsed.protocol !== 'https:') return null;
+    // Keep launch targets free of opaque fragments/queries supplied by a
+    // runner. Same-origin paths are returned normalized; the caller decides
+    // whether the built-in default needs a reverse-proxy prefix.
+    if (parsed.search || parsed.hash) return null;
+    // An operator may expose an external MicroDuck service at a same-origin
+    // path such as /mujoco/microduck/. That path is already routed by Nginx;
+    // a configured entry is therefore used verbatim. Only the built-in
+    // default is prefixed by appRelativePath().
+    return sameOrigin ? parsed.pathname : parsed.toString();
+  } catch {
+    return null;
+  }
+}
+
 function setAuthGate(payload) {
   state.authRequired = true;
-  const loginUrl =
+  const loginUrl = safeLoginUrl(
     payload && typeof payload === 'object' && typeof payload.ssoLoginUrl === 'string'
       ? payload.ssoLoginUrl
-      : '/rdkstudio/';
+      : '/rdkstudio/',
+  );
   const gate = $('auth-gate');
   const loginButton = $('auth-login-button');
   const loginLink = $('login-link');
@@ -347,6 +416,7 @@ function renderIntegrations() {
   const local = integrations.simulator?.local || {};
   const storage = integrations.storage || {};
   const simulator = integrations.simulator || {};
+  const boardAgent = simulator.boardAgent || {};
   const profile = selectedProductProfile();
   const model = selectedModel();
   // MicroDuck's entry is a bundled read-only asset, so keep it visible while
@@ -381,12 +451,15 @@ function renderIntegrations() {
   );
   const robogoRunnerAvailable = simulator.robogo?.available === true;
   const robogoAccountReady = robogo.state === 'ready';
+  const robogoLoginRequired = robogo.state === 'login_required';
   setText(
     'robogo-run-button',
     robogoRunnerAvailable
       ? robogoAccountReady
         ? '发起 RoboGo 训练'
-        : '检查 RoboGo 连接'
+        : robogoLoginRequired
+          ? '检查 RoboGo 连接'
+          : '尝试发起 RoboGo 训练'
       : '登记 RoboGo 训练',
   );
   setText(
@@ -412,14 +485,67 @@ function renderIntegrations() {
   setText('status-storage', storage.writable ? '台账可写' : '需要共享存储');
   setText('status-storage-card', storage.writable ? '台账可写' : '需要共享存储');
   setText('status-storage-detail', storage.message || '状态按账号隔离');
-  $('browser-run-button')?.toggleAttribute('disabled', !model || !browserAvailable);
+  $('browser-run-button')?.toggleAttribute('disabled', state.runSubmitting || !model || !browserAvailable);
   $('browser-run-button')?.setAttribute(
     'title',
     !browserAvailable ? '当前产品线尚未配置浏览器仿真适配器' : model ? '' : '请先选择模型',
   );
+  const detectButton = $('detect-button');
+  if (detectButton) {
+    const canDetect = Boolean(selectedDevice()) && boardAgent.available === true;
+    detectButton.disabled = !canDetect;
+    detectButton.title = canDetect
+      ? '通过受控 BoardAgent 读取板型'
+      : boardAgent.reason || '当前部署未接入 BoardAgent';
+  }
+  const preflightButton = $('preflight-button');
+  if (preflightButton) {
+    preflightButton.disabled =
+      state.deploymentSubmitting || !state.activeDeployment || boardAgent.available !== true;
+    preflightButton.title =
+      boardAgent.reason || '先生成预检计划，并在部署环境接入 BoardAgent';
+  }
+  for (const id of ['contract-run-button', 'local-run-button', 'robogo-run-button']) {
+    $(id)?.toggleAttribute('disabled', state.runSubmitting || !model);
+  }
   const simulatorFrame = $('simulator-frame');
   const simulatorFallback = document.querySelector('.simulator-fallback');
   const simulatorProductGate = $('simulator-product-gate');
+  const simulatorGateTitle = $('simulator-gate-title');
+  const simulatorGateCopy = $('simulator-gate-copy');
+  const simulatorGateTrain = $('simulator-gate-train');
+  const simulatorGateInstall = $('simulator-gate-install');
+  const configuredBrowserEntry = safeLaunchUrl(simulator.browser?.entryUrl);
+  const browserEntry = simulator.browser?.entryUrl
+    ? configuredBrowserEntry || appRelativePath(SIMULATOR_PATH)
+    : appRelativePath(SIMULATOR_PATH);
+  const microduckMissing = profile.id === 'microduck' && simulator.browser?.state === 'missing';
+  if (simulatorFrame && simulatorFrame.getAttribute('src') !== browserEntry) {
+    simulatorFrame.setAttribute('src', browserEntry);
+  }
+  const browserEntryLink = document.querySelector('.simulator-fallback a');
+  if (browserEntryLink && browserEntryLink.getAttribute('href') !== browserEntry) {
+    browserEntryLink.setAttribute('href', browserEntry);
+  }
+  for (const id of ['microduck-entry-link', 'microduck-footer-link']) {
+    const link = $(id);
+    if (link && link.getAttribute('href') !== browserEntry) link.setAttribute('href', browserEntry);
+  }
+  if (simulatorGateTitle) {
+    simulatorGateTitle.textContent = microduckMissing
+      ? 'MicroDuck 仿真资源尚未挂载'
+      : 'RDK Duck 仿真适配器待配置';
+  }
+  if (simulatorGateCopy) {
+    simulatorGateCopy.textContent = microduckMissing
+      ? '当前源码不内置上游静态包；请先按部署说明挂载经过审核的 release，再回到这里开始录制。'
+      : '当前产品线不会复用 MicroDuck 的浏览器场景。请先导入真实契约 manifest，或使用本地 headless 仿真 worker。';
+  }
+  if (simulatorGateTrain) simulatorGateTrain.hidden = microduckMissing;
+  if (simulatorGateInstall) {
+    simulatorGateInstall.hidden = !microduckMissing;
+    simulatorGateInstall.setAttribute('href', browserEntry);
+  }
   if (simulatorFrame) simulatorFrame.hidden = !browserAvailable;
   if (simulatorFallback) simulatorFallback.hidden = !browserAvailable;
   if (simulatorProductGate) simulatorProductGate.hidden = browserAvailable;
@@ -555,14 +681,25 @@ function renderActionLibrary() {
   const root = $('sim-action-list');
   const empty = $('sim-action-empty');
   if (!root || !empty) return;
-  const policies = state.model?.manifest?.simulator?.policyBundle?.policies || [];
+  const simulator = state.model?.manifest?.simulator || {};
+  // Runtime/UI controls are separate from policy artifacts: reset, quack and
+  // camera actions do not necessarily have an ONNX artifact behind them.
+  // Older manifests only have policyBundle, so retain that as a fallback.
+  const controls = Array.isArray(simulator.controls) ? simulator.controls : [];
+  const policies = Array.isArray(simulator.policyBundle?.policies)
+    ? simulator.policyBundle.policies
+    : [];
+  const entries = controls.length ? controls : policies;
   root.replaceChildren();
-  empty.hidden = policies.length > 0;
-  for (const policy of policies) {
+  empty.hidden = entries.length > 0;
+  for (const policy of entries) {
     const item = document.createElement('div');
     item.className = 'sim-action-item';
     const keys =
       Array.isArray(policy.keys) && policy.keys.length ? policy.keys.join(' / ') : '按模型默认';
+    const description = String(policy.description || '').trim();
+    if (description) item.title = description;
+    item.setAttribute('aria-label', `${policy.label || policy.id}：${keys}${description ? `。${description}` : ''}`);
     item.innerHTML =
       '<strong>' +
       escapeHtml(policy.label || policy.id) +
@@ -774,6 +911,12 @@ function booleanValue(value) {
   return false;
 }
 
+// Keep browser import capacity aligned with SIM2REAL_CONTRACT_LIMITS on the
+// server. RDK Duck manifests may legitimately declare vectors larger than
+// MicroDuck's 61/14 contract; truncating them here would make valid telemetry
+// impossible to publish.
+const MAX_TELEMETRY_VECTOR_VALUES = 4096;
+
 function normalizeTelemetrySample(value) {
   if (!value || typeof value !== 'object') return null;
   const raw = value;
@@ -781,13 +924,19 @@ function normalizeTelemetrySample(value) {
   if (timestamp === null) return null;
   return {
     t: timestamp,
-    ...(Array.isArray(raw.observation) ? { observation: raw.observation.slice(0, 256) } : {}),
-    ...(Array.isArray(raw.action) ? { action: raw.action.slice(0, 128) } : {}),
+    ...(Array.isArray(raw.observation)
+      ? { observation: raw.observation.slice(0, MAX_TELEMETRY_VECTOR_VALUES) }
+      : {}),
+    ...(Array.isArray(raw.action)
+      ? { action: raw.action.slice(0, MAX_TELEMETRY_VECTOR_VALUES) }
+      : {}),
     ...(finiteNumber(raw.reward) !== null ? { reward: finiteNumber(raw.reward) } : {}),
     ...(raw.done != null ? { done: booleanValue(raw.done) } : {}),
     ...(raw.fall != null ? { fall: booleanValue(raw.fall) } : {}),
   };
 }
+
+const MAX_TELEMETRY_IMPORT_SAMPLES = 100_000;
 
 function parseTelemetryText(text) {
   const lines = String(text || '')
@@ -798,6 +947,12 @@ function parseTelemetryText(text) {
   const values = [];
   let skipped = 0;
   let header = null;
+  const appendValues = (items) => {
+    if (values.length + items.length > MAX_TELEMETRY_IMPORT_SAMPLES) {
+      throw new Error(`遥测文件超过 ${MAX_TELEMETRY_IMPORT_SAMPLES} 帧上限，请先分段导入`);
+    }
+    values.push(...items);
+  };
   for (const line of lines) {
     let parsed;
     try {
@@ -807,11 +962,11 @@ function parseTelemetryText(text) {
       continue;
     }
     if (Array.isArray(parsed)) {
-      values.push(...parsed);
+      appendValues(parsed);
       continue;
     }
     if (parsed && typeof parsed === 'object' && Array.isArray(parsed.samples)) {
-      values.push(...parsed.samples);
+      appendValues(parsed.samples);
       header = parsed;
       continue;
     }
@@ -819,9 +974,9 @@ function parseTelemetryText(text) {
       header = parsed;
       continue;
     }
-    values.push(parsed);
+    appendValues([parsed]);
   }
-  const samples = values.map(normalizeTelemetrySample).filter(Boolean).slice(0, 50_000);
+  const samples = values.map(normalizeTelemetrySample).filter(Boolean);
   if (!samples.length) throw new Error('没有找到带 t/time 时间戳的有效遥测样本');
   const firstTimestamp = samples[0].t;
   const lastTimestamp = samples[samples.length - 1].t;
@@ -851,8 +1006,34 @@ function parseTelemetryText(text) {
   };
 }
 
+function currentModelIds() {
+  const selected = selectedModel();
+  if (selected?.id) return new Set([selected.id]);
+  return new Set(
+    (state.overview?.models || [])
+      .filter((model) => model.manifest?.robot?.id === state.productId)
+      .map((model) => model.id),
+  );
+}
+
+function runsForCurrentModel() {
+  const ids = currentModelIds();
+  return (state.overview?.runs || []).filter((run) => ids.has(run.modelId));
+}
+
+function deploymentsForCurrentModel() {
+  const ids = currentModelIds();
+  return (state.overview?.deployments || []).filter((deployment) => ids.has(deployment.modelId));
+}
+
+function currentTelemetry() {
+  const evidence = state.telemetry;
+  if (!evidence) return null;
+  return evidence.modelId && !currentModelIds().has(evidence.modelId) ? null : evidence;
+}
+
 function latestRun() {
-  return [...(state.overview?.runs || [])].sort((a, b) =>
+  return [...runsForCurrentModel()].sort((a, b) =>
     String(b.createdAt || '').localeCompare(String(a.createdAt || '')),
   )[0] || null;
 }
@@ -864,7 +1045,7 @@ function renderTelemetryEvidence() {
   const clear = $('telemetry-clear-button');
   const publish = $('telemetry-publish-button');
   if (!root || !stateBadge || !timeline || !clear) return;
-  const evidence = state.telemetry;
+  const evidence = currentTelemetry();
   if (!evidence) {
     stateBadge.className = 'state-badge state-neutral';
     stateBadge.textContent = '尚未导入';
@@ -931,7 +1112,11 @@ async function importTelemetryFile(event) {
     evidence.fileName = file.name;
     state.telemetry = evidence;
     renderAll();
-    showToast('已导入 ' + evidence.summary.sampleCount + ' 帧遥测，可用于本地回放检查', 'success');
+    const skippedHint = evidence.skipped ? `，跳过 ${evidence.skipped} 条无效行` : '';
+    showToast(
+      '已导入 ' + evidence.summary.sampleCount + ' 帧遥测' + skippedHint + '，可用于本地回放检查',
+      'success',
+    );
   } catch (error) {
     showToast(error instanceof Error ? error.message : '遥测文件无法解析', 'error');
   } finally {
@@ -940,7 +1125,7 @@ async function importTelemetryFile(event) {
 }
 
 async function publishTelemetry() {
-  const evidence = state.telemetry;
+  const evidence = currentTelemetry();
   if (!evidence) {
     showToast('请先导入一段遥测 JSONL', 'error');
     return;
@@ -950,25 +1135,73 @@ async function publishTelemetry() {
     showToast('请先发起一次训练或仿真运行，再绑定遥测', 'error');
     return;
   }
+  const model = state.overview?.models?.find((item) => item.id === run.modelId);
+  const contract = model?.manifest?.contract;
+  if (!contract) {
+    showToast('当前 Run 的模型契约不可用，无法安全绑定遥测', 'error');
+    return;
+  }
+  if (evidence.contractId && evidence.contractId !== contract.id) {
+    showToast('遥测契约与当前 Run 不一致，请切换产品或选择对应 Run', 'error');
+    return;
+  }
+  for (const [index, sample] of (evidence.samples || []).entries()) {
+    if (sample.observation && sample.observation.length !== contract.observationSize) {
+      showToast(`第 ${index + 1} 帧 observation 维度不匹配（应为 ${contract.observationSize}）`, 'error');
+      return;
+    }
+    if (sample.action && sample.action.length !== contract.actionSize) {
+      showToast(`第 ${index + 1} 帧 action 维度不匹配（应为 ${contract.actionSize}）`, 'error');
+      return;
+    }
+  }
   state.publishingTelemetry = true;
   renderTelemetryEvidence();
   try {
     const samples = evidence.samples || [];
-    const chunkSize = 5_000;
+    // Keep a generous margin below Express/nginx's 2 MiB limit. A legal
+    // MicroDuck frame is large (61D observation + 14D action), so a fixed
+    // 5,000-frame chunk would exceed the gateway before reaching the route.
+    const maxChunkBytes = 900_000;
+    const maxChunkSamples = 5_000;
     const requestId =
       evidence.uploadKey ||
       globalThis.crypto?.randomUUID?.() ||
       `telemetry-${Date.now()}-${Math.random().toString(16).slice(2)}`;
     evidence.uploadKey = requestId;
-    for (let offset = 0; offset < samples.length; offset += chunkSize) {
-      const chunk = samples.slice(offset, offset + chunkSize);
-      const sequence = Math.floor(offset / chunkSize);
+    evidence.modelId = run.modelId;
+    const basePayload = {
+      source: 'import',
+      modelId: run.modelId,
+      contractId: evidence.contractId || contract.id,
+    };
+    const baseBytes = new TextEncoder().encode(JSON.stringify({ ...basePayload, sequence: 0, idempotencyKey: requestId + '-0', samples: [] })).length;
+    const chunks = [];
+    let chunk = [];
+    let chunkBytes = baseBytes - 2;
+    for (const sample of samples) {
+      const sampleBytes = new TextEncoder().encode(JSON.stringify(sample)).length;
+      const extra = sampleBytes + (chunk.length ? 1 : 0);
+      if (
+        chunk.length &&
+        (chunk.length >= maxChunkSamples || chunkBytes + extra > maxChunkBytes)
+      ) {
+        chunks.push(chunk);
+        chunk = [];
+        chunkBytes = baseBytes - 2;
+      }
+      if (!chunk.length && chunkBytes + sampleBytes > maxChunkBytes) {
+        throw new Error('单帧遥测过大，无法放入安全请求分片');
+      }
+      chunk.push(sample);
+      chunkBytes += sampleBytes + (chunk.length > 1 ? 1 : 0);
+    }
+    if (chunk.length) chunks.push(chunk);
+    for (const [sequence, chunk] of chunks.entries()) {
       await request('/sim2real/runs/' + encodeURIComponent(run.id) + '/telemetry', {
         method: 'POST',
         body: JSON.stringify({
-          source: 'import',
-          modelId: run.modelId,
-          ...(evidence.contractId ? { contractId: evidence.contractId } : {}),
+          ...basePayload,
           sequence,
           idempotencyKey: requestId + '-' + sequence,
           samples: chunk,
@@ -1002,7 +1235,8 @@ function clearTelemetry() {
 
 function renderEvaluation() {
   renderTelemetryEvidence();
-  const runs = [...(state.overview?.runs || [])].sort((a, b) =>
+  const evidence = currentTelemetry();
+  const runs = [...runsForCurrentModel()].sort((a, b) =>
     String(b.createdAt || '').localeCompare(String(a.createdAt || '')),
   );
   const latest = runs[0] || null;
@@ -1017,7 +1251,7 @@ function renderEvaluation() {
           ? '评测失败'
           : latest
             ? '等待评测结果'
-            : state.telemetry
+            : evidence
               ? '已导入遥测证据'
               : '尚未产生评测结果';
   setText('eval-run-status', statusLabel);
@@ -1025,8 +1259,8 @@ function renderEvaluation() {
     'eval-run-name',
     latest
       ? (latest.summary || latest.modelId || '最新运行') + ' · ' + (latest.backend || 'unknown')
-      : state.telemetry
-        ? state.telemetry.fileName + ' · 本地聚合，可继续绑定到正式 Run'
+      : evidence
+        ? evidence.fileName + ' · 本地聚合，可继续绑定到正式 Run'
         : '训练完成后，这里会显示最新一次运行的仿真/真机指标。',
   );
   setText(
@@ -1055,10 +1289,10 @@ function renderEvaluation() {
   const mark = $('eval-status-mark');
   if (mark) {
     mark.textContent =
-      status === 'completed' ? '✓' : status === 'failed' ? '!' : state.telemetry ? '↗' : '○';
+      status === 'completed' ? '✓' : status === 'failed' ? '!' : evidence ? '↗' : '○';
     mark.className =
       'evaluation-status-mark ' +
-      (status === 'completed' || state.telemetry
+      (status === 'completed' || evidence
         ? 'is-success'
         : status === 'failed'
           ? 'is-error'
@@ -1067,13 +1301,14 @@ function renderEvaluation() {
 }
 
 function renderNextAction() {
+  const evidence = currentTelemetry();
   const model = selectedModel();
-  const runs = [...(state.overview?.runs || [])].sort((a, b) =>
+  const runs = [...runsForCurrentModel()].sort((a, b) =>
     String(b.createdAt || '').localeCompare(String(a.createdAt || '')),
   );
   const latest = runs[0] || null;
   const hasEvaluation = Boolean(latest?.metrics && typeof latest.metrics.successRate === 'number');
-  const deployments = state.overview?.deployments || [];
+  const deployments = deploymentsForCurrentModel();
   let view = 'simulate';
   let title = '先在仿真里验证「' + selectedTask().label + '」';
   let copy = selectedTask().hint + '。先录一段可回放轨迹，再决定使用本地服务器还是 RoboGo 训练。';
@@ -1093,7 +1328,7 @@ function renderNextAction() {
     title = '训练完成，先看评测证据';
     copy = '确认契约、成功率、跌倒率和控制延迟，再决定是否生成 X5 预检计划。';
     label = '进入评测中心 →';
-  } else if (state.telemetry && !hasEvaluation) {
+  } else if (evidence && !hasEvaluation) {
     view = 'evaluate';
     title = '遥测已导入，检查虚实差异';
     copy = '当前是浏览器本地聚合证据；先确认采样率和跌倒事件，再绑定到一次正式运行或继续训练。';
@@ -1134,7 +1369,8 @@ function renderEvaluationNext() {
   const button = $('evaluation-next-button');
   const line = $('evaluation-next-line');
   if (!title || !copy || !button || !line) return;
-  const latest = [...(state.overview?.runs || [])].sort((a, b) =>
+  const evidence = currentTelemetry();
+  const latest = [...runsForCurrentModel()].sort((a, b) =>
     String(b.createdAt || '').localeCompare(String(a.createdAt || '')),
   )[0];
   const hasMetrics = Boolean(latest?.metrics && typeof latest.metrics.successRate === 'number');
@@ -1165,9 +1401,9 @@ function renderEvaluationNext() {
     line.style.background = 'var(--red)';
     return;
   }
-  if (hasMetrics || state.telemetry) {
+  if (hasMetrics || evidence) {
     title.textContent = '下一步：生成 X5 只读预检计划';
-    copy.textContent = state.telemetry
+    copy.textContent = evidence
       ? '遥测已在浏览器本地聚合；正式发布仍需要绑定 Run、选择板卡并执行只读预检。'
       : '评测指标已回写；选择目标 X5 后先执行只读预检，Canary 和 Live 仍需板端 Agent。';
     button.textContent = '去做设备预检 →';
@@ -1187,12 +1423,12 @@ function renderEvaluationNext() {
 
 function renderReleaseGate() {
   const model = selectedModel();
-  const latest = [...(state.overview?.runs || [])].sort((a, b) =>
+  const latest = [...runsForCurrentModel()].sort((a, b) =>
     String(b.createdAt || '').localeCompare(String(a.createdAt || '')),
   )[0];
   const deployment =
     state.activeDeployment ||
-    state.overview?.deployments?.find(
+    deploymentsForCurrentModel().find(
       (item) => item.modelId === model?.id && item.deviceId === state.selectedDeviceId,
     );
   const contractReady = Boolean(
@@ -1202,7 +1438,7 @@ function renderReleaseGate() {
       state.compatibility?.some((item) => item.deployable)),
   );
   const evidenceReady = Boolean(
-    state.telemetry || (latest?.metrics && typeof latest.metrics.successRate === 'number'),
+    currentTelemetry() || (latest?.metrics && typeof latest.metrics.successRate === 'number'),
   );
   const preflightReady = Boolean(deployment && ['ready', 'completed'].includes(deployment.status));
   const update = (key, stateName, detail) => {
@@ -1248,7 +1484,7 @@ function renderReleaseGate() {
 function renderRunProgress() {
   const card = $('run-progress-card');
   if (!card) return;
-  const runs = [...(state.overview?.runs || [])].sort((a, b) =>
+  const runs = [...runsForCurrentModel()].sort((a, b) =>
     String(b.createdAt || '').localeCompare(String(a.createdAt || '')),
   );
   const latest = runs[0];
@@ -1283,13 +1519,15 @@ function renderRunProgress() {
 }
 
 function recordCollection() {
-  const runs = (state.overview?.runs || []).map((item) =>
+  const runs = runsForCurrentModel().map((item) =>
     Object.assign({}, item, { kind: 'run · ' + item.backend, recordType: 'run' }),
   );
-  const deployments = (state.overview?.deployments || []).map((item) =>
+  const deployments = deploymentsForCurrentModel().map((item) =>
     Object.assign({}, item, { kind: 'deploy · ' + item.mode, recordType: 'deploy' }),
   );
-  const artifacts = (state.overview?.models || []).flatMap((model) =>
+  const artifacts = (state.overview?.models || [])
+    .filter((model) => currentModelIds().has(model.id))
+    .flatMap((model) =>
     (model.manifest?.artifacts || []).map((artifact) =>
       Object.assign({}, artifact, {
         id: model.id + ':' + artifact.id,
@@ -1300,19 +1538,20 @@ function recordCollection() {
         summary: artifact.name || artifact.id,
         createdAt: model.updatedAt || model.createdAt,
       }),
-    ),
-  );
-  const telemetry = state.telemetry
+      ),
+    );
+  const evidence = currentTelemetry();
+  const telemetry = evidence
     ? [
         {
-          id: 'telemetry:' + state.telemetry.fileName,
+          id: 'telemetry:' + evidence.fileName,
           recordType: 'telemetry',
           kind: 'telemetry · import',
           status: 'registered',
-          summary: state.telemetry.fileName || '本地遥测证据',
-          source: state.telemetry.source,
+          summary: evidence.fileName || '本地遥测证据',
+          source: evidence.source,
           createdAt: new Date().toISOString(),
-          telemetrySummary: state.telemetry.summary,
+          telemetrySummary: evidence.summary,
         },
       ]
     : [];
@@ -1358,7 +1597,7 @@ async function loadModelDetails(modelId = state.selectedModelId) {
 async function refreshActiveRuns() {
   const overview = state.overview;
   if (!overview?.runs?.length) return;
-  const active = overview.runs.filter((run) =>
+  const active = runsForCurrentModel().filter((run) =>
     ['queued', 'running'].includes(String(run.status || '').toLowerCase()),
   );
   if (!active.length) return;
@@ -1366,10 +1605,23 @@ async function refreshActiveRuns() {
     active.slice(0, 8).map(async (run) => {
       try {
         const payload = await request('/sim2real/runs/' + encodeURIComponent(run.id));
+        runStatusFailures.delete(run.id);
         return payload.run || null;
       } catch (error) {
-        // A transient worker status failure must not discard the last known run.
-        if (!(error instanceof ApiError && error.status === 401)) return null;
+        // The API keeps the last known state and returns a retryable 503 when
+        // the external runner is unavailable. Back off after repeated errors
+        // so a dead runner cannot create a tight polling loop.
+        if (!(error instanceof ApiError && error.status === 401)) {
+          const failures = (runStatusFailures.get(run.id) || 0) + 1;
+          runStatusFailures.set(run.id, failures);
+          if (failures >= 3) {
+            runStatusBackoffUntil = Math.max(runStatusBackoffUntil, Date.now() + 30_000);
+            if (Date.now() - runStatusNoticeAt > 30_000) {
+              runStatusNoticeAt = Date.now();
+              showToast('训练 runner 暂时无法返回状态，已降低轮询频率；任务未被伪造为完成', 'error');
+            }
+          }
+        }
         return null;
       }
     }),
@@ -1412,15 +1664,19 @@ async function loadOverview({ quiet = false } = {}) {
 
 function scheduleOverviewPolling() {
   if (overviewPollTimer !== null) window.clearTimeout(overviewPollTimer);
-  const hasActiveRun = (state.overview?.runs || []).some((run) =>
+  const hasActiveRun = runsForCurrentModel().some((run) =>
     ['queued', 'running'].includes(String(run.status || '').toLowerCase()),
   );
+  const backoffActive = runStatusBackoffUntil > Date.now();
+  const activeDelay = backoffActive
+    ? Math.max(30_000, runStatusBackoffUntil - Date.now())
+    : 5_000;
   overviewPollTimer = window.setTimeout(
     () => {
       overviewPollTimer = null;
       void loadOverview({ quiet: true });
     },
-    hasActiveRun ? 5_000 : 30_000,
+    hasActiveRun ? activeDelay : 30_000,
   );
 }
 
@@ -1486,6 +1742,7 @@ async function registerEditor() {
 }
 
 async function runModel(backend) {
+  if (state.runSubmitting) return;
   if (backend === 'browser' && !selectedProductProfile().simulatorPath) {
     showToast('RDK Duck 尚未配置浏览器仿真适配器，请使用本地仿真或先登记 manifest', 'error');
     return;
@@ -1495,8 +1752,13 @@ async function runModel(backend) {
     showToast('请先选择模型', 'error');
     return;
   }
+  state.runSubmitting = true;
+  renderIntegrations();
   try {
-    const body = { modelId: model.id, backend, taskId: state.taskId };
+    const requestKey =
+      globalThis.crypto?.randomUUID?.() ||
+      `run-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+    const body = { modelId: model.id, backend, taskId: state.taskId, idempotencyKey: requestKey };
     const profile = $('training-profile')?.value;
     if ((backend === 'robogo' || backend === 'local') && profile) body.training = { profile };
     const checkpointId = $('resume-checkpoint-id')?.value.trim() || '';
@@ -1517,18 +1779,17 @@ async function runModel(backend) {
       run.summary || '运行请求已记录',
       run.status === 'completed' || run.status === 'ready' ? 'success' : 'normal',
     );
-    if (
-      backend === 'browser' &&
-      run.launchUrl &&
-      run.launchUrl.startsWith('/') &&
-      !run.launchUrl.startsWith('//')
-    ) {
-      window.open(run.launchUrl, '_blank', 'noopener,noreferrer');
+    if (backend === 'browser') {
+      const launchUrl = safeLaunchUrl(run.launchUrl);
+      if (launchUrl) window.open(launchUrl, '_blank', 'noopener,noreferrer');
     }
     await loadOverview({ quiet: true });
   } catch (error) {
     if (!(error instanceof ApiError && error.status === 401))
       showToast(error instanceof Error ? error.message : '运行请求失败', 'error');
+  } finally {
+    state.runSubmitting = false;
+    renderIntegrations();
   }
 }
 
@@ -1555,15 +1816,22 @@ async function detectBoard() {
 }
 
 async function createPlan() {
+  if (state.deploymentSubmitting) return;
   const model = selectedModel();
   const device = selectedDevice();
   if (!model || !device) {
     showToast('请先选择模型和板卡', 'error');
     return;
   }
+  state.deploymentSubmitting = true;
+  renderIntegrations();
   try {
+    const requestKey =
+      globalThis.crypto?.randomUUID?.() ||
+      `deployment-${Date.now()}-${Math.random().toString(16).slice(2)}`;
     const payload = await request('/sim2real/deployments', {
       method: 'POST',
+      headers: { 'Idempotency-Key': requestKey },
       body: JSON.stringify({ modelId: model.id, deviceId: device.id, mode: 'preflight' }),
     });
     state.activeDeployment = payload.deployment || null;
@@ -1572,6 +1840,9 @@ async function createPlan() {
   } catch (error) {
     if (!(error instanceof ApiError && error.status === 401))
       showToast(error instanceof Error ? error.message : '计划生成失败', 'error');
+  } finally {
+    state.deploymentSubmitting = false;
+    renderIntegrations();
   }
 }
 
@@ -1583,7 +1854,14 @@ async function executePreflight() {
     state.overview?.deployments?.find(
       (item) => item.modelId === model?.id && item.deviceId === device?.id,
     );
-  if (!deployment) {
+  if (
+    !deployment ||
+    !model ||
+    !device ||
+    deployment.modelId !== model.id ||
+    deployment.deviceId !== device.id
+  ) {
+    state.activeDeployment = null;
     showToast('请先生成预检计划', 'error');
     return;
   }
@@ -1690,10 +1968,12 @@ function loadManifestTemplate() {
             id: 'walking',
             label: '行走',
             artifactId: 'policy-onnx',
-            keys: ['ArrowUp', 'ArrowDown', 'A', 'E', 'Space'],
+            keys: ['W', 'A', 'S', 'D', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'],
+            description: 'W/A/S/D 或方向键控制前进、后退和转向。',
           },
         ],
       },
+      controls: MICRODUCK_CONTROLS,
       entryUrl: SIMULATOR_PATH,
     },
     artifacts: [
@@ -1798,6 +2078,8 @@ function wireEvents() {
     state.selectedModelId = '';
     state.model = null;
     state.compatibility = [];
+    state.activeDeployment = null;
+    state.telemetry = null;
     try {
       window.localStorage?.setItem('rdk-duck-lab-product', next);
     } catch {
@@ -1815,11 +2097,14 @@ function wireEvents() {
   });
   $('model-select')?.addEventListener('change', async (event) => {
     state.selectedModelId = event.target.value;
+    state.activeDeployment = null;
+    state.telemetry = state.telemetry?.modelId === state.selectedModelId ? state.telemetry : null;
     renderAll();
     await loadModelDetails();
   });
   $('device-select')?.addEventListener('change', (event) => {
     state.selectedDeviceId = event.target.value;
+    state.activeDeployment = null;
     renderAll();
   });
   $('template-button')?.addEventListener('click', loadManifestTemplate);
@@ -1840,14 +2125,25 @@ function wireEvents() {
     const integrations = state.overview?.integrations || {};
     const runnerAvailable = integrations.simulator?.robogo?.available === true;
     const accountReady = integrations.robogo?.state === 'ready';
+    const loginRequired = integrations.robogo?.state === 'login_required';
     if (!runnerAvailable) {
       showToast('RoboGo runner 尚未配置；可以先使用本地 Mock 或本地 worker。', 'error');
       return;
     }
-    if (!accountReady) {
+    // Aggregate RoboGo resource probes are advisory. In a trusted-proxy
+    // deployment the gateway may reserve the short-lived runner token for the
+    // explicit POST only, or a read-only inventory endpoint may be degraded
+    // while the training runner is healthy. Do not turn that probe result
+    // into a client-side hard block: the server re-checks the current account
+    // and token immediately before any billable request, and records a
+    // blocked run when authorization is absent.
+    if (loginRequired) {
       showToast('请先在 RoboGo 完成登录或连接，再发起云端训练。', 'normal');
       window.open('https://robogo.d-robotics.cc', '_blank', 'noopener,noreferrer');
       return;
+    }
+    if (!accountReady) {
+      showToast('RoboGo 资源探测暂不可用，将由服务端再次校验当前账号授权后提交。', 'normal');
     }
     runModel('robogo');
   });

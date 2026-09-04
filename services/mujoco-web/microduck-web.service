@@ -1,12 +1,15 @@
 [Unit]
 Description=Microduck browser simulator static assets
 After=network.target
+ConditionPathExists=/opt/microduck-web/current/index.html
+ConditionPathExists=/usr/bin/python3
 
 [Service]
 Type=simple
 User=microduck
 Group=microduck
 WorkingDirectory=/opt/microduck-web/current
+Environment=PATH=/usr/local/bin:/usr/bin:/bin
 ExecStart=/usr/bin/python3 -m http.server 18101 --bind 127.0.0.1 --directory /opt/microduck-web/current
 Restart=always
 RestartSec=2

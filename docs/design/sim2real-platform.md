@@ -9,20 +9,22 @@
 独立的含义是：页面、监听端口、systemd 服务和 Nginx 入口均不注册到 Studio
 React tab；服务只复用已验证的 SSO、设备和模型兼容性适配器。
 
-RDK Studio 是可选的 AI 入口，不是该平台的运行时依赖：Studio 通过账号隔离的 DSH Skill
+RDK Studio 是可选的 AI 入口，不是该平台的运行时依赖：部署方可以通过账号隔离的 DSH Skill
 编排流程，经 `duck-lab-mcp` 调用版本化 Sim2Real API；API 是业务真源，MCP 只做适配和
 证据投影，Skill 不承载模型校验或权限逻辑。这样网页、CLI、RDK Studio 和未来客户端可以
-共享同一套接口，同时保持 Studio 与 Sim2Real 的独立发布节奏。
+共享同一套接口，同时保持 Studio 与 Sim2Real 的独立发布节奏。注意：本公开仓库目前只提供
+API 与适配契约，不包含 `duck-lab-mcp`、`microduck-mcp` 或 DSH Skill 实现；这些名称代表
+可选的外部集成，未装配时网页和 CLI 仍可独立运行。
 
 ```text
-RDK Studio → Skill → microduck-mcp → Sim2Real API → 台账 / 事件 / 权限
+RDK Studio → 外部 Skill / MCP（可选） → Sim2Real API → 台账 / 事件 / 权限
                                                     ├─ Local Agent
                                                     └─ RoboGo Connector
 ```
 
 执行动作遵循 Studio 的 Plan/Spec/Execute 语义：Plan/Spec 只能读取和生成计划，训练、上传、
 Canary、Live 等变更在 Execute 阶段显式审批；local 与 RoboGo 不自动 fallback，凭据只在服务端
-受控环境或现有 SSO 会话中短时使用。
+受控环境或经过验证的 SSO 网关转发中短时使用。
 
 ## 页面模块化信息架构
 
@@ -43,7 +45,7 @@ Sim2Real Web 采用两层导航：
                                       └─ server-side token（仅显式 RoboGo 请求）
 ```
 
-Sim2Real 业务路由只依赖 `Sim2RealAuthPort`，不读取 Studio React 状态、不访问 Studio 对话记录，也不把 Studio 数据库当作业务台账。当前同域部署的 `studio-sso-auth.ts` 是组合根适配器，复用已有 SSO 会话以免二次登录；将来拆成独立域名/仓库时，可以替换为单独注册的 OIDC client 和 Sim2Real 自有会话，仿真、训练、评测和部署模块无需修改。
+Sim2Real 业务路由只依赖 `Sim2RealAuthPort`，不读取 Studio React 状态、不访问 Studio 对话记录，也不把 Studio 数据库当作业务台账。生产同域部署由经过验证的 Studio SSO 网关/adapter 提供身份；当前公开仓库的 `studio-sso-auth.ts` 仅提供 standalone 与签名 `trusted-proxy` 参考组合根，不直接解密 Studio Cookie。将来拆成独立域名/仓库时，可以替换为单独注册的 OIDC client 和 Sim2Real 自有会话，仿真、训练、评测和部署模块无需修改。
 
 共享部署中缺少有效身份直接返回 401，绝不回退到公共 owner；模型、运行、部署、设备和审计记录均以稳定的 SSO `accountId` 做隔离。RoboGo 的 token 不进入浏览器、URL、manifest 或日志。
 
@@ -58,8 +60,9 @@ Sim2Real 业务路由只依赖 `Sim2RealAuthPort`，不读取 Studio React 状�
 - MicroDuck 官方浏览器仿真固定入口 /mujoco/microduck/。
 - manifest 的 schema、产品标识、输入输出形状、观测布局、制品角色和危险引用校验；
   MicroDuck 严格匹配固定布局，RDK Duck 按真实 manifest 做自洽校验。
-- manifest 可声明策略包与按键映射（行走、坐下/站起、翻滚、轮滑、踢球等），仿真与训练使用同一
-  份动作清单。
+- manifest 可声明由 ONNX 制品驱动的策略包，以及独立的 `simulator.controls` 运行时控制清单
+  （行走、坐下/站起、翻滚、轮滑、踢球、叫声、重置等）；仿真与训练使用同一份可追溯动作契约，
+  不会把 UI 动作误当成模型制品。
 - RoboGo 训练预设（冒烟、低显存、标准、高显存）和明确的 checkpoint 续训引用；训练参数在服务端
   做范围校验，不执行用户粘贴的 shell 命令。
 - 本地训练 runner 与 RoboGo runner 使用同一份受控 JSON 契约，但本地适配器不会转发 Studio/RoboGo
@@ -72,6 +75,8 @@ Sim2Real 业务路由只依赖 `Sim2RealAuthPort`，不读取 Studio React 状�
   不驱动电机。
 - 平台侧遥测 ingest（JSON/JSONL）、幂等补传、回放摘要和 action/observation MAE/RMSE 评测；
   轨迹按 run 与账号隔离保存。
+- 遥测 ingest 受单 chunk、单 run 和单账号的样本/字节配额保护；当前 JSON ledger 是单实例
+  MVP，超过配额或需要横向扩容时应迁移到对象存储/数据库 adapter。
 - systemd unit、Nginx 安装脚本和独立服务健康检查。
 
 ### 明确未宣称已完成
@@ -90,13 +95,13 @@ Sim2Real 业务路由只依赖 `Sim2RealAuthPort`，不读取 Studio React 状�
 ```
 浏览器
   ├─ GET /sim2real/                         独立静态页面
-  └─ /api/sim2real/*                       独立控制面
+  └─ /api/v1/duck/*                        版本化独立控制面（/api/sim2real/* 兼容）
        ├─ manifest validator                纯函数契约门
        ├─ owner-scoped ledger               仅存元数据/状态
        ├─ local runner adapter              内网 worker（训练动作显式）
        ├─ RoboGo adapter                   只读聚合查询（训练动作显式）
        ├─ board adapter                    探测与兼容性
-       ├─ telemetry ingest                 JSON/JSONL、幂等、回放与评测
+       ├─ telemetry ingest                 JSON/JSONL、幂等、回放与评测（有配额）
        └─ fixed preflight                  只读板端探针
 
 产品选择器 ──MicroDuck──> /mujoco/microduck/     官方 WASM/ONNX 仿真
@@ -113,12 +118,35 @@ Sim2Real 业务路由只依赖 `Sim2RealAuthPort`，不读取 Studio React 状�
 - RDK_SIM2REAL_ROBOGO_RUNNER_URL：受控 RoboGo runner 的 POST 入口；未设置或返回错误
   时不会启动训练机器，也不会伪造成功。
 
-SSO、Cookie 签名和 RoboGo 账号 token 沿用服务端的现有受控配置，不在页面、manifest、
-日志或 unit 文件中写入凭据。
+SSO、trusted-proxy/Cookie 适配和 RoboGo 账号 token 由部署方的受控 adapter 注入，不在页面、manifest、
+日志或 unit 文件中写入凭据；公开 standalone unit 当前只提供 trusted-proxy 参考。
+
+当前 JSON ledger 只支持单进程/单实例写入；不要在没有数据库 adapter 和跨实例锁的情况下启动
+多个 Web 副本。遥测默认每个 run 最多 100,000 个样本/128 MiB、每个账号最多 500,000 个样本/
+512 MiB，整个 ledger 另有 100,000 个 chunk 的硬上限；run/账号/chunk 遥测配额超限返回
+`413 SIM2REAL_TELEMETRY_QUOTA_EXCEEDED`，整个 ledger 字节上限返回
+`507 SIM2REAL_STORAGE_QUOTA_EXCEEDED`。任一情况都会拒绝本次写入，不会静默淘汰已接受历史。
+评测与回放读取该 run 的全部已接受 chunk；这是保护单实例磁盘和评测内存的 MVP 闸门，不是对象存储配额替代品。
+
+单实例台账还对元数据设置硬上限：最多 100 个自定义模型、10,000 个 run、200 个部署计划，
+超限返回 `507 SIM2REAL_LEDGER_QUOTA_EXCEEDED`，历史记录不会被静默淘汰。local/RoboGo 的
+queued/running 任务按账号共享默认 4 个并发（`RDK_SIM2REAL_MAX_ACTIVE_RUNS` 可调，最大 100），
+幂等键预留和并发检查在同一台账事务链中完成。它们只是单实例保护阀；正式多人产品仍需
+PostgreSQL 行级配额、对象存储和跨副本锁。
+
+runner 可能已经接受请求但提交响应超时或连接断开；这类 outcome unknown 与进程在写回
+`externalRunId` 前崩溃的情况一样，预留的 queued run 会保留，不能直接重试提交。确认外部任务
+归属后，运维可调用版本化 `POST /api/v1/duck/runs/:id/reconcile` 并提交（旧客户端可继续使用
+`/api/sim2real/runs/:id/reconcile` 兼容别名）
+`{"externalRunId":"…","confirm":true}`；服务只读查询 runner 状态并原子补回台账，不会再次发起
+训练。查询失败返回可重试的 `503 SIM2REAL_RUN_RECONCILE_UNAVAILABLE`。没有
+`externalRunId` 的崩溃窗口预留默认在 24 小时后、下一次提交训练时自动终止并释放并发名额，
+可用 `RDK_SIM2REAL_ACTIVE_RUN_TTL_SECONDS` 调整（5 分钟至 7 天）；已关联真实 runner 的任务不受影响。
 
 ## 契约来源与边界
 
 MicroDuck 的 contract 数值来自已核对的上游浏览器策略和仓内测试；RDK Duck 的关节数、
 观测/动作布局、控制频率和配件输入必须由产品团队提供并登记到 manifest。RDK 板型、模型编译格式
 和 runtime 以 [RDK 官方开发文档](https://developer.d-robotics.cc/rdk_studio_doc/) 及仓内
-`server/board/model-compatibility-matrix.ts` 为准。平台不会用 MicroDuck 数字猜测 RDK Duck 契约。
+`server/sim2real/standalone-compatibility.ts`、`shared/board-types.ts` 的适配边界为准。
+平台不会用 MicroDuck 数字猜测 RDK Duck 契约。

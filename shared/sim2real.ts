@@ -47,6 +47,24 @@ export const MICRODUCK_SIM2REAL_CONTRACT = Object.freeze({
   observationLayout: MICRODUCK_OBSERVATION_LAYOUT,
 });
 
+/**
+ * Safety bounds for manifest-defined contracts.  The MicroDuck contract is
+ * fixed above; these limits apply to the extensible RDK Duck contract so a
+ * syntactically valid manifest cannot make a worker allocate unbounded
+ * tensors or enter an impractical control loop.
+ */
+export const SIM2REAL_CONTRACT_LIMITS = Object.freeze({
+  maxJointCount: 256,
+  maxObservationSize: 4096,
+  maxActionSize: 4096,
+  maxControlHz: 1_000,
+  minPhysicsTimestepSeconds: 0.000001,
+  maxPhysicsTimestepSeconds: 1,
+  maxDecimation: 256,
+  maxObservationLayoutEntries: 16,
+  maxObservationLayoutItemSize: 4096,
+});
+
 /** Product lines share a workflow, not a policy contract. */
 export type Sim2RealRobotId = 'microduck' | 'rdk-duck';
 
@@ -103,6 +121,21 @@ export interface Sim2RealPolicyBundle {
   policies: Sim2RealPolicyBinding[];
 }
 
+/**
+ * User-facing simulator controls are intentionally separate from policy
+ * artifacts.  A key can trigger a runtime/UI action (for example quack or
+ * reset) even when no ONNX policy is involved.  Keeping this map in the
+ * manifest gives the browser, training workspace and future clients one
+ * canonical source for the controls actually exposed by a release.
+ */
+export interface Sim2RealControlBinding {
+  id: string;
+  label: string;
+  keys?: string[];
+  description?: string;
+  source?: 'keyboard' | 'touch' | 'gamepad' | 'ui';
+}
+
 export interface Sim2RealTrainingSpec {
   profile: Sim2RealTrainingProfile;
   numEnvs: number;
@@ -152,6 +185,7 @@ export interface Sim2RealModelManifest {
     backends: Sim2RealBackend[];
     policyArtifactId: string;
     policyBundle?: Sim2RealPolicyBundle;
+    controls?: Sim2RealControlBinding[];
     entryUrl?: string;
   };
   artifacts: Sim2RealArtifact[];
@@ -184,6 +218,15 @@ export type Sim2RealRunStatus = 'ready' | 'queued' | 'running' | 'completed' | '
 export interface Sim2RealRunRecord {
   id: string;
   modelId: string;
+  /**
+   * Denormalized API identity.  Older ledger rows may omit these fields; the
+   * HTTP layer derives them from the referenced model manifest before
+   * returning a response.  Keeping the fields optional preserves ledger
+   * compatibility while making product/contract provenance explicit to new
+   * clients.
+   */
+  productId?: Sim2RealRobotId;
+  contractId?: string;
   /** Stable action-task id (walk/turn/sit/recover/kick/custom). */
   taskId?: string;
   backend: Sim2RealRunBackend;
@@ -265,6 +308,15 @@ export interface Sim2RealOverview {
   selectedProductId: Sim2RealRobotId;
   /** Null means the selected product still requires a real manifest-defined contract. */
   selectedContract: Sim2RealContract | null;
+  /**
+   * Every contract currently visible to this account, grouped by product.
+   * Unlike the legacy `contract` field below, this list never substitutes the
+   * fixed MicroDuck dimensions for an RDK Duck manifest-defined contract.
+   */
+  availableContracts: Sim2RealAvailableContract[];
+  contracts: Record<Sim2RealRobotId, Sim2RealAvailableContract[]>;
+  /** Legacy MicroDuck default retained for old clients; use selectedContract or
+   * availableContracts for product-aware integrations. */
   contract: Sim2RealContract;
   models: Array<Sim2RealModelRecord>;
   runs: Sim2RealRunRecord[];
@@ -272,7 +324,13 @@ export interface Sim2RealOverview {
   devices: Sim2RealDeviceSummary[];
   integrations: {
     simulator: {
-      browser: { available: true; entryUrl: string };
+      browser: {
+        available: boolean;
+        entryUrl: string;
+        state?: 'mounted' | 'redirect' | 'missing';
+        reason?: string;
+      };
+      boardAgent: { available: boolean; reason: string };
       robogo: { available: boolean; reason: string };
       local: { available: boolean; reason: string; mock?: boolean };
     };
@@ -289,9 +347,21 @@ export interface Sim2RealOverview {
 export interface Sim2RealModelRecord {
   id: string;
   manifest: Sim2RealModelManifest;
+  /** See Sim2RealRunRecord.productId/contractId; derived for API responses. */
+  productId?: Sim2RealRobotId;
+  contractId?: string;
   builtin?: boolean;
   createdAt: string;
   updatedAt: string;
+}
+
+export interface Sim2RealAvailableContract {
+  productId: Sim2RealRobotId;
+  contractId: string;
+  contract: Sim2RealContract;
+  /** Model record ids that currently expose this contract to the account. */
+  modelIds: string[];
+  source: 'builtin' | 'manifest';
 }
 
 const ALLOWED_FORMATS = new Set<ModelArtifactFormat>([
@@ -323,6 +393,9 @@ const ALLOWED_TRAINING_PROFILES = new Set<Sim2RealTrainingProfile>([
 const SAFE_ID = /^[a-z][a-z0-9-]{1,63}$/;
 const SHA256 = /^[a-f0-9]{64}$/i;
 const SENSITIVE_REF = /(?:password|passwd|secret|token|api[_-]?key|private[_-]?key)/i;
+/** Opaque artifact handles only; workers resolve them through a managed store. */
+export const SAFE_ARTIFACT_REF =
+  /^artifact:\/\/[a-zA-Z0-9][a-zA-Z0-9._-]{0,63}(?:\/[a-zA-Z0-9][a-zA-Z0-9._-]{0,119}){0,8}$/;
 
 export const MICRODUCK_TRAINING_PROFILES: Readonly<
   Record<Sim2RealTrainingProfile, Sim2RealTrainingSpec>
@@ -414,6 +487,51 @@ function normalizePolicyBundle(
   return policies.length ? { defaultPolicyId, policies } : undefined;
 }
 
+function normalizeControlBindings(
+  value: unknown,
+  errors: string[],
+): Sim2RealControlBinding[] | undefined {
+  if (value == null) return undefined;
+  if (!Array.isArray(value)) {
+    errors.push('simulator.controls must be an array');
+    return undefined;
+  }
+  if (value.length > 32) errors.push('simulator.controls must contain at most 32 entries');
+  const ids = new Set<string>();
+  const controls: Sim2RealControlBinding[] = [];
+  for (const [index, item] of value.slice(0, 32).entries()) {
+    const source = record(item);
+    const id = safeText(source.id, 64).toLowerCase();
+    const label = safeText(source.label, 120);
+    const keys = Array.isArray(source.keys)
+      ? source.keys.slice(0, 12).map(safeKey).filter(Boolean)
+      : [];
+    const rawSource = safeText(source.source, 16).toLowerCase();
+    const controlSource = ['keyboard', 'touch', 'gamepad', 'ui'].includes(rawSource)
+      ? (rawSource as Sim2RealControlBinding['source'])
+      : undefined;
+    if (!SAFE_ID.test(id)) errors.push(`simulator.controls[${index}].id is invalid`);
+    if (!label) errors.push(`simulator.controls[${index}].label is required`);
+    if (ids.has(id)) errors.push('simulator.controls ids must be unique');
+    ids.add(id);
+    if (rawSource && !controlSource) {
+      errors.push(`simulator.controls[${index}].source is invalid`);
+    }
+    if (id && label) {
+      controls.push({
+        id,
+        label,
+        ...(keys.length ? { keys } : {}),
+        ...(safeText(source.description, 180)
+          ? { description: safeText(source.description, 180) }
+          : {}),
+        ...(controlSource ? { source: controlSource } : {}),
+      });
+    }
+  }
+  return controls.length ? controls : undefined;
+}
+
 export function trainingSpecForProfile(profile: Sim2RealTrainingProfile): Sim2RealTrainingSpec {
   return { ...MICRODUCK_TRAINING_PROFILES[profile] };
 }
@@ -467,17 +585,33 @@ function exactNumber(value: unknown, expected: number, label: string, errors: st
   return parsed;
 }
 
-function positiveNumber(value: unknown, label: string, errors: string[]): number {
+function positiveNumber(
+  value: unknown,
+  label: string,
+  errors: string[],
+  bounds: { min?: number; max?: number } = {},
+): number {
   const parsed = Number(value);
   if (!Number.isFinite(parsed) || parsed <= 0) {
     errors.push(`${label} must be a positive number`);
     return 1;
   }
+  if (bounds.min !== undefined && parsed < bounds.min) {
+    errors.push(`${label} must be at least ${bounds.min}`);
+  }
+  if (bounds.max !== undefined && parsed > bounds.max) {
+    errors.push(`${label} must be at most ${bounds.max}`);
+  }
   return parsed;
 }
 
-function positiveInteger(value: unknown, label: string, errors: string[]): number {
-  const parsed = positiveNumber(value, label, errors);
+function positiveInteger(
+  value: unknown,
+  label: string,
+  errors: string[],
+  max = Number.MAX_SAFE_INTEGER,
+): number {
+  const parsed = positiveNumber(value, label, errors, { max });
   if (!Number.isSafeInteger(parsed)) {
     errors.push(`${label} must be a positive integer`);
     return Math.max(1, Math.floor(parsed));
@@ -494,13 +628,24 @@ function normalizeLayout(
     errors.push('contract.observationLayout is required');
     return expected?.map((item) => ({ ...item })) || [];
   }
+  if (value.length > SIM2REAL_CONTRACT_LIMITS.maxObservationLayoutEntries) {
+    errors.push(
+      `contract.observationLayout must contain at most ${SIM2REAL_CONTRACT_LIMITS.maxObservationLayoutEntries} entries`,
+    );
+  }
   const layout = value.slice(0, 16).map((item) => {
     const source = record(item);
     const name = safeText(source.name, 64);
     const size = positiveFinite(source.size);
     if (!name) errors.push('contract.observationLayout item name is required');
-    if (!size || !Number.isSafeInteger(size)) {
-      errors.push('contract.observationLayout item size must be a positive integer');
+    if (
+      !size ||
+      !Number.isSafeInteger(size) ||
+      size > SIM2REAL_CONTRACT_LIMITS.maxObservationLayoutItemSize
+    ) {
+      errors.push(
+        `contract.observationLayout item size must be a positive integer at most ${SIM2REAL_CONTRACT_LIMITS.maxObservationLayoutItemSize}`,
+      );
     }
     return { name, size: size ? Math.floor(size) : 0 };
   });
@@ -541,9 +686,11 @@ function normalizeArtifact(
     (ref.includes('..') ||
       /[\u0000\r\n]/.test(ref) ||
       SENSITIVE_REF.test(ref) ||
-      /^(?:javascript|data|file):/i.test(ref))
+      !SAFE_ARTIFACT_REF.test(ref))
   ) {
-    errors.push(`artifacts[${index}].ref contains a forbidden path or credential pattern`);
+    errors.push(
+      `artifacts[${index}].ref must be an opaque artifact:// reference (no local path or URL)`,
+    );
   }
   if (!ALLOWED_ROLES.has(role)) errors.push(`artifacts[${index}].role is invalid`);
   if (!ALLOWED_FORMATS.has(format)) errors.push(`artifacts[${index}].format is invalid`);
@@ -660,16 +807,36 @@ export function validateSim2RealManifest(input: unknown): Sim2RealValidationResu
     robotId: productId,
     jointCount: isFixedMicroDuck
       ? exactNumber(contract.jointCount, 14, 'contract.jointCount', errors)
-      : positiveInteger(contract.jointCount, 'contract.jointCount', errors),
+      : positiveInteger(
+          contract.jointCount,
+          'contract.jointCount',
+          errors,
+          SIM2REAL_CONTRACT_LIMITS.maxJointCount,
+        ),
     observationSize: isFixedMicroDuck
       ? exactNumber(contract.observationSize, 61, 'contract.observationSize', errors)
-      : positiveInteger(contract.observationSize, 'contract.observationSize', errors),
+      : positiveInteger(
+          contract.observationSize,
+          'contract.observationSize',
+          errors,
+          SIM2REAL_CONTRACT_LIMITS.maxObservationSize,
+        ),
     actionSize: isFixedMicroDuck
       ? exactNumber(contract.actionSize, 14, 'contract.actionSize', errors)
-      : positiveInteger(contract.actionSize, 'contract.actionSize', errors),
+      : positiveInteger(
+          contract.actionSize,
+          'contract.actionSize',
+          errors,
+          SIM2REAL_CONTRACT_LIMITS.maxActionSize,
+        ),
     controlHz: isFixedMicroDuck
       ? exactNumber(contract.controlHz, 50, 'contract.controlHz', errors)
-      : positiveInteger(contract.controlHz, 'contract.controlHz', errors),
+      : positiveInteger(
+          contract.controlHz,
+          'contract.controlHz',
+          errors,
+          SIM2REAL_CONTRACT_LIMITS.maxControlHz,
+        ),
     physicsTimestepSeconds: isFixedMicroDuck
       ? exactNumber(
           contract.physicsTimestepSeconds,
@@ -677,10 +844,18 @@ export function validateSim2RealManifest(input: unknown): Sim2RealValidationResu
           'contract.physicsTimestepSeconds',
           errors,
         )
-      : positiveNumber(contract.physicsTimestepSeconds, 'contract.physicsTimestepSeconds', errors),
+      : positiveNumber(contract.physicsTimestepSeconds, 'contract.physicsTimestepSeconds', errors, {
+          min: SIM2REAL_CONTRACT_LIMITS.minPhysicsTimestepSeconds,
+          max: SIM2REAL_CONTRACT_LIMITS.maxPhysicsTimestepSeconds,
+        }),
     decimation: isFixedMicroDuck
       ? exactNumber(contract.decimation, 4, 'contract.decimation', errors)
-      : positiveInteger(contract.decimation, 'contract.decimation', errors),
+      : positiveInteger(
+          contract.decimation,
+          'contract.decimation',
+          errors,
+          SIM2REAL_CONTRACT_LIMITS.maxDecimation,
+        ),
     observationLayout: normalizeLayout(
       contract.observationLayout,
       errors,
@@ -738,6 +913,7 @@ export function validateSim2RealManifest(input: unknown): Sim2RealValidationResu
     errors.push('simulator.policyArtifactId must point to an ONNX policy artifact');
   }
   const policyBundle = normalizePolicyBundle(simulator.policyBundle, artifacts, errors);
+  const controls = normalizeControlBindings(simulator.controls, errors);
   const cpuOnnxLocomotion =
     policy?.runtime === 'cpu-onnx' && policy.workload === 'locomotion' && policy.threads === 1;
   if (!artifacts.some((item) => item.role === 'compiled-policy')) {
@@ -770,6 +946,7 @@ export function validateSim2RealManifest(input: unknown): Sim2RealValidationResu
       backends,
       policyArtifactId,
       ...(policyBundle ? { policyBundle } : {}),
+      ...(controls ? { controls } : {}),
       ...(entryUrl && entryUrl.startsWith('/') && !entryUrl.startsWith('//') ? { entryUrl } : {}),
     },
     artifacts,
@@ -829,11 +1006,137 @@ export const BUILTIN_MICRODUCK_MODEL: Sim2RealModelRecord = {
             id: 'walking',
             label: '行走',
             artifactId: 'official-walking-policy',
-            keys: ['ArrowUp', 'ArrowDown', 'A', 'E', 'Space'],
-            description: '方向键前进/后退，A/E 左右转，Space 清零指令',
+            keys: ['W', 'A', 'S', 'D', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'],
+            description: 'W/A/S/D 或方向键控制前进、后退和转向。',
+          },
+          {
+            id: 'sit-stand',
+            label: '坐下 / 站起',
+            artifactId: 'official-sitstand-policy',
+            keys: ['R'],
+            description: 'R 在双足模式切换坐下与站立。',
+          },
+          {
+            id: 'kick-left',
+            label: '左脚踢球',
+            artifactId: 'official-kick-left-policy',
+            keys: ['Q'],
+            description: 'Q（部分 AZERTY 键盘显示 A）触发左脚踢球。',
+          },
+          {
+            id: 'kick-right',
+            label: '右脚踢球',
+            artifactId: 'official-kick-right-policy',
+            keys: ['E'],
+            description: 'E 触发右脚踢球。',
+          },
+          {
+            id: 'ground-pick',
+            label: '拾取',
+            artifactId: 'official-ground-pick-policy',
+            keys: ['G'],
+            description: 'G 触发喙朝地面的拾取动作。',
+          },
+          {
+            id: 'stand-recover',
+            label: '自恢复',
+            artifactId: 'official-stand-policy',
+            description: '跌倒检测后由运行时自动调用，无固定键位。',
+          },
+          {
+            id: 'roller-drive',
+            label: '滚轮移动',
+            artifactId: 'official-roller-drive-policy',
+            keys: ['M'],
+            description: 'M 切换到滚轮模式后使用滚轮策略。',
+          },
+          {
+            id: 'roller-crouch',
+            label: '滚轮蹲伏',
+            artifactId: 'official-roller-crouch-policy',
+            keys: ['R'],
+            description: '滚轮模式下 R 触发蹲伏滑行。',
           },
         ],
       },
+      controls: [
+        {
+          id: 'move',
+          label: '移动',
+          keys: ['W', 'A', 'S', 'D', '↑', '↓', '←', '→'],
+          description: 'W/A/S/D 或方向键：前进、后退、左转、右转。',
+          source: 'keyboard',
+        },
+        {
+          id: 'kick-left',
+          label: '左脚踢球',
+          keys: ['Q'],
+          description: '触发左脚踢球动作。',
+          source: 'keyboard',
+        },
+        {
+          id: 'kick-right',
+          label: '右脚踢球',
+          keys: ['E'],
+          description: '触发右脚踢球动作。',
+          source: 'keyboard',
+        },
+        {
+          id: 'alternate-kick',
+          label: '换脚踢球',
+          keys: ['F'],
+          description: '由仿真引擎自动选择下一只脚。',
+          source: 'keyboard',
+        },
+        {
+          id: 'sit-toggle',
+          label: '坐下 / 站起',
+          keys: ['R'],
+          description: '切换坐下与站立状态。',
+          source: 'keyboard',
+        },
+        {
+          id: 'ground-pick',
+          label: '拾取',
+          keys: ['G'],
+          description: '触发喙朝地面的拾取动作。',
+          source: 'keyboard',
+        },
+        {
+          id: 'chase-camera',
+          label: '跟随视角',
+          keys: ['C'],
+          description: '切换跟随镜头，不是相机硬件控制。',
+          source: 'keyboard',
+        },
+        {
+          id: 'locomotion-mode',
+          label: '移动模式',
+          keys: ['M'],
+          description: '在双足与滚轮模式之间切换。',
+          source: 'keyboard',
+        },
+        {
+          id: 'quack',
+          label: '叫一声',
+          keys: ['B'],
+          description: '平台覆盖层快捷键（上游桌面键盘未绑定）；移动端按钮和手柄也可触发。',
+          source: 'ui',
+        },
+        {
+          id: 'reset',
+          label: '重置仿真',
+          keys: ['Space'],
+          description: '重新开始当前仿真。',
+          source: 'keyboard',
+        },
+        {
+          id: 'spawn-ball',
+          label: '生成球',
+          description: '通过移动端完整控制面板或仿真 API 触发。',
+          source: 'ui',
+        },
+      ],
       entryUrl: '/mujoco/microduck/',
     },
     artifacts: [
@@ -843,7 +1146,66 @@ export const BUILTIN_MICRODUCK_MODEL: Sim2RealModelRecord = {
         name: 'BEST_alpha_walking.onnx',
         kind: 'source',
         format: 'onnx',
-        ref: '/mujoco/microduck/policies/BEST_alpha_walking.onnx',
+        // The browser path is carried by `simulator.entryUrl`; artifact refs
+        // sent to a worker must remain opaque and never be local filesystem or
+        // arbitrary URL values.
+        ref: 'artifact://builtin/microduck-official/upstream-browser/policy.onnx',
+      },
+      {
+        id: 'official-sitstand-policy',
+        role: 'policy',
+        name: 'BEST_alpha_sitstand.onnx',
+        kind: 'source',
+        format: 'onnx',
+        ref: 'artifact://builtin/microduck-official/upstream-browser/BEST_alpha_sitstand.onnx',
+      },
+      {
+        id: 'official-kick-left-policy',
+        role: 'policy',
+        name: 'ball_kick_left.onnx',
+        kind: 'source',
+        format: 'onnx',
+        ref: 'artifact://builtin/microduck-official/upstream-browser/ball_kick_left.onnx',
+      },
+      {
+        id: 'official-kick-right-policy',
+        role: 'policy',
+        name: 'ball_kick_right.onnx',
+        kind: 'source',
+        format: 'onnx',
+        ref: 'artifact://builtin/microduck-official/upstream-browser/ball_kick_right.onnx',
+      },
+      {
+        id: 'official-ground-pick-policy',
+        role: 'policy',
+        name: 'alpha_ground_pick.onnx',
+        kind: 'source',
+        format: 'onnx',
+        ref: 'artifact://builtin/microduck-official/upstream-browser/alpha_ground_pick.onnx',
+      },
+      {
+        id: 'official-stand-policy',
+        role: 'policy',
+        name: 'BEST_alpha_stand.onnx',
+        kind: 'source',
+        format: 'onnx',
+        ref: 'artifact://builtin/microduck-official/upstream-browser/BEST_alpha_stand.onnx',
+      },
+      {
+        id: 'official-roller-drive-policy',
+        role: 'policy',
+        name: 'BEST_roller.onnx',
+        kind: 'source',
+        format: 'onnx',
+        ref: 'artifact://builtin/microduck-official/upstream-browser/BEST_roller.onnx',
+      },
+      {
+        id: 'official-roller-crouch-policy',
+        role: 'policy',
+        name: 'BEST_roller_crouch.onnx',
+        kind: 'source',
+        format: 'onnx',
+        ref: 'artifact://builtin/microduck-official/upstream-browser/BEST_roller_crouch.onnx',
       },
     ],
     metadata: {

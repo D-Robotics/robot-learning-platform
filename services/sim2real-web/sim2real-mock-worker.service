@@ -1,19 +1,28 @@
 [Unit]
 Description=RDK Sim2Real protocol-only Mock worker (no CUDA, no RL)
+Conflicts=studio-integrated-sim2real.service
 After=network-online.target
 Wants=network-online.target
+ConditionPathExists=/opt/rdk-robot-learning-platform/current/dist-server/services/sim2real-web/mock-local-worker.mjs
+ConditionPathExists=/usr/bin/env
 
 [Service]
 Type=simple
-User=root
-Group=root
-WorkingDirectory=/opt/sim2real-web/current
+User=sim2real
+Group=sim2real
+WorkingDirectory=/opt/rdk-robot-learning-platform/current
+# Deliberately do not load the web service's production env here: that file
+# may contain the trusted-proxy secret or RoboGo token. The mock only needs
+# the fixed values below; customize them with a dedicated systemd drop-in.
 Environment=NODE_ENV=production
 Environment=RDK_SIM2REAL_MOCK_BIND_HOST=127.0.0.1
 Environment=RDK_SIM2REAL_MOCK_PORT=19090
-Environment=RDK_SIM2REAL_MOCK_DATA_DIR=/opt/sim2real-web/mock-worker-data
-Environment=PATH=/opt/node-v22.16.0-linux-x64/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin
-ExecStart=/opt/node-v22.16.0-linux-x64/bin/node /opt/sim2real-web/current/mock-local-worker.mjs
+Environment=RDK_SIM2REAL_MOCK_DATA_DIR=/var/lib/rdk-robot-learning-platform/mock-worker
+Environment=PATH=/usr/local/bin:/usr/bin:/bin
+ExecStartPre=/usr/bin/test ${RDK_SIM2REAL_MOCK_BIND_HOST} = 127.0.0.1
+ExecStartPre=/usr/bin/test ${RDK_SIM2REAL_MOCK_DATA_DIR} = /var/lib/rdk-robot-learning-platform/mock-worker
+ExecStartPre=/usr/bin/env node --version
+ExecStart=/usr/bin/env node /opt/rdk-robot-learning-platform/current/dist-server/services/sim2real-web/mock-local-worker.mjs
 Restart=always
 RestartSec=3
 NoNewPrivileges=true
@@ -22,7 +31,7 @@ ProtectHome=true
 ProtectSystem=strict
 PrivateDevices=true
 RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
-ReadWritePaths=/opt/sim2real-web/mock-worker-data
+ReadWritePaths=/var/lib/rdk-robot-learning-platform/mock-worker
 
 [Install]
 WantedBy=multi-user.target

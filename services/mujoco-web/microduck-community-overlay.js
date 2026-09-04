@@ -291,8 +291,9 @@
       </div>
       <div class="rdk-touch-help-grid">
         <div class="rdk-touch-help-item"><kbd>摇杆 / WASD</kbd><span>移动</span></div>
-        <div class="rdk-touch-help-item"><kbd>A / Q · E</kbd><span>踢球</span></div>
-        <div class="rdk-touch-help-item"><kbd>B</kbd><span>叫一声</span></div>
+        <div class="rdk-touch-help-item"><kbd>Q · E</kbd><span>左 / 右踢球</span></div>
+        <div class="rdk-touch-help-item"><kbd>F</kbd><span>换脚踢球</span></div>
+        <div class="rdk-touch-help-item"><kbd>B（平台）</kbd><span>叫一声</span></div>
         <div class="rdk-touch-help-item"><kbd>R</kbd><span>坐下 / 站起</span></div>
         <div class="rdk-touch-help-item"><kbd>G</kbd><span>拾取</span></div>
         <div class="rdk-touch-help-item"><kbd>C</kbd><span>跟随视角</span></div>
@@ -587,6 +588,54 @@
       key: keys[code] || code,
       repeat: false,
     }));
+    return true;
+  }
+
+  function callRuntimeMethod(current, method, ...args) {
+    if (typeof current?.[method] !== 'function') return false;
+    const result = current[method](...args);
+    // Runtime actions historically returned void.  Treat any result other
+    // than an explicit false as a dispatched action.
+    return result !== false;
+  }
+
+  // The current simulator exposes the controller sources through window.rl,
+  // but its desktop keyboard intentionally has no quack key (the touch B
+  // button is the quack source). Invoke the same action bus when available so
+  // a desktop fallback cannot depend on a hidden mobile DOM node. Older
+  // releases may not expose the controller; callers below retain their
+  // public-method / touch-button fallbacks for those builds.
+  function dispatchControllerAction(action) {
+    const current = runtime();
+    const sources = current?.controller?.sources;
+    if (!Array.isArray(sources)) return false;
+    const source = sources.find((candidate) =>
+      candidate && (candidate.id === 'keyboard' || candidate.id === 'touch') &&
+      typeof candidate.onAction === 'function',
+    );
+    if (!source) return false;
+    try {
+      source.onAction(action);
+      return true;
+    } catch (error) {
+      console.warn('[microduck controls] controller action failed', action, error);
+      return false;
+    }
+  }
+
+  function dispatchQuack() {
+    const current = runtime();
+    if (typeof current?.triggerQuack === 'function') {
+      current.triggerQuack();
+      return true;
+    }
+    const api = window.__gameApi;
+    if (typeof api?.quack === 'function') {
+      api.quack();
+      return true;
+    }
+    if (dispatchControllerAction('quack')) return true;
+    return triggerTouchButton('touch-b');
   }
 
   function triggerTouchButton(id) {
@@ -806,7 +855,7 @@
           <button type="button" class="rdk-mobile-color" data-mobile-variant="blue" aria-label="天空蓝" aria-pressed="false" disabled>蓝色</button>
         </div>
       </div>
-      <p class="rdk-mobile-footnote">桌面端可用 B 叫一声、F 换脚踢球；移动端右侧 B 也可触发叫声。</p>
+      <p class="rdk-mobile-footnote">平台覆盖层提供 B 叫一声、F 换脚踢球；移动端按钮和手柄也可触发。官方引擎若未暴露入口会明确提示。</p>
     `;
     document.body.append(toggle, panel);
 
@@ -868,34 +917,79 @@
         return;
       }
       try {
-        if (action === 'sit') dispatchShortcut('KeyR');
+        let sent = false;
+        let failureMessage = '当前引擎暂未提供此动作';
+        if (action === 'sit') {
+          sent = dispatchControllerAction('sitToggle') || dispatchShortcut('KeyR');
+        }
         else if (action === 'pick') {
-          if (typeof current.triggerGroundPick === 'function') current.triggerGroundPick();
-          else dispatchShortcut('KeyG');
+          if (current.loco === 'rollers') {
+            failureMessage = '滚轮模式不支持拾取，请切换到双足模式';
+          } else if (typeof current.triggerGroundPick === 'function') {
+            // triggerGroundPick is intentionally void in the upstream build;
+            // the mode transition is the reliable success signal. Do not
+            // dispatch a second action when the method exists but is gated.
+            current.triggerGroundPick('ui');
+            sent = current.mode === 'groundpick';
+          } else {
+            sent = dispatchControllerAction('groundPick') || dispatchShortcut('KeyG');
+          }
         } else if (action === 'kick-left') {
-          if (typeof current.triggerKick === 'function') current.triggerKick('left');
-          else dispatchShortcut('KeyQ');
+          if (current.loco === 'rollers') {
+            failureMessage = '滚轮模式不支持踢球，请切换到双足模式';
+          } else if (typeof current.triggerKick === 'function') {
+            sent = current.triggerKick('left', 'ui') !== false;
+          } else {
+            sent = dispatchControllerAction('kickL') || dispatchShortcut('KeyQ');
+          }
         } else if (action === 'kick-right') {
-          if (typeof current.triggerKick === 'function') current.triggerKick('right');
-          else dispatchShortcut('KeyE');
+          if (current.loco === 'rollers') {
+            failureMessage = '滚轮模式不支持踢球，请切换到双足模式';
+          } else if (typeof current.triggerKick === 'function') {
+            sent = current.triggerKick('right', 'ui') !== false;
+          } else {
+            sent = dispatchControllerAction('kickR') || dispatchShortcut('KeyE');
+          }
         } else if (action === 'head') {
-          if (typeof current.toggleHeadMode === 'function') current.toggleHeadMode();
-          else showNotice('头部视角需要更新后的仿真引擎');
+          if (typeof current.toggleHeadMode === 'function') {
+            const before = typeof current.headMode === 'boolean' ? current.headMode : null;
+            current.toggleHeadMode();
+            sent = before === null || current.headMode !== before;
+          } else {
+            sent = dispatchControllerAction('headToggle');
+          }
+          failureMessage = '头部视角需要更新后的仿真引擎';
         } else if (action === 'chase') {
-          if (typeof current.chaseCam === 'boolean') current.chaseCam = !current.chaseCam;
-          else dispatchShortcut('KeyC');
+          if (typeof current.chaseCam === 'boolean') {
+            current.chaseCam = !current.chaseCam;
+            sent = true;
+          } else {
+            sent = dispatchControllerAction('chaseToggle') || dispatchShortcut('KeyC');
+          }
         } else if (action === 'quack') {
-          if (!triggerTouchButton('touch-b')) showNotice('当前引擎没有叫声入口');
+          sent = dispatchQuack();
+          if (!sent) showNotice('当前引擎没有叫声入口');
         } else if (action === 'alternate-kick') {
-          dispatchShortcut('KeyF');
+          if (current.loco === 'rollers') {
+            failureMessage = '滚轮模式不支持踢球，请切换到双足模式';
+          } else {
+            sent = dispatchControllerAction('alternateKick') || dispatchShortcut('KeyF');
+          }
         } else if (action === 'roll') {
-          if (typeof current.triggerRoll === 'function') current.triggerRoll('kb');
-          else dispatchShortcut('KeyM');
+          if (typeof current.triggerRoll === 'function') {
+            current.triggerRoll('ui');
+            sent = current.mode === 'roll' || current.mode === 'crouch';
+          } else {
+            sent = dispatchControllerAction('roll');
+          }
         } else if (action === 'ball') {
-          if (typeof current.spawnBall === 'function') current.spawnBall();
+          sent = callRuntimeMethod(current, 'spawnBall') || dispatchControllerAction('spawnBall');
         } else if (action === 'reset') {
-          if (typeof current.resetSim === 'function') current.resetSim();
-          else dispatchShortcut('Space');
+          sent = callRuntimeMethod(current, 'resetSim') || dispatchControllerAction('reset') || dispatchShortcut('Space');
+        }
+        if (!sent) {
+          showNotice(failureMessage);
+          return;
         }
         showNotice('操作已发送');
       } catch (error) {
@@ -938,9 +1032,14 @@
       if (event.repeat || isLanding() || event.target instanceof HTMLInputElement || event.target instanceof HTMLTextAreaElement) return;
       if (event.code === 'KeyB') {
         event.preventDefault();
-        if (!triggerTouchButton('touch-b')) showNotice('当前引擎没有叫声入口');
+        // B is a platform overlay shortcut.  The pinned upstream browser
+        // build exposes quack on touch/gamepad, not as a desktop key; capture
+        // this convenience key so a future upstream binding cannot fire two
+        // unrelated actions at once.
+        event.stopPropagation();
+        if (!dispatchQuack()) console.info('[microduck controls] quack is not exposed by this engine');
       }
-    });
+    }, { capture: true });
 
     const fullscreenButton = document.createElement('button');
     fullscreenButton.type = 'button';

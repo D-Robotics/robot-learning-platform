@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 
 function copyFile(src, dst) {
-  if (!fs.existsSync(src)) return;
+  if (!fs.existsSync(src)) throw new Error(`[copy-server-assets] required file is missing: ${src}`);
   fs.mkdirSync(path.dirname(dst), { recursive: true });
   fs.copyFileSync(src, dst);
   console.log(
@@ -18,10 +18,10 @@ const SKIP_DIR_NAMES = new Set(['_archive', '_template', 'node_modules', '.git',
 
 function copyTreeFiltered(src, dst) {
   if (!fs.existsSync(src)) {
-    console.warn('[copy-server-assets] skip tree: missing', path.relative(process.cwd(), src));
-    return;
+    throw new Error(`[copy-server-assets] required directory is missing: ${src}`);
   }
-  fs.rmSync(dst, { recursive: true, force: true });
+  const temporary = `${dst}.${process.pid}.${Date.now()}.tmp`;
+  fs.rmSync(temporary, { recursive: true, force: true });
   function walk(from, to) {
     fs.mkdirSync(to, { recursive: true });
     for (const name of fs.readdirSync(from)) {
@@ -32,7 +32,9 @@ function copyTreeFiltered(src, dst) {
       else fs.copyFileSync(source, target);
     }
   }
-  walk(src, dst);
+  walk(src, temporary);
+  fs.rmSync(dst, { recursive: true, force: true });
+  fs.renameSync(temporary, dst);
   console.log(
     '[copy-server-assets]',
     path.relative(process.cwd(), src),
@@ -46,5 +48,13 @@ function copyTreeFiltered(src, dst) {
 // to run after an incremental build by replacing the destination atomically.
 copyTreeFiltered(
   path.join('services', 'sim2real-web', 'public'),
-  path.join('dist', 'services', 'sim2real-web', 'public'),
+  path.join('dist-server', 'services', 'sim2real-web', 'public'),
+);
+
+// The mock worker is a deliberate no-CUDA smoke dependency of the systemd
+// example. TypeScript does not emit .mjs files, so copy it beside the compiled
+// server instead of making the release unit depend on the source checkout.
+copyFile(
+  path.join('services', 'sim2real-web', 'mock-local-worker.mjs'),
+  path.join('dist-server', 'services', 'sim2real-web', 'mock-local-worker.mjs'),
 );
