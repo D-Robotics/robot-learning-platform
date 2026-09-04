@@ -1,8 +1,64 @@
 # RDK Robot Learning Platform
 
-面向 RDK-X5 与 MicroDuck 的机器人强化学习、仿真和 Sim2Real 工程工作台。仓库把浏览器仿真、动作录制、训练调度、模型契约、遥测评测与部署预检放在同一条可追溯工作流中，同时保留本地训练和 RoboGo 两种 runner 接口。Node.js 建议使用 22 LTS（最低满足 lockfile 的 Node 20.19+）。
+<div align="center">
+
+**从浏览器里的第一步，到 RDK-X5 上的下一步。**
+
+面向 MicroDuck 与 RDK-X5 的机器人学习工作台：仿真、录制、训练、评测、部署和虚实迭代，都围绕同一份可追溯模型契约组织。
+
+[![verify](https://github.com/D-Robotics/robot-learning-platform/actions/workflows/verify.yml/badge.svg)](https://github.com/D-Robotics/robot-learning-platform/actions/workflows/verify.yml)
+[![Node.js](https://img.shields.io/badge/Node.js-20.19%2B-339933?logo=nodedotjs&logoColor=white)](https://nodejs.org/)
+[![API](https://img.shields.io/badge/API-versioned%20%2Fapi%2Fv1%2Fduck-ff7433)](docs/standalone-adapters.md)
+[![状态](https://img.shields.io/badge/Mock%20闭环-可运行-16a085)](#30-秒上手)
+
+<img src="docs/assets/rdk-robot-learning-platform-hero.svg" alt="RDK Robot Learning Platform 从仿真到真机的产品闭环" width="100%" />
+
+</div>
+
+> **一句话理解：这不是一个只能“遛鸭”的游戏。** 浏览器仿真是低门槛的动作入口；录制结果进入统一契约，随后可以交给本地 worker（默认 Mock）或 RoboGo adapter，最后通过制品、评测和 RDK-X5 预检进入受控的真机迭代。
+
+Node.js 建议使用 22 LTS（最低满足 lockfile 的 Node 20.19+）。
 
 > 当前版本是可公开审阅的独立产品源代码与参考实现。默认可以用本地 Mock worker 验证“仿真 → 训练请求 → 运行台账 → 遥测评测”流程；真实 RoboGo、RDK-X5 板端 agent、SSO/OIDC 与 OTA 由部署方通过 adapter 注入，仓库不包含任何账号、密钥或设备地址。
+
+## 先看懂平台
+
+| 你想做什么 | 从哪里开始 | 结果是什么 |
+| --- | --- | --- |
+| 亲手演示一个动作 | **仿真与录制** | 浏览器轨迹 JSON / JSONL |
+| 训练一个策略 | **训练与模型** | 本地 Mock、本地 worker 或 RoboGo Run |
+| 判断仿真是否接近真机 | **评测与效果** | 遥测、回放和虚实偏差摘要 |
+| 给 X5 做上线准备 | **部署到 X5** | 契约、板型、制品和只读预检 |
+
+平台把“可视化入口”和“受控执行”分开：浏览器负责观察和录制，服务端负责权限、制品、幂等和审计，板端/云端 adapter 负责真正的训练或部署。
+
+### 两条训练路径
+
+| 路径 | 适合谁 | 当前仓库能验证什么 | 生产接入点 |
+| --- | --- | --- | --- |
+| **本地 / Mock** | 没有 CUDA、先验证产品和协议 | 任务台账、状态流转、遥测、评测、回放 | `LocalRunnerPort` |
+| **RoboGo** | 有云端算力和训练账号 | manifest 校验、请求边界、token 不出浏览器、状态 reconcile | `RoboGoRunnerPort` |
+
+Mock 的 `completed` 只表示协议演练完成，不代表真实 PPO 权重或可部署模型；真实训练必须由已配置的 runner 明确返回制品。
+
+### 当前能力边界（诚实版）
+
+| 能力 | 状态 | 说明 |
+| --- | --- | --- |
+| 浏览器 MicroDuck + 中文控制层 | ✅ | 上游资源需由部署方挂载；仓库不重新分发上游 bundle |
+| 动作录制、契约校验、JSONL 导入 | ✅ | 可在本地直接验收 |
+| 本地 Mock 闭环 | ✅ | 无 CUDA 可跑通 API 和 UI 流程 |
+| RoboGo 适配接口 | 🔌 | 需要服务端配置真实地址、凭据和网络策略 |
+| RDK-X5 真机采集 / BoardAgent / OTA | 🧩 | 提供端口、预检和部署边界，需接入实际设备 |
+| 多副本生产存储 | 🗺️ | MVP 使用单实例 ledger，规模化迁移 PostgreSQL + 对象存储 |
+
+<div align="center">
+
+<img src="docs/assets/rdk-platform-workbench.svg" alt="RDK Robot Learning Platform 模块化工作台示意" width="92%" />
+
+<sub>模块化工作台概念图：展示产品信息架构与数据关系，不是运行时截图。</sub>
+
+</div>
 
 ## 30 秒上手
 
@@ -38,6 +94,7 @@ npx tsc --noEmit
 | `shared` | MicroDuck 61D observation / 14D action / 50 Hz 契约、模型制品和遥测类型 |
 | `server/routes` | Sim2Real HTTP API（模型、运行、部署、遥测） |
 | `server/sim2real` | 本地/RoboGo runner、JSON ledger、兼容性策略和可替换 adapter |
+| `docs/assets` | README 首屏与工作台示意图（自绘 SVG，无运行时依赖） |
 | `docs/design` | 产品设计、MVP/90 分验收、Sim2Real 方案和端到端流程 |
 
 ## 训练与部署边界

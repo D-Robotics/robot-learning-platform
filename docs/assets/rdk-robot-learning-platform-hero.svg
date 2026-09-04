@@ -1,0 +1,187 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1600 720" role="img" aria-labelledby="title desc">
+  <title id="title">RDK Robot Learning Platform：从仿真到真机的机器人学习闭环</title>
+  <desc id="desc">一个面向 MicroDuck 和 RDK-X5 的可追溯工作流：浏览器仿真、统一模型契约、本地或 RoboGo 训练、虚实评测和安全部署。</desc>
+  <defs>
+    <linearGradient id="background" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#080a10"/>
+      <stop offset="0.58" stop-color="#10131c"/>
+      <stop offset="1" stop-color="#1b0e19"/>
+    </linearGradient>
+    <linearGradient id="orange" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#ff6333"/>
+      <stop offset="1" stop-color="#ffb000"/>
+    </linearGradient>
+    <linearGradient id="pink" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#ff2da2"/>
+      <stop offset="1" stop-color="#a866ff"/>
+    </linearGradient>
+    <linearGradient id="cyan" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#48d5ff"/>
+      <stop offset="1" stop-color="#9df4ff"/>
+    </linearGradient>
+    <filter id="glow-orange" x="-60%" y="-60%" width="220%" height="220%">
+      <feGaussianBlur stdDeviation="8" result="blur"/>
+      <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+    <filter id="glow-pink" x="-60%" y="-60%" width="220%" height="220%">
+      <feGaussianBlur stdDeviation="10" result="blur"/>
+      <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+    <filter id="shadow" x="-30%" y="-30%" width="160%" height="180%">
+      <feDropShadow dx="0" dy="18" stdDeviation="16" flood-color="#000" flood-opacity=".42"/>
+    </filter>
+    <pattern id="dots" width="38" height="38" patternUnits="userSpaceOnUse">
+      <circle cx="3" cy="3" r="1.8" fill="#ff7433" opacity=".23"/>
+    </pattern>
+    <pattern id="grid" width="44" height="44" patternUnits="userSpaceOnUse">
+      <path d="M44 0H0V44" fill="none" stroke="#f5f7ff" stroke-opacity=".045" stroke-width="1"/>
+    </pattern>
+    <marker id="arrow-orange" markerWidth="12" markerHeight="12" refX="10" refY="6" orient="auto">
+      <path d="M0 0L12 6L0 12z" fill="#ff8b3d"/>
+    </marker>
+    <marker id="arrow-pink" markerWidth="12" markerHeight="12" refX="10" refY="6" orient="auto">
+      <path d="M0 0L12 6L0 12z" fill="#ff3ca8"/>
+    </marker>
+    <style>
+      .sans{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif}
+      .mono{font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace}
+      .eyebrow{font:700 15px ui-monospace,SFMono-Regular,Menlo,monospace;letter-spacing:3px;fill:#ff9b45}
+      .headline{font:800 48px -apple-system,BlinkMacSystemFont,"PingFang SC","Microsoft YaHei",sans-serif;letter-spacing:-1.5px;fill:#fff}
+      .lede{font:400 19px -apple-system,BlinkMacSystemFont,"PingFang SC","Microsoft YaHei",sans-serif;fill:#b9becb}
+      .node-title{font:750 19px -apple-system,BlinkMacSystemFont,"PingFang SC","Microsoft YaHei",sans-serif;fill:#fff}
+      .node-sub{font:400 13px -apple-system,BlinkMacSystemFont,"PingFang SC","Microsoft YaHei",sans-serif;fill:#a3a9b7}
+      .node-tag{font:700 10px ui-monospace,SFMono-Regular,Menlo,monospace;letter-spacing:1.4px;fill:#ff9b45}
+      .metric{font:750 15px ui-monospace,SFMono-Regular,Menlo,monospace;fill:#f5f7ff}
+      .small{font:500 12px -apple-system,BlinkMacSystemFont,"PingFang SC","Microsoft YaHei",sans-serif;fill:#8f96a5}
+    </style>
+  </defs>
+
+  <rect width="1600" height="720" rx="34" fill="url(#background)"/>
+  <rect x="0" y="0" width="1600" height="720" rx="34" fill="url(#dots)"/>
+  <rect x="930" y="320" width="650" height="390" rx="28" fill="url(#grid)" opacity=".7"/>
+  <path d="M0 604C245 520 410 690 650 600S1050 490 1600 566" fill="none" stroke="#ff7433" stroke-opacity=".12" stroke-width="2"/>
+  <path d="M0 626C245 542 410 712 650 622S1050 512 1600 588" fill="none" stroke="#ff2da2" stroke-opacity=".10" stroke-width="2"/>
+
+  <!-- Header / product statement -->
+  <g transform="translate(78 68)">
+    <rect width="54" height="54" rx="16" fill="url(#orange)"/>
+    <path d="M17 15h20c6 0 11 5 11 11v14c0 6-5 11-11 11H17V15Z" fill="#10131a"/>
+    <circle cx="28" cy="33" r="7" fill="none" stroke="#ff7433" stroke-width="3"/>
+    <circle cx="28" cy="33" r="2.3" fill="#ffb000"/>
+  </g>
+  <text x="150" y="87" class="eyebrow">RDK ROBOT LEARNING PLATFORM</text>
+  <text x="150" y="139" class="headline">让一个动作，走完仿真到真机</text>
+  <text x="150" y="178" class="lede">面向 MicroDuck 与 RDK-X5 的一站式机器人学习工作台</text>
+  <text x="150" y="211" class="lede">可视化 · 可追溯 · 可替换：本地训练或 RoboGo，统一模型契约</text>
+
+  <!-- Contract / metrics ribbon -->
+  <g transform="translate(150 247)">
+    <rect width="770" height="50" rx="15" fill="#151923" stroke="#343946" stroke-width="1.5"/>
+    <rect width="8" height="50" rx="4" fill="url(#orange)"/>
+    <text x="28" y="31" class="metric">MICRODUCK</text>
+    <text x="139" y="31" class="small">61D OBS</text>
+    <circle cx="206" cy="25" r="3" fill="#ff7433"/>
+    <text x="224" y="31" class="small">14D ACTION</text>
+    <circle cx="331" cy="25" r="3" fill="#ff7433"/>
+    <text x="349" y="31" class="small">50 HZ</text>
+    <path d="M430 13V37" stroke="#3a3e4c"/>
+    <text x="456" y="31" class="metric">RDK DUCK</text>
+    <text x="562" y="31" class="small">MANIFEST CONTRACT</text>
+    <circle cx="721" cy="25" r="5" fill="#45df9c" filter="url(#glow-orange)"/>
+  </g>
+
+  <!-- Stylized Duck card -->
+  <g transform="translate(1040 62)" filter="url(#shadow)">
+    <rect width="450" height="262" rx="24" fill="#171a22" stroke="#3b3f4c" stroke-width="2"/>
+    <text x="28" y="38" class="node-tag">BROWSER SIMULATION</text>
+    <text x="28" y="67" class="node-title">动作可视化入口</text>
+    <text x="28" y="91" class="node-sub">录制轨迹 · 回放验证 · 契约导出</text>
+    <g transform="translate(266 72)">
+      <!-- floor -->
+      <path d="M-133 132H134" stroke="#ff7433" stroke-opacity=".38"/>
+      <path d="M-112 132L-52 72M-52 132L-5 72M8 132L39 72M69 132L83 72M125 132L128 72" stroke="#ff7433" stroke-opacity=".17"/>
+      <path d="M-132 104H134M-132 79H134" stroke="#ff7433" stroke-opacity=".13"/>
+      <!-- duck head -->
+      <path d="M-53 15c0-18 18-32 42-32h66c22 0 40 13 40 31v30H-53V15Z" fill="#eef2f2" stroke="#171a22" stroke-width="5"/>
+      <path d="M-52 27h147v18H-52Z" fill="#ff7433"/>
+      <ellipse cx="37" cy="4" rx="18" ry="18" fill="#252a32" stroke="#ffb000" stroke-width="5"/>
+      <circle cx="37" cy="4" r="6" fill="#0b0e14"/>
+      <!-- neck/body -->
+      <path d="M13 46h23v34H13Z" fill="#69717c" stroke="#171a22" stroke-width="5"/>
+      <rect x="-60" y="80" width="145" height="53" rx="21" fill="#f0f3f2" stroke="#171a22" stroke-width="5"/>
+      <path d="M-45 115h117" stroke="#c6cdd0" stroke-width="4"/>
+      <!-- legs -->
+      <path d="M-17 130l-21 40 28 17M48 130l24 39-25 18" fill="none" stroke="#69717c" stroke-width="13" stroke-linecap="round"/>
+      <path d="M-44 188h41M41 188h41" stroke="#ff9b19" stroke-width="13" stroke-linecap="round"/>
+      <path d="M-65 190h61M43 190h59" stroke="#ff7433" stroke-width="5" stroke-linecap="round"/>
+    </g>
+    <g transform="translate(28 214)">
+      <rect width="124" height="27" rx="8" fill="#222733"/>
+      <circle cx="15" cy="13.5" r="4" fill="#45df9c"/>
+      <text x="28" y="18" class="small" fill="#c8d0d1">仿真入口已接入</text>
+    </g>
+  </g>
+
+  <!-- Workflow nodes -->
+  <g transform="translate(82 370)">
+    <text x="0" y="0" class="node-tag">ONE TRACEABLE LOOP</text>
+    <text x="0" y="34" class="node-title" font-size="26">一条工作流，五个可验证节点</text>
+
+    <!-- connectors first -->
+    <path d="M204 119H242" fill="none" stroke="#ff8b3d" stroke-width="3" marker-end="url(#arrow-orange)"/>
+    <path d="M478 119H516" fill="none" stroke="#ff8b3d" stroke-width="3" marker-end="url(#arrow-orange)"/>
+    <path d="M752 119H790" fill="none" stroke="#ff8b3d" stroke-width="3" marker-end="url(#arrow-orange)"/>
+    <path d="M1026 119H1064" fill="none" stroke="#ff8b3d" stroke-width="3" marker-end="url(#arrow-orange)"/>
+    <path d="M1175 177C1175 229 985 254 784 254C502 254 288 251 104 210C68 202 48 186 48 169" fill="none" stroke="#ff3ca8" stroke-opacity=".9" stroke-width="3" stroke-dasharray="8 8" marker-end="url(#arrow-pink)"/>
+
+    <!-- node cards -->
+    <g filter="url(#shadow)">
+      <rect x="0" y="66" width="204" height="108" rx="17" fill="#171a22" stroke="#3d424f" stroke-width="1.5"/>
+      <rect x="274" y="66" width="204" height="108" rx="17" fill="#171a22" stroke="#3d424f" stroke-width="1.5"/>
+      <rect x="548" y="66" width="204" height="108" rx="17" fill="#171a22" stroke="#3d424f" stroke-width="1.5"/>
+      <rect x="822" y="66" width="204" height="108" rx="17" fill="#171a22" stroke="#3d424f" stroke-width="1.5"/>
+      <rect x="1096" y="66" width="204" height="108" rx="17" fill="#171a22" stroke="#ff7433" stroke-opacity=".6" stroke-width="1.5"/>
+    </g>
+    <g transform="translate(20 88)">
+      <circle cx="17" cy="17" r="17" fill="#2b2020" stroke="#ff7433"/>
+      <text x="11" y="23" class="metric" fill="#ffb000">01</text>
+      <text x="0" y="55" class="node-title">仿真 · 录制</text>
+      <text x="0" y="78" class="node-sub">浏览器动作 → JSONL</text>
+    </g>
+    <g transform="translate(294 88)">
+      <circle cx="17" cy="17" r="17" fill="#2b2020" stroke="#ff7433"/>
+      <text x="8" y="23" class="metric" fill="#ffb000">02</text>
+      <text x="0" y="55" class="node-title">统一契约</text>
+      <text x="0" y="78" class="node-sub">obs · action · timestamp</text>
+    </g>
+    <g transform="translate(568 88)">
+      <circle cx="17" cy="17" r="17" fill="#202331" stroke="#9c7aff"/>
+      <text x="8" y="23" class="metric" fill="#c5b5ff">03</text>
+      <text x="0" y="55" class="node-title">训练</text>
+      <text x="0" y="78" class="node-sub">本地 worker / RoboGo</text>
+    </g>
+    <g transform="translate(842 88)">
+      <circle cx="17" cy="17" r="17" fill="#202331" stroke="#48d5ff"/>
+      <text x="8" y="23" class="metric" fill="#9df4ff">04</text>
+      <text x="0" y="55" class="node-title">虚实评测</text>
+      <text x="0" y="78" class="node-sub">轨迹 · 偏差 · 回放</text>
+    </g>
+    <g transform="translate(1116 88)">
+      <circle cx="17" cy="17" r="17" fill="#202b28" stroke="#45df9c"/>
+      <text x="8" y="23" class="metric" fill="#75efb8">05</text>
+      <text x="0" y="55" class="node-title">安全部署</text>
+      <text x="0" y="78" class="node-sub">预检 → Canary → Live</text>
+    </g>
+    <text x="465" y="223" class="small" fill="#ff70be">偏差反馈回仿真，继续下一轮迭代</text>
+  </g>
+
+  <!-- Footer product boundaries -->
+  <g transform="translate(1100 620)">
+    <rect width="390" height="55" rx="16" fill="#11151d" stroke="#3b414e"/>
+    <circle cx="28" cy="28" r="9" fill="none" stroke="#45df9c" stroke-width="2"/>
+    <path d="M24 28l3 3 6-7" fill="none" stroke="#45df9c" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+    <text x="51" y="24" class="node-title" font-size="14">安全边界</text>
+    <text x="51" y="43" class="small">Mock 可验证 · 真机动作需受控 agent</text>
+  </g>
+  <text x="82" y="677" class="small">OPEN SOURCE REFERENCE IMPLEMENTATION  ·  RDK-X5  ·  MICRODUCK  ·  SIM2REAL</text>
+</svg>

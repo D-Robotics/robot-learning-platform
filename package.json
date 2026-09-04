@@ -2,7 +2,27 @@
   "name": "@d-robotics/robot-learning-platform",
   "version": "0.1.0",
   "private": false,
-  "description": "RDK robot learning and Sim2Real workflow platform for MicroDuck and RDK-X5.",
+  "description": "RDK-X5 × MicroDuck robot learning platform for browser simulation, RL training, model artifacts, Sim2Real evaluation, and deployment.",
+  "homepage": "https://github.com/D-Robotics/robot-learning-platform#readme",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/D-Robotics/robot-learning-platform.git"
+  },
+  "bugs": {
+    "url": "https://github.com/D-Robotics/robot-learning-platform/issues"
+  },
+  "keywords": [
+    "robot-learning",
+    "reinforcement-learning",
+    "sim2real",
+    "robotics",
+    "embodied-ai",
+    "microduck",
+    "rdk-x5",
+    "mujoco",
+    "onnx",
+    "d-robotics"
+  ],
   "type": "module",
   "engines": { "node": "^20.19.0 || ^22.12.0 || >=24.0.0" },
   "scripts": {
