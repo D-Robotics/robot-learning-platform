@@ -8,7 +8,7 @@
 
 [![verify](https://github.com/D-Robotics/robot-learning-platform/actions/workflows/verify.yml/badge.svg)](https://github.com/D-Robotics/robot-learning-platform/actions/workflows/verify.yml)
 [![Node.js](https://img.shields.io/badge/Node.js-20.19%2B-339933?logo=nodedotjs&logoColor=white)](https://nodejs.org/)
-[![API](https://img.shields.io/badge/API-versioned%20%2Fapi%2Fv1%2Fduck-ff7433)](docs/standalone-adapters.md)
+[![API](https://img.shields.io/badge/API-versioned%20%2Fapi%2Fv1%2Fduck-ff7433)](docs/api/openapi.yaml)
 [![状态](https://img.shields.io/badge/Mock%20闭环-可运行-16a085)](#30-秒上手)
 
 <img src="docs/assets/rdk-robot-learning-platform-hero.svg" alt="RDK Robot Learning Platform 从仿真到真机的产品闭环" width="100%" />
@@ -103,6 +103,7 @@ npx tsc --noEmit
 | `shared` | MicroDuck 61D observation / 14D action / 50 Hz 契约、模型制品和遥测类型 |
 | `server/routes` | Sim2Real HTTP API（模型、运行、部署、遥测） |
 | `server/sim2real` | 本地/RoboGo runner、JSON ledger、兼容性策略和可替换 adapter |
+| `docs/api` | 版本化 OpenAPI 契约与外部集成调用顺序 |
 | `docs/assets` | README 首屏与工作台示意图（自绘 SVG，无运行时依赖） |
 | `docs/design` | 产品设计、MVP/90 分验收、Sim2Real 方案和端到端流程 |
 

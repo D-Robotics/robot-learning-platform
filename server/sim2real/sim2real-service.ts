@@ -10,6 +10,7 @@ import {
   type Sim2RealDeploymentStep,
   type Sim2RealDeviceSummary,
   type Sim2RealModelManifest,
+  type Sim2RealLocalWorkerIntegration,
   type Sim2RealRobogoIntegration,
 } from '../../shared/sim2real.js';
 import {
@@ -20,7 +21,7 @@ import {
 } from './standalone-adapters.js';
 import { evaluateModelCompatibility } from './standalone-compatibility.js';
 import { sim2RealStorageInfo } from './sim2real-store.js';
-import { isRobogoRunnerConfigured } from './robogo-runner.js';
+import { isRobogoRunnerConfigured, normalizeRunnerUrl } from './robogo-runner.js';
 import { isLocalRunnerConfigured } from './local-runner.js';
 
 function publicPath(pathname: string): string {
@@ -358,7 +359,7 @@ export function simulatorIntegration(): {
   };
   boardAgent: { available: boolean; reason: string };
   robogo: { available: boolean; reason: string };
-  local: { available: boolean; reason: string; mock?: boolean };
+  local: Sim2RealLocalWorkerIntegration;
 } {
   const runnerConfigured = isRobogoRunnerConfigured();
   const localRunnerConfigured = isLocalRunnerConfigured();
@@ -380,14 +381,212 @@ export function simulatorIntegration(): {
     },
     local: {
       available: localRunnerConfigured,
+      reachable: false,
+      healthy: false,
+      configured: localRunnerConfigured,
       reason: localRunnerConfigured
         ? localRunnerMock
           ? '本地 Mock worker 已连接：无 CUDA，仅用于契约与流程演练，不生成可部署模型。'
           : 'A local training runner is configured for this deployment.'
         : 'The local training runner is not configured; configure an internal worker endpoint first.',
+      message: localRunnerConfigured
+        ? localRunnerMock
+          ? '本地 Mock worker 已配置，待健康检查。'
+          : '本地训练 worker 已配置，待健康检查。'
+        : '本地训练 worker 未配置。',
       ...(localRunnerMock ? { mock: true } : {}),
     },
   };
+}
+
+function localWorkerHealthUrl(raw?: string): string | null {
+  const value = String(raw ?? process.env.RDK_SIM2REAL_LOCAL_RUNNER_URL ?? '').trim();
+  if (!value || !isLocalRunnerConfigured(value)) return null;
+  try {
+    const parsed = new URL(normalizeRunnerUrl(value, { localHttp: true }));
+    const pathname = parsed.pathname.replace(/\/train\/?$/, '').replace(/\/+$/, '');
+    parsed.pathname = `${pathname || ''}/healthz`;
+    parsed.search = '';
+    parsed.hash = '';
+    return parsed.toString();
+  } catch {
+    return null;
+  }
+}
+
+function boundedCount(value: unknown): number | undefined {
+  const number = Number(value);
+  return Number.isInteger(number) && number >= 0 && number <= 1_000_000 ? number : undefined;
+}
+
+const MAX_LOCAL_HEALTH_RESPONSE_BYTES = 32 * 1024;
+
+/** Read only the small, aggregate health payload; never buffer an arbitrary worker response. */
+async function boundedHealthResponseText(response: Response): Promise<string> {
+  const declaredLength = Number(response.headers.get('content-length') || 0);
+  if (Number.isFinite(declaredLength) && declaredLength > MAX_LOCAL_HEALTH_RESPONSE_BYTES) {
+    throw new Error('local_worker_health_response_too_large');
+  }
+  // A standard Fetch Response with a null body is an empty response. Do not
+  // call an adapter-provided `text()` fallback here: custom fetch shims could
+  // otherwise hand us an arbitrarily large string outside the bounded stream
+  // reader below.
+  if (!response.body) return '';
+  const reader = response.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  try {
+    while (true) {
+      const next = await reader.read();
+      if (next.done) break;
+      total += next.value.byteLength;
+      if (total > MAX_LOCAL_HEALTH_RESPONSE_BYTES) {
+        await reader.cancel();
+        throw new Error('local_worker_health_response_too_large');
+      }
+      chunks.push(next.value);
+    }
+  } finally {
+    reader.releaseLock();
+  }
+  return new TextDecoder().decode(Buffer.concat(chunks.map((chunk) => Buffer.from(chunk))));
+}
+
+/**
+ * Probe the configured local worker without making its URL or credentials
+ * part of the public response. Unconfigured deployments return synchronously
+ * useful state; configured-but-down workers fail within a short timeout.
+ */
+async function probeLocalTrainingWorkerUncached(
+  configured: Sim2RealLocalWorkerIntegration = simulatorIntegration().local,
+  options: { fetchImpl?: typeof fetch; timeoutMs?: number } = {},
+): Promise<Sim2RealLocalWorkerIntegration> {
+  if (!configured.available) {
+    return {
+      ...configured,
+      reachable: false,
+      healthy: false,
+      message: '本地训练 worker 未配置；不会发起网络探测。',
+    };
+  }
+  const healthUrl = localWorkerHealthUrl();
+  if (!healthUrl) {
+    return {
+      ...configured,
+      reachable: false,
+      healthy: false,
+      message: '本地训练 worker 地址无效；不会发起网络探测。',
+    };
+  }
+  const fetchImpl = options.fetchImpl ?? fetch;
+  const timeoutMs = Math.max(250, Math.min(2_000, Number(options.timeoutMs) || 1_200));
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+  const startedAt = Date.now();
+  try {
+    let response: Response;
+    try {
+      response = await fetchImpl(healthUrl, {
+        method: 'GET',
+        redirect: 'error',
+        headers: { accept: 'application/json' },
+        signal: controller.signal,
+      });
+    } catch {
+      return {
+        ...configured,
+        reachable: false,
+        healthy: false,
+        responseMs: Math.max(0, Date.now() - startedAt),
+        message: '本地训练 worker 当前不可达；请检查服务状态。',
+      };
+    }
+    const responseMs = Math.max(0, Date.now() - startedAt);
+    let payload: Record<string, unknown> = {};
+    try {
+      const raw = await boundedHealthResponseText(response);
+      const parsed = JSON.parse(raw);
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+        payload = parsed as Record<string, unknown>;
+      }
+    } catch {
+      return {
+        ...configured,
+        reachable: true,
+        healthy: false,
+        responseMs,
+        message: '本地训练 worker 可达但健康响应无效。',
+      };
+    }
+    const healthy = response.ok && payload.ok === true;
+    const result: Sim2RealLocalWorkerIntegration = {
+      ...configured,
+      reachable: true,
+      healthy,
+      responseMs,
+      message: healthy
+        ? '本地训练 worker 已通过健康检查。'
+        : `本地训练 worker 可达但健康检查未通过（HTTP ${response.status}）。`,
+    };
+    const maxConcurrentJobs = boundedCount(payload.maxConcurrentJobs);
+    const activeJobs = boundedCount(payload.activeJobs);
+    const queuedJobs = boundedCount(payload.queuedJobs);
+    if (maxConcurrentJobs !== undefined) result.maxConcurrentJobs = maxConcurrentJobs;
+    if (activeJobs !== undefined) result.activeJobs = activeJobs;
+    if (queuedJobs !== undefined) result.queuedJobs = queuedJobs;
+    return result;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+const LOCAL_HEALTH_CACHE_TTL_MS = 3_000;
+let localHealthCache:
+  | { key: string; expiresAt: number; result: Sim2RealLocalWorkerIntegration }
+  | undefined;
+let localHealthProbeInFlight:
+  | { key: string; promise: Promise<Sim2RealLocalWorkerIntegration> }
+  | undefined;
+
+/**
+ * Coalesce overview requests and briefly cache both healthy and failed probes.
+ * A stopped worker should not add a network timeout to every user's refresh;
+ * custom fetch implementations remain uncached so tests and diagnostics stay
+ * deterministic.
+ */
+export async function probeLocalTrainingWorker(
+  configured: Sim2RealLocalWorkerIntegration = simulatorIntegration().local,
+  options: { fetchImpl?: typeof fetch; timeoutMs?: number } = {},
+): Promise<Sim2RealLocalWorkerIntegration> {
+  if (options.fetchImpl) return probeLocalTrainingWorkerUncached(configured, options);
+  const key = JSON.stringify({
+    url: process.env.RDK_SIM2REAL_LOCAL_RUNNER_URL || '',
+    available: configured.available,
+    mock: configured.mock === true,
+  });
+  const now = Date.now();
+  if (localHealthCache && localHealthCache.key === key && localHealthCache.expiresAt > now) {
+    return { ...localHealthCache.result };
+  }
+  if (localHealthProbeInFlight?.key === key) {
+    const result = await localHealthProbeInFlight.promise;
+    return { ...result };
+  }
+  const promise = probeLocalTrainingWorkerUncached(configured, options).then((result) => {
+    localHealthCache = {
+      key,
+      expiresAt: Date.now() + LOCAL_HEALTH_CACHE_TTL_MS,
+      result: { ...result },
+    };
+    return result;
+  });
+  localHealthProbeInFlight = { key, promise };
+  try {
+    const result = await promise;
+    return { ...result };
+  } finally {
+    if (localHealthProbeInFlight?.promise === promise) localHealthProbeInFlight = undefined;
+  }
 }
 
 export function supportedRdkPlatforms(): RdkPlatform[] {

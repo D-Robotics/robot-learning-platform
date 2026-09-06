@@ -366,7 +366,11 @@ export function registerSim2RealTelemetryRoutes(
     }
     const run = await getSim2RealRun(runId, owner);
     if (!run) {
-      response.status(404).json({ ok: false, error: 'SIM2REAL_RUN_NOT_FOUND' });
+      response.status(404).json({
+        ok: false,
+        error: 'SIM2REAL_RUN_NOT_FOUND',
+        message: '运行记录不存在，或不属于当前账号。',
+      });
       return;
     }
     const parsed = parseTelemetryBody(body);
@@ -424,7 +428,11 @@ export function registerSim2RealTelemetryRoutes(
           deps.auth.isMultiUserDeployment(),
         )
       ) {
-        response.status(404).json({ ok: false, error: 'SIM2REAL_DEVICE_NOT_FOUND' });
+        response.status(404).json({
+          ok: false,
+          error: 'SIM2REAL_DEVICE_NOT_FOUND',
+          message: '设备不存在，或不属于当前账号。',
+        });
         return;
       }
     }
@@ -527,7 +535,11 @@ export function registerSim2RealTelemetryRoutes(
       noStore(response);
       const runId = String(request.params.id || '').trim();
       if (!(await getSim2RealRun(runId, owner))) {
-        response.status(404).json({ ok: false, error: 'SIM2REAL_RUN_NOT_FOUND' });
+        response.status(404).json({
+          ok: false,
+          error: 'SIM2REAL_RUN_NOT_FOUND',
+          message: '运行记录不存在，或不属于当前账号。',
+        });
         return;
       }
       const rawLimit = request.query.limit;
@@ -545,7 +557,11 @@ export function registerSim2RealTelemetryRoutes(
       const runId = String(request.params.id || '').trim();
       const run = await getSim2RealRun(runId, owner);
       if (!run) {
-        response.status(404).json({ ok: false, error: 'SIM2REAL_RUN_NOT_FOUND' });
+        response.status(404).json({
+          ok: false,
+          error: 'SIM2REAL_RUN_NOT_FOUND',
+          message: '运行记录不存在，或不属于当前账号。',
+        });
         return;
       }
       // Evaluation/replay must consume every accepted chunk. The store's
@@ -568,7 +584,11 @@ export function registerSim2RealTelemetryRoutes(
       const runId = String(request.params.id || '').trim();
       const run = await getSim2RealRun(runId, owner);
       if (!run) {
-        response.status(404).json({ ok: false, error: 'SIM2REAL_RUN_NOT_FOUND' });
+        response.status(404).json({
+          ok: false,
+          error: 'SIM2REAL_RUN_NOT_FOUND',
+          message: '运行记录不存在，或不属于当前账号。',
+        });
         return;
       }
       const body =
@@ -645,7 +665,11 @@ export function registerSim2RealTelemetryRoutes(
           return buildEvaluation(telemetry, reference);
         });
         if (!evaluated) {
-          response.status(404).json({ ok: false, error: 'SIM2REAL_RUN_NOT_FOUND' });
+          response.status(404).json({
+            ok: false,
+            error: 'SIM2REAL_RUN_NOT_FOUND',
+            message: '运行记录不存在，或不属于当前账号。',
+          });
           return;
         }
         response.json({ ok: true, run: evaluated.run, evaluation: evaluated.evaluation });

@@ -192,6 +192,10 @@ action/observation 的 MAE/RMSE。当前数据仍保存在本地 owner-scoped le
 
 接入本地 GPU 时，直接配置 `local-training-worker` 的绝对可执行文件和参数 JSON，令 `RDK_SIM2REAL_LOCAL_RUNNER_URL` 指向 `127.0.0.1:19091/train`；页面和 API 不需要改。worker 使用 `shell:false`、白名单 profile、受控结果文件和 `artifact://` 校验，真实引擎仍由部署方负责安装和验收。
 
+本地 worker 默认只允许一个训练子进程运行，并将后续请求排队；健康接口会返回 `maxConcurrentJobs`、`activeJobs` 和 `queuedJobs`。这样 CPU 单线程运控或单卡训练不会因误操作被并发任务挤占。管理员可在容量验证后将 `RDK_SIM2REAL_MAX_CONCURRENT_JOBS` 调到 1–32。
+
+外部调用者可直接使用 [`docs/api/openapi.yaml`](../api/openapi.yaml)；它是版本化控制面契约，RoboGo、Studio MCP 和 CLI 都通过该层接入。
+
 ## 路径 B：使用 RoboGo
 
 路径 B 对两个产品都适用，RoboGo 只负责训练算力，不负责解释机器人契约。RDK Duck 的真实观测布局、动作顺序、频率和降采样参数必须先写入 manifest，再提交训练。

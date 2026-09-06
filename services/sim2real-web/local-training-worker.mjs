@@ -15,7 +15,7 @@
 
 import { createHash, randomUUID } from 'node:crypto';
 import { createServer } from 'node:http';
-import { mkdir, readdir, readFile, writeFile } from 'node:fs/promises';
+import { mkdir, open, readdir, readFile, writeFile } from 'node:fs/promises';
 import { spawn } from 'node:child_process';
 import path from 'node:path';
 import process from 'node:process';
@@ -26,12 +26,17 @@ const portValue = Number(process.env.RDK_SIM2REAL_LOCAL_WORKER_PORT || 19091);
 const PORT = Number.isInteger(portValue) && portValue >= 1024 && portValue <= 65535 ? portValue : 19091;
 const DATA_DIR = path.resolve(String(process.env.RDK_SIM2REAL_LOCAL_WORKER_DATA_DIR || path.join(process.cwd(), '.data', 'local-worker')));
 const MAX_BODY = 2 * 1024 * 1024;
+const MAX_RESULT = 1 * 1024 * 1024;
 const MAX_LOG = 64 * 1024;
 const MAX_JOBS = 1000;
+const MAX_CONCURRENT_JOBS_LIMIT = 32;
 const SAFE_RUN_ID = /^[a-zA-Z0-9][a-zA-Z0-9._-]{0,199}$/;
 const profiles = new Set(['smoke', 'low-vram', 'standard', 'high-vram']);
 const jobs = new Map();
+const queuedJobs = [];
+const activeJobs = new Set();
 const activeChildren = new Set();
+const finalizingJobs = new Set();
 let jobsLoadPromise;
 
 function text(value, max = 500) {
@@ -156,6 +161,15 @@ function executableConfig() {
   return { executable, args };
 }
 
+function maxConcurrentJobs() {
+  const raw = String(process.env.RDK_SIM2REAL_MAX_CONCURRENT_JOBS || '1').trim();
+  const value = Number(raw);
+  if (!/^\d+$/.test(raw) || !Number.isSafeInteger(value) || value < 1 || value > MAX_CONCURRENT_JOBS_LIMIT) {
+    throw fail(`RDK_SIM2REAL_MAX_CONCURRENT_JOBS must be an integer from 1 to ${MAX_CONCURRENT_JOBS_LIMIT}`, 500, 'worker_configuration_invalid');
+  }
+  return value;
+}
+
 function publicJob(job) {
   const {
     accountId: _accountId,
@@ -167,6 +181,10 @@ function publicJob(job) {
     pid: _pid,
     ...visible
   } = job;
+  if (visible.status === 'queued') {
+    const position = queuedJobs.indexOf(job);
+    visible.queuePosition = position >= 0 ? position + 1 : null;
+  }
   return visible;
 }
 
@@ -245,12 +263,29 @@ function ensureJobsLoaded() {
 }
 
 async function readResult(job) {
+  let handle;
   try {
-    const parsed = JSON.parse(await readFile(path.join(job.dir, 'result.json'), 'utf8'));
+    const resultPath = path.join(job.dir, 'result.json');
+    handle = await open(resultPath, 'r');
+    const info = await handle.stat();
+    // A trainer is trusted to produce the result, but a bounded read keeps a
+    // broken plugin from making the worker allocate unbounded memory. The
+    // artifact metadata is deliberately small; large model bytes belong in a
+    // managed artifact store, never in result.json.
+    if (!info.isFile() || info.size > MAX_RESULT) return null;
+    // Read at most one byte beyond the limit as well. A result can grow after
+    // the first stat call; never let that race turn into an unbounded read.
+    const buffer = Buffer.allocUnsafe(MAX_RESULT + 1);
+    const { bytesRead } = await handle.read(buffer, 0, buffer.length, 0);
+    const afterRead = await handle.stat();
+    if (afterRead.size > MAX_RESULT || bytesRead > MAX_RESULT) return null;
+    const parsed = JSON.parse(buffer.subarray(0, bytesRead).toString('utf8'));
     if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return null;
     return parsed;
   } catch {
     return null;
+  } finally {
+    await handle?.close().catch(() => undefined);
   }
 }
 
@@ -285,35 +320,95 @@ async function launch(job, config) {
 }
 
 async function finish(job, code, stdout, stderr) {
-  if (job.finishedAt) return;
+  if (job.finishedAt || finalizingJobs.has(job)) return;
+  finalizingJobs.add(job);
   if (job.timeout) clearTimeout(job.timeout);
   const childPid = job.pid;
   for (const child of activeChildren) {
     if (childPid != null && child.pid === childPid) activeChildren.delete(child);
   }
+  activeJobs.delete(job);
   job.timeout = undefined;
   job.finishedAt = new Date().toISOString();
   job.pid = undefined;
-  const result = await readResult(job);
-  const artifact = code === 0 && result ? resultArtifact(result) : null;
-  if (artifact) {
-    job.status = 'completed';
-    job.mock = false;
-    job.cuda = Boolean(result.cuda);
-    job.deployable = result.deployable === true;
-    if (artifact.checkpoint) job.checkpoint = artifact.checkpoint;
-    if (artifact.artifact) job.artifact = artifact.artifact;
-    if (artifact.metrics) job.metrics = artifact.metrics;
-    job.message = '本地训练引擎已完成并返回受控制品引用。';
-  } else {
+  try {
+    const result = await readResult(job);
+    const artifact = code === 0 && result ? resultArtifact(result) : null;
+    if (artifact) {
+      job.status = 'completed';
+      job.mock = false;
+      job.cuda = Boolean(result.cuda);
+      job.deployable = result.deployable === true;
+      if (artifact.checkpoint) job.checkpoint = artifact.checkpoint;
+      if (artifact.artifact) job.artifact = artifact.artifact;
+      if (artifact.metrics) job.metrics = artifact.metrics;
+      job.message = '本地训练引擎已完成并返回受控制品引用。';
+    } else {
+      job.status = 'failed';
+      job.message = code === 0 ? '训练进程完成，但未写入有效 artifact:// 结果；任务不会标记为成功。' : '本地训练进程失败。';
+      job.errorCode = code === 0 ? 'training_result_missing' : 'training_process_failed';
+    }
+    job.exitCode = code;
+    if (stdout) job.stdoutTail = scrubLog(stdout);
+    if (stderr) job.stderrTail = scrubLog(stderr);
+    try {
+      await persist(job);
+    } catch {
+      // A result that cannot be durably recorded must not be reported as a
+      // successful run after restart. Keep the in-memory record terminal and
+      // let the next queued job proceed; operators can inspect disk health.
+      job.status = 'failed';
+      job.errorCode = 'worker_persist_failed';
+      job.message = '本地 worker 无法保存任务结果，请检查数据目录。';
+      await persist(job).catch(() => undefined);
+    }
+  } catch {
     job.status = 'failed';
-    job.message = code === 0 ? '训练进程完成，但未写入有效 artifact:// 结果；任务不会标记为成功。' : '本地训练进程失败。';
-    job.errorCode = code === 0 ? 'training_result_missing' : 'training_process_failed';
+    job.errorCode = 'worker_finalize_failed';
+    job.message = '本地 worker 无法整理训练结果，请检查数据目录。';
+    await persist(job).catch(() => undefined);
+  } finally {
+    finalizingJobs.delete(job);
+    void pumpQueue();
   }
-  job.exitCode = code;
-  if (stdout) job.stdoutTail = scrubLog(stdout);
-  if (stderr) job.stderrTail = scrubLog(stderr);
-  await persist(job);
+}
+
+async function pumpQueue() {
+  let limit;
+  try {
+    limit = maxConcurrentJobs();
+  } catch {
+    // /healthz reports invalid configuration. Keep queued work visible rather
+    // than launching it with an implicit fallback or dropping it.
+    return;
+  }
+  while (activeJobs.size < limit && queuedJobs.length) {
+    const job = queuedJobs.shift();
+    if (!job || job.status !== 'queued') continue;
+    let config;
+    try {
+      config = executableConfig();
+    } catch (error) {
+      job.status = 'failed';
+      job.finishedAt = new Date().toISOString();
+      job.errorCode = error?.errorCode || 'worker_configuration_invalid';
+      job.message = text(error?.message) || 'worker configuration is invalid';
+      await persist(job).catch(() => undefined);
+      continue;
+    }
+    activeJobs.add(job);
+    void launch(job, config).catch(async (error) => {
+      activeJobs.delete(job);
+      if (!job.finishedAt) {
+        job.status = 'failed';
+        job.finishedAt = new Date().toISOString();
+        job.message = text(error?.message) || 'worker launch failed';
+        job.errorCode = 'worker_launch_failed';
+        await persist(job).catch(() => undefined);
+      }
+      void pumpQueue();
+    });
+  }
 }
 
 async function persist(job) {
@@ -327,6 +422,7 @@ async function handleTrain(request, response) {
   await ensureJobsLoaded();
   const source = await bodyJson(request);
   const config = executableConfig();
+  maxConcurrentJobs();
   if (!config) {
     json(response, 503, { ok: false, error: 'real_worker_not_configured', message: '未配置真实训练引擎；当前 worker 不会伪造 PPO 完成。' });
     return;
@@ -356,7 +452,8 @@ async function handleTrain(request, response) {
     jobs.delete(runId);
     throw error;
   }
-  void launch(job, config).catch(async (error) => { job.status = 'failed'; job.message = text(error?.message) || 'worker launch failed'; job.errorCode = 'worker_launch_failed'; await persist(job); });
+  queuedJobs.push(job);
+  void pumpQueue();
   json(response, 202, publicJob(job));
 }
 
@@ -377,6 +474,7 @@ export function createLocalTrainingWorkerServer() {
         let configured = false;
         try {
           configured = Boolean(executableConfig());
+          maxConcurrentJobs();
         } catch (error) {
           json(response, 503, {
             ok: false,
@@ -390,7 +488,17 @@ export function createLocalTrainingWorkerServer() {
           });
           return;
         }
-        json(response, configured ? 200 : 503, { ok: configured, worker: 'sim2real-local', mode: 'external-engine', configured, cuda: null, contracts: ['microduck-policy-v1', 'rdk-duck-policy-v1'] });
+        json(response, configured ? 200 : 503, {
+          ok: configured,
+          worker: 'sim2real-local',
+          mode: 'external-engine',
+          configured,
+          maxConcurrentJobs: maxConcurrentJobs(),
+          activeJobs: activeJobs.size,
+          queuedJobs: queuedJobs.length,
+          cuda: null,
+          contracts: ['microduck-policy-v1', 'rdk-duck-policy-v1'],
+        });
         return;
       }
       if (!authorized(request)) {

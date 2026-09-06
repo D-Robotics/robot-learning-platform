@@ -8,6 +8,7 @@ import {
 import {
   compatibilityForManifest,
   deploymentStepsFor,
+  probeLocalTrainingWorker,
   probeRobogoIntegration,
   simulatorIntegration,
 } from './sim2real-service.js';
@@ -203,6 +204,141 @@ describe('Sim2Real compatibility service', () => {
       else process.env.RDK_SIM2REAL_MICRODUCK_ROOT = previousMicroduckRoot;
       if (previousMicroduckUrl === undefined) delete process.env.RDK_SIM2REAL_MICRODUCK_URL;
       else process.env.RDK_SIM2REAL_MICRODUCK_URL = previousMicroduckUrl;
+    }
+  });
+
+  it('does not probe an unconfigured local worker', async () => {
+    const previous = process.env.RDK_SIM2REAL_LOCAL_RUNNER_URL;
+    const originalFetch = globalThis.fetch;
+    let calls = 0;
+    delete process.env.RDK_SIM2REAL_LOCAL_RUNNER_URL;
+    globalThis.fetch = (async () => {
+      calls += 1;
+      return new Response('{}');
+    }) as typeof fetch;
+    try {
+      await expect(probeLocalTrainingWorker({
+        available: false,
+        reachable: false,
+        healthy: false,
+        message: 'not configured',
+      })).resolves.toMatchObject({
+        available: false,
+        reachable: false,
+        healthy: false,
+      });
+      expect(calls).toBe(0);
+    } finally {
+      globalThis.fetch = originalFetch;
+      if (previous === undefined) delete process.env.RDK_SIM2REAL_LOCAL_RUNNER_URL;
+      else process.env.RDK_SIM2REAL_LOCAL_RUNNER_URL = previous;
+    }
+  });
+
+  it('reports local worker health and aggregate queue state without forwarding a token', async () => {
+    const previousUrl = process.env.RDK_SIM2REAL_LOCAL_RUNNER_URL;
+    const previousToken = process.env.RDK_SIM2REAL_LOCAL_RUNNER_TOKEN;
+    const seen: { url?: string; authorization?: string } = {};
+    process.env.RDK_SIM2REAL_LOCAL_RUNNER_URL = 'http://127.0.0.1:19102/train';
+    process.env.RDK_SIM2REAL_LOCAL_RUNNER_TOKEN = 'must-not-leak';
+    try {
+      const result = await probeLocalTrainingWorker(
+        { available: true, reachable: false, healthy: false, message: 'configured' },
+        {
+          timeoutMs: 500,
+          fetchImpl: (async (input, init) => {
+            seen.url = String(input);
+            seen.authorization = new Headers(init?.headers).get('authorization') || '';
+            return new Response(JSON.stringify({
+              ok: true,
+              worker: 'sim2real-local',
+              maxConcurrentJobs: 4,
+              activeJobs: 2,
+              queuedJobs: 3,
+              token: 'health-payload-is-not-forwarded',
+            }), { status: 200, headers: { 'content-type': 'application/json' } });
+          }) as typeof fetch,
+        },
+      );
+      expect(result).toMatchObject({
+        available: true,
+        reachable: true,
+        healthy: true,
+        maxConcurrentJobs: 4,
+        activeJobs: 2,
+        queuedJobs: 3,
+      });
+      expect(seen.url).toBe('http://127.0.0.1:19102/healthz');
+      expect(seen.authorization).toBe('');
+      expect(JSON.stringify(result)).not.toContain('must-not-leak');
+      expect(JSON.stringify(result)).not.toContain('health-payload-is-not-forwarded');
+    } finally {
+      if (previousUrl === undefined) delete process.env.RDK_SIM2REAL_LOCAL_RUNNER_URL;
+      else process.env.RDK_SIM2REAL_LOCAL_RUNNER_URL = previousUrl;
+      if (previousToken === undefined) delete process.env.RDK_SIM2REAL_LOCAL_RUNNER_TOKEN;
+      else process.env.RDK_SIM2REAL_LOCAL_RUNNER_TOKEN = previousToken;
+    }
+  });
+
+  it('rejects health redirects and oversized payloads without calling them reachable and healthy', async () => {
+    const previousUrl = process.env.RDK_SIM2REAL_LOCAL_RUNNER_URL;
+    process.env.RDK_SIM2REAL_LOCAL_RUNNER_URL = 'http://127.0.0.1:19102/train';
+    const configured = { available: true, reachable: false, healthy: false, message: 'configured' };
+    try {
+      let redirectOptions: RequestInit | undefined;
+      const redirected = await probeLocalTrainingWorker(configured, {
+        fetchImpl: (async (_input, init) => {
+          redirectOptions = init;
+          return new Response('', {
+            status: 302,
+            headers: { location: 'https://unexpected.example.test/healthz' },
+          });
+        }) as typeof fetch,
+      });
+      expect(redirectOptions?.redirect).toBe('error');
+      expect(redirected).toMatchObject({ reachable: true, healthy: false });
+
+      const oversized = await probeLocalTrainingWorker(configured, {
+        fetchImpl: (async () =>
+          new Response('x'.repeat(32 * 1024 + 1), {
+            status: 200,
+            headers: { 'content-length': String(32 * 1024 + 1) },
+          })) as typeof fetch,
+      });
+      expect(oversized).toMatchObject({ reachable: true, healthy: false });
+      expect(oversized.message).toContain('响应无效');
+    } finally {
+      if (previousUrl === undefined) delete process.env.RDK_SIM2REAL_LOCAL_RUNNER_URL;
+      else process.env.RDK_SIM2REAL_LOCAL_RUNNER_URL = previousUrl;
+    }
+  });
+
+  it('coalesces concurrent default health probes for the same worker', async () => {
+    const previousUrl = process.env.RDK_SIM2REAL_LOCAL_RUNNER_URL;
+    const originalFetch = globalThis.fetch;
+    let calls = 0;
+    process.env.RDK_SIM2REAL_LOCAL_RUNNER_URL = 'http://127.0.0.1:19103/train';
+    globalThis.fetch = (async () => {
+      calls += 1;
+      await new Promise((resolve) => setTimeout(resolve, 15));
+      return new Response(JSON.stringify({ ok: true, maxConcurrentJobs: 1, activeJobs: 0, queuedJobs: 0 }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      });
+    }) as typeof fetch;
+    try {
+      const configured = { available: true, reachable: false, healthy: false, message: 'configured' };
+      const [first, second] = await Promise.all([
+        probeLocalTrainingWorker(configured),
+        probeLocalTrainingWorker(configured),
+      ]);
+      expect(calls).toBe(1);
+      expect(first).toMatchObject({ healthy: true, maxConcurrentJobs: 1 });
+      expect(second).toMatchObject({ healthy: true, queuedJobs: 0 });
+    } finally {
+      globalThis.fetch = originalFetch;
+      if (previousUrl === undefined) delete process.env.RDK_SIM2REAL_LOCAL_RUNNER_URL;
+      else process.env.RDK_SIM2REAL_LOCAL_RUNNER_URL = previousUrl;
     }
   });
 

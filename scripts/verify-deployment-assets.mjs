@@ -29,6 +29,53 @@ assert.match(
   'npm run verify must include the local Sim2Real smoke command',
 );
 
+const openapi = read('docs/api/openapi.yaml');
+assert.match(openapi, /^openapi:\s*3\.1\.0/m, 'OpenAPI contract must declare 3.1.0');
+const components = openapi.match(/^components:\n([\s\S]*)$/m)?.[1] || '';
+function componentNames(kind) {
+  const marker = `  ${kind}:\n`;
+  const start = components.indexOf(marker);
+  if (start < 0) return new Set();
+  const bodyStart = start + marker.length;
+  const remainder = components.slice(bodyStart);
+  const next = remainder.search(/^  [A-Za-z][A-Za-z0-9_-]*:\n/m);
+  const section = next < 0 ? remainder : remainder.slice(0, next);
+  return new Set(
+    [...section.matchAll(/^    ([A-Za-z][A-Za-z0-9_-]*):\s*$/gm)].map((match) => match[1]),
+  );
+}
+const declaredSchemas = componentNames('schemas');
+for (const reference of openapi.matchAll(/#\/components\/schemas\/([A-Za-z][A-Za-z0-9_-]*)/g)) {
+  assert.ok(
+    declaredSchemas.has(reference[1]),
+    `OpenAPI schema reference is not declared: ${reference[1]}`,
+  );
+}
+const declaredParameters = componentNames('parameters');
+for (const reference of openapi.matchAll(/#\/components\/parameters\/([A-Za-z][A-Za-z0-9_-]*)/g)) {
+  assert.ok(
+    declaredParameters.has(reference[1]),
+    `OpenAPI parameter reference is not declared: ${reference[1]}`,
+  );
+}
+const declaredResponses = componentNames('responses');
+for (const reference of openapi.matchAll(/#\/components\/responses\/([A-Za-z][A-Za-z0-9_-]*)/g)) {
+  assert.ok(
+    declaredResponses.has(reference[1]),
+    `OpenAPI response reference is not declared: ${reference[1]}`,
+  );
+}
+for (const route of [
+  '/api/v1/duck/overview:',
+  '/api/v1/duck/models:',
+  '/api/v1/duck/runs:',
+  '/api/v1/duck/runs/{runId}/telemetry:',
+  '/api/v1/duck/deployments:',
+  '/api/devices/{deviceId}/board/detect:',
+]) {
+  assert.match(openapi, new RegExp(`^  ${route.replace(/[{}]/g, '\\$&')}$`, 'm'), `OpenAPI is missing ${route}`);
+}
+
 function section(text, name) {
   const match = text.match(new RegExp(`(?:^|\\n)\\[${name}\\]\\n([\\s\\S]*?)(?=\\n\\[|$)`));
   return match?.[1] ?? '';
@@ -85,6 +132,7 @@ assertUnit('services/sim2real-web/sim2real-local-worker.service', {
     /ExecStart=.*dist-server\/services\/sim2real-web\/local-training-worker\.mjs/,
     /ReadWritePaths=\/var\/lib\/rdk-robot-learning-platform\/local-worker/,
     /UMask=0077/,
+    /Environment=RDK_SIM2REAL_MAX_CONCURRENT_JOBS=1/,
   ],
 });
 

@@ -503,14 +503,22 @@ export function createDeviceBoardDetectRouter(
       }
       const id = String(request.params.id || '').trim();
       if (!/^[a-zA-Z0-9][a-zA-Z0-9._:-]{0,159}$/.test(id)) {
-        response.status(400).json({ ok: false, error: 'SIM2REAL_DEVICE_ID_INVALID' });
+        response.status(400).json({
+          ok: false,
+          error: 'SIM2REAL_DEVICE_ID_INVALID',
+          message: '设备 ID 格式无效。',
+        });
         return;
       }
       const devices = (await readDevices()) as Array<Device & { bridgeOwnerKey?: string }>;
       const device = devices.find((item) => item.id === id);
       const ownerKey = principal?.accountId ? `sso:${principal.accountId}:web` : null;
       if (!device || !requestOwnsDevice(request, device, ownerKey, auth.isMultiUserDeployment())) {
-        response.status(404).json({ ok: false, error: 'SIM2REAL_DEVICE_NOT_FOUND' });
+        response.status(404).json({
+          ok: false,
+          error: 'SIM2REAL_DEVICE_NOT_FOUND',
+          message: '设备不存在，或不属于当前账号。',
+        });
         return;
       }
       const executed = await runner(request, response, id, [buildBoardPreflightCommand()], {

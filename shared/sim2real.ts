@@ -298,6 +298,28 @@ export interface Sim2RealRobogoIntegration {
   message: string;
 }
 
+/**
+ * Runtime health for the administrator-owned local training worker.
+ *
+ * `available` means configured; `reachable` and `healthy` come from the
+ * worker's bounded health probe.  Queue counters are deliberately aggregate
+ * only and never include request payloads, paths, or credentials.
+ */
+export interface Sim2RealLocalWorkerIntegration {
+  available: boolean;
+  reachable: boolean;
+  healthy: boolean;
+  configured?: boolean;
+  mock?: boolean;
+  maxConcurrentJobs?: number;
+  activeJobs?: number;
+  queuedJobs?: number;
+  responseMs?: number;
+  /** Legacy/configuration detail retained for clients that predate health probes. */
+  reason?: string;
+  message: string;
+}
+
 export interface Sim2RealOverview {
   schemaVersion: typeof SIM2REAL_SCHEMA_VERSION;
   /** The authenticated account that owns the returned resources; null only in local-dev mode. */
@@ -332,7 +354,7 @@ export interface Sim2RealOverview {
       };
       boardAgent: { available: boolean; reason: string };
       robogo: { available: boolean; reason: string };
-      local: { available: boolean; reason: string; mock?: boolean };
+      local: Sim2RealLocalWorkerIntegration;
     };
     robogo: Sim2RealRobogoIntegration;
     storage: {

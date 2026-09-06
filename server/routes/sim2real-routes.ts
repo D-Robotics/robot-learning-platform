@@ -36,6 +36,7 @@ import {
   compatibilityForManifest,
   compatibilityForPlatforms,
   deploymentStepsFor,
+  probeLocalTrainingWorker,
   probeRobogoIntegration,
   publicDeviceSummary,
   simulatorIntegration,
@@ -602,7 +603,8 @@ export function createSim2RealRouter(
       const principal = auth.resolvePrincipal(request);
       const selectedProductId = requestedProduct(request.query.productId);
       noStore(response);
-      const [models, runs, deployments, devices, robogo] = await Promise.all([
+      const simulator = simulatorIntegration();
+      const [models, runs, deployments, devices, robogo, localWorker] = await Promise.all([
         listSim2RealModels(owner),
         listSim2RealRuns(owner),
         listSim2RealDeployments(owner),
@@ -612,6 +614,7 @@ export function createSim2RealRouter(
           auth.resolveAccessToken(request),
           { multiUser: auth.isMultiUserDeployment() },
         ),
+        probeLocalTrainingWorker(simulator.local),
       ]);
       const contractRegistry = availableContractsFor(models);
       const selectedContracts = contractRegistry.contracts[selectedProductId];
@@ -648,7 +651,7 @@ export function createSim2RealRouter(
         deployments: deployments.map((deployment) => publicDeployment(deployment, models)),
         devices: devices.map(publicDeviceSummary),
         integrations: {
-          simulator: simulatorIntegration(),
+          simulator: { ...simulator, local: localWorker },
           robogo,
           storage: storageIntegration(),
         },
@@ -691,7 +694,11 @@ export function createSim2RealRouter(
       noStore(response);
       const run = await getSim2RealRun(String(request.params.id || ''), owner);
       if (!run) {
-        response.status(404).json({ ok: false, error: 'SIM2REAL_RUN_NOT_FOUND' });
+        response.status(404).json({
+          ok: false,
+          error: 'SIM2REAL_RUN_NOT_FOUND',
+          message: '运行记录不存在，或不属于当前账号。',
+        });
         return;
       }
       let current = run;
@@ -820,7 +827,11 @@ export function createSim2RealRouter(
       const runId = String(request.params.id || '').trim();
       const run = await getSim2RealRun(runId, owner);
       if (!run) {
-        response.status(404).json({ ok: false, error: 'SIM2REAL_RUN_NOT_FOUND' });
+        response.status(404).json({
+          ok: false,
+          error: 'SIM2REAL_RUN_NOT_FOUND',
+          message: '运行记录不存在，或不属于当前账号。',
+        });
         return;
       }
       if (run.backend !== 'local' && run.backend !== 'robogo') {
@@ -1039,7 +1050,11 @@ export function createSim2RealRouter(
       noStore(response);
       const model = await getSim2RealModel(String(request.params.id || ''), owner);
       if (!model) {
-        response.status(404).json({ ok: false, error: 'SIM2REAL_MODEL_NOT_FOUND' });
+        response.status(404).json({
+          ok: false,
+          error: 'SIM2REAL_MODEL_NOT_FOUND',
+          message: '模型制品不存在，或不属于当前账号。',
+        });
         return;
       }
       response.json({
@@ -1133,7 +1148,11 @@ export function createSim2RealRouter(
       const resumeFrom = resumeResult.value;
       const model = await getSim2RealModel(modelId, owner);
       if (!model) {
-        response.status(404).json({ ok: false, error: 'SIM2REAL_MODEL_NOT_FOUND' });
+        response.status(404).json({
+          ok: false,
+          error: 'SIM2REAL_MODEL_NOT_FOUND',
+          message: '模型制品不存在，或不属于当前账号。',
+        });
         return;
       }
       const requestFingerprint = runRequestFingerprint({
@@ -1448,7 +1467,11 @@ export function createSim2RealRouter(
       }
       const model = await getSim2RealModel(modelId, owner);
       if (!model) {
-        response.status(404).json({ ok: false, error: 'SIM2REAL_MODEL_NOT_FOUND' });
+        response.status(404).json({
+          ok: false,
+          error: 'SIM2REAL_MODEL_NOT_FOUND',
+          message: '模型制品不存在，或不属于当前账号。',
+        });
         return;
       }
       const devices = await visibleDevicesForAuth(owner);
@@ -1462,7 +1485,11 @@ export function createSim2RealRouter(
           auth.isMultiUserDeployment(),
         )
       ) {
-        response.status(404).json({ ok: false, error: 'SIM2REAL_DEVICE_NOT_FOUND' });
+        response.status(404).json({
+          ok: false,
+          error: 'SIM2REAL_DEVICE_NOT_FOUND',
+          message: '设备不存在，或不属于当前账号。',
+        });
         return;
       }
       const targetPlatform = String(device.boardPlatform ?? '').trim();
@@ -1512,7 +1539,11 @@ export function createSim2RealRouter(
       noStore(response);
       const deployment = await getSim2RealDeployment(String(request.params.id || ''), owner);
       if (!deployment) {
-        response.status(404).json({ ok: false, error: 'SIM2REAL_DEPLOYMENT_NOT_FOUND' });
+        response.status(404).json({
+          ok: false,
+          error: 'SIM2REAL_DEPLOYMENT_NOT_FOUND',
+          message: '部署计划不存在，或不属于当前账号。',
+        });
         return;
       }
       response.json({ ok: true, deployment });
@@ -1528,7 +1559,11 @@ export function createSim2RealRouter(
       const id = String(request.params.id || '').trim();
       const deployment = await getSim2RealDeployment(id, owner);
       if (!deployment) {
-        response.status(404).json({ ok: false, error: 'SIM2REAL_DEPLOYMENT_NOT_FOUND' });
+        response.status(404).json({
+          ok: false,
+          error: 'SIM2REAL_DEPLOYMENT_NOT_FOUND',
+          message: '部署计划不存在，或不属于当前账号。',
+        });
         return;
       }
       if (deployment.mode !== 'preflight') {
@@ -1562,7 +1597,11 @@ export function createSim2RealRouter(
           auth.isMultiUserDeployment(),
         )
       ) {
-        response.status(404).json({ ok: false, error: 'SIM2REAL_DEVICE_NOT_FOUND' });
+        response.status(404).json({
+          ok: false,
+          error: 'SIM2REAL_DEVICE_NOT_FOUND',
+          message: '设备不存在，或不属于当前账号。',
+        });
         return;
       }
       const runningSteps = markStep(deployment.steps, 'board-passport', 'running');

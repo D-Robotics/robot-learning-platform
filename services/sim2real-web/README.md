@@ -27,6 +27,8 @@ canary、live、制品转换/下发仍需要单独配置受控适配器。
 产品信息架构和交互边界见仓库根目录的
 `docs/design/rdk-duck-product-design.md`。页面固定为“总览 + 六个业务模块”，顶部用“仿真与录制 → 训练与导出 → 评测与效果 → 预检与上板”引导新用户，避免把所有操作堆在同一张看板上。
 
+外部客户端的版本化请求/响应契约见仓库根目录的 `docs/api/openapi.yaml`，配套的调用顺序和认证边界见 `docs/api/README.md`。
+
 当前控制面 90 分阶段验收清单见 `docs/design/sim2real-90-acceptance.md`；其中明确区分软件闭环验收和真实 X5 硬件验收。
 
 评测页的遥测导入默认只在浏览器本地聚合；用户点击“上传到当前 Run 并评测”后，才会将 JSON/JSONL
@@ -375,6 +377,11 @@ Mock unit 不读取包含 SSO/RoboGo secret 的生产 env；默认端口是 1909
 接入真实 GPU worker 后，删除该环境变量并停止 Mock 单元，再把同一个 `/train` 协议指向真实 worker；Studio
 API 和页面无需改变。
 
+仓库提供 `examples/local-engine-reference.mjs` 作为可复制的外部引擎最小示例。它读取
+`RDK_SIM2REAL_REQUEST_FILE`、校验 manifest 契约并写入 `RDK_SIM2REAL_RESULT_FILE`，方便先验证
+服务器桥接；它只返回不可部署的协议 fixture，不包含 PPO、MuJoCo 或模型权重。真实接入时只需替换
+`RDK_SIM2REAL_TRAIN_EXECUTABLE`/`RDK_SIM2REAL_TRAIN_ARGS_JSON`，平台 API、幂等和状态查询无需改动。
+
 ### 受控本地训练 worker（真实引擎桥接）
 
 本仓还提供 `local-training-worker.mjs` 和 `sim2real-local-worker.service`。它是一个真实训练引擎
@@ -395,9 +402,15 @@ RDK_SIM2REAL_TRAIN_ARGS_JSON='["--request-file","request.json"]'
 # Optional; use the same value in the Web service env to authenticate the
 # loopback worker even when another local process can reach the port.
 RDK_SIM2REAL_LOCAL_RUNNER_TOKEN=change-me-in-a-root-only-env-file
+# Keep this at 1 for a single GPU/CPU host; allowed range is 1-32.
+RDK_SIM2REAL_MAX_CONCURRENT_JOBS=1
 ```
 
 参数数组由 systemd 环境文件直接传入 JSON；worker 不执行 shell 展开，也不会把用户字段拼到命令中。
+本地 worker 自带有界队列，默认只允许 1 个训练子进程运行；超过并发数的任务会保留为 `queued`，状态中
+带有 `queuePosition`，前一个任务结束后才会启动。管理员可以按机器资源将
+`RDK_SIM2REAL_MAX_CONCURRENT_JOBS` 调整到 1-32；非法值会让 `/healthz` 返回
+`worker_configuration_invalid`，不会偷偷回退到不受控的并发数。
 随仓库提供的 systemd unit 默认隐藏主机设备（包括 GPU），以保持最小权限；当前无 CUDA 的 CPU
 流程可直接使用。若部署真实 GPU 训练，管理员应单独审核并复制该 unit，按主机安全策略仅放行所需
 GPU 设备后再启用，不要直接把服务改成宽泛的特权模式。

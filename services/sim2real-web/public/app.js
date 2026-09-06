@@ -419,6 +419,10 @@ function renderIntegrations() {
   const boardAgent = simulator.boardAgent || {};
   const profile = selectedProductProfile();
   const model = selectedModel();
+  const localConfigured = local.available === true;
+  const localReachable = local.reachable === true;
+  const localHealthy = local.healthy === true;
+  const localReady = localConfigured && localReachable && localHealthy;
   // MicroDuck's entry is a bundled read-only asset, so keep it visible while
   // the account-scoped overview is loading. A server-side `available: false`
   // still wins; RDK Duck has no path and therefore remains gated.
@@ -468,10 +472,14 @@ function renderIntegrations() {
   );
   setText(
     'status-robogo',
-    local.available
+    localReady
       ? local.mock
         ? '本地 Mock 已连接'
         : '本地训练已连接'
+      : localConfigured && localReachable
+        ? '本地 worker 检查失败'
+        : localConfigured
+          ? '本地 worker 不可达'
       : robogo.state === 'ready'
         ? 'RoboGo 已连接'
         : robogo.state === 'login_required'
@@ -480,7 +488,9 @@ function renderIntegrations() {
   );
   setText(
     'status-robogo-detail',
-    local.available ? local.reason : robogo.message || local.reason || '只读读取训练资源',
+    localConfigured
+      ? local.message || local.reason || '本地 worker 状态未知'
+      : robogo.message || local.reason || '只读读取训练资源',
   );
   setText('status-storage', storage.writable ? '台账可写' : '需要共享存储');
   setText('status-storage-card', storage.writable ? '台账可写' : '需要共享存储');
@@ -567,12 +577,24 @@ function renderIntegrations() {
           ? 'LOGIN'
           : 'UNAVAILABLE';
   }
-  setText('robogo-board-count', robogo.availableBoardCount ?? '—');
-  setText('robogo-machine-count', robogo.developmentMachineCount ?? '—');
   setText(
     'robogo-message',
-    local.available ? local.reason : robogo.message || '本地 / RoboGo 训练后端不可用',
+    localConfigured
+      ? [
+          local.message || local.reason || '本地 worker 状态未知',
+          Number.isInteger(local.maxConcurrentJobs)
+            ? `并发 ${local.activeJobs ?? 0}/${local.maxConcurrentJobs}`
+            : '',
+          Number.isInteger(local.queuedJobs) ? `排队 ${local.queuedJobs}` : '',
+        ]
+          .filter(Boolean)
+          .join(' · ')
+      : robogo.message || '本地 / RoboGo 训练后端不可用',
   );
+  setText('robogo-board-label', localConfigured ? '运行中任务' : '可见算力资源');
+  setText('robogo-machine-label', localConfigured ? '排队任务' : '开发机');
+  setText('robogo-board-count', localConfigured ? local.activeJobs ?? '—' : robogo.availableBoardCount ?? '—');
+  setText('robogo-machine-count', localConfigured ? local.queuedJobs ?? '—' : robogo.developmentMachineCount ?? '—');
 }
 
 function renderModel() {

@@ -1,11 +1,14 @@
 #!/usr/bin/env node
 
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
+import { spawnSync } from 'node:child_process';
 
 const root = process.cwd();
 const manifestPath = path.join(root, 'examples', 'rdk-duck-policy-manifest.json');
 const telemetryPath = path.join(root, 'examples', 'telemetry-sample.jsonl');
+const localEnginePath = path.join(root, 'examples', 'local-engine-reference.mjs');
 
 function fail(message) {
   throw new Error(`[examples] ${message}`);
@@ -20,6 +23,9 @@ function readJson(file) {
 }
 
 const manifest = readJson(manifestPath);
+if (!fs.existsSync(localEnginePath)) fail('local-engine-reference.mjs is missing');
+if (!fs.readFileSync(localEnginePath, 'utf8').includes('RDK_SIM2REAL_RESULT_FILE'))
+  fail('local engine example must implement the worker result-file protocol');
 if (manifest.schemaVersion !== 1) fail('manifest schemaVersion must be 1');
 if (manifest.robot?.id !== 'rdk-duck') fail('manifest must describe rdk-duck');
 if (manifest.contract?.id !== 'rdk-duck-policy-v1') fail('manifest contract id is unexpected');
@@ -36,6 +42,50 @@ if (!manifest.artifacts.some((item) => item.role === 'policy' && item.format ===
 for (const artifact of manifest.artifacts) {
   if (typeof artifact.ref !== 'string' || !artifact.ref.startsWith('artifact://'))
     fail(`artifact ${artifact.id || '<unknown>'} must use artifact://`);
+}
+
+// Execute the reference engine once with a disposable request/result pair so
+// the public example is proven runnable, not merely present in the tree.
+const exampleScratch = fs.mkdtempSync(path.join(os.tmpdir(), 'rdk-sim2real-example-'));
+try {
+  const requestFile = path.join(exampleScratch, 'request.json');
+  const resultFile = path.join(exampleScratch, 'result.json');
+  fs.writeFileSync(
+    requestFile,
+    JSON.stringify(
+      {
+        schemaVersion: 1,
+        contractId: manifest.contract.id,
+        model: { modelId: manifest.modelId, version: manifest.version },
+        contract: manifest.contract,
+      },
+      null,
+      2,
+    ),
+    { mode: 0o600 },
+  );
+  const execution = spawnSync(process.execPath, [localEnginePath], {
+    cwd: root,
+    env: {
+      ...process.env,
+      RDK_SIM2REAL_REQUEST_FILE: requestFile,
+      RDK_SIM2REAL_RESULT_FILE: resultFile,
+      RDK_SIM2REAL_EXAMPLE_DELAY_MS: '0',
+    },
+    encoding: 'utf8',
+  });
+  if (execution.status !== 0) {
+    fail(`local engine example failed: ${execution.stderr || execution.stdout || 'unknown error'}`);
+  }
+  const result = readJson(resultFile);
+  if (result.deployable !== false || result.cuda !== false) {
+    fail('local engine example must remain a non-deployable, CPU protocol fixture');
+  }
+  if (!String(result.checkpoint?.artifactRef || '').startsWith('artifact://')) {
+    fail('local engine example must emit an opaque checkpoint artifact reference');
+  }
+} finally {
+  fs.rmSync(exampleScratch, { recursive: true, force: true });
 }
 
 const lines = fs

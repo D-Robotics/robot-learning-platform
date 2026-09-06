@@ -78,6 +78,7 @@ Sim2Real 业务路由只依赖 `Sim2RealAuthPort`，不读取 Studio React 状�
 - 遥测 ingest 受单 chunk、单 run 和单账号的样本/字节配额保护；当前 JSON ledger 是单实例
   MVP，超过配额或需要横向扩容时应迁移到对象存储/数据库 adapter。
 - systemd unit、Nginx 安装脚本和独立服务健康检查。
+- 本地真实训练 worker 自带有界并发队列（默认 1 个子进程），健康接口会返回并发上限、运行中和排队数量；这避免多个用户在 CPU/单卡服务器上互相挤占。
 
 ### 明确未宣称已完成
 
@@ -117,6 +118,9 @@ Sim2Real 业务路由只依赖 `Sim2RealAuthPort`，不读取 Studio React 状�
   不需要 RoboGo 账号。
 - RDK_SIM2REAL_ROBOGO_RUNNER_URL：受控 RoboGo runner 的 POST 入口；未设置或返回错误
   时不会启动训练机器，也不会伪造成功。
+
+完整的机器调用契约见 [`docs/api/openapi.yaml`](../api/openapi.yaml)；外部 MCP、CLI 和 RDK Studio
+入口都应调用版本化 `/api/v1/duck`，不要直接依赖 runner 私有接口。
 
 SSO、trusted-proxy/Cookie 适配和 RoboGo 账号 token 由部署方的受控 adapter 注入，不在页面、manifest、
 日志或 unit 文件中写入凭据；公开 standalone unit 当前只提供 trusted-proxy 参考。

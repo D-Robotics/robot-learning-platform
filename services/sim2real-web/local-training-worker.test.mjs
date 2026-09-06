@@ -8,13 +8,14 @@ const fixtureDir = await mkdtemp(path.join(os.tmpdir(), 'rdk-local-worker-'));
 const fixture = path.join(fixtureDir, 'engine.mjs');
 await writeFile(
   fixture,
-  `import { writeFile } from 'node:fs/promises';\nconsole.error('Bearer fake-secret token=should-hide');\nawait writeFile(process.env.RDK_SIM2REAL_RESULT_FILE, JSON.stringify({ checkpoint: { checkpointId: 'cp-1', artifactRef: 'artifact://microduck/cp-1', iteration: 1 }, metrics: { reward: 3.5, platformTokenLeaked: Boolean(process.env.RDK_SIM2REAL_LOCAL_RUNNER_TOKEN) }, deployable: false }));\n`,
+  `import { writeFile } from 'node:fs/promises';\nconsole.error('Bearer fake-secret token=should-hide');\nawait new Promise((resolve) => setTimeout(resolve, 120));\nconst result = { checkpoint: { checkpointId: 'cp-1', artifactRef: 'artifact://microduck/cp-1', iteration: 1 }, metrics: { reward: 3.5, platformTokenLeaked: Boolean(process.env.RDK_SIM2REAL_LOCAL_RUNNER_TOKEN) }, deployable: false };\nif (process.env.RDK_SIM2REAL_TEST_LARGE_RESULT === '1') result.padding = 'x'.repeat(1_100_000);\nawait writeFile(process.env.RDK_SIM2REAL_RESULT_FILE, JSON.stringify(result));\n`,
   { mode: 0o600 },
 );
 process.env.RDK_SIM2REAL_TRAIN_EXECUTABLE = process.execPath;
 process.env.RDK_SIM2REAL_TRAIN_ARGS_JSON = JSON.stringify([fixture]);
 process.env.RDK_SIM2REAL_LOCAL_WORKER_DATA_DIR = fixtureDir;
 process.env.RDK_SIM2REAL_LOCAL_RUNNER_TOKEN = 'worker-test-token';
+process.env.RDK_SIM2REAL_MAX_CONCURRENT_JOBS = '1';
 
 const { createLocalTrainingWorkerServer } = await import('./local-training-worker.mjs');
 const server = createLocalTrainingWorkerServer();
@@ -31,6 +32,12 @@ const request = {
   training: { profile: 'smoke', maxIterations: 10 },
 };
 try {
+  const health = await fetch(`${base}/healthz`);
+  assert.equal(health.status, 200);
+  const healthBody = await health.json();
+  assert.equal(healthBody.maxConcurrentJobs, 1);
+  assert.equal(healthBody.activeJobs, 0);
+
   const unauthorized = await fetch(`${base}/train`, {
     method: 'POST',
     headers: { 'content-type': 'application/json', 'x-sim2real-account': 'alice' },
@@ -50,6 +57,21 @@ try {
   assert.equal(launch.status, 202);
   const launched = await launch.json();
   assert.equal(launched.mock, false);
+
+  const secondLaunch = await fetch(`${base}/train`, {
+    method: 'POST',
+    headers: {
+      'content-type': 'application/json',
+      'x-sim2real-account': 'alice',
+      authorization: 'Bearer worker-test-token',
+      'idempotency-key': 'second-job',
+    },
+    body: JSON.stringify({ ...request, model: { modelId: 'microduck-turn', version: 'v1' } }),
+  });
+  assert.equal(secondLaunch.status, 202);
+  const second = await secondLaunch.json();
+  assert.equal(second.status, 'queued');
+  assert.equal(second.queuePosition, 1);
   const replay = await fetch(`${base}/train`, {
     method: 'POST',
     headers: {
@@ -86,6 +108,37 @@ try {
   assert.match(status.stderrTail, /Bearer \[redacted\]/);
   assert.doesNotMatch(status.stderrTail, /should-hide/);
 
+  let secondStatus = second;
+  for (let index = 0; index < 100 && (secondStatus.status === 'queued' || secondStatus.status === 'running'); index += 1) {
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    const statusResponse = await fetch(`${base}/runs/${encodeURIComponent(second.runId)}`, { headers: { 'x-sim2real-account': 'alice', authorization: 'Bearer worker-test-token' } });
+    secondStatus = await statusResponse.json();
+    if (statusResponse.status !== 200) throw new Error(`second status response ${statusResponse.status}: ${JSON.stringify(secondStatus)}`);
+  }
+  assert.equal(secondStatus.status, 'completed', JSON.stringify(secondStatus));
+
+  process.env.RDK_SIM2REAL_TEST_LARGE_RESULT = '1';
+  const oversizedLaunch = await fetch(`${base}/train`, {
+    method: 'POST',
+    headers: {
+      'content-type': 'application/json',
+      'x-sim2real-account': 'alice',
+      authorization: 'Bearer worker-test-token',
+      'idempotency-key': 'oversized-result',
+    },
+    body: JSON.stringify({ ...request, model: { modelId: 'microduck-large-result', version: 'v1' } }),
+  });
+  assert.equal(oversizedLaunch.status, 202);
+  let oversizedStatus = await oversizedLaunch.json();
+  for (let index = 0; index < 100 && (oversizedStatus.status === 'queued' || oversizedStatus.status === 'running'); index += 1) {
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    const statusResponse = await fetch(`${base}/runs/${encodeURIComponent(oversizedStatus.runId)}`, { headers: { 'x-sim2real-account': 'alice', authorization: 'Bearer worker-test-token' } });
+    oversizedStatus = await statusResponse.json();
+  }
+  assert.equal(oversizedStatus.status, 'failed', JSON.stringify(oversizedStatus));
+  assert.equal(oversizedStatus.errorCode, 'training_result_missing');
+  delete process.env.RDK_SIM2REAL_TEST_LARGE_RESULT;
+
   process.env.RDK_SIM2REAL_TRAIN_ARGS_JSON = 'not-json';
   const invalidHealth = await fetch(`${base}/healthz`);
   assert.equal(invalidHealth.status, 503);
@@ -101,7 +154,7 @@ try {
   assert.equal(blocked.status, 503);
   assert.equal((await blocked.json()).error, 'real_worker_not_configured');
   const persistedEntries = await readdir(fixtureDir, { withFileTypes: true });
-  assert.equal(persistedEntries.filter((entry) => entry.isDirectory()).length, 1);
+  assert.equal(persistedEntries.filter((entry) => entry.isDirectory()).length, 3);
 
   // A fresh worker process must recover terminal records so polling and
   // idempotency do not silently forget a completed run after a restart.
@@ -131,4 +184,6 @@ try {
   delete process.env.RDK_SIM2REAL_TRAIN_ARGS_JSON;
   delete process.env.RDK_SIM2REAL_LOCAL_WORKER_DATA_DIR;
   delete process.env.RDK_SIM2REAL_LOCAL_RUNNER_TOKEN;
+  delete process.env.RDK_SIM2REAL_MAX_CONCURRENT_JOBS;
+  delete process.env.RDK_SIM2REAL_TEST_LARGE_RESULT;
 }

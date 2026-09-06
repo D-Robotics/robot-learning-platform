@@ -1,0 +1,678 @@
+openapi: 3.1.0
+info:
+  title: RDK Robot Learning Platform API
+  version: 1.0.0
+  description: >-
+    Versioned control-plane contract for the standalone MicroDuck/RDK Duck
+    Sim2Real workflow. The legacy /api/sim2real paths are aliases.
+servers:
+  - url: https://example.invalid
+    description: Replace with the deployment origin.
+tags:
+  - name: service
+  - name: workspace
+  - name: runs
+  - name: telemetry
+  - name: deployments
+  - name: devices
+security:
+  - cookieAuth: []
+paths:
+  /healthz:
+    get:
+      tags: [service]
+      summary: Liveness and dependency summary
+      operationId: getHealth
+      security: []
+      responses:
+        "200":
+          description: Service is alive (it may be degraded).
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Health" }
+  /readyz:
+    get:
+      tags: [service]
+      summary: Readiness probe
+      operationId: getReadiness
+      security: []
+      responses:
+        "200": { $ref: "#/components/responses/Ready" }
+        "503": { $ref: "#/components/responses/NotReady" }
+  /api/v1/duck/overview:
+    get:
+      tags: [workspace]
+      summary: Read the account-scoped workspace snapshot
+      operationId: getOverview
+      parameters:
+        - $ref: "#/components/parameters/ProductId"
+      responses:
+        "200":
+          description: Products, contracts, models, runs, devices and integrations.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/OverviewResponse" }
+        "401": { $ref: "#/components/responses/AuthRequired" }
+  /api/v1/duck/models/validate:
+    post:
+      tags: [workspace]
+      summary: Validate a manifest without persisting it
+      operationId: validateModelManifest
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ManifestEnvelope" }
+      responses:
+        "200":
+          description: Validation result (valid may be false).
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ValidationResponse" }
+        "401": { $ref: "#/components/responses/AuthRequired" }
+  /api/v1/duck/models:
+    post:
+      tags: [workspace]
+      summary: Register an immutable model manifest
+      operationId: createModel
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ManifestEnvelope" }
+      responses:
+        "201":
+          description: Model registered.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ModelResponse" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "409": { description: Model version already exists. }
+  /api/v1/duck/models/{modelId}:
+    parameters:
+      - $ref: "#/components/parameters/ModelId"
+    get:
+      tags: [workspace]
+      summary: Read one registered model
+      operationId: getModel
+      responses:
+        "200":
+          description: Model.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ModelResponse" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /api/v1/duck/runs:
+    post:
+      tags: [runs]
+      summary: Start or register a browser, local, RoboGo or contract run
+      operationId: createRun
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/RunRequest" }
+      responses:
+        "201":
+          description: New run.
+          content: { application/json: { schema: { $ref: "#/components/schemas/RunResponse" } } }
+        "200":
+          description: Idempotent replay.
+          content: { application/json: { schema: { $ref: "#/components/schemas/RunResponse" } } }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/AuthRequired" }
+        "429": { description: Per-account active-run quota reached. }
+  /api/v1/duck/runs/{runId}:
+    parameters:
+      - $ref: "#/components/parameters/RunId"
+    get:
+      tags: [runs]
+      summary: Read a run and refresh remote status when applicable
+      operationId: getRun
+      responses:
+        "200":
+          description: Run.
+          content: { application/json: { schema: { $ref: "#/components/schemas/RunResponse" } } }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "503": { description: Status lookup is retryable; last known state is preserved. }
+  /api/v1/duck/runs/{runId}/reconcile:
+    post:
+      tags: [runs]
+      summary: Attach a confirmed external id without relaunching work
+      operationId: reconcileRun
+      parameters:
+        - $ref: "#/components/parameters/RunId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [externalRunId, confirm]
+              properties:
+                externalRunId: { type: string }
+                confirm: { const: true }
+      responses:
+        "200":
+          description: Reconciled run.
+          content: { application/json: { schema: { $ref: "#/components/schemas/RunResponse" } } }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "409": { description: Run is not reconcilable or the id does not match. }
+  /api/v1/duck/telemetry:
+    post:
+      tags: [telemetry]
+      summary: Append one ordered telemetry chunk
+      operationId: appendTelemetry
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/TelemetryRequest" }
+      responses:
+        "201":
+          description: Chunk accepted.
+          content: { application/json: { schema: { $ref: "#/components/schemas/TelemetryResponse" } } }
+        "200":
+          description: Idempotent replay.
+          content: { application/json: { schema: { $ref: "#/components/schemas/TelemetryResponse" } } }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "413": { description: Telemetry quota exceeded. }
+  /api/v1/duck/runs/{runId}/telemetry:
+    parameters:
+      - $ref: "#/components/parameters/RunId"
+    get:
+      tags: [telemetry]
+      summary: List accepted telemetry chunks
+      operationId: listTelemetry
+      responses:
+        "200":
+          description: Telemetry chunks.
+          content: { application/json: { schema: { $ref: "#/components/schemas/TelemetryListResponse" } } }
+        "404": { $ref: "#/components/responses/NotFound" }
+    post:
+      tags: [telemetry]
+      summary: Append a chunk using the run id in the path
+      operationId: appendRunTelemetry
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/TelemetryRequestWithoutRunId" }
+      responses:
+        "201":
+          description: Chunk accepted.
+          content: { application/json: { schema: { $ref: "#/components/schemas/TelemetryResponse" } } }
+        "400": { $ref: "#/components/responses/BadRequest" }
+  /api/v1/duck/runs/{runId}/replay:
+    get:
+      tags: [telemetry]
+      summary: Read the replay summary
+      operationId: getReplay
+      parameters:
+        - $ref: "#/components/parameters/RunId"
+      responses:
+        "200":
+          description: Replay and evaluation summary.
+          content: { application/json: { schema: { $ref: "#/components/schemas/ReplayResponse" } } }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /api/v1/duck/runs/{runId}/evaluate:
+    post:
+      tags: [telemetry]
+      summary: Evaluate accepted telemetry against an optional reference
+      operationId: evaluateRun
+      parameters:
+        - $ref: "#/components/parameters/RunId"
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                referenceSamples: { type: array, maxItems: 5000, items: { $ref: "#/components/schemas/TelemetrySample" } }
+                referenceJsonl: { type: string, maxLength: 2000000 }
+      responses:
+        "200":
+          description: Evaluation.
+          content: { application/json: { schema: { $ref: "#/components/schemas/EvaluationResponse" } } }
+        "400": { $ref: "#/components/responses/BadRequest" }
+  /api/v1/duck/deployments:
+    post:
+      tags: [deployments]
+      summary: Create a preflight, canary or live deployment plan
+      operationId: createDeployment
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/DeploymentRequest" }
+      responses:
+        "201":
+          description: Deployment plan.
+          content: { application/json: { schema: { $ref: "#/components/schemas/DeploymentResponse" } } }
+        "200":
+          description: Idempotent replay.
+          content: { application/json: { schema: { $ref: "#/components/schemas/DeploymentResponse" } } }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "409": { description: Board detection or compatibility gate is not satisfied. }
+  /api/v1/duck/deployments/{deploymentId}:
+    parameters:
+      - $ref: "#/components/parameters/DeploymentId"
+    get:
+      tags: [deployments]
+      summary: Read a deployment plan
+      operationId: getDeployment
+      responses:
+        "200":
+          description: Deployment.
+          content: { application/json: { schema: { $ref: "#/components/schemas/DeploymentResponse" } } }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /api/v1/duck/deployments/{deploymentId}/preflight:
+    post:
+      tags: [deployments]
+      summary: Execute the fixed read-only board preflight
+      operationId: runPreflight
+      parameters:
+        - $ref: "#/components/parameters/DeploymentId"
+      responses:
+        "200":
+          description: Real read-only preflight passed.
+          content: { application/json: { schema: { $ref: "#/components/schemas/PreflightResponse" } } }
+        "409": { description: Preflight failed or a mock agent was used; actuator action is not attempted. }
+        "503": { description: Board agent unavailable. }
+  /api/devices/{deviceId}/board/detect:
+    post:
+      tags: [devices]
+      summary: Probe and optionally persist board passport metadata
+      operationId: detectBoard
+      parameters:
+        - $ref: "#/components/parameters/DeviceId"
+        - in: query
+          name: persist
+          schema: { type: boolean, default: false }
+      responses:
+        "200":
+          description: Board passport result.
+          content: { application/json: { schema: { $ref: "#/components/schemas/BoardDetectResponse" } } }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "503": { description: Board agent unavailable. }
+components:
+  securitySchemes:
+    cookieAuth:
+      type: apiKey
+      in: cookie
+      name: sim2real_session
+      description: Deployment-owned SSO/OIDC session; the reference local adapter has no login.
+  parameters:
+    ProductId:
+      in: query
+      name: productId
+      schema: { type: string, enum: [microduck, rdk-duck] }
+    IdempotencyKey:
+      in: header
+      name: Idempotency-Key
+      schema: { type: string, minLength: 1, maxLength: 128 }
+      description: Required for local/RoboGo runs and canary/live plans.
+    ModelId:
+      in: path
+      name: modelId
+      required: true
+      schema: { type: string }
+    DeviceId:
+      in: path
+      name: deviceId
+      required: true
+      schema: { type: string }
+    RunId:
+      in: path
+      name: runId
+      required: true
+      schema: { type: string }
+    DeploymentId:
+      in: path
+      name: deploymentId
+      required: true
+      schema: { type: string }
+  responses:
+    Ready:
+      description: Control plane is ready.
+      content: { application/json: { schema: { $ref: "#/components/schemas/Health" } } }
+    NotReady:
+      description: A required dependency is not ready.
+      content: { application/json: { schema: { $ref: "#/components/schemas/Health" } } }
+    AuthRequired:
+      description: Shared deployment requires a verified SSO principal.
+      content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } }
+    BadRequest:
+      description: Input or contract validation failed.
+      content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } }
+    NotFound:
+      description: Resource is not visible to this account.
+      content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } }
+  schemas:
+    Error:
+      type: object
+      required: [ok, error]
+      properties:
+        ok: { const: false }
+        error: { type: string }
+        code: { type: string }
+        message: { type: string, description: Human-readable detail when available. }
+        requestId: { type: string }
+        retryable: { type: boolean }
+    Health:
+      type: object
+      required: [ok, service, ready, schemaVersion]
+      properties:
+        ok: { type: boolean }
+        service: { const: sim2real-web }
+        ready: { type: boolean }
+        schemaVersion: { type: integer, const: 1 }
+        degraded: { type: array, items: { type: string } }
+    BoardDetectResponse:
+      type: object
+      required: [ok, platform, model, osVersion, checks, device, output, persisted, mock, actuatorControl]
+      properties:
+        ok: { const: true }
+        platform: { type: [string, "null"] }
+        model: { type: string }
+        osVersion: { type: string }
+        checks: { type: object, additionalProperties: true }
+        device: { type: object, additionalProperties: true }
+        output: { type: string, maxLength: 12000 }
+        persisted: { type: boolean }
+        mock: { type: boolean }
+        actuatorControl: { type: boolean }
+    Contract:
+      type: object
+      required: [id, robotId, jointCount, observationSize, actionSize, controlHz, physicsTimestepSeconds, decimation, observationLayout]
+      properties:
+        id: { type: string }
+        robotId: { type: string, enum: [microduck, rdk-duck] }
+        jointCount: { type: integer, minimum: 1, maximum: 256 }
+        observationSize: { type: integer, minimum: 1, maximum: 4096 }
+        actionSize: { type: integer, minimum: 1, maximum: 4096 }
+        controlHz: { type: number, exclusiveMinimum: 0, maximum: 1000 }
+        physicsTimestepSeconds: { type: number, exclusiveMinimum: 0, maximum: 1 }
+        decimation: { type: integer, minimum: 1, maximum: 256 }
+        observationLayout:
+          type: array
+          maxItems: 16
+          items:
+            type: object
+            required: [name, size]
+            properties:
+              name: { type: string }
+              size: { type: integer, minimum: 1, maximum: 4096 }
+    Artifact:
+      type: object
+      required: [id, role, name, kind, format, ref]
+      properties:
+        id: { type: string }
+        role: { type: string, enum: [policy, compiled-policy, calibration] }
+        name: { type: string }
+        kind: { type: string, enum: [source, compiled] }
+        format: { type: string, enum: [pytorch, onnx, bin, hbm, gguf, unknown] }
+        runtime: { type: string, enum: [cpu-onnx, bpu] }
+        workload: { type: string, enum: [locomotion, perception, navigation, speech, multimodal] }
+        threads: { type: integer, minimum: 1, maximum: 128 }
+        targetPlatforms: { type: array, items: { type: string } }
+        ref: { type: string, pattern: "^artifact://" }
+    Manifest:
+      type: object
+      required: [schemaVersion, modelId, displayName, version, robot, contract, simulator, artifacts]
+      properties:
+        schemaVersion: { type: integer, const: 1 }
+        modelId: { type: string }
+        displayName: { type: string }
+        version: { type: string }
+        robot: { type: object, required: [id, variant], properties: { id: { type: string, enum: [microduck, rdk-duck] }, variant: { type: string } } }
+        contract: { $ref: "#/components/schemas/Contract" }
+        simulator: { type: object, required: [backends, policyArtifactId], additionalProperties: true }
+        artifacts: { type: array, minItems: 1, items: { $ref: "#/components/schemas/Artifact" } }
+    ManifestEnvelope:
+      oneOf:
+        - $ref: "#/components/schemas/Manifest"
+        - type: object
+          required: [manifest]
+          properties:
+            manifest: { $ref: "#/components/schemas/Manifest" }
+            platforms: { type: array, items: { type: string } }
+    Training:
+      type: object
+      description: All fields are optional; the selected profile supplies safe defaults.
+      properties:
+        profile: { type: string, enum: [smoke, low-vram, standard, high-vram] }
+        numEnvs: { type: integer, minimum: 1, maximum: 16384 }
+        maxIterations: { type: integer, minimum: 1, maximum: 2000000 }
+        video: { type: boolean }
+        runName: { type: string, maxLength: 80 }
+    RunRequest:
+      type: object
+      required: [modelId, backend]
+      properties:
+        modelId: { type: string }
+        backend: { type: string, enum: [browser, local, robogo, contract] }
+        taskId: { type: string }
+        training: { $ref: "#/components/schemas/Training" }
+        resumeFrom: { type: object, required: [checkpointId, artifactRef], properties: { checkpointId: { type: string }, artifactRef: { type: string }, iteration: { type: integer, minimum: 0 } } }
+        idempotencyKey: { type: string, maxLength: 128 }
+    Run:
+      type: object
+      required: [id, modelId, backend, status, summary, createdAt]
+      properties:
+        id: { type: string }
+        modelId: { type: string }
+        productId: { type: string, enum: [microduck, rdk-duck] }
+        contractId: { type: string }
+        taskId: { type: string }
+        backend: { type: string, enum: [browser, local, robogo, contract] }
+        status: { type: string, enum: [ready, queued, running, completed, blocked, failed] }
+        summary: { type: string }
+        externalRunId: { type: string }
+        mock: { type: boolean }
+        training: { $ref: "#/components/schemas/Training" }
+        checkpoint: { type: object, additionalProperties: true }
+        artifact: { type: object, additionalProperties: true }
+        metrics: { type: object, additionalProperties: true }
+        createdAt: { type: string, format: date-time }
+        finishedAt: { type: string, format: date-time }
+    Model:
+      type: object
+      required: [id, manifest, createdAt, updatedAt]
+      properties:
+        id: { type: string }
+        productId: { type: string }
+        contractId: { type: string }
+        builtin: { type: boolean }
+        manifest: { $ref: "#/components/schemas/Manifest" }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+    Compatibility:
+      type: object
+      required: [platformId, status, deployable, reason]
+      properties:
+        platformId: { type: string }
+        status: { type: string }
+        artifactId: { type: string }
+        deployable: { type: boolean }
+        reason: { type: string }
+        result: { type: object, additionalProperties: true }
+    DeploymentRequest:
+      type: object
+      required: [modelId, deviceId]
+      properties:
+        modelId: { type: string }
+        deviceId: { type: string }
+        mode: { type: string, enum: [preflight, canary, live], default: preflight }
+        idempotencyKey: { type: string, maxLength: 128 }
+    Deployment:
+      type: object
+      required: [id, modelId, deviceId, targetPlatform, mode, status, summary, steps, createdAt, updatedAt]
+      properties:
+        id: { type: string }
+        modelId: { type: string }
+        deviceId: { type: string }
+        targetPlatform: { type: string }
+        mode: { type: string }
+        status: { type: string }
+        summary: { type: string }
+        compatibility: { $ref: "#/components/schemas/Compatibility" }
+        steps: { type: array, items: { type: object, additionalProperties: true } }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+    TelemetrySample:
+      type: object
+      required: [t]
+      properties:
+        t: { type: number, minimum: 0, maximum: 86400 }
+        observation: { type: array, maxItems: 4096, items: { type: number } }
+        action: { type: array, maxItems: 4096, items: { type: number } }
+        reward: { type: number }
+        done: { type: boolean }
+        fall: { type: boolean }
+    TelemetryRequestWithoutRunId:
+      type: object
+      properties:
+        source: { type: string, enum: [board-agent, browser, import], default: import }
+        modelId: { type: string }
+        deviceId: { type: string }
+        contractId: { type: string }
+        sequence: { type: integer, minimum: 0 }
+        droppedCount: { type: integer, minimum: 0 }
+        samples: { type: array, minItems: 1, maxItems: 5000, items: { $ref: "#/components/schemas/TelemetrySample" } }
+        jsonl: { type: string, maxLength: 2000000 }
+        idempotencyKey: { type: string, maxLength: 128 }
+    TelemetryRequest:
+      allOf:
+        - $ref: "#/components/schemas/TelemetryRequestWithoutRunId"
+        - type: object
+          required: [runId]
+          properties: { runId: { type: string } }
+    OverviewResponse:
+      type: object
+      required: [ok, schemaVersion, productProfiles, selectedProductId, models, runs, deployments, devices, integrations]
+      properties:
+        ok: { const: true }
+        schemaVersion: { type: integer, const: 1 }
+        identity: { type: [object, "null"], additionalProperties: true }
+        productProfiles: { type: array, items: { type: object, additionalProperties: true } }
+        selectedProductId: { type: string, enum: [microduck, rdk-duck] }
+        selectedContract:
+          oneOf:
+            - $ref: "#/components/schemas/Contract"
+            - type: "null"
+        availableContracts: { type: array, items: { type: object, additionalProperties: true } }
+        contracts: { type: object, additionalProperties: true }
+        contract: { $ref: "#/components/schemas/Contract" }
+        models: { type: array, items: { $ref: "#/components/schemas/Model" } }
+        runs: { type: array, items: { $ref: "#/components/schemas/Run" } }
+        deployments: { type: array, items: { $ref: "#/components/schemas/Deployment" } }
+        devices: { type: array, items: { $ref: "#/components/schemas/DeviceSummary" } }
+        integrations: { $ref: "#/components/schemas/Integrations" }
+    DeviceSummary:
+      type: object
+      required: [id, name, status]
+      properties:
+        id: { type: string }
+        name: { type: string }
+        status: { type: string }
+        boardPlatform: { type: [string, "null"] }
+        boardModel: { type: [string, "null"] }
+        connectionMode: { type: string }
+        sshReachability: { type: string }
+    LocalWorkerIntegration:
+      type: object
+      required: [available, reachable, healthy, message]
+      properties:
+        available: { type: boolean, description: Whether the endpoint is configured. }
+        reachable: { type: boolean }
+        healthy: { type: boolean }
+        configured: { type: boolean }
+        mock: { type: boolean }
+        maxConcurrentJobs: { type: integer, minimum: 0 }
+        activeJobs: { type: integer, minimum: 0 }
+        queuedJobs: { type: integer, minimum: 0 }
+        responseMs: { type: integer, minimum: 0 }
+        reason: { type: string }
+        message: { type: string }
+    Integrations:
+      type: object
+      required: [simulator, robogo, storage]
+      properties:
+        simulator:
+          type: object
+          required: [browser, boardAgent, robogo, local]
+          properties:
+            browser: { type: object, additionalProperties: true }
+            boardAgent: { type: object, additionalProperties: true }
+            robogo: { type: object, additionalProperties: true }
+            local: { $ref: "#/components/schemas/LocalWorkerIntegration" }
+        robogo: { $ref: "#/components/schemas/RobogoIntegration" }
+        storage: { $ref: "#/components/schemas/StorageIntegration" }
+    RobogoIntegration:
+      type: object
+      required: [state, clusterQueried, devMachineQueried, message]
+      properties:
+        state: { type: string, enum: [ready, login_required, unavailable] }
+        clusterQueried: { type: boolean }
+        devMachineQueried: { type: boolean }
+        availableBoardCount: { type: integer, minimum: 0 }
+        developmentMachineCount: { type: integer, minimum: 0 }
+        message: { type: string }
+    StorageIntegration:
+      type: object
+      required: [mode, writable, message]
+      properties:
+        mode: { type: string, enum: [local-server, external-required] }
+        writable: { type: boolean }
+        message: { type: string }
+    ValidationResponse:
+      type: object
+      required: [ok, validation]
+      properties:
+        ok: { const: true }
+        validation: { type: object, additionalProperties: true }
+        compatibility: { type: array, items: { $ref: "#/components/schemas/Compatibility" } }
+    ModelResponse:
+      type: object
+      required: [ok, model]
+      properties:
+        ok: { const: true }
+        model: { $ref: "#/components/schemas/Model" }
+        compatibility: { type: array, items: { $ref: "#/components/schemas/Compatibility" } }
+    RunResponse:
+      type: object
+      required: [ok, run]
+      properties: { ok: { const: true }, run: { $ref: "#/components/schemas/Run" }, idempotentReplay: { type: boolean }, reconciled: { type: boolean } }
+    TelemetryResponse:
+      type: object
+      required: [ok]
+      properties: { ok: { const: true }, telemetry: { type: object, additionalProperties: true }, duplicate: { type: boolean }, acceptedSamples: { type: integer } }
+    TelemetryListResponse:
+      type: object
+      required: [ok, runId, telemetry, count]
+      properties: { ok: { const: true }, runId: { type: string }, telemetry: { type: array, items: { type: object, additionalProperties: true } }, count: { type: integer } }
+    ReplayResponse:
+      type: object
+      required: [ok, runId, replay, evaluation]
+      properties: { ok: { const: true }, runId: { type: string }, replay: { type: object, additionalProperties: true }, evaluation: { type: object, additionalProperties: true } }
+    EvaluationResponse:
+      type: object
+      required: [ok, evaluation]
+      properties: { ok: { const: true }, run: { $ref: "#/components/schemas/Run" }, evaluation: { type: object, additionalProperties: true } }
+    DeploymentResponse:
+      type: object
+      required: [ok, deployment]
+      properties: { ok: { const: true }, deployment: { $ref: "#/components/schemas/Deployment" }, idempotentReplay: { type: boolean } }
+    PreflightResponse:
+      type: object
+      required: [ok, deployment, preflight]
+      properties: { ok: { const: true }, deployment: { $ref: "#/components/schemas/Deployment" }, preflight: { type: object, additionalProperties: true } }
