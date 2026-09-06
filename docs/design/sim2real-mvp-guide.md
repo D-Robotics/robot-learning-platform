@@ -2,7 +2,7 @@
 
 > 对外发布前请先阅读 [`RDK 机器人强化学习开发平台：最终方案审查与修订稿`](./rdk-rl-platform-final-review.md)，其中列出了当前实现边界、契约拆分、数据闭环和分阶段验收要求。
 
-> 版本：2026-09-03 · 状态：控制面 MVP（Mock 状态流 + 遥测回放评测）已实测；真实 RL/X5 闭环待硬件验收
+> 版本：2026-09-06 · 状态：控制面、local worker 桥接和只读 BoardAgent 协议已实测；真实 PPO/X5 闭环待部署环境验收
 > 入口：[RDK Sim2Real Lab](https://rdkstudio.d-robotics.cc/sim2real/)
 
 ## 先说结论
@@ -17,7 +17,7 @@
    ┌───────────────┐
    │               │
 本地 worker       RoboGo worker
-（当前是 Mock）   （可选，待配置）
+（Mock / 外部引擎） （可选，待配置）
    │               │
    └───────┬───────┘
            ↓
@@ -26,7 +26,7 @@
 无电机 Canary → 受控 Live
 ```
 
-当前服务器已经跑通的是“不使用 RoboGo”的 Mock MVP：请求、契约校验、queued → running → completed 状态、checkpoint/artifact/metrics 引用、遥测回放评测和台账都真实走了一遍；Mock 的 `completed` 只表示协议流程完成，不代表执行了真实强化学习。
+当前服务器已经跑通的是“不使用 RoboGo”的两种本地路径：Mock MVP，以及会启动受控外部引擎的 `local-training-worker` 桥接。仓库的确定性冒烟测试会真实启动 Web、worker 和 reference BoardAgent，完成请求、契约校验、queued → running → completed、checkpoint/artifact/metrics、幂等重放和模拟板卡预检拦截；冒烟使用临时引擎验证桥接协议，不把它包装成真实 PPO。Mock 的 `completed` 仍只表示协议流程完成，不代表执行了真实强化学习。
 
 ## 页面怎么用：任务流与平台模块分层
 
@@ -130,10 +130,10 @@ RDK Studio（可选入口）
 | 浏览器仿真    | 打开官方 MicroDuck WASM/ONNX 仿真                                                    | 协议已验证；需挂载上游 release |
 | 模型契约      | MicroDuck 严格校验固定契约；RDK Duck 校验 manifest 自洽契约                          | 控制面已验证 |
 | manifest      | 登记模型版本、policy bundle 和不透明 artifact 引用                                   | 控制面已验证 |
-| 训练协议      | 统一 `queued/running/completed`，运行详情轮询和 checkpoint/artifact/metrics 返回格式 | Mock 已验证；真实 worker 待接入 |
+| 训练协议      | 统一 `queued/running/completed`，运行详情轮询和 checkpoint/artifact/metrics 返回格式 | Mock 与 local worker 桥接已验证；真实引擎由部署方配置 |
 | 台账          | 按账号记录 run、训练参数、checkpoint 和状态                                          | 单实例 ledger 已验证 |
 | 遥测与评测    | JSON/JSONL ingest、幂等补传、回放摘要、MAE/RMSE 和跌倒/奖励统计                      | 平台侧已验证 |
-| 板端预检      | 读取板型、系统、TROS、磁盘等信息，不开电机                                           | 只读接口已验证；BoardAgent 待接入 |
+| 板端预检      | 读取板型、系统、TROS、磁盘等信息，不开电机                                           | reference BoardAgent 与路由已验证；真实 X5 agent 待接入 |
 | Canary / Live | Canary 只做无电机验证；网页不直接开启 Live                                           | 受控/阻断 |
 
 运控策略可使用 `cpu-onnx + locomotion + threads=1`，由 CPU 单线程推理；视觉、语音和感知模型继续走 RDK BPU。普通 ONNX 不会被冒充成目标板的 BPU 编译制品。
@@ -167,13 +167,14 @@ RDK Studio（可选入口）
 Sim2Real 页面
   → POST /api/v1/duck/runs（backend=local）
   → local-runner
-  → http://127.0.0.1:19090/train
-  → Mock worker（queued）
+  → http://127.0.0.1:19090/train（Mock）
+  或 http://127.0.0.1:19091/train（local worker）
+  → 受控引擎（queued）
   → GET /api/v1/duck/runs/:id（running → completed）
-  → run 记录 + mock checkpoint/artifact/metrics
+  → run 记录 + checkpoint/artifact/metrics
 ```
 
-当前 Mock worker 监听 `127.0.0.1:19090`，systemd 单元为 `sim2real-mock-worker.service`。它只做契约校验、写入任务回执和返回明确标记：
+Mock worker 监听 `127.0.0.1:19090`，systemd 单元为 `sim2real-mock-worker.service`；受控真实桥接监听 `127.0.0.1:19091`，单元为 `sim2real-local-worker.service`。Mock 只做契约校验、写入任务回执和返回明确标记：
 
 ```json
 {
@@ -189,7 +190,7 @@ Sim2Real 页面
 `POST /api/v1/duck/runs/:id/telemetry`，再调用 `POST /api/v1/duck/runs/:id/evaluate` 生成回放摘要和
 action/observation 的 MAE/RMSE。当前数据仍保存在本地 owner-scoped ledger，尚未接入 X5 的 Protobuf Agent。
 
-将来接入本地 GPU 时，只需要让真实 worker 实现同一个 `/train` 协议，并把 `RDK_SIM2REAL_LOCAL_RUNNER_URL` 指向它；页面和 API 不需要改。
+接入本地 GPU 时，直接配置 `local-training-worker` 的绝对可执行文件和参数 JSON，令 `RDK_SIM2REAL_LOCAL_RUNNER_URL` 指向 `127.0.0.1:19091/train`；页面和 API 不需要改。worker 使用 `shell:false`、白名单 profile、受控结果文件和 `artifact://` 校验，真实引擎仍由部署方负责安装和验收。
 
 ## 路径 B：使用 RoboGo
 
@@ -220,7 +221,7 @@ unknown 不应直接重试提交。该接口不重试提交，也不绕过当前
 | 维度              | 不用 RoboGo              | 使用 RoboGo              |
 | ----------------- | ------------------------ | ------------------------ |
 | 算力位置          | 本地服务器 / 本地 GPU    | RoboGo 云端              |
-| 当前状态          | 本仓库 Mock 可运行并已实测 | 接口已预留，待配置       |
+| 当前状态          | 本仓库 Mock 可运行；local worker 桥接已实测 | 接口已预留，待配置       |
 | 账号与费用        | 不需要 RoboGo 账号       | 需要显式登录/计费确认    |
 | 请求入口          | local runner `/train`    | RoboGo runner            |
 | 模型契约          | 按产品选择；两者均先校验 | 按产品选择；两者均先校验 |
@@ -276,7 +277,7 @@ sim2real-mock-worker.service: active
 3. 校验和登记对应产品的模型 manifest；RDK Duck 不会复用 MicroDuck 维度。
 4. 选择 smoke / low-vram / standard / high-vram 训练档位。
 5. 走本地 Mock 训练流程，查看 run 和 checkpoint 引用。
-6. 接入真实本地 GPU worker（协议不变）。
+6. 配置真实本地 GPU worker（使用仓库提供的桥接器，协议不变）。
 7. 配置 RoboGo runner 后走第二条训练分支。
 8. 登记 RDK 板卡并生成只读 preflight / 无电机 Canary 计划。
 9. 导入遥测 JSONL，在评测页查看时间轴、采样率、奖励、跌倒事件；点击“上传到当前 Run 并评测”后，平台会分块幂等写入并生成评测摘要。
@@ -295,9 +296,9 @@ sim2real-mock-worker.service: active
 ### 接入本地 GPU
 
 1. 安装 MicroDuck RL、MuJoCo、PyTorch 等依赖。
-2. 写一个只接受固定 JSON 契约的真实 `/train` worker。
-3. 返回真实的 `queued/running/completed` 和受控 artifact 引用。
-4. 去掉 Mock mode，替换 `RDK_SIM2REAL_LOCAL_RUNNER_URL`。
+2. 按 `services/sim2real-web/README.md` 配置 `local-training-worker` 的绝对可执行文件、参数 JSON 和 root-only token。
+3. 让引擎读取 `RDK_SIM2REAL_REQUEST_FILE`，并将带 `artifact://` 引用的结果写入 `RDK_SIM2REAL_RESULT_FILE`。
+4. 停止 Mock worker，替换 `RDK_SIM2REAL_LOCAL_RUNNER_URL` 为 `http://127.0.0.1:19091/train`。
 5. 用同一个 manifest 重新跑仿真、评测和板端 preflight。
 
 ### 接入 RoboGo

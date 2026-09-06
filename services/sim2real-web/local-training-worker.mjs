@@ -19,6 +19,7 @@ import { mkdir, readdir, readFile, writeFile } from 'node:fs/promises';
 import { spawn } from 'node:child_process';
 import path from 'node:path';
 import process from 'node:process';
+import { fileURLToPath } from 'node:url';
 
 const HOST = String(process.env.RDK_SIM2REAL_LOCAL_WORKER_HOST || '127.0.0.1').trim() || '127.0.0.1';
 const portValue = Number(process.env.RDK_SIM2REAL_LOCAL_WORKER_PORT || 19091);
@@ -30,10 +31,17 @@ const MAX_JOBS = 1000;
 const SAFE_RUN_ID = /^[a-zA-Z0-9][a-zA-Z0-9._-]{0,199}$/;
 const profiles = new Set(['smoke', 'low-vram', 'standard', 'high-vram']);
 const jobs = new Map();
+const activeChildren = new Set();
 let jobsLoadPromise;
 
 function text(value, max = 500) {
   return typeof value === 'string' ? value.replace(/[\u0000-\u001f\u007f]/g, ' ').trim().slice(0, max) : '';
+}
+
+function scrubLog(value, max = 2000) {
+  return text(value, max)
+    .replace(/(Bearer\s+)[^\s]+/gi, '$1[redacted]')
+    .replace(/((?:token|secret|password|api[_-]?key)\s*[=:]\s*)[^\s,;]+/gi, '$1[redacted]');
 }
 
 function json(response, status, payload) {
@@ -262,6 +270,7 @@ async function launch(job, config) {
     stdio: ['ignore', 'pipe', 'pipe'],
     env: childEnvironment(job),
   });
+  activeChildren.add(child);
   job.status = 'running';
   job.startedAt = new Date().toISOString();
   job.pid = child.pid;
@@ -278,6 +287,10 @@ async function launch(job, config) {
 async function finish(job, code, stdout, stderr) {
   if (job.finishedAt) return;
   if (job.timeout) clearTimeout(job.timeout);
+  const childPid = job.pid;
+  for (const child of activeChildren) {
+    if (childPid != null && child.pid === childPid) activeChildren.delete(child);
+  }
   job.timeout = undefined;
   job.finishedAt = new Date().toISOString();
   job.pid = undefined;
@@ -298,8 +311,8 @@ async function finish(job, code, stdout, stderr) {
     job.errorCode = code === 0 ? 'training_result_missing' : 'training_process_failed';
   }
   job.exitCode = code;
-  if (stdout) job.stdoutTail = stdout.slice(-2000);
-  if (stderr) job.stderrTail = stderr.slice(-2000);
+  if (stdout) job.stdoutTail = scrubLog(stdout);
+  if (stderr) job.stderrTail = scrubLog(stderr);
   await persist(job);
 }
 
@@ -361,7 +374,22 @@ export function createLocalTrainingWorkerServer() {
   return createServer(async (request, response) => {
     try {
       if (request.method === 'GET' && request.url === '/healthz') {
-        const configured = Boolean(String(process.env.RDK_SIM2REAL_TRAIN_EXECUTABLE || '').trim());
+        let configured = false;
+        try {
+          configured = Boolean(executableConfig());
+        } catch (error) {
+          json(response, 503, {
+            ok: false,
+            worker: 'sim2real-local',
+            mode: 'external-engine',
+            configured: false,
+            error: error?.errorCode || 'worker_configuration_invalid',
+            message: text(error?.message) || '训练引擎配置无效。',
+            cuda: null,
+            contracts: ['microduck-policy-v1', 'rdk-duck-policy-v1'],
+          });
+          return;
+        }
         json(response, configured ? 200 : 503, { ok: configured, worker: 'sim2real-local', mode: 'external-engine', configured, cuda: null, contracts: ['microduck-policy-v1', 'rdk-duck-policy-v1'] });
         return;
       }
@@ -379,13 +407,23 @@ export function createLocalTrainingWorkerServer() {
   });
 }
 
-if (process.argv[1] && path.resolve(process.argv[1]) === path.resolve(new URL(import.meta.url).pathname)) {
+if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   await mkdir(DATA_DIR, { recursive: true, mode: 0o700 });
   const server = createLocalTrainingWorkerServer();
   server.requestTimeout = 10_000;
   server.headersTimeout = 5_000;
   server.listen(PORT, HOST, () => console.log(`[sim2real-local] listening on http://${HOST}:${PORT}`));
-  const close = () => server.close(() => process.exit(0));
+  const close = () => {
+    for (const child of activeChildren) child.kill('SIGTERM');
+    server.closeIdleConnections?.();
+    server.closeAllConnections?.();
+    const forceExit = setTimeout(() => process.exit(1), 5_000);
+    forceExit.unref();
+    server.close(() => {
+      clearTimeout(forceExit);
+      process.exit(0);
+    });
+  };
   process.once('SIGTERM', close);
   process.once('SIGINT', close);
 }

@@ -705,8 +705,8 @@
       <div class="topline">
         <div class="brand"><span class="brand-mark">R</span><span>RDK / Sim2Real Lab</span></div>
         <span class="status"
-          ><i class="dot"></i> 控制面 MVP（Mock 状态流 + 遥测回放评测）已实测 · 真实 RL/X5
-          闭环待验收 · 2026-09-03</span
+          ><i class="dot"></i> 控制面、local worker 桥接与只读 BoardAgent 已实测 · 真实 PPO/X5
+          闭环待部署验收 · 2026-09-06</span
         >
       </div>
 
@@ -736,10 +736,10 @@
           <span class="section-note">公共底座 + 双产品契约 + 两个训练后端</span>
         </div>
         <div class="callout">
-          <strong>当前已经打通的是控制面和协议闭环，不是“伪装成真实 RL 的成功结果”。</strong> 不使用
-          RoboGo 的本地 Mock 版本已在服务器上真实调用 `/api/sim2real/runs`、写入台账并返回
-          `mock=true`；RoboGo 分支已有 adapter 和安全边界，但生产环境还没有配置真实 RoboGo
-          runner，因此尚未做云端训练实跑。
+          <strong>当前已经打通的是控制面和受控协议闭环，不是“伪装成真实 RL 的成功结果”。</strong>
+          不使用 RoboGo 的 Mock 与 local worker 桥接都已验证；确定性冒烟会启动 Web、外部引擎
+          fixture 和 reference BoardAgent，实际完成训练状态、制品引用、幂等重放和模拟预检拦截。
+          fixture 只验证桥接协议，不代表真实 PPO；RoboGo 仍需部署方配置真实 runner 后再验收。
         </div>
         <div class="flow" style="margin-top: 22px">
           <div class="flow-step">
@@ -1284,10 +1284,10 @@
               <span class="tagline">PATH A / LOCAL</span>
               <h3>不用 RoboGo：服务器本地训练</h3>
               <p>
-                当前是无 CUDA 环境下的 Mock MVP；后续替换为真实 GPU worker 时，Studio API 不变。
+                本地支持无 CUDA 的 Mock，也支持配置真实引擎的 local worker 桥接；Studio API 不变。
               </p>
             </div>
-            <span class="state">Mock 控制面已验证</span>
+            <span class="state">本地桥接协议已验证</span>
           </div>
           <div class="path-body">
             <div>
@@ -1296,7 +1296,7 @@
                 <div class="sequence-step">
                   <b>1</b>
                   <div>
-                    <strong>页面点击“运行 Mock 流程”</strong
+                    <strong>页面选择 Mock 或本地引擎</strong
                     ><small>提交 modelId、backend=local 和训练档位</small>
                   </div>
                 </div>
@@ -1310,17 +1310,17 @@
                 <div class="sequence-step">
                   <b>3</b>
                   <div>
-                    <strong>local-runner 转发到 19090</strong
+                    <strong>local-runner 转发到受控 worker</strong
                     ><small
-                      >只发送已校验 manifest；不会把 Studio bearer token 转发给本地 worker</small
+                      >Mock 默认 19090；真实桥接默认 19091；不会把 Studio bearer token 转发给 worker</small
                     >
                   </div>
                 </div>
                 <div class="sequence-step">
                   <b>4</b>
                   <div>
-                    <strong>Mock worker 严格校验并写回执</strong
-                    ><small>不执行 Python、shell、GPU 或训练脚本</small>
+                    <strong>worker 严格校验并写回执</strong
+                    ><small>Mock 不执行训练；local worker 仅用 shell:false 启动管理员配置的引擎</small>
                   </div>
                 </div>
                 <div class="sequence-step">
@@ -1335,11 +1335,11 @@
             <div>
               <h3>当前配置</h3>
               <pre>
-worker: 127.0.0.1:19090
-unit: sim2real-mock-worker.service
-mode: mock
-cuda: false
-artifact: artifact://mock/...</pre
+mock: 127.0.0.1:19090
+real bridge: 127.0.0.1:19091
+unit: sim2real-local-worker.service
+mode: external-engine
+result: artifact://...</pre
               >
               <p class="small">
                 Mock 的 <code>completed</code> 只代表接口流程完成，返回的 artifact
@@ -1440,7 +1440,7 @@ fallback：禁止自动切本地</pre
             </tr>
             <tr>
               <td>当前状态</td>
-              <td class="good">本仓库 Mock 可运行并已实测</td>
+              <td class="good">Mock 可运行；local worker 桥接已实测</td>
               <td class="warn">adapter 已有，真实 runner 待配置</td>
             </tr>
             <tr>
@@ -1473,7 +1473,7 @@ fallback：禁止自动切本地</pre
             <span class="kicker">07 / ACTUAL RUN</span>
             <h2>之前实际跑通的例子</h2>
           </div>
-          <span class="section-note">服务器隔离 18103 候选实例</span>
+          <span class="section-note">候选实例历史记录 + 当前本地冒烟脚本</span>
         </div>
         <div class="evidence">
           <article class="evidence-card">
@@ -1503,6 +1503,20 @@ checkpoint.iteration: 5</pre
             >
             <p>返回说明明确写着：未执行真实 RL，也没有生成可部署模型。</p>
           </article>
+          <article class="evidence-card">
+            <span class="tagline">BRIDGE</span>
+            <h3>Local worker 真实桥接</h3>
+            <pre>
+npm run smoke:sim2real-local
+Web + worker + BoardAgent
+external engine fixture
+idempotency: pass</pre
+            >
+            <p>
+              冒烟会启动临时外部引擎并验证 <code>artifact://</code> 回执；它证明桥接可用，不把
+              fixture 结果包装成真实 PPO。
+            </p>
+          </article>
         </div>
         <div class="card" style="margin-top: 14px">
           <span class="tagline">ASSERTIONS</span>
@@ -1511,13 +1525,13 @@ checkpoint.iteration: 5</pre
             <div class="step-row">
               <div>
                 <strong>local training API 返回 201</strong
-                ><span>run 记录包含 backend=local、status=completed、mock=true。</span>
+                ><span>Mock 和外部 worker 都能进入 backend=local；结果会明确区分 mock 标记。</span>
               </div>
             </div>
             <div class="step-row">
               <div>
                 <strong>checkpoint 引用进入台账</strong
-                ><span>artifact 使用受控的 artifact://mock/...，没有生成或上传模型文件。</span>
+                ><span>结果只接受受控的 artifact:// 引用；Mock 不生成模型，外部 worker 的制品由引擎负责。</span>
               </div>
             </div>
             <div class="step-row">
@@ -1707,8 +1721,8 @@ checkpoint.iteration: 5</pre
             <h3>先把 API 固化</h3>
             <p>
               用 OpenAPI 固化项目、manifest、训练、artifact、preflight 和事件；安装 MicroDuck RL /
-              MuJoCo / PyTorch 后，实现同一个 <code>/train</code> 协议，替换本地 runner URL，去掉
-              Mock mode。
+              MuJoCo / PyTorch 后，配置仓库提供的 local worker，替换本地 runner URL，去掉 Mock
+              mode。
             </p>
           </div>
           <div class="card">

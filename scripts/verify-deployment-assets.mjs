@@ -17,6 +17,18 @@ function read(relativePath) {
   return readFileSync(path.join(root, relativePath), 'utf8');
 }
 
+const packageManifest = JSON.parse(read('package.json'));
+assert.equal(
+  typeof packageManifest.scripts?.['smoke:sim2real-local'],
+  'string',
+  'package.json must expose the local Sim2Real smoke command',
+);
+assert.match(
+  String(packageManifest.scripts?.verify || ''),
+  /smoke:sim2real-local/,
+  'npm run verify must include the local Sim2Real smoke command',
+);
+
 function section(text, name) {
   const match = text.match(new RegExp(`(?:^|\\n)\\[${name}\\]\\n([\\s\\S]*?)(?=\\n\\[|$)`));
   return match?.[1] ?? '';
@@ -72,6 +84,7 @@ assertUnit('services/sim2real-web/sim2real-local-worker.service', {
     /ExecStartPre=.*RDK_SIM2REAL_LOCAL_WORKER_DATA_DIR/,
     /ExecStart=.*dist-server\/services\/sim2real-web\/local-training-worker\.mjs/,
     /ReadWritePaths=\/var\/lib\/rdk-robot-learning-platform\/local-worker/,
+    /UMask=0077/,
   ],
 });
 

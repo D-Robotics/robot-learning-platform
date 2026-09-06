@@ -4,12 +4,12 @@ import process from 'node:process';
 const previousToken = process.env.RDK_SIM2REAL_BOARD_AGENT_TOKEN;
 delete process.env.RDK_SIM2REAL_BOARD_AGENT_TOKEN;
 
-const { createLocalBoardAgentServer } = await import('./local-board-agent.mjs');
+const { buildBoardPreflightCommand, createLocalBoardAgentServer } = await import('./local-board-agent.mjs');
 const server = createLocalBoardAgentServer();
 await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
 const address = server.address();
 const base = `http://127.0.0.1:${address.port}`;
-const preflight = '__STUDIO_SIM2REAL_PREFLIGHT_BEGIN__\nprobe\n__STUDIO_SIM2REAL_PREFLIGHT_END__';
+const preflight = buildBoardPreflightCommand();
 
 try {
   const health = await fetch(`${base}/healthz`);
@@ -29,6 +29,14 @@ try {
   });
   assert.equal(rejected.status, 403);
   assert.equal((await rejected.json()).error, 'BOARD_AGENT_READ_ONLY');
+
+  const forged = await fetch(`${base}/v1/devices/x5/commands`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ commands: [`${preflight}\n; echo forged`] }),
+  });
+  assert.equal(forged.status, 403);
+  assert.equal((await forged.json()).error, 'BOARD_AGENT_READ_ONLY');
 
   const accepted = await fetch(`${base}/v1/devices/x5/commands`, {
     method: 'POST',

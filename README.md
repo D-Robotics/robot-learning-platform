@@ -91,6 +91,8 @@ npx tsc --noEmit
 
 `npm run verify:local-worker` 会用一个临时外部引擎验证真实 Worker 契约；
 `npm run verify:board-agent` 会验证只读 BoardAgent、模拟标记和 token 闸门。
+`npm run smoke:sim2real-local` 会临时启动 Web、local worker 和 reference BoardAgent，
+实际走一遍 overview → 本地训练完成 → 幂等重放 → 模拟板卡预检拦截；它也已包含在 `npm run verify` 中。
 
 ## 目录
 

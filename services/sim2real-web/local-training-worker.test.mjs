@@ -8,7 +8,7 @@ const fixtureDir = await mkdtemp(path.join(os.tmpdir(), 'rdk-local-worker-'));
 const fixture = path.join(fixtureDir, 'engine.mjs');
 await writeFile(
   fixture,
-  `import { writeFile } from 'node:fs/promises';\nawait writeFile(process.env.RDK_SIM2REAL_RESULT_FILE, JSON.stringify({ checkpoint: { checkpointId: 'cp-1', artifactRef: 'artifact://microduck/cp-1', iteration: 1 }, metrics: { reward: 3.5, platformTokenLeaked: Boolean(process.env.RDK_SIM2REAL_LOCAL_RUNNER_TOKEN) }, deployable: false }));\n`,
+  `import { writeFile } from 'node:fs/promises';\nconsole.error('Bearer fake-secret token=should-hide');\nawait writeFile(process.env.RDK_SIM2REAL_RESULT_FILE, JSON.stringify({ checkpoint: { checkpointId: 'cp-1', artifactRef: 'artifact://microduck/cp-1', iteration: 1 }, metrics: { reward: 3.5, platformTokenLeaked: Boolean(process.env.RDK_SIM2REAL_LOCAL_RUNNER_TOKEN) }, deployable: false }));\n`,
   { mode: 0o600 },
 );
 process.env.RDK_SIM2REAL_TRAIN_EXECUTABLE = process.execPath;
@@ -83,6 +83,14 @@ try {
   assert.equal(status.status, 'completed', JSON.stringify(status));
   assert.equal(status.checkpoint.artifactRef, 'artifact://microduck/cp-1');
   assert.equal(status.metrics.platformTokenLeaked, false);
+  assert.match(status.stderrTail, /Bearer \[redacted\]/);
+  assert.doesNotMatch(status.stderrTail, /should-hide/);
+
+  process.env.RDK_SIM2REAL_TRAIN_ARGS_JSON = 'not-json';
+  const invalidHealth = await fetch(`${base}/healthz`);
+  assert.equal(invalidHealth.status, 503);
+  assert.equal((await invalidHealth.json()).error, 'worker_configuration_invalid');
+  process.env.RDK_SIM2REAL_TRAIN_ARGS_JSON = JSON.stringify([fixture]);
 
   process.env.RDK_SIM2REAL_TRAIN_EXECUTABLE = '';
   const blocked = await fetch(`${base}/train`, {

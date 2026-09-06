@@ -3,6 +3,10 @@
 > 审查日期：2026-09-03
 > 适用对象：RDK Duck / MicroDuck 双产品、独立 Sim2Real 平台、可选 RDK Studio 与 RoboGo 接入
 
+> 状态补充（2026-09-06）：仓库已增加受控 `local-training-worker` 桥接和 reference
+> BoardAgent，并通过确定性端到端冒烟；这证明协议和装配链路可用，不等于真实 PPO、RoboGo
+> 云训练或 X5 硬件已验收。
+
 ## 1. 先给结论
 
 原方案的产品方向是正确的：用一个独立控制面把仿真、动作数据、训练、模型制品、评测、设备和
@@ -10,8 +14,8 @@ Sim2Real 证据串起来，同时保留本地服务器和 RoboGo 两种训练后
 
 但现在不适合直接以“完整端云闭环已完成”对外发布。原文需要做一次**状态分层和边界收敛**：
 
-1. 当前仓库已经具备的是平台控制面 MVP：双产品 manifest 校验、训练后端协议、异步 Mock runner、账号隔离、只读板端预检、JSON/JSONL 遥测接收/回放/评测和模块化 Web 工作台。
-2. 当前还没有真实实现的是：PPO/RL worker、RoboGo 生产 runner、X5 板端采集 Agent、Protobuf 遥测、eMMC 滚动缓存、断网补传、对象存储、真实制品上传/签名/编译、OTA 和真机硬件验收。
+1. 当前仓库已经具备的是平台控制面 MVP：双产品 manifest 校验、训练后端协议、异步 Mock runner、受控 local worker 桥接、账号隔离、只读板端预检、JSON/JSONL 遥测接收/回放/评测和模块化 Web 工作台。
+2. 当前还没有真实实现的是：PPO/RL 训练栈本身、RoboGo 生产 runner、X5 板端采集 Agent、Protobuf 遥测、eMMC 滚动缓存、断网补传、对象存储、真实制品上传/签名/编译、OTA 和真机硬件验收。
 3. 因此建议把项目拆成“控制面 MVP → 单机硬件 Beta → 多用户产品化”三阶段，不要把二期硬件能力写成一期已交付能力。
 
 推荐对外定位改为：
@@ -241,7 +245,7 @@ listCheckpoints(runId)
 | -------------- | ----------------------------------------------------------------------------------------------------- | ---------------------------------------- |
 | MicroDuck 仿真 | 官方浏览器入口、固定策略录制/回放                                                                     | 已有演示与数据入口，不是任意策略训练器   |
 | RDK Duck 仿真  | manifest 定义与校验，真实 adapter 未接入                                                              | 适配中/未配置时 blocked                  |
-| 本地训练       | Mock runner 已支持 queued/running/completed、checkpoint、artifact 和 metrics；无 CUDA 时不执行真实 RL | 协议 MVP，真实 worker 待接入             |
+| 本地训练       | Mock runner 与 `local-training-worker` 桥接均支持 queued/running/completed、checkpoint、artifact 和 metrics；冒烟用临时引擎验证桥接，不执行真实 PPO | 协议与桥接已验证，真实训练栈仍由部署方接入 |
 | RoboGo         | adapter、状态解析和失败保护已预留；生产 runner 未配置                                                 | 可插拔接口，未完成真实云训练验收         |
 | 模型制品       | 元数据和 opaque artifact 引用                                                                         | 尚无真实文件上传、签名、编译和不可变存储 |
 | X5 预检        | 只读探针和发布计划                                                                                    | 已有安全前置检查，不等于 OTA/Live        |

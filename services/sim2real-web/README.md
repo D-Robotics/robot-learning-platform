@@ -389,7 +389,9 @@ API 和页面无需改变。
 
 ```bash
 RDK_SIM2REAL_TRAIN_EXECUTABLE=/opt/rl/bin/microduck-train
-RDK_SIM2REAL_TRAIN_ARGS_JSON=["--request-file","request.json"]
+# Keep the outer single quotes when this is placed in a systemd EnvironmentFile;
+# they preserve the JSON string quotes.
+RDK_SIM2REAL_TRAIN_ARGS_JSON='["--request-file","request.json"]'
 # Optional; use the same value in the Web service env to authenticate the
 # loopback worker even when another local process can reach the port.
 RDK_SIM2REAL_LOCAL_RUNNER_TOKEN=change-me-in-a-root-only-env-file
@@ -417,3 +419,5 @@ GPU 设备后再启用，不要直接把服务改成宽泛的特权模式。
 未配置 `RDK_SIM2REAL_TRAIN_EXECUTABLE` 时 `/healthz` 和 `/train` 返回 503
 `real_worker_not_configured`。这条路径只提供安全、可复核的进程和制品协议；真实 PPO/MuJoCo
 环境仍由部署方提供，不能把它与无 CUDA 的 Mock worker 混用。
+如果可执行文件或参数 JSON 配置不合法，`/healthz` 同样会以 503
+`worker_configuration_invalid` 失败，便于 systemd/网关尽早发现配置问题。

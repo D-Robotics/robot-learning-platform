@@ -20,6 +20,7 @@ ExecStartPre=/usr/bin/test ${RDK_SIM2REAL_LOCAL_WORKER_DATA_DIR} = /var/lib/rdk-
 ExecStart=/usr/bin/env node /opt/rdk-robot-learning-platform/current/dist-server/services/sim2real-web/local-training-worker.mjs
 Restart=on-failure
 RestartSec=3
+UMask=0077
 NoNewPrivileges=true
 PrivateTmp=true
 ProtectHome=true

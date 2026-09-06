@@ -16,6 +16,19 @@ const MAX_BODY_BYTES = 64 * 1024;
 const BEGIN = '__STUDIO_SIM2REAL_PREFLIGHT_BEGIN__';
 const END = '__STUDIO_SIM2REAL_PREFLIGHT_END__';
 
+export function buildBoardPreflightCommand() {
+  return [
+    'set +e',
+    `printf "${BEGIN}\\n"`,
+    'printf "arch=%s\\n" "$(uname -m 2>/dev/null || echo unknown)"',
+    'printf "kernel=%s\\n" "$(uname -r 2>/dev/null || echo unknown)"',
+    'printf "python3=%s\\n" "$(command -v python3 2>/dev/null || echo missing)"',
+    'printf "tros=%s\\n" "$(if test -d /opt/tros || test -d /opt/ros; then echo present; else echo missing; fi)"',
+    'printf "disk_bytes=%s\\n" "$(df -Pk /tmp 2>/dev/null | awk \'NR==2 {print $4 * 1024}\' || echo unknown)"',
+    `printf "${END}\\n"`,
+  ].join('; ');
+}
+
 function json(response, status, payload) {
   const body = JSON.stringify(payload);
   response.statusCode = status;
@@ -96,7 +109,7 @@ export function createLocalBoardAgentServer() {
       }
       // Only the fixed preflight protocol is understood. Unknown commands are
       // rejected instead of being passed to a shell or a board.
-      if (!commands.some((item) => item.includes(BEGIN))) {
+      if (commands.length !== 1 || commands[0] !== buildBoardPreflightCommand()) {
         json(response, 403, {
           ok: false,
           error: 'BOARD_AGENT_READ_ONLY',

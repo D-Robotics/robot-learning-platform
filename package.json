@@ -30,16 +30,17 @@
     "dev:mock-worker": "node scripts/run-with-env.mjs node services/sim2real-web/mock-local-worker.mjs",
     "dev:local-worker": "node scripts/run-with-env.mjs node services/sim2real-web/local-training-worker.mjs",
     "dev:board-agent": "node scripts/run-with-env.mjs node services/sim2real-web/local-board-agent.mjs",
+    "smoke:sim2real-local": "node scripts/sim2real-local-e2e-smoke.mjs",
     "build": "tsc -p tsconfig.build.json && npm run build:assets",
     "build:assets": "node scripts/copy-server-assets.mjs",
-    "test": "vitest run",
+    "test": "vitest run --configLoader runner",
     "verify:ui": "node services/sim2real-web/ui-ia.spec.mjs",
     "verify:recorder": "node services/mujoco-web/microduck-community-overlay.test.mjs",
     "verify:deployment": "node scripts/verify-deployment-assets.mjs",
     "verify:examples": "node scripts/verify-examples.mjs",
     "verify:local-worker": "node services/sim2real-web/local-training-worker.test.mjs",
     "verify:board-agent": "node services/sim2real-web/local-board-agent.test.mjs",
-    "verify": "npm run verify:ui && npm run verify:recorder && npm run verify:deployment && npm run verify:examples && npm run verify:local-worker && npm run verify:board-agent && node services/sim2real-web/server-wiring.spec.mjs && npm test"
+    "verify": "npm run verify:ui && npm run verify:recorder && npm run verify:deployment && npm run verify:examples && npm run verify:local-worker && npm run verify:board-agent && npm run smoke:sim2real-local && node services/sim2real-web/server-wiring.spec.mjs && npm test"
   },
   "dependencies": {
     "express": "^5.2.1"
