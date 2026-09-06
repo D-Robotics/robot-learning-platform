@@ -206,6 +206,18 @@ describe('Sim2Real compatibility service', () => {
     }
   });
 
+  it('reports a safe loopback BoardAgent as available without treating it as hardware proof', () => {
+    const previous = process.env.RDK_SIM2REAL_BOARD_AGENT_URL;
+    process.env.RDK_SIM2REAL_BOARD_AGENT_URL = 'http://[::1]:19100';
+    try {
+      expect(simulatorIntegration().boardAgent).toMatchObject({ available: true });
+      expect(simulatorIntegration().boardAgent.reason).toMatch(/只读板端预检/);
+    } finally {
+      if (previous === undefined) delete process.env.RDK_SIM2REAL_BOARD_AGENT_URL;
+      else process.env.RDK_SIM2REAL_BOARD_AGENT_URL = previous;
+    }
+  });
+
   it('uses a request-scoped Web Cloud token when the standalone process has no local session map', async () => {
     const originalFetch = globalThis.fetch;
     const originalBase = process.env.RDK_SIM2REAL_ROBOGO_API_URL;

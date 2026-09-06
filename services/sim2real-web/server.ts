@@ -8,6 +8,7 @@
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { existsSync, realpathSync, statSync } from 'node:fs';
+import { randomUUID } from 'node:crypto';
 
 import express, { type Express } from 'express';
 
@@ -69,6 +70,13 @@ function configuredMicroduckRequired(): boolean {
 
 function jsonError(error: unknown): string {
   return error instanceof Error ? error.message : String(error ?? 'unknown error');
+}
+
+function requestCorrelationId(value: unknown): string {
+  const candidate = String(value ?? '').trim();
+  // Preserve a gateway-provided correlation id when it is a bounded printable
+  // value. Otherwise mint one here so every response can be traced safely.
+  return /^[\x21-\x7e]{1,128}$/.test(candidate) ? candidate : randomUUID();
 }
 
 function configuredMicroduckRoot(): string | null {
@@ -141,6 +149,16 @@ export function createSim2RealWebApp(): Express {
   app.disable('x-powered-by');
   if (String(process.env.EXPRESS_TRUST_PROXY ?? '').trim() === '1') app.set('trust proxy', 1);
 
+  // Keep a stable identifier across gateway, API and server logs. This is
+  // deliberately generated before auth/CSRF so rejected requests are
+  // diagnosable too, without trusting arbitrary headers as identity.
+  app.use((request, response, next) => {
+    const header = request.headers['x-request-id'];
+    const incoming = Array.isArray(header) ? header[0] : header;
+    response.setHeader('X-Request-Id', requestCorrelationId(incoming));
+    next();
+  });
+
   // Keep the same signed-cookie context as the board/device adapters.
   app.use(storageRequestContextMiddleware);
   app.use(studioSecurityHeadersMiddleware);
@@ -211,7 +229,7 @@ export function createSim2RealWebApp(): Express {
   // Board detection is read-only unless the caller explicitly asks the
   // existing route to persist the detected metadata. The sim2real router
   // itself only creates plans and runs the fixed preflight probe.
-  app.use(createDeviceBoardDetectRouter(runOnDevice));
+  app.use(createDeviceBoardDetectRouter(runOnDevice, { auth: studioSsoAuth }));
   // Studio SSO is injected at the standalone composition root. The Sim2Real
   // business router only sees the auth port, so the product can be extracted
   // into another repository or paired with a native OIDC adapter later.
@@ -272,7 +290,12 @@ export function createSim2RealWebApp(): Express {
     response
       .status(404)
       .setHeader('Cache-Control', 'no-store')
-      .json({ ok: false, error: 'SIM2REAL_API_NOT_FOUND', message: 'API 路径不存在。' });
+      .json({
+        ok: false,
+        error: 'SIM2REAL_API_NOT_FOUND',
+        message: 'API 路径不存在。',
+        requestId: response.getHeader('X-Request-Id'),
+      });
   });
 
   app.use(
@@ -347,6 +370,7 @@ export function createSim2RealWebApp(): Express {
         ok: false,
         error: 'SIM2REAL_WEB_INTERNAL_ERROR',
         message: '独立仿真到真机服务暂时不可用，请稍后重试。',
+        requestId: response.getHeader('X-Request-Id'),
       });
     },
   );

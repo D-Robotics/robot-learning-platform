@@ -544,6 +544,69 @@ describe('Sim2Real HTTP routes', () => {
     expect(response.body).toMatchObject({ code: 'SIM2REAL_INVALID_DEPLOYMENT' });
   });
 
+  it('keeps a mock BoardAgent preflight blocked instead of reporting hardware readiness', async () => {
+    await fixture();
+    const storageRoot = process.env.RDK_SIM2REAL_STORAGE_DIR as string;
+    await fs.mkdir(storageRoot, { recursive: true });
+    await fs.writeFile(
+      path.join(storageRoot, 'devices.json'),
+      JSON.stringify([
+        {
+          id: 'mock-x5',
+          host: '127.0.0.1',
+          username: 'sim2real',
+          status: 'connected',
+          lastCheckedAt: new Date().toISOString(),
+          boardPlatform: 'rdk-x5',
+        },
+      ]),
+      'utf8',
+    );
+    const output = [
+      '__STUDIO_SIM2REAL_PREFLIGHT_BEGIN__',
+      'arch=aarch64',
+      'kernel=6.1.0-rdk',
+      'python3=/usr/bin/python3',
+      'tros=present',
+      `disk_bytes=${2 * 1024 ** 3}`,
+      '__STUDIO_SIM2REAL_PREFLIGHT_END__',
+    ].join('\n');
+    const router = createSim2RealRouter({
+      runOnDevice: async () => ({
+        device: { id: 'mock-x5', kind: 'simulated-x5' },
+        output,
+        exitCode: 0,
+        mock: true,
+        actuatorControl: false,
+      }),
+    });
+    const planned = await invoke(router, 'post', '/api/sim2real/deployments', {
+      body: {
+        modelId: BUILTIN_MICRODUCK_MODEL.id,
+        deviceId: 'mock-x5',
+        mode: 'preflight',
+      },
+    });
+    expect(planned.statusCode).toBe(201);
+    const deploymentId = (planned.body as { deployment: { id: string } }).deployment.id;
+    const preflight = await invoke(router, 'post', '/api/sim2real/deployments/:id/preflight', {
+      params: { id: deploymentId },
+    });
+    expect(preflight.statusCode).toBe(409);
+    expect(preflight.body).toMatchObject({
+      code: 'SIM2REAL_PREFLIGHT_MOCK_ONLY',
+      preflight: { passed: false, mock: true },
+    });
+    const details = await invoke(router, 'get', '/api/sim2real/deployments/:id', {
+      params: { id: deploymentId },
+    });
+    const detailDeployment = (details.body as { deployment: { status: string; steps: Array<{ id: string; status: string }> } }).deployment;
+    expect(detailDeployment.status).toBe('blocked');
+    expect(detailDeployment.steps).toEqual(
+      expect.arrayContaining([expect.objectContaining({ id: 'board-passport', status: 'blocked' })]),
+    );
+  });
+
   it('keeps the built-in browser run explicit and never rewrites a user model into it', async () => {
     const router = await fixture();
     const manifest = userManifest();

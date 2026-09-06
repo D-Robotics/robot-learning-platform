@@ -15,6 +15,7 @@ import {
 import {
   collectSandboxBoards,
   createStandaloneRobogoApiClient,
+  isBoardAgentConfigured,
   isStandaloneMultiUserMode,
 } from './standalone-adapters.js';
 import { evaluateModelCompatibility } from './standalone-compatibility.js';
@@ -362,11 +363,14 @@ export function simulatorIntegration(): {
   const runnerConfigured = isRobogoRunnerConfigured();
   const localRunnerConfigured = isLocalRunnerConfigured();
   const localRunnerMock = process.env.RDK_SIM2REAL_LOCAL_RUNNER_MODE === 'mock';
+  const boardAgentConfigured = isBoardAgentConfigured();
   return {
     browser: microduckBrowserSurface(),
     boardAgent: {
-      available: false,
-      reason: '公开发行版未注入 BoardAgent；板型探测和真机执行保持只读占位。',
+      available: boardAgentConfigured,
+      reason: boardAgentConfigured
+        ? '受控 BoardAgent 已配置；当前仅允许只读板端预检，模拟 agent 不会产生真机就绪证据。'
+        : '公开发行版未注入 BoardAgent；板型探测和真机执行保持只读占位。',
     },
     robogo: {
       available: runnerConfigured,

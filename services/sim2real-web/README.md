@@ -57,6 +57,22 @@ npm run dev:mock-worker       # 终端 1；没有 CUDA 时的协议演练
 npm run dev:sim2real          # 终端 2
 ```
 
+如果要在没有 X5 的情况下演练“部署 → 只读板端预检”，再开一个终端运行：
+
+```
+npm run dev:board-agent       # 终端 3；仅 loopback、只读 reference agent
+RDK_SIM2REAL_BOARD_AGENT_URL=http://127.0.0.1:19100 npm run dev:sim2real
+```
+
+对应的确定性验收命令是 `npm run verify:board-agent`。
+
+该 reference agent 只实现 board passport 协议，返回明确的 `mock: true`、`actuatorControl: false`
+和模拟的 `rdk-x5` 元数据；它不会执行任何收到的 shell 字符串，也不会声称真实 X5 已连接。
+设备页的板型探测可将这些模拟元数据写回本地登记表，但部署预检仍会保持 blocked，不会把 mock
+结果当作真机就绪证据。
+生产环境请替换 `runOnDevice` 为组织维护的 BoardAgentPort，并通过 HTTPS、短期 token
+和独立的执行策略保护 canary/live。
+
 打开 http://127.0.0.1:18102/。生产构建应将入口编译到独立的 release 目录，并用
 `scripts/copy-server-assets.mjs` 把 `public/` 复制到相邻的静态资源目录。
 
@@ -358,3 +374,46 @@ Mock unit 不读取包含 SSO/RoboGo secret 的生产 env；默认端口是 1909
 
 接入真实 GPU worker 后，删除该环境变量并停止 Mock 单元，再把同一个 `/train` 协议指向真实 worker；Studio
 API 和页面无需改变。
+
+### 受控本地训练 worker（真实引擎桥接）
+
+本仓还提供 `local-training-worker.mjs` 和 `sim2real-local-worker.service`。它是一个真实训练引擎
+桥接器：服务端接收平台的 manifest，按白名单 profile 创建隔离任务目录，再用 `spawn(...,
+{shell:false})` 启动管理员配置的可执行文件。训练引擎从 `RDK_SIM2REAL_REQUEST_FILE` 读取请求，
+并必须将结果写入 `RDK_SIM2REAL_RESULT_FILE`。只有结果包含受控 `artifact://` checkpoint 或 artifact
+引用，worker 才会返回 `completed`；进程成功但没有制品时会返回 `failed`，不会产生绿色假成功。
+任务快照保存在每个 job 目录的 `job.json`；worker 重启时会恢复已结束任务，遗留的 queued/running
+任务会标记为 `worker_restarted` 并停止自动重跑，避免重复消耗算力或产生重复制品。
+
+启用前在 root-only 的 `/etc/rdk-robot-learning-platform-local-worker.env` 中配置：
+
+```bash
+RDK_SIM2REAL_TRAIN_EXECUTABLE=/opt/rl/bin/microduck-train
+RDK_SIM2REAL_TRAIN_ARGS_JSON=["--request-file","request.json"]
+# Optional; use the same value in the Web service env to authenticate the
+# loopback worker even when another local process can reach the port.
+RDK_SIM2REAL_LOCAL_RUNNER_TOKEN=change-me-in-a-root-only-env-file
+```
+
+参数数组由 systemd 环境文件直接传入 JSON；worker 不执行 shell 展开，也不会把用户字段拼到命令中。
+随仓库提供的 systemd unit 默认隐藏主机设备（包括 GPU），以保持最小权限；当前无 CUDA 的 CPU
+流程可直接使用。若部署真实 GPU 训练，管理员应单独审核并复制该 unit，按主机安全策略仅放行所需
+GPU 设备后再启用，不要直接把服务改成宽泛的特权模式。
+训练引擎完成后写入类似下面的结果：
+
+```json
+{
+  "checkpoint": {
+    "checkpointId": "checkpoint-1500",
+    "artifactRef": "artifact://microduck/checkpoint-1500",
+    "iteration": 1500
+  },
+  "artifact": { "artifactRef": "artifact://microduck/policy-v3" },
+  "metrics": { "reward": 12.4, "iterations": 1500 },
+  "deployable": false
+}
+```
+
+未配置 `RDK_SIM2REAL_TRAIN_EXECUTABLE` 时 `/healthz` 和 `/train` 返回 503
+`real_worker_not_configured`。这条路径只提供安全、可复核的进程和制品协议；真实 PPO/MuJoCo
+环境仍由部署方提供，不能把它与无 CUDA 的 Mock worker 混用。

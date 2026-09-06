@@ -130,10 +130,22 @@ describe('standalone Sim2Real health and optional simulator surface', () => {
     const response = await fetch(`${baseUrl}/api/does-not-exist`);
     expect(response.status).toBe(404);
     expect(response.headers.get('content-type')).toMatch(/application\/json/);
+    expect(response.headers.get('x-request-id')).toMatch(/^[\x21-\x7e]{1,128}$/);
     expect(await response.json()).toMatchObject({
       ok: false,
       error: 'SIM2REAL_API_NOT_FOUND',
+      requestId: response.headers.get('x-request-id'),
     });
+  });
+
+  it('preserves a bounded gateway request id for API tracing', async () => {
+    const { baseUrl } = await fixture();
+    const requestId = 'gateway-trace-42';
+    const response = await fetch(`${baseUrl}/api/does-not-exist`, {
+      headers: { 'X-Request-Id': requestId },
+    });
+    expect(response.headers.get('x-request-id')).toBe(requestId);
+    expect((await response.json()).requestId).toBe(requestId);
   });
 
   it('shows an actionable fallback page when the optional MicroDuck bundle is absent', async () => {

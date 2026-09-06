@@ -62,6 +62,19 @@ assertUnit('services/sim2real-web/sim2real-mock-worker.service', {
   ],
 });
 
+assertUnit('services/sim2real-web/sim2real-local-worker.service', {
+  requiredUnit: [
+    /ConditionPathExists=.*dist-server\/services\/sim2real-web\/local-training-worker\.mjs/,
+  ],
+  requiredService: [
+    /User=sim2real/,
+    /Environment=RDK_SIM2REAL_LOCAL_WORKER_HOST=127\.0\.0\.1/,
+    /ExecStartPre=.*RDK_SIM2REAL_LOCAL_WORKER_DATA_DIR/,
+    /ExecStart=.*dist-server\/services\/sim2real-web\/local-training-worker\.mjs/,
+    /ReadWritePaths=\/var\/lib\/rdk-robot-learning-platform\/local-worker/,
+  ],
+});
+
 const integratedUnit = read('services/sim2real-web/studio-integrated-sim2real.service');
 assert.match(integratedUnit, /ConditionPathExists=\/etc\/rdkstudio-sim2real-adapter\.ready/);
 assert.match(integratedUnit, /ExecStartPre=.*RDK_SIM2REAL_ADAPTER_READY=1/);
@@ -73,6 +86,8 @@ assert.doesNotMatch(integratedUnit, /ReadOnlyPaths=\/opt\/rdstudio-web-opt/);
 
 const copyScript = read('scripts/copy-server-assets.mjs');
 assert.match(copyScript, /mock-local-worker\.mjs/, 'build:assets must ship the mock worker');
+assert.match(copyScript, /local-training-worker\.mjs/, 'build:assets must ship the local worker bridge');
+assert.match(copyScript, /local-board-agent\.mjs/, 'build:assets must ship the BoardAgent reference');
 assert.ok(existsSync(path.join(root, 'services/sim2real-web/public/microduck-unavailable.html')));
 
 const productionEnv = read('services/sim2real-web/sim2real.production.env.example');
@@ -133,6 +148,7 @@ if (process.env.VERIFY_SYSTEMD === '1') {
   for (const relativePath of [
     'services/sim2real-web/standalone-sim2real.service',
     'services/sim2real-web/sim2real-mock-worker.service',
+    'services/sim2real-web/sim2real-local-worker.service',
   ]) {
     const result = spawnSync('systemd-analyze', ['verify', path.join(root, relativePath)], {
       encoding: 'utf8',

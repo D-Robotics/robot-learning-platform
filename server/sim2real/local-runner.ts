@@ -31,12 +31,13 @@ export function requestLocalTraining(input: {
   runnerUrl?: string;
   timeoutMs?: number;
 }): Promise<Sim2RealRobogoRunResult> {
+  const localToken = String(process.env.RDK_SIM2REAL_LOCAL_RUNNER_TOKEN ?? '').trim();
   return requestRobogoTraining({
     ...input,
     // A local worker is an internal deployment boundary.  Never forward the
     // Studio/RoboGo bearer token to it, even if a caller happens to provide
     // one while reusing the shared adapter input shape.
-    requestToken: undefined,
+    requestToken: localToken || undefined,
     // Pass an explicit empty value when the local endpoint is unset so the
     // generic adapter can never fall back to the RoboGo endpoint.
     runnerUrl: input.runnerUrl ?? process.env.RDK_SIM2REAL_LOCAL_RUNNER_URL ?? '',
@@ -54,9 +55,10 @@ export function requestLocalTrainingStatus(input: {
   statusUrl?: string;
   timeoutMs?: number;
 }): Promise<Sim2RealRobogoRunResult> {
+  const localToken = String(process.env.RDK_SIM2REAL_LOCAL_RUNNER_TOKEN ?? '').trim();
   return requestRobogoTrainingStatus({
     ...input,
-    requestToken: undefined,
+    requestToken: localToken || undefined,
     runnerUrl: input.runnerUrl ?? process.env.RDK_SIM2REAL_LOCAL_RUNNER_URL ?? '',
     allowPrivateHttp: true,
     allowEnvironmentToken: false,

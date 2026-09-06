@@ -1,0 +1,32 @@
+[Unit]
+Description=RDK Sim2Real controlled local RL worker
+After=network-online.target
+Wants=network-online.target
+ConditionPathExists=/opt/rdk-robot-learning-platform/current/dist-server/services/sim2real-web/local-training-worker.mjs
+
+[Service]
+Type=simple
+User=sim2real
+Group=sim2real
+WorkingDirectory=/opt/rdk-robot-learning-platform/current
+EnvironmentFile=/etc/rdk-robot-learning-platform-local-worker.env
+Environment=NODE_ENV=production
+Environment=RDK_SIM2REAL_LOCAL_WORKER_HOST=127.0.0.1
+Environment=RDK_SIM2REAL_LOCAL_WORKER_PORT=19091
+Environment=RDK_SIM2REAL_LOCAL_WORKER_DATA_DIR=/var/lib/rdk-robot-learning-platform/local-worker
+Environment=PATH=/usr/local/bin:/usr/bin:/bin
+ExecStartPre=/usr/bin/test ${RDK_SIM2REAL_LOCAL_WORKER_HOST} = 127.0.0.1
+ExecStartPre=/usr/bin/test ${RDK_SIM2REAL_LOCAL_WORKER_DATA_DIR} = /var/lib/rdk-robot-learning-platform/local-worker
+ExecStart=/usr/bin/env node /opt/rdk-robot-learning-platform/current/dist-server/services/sim2real-web/local-training-worker.mjs
+Restart=on-failure
+RestartSec=3
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=strict
+PrivateDevices=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+ReadWritePaths=/var/lib/rdk-robot-learning-platform/local-worker
+
+[Install]
+WantedBy=multi-user.target

@@ -5,12 +5,15 @@ import { isLocalRunnerConfigured, requestLocalTraining } from './local-runner.js
 
 const previousLocal = process.env.RDK_SIM2REAL_LOCAL_RUNNER_URL;
 const previousRobogo = process.env.RDK_SIM2REAL_ROBOGO_RUNNER_URL;
+const previousLocalToken = process.env.RDK_SIM2REAL_LOCAL_RUNNER_TOKEN;
 
 afterEach(() => {
   if (previousLocal === undefined) delete process.env.RDK_SIM2REAL_LOCAL_RUNNER_URL;
   else process.env.RDK_SIM2REAL_LOCAL_RUNNER_URL = previousLocal;
   if (previousRobogo === undefined) delete process.env.RDK_SIM2REAL_ROBOGO_RUNNER_URL;
   else process.env.RDK_SIM2REAL_ROBOGO_RUNNER_URL = previousRobogo;
+  if (previousLocalToken === undefined) delete process.env.RDK_SIM2REAL_LOCAL_RUNNER_TOKEN;
+  else process.env.RDK_SIM2REAL_LOCAL_RUNNER_TOKEN = previousLocalToken;
 });
 
 describe('local Sim2Real runner adapter', () => {
@@ -27,6 +30,7 @@ describe('local Sim2Real runner adapter', () => {
   });
 
   it('does not forward a Studio bearer token to the internal worker', async () => {
+    delete process.env.RDK_SIM2REAL_LOCAL_RUNNER_TOKEN;
     let authorization = '';
     const result = await requestLocalTraining({
       accountId: 'alice',

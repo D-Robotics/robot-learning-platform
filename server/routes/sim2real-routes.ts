@@ -27,6 +27,7 @@ import {
 } from '../../shared/sim2real.js';
 import { sendApiError, sendInternalApiError, wrapAsync } from '../sim2real/http-helpers.js';
 import {
+  buildBoardPreflightCommand,
   isForeignOwnedDevice,
   readDevices,
   requestOwnsDevice,
@@ -81,7 +82,7 @@ type RunOnDevice = (
     stdoutCharLimit?: number;
     abortSignal?: AbortSignal;
   },
-  ) => Promise<{ device: unknown; output: string; exitCode?: number } | null>;
+  ) => Promise<{ device: unknown; output: string; exitCode?: number; mock?: boolean; actuatorControl?: boolean } | null>;
 
 type OwnedDevice = Device & { bridgeOwnerKey?: string };
 
@@ -484,16 +485,7 @@ function deploymentSummary(mode: Sim2RealDeploymentMode, deployable: boolean): s
 }
 
 function preflightCommand(): string {
-  return [
-    'set +e',
-    'printf "__STUDIO_SIM2REAL_PREFLIGHT_BEGIN__\\n"',
-    'printf "arch=%s\\n" "$(uname -m 2>/dev/null || echo unknown)"',
-    'printf "kernel=%s\\n" "$(uname -r 2>/dev/null || echo unknown)"',
-    'printf "python3=%s\\n" "$(command -v python3 2>/dev/null || echo missing)"',
-    'printf "tros=%s\\n" "$(if test -d /opt/tros || test -d /opt/ros; then echo present; else echo missing; fi)"',
-    'printf "disk_bytes=%s\\n" "$(df -Pk /tmp 2>/dev/null | awk \'NR==2 {print $4 * 1024}\' || echo unknown)"',
-    'printf "__STUDIO_SIM2REAL_PREFLIGHT_END__\\n"',
-  ].join('; ');
+  return buildBoardPreflightCommand();
 }
 
 const PREFLIGHT_BEGIN = '__STUDIO_SIM2REAL_PREFLIGHT_BEGIN__';
@@ -1642,6 +1634,24 @@ export function createSim2RealRouter(
             message: detail,
             retryable: true,
             preflight: { passed: false, checks: parsedPreflight.checks },
+          });
+          return;
+        }
+        if (executed.mock === true) {
+          const detail = '当前返回来自模拟 BoardAgent；协议已验证，但不是真机预检证据。';
+          const blockedSteps = markStep(runningSteps, 'board-passport', 'blocked', detail);
+          await updateSim2RealDeployment(
+            id,
+            {
+              status: 'blocked',
+              summary: '模拟 BoardAgent 只能演练协议，不能把部署计划标记为真机就绪。',
+              steps: blockedSteps,
+            },
+            owner,
+          ).catch(() => null);
+          sendApiError(response, 409, 'SIM2REAL_PREFLIGHT_MOCK_ONLY', detail, {
+            retryable: false,
+            preflight: { passed: false, mock: true, checks: parsedPreflight.checks },
           });
           return;
         }

@@ -73,6 +73,10 @@ npm run dev:mock-worker
 npm run dev:sim2real
 ```
 
+需要演练部署页的只读 X5 预检时，再开 `npm run dev:board-agent`，并设置
+`RDK_SIM2REAL_BOARD_AGENT_URL=http://127.0.0.1:19100`；该 reference agent 只返回模拟板卡信息，
+不会连接设备、执行命令或开启电机。
+
 打开 <http://127.0.0.1:18102/>。页面中的“仿真与录制”会打开已挂载的 MicroDuck 浏览器仿真；
 干净源码 checkout 未包含上游静态 bundle，未配置 `RDK_SIM2REAL_MICRODUCK_ROOT` 或 URL 时会显示安装指引页。
 “训练与模型”可选择本地 Mock runner；“评测与效果”支持导入浏览器录制的 JSON/JSONL 并显式绑定到 Run；
@@ -84,6 +88,9 @@ npm run dev:sim2real
 npm run verify
 npx tsc --noEmit
 ```
+
+`npm run verify:local-worker` 会用一个临时外部引擎验证真实 Worker 契约；
+`npm run verify:board-agent` 会验证只读 BoardAgent、模拟标记和 token 闸门。
 
 ## 目录
 

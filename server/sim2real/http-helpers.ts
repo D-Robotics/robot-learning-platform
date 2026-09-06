@@ -7,7 +7,17 @@ export function wrapAsync(handler: (request: Request, response: Response, next: 
 }
 
 export function sendApiError(response: Response, status: number, code: string, message: string, extra: Record<string, unknown> = {}): void {
-  response.status(status).json({ ok: false, error: code, code, message, ...extra });
+  // Express exposes getHeader, while lightweight route harnesses may provide
+  // only status/json. Keep the correlation field best-effort at this boundary.
+  const requestId = typeof response.getHeader === 'function' ? response.getHeader('X-Request-Id') : undefined;
+  response.status(status).json({
+    ok: false,
+    error: code,
+    code,
+    message,
+    ...(typeof requestId === 'string' && requestId ? { requestId } : {}),
+    ...extra,
+  });
 }
 
 export function sendInternalApiError(

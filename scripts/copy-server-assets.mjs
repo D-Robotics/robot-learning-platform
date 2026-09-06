@@ -58,3 +58,16 @@ copyFile(
   path.join('services', 'sim2real-web', 'mock-local-worker.mjs'),
   path.join('dist-server', 'services', 'sim2real-web', 'mock-local-worker.mjs'),
 );
+
+// The real local worker is a protocol bridge to an administrator-owned
+// training engine. Copy it into the release so the systemd example can run
+// without depending on the source checkout.
+copyFile(
+  path.join('services', 'sim2real-web', 'local-training-worker.mjs'),
+  path.join('dist-server', 'services', 'sim2real-web', 'local-training-worker.mjs'),
+);
+
+copyFile(
+  path.join('services', 'sim2real-web', 'local-board-agent.mjs'),
+  path.join('dist-server', 'services', 'sim2real-web', 'local-board-agent.mjs'),
+);
