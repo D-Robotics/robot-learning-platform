@@ -301,6 +301,14 @@ export function createSim2RealWebApp(): Express {
   app.use(
     express.static(PUBLIC_ROOT, {
       index: 'index.html',
+      // The HTML entry must always revalidate so cache-busted assets
+      // (app.js?v=…) are picked up immediately; hashed/versioned assets
+      // themselves may cache longer.
+      setHeaders: (response, filePath) => {
+        if (filePath.endsWith('.html')) {
+          response.setHeader('Cache-Control', 'no-cache');
+        }
+      },
       maxAge: process.env.NODE_ENV === 'production' ? '1h' : 0,
     }),
   );

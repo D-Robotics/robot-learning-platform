@@ -125,6 +125,15 @@ describe('standalone Sim2Real health and optional simulator surface', () => {
     expect(await response.text()).toContain('mounted');
   });
 
+  it('revalidates the HTML entry so versioned assets are picked up immediately', async () => {
+    const { baseUrl } = await fixture();
+    const response = await fetch(`${baseUrl}/index.html`);
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get('cache-control')).toBe('no-cache');
+    expect(await response.text()).toContain('<!doctype html>');
+  });
+
   it('keeps unknown API paths machine-readable and does not masquerade as the SPA', async () => {
     const { baseUrl } = await fixture();
     const response = await fetch(`${baseUrl}/api/does-not-exist`);

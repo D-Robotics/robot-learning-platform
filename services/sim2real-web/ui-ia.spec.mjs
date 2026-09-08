@@ -26,7 +26,11 @@ assert.deepEqual(
   [...viewNames].sort(),
   'navigation targets must resolve to a workflow view',
 );
-assert.deepEqual(workflowTargets, ['simulate', 'train', 'evaluate', 'deploy']);
+assert.deepEqual(
+  workflowTargets,
+  [],
+  'the horizontal workflow strip must stay removed: one navigation surface only',
+);
 assert.equal(
   navItems,
   8,
@@ -37,12 +41,21 @@ assert.equal(
   null,
   'the duplicate “平台模块” secondary navigation must not regress',
 );
-assert.match(html, /data-view-section="overview"[\s\S]*?section-kicker">OVERVIEW/, 'overview must read as a dashboard, not a marketing hero');
+assert.doesNotMatch(html, /section-kicker|card-kicker/, 'no English kicker labels: one lean title per section, not a three-line header');
 assert.doesNotMatch(html, /让一个动作/, 'the marketing hero must stay removed');
 assert.match(html, /id="task-select"/, 'workspace must expose an action-task context');
 assert.match(html, /id="presentation-toggle"/, 'workspace must expose a reversible presentation view');
 assert.match(html, /class="skip-link"/, 'workspace must expose a keyboard skip link');
-assert.match(html, /data-pipeline-step="simulate"/, 'overview must expose live workflow progress');
+assert.doesNotMatch(
+  html,
+  /data-pipeline-step/,
+  'the overview vertical pipeline duplicate must stay removed',
+);
+assert.doesNotMatch(
+  html,
+  /workspace-brief|safety-banner|brief-title/,
+  'the hero brief and standing safety banner must stay removed',
+);
 assert.match(html, /id="run-detail-dialog"/, 'runs must have a detail surface');
 assert.match(html, /id="sim-action-list"/, 'simulation must show the manifest action library');
 assert.equal(
@@ -153,7 +166,11 @@ assert.match(app, /dataset\.action === 'import-telemetry'/);
 assert.match(app, /data-release-step/);
 assert.match(app, /sim2real\/overview\?productId=/, 'overview must be product-aware');
 assert.match(app, /taskId: state\.taskId/);
-assert.match(app, /classList\.contains\('workflow-node'\)/);
+assert.doesNotMatch(
+  app,
+  /classList\.contains\('workflow-node'\)/,
+  'workflow strip classes must not linger in view switching',
+);
 assert.match(
   app,
   /const robogoRunnerAvailable = simulator\.robogo\?\.available === true/,

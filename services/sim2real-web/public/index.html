@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="description" content="面向 RDK X5 的 Duck 仿真、训练与部署平台" />
     <title>RDK Duck Sim2Real Lab</title>
-    <link rel="stylesheet" href="./styles.css?v=duck-lab-15" />
+    <link rel="stylesheet" href="./styles.css?v=duck-lab-16" />
   </head>
   <body>
     <a class="skip-link" href="#main-content">跳到主要内容</a>
@@ -79,35 +79,35 @@
               aria-current="page"
             >
               <span class="nav-index">◇</span
-              ><span><strong>总览</strong><small>状态与下一步</small></span>
+              ><span><strong>总览</strong></span>
             </button>
             <button class="nav-item" type="button" data-view-target="simulate">
               <span class="nav-index">01</span
-              ><span><strong>仿真与录制</strong><small>演示、记录、回放</small></span>
+              ><span><strong>仿真</strong></span>
             </button>
             <button class="nav-item" type="button" data-view-target="train">
               <span class="nav-index">02</span
-              ><span><strong>训练与模型</strong><small>本地或 RoboGo</small></span>
+              ><span><strong>训练</strong></span>
             </button>
             <button class="nav-item" type="button" data-view-target="evaluate">
               <span class="nav-index">03</span
-              ><span><strong>评测与效果</strong><small>仿真 / 真机对比</small></span>
+              ><span><strong>评测</strong></span>
             </button>
             <button class="nav-item" type="button" data-view-target="deploy">
               <span class="nav-index">04</span
-              ><span><strong>部署到 X5</strong><small>预检、Canary、Live</small></span>
+              ><span><strong>部署</strong></span>
             </button>
             <button class="nav-item" type="button" data-view-target="records">
               <span class="nav-index">05</span
-              ><span><strong>记录与版本</strong><small>模型、运行、审计</small></span>
+              ><span><strong>记录</strong></span>
             </button>
             <button class="nav-item" type="button" data-view-target="station">
               <span class="nav-index">06</span
-              ><span><strong>上位机</strong><small>状态、相机、只读命令</small></span>
+              ><span><strong>上位机</strong></span>
             </button>
             <button class="nav-item nav-item-quiet" type="button" data-view-target="contract">
               <span class="nav-index">◇</span
-              ><span><strong>套件与契约</strong><small>登记模型 manifest</small></span>
+              ><span><strong>套件与契约</strong></span>
             </button>
           </nav>
           <div class="sidebar-divider sidebar-divider-compact"></div>
@@ -133,35 +133,10 @@
         </aside>
 
         <main class="main-content" id="main-content" tabindex="-1">
-          <section class="workspace-brief" aria-label="工作区状态">
-            <div class="brief-copy">
-              <p class="brief-kicker" id="hero-eyebrow">SIM2REAL · MICRODUCK · X5</p>
-              <h1 class="brief-title">Sim2Real 工作台</h1>
-              <p class="brief-lede" id="hero-lede">选择任务，跑完仿真到部署的闭环。</p>
-            </div>
-            <div class="brief-meta">
-              <div class="brief-chip">
-                <span>当前契约</span
-                ><strong id="hero-contract-id">microduck-policy-v1</strong>
-              </div>
-              <div class="brief-chip">
-                <span>最后刷新</span><strong id="hero-updated">等待服务响应</strong>
-              </div>
-              <div class="hero-target">
-                <span class="target-dot is-empty" id="hero-target-dot"></span
-                ><span>目标平台</span><b id="hero-target-label">待选择设备</b>
-              </div>
-            </div>
-          </section>
-
           <section class="auth-gate" id="auth-gate" aria-live="polite" hidden>
             <span class="auth-gate-icon">↪</span>
             <div class="auth-gate-copy">
               <strong>登录后加载你的工作区</strong>
-              <p>
-                模型、设备、运行记录和 RoboGo 资源按账号隔离。登录 RDK Studio（或直接通过 SSO
-                登录）后，回到本页点击“重新加载”。
-              </p>
               <div class="auth-gate-actions">
                 <a
                   class="button button-primary button-small"
@@ -179,14 +154,6 @@
                 </button>
               </div>
             </div>
-          </section>
-          <section class="safety-banner" aria-label="安全边界">
-            <span class="banner-icon">✓</span>
-            <div>
-              <strong>安全边界已开启</strong>
-              <p>仿真和预检可以直接执行；训练、上传、Canary、Live 都需要明确选择和审批。</p>
-            </div>
-            <span class="banner-tag">FAIL-CLOSED</span>
           </section>
 
           <section class="context-strip" aria-label="当前工作区选择">
@@ -224,44 +191,19 @@
             ><span id="device-count" class="sr-only">0 块板卡</span>
           </section>
 
-          <nav class="workflow-strip" aria-label="动作交付流程">
-            <span class="workflow-strip-label">交付流程</span>
-            <button class="workflow-node" type="button" data-view-target="simulate">
-              <span class="workflow-node-index">01</span><span>仿真与录制</span>
-            </button>
-            <span class="workflow-arrow" aria-hidden="true">→</span>
-            <button class="workflow-node" type="button" data-view-target="train">
-              <span class="workflow-node-index">02</span><span>训练与导出</span>
-            </button>
-            <span class="workflow-arrow" aria-hidden="true">→</span>
-            <button class="workflow-node" type="button" data-view-target="evaluate">
-              <span class="workflow-node-index">03</span><span>评测与效果</span>
-            </button>
-            <span class="workflow-arrow" aria-hidden="true">→</span>
-            <button class="workflow-node" type="button" data-view-target="deploy">
-              <span class="workflow-node-index">04</span><span>预检与上板</span>
-            </button>
-          </nav>
-
           <section
             class="view-section"
             data-view-section="overview"
             aria-labelledby="overview-title"
           >
-            <div class="section-heading">
-              <div>
-                <span class="section-kicker">OVERVIEW</span>
-                <h2 id="overview-title">总览</h2>
-              </div>
-              <span class="section-caption">交付进度与集成状态</span>
+            <div class="section-heading section-heading-lean">
+              <h2 id="overview-title">总览</h2>
+              <span class="section-caption" id="hero-updated">—</span>
             </div>
             <div class="next-card">
               <div class="next-card-main">
                 <span class="next-badge">下一步</span>
                 <h3 id="next-action-title">从一个动作任务开始</h3>
-                <p id="next-action-copy">
-                  先选择产品线和模型契约，再进入仿真、训练、评测与部署。每个模块都可以单独重跑。
-                </p>
                 <button
                   class="button button-primary"
                   id="next-action-button"
@@ -274,7 +216,6 @@
             </div>
             <div class="status-grid" id="status-grid" aria-label="集成状态">
               <article class="status-card">
-                <span class="card-kicker">SIMULATOR</span>
                 <div class="status-card-main">
                   <span class="status-icon status-icon-blue">◉</span
                   ><strong id="status-simulator">浏览器仿真</strong>
@@ -282,15 +223,13 @@
                 <p id="status-simulator-detail">固定参考策略</p>
               </article>
               <article class="status-card">
-                <span class="card-kicker">TRAINING</span>
                 <div class="status-card-main">
                   <span class="status-icon status-icon-violet">⌁</span
                   ><strong id="status-robogo">训练后端检查中</strong>
                 </div>
-                <p id="status-robogo-detail">本地优先，RoboGo 可选</p>
+                <p id="status-robogo-detail">本地优先</p>
               </article>
               <article class="status-card">
-                <span class="card-kicker">TARGET</span>
                 <div class="status-card-main">
                   <span class="status-icon status-icon-orange" id="status-board-icon">⌂</span
                   ><strong id="status-board">尚未选择板卡</strong>
@@ -298,48 +237,11 @@
                 <p id="status-board-detail">连接后进行预检</p>
               </article>
               <article class="status-card">
-                <span class="card-kicker">LEDGER</span>
                 <div class="status-card-main">
                   <span class="status-icon status-icon-orange">▣</span
                   ><strong id="status-storage-card">按账号隔离</strong>
                 </div>
                 <p id="status-storage-detail">模型和运行可追溯</p>
-              </article>
-            </div>
-            <div class="overview-columns overview-columns-single">
-              <article class="panel overview-panel">
-                <div class="panel-heading">
-                  <div>
-                    <span class="card-kicker">PIPELINE</span>
-                    <h2>交付进度</h2>
-                  </div>
-                  <span class="panel-caption">可暂停、可回退</span>
-                </div>
-                <div class="pipeline pipeline-vertical">
-                  <div class="pipeline-step pipeline-step-current" data-pipeline-step="simulate">
-                    <span class="pipeline-number">01</span>
-                    <div><strong>仿真与录制</strong><small>看懂动作，留下轨迹</small></div>
-                    <span class="step-state" id="pipeline-simulate-state" aria-live="polite">检查中</span>
-                  </div>
-                  <div class="pipeline-connector"></div>
-                  <div class="pipeline-step" data-pipeline-step="train">
-                    <span class="pipeline-number">02</span>
-                    <div><strong>训练与导出</strong><small>本地 / RoboGo</small></div>
-                    <span class="step-state" id="pipeline-train-state" aria-live="polite">待开始</span>
-                  </div>
-                  <div class="pipeline-connector"></div>
-                  <div class="pipeline-step" data-pipeline-step="evaluate">
-                    <span class="pipeline-number">03</span>
-                    <div><strong>评测与契约</strong><small>输入、动作、频率一致</small></div>
-                    <span class="step-state" id="pipeline-evaluate-state" aria-live="polite">待开始</span>
-                  </div>
-                  <div class="pipeline-connector"></div>
-                  <div class="pipeline-step pipeline-step-gated" data-pipeline-step="deploy">
-                    <span class="pipeline-number">04</span>
-                    <div><strong>预检与上板</strong><small>无电机 Canary → Live</small></div>
-                    <span class="step-state" id="pipeline-deploy-state" aria-live="polite">受控阻断</span>
-                  </div>
-                </div>
               </article>
             </div>
           </section>
@@ -350,25 +252,13 @@
             hidden
             aria-labelledby="contract-title"
           >
-            <div class="section-heading">
-              <div>
-                <span class="section-kicker">PLATFORM MODULE · CONTRACT</span>
-                <h2 id="contract-title">套件与契约</h2>
-              </div>
-              <span class="section-caption">先把产品、配件和模型说清楚</span>
+            <div class="section-heading section-heading-lean">
+              <h2 id="contract-title">套件与契约</h2>
             </div>
             <div class="records-layout">
               <article class="panel manifest-panel">
-                <div class="panel-heading">
-                  <div>
-                    <span class="card-kicker">MODEL MANIFEST</span>
-                    <h2>登记你的模型</h2>
-                  </div>
-                  <span class="panel-caption">metadata-only</span>
+                <div class="panel-heading panel-heading-lean"><h2>登记你的模型</h2>
                 </div>
-                <p class="panel-intro">
-                  导入 ONNX + manifest 只登记元数据和哈希，不执行上传的 Python、XML 或 shell。
-                </p>
                 <textarea
                   id="manifest-editor"
                   spellcheck="false"
@@ -403,11 +293,7 @@
                 <div class="validation-result" id="validation-result" role="status">尚未校验</div>
               </article>
               <article class="panel contract-guide-panel">
-                <div class="panel-heading">
-                  <div>
-                    <span class="card-kicker">CONTRACT GATE</span>
-                    <h2>契约检查清单</h2>
-                  </div>
+                <div class="panel-heading panel-heading-lean"><h2>契约检查清单</h2>
                   <span class="state-badge state-neutral">FAIL-CLOSED</span>
                 </div>
                 <ul class="contract-check-list">
@@ -449,18 +335,13 @@
             hidden
             aria-labelledby="simulate-title"
           >
-            <div class="section-heading">
-              <div>
-                <span class="section-kicker">STEP 01 · SIMULATE</span>
-                <h2 id="simulate-title">仿真与录制</h2>
-              </div>
-              <span class="section-caption">先验证动作，再进入训练</span>
+            <div class="section-heading section-heading-lean">
+              <h2 id="simulate-title">仿真与录制</h2>
             </div>
             <div class="sim-layout">
               <article class="panel simulator-panel">
                 <div class="panel-heading">
                   <div>
-                    <span class="card-kicker" id="simulator-kicker">BROWSER SIMULATION</span>
                     <h2 id="simulator-title">MicroDuck 仿真场</h2>
                   </div>
                   <span class="live-label is-waiting" id="simulator-live-label"
@@ -524,10 +405,8 @@
                 <div class="sim-action-library" aria-label="当前模型动作库">
                   <div class="sim-action-library-heading">
                     <div>
-                      <span class="card-kicker">ACTION LIBRARY</span>
                       <strong>当前模型可用动作</strong>
                     </div>
-                    <span class="panel-caption">按键映射来自 manifest</span>
                   </div>
                   <div id="sim-action-list" class="sim-action-list"></div>
                   <p id="sim-action-empty" class="small-note">
@@ -551,20 +430,12 @@
             hidden
             aria-labelledby="train-title"
           >
-            <div class="section-heading">
-              <div>
-                <span class="section-kicker">STEP 02 · TRAIN</span>
-                <h2 id="train-title">训练与模型</h2>
-              </div>
-              <span class="section-caption">同一份契约，两个训练后端</span>
+            <div class="section-heading section-heading-lean">
+              <h2 id="train-title">训练与模型</h2>
             </div>
             <div class="train-layout">
               <article class="panel model-panel">
-                <div class="panel-heading">
-                  <div>
-                    <span class="card-kicker">MODEL REGISTRY</span>
-                    <h2>模型版本</h2>
-                  </div>
+                <div class="panel-heading panel-heading-lean"><h2>模型版本</h2>
                   <button
                     class="button button-ghost button-small"
                     id="contract-run-button"
@@ -573,9 +444,6 @@
                     校验契约
                   </button>
                 </div>
-                <p class="panel-intro">
-                  运控策略使用 CPU ONNX 单线程；视觉、语音等感知模型使用 X5 对应的 BPU 制品。
-                </p>
                 <div class="model-summary" id="model-summary">
                   <div class="empty-inline">等待模型台账加载</div>
                 </div>
@@ -593,7 +461,6 @@
                 <div class="run-progress-card" id="run-progress-card" hidden>
                   <div class="run-progress-heading">
                     <div>
-                      <span class="card-kicker">LATEST RUN</span>
                       <strong id="run-progress-title">等待训练任务</strong>
                     </div>
                     <span class="state-badge state-neutral" id="run-progress-status">—</span>
@@ -635,17 +502,10 @@
                       autocomplete="off"
                     />
                   </div>
-                  <p class="small-note">
-                    没有 CUDA 时可以先跑 Mock 验证协议；它不会伪造可部署模型。
-                  </p>
                 </details>
               </article>
               <article class="panel robogo-panel">
-                <div class="panel-heading">
-                  <div>
-                    <span class="card-kicker">TRAINING CONNECTOR</span>
-                    <h2>算力后端</h2>
-                  </div>
+                <div class="panel-heading panel-heading-lean"><h2>算力后端</h2>
                   <span id="robogo-state-badge" class="state-badge state-neutral">检查中</span>
                 </div>
                 <div class="backend-choice">
@@ -663,9 +523,7 @@
                   <div><span id="robogo-board-label">可见算力资源</span><strong id="robogo-board-count">—</strong></div>
                   <div><span id="robogo-machine-label">开发机</span><strong id="robogo-machine-count">—</strong></div>
                 </div>
-                <p id="robogo-message" class="panel-intro">
-                  本地 worker 为首选；RoboGo 仅在显式登录时读取聚合状态。
-                </p>
+                <p id="robogo-message" class="small-note">—</p>
                 <div class="robogo-actions">
                   <button
                     class="button button-ghost button-small"
@@ -691,12 +549,8 @@
             hidden
             aria-labelledby="evaluate-title"
           >
-            <div class="section-heading">
-              <div>
-                <span class="section-kicker">STEP 03 · EVALUATE</span>
-                <h2 id="evaluate-title">评测与效果</h2>
-              </div>
-              <span class="section-caption">先看证据，再决定是否上板</span>
+            <div class="section-heading section-heading-lean">
+              <h2 id="evaluate-title">评测与效果</h2>
             </div>
             <div class="evaluation-banner">
               <div class="evaluation-status-mark" id="eval-status-mark">○</div>
@@ -717,12 +571,7 @@
             </div>
             <div class="evaluation-grid">
               <article class="panel metrics-panel">
-                <div class="panel-heading">
-                  <div>
-                    <span class="card-kicker">KEY METRICS</span>
-                    <h2>关键指标</h2>
-                  </div>
-                  <span class="panel-caption">没有数据时保持为空</span>
+                <div class="panel-heading panel-heading-lean"><h2>关键指标</h2>
                 </div>
                 <div class="metric-grid metric-grid-large">
                   <div class="metric metric-contract">
@@ -734,19 +583,10 @@
                     <strong id="eval-latency">—</strong><span>控制延迟</span>
                   </div>
                 </div>
-                <p class="small-note" id="eval-metrics-note">
-                  真实成功率、跌倒率和延迟需要训练 worker 或 X5 Agent
-                  回写指标；平台不会用默认值冒充评测结果。
-                </p>
+                <p class="small-note" id="eval-metrics-note">指标由训练 worker 或 X5 Agent 回写。</p>
               </article>
               <article class="panel comparison-panel">
-                <div class="panel-heading">
-                  <div>
-                    <span class="card-kicker">SIM → REAL</span>
-                    <h2>效果对比</h2>
-                  </div>
-                  <span class="panel-caption">同一模型、同一版本</span>
-                </div>
+                <div class="panel-heading panel-heading-lean"><h2>效果对比</h2></div>
                 <div class="comparison-chart" aria-label="仿真与真机效果对比">
                   <div class="chart-row">
                     <span>仿真</span>
@@ -770,18 +610,11 @@
               </article>
             </div>
             <article class="panel telemetry-panel" aria-labelledby="telemetry-title">
-              <div class="panel-heading">
-                <div>
-                  <span class="card-kicker">SIMREAL EVIDENCE</span>
-                  <h2 id="telemetry-title">遥测回放与证据</h2>
-                </div>
+              <div class="panel-heading panel-heading-lean"><h2>遥测回放与证据</h2>
                 <span class="state-badge state-neutral" id="telemetry-state">尚未导入</span>
               </div>
               <div class="telemetry-intro">
-                <p>
-                  把 X5 Board Agent 或浏览器录制的 JSONL
-                  拖进来，先在浏览器本地检查时序、频率和跌倒事件；原始数据不会自动上传。
-                </p>
+                <p>导入 X5 Agent 或浏览器录制的 JSONL，本地解析、不上传。</p>
                 <label
                   class="button button-ghost button-small file-input-button telemetry-file-button"
                 >
@@ -813,7 +646,6 @@
               <div class="telemetry-visuals" id="telemetry-visuals" hidden>
                 <div class="telemetry-chart-block">
                   <div class="telemetry-chart-heading">
-                    <span class="card-kicker">REWARD TIMELINE</span>
                     <span class="telemetry-chart-legend">
                       <i class="legend-swatch legend-reward"></i>奖励
                       <i class="legend-swatch legend-fall"></i>跌倒
@@ -835,7 +667,6 @@
                 <div class="telemetry-heatmap-grid">
                   <div class="telemetry-chart-block">
                     <div class="telemetry-chart-heading">
-                      <span class="card-kicker">OBSERVATION</span>
                       <span class="panel-caption" id="telemetry-obs-caption">—</span>
                     </div>
                     <canvas
@@ -849,7 +680,6 @@
                   </div>
                   <div class="telemetry-chart-block">
                     <div class="telemetry-chart-heading">
-                      <span class="card-kicker">ACTION</span>
                       <span class="panel-caption" id="telemetry-action-caption">—</span>
                     </div>
                     <canvas
@@ -892,12 +722,7 @@
             </article>
             <div class="evaluation-next">
               <span class="next-line" id="evaluation-next-line"></span>
-              <div>
-                <strong id="evaluation-next-title">下一步：通过评测后生成 X5 预检计划</strong
-                ><small id="evaluation-next-copy"
-                  >没有真实指标时，只能回到训练或继续仿真，不能直接进入 Live。</small
-                >
-              </div>
+              <strong id="evaluation-next-title">下一步：通过评测后生成 X5 预检计划</strong>
               <button
                 class="button button-primary button-small"
                 id="evaluation-next-button"
@@ -917,20 +742,12 @@
             hidden
             aria-labelledby="deploy-title"
           >
-            <div class="section-heading">
-              <div>
-                <span class="section-kicker">STEP 04 · DEPLOY</span>
-                <h2 id="deploy-title">部署到 RDK X5</h2>
-              </div>
-              <span class="section-caption">先预检，再让真机接管</span>
+            <div class="section-heading section-heading-lean">
+              <h2 id="deploy-title">部署到 RDK X5</h2>
             </div>
             <div class="deploy-layout">
               <article class="panel board-panel">
-                <div class="panel-heading">
-                  <div>
-                    <span class="card-kicker">RDK TARGET</span>
-                    <h2>设备预检</h2>
-                  </div>
+                <div class="panel-heading panel-heading-lean"><h2>设备预检</h2>
                   <span class="deploy-safe">NO MOTOR</span>
                 </div>
                 <div class="board-summary" id="board-summary">
@@ -950,7 +767,6 @@
                 </p>
               </article>
               <article class="panel deploy-flow-panel">
-                <span class="card-kicker">RELEASE GATE</span>
                 <h2>上线闸门</h2>
                 <div class="release-steps">
                   <div class="release-step is-ready" data-release-step="contract">
@@ -982,20 +798,12 @@
             hidden
             aria-labelledby="records-title"
           >
-            <div class="section-heading">
-              <div>
-                <span class="section-kicker">EVIDENCE & VERSIONS</span>
-                <h2 id="records-title">记录与版本</h2>
-              </div>
-              <span class="section-caption">每一次运行都有证据</span>
+            <div class="section-heading section-heading-lean">
+              <h2 id="records-title">记录与版本</h2>
             </div>
             <div class="records-layout records-single">
               <article class="panel history-panel">
-                <div class="panel-heading">
-                  <div>
-                    <span class="card-kicker">AUDIT TRAIL</span>
-                    <h2>运行与发布记录</h2>
-                  </div>
+                <div class="panel-heading panel-heading-lean"><h2>运行与发布记录</h2>
                   <span class="panel-caption" id="records-count">最近 30 条</span>
                 </div>
                 <div class="records-toolbar" role="toolbar" aria-label="记录筛选">
@@ -1061,23 +869,15 @@
             hidden
             aria-labelledby="station-title"
           >
-            <div class="section-heading">
-              <div>
-                <span class="section-kicker">HOST STATION · 上位机</span>
-                <h2 id="station-title">板端上位机</h2>
-              </div>
-              <span class="section-caption" id="station-caption">实时状态 · 相机 · 只读命令</span>
+            <div class="section-heading section-heading-lean">
+              <h2 id="station-title">板端上位机</h2>
             </div>
             <div class="station-notice" id="station-notice" role="status" aria-live="polite" hidden>
               上位机未就绪：未配置板端 agent 或板卡设备。
             </div>
             <div class="station-layout">
               <article class="panel station-status-panel">
-                <div class="panel-heading">
-                  <div>
-                    <span class="card-kicker">LIVE STATUS</span>
-                    <h2>板卡实时状态</h2>
-                  </div>
+                <div class="panel-heading panel-heading-lean"><h2>板卡实时状态</h2>
                   <span class="station-live-badge" id="station-live-badge" hidden>
                     <span class="station-live-dot" aria-hidden="true"></span>LIVE
                   </span>
@@ -1130,11 +930,7 @@
               </article>
 
               <article class="panel station-camera-panel">
-                <div class="panel-heading">
-                  <div>
-                    <span class="card-kicker">CAMERA</span>
-                    <h2>板载相机</h2>
-                  </div>
+                <div class="panel-heading panel-heading-lean"><h2>板载相机</h2>
                   <span class="panel-caption">MJPEG 流（只读）</span>
                 </div>
                 <div class="station-camera-frame">
@@ -1156,11 +952,7 @@
               </article>
 
               <article class="panel station-command-panel">
-                <div class="panel-heading">
-                  <div>
-                    <span class="card-kicker">READ-ONLY COMMANDS</span>
-                    <h2>命令面板</h2>
-                  </div>
+                <div class="panel-heading panel-heading-lean"><h2>命令面板</h2>
                   <span class="panel-caption">白名单只读命令</span>
                 </div>
                 <div class="station-command-grid" id="station-command-grid">
@@ -1226,7 +1018,6 @@
     <dialog class="run-dialog" id="run-detail-dialog" aria-labelledby="run-detail-title">
       <div class="run-dialog-heading">
         <div>
-          <span class="card-kicker">RUN DETAIL</span>
           <h2 id="run-detail-title">运行详情</h2>
         </div>
         <button class="button button-ghost button-small" id="run-detail-close" type="button">
@@ -1238,6 +1029,6 @@
       </div>
     </dialog>
     <div class="toast-region" id="toast-region" aria-live="polite" aria-atomic="true"></div>
-    <script src="./app.js?v=duck-lab-15" type="module"></script>
+    <script src="./app.js?v=duck-lab-16" type="module"></script>
   </body>
 </html>

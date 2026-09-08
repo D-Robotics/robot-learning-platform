@@ -356,8 +356,7 @@ function setView(view, { updateHash = true, scroll = true } = {}) {
     const active = control.dataset.viewTarget === wanted;
     const isNavigationControl =
       control.classList.contains('nav-item') ||
-      control.classList.contains('module-item') ||
-      control.classList.contains('workflow-node');
+      control.classList.contains('module-item');
     control.classList.toggle('is-active', active && isNavigationControl);
     // Keep one canonical current-page announcement for screen readers. The
     // module cards and workflow strip still receive the visual active class,
@@ -567,16 +566,6 @@ function renderIntegrations() {
   setText('sidebar-kit-name', profile.kitName);
   setText('kit-card-title', profile.displayName + ' 套件');
   const microduckProduct = profile.id === 'microduck';
-  setText(
-    'hero-eyebrow',
-    microduckProduct ? 'SIM2REAL · MICRODUCK · X5' : 'SIM2REAL · RDK DUCK · X5',
-  );
-  setText(
-    'hero-lede',
-    microduckProduct
-      ? '面向 RDK X5 和配件的 Duck 一站式工作台。先在浏览器看懂动作，再选择本地或 RoboGo 训练，最后经过安全预检部署到板端。'
-      : '面向 RDK X5 的 RDK Duck 工作台。先校验真实 manifest，再接本地 headless worker，最后经过安全预检部署到板端。',
-  );
   const kitStatusLabel = $('kit-status-label');
   const kitStatus = kitStatusLabel?.closest('.kit-status');
   if (kitStatusLabel) {
@@ -584,11 +573,7 @@ function renderIntegrations() {
   }
   kitStatus?.classList.toggle('kit-status-ready', Boolean(model));
   kitStatus?.classList.toggle('kit-status-waiting', !model);
-  setText(
-    'hero-contract-id',
-    model?.manifest?.contract?.id || profile.contractId || '等待 manifest',
-  );
-  setText('hero-updated', '最后刷新 ' + formatDate(new Date().toISOString()));
+  setText('hero-updated', '更新于 ' + formatDate(new Date().toISOString()));
   setText(
     'status-simulator',
     browserAvailable ? '浏览器 MicroDuck' : profile.displayName + ' 仿真适配器',
@@ -732,12 +717,10 @@ function renderIntegrations() {
     $(id)?.toggleAttribute('disabled', state.runSubmitting || !model);
   }
   const simulatorFrame = $('simulator-frame');
-  const simulatorKicker = $('simulator-kicker');
   const simulatorTitle = $('simulator-title');
   const simulatorLiveLabel = $('simulator-live-label');
   const simulatorLiveText = $('simulator-live-text');
   const simulatorRuntimeLabel = $('simulator-runtime-label');
-  if (simulatorKicker) simulatorKicker.textContent = microduckProduct ? 'BROWSER SIMULATION' : 'SIMULATION ADAPTER';
   if (simulatorTitle) simulatorTitle.textContent = microduckProduct ? 'MicroDuck 仿真场' : 'RDK Duck 仿真适配器';
   if (simulatorFrame) simulatorFrame.title = microduckProduct ? 'MicroDuck 浏览器仿真' : 'RDK Duck 仿真适配器状态';
   if (simulatorLiveText) {
@@ -826,24 +809,6 @@ function renderIntegrations() {
       : device?.boardPlatform
         ? '板型已探测，等待只读预检'
         : '尚未探测板型';
-  }
-  const targetLabel = targetReady
-    ? device?.boardPlatform || 'RDK X5'
-    : device
-      ? '已登记 · 待预检'
-      : '待选择设备';
-  setText('hero-target-label', targetLabel);
-  const targetDot = $('hero-target-dot');
-  targetDot?.classList.toggle('is-ready', targetReady);
-  targetDot?.classList.toggle('is-pending', Boolean(device) && !targetReady);
-  targetDot?.classList.toggle('is-empty', !device);
-  const target = document.querySelector('.hero-target');
-  if (target) {
-    target.title = targetReady
-      ? '只读板端预检已通过；Canary / Live 仍需显式批准'
-      : device
-        ? '设备已登记，等待只读板端预检'
-        : '请选择设备后生成只读板端预检计划';
   }
 
   const robogoBadge = $('robogo-state-badge');
@@ -1161,7 +1126,7 @@ function renderRunMetricCards(record) {
   );
   if (!cards.length) return '';
   return (
-    '<div><span class="card-kicker">METRICS</span><div class="run-metric-grid">' +
+    '<div><strong class="run-detail-block-title">指标</strong><div class="run-metric-grid">' +
     cards.join('') +
     '</div></div>'
   );
@@ -1262,12 +1227,12 @@ function openRecordDetails(record) {
       ? renderRunMetricCards(record) + renderRunMetricsRaw(record)
       : '') +
     (isRun && record.checkpoint
-      ? '<div><span class="card-kicker">CHECKPOINT</span><pre class="run-detail-code">' +
+      ? '<div><strong class="run-detail-block-title">Checkpoint</strong><pre class="run-detail-code">' +
         escapeHtml(JSON.stringify(record.checkpoint, null, 2)) +
         '</pre></div>'
       : '') +
     (isArtifact
-      ? '<div><span class="card-kicker">ARTIFACT METADATA</span><pre class="run-detail-code">' +
+      ? '<div><strong class="run-detail-block-title">制品元数据</strong><pre class="run-detail-code">' +
         escapeHtml(
           JSON.stringify(
             {
@@ -1284,7 +1249,7 @@ function openRecordDetails(record) {
         '</pre></div>'
       : '') +
     (isTelemetry
-      ? '<div><span class="card-kicker">TELEMETRY SUMMARY</span><pre class="run-detail-code">' +
+      ? '<div><strong class="run-detail-block-title">遥测摘要</strong><pre class="run-detail-code">' +
         escapeHtml(JSON.stringify(record.telemetrySummary || {}, null, 2)) +
         '</pre></div>'
       : '') +
@@ -2293,7 +2258,6 @@ function renderNextAction() {
     label = '打开记录与版本 →';
   }
   setText('next-action-title', title);
-  setText('next-action-copy', copy);
   const button = $('next-action-button');
   if (button) {
     button.dataset.viewTarget = view;
@@ -2303,10 +2267,9 @@ function renderNextAction() {
 
 function renderEvaluationNext() {
   const title = $('evaluation-next-title');
-  const copy = $('evaluation-next-copy');
   const button = $('evaluation-next-button');
   const line = $('evaluation-next-line');
-  if (!title || !copy || !button || !line) return;
+  if (!title || !button || !line) return;
   // Keep the CTA inert until the account-scoped overview has arrived.  The
   // initial paint runs before loadOverview(), so enabling this button here
   // would let a presenter click through a half-rendered workspace (and would
@@ -2318,9 +2281,6 @@ function renderEvaluationNext() {
     button.dataset.viewTarget = 'overview';
     delete button.dataset.action;
     title.textContent = state.authRequired ? '下一步：登录工作区' : '下一步：等待工作区加载';
-    copy.textContent = state.authRequired
-      ? '登录 RDK Studio 后重新加载，平台才会读取模型、设备和运行台账。'
-      : '工作区状态返回后，这里会根据当前模型和运行证据给出下一步。';
     line.style.background = 'var(--orange)';
     return;
   }
@@ -2336,7 +2296,6 @@ function renderEvaluationNext() {
   const releaseGradeEvidence = hasReleaseGradeEvidence(evidence, latest);
   if (!selectedModel()) {
     title.textContent = '下一步：先登记模型契约';
-    copy.textContent = '没有模型和契约，平台不会接受遥测或生成 X5 预检计划。';
     button.textContent = '去登记契约 →';
     button.dataset.viewTarget = 'contract';
     delete button.dataset.action;
@@ -2345,7 +2304,6 @@ function renderEvaluationNext() {
   }
   if (latest && ['queued', 'running'].includes(String(latest.status))) {
     title.textContent = '下一步：等待训练完成';
-    copy.textContent = '训练任务仍在运行，平台会自动刷新状态；完成后再导入或查看评测证据。';
     button.textContent = '查看训练任务 →';
     button.dataset.viewTarget = 'train';
     delete button.dataset.action;
@@ -2354,7 +2312,6 @@ function renderEvaluationNext() {
   }
   if (latest?.status === 'failed') {
     title.textContent = '下一步：处理失败任务';
-    copy.textContent = latest.summary || '修复契约或训练后端后再重试，失败任务不会自动重试。';
     button.textContent = '回到训练中心 →';
     button.dataset.viewTarget = 'train';
     delete button.dataset.action;
@@ -2363,8 +2320,6 @@ function renderEvaluationNext() {
   }
   if (mockRun && ['completed', 'ready'].includes(String(latest.status))) {
     title.textContent = '下一步：查看安全闸门（Mock）';
-    copy.textContent =
-      '协议演示已完成，但固定 Mock 指标和 checkpoint 不能用于发布；打开设备页查看只读预检与阻断原因。';
     button.textContent = '查看安全闸门 →';
     button.dataset.viewTarget = 'deploy';
     delete button.dataset.action;
@@ -2373,8 +2328,6 @@ function renderEvaluationNext() {
   }
   if (demoEvidence) {
     title.textContent = '下一步：查看演示安全闸门';
-    copy.textContent =
-      '这是合成演示证据，只用于验证导入、聚合和安全阻断；进入设备页可查看计划元数据，但它不会让真实预检通过。';
     button.textContent = '查看演示安全闸门 →';
     button.dataset.viewTarget = 'deploy';
     delete button.dataset.action;
@@ -2383,9 +2336,6 @@ function renderEvaluationNext() {
   }
   if (releaseGradeEvidence) {
     title.textContent = '下一步：生成 X5 只读预检计划';
-    copy.textContent = evidence
-      ? '遥测已在浏览器本地聚合；正式发布仍需要绑定 Run、选择板卡并执行只读预检。'
-      : '评测指标已回写；选择目标 X5 后先执行只读预检，Canary 和 Live 仍需板端 Agent。';
     button.textContent = '去做设备预检 →';
     button.dataset.viewTarget = 'deploy';
     delete button.dataset.action;
@@ -2394,8 +2344,6 @@ function renderEvaluationNext() {
   }
   if (hasEvaluation || evidence) {
     title.textContent = '下一步：查看安全闸门（来源未验证）';
-    copy.textContent =
-      '评测摘要可以查看和回放，但当前 source 由上传方声明；需要真实 worker 指标或显式 attested replay 才能推进发布。';
     button.textContent = '查看安全闸门 →';
     button.dataset.viewTarget = 'deploy';
     delete button.dataset.action;
@@ -2403,8 +2351,6 @@ function renderEvaluationNext() {
     return;
   }
   title.textContent = '下一步：导入一段遥测证据';
-  copy.textContent =
-    '支持 MicroDuck 浏览器录制或 X5 Board Agent JSONL；数据只在本地聚合，不会伪造评测指标。';
   button.textContent = '导入遥测文件 →';
   button.dataset.viewTarget = 'evaluate';
   button.dataset.action = 'import-telemetry';
@@ -2480,7 +2426,7 @@ function renderReleaseGate() {
     releaseReady
       ? '预检已通过'
       : mockRun
-        ? 'Mock 结果不可用于发布；需要真实评测'
+        ? 'Mock 不可部署；需要真实评测'
           : demoEvidence
             ? '合成证据仅用于演示；需要真实评测'
           : evidenceReady
@@ -2494,105 +2440,11 @@ function renderReleaseGate() {
 }
 
 function renderWorkflowProgress() {
-  const model = selectedModel();
-  const integrations = state.overview?.integrations || {};
-  const simulator = integrations.simulator || {};
-  const local = simulator.local || {};
-  const browserAvailable =
-    Boolean(state.overview) &&
-    Boolean(selectedProductProfile().simulatorPath) &&
-    simulator.browser?.available !== false;
-  const browserRunnable = browserAvailable && model?.builtin === true;
-  const localReady = local.available === true && local.reachable === true && local.healthy === true;
-  const robogoReady =
-    simulator.robogo?.available === true && integrations.robogo?.state === 'ready';
-  const latest = latestRun();
-  const evidence = currentTelemetry();
-  const demoEvidence = isSyntheticEvidence(evidence, latest);
-  const mockRun = latest?.mock === true;
-  const hasEvaluation = hasRealEvaluation(evidence, latest);
-  const hasMetrics = hasReleaseGradeEvidence(evidence, latest);
-  const deployment =
-    state.activeDeployment ||
-    deploymentsForCurrentModel().find(
-      (item) => item.modelId === model?.id && item.deviceId === state.selectedDeviceId,
-    );
-  const boardPreflightReady = Boolean(
-    !demoEvidence && deployment && ['ready', 'completed'].includes(deployment.status),
-  );
-  const realEvidenceReady = hasMetrics;
-  const preflightReady = boardPreflightReady && realEvidenceReady;
-  const activeRun = Boolean(latest && ['queued', 'running'].includes(String(latest.status)));
-  const completedRun = Boolean(latest && ['completed', 'ready'].includes(String(latest.status)));
-  const steps = {
-    simulate: model
-      ? browserRunnable
-        ? { state: 'current', label: '可开始' }
-        : demoEvidence
-          ? { state: 'current', label: '合成回放' }
-          : { state: 'blocked', label: '待挂载' }
-      : { state: 'blocked', label: '先选模型' },
-    train: !model
-      ? { state: 'blocked', label: '先选模型' }
-      : activeRun
-        ? { state: 'current', label: '进行中' }
-        : mockRun && completedRun
-          ? { state: 'demo', label: '协议演示' }
-          : completedRun
-            ? { state: 'ready', label: '已完成' }
-            : localReady || robogoReady
-              ? { state: 'current', label: '可开始' }
-              : { state: 'blocked', label: '待配置' },
-    evaluate:
-      mockRun && completedRun
-        ? { state: 'demo', label: '协议演示' }
-        : demoEvidence
-        ? { state: 'demo', label: '合成证据' }
-        : hasMetrics
-          ? { state: 'ready', label: '有结果' }
-          : hasEvaluation
-            ? { state: 'current', label: '来源未验证' }
-            : evidence
-              ? { state: 'current', label: '待上传' }
-              : completedRun
-                ? { state: 'current', label: '待证据' }
-                : { state: 'blocked', label: '待开始' },
-    deploy:
-      preflightReady && !mockRun && !demoEvidence
-        ? { state: 'ready', label: '已预检' }
-        : mockRun
-          ? { state: 'blocked', label: 'Mock 不可部署' }
-          : demoEvidence
-            ? { state: 'blocked', label: '合成证据不可部署' }
-            : boardPreflightReady
-              ? { state: 'current', label: '已预检 · 待真实评测' }
-              : hasMetrics || hasEvaluation || evidence
-                ? {
-                    state: 'current',
-                    label: hasEvaluation && !hasMetrics ? '需预检 · 来源未验证' : '需预检',
-                  }
-                : { state: 'blocked', label: '安全闸门' },
-  };
-  for (const [key, value] of Object.entries(steps)) {
-    const node = document.querySelector('[data-pipeline-step="' + key + '"]');
-    if (!node) continue;
-    node.classList.remove(
-      'pipeline-step-active',
-      'pipeline-step-current',
-      'pipeline-step-gated',
-      'is-demo',
-      'is-ready',
-      'is-current',
-      'is-blocked',
-      'is-locked',
-    );
-    node.classList.add('is-' + value.state);
-    if (value.state === 'current') node.classList.add('pipeline-step-current');
-    if (value.state === 'demo') node.classList.add('is-demo');
-    if (key === 'deploy' && value.state === 'blocked') node.classList.add('pipeline-step-gated');
-    const status = $('pipeline-' + key + '-state');
-    if (status) status.textContent = value.label;
-  }
+  // The workflow state used to be mirrored into a vertical pipeline on the
+  // overview and a horizontal strip above every view. Both were removed in the
+  // declutter pass; readiness now surfaces only through the next-action card,
+  // the status grid, and each step view itself.
+  return;
 }
 
 function renderRunProgress() {
@@ -2787,7 +2639,7 @@ async function loadOverview({ quiet = false } = {}) {
     await refreshActiveRuns();
     renderAll();
     await loadModelDetails();
-    setText('hero-updated', '最后刷新 ' + formatDate(new Date().toISOString()));
+    setText('hero-updated', '更新于 ' + formatDate(new Date().toISOString()));
   } catch (error) {
     state.serviceError = !(error instanceof ApiError && error.status === 401);
     if (!(error instanceof ApiError && error.status === 401) && !quiet) {
