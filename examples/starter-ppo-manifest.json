@@ -1,0 +1,58 @@
+{
+  "schemaVersion": 1,
+  "modelId": "starter-ppo-balance",
+  "displayName": "Starter PPO 平衡策略（CPU 真实训练）",
+  "version": "0.1.0",
+  "robot": {
+    "id": "rdk-duck",
+    "variant": "starter-kit"
+  },
+  "contract": {
+    "id": "rdk-duck-policy-starter-v1",
+    "robotId": "rdk-duck",
+    "jointCount": 12,
+    "observationSize": 42,
+    "actionSize": 12,
+    "controlHz": 50,
+    "physicsTimestepSeconds": 0.002,
+    "decimation": 10,
+    "observationLayout": [
+      { "name": "joint_cos", "size": 12 },
+      { "name": "joint_sin", "size": 12 },
+      { "name": "joint_velocity", "size": 12 },
+      { "name": "command", "size": 6 }
+    ]
+  },
+  "simulator": {
+    "backends": ["local"],
+    "policyArtifactId": "starter-ppo-policy",
+    "policyBundle": {
+      "defaultPolicyId": "balance",
+      "policies": [
+        {
+          "id": "balance",
+          "label": "平衡",
+          "artifactId": "starter-ppo-policy",
+          "description": "12 关节倒立摆链平衡：由 engines/starter-ppo 真实 PPO 训练导出。"
+        }
+      ]
+    }
+  },
+  "artifacts": [
+    {
+      "id": "starter-ppo-policy",
+      "role": "policy",
+      "name": "policy.onnx",
+      "kind": "source",
+      "format": "onnx",
+      "runtime": "cpu-onnx",
+      "workload": "locomotion",
+      "threads": 1,
+      "ref": "artifact://starter/starter-ppo-balance/0.1.0/policy.onnx"
+    }
+  ],
+  "metadata": {
+    "source": "engines/starter-ppo/runner.py",
+    "notes": "真 PPO 训练产物：numpy 向量化物理 + torch CPU PPO + ONNX 导出。deployable=false——上板仍需 X5 编译制品与只读预检。"
+  }
+}

@@ -80,7 +80,8 @@ function noStore(response: Response): void {
 
 function safeTelemetrySource(value: unknown): Sim2RealTelemetrySource | null {
   const source = String(value ?? '').trim();
-  return source === 'board-agent' || source === 'browser' || source === 'import' ? source : null;
+  if (!['board-agent', 'browser', 'import', 'demo-fixture'].includes(source)) return null;
+  return source as Sim2RealTelemetrySource;
 }
 
 function finiteVector(value: unknown, label: string): { value?: number[]; error?: string } {
@@ -291,6 +292,14 @@ function buildEvaluation(
   const first = samples[0]?.t;
   const last = samples.at(-1)?.t;
   const duration = first != null && last != null ? Math.max(0, last - first) : 0;
+  // A run can receive more than one chunk, and older clients did not enforce
+  // a single provenance value across those chunks.  If any chunk is the
+  // built-in presentation fixture, classify the complete replay as synthetic
+  // so a page refresh cannot turn a mixed run into apparently real evidence.
+  const sources = [...new Set(orderedRecords.map((record) => record.source))];
+  const replaySource = sources.includes('demo-fixture')
+    ? 'demo-fixture'
+    : sources[0] ?? 'import';
   const rewardValues = samples
     .map((sample) => sample.reward)
     .filter((value): value is number => value != null);
@@ -302,7 +311,7 @@ function buildEvaluation(
       : {}),
     ...(first == null ? {} : { firstTimestamp: first }),
     ...(last == null ? {} : { lastTimestamp: last }),
-    source: orderedRecords[0]?.source ?? 'import',
+    source: replaySource,
     chunkCount: orderedRecords.length,
     droppedCount: orderedRecords.reduce((sum, record) => sum + (record.droppedCount ?? 0), 0),
     ...(rewardValues.length
@@ -319,6 +328,11 @@ function buildEvaluation(
     warnings.push('reference and telemetry sample counts differ; paired prefix was evaluated');
   if (replay.droppedCount > 0)
     warnings.push(`${replay.droppedCount} source samples were reported as dropped`);
+  if (sources.length > 1) {
+    warnings.push(
+      `telemetry chunks contain mixed sources (${sources.join(', ')}); replay provenance is classified conservatively as ${replaySource}`,
+    );
+  }
   const action = reference ? vectorErrors(samples, reference, 'action') : {};
   const observation = reference ? vectorErrors(samples, reference, 'observation') : {};
   return {
@@ -386,7 +400,7 @@ export function registerSim2RealTelemetryRoutes(
         response,
         400,
         'SIM2REAL_INVALID_TELEMETRY',
-        'source 必须为 board-agent、browser 或 import',
+        'source 必须为 board-agent、browser、import 或 demo-fixture',
         { retryable: false },
       );
       return;

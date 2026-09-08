@@ -387,7 +387,12 @@ function parseBoardPreflight(output: string): Record<string, string> {
   return required.every((key) => fields[key]) ? fields : {};
 }
 
-function boardAgentUrl(): string | null {
+/**
+ * BoardAgent base URL after the SSRF-safe parse: plain HTTP is limited to
+ * loopback; remote agents must use TLS; credentials/query/hash are rejected.
+ * Exported for the board-station proxy, which shares the same rule.
+ */
+export function boardAgentUrl(): string | null {
   const raw = String(process.env.RDK_SIM2REAL_BOARD_AGENT_URL ?? '').trim().replace(/\/+$/, '');
   if (!raw) return null;
   try {

@@ -27,6 +27,7 @@ URL、manifest、日志或 OpenAPI 示例里。
 
 ```text
 GET overview
+  → GET models / runs / deployments (按需局部刷新)
   → POST models/validate
   → POST models
   → POST runs (backend=local / robogo, with Idempotency-Key)
@@ -35,6 +36,9 @@ GET overview
   → POST deployments (mode=preflight)
   → POST deployments/{id}/preflight
 ```
+
+遥测 `source` 可以是 `board-agent`、`browser`、`import` 或 `demo-fixture`；最后一个值只
+用于内置演示样例，服务会保留这个来源标记，刷新后仍不会把合成证据当成真实评测。
 
 `preflight` 是固定的只读板端探针。reference BoardAgent 返回 `mock=true` 时，服务会
 明确保持 `409 SIM2REAL_PREFLIGHT_MOCK_ONLY`，不会把协议演练当成真机就绪，也不会执行

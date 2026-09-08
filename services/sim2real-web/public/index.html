@@ -5,9 +5,10 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="description" content="面向 RDK X5 的 Duck 仿真、训练与部署平台" />
     <title>RDK Duck Sim2Real Lab</title>
-    <link rel="stylesheet" href="./styles.css?v=duck-lab-02" />
+    <link rel="stylesheet" href="./styles.css?v=duck-lab-09" />
   </head>
   <body>
+    <a class="skip-link" href="#main-content">跳到主要内容</a>
     <div class="app-shell">
       <header class="topbar">
         <a class="brand" href="./" aria-label="RDK Duck Sim2Real Lab 首页">
@@ -22,7 +23,7 @@
           ><strong id="current-project-name">MicroDuck · X5 Starter</strong
           ><span class="account-pill" id="account-status" hidden></span
           ><span class="context-divider" id="account-divider" hidden></span
-          ><span class="service-pill"
+          ><span class="service-pill" id="service-pill"
             ><i class="status-dot"></i><span id="service-status">连接中</span></span
           >
         </div>
@@ -35,6 +36,15 @@
             rel="noreferrer"
             hidden
             >登录工作区</a
+          ><button
+            class="button button-ghost"
+            id="presentation-toggle"
+            type="button"
+            aria-pressed="false"
+            title="切换适合投屏的演示视图"
+          >
+            演示视图
+          </button
           ><button class="button button-ghost" id="refresh-button" type="button">刷新</button
           ><a class="button button-ghost" href="/rdkstudio/" target="_blank" rel="noreferrer"
             >RDK Studio ↗</a
@@ -50,7 +60,15 @@
               <strong id="sidebar-product-name">MicroDuck</strong
               ><span id="sidebar-kit-name">RDK X5 Starter Kit</span>
             </div>
-            <span class="sidebar-project-state">LIVE</span>
+            <span
+              class="sidebar-project-state is-waiting"
+              id="workspace-readiness"
+              data-state="waiting"
+              role="status"
+              aria-live="polite"
+              title="正在检查工作区"
+              >检查中</span
+            >
           </div>
           <div class="nav-label">Sim2Real 工作流</div>
           <nav class="workflow-nav" aria-label="Duck 工作流">
@@ -83,6 +101,10 @@
               <span class="nav-index">06</span
               ><span><strong>记录与版本</strong><small>模型、运行、审计</small></span>
             </button>
+            <button class="nav-item" type="button" data-view-target="station">
+              <span class="nav-index">07</span
+              ><span><strong>上位机</strong><small>状态、相机、只读命令</small></span>
+            </button>
           </nav>
           <div class="sidebar-divider"></div>
           <div class="nav-label">平台模块</div>
@@ -111,6 +133,10 @@
               <span class="module-icon">▣</span
               ><span><strong>记录与审计</strong><small>版本、制品、事件</small></span>
             </button>
+            <button class="module-item" type="button" data-view-target="station">
+              <span class="module-icon">◎</span
+              ><span><strong>上位机</strong><small>板端实时状态</small></span>
+            </button>
           </nav>
           <div class="sidebar-divider sidebar-divider-compact"></div>
           <div class="nav-label">快速入口</div>
@@ -134,12 +160,12 @@
           </div>
         </aside>
 
-        <main class="main-content">
+        <main class="main-content" id="main-content" tabindex="-1">
           <section class="hero">
             <div class="hero-copy">
-              <p class="eyebrow">SIM2REAL · SIMULATE · TRAIN · DEPLOY</p>
-              <h1>让一个动作，<em>走完</em>仿真到真机。</h1>
-              <p class="hero-lede">
+              <p class="eyebrow" id="hero-eyebrow">SIM2REAL · SIMULATE · TRAIN · DEPLOY</p>
+              <h1>让一个动作，<em>走完</em><br class="hero-break" />仿真到真机。</h1>
+              <p class="hero-lede" id="hero-lede">
                 面向 RDK X5 和配件的 Duck 一站式工作台。先在浏览器看懂动作，再选择本地或 RoboGo
                 训练，最后经过安全预检部署到板端。
               </p>
@@ -160,7 +186,8 @@
               ><strong id="hero-contract-id">microduck-policy-v1</strong
               ><span id="hero-updated">等待服务响应</span>
               <div class="hero-target">
-                <span class="target-dot"></span><span>目标板卡</span><b>RDK X5</b>
+                <span class="target-dot is-empty" id="hero-target-dot"></span
+                ><span>目标平台</span><b id="hero-target-label">待选择设备</b>
               </div>
             </div>
           </section>
@@ -227,7 +254,7 @@
               <span class="field-label">目标设备</span
               ><select id="device-select" aria-label="选择板卡"></select>
             </div>
-            <div class="context-health">
+            <div class="context-health is-waiting" id="context-health">
               <span class="health-ring">●</span>
               <div><span>工作区状态</span><strong id="status-storage">检查中</strong></div>
             </div>
@@ -372,7 +399,7 @@
               <article class="status-card">
                 <span class="card-kicker">03 / TARGET</span>
                 <div class="status-card-main">
-                  <span class="status-icon status-icon-green">⌂</span
+                  <span class="status-icon status-icon-orange" id="status-board-icon">⌂</span
                   ><strong id="status-board">尚未选择板卡</strong>
                 </div>
                 <p id="status-board-detail">连接后进行预检</p>
@@ -396,25 +423,28 @@
                   <span class="panel-caption">可暂停、可回退</span>
                 </div>
                 <div class="pipeline pipeline-vertical">
-                  <div class="pipeline-step pipeline-step-active">
+                  <div class="pipeline-step pipeline-step-current" data-pipeline-step="simulate">
                     <span class="pipeline-number">01</span>
                     <div><strong>仿真与录制</strong><small>看懂动作，留下轨迹</small></div>
-                    <span class="step-state">进行中</span>
+                    <span class="step-state" id="pipeline-simulate-state" aria-live="polite">检查中</span>
                   </div>
                   <div class="pipeline-connector"></div>
-                  <div class="pipeline-step">
+                  <div class="pipeline-step" data-pipeline-step="train">
                     <span class="pipeline-number">02</span>
                     <div><strong>训练与导出</strong><small>本地 / RoboGo</small></div>
+                    <span class="step-state" id="pipeline-train-state" aria-live="polite">待开始</span>
                   </div>
                   <div class="pipeline-connector"></div>
-                  <div class="pipeline-step">
+                  <div class="pipeline-step" data-pipeline-step="evaluate">
                     <span class="pipeline-number">03</span>
                     <div><strong>评测与契约</strong><small>输入、动作、频率一致</small></div>
+                    <span class="step-state" id="pipeline-evaluate-state" aria-live="polite">待开始</span>
                   </div>
                   <div class="pipeline-connector"></div>
-                  <div class="pipeline-step pipeline-step-gated">
+                  <div class="pipeline-step pipeline-step-gated" data-pipeline-step="deploy">
                     <span class="pipeline-number">04</span>
                     <div><strong>预检与上板</strong><small>无电机 Canary → Live</small></div>
+                    <span class="step-state" id="pipeline-deploy-state" aria-live="polite">受控阻断</span>
                   </div>
                 </div>
               </article>
@@ -422,9 +452,11 @@
                 <div class="panel-heading">
                   <div>
                     <span class="card-kicker">STARTER KIT</span>
-                    <h2>RDK X5 Duck</h2>
+                    <h2 id="kit-card-title">MicroDuck 套件</h2>
                   </div>
-                  <span class="kit-status"><i class="status-dot"></i> READY</span>
+                  <span class="kit-status kit-status-waiting"
+                    ><i class="status-dot"></i><span id="kit-status-label">待配置</span></span
+                  >
                 </div>
                 <div class="kit-illustration">
                   <div class="kit-grid"></div>
@@ -567,10 +599,12 @@
               <article class="panel simulator-panel">
                 <div class="panel-heading">
                   <div>
-                    <span class="card-kicker">BROWSER SIMULATION</span>
-                    <h2>MicroDuck 仿真场</h2>
+                    <span class="card-kicker" id="simulator-kicker">BROWSER SIMULATION</span>
+                    <h2 id="simulator-title">MicroDuck 仿真场</h2>
                   </div>
-                  <span class="live-label"><i class="status-dot"></i> 参考策略</span>
+                  <span class="live-label is-waiting" id="simulator-live-label"
+                    ><i class="status-dot"></i><span id="simulator-live-text">资源待挂载</span></span
+                  >
                 </div>
                 <div class="simulator-frame-wrap">
                   <iframe
@@ -622,7 +656,7 @@
                 </div>
                 <div class="simulator-footer">
                   <span id="simulator-run-status">参考策略可用</span
-                  ><span class="mono">MuJoCo WASM · 50Hz</span>
+                  ><span class="mono" id="simulator-runtime-label">资源状态 · 需挂载</span>
                 </div>
               </article>
               <aside class="panel guide-panel">
@@ -755,11 +789,12 @@
                       type="text"
                       placeholder="checkpoint-1500"
                       autocomplete="off"
-                    /><input
+                    /><label class="field-label" for="resume-artifact-ref"
+                      >续训制品引用（可选）</label
+                    ><input
                       id="resume-artifact-ref"
                       type="text"
                       placeholder="artifact://model/checkpoint-1500"
-                      aria-label="续训制品引用"
                       autocomplete="off"
                     />
                   </div>
@@ -831,6 +866,9 @@
               <div>
                 <strong id="eval-run-status">尚未产生评测结果</strong>
                 <p id="eval-run-name">训练完成后，这里会显示最新一次运行的仿真/真机指标。</p>
+                <span class="state-badge state-demo evaluation-quality" id="eval-run-quality" hidden
+                  >Mock 协议演示</span
+                >
               </div>
               <button
                 class="button button-ghost button-small"
@@ -859,7 +897,7 @@
                     <strong id="eval-latency">—</strong><span>控制延迟</span>
                   </div>
                 </div>
-                <p class="small-note">
+                <p class="small-note" id="eval-metrics-note">
                   真实成功率、跌倒率和延迟需要训练 worker 或 X5 Agent
                   回写指标；平台不会用默认值冒充评测结果。
                 </p>
@@ -916,6 +954,14 @@
                     accept=".jsonl,.json,.ndjson,application/json,text/plain"
                   />
                 </label>
+                <button
+                  class="button button-quiet button-small"
+                  type="button"
+                  id="telemetry-demo-button"
+                  title="载入 8 帧合成证据，仅用于演示页面流程"
+                >
+                  载入合成演示证据
+                </button>
               </div>
               <div class="telemetry-summary" id="telemetry-summary">
                 <div class="empty-inline">等待导入遥测；训练完成后可用它做仿真 / 真机对照。</div>
@@ -925,6 +971,64 @@
                 <div class="telemetry-timeline-meta">
                   <span id="telemetry-timeline-start">0.00s</span
                   ><span id="telemetry-timeline-end">0.00s</span>
+                </div>
+              </div>
+              <div class="telemetry-visuals" id="telemetry-visuals" hidden>
+                <div class="telemetry-chart-block">
+                  <div class="telemetry-chart-heading">
+                    <span class="card-kicker">REWARD TIMELINE</span>
+                    <span class="telemetry-chart-legend">
+                      <i class="legend-swatch legend-reward"></i>奖励
+                      <i class="legend-swatch legend-fall"></i>跌倒
+                      <i class="legend-swatch legend-done"></i>完成
+                    </span>
+                  </div>
+                  <canvas
+                    id="telemetry-reward-canvas"
+                    class="telemetry-canvas"
+                    width="720"
+                    height="200"
+                    role="img"
+                    aria-label="奖励随时间变化曲线"
+                  ></canvas>
+                  <p class="telemetry-chart-note small-note" id="telemetry-reward-note">
+                    奖励为逐帧原始值；跌倒 / 完成标记取自样本 done / fall 字段。
+                  </p>
+                </div>
+                <div class="telemetry-heatmap-grid">
+                  <div class="telemetry-chart-block">
+                    <div class="telemetry-chart-heading">
+                      <span class="card-kicker">OBSERVATION</span>
+                      <span class="panel-caption" id="telemetry-obs-caption">—</span>
+                    </div>
+                    <canvas
+                      id="telemetry-obs-heatmap"
+                      class="telemetry-canvas telemetry-heatmap"
+                      width="720"
+                      height="240"
+                      role="img"
+                      aria-label="观测向量随时间热力图"
+                    ></canvas>
+                  </div>
+                  <div class="telemetry-chart-block">
+                    <div class="telemetry-chart-heading">
+                      <span class="card-kicker">ACTION</span>
+                      <span class="panel-caption" id="telemetry-action-caption">—</span>
+                    </div>
+                    <canvas
+                      id="telemetry-action-heatmap"
+                      class="telemetry-canvas telemetry-heatmap"
+                      width="720"
+                      height="240"
+                      role="img"
+                      aria-label="动作向量随时间热力图"
+                    ></canvas>
+                  </div>
+                </div>
+                <div class="telemetry-heatmap-legend">
+                  <i class="heatmap-scale"></i>
+                  <span id="telemetry-heatmap-range">—</span>
+                  <span class="small-note">按维度均值归一化的逐帧值（蓝 → 白 → 红）</span>
                 </div>
               </div>
               <div class="telemetry-actions">
@@ -944,7 +1048,9 @@
                 >
                   清除本地证据
                 </button>
-                <span class="small-note">只显示聚合统计，不替代正式评测报告。</span>
+                <span class="small-note" id="telemetry-source-note"
+                  >只显示聚合统计，不替代正式评测报告。</span
+                >
               </div>
             </article>
             <div class="evaluation-next">
@@ -960,8 +1066,10 @@
                 id="evaluation-next-button"
                 type="button"
                 data-view-target="deploy"
+                aria-disabled="true"
+                disabled
               >
-                去做预检 →
+                等待服务状态…
               </button>
             </div>
           </section>
@@ -1058,13 +1166,12 @@
                   <span class="panel-caption" id="records-count">最近 30 条</span>
                 </div>
                 <div class="records-toolbar" role="toolbar" aria-label="记录筛选">
-                  <div class="record-tabs" role="tablist" aria-label="记录类型">
+                  <div class="record-tabs" role="group" aria-label="记录类型筛选">
                     <button
                       class="record-tab is-active"
                       type="button"
                       data-record-tab="all"
-                      role="tab"
-                      aria-selected="true"
+                      aria-pressed="true"
                     >
                       全部
                     </button>
@@ -1072,8 +1179,7 @@
                       class="record-tab"
                       type="button"
                       data-record-tab="run"
-                      role="tab"
-                      aria-selected="false"
+                      aria-pressed="false"
                     >
                       Runs
                     </button>
@@ -1081,8 +1187,7 @@
                       class="record-tab"
                       type="button"
                       data-record-tab="deploy"
-                      role="tab"
-                      aria-selected="false"
+                      aria-pressed="false"
                     >
                       发布
                     </button>
@@ -1090,8 +1195,7 @@
                       class="record-tab"
                       type="button"
                       data-record-tab="artifact"
-                      role="tab"
-                      aria-selected="false"
+                      aria-pressed="false"
                     >
                       制品
                     </button>
@@ -1099,8 +1203,7 @@
                       class="record-tab"
                       type="button"
                       data-record-tab="telemetry"
-                      role="tab"
-                      aria-selected="false"
+                      aria-pressed="false"
                     >
                       遥测
                     </button>
@@ -1118,13 +1221,169 @@
               </article>
             </div>
           </section>
+
+          <section
+            class="view-section"
+            data-view-section="station"
+            hidden
+            aria-labelledby="station-title"
+          >
+            <div class="section-heading">
+              <div>
+                <span class="section-kicker">HOST STATION · 上位机</span>
+                <h2 id="station-title">板端上位机</h2>
+              </div>
+              <span class="section-caption" id="station-caption">实时状态 · 相机 · 只读命令</span>
+            </div>
+            <div class="station-notice" id="station-notice" role="status" aria-live="polite" hidden>
+              上位机未就绪：未配置板端 agent 或板卡设备。
+            </div>
+            <div class="station-layout">
+              <article class="panel station-status-panel">
+                <div class="panel-heading">
+                  <div>
+                    <span class="card-kicker">LIVE STATUS</span>
+                    <h2>板卡实时状态</h2>
+                  </div>
+                  <span class="station-live-badge" id="station-live-badge" hidden>
+                    <span class="station-live-dot" aria-hidden="true"></span>LIVE
+                  </span>
+                </div>
+                <div class="station-device-line" id="station-device-line">
+                  目标板卡：<span id="station-device-name">（未选择）</span>
+                </div>
+                <div class="station-metric-grid" id="station-metric-grid">
+                  <div class="station-metric-card">
+                    <span class="station-metric-label">CPU 占用</span>
+                    <span class="station-metric-value" id="station-cpu">--</span>
+                    <span class="station-metric-sub" id="station-cpu-temp">--</span>
+                  </div>
+                  <div class="station-metric-card">
+                    <span class="station-metric-label">内存</span>
+                    <span class="station-metric-value" id="station-memory">--</span>
+                    <span class="station-metric-sub" id="station-memory-sub">--</span>
+                  </div>
+                  <div class="station-metric-card">
+                    <span class="station-metric-label">网络 ↓/↑</span>
+                    <span class="station-metric-value" id="station-network">--</span>
+                    <span class="station-metric-sub" id="station-network-sub">--</span>
+                  </div>
+                  <div class="station-metric-card">
+                    <span class="station-metric-label">电源</span>
+                    <span class="station-metric-value" id="station-power">--</span>
+                    <span class="station-metric-sub" id="station-power-sub">--</span>
+                  </div>
+                  <div class="station-metric-card">
+                    <span class="station-metric-label">运行时长</span>
+                    <span class="station-metric-value" id="station-uptime">--</span>
+                    <span class="station-metric-sub">自 agent 启动</span>
+                  </div>
+                  <div class="station-metric-card">
+                    <span class="station-metric-label">磁盘</span>
+                    <span class="station-metric-value" id="station-disk">--</span>
+                    <span class="station-metric-sub" id="station-disk-sub">--</span>
+                  </div>
+                </div>
+                <div class="station-topics">
+                  <span class="station-topics-label">TROS 话题</span>
+                  <div class="station-topic-list" id="station-topic-list">
+                    <span class="station-topic-empty">等待状态流…</span>
+                  </div>
+                </div>
+                <p class="station-honesty-note" id="station-honesty-note" hidden>
+                  当前连接的是本地参考 BoardAgent（模拟数据，mock=true）；真机接入见
+                  docs/host-station.md。所有命令均为只读，本平台不提供电机/执行器控制通道。
+                </p>
+              </article>
+
+              <article class="panel station-camera-panel">
+                <div class="panel-heading">
+                  <div>
+                    <span class="card-kicker">CAMERA</span>
+                    <h2>板载相机</h2>
+                  </div>
+                  <span class="panel-caption">MJPEG 流（只读）</span>
+                </div>
+                <div class="station-camera-frame">
+                  <img
+                    id="station-camera-img"
+                    alt="板载相机实时画面"
+                    hidden
+                  />
+                  <div class="station-camera-placeholder" id="station-camera-placeholder">
+                    相机流未启动
+                  </div>
+                </div>
+                <div class="station-camera-toolbar">
+                  <button class="button button-quiet" type="button" id="station-camera-toggle">
+                    开启相机流
+                  </button>
+                  <span class="station-camera-state" id="station-camera-state">未连接</span>
+                </div>
+              </article>
+
+              <article class="panel station-command-panel">
+                <div class="panel-heading">
+                  <div>
+                    <span class="card-kicker">READ-ONLY COMMANDS</span>
+                    <h2>命令面板</h2>
+                  </div>
+                  <span class="panel-caption">白名单只读命令</span>
+                </div>
+                <div class="station-command-grid" id="station-command-grid">
+                  <button
+                    class="station-command-button"
+                    type="button"
+                    data-station-command="list-tros-nodes"
+                  >
+                    TROS 节点列表
+                  </button>
+                  <button
+                    class="station-command-button"
+                    type="button"
+                    data-station-command="list-tros-topics"
+                  >
+                    TROS 话题列表
+                  </button>
+                  <button
+                    class="station-command-button"
+                    type="button"
+                    data-station-command="disk-usage"
+                  >
+                    磁盘用量
+                  </button>
+                  <button
+                    class="station-command-button"
+                    type="button"
+                    data-station-command="service-status"
+                  >
+                    服务状态
+                  </button>
+                </div>
+                <pre class="station-command-output" id="station-command-output" hidden></pre>
+                <div class="station-log">
+                  <div class="station-log-heading">
+                    <span class="station-log-title">串流日志</span>
+                    <button
+                      class="button button-quiet station-log-clear"
+                      type="button"
+                      id="station-log-clear"
+                    >
+                      清空
+                    </button>
+                  </div>
+                  <ol class="station-log-list" id="station-log-list" aria-live="polite"></ol>
+                </div>
+              </article>
+            </div>
+          </section>
         </main>
       </div>
       <footer class="footer">
         <span>RDK Duck Lab · standalone web service</span
-        ><span
-          ><a href="/rdkstudio/">RDK Studio</a> ·
-          <a id="microduck-footer-link" href="./mujoco/microduck/">MicroDuck</a> ·
+          ><span
+          ><a href="/rdkstudio/">RDK Studio</a><span id="microduck-footer-item"> ·
+          <a id="microduck-footer-link" href="./mujoco/microduck/">MicroDuck</a></span> ·
           <a href="https://developer.d-robotics.cc/" target="_blank" rel="noreferrer"
             >RDK 文档 ↗</a
           ></span
@@ -1146,6 +1405,6 @@
       </div>
     </dialog>
     <div class="toast-region" id="toast-region" aria-live="polite" aria-atomic="true"></div>
-    <script src="./app.js?v=duck-lab-02" type="module"></script>
+    <script src="./app.js?v=duck-lab-09" type="module"></script>
   </body>
 </html>

@@ -7,7 +7,16 @@ import { spawnSync } from 'node:child_process';
 
 const root = process.cwd();
 const manifestPath = path.join(root, 'examples', 'rdk-duck-policy-manifest.json');
+const starterManifestPath = path.join(root, 'examples', 'starter-ppo-manifest.json');
 const telemetryPath = path.join(root, 'examples', 'telemetry-sample.jsonl');
+const microduckDemoTelemetryPath = path.join(
+  root,
+  'services',
+  'sim2real-web',
+  'public',
+  'demo',
+  'microduck-telemetry-sample.jsonl',
+);
 const localEnginePath = path.join(root, 'examples', 'local-engine-reference.mjs');
 
 function fail(message) {
@@ -42,6 +51,41 @@ if (!manifest.artifacts.some((item) => item.role === 'policy' && item.format ===
 for (const artifact of manifest.artifacts) {
   if (typeof artifact.ref !== 'string' || !artifact.ref.startsWith('artifact://'))
     fail(`artifact ${artifact.id || '<unknown>'} must use artifact://`);
+}
+
+// The starter-ppo manifest must stay aligned with the real engine in
+// engines/starter-ppo/runner.py: dimensions, layout sum, and the declared
+// CPU-onnx locomotion runtime all gate what demo:starter trains and exports.
+const starterManifest = readJson(starterManifestPath);
+if (starterManifest.schemaVersion !== 1) fail('starter manifest schemaVersion must be 1');
+if (starterManifest.robot?.id !== 'rdk-duck') fail('starter manifest must describe rdk-duck');
+const starterContract = starterManifest.contract;
+if (starterContract.observationSize !== 42 || starterContract.actionSize !== 12) {
+  fail('starter manifest must declare the engine 42D/12D contract');
+}
+const layoutTotal = (starterContract.observationLayout || []).reduce(
+  (sum, item) => sum + item.size,
+  0,
+);
+if (layoutTotal !== starterContract.observationSize) {
+  fail('starter manifest observationLayout must sum to observationSize');
+}
+if (starterContract.decimation !== 10 || starterContract.controlHz !== 50) {
+  fail('starter manifest must declare the engine 50Hz x decimation 10 loop');
+}
+const starterPolicy = (starterManifest.artifacts || []).find(
+  (item) => item.role === 'policy' && item.format === 'onnx',
+);
+if (
+  !starterPolicy ||
+  starterPolicy.runtime !== 'cpu-onnx' ||
+  starterPolicy.workload !== 'locomotion' ||
+  starterPolicy.threads !== 1
+) {
+  fail('starter manifest must declare the one-thread cpu-onnx locomotion policy');
+}
+if (!fs.existsSync(path.join(root, 'engines', 'starter-ppo', 'runner.py'))) {
+  fail('engines/starter-ppo/runner.py is missing');
 }
 
 // Execute the reference engine once with a disposable request/result pair so
@@ -112,6 +156,50 @@ for (const [index, line] of lines.entries()) {
   }
 }
 
+// The browser's one-click demo fixture is deliberately checked separately
+// from the RDK Duck example above. It must stay aligned with the MicroDuck
+// contract so a presentation cannot silently load the wrong vector shape.
+if (!fs.existsSync(microduckDemoTelemetryPath)) {
+  fail('MicroDuck demo telemetry fixture is missing');
+}
+const microduckLines = fs
+  .readFileSync(microduckDemoTelemetryPath, 'utf8')
+  .split(/\r?\n/)
+  .map((line) => line.trim())
+  .filter(Boolean);
+if (microduckLines.length < 3) fail('MicroDuck demo telemetry must contain a header and samples');
+const microduckHeader = readJsonFromLine(microduckLines[0], 0);
+if (
+  microduckHeader.type !== 'header' ||
+  microduckHeader.source !== 'demo-fixture' ||
+  microduckHeader.contractId !== 'microduck-policy-v1'
+) {
+  fail('MicroDuck demo telemetry header must identify the synthetic microduck-policy-v1 fixture');
+}
+let microduckPrevious = -Infinity;
+let microduckSamples = 0;
+for (const [index, line] of microduckLines.slice(1).entries()) {
+  const sample = readJsonFromLine(line, index + 1);
+  if (sample.type !== 'step') fail(`MicroDuck demo telemetry line ${index + 2} must be a step`);
+  if (!Number.isFinite(sample.t) || sample.t < microduckPrevious) {
+    fail(`MicroDuck demo telemetry line ${index + 2} has bad t`);
+  }
+  microduckPrevious = sample.t;
+  for (const [field, expectedSize] of [
+    ['observation', 61],
+    ['action', 14],
+  ]) {
+    if (!Array.isArray(sample[field]) || sample[field].length !== expectedSize) {
+      fail(`MicroDuck demo telemetry line ${index + 2} ${field} must contain exactly ${expectedSize} values`);
+    }
+    if (sample[field].some((value) => typeof value !== 'number' || !Number.isFinite(value))) {
+      fail(`MicroDuck demo telemetry line ${index + 2} ${field} contains a non-finite/non-number value`);
+    }
+  }
+  microduckSamples += 1;
+}
+if (microduckSamples < 2) fail('MicroDuck demo telemetry must contain at least two steps');
+
 function readJsonFromLine(line, index) {
   try {
     return JSON.parse(line);
@@ -120,4 +208,6 @@ function readJsonFromLine(line, index) {
   }
 }
 
-console.log(`[examples] PASS — manifest + ${lines.length} ordered telemetry samples`);
+console.log(
+  `[examples] PASS — manifests (rdk-duck + starter-ppo) + ${lines.length} ordered RDK Duck samples + ${microduckSamples} MicroDuck demo samples`,
+);

@@ -70,6 +70,7 @@ import {
 } from '../sim2real/robogo-runner.js';
 import { LOCAL_SIM2REAL_AUTH, type Sim2RealAuthPort } from '../sim2real/sim2real-auth.js';
 import { registerSim2RealTelemetryRoutes } from './sim2real-telemetry-routes.js';
+import { registerSim2RealBoardStationRoutes } from './sim2real-board-station-routes.js';
 
 type RunOnDevice = (
   request: Request,
@@ -671,6 +672,16 @@ export function createSim2RealRouter(
     { prefix },
   );
 
+  registerSim2RealBoardStationRoutes(
+    router,
+    {
+      auth,
+      requestOwner: (request, response) => requestOwner(request, response, auth),
+      visibleDevices: visibleDevicesForAuth,
+    },
+    { prefix },
+  );
+
   router.post(
     api('/models/validate'),
     wrapAsync(async (request, response) => {
@@ -1039,6 +1050,21 @@ export function createSim2RealRouter(
       } catch (error) {
         storageError(request, response, error, 'sim2real-model-create');
       }
+    }),
+  );
+
+  // Collection reads are intentionally thin wrappers over the account-scoped
+  // ledger helpers.  Keeping these alongside the overview endpoint gives API
+  // clients a stable way to refresh one resource without downloading the
+  // entire workspace snapshot.
+  router.get(
+    api('/models'),
+    wrapAsync(async (request, response) => {
+      const owner = requestOwner(request, response, auth);
+      if (owner === null) return;
+      noStore(response);
+      const models = await listSim2RealModels(owner);
+      response.json({ ok: true, models: models.map(publicModel) });
     }),
   );
 
@@ -1424,6 +1450,18 @@ export function createSim2RealRouter(
     }),
   );
 
+  router.get(
+    api('/runs'),
+    wrapAsync(async (request, response) => {
+      const owner = requestOwner(request, response, auth);
+      if (owner === null) return;
+      noStore(response);
+      const models = await listSim2RealModels(owner);
+      const runs = await listSim2RealRuns(owner);
+      response.json({ ok: true, runs: runs.map((run) => publicRun(run, models)) });
+    }),
+  );
+
   router.post(
     api('/deployments'),
     wrapAsync(async (request, response) => {
@@ -1528,6 +1566,21 @@ export function createSim2RealRouter(
       } catch (error) {
         storageError(request, response, error, 'sim2real-deployment-create');
       }
+    }),
+  );
+
+  router.get(
+    api('/deployments'),
+    wrapAsync(async (request, response) => {
+      const owner = requestOwner(request, response, auth);
+      if (owner === null) return;
+      noStore(response);
+      const models = await listSim2RealModels(owner);
+      const deployments = await listSim2RealDeployments(owner);
+      response.json({
+        ok: true,
+        deployments: deployments.map((deployment) => publicDeployment(deployment, models)),
+      });
     }),
   );
 

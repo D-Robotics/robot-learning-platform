@@ -32,7 +32,13 @@ export interface Sim2RealRunMetrics {
   iterations?: number;
 }
 
-export type Sim2RealTelemetrySource = 'board-agent' | 'browser' | 'import';
+/**
+ * Where a telemetry record came from.  `demo-fixture` is intentionally a
+ * first-class value so a canned presentation trace stays marked as synthetic
+ * after it is uploaded and the page is refreshed; it must never be treated as
+ * real simulator or X5 evidence by release gates.
+ */
+export type Sim2RealTelemetrySource = 'board-agent' | 'browser' | 'import' | 'demo-fixture';
 
 /** A bounded, normalized time-series sample accepted by the ingest endpoint. */
 export interface Sim2RealTelemetrySample {

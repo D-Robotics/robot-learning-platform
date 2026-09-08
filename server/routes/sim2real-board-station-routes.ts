@@ -1,0 +1,361 @@
+import { type Request, type Response, type Router } from 'express';
+
+import { sendApiError, wrapAsync } from '../sim2real/http-helpers.js';
+import { isBoardAgentConfigured } from '../sim2real/standalone-adapters.js';
+import { stationAgentFetch, stationAgentFetchStream } from '../sim2real/board-station-proxy.js';
+import type { Sim2RealAuthPort } from '../sim2real/sim2real-auth.js';
+import type { Device } from '../../shared/types.js';
+
+/**
+ * Read-only host-station command whitelist. Kept identical to
+ * STATION_COMMANDS in services/sim2real-web/board-station.mjs; the TS side
+ * owns the typed contract (allowJs is off) and the agent test asserts the two
+ * lists stay in sync.
+ */
+const STATION_COMMANDS: readonly { id: string; label: string; timeoutMs: number }[] = [
+  { id: 'list-tros-nodes', label: 'TROS 节点列表', timeoutMs: 8000 },
+  { id: 'list-tros-topics', label: 'TROS 话题列表', timeoutMs: 8000 },
+  { id: 'disk-usage', label: '磁盘用量', timeoutMs: 5000 },
+  { id: 'service-status', label: '服务状态', timeoutMs: 5000 },
+];
+
+type OwnedDevice = Device & { bridgeOwnerKey?: string };
+type OwnerResolver = (request: Request, response: Response) => string | undefined | null;
+
+export interface Sim2RealBoardStationRouteDeps {
+  auth: Sim2RealAuthPort;
+  requestOwner: OwnerResolver;
+  visibleDevices: (owner?: string) => Promise<readonly OwnedDevice[]>;
+}
+
+export interface Sim2RealBoardStationRouteOptions {
+  /** API prefix supplied by the owning Sim2Real router. */
+  prefix?: string;
+}
+
+const DEFAULT_SIM2REAL_API_PREFIX = '/api/sim2real';
+
+function normalizeStationApiPrefix(value: string | undefined): string {
+  const prefix = String(value ?? DEFAULT_SIM2REAL_API_PREFIX).trim();
+  if (!/^\/[A-Za-z0-9._~-]+(?:\/[A-Za-z0-9._~-]+)*$/.test(prefix)) {
+    throw new Error(`Invalid Sim2Real board-station API prefix: ${prefix}`);
+  }
+  return prefix;
+}
+
+function noStore(response: Response): void {
+  response.setHeader('Cache-Control', 'no-store');
+}
+
+/**
+ * Forward an agent ReadableStream to the response with a hard lifetime. The
+ * proxy holds exactly one upstream connection per downstream client; when
+ * either side closes (or the lifetime expires) both are torn down together.
+ */
+function pipeStationStream(
+  request: Request,
+  response: Response,
+  upstream: ReadableStream<Uint8Array>,
+  headers: Record<string, string>,
+  lifetimeMs = 15 * 60 * 1000,
+): void {
+  response.writeHead(200, {
+    ...headers,
+    'cache-control': 'no-store',
+    'x-board-station': 'proxy',
+  });
+  const lifetime = setTimeout(() => {
+    try {
+      response.destroy();
+    } catch {
+      /* downstream already gone */
+    }
+  }, lifetimeMs);
+  const cleanup = () => {
+    clearTimeout(lifetime);
+    try {
+      void upstream.cancel().catch(() => undefined);
+    } catch {
+      /* upstream already closed */
+    }
+    try {
+      response.destroy();
+    } catch {
+      /* downstream already closed */
+    }
+  };
+  request.on('close', cleanup);
+  response.on('error', cleanup);
+  const reader = upstream.getReader();
+  const pump = async (): Promise<void> => {
+    try {
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        if (value && !response.write(value)) {
+          await new Promise<void>((resolve) => response.once('drain', resolve));
+        }
+      }
+    } catch {
+      /* upstream closed mid-stream */
+    } finally {
+      cleanup();
+      try {
+        response.end();
+      } catch {
+        /* response already destroyed */
+      }
+    }
+  };
+  void pump();
+}
+
+/**
+ * Board-station (上位机) proxy surface. The workbench browser never talks to
+ * the board agent directly: every call goes through this authenticated,
+ * allowlisted, ownership-checked proxy. Streaming endpoints (status NDJSON and
+ * MJPEG) are forwarded with a bounded lifetime; JSON endpoints are bounded
+ * fetches. No path here can issue an actuator command — the agent itself only
+ * exposes read-only station operations.
+ */
+export function registerSim2RealBoardStationRoutes(
+  router: Router,
+  deps: Sim2RealBoardStationRouteDeps,
+  options: Sim2RealBoardStationRouteOptions = {},
+): void {
+  const prefix = normalizeStationApiPrefix(options.prefix);
+  const api = (suffix: string): string => `${prefix}${suffix}`;
+  const { auth, requestOwner, visibleDevices } = deps;
+  const multiUser = auth.isMultiUserDeployment();
+  const visibleDevicesForAuth = (owner?: string) =>
+    multiUser ? visibleDevices(owner) : visibleDevices(undefined);
+
+  /** Resolve the station target: the configured agent plus a visible device. */
+  const resolveStation = async (request: Request, response: Response) => {
+    if (!isBoardAgentConfigured()) {
+      noStore(response);
+      sendApiError(
+        response,
+        503,
+        'SIM2REAL_BOARD_AGENT_NOT_CONFIGURED',
+        '未配置板端 agent（RDK_SIM2REAL_BOARD_AGENT_URL），无法访问上位机。',
+        { retryable: true },
+      );
+      return null;
+    }
+    const owner = requestOwner(request, response);
+    if (owner === null) return null;
+    const deviceId = String(request.query.deviceId ?? '').trim();
+    const devices = (await visibleDevicesForAuth(owner)) as readonly OwnedDevice[];
+    const device = deviceId ? devices.find((item) => item.id === deviceId) : devices[0];
+    if (!device) {
+      noStore(response);
+      sendApiError(
+        response,
+        404,
+        'SIM2REAL_DEVICE_NOT_FOUND',
+        '未找到可用的板卡设备，请先在部署页完成板卡注册与检测。',
+        { retryable: false },
+      );
+      return null;
+    }
+    return { device, owner };
+  };
+
+  /** GET /board-station/health — capability probe for the workbench. */
+  router.get(
+    api('/board-station/health'),
+    wrapAsync(async (request, response) => {
+      const resolved = await resolveStation(request, response);
+      if (!resolved) return;
+      noStore(response);
+      const agent = await stationAgentFetch('/healthz', { timeoutMs: 4000 });
+      if (!agent) {
+        sendApiError(
+          response,
+          502,
+          'SIM2REAL_BOARD_AGENT_UNREACHABLE',
+          '板端 agent 不可达，请确认 agent 进程已启动（npm run dev:board-agent）。',
+          { retryable: true },
+        );
+        return;
+      }
+      const capabilities = Array.isArray((agent as Record<string, unknown>).capabilities)
+        ? ((agent as Record<string, unknown>).capabilities as unknown[])
+        : [];
+      const stationCommands = Array.isArray((agent as Record<string, unknown>).stationCommands)
+        ? ((agent as Record<string, unknown>).stationCommands as unknown[])
+        : STATION_COMMANDS.map((command) => ({ id: command.id, label: command.label }));
+      response.json({
+        ok: true,
+        device: {
+          id: resolved.device.id,
+          name: resolved.device.name,
+          status: resolved.device.status,
+          boardPlatform: resolved.device.boardPlatform ?? null,
+          boardModel: resolved.device.boardModel ?? null,
+        },
+        agent: {
+          capabilities,
+          stationCommands,
+          actuatorControl: (agent as Record<string, unknown>).actuatorControl === true,
+          mock: (agent as Record<string, unknown>).mock === true,
+        },
+        cameraSupported: capabilities.includes('host-station'),
+      });
+    }),
+  );
+
+  /** GET /board-station/status — one status snapshot. */
+  router.get(
+    api('/board-station/status'),
+    wrapAsync(async (request, response) => {
+      const resolved = await resolveStation(request, response);
+      if (!resolved) return;
+      noStore(response);
+      const status = await stationAgentFetch('/v1/station/status', { timeoutMs: 5000 });
+      if (!status || typeof status !== 'object') {
+        sendApiError(
+          response,
+          502,
+          'SIM2REAL_BOARD_AGENT_UNREACHABLE',
+          '板端状态不可达，请确认 agent 进程已启动。',
+          { retryable: true },
+        );
+        return;
+      }
+      response.json({ ok: true, status });
+    }),
+  );
+
+  /**
+   * GET /board-station/status/stream — forwarded NDJSON heartbeat. The proxy
+   * holds ONE upstream connection per downstream client and tears both down
+   * together; a bounded lifetime stops orphaned upstream readers.
+   */
+  router.get(
+    api('/board-station/status/stream'),
+    wrapAsync(async (request, response) => {
+      const resolved = await resolveStation(request, response);
+      if (!resolved) return;
+      noStore(response);
+      let upstream: ReadableStream<Uint8Array> | null = null;
+      try {
+        upstream = await stationAgentFetchStream('/v1/station/status/stream');
+      } catch {
+        upstream = null;
+      }
+      if (!upstream) {
+        sendApiError(
+          response,
+          502,
+          'SIM2REAL_BOARD_AGENT_UNREACHABLE',
+          '板端状态流不可达，请确认 agent 进程已启动。',
+          { retryable: true },
+        );
+        return;
+      }
+      pipeStationStream(request, response, upstream, {
+        'content-type': 'application/x-ndjson; charset=utf-8',
+      });
+    }),
+  );
+
+  /**
+   * GET /board-station/camera.mjpeg — forwarded MJPEG camera view. A plain
+   * <img> tag in the workbench renders this stream directly.
+   */
+  router.get(
+    api('/board-station/camera.mjpeg'),
+    wrapAsync(async (request, response) => {
+      const resolved = await resolveStation(request, response);
+      if (!resolved) return;
+      noStore(response);
+      let upstream: ReadableStream<Uint8Array> | null = null;
+      try {
+        upstream = await stationAgentFetchStream('/v1/station/camera.mjpeg');
+      } catch {
+        upstream = null;
+      }
+      if (!upstream) {
+        sendApiError(
+          response,
+          502,
+          'SIM2REAL_BOARD_AGENT_UNREACHABLE',
+          '板端相机流不可达，请确认 agent 进程与摄像头已就绪。',
+          { retryable: true },
+        );
+        return;
+      }
+      pipeStationStream(request, response, upstream, {
+        'content-type': 'multipart/x-mixed-replace; boundary=rdk-board-station-frame',
+      });
+    }),
+  );
+
+  /** POST /board-station/commands — allowlisted read-only command dispatch. */
+  router.post(
+    api('/board-station/commands'),
+    wrapAsync(async (request, response) => {
+      const resolved = await resolveStation(request, response);
+      if (!resolved) return;
+      noStore(response);
+      const body =
+        request.body && typeof request.body === 'object' && !Array.isArray(request.body)
+          ? (request.body as Record<string, unknown>)
+          : {};
+      const id = String(body.id ?? '').trim();
+      const known = STATION_COMMANDS.find((command) => command.id === id);
+      if (!known) {
+        sendApiError(
+          response,
+          400,
+          'SIM2REAL_STATION_COMMAND_REJECTED',
+          '仅支持白名单内的只读上位机命令：' +
+            STATION_COMMANDS.map((command) => command.id).join('、'),
+          { retryable: false, commands: STATION_COMMANDS.map((command) => command.id) },
+        );
+        return;
+      }
+      const agent = await stationAgentFetch('/v1/station/commands', {
+        method: 'POST',
+        timeoutMs: Math.min(known.timeoutMs + 4000, 15_000),
+        body: JSON.stringify({ id }),
+      });
+      if (!agent || typeof agent !== 'object' || (agent as Record<string, unknown>).ok !== true) {
+        sendApiError(
+          response,
+          502,
+          'SIM2REAL_BOARD_AGENT_UNREACHABLE',
+          `命令 ${known.label} 执行失败：板端 agent 不可达或拒绝了该命令。`,
+          { retryable: true },
+        );
+        return;
+      }
+      response.json(agent);
+    }),
+  );
+
+  /** GET /board-station/devices — devices usable as the station target. */
+  router.get(
+    api('/board-station/devices'),
+    wrapAsync(async (request, response) => {
+      const owner = requestOwner(request, response);
+      if (owner === null) return;
+      noStore(response);
+      const devices = await visibleDevicesForAuth(owner);
+      response.json({
+        ok: true,
+        agentConfigured: isBoardAgentConfigured(),
+        devices: devices.map((device) => ({
+          id: device.id,
+          name: device.name,
+          status: device.status,
+          boardPlatform: device.boardPlatform ?? null,
+          boardModel: device.boardModel ?? null,
+          connectionMode: device.connectionMode ?? null,
+        })),
+      });
+    }),
+  );
+}

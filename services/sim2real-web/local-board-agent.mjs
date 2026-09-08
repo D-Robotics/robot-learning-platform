@@ -3,18 +3,41 @@
 /**
  * Loopback BoardAgent reference for local Sim2Real acceptance.
  *
- * It deliberately implements one operation: the read-only board passport
- * probe used by deployment preflight. It never opens SSH, invokes a shell,
- * uploads an artifact, starts a process, or enables actuators. Replace this
- * process with the controlled RDK-X5 agent in a hardware deployment.
+ * It deliberately implements two read-only surfaces and never opens SSH,
+ * invokes a shell, uploads an artifact, starts a process, or enables
+ * actuators:
+ *
+ *  1. The board passport probe used by deployment preflight
+ *     (POST /v1/devices/:id/commands with the fixed preflight command).
+ *  2. The host-station (上位机) protocol from ./board-station.mjs:
+ *     GET /v1/station/status, GET /v1/station/status/stream (NDJSON),
+ *     GET /v1/station/camera.mjpeg (MJPEG fixture loop), and the
+ *     allowlisted read-only POST /v1/station/commands.
+ *
+ * Replace this process with the controlled RDK-X5 agent in a hardware
+ * deployment; the wire contract is documented in docs/host-station.md.
  */
+import { randomUUID } from 'node:crypto';
 import { createServer } from 'node:http';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+import { BOARD_CAMERA_FIXTURE_FRAMES } from './board-camera-frames.mjs';
+import {
+  STATION_CAMERA_INTERVAL_MS,
+  STATION_COMMANDS,
+  STATION_MAX_STREAM_CLIENTS,
+  STATION_STATUS_INTERVAL_MS,
+  buildStationCommandResult,
+  buildStationStatus,
+  isStationCommandId,
+} from './board-station.mjs';
+
 const MAX_BODY_BYTES = 64 * 1024;
 const BEGIN = '__STUDIO_SIM2REAL_PREFLIGHT_BEGIN__';
 const END = '__STUDIO_SIM2REAL_PREFLIGHT_END__';
+const BOUNDARY = 'rdk-board-station-frame';
+const STATION_STARTED_AT_MS = Date.now();
 
 export function buildBoardPreflightCommand() {
   return [
@@ -34,6 +57,7 @@ function json(response, status, payload) {
   response.statusCode = status;
   response.setHeader('content-type', 'application/json; charset=utf-8');
   response.setHeader('cache-control', 'no-store');
+  response.setHeader('connection', 'close');
   response.setHeader('content-length', Buffer.byteLength(body));
   response.end(body);
 }
@@ -76,7 +100,132 @@ function passportOutput() {
   ].join('\n') + '\n';
 }
 
+/**
+ * Heartbeat stream. Each line is a `buildStationStatus` snapshot; the stream
+ * is capped by a shared client budget so a demo cannot fan out unbounded
+ * timers. Closed sockets stop their own timer (no leaked intervals).
+ */
+function pipeStationStatusStream(request, response, streams) {
+  if (streams.clients >= STATION_MAX_STREAM_CLIENTS) {
+    json(response, 503, {
+      ok: false,
+      error: 'BOARD_AGENT_STREAM_BUSY',
+      message: `station streams support at most ${STATION_MAX_STREAM_CLIENTS} concurrent clients`,
+    });
+    return;
+  }
+  streams.clients += 1;
+  let tick = Math.floor((Date.now() - STATION_STARTED_AT_MS) / STATION_STATUS_INTERVAL_MS);
+  response.writeHead(200, {
+    'content-type': 'application/x-ndjson; charset=utf-8',
+    'cache-control': 'no-store',
+    connection: 'close',
+  });
+  const cleanup = () => {
+    clearInterval(timer);
+    streams.clients = Math.max(0, streams.clients - 1);
+    try {
+      response.destroy();
+    } catch {
+      /* already closed */
+    }
+  };
+  const writeSnapshot = () => {
+    try {
+      response.write(
+        JSON.stringify(buildStationStatus({ startedAtMs: STATION_STARTED_AT_MS, tick })) + '\n',
+      );
+      tick += 1;
+    } catch {
+      cleanup();
+    }
+  };
+  const timer = setInterval(writeSnapshot, STATION_STATUS_INTERVAL_MS);
+  request.on('close', cleanup);
+  response.on('error', cleanup);
+  writeSnapshot();
+}
+
+/**
+ * Synthetic MJPEG camera stream: loops the fixture frames inside a standard
+ * multipart/x-mixed-replace response so a plain <img> tag renders it. A
+ * browser that cancels the stream simply closes the socket; the interval is
+ * cleared and the client budget released.
+ */
+function pipeStationCamera(request, response, streams) {
+  if (streams.clients >= STATION_MAX_STREAM_CLIENTS) {
+    json(response, 503, {
+      ok: false,
+      error: 'BOARD_AGENT_STREAM_BUSY',
+      message: `station streams support at most ${STATION_MAX_STREAM_CLIENTS} concurrent clients`,
+    });
+    return;
+  }
+  streams.clients += 1;
+  let index = 0;
+  response.writeHead(200, {
+    'content-type': `multipart/x-mixed-replace; boundary=${BOUNDARY}`,
+    'cache-control': 'no-store',
+    'x-board-camera': 'synthetic-fixture',
+    connection: 'close',
+  });
+  const cleanup = () => {
+    clearInterval(timer);
+    streams.clients = Math.max(0, streams.clients - 1);
+    try {
+      response.destroy();
+    } catch {
+      /* already closed */
+    }
+  };
+  const writeFrame = () => {
+    const frame = BOARD_CAMERA_FIXTURE_FRAMES[index % BOARD_CAMERA_FIXTURE_FRAMES.length];
+    index += 1;
+    try {
+      response.write(
+        `--${BOUNDARY}\r\ncontent-type: image/jpeg\r\ncontent-length: ${frame.length}\r\n\r\n`,
+      );
+      response.write(frame);
+      response.write('\r\n');
+    } catch {
+      cleanup();
+    }
+  };
+  const timer = setInterval(writeFrame, STATION_CAMERA_INTERVAL_MS);
+  request.on('close', cleanup);
+  response.on('error', cleanup);
+  writeFrame();
+}
+
+function handleStationCommand(request, response) {
+  readBody(request)
+    .then((body) => {
+      const payload = JSON.parse(body);
+      const id = String(payload?.id ?? '').trim();
+      if (!isStationCommandId(id)) {
+        json(response, 403, {
+          ok: false,
+          error: 'BOARD_AGENT_READ_ONLY',
+          message: 'unknown station command; only the allowlisted read-only commands are accepted',
+          commands: STATION_COMMANDS.map((command) => ({ id: command.id, label: command.label })),
+        });
+        return;
+      }
+      const tick = Math.floor((Date.now() - STATION_STARTED_AT_MS) / STATION_STATUS_INTERVAL_MS);
+      json(response, 200, buildStationCommandResult(id, { tick }));
+    })
+    .catch((error) => {
+      json(response, Number(error?.statusCode) || 400, {
+        ok: false,
+        error: 'BOARD_AGENT_INVALID_JSON',
+      });
+    });
+}
+
 export function createLocalBoardAgentServer() {
+  // One shared budget across every stream of this process: a demo browser
+  // cannot fan out unbounded status/camera timers per tab.
+  const streams = { clients: 0 };
   return createServer(async (request, response) => {
     if (!authorized(request)) {
       json(response, 401, { ok: false, error: 'BOARD_AGENT_UNAUTHORIZED' });
@@ -86,10 +235,28 @@ export function createLocalBoardAgentServer() {
       json(response, 200, {
         ok: true,
         service: 'local-board-agent-reference',
-        capabilities: ['read-only-preflight'],
+        capabilities: ['read-only-preflight', 'host-station'],
+        stationCommands: STATION_COMMANDS.map((command) => ({ id: command.id, label: command.label })),
         actuatorControl: false,
         mock: true,
       });
+      return;
+    }
+    if (request.method === 'GET' && request.url === '/v1/station/status') {
+      const tick = Math.floor((Date.now() - STATION_STARTED_AT_MS) / STATION_STATUS_INTERVAL_MS);
+      json(response, 200, buildStationStatus({ startedAtMs: STATION_STARTED_AT_MS, tick }));
+      return;
+    }
+    if (request.method === 'GET' && request.url === '/v1/station/status/stream') {
+      pipeStationStatusStream(request, response, streams);
+      return;
+    }
+    if (request.method === 'GET' && request.url === '/v1/station/camera.mjpeg') {
+      pipeStationCamera(request, response, streams);
+      return;
+    }
+    if (request.method === 'POST' && request.url === '/v1/station/commands') {
+      handleStationCommand(request, response);
       return;
     }
     if (request.method !== 'POST' || !/^\/v1\/devices\/[^/]+\/commands$/.test(request.url || '')) {
@@ -130,6 +297,7 @@ export function createLocalBoardAgentServer() {
         exitCode: 0,
         mock: true,
         actuatorControl: false,
+        requestUuid: randomUUID().slice(0, 8),
       });
     } catch (error) {
       json(response, Number(error?.statusCode) || 400, {
@@ -147,6 +315,9 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === path.resolve(process.a
   const server = createLocalBoardAgentServer();
   server.listen(port, host, () => {
     console.log(`local BoardAgent reference listening on http://${host}:${port}`);
+    console.log(
+      'host-station endpoints: /v1/station/status /v1/station/status/stream /v1/station/camera.mjpeg /v1/station/commands',
+    );
   });
   function shutdown() {
     server.close(() => process.exit(0));

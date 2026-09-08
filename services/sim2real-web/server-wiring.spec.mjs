@@ -29,6 +29,21 @@ assert.doesNotMatch(businessRoutes, /from ['"].*server\/(?:sso|storage|agent-run
 assert.match(adapters, /Never infer an identity from a client-controlled header/);
 assert.match(copyAssets, /services.*sim2real-web.*public/);
 assert.match(boardAgent, /actuatorControl: false/);
-assert.match(boardAgent, /never executes shell|never opens SSH/);
+assert.match(boardAgent, /never executes shell|never opens SSH|never opens SSH/);
 assert.match(boardAgent, /BOARD_AGENT_READ_ONLY/);
+const stationRoutes = fs.readFileSync(
+  path.join(root, 'server/routes/sim2real-board-station-routes.ts'),
+  'utf8',
+);
+const stationProxy = fs.readFileSync(
+  path.join(root, 'server/sim2real/board-station-proxy.ts'),
+  'utf8',
+);
+assert.match(businessRoutes, /registerSim2RealBoardStationRoutes/, 'business router must mount the board-station proxy');
+assert.match(stationRoutes, /SIM2REAL_BOARD_AGENT_NOT_CONFIGURED/, 'station proxy must fail closed when no agent is configured');
+assert.match(stationRoutes, /SIM2REAL_STATION_COMMAND_REJECTED/, 'station commands must be whitelisted before dispatch');
+assert.match(stationRoutes, /requestOwner/, 'station proxy must authenticate and scope by owner');
+assert.match(stationProxy, /boardAgentUrl\(\)/, 'station proxy must reuse the SSRF-safe agent URL resolver');
+assert.match(stationProxy, /redirect: 'error'/, 'station proxy must not follow redirects');
+assert.doesNotMatch(stationProxy, /process\.env\.RDK_STUDIO/, 'station proxy must not forward Studio credentials');
 console.log('[sim2real-web wiring] PASS — standalone surface has no Studio runtime dependency');

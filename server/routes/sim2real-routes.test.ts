@@ -156,6 +156,34 @@ describe('Sim2Real HTTP routes', () => {
     expect(replay.body).toMatchObject({ ok: true, runId });
   });
 
+  it('lists models, runs, and deployments without requiring the full overview payload', async () => {
+    const router = await fixture();
+    const registered = await invoke(router, 'post', '/api/sim2real/models', {
+      body: { manifest: userManifest() },
+    });
+    const modelId = (registered.body as { model: { id: string } }).model.id;
+    const createdRun = await invoke(router, 'post', '/api/sim2real/runs', {
+      body: { modelId, backend: 'contract', taskId: 'walk' },
+    });
+    const runId = (createdRun.body as { run: { id: string } }).run.id;
+
+    const models = await invoke(router, 'get', '/api/sim2real/models');
+    expect(models.statusCode).toBe(200);
+    expect(models.body).toMatchObject({ ok: true });
+    expect((models.body as { models: Array<{ id: string }> }).models).toEqual(
+      expect.arrayContaining([expect.objectContaining({ id: modelId })]),
+    );
+    expect(JSON.stringify(models.body)).not.toContain('owner');
+
+    const runs = await invoke(router, 'get', '/api/sim2real/runs');
+    expect(runs.statusCode).toBe(200);
+    expect(runs.body).toMatchObject({ ok: true, runs: [{ id: runId, modelId }] });
+
+    const deployments = await invoke(router, 'get', '/api/sim2real/deployments');
+    expect(deployments.statusCode).toBe(200);
+    expect(deployments.body).toMatchObject({ ok: true, deployments: [] });
+  });
+
   it('validates and registers metadata, then records a contract-only run', async () => {
     const router = await fixture();
     const manifest = userManifest();
@@ -294,6 +322,97 @@ describe('Sim2Real HTTP routes', () => {
     });
     expect(freshReplay.statusCode).toBe(200);
     expect(freshReplay.body).toMatchObject({ replay: { sampleCount: 3, chunkCount: 2 } });
+  });
+
+  it('preserves the demo-fixture source so synthetic evidence stays gated after refresh', async () => {
+    const router = await fixture();
+    const registerResponse = await invoke(router, 'post', '/api/sim2real/models', {
+      body: { manifest: userManifest() },
+    });
+    const modelId = (registerResponse.body as { model: { id: string } }).model.id;
+    const runResponse = await invoke(router, 'post', '/api/sim2real/runs', {
+      body: { modelId, backend: 'contract', taskId: 'walk' },
+    });
+    const runId = (runResponse.body as { run: { id: string } }).run.id;
+    const ingest = await invoke(router, 'post', '/api/sim2real/runs/:id/telemetry', {
+      params: { id: runId },
+      body: {
+        source: 'demo-fixture',
+        contractId: 'microduck-policy-v1',
+        samples: [{ t: 0, observation: vector(61, 0), action: vector(14, 0) }],
+      },
+    });
+    expect(ingest.statusCode).toBe(201);
+    expect(ingest.body).toMatchObject({ telemetry: { source: 'demo-fixture' } });
+
+    const evaluated = await invoke(router, 'post', '/api/sim2real/runs/:id/evaluate', {
+      params: { id: runId },
+      body: {},
+    });
+    expect(evaluated.statusCode).toBe(200);
+    expect(evaluated.body).toMatchObject({
+      evaluation: { replay: { source: 'demo-fixture', sampleCount: 1 } },
+    });
+
+    const replay = await invoke(router, 'get', '/api/sim2real/runs/:id/replay', {
+      params: { id: runId },
+    });
+    expect(replay.statusCode).toBe(200);
+    expect(replay.body).toMatchObject({ replay: { source: 'demo-fixture' } });
+  });
+
+  it('classifies a mixed replay as synthetic when a later chunk is demo-fixture', async () => {
+    const router = await fixture();
+    const registerResponse = await invoke(router, 'post', '/api/sim2real/models', {
+      body: { manifest: userManifest() },
+    });
+    const modelId = (registerResponse.body as { model: { id: string } }).model.id;
+    const runResponse = await invoke(router, 'post', '/api/sim2real/runs', {
+      body: { modelId, backend: 'contract', taskId: 'walk' },
+    });
+    const runId = (runResponse.body as { run: { id: string } }).run.id;
+    const baseSample = (t: number, value: number) => ({
+      t,
+      observation: vector(61, value),
+      action: vector(14, value),
+    });
+
+    const realChunk = await invoke(router, 'post', '/api/sim2real/runs/:id/telemetry', {
+      params: { id: runId },
+      body: { source: 'import', sequence: 0, samples: [baseSample(0, 0)] },
+    });
+    expect(realChunk.statusCode).toBe(201);
+    const demoChunk = await invoke(router, 'post', '/api/sim2real/runs/:id/telemetry', {
+      params: { id: runId },
+      body: { source: 'demo-fixture', sequence: 1, samples: [baseSample(0.02, 1)] },
+    });
+    expect(demoChunk.statusCode).toBe(201);
+
+    const evaluated = await invoke(router, 'post', '/api/sim2real/runs/:id/evaluate', {
+      params: { id: runId },
+      body: {},
+    });
+    expect(evaluated.statusCode).toBe(200);
+    expect(evaluated.body).toMatchObject({
+      evaluation: {
+        replay: { source: 'demo-fixture', sampleCount: 2, chunkCount: 2 },
+      },
+    });
+    const evaluatedWarnings = (evaluated.body as { evaluation: { warnings: string[] } }).evaluation
+      .warnings;
+    expect(evaluatedWarnings).toEqual(expect.arrayContaining([expect.stringContaining('mixed sources')]));
+    expect(evaluatedWarnings.join(' ')).toContain('demo-fixture');
+
+    // GET /replay reads the persisted summary, which is the same path the
+    // browser uses after a refresh when its in-memory fixture is gone.
+    const replay = await invoke(router, 'get', '/api/sim2real/runs/:id/replay', {
+      params: { id: runId },
+    });
+    expect(replay.statusCode).toBe(200);
+    expect(replay.body).toMatchObject({
+      replay: { source: 'demo-fixture', sampleCount: 2 },
+      evaluation: { warnings: [expect.stringContaining('mixed sources')] },
+    });
   });
 
   it('rejects a cross-chunk timestamp regression without corrupting replay metrics', async () => {

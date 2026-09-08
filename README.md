@@ -32,14 +32,15 @@ Node.js 建议使用 22 LTS（最低满足 lockfile 的 Node 20.19+）。
 
 平台把“可视化入口”和“受控执行”分开：浏览器负责观察和录制，服务端负责权限、制品、幂等和审计，板端/云端 adapter 负责真正的训练或部署。
 
-### 两条训练路径
+### 三条训练路径
 
 | 路径 | 适合谁 | 当前仓库能验证什么 | 生产接入点 |
 | --- | --- | --- | --- |
 | **本地 / Mock** | 没有 CUDA、先验证产品和协议 | 任务台账、状态流转、遥测、评测、回放 | `LocalRunnerPort` |
+| **本地 / starter-ppo** | 无 GPU 但要看真实训练 | `mock=false` 的真 PPO、ONNX 导出、遥测评测（`npm run demo:starter`） | `engines/starter-ppo` |
 | **RoboGo** | 有云端算力和训练账号 | manifest 校验、请求边界、token 不出浏览器、状态 reconcile | `RoboGoRunnerPort` |
 
-Mock 的 `completed` 只表示协议演练完成，不代表真实 PPO 权重或可部署模型；真实训练必须由已配置的 runner 明确返回制品。
+Mock 的 `completed` 只表示协议演练完成，不代表真实 PPO 权重或可部署模型；真实训练必须由已配置的 runner 明确返回制品。starter-ppo 返回的是真实训练产物（`mock=false`），但其 numpy 物理不是 MicroDuck 全身动力学，`deployable` 恒为 `false`。
 
 ### 当前能力边界（诚实版）
 
@@ -48,6 +49,8 @@ Mock 的 `completed` 只表示协议演练完成，不代表真实 PPO 权重或
 | 浏览器 MicroDuck + 中文控制层 | ✅ | 上游资源需由部署方挂载；仓库不重新分发上游 bundle |
 | 动作录制、契约校验、JSONL 导入 | ✅ | 可在本地直接验收 |
 | 本地 Mock 闭环 | ✅ | 无 CUDA 可跑通 API 和 UI 流程 |
+| **CPU 真实 PPO 训练（starter-ppo）** | ✅ | `npm run demo:starter`：真训练 + 真 ONNX + 遥测评测，无 GPU 依赖 |
+| mjlab + rsl-rl GPU 训练 | 🔌 | 参考适配器在 `engines/mjlab-rsl-rl-adapter/`，需自备训练栈与 GPU |
 | RoboGo 适配接口 | 🔌 | 需要服务端配置真实地址、凭据和网络策略 |
 | RDK-X5 真机采集 / BoardAgent / OTA | 🧩 | 提供端口、预检和部署边界，需接入实际设备 |
 | 多副本生产存储 | 🗺️ | MVP 使用单实例 ledger，规模化迁移 PostgreSQL + 对象存储 |
@@ -73,14 +76,44 @@ npm run dev:mock-worker
 npm run dev:sim2real
 ```
 
+想要**真实训练闭环**（真 PPO + ONNX 制品 + 遥测评测，约 2 分钟笔记本 CPU）：
+
+```bash
+python3 -m pip install --user numpy torch onnx
+npm run demo:starter
+```
+
+先跑 `npm run doctor` 可以一键体检环境（Node/Python/ONNX/GPU/端口），每条失败项都带修复命令。
+
+它会用 `engines/starter-ppo`（numpy 向量化物理 + torch PPO，**自动检测 CUDA**：有 GPU 就用 GPU，没有就 CPU 且如实上报 `result.cuda=false`）完成：注册 manifest → `mock=false` 的真实训练 → 导出 `policy.onnx` → 分块上传评测轨迹 → 对未训练基线出 MAE/RMSE 评测。依赖缺失时明确退出，不伪造训练结果；详见 [`docs/engines/starter-ppo.md`](docs/engines/starter-ppo.md)。有独立 GPU 机器时用 `node scripts/gpu-deploy.mjs` 一键部署（见 [`docs/gpu-runner.md`](docs/gpu-runner.md)）。生产级 GPU 训练（mjlab + rsl-rl）的接入参考在 `engines/mjlab-rsl-rl-adapter/`。
+
+演示时也可以直接用一条命令启动隔离的 Mock worker、只读 reference BoardAgent 和 Web 工作台：
+
+```bash
+npm run demo:sim2real
+```
+
+它使用临时台账并预置一台 `x5-demo` 模拟板卡，退出后不会污染本地开发记录；因此可以把“生成预检计划 →
+只读 BoardAgent → 安全闸门”完整走一遍。Mock 只演练协议和台账，reference BoardAgent 只做只读预检，
+不会把部署标成真机就绪。需要展示 MicroDuck 浏览器场景时，仍需显式设置经过审核的
+`RDK_SIM2REAL_MICRODUCK_ROOT` 或 `RDK_SIM2REAL_MICRODUCK_URL`，启动器不会自动下载上游资源。
+
 需要演练部署页的只读 X5 预检时，再开 `npm run dev:board-agent`，并设置
 `RDK_SIM2REAL_BOARD_AGENT_URL=http://127.0.0.1:19100`；该 reference agent 只返回模拟板卡信息，
 不会连接设备、执行命令或开启电机。
 
-打开 <http://127.0.0.1:18102/>。页面中的“仿真与录制”会打开已挂载的 MicroDuck 浏览器仿真；
+同一进程也提供**上位机**协议（工作台第 07 步「上位机」视图）：板卡实时状态心跳、板载相机
+MJPEG 流与白名单只读命令，全部经 `/api/sim2real/board-station` 认证代理转发，浏览器不直连
+agent，也不存在任何电机控制通道；详见 [`docs/host-station.md`](docs/host-station.md)。
+
+打开 <http://127.0.0.1:18102/?demo=1>（启动器日志也会给出这个地址）。查询参数会固定 MicroDuck 和投屏演示视图；
+页面中的“仿真与录制”会打开已挂载的 MicroDuck 浏览器仿真；
 干净源码 checkout 未包含上游静态 bundle，未配置 `RDK_SIM2REAL_MICRODUCK_ROOT` 或 URL 时会显示安装指引页。
 “训练与模型”可选择本地 Mock runner；“评测与效果”支持导入浏览器录制的 JSON/JSONL 并显式绑定到 Run；
 “部署到 X5”只做契约、板型和只读预检，不会在网页层直接开启电机。
+
+如果现场暂时没有可录制的 MicroDuck bundle，评测页可以点击“载入合成演示证据”继续展示上传和评测
+流程；该证据固定为 MicroDuck 61D/14D 合成样例，不代表真实 X5 遥测。
 
 运行确定性检查：
 
@@ -138,6 +171,9 @@ MicroDuck 浏览器资源的上游 commit、仓库和许可证边界记录在 [`
 
 更多说明：
 
+- [`docs/demo-runbook.md`](docs/demo-runbook.md)
+- [`docs/gpu-runner.md`](docs/gpu-runner.md)
+- [`docs/host-station.md`](docs/host-station.md)
 - [`services/sim2real-web/README.md`](services/sim2real-web/README.md)
 - [`docs/design/sim2real-90-acceptance.md`](docs/design/sim2real-90-acceptance.md)
 - [`docs/design/sim2real-mvp-guide.md`](docs/design/sim2real-mvp-guide.md)

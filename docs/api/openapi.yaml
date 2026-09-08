@@ -71,6 +71,22 @@ paths:
               schema: { $ref: "#/components/schemas/ValidationResponse" }
         "401": { $ref: "#/components/responses/AuthRequired" }
   /api/v1/duck/models:
+    get:
+      tags: [workspace]
+      summary: List account-scoped model manifests
+      operationId: listModels
+      responses:
+        "200":
+          description: Registered models, including the built-in MicroDuck contract.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [ok, models]
+                properties:
+                  ok: { const: true }
+                  models: { type: array, items: { $ref: "#/components/schemas/Model" } }
+        "401": { $ref: "#/components/responses/AuthRequired" }
     post:
       tags: [workspace]
       summary: Register an immutable model manifest
@@ -103,6 +119,22 @@ paths:
               schema: { $ref: "#/components/schemas/ModelResponse" }
         "404": { $ref: "#/components/responses/NotFound" }
   /api/v1/duck/runs:
+    get:
+      tags: [runs]
+      summary: List account-scoped runs
+      operationId: listRuns
+      responses:
+        "200":
+          description: Recent runs with product and contract provenance.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [ok, runs]
+                properties:
+                  ok: { const: true }
+                  runs: { type: array, items: { $ref: "#/components/schemas/Run" } }
+        "401": { $ref: "#/components/responses/AuthRequired" }
     post:
       tags: [runs]
       summary: Start or register a browser, local, RoboGo or contract run
@@ -242,6 +274,22 @@ paths:
           content: { application/json: { schema: { $ref: "#/components/schemas/EvaluationResponse" } } }
         "400": { $ref: "#/components/responses/BadRequest" }
   /api/v1/duck/deployments:
+    get:
+      tags: [deployments]
+      summary: List account-scoped deployment plans
+      operationId: listDeployments
+      responses:
+        "200":
+          description: Recent deployment plans.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [ok, deployments]
+                properties:
+                  ok: { const: true }
+                  deployments: { type: array, items: { $ref: "#/components/schemas/Deployment" } }
+        "401": { $ref: "#/components/responses/AuthRequired" }
     post:
       tags: [deployments]
       summary: Create a preflight, canary or live deployment plan
@@ -541,7 +589,7 @@ components:
     TelemetryRequestWithoutRunId:
       type: object
       properties:
-        source: { type: string, enum: [board-agent, browser, import], default: import }
+        source: { type: string, enum: [board-agent, browser, import, demo-fixture], default: import, description: "demo-fixture 仅表示内置合成演示数据；不会满足真实评测或发布闸门" }
         modelId: { type: string }
         deviceId: { type: string }
         contractId: { type: string }

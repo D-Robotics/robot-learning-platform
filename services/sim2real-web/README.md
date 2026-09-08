@@ -33,6 +33,10 @@ canary、live、制品转换/下发仍需要单独配置受控适配器。
 
 评测页的遥测导入默认只在浏览器本地聚合；用户点击“上传到当前 Run 并评测”后，才会将 JSON/JSONL
 分块写入对应运行并保存回放摘要。这个显式动作用于避免误传本地文件，也让每次评测都能追溯到具体 Run。
+没有可用的浏览器录制资源时，可以点击“载入合成演示证据”继续验证 MicroDuck 61D/14D 的上传与评测
+流程；页面会把它标成演示样例，不能当作真实 X5 遥测。
+如果将样例绑定到 Mock Run，API 会以 `source=demo-fixture` 持久化来源；刷新页面或打开记录时仍会保留
+合成标记，不会解锁真实评测、预检或发布。
 
 ## 多用户账号与 Studio 解耦
 
@@ -59,6 +63,17 @@ npm run dev:mock-worker       # 终端 1；没有 CUDA 时的协议演练
 npm run dev:sim2real          # 终端 2
 ```
 
+演示时可用根目录的一键启动器代替手动开终端：
+
+```
+npm run demo:sim2real
+```
+
+启动器会为本次演示创建临时台账、预置一台 `x5-demo` 模拟板卡，同时启动 Mock worker、只读 reference
+BoardAgent 和 Web；退出后不会污染默认 `.data`。这样部署页可以完整展示“计划 → 只读预检 → mock-only
+安全闸门”，但不会把结果伪装成真机就绪。它不会下载或伪装 MicroDuck 资源，仿真仍需显式挂载审核过的
+bundle 或配置受信任 URL；若手动设置 `RDK_SIM2REAL_STORAGE_DIR`，启动器不会修改该目录里的设备注册表。
+
 如果要在没有 X5 的情况下演练“部署 → 只读板端预检”，再开一个终端运行：
 
 ```
@@ -75,7 +90,7 @@ RDK_SIM2REAL_BOARD_AGENT_URL=http://127.0.0.1:19100 npm run dev:sim2real
 生产环境请替换 `runOnDevice` 为组织维护的 BoardAgentPort，并通过 HTTPS、短期 token
 和独立的执行策略保护 canary/live。
 
-打开 http://127.0.0.1:18102/。生产构建应将入口编译到独立的 release 目录，并用
+打开 http://127.0.0.1:18102/?demo=1（该参数固定 MicroDuck 和投屏演示视图）。生产构建应将入口编译到独立的 release 目录，并用
 `scripts/copy-server-assets.mjs` 把 `public/` 复制到相邻的静态资源目录。
 
 如果要显示浏览器 MicroDuck，请先把一个已审核、已固定版本的上游静态 release 挂到本地：
