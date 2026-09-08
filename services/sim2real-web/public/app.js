@@ -196,6 +196,29 @@ function safeLoginUrl(value) {
   }
 }
 
+/* SSO 登录后回到本工作台：把 IdP URL 里的 returnTo 指回当前页面，
+   而不是落在主站根让用户再手动找回来。仅改同源回跳参数，其它参数原样保留。 */
+function withLocalReturnTo(loginUrl) {
+  try {
+    const parsed = new URL(loginUrl, window.location.origin);
+    if (parsed.origin === window.location.origin) return loginUrl;
+    const returnHere = window.location.origin + BASE_PATH + '/';
+    const redirectRaw = parsed.searchParams.get('redirectUrl');
+    if (redirectRaw) {
+      const redirect = new URL(redirectRaw, window.location.origin);
+      const returnTo = redirect.searchParams.get('returnTo');
+      if (returnTo && new URL(returnTo, window.location.origin).origin === window.location.origin) {
+        redirect.searchParams.set('returnTo', returnHere);
+        parsed.searchParams.set('redirectUrl', redirect.toString());
+        return parsed.toString();
+      }
+    }
+    return loginUrl;
+  } catch {
+    return loginUrl;
+  }
+}
+
 function safeLaunchUrl(value) {
   const raw = String(value || '').trim();
   if (!raw || raw.startsWith('//')) return null;
@@ -220,11 +243,11 @@ function safeLaunchUrl(value) {
 
 function setAuthGate(payload) {
   state.authRequired = true;
-  const loginUrl = safeLoginUrl(
+  const loginUrl = withLocalReturnTo(safeLoginUrl(
     payload && typeof payload === 'object' && typeof payload.ssoLoginUrl === 'string'
       ? payload.ssoLoginUrl
       : '/rdkstudio/',
-  );
+  ));
   const gate = $('auth-gate');
   const loginButton = $('auth-login-button');
   const loginLink = $('login-link');
@@ -1103,6 +1126,11 @@ const RUN_METRIC_CARDS = [
   ['controlLatencyMs', '控制延迟', (value) =>
     typeof value === 'number' && Number.isFinite(value) ? value.toFixed(1) + 'ms' : '—'],
   ['iterations', '迭代数', (value) => formatMetricNumber(value, 0)],
+  [
+    'cuda',
+    '训练设备',
+    (value) => (value === true ? 'GPU (CUDA)' : value === false ? 'CPU' : '—'),
+  ],
   ['observationSize', '观测维度', (value) => formatMetricNumber(value, 0)],
   ['actionSize', '动作维度', (value) => formatMetricNumber(value, 0)],
 ];
@@ -1476,7 +1504,7 @@ const HEATMAP_MAX_COLUMNS = 360;
 const HEATMAP_MAX_ROWS = 48;
 
 const CANVAS_TEXT_STYLE = '9px ui-monospace, SFMono-Regular, Menlo, monospace';
-const CANVAS_TEXT_COLOR = 'rgba(145, 164, 189, 0.95)';
+const CANVAS_TEXT_COLOR = 'rgba(85, 86, 79, 0.95)';
 
 function clearCanvas(canvas, width, height) {
   if (!canvas || typeof canvas.getContext !== 'function') return null;
@@ -1498,15 +1526,15 @@ function drawCanvasPlaceholder(ctx, width, height, message) {
   ctx.textBaseline = 'alphabetic';
 }
 
-// Diverging scale for the heatmaps: blue (negative) → panel-dark (zero) →
-// red (positive), so sign and magnitude stay readable on the dark theme.
+// Diverging scale for the heatmaps: blue (negative) → canvas-light (zero) →
+// red (positive), so sign and magnitude stay readable on the light theme.
 function telemetryDivergingColor(value) {
   const stops = [
-    [-1, 79, 124, 214],
-    [-0.25, 34, 62, 100],
-    [0, 10, 19, 31],
-    [0.25, 168, 96, 84],
-    [1, 255, 144, 152],
+    [-1, 37, 99, 235],
+    [-0.25, 189, 214, 252],
+    [0, 251, 251, 249],
+    [0.25, 252, 216, 200],
+    [1, 220, 38, 38],
   ];
   const v = Math.max(-1, Math.min(1, value));
   for (let i = 1; i < stops.length; i++) {
@@ -1588,7 +1616,7 @@ function drawTelemetryRewardTimeline(samples) {
   const xOf = (t) => plotLeft + ((t - tFirst) / tSpan) * plotWidth;
   const yOf = (reward) =>
     plotBottom - ((reward - rewardMin) / (rewardMax - rewardMin)) * plotHeight;
-  ctx.strokeStyle = 'rgba(160, 192, 224, 0.18)';
+  ctx.strokeStyle = 'rgba(28, 28, 26, 0.12)';
   ctx.lineWidth = 1;
   ctx.font = CANVAS_TEXT_STYLE;
   ctx.fillStyle = CANVAS_TEXT_COLOR;
@@ -1607,10 +1635,10 @@ function drawTelemetryRewardTimeline(samples) {
   for (const sample of samples) {
     const x = xOf(sample.t);
     if (sample.fall) {
-      ctx.fillStyle = 'rgba(255, 144, 152, 0.9)';
+      ctx.fillStyle = 'rgba(220, 38, 38, 0.85)';
       ctx.fillRect(x - 1, plotBottom - 7, 2, 7);
     } else if (sample.done) {
-      ctx.fillStyle = 'rgba(116, 230, 176, 0.55)';
+      ctx.fillStyle = 'rgba(70, 160, 98, 0.35)';
       ctx.fillRect(x - 1, plotTop, 1, plotHeight);
     }
   }
@@ -1622,8 +1650,8 @@ function drawTelemetryRewardTimeline(samples) {
     else ctx.lineTo(x, y);
   });
   const gradient = ctx.createLinearGradient(0, plotTop, 0, plotBottom);
-  gradient.addColorStop(0, 'rgba(104, 227, 255, 0.22)');
-  gradient.addColorStop(1, 'rgba(104, 227, 255, 0)');
+  gradient.addColorStop(0, 'rgba(240, 90, 26, 0.16)');
+  gradient.addColorStop(1, 'rgba(240, 90, 26, 0)');
   ctx.lineTo(xOf(points[points.length - 1][0]), plotBottom);
   ctx.lineTo(xOf(points[0][0]), plotBottom);
   ctx.closePath();
@@ -1636,7 +1664,7 @@ function drawTelemetryRewardTimeline(samples) {
     if (index === 0) ctx.moveTo(x, y);
     else ctx.lineTo(x, y);
   });
-  ctx.strokeStyle = 'rgba(104, 227, 255, 0.95)';
+  ctx.strokeStyle = 'rgba(240, 90, 26, 0.95)';
   ctx.lineWidth = 1.6;
   ctx.stroke();
   ctx.fillStyle = CANVAS_TEXT_COLOR;
@@ -2580,7 +2608,7 @@ function renderRunProgress() {
     return;
   }
   card.hidden = false;
-  state.selectedRecord = latest;
+  state.selectedRecord = Object.assign({}, latest, { recordType: 'run' });
   setText('run-progress-title', latest.summary || latest.modelId || '最新运行');
   const status = $('run-progress-status');
   if (status) {
@@ -3334,6 +3362,20 @@ function stationSetCamera(enabled) {
   }
 }
 
+// A real board may answer 503 CAMERA_UNAVAILABLE (no camera connected). The
+// <img> element only surfaces that through onerror, so fall back to the
+// honest placeholder instead of leaving a blank frame.
+function wireStationCameraError() {
+  const img = $('station-camera-img');
+  if (!img || img.dataset.cameraErrorWired === '1') return;
+  img.dataset.cameraErrorWired = '1';
+  img.addEventListener('error', () => {
+    if (!state.station.cameraOn) return;
+    stationSetCamera(false);
+    stationLog('板端没有可用相机（agent 如实返回不可用），不会伪造画面', 'error');
+  });
+}
+
 async function stationRunCommand(id) {
   const output = $('station-command-output');
   const buttons = document.querySelectorAll('[data-station-command]');
@@ -3406,6 +3448,7 @@ function stationTeardown() {
 }
 
 function wireStationEvents() {
+  wireStationCameraError();
   document.querySelectorAll('[data-station-command]').forEach((button) => {
     button.addEventListener('click', () => stationRunCommand(button.dataset.stationCommand));
   });

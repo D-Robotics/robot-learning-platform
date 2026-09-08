@@ -265,4 +265,45 @@ describe('RoboGo Sim2Real runner adapter', () => {
       metrics: { contractValid: true, successRate: 0.72, iterations: 10 },
     });
   });
+
+  it('merges the worker-level cuda flag into metrics without trusting non-boolean values', async () => {
+    const poll = (payload: Record<string, unknown>) =>
+      requestRobogoTrainingStatus({
+        accountId: 'alice',
+        externalRunId: 'run-cuda',
+        runnerUrl: 'http://127.0.0.1:19091/train',
+        allowPrivateHttp: true,
+        fetchImpl: (async () =>
+          new Response(JSON.stringify(payload), {
+            status: 200,
+            headers: { 'content-type': 'application/json' },
+          })) as typeof fetch,
+      });
+
+    const gpu = await poll({
+      status: 'completed',
+      runId: 'run-cuda',
+      cuda: true,
+      metrics: { contractValid: true, observationSize: 61, actionSize: 14 },
+    });
+    expect(gpu.metrics).toMatchObject({ cuda: true });
+
+    // The worker-level flag loses when metrics already state it explicitly.
+    const explicit = await poll({
+      status: 'completed',
+      runId: 'run-cuda',
+      cuda: true,
+      metrics: { contractValid: true, observationSize: 61, actionSize: 14, cuda: false },
+    });
+    expect(explicit.metrics).toMatchObject({ cuda: false });
+
+    // A non-boolean (spoofed string, missing) must never report GPU usage.
+    const spoofed = await poll({
+      status: 'completed',
+      runId: 'run-cuda',
+      cuda: 'yes',
+      metrics: { contractValid: true, observationSize: 61, actionSize: 14 },
+    });
+    expect(spoofed.metrics?.cuda).toBeUndefined();
+  });
 });

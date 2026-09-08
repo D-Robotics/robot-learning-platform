@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="description" content="面向 RDK X5 的 Duck 仿真、训练与部署平台" />
     <title>RDK Duck Sim2Real Lab</title>
-    <link rel="stylesheet" href="./styles.css?v=duck-lab-09" />
+    <link rel="stylesheet" href="./styles.css?v=duck-lab-15" />
   </head>
   <body>
     <a class="skip-link" href="#main-content">跳到主要内容</a>
@@ -70,7 +70,7 @@
               >检查中</span
             >
           </div>
-          <div class="nav-label">Sim2Real 工作流</div>
+          <div class="nav-label">工作台</div>
           <nav class="workflow-nav" aria-label="Duck 工作流">
             <button
               class="nav-item is-active"
@@ -78,64 +78,36 @@
               data-view-target="overview"
               aria-current="page"
             >
-              <span class="nav-index">01</span
-              ><span><strong>总览</strong><small>下一步做什么</small></span>
+              <span class="nav-index">◇</span
+              ><span><strong>总览</strong><small>状态与下一步</small></span>
             </button>
             <button class="nav-item" type="button" data-view-target="simulate">
-              <span class="nav-index">02</span
+              <span class="nav-index">01</span
               ><span><strong>仿真与录制</strong><small>演示、记录、回放</small></span>
             </button>
             <button class="nav-item" type="button" data-view-target="train">
-              <span class="nav-index">03</span
+              <span class="nav-index">02</span
               ><span><strong>训练与模型</strong><small>本地或 RoboGo</small></span>
             </button>
             <button class="nav-item" type="button" data-view-target="evaluate">
-              <span class="nav-index">04</span
+              <span class="nav-index">03</span
               ><span><strong>评测与效果</strong><small>仿真 / 真机对比</small></span>
             </button>
             <button class="nav-item" type="button" data-view-target="deploy">
-              <span class="nav-index">05</span
+              <span class="nav-index">04</span
               ><span><strong>部署到 X5</strong><small>预检、Canary、Live</small></span>
             </button>
             <button class="nav-item" type="button" data-view-target="records">
-              <span class="nav-index">06</span
+              <span class="nav-index">05</span
               ><span><strong>记录与版本</strong><small>模型、运行、审计</small></span>
             </button>
             <button class="nav-item" type="button" data-view-target="station">
-              <span class="nav-index">07</span
+              <span class="nav-index">06</span
               ><span><strong>上位机</strong><small>状态、相机、只读命令</small></span>
             </button>
-          </nav>
-          <div class="sidebar-divider"></div>
-          <div class="nav-label">平台模块</div>
-          <nav class="module-nav" aria-label="平台模块">
-            <button class="module-item" type="button" data-view-target="contract">
-              <span class="module-icon">◇</span
-              ><span><strong>套件与契约</strong><small>机器人、配件、模型</small></span>
-            </button>
-            <button class="module-item" type="button" data-view-target="simulate">
-              <span class="module-icon">◉</span
-              ><span><strong>仿真与数据</strong><small>场景、录制、回放</small></span>
-            </button>
-            <button class="module-item" type="button" data-view-target="train">
-              <span class="module-icon">⌁</span
-              ><span><strong>训练中心</strong><small>本地、Mock、RoboGo</small></span>
-            </button>
-            <button class="module-item" type="button" data-view-target="evaluate">
-              <span class="module-icon">↗</span
-              ><span><strong>评测中心</strong><small>指标、对比、报告</small></span>
-            </button>
-            <button class="module-item" type="button" data-view-target="deploy">
-              <span class="module-icon">⌂</span
-              ><span><strong>设备与发布</strong><small>预检、Canary、Live</small></span>
-            </button>
-            <button class="module-item" type="button" data-view-target="records">
-              <span class="module-icon">▣</span
-              ><span><strong>记录与审计</strong><small>版本、制品、事件</small></span>
-            </button>
-            <button class="module-item" type="button" data-view-target="station">
-              <span class="module-icon">◎</span
-              ><span><strong>上位机</strong><small>板端实时状态</small></span>
+            <button class="nav-item nav-item-quiet" type="button" data-view-target="contract">
+              <span class="nav-index">◇</span
+              ><span><strong>套件与契约</strong><small>登记模型 manifest</small></span>
             </button>
           </nav>
           <div class="sidebar-divider sidebar-divider-compact"></div>
@@ -161,30 +133,20 @@
         </aside>
 
         <main class="main-content" id="main-content" tabindex="-1">
-          <section class="hero">
-            <div class="hero-copy">
-              <p class="eyebrow" id="hero-eyebrow">SIM2REAL · SIMULATE · TRAIN · DEPLOY</p>
-              <h1>让一个动作，<em>走完</em><br class="hero-break" />仿真到真机。</h1>
-              <p class="hero-lede" id="hero-lede">
-                面向 RDK X5 和配件的 Duck 一站式工作台。先在浏览器看懂动作，再选择本地或 RoboGo
-                训练，最后经过安全预检部署到板端。
-              </p>
-              <div class="hero-actions">
-                <button
-                  class="button button-primary button-large"
-                  type="button"
-                  data-view-target="simulate"
-                >
-                  开始第一个动作 <span>→</span></button
-                ><button class="button button-quiet" type="button" data-view-target="overview">
-                  查看工作流
-                </button>
-              </div>
+          <section class="workspace-brief" aria-label="工作区状态">
+            <div class="brief-copy">
+              <p class="brief-kicker" id="hero-eyebrow">SIM2REAL · MICRODUCK · X5</p>
+              <h1 class="brief-title">Sim2Real 工作台</h1>
+              <p class="brief-lede" id="hero-lede">选择任务，跑完仿真到部署的闭环。</p>
             </div>
-            <div class="hero-meta">
-              <span class="hero-meta-label">CURRENT CONTRACT</span
-              ><strong id="hero-contract-id">microduck-policy-v1</strong
-              ><span id="hero-updated">等待服务响应</span>
+            <div class="brief-meta">
+              <div class="brief-chip">
+                <span>当前契约</span
+                ><strong id="hero-contract-id">microduck-policy-v1</strong>
+              </div>
+              <div class="brief-chip">
+                <span>最后刷新</span><strong id="hero-updated">等待服务响应</strong>
+              </div>
               <div class="hero-target">
                 <span class="target-dot is-empty" id="hero-target-dot"></span
                 ><span>目标平台</span><b id="hero-target-label">待选择设备</b>
@@ -288,14 +250,14 @@
           >
             <div class="section-heading">
               <div>
-                <span class="section-kicker">YOUR NEXT MOVE</span>
-                <h2 id="overview-title">现在，从这里开始</h2>
+                <span class="section-kicker">OVERVIEW</span>
+                <h2 id="overview-title">总览</h2>
               </div>
-              <span class="section-caption">一条任务流，六个独立模块</span>
+              <span class="section-caption">交付进度与集成状态</span>
             </div>
             <div class="next-card">
               <div class="next-card-main">
-                <span class="next-badge">START HERE</span>
+                <span class="next-badge">下一步</span>
                 <h3 id="next-action-title">从一个动作任务开始</h3>
                 <p id="next-action-copy">
                   先选择产品线和模型契约，再进入仿真、训练、评测与部署。每个模块都可以单独重跑。
@@ -309,79 +271,10 @@
                   进入仿真与录制 →
                 </button>
               </div>
-              <div class="next-visual" aria-hidden="true">
-                <div class="orbit orbit-one"></div>
-                <div class="orbit orbit-two"></div>
-                <div class="duck-mark">D</div>
-                <span class="visual-label label-sim">SIM</span
-                ><span class="visual-label label-real">X5</span>
-              </div>
-            </div>
-            <div class="module-grid" aria-label="平台模块">
-              <article class="module-card module-card-highlight">
-                <div class="module-card-top">
-                  <span class="module-card-icon">◇</span><span class="module-card-state">核心</span>
-                </div>
-                <h3>套件与契约</h3>
-                <p>选择 MicroDuck / RDK Duck，登记模型、配件和输入输出契约。</p>
-                <button class="module-card-link" type="button" data-view-target="contract">
-                  打开模块 →
-                </button>
-              </article>
-              <article class="module-card">
-                <div class="module-card-top">
-                  <span class="module-card-icon">◉</span><span class="module-card-state">01</span>
-                </div>
-                <h3>仿真与数据</h3>
-                <p>运行场景、录制动作、查看轨迹和准备训练数据。</p>
-                <button class="module-card-link" type="button" data-view-target="simulate">
-                  打开模块 →
-                </button>
-              </article>
-              <article class="module-card">
-                <div class="module-card-top">
-                  <span class="module-card-icon">⌁</span><span class="module-card-state">02</span>
-                </div>
-                <h3>训练中心</h3>
-                <p>选择本地、Mock 或 RoboGo，跟踪运行和 checkpoint。</p>
-                <button class="module-card-link" type="button" data-view-target="train">
-                  打开模块 →
-                </button>
-              </article>
-              <article class="module-card">
-                <div class="module-card-top">
-                  <span class="module-card-icon">↗</span><span class="module-card-state">03</span>
-                </div>
-                <h3>评测中心</h3>
-                <p>比较仿真与真机效果，确认是否达到发布门槛。</p>
-                <button class="module-card-link" type="button" data-view-target="evaluate">
-                  打开模块 →
-                </button>
-              </article>
-              <article class="module-card">
-                <div class="module-card-top">
-                  <span class="module-card-icon">⌂</span><span class="module-card-state">04</span>
-                </div>
-                <h3>设备与发布</h3>
-                <p>连接 X5、执行只读预检、安排 Canary 和受控发布。</p>
-                <button class="module-card-link" type="button" data-view-target="deploy">
-                  打开模块 →
-                </button>
-              </article>
-              <article class="module-card">
-                <div class="module-card-top">
-                  <span class="module-card-icon">▣</span><span class="module-card-state">LOG</span>
-                </div>
-                <h3>记录与审计</h3>
-                <p>查看版本、制品、运行记录、评测报告和操作事件。</p>
-                <button class="module-card-link" type="button" data-view-target="records">
-                  打开模块 →
-                </button>
-              </article>
             </div>
             <div class="status-grid" id="status-grid" aria-label="集成状态">
               <article class="status-card">
-                <span class="card-kicker">01 / SIMULATOR</span>
+                <span class="card-kicker">SIMULATOR</span>
                 <div class="status-card-main">
                   <span class="status-icon status-icon-blue">◉</span
                   ><strong id="status-simulator">浏览器仿真</strong>
@@ -389,7 +282,7 @@
                 <p id="status-simulator-detail">固定参考策略</p>
               </article>
               <article class="status-card">
-                <span class="card-kicker">02 / TRAINING</span>
+                <span class="card-kicker">TRAINING</span>
                 <div class="status-card-main">
                   <span class="status-icon status-icon-violet">⌁</span
                   ><strong id="status-robogo">训练后端检查中</strong>
@@ -397,7 +290,7 @@
                 <p id="status-robogo-detail">本地优先，RoboGo 可选</p>
               </article>
               <article class="status-card">
-                <span class="card-kicker">03 / TARGET</span>
+                <span class="card-kicker">TARGET</span>
                 <div class="status-card-main">
                   <span class="status-icon status-icon-orange" id="status-board-icon">⌂</span
                   ><strong id="status-board">尚未选择板卡</strong>
@@ -405,7 +298,7 @@
                 <p id="status-board-detail">连接后进行预检</p>
               </article>
               <article class="status-card">
-                <span class="card-kicker">04 / LEDGER</span>
+                <span class="card-kicker">LEDGER</span>
                 <div class="status-card-main">
                   <span class="status-icon status-icon-orange">▣</span
                   ><strong id="status-storage-card">按账号隔离</strong>
@@ -413,12 +306,12 @@
                 <p id="status-storage-detail">模型和运行可追溯</p>
               </article>
             </div>
-            <div class="overview-columns">
+            <div class="overview-columns overview-columns-single">
               <article class="panel overview-panel">
                 <div class="panel-heading">
                   <div>
-                    <span class="card-kicker">THE LOOP</span>
-                    <h2>一条动作流水线</h2>
+                    <span class="card-kicker">PIPELINE</span>
+                    <h2>交付进度</h2>
                   </div>
                   <span class="panel-caption">可暂停、可回退</span>
                 </div>
@@ -447,32 +340,6 @@
                     <span class="step-state" id="pipeline-deploy-state" aria-live="polite">受控阻断</span>
                   </div>
                 </div>
-              </article>
-              <article class="panel kit-panel">
-                <div class="panel-heading">
-                  <div>
-                    <span class="card-kicker">STARTER KIT</span>
-                    <h2 id="kit-card-title">MicroDuck 套件</h2>
-                  </div>
-                  <span class="kit-status kit-status-waiting"
-                    ><i class="status-dot"></i><span id="kit-status-label">待配置</span></span
-                  >
-                </div>
-                <div class="kit-illustration">
-                  <div class="kit-grid"></div>
-                  <div class="kit-duck">D</div>
-                </div>
-                <div class="kit-specs">
-                  <span><b>相机</b>视觉输入</span><span><b>IMU</b>姿态输入</span
-                  ><span><b>舵机</b>动作输出</span><span><b>BPU</b>感知加速</span>
-                </div>
-                <button
-                  class="button button-ghost button-small"
-                  type="button"
-                  data-view-target="deploy"
-                >
-                  查看设备预检 →
-                </button>
               </article>
             </div>
           </section>
@@ -572,12 +439,6 @@
                     </div>
                   </li>
                 </ul>
-                <div class="tip-box">
-                  <strong>为什么单独做契约模块？</strong>
-                  <p>
-                    契约是仿真、训练、评测和上板共同依赖的边界；先校验它，后续模块才能复用同一份上下文。
-                  </p>
-                </div>
               </article>
             </div>
           </section>
@@ -660,30 +521,6 @@
                 </div>
               </article>
               <aside class="panel guide-panel">
-                <span class="card-kicker">HOW TO USE</span>
-                <h2>三步完成一次演示</h2>
-                <ol class="howto-list">
-                  <li>
-                    <span>1</span>
-                    <div>
-                      <strong>点击开始录制</strong><small>先按你要验证的动作操作机器人</small>
-                    </div>
-                  </li>
-                  <li>
-                    <span>2</span>
-                    <div>
-                      <strong>点击停止并下载</strong><small>文件包含观测、动作和按键事件</small>
-                    </div>
-                  </li>
-                  <li>
-                    <span>3</span>
-                    <div><strong>回到训练页</strong><small>选择本地、Mock 或 RoboGo</small></div>
-                  </li>
-                </ol>
-                <div class="tip-box">
-                  <strong>为什么先录制？</strong>
-                  <p>它能快速发现按键、动作映射和观察量是否正确，不需要先花算力训练。</p>
-                </div>
                 <div class="sim-action-library" aria-label="当前模型动作库">
                   <div class="sim-action-library-heading">
                     <div>
@@ -1135,10 +972,6 @@
                     <div><strong>Live</strong><small>人工批准后开放</small></div>
                   </div>
                 </div>
-                <div class="tip-box">
-                  <strong>部署原则</strong>
-                  <p>网页只负责计划和证据展示；真正的下发和执行由受控 X5 Agent 完成。</p>
-                </div>
               </article>
             </div>
           </section>
@@ -1405,6 +1238,6 @@
       </div>
     </dialog>
     <div class="toast-region" id="toast-region" aria-live="polite" aria-atomic="true"></div>
-    <script src="./app.js?v=duck-lab-09" type="module"></script>
+    <script src="./app.js?v=duck-lab-15" type="module"></script>
   </body>
 </html>

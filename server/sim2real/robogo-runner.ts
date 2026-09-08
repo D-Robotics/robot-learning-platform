@@ -335,6 +335,7 @@ function safeMetrics(value: unknown): Sim2RealRunMetrics | undefined {
     ...(bounded('iterations', 0, 2_000_000) == null
       ? {}
       : { iterations: bounded('iterations', 0, 2_000_000) }),
+    ...(source.cuda === true ? { cuda: true } : source.cuda === false ? { cuda: false } : {}),
   };
 }
 
@@ -380,6 +381,12 @@ function parseRunResult(payload: unknown): Sim2RealRobogoRunResult {
   const checkpoint = safeCheckpoint(source.checkpoint);
   const artifact = safeArtifact(source.artifact);
   const metrics = safeMetrics(source.metrics);
+  // Local workers report the honest device fact at the top level of the job
+  // view (job.cuda), not inside metrics. Merge it in so the platform run
+  // record can surface GPU usage; only an explicit boolean is trusted.
+  const runnerCuda = source.cuda === true || source.cuda === false ? source.cuda : undefined;
+  const metricsWithCuda =
+    metrics && runnerCuda != null && metrics.cuda == null ? { ...metrics, cuda: runnerCuda } : metrics;
   return {
     status,
     ...(validExternalRunId ? { externalRunId: validExternalRunId } : {}),
@@ -388,7 +395,7 @@ function parseRunResult(payload: unknown): Sim2RealRobogoRunResult {
     ...(message ? { message } : {}),
     ...(checkpoint ? { checkpoint } : {}),
     ...(artifact ? { artifact } : {}),
-    ...(metrics ? { metrics } : {}),
+    ...(metricsWithCuda ? { metrics: metricsWithCuda } : {}),
   };
 }
 

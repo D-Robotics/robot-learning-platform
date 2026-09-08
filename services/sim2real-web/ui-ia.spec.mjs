@@ -15,8 +15,10 @@ const targets = [...html.matchAll(/data-view-target="([^"]+)"/g)].map((match) =>
 const workflowTargets = [
   ...html.matchAll(/class="workflow-node"[^>]*data-view-target="([^"]+)"/g),
 ].map((match) => match[1]);
-const moduleCards = (html.match(/class="module-card(?: module-card-highlight)?"/g) || []).length;
-const moduleItems = (html.match(/class="module-item"/g) || []).length;
+const navItems = (
+  html.match(/class="nav-item(?: is-active| nav-item-quiet)?"/g) || []
+).length;
+const duplicateNavs = html.match(/module-nav|module-item/g);
 
 assert.deepEqual(sections, viewNames, 'each workflow view must have a rendered section');
 assert.deepEqual(
@@ -25,9 +27,18 @@ assert.deepEqual(
   'navigation targets must resolve to a workflow view',
 );
 assert.deepEqual(workflowTargets, ['simulate', 'train', 'evaluate', 'deploy']);
-assert.equal(moduleCards, 6, 'overview must expose six independent platform modules');
-assert.equal(moduleItems, 7, 'sidebar must expose seven platform module shortcuts');
-assert.match(html, /一条任务流，六个独立模块/);
+assert.equal(
+  navItems,
+  8,
+  'sidebar must expose a single workflow navigation: overview, steps 01-06, contract',
+);
+assert.equal(
+  duplicateNavs,
+  null,
+  'the duplicate “平台模块” secondary navigation must not regress',
+);
+assert.match(html, /data-view-section="overview"[\s\S]*?section-kicker">OVERVIEW/, 'overview must read as a dashboard, not a marketing hero');
+assert.doesNotMatch(html, /让一个动作/, 'the marketing hero must stay removed');
 assert.match(html, /id="task-select"/, 'workspace must expose an action-task context');
 assert.match(html, /id="presentation-toggle"/, 'workspace must expose a reversible presentation view');
 assert.match(html, /class="skip-link"/, 'workspace must expose a keyboard skip link');
@@ -224,5 +235,5 @@ assert.doesNotMatch(
 );
 
 console.log(
-  `[sim2real-ui] PASS — ${viewNames.length} views, ${moduleCards} overview modules, ${workflowTargets.length} workflow nodes`,
+  `[sim2real-ui] PASS — ${viewNames.length} views, ${navItems} sidebar entries, single workflow navigation`,
 );

@@ -30,6 +30,12 @@ export interface Sim2RealRunMetrics {
   episodeLength?: number;
   controlLatencyMs?: number;
   iterations?: number;
+  /**
+   * True only when the training backend actually ran on CUDA. A requested but
+   * unavailable GPU falls back to CPU and must stay false; an absent value
+   * means the backend did not report it (never assume GPU).
+   */
+  cuda?: boolean;
 }
 
 /**

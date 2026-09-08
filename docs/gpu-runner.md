@@ -11,10 +11,10 @@ node scripts/gpu-deploy.mjs --host <gpu-ip> --port <ssh-port> --user <ssh-user> 
 脚本会依次完成（全部通过 SSH，本机不跑任何训练）：
 
 1. 探测 SSH 可达性（失败时打印排查步骤）；
-2. 同步 worker + 引擎 + manifest（rsync，缺则回退 scp）；
-3. 在 `~/rdk-sim2real/.venv` 安装 `numpy / torch / onnx`；
+2. 同步 worker + 引擎 + manifest（rsync `--relative` 保留仓库子路径，缺则回退 scp）；
+3. 在 `~/rdk-sim2real/.venv` 安装 `numpy / torch / onnx`（检测到 NVIDIA 驱动时 torch 改用 `--index-url https://download.pytorch.org/whl/cu128`，否则 PyPI CPU 轮子会让 `torch.cuda.is_available()` 永远为 false）；
 4. 探测 CUDA 并打印引擎将产生的诚实设备报告；
-5. 生成 `~/rdk-sim2real/worker.env`（含随机 runner token，`chmod 600`）；
+5. 生成 `~/rdk-sim2real/worker.env`（含随机 runner token，`chmod 600`；`--dir ~/...` 会解析为绝对路径，worker 要求可执行文件路径必须绝对）；
 6. `--service` 时安装并启动 `systemd --user` 服务 `rdk-sim2real-worker`。
 
 结束时打印需要粘贴到本机 web 服务器 `.env` 的两行：
@@ -44,15 +44,22 @@ RDK_SIM2REAL_LOCAL_RUNNER_TOKEN=<随机 token>
 
 注意：`controlLatencyMs` 始终在 CPU 单线程上测量（它描述的是上板推理预算，不是 GPU 训练速度）；ONNX 导出也始终在 CPU 上完成（导出的是 CPU runtime 制品）。
 
+另外两个实战踩坑记录（RTX 5090 + CUDA 12.8 机器上验证过）：
+
+- **torch 轮子**：PyPI 默认 `torch` 是 CPU-only 轮。GPU 机必须装 `onnxscript` 之外的 `torch==cu128` 版本，否则 `torch.cuda.is_available()` 一直是 `false`，引擎会如实回退 CPU 并上报 `cuda=false`。部署脚本已自动处理。
+- **ONNX 导出依赖**：`torch>=2.5` 的 `torch.onnx.export`（dynamo 路径）需要 `onnxscript` 包；缺它时引擎打印告警、`metrics.onnxExported=false` 但训练本身成功。想要完整 ONNX 制品就 `pip install onnxscript` 后重跑一次。
+
 ## 网络与安全
 
 - worker 监听 `0.0.0.0:19091`，runner token 是唯一防线，生产环境务必配合防火墙白名单；
-- 更稳妥的方案是 **SSH 隧道**（worker 只监听 `127.0.0.1`）：
+- 更稳妥的方案是 **SSH 隧道**（worker 只监听 `127.0.0.1`）。很多托管 GPU 机默认只在公网开放 SSH 端口（例如仅 2222），直连 `19091` 会超时——这不是部署失败，走隧道即可：
 
   ```bash
   ssh -p <ssh-port> -N -L 19091:127.0.0.1:19091 <ssh-user>@<gpu-ip>
   # 本机 .env 用 http://127.0.0.1:19091/train
   ```
+
+  建议加 `-o ServerAliveInterval=15 -o ExitOnForwardFailure=yes`，隧道断了立刻能发现。
 
 - worker 的安全边界与本地部署完全一致：`shell:false`、引擎必须绝对路径、凭据不出现在子进程环境、结果必须带回合法 `artifact://` 引用，否则任务不会被标记完成。
 
