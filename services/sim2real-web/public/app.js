@@ -86,6 +86,117 @@ function readPresentationPreference() {
   }
 }
 
+function readNotifyPreference() {
+  try {
+    return window.localStorage?.getItem('rdk-duck-lab-notify') === '1';
+  } catch {
+    return false;
+  }
+}
+
+const RUN_TERMINAL_STATUSES = Object.freeze(['completed', 'failed', 'blocked', 'cancelled']);
+const ACTIVE_RUN_STATUSES = Object.freeze(['queued', 'running']);
+
+function isTerminalRunStatus(status) {
+  return RUN_TERMINAL_STATUSES.includes(String(status || '').toLowerCase());
+}
+
+function isActiveRunStatus(status) {
+  return ACTIVE_RUN_STATUSES.includes(String(status || '').toLowerCase());
+}
+
+function notifyRunTerminal(run) {
+  const title =
+    String(run.status || '').toLowerCase() === 'completed' ? '训练任务完成' : '训练任务未完成';
+  const runModel = (state.overview?.models || []).find((model) => model.id === run.modelId);
+  const detail = [runModel ? modelLabel(runModel) : run.modelId, statusLabel(run.status)]
+    .filter(Boolean)
+    .join(' · ');
+  showToast((title + '：' + detail).slice(0, 120), run.status === 'completed' ? 'success' : 'error');
+  if (
+    state.notifyEnabled &&
+    typeof Notification !== 'undefined' &&
+    Notification.permission === 'granted'
+  ) {
+    try {
+      new Notification('RDK 工作台', { body: (title + '：' + detail).slice(0, 140) });
+    } catch {
+      // Some browsers restrict Notification construction; the toast already
+      // informed the user, so a failure here is silent.
+    }
+  }
+}
+
+function syncNotifyToggle() {
+  const button = $('notify-toggle');
+  if (!button) return;
+  const granted =
+    state.notifyEnabled && typeof Notification !== 'undefined' && Notification.permission === 'granted';
+  button.textContent = state.notifyEnabled ? '通知开' : '通知关';
+  button.setAttribute('aria-pressed', state.notifyEnabled ? 'true' : 'false');
+  button.classList.toggle('is-active', granted);
+}
+
+async function toggleNotifyPreference() {
+  if (!state.notifyEnabled) {
+    if (typeof Notification === 'undefined') {
+      showToast('当前浏览器不支持系统通知，仍会在页面内提示。', 'normal');
+    } else if (Notification.permission === 'denied') {
+      showToast('系统通知已被浏览器拒绝；可在站点权限设置中重新允许。', 'error');
+    } else if (Notification.permission !== 'granted') {
+      try {
+        const permission = await Notification.requestPermission();
+        if (permission !== 'granted') {
+          showToast('未获得系统通知权限；仍会保存偏好并在页面内提示。', 'normal');
+          return;
+        }
+      } catch {
+        showToast('无法请求系统通知权限；仍会保存偏好并在页面内提示。', 'normal');
+        return;
+      }
+    }
+  }
+  state.notifyEnabled = !state.notifyEnabled;
+  try {
+    window.localStorage?.setItem('rdk-duck-lab-notify', state.notifyEnabled ? '1' : '0');
+  } catch {
+    // Preference persistence is best-effort; the in-session toggle still works.
+  }
+  syncNotifyToggle();
+}
+
+function renderContextLive() {
+  const wrap = $('context-live');
+  if (!wrap) return;
+  const model = selectedModel();
+  const device = selectedDevice();
+  const activeRuns = runsForCurrentModel().filter((run) => isActiveRunStatus(run.status));
+  const robogo = state.overview?.integrations?.robogo || {};
+  const localRunner = state.overview?.integrations?.simulator?.local || {};
+  let backendLabel = '检查中';
+  if (state.authRequired) backendLabel = '需要登录';
+  else if (state.serviceError) backendLabel = '服务不可用';
+  else if (robogo.state === 'ready') backendLabel = 'RoboGo 就绪';
+  else if (localRunner.available === true && localRunner.healthy === true) backendLabel = '本地就绪';
+  else if (localRunner.available === true) backendLabel = '本地已配置';
+  setText(
+    'context-live-model',
+    model ? modelLabel(model) : (state.overview?.models?.length ? '未选择' : '暂无模型'),
+  );
+  setText(
+    'context-live-device',
+    device ? device.name || device.id : (state.overview?.devices?.length ? '未选择' : '暂无板卡'),
+  );
+  if (activeRuns.length === 1) {
+    setText('context-live-runs', '1 个任务 · ' + statusLabel(activeRuns[0].status));
+  } else if (activeRuns.length > 1) {
+    setText('context-live-runs', activeRuns.length + ' 个任务进行中');
+  } else {
+    setText('context-live-runs', '空闲');
+  }
+  setText('context-live-backend', backendLabel);
+}
+
 const state = {
   overview: null,
   productProfiles: null,
@@ -101,6 +212,9 @@ const state = {
   authNoticeShown: false,
   productId: readProductPreference(),
   taskId: readTaskPreference(),
+  notifyEnabled: readNotifyPreference(),
+  notifiedRunIds: new Set(),
+  confirmRunResolve: null,
   recordsTab: 'all',
   recordsQuery: '',
   selectedRecord: null,
@@ -114,6 +228,8 @@ const state = {
     device: null,
     statusReader: null,
     streamAbort: null,
+    streamReconnectAttempts: 0,
+    streamReconnectTimer: null,
     cameraOn: false,
     log: [],
   },
@@ -379,6 +495,9 @@ function setView(view, { updateHash = true, scroll = true } = {}) {
   // when switching frames so a sticky header or a previous deep scroll cannot
   // hide the section title and its primary action during a live demo.
   if (scroll) window.scrollTo({ top: 0, left: 0, behavior: 'auto' });
+  // 评估页的真机对照快照只在视图内轮询，离开即停，避免后台空转。
+  if (wanted === 'evaluate') originbotCompareStart();
+  else originbotCompareStop();
 }
 
 function setPresentationMode(enabled, { persist = true } = {}) {
@@ -2173,6 +2292,65 @@ function renderEvaluation() {
   }
 }
 
+// ---- 真机实时对照（评估页，OriginBot 只读遥测 2s 快照） -------------------
+// 与效果对比图并排显示当下真机侧写：电压、IMU 航向、里程计。数据缺失时
+// 如实显示「无数据」，绝不合成。轮询只在 evaluate 视图内进行。
+
+let originbotCompareTimer = null;
+
+async function originbotCompareRefresh() {
+  try {
+    const payload = await request('/sim2real/board-station/status');
+    const ob = payload?.status?.originbot;
+    const panel = $('originbot-compare-panel');
+    if (panel) panel.dataset.live = ob ? 'on' : 'off';
+    if (ob && typeof ob === 'object') {
+      const v = Number(ob.batteryVoltage);
+      setText('ob-compare-voltage', Number.isFinite(v) ? v.toFixed(2) + ' V' : '—');
+      const imu = ob.imu || {};
+      const z = Number(imu.z);
+      const w = Number(imu.w);
+      setText(
+        'ob-compare-heading',
+        Number.isFinite(z) && Number.isFinite(w)
+          ? (2 * Math.atan2(z, w) * (180 / Math.PI)).toFixed(1) + '°'
+          : '—',
+      );
+      const odom = ob.odom || {};
+      const px = Number(odom.positionX);
+      const lx = Number(odom.linearX);
+      setText(
+        'ob-compare-odom',
+        Number.isFinite(px) || Number.isFinite(lx)
+          ? `${Number.isFinite(px) ? px.toFixed(2) + ' m' : '—'} / ${Number.isFinite(lx) ? lx.toFixed(2) + ' m/s' : '—'}`
+          : '—',
+      );
+      setText('ob-compare-source', '板端 agent · ros2 topic echo（只读）');
+    } else {
+      setText('ob-compare-voltage', '无数据');
+      setText('ob-compare-heading', '无数据');
+      setText('ob-compare-odom', '无数据');
+      setText('ob-compare-source', 'bringup 未运行');
+    }
+  } catch {
+    // 板端不可达时保持上一帧数值并把来源标灰，不弹错误横幅打断评测页。
+    setText('ob-compare-source', '板端不可达');
+  }
+}
+
+function originbotCompareStart() {
+  if (originbotCompareTimer) return;
+  void originbotCompareRefresh();
+  originbotCompareTimer = setInterval(originbotCompareRefresh, 2000);
+}
+
+function originbotCompareStop() {
+  if (originbotCompareTimer) {
+    clearInterval(originbotCompareTimer);
+    originbotCompareTimer = null;
+  }
+}
+
 function renderNextAction() {
   const evidence = currentTelemetry();
   const model = selectedModel();
@@ -2553,6 +2731,7 @@ function recordCollection() {
 function renderAll() {
   renderSelects();
   renderIntegrations();
+  renderContextLive();
   renderModel();
   renderActionLibrary();
   renderBoard();
@@ -2619,10 +2798,25 @@ async function refreshActiveRuns() {
   );
   const byId = new Map(updates.filter(Boolean).map((run) => [run.id, run]));
   if (!byId.size || !state.overview) return;
+  const previousRuns = state.overview.runs;
   state.overview = {
     ...state.overview,
     runs: state.overview.runs.map((run) => byId.get(run.id) || run),
   };
+  // Studio-style channel notification: fire exactly once per run when an
+  // active task reaches a terminal state, even if this is a background tab.
+  for (const previous of previousRuns) {
+    const next = byId.get(previous.id);
+    if (!next) continue;
+    if (
+      isActiveRunStatus(previous.status) &&
+      isTerminalRunStatus(next.status) &&
+      !state.notifiedRunIds.has(next.id)
+    ) {
+      state.notifiedRunIds.add(next.id);
+      notifyRunTerminal(next);
+    }
+  }
 }
 
 async function loadOverview({ quiet = false } = {}) {
@@ -2734,6 +2928,42 @@ async function registerEditor() {
     if (!(error instanceof ApiError && error.status === 401))
       showToast(error instanceof Error ? error.message : '模型登记失败', 'error');
   }
+}
+
+function settleConfirmRun(approved) {
+  const dialog = $('confirm-run-dialog');
+  if (dialog instanceof HTMLDialogElement && dialog.open) dialog.close();
+  const resolve = state.confirmRunResolve;
+  state.confirmRunResolve = null;
+  if (resolve) resolve(approved);
+}
+
+// Studio-style explicit confirmation before a billable action: the caller
+// gets the operator's decision, and the dialog never submits by itself.
+function confirmRobogoRun() {
+  const dialog = $('confirm-run-dialog');
+  const model = selectedModel();
+  const task = selectedTask();
+  const profileValue = $('training-profile')?.value || 'standard';
+  const profileLabel =
+    $('training-profile')?.querySelector('option[value="' + profileValue + '"]')?.textContent ||
+    profileValue;
+  const checkpointId = $('resume-checkpoint-id')?.value.trim() || '';
+  const artifactRef = $('resume-artifact-ref')?.value.trim() || '';
+  if (state.confirmRunResolve) state.confirmRunResolve(false);
+  state.confirmRunResolve = null;
+  if (!(dialog instanceof HTMLDialogElement)) return Promise.resolve(true);
+  setText('confirm-run-model', model ? modelLabel(model) : '未选择模型');
+  setText('confirm-run-task', task.label || '—');
+  setText('confirm-run-profile', profileLabel || '—');
+  setText(
+    'confirm-run-resume',
+    checkpointId && artifactRef ? checkpointId : '不续训',
+  );
+  return new Promise((resolve) => {
+    state.confirmRunResolve = resolve;
+    dialog.showModal();
+  });
 }
 
 async function runModel(backend) {
@@ -3104,15 +3334,41 @@ function stationRenderStatus(status) {
     `${Number.isFinite(network.rxKbPerSec) ? network.rxKbPerSec : '--'}/${Number.isFinite(network.txKbPerSec) ? network.txKbPerSec : '--'} KB/s`,
   );
   setText('station-network-sub', '以太网');
+  // OriginBot telemetry is reported honestly by the agent: present only when
+  // the bringup stack is running, never synthesized here.
+  const originbot = status.originbot || {};
+  const obVoltage = Number(originbot.batteryVoltage);
   setText(
     'station-power',
-    Number.isFinite(power.voltage) ? `${power.voltage.toFixed(1)}V` : '--',
+    Number.isFinite(obVoltage)
+      ? `${obVoltage.toFixed(2)}V`
+      : Number.isFinite(power.voltage)
+        ? `${power.voltage.toFixed(1)}V`
+        : '--',
   );
+  const obImu = originbot.imu || {};
+  const imuZ = Number(obImu.z);
+  const imuW = Number(obImu.w);
   setText(
     'station-power-sub',
-    Number.isFinite(power.current) ? `电流 ${power.current.toFixed(1)}A` : '--',
+    Number.isFinite(obVoltage)
+      ? 'OriginBot 电池'
+      : Number.isFinite(power.current)
+        ? `电流 ${power.current.toFixed(1)}A`
+        : '无电源监控',
   );
-  setText('station-uptime', stationFormatUptime(status.uptimeSec));
+  setText(
+    'station-uptime',
+    Number.isFinite(imuZ) && Number.isFinite(imuW)
+      ? `航向 ${(2 * Math.atan2(imuZ, imuW) * (180 / Math.PI)).toFixed(1)}°`
+      : stationFormatUptime(status.uptimeSec),
+  );
+  setText(
+    'station-uptime-sub',
+    Number.isFinite(imuZ) && Number.isFinite(imuW)
+      ? `OriginBot IMU · ${stationFormatUptime(status.uptimeSec)}`
+      : '自 agent 启动',
+  );
   const diskUsedMB = Number(disk.usedMB);
   const diskTotalMB = Number(disk.totalMB);
   setText(
@@ -3125,6 +3381,20 @@ function stationRenderStatus(status) {
       ? `已用 ${Math.round((diskUsedMB / diskTotalMB) * 100)}%`
       : '--',
   );
+  // Drive canary state comes straight from the agent snapshot (1 Hz stream);
+  // absent means the agent predates the drive surface and stays "空闲".
+  const drive = status.drive;
+  const driveState = $('station-drive-state');
+  if (driveState) {
+    if (drive && drive.active) {
+      const remaining = Number.isFinite(Number(drive.remainingMs)) ? drive.remainingMs : 0;
+      driveState.textContent =
+        `运动中 ${Number(drive.linear).toFixed(2)} m/s · ${Number(drive.angular).toFixed(2)} rad/s · 剩余 ${(remaining / 1000).toFixed(1)}s`;
+    } else {
+      const reason = drive && drive.lastStopReason ? String(drive.lastStopReason) : '空闲';
+      driveState.textContent = `空闲（${reason}）`;
+    }
+  }
   const topicList = $('station-topic-list');
   if (topicList) {
     const topics = Array.isArray(status.topics) ? status.topics.slice(0, 12) : [];
@@ -3145,8 +3415,30 @@ function stationRenderStatus(status) {
   }
 }
 
+function stationClearStreamReconnect() {
+  if (state.station.streamReconnectTimer) {
+    clearTimeout(state.station.streamReconnectTimer);
+    state.station.streamReconnectTimer = null;
+  }
+}
+
+function stationScheduleStreamReconnect() {
+  // 一次网络抖动或 agent 重启不应让上位机永久显示 "--"：指数退避重连，
+  // 上限 30 秒；视图切走（teardown）时清除定时器。
+  if (!state.station.ready || state.station.statusReader) return;
+  stationClearStreamReconnect();
+  const attempts = Math.min(state.station.streamReconnectAttempts + 1, 5);
+  state.station.streamReconnectAttempts = attempts;
+  const delayMs = Math.min(1000 * 2 ** (attempts - 1), 30000);
+  state.station.streamReconnectTimer = setTimeout(() => {
+    state.station.streamReconnectTimer = null;
+    stationStartStatusStream();
+  }, delayMs);
+}
+
 function stationStartStatusStream() {
   if (state.station.statusReader) return;
+  stationClearStreamReconnect();
   const badge = $('station-live-badge');
   fetch(apiPath('/sim2real/board-station/status/stream'), {
     credentials: 'same-origin',
@@ -3155,6 +3447,8 @@ function stationStartStatusStream() {
     .then(async (response) => {
       if (!response.ok || !response.body) throw new Error('HTTP ' + response.status);
       if (badge) badge.hidden = false;
+      // 流真正建立后重置退避计数，短暂中断不会累积到长间隔。
+      state.station.streamReconnectAttempts = 0;
       const reader = response.body.getReader();
       state.station.statusReader = reader;
       const decoder = new TextDecoder();
@@ -3184,7 +3478,83 @@ function stationStartStatusStream() {
     .finally(() => {
       state.station.statusReader = null;
       if (badge) badge.hidden = true;
+      // 流结束（正常关闭或错误）后自动重连；页面隐藏/视图切走时由
+      // teardown 清理定时器，不产生孤儿重连。
+      stationScheduleStreamReconnect();
     });
+}
+
+// ---- motion canary (constrained drive) ---------------------------------
+// The panel appears only when BOTH switches report enabled: the platform's
+// (GET drive -> platformEnabled) and the agent's (drive.enabled). Motion is
+// sent one command at a time behind an explicit confirm; 急停 (stop) bypasses
+// every gate and is always clickable.
+
+async function stationProbeDrive() {
+  try {
+    const payload = await request('/sim2real/board-station/drive');
+    const enabled = payload?.platformEnabled === true && payload?.drive?.enabled === true;
+    const controls = $('station-drive-controls');
+    const note = $('station-drive-note');
+    if (controls) controls.hidden = !enabled;
+    if (note) {
+      note.textContent = enabled
+        ? '受限驱动已开启：速度钳制 0.3 m/s / 1.0 rad/s，单次窗口 ≤ 2s，500ms 无命令底盘自动停车。'
+        : payload?.platformEnabled === true
+          ? '平台已开启，但板端 agent 未开启 RDK_SIM2REAL_BOARD_AGENT_ENABLE_DRIVE。'
+          : '未启用。受限驱动需要平台与板端两个开关同时开启（RDK_SIM2REAL_STATION_DRIVE_ENABLED / RDK_SIM2REAL_BOARD_AGENT_ENABLE_DRIVE）；急停始终可用。';
+    }
+  } catch {
+    // Drive surface absent (older agent) keeps the panel hidden — the
+    // read-only contract must render honestly, never fail loudly here.
+    const controls = $('station-drive-controls');
+    if (controls) controls.hidden = true;
+  }
+}
+
+function stationReadDriveInputs() {
+  const speed = Number($('station-drive-speed')?.value);
+  const omega = Number($('station-drive-omega')?.value);
+  const duration = Number($('station-drive-duration')?.value);
+  return {
+    linear: Number.isFinite(speed) ? speed : 0,
+    angular: Number.isFinite(omega) ? omega : 0,
+    durationSec: Number.isFinite(duration) ? duration : 1,
+  };
+}
+
+async function stationSendDrive() {
+  const { linear, angular, durationSec } = stationReadDriveInputs();
+  const acknowledged = window.confirm(
+    `即将让 OriginBot 以 ${linear.toFixed(2)} m/s（转向 ${angular.toFixed(2)} rad/s）运动 ${durationSec.toFixed(1)} 秒。\n` +
+      '请确认机器人周围无障碍物、桌面/场地已清空。\n' +
+      '急停按钮随时可用；底盘 500ms 看门狗兜底。',
+  );
+  if (!acknowledged) return;
+  try {
+    const payload = await request('/sim2real/board-station/drive', {
+      method: 'POST',
+      body: JSON.stringify({ linear, angular, durationSec }),
+    });
+    if (payload?.drive?.active) {
+      stationLog(`运动命令已接受：${linear.toFixed(2)} m/s / ${angular.toFixed(2)} rad/s / ${durationSec.toFixed(1)}s`, 'ok');
+    } else {
+      stationLog('板端未进入运动状态（可能已被窗口过期或急停覆盖）', 'info');
+    }
+  } catch (error) {
+    stationLog(`运动命令被拒绝：${error instanceof Error ? error.message : '未知错误'}`, 'error');
+  }
+}
+
+async function stationEmergencyStop() {
+  try {
+    await request('/sim2real/board-station/drive/stop', { method: 'POST', body: '{}' });
+    stationLog('急停已下发：零速帧发布，底盘看门狗兜底停车', 'ok');
+    const driveState = $('station-drive-state');
+    if (driveState) driveState.textContent = '急停（operator-emergency-stop）';
+  } catch (error) {
+    stationLog(`急停下发失败（底盘看门狗仍兜底）：${error instanceof Error ? error.message : '未知错误'}`, 'error');
+  }
 }
 
 function stationSetCamera(enabled) {
@@ -3281,6 +3651,8 @@ async function stationInit() {
       'ok',
     );
     stationStartStatusStream();
+    // 探测受限驱动双开关状态；面板是否可见由真实状态决定，默认隐藏。
+    stationProbeDrive();
   } catch (error) {
     state.station.ready = false;
     if (notice) {
@@ -3296,6 +3668,8 @@ async function stationInit() {
 
 function stationTeardown() {
   stationStopStatusStream();
+  stationClearStreamReconnect();
+  state.station.streamReconnectAttempts = 0;
   stationSetCamera(false);
 }
 
@@ -3307,11 +3681,47 @@ function wireStationEvents() {
   $('station-camera-toggle')?.addEventListener('click', () => {
     stationSetCamera(!state.station.cameraOn);
   });
+  // 运动滑条的实时读数；急停不设任何前置条件。
+  $('station-drive-speed')?.addEventListener('input', (event) => {
+    setText('station-drive-speed-out', `${Number(event.target.value).toFixed(2)} m/s`);
+  });
+  $('station-drive-omega')?.addEventListener('input', (event) => {
+    setText('station-drive-omega-out', `${Number(event.target.value).toFixed(1)} rad/s`);
+  });
+  $('station-drive-duration')?.addEventListener('input', (event) => {
+    setText('station-drive-duration-out', `${Number(event.target.value).toFixed(1)} s`);
+  });
+  $('station-drive-go')?.addEventListener('click', () => {
+    void stationSendDrive();
+  });
+  $('station-drive-stop')?.addEventListener('click', () => {
+    void stationEmergencyStop();
+  });
+  // 空格键 = 急停（focus 不在输入控件时），与现场操作直觉一致。
+  document.addEventListener('keydown', (event) => {
+    const target = event.target;
+    const inControl =
+      target instanceof HTMLInputElement ||
+      target instanceof HTMLTextAreaElement ||
+      target instanceof HTMLSelectElement;
+    if (event.code === 'Space' && !inControl && state.station.initialized) {
+      event.preventDefault();
+      void stationEmergencyStop();
+    }
+  });
   $('station-log-clear')?.addEventListener('click', () => {
     state.station.log = [];
     $('station-log-list')?.replaceChildren();
   });
   window.addEventListener('pagehide', stationTeardown);
+  document.addEventListener('visibilitychange', () => {
+    // 切走标签页时停止流与重连；切回时立即重连，避免后台空转和恢复延迟。
+    if (document.visibilityState === 'hidden') {
+      stationTeardown();
+    } else if (state.station.ready) {
+      stationStartStatusStream();
+    }
+  });
 }
 
 function wireEvents() {
@@ -3451,7 +3861,24 @@ function wireEvents() {
     if (!accountReady) {
       showToast('RoboGo 资源探测暂不可用，将由服务端再次校验当前账号授权后提交。', 'normal');
     }
-    runModel('robogo');
+    void confirmRobogoRun().then((approved) => {
+      if (approved) runModel('robogo');
+    });
+  });
+  $('notify-toggle')?.addEventListener('click', () => {
+    void toggleNotifyPreference();
+  });
+  $('confirm-run-cancel')?.addEventListener('click', () => settleConfirmRun(false));
+  $('confirm-run-approve')?.addEventListener('click', () => settleConfirmRun(true));
+  const confirmRunDialog = $('confirm-run-dialog');
+  confirmRunDialog?.addEventListener('cancel', (event) => {
+    event.preventDefault();
+    settleConfirmRun(false);
+  });
+  confirmRunDialog?.addEventListener('close', () => {
+    // Guard against a settleConfirmRun no-op path leaving a dangling promise
+    // (e.g. a programmatic close from elsewhere in the page).
+    if (state.confirmRunResolve) settleConfirmRun(false);
   });
   $('detect-button')?.addEventListener('click', () => {
     setView('deploy');
@@ -3470,6 +3897,7 @@ function wireEvents() {
 
 wireEvents();
 setPresentationMode(readPresentationPreference(), { persist: false });
+syncNotifyToggle();
 setView(window.location.hash.slice(1) || 'overview', { updateHash: false });
 // Render the product boundary immediately, even while the account-scoped
 // overview request is still loading (important when RDK Duck was selected in
@@ -3482,14 +3910,21 @@ loadOverview();
 // 上位机视图懒初始化：首次切到 station 视图时再探测板端 agent，
 // 避免无板卡环境下的多余请求与误导性错误横幅。
 const stationViewObserver = new MutationObserver(() => {
-  const section = document.querySelector('[data-view-section="station"]');
-  if (section && !section.hidden && !state.station.initialized) {
-    state.station.initialized = true;
-    stationInit();
-  }
+  stationMaybeInit();
 });
 stationViewObserver.observe(document.body, {
   attributes: true,
   attributeFilter: ['data-active-view'],
   subtree: false,
 });
+// 直接以 #station 打开（刷新或书签）时 setView 在 observer 注册之前就已执行，
+// 不会产生属性变更事件，这里必须补一次同步检查，否则上位机永不初始化。
+stationMaybeInit();
+
+function stationMaybeInit() {
+  const section = document.querySelector('[data-view-section="station"]');
+  if (section && !section.hidden && !state.station.initialized) {
+    state.station.initialized = true;
+    stationInit();
+  }
+}

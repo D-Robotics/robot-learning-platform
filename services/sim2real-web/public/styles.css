@@ -1042,6 +1042,36 @@ h2 {
   color: var(--green);
 }
 
+.context-live {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+  margin-bottom: 17px;
+}
+.context-live-item {
+  min-width: 0;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 11px 13px;
+  background: var(--panel);
+  box-shadow: var(--shadow);
+}
+.context-live-item span {
+  display: block;
+  color: var(--muted);
+  font-size: 9px;
+  letter-spacing: 0.15em;
+}
+.context-live-item strong {
+  display: block;
+  margin-top: 5px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 13px;
+  color: var(--text);
+}
+
 .status-grid {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
@@ -2101,6 +2131,39 @@ h2 {
   gap: 17px;
   margin: 27px 0 22px;
 }
+.originbot-compare-panel {
+  grid-column: 2;
+}
+.originbot-compare-body {
+  display: grid;
+  gap: 10px;
+}
+.originbot-compare-metrics {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+.originbot-compare-metrics > div {
+  display: grid;
+  gap: 4px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: rgba(28, 28, 26, 0.02);
+}
+.originbot-compare-metrics span {
+  font-size: 11px;
+  color: var(--muted);
+}
+.originbot-compare-metrics strong {
+  font-size: 17px;
+  font-variant-numeric: tabular-nums;
+}
+.originbot-compare-panel[data-live='off'] .originbot-compare-metrics strong {
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 500;
+}
 .chart-row {
   display: grid;
   grid-template-columns: 38px minmax(0, 1fr) 36px;
@@ -2406,6 +2469,18 @@ h2 {
   background: rgba(28, 28, 26, 0.32);
   backdrop-filter: blur(3px);
 }
+.confirm-run-note {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.7;
+  color: var(--text);
+}
+.confirm-run-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  margin-top: 4px;
+}
 .run-detail-body {
   display: grid;
   gap: 12px;
@@ -2706,6 +2781,9 @@ body.presentation-mode .next-card {
   .status-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
+  .context-live {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
   .next-card {
     grid-template-columns: minmax(0, 1fr) 190px;
   }
@@ -2854,6 +2932,10 @@ body.presentation-mode .next-card {
     grid-template-columns: 1fr 1fr;
     gap: 7px;
   }
+  .context-live {
+    grid-template-columns: 1fr 1fr;
+    gap: 7px;
+  }
   .module-grid {
     grid-template-columns: 1fr;
   }
@@ -2952,7 +3034,8 @@ body.presentation-mode .next-card {
   align-items: start;
 }
 .station-camera-panel,
-.station-command-panel {
+.station-command-panel,
+.station-drive-panel {
   grid-column: 2;
 }
 .station-status-panel {
@@ -3055,6 +3138,65 @@ body.presentation-mode .next-card {
   border-left: 3px solid rgba(255, 190, 60, 0.6);
   padding-left: 10px;
   line-height: 1.6;
+}
+.station-drive-note {
+  margin: 10px 0 14px;
+  font-size: 12px;
+  color: var(--muted, #91a4bd);
+  border-left: 3px solid rgba(255, 190, 60, 0.6);
+  padding-left: 10px;
+  line-height: 1.6;
+}
+.station-drive-controls {
+  display: grid;
+  gap: 14px;
+}
+.station-drive-slider label {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  font-size: 13px;
+  margin-bottom: 6px;
+  color: var(--ink, #e8eefc);
+}
+.station-drive-slider output {
+  font-variant-numeric: tabular-nums;
+  color: var(--accent-text);
+  font-size: 13px;
+}
+.station-drive-slider input[type='range'] {
+  width: 100%;
+  accent-color: #f05a1a;
+}
+.station-drive-actions {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.station-drive-go {
+  border: 1px solid rgba(70, 160, 98, 0.5);
+  color: var(--green, #74e6b0);
+}
+.station-drive-stop {
+  flex: 1;
+  border: none;
+  border-radius: 8px;
+  padding: 10px 18px;
+  background: #d92b2b;
+  color: #fff;
+  font-weight: 600;
+  cursor: pointer;
+  letter-spacing: 0.12em;
+}
+.station-drive-stop:hover {
+  background: #b81f1f;
+}
+.station-drive-state {
+  font-size: 13px;
+  color: var(--muted, #91a4bd);
+  border-top: 1px dashed var(--line);
+  padding-top: 10px;
+  font-variant-numeric: tabular-nums;
 }
 .station-camera-frame {
   border: 1px solid var(--line);
@@ -3176,7 +3318,8 @@ body.presentation-mode .next-card {
   }
   .station-status-panel,
   .station-camera-panel,
-  .station-command-panel {
+  .station-command-panel,
+  .station-drive-panel {
     grid-column: 1;
     grid-row: auto;
   }

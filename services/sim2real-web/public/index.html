@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="description" content="面向 RDK X5 的 Duck 仿真、训练与部署平台" />
     <title>RDK Duck Sim2Real Lab</title>
-    <link rel="stylesheet" href="./styles.css?v=duck-lab-16" />
+    <link rel="stylesheet" href="./styles.css?v=duck-lab-18" />
   </head>
   <body>
     <a class="skip-link" href="#main-content">跳到主要内容</a>
@@ -44,6 +44,15 @@
             title="切换适合投屏的演示视图"
           >
             演示视图
+          </button
+          ><button
+            class="button button-ghost"
+            id="notify-toggle"
+            type="button"
+            aria-pressed="false"
+            title="训练任务到达终态时发送系统通知"
+          >
+            通知关
           </button
           ><button class="button button-ghost" id="refresh-button" type="button">刷新</button
           ><a class="button button-ghost" href="/rdkstudio/" target="_blank" rel="noreferrer"
@@ -212,6 +221,24 @@
                 >
                   进入仿真与录制 →
                 </button>
+              </div>
+            </div>
+            <div class="context-live" id="context-live" aria-label="当前状态">
+              <div class="context-live-item">
+                <span>当前模型</span>
+                <strong id="context-live-model">未选择</strong>
+              </div>
+              <div class="context-live-item">
+                <span>当前板卡</span>
+                <strong id="context-live-device">未选择</strong>
+              </div>
+              <div class="context-live-item">
+                <span>进行中任务</span>
+                <strong id="context-live-runs">空闲</strong>
+              </div>
+              <div class="context-live-item">
+                <span>算力后端</span>
+                <strong id="context-live-backend">检查中</strong>
               </div>
             </div>
             <div class="status-grid" id="status-grid" aria-label="集成状态">
@@ -608,6 +635,22 @@
                   <span class="compare-dot compare-dot-real"></span> RDK X5 Agent
                 </div>
               </article>
+              <article class="panel originbot-compare-panel" id="originbot-compare-panel">
+                <div class="panel-heading panel-heading-lean"><h2>真机实时对照</h2>
+                  <span class="panel-caption">OriginBot 只读遥测</span>
+                </div>
+                <div class="originbot-compare-body">
+                  <div class="originbot-compare-metrics" id="originbot-compare-metrics">
+                    <div><span>电池电压</span><strong id="ob-compare-voltage">—</strong></div>
+                    <div><span>航向（IMU）</span><strong id="ob-compare-heading">—</strong></div>
+                    <div><span>里程计 位移/线速</span><strong id="ob-compare-odom">—</strong></div>
+                    <div><span>遥测源</span><strong id="ob-compare-source">—</strong></div>
+                  </div>
+                  <p class="small-note" id="ob-compare-note">
+                    上位机页可看实时流；此处为 2 秒轮询快照。bringup 未运行时如实显示「无数据」，不合成。
+                  </p>
+                </div>
+              </article>
             </div>
             <article class="panel telemetry-panel" aria-labelledby="telemetry-title">
               <div class="panel-heading panel-heading-lean"><h2>遥测回放与证据</h2>
@@ -909,7 +952,7 @@
                   <div class="station-metric-card">
                     <span class="station-metric-label">运行时长</span>
                     <span class="station-metric-value" id="station-uptime">--</span>
-                    <span class="station-metric-sub">自 agent 启动</span>
+                    <span class="station-metric-sub" id="station-uptime-sub">自 agent 启动</span>
                   </div>
                   <div class="station-metric-card">
                     <span class="station-metric-label">磁盘</span>
@@ -948,6 +991,63 @@
                     开启相机流
                   </button>
                   <span class="station-camera-state" id="station-camera-state">未连接</span>
+                </div>
+              </article>
+
+              <article class="panel station-drive-panel" id="station-drive-panel">
+                <div class="panel-heading panel-heading-lean"><h2>运动 Canary</h2>
+                  <span class="panel-caption">受限驱动 · 双开关 · 速度/时限钳制</span>
+                </div>
+                <p class="station-drive-note" id="station-drive-note">
+                  未启用。受限驱动需要平台与板端两个开关同时开启
+                  （RDK_SIM2REAL_STATION_DRIVE_ENABLED / RDK_SIM2REAL_BOARD_AGENT_ENABLE_DRIVE）；
+                  急停始终可用。
+                </p>
+                <div class="station-drive-controls" id="station-drive-controls" hidden>
+                  <div class="station-drive-slider">
+                    <label for="station-drive-speed">线速度 <output id="station-drive-speed-out">0.10 m/s</output></label>
+                    <input
+                      type="range"
+                      id="station-drive-speed"
+                      min="0.05"
+                      max="0.3"
+                      step="0.05"
+                      value="0.1"
+                    />
+                  </div>
+                  <div class="station-drive-slider">
+                    <label for="station-drive-omega">角速度 <output id="station-drive-omega-out">0.0 rad/s</output></label>
+                    <input
+                      type="range"
+                      id="station-drive-omega"
+                      min="-1.0"
+                      max="1.0"
+                      step="0.25"
+                      value="0"
+                    />
+                  </div>
+                  <div class="station-drive-slider">
+                    <label for="station-drive-duration">持续 <output id="station-drive-duration-out">1.0 s</output></label>
+                    <input
+                      type="range"
+                      id="station-drive-duration"
+                      min="0.5"
+                      max="2.0"
+                      step="0.5"
+                      value="1"
+                    />
+                  </div>
+                  <div class="station-drive-actions">
+                    <button class="button station-drive-go" type="button" id="station-drive-go">
+                      发送运动命令
+                    </button>
+                    <button class="station-drive-stop" type="button" id="station-drive-stop">
+                      急停
+                    </button>
+                  </div>
+                  <div class="station-drive-state" id="station-drive-state" role="status" aria-live="polite">
+                    空闲
+                  </div>
                 </div>
               </article>
 
@@ -1028,7 +1128,31 @@
         <div class="empty-inline">选择一条运行记录查看详情。</div>
       </div>
     </dialog>
+    <dialog class="run-dialog" id="confirm-run-dialog" aria-labelledby="confirm-run-title">
+      <div class="run-dialog-heading">
+        <div>
+          <h2 id="confirm-run-title">确认提交云端训练</h2>
+        </div>
+      </div>
+      <div class="run-detail-body">
+        <p class="confirm-run-note">
+          该请求会消耗 RoboGo 云端算力并占用一个任务名额；提交后由服务端校验当前账号授权，未授权时会明确标记为 blocked。
+        </p>
+        <div class="run-detail-grid">
+          <div class="run-detail-field"><span>模型</span><strong id="confirm-run-model">—</strong></div>
+          <div class="run-detail-field"><span>动作任务</span><strong id="confirm-run-task">—</strong></div>
+          <div class="run-detail-field"><span>训练档位</span><strong id="confirm-run-profile">—</strong></div>
+          <div class="run-detail-field"><span>续训</span><strong id="confirm-run-resume">不续训</strong></div>
+        </div>
+        <div class="confirm-run-actions">
+          <button class="button button-ghost" id="confirm-run-cancel" type="button">取消</button
+          ><button class="button button-primary" id="confirm-run-approve" type="button">
+            确认提交
+          </button>
+        </div>
+      </div>
+    </dialog>
     <div class="toast-region" id="toast-region" aria-live="polite" aria-atomic="true"></div>
-    <script src="./app.js?v=duck-lab-16" type="module"></script>
+    <script src="./app.js?v=duck-lab-18" type="module"></script>
   </body>
 </html>
