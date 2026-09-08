@@ -3492,6 +3492,7 @@ function stationRenderStatus(status) {
       driveState.textContent = `空闲（${reason}）`;
     }
   }
+  stationUpdateFloatStop(drive);
   const topicList = $('station-topic-list');
   if (topicList) {
     const topics = Array.isArray(status.topics) ? status.topics.slice(0, 12) : [];
@@ -3654,6 +3655,38 @@ async function stationEmergencyStop() {
   }
 }
 
+// 浮动急停：驱动窗口激活时在视口角落常驻一枚红色停止按钮，任何页面可见。
+// 只依赖 1Hz 状态流里的 drive.active；流断开时按钮 2s 后自动隐藏，宁可
+// 多显示不可在运动中消失。急停端点本身永远可用，与按钮显隐无关。
+let stationFloatStopTimer = null;
+
+function stationUpdateFloatStop(drive) {
+  const button = $('station-float-stop');
+  if (!button) return;
+  const active = Boolean(drive && drive.active);
+  if (active) {
+    button.hidden = false;
+    if (stationFloatStopTimer) clearTimeout(stationFloatStopTimer);
+    stationFloatStopTimer = setTimeout(() => {
+      button.hidden = true;
+      stationFloatStopTimer = null;
+    }, 2000);
+  } else if (stationFloatStopTimer) {
+    clearTimeout(stationFloatStopTimer);
+    stationFloatStopTimer = null;
+    button.hidden = true;
+  }
+}
+
+function wireStationFloatStop() {
+  const button = $('station-float-stop');
+  if (!button || button.dataset.wired === '1') return;
+  button.dataset.wired = '1';
+  button.addEventListener('click', () => {
+    void stationEmergencyStop();
+  });
+}
+
 function stationSetCamera(enabled) {
   const img = $('station-camera-img');
   const placeholder = $('station-camera-placeholder');
@@ -3794,14 +3827,16 @@ function wireStationEvents() {
   $('station-drive-stop')?.addEventListener('click', () => {
     void stationEmergencyStop();
   });
-  // 空格键 = 急停（focus 不在输入控件时），与现场操作直觉一致。
+  wireStationFloatStop();
+  // 空格键 = 急停（focus 不在输入控件时）。不限制在 station 页：机器人在动时，
+  // 操作者在任何页面（评测页看遥测对照时也一样）都必须能一按就停。
   document.addEventListener('keydown', (event) => {
     const target = event.target;
     const inControl =
       target instanceof HTMLInputElement ||
       target instanceof HTMLTextAreaElement ||
       target instanceof HTMLSelectElement;
-    if (event.code === 'Space' && !inControl && state.station.initialized) {
+    if (event.code === 'Space' && !inControl) {
       event.preventDefault();
       void stationEmergencyStop();
     }

@@ -43,8 +43,9 @@
     "verify:examples": "node scripts/verify-examples.mjs",
     "verify:local-worker": "node services/sim2real-web/local-training-worker.test.mjs",
     "verify:board-agent": "node services/sim2real-web/local-board-agent.test.mjs",
+    "verify:board-drive": "python3 services/sim2real-web/board-agent-drive.test.py",
     "verify:starter-engine": "node scripts/verify-starter-engine.mjs",
-    "verify": "npm run verify:ui && npm run verify:recorder && npm run verify:deployment && npm run verify:examples && npm run verify:local-worker && npm run verify:board-agent && npm run verify:starter-engine && npm run smoke:sim2real-local && node services/sim2real-web/server-wiring.spec.mjs && npm test"
+    "verify": "npm run verify:ui && npm run verify:recorder && npm run verify:deployment && npm run verify:examples && npm run verify:local-worker && npm run verify:board-agent && npm run verify:board-drive && npm run verify:starter-engine && npm run smoke:sim2real-local && node services/sim2real-web/server-wiring.spec.mjs && npm test"
   },
   "dependencies": {
     "express": "^5.2.1"

@@ -53,6 +53,8 @@ Mock 的 `completed` 只表示协议演练完成，不代表真实 PPO 权重或
 | mjlab + rsl-rl GPU 训练 | 🔌 | 参考适配器在 `engines/mjlab-rsl-rl-adapter/`，需自备训练栈与 GPU |
 | RoboGo 适配接口 | 🔌 | 需要服务端配置真实地址、凭据和网络策略 |
 | RDK-X5 真机采集 / BoardAgent / OTA | 🧩 | 提供端口、预检和部署边界，需接入实际设备 |
+| 真机遥测（IMU/里程计/电池） | ✅ | 常驻只读遥测节点 + 认证代理 + 评估页同屏对比（参考机型 OriginBot，话题清单可换机型） |
+| 真机受限驱动（运动金丝雀） | ✅ 默认关闭 | 通用 `/cmd_vel` 通道：双开关 + 双重钳制 + 时间盒 + 急停恒可用，见 [docs/actuator-drive.md](docs/actuator-drive.md) |
 | 多副本生产存储 | 🗺️ | MVP 使用单实例 ledger，规模化迁移 PostgreSQL + 对象存储 |
 
 <div align="center">

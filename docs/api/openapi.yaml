@@ -15,6 +15,7 @@ tags:
   - name: telemetry
   - name: deployments
   - name: devices
+  - name: board-station
 security:
   - cookieAuth: []
 paths:
@@ -351,6 +352,216 @@ paths:
           content: { application/json: { schema: { $ref: "#/components/schemas/BoardDetectResponse" } } }
         "404": { $ref: "#/components/responses/NotFound" }
         "503": { description: Board agent unavailable. }
+  /api/v1/duck/board-station/health:
+    get:
+      tags: [board-station]
+      summary: Station capability probe for the workbench
+      operationId: getBoardStationHealth
+      description: >-
+        Returns the resolved station target device plus the agent's honest
+        capability snapshot (capabilities, stationCommands, actuatorControl,
+        mock, cameraSupported). Fails closed with 503 when no board agent is
+        configured.
+      parameters:
+        - in: query
+          name: deviceId
+          schema: { type: string }
+          description: Optional explicit station target; defaults to the first visible device.
+      responses:
+        "200":
+          description: Station health and capabilities.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StationHealthResponse" }
+        "401": { $ref: "#/components/responses/AuthRequired" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "502": { description: Board agent unreachable (retryable). }
+        "503": { description: Board agent not configured. }
+  /api/v1/duck/board-station/status:
+    get:
+      tags: [board-station]
+      summary: One board status snapshot (CPU, memory, power, TROS topics)
+      operationId: getBoardStationStatus
+      parameters:
+        - in: query
+          name: deviceId
+          schema: { type: string }
+      responses:
+        "200":
+          description: Status snapshot.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [ok, status]
+                properties:
+                  ok: { const: true }
+                  status: { type: object, additionalProperties: true }
+        "401": { $ref: "#/components/responses/AuthRequired" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "502": { description: Board agent unreachable (retryable). }
+        "503": { description: Board agent not configured. }
+  /api/v1/duck/board-station/status/stream:
+    get:
+      tags: [board-station]
+      summary: Forwarded NDJSON status heartbeat
+      operationId: getBoardStationStatusStream
+      description: >-
+        Streams NDJSON status frames from the agent through the authenticated
+        proxy; one upstream connection per client, torn down together, with a
+        bounded lifetime.
+      parameters:
+        - in: query
+          name: deviceId
+          schema: { type: string }
+      responses:
+        "200":
+          description: NDJSON stream (content-type application/x-ndjson).
+          content: { application/x-ndjson: { schema: { type: object, additionalProperties: true } } }
+        "401": { $ref: "#/components/responses/AuthRequired" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "502": { description: Board agent stream unreachable (retryable). }
+        "503": { description: Board agent not configured. }
+  /api/v1/duck/board-station/camera.mjpeg:
+    get:
+      tags: [board-station]
+      summary: Forwarded MJPEG camera stream
+      operationId: getBoardStationCamera
+      description: >-
+        Forwards the board camera MJPEG stream; rendered directly by a plain
+        img tag in the workbench. The agent reports 503 (not synthetic
+        frames) when no camera is connected.
+      parameters:
+        - in: query
+          name: deviceId
+          schema: { type: string }
+      responses:
+        "200":
+          description: MJPEG stream (multipart/x-mixed-replace).
+          content:
+            multipart/x-mixed-replace:
+              schema: { type: string, format: binary }
+        "401": { $ref: "#/components/responses/AuthRequired" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "502": { description: Board agent stream unreachable (retryable). }
+        "503": { description: Board agent not configured or camera absent. }
+  /api/v1/duck/board-station/commands:
+    post:
+      tags: [board-station]
+      summary: Dispatch one allowlisted read-only station command
+      operationId: postBoardStationCommand
+      description: >-
+        Accepts only the four read-only station commands
+        (list-tros-nodes, list-tros-topics, disk-usage, service-status);
+        anything else is rejected before any agent call is made.
+      parameters:
+        - in: query
+          name: deviceId
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [id]
+              properties:
+                id: { type: string, enum: [list-tros-nodes, list-tros-topics, disk-usage, service-status] }
+      responses:
+        "200":
+          description: Command result from the agent.
+          content:
+            application/json:
+              schema: { type: object, additionalProperties: true }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/AuthRequired" }
+        "502": { description: Board agent unreachable or refused the command. }
+  /api/v1/duck/board-station/devices:
+    get:
+      tags: [board-station]
+      summary: Devices usable as the station target
+      operationId: getBoardStationDevices
+      responses:
+        "200":
+          description: Visible devices and agent configuration state.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StationDevicesResponse" }
+        "401": { $ref: "#/components/responses/AuthRequired" }
+  /api/v1/duck/board-station/drive:
+    get:
+      tags: [board-station]
+      summary: Constrained-drive state (motion canary)
+      operationId: getBoardStationDrive
+      description: >-
+        Honest snapshot of the constrained-drive canary: platform switch,
+        board agent switch, and the actuator policy (clamps, window, publish
+        rate, chassis watchdog). Read-only; never moves the robot.
+      parameters:
+        - in: query
+          name: deviceId
+          schema: { type: string }
+      responses:
+        "200":
+          description: Drive state and policy.
+          content: { application/json: { schema: { $ref: "#/components/schemas/DriveState" } } }
+        "401": { $ref: "#/components/responses/AuthRequired" }
+        "502": { description: Board agent unreachable (retryable). }
+    post:
+      tags: [board-station]
+      summary: One clamped, time-boxed motion command
+      operationId: postBoardStationDrive
+      description: >-
+        Sends a single constrained motion command to the board chassis.
+        Double-gated: 409 unless BOTH the platform switch
+        (RDK_SIM2REAL_STATION_DRIVE_ENABLED=1) and the board agent switch
+        (RDK_SIM2REAL_BOARD_AGENT_ENABLE_DRIVE=1) are enabled. Values are
+        re-clamped at the proxy and again on the board (linear <=0.3 m/s,
+        angular <=1.0 rad/s, duration 0.2-2.0 s). The chassis firmware
+        watchdog stops the robot 500 ms after /cmd_vel goes silent.
+      parameters:
+        - in: query
+          name: deviceId
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/DriveCommand" }
+      responses:
+        "200":
+          description: Command accepted; motion window opened.
+          content: { application/json: { schema: { $ref: "#/components/schemas/DriveState" } } }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/AuthRequired" }
+        "409":
+          description: >-
+            Refused: drive disabled on the platform (no agent call made), or
+            the board agent refused (drive-disabled / out-of-range /
+            rate-limited / publisher-unavailable). The refusal reason is
+            passed through verbatim.
+          content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } }
+        "502": { description: Board agent unreachable (retryable); robot stays at rest. }
+  /api/v1/duck/board-station/drive/stop:
+    post:
+      tags: [board-station]
+      summary: Emergency zero-speed stop (always available)
+      operationId: postBoardStationDriveStop
+      description: >-
+        Zero-speed emergency stop. Always forwarded to the board agent
+        regardless of both drive switches, so the stop path has no failure
+        mode from gating. The board writes a zero command frame and the
+        chassis watchdog enforces rest.
+      parameters:
+        - in: query
+          name: deviceId
+          schema: { type: string }
+      responses:
+        "200":
+          description: Stop delivered; zero-speed frame published.
+          content: { application/json: { schema: { $ref: "#/components/schemas/DriveState" } } }
+        "401": { $ref: "#/components/responses/AuthRequired" }
+        "502": { description: Board agent unreachable; chassis watchdog still enforces rest. }
 components:
   securitySchemes:
     cookieAuth:
@@ -405,6 +616,95 @@ components:
       description: Resource is not visible to this account.
       content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } }
   schemas:
+    StationHealthResponse:
+      type: object
+      required: [ok, device, agent, cameraSupported]
+      properties:
+        ok: { const: true }
+        device:
+          type: object
+          required: [id, name, status]
+          properties:
+            id: { type: string }
+            name: { type: string }
+            status: { type: string }
+            boardPlatform: { type: [string, "null"] }
+            boardModel: { type: [string, "null"] }
+        agent:
+          type: object
+          required: [capabilities, stationCommands, actuatorControl, mock]
+          properties:
+            capabilities: { type: array, items: { type: string } }
+            stationCommands: { type: array, items: { type: object, additionalProperties: true } }
+            actuatorControl: { type: boolean }
+            mock: { type: boolean }
+        cameraSupported: { type: boolean }
+    StationDevicesResponse:
+      type: object
+      required: [ok, agentConfigured, devices]
+      properties:
+        ok: { const: true }
+        agentConfigured: { type: boolean }
+        devices:
+          type: array
+          items:
+            type: object
+            required: [id, name, status]
+            properties:
+              id: { type: string }
+              name: { type: string }
+              status: { type: string }
+              boardPlatform: { type: [string, "null"] }
+              boardModel: { type: [string, "null"] }
+              connectionMode: { type: [string, "null"] }
+    DriveCommand:
+      type: object
+      required: [linear, angular, durationSec]
+      properties:
+        linear:
+          type: number
+          minimum: -0.3
+          maximum: 0.3
+          description: Forward/backward speed in m/s; re-clamped at both proxy and board.
+        angular:
+          type: number
+          minimum: -1.0
+          maximum: 1.0
+          description: Yaw rate in rad/s; re-clamped at both proxy and board.
+        durationSec:
+          type: number
+          minimum: 0.2
+          maximum: 2.0
+          description: Motion window length in seconds; one command may never drive longer.
+    DriveState:
+      type: object
+      required: [ok, platformEnabled, drive]
+      properties:
+        ok: { type: boolean }
+        platformEnabled:
+          type: boolean
+          description: The platform-side drive switch state (RDK_SIM2REAL_STATION_DRIVE_ENABLED).
+        drive:
+          type: object
+          required: [enabled, active]
+          properties:
+            enabled: { type: boolean, description: Board agent drive switch state. }
+            active: { type: boolean, description: True while a motion window is open. }
+            linear: { type: number }
+            angular: { type: number }
+            remainingMs: { type: integer }
+            lastStopReason: { type: string }
+            published: { type: integer, description: Total accepted commands since agent start. }
+        actuatorPolicy:
+          type: object
+          properties:
+            enabled: { type: boolean }
+            maxLinear: { type: number }
+            maxAngular: { type: number }
+            maxWindowSec: { type: number }
+            publishHz: { type: integer }
+            chassisWatchdogMs: { type: integer }
+            emergencyStop: { type: string }
     Error:
       type: object
       required: [ok, error]

@@ -2,7 +2,11 @@ import { type Request, type Response, type Router } from 'express';
 
 import { sendApiError, wrapAsync } from '../sim2real/http-helpers.js';
 import { isBoardAgentConfigured } from '../sim2real/standalone-adapters.js';
-import { stationAgentFetch, stationAgentFetchStream } from '../sim2real/board-station-proxy.js';
+import {
+  stationAgentFetch,
+  stationAgentFetchStream,
+  stationAgentFetchWithStatus,
+} from '../sim2real/board-station-proxy.js';
 import type { Sim2RealAuthPort } from '../sim2real/sim2real-auth.js';
 import type { Device } from '../../shared/types.js';
 
@@ -115,8 +119,12 @@ function pipeStationStream(
  * the board agent directly: every call goes through this authenticated,
  * allowlisted, ownership-checked proxy. Streaming endpoints (status NDJSON and
  * MJPEG) are forwarded with a bounded lifetime; JSON endpoints are bounded
- * fetches. No path here can issue an actuator command — the agent itself only
- * exposes read-only station operations.
+ * fetches. Motion is the ONE actuator path, and it is double-gated: the
+ * platform switch (RDK_SIM2REAL_STATION_DRIVE_ENABLED) AND the board agent
+ * switch (RDK_SIM2REAL_BOARD_AGENT_ENABLE_DRIVE) must both be on, every value
+ * is re-clamped here and again on the board, each command is time-boxed, and
+ * drive/stop (emergency zero) is always forwarded. Everything else stays
+ * read-only.
  */
 export function registerSim2RealBoardStationRoutes(
   router: Router,
@@ -356,6 +364,139 @@ export function registerSim2RealBoardStationRoutes(
           connectionMode: device.connectionMode ?? null,
         })),
       });
+    }),
+  );
+
+  // ---- constrained drive (motion canary) --------------------------------
+  // Motion requires BOTH switches: the board agent's
+  // RDK_SIM2REAL_BOARD_AGENT_ENABLE_DRIVE=1 and the platform's
+  // RDK_SIM2REAL_STATION_DRIVE_ENABLED=1. Either one alone keeps the
+  // platform read-only. The proxy re-validates and clamps every value the
+  // browser sends; the agent clamps again on the board.
+
+  const drivePlatformEnabled =
+    String(process.env.RDK_SIM2REAL_STATION_DRIVE_ENABLED ?? '').trim() === '1';
+  const DRIVE_PROXY_MAX_LINEAR = 0.3;
+  const DRIVE_PROXY_MAX_ANGULAR = 1.0;
+  const DRIVE_PROXY_MAX_WINDOW_SEC = 2.0;
+
+  /** Normalize and clamp one drive request; null when invalid. */
+  const clampDriveRequest = (body: Record<string, unknown>) => {
+    const linear = Number(body.linear);
+    const angular = Number(body.angular);
+    const durationSec = Number(body.durationSec);
+    if (!Number.isFinite(linear) || !Number.isFinite(angular) || !Number.isFinite(durationSec)) {
+      return null;
+    }
+    return {
+      linear: Math.min(Math.max(linear, -DRIVE_PROXY_MAX_LINEAR), DRIVE_PROXY_MAX_LINEAR),
+      angular: Math.min(Math.max(angular, -DRIVE_PROXY_MAX_ANGULAR), DRIVE_PROXY_MAX_ANGULAR),
+      durationSec: Math.min(Math.max(durationSec, 0.2), DRIVE_PROXY_MAX_WINDOW_SEC),
+    };
+  };
+
+  /** GET /board-station/drive — current constrained-drive state. */
+  router.get(
+    api('/board-station/drive'),
+    wrapAsync(async (request, response) => {
+      const resolved = await resolveStation(request, response);
+      if (!resolved) return;
+      noStore(response);
+      const agent = await stationAgentFetch('/v1/station/drive');
+      if (!agent) {
+        sendApiError(
+          response,
+          502,
+          'SIM2REAL_BOARD_AGENT_UNREACHABLE',
+          '板端驱动状态不可达。',
+          { retryable: true },
+        );
+        return;
+      }
+      response.json({
+        ok: true,
+        platformEnabled: drivePlatformEnabled,
+        drive: agent.drive ?? null,
+        actuatorPolicy: agent.actuatorPolicy ?? null,
+      });
+    }),
+  );
+
+  /** POST /board-station/drive — one clamped, time-boxed motion command. */
+  router.post(
+    api('/board-station/drive'),
+    wrapAsync(async (request, response) => {
+      const resolved = await resolveStation(request, response);
+      if (!resolved) return;
+      noStore(response);
+      if (!drivePlatformEnabled) {
+        sendApiError(
+          response,
+          409,
+          'SIM2REAL_STATION_DRIVE_DISABLED',
+          '平台未开启受限驱动（RDK_SIM2REAL_STATION_DRIVE_ENABLED），上位机保持只读。',
+          { retryable: false },
+        );
+        return;
+      }
+      const body =
+        request.body && typeof request.body === 'object' && !Array.isArray(request.body)
+          ? (request.body as Record<string, unknown>)
+          : {};
+      const clamped = clampDriveRequest(body);
+      if (!clamped) {
+        sendApiError(
+          response,
+          400,
+          'SIM2REAL_STATION_DRIVE_INVALID',
+          '驱动参数无效（需要数值型 linear/angular/durationSec）。',
+          { retryable: false },
+        );
+        return;
+      }
+      const agent = await stationAgentFetchWithStatus('/v1/station/drive', {
+        method: 'POST',
+        timeoutMs: 12000,
+        body: JSON.stringify(clamped),
+      });
+      // An agent refusal (409 drive-disabled / rate-limited / out of range)
+      // is a meaningful answer: pass the reason through, not a 502.
+      if (!agent) {
+        sendApiError(
+          response,
+          502,
+          'SIM2REAL_BOARD_AGENT_UNREACHABLE',
+          '板端 agent 不可达，命令未下发。底盘看门狗保证机器人保持静止。',
+          { retryable: true },
+        );
+        return;
+      }
+      response.status(agent.status).json(agent.payload);
+    }),
+  );
+
+  /** POST /board-station/drive/stop — emergency zero-speed, always allowed. */
+  router.post(
+    api('/board-station/drive/stop'),
+    wrapAsync(async (request, response) => {
+      const resolved = await resolveStation(request, response);
+      if (!resolved) return;
+      noStore(response);
+      const agent = await stationAgentFetch('/v1/station/drive/stop', {
+        method: 'POST',
+        timeoutMs: 5000,
+      });
+      if (!agent || typeof agent !== 'object') {
+        sendApiError(
+          response,
+          502,
+          'SIM2REAL_BOARD_AGENT_UNREACHABLE',
+          '急停命令未送达板端。持续按下急停并检查板端 agent；底盘固件看门狗（500ms 无命令自动停车）兜底。',
+          { retryable: true },
+        );
+        return;
+      }
+      response.json(agent);
     }),
   );
 }

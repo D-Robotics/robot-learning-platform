@@ -9,10 +9,11 @@
 | 板卡实时状态（CPU/内存/磁盘/网络/电源/uptime/TROS 话题） | ✅ | NDJSON 心跳流，1Hz |
 | 板载相机画面 | ✅ | MJPEG 流（multipart/x-mixed-replace），`<img>` 直接渲染 |
 | 白名单只读命令 | ✅ | TROS 节点/话题列表、磁盘用量、服务状态 |
-| 遥控/电机控制 | ❌ 永不提供 | 代理和 agent 都没有执行器通道，`actuatorControl: false` 全链路如实上报 |
+| 遥控/电机控制 | ⚠️ 默认关闭的受限驱动 | 双开关（平台 `RDK_SIM2REAL_STATION_DRIVE_ENABLED` + 板端 `RDK_SIM2REAL_BOARD_AGENT_ENABLE_DRIVE`）全开后提供 0.05–0.3 m/s / ≤2 s 的运动金丝雀；`actuatorControl` 全链路如实上报开关状态 |
+| 急停 | ✅ 恒可用 | `POST /api/sim2real/board-station/drive/stop` 绕过所有开关，空格键全局急停 |
 | 写板操作（下发制品、改参数、启停服务） | ❌ | 上板部署仍走部署页的 preflight → canary → live 流程 |
 
-本平台的安全立场：上位机是**观察面**，不是控制面。真机上想让机器人动，必须经过部署流程的显式批准与受控 board agent，不经过浏览器。
+本平台的安全立场：上位机默认是**观察面**。受限驱动是唯一例外且默认关闭——双开关、双重钳制、时间盒、底盘固件看门狗兜底，完整启用流程与操作案例见 [docs/actuator-drive.md](actuator-drive.md)。
 
 ## 一分钟跑起来（本地参考实现）
 
@@ -32,7 +33,7 @@ RDK_SIM2REAL_BOARD_AGENT_URL=http://127.0.0.1:19100 npm run dev:sim2real
 
 ## 线协议（agent 侧）
 
-BoardAgent 在部署预检协议之外新增 5 个端点，全部只读：
+BoardAgent 在部署预检协议之外新增 8 个端点（5 个只读 + 3 个受限驱动）：
 
 ```
 GET  /healthz                       能力声明 + stationCommands 白名单
@@ -40,6 +41,9 @@ GET  /v1/station/status             一次状态快照（JSON）
 GET  /v1/station/status/stream      NDJSON 心跳流（1 行 = 1 个快照）
 GET  /v1/station/camera.mjpeg       MJPEG 相机流
 POST /v1/station/commands           { "id": "<白名单命令>" } → { ok, output, ... }
+GET  /v1/station/drive              受限驱动状态（金丝雀）
+POST /v1/station/drive              钳制+时间盒的 cmd_vel（双开关全开才接受）
+POST /v1/station/drive/stop         零速急停（恒 200，绕过开关）
 ```
 
 - 鉴权：与预检协议同一 `RDK_SIM2REAL_BOARD_AGENT_TOKEN`（Bearer）。

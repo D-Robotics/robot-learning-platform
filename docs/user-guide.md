@@ -111,7 +111,7 @@ npm run demo:sim2real
 
 ### 上位机（06）
 
-板卡实时状态（CPU / 内存 / 网络 / 电源 / 运行时长 / 磁盘 + TROS 话题）、板载相机 MJPEG 流、白名单只读命令（TROS 节点 / 话题列表、磁盘用量、服务状态）+ 串流日志。浏览器不直连板端，全部走服务端认证代理；**没有电机 / 执行器控制通道**。接入真实板卡见 [docs/host-station.md](host-station.md)。
+板卡实时状态（CPU / 内存 / 网络 / 电源 / 运行时长 / 磁盘 + TROS 话题）、板载相机 MJPEG 流、白名单只读命令（TROS 节点 / 话题列表、磁盘用量、服务状态）+ 串流日志、真机遥测卡片（电池电压、IMU 航向；参考机型 OriginBot）。浏览器不直连板端，全部走服务端认证代理。电机控制**默认关闭**：平台与板端各有一个开关，全部显式开启后才会出现受限驱动面板（速度 ≤0.3 m/s、单命令 ≤2 s 的运动金丝雀，通道通用、`/cmd_vel` 底盘即可复用），急停永远可用。接入真实板卡见 [docs/host-station.md](host-station.md)，受限驱动的启用流程与安全边界见 [docs/actuator-drive.md](actuator-drive.md)。
 
 ---
 
@@ -134,7 +134,7 @@ npm run demo:sim2real
 
 - **预检永远只读**：不要试图绕过——它就是设计来在你承诺真机前给你完整板端画像的。
 - **Canary 先于 Live**：无电机 Canary 通过、日志干净，再人工批准 Live。
-- **电机控制不在浏览器里**：想让机器人动，走部署流程 + 受控 Board Agent；上位机只是观察面。
+- **电机控制默认不在浏览器里**：受限驱动是双开关 + 双重钳制 + 时间盒 + 急停的运动金丝雀（见 [docs/actuator-drive.md](actuator-drive.md)），默认关闭；其余任何「想让机器人动」的场景走部署流程 + 受控 Board Agent。
 
 ### 日常操作
 
@@ -156,4 +156,4 @@ npm run demo:sim2real
 | 上位机无数据 | 板端 agent 未就绪；确认 `RDK_SIM2REAL_BOARD_AGENT_URL` 指向可达 agent 并已登记设备 |
 | 浏览器显示旧版界面 | 强刷一次（HTML 已配置为每次重校验缓存） |
 
-更多部署 / 运维细节：[docs/host-station.md](host-station.md)（上位机与板端 agent）、[docs/gpu-runner.md](gpu-runner.md)（GPU 训练机）、[docs/demo-runbook.md](demo-runbook.md)（演示脚本）、[docs/engines/starter-ppo.md](engines/starter-ppo.md)（Starter PPO 引擎）。
+更多部署 / 运维细节：[docs/host-station.md](host-station.md)（上位机与板端 agent）、[docs/actuator-drive.md](actuator-drive.md)（受限驱动）、[docs/gpu-runner.md](gpu-runner.md)（GPU 训练机）、[docs/demo-runbook.md](demo-runbook.md)（演示脚本）、[docs/engines/starter-ppo.md](engines/starter-ppo.md)（Starter PPO 引擎）。
