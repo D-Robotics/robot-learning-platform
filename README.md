@@ -171,6 +171,7 @@ MicroDuck 浏览器资源的上游 commit、仓库和许可证边界记录在 [`
 
 更多说明：
 
+- [`docs/user-guide.md`](docs/user-guide.md)（使用手册与最佳实践）
 - [`docs/demo-runbook.md`](docs/demo-runbook.md)
 - [`docs/gpu-runner.md`](docs/gpu-runner.md)
 - [`docs/host-station.md`](docs/host-station.md)
