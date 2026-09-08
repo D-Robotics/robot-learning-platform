@@ -25,6 +25,7 @@ import {
   storageRequestContextMiddleware,
   studioSecurityHeadersMiddleware,
 } from '../../server/sim2real/standalone-adapters.js';
+import { createStudioLoginRelayRouter } from '../../server/sim2real/studio-login-relay.js';
 import {
   createSim2RealRouter,
   SIM2REAL_VERSIONED_API_PREFIX,
@@ -191,8 +192,7 @@ export function createSim2RealWebApp(): Express {
         ? authAdapterConfigured
           ? studioSsoAdapterMode()
           : 'sso-adapter-required'
-        : 'local-single-user',
-      microduck: surface,
+        : 'local-single-user',      microduck: surface,
       microduckRequired,
       storage,
       ready:
@@ -224,7 +224,14 @@ export function createSim2RealWebApp(): Express {
   // OIDC adapter) must establish the account before shared mode is enabled.
   registerSSORoutes(app);
   app.use(ssoAuthMiddleware);
+  // Mount order matters: the credential relay must sit behind the CSRF
+  // boundary so a cross-site page cannot post credentials through this
+  // service. Same-origin browser posts carry an allowed Origin and pass.
   app.use(sim2RealCsrfMiddleware);
+  // Studio-cookie deployments also expose a credential relay so the workbench
+  // can log in directly (POST /api/sso/login) instead of bouncing users to
+  // the Studio main shell. The relay adopts the same site-wide cookie.
+  app.use(createStudioLoginRelayRouter({ auth: studioSsoAuth }));
 
   // Board detection is read-only unless the caller explicitly asks the
   // existing route to persist the detected metadata. The sim2real router

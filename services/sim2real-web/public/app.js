@@ -357,6 +357,50 @@ function safeLaunchUrl(value) {
   }
 }
 
+/* 登录门：优先展示本地 SSO 登录表单（POST /api/sso/login 由服务端转发
+   Studio 账号中心并代管会话 Cookie）；「改用 RDK Studio 登录页」保留为兜底外链。 */
+const AUTH_METHOD_FIELDS = {
+  account: ['userName', 'password'],
+  sms: ['mobile', 'code'],
+  email: ['email', 'code'],
+};
+let authMethod = 'account';
+let authSubmitting = false;
+
+function authFieldInput(name) {
+  const field = document.querySelector('[data-auth-field="' + name + '"]');
+  return field ? field.querySelector('input') : null;
+}
+
+function setAuthMethod(method) {
+  if (!AUTH_METHOD_FIELDS[method]) return;
+  authMethod = method;
+  document.querySelectorAll('.auth-login-tab').forEach((tab) => {
+    tab.classList.toggle('is-active', tab.dataset.authMethod === method);
+  });
+  const visible = new Set(AUTH_METHOD_FIELDS[method]);
+  document.querySelectorAll('[data-auth-field]').forEach((field) => {
+    field.hidden = !visible.has(field.dataset.authField);
+  });
+  setAuthLoginError('');
+  syncAuthLoginSubmit();
+}
+
+function syncAuthLoginSubmit() {
+  const submit = $('auth-login-submit');
+  if (!submit) return;
+  const required = AUTH_METHOD_FIELDS[authMethod] || [];
+  const filled = required.every((name) => String(authFieldInput(name)?.value || '').trim());
+  submit.disabled = authSubmitting || !filled;
+}
+
+function setAuthLoginError(message) {
+  const node = $('auth-login-error');
+  if (!node) return;
+  node.textContent = String(message || '');
+  node.hidden = !message;
+}
+
 function setAuthGate(payload) {
   state.authRequired = true;
   const loginUrl = withLocalReturnTo(safeLoginUrl(
@@ -378,8 +422,54 @@ function setAuthGate(payload) {
   renderEvaluationNext();
   if (!state.authNoticeShown) {
     state.authNoticeShown = true;
-    showToast('请先登录 RDK Studio，再加载你的 Sim2Real 工作区。', 'error');
+    showToast('请先登录 RDK 账号，再加载你的 Sim2Real 工作区。', 'error');
   }
+}
+
+async function submitAuthLogin() {
+  if (authSubmitting) return;
+  const method = authMethod;
+  const body = { method };
+  for (const name of AUTH_METHOD_FIELDS[method] || []) {
+    const value = String(authFieldInput(name)?.value || '').trim();
+    if (!value) return;
+    body[name] = value;
+  }
+  authSubmitting = true;
+  syncAuthLoginSubmit();
+  setAuthLoginError('');
+  const submit = $('auth-login-submit');
+  if (submit) submit.textContent = '登录中…';
+  try {
+    await request('/sso/login', { method: 'POST', body: JSON.stringify(body) });
+    clearAuthGate();
+    showToast('登录成功，正在加载工作区…', 'success');
+    await loadOverview();
+  } catch (error) {
+    const message =
+      error instanceof ApiError && error.payload && error.payload.message
+        ? String(error.payload.message)
+        : error instanceof Error
+          ? error.message
+          : '登录失败，请稍后重试';
+    setAuthLoginError(message);
+  } finally {
+    authSubmitting = false;
+    if (submit) submit.textContent = '登录';
+    syncAuthLoginSubmit();
+  }
+}
+
+async function logoutAccount() {
+  try {
+    await request('/sso/logout', { method: 'POST', body: '{}' });
+  } catch {
+    // Even if the logout call fails, drop back to the login gate locally.
+  }
+  state.overview = null;
+  setAuthGate(null);
+  renderAll();
+  showToast('已退出登录。', 'success');
 }
 
 function clearAuthGate() {
@@ -387,6 +477,7 @@ function clearAuthGate() {
   state.authNoticeShown = false;
   $('auth-gate')?.setAttribute('hidden', '');
   $('login-link')?.setAttribute('hidden', '');
+  setAuthLoginError('');
   syncServicePill();
 }
 
@@ -679,6 +770,12 @@ function renderIntegrations() {
     accountDivider.hidden = !accountLabel;
     accountStatus.textContent = accountLabel ? '账号 · ' + accountLabel : '';
     accountStatus.title = identity?.email || identity?.accountId || '';
+  }
+  const accountLogout = $('account-pill-logout');
+  if (accountLogout) {
+    const accountLabel = identity?.displayName || identity?.accountId || '';
+    accountLogout.hidden = !accountLabel;
+    accountLogout.title = accountLabel ? '退出当前 RDK 账号' : '';
   }
   setText('current-project-name', profile.projectName);
   setText('sidebar-product-name', profile.displayName);
@@ -3742,6 +3839,19 @@ function wireEvents() {
   });
   $('robogo-refresh-button')?.addEventListener('click', () => loadOverview());
   $('auth-retry-button')?.addEventListener('click', () => loadOverview());
+  document.querySelectorAll('.auth-login-tab').forEach((tab) => {
+    tab.addEventListener('click', () => setAuthMethod(tab.dataset.authMethod || 'account'));
+  });
+  document.querySelectorAll('[data-auth-field] input').forEach((input) => {
+    input.addEventListener('input', syncAuthLoginSubmit);
+  });
+  $('auth-login-form')?.addEventListener('submit', (event) => {
+    event.preventDefault();
+    void submitAuthLogin();
+  });
+  $('account-pill-logout')?.addEventListener('click', () => {
+    void logoutAccount();
+  });
   $('task-select')?.addEventListener('change', (event) => {
     const next = event.target.value;
     if (!ACTION_TASKS[next]) return;

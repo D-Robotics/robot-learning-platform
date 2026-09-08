@@ -5,6 +5,7 @@ import type { Request, RequestHandler, Response } from 'express';
 import { Router } from 'express';
 import type { Device } from '../../shared/types.js';
 import type { Sim2RealAuthPort } from './sim2real-auth.js';
+import { studioCookieAuthConfigured } from './studio-cookie-auth.js';
 
 const MAX_ROBOGO_API_RESPONSE_BYTES = 1_000_000;
 const BOARD_PREFLIGHT_BEGIN = '__STUDIO_SIM2REAL_PREFLIGHT_BEGIN__';
@@ -26,6 +27,21 @@ export function isWebCloudDeployment(): boolean {
     String(process.env.RDK_SIM2REAL_DEPLOYMENT || '').trim() === 'web-cloud' ||
     String(process.env.RDK_STUDIO_DEPLOYMENT_PROFILE || '').trim() === 'web-cloud'
   );
+}
+
+/**
+ * Single source of truth for auth-mode selection so the CSRF boundary and the
+ * composition root cannot disagree about whether this is a multi-user
+ * deployment. `studio-cookie` activates automatically when the shared Studio
+ * cookie secret is present (the default-configurable path); any other value
+ * must be set explicitly.
+ */
+export function resolveStandaloneAuthMode(): 'studio-cookie' | 'trusted-proxy' | 'standalone' {
+  const raw = String(process.env.RDK_SIM2REAL_AUTH_MODE ?? '').trim().toLowerCase();
+  if (raw === 'trusted-proxy') return 'trusted-proxy';
+  if (raw === 'standalone') return 'standalone';
+  if (raw === 'studio-cookie') return 'studio-cookie';
+  return studioCookieAuthConfigured() ? 'studio-cookie' : 'standalone';
 }
 
 export const storageRequestContextMiddleware: RequestHandler = (_request, _response, next) => next();
@@ -59,6 +75,10 @@ export function isSSORequired(): boolean {
  * instead of silently treating every caller as one anonymous owner.
  */
 export function isStandaloneMultiUserMode(): boolean {
+  // Cookie/header based auth modes are multi-user regardless of the legacy
+  // deployment-profile flags; the CSRF boundary depends on this predicate.
+  const mode = resolveStandaloneAuthMode();
+  if (mode !== 'standalone') return true;
   return isWebCloudDeployment() || isSSORequired() || isSSOEnabled();
 }
 
