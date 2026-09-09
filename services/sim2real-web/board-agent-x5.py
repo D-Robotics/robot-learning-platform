@@ -806,18 +806,21 @@ def _policy_send(op, **fields):
 def policy_status():
     """Honest policy surface: switches, runtime process, last state snapshot."""
     snap = _policy_read_state()
+    runtime_running = _policy_runtime_alive()
     return {
         "enabled": POLICY_ENABLED,
-        "runtimeRunning": _policy_runtime_alive(),
+        "runtimeRunning": runtime_running,
         "driveEnabled": DRIVE_ENABLED,
         # Policy motion requires BOTH switches; report the combined verdict so
         # the UI can render exactly one gate explanation.
         "motionAuthorized": POLICY_ENABLED and DRIVE_ENABLED,
-        "state": snap.get("state") if snap else None,
+        # A historical state file must never make a stopped process look
+        # ready/running to the station UI or API consumers.
+        "state": snap.get("state") if runtime_running and snap else "stopped" if snap else None,
         "model": snap.get("model") if snap else None,
-        "command": snap.get("command") if snap else None,
-        "published": snap.get("published") if snap else None,
-        "inferMs": snap.get("inferMs") if snap else None,
+        "command": snap.get("command") if runtime_running and snap else 0.0 if snap else None,
+        "published": snap.get("published") if runtime_running and snap else 0 if snap else None,
+        "inferMs": snap.get("inferMs") if runtime_running and snap else None,
         "lastError": snap.get("lastError") if snap else None,
         "lastOp": snap.get("lastOp") if snap else None,
         "obsSlots": snap.get("obsSlots") if snap else None,
@@ -907,6 +910,9 @@ def build_status():
     rx, tx = network_kb_per_sec()
     total_disk, used_disk = disk_mb()
     topics = ros_topics_cached() or []
+    originbot = originbot_telemetry_cached()
+    battery_voltage = originbot.get("batteryVoltage") if isinstance(originbot, dict) else None
+    power = {"voltage": battery_voltage} if isinstance(battery_voltage, (int, float)) else None
     return {
         "timestamp": now,
         "board": {
@@ -934,9 +940,9 @@ def build_status():
             **({"rxKbPerSec": rx} if rx is not None else {}),
             **({"txKbPerSec": tx} if tx is not None else {}),
         },
-        "power": None,  # no power monitor path on this board; report honestly
-        "originbot": originbot_telemetry_cached(),
-        "telemetry": originbot_telemetry_cached(),
+        "power": power,
+        "originbot": originbot,
+        "telemetry": originbot,
         "originbotNote": "read-only ros2 topic echo; the agent never publishes or moves the robot",
         "topics": [{"name": name} for name in topics[:24]],
         "uptimeSec": int(time.time() - STARTED_AT),
