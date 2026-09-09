@@ -30,5 +30,6 @@ for (const file of files) {
   if (!(safety.maxAngular > 0 && safety.maxAngular <= 1)) throw new Error(`${file}: maxAngular outside platform limit`);
   if (!(profile.actuator.watchdogMs >= 500)) throw new Error(`${file}: watchdog must be >= 500ms`);
   if (!(profile.policy?.observationSize > 0 && profile.policy?.actionSize > 0)) throw new Error(`${file}: policy dimensions required`);
+  if (!Array.isArray(profile.capabilities) || !profile.capabilities.length || profile.capabilities.some((item) => typeof item !== 'string' || !item.trim())) throw new Error(`${file}: capabilities must be a non-empty string array`);
 }
 console.log(`[hardware-adapters] PASS — ${files.length} declarative profiles validated (${[...ids].join(', ')})`);

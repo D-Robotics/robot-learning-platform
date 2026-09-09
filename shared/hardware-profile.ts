@@ -88,7 +88,7 @@ export function validateHardwareProfile(input: unknown): { valid: boolean; error
   if (!String(policy.actionAdapterId ?? '').trim()) errors.push('policy.actionAdapterId is required');
   if (!(Number.isInteger(policy.observationSize) && policy.observationSize > 0 && policy.observationSize <= 4096)) errors.push('policy.observationSize is invalid');
   if (!(Number.isInteger(policy.actionSize) && policy.actionSize > 0 && policy.actionSize <= 4096)) errors.push('policy.actionSize is invalid');
-  if (!Array.isArray(value.capabilities) || value.capabilities.some((item: unknown) => typeof item !== 'string' || !item.trim())) errors.push('capabilities must be a non-empty string array');
+  if (!Array.isArray(value.capabilities) || !value.capabilities.length || value.capabilities.some((item: unknown) => typeof item !== 'string' || !item.trim())) errors.push('capabilities must be a non-empty string array');
   const runtime = value.runtime && typeof value.runtime === 'object' ? value.runtime : {};
   if (runtime.decisionHz !== undefined && !(Number.isFinite(Number(runtime.decisionHz)) && Number(runtime.decisionHz) >= 1 && Number(runtime.decisionHz) <= 50)) errors.push('runtime.decisionHz must be 1..50');
   if (runtime.actionProjection !== undefined && !String(runtime.actionProjection).trim()) errors.push('runtime.actionProjection is invalid');

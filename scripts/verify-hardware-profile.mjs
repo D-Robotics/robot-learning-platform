@@ -27,7 +27,7 @@ for (const file of files) {
   if (!(Number.isInteger(p.actuator.watchdogMs) && p.actuator.watchdogMs >= 500 && p.actuator.watchdogMs <= 2000)) fail('watchdog must be 500..2000ms');
   if (!(Number.isInteger(p.policy?.observationSize) && p.policy.observationSize > 0 && p.policy.observationSize <= 4096)) fail('observation dimensions invalid');
   if (!(Number.isInteger(p.policy?.actionSize) && p.policy.actionSize > 0 && p.policy.actionSize <= 4096)) fail('action dimensions invalid');
-  if (!Array.isArray(p.capabilities) || p.capabilities.some((item) => typeof item !== 'string' || !item.trim())) fail('capabilities must be a string array');
+  if (!Array.isArray(p.capabilities) || !p.capabilities.length || p.capabilities.some((item) => typeof item !== 'string' || !item.trim())) fail('capabilities must be a non-empty string array');
   if (p.runtime?.decisionHz !== undefined && (!(Number.isFinite(Number(p.runtime.decisionHz))) || Number(p.runtime.decisionHz) < 1 || Number(p.runtime.decisionHz) > 50)) fail('runtime.decisionHz must be 1..50');
   if (p.safety?.sensorStallSec !== undefined && (Number(p.safety.sensorStallSec) < .1 || Number(p.safety.sensorStallSec) > 2)) fail('safety.sensorStallSec must be .1..2');
 }
