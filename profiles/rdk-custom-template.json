@@ -2,13 +2,36 @@
   "schemaVersion": 1,
   "id": "rdk-custom-template",
   "displayName": "自研 RDK 机器人（待填写）",
-  "board": { "platform": "rdk-x5", "family": "rdk-custom", "model": "请替换为实际型号" },
+  "board": {
+    "platform": "rdk-x5",
+    "family": "rdk-custom",
+    "model": "请替换为实际型号"
+  },
   "ros": {
-    "setupPaths": ["/opt/tros/humble/setup.bash", "/userdata/dev_ws/install/setup.bash"],
+    "setupPaths": [
+      "/opt/tros/humble/setup.bash",
+      "/userdata/dev_ws/install/setup.bash"
+    ],
     "topics": {
-      "imu": { "name": "/imu", "type": "sensor_msgs/msg/Imu", "qos": "best-effort", "required": true },
-      "odom": { "name": "/odom", "type": "nav_msgs/msg/Odometry", "qos": "best-effort", "required": false },
-      "battery": { "name": "/battery_state", "type": "sensor_msgs/msg/BatteryState", "field": "percentage", "qos": "reliable", "required": false }
+      "imu": {
+        "name": "/imu",
+        "type": "sensor_msgs/msg/Imu",
+        "qos": "best-effort",
+        "required": true
+      },
+      "odom": {
+        "name": "/odom",
+        "type": "nav_msgs/msg/Odometry",
+        "qos": "best-effort",
+        "required": false
+      },
+      "battery": {
+        "name": "/battery_state",
+        "type": "sensor_msgs/msg/BatteryState",
+        "field": "percentage",
+        "qos": "reliable",
+        "required": false
+      }
     }
   },
   "actuator": {
@@ -27,5 +50,20 @@
     "observationSize": 42,
     "actionSize": 2
   },
-  "capabilities": ["imu", "odom", "battery", "twist", "cpu-onnx"]
+  "capabilities": [
+    "imu",
+    "odom",
+    "battery",
+    "twist",
+    "cpu-onnx"
+  ],
+  "runtime": {
+    "decisionHz": 10,
+    "actionProjection": "identity"
+  },
+  "safety": {
+    "maxLinear": 0.3,
+    "maxAngular": 1.0,
+    "sensorStallSec": 0.5
+  }
 }

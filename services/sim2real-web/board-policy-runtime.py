@@ -84,7 +84,7 @@ def _adapter_config():
 
 _ADAPTER = _adapter_config()
 ADAPTER_ID = str(_ADAPTER.get("id") or os.environ.get("RDK_SIM2REAL_ADAPTER_ID", "generic-differential-drive"))[:80]
-_safety = _ADAPTER.get("safety") if isinstance(_ADAPTER.get("safety"), dict) else {}
+_safety = _ADAPTER.get("safety") if isinstance(_ADAPTER.get("safety"), dict) else (_ADAPTER.get("actuator") if isinstance(_ADAPTER.get("actuator"), dict) else {})
 _runtime = _ADAPTER.get("runtime") if isinstance(_ADAPTER.get("runtime"), dict) else {}
 MAX_LINEAR = _bounded_env("RDK_SIM2REAL_MAX_LINEAR", _safety.get("maxLinear", 0.3), 0.01, 0.3)
 MAX_ANGULAR = _bounded_env("RDK_SIM2REAL_MAX_ANGULAR", _safety.get("maxAngular", 1.0), 0.05, 1.0)
