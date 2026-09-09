@@ -216,6 +216,30 @@ def board_identity():
 _identity = board_identity()
 
 
+ADAPTER_PROFILE_PATH = os.environ.get("RDK_SIM2REAL_ADAPTER_CONFIG", "").strip()
+
+
+def load_adapter_profile():
+    """Load a declarative hardware profile without allowing it to alter safety.
+
+    The agent keeps its hard safety ceilings in code; the profile only supplies
+    identity, capabilities and already-bounded wiring metadata for clients.
+    """
+    if not ADAPTER_PROFILE_PATH:
+        return {}
+    try:
+        with open(ADAPTER_PROFILE_PATH, "r", encoding="utf-8") as handle:
+            profile = json.load(handle)
+        return profile if isinstance(profile, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+_adapter_profile = load_adapter_profile()
+_adapter_id = str(_adapter_profile.get("id") or "rdk-x5-reference")[:80]
+_adapter_capabilities = [str(item)[:80] for item in (_adapter_profile.get("capabilities") or []) if isinstance(item, str)]
+
+
 def run_ros2_list(kind):
     """`ros2 node/topic list` through TROS, bounded to 8 s, read-only.
 
@@ -890,6 +914,12 @@ def build_status():
             "model": _identity["model"],
             "mock": False,
         },
+        "profile": {
+            "id": _adapter_id,
+            "displayName": _adapter_profile.get("displayName", _identity["model"]),
+            "capabilities": _adapter_capabilities,
+        },
+        "adapterId": _adapter_id,
         "cpu": {
             "percent": cpu,
             "temperatureC": temp,
@@ -906,6 +936,7 @@ def build_status():
         },
         "power": None,  # no power monitor path on this board; report honestly
         "originbot": originbot_telemetry_cached(),
+        "telemetry": originbot_telemetry_cached(),
         "originbotNote": "read-only ros2 topic echo; the agent never publishes or moves the robot",
         "topics": [{"name": name} for name in topics[:24]],
         "uptimeSec": int(time.time() - STARTED_AT),
@@ -1076,6 +1107,12 @@ class Handler(BaseHTTPRequestHandler):
                 "actuatorPolicy": _actuator_policy(),
                 "mock": False,
                 "board": _identity,
+                "profile": {
+                    "id": _adapter_id,
+                    "displayName": _adapter_profile.get("displayName", _identity["model"]),
+                    "capabilities": _adapter_capabilities,
+                },
+                "adapterId": _adapter_id,
                 "camera": {
                     "devices": find_camera_device(),
                     "cv2": CV2_AVAILABLE,
@@ -1215,8 +1252,8 @@ class Handler(BaseHTTPRequestHandler):
             "ok": True,
             "device": {
                 "id": device_id,
-                "kind": "rdk-x5",
-                "boardPlatform": "rdk-x5",
+                "kind": _adapter_profile.get("board", {}).get("family", "rdk-x5"),
+                "boardPlatform": _adapter_profile.get("board", {}).get("platform", _identity["platform"]),
                 "boardModel": _identity["model"],
                 "boardOsVersion": _identity["os"],
             },
