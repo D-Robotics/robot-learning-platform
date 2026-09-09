@@ -2406,15 +2406,24 @@ let originbotCompareTimer = null;
 async function originbotCompareRefresh() {
   try {
     const payload = await request('/sim2real/board-station/status');
-    const ob = payload?.status?.originbot;
+    const status = payload?.status || {};
+    // The board agent exposes the adapter telemetry under both `originbot`
+    // (legacy clients) and `telemetry` (generic clients). Prefer the generic
+    // field so this panel keeps working for custom hardware profiles.
+    const ob = status.telemetry || status.originbot;
     const panel = $('originbot-compare-panel');
     if (panel) panel.dataset.live = ob ? 'on' : 'off';
+    const caption = panel?.querySelector('.panel-caption');
+    if (caption) {
+      const profileName = status.profile?.displayName || status.board?.model || status.adapterId;
+      caption.textContent = profileName ? `${profileName} · 只读遥测` : '当前适配包 · 只读遥测';
+    }
     if (ob && typeof ob === 'object') {
-      const v = Number(ob.batteryVoltage);
+      const v = Number(ob.batteryVoltage ?? ob.battery?.voltage ?? status.power?.voltage);
       setText('ob-compare-voltage', Number.isFinite(v) ? v.toFixed(2) + ' V' : '—');
-      const imu = ob.imu || {};
-      const z = Number(imu.z);
-      const w = Number(imu.w);
+      const quat = stationImuQuaternion(ob);
+      const z = quat?.z;
+      const w = quat?.w;
       setText(
         'ob-compare-heading',
         Number.isFinite(z) && Number.isFinite(w)
