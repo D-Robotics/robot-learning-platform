@@ -3617,13 +3617,12 @@ function stationRenderStatus(status) {
   // the bringup stack is running, never synthesized here.
   const originbot = status.originbot || status.telemetry || {};
   const obVoltage = Number(originbot.batteryVoltage ?? originbot.battery?.voltage);
+  const displayVoltage = Number.isFinite(obVoltage) ? obVoltage : Number(power.voltage);
   setText(
     'station-power',
-    Number.isFinite(obVoltage)
-      ? `${obVoltage.toFixed(2)}V`
-      : Number.isFinite(power.voltage)
-        ? `${power.voltage.toFixed(1)}V`
-        : '--',
+    Number.isFinite(displayVoltage)
+      ? `${displayVoltage.toFixed(Number.isFinite(obVoltage) ? 2 : 1)}V`
+      : '--',
   );
   const obQuat = stationImuQuaternion(originbot);
   const imuZ = obQuat ? obQuat.z : NaN;
@@ -3632,9 +3631,11 @@ function stationRenderStatus(status) {
     'station-power-sub',
     Number.isFinite(obVoltage)
       ? `${status.profile?.displayName || status.adapterId || '设备'} 电池`
-      : Number.isFinite(power.current)
-        ? `电流 ${power.current.toFixed(1)}A`
-        : '无电源监控',
+      : Number.isFinite(displayVoltage)
+        ? `${status.profile?.displayName || status.adapterId || '设备'} 电源电压`
+        : Number.isFinite(power.current)
+          ? `电流 ${power.current.toFixed(1)}A`
+          : '无电源监控',
   );
   setText(
     'station-uptime',
@@ -3683,7 +3684,7 @@ function stationRenderStatus(status) {
     0.9,
   );
   const powerRatio =
-    Number.isFinite(obVoltage) ? Math.max(0, Math.min(1, (obVoltage - 3.3) / (5.4 - 3.3))) : NaN;
+    Number.isFinite(displayVoltage) ? Math.max(0, Math.min(1, (displayVoltage - 3.3) / (5.4 - 3.3))) : NaN;
   stationSetBar('station-power-bar', powerRatio, 0.35, 0.2, true);
   const profileTitle = $('station-robot-tele-title');
   if (profileTitle) {
