@@ -352,6 +352,103 @@ paths:
           content: { application/json: { schema: { $ref: "#/components/schemas/BoardDetectResponse" } } }
         "404": { $ref: "#/components/responses/NotFound" }
         "503": { description: Board agent unavailable. }
+  /api/v1/duck/board-station/policy:
+    get:
+      tags: [board-station]
+      summary: Read board policy runtime state
+      operationId: getBoardStationPolicy
+      parameters:
+        - in: query
+          name: deviceId
+          schema: { type: string }
+      responses:
+        "200":
+          description: Policy runtime state and platform gates.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/BoardPolicyResponse" }
+        "401": { $ref: "#/components/responses/AuthRequired" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "502": { description: Board agent unreachable. }
+  /api/v1/duck/board-station/policy/load:
+    post:
+      tags: [board-station]
+      summary: Load an allowlisted ONNX policy from the board policies directory
+      operationId: loadBoardStationPolicy
+      parameters:
+        - in: query
+          name: deviceId
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [path]
+              properties:
+                path: { type: string, pattern: "^[\\w.-]+\\.onnx$" }
+      responses:
+        "200": { description: Policy loaded. }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/AuthRequired" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { description: Platform policy gate is disabled. }
+        "502": { description: Board agent unreachable. }
+  /api/v1/duck/board-station/policy/start:
+    post:
+      tags: [board-station]
+      summary: Start constrained policy motion after all gates are enabled
+      operationId: startBoardStationPolicy
+      parameters:
+        - in: query
+          name: deviceId
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [direction]
+              properties:
+                direction: { type: number, minimum: -1, maximum: 1 }
+      responses:
+        "200": { description: Policy motion started. }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/AuthRequired" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { description: One or more safety gates are disabled. }
+        "502": { description: Board agent unreachable. }
+  /api/v1/duck/board-station/policy/reset:
+    post:
+      tags: [board-station]
+      summary: Reset a sticky policy runtime fault
+      operationId: resetBoardStationPolicy
+      parameters:
+        - in: query
+          name: deviceId
+          schema: { type: string }
+      responses:
+        "200": { description: Policy fault reset. }
+        "401": { $ref: "#/components/responses/AuthRequired" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { description: Platform policy gate is disabled. }
+        "502": { description: Board agent unreachable. }
+  /api/v1/duck/board-station/policy/stop:
+    post:
+      tags: [board-station]
+      summary: Stop policy motion and publish zero output
+      operationId: stopBoardStationPolicy
+      parameters:
+        - in: query
+          name: deviceId
+          schema: { type: string }
+      responses:
+        "200": { description: Policy stopped. }
+        "401": { $ref: "#/components/responses/AuthRequired" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "502": { description: Board agent unreachable; watchdog remains active. }
   /api/v1/duck/board-station/health:
     get:
       tags: [board-station]
@@ -616,6 +713,14 @@ components:
       description: Resource is not visible to this account.
       content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } }
   schemas:
+    BoardPolicyResponse:
+      type: object
+      required: [ok, platformEnabled, drivePlatformEnabled, policy]
+      properties:
+        ok: { const: true }
+        platformEnabled: { type: boolean }
+        drivePlatformEnabled: { type: boolean }
+        policy: { type: [object, "null"], additionalProperties: true }
     StationHealthResponse:
       type: object
       required: [ok, device, agent, cameraSupported]
