@@ -33,6 +33,8 @@ export interface HardwareProfile {
     maxAngular: number;
     watchdogMs: number;
   };
+  runtime?: { decisionHz?: number; actionProjection?: 'paired' | 'identity' | string };
+  safety?: { maxLinear?: number; maxAngular?: number; sensorStallSec?: number };
   policy: {
     observationAdapterId: string;
     actionAdapterId: string;
@@ -67,6 +69,8 @@ export function validateHardwareProfile(input: unknown): { valid: boolean; error
   if (!(Number(actuator.maxLinear) > 0 && Number(actuator.maxLinear) <= 0.3)) errors.push('actuator.maxLinear must be in (0, 0.3]');
   if (!(Number(actuator.maxAngular) > 0 && Number(actuator.maxAngular) <= 1)) errors.push('actuator.maxAngular must be in (0, 1]');
   if (!(Number.isInteger(actuator.watchdogMs) && actuator.watchdogMs >= 500 && actuator.watchdogMs <= 2000)) errors.push('actuator.watchdogMs must be 500..2000ms');
+  const commandTopic = topics.cmdVel;
+  if (commandTopic && String((commandTopic as any).name ?? '') !== String(actuator.commandTopic ?? '')) errors.push('actuator.commandTopic must match ros.topics.cmdVel.name');
   const policy = value.policy && typeof value.policy === 'object' ? value.policy : {};
   if (!String(policy.observationAdapterId ?? '').trim()) errors.push('policy.observationAdapterId is required');
   if (!String(policy.actionAdapterId ?? '').trim()) errors.push('policy.actionAdapterId is required');

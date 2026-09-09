@@ -14,6 +14,7 @@ for (const file of files) {
   }
   if (!['diff-drive', 'omni-drive', 'joint', 'custom'].includes(p.actuator?.kind)) fail('unsupported actuator kind');
   if (!p.actuator.commandTopic?.startsWith('/') || !p.actuator.messageType?.includes('/')) fail('actuator command is incomplete');
+  if (p.ros?.topics?.cmdVel && p.ros.topics.cmdVel.name !== p.actuator.commandTopic) fail('cmdVel topic must match actuator.commandTopic');
   if (!(p.actuator.maxLinear > 0 && p.actuator.maxLinear <= .3)) fail('linear safety bound invalid');
   if (!(p.actuator.maxAngular > 0 && p.actuator.maxAngular <= 1)) fail('angular safety bound invalid');
   if (!(p.actuator.watchdogMs >= 500)) fail('watchdog must be >=500ms');
