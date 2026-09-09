@@ -114,9 +114,12 @@ def _read_telemetry():
     try:
         with open(TELEMETRY_SNAPSHOT_FILE, "r", encoding="utf-8") as fh:
             snap = json.load(fh)
-        if time.time() - float(snap.get("ts", 0)) > STALL_LIMIT_SEC * 2 + 4.5:
+        # The policy loop must use the same freshness budget as the safety
+        # watchdog.  A stale snapshot is not a valid observation.
+        if time.time() - float(snap.get("ts", 0)) > STALL_LIMIT_SEC:
             return None
-        return snap.get("data")
+        data = snap.get("data")
+        return data if isinstance(data, dict) else None
     except (OSError, ValueError):
         return None
 
@@ -310,18 +313,24 @@ class PolicyRuntime:
         # runtime works with either snapshot producer on the board.
         q = imu.get("quaternion") or imu
         gyro = imu.get("gyro") or {}
-        gx, gy, gz = (
-            float(gyro.get("x", 0.0)),
-            float(gyro.get("y", 0.0)),
-            float(gyro.get("z", 0.0)),
-        )
+
+        def _finite(mapping, key):
+            try:
+                value = float(mapping[key])
+            except (KeyError, TypeError, ValueError):
+                return None
+            return value if math.isfinite(value) else None
+
+        gyro_values = [_finite(gyro, key) for key in ("x", "y", "z")]
+        quaternion_values = [_finite(q, key) for key in ("x", "y", "z", "w")]
+        # Never turn a missing/broken IMU into a plausible zero observation:
+        # doing so could drive a policy with fabricated state.  The caller
+        # treats None as telemetry-stale and publishes a bounded zero frame.
+        if any(value is None for value in gyro_values + quaternion_values):
+            return None
+        gx, gy, gz = gyro_values
         # projected gravity from quaternion (roll/pitch only; yaw-independent)
-        qx, qy, qz, qw = (
-            float(q.get("x", 0.0)),
-            float(q.get("y", 0.0)),
-            float(q.get("z", 0.0)),
-            float(q.get("w", 1.0)),
-        )
+        qx, qy, qz, qw = quaternion_values
         pg_x = 2 * (qx * qz - qw * qy)
         pg_y = 2 * (qw * qx + qy * qz)
         pg_z = 1 - 2 * (qx * qx + qy * qy)
