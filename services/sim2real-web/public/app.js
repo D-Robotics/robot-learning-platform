@@ -3492,6 +3492,7 @@ function stationImuQuaternion(originbot) {
   const z = Number(q.z);
   const w = Number(q.w);
   if (![x, y, z, w].every(Number.isFinite)) return null;
+  if (Math.hypot(x, y, z, w) < 1e-6) return null;
   return { x, y, z, w };
 }
 
