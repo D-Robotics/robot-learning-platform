@@ -1,0 +1,14 @@
+{
+  "schemaVersion": 1,
+  "id": "originbot-differential-drive",
+  "displayName": "OriginBot differential drive",
+  "platforms": ["rdk-x5", "linux-generic"],
+  "sensors": {
+    "imu": { "topic": "/imu", "required": true },
+    "odom": { "topic": "/odom", "required": false },
+    "battery": { "topic": "/originbot_status", "required": false }
+  },
+  "actuator": { "type": "twist", "topic": "/cmd_vel", "linearAxis": "x", "angularAxis": "z" },
+  "runtime": { "decisionHz": 10, "actionProjection": "paired" },
+  "safety": { "maxLinear": 0.3, "maxAngular": 1.0, "sensorStallSec": 0.5, "watchdogMs": 500 }
+}

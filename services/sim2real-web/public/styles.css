@@ -3319,17 +3319,17 @@ body.presentation-mode .next-card {
 }
 .station-topic-chip.station-topic-drive {
   border-color: rgba(239, 68, 68, 0.55);
-  color: #fca5a5;
+  color: var(--red);
   background: rgba(239, 68, 68, 0.08);
 }
 .station-topic-chip.station-topic-sensor {
   border-color: rgba(56, 189, 248, 0.5);
-  color: #7dd3fc;
+  color: var(--blue);
   background: rgba(56, 189, 248, 0.08);
 }
 .station-topic-chip.station-topic-tf {
   border-color: rgba(52, 210, 181, 0.5);
-  color: #6ee7c9;
+  color: var(--green-text);
   background: rgba(52, 210, 181, 0.08);
 }
 .station-topic-chip.station-topic-sys {
@@ -3366,7 +3366,7 @@ body.presentation-mode .next-card {
   align-items: baseline;
   font-size: 13px;
   margin-bottom: 6px;
-  color: var(--ink, #e8eefc);
+  color: var(--text);
 }
 .station-drive-slider output {
   font-variant-numeric: tabular-nums;

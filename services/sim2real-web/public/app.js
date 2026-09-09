@@ -222,6 +222,14 @@ const state = {
   publishingTelemetry: false,
   runSubmitting: false,
   deploymentSubmitting: false,
+  // The assistant is a thin, account-scoped UI layer. It never invents run
+  // state; it only derives suggestions from the overview already loaded by
+  // the workspace and from explicit read-only board health probes.
+  agent: {
+    boardHealth: null,
+    checkingBoard: false,
+    collapsed: false,
+  },
   station: {
     ready: false,
     mock: false,
@@ -2839,6 +2847,7 @@ function renderAll() {
   renderEvaluationNext();
   renderReleaseGate();
   renderWorkflowProgress();
+  renderAgentPanel();
 }
 
 async function loadModelDetails(modelId = state.selectedModelId) {
@@ -3403,7 +3412,7 @@ function stationFormatUptime(seconds) {
 const STATION_SPARK_POINTS = 60;
 const stationSparkSeries = { rx: [], tx: [] };
 
-function stationSetBar(id, ratio, warn, danger) {
+function stationSetBar(id, ratio, warn, danger, invert = false) {
   const bar = $(id);
   if (!bar) return;
   const value = Number(ratio);
@@ -3415,8 +3424,14 @@ function stationSetBar(id, ratio, warn, danger) {
   const pct = Math.max(0, Math.min(100, value * 100));
   bar.style.width = `${pct}%`;
   const card = bar.closest('.station-metric-card');
-  bar.className = value >= danger ? 'is-danger' : value >= warn ? 'is-warn' : '';
-  if (card) card.classList.toggle('is-danger', value >= danger);
+  // Most gauges treat higher values as risk (CPU, memory, disk). Battery
+  // voltage is the opposite: a lower ratio is the dangerous direction. Keep
+  // the direction explicit at the call site so a healthy battery is never
+  // painted red while a depleted one looks normal.
+  const isDanger = invert ? value <= danger : value >= danger;
+  const isWarn = invert ? value <= warn : value >= warn;
+  bar.className = isDanger ? 'is-danger' : isWarn ? 'is-warn' : '';
+  if (card) card.classList.toggle('is-danger', isDanger);
 }
 
 function stationPushSpark(rxBps, txBps) {
@@ -3474,7 +3489,7 @@ function stationImuQuaternion(originbot) {
 function stationRenderRobotTelemetry(status) {
   const wrap = $('station-robot-tele');
   if (!wrap) return;
-  const originbot = status.originbot || {};
+  const originbot = status.originbot || status.telemetry || {};
   const hasData =
     originbot && typeof originbot === 'object' && Object.keys(originbot).length > 0;
   wrap.hidden = !hasData;
@@ -3495,7 +3510,7 @@ function stationRenderRobotTelemetry(status) {
   } else {
     setText('station-tele-heading', '--');
   }
-  const voltage = Number(originbot.batteryVoltage);
+  const voltage = Number(originbot.batteryVoltage ?? originbot.battery?.voltage);
   const BATTERY_MIN = 3.3;
   const BATTERY_MAX = 5.4;
   if (Number.isFinite(voltage)) {
@@ -3540,6 +3555,11 @@ function stationRenderRobotTelemetry(status) {
 
 function stationRenderStatus(status) {
   if (!status || typeof status !== 'object') return;
+  const freshness = $('station-freshness');
+  if (freshness) {
+    freshness.textContent = `最后更新 ${new Date().toLocaleTimeString('zh-CN', { hour12: false })}`;
+    freshness.classList.remove('is-stale');
+  }
   const cpu = status.cpu || {};
   const memory = status.memory || {};
   const disk = status.disk || {};
@@ -3585,8 +3605,8 @@ function stationRenderStatus(status) {
   );
   // OriginBot telemetry is reported honestly by the agent: present only when
   // the bringup stack is running, never synthesized here.
-  const originbot = status.originbot || {};
-  const obVoltage = Number(originbot.batteryVoltage);
+  const originbot = status.originbot || status.telemetry || {};
+  const obVoltage = Number(originbot.batteryVoltage ?? originbot.battery?.voltage);
   setText(
     'station-power',
     Number.isFinite(obVoltage)
@@ -3601,7 +3621,7 @@ function stationRenderStatus(status) {
   setText(
     'station-power-sub',
     Number.isFinite(obVoltage)
-      ? 'OriginBot 电池'
+      ? `${status.profile?.displayName || status.adapterId || '设备'} 电池`
       : Number.isFinite(power.current)
         ? `电流 ${power.current.toFixed(1)}A`
         : '无电源监控',
@@ -3615,7 +3635,7 @@ function stationRenderStatus(status) {
   setText(
     'station-uptime-sub',
     Number.isFinite(imuZ) && Number.isFinite(imuW)
-      ? `OriginBot IMU · ${stationFormatUptime(status.uptimeSec)}`
+      ? `${status.profile?.displayName || status.adapterId || '设备'} IMU · ${stationFormatUptime(status.uptimeSec)}`
       : '自 agent 启动',
   );
   const diskUsedMB = Number(disk.usedMB);
@@ -3654,7 +3674,19 @@ function stationRenderStatus(status) {
   );
   const powerRatio =
     Number.isFinite(obVoltage) ? Math.max(0, Math.min(1, (obVoltage - 3.3) / (5.4 - 3.3))) : NaN;
-  stationSetBar('station-power-bar', powerRatio, 0.35, 0.2);
+  stationSetBar('station-power-bar', powerRatio, 0.35, 0.2, true);
+  const profileTitle = $('station-robot-tele-title');
+  if (profileTitle) {
+    const profileName = status.profile?.displayName || status.board?.model || status.adapterId || '当前适配包';
+    profileTitle.textContent = `机体遥测 · ${profileName}`;
+  }
+  const liveBadge = $('station-live-badge');
+  if (liveBadge && status.timestamp) {
+    const age = Math.max(0, (Date.now() - Date.parse(status.timestamp)) / 1000);
+    liveBadge.textContent = age <= 3 ? `LIVE · ${age.toFixed(1)}s` : age <= 10 ? `陈旧 · ${age.toFixed(1)}s` : '已断开';
+    liveBadge.classList.toggle('is-stale', age > 3);
+    liveBadge.title = `最后采样 ${age.toFixed(1)} 秒前`;
+  }
   stationRenderRobotTelemetry(status);
   // 策略运行时状态直接来自 agent 1Hz 快照（policy 字段），如实渲染。
   stationRenderPolicy(status.policy);
@@ -3744,6 +3776,11 @@ function stationStartStatusStream() {
     })
     .catch(() => {
       if (badge) badge.hidden = true;
+      const freshness = $('station-freshness');
+      if (freshness) {
+        freshness.textContent = '数据流已断开';
+        freshness.classList.add('is-stale');
+      }
       stationLog('状态流已断开或不可用', 'error');
     })
     .finally(() => {

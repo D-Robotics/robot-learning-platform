@@ -58,11 +58,42 @@ TELEMETRY_SNAPSHOT_FILE = os.environ.get(
     "RDK_BOARD_TELEMETRY_SNAPSHOT", "/tmp/board-telemetry-snapshot.json"
 )
 
-MAX_LINEAR = 0.3          # same clamp as the drive canary — never exceed
-MAX_ANGULAR = 1.0         # same clamp as the drive canary
-DECISION_HZ = 10          # inference rate; cmd_vel publishes at this rate
+def _bounded_env(name, default, lo, hi):
+    try:
+        value = float(os.environ.get(name, str(default)))
+    except (TypeError, ValueError):
+        value = default
+    return max(lo, min(hi, value))
+
+
+# Hardware safety and timing are adapter configuration, not platform code.
+# Every adapter remains bounded here even when deployment env is malformed.
+ADAPTER_CONFIG_PATH = os.environ.get("RDK_SIM2REAL_ADAPTER_CONFIG", "").strip()
+
+def _adapter_config():
+    if not ADAPTER_CONFIG_PATH:
+        return {}
+    try:
+        with open(ADAPTER_CONFIG_PATH, "r", encoding="utf-8") as fh:
+            value = json.load(fh)
+        return value if isinstance(value, dict) else {}
+    except (OSError, ValueError):
+        # A missing or malformed adapter never disables the safety defaults.
+        return {}
+
+
+_ADAPTER = _adapter_config()
+ADAPTER_ID = str(_ADAPTER.get("id") or os.environ.get("RDK_SIM2REAL_ADAPTER_ID", "generic-differential-drive"))[:80]
+_safety = _ADAPTER.get("safety") if isinstance(_ADAPTER.get("safety"), dict) else {}
+_runtime = _ADAPTER.get("runtime") if isinstance(_ADAPTER.get("runtime"), dict) else {}
+MAX_LINEAR = _bounded_env("RDK_SIM2REAL_MAX_LINEAR", _safety.get("maxLinear", 0.3), 0.01, 0.3)
+MAX_ANGULAR = _bounded_env("RDK_SIM2REAL_MAX_ANGULAR", _safety.get("maxAngular", 1.0), 0.05, 1.0)
+DECISION_HZ = _bounded_env("RDK_SIM2REAL_DECISION_HZ", _runtime.get("decisionHz", 10), 1, 50)
 STATS_EVERY_SEC = 1.0
-STALL_LIMIT_SEC = 0.5     # no fresh IMU for this long -> freeze (zero output)
+STALL_LIMIT_SEC = _bounded_env("RDK_SIM2REAL_SENSOR_STALL_SEC", _safety.get("sensorStallSec", 0.5), 0.1, 2.0)
+ACTION_PROJECTION = os.environ.get("RDK_SIM2REAL_ACTION_PROJECTION", _runtime.get("actionProjection", "paired"))
+if ACTION_PROJECTION not in ("paired", "identity"):
+    ACTION_PROJECTION = "paired"
 
 
 def _clamp(value, lo, hi):
@@ -117,6 +148,8 @@ class PolicyRuntime:
                 "ok": True,
                 "ts": time.time(),
                 "state": self._state,
+                "adapterId": ADAPTER_ID,
+                "actionProjection": ACTION_PROJECTION,
                 "model": self._model_meta,
                 "command": self._command_dir,
                 "published": self._published,
@@ -312,8 +345,8 @@ class PolicyRuntime:
         ~ yaw. For 2-D (v, w) policies the mapping is identity. Both paths
         clamp to the canary limits.
         """
-        if len(action) == 2:
-            linear, angular = float(action[0]), float(action[1])
+        if len(action) == 2 or ACTION_PROJECTION == "identity":
+            linear, angular = float(action[0]), float(action[1] if len(action) > 1 else 0.0)
         else:
             half = len(action) // 2
             left = action[:half]

@@ -30,6 +30,25 @@ SNAPSHOT_FILE = os.environ.get(
 )
 SNAPSHOT_HZ = float(os.environ.get("RDK_BOARD_TELEMETRY_HZ", "2"))
 STALE_SEC = 5.0  # snapshot older than this means "no fresh data"
+ADAPTER_CONFIG_PATH = os.environ.get("RDK_SIM2REAL_ADAPTER_CONFIG", "").strip()
+
+def _adapter_config():
+    if not ADAPTER_CONFIG_PATH:
+        return {}
+    try:
+        with open(ADAPTER_CONFIG_PATH, "r", encoding="utf-8") as fh:
+            value = json.load(fh)
+        return value if isinstance(value, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+_ADAPTER = _adapter_config()
+ADAPTER_ID = str(_ADAPTER.get("id") or os.environ.get("RDK_SIM2REAL_ADAPTER_ID", "generic-differential-drive"))[:80]
+_TOPICS = _ADAPTER.get("sensors") if isinstance(_ADAPTER.get("sensors"), dict) else {}
+IMU_TOPIC = os.environ.get("RDK_SIM2REAL_IMU_TOPIC", (_TOPICS.get("imu") or {}).get("topic", "/imu"))
+ODOM_TOPIC = os.environ.get("RDK_SIM2REAL_ODOM_TOPIC", (_TOPICS.get("odom") or {}).get("topic", "/odom"))
+BATTERY_TOPIC = os.environ.get("RDK_SIM2REAL_BATTERY_TOPIC", (_TOPICS.get("battery") or {}).get("topic", "/originbot_status"))
 
 
 class TelemetryNode(Node):
@@ -47,12 +66,12 @@ class TelemetryNode(Node):
         self._odom = None
         self._battery = None
         self._seq = 0
-        self.create_subscription(Imu, "/imu", self._on_imu, sensor_qos)
-        self.create_subscription(Odometry, "/odom", self._on_odom, sensor_qos)
+        self.create_subscription(Imu, IMU_TOPIC, self._on_imu, sensor_qos)
+        self.create_subscription(Odometry, ODOM_TOPIC, self._on_odom, sensor_qos)
         self._status_type = self._load_status_type()
         if self._status_type is not None:
             self.create_subscription(
-                self._status_type, "/originbot_status", self._on_status, status_qos
+                self._status_type, BATTERY_TOPIC, self._on_status, status_qos
             )
         self.create_timer(1.0 / SNAPSHOT_HZ, self._write_snapshot)
 
@@ -69,8 +88,12 @@ class TelemetryNode(Node):
 
     def _on_imu(self, msg):
         q = msg.orientation
-        a = msg.angular_velocity
-        accel = msg.linear_acceleration
+        a = getattr(msg, "angular_velocity", None)
+        accel = getattr(msg, "linear_acceleration", None)
+        if a is None:
+            a = type("Vec", (), {"x": 0.0, "y": 0.0, "z": 0.0})()
+        if accel is None:
+            accel = type("Vec", (), {"x": 0.0, "y": 0.0, "z": 0.0})()
         self._imu = {
             # Keep the nested names stable with board-policy-runtime.py.
             # Older consumers can still read the quaternion fields directly.
@@ -125,6 +148,8 @@ class TelemetryNode(Node):
             "sourceWallTimeMs": int(now * 1000),
             "sourceMonotonicNs": time.monotonic_ns(),
             "seq": self._seq,
+            "adapterId": ADAPTER_ID,
+            "topics": {"imu": IMU_TOPIC, "odom": ODOM_TOPIC, "battery": BATTERY_TOPIC},
             "data": data if data else None,
         }
         tmp = SNAPSHOT_FILE + ".tmp"
@@ -132,11 +157,26 @@ class TelemetryNode(Node):
             with open(tmp, "w", encoding="utf-8") as handle:
                 json.dump(payload, handle)
             os.replace(tmp, SNAPSHOT_FILE)
+        except Exception as exc:  # keep the sampler alive and make failures observable
+            print(f"telemetry snapshot write failed: {exc!r}", file=sys.stderr, flush=True)
+
+
+def _pick_ros_log_dir():
+    # Under the board systemd unit (ProtectHome=true, ProtectSystem=strict)
+    # the default /root/.ros/log cannot be created and rclpy.init() aborts
+    # before any subscription is registered, so the agent sees a permanently
+    # stale snapshot. Point ROS logging at a writable path instead.
+    for cand in ("/var/lib/rdk-board-agent/roslogs", "/tmp/roslogs"):
+        try:
+            os.makedirs(cand, exist_ok=True)
+            os.environ["ROS_LOG_DIR"] = cand
+            return
         except OSError:
-            pass
+            continue
 
 
 def main():
+    _pick_ros_log_dir()
     rclpy.init()
     node = TelemetryNode()
     try:
