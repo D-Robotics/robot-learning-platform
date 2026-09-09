@@ -800,12 +800,14 @@ function renderIntegrations() {
   setText('hero-updated', '更新于 ' + formatDate(new Date().toISOString()));
   setText(
     'status-simulator',
-    browserAvailable ? '浏览器 MicroDuck' : profile.displayName + ' 仿真适配器',
+    browserAvailable ? `浏览器 ${profile.displayName}` : profile.displayName + ' 仿真适配器',
   );
   setText(
     'status-simulator-detail',
     browserAvailable
-      ? '固定官方参考策略'
+      ? microduckProduct
+        ? '固定官方参考策略'
+        : `${profile.displayName} 浏览器仿真适配器`
       : microduckProduct
         ? '等待挂载经过审核的静态 bundle'
         : '当前产品线等待仿真适配器',
