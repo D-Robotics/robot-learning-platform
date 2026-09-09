@@ -31,6 +31,12 @@
         "field": "percentage",
         "qos": "reliable",
         "required": false
+      },
+      "cmdVel": {
+        "name": "/cmd_vel",
+        "type": "geometry_msgs/msg/Twist",
+        "qos": "reliable",
+        "required": true
       }
     }
   },
