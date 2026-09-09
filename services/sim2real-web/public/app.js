@@ -2412,7 +2412,7 @@ async function originbotCompareRefresh() {
     // The board agent exposes the adapter telemetry under both `originbot`
     // (legacy clients) and `telemetry` (generic clients). Prefer the generic
     // field so this panel keeps working for custom hardware profiles.
-    const ob = status.telemetry || status.originbot;
+    const ob = stationTelemetrySnapshot(status);
     const panel = $('originbot-compare-panel');
     if (panel) panel.dataset.live = ob ? 'on' : 'off';
     const caption = panel?.querySelector('.panel-caption');
@@ -2420,7 +2420,7 @@ async function originbotCompareRefresh() {
       const profileName = status.profile?.displayName || status.board?.model || status.adapterId;
       caption.textContent = profileName ? `${profileName} · 只读遥测` : '当前适配包 · 只读遥测';
     }
-    if (ob && typeof ob === 'object') {
+    if (Object.keys(ob).length > 0) {
       const v = Number(ob.batteryVoltage ?? ob.battery?.voltage ?? status.power?.voltage);
       setText('ob-compare-voltage', Number.isFinite(v) ? v.toFixed(2) + ' V' : '—');
       const quat = stationImuQuaternion(ob);
@@ -3498,10 +3498,19 @@ function stationImuQuaternion(originbot) {
   return { x, y, z, w };
 }
 
+function stationTelemetrySnapshot(status) {
+  for (const candidate of [status?.telemetry, status?.originbot]) {
+    if (candidate && typeof candidate === 'object' && Object.keys(candidate).length > 0) {
+      return candidate;
+    }
+  }
+  return {};
+}
+
 function stationRenderRobotTelemetry(status) {
   const wrap = $('station-robot-tele');
   if (!wrap) return;
-  const originbot = status.originbot || status.telemetry || {};
+  const originbot = stationTelemetrySnapshot(status);
   const hasData =
     originbot && typeof originbot === 'object' && Object.keys(originbot).length > 0;
   wrap.hidden = !hasData;
@@ -3617,7 +3626,7 @@ function stationRenderStatus(status) {
   );
   // OriginBot telemetry is reported honestly by the agent: present only when
   // the bringup stack is running, never synthesized here.
-  const originbot = status.originbot || status.telemetry || {};
+  const originbot = stationTelemetrySnapshot(status);
   const obVoltage = Number(originbot.batteryVoltage ?? originbot.battery?.voltage);
   const displayVoltage = Number.isFinite(obVoltage) ? obVoltage : Number(power.voltage);
   setText(
