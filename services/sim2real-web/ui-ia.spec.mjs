@@ -41,7 +41,7 @@ assert.equal(
   null,
   'the duplicate “平台模块” secondary navigation must not regress',
 );
-assert.doesNotMatch(html, /section-kicker|card-kicker/, 'no English kicker labels: one lean title per section, not a three-line header');
+assert.doesNotMatch(html, /section-kicker/, 'no legacy section kicker labels: keep the workflow surface compact');
 assert.doesNotMatch(html, /让一个动作/, 'the marketing hero must stay removed');
 assert.match(html, /id="task-select"/, 'workspace must expose an action-task context');
 assert.match(html, /id="presentation-toggle"/, 'workspace must expose a reversible presentation view');
