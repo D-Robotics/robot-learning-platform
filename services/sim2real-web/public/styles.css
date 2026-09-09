@@ -3152,6 +3152,147 @@ body.presentation-mode .next-card {
   font-size: 11px;
   color: var(--muted, #91a4bd);
 }
+.station-metric-bar {
+  height: 4px;
+  border-radius: 2px;
+  background: rgba(148, 163, 184, 0.14);
+  overflow: hidden;
+  margin: 4px 0 2px;
+}
+.station-metric-bar i {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, #34d2b5, #38bdf8);
+  transition: width 0.4s ease;
+}
+.station-metric-bar i.is-warn {
+  background: linear-gradient(90deg, #fbbf24, #f59e0b);
+}
+.station-metric-bar i.is-danger {
+  background: linear-gradient(90deg, #f87171, #ef4444);
+}
+.station-metric-card.is-danger .station-metric-value {
+  color: #f87171;
+}
+.station-spark {
+  width: 100%;
+  height: 24px;
+  margin: 4px 0 2px;
+  display: block;
+}
+.station-spark polyline {
+  fill: none;
+  stroke: #38bdf8;
+  stroke-width: 1.4;
+  vector-effect: non-scaling-stroke;
+}
+.station-spark .station-spark-tx {
+  stroke: rgba(148, 163, 184, 0.45);
+  stroke-dasharray: 2 2;
+}
+/* ---- 机体遥测卡（参考机型 OriginBot） ---- */
+.station-robot-tele {
+  margin-top: 14px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 12px 14px;
+  background: linear-gradient(180deg, rgba(56, 189, 248, 0.05), rgba(56, 189, 248, 0.015));
+}
+.station-tele-heading {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 12px;
+  letter-spacing: 0.06em;
+  color: var(--muted, #91a4bd);
+  margin-bottom: 10px;
+}
+.station-tele-live {
+  color: var(--green, #74e6b0);
+  border: 1px solid rgba(70, 160, 98, 0.5);
+  border-radius: 999px;
+  padding: 1px 8px;
+  font-size: 11px;
+}
+.station-tele-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 10px;
+}
+.station-tele-card {
+  border: 1px solid rgba(148, 163, 184, 0.18);
+  border-radius: 10px;
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  background: var(--panel-soft);
+}
+.station-tele-compass {
+  grid-column: span 1;
+}
+.station-compass {
+  width: 84px;
+  height: 84px;
+  margin: 4px auto;
+  position: relative;
+}
+.station-compass svg {
+  width: 100%;
+  height: 100%;
+}
+.station-compass-ring {
+  fill: rgba(15, 23, 42, 0.35);
+  stroke: rgba(148, 163, 184, 0.4);
+  stroke-width: 1.5;
+}
+.station-compass-marks line {
+  stroke: rgba(148, 163, 184, 0.6);
+  stroke-width: 1;
+}
+.station-compass-marks text {
+  fill: var(--muted, #91a4bd);
+  font-size: 9px;
+  text-anchor: middle;
+}
+.station-compass-needle {
+  transform-origin: 50px 50px;
+  transition: transform 0.5s cubic-bezier(0.22, 1, 0.36, 1);
+}
+.station-compass-needle-n {
+  fill: #ef4444;
+}
+.station-compass-needle-s {
+  fill: rgba(148, 163, 184, 0.7);
+}
+.station-tele-compass .station-metric-value {
+  text-align: center;
+}
+.station-battery-cells {
+  display: flex;
+  gap: 3px;
+  margin: 4px 0 2px;
+}
+.station-battery-cells i {
+  flex: 1;
+  height: 8px;
+  border-radius: 2px;
+  background: rgba(148, 163, 184, 0.16);
+  border: 1px solid rgba(148, 163, 184, 0.2);
+  transition: background 0.4s ease;
+}
+.station-battery-cells i.is-on {
+  background: linear-gradient(180deg, #34d2b5, #10b981);
+  border-color: rgba(52, 210, 181, 0.5);
+}
+.station-battery-cells i.is-danger {
+  background: linear-gradient(180deg, #f87171, #ef4444);
+  border-color: rgba(248, 113, 113, 0.5);
+}
+.station-odom {
+  font-size: 15px;
+}
 .station-topics {
   margin-top: 14px;
   display: flex;
@@ -3175,6 +3316,25 @@ body.presentation-mode .next-card {
   font-size: 12px;
   color: var(--accent-text);
   font-variant-numeric: tabular-nums;
+}
+.station-topic-chip.station-topic-drive {
+  border-color: rgba(239, 68, 68, 0.55);
+  color: #fca5a5;
+  background: rgba(239, 68, 68, 0.08);
+}
+.station-topic-chip.station-topic-sensor {
+  border-color: rgba(56, 189, 248, 0.5);
+  color: #7dd3fc;
+  background: rgba(56, 189, 248, 0.08);
+}
+.station-topic-chip.station-topic-tf {
+  border-color: rgba(52, 210, 181, 0.5);
+  color: #6ee7c9;
+  background: rgba(52, 210, 181, 0.08);
+}
+.station-topic-chip.station-topic-sys {
+  border-color: rgba(148, 163, 184, 0.4);
+  color: var(--muted, #91a4bd);
 }
 .station-topic-empty {
   font-size: 12px;
@@ -3246,6 +3406,156 @@ body.presentation-mode .next-card {
   border-top: 1px dashed var(--line);
   padding-top: 10px;
   font-variant-numeric: tabular-nums;
+}
+
+/* ---- 策略运行时面板（与运动 Canary 同一受限通道的第三重开关） ---- */
+.station-policy-panel {
+  grid-column: 2;
+}
+.station-policy-controls {
+  display: grid;
+  gap: 14px;
+}
+.station-policy-model label {
+  display: block;
+  font-size: 13px;
+  margin-bottom: 6px;
+}
+.station-policy-model-row {
+  display: flex;
+  gap: 8px;
+}
+.station-policy-model-row input[type='text'] {
+  flex: 1;
+  min-width: 0;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 8px 10px;
+  background: var(--panel-soft);
+  color: var(--text, #d8e2f0);
+  font-family: var(--mono, ui-monospace, monospace);
+  font-size: 13px;
+}
+.station-policy-model-meta {
+  margin-top: 6px;
+  font-size: 12px;
+  color: var(--muted, #91a4bd);
+  font-variant-numeric: tabular-nums;
+}
+.station-policy-slider label {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  font-size: 13px;
+  margin-bottom: 6px;
+}
+.station-policy-slider output {
+  color: var(--accent-text);
+  font-variant-numeric: tabular-nums;
+}
+.station-policy-slider input[type='range'] {
+  width: 100%;
+  accent-color: #38bdf8;
+}
+.station-policy-actions {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.station-policy-start {
+  border: 1px solid rgba(56, 189, 248, 0.5);
+  color: #38bdf8;
+}
+.station-policy-stop {
+  flex: 1;
+  border: none;
+  border-radius: 8px;
+  padding: 10px 18px;
+  background: #d92b2b;
+  color: #fff;
+  font-weight: 600;
+  cursor: pointer;
+  letter-spacing: 0.12em;
+}
+.station-policy-stop:hover {
+  background: #b81f1f;
+}
+.station-policy-telemetry {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+  border-top: 1px dashed var(--line);
+  padding-top: 12px;
+}
+.station-policy-stat {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.station-policy-stat-label {
+  font-size: 11px;
+  color: var(--muted, #91a4bd);
+  letter-spacing: 0.04em;
+}
+.station-policy-stat-value {
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--accent-text);
+  font-variant-numeric: tabular-nums;
+}
+.station-policy-stat-value[data-state='running'] {
+  color: var(--green, #74e6b0);
+}
+.station-policy-stat-value[data-state='fault'] {
+  color: #f87171;
+}
+.station-policy-obsslots {
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  background: var(--panel-soft);
+}
+.station-policy-obsslots-title {
+  font-size: 12px;
+  color: var(--muted, #91a4bd);
+}
+.station-policy-obsslots-row {
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+  font-size: 12px;
+}
+.station-policy-obsslots-kind {
+  flex: none;
+  border-radius: 4px;
+  padding: 1px 6px;
+  font-size: 11px;
+  letter-spacing: 0.08em;
+}
+.station-policy-obsslots-kind.is-real {
+  background: rgba(70, 160, 98, 0.18);
+  color: var(--green, #74e6b0);
+}
+.station-policy-obsslots-kind.is-zero {
+  background: rgba(255, 190, 60, 0.14);
+  color: #ffbe3c;
+}
+.station-policy-obsslots-name {
+  font-family: var(--mono, ui-monospace, monospace);
+  color: var(--text, #d8e2f0);
+}
+.station-policy-obsslots-desc {
+  color: var(--muted, #91a4bd);
+}
+.station-policy-lasterr {
+  font-size: 12px;
+  color: #f87171;
+  border-left: 3px solid rgba(248, 113, 113, 0.7);
+  padding-left: 10px;
+  line-height: 1.6;
 }
 .station-camera-frame {
   border: 1px solid var(--line);
@@ -3376,6 +3686,16 @@ body.presentation-mode .next-card {
 @media (max-width: 720px) {
   .station-metric-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .station-tele-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .station-tele-compass {
+    grid-column: 1 / -1;
+  }
+  .station-compass {
+    width: 72px;
+    height: 72px;
   }
   .station-command-grid {
     grid-template-columns: 1fr;

@@ -81,6 +81,26 @@ export function buildStationStatus({ startedAtMs, tick }) {
       txKbPerSec: Math.max(0, Math.round(wave(5, 300, 700))),
     },
     power: { voltage: wave(2, 0.2, 11.9), current: wave(4, 0.6, 2.1) },
+    // 参考机型的模拟机体遥测：IMU 四元数（缓慢转向）、odom（缓慢绕圈）、
+    // 电池波动——让离线演示也能走通遥测卡的渲染路径。真机数据源是板端
+    // board-telemetry-node.py；此处 mock=true 诚实标注，绝不冒充真机。
+    originbot: {
+      imu: {
+        x: 0,
+        y: 0,
+        z: Number(Math.sin((tick / 40) * Math.PI).toFixed(6)),
+        w: Number(Math.cos((tick / 40) * Math.PI).toFixed(6)),
+      },
+      odom: {
+        positionX: Number((0.3 * Math.sin(tick / 30)).toFixed(4)),
+        positionY: Number((0.3 * Math.cos(tick / 30)).toFixed(4)),
+        linearX: 0,
+        angularZ: 0,
+      },
+      batteryVoltage: wave(6, 0.05, 4.9),
+    },
+    originbotNote:
+      'simulated OriginBot telemetry for the local reference agent (mock=true); the real board publishes /imu /odom /originbot_status',
     topics: [
       { name: '/tf', hz: 30 },
       { name: '/joint_states', hz: 50 },

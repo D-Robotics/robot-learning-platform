@@ -499,4 +499,216 @@ export function registerSim2RealBoardStationRoutes(
       response.json(agent);
     }),
   );
+
+  // ---- policy runtime (trained ONNX → bounded /cmd_vel) --------------------
+  // The browser loads a trained policy through this surface and the board
+  // runs inference, publishing through the SAME clamped, watchdog-floored
+  // channel as the drive canary. Platform-side this adds a THIRD gate
+  // (RDK_SIM2REAL_STATION_POLICY_ENABLED) on top of the two drive switches,
+  // so policy motion requires all three. `policy/stop` (like drive/stop) is
+  // always forwarded regardless of switches.
+
+  const policyPlatformEnabled =
+    String(process.env.RDK_SIM2REAL_STATION_POLICY_ENABLED ?? '').trim() === '1';
+
+  /** GET /board-station/policy — honest policy-runtime state. */
+  router.get(
+    api('/board-station/policy'),
+    wrapAsync(async (request, response) => {
+      const resolved = await resolveStation(request, response);
+      if (!resolved) return;
+      noStore(response);
+      const agent = await stationAgentFetch('/v1/station/policy');
+      if (!agent || typeof agent !== 'object') {
+        sendApiError(
+          response,
+          502,
+          'SIM2REAL_BOARD_AGENT_UNREACHABLE',
+          '板端策略运行时状态不可达。',
+          { retryable: true },
+        );
+        return;
+      }
+      response.json({
+        ok: true,
+        platformEnabled: policyPlatformEnabled,
+        drivePlatformEnabled,
+        policy: agent.policy ?? null,
+      });
+    }),
+  );
+
+  /** POST /board-station/policy/load — load a policies/ ONNX (gated). */
+  router.post(
+    api('/board-station/policy/load'),
+    wrapAsync(async (request, response) => {
+      const resolved = await resolveStation(request, response);
+      if (!resolved) return;
+      noStore(response);
+      if (!policyPlatformEnabled) {
+        sendApiError(
+          response,
+          409,
+          'SIM2REAL_STATION_POLICY_DISABLED',
+          '平台未开启策略运行时（RDK_SIM2REAL_STATION_POLICY_ENABLED）。',
+          { retryable: false },
+        );
+        return;
+      }
+      const body =
+        request.body && typeof request.body === 'object' && !Array.isArray(request.body)
+          ? (request.body as Record<string, unknown>)
+          : {};
+      const path = String(body.path ?? '').trim();
+      // Allow only an onnx filename; the board resolves it inside its pinned
+      // policies dir. No absolute paths, no traversal, no extensions smuggling.
+      if (!/^[\w.-]+\.onnx$/.test(path)) {
+        sendApiError(
+          response,
+          400,
+          'SIM2REAL_STATION_POLICY_INVALID_PATH',
+          '模型路径无效：仅接受 policies 目录内的 .onnx 文件名。',
+          { retryable: false },
+        );
+        return;
+      }
+      const agent = await stationAgentFetchWithStatus('/v1/station/policy/load', {
+        method: 'POST',
+        timeoutMs: 30_000, // model load + onnxruntime session init on board
+        body: JSON.stringify({ path: `/root/rdk-board-agent/policies/${path}` }),
+      });
+      if (!agent) {
+        sendApiError(
+          response,
+          502,
+          'SIM2REAL_BOARD_AGENT_UNREACHABLE',
+          '板端 agent 不可达，模型未加载。',
+          { retryable: true },
+        );
+        return;
+      }
+      response.status(agent.status).json(agent.payload);
+    }),
+  );
+
+  /** POST /board-station/policy/start — begin policy-driven motion (gated). */
+  router.post(
+    api('/board-station/policy/start'),
+    wrapAsync(async (request, response) => {
+      const resolved = await resolveStation(request, response);
+      if (!resolved) return;
+      noStore(response);
+      if (!policyPlatformEnabled) {
+        sendApiError(
+          response,
+          409,
+          'SIM2REAL_STATION_POLICY_DISABLED',
+          '平台未开启策略运行时（RDK_SIM2REAL_STATION_POLICY_ENABLED）。',
+          { retryable: false },
+        );
+        return;
+      }
+      if (!drivePlatformEnabled) {
+        sendApiError(
+          response,
+          409,
+          'SIM2REAL_STATION_DRIVE_DISABLED',
+          '策略运动同时需要平台侧 RDK_SIM2REAL_STATION_DRIVE_ENABLED=1。',
+          { retryable: false },
+        );
+        return;
+      }
+      const body =
+        request.body && typeof request.body === 'object' && !Array.isArray(request.body)
+          ? (request.body as Record<string, unknown>)
+          : {};
+      const direction = Number(body.direction);
+      if (!Number.isFinite(direction)) {
+        sendApiError(
+          response,
+          400,
+          'SIM2REAL_STATION_POLICY_INVALID',
+          'direction 需为数值（-1..1）。',
+          { retryable: false },
+        );
+        return;
+      }
+      const agent = await stationAgentFetchWithStatus('/v1/station/policy/start', {
+        method: 'POST',
+        timeoutMs: 15_000,
+        body: JSON.stringify({ direction: Math.min(Math.max(direction, -1), 1) }),
+      });
+      if (!agent) {
+        sendApiError(
+          response,
+          502,
+          'SIM2REAL_BOARD_AGENT_UNREACHABLE',
+          '板端 agent 不可达，策略未启动。底盘看门狗保证机器人保持静止。',
+          { retryable: true },
+        );
+        return;
+      }
+      response.status(agent.status).json(agent.payload);
+    }),
+  );
+
+  /** POST /board-station/policy/reset — clear a sticky fault (gated). */
+  router.post(
+    api('/board-station/policy/reset'),
+    wrapAsync(async (request, response) => {
+      const resolved = await resolveStation(request, response);
+      if (!resolved) return;
+      noStore(response);
+      if (!policyPlatformEnabled) {
+        sendApiError(
+          response,
+          409,
+          'SIM2REAL_STATION_POLICY_DISABLED',
+          '平台未开启策略运行时（RDK_SIM2REAL_STATION_POLICY_ENABLED）。',
+          { retryable: false },
+        );
+        return;
+      }
+      const agent = await stationAgentFetchWithStatus('/v1/station/policy/reset', {
+        method: 'POST',
+        timeoutMs: 12_000,
+      });
+      if (!agent) {
+        sendApiError(
+          response,
+          502,
+          'SIM2REAL_BOARD_AGENT_UNREACHABLE',
+          '板端 agent 不可达，重置未执行。',
+          { retryable: true },
+        );
+        return;
+      }
+      response.status(agent.status).json(agent.payload);
+    }),
+  );
+
+  /** POST /board-station/policy/stop — zero output + halt, always allowed. */
+  router.post(
+    api('/board-station/policy/stop'),
+    wrapAsync(async (request, response) => {
+      const resolved = await resolveStation(request, response);
+      if (!resolved) return;
+      noStore(response);
+      const agent = await stationAgentFetchWithStatus('/v1/station/policy/stop', {
+        method: 'POST',
+        timeoutMs: 12_000,
+      });
+      if (!agent) {
+        sendApiError(
+          response,
+          502,
+          'SIM2REAL_BOARD_AGENT_UNREACHABLE',
+          '策略停止命令未送达板端。底盘固件看门狗（500ms 无命令自动停车）兜底。',
+          { retryable: true },
+        );
+        return;
+      }
+      response.status(agent.status).json(agent.payload);
+    }),
+  );
 }

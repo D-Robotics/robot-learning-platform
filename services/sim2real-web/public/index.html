@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="description" content="面向 RDK X5 的 Duck 仿真、训练与部署平台" />
     <title>RDK Duck Sim2Real Lab</title>
-    <link rel="stylesheet" href="./styles.css?v=duck-lab-20" />
+    <link rel="stylesheet" href="./styles.css?v=duck-lab-22" />
   </head>
   <body>
     <a class="skip-link" href="#main-content">跳到主要内容</a>
@@ -981,24 +981,30 @@
                   目标板卡：<span id="station-device-name">（未选择）</span>
                 </div>
                 <div class="station-metric-grid" id="station-metric-grid">
-                  <div class="station-metric-card">
+                  <div class="station-metric-card" id="station-cpu-card">
                     <span class="station-metric-label">CPU 占用</span>
                     <span class="station-metric-value" id="station-cpu">--</span>
+                    <span class="station-metric-bar" aria-hidden="true"><i id="station-cpu-bar"></i></span>
                     <span class="station-metric-sub" id="station-cpu-temp">--</span>
                   </div>
-                  <div class="station-metric-card">
+                  <div class="station-metric-card" id="station-memory-card">
                     <span class="station-metric-label">内存</span>
                     <span class="station-metric-value" id="station-memory">--</span>
+                    <span class="station-metric-bar" aria-hidden="true"><i id="station-memory-bar"></i></span>
                     <span class="station-metric-sub" id="station-memory-sub">--</span>
                   </div>
                   <div class="station-metric-card">
                     <span class="station-metric-label">网络 ↓/↑</span>
                     <span class="station-metric-value" id="station-network">--</span>
+                    <svg class="station-spark" id="station-network-spark" viewBox="0 0 100 24" preserveAspectRatio="none" aria-hidden="true">
+                      <polyline id="station-network-spark-line" points="" />
+                    </svg>
                     <span class="station-metric-sub" id="station-network-sub">--</span>
                   </div>
-                  <div class="station-metric-card">
+                  <div class="station-metric-card" id="station-power-card">
                     <span class="station-metric-label">电源</span>
                     <span class="station-metric-value" id="station-power">--</span>
+                    <span class="station-metric-bar" aria-hidden="true"><i id="station-power-bar"></i></span>
                     <span class="station-metric-sub" id="station-power-sub">--</span>
                   </div>
                   <div class="station-metric-card">
@@ -1006,10 +1012,57 @@
                     <span class="station-metric-value" id="station-uptime">--</span>
                     <span class="station-metric-sub" id="station-uptime-sub">自 agent 启动</span>
                   </div>
-                  <div class="station-metric-card">
+                  <div class="station-metric-card" id="station-disk-card">
                     <span class="station-metric-label">磁盘</span>
                     <span class="station-metric-value" id="station-disk">--</span>
+                    <span class="station-metric-bar" aria-hidden="true"><i id="station-disk-bar"></i></span>
                     <span class="station-metric-sub" id="station-disk-sub">--</span>
+                  </div>
+                </div>
+                <div class="station-robot-tele" id="station-robot-tele" hidden>
+                  <div class="station-tele-heading">
+                    <span>机体遥测 · 参考机型 OriginBot</span>
+                    <span class="station-tele-live" id="station-tele-live" hidden>实时</span>
+                  </div>
+                  <div class="station-tele-grid">
+                    <div class="station-tele-card station-tele-compass">
+                      <span class="station-metric-label">IMU 航向</span>
+                      <div class="station-compass" aria-hidden="true">
+                        <svg viewBox="0 0 100 100">
+                          <circle class="station-compass-ring" cx="50" cy="50" r="46" />
+                          <g class="station-compass-marks">
+                            <line x1="50" y1="6" x2="50" y2="14" /><text x="50" y="26">北</text>
+                            <line x1="50" y1="86" x2="50" y2="94" /><text x="50" y="84">南</text>
+                            <line x1="6" y1="50" x2="14" y2="50" /><text x="24" y="54">西</text>
+                            <line x1="86" y1="50" x2="94" y2="50" /><text x="76" y="54">东</text>
+                          </g>
+                          <g id="station-compass-needle" class="station-compass-needle">
+                            <polygon class="station-compass-needle-n" points="50,14 45,50 55,50" />
+                            <polygon class="station-compass-needle-s" points="50,86 45,50 55,50" />
+                          </g>
+                        </svg>
+                      </div>
+                      <span class="station-metric-value" id="station-tele-heading">--</span>
+                      <span class="station-metric-sub" id="station-tele-heading-sub">quaternion → yaw</span>
+                    </div>
+                    <div class="station-tele-card">
+                      <span class="station-metric-label">电池电压</span>
+                      <span class="station-metric-value" id="station-tele-battery">--</span>
+                      <span class="station-battery-cells" id="station-tele-battery-cells" aria-hidden="true">
+                        <i></i><i></i><i></i><i></i>
+                      </span>
+                      <span class="station-metric-sub" id="station-tele-battery-sub">--</span>
+                    </div>
+                    <div class="station-tele-card">
+                      <span class="station-metric-label">里程计</span>
+                      <span class="station-metric-value station-odom" id="station-tele-odom">--</span>
+                      <span class="station-metric-sub" id="station-tele-odom-sub">位置 x / y（板端原点）</span>
+                    </div>
+                    <div class="station-tele-card">
+                      <span class="station-metric-label">底盘速度</span>
+                      <span class="station-metric-value" id="station-tele-vel">--</span>
+                      <span class="station-metric-sub" id="station-tele-vel-sub">odom twist</span>
+                    </div>
                   </div>
                 </div>
                 <div class="station-topics">
@@ -1100,6 +1153,82 @@
                   <div class="station-drive-state" id="station-drive-state" role="status" aria-live="polite">
                     空闲
                   </div>
+                </div>
+              </article>
+
+              <article class="panel station-policy-panel" id="station-policy-panel">
+                <div class="panel-heading panel-heading-lean"><h2>策略运行时</h2>
+                  <span class="panel-caption">ONNX 推理 · 三重开关 · 同一受限通道</span>
+                </div>
+                <p class="station-drive-note" id="station-policy-note">
+                  未启用。策略运动需要平台策略开关、平台驱动开关、板端驱动与策略开关全部开启
+                  （RDK_SIM2REAL_STATION_POLICY_ENABLED / RDK_SIM2REAL_STATION_DRIVE_ENABLED /
+                  RDK_SIM2REAL_BOARD_AGENT_ENABLE_DRIVE / RDK_SIM2REAL_BOARD_AGENT_ENABLE_POLICY）；
+                  策略停止始终可用。
+                </p>
+                <div class="station-policy-controls" id="station-policy-controls" hidden>
+                  <div class="station-policy-model">
+                    <label for="station-policy-model-name">模型（板端 policies/ 目录）</label>
+                    <div class="station-policy-model-row">
+                      <input
+                        type="text"
+                        id="station-policy-model-name"
+                        placeholder="policy.onnx"
+                        spellcheck="false"
+                        autocomplete="off"
+                      />
+                      <button class="button station-policy-load" type="button" id="station-policy-load">
+                        加载
+                      </button>
+                    </div>
+                    <div class="station-policy-model-meta" id="station-policy-model-meta">
+                      未加载模型
+                    </div>
+                  </div>
+                  <div class="station-policy-slider">
+                    <label for="station-policy-direction">方向指令
+                      <output id="station-policy-direction-out">+0.0</output>
+                    </label>
+                    <input
+                      type="range"
+                      id="station-policy-direction"
+                      min="-1"
+                      max="1"
+                      step="0.1"
+                      value="0"
+                    />
+                  </div>
+                  <div class="station-policy-actions">
+                    <button class="button station-policy-start" type="button" id="station-policy-start">
+                      启动策略
+                    </button>
+                    <button class="station-policy-stop" type="button" id="station-policy-stop">
+                      停止
+                    </button>
+                    <button class="button button-quiet station-policy-reset" type="button" id="station-policy-reset">
+                      清除故障
+                    </button>
+                  </div>
+                  <div class="station-policy-telemetry">
+                    <div class="station-policy-stat">
+                      <span class="station-policy-stat-label">状态</span>
+                      <span class="station-policy-stat-value" id="station-policy-state">idle</span>
+                    </div>
+                    <div class="station-policy-stat">
+                      <span class="station-policy-stat-label">推理耗时</span>
+                      <span class="station-policy-stat-value" id="station-policy-infer">-- ms</span>
+                    </div>
+                    <div class="station-policy-stat">
+                      <span class="station-policy-stat-label">已发布</span>
+                      <span class="station-policy-stat-value" id="station-policy-published">0</span>
+                    </div>
+                    <div class="station-policy-stat">
+                      <span class="station-policy-stat-label">命令</span>
+                      <span class="station-policy-stat-value" id="station-policy-command">0.0</span>
+                    </div>
+                  </div>
+                  <div class="station-policy-obsslots" id="station-policy-obsslots" hidden></div>
+                  <div class="station-policy-lasterr" id="station-policy-lasterr" hidden></div>
                 </div>
               </article>
 
@@ -1214,6 +1343,6 @@
     >
       ■ 急停
     </button>
-    <script src="./app.js?v=duck-lab-20" type="module"></script>
+    <script src="./app.js?v=duck-lab-22" type="module"></script>
   </body>
 </html>

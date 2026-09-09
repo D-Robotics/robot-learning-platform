@@ -46,6 +46,7 @@ class TelemetryNode(Node):
         self._imu = None
         self._odom = None
         self._battery = None
+        self._seq = 0
         self.create_subscription(Imu, "/imu", self._on_imu, sensor_qos)
         self.create_subscription(Odometry, "/odom", self._on_odom, sensor_qos)
         self._status_type = self._load_status_type()
@@ -68,7 +69,14 @@ class TelemetryNode(Node):
 
     def _on_imu(self, msg):
         q = msg.orientation
+        a = msg.angular_velocity
+        accel = msg.linear_acceleration
         self._imu = {
+            # Keep the nested names stable with board-policy-runtime.py.
+            # Older consumers can still read the quaternion fields directly.
+            "quaternion": {"x": q.x, "y": q.y, "z": q.z, "w": q.w},
+            "gyro": {"x": a.x, "y": a.y, "z": a.z},
+            "linearAcceleration": {"x": accel.x, "y": accel.y, "z": accel.z},
             "x": q.x,
             "y": q.y,
             "z": q.z,
@@ -97,9 +105,14 @@ class TelemetryNode(Node):
 
     def _write_snapshot(self):
         now = time.time()
+        self._seq += 1
         data = {}
         if self._imu and now - self._imu["ts"] <= STALE_SEC:
-            data["imu"] = {k: self._imu[k] for k in ("x", "y", "z", "w")}
+            data["imu"] = {
+                "quaternion": dict(self._imu["quaternion"]),
+                "gyro": dict(self._imu["gyro"]),
+                "linearAcceleration": dict(self._imu["linearAcceleration"]),
+            }
         if self._odom and now - self._odom["ts"] <= STALE_SEC:
             data["odom"] = {
                 k: self._odom[k]
@@ -107,7 +120,13 @@ class TelemetryNode(Node):
             }
         if self._battery and now - self._battery["ts"] <= STALE_SEC:
             data["batteryVoltage"] = self._battery["voltage"]
-        payload = {"ts": now, "data": data if data else None}
+        payload = {
+            "ts": now,
+            "sourceWallTimeMs": int(now * 1000),
+            "sourceMonotonicNs": time.monotonic_ns(),
+            "seq": self._seq,
+            "data": data if data else None,
+        }
         tmp = SNAPSHOT_FILE + ".tmp"
         try:
             with open(tmp, "w", encoding="utf-8") as handle:

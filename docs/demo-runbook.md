@@ -69,10 +69,68 @@ npm run demo:starter
 保持诚实——上板依旧需要 X5 编译制品和只读预检。详见
 [`docs/engines/starter-ppo.md`](engines/starter-ppo.md)。
 
+## 上位机站 + 真机遥测（station 页）
+
+`http://127.0.0.1:18104/#station` 是另一段可投屏的演示：工作台 → 板卡 → 真实数据。
+
+1. **真实遥测卡**：IMU 罗盘指针随真机姿态转动、电池电压实时显示、里程计与底盘速度卡、
+   CPU/内存/磁盘进度条按阈值变色、网络速率 sparkline 流动。所有数字来自板端 1Hz 状态流
+   （`mock: false`），本地参考 agent 演示时页脚会标注模拟数据。
+2. **运动 Canary**（开关默认全关）：面板会如实显示"未启用"与需要的开关名——这本身就是
+   演示点：默认只读、fail-closed、急停永远可点（空格键也触发急停）。
+3. **策略运行时面板**：训练 → 导出 → 板端推理这条链的可视化。开关全关时同样显示诚实
+   说明；开启后可以：输入模型名（板端 `policies/` 目录内的 `.onnx` 文件）→ 加载（板端
+   onnxruntime 会话就绪，显示 61→14、文件大小）→ 看到"观测槽位如实标注"列表（哪些槽是
+   真传感器、哪些是适配零填充——这是 sim→real 的诚实边界展示点）→ 启动（前置确认弹窗
+   确保人已在场）→ 1Hz 显示推理耗时/发布计数 → 停止。
+4. **话题分色**：`/cmd_vel`（红）驱动、`/imu`/`/odom`（蓝）传感器、`/tf`（青）——一眼
+   看出板端在跑什么。
+
+### 策略上板前置（板端一次性）
+
+```bash
+# 1. 板上装依赖（已装过则跳过）
+sshpass -p root ssh root@10.185.136.180 'python3 -m pip install --no-cache-dir onnxruntime numpy'
+
+# 2. 传模型（只用 policies/ 目录内的 .onnx 文件名，代理会拒绝路径穿越）
+sshpass -p root scp local-path/policy.onnx \
+  root@10.185.136.180:/root/rdk-board-agent/policies/policy.onnx
+
+# 3. 开三重开关（演示完建议全部关回）
+#    Mac 侧: RDK_SIM2REAL_STATION_POLICY_ENABLED=1 RDK_SIM2REAL_STATION_DRIVE_ENABLED=1
+#    板 侧: agent.env 里 RDK_SIM2REAL_BOARD_AGENT_ENABLE_DRIVE=1 + ENABLE_POLICY=1
+#    然后: sshpass -p root ssh root@10.185.136.180 'systemctl restart rdk-board-agent'
+
+# 4. 重建 SSH 隧道（agent 重启/板重启后都要重建）
+sshpass -p root ssh -f -N -L '[::1]:19100:127.0.0.1:19100' root@10.185.136.180
+```
+
+### 演示前 30 秒预检清单
+
+- [ ] `curl -s http://127.0.0.1:18104/api/sim2real/board-station/health` 返回 `ok: true` 且
+      `mock: false`（如果板不可达，先重建隧道，再 `systemctl restart rdk-board-agent`）。
+- [ ] station 页罗盘在转（= 真 IMU 流活着），电池显示 ~5V。
+- [ ] 板端策略运行时状态：`GET /api/sim2real/board-station/policy` → 开关状态与你的演示
+      计划一致（只演示加载/推理时保持 start 不可达即可，被拒绝时页面会给出准确原因）。
+- [ ] 板卡掉线时的退路：切换到本地参考 agent（`RDK_SIM2REAL_BOARD_AGENT_URL` 指向
+      `local-board-agent`），遥测卡继续渲染（页脚标注模拟），讲解词强调"诚实降级，不伪造"。
+
+### 策略演示的安全话术
+
+- 输出钳制 0.3 m/s / 1.0 rad/s，500ms 无命令底盘固件看门狗自动零速——与手动 Canary
+  完全同一条受限通道。
+- 观测适配是**部分真实**：IMU 槽位是真数据，腿关节槽位是零填充（底盘没有腿）；面板上的
+  槽位标注就是这份边界的如实展示，不要讲成"完整 sim2real 对齐"。
+- 动作投影：14 维腿式输出 → 对抗肌对均值/不对称度 → (v, w)，或 (v, w) 策略直通；面板
+  的 obsSlots 与 note 都如实说明。
+
 ## 现场边界
 
 - Mock 只验证请求协议、状态流转和台账，不运行 PPO，也不生成可部署权重。
 - 合成遥测只验证导入、分片、回放和评测渲染，不代表真实 X5 采样。
 - reference BoardAgent 只返回固定的只读板卡护照，不连接 SSH、不执行任意命令、不驱动电机。
+- 策略运行时面板的推理指标（inferMs、published）来自板端真实 onnxruntime 进程；演示用
+  的 `policies/demo-policy.onnx` 是**结构真实的 61→14 契约形状模型但未经 RL 训练**——
+  展示的是推理管线与安全通道，不要讲成训练成果上机。
 - 真实闭环还需要真实 RL worker、X5 BoardAgent/Protobuf、制品编译与签名、OTA/回滚以及
   一台实体 X5 的验收。

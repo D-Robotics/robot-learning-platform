@@ -13,6 +13,11 @@ Wire contract (identical to services/sim2real-web/local-board-agent.mjs):
   GET  /v1/station/drive                 constrained-drive state (canary)
   POST /v1/station/drive                 clamped, time-boxed cmd_vel (opt-in)
   POST /v1/station/drive/stop            zero-speed emergency stop (always on)
+  GET  /v1/station/policy                policy-runtime state (honest, always)
+  POST /v1/station/policy/load           load a policies/ ONNX (gated)
+  POST /v1/station/policy/start          begin policy-driven motion (gated)
+  POST /v1/station/policy/reset          clear a sticky fault (gated)
+  POST /v1/station/policy/stop           zero output + halt (always on)
 
 Safety invariants (same as the reference agent):
 - token auth via RDK_SIM2REAL_BOARD_AGENT_TOKEN
@@ -22,6 +27,10 @@ Safety invariants (same as the reference agent):
   time-boxed (<=2 s), and the chassis firmware watchdog (500 ms cmd_vel
   silence -> zero speed) is the final safety floor. `drive/stop` is always
   accepted regardless of the switch.
+- policy-driven motion needs a THIRD gate (RDK_SIM2REAL_BOARD_AGENT_ENABLE_POLICY=1)
+  on top of the drive switch; its output shares the same clamps, the same
+  watchdog floor, and the same always-accepted stop. load() is restricted to
+  files under /root/rdk-board-agent/policies (<=50 MB).
 - `actuatorControl` mirrors the drive switch; `mock: false` reported honestly
 - camera stream reports 503 CAMERA_UNAVAILABLE when no device is connected;
   it never substitutes synthetic frames.
@@ -618,6 +627,238 @@ def originbot_telemetry_cached():
         return _ob_state["data"]
 
 
+# ---- policy runtime (trained ONNX → bounded /cmd_vel) ----------------------
+# A SECOND gate on top of the drive switch: even with the platform's
+# RDK_SIM2REAL_STATION_DRIVE_ENABLED=1 and the agent's
+# RDK_SIM2REAL_BOARD_AGENT_ENABLE_DRIVE=1, policy-driven motion only runs when
+# this third switch is set. `stop` is always honored regardless (it only ever
+# zeroes output — the same fail-closed stance as drive/stop).
+POLICY_ENABLED = os.environ.get("RDK_SIM2REAL_BOARD_AGENT_ENABLE_POLICY", "").strip() == "1"
+POLICY_RUNTIME_SCRIPT = os.environ.get(
+    "RDK_BOARD_POLICY_RUNTIME",
+    os.path.join(os.path.dirname(os.path.abspath(__file__)), "board-policy-runtime.py"),
+)
+POLICY_CMD_FILE = os.environ.get("RDK_BOARD_POLICY_CMD", "/tmp/board-policy-runtime-cmd.json")
+POLICY_STATE_FILE = os.environ.get(
+    "RDK_BOARD_POLICY_STATE", "/tmp/board-policy-runtime-state.json"
+)
+POLICY_RUNTIME_READY = "/tmp/board-policy-runtime.ready"
+POLICY_READY_TIMEOUT = 20.0  # rclpy init + onnxruntime import on the board
+POLICY_APPLY_TIMEOUT = 10.0  # file-protocol round trip for load/start
+POLICY_ALLOWED_MODEL_DIR = "/root/rdk-board-agent/policies"
+
+_policy_lock = threading.Lock()
+_policy_proc = None
+_policy_seq = 0
+
+
+def _policy_read_state(max_age=None):
+    """Read the runtime's state file; None when absent (or stale)."""
+    try:
+        with open(POLICY_STATE_FILE, "r", encoding="utf-8") as fh:
+            snap = json.load(fh)
+    except (OSError, ValueError):
+        return None
+    if max_age is not None:
+        ts = snap.get("ts")
+        if not isinstance(ts, (int, float)) or time.time() - ts > max_age:
+            return None
+    return snap
+
+
+def _policy_runtime_alive():
+    global _policy_proc
+    if _policy_proc is None or _policy_proc.poll() is not None:
+        return False
+    snap = _policy_read_state(max_age=5.0)
+    return bool(snap and snap.get("ok") is not False)
+
+
+def _start_policy_runtime():
+    """Spawn board-policy-runtime.py under the TROS environment if not alive.
+    Blocks until its state file appears (or timeout) so callers get an honest
+    launched/failed answer instead of accepting into the void."""
+    global _policy_proc
+    if _policy_runtime_alive():
+        return True
+    try:
+        os.unlink(POLICY_RUNTIME_READY)
+    except OSError:
+        pass
+    if not os.path.exists(POLICY_RUNTIME_SCRIPT):
+        return False
+    try:
+        _policy_proc = subprocess.Popen(
+            ["bash", "-c",
+             f"source {TROS_SETUP} 2>/dev/null && "
+             f"source {ORIGINBOT_WS_SETUP} 2>/dev/null && "
+             f"exec python3 {POLICY_RUNTIME_SCRIPT}"],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            env={**os.environ, "HOME": "/root", "TERM": "dumb",
+                 "PATH": "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"},
+        )
+    except OSError:
+        _policy_proc = None
+        return False
+    deadline = time.time() + POLICY_READY_TIMEOUT
+    while time.time() < deadline:
+        if _policy_proc.poll() is not None:
+            _policy_proc = None
+            return False
+        if os.path.exists(POLICY_RUNTIME_READY):
+            return True
+        time.sleep(0.1)
+    try:
+        _policy_proc.terminate()
+        _policy_proc.wait(timeout=2)
+    except (OSError, subprocess.TimeoutExpired):
+        pass
+    _policy_proc = None
+    return False
+
+
+def _stop_policy_runtime():
+    global _policy_proc
+    if _policy_proc is not None:
+        try:
+            _policy_proc.terminate()
+            _policy_proc.wait(timeout=3)
+        except (OSError, subprocess.TimeoutExpired):
+            try:
+                _policy_proc.kill()
+            except OSError:
+                pass
+        _policy_proc = None
+    for path in (POLICY_CMD_FILE, POLICY_RUNTIME_READY):
+        try:
+            os.unlink(path)
+        except OSError:
+            pass
+
+
+def _policy_send(op, **fields):
+    """Write one file-protocol request and wait for the runtime's ack.
+
+    Returns the runtime's post-op state snapshot (which carries a seq-
+    correlated `lastOp` for THIS request), or an error dict."""
+    global _policy_seq
+    if not _start_policy_runtime():
+        return {"ok": False, "error": "runtime-unavailable"}
+    with _policy_lock:
+        _policy_seq += 1
+        seq = _policy_seq
+    req = {"op": op, "seq": seq, **fields}
+    tmp = POLICY_CMD_FILE + ".tmp"
+    try:
+        with open(tmp, "w", encoding="utf-8") as fh:
+            json.dump(req, fh)
+            fh.flush()
+            os.fsync(fh.fileno())
+        os.replace(tmp, POLICY_CMD_FILE)
+    except OSError:
+        return {"ok": False, "error": "cmd-file-write-failed"}
+    # The runtime polls at 50 ms; state file rewrite is atomic. Wait until
+    # lastOp.seq == our seq (success or failure), or until timeout.
+    deadline = time.time() + POLICY_APPLY_TIMEOUT
+    while time.time() < deadline:
+        snap = _policy_read_state()
+        last = snap.get("lastOp") if snap else None
+        if last and last.get("seq") == seq:
+            if last.get("ok"):
+                return {**snap, "ok": True}
+            return {
+                "ok": False,
+                "error": last.get("error") or "policy-op-failed",
+                "detail": last.get("detail"),
+                "state": snap.get("state"),
+            }
+        if _policy_proc is not None and _policy_proc.poll() is not None:
+            return {"ok": False, "error": "runtime-died"}
+        time.sleep(0.05)
+    return {"ok": False, "error": "policy-op-timeout"}
+
+
+def policy_status():
+    """Honest policy surface: switches, runtime process, last state snapshot."""
+    snap = _policy_read_state()
+    return {
+        "enabled": POLICY_ENABLED,
+        "runtimeRunning": _policy_runtime_alive(),
+        "driveEnabled": DRIVE_ENABLED,
+        # Policy motion requires BOTH switches; report the combined verdict so
+        # the UI can render exactly one gate explanation.
+        "motionAuthorized": POLICY_ENABLED and DRIVE_ENABLED,
+        "state": snap.get("state") if snap else None,
+        "model": snap.get("model") if snap else None,
+        "command": snap.get("command") if snap else None,
+        "published": snap.get("published") if snap else None,
+        "inferMs": snap.get("inferMs") if snap else None,
+        "lastError": snap.get("lastError") if snap else None,
+        "lastOp": snap.get("lastOp") if snap else None,
+        "obsSlots": snap.get("obsSlots") if snap else None,
+        "limits": {
+            "maxLinear": 0.3,
+            "maxAngular": 1.0,
+            "decisionHz": 10,
+            "chassisWatchdogMs": 500,
+        },
+        "note": "trained-policy inference on board; motion requires drive+policy switches, "
+                "output is speed-clamped and watchdog-floored exactly like the drive canary",
+    }
+
+
+def policy_stop(reason="operator-stop"):
+    """Always honored: forward stop even when disabled, and kill the runtime
+    output by file protocol + process termination as a floor."""
+    res = None
+    if _policy_runtime_alive():
+        res = _policy_send("stop", reason=reason)
+        if not res.get("ok"):
+            _stop_policy_runtime()
+            res = {"ok": True, "state": "idle", "stoppedBy": "process-terminated"}
+    else:
+        res = {"ok": True, "state": None, "stoppedBy": "runtime-not-running"}
+    return res
+
+
+def _policy_allowed_model_path(path):
+    """Only models under the pinned policies dir are loadable, and the file
+    must exist and be a regular file (no traversal, no devices/sockets)."""
+    if not isinstance(path, str) or not path:
+        return False, "model-path-required"
+    base = os.path.realpath(POLICY_ALLOWED_MODEL_DIR)
+    resolved = os.path.realpath(path)
+    if not (resolved == base or resolved.startswith(base + os.sep)):
+        return False, "model-path-outside-allowed-dir"
+    if not os.path.isfile(resolved):
+        return False, "model-file-missing"
+    if os.path.getsize(resolved) > 50 * 1024 * 1024:
+        return False, "model-too-large"
+    return True, resolved
+
+
+def policy_load(path):
+    if not POLICY_ENABLED:
+        return {"ok": False, "error": "policy-disabled"}
+    ok, resolved = _policy_allowed_model_path(path)
+    if not ok:
+        return {"ok": False, "error": resolved}
+    return _policy_send("load", path=resolved)
+
+
+def policy_start(direction):
+    if not POLICY_ENABLED:
+        return {"ok": False, "error": "policy-disabled"}
+    if not DRIVE_ENABLED:
+        # Gate honesty: refuse before touching the runtime, explain both gates.
+        return {"ok": False, "error": "drive-disabled",
+                "message": "policy start requires RDK_SIM2REAL_BOARD_AGENT_ENABLE_DRIVE=1 too"}
+    if not isinstance(direction, (int, float)):
+        return {"ok": False, "error": "invalid-type"}
+    return _policy_send("start", direction=float(direction))
+
+
 def _start_ob_sampler():
     global _ob_thread
     if _ob_thread is None:
@@ -669,7 +910,8 @@ def build_status():
         "topics": [{"name": name} for name in topics[:24]],
         "uptimeSec": int(time.time() - STARTED_AT),
         "cameraDevices": find_camera_device(),
-        "actuatorControl": False,
+        "actuatorControl": DRIVE_ENABLED,
+        "policy": policy_status(),
     }
 
 
@@ -848,6 +1090,9 @@ class Handler(BaseHTTPRequestHandler):
             self._json(200, {"ok": True, "drive": drive_status(),
                              "actuatorPolicy": _actuator_policy()})
             return
+        if path == "/v1/station/policy":
+            self._json(200, {"ok": True, "policy": policy_status()})
+            return
         if path == "/v1/station/status/stream":
             self._stream_ndjson()
             return
@@ -875,8 +1120,34 @@ class Handler(BaseHTTPRequestHandler):
             # Emergency stop is always accepted — even when drive is disabled
             # — so the UI stop button never has a failure mode.
             drive_stop("operator-emergency-stop")
+            policy_stop("operator-emergency-stop")
             self._json(200, {"ok": True, "drive": drive_status(),
                              "note": "zero-speed frame published; chassis watchdog enforces rest"})
+            return
+        if path == "/v1/station/policy/stop":
+            # Same always-on stance as drive/stop: stopping is never refused.
+            res = policy_stop("operator-stop")
+            drive_stop("operator-stop")  # belt-and-braces zero the canary too
+            self._json(200, {"ok": True, "stop": res, "policy": policy_status(),
+                             "note": "policy output zeroed; chassis watchdog enforces rest"})
+            return
+        if path == "/v1/station/policy/load":
+            payload = self._read_json() or {}
+            res = policy_load(str(payload.get("path", "")))
+            self._json(200 if res.get("ok") else 409,
+                       {**res, "policy": policy_status()})
+            return
+        if path == "/v1/station/policy/start":
+            payload = self._read_json() or {}
+            res = policy_start(payload.get("direction", 0.0))
+            self._json(200 if res.get("ok") else 409,
+                       {**res, "policy": policy_status()})
+            return
+        if path == "/v1/station/policy/reset":
+            res = _policy_send("reset") if _policy_runtime_alive() else {"ok": True,
+                                                                         "state": None}
+            self._json(200 if res.get("ok") else 409, {"ok": res.get("ok", True),
+                                                        "policy": policy_status()})
             return
         self._json(404, {"ok": False, "error": "BOARD_AGENT_NOT_FOUND"})
 
@@ -1072,7 +1343,8 @@ def main():
     print(f"[board-agent] real-data BoardAgent listening on http://{HOST}:{PORT}")
     print(f"[board-agent] board: {_identity['model']} / {_identity['os']} / rdk {_identity['rdkVersion']}")
     print(f"[board-agent] auth: {'token' if TOKEN else 'open (loopback only)'}; "
-          f"actuatorControl={'true' if DRIVE_ENABLED else 'false'}; mock=false")
+          f"actuatorControl={'true' if DRIVE_ENABLED else 'false'}; mock=false; "
+          f"policyRuntime={'true' if POLICY_ENABLED else 'false'}")
     sys.stdout.flush()
     try:
         server.serve_forever()
@@ -1080,6 +1352,7 @@ def main():
         pass
     finally:
         server.server_close()
+        policy_stop("agent-shutdown")
         if _telemetry_proc is not None and _telemetry_proc.poll() is None:
             try:
                 _telemetry_proc.terminate()

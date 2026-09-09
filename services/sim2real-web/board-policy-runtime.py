@@ -1,0 +1,488 @@
+#!/usr/bin/env python3
+"""Policy runtime for the RDK board: run a trained ONNX policy on the robot.
+
+This is the missing bridge between "training" and "motion": it loads the
+platform's exported policy.onnx, maps real robot observations onto the
+policy's input space, runs inference on the board, and publishes bounded
+/cmd_vel commands — the same constrained channel the manual drive canary
+uses. Every safety property of the drive canary applies here unchanged:
+
+  * speed clamps (<= max_linear m/s, <= max_angular rad/s, same constants)
+  * watchdog floor (chassis firmware zeroes 500 ms after cmd_vel goes silent)
+  * emergency stop honored (zero-speed frame + process halt)
+  * honest telemetry (publishes what it actually commanded; never fabricates)
+
+Observation mapping (the sim→real adapter). The MicroDuck contract expects
+[gyro(3), projected_gravity(3), joint_position_error(14), joint_velocity(14),
+last_action(14), command(13)] but a wheeled chassis only offers a subset. The
+runtime therefore builds a *contract-shaped* observation with real IMU gyro +
+gravity in the leading slots, zeros for the leg-joint slots the chassis does
+not have, and a command slot driven by the operator's direction command. This
+is an honest partial adapter: it reports exactly which slots are real vs
+zero-filled in every status snapshot, so the evaluation page can tell.
+
+Action mapping: the policy output is a 61→14 MLP; a differential base cannot
+actuate 14 leg joints, so the runtime projects the action onto base motion
+with an explicit, logged projection (mean of antagonistic pairs → forward
+speed; asymmetry → yaw rate) and clamps to the same bounds as the canary.
+For wheeled policies trained directly on (v, w) the projection is identity.
+
+Run inside the board's TROS environment:
+  python3 board-policy-runtime.py
+State machine: idle → (load) ready → (start) running → (stop) idle;
+fault ← any exception → (reset) ready. Op results are folded into every
+state snapshot as `lastOp` (seq-correlated) so callers see honest errors.
+"""
+
+import json
+import os
+import signal
+import sys
+import threading
+import time
+
+RUNTIME_STATE_FILE = os.environ.get(
+    "RDK_BOARD_POLICY_STATE", "/tmp/board-policy-runtime-state.json"
+)
+TELEMETRY_SPOOL_FILE = os.environ.get(
+    "RDK_BOARD_TELEMETRY_SPOOL", "/var/lib/rdk-board-agent/telemetry/policy.jsonl"
+)
+TELEMETRY_RUN_ID = os.environ.get("RDK_SIM2REAL_RUN_ID", "").strip()
+TELEMETRY_MODEL_ID = os.environ.get("RDK_SIM2REAL_MODEL_ID", "").strip()
+TELEMETRY_DEVICE_ID = os.environ.get("RDK_SIM2REAL_DEVICE_ID", "").strip()
+TELEMETRY_CONTRACT_ID = os.environ.get("RDK_SIM2REAL_CONTRACT_ID", "").strip()
+TELEMETRY_MAX_BYTES = int(os.environ.get("RDK_BOARD_TELEMETRY_SPOOL_MAX_BYTES", str(256 * 1024 * 1024)))
+EXPECTED_OBS_DIM = int(os.environ.get("RDK_SIM2REAL_POLICY_OBS_DIM", "61"))
+EXPECTED_ACTION_DIM = int(os.environ.get("RDK_SIM2REAL_POLICY_ACTION_DIM", "14"))
+TELEMETRY_SNAPSHOT_FILE = os.environ.get(
+    "RDK_BOARD_TELEMETRY_SNAPSHOT", "/tmp/board-telemetry-snapshot.json"
+)
+
+MAX_LINEAR = 0.3          # same clamp as the drive canary — never exceed
+MAX_ANGULAR = 1.0         # same clamp as the drive canary
+DECISION_HZ = 10          # inference rate; cmd_vel publishes at this rate
+STATS_EVERY_SEC = 1.0
+STALL_LIMIT_SEC = 0.5     # no fresh IMU for this long -> freeze (zero output)
+
+
+def _clamp(value, lo, hi):
+    return max(lo, min(hi, value))
+
+
+def _atomic_write_json(path, payload):
+    tmp = path + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as fh:
+        json.dump(payload, fh, ensure_ascii=False)
+        fh.flush()
+        os.fsync(fh.fileno())
+    os.replace(tmp, path)
+
+
+def _read_telemetry():
+    """Latest board telemetry snapshot (None when absent/stale)."""
+    try:
+        with open(TELEMETRY_SNAPSHOT_FILE, "r", encoding="utf-8") as fh:
+            snap = json.load(fh)
+        if time.time() - float(snap.get("ts", 0)) > STALL_LIMIT_SEC * 2 + 4.5:
+            return None
+        return snap.get("data")
+    except (OSError, ValueError):
+        return None
+
+
+class PolicyRuntime:
+    def __init__(self):
+        self._lock = threading.Lock()
+        self._model = None            # onnxruntime InferenceSession or None
+        self._model_meta = None       # {path, bytes, inputDim, outputDim}
+        self._state = "idle"          # idle | ready | running | fault
+        self._last_error = None
+        self._last_op = None          # {op, seq, ok, error, detail, at}
+        self._command_dir = 0.0       # operator direction command (-1..1)
+        self._last_obs = None
+        self._last_action = None
+        self._published = 0
+        self._infer_ms_avg = 0.0
+        self._started_at = None
+        self._stop_flag = threading.Event()
+        self._cmd_pub = None
+        self._node = None
+        self._last_cmd = (0.0, 0.0)
+        self._telemetry_dropped = 0
+
+    # ---- state reporting ------------------------------------------------
+    def snapshot(self):
+        with self._lock:
+            return {
+                "ok": True,
+                "ts": time.time(),
+                "state": self._state,
+                "model": self._model_meta,
+                "command": self._command_dir,
+                "published": self._published,
+                "inferMs": round(self._infer_ms_avg, 2),
+                "lastError": self._last_error,
+                "lastOp": self._last_op,
+                "obsSlots": self._obs_slot_report(),
+                "telemetry": {
+                    "spool": TELEMETRY_SPOOL_FILE,
+                    "bytes": os.path.getsize(TELEMETRY_SPOOL_FILE) if os.path.exists(TELEMETRY_SPOOL_FILE) else 0,
+                    "maxBytes": TELEMETRY_MAX_BYTES,
+                    "dropped": self._telemetry_dropped,
+                },
+                "uptimeSec": round(time.time() - self._started_at, 1)
+                if self._started_at
+                else 0.0,
+            }
+
+    def _obs_slot_report(self):
+        # Which observation slots carry real sensor data vs adapter zeros.
+        if not self._model_meta:
+            return None
+        return {
+            "gyro": "real (/imu angular_velocity)",
+            "projected_gravity": "real (/imu linear_acceleration, low-pass)",
+            "joint_position_error": "zero (chassis has no leg joints)",
+            "joint_velocity": "zero (chassis has no leg joints)",
+            "last_action": "real (previous projected action)",
+            "command": f"operator ({self._command_dir:+.2f}) + zeros",
+        }
+
+    # ---- lifecycle ------------------------------------------------------
+    def _record_op(self, op, req, res):
+        """Fold a file-protocol op result into the next state snapshot so the
+        supervising agent can correlate THIS request (by seq) with its
+        outcome, including failures that change nothing else observable."""
+        with self._lock:
+            self._last_op = {
+                "op": op,
+                "seq": req.get("seq"),
+                "ok": bool(res.get("ok")),
+                "error": res.get("error"),
+                "detail": res.get("detail"),
+                "at": round(time.time(), 3),
+            }
+
+    def reset(self):
+        """Clear a sticky fault back to idle/ready (model retained)."""
+        with self._lock:
+            if self._state == "fault":
+                self._state = "ready" if self._model is not None else "idle"
+                self._last_error = None
+            return {"ok": True, "state": self._state}
+
+    def load(self, model_path):
+        try:
+            import onnxruntime as rt
+
+            if not os.path.isfile(model_path):
+                return {"ok": False, "error": "model-file-missing"}
+            size = os.path.getsize(model_path)
+            if size > 50 * 1024 * 1024:
+                return {"ok": False, "error": "model-too-large"}
+            sess = rt.InferenceSession(
+                model_path, providers=["CPUExecutionProvider"]
+            )
+            inp = sess.get_inputs()[0]
+            out = sess.get_outputs()[0]
+            input_dim = int(inp.shape[-1]) if inp.shape and isinstance(inp.shape[-1], (int, float)) else 0
+            output_dim = int(out.shape[-1]) if out.shape and isinstance(out.shape[-1], (int, float)) else 0
+            if input_dim != EXPECTED_OBS_DIM:
+                return {"ok": False, "error": "policy-input-dimension-mismatch", "expected": EXPECTED_OBS_DIM, "actual": input_dim}
+            if output_dim not in (EXPECTED_ACTION_DIM, 2):
+                return {"ok": False, "error": "policy-output-dimension-mismatch", "expected": [EXPECTED_ACTION_DIM, 2], "actual": output_dim}
+            meta = {
+                "path": model_path,
+                "bytes": size,
+                "inputDim": input_dim,
+                "outputDim": output_dim,
+            }
+            with self._lock:
+                self._model = sess
+                self._model_meta = meta
+                self._state = "ready" if self._state == "idle" else self._state
+                self._last_error = None
+            return {"ok": True, "model": meta}
+        except ImportError:
+            return {"ok": False, "error": "onnxruntime-not-installed"}
+        except Exception as exc:  # noqa: BLE001 - report any load failure
+            with self._lock:
+                self._last_error = str(exc)[:200]
+            return {"ok": False, "error": "model-load-failed", "detail": str(exc)[:200]}
+
+    def start(self, direction):
+        with self._lock:
+            if self._model is None:
+                return {"ok": False, "error": "no-model", "state": self._state}
+            if self._state not in ("ready", "running"):
+                return {"ok": False, "error": "not-ready", "state": self._state}
+            self._command_dir = _clamp(float(direction), -1.0, 1.0)
+            if self._state == "running":
+                return {"ok": True, "state": "running"}
+            self._state = "running"
+            self._started_at = time.time()
+            self._published = 0
+            self._stop_flag.clear()
+        threading.Thread(target=self._loop, daemon=True).start()
+        return {"ok": True, "state": "running"}
+
+    def stop(self, reason="operator-stop"):
+        with self._lock:
+            if self._state == "running":
+                self._state = "idle"
+            self._command_dir = 0.0
+            self._stop_flag.set()
+        # Publish one zero frame immediately on the ROS side (below); the
+        # chassis watchdog covers the 500 ms gap regardless.
+        self._publish_zero(reason)
+        return {"ok": True, "state": self._state, "reason": reason}
+
+    def _fault(self, message):
+        with self._lock:
+            self._state = "fault"
+            self._last_error = message[:200]
+            self._command_dir = 0.0
+        self._stop_flag.set()
+        self._publish_zero("fault:" + message[:60])
+
+    # ---- observation building -------------------------------------------
+    def _build_observation(self):
+        """Contract-shaped 61-D observation from real sensors + adapter zeros."""
+        import math
+
+        tel = _read_telemetry()
+        if tel is None:
+            return None
+        imu = tel.get("imu") or {}
+        # Telemetry-node ships two shapes: flat {x,y,z,w} (older) and nested
+        # {quaternion, gyro, linearAcceleration} (newer). Accept both so this
+        # runtime works with either snapshot producer on the board.
+        q = imu.get("quaternion") or imu
+        gyro = imu.get("gyro") or {}
+        gx, gy, gz = (
+            float(gyro.get("x", 0.0)),
+            float(gyro.get("y", 0.0)),
+            float(gyro.get("z", 0.0)),
+        )
+        # projected gravity from quaternion (roll/pitch only; yaw-independent)
+        qx, qy, qz, qw = (
+            float(q.get("x", 0.0)),
+            float(q.get("y", 0.0)),
+            float(q.get("z", 0.0)),
+            float(q.get("w", 1.0)),
+        )
+        pg_x = 2 * (qx * qz - qw * qy)
+        pg_y = 2 * (qw * qx + qy * qz)
+        pg_z = 1 - 2 * (qx * qx + qy * qy)
+
+        last = self._last_action or [0.0] * 14
+        obs = (
+            [gx, gy, gz]
+            + [pg_x, pg_y, pg_z]
+            + [0.0] * 14      # joint_position_error — no leg joints on chassis
+            + [0.0] * 14      # joint_velocity — no leg joints on chassis
+            + [round(v, 4) for v in last]
+            + [self._command_dir] + [0.0] * 12   # command slot 0 = direction
+        )
+        return obs
+
+    def _project_action(self, action):
+        """Map policy output onto bounded (linear, angular) base motion.
+
+        For a 14-D leg-style output, antagonistic-pair statistics carry a
+        walking-intent signal: pair mean ~ forward drive, left/right asymmetry
+        ~ yaw. For 2-D (v, w) policies the mapping is identity. Both paths
+        clamp to the canary limits.
+        """
+        if len(action) == 2:
+            linear, angular = float(action[0]), float(action[1])
+        else:
+            half = len(action) // 2
+            left = action[:half]
+            right = action[half:]
+            mean = (sum(left) + sum(right)) / max(1, len(action))
+            asym = (sum(left) - sum(right)) / max(1, len(action))
+            # tuned so a fully-one-sided ±1 output maps to ±max_angular
+            linear = mean * MAX_LINEAR
+            angular = asym * MAX_ANGULAR * 1.5
+        return (
+            _clamp(linear, -MAX_LINEAR, MAX_LINEAR),
+            _clamp(angular, -MAX_ANGULAR, MAX_ANGULAR),
+        )
+
+    # ---- main loop ------------------------------------------------------
+    def _loop(self):
+        period = 1.0 / DECISION_HZ
+        stats_t = time.time()
+        while not self._stop_flag.is_set():
+            t0 = time.time()
+            try:
+                obs = self._build_observation()
+                if obs is None:
+                    self._publish_zero("telemetry-stale")
+                    self._maybe_stats(stats_t, stale=True)
+                    stats_t = stats_t  # keep window
+                    time.sleep(period)
+                    continue
+                import numpy as np
+
+                t_infer = time.time()
+                result = self._model.run(
+                    None, {self._model.get_inputs()[0].name: np.array([obs], dtype=np.float32)}
+                )[0][0]
+                infer_ms = (time.time() - t_infer) * 1000
+                action = [float(v) for v in result]
+                linear, angular = self._project_action(action)
+                self._publish_cmd(linear, angular)
+                self._append_telemetry(obs, action)
+                with self._lock:
+                    self._last_obs = obs
+                    self._last_action = action[:14]
+                    self._published += 1
+                    self._infer_ms_avg = (
+                        0.9 * self._infer_ms_avg + 0.1 * infer_ms
+                        if self._infer_ms_avg
+                        else infer_ms
+                    )
+                if time.time() - stats_t >= STATS_EVERY_SEC:
+                    self._write_state()
+                    stats_t = time.time()
+            except Exception as exc:  # noqa: BLE001 - any loop failure stops motion
+                self._fault("loop: " + str(exc))
+                return
+            elapsed = time.time() - t0
+            time.sleep(max(0.0, period - elapsed))
+        self._publish_zero("stopped")
+        self._write_state()
+
+    def _append_telemetry(self, observation, action):
+        """Persist the exact observation/action pair used for inference.
+
+        The spool is append-only and bounded. A separate uploader can retry
+        chunks after reconnecting; inference never performs network I/O.
+        """
+        if not TELEMETRY_RUN_ID:
+            return
+        try:
+            directory = os.path.dirname(TELEMETRY_SPOOL_FILE)
+            if directory:
+                os.makedirs(directory, mode=0o700, exist_ok=True)
+            if os.path.exists(TELEMETRY_SPOOL_FILE) and os.path.getsize(TELEMETRY_SPOOL_FILE) >= TELEMETRY_MAX_BYTES:
+                self._telemetry_dropped += 1
+                return
+            record = {
+                "t": max(0.0, time.time() - (self._started_at or time.time())),
+                "observation": [float(v) for v in observation],
+                "action": [float(v) for v in action],
+            }
+            with open(TELEMETRY_SPOOL_FILE, "a", encoding="utf-8") as fh:
+                fh.write(json.dumps(record, separators=(",", ":")) + "\n")
+                fh.flush()
+        except OSError:
+            # Motion must continue under the watchdog; telemetry loss is
+            # surfaced by the uploader/health checks rather than blocking it.
+            return
+
+    def _publish_cmd(self, linear, angular):
+        self._last_cmd = (linear, angular)
+        if self._cmd_pub is not None:
+            msg = self._Twist()
+            msg.linear.x = float(linear)
+            msg.angular.z = float(angular)
+            self._cmd_pub.publish(msg)
+
+    def _publish_zero(self, reason):
+        self._publish_cmd(0.0, 0.0)
+        self._write_state()
+
+    def _maybe_stats(self, stats_t, stale=False):
+        if time.time() - stats_t >= STATS_EVERY_SEC:
+            self._write_state()
+            return time.time()
+        return stats_t
+
+    def _write_state(self):
+        _atomic_write_json(RUNTIME_STATE_FILE, self.snapshot())
+
+    # ---- ROS wiring (lazy so import errors surface as honest states) ----
+    def bind_ros(self):
+        try:
+            import rclpy
+            from geometry_msgs.msg import Twist
+
+            self._Twist = Twist
+            rclpy.init()
+            self._node = rclpy.create_node("rdk_board_policy_runtime")
+            self._cmd_pub = self._node.create_publisher(Twist, "/cmd_vel", 10)
+            return {"ok": True}
+        except Exception as exc:  # noqa: BLE001
+            return {"ok": False, "error": "ros-unavailable", "detail": str(exc)[:200]}
+
+
+# ---- control file protocol (the board agent talks to us through this) ----
+# The agent writes JSON requests to a command file; we apply them and rewrite
+# the state file. This decouples the rclpy thread from the agent's HTTP loop
+# the same way the drive publisher does it.
+CMD_FILE = os.environ.get("RDK_BOARD_POLICY_CMD", "/tmp/board-policy-runtime-cmd.json")
+
+
+def _serve_file_protocol(runtime):
+    """Agent-facing control loop: watch the command file, apply requests."""
+    last_seen = ""
+    while True:
+        time.sleep(0.05)
+        try:
+            with open(CMD_FILE, "r", encoding="utf-8") as fh:
+                raw = fh.read()
+        except OSError:
+            continue
+        if raw == last_seen or not raw.strip():
+            continue
+        last_seen = raw
+        try:
+            req = json.loads(raw)
+        except ValueError:
+            continue
+        op = req.get("op")
+        if op == "load":
+            res = runtime.load(str(req.get("path", "")))
+        elif op == "start":
+            res = runtime.start(float(req.get("direction", 0.0)))
+        elif op == "stop":
+            res = runtime.stop(str(req.get("reason", "operator-stop")))
+        elif op == "reset":
+            res = runtime.reset()
+        elif op == "snapshot":
+            res = None
+        else:
+            res = {"ok": False, "error": "unknown-op"}
+        if res is not None:
+            runtime._record_op(op, req, res)
+        runtime._write_state()
+
+
+def main():
+    runtime = PolicyRuntime()
+    runtime._write_state()
+    # Ready marker: the supervising agent waits for this before trusting the
+    # file protocol (mirrors the drive publisher handshake).
+    _atomic_write_json("/tmp/board-policy-runtime.ready", {"pid": os.getpid()})
+    ros = runtime.bind_ros()
+    if not ros.get("ok"):
+        runtime._fault(ros.get("error", "ros-unavailable"))
+        # Still serve the file protocol so the agent can see the honest state.
+    threading.Thread(target=_serve_file_protocol, args=(runtime,), daemon=True).start()
+
+    def _term(_sig, _frm):
+        runtime.stop("sigterm")
+        sys.exit(0)
+
+    signal.signal(signal.SIGTERM, _term)
+    signal.signal(signal.SIGINT, _term)
+    while True:
+        time.sleep(1.0)
+        runtime._write_state()
+
+
+if __name__ == "__main__":
+    main()

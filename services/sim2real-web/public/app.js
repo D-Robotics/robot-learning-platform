@@ -3398,6 +3398,130 @@ function stationFormatUptime(seconds) {
   return h > 0 ? `${h}h ${m}m ${s}s` : m > 0 ? `${m}m ${s}s` : `${s}s`;
 }
 
+// ---- station 可视化辅助 -------------------------------------------------
+// 指标进度条：按阈值分色（青 → 黄 → 红），值非法时整条隐藏。
+const STATION_SPARK_POINTS = 60;
+const stationSparkSeries = { rx: [], tx: [] };
+
+function stationSetBar(id, ratio, warn, danger) {
+  const bar = $(id);
+  if (!bar) return;
+  const value = Number(ratio);
+  if (!Number.isFinite(value)) {
+    bar.style.width = '0%';
+    bar.className = '';
+    return;
+  }
+  const pct = Math.max(0, Math.min(100, value * 100));
+  bar.style.width = `${pct}%`;
+  const card = bar.closest('.station-metric-card');
+  bar.className = value >= danger ? 'is-danger' : value >= warn ? 'is-warn' : '';
+  if (card) card.classList.toggle('is-danger', value >= danger);
+}
+
+function stationPushSpark(rxBps, txBps) {
+  const push = (series, v) => {
+    series.push(Number.isFinite(v) ? v : 0);
+    if (series.length > STATION_SPARK_POINTS) series.shift();
+  };
+  push(stationSparkSeries.rx, rxBps);
+  push(stationSparkSeries.tx, txBps);
+  const line = $('station-network-spark-line');
+  if (!line) return;
+  const all = stationSparkSeries.rx.concat(stationSparkSeries.tx);
+  const max = Math.max(1, ...all);
+  const toPoints = (series) =>
+    series
+      .map((v, i) => {
+        const x = (i / Math.max(1, STATION_SPARK_POINTS - 1)) * 100;
+        const y = 24 - Math.min(1, v / max) * 20;
+        return `${x.toFixed(1)},${y.toFixed(1)}`;
+      })
+      .join(' ');
+  const rxPoints = toPoints(stationSparkSeries.rx);
+  const txPoints = toPoints(stationSparkSeries.tx);
+  // rx 折线走主色，tx 用低透明度参考线（points 属性拼两条 polyline）。
+  const rxEl = document.createElementNS('http://www.w3.org/2000/svg', 'polyline');
+  line.setAttribute('points', rxPoints || '0,24 100,24');
+  const svg = line.closest('svg');
+  if (svg) {
+    let txLine = svg.querySelector('.station-spark-tx');
+    if (!txLine) {
+      txLine = document.createElementNS('http://www.w3.org/2000/svg', 'polyline');
+      txLine.setAttribute('class', 'station-spark-tx');
+      svg.appendChild(txLine);
+    }
+    txLine.setAttribute('points', txPoints || '0,24 100,24');
+  }
+}
+
+function stationRenderRobotTelemetry(status) {
+  const wrap = $('station-robot-tele');
+  if (!wrap) return;
+  const originbot = status.originbot || {};
+  const hasData =
+    originbot && typeof originbot === 'object' && Object.keys(originbot).length > 0;
+  wrap.hidden = !hasData;
+  if (!hasData) return;
+  const setText = (id, value) => {
+    const node = $(id);
+    if (node) node.textContent = value;
+  };
+  const imu = originbot.imu || {};
+  const z = Number(imu.z);
+  const w = Number(imu.w);
+  if (Number.isFinite(z) && Number.isFinite(w)) {
+    const yawDeg = (2 * Math.atan2(z, w) * (180 / Math.PI) + 360) % 360;
+    setText('station-tele-heading', `${yawDeg.toFixed(1)}°`);
+    const needle = $('station-compass-needle');
+    if (needle) needle.style.transform = `rotate(${yawDeg.toFixed(2)}deg)`;
+    setText('station-tele-heading-sub', `四元数 yaw · ${(Math.atan2(z, w) * (180 / Math.PI)).toFixed(1)}° 原始`);
+  } else {
+    setText('station-tele-heading', '--');
+  }
+  const voltage = Number(originbot.batteryVoltage);
+  const BATTERY_MIN = 3.3;
+  const BATTERY_MAX = 5.4;
+  if (Number.isFinite(voltage)) {
+    setText('station-tele-battery', `${voltage.toFixed(2)}V`);
+    const ratio = Math.max(0, Math.min(1, (voltage - BATTERY_MIN) / (BATTERY_MAX - BATTERY_MIN)));
+    const cells = $('station-tele-battery-cells');
+    if (cells) {
+      const lit = Math.ceil(ratio * cells.children.length);
+      [...cells.children].forEach((cell, i) => {
+        cell.className = i < lit ? (ratio < 0.2 ? 'is-danger' : i < lit ? 'is-on' : '') : '';
+      });
+    }
+    setText(
+      'station-tele-battery-sub',
+      ratio < 0.2 ? '低电压 · 建议尽快充电' : `电量估计 ${Math.round(ratio * 100)}%（3.3–5.4V 参考区间）`,
+    );
+  } else {
+    setText('station-tele-battery', '--');
+    setText('station-tele-battery-sub', '无电池遥测');
+  }
+  const odom = originbot.odom || {};
+  const px = Number(odom.positionX);
+  const py = Number(odom.positionY);
+  if (Number.isFinite(px) && Number.isFinite(py)) {
+    setText('station-tele-odom', `x ${px.toFixed(2)} · y ${py.toFixed(2)} m`);
+  } else {
+    setText('station-tele-odom', '--');
+  }
+  const vx = Number(odom.linearX);
+  const wz = Number(odom.angularZ);
+  if (Number.isFinite(vx) || Number.isFinite(wz)) {
+    setText(
+      'station-tele-vel',
+      `${Number.isFinite(vx) ? vx.toFixed(2) : '--'} m/s · ${Number.isFinite(wz) ? wz.toFixed(2) : '--'} rad/s`,
+    );
+  } else {
+    setText('station-tele-vel', '--');
+  }
+  const liveBadge = $('station-tele-live');
+  if (liveBadge) liveBadge.hidden = false;
+}
+
 function stationRenderStatus(status) {
   if (!status || typeof status !== 'object') return;
   const cpu = status.cpu || {};
@@ -3431,6 +3555,18 @@ function stationRenderStatus(status) {
     `${Number.isFinite(network.rxKbPerSec) ? network.rxKbPerSec : '--'}/${Number.isFinite(network.txKbPerSec) ? network.txKbPerSec : '--'} KB/s`,
   );
   setText('station-network-sub', '以太网');
+  // 可视化层：进度条 + 网络 sparkline（1Hz 流驱动，60 点滚动窗口）。
+  stationSetBar('station-cpu-bar', Number(cpu.percent) / 100, 0.6, 0.85);
+  stationSetBar(
+    'station-memory-bar',
+    Number.isFinite(usedMB) && totalMB ? usedMB / totalMB : NaN,
+    0.7,
+    0.9,
+  );
+  stationPushSpark(
+    Number(network.rxKbPerSec),
+    Number(network.txKbPerSec),
+  );
   // OriginBot telemetry is reported honestly by the agent: present only when
   // the bringup stack is running, never synthesized here.
   const originbot = status.originbot || {};
@@ -3493,6 +3629,19 @@ function stationRenderStatus(status) {
     }
   }
   stationUpdateFloatStop(drive);
+  // 可视化层：磁盘进度条 + 机体遥测卡（罗盘/电池/odom）。
+  stationSetBar(
+    'station-disk-bar',
+    Number.isFinite(diskUsedMB) && diskTotalMB ? diskUsedMB / diskTotalMB : NaN,
+    0.75,
+    0.9,
+  );
+  const powerRatio =
+    Number.isFinite(obVoltage) ? Math.max(0, Math.min(1, (obVoltage - 3.3) / (5.4 - 3.3))) : NaN;
+  stationSetBar('station-power-bar', powerRatio, 0.35, 0.2);
+  stationRenderRobotTelemetry(status);
+  // 策略运行时状态直接来自 agent 1Hz 快照（policy 字段），如实渲染。
+  stationRenderPolicy(status.policy);
   const topicList = $('station-topic-list');
   if (topicList) {
     const topics = Array.isArray(status.topics) ? status.topics.slice(0, 12) : [];
@@ -3503,9 +3652,17 @@ function stationRenderStatus(status) {
       empty.textContent = '无话题数据';
       topicList.appendChild(empty);
     } else {
+      // 话题按角色分色：驱动 / 传感器 / TF·系统，一眼可辨。
+      const topicKind = (name) => {
+        const n = String(name ?? '');
+        if (n === '/cmd_vel') return 'drive';
+        if (n === '/imu' || n === '/odom' || n.includes('status')) return 'sensor';
+        if (n.startsWith('/tf')) return 'tf';
+        return 'sys';
+      };
       topics.forEach((topic) => {
         const chip = document.createElement('span');
-        chip.className = 'station-topic-chip';
+        chip.className = `station-topic-chip station-topic-${topicKind(topic?.name)}`;
         chip.textContent = `${String(topic?.name ?? '?')} · ${Number.isFinite(Number(topic?.hz)) ? Math.round(Number(topic.hz)) : '?'}Hz`;
         topicList.appendChild(chip);
       });
@@ -3687,6 +3844,172 @@ function wireStationFloatStop() {
   });
 }
 
+// ---- policy runtime (trained ONNX → bounded /cmd_vel) ---------------------
+// 与运动 Canary 同一条受限通道：速度钳制 / 500ms 底盘看门狗 / 急停常开。
+// 面板只在平台策略开关开启时展开控制区；停止（策略归零）永远可点。
+
+async function stationProbePolicy() {
+  try {
+    const payload = await request('/sim2real/board-station/policy');
+    const platform = payload?.platformEnabled === true;
+    const agent = payload?.policy;
+    const agentReady = agent?.enabled === true && agent?.motionAuthorized === true;
+    const controls = $('station-policy-controls');
+    const note = $('station-policy-note');
+    if (controls) controls.hidden = !platform;
+    if (note) {
+      if (platform && agentReady) {
+        note.textContent =
+          '策略运动通道已开启：输出钳制 0.3 m/s / 1.0 rad/s，500ms 无命令底盘自动停车，急停始终可用。';
+      } else if (platform) {
+        note.textContent =
+          '平台已开启策略开关，但板端未同时开启 RDK_SIM2REAL_BOARD_AGENT_ENABLE_DRIVE 与 RDK_SIM2REAL_BOARD_AGENT_ENABLE_POLICY。';
+      } else {
+        note.textContent =
+          '未启用。策略运动需要平台策略开关、平台驱动开关、板端驱动与策略开关全部开启（RDK_SIM2REAL_STATION_POLICY_ENABLED / RDK_SIM2REAL_STATION_DRIVE_ENABLED / RDK_SIM2REAL_BOARD_AGENT_ENABLE_DRIVE / RDK_SIM2REAL_BOARD_AGENT_ENABLE_POLICY）；策略停止始终可用。';
+      }
+    }
+    if (agent) stationRenderPolicy(agent);
+  } catch {
+    const controls = $('station-policy-controls');
+    if (controls) controls.hidden = true;
+  }
+}
+
+/** 1Hz 流渲染：state/model/infer/published/obsSlots 全部如实显示。 */
+function stationRenderPolicy(policy) {
+  if (!policy || typeof policy !== 'object') return;
+  const stateText = String(policy.state ?? 'idle');
+  const stateNode = $('station-policy-state');
+  if (stateNode) {
+    stateNode.textContent = stateText;
+    stateNode.dataset.state = stateText;
+  }
+  const infer = Number(policy.inferMs);
+  setText('station-policy-infer', Number.isFinite(infer) && infer > 0 ? `${infer.toFixed(1)} ms` : '-- ms');
+  setText('station-policy-published', Number.isFinite(Number(policy.published)) ? String(Math.round(Number(policy.published))) : '0');
+  const cmd = Number(policy.command);
+  setText('station-policy-command', Number.isFinite(cmd) ? cmd.toFixed(1) : '0.0');
+  const model = policy.model;
+  const meta = $('station-policy-model-meta');
+  if (meta) {
+    if (model && typeof model === 'object') {
+      const kb = Number(model.bytes);
+      meta.textContent =
+        `${String(model.path ?? '?').split('/').pop()} · ${Number.isFinite(kb) ? `${Math.round(kb / 1024)}KB` : '?'} · ` +
+        `${Number(model.inputDim)}→${Number(model.outputDim)}`;
+    } else {
+      meta.textContent = '未加载模型';
+    }
+  }
+  const slots = policy.obsSlots;
+  const slotsNode = $('station-policy-obsslots');
+  if (slotsNode) {
+    const entries = Object.entries(slots ?? {});
+    if (entries.length) {
+      slotsNode.replaceChildren();
+      const title = document.createElement('div');
+      title.className = 'station-policy-obsslots-title';
+      title.textContent = '观测槽位如实标注（哪些是真数据，哪些是适配零填充）';
+      slotsNode.appendChild(title);
+      entries.forEach(([slot, desc]) => {
+        const row = document.createElement('div');
+        row.className = 'station-policy-obsslots-row';
+        const real = String(desc ?? '').startsWith('real');
+        const kind = document.createElement('span');
+        kind.className = `station-policy-obsslots-kind ${real ? 'is-real' : 'is-zero'}`;
+        kind.textContent = real ? '真' : '零';
+        const name = document.createElement('span');
+        name.className = 'station-policy-obsslots-name';
+        name.textContent = slot;
+        const descNode = document.createElement('span');
+        descNode.className = 'station-policy-obsslots-desc';
+        descNode.textContent = String(desc ?? '');
+        row.append(kind, name, descNode);
+        slotsNode.appendChild(row);
+      });
+      slotsNode.hidden = false;
+    } else {
+      slotsNode.hidden = true;
+    }
+  }
+  const lastError = policy.lastError;
+  const errNode = $('station-policy-lasterr');
+  if (errNode) {
+    if (lastError) {
+      errNode.textContent = `最近故障：${String(lastError)}`;
+      errNode.hidden = false;
+    } else {
+      errNode.hidden = true;
+    }
+  }
+  stationUpdateFloatStop(policy.state === 'running' ? { active: true } : null);
+}
+
+async function stationPolicyLoad() {
+  const name = String($('station-policy-model-name')?.value ?? '').trim();
+  if (!/^[\w.-]+\.onnx$/.test(name)) {
+    stationLog('模型名无效：仅接受板端 policies/ 目录内的 .onnx 文件名', 'error');
+    return;
+  }
+  try {
+    const payload = await request('/sim2real/board-station/policy/load', {
+      method: 'POST',
+      body: JSON.stringify({ path: name }),
+    });
+    if (payload?.ok) {
+      stationLog(`模型已加载：${name}（板端 onnxruntime 会话就绪）`, 'ok');
+    } else {
+      stationLog(`模型加载失败：${payload?.error ?? payload?.reason ?? '未知原因'}`, 'error');
+    }
+    if (payload?.policy) stationRenderPolicy(payload.policy);
+  } catch (error) {
+    stationLog(`模型加载失败：${error instanceof Error ? error.message : '未知错误'}`, 'error');
+  }
+}
+
+async function stationPolicyStart() {
+  const direction = Number($('station-policy-direction')?.value ?? 0);
+  const acknowledged = window.confirm(
+    `即将让 OriginBot 由策略网络驱动运动（方向指令 ${direction.toFixed(1)}）。\n` +
+    '策略输出将被钳制在 0.3 m/s / 1.0 rad/s 内，500ms 无命令底盘自动停车。\n' +
+    '请确认机器人周围无障碍物、场地已清空，急停按钮随时可用。',
+  );
+  if (!acknowledged) return;
+  try {
+    const payload = await request('/sim2real/board-station/policy/start', {
+      method: 'POST',
+      body: JSON.stringify({ direction }),
+    });
+    if (payload?.ok) {
+      stationLog('策略已启动：板端实时推理中（观测→动作→/cmd_vel）', 'ok');
+    } else {
+      stationLog(`策略启动被拒绝：${payload?.error ?? payload?.reason ?? '未知原因'}`, 'error');
+    }
+    if (payload?.policy) stationRenderPolicy(payload.policy);
+  } catch (error) {
+    stationLog(`策略启动被拒绝：${error instanceof Error ? error.message : '未知错误'}`, 'error');
+  }
+}
+
+async function stationPolicyStop() {
+  try {
+    await request('/sim2real/board-station/policy/stop', { method: 'POST', body: '{}' });
+    stationLog('策略已停止：输出归零，底盘看门狗兜底', 'ok');
+  } catch (error) {
+    stationLog(`策略停止失败（底盘看门狗仍兜底）：${error instanceof Error ? error.message : '未知错误'}`, 'error');
+  }
+}
+
+async function stationPolicyReset() {
+  try {
+    await request('/sim2real/board-station/policy/reset', { method: 'POST', body: '{}' });
+    stationLog('故障已清除，策略运行时回到可用状态', 'ok');
+  } catch (error) {
+    stationLog(`故障清除失败：${error instanceof Error ? error.message : '未知错误'}`, 'error');
+  }
+}
+
 function stationSetCamera(enabled) {
   const img = $('station-camera-img');
   const placeholder = $('station-camera-placeholder');
@@ -3783,6 +4106,8 @@ async function stationInit() {
     stationStartStatusStream();
     // 探测受限驱动双开关状态；面板是否可见由真实状态决定，默认隐藏。
     stationProbeDrive();
+    // 同样探测策略运行时开关（独立的面板、独立的第三重开关）。
+    stationProbePolicy();
   } catch (error) {
     state.station.ready = false;
     if (notice) {
@@ -3826,6 +4151,23 @@ function wireStationEvents() {
   });
   $('station-drive-stop')?.addEventListener('click', () => {
     void stationEmergencyStop();
+  });
+  // 策略面板：加载/启动（含确认）/停止/清故障；停止同样无任何前置条件。
+  $('station-policy-load')?.addEventListener('click', () => {
+    void stationPolicyLoad();
+  });
+  $('station-policy-start')?.addEventListener('click', () => {
+    void stationPolicyStart();
+  });
+  $('station-policy-stop')?.addEventListener('click', () => {
+    void stationPolicyStop();
+  });
+  $('station-policy-reset')?.addEventListener('click', () => {
+    void stationPolicyReset();
+  });
+  $('station-policy-direction')?.addEventListener('input', (event) => {
+    const value = Number(event.target.value);
+    setText('station-policy-direction-out', `${value >= 0 ? '+' : ''}${value.toFixed(1)}`);
   });
   wireStationFloatStop();
   // 空格键 = 急停（focus 不在输入控件时）。不限制在 station 页：机器人在动时，
