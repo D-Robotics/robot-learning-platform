@@ -52,8 +52,6 @@ TELEMETRY_MODEL_ID = os.environ.get("RDK_SIM2REAL_MODEL_ID", "").strip()
 TELEMETRY_DEVICE_ID = os.environ.get("RDK_SIM2REAL_DEVICE_ID", "").strip()
 TELEMETRY_CONTRACT_ID = os.environ.get("RDK_SIM2REAL_CONTRACT_ID", "").strip()
 TELEMETRY_MAX_BYTES = int(os.environ.get("RDK_BOARD_TELEMETRY_SPOOL_MAX_BYTES", str(256 * 1024 * 1024)))
-EXPECTED_OBS_DIM = int(os.environ.get("RDK_SIM2REAL_POLICY_OBS_DIM", "61"))
-EXPECTED_ACTION_DIM = int(os.environ.get("RDK_SIM2REAL_POLICY_ACTION_DIM", "14"))
 TELEMETRY_SNAPSHOT_FILE = os.environ.get(
     "RDK_BOARD_TELEMETRY_SNAPSHOT", "/tmp/board-telemetry-snapshot.json"
 )
@@ -86,6 +84,26 @@ _ADAPTER = _adapter_config()
 ADAPTER_ID = str(_ADAPTER.get("id") or os.environ.get("RDK_SIM2REAL_ADAPTER_ID", "generic-differential-drive"))[:80]
 _safety = _ADAPTER.get("safety") if isinstance(_ADAPTER.get("safety"), dict) else (_ADAPTER.get("actuator") if isinstance(_ADAPTER.get("actuator"), dict) else {})
 _runtime = _ADAPTER.get("runtime") if isinstance(_ADAPTER.get("runtime"), dict) else {}
+
+def _policy_dimension(env_name, profile_key, default):
+    """Resolve a contract dimension from an explicit env override or profile.
+
+    The profile is the portable source of truth for a hardware adapter. Keep
+    env overrides for field debugging, but never accept malformed or unsafe
+    dimensions from either source.
+    """
+    raw = os.environ.get(env_name)
+    if raw is None:
+        raw = (_ADAPTER.get("policy") or {}).get(profile_key, default)
+    try:
+        value = int(raw)
+    except (TypeError, ValueError):
+        value = int(default)
+    return max(1, min(4096, value))
+
+
+EXPECTED_OBS_DIM = _policy_dimension("RDK_SIM2REAL_POLICY_OBS_DIM", "observationSize", 61)
+EXPECTED_ACTION_DIM = _policy_dimension("RDK_SIM2REAL_POLICY_ACTION_DIM", "actionSize", 14)
 MAX_LINEAR = _bounded_env("RDK_SIM2REAL_MAX_LINEAR", _safety.get("maxLinear", 0.3), 0.01, 0.3)
 MAX_ANGULAR = _bounded_env("RDK_SIM2REAL_MAX_ANGULAR", _safety.get("maxAngular", 1.0), 0.05, 1.0)
 DECISION_HZ = _bounded_env("RDK_SIM2REAL_DECISION_HZ", _runtime.get("decisionHz", 10), 1, 50)
@@ -94,6 +112,11 @@ STALL_LIMIT_SEC = _bounded_env("RDK_SIM2REAL_SENSOR_STALL_SEC", _safety.get("sen
 ACTION_PROJECTION = os.environ.get("RDK_SIM2REAL_ACTION_PROJECTION", _runtime.get("actionProjection", "paired"))
 if ACTION_PROJECTION not in ("paired", "identity"):
     ACTION_PROJECTION = "paired"
+_actuator = _ADAPTER.get("actuator") if isinstance(_ADAPTER.get("actuator"), dict) else {}
+_ros_topics = (_ADAPTER.get("ros") or {}).get("topics") if isinstance((_ADAPTER.get("ros") or {}).get("topics"), dict) else {}
+_configured_topic = os.environ.get("RDK_SIM2REAL_COMMAND_TOPIC") or _actuator.get("commandTopic") or ((_ros_topics.get("cmdVel") or {}).get("name")) or "/cmd_vel"
+COMMAND_TOPIC = _configured_topic if isinstance(_configured_topic, str) and _configured_topic.startswith("/") else "/cmd_vel"
+COMMAND_MESSAGE_TYPE = str(_actuator.get("messageType") or ((_ros_topics.get("cmdVel") or {}).get("type")) or "geometry_msgs/msg/Twist")
 
 
 def _clamp(value, lo, hi):
@@ -153,6 +176,7 @@ class PolicyRuntime:
                 "state": self._state,
                 "adapterId": ADAPTER_ID,
                 "actionProjection": ACTION_PROJECTION,
+                "commandTopic": COMMAND_TOPIC,
                 "model": self._model_meta,
                 "command": self._command_dir,
                 "published": self._published,
@@ -472,10 +496,12 @@ class PolicyRuntime:
             import rclpy
             from geometry_msgs.msg import Twist
 
+            if COMMAND_MESSAGE_TYPE != "geometry_msgs/msg/Twist":
+                return {"ok": False, "error": "unsupported-actuator-message-type", "detail": COMMAND_MESSAGE_TYPE}
             self._Twist = Twist
             rclpy.init()
             self._node = rclpy.create_node("rdk_board_policy_runtime")
-            self._cmd_pub = self._node.create_publisher(Twist, "/cmd_vel", 10)
+            self._cmd_pub = self._node.create_publisher(Twist, COMMAND_TOPIC, 10)
             return {"ok": True}
         except Exception as exc:  # noqa: BLE001
             return {"ok": False, "error": "ros-unavailable", "detail": str(exc)[:200]}
