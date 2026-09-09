@@ -2414,13 +2414,14 @@ async function originbotCompareRefresh() {
     // field so this panel keeps working for custom hardware profiles.
     const ob = stationTelemetrySnapshot(status);
     const panel = $('originbot-compare-panel');
-    if (panel) panel.dataset.live = ob ? 'on' : 'off';
+    const hasTelemetry = Object.keys(ob).length > 0;
+    if (panel) panel.dataset.live = hasTelemetry ? 'on' : 'off';
     const caption = panel?.querySelector('.panel-caption');
     if (caption) {
       const profileName = status.profile?.displayName || status.board?.model || status.adapterId;
       caption.textContent = profileName ? `${profileName} · 只读遥测` : '当前适配包 · 只读遥测';
     }
-    if (Object.keys(ob).length > 0) {
+    if (hasTelemetry) {
       const v = Number(ob.batteryVoltage ?? ob.battery?.voltage ?? status.power?.voltage);
       setText('ob-compare-voltage', Number.isFinite(v) ? v.toFixed(2) + ' V' : '—');
       const quat = stationImuQuaternion(ob);
