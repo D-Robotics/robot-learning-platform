@@ -96,14 +96,31 @@ sshpass -p root ssh root@10.185.136.180 'python3 -m pip install --no-cache-dir o
 sshpass -p root scp local-path/policy.onnx \
   root@10.185.136.180:/root/rdk-board-agent/policies/policy.onnx
 
-# 3. 开三重开关（演示完建议全部关回）
+# 3. 契约维度必须与模型一致（starter-ppo pendulum-chain-12j 是 42→12；
+#    MicroDuck 底盘契约是 61→14。runtime 会拒绝维度不符的模型——这是
+#    安全检查，不是 bug）。板端 agent.env：
+#    RDK_SIM2REAL_POLICY_OBS_DIM=42
+#    RDK_SIM2REAL_POLICY_ACTION_DIM=12
+
+# 4. 开三重开关（演示完建议全部关回）
 #    Mac 侧: RDK_SIM2REAL_STATION_POLICY_ENABLED=1 RDK_SIM2REAL_STATION_DRIVE_ENABLED=1
 #    板 侧: agent.env 里 RDK_SIM2REAL_BOARD_AGENT_ENABLE_DRIVE=1 + ENABLE_POLICY=1
 #    然后: sshpass -p root ssh root@10.185.136.180 'systemctl restart rdk-board-agent'
 
-# 4. 重建 SSH 隧道（agent 重启/板重启后都要重建）
+# 5. 重建 SSH 隧道（agent 重启/板重启后都要重建）
 sshpass -p root ssh -f -N -L '[::1]:19100:127.0.0.1:19100' root@10.185.136.180
 ```
+
+### 真训练模型演示（推荐路径）
+
+`npm run demo:starter` 产出的是**真训练的 torch.onnx.export 制品**
+（95KB，starter-ppo 引擎 240 轮 PPO）。把它 scp 到板端 policies/ 并按上面
+的维度配置 agent.env，面板"加载"后 model 卡显示 `policy.onnx · 93KB · 42→12`，
+obsSlots 显示 `42D obs / 12D act`、`slots_real: 6`——讲解词：前 6 槽是真 IMU
+陀螺仪+投影重力，其余是适配槽（上一步动作+操作指令，不够的零填充），这是
+sim→real 的诚实边界。任务本体是 pendulum-chain（摆链保持平衡），动作为 12
+维，runtime 用对抗对统计投影到底盘 (v, w)——投影是适配层，不是训练目标，
+这一点如实讲。
 
 ### 演示前 30 秒预检清单
 
@@ -129,8 +146,10 @@ sshpass -p root ssh -f -N -L '[::1]:19100:127.0.0.1:19100' root@10.185.136.180
 - Mock 只验证请求协议、状态流转和台账，不运行 PPO，也不生成可部署权重。
 - 合成遥测只验证导入、分片、回放和评测渲染，不代表真实 X5 采样。
 - reference BoardAgent 只返回固定的只读板卡护照，不连接 SSH、不执行任意命令、不驱动电机。
-- 策略运行时面板的推理指标（inferMs、published）来自板端真实 onnxruntime 进程；演示用
-  的 `policies/demo-policy.onnx` 是**结构真实的 61→14 契约形状模型但未经 RL 训练**——
-  展示的是推理管线与安全通道，不要讲成训练成果上机。
+- 策略运行时面板的推理指标（inferMs、published）来自板端真实 onnxruntime 进程。
+  `policies/policy.onnx` 是 starter-ppo 真训练制品（95KB，42→12）；若用
+  `policies/demo-policy.onnx`（61→14 结构真实但未经 RL 训练）要如实说明"演示推理
+  管线，非训练成果"。两者都不要讲成"真机 RL 闭环完成"——观测适配与动作投影是
+  适配层，任务语义（摆链平衡）与底盘运动不对应。
 - 真实闭环还需要真实 RL worker、X5 BoardAgent/Protobuf、制品编译与签名、OTA/回滚以及
   一台实体 X5 的验收。

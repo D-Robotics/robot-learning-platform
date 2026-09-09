@@ -3455,6 +3455,22 @@ function stationPushSpark(rxBps, txBps) {
   }
 }
 
+/**
+ * IMU 快照有两种形状：平铺 {x,y,z,w}（旧遥测节点）与嵌套
+ * {quaternion:{...}, gyro:{...}}（新版遥测节点）。统一在这里解析，
+ * 两条数据路径（罗盘、顶部航向）都用它，避免升级遥测节点后罗盘停转。
+ */
+function stationImuQuaternion(originbot) {
+  const imu = (originbot && originbot.imu) || {};
+  const q = imu.quaternion && typeof imu.quaternion === 'object' ? imu.quaternion : imu;
+  const x = Number(q.x);
+  const y = Number(q.y);
+  const z = Number(q.z);
+  const w = Number(q.w);
+  if (![x, y, z, w].every(Number.isFinite)) return null;
+  return { x, y, z, w };
+}
+
 function stationRenderRobotTelemetry(status) {
   const wrap = $('station-robot-tele');
   if (!wrap) return;
@@ -3467,9 +3483,9 @@ function stationRenderRobotTelemetry(status) {
     const node = $(id);
     if (node) node.textContent = value;
   };
-  const imu = originbot.imu || {};
-  const z = Number(imu.z);
-  const w = Number(imu.w);
+  const quat = stationImuQuaternion(originbot);
+  const z = quat ? quat.z : NaN;
+  const w = quat ? quat.w : NaN;
   if (Number.isFinite(z) && Number.isFinite(w)) {
     const yawDeg = (2 * Math.atan2(z, w) * (180 / Math.PI) + 360) % 360;
     setText('station-tele-heading', `${yawDeg.toFixed(1)}°`);
@@ -3579,9 +3595,9 @@ function stationRenderStatus(status) {
         ? `${power.voltage.toFixed(1)}V`
         : '--',
   );
-  const obImu = originbot.imu || {};
-  const imuZ = Number(obImu.z);
-  const imuW = Number(obImu.w);
+  const obQuat = stationImuQuaternion(originbot);
+  const imuZ = obQuat ? obQuat.z : NaN;
+  const imuW = obQuat ? obQuat.w : NaN;
   setText(
     'station-power-sub',
     Number.isFinite(obVoltage)
@@ -3852,21 +3868,29 @@ async function stationProbePolicy() {
   try {
     const payload = await request('/sim2real/board-station/policy');
     const platform = payload?.platformEnabled === true;
+    const drivePlatform = payload?.drivePlatformEnabled === true;
     const agent = payload?.policy;
-    const agentReady = agent?.enabled === true && agent?.motionAuthorized === true;
+    const agentPolicy = agent?.enabled === true;
+    const agentDrive = agent?.driveEnabled === true;
+    const agentReady = agentPolicy && agentDrive;
     const controls = $('station-policy-controls');
     const note = $('station-policy-note');
     if (controls) controls.hidden = !platform;
     if (note) {
-      if (platform && agentReady) {
+      // 逐个开关如实点名，缺哪个说哪个——演示时这就是现场核对清单。
+      const missing = [];
+      if (!platform) missing.push('平台 RDK_SIM2REAL_STATION_POLICY_ENABLED');
+      if (!drivePlatform) missing.push('平台 RDK_SIM2REAL_STATION_DRIVE_ENABLED');
+      if (!agentPolicy) missing.push('板端 RDK_SIM2REAL_BOARD_AGENT_ENABLE_POLICY');
+      if (!agentDrive) missing.push('板端 RDK_SIM2REAL_BOARD_AGENT_ENABLE_DRIVE');
+      if (!missing.length) {
         note.textContent =
           '策略运动通道已开启：输出钳制 0.3 m/s / 1.0 rad/s，500ms 无命令底盘自动停车，急停始终可用。';
       } else if (platform) {
-        note.textContent =
-          '平台已开启策略开关，但板端未同时开启 RDK_SIM2REAL_BOARD_AGENT_ENABLE_DRIVE 与 RDK_SIM2REAL_BOARD_AGENT_ENABLE_POLICY。';
+        note.textContent = `平台策略开关已开启，尚未开启：${missing.join('、')}。`;
       } else {
         note.textContent =
-          '未启用。策略运动需要平台策略开关、平台驱动开关、板端驱动与策略开关全部开启（RDK_SIM2REAL_STATION_POLICY_ENABLED / RDK_SIM2REAL_STATION_DRIVE_ENABLED / RDK_SIM2REAL_BOARD_AGENT_ENABLE_DRIVE / RDK_SIM2REAL_BOARD_AGENT_ENABLE_POLICY）；策略停止始终可用。';
+          `未启用。策略运动需要四个开关全部开启，尚未开启：${missing.join('、')}；策略停止始终可用。`;
       }
     }
     if (agent) stationRenderPolicy(agent);
@@ -3905,17 +3929,28 @@ function stationRenderPolicy(policy) {
   const slots = policy.obsSlots;
   const slotsNode = $('station-policy-obsslots');
   if (slotsNode) {
-    const entries = Object.entries(slots ?? {});
+    // obsSlots 混有字符串条目（槽位说明）与数字条目（契约统计）——只把字符串
+    // 说明渲染成真/零行；统计类键（slots_real 等）拼进标题，一行看懂契约。
+    const entries = Object.entries(slots ?? {}).filter(
+      ([, desc]) => typeof desc === 'string',
+    );
+    const slotsReal = Number(slots?.slots_real);
+    const slotsAdapter = Number(slots?.slots_adapter);
+    const contract = typeof slots?.contract === 'string' ? slots.contract : '';
     if (entries.length) {
       slotsNode.replaceChildren();
       const title = document.createElement('div');
       title.className = 'station-policy-obsslots-title';
-      title.textContent = '观测槽位如实标注（哪些是真数据，哪些是适配零填充）';
+      title.textContent =
+        `观测槽位如实标注${contract ? ` · 契约 ${contract}` : ''}` +
+        (Number.isFinite(slotsReal) && Number.isFinite(slotsAdapter)
+          ? ` · 真实槽 ${slotsReal} / 适配槽 ${slotsAdapter}`
+          : '（哪些是真数据，哪些是适配零填充）');
       slotsNode.appendChild(title);
       entries.forEach(([slot, desc]) => {
         const row = document.createElement('div');
         row.className = 'station-policy-obsslots-row';
-        const real = String(desc ?? '').startsWith('real');
+        const real = String(desc).startsWith('real');
         const kind = document.createElement('span');
         kind.className = `station-policy-obsslots-kind ${real ? 'is-real' : 'is-zero'}`;
         kind.textContent = real ? '真' : '零';
@@ -3924,7 +3959,7 @@ function stationRenderPolicy(policy) {
         name.textContent = slot;
         const descNode = document.createElement('span');
         descNode.className = 'station-policy-obsslots-desc';
-        descNode.textContent = String(desc ?? '');
+        descNode.textContent = String(desc);
         row.append(kind, name, descNode);
         slotsNode.appendChild(row);
       });

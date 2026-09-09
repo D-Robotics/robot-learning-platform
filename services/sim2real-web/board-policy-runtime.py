@@ -137,15 +137,24 @@ class PolicyRuntime:
 
     def _obs_slot_report(self):
         # Which observation slots carry real sensor data vs adapter zeros.
+        # Dimensions are contract-parameterized (RDK_SIM2REAL_POLICY_OBS_DIM /
+        # _ACTION_DIM), so the report describes THIS model's shape honestly.
         if not self._model_meta:
             return None
+        filled = 6 + min(EXPECTED_ACTION_DIM, max(0, EXPECTED_OBS_DIM - 6))
         return {
+            "contract": f"{EXPECTED_OBS_DIM}D obs / {EXPECTED_ACTION_DIM}D act (or 2D vw)",
             "gyro": "real (/imu angular_velocity)",
-            "projected_gravity": "real (/imu linear_acceleration, low-pass)",
-            "joint_position_error": "zero (chassis has no leg joints)",
-            "joint_velocity": "zero (chassis has no leg joints)",
-            "last_action": "real (previous projected action)",
-            "command": f"operator ({self._command_dir:+.2f}) + zeros",
+            "projected_gravity": "real (quaternion-derived, roll/pitch)",
+            "last_action": "real (previous projected action)"
+            if EXPECTED_OBS_DIM > 6
+            else "absent (contract too small)",
+            "command": f"operator ({self._command_dir:+.2f})"
+            if EXPECTED_OBS_DIM > 6 + EXPECTED_ACTION_DIM
+            else "zero-padded (no room after action slots)",
+            "slots_real": 6,
+            "slots_adapter": max(0, EXPECTED_OBS_DIM - 6),
+            "note": f"slots 0-5 real sensors; slots 6-{filled - 1} adapter (last_action/command); any remainder zero-padded to {EXPECTED_OBS_DIM}D",
         }
 
     # ---- lifecycle ------------------------------------------------------
@@ -247,7 +256,16 @@ class PolicyRuntime:
 
     # ---- observation building -------------------------------------------
     def _build_observation(self):
-        """Contract-shaped 61-D observation from real sensors + adapter zeros."""
+        """Contract-shaped EXPECTED_OBS_DIM observation from real sensors.
+
+        Layout: [gyro(3), projected_gravity(3)] are ALWAYS real; the remaining
+        slots are filled left-to-right with last_action then the operator
+        command, and any shortfall is zero-padded — an honest partial adapter
+        (obsSlots reports exactly this). Works for any model contract
+        configured via RDK_SIM2REAL_POLICY_OBS_DIM / _ACTION_DIM, so a
+        42->12 pendulum-chain policy and the 61->14 MicroDuck contract both
+        load against the same real-sensor head.
+        """
         import math
 
         tel = _read_telemetry()
@@ -275,15 +293,15 @@ class PolicyRuntime:
         pg_y = 2 * (qw * qx + qy * qz)
         pg_z = 1 - 2 * (qx * qx + qy * qy)
 
-        last = self._last_action or [0.0] * 14
-        obs = (
-            [gx, gy, gz]
-            + [pg_x, pg_y, pg_z]
-            + [0.0] * 14      # joint_position_error — no leg joints on chassis
-            + [0.0] * 14      # joint_velocity — no leg joints on chassis
-            + [round(v, 4) for v in last]
-            + [self._command_dir] + [0.0] * 12   # command slot 0 = direction
+        head = [gx, gy, gz, pg_x, pg_y, pg_z]
+        last = self._last_action or [0.0] * EXPECTED_ACTION_DIM
+        tail = (
+            [round(v, 4) for v in last]
+            + [self._command_dir]
         )
+        obs = (head + tail)[:EXPECTED_OBS_DIM]
+        if len(obs) < EXPECTED_OBS_DIM:
+            obs = obs + [0.0] * (EXPECTED_OBS_DIM - len(obs))
         return obs
 
     def _project_action(self, action):
@@ -337,7 +355,7 @@ class PolicyRuntime:
                 self._append_telemetry(obs, action)
                 with self._lock:
                     self._last_obs = obs
-                    self._last_action = action[:14]
+                    self._last_action = action[:EXPECTED_ACTION_DIM]
                     self._published += 1
                     self._infer_ms_avg = (
                         0.9 * self._infer_ms_avg + 0.1 * infer_ms
