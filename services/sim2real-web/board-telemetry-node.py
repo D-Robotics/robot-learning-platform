@@ -45,10 +45,22 @@ def _adapter_config():
 
 _ADAPTER = _adapter_config()
 ADAPTER_ID = str(_ADAPTER.get("id") or os.environ.get("RDK_SIM2REAL_ADAPTER_ID", "generic-differential-drive"))[:80]
-_TOPICS = _ADAPTER.get("sensors") if isinstance(_ADAPTER.get("sensors"), dict) else {}
-IMU_TOPIC = os.environ.get("RDK_SIM2REAL_IMU_TOPIC", (_TOPICS.get("imu") or {}).get("topic", "/imu"))
-ODOM_TOPIC = os.environ.get("RDK_SIM2REAL_ODOM_TOPIC", (_TOPICS.get("odom") or {}).get("topic", "/odom"))
-BATTERY_TOPIC = os.environ.get("RDK_SIM2REAL_BATTERY_TOPIC", (_TOPICS.get("battery") or {}).get("topic", "/originbot_status"))
+_TOPICS = _ADAPTER.get("sensors") if isinstance(_ADAPTER.get("sensors"), dict) else None
+if _TOPICS is None:
+    ros = _ADAPTER.get("ros") if isinstance(_ADAPTER.get("ros"), dict) else {}
+    _TOPICS = ros.get("topics") if isinstance(ros.get("topics"), dict) else {}
+
+
+def _topic(name, default):
+    value = _TOPICS.get(name) or {}
+    if isinstance(value, dict):
+        return str(value.get("topic") or value.get("name") or default)
+    return default
+
+
+IMU_TOPIC = os.environ.get("RDK_SIM2REAL_IMU_TOPIC", _topic("imu", "/imu"))
+ODOM_TOPIC = os.environ.get("RDK_SIM2REAL_ODOM_TOPIC", _topic("odom", "/odom"))
+BATTERY_TOPIC = os.environ.get("RDK_SIM2REAL_BATTERY_TOPIC", _topic("battery", "/originbot_status"))
 
 
 class TelemetryNode(Node):
