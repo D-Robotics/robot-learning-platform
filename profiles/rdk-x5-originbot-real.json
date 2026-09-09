@@ -1,0 +1,34 @@
+{
+  "schemaVersion": 1,
+  "id": "rdk-x5-originbot-real",
+  "displayName": "自研 RDK X5 差速底盘（现场设备）",
+  "board": { "platform": "rdk-x5", "family": "rdk-custom", "model": "D-Robotics RDK X5 V1.0" },
+  "ros": {
+    "setupPaths": ["/opt/tros/humble/setup.bash", "/userdata/dev_ws/install/setup.bash"],
+    "topics": {
+      "imu": { "name": "/imu", "type": "sensor_msgs/msg/Imu", "qos": "reliable", "required": true },
+      "odom": { "name": "/odom", "type": "nav_msgs/msg/Odometry", "qos": "reliable", "required": true },
+      "battery": { "name": "/originbot_status", "type": "originbot_msgs/msg/OriginbotStatus", "field": "battery_voltage", "qos": "reliable", "required": true },
+      "cmdVel": { "name": "/cmd_vel", "type": "geometry_msgs/msg/Twist", "qos": "reliable", "required": true }
+    }
+  },
+  "actuator": {
+    "kind": "diff-drive",
+    "commandTopic": "/cmd_vel",
+    "messageType": "geometry_msgs/msg/Twist",
+    "linearAxis": "x",
+    "angularAxis": "z",
+    "maxLinear": 0.3,
+    "maxAngular": 1.0,
+    "watchdogMs": 500
+  },
+  "runtime": { "decisionHz": 10, "actionProjection": "paired" },
+  "safety": { "maxLinear": 0.3, "maxAngular": 1.0, "sensorStallSec": 0.5 },
+  "policy": {
+    "observationAdapterId": "imu-gravity-v1",
+    "actionAdapterId": "microduck-14d-to-diff-drive-pair-v1",
+    "observationSize": 61,
+    "actionSize": 14
+  },
+  "capabilities": ["imu", "odom", "battery", "twist", "cpu-onnx", "camera-devices"]
+}
