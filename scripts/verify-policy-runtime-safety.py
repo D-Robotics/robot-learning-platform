@@ -30,6 +30,9 @@ assert policy._build_observation() is None, "missing IMU must fail closed"
 runtime._read_telemetry = lambda: {"imu": {"gyro": {"x": 0.0, "y": 0.0, "z": float("nan")}, "quaternion": valid_imu["quaternion"]}}
 assert policy._build_observation() is None, "non-finite IMU must fail closed"
 
+runtime._read_telemetry = lambda: {"imu": {"gyro": valid_imu["gyro"], "quaternion": {"x": 0, "y": 0, "z": 0, "w": 0}}}
+assert policy._build_observation() is None, "zero-norm quaternion must fail closed"
+
 runtime._read_telemetry = lambda: {"imu": valid_imu}
 observation = policy._build_observation()
 assert observation is not None and len(observation) == runtime.EXPECTED_OBS_DIM

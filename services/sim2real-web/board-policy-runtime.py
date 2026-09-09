@@ -120,7 +120,7 @@ def _read_telemetry():
             return None
         data = snap.get("data")
         return data if isinstance(data, dict) else None
-    except (OSError, ValueError):
+    except (OSError, TypeError, ValueError):
         return None
 
 
@@ -331,6 +331,8 @@ class PolicyRuntime:
         gx, gy, gz = gyro_values
         # projected gravity from quaternion (roll/pitch only; yaw-independent)
         qx, qy, qz, qw = quaternion_values
+        if math.sqrt(qx * qx + qy * qy + qz * qz + qw * qw) < 1e-6:
+            return None
         pg_x = 2 * (qx * qz - qw * qy)
         pg_y = 2 * (qw * qx + qy * qz)
         pg_z = 1 - 2 * (qx * qx + qy * qy)
