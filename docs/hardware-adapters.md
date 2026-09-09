@@ -2,6 +2,11 @@
 
 平台核心只依赖统一的策略契约、遥测快照和受限运动接口。具体机型放在适配包中：传感器话题、动作执行器、观测槽位、动作投影和安全参数都由适配包声明。OriginBot 是首个参考适配包，不是平台边界；示例见 [`adapters/originbot-differential-drive.json`](../adapters/originbot-differential-drive.json)。
 
+`adapters/*.json` 与 `profiles/*.json` 使用同一个 schema v1。设备身份统一放在
+`board`，ROS 话题统一放在 `ros.topics`，执行器统一使用
+`actuator.commandTopic` / `actuator.messageType`，策略维度统一放在 `policy`。
+旧版 `platforms`、`sensors.*.topic`、`actuator.type` 字段不再作为独立契约；这样仿真、板端遥测节点、策略运行时和预检脚本读取的是同一份字段定义。
+
 板端策略运行时支持通过 `RDK_SIM2REAL_ADAPTER_CONFIG` 加载 JSON 适配包。适配包可以配置 `runtime.decisionHz`、`runtime.actionProjection`、`safety.maxLinear`、`safety.maxAngular` 和 `safety.sensorStallSec`。环境变量可以覆盖部署参数，但运行时始终把值限制在平台安全上限内；配置缺失或损坏时回退到安全默认值并保持停止优先。
 
 新增机型的最小步骤是：

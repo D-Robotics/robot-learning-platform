@@ -2,13 +2,21 @@
   "schemaVersion": 1,
   "id": "generic-differential-drive",
   "displayName": "Generic differential drive",
-  "platforms": ["linux-generic"],
-  "sensors": {
-    "imu": { "topic": "/sensors/imu", "required": true },
-    "odom": { "topic": "/localization/odom", "required": false },
-    "battery": { "topic": "/power/state", "required": false }
+  "board": { "platform": "linux-generic", "family": "generic-drive", "model": "Generic differential drive" },
+  "ros": {
+    "topics": {
+      "imu": { "name": "/sensors/imu", "type": "sensor_msgs/msg/Imu", "required": true },
+      "odom": { "name": "/localization/odom", "type": "nav_msgs/msg/Odometry", "required": false },
+      "battery": { "name": "/power/state", "type": "sensor_msgs/msg/BatteryState", "field": "percentage", "required": false },
+      "cmdVel": { "name": "/base/cmd_vel", "type": "geometry_msgs/msg/Twist", "required": true }
+    }
   },
-  "actuator": { "type": "twist", "topic": "/base/cmd_vel", "linearAxis": "x", "angularAxis": "z" },
+  "actuator": {
+    "kind": "diff-drive", "commandTopic": "/base/cmd_vel", "messageType": "geometry_msgs/msg/Twist",
+    "linearAxis": "x", "angularAxis": "z", "maxLinear": 0.3, "maxAngular": 1.0, "watchdogMs": 500
+  },
   "runtime": { "decisionHz": 10, "actionProjection": "identity" },
-  "safety": { "maxLinear": 0.3, "maxAngular": 1.0, "sensorStallSec": 0.5, "watchdogMs": 500 }
+  "safety": { "maxLinear": 0.3, "maxAngular": 1.0, "sensorStallSec": 0.5 },
+  "policy": { "observationAdapterId": "imu-gravity-v1", "actionAdapterId": "diff-drive-vw-v1", "observationSize": 42, "actionSize": 2 },
+  "capabilities": ["imu", "odom", "battery", "twist"]
 }

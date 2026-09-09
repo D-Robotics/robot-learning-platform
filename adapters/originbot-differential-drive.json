@@ -2,13 +2,21 @@
   "schemaVersion": 1,
   "id": "originbot-differential-drive",
   "displayName": "OriginBot differential drive",
-  "platforms": ["rdk-x5", "linux-generic"],
-  "sensors": {
-    "imu": { "topic": "/imu", "required": true },
-    "odom": { "topic": "/odom", "required": false },
-    "battery": { "topic": "/originbot_status", "required": false }
+  "board": { "platform": "rdk-x5", "family": "originbot", "model": "OriginBot" },
+  "ros": {
+    "topics": {
+      "imu": { "name": "/imu", "type": "sensor_msgs/msg/Imu", "required": true },
+      "odom": { "name": "/odom", "type": "nav_msgs/msg/Odometry", "required": false },
+      "battery": { "name": "/originbot_status", "type": "originbot_msgs/msg/OriginbotStatus", "field": "battery_voltage", "required": false },
+      "cmdVel": { "name": "/cmd_vel", "type": "geometry_msgs/msg/Twist", "required": true }
+    }
   },
-  "actuator": { "type": "twist", "topic": "/cmd_vel", "linearAxis": "x", "angularAxis": "z" },
+  "actuator": {
+    "kind": "diff-drive", "commandTopic": "/cmd_vel", "messageType": "geometry_msgs/msg/Twist",
+    "linearAxis": "x", "angularAxis": "z", "maxLinear": 0.3, "maxAngular": 1.0, "watchdogMs": 500
+  },
   "runtime": { "decisionHz": 10, "actionProjection": "paired" },
-  "safety": { "maxLinear": 0.3, "maxAngular": 1.0, "sensorStallSec": 0.5, "watchdogMs": 500 }
+  "safety": { "maxLinear": 0.3, "maxAngular": 1.0, "sensorStallSec": 0.5 },
+  "policy": { "observationAdapterId": "imu-gravity-v1", "actionAdapterId": "microduck-14d-to-diff-drive-pair-v1", "observationSize": 61, "actionSize": 14 },
+  "capabilities": ["imu", "odom", "battery", "twist", "cpu-onnx"]
 }
