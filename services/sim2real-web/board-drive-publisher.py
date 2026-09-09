@@ -36,6 +36,9 @@ READY_FILE = os.environ.get(
 )
 LOG_FILE = os.environ.get("RDK_BOARD_DRIVE_LOG", "/tmp/board-drive-publisher.log")
 RATE_HZ = float(os.environ.get("RDK_BOARD_DRIVE_RATE_HZ", "10"))
+COMMAND_TOPIC = os.environ.get("RDK_BOARD_DRIVE_CMD_TOPIC", "/cmd_vel").strip() or "/cmd_vel"
+if not COMMAND_TOPIC.startswith("/"):
+    COMMAND_TOPIC = "/cmd_vel"
 IDLE_ZERO_SEC = float(os.environ.get("RDK_BOARD_DRIVE_IDLE_ZERO_SEC", "5"))
 # When the board drive switch is on, the agent pre-warms this publisher at
 # boot and owns teardown via its own watchdog (idle 5 s -> _stop_drive_publisher),
@@ -75,7 +78,7 @@ def main():
     log(f"start cmd_file={CMD_FILE} rate={RATE_HZ} cwd={os.getcwd()}")
     rclpy.init()
     node = rclpy.create_node("rdk_board_drive_publisher")
-    pub = node.create_publisher(Twist, "/cmd_vel", 10)
+    pub = node.create_publisher(Twist, COMMAND_TOPIC, 10)
 
     # Readiness handshake: only declare live once the chassis subscription is
     # discovered, so the agent never opens a motion window against a publisher
@@ -83,7 +86,7 @@ def main():
     deadline = time.time() + READY_WAIT_SEC
     subscribers = 0
     while time.time() < deadline:
-        subscribers = node.count_subscribers("/cmd_vel")
+        subscribers = node.count_subscribers(COMMAND_TOPIC)
         if subscribers >= 1:
             break
         rclpy.spin_once(node, timeout_sec=0.2)

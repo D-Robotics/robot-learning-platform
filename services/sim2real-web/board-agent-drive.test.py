@@ -27,7 +27,7 @@ AGENT_FILE = os.path.join(HERE, "board-agent-x5.py")  # hyphenated: spec-load
 _load_count = [0]
 
 
-def load_agent_module(enable_drive=False):
+def load_agent_module(enable_drive=False, profile_path=None):
     """Spec-load the agent with a clean, offline environment.
 
     The filename carries hyphens, so plain `import` cannot load it; each call
@@ -41,6 +41,7 @@ def load_agent_module(enable_drive=False):
         "RDK_SIM2REAL_BOARD_AGENT_ENABLE_DRIVE": "1" if enable_drive else "",
         "RDK_SIM2REAL_BOARD_AGENT_BIND_HOST": "127.0.0.1",
         "RDK_SIM2REAL_BOARD_AGENT_PORT": "19100",
+        "RDK_SIM2REAL_ADAPTER_CONFIG": profile_path or "",
     }
     with mock.patch.dict(os.environ, env, clear=True):
         spec = importlib.util.spec_from_file_location(
@@ -138,6 +139,26 @@ class DriveEnabledContract(unittest.TestCase):
         self.assertEqual(policy["maxWindowSec"], 2.0)
         self.assertEqual(policy["chassisWatchdogMs"], 500)
         self.assertIn("drive/stop", policy["emergencyStop"])
+
+    def test_profile_wiring_lowers_limits_and_selects_command_topic(self):
+        profile_path = os.path.join(self.workdir, "custom-profile.json")
+        with open(profile_path, "w") as handle:
+            json.dump(
+                {
+                    "id": "custom-diff-drive",
+                    "actuator": {"commandTopic": "/robot/cmd_vel", "watchdogMs": 700},
+                    "runtime": {"decisionHz": 5},
+                    "safety": {"maxLinear": 0.12, "maxAngular": 0.4},
+                    "ros": {"topics": {"cmdVel": {"name": "/robot/cmd_vel"}}},
+                },
+                handle,
+            )
+        agent = load_agent_module(enable_drive=True, profile_path=profile_path)
+        self.assertEqual(agent.DRIVE_MAX_LINEAR, 0.12)
+        self.assertEqual(agent.DRIVE_MAX_ANGULAR, 0.4)
+        self.assertEqual(agent.DRIVE_PUBLISH_HZ, 5)
+        self.assertEqual(agent.DRIVE_WATCHDOG_MS, 700)
+        self.assertEqual(agent.DRIVE_COMMAND_TOPIC, "/robot/cmd_vel")
 
     def test_telemetry_snapshot_reader_rejects_stale_and_absent(self):
         # No file: None
