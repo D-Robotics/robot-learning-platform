@@ -240,6 +240,31 @@ _adapter_id = str(_adapter_profile.get("id") or "rdk-x5-reference")[:80]
 _adapter_capabilities = [str(item)[:80] for item in (_adapter_profile.get("capabilities") or []) if isinstance(item, str)]
 
 
+def _profile_number(section, key, default, lower, upper):
+    value = (_adapter_profile.get(section) or {}).get(key)
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError):
+        return default
+    return max(lower, min(upper, parsed))
+
+
+_profile_actuator = _adapter_profile.get("actuator") or {}
+_profile_topics = ((_adapter_profile.get("ros") or {}).get("topics") or {})
+DRIVE_MAX_LINEAR = min(DRIVE_MAX_LINEAR, _profile_number("safety", "maxLinear", DRIVE_MAX_LINEAR, 0.01, 0.3))
+DRIVE_MAX_ANGULAR = min(DRIVE_MAX_ANGULAR, _profile_number("safety", "maxAngular", DRIVE_MAX_ANGULAR, 0.05, 1.0))
+DRIVE_PUBLISH_HZ = min(DRIVE_PUBLISH_HZ, _profile_number("runtime", "decisionHz", DRIVE_PUBLISH_HZ, 1, 50))
+DRIVE_WATCHDOG_MS = int(_profile_number("actuator", "watchdogMs", 500, 500, 2000))
+DRIVE_COMMAND_TOPIC = str(
+    os.environ.get("RDK_BOARD_DRIVE_CMD_TOPIC")
+    or _profile_actuator.get("commandTopic")
+    or (_profile_topics.get("cmdVel") or {}).get("name")
+    or "/cmd_vel"
+).strip()
+if not DRIVE_COMMAND_TOPIC.startswith("/"):
+    DRIVE_COMMAND_TOPIC = "/cmd_vel"
+
+
 def run_ros2_list(kind):
     """`ros2 node/topic list` through TROS, bounded to 8 s, read-only.
 
@@ -334,7 +359,7 @@ def _actuator_policy():
         "maxAngular": DRIVE_MAX_ANGULAR,
         "maxWindowSec": DRIVE_MAX_WINDOW_SEC,
         "publishHz": DRIVE_PUBLISH_HZ,
-        "chassisWatchdogMs": 500,
+        "chassisWatchdogMs": DRIVE_WATCHDOG_MS,
         "emergencyStop": "/v1/station/drive/stop (always available)",
     }
 
@@ -428,6 +453,7 @@ def _start_drive_publisher():
             stderr=subprocess.DEVNULL,
             env={**os.environ, "HOME": "/root", "TERM": "dumb",
                  "RDK_BOARD_DRIVE_PERSIST": "1",
+                 "RDK_BOARD_DRIVE_CMD_TOPIC": DRIVE_COMMAND_TOPIC,
                  "PATH": "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"},
         )
     except OSError:
@@ -825,10 +851,10 @@ def policy_status():
         "lastOp": snap.get("lastOp") if snap else None,
         "obsSlots": snap.get("obsSlots") if snap else None,
         "limits": {
-            "maxLinear": 0.3,
-            "maxAngular": 1.0,
-            "decisionHz": 10,
-            "chassisWatchdogMs": 500,
+            "maxLinear": DRIVE_MAX_LINEAR,
+            "maxAngular": DRIVE_MAX_ANGULAR,
+            "decisionHz": DRIVE_PUBLISH_HZ,
+            "chassisWatchdogMs": DRIVE_WATCHDOG_MS,
         },
         "note": "trained-policy inference on board; motion requires drive+policy switches, "
                 "output is speed-clamped and watchdog-floored exactly like the drive canary",
