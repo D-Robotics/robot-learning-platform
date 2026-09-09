@@ -454,6 +454,7 @@ def _start_drive_publisher():
             env={**os.environ, "HOME": "/root", "TERM": "dumb",
                  "RDK_BOARD_DRIVE_PERSIST": "1",
                  "RDK_BOARD_DRIVE_CMD_TOPIC": DRIVE_COMMAND_TOPIC,
+                 "RDK_BOARD_DRIVE_RATE_HZ": str(DRIVE_PUBLISH_HZ),
                  "PATH": "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"},
         )
     except OSError:
