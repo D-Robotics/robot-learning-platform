@@ -66,7 +66,7 @@ export const SIM2REAL_CONTRACT_LIMITS = Object.freeze({
 });
 
 /** Product lines share a workflow, not a policy contract. */
-export type Sim2RealRobotId = 'microduck' | 'rdk-duck';
+export type Sim2RealRobotId = 'microduck' | 'rdk-duck' | 'originbot';
 
 export type Sim2RealProductContractMode = 'fixed' | 'manifest-defined';
 
@@ -91,6 +91,14 @@ export const SIM2REAL_PRODUCT_PROFILES: Readonly<Record<Sim2RealRobotId, Sim2Rea
       simulatorPath: '/mujoco/microduck/',
       targetPlatforms: ['rdk-x5'],
       accessories: ['ball'],
+    },
+    originbot: {
+      id: 'originbot',
+      displayName: 'OriginBot',
+      contractMode: 'manifest-defined',
+      contractIdPrefix: 'originbot-policy-',
+      targetPlatforms: ['rdk-x5'],
+      accessories: ['imu', 'odom', 'battery', 'camera'],
     },
     'rdk-duck': {
       id: 'rdk-duck',
@@ -218,6 +226,12 @@ export type Sim2RealRunStatus = 'ready' | 'queued' | 'running' | 'completed' | '
 export interface Sim2RealRunRecord {
   id: string;
   modelId: string;
+  computeResourceId?: string;
+  /** Optional project context for experiment history and comparison. */
+  projectId?: string;
+  /** Stable user-defined experiment group used to compare runs. */
+  experimentId?: string;
+  label?: string;
   /**
    * Denormalized API identity.  Older ledger rows may omit these fields; the
    * HTTP layer derives them from the referenced model manifest before
@@ -247,6 +261,30 @@ export interface Sim2RealRunRecord {
   finishedAt?: string;
 }
 
+export interface Sim2RealDatasetRecord {
+  id: string;
+  name: string;
+  description?: string;
+  uri?: string;
+  format?: string;
+  sampleCount?: number;
+  sizeBytes?: number;
+  tags?: string[];
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface Sim2RealProjectRecord {
+  id: string;
+  name: string;
+  slug: string;
+  description?: string;
+  modelIds: string[];
+  datasetIds: string[];
+  createdAt: string;
+  updatedAt: string;
+}
+
 export type Sim2RealDeploymentMode = 'preflight' | 'canary' | 'live';
 export type Sim2RealDeploymentStatus =
   | 'planned'
@@ -254,7 +292,8 @@ export type Sim2RealDeploymentStatus =
   | 'ready'
   | 'blocked'
   | 'failed'
-  | 'completed';
+  | 'completed'
+  | 'cancelled';
 export type Sim2RealStepStatus = 'pending' | 'running' | 'completed' | 'blocked' | 'failed';
 
 export interface Sim2RealDeploymentStep {
@@ -262,6 +301,31 @@ export interface Sim2RealDeploymentStep {
   label: string;
   status: Sim2RealStepStatus;
   detail?: string;
+}
+
+export type Sim2RealDeploymentEventType =
+  | 'created'
+  | 'status_changed'
+  | 'preflight'
+  | 'cancelled'
+  | 'version_switched'
+  | 'updated';
+
+/** Append-only lifecycle evidence kept with a deployment plan. */
+export interface Sim2RealDeploymentHistoryEvent {
+  id: string;
+  type: Sim2RealDeploymentEventType;
+  status: Sim2RealDeploymentStatus;
+  summary: string;
+  createdAt: string;
+}
+
+export interface Sim2RealDeploymentVerification {
+  passed: boolean;
+  checkedAt: string;
+  checks?: Record<string, string | number | null>;
+  /** True when a protocol-only mock answered; never counts as hardware evidence. */
+  mock?: boolean;
 }
 
 export interface Sim2RealDeploymentRecord {
@@ -274,6 +338,10 @@ export interface Sim2RealDeploymentRecord {
   summary: string;
   compatibility: Sim2RealCompatibilityView;
   steps: Sim2RealDeploymentStep[];
+  history?: Sim2RealDeploymentHistoryEvent[];
+  verification?: Sim2RealDeploymentVerification;
+  /** Set when this plan was created to switch from another model version. */
+  versionSwitchFrom?: string;
   createdAt: string;
   updatedAt: string;
   executedAt?: string;
@@ -318,6 +386,24 @@ export interface Sim2RealLocalWorkerIntegration {
   /** Legacy/configuration detail retained for clients that predate health probes. */
   reason?: string;
   message: string;
+}
+
+/** A user-owned training endpoint registered in the workspace. */
+export interface Sim2RealComputeResource {
+  id: string;
+  name: string;
+  kind: 'local-gpu';
+  runnerUrl: string;
+  tokenConfigured: boolean;
+  status: 'online' | 'offline' | 'unknown';
+  gpuName?: string;
+  cuda?: boolean;
+  vramMb?: number;
+  maxConcurrentJobs?: number;
+  message?: string;
+  lastCheckedAt?: string;
+  createdAt: string;
+  updatedAt: string;
 }
 
 export interface Sim2RealOverview {
@@ -405,7 +491,7 @@ const ALLOWED_WORKLOADS = new Set<ModelArtifactWorkload>([
 const ALLOWED_ROLES = new Set<Sim2RealArtifactRole>(['policy', 'compiled-policy', 'calibration']);
 const ALLOWED_BACKENDS = new Set<Sim2RealBackend>(['browser', 'robogo', 'local']);
 const ALLOWED_VARIANTS = new Set<Sim2RealRobotVariant>(['legs', 'rollers', 'both']);
-const ALLOWED_ROBOT_IDS = new Set<Sim2RealRobotId>(['microduck', 'rdk-duck']);
+const ALLOWED_ROBOT_IDS = new Set<Sim2RealRobotId>(['microduck', 'rdk-duck', 'originbot']);
 const ALLOWED_TRAINING_PROFILES = new Set<Sim2RealTrainingProfile>([
   'smoke',
   'low-vram',
@@ -807,7 +893,7 @@ export function validateSim2RealManifest(input: unknown): Sim2RealValidationResu
   const robotId = safeText(robot.id, 40);
   const variant = safeText(robot.variant, 16) as Sim2RealRobotVariant;
   if (!ALLOWED_ROBOT_IDS.has(robotId as Sim2RealRobotId)) {
-    errors.push('robot.id must be microduck or rdk-duck');
+    errors.push('robot.id must be microduck, rdk-duck, or originbot');
   }
   if (robotId === 'microduck' && !ALLOWED_VARIANTS.has(variant)) {
     errors.push('robot.variant must be legs, rollers, or both for microduck');

@@ -38,6 +38,22 @@ observation = policy._build_observation()
 assert observation is not None and len(observation) == runtime.EXPECTED_OBS_DIM
 assert observation[:6] == [0.01, -0.02, 0.03, 0.0, 0.0, 1.0]
 
+# Native OriginBot 8D policies must receive the same layout used by the
+# trainer, and must fail closed when no explicit real-world goal is set.
+old_dims = (runtime.EXPECTED_OBS_DIM, runtime.EXPECTED_ACTION_DIM)
+old_goal = (runtime.ORIGINBOT_GOAL_X, runtime.ORIGINBOT_GOAL_Y)
+runtime.EXPECTED_OBS_DIM, runtime.EXPECTED_ACTION_DIM = 8, 2
+runtime.ORIGINBOT_GOAL_X, runtime.ORIGINBOT_GOAL_Y = None, None
+runtime._read_telemetry = lambda: {"imu": valid_imu, "odom": {"positionX": 1.0, "positionY": -0.5, "linearX": 0.1, "angularZ": 0.2}}
+assert policy._build_observation() is None, "8D policy must require an explicit goal"
+runtime.ORIGINBOT_GOAL_X, runtime.ORIGINBOT_GOAL_Y = 2.0, 0.5
+policy._goal = (runtime.ORIGINBOT_GOAL_X, runtime.ORIGINBOT_GOAL_Y)
+observation = policy._build_observation()
+assert observation is not None and len(observation) == 8
+assert observation[0:2] == [1.0, -0.5] and observation[4:6] == [1.0, 1.0]
+runtime.EXPECTED_OBS_DIM, runtime.EXPECTED_ACTION_DIM = old_dims
+runtime.ORIGINBOT_GOAL_X, runtime.ORIGINBOT_GOAL_Y = old_goal
+
 with tempfile.TemporaryDirectory() as temp_dir:
     snapshot = Path(temp_dir) / "snapshot.json"
     runtime.TELEMETRY_SNAPSHOT_FILE = str(snapshot)

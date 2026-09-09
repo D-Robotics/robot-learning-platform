@@ -1,0 +1,4 @@
+import { describe, expect, it } from 'vitest';
+import { discoverRobotAdapter, registerRobotAdapters } from './robot-adapter-registry.js';
+const adapter={schemaVersion:1,id:'test-drive',displayName:'test',family:'diff-drive',hardwareProfileId:'rdk-x5-originbot-real',simulation:{backend:'kinematic'},training:{observationSize:8,actionSize:2,controlHz:10},telemetry:{required:['imu','odom']},action:{kind:'twist',commandTopic:'/cmd_vel'}} as const;
+describe('robot adapter registry',()=>{it('registers and discovers by capabilities',()=>{const r=registerRobotAdapters([adapter]);expect(r.errors).toEqual([]);expect(discoverRobotAdapter(r.adapters,{family:'diff-drive',observationSize:8,actionSize:2,topics:['imu','odom','/cmd_vel']})?.id).toBe('test-drive');});it('rejects duplicate ids',()=>{expect(registerRobotAdapters([adapter,adapter]).errors).toContain('duplicate adapter id: test-drive');});});

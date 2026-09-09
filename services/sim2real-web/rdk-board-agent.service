@@ -1,0 +1,24 @@
+[Unit]
+Description=RDK X5 Sim2Real board agent
+After=network-online.target
+Wants=network-online.target
+ConditionPathExists=/opt/rdk-board-agent/board-agent-x5.py
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/opt/rdk-board-agent
+EnvironmentFile=/etc/rdk-board-agent/agent.env
+ExecStart=/usr/bin/python3 /opt/rdk-board-agent/board-agent-x5.py
+Restart=always
+RestartSec=2
+NoNewPrivileges=true
+# Policy artifacts are pinned under /root/rdk-board-agent/policies by the
+# HTTP contract; keep this path readable while all callers remain token gated.
+ProtectHome=false
+ProtectSystem=strict
+ReadWritePaths=/var/lib/rdk-board-agent /var/lib/rdk-board-agent/telemetry /tmp
+PrivateTmp=false
+
+[Install]
+WantedBy=multi-user.target

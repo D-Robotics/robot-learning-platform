@@ -45,5 +45,6 @@ assert.match(stationRoutes, /SIM2REAL_STATION_COMMAND_REJECTED/, 'station comman
 assert.match(stationRoutes, /requestOwner/, 'station proxy must authenticate and scope by owner');
 assert.match(stationProxy, /boardAgentUrl\(\)/, 'station proxy must reuse the SSRF-safe agent URL resolver');
 assert.match(stationProxy, /redirect: 'error'/, 'station proxy must not follow redirects');
-assert.doesNotMatch(stationProxy, /process\.env\.RDK_STUDIO/, 'station proxy must not forward Studio credentials');
-console.log('[sim2real-web wiring] PASS — standalone surface has no Studio runtime dependency');
+assert.match(stationProxy, /studioBridgeAgentJson/, 'shared Studio deployments must reuse the Local Bridge adapter');
+assert.match(stationProxy, /cookie: options\.cookieHeader/, 'only the browser request cookie may authorize Studio bridge access');
+console.log('[sim2real-web wiring] PASS — standalone and Studio-bridge surfaces are isolated by explicit adapters');

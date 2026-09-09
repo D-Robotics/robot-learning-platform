@@ -107,8 +107,12 @@ sshpass -p root scp local-path/policy.onnx \
 #    板 侧: agent.env 里 RDK_SIM2REAL_BOARD_AGENT_ENABLE_DRIVE=1 + ENABLE_POLICY=1
 #    然后: sshpass -p root ssh root@10.185.136.180 'systemctl restart rdk-board-agent'
 
-# 5. 重建 SSH 隧道（agent 重启/板重启后都要重建）
-sshpass -p root ssh -f -N -L '[::1]:19100:127.0.0.1:19100' root@10.185.136.180
+# 5. 更新 X5 板端 agent（有 SSH/SCP 路径时执行；Studio Bridge 不需要额外隧道）
+RDK_X5_SSH_TARGET=root@10.185.136.180 ./scripts/deploy-x5-board-agent.sh
+
+# 6. 线上平台复用 RDK Studio Local Bridge：保持本机 bridge 客户端运行，
+#    在 Studio 中确认 RDK X5 已连接，然后打开 Sim2Real Station 页面。
+#    不再创建第二条 19100 SSH 隧道。
 ```
 
 ### 真训练模型演示（推荐路径）

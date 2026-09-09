@@ -155,7 +155,14 @@ class PendulumChain:
         self.num_envs = num_envs
         self.joint_count = joint_count
         self.command_size = command_size
-        self.command = np.tile(np.asarray(COMMAND_HOLD[:command_size], dtype=np.float32), (num_envs, 1))
+        # COMMAND_HOLD is a compact default for the original 6D task.  Pad
+        # contract-declared command channels with zeros so arbitrary valid
+        # contracts (for example MicroDuck 61D = 42 + 19) keep their exact
+        # observation shape instead of silently producing a 48D tensor.
+        command = np.zeros(command_size, dtype=np.float32)
+        hold = np.asarray(COMMAND_HOLD[:command_size], dtype=np.float32)
+        command[: hold.size] = hold
+        self.command = np.tile(command, (num_envs, 1))
         self.rng = np.random.default_rng(seed)
         self.observation_size = 3 * joint_count + command_size
         self.action_size = joint_count

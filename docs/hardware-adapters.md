@@ -2,6 +2,11 @@
 
 平台核心只依赖统一的策略契约、遥测快照和受限运动接口。具体机型放在适配包中：传感器话题、动作执行器、观测槽位、动作投影和安全参数都由适配包声明。OriginBot 是首个参考适配包，不是平台边界；示例见 [`adapters/originbot-differential-drive.json`](../adapters/originbot-differential-drive.json)。
 
+仓库同时提供 [`profiles/rdk-s100-generic-drive.json`](../profiles/rdk-s100-generic-drive.json)
+作为第二种板卡族的可运行契约示例。该文件明确标记 `provenance.kind=synthetic`、
+`provenance.mock=true`，只证明适配边界和维度可配置，不宣称已经有 S100 真机数据；
+接入设备后先替换实际话题并运行只读预检。
+
 `adapters/*.json` 与 `profiles/*.json` 使用同一个 schema v1。设备身份统一放在
 `board`，ROS 话题统一放在 `ros.topics`，执行器统一使用
 `actuator.commandTopic` / `actuator.messageType`，策略维度统一放在 `policy`。

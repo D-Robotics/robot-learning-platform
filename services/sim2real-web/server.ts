@@ -30,6 +30,7 @@ import {
   createSim2RealRouter,
   SIM2REAL_VERSIONED_API_PREFIX,
 } from '../../server/routes/sim2real-routes.js';
+import { createSim2RealAgentRouter } from '../../server/routes/sim2real-agent-routes.js';
 import { sim2RealStorageReadiness } from '../../server/sim2real/sim2real-store.js';
 import {
   studioSsoAdapterConfigured,
@@ -145,6 +146,44 @@ function microduckUnavailablePage(response: express.Response): void {
     .sendFile(path.join(PUBLIC_ROOT, 'microduck-unavailable.html'));
 }
 
+async function proxyMicroduck(request: express.Request, response: express.Response): Promise<void> {
+  const origin = normalizeMicroduckRedirect(process.env.RDK_SIM2REAL_MICRODUCK_URL)?.replace(/\/+$/, '');
+  if (!origin) { microduckUnavailablePage(response); return; }
+  const rawSuffix = (request.params as Record<string, string | string[]>).splat ?? '';
+  const suffix = (Array.isArray(rawSuffix) ? rawSuffix.join('/') : String(rawSuffix)).replace(/^\/+/, '');
+  const target = `${origin}${suffix ? `/${suffix}` : '/'}`;
+  try {
+    // The MuJoCo runtime is a ~10 MB WASM asset on a cold HF Space. Keep the
+    // bridge timeout long enough for that first load; subsequent browser loads
+    // are served from the browser cache.
+    const upstream = await fetch(target, { signal: AbortSignal.timeout(120_000) });
+    response.status(upstream.status);
+    const contentType = upstream.headers.get('content-type') || 'application/octet-stream';
+    response.setHeader('content-type', contentType);
+    response.setHeader('cache-control', 'no-store');
+    const bytes = new Uint8Array(await upstream.arrayBuffer());
+    if (contentType.includes('text/html')) {
+      const html = new TextDecoder().decode(bytes)
+        .replaceAll('src="/bundle/', 'src="/mujoco/microduck-proxy/bundle/')
+        .replaceAll('href="/bundle/', 'href="/mujoco/microduck-proxy/bundle/');
+      response.send(html);
+      return;
+    }
+    // The upstream app keeps its WASM paths absolute (`/bundle/...`). Once
+    // mounted below our same-origin prefix those URLs would escape the bridge
+    // and hit the host app's HTML fallback, which WebAssembly reports as the
+    // familiar "expected magic word" error. Rewrite only JavaScript assets.
+    if (contentType.includes('javascript')) {
+      const script = new TextDecoder().decode(bytes).replaceAll('/bundle/', '/mujoco/microduck-proxy/bundle/');
+      response.send(script);
+      return;
+    }
+    response.send(Buffer.from(bytes));
+  } catch (error) {
+    response.status(502).json({ ok: false, error: 'MICRODUCK_PROXY_UNAVAILABLE', message: jsonError(error) });
+  }
+}
+
 export function createSim2RealWebApp(): Express {
   const app = express();
   app.disable('x-powered-by');
@@ -245,12 +284,20 @@ export function createSim2RealWebApp(): Express {
   // created by the same factory and share the same auth/store adapters, so the
   // aliases cannot drift in validation or side effects.
   app.use(createSim2RealRouter({ runOnDevice, auth: studioSsoAuth }));
+  // Product Agent surface: the planner/executor owns the conversation task
+  // lifecycle and calls the same guarded Sim2Real APIs as the UI.
+  app.use(createSim2RealAgentRouter());
   app.use(
     createSim2RealRouter(
       { runOnDevice, auth: studioSsoAuth },
       { prefix: SIM2REAL_VERSIONED_API_PREFIX },
     ),
   );
+
+  // Same-origin MicroDuck proxy used by the Agent control bridge. Register it
+  // before the legacy `/mujoco/microduck` route because Express wildcard
+  // matching treats the latter as a prefix.
+  app.get('/mujoco/microduck-proxy/{*splat}', (request, response) => { void proxyMicroduck(request, response); });
 
   // MicroDuck is an optional, separately released static surface. Mounting it
   // here is useful for a self-contained deployment; when operators keep the

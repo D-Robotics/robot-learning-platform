@@ -7,10 +7,14 @@ import {
 
 const originalAgentUrl = process.env.RDK_SIM2REAL_BOARD_AGENT_URL;
 const originalAgentToken = process.env.RDK_SIM2REAL_BOARD_AGENT_TOKEN;
+const originalStudioOrigin = process.env.RDK_SIM2REAL_STUDIO_EXEC_ORIGIN;
+const originalStudioDevice = process.env.RDK_SIM2REAL_STUDIO_DEVICE_ID;
 
 beforeEach(() => {
   process.env.RDK_SIM2REAL_BOARD_AGENT_URL = 'http://127.0.0.1:19100';
   process.env.RDK_SIM2REAL_BOARD_AGENT_TOKEN = 'board-secret';
+  process.env.RDK_SIM2REAL_STUDIO_EXEC_ORIGIN = '';
+  delete process.env.RDK_SIM2REAL_STUDIO_DEVICE_ID;
 });
 
 afterEach(() => {
@@ -18,6 +22,10 @@ afterEach(() => {
   else process.env.RDK_SIM2REAL_BOARD_AGENT_URL = originalAgentUrl;
   if (originalAgentToken === undefined) delete process.env.RDK_SIM2REAL_BOARD_AGENT_TOKEN;
   else process.env.RDK_SIM2REAL_BOARD_AGENT_TOKEN = originalAgentToken;
+  if (originalStudioOrigin === undefined) delete process.env.RDK_SIM2REAL_STUDIO_EXEC_ORIGIN;
+  else process.env.RDK_SIM2REAL_STUDIO_EXEC_ORIGIN = originalStudioOrigin;
+  if (originalStudioDevice === undefined) delete process.env.RDK_SIM2REAL_STUDIO_DEVICE_ID;
+  else process.env.RDK_SIM2REAL_STUDIO_DEVICE_ID = originalStudioDevice;
   vi.restoreAllMocks();
 });
 
@@ -86,5 +94,19 @@ describe('board-station proxy bounded body handling', () => {
     await expect(stationAgentFetch('/v1/station/status')).resolves.toBeNull();
     vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response('42', { status: 200 }));
     await expect(stationAgentFetch('/v1/station/status')).resolves.toBeNull();
+  });
+
+  it('uses a per-request Studio bridge device id when direct BoardAgent is absent', async () => {
+    delete process.env.RDK_SIM2REAL_BOARD_AGENT_URL;
+    process.env.RDK_SIM2REAL_STUDIO_EXEC_ORIGIN = 'http://127.0.0.1:18090';
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(JSON.stringify({ output: JSON.stringify({ ok: true, mock: false }) }), { status: 200 }),
+    );
+    await expect(
+      stationAgentFetch('/healthz', { cookieHeader: 'studio_session=test', deviceId: 'studio-device-2' }),
+    ).resolves.toEqual({ ok: true, mock: false });
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe('http://127.0.0.1:18090/api/devices/studio-device-2/exec');
+    expect((init.headers as Record<string, string>).cookie).toBe('studio_session=test');
   });
 });

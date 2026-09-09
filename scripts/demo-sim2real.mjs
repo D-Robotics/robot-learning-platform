@@ -158,11 +158,11 @@ process.once('SIGINT', () => shutdown(0));
 process.once('SIGTERM', () => shutdown(0));
 
 console.log('[demo] starting isolated Sim2Real presentation stack');
-// The query pins MicroDuck + presentation mode for a deterministic projector
+// The query pins the RDK Duck workflow + presentation mode for a deterministic projector
 // run, even if a previous browser session stored a different product choice.
 console.log(`[demo] web: http://127.0.0.1:${env.RDK_SIM2REAL_PORT}/?demo=1`);
 console.log('[demo] flow: overview → simulation/replay → Mock protocol run → telemetry/evaluation → X5 preflight gate');
-console.log('[demo] telemetry sample: MicroDuck 页面按钮载入合成 61D/14D 证据；examples/telemetry-sample.jsonl 属于 RDK Duck');
+console.log('[demo] telemetry sample: OriginBot 真机遥测可通过上位机接入；examples/telemetry-sample.jsonl 是 RDK Duck 契约演示数据');
 console.log(
   configuredStorage
     ? '[demo] using explicit storage (opt-in); device registry is not modified'

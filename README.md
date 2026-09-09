@@ -125,7 +125,9 @@ npx tsc --noEmit
 ```
 
 `npm run verify:local-worker` 会用一个临时外部引擎验证真实 Worker 契约；
-`npm run verify:board-agent` 会验证只读 BoardAgent、模拟标记和 token 闸门。
+`npm run verify:board-agent` 会验证只读 BoardAgent、模拟标记和 token 闸门；
+`npm run verify:api-contract` 会实例化真实路由工厂，双向核对 OpenAPI 契约与挂载端点
+（spec 漂移或死契约都会失败），并验证 `/api/sim2real` 与 `/api/v1/duck` 别名路由集完全一致。
 `npm run smoke:sim2real-local` 会临时启动 Web、local worker 和 reference BoardAgent，
 实际走一遍 overview → 本地训练完成 → 幂等重放 → 模拟板卡预检拦截；它也已包含在 `npm run verify` 中。
 
@@ -139,6 +141,7 @@ npx tsc --noEmit
 | `server/routes` | Sim2Real HTTP API（模型、运行、部署、遥测） |
 | `server/sim2real` | 本地/RoboGo runner、JSON ledger、兼容性策略和可替换 adapter |
 | `docs/api` | 版本化 OpenAPI 契约与外部集成调用顺序 |
+| `docs/sim2real-plugins.md` | 事件驱动扩展层：实验追踪、对象存储、通知和硬件适配器 |
 | `docs/assets` | README 首屏与工作台示意图（自绘 SVG，无运行时依赖） |
 | `docs/design` | 产品设计、MVP/90 分验收、Sim2Real 方案和端到端流程 |
 

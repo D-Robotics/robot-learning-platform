@@ -29,9 +29,10 @@ export function requestLocalTraining(input: {
   idempotencyKey?: string;
   fetchImpl?: typeof fetch;
   runnerUrl?: string;
+  runnerToken?: string;
   timeoutMs?: number;
 }): Promise<Sim2RealRobogoRunResult> {
-  const localToken = String(process.env.RDK_SIM2REAL_LOCAL_RUNNER_TOKEN ?? '').trim();
+  const localToken = String(input.runnerToken ?? process.env.RDK_SIM2REAL_LOCAL_RUNNER_TOKEN ?? '').trim();
   return requestRobogoTraining({
     ...input,
     // A local worker is an internal deployment boundary.  Never forward the
@@ -53,9 +54,10 @@ export function requestLocalTrainingStatus(input: {
   fetchImpl?: typeof fetch;
   runnerUrl?: string;
   statusUrl?: string;
+  runnerToken?: string;
   timeoutMs?: number;
 }): Promise<Sim2RealRobogoRunResult> {
-  const localToken = String(process.env.RDK_SIM2REAL_LOCAL_RUNNER_TOKEN ?? '').trim();
+  const localToken = String(input.runnerToken ?? process.env.RDK_SIM2REAL_LOCAL_RUNNER_TOKEN ?? '').trim();
   return requestRobogoTrainingStatus({
     ...input,
     requestToken: localToken || undefined,

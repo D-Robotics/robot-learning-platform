@@ -1,0 +1,138 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1400 760" role="img" aria-labelledby="title desc">
+  <title id="title">RDK Robot Learning Platform 工作台界面示意</title>
+  <desc id="desc">独立 Web 工作台的模块化界面示意，包含仿真录制、训练、评测、部署和记录模块。此图为产品概念图，不是运行时截图。</desc>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#090b11"/>
+      <stop offset="1" stop-color="#17111b"/>
+    </linearGradient>
+    <linearGradient id="accent" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#ff7037"/>
+      <stop offset="1" stop-color="#ffb020"/>
+    </linearGradient>
+    <linearGradient id="violet" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#ff2da2"/>
+      <stop offset="1" stop-color="#a866ff"/>
+    </linearGradient>
+    <filter id="shadow" x="-20%" y="-20%" width="140%" height="150%">
+      <feDropShadow dx="0" dy="18" stdDeviation="20" flood-color="#000" flood-opacity=".48"/>
+    </filter>
+    <pattern id="dots" width="30" height="30" patternUnits="userSpaceOnUse">
+      <circle cx="2" cy="2" r="1.5" fill="#ff7433" opacity=".16"/>
+    </pattern>
+    <style>
+      .sans{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif}
+      .mono{font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace}
+      .label{font:700 11px ui-monospace,SFMono-Regular,Menlo,monospace;letter-spacing:1.7px;fill:#ff9b45}
+      .nav{font:600 14px -apple-system,BlinkMacSystemFont,"PingFang SC","Microsoft YaHei",sans-serif;fill:#aeb5c4}
+      .nav-active{font:700 14px -apple-system,BlinkMacSystemFont,"PingFang SC","Microsoft YaHei",sans-serif;fill:#fff}
+      .h1{font:800 26px -apple-system,BlinkMacSystemFont,"PingFang SC","Microsoft YaHei",sans-serif;fill:#fff}
+      .h2{font:750 17px -apple-system,BlinkMacSystemFont,"PingFang SC","Microsoft YaHei",sans-serif;fill:#f5f7ff}
+      .body{font:400 13px -apple-system,BlinkMacSystemFont,"PingFang SC","Microsoft YaHei",sans-serif;fill:#a7afbf}
+      .micro{font:500 11px -apple-system,BlinkMacSystemFont,"PingFang SC","Microsoft YaHei",sans-serif;fill:#858e9f}
+      .metric{font:750 18px ui-monospace,SFMono-Regular,Menlo,monospace;fill:#fff}
+    </style>
+  </defs>
+
+  <rect width="1400" height="760" rx="28" fill="url(#bg)"/>
+  <rect width="1400" height="760" rx="28" fill="url(#dots)"/>
+
+  <!-- Browser shell -->
+  <g transform="translate(48 38)" filter="url(#shadow)">
+    <rect width="1304" height="684" rx="22" fill="#0f131b" stroke="#343a49" stroke-width="2"/>
+    <rect width="1304" height="58" rx="22" fill="#151923"/>
+    <path d="M0 58h1304" stroke="#333947"/>
+    <circle cx="27" cy="29" r="6" fill="#ff6b5c"/><circle cx="49" cy="29" r="6" fill="#ffbd44"/><circle cx="71" cy="29" r="6" fill="#39c95d"/>
+    <rect x="113" y="17" width="680" height="25" rx="8" fill="#0a0d13" stroke="#292e3a"/>
+    <text x="132" y="34" class="micro">rdk-robot-learning-platform.local / workspace / microduck-policy-v1</text>
+    <circle cx="1246" cy="29" r="14" fill="#242a37"/><text x="1240" y="34" class="nav-active" font-size="11">R</text>
+
+    <!-- Sidebar -->
+    <rect x="0" y="58" width="240" height="626" fill="#10141c"/>
+    <path d="M240 58v626" stroke="#2d3340"/>
+    <g transform="translate(25 88)">
+      <rect width="32" height="32" rx="10" fill="url(#accent)"/>
+      <path d="M10 8h12c5 0 8 3 8 8v8c0 5-3 8-8 8H10V8Z" fill="#10141a"/>
+      <circle cx="17" cy="20" r="4.5" fill="none" stroke="#ff8a31" stroke-width="2"/>
+      <text x="47" y="14" class="label" font-size="9">RDK X5</text>
+      <text x="47" y="33" class="h2" font-size="16">Duck Lab</text>
+    </g>
+    <text x="26" y="170" class="label">SIM2REAL WORKFLOW</text>
+    <g transform="translate(15 190)">
+      <rect x="0" y="0" width="210" height="48" rx="10" fill="#232b38" stroke="#397791"/>
+      <rect x="0" y="0" width="4" height="48" rx="2" fill="#57d5ff"/>
+      <text x="18" y="22" class="nav-active">总览</text><text x="18" y="38" class="micro">下一步做什么</text><text x="187" y="29" class="metric" font-size="13">01</text>
+      <text x="18" y="80" class="nav">仿真与录制</text><text x="18" y="98" class="micro">演示 · 记录 · 回放</text><text x="187" y="88" class="micro">02</text>
+      <text x="18" y="140" class="nav">训练与模型</text><text x="18" y="158" class="micro">本地 · Mock · RoboGo</text><text x="187" y="148" class="micro">03</text>
+      <text x="18" y="200" class="nav">评测与效果</text><text x="18" y="218" class="micro">仿真 / 真机对比</text><text x="187" y="208" class="micro">04</text>
+      <text x="18" y="260" class="nav">部署到 X5</text><text x="18" y="278" class="micro">预检 · Canary · Live</text><text x="187" y="268" class="micro">05</text>
+      <text x="18" y="320" class="nav">记录与版本</text><text x="18" y="338" class="micro">制品 · 运行 · 审计</text><text x="187" y="328" class="micro">06</text>
+    </g>
+    <path d="M25 567h190" stroke="#2d3340"/>
+    <text x="25" y="596" class="label">QUICK ENTRY</text>
+    <text x="25" y="623" class="nav">↗ 独立打开仿真</text>
+    <text x="25" y="650" class="nav">↗ RoboGo 训练</text>
+
+    <!-- Main content -->
+    <g transform="translate(275 91)">
+      <text x="0" y="0" class="label">WORKSPACE / OVERVIEW</text>
+      <text x="0" y="39" class="h1">今天，让一个动作走完闭环</text>
+      <text x="0" y="66" class="body">MicroDuck · X5 Starter Kit <tspan fill="#45df9c">● 状态示意</tspan></text>
+      <rect x="0" y="94" width="974" height="72" rx="14" fill="#182029" stroke="#2d5364"/>
+      <rect x="0" y="94" width="6" height="72" rx="3" fill="url(#accent)"/>
+      <text x="25" y="123" class="h2">下一步：打开仿真并录制第一个动作</text>
+      <text x="25" y="147" class="body">录制结果会绑定 MicroDuck 契约，随后可选择本地 Mock、真实本地 worker 或 RoboGo。</text>
+      <rect x="815" y="113" width="136" height="35" rx="9" fill="url(#accent)"/>
+      <text x="842" y="136" class="nav-active" fill="#13151b">开始动作 →</text>
+
+      <!-- Cards -->
+      <g transform="translate(0 190)">
+        <rect width="312" height="187" rx="15" fill="#151a23" stroke="#333a49"/>
+        <text x="22" y="31" class="label">01 / SIMULATOR</text>
+        <text x="22" y="61" class="h2">仿真与录制</text>
+        <text x="22" y="86" class="body">浏览器 MicroDuck</text>
+        <rect x="22" y="108" width="267" height="7" rx="3" fill="#2c3440"/><rect x="22" y="108" width="205" height="7" rx="3" fill="url(#accent)"/>
+        <text x="22" y="145" class="micro">上次轨迹</text><text x="22" y="166" class="metric" font-size="16">walk-forward-001</text>
+        <circle cx="270" cy="151" r="14" fill="#222b30" stroke="#45df9c"/><path d="M265 151l4 4 7-9" fill="none" stroke="#45df9c" stroke-width="2"/>
+      </g>
+      <g transform="translate(331 190)">
+        <rect width="312" height="187" rx="15" fill="#151a23" stroke="#333a49"/>
+        <text x="22" y="31" class="label">02 / TRAINING</text>
+        <text x="22" y="61" class="h2">训练与模型</text>
+        <text x="22" y="86" class="body">local Mock · 等待选择</text>
+        <rect x="22" y="108" width="267" height="7" rx="3" fill="#2c3440"/><rect x="22" y="108" width="122" height="7" rx="3" fill="url(#violet)"/>
+        <text x="22" y="145" class="micro">当前制品</text><text x="22" y="166" class="metric" font-size="16">尚未创建</text>
+        <circle cx="270" cy="151" r="14" fill="#262331" stroke="#a866ff"/><path d="M270 143v16M262 151h16" stroke="#c4a9ff" stroke-width="2"/>
+      </g>
+      <g transform="translate(662 190)">
+        <rect width="312" height="187" rx="15" fill="#151a23" stroke="#333a49"/>
+        <text x="22" y="31" class="label">03 / EVALUATION</text>
+        <text x="22" y="61" class="h2">评测与效果</text>
+        <text x="22" y="86" class="body">仿真 / 真机同轴对比</text>
+        <path d="M22 139C61 126 76 147 111 123S166 141 194 109s57 10 95-22" fill="none" stroke="#55d7ff" stroke-width="3"/>
+        <path d="M22 148C62 142 79 157 111 142s53 12 84-13 51 6 94-9" fill="none" stroke="#ff7433" stroke-width="3" stroke-dasharray="6 5"/>
+        <text x="22" y="171" class="micro">蓝色仿真 · 橙色真机</text>
+      </g>
+
+      <!-- Lower strip -->
+      <g transform="translate(0 400)">
+        <rect width="618" height="153" rx="15" fill="#151a23" stroke="#333a49"/>
+        <text x="22" y="32" class="label">MODEL ARTIFACT</text>
+        <text x="22" y="61" class="h2">不可变制品快照</text>
+        <text x="22" y="86" class="body">仿真配置 · DR · 奖励 · ONNX · RDK 元数据</text>
+        <rect x="22" y="107" width="574" height="27" rx="7" fill="#0c1017" stroke="#2e3542"/>
+        <text x="35" y="125" class="mono" font-size="12" fill="#9df4ff">artifact://microduck-policy-v1/run-0007</text>
+        <text x="490" y="125" class="mono" font-size="11" fill="#45df9c">IMMUTABLE</text>
+      </g>
+      <g transform="translate(644 400)">
+        <rect width="330" height="153" rx="15" fill="#151a23" stroke="#ff7433" stroke-opacity=".55"/>
+        <text x="22" y="32" class="label">DEPLOY GATE</text>
+        <text x="22" y="61" class="h2">部署到 X5</text>
+        <text x="22" y="86" class="body">先预检，再 Canary / Live</text>
+        <rect x="22" y="107" width="286" height="27" rx="7" fill="#1c2b26"/>
+        <circle cx="39" cy="120.5" r="5" fill="#45df9c"/><text x="53" y="125" class="micro" fill="#a5edc6">网页不会直接开电机</text>
+      </g>
+    </g>
+  </g>
+  <text x="72" y="744" class="micro">CONCEPT PREVIEW · 模块化产品界面示意，不是运行时截图</text>
+</svg>

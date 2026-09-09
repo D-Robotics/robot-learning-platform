@@ -45,6 +45,9 @@ assert.doesNotMatch(html, /section-kicker/, 'no legacy section kicker labels: ke
 assert.doesNotMatch(html, /让一个动作/, 'the marketing hero must stay removed');
 assert.match(html, /id="task-select"/, 'workspace must expose an action-task context');
 assert.match(html, /id="presentation-toggle"/, 'workspace must expose a reversible presentation view');
+assert.match(html, /id="agent-floating-toggle"/, 'Agent must be available from a compact floating launcher');
+assert.match(html, /id="agent-chat-close"/, 'Agent drawer must expose an explicit close action');
+assert.match(html, /id="agent-chat-backdrop"/, 'Agent drawer must expose a dismissible backdrop');
 assert.match(html, /class="skip-link"/, 'workspace must expose a keyboard skip link');
 assert.doesNotMatch(
   html,
@@ -65,6 +68,9 @@ assert.equal(
 );
 assert.match(app, /function renderNextAction\(\)/);
 assert.match(app, /function setPresentationMode\(enabled/);
+assert.match(fs.readFileSync(path.join(here, 'public', 'agent-chat.js'), 'utf8'), /function setAgentDrawer\(open\)/);
+assert.match(fs.readFileSync(path.join(here, 'public', 'agent-chat.js'), 'utf8'), /AGENT_POSITION_KEY/);
+assert.match(fs.readFileSync(path.join(here, 'public', 'agent-chat.js'), 'utf8'), /关闭 Agent 对话/);
 assert.match(app, /function syncServicePill\(\)/, 'service status dot must follow loading and error state');
 assert.match(app, /event\.key === 'Escape'/, 'presentation mode must have a keyboard exit');
 assert.match(app, /function renderWorkflowProgress\(\)/);

@@ -64,4 +64,22 @@ describe('hardware profile contract', () => {
     expect(result.errors).toContain('ros.topics.cmdVel.name duplicates another topic');
     expect(result.errors).toContain('runtime.decisionHz must be 1..50');
   });
+
+  it('keeps synthetic profile provenance explicit', () => {
+    const result = validateHardwareProfile({
+      ...validProfile,
+      provenance: { kind: 'synthetic', mock: true, note: 'contract-only profile; no hardware evidence' },
+    });
+    expect(result.valid).toBe(true);
+    expect(result.profile?.provenance).toMatchObject({ kind: 'synthetic', mock: true });
+  });
+
+  it('rejects provenance that claims synthetic data is real', () => {
+    const result = validateHardwareProfile({
+      ...validProfile,
+      provenance: { kind: 'synthetic', mock: false },
+    });
+    expect(result.valid).toBe(false);
+    expect(result.errors).toContain('provenance.mock must be true for synthetic profiles');
+  });
 });

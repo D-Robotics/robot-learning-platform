@@ -8,6 +8,7 @@ Wire contract (identical to services/sim2real-web/local-board-agent.mjs):
   GET  /v1/station/status                real /proc-based snapshot
   GET  /v1/station/status/stream         NDJSON heartbeat (1 Hz)
   GET  /v1/station/camera.mjpeg          real camera MJPEG (or 503 if absent)
+  GET  /v1/station/camera.snapshot       one real JPEG frame for bridge transports
   POST /v1/station/commands              allowlisted read-only commands
   POST /v1/devices/:id/commands          the fixed preflight probe only
   GET  /v1/station/drive                 constrained-drive state (canary)
@@ -198,6 +199,25 @@ def disk_mb():
         return 0, 0
 
 
+def configured_board_identity():
+    """Read only the identity fields from the selected adapter profile.
+
+    The X5 agent remains the reference implementation, but its identity must
+    not lie when the same runtime is configured for another RDK family. A
+    malformed profile is ignored and the conservative X5 defaults remain.
+    """
+    path = os.environ.get("RDK_SIM2REAL_ADAPTER_CONFIG", "").strip()
+    if not path:
+        return {}
+    try:
+        with open(path, "r", encoding="utf-8") as handle:
+            value = json.load(handle)
+        board = value.get("board") if isinstance(value, dict) else None
+        return board if isinstance(board, dict) else {}
+    except (OSError, ValueError, TypeError):
+        return {}
+
+
 def board_identity():
     model = read_file("/proc/device-tree/model").replace("\x00", "").strip()
     os_release = {}
@@ -205,9 +225,13 @@ def board_identity():
         if "=" in line:
             key, value = line.split("=", 1)
             os_release[key.strip()] = value.strip().strip('"')
+    configured = configured_board_identity()
+    platform = str(os.environ.get("RDK_SIM2REAL_BOARD_PLATFORM") or configured.get("platform") or "rdk-x5").strip()[:80]
+    configured_model = str(configured.get("model") or "").strip()
     return {
-        "platform": "rdk-x5",
-        "model": model or "D-Robotics RDK X5",
+        "platform": platform,
+        "family": str(configured.get("family") or "rdk-custom").strip()[:80],
+        "model": model or configured_model or "D-Robotics RDK X5",
         "os": os_release.get("PRETTY_NAME", ""),
         "rdkVersion": read_file("/etc/version").strip(),
     }
@@ -359,7 +383,7 @@ def _actuator_policy():
         "maxAngular": DRIVE_MAX_ANGULAR,
         "maxWindowSec": DRIVE_MAX_WINDOW_SEC,
         "publishHz": DRIVE_PUBLISH_HZ,
-        "chassisWatchdogMs": DRIVE_WATCHDOG_MS,
+        "chassisWatchdogMs": 500,
         "emergencyStop": "/v1/station/drive/stop (always available)",
     }
 
@@ -455,6 +479,7 @@ def _start_drive_publisher():
                  "RDK_BOARD_DRIVE_PERSIST": "1",
                  "RDK_BOARD_DRIVE_CMD_TOPIC": DRIVE_COMMAND_TOPIC,
                  "RDK_BOARD_DRIVE_RATE_HZ": str(DRIVE_PUBLISH_HZ),
+                 "ROS_LOG_DIR": "/var/lib/rdk-board-agent/roslogs",
                  "PATH": "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"},
         )
     except OSError:
@@ -619,16 +644,23 @@ def _start_telemetry_node():
     if not os.path.exists(TELEMETRY_NODE_SCRIPT) or not os.path.exists(TROS_SETUP):
         return False
     try:
+        # Keep diagnostics inside the service's declared writable state
+        # directory; ProtectSystem=strict makes /var/log read-only.
+        telemetry_log = open(
+            "/var/lib/rdk-board-agent/telemetry/sampler.log", "a", encoding="utf-8"
+        )
         _telemetry_proc = subprocess.Popen(
             ["bash", "-c",
              f"source {TROS_SETUP} 2>/dev/null && "
              f"source {ORIGINBOT_WS_SETUP} 2>/dev/null && "
              f"exec python3 {TELEMETRY_NODE_SCRIPT}"],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
+            stdout=telemetry_log,
+            stderr=telemetry_log,
             env={**os.environ, "HOME": "/root", "TERM": "dumb",
+                 "ROS_LOG_DIR": "/var/lib/rdk-board-agent/roslogs",
                  "PATH": "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"},
         )
+        telemetry_log.close()
         return True
     except OSError:
         _telemetry_proc = None
@@ -655,7 +687,10 @@ def _ob_sampler_loop():
     starts and disappears (as None) when it stops. Restarts the sampler
     node if it died (e.g. TROS was sourced after the agent started).
     """
-    _start_telemetry_node()
+    try:
+        _start_telemetry_node()
+    except Exception as exc:
+        print(f"[board-agent] telemetry sampler start failed: {exc!r}", flush=True)
     while True:
         try:
             data = _read_telemetry_snapshot()
@@ -665,7 +700,10 @@ def _ob_sampler_loop():
             if data is None and (
                 _telemetry_proc is None or _telemetry_proc.poll() is not None
             ):
-                _start_telemetry_node()
+                try:
+                    _start_telemetry_node()
+                except Exception as exc:
+                    print(f"[board-agent] telemetry sampler restart failed: {exc!r}", flush=True)
         except Exception:
             with _ob_lock:
                 _ob_state["data"] = None
@@ -747,6 +785,7 @@ def _start_policy_runtime():
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
             env={**os.environ, "HOME": "/root", "TERM": "dumb",
+                 "ROS_LOG_DIR": "/var/lib/rdk-board-agent/roslogs",
                  "PATH": "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"},
         )
     except OSError:
@@ -901,7 +940,7 @@ def policy_load(path):
     return _policy_send("load", path=resolved)
 
 
-def policy_start(direction):
+def policy_start(direction, goal_x=None, goal_y=None):
     if not POLICY_ENABLED:
         return {"ok": False, "error": "policy-disabled"}
     if not DRIVE_ENABLED:
@@ -910,7 +949,16 @@ def policy_start(direction):
                 "message": "policy start requires RDK_SIM2REAL_BOARD_AGENT_ENABLE_DRIVE=1 too"}
     if not isinstance(direction, (int, float)):
         return {"ok": False, "error": "invalid-type"}
-    return _policy_send("start", direction=float(direction))
+    snap = _policy_read_state()
+    model = snap.get("model") if isinstance(snap, dict) else None
+    if isinstance(model, dict) and model.get("inputDim") == 8:
+        if goal_x is None or goal_y is None:
+            return {"ok": False, "error": "originbot-goal-required",
+                    "message": "8D OriginBot 策略需要同时提供 goalX/goalY（单位：米）"}
+    payload = {"direction": float(direction)}
+    if goal_x is not None or goal_y is not None:
+        payload.update({"goalX": goal_x, "goalY": goal_y})
+    return _policy_send("start", **payload)
 
 
 def _start_ob_sampler():
@@ -1166,6 +1214,9 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/v1/station/status/stream":
             self._stream_ndjson()
             return
+        if path == "/v1/station/camera.snapshot":
+            self._camera_snapshot()
+            return
         if path == "/v1/station/camera.mjpeg":
             self._stream_camera()
             return
@@ -1209,7 +1260,7 @@ class Handler(BaseHTTPRequestHandler):
             return
         if path == "/v1/station/policy/start":
             payload = self._read_json() or {}
-            res = policy_start(payload.get("direction", 0.0))
+            res = policy_start(payload.get("direction", 0.0), payload.get("goalX"), payload.get("goalY"))
             self._json(200 if res.get("ok") else 409,
                        {**res, "policy": policy_status()})
             return
@@ -1321,6 +1372,53 @@ class Handler(BaseHTTPRequestHandler):
             pass
         finally:
             self._release_stream_slot()
+
+    def _camera_snapshot(self):
+        """Return one real JPEG frame for transports that cannot carry MJPEG.
+
+        Studio Local Bridge exec is a request/response channel, so the
+        platform's bridge adapter polls this endpoint and rebuilds the same
+        multipart stream for the browser. No synthetic frame is substituted.
+        """
+        devices = find_camera_device()
+        if not devices or not CV2_AVAILABLE:
+            self._json(503, {
+                "ok": False,
+                "error": "CAMERA_UNAVAILABLE",
+                "message": "no camera device is connected to this board; the agent never substitutes synthetic frames",
+                "devices": devices,
+                "cv2": CV2_AVAILABLE,
+            })
+            return
+        cap = CAMERA.open()
+        if cap is None:
+            self._json(503, {
+                "ok": False,
+                "error": "CAMERA_UNAVAILABLE",
+                "message": "camera device present but could not be opened",
+                "devices": devices,
+            })
+            return
+        try:
+            import cv2
+            ok, frame = cap.read()
+            if not ok:
+                self._json(503, {"ok": False, "error": "CAMERA_FRAME_UNAVAILABLE", "devices": devices})
+                return
+            ok, encoded = cv2.imencode(".jpg", frame, [int(cv2.IMWRITE_JPEG_QUALITY), 80])
+            if not ok:
+                self._json(503, {"ok": False, "error": "CAMERA_FRAME_UNAVAILABLE", "devices": devices})
+                return
+            data = encoded.tobytes()
+            self.send_response(200)
+            self.send_header("content-type", "image/jpeg")
+            self.send_header("cache-control", "no-store")
+            self.send_header("content-length", str(len(data)))
+            self.send_header("x-board-camera", "real-device")
+            self.end_headers()
+            self.wfile.write(data)
+        finally:
+            cap.release()
 
     def _stream_camera(self):
         devices = find_camera_device()

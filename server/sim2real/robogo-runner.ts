@@ -6,6 +6,7 @@ import type {
   Sim2RealTrainingSpec,
 } from '../../shared/sim2real.js';
 import { SAFE_ARTIFACT_REF } from '../../shared/sim2real.js';
+import { Sim2RealError } from './sim2real-errors.js';
 
 const DEFAULT_TIMEOUT_MS = 30_000;
 const MAX_RESPONSE_BYTES = 1_000_000;
@@ -111,23 +112,23 @@ export function normalizeRunnerUrl(raw: string | undefined, options: { localHttp
     .trim()
     .replace(/\/+$/, '');
   if (!value) {
-    throw new Error('sim2real_robogo_runner_not_configured');
+    throw new Sim2RealError('sim2real_robogo_runner_not_configured');
   }
   let parsed: URL;
   try {
     parsed = new URL(value);
   } catch {
-    throw new Error('sim2real_robogo_runner_url_invalid');
+    throw new Sim2RealError('sim2real_robogo_runner_url_invalid');
   }
   const localHttp =
     parsed.protocol === 'http:' &&
     options.localHttp === true &&
     isPrivateHttpHost(parsed.hostname);
   if (parsed.protocol !== 'https:' && !localHttp) {
-    throw new Error('sim2real_robogo_runner_url_must_be_https');
+    throw new Sim2RealError('sim2real_robogo_runner_url_must_be_https');
   }
   if (parsed.username || parsed.password || parsed.search || parsed.hash) {
-    throw new Error('sim2real_robogo_runner_url_invalid');
+    throw new Sim2RealError('sim2real_robogo_runner_url_invalid');
   }
   return parsed.toString().replace(/\/+$/, '');
 }
@@ -175,7 +176,7 @@ function safeToken(raw: unknown): string {
     .trim()
     .replace(/^Bearer\s+/i, '');
   if (token.length > 4096 || /[\u0000-\u001f\u007f]/.test(token)) {
-    throw new Error('sim2real_runner_token_invalid');
+    throw new Sim2RealError('sim2real_runner_token_invalid');
   }
   return token;
 }
@@ -183,7 +184,7 @@ function safeToken(raw: unknown): string {
 function safeAccountId(raw: string): string {
   const accountId = String(raw ?? '').trim();
   if (!accountId || accountId.length > 160 || /[\u0000-\u001f\u007f/]/.test(accountId)) {
-    throw new Error('sim2real_runner_account_invalid');
+    throw new Sim2RealError('sim2real_runner_account_invalid');
   }
   return accountId;
 }
@@ -191,7 +192,7 @@ function safeAccountId(raw: string): string {
 function safeIdempotencyKey(raw: unknown): string | undefined {
   if (raw == null || raw === '') return undefined;
   const key = String(raw).trim();
-  if (!SAFE_IDEMPOTENCY_KEY.test(key)) throw new Error('sim2real_runner_idempotency_invalid');
+  if (!SAFE_IDEMPOTENCY_KEY.test(key)) throw new Sim2RealError('sim2real_runner_idempotency_invalid');
   return key;
 }
 
@@ -204,7 +205,7 @@ async function boundedResponseText(response: Response): Promise<string> {
   if (!response.body) {
     const text = await response.text();
     if (Buffer.byteLength(text, 'utf8') > MAX_RESPONSE_BYTES)
-      throw new Error('sim2real_runner_response_too_large');
+      throw new Sim2RealError('sim2real_runner_response_too_large');
     return text;
   }
   const reader = response.body.getReader();
@@ -217,7 +218,7 @@ async function boundedResponseText(response: Response): Promise<string> {
       total += next.value.byteLength;
       if (total > MAX_RESPONSE_BYTES) {
         await reader.cancel();
-        throw new Error('sim2real_runner_response_too_large');
+        throw new Sim2RealError('sim2real_runner_response_too_large');
       }
       chunks.push(next.value);
     }
@@ -345,7 +346,7 @@ function parseRunResult(payload: unknown): Sim2RealRobogoRunResult {
       ? (payload as Record<string, unknown>)
       : {};
   const requestedStatus = safeText(source.status ?? source.state, 24).toLowerCase();
-  if (!requestedStatus) throw new Error('sim2real_robogo_runner_status_invalid');
+  if (!requestedStatus) throw new Sim2RealError('sim2real_robogo_runner_status_invalid');
   const status =
     requestedStatus === 'queued' || requestedStatus === 'pending'
       ? 'queued'
@@ -362,7 +363,7 @@ function parseRunResult(payload: unknown): Sim2RealRobogoRunResult {
             requestedStatus === 'canceled'
           ? 'failed'
       : null;
-  if (!status) throw new Error('sim2real_robogo_runner_status_invalid');
+  if (!status) throw new Sim2RealError('sim2real_robogo_runner_status_invalid');
   const launchUrlValue = safeText(source.launchUrl ?? source.url, 500);
   const launchUrl =
     launchUrlValue && sameOriginOrHttps(launchUrlValue) ? launchUrlValue : undefined;
@@ -372,7 +373,7 @@ function parseRunResult(payload: unknown): Sim2RealRobogoRunResult {
       ? externalRunId
       : '';
   if ((status === 'queued' || status === 'running') && !validExternalRunId) {
-    throw new Error('sim2real_robogo_runner_run_id_missing');
+    throw new Sim2RealError('sim2real_robogo_runner_run_id_missing');
   }
   const message =
     safeText(source.message, 500) ||
@@ -539,7 +540,7 @@ export async function requestRobogoTraining(input: {
 
 function statusUrl(rawRunnerUrl: string, externalRunId: string): string {
   if (!/^[a-zA-Z0-9][a-zA-Z0-9._-]{0,119}$/.test(externalRunId)) {
-    throw new Error('sim2real_robogo_run_id_invalid');
+    throw new Sim2RealError('sim2real_robogo_run_id_invalid');
   }
   const parsed = new URL(rawRunnerUrl);
   const pathName = parsed.pathname.replace(/\/+$/, '');
@@ -557,7 +558,7 @@ function safeStatusOverride(raw: string, configuredRunnerUrl: string): string {
     candidate = new URL(raw);
     base = new URL(configuredRunnerUrl);
   } catch {
-    throw new Error('sim2real_robogo_status_url_invalid');
+    throw new Sim2RealError('sim2real_robogo_status_url_invalid');
   }
   if (
     candidate.origin !== base.origin ||
@@ -567,7 +568,7 @@ function safeStatusOverride(raw: string, configuredRunnerUrl: string): string {
     candidate.hash ||
     !sameOriginOrHttps(candidate.toString())
   ) {
-    throw new Error('sim2real_robogo_status_url_invalid');
+    throw new Sim2RealError('sim2real_robogo_status_url_invalid');
   }
   return candidate.toString();
 }

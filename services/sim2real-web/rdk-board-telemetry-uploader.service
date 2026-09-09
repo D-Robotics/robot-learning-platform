@@ -1,0 +1,22 @@
+[Unit]
+Description=RDK Sim2Real board telemetry uploader
+After=network-online.target rdk-board-agent.service
+Wants=network-online.target
+ConditionPathExists=/opt/rdk-board-agent/board-telemetry-uploader.py
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/opt/rdk-board-agent
+EnvironmentFile=/etc/rdk-board-agent/telemetry.env
+ExecStart=/usr/bin/python3 /opt/rdk-board-agent/board-telemetry-uploader.py
+Restart=always
+RestartSec=3
+NoNewPrivileges=true
+ProtectHome=true
+ProtectSystem=strict
+ReadWritePaths=/var/lib/rdk-board-agent/telemetry
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

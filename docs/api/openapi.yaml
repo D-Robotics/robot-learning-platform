@@ -10,12 +10,14 @@ servers:
     description: Replace with the deployment origin.
 tags:
   - name: service
+  - name: sso
   - name: workspace
   - name: runs
   - name: telemetry
   - name: deployments
   - name: devices
   - name: board-station
+  - name: agent
 security:
   - cookieAuth: []
 paths:
@@ -40,6 +42,74 @@ paths:
       responses:
         "200": { $ref: "#/components/responses/Ready" }
         "503": { $ref: "#/components/responses/NotReady" }
+  /api/sso/session:
+    get:
+      tags: [sso]
+      summary: Current cookie identity or an auth-required challenge
+      operationId: getSsoSession
+      security: []
+      description: >-
+        Returns 200 with the identity when the site-wide Studio session cookie
+        is present and valid, otherwise 401 with login-relay availability
+        (loginRelay.configured and optionally loginRelay.loginPageUrl) so the
+        workbench can render a direct login form or a redirect.
+      responses:
+        "200":
+          description: Verified identity.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SsoSessionResponse" }
+        "401":
+          description: >-
+            No valid session; body carries loginRelay availability.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+  /api/sso/login:
+    post:
+      tags: [sso]
+      summary: Relay credentials to the Studio account center and adopt its cookie
+      operationId: ssoLogin
+      security: []
+      description: >-
+        Relays a whitelist of login fields to POST /api/sso/direct/login on
+        the Studio main shell, then adopts only the web-cloud session cookie
+        it can verify (legacy cookies are dropped). In same-origin
+        deployments nginx may route the browser directly to the Studio shell
+        instead, in which case this endpoint is unused. Failed by
+        sim2RealCsrfMiddleware for cross-site submissions.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/SsoLoginRequest" }
+      responses:
+        "200":
+          description: Login accepted; session cookie set on the response.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SsoSessionResponse" }
+        "400": { description: Login method missing or not in account/sms/email. }
+        "409": { description: Credentials rejected by the account center. }
+        "502": { description: Relay transport failure or unusable cookie. }
+        "503": { description: Cookie secret or relay target not configured. }
+  /api/sso/logout:
+    post:
+      tags: [sso]
+      summary: Clear the shared session cookie
+      operationId: ssoLogout
+      security: []
+      description: Expires the site-wide session cookie for this service only.
+      responses:
+        "200":
+          description: Cookie cleared.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [ok]
+                properties:
+                  ok: { const: true }
   /api/v1/duck/overview:
     get:
       tags: [workspace]
@@ -54,6 +124,92 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/OverviewResponse" }
         "401": { $ref: "#/components/responses/AuthRequired" }
+  /api/v1/duck/workspace-summary:
+    get:
+      tags: [workspace]
+      summary: Read a lightweight workspace summary
+      operationId: getWorkspaceSummary
+      description: >-
+        Returns account-scoped counts and the latest run/deployment projection
+        for dashboards and assistants. It intentionally omits model manifests,
+        telemetry layouts and integration probes so it is safe to poll often.
+      responses:
+        "200":
+          description: Lightweight workspace summary.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WorkspaceSummaryResponse"
+        "401": { $ref: "#/components/responses/AuthRequired" }
+  /api/v1/duck/projects:
+    get:
+      tags: [workspace]
+      summary: List account-scoped learning projects
+      operationId: listProjects
+      responses:
+        "200": { description: Projects, content: { application/json: { schema: { $ref: "#/components/schemas/ProjectsResponse" } } } }
+        "401": { $ref: "#/components/responses/AuthRequired" }
+    post:
+      tags: [workspace]
+      summary: Create a learning project
+      operationId: createProject
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: "#/components/schemas/ProjectInput" } } }
+      responses:
+        "201": { description: Created, content: { application/json: { schema: { $ref: "#/components/schemas/ProjectResponse" } } } }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "409": { description: Duplicate slug. }
+  /api/v1/duck/projects/{id}:
+    parameters: [{ $ref: "#/components/parameters/ProjectId" }]
+    get:
+      tags: [workspace]
+      summary: Read a project with linked datasets and runs
+      operationId: getProject
+      responses:
+        "200": { description: Project detail, content: { application/json: { schema: { $ref: "#/components/schemas/ProjectDetailResponse" } } } }
+        "404": { $ref: "#/components/responses/NotFound" }
+    patch:
+      tags: [workspace]
+      summary: Update project metadata and asset links
+      operationId: updateProject
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: "#/components/schemas/ProjectInput" } } }
+      responses:
+        "200": { description: Updated, content: { application/json: { schema: { $ref: "#/components/schemas/ProjectResponse" } } } }
+        "400": { $ref: "#/components/responses/BadRequest" }
+  /api/v1/duck/projects/{id}/runs/compare:
+    get:
+      tags: [runs]
+      summary: Compare experiment runs in a project
+      operationId: compareProjectRuns
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+        - in: query
+          name: runIds
+          schema: { type: string, maxLength: 1024 }
+          description: Comma-separated run ids; omitted returns the latest 20.
+      responses:
+        "200": { description: Comparison rows, content: { application/json: { schema: { $ref: "#/components/schemas/RunComparisonResponse" } } } }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /api/v1/duck/datasets:
+    get:
+      tags: [workspace]
+      summary: List dataset metadata references
+      operationId: listDatasets
+      responses:
+        "200": { description: Datasets, content: { application/json: { schema: { $ref: "#/components/schemas/DatasetsResponse" } } } }
+    post:
+      tags: [workspace]
+      summary: Register a dataset metadata reference
+      operationId: createDataset
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: "#/components/schemas/DatasetInput" } } }
+      responses:
+        "201": { description: Created, content: { application/json: { schema: { $ref: "#/components/schemas/DatasetResponse" } } } }
+        "400": { $ref: "#/components/responses/BadRequest" }
   /api/v1/duck/models/validate:
     post:
       tags: [workspace]
@@ -274,6 +430,52 @@ paths:
           description: Evaluation.
           content: { application/json: { schema: { $ref: "#/components/schemas/EvaluationResponse" } } }
         "400": { $ref: "#/components/responses/BadRequest" }
+  /api/sim2real/agent/plan:
+    post:
+      tags: [agent]
+      summary: Parse a Chinese task into a guarded Sim2Real tool plan
+      operationId: createSim2RealAgentPlan
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [message]
+              properties:
+                message: { type: string, minLength: 1, maxLength: 2000 }
+                context: { type: object, additionalProperties: true }
+      responses:
+        "200": { description: Agent plan. }
+        "400": { $ref: "#/components/responses/BadRequest" }
+  /api/sim2real/agent/execute:
+    post:
+      tags: [agent]
+      summary: Start an asynchronous guarded Agent run
+      operationId: executeSim2RealAgentPlan
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [plan]
+              properties:
+                plan: { type: object, additionalProperties: true }
+                approved: { type: boolean, default: false }
+      responses:
+        "202": { description: Run accepted. }
+        "409": { description: Explicit approval required. }
+  /api/sim2real/agent/runs/{runId}:
+    get:
+      tags: [agent]
+      summary: Read Agent run status, tool events and evidence
+      operationId: getSim2RealAgentRun
+      parameters:
+        - $ref: "#/components/parameters/RunId"
+      responses:
+        "200": { description: Agent run snapshot. }
+        "404": { $ref: "#/components/responses/NotFound" }
   /api/v1/duck/deployments:
     get:
       tags: [deployments]
@@ -323,6 +525,67 @@ paths:
           description: Deployment.
           content: { application/json: { schema: { $ref: "#/components/schemas/DeploymentResponse" } } }
         "404": { $ref: "#/components/responses/NotFound" }
+  /api/v1/duck/deployments/{deploymentId}/cancel:
+    post:
+      tags: [deployments]
+      summary: Cancel a deployment plan before board action
+      operationId: cancelDeployment
+      parameters:
+        - $ref: "#/components/parameters/DeploymentId"
+      responses:
+        "200":
+          description: Cancelled plan.
+          content: { application/json: { schema: { $ref: "#/components/schemas/DeploymentResponse" } } }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { description: Plan is no longer cancellable. }
+  /api/v1/duck/deployments/{deploymentId}/history:
+    get:
+      tags: [deployments]
+      summary: Read deployment lifecycle history and verification evidence
+      operationId: getDeploymentHistory
+      parameters:
+        - $ref: "#/components/parameters/DeploymentId"
+      responses:
+        "200":
+          description: Append-only lifecycle events and latest verification.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [ok, deploymentId, history, verification]
+                properties:
+                  ok: { const: true }
+                  deploymentId: { type: string }
+                  history: { type: array, items: { type: object, additionalProperties: true } }
+                  verification: { type: [object, "null"], additionalProperties: true }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /api/v1/duck/deployments/{deploymentId}/version-switch:
+    post:
+      tags: [deployments]
+      summary: Create a guarded preflight plan for another model version
+      operationId: switchDeploymentVersion
+      parameters:
+        - $ref: "#/components/parameters/DeploymentId"
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [targetModelId]
+              properties:
+                targetModelId: { type: string }
+      responses:
+        "201":
+          description: New preflight plan.
+          content: { application/json: { schema: { $ref: "#/components/schemas/DeploymentResponse" } } }
+        "200":
+          description: Idempotent replay.
+          content: { application/json: { schema: { $ref: "#/components/schemas/DeploymentResponse" } } }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { description: Target model is invalid or incompatible. }
   /api/v1/duck/deployments/{deploymentId}/preflight:
     post:
       tags: [deployments]
@@ -659,13 +922,71 @@ paths:
           content: { application/json: { schema: { $ref: "#/components/schemas/DriveState" } } }
         "401": { $ref: "#/components/responses/AuthRequired" }
         "502": { description: Board agent unreachable; chassis watchdog still enforces rest. }
+  /api/v1/duck/compute-resources:
+    get:
+      tags: [workspace]
+      summary: List account-owned GPU workers
+      operationId: listComputeResources
+      responses:
+        "200": { description: Compute resources returned. }
+    post:
+      tags: [workspace]
+      summary: Register a GPU worker
+      operationId: createComputeResource
+      requestBody:
+        required: true
+        content:
+          application/json: { schema: { type: object, required: [name, runnerUrl] } }
+      responses:
+        "201": { description: Compute resource created. }
+        "400": { $ref: "#/components/responses/BadRequest" }
+  /api/v1/duck/compute-resources/{id}:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema: { type: string }
+    patch:
+      tags: [workspace]
+      summary: Update a GPU worker
+      operationId: updateComputeResource
+      requestBody:
+        content:
+          application/json: { schema: { type: object } }
+      responses:
+        "200": { description: Compute resource updated. }
+        "404": { $ref: "#/components/responses/NotFound" }
+    delete:
+      tags: [workspace]
+      summary: Remove a GPU worker
+      operationId: deleteComputeResource
+      responses:
+        "200": { description: Compute resource removed. }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /api/v1/duck/compute-resources/{id}/test:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema: { type: string }
+    post:
+      tags: [workspace]
+      summary: Probe a GPU worker health endpoint
+      operationId: testComputeResource
+      responses:
+        "200": { description: Probe result returned. }
+        "404": { $ref: "#/components/responses/NotFound" }
 components:
   securitySchemes:
     cookieAuth:
       type: apiKey
       in: cookie
-      name: sim2real_session
-      description: Deployment-owned SSO/OIDC session; the reference local adapter has no login.
+      name: rdk_sso_web_session
+      description: >-
+        Site-wide encrypted session cookie issued by the Studio main shell;
+        the reference studio-cookie-auth adapter verifies it with
+        AES-256-GCM (v1.iv.tag.ciphertext). The reference local adapter has
+        no login.
   parameters:
     ProductId:
       in: query
@@ -696,6 +1017,11 @@ components:
       name: deploymentId
       required: true
       schema: { type: string }
+    ProjectId:
+      in: path
+      name: projectId
+      required: true
+      schema: { type: string }
   responses:
     Ready:
       description: Control plane is ready.
@@ -713,14 +1039,123 @@ components:
       description: Resource is not visible to this account.
       content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } }
   schemas:
-    BoardPolicyResponse:
+    Project:
       type: object
-      required: [ok, platformEnabled, drivePlatformEnabled, policy]
+      required: [id, name, slug, modelIds, datasetIds, createdAt, updatedAt]
+      properties:
+        id: { type: string }
+        name: { type: string, maxLength: 160 }
+        slug: { type: string, pattern: '^[a-z0-9][a-z0-9-]{1,63}$' }
+        description: { type: string }
+        modelIds: { type: array, items: { type: string } }
+        datasetIds: { type: array, items: { type: string } }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+    ProjectInput:
+      type: object
+      required: [name]
+      properties:
+        name: { type: string, maxLength: 160 }
+        slug: { type: string, maxLength: 64 }
+        description: { type: string, maxLength: 4000 }
+        modelIds: { type: array, maxItems: 100, items: { type: string } }
+        datasetIds: { type: array, maxItems: 500, items: { type: string } }
+    Dataset:
+      type: object
+      required: [id, name, createdAt, updatedAt]
+      properties:
+        id: { type: string }
+        name: { type: string }
+        description: { type: string }
+        uri: { type: string }
+        format: { type: string }
+        sampleCount: { type: integer, minimum: 0 }
+        sizeBytes: { type: integer, minimum: 0 }
+        tags: { type: array, items: { type: string } }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+    DatasetInput:
+      type: object
+      required: [name]
+      properties:
+        name: { type: string, maxLength: 160 }
+        description: { type: string, maxLength: 4000 }
+        uri: { type: string, maxLength: 2048 }
+        format: { type: string, maxLength: 32 }
+        sampleCount: { type: integer, minimum: 0 }
+        sizeBytes: { type: integer, minimum: 0 }
+        tags: { type: array, maxItems: 32, items: { type: string } }
+    ProjectsResponse:
+      type: object
+      required: [ok, projects]
       properties:
         ok: { const: true }
-        platformEnabled: { type: boolean }
-        drivePlatformEnabled: { type: boolean }
-        policy: { type: [object, "null"], additionalProperties: true }
+        projects: { type: array, items: { $ref: "#/components/schemas/Project" } }
+    ProjectResponse:
+      type: object
+      required: [ok, project]
+      properties:
+        ok: { const: true }
+        project: { $ref: "#/components/schemas/Project" }
+    ProjectDetailResponse:
+      allOf:
+        - $ref: "#/components/schemas/ProjectResponse"
+        - type: object
+          properties:
+            datasets: { type: array, items: { $ref: "#/components/schemas/Dataset" } }
+            runs: { type: array, items: { $ref: "#/components/schemas/Run" } }
+    RunComparisonResponse:
+      type: object
+      required: [ok, projectId, runs, comparison]
+      properties:
+        ok: { const: true }
+        projectId: { type: string }
+        runs: { type: array, items: { $ref: "#/components/schemas/Run" } }
+        comparison: { type: array, items: { type: object, additionalProperties: true } }
+    DatasetsResponse:
+      type: object
+      required: [ok, datasets]
+      properties:
+        ok: { const: true }
+        datasets: { type: array, items: { $ref: "#/components/schemas/Dataset" } }
+    DatasetResponse:
+      type: object
+      required: [ok, dataset]
+      properties:
+        ok: { const: true }
+        dataset: { $ref: "#/components/schemas/Dataset" }
+    SsoLoginRequest:
+      type: object
+      required: [method]
+      properties:
+        method:
+          type: string
+          enum: [account, sms, email]
+          description: Only whitelisted fields are relayed upstream; everything else is dropped.
+        userName: { type: string, maxLength: 4096 }
+        password: { type: string, maxLength: 4096, description: Relayed to the Studio account center, never stored. }
+        mobile: { type: string, maxLength: 4096 }
+        email: { type: string, maxLength: 4096 }
+        code: { type: string, maxLength: 4096 }
+        emailcode: { type: string, maxLength: 4096 }
+    SsoSessionResponse:
+      type: object
+      required: [ok, identity]
+      properties:
+        ok: { const: true }
+        identity:
+          type: object
+          required: [accountId]
+          properties:
+            accountId: { type: string }
+            displayName: { type: string }
+            email: { type: string }
+        sessionExpiresAt: { type: string }
+        loginRelay:
+          type: object
+          properties:
+            configured: { type: boolean }
+            loginPageUrl: { type: string }
     StationHealthResponse:
       type: object
       required: [ok, device, agent, cameraSupported]
@@ -762,6 +1197,18 @@ components:
               boardPlatform: { type: [string, "null"] }
               boardModel: { type: [string, "null"] }
               connectionMode: { type: [string, "null"] }
+    BoardPolicyResponse:
+      type: object
+      required: [ok, platformEnabled, drivePlatformEnabled, policy]
+      properties:
+        ok: { const: true }
+        platformEnabled: { type: boolean }
+        drivePlatformEnabled: { type: boolean }
+        policy:
+          oneOf:
+            - type: object
+              additionalProperties: true
+            - type: "null"
     DriveCommand:
       type: object
       required: [linear, angular, durationSec]
@@ -975,10 +1422,30 @@ components:
         deviceId: { type: string }
         targetPlatform: { type: string }
         mode: { type: string }
-        status: { type: string }
+        status: { type: string, enum: [planned, running, ready, blocked, failed, completed, cancelled] }
         summary: { type: string }
         compatibility: { $ref: "#/components/schemas/Compatibility" }
         steps: { type: array, items: { type: object, additionalProperties: true } }
+        history:
+          type: array
+          items:
+            type: object
+            required: [id, type, status, summary, createdAt]
+            properties:
+              id: { type: string }
+              type: { type: string, enum: [created, status_changed, preflight, cancelled, version_switched, updated] }
+              status: { type: string }
+              summary: { type: string }
+              createdAt: { type: string, format: date-time }
+        verification:
+          type: object
+          required: [passed, checkedAt]
+          properties:
+            passed: { type: boolean }
+            checkedAt: { type: string, format: date-time }
+            checks: { type: object, additionalProperties: { type: [string, number, "null"] } }
+            mock: { type: boolean }
+        versionSwitchFrom: { type: string }
         createdAt: { type: string, format: date-time }
         updatedAt: { type: string, format: date-time }
     TelemetrySample:
@@ -1009,6 +1476,64 @@ components:
         - type: object
           required: [runId]
           properties: { runId: { type: string } }
+    WorkspaceSummaryResponse:
+      type: object
+      required: [ok, schemaVersion, generatedAt, counts, latest]
+      properties:
+        ok: { const: true }
+        schemaVersion: { type: integer, const: 1 }
+        generatedAt: { type: string, format: date-time }
+        counts:
+          type: object
+          required: [models, runs, activeRuns, deployments, activeDeployments, devices, connectedDevices, detectedDevices, projects, datasets]
+          properties:
+            models: { type: integer, minimum: 0 }
+            runs: { type: integer, minimum: 0 }
+            activeRuns: { type: integer, minimum: 0 }
+            deployments: { type: integer, minimum: 0 }
+            activeDeployments: { type: integer, minimum: 0 }
+            devices: { type: integer, minimum: 0 }
+            connectedDevices: { type: integer, minimum: 0 }
+            detectedDevices: { type: integer, minimum: 0 }
+            projects: { type: integer, minimum: 0 }
+            datasets: { type: integer, minimum: 0 }
+        latest:
+          type: object
+          required: [run, deployment]
+          properties:
+            run:
+              oneOf:
+                - $ref: "#/components/schemas/WorkspaceRunSummary"
+                - type: "null"
+            deployment:
+              oneOf:
+                - $ref: "#/components/schemas/WorkspaceDeploymentSummary"
+                - type: "null"
+    WorkspaceRunSummary:
+      type: object
+      required: [id, modelId, backend, status, summary, createdAt]
+      properties:
+        id: { type: string }
+        modelId: { type: string }
+        taskId: { type: string }
+        backend: { type: string, enum: [browser, local, robogo, contract] }
+        status: { type: string }
+        summary: { type: string }
+        createdAt: { type: string, format: date-time }
+        finishedAt: { type: string, format: date-time }
+    WorkspaceDeploymentSummary:
+      type: object
+      required: [id, modelId, deviceId, targetPlatform, mode, status, summary, createdAt, updatedAt]
+      properties:
+        id: { type: string }
+        modelId: { type: string }
+        deviceId: { type: string }
+        targetPlatform: { type: string }
+        mode: { type: string, enum: [preflight, canary, live] }
+        status: { type: string }
+        summary: { type: string }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
     OverviewResponse:
       type: object
       required: [ok, schemaVersion, productProfiles, selectedProductId, models, runs, deployments, devices, integrations]

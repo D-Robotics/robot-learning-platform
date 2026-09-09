@@ -1,0 +1,18 @@
+{
+  "schemaVersion": 1,
+  "id": "rdk-originbot",
+  "displayName": "RDK OriginBot",
+  "board": { "platform": "rdk-x5", "family": "originbot", "model": "OriginBot" },
+  "ros": { "topics": {
+    "imu": { "name": "/imu", "type": "sensor_msgs/msg/Imu", "required": true },
+    "odom": { "name": "/odom", "type": "nav_msgs/msg/Odometry", "required": true },
+    "battery": { "name": "/originbot_status", "type": "originbot_msgs/msg/OriginbotStatus", "field": "battery_voltage", "required": false },
+    "cmdVel": { "name": "/cmd_vel", "type": "geometry_msgs/msg/Twist", "required": true }
+  }},
+  "actuator": { "kind": "diff-drive", "commandTopic": "/cmd_vel", "messageType": "geometry_msgs/msg/Twist", "linearAxis": "x", "angularAxis": "z", "maxLinear": 0.3, "maxAngular": 1.0, "watchdogMs": 500 },
+  "runtime": { "decisionHz": 10, "actionProjection": "paired" },
+  "safety": { "maxLinear": 0.3, "maxAngular": 1.0, "sensorStallSec": 0.5 },
+  "policy": { "observationAdapterId": "originbot-imu-odom-v1", "actionAdapterId": "originbot-twist-v1", "observationSize": 8, "actionSize": 2 },
+  "capabilities": ["imu", "odom", "battery", "twist", "cpu-onnx", "camera-devices"],
+  "provenance": { "kind": "template", "mock": true, "note": "OriginBot adapter contract; validate against the connected board before live use." }
+}

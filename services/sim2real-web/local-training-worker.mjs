@@ -484,7 +484,7 @@ export function createLocalTrainingWorkerServer() {
             error: error?.errorCode || 'worker_configuration_invalid',
             message: text(error?.message) || '训练引擎配置无效。',
             cuda: null,
-            contracts: ['microduck-policy-v1', 'rdk-duck-policy-v1'],
+            contracts: ['microduck-policy-v1', 'rdk-duck-policy-v1', 'originbot-policy-v1'],
           });
           return;
         }
@@ -497,7 +497,7 @@ export function createLocalTrainingWorkerServer() {
           activeJobs: activeJobs.size,
           queuedJobs: queuedJobs.length,
           cuda: null,
-          contracts: ['microduck-policy-v1', 'rdk-duck-policy-v1'],
+          contracts: ['microduck-policy-v1', 'rdk-duck-policy-v1', 'originbot-policy-v1'],
         });
         return;
       }

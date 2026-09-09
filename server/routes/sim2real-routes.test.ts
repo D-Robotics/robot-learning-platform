@@ -120,6 +120,40 @@ function vector(size: number, value: number): number[] {
 }
 
 describe('Sim2Real HTTP routes', () => {
+  it('creates an owner-scoped project and compares its experiment runs', async () => {
+    const router = await fixture();
+    const dataset = await invoke(router, 'post', '/api/sim2real/datasets', {
+      body: { name: 'walk demos', format: 'jsonl', sampleCount: 24 },
+    });
+    expect(dataset.statusCode).toBe(201);
+    const datasetId = (dataset.body as { dataset: { id: string } }).dataset.id;
+    const project = await invoke(router, 'post', '/api/sim2real/projects', {
+      body: { name: 'Walk policy', slug: 'walk-policy', datasetIds: [datasetId] },
+    });
+    expect(project.statusCode).toBe(201);
+    const projectId = (project.body as { project: { id: string } }).project.id;
+    const run = await invoke(router, 'post', '/api/sim2real/runs', {
+      body: { modelId: BUILTIN_MICRODUCK_MODEL.id, backend: 'contract', projectId, experimentId: 'baseline', label: 'Baseline' },
+    });
+    expect(run.statusCode).toBe(201);
+    const compare = await invoke(router, 'get', '/api/sim2real/projects/:id/runs/compare', { params: { id: projectId } });
+    expect(compare.statusCode).toBe(200);
+    expect(compare.body).toMatchObject({ ok: true, projectId, comparison: [expect.objectContaining({ experimentId: 'baseline', label: 'Baseline' })] });
+  });
+
+  it('does not allow a run to reference another owner project', async () => {
+    const router = await fixture();
+    const project = await invoke(router, 'post', '/api/sim2real/projects', { body: { name: 'Private project', slug: 'private-project' } });
+    const projectId = (project.body as { project: { id: string } }).project.id;
+    const otherRouter = createSim2RealRouter({ auth: {
+      ...({} as Sim2RealAuthPort),
+      isMultiUserDeployment: () => true,
+      resolvePrincipal: () => ({ accountId: 'other' }),
+      resolveAccessToken: () => undefined,
+    } });
+    const run = await invoke(otherRouter, 'post', '/api/sim2real/runs', { body: { modelId: BUILTIN_MICRODUCK_MODEL.id, backend: 'contract', projectId } });
+    expect(run.statusCode).toBe(404);
+  });
   it('registers the versioned Duck prefix for core and telemetry routes', async () => {
     await fixture();
     const router = createSim2RealRouter({}, { prefix: '/api/v1/duck' });
@@ -182,6 +216,41 @@ describe('Sim2Real HTTP routes', () => {
     const deployments = await invoke(router, 'get', '/api/sim2real/deployments');
     expect(deployments.statusCode).toBe(200);
     expect(deployments.body).toMatchObject({ ok: true, deployments: [] });
+  });
+
+  it('serves a lightweight owner-scoped workspace summary', async () => {
+    const router = await fixture();
+    const registered = await invoke(router, 'post', '/api/sim2real/models', {
+      body: { manifest: userManifest() },
+    });
+    const modelId = (registered.body as { model: { id: string } }).model.id;
+    const createdRun = await invoke(router, 'post', '/api/sim2real/runs', {
+      body: { modelId, backend: 'contract', taskId: 'walk' },
+    });
+    expect(createdRun.statusCode).toBe(201);
+
+    const response = await invoke(router, 'get', '/api/sim2real/workspace-summary');
+    expect(response.statusCode).toBe(200);
+    expect(response.body).toMatchObject({
+      ok: true,
+      counts: {
+        models: 2,
+        runs: 1,
+        activeRuns: 0,
+        deployments: 0,
+        devices: 0,
+      },
+      latest: {
+        run: {
+          modelId,
+          taskId: 'walk',
+          status: 'completed',
+        },
+        deployment: null,
+      },
+    });
+    expect(JSON.stringify(response.body)).not.toContain('observationLayout');
+    expect(JSON.stringify(response.body)).not.toContain('integrations');
   });
 
   it('validates and registers metadata, then records a contract-only run', async () => {

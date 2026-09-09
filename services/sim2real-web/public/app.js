@@ -17,6 +17,14 @@ const PRODUCT_PROFILES = Object.freeze({
     contractId: CONTRACT_ID,
     simulatorPath: SIMULATOR_PATH,
   },
+  originbot: {
+    id: 'originbot',
+    displayName: 'OriginBot',
+    projectName: 'OriginBot · X5 Mobile',
+    kitName: 'RDK X5 + OriginBot',
+    contractId: 'originbot-policy-v1',
+    simulatorPath: '',
+  },
   'rdk-duck': {
     id: 'rdk-duck',
     displayName: 'RDK Duck',
@@ -199,12 +207,17 @@ function renderContextLive() {
 
 const state = {
   overview: null,
+  workspaceSummary: null,
+  projects: [],
+  datasets: [],
   productProfiles: null,
   model: null,
   compatibility: [],
   validation: null,
   selectedModelId: '',
   selectedDeviceId: '',
+  selectedComputeResourceId: '',
+  computeResourceEditingId: '',
   activeDeployment: null,
   loading: false,
   serviceError: false,
@@ -242,6 +255,125 @@ const state = {
     log: [],
   },
 };
+
+const WORKSPACE_PREF_KEY = 'rdk-duck-lab-workspace-context';
+
+function saveWorkspaceContext() {
+  try {
+    window.localStorage?.setItem(
+      WORKSPACE_PREF_KEY,
+      JSON.stringify({
+        productId: state.productId,
+        taskId: state.taskId,
+        modelId: state.selectedModelId,
+        deviceId: state.selectedDeviceId,
+        savedAt: new Date().toISOString(),
+      }),
+    );
+  } catch {
+    // Local persistence is best-effort in private browsing contexts.
+  }
+}
+
+function workspaceSummaryData() {
+  const remote = state.workspaceSummary;
+  const runs = state.overview?.runs || [];
+  const deployments = state.overview?.deployments || [];
+  const latestRun = remote?.latest?.run || runs.slice().sort((a, b) => String(b.createdAt || '').localeCompare(String(a.createdAt || '')))[0] || null;
+  const latestDeployment = remote?.latest?.deployment || deployments.slice().sort((a, b) => String(b.updatedAt || b.createdAt || '').localeCompare(String(a.updatedAt || a.createdAt || '')))[0] || null;
+  return {
+    counts: remote?.counts || {
+      models: state.overview?.models?.length || 0,
+      runs: runs.length,
+      activeRuns: runs.filter((run) => isActiveRunStatus(run.status)).length,
+      deployments: deployments.length,
+      activeDeployments: deployments.filter((item) => ['planned', 'running'].includes(String(item.status || '').toLowerCase())).length,
+      devices: state.overview?.devices?.length || 0,
+      connectedDevices: (state.overview?.devices || []).filter((device) => device.status === 'connected').length,
+    },
+    latestRun,
+    latestDeployment,
+    datasets: state.datasets || [],
+  };
+}
+
+function renderProjectWorkspace() {
+  const data = workspaceSummaryData();
+  const counts = data.counts || {};
+  const run = data.latestRun;
+  const deployment = data.latestDeployment;
+  const modelCount = Number(counts.models || 0);
+  setText('workspace-asset-count', `${modelCount} 个模型`);
+  setText('workspace-asset-meta', modelCount ? '含 manifest 与运行时契约' : '登记 manifest 后可追溯');
+  if (run) {
+    setText('workspace-latest-run', statusLabel(run.status));
+    setText('workspace-latest-run-meta', `${run.summary || run.taskId || run.backend || '最近一次运行'} · ${formatDate(run.createdAt)}`);
+  } else {
+    setText('workspace-latest-run', '暂无运行');
+    setText('workspace-latest-run-meta', '从仿真或训练开始');
+  }
+  const hasTelemetry = Boolean(currentTelemetry());
+  const datasetCount = data.datasets.length;
+  setText('workspace-dataset-count', hasTelemetry ? '已有遥测证据' : datasetCount ? `${datasetCount} 个数据集` : '等待遥测');
+  setText('workspace-dataset-meta', hasTelemetry ? `${currentTelemetry()?.summary?.sampleCount || 0} 帧 · 可进入评测` : datasetCount ? '可在评测中复用' : '导入证据后生成摘要');
+  if (deployment) {
+    setText('workspace-deploy-status', statusLabel(deployment.status));
+    setText('workspace-deploy-meta', `${deployment.targetPlatform || 'RDK X5'} · ${formatDate(deployment.updatedAt || deployment.createdAt)}`);
+  } else {
+    setText('workspace-deploy-status', '尚未部署');
+    setText('workspace-deploy-meta', counts.devices ? '目标板卡已登记，等待预检' : '登记目标板卡后开始');
+  }
+  const recentRoot = $('workspace-recent-list');
+  if (recentRoot) {
+    const recent = [
+      ...(state.overview?.runs || []).map((item) => Object.assign({ kindLabel: '运行' }, item)),
+      ...(state.overview?.deployments || []).map((item) => Object.assign({ kindLabel: '部署' }, item)),
+    ].sort((a, b) => String(b.createdAt || b.updatedAt || '').localeCompare(String(a.createdAt || a.updatedAt || ''))).slice(0, 3);
+    recentRoot.replaceChildren();
+    if (!recent.length) {
+      recentRoot.innerHTML = '<span class="empty-inline">还没有活动。完成一次仿真、训练或预检后会显示在这里。</span>';
+    } else {
+      for (const item of recent) {
+        const row = document.createElement('button');
+        row.type = 'button';
+        row.className = 'workspace-recent-item';
+        row.dataset.workspaceView = item.kindLabel === '部署' ? 'deploy' : 'records';
+        row.innerHTML = `<span class="workspace-recent-dot ${stateClass(item.status)}"></span><span class="workspace-recent-copy"><strong>${escapeHtml(item.kindLabel)} · ${escapeHtml(item.summary || item.taskId || item.backend || item.mode || '状态更新')}</strong><small>${escapeHtml(statusLabel(item.status))} · ${escapeHtml(formatDate(item.createdAt || item.updatedAt))}</small></span><span aria-hidden="true">→</span>`;
+        recentRoot.append(row);
+      }
+    }
+  }
+  const saved = $('workspace-last-saved');
+  if (saved) saved.textContent = `最近同步 ${formatDate(state.workspaceSummary?.generatedAt || new Date().toISOString())}`;
+  renderDeploymentTimeline();
+}
+
+function renderDeploymentTimeline() {
+  const root = $('deploy-timeline-list');
+  if (!root) return;
+  const model = selectedModel();
+  const device = selectedDevice();
+  const deployment = state.activeDeployment || deploymentsForCurrentModel().find((item) => item.modelId === model?.id && item.deviceId === device?.id);
+  const latest = latestRun();
+  const evidence = currentTelemetry();
+  const entries = [
+    { label: '模型契约', detail: model ? `${modelLabel(model)} 已选定` : '尚未选择模型', state: model ? 'done' : 'pending' },
+    { label: '训练 / 评测证据', detail: evidence ? '遥测已绑定当前工作区' : latest ? statusLabel(latest.status) : '等待运行结果', state: evidence ? 'done' : latest?.status === 'completed' ? 'attention' : 'pending' },
+    { label: '目标板卡', detail: device ? `${device.name || device.id} · ${device.status || '待连接'}` : '尚未选择板卡', state: device ? 'done' : 'pending' },
+    { label: '只读预检', detail: deployment ? statusLabel(deployment.status) : '生成计划后执行', state: deployment && ['ready', 'completed'].includes(String(deployment.status || '')) ? 'done' : deployment ? 'attention' : 'pending' },
+  ];
+  root.replaceChildren();
+  for (const entry of entries) {
+    const item = document.createElement('li');
+    item.className = `deploy-timeline-item is-${entry.state}`;
+    item.innerHTML = `<span class="deploy-timeline-marker">${entry.state === 'done' ? '✓' : entry.state === 'attention' ? '!' : '·'}</span><span><strong>${escapeHtml(entry.label)}</strong><small>${escapeHtml(entry.detail)}</small></span>`;
+    root.append(item);
+  }
+  const active = deployment ? statusLabel(deployment.status) : '等待预检';
+  setText('deploy-timeline-status', active);
+  setText('deploy-flow-caption', deployment ? `更新于 ${formatDate(deployment.updatedAt || deployment.createdAt)}` : '按证据推进');
+  $('deploy-recovery-note')?.toggleAttribute('hidden', !deployment || !['failed', 'blocked'].includes(String(deployment.status || '').toLowerCase()));
+}
 
 let overviewPollTimer = null;
 const runStatusFailures = new Map();
@@ -680,6 +812,7 @@ function renderSelects() {
   const productSelect = $('product-select');
   const modelSelect = $('model-select');
   const deviceSelect = $('device-select');
+  const computeSelect = $('compute-resource-select');
   if (!PRODUCT_PROFILES[state.productId]) state.productId = 'microduck';
   if (productSelect) productSelect.value = state.productId;
   if (taskSelect) taskSelect.value = state.taskId;
@@ -689,7 +822,7 @@ function renderSelects() {
       const option = document.createElement('option');
       option.value = '';
       option.textContent =
-        state.productId === 'rdk-duck' ? '暂无 RDK Duck 模型 · 请导入 manifest' : '暂无模型';
+        state.productId === 'rdk-duck' ? '暂无 RDK Duck 模型 · 请导入 manifest' : state.productId === 'originbot' ? '暂无 OriginBot 模型 · 请导入 manifest' : '暂无模型';
       modelSelect.append(option);
     }
     for (const model of models) {
@@ -724,8 +857,96 @@ function renderSelects() {
       deviceSelect.value = state.selectedDeviceId;
     }
   }
+  if (computeSelect) {
+    const resources = state.overview?.computeResources || [];
+    computeSelect.replaceChildren();
+    const defaultOption = document.createElement('option');
+    defaultOption.value = '';
+    defaultOption.textContent = '服务端默认本地 Worker';
+    computeSelect.append(defaultOption);
+    for (const resource of resources) {
+      const option = document.createElement('option');
+      option.value = resource.id;
+      option.textContent = `${resource.name} · ${resource.status === 'online' ? '在线' : resource.status === 'offline' ? '离线' : '未测试'}`;
+      computeSelect.append(option);
+    }
+    if (!resources.some((resource) => resource.id === state.selectedComputeResourceId)) state.selectedComputeResourceId = '';
+    computeSelect.value = state.selectedComputeResourceId;
+  }
   setText('model-count', models.length + ' 个 ' + selectedProductProfile().displayName + ' 模型');
   setText('device-count', devices.length + ' 块板卡');
+}
+
+function renderComputeResources() {
+  const resources = state.overview?.computeResources || [];
+  setText('compute-resource-count', resources.length + ' 个');
+  const list = $('compute-resource-list');
+  if (!list) return;
+  list.replaceChildren();
+  if (!resources.length) {
+    const empty = document.createElement('p'); empty.className = 'empty-inline'; empty.textContent = '还没有接入 GPU。添加后可在上方训练资源中选择。'; list.append(empty); return;
+  }
+  for (const resource of resources) {
+    const card = document.createElement('div'); card.className = 'compute-resource-card';
+    const status = resource.status === 'online' ? '在线' : resource.status === 'offline' ? '离线' : '未测试';
+    card.innerHTML = `<div class="compute-resource-card-main"><strong></strong><span class="state-badge state-${resource.status === 'online' ? 'ok' : resource.status === 'offline' ? 'error' : 'neutral'}">${status}</span><small></small></div><div class="compute-resource-card-meta"></div><div class="compute-resource-card-actions"><button type="button" class="button button-ghost button-small" data-resource-action="test">测试连接</button><button type="button" class="button button-ghost button-small" data-resource-action="edit">编辑</button><button type="button" class="button button-ghost button-small" data-resource-action="delete">删除</button></div>`;
+    card.querySelector('strong').textContent = resource.name;
+    card.querySelector('small').textContent = resource.tokenConfigured ? '已配置访问令牌' : '未配置访问令牌';
+    card.querySelector('.compute-resource-card-meta').textContent = [resource.gpuName, resource.cuda ? 'CUDA' : '', resource.runnerUrl, resource.message].filter(Boolean).join(' · ');
+    card.querySelectorAll('[data-resource-action]').forEach((button) => button.addEventListener('click', () => handleComputeResourceAction(button.dataset.resourceAction, resource)));
+    list.append(card);
+  }
+}
+
+function resetComputeResourceForm() {
+  state.computeResourceEditingId = '';
+  $('compute-resource-editing-id').value = '';
+  $('compute-resource-name').value = '';
+  $('compute-resource-url').value = '';
+  $('compute-resource-token').value = '';
+  $('compute-resource-concurrency').value = '1';
+  $('compute-resource-save').textContent = '添加 GPU';
+  $('compute-resource-cancel').hidden = true;
+  setText('compute-resource-form-status', '');
+}
+
+async function handleComputeResourceAction(action, resource) {
+  if (action === 'edit') {
+    state.computeResourceEditingId = resource.id;
+    $('compute-resource-editing-id').value = resource.id;
+    $('compute-resource-name').value = resource.name || '';
+    $('compute-resource-url').value = resource.runnerUrl || '';
+    $('compute-resource-token').value = '';
+    $('compute-resource-concurrency').value = String(resource.maxConcurrentJobs || 1);
+    $('compute-resource-save').textContent = '保存修改'; $('compute-resource-cancel').hidden = false;
+    $('compute-resource-name').focus(); return;
+  }
+  try {
+    if (action === 'delete') {
+      if (!window.confirm('确定删除“' + resource.name + '”？')) return;
+      await request('/sim2real/compute-resources/' + encodeURIComponent(resource.id), { method: 'DELETE' });
+      if (state.selectedComputeResourceId === resource.id) state.selectedComputeResourceId = '';
+      showToast('GPU 资源已删除', 'success');
+    } else if (action === 'test') {
+      setText('compute-resource-form-status', '正在测试连接…');
+      const payload = await request('/sim2real/compute-resources/' + encodeURIComponent(resource.id) + '/test', { method: 'POST' });
+      showToast(payload.connected ? resource.name + ' 已连接' : resource.name + ' 连接失败', payload.connected ? 'success' : 'error');
+    }
+    await loadOverview({ quiet: true });
+  } catch (error) { showToast(error instanceof Error ? error.message : 'GPU 资源操作失败', 'error'); }
+}
+
+async function saveComputeResource(event) {
+  event.preventDefault();
+  const id = $('compute-resource-editing-id').value.trim();
+  const token = $('compute-resource-token').value.trim();
+  const body = { name: $('compute-resource-name').value.trim(), runnerUrl: $('compute-resource-url').value.trim(), maxConcurrentJobs: Number($('compute-resource-concurrency').value || 1) };
+  if (!id || token) body.runnerToken = token;
+  try {
+    setText('compute-resource-form-status', '保存中…');
+    await request(id ? '/sim2real/compute-resources/' + encodeURIComponent(id) : '/sim2real/compute-resources', { method: id ? 'PATCH' : 'POST', body: JSON.stringify(body) });
+    resetComputeResourceForm(); showToast(id ? 'GPU 资源已更新' : 'GPU 资源已添加', 'success'); await loadOverview({ quiet: true });
+  } catch (error) { setText('compute-resource-form-status', error instanceof Error ? error.message : '保存失败'); }
 }
 
 function renderIntegrations() {
@@ -790,6 +1011,7 @@ function renderIntegrations() {
   setText('sidebar-kit-name', profile.kitName);
   setText('kit-card-title', profile.displayName + ' 套件');
   const microduckProduct = profile.id === 'microduck';
+  const originbotProduct = profile.id === 'originbot';
   const kitStatusLabel = $('kit-status-label');
   const kitStatus = kitStatusLabel?.closest('.kit-status');
   if (kitStatusLabel) {
@@ -810,7 +1032,7 @@ function renderIntegrations() {
         : `${profile.displayName} 浏览器仿真适配器`
       : microduckProduct
         ? '等待挂载经过审核的静态 bundle'
-        : '当前产品线等待仿真适配器',
+        : originbotProduct ? 'OriginBot 使用外部仿真/遥测适配器' : '当前产品线等待仿真适配器',
   );
   const robogoRunnerAvailable = simulator.robogo?.available === true;
   const robogoAccountReady = robogo.state === 'ready';
@@ -947,14 +1169,14 @@ function renderIntegrations() {
   const simulatorLiveLabel = $('simulator-live-label');
   const simulatorLiveText = $('simulator-live-text');
   const simulatorRuntimeLabel = $('simulator-runtime-label');
-  if (simulatorTitle) simulatorTitle.textContent = microduckProduct ? 'MicroDuck 仿真场' : 'RDK Duck 仿真适配器';
-  if (simulatorFrame) simulatorFrame.title = microduckProduct ? 'MicroDuck 浏览器仿真' : 'RDK Duck 仿真适配器状态';
+  if (simulatorTitle) simulatorTitle.textContent = microduckProduct ? 'MicroDuck 仿真场' : originbotProduct ? 'OriginBot 仿真适配器' : 'RDK Duck 仿真适配器';
+  if (simulatorFrame) simulatorFrame.title = microduckProduct ? 'MicroDuck 浏览器仿真' : originbotProduct ? 'OriginBot 仿真适配器状态' : 'RDK Duck 仿真适配器状态';
   if (simulatorLiveText) {
     simulatorLiveText.textContent = browserAvailable
       ? '参考策略可用'
       : microduckProduct
         ? '资源待挂载'
-        : '适配器待配置';
+        : originbotProduct ? '使用本地或外部 OriginBot 适配器' : '适配器待配置';
   }
   simulatorLiveLabel?.classList.toggle('is-ready', browserAvailable);
   simulatorLiveLabel?.classList.toggle('is-waiting', !browserAvailable);
@@ -2289,6 +2511,7 @@ function renderEvaluation() {
     String(b.createdAt || '').localeCompare(String(a.createdAt || '')),
   );
   const latest = runs[0] || null;
+  renderRunComparison(runs);
   const metrics = latest?.metrics || {};
   const status = String(latest?.status || '').toLowerCase();
   const mockRun = latest?.mock === true;
@@ -2397,6 +2620,43 @@ function renderEvaluation() {
             ? 'is-error'
             : '');
   }
+}
+
+// A compact, honest comparison view for the last few Runs. It deliberately
+// leaves missing metrics blank and marks protocol/demo runs, so operators can
+// spot a trend without mistaking a receipt for real robot performance.
+function renderRunComparison(runs) {
+  const root = $('run-comparison');
+  if (!root) return;
+  const recent = (runs || []).slice(0, 5);
+  setText('run-comparison-caption', recent.length ? `最近 ${recent.length} 次` : '暂无数据');
+  if (!recent.length) {
+    root.innerHTML = '<div class="empty-inline">完成一次训练或评测后，这里会显示可比较的指标。</div>';
+    return;
+  }
+  const metrics = [
+    { key: 'successRate', label: '成功率', format: (value) => { const v = metricPercent(value); return v == null ? '—' : `${v}%`; } },
+    { key: 'fallRate', label: '跌倒率', format: (value) => { const v = metricPercent(value); return v == null ? '—' : `${v}%`; } },
+    { key: 'reward', label: '平均奖励', format: (value) => formatMetricNumber(value, 2) },
+  ];
+  const values = Object.fromEntries(metrics.map((metric) => [metric.key, recent.map((run) => finiteNumber(run?.metrics?.[metric.key])).filter((value) => value !== null)]));
+  root.innerHTML = recent.map((run, index) => {
+    const metricsHtml = metrics.map((metric) => {
+      const raw = finiteNumber(run?.metrics?.[metric.key]);
+      const all = values[metric.key];
+      let width = 0;
+      if (raw !== null && all.length) {
+        const min = Math.min(...all);
+        const max = Math.max(...all);
+        width = max === min ? 100 : ((raw - min) / (max - min)) * 100;
+        width = Math.max(8, Math.min(100, width));
+      }
+      return `<div class="run-compare-metric"><span>${escapeHtml(metric.label)}</span><div class="run-compare-track"><i style="width:${width}%"></i></div><b>${escapeHtml(raw === null ? '—' : metric.format(raw))}</b></div>`;
+    }).join('');
+    const mock = run.mock === true || run.evaluation?.replay?.source === 'demo-fixture';
+    const title = run.summary || run.taskId || run.backend || `Run ${index + 1}`;
+    return `<div class="run-compare-row"><div class="run-compare-name"><strong>${escapeHtml(title)}</strong><small>${escapeHtml(formatDate(run.createdAt))} · ${escapeHtml(statusLabel(run.status))}${mock ? ' · 演示' : ''}</small></div><div class="run-compare-metrics">${metricsHtml}</div></div>`;
+  }).join('');
 }
 
 // ---- 真机实时对照（评估页，OriginBot 只读遥测 2s 快照） -------------------
@@ -2845,8 +3105,248 @@ function recordCollection() {
   );
 }
 
+/* ------------------------------------------------------------------------- *
+ * Sim2Real Agent 助手
+ *
+ * This is intentionally a presentation layer rather than a second workflow.
+ * Suggestions are derived from the same account-scoped overview used by the
+ * rest of the page, and the only network action exposed here is a read-only
+ * BoardAgent health probe. Keeping the surface data-driven makes it easy to
+ * add new skills later without coupling them to navigation or run submission.
+ * ------------------------------------------------------------------------- */
+const AGENT_COLLAPSED_KEY = 'rdk-duck-lab-agent-collapsed';
+
+function ensureAgentPanelStyles() {
+  if ($('agent-assistant-styles')) return;
+  const style = document.createElement('style');
+  style.id = 'agent-assistant-styles';
+  style.textContent = `
+    .agent-assistant { margin-top: 16px; padding: 18px 20px; border-color: color-mix(in srgb, var(--cyan, #56d4ff) 28%, var(--line, #27354a)); background: linear-gradient(135deg, color-mix(in srgb, var(--panel, #121b2c) 94%, var(--cyan, #56d4ff)), var(--panel, #121b2c)); }
+    .agent-assistant-header, .agent-assistant-title-wrap, .agent-assistant-foot { display: flex; align-items: center; }
+    .agent-assistant-header { justify-content: space-between; gap: 12px; }
+    .agent-assistant-title-wrap { gap: 10px; min-width: 0; }
+    .agent-assistant-title-wrap h2 { margin: 2px 0 0; font-size: 17px; }
+    .agent-assistant-mark { display: grid; place-items: center; width: 30px; height: 30px; border-radius: 9px; background: rgba(86,212,255,.13); color: var(--cyan, #56d4ff); font-size: 17px; }
+    .agent-assistant-mode { margin-left: 4px; padding: 3px 7px; border: 1px solid rgba(116,230,176,.3); border-radius: 999px; color: var(--green, #74e6b0); font-size: 10px; white-space: nowrap; }
+    .agent-assistant-body { margin-top: 14px; }
+    .agent-assistant[data-collapsed="true"] .agent-assistant-body { display: none; }
+    .agent-assistant-lead strong { display: block; font-size: 15px; }
+    .agent-assistant-lead p { max-width: 760px; margin: 5px 0 0; color: var(--muted, #91a4bd); font-size: 13px; line-height: 1.55; }
+    .agent-assistant-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 14px; }
+    .agent-assistant-action { display: inline-flex; align-items: center; min-height: 32px; padding: 7px 11px; border: 1px solid rgba(86,212,255,.28); border-radius: 7px; background: rgba(86,212,255,.06); color: var(--text, #eef5ff); cursor: pointer; font: inherit; font-size: 12px; text-decoration: none; transition: border-color .16s ease, background .16s ease, transform .16s ease; }
+    .agent-assistant-action:hover { border-color: var(--cyan, #56d4ff); background: rgba(86,212,255,.13); transform: translateY(-1px); }
+    .agent-assistant-foot { justify-content: space-between; gap: 10px; margin-top: 15px; padding-top: 11px; border-top: 1px solid color-mix(in srgb, var(--line, #27354a) 80%, transparent); }
+    .agent-assistant-health { color: var(--muted, #91a4bd); font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .agent-assistant-health[data-state="ready"] { color: var(--green, #74e6b0); }
+    .agent-assistant-health[data-state="error"] { color: var(--red, #ff9098); }
+    @media (max-width: 600px) { .agent-assistant { padding: 15px; } .agent-assistant-mode { display: none; } .agent-assistant-foot { align-items: flex-start; } }
+  `;
+  document.head.append(style);
+}
+
+function ensureAgentPanel() {
+  const overview = document.querySelector('[data-view-section="overview"]');
+  if (!overview) return null;
+  ensureAgentPanelStyles();
+  let panel = $('agent-assistant');
+  if (panel) return panel;
+  panel = document.createElement('section');
+  panel.id = 'agent-assistant';
+  panel.className = 'agent-assistant panel';
+  panel.setAttribute('aria-labelledby', 'agent-assistant-title');
+  panel.innerHTML = `
+    <div class="agent-assistant-header">
+      <div class="agent-assistant-title-wrap">
+        <span class="agent-assistant-mark" aria-hidden="true">✦</span>
+        <div>
+          <div class="panel-kicker">SIM2REAL AGENT</div>
+          <h2 id="agent-assistant-title">下一步助手</h2>
+        </div>
+        <span class="agent-assistant-mode">只读建议</span>
+      </div>
+      <button class="button button-ghost button-small agent-assistant-toggle" id="agent-assistant-toggle" type="button" aria-expanded="true">收起</button>
+    </div>
+    <div class="agent-assistant-body" id="agent-assistant-body">
+      <div class="agent-assistant-lead">
+        <strong id="agent-assistant-headline">正在读取工作区…</strong>
+        <p id="agent-assistant-summary">助手会根据当前模型、运行和板卡状态给出下一步建议。</p>
+      </div>
+      <div class="agent-assistant-actions" id="agent-assistant-actions" role="list" aria-label="助手快捷操作"></div>
+      <div class="agent-assistant-foot">
+        <span class="agent-assistant-health" id="agent-assistant-health" role="status" aria-live="polite">板端状态未检查</span>
+        <button class="button button-ghost button-small" id="agent-assistant-check" type="button">检查板端</button>
+      </div>
+    </div>`;
+  const statusGrid = overview.querySelector('#status-grid');
+  (statusGrid || overview.querySelector('.next-card'))?.after(panel);
+  if (!state.agent.collapsed) {
+    try {
+      state.agent.collapsed = window.localStorage?.getItem(AGENT_COLLAPSED_KEY) === '1';
+    } catch {
+      state.agent.collapsed = false;
+    }
+  }
+  panel.addEventListener('click', (event) => {
+    const target = event.target instanceof Element ? event.target.closest('[data-agent-view]') : null;
+    if (target) {
+      event.preventDefault();
+      setView(target.dataset.agentView);
+      return;
+    }
+    const action = event.target instanceof Element ? event.target.closest('[data-agent-action]') : null;
+    if (action?.dataset.agentAction === 'refresh') {
+      void loadOverview();
+    }
+  });
+  $('agent-assistant-toggle')?.addEventListener('click', () => {
+    state.agent.collapsed = !state.agent.collapsed;
+    try {
+      window.localStorage?.setItem(AGENT_COLLAPSED_KEY, state.agent.collapsed ? '1' : '0');
+    } catch {
+      // A private browsing context may not expose localStorage.
+    }
+    renderAgentPanel();
+  });
+  $('agent-assistant-check')?.addEventListener('click', () => {
+    void agentCheckBoard();
+  });
+  return panel;
+}
+
+function agentSuggestionSet() {
+  if (state.authRequired || !state.overview) {
+    return {
+      headline: '登录后开始你的 Sim2Real 迭代',
+      summary: '助手会在工作区加载后，把模型、训练、评测和板卡状态串起来。',
+      actions: [{ label: '登录工作区', view: null, href: '/rdkstudio/' }],
+    };
+  }
+  const model = selectedModel();
+  const device = selectedDevice();
+  const latest = latestRun();
+  const evidence = currentTelemetry();
+  if (!model) {
+    return {
+      headline: '先登记模型契约，再开始训练',
+      summary: '把观测、动作、运行时和制品引用放进一个可追溯 manifest。',
+      actions: [{ label: '去登记模型契约', view: 'contract' }, { label: '查看训练入口', view: 'train' }],
+    };
+  }
+  if (latest && isActiveRunStatus(latest.status)) {
+    return {
+      headline: '训练正在进行，先查看运行状态',
+      summary: `${modelLabel(model)} · ${statusLabel(latest.status)}。完成后再进入评测，避免重复提交。`,
+      actions: [{ label: '查看训练任务', view: 'train' }, { label: '打开运行记录', view: 'records' }],
+    };
+  }
+  if (latest?.status === 'failed') {
+    return {
+      headline: '上一次训练需要处理',
+      summary: latest.summary || '查看失败详情，修复契约或运行后端后再重试。',
+      actions: [{ label: '查看失败详情', view: 'train' }, { label: '检查模型契约', view: 'contract' }],
+    };
+  }
+  if (!evidence && latest && ['completed', 'ready'].includes(String(latest.status))) {
+    return {
+      headline: '训练完成，下一步是评测证据',
+      summary: '先确认成功率、跌倒率和控制延迟，再生成目标板卡的只读预检计划。',
+      actions: [{ label: '进入评测中心', view: 'evaluate' }, { label: '查看训练结果', view: 'records' }],
+    };
+  }
+  if (evidence && !hasReleaseGradeEvidence(evidence, latest)) {
+    return {
+      headline: '已有遥测，补齐真实评测来源',
+      summary: '当前证据还不能推进发布；检查采样率和来源后再绑定正式运行。',
+      actions: [{ label: '查看评测证据', view: 'evaluate' }, { label: '查看安全闸门', view: 'deploy' }],
+    };
+  }
+  if (!device) {
+    return {
+      headline: '选择一块目标板卡，准备只读预检',
+      summary: '发布前会检查设备连接、运行时和模型制品；网页不会直接开启电机。',
+      actions: [{ label: '进入部署预检', view: 'deploy' }, { label: '打开上位机', view: 'station' }],
+    };
+  }
+  return {
+    headline: '可以开始下一轮 Sim2Real 验证',
+    summary: `${modelLabel(model)} → ${device.name || device.id}。先做只读预检，再决定是否进入受控 Canary。`,
+    actions: [{ label: '查看部署闸门', view: 'deploy' }, { label: '打开上位机', view: 'station' }, { label: '查看完整记录', view: 'records' }],
+  };
+}
+
+function renderAgentPanel() {
+  const panel = ensureAgentPanel();
+  if (!panel) return;
+  panel.dataset.collapsed = state.agent.collapsed ? 'true' : 'false';
+  const toggle = $('agent-assistant-toggle');
+  if (toggle) {
+    toggle.textContent = state.agent.collapsed ? '展开' : '收起';
+    toggle.setAttribute('aria-expanded', state.agent.collapsed ? 'false' : 'true');
+  }
+  const suggestion = agentSuggestionSet();
+  setText('agent-assistant-headline', suggestion.headline);
+  setText('agent-assistant-summary', suggestion.summary);
+  const actions = $('agent-assistant-actions');
+  if (actions) {
+    actions.replaceChildren();
+    for (const item of suggestion.actions) {
+      const control = item.href ? document.createElement('a') : document.createElement('button');
+      control.className = 'agent-assistant-action';
+      control.textContent = item.label + '  →';
+      if (item.href) {
+        control.href = item.href;
+        control.target = '_blank';
+        control.rel = 'noreferrer';
+      } else {
+        control.type = 'button';
+        control.dataset.agentView = item.view || 'overview';
+      }
+      actions.append(control);
+    }
+  }
+  const health = $('agent-assistant-health');
+  const boardHealth = state.agent.boardHealth;
+  if (health) {
+    if (state.agent.checkingBoard) {
+      health.textContent = '正在检查板端…';
+      health.dataset.state = 'loading';
+    } else if (boardHealth?.ok) {
+      const name = boardHealth.device?.name || selectedDevice()?.name || '目标板卡';
+      health.textContent = `${name} · 板端在线`;
+      health.dataset.state = 'ready';
+    } else if (boardHealth?.error) {
+      health.textContent = `板端暂不可用 · ${boardHealth.error}`;
+      health.dataset.state = 'error';
+    } else {
+      health.textContent = '板端状态未检查';
+      health.dataset.state = 'idle';
+    }
+  }
+  const check = $('agent-assistant-check');
+  if (check) check.disabled = state.agent.checkingBoard;
+}
+
+async function agentCheckBoard() {
+  if (state.agent.checkingBoard) return;
+  state.agent.checkingBoard = true;
+  renderAgentPanel();
+  try {
+    const payload = await request('/sim2real/board-station/health');
+    state.agent.boardHealth = Object.assign({ ok: true }, payload || {});
+    showToast('板端健康检查完成。', 'success');
+  } catch (error) {
+    const message = error instanceof Error ? error.message : '板端暂不可用';
+    state.agent.boardHealth = { ok: false, error: message.slice(0, 80) };
+    if (!(error instanceof ApiError && error.status === 401)) showToast('板端检查失败：' + message, 'error');
+  } finally {
+    state.agent.checkingBoard = false;
+    renderAgentPanel();
+  }
+}
+
 function renderAll() {
   renderSelects();
+  renderComputeResources();
   renderIntegrations();
   renderContextLive();
   renderModel();
@@ -2859,6 +3359,7 @@ function renderAll() {
   renderEvaluationNext();
   renderReleaseGate();
   renderWorkflowProgress();
+  renderProjectWorkspace();
   renderAgentPanel();
 }
 
@@ -2945,6 +3446,18 @@ async function loadOverview({ quiet = false } = {}) {
       '/sim2real/overview?productId=' + encodeURIComponent(state.productId),
     );
     state.overview = payload;
+    state.selectedComputeResourceId = state.selectedComputeResourceId || '';
+    // The summary is intentionally lightweight and remains useful to future
+    // dashboard surfaces. It is allowed to fail independently from the main
+    // overview so the primary workflow still works on older gateways.
+    const [summaryResult, projectsResult, datasetsResult] = await Promise.allSettled([
+      request('/sim2real/workspace-summary'),
+      request('/sim2real/projects'),
+      request('/sim2real/datasets'),
+    ]);
+    state.workspaceSummary = summaryResult.status === 'fulfilled' ? summaryResult.value : null;
+    state.projects = projectsResult.status === 'fulfilled' && Array.isArray(projectsResult.value?.projects) ? projectsResult.value.projects : [];
+    state.datasets = datasetsResult.status === 'fulfilled' && Array.isArray(datasetsResult.value?.datasets) ? datasetsResult.value.datasets : [];
     state.serviceError = false;
     state.productProfiles = Array.isArray(payload.productProfiles) ? payload.productProfiles : null;
     clearAuthGate();
@@ -3102,6 +3615,7 @@ async function runModel(backend) {
       globalThis.crypto?.randomUUID?.() ||
       `run-${Date.now()}-${Math.random().toString(16).slice(2)}`;
     const body = { modelId: model.id, backend, taskId: state.taskId, idempotencyKey: requestKey };
+    if (backend === 'local' && state.selectedComputeResourceId) body.computeResourceId = state.selectedComputeResourceId;
     const profile = $('training-profile')?.value;
     if ((backend === 'robogo' || backend === 'local') && profile) body.training = { profile };
     const checkpointId = $('resume-checkpoint-id')?.value.trim() || '';
@@ -4065,8 +4579,16 @@ async function stationPolicyLoad() {
 
 async function stationPolicyStart() {
   const direction = Number($('station-policy-direction')?.value ?? 0);
+  const goalXRaw = String($('station-policy-goal-x')?.value ?? '').trim();
+  const goalYRaw = String($('station-policy-goal-y')?.value ?? '').trim();
+  const goalX = goalXRaw === '' ? undefined : Number(goalXRaw);
+  const goalY = goalYRaw === '' ? undefined : Number(goalYRaw);
+  if ((goalX !== undefined && !Number.isFinite(goalX)) || (goalY !== undefined && !Number.isFinite(goalY))) {
+    stationLog('目标点必须是数值（单位：米）', 'error');
+    return;
+  }
   const acknowledged = window.confirm(
-    `即将让 OriginBot 由策略网络驱动运动（方向指令 ${direction.toFixed(1)}）。\n` +
+    `即将让 OriginBot 由策略网络驱动运动（方向指令 ${direction.toFixed(1)}${goalX !== undefined && goalY !== undefined ? `，目标 ${goalX.toFixed(2)}, ${goalY.toFixed(2)} m` : ''}）。\n` +
     '策略输出将被钳制在 0.3 m/s / 1.0 rad/s 内，500ms 无命令底盘自动停车。\n' +
     '请确认机器人周围无障碍物、场地已清空，急停按钮随时可用。',
   );
@@ -4074,7 +4596,11 @@ async function stationPolicyStart() {
   try {
     const payload = await request('/sim2real/board-station/policy/start', {
       method: 'POST',
-      body: JSON.stringify({ direction }),
+      body: JSON.stringify({
+        direction,
+        ...(goalX === undefined ? {} : { goalX }),
+        ...(goalY === undefined ? {} : { goalY }),
+      }),
     });
     if (payload?.ok) {
       stationLog('策略已启动：板端实时推理中（观测→动作→/cmd_vel）', 'ok');
@@ -4301,6 +4827,7 @@ function wireEvents() {
     setView(window.location.hash.slice(1), { updateHash: false }),
   );
   $('refresh-button')?.addEventListener('click', () => loadOverview());
+  wireCommandPalette();
   $('presentation-toggle')?.addEventListener('click', () => {
     setPresentationMode(!document.body.classList.contains('presentation-mode'));
   });
@@ -4328,6 +4855,7 @@ function wireEvents() {
     const next = event.target.value;
     if (!ACTION_TASKS[next]) return;
     state.taskId = next;
+    saveWorkspaceContext();
     try {
       window.localStorage?.setItem('rdk-duck-lab-task', next);
     } catch {
@@ -4346,6 +4874,12 @@ function wireEvents() {
       });
       renderHistory();
     });
+  });
+  document.addEventListener('click', (event) => {
+    const control = event.target instanceof Element ? event.target.closest('[data-workspace-view]') : null;
+    if (!control) return;
+    const view = control.dataset.workspaceView;
+    if (view) setView(view);
   });
   $('record-search')?.addEventListener('input', (event) => {
     state.recordsQuery = String(event.target.value || '');
@@ -4378,6 +4912,7 @@ function wireEvents() {
     state.compatibility = [];
     state.activeDeployment = null;
     state.telemetry = null;
+    saveWorkspaceContext();
     try {
       window.localStorage?.setItem('rdk-duck-lab-product', next);
     } catch {
@@ -4397,14 +4932,22 @@ function wireEvents() {
     state.selectedModelId = event.target.value;
     state.activeDeployment = null;
     state.telemetry = state.telemetry?.modelId === state.selectedModelId ? state.telemetry : null;
+    saveWorkspaceContext();
     renderAll();
     await loadModelDetails();
   });
   $('device-select')?.addEventListener('change', (event) => {
     state.selectedDeviceId = event.target.value;
     state.activeDeployment = null;
+    saveWorkspaceContext();
     renderAll();
   });
+  $('compute-resource-select')?.addEventListener('change', (event) => {
+    state.selectedComputeResourceId = event.target.value;
+    renderAll();
+  });
+  $('compute-resource-form')?.addEventListener('submit', saveComputeResource);
+  $('compute-resource-cancel')?.addEventListener('click', resetComputeResourceForm);
   $('template-button')?.addEventListener('click', loadManifestTemplate);
   $('manifest-file-input')?.addEventListener('change', importManifestFile);
   $('validate-button')?.addEventListener('click', validateEditor);
@@ -4475,6 +5018,75 @@ function wireEvents() {
     executePreflight();
   });
   wireStationEvents();
+}
+
+const COMMANDS = [
+  { id: 'overview', label: '打开总览', hint: '查看项目进度与工作区状态', view: 'overview' },
+  { id: 'simulate', label: '开始仿真与录制', hint: '打开浏览器仿真', view: 'simulate' },
+  { id: 'train', label: '查看训练', hint: '选择模型与训练后端', view: 'train' },
+  { id: 'evaluate', label: '打开评测中心', hint: '查看指标与遥测证据', view: 'evaluate' },
+  { id: 'deploy', label: '准备部署', hint: '检查板卡与模型契约', view: 'deploy' },
+  { id: 'records', label: '查看运行记录', hint: '搜索 Run、部署与遥测', view: 'records' },
+  { id: 'station', label: '打开设备工作台', hint: '查看 X5 连接与只读诊断', view: 'station' },
+  { id: 'refresh', label: '刷新工作区', hint: '重新加载项目状态与设备信息', action: () => loadOverview() },
+];
+
+function wireCommandPalette() {
+  const dialog = $('command-palette');
+  const input = $('command-palette-input');
+  const list = $('command-palette-list');
+  if (!dialog || !input || !list) return;
+  let activeIndex = 0;
+  const render = () => {
+    const query = input.value.trim().toLowerCase();
+    const matches = COMMANDS.filter((command) => `${command.label} ${command.hint}`.toLowerCase().includes(query));
+    activeIndex = Math.max(0, Math.min(activeIndex, matches.length - 1));
+    list.replaceChildren();
+    if (!matches.length) {
+      list.innerHTML = '<div class="command-palette-empty">没有匹配的操作</div>';
+      return;
+    }
+    matches.forEach((command, index) => {
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.className = 'command-palette-item' + (index === activeIndex ? ' is-active' : '');
+      button.setAttribute('role', 'option');
+      button.setAttribute('aria-selected', index === activeIndex ? 'true' : 'false');
+      button.innerHTML = `<span class="command-palette-item-icon">${command.view ? '↗' : '↻'}</span><span><strong>${escapeHtml(command.label)}</strong><small>${escapeHtml(command.hint)}</small></span><kbd>${command.view ? '打开' : '执行'}</kbd>`;
+      button.addEventListener('click', () => executeCommand(command));
+      list.append(button);
+    });
+  };
+  const open = () => {
+    input.value = '';
+    activeIndex = 0;
+    render();
+    if (typeof dialog.showModal === 'function') dialog.showModal();
+    else dialog.setAttribute('open', '');
+    window.requestAnimationFrame(() => input.focus());
+  };
+  const close = () => {
+    if (typeof dialog.close === 'function' && dialog.open) dialog.close();
+    else dialog.removeAttribute('open');
+  };
+  const executeCommand = (command) => {
+    close();
+    if (command.view) setView(command.view);
+    else command.action?.();
+  };
+  $('command-palette-close')?.addEventListener('click', close);
+  dialog.addEventListener('click', (event) => { if (event.target === dialog) close(); });
+  input.addEventListener('input', () => { activeIndex = 0; render(); });
+  input.addEventListener('keydown', (event) => {
+    const query = input.value.trim().toLowerCase();
+    const matches = COMMANDS.filter((command) => `${command.label} ${command.hint}`.toLowerCase().includes(query));
+    if (event.key === 'ArrowDown') { event.preventDefault(); activeIndex = Math.min(activeIndex + 1, Math.max(0, matches.length - 1)); render(); }
+    else if (event.key === 'ArrowUp') { event.preventDefault(); activeIndex = Math.max(0, activeIndex - 1); render(); }
+    else if (event.key === 'Enter' && matches[activeIndex]) { event.preventDefault(); executeCommand(matches[activeIndex]); }
+  });
+  document.addEventListener('keydown', (event) => {
+    if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'k') { event.preventDefault(); open(); }
+  });
 }
 
 wireEvents();

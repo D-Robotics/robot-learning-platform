@@ -24,7 +24,9 @@
     "d-robotics"
   ],
   "type": "module",
-  "engines": { "node": "^20.19.0 || ^22.12.0 || >=24.0.0" },
+  "engines": {
+    "node": "^20.19.0 || ^22.12.0 || >=24.0.0"
+  },
   "scripts": {
     "dev:sim2real": "node scripts/run-with-env.mjs node --import tsx/esm services/sim2real-web/server.ts",
     "dev:mock-worker": "node scripts/run-with-env.mjs node services/sim2real-web/mock-local-worker.mjs",
@@ -34,6 +36,7 @@
     "demo:starter": "node scripts/demo-starter.mjs",
     "doctor": "node scripts/doctor.mjs",
     "smoke:sim2real-local": "node scripts/sim2real-local-e2e-smoke.mjs",
+    "verify:api-contract": "node scripts/verify-api-contract.mjs",
     "build": "tsc -p tsconfig.build.json && npm run build:assets",
     "build:assets": "node scripts/copy-server-assets.mjs",
     "test": "vitest run --configLoader runner",
@@ -46,8 +49,16 @@
     "verify:board-drive": "python3 services/sim2real-web/board-agent-drive.test.py",
     "verify:policy-runtime": "python3 scripts/verify-policy-runtime-safety.py",
     "verify:hardware-profiles": "node scripts/verify-hardware-adapters.mjs && node scripts/verify-hardware-profile.mjs",
+    "verify:real-loop": "node scripts/verify-real-loop.mjs",
     "verify:starter-engine": "node scripts/verify-starter-engine.mjs",
-    "verify": "npm run verify:ui && npm run verify:recorder && npm run verify:deployment && npm run verify:examples && npm run verify:local-worker && npm run verify:board-agent && npm run verify:board-drive && npm run verify:policy-runtime && npm run verify:hardware-profiles && npm run verify:starter-engine && npm run smoke:sim2real-local && node services/sim2real-web/server-wiring.spec.mjs && npm test"
+    "verify": "npm run verify:ui && npm run verify:task-templates && npm run verify:originbot-env && npm run verify:originbot-telemetry && npm run verify:recorder && npm run verify:deployment && npm run verify:examples && npm run verify:local-worker && npm run verify:board-agent && npm run verify:board-drive && npm run verify:policy-runtime && npm run verify:hardware-profiles && npm run verify:real-loop && npm run verify:starter-engine && npm run build && npm run verify:api-contract && npm run smoke:sim2real-local && node services/sim2real-web/server-wiring.spec.mjs && npm test",
+    "verify:originbot-env": "python3 engines/rdk-rl-env/test_originbot_env.py",
+    "verify:task-templates": "node scripts/verify-task-templates.mjs",
+    "create:adapter": "node scripts/create-robot-adapter.mjs",
+    "demo:originbot": "node scripts/demo-originbot.mjs",
+    "verify:originbot-telemetry": "node scripts/verify-originbot-telemetry.mjs",
+    "verify:live-board": "node scripts/verify-live-board.mjs",
+    "train:originbot": "python3 engines/rdk-rl-env/train_originbot.py"
   },
   "dependencies": {
     "express": "^5.2.1"

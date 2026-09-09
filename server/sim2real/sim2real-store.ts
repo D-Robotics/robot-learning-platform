@@ -4,14 +4,20 @@ import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
 
 import type {
+  Sim2RealDeploymentEventType,
   Sim2RealDeploymentRecord,
   Sim2RealEvaluationSummary,
   Sim2RealModelManifest,
   Sim2RealModelRecord,
+  Sim2RealProjectRecord,
+  Sim2RealDatasetRecord,
+  Sim2RealComputeResource,
   Sim2RealRunRecord,
   Sim2RealTelemetryRecord,
 } from '../../shared/sim2real.js';
 import { BUILTIN_MICRODUCK_MODEL } from '../../shared/sim2real.js';
+import { Sim2RealError } from './sim2real-errors.js';
+import { emitSim2RealEvent } from './sim2real-events.js';
 import { isWebCloudDeployment, resolveDataDir } from './standalone-adapters.js';
 
 const LEDGER_VERSION = 1 as const;
@@ -21,6 +27,8 @@ const MODEL_CAP = 100;
 const RUN_CAP = 10_000;
 const PUBLIC_RUN_LIST_CAP = 200;
 const DEPLOYMENT_CAP = 200;
+const PROJECT_CAP = 100;
+const DATASET_CAP = 500;
 export const DEFAULT_ACTIVE_RUN_CAP = 4;
 // A reservation that never receives a runner id (for example, a process
 // crash between submit and ledger update) must not occupy an account slot
@@ -84,6 +92,9 @@ type StoredDeployment = Sim2RealDeploymentRecord & {
   _idempotencyKey?: string;
   _requestFingerprint?: string;
 };
+type StoredProject = Sim2RealProjectRecord & { owner?: string };
+type StoredDataset = Sim2RealDatasetRecord & { owner?: string };
+type StoredComputeResource = Sim2RealComputeResource & { owner?: string; runnerToken?: string };
 type StoredTelemetry = Sim2RealTelemetryRecord & {
   owner?: string;
   /** Internal idempotency fingerprint; never returned to clients. */
@@ -96,6 +107,9 @@ interface Sim2RealLedger {
   runs: StoredRun[];
   deployments: StoredDeployment[];
   telemetry: StoredTelemetry[];
+  projects: StoredProject[];
+  datasets: StoredDataset[];
+  computeResources: StoredComputeResource[];
 }
 
 export interface Sim2RealStorageInfo {
@@ -170,7 +184,7 @@ let readinessCache: {
 let writeChain: Promise<void> = Promise.resolve();
 
 function ledgerQuotaError(size: number): Error {
-  const error = new Error('sim2real_storage_quota_exceeded');
+  const error = new Sim2RealError('sim2real_storage_quota_exceeded');
   // Keep the public error code stable while retaining a useful diagnostic for
   // logs/debuggers without exposing filesystem details to API callers.
   error.cause = new Error(`ledger size ${size} exceeds ${SIM2REAL_LEDGER_MAX_BYTES} bytes`);
@@ -182,7 +196,16 @@ function assertLedgerSize(size: number): void {
 }
 
 function emptyLedger(): Sim2RealLedger {
-  return { version: LEDGER_VERSION, models: [], runs: [], deployments: [], telemetry: [] };
+  return {
+    version: LEDGER_VERSION,
+    models: [],
+    runs: [],
+    deployments: [],
+    telemetry: [],
+    projects: [],
+    datasets: [],
+    computeResources: [],
+  };
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -238,10 +261,40 @@ function validLedgerShape(value: Record<string, unknown>): boolean {
     return false;
   }
   if ((value.deployments as unknown[]).length > DEPLOYMENT_CAP) return false;
+  if (!(value.deployments as Array<Record<string, unknown>>).every((deployment) => {
+    if (deployment.history === undefined) return true;
+    return (
+      Array.isArray(deployment.history) &&
+      deployment.history.length <= 100 &&
+      deployment.history.every(
+        (event) =>
+          isRecord(event) &&
+          ['id', 'type', 'status', 'summary', 'createdAt'].every(
+            (key) => typeof event[key] === 'string' && String(event[key]).trim(),
+          ),
+      )
+    );
+  })) return false;
   if (!validRecordArray(value.telemetry, ['id', 'runId', 'source', 'receivedAt'], 'samples')) {
     return false;
   }
   if ((value.telemetry as unknown[]).length > SIM2REAL_TELEMETRY_RECORD_CAP) return false;
+  if (value.projects !== undefined && !Array.isArray(value.projects)) return false;
+  if (value.datasets !== undefined && !Array.isArray(value.datasets)) return false;
+  if (value.computeResources !== undefined && !Array.isArray(value.computeResources)) return false;
+  if (Array.isArray(value.projects) && value.projects.length > PROJECT_CAP) return false;
+  if (Array.isArray(value.datasets) && value.datasets.length > DATASET_CAP) return false;
+  if (Array.isArray(value.computeResources) && value.computeResources.length > 100) return false;
+  if (Array.isArray(value.projects)) {
+    if (!validRecordArray(value.projects, ['id', 'name', 'slug', 'createdAt', 'updatedAt'])) return false;
+    if (!(value.projects as Array<Record<string, unknown>>).every((item) =>
+      Array.isArray(item.modelIds) && Array.isArray(item.datasetIds) &&
+      (item.modelIds as unknown[]).every((id) => typeof id === 'string') &&
+      (item.datasetIds as unknown[]).every((id) => typeof id === 'string'),
+    )) return false;
+  }
+  if (Array.isArray(value.datasets) && !validRecordArray(value.datasets, ['id', 'name', 'createdAt', 'updatedAt'])) return false;
+  if (Array.isArray(value.computeResources) && !validRecordArray(value.computeResources, ['id', 'name', 'kind', 'runnerUrl', 'status', 'createdAt', 'updatedAt'])) return false;
   return value.telemetry.every((item) =>
     (item.samples as unknown[]).every((sample) => isRecord(sample)),
   );
@@ -352,7 +405,7 @@ async function readLedger(): Promise<Sim2RealLedger> {
         // fail closed so a later write cannot recreate it over an operator's
         // in-progress restore/deletion.
         if (cache.size >= 0) {
-          const failure = new Error('sim2real_storage_unavailable');
+          const failure = new Sim2RealError('sim2real_storage_unavailable');
           failure.cause = error;
           throw failure;
         }
@@ -382,7 +435,7 @@ async function readLedger(): Promise<Sim2RealLedger> {
       } catch (error) {
         if ((error as NodeJS.ErrnoException)?.code === 'ENOENT') {
           if (cache?.file === file && cache.size >= 0) {
-            const failure = new Error('sim2real_storage_unavailable');
+            const failure = new Sim2RealError('sim2real_storage_unavailable');
             failure.cause = error;
             throw failure;
           }
@@ -406,6 +459,9 @@ async function readLedger(): Promise<Sim2RealLedger> {
         runs: arrayOf<StoredRun>(parsed.runs),
         deployments: arrayOf<StoredDeployment>(parsed.deployments),
         telemetry: arrayOf<StoredTelemetry>(parsed.telemetry),
+        projects: arrayOf<StoredProject>(parsed.projects),
+        datasets: arrayOf<StoredDataset>(parsed.datasets),
+        computeResources: arrayOf<StoredComputeResource>(parsed.computeResources),
       };
       cache = { file, value, size: afterStat.size, mtimeMs: afterStat.mtimeMs };
       return value;
@@ -414,7 +470,7 @@ async function readLedger(): Promise<Sim2RealLedger> {
   } catch (error) {
     if ((error as NodeJS.ErrnoException)?.code === 'ENOENT') {
       if (cache?.file === file && cache.size >= 0) {
-        const failure = new Error('sim2real_storage_unavailable');
+        const failure = new Sim2RealError('sim2real_storage_unavailable');
         failure.cause = error;
         throw failure;
       }
@@ -435,7 +491,7 @@ async function readLedger(): Promise<Sim2RealLedger> {
       '[sim2real] ledger unreadable; refusing to continue:',
       error instanceof Error ? error.message : error,
     );
-    const failure = new Error('sim2real_storage_unavailable');
+    const failure = new Sim2RealError('sim2real_storage_unavailable');
     failure.cause = error;
     throw failure;
   }
@@ -447,7 +503,7 @@ async function writeLedger(value: Sim2RealLedger): Promise<void> {
   const temporary = `${file}.${process.pid}.${Date.now()}.tmp`;
   const serializedValue = JSON.stringify(value, null, 2);
   if (Buffer.byteLength(serializedValue, 'utf8') > SIM2REAL_LEDGER_MAX_BYTES) {
-    throw new Error('sim2real_storage_quota_exceeded');
+    throw new Sim2RealError('sim2real_storage_quota_exceeded');
   }
   try {
     const handle = await fs.open(temporary, 'w', 0o600);
@@ -485,7 +541,7 @@ function serialized<T>(task: () => Promise<T>): Promise<T> {
 }
 
 function ensureWritable(): void {
-  if (!sim2RealStorageInfo().writable) throw new Error('sim2real_storage_not_configured');
+  if (!sim2RealStorageInfo().writable) throw new Sim2RealError('sim2real_storage_not_configured');
 }
 
 function ownerMatches(record: { owner?: string }, owner: string | undefined): boolean {
@@ -510,6 +566,19 @@ function withoutTelemetryPrivate(record: StoredTelemetry): Sim2RealTelemetryReco
 function withoutDeploymentPrivate(record: StoredDeployment): Sim2RealDeploymentRecord {
   const { _idempotencyKey: _key, _requestFingerprint: _fingerprint, ...owned } = withoutOwner(record);
   return owned as Sim2RealDeploymentRecord;
+}
+
+function withoutProjectPrivate(record: StoredProject): Sim2RealProjectRecord {
+  return withoutOwner(record) as Sim2RealProjectRecord;
+}
+
+function withoutDatasetPrivate(record: StoredDataset): Sim2RealDatasetRecord {
+  return withoutOwner(record) as Sim2RealDatasetRecord;
+}
+
+function withoutComputeResourcePrivate(record: StoredComputeResource): Sim2RealComputeResource {
+  const { runnerToken: _token, ...publicRecord } = withoutOwner(record);
+  return { ...publicRecord, tokenConfigured: Boolean(record.runnerToken) } as Sim2RealComputeResource;
 }
 
 function copy<T>(value: T): T {
@@ -574,7 +643,7 @@ function assertTelemetryTimeline(
       // route-level validation still rejects malformed new input.
       if (!Number.isFinite(timestamp)) continue;
       if (previousInChunk != null && timestamp < previousInChunk) {
-        throw new Error('sim2real_telemetry_timestamp_order');
+        throw new Sim2RealError('sim2real_telemetry_timestamp_order');
       }
       previousInChunk = timestamp;
     }
@@ -582,7 +651,7 @@ function assertTelemetryTimeline(
     const last = Number(samples.at(-1)?.t);
     if (!Number.isFinite(first) || !Number.isFinite(last)) continue;
     if (previousLast != null && first < previousLast) {
-      throw new Error('sim2real_telemetry_timestamp_order');
+      throw new Sim2RealError('sim2real_telemetry_timestamp_order');
     }
     previousLast = last;
   }
@@ -595,6 +664,187 @@ export async function listSim2RealModels(owner?: string): Promise<Sim2RealModelR
     .slice(0, MODEL_CAP)
     .map((item) => copy(withoutOwner(item)) as Sim2RealModelRecord);
   return [copy(BUILTIN_MICRODUCK_MODEL), ...custom];
+}
+
+export async function listSim2RealProjects(owner?: string): Promise<Sim2RealProjectRecord[]> {
+  const ledger = await readLedger();
+  return ledger.projects
+    .filter((item) => ownerMatches(item, owner))
+    .slice(0, PROJECT_CAP)
+    .map((item) => copy(withoutProjectPrivate(item)));
+}
+
+export async function getSim2RealProject(
+  id: string,
+  owner?: string,
+): Promise<Sim2RealProjectRecord | null> {
+  const wanted = String(id ?? '').trim();
+  if (!wanted) return null;
+  const ledger = await readLedger();
+  const found = ledger.projects.find((item) => item.id === wanted && ownerMatches(item, owner));
+  return found ? copy(withoutProjectPrivate(found)) : null;
+}
+
+export async function createSim2RealProject(
+  input: Omit<Sim2RealProjectRecord, 'id' | 'createdAt' | 'updatedAt'>,
+  owner?: string,
+): Promise<Sim2RealProjectRecord> {
+  ensureWritable();
+  return serialized(async () => {
+    const ledger = await readLedger();
+    if (ledger.projects.length >= PROJECT_CAP) throw new Sim2RealError('sim2real_storage_quota_exceeded');
+    const duplicate = ledger.projects.some(
+      (item) => ownerMatches(item, owner) && item.slug === input.slug,
+    );
+    if (duplicate) throw new Error('sim2real_project_slug_exists');
+    const now = new Date().toISOString();
+    const record: StoredProject = {
+      ...copy(input),
+      id: randomUUID(),
+      createdAt: now,
+      updatedAt: now,
+      ...(owner ? { owner } : {}),
+    };
+    await writeLedger({ ...ledger, projects: [record, ...ledger.projects] });
+    void emitSim2RealEvent('project.created', record.id, withoutProjectPrivate(record), owner);
+    return copy(withoutProjectPrivate(record));
+  });
+}
+
+export async function updateSim2RealProject(
+  id: string,
+  patch: Partial<Pick<Sim2RealProjectRecord, 'name' | 'slug' | 'description' | 'modelIds' | 'datasetIds'>>,
+  owner?: string,
+): Promise<Sim2RealProjectRecord | null> {
+  ensureWritable();
+  return serialized(async () => {
+    const ledger = await readLedger();
+    const index = ledger.projects.findIndex((item) => item.id === id && ownerMatches(item, owner));
+    if (index < 0) return null;
+    if (patch.slug && ledger.projects.some((item) => item.id !== id && ownerMatches(item, owner) && item.slug === patch.slug)) {
+      throw new Error('sim2real_project_slug_exists');
+    }
+    const updated: StoredProject = {
+      ...ledger.projects[index],
+      ...copy(patch),
+      updatedAt: new Date().toISOString(),
+    };
+    const projects = [...ledger.projects];
+    projects[index] = updated;
+    await writeLedger({ ...ledger, projects });
+    void emitSim2RealEvent('project.updated', updated.id, withoutProjectPrivate(updated), owner);
+    return copy(withoutProjectPrivate(updated));
+  });
+}
+
+export async function listSim2RealDatasets(owner?: string): Promise<Sim2RealDatasetRecord[]> {
+  const ledger = await readLedger();
+  return ledger.datasets
+    .filter((item) => ownerMatches(item, owner))
+    .slice(0, DATASET_CAP)
+    .map((item) => copy(withoutDatasetPrivate(item)));
+}
+
+export async function createSim2RealDataset(
+  input: Omit<Sim2RealDatasetRecord, 'id' | 'createdAt' | 'updatedAt'>,
+  owner?: string,
+): Promise<Sim2RealDatasetRecord> {
+  ensureWritable();
+  return serialized(async () => {
+    const ledger = await readLedger();
+    if (ledger.datasets.length >= DATASET_CAP) throw new Sim2RealError('sim2real_storage_quota_exceeded');
+    const now = new Date().toISOString();
+    const record: StoredDataset = {
+      ...copy(input),
+      id: randomUUID(),
+      createdAt: now,
+      updatedAt: now,
+      ...(owner ? { owner } : {}),
+    };
+    await writeLedger({ ...ledger, datasets: [record, ...ledger.datasets] });
+    void emitSim2RealEvent('dataset.created', record.id, withoutDatasetPrivate(record), owner);
+    return copy(withoutDatasetPrivate(record));
+  });
+}
+
+export async function listSim2RealComputeResources(owner?: string): Promise<Sim2RealComputeResource[]> {
+  const ledger = await readLedger();
+  return (ledger.computeResources ?? [])
+    .filter((item) => ownerMatches(item, owner))
+    .slice(0, 100)
+    .map((item) => copy(withoutComputeResourcePrivate(item)));
+}
+
+export async function getSim2RealComputeResource(id: string, owner?: string): Promise<Sim2RealComputeResource | null> {
+  const ledger = await readLedger();
+  const found = (ledger.computeResources ?? []).find((item) => item.id === id && ownerMatches(item, owner));
+  return found ? copy(withoutComputeResourcePrivate(found)) : null;
+}
+
+export async function getSim2RealComputeResourceSecret(id: string, owner?: string): Promise<{ resource: Sim2RealComputeResource; runnerToken?: string } | null> {
+  const ledger = await readLedger();
+  const found = (ledger.computeResources ?? []).find((item) => item.id === id && ownerMatches(item, owner));
+  return found ? { resource: copy(withoutComputeResourcePrivate(found)), ...(found.runnerToken ? { runnerToken: found.runnerToken } : {}) } : null;
+}
+
+export async function createSim2RealComputeResource(
+  input: Omit<Sim2RealComputeResource, 'id' | 'createdAt' | 'updatedAt' | 'tokenConfigured'> & { runnerToken?: string },
+  owner?: string,
+): Promise<Sim2RealComputeResource> {
+  ensureWritable();
+  return serialized(async () => {
+    const ledger = await readLedger();
+    const resources = ledger.computeResources ?? [];
+    if (resources.length >= 100) throw new Sim2RealError('sim2real_storage_quota_exceeded');
+    const now = new Date().toISOString();
+    const record: StoredComputeResource = {
+      ...copy(input),
+      id: randomUUID(),
+      tokenConfigured: Boolean(input.runnerToken),
+      createdAt: now,
+      updatedAt: now,
+      ...(owner ? { owner } : {}),
+    };
+    await writeLedger({ ...ledger, computeResources: [record, ...resources] });
+    return copy(withoutComputeResourcePrivate(record));
+  });
+}
+
+export async function updateSim2RealComputeResource(
+  id: string,
+  patch: Partial<Pick<Sim2RealComputeResource, 'name' | 'runnerUrl' | 'status' | 'gpuName' | 'cuda' | 'vramMb' | 'maxConcurrentJobs' | 'message' | 'lastCheckedAt'>> & { runnerToken?: string },
+  owner?: string,
+): Promise<Sim2RealComputeResource | null> {
+  ensureWritable();
+  return serialized(async () => {
+    const ledger = await readLedger();
+    const resources = ledger.computeResources ?? [];
+    const index = resources.findIndex((item) => item.id === id && ownerMatches(item, owner));
+    if (index < 0) return null;
+    const current = resources[index];
+    const updated: StoredComputeResource = {
+      ...current,
+      ...copy(patch),
+      ...(patch.runnerToken !== undefined ? { runnerToken: patch.runnerToken } : {}),
+      tokenConfigured: patch.runnerToken !== undefined ? Boolean(patch.runnerToken) : Boolean(current.runnerToken),
+      updatedAt: new Date().toISOString(),
+    };
+    const next = [...resources]; next[index] = updated;
+    await writeLedger({ ...ledger, computeResources: next });
+    return copy(withoutComputeResourcePrivate(updated));
+  });
+}
+
+export async function deleteSim2RealComputeResource(id: string, owner?: string): Promise<boolean> {
+  ensureWritable();
+  return serialized(async () => {
+    const ledger = await readLedger();
+    const resources = ledger.computeResources ?? [];
+    const next = resources.filter((item) => !(item.id === id && ownerMatches(item, owner)));
+    if (next.length === resources.length) return false;
+    await writeLedger({ ...ledger, computeResources: next });
+    return true;
+  });
 }
 
 export async function getSim2RealModel(
@@ -623,10 +873,10 @@ export async function createSim2RealModel(
         item.manifest.version === manifest.version,
     );
     if (duplicate || manifest.modelId === BUILTIN_MICRODUCK_MODEL.manifest.modelId) {
-      throw new Error('sim2real_model_version_exists');
+      throw new Sim2RealError('sim2real_model_version_exists');
     }
     if (ledger.models.length >= MODEL_CAP) {
-      throw new Error('sim2real_model_quota_exceeded');
+      throw new Sim2RealError('sim2real_model_quota_exceeded');
     }
     const now = new Date().toISOString();
     const record: StoredModel = {
@@ -643,6 +893,7 @@ export async function createSim2RealModel(
       models: [record, ...ledger.models],
     };
     await writeLedger(next);
+    void emitSim2RealEvent('model.created', record.id, withoutOwner(record), owner);
     return copy(withoutOwner(record)) as Sim2RealModelRecord;
   });
 }
@@ -761,7 +1012,7 @@ export async function reserveSim2RealRun(
 ): Promise<Sim2RealRunReservation> {
   ensureWritable();
   const idempotencyKey = String(options.idempotencyKey ?? '').trim();
-  if (!idempotencyKey) throw new Error('sim2real_run_idempotency_required');
+  if (!idempotencyKey) throw new Sim2RealError('sim2real_run_idempotency_required');
   return serialized(async () => {
     // A process crash can leave a queued reservation without an external
     // runner id. Reap only that narrow crash window before counting active
@@ -781,7 +1032,7 @@ export async function reserveSim2RealRun(
         existing._requestFingerprint &&
         options.requestFingerprint !== existing._requestFingerprint
       ) {
-        throw new Error('sim2real_run_idempotency_conflict');
+        throw new Sim2RealError('sim2real_run_idempotency_conflict');
       }
       return { run: copy(withoutRunPrivate(existing)), created: false };
     }
@@ -791,7 +1042,7 @@ export async function reserveSim2RealRun(
         (item) => ownerMatches(item, owner) && isActiveRunnerRun(item),
       ).length;
       if (activeCount >= maxActiveRuns) {
-        throw new Error('sim2real_active_run_quota_exceeded');
+        throw new Sim2RealError('sim2real_active_run_quota_exceeded');
       }
     }
     const record: StoredRun = {
@@ -803,9 +1054,10 @@ export async function reserveSim2RealRun(
       ...(options.requestFingerprint ? { _requestFingerprint: options.requestFingerprint } : {}),
     };
     if (ledger.runs.length >= RUN_CAP) {
-      throw new Error('sim2real_run_quota_exceeded');
+      throw new Sim2RealError('sim2real_run_quota_exceeded');
     }
     await writeLedger({ ...ledger, runs: [record, ...ledger.runs] });
+    void emitSim2RealEvent('run.created', record.id, withoutRunPrivate(record), owner);
     return { run: copy(withoutRunPrivate(record)), created: true };
   });
 }
@@ -829,7 +1081,7 @@ export async function createSim2RealRun(
           existing._requestFingerprint &&
           options.requestFingerprint !== existing._requestFingerprint
         ) {
-          throw new Error('sim2real_run_idempotency_conflict');
+          throw new Sim2RealError('sim2real_run_idempotency_conflict');
         }
         return copy(withoutRunPrivate(existing));
       }
@@ -843,9 +1095,10 @@ export async function createSim2RealRun(
       ...(options.requestFingerprint ? { _requestFingerprint: options.requestFingerprint } : {}),
     };
     if (ledger.runs.length >= RUN_CAP) {
-      throw new Error('sim2real_run_quota_exceeded');
+      throw new Sim2RealError('sim2real_run_quota_exceeded');
     }
     await writeLedger({ ...ledger, runs: [record, ...ledger.runs] });
+    void emitSim2RealEvent('run.created', record.id, withoutRunPrivate(record), owner);
     return copy(withoutRunPrivate(record));
   });
 }
@@ -882,6 +1135,7 @@ export async function updateSim2RealRun(
     const runs = [...ledger.runs];
     runs[index] = updated;
     await writeLedger({ ...ledger, runs });
+    void emitSim2RealEvent('run.updated', updated.id, withoutRunPrivate(updated), owner);
     return copy(withoutRunPrivate(updated));
   });
 }
@@ -931,6 +1185,7 @@ export async function updateSim2RealRunForReconcile(
     const runs = [...ledger.runs];
     runs[index] = updated;
     await writeLedger({ ...ledger, runs });
+    void emitSim2RealEvent('run.updated', updated.id, withoutRunPrivate(updated), owner);
     return copy(withoutRunPrivate(updated));
   });
 }
@@ -981,6 +1236,7 @@ export async function evaluateSim2RealRun(
     const runs = [...ledger.runs];
     runs[index] = updated;
     await writeLedger({ ...ledger, runs });
+    void emitSim2RealEvent('run.updated', updated.id, withoutRunPrivate(updated), owner);
     return {
       run: copy(withoutRunPrivate(updated)),
       evaluation: copy(evaluation),
@@ -1049,7 +1305,7 @@ export async function appendSim2RealTelemetryWithResult(
           existing._requestFingerprint &&
           requestFingerprint !== existing._requestFingerprint
         ) {
-          throw new Error('sim2real_telemetry_idempotency_conflict');
+          throw new Sim2RealError('sim2real_telemetry_idempotency_conflict');
         }
         return {
           telemetry: copy(withoutTelemetryPrivate(existing)),
@@ -1076,17 +1332,17 @@ export async function appendSim2RealTelemetryWithResult(
       runUsage.samples + incomingUsage.samples > SIM2REAL_TELEMETRY_LIMITS.runSamples ||
       runUsage.bytes + incomingUsage.bytes > SIM2REAL_TELEMETRY_LIMITS.runBytes
     ) {
-      throw new Error('sim2real_telemetry_quota_exceeded');
+      throw new Sim2RealError('sim2real_telemetry_quota_exceeded');
     }
     const ownerUsage = telemetryUsage(ledger.telemetry.filter((item) => ownerMatches(item, owner)));
     if (
       ownerUsage.samples + incomingUsage.samples > SIM2REAL_TELEMETRY_LIMITS.ownerSamples ||
       ownerUsage.bytes + incomingUsage.bytes > SIM2REAL_TELEMETRY_LIMITS.ownerBytes
     ) {
-      throw new Error('sim2real_telemetry_quota_exceeded');
+      throw new Sim2RealError('sim2real_telemetry_quota_exceeded');
     }
     if (ledger.telemetry.length >= SIM2REAL_TELEMETRY_RECORD_CAP) {
-      throw new Error('sim2real_telemetry_quota_exceeded');
+      throw new Sim2RealError('sim2real_telemetry_quota_exceeded');
     }
     // A new chunk changes the replay/evaluation input. Clear the cached
     // summary in the same serialized write so GET /replay can never return a
@@ -1102,6 +1358,12 @@ export async function appendSim2RealTelemetryWithResult(
       runs,
       telemetry: [record, ...ledger.telemetry],
     });
+    void emitSim2RealEvent(
+      'telemetry.appended',
+      record.runId,
+      { telemetryId: record.id, sequence: record.sequence, sampleCount: record.samples.length },
+      owner,
+    );
     return {
       telemetry: copy(withoutTelemetryPrivate(record)),
       duplicate: false,
@@ -1161,7 +1423,7 @@ export async function createSim2RealDeploymentWithResult(
           existing._requestFingerprint &&
           options.requestFingerprint !== existing._requestFingerprint
         ) {
-          throw new Error('sim2real_deployment_idempotency_conflict');
+          throw new Sim2RealError('sim2real_deployment_idempotency_conflict');
         }
         return { deployment: copy(withoutDeploymentPrivate(existing)), duplicate: true };
       }
@@ -1172,17 +1434,27 @@ export async function createSim2RealDeploymentWithResult(
       id: randomUUID(),
       createdAt: now,
       updatedAt: now,
+      history: [
+        {
+          id: randomUUID(),
+          type: 'created',
+          status: input.status,
+          summary: input.summary,
+          createdAt: now,
+        },
+      ],
       ...(owner ? { owner } : {}),
       ...(idempotencyKey ? { _idempotencyKey: idempotencyKey } : {}),
       ...(options.requestFingerprint ? { _requestFingerprint: options.requestFingerprint } : {}),
     };
     if (ledger.deployments.length >= DEPLOYMENT_CAP) {
-      throw new Error('sim2real_deployment_quota_exceeded');
+      throw new Sim2RealError('sim2real_deployment_quota_exceeded');
     }
     await writeLedger({
       ...ledger,
       deployments: [record, ...ledger.deployments],
     });
+    void emitSim2RealEvent('deployment.created', record.id, withoutDeploymentPrivate(record), owner);
     return { deployment: copy(withoutDeploymentPrivate(record)), duplicate: false };
   });
 }
@@ -1196,7 +1468,12 @@ export async function createSim2RealDeployment(
 
 export async function updateSim2RealDeployment(
   id: string,
-  patch: Partial<Pick<Sim2RealDeploymentRecord, 'status' | 'summary' | 'steps' | 'executedAt'>>,
+  patch: Partial<
+    Pick<
+      Sim2RealDeploymentRecord,
+      'status' | 'summary' | 'steps' | 'executedAt' | 'verification' | 'versionSwitchFrom'
+    >
+  >,
   owner?: string,
 ): Promise<Sim2RealDeploymentRecord | null> {
   ensureWritable();
@@ -1207,14 +1484,41 @@ export async function updateSim2RealDeployment(
     );
     if (index < 0) return null;
     const current = ledger.deployments[index];
+    // A read-only probe may return after the user cancelled its plan. Never
+    // let that late completion resurrect the cancelled lifecycle.
+    if (current.status === 'cancelled' && patch.status !== 'cancelled') {
+      return copy(withoutDeploymentPrivate(current));
+    }
+    const now = new Date().toISOString();
+    const statusChanged = patch.status && patch.status !== current.status;
+    const eventType: Sim2RealDeploymentEventType =
+      patch.status === 'cancelled'
+        ? 'cancelled'
+        : patch.verification
+          ? 'preflight'
+          : statusChanged
+            ? 'status_changed'
+            : 'updated';
+    const history = [
+      ...(current.history ?? []),
+      {
+        id: randomUUID(),
+        type: eventType,
+        status: patch.status ?? current.status,
+        summary: patch.summary ?? current.summary,
+        createdAt: now,
+      },
+    ].slice(-100);
     const updated: StoredDeployment = {
       ...current,
       ...copy(patch),
-      updatedAt: new Date().toISOString(),
+      history,
+      updatedAt: now,
     };
     const deployments = [...ledger.deployments];
     deployments[index] = updated;
     await writeLedger({ ...ledger, deployments });
+    void emitSim2RealEvent('deployment.updated', updated.id, withoutDeploymentPrivate(updated), owner);
     return copy(withoutDeploymentPrivate(updated));
   });
 }

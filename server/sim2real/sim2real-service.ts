@@ -331,11 +331,16 @@ function microduckBrowserSurface(): {
         !parsed.hash &&
         (parsed.protocol === 'https:' || (parsed.protocol === 'http:' && loopback))
       ) {
+        const proxyEnabled = !['0', 'false', 'no', 'off'].includes(
+          String(process.env.RDK_SIM2REAL_MICRODUCK_PROXY ?? '1').trim().toLowerCase(),
+        );
         return {
           available: true,
-          entryUrl: parsed.toString(),
-          state: 'redirect',
-          reason: 'MicroDuck 由独立仿真服务提供。',
+          entryUrl: proxyEnabled ? publicPath('/mujoco/microduck-proxy/') : parsed.toString(),
+          state: proxyEnabled ? 'mounted' : 'redirect',
+          reason: proxyEnabled
+            ? 'MicroDuck 通过同源控制桥接提供，可由 Agent 发送白名单动作。'
+            : 'MicroDuck 由独立仿真服务提供。',
         };
       }
     } catch {

@@ -26,6 +26,17 @@ RDK_SIM2REAL_LOCAL_RUNNER_TOKEN=<随机 token>
 
 重启 web 服务器后，工作台「训练与模型」选 **local** backend 提交任务即可。
 
+## 在平台页面管理自己的 GPU
+
+完成 worker 部署后，也可以直接在工作台完成接入，不必把 token 写进浏览器：
+
+1. 打开「训练」→「我的 GPU 训练资源」，填写资源名称、`/train` 地址、Runner token 和并发任务数；
+2. 点击「添加 GPU」，再点「测试连接」确认 Worker 的 CUDA / GPU 信息；
+3. 在「训练参数与续训」的「训练资源」下拉框选择这台 GPU，点击「发起本地训练」；
+4. 资源支持编辑、删除，训练记录会保留所选资源 id，后续状态查询继续访问对应 Worker。
+
+凭据只保存在服务端台账，列表和运行记录不会返回 token。对应接口为 `GET/POST/PATCH/DELETE /api/sim2real/compute-resources`，连通性检查使用 `POST /api/sim2real/compute-resources/:id/test`。
+
 ## 设备自动检测（诚实上报）
 
 `starter-ppo` 引擎现在会自动选择设备：

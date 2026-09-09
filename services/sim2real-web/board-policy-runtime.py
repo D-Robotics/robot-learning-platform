@@ -27,6 +27,12 @@ with an explicit, logged projection (mean of antagonistic pairs → forward
 speed; asymmetry → yaw rate) and clamps to the same bounds as the canary.
 For wheeled policies trained directly on (v, w) the projection is identity.
 
+OriginBot's native 8→2 contract uses the same observation layout as the
+reference environment: [x, y, sin(yaw), cos(yaw), goal_dx, goal_dy, v, w].
+The runtime only enables this layout when an explicit
+RDK_SIM2REAL_GOAL_X/Y is configured; without a goal it fails closed instead
+of silently driving toward an invented target.
+
 Run inside the board's TROS environment:
   python3 board-policy-runtime.py
 State machine: idle → (load) ready → (start) running → (stop) idle;
@@ -117,6 +123,15 @@ _ros_topics = (_ADAPTER.get("ros") or {}).get("topics") if isinstance((_ADAPTER.
 _configured_topic = os.environ.get("RDK_SIM2REAL_COMMAND_TOPIC") or _actuator.get("commandTopic") or ((_ros_topics.get("cmdVel") or {}).get("name")) or "/cmd_vel"
 COMMAND_TOPIC = _configured_topic if isinstance(_configured_topic, str) and _configured_topic.startswith("/") else "/cmd_vel"
 COMMAND_MESSAGE_TYPE = str(_actuator.get("messageType") or ((_ros_topics.get("cmdVel") or {}).get("type")) or "geometry_msgs/msg/Twist")
+def _optional_float_env(name):
+    try:
+        value = float(os.environ[name])
+    except (KeyError, TypeError, ValueError):
+        return None
+    return value if value == value and abs(value) != float("inf") else None
+
+ORIGINBOT_GOAL_X = _optional_float_env("RDK_SIM2REAL_GOAL_X")
+ORIGINBOT_GOAL_Y = _optional_float_env("RDK_SIM2REAL_GOAL_Y")
 
 
 def _clamp(value, lo, hi):
@@ -166,6 +181,7 @@ class PolicyRuntime:
         self._node = None
         self._last_cmd = (0.0, 0.0)
         self._telemetry_dropped = 0
+        self._goal = (ORIGINBOT_GOAL_X, ORIGINBOT_GOAL_Y)
 
     # ---- state reporting ------------------------------------------------
     def snapshot(self):
@@ -184,6 +200,9 @@ class PolicyRuntime:
                 "lastError": self._last_error,
                 "lastOp": self._last_op,
                 "obsSlots": self._obs_slot_report(),
+                "goal": {"x": self._goal[0], "y": self._goal[1]}
+                if EXPECTED_OBS_DIM == 8 and EXPECTED_ACTION_DIM == 2
+                else None,
                 "telemetry": {
                     "spool": TELEMETRY_SPOOL_FILE,
                     "bytes": os.path.getsize(TELEMETRY_SPOOL_FILE) if os.path.exists(TELEMETRY_SPOOL_FILE) else 0,
@@ -201,6 +220,15 @@ class PolicyRuntime:
         # _ACTION_DIM), so the report describes THIS model's shape honestly.
         if not self._model_meta:
             return None
+        if EXPECTED_OBS_DIM == 8 and EXPECTED_ACTION_DIM == 2:
+            return {
+                "contract": "8D obs / 2D act (native OriginBot twist)",
+                "layout": "[x, y, sin(yaw), cos(yaw), goal_dx, goal_dy, v, w]",
+                "source": "real (/odom + /imu)",
+                "goal": "explicit RDK_SIM2REAL_GOAL_X/Y required",
+                "slots_real": 8,
+                "slots_adapter": 0,
+            }
         filled = 6 + min(EXPECTED_ACTION_DIM, max(0, EXPECTED_OBS_DIM - 6))
         return {
             "contract": f"{EXPECTED_OBS_DIM}D obs / {EXPECTED_ACTION_DIM}D act (or 2D vw)",
@@ -241,6 +269,7 @@ class PolicyRuntime:
             return {"ok": True, "state": self._state}
 
     def load(self, model_path):
+        global EXPECTED_OBS_DIM, EXPECTED_ACTION_DIM
         try:
             import onnxruntime as rt
 
@@ -256,10 +285,16 @@ class PolicyRuntime:
             out = sess.get_outputs()[0]
             input_dim = int(inp.shape[-1]) if inp.shape and isinstance(inp.shape[-1], (int, float)) else 0
             output_dim = int(out.shape[-1]) if out.shape and isinstance(out.shape[-1], (int, float)) else 0
-            if input_dim != EXPECTED_OBS_DIM:
-                return {"ok": False, "error": "policy-input-dimension-mismatch", "expected": EXPECTED_OBS_DIM, "actual": input_dim}
+            if input_dim not in (EXPECTED_OBS_DIM, 8):
+                return {"ok": False, "error": "policy-input-dimension-mismatch", "expected": [EXPECTED_OBS_DIM, 8], "actual": input_dim}
             if output_dim not in (EXPECTED_ACTION_DIM, 2):
                 return {"ok": False, "error": "policy-output-dimension-mismatch", "expected": [EXPECTED_ACTION_DIM, 2], "actual": output_dim}
+            # Select the adapter contract from the inspected model. This lets
+            # OriginBot 8D->2D policies share the same runtime as 61D->14D
+            # policies without a second board service.
+            if input_dim == 8:
+                EXPECTED_OBS_DIM = 8
+                EXPECTED_ACTION_DIM = 2
             meta = {
                 "path": model_path,
                 "bytes": size,
@@ -279,12 +314,23 @@ class PolicyRuntime:
                 self._last_error = str(exc)[:200]
             return {"ok": False, "error": "model-load-failed", "detail": str(exc)[:200]}
 
-    def start(self, direction):
+    def start(self, direction, goal_x=None, goal_y=None):
         with self._lock:
             if self._model is None:
                 return {"ok": False, "error": "no-model", "state": self._state}
             if self._state not in ("ready", "running"):
                 return {"ok": False, "error": "not-ready", "state": self._state}
+            if EXPECTED_OBS_DIM == 8 and EXPECTED_ACTION_DIM == 2:
+                if goal_x is not None or goal_y is not None:
+                    try:
+                        candidate = (float(goal_x), float(goal_y))
+                        if not all(value == value and abs(value) != float("inf") for value in candidate):
+                            raise ValueError
+                        self._goal = candidate
+                    except (TypeError, ValueError):
+                        return {"ok": False, "error": "invalid-originbot-goal"}
+                if self._goal[0] is None or self._goal[1] is None:
+                    return {"ok": False, "error": "originbot-goal-required", "message": "8D OriginBot 策略需要 goalX/goalY"}
             self._command_dir = _clamp(float(direction), -1.0, 1.0)
             if self._state == "running":
                 return {"ok": True, "state": "running"}
@@ -332,6 +378,7 @@ class PolicyRuntime:
         if tel is None:
             return None
         imu = tel.get("imu") or {}
+        odom = tel.get("odom") or {}
         # Telemetry-node ships two shapes: flat {x,y,z,w} (older) and nested
         # {quaternion, gyro, linearAcceleration} (newer). Accept both so this
         # runtime works with either snapshot producer on the board.
@@ -344,6 +391,35 @@ class PolicyRuntime:
             except (KeyError, TypeError, ValueError):
                 return None
             return value if math.isfinite(value) else None
+
+        # The OriginBot trainer and runtime share this exact native wheeled
+        # layout. A real goal is mandatory: the policy must never infer a
+        # target from a stale demo value or from the operator direction.
+        if EXPECTED_OBS_DIM == 8 and EXPECTED_ACTION_DIM == 2:
+            if self._goal[0] is None or self._goal[1] is None:
+                return None
+            def _odom_value(*keys):
+                for key in keys:
+                    value = _finite(odom, key)
+                    if value is not None:
+                        return value
+                return None
+            x = _odom_value("positionX", "x")
+            y = _odom_value("positionY", "y")
+            v = _odom_value("linearX", "v")
+            w = _odom_value("angularZ", "w")
+            if any(value is None for value in (x, y, v, w)):
+                return None
+            quaternion_values = [_finite(q, key) for key in ("x", "y", "z", "w")]
+            if any(value is None for value in quaternion_values):
+                return None
+            qx, qy, qz, qw = quaternion_values
+            norm = math.sqrt(qx * qx + qy * qy + qz * qz + qw * qw)
+            if norm < 1e-6:
+                return None
+            qx, qy, qz, qw = (value / norm for value in quaternion_values)
+            yaw = math.atan2(2 * (qw * qz + qx * qy), 1 - 2 * (qy * qy + qz * qz))
+            return [x, y, math.sin(yaw), math.cos(yaw), self._goal[0] - x, self._goal[1] - y, v, w]
 
         gyro_values = [_finite(gyro, key) for key in ("x", "y", "z")]
         quaternion_values = [_finite(q, key) for key in ("x", "y", "z", "w")]
@@ -535,7 +611,7 @@ def _serve_file_protocol(runtime):
         if op == "load":
             res = runtime.load(str(req.get("path", "")))
         elif op == "start":
-            res = runtime.start(float(req.get("direction", 0.0)))
+            res = runtime.start(float(req.get("direction", 0.0)), req.get("goalX"), req.get("goalY"))
         elif op == "stop":
             res = runtime.stop(str(req.get("reason", "operator-stop")))
         elif op == "reset":

@@ -65,15 +65,52 @@ GET  /board-station/devices         可作为上位机目标的可见板卡列�
 
 代理行为：
 
-- 未配置 `RDK_SIM2REAL_BOARD_AGENT_URL` → 503 fail-closed，页面显示引导横幅。
+- 优先使用 `RDK_SIM2REAL_BOARD_AGENT_URL` 直连 BoardAgent；在与 RDK Studio 共用服务器的部署中，可改用 `RDK_SIM2REAL_STUDIO_EXEC_ORIGIN` + `RDK_SIM2REAL_STUDIO_DEVICE_ID`，平台会复用 Studio Local Bridge 执行同一组白名单请求，不再建立第二条板端隧道。浏览器当前请求的 Studio cookie 只转发到 Studio 同源 exec 路由。
+- 两种连接都未配置时 → 503 fail-closed，页面显示引导横幅。
 - 命令在**服务端再校验一次白名单**（浏览器拿到的按钮列表只是展示层）。
 - 每个流式转发严格 1:1 上游连接，下游断开/超时/生命周期到期时双向一起拆，不留孤儿 interval。
 - 请求体上限 64KB、JSON 响应上限 256KB、超时 4–15s 有界。
-- 不转发任何 Studio 凭据；`redirect: 'error'` 防重定向 SSRF。
+- 直连模式不转发 Studio 凭据；Local Bridge 模式只转发当前浏览器已有的 Studio cookie，且 `redirect: 'error'` 防重定向 SSRF。
+- Local Bridge 无法承载长连接 MJPEG 时，平台轮询板端 `/v1/station/camera.snapshot`，在服务端重建同一 multipart 流；无相机仍返回 `CAMERA_UNAVAILABLE`，不生成合成画面。
 
 ## 接真机（X5）
 
 参考 agent 的每个端点对应真机上的只读数据源，替换 `services/sim2real-web/local-board-agent.mjs` 为受控 X5 agent：
+
+真实策略闭环现在按下面的进程关系运行：
+
+```text
+TROS /imu + /odom
+      │
+      ▼
+board-telemetry-node.py ──► /tmp/board-telemetry-snapshot.json
+      │                                  │
+      │                                  ▼
+      │                    board-policy-runtime.py (ONNX CPU)
+      │                                  │
+      │                                  ├─► /cmd_vel（10 Hz，限速 + 500 ms 看门狗）
+      │                                  └─► policy.jsonl（本地断网 spool）
+      │                                                    │
+      ▼                                                    ▼
+board-agent-x5.py ◄──────── HTTP ◄──── board-telemetry-uploader.py
+      │
+      ▼
+Sim2Real `/runs/:id/telemetry` → 回放 / MAE-RMSE / 发布闸门
+```
+
+板端启动时至少配置：
+
+```bash
+export RDK_SIM2REAL_BOARD_AGENT_TOKEN='<随机 32 字节以上 token>'
+export RDK_SIM2REAL_BOARD_AGENT_ENABLE_DRIVE=1
+export RDK_SIM2REAL_BOARD_AGENT_ENABLE_POLICY=1
+export RDK_BOARD_TELEMETRY_SPOOL=/var/lib/rdk-board-agent/telemetry/policy.jsonl
+python3 board-agent-x5.py
+```
+
+策略运行时只接受 `/root/rdk-board-agent/policies/` 下的 ONNX，并校验输入维度（默认 61）和输出维度（14 或 2）。将本次运行的 `RDK_SIM2REAL_RUN_ID`、`RDK_SIM2REAL_MODEL_ID`、`RDK_SIM2REAL_DEVICE_ID`、`RDK_SIM2REAL_CONTRACT_ID` 注入 agent 环境后，`board-policy-runtime.py` 会把每次推理使用的 observation/action 原样写入 spool；`board-telemetry-uploader.py` 在网络恢复后按 chunk 重试，服务端用 `Idempotency-Key` 去重。
+
+这条链路仍保留三道闸门：平台策略开关、平台驱动开关、板端策略/驱动开关。任何遥测陈旧、模型维度不符、运行时故障或 stop 请求都会发布零速并停止策略；页面显示的 `source=board-agent` 才能作为真实 X5 评测证据。
 
 | 端点 | 真机数据源（示例） |
 | --- | --- |

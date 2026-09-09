@@ -9,12 +9,15 @@ import {
   isForeignOwnedDevice,
   readDevices,
   requestOwnsDevice,
+  studioBridgeConfiguration,
 } from './standalone-adapters.js';
 
 const fakeRequest = {} as never;
 const previousApiUrl = process.env.RDK_SIM2REAL_ROBOGO_API_URL;
 const previousToken = process.env.RDK_SIM2REAL_ROBOGO_TOKEN;
 const previousStorage = process.env.RDK_SIM2REAL_STORAGE_DIR;
+const previousStudioOrigin = process.env.RDK_SIM2REAL_STUDIO_EXEC_ORIGIN;
+const previousStudioDevice = process.env.RDK_SIM2REAL_STUDIO_DEVICE_ID;
 const temporaryRoots: string[] = [];
 
 afterEach(async () => {
@@ -27,6 +30,10 @@ afterEach(async () => {
   else process.env.RDK_SIM2REAL_ROBOGO_TOKEN = previousToken;
   if (previousStorage === undefined) delete process.env.RDK_SIM2REAL_STORAGE_DIR;
   else process.env.RDK_SIM2REAL_STORAGE_DIR = previousStorage;
+  if (previousStudioOrigin === undefined) delete process.env.RDK_SIM2REAL_STUDIO_EXEC_ORIGIN;
+  else process.env.RDK_SIM2REAL_STUDIO_EXEC_ORIGIN = previousStudioOrigin;
+  if (previousStudioDevice === undefined) delete process.env.RDK_SIM2REAL_STUDIO_DEVICE_ID;
+  else process.env.RDK_SIM2REAL_STUDIO_DEVICE_ID = previousStudioDevice;
 });
 
 describe('standalone device ownership boundary', () => {
@@ -120,5 +127,15 @@ describe('standalone device ownership boundary', () => {
       allowEnvironmentToken: true,
     }).request('alice', { method: 'GET', path: '/summary' });
     expect(requests).toEqual(['Bearer global-token']);
+  });
+
+  it('allows the visible device registry to provide the Studio bridge id', () => {
+    process.env.RDK_SIM2REAL_STUDIO_EXEC_ORIGIN = 'http://127.0.0.1:18090';
+    delete process.env.RDK_SIM2REAL_STUDIO_DEVICE_ID;
+    expect(studioBridgeConfiguration()).toEqual({
+      origin: 'http://127.0.0.1:18090',
+      deviceId: '',
+      agentPort: 19100,
+    });
   });
 });

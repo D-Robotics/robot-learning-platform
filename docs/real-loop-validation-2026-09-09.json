@@ -1,0 +1,322 @@
+{
+  "schemaVersion": 1,
+  "date": "2026-09-09T04:42:19.568Z",
+  "gpu": {
+    "host": "120.48.90.140",
+    "runId": "local-microduck-ppo-gpu-8c10760f-9872-458a-880c-860704538923",
+    "cuda": true,
+    "backend": "local",
+    "status": "completed",
+    "artifact": "artifact://starter/microduck-ppo-gpu/0.1.2/policy.onnx",
+    "inputDim": 61,
+    "outputDim": 14,
+    "iterations": 5,
+    "metrics": {
+      "contractValid": true,
+      "observationSize": 61,
+      "actionSize": 14,
+      "reward": 40.893,
+      "successRate": 0,
+      "fallRate": 1,
+      "episodeLength": 43.12,
+      "controlLatencyMs": 0.103,
+      "iterations": 5,
+      "cuda": true
+    }
+  },
+  "board": {
+    "host": "10.185.136.180",
+    "deviceId": null,
+    "platform": "rdk-x5",
+    "model": "D-Robotics RDK X5 V1.0"
+  },
+  "checks": {
+    "webHealth": {
+      "ok": true,
+      "service": "sim2real-web",
+      "schemaVersion": 1,
+      "contractId": "microduck-policy-v1",
+      "ssoRequired": false,
+      "ssoConfigured": false,
+      "authRequired": false,
+      "authMode": "local-single-user",
+      "microduck": {
+        "state": "missing",
+        "entryUrl": "/mujoco/microduck/",
+        "message": "尚未挂载 MicroDuck 静态资源；当前提供安装指引页。"
+      },
+      "microduckRequired": false,
+      "storage": {
+        "mode": "local-server",
+        "writable": true,
+        "message": "Metadata is stored in an owner-scoped local ledger; model binaries are not executed by this service."
+      },
+      "ready": true,
+      "degraded": [
+        "microduck-not-mounted"
+      ]
+    },
+    "boardHealth": {
+      "ok": true,
+      "device": {
+        "id": "x5-real-10-185-136-180",
+        "name": "RDK X5 真机",
+        "status": "connected",
+        "boardPlatform": "rdk-x5",
+        "boardModel": "D-Robotics RDK X5 V1.0"
+      },
+      "agent": {
+        "capabilities": [
+          "read-only-preflight",
+          "host-station"
+        ],
+        "stationCommands": [
+          {
+            "id": "list-tros-nodes",
+            "label": "TROS 节点列表"
+          },
+          {
+            "id": "list-tros-topics",
+            "label": "TROS 话题列表"
+          },
+          {
+            "id": "disk-usage",
+            "label": "磁盘用量"
+          },
+          {
+            "id": "service-status",
+            "label": "服务状态"
+          }
+        ],
+        "actuatorControl": false,
+        "mock": false
+      },
+      "cameraSupported": true
+    },
+    "boardStatus": {
+      "ok": true,
+      "status": {
+        "timestamp": "2026-09-09T04:42:19Z",
+        "board": {
+          "platform": "rdk-x5",
+          "model": "D-Robotics RDK X5 V1.0",
+          "mock": false
+        },
+        "profile": {
+          "id": "rdk-x5-originbot-real",
+          "displayName": "自研 RDK X5 差速底盘（现场设备）",
+          "capabilities": [
+            "imu",
+            "odom",
+            "battery",
+            "twist",
+            "cpu-onnx",
+            "camera-devices"
+          ]
+        },
+        "adapterId": "rdk-x5-originbot-real",
+        "cpu": {
+          "percent": 10,
+          "temperatureC": 57.3
+        },
+        "memory": {
+          "totalMB": 7080,
+          "usedMB": 873
+        },
+        "disk": {
+          "totalMB": 59608,
+          "usedMB": 11653
+        },
+        "network": {
+          "mode": "ethernet"
+        },
+        "power": null,
+        "originbot": {
+          "imu": {
+            "quaternion": {
+              "x": -0.00489100354407838,
+              "y": 0.001763734038520064,
+              "z": 0.051518305432111444,
+              "w": 0.9986585159762954
+            },
+            "gyro": {
+              "x": -0.009587380103766918,
+              "y": 0.009587380103766918,
+              "z": 0.006391586735844612
+            },
+            "linearAcceleration": {
+              "x": -0.3397460877895355,
+              "y": -0.512011706829071,
+              "z": 39.903419494628906
+            }
+          },
+          "odom": {
+            "positionX": -1.8054306565318257e-06,
+            "positionY": 1.662595678908474e-07,
+            "linearX": 0,
+            "angularZ": 0
+          },
+          "batteryVoltage": 4.97
+        },
+        "telemetry": {
+          "imu": {
+            "quaternion": {
+              "x": -0.00489100354407838,
+              "y": 0.001763734038520064,
+              "z": 0.051518305432111444,
+              "w": 0.9986585159762954
+            },
+            "gyro": {
+              "x": -0.009587380103766918,
+              "y": 0.009587380103766918,
+              "z": 0.006391586735844612
+            },
+            "linearAcceleration": {
+              "x": -0.3397460877895355,
+              "y": -0.512011706829071,
+              "z": 39.903419494628906
+            }
+          },
+          "odom": {
+            "positionX": -1.8054306565318257e-06,
+            "positionY": 1.662595678908474e-07,
+            "linearX": 0,
+            "angularZ": 0
+          },
+          "batteryVoltage": 4.97
+        },
+        "originbotNote": "read-only ros2 topic echo; the agent never publishes or moves the robot",
+        "topics": [
+          {
+            "name": "/cmd_vel"
+          },
+          {
+            "name": "/imu"
+          },
+          {
+            "name": "/odom"
+          },
+          {
+            "name": "/originbot_status"
+          },
+          {
+            "name": "/parameter_events"
+          },
+          {
+            "name": "/rosout"
+          },
+          {
+            "name": "/tf"
+          },
+          {
+            "name": "/tf_static"
+          }
+        ],
+        "uptimeSec": 801,
+        "cameraDevices": [
+          "/dev/video0",
+          "/dev/video1"
+        ],
+        "actuatorControl": false,
+        "policy": {
+          "enabled": true,
+          "runtimeRunning": true,
+          "driveEnabled": false,
+          "motionAuthorized": false,
+          "state": "ready",
+          "model": {
+            "path": "/root/rdk-board-agent/policies/microduck-ppo-gpu.onnx",
+            "bytes": 9697,
+            "inputDim": 61,
+            "outputDim": 14
+          },
+          "command": 0,
+          "published": 0,
+          "inferMs": 0,
+          "lastError": null,
+          "lastOp": {
+            "op": "stop",
+            "seq": 2,
+            "ok": true,
+            "error": null,
+            "detail": null,
+            "at": 1788928588.833
+          },
+          "obsSlots": {
+            "contract": "61D obs / 14D act (or 2D vw)",
+            "gyro": "real (/imu angular_velocity)",
+            "projected_gravity": "real (quaternion-derived, roll/pitch)",
+            "last_action": "real (previous projected action)",
+            "command": "operator (+0.00)",
+            "slots_real": 6,
+            "slots_adapter": 55,
+            "note": "slots 0-5 real sensors; slots 6-19 adapter (last_action/command); any remainder zero-padded to 61D"
+          },
+          "limits": {
+            "maxLinear": 0.3,
+            "maxAngular": 1,
+            "decisionHz": 10,
+            "chassisWatchdogMs": 500
+          },
+          "note": "trained-policy inference on board; motion requires drive+policy switches, output is speed-clamped and watchdog-floored exactly like the drive canary"
+        },
+        "drive": {
+          "enabled": false,
+          "active": false,
+          "linear": 0,
+          "angular": 0,
+          "remainingMs": 0,
+          "lastStopReason": "operator-stop",
+          "published": 0
+        }
+      }
+    },
+    "policyLoad": {
+      "state": "ready",
+      "model": {
+        "path": "/root/rdk-board-agent/policies/microduck-ppo-gpu.onnx",
+        "bytes": 9697,
+        "inputDim": 61,
+        "outputDim": 14
+      },
+      "obsSlots": {
+        "contract": "61D obs / 14D act (or 2D vw)",
+        "gyro": "real (/imu angular_velocity)",
+        "projected_gravity": "real (quaternion-derived, roll/pitch)",
+        "last_action": "real (previous projected action)",
+        "command": "operator (+0.00)",
+        "slots_real": 6,
+        "slots_adapter": 55,
+        "note": "slots 0-5 real sensors; slots 6-19 adapter (last_action/command); any remainder zero-padded to 61D"
+      }
+    },
+    "policyStart": {
+      "status": 409,
+      "error": "SIM2REAL_STATION_DRIVE_DISABLED"
+    },
+    "policyStop": {
+      "status": 200,
+      "state": "ready"
+    },
+    "preflight": {
+      "status": "passed",
+      "mode": "read-only"
+    },
+    "browserSimulation": {
+      "status": "passed",
+      "state": "redirect",
+      "entryUrl": "https://pollen-robotics-microduck-simulator.hf.space/",
+      "runtime": "MuJoCo WASM",
+      "controlHz": 50,
+      "scene": "MicroDuck 3D + ball",
+      "action": "ArrowUp forward motion observed"
+    }
+  },
+  "recording": {
+    "path": "docs/real-loop-demo-2026-09-09-full.mp4",
+    "durationSeconds": 273.533335,
+    "format": "H.264 MP4 1280x720 30fps",
+    "simulationSegment": "docs/simulation-demo-2026-09-09.mp4",
+    "simulator": "https://pollen-robotics-microduck-simulator.hf.space/"
+  }
+}

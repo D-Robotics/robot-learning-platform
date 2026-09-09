@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>OriginBot 实时 Sim2Real</title>
+  <style>
+    *{box-sizing:border-box}body{margin:0;background:#101214;color:#eee;font:15px system-ui,-apple-system,"PingFang SC",sans-serif}main{max-width:1200px;margin:auto;padding:24px}h1{color:#ff8a52;font-size:28px}h2{font-size:18px}a{color:#ffb48f}.grid{display:grid;grid-template-columns:2fr 1fr;gap:16px}.card{background:#1b1f23;border:1px solid #30363d;border-radius:12px;padding:18px;min-width:0}canvas{width:100%;height:360px;background:#0b0d0f;border-radius:8px}.kv{display:grid;grid-template-columns:auto 1fr;gap:12px}.v{color:#7ee787;text-align:right;overflow-wrap:anywhere}.bad{color:#ff7b72}.muted,small{color:#a7b0bb}.actions{display:flex;gap:10px;flex-wrap:wrap;margin:16px 0}button,.file-button{font:inherit;color:#eee;background:#30363d;border:1px solid #4b535d;border-radius:6px;padding:8px 12px;cursor:pointer}button:hover,.file-button:hover{border-color:#ff8a52}input[type=file]{max-width:100%}pre{white-space:pre-wrap;overflow-wrap:anywhere;font-size:12px;max-height:260px;overflow:auto}#connection{min-height:24px}#sim-note{min-height:42px}details{margin-top:18px}@media(max-width:800px){.grid{grid-template-columns:1fr}main{padding:16px}}
+  </style>
+</head>
+<body><main>
+  <a href="./">← 返回平台</a>
+  <h1>OriginBot · 实时 Sim2Real</h1>
+  <p class="muted">真实里程计与仿真参考轨迹并排核对。真机状态每秒刷新；本页只读取数据。</p>
+  <p id="connection" role="status" aria-live="polite">正在连接板端…</p>
+  <div class="grid">
+    <section class="card">
+      <h2>轨迹对比</h2>
+      <canvas id="plot" width="900" height="420" aria-label="橙色仿真轨迹与绿色真实里程计，坐标单位为米"></canvas>
+      <p><span style="color:#ff8a52">● 仿真参考</span>　<span style="color:#7ee787">● 真实里程计</span>　<small id="counts"></small></p>
+      <div class="actions"><button id="sample" type="button">加载仿真示例</button><button id="clear-real" type="button">清空本页真机轨迹</button></div>
+      <label>导入自己的仿真 JSONL <input id="sim-file" type="file" accept=".jsonl,.json,text/plain,application/json"></label>
+      <p id="sim-note" class="muted" role="status">尚未加载仿真。参考轨迹与真机使用各自的里程计原点，不构成自动误差评测。</p>
+    </section>
+    <section class="card"><h2>真实状态</h2><div class="kv" id="status"></div><h2>策略</h2><p id="policy-state">加载中…</p><details><summary>策略详情</summary><pre id="policy"></pre></details></section>
+  </div>
+</main>
+<script>
+  const base=location.pathname.startsWith('/sim2real/')?'/sim2real':'';
+  const sim=[],real=[],$=id=>document.getElementById(id); let lastTimestamp=null;
+  const number=v=>typeof v==='number'&&Number.isFinite(v)?v:null;
+  const val=(v,suffix='')=>number(v)===null?'—':v.toFixed(3)+suffix;
+  function position(odom={}){const x=number(odom.positionX??odom.x),y=number(odom.positionY??odom.y);return x===null||y===null?null:{x,y};}
+  function yaw(imu={}){if(number(imu.yaw)!==null)return imu.yaw;const q=imu.quaternion??imu;if(!['x','y','z','w'].every(k=>number(q[k])!==null))return null;const n=Math.hypot(q.x,q.y,q.z,q.w);if(n<1e-6)return null;const x=q.x/n,y=q.y/n,z=q.z/n,w=q.w/n;return Math.atan2(2*(w*z+x*y),1-2*(y*y+z*z));}
+  function rows(entries){const root=$('status');root.replaceChildren();for(const [k,v] of entries){const a=document.createElement('div'),b=document.createElement('div');a.textContent=k;b.textContent=v;b.className='v';root.append(a,b);}}
+  function draw(){const c=$('plot'),ctx=c.getContext('2d'),w=c.width,h=c.height,all=sim.concat(real),extent=Math.max(.5,...all.map(p=>Math.abs(p.x)),...all.map(p=>Math.abs(p.y))),scale=(Math.min(w,h)/2-35)/extent;ctx.clearRect(0,0,w,h);ctx.strokeStyle='#30363d';ctx.lineWidth=1;for(let i=-4;i<=4;i++){const d=i*extent*scale/4;ctx.beginPath();ctx.moveTo(w/2+d,0);ctx.lineTo(w/2+d,h);ctx.moveTo(0,h/2+d);ctx.lineTo(w,h/2+d);ctx.stroke();}ctx.fillStyle='#a7b0bb';ctx.font='14px system-ui';ctx.fillText('x / y：米 · 等比例坐标',12,22);ctx.fillText('±'+extent.toFixed(2)+' m',12,h-14);for(const [points,color] of [[sim,'#ff8a52'],[real,'#7ee787']]){ctx.strokeStyle=color;ctx.fillStyle=color;ctx.lineWidth=3;ctx.beginPath();points.forEach((p,i)=>{const x=w/2+p.x*scale,y=h/2-p.y*scale;i?ctx.lineTo(x,y):ctx.moveTo(x,y);});ctx.stroke();const p=points.at(-1);if(p){ctx.beginPath();ctx.arc(w/2+p.x*scale,h/2-p.y*scale,5,0,2*Math.PI);ctx.fill();}}$('counts').textContent=`仿真 ${sim.length} 点 · 真机 ${real.length} 点`;}
+  async function get(path){const r=await fetch(base+'/api/sim2real/board-station/'+path,{cache:'no-store',signal:AbortSignal.timeout(4000)});if(!r.ok)throw Error('HTTP '+r.status);const j=await r.json();if(j.ok===false)throw Error(j.error||'数据不可用');return j;}
+  async function tick(){await Promise.allSettled([get('status').then(j=>{const s=j.status||j,t=s.telemetry&&Object.keys(s.telemetry).length?s.telemetry:s.originbot||{},p=position(t.odom),heading=yaw(t.imu),fresh=Number.isFinite(Date.parse(s.timestamp))&&Math.abs(Date.now()-Date.parse(s.timestamp))<5000;if(p&&fresh&&s.board?.mock===false&&s.timestamp!==lastTimestamp){real.push(p);if(real.length>2000)real.shift();lastTimestamp=s.timestamp;}rows([['设备',s.board?.model||'—'],['数据来源',s.board?.mock===false?'真实板端':s.board?.mock===true?'Mock':'未知'],['电池',val(t.batteryVoltage??s.power?.voltage,' V')],['位置',p?val(p.x)+', '+val(p.y)+' m':'—'],['航向',heading===null?'—':(heading*180/Math.PI).toFixed(1)+'°'],['速度',val(t.odom?.linearX,' m/s')],['ROS 话题',String(s.topics?.length??0)]]);$('connection').textContent=(fresh?'已连接 · ':'数据已过期 · ')+(s.timestamp||'缺少时间戳');$('connection').className=fresh?'muted':'bad';draw();}).catch(e=>{$('connection').textContent='状态不可达 · '+e.message+'（保留最后一次快照）';$('connection').className='bad';}),get('policy').then(j=>{const p=j.policy||j;$('policy-state').textContent='状态：'+(p.state||'未知')+' · 已发布 '+(p.published??0)+' 次';$('policy').textContent=JSON.stringify(p,null,2);}).catch(e=>{$('policy-state').textContent='策略状态不可达 · '+e.message;})]);setTimeout(tick,1000);}
+  function loadSim(text,name){const lines=text.trim().split(/\r?\n/);if(lines.length>10000)throw Error('最多导入 10000 行');const points=[];for(const [i,line] of lines.entries()){if(!line.trim())continue;const row=JSON.parse(line);if(row.source==='board-agent')throw Error('请选择仿真数据，不能把真机记录标为仿真');const p=position(row.telemetry?.odom??row.odom);if(!p)throw Error('第 '+(i+1)+' 行缺少有效 odom 坐标');points.push(p);}if(!points.length)throw Error('没有轨迹样本');sim.splice(0,sim.length,...points);$('sim-note').textContent=name+' · '+points.length+' 个仿真参考点（各自原点，非自动误差评测）';draw();}
+  $('sample').addEventListener('click',async()=>{try{const r=await fetch('./demo/originbot-telemetry-sample.jsonl');if(!r.ok)throw Error('示例不可用');loadSim(await r.text(),'OriginBot 运动学仿真 · 固定动作示例，非训练策略');}catch(e){$('sim-note').textContent=e.message;}});$('sim-file').addEventListener('change',async e=>{try{const file=e.target.files[0];if(!file)return;if(file.size>10*1024*1024)throw Error('文件不能超过 10 MB');loadSim(await file.text(),file.name);}catch(e){$('sim-note').textContent='导入失败：'+e.message;}});$('clear-real').addEventListener('click',()=>{real.length=0;lastTimestamp=null;draw();});draw();tick();
+</script></body></html>

@@ -5,9 +5,9 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="description" content="面向 RDK X5 的 Duck 仿真、训练与部署平台" />
     <title>RDK Duck Sim2Real Lab</title>
-    <link rel="stylesheet" href="./styles.css?v=duck-lab-23" />
+    <link rel="stylesheet" href="./styles.css?v=duck-lab-26" />
   </head>
-  <body>
+  <body class="theme-dark">
     <a class="skip-link" href="#main-content">跳到主要内容</a>
     <div class="app-shell">
       <header class="topbar">
@@ -139,6 +139,9 @@
           <a class="side-link" href="https://robogo.d-robotics.cc" target="_blank" rel="noreferrer"
             ><span>↗</span> RoboGo 训练</a
           >
+          <a class="side-link" id="originbot-dashboard-link" href="./originbot-dashboard.html" target="_blank" rel="noreferrer"
+            ><span>↗</span> OriginBot 实时看板</a
+          >
           <div class="sidebar-bottom">
             <div class="safety-mini">
               <span>✓</span>
@@ -261,6 +264,45 @@
               <h2 id="overview-title">总览</h2>
               <span class="section-caption" id="hero-updated">—</span>
             </div>
+            <section class="workspace-command-bar" aria-label="工作区上下文与快捷操作">
+              <article class="workspace-context-card">
+                <div class="workspace-card-heading">
+                  <span class="workspace-kicker">PROJECT CONTEXT</span>
+                  <span class="state-badge state-neutral" id="workspace-context-state">草稿工作区</span>
+                </div>
+                <div class="workspace-project-row">
+                  <span class="workspace-project-mark" aria-hidden="true">◇</span>
+                  <div>
+                    <strong id="workspace-project-name">MicroDuck · X5 Starter</strong>
+                    <span id="workspace-project-meta">RDK X5 · Sim2Real Lab</span>
+                  </div>
+                </div>
+                <div class="workspace-context-details">
+                  <div><span>工作目录</span><strong id="workspace-root">~/rdk/sim2real</strong></div>
+                  <div><span>目标板卡</span><strong id="workspace-device-summary">跟随上方选择</strong></div>
+                </div>
+              </article>
+              <article class="workspace-quick-panel" aria-labelledby="workspace-quick-title">
+                <div class="workspace-card-heading">
+                  <div><span class="workspace-kicker">QUICK ACTIONS</span><h3 id="workspace-quick-title">从这里继续</h3></div>
+                  <span class="workspace-shortcut-hint" aria-label="打开命令面板快捷键">⌘ K</span>
+                </div>
+                <div class="workspace-quick-actions">
+                  <button class="quick-action" type="button" data-view-target="simulate"><span class="quick-action-icon">▶</span><span><strong>开始仿真</strong><small>录制一段动作</small></span><span class="quick-action-arrow">→</span></button>
+                  <button class="quick-action" type="button" data-view-target="train"><span class="quick-action-icon">⌁</span><span><strong>查看模型</strong><small>选择版本与训练方式</small></span><span class="quick-action-arrow">→</span></button>
+                  <button class="quick-action" type="button" data-view-target="deploy"><span class="quick-action-icon">↑</span><span><strong>准备部署</strong><small>检查设备与契约</small></span><span class="quick-action-arrow">→</span>
+                  </button>
+                </div>
+              </article>
+              <aside class="agent-entry-card" aria-labelledby="agent-entry-title">
+                <div class="agent-entry-orb" aria-hidden="true"><i class="status-dot"></i>✦</div>
+                <div class="agent-entry-copy">
+                  <div class="workspace-card-heading"><span class="workspace-kicker">RDK AGENT</span><span class="agent-status-label"><i class="status-dot"></i>可用</span></div>
+                  <h3 id="agent-entry-title">让 Agent 帮你检查设备</h3><p>连接、遥测和部署预检都在一个工作现场完成。</p>
+                  <button class="button button-primary button-small" id="agent-entry-button" type="button" data-view-target="station">打开设备工作台 <span aria-hidden="true">↗</span></button>
+                </div>
+              </aside>
+            </section>
             <div class="next-card">
               <div class="next-card-main">
                 <span class="next-badge">下一步</span>
@@ -323,6 +365,61 @@
                 <p id="status-storage-detail">模型和运行可追溯</p>
               </article>
             </div>
+            <section class="project-workspace panel" id="project-workspace" aria-labelledby="project-workspace-title">
+              <div class="panel-heading panel-heading-lean project-workspace-heading">
+                <div>
+                  <span class="workspace-kicker">PROJECT WORKSPACE</span>
+                  <h2 id="project-workspace-title">项目进度</h2>
+                </div>
+                <span class="panel-caption" id="workspace-last-saved">本地偏好已保存</span>
+              </div>
+              <div class="workspace-summary-grid" aria-label="项目摘要">
+                <button class="workspace-summary-card" type="button" data-workspace-view="records">
+                  <span class="workspace-summary-icon">↗</span>
+                  <span><small>最近运行</small><strong id="workspace-latest-run">暂无运行</strong><em id="workspace-latest-run-meta">从仿真或训练开始</em></span>
+                </button>
+                <button class="workspace-summary-card" type="button" data-workspace-view="contract">
+                  <span class="workspace-summary-icon workspace-summary-icon-violet">◈</span>
+                  <span><small>模型与制品</small><strong id="workspace-asset-count">0 个模型</strong><em id="workspace-asset-meta">登记 manifest 后可追溯</em></span>
+                </button>
+                <button class="workspace-summary-card" type="button" data-workspace-view="evaluate">
+                  <span class="workspace-summary-icon workspace-summary-icon-green">▤</span>
+                  <span><small>数据与评测</small><strong id="workspace-dataset-count">等待遥测</strong><em id="workspace-dataset-meta">导入证据后生成摘要</em></span>
+                </button>
+                <button class="workspace-summary-card" type="button" data-workspace-view="deploy">
+                  <span class="workspace-summary-icon workspace-summary-icon-orange">↑</span>
+                  <span><small>部署状态</small><strong id="workspace-deploy-status">尚未部署</strong><em id="workspace-deploy-meta">只读预检保护设备</em></span>
+                </button>
+              </div>
+              <div class="workspace-recent-row">
+                <div class="workspace-recent-heading"><strong>最近活动</strong><span id="workspace-recent-caption">按当前项目筛选</span></div>
+                <div class="workspace-recent-list" id="workspace-recent-list" aria-live="polite"><span class="empty-inline">加载项目活动…</span></div>
+              </div>
+            </section>
+          </section>
+
+          <section class="agent-chat-panel" id="agent-chat-panel" aria-labelledby="agent-chat-title">
+            <div class="agent-chat-heading">
+              <div><span class="workspace-kicker">RDK STUDIO AGENT</span><h2 id="agent-chat-title">对话式任务 Agent</h2></div>
+              <div class="agent-chat-heading-actions">
+                <span class="agent-chat-runtime"><i class="status-dot"></i>工具链已连接</span>
+                <button class="agent-chat-close" id="agent-chat-close" type="button" aria-label="关闭 Agent 对话">×</button>
+              </div>
+            </div>
+            <div class="agent-chat-layout">
+              <div class="agent-chat-messages" id="agent-chat-messages" aria-live="polite">
+                <div class="agent-chat-message agent-chat-message-agent"><strong>Agent</strong><p>告诉我你要完成什么。例如：跑一轮 GPU 训练，检查 X5，再做只读预检。</p></div>
+              </div>
+              <div class="agent-chat-side">
+                <div class="agent-plan-card" id="agent-plan-card"><span class="empty-inline">等待任务计划…</span></div>
+                <div class="agent-evidence" id="agent-evidence"><span class="empty-inline">执行证据会显示在这里</span></div>
+                <div class="agent-event-log" id="agent-event-log"><span class="empty-inline">工具事件会实时显示在这里</span></div>
+              </div>
+            </div>
+            <form class="agent-chat-composer" id="agent-chat-form">
+              <input id="agent-chat-input" autocomplete="off" placeholder="例如：完成仿真、GPU 训练和 X5 真机预检" />
+              <button class="button button-primary" type="submit">发送任务 ↗</button>
+            </form>
           </section>
 
           <section
@@ -565,6 +662,10 @@
                       <option value="low-vram">低显存 · 64 环境起步</option>
                       <option value="standard" selected>标准 · 1024 环境</option>
                       <option value="high-vram">高显存 · 4096 环境</option></select
+                    ><label class="field-label" for="compute-resource-select">训练资源</label
+                    ><select id="compute-resource-select" aria-label="选择 GPU 训练资源">
+                      <option value="">服务端默认本地 Worker</option>
+                    </select
                     ><label class="field-label" for="resume-checkpoint-id"
                       >续训 checkpoint（可选）</label
                     ><input
@@ -618,6 +719,23 @@
                     >打开 RoboGo ↗</a
                   >
                 </div>
+              </article>
+              <article class="panel compute-resources-panel">
+                <div class="panel-heading panel-heading-lean">
+                  <div><h2>我的 GPU 训练资源</h2><p class="panel-caption">接入自己的 GPU Worker，凭据仅保存在服务端</p></div>
+                  <span id="compute-resource-count" class="state-badge state-neutral">0 个</span>
+                </div>
+                <div id="compute-resource-list" class="compute-resource-list"><p class="empty-inline">还没有接入 GPU。添加后可在上方训练资源中选择。</p></div>
+                <form id="compute-resource-form" class="compute-resource-form">
+                  <input id="compute-resource-editing-id" type="hidden" />
+                  <div class="compute-resource-form-grid">
+                    <label class="field-label">名称<input id="compute-resource-name" required maxlength="120" placeholder="我的 RTX 5090" /></label>
+                    <label class="field-label">Runner 地址<input id="compute-resource-url" required placeholder="http://127.0.0.1:19091/train" /></label>
+                    <label class="field-label">访问令牌<input id="compute-resource-token" type="password" autocomplete="new-password" placeholder="可选" /></label>
+                    <label class="field-label">并发任务<input id="compute-resource-concurrency" type="number" min="1" max="32" value="1" /></label>
+                  </div>
+                  <div class="compute-resource-form-actions"><button class="button button-primary button-small" type="submit" id="compute-resource-save">添加 GPU</button><button class="button button-ghost button-small" type="button" id="compute-resource-cancel" hidden>取消编辑</button><span id="compute-resource-form-status" class="small-note"></span></div>
+                </form>
               </article>
             </div>
           </section>
@@ -704,6 +822,15 @@
                 </div>
               </article>
             </div>
+            <article class="panel run-comparison-panel" aria-labelledby="run-comparison-title">
+              <div class="panel-heading panel-heading-lean">
+                <div><h2 id="run-comparison-title">最近实验对比</h2><p class="panel-subtitle">用同一模型的最近 Run 快速判断趋势</p></div>
+                <span class="panel-caption" id="run-comparison-caption">最近 5 次</span>
+              </div>
+              <div class="run-comparison" id="run-comparison" aria-live="polite">
+                <div class="empty-inline">完成一次训练或评测后，这里会显示可比较的指标。</div>
+              </div>
+            </article>
             <article class="panel telemetry-panel" aria-labelledby="telemetry-title">
               <div class="panel-heading panel-heading-lean"><h2>遥测回放与证据</h2>
                 <span class="state-badge state-neutral" id="telemetry-state">尚未导入</span>
@@ -862,7 +989,7 @@
                 </p>
               </article>
               <article class="panel deploy-flow-panel">
-                <h2>上线闸门</h2>
+                <div class="panel-heading panel-heading-lean"><h2>上线闸门</h2><span class="panel-caption" id="deploy-flow-caption">按证据推进</span></div>
                 <div class="release-steps">
                   <div class="release-step is-ready" data-release-step="contract">
                     <span class="release-step-index">✓</span>
@@ -882,6 +1009,14 @@
                     <span class="release-step-index">04</span>
                     <div><strong>Live</strong><small>人工批准后开放</small></div>
                   </div>
+                </div>
+                <div class="deploy-timeline" aria-label="部署状态时间线">
+                  <div class="deploy-timeline-heading"><strong>部署时间线</strong><span id="deploy-timeline-status">等待预检</span></div>
+                  <ol id="deploy-timeline-list"><li class="deploy-timeline-empty">生成预检计划后，这里会显示模型、板卡和证据状态。</li></ol>
+                </div>
+                <div class="deploy-recovery-note" id="deploy-recovery-note" hidden>
+                  <span class="deploy-recovery-icon">↶</span><span><strong>可以安全回到上一版本</strong><small>当前只读预检不会修改板端；如需回滚，请从记录中选择上一份已验证制品。</small></span>
+                  <button class="button button-ghost button-small" type="button" data-workspace-view="records">查看记录</button>
                 </div>
               </article>
             </div>
@@ -976,6 +1111,7 @@
                   <span class="station-live-badge" id="station-live-badge" hidden>
                     <span class="station-live-dot" aria-hidden="true"></span>LIVE
                   </span>
+                  <span class="station-freshness" id="station-freshness" aria-live="polite">等待数据…</span>
                 </div>
                 <div class="station-device-line" id="station-device-line">
                   目标板卡：<span id="station-device-name">（未选择）</span>
@@ -1198,6 +1334,14 @@
                       value="0"
                     />
                   </div>
+                  <div class="station-policy-goal">
+                    <label for="station-policy-goal-x">目标点 X（m）
+                      <input type="number" id="station-policy-goal-x" step="0.1" min="-10" max="10" placeholder="必填" />
+                    </label>
+                    <label for="station-policy-goal-y">目标点 Y（m）
+                      <input type="number" id="station-policy-goal-y" step="0.1" min="-10" max="10" placeholder="必填" />
+                    </label>
+                  </div>
                   <div class="station-policy-actions">
                     <button class="button station-policy-start" type="button" id="station-policy-start">
                       启动策略
@@ -1333,6 +1477,24 @@
         </div>
       </div>
     </dialog>
+    <dialog class="command-palette" id="command-palette" aria-labelledby="command-palette-title">
+      <div class="command-palette-shell">
+        <div class="command-palette-heading">
+          <div>
+            <span class="workspace-kicker">QUICK NAVIGATION</span>
+            <h2 id="command-palette-title">快速打开</h2>
+          </div>
+          <button class="button button-ghost button-small" id="command-palette-close" type="button">关闭 <kbd>Esc</kbd></button>
+        </div>
+        <label class="command-palette-search">
+          <span aria-hidden="true">⌕</span>
+          <input id="command-palette-input" type="search" autocomplete="off" placeholder="搜索页面或操作…" aria-label="搜索页面或操作" />
+          <kbd>⌘ K</kbd>
+        </label>
+        <div class="command-palette-list" id="command-palette-list" role="listbox" aria-label="可用操作"></div>
+        <p class="command-palette-hint">使用 ↑ ↓ 选择，Enter 执行，Esc 关闭</p>
+      </div>
+    </dialog>
     <div class="toast-region" id="toast-region" aria-live="polite" aria-atomic="true"></div>
     <button
       id="station-float-stop"
@@ -1343,6 +1505,21 @@
     >
       ■ 急停
     </button>
-    <script src="./app.js?v=duck-lab-23" type="module"></script>
+    <button class="agent-floating-toggle" id="agent-floating-toggle" type="button" aria-controls="agent-chat-panel" aria-expanded="false" aria-label="打开 Agent 对话">
+      <span class="agent-floating-icon" aria-hidden="true">✦</span>
+      <span class="agent-floating-label">Agent</span>
+      <span class="agent-floating-pulse" aria-hidden="true"></span>
+    </button>
+    <div class="agent-chat-backdrop" id="agent-chat-backdrop" hidden></div>
+    <!--
+      Keep these as classic scripts instead of ES modules.  The standalone
+      artifact is also opened directly from file:// during demos/review.  A
+      module script is blocked by Chromium's CORS rules for file origins,
+      which leaves the page rendered but without any navigation handlers.
+      Neither bundle imports another module, so classic scripts preserve the
+      same ordering while working from both file:// and the served app.
+    -->
+    <script src="./app.js?v=duck-lab-25"></script>
+    <script src="./agent-chat.js?v=agent-3"></script>
   </body>
 </html>

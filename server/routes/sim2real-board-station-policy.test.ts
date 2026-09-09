@@ -217,6 +217,20 @@ describe('board-station policy runtime proxy', () => {
     expect(sent).toEqual({ direction: 1 });
   });
 
+  it('forwards an explicit OriginBot goal with the bounded direction', async () => {
+    process.env.RDK_SIM2REAL_STATION_POLICY_ENABLED = '1';
+    process.env.RDK_SIM2REAL_STATION_DRIVE_ENABLED = '1';
+    const fetchMock = mockAgent(200, { ok: true, policy: { state: 'running' } });
+    const router = buildRouter();
+    const res = await call(routeHandler(router, 'post', '/api/sim2real/board-station/policy/start'), {
+      method: 'POST',
+      body: { direction: 0.25, goalX: 1.2, goalY: -0.4 },
+    });
+    expect(res.statusCode).toBe(200);
+    const sent = JSON.parse(String((fetchMock.mock.calls[0] as unknown[])[1]!.body));
+    expect(sent).toEqual({ direction: 0.25, goalX: 1.2, goalY: -0.4 });
+  });
+
   it('passes an agent-side refusal (409) through to the browser verbatim', async () => {
     process.env.RDK_SIM2REAL_STATION_POLICY_ENABLED = '1';
     process.env.RDK_SIM2REAL_STATION_DRIVE_ENABLED = '1';

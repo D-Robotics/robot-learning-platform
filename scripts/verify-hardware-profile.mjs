@@ -30,5 +30,11 @@ for (const file of files) {
   if (!Array.isArray(p.capabilities) || !p.capabilities.length || p.capabilities.some((item) => typeof item !== 'string' || !item.trim())) fail('capabilities must be a non-empty string array');
   if (p.runtime?.decisionHz !== undefined && (!(Number.isFinite(Number(p.runtime.decisionHz))) || Number(p.runtime.decisionHz) < 1 || Number(p.runtime.decisionHz) > 50)) fail('runtime.decisionHz must be 1..50');
   if (p.safety?.sensorStallSec !== undefined && (Number(p.safety.sensorStallSec) < .1 || Number(p.safety.sensorStallSec) > 2)) fail('safety.sensorStallSec must be .1..2');
+  if (p.provenance !== undefined) {
+    if (!['real', 'synthetic', 'template'].includes(p.provenance.kind)) fail('provenance.kind must be real, synthetic, or template');
+    if (typeof p.provenance.mock !== 'boolean') fail('provenance.mock must be boolean');
+    if (p.provenance.kind === 'real' && p.provenance.mock) fail('real profile cannot claim mock=true');
+    if (p.provenance.kind === 'synthetic' && !p.provenance.mock) fail('synthetic profile must claim mock=true');
+  }
 }
 console.log(`[hardware-profile] PASS — ${files.length} profile(s) validated`);

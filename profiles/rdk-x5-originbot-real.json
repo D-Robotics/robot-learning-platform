@@ -30,5 +30,10 @@
     "observationSize": 61,
     "actionSize": 14
   },
-  "capabilities": ["imu", "odom", "battery", "twist", "cpu-onnx", "camera-devices"]
+  "capabilities": ["imu", "odom", "battery", "twist", "cpu-onnx", "camera-devices"],
+  "provenance": {
+    "kind": "real",
+    "mock": false,
+    "note": "Validated against the connected RDK X5 field device through RDK Studio Local Bridge."
+  }
 }

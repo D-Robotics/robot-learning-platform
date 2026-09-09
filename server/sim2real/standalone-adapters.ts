@@ -431,7 +431,25 @@ export function boardAgentUrl(): string | null {
 
 /** Whether the composition root has a syntactically safe BoardAgent endpoint. */
 export function isBoardAgentConfigured(): boolean {
-  return Boolean(boardAgentUrl());
+  return Boolean(boardAgentUrl() || studioBridgeConfiguration());
+}
+
+/**
+ * Shared Studio deployments can reach a board through the already-authenticated
+ * Local Bridge WebSocket. Sim2Real uses Studio's device exec route as a narrow
+ * command transport in that mode, so the board never needs a second tunnel.
+ */
+export function studioBridgeConfiguration(): { origin: string; deviceId: string; agentPort: number } | null {
+  const origin = String(process.env.RDK_SIM2REAL_STUDIO_EXEC_ORIGIN ?? '').trim().replace(/\/+$/, '');
+  const deviceId = String(process.env.RDK_SIM2REAL_STUDIO_DEVICE_ID ?? '').trim();
+  const agentPort = Number(process.env.RDK_SIM2REAL_STUDIO_AGENT_PORT ?? 19100);
+  if (!/^https?:\/\/[^\s/]+(?::\d+)?$/.test(origin)) return null;
+  // The registry can supply a per-device Studio bridge id. Keep the
+  // environment value optional so one deployment can serve multiple bridge
+  // devices; a non-empty value still receives the same strict validation.
+  if (deviceId && !/^[A-Za-z0-9._:-]{1,160}$/.test(deviceId)) return null;
+  if (!Number.isSafeInteger(agentPort) || agentPort < 1 || agentPort > 65535) return null;
+  return { origin, deviceId, agentPort };
 }
 
 /**

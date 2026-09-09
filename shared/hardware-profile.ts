@@ -42,6 +42,12 @@ export interface HardwareProfile {
     actionSize: number;
   };
   capabilities: string[];
+  /** Provenance is optional metadata; it never relaxes safety or validation. */
+  provenance?: {
+    kind: 'real' | 'synthetic' | 'template';
+    mock: boolean;
+    note?: string;
+  };
 }
 
 const ID = /^[a-z][a-z0-9-]{1,63}$/;
@@ -96,6 +102,14 @@ export function validateHardwareProfile(input: unknown): { valid: boolean; error
   if (safety.maxLinear !== undefined && !(Number(safety.maxLinear) > 0 && Number(safety.maxLinear) <= 0.3)) errors.push('safety.maxLinear must be in (0, 0.3]');
   if (safety.maxAngular !== undefined && !(Number(safety.maxAngular) > 0 && Number(safety.maxAngular) <= 1)) errors.push('safety.maxAngular must be in (0, 1]');
   if (safety.sensorStallSec !== undefined && !(Number(safety.sensorStallSec) >= 0.1 && Number(safety.sensorStallSec) <= 2)) errors.push('safety.sensorStallSec must be 0.1..2 seconds');
+  if (value.provenance !== undefined) {
+    const provenance = value.provenance && typeof value.provenance === 'object' ? value.provenance : {};
+    if (!['real', 'synthetic', 'template'].includes(String(provenance.kind))) errors.push('provenance.kind must be real, synthetic, or template');
+    if (typeof provenance.mock !== 'boolean') errors.push('provenance.mock must be boolean');
+    if (provenance.kind === 'real' && provenance.mock === true) errors.push('provenance.mock must be false for real profiles');
+    if (provenance.kind === 'synthetic' && provenance.mock !== true) errors.push('provenance.mock must be true for synthetic profiles');
+    if (provenance.note !== undefined && !String(provenance.note).trim()) errors.push('provenance.note must not be empty');
+  }
   if (errors.length) return { valid: false, errors };
   return { valid: true, errors, profile: value as HardwareProfile };
 }
