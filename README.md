@@ -55,6 +55,8 @@ Mock 的 `completed` 只表示协议演练完成，不代表真实 PPO 权重或
 | RDK-X5 真机采集 / BoardAgent / OTA | 🧩 | 提供端口、预检和部署边界，需接入实际设备 |
 | 真机遥测（IMU/里程计/电池） | ✅ | 常驻只读遥测节点 + 认证代理 + 评估页同屏对比（参考机型 OriginBot，话题清单可换机型） |
 | 真机受限驱动（运动金丝雀） | ✅ 默认关闭 | 通用 `/cmd_vel` 通道：双开关 + 双重钳制 + 时间盒 + 急停恒可用，见 [docs/actuator-drive.md](docs/actuator-drive.md) |
+| 生产加固（CSP / 限流 / 结构化日志 / 指标） | ✅ | 自家页面严格 `script-src 'self'`、进程内限流 429、JSON 行日志、Prometheus `/metrics`；MicroDuck 上游 bundle 所在的 `/mujoco` 刻意放宽，见 [docs/operations.md](docs/operations.md) |
+| 遥测有界读 + 保留策略 | ✅ | 小 `limit` 的遥测列表不再解析整个分片；可按天淘汰过期遥测（默认关闭），见 [docs/scalability.md](docs/scalability.md) |
 | 多副本生产存储 | 🗺️ | MVP 使用单实例 ledger，规模化迁移 PostgreSQL + 对象存储 |
 
 <div align="center">
@@ -122,7 +124,11 @@ agent，也不存在任何电机控制通道；详见 [`docs/host-station.md`](d
 ```bash
 npm run verify
 npx tsc --noEmit
+npm run lint
+npm run format:check
 ```
+
+`npm test`（vitest）与 `npm run verify` 是两套互补的门禁：前者是单元/行为测试，后者串起 20+ 个契约与接线断言脚本、构建、API 契约核对和本地 smoke。`npm run verify:escape-audit` 扫描前端模板插值，禁止未转义的值进入 `innerHTML`。
 
 `npm run verify:local-worker` 会用一个临时外部引擎验证真实 Worker 契约；
 `npm run verify:board-agent` 会验证只读 BoardAgent、模拟标记和 token 闸门；
@@ -172,11 +178,17 @@ PostgreSQL、对象存储和租户配额服务。
 
 ## 上游与许可证
 
-MicroDuck 浏览器资源的上游 commit、仓库和许可证边界记录在 [`services/mujoco-web/MICRODUCK-UPSTREAM.md`](services/mujoco-web/MICRODUCK-UPSTREAM.md)。发布组织应在首次公开发布前补充与上游及 D-Robotics 代码相匹配的 LICENSE/NOTICE；本快照没有替运营方做版权授权判断。
+本项目以 **Apache-2.0** 发布，完整原文见根目录 [`LICENSE`](LICENSE)。第三方集成方向及其许可证边界记录在 [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md)。
+
+MicroDuck 浏览器资源的上游 commit、仓库和许可证边界记录在 [`services/mujoco-web/MICRODUCK-UPSTREAM.md`](services/mujoco-web/MICRODUCK-UPSTREAM.md)；仓库不重新分发上游静态 bundle。`LICENSE` 的 APPENDIX 保留上游占位符，版权主体写法由发布方确认，公开发布前请走一遍 [`docs/release-checklist.md`](docs/release-checklist.md)。
 
 更多说明：
 
+- [`docs/README.md`](docs/README.md)（文档索引）
 - [`docs/user-guide.md`](docs/user-guide.md)（使用手册与最佳实践）
+- [`docs/operations.md`](docs/operations.md)（生产环境变量、限流、CSP、日志与指标）
+- [`docs/scalability.md`](docs/scalability.md)（存储容量边界与扩容路径）
+- [`docs/release-checklist.md`](docs/release-checklist.md)（公开发布阻塞项）
 - [`docs/demo-runbook.md`](docs/demo-runbook.md)
 - [`docs/gpu-runner.md`](docs/gpu-runner.md)
 - [`docs/host-station.md`](docs/host-station.md)

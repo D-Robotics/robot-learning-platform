@@ -3030,6 +3030,19 @@ h2 {
   font-size: 11px;
   color: var(--muted-strong);
 }
+.run-retrain-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.run-retrain-submit-status {
+  font-size: 11px;
+  color: var(--muted-strong);
+}
+.run-retrain-submit-status:empty {
+  display: none;
+}
 .run-retrain-error {
   display: grid;
   gap: 6px;

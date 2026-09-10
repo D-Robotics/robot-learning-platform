@@ -38,10 +38,10 @@ function componentNames(kind) {
   if (start < 0) return new Set();
   const bodyStart = start + marker.length;
   const remainder = components.slice(bodyStart);
-  const next = remainder.search(/^  [A-Za-z][A-Za-z0-9_-]*:\n/m);
+  const next = remainder.search(/^ {2}[A-Za-z][A-Za-z0-9_-]*:\n/m);
   const section = next < 0 ? remainder : remainder.slice(0, next);
   return new Set(
-    [...section.matchAll(/^    ([A-Za-z][A-Za-z0-9_-]*):\s*$/gm)].map((match) => match[1]),
+    [...section.matchAll(/^ {4}([A-Za-z][A-Za-z0-9_-]*):\s*$/gm)].map((match) => match[1]),
   );
 }
 const declaredSchemas = componentNames('schemas');
@@ -73,7 +73,11 @@ for (const route of [
   '/api/v1/duck/deployments:',
   '/api/devices/{deviceId}/board/detect:',
 ]) {
-  assert.match(openapi, new RegExp(`^  ${route.replace(/[{}]/g, '\\$&')}$`, 'm'), `OpenAPI is missing ${route}`);
+  assert.match(
+    openapi,
+    new RegExp(`^  ${route.replace(/[{}]/g, '\\$&')}$`, 'm'),
+    `OpenAPI is missing ${route}`,
+  );
 }
 
 function section(text, name) {
@@ -89,14 +93,20 @@ function assertUnit(relativePath, { requiredUnit, requiredService }) {
   assert.ok(service, `${relativePath} must contain [Service]`);
   for (const value of requiredUnit) assert.match(unit, value, `${relativePath} [Unit]`);
   for (const value of requiredService) assert.match(service, value, `${relativePath} [Service]`);
-  assert.doesNotMatch(service, /ConditionPathExists=/, `${relativePath}: conditions belong in [Unit]`);
-  assert.doesNotMatch(text, /RDK_SIM2REAL_(?:ROBOGO_)?TOKEN=\S+/, `${relativePath}: no token in unit`);
+  assert.doesNotMatch(
+    service,
+    /ConditionPathExists=/,
+    `${relativePath}: conditions belong in [Unit]`,
+  );
+  assert.doesNotMatch(
+    text,
+    /RDK_SIM2REAL_(?:ROBOGO_)?TOKEN=\S+/,
+    `${relativePath}: no token in unit`,
+  );
 }
 
 assertUnit('services/sim2real-web/standalone-sim2real.service', {
-  requiredUnit: [
-    /ConditionPathExists=.*dist-server\/services\/sim2real-web\/server\.js/,
-  ],
+  requiredUnit: [/ConditionPathExists=.*dist-server\/services\/sim2real-web\/server\.js/],
   requiredService: [
     /User=sim2real/,
     /Environment=RDK_SIM2REAL_SSO_REQUIRED=1/,
@@ -140,15 +150,32 @@ const integratedUnit = read('services/sim2real-web/studio-integrated-sim2real.se
 assert.match(integratedUnit, /ConditionPathExists=\/etc\/rdkstudio-sim2real-adapter\.ready/);
 assert.match(integratedUnit, /ExecStartPre=.*RDK_SIM2REAL_ADAPTER_READY=1/);
 assert.match(integratedUnit, /Environment=RDK_SIM2REAL_AUTH_MODE=trusted-proxy/);
-assert.match(integratedUnit, /ExecStartPre=\/bin\/sh -c 'test -n "\$\$\{RDK_SIM2REAL_TRUSTED_PROXY_SECRET\}"'/);
-assert.match(integratedUnit, /ExecStartPre=.*Buffer\.byteLength\(process\.env\.RDK_SIM2REAL_TRUSTED_PROXY_SECRET/);
-assert.match(integratedUnit, /ConditionPathExists=.*dist-server\/services\/sim2real-web\/server\.js/);
+assert.match(
+  integratedUnit,
+  /ExecStartPre=\/bin\/sh -c 'test -n "\$\$\{RDK_SIM2REAL_TRUSTED_PROXY_SECRET\}"'/,
+);
+assert.match(
+  integratedUnit,
+  /ExecStartPre=.*Buffer\.byteLength\(process\.env\.RDK_SIM2REAL_TRUSTED_PROXY_SECRET/,
+);
+assert.match(
+  integratedUnit,
+  /ConditionPathExists=.*dist-server\/services\/sim2real-web\/server\.js/,
+);
 assert.doesNotMatch(integratedUnit, /ReadOnlyPaths=\/opt\/rdstudio-web-opt/);
 
 const copyScript = read('scripts/copy-server-assets.mjs');
 assert.match(copyScript, /mock-local-worker\.mjs/, 'build:assets must ship the mock worker');
-assert.match(copyScript, /local-training-worker\.mjs/, 'build:assets must ship the local worker bridge');
-assert.match(copyScript, /local-board-agent\.mjs/, 'build:assets must ship the BoardAgent reference');
+assert.match(
+  copyScript,
+  /local-training-worker\.mjs/,
+  'build:assets must ship the local worker bridge',
+);
+assert.match(
+  copyScript,
+  /local-board-agent\.mjs/,
+  'build:assets must ship the BoardAgent reference',
+);
 assert.ok(existsSync(path.join(root, 'services/sim2real-web/public/microduck-unavailable.html')));
 
 const productionEnv = read('services/sim2real-web/sim2real.production.env.example');
@@ -169,10 +196,22 @@ const microduckNginx = read('services/mujoco-web/install-microduck-nginx-route.p
 assert.match(microduckNginx, /location \/mujoco\/microduck\//);
 assert.match(microduckNginx, /proxy_pass http:\/\/127\.0\.0\.1:18101\//);
 assert.match(microduckNginx, /target_server_block/);
-assert.match(read('services/mujoco-web/microduck-web.service'), /ExecStart=\/usr\/bin\/python3 -m http\.server 18101 --bind 127\.0\.0\.1/);
-assert.match(read('services/mujoco-web/microduck-web.service'), /ConditionPathExists=\/usr\/bin\/python3/);
-assert.match(read('services/mujoco-web/microduck-web.service'), /ConditionPathExists=.*microduck-web\/current\/index\.html/);
-assert.match(read('services/mujoco-web/mujoco-web.service'), /ConditionPathExists=.*mujoco-web\/current\/app\.py/);
+assert.match(
+  read('services/mujoco-web/microduck-web.service'),
+  /ExecStart=\/usr\/bin\/python3 -m http\.server 18101 --bind 127\.0\.0\.1/,
+);
+assert.match(
+  read('services/mujoco-web/microduck-web.service'),
+  /ConditionPathExists=\/usr\/bin\/python3/,
+);
+assert.match(
+  read('services/mujoco-web/microduck-web.service'),
+  /ConditionPathExists=.*microduck-web\/current\/index\.html/,
+);
+assert.match(
+  read('services/mujoco-web/mujoco-web.service'),
+  /ConditionPathExists=.*mujoco-web\/current\/app\.py/,
+);
 assert.match(read('services/mujoco-web/mujoco-web.service'), /127\.0\.0\.1 --port 18100/);
 const mujocoNginx = read('services/mujoco-web/install-nginx-route.py');
 assert.match(mujocoNginx, /location \/mujoco\//);
@@ -221,4 +260,6 @@ if (process.env.VERIFY_SYSTEMD === '1') {
   }
 }
 
-console.log('[deployment-assets] PASS — service units, release guards, and static fallback are wired');
+console.log(
+  '[deployment-assets] PASS — service units, release guards, and static fallback are wired',
+);

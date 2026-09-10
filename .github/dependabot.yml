@@ -1,0 +1,65 @@
+version: 2
+updates:
+  # Node toolchain and runtime dependencies. Dev tooling (eslint, prettier,
+  # vitest, typescript) moves fast, so its updates are grouped into a single
+  # PR while the shipped `express` dependency stays isolated for review.
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      time: '06:00'
+      timezone: UTC
+    open-pull-requests-limit: 5
+    groups:
+      npm-production:
+        dependency-type: production
+        patterns:
+          - '*'
+      npm-development:
+        dependency-type: development
+        patterns:
+          - '*'
+    labels:
+      - dependencies
+      - npm
+    commit-message:
+      prefix: 'chore(deps)'
+
+  # Keep the pinned GitHub Actions majors current.
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      time: '06:00'
+      timezone: UTC
+    open-pull-requests-limit: 3
+    groups:
+      github-actions:
+        patterns:
+          - '*'
+    labels:
+      - dependencies
+      - ci
+    commit-message:
+      prefix: 'chore(ci)'
+
+  # Python runtime used by the MuJoCo web service.
+  - package-ecosystem: pip
+    directory: /services/mujoco-web
+    schedule:
+      interval: weekly
+      day: monday
+      time: '06:00'
+      timezone: UTC
+    open-pull-requests-limit: 3
+    groups:
+      python-dependencies:
+        patterns:
+          - '*'
+    labels:
+      - dependencies
+      - python
+    commit-message:
+      prefix: 'chore(deps)'

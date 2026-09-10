@@ -2,13 +2,14 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import {
   BUILTIN_MICRODUCK_MODEL,
   type Sim2RealEvaluationSummary,
   type Sim2RealTelemetryRecord,
 } from '../../shared/sim2real.js';
+import { isSim2RealError } from './sim2real-errors.js';
 import {
   appendSim2RealTelemetryWithResult,
   createSim2RealModel,
@@ -23,9 +24,11 @@ import {
   reserveSim2RealRun,
   updateSim2RealRun,
   SIM2REAL_LEDGER_MAX_BYTES,
+  SIM2REAL_TELEMETRY_RECORD_CAP,
   sim2RealActiveRunLimit,
   sim2RealStorageInfo,
   sim2RealStorageReadiness,
+  sim2RealTelemetryRetentionDays,
 } from './sim2real-store.js';
 
 const roots: string[] = [];
@@ -33,6 +36,8 @@ const previousStorage = process.env.RDK_SIM2REAL_STORAGE_DIR;
 const previousDeployment = process.env.RDK_SIM2REAL_DEPLOYMENT;
 const previousMaxActiveRuns = process.env.RDK_SIM2REAL_MAX_ACTIVE_RUNS;
 const previousActiveRunTtl = process.env.RDK_SIM2REAL_ACTIVE_RUN_TTL_SECONDS;
+const previousRetention = process.env.RDK_SIM2REAL_TELEMETRY_RETENTION_DAYS;
+const previousLease = process.env.RDK_SIM2REAL_STORAGE_LEASE;
 
 afterEach(async () => {
   invalidateSim2RealStoreCacheForTest();
@@ -45,6 +50,10 @@ afterEach(async () => {
   else process.env.RDK_SIM2REAL_MAX_ACTIVE_RUNS = previousMaxActiveRuns;
   if (previousActiveRunTtl === undefined) delete process.env.RDK_SIM2REAL_ACTIVE_RUN_TTL_SECONDS;
   else process.env.RDK_SIM2REAL_ACTIVE_RUN_TTL_SECONDS = previousActiveRunTtl;
+  if (previousRetention === undefined) delete process.env.RDK_SIM2REAL_TELEMETRY_RETENTION_DAYS;
+  else process.env.RDK_SIM2REAL_TELEMETRY_RETENTION_DAYS = previousRetention;
+  if (previousLease === undefined) delete process.env.RDK_SIM2REAL_STORAGE_LEASE;
+  else process.env.RDK_SIM2REAL_STORAGE_LEASE = previousLease;
 });
 
 async function useTempStorage(): Promise<string> {
@@ -149,9 +158,7 @@ describe('Sim2Real owner-scoped ledger', () => {
     await fs.writeFile(ledgerFile, '{}', 'utf8');
     await fs.truncate(ledgerFile, SIM2REAL_LEDGER_MAX_BYTES + 1);
 
-    await expect(listSim2RealRuns('alice')).rejects.toThrow(
-      'sim2real_storage_quota_exceeded',
-    );
+    await expect(listSim2RealRuns('alice')).rejects.toThrow('sim2real_storage_quota_exceeded');
     await expect(sim2RealStorageReadiness()).resolves.toMatchObject({
       writable: false,
       message: expect.stringContaining('超过单实例大小上限'),
@@ -250,7 +257,9 @@ describe('Sim2Real owner-scoped ledger', () => {
 
     await expect(listSim2RealModels('alice')).resolves.toEqual(
       expect.arrayContaining([
-        expect.objectContaining({ manifest: expect.objectContaining({ displayName: 'Restored display name' }) }),
+        expect.objectContaining({
+          manifest: expect.objectContaining({ displayName: 'Restored display name' }),
+        }),
       ]),
     );
   });
@@ -413,9 +422,7 @@ describe('Sim2Real owner-scoped ledger', () => {
       );
 
     await append(0, [0, 0.02]);
-    await expect(append(1, [0.01, 0.03])).rejects.toThrow(
-      'sim2real_telemetry_timestamp_order',
-    );
+    await expect(append(1, [0.01, 0.03])).rejects.toThrow('sim2real_telemetry_timestamp_order');
     await expect(listSim2RealTelemetry(run.id, 'alice', 10)).resolves.toHaveLength(1);
 
     // A later sequence may arrive first (for example after a retry), as long
@@ -456,9 +463,9 @@ describe('Sim2Real owner-scoped ledger', () => {
 
     // The ledger keeps only a sample-stripped index row; the full record
     // (samples included) lives in the run shard.
-    const ledger = JSON.parse(
-      await fs.readFile(path.join(root, 'sim2real.json'), 'utf8'),
-    ) as { telemetry: Array<Record<string, unknown>> };
+    const ledger = JSON.parse(await fs.readFile(path.join(root, 'sim2real.json'), 'utf8')) as {
+      telemetry: Array<Record<string, unknown>>;
+    };
     expect(ledger.telemetry).toHaveLength(1);
     expect(ledger.telemetry[0].samples).toBeUndefined();
     const shard = await fs.readFile(path.join(root, 'telemetry', `${run.id}.jsonl`), 'utf8');
@@ -506,5 +513,419 @@ describe('Sim2Real owner-scoped ledger', () => {
     expect(sim2RealActiveRunLimit()).toBe(4);
     process.env.RDK_SIM2REAL_MAX_ACTIVE_RUNS = '7';
     expect(sim2RealActiveRunLimit()).toBe(7);
+  });
+});
+
+async function seedRun(tag: string, owner = 'alice'): Promise<{ modelId: string; runId: string }> {
+  const manifest = structuredClone(BUILTIN_MICRODUCK_MODEL.manifest);
+  manifest.modelId = `${tag}-policy`;
+  manifest.displayName = `${tag} policy`;
+  manifest.version = '1.0.0';
+  const model = await createSim2RealModel(manifest, owner);
+  const run = await createSim2RealRun(
+    {
+      modelId: model.id,
+      backend: 'contract',
+      status: 'completed',
+      summary: 'bounded telemetry fixture',
+    },
+    owner,
+  );
+  return { modelId: model.id, runId: run.id };
+}
+
+function telemetryShardFile(root: string, runId: string): string {
+  return path.join(root, 'telemetry', `${runId}.jsonl`);
+}
+
+async function readShardLines(
+  root: string,
+  runId: string,
+): Promise<Array<Record<string, unknown>>> {
+  let raw: string;
+  try {
+    raw = await fs.readFile(telemetryShardFile(root, runId), 'utf8');
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException)?.code === 'ENOENT') return [];
+    throw error;
+  }
+  return raw
+    .split('\n')
+    .filter((line) => line.trim())
+    .map((line) => JSON.parse(line) as Record<string, unknown>);
+}
+
+/** Insert sample-carrying legacy rows, as written by pre-shard ledgers. */
+async function insertLegacyInlineRows(
+  root: string,
+  rows: Array<{
+    id: string;
+    runId: string;
+    modelId: string;
+    source: string;
+    sequence: number;
+    receivedAt: string;
+    owner?: string;
+  }>,
+): Promise<void> {
+  const file = path.join(root, 'sim2real.json');
+  const ledger = JSON.parse(await fs.readFile(file, 'utf8')) as {
+    telemetry: Array<Record<string, unknown>>;
+  };
+  for (const row of rows) ledger.telemetry.push({ ...row, samples: [{ t: row.sequence }] });
+  await fs.writeFile(file, JSON.stringify(ledger, null, 2), 'utf8');
+  invalidateSim2RealStoreCacheForTest();
+}
+
+/** Move every existing shard and index row for one run into the past. */
+async function ageRunTelemetry(root: string, runId: string, days: number): Promise<void> {
+  const iso = new Date(Date.now() - days * 24 * 60 * 60 * 1_000).toISOString();
+  const shardFile = telemetryShardFile(root, runId);
+  const aged = (await fs.readFile(shardFile, 'utf8'))
+    .split('\n')
+    .filter((line) => line.trim())
+    .map((line) => {
+      const record = JSON.parse(line) as { receivedAt: string };
+      record.receivedAt = iso;
+      return JSON.stringify(record);
+    });
+  await fs.writeFile(shardFile, `${aged.join('\n')}\n`, 'utf8');
+  const ledgerFile = path.join(root, 'sim2real.json');
+  const ledger = JSON.parse(await fs.readFile(ledgerFile, 'utf8')) as {
+    telemetry: Array<{ runId: string; receivedAt: string }>;
+  };
+  for (const row of ledger.telemetry) {
+    if (row.runId === runId) row.receivedAt = iso;
+  }
+  await fs.writeFile(ledgerFile, JSON.stringify(ledger, null, 2), 'utf8');
+  invalidateSim2RealStoreCacheForTest();
+}
+
+describe('Sim2Real bounded telemetry reads', () => {
+  it('matches the full read + sort + slice result for small and large limits', async () => {
+    await useTempStorage();
+    const { modelId, runId } = await seedRun('bounded-equivalence');
+    for (let sequence = 0; sequence < 5; sequence += 1) {
+      await appendSim2RealTelemetryWithResult(
+        { runId, modelId, source: 'import', sequence, samples: [{ t: sequence }] },
+        'alice',
+      );
+    }
+
+    // `limit = CAP` is the unchanged full read and doubles as the reference.
+    const full = await listSim2RealTelemetry(runId, 'alice', SIM2REAL_TELEMETRY_RECORD_CAP);
+    expect(full.map((record) => record.sequence)).toEqual([0, 1, 2, 3, 4]);
+    for (const limit of [1, 2, 4, 5, 9]) {
+      await expect(listSim2RealTelemetry(runId, 'alice', limit)).resolves.toEqual(
+        full.slice(0, limit),
+      );
+    }
+  });
+
+  it('interleaves legacy inline rows that sort ahead of shard rows', async () => {
+    const root = await useTempStorage();
+    const { modelId, runId } = await seedRun('legacy-interleave');
+    for (const sequence of [0, 2, 4]) {
+      await appendSim2RealTelemetryWithResult(
+        { runId, modelId, source: 'import', sequence, samples: [{ t: sequence }] },
+        'alice',
+      );
+    }
+    await insertLegacyInlineRows(root, [
+      {
+        id: 'legacy-1',
+        runId,
+        modelId,
+        source: 'import',
+        sequence: 1,
+        receivedAt: '2026-01-01T00:00:01.000Z',
+        owner: 'alice',
+      },
+      {
+        id: 'legacy-3',
+        runId,
+        modelId,
+        source: 'import',
+        sequence: 3,
+        receivedAt: '2026-01-01T00:00:03.000Z',
+        owner: 'alice',
+      },
+    ]);
+
+    const full = await listSim2RealTelemetry(runId, 'alice', SIM2REAL_TELEMETRY_RECORD_CAP);
+    expect(full.map((record) => record.sequence)).toEqual([0, 1, 2, 3, 4]);
+    for (const limit of [1, 2, 3, 6]) {
+      await expect(listSim2RealTelemetry(runId, 'alice', limit)).resolves.toEqual(
+        full.slice(0, limit),
+      );
+    }
+  });
+
+  it('ignores other owners without letting them consume the bounded head', async () => {
+    await useTempStorage();
+    const { modelId, runId } = await seedRun('own-scoped-head');
+    const append = (sequence: number, owner: string) =>
+      appendSim2RealTelemetryWithResult(
+        { runId, modelId, source: 'import', sequence, samples: [{ t: sequence }] },
+        owner,
+      );
+    await append(0, 'alice');
+    await append(10, 'bob');
+    await append(1, 'alice');
+    await append(11, 'bob');
+    await append(2, 'alice');
+
+    const full = await listSim2RealTelemetry(runId, 'alice', SIM2REAL_TELEMETRY_RECORD_CAP);
+    expect(full.map((record) => record.sequence)).toEqual([0, 1, 2]);
+    for (const limit of [1, 2, 3, 5]) {
+      const bounded = await listSim2RealTelemetry(runId, 'alice', limit);
+      expect(bounded).toEqual(full.slice(0, limit));
+      expect(bounded.every((record) => (record.sequence ?? -1) < 10)).toBe(true);
+    }
+    expect(JSON.stringify(full)).not.toContain('"owner"');
+  });
+
+  it('stops before a malformed trailing shard line that the full read still hits', async () => {
+    const root = await useTempStorage();
+    const { modelId, runId } = await seedRun('bounded-head-proof');
+    for (let sequence = 0; sequence < 4; sequence += 1) {
+      await appendSim2RealTelemetryWithResult(
+        { runId, modelId, source: 'import', sequence, samples: [{ t: sequence }] },
+        'alice',
+      );
+    }
+    // The bounded reader must finish before this line is ever parsed; the full
+    // reader has no try/catch and must throw on it. This is the observable
+    // proof that a small limit does not read (and parse) the whole shard.
+    await fs.appendFile(telemetryShardFile(root, runId), '{not-json}\n', 'utf8');
+
+    const bounded = await listSim2RealTelemetry(runId, 'alice', 2);
+    expect(bounded.map((record) => record.sequence)).toEqual([0, 1]);
+    await expect(
+      listSim2RealTelemetry(runId, 'alice', SIM2REAL_TELEMETRY_RECORD_CAP),
+    ).rejects.toThrow(SyntaxError);
+  });
+
+  it('falls back to the full read when a late chunk is appended out of order', async () => {
+    await useTempStorage();
+    const { modelId, runId } = await seedRun('out-of-order-head');
+    const append = (sequence: number, t: number) =>
+      appendSim2RealTelemetryWithResult(
+        { runId, modelId, source: 'import', sequence, samples: [{ t }] },
+        'alice',
+      );
+    // Sequence 1 is accepted after sequence 2 because its sample timeline is
+    // still monotonic, so the shard head is not the sorted head. The bounded
+    // path must detect that and still match the full read.
+    await append(0, 0);
+    await append(2, 0.04);
+    await append(1, 0.02);
+
+    const full = await listSim2RealTelemetry(runId, 'alice', SIM2REAL_TELEMETRY_RECORD_CAP);
+    expect(full.map((record) => record.sequence)).toEqual([0, 1, 2]);
+    for (const limit of [1, 2]) {
+      await expect(listSim2RealTelemetry(runId, 'alice', limit)).resolves.toEqual(
+        full.slice(0, limit),
+      );
+    }
+  });
+});
+
+describe('Sim2Real telemetry retention', () => {
+  it('keeps every record when retention is disabled', async () => {
+    const root = await useTempStorage();
+    delete process.env.RDK_SIM2REAL_TELEMETRY_RETENTION_DAYS;
+    const { modelId, runId } = await seedRun('retention-off');
+    for (let sequence = 0; sequence < 2; sequence += 1) {
+      await appendSim2RealTelemetryWithResult(
+        { runId, modelId, source: 'import', sequence, samples: [{ t: sequence }] },
+        'alice',
+      );
+    }
+    await ageRunTelemetry(root, runId, 30);
+    await appendSim2RealTelemetryWithResult(
+      { runId, modelId, source: 'import', sequence: 2, samples: [{ t: 2 }] },
+      'alice',
+    );
+
+    await expect(readShardLines(root, runId)).resolves.toHaveLength(3);
+    await expect(listSim2RealTelemetry(runId, 'alice', 10)).resolves.toMatchObject([
+      { sequence: 0 },
+      { sequence: 1 },
+      { sequence: 2 },
+    ]);
+  });
+
+  it('prunes expired shard rows and their index rows together', async () => {
+    const root = await useTempStorage();
+    const { modelId, runId } = await seedRun('retention-on');
+    for (let sequence = 0; sequence < 2; sequence += 1) {
+      await appendSim2RealTelemetryWithResult(
+        { runId, modelId, source: 'import', sequence, samples: [{ t: sequence }] },
+        'alice',
+      );
+    }
+    await ageRunTelemetry(root, runId, 30);
+    process.env.RDK_SIM2REAL_TELEMETRY_RETENTION_DAYS = '1';
+
+    await expect(
+      appendSim2RealTelemetryWithResult(
+        { runId, modelId, source: 'import', sequence: 2, samples: [{ t: 2 }] },
+        'alice',
+      ),
+    ).resolves.toMatchObject({ duplicate: false });
+
+    // The shard keeps only the fresh row and stays valid NDJSON.
+    const lines = await readShardLines(root, runId);
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toMatchObject({ sequence: 2, samples: [{ t: 2 }] });
+
+    // The ledger index agrees: the expired rows are gone and no index row
+    // survives without its shard record.
+    const ledger = JSON.parse(await fs.readFile(path.join(root, 'sim2real.json'), 'utf8')) as {
+      telemetry: Array<Record<string, unknown>>;
+    };
+    expect(ledger.telemetry).toHaveLength(1);
+    expect(ledger.telemetry[0]).toMatchObject({ sequence: 2 });
+    expect(ledger.telemetry[0].samples).toBeUndefined();
+
+    invalidateSim2RealStoreCacheForTest();
+    const listed = await listSim2RealTelemetry(runId, 'alice', 10);
+    expect(listed).toHaveLength(1);
+    expect(listed[0]).toMatchObject({ sequence: 2, samples: [{ t: 2 }] });
+  });
+
+  it('treats malformed or out-of-range retention values as disabled', () => {
+    const error = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    try {
+      delete process.env.RDK_SIM2REAL_TELEMETRY_RETENTION_DAYS;
+      expect(sim2RealTelemetryRetentionDays()).toBe(0);
+      for (const invalid of ['abc', '-1', '0', '99999', '1.5', 'Infinity']) {
+        process.env.RDK_SIM2REAL_TELEMETRY_RETENTION_DAYS = invalid;
+        expect(sim2RealTelemetryRetentionDays()).toBe(0);
+      }
+      process.env.RDK_SIM2REAL_TELEMETRY_RETENTION_DAYS = '30';
+      expect(sim2RealTelemetryRetentionDays()).toBe(30);
+    } finally {
+      error.mockRestore();
+    }
+  });
+});
+
+describe('Sim2Real cross-process writer lease', () => {
+  function leaseFile(root: string): string {
+    return path.join(root, 'writer-lease.json');
+  }
+
+  function customManifest(modelId: string) {
+    const manifest = structuredClone(BUILTIN_MICRODUCK_MODEL.manifest);
+    manifest.modelId = modelId;
+    manifest.displayName = modelId;
+    manifest.version = '1.0.0';
+    return manifest;
+  }
+
+  /** A lease held by a writer this process cannot prove dead: another host. */
+  function foreignLease(overrides: Record<string, unknown> = {}) {
+    return {
+      schemaVersion: 1,
+      host: 'another-host.invalid',
+      pid: 999_999,
+      startedAt: '2020-01-01T00:00:00.000Z',
+      heartbeatAt: new Date().toISOString(),
+      ...overrides,
+    };
+  }
+
+  async function captureWriteError(modelId: string): Promise<unknown> {
+    return createSim2RealModel(customManifest(modelId), 'alice').catch((thrown: unknown) => thrown);
+  }
+
+  it('fails fast with a writer conflict when another writer holds a fresh lease', async () => {
+    const root = await useTempStorage();
+    const file = leaseFile(root);
+    const foreign = foreignLease();
+    await fs.writeFile(file, JSON.stringify(foreign, null, 2), 'utf8');
+    const logged = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    try {
+      const error = await captureWriteError('lease-conflict-policy');
+
+      expect(isSim2RealError(error)).toBe(true);
+      if (!isSim2RealError(error)) throw new Error('expected a Sim2RealError');
+      expect(error.code).toBe('sim2real_storage_writer_conflict');
+      expect(error.detail).toContain('另一个进程正在写这个存储目录');
+      // The refused write must not create a ledger or touch the other lease.
+      await expect(fs.readFile(path.join(root, 'sim2real.json'), 'utf8')).rejects.toThrow();
+      expect(JSON.parse(await fs.readFile(file, 'utf8'))).toEqual(foreign);
+    } finally {
+      logged.mockRestore();
+    }
+  });
+
+  it('skips the check entirely when RDK_SIM2REAL_STORAGE_LEASE=0', async () => {
+    const root = await useTempStorage();
+    const file = leaseFile(root);
+    const foreign = foreignLease();
+    await fs.writeFile(file, JSON.stringify(foreign, null, 2), 'utf8');
+    process.env.RDK_SIM2REAL_STORAGE_LEASE = '0';
+
+    await expect(
+      createSim2RealModel(customManifest('lease-disabled-policy'), 'alice'),
+    ).resolves.toMatchObject({ id: expect.any(String) });
+    // Disabled means no lease handling at all: the other writer's file is
+    // neither validated nor rewritten.
+    expect(JSON.parse(await fs.readFile(file, 'utf8'))).toEqual(foreign);
+  });
+
+  it('writes a complete lease on the first write and renews it on later writes', async () => {
+    const root = await useTempStorage();
+    const file = leaseFile(root);
+    await createSim2RealModel(customManifest('lease-first-policy'), 'alice');
+
+    const first = JSON.parse(await fs.readFile(file, 'utf8')) as Record<string, unknown>;
+    expect(first).toMatchObject({
+      schemaVersion: 1,
+      host: os.hostname(),
+      pid: process.pid,
+    });
+    expect(Number.isFinite(Date.parse(String(first.startedAt)))).toBe(true);
+    expect(Number.isFinite(Date.parse(String(first.heartbeatAt)))).toBe(true);
+
+    // Simulate a process that has been idle for a long time: the on-disk
+    // heartbeat is ancient, but the recorded incarnation is still this one, so
+    // the next write must renew and refresh it instead of conflicting or
+    // treating this process as gone.
+    await fs.writeFile(
+      file,
+      JSON.stringify({ ...first, heartbeatAt: '2020-01-01T00:00:00.000Z' }),
+      'utf8',
+    );
+    await createSim2RealModel(customManifest('lease-renew-policy'), 'alice');
+
+    const second = JSON.parse(await fs.readFile(file, 'utf8')) as Record<string, unknown>;
+    expect(second.startedAt).toBe(first.startedAt);
+    expect(second.heartbeatAt).not.toBe('2020-01-01T00:00:00.000Z');
+    expect(Date.parse(String(second.heartbeatAt))).toBeGreaterThan(
+      Date.parse('2020-01-01T00:00:00.000Z'),
+    );
+  });
+
+  it('never treats a corrupt lease file as an unowned directory', async () => {
+    const root = await useTempStorage();
+    const file = leaseFile(root);
+    const corrupt = '{"schemaVersion":1,"host":';
+    await fs.writeFile(file, corrupt, 'utf8');
+    const logged = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    try {
+      const error = await captureWriteError('lease-corrupt-policy');
+
+      expect(isSim2RealError(error)).toBe(true);
+      if (!isSim2RealError(error)) throw new Error('expected a Sim2RealError');
+      expect(error.code).toBe('sim2real_storage_writer_conflict');
+      expect(await fs.readFile(file, 'utf8')).toBe(corrupt);
+      await expect(fs.readFile(path.join(root, 'sim2real.json'), 'utf8')).rejects.toThrow();
+    } finally {
+      logged.mockRestore();
+    }
   });
 });

@@ -11,7 +11,7 @@
  */
 
 import assert from 'node:assert/strict';
-import { spawn, spawnSync } from 'node:child_process';
+import { spawnSync } from 'node:child_process';
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
@@ -84,24 +84,20 @@ try {
     ),
   );
 
-  const run = spawnSync(
-    python,
-    [enginePath],
-    {
-      cwd: scratch,
-      encoding: 'utf8',
-      stdio: ['ignore', 'pipe', 'pipe'],
-      env: {
-        ...process.env,
-        RDK_SIM2REAL_REQUEST_FILE: requestPath,
-        RDK_SIM2REAL_RESULT_FILE: resultPath,
-        RDK_STARTER_ENGINE_ITERATIONS: '20',
-        RDK_STARTER_ENGINE_ENVS: '16',
-        RDK_STARTER_ENGINE_STEPS: '128',
-      },
-      maxBuffer: 4 * 1024 * 1024,
+  const run = spawnSync(python, [enginePath], {
+    cwd: scratch,
+    encoding: 'utf8',
+    stdio: ['ignore', 'pipe', 'pipe'],
+    env: {
+      ...process.env,
+      RDK_SIM2REAL_REQUEST_FILE: requestPath,
+      RDK_SIM2REAL_RESULT_FILE: resultPath,
+      RDK_STARTER_ENGINE_ITERATIONS: '20',
+      RDK_STARTER_ENGINE_ENVS: '16',
+      RDK_STARTER_ENGINE_STEPS: '128',
     },
-  );
+    maxBuffer: 4 * 1024 * 1024,
+  });
   if (run.status !== 0) {
     console.error(run.stdout || '');
     console.error(run.stderr || '');
@@ -109,9 +105,16 @@ try {
   }
 
   const result = JSON.parse(await readFile(resultPath, 'utf8'));
-  assert.equal(result.deployable, false, 'a CPU starter policy must never claim board deployability');
+  assert.equal(
+    result.deployable,
+    false,
+    'a CPU starter policy must never claim board deployability',
+  );
   assert.equal(result.cuda, false);
-  assert.ok(result.checkpoint.artifactRef.startsWith('artifact://starter/'), 'checkpoint reference');
+  assert.ok(
+    result.checkpoint.artifactRef.startsWith('artifact://starter/'),
+    'checkpoint reference',
+  );
   const artifact = result.artifact;
   assert.equal(artifact.kind, 'source');
   assert.equal(artifact.format, 'onnx');
@@ -164,26 +167,22 @@ try {
     request.model = { modelId: 'starter-sac-gate', version: '0.1.0-gate' };
     await writeFile(sacRequestPath, JSON.stringify(request, null, 2));
 
-    const sacRun = spawnSync(
-      python,
-      [enginePath],
-      {
-        cwd: sacScratch,
-        encoding: 'utf8',
-        stdio: ['ignore', 'pipe', 'pipe'],
-        env: {
-          ...process.env,
-          RDK_SIM2REAL_REQUEST_FILE: sacRequestPath,
-          RDK_SIM2REAL_RESULT_FILE: sacResultPath,
-          // Enough columns to cross the SAC warmup threshold so at least one
-          // real gradient step (and an honest alphaCurve entry) is exercised.
-          RDK_STARTER_ENGINE_ITERATIONS: '10',
-          RDK_STARTER_ENGINE_ENVS: '16',
-          RDK_STARTER_ENGINE_STEPS: '64',
-        },
-        maxBuffer: 4 * 1024 * 1024,
+    const sacRun = spawnSync(python, [enginePath], {
+      cwd: sacScratch,
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'pipe'],
+      env: {
+        ...process.env,
+        RDK_SIM2REAL_REQUEST_FILE: sacRequestPath,
+        RDK_SIM2REAL_RESULT_FILE: sacResultPath,
+        // Enough columns to cross the SAC warmup threshold so at least one
+        // real gradient step (and an honest alphaCurve entry) is exercised.
+        RDK_STARTER_ENGINE_ITERATIONS: '10',
+        RDK_STARTER_ENGINE_ENVS: '16',
+        RDK_STARTER_ENGINE_STEPS: '64',
       },
-    );
+      maxBuffer: 4 * 1024 * 1024,
+    });
     if (sacRun.status !== 0) {
       console.error(sacRun.stdout || '');
       console.error(sacRun.stderr || '');
@@ -192,7 +191,11 @@ try {
     const sacResult = JSON.parse(await readFile(sacResultPath, 'utf8'));
     assert.equal(sacResult.metrics.algorithm, 'sac', 'SAC run must report algorithm=sac');
     assert.equal(sacResult.deployable, false);
-    assert.equal(sacResult.artifact.format, 'onnx', 'SAC actor must export through the same ONNX contract');
+    assert.equal(
+      sacResult.artifact.format,
+      'onnx',
+      'SAC actor must export through the same ONNX contract',
+    );
     const sacSummary = JSON.parse(
       await readFile(path.join(sacScratch, 'training-summary.json'), 'utf8'),
     );

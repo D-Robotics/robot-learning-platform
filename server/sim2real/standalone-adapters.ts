@@ -6,10 +6,7 @@ import { Router } from 'express';
 import type { Device } from '../../shared/types.js';
 import type { Sim2RealAuthPort } from './sim2real-auth.js';
 import { studioCookieAuthConfigured } from './studio-cookie-auth.js';
-import {
-  activeTunnelAgentUrl,
-  setTunnelDataDirResolver,
-} from './board-tunnel-manager.js';
+import { activeTunnelAgentUrl, setTunnelDataDirResolver } from './board-tunnel-manager.js';
 
 // Wire the tunnel manager's data-dir resolution to the adapters' own resolver
 // (kept as an explicit init call instead of a direct import so this module
@@ -50,19 +47,250 @@ export function isWebCloudDeployment(): boolean {
  * must be set explicitly.
  */
 export function resolveStandaloneAuthMode(): 'studio-cookie' | 'trusted-proxy' | 'standalone' {
-  const raw = String(process.env.RDK_SIM2REAL_AUTH_MODE ?? '').trim().toLowerCase();
+  const raw = String(process.env.RDK_SIM2REAL_AUTH_MODE ?? '')
+    .trim()
+    .toLowerCase();
   if (raw === 'trusted-proxy') return 'trusted-proxy';
   if (raw === 'standalone') return 'standalone';
   if (raw === 'studio-cookie') return 'studio-cookie';
   return studioCookieAuthConfigured() ? 'studio-cookie' : 'standalone';
 }
 
-export const storageRequestContextMiddleware: RequestHandler = (_request, _response, next) => next();
+export const storageRequestContextMiddleware: RequestHandler = (_request, _response, next) =>
+  next();
 
-export const studioSecurityHeadersMiddleware: RequestHandler = (_request, response, next) => {
+/** Baseline hardening applied to every response, including the relaxed
+ * MicroDuck surface. These headers are cheap and cannot break a WASM bundle. */
+const PERMISSIONS_POLICY = [
+  'accelerometer=()',
+  'ambient-light-sensor=()',
+  'autoplay=(self)',
+  'battery=()',
+  'camera=()',
+  'display-capture=()',
+  'encrypted-media=()',
+  'fullscreen=(self)',
+  'geolocation=()',
+  'gyroscope=()',
+  'magnetometer=()',
+  'microphone=()',
+  'midi=()',
+  'payment=()',
+  'picture-in-picture=(self)',
+  'publickey-credentials-get=(self)',
+  'screen-wake-lock=()',
+  'serial=()',
+  'usb=()',
+  'xr-spatial-tracking=()',
+].join(', ');
+
+/** 180 days. Deliberately conservative so a mistaken HSTS on a lab host does
+ * not pin a browser for the customary two years. */
+const HSTS_MAX_AGE_SECONDS = 15_552_000;
+
+const CSP_MAX_EXTRA_SOURCES = 20;
+const CSP_MAX_SOURCE_LENGTH = 200;
+const CSP_FRAME_SRC_ENV = 'RDK_SIM2REAL_CSP_EXTRA_FRAME_SRC';
+const CSP_CONNECT_SRC_ENV = 'RDK_SIM2REAL_CSP_EXTRA_CONNECT_SRC';
+const CSP_DISABLE_ENV = 'RDK_SIM2REAL_CSP_DISABLE';
+const CSP_WARNED_SOURCES = new Set<string>();
+
+function environmentFlagEnabled(raw: unknown): boolean {
+  return ['1', 'true', 'yes', 'on'].includes(
+    String(raw ?? '')
+      .trim()
+      .toLowerCase(),
+  );
+}
+
+/**
+ * The public base path is a deployment concern owned by `server.ts`; mirror its
+ * normalisation here so a path-scoped header decision cannot drift from the
+ * actual mount when the service is published under a prefix.
+ */
+function publicBasePath(): string {
+  const raw = String(process.env.RDK_SIM2REAL_PUBLIC_BASE_PATH ?? '').trim();
+  return raw && raw !== '/' ? `/${raw.replace(/^\/+|\/+$/g, '')}` : '';
+}
+
+/**
+ * Content-Security-Policy relaxation for the MicroDuck surface.
+ *
+ * `services/sim2real-web/server.ts` owns exactly three simulator mounts under
+ * this namespace: `/mujoco/microduck` (static release served straight from
+ * `RDK_SIM2REAL_MICRODUCK_ROOT`), `/mujoco/microduck/{*splat}` (index/404
+ * handling for that release) and `/mujoco/microduck-proxy/{*splat}` (a
+ * transparent reverse proxy of `RDK_SIM2REAL_MICRODUCK_URL`). The bundle behind
+ * them is a third-party MuJoCo/WASM build whose inline bootstrap and blob
+ * workers are outside this repository's control; the strict SPA policy breaks
+ * it (WebAssembly bootstrap fails to start). Responses under `/mujoco` keep the
+ * other hardening headers but are not given the strict CSP. Operators can still
+ * set `RDK_SIM2REAL_CSP_DISABLE=1` to drop the strict policy everywhere.
+ */
+function isMicroduckSurfacePath(requestPath: unknown): boolean {
+  const pathValue = String(requestPath ?? '/');
+  const base = publicBasePath();
+  const relative =
+    base && (pathValue === base || pathValue.startsWith(`${base}/`))
+      ? pathValue.slice(base.length) || '/'
+      : pathValue;
+  return /^\/mujoco(?:\/|$)/.test(relative);
+}
+
+/**
+ * Origin of the optional externally hosted MicroDuck entry. Mirrors the SSRF
+ * validation in `server.ts#normalizeMicroduckRedirect` (TLS, or plain HTTP on
+ * loopback, and no credentials/query/hash) so the iframe allowlist can never be
+ * widened by a malformed URL.
+ */
+function microduckRedirectOrigin(): string | null {
+  const raw = String(process.env.RDK_SIM2REAL_MICRODUCK_URL ?? '').trim();
+  if (!raw) return null;
+  try {
+    const parsed = new URL(raw);
+    const loopback = ['localhost', '127.0.0.1', '::1'].includes(
+      parsed.hostname.replace(/^\[|\]$/g, ''),
+    );
+    if (parsed.username || parsed.password || parsed.search || parsed.hash) return null;
+    if (parsed.protocol !== 'https:' && !(parsed.protocol === 'http:' && loopback)) return null;
+    return parsed.origin;
+  } catch {
+    return null;
+  }
+}
+
+/** Accept only bare origins: no wildcards, no separator/quote characters and no
+ * control characters, so an environment value can never terminate a directive
+ * or inject a second header. */
+function normalizeCspOrigin(raw: string, allowedProtocols: readonly string[]): string | null {
+  if (!raw || raw.length > CSP_MAX_SOURCE_LENGTH) return null;
+  if (/[\u0000-\u001f\u007f]/.test(raw)) return null;
+  if (/[\s;,'"`\\*(){}<>]/.test(raw)) return null;
+  let parsed: URL;
+  try {
+    parsed = new URL(raw);
+  } catch {
+    return null;
+  }
+  if (!parsed.hostname) return null;
+  if (!allowedProtocols.includes(parsed.protocol)) return null;
+  if (parsed.username || parsed.password || parsed.search || parsed.hash) return null;
+  if (parsed.pathname !== '' && parsed.pathname !== '/') return null;
+  return parsed.origin;
+}
+
+function extraCspSources(envName: string, allowedProtocols: readonly string[]): string[] {
+  const configured = String(process.env[envName] ?? '');
+  if (!configured) return [];
+  const accepted: string[] = [];
+  for (const candidate of configured
+    .split(',')
+    .map((item) => item.trim())
+    .filter(Boolean)) {
+    if (accepted.length >= CSP_MAX_EXTRA_SOURCES) break;
+    const origin = normalizeCspOrigin(candidate, allowedProtocols);
+    if (origin) {
+      if (!accepted.includes(origin)) accepted.push(origin);
+      continue;
+    }
+    // A silently dropped allowlist entry is an outage waiting to happen; report
+    // it once per distinct value instead of on every request.
+    const warningKey = `${envName}\u0000${candidate}`;
+    if (!CSP_WARNED_SOURCES.has(warningKey)) {
+      CSP_WARNED_SOURCES.add(warningKey);
+      console.warn(`[sim2real] 已忽略 ${envName} 中不合法的来源：${candidate.slice(0, 80)}`);
+    }
+  }
+  return accepted;
+}
+
+let cachedCspSignature = '\u0000uninitialised';
+let cachedCsp: string | null = null;
+
+function contentSecurityPolicy(): string | null {
+  if (environmentFlagEnabled(process.env[CSP_DISABLE_ENV])) return null;
+  const signature = [
+    process.env[CSP_DISABLE_ENV],
+    process.env[CSP_FRAME_SRC_ENV],
+    process.env[CSP_CONNECT_SRC_ENV],
+    process.env.RDK_SIM2REAL_MICRODUCK_URL,
+  ].join('\u0000');
+  if (signature === cachedCspSignature) return cachedCsp;
+  cachedCspSignature = signature;
+  const simulatorOrigin = microduckRedirectOrigin();
+  const frameSources = [
+    "'self'",
+    ...(simulatorOrigin ? [simulatorOrigin] : []),
+    ...extraCspSources(CSP_FRAME_SRC_ENV, ['http:', 'https:']),
+  ];
+  const connectSources = [
+    "'self'",
+    ...extraCspSources(CSP_CONNECT_SRC_ENV, ['http:', 'https:', 'ws:', 'wss:']),
+  ];
+  cachedCsp = [
+    "default-src 'self'",
+    "script-src 'self'",
+    // Deliberate: the SPA builds `style="…"` attributes through innerHTML
+    // templates, so 'unsafe-inline' is required for style-src. Inline <script>
+    // blocks and on* handler attributes stay blocked, which is the boundary
+    // that actually protects the page.
+    "style-src 'self' 'unsafe-inline'",
+    "img-src 'self' data: blob:",
+    "font-src 'self' data:",
+    `connect-src ${connectSources.join(' ')}`,
+    "worker-src 'self' blob:",
+    "child-src 'self'",
+    `frame-src ${frameSources.join(' ')}`,
+    "object-src 'none'",
+    "base-uri 'self'",
+    "form-action 'self'",
+    "frame-ancestors 'self'",
+  ].join('; ');
+  return cachedCsp;
+}
+
+/**
+ * HSTS is only emitted when it cannot lock a development host: either the
+ * operator asked for it explicitly, or the request itself arrived over TLS
+ * (`request.secure`/`request.protocol` honour `trust proxy`, and the raw
+ * `x-forwarded-proto` check covers a TLS-terminating proxy that has not been
+ * declared yet). Sending HSTS on a plaintext response is a no-op in browsers,
+ * which is why the forwarded check is safe here.
+ */
+function requestLooksSecure(request: Request): boolean {
+  if (request.secure === true) return true;
+  if (String(request.protocol ?? '') === 'https') return true;
+  const forwarded = String(request.headers['x-forwarded-proto'] ?? '')
+    .split(',')[0]
+    .trim()
+    .toLowerCase();
+  return forwarded === 'https';
+}
+
+function strictTransportSecurityValue(request: Request): string | null {
+  if (
+    !environmentFlagEnabled(process.env.RDK_SIM2REAL_ENABLE_HSTS) &&
+    !requestLooksSecure(request)
+  ) {
+    return null;
+  }
+  const includeSubDomains = environmentFlagEnabled(
+    process.env.RDK_SIM2REAL_HSTS_INCLUDE_SUBDOMAINS,
+  );
+  return `max-age=${HSTS_MAX_AGE_SECONDS}${includeSubDomains ? '; includeSubDomains' : ''}`;
+}
+
+export const studioSecurityHeadersMiddleware: RequestHandler = (request, response, next) => {
   response.setHeader('X-Content-Type-Options', 'nosniff');
   response.setHeader('Referrer-Policy', 'same-origin');
   response.setHeader('X-Frame-Options', 'SAMEORIGIN');
+  response.setHeader('Permissions-Policy', PERMISSIONS_POLICY);
+  const hsts = strictTransportSecurityValue(request);
+  if (hsts) response.setHeader('Strict-Transport-Security', hsts);
+  if (!isMicroduckSurfacePath(request.path)) {
+    const policy = contentSecurityPolicy();
+    if (policy) response.setHeader('Content-Security-Policy', policy);
+  }
   next();
 };
 
@@ -70,15 +298,20 @@ export function isSSOEnabled(): boolean {
   return (
     String(process.env.RDK_SIM2REAL_SSO_ENABLED || process.env.SSO_ENABLED || '').trim() === '1' ||
     String(process.env.RDK_STUDIO_DEPLOYMENT_PROFILE || '').trim() === 'web-cloud' ||
-    String(process.env.RDK_SIM2REAL_AUTH_MODE || '').trim().toLowerCase() === 'trusted-proxy'
+    String(process.env.RDK_SIM2REAL_AUTH_MODE || '')
+      .trim()
+      .toLowerCase() === 'trusted-proxy'
   );
 }
 
 export function isSSORequired(): boolean {
   return (
-    String(process.env.RDK_SIM2REAL_SSO_REQUIRED || process.env.SSO_REQUIRED || '').trim() === '1' ||
+    String(process.env.RDK_SIM2REAL_SSO_REQUIRED || process.env.SSO_REQUIRED || '').trim() ===
+      '1' ||
     String(process.env.RDK_STUDIO_DEPLOYMENT_PROFILE || '').trim() === 'web-cloud' ||
-    String(process.env.RDK_SIM2REAL_AUTH_MODE || '').trim().toLowerCase() === 'trusted-proxy'
+    String(process.env.RDK_SIM2REAL_AUTH_MODE || '')
+      .trim()
+      .toLowerCase() === 'trusted-proxy'
   );
 }
 
@@ -121,7 +354,9 @@ export const sim2RealCsrfMiddleware: RequestHandler = (request, response, next) 
     next();
     return;
   }
-  const fetchSite = String(request.headers['sec-fetch-site'] ?? '').trim().toLowerCase();
+  const fetchSite = String(request.headers['sec-fetch-site'] ?? '')
+    .trim()
+    .toLowerCase();
   if (fetchSite === 'cross-site') {
     response.status(403).json({
       ok: false,
@@ -186,11 +421,9 @@ function normalizedDevice(value: unknown): (Device & { bridgeOwnerKey?: string }
   const id = typeof source.id === 'string' ? source.id.trim() : '';
   const host = typeof source.host === 'string' ? source.host.trim() : '';
   const username = typeof source.username === 'string' ? source.username.trim() : '';
-  const status = source.status === 'connected' || source.status === 'disconnected'
-    ? source.status
-    : null;
-  const lastCheckedAt =
-    typeof source.lastCheckedAt === 'string' ? source.lastCheckedAt.trim() : '';
+  const status =
+    source.status === 'connected' || source.status === 'disconnected' ? source.status : null;
+  const lastCheckedAt = typeof source.lastCheckedAt === 'string' ? source.lastCheckedAt.trim() : '';
   if (
     !id ||
     id.length > 160 ||
@@ -262,7 +495,11 @@ function normalizedDevice(value: unknown): (Device & { bridgeOwnerKey?: string }
   const bridgeDeviceId = optionalText('bridgeDeviceId', 160);
   if (bridgeDeviceId) normalized.bridgeDeviceId = bridgeDeviceId;
   const bridgeTransport = optionalText('bridgeTransport', 24);
-  if (bridgeTransport === 'ssh' || bridgeTransport === 'usb-ethernet' || bridgeTransport === 'serial') {
+  if (
+    bridgeTransport === 'ssh' ||
+    bridgeTransport === 'usb-ethernet' ||
+    bridgeTransport === 'serial'
+  ) {
     normalized.bridgeTransport = bridgeTransport;
   }
   const bridgeOwnerKey = optionalText('bridgeOwnerKey', 200);
@@ -277,7 +514,10 @@ export async function readDevices(): Promise<Device[]> {
     if (!Array.isArray(parsed)) return [];
     // A corrupt record must not make the whole overview fail. Keep a bounded
     // registry in memory; the device manager remains the owner of persistence.
-    return parsed.slice(0, 500).map(normalizedDevice).filter((device): device is Device => device !== null);
+    return parsed
+      .slice(0, 500)
+      .map(normalizedDevice)
+      .filter((device): device is Device => device !== null);
   } catch {
     return [];
   }
@@ -290,7 +530,12 @@ export async function readDevices(): Promise<Device[]> {
  */
 export function persistDeviceBoardDetection(
   id: string,
-  patch: { boardPlatform?: string | null; boardModel?: string | null; boardOsVersion?: string | null; researchSeeds?: string[] },
+  patch: {
+    boardPlatform?: string | null;
+    boardModel?: string | null;
+    boardOsVersion?: string | null;
+    researchSeeds?: string[];
+  },
 ): Promise<boolean> {
   const operation = deviceWriteQueue.then(async () => {
     if (!/^[a-zA-Z0-9][a-zA-Z0-9._:-]{0,159}$/.test(id)) return false;
@@ -416,7 +661,8 @@ function parseBoardPreflight(output: string): Record<string, string> {
     if (separator <= 0) continue;
     const key = line.slice(0, separator).trim();
     const value = line.slice(separator + 1).trim();
-    if (/^(?:arch|kernel|python3|tros|disk_bytes|bpu_toolchain)$/.test(key)) fields[key] = value.slice(0, 255);
+    if (/^(?:arch|kernel|python3|tros|disk_bytes|bpu_toolchain)$/.test(key))
+      fields[key] = value.slice(0, 255);
   }
   // A board passport is only useful when the complete fixed probe was
   // returned.  Do not let a partial/malformed agent response look like a
@@ -437,7 +683,9 @@ function parseBoardPreflight(output: string): Record<string, string> {
  * deployment infrastructure, not per-operator state.
  */
 export function boardAgentUrl(): string | null {
-  const raw = String(process.env.RDK_SIM2REAL_BOARD_AGENT_URL ?? '').trim().replace(/\/+$/, '');
+  const raw = String(process.env.RDK_SIM2REAL_BOARD_AGENT_URL ?? '')
+    .trim()
+    .replace(/\/+$/, '');
   let fromEnv: string | null = null;
   if (raw) {
     try {
@@ -471,8 +719,14 @@ export function isBoardAgentConfigured(): boolean {
  * Local Bridge WebSocket. Sim2Real uses Studio's device exec route as a narrow
  * command transport in that mode, so the board never needs a second tunnel.
  */
-export function studioBridgeConfiguration(): { origin: string; deviceId: string; agentPort: number } | null {
-  const origin = String(process.env.RDK_SIM2REAL_STUDIO_EXEC_ORIGIN ?? '').trim().replace(/\/+$/, '');
+export function studioBridgeConfiguration(): {
+  origin: string;
+  deviceId: string;
+  agentPort: number;
+} | null {
+  const origin = String(process.env.RDK_SIM2REAL_STUDIO_EXEC_ORIGIN ?? '')
+    .trim()
+    .replace(/\/+$/, '');
   const deviceId = String(process.env.RDK_SIM2REAL_STUDIO_DEVICE_ID ?? '').trim();
   const agentPort = Number(process.env.RDK_SIM2REAL_STUDIO_AGENT_PORT ?? 19100);
   if (!/^https?:\/\/[^\s/]+(?::\d+)?$/.test(origin)) return null;
@@ -499,7 +753,13 @@ export const runOnDevice = async (
   id: string,
   commands: string[],
   options: BoardAgentRunOptions = {},
-): Promise<{ device: unknown; output: string; exitCode?: number; mock?: boolean; actuatorControl?: boolean } | null> => {
+): Promise<{
+  device: unknown;
+  output: string;
+  exitCode?: number;
+  mock?: boolean;
+  actuatorControl?: boolean;
+} | null> => {
   const baseUrl = boardAgentUrl();
   if (
     !baseUrl ||
@@ -508,7 +768,8 @@ export const runOnDevice = async (
     !commands.length ||
     commands.length > 8 ||
     commands.some((command) => typeof command !== 'string' || command.length > 16_000)
-  ) return null;
+  )
+    return null;
   const token = String(process.env.RDK_SIM2REAL_BOARD_AGENT_TOKEN ?? '').trim();
   if (token.length > 4096 || /[\u0000-\u001f\u007f]/.test(token)) return null;
   const timeoutMs = Math.min(Math.max(Number(options.timeoutMs) || 45_000, 1_000), 60_000);
@@ -529,7 +790,8 @@ export const runOnDevice = async (
     });
     if (!response.ok) return null;
     const contentLength = Number(response.headers.get('content-length') || 0);
-    if (Number.isFinite(contentLength) && contentLength > MAX_ROBOGO_API_RESPONSE_BYTES) return null;
+    if (Number.isFinite(contentLength) && contentLength > MAX_ROBOGO_API_RESPONSE_BYTES)
+      return null;
     const raw = await response.text();
     if (Buffer.byteLength(raw, 'utf8') > MAX_ROBOGO_API_RESPONSE_BYTES) return null;
     const payload = JSON.parse(raw) as Record<string, unknown>;
@@ -626,10 +888,11 @@ export function createDeviceBoardDetectRouter(
         const value = typeof agentDevice[key] === 'string' ? agentDevice[key] : fields[key];
         return typeof value === 'string' && value.trim() ? value.trim().slice(0, 160) : undefined;
       };
-      const platform = safeField('boardPlatform') ||
-        (agentDevice.kind === 'simulated-x5' ? 'rdk-x5' : undefined);
+      const platform =
+        safeField('boardPlatform') || (agentDevice.kind === 'simulated-x5' ? 'rdk-x5' : undefined);
       const model = safeField('boardModel') || safeField('model');
-      const osVersion = safeField('boardOsVersion') || safeField('osVersion') || safeField('kernel');
+      const osVersion =
+        safeField('boardOsVersion') || safeField('osVersion') || safeField('kernel');
       const persisted =
         String(request.query.persist ?? '').toLowerCase() === '1' ||
         String(request.query.persist ?? '').toLowerCase() === 'true'
@@ -646,7 +909,11 @@ export function createDeviceBoardDetectRouter(
         model: model || '',
         osVersion: osVersion || '',
         checks: fields,
-        device: { id, ...(platform ? { boardPlatform: platform } : {}), ...(model ? { boardModel: model } : {}) },
+        device: {
+          id,
+          ...(platform ? { boardPlatform: platform } : {}),
+          ...(model ? { boardModel: model } : {}),
+        },
         output: executed.output.slice(0, 12_000),
         persisted,
         mock: executed.mock === true,
@@ -665,7 +932,9 @@ export function createStandaloneRobogoApiClient(
     allowEnvironmentToken?: boolean;
   } = {},
 ) {
-  const baseUrl = String(process.env.RDK_SIM2REAL_ROBOGO_API_URL || '').trim().replace(/\/+$/, '');
+  const baseUrl = String(process.env.RDK_SIM2REAL_ROBOGO_API_URL || '')
+    .trim()
+    .replace(/\/+$/, '');
   if (!/^https:\/\//i.test(baseUrl)) throw new Error('robogo_api_not_configured');
   return {
     async request(accountId: string, input: { method: string; path: string; timeoutMs?: number }) {
@@ -721,7 +990,9 @@ export function createStandaloneRobogoApiClient(
         } finally {
           reader.releaseLock();
         }
-        const raw = new TextDecoder().decode(Buffer.concat(chunks.map((chunk) => Buffer.from(chunk))));
+        const raw = new TextDecoder().decode(
+          Buffer.concat(chunks.map((chunk) => Buffer.from(chunk))),
+        );
         return raw ? (JSON.parse(raw) as unknown) : null;
       } finally {
         clearTimeout(timer);

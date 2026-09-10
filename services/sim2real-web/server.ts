@@ -26,6 +26,8 @@ import {
   studioSecurityHeadersMiddleware,
 } from '../../server/sim2real/standalone-adapters.js';
 import { createStudioLoginRelayRouter } from '../../server/sim2real/studio-login-relay.js';
+import { createRateLimitMiddleware } from '../../server/sim2real/rate-limit.js';
+import { createSim2RealObservability } from '../../server/sim2real/observability.js';
 import {
   createSim2RealRouter,
   SIM2REAL_VERSIONED_API_PREFIX,
@@ -66,7 +68,9 @@ function publicPath(pathname: string): string {
 
 function configuredMicroduckRequired(): boolean {
   return ['1', 'true', 'yes', 'on'].includes(
-    String(process.env.RDK_SIM2REAL_REQUIRE_MICRODUCK ?? '').trim().toLowerCase(),
+    String(process.env.RDK_SIM2REAL_REQUIRE_MICRODUCK ?? '')
+      .trim()
+      .toLowerCase(),
   );
 }
 
@@ -85,9 +89,7 @@ function configuredMicroduckRoot(): string | null {
   const raw = String(process.env.RDK_SIM2REAL_MICRODUCK_ROOT ?? '').trim();
   if (!raw || !path.isAbsolute(raw)) return null;
   try {
-    return existsSync(path.join(raw, 'index.html')) && statSync(raw).isDirectory()
-      ? raw
-      : null;
+    return existsSync(path.join(raw, 'index.html')) && statSync(raw).isDirectory() ? raw : null;
   } catch {
     return null;
   }
@@ -147,10 +149,19 @@ function microduckUnavailablePage(response: express.Response): void {
 }
 
 async function proxyMicroduck(request: express.Request, response: express.Response): Promise<void> {
-  const origin = normalizeMicroduckRedirect(process.env.RDK_SIM2REAL_MICRODUCK_URL)?.replace(/\/+$/, '');
-  if (!origin) { microduckUnavailablePage(response); return; }
+  const origin = normalizeMicroduckRedirect(process.env.RDK_SIM2REAL_MICRODUCK_URL)?.replace(
+    /\/+$/,
+    '',
+  );
+  if (!origin) {
+    microduckUnavailablePage(response);
+    return;
+  }
   const rawSuffix = (request.params as Record<string, string | string[]>).splat ?? '';
-  const suffix = (Array.isArray(rawSuffix) ? rawSuffix.join('/') : String(rawSuffix)).replace(/^\/+/, '');
+  const suffix = (Array.isArray(rawSuffix) ? rawSuffix.join('/') : String(rawSuffix)).replace(
+    /^\/+/,
+    '',
+  );
   const target = `${origin}${suffix ? `/${suffix}` : '/'}`;
   // Rewritable content types (HTML/JS) must be fully buffered to rewrite the
   // upstream absolute /bundle/ paths. Everything else — including the ~10 MB
@@ -179,8 +190,12 @@ async function proxyMicroduck(request: express.Request, response: express.Respon
         response.end(Buffer.from(await upstream.arrayBuffer()));
         return;
       }
-      request.on('close', () => { void reader.cancel().catch(() => undefined); });
-      response.on('error', () => { void reader.cancel().catch(() => undefined); });
+      request.on('close', () => {
+        void reader.cancel().catch(() => undefined);
+      });
+      response.on('error', () => {
+        void reader.cancel().catch(() => undefined);
+      });
       try {
         for (;;) {
           const { done, value } = await reader.read();
@@ -198,7 +213,8 @@ async function proxyMicroduck(request: express.Request, response: express.Respon
     }
     const bytes = new Uint8Array(await upstream.arrayBuffer());
     if (contentType.includes('text/html')) {
-      const html = new TextDecoder().decode(bytes)
+      const html = new TextDecoder()
+        .decode(bytes)
         .replaceAll('src="/bundle/', 'src="/mujoco/microduck-proxy/bundle/')
         .replaceAll('href="/bundle/', 'href="/mujoco/microduck-proxy/bundle/');
       response.send(html);
@@ -208,10 +224,14 @@ async function proxyMicroduck(request: express.Request, response: express.Respon
     // mounted below our same-origin prefix those URLs would escape the bridge
     // and hit the host app's HTML fallback, which WebAssembly reports as the
     // familiar "expected magic word" error. Rewrite only JavaScript assets.
-    const script = new TextDecoder().decode(bytes).replaceAll('/bundle/', '/mujoco/microduck-proxy/bundle/');
+    const script = new TextDecoder()
+      .decode(bytes)
+      .replaceAll('/bundle/', '/mujoco/microduck-proxy/bundle/');
     response.send(script);
   } catch (error) {
-    response.status(502).json({ ok: false, error: 'MICRODUCK_PROXY_UNAVAILABLE', message: jsonError(error) });
+    response
+      .status(502)
+      .json({ ok: false, error: 'MICRODUCK_PROXY_UNAVAILABLE', message: jsonError(error) });
   }
 }
 
@@ -234,6 +254,26 @@ export function createSim2RealWebApp(): Express {
   app.use(storageRequestContextMiddleware);
   app.use(studioSecurityHeadersMiddleware);
   app.use(express.json({ limit: '2mb' }));
+
+  // Structured request telemetry and the application rate limit sit after body
+  // parsing and before every business route, so rejected (429) and failed
+  // requests are counted too. Each app instance owns its own registry, which
+  // keeps counters isolated between tests and embedded deployments.
+  const observability = createSim2RealObservability();
+  app.use(observability.requestMiddleware);
+  app.use(
+    createRateLimitMiddleware({
+      resolveOwner: (request) => {
+        // Reuse the composition root's verified auth port instead of inventing
+        // a second identity path. Single-user mode is one principal, so the
+        // transport address is the correct bucket there.
+        if (!studioSsoAuth.isMultiUserDeployment()) return null;
+        const principal = studioSsoAuth.resolvePrincipal(request);
+        const accountId = String(principal?.accountId ?? '').trim();
+        return accountId ? `sso:${accountId}:web` : null;
+      },
+    }),
+  );
 
   // Health is intentionally public so systemd/nginx can probe the service
   // without possessing an account session.
@@ -268,7 +308,8 @@ export function createSim2RealWebApp(): Express {
       storage,
       ready:
         degraded.every(
-          (item) => item !== 'storage-not-configured' &&
+          (item) =>
+            item !== 'storage-not-configured' &&
             (!microduckRequired || item !== 'microduck-not-mounted'),
         ) &&
         (!authRequired || authAdapterConfigured),
@@ -288,6 +329,17 @@ export function createSim2RealWebApp(): Express {
   app.get('/api/readyz', async (_request, response) => {
     const payload = await healthPayload();
     response.status(payload.ready ? 200 : 503).json(payload);
+  });
+
+  // Prometheus scrape endpoint. It exposes only this process's counters,
+  // normalized route labels and gauges — no environment, token or path data —
+  // and is exempt from the application rate limit so a scrape never trips it.
+  // The body is written with `end` (not `send`) so Express cannot reorder the
+  // `version=0.0.4` content-type parameter.
+  app.get('/metrics', (_request, response) => {
+    response.setHeader('Cache-Control', 'no-store');
+    response.setHeader('Content-Type', 'text/plain; version=0.0.4; charset=utf-8');
+    response.end(observability.renderMetrics());
   });
 
   // Identity is supplied by the injected composition-root adapter. The public
@@ -331,7 +383,9 @@ export function createSim2RealWebApp(): Express {
   // Same-origin MicroDuck proxy used by the Agent control bridge. Register it
   // before the legacy `/mujoco/microduck` route because Express wildcard
   // matching treats the latter as a prefix.
-  app.get('/mujoco/microduck-proxy/{*splat}', (request, response) => { void proxyMicroduck(request, response); });
+  app.get('/mujoco/microduck-proxy/{*splat}', (request, response) => {
+    void proxyMicroduck(request, response);
+  });
 
   // MicroDuck is an optional, separately released static surface. Mounting it
   // here is useful for a self-contained deployment; when operators keep the

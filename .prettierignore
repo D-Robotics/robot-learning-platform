@@ -1,0 +1,24 @@
+# Build and install output
+node_modules
+coverage
+dist-server
+.data
+
+# Hand-written single-file assets: app.js/styles.css/index.html are legacy
+# monoliths that Prettier would rewrite wholesale.
+services/sim2real-web/public/
+
+# Docs and vendored upstream artifacts stay untouched.
+docs/
+*.md
+*.svg
+package-lock.json
+services/mujoco-web/static
+
+# Declarative robot/task manifests are hand-authored and reviewed as data, not
+# code: their expanded arrays are deliberate (diff readability per capability),
+# so Prettier must not collapse them.
+adapters/
+profiles/
+tasks/
+examples/

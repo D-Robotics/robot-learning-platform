@@ -36,6 +36,11 @@
 | **BPU provider 可切换（环 C，本轮新增）** | ✅ | `RDK_BOARD_POLICY_PROVIDER`（env/adapter）选 cpu/bpu；bpu 请求在无 BPU provider 构建上 fail-closed 拒载（`bpu-provider-unavailable`，绝不静默降 CPU）；provider/providerRequested/providersAvailable 如实上报进 station UI |
 | **制品→板端下发（环 D，本轮新增）** | ✅ | worker `/runs/:id/artifact`（服务前重哈希）→ 平台 `/board-station/policy/stage`（发布证据 + SHA-256 交叉比对）→ agent `/policy/upload`（写盘前验哈希、原子落盘）；staging≠加载≠运动；station 页一键下发 + policies/ 列表 |
 | **遥测飞轮（环 A，本轮新增）** | ✅ | `GET /runs/:id/retraining-advice`：action-mae/done-ratio/stale-observation-ratio 三信号 + 120 样本证据底（不足=insufficient-evidence，非静默 healthy）；run 详情建议卡 + 操作员显式「按建议重训」；绝不自动发起 |
+| **生产加固（本轮新增）** | ✅ | 自家页面严格 CSP（`script-src 'self'`）+ 可选 HSTS，MicroDuck 上游 WASM 所在的 `/mujoco` 刻意放宽；进程内限流（429 + `Retry-After`，探针与 `/metrics` 豁免）；JSON 行结构化日志（字段白名单，绝不读 token/cookie/请求体）；Prometheus `/metrics`（标签归一化 + 基数上限）；`originbot-dashboard.html` 内联脚本/样式已抽取为独立文件 |
+| **遥测有界读 + 保留（本轮新增）** | ✅ | 小 `limit` 的列表请求解析到第 N 条即停止（乱序迟到分块自动回退全量以保证逐字节一致）；`RDK_SIM2REAL_TELEMETRY_RETENTION_DAYS` 按天淘汰过期遥测，分片与台账索引同生共死，默认关闭 |
+| **单写者租约（本轮新增）** | ✅ | 写台账前获取/续租 `<storage>/writer-lease.json`；同主机按 pid 存活、跨主机按心跳新鲜度判定；冲突 fail-closed 并映射为 503 + `retryable:false` + 可执行建议；`RDK_SIM2REAL_STORAGE_LEASE=0` 可关闭（排障用） |
+| **前端注入门禁（本轮新增）** | ✅ | `verify:escape-audit` 扫描 `innerHTML`/`outerHTML` 模板插值，未转义即失败；豁免必须带理由，写在模板字面量文本里的"注释"不被承认 |
+| **工程护栏（本轮新增）** | ✅ | ESLint（flat config，error 级零违规）+ Prettier + EditorConfig；覆盖率阈值（lines/stmts 66、funcs 79、branches 61）；Dependabot（npm/Actions/pip）；CI Node 20/22/24 矩阵 |
 | 诚实性原则 | ✅ | mock 永远标注、遥测不伪造、fail-closed、急停常开 |
 
 ## 差距与计划

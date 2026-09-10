@@ -1,8 +1,10 @@
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
+import type { AddressInfo } from 'node:net';
 
-import { afterEach, describe, expect, it } from 'vitest';
+import express, { type Express } from 'express';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import {
   buildBoardPreflightCommand,
@@ -11,7 +13,9 @@ import {
   readDevices,
   requestOwnsDevice,
   studioBridgeConfiguration,
+  studioSecurityHeadersMiddleware,
 } from './standalone-adapters.js';
+import { createSim2RealWebApp } from '../../services/sim2real-web/server.js';
 
 const fakeRequest = {} as never;
 const previousApiUrl = process.env.RDK_SIM2REAL_ROBOGO_API_URL;
@@ -41,7 +45,11 @@ describe('standalone device ownership boundary', () => {
   it('hides ownerless and unknown-owner records in multi-user mode', () => {
     expect(isForeignOwnedDevice({ id: 'unowned' }, 'sso:alice:web', true)).toBe(true);
     expect(
-      isForeignOwnedDevice({ id: 'unknown', bridgeOwnerKey: 'legacy:alice' }, 'sso:alice:web', true),
+      isForeignOwnedDevice(
+        { id: 'unknown', bridgeOwnerKey: 'legacy:alice' },
+        'sso:alice:web',
+        true,
+      ),
     ).toBe(true);
     expect(
       isForeignOwnedDevice({ id: 'owned', bridgeOwnerKey: 'sso:alice:web' }, 'sso:alice:web', true),
@@ -50,9 +58,7 @@ describe('standalone device ownership boundary', () => {
 
   it('keeps single-user local inspection compatible', () => {
     expect(isForeignOwnedDevice({ id: 'local' }, null, false)).toBe(false);
-    expect(
-      requestOwnsDevice(fakeRequest, { id: 'local' }, null, false),
-    ).toBe(true);
+    expect(requestOwnsDevice(fakeRequest, { id: 'local' }, null, false)).toBe(true);
   });
 
   it('requires an exact verified owner key in shared mode', () => {
@@ -61,7 +67,12 @@ describe('standalone device ownership boundary', () => {
     expect(requestOwnsDevice(fakeRequest, device, 'sso:bob:web', true)).toBe(false);
     expect(requestOwnsDevice(fakeRequest, device, null, true)).toBe(false);
     expect(
-      requestOwnsDevice(fakeRequest, { id: 'legacy', bridgeOwnerKey: 'legacy:alice' }, 'sso:alice:web', true),
+      requestOwnsDevice(
+        fakeRequest,
+        { id: 'legacy', bridgeOwnerKey: 'legacy:alice' },
+        'sso:alice:web',
+        true,
+      ),
     ).toBe(false);
   });
 
@@ -162,17 +173,263 @@ describe('board preflight probe contract', () => {
     try {
       const { execFile } = await import('node:child_process');
       const { promisify } = await import('node:util');
-      pythonOutput = (await promisify(execFile)('python3', ['-c', [
-        'import importlib.util, sys',
-        'spec = importlib.util.spec_from_file_location("ba", "services/sim2real-web/board-agent-x5.py")',
-        'module = importlib.util.module_from_spec(spec)',
-        'sys.modules["ba"] = module',
-        'spec.loader.exec_module(module)',
-        'print(module.build_preflight_command())',
-      ].join('; ')], { cwd: process.cwd() })).stdout.trim();
+      pythonOutput = (
+        await promisify(execFile)(
+          'python3',
+          [
+            '-c',
+            [
+              'import importlib.util, sys',
+              'spec = importlib.util.spec_from_file_location("ba", "services/sim2real-web/board-agent-x5.py")',
+              'module = importlib.util.module_from_spec(spec)',
+              'sys.modules["ba"] = module',
+              'spec.loader.exec_module(module)',
+              'print(module.build_preflight_command())',
+            ].join('; '),
+          ],
+          { cwd: process.cwd() },
+        )
+      ).stdout.trim();
     } catch {
       return; // python3 unavailable: skip the cross-language check
     }
     expect(pythonOutput).toBe(buildBoardPreflightCommand());
+  });
+});
+
+describe('standalone security headers', () => {
+  const managedEnvKeys = [
+    'RDK_SIM2REAL_CSP_DISABLE',
+    'RDK_SIM2REAL_CSP_EXTRA_FRAME_SRC',
+    'RDK_SIM2REAL_CSP_EXTRA_CONNECT_SRC',
+    'RDK_SIM2REAL_MICRODUCK_URL',
+    'RDK_SIM2REAL_MICRODUCK_ROOT',
+    'RDK_SIM2REAL_ENABLE_HSTS',
+    'RDK_SIM2REAL_HSTS_INCLUDE_SUBDOMAINS',
+    'RDK_SIM2REAL_PUBLIC_BASE_PATH',
+    'RDK_SIM2REAL_REQUIRE_MICRODUCK',
+    'RDK_SIM2REAL_DEPLOYMENT',
+    'RDK_SIM2REAL_AUTH_MODE',
+  ];
+  const savedEnv = new Map<string, string | undefined>();
+  const securityServers: Array<ReturnType<Express['listen']>> = [];
+
+  beforeEach(() => {
+    for (const key of managedEnvKeys) {
+      savedEnv.set(key, process.env[key]);
+      delete process.env[key];
+    }
+  });
+
+  afterEach(async () => {
+    for (const key of managedEnvKeys) {
+      const value = savedEnv.get(key);
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+    savedEnv.clear();
+    await Promise.all(
+      securityServers.splice(0).map(
+        (server) =>
+          new Promise<void>((resolve) => {
+            server.close(() => resolve());
+          }),
+      ),
+    );
+  });
+
+  async function listenOn(app: Express): Promise<string> {
+    const server = app.listen(0, '127.0.0.1');
+    securityServers.push(server);
+    await new Promise<void>((resolve, reject) => {
+      server.once('listening', () => resolve());
+      server.once('error', reject);
+    });
+    const address = server.address() as AddressInfo;
+    return `http://127.0.0.1:${address.port}`;
+  }
+
+  async function startHeaderApp(options: { trustProxy?: boolean } = {}): Promise<string> {
+    const app = express();
+    if (options.trustProxy) app.set('trust proxy', 1);
+    app.use(studioSecurityHeadersMiddleware);
+    app.get('/api/ping', (_request, response) => {
+      response.json({ ok: true });
+    });
+    app.get('/mujoco', (_request, response) => {
+      response.json({ ok: true });
+    });
+    app.get('/mujoco/{*splat}', (_request, response) => {
+      response.json({ ok: true });
+    });
+    return listenOn(app);
+  }
+
+  it('sends the strict CSP with the documented baseline on every SPA response', async () => {
+    const baseUrl = await startHeaderApp();
+    const response = await fetch(`${baseUrl}/api/ping`);
+    const csp = response.headers.get('content-security-policy') ?? '';
+
+    expect(csp).toContain("default-src 'self'");
+    expect(csp).toContain("script-src 'self'");
+    // 'unsafe-inline' is intentionally limited to styles: the SPA builds
+    // style="…" attributes through innerHTML templates.
+    expect(csp).toContain("style-src 'self' 'unsafe-inline'");
+    expect(csp).toContain("img-src 'self' data: blob:");
+    expect(csp).toContain("font-src 'self' data:");
+    expect(csp).toContain("connect-src 'self'");
+    expect(csp).toContain("worker-src 'self' blob:");
+    expect(csp).toContain("child-src 'self'");
+    expect(csp).toContain("frame-src 'self'");
+    expect(csp).toContain("object-src 'none'");
+    expect(csp).toContain("base-uri 'self'");
+    expect(csp).toContain("form-action 'self'");
+    expect(csp).toContain("frame-ancestors 'self'");
+    expect(csp).not.toContain('unsafe-eval');
+    expect(response.headers.get('x-content-type-options')).toBe('nosniff');
+    expect(response.headers.get('referrer-policy')).toBe('same-origin');
+    expect(response.headers.get('x-frame-options')).toBe('SAMEORIGIN');
+    expect(response.headers.get('permissions-policy')).toContain('camera=()');
+    expect(response.headers.get('permissions-policy')).toContain('microphone=()');
+    expect(response.headers.get('permissions-policy')).toContain('geolocation=()');
+  });
+
+  it('withholds HSTS from plain HTTP unless the operator opts in', async () => {
+    const baseUrl = await startHeaderApp();
+    expect(
+      (await fetch(`${baseUrl}/api/ping`)).headers.get('strict-transport-security'),
+    ).toBeNull();
+
+    process.env.RDK_SIM2REAL_ENABLE_HSTS = '1';
+    const forced = await fetch(`${baseUrl}/api/ping`);
+    expect(forced.headers.get('strict-transport-security')).toBe('max-age=15552000');
+
+    process.env.RDK_SIM2REAL_HSTS_INCLUDE_SUBDOMAINS = '1';
+    const withSubdomains = await fetch(`${baseUrl}/api/ping`);
+    expect(withSubdomains.headers.get('strict-transport-security')).toBe(
+      'max-age=15552000; includeSubDomains',
+    );
+  });
+
+  it('sends HSTS when the request arrived over TLS', async () => {
+    const behindProxy = await startHeaderApp({ trustProxy: true });
+    const forwarded = await fetch(`${behindProxy}/api/ping`, {
+      headers: { 'x-forwarded-proto': 'https', 'x-forwarded-for': '203.0.113.7' },
+    });
+    expect(forwarded.headers.get('strict-transport-security')).toBe('max-age=15552000');
+
+    // Without `trust proxy`, the raw header is still a TLS hint (a browser
+    // ignores HSTS on a plaintext response, so this cannot lock a host).
+    const direct = await startHeaderApp();
+    const hinted = await fetch(`${direct}/api/ping`, {
+      headers: { 'x-forwarded-proto': 'https' },
+    });
+    expect(hinted.headers.get('strict-transport-security')).toBe('max-age=15552000');
+  });
+
+  it('honours the CSP escape valve while keeping the other headers', async () => {
+    process.env.RDK_SIM2REAL_CSP_DISABLE = '1';
+    const baseUrl = await startHeaderApp();
+    const response = await fetch(`${baseUrl}/api/ping`);
+    expect(response.headers.get('content-security-policy')).toBeNull();
+    expect(response.headers.get('x-content-type-options')).toBe('nosniff');
+    expect(response.headers.get('x-frame-options')).toBe('SAMEORIGIN');
+  });
+
+  it('relaxes the CSP for the whole MicroDuck mount namespace only', async () => {
+    const baseUrl = await startHeaderApp();
+    for (const pathname of [
+      '/mujoco',
+      '/mujoco/microduck',
+      '/mujoco/microduck/',
+      '/mujoco/microduck/index.html',
+      '/mujoco/microduck-proxy/bundle/duck.wasm',
+    ]) {
+      const response = await fetch(`${baseUrl}${pathname}`);
+      expect(response.headers.get('content-security-policy'), pathname).toBeNull();
+      expect(response.headers.get('x-content-type-options'), pathname).toBe('nosniff');
+      expect(response.headers.get('x-frame-options'), pathname).toBe('SAMEORIGIN');
+    }
+    expect(
+      (await fetch(`${baseUrl}/api/ping`)).headers.get('content-security-policy'),
+    ).not.toBeNull();
+  });
+
+  it('appends validated extra CSP origins and rejects wildcards and injections', async () => {
+    process.env.RDK_SIM2REAL_CSP_EXTRA_FRAME_SRC =
+      'https://sim.example.test, *, http://127.0.0.1:8080, https://bad.example.test;evil, javascript:alert(1)';
+    process.env.RDK_SIM2REAL_CSP_EXTRA_CONNECT_SRC =
+      'wss://ws.example.test, https://api.example.test/path';
+    process.env.RDK_SIM2REAL_MICRODUCK_URL = 'https://microduck.example.test/entry';
+    const baseUrl = await startHeaderApp();
+    const csp = (await fetch(`${baseUrl}/api/ping`)).headers.get('content-security-policy') ?? '';
+
+    expect(csp).toContain(
+      "frame-src 'self' https://microduck.example.test https://sim.example.test http://127.0.0.1:8080",
+    );
+    expect(csp).toContain("connect-src 'self' wss://ws.example.test");
+    expect(csp).not.toContain('*');
+    expect(csp).not.toContain('bad.example.test');
+    expect(csp).not.toContain('javascript:');
+    expect(csp).not.toContain('api.example.test');
+    expect(csp).not.toMatch(/[\r\n]/);
+  });
+
+  it('ignores an invalid MicroDuck redirect origin in frame-src', async () => {
+    process.env.RDK_SIM2REAL_MICRODUCK_URL = 'http://evil.example.test/microduck';
+    const baseUrl = await startHeaderApp();
+    const csp = (await fetch(`${baseUrl}/api/ping`)).headers.get('content-security-policy') ?? '';
+    expect(csp).toContain("frame-src 'self'");
+    expect(csp).not.toContain('evil.example.test');
+  });
+
+  it('relaxes the CSP on the real app mounts while keeping it on the SPA', async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'rdk-sim2real-headers-'));
+    temporaryRoots.push(root);
+    process.env.RDK_SIM2REAL_DEPLOYMENT = 'local';
+    process.env.RDK_SIM2REAL_STORAGE_DIR = path.join(root, 'ledger');
+    process.env.RDK_SIM2REAL_REQUIRE_MICRODUCK = '0';
+    const baseUrl = await listenOn(createSim2RealWebApp());
+
+    const spa = await fetch(`${baseUrl}/index.html`);
+    expect(spa.status).toBe(200);
+    expect(spa.headers.get('content-security-policy')).toContain("script-src 'self'");
+    expect(spa.headers.get('strict-transport-security')).toBeNull();
+
+    const simulator = await fetch(`${baseUrl}/mujoco/microduck/`);
+    expect(simulator.headers.get('content-security-policy')).toBeNull();
+    expect(simulator.headers.get('x-content-type-options')).toBe('nosniff');
+  });
+});
+
+describe('originbot dashboard asset extraction', () => {
+  it('serves an external script and stylesheet instead of inline blocks', async () => {
+    const publicRoot = path.join(process.cwd(), 'services/sim2real-web/public');
+    const html = await fs.readFile(path.join(publicRoot, 'originbot-dashboard.html'), 'utf8');
+    const scripts = [...html.matchAll(/<script\b[^>]*>/gi)].map((match) => match[0]);
+    expect(scripts).toHaveLength(1);
+    expect(scripts[0]).toContain('src="./originbot-dashboard.js"');
+    expect(html).not.toContain('<style>');
+    expect(html).toContain('<link rel="stylesheet" href="./originbot-dashboard.css">');
+    expect(html).not.toMatch(/\son(click|input|change|submit|load|error)\s*=/i);
+
+    const script = await fs.readFile(path.join(publicRoot, 'originbot-dashboard.js'), 'utf8');
+    const css = await fs.readFile(path.join(publicRoot, 'originbot-dashboard.css'), 'utf8');
+    expect(script.trim().length).toBeGreaterThan(0);
+    expect(script).toContain(
+      "const base=location.pathname.startsWith('/sim2real/')?'/sim2real':'';",
+    );
+    expect(script).toContain('tick();');
+    expect(css.trim().length).toBeGreaterThan(0);
+    expect(css).toContain('.grid{display:grid');
+
+    const { execFile } = await import('node:child_process');
+    const { promisify } = await import('node:util');
+    const checked = await promisify(execFile)(
+      process.execPath,
+      ['--check', path.join(publicRoot, 'originbot-dashboard.js')],
+      { cwd: process.cwd() },
+    );
+    expect(checked.stderr).toBe('');
   });
 });

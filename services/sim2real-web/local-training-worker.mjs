@@ -22,10 +22,17 @@ import path from 'node:path';
 import process from 'node:process';
 import { fileURLToPath } from 'node:url';
 
-const HOST = String(process.env.RDK_SIM2REAL_LOCAL_WORKER_HOST || '127.0.0.1').trim() || '127.0.0.1';
+const HOST =
+  String(process.env.RDK_SIM2REAL_LOCAL_WORKER_HOST || '127.0.0.1').trim() || '127.0.0.1';
 const portValue = Number(process.env.RDK_SIM2REAL_LOCAL_WORKER_PORT || 19091);
-const PORT = Number.isInteger(portValue) && portValue >= 1024 && portValue <= 65535 ? portValue : 19091;
-const DATA_DIR = path.resolve(String(process.env.RDK_SIM2REAL_LOCAL_WORKER_DATA_DIR || path.join(process.cwd(), '.data', 'local-worker')));
+const PORT =
+  Number.isInteger(portValue) && portValue >= 1024 && portValue <= 65535 ? portValue : 19091;
+const DATA_DIR = path.resolve(
+  String(
+    process.env.RDK_SIM2REAL_LOCAL_WORKER_DATA_DIR ||
+      path.join(process.cwd(), '.data', 'local-worker'),
+  ),
+);
 const MAX_BODY = 2 * 1024 * 1024;
 const MAX_RESULT = 1 * 1024 * 1024;
 const MAX_ARTIFACT_BYTES = 10_000_000_000;
@@ -42,7 +49,12 @@ const finalizingJobs = new Set();
 let jobsLoadPromise;
 
 function text(value, max = 500) {
-  return typeof value === 'string' ? value.replace(/[\u0000-\u001f\u007f]/g, ' ').trim().slice(0, max) : '';
+  return typeof value === 'string'
+    ? value
+        .replace(/[\u0000-\u001f\u007f]/g, ' ')
+        .trim()
+        .slice(0, max)
+    : '';
 }
 
 function scrubLog(value, max = 2000) {
@@ -83,7 +95,8 @@ async function bodyJson(request) {
   if (!size) return {};
   try {
     const parsed = JSON.parse(Buffer.concat(chunks).toString('utf8'));
-    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new Error('object required');
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed))
+      throw new Error('object required');
     return parsed;
   } catch {
     throw fail('request body must be valid JSON');
@@ -121,7 +134,11 @@ function canonicalJson(value) {
 }
 
 function requestFingerprint(source, owner) {
-  const { idempotencyKey: _idempotencyKey, accountId: _accountId, ...requestWithoutIdentity } = source;
+  const {
+    idempotencyKey: _idempotencyKey,
+    accountId: _accountId,
+    ...requestWithoutIdentity
+  } = source;
   return createHash('sha256')
     .update(canonicalJson({ accountId: owner, request: requestWithoutIdentity }))
     .digest('hex');
@@ -132,16 +149,29 @@ function validate(source) {
   const contract = source.contract && typeof source.contract === 'object' ? source.contract : {};
   const model = source.model && typeof source.model === 'object' ? source.model : {};
   const contractId = text(source.contractId, 120);
-  if (!contractId || contract.id !== contractId || !text(model.modelId, 64) || !text(model.version, 64)) {
+  if (
+    !contractId ||
+    contract.id !== contractId ||
+    !text(model.modelId, 64) ||
+    !text(model.version, 64)
+  ) {
     throw fail('contractId, contract.id, model.modelId and model.version are required');
   }
-  if (!Number.isSafeInteger(Number(contract.observationSize)) || !Number.isSafeInteger(Number(contract.actionSize))) {
+  if (
+    !Number.isSafeInteger(Number(contract.observationSize)) ||
+    !Number.isSafeInteger(Number(contract.actionSize))
+  ) {
     throw fail('contract dimensions are invalid');
   }
   const training = source.training && typeof source.training === 'object' ? source.training : {};
   const profile = text(training.profile, 32) || 'standard';
   if (!profiles.has(profile)) throw fail('training.profile is not allowed');
-  return { contractId, modelId: text(model.modelId, 64), version: text(model.version, 64), profile };
+  return {
+    contractId,
+    modelId: text(model.modelId, 64),
+    version: text(model.version, 64),
+    profile,
+  };
 }
 
 function executableConfig() {
@@ -149,16 +179,29 @@ function executableConfig() {
   if (!executable) return null;
   // An absolute path makes the deployment boundary explicit and avoids PATH
   // surprises when the service is started by systemd.
-  if (!path.isAbsolute(executable) || executable.includes('\0')) throw fail('RDK_SIM2REAL_TRAIN_EXECUTABLE must be an absolute path', 500, 'worker_configuration_invalid');
+  if (!path.isAbsolute(executable) || executable.includes('\0'))
+    throw fail(
+      'RDK_SIM2REAL_TRAIN_EXECUTABLE must be an absolute path',
+      500,
+      'worker_configuration_invalid',
+    );
   let args = [];
   const rawArgs = String(process.env.RDK_SIM2REAL_TRAIN_ARGS_JSON || '[]').trim();
   try {
     args = JSON.parse(rawArgs);
   } catch {
-    throw fail('RDK_SIM2REAL_TRAIN_ARGS_JSON must be a JSON array', 500, 'worker_configuration_invalid');
+    throw fail(
+      'RDK_SIM2REAL_TRAIN_ARGS_JSON must be a JSON array',
+      500,
+      'worker_configuration_invalid',
+    );
   }
   if (!Array.isArray(args) || args.some((item) => typeof item !== 'string' || item.length > 500)) {
-    throw fail('RDK_SIM2REAL_TRAIN_ARGS_JSON must contain strings', 500, 'worker_configuration_invalid');
+    throw fail(
+      'RDK_SIM2REAL_TRAIN_ARGS_JSON must contain strings',
+      500,
+      'worker_configuration_invalid',
+    );
   }
   return { executable, args };
 }
@@ -166,8 +209,17 @@ function executableConfig() {
 function maxConcurrentJobs() {
   const raw = String(process.env.RDK_SIM2REAL_MAX_CONCURRENT_JOBS || '1').trim();
   const value = Number(raw);
-  if (!/^\d+$/.test(raw) || !Number.isSafeInteger(value) || value < 1 || value > MAX_CONCURRENT_JOBS_LIMIT) {
-    throw fail(`RDK_SIM2REAL_MAX_CONCURRENT_JOBS must be an integer from 1 to ${MAX_CONCURRENT_JOBS_LIMIT}`, 500, 'worker_configuration_invalid');
+  if (
+    !/^\d+$/.test(raw) ||
+    !Number.isSafeInteger(value) ||
+    value < 1 ||
+    value > MAX_CONCURRENT_JOBS_LIMIT
+  ) {
+    throw fail(
+      `RDK_SIM2REAL_MAX_CONCURRENT_JOBS must be an integer from 1 to ${MAX_CONCURRENT_JOBS_LIMIT}`,
+      500,
+      'worker_configuration_invalid',
+    );
   }
   return value;
 }
@@ -236,7 +288,8 @@ async function restorePersistedJobs() {
         !text(candidate.accountId, 160) ||
         !['queued', 'running', 'completed', 'failed'].includes(candidate.status) ||
         typeof candidate.fingerprint !== 'string'
-      ) continue;
+      )
+        continue;
       candidate.accountId = text(candidate.accountId, 160);
       if (!candidate.accountId || /[\u0000-\u001f\u007f/]/.test(candidate.accountId)) continue;
       // A process restart terminates children through systemd's cgroup. Keep
@@ -246,12 +299,14 @@ async function restorePersistedJobs() {
         candidate.status = 'failed';
         candidate.finishedAt = new Date().toISOString();
         candidate.errorCode = 'worker_restarted';
-        candidate.message = '本地 worker 重启后任务状态未知；未自动重启训练，请检查任务目录中的结果。';
+        candidate.message =
+          '本地 worker 重启后任务状态未知；未自动重启训练，请检查任务目录中的结果。';
       }
       delete candidate.pid;
       delete candidate.timeout;
       jobs.set(candidate.runId, candidate);
-      if (candidate.errorCode === 'worker_restarted') await persist(candidate).catch(() => undefined);
+      if (candidate.errorCode === 'worker_restarted')
+        await persist(candidate).catch(() => undefined);
     } catch {
       // A partial/corrupt job must not make the worker unavailable. It is
       // intentionally left on disk for operator inspection.
@@ -336,15 +391,31 @@ async function attachLocalArtifactDigest(job, artifact) {
 }
 
 function resultArtifact(result) {
-  const checkpoint = result.checkpoint && typeof result.checkpoint === 'object' ? result.checkpoint : null;
+  const checkpoint =
+    result.checkpoint && typeof result.checkpoint === 'object' ? result.checkpoint : null;
   const artifact = result.artifact && typeof result.artifact === 'object' ? result.artifact : null;
   const refs = [checkpoint?.artifactRef, artifact?.artifactRef, artifact?.ref];
-  if (!refs.some((ref) => typeof ref === 'string' && /^artifact:\/\/[a-zA-Z0-9][a-zA-Z0-9._-]{0,63}(?:\/[a-zA-Z0-9][a-zA-Z0-9._-]{0,119}){0,8}$/.test(ref))) return null;
-  return { checkpoint, artifact, metrics: result.metrics && typeof result.metrics === 'object' ? result.metrics : undefined };
+  if (
+    !refs.some(
+      (ref) =>
+        typeof ref === 'string' &&
+        /^artifact:\/\/[a-zA-Z0-9][a-zA-Z0-9._-]{0,63}(?:\/[a-zA-Z0-9][a-zA-Z0-9._-]{0,119}){0,8}$/.test(
+          ref,
+        ),
+    )
+  )
+    return null;
+  return {
+    checkpoint,
+    artifact,
+    metrics: result.metrics && typeof result.metrics === 'object' ? result.metrics : undefined,
+  };
 }
 
 async function launch(job, config) {
-  await writeFile(path.join(job.dir, 'request.json'), JSON.stringify(job.request, null, 2), { mode: 0o600 });
+  await writeFile(path.join(job.dir, 'request.json'), JSON.stringify(job.request, null, 2), {
+    mode: 0o600,
+  });
   const child = spawn(config.executable, config.args, {
     cwd: job.dir,
     shell: false,
@@ -357,12 +428,21 @@ async function launch(job, config) {
   job.pid = child.pid;
   let stdout = '';
   let stderr = '';
-  child.stdout.on('data', (chunk) => { stdout = (stdout + String(chunk)).slice(-MAX_LOG); });
-  child.stderr.on('data', (chunk) => { stderr = (stderr + String(chunk)).slice(-MAX_LOG); });
-  const timeoutMs = Math.min(Math.max(Number(process.env.RDK_SIM2REAL_TRAIN_TIMEOUT_MS || 86_400_000), 1000), 7 * 86_400_000);
+  child.stdout.on('data', (chunk) => {
+    stdout = (stdout + String(chunk)).slice(-MAX_LOG);
+  });
+  child.stderr.on('data', (chunk) => {
+    stderr = (stderr + String(chunk)).slice(-MAX_LOG);
+  });
+  const timeoutMs = Math.min(
+    Math.max(Number(process.env.RDK_SIM2REAL_TRAIN_TIMEOUT_MS || 86_400_000), 1000),
+    7 * 86_400_000,
+  );
   job.timeout = setTimeout(() => child.kill('SIGTERM'), timeoutMs);
   child.once('error', (error) => finish(job, 1, stdout, `${stderr}\n${error.message}`));
-  child.once('exit', (code, signal) => finish(job, code ?? 1, stdout, `${stderr}${signal ? `\nterminated:${signal}` : ''}`));
+  child.once('exit', (code, signal) =>
+    finish(job, code ?? 1, stdout, `${stderr}${signal ? `\nterminated:${signal}` : ''}`),
+  );
 }
 
 async function finish(job, code, stdout, stderr) {
@@ -382,18 +462,25 @@ async function finish(job, code, stdout, stderr) {
     const artifact = code === 0 && result ? resultArtifact(result) : null;
     if (artifact) {
       const taskEvaluation = await readTaskEvaluation(job, result);
-      job.status = 'completed';
-      job.mock = false;
-      job.cuda = Boolean(result.cuda);
-      job.deployable = result.deployable === true;
       if (artifact.checkpoint) job.checkpoint = artifact.checkpoint;
       if (artifact.artifact) job.artifact = await attachLocalArtifactDigest(job, artifact.artifact);
       if (artifact.metrics) job.metrics = artifact.metrics;
       if (taskEvaluation) job.taskEvaluation = taskEvaluation;
+      // Publish completion only after every derived field is attached. Flipping
+      // status before the digest await let a status poll observe `completed`
+      // with no artifact, which is exactly what the staging chain must never
+      // see (the consumer reads sha256/sizeBytes off a completed run).
+      job.status = 'completed';
+      job.mock = false;
+      job.cuda = Boolean(result.cuda);
+      job.deployable = result.deployable === true;
       job.message = '本地训练引擎已完成并返回受控制品引用。';
     } else {
       job.status = 'failed';
-      job.message = code === 0 ? '训练进程完成，但未写入有效 artifact:// 结果；任务不会标记为成功。' : '本地训练进程失败。';
+      job.message =
+        code === 0
+          ? '训练进程完成，但未写入有效 artifact:// 结果；任务不会标记为成功。'
+          : '本地训练进程失败。';
       job.errorCode = code === 0 ? 'training_result_missing' : 'training_process_failed';
     }
     job.exitCode = code;
@@ -463,7 +550,9 @@ async function persist(job) {
   // Timeout handles are process-local and circular; never serialize runtime
   // state into the durable job snapshot exposed to status readers.
   const { timeout: _timeout, ...snapshot } = job;
-  await writeFile(path.join(job.dir, 'job.json'), JSON.stringify(snapshot, null, 2), { mode: 0o600 });
+  await writeFile(path.join(job.dir, 'job.json'), JSON.stringify(snapshot, null, 2), {
+    mode: 0o600,
+  });
 }
 
 async function handleTrain(request, response) {
@@ -472,7 +561,11 @@ async function handleTrain(request, response) {
   const config = executableConfig();
   maxConcurrentJobs();
   if (!config) {
-    json(response, 503, { ok: false, error: 'real_worker_not_configured', message: '未配置真实训练引擎；当前 worker 不会伪造 PPO 完成。' });
+    json(response, 503, {
+      ok: false,
+      error: 'real_worker_not_configured',
+      message: '未配置真实训练引擎；当前 worker 不会伪造 PPO 完成。',
+    });
     return;
   }
   const normalized = validate(source);
@@ -481,15 +574,37 @@ async function handleTrain(request, response) {
   const fingerprint = requestFingerprint(source, owner);
   for (const job of jobs.values()) {
     if (key && job.accountId === owner && job.idempotencyKey === key) {
-      if (job.fingerprint !== fingerprint) throw fail('Idempotency-Key was reused for a different request', 409, 'idempotency_conflict');
+      if (job.fingerprint !== fingerprint)
+        throw fail(
+          'Idempotency-Key was reused for a different request',
+          409,
+          'idempotency_conflict',
+        );
       json(response, 200, { ...publicJob(job), idempotentReplay: true });
       return;
     }
   }
-  if (jobs.size >= MAX_JOBS) throw fail('worker job retention limit reached', 429, 'worker_queue_full');
+  if (jobs.size >= MAX_JOBS)
+    throw fail('worker job retention limit reached', 429, 'worker_queue_full');
   const runId = `local-${normalized.modelId.replace(/[^a-zA-Z0-9._-]/g, '-').slice(0, 48)}-${randomUUID()}`;
   const dir = path.join(DATA_DIR, runId);
-  const job = { runId, status: 'queued', mock: false, cuda: null, deployable: false, accountId: owner, contractId: normalized.contractId, modelId: normalized.modelId, version: normalized.version, profile: normalized.profile, idempotencyKey: key, fingerprint, request: source, dir, createdAt: new Date().toISOString() };
+  const job = {
+    runId,
+    status: 'queued',
+    mock: false,
+    cuda: null,
+    deployable: false,
+    accountId: owner,
+    contractId: normalized.contractId,
+    modelId: normalized.modelId,
+    version: normalized.version,
+    profile: normalized.profile,
+    idempotencyKey: key,
+    fingerprint,
+    request: source,
+    dir,
+    createdAt: new Date().toISOString(),
+  };
   // Reserve synchronously before the first await so two concurrent requests
   // carrying one idempotency key cannot both launch an engine process.
   jobs.set(runId, job);
@@ -508,10 +623,21 @@ async function handleTrain(request, response) {
 async function handleStatus(request, response, runId) {
   await ensureJobsLoaded();
   const job = jobs.get(runId);
-  if (!job) { json(response, 404, { ok: false, error: 'run_not_found' }); return; }
+  if (!job) {
+    json(response, 404, { ok: false, error: 'run_not_found' });
+    return;
+  }
   let owner;
-  try { owner = accountId(request, {}); } catch { json(response, 401, { ok: false, error: 'account_required' }); return; }
-  if (owner !== job.accountId) { json(response, 404, { ok: false, error: 'run_not_found' }); return; }
+  try {
+    owner = accountId(request, {});
+  } catch {
+    json(response, 401, { ok: false, error: 'account_required' });
+    return;
+  }
+  if (owner !== job.accountId) {
+    json(response, 404, { ok: false, error: 'run_not_found' });
+    return;
+  }
   json(response, 200, publicJob(job));
 }
 
@@ -529,20 +655,43 @@ async function handleArtifact(request, response) {
   await ensureJobsLoaded();
   const runId = decodeURIComponent((request.url || '').slice('/runs/'.length, -'/artifact'.length));
   const job = jobs.get(runId);
-  if (!job) { json(response, 404, { ok: false, error: 'run_not_found' }); return; }
+  if (!job) {
+    json(response, 404, { ok: false, error: 'run_not_found' });
+    return;
+  }
   let owner;
-  try { owner = accountId(request, {}); } catch { json(response, 401, { ok: false, error: 'account_required' }); return; }
-  if (owner !== job.accountId) { json(response, 404, { ok: false, error: 'run_not_found' }); return; }
+  try {
+    owner = accountId(request, {});
+  } catch {
+    json(response, 401, { ok: false, error: 'account_required' });
+    return;
+  }
+  if (owner !== job.accountId) {
+    json(response, 404, { ok: false, error: 'run_not_found' });
+    return;
+  }
   if (job.status !== 'completed') {
-    json(response, 409, { ok: false, error: 'run_not_completed', message: '只有已完成的任务才能读取制品字节。' });
+    json(response, 409, {
+      ok: false,
+      error: 'run_not_completed',
+      message: '只有已完成的任务才能读取制品字节。',
+    });
     return;
   }
   if (job.mock) {
-    json(response, 409, { ok: false, error: 'mock_run_has_no_artifact', message: 'mock 任务不产生可部署制品。' });
+    json(response, 409, {
+      ok: false,
+      error: 'mock_run_has_no_artifact',
+      message: 'mock 任务不产生可部署制品。',
+    });
     return;
   }
   if (job.artifact?.format?.toLowerCase() !== 'onnx') {
-    json(response, 409, { ok: false, error: 'artifact_not_onnx', message: '该任务没有 ONNX 制品可下发。' });
+    json(response, 409, {
+      ok: false,
+      error: 'artifact_not_onnx',
+      message: '该任务没有 ONNX 制品可下发。',
+    });
     return;
   }
   const filePath = path.join(job.dir, 'policy.onnx');
@@ -550,7 +699,11 @@ async function handleArtifact(request, response) {
   try {
     info = await stat(filePath);
   } catch {
-    json(response, 409, { ok: false, error: 'artifact_file_missing', message: '制品文件缺失（引擎导出失败或已被清理）。' });
+    json(response, 409, {
+      ok: false,
+      error: 'artifact_file_missing',
+      message: '制品文件缺失（引擎导出失败或已被清理）。',
+    });
     return;
   }
   if (!info.isFile() || info.size <= 0 || info.size > MAX_ARTIFACT_BYTES) {
@@ -574,7 +727,11 @@ async function handleArtifact(request, response) {
       await handle?.close().catch(() => undefined);
     }
     if (digest.digest('hex') !== job.artifact.sha256 || bytes !== info.size) {
-      json(response, 409, { ok: false, error: 'artifact_digest_mismatch', message: '制品字节与完成时记录的 SHA-256 不一致，拒绝下发。' });
+      json(response, 409, {
+        ok: false,
+        error: 'artifact_digest_mismatch',
+        message: '制品字节与完成时记录的 SHA-256 不一致，拒绝下发。',
+      });
       return;
     }
   }
@@ -627,13 +784,34 @@ export function createLocalTrainingWorkerServer() {
         json(response, 401, { ok: false, error: 'local_worker_unauthorized' });
         return;
       }
-      if (request.method === 'POST' && request.url === '/train') { await handleTrain(request, response); return; }
-      if (request.method === 'GET' && request.url?.startsWith('/runs/') && request.url.endsWith('/artifact')) { await handleArtifact(request, response); return; }
-      if (request.method === 'GET' && request.url?.startsWith('/runs/')) { await handleStatus(request, response, decodeURIComponent(request.url.slice('/runs/'.length))); return; }
+      if (request.method === 'POST' && request.url === '/train') {
+        await handleTrain(request, response);
+        return;
+      }
+      if (
+        request.method === 'GET' &&
+        request.url?.startsWith('/runs/') &&
+        request.url.endsWith('/artifact')
+      ) {
+        await handleArtifact(request, response);
+        return;
+      }
+      if (request.method === 'GET' && request.url?.startsWith('/runs/')) {
+        await handleStatus(
+          request,
+          response,
+          decodeURIComponent(request.url.slice('/runs/'.length)),
+        );
+        return;
+      }
       json(response, 404, { ok: false, error: 'not_found' });
     } catch (error) {
       const status = Number(error?.statusCode) || 500;
-      json(response, status, { ok: false, error: error?.errorCode || 'local_worker_failed', message: text(error?.message) });
+      json(response, status, {
+        ok: false,
+        error: error?.errorCode || 'local_worker_failed',
+        message: text(error?.message),
+      });
     }
   });
 }
@@ -643,7 +821,9 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
   const server = createLocalTrainingWorkerServer();
   server.requestTimeout = 10_000;
   server.headersTimeout = 5_000;
-  server.listen(PORT, HOST, () => console.log(`[sim2real-local] listening on http://${HOST}:${PORT}`));
+  server.listen(PORT, HOST, () =>
+    console.log(`[sim2real-local] listening on http://${HOST}:${PORT}`),
+  );
   const close = () => {
     for (const child of activeChildren) child.kill('SIGTERM');
     server.closeIdleConnections?.();

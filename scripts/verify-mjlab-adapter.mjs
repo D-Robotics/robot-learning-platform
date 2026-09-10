@@ -12,7 +12,7 @@
  */
 
 import assert from 'node:assert/strict';
-import { spawn, spawnSync } from 'node:child_process';
+import { spawnSync } from 'node:child_process';
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
@@ -64,26 +64,22 @@ try {
   const resultPath = path.join(scratch, 'result.json');
   await writeFile(requestPath, JSON.stringify(request, null, 2));
 
-  const run = spawnSync(
-    python,
-    [adapterPath],
-    {
-      cwd: scratch,
-      encoding: 'utf8',
-      stdio: ['ignore', 'pipe', 'pipe'],
-      env: {
-        ...process.env,
-        RDK_SIM2REAL_REQUEST_FILE: requestPath,
-        RDK_SIM2REAL_RESULT_FILE: resultPath,
-        RDK_STARTER_ENGINE_ITERATIONS: '2',
-        RDK_STARTER_ENGINE_ENVS: '4',
-        RDK_STARTER_ENGINE_STEPS: '16',
-        RDK_STARTER_ENGINE_DEVICE: 'cpu',
-        RDK_RSL_ADAPTER_FORCE_MJLAB: '0',
-      },
-      maxBuffer: 4 * 1024 * 1024,
+  const run = spawnSync(python, [adapterPath], {
+    cwd: scratch,
+    encoding: 'utf8',
+    stdio: ['ignore', 'pipe', 'pipe'],
+    env: {
+      ...process.env,
+      RDK_SIM2REAL_REQUEST_FILE: requestPath,
+      RDK_SIM2REAL_RESULT_FILE: resultPath,
+      RDK_STARTER_ENGINE_ITERATIONS: '2',
+      RDK_STARTER_ENGINE_ENVS: '4',
+      RDK_STARTER_ENGINE_STEPS: '16',
+      RDK_STARTER_ENGINE_DEVICE: 'cpu',
+      RDK_RSL_ADAPTER_FORCE_MJLAB: '0',
     },
-  );
+    maxBuffer: 4 * 1024 * 1024,
+  });
   if (run.status !== 0) {
     console.error(run.stdout || '');
     console.error(run.stderr || '');

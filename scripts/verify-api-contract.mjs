@@ -40,13 +40,13 @@ function declaredOperations(text) {
     }
     if (inPaths && /^components:\s*$/.test(line)) break;
     if (!inPaths) continue;
-    const pathMatch = line.match(/^  (\/[^\s:]+):\s*$/);
+    const pathMatch = line.match(/^ {2}(\/[^\s:]+):\s*$/);
     if (pathMatch) {
       currentPath = pathMatch[1];
       operations.set(currentPath, new Set());
       continue;
     }
-    if (currentPath && /^    (get|post|put|patch|delete):\s*$/.test(line)) {
+    if (currentPath && /^ {4}(get|post|put|patch|delete):\s*$/.test(line)) {
       const method = line.trim().replace(':', '');
       operations.get(currentPath).add(method);
     }
@@ -73,10 +73,12 @@ function collectRoutes(router, prefix = '') {
 }
 
 function normalizeRoutePath(routePath) {
-  return routePath
-    .replace(/\/\(\?:\?\?\)/g, '')
-    .replace(/\?.*$/, '')
-    .replace(/\/+$/, '') || '/';
+  return (
+    routePath
+      .replace(/\/\(\?:\?\?\)/g, '')
+      .replace(/\?.*$/, '')
+      .replace(/\/+$/, '') || '/'
+  );
 }
 
 const { createSim2RealRouter, SIM2REAL_VERSIONED_API_PREFIX } = await import(
@@ -98,8 +100,14 @@ const relayRouter = createStudioLoginRelayRouter();
 const boardDetectRouter = createDeviceBoardDetectRouter(undefined, {});
 const agentRouter = createSim2RealAgentRouter();
 
-const legacyRoutes = collectRoutes(legacyRouter).map(([method, p]) => [method, normalizeRoutePath(p)]);
-const versionedRoutes = collectRoutes(versionedRouter).map(([method, p]) => [method, normalizeRoutePath(p)]);
+const legacyRoutes = collectRoutes(legacyRouter).map(([method, p]) => [
+  method,
+  normalizeRoutePath(p),
+]);
+const versionedRoutes = collectRoutes(versionedRouter).map(([method, p]) => [
+  method,
+  normalizeRoutePath(p),
+]);
 
 // The two prefixes must be route-for-route identical (the alias promise):
 // compare route shapes with each router's own prefix stripped.
@@ -111,9 +119,7 @@ function stripPrefix(routePath, prefix) {
   );
   return routePath === prefix ? '/' : routePath.slice(prefix.length);
 }
-const legacyShapes = new Set(
-  legacyRoutes.map(([m, p]) => `${m} ${stripPrefix(p, LEGACY_PREFIX)}`),
-);
+const legacyShapes = new Set(legacyRoutes.map(([m, p]) => `${m} ${stripPrefix(p, LEGACY_PREFIX)}`));
 const versionedShapes = new Set(
   versionedRoutes.map(([m, p]) => `${m} ${stripPrefix(p, SIM2REAL_VERSIONED_API_PREFIX)}`),
 );
@@ -151,7 +157,7 @@ const RESOURCE_PARAM_NAMES = {
 };
 function toSpecShape(routePath) {
   return routePath.replace(/\/([A-Za-z0-9_-]+)\/:([A-Za-z0-9_]+)/g, (match, resource, name) => {
-    const specName = name === 'id' ? RESOURCE_PARAM_NAMES[resource] ?? 'id' : name;
+    const specName = name === 'id' ? (RESOURCE_PARAM_NAMES[resource] ?? 'id') : name;
     return `/${resource}/{${specName}}`;
   });
 }

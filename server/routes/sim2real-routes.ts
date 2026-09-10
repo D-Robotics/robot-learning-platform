@@ -6,7 +6,6 @@ import type {
   Sim2RealDeploymentRecord,
   Sim2RealDeploymentStep,
   Sim2RealAvailableContract,
-  Sim2RealModelManifest,
   Sim2RealModelRecord,
   Sim2RealRunArtifactMetadata,
   Sim2RealRunMetrics,
@@ -27,7 +26,11 @@ import {
   validateSim2RealManifest,
 } from '../../shared/sim2real.js';
 import { sendApiError, sendInternalApiError, wrapAsync } from '../sim2real/http-helpers.js';
-import { Sim2RealError, sim2RealErrorCode, type Sim2RealErrorCode } from '../sim2real/sim2real-errors.js';
+import {
+  Sim2RealError,
+  sim2RealErrorCode,
+  type Sim2RealErrorCode,
+} from '../sim2real/sim2real-errors.js';
 import {
   buildBoardPreflightCommand,
   isForeignOwnedDevice,
@@ -71,7 +74,11 @@ import {
   updateSim2RealDeployment,
   sim2RealStorageInfo,
 } from '../sim2real/sim2real-store.js';
-import { requestLocalTraining, requestLocalTrainingStatus, fetchLocalRunArtifact } from '../sim2real/local-runner.js';
+import {
+  requestLocalTraining,
+  requestLocalTrainingStatus,
+  fetchLocalRunArtifact,
+} from '../sim2real/local-runner.js';
 import {
   isSim2RealRunnerNotFound,
   isSim2RealRunnerOutcomeUnknown,
@@ -98,7 +105,13 @@ type RunOnDevice = (
     stdoutCharLimit?: number;
     abortSignal?: AbortSignal;
   },
-  ) => Promise<{ device: unknown; output: string; exitCode?: number; mock?: boolean; actuatorControl?: boolean } | null>;
+) => Promise<{
+  device: unknown;
+  output: string;
+  exitCode?: number;
+  mock?: boolean;
+  actuatorControl?: boolean;
+} | null>;
 
 type OwnedDevice = Device & { bridgeOwnerKey?: string };
 
@@ -145,10 +158,13 @@ function requestIdempotencyKey(
   body: Record<string, unknown>,
 ): { key?: string; error?: string } {
   const headerValue = request.headers['idempotency-key'];
-  const header = Array.isArray(headerValue) ? headerValue.join(',') : String(headerValue ?? '').trim();
+  const header = Array.isArray(headerValue)
+    ? headerValue.join(',')
+    : String(headerValue ?? '').trim();
   const bodyValue = body.idempotencyKey == null ? '' : String(body.idempotencyKey).trim();
   if (header && !SAFE_IDEMPOTENCY_KEY.test(header)) return { error: 'Idempotency-Key 格式无效' };
-  if (bodyValue && !SAFE_IDEMPOTENCY_KEY.test(bodyValue)) return { error: 'idempotencyKey 格式无效' };
+  if (bodyValue && !SAFE_IDEMPOTENCY_KEY.test(bodyValue))
+    return { error: 'idempotencyKey 格式无效' };
   if (header && bodyValue && header !== bodyValue) {
     return { error: 'Idempotency-Key 请求头与 body.idempotencyKey 不一致' };
   }
@@ -349,9 +365,7 @@ function latestByTimestamp<T>(items: readonly T[], timestamp: (item: T) => strin
   return [...items].sort((left, right) => timestamp(right).localeCompare(timestamp(left)))[0];
 }
 
-function availableContractsFor(
-  models: readonly Sim2RealModelRecord[],
-): {
+function availableContractsFor(models: readonly Sim2RealModelRecord[]): {
   availableContracts: Sim2RealAvailableContract[];
   contracts: Record<Sim2RealRobotId, Sim2RealAvailableContract[]>;
 } {
@@ -420,6 +434,7 @@ function validationPayload(input: unknown, platforms: readonly string[]) {
 const STORAGE_HTTP_CODES = [
   'sim2real_storage_not_configured',
   'sim2real_storage_unavailable',
+  'sim2real_storage_writer_conflict',
   'sim2real_storage_quota_exceeded',
   'sim2real_model_version_exists',
   'sim2real_model_quota_exceeded',
@@ -441,13 +456,26 @@ const STORAGE_HTTP_CODES = [
 
 type StorageHttpCode = (typeof STORAGE_HTTP_CODES)[number];
 
-const STORAGE_ERROR_HTTP: Readonly<Record<StorageHttpCode, {
-  status: number;
-  code: string;
-  message: string;
-  retryable: boolean;
-  retryAfterSeconds?: number;
-}>> = {
+/**
+ * Runtime membership set derived from the same list the type comes from, so the
+ * lookup below cannot drift from the compile-time exhaustiveness guarantee — and
+ * so a code like `toString` can never match through the prototype chain the way
+ * a bare `code in STORAGE_ERROR_HTTP` would.
+ */
+const STORAGE_ERROR_CODE_SET: ReadonlySet<string> = new Set(STORAGE_HTTP_CODES);
+
+const STORAGE_ERROR_HTTP: Readonly<
+  Record<
+    StorageHttpCode,
+    {
+      status: number;
+      code: string;
+      message: string;
+      retryable: boolean;
+      retryAfterSeconds?: number;
+    }
+  >
+> = {
   sim2real_storage_not_configured: {
     status: 503,
     code: 'SIM2REAL_STORAGE_NOT_CONFIGURED',
@@ -459,6 +487,15 @@ const STORAGE_ERROR_HTTP: Readonly<Record<StorageHttpCode, {
     code: 'SIM2REAL_STORAGE_UNAVAILABLE',
     message: 'sim2real 台账当前不可读或不可写；为避免覆盖已有数据，服务已停止本次操作。',
     retryable: true,
+  },
+  sim2real_storage_writer_conflict: {
+    // Another process owns the storage directory. Retrying without operator
+    // action cannot succeed, so this is explicitly not retryable.
+    status: 503,
+    code: 'SIM2REAL_STORAGE_WRITER_CONFLICT',
+    message:
+      '另一个进程正在写这个存储目录；为避免覆盖台账，本服务已拒绝本次写入。请改用独立的 RDK_SIM2REAL_STORAGE_DIR，或确认旧进程已退出后重试。',
+    retryable: false,
   },
   sim2real_storage_quota_exceeded: {
     status: 507,
@@ -569,11 +606,13 @@ function storageError(request: Request, response: Response, error: unknown, scop
   const code = sim2RealErrorCode(error);
   // Runner-level codes (sim2real_robogo_*) are caught upstream and become
   // run-level states; anything left unmapped here falls to the 500 path.
-  const mapped = code && (code in STORAGE_ERROR_HTTP)
-    ? STORAGE_ERROR_HTTP[code as StorageHttpCode]
-    : undefined;
+  const mapped =
+    code && STORAGE_ERROR_CODE_SET.has(code)
+      ? STORAGE_ERROR_HTTP[code as StorageHttpCode]
+      : undefined;
   if (mapped) {
-    if (mapped.retryAfterSeconds) response.setHeader('Retry-After', String(mapped.retryAfterSeconds));
+    if (mapped.retryAfterSeconds)
+      response.setHeader('Retry-After', String(mapped.retryAfterSeconds));
     sendApiError(response, mapped.status, mapped.code, mapped.message, {
       retryable: mapped.retryable,
       ...(mapped.retryAfterSeconds ? { retryAfterSeconds: mapped.retryAfterSeconds } : {}),
@@ -616,7 +655,11 @@ function parseRunRequest(
   const idempotency = requestIdempotencyKey(request, body);
   if (idempotency.error) {
     return {
-      apiError: { status: 400, code: 'SIM2REAL_INVALID_IDEMPOTENCY_KEY', message: idempotency.error },
+      apiError: {
+        status: 400,
+        code: 'SIM2REAL_INVALID_IDEMPOTENCY_KEY',
+        message: idempotency.error,
+      },
     };
   }
   const idempotencyKey = idempotency.key;
@@ -665,17 +708,50 @@ function parseRunRequest(
   }
   const resumeResult = normalizeResumeFrom(body.resumeFrom);
   if (resumeResult.error) {
-    return { apiError: { status: 400, code: 'SIM2REAL_INVALID_RESUME', message: resumeResult.error } };
+    return {
+      apiError: { status: 400, code: 'SIM2REAL_INVALID_RESUME', message: resumeResult.error },
+    };
   }
   const projectId = String(body.projectId ?? '').trim();
   const experimentId = String(body.experimentId ?? '').trim();
   const label = String(body.label ?? '').trim();
   const computeResourceId = String(body.computeResourceId ?? '').trim();
-  if (projectId && !/^[a-zA-Z0-9_-]{1,120}$/.test(projectId)) return { apiError: { status: 400, code: 'SIM2REAL_INVALID_PROJECT', message: 'projectId 格式无效' } };
-  if (experimentId && !/^[a-zA-Z0-9._-]{1,120}$/.test(experimentId)) return { apiError: { status: 400, code: 'SIM2REAL_INVALID_EXPERIMENT', message: 'experimentId 格式无效' } };
-  if (label.length > 120) return { apiError: { status: 400, code: 'SIM2REAL_INVALID_LABEL', message: 'label 长度不能超过 120 个字符' } };
-  if (computeResourceId && !/^[a-f0-9-]{8,100}$/i.test(computeResourceId)) return { apiError: { status: 400, code: 'SIM2REAL_INVALID_COMPUTE_RESOURCE', message: 'computeResourceId 格式无效' } };
-  if (computeResourceId && backend !== 'local') return { apiError: { status: 400, code: 'SIM2REAL_COMPUTE_RESOURCE_LOCAL_ONLY', message: '自有 GPU 资源目前只支持 local 训练后端。' } };
+  if (projectId && !/^[a-zA-Z0-9_-]{1,120}$/.test(projectId))
+    return {
+      apiError: { status: 400, code: 'SIM2REAL_INVALID_PROJECT', message: 'projectId 格式无效' },
+    };
+  if (experimentId && !/^[a-zA-Z0-9._-]{1,120}$/.test(experimentId))
+    return {
+      apiError: {
+        status: 400,
+        code: 'SIM2REAL_INVALID_EXPERIMENT',
+        message: 'experimentId 格式无效',
+      },
+    };
+  if (label.length > 120)
+    return {
+      apiError: {
+        status: 400,
+        code: 'SIM2REAL_INVALID_LABEL',
+        message: 'label 长度不能超过 120 个字符',
+      },
+    };
+  if (computeResourceId && !/^[a-f0-9-]{8,100}$/i.test(computeResourceId))
+    return {
+      apiError: {
+        status: 400,
+        code: 'SIM2REAL_INVALID_COMPUTE_RESOURCE',
+        message: 'computeResourceId 格式无效',
+      },
+    };
+  if (computeResourceId && backend !== 'local')
+    return {
+      apiError: {
+        status: 400,
+        code: 'SIM2REAL_COMPUTE_RESOURCE_LOCAL_ONLY',
+        message: '自有 GPU 资源目前只支持 local 训练后端。',
+      },
+    };
   return {
     parsed: {
       idempotencyKey,
@@ -773,7 +849,8 @@ async function dispatchRunBackend(input: {
       summary: '官方参考策略已准备好在浏览器 MicroDuck 仿真中运行。',
       // Use the integration's public entry so a reverse-proxy prefix such
       // as /sim2real is preserved for API/CLI consumers as well as the SPA.
-      launchUrl: integrations.browser.entryUrl || model.manifest.simulator.entryUrl || '/mujoco/microduck/',
+      launchUrl:
+        integrations.browser.entryUrl || model.manifest.simulator.entryUrl || '/mujoco/microduck/',
     };
   }
   if (backend === 'browser' && browserSupported && isBuiltin) {
@@ -819,7 +896,11 @@ async function dispatchRunBackend(input: {
         summary:
           launched.message ||
           'RoboGo 训练已' +
-            (launched.status === 'completed' ? '完成' : launched.status === 'running' ? '启动' : '排队') +
+            (launched.status === 'completed'
+              ? '完成'
+              : launched.status === 'running'
+                ? '启动'
+                : '排队') +
             '；不会在网页层直接驱动电机。',
         ...(launched.externalRunId ? { externalRunId: launched.externalRunId } : {}),
         ...(launched.mock === true ? { mock: true } : {}),
@@ -836,7 +917,9 @@ async function dispatchRunBackend(input: {
       // external id instead of making a duplicate retry.
       return {
         status: isSim2RealRunnerOutcomeUnknown(error) ? 'queued' : 'failed',
-        summary: isSim2RealRunnerOutcomeUnknown(error) ? unknownSummary('robogo') : failedSummary('robogo'),
+        summary: isSim2RealRunnerOutcomeUnknown(error)
+          ? unknownSummary('robogo')
+          : failedSummary('robogo'),
       };
     }
   }
@@ -848,7 +931,9 @@ async function dispatchRunBackend(input: {
         summary: '本地训练 runner 已配置，但当前会话没有可用账号；任务只登记，未启动训练。',
       };
     }
-    const selectedResource = computeResourceId ? await getSim2RealComputeResourceSecret(computeResourceId, owner) : null;
+    const selectedResource = computeResourceId
+      ? await getSim2RealComputeResourceSecret(computeResourceId, owner)
+      : null;
     if (computeResourceId && !selectedResource) {
       return { status: 'blocked', summary: '所选 GPU 训练资源不存在，或不属于当前账号。' };
     }
@@ -860,7 +945,9 @@ async function dispatchRunBackend(input: {
         resumeFrom,
         taskId: taskId || undefined,
         idempotencyKey,
-        ...(selectedResource?.resource.runnerUrl ? { runnerUrl: selectedResource.resource.runnerUrl } : {}),
+        ...(selectedResource?.resource.runnerUrl
+          ? { runnerUrl: selectedResource.resource.runnerUrl }
+          : {}),
         ...(selectedResource?.runnerToken ? { runnerToken: selectedResource.runnerToken } : {}),
       });
       return {
@@ -868,7 +955,11 @@ async function dispatchRunBackend(input: {
         summary:
           launched.message ||
           '本地服务器训练已' +
-            (launched.status === 'completed' ? '完成' : launched.status === 'running' ? '启动' : '排队') +
+            (launched.status === 'completed'
+              ? '完成'
+              : launched.status === 'running'
+                ? '启动'
+                : '排队') +
             '；训练进程由受控 worker 管理。',
         ...(launched.externalRunId ? { externalRunId: launched.externalRunId } : {}),
         ...(launched.mock === true ? { mock: true } : {}),
@@ -883,7 +974,9 @@ async function dispatchRunBackend(input: {
       // deterministic configuration or 4xx rejection can be terminal.
       return {
         status: isSim2RealRunnerOutcomeUnknown(error) ? 'queued' : 'failed',
-        summary: isSim2RealRunnerOutcomeUnknown(error) ? unknownSummary('local') : failedSummary('local'),
+        summary: isSim2RealRunnerOutcomeUnknown(error)
+          ? unknownSummary('local')
+          : failedSummary('local'),
       };
     }
   }
@@ -930,7 +1023,11 @@ type PreflightCheck = {
   bpuToolchain: 'present' | 'missing' | '';
 };
 
-function parsePreflightOutput(output: string): { checks: PreflightCheck; valid: boolean; reason: string } {
+function parsePreflightOutput(output: string): {
+  checks: PreflightCheck;
+  valid: boolean;
+  reason: string;
+} {
   const text = String(output ?? '');
   const begin = text.indexOf(PREFLIGHT_BEGIN);
   const end = text.indexOf(PREFLIGHT_END, begin + PREFLIGHT_BEGIN.length);
@@ -1045,19 +1142,20 @@ export function createSim2RealRouter(
       const selectedProductId = requestedProduct(request.query.productId);
       noStore(response);
       const simulator = simulatorIntegration();
-      const [models, runs, deployments, devices, robogo, localWorker, computeResources] = await Promise.all([
-        listSim2RealModels(owner),
-        listSim2RealRuns(owner),
-        listSim2RealDeployments(owner),
-        visibleDevicesForAuth(owner),
-        probeRobogoIntegration(
-          String(auth.resolvePrincipal(request)?.accountId ?? owner ?? ''),
-          auth.resolveAccessToken(request),
-          { multiUser: auth.isMultiUserDeployment() },
-        ),
-        probeLocalTrainingWorker(simulator.local),
-        listSim2RealComputeResources(owner),
-      ]);
+      const [models, runs, deployments, devices, robogo, localWorker, computeResources] =
+        await Promise.all([
+          listSim2RealModels(owner),
+          listSim2RealRuns(owner),
+          listSim2RealDeployments(owner),
+          visibleDevicesForAuth(owner),
+          probeRobogoIntegration(
+            String(auth.resolvePrincipal(request)?.accountId ?? owner ?? ''),
+            auth.resolveAccessToken(request),
+            { multiUser: auth.isMultiUserDeployment() },
+          ),
+          probeLocalTrainingWorker(simulator.local),
+          listSim2RealComputeResources(owner),
+        ]);
       const contractRegistry = availableContractsFor(models);
       const selectedContracts = contractRegistry.contracts[selectedProductId];
       // MicroDuck has one fixed, built-in contract.  RDK Duck is
@@ -1161,71 +1259,193 @@ export function createSim2RealRouter(
 
   // User-owned local GPU resources. Credentials stay in the server ledger;
   // list responses only expose whether a token is configured.
-  router.get(api('/compute-resources'), wrapAsync(async (request, response) => {
-    const owner = requestOwner(request, response, auth); if (owner === null) return;
-    noStore(response); response.json({ ok: true, computeResources: await listSim2RealComputeResources(owner) });
-  }));
+  router.get(
+    api('/compute-resources'),
+    wrapAsync(async (request, response) => {
+      const owner = requestOwner(request, response, auth);
+      if (owner === null) return;
+      noStore(response);
+      response.json({ ok: true, computeResources: await listSim2RealComputeResources(owner) });
+    }),
+  );
 
-  router.post(api('/compute-resources'), wrapAsync(async (request, response) => {
-    const owner = requestOwner(request, response, auth); if (owner === null) return;
-    const body = request.body && typeof request.body === 'object' ? request.body as Record<string, unknown> : {};
-    const name = String(body.name ?? '').trim();
-    const runnerUrlRaw = String(body.runnerUrl ?? '').trim();
-    const runnerToken = String(body.runnerToken ?? '').trim();
-    if (!name || name.length > 120 || !runnerUrlRaw) { sendApiError(response, 400, 'SIM2REAL_INVALID_COMPUTE_RESOURCE', '名称和 Runner 地址必填。', { retryable: false }); return; }
-    let runnerUrl: string;
-    try { runnerUrl = normalizeRunnerUrl(runnerUrlRaw, { localHttp: true }); }
-    catch { sendApiError(response, 400, 'SIM2REAL_INVALID_COMPUTE_RESOURCE_URL', 'Runner 地址必须是合法的 HTTP(S) /train 地址。', { retryable: false }); return; }
-    const maxConcurrentJobs = Number(body.maxConcurrentJobs ?? 1);
-    if (!Number.isInteger(maxConcurrentJobs) || maxConcurrentJobs < 1 || maxConcurrentJobs > 32) { sendApiError(response, 400, 'SIM2REAL_INVALID_COMPUTE_RESOURCE', '并发任务数必须是 1 到 32。', { retryable: false }); return; }
-    try {
-      const resource = await createSim2RealComputeResource({ name, kind: 'local-gpu', runnerUrl, runnerToken, status: 'unknown', maxConcurrentJobs, message: '尚未测试连接。' }, owner);
-      response.status(201).json({ ok: true, computeResource: resource });
-    } catch (error) { storageError(request, response, error, 'sim2real-compute-resource-create'); }
-  }));
+  router.post(
+    api('/compute-resources'),
+    wrapAsync(async (request, response) => {
+      const owner = requestOwner(request, response, auth);
+      if (owner === null) return;
+      const body =
+        request.body && typeof request.body === 'object'
+          ? (request.body as Record<string, unknown>)
+          : {};
+      const name = String(body.name ?? '').trim();
+      const runnerUrlRaw = String(body.runnerUrl ?? '').trim();
+      const runnerToken = String(body.runnerToken ?? '').trim();
+      if (!name || name.length > 120 || !runnerUrlRaw) {
+        sendApiError(
+          response,
+          400,
+          'SIM2REAL_INVALID_COMPUTE_RESOURCE',
+          '名称和 Runner 地址必填。',
+          { retryable: false },
+        );
+        return;
+      }
+      let runnerUrl: string;
+      try {
+        runnerUrl = normalizeRunnerUrl(runnerUrlRaw, { localHttp: true });
+      } catch {
+        sendApiError(
+          response,
+          400,
+          'SIM2REAL_INVALID_COMPUTE_RESOURCE_URL',
+          'Runner 地址必须是合法的 HTTP(S) /train 地址。',
+          { retryable: false },
+        );
+        return;
+      }
+      const maxConcurrentJobs = Number(body.maxConcurrentJobs ?? 1);
+      if (!Number.isInteger(maxConcurrentJobs) || maxConcurrentJobs < 1 || maxConcurrentJobs > 32) {
+        sendApiError(
+          response,
+          400,
+          'SIM2REAL_INVALID_COMPUTE_RESOURCE',
+          '并发任务数必须是 1 到 32。',
+          { retryable: false },
+        );
+        return;
+      }
+      try {
+        const resource = await createSim2RealComputeResource(
+          {
+            name,
+            kind: 'local-gpu',
+            runnerUrl,
+            runnerToken,
+            status: 'unknown',
+            maxConcurrentJobs,
+            message: '尚未测试连接。',
+          },
+          owner,
+        );
+        response.status(201).json({ ok: true, computeResource: resource });
+      } catch (error) {
+        storageError(request, response, error, 'sim2real-compute-resource-create');
+      }
+    }),
+  );
 
-  router.patch(api('/compute-resources/:id'), wrapAsync(async (request, response) => {
-    const owner = requestOwner(request, response, auth); if (owner === null) return;
-    const body = request.body && typeof request.body === 'object' ? request.body as Record<string, unknown> : {};
-    const patch: Record<string, unknown> = {};
-    if (body.name !== undefined) patch.name = String(body.name).trim();
-    if (body.runnerToken !== undefined) patch.runnerToken = String(body.runnerToken).trim();
-    if (body.runnerUrl !== undefined) {
-      try { patch.runnerUrl = normalizeRunnerUrl(String(body.runnerUrl).trim(), { localHttp: true }); }
-      catch { sendApiError(response, 400, 'SIM2REAL_INVALID_COMPUTE_RESOURCE_URL', 'Runner 地址无效。', { retryable: false }); return; }
-    }
-    const resource = await updateSim2RealComputeResource(String(request.params.id), patch as never, owner);
-    if (!resource) { response.status(404).json({ ok: false, error: 'SIM2REAL_COMPUTE_RESOURCE_NOT_FOUND' }); return; }
-    response.json({ ok: true, computeResource: resource });
-  }));
+  router.patch(
+    api('/compute-resources/:id'),
+    wrapAsync(async (request, response) => {
+      const owner = requestOwner(request, response, auth);
+      if (owner === null) return;
+      const body =
+        request.body && typeof request.body === 'object'
+          ? (request.body as Record<string, unknown>)
+          : {};
+      const patch: Record<string, unknown> = {};
+      if (body.name !== undefined) patch.name = String(body.name).trim();
+      if (body.runnerToken !== undefined) patch.runnerToken = String(body.runnerToken).trim();
+      if (body.runnerUrl !== undefined) {
+        try {
+          patch.runnerUrl = normalizeRunnerUrl(String(body.runnerUrl).trim(), { localHttp: true });
+        } catch {
+          sendApiError(
+            response,
+            400,
+            'SIM2REAL_INVALID_COMPUTE_RESOURCE_URL',
+            'Runner 地址无效。',
+            { retryable: false },
+          );
+          return;
+        }
+      }
+      const resource = await updateSim2RealComputeResource(
+        String(request.params.id),
+        patch as never,
+        owner,
+      );
+      if (!resource) {
+        response.status(404).json({ ok: false, error: 'SIM2REAL_COMPUTE_RESOURCE_NOT_FOUND' });
+        return;
+      }
+      response.json({ ok: true, computeResource: resource });
+    }),
+  );
 
-  router.delete(api('/compute-resources/:id'), wrapAsync(async (request, response) => {
-    const owner = requestOwner(request, response, auth); if (owner === null) return;
-    const deleted = await deleteSim2RealComputeResource(String(request.params.id), owner);
-    if (!deleted) { response.status(404).json({ ok: false, error: 'SIM2REAL_COMPUTE_RESOURCE_NOT_FOUND' }); return; }
-    response.json({ ok: true, deleted: true });
-  }));
+  router.delete(
+    api('/compute-resources/:id'),
+    wrapAsync(async (request, response) => {
+      const owner = requestOwner(request, response, auth);
+      if (owner === null) return;
+      const deleted = await deleteSim2RealComputeResource(String(request.params.id), owner);
+      if (!deleted) {
+        response.status(404).json({ ok: false, error: 'SIM2REAL_COMPUTE_RESOURCE_NOT_FOUND' });
+        return;
+      }
+      response.json({ ok: true, deleted: true });
+    }),
+  );
 
-  router.post(api('/compute-resources/:id/test'), wrapAsync(async (request, response) => {
-    const owner = requestOwner(request, response, auth); if (owner === null) return;
-    const secret = await getSim2RealComputeResourceSecret(String(request.params.id), owner);
-    if (!secret) { response.status(404).json({ ok: false, error: 'SIM2REAL_COMPUTE_RESOURCE_NOT_FOUND' }); return; }
-    const checkedAt = new Date().toISOString();
-    let patch: Record<string, unknown>;
-    try {
-      const parsed = new URL(secret.resource.runnerUrl);
-      parsed.pathname = parsed.pathname.replace(/\/train\/?$/, '/healthz');
-      const headers: Record<string, string> = { accept: 'application/json' };
-      if (secret.runnerToken) headers.authorization = `Bearer ${secret.runnerToken}`;
-      const controller = new AbortController(); const timer = setTimeout(() => controller.abort(), 5_000);
-      const result = await fetch(parsed, { headers, signal: controller.signal }); clearTimeout(timer);
-      const bodyText = await result.text(); let payload: any = {}; try { payload = bodyText ? JSON.parse(bodyText) : {}; } catch { /* ignore */ }
-      const healthy = result.ok && payload?.ok !== false;
-      patch = { status: healthy ? 'online' : 'offline', message: healthy ? 'GPU Worker 连接正常。' : `Worker 返回 HTTP ${result.status}。`, lastCheckedAt: checkedAt, ...(payload?.cuda != null ? { cuda: payload.cuda === true } : {}), ...(payload?.gpuName ? { gpuName: String(payload.gpuName).slice(0, 160) } : {}), ...(payload?.maxConcurrentJobs ? { maxConcurrentJobs: Number(payload.maxConcurrentJobs) } : {}) };
-    } catch (error) { patch = { status: 'offline', message: `连接失败：${error instanceof Error ? error.message : '无法连接 Worker'}`, lastCheckedAt: checkedAt }; }
-    const updated = await updateSim2RealComputeResource(secret.resource.id, patch as never, owner);
-    response.json({ ok: true, computeResource: updated, connected: updated?.status === 'online' });
-  }));
+  router.post(
+    api('/compute-resources/:id/test'),
+    wrapAsync(async (request, response) => {
+      const owner = requestOwner(request, response, auth);
+      if (owner === null) return;
+      const secret = await getSim2RealComputeResourceSecret(String(request.params.id), owner);
+      if (!secret) {
+        response.status(404).json({ ok: false, error: 'SIM2REAL_COMPUTE_RESOURCE_NOT_FOUND' });
+        return;
+      }
+      const checkedAt = new Date().toISOString();
+      let patch: Record<string, unknown>;
+      try {
+        const parsed = new URL(secret.resource.runnerUrl);
+        parsed.pathname = parsed.pathname.replace(/\/train\/?$/, '/healthz');
+        const headers: Record<string, string> = { accept: 'application/json' };
+        if (secret.runnerToken) headers.authorization = `Bearer ${secret.runnerToken}`;
+        const controller = new AbortController();
+        const timer = setTimeout(() => controller.abort(), 5_000);
+        const result = await fetch(parsed, { headers, signal: controller.signal });
+        clearTimeout(timer);
+        const bodyText = await result.text();
+        let payload: Record<string, unknown> = {};
+        try {
+          payload = bodyText ? JSON.parse(bodyText) : {};
+        } catch {
+          /* ignore */
+        }
+        const healthy = result.ok && payload?.ok !== false;
+        patch = {
+          status: healthy ? 'online' : 'offline',
+          message: healthy ? 'GPU Worker 连接正常。' : `Worker 返回 HTTP ${result.status}。`,
+          lastCheckedAt: checkedAt,
+          ...(payload?.cuda != null ? { cuda: payload.cuda === true } : {}),
+          ...(payload?.gpuName ? { gpuName: String(payload.gpuName).slice(0, 160) } : {}),
+          ...(payload?.maxConcurrentJobs
+            ? { maxConcurrentJobs: Number(payload.maxConcurrentJobs) }
+            : {}),
+        };
+      } catch (error) {
+        patch = {
+          status: 'offline',
+          message: `连接失败：${error instanceof Error ? error.message : '无法连接 Worker'}`,
+          lastCheckedAt: checkedAt,
+        };
+      }
+      const updated = await updateSim2RealComputeResource(
+        secret.resource.id,
+        patch as never,
+        owner,
+      );
+      response.json({
+        ok: true,
+        computeResource: updated,
+        connected: updated?.status === 'online',
+      });
+    }),
+  );
 
   registerSim2RealTelemetryRoutes(
     router,
@@ -1247,7 +1467,7 @@ export function createSim2RealRouter(
       getRun: (runId, owner) => getSim2RealRun(runId, owner),
       // Artifact bytes come from the run's own training worker; a run without
       // an external id (remote/cleaned) simply cannot stage, fail-closed.
-      fetchRunArtifact: async (run, owner) => {
+      fetchRunArtifact: async (run, _owner) => {
         if (run.backend !== 'local' || !run.externalRunId) return null;
         return fetchLocalRunArtifact({ externalRunId: run.externalRunId });
       },
@@ -1555,15 +1775,21 @@ export function createSim2RealRouter(
           ...(latest.artifact ? { artifact: latest.artifact } : {}),
           ...(latest.metrics ? { metrics: latest.metrics } : {}),
           ...(latest.taskEvaluation ? { taskEvaluation: latest.taskEvaluation } : {}),
-          ...((latest.status === 'completed' || latest.status === 'failed')
+          ...(latest.status === 'completed' || latest.status === 'failed'
             ? { finishedAt: new Date().toISOString() }
             : {}),
         };
         const updated = await updateSim2RealRunForReconcile(run.id, update, owner);
         if (!updated) {
-          sendApiError(response, 409, 'SIM2REAL_RUN_RECONCILE_RACE', '运行记录已发生变化，请刷新后重试。', {
-            retryable: true,
-          });
+          sendApiError(
+            response,
+            409,
+            'SIM2REAL_RUN_RECONCILE_RACE',
+            '运行记录已发生变化，请刷新后重试。',
+            {
+              retryable: true,
+            },
+          );
           return;
         }
         response.json({ ok: true, reconciled: true, run: updated });
@@ -1642,15 +1868,13 @@ export function createSim2RealRouter(
       }
       try {
         const model = await createSim2RealModel(payload.validation.manifest, owner);
-        response
-          .status(201)
-          .json({
-            ok: true,
-            model: publicModel(model),
-            productId: model.manifest.robot.id,
-            contractId: model.manifest.contract.id,
-            compatibility: compatibilityForPlatforms(model.manifest),
-          });
+        response.status(201).json({
+          ok: true,
+          model: publicModel(model),
+          productId: model.manifest.robot.id,
+          contractId: model.manifest.contract.id,
+          compatibility: compatibilityForPlatforms(model.manifest),
+        });
       } catch (error) {
         storageError(request, response, error, 'sim2real-model-create');
       }
@@ -1714,7 +1938,18 @@ export function createSim2RealRouter(
         });
         return;
       }
-      const { idempotencyKey, modelId, taskId, backend, training, resumeFrom, projectId, experimentId, label, computeResourceId } = parsed;
+      const {
+        idempotencyKey,
+        modelId,
+        taskId,
+        backend,
+        training,
+        resumeFrom,
+        projectId,
+        experimentId,
+        label,
+        computeResourceId,
+      } = parsed;
       const model = await getSim2RealModel(modelId, owner);
       if (!model) {
         response.status(404).json({
@@ -1725,7 +1960,11 @@ export function createSim2RealRouter(
         return;
       }
       if (projectId && !(await getSim2RealProject(projectId, owner))) {
-        response.status(404).json({ ok: false, error: 'SIM2REAL_PROJECT_NOT_FOUND', message: '项目不存在，或不属于当前账号。' });
+        response.status(404).json({
+          ok: false,
+          error: 'SIM2REAL_PROJECT_NOT_FOUND',
+          message: '项目不存在，或不属于当前账号。',
+        });
         return;
       }
       const requestFingerprint = runRequestFingerprint({
@@ -2064,7 +2303,11 @@ export function createSim2RealRouter(
       noStore(response);
       const deployment = await getSim2RealDeployment(String(request.params.id || ''), owner);
       if (!deployment) {
-        response.status(404).json({ ok: false, error: 'SIM2REAL_DEPLOYMENT_NOT_FOUND', message: '部署计划不存在，或不属于当前账号。' });
+        response.status(404).json({
+          ok: false,
+          error: 'SIM2REAL_DEPLOYMENT_NOT_FOUND',
+          message: '部署计划不存在，或不属于当前账号。',
+        });
         return;
       }
       response.json({
@@ -2086,7 +2329,11 @@ export function createSim2RealRouter(
       const id = String(request.params.id || '').trim();
       const deployment = await getSim2RealDeployment(id, owner);
       if (!deployment) {
-        response.status(404).json({ ok: false, error: 'SIM2REAL_DEPLOYMENT_NOT_FOUND', message: '部署计划不存在，或不属于当前账号。' });
+        response.status(404).json({
+          ok: false,
+          error: 'SIM2REAL_DEPLOYMENT_NOT_FOUND',
+          message: '部署计划不存在，或不属于当前账号。',
+        });
         return;
       }
       if (deployment.status === 'cancelled') {
@@ -2094,13 +2341,21 @@ export function createSim2RealRouter(
         return;
       }
       if (!['planned', 'running', 'blocked', 'ready'].includes(deployment.status)) {
-        response.status(409).json({ ok: false, error: 'SIM2REAL_DEPLOYMENT_NOT_CANCELLABLE', message: '当前部署状态不可取消。' });
+        response.status(409).json({
+          ok: false,
+          error: 'SIM2REAL_DEPLOYMENT_NOT_CANCELLABLE',
+          message: '当前部署状态不可取消。',
+        });
         return;
       }
-      const updated = await updateSim2RealDeployment(id, {
-        status: 'cancelled',
-        summary: '部署计划已取消；未执行模型下发或电机动作。',
-      }, owner);
+      const updated = await updateSim2RealDeployment(
+        id,
+        {
+          status: 'cancelled',
+          summary: '部署计划已取消；未执行模型下发或电机动作。',
+        },
+        owner,
+      );
       response.json({ ok: true, deployment: updated });
     }),
   );
@@ -2114,17 +2369,32 @@ export function createSim2RealRouter(
       noStore(response);
       const source = await getSim2RealDeployment(String(request.params.id || '').trim(), owner);
       if (!source) {
-        response.status(404).json({ ok: false, error: 'SIM2REAL_DEPLOYMENT_NOT_FOUND', message: '部署计划不存在，或不属于当前账号。' });
+        response.status(404).json({
+          ok: false,
+          error: 'SIM2REAL_DEPLOYMENT_NOT_FOUND',
+          message: '部署计划不存在，或不属于当前账号。',
+        });
         return;
       }
-      const body = request.body && typeof request.body === 'object' ? request.body as Record<string, unknown> : {};
+      const body =
+        request.body && typeof request.body === 'object'
+          ? (request.body as Record<string, unknown>)
+          : {};
       const targetModelId = String(body.targetModelId ?? body.modelId ?? '').trim();
       if (!targetModelId) {
-        response.status(400).json({ ok: false, error: 'SIM2REAL_INVALID_DEPLOYMENT', message: 'targetModelId 必填。' });
+        response.status(400).json({
+          ok: false,
+          error: 'SIM2REAL_INVALID_DEPLOYMENT',
+          message: 'targetModelId 必填。',
+        });
         return;
       }
       if (targetModelId === source.modelId) {
-        response.status(409).json({ ok: false, error: 'SIM2REAL_INVALID_DEPLOYMENT', message: '目标模型必须是不同版本。' });
+        response.status(409).json({
+          ok: false,
+          error: 'SIM2REAL_INVALID_DEPLOYMENT',
+          message: '目标模型必须是不同版本。',
+        });
         return;
       }
       const devices = await visibleDevicesForAuth(owner);
@@ -2138,17 +2408,29 @@ export function createSim2RealRouter(
           auth.isMultiUserDeployment(),
         )
       ) {
-        response.status(404).json({ ok: false, error: 'SIM2REAL_DEVICE_NOT_FOUND', message: '设备不存在，或不属于当前账号。' });
+        response.status(404).json({
+          ok: false,
+          error: 'SIM2REAL_DEVICE_NOT_FOUND',
+          message: '设备不存在，或不属于当前账号。',
+        });
         return;
       }
       const targetPlatform = String(device.boardPlatform ?? '').trim();
       if (!targetPlatform) {
-        response.status(409).json({ ok: false, error: 'SIM2REAL_BOARD_DETECTION_REQUIRED', message: '请先完成板卡探测，再切换模型版本。' });
+        response.status(409).json({
+          ok: false,
+          error: 'SIM2REAL_BOARD_DETECTION_REQUIRED',
+          message: '请先完成板卡探测，再切换模型版本。',
+        });
         return;
       }
       const model = await getSim2RealModel(targetModelId, owner);
       if (!model) {
-        response.status(404).json({ ok: false, error: 'SIM2REAL_MODEL_NOT_FOUND', message: '目标模型制品不存在，或不属于当前账号。' });
+        response.status(404).json({
+          ok: false,
+          error: 'SIM2REAL_MODEL_NOT_FOUND',
+          message: '目标模型制品不存在，或不属于当前账号。',
+        });
         return;
       }
       const compatibility = compatibilityForManifest(model.manifest, targetPlatform);
@@ -2167,15 +2449,23 @@ export function createSim2RealRouter(
       };
       const idempotency = requestIdempotencyKey(request, body);
       if (idempotency.error) {
-        sendApiError(response, 400, 'SIM2REAL_INVALID_DEPLOYMENT', idempotency.error, { retryable: false });
+        sendApiError(response, 400, 'SIM2REAL_INVALID_DEPLOYMENT', idempotency.error, {
+          retryable: false,
+        });
         return;
       }
       const created = await createSim2RealDeploymentWithResult(deployment, owner, {
         ...(idempotency.key ? { idempotencyKey: idempotency.key } : {}),
-        ...(idempotency.key ? { requestFingerprint: JSON.stringify({ source: source.id, targetModelId }) } : {}),
+        ...(idempotency.key
+          ? { requestFingerprint: JSON.stringify({ source: source.id, targetModelId }) }
+          : {}),
       });
       if (idempotency.key) response.setHeader('Idempotency-Key', idempotency.key);
-      response.status(created.duplicate ? 200 : 201).json({ ok: true, deployment: created.deployment, ...(created.duplicate ? { idempotentReplay: true } : {}) });
+      response.status(created.duplicate ? 200 : 201).json({
+        ok: true,
+        deployment: created.deployment,
+        ...(created.duplicate ? { idempotentReplay: true } : {}),
+      });
     }),
   );
 
@@ -2204,7 +2494,11 @@ export function createSim2RealRouter(
         return;
       }
       if (deployment.status === 'cancelled') {
-        response.status(409).json({ ok: false, error: 'SIM2REAL_DEPLOYMENT_NOT_CANCELLABLE', message: '部署计划已取消，不能执行预检。' });
+        response.status(409).json({
+          ok: false,
+          error: 'SIM2REAL_DEPLOYMENT_NOT_CANCELLABLE',
+          message: '部署计划已取消，不能执行预检。',
+        });
         return;
       }
       if (!deps.runOnDevice) {
@@ -2297,7 +2591,11 @@ export function createSim2RealRouter(
             {
               status: 'blocked',
               summary: '板端只读预检未通过；未执行模型下发或电机动作。',
-              verification: { passed: false, checkedAt: new Date().toISOString(), checks: parsedPreflight.checks },
+              verification: {
+                passed: false,
+                checkedAt: new Date().toISOString(),
+                checks: parsedPreflight.checks,
+              },
               steps: blockedSteps,
             },
             owner,
@@ -2319,7 +2617,12 @@ export function createSim2RealRouter(
             {
               status: 'blocked',
               summary: '模拟 BoardAgent 只能演练协议，不能把部署计划标记为真机就绪。',
-              verification: { passed: false, mock: true, checkedAt: new Date().toISOString(), checks: parsedPreflight.checks },
+              verification: {
+                passed: false,
+                mock: true,
+                checkedAt: new Date().toISOString(),
+                checks: parsedPreflight.checks,
+              },
               steps: blockedSteps,
             },
             owner,
@@ -2347,7 +2650,11 @@ export function createSim2RealRouter(
             summary: finalSummary,
             steps: finalSteps,
             executedAt: new Date().toISOString(),
-            verification: { passed: true, checkedAt: new Date().toISOString(), checks: parsedPreflight.checks },
+            verification: {
+              passed: true,
+              checkedAt: new Date().toISOString(),
+              checks: parsedPreflight.checks,
+            },
           },
           owner,
         );

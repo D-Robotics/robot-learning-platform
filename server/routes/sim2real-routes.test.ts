@@ -133,25 +133,43 @@ describe('Sim2Real HTTP routes', () => {
     expect(project.statusCode).toBe(201);
     const projectId = (project.body as { project: { id: string } }).project.id;
     const run = await invoke(router, 'post', '/api/sim2real/runs', {
-      body: { modelId: BUILTIN_MICRODUCK_MODEL.id, backend: 'contract', projectId, experimentId: 'baseline', label: 'Baseline' },
+      body: {
+        modelId: BUILTIN_MICRODUCK_MODEL.id,
+        backend: 'contract',
+        projectId,
+        experimentId: 'baseline',
+        label: 'Baseline',
+      },
     });
     expect(run.statusCode).toBe(201);
-    const compare = await invoke(router, 'get', '/api/sim2real/projects/:id/runs/compare', { params: { id: projectId } });
+    const compare = await invoke(router, 'get', '/api/sim2real/projects/:id/runs/compare', {
+      params: { id: projectId },
+    });
     expect(compare.statusCode).toBe(200);
-    expect(compare.body).toMatchObject({ ok: true, projectId, comparison: [expect.objectContaining({ experimentId: 'baseline', label: 'Baseline' })] });
+    expect(compare.body).toMatchObject({
+      ok: true,
+      projectId,
+      comparison: [expect.objectContaining({ experimentId: 'baseline', label: 'Baseline' })],
+    });
   });
 
   it('does not allow a run to reference another owner project', async () => {
     const router = await fixture();
-    const project = await invoke(router, 'post', '/api/sim2real/projects', { body: { name: 'Private project', slug: 'private-project' } });
+    const project = await invoke(router, 'post', '/api/sim2real/projects', {
+      body: { name: 'Private project', slug: 'private-project' },
+    });
     const projectId = (project.body as { project: { id: string } }).project.id;
-    const otherRouter = createSim2RealRouter({ auth: {
-      ...({} as Sim2RealAuthPort),
-      isMultiUserDeployment: () => true,
-      resolvePrincipal: () => ({ accountId: 'other' }),
-      resolveAccessToken: () => undefined,
-    } });
-    const run = await invoke(otherRouter, 'post', '/api/sim2real/runs', { body: { modelId: BUILTIN_MICRODUCK_MODEL.id, backend: 'contract', projectId } });
+    const otherRouter = createSim2RealRouter({
+      auth: {
+        ...({} as Sim2RealAuthPort),
+        isMultiUserDeployment: () => true,
+        resolvePrincipal: () => ({ accountId: 'other' }),
+        resolveAccessToken: () => undefined,
+      },
+    });
+    const run = await invoke(otherRouter, 'post', '/api/sim2real/runs', {
+      body: { modelId: BUILTIN_MICRODUCK_MODEL.id, backend: 'contract', projectId },
+    });
     expect(run.statusCode).toBe(404);
   });
   it('registers the versioned Duck prefix for core and telemetry routes', async () => {
@@ -380,9 +398,7 @@ describe('Sim2Real HTTP routes', () => {
         source: 'import',
         sequence: 2,
         idempotencyKey: 'chunk-2',
-        samples: [
-          { t: 0.04, observation: vector(61, 2), action: vector(14, 2), reward: 3 },
-        ],
+        samples: [{ t: 0.04, observation: vector(61, 2), action: vector(14, 2), reward: 3 }],
       },
     });
     expect(laterChunk.statusCode).toBe(201);
@@ -411,9 +427,9 @@ describe('Sim2Real HTTP routes', () => {
         source: 'import',
         sequence: 1,
         idempotencyKey: 'adv-1',
-        jsonl: [
-          JSON.stringify({ t: 0, observation: vector(61, 0), action: vector(14, 0) }),
-        ].join('\n'),
+        jsonl: [JSON.stringify({ t: 0, observation: vector(61, 0), action: vector(14, 0) })].join(
+          '\n',
+        ),
       },
     });
 
@@ -521,7 +537,9 @@ describe('Sim2Real HTTP routes', () => {
     });
     const evaluatedWarnings = (evaluated.body as { evaluation: { warnings: string[] } }).evaluation
       .warnings;
-    expect(evaluatedWarnings).toEqual(expect.arrayContaining([expect.stringContaining('mixed sources')]));
+    expect(evaluatedWarnings).toEqual(
+      expect.arrayContaining([expect.stringContaining('mixed sources')]),
+    );
     expect(evaluatedWarnings.join(' ')).toContain('demo-fixture');
 
     // GET /replay reads the persisted summary, which is the same path the
@@ -840,10 +858,16 @@ describe('Sim2Real HTTP routes', () => {
     const details = await invoke(router, 'get', '/api/sim2real/deployments/:id', {
       params: { id: deploymentId },
     });
-    const detailDeployment = (details.body as { deployment: { status: string; steps: Array<{ id: string; status: string }> } }).deployment;
+    const detailDeployment = (
+      details.body as {
+        deployment: { status: string; steps: Array<{ id: string; status: string }> };
+      }
+    ).deployment;
     expect(detailDeployment.status).toBe('blocked');
     expect(detailDeployment.steps).toEqual(
-      expect.arrayContaining([expect.objectContaining({ id: 'board-passport', status: 'blocked' })]),
+      expect.arrayContaining([
+        expect.objectContaining({ id: 'board-passport', status: 'blocked' }),
+      ]),
     );
   });
 
@@ -992,11 +1016,11 @@ describe('Sim2Real HTTP routes', () => {
       });
       const registered = registerResponse.body as { model: { id: string } };
       const response = await invoke(router, 'post', '/api/sim2real/runs', {
-      body: {
-        modelId: registered.model.id,
-        backend: 'local',
-        idempotencyKey: 'local-route-run-1',
-      },
+        body: {
+          modelId: registered.model.id,
+          backend: 'local',
+          idempotencyKey: 'local-route-run-1',
+        },
       });
       expect(response.statusCode).toBe(201);
       expect(response.body).toMatchObject({
@@ -1132,7 +1156,7 @@ describe('Sim2Real HTTP routes', () => {
       });
     }) as typeof fetch;
     try {
-      const router = await fixture();
+      await fixture();
       const auth: Sim2RealAuthPort = {
         isMultiUserDeployment: () => true,
         resolvePrincipal: (request) => {
@@ -1335,9 +1359,44 @@ describe('Sim2Real HTTP routes', () => {
       expect(unchanged.body).toMatchObject({
         run: { id: reserved.run.id, status: 'queued' },
       });
-      expect((unchanged.body as { run: Record<string, unknown> }).run.externalRunId).toBeUndefined();
+      expect(
+        (unchanged.body as { run: Record<string, unknown> }).run.externalRunId,
+      ).toBeUndefined();
     } finally {
       globalThis.fetch = originalFetch;
     }
+  });
+
+  it('maps a storage writer-lease conflict to an actionable, non-retryable 503', async () => {
+    const router = await fixture();
+    const storageRoot = process.env.RDK_SIM2REAL_STORAGE_DIR as string;
+    await fs.mkdir(storageRoot, { recursive: true });
+    // Same host, live foreign pid: pid 1 always exists, and a non-root
+    // process.kill(1, 0) reports EPERM, which the lease treats as alive. The
+    // previous pid keeps the record from ever matching this process.
+    await fs.writeFile(
+      path.join(storageRoot, 'writer-lease.json'),
+      JSON.stringify({
+        schemaVersion: 1,
+        host: os.hostname(),
+        pid: process.pid === 1 ? 2 : 1,
+        startedAt: new Date().toISOString(),
+        heartbeatAt: new Date().toISOString(),
+      }),
+    );
+
+    const response = await invoke(router, 'post', '/api/sim2real/models', {
+      body: { manifest: userManifest() },
+    });
+
+    expect(response.statusCode).toBe(503);
+    expect(response.body).toMatchObject({
+      code: 'SIM2REAL_STORAGE_WRITER_CONFLICT',
+      retryable: false,
+    });
+    // The remediation advice must survive into the operator-visible message.
+    expect(String((response.body as { message: string }).message)).toContain(
+      'RDK_SIM2REAL_STORAGE_DIR',
+    );
   });
 });

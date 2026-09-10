@@ -7,7 +7,6 @@ import {
 } from './studio-cookie-auth.js';
 import { createStudioLoginRelayRouter } from './studio-login-relay.js';
 
-const NOW = 1_760_000_000_000;
 const SECRET = 'k'.repeat(48);
 const USER = { id: 'user-42', name: 'Alice', email: 'alice@example.com' };
 
@@ -25,7 +24,11 @@ function studioLoginResponse(): Response {
     status: 200,
     headers: {
       'content-type': 'application/json',
-      ...(cookieValue ? { 'set-cookie': `${STUDIO_WEB_CLOUD_SESSION_COOKIE}=${encodeURIComponent(cookieValue)}; Path=/; HttpOnly; SameSite=Lax; Secure; Max-Age=1209600` } : {}),
+      ...(cookieValue
+        ? {
+            'set-cookie': `${STUDIO_WEB_CLOUD_SESSION_COOKIE}=${encodeURIComponent(cookieValue)}; Path=/; HttpOnly; SameSite=Lax; Secure; Max-Age=1209600`,
+          }
+        : {}),
     },
   });
   return response;
@@ -91,11 +94,16 @@ async function callRelay(
     sent: unknown;
   };
   // Find the matching route in the router stack.
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const stack = (router as any).stack as Array<{
-    route?: { path: string; methods: Record<string, boolean>; stack: Array<{ handle: (req: unknown, res: unknown, next: (err?: unknown) => void) => void }> };
+    route?: {
+      path: string;
+      methods: Record<string, boolean>;
+      stack: Array<{ handle: (req: unknown, res: unknown, next: (err?: unknown) => void) => void }>;
+    };
   }>;
-  const layer = stack.find((entry) => entry.route?.path === init.path && entry.route.methods[init.method.toLowerCase()]);
+  const layer = stack.find(
+    (entry) => entry.route?.path === init.path && entry.route.methods[init.method.toLowerCase()],
+  );
   if (!layer) throw new Error(`route not found: ${init.method} ${init.path}`);
   await new Promise<void>((resolve) => {
     for (const routeLayer of layer.route!.stack) {
@@ -109,7 +117,11 @@ async function callRelay(
     };
     waitForBody();
   });
-  return { status: response.statusCode, body: (response.sent ?? {}) as Record<string, unknown>, headers };
+  return {
+    status: response.statusCode,
+    body: (response.sent ?? {}) as Record<string, unknown>,
+    headers,
+  };
 }
 
 describe('studio login relay routes', () => {
@@ -129,7 +141,9 @@ describe('studio login relay routes', () => {
     const identity = result.body.identity as Record<string, string>;
     expect(identity.accountId).toBe('user-42');
     const setCookie = result.headers['set-cookie'] ?? [];
-    expect(setCookie.some((cookie) => cookie.startsWith(`${STUDIO_WEB_CLOUD_SESSION_COOKIE}=`))).toBe(true);
+    expect(
+      setCookie.some((cookie) => cookie.startsWith(`${STUDIO_WEB_CLOUD_SESSION_COOKIE}=`)),
+    ).toBe(true);
     delete process.env.RDK_SIM2REAL_STUDIO_SHELL_URL;
     delete process.env.RDK_SIM2REAL_PUBLIC_ORIGIN;
   });
@@ -183,6 +197,8 @@ describe('studio login relay routes', () => {
     const router = createStudioLoginRelayRouter({ fetchImpl: fakeFetchSequence([]) });
     const result = await callRelay(router, { path: '/api/sso/logout', method: 'POST' });
     expect(result.status).toBe(200);
-    expect((result.headers['set-cookie'] ?? [])[0]).toContain(`${STUDIO_WEB_CLOUD_SESSION_COOKIE}=;`);
+    expect((result.headers['set-cookie'] ?? [])[0]).toContain(
+      `${STUDIO_WEB_CLOUD_SESSION_COOKIE}=;`,
+    );
   });
 });

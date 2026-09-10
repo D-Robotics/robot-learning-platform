@@ -23,7 +23,6 @@
 
 import { spawnSync } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
-import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -40,10 +39,10 @@ function parseArgs(argv) {
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
     const next = argv[i + 1];
-    if (arg === '--host') (flags.host = next), i++;
-    else if (arg === '--port') (flags.port = next), i++;
-    else if (arg === '--user') (flags.user = next), i++;
-    else if (arg === '--dir') (flags.dir = next), i++;
+    if (arg === '--host') ((flags.host = next), i++);
+    else if (arg === '--port') ((flags.port = next), i++);
+    else if (arg === '--user') ((flags.user = next), i++);
+    else if (arg === '--dir') ((flags.dir = next), i++);
     else if (arg === '--service') flags.service = true;
     else if (arg === '--help' || arg === '-h') {
       console.log(
@@ -67,7 +66,19 @@ function parseArgs(argv) {
 
 const flags = parseArgs(process.argv.slice(2));
 const sshTarget = `${flags.user}@${flags.host}`;
-const sshBase = ['ssh', '-o', 'PreferredAuthentications=publickey', '-o', 'PasswordAuthentication=no', '-o', 'ConnectTimeout=10', '-o', 'BatchMode=yes', '-p', flags.port];
+const sshBase = [
+  'ssh',
+  '-o',
+  'PreferredAuthentications=publickey',
+  '-o',
+  'PasswordAuthentication=no',
+  '-o',
+  'ConnectTimeout=10',
+  '-o',
+  'BatchMode=yes',
+  '-p',
+  flags.port,
+];
 
 function ssh(command, { allowFail = false, timeout = 120_000 } = {}) {
   const run = spawnSync(sshBase[0], [...sshBase.slice(1), sshTarget, command], {
@@ -82,7 +93,11 @@ function ssh(command, { allowFail = false, timeout = 120_000 } = {}) {
           '  1. 机器是否已创建完成（云控制台看状态）；\n' +
           '  2. 本机公钥是否已加入服务器 authorized_keys：\n' +
           `     cat ~/.ssh/id_ed25519.pub → 上传到服务器 ~/.ssh/authorized_keys\n` +
-          '  3. 手工验证: ' + sshBase.join(' ') + ' ' + sshTarget + ' echo ok',
+          '  3. 手工验证: ' +
+          sshBase.join(' ') +
+          ' ' +
+          sshTarget +
+          ' echo ok',
       );
     }
     console.error(run.stderr || run.stdout || `ssh exited ${run.status}`);
@@ -123,7 +138,9 @@ const files = [
   'examples/local-engine-reference.mjs',
   'package.json',
 ];
-ssh(`mkdir -p ${flags.dir}/services/sim2real-web ${flags.dir}/engines/starter-ppo ${flags.dir}/examples`);
+ssh(
+  `mkdir -p ${flags.dir}/services/sim2real-web ${flags.dir}/engines/starter-ppo ${flags.dir}/examples`,
+);
 const sshShell = `ssh -p ${flags.port} -o BatchMode=yes -o ConnectTimeout=10`;
 // --relative keeps each file's repository-relative subpath on the target,
 // so runner.py lands at <dir>/engines/starter-ppo/runner.py (not flattened).
@@ -147,7 +164,14 @@ if (!synced) {
     ssh(`mkdir -p ${flags.dir}/$(dirname ${file})`);
     const scp = spawnSync(
       'scp',
-      ['-P', flags.port, '-o', 'BatchMode=yes', path.join(repoRoot, file), `${sshTarget}:${flags.dir}/${file}`],
+      [
+        '-P',
+        flags.port,
+        '-o',
+        'BatchMode=yes',
+        path.join(repoRoot, file),
+        `${sshTarget}:${flags.dir}/${file}`,
+      ],
       { encoding: 'utf8', timeout: 120_000 },
     );
     if (scp.status !== 0) {
@@ -163,20 +187,22 @@ console.log('  ✓ 已同步 worker + 引擎 + manifest');
 step('安装/检查 Python 训练栈（venv + numpy/onnx + CUDA torch）');
 const pySetup = ssh(
   `cd ${flags.dir} && ` +
-  'if [ ! -x .venv/bin/python ]; then python3 -m venv .venv 2>/dev/null || python3 -m pip install --user virtualenv && python3 -m virtualenv .venv; fi && ' +
-  '.venv/bin/python -m pip install -q --upgrade pip && ' +
-  '.venv/bin/pip install -q numpy onnx && ' +
-  // The PyPI "torch" wheel is CPU-only; a machine with an NVIDIA driver
-  // needs the CUDA build or torch.cuda.is_available() stays false.
-  '(if command -v nvidia-smi >/dev/null 2>&1; then ' +
-  '.venv/bin/pip install -q torch --index-url https://download.pytorch.org/whl/cu128; ' +
-  'else .venv/bin/pip install -q torch; fi) 2>&1 | tail -1 || true; ' +
-  '.venv/bin/python -c "import numpy, torch; print(\\"stack-ok\\")"',
+    'if [ ! -x .venv/bin/python ]; then python3 -m venv .venv 2>/dev/null || python3 -m pip install --user virtualenv && python3 -m virtualenv .venv; fi && ' +
+    '.venv/bin/python -m pip install -q --upgrade pip && ' +
+    '.venv/bin/pip install -q numpy onnx && ' +
+    // The PyPI "torch" wheel is CPU-only; a machine with an NVIDIA driver
+    // needs the CUDA build or torch.cuda.is_available() stays false.
+    '(if command -v nvidia-smi >/dev/null 2>&1; then ' +
+    '.venv/bin/pip install -q torch --index-url https://download.pytorch.org/whl/cu128; ' +
+    'else .venv/bin/pip install -q torch; fi) 2>&1 | tail -1 || true; ' +
+    '.venv/bin/python -c "import numpy, torch; print(\\"stack-ok\\")"',
   { allowFail: true, timeout: 900_000 },
 );
 const stackOk = pySetup.stdout.includes('stack-ok');
 if (!stackOk) {
-  console.log('  ! Python 栈安装未完成（可稍后在服务器上手动运行: ~/rdk-sim2real/.venv/bin/pip install numpy onnx torch --index-url https://download.pytorch.org/whl/cu128）');
+  console.log(
+    '  ! Python 栈安装未完成（可稍后在服务器上手动运行: ~/rdk-sim2real/.venv/bin/pip install numpy onnx torch --index-url https://download.pytorch.org/whl/cu128）',
+  );
 } else {
   console.log('  ✓ numpy + torch 就绪');
 }
@@ -189,7 +215,11 @@ const cudaProbe = ssh(
 );
 const cudaName = cudaProbe.stdout.trim().split('\n').pop();
 const hasCuda = cudaName !== 'no-cuda' && cudaName !== 'no-torch';
-console.log(hasCuda ? `  ✓ ${cudaName} — 引擎将在 GPU 上训练（result.cuda=true）` : '  ✗ 未检测到 CUDA — 引擎会退回 CPU 并如实上报 cuda=false');
+console.log(
+  hasCuda
+    ? `  ✓ ${cudaName} — 引擎将在 GPU 上训练（result.cuda=true）`
+    : '  ✗ 未检测到 CUDA — 引擎会退回 CPU 并如实上报 cuda=false',
+);
 
 // --- 5. worker env ----------------------------------------------------------
 step('生成 worker 环境文件（含随机 runner token）');
@@ -227,17 +257,25 @@ if (flags.service) {
     '[Install]',
     'WantedBy=default.target',
   ].join('\n');
-  ssh(`mkdir -p ~/.config/systemd/user && cat > ~/.config/systemd/user/rdk-sim2real-worker.service <<'EOF'\n${unit}\nEOF\nsystemctl --user daemon-reload && systemctl --user enable --now rdk-sim2real-worker && systemctl --user is-active rdk-sim2real-worker`);
+  ssh(
+    `mkdir -p ~/.config/systemd/user && cat > ~/.config/systemd/user/rdk-sim2real-worker.service <<'EOF'\n${unit}\nEOF\nsystemctl --user daemon-reload && systemctl --user enable --now rdk-sim2real-worker && systemctl --user is-active rdk-sim2real-worker`,
+  );
   console.log('  ✓ 服务已启动: systemctl --user status rdk-sim2real-worker');
 } else {
   console.log('\n[gpu-deploy] 未指定 --service；手动启动方式：');
   console.log(`  ssh -p ${flags.port} ${sshTarget}`);
-  console.log(`  cd ${flags.dir} && set -a && . ./worker.env && set +a && node services/sim2real-web/local-training-worker.mjs`);
+  console.log(
+    `  cd ${flags.dir} && set -a && . ./worker.env && set +a && node services/sim2real-web/local-training-worker.mjs`,
+  );
 }
 
 // --- final wiring instructions ---------------------------------------------
 console.log('\n[gpu-deploy] 部署完成。把下面两行加进本机 web 服务器的 .env 并重启：');
 console.log(`  RDK_SIM2REAL_LOCAL_RUNNER_URL=http://${flags.host}:19091/train`);
 console.log(`  RDK_SIM2REAL_LOCAL_RUNNER_TOKEN=${token}`);
-console.log('\n注意: worker 监听 0.0.0.0:19091，token 是唯一防线；生产建议加防火墙/白名单或 SSH 隧道：');
-console.log(`  ssh -p ${flags.port} -N -L 19091:127.0.0.1:19091 ${sshTarget}  # 然后用 http://127.0.0.1:19091/train`);
+console.log(
+  '\n注意: worker 监听 0.0.0.0:19091，token 是唯一防线；生产建议加防火墙/白名单或 SSH 隧道：',
+);
+console.log(
+  `  ssh -p ${flags.port} -N -L 19091:127.0.0.1:19091 ${sshTarget}  # 然后用 http://127.0.0.1:19091/train`,
+);

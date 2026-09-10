@@ -1,7 +1,6 @@
 import type {
   ModelArtifactDescriptor,
   ModelArtifactFormat,
-  ModelArtifactKind,
   ModelArtifactRuntime,
   ModelArtifactWorkload,
   ModelCompatibilityResult,
@@ -301,13 +300,7 @@ export interface Sim2RealProjectRecord {
 
 export type Sim2RealDeploymentMode = 'preflight' | 'canary' | 'live';
 export type Sim2RealDeploymentStatus =
-  | 'planned'
-  | 'running'
-  | 'ready'
-  | 'blocked'
-  | 'failed'
-  | 'completed'
-  | 'cancelled';
+  'planned' | 'running' | 'ready' | 'blocked' | 'failed' | 'completed' | 'cancelled';
 export type Sim2RealStepStatus = 'pending' | 'running' | 'completed' | 'blocked' | 'failed';
 
 export interface Sim2RealDeploymentStep {
@@ -318,12 +311,7 @@ export interface Sim2RealDeploymentStep {
 }
 
 export type Sim2RealDeploymentEventType =
-  | 'created'
-  | 'status_changed'
-  | 'preflight'
-  | 'cancelled'
-  | 'version_switched'
-  | 'updated';
+  'created' | 'status_changed' | 'preflight' | 'cancelled' | 'version_switched' | 'updated';
 
 /** Append-only lifecycle evidence kept with a deployment plan. */
 export interface Sim2RealDeploymentHistoryEvent {

@@ -9,6 +9,9 @@
 - **RL 训练（9+ 的软件门槛）**：训练请求由声明式 task-pack + adapter 合并生成；评估固定 nominal/hard envelope、seed、最小样本量和 CI lower-bound；发布前还必须证明训练策略优于 seeded baseline。评估报告中的 PASS 字段不会被直接信任，服务端会重新计算门槛。
 - **硬件抽象（9+ 的软件门槛）**：adapter/profile 使用统一 schema，校验 topic、消息类型、控制频率、动作/观测维度、限幅、watchdog 和 provenance；脚手架默认生成 mock，并拒绝覆盖已有 manifest。
 - **产品与文档（9+ 的可用性门槛）**：首屏信息架构、命令面板、训练/评估/发布路径和 agent chat 均有行为回归；文档把 preflight、canary、live 和证据要求写成可执行 runbook。
+- **工程护栏（9+）**：ESLint（error 级为真实缺陷规则，零违规）与 Prettier/EditorConfig 进 CI；Node 20/22/24 矩阵；`test:coverage` 带 lines/statements 66、functions 79、branches 61 的下限；Dependabot 覆盖 npm / GitHub Actions / pip。
+- **前端注入门禁（9+）**：`verify:escape-audit` 扫描 `public/*.js` 里 `innerHTML`/`outerHTML` 的模板插值，未转义即失败；豁免必须写带理由的 `// escape-audit:allow`，且写在模板字面量文本里的"注释"不被承认。
+- **运行加固（9+ 的软件门槛）**：自家页面严格 CSP（`script-src 'self'`，仅第三方 WASM 所在 `/mujoco` 放宽）、可选 HSTS、进程内限流 429、字段白名单结构化日志、Prometheus `/metrics`（标签归一化且有基数上限）；配置与取舍见 [`operations.md`](operations.md)。
 
 ## 仍需现场证据才能宣称“整体 9+”
 

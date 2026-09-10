@@ -1,9 +1,8 @@
-import { Router, type Request, type Response } from 'express';
+import { Router, type Response } from 'express';
 
 import {
   STUDIO_WEB_CLOUD_SESSION_COOKIE,
   decodeStudioWebCloudCookie,
-  parseCookieValue,
   studioCookieAuthConfigured,
 } from './studio-cookie-auth.js';
 import type { Sim2RealAuthPort } from './sim2real-auth.js';
@@ -30,7 +29,9 @@ const DEFAULT_SHELL_URL = 'https://rdkstudio.d-robotics.cc';
 const RESET_COOKIE = `${STUDIO_WEB_CLOUD_SESSION_COOKIE}=; Path=/; HttpOnly; SameSite=Lax; Secure; Max-Age=0`;
 
 function studioShellLoginUrl(): string | null {
-  const raw = String(process.env.RDK_SIM2REAL_STUDIO_SHELL_URL ?? '').trim().replace(/\/+$/, '');
+  const raw = String(process.env.RDK_SIM2REAL_STUDIO_SHELL_URL ?? '')
+    .trim()
+    .replace(/\/+$/, '');
   const base = raw || DEFAULT_SHELL_URL;
   try {
     const parsed = new URL(`${base}/api/sso/direct/login`);
@@ -48,7 +49,9 @@ function studioShellLoginUrl(): string | null {
 }
 
 function studioShellBaseUrl(): string | null {
-  const raw = String(process.env.RDK_SIM2REAL_STUDIO_SHELL_URL ?? '').trim().replace(/\/+$/, '');
+  const raw = String(process.env.RDK_SIM2REAL_STUDIO_SHELL_URL ?? '')
+    .trim()
+    .replace(/\/+$/, '');
   const base = raw || DEFAULT_SHELL_URL;
   try {
     const parsed = new URL(base);
@@ -112,9 +115,10 @@ async function relayLoginUpstream(
 }
 
 function hasUsableCookie(setCookie: string[]): boolean {
-  return setCookie.some((cookie) =>
-    cookie.startsWith(`${STUDIO_WEB_CLOUD_SESSION_COOKIE}=`) &&
-    decodeStudioWebCloudCookie(parseCookieValueFromSetCookie(cookie)) !== null,
+  return setCookie.some(
+    (cookie) =>
+      cookie.startsWith(`${STUDIO_WEB_CLOUD_SESSION_COOKIE}=`) &&
+      decodeStudioWebCloudCookie(parseCookieValueFromSetCookie(cookie)) !== null,
   );
 }
 
@@ -131,15 +135,18 @@ function parseCookieValueFromSetCookie(cookie: string): string {
 
 function appendSetCookies(response: Response, setCookie: string[]): void {
   const existing = response.getHeader('Set-Cookie');
-  const list = existing === undefined
-    ? []
-    : Array.isArray(existing)
-      ? existing.map(String)
-      : [String(existing)];
+  const list =
+    existing === undefined
+      ? []
+      : Array.isArray(existing)
+        ? existing.map(String)
+        : [String(existing)];
   // Only adopt the Studio web-cloud session cookie; a Studio login response
   // may also refresh the legacy rdk_sso_session id cookie, which this service
   // cannot validate, so it is deliberately dropped here.
-  const adopted = setCookie.filter((cookie) => cookie.startsWith(`${STUDIO_WEB_CLOUD_SESSION_COOKIE}=`));
+  const adopted = setCookie.filter((cookie) =>
+    cookie.startsWith(`${STUDIO_WEB_CLOUD_SESSION_COOKIE}=`),
+  );
   response.setHeader('Set-Cookie', [...list, ...adopted]);
 }
 
@@ -155,10 +162,12 @@ export function studioLoginInfo(): {
   };
 }
 
-export function createStudioLoginRelayRouter(options: {
-  auth?: Sim2RealAuthPort;
-  fetchImpl?: typeof fetch;
-} = {}): Router {
+export function createStudioLoginRelayRouter(
+  options: {
+    auth?: Sim2RealAuthPort;
+    fetchImpl?: typeof fetch;
+  } = {},
+): Router {
   const router = Router();
   const auth = options.auth;
   const fetchImpl = options.fetchImpl ?? fetch;
@@ -257,15 +266,11 @@ export function createStudioLoginRelayRouter(options: {
       if (relayed.status >= 200 && relayed.status < 300 && payload.ok !== true) {
         // Studio returns its own JSON error shape (409 wrong password, etc.).
         // Preserve the status so the frontend can show the real reason.
-        relayJson(
-          response,
-          relayed.status >= 400 ? relayed.status : 409,
-          {
-            ok: false,
-            error: String(payload.error ?? 'SIM2REAL_LOGIN_REJECTED'),
-            message: String(payload.message ?? payload.error ?? '登录未通过账号中心校验。'),
-          },
-        );
+        relayJson(response, relayed.status >= 400 ? relayed.status : 409, {
+          ok: false,
+          error: String(payload.error ?? 'SIM2REAL_LOGIN_REJECTED'),
+          message: String(payload.message ?? payload.error ?? '登录未通过账号中心校验。'),
+        });
         return;
       }
       if (relayed.status >= 400) {
@@ -286,8 +291,9 @@ export function createStudioLoginRelayRouter(options: {
         return;
       }
       appendSetCookies(response, relayed.setCookie);
-      const adoptedCookie = relayed.setCookie
-        .find((cookie) => cookie.startsWith(`${STUDIO_WEB_CLOUD_SESSION_COOKIE}=`));
+      const adoptedCookie = relayed.setCookie.find((cookie) =>
+        cookie.startsWith(`${STUDIO_WEB_CLOUD_SESSION_COOKIE}=`),
+      );
       const decoded = adoptedCookie
         ? decodeStudioWebCloudCookie(parseCookieValueFromSetCookie(adoptedCookie))
         : null;

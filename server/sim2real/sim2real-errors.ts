@@ -16,6 +16,7 @@ export type Sim2RealErrorCode =
   | 'sim2real_storage_not_configured'
   | 'sim2real_storage_unavailable'
   | 'sim2real_storage_quota_exceeded'
+  | 'sim2real_storage_writer_conflict'
   | 'sim2real_model_version_exists'
   | 'sim2real_model_quota_exceeded'
   | 'sim2real_run_quota_exceeded'
@@ -84,6 +85,7 @@ const SIM2REAL_ERROR_CODE_SET = new Set<string>([
   'sim2real_storage_not_configured',
   'sim2real_storage_unavailable',
   'sim2real_storage_quota_exceeded',
+  'sim2real_storage_writer_conflict',
   'sim2real_model_version_exists',
   'sim2real_model_quota_exceeded',
   'sim2real_run_quota_exceeded',

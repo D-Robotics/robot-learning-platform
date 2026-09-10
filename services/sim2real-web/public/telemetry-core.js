@@ -41,6 +41,54 @@
     return rounded + 'Hz';
   }
 
+  // Retraining advice verdicts are a closed server contract. Map a raw verdict
+  // to its presentation surface, and degrade an unknown/missing/non-string
+  // value to the neutral "insufficient-evidence" verdict instead of inventing a
+  // success state. `recognized` lets the UI state the degradation explicitly.
+  const RETRAINING_VERDICTS = Object.freeze({
+    'retrain-recommended': { label: '建议重训', className: 'is-retrain-recommended' },
+    healthy: { label: '板端行为健康', className: 'is-healthy' },
+    'insufficient-evidence': { label: '证据不足（待补）', className: 'is-insufficient-evidence' },
+  });
+
+  function retrainingVerdict(verdict) {
+    const raw = typeof verdict === 'string' ? verdict : '';
+    if (Object.prototype.hasOwnProperty.call(RETRAINING_VERDICTS, raw)) {
+      return { key: raw, recognized: true, ...RETRAINING_VERDICTS[raw] };
+    }
+    return {
+      key: 'insufficient-evidence',
+      recognized: false,
+      ...RETRAINING_VERDICTS['insufficient-evidence'],
+    };
+  }
+
+  // A re-training signal may legitimately be incomparable (no reference
+  // trajectory, no telemetry window). Report null so the UI can say
+  // "不可比/无数据" instead of fabricating 0.000. Numeric strings stay
+  // incomparable on purpose: the server contract sends a number or null.
+  function formatRetrainingMeasure(value) {
+    return typeof value === 'number' && Number.isFinite(value) ? value.toFixed(3) : null;
+  }
+
+  // Pre-filled training request for the operator-confirmed retrain action.
+  // Pure and deterministic: the caller resolves the model id and supplies the
+  // idempotency key, so the body shape is unit testable without a DOM, crypto,
+  // or network. The panel POSTs this only after an explicit click plus
+  // confirmation — the analysis itself never submits a run.
+  function retrainingRequest(input) {
+    const record = input?.record || {};
+    const suggested = input?.advice?.suggestedTraining;
+    const taskId = suggested?.taskId ?? record.taskId;
+    return {
+      modelId: input?.modelId,
+      backend: 'local',
+      ...(taskId ? { taskId } : {}),
+      idempotencyKey: input?.idempotencyKey,
+      training: suggested?.training ?? { profile: 'standard' },
+    };
+  }
+
   // Keep browser import capacity aligned with SIM2REAL_CONTRACT_LIMITS on the
   // server. RDK Duck manifests may legitimately declare vectors larger than
   // MicroDuck's 61/14 contract; truncating them here would make valid telemetry
@@ -227,6 +275,161 @@
     };
   }
 
+  // --- Presentation helpers -------------------------------------------------
+  // The DOM renderers only ever ask these for strings, so the HTML escaper and
+  // the locale date formatter live here where they can be asserted without
+  // booting the app.
+  function escapeHtml(value) {
+    return String(value ?? '')
+      .replaceAll('&', '&amp;')
+      .replaceAll('<', '&lt;')
+      .replaceAll('>', '&gt;')
+      .replaceAll('"', '&quot;')
+      .replaceAll("'", '&#039;');
+  }
+
+  function formatDate(value) {
+    if (!value) return '—';
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) return '—';
+    return date.toLocaleString('zh-CN', {
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+    });
+  }
+
+  // Run statuses are a closed server contract: an unknown value degrades to a
+  // neutral surface instead of guessing success.
+  const RUN_TERMINAL_STATUSES = Object.freeze(['completed', 'failed', 'blocked', 'cancelled']);
+  const ACTIVE_RUN_STATUSES = Object.freeze(['queued', 'running']);
+
+  function isTerminalRunStatus(status) {
+    return RUN_TERMINAL_STATUSES.includes(String(status || '').toLowerCase());
+  }
+
+  function isActiveRunStatus(status) {
+    return ACTIVE_RUN_STATUSES.includes(String(status || '').toLowerCase());
+  }
+
+  function stateClass(status) {
+    const normalized = String(status || '').toLowerCase();
+    if (['ready', 'completed', 'success'].includes(normalized)) return 'state-success';
+    if (['blocked', 'queued', 'partial', 'running', 'planned'].includes(normalized)) {
+      return 'state-partial';
+    }
+    if (['failed', 'error'].includes(normalized)) return 'state-error';
+    return 'state-neutral';
+  }
+
+  function statusLabel(status) {
+    return (
+      {
+        queued: '排队中',
+        running: '运行中',
+        completed: '已完成',
+        ready: '可运行',
+        planned: '已计划',
+        blocked: '已阻断',
+        failed: '失败',
+        cancelled: '已取消',
+        registered: '已登记',
+        demo: '演示样例',
+      }[String(status || '').toLowerCase()] || String(status || '未知')
+    );
+  }
+
+  // Run metric cards share one numeric vocabulary: a value outside the metric
+  // contract reads as an em dash instead of a fabricated 0.
+  function metricPercent(value) {
+    if (typeof value !== 'number' || !Number.isFinite(value)) return null;
+    const percent = value >= 0 && value <= 1 ? value * 100 : value;
+    return percent >= 0 && percent <= 100 ? Math.round(percent) : null;
+  }
+
+  function formatMetricPercent(value) {
+    const percent = metricPercent(value);
+    return percent === null ? '—' : percent + '%';
+  }
+
+  function formatMetricNumber(value, digits) {
+    return typeof value === 'number' && Number.isFinite(value) ? value.toFixed(digits) : '—';
+  }
+
+  // Evidence provenance. A synthetic fixture and a mock run stay visible for
+  // review, but neither may satisfy a real-evaluation predicate.
+  function isSyntheticEvidence(evidence, run) {
+    return evidence?.source === 'demo-fixture' || run?.evaluation?.replay?.source === 'demo-fixture';
+  }
+
+  function hasPersistedEvaluation(run) {
+    return Boolean(run?.evaluation?.replay && Number(run.evaluation.replay.sampleCount) > 0);
+  }
+
+  // A raw browser import is useful for the local review step, but it is not a
+  // release-grade evaluation. Keep this broader predicate for review/navigation
+  // so ordinary replay remains visible after refresh; release decisions use the
+  // stricter hasReleaseGradeEvidence below. Mock and demo-fixture evidence
+  // remain gated.
+  function hasRealEvaluation(evidence, run) {
+    if (run?.mock === true || isSyntheticEvidence(evidence, run)) return false;
+    return Boolean(
+      hasPersistedEvaluation(run) ||
+        (run?.metrics && typeof run.metrics.successRate === 'number') ||
+        (evidence?.publishedRunId === run?.id && evidence?.summary?.sampleCount > 0),
+    );
+  }
+
+  // A release may advance only on metrics returned by a real worker or on an
+  // explicitly attested replay. `source: "board-agent"` is an uploader's claim,
+  // so it remains useful for review/replay but cannot prove that an X5 produced
+  // the samples. The optional attested flag is intentionally read-only here;
+  // trusted adapters may add it without changing the existing API shape.
+  function hasReleaseGradeEvidence(evidence, run) {
+    if (run?.mock === true || isSyntheticEvidence(evidence, run)) return false;
+    const metrics = run?.metrics;
+    const workerMetrics = Boolean(
+      run &&
+        ['local', 'robogo'].includes(String(run.backend || '').toLowerCase()) &&
+        metrics?.contractValid === true &&
+        typeof metrics.successRate === 'number',
+    );
+    const replay = run?.evaluation?.replay;
+    const attestedReplay = Boolean(replay?.attested === true && Number(replay.sampleCount) > 0);
+    return workerMetrics || attestedReplay;
+  }
+
+  // Diverging scale for the heatmaps: blue (negative) → canvas-light (zero) →
+  // red (positive), so sign and magnitude stay readable on the light theme.
+  function telemetryDivergingColor(value) {
+    const stops = [
+      [-1, 37, 99, 235],
+      [-0.25, 189, 214, 252],
+      [0, 251, 251, 249],
+      [0.25, 252, 216, 200],
+      [1, 220, 38, 38],
+    ];
+    const v = Math.max(-1, Math.min(1, value));
+    for (let i = 1; i < stops.length; i++) {
+      if (v <= stops[i][0]) {
+        const [p0, r0, g0, b0] = stops[i - 1];
+        const [p1, r1, g1, b1] = stops[i];
+        const f = (v - p0) / (p1 - p0 || 1);
+        return (
+          'rgb(' +
+          Math.round(r0 + (r1 - r0) * f) +
+          ', ' +
+          Math.round(g0 + (g1 - g0) * f) +
+          ', ' +
+          Math.round(b0 + (b1 - b0) * f) +
+          ')'
+        );
+      }
+    }
+    return 'rgb(255, 144, 152)';
+  }
+
   return {
     MAX_TELEMETRY_VECTOR_VALUES,
     MAX_TELEMETRY_IMPORT_SAMPLES,
@@ -234,6 +437,9 @@
     booleanValue,
     formatTelemetrySeconds,
     formatTelemetryRate,
+    retrainingVerdict,
+    formatRetrainingMeasure,
+    retrainingRequest,
     normalizeTelemetrySample,
     parseTelemetryText,
     stationImuQuaternion,
@@ -241,5 +447,19 @@
     telemetryHasData,
     stationPowerView,
     simulatorStatusLabels,
+    escapeHtml,
+    formatDate,
+    isTerminalRunStatus,
+    isActiveRunStatus,
+    stateClass,
+    statusLabel,
+    metricPercent,
+    formatMetricPercent,
+    formatMetricNumber,
+    isSyntheticEvidence,
+    hasPersistedEvaluation,
+    hasRealEvaluation,
+    hasReleaseGradeEvidence,
+    telemetryDivergingColor,
   };
 });

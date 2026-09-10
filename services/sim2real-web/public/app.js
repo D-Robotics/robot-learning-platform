@@ -91,15 +91,14 @@ function readNotifyPreference() {
   }
 }
 
-const RUN_TERMINAL_STATUSES = Object.freeze(['completed', 'failed', 'blocked', 'cancelled']);
-const ACTIVE_RUN_STATUSES = Object.freeze(['queued', 'running']);
-
+// The terminal/active status vocabularies live in telemetry-core.js; app.js
+// only keeps the delegation seam so call sites stay unchanged.
 function isTerminalRunStatus(status) {
-  return RUN_TERMINAL_STATUSES.includes(String(status || '').toLowerCase());
+  return SimTelemetryCore.isTerminalRunStatus(status);
 }
 
 function isActiveRunStatus(status) {
-  return ACTIVE_RUN_STATUSES.includes(String(status || '').toLowerCase());
+  return SimTelemetryCore.isActiveRunStatus(status);
 }
 
 function notifyRunTerminal(run) {
@@ -388,24 +387,11 @@ function apiPath(path) {
 }
 
 function escapeHtml(value) {
-  return String(value ?? '')
-    .replaceAll('&', '&amp;')
-    .replaceAll('<', '&lt;')
-    .replaceAll('>', '&gt;')
-    .replaceAll('"', '&quot;')
-    .replaceAll("'", '&#039;');
+  return SimTelemetryCore.escapeHtml(value);
 }
 
 function formatDate(value) {
-  if (!value) return '—';
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return '—';
-  return date.toLocaleString('zh-CN', {
-    month: '2-digit',
-    day: '2-digit',
-    hour: '2-digit',
-    minute: '2-digit',
-  });
+  return SimTelemetryCore.formatDate(value);
 }
 
 function formatTelemetrySeconds(value) {
@@ -756,28 +742,11 @@ function selectedDevice() {
 }
 
 function stateClass(status) {
-  const normalized = String(status || '').toLowerCase();
-  if (['ready', 'completed', 'success'].includes(normalized)) return 'state-success';
-  if (['blocked', 'queued', 'partial', 'running', 'planned'].includes(normalized)) return 'state-partial';
-  if (['failed', 'error'].includes(normalized)) return 'state-error';
-  return 'state-neutral';
+  return SimTelemetryCore.stateClass(status);
 }
 
 function statusLabel(status) {
-  return (
-    {
-      queued: '排队中',
-      running: '运行中',
-      completed: '已完成',
-      ready: '可运行',
-      planned: '已计划',
-      blocked: '已阻断',
-      failed: '失败',
-      cancelled: '已取消',
-      registered: '已登记',
-      demo: '演示样例',
-    }[String(status || '').toLowerCase()] || String(status || '未知')
-  );
+  return SimTelemetryCore.statusLabel(status);
 }
 
 function renderSelects() {
@@ -1522,14 +1491,11 @@ const RUN_METRIC_CARDS = [
 ];
 
 function formatMetricPercent(value) {
-  const percent = metricPercent(value);
-  return percent === null ? '—' : percent + '%';
+  return SimTelemetryCore.formatMetricPercent(value);
 }
 
 function formatMetricNumber(value, digits) {
-  return typeof value === 'number' && Number.isFinite(value)
-    ? value.toFixed(digits)
-    : '—';
+  return SimTelemetryCore.formatMetricNumber(value, digits);
 }
 
 function renderRunMetricCards(record) {
@@ -1722,7 +1688,7 @@ function formatRetrainingMeasure(value) {
   return SimTelemetryCore.formatRetrainingMeasure(value);
 }
 
-function renderRetrainingAdvice(body, advice) {
+function renderRetrainingAdvice(body, advice, record) {
   const verdict = retrainingVerdict(advice);
   const boardSamples = Number(advice?.boardSamples);
   const signals = Array.isArray(advice?.signals) ? advice.signals : [];
@@ -1833,6 +1799,30 @@ function renderRetrainingAdvice(body, advice) {
     }
     suggested.append(retrainingElement('pre', 'run-detail-code', serialized || '（无法序列化）'));
     body.append(suggested);
+
+    // The retrain action exists only for the affirmative verdict AND a usable
+    // request body. Rendering it wires a click listener; it never fires on its
+    // own, and every non-click path stays a GET.
+    if (advice?.verdict === 'retrain-recommended') {
+      const actions = retrainingElement('div', 'run-retrain-actions');
+      const submit = retrainingElement(
+        'button',
+        'button button-primary button-small',
+        '按建议发起重训',
+      );
+      submit.type = 'button';
+      submit.id = 'run-retrain-submit';
+      submit.addEventListener('click', () => {
+        void submitRetrainingFromAdvice(record, advice);
+      });
+      actions.append(submit);
+      const submitStatus = retrainingElement('span', 'run-retrain-submit-status', '');
+      submitStatus.id = 'run-retrain-submit-status';
+      submitStatus.setAttribute('role', 'status');
+      submitStatus.setAttribute('aria-live', 'polite');
+      actions.append(submitStatus);
+      body.append(actions);
+    }
   }
 
   body.append(
@@ -1871,11 +1861,10 @@ function renderRetrainingAdviceError(body, error, record) {
 }
 
 /**
- * Retraining advice is the read-only half of the telemetry flywheel. The
- * operator asks the server what the board telemetry suggests and this panel
- * only reports it: the request is a plain authenticated GET and no training
- * run is ever submitted from here. suggestedTraining is displayed as a
- * pre-filled request body the human may act on elsewhere.
+ * Pull the read-only re-training analysis for one run. This is a plain
+ * authenticated GET: opening the run detail or loading the advice never
+ * submits anything. A training run may only be created by the explicit
+ * operator action in submitRetrainingFromAdvice().
  */
 async function loadRunRetrainingAdvice(record) {
   const card = $('run-retrain-card');
@@ -1896,12 +1885,94 @@ async function loadRunRetrainingAdvice(record) {
     if (!advice || typeof advice !== 'object') {
       throw new ApiError('服务端返回缺少 advice 字段', 0, payload);
     }
-    renderRetrainingAdvice(body, advice);
+    renderRetrainingAdvice(body, advice, record);
   } catch (error) {
     if (card.dataset.runId !== record.id) return;
     renderRetrainingAdviceError(body, error, record);
   } finally {
     if (button) button.disabled = false;
+  }
+}
+
+// The request body shape is pure logic (telemetry-core.js); this wrapper only
+// supplies the per-submission idempotency key, matching the run-creation flow.
+function retrainingRequestBody(record, advice, modelId) {
+  return SimTelemetryCore.retrainingRequest({
+    record,
+    advice,
+    modelId,
+    idempotencyKey:
+      globalThis.crypto?.randomUUID?.() ||
+      `retrain-${Date.now()}-${Math.random().toString(16).slice(2)}`,
+  });
+}
+
+/**
+ * The operator-confirmed re-training action. This is the ONLY code path in the
+ * advice panel that writes: it runs after an explicit click, shows an honest
+ * confirmation, and aborts on cancel or on a missing model id. Nothing here is
+ * reachable from rendering, loading, or opening the run detail.
+ */
+async function submitRetrainingFromAdvice(record, advice) {
+  const suggested = advice?.suggestedTraining;
+  if (!suggested || typeof suggested !== 'object') return;
+  const button = $('run-retrain-submit');
+  const status = $('run-retrain-submit-status');
+  const setStatus = (message) => {
+    if (status) status.textContent = message;
+  };
+  const modelId = record?.modelId || selectedModel()?.id;
+  if (!modelId) {
+    // Fail closed: never POST a body whose model is unknown.
+    setStatus('无法发起重训：缺少模型 ID。已中止，未提交任何请求；请先在训练页选择模型。');
+    return;
+  }
+  const taskId = suggested.taskId ?? record?.taskId;
+  const profile = suggested.training?.profile ?? 'standard';
+  const acknowledged = window.confirm(
+    '即将按建议提交一次新的本地训练（任务 ' +
+      (taskId ?? '未指定') +
+      '，档位 ' +
+      profile +
+      '）。\n这是操作员的显式动作：会真实发起一次本地训练；分析本身不会自动发起任何训练。',
+  );
+  if (!acknowledged) {
+    setStatus('已取消：未提交任何请求。');
+    return;
+  }
+  const idleLabel = button ? button.textContent : '按建议发起重训';
+  if (button) {
+    button.disabled = true;
+    button.textContent = '提交中…';
+  }
+  setStatus('正在提交重训请求…');
+  try {
+    const payload = await request('/sim2real/runs', {
+      method: 'POST',
+      body: JSON.stringify(retrainingRequestBody(record, advice, modelId)),
+    });
+    const run = payload?.run || {};
+    setStatus(
+      '已提交：训练任务 ' +
+        String(run.id ?? '（服务端未返回 id）') +
+        ' 已创建，可在「记录与版本」中跟踪。',
+    );
+    showToast('重训请求已记录（操作员显式提交）', 'success');
+    await loadOverview({ quiet: true });
+  } catch (error) {
+    setStatus(
+      '提交失败：' +
+        (error instanceof Error ? error.message : '未知错误') +
+        '。可点击按钮重试；本面板不会自动重发。',
+    );
+    if (!(error instanceof ApiError && error.status === 401)) {
+      showToast(error instanceof Error ? error.message : '重训提交失败', 'error');
+    }
+  } finally {
+    if (button) {
+      button.disabled = false;
+      button.textContent = idleLabel || '按建议发起重训';
+    }
   }
 }
 
@@ -1914,9 +1985,7 @@ function wireRunRetrainingAdvice(record) {
 }
 
 function metricPercent(value) {
-  if (typeof value !== 'number' || !Number.isFinite(value)) return null;
-  const percent = value >= 0 && value <= 1 ? value * 100 : value;
-  return percent >= 0 && percent <= 100 ? Math.round(percent) : null;
+  return SimTelemetryCore.metricPercent(value);
 }
 
 function finiteNumber(value) {
@@ -1968,51 +2037,24 @@ function latestRun() {
 }
 
 function isSyntheticEvidence(evidence, run) {
-  return (
-    evidence?.source === 'demo-fixture' ||
-    run?.evaluation?.replay?.source === 'demo-fixture'
-  );
+  return SimTelemetryCore.isSyntheticEvidence(evidence, run);
 }
 
 function hasPersistedEvaluation(run) {
-  return Boolean(
-    run?.evaluation?.replay &&
-      Number(run.evaluation.replay.sampleCount) > 0,
-  );
+  return SimTelemetryCore.hasPersistedEvaluation(run);
 }
 
-// A raw browser import is useful for the local review step, but it is not a
-// release-grade evaluation. Keep this broader predicate for review/navigation
-// so ordinary replay remains visible after refresh; release decisions use the
-// stricter helper below. Mock and demo-fixture evidence remain gated.
 function hasRealEvaluation(evidence, run) {
-  if (run?.mock === true || isSyntheticEvidence(evidence, run)) return false;
-  return Boolean(
-    hasPersistedEvaluation(run) ||
-      (run?.metrics && typeof run.metrics.successRate === 'number') ||
-      (evidence?.publishedRunId === run?.id && evidence?.summary?.sampleCount > 0),
-  );
+  return SimTelemetryCore.hasRealEvaluation(evidence, run);
 }
 
 // A release may advance only on metrics returned by a real worker or on an
 // explicitly attested replay. `source: "board-agent"` is an uploader's claim,
 // so it remains useful for review/replay but cannot prove that an X5 produced
-// the samples. The optional attested flag is intentionally read-only here;
-// trusted adapters may add it without changing the existing API shape.
+// the samples. The predicate itself lives in telemetry-core.js so its truth
+// table is unit-tested without a DOM.
 function hasReleaseGradeEvidence(evidence, run) {
-  if (run?.mock === true || isSyntheticEvidence(evidence, run)) return false;
-  const metrics = run?.metrics;
-  const workerMetrics = Boolean(
-    run &&
-      ['local', 'robogo'].includes(String(run.backend || '').toLowerCase()) &&
-      metrics?.contractValid === true &&
-      typeof metrics.successRate === 'number',
-  );
-  const replay = run?.evaluation?.replay;
-  const attestedReplay = Boolean(
-    replay?.attested === true && Number(replay.sampleCount) > 0,
-  );
-  return workerMetrics || attestedReplay;
+  return SimTelemetryCore.hasReleaseGradeEvidence(evidence, run);
 }
 
 // --- Telemetry visuals ------------------------------------------------------
@@ -2051,34 +2093,9 @@ function drawCanvasPlaceholder(ctx, width, height, message) {
   ctx.textBaseline = 'alphabetic';
 }
 
-// Diverging scale for the heatmaps: blue (negative) → canvas-light (zero) →
-// red (positive), so sign and magnitude stay readable on the light theme.
+// The diverging heatmap scale lives in telemetry-core.js.
 function telemetryDivergingColor(value) {
-  const stops = [
-    [-1, 37, 99, 235],
-    [-0.25, 189, 214, 252],
-    [0, 251, 251, 249],
-    [0.25, 252, 216, 200],
-    [1, 220, 38, 38],
-  ];
-  const v = Math.max(-1, Math.min(1, value));
-  for (let i = 1; i < stops.length; i++) {
-    if (v <= stops[i][0]) {
-      const [p0, r0, g0, b0] = stops[i - 1];
-      const [p1, r1, g1, b1] = stops[i];
-      const f = (v - p0) / (p1 - p0 || 1);
-      return (
-        'rgb(' +
-        Math.round(r0 + (r1 - r0) * f) +
-        ', ' +
-        Math.round(g0 + (g1 - g0) * f) +
-        ', ' +
-        Math.round(b0 + (b1 - b0) * f) +
-        ')'
-      );
-    }
-  }
-  return 'rgb(255, 144, 152)';
+  return SimTelemetryCore.telemetryDivergingColor(value);
 }
 
 function drawTelemetryRewardTimeline(samples) {

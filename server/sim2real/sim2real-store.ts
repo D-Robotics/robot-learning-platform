@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import * as fsSync from 'node:fs';
 import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
+import { StringDecoder } from 'node:string_decoder';
 
 import type {
   Sim2RealDeploymentEventType,
@@ -20,6 +21,7 @@ import { BUILTIN_MICRODUCK_MODEL } from '../../shared/sim2real.js';
 import { Sim2RealError } from './sim2real-errors.js';
 import { emitSim2RealEvent } from './sim2real-events.js';
 import { isWebCloudDeployment, resolveDataDir } from './standalone-adapters.js';
+import { acquireStorageLease } from './storage-lease.js';
 
 const LEDGER_VERSION = 1 as const;
 const MODEL_CAP = 100;
@@ -74,10 +76,44 @@ export function sim2RealActiveRunTtlSeconds(): number {
   if (!raw) return DEFAULT_ACTIVE_RUN_TTL_SECONDS;
   const parsed = Number(raw);
   return Number.isSafeInteger(parsed) &&
-      parsed >= MIN_ACTIVE_RUN_TTL_SECONDS &&
-      parsed <= MAX_ACTIVE_RUN_TTL_SECONDS
+    parsed >= MIN_ACTIVE_RUN_TTL_SECONDS &&
+    parsed <= MAX_ACTIVE_RUN_TTL_SECONDS
     ? parsed
     : DEFAULT_ACTIVE_RUN_TTL_SECONDS;
+}
+
+/** Hard upper bound for the retention window: ten years, in days. */
+export const MAX_SIM2REAL_TELEMETRY_RETENTION_DAYS = 3_650;
+const MS_PER_DAY = 24 * 60 * 60 * 1_000;
+let retentionWarningLogged = false;
+
+/**
+ * Telemetry retention window in days. `0` disables pruning entirely and is the
+ * default, so existing deployments keep every accepted chunk. A non-finite,
+ * non-integer, non-positive or absurdly large value is also treated as `0`.
+ * Malformed input is reported once instead of throwing: retention is an
+ * operator policy and must never turn a normal ingest into a request error.
+ */
+export function sim2RealTelemetryRetentionDays(): number {
+  const raw = String(process.env.RDK_SIM2REAL_TELEMETRY_RETENTION_DAYS ?? '').trim();
+  if (!raw) return 0;
+  const parsed = Number(raw);
+  if (
+    !Number.isFinite(parsed) ||
+    !Number.isInteger(parsed) ||
+    parsed <= 0 ||
+    parsed > MAX_SIM2REAL_TELEMETRY_RETENTION_DAYS
+  ) {
+    if (!retentionWarningLogged) {
+      retentionWarningLogged = true;
+      console.error(
+        `[sim2real] RDK_SIM2REAL_TELEMETRY_RETENTION_DAYS=${raw} is invalid; ` +
+          `telemetry retention stays disabled (expected an integer in 1..${MAX_SIM2REAL_TELEMETRY_RETENTION_DAYS}).`,
+      );
+    }
+    return 0;
+  }
+  return parsed;
 }
 
 type StoredModel = Sim2RealModelRecord & { owner?: string };
@@ -256,7 +292,9 @@ function validLedgerShape(value: Record<string, unknown>): boolean {
   if (!validRecordArray(value.models, ['id', 'createdAt', 'updatedAt'])) return false;
   if ((value.models as unknown[]).length > MODEL_CAP) return false;
   if (!value.models.every((item) => isRecord(item.manifest))) return false;
-  if (!validRecordArray(value.runs, ['id', 'modelId', 'backend', 'status', 'summary', 'createdAt'])) {
+  if (
+    !validRecordArray(value.runs, ['id', 'modelId', 'backend', 'status', 'summary', 'createdAt'])
+  ) {
     return false;
   }
   if ((value.runs as unknown[]).length > RUN_CAP) return false;
@@ -276,26 +314,34 @@ function validLedgerShape(value: Record<string, unknown>): boolean {
     return false;
   }
   if ((value.deployments as unknown[]).length > DEPLOYMENT_CAP) return false;
-  if (!(value.deployments as Array<Record<string, unknown>>).every((deployment) => {
-    if (deployment.history === undefined) return true;
-    return (
-      Array.isArray(deployment.history) &&
-      deployment.history.length <= 100 &&
-      deployment.history.every(
-        (event) =>
-          isRecord(event) &&
-          ['id', 'type', 'status', 'summary', 'createdAt'].every(
-            (key) => typeof event[key] === 'string' && String(event[key]).trim(),
-          ),
-      )
-    );
-  })) return false;
+  if (
+    !(value.deployments as Array<Record<string, unknown>>).every((deployment) => {
+      if (deployment.history === undefined) return true;
+      return (
+        Array.isArray(deployment.history) &&
+        deployment.history.length <= 100 &&
+        deployment.history.every(
+          (event) =>
+            isRecord(event) &&
+            ['id', 'type', 'status', 'summary', 'createdAt'].every(
+              (key) => typeof event[key] === 'string' && String(event[key]).trim(),
+            ),
+        )
+      );
+    })
+  )
+    return false;
   // Telemetry rows come in two shapes: legacy inline rows carry their samples
   // array; shard-backed index rows deliberately omit it. Accept either.
-  const telemetryRowsOk = Array.isArray(value.telemetry) &&
+  const telemetryRowsOk =
+    Array.isArray(value.telemetry) &&
     value.telemetry.every((item) => {
       if (!isRecord(item)) return false;
-      if (['id', 'runId', 'source', 'receivedAt'].some((key) => typeof item[key] !== 'string' || !String(item[key]).trim())) {
+      if (
+        ['id', 'runId', 'source', 'receivedAt'].some(
+          (key) => typeof item[key] !== 'string' || !String(item[key]).trim(),
+        )
+      ) {
         return false;
       }
       return item.samples === undefined || Array.isArray(item.samples);
@@ -311,20 +357,42 @@ function validLedgerShape(value: Record<string, unknown>): boolean {
   if (Array.isArray(value.datasets) && value.datasets.length > DATASET_CAP) return false;
   if (Array.isArray(value.computeResources) && value.computeResources.length > 100) return false;
   if (Array.isArray(value.projects)) {
-    if (!validRecordArray(value.projects, ['id', 'name', 'slug', 'createdAt', 'updatedAt'])) return false;
-    if (!(value.projects as Array<Record<string, unknown>>).every((item) =>
-      Array.isArray(item.modelIds) && Array.isArray(item.datasetIds) &&
-      (item.modelIds as unknown[]).every((id) => typeof id === 'string') &&
-      (item.datasetIds as unknown[]).every((id) => typeof id === 'string'),
-    )) return false;
+    if (!validRecordArray(value.projects, ['id', 'name', 'slug', 'createdAt', 'updatedAt']))
+      return false;
+    if (
+      !(value.projects as Array<Record<string, unknown>>).every(
+        (item) =>
+          Array.isArray(item.modelIds) &&
+          Array.isArray(item.datasetIds) &&
+          (item.modelIds as unknown[]).every((id) => typeof id === 'string') &&
+          (item.datasetIds as unknown[]).every((id) => typeof id === 'string'),
+      )
+    )
+      return false;
   }
-  if (Array.isArray(value.datasets) && !validRecordArray(value.datasets, ['id', 'name', 'createdAt', 'updatedAt'])) return false;
-  if (Array.isArray(value.computeResources) && !validRecordArray(value.computeResources, ['id', 'name', 'kind', 'runnerUrl', 'status', 'createdAt', 'updatedAt'])) return false;
+  if (
+    Array.isArray(value.datasets) &&
+    !validRecordArray(value.datasets, ['id', 'name', 'createdAt', 'updatedAt'])
+  )
+    return false;
+  if (
+    Array.isArray(value.computeResources) &&
+    !validRecordArray(value.computeResources, [
+      'id',
+      'name',
+      'kind',
+      'runnerUrl',
+      'status',
+      'createdAt',
+      'updatedAt',
+    ])
+  )
+    return false;
   // Sample-level validation applies only to legacy inline rows; shard-backed
   // index rows have no samples here.
-  return (value.telemetry as Array<Record<string, unknown>>).every((item) =>
-    item.samples === undefined ||
-    (item.samples as unknown[]).every((sample) => isRecord(sample)),
+  return (value.telemetry as Array<Record<string, unknown>>).every(
+    (item) =>
+      item.samples === undefined || (item.samples as unknown[]).every((sample) => isRecord(sample)),
   );
 }
 
@@ -528,6 +596,13 @@ async function readLedger(): Promise<Sim2RealLedger> {
 async function writeLedger(value: Sim2RealLedger): Promise<void> {
   const file = ledgerPath();
   await fs.mkdir(path.dirname(file), { recursive: true, mode: 0o700 });
+  // Cross-process writer lease: every ledger write funnels through this
+  // function from inside `serialized(...)`, so this is the one choke point
+  // that (a) makes a second instance sharing the storage directory fail fast
+  // instead of overwriting the ledger and (b) refreshes the heartbeat on
+  // every successful write so a long-lived process is never mistaken for a
+  // dead one. A conflict throws before the first durable change is made.
+  await acquireStorageLease(path.dirname(file));
   const temporary = `${file}.${process.pid}.${Date.now()}.tmp`;
   const serializedValue = JSON.stringify(value, null, 2);
   if (Buffer.byteLength(serializedValue, 'utf8') > SIM2REAL_LEDGER_MAX_BYTES) {
@@ -585,6 +660,22 @@ function telemetryShardPath(runId: string): string | null {
 }
 
 /**
+ * Parse one NDJSON shard line into a full telemetry record. A line whose JSON
+ * is malformed deliberately propagates its `JSON.parse` error: an unreadable
+ * shard must fail loudly rather than silently drop accepted evidence.
+ */
+function parseTelemetryShardLine(
+  line: string,
+  owner: string | undefined,
+): TelemetryShardRecord | null {
+  if (!line.trim()) return null;
+  const parsed: unknown = JSON.parse(line);
+  if (!isRecord(parsed)) return null;
+  const record = parsed as unknown as TelemetryShardRecord;
+  return ownerMatches(record, owner) && Array.isArray(record.samples) ? record : null;
+}
+
+/**
  * Read the full telemetry chunks for one run. Rows still carrying inline
  * samples (written by ledger versions before the split) come from the ledger
  * itself, so old data keeps working without a migration pass.
@@ -601,11 +692,69 @@ async function readTelemetryShard(runId: string, owner?: string): Promise<Teleme
   }
   const records: TelemetryShardRecord[] = [];
   for (const line of raw.split('\n')) {
-    if (!line.trim()) continue;
-    const parsed: unknown = JSON.parse(line);
-    if (!isRecord(parsed)) continue;
-    const record = parsed as unknown as TelemetryShardRecord;
-    if (ownerMatches(record, owner) && Array.isArray(record.samples)) records.push(record);
+    const record = parseTelemetryShardLine(line, owner);
+    if (record) records.push(record);
+  }
+  return records;
+}
+
+/**
+ * Bounded head read of one run shard, used by the list endpoint. It reads the
+ * file in fixed-size chunks and returns as soon as `maxRecords` owner-matching
+ * rows have been parsed, so a small `limit` no longer pays for the whole
+ * (potentially 100k-row, sample-heavy) file. Rows are returned in append order,
+ * which is the order `readTelemetryShard` observes. The full reader above stays
+ * unchanged for replay/evaluation and idempotency lookups.
+ */
+async function readTelemetryShardBounded(
+  runId: string,
+  owner: string | undefined,
+  maxRecords: number,
+): Promise<TelemetryShardRecord[]> {
+  if (!Number.isFinite(maxRecords) || maxRecords <= 0) return [];
+  const shard = telemetryShardPath(runId);
+  if (!shard) return [];
+  let handle: fs.FileHandle;
+  try {
+    handle = await fs.open(shard, 'r');
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException)?.code === 'ENOENT') return [];
+    throw error;
+  }
+  const records: TelemetryShardRecord[] = [];
+  // A fixed 64 KiB window bounds peak memory independently of file size, and
+  // the decoder keeps a multi-byte code point split across two reads intact.
+  const buffer = Buffer.allocUnsafe(64 * 1024);
+  const decoder = new StringDecoder('utf8');
+  let pending = '';
+  let position = 0;
+  try {
+    readChunks: for (;;) {
+      const { bytesRead } = await handle.read(buffer, 0, buffer.length, position);
+      if (bytesRead <= 0) break;
+      position += bytesRead;
+      pending += decoder.write(buffer.subarray(0, bytesRead));
+      let newline = pending.indexOf('\n');
+      while (newline >= 0) {
+        const line = pending.slice(0, newline);
+        pending = pending.slice(newline + 1);
+        const record = parseTelemetryShardLine(line, owner);
+        if (record) {
+          records.push(record);
+          if (records.length >= maxRecords) break readChunks;
+        }
+        newline = pending.indexOf('\n');
+      }
+    }
+    // The writer always terminates a line with "\n", but tolerate a truncated
+    // tail so a partial final write cannot hide every earlier record.
+    if (records.length < maxRecords) {
+      const tail = `${pending}${decoder.end()}`;
+      const record = parseTelemetryShardLine(tail, owner);
+      if (record) records.push(record);
+    }
+  } finally {
+    await handle.close();
   }
   return records;
 }
@@ -629,6 +778,81 @@ async function appendTelemetryShard(record: TelemetryShardRecord): Promise<void>
   }
 }
 
+/**
+ * Ledger index rows for one run whose shard record is older than the retention
+ * cutoff. Legacy inline rows are self-contained and deliberately skipped: only
+ * shard-backed rows are pruned, so a shard line and its index row always
+ * disappear together. An unparseable `receivedAt` is kept (fail safe: never
+ * delete evidence this process cannot date).
+ */
+function expiredTelemetryIndexIds(
+  ledger: Sim2RealLedger,
+  runId: string,
+  owner: string | undefined,
+  cutoffMs: number,
+): Set<string> {
+  const expired = new Set<string>();
+  for (const row of ledger.telemetry) {
+    if (row.runId !== runId || !ownerMatches(row, owner)) continue;
+    if (Array.isArray(row.samples)) continue;
+    const received = Date.parse(String(row.receivedAt ?? ''));
+    if (Number.isFinite(received) && received < cutoffMs) expired.add(row.id);
+  }
+  return expired;
+}
+
+/**
+ * Drop the given ids from a run shard by rewriting it through a temporary file
+ * and an atomic `rename`, so a reader always sees either the old or the new
+ * complete file. Surviving rows keep their original append order and the file
+ * stays mode 0o600 in the 0o700 telemetry directory. A malformed line is kept
+ * verbatim because this process cannot prove it is safe to discard.
+ */
+async function rewriteTelemetryShardWithout(
+  shard: string,
+  removedIds: ReadonlySet<string>,
+): Promise<void> {
+  let raw: string;
+  try {
+    raw = await fs.readFile(shard, 'utf8');
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException)?.code === 'ENOENT') return;
+    throw error;
+  }
+  const kept: string[] = [];
+  let changed = false;
+  for (const line of raw.split('\n')) {
+    if (!line.trim()) continue;
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(line);
+    } catch {
+      kept.push(line);
+      continue;
+    }
+    if (isRecord(parsed) && typeof parsed.id === 'string' && removedIds.has(parsed.id)) {
+      changed = true;
+      continue;
+    }
+    kept.push(line);
+  }
+  if (!changed) return;
+  const temporary = `${shard}.${process.pid}.${Date.now()}.tmp`;
+  try {
+    const handle = await fs.open(temporary, 'w', 0o600);
+    try {
+      await handle.writeFile(kept.map((line) => `${line}\n`).join(''), 'utf8');
+      await handle.sync();
+    } finally {
+      await handle.close();
+    }
+    await fs.rename(temporary, shard);
+  } catch (error) {
+    await fs.rm(temporary, { force: true }).catch(() => undefined);
+    throw error;
+  }
+}
+
 function ensureWritable(): void {
   if (!sim2RealStorageInfo().writable) throw new Sim2RealError('sim2real_storage_not_configured');
 }
@@ -643,7 +867,11 @@ function withoutOwner<T extends { owner?: string }>(record: T): Omit<T, 'owner'>
 }
 
 function withoutRunPrivate(record: StoredRun): Sim2RealRunRecord {
-  const { _idempotencyKey: _key, _requestFingerprint: _fingerprint, ...owned } = withoutOwner(record);
+  const {
+    _idempotencyKey: _key,
+    _requestFingerprint: _fingerprint,
+    ...owned
+  } = withoutOwner(record);
   return owned as Sim2RealRunRecord;
 }
 
@@ -653,7 +881,11 @@ function withoutTelemetryPrivate(record: StoredTelemetry): Sim2RealTelemetryReco
 }
 
 function withoutDeploymentPrivate(record: StoredDeployment): Sim2RealDeploymentRecord {
-  const { _idempotencyKey: _key, _requestFingerprint: _fingerprint, ...owned } = withoutOwner(record);
+  const {
+    _idempotencyKey: _key,
+    _requestFingerprint: _fingerprint,
+    ...owned
+  } = withoutOwner(record);
   return owned as Sim2RealDeploymentRecord;
 }
 
@@ -667,7 +899,10 @@ function withoutDatasetPrivate(record: StoredDataset): Sim2RealDatasetRecord {
 
 function withoutComputeResourcePrivate(record: StoredComputeResource): Sim2RealComputeResource {
   const { runnerToken: _token, ...publicRecord } = withoutOwner(record);
-  return { ...publicRecord, tokenConfigured: Boolean(record.runnerToken) } as Sim2RealComputeResource;
+  return {
+    ...publicRecord,
+    tokenConfigured: Boolean(record.runnerToken),
+  } as Sim2RealComputeResource;
 }
 
 function copy<T>(value: T): T {
@@ -781,7 +1016,8 @@ export async function createSim2RealProject(
   ensureWritable();
   return serialized(async () => {
     const ledger = await readLedger();
-    if (ledger.projects.length >= PROJECT_CAP) throw new Sim2RealError('sim2real_storage_quota_exceeded');
+    if (ledger.projects.length >= PROJECT_CAP)
+      throw new Sim2RealError('sim2real_storage_quota_exceeded');
     const duplicate = ledger.projects.some(
       (item) => ownerMatches(item, owner) && item.slug === input.slug,
     );
@@ -802,7 +1038,9 @@ export async function createSim2RealProject(
 
 export async function updateSim2RealProject(
   id: string,
-  patch: Partial<Pick<Sim2RealProjectRecord, 'name' | 'slug' | 'description' | 'modelIds' | 'datasetIds'>>,
+  patch: Partial<
+    Pick<Sim2RealProjectRecord, 'name' | 'slug' | 'description' | 'modelIds' | 'datasetIds'>
+  >,
   owner?: string,
 ): Promise<Sim2RealProjectRecord | null> {
   ensureWritable();
@@ -810,7 +1048,12 @@ export async function updateSim2RealProject(
     const ledger = await readLedger();
     const index = ledger.projects.findIndex((item) => item.id === id && ownerMatches(item, owner));
     if (index < 0) return null;
-    if (patch.slug && ledger.projects.some((item) => item.id !== id && ownerMatches(item, owner) && item.slug === patch.slug)) {
+    if (
+      patch.slug &&
+      ledger.projects.some(
+        (item) => item.id !== id && ownerMatches(item, owner) && item.slug === patch.slug,
+      )
+    ) {
       throw new Error('sim2real_project_slug_exists');
     }
     const updated: StoredProject = {
@@ -841,7 +1084,8 @@ export async function createSim2RealDataset(
   ensureWritable();
   return serialized(async () => {
     const ledger = await readLedger();
-    if (ledger.datasets.length >= DATASET_CAP) throw new Sim2RealError('sim2real_storage_quota_exceeded');
+    if (ledger.datasets.length >= DATASET_CAP)
+      throw new Sim2RealError('sim2real_storage_quota_exceeded');
     const now = new Date().toISOString();
     const record: StoredDataset = {
       ...copy(input),
@@ -856,7 +1100,9 @@ export async function createSim2RealDataset(
   });
 }
 
-export async function listSim2RealComputeResources(owner?: string): Promise<Sim2RealComputeResource[]> {
+export async function listSim2RealComputeResources(
+  owner?: string,
+): Promise<Sim2RealComputeResource[]> {
   const ledger = await readLedger();
   return (ledger.computeResources ?? [])
     .filter((item) => ownerMatches(item, owner))
@@ -864,20 +1110,37 @@ export async function listSim2RealComputeResources(owner?: string): Promise<Sim2
     .map((item) => copy(withoutComputeResourcePrivate(item)));
 }
 
-export async function getSim2RealComputeResource(id: string, owner?: string): Promise<Sim2RealComputeResource | null> {
+export async function getSim2RealComputeResource(
+  id: string,
+  owner?: string,
+): Promise<Sim2RealComputeResource | null> {
   const ledger = await readLedger();
-  const found = (ledger.computeResources ?? []).find((item) => item.id === id && ownerMatches(item, owner));
+  const found = (ledger.computeResources ?? []).find(
+    (item) => item.id === id && ownerMatches(item, owner),
+  );
   return found ? copy(withoutComputeResourcePrivate(found)) : null;
 }
 
-export async function getSim2RealComputeResourceSecret(id: string, owner?: string): Promise<{ resource: Sim2RealComputeResource; runnerToken?: string } | null> {
+export async function getSim2RealComputeResourceSecret(
+  id: string,
+  owner?: string,
+): Promise<{ resource: Sim2RealComputeResource; runnerToken?: string } | null> {
   const ledger = await readLedger();
-  const found = (ledger.computeResources ?? []).find((item) => item.id === id && ownerMatches(item, owner));
-  return found ? { resource: copy(withoutComputeResourcePrivate(found)), ...(found.runnerToken ? { runnerToken: found.runnerToken } : {}) } : null;
+  const found = (ledger.computeResources ?? []).find(
+    (item) => item.id === id && ownerMatches(item, owner),
+  );
+  return found
+    ? {
+        resource: copy(withoutComputeResourcePrivate(found)),
+        ...(found.runnerToken ? { runnerToken: found.runnerToken } : {}),
+      }
+    : null;
 }
 
 export async function createSim2RealComputeResource(
-  input: Omit<Sim2RealComputeResource, 'id' | 'createdAt' | 'updatedAt' | 'tokenConfigured'> & { runnerToken?: string },
+  input: Omit<Sim2RealComputeResource, 'id' | 'createdAt' | 'updatedAt' | 'tokenConfigured'> & {
+    runnerToken?: string;
+  },
   owner?: string,
 ): Promise<Sim2RealComputeResource> {
   ensureWritable();
@@ -901,7 +1164,20 @@ export async function createSim2RealComputeResource(
 
 export async function updateSim2RealComputeResource(
   id: string,
-  patch: Partial<Pick<Sim2RealComputeResource, 'name' | 'runnerUrl' | 'status' | 'gpuName' | 'cuda' | 'vramMb' | 'maxConcurrentJobs' | 'message' | 'lastCheckedAt'>> & { runnerToken?: string },
+  patch: Partial<
+    Pick<
+      Sim2RealComputeResource,
+      | 'name'
+      | 'runnerUrl'
+      | 'status'
+      | 'gpuName'
+      | 'cuda'
+      | 'vramMb'
+      | 'maxConcurrentJobs'
+      | 'message'
+      | 'lastCheckedAt'
+    >
+  > & { runnerToken?: string },
   owner?: string,
 ): Promise<Sim2RealComputeResource | null> {
   ensureWritable();
@@ -915,10 +1191,12 @@ export async function updateSim2RealComputeResource(
       ...current,
       ...copy(patch),
       ...(patch.runnerToken !== undefined ? { runnerToken: patch.runnerToken } : {}),
-      tokenConfigured: patch.runnerToken !== undefined ? Boolean(patch.runnerToken) : Boolean(current.runnerToken),
+      tokenConfigured:
+        patch.runnerToken !== undefined ? Boolean(patch.runnerToken) : Boolean(current.runnerToken),
       updatedAt: new Date().toISOString(),
     };
-    const next = [...resources]; next[index] = updated;
+    const next = [...resources];
+    next[index] = updated;
     await writeLedger({ ...ledger, computeResources: next });
     return copy(withoutComputeResourcePrivate(updated));
   });
@@ -1038,7 +1316,9 @@ function isActiveRunnerRun(run: Pick<Sim2RealRunRecord, 'backend' | 'status'>): 
  * instead of unblocking the old one.
  */
 function isTerminalRunStatus(status: Sim2RealRunStatus): boolean {
-  return status === 'ready' || status === 'completed' || status === 'blocked' || status === 'failed';
+  return (
+    status === 'ready' || status === 'completed' || status === 'blocked' || status === 'failed'
+  );
 }
 
 function expireStaleActiveRunnerRuns(
@@ -1341,8 +1621,8 @@ export async function evaluateSim2RealRun(
       run: copy(withoutRunPrivate(current)),
       // Full chunks (samples) come from the run shard; the ledger keeps only
       // index rows now. Legacy inline rows are merged in by loadRunTelemetry.
-      telemetry: (await loadRunTelemetry(id, owner)).map(
-        (item) => copy(withoutTelemetryPrivate(item as StoredTelemetry)),
+      telemetry: (await loadRunTelemetry(id, owner)).map((item) =>
+        copy(withoutTelemetryPrivate(item as StoredTelemetry)),
       ),
     };
     // Copy the callback result before putting it into the ledger so a caller
@@ -1376,6 +1656,68 @@ async function loadRunTelemetry(runId: string, owner?: string): Promise<Telemetr
   return merged.sort(compareTelemetryRecords);
 }
 
+/**
+ * Bounded counterpart of `loadRunTelemetry` for the list endpoint.
+ *
+ * The caller wants the first `maxRecords` rows of `shard ∪ inlineLegacy`.
+ * Shard rows are stored in append order; while chunks are accepted in sequence
+ * order that is also `compareTelemetryRecords` order, so the smallest rows sit
+ * at the head of the file. Legacy inline rows live in the ledger and can sort
+ * anywhere in that union: at most `inlineLegacy.length` of them can rank ahead
+ * of a shard row that belongs in the answer, which is why the head read asks
+ * for `maxRecords + inlineLegacy.length` rows rather than just `maxRecords`.
+ *
+ * That head size alone is only exact while append order matches sort order, so
+ * the result is verified against the lightweight ledger index rows (which hold
+ * the same sequence/receivedAt/id, minus samples) before it is trusted. A chunk
+ * accepted out of sequence — allowed when its logical timeline is still
+ * monotonic — or a same-millisecond `receivedAt` tie makes the head miss a row
+ * that belongs in the answer; the check detects that and falls back to the
+ * complete reader, so correctness never depends on the ordering assumption.
+ */
+async function loadRunTelemetryBounded(
+  runId: string,
+  owner: string | undefined,
+  maxRecords: number,
+): Promise<TelemetryShardRecord[]> {
+  const ledger = await readLedger();
+  const inlineLegacy = ledger.telemetry.filter(
+    (item) => item.runId === runId && ownerMatches(item, owner) && Array.isArray(item.samples),
+  ) as unknown as TelemetryShardRecord[];
+  const headSize = maxRecords + inlineLegacy.length;
+  const head = await readTelemetryShardBounded(runId, owner, headSize);
+  // A short head means the bounded read already reached the end of the shard,
+  // so it is the whole shard and needs no verification. Otherwise every
+  // shard-backed row in the ledger's top `headSize` must be present in it.
+  if (head.length === headSize && !headCoversIndexedTop(runId, owner, ledger, head, headSize)) {
+    return loadRunTelemetry(runId, owner);
+  }
+  return [...head, ...inlineLegacy].sort(compareTelemetryRecords).slice(0, maxRecords);
+}
+
+/**
+ * Whether `head` already contains every shard-backed row among the ledger's
+ * first `headSize` rows for this run. Legacy inline rows are checked directly
+ * by the caller, so only shard-backed index rows need to be present in `head`.
+ */
+function headCoversIndexedTop(
+  runId: string,
+  owner: string | undefined,
+  ledger: Sim2RealLedger,
+  head: readonly TelemetryShardRecord[],
+  headSize: number,
+): boolean {
+  const candidates = ledger.telemetry
+    .filter((item) => item.runId === runId && ownerMatches(item, owner))
+    .sort(compareTelemetryRecords);
+  const headIds = new Set(head.map((record) => record.id));
+  for (const row of candidates.slice(0, headSize)) {
+    if (Array.isArray(row.samples)) continue;
+    if (!headIds.has(row.id)) return false;
+  }
+  return true;
+}
+
 export async function listSim2RealTelemetry(
   runId: string,
   owner?: string,
@@ -1387,7 +1729,12 @@ export async function listSim2RealTelemetry(
     1,
     Math.min(SIM2REAL_TELEMETRY_RECORD_CAP, Math.floor(Number(limit) || 200)),
   );
-  const records = await loadRunTelemetry(runId, owner);
+  // Replay/evaluation request the full cap and must keep the complete,
+  // unchanged read path; every smaller limit reads only a bounded shard head.
+  const records =
+    bounded < SIM2REAL_TELEMETRY_RECORD_CAP
+      ? await loadRunTelemetryBounded(runId, owner, bounded)
+      : await loadRunTelemetry(runId, owner);
   return records
     .slice(0, bounded)
     .map((item) => copy(withoutTelemetryPrivate(item as StoredTelemetry)));
@@ -1471,8 +1818,8 @@ export async function appendSim2RealTelemetryWithResult(
         ownerHistory.push(item as unknown as TelemetryShardRecord);
       } else {
         ownerHistory.push(
-          ...(await readTelemetryShard(item.runId, owner)).filter(
-            (shardItem) => ownerMatches(shardItem, owner),
+          ...(await readTelemetryShard(item.runId, owner)).filter((shardItem) =>
+            ownerMatches(shardItem, owner),
           ),
         );
       }
@@ -1493,7 +1840,24 @@ export async function appendSim2RealTelemetryWithResult(
     ) {
       throw new Sim2RealError('sim2real_telemetry_quota_exceeded');
     }
-    if (ledger.telemetry.length >= SIM2REAL_TELEMETRY_RECORD_CAP) {
+    // Retention is opt-in (default 0 = disabled). When enabled, prune this
+    // run's shard-backed rows that fell out of the window. The deletion is
+    // per-run because only the shard being appended to is rewritten; an
+    // untouched old run is reclaimed the next time a chunk is appended to it.
+    const retentionDays = sim2RealTelemetryRetentionDays();
+    const expiredIndexIds =
+      retentionDays > 0
+        ? expiredTelemetryIndexIds(
+            ledger,
+            input.runId,
+            owner,
+            Date.now() - retentionDays * MS_PER_DAY,
+          )
+        : new Set<string>();
+    // Count the record cap against the index rows that will remain after the
+    // prune, so retention actually frees room instead of permanently pinning
+    // the store at its limit.
+    if (ledger.telemetry.length - expiredIndexIds.size >= SIM2REAL_TELEMETRY_RECORD_CAP) {
       throw new Sim2RealError('sim2real_telemetry_quota_exceeded');
     }
     // Shard first, then the index row: a crash between the two leaves an
@@ -1510,11 +1874,22 @@ export async function appendSim2RealTelemetryWithResult(
         : item,
     );
     const { samples: _samples, ...indexRow } = record;
+    const retainedIndexRows = expiredIndexIds.size
+      ? ledger.telemetry.filter((item) => !expiredIndexIds.has(item.id))
+      : ledger.telemetry;
     await writeLedger({
       ...ledger,
       runs,
-      telemetry: [indexRow as StoredTelemetry, ...ledger.telemetry],
+      telemetry: [indexRow as StoredTelemetry, ...retainedIndexRows],
     });
+    // The shard is rewritten after the index rows are durable. A crash in
+    // between leaves expired lines the ledger no longer indexes (a read may
+    // still merge them until the next successful prune), never an index row
+    // whose samples no longer exist anywhere.
+    if (expiredIndexIds.size) {
+      const shard = telemetryShardPath(record.runId);
+      if (shard) await rewriteTelemetryShardWithout(shard, expiredIndexIds);
+    }
     void emitSim2RealEvent(
       'telemetry.appended',
       record.runId,
@@ -1611,7 +1986,12 @@ export async function createSim2RealDeploymentWithResult(
       ...ledger,
       deployments: [record, ...ledger.deployments],
     });
-    void emitSim2RealEvent('deployment.created', record.id, withoutDeploymentPrivate(record), owner);
+    void emitSim2RealEvent(
+      'deployment.created',
+      record.id,
+      withoutDeploymentPrivate(record),
+      owner,
+    );
     return { deployment: copy(withoutDeploymentPrivate(record)), duplicate: false };
   });
 }
@@ -1675,7 +2055,12 @@ export async function updateSim2RealDeployment(
     const deployments = [...ledger.deployments];
     deployments[index] = updated;
     await writeLedger({ ...ledger, deployments });
-    void emitSim2RealEvent('deployment.updated', updated.id, withoutDeploymentPrivate(updated), owner);
+    void emitSim2RealEvent(
+      'deployment.updated',
+      updated.id,
+      withoutDeploymentPrivate(updated),
+      owner,
+    );
     return copy(withoutDeploymentPrivate(updated));
   });
 }

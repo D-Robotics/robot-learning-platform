@@ -17,7 +17,7 @@
 
 import assert from 'node:assert/strict';
 import { spawn, spawnSync } from 'node:child_process';
-import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, readFile, rm } from 'node:fs/promises';
 import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
@@ -102,11 +102,15 @@ function spawnService(label, command, args, env) {
     process.stdout.write(`[${label}] ${String(chunk)}`);
   });
   child.once('error', (error) => {
-    process.stderr.write(`[${label}] process error: ${error instanceof Error ? error.stack || error.message : String(error)}\n`);
+    process.stderr.write(
+      `[${label}] process error: ${error instanceof Error ? error.stack || error.message : String(error)}\n`,
+    );
   });
   child.once('exit', (code, signal) => {
     if (code !== 0 && signal !== 'SIGTERM') {
-      process.stderr.write(`[${label}] exited unexpectedly: code=${code ?? 'null'} signal=${signal ?? 'null'}\n`);
+      process.stderr.write(
+        `[${label}] exited unexpectedly: code=${code ?? 'null'} signal=${signal ?? 'null'}\n`,
+      );
     }
   });
   return child;
@@ -126,18 +130,28 @@ async function fetchJson(url, init) {
   return { response, body, text };
 }
 
-async function waitForJson(url, { expectStatus = 200, timeoutMs = 30_000, label = url, predicate } = {}) {
+async function waitForJson(
+  url,
+  { expectStatus = 200, timeoutMs = 30_000, label = url, predicate } = {},
+) {
   const deadline = Date.now() + timeoutMs;
   let lastError;
   while (Date.now() < deadline) {
     try {
       const result = await fetchJson(url, { headers: { accept: 'application/json' } });
-      if (result.response.status === expectStatus && (!predicate || predicate(result.body, result.response))) {
+      if (
+        result.response.status === expectStatus &&
+        (!predicate || predicate(result.body, result.response))
+      ) {
         return result;
       }
-      lastError = new Error(`${label} returned ${result.response.status}: ${JSON.stringify(result.body)}`);
+      lastError = new Error(
+        `${label} returned ${result.response.status}: ${JSON.stringify(result.body)}`,
+      );
     } catch (error) {
-      lastError = new Error(`${label} request failed: ${error instanceof Error ? error.message : String(error)}`);
+      lastError = new Error(
+        `${label} request failed: ${error instanceof Error ? error.message : String(error)}`,
+      );
     }
     await sleep(250);
   }
@@ -247,7 +261,9 @@ async function main() {
     assert.equal(register.response.status, 201, JSON.stringify(register.body));
     const modelId = register.body.model.id;
 
-    console.log(`[demo:starter] launching REAL PPO training (${iterations} iterations, ~${Math.round(iterations / 3)}s on a laptop CPU)`);
+    console.log(
+      `[demo:starter] launching REAL PPO training (${iterations} iterations, ~${Math.round(iterations / 3)}s on a laptop CPU)`,
+    );
     const launch = await fetchJson(`${base}/api/v1/duck/runs`, {
       method: 'POST',
       headers: {
@@ -291,30 +307,37 @@ async function main() {
     );
     const onnxPath = path.join(jobDir, 'policy.onnx');
     const onnxBytes = await readFile(onnxPath);
-    console.log(`[demo:starter] real ONNX artifact: policy.onnx (${onnxBytes.length} bytes) at ${onnxPath}`);
+    console.log(
+      `[demo:starter] real ONNX artifact: policy.onnx (${onnxBytes.length} bytes) at ${onnxPath}`,
+    );
 
     // Upload the engine's evaluation rollout as evidence bound to the run.
     const telemetryRows = readJsonl(await readFile(path.join(jobDir, 'telemetry.jsonl'), 'utf8'));
-    const baselineRows = readJsonl(await readFile(path.join(jobDir, 'baseline-telemetry.jsonl'), 'utf8'));
+    const baselineRows = readJsonl(
+      await readFile(path.join(jobDir, 'baseline-telemetry.jsonl'), 'utf8'),
+    );
     console.log(`[demo:starter] uploading ${telemetryRows.length} telemetry samples in chunks`);
     const chunkSize = 250;
     for (let offset = 0; offset < telemetryRows.length; offset += chunkSize) {
       const chunk = telemetryRows.slice(offset, offset + chunkSize);
-      const uploaded = await fetchJson(`${base}/api/v1/duck/runs/${encodeURIComponent(runId)}/telemetry`, {
-        method: 'POST',
-        headers: {
-          'content-type': 'application/json',
-          accept: 'application/json',
-          'idempotency-key': `starter-demo-telemetry-${offset}`,
+      const uploaded = await fetchJson(
+        `${base}/api/v1/duck/runs/${encodeURIComponent(runId)}/telemetry`,
+        {
+          method: 'POST',
+          headers: {
+            'content-type': 'application/json',
+            accept: 'application/json',
+            'idempotency-key': `starter-demo-telemetry-${offset}`,
+          },
+          body: JSON.stringify({
+            // `import` is the honest source label: an engine-side rollout file
+            // uploaded through the public API, not a board or browser stream.
+            source: 'import',
+            samples: chunk,
+            sequence: offset / chunkSize,
+          }),
         },
-        body: JSON.stringify({
-          // `import` is the honest source label: an engine-side rollout file
-          // uploaded through the public API, not a board or browser stream.
-          source: 'import',
-          samples: chunk,
-          sequence: offset / chunkSize,
-        }),
-      });
+      );
       if (uploaded.response.status !== 201 && uploaded.response.status !== 200) {
         throw new Error(`telemetry upload failed: ${JSON.stringify(uploaded.body)}`);
       }
@@ -323,11 +346,14 @@ async function main() {
     // Evaluate the trained rollout against the untrained baseline rollout:
     // the MAE/RMSE gap IS the sim2real-style trained-vs-baseline delta.
     console.log('[demo:starter] evaluating trained rollout against untrained baseline');
-    const evaluated = await fetchJson(`${base}/api/v1/duck/runs/${encodeURIComponent(runId)}/evaluate`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json', accept: 'application/json' },
-      body: JSON.stringify({ referenceSamples: baselineRows }),
-    });
+    const evaluated = await fetchJson(
+      `${base}/api/v1/duck/runs/${encodeURIComponent(runId)}/evaluate`,
+      {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', accept: 'application/json' },
+        body: JSON.stringify({ referenceSamples: baselineRows }),
+      },
+    );
     assert.equal(evaluated.response.status, 200, JSON.stringify(evaluated.body));
     const evaluation = evaluated.body.evaluation;
     console.log(
@@ -364,6 +390,8 @@ async function main() {
 }
 
 main().catch((error) => {
-  console.error(`[demo:starter] FAIL: ${error instanceof Error ? error.stack || error.message : String(error)}`);
+  console.error(
+    `[demo:starter] FAIL: ${error instanceof Error ? error.stack || error.message : String(error)}`,
+  );
   process.exit(1);
 });
