@@ -55,7 +55,8 @@ interface StoredConnection extends DeviceConnectionRecord {
 const TUNNEL_SSH_CONNECT_TIMEOUT_SEC = 8;
 const MAX_LOCAL_PORT = 65_530;
 const MIN_LOCAL_PORT = 20_000;
-const portRange = () => MIN_LOCAL_PORT + Math.floor(Math.random() * (MAX_LOCAL_PORT - MIN_LOCAL_PORT));
+const portRange = () =>
+  MIN_LOCAL_PORT + Math.floor(Math.random() * (MAX_LOCAL_PORT - MIN_LOCAL_PORT));
 
 interface TunnelState {
   process: ChildProcess;
@@ -105,16 +106,22 @@ function readConnections(): StoredConnection[] {
     if (!Array.isArray(parsed)) return [];
     return parsed
       .slice(0, 100)
-      .filter((item): item is Record<string, unknown> => Boolean(item && typeof item === 'object' && !Array.isArray(item)))
+      .filter((item): item is Record<string, unknown> =>
+        Boolean(item && typeof item === 'object' && !Array.isArray(item)),
+      )
       .map((item): StoredConnection | null => {
         const host = normalizeHost(item.host);
         if (!host) return null;
         return {
           id: String(item.id ?? '').trim(),
-          label: String(item.label ?? '').trim().slice(0, 120),
+          label: String(item.label ?? '')
+            .trim()
+            .slice(0, 120),
           host,
           port: normalizePort(item.port, 22, 1, 65_535),
-          username: String(item.username ?? 'root').trim().slice(0, 64),
+          username: String(item.username ?? 'root')
+            .trim()
+            .slice(0, 64),
           agentPort: normalizePort(item.agentPort, 19_100, 1, 65_535),
           localPort: normalizePort(item.localPort, 0, 0, 65_535),
           createdAt: String(item.createdAt ?? ''),
@@ -124,7 +131,10 @@ function readConnections(): StoredConnection[] {
           ownerKey: item.ownerKey ? String(item.ownerKey).slice(0, 200) : undefined,
         };
       })
-      .filter((item): item is StoredConnection => item !== null && /^[a-zA-Z0-9][a-zA-Z0-9._:-]{0,79}$/.test(item.id));
+      .filter(
+        (item): item is StoredConnection =>
+          item !== null && /^[a-zA-Z0-9][a-zA-Z0-9._:-]{0,79}$/.test(item.id),
+      );
   } catch {
     return [];
   }
@@ -141,7 +151,10 @@ function persistConnections(next: StoredConnection[]): Promise<void> {
   return operation as Promise<void>;
 }
 
-function ownerScope(owner: string | undefined): { ownerKey: string | null; matches: (record: StoredConnection) => boolean } {
+function ownerScope(owner: string | undefined): {
+  ownerKey: string | null;
+  matches: (record: StoredConnection) => boolean;
+} {
   const key = owner ? `sso:${owner}:web` : null;
   return {
     ownerKey: key,
@@ -152,7 +165,9 @@ function ownerScope(owner: string | undefined): { ownerKey: string | null; match
 
 export function listDeviceConnections(owner?: string): DeviceConnectionRecord[] {
   const { matches } = ownerScope(owner);
-  return readConnections().filter(matches).map(({ ownerKey: _ownerKey, ...publicRecord }) => publicRecord);
+  return readConnections()
+    .filter(matches)
+    .map(({ ownerKey: _ownerKey, ...publicRecord }) => publicRecord);
 }
 
 /** The loopback agent URL of a connection, if its tunnel is up. */
@@ -180,13 +195,17 @@ async function probeAgent(localPort: number): Promise<TunnelProbeResult> {
   const token = String(process.env.RDK_SIM2REAL_BOARD_AGENT_TOKEN ?? '').trim();
   try {
     const response = await fetch(`http://127.0.0.1:${localPort}/healthz`, {
-      headers: { accept: 'application/json', ...(token ? { authorization: `Bearer ${token}` } : {}) },
+      headers: {
+        accept: 'application/json',
+        ...(token ? { authorization: `Bearer ${token}` } : {}),
+      },
       signal: AbortSignal.timeout(4000),
     });
     if (!response.ok) return { ok: false, message: `板端 agent 返回 HTTP ${response.status}` };
     const body = (await response.json().catch(() => null)) as Record<string, unknown> | null;
     if (!body) return { ok: false, message: '板端 agent 健康响应不是合法 JSON' };
-    const board = body.board && typeof body.board === 'object' ? (body.board as Record<string, unknown>) : null;
+    const board =
+      body.board && typeof body.board === 'object' ? (body.board as Record<string, unknown>) : null;
     return {
       ok: true,
       message: '连接正常',
@@ -195,11 +214,15 @@ async function probeAgent(localPort: number): Promise<TunnelProbeResult> {
         capabilities: Array.isArray(body.capabilities)
           ? (body.capabilities as unknown[]).slice(0, 8).map((item) => String(item))
           : undefined,
-        boardModel: board && typeof board.model === 'string' ? board.model.slice(0, 120) : undefined,
+        boardModel:
+          board && typeof board.model === 'string' ? board.model.slice(0, 120) : undefined,
       },
     };
   } catch (error) {
-    return { ok: false, message: `板端 agent 不可达：${error instanceof Error ? error.message : '未知错误'}` };
+    return {
+      ok: false,
+      message: `板端 agent 不可达：${error instanceof Error ? error.message : '未知错误'}`,
+    };
   }
 }
 
@@ -229,16 +252,25 @@ export async function openDeviceConnectionTunnel(
     'ssh',
     [
       '-N',
-      '-o', 'BatchMode=yes',
-      '-o', 'StrictHostKeyChecking=accept-new',
-      '-o', `ConnectTimeout=${TUNNEL_SSH_CONNECT_TIMEOUT_SEC}`,
-      '-o', 'ExitOnForwardFailure=yes',
-      '-o', 'ServerAliveInterval=15',
-      '-o', 'ServerAliveCountMax=4',
-      '-o', 'TCPKeepAlive=yes',
-      '-L', `${localPort}:127.0.0.1:${record.agentPort}`,
+      '-o',
+      'BatchMode=yes',
+      '-o',
+      'StrictHostKeyChecking=accept-new',
+      '-o',
+      `ConnectTimeout=${TUNNEL_SSH_CONNECT_TIMEOUT_SEC}`,
+      '-o',
+      'ExitOnForwardFailure=yes',
+      '-o',
+      'ServerAliveInterval=15',
+      '-o',
+      'ServerAliveCountMax=4',
+      '-o',
+      'TCPKeepAlive=yes',
+      '-L',
+      `${localPort}:127.0.0.1:${record.agentPort}`,
       `${record.username}@${record.host}`,
-      '-p', String(record.port),
+      '-p',
+      String(record.port),
     ],
     { stdio: ['ignore', 'ignore', 'pipe'] },
   );
@@ -254,14 +286,16 @@ export async function openDeviceConnectionTunnel(
 
   // Wait until ssh either establishes the forward (process keeps running) or
   // exits. ExitOnForwardFailure turns a failed forward into a quick exit.
-  const exited = await new Promise<null | { code: number | null; signal: NodeJS.Signals | null }>((resolve) => {
-    const timer = setTimeout(() => resolve(null), TUNNEL_SSH_CONNECT_TIMEOUT_SEC * 1000 + 1500);
-    const onExit = (code: number | null, signal: NodeJS.Signals | null) => {
-      clearTimeout(timer);
-      resolve({ code, signal });
-    };
-    child.once('exit', onExit);
-  });
+  const exited = await new Promise<null | { code: number | null; signal: NodeJS.Signals | null }>(
+    (resolve) => {
+      const timer = setTimeout(() => resolve(null), TUNNEL_SSH_CONNECT_TIMEOUT_SEC * 1000 + 1500);
+      const onExit = (code: number | null, signal: NodeJS.Signals | null) => {
+        clearTimeout(timer);
+        resolve({ code, signal });
+      };
+      child.once('exit', onExit);
+    },
+  );
   if (exited) {
     tunnels.delete(id);
     const reason = stderrTail.trim() || `ssh 退出（code=${exited.code}）`;
@@ -277,7 +311,13 @@ export async function openDeviceConnectionTunnel(
   // Persist the healthy state so the UI can show it after refresh.
   const next = readConnections().map((item) =>
     item.id === id
-      ? { ...item, localPort, lastCheckedAt: new Date().toISOString(), lastCheckOk: true, lastCheckMessage: probe.message }
+      ? {
+          ...item,
+          localPort,
+          lastCheckedAt: new Date().toISOString(),
+          lastCheckOk: true,
+          lastCheckMessage: probe.message,
+        }
       : item,
   );
   await persistConnections(next);
@@ -291,14 +331,22 @@ export function closeDeviceConnectionTunnel(id: string): Promise<void> {
   tunnels.delete(id);
   return new Promise((resolve) => {
     const forceKill = setTimeout(() => {
-      try { state.process.kill('SIGKILL'); } catch { /* already gone */ }
+      try {
+        state.process.kill('SIGKILL');
+      } catch {
+        /* already gone */
+      }
       resolve();
     }, 2000);
     state.process.once('exit', () => {
       clearTimeout(forceKill);
       resolve();
     });
-    try { state.process.kill('SIGTERM'); } catch { /* already gone */ }
+    try {
+      state.process.kill('SIGTERM');
+    } catch {
+      /* already gone */
+    }
   });
 }
 
@@ -343,11 +391,15 @@ export async function createDeviceConnection(
   if (!host) return { error: 'INVALID_HOST' };
   const username = String(input.username ?? 'root').trim();
   if (!/^[a-zA-Z0-9_][a-zA-Z0-9._-]{0,63}$/.test(username)) return { error: 'INVALID_USERNAME' };
-  const label = String(input.label ?? '').trim().slice(0, 120);
+  const label = String(input.label ?? '')
+    .trim()
+    .slice(0, 120);
   const port = normalizePort(input.port, 22, 1, 65_535);
   const agentPort = normalizePort(input.agentPort, 19_100, 1, 65_535);
   const existing = readConnections();
-  if (existing.some((item) => item.host === host && item.port === port && item.username === username)) {
+  if (
+    existing.some((item) => item.host === host && item.port === port && item.username === username)
+  ) {
     return { error: 'ALREADY_EXISTS' };
   }
   if (existing.length >= 50) return { error: 'QUOTA_EXCEEDED' };
@@ -404,6 +456,10 @@ export async function markConnectionCheck(
 
 process.once('exit', () => {
   for (const state of tunnels.values()) {
-    try { state.process.kill('SIGTERM'); } catch { /* already gone */ }
+    try {
+      state.process.kill('SIGTERM');
+    } catch {
+      /* already gone */
+    }
   }
 });

@@ -12,10 +12,7 @@ import {
 const NOW = 1_760_000_000_000;
 const SECRET = 's'.repeat(40);
 
-function requestFor(
-  path: string,
-  overrides: Record<string, string> = {},
-): Request {
+function requestFor(path: string, overrides: Record<string, string> = {}): Request {
   const timestamp = String(Math.floor(NOW / 1000));
   const accountId = overrides[TRUSTED_PROXY_HEADERS.account] || 'alice';
   const runnerToken = overrides[TRUSTED_PROXY_HEADERS.runnerToken] || '';
@@ -56,7 +53,9 @@ describe('trusted proxy auth adapter', () => {
   it('rejects tampered paths, stale timestamps, and missing secrets', () => {
     const auth = createTrustedProxyAuth({ secret: SECRET, now: () => NOW });
     const signed = requestFor('/api/sim2real/runs');
-    expect(auth.resolvePrincipal({ ...signed, path: '/api/sim2real/models' } as Request)).toBeNull();
+    expect(
+      auth.resolvePrincipal({ ...signed, path: '/api/sim2real/models' } as Request),
+    ).toBeNull();
 
     const stale = requestFor('/api/sim2real/runs');
     (stale.headers as Record<string, string>)[TRUSTED_PROXY_HEADERS.timestamp] = '1';

@@ -298,9 +298,7 @@ function buildEvaluation(
   // built-in presentation fixture, classify the complete replay as synthetic
   // so a page refresh cannot turn a mixed run into apparently real evidence.
   const sources = [...new Set(orderedRecords.map((record) => record.source))];
-  const replaySource = sources.includes('demo-fixture')
-    ? 'demo-fixture'
-    : sources[0] ?? 'import';
+  const replaySource = sources.includes('demo-fixture') ? 'demo-fixture' : (sources[0] ?? 'import');
   const rewardValues = samples
     .map((sample) => sample.reward)
     .filter((value): value is number => value != null);
@@ -525,7 +523,9 @@ export function registerSim2RealTelemetryRoutes(
       response.status(appended.duplicate ? 200 : 201).json({
         ok: true,
         telemetry: appended.telemetry,
-        ...(appended.duplicate ? { duplicate: true } : { acceptedSamples: appended.telemetry.samples.length }),
+        ...(appended.duplicate
+          ? { duplicate: true }
+          : { acceptedSamples: appended.telemetry.samples.length }),
       });
     } catch (error) {
       deps.storageError(request, response, error, 'sim2real-telemetry-ingest');
@@ -581,11 +581,7 @@ export function registerSim2RealTelemetryRoutes(
       }
       // Evaluation/replay must consume every accepted chunk. The store's
       // record cap is an explicit rejection guard, never a silent truncation.
-      const telemetry = await listSim2RealTelemetry(
-        runId,
-        owner,
-        SIM2REAL_TELEMETRY_RECORD_CAP,
-      );
+      const telemetry = await listSim2RealTelemetry(runId, owner, SIM2REAL_TELEMETRY_RECORD_CAP);
       const evaluation = run.evaluation ?? buildEvaluation(telemetry, undefined);
       response.json({ ok: true, runId, replay: evaluation.replay, evaluation });
     }),
@@ -606,11 +602,7 @@ export function registerSim2RealTelemetryRoutes(
         });
         return;
       }
-      const telemetry = await listSim2RealTelemetry(
-        runId,
-        owner,
-        SIM2REAL_TELEMETRY_RECORD_CAP,
-      );
+      const telemetry = await listSim2RealTelemetry(runId, owner, SIM2REAL_TELEMETRY_RECORD_CAP);
       const advice = adviseRetraining({ run, evaluation: run.evaluation, telemetry });
       response.json({ ok: true, advice });
     }),
@@ -715,13 +707,9 @@ export function registerSim2RealTelemetryRoutes(
         response.json({ ok: true, run: evaluated.run, evaluation: evaluated.evaluation });
       } catch (error) {
         if (error instanceof Sim2RealEvaluationValidationError) {
-          sendApiError(
-            response,
-            409,
-            'SIM2REAL_TELEMETRY_DIMENSION_MISMATCH',
-            error.message,
-            { retryable: false },
-          );
+          sendApiError(response, 409, 'SIM2REAL_TELEMETRY_DIMENSION_MISMATCH', error.message, {
+            retryable: false,
+          });
           return;
         }
         deps.storageError(request, response, error, 'sim2real-run-evaluate');

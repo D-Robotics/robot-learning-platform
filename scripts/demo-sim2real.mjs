@@ -141,7 +141,9 @@ async function waitForReady() {
     await new Promise((resolve) => setTimeout(resolve, 250));
   }
   if (!shuttingDown) {
-    console.error(`[demo] services did not become ready within 15s${lastError ? ` (${lastError})` : ''}`);
+    console.error(
+      `[demo] services did not become ready within 15s${lastError ? ` (${lastError})` : ''}`,
+    );
     shutdown(1);
   }
 }
@@ -161,16 +163,22 @@ console.log('[demo] starting isolated Sim2Real presentation stack');
 // The query pins the RDK Duck workflow for a deterministic projector run,
 // even if a previous browser session stored a different product choice.
 console.log(`[demo] web: http://127.0.0.1:${env.RDK_SIM2REAL_PORT}/?demo=1`);
-console.log('[demo] flow: overview → simulation/replay → Mock protocol run → telemetry/evaluation → X5 preflight gate');
-console.log('[demo] telemetry sample: OriginBot 真机遥测可通过上位机接入；examples/telemetry-sample.jsonl 是 RDK Duck 契约演示数据');
+console.log(
+  '[demo] flow: overview → simulation/replay → Mock protocol run → telemetry/evaluation → X5 preflight gate',
+);
+console.log(
+  '[demo] telemetry sample: OriginBot 真机遥测可通过上位机接入；examples/telemetry-sample.jsonl 是 RDK Duck 契约演示数据',
+);
 console.log(
   configuredStorage
     ? '[demo] using explicit storage (opt-in); device registry is not modified'
     : ignoredStorage
       ? '[demo] ignoring RDK_SIM2REAL_STORAGE_DIR; set RDK_SIM2REAL_DEMO_USE_EXISTING_STORAGE=1 to opt in'
-    : '[demo] seeded disposable x5-demo (simulated); preflight remains mock-only and cannot enable motors',
+      : '[demo] seeded disposable x5-demo (simulated); preflight remains mock-only and cannot enable motors',
 );
-console.log('[demo] Mock and BoardAgent are explicitly non-production; Ctrl-C stops all demo processes.');
+console.log(
+  '[demo] Mock and BoardAgent are explicitly non-production; Ctrl-C stops all demo processes.',
+);
 
 start('mock-worker', ['node', 'services/sim2real-web/mock-local-worker.mjs']);
 start('board-agent', ['node', 'services/sim2real-web/local-board-agent.mjs']);

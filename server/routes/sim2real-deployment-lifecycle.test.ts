@@ -20,25 +20,55 @@ async function fixture() {
   process.env.RDK_SIM2REAL_STORAGE_DIR = path.join(root, 'ledger');
   process.env.RDK_DATA_DIR = path.join(root, 'data');
   await fs.mkdir(process.env.RDK_SIM2REAL_STORAGE_DIR, { recursive: true });
-  await fs.writeFile(path.join(process.env.RDK_SIM2REAL_STORAGE_DIR, 'devices.json'), JSON.stringify([{
-    id: 'board-1', host: '127.0.0.1', username: 'rdk', status: 'connected', lastCheckedAt: new Date().toISOString(), boardPlatform: 'rdk-x5',
-  }]));
+  await fs.writeFile(
+    path.join(process.env.RDK_SIM2REAL_STORAGE_DIR, 'devices.json'),
+    JSON.stringify([
+      {
+        id: 'board-1',
+        host: '127.0.0.1',
+        username: 'rdk',
+        status: 'connected',
+        lastCheckedAt: new Date().toISOString(),
+        boardPlatform: 'rdk-x5',
+      },
+    ]),
+  );
   return createSim2RealRouter();
 }
 
-async function invoke(router: ReturnType<typeof createSim2RealRouter>, method: string, routePath: string, input: Partial<Request> = {}) {
-  const layer = router.stack.find((entry) => entry.route?.path === routePath && entry.route.methods[method]);
+async function invoke(
+  router: ReturnType<typeof createSim2RealRouter>,
+  method: string,
+  routePath: string,
+  input: Partial<Request> = {},
+) {
+  const layer = router.stack.find(
+    (entry) => entry.route?.path === routePath && entry.route.methods[method],
+  );
   const handler = layer?.route?.stack[0]?.handle;
   if (!handler) throw new Error(`route not registered: ${method} ${routePath}`);
   return new Promise<{ statusCode: number; body: any }>((resolve, reject) => {
     const response = {
       statusCode: 200,
       body: undefined as any,
-      status(code: number) { this.statusCode = code; return this; },
-      setHeader() { return this; },
-      json(body: unknown) { this.body = body; resolve(this); return this; },
+      status(code: number) {
+        this.statusCode = code;
+        return this;
+      },
+      setHeader() {
+        return this;
+      },
+      json(body: unknown) {
+        this.body = body;
+        resolve(this);
+        return this;
+      },
     } as unknown as Response & { statusCode: number; body: any };
-    handler({ body: {}, params: {}, query: {}, headers: {}, ...input } as Request, response, ((error?: unknown) => error && reject(error)) as NextFunction);
+    handler(
+      { body: {}, params: {}, query: {}, headers: {}, ...input } as Request,
+      response,
+      ((error?: unknown) => error && reject(error)) as NextFunction,
+    );
   });
 }
 
@@ -50,17 +80,25 @@ describe('deployment lifecycle routes', () => {
     });
     expect(created.statusCode).toBe(201);
     const id = created.body.deployment.id;
-    const cancelled = await invoke(router, 'post', '/api/sim2real/deployments/:id/cancel', { params: { id } });
+    const cancelled = await invoke(router, 'post', '/api/sim2real/deployments/:id/cancel', {
+      params: { id },
+    });
     expect(cancelled.statusCode).toBe(200);
     expect(cancelled.body.deployment.status).toBe('cancelled');
-    expect(cancelled.body.deployment.history).toEqual(expect.arrayContaining([
-      expect.objectContaining({ type: 'created' }),
-      expect.objectContaining({ type: 'cancelled' }),
-    ]));
-    const history = await invoke(router, 'get', '/api/sim2real/deployments/:id/history', { params: { id } });
+    expect(cancelled.body.deployment.history).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ type: 'created' }),
+        expect.objectContaining({ type: 'cancelled' }),
+      ]),
+    );
+    const history = await invoke(router, 'get', '/api/sim2real/deployments/:id/history', {
+      params: { id },
+    });
     expect(history.statusCode).toBe(200);
     expect(history.body).toMatchObject({ ok: true, deploymentId: id, verification: null });
-    const replay = await invoke(router, 'post', '/api/sim2real/deployments/:id/cancel', { params: { id } });
+    const replay = await invoke(router, 'post', '/api/sim2real/deployments/:id/cancel', {
+      params: { id },
+    });
     expect(replay.statusCode).toBe(200);
     expect(replay.body.idempotentReplay).toBe(true);
   });

@@ -21,7 +21,13 @@ const COOKIE = 'rdk_sso_web_session';
 const TTL_MS = 14 * 24 * 60 * 60 * 1000;
 
 const ACCOUNTS = new Map([
-  ['demo', { password: 'demo-pass-123', user: { id: 'local-demo-user', name: '本地演示账号', email: 'demo@example.com' } }],
+  [
+    'demo',
+    {
+      password: 'demo-pass-123',
+      user: { id: 'local-demo-user', name: '本地演示账号', email: 'demo@example.com' },
+    },
+  ],
 ]);
 
 function key(secret) {
@@ -46,10 +52,16 @@ function encodeCookie(user, expiresAt) {
 const server = http.createServer((req, res) => {
   if (req.method === 'POST' && req.url === '/api/sso/direct/login') {
     let raw = '';
-    req.on('data', (chunk) => { raw += chunk; });
+    req.on('data', (chunk) => {
+      raw += chunk;
+    });
     req.on('end', () => {
       let body = {};
-      try { body = JSON.parse(raw || '{}'); } catch { body = {}; }
+      try {
+        body = JSON.parse(raw || '{}');
+      } catch {
+        body = {};
+      }
       const method = String(body.method || '');
       if (!['account', 'sms', 'email'].includes(method)) {
         res.writeHead(400, { 'content-type': 'application/json' });
@@ -64,13 +76,26 @@ const server = http.createServer((req, res) => {
         // sms/email: accept any non-empty identifier + code in the mock.
         const identifier = String(body.mobile || body.email || '').trim();
         const code = String(body.code || body.emailcode || '').trim();
-        account = identifier && code === '123456'
-          ? { user: { id: `local-${method}-${identifier}`, name: identifier, email: method === 'email' ? identifier : '' } }
-          : null;
+        account =
+          identifier && code === '123456'
+            ? {
+                user: {
+                  id: `local-${method}-${identifier}`,
+                  name: identifier,
+                  email: method === 'email' ? identifier : '',
+                },
+              }
+            : null;
       }
       if (!account) {
         res.writeHead(409, { 'content-type': 'application/json' });
-        res.end(JSON.stringify({ ok: false, error: 'bad_credentials', message: '账号或密码错误（本地模拟）' }));
+        res.end(
+          JSON.stringify({
+            ok: false,
+            error: 'bad_credentials',
+            message: '账号或密码错误（本地模拟）',
+          }),
+        );
         return;
       }
       const expiresAt = Date.now() + TTL_MS;
@@ -97,5 +122,7 @@ server.listen(PORT, '127.0.0.1', () => {
     console.error('[mock-studio] RDK_STUDIO_COOKIE_SECRET must be >= 32 chars');
     process.exit(1);
   }
-  console.log(`[mock-studio] mock Studio login shell on http://127.0.0.1:${PORT} (account: demo / demo-pass-123, code: 123456)`);
+  console.log(
+    `[mock-studio] mock Studio login shell on http://127.0.0.1:${PORT} (account: demo / demo-pass-123, code: 123456)`,
+  );
 });

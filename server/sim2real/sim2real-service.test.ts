@@ -217,12 +217,14 @@ describe('Sim2Real compatibility service', () => {
       return new Response('{}');
     }) as typeof fetch;
     try {
-      await expect(probeLocalTrainingWorker({
-        available: false,
-        reachable: false,
-        healthy: false,
-        message: 'not configured',
-      })).resolves.toMatchObject({
+      await expect(
+        probeLocalTrainingWorker({
+          available: false,
+          reachable: false,
+          healthy: false,
+          message: 'not configured',
+        }),
+      ).resolves.toMatchObject({
         available: false,
         reachable: false,
         healthy: false,
@@ -249,14 +251,17 @@ describe('Sim2Real compatibility service', () => {
           fetchImpl: (async (input, init) => {
             seen.url = String(input);
             seen.authorization = new Headers(init?.headers).get('authorization') || '';
-            return new Response(JSON.stringify({
-              ok: true,
-              worker: 'sim2real-local',
-              maxConcurrentJobs: 4,
-              activeJobs: 2,
-              queuedJobs: 3,
-              token: 'health-payload-is-not-forwarded',
-            }), { status: 200, headers: { 'content-type': 'application/json' } });
+            return new Response(
+              JSON.stringify({
+                ok: true,
+                worker: 'sim2real-local',
+                maxConcurrentJobs: 4,
+                activeJobs: 2,
+                queuedJobs: 3,
+                token: 'health-payload-is-not-forwarded',
+              }),
+              { status: 200, headers: { 'content-type': 'application/json' } },
+            );
           }) as typeof fetch,
         },
       );
@@ -321,13 +326,21 @@ describe('Sim2Real compatibility service', () => {
     globalThis.fetch = (async () => {
       calls += 1;
       await new Promise((resolve) => setTimeout(resolve, 15));
-      return new Response(JSON.stringify({ ok: true, maxConcurrentJobs: 1, activeJobs: 0, queuedJobs: 0 }), {
-        status: 200,
-        headers: { 'content-type': 'application/json' },
-      });
+      return new Response(
+        JSON.stringify({ ok: true, maxConcurrentJobs: 1, activeJobs: 0, queuedJobs: 0 }),
+        {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        },
+      );
     }) as typeof fetch;
     try {
-      const configured = { available: true, reachable: false, healthy: false, message: 'configured' };
+      const configured = {
+        available: true,
+        reachable: false,
+        healthy: false,
+        message: 'configured',
+      };
       const [first, second] = await Promise.all([
         probeLocalTrainingWorker(configured),
         probeLocalTrainingWorker(configured),

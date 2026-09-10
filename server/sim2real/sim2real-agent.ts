@@ -39,13 +39,19 @@ export type Sim2RealAgentPlan = {
 
 export type Sim2RealAgentRun = Sim2RealAgentPlan & {
   status: 'queued' | 'running' | 'completed' | 'blocked' | 'failed';
-  events: Array<{ at: string; type: 'plan' | 'tool_start' | 'tool_result' | 'message'; text: string }>;
+  events: Array<{
+    at: string;
+    type: 'plan' | 'tool_start' | 'tool_result' | 'message';
+    text: string;
+  }>;
   evidence: Array<{ label: string; value: string; href?: string }>;
   updatedAt: string;
 };
 
 export function classifySim2RealAgentIntent(message: string): Sim2RealAgentIntent {
-  const text = String(message ?? '').trim().toLowerCase();
+  const text = String(message ?? '')
+    .trim()
+    .toLowerCase();
   if (!text) return 'board-check';
   if (/(停止|急停|stop|halt)/i.test(text)) return 'stop';
   if (/(完整|闭环|端云|真机|能力演示|全链路)/i.test(text)) return 'full-loop';
@@ -56,7 +62,12 @@ export function classifySim2RealAgentIntent(message: string): Sim2RealAgentInten
   return 'board-check';
 }
 
-const step = (id: string, label: string, tool: string, requiresApproval = false): Sim2RealAgentStep => ({
+const step = (
+  id: string,
+  label: string,
+  tool: string,
+  requiresApproval = false,
+): Sim2RealAgentStep => ({
   id,
   label,
   tool,
@@ -64,14 +75,26 @@ const step = (id: string, label: string, tool: string, requiresApproval = false)
   ...(requiresApproval ? { requiresApproval: true } : {}),
 });
 
-export function createSim2RealAgentPlan(message: string, context?: Record<string, unknown>): Sim2RealAgentPlan {
+export function createSim2RealAgentPlan(
+  message: string,
+  context?: Record<string, unknown>,
+): Sim2RealAgentPlan {
   const intent = classifySim2RealAgentIntent(message);
   const modelId = String(context?.modelId ?? '').trim();
   const deviceId = String(context?.deviceId ?? '').trim();
   const computeResourceId = String(context?.computeResourceId ?? '').trim();
-  const suffix = [modelId ? `模型 ${modelId}` : '', deviceId ? `板卡 ${deviceId}` : '', computeResourceId ? `指定 GPU 资源 ${computeResourceId}` : ''].filter(Boolean).join('，');
+  const suffix = [
+    modelId ? `模型 ${modelId}` : '',
+    deviceId ? `板卡 ${deviceId}` : '',
+    computeResourceId ? `指定 GPU 资源 ${computeResourceId}` : '',
+  ]
+    .filter(Boolean)
+    .join('，');
   const common = suffix ? `（${suffix}）` : '';
-  const plans: Record<Sim2RealAgentIntent, Omit<Sim2RealAgentPlan, 'id' | 'createdAt' | 'rationale'>> = {
+  const plans: Record<
+    Sim2RealAgentIntent,
+    Omit<Sim2RealAgentPlan, 'id' | 'createdAt' | 'rationale'>
+  > = {
     'full-loop': {
       intent,
       goal: `完成仿真 → GPU 训练 → X5 真机只读预检的演示闭环${common}`,
@@ -89,7 +112,10 @@ export function createSim2RealAgentPlan(message: string, context?: Record<string
       intent,
       goal: `提交一轮 GPU smoke 训练${common}`,
       safety: 'compute',
-      steps: [step('workspace', '读取模型契约', 'workspace.overview'), step('train', '提交 GPU smoke 训练', 'training.gpu')],
+      steps: [
+        step('workspace', '读取模型契约', 'workspace.overview'),
+        step('train', '提交 GPU smoke 训练', 'training.gpu'),
+      ],
     },
     'board-check': {
       intent,
@@ -101,7 +127,11 @@ export function createSim2RealAgentPlan(message: string, context?: Record<string
       intent,
       goal: `准备模型上板并执行只读预检${common}`,
       safety: 'guarded',
-      steps: [step('workspace', '读取模型与设备契约', 'workspace.overview'), step('preflight', '执行部署计划和只读 preflight', 'deployment.preflight'), step('safety', '确认真机动作仍处于安全门控', 'safety.gate')],
+      steps: [
+        step('workspace', '读取模型与设备契约', 'workspace.overview'),
+        step('preflight', '执行部署计划和只读 preflight', 'deployment.preflight'),
+        step('safety', '确认真机动作仍处于安全门控', 'safety.gate'),
+      ],
     },
     simulate: {
       intent,
@@ -113,7 +143,10 @@ export function createSim2RealAgentPlan(message: string, context?: Record<string
       intent,
       goal: '汇总最近一次训练的评测证据与关键指标',
       safety: 'read-only',
-      steps: [step('workspace', '读取最近训练运行', 'workspace.overview'), step('evaluate', '执行评测并汇总证据', 'evaluation.summarize')],
+      steps: [
+        step('workspace', '读取最近训练运行', 'workspace.overview'),
+        step('evaluate', '执行评测并汇总证据', 'evaluation.summarize'),
+      ],
     },
     stop: {
       intent,
@@ -126,7 +159,8 @@ export function createSim2RealAgentPlan(message: string, context?: Record<string
   return {
     id: randomUUID(),
     createdAt: new Date().toISOString(),
-    rationale: 'Agent 根据任务关键词匹配能力范围，先读取上下文，再按依赖顺序调用受控工具；真机动作始终停在安全门控。',
+    rationale:
+      'Agent 根据任务关键词匹配能力范围，先读取上下文，再按依赖顺序调用受控工具；真机动作始终停在安全门控。',
     ...selected,
     ...(modelId ? { modelId } : {}),
     ...(deviceId ? { deviceId } : {}),

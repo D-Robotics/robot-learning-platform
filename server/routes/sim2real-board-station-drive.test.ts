@@ -40,15 +40,21 @@ function buildRouter() {
   const router = {} as Router;
   router.stack = [];
   router.get = (path: string, ...handlers: Handler[]) => {
-    router.stack.push({ route: { path, methods: { get: true }, stack: handlers.map((h) => ({ handle: h })) } } as never);
+    router.stack.push({
+      route: { path, methods: { get: true }, stack: handlers.map((h) => ({ handle: h })) },
+    } as never);
     return router;
   };
   router.post = (path: string, ...handlers: Handler[]) => {
-    router.stack.push({ route: { path, methods: { post: true }, stack: handlers.map((h) => ({ handle: h })) } } as never);
+    router.stack.push({
+      route: { path, methods: { post: true }, stack: handlers.map((h) => ({ handle: h })) },
+    } as never);
     return router;
   };
   router.put = (path: string, ...handlers: Handler[]) => {
-    router.stack.push({ route: { path, methods: { put: true }, stack: handlers.map((h) => ({ handle: h })) } } as never);
+    router.stack.push({
+      route: { path, methods: { put: true }, stack: handlers.map((h) => ({ handle: h })) },
+    } as never);
     return router;
   };
   registerSim2RealBoardStationRoutes(router, {
@@ -59,7 +65,10 @@ function buildRouter() {
   return router;
 }
 
-function call(handler: Handler, init: { method?: string; body?: unknown; query?: Record<string, string> } = {}) {
+function call(
+  handler: Handler,
+  init: { method?: string; body?: unknown; query?: Record<string, string> } = {},
+) {
   return new Promise<{ statusCode: number; body?: unknown; ended: boolean }>((resolve, reject) => {
     const response = {
       statusCode: 200,
@@ -70,7 +79,9 @@ function call(handler: Handler, init: { method?: string; body?: unknown; query?:
       },
       setHeader() {},
       writeHead() {},
-      write() { return true; },
+      write() {
+        return true;
+      },
       end() {
         response.ended = true;
       },
@@ -174,9 +185,10 @@ describe('board-station constrained drive proxy', () => {
       'http://127.0.0.1:19100/v1/station/drive',
       expect.objectContaining({ method: 'POST' }),
     );
-    const sent = JSON.parse(
-      String((fetchMock.mock.calls[0] as unknown[])[1]!.body),
-    ) as Record<string, number>;
+    const sent = JSON.parse(String((fetchMock.mock.calls[0] as unknown[])[1]!.body)) as Record<
+      string,
+      number
+    >;
     // The proxy clamps before the board ever sees the request.
     expect(sent).toEqual({ linear: 0.3, angular: -1.0, durationSec: 2.0 });
   });

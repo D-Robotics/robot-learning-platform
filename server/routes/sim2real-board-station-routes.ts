@@ -2,7 +2,11 @@ import { type Request, type Response, type Router } from 'express';
 
 import { sendApiError, wrapAsync } from '../sim2real/http-helpers.js';
 import { isBoardAgentConfigured } from '../sim2real/standalone-adapters.js';
-import { stationSwitchEnabled, setStationSwitch, clearStationSwitch } from '../sim2real/station-switches.js';
+import {
+  stationSwitchEnabled,
+  setStationSwitch,
+  clearStationSwitch,
+} from '../sim2real/station-switches.js';
 import {
   stationAgentFetch,
   stationAgentFetchStream,
@@ -39,7 +43,10 @@ export interface Sim2RealBoardStationRouteDeps {
    * Fetch a completed run's ONNX bytes from its training worker. Returns
    * { bytes, sha256 } on success; null when the artifact is unavailable.
    */
-  fetchRunArtifact?: (run: Sim2RealRunRecord, owner?: string) => Promise<{ bytes: Buffer; sha256: string } | null>;
+  fetchRunArtifact?: (
+    run: Sim2RealRunRecord,
+    owner?: string,
+  ) => Promise<{ bytes: Buffer; sha256: string } | null>;
 }
 
 export interface Sim2RealBoardStationRouteOptions {
@@ -145,12 +152,20 @@ export function registerSim2RealBoardStationRoutes(
   const api = (suffix: string): string => `${prefix}${suffix}`;
   const { auth, requestOwner, visibleDevices } = deps;
   const multiUser = auth.isMultiUserDeployment();
-  const stationOptions = (request: Request, options: StationAgentFetchOptions = {}): StationAgentFetchOptions => ({
+  const stationOptions = (
+    request: Request,
+    options: StationAgentFetchOptions = {},
+  ): StationAgentFetchOptions => ({
     ...options,
     cookieHeader: String(request.headers.cookie ?? ''),
     // resolveStation records the auth-filtered registry choice on the request
     // so the Studio bridge follows the same dynamic device as the API.
-    deviceId: String((request as Request & { __stationDeviceId?: string }).__stationDeviceId ?? options.deviceId ?? '').trim() || undefined,
+    deviceId:
+      String(
+        (request as Request & { __stationDeviceId?: string }).__stationDeviceId ??
+          options.deviceId ??
+          '',
+      ).trim() || undefined,
   });
   const visibleDevicesForAuth = (owner?: string) =>
     multiUser ? visibleDevices(owner) : visibleDevices(undefined);
@@ -186,8 +201,9 @@ export function registerSim2RealBoardStationRoutes(
     }
     // A registry row may carry the Studio bridge's remote identifier when it
     // differs from the platform's device key. Fall back to the legacy key.
-    (request as Request & { __stationDeviceId?: string }).__stationDeviceId =
-      String(device.bridgeDeviceId ?? device.id).trim();
+    (request as Request & { __stationDeviceId?: string }).__stationDeviceId = String(
+      device.bridgeDeviceId ?? device.id,
+    ).trim();
     return { device, owner };
   };
 
@@ -198,7 +214,10 @@ export function registerSim2RealBoardStationRoutes(
       const resolved = await resolveStation(request, response);
       if (!resolved) return;
       noStore(response);
-      const agent = await stationAgentFetch('/healthz', stationOptions(request, { timeoutMs: 4000 }));
+      const agent = await stationAgentFetch(
+        '/healthz',
+        stationOptions(request, { timeoutMs: 4000 }),
+      );
       if (!agent) {
         sendApiError(
           response,
@@ -242,7 +261,10 @@ export function registerSim2RealBoardStationRoutes(
       const resolved = await resolveStation(request, response);
       if (!resolved) return;
       noStore(response);
-      const status = await stationAgentFetch('/v1/station/status', stationOptions(request, { timeoutMs: 5000 }));
+      const status = await stationAgentFetch(
+        '/v1/station/status',
+        stationOptions(request, { timeoutMs: 5000 }),
+      );
       if (!status || typeof status !== 'object') {
         sendApiError(
           response,
@@ -270,7 +292,10 @@ export function registerSim2RealBoardStationRoutes(
       noStore(response);
       let upstream: ReadableStream<Uint8Array> | null = null;
       try {
-        upstream = await stationAgentFetchStream('/v1/station/status/stream', stationOptions(request));
+        upstream = await stationAgentFetchStream(
+          '/v1/station/status/stream',
+          stationOptions(request),
+        );
       } catch {
         upstream = null;
       }
@@ -302,7 +327,10 @@ export function registerSim2RealBoardStationRoutes(
       noStore(response);
       let upstream: ReadableStream<Uint8Array> | null = null;
       try {
-        upstream = await stationAgentFetchStream('/v1/station/camera.mjpeg', stationOptions(request));
+        upstream = await stationAgentFetchStream(
+          '/v1/station/camera.mjpeg',
+          stationOptions(request),
+        );
       } catch {
         upstream = null;
       }
@@ -346,11 +374,14 @@ export function registerSim2RealBoardStationRoutes(
         );
         return;
       }
-      const agent = await stationAgentFetch('/v1/station/commands', stationOptions(request, {
-        method: 'POST',
-        timeoutMs: Math.min(known.timeoutMs + 4000, 15_000),
-        body: JSON.stringify({ id }),
-      }));
+      const agent = await stationAgentFetch(
+        '/v1/station/commands',
+        stationOptions(request, {
+          method: 'POST',
+          timeoutMs: Math.min(known.timeoutMs + 4000, 15_000),
+          body: JSON.stringify({ id }),
+        }),
+      );
       if (!agent || typeof agent !== 'object' || (agent as Record<string, unknown>).ok !== true) {
         sendApiError(
           response,
@@ -425,13 +456,9 @@ export function registerSim2RealBoardStationRoutes(
       noStore(response);
       const agent = await stationAgentFetch('/v1/station/drive', stationOptions(request));
       if (!agent) {
-        sendApiError(
-          response,
-          502,
-          'SIM2REAL_BOARD_AGENT_UNREACHABLE',
-          '板端驱动状态不可达。',
-          { retryable: true },
-        );
+        sendApiError(response, 502, 'SIM2REAL_BOARD_AGENT_UNREACHABLE', '板端驱动状态不可达。', {
+          retryable: true,
+        });
         return;
       }
       response.json({
@@ -482,20 +509,30 @@ export function registerSim2RealBoardStationRoutes(
       const patch: { drive?: boolean; policy?: boolean } = {};
       if (body.drive !== undefined) {
         if (typeof body.drive !== 'boolean') {
-          sendApiError(response, 400, 'SIM2REAL_STATION_SWITCH_INVALID', 'drive 需为布尔值。', { retryable: false });
+          sendApiError(response, 400, 'SIM2REAL_STATION_SWITCH_INVALID', 'drive 需为布尔值。', {
+            retryable: false,
+          });
           return;
         }
         patch.drive = body.drive;
       }
       if (body.policy !== undefined) {
         if (typeof body.policy !== 'boolean') {
-          sendApiError(response, 400, 'SIM2REAL_STATION_SWITCH_INVALID', 'policy 需为布尔值。', { retryable: false });
+          sendApiError(response, 400, 'SIM2REAL_STATION_SWITCH_INVALID', 'policy 需为布尔值。', {
+            retryable: false,
+          });
           return;
         }
         patch.policy = body.policy;
       }
       if (patch.drive === undefined && patch.policy === undefined) {
-        sendApiError(response, 400, 'SIM2REAL_STATION_SWITCH_INVALID', '需要 drive 或 policy 布尔字段。', { retryable: false });
+        sendApiError(
+          response,
+          400,
+          'SIM2REAL_STATION_SWITCH_INVALID',
+          '需要 drive 或 policy 布尔字段。',
+          { retryable: false },
+        );
         return;
       }
       // Turning motion ON requires the operator's explicit confirmation flag
@@ -558,11 +595,14 @@ export function registerSim2RealBoardStationRoutes(
         );
         return;
       }
-      const agent = await stationAgentFetchWithStatus('/v1/station/drive', stationOptions(request, {
-        method: 'POST',
-        timeoutMs: 12000,
-        body: JSON.stringify(clamped),
-      }));
+      const agent = await stationAgentFetchWithStatus(
+        '/v1/station/drive',
+        stationOptions(request, {
+          method: 'POST',
+          timeoutMs: 12000,
+          body: JSON.stringify(clamped),
+        }),
+      );
       // An agent refusal (409 drive-disabled / rate-limited / out of range)
       // is a meaningful answer: pass the reason through, not a 502.
       if (!agent) {
@@ -586,10 +626,13 @@ export function registerSim2RealBoardStationRoutes(
       const resolved = await resolveStation(request, response);
       if (!resolved) return;
       noStore(response);
-      const agent = await stationAgentFetch('/v1/station/drive/stop', stationOptions(request, {
-        method: 'POST',
-        timeoutMs: 5000,
-      }));
+      const agent = await stationAgentFetch(
+        '/v1/station/drive/stop',
+        stationOptions(request, {
+          method: 'POST',
+          timeoutMs: 5000,
+        }),
+      );
       if (!agent || typeof agent !== 'object') {
         sendApiError(
           response,
@@ -675,15 +718,18 @@ export function registerSim2RealBoardStationRoutes(
         );
         return;
       }
-      const agent = await stationAgentFetchWithStatus('/v1/station/policy/load', stationOptions(request, {
-        method: 'POST',
-        timeoutMs: 30_000, // model load + onnxruntime session init on board
-        // Send only the bare filename: the board resolves it inside its own
-        // pinned policies dir. Keeping the platform ignorant of the on-board
-        // directory layout avoids two hardcoded paths that can drift apart
-        // (or leak the board's root filesystem layout into the API).
-        body: JSON.stringify({ path }),
-      }));
+      const agent = await stationAgentFetchWithStatus(
+        '/v1/station/policy/load',
+        stationOptions(request, {
+          method: 'POST',
+          timeoutMs: 30_000, // model load + onnxruntime session init on board
+          // Send only the bare filename: the board resolves it inside its own
+          // pinned policies dir. Keeping the platform ignorant of the on-board
+          // directory layout avoids two hardcoded paths that can drift apart
+          // (or leak the board's root filesystem layout into the API).
+          body: JSON.stringify({ path }),
+        }),
+      );
       if (!agent) {
         sendApiError(
           response,
@@ -705,10 +751,13 @@ export function registerSim2RealBoardStationRoutes(
       const resolved = await resolveStation(request, response);
       if (!resolved) return;
       noStore(response);
-      const agent = await stationAgentFetchWithStatus('/v1/station/policy/files', stationOptions(request, {
-        method: 'GET',
-        timeoutMs: 5000,
-      }));
+      const agent = await stationAgentFetchWithStatus(
+        '/v1/station/policy/files',
+        stationOptions(request, {
+          method: 'GET',
+          timeoutMs: 5000,
+        }),
+      );
       if (!agent) {
         sendApiError(
           response,
@@ -798,7 +847,10 @@ export function registerSim2RealBoardStationRoutes(
           409,
           'SIM2REAL_STATION_POLICY_RUN_NOT_STAGED',
           `发布证据不足：${errors.join('；')}`,
-          { retryable: false, details: { runId: run.id, status: run.status, mock: run.mock ?? false } },
+          {
+            retryable: false,
+            details: { runId: run.id, status: run.status, mock: run.mock ?? false },
+          },
         );
         return;
       }
@@ -834,16 +886,19 @@ export function registerSim2RealBoardStationRoutes(
         );
         return;
       }
-      const agent = await stationAgentFetchWithStatus('/v1/station/policy/upload', stationOptions(request, {
-        method: 'POST',
-        // base64 inflates the body by ~4/3 over the 50 MB artifact ceiling.
-        timeoutMs: 120_000,
-        body: JSON.stringify({
-          filename,
-          bytesBase64: artifact.bytes.toString('base64'),
-          sha256: artifact.sha256,
+      const agent = await stationAgentFetchWithStatus(
+        '/v1/station/policy/upload',
+        stationOptions(request, {
+          method: 'POST',
+          // base64 inflates the body by ~4/3 over the 50 MB artifact ceiling.
+          timeoutMs: 120_000,
+          body: JSON.stringify({
+            filename,
+            bytesBase64: artifact.bytes.toString('base64'),
+            sha256: artifact.sha256,
+          }),
         }),
-      }));
+      );
       if (!agent) {
         sendApiError(
           response,
@@ -902,7 +957,10 @@ export function registerSim2RealBoardStationRoutes(
       }
       const goalX = body.goalX == null || body.goalX === '' ? undefined : Number(body.goalX);
       const goalY = body.goalY == null || body.goalY === '' ? undefined : Number(body.goalY);
-      if ((goalX !== undefined && !Number.isFinite(goalX)) || (goalY !== undefined && !Number.isFinite(goalY))) {
+      if (
+        (goalX !== undefined && !Number.isFinite(goalX)) ||
+        (goalY !== undefined && !Number.isFinite(goalY))
+      ) {
         sendApiError(
           response,
           400,
@@ -912,15 +970,18 @@ export function registerSim2RealBoardStationRoutes(
         );
         return;
       }
-      const agent = await stationAgentFetchWithStatus('/v1/station/policy/start', stationOptions(request, {
-        method: 'POST',
-        timeoutMs: 15_000,
-        body: JSON.stringify({
-          direction: Math.min(Math.max(direction, -1), 1),
-          ...(goalX === undefined ? {} : { goalX }),
-          ...(goalY === undefined ? {} : { goalY }),
+      const agent = await stationAgentFetchWithStatus(
+        '/v1/station/policy/start',
+        stationOptions(request, {
+          method: 'POST',
+          timeoutMs: 15_000,
+          body: JSON.stringify({
+            direction: Math.min(Math.max(direction, -1), 1),
+            ...(goalX === undefined ? {} : { goalX }),
+            ...(goalY === undefined ? {} : { goalY }),
+          }),
         }),
-      }));
+      );
       if (!agent) {
         sendApiError(
           response,
@@ -952,10 +1013,13 @@ export function registerSim2RealBoardStationRoutes(
         );
         return;
       }
-      const agent = await stationAgentFetchWithStatus('/v1/station/policy/reset', stationOptions(request, {
-        method: 'POST',
-        timeoutMs: 12_000,
-      }));
+      const agent = await stationAgentFetchWithStatus(
+        '/v1/station/policy/reset',
+        stationOptions(request, {
+          method: 'POST',
+          timeoutMs: 12_000,
+        }),
+      );
       if (!agent) {
         sendApiError(
           response,
@@ -977,10 +1041,13 @@ export function registerSim2RealBoardStationRoutes(
       const resolved = await resolveStation(request, response);
       if (!resolved) return;
       noStore(response);
-      const agent = await stationAgentFetchWithStatus('/v1/station/policy/stop', stationOptions(request, {
-        method: 'POST',
-        timeoutMs: 12_000,
-      }));
+      const agent = await stationAgentFetchWithStatus(
+        '/v1/station/policy/stop',
+        stationOptions(request, {
+          method: 'POST',
+          timeoutMs: 12_000,
+        }),
+      );
       if (!agent) {
         sendApiError(
           response,

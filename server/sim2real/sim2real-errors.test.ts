@@ -31,9 +31,7 @@ describe('Sim2RealError', () => {
 
   it('returns null for unknown errors and non-Error values', () => {
     expect(sim2RealErrorCode(new Error('totally unexpected'))).toBeNull();
-    expect(sim2RealErrorCode('sim2real_storage_unavailable')).toBe(
-      'sim2real_storage_unavailable',
-    );
+    expect(sim2RealErrorCode('sim2real_storage_unavailable')).toBe('sim2real_storage_unavailable');
     expect(sim2RealErrorCode(undefined)).toBeNull();
   });
 });

@@ -1,2 +1,28 @@
-import { describe, expect, it } from 'vitest'; import { validateArtifactForDeployment } from './artifact-quality-gate.js';
-describe('artifact quality gate',()=>{it('passes matching deployable artifact',()=>expect(validateArtifactForDeployment({observationSize:8,actionSize:2,manifestObservationSize:8,manifestActionSize:2,hasArtifactRef:true,deployable:true,maxAbsAction:.9}).passed).toBe(true));it('blocks unsafe artifact',()=>expect(validateArtifactForDeployment({observationSize:8,actionSize:3,manifestObservationSize:8,manifestActionSize:2,hasArtifactRef:false,deployable:false,maxAbsAction:2}).errors.length).toBe(4));});
+import { describe, expect, it } from 'vitest';
+import { validateArtifactForDeployment } from './artifact-quality-gate.js';
+describe('artifact quality gate', () => {
+  it('passes matching deployable artifact', () =>
+    expect(
+      validateArtifactForDeployment({
+        observationSize: 8,
+        actionSize: 2,
+        manifestObservationSize: 8,
+        manifestActionSize: 2,
+        hasArtifactRef: true,
+        deployable: true,
+        maxAbsAction: 0.9,
+      }).passed,
+    ).toBe(true));
+  it('blocks unsafe artifact', () =>
+    expect(
+      validateArtifactForDeployment({
+        observationSize: 8,
+        actionSize: 3,
+        manifestObservationSize: 8,
+        manifestActionSize: 2,
+        hasArtifactRef: false,
+        deployable: false,
+        maxAbsAction: 2,
+      }).errors.length,
+    ).toBe(4));
+});

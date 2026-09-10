@@ -12,7 +12,13 @@ function baseRun(): Sim2RealRunRecord {
     summary: 'completed local run',
     taskId: 'originbot-goal-navigation',
     createdAt: '2026-09-10T00:00:00.000Z',
-    training: { profile: 'standard', numEnvs: 8, maxIterations: 800, video: false, algorithm: 'sac' },
+    training: {
+      profile: 'standard',
+      numEnvs: 8,
+      maxIterations: 800,
+      video: false,
+      algorithm: 'sac',
+    },
   } as Sim2RealRunRecord;
 }
 
@@ -26,7 +32,9 @@ function boardEvaluation(sampleCount: number, actionMae?: number) {
 }
 
 function samples(count: number, opts: { done?: boolean; zeroed?: boolean } = {}) {
-  const observation = opts.zeroed ? [0, 0, 0, 0, 0, 0, 0, 0] : [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8];
+  const observation = opts.zeroed
+    ? [0, 0, 0, 0, 0, 0, 0, 0]
+    : [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8];
   return Array.from({ length: count }, () => ({
     t: 1,
     observation,
@@ -70,7 +78,9 @@ describe('retraining advisor (flywheel read-only half)', () => {
     const advice = adviseRetraining({
       run: baseRun(),
       evaluation: boardEvaluation(300, 0.1),
-      telemetry: [{ samples: [...samples(100), ...samples(200, { done: true, zeroed: true })] } as never],
+      telemetry: [
+        { samples: [...samples(100), ...samples(200, { done: true, zeroed: true })] } as never,
+      ],
     });
     expect(advice.verdict).toBe('retrain-recommended');
     expect(advice.signals.find((s) => s.id === 'done-ratio')?.breached).toBe(true);

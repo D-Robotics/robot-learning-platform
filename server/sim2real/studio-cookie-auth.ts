@@ -140,12 +140,14 @@ export function decodeStudioWebCloudCookie(
         v: 1,
         user: {
           id: String((user as Record<string, unknown>).id),
-          name: typeof (user as Record<string, unknown>).name === 'string'
-            ? String((user as Record<string, unknown>).name)
-            : '',
-          email: typeof (user as Record<string, unknown>).email === 'string'
-            ? String((user as Record<string, unknown>).email)
-            : '',
+          name:
+            typeof (user as Record<string, unknown>).name === 'string'
+              ? String((user as Record<string, unknown>).name)
+              : '',
+          email:
+            typeof (user as Record<string, unknown>).email === 'string'
+              ? String((user as Record<string, unknown>).email)
+              : '',
           ...(typeof (user as Record<string, unknown>).avatar === 'string'
             ? { avatar: String((user as Record<string, unknown>).avatar) }
             : {}),
@@ -199,8 +201,12 @@ function resolveIdentity(
   return {
     principal: {
       accountId,
-      ...(safeAccountText(payload.user.name, 120) ? { displayName: payload.user.name.trim().slice(0, 120) } : {}),
-      ...(safeAccountText(payload.user.email, 240) ? { email: payload.user.email.trim().slice(0, 240) } : {}),
+      ...(safeAccountText(payload.user.name, 120)
+        ? { displayName: payload.user.name.trim().slice(0, 120) }
+        : {}),
+      ...(safeAccountText(payload.user.email, 240)
+        ? { email: payload.user.email.trim().slice(0, 240) }
+        : {}),
     },
     ...(safeAccountText(payload.accessToken, 4_096) ? { runnerToken: payload.accessToken } : {}),
     expiresAt: payload.expiresAt,
@@ -216,11 +222,13 @@ export function studioCookieAuthConfigured(options?: { secret?: string }): boole
  * Create the auth port. Without a usable secret the adapter stays fail-closed:
  * multi-user mode rejects every caller instead of silently trusting cookies.
  */
-export function createStudioCookieAuth(options: {
-  secret?: string;
-  previousSecrets?: string;
-  now?: () => number;
-} = {}): Sim2RealAuthPort {
+export function createStudioCookieAuth(
+  options: {
+    secret?: string;
+    previousSecrets?: string;
+    now?: () => number;
+  } = {},
+): Sim2RealAuthPort {
   const verifyOptions = {
     ...(options.secret !== undefined || options.previousSecrets !== undefined
       ? {

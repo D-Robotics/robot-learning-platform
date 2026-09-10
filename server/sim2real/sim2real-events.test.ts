@@ -16,10 +16,19 @@ describe('Sim2Real plugin event bus', () => {
       events: ['run.created'],
       onEvent: (event) => received.push(event),
     });
-    registerSim2RealPlugin({ id: 'all-events', events: '*', onEvent: (event) => received.push(event.type) });
+    registerSim2RealPlugin({
+      id: 'all-events',
+      events: '*',
+      onEvent: (event) => received.push(event.type),
+    });
     await emitSim2RealEvent('run.created', 'run-1', { status: 'queued' }, 'owner-a');
     expect(received).toHaveLength(2);
-    expect(received[0]).toMatchObject({ type: 'run.created', entityId: 'run-1', owner: 'owner-a', data: { status: 'queued' } });
+    expect(received[0]).toMatchObject({
+      type: 'run.created',
+      entityId: 'run-1',
+      owner: 'owner-a',
+      data: { status: 'queued' },
+    });
     expect(listSim2RealPlugins()).toEqual([
       { id: 'experiment-tracker', events: ['run.created'] },
       { id: 'all-events', events: '*' },
@@ -28,7 +37,13 @@ describe('Sim2Real plugin event bus', () => {
 
   it('isolates handler failures and supports disposer replacement', async () => {
     const error = vi.spyOn(console, 'error').mockImplementation(() => undefined);
-    const dispose = registerSim2RealPlugin({ id: 'broken', events: '*', onEvent: () => { throw new Error('nope'); } });
+    const dispose = registerSim2RealPlugin({
+      id: 'broken',
+      events: '*',
+      onEvent: () => {
+        throw new Error('nope');
+      },
+    });
     registerSim2RealPlugin({ id: 'healthy', events: '*', onEvent: () => undefined });
     await expect(emitSim2RealEvent('dataset.created', 'dataset-1', {})).resolves.toBeUndefined();
     expect(error).toHaveBeenCalled();

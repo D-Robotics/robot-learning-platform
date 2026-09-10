@@ -28,7 +28,12 @@ function readJson(relativePath) {
 }
 
 function pair(value, where) {
-  assert.ok(Array.isArray(value) && value.length === 2 && value.every((x) => typeof x === 'number' && Number.isFinite(x)), `${where} must be [min, max]`);
+  assert.ok(
+    Array.isArray(value) &&
+      value.length === 2 &&
+      value.every((x) => typeof x === 'number' && Number.isFinite(x)),
+    `${where} must be [min, max]`,
+  );
   assert.ok(value[0] <= value[1], `${where} min must not exceed max`);
   return value;
 }
@@ -38,10 +43,16 @@ export function resolveTaskPack(taskId, context = {}) {
   const adapter = readJson(path.join('adapters', `${task.adapterId}.json`));
   assert.equal(task.schemaVersion, 1, 'task schemaVersion must be 1');
   assert.equal(adapter.schemaVersion, 1, 'adapter schemaVersion must be 1');
-  assert.equal(task.observationAdapterId, adapter.policy.observationAdapterId,
-    `task declares observation adapter ${task.observationAdapterId} but ${task.adapterId} provides ${adapter.policy.observationAdapterId}`);
-  assert.equal(task.actionAdapterId, adapter.policy.actionAdapterId,
-    `task declares action adapter ${task.actionAdapterId} but ${task.adapterId} provides ${adapter.policy.actionAdapterId}`);
+  assert.equal(
+    task.observationAdapterId,
+    adapter.policy.observationAdapterId,
+    `task declares observation adapter ${task.observationAdapterId} but ${task.adapterId} provides ${adapter.policy.observationAdapterId}`,
+  );
+  assert.equal(
+    task.actionAdapterId,
+    adapter.policy.actionAdapterId,
+    `task declares action adapter ${task.actionAdapterId} but ${task.adapterId} provides ${adapter.policy.actionAdapterId}`,
+  );
 
   const decisionHz = Number(adapter.runtime?.decisionHz) || 10;
   const controlHz = Number(context.controlHz) || decisionHz;
@@ -65,13 +76,25 @@ export function resolveTaskPack(taskId, context = {}) {
     physicsTimestepSeconds,
     decimation,
     seed: Number.isInteger(context.seed) ? context.seed : 7,
-    provenance: task.provenance || { kind: 'task-pack', mock: true, note: 'Declarative task pack resolved from tasks/ + adapters/.' },
+    provenance: task.provenance || {
+      kind: 'task-pack',
+      mock: true,
+      note: 'Declarative task pack resolved from tasks/ + adapters/.',
+    },
   };
   // The adapter's clamps are the single actuator truth: the engine, the
   // board runtime, and this resolver all read the same numbers.
   const dr = pack.domainRandomization || {};
-  for (const key of ['motorGain', 'lagTauSeconds', 'gyroNoiseStdRadSec', 'odomNoiseStdM',
-                     'angularBiasRadSec', 'actionLatencySteps', 'odomDropoutProb', 'slipScale']) {
+  for (const key of [
+    'motorGain',
+    'lagTauSeconds',
+    'gyroNoiseStdRadSec',
+    'odomNoiseStdM',
+    'angularBiasRadSec',
+    'actionLatencySteps',
+    'odomDropoutProb',
+    'slipScale',
+  ]) {
     if (dr[key]) pair(dr[key], `domainRandomization.${key}`);
   }
   return pack;
@@ -96,7 +119,12 @@ export function trainingRequestFor(pack, context = {}) {
       modelId: context.modelId || `${pack.id}-ppo`,
       version: context.version || '0.1.0',
     },
-    training: { profile: context.profile || 'smoke', numEnvs: context.numEnvs, maxIterations: context.maxIterations, video: false },
+    training: {
+      profile: context.profile || 'smoke',
+      numEnvs: context.numEnvs,
+      maxIterations: context.maxIterations,
+      video: false,
+    },
     task: pack,
   };
 }

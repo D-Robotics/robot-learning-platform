@@ -32,7 +32,9 @@ export function requestLocalTraining(input: {
   runnerToken?: string;
   timeoutMs?: number;
 }): Promise<Sim2RealRobogoRunResult> {
-  const localToken = String(input.runnerToken ?? process.env.RDK_SIM2REAL_LOCAL_RUNNER_TOKEN ?? '').trim();
+  const localToken = String(
+    input.runnerToken ?? process.env.RDK_SIM2REAL_LOCAL_RUNNER_TOKEN ?? '',
+  ).trim();
   return requestRobogoTraining({
     ...input,
     // A local worker is an internal deployment boundary.  Never forward the
@@ -57,7 +59,9 @@ export function requestLocalTrainingStatus(input: {
   runnerToken?: string;
   timeoutMs?: number;
 }): Promise<Sim2RealRobogoRunResult> {
-  const localToken = String(input.runnerToken ?? process.env.RDK_SIM2REAL_LOCAL_RUNNER_TOKEN ?? '').trim();
+  const localToken = String(
+    input.runnerToken ?? process.env.RDK_SIM2REAL_LOCAL_RUNNER_TOKEN ?? '',
+  ).trim();
   return requestRobogoTrainingStatus({
     ...input,
     requestToken: localToken || undefined,
@@ -81,12 +85,19 @@ export async function fetchLocalRunArtifact(input: {
   runnerToken?: string;
   timeoutMs?: number;
 }): Promise<{ bytes: Buffer; sha256: string } | null> {
-  const runnerUrl = (input.runnerUrl ?? process.env.RDK_SIM2REAL_LOCAL_RUNNER_URL ?? '').trim().replace(/\/+$/, '');
+  const runnerUrl = (input.runnerUrl ?? process.env.RDK_SIM2REAL_LOCAL_RUNNER_URL ?? '')
+    .trim()
+    .replace(/\/+$/, '');
   if (!runnerUrl) return null;
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), Math.min(Math.max(input.timeoutMs ?? 60_000, 1000), 180_000));
+  const timer = setTimeout(
+    () => controller.abort(),
+    Math.min(Math.max(input.timeoutMs ?? 60_000, 1000), 180_000),
+  );
   try {
-    const token = String(input.runnerToken ?? process.env.RDK_SIM2REAL_LOCAL_RUNNER_TOKEN ?? '').trim();
+    const token = String(
+      input.runnerToken ?? process.env.RDK_SIM2REAL_LOCAL_RUNNER_TOKEN ?? '',
+    ).trim();
     const response = await (input.fetchImpl ?? fetch)(
       `${runnerUrl}/runs/${encodeURIComponent(input.externalRunId)}/artifact`,
       {
@@ -120,7 +131,9 @@ export async function fetchLocalRunArtifact(input: {
     }
     if (total !== declared) return null;
     const bytes = Buffer.concat(chunks);
-    const sha256 = String(response.headers.get('x-artifact-sha256') || '').trim().toLowerCase();
+    const sha256 = String(response.headers.get('x-artifact-sha256') || '')
+      .trim()
+      .toLowerCase();
     if (!/^[a-f0-9]{64}$/.test(sha256)) return null;
     return { bytes, sha256 };
   } catch {

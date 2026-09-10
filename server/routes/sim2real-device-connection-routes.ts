@@ -38,12 +38,32 @@ export interface Sim2RealDeviceConnectionRouteOptions {
 const DEFAULT_SIM2REAL_API_PREFIX = '/api/sim2real';
 
 const CONNECTION_ERRORS: Record<string, { status: number; code: string; message: string }> = {
-  INVALID_HOST: { status: 400, code: 'SIM2REAL_INVALID_HOST', message: '主机名或 IP 无效（不要带 http:// 前缀）。' },
+  INVALID_HOST: {
+    status: 400,
+    code: 'SIM2REAL_INVALID_HOST',
+    message: '主机名或 IP 无效（不要带 http:// 前缀）。',
+  },
   INVALID_USERNAME: { status: 400, code: 'SIM2REAL_INVALID_USERNAME', message: '用户名无效。' },
-  ALREADY_EXISTS: { status: 409, code: 'SIM2REAL_DEVICE_CONNECTION_EXISTS', message: '同主机/端口/用户的连接已存在。' },
-  QUOTA_EXCEEDED: { status: 507, code: 'SIM2REAL_DEVICE_CONNECTION_QUOTA', message: '连接记录数量达到上限（50）。' },
-  NOT_FOUND: { status: 404, code: 'SIM2REAL_DEVICE_CONNECTION_NOT_FOUND', message: '连接记录不存在。' },
-  SSH_UNAVAILABLE: { status: 503, code: 'SIM2REAL_SSH_UNAVAILABLE', message: '服务器上找不到 ssh 客户端，无法建立隧道。' },
+  ALREADY_EXISTS: {
+    status: 409,
+    code: 'SIM2REAL_DEVICE_CONNECTION_EXISTS',
+    message: '同主机/端口/用户的连接已存在。',
+  },
+  QUOTA_EXCEEDED: {
+    status: 507,
+    code: 'SIM2REAL_DEVICE_CONNECTION_QUOTA',
+    message: '连接记录数量达到上限（50）。',
+  },
+  NOT_FOUND: {
+    status: 404,
+    code: 'SIM2REAL_DEVICE_CONNECTION_NOT_FOUND',
+    message: '连接记录不存在。',
+  },
+  SSH_UNAVAILABLE: {
+    status: 503,
+    code: 'SIM2REAL_SSH_UNAVAILABLE',
+    message: '服务器上找不到 ssh 客户端，无法建立隧道。',
+  },
 };
 
 function normalizePrefix(value: string | undefined): string {
@@ -62,17 +82,24 @@ function connectionError(response: Response, error: string, fallbackMessage: str
   const known = CONNECTION_ERRORS[error];
   if (known) {
     noStore(response);
-    sendApiError(response, known.status, known.code, known.message, { retryable: known.status >= 500 });
+    sendApiError(response, known.status, known.code, known.message, {
+      retryable: known.status >= 500,
+    });
     return true;
   }
   // Tunnel open failures return human-readable ssh reasons.
   noStore(response);
-  sendApiError(response, 502, 'SIM2REAL_DEVICE_CONNECTION_FAILED', fallbackMessage || error, { retryable: true });
+  sendApiError(response, 502, 'SIM2REAL_DEVICE_CONNECTION_FAILED', fallbackMessage || error, {
+    retryable: true,
+  });
   return false;
 }
 
 /** Serialize one connection with its live tunnel state. */
-function serializeConnection(record: ReturnType<typeof listDeviceConnections>[number], tunnelUrl: string | null) {
+function serializeConnection(
+  record: ReturnType<typeof listDeviceConnections>[number],
+  tunnelUrl: string | null,
+) {
   const { localPort, ...rest } = record;
   void localPort;
   return { ...rest, tunnelActive: Boolean(tunnelUrl) };
@@ -98,12 +125,18 @@ export function registerSim2RealDeviceConnectionRoutes(
       noStore(response);
       const live = activeTunnels();
       const connections = listDeviceConnections(multiUser ? owner : undefined).map((record) =>
-        serializeConnection(record, live.has(record.id) ? deviceConnectionAgentUrl(record.id, multiUser ? owner : undefined) : null),
+        serializeConnection(
+          record,
+          live.has(record.id)
+            ? deviceConnectionAgentUrl(record.id, multiUser ? owner : undefined)
+            : null,
+        ),
       );
       response.json({
         ok: true,
         connections,
-        sshNote: '隧道使用服务器本机 ssh 与已有密钥/代理跳转（与 deploy-x5-board-agent.sh 相同），不存储密码。',
+        sshNote:
+          '隧道使用服务器本机 ssh 与已有密钥/代理跳转（与 deploy-x5-board-agent.sh 相同），不存储密码。',
       });
     }),
   );
@@ -114,9 +147,10 @@ export function registerSim2RealDeviceConnectionRoutes(
     wrapAsync(async (request, response) => {
       const owner = requestOwner(request, response);
       if (owner === null) return;
-      const body = request.body && typeof request.body === 'object' && !Array.isArray(request.body)
-        ? (request.body as Record<string, unknown>)
-        : {};
+      const body =
+        request.body && typeof request.body === 'object' && !Array.isArray(request.body)
+          ? (request.body as Record<string, unknown>)
+          : {};
       const created = await createDeviceConnection(
         {
           host: String(body.host ?? ''),
@@ -142,7 +176,10 @@ export function registerSim2RealDeviceConnectionRoutes(
     wrapAsync(async (request, response) => {
       const owner = requestOwner(request, response);
       if (owner === null) return;
-      const deleted = await deleteDeviceConnection(String(request.params.connectionId || ''), multiUser ? owner : undefined);
+      const deleted = await deleteDeviceConnection(
+        String(request.params.connectionId || ''),
+        multiUser ? owner : undefined,
+      );
       if (!deleted) {
         connectionError(response, 'NOT_FOUND', '连接记录不存在。');
         return;
@@ -172,8 +209,17 @@ export function registerSim2RealDeviceConnectionRoutes(
         ok: true,
         connection: serializeConnection(
           listDeviceConnections(multiUser ? owner : undefined).find((item) => item.id === id) ?? {
-            id, label: '', host: '', port: 22, username: '', agentPort: 19100, localPort: 0,
-            createdAt: '', lastCheckedAt: null, lastCheckOk: true, lastCheckMessage: result.probe.message,
+            id,
+            label: '',
+            host: '',
+            port: 22,
+            username: '',
+            agentPort: 19100,
+            localPort: 0,
+            createdAt: '',
+            lastCheckedAt: null,
+            lastCheckOk: true,
+            lastCheckMessage: result.probe.message,
           },
           result.url,
         ),
@@ -208,13 +254,25 @@ export function registerSim2RealDeviceConnectionRoutes(
       const url = deviceConnectionAgentUrl(id, multiUser ? owner : undefined);
       if (!url) {
         noStore(response);
-        sendApiError(response, 409, 'SIM2REAL_DEVICE_TUNNEL_DOWN', '隧道未连接；先连接设备再读取开关。', { retryable: false });
+        sendApiError(
+          response,
+          409,
+          'SIM2REAL_DEVICE_TUNNEL_DOWN',
+          '隧道未连接；先连接设备再读取开关。',
+          { retryable: false },
+        );
         return;
       }
       const config = await stationAgentFetch('/v1/config', { timeoutMs: 5000, baseUrl: url });
       if (!config || config.ok !== true) {
         noStore(response);
-        sendApiError(response, 502, 'SIM2REAL_BOARD_AGENT_UNREACHABLE', '板端开关状态不可达（agent 需更新到带 /v1/config 的版本）。', { retryable: true });
+        sendApiError(
+          response,
+          502,
+          'SIM2REAL_BOARD_AGENT_UNREACHABLE',
+          '板端开关状态不可达（agent 需更新到带 /v1/config 的版本）。',
+          { retryable: true },
+        );
         return;
       }
       noStore(response);
@@ -236,21 +294,34 @@ export function registerSim2RealDeviceConnectionRoutes(
       const url = deviceConnectionAgentUrl(id, multiUser ? owner : undefined);
       if (!url) {
         noStore(response);
-        sendApiError(response, 409, 'SIM2REAL_DEVICE_TUNNEL_DOWN', '隧道未连接；先连接设备再修改开关。', { retryable: false });
+        sendApiError(
+          response,
+          409,
+          'SIM2REAL_DEVICE_TUNNEL_DOWN',
+          '隧道未连接；先连接设备再修改开关。',
+          { retryable: false },
+        );
         return;
       }
-      const body = request.body && typeof request.body === 'object' && !Array.isArray(request.body)
-        ? (request.body as Record<string, unknown>)
-        : {};
-      const switches = body.switches && typeof body.switches === 'object' && !Array.isArray(body.switches)
-        ? (body.switches as Record<string, unknown>)
-        : null;
+      const body =
+        request.body && typeof request.body === 'object' && !Array.isArray(request.body)
+          ? (request.body as Record<string, unknown>)
+          : {};
+      const switches =
+        body.switches && typeof body.switches === 'object' && !Array.isArray(body.switches)
+          ? (body.switches as Record<string, unknown>)
+          : null;
       if (!switches) {
         noStore(response);
-        sendApiError(response, 400, 'SIM2REAL_STATION_CONFIG_INVALID', '需要 switches 对象。', { retryable: false });
+        sendApiError(response, 400, 'SIM2REAL_STATION_CONFIG_INVALID', '需要 switches 对象。', {
+          retryable: false,
+        });
         return;
       }
-      const ALLOWED = new Set(['RDK_SIM2REAL_BOARD_AGENT_ENABLE_DRIVE', 'RDK_SIM2REAL_BOARD_AGENT_ENABLE_POLICY']);
+      const ALLOWED = new Set([
+        'RDK_SIM2REAL_BOARD_AGENT_ENABLE_DRIVE',
+        'RDK_SIM2REAL_BOARD_AGENT_ENABLE_POLICY',
+      ]);
       const unknownKeys = Object.keys(switches).filter((key) => !ALLOWED.has(key));
       if (unknownKeys.length) {
         noStore(response);
@@ -271,7 +342,13 @@ export function registerSim2RealDeviceConnectionRoutes(
       });
       if (!agent || !agent.payload) {
         noStore(response);
-        sendApiError(response, 502, 'SIM2REAL_BOARD_AGENT_UNREACHABLE', '板端 agent 不可达，开关未修改。', { retryable: true });
+        sendApiError(
+          response,
+          502,
+          'SIM2REAL_BOARD_AGENT_UNREACHABLE',
+          '板端 agent 不可达，开关未修改。',
+          { retryable: true },
+        );
         return;
       }
       response.status(agent.status).json(agent.payload);

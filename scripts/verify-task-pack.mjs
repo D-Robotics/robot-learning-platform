@@ -21,10 +21,22 @@ for (const taskId of ['originbot-goal-navigation', 'generic-goal-navigation']) {
   assert.equal(pack.kind, 'goal-navigation', `${taskId}: resolved pack kind`);
   assert.equal(pack.schemaVersion, 1, `${taskId}: pack schemaVersion`);
 
-  const request = trainingRequestFor(pack, { modelId: `${taskId}-gate`, version: '0.1.0-gate', profile: 'smoke' });
+  const request = trainingRequestFor(pack, {
+    modelId: `${taskId}-gate`,
+    version: '0.1.0-gate',
+    profile: 'smoke',
+  });
   assert.equal(request.schemaVersion, 1);
-  assert.equal(request.contract.observationSize, pack.adapter.policy.observationSize, `${taskId}: contract obs matches adapter`);
-  assert.equal(request.contract.actionSize, pack.adapter.policy.actionSize, `${taskId}: contract action matches adapter`);
+  assert.equal(
+    request.contract.observationSize,
+    pack.adapter.policy.observationSize,
+    `${taskId}: contract obs matches adapter`,
+  );
+  assert.equal(
+    request.contract.actionSize,
+    pack.adapter.policy.actionSize,
+    `${taskId}: contract action matches adapter`,
+  );
   assert.equal(request.task.id, taskId);
   assert.equal(typeof request.task.curriculum.expandFactor, 'number');
 
@@ -32,13 +44,25 @@ for (const taskId of ['originbot-goal-navigation', 'generic-goal-navigation']) {
   // and a supported confidence level, or the gate verdict is noise.
   const evaluationConfig = request.task.evaluationConfig || {};
   if (request.task.qualityGate?.gateOn === 'ciLowerBound') {
-    assert.ok((evaluationConfig.episodesPerEnvelope ?? 0) >= 30, `${taskId}: gateOn=ciLowerBound needs >=30 episodes per envelope`);
-    assert.ok([0.9, 0.95, 0.99].includes(evaluationConfig.confidenceLevel ?? 0.95), `${taskId}: confidenceLevel must be 0.9/0.95/0.99`);
+    assert.ok(
+      (evaluationConfig.episodesPerEnvelope ?? 0) >= 30,
+      `${taskId}: gateOn=ciLowerBound needs >=30 episodes per envelope`,
+    );
+    assert.ok(
+      [0.9, 0.95, 0.99].includes(evaluationConfig.confidenceLevel ?? 0.95),
+      `${taskId}: confidenceLevel must be 0.9/0.95/0.99`,
+    );
   }
   // The 8-value envelopes must pin dropout/slip too (legacy 6 tolerated).
   for (const [name, envelope] of Object.entries(pack.domainRandomization?.evalEnvelopes ?? {})) {
-    assert.ok([6, 8].includes(envelope.length), `${taskId}: evalEnvelopes.${name} must be 6 or 8 pinned values`);
-    assert.ok(envelope.every((x) => typeof x === 'number' && Number.isFinite(x)), `${taskId}: evalEnvelopes.${name} must be numbers`);
+    assert.ok(
+      [6, 8].includes(envelope.length),
+      `${taskId}: evalEnvelopes.${name} must be 6 or 8 pinned values`,
+    );
+    assert.ok(
+      envelope.every((x) => typeof x === 'number' && Number.isFinite(x)),
+      `${taskId}: evalEnvelopes.${name} must be numbers`,
+    );
   }
 
   // The request must round-trip through the worker's file protocol: the
@@ -92,4 +116,6 @@ assert.deepEqual(originbot.reward, generic.reward, 'both machines share the task
 assert.notEqual(originbot.adapter.id, generic.adapter.id, 'different adapter packs');
 assert.equal(generic.provenance.mock, true, 'virtual machine stays honestly labeled');
 
-console.log('[task-pack] PASS — 2 packs resolved, layouts aligned with board runtime, request shape valid');
+console.log(
+  '[task-pack] PASS — 2 packs resolved, layouts aligned with board runtime, request shape valid',
+);

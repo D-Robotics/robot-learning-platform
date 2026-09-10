@@ -52,10 +52,12 @@ describe('deployment lifecycle ledger', () => {
       summary: 'cancelled',
     });
     expect(cancelled?.status).toBe('cancelled');
-    expect(cancelled?.history).toEqual(expect.arrayContaining([
-      expect.objectContaining({ type: 'created', status: 'planned' }),
-      expect.objectContaining({ type: 'cancelled', status: 'cancelled' }),
-    ]));
+    expect(cancelled?.history).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ type: 'created', status: 'planned' }),
+        expect.objectContaining({ type: 'cancelled', status: 'cancelled' }),
+      ]),
+    );
 
     const lateProbe = await updateSim2RealDeployment(created.id, {
       status: 'ready',

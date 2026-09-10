@@ -129,10 +129,13 @@ describe('RoboGo Sim2Real runner adapter', () => {
       manifest: BUILTIN_MICRODUCK_MODEL.manifest,
       runnerUrl: 'https://runner.example.test/run',
       fetchImpl: (async () =>
-        new Response(JSON.stringify({ status: 'queued', runId: 'safe-run-1', url: 'javascript:alert(1)' }), {
-          status: 200,
-          headers: { 'content-type': 'application/json' },
-        })) as typeof fetch,
+        new Response(
+          JSON.stringify({ status: 'queued', runId: 'safe-run-1', url: 'javascript:alert(1)' }),
+          {
+            status: 200,
+            headers: { 'content-type': 'application/json' },
+          },
+        )) as typeof fetch,
     });
 
     expect(result).toMatchObject({ status: 'queued' });

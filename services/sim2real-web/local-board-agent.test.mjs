@@ -4,7 +4,8 @@ import process from 'node:process';
 const previousToken = process.env.RDK_SIM2REAL_BOARD_AGENT_TOKEN;
 delete process.env.RDK_SIM2REAL_BOARD_AGENT_TOKEN;
 
-const { buildBoardPreflightCommand, createLocalBoardAgentServer } = await import('./local-board-agent.mjs');
+const { buildBoardPreflightCommand, createLocalBoardAgentServer } =
+  await import('./local-board-agent.mjs');
 const { STATION_COMMANDS } = await import('./board-station.mjs');
 const server = createLocalBoardAgentServer();
 await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
@@ -107,7 +108,10 @@ try {
   const statusStream = await fetch(`${base}/v1/station/status/stream`);
   assert.equal(statusStream.status, 200);
   assert.match(statusStream.headers.get('content-type') || '', /x-ndjson/);
-  const statusStreamBody = await readStreamPrefix(statusStream, { maxBytes: 8192, timeoutMs: 1500 });
+  const statusStreamBody = await readStreamPrefix(statusStream, {
+    maxBytes: 8192,
+    timeoutMs: 1500,
+  });
   const statusLines = statusStreamBody.toString('utf8').split('\n').filter(Boolean);
   assert.ok(statusLines.length >= 1, 'status stream should emit at least one heartbeat');
   assert.ok(Number.isFinite(JSON.parse(statusLines[0]).cpu.percent));
@@ -136,7 +140,11 @@ try {
   const traversal = await fetch(`${base}/v1/station/policy/upload`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ filename: '../escape.onnx', bytesBase64: policyBytes.toString('base64'), sha256: policySha }),
+    body: JSON.stringify({
+      filename: '../escape.onnx',
+      bytesBase64: policyBytes.toString('base64'),
+      sha256: policySha,
+    }),
   });
   assert.equal(traversal.status, 409);
   assert.equal((await traversal.json()).error, 'policy-filename-invalid');
@@ -144,7 +152,11 @@ try {
   const badDigest = await fetch(`${base}/v1/station/policy/upload`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ filename: 'probe.onnx', bytesBase64: policyBytes.toString('base64'), sha256: '0'.repeat(64) }),
+    body: JSON.stringify({
+      filename: 'probe.onnx',
+      bytesBase64: policyBytes.toString('base64'),
+      sha256: '0'.repeat(64),
+    }),
   });
   assert.equal(badDigest.status, 409);
   assert.equal((await badDigest.json()).error, 'policy-digest-mismatch');
@@ -152,7 +164,11 @@ try {
   const staged = await fetch(`${base}/v1/station/policy/upload`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ filename: 'probe.onnx', bytesBase64: policyBytes.toString('base64'), sha256: policySha }),
+    body: JSON.stringify({
+      filename: 'probe.onnx',
+      bytesBase64: policyBytes.toString('base64'),
+      sha256: policySha,
+    }),
   });
   assert.equal(staged.status, 200);
   const stagedPayload = await staged.json();
@@ -176,10 +192,17 @@ try {
   const idempotentRestage = await fetch(`${base}/v1/station/policy/upload`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ filename: 'probe.onnx', bytesBase64: policyBytes.toString('base64'), sha256: policySha }),
+    body: JSON.stringify({
+      filename: 'probe.onnx',
+      bytesBase64: policyBytes.toString('base64'),
+      sha256: policySha,
+    }),
   });
   assert.equal(idempotentRestage.status, 200);
-  assert.equal((await idempotentRestage.json()).note, 'byte-identical to the staged file; no rewrite');
+  assert.equal(
+    (await idempotentRestage.json()).note,
+    'byte-identical to the staged file; no rewrite',
+  );
 
   const list = await fetch(`${base}/v1/station/policy/files`);
   assert.equal(list.status, 200);
@@ -197,7 +220,9 @@ try {
     headers: { authorization: 'Bearer board-test-token' },
   });
   assert.equal(authorized.status, 200);
-  console.log('[local-board-agent] PASS — read-only contract, host-station surface, mock marker, and token gate verified');
+  console.log(
+    '[local-board-agent] PASS — read-only contract, host-station surface, mock marker, and token gate verified',
+  );
 } finally {
   server.closeIdleConnections?.();
   server.closeAllConnections?.();

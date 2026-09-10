@@ -99,7 +99,10 @@ describe('standalone BoardAgent board-detect route', () => {
       actuatorControl: false,
     });
     expect(command).toContain('__STUDIO_SIM2REAL_PREFLIGHT_BEGIN__');
-    expect((await readDevices())[0]).toMatchObject({ boardPlatform: 'rdk-x5', boardModel: 'RDK X5' });
+    expect((await readDevices())[0]).toMatchObject({
+      boardPlatform: 'rdk-x5',
+      boardModel: 'RDK X5',
+    });
   });
 
   it('fails closed when no BoardAgent result is available', async () => {
@@ -144,7 +147,8 @@ describe('standalone BoardAgent board-detect route', () => {
     const response = await invoke(
       createDeviceBoardDetectRouter(async () => ({
         device: { id: 'x5-local' },
-        output: '__STUDIO_SIM2REAL_PREFLIGHT_BEGIN__\narch=aarch64\n__STUDIO_SIM2REAL_PREFLIGHT_END__',
+        output:
+          '__STUDIO_SIM2REAL_PREFLIGHT_BEGIN__\narch=aarch64\n__STUDIO_SIM2REAL_PREFLIGHT_END__',
         exitCode: 0,
       })),
     );

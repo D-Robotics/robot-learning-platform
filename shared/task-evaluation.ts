@@ -14,7 +14,10 @@ function record(value: unknown): Record<string, unknown> {
 
 function text(value: unknown, maxLength: number): string {
   return typeof value === 'string'
-    ? value.replace(/[\u0000-\u001f\u007f]/g, ' ').trim().slice(0, maxLength)
+    ? value
+        .replace(/[\u0000-\u001f\u007f]/g, ' ')
+        .trim()
+        .slice(0, maxLength)
     : '';
 }
 
@@ -52,9 +55,7 @@ function envelope(value: unknown): Sim2RealTaskEvaluationEnvelope | undefined {
   return Object.keys(normalized).length ? normalized : undefined;
 }
 
-function evaluationBlock(
-  value: unknown,
-): Sim2RealTaskEvaluationEvidence['trained'] | undefined {
+function evaluationBlock(value: unknown): Sim2RealTaskEvaluationEvidence['trained'] | undefined {
   const source = record(value);
   if (!Object.keys(source).length) return undefined;
   const rawEnvelopes = record(source.envelopes);
@@ -102,7 +103,10 @@ export function normalizeTaskEvaluationEvidence(
       ? rawCriteria.gateOn
       : undefined;
   const gateErrors = Array.isArray(rawGate.errors)
-    ? rawGate.errors.slice(0, 32).map((item) => text(item, 240)).filter(Boolean)
+    ? rawGate.errors
+        .slice(0, 32)
+        .map((item) => text(item, 240))
+        .filter(Boolean)
     : undefined;
   const qualityGate = Object.keys(rawGate).length
     ? {

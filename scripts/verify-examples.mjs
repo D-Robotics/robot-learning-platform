@@ -27,7 +27,9 @@ function readJson(file) {
   try {
     return JSON.parse(fs.readFileSync(file, 'utf8'));
   } catch (error) {
-    fail(`${path.relative(root, file)} is not valid JSON: ${error instanceof Error ? error.message : error}`);
+    fail(
+      `${path.relative(root, file)} is not valid JSON: ${error instanceof Error ? error.message : error}`,
+    );
   }
 }
 
@@ -141,7 +143,8 @@ if (lines.length < 2) fail('telemetry sample must contain at least two lines');
 let previous = -Infinity;
 for (const [index, line] of lines.entries()) {
   const sample = readJsonFromLine(line, index);
-  if (!Number.isFinite(sample.t) || sample.t < previous) fail(`telemetry line ${index + 1} has bad t`);
+  if (!Number.isFinite(sample.t) || sample.t < previous)
+    fail(`telemetry line ${index + 1} has bad t`);
   previous = sample.t;
   for (const [field, expectedSize] of [
     ['observation', observationSize],
@@ -190,10 +193,14 @@ for (const [index, line] of microduckLines.slice(1).entries()) {
     ['action', 14],
   ]) {
     if (!Array.isArray(sample[field]) || sample[field].length !== expectedSize) {
-      fail(`MicroDuck demo telemetry line ${index + 2} ${field} must contain exactly ${expectedSize} values`);
+      fail(
+        `MicroDuck demo telemetry line ${index + 2} ${field} must contain exactly ${expectedSize} values`,
+      );
     }
     if (sample[field].some((value) => typeof value !== 'number' || !Number.isFinite(value))) {
-      fail(`MicroDuck demo telemetry line ${index + 2} ${field} contains a non-finite/non-number value`);
+      fail(
+        `MicroDuck demo telemetry line ${index + 2} ${field} contains a non-finite/non-number value`,
+      );
     }
   }
   microduckSamples += 1;
@@ -204,7 +211,9 @@ function readJsonFromLine(line, index) {
   try {
     return JSON.parse(line);
   } catch (error) {
-    fail(`telemetry line ${index + 1} is not valid JSON: ${error instanceof Error ? error.message : error}`);
+    fail(
+      `telemetry line ${index + 1} is not valid JSON: ${error instanceof Error ? error.message : error}`,
+    );
   }
 }
 

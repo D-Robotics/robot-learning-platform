@@ -27,7 +27,9 @@ import {
 type AuthMode = 'studio-cookie' | 'trusted-proxy' | 'standalone';
 
 function resolveAuthMode(): AuthMode {
-  const raw = String(process.env.RDK_SIM2REAL_AUTH_MODE ?? '').trim().toLowerCase();
+  const raw = String(process.env.RDK_SIM2REAL_AUTH_MODE ?? '')
+    .trim()
+    .toLowerCase();
   if (raw === 'trusted-proxy') return 'trusted-proxy';
   if (raw === 'standalone') return 'standalone';
   if (raw === 'studio-cookie') return 'studio-cookie';
@@ -56,9 +58,7 @@ export function studioSsoAdapterConfigured(): boolean {
 }
 
 export function studioSsoAdapterMode(): 'standalone' | 'trusted-proxy' | 'studio-cookie' {
-  return authMode === 'studio-cookie' && !studioCookieAuthConfigured()
-    ? 'standalone'
-    : authMode;
+  return authMode === 'studio-cookie' && !studioCookieAuthConfigured() ? 'standalone' : authMode;
 }
 
 export const studioSsoAuth: Sim2RealAuthPort = Object.freeze({

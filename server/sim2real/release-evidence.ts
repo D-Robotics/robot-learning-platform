@@ -1,8 +1,5 @@
 import { validateTaskPackEvalForRelease } from '../../shared/artifact-quality-gate.js';
-import type {
-  Sim2RealDeploymentMode,
-  Sim2RealRunRecord,
-} from '../../shared/sim2real.js';
+import type { Sim2RealDeploymentMode, Sim2RealRunRecord } from '../../shared/sim2real.js';
 
 export interface Sim2RealReleaseEvidenceVerdict {
   passed: boolean;

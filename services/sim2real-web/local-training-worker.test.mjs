@@ -96,11 +96,18 @@ try {
   });
   assert.equal(conflict.status, 409);
   let status = launched;
-  for (let index = 0; index < 30 && (status.status === 'queued' || status.status === 'running'); index += 1) {
+  for (
+    let index = 0;
+    index < 30 && (status.status === 'queued' || status.status === 'running');
+    index += 1
+  ) {
     await new Promise((resolve) => setTimeout(resolve, 10));
-    const statusResponse = await fetch(`${base}/runs/${encodeURIComponent(launched.runId)}`, { headers: { 'x-sim2real-account': 'alice', authorization: 'Bearer worker-test-token' } });
+    const statusResponse = await fetch(`${base}/runs/${encodeURIComponent(launched.runId)}`, {
+      headers: { 'x-sim2real-account': 'alice', authorization: 'Bearer worker-test-token' },
+    });
     status = await statusResponse.json();
-    if (statusResponse.status !== 200) throw new Error(`status response ${statusResponse.status}: ${JSON.stringify(status)}`);
+    if (statusResponse.status !== 200)
+      throw new Error(`status response ${statusResponse.status}: ${JSON.stringify(status)}`);
   }
   assert.equal(status.status, 'completed', JSON.stringify(status));
   assert.equal(status.checkpoint.artifactRef, 'artifact://microduck/cp-1');
@@ -114,9 +121,12 @@ try {
   assert.doesNotMatch(status.stderrTail, /should-hide/);
 
   // ---- artifact bytes endpoint (staging source for the board) ----
-  const artifactWrongOwner = await fetch(`${base}/runs/${encodeURIComponent(launched.runId)}/artifact`, {
-    headers: { 'x-sim2real-account': 'bob', authorization: 'Bearer worker-test-token' },
-  });
+  const artifactWrongOwner = await fetch(
+    `${base}/runs/${encodeURIComponent(launched.runId)}/artifact`,
+    {
+      headers: { 'x-sim2real-account': 'bob', authorization: 'Bearer worker-test-token' },
+    },
+  );
   assert.equal(artifactWrongOwner.status, 404);
 
   const artifactNoAuth = await fetch(`${base}/runs/${encodeURIComponent(launched.runId)}/artifact`);
@@ -141,19 +151,31 @@ try {
   // fail-closed instead of serving swapped bytes.
   const jobDir = path.join(fixtureDir, launched.runId);
   await writeFile(path.join(jobDir, 'policy.onnx'), 'swapped-bytes');
-  const artifactCorrupted = await fetch(`${base}/runs/${encodeURIComponent(launched.runId)}/artifact`, {
-    headers: { 'x-sim2real-account': 'alice', authorization: 'Bearer worker-test-token' },
-  });
+  const artifactCorrupted = await fetch(
+    `${base}/runs/${encodeURIComponent(launched.runId)}/artifact`,
+    {
+      headers: { 'x-sim2real-account': 'alice', authorization: 'Bearer worker-test-token' },
+    },
+  );
   assert.equal(artifactCorrupted.status, 409);
   assert.equal((await artifactCorrupted.json()).error, 'artifact_digest_mismatch');
   await writeFile(path.join(jobDir, 'policy.onnx'), 'onnx-fixture');
 
   let secondStatus = second;
-  for (let index = 0; index < 100 && (secondStatus.status === 'queued' || secondStatus.status === 'running'); index += 1) {
+  for (
+    let index = 0;
+    index < 100 && (secondStatus.status === 'queued' || secondStatus.status === 'running');
+    index += 1
+  ) {
     await new Promise((resolve) => setTimeout(resolve, 20));
-    const statusResponse = await fetch(`${base}/runs/${encodeURIComponent(second.runId)}`, { headers: { 'x-sim2real-account': 'alice', authorization: 'Bearer worker-test-token' } });
+    const statusResponse = await fetch(`${base}/runs/${encodeURIComponent(second.runId)}`, {
+      headers: { 'x-sim2real-account': 'alice', authorization: 'Bearer worker-test-token' },
+    });
     secondStatus = await statusResponse.json();
-    if (statusResponse.status !== 200) throw new Error(`second status response ${statusResponse.status}: ${JSON.stringify(secondStatus)}`);
+    if (statusResponse.status !== 200)
+      throw new Error(
+        `second status response ${statusResponse.status}: ${JSON.stringify(secondStatus)}`,
+      );
   }
   assert.equal(secondStatus.status, 'completed', JSON.stringify(secondStatus));
 
@@ -166,13 +188,23 @@ try {
       authorization: 'Bearer worker-test-token',
       'idempotency-key': 'oversized-result',
     },
-    body: JSON.stringify({ ...request, model: { modelId: 'microduck-large-result', version: 'v1' } }),
+    body: JSON.stringify({
+      ...request,
+      model: { modelId: 'microduck-large-result', version: 'v1' },
+    }),
   });
   assert.equal(oversizedLaunch.status, 202);
   let oversizedStatus = await oversizedLaunch.json();
-  for (let index = 0; index < 100 && (oversizedStatus.status === 'queued' || oversizedStatus.status === 'running'); index += 1) {
+  for (
+    let index = 0;
+    index < 100 && (oversizedStatus.status === 'queued' || oversizedStatus.status === 'running');
+    index += 1
+  ) {
     await new Promise((resolve) => setTimeout(resolve, 20));
-    const statusResponse = await fetch(`${base}/runs/${encodeURIComponent(oversizedStatus.runId)}`, { headers: { 'x-sim2real-account': 'alice', authorization: 'Bearer worker-test-token' } });
+    const statusResponse = await fetch(
+      `${base}/runs/${encodeURIComponent(oversizedStatus.runId)}`,
+      { headers: { 'x-sim2real-account': 'alice', authorization: 'Bearer worker-test-token' } },
+    );
     oversizedStatus = await statusResponse.json();
   }
   assert.equal(oversizedStatus.status, 'failed', JSON.stringify(oversizedStatus));
@@ -188,7 +220,11 @@ try {
   process.env.RDK_SIM2REAL_TRAIN_EXECUTABLE = '';
   const blocked = await fetch(`${base}/train`, {
     method: 'POST',
-    headers: { 'content-type': 'application/json', 'x-sim2real-account': 'alice', authorization: 'Bearer worker-test-token' },
+    headers: {
+      'content-type': 'application/json',
+      'x-sim2real-account': 'alice',
+      authorization: 'Bearer worker-test-token',
+    },
     body: JSON.stringify({ ...request, model: { modelId: 'microduck-blocked', version: 'v1' } }),
   });
   assert.equal(blocked.status, 503);
@@ -212,7 +248,9 @@ try {
   );
   assert.equal(recoveredStatus.status, 200);
   assert.equal((await recoveredStatus.json()).status, 'completed');
-  console.log('[local-training-worker] PASS — external engine result is required; unconfigured mode fails closed');
+  console.log(
+    '[local-training-worker] PASS — external engine result is required; unconfigured mode fails closed',
+  );
 } finally {
   // Node's fetch keeps an idle connection alive; explicitly drain it so this
   // standalone contract test never leaves the test runner hanging.

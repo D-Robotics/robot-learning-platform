@@ -57,8 +57,8 @@ export interface Sim2RealRobogoRunResult {
 export function isSim2RealRunnerOutcomeUnknown(error: unknown): boolean {
   return Boolean(
     error &&
-      typeof error === 'object' &&
-      (error as { outcomeUnknown?: unknown }).outcomeUnknown === true,
+    typeof error === 'object' &&
+    (error as { outcomeUnknown?: unknown }).outcomeUnknown === true,
   );
 }
 
@@ -71,8 +71,8 @@ export function isSim2RealRunnerOutcomeUnknown(error: unknown): boolean {
 export function isSim2RealRunnerNotFound(error: unknown): boolean {
   return Boolean(
     error &&
-      typeof error === 'object' &&
-      (error as { runnerNotFound?: unknown }).runnerNotFound === true,
+    typeof error === 'object' &&
+    (error as { runnerNotFound?: unknown }).runnerNotFound === true,
   );
 }
 
@@ -88,7 +88,9 @@ function runnerNotFoundError(status: number): Error {
 
 function unknownOutcomeError(error: unknown): Error {
   if (isSim2RealRunnerOutcomeUnknown(error)) return error as Error;
-  const wrapped = new Error(error instanceof Error ? error.message : String(error ?? 'runner request failed'));
+  const wrapped = new Error(
+    error instanceof Error ? error.message : String(error ?? 'runner request failed'),
+  );
   wrapped.name = 'Sim2RealRunnerOutcomeUnknownError';
   wrapped.cause = error;
   Object.defineProperty(wrapped, 'outcomeUnknown', {
@@ -132,7 +134,10 @@ function isPrivateHttpHost(hostname: string): boolean {
   return /^fc[0-9a-f]{2}:/i.test(host) || /^fd[0-9a-f]{2}:/i.test(host);
 }
 
-export function normalizeRunnerUrl(raw: string | undefined, options: { localHttp?: boolean } = {}): string {
+export function normalizeRunnerUrl(
+  raw: string | undefined,
+  options: { localHttp?: boolean } = {},
+): string {
   const value = String(raw ?? process.env.RDK_SIM2REAL_ROBOGO_RUNNER_URL ?? '')
     .trim()
     .replace(/\/+$/, '');
@@ -146,9 +151,7 @@ export function normalizeRunnerUrl(raw: string | undefined, options: { localHttp
     throw new Sim2RealError('sim2real_robogo_runner_url_invalid');
   }
   const localHttp =
-    parsed.protocol === 'http:' &&
-    options.localHttp === true &&
-    isPrivateHttpHost(parsed.hostname);
+    parsed.protocol === 'http:' && options.localHttp === true && isPrivateHttpHost(parsed.hostname);
   if (parsed.protocol !== 'https:' && !localHttp) {
     throw new Sim2RealError('sim2real_robogo_runner_url_must_be_https');
   }
@@ -217,13 +220,16 @@ function safeAccountId(raw: string): string {
 function safeIdempotencyKey(raw: unknown): string | undefined {
   if (raw == null || raw === '') return undefined;
   const key = String(raw).trim();
-  if (!SAFE_IDEMPOTENCY_KEY.test(key)) throw new Sim2RealError('sim2real_runner_idempotency_invalid');
+  if (!SAFE_IDEMPOTENCY_KEY.test(key))
+    throw new Sim2RealError('sim2real_runner_idempotency_invalid');
   return key;
 }
 
 function boundedTimeout(raw: unknown): number {
   const value = Number(raw ?? DEFAULT_TIMEOUT_MS);
-  return Number.isFinite(value) ? Math.min(60_000, Math.max(3_000, Math.round(value))) : DEFAULT_TIMEOUT_MS;
+  return Number.isFinite(value)
+    ? Math.min(60_000, Math.max(3_000, Math.round(value)))
+    : DEFAULT_TIMEOUT_MS;
 }
 
 async function boundedResponseText(response: Response): Promise<string> {
@@ -260,8 +266,7 @@ function safeCheckpoint(value: unknown): Sim2RealCheckpointRef | undefined {
   const artifactRef = safeText(source.artifactRef, 260);
   const rawIteration = source.iteration == null ? undefined : Number(source.iteration);
   if (!/^[a-zA-Z0-9][a-zA-Z0-9._-]{0,79}$/.test(checkpointId)) return undefined;
-  if (!SAFE_ARTIFACT_REF.test(artifactRef))
-    return undefined;
+  if (!SAFE_ARTIFACT_REF.test(artifactRef)) return undefined;
   if (
     rawIteration != null &&
     (!Number.isSafeInteger(rawIteration) || rawIteration < 0 || rawIteration > 2_000_000)
@@ -376,27 +381,25 @@ function parseRunResult(payload: unknown): Sim2RealRobogoRunResult {
     requestedStatus === 'queued' || requestedStatus === 'pending'
       ? 'queued'
       : requestedStatus === 'running'
-      ? 'running'
-      : requestedStatus === 'completed' ||
-          requestedStatus === 'success' ||
-          requestedStatus === 'succeeded' ||
-          requestedStatus === 'done'
-        ? 'completed'
-        : requestedStatus === 'failed' ||
-            requestedStatus === 'error' ||
-            requestedStatus === 'cancelled' ||
-            requestedStatus === 'canceled'
-          ? 'failed'
-      : null;
+        ? 'running'
+        : requestedStatus === 'completed' ||
+            requestedStatus === 'success' ||
+            requestedStatus === 'succeeded' ||
+            requestedStatus === 'done'
+          ? 'completed'
+          : requestedStatus === 'failed' ||
+              requestedStatus === 'error' ||
+              requestedStatus === 'cancelled' ||
+              requestedStatus === 'canceled'
+            ? 'failed'
+            : null;
   if (!status) throw new Sim2RealError('sim2real_robogo_runner_status_invalid');
   const launchUrlValue = safeText(source.launchUrl ?? source.url, 500);
   const launchUrl =
     launchUrlValue && sameOriginOrHttps(launchUrlValue) ? launchUrlValue : undefined;
   const externalRunId = safeText(source.externalRunId ?? source.runId ?? source.id, 120);
   const validExternalRunId =
-    !externalRunId || /^[a-zA-Z0-9][a-zA-Z0-9._-]{0,119}$/.test(externalRunId)
-      ? externalRunId
-      : '';
+    !externalRunId || /^[a-zA-Z0-9][a-zA-Z0-9._-]{0,119}$/.test(externalRunId) ? externalRunId : '';
   if ((status === 'queued' || status === 'running') && !validExternalRunId) {
     throw new Sim2RealError('sim2real_robogo_runner_run_id_missing');
   }
@@ -413,7 +416,9 @@ function parseRunResult(payload: unknown): Sim2RealRobogoRunResult {
   // record can surface GPU usage; only an explicit boolean is trusted.
   const runnerCuda = source.cuda === true || source.cuda === false ? source.cuda : undefined;
   const metricsWithCuda =
-    metrics && runnerCuda != null && metrics.cuda == null ? { ...metrics, cuda: runnerCuda } : metrics;
+    metrics && runnerCuda != null && metrics.cuda == null
+      ? { ...metrics, cuda: runnerCuda }
+      : metrics;
   return {
     status,
     ...(validExternalRunId ? { externalRunId: validExternalRunId } : {}),

@@ -40,21 +40,30 @@ function routeHandler(router: Router, method: 'get' | 'post', path: string): Han
 function buildRouter(
   deps: {
     getRun?: (runId: string, owner?: string) => Promise<unknown>;
-    fetchRunArtifact?: (run: unknown, owner?: string) => Promise<{ bytes: Buffer; sha256: string } | null>;
+    fetchRunArtifact?: (
+      run: unknown,
+      owner?: string,
+    ) => Promise<{ bytes: Buffer; sha256: string } | null>;
   } = {},
 ) {
   const router = {} as Router;
   router.stack = [];
   router.get = (path: string, ...handlers: Handler[]) => {
-    router.stack.push({ route: { path, methods: { get: true }, stack: handlers.map((h) => ({ handle: h })) } } as never);
+    router.stack.push({
+      route: { path, methods: { get: true }, stack: handlers.map((h) => ({ handle: h })) },
+    } as never);
     return router;
   };
   router.post = (path: string, ...handlers: Handler[]) => {
-    router.stack.push({ route: { path, methods: { post: true }, stack: handlers.map((h) => ({ handle: h })) } } as never);
+    router.stack.push({
+      route: { path, methods: { post: true }, stack: handlers.map((h) => ({ handle: h })) },
+    } as never);
     return router;
   };
   router.put = (path: string, ...handlers: Handler[]) => {
-    router.stack.push({ route: { path, methods: { put: true }, stack: handlers.map((h) => ({ handle: h })) } } as never);
+    router.stack.push({
+      route: { path, methods: { put: true }, stack: handlers.map((h) => ({ handle: h })) },
+    } as never);
     return router;
   };
   registerSim2RealBoardStationRoutes(router, {
@@ -67,7 +76,10 @@ function buildRouter(
   return router;
 }
 
-function call(handler: Handler, init: { method?: string; body?: unknown; query?: Record<string, string> } = {}) {
+function call(
+  handler: Handler,
+  init: { method?: string; body?: unknown; query?: Record<string, string> } = {},
+) {
   return new Promise<{ statusCode: number; body?: unknown; ended: boolean }>((resolve, reject) => {
     const response = {
       statusCode: 200,
@@ -78,7 +90,9 @@ function call(handler: Handler, init: { method?: string; body?: unknown; query?:
       },
       setHeader() {},
       writeHead() {},
-      write() { return true; },
+      write() {
+        return true;
+      },
       end() {
         response.ended = true;
       },
@@ -164,10 +178,13 @@ describe('board-station policy runtime proxy', () => {
   it('refuses load while the platform policy switch is off, without calling the agent', async () => {
     const fetchMock = vi.spyOn(globalThis, 'fetch');
     const router = buildRouter();
-    const res = await call(routeHandler(router, 'post', '/api/sim2real/board-station/policy/load'), {
-      method: 'POST',
-      body: { path: 'policy.onnx' },
-    });
+    const res = await call(
+      routeHandler(router, 'post', '/api/sim2real/board-station/policy/load'),
+      {
+        method: 'POST',
+        body: { path: 'policy.onnx' },
+      },
+    );
     expect(res.statusCode).toBe(409);
     expect(res.body).toMatchObject({ error: 'SIM2REAL_STATION_POLICY_DISABLED' });
     expect(fetchMock).not.toHaveBeenCalled();
@@ -177,11 +194,20 @@ describe('board-station policy runtime proxy', () => {
     process.env.RDK_SIM2REAL_STATION_POLICY_ENABLED = '1';
     const fetchMock = vi.spyOn(globalThis, 'fetch');
     const router = buildRouter();
-    for (const path of ['../etc/passwd', '/abs/path.onnx', 'nested/dir.onnx', 'no-extension', 'a b.onnx']) {
-      const res = await call(routeHandler(router, 'post', '/api/sim2real/board-station/policy/load'), {
-        method: 'POST',
-        body: { path },
-      });
+    for (const path of [
+      '../etc/passwd',
+      '/abs/path.onnx',
+      'nested/dir.onnx',
+      'no-extension',
+      'a b.onnx',
+    ]) {
+      const res = await call(
+        routeHandler(router, 'post', '/api/sim2real/board-station/policy/load'),
+        {
+          method: 'POST',
+          body: { path },
+        },
+      );
       expect(res.statusCode).toBe(400);
       expect(res.body).toMatchObject({ error: 'SIM2REAL_STATION_POLICY_INVALID_PATH' });
     }
@@ -195,14 +221,18 @@ describe('board-station policy runtime proxy', () => {
       policy: { state: 'ready', model: { inputDim: 61, outputDim: 14 } },
     });
     const router = buildRouter();
-    const res = await call(routeHandler(router, 'post', '/api/sim2real/board-station/policy/load'), {
-      method: 'POST',
-      body: { path: 'ppo-policy.onnx' },
-    });
+    const res = await call(
+      routeHandler(router, 'post', '/api/sim2real/board-station/policy/load'),
+      {
+        method: 'POST',
+        body: { path: 'ppo-policy.onnx' },
+      },
+    );
     expect(res.statusCode).toBe(200);
-    const sent = JSON.parse(
-      String((fetchMock.mock.calls[0] as unknown[])[1]!.body),
-    ) as Record<string, string>;
+    const sent = JSON.parse(String((fetchMock.mock.calls[0] as unknown[])[1]!.body)) as Record<
+      string,
+      string
+    >;
     expect(sent).toEqual({ path: 'ppo-policy.onnx' });
   });
 
@@ -210,10 +240,13 @@ describe('board-station policy runtime proxy', () => {
     process.env.RDK_SIM2REAL_STATION_POLICY_ENABLED = '1';
     const fetchMock = vi.spyOn(globalThis, 'fetch');
     const router = buildRouter();
-    const res = await call(routeHandler(router, 'post', '/api/sim2real/board-station/policy/start'), {
-      method: 'POST',
-      body: { direction: 0.5 },
-    });
+    const res = await call(
+      routeHandler(router, 'post', '/api/sim2real/board-station/policy/start'),
+      {
+        method: 'POST',
+        body: { direction: 0.5 },
+      },
+    );
     expect(res.statusCode).toBe(409);
     expect(res.body).toMatchObject({ error: 'SIM2REAL_STATION_DRIVE_DISABLED' });
     expect(fetchMock).not.toHaveBeenCalled();
@@ -227,14 +260,18 @@ describe('board-station policy runtime proxy', () => {
       policy: { state: 'running', published: 12 },
     });
     const router = buildRouter();
-    const res = await call(routeHandler(router, 'post', '/api/sim2real/board-station/policy/start'), {
-      method: 'POST',
-      body: { direction: 42.0 },
-    });
+    const res = await call(
+      routeHandler(router, 'post', '/api/sim2real/board-station/policy/start'),
+      {
+        method: 'POST',
+        body: { direction: 42.0 },
+      },
+    );
     expect(res.statusCode).toBe(200);
-    const sent = JSON.parse(
-      String((fetchMock.mock.calls[0] as unknown[])[1]!.body),
-    ) as Record<string, number>;
+    const sent = JSON.parse(String((fetchMock.mock.calls[0] as unknown[])[1]!.body)) as Record<
+      string,
+      number
+    >;
     expect(sent).toEqual({ direction: 1 });
   });
 
@@ -243,10 +280,13 @@ describe('board-station policy runtime proxy', () => {
     process.env.RDK_SIM2REAL_STATION_DRIVE_ENABLED = '1';
     const fetchMock = mockAgent(200, { ok: true, policy: { state: 'running' } });
     const router = buildRouter();
-    const res = await call(routeHandler(router, 'post', '/api/sim2real/board-station/policy/start'), {
-      method: 'POST',
-      body: { direction: 0.25, goalX: 1.2, goalY: -0.4 },
-    });
+    const res = await call(
+      routeHandler(router, 'post', '/api/sim2real/board-station/policy/start'),
+      {
+        method: 'POST',
+        body: { direction: 0.25, goalX: 1.2, goalY: -0.4 },
+      },
+    );
     expect(res.statusCode).toBe(200);
     const sent = JSON.parse(String((fetchMock.mock.calls[0] as unknown[])[1]!.body));
     expect(sent).toEqual({ direction: 0.25, goalX: 1.2, goalY: -0.4 });
@@ -262,10 +302,13 @@ describe('board-station policy runtime proxy', () => {
       policy: { state: 'idle' },
     });
     const router = buildRouter();
-    const res = await call(routeHandler(router, 'post', '/api/sim2real/board-station/policy/start'), {
-      method: 'POST',
-      body: { direction: 0.1 },
-    });
+    const res = await call(
+      routeHandler(router, 'post', '/api/sim2real/board-station/policy/start'),
+      {
+        method: 'POST',
+        body: { direction: 0.1 },
+      },
+    );
     expect(res.statusCode).toBe(409);
     expect(res.body).toMatchObject({ reason: 'no-model' });
   });
@@ -276,9 +319,12 @@ describe('board-station policy runtime proxy', () => {
       policy: { state: 'idle', lastOp: { op: 'stop', ok: true } },
     });
     const router = buildRouter();
-    const res = await call(routeHandler(router, 'post', '/api/sim2real/board-station/policy/stop'), {
-      method: 'POST',
-    });
+    const res = await call(
+      routeHandler(router, 'post', '/api/sim2real/board-station/policy/stop'),
+      {
+        method: 'POST',
+      },
+    );
     expect(res.statusCode).toBe(200);
     expect(fetchMock).toHaveBeenCalledWith(
       'http://127.0.0.1:19100/v1/station/policy/stop',
@@ -289,9 +335,12 @@ describe('board-station policy runtime proxy', () => {
   it('reports an unreachable agent for stop as retryable 502 (watchdog floor noted)', async () => {
     vi.spyOn(globalThis, 'fetch').mockRejectedValue(new Error('fetch failed'));
     const router = buildRouter();
-    const res = await call(routeHandler(router, 'post', '/api/sim2real/board-station/policy/stop'), {
-      method: 'POST',
-    });
+    const res = await call(
+      routeHandler(router, 'post', '/api/sim2real/board-station/policy/stop'),
+      {
+        method: 'POST',
+      },
+    );
     expect(res.statusCode).toBe(502);
     expect(res.body).toMatchObject({ error: 'SIM2REAL_BOARD_AGENT_UNREACHABLE', retryable: true });
   });
@@ -306,7 +355,12 @@ describe('board-station policy runtime proxy', () => {
       status: 'completed',
       mock: false,
       externalRunId: 'local-run-1',
-      artifact: { artifactId: 'policy', artifactRef: 'artifact://starter/x/policy.onnx', format: 'onnx', sha256: artifactSha },
+      artifact: {
+        artifactId: 'policy',
+        artifactRef: 'artifact://starter/x/policy.onnx',
+        format: 'onnx',
+        sha256: artifactSha,
+      },
     };
 
     it('refuses staging while the platform policy switch is off', async () => {
@@ -315,10 +369,13 @@ describe('board-station policy runtime proxy', () => {
         getRun: async () => completedRun,
         fetchRunArtifact: async () => ({ bytes: artifactBytes, sha256: artifactSha }),
       });
-      const res = await call(routeHandler(router, 'post', '/api/sim2real/board-station/policy/stage'), {
-        method: 'POST',
-        body: { runId: 'run-stage-1' },
-      });
+      const res = await call(
+        routeHandler(router, 'post', '/api/sim2real/board-station/policy/stage'),
+        {
+          method: 'POST',
+          body: { runId: 'run-stage-1' },
+        },
+      );
       expect(res.statusCode).toBe(409);
       expect(res.body).toMatchObject({ error: 'SIM2REAL_STATION_POLICY_DISABLED' });
       expect(fetchMock).not.toHaveBeenCalled();
@@ -330,10 +387,13 @@ describe('board-station policy runtime proxy', () => {
         getRun: async () => ({ ...completedRun, mock: true }),
         fetchRunArtifact: async () => null,
       });
-      const res = await call(routeHandler(router, 'post', '/api/sim2real/board-station/policy/stage'), {
-        method: 'POST',
-        body: { runId: 'run-stage-1' },
-      });
+      const res = await call(
+        routeHandler(router, 'post', '/api/sim2real/board-station/policy/stage'),
+        {
+          method: 'POST',
+          body: { runId: 'run-stage-1' },
+        },
+      );
       expect(res.statusCode).toBe(409);
       expect(res.body).toMatchObject({ error: 'SIM2REAL_STATION_POLICY_RUN_NOT_STAGED' });
     });
@@ -344,10 +404,13 @@ describe('board-station policy runtime proxy', () => {
         getRun: async () => completedRun,
         fetchRunArtifact: async () => ({ bytes: artifactBytes, sha256: 'f'.repeat(64) }),
       });
-      const res = await call(routeHandler(router, 'post', '/api/sim2real/board-station/policy/stage'), {
-        method: 'POST',
-        body: { runId: 'run-stage-1' },
-      });
+      const res = await call(
+        routeHandler(router, 'post', '/api/sim2real/board-station/policy/stage'),
+        {
+          method: 'POST',
+          body: { runId: 'run-stage-1' },
+        },
+      );
       expect(res.statusCode).toBe(409);
       expect(res.body).toMatchObject({ error: 'SIM2REAL_STATION_POLICY_ARTIFACT_DIGEST_MISMATCH' });
     });
@@ -365,10 +428,13 @@ describe('board-station policy runtime proxy', () => {
         getRun: async () => completedRun,
         fetchRunArtifact: async () => ({ bytes: artifactBytes, sha256: artifactSha }),
       });
-      const res = await call(routeHandler(router, 'post', '/api/sim2real/board-station/policy/stage'), {
-        method: 'POST',
-        body: { runId: 'run-stage-1' },
-      });
+      const res = await call(
+        routeHandler(router, 'post', '/api/sim2real/board-station/policy/stage'),
+        {
+          method: 'POST',
+          body: { runId: 'run-stage-1' },
+        },
+      );
       expect(res.statusCode).toBe(200);
       expect(res.body).toMatchObject({ ok: true, staged: true, path: 'run-stage-1.onnx' });
       const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
@@ -390,10 +456,13 @@ describe('board-station policy runtime proxy', () => {
         getRun: async () => completedRun,
         fetchRunArtifact: async () => ({ bytes: artifactBytes, sha256: artifactSha }),
       });
-      const res = await call(routeHandler(router, 'post', '/api/sim2real/board-station/policy/stage'), {
-        method: 'POST',
-        body: { runId: 'run-stage-1', filename: '../escape.onnx' },
-      });
+      const res = await call(
+        routeHandler(router, 'post', '/api/sim2real/board-station/policy/stage'),
+        {
+          method: 'POST',
+          body: { runId: 'run-stage-1', filename: '../escape.onnx' },
+        },
+      );
       expect(res.statusCode).toBe(400);
       expect(res.body).toMatchObject({ error: 'SIM2REAL_STATION_POLICY_INVALID_FILENAME' });
       expect(fetchMock).not.toHaveBeenCalled();
@@ -406,7 +475,9 @@ describe('board-station policy runtime proxy', () => {
         policies: [{ name: 'run-stage-1.onnx', bytes: artifactBytes.length, sha256: artifactSha }],
       });
       const router = buildRouter();
-      const res = await call(routeHandler(router, 'get', '/api/sim2real/board-station/policy/files'));
+      const res = await call(
+        routeHandler(router, 'get', '/api/sim2real/board-station/policy/files'),
+      );
       expect(res.statusCode).toBe(200);
       expect(res.body).toMatchObject({ ok: true, policies: [{ name: 'run-stage-1.onnx' }] });
       expect(fetchMock).toHaveBeenCalledWith(

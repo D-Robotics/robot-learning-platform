@@ -20,7 +20,9 @@ const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..'
 const fetchFn = globalThis.fetch.bind(globalThis);
 const children = [];
 
-function sleep(ms) { return new Promise((resolve) => setTimeout(resolve, ms)); }
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
 
 function freePort() {
   return new Promise((resolve, reject) => {
@@ -40,7 +42,12 @@ function buildEnv(overrides = {}) {
   for (const key of Object.keys(environment)) {
     if (/^(?:RDK_SIM2REAL|RDK_STUDIO|SSO)_/i.test(key)) delete environment[key];
   }
-  return { ...environment, NO_PROXY: '127.0.0.1,localhost', no_proxy: '127.0.0.1,localhost', ...overrides };
+  return {
+    ...environment,
+    NO_PROXY: '127.0.0.1,localhost',
+    no_proxy: '127.0.0.1,localhost',
+    ...overrides,
+  };
 }
 
 function spawnService(label, command, args, env) {
@@ -65,7 +72,13 @@ async function fetchJson(url, init) {
   const response = await fetchFn(url, init);
   const text = await response.text();
   let body = null;
-  if (text) { try { body = JSON.parse(text); } catch { body = { raw: text.slice(0, 200) }; } }
+  if (text) {
+    try {
+      body = JSON.parse(text);
+    } catch {
+      body = { raw: text.slice(0, 200) };
+    }
+  }
   return { response, body };
 }
 
@@ -76,20 +89,29 @@ async function waitForJson(url, { expectStatus = 200, timeoutMs = 30_000, label 
     try {
       last = await fetchJson(url, { headers: { accept: 'application/json' } });
       if (last.response.status === expectStatus) return last;
-    } catch (error) { last = error; }
+    } catch (error) {
+      last = error;
+    }
     await sleep(200);
   }
-  throw new Error(`timeout waiting for ${label} (last: ${String(last && last.response ? last.response.status : last)})`);
+  throw new Error(
+    `timeout waiting for ${label} (last: ${String(last && last.response ? last.response.status : last)})`,
+  );
 }
 
 async function agent(base, pathName, init) {
-  return fetchJson(`${base}${pathName}`, { headers: { accept: 'application/json', ...init?.headers }, ...init });
+  return fetchJson(`${base}${pathName}`, {
+    headers: { accept: 'application/json', ...init?.headers },
+    ...init,
+  });
 }
 
 async function pollRun(base, runId, { timeoutMs = 45_000 } = {}) {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
-    const { response, body } = await fetchJson(`${base}/api/sim2real/agent/runs/${encodeURIComponent(runId)}`);
+    const { response, body } = await fetchJson(
+      `${base}/api/sim2real/agent/runs/${encodeURIComponent(runId)}`,
+    );
     assert.equal(response.status, 200, `run poll failed: ${response.status}`);
     if (['completed', 'failed', 'blocked'].includes(body.run?.status)) return body.run;
     await sleep(500);
@@ -108,66 +130,99 @@ try {
 
   // Same model manifest + instant engine as the local smoke so the
   // full-loop conversation exercises a real training run.
-  const manifest = JSON.parse(await readFile(path.join(repoRoot, 'examples/rdk-duck-policy-manifest.json'), 'utf8'));
+  const manifest = JSON.parse(
+    await readFile(path.join(repoRoot, 'examples/rdk-duck-policy-manifest.json'), 'utf8'),
+  );
   manifest.modelId = 'rdk-duck-agent-e2e';
   manifest.displayName = 'RDK Duck agent e2e';
   manifest.version = '0.1.0-agent-e2e';
-  await writeFile(path.join(storageDir, 'devices.json'), JSON.stringify([
-    { id: 'x5-agent', host: '127.0.0.1', username: 'sim2real', status: 'connected', lastCheckedAt: new Date().toISOString() },
-  ], null, 2));
+  await writeFile(
+    path.join(storageDir, 'devices.json'),
+    JSON.stringify(
+      [
+        {
+          id: 'x5-agent',
+          host: '127.0.0.1',
+          username: 'sim2real',
+          status: 'connected',
+          lastCheckedAt: new Date().toISOString(),
+        },
+      ],
+      null,
+      2,
+    ),
+  );
   const engineScript = path.join(engineDir, 'engine.mjs');
-  await writeFile(engineScript, [
-    `import { readFile, writeFile } from 'node:fs/promises';`,
-    `const request = JSON.parse(await readFile(process.env.RDK_SIM2REAL_REQUEST_FILE, 'utf8'));`,
-    `if (request.model?.modelId !== 'rdk-duck-agent-e2e') throw new Error('unexpected modelId');`,
-    `await new Promise((resolve) => setTimeout(resolve, 150));`,
-    `await writeFile(process.env.RDK_SIM2REAL_RESULT_FILE, JSON.stringify({`,
-    `  checkpoint: { checkpointId: 'cp-1', artifactRef: 'artifact://smoke/rdk-duck/cp-1', iteration: 1 },`,
-    `  artifact: { artifactId: 'policy', artifactRef: 'artifact://smoke/rdk-duck/policy.onnx', kind: 'source', format: 'onnx', deployable: true },`,
-    `  metrics: { reward: 1.5, cuda: false },`,
-    `  deployable: true,`,
-    `  cuda: false,`,
-    `}));`,
-  ].join('\n'));
+  await writeFile(
+    engineScript,
+    [
+      `import { readFile, writeFile } from 'node:fs/promises';`,
+      `const request = JSON.parse(await readFile(process.env.RDK_SIM2REAL_REQUEST_FILE, 'utf8'));`,
+      `if (request.model?.modelId !== 'rdk-duck-agent-e2e') throw new Error('unexpected modelId');`,
+      `await new Promise((resolve) => setTimeout(resolve, 150));`,
+      `await writeFile(process.env.RDK_SIM2REAL_RESULT_FILE, JSON.stringify({`,
+      `  checkpoint: { checkpointId: 'cp-1', artifactRef: 'artifact://smoke/rdk-duck/cp-1', iteration: 1 },`,
+      `  artifact: { artifactId: 'policy', artifactRef: 'artifact://smoke/rdk-duck/policy.onnx', kind: 'source', format: 'onnx', deployable: true },`,
+      `  metrics: { reward: 1.5, cuda: false },`,
+      `  deployable: true,`,
+      `  cuda: false,`,
+      `}));`,
+    ].join('\n'),
+  );
 
   const workerPort = await freePort();
   const boardAgentPort = await freePort();
   const webPort = await freePort();
   const runnerToken = 'agent-e2e-runner-token';
 
-  spawnService('worker', process.execPath, [path.join(repoRoot, 'services/sim2real-web/local-training-worker.mjs')], {
-    RDK_SIM2REAL_LOCAL_WORKER_HOST: '127.0.0.1',
-    RDK_SIM2REAL_LOCAL_WORKER_PORT: String(workerPort),
-    RDK_SIM2REAL_LOCAL_WORKER_DATA_DIR: workerDataDir,
-    RDK_SIM2REAL_LOCAL_RUNNER_TOKEN: runnerToken,
-    RDK_SIM2REAL_TRAIN_EXECUTABLE: process.execPath,
-    RDK_SIM2REAL_TRAIN_ARGS_JSON: JSON.stringify([engineScript]),
-    RDK_SIM2REAL_TRAIN_TIMEOUT_MS: '30000',
-    RDK_SIM2REAL_LOCAL_RUNNER_MODE: '',
-  });
-  spawnService('board-agent', process.execPath, [path.join(repoRoot, 'services/sim2real-web/local-board-agent.mjs')], {
-    RDK_SIM2REAL_BOARD_AGENT_BIND_HOST: '127.0.0.1',
-    RDK_SIM2REAL_BOARD_AGENT_PORT: String(boardAgentPort),
-    RDK_SIM2REAL_BOARD_AGENT_TOKEN: '',
-    RDK_SIM2REAL_BOARD_AGENT_ARCH: 'aarch64',
-    RDK_SIM2REAL_BOARD_AGENT_KERNEL: '6.1.0-rdk-agent-e2e',
-  });
-  spawnService('web', process.execPath, ['--import', 'tsx/esm', path.join(repoRoot, 'services/sim2real-web/server.ts')], {
-    RDK_SIM2REAL_BIND_HOST: '127.0.0.1',
-    RDK_SIM2REAL_PORT: String(webPort),
-    RDK_SIM2REAL_STORAGE_DIR: storageDir,
-    RDK_SIM2REAL_DEPLOYMENT: 'local',
-    RDK_SIM2REAL_SSO_REQUIRED: '0',
-    RDK_SIM2REAL_SSO_ENABLED: '0',
-    RDK_SIM2REAL_AUTH_MODE: '',
-    RDK_STUDIO_DEPLOYMENT_PROFILE: '',
-    RDK_SIM2REAL_REQUIRE_MICRODUCK: '0',
-    RDK_SIM2REAL_LOCAL_RUNNER_URL: `http://127.0.0.1:${workerPort}/train`,
-    RDK_SIM2REAL_LOCAL_RUNNER_TOKEN: runnerToken,
-    RDK_SIM2REAL_LOCAL_RUNNER_MODE: '',
-    RDK_SIM2REAL_BOARD_AGENT_URL: `http://127.0.0.1:${boardAgentPort}`,
-    RDK_SIM2REAL_BOARD_AGENT_TOKEN: '',
-  });
+  spawnService(
+    'worker',
+    process.execPath,
+    [path.join(repoRoot, 'services/sim2real-web/local-training-worker.mjs')],
+    {
+      RDK_SIM2REAL_LOCAL_WORKER_HOST: '127.0.0.1',
+      RDK_SIM2REAL_LOCAL_WORKER_PORT: String(workerPort),
+      RDK_SIM2REAL_LOCAL_WORKER_DATA_DIR: workerDataDir,
+      RDK_SIM2REAL_LOCAL_RUNNER_TOKEN: runnerToken,
+      RDK_SIM2REAL_TRAIN_EXECUTABLE: process.execPath,
+      RDK_SIM2REAL_TRAIN_ARGS_JSON: JSON.stringify([engineScript]),
+      RDK_SIM2REAL_TRAIN_TIMEOUT_MS: '30000',
+      RDK_SIM2REAL_LOCAL_RUNNER_MODE: '',
+    },
+  );
+  spawnService(
+    'board-agent',
+    process.execPath,
+    [path.join(repoRoot, 'services/sim2real-web/local-board-agent.mjs')],
+    {
+      RDK_SIM2REAL_BOARD_AGENT_BIND_HOST: '127.0.0.1',
+      RDK_SIM2REAL_BOARD_AGENT_PORT: String(boardAgentPort),
+      RDK_SIM2REAL_BOARD_AGENT_TOKEN: '',
+      RDK_SIM2REAL_BOARD_AGENT_ARCH: 'aarch64',
+      RDK_SIM2REAL_BOARD_AGENT_KERNEL: '6.1.0-rdk-agent-e2e',
+    },
+  );
+  spawnService(
+    'web',
+    process.execPath,
+    ['--import', 'tsx/esm', path.join(repoRoot, 'services/sim2real-web/server.ts')],
+    {
+      RDK_SIM2REAL_BIND_HOST: '127.0.0.1',
+      RDK_SIM2REAL_PORT: String(webPort),
+      RDK_SIM2REAL_STORAGE_DIR: storageDir,
+      RDK_SIM2REAL_DEPLOYMENT: 'local',
+      RDK_SIM2REAL_SSO_REQUIRED: '0',
+      RDK_SIM2REAL_SSO_ENABLED: '0',
+      RDK_SIM2REAL_AUTH_MODE: '',
+      RDK_STUDIO_DEPLOYMENT_PROFILE: '',
+      RDK_SIM2REAL_REQUIRE_MICRODUCK: '0',
+      RDK_SIM2REAL_LOCAL_RUNNER_URL: `http://127.0.0.1:${workerPort}/train`,
+      RDK_SIM2REAL_LOCAL_RUNNER_TOKEN: runnerToken,
+      RDK_SIM2REAL_LOCAL_RUNNER_MODE: '',
+      RDK_SIM2REAL_BOARD_AGENT_URL: `http://127.0.0.1:${boardAgentPort}`,
+      RDK_SIM2REAL_BOARD_AGENT_TOKEN: '',
+    },
+  );
 
   const base = `http://127.0.0.1:${webPort}`;
   await waitForJson(`${base}/healthz`, { label: 'web health' });
@@ -183,14 +238,19 @@ try {
   console.log('[agent-e2e] model registered');
 
   // Board detect is a prerequisite for deployment plans (same as the smoke).
-  const detect = await agent(base, `/api/devices/x5-agent/board/detect?persist=true`, { method: 'POST' });
+  const detect = await agent(base, `/api/devices/x5-agent/board/detect?persist=true`, {
+    method: 'POST',
+  });
   assert.equal(detect.response.status, 200);
   assert.equal(detect.body.ok, true);
   console.log('[agent-e2e] board detect persisted');
 
   // Which model will the agent's training tool actually pick?
   const overview = (await agent(base, '/api/sim2real/overview')).body;
-  console.log('[agent-e2e] overview models:', (overview.models ?? []).map((m) => `${m.id}:${m.manifest?.modelId}`).join(', '));
+  console.log(
+    '[agent-e2e] overview models:',
+    (overview.models ?? []).map((m) => `${m.id}:${m.manifest?.modelId}`).join(', '),
+  );
 
   // --- Case 1: full conversation flow, exactly as the frontend drives it ---
   const planResponse = await agent(base, '/api/sim2real/agent/plan', {
@@ -201,7 +261,9 @@ try {
   assert.equal(planResponse.response.status, 200);
   assert.equal(planResponse.body.plan.intent, 'full-loop');
   const plan = planResponse.body.plan;
-  console.log(`[agent-e2e] plan created: ${plan.steps.length} steps (${plan.steps.map((s) => s.tool).join(', ')})`);
+  console.log(
+    `[agent-e2e] plan created: ${plan.steps.length} steps (${plan.steps.map((s) => s.tool).join(', ')})`,
+  );
 
   const executeResponse = await agent(base, '/api/sim2real/agent/execute', {
     method: 'POST',
@@ -218,8 +280,19 @@ try {
   // is "completed" with drill-marked evidence, never a faked real-machine pass.
   const run = await pollRun(base, runId);
   console.log(`[agent-e2e] full-loop terminal status: ${run.status}`);
-  console.log('[agent-e2e] steps:', run.steps.map((s) => `${s.tool}=${s.status}${s.detail ? `(${s.detail.slice(0, 100)})` : ''}`).join(' | '));
-  console.log('[agent-e2e] last events:', run.events.slice(-3).map((e) => e.text.slice(0, 120)).join(' || '));
+  console.log(
+    '[agent-e2e] steps:',
+    run.steps
+      .map((s) => `${s.tool}=${s.status}${s.detail ? `(${s.detail.slice(0, 100)})` : ''}`)
+      .join(' | '),
+  );
+  console.log(
+    '[agent-e2e] last events:',
+    run.events
+      .slice(-3)
+      .map((e) => e.text.slice(0, 120))
+      .join(' || '),
+  );
   if (run.status === 'failed') {
     const trainingEvidence = run.evidence.find((e) => e.label === 'GPU 训练');
     if (trainingEvidence) {
@@ -231,26 +304,47 @@ try {
   assert.equal(run.status, 'completed');
   const preflightStep = run.steps.find((s) => s.tool === 'deployment.preflight');
   assert.equal(preflightStep.status, 'completed');
-  assert.match(preflightStep.detail, /演练|模拟/, 'mock preflight is labeled as a drill, not real evidence');
+  assert.match(
+    preflightStep.detail,
+    /演练|模拟/,
+    'mock preflight is labeled as a drill, not real evidence',
+  );
   // Training really ran before the preflight.
   const trainStep = run.steps.find((s) => s.tool === 'training.gpu');
   assert.equal(trainStep.status, 'completed');
-  assert.ok(run.evidence.some((e) => e.label === 'GPU 训练' && /completed/.test(e.value)), 'training evidence recorded');
-  assert.ok(run.evidence.some((e) => e.label === 'X5 BoardAgent'), 'board health evidence recorded');
-  assert.ok(run.evidence.some((e) => /演练|模拟/.test(e.label + e.value)), 'preflight evidence is marked as mock drill');
+  assert.ok(
+    run.evidence.some((e) => e.label === 'GPU 训练' && /completed/.test(e.value)),
+    'training evidence recorded',
+  );
+  assert.ok(
+    run.evidence.some((e) => e.label === 'X5 BoardAgent'),
+    'board health evidence recorded',
+  );
+  assert.ok(
+    run.evidence.some((e) => /演练|模拟/.test(e.label + e.value)),
+    'preflight evidence is marked as mock drill',
+  );
   // No actuator path was ever touched.
-  console.log('[agent-e2e] full-loop: training completed, mock preflight labeled as drill, evidence recorded');
+  console.log(
+    '[agent-e2e] full-loop: training completed, mock preflight labeled as drill, evidence recorded',
+  );
 
   // --- Case 2: stop intent end to end ---
-  const stopPlan = (await agent(base, '/api/sim2real/agent/plan', {
-    method: 'POST', headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ message: '急停' }),
-  })).body.plan;
+  const stopPlan = (
+    await agent(base, '/api/sim2real/agent/plan', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ message: '急停' }),
+    })
+  ).body.plan;
   assert.equal(stopPlan.intent, 'stop');
-  const stopRun = (await agent(base, '/api/sim2real/agent/execute', {
-    method: 'POST', headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ plan: stopPlan, approved: true }),
-  })).body.run;
+  const stopRun = (
+    await agent(base, '/api/sim2real/agent/execute', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ plan: stopPlan, approved: true }),
+    })
+  ).body.run;
   const stopFinal = await pollRun(base, stopRun.id);
   assert.equal(stopFinal.status, 'completed');
   console.log('[agent-e2e] stop intent: completed (stop requests sent to mock board)');
@@ -258,7 +352,8 @@ try {
   // --- Case 3: crafted plan with an unknown/actuator tool is rejected ---
   const hostile = { ...plan, steps: [{ ...plan.steps[0], tool: 'board.policy-start' }] };
   const hostileResponse = await agent(base, '/api/sim2real/agent/execute', {
-    method: 'POST', headers: { 'content-type': 'application/json' },
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ plan: hostile, approved: true }),
   });
   assert.equal(hostileResponse.response.status, 400);
@@ -266,9 +361,13 @@ try {
   console.log('[agent-e2e] crafted actuator tool rejected with 400');
 
   // Oversized plan (13 steps > cap of 12).
-  const oversized = { ...plan, steps: Array.from({ length: 13 }, (_, i) => ({ ...plan.steps[0], id: `s${i}` })) };
+  const oversized = {
+    ...plan,
+    steps: Array.from({ length: 13 }, (_, i) => ({ ...plan.steps[0], id: `s${i}` })),
+  };
   const oversizedResponse = await agent(base, '/api/sim2real/agent/execute', {
-    method: 'POST', headers: { 'content-type': 'application/json' },
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ plan: oversized, approved: true }),
   });
   assert.equal(oversizedResponse.response.status, 400);
@@ -281,7 +380,8 @@ try {
   for (let i = 0; i < 205; i += 1) {
     const uniquePlan = { ...stopPlan, id: randomUUID() };
     const response = await agent(base, '/api/sim2real/agent/execute', {
-      method: 'POST', headers: { 'content-type': 'application/json' },
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ plan: uniquePlan, approved: true }),
     });
     assert.equal(response.response.status, 202);
@@ -292,7 +392,9 @@ try {
   assert.equal(oldest.response.status, 404);
   console.log('[agent-e2e] eviction: oldest terminal run dropped after 205 newer runs');
 
-  console.log('[agent-e2e] PASS — conversation flow, honest failure, tool allowlist, plan cap, and eviction all verified');
+  console.log(
+    '[agent-e2e] PASS — conversation flow, honest failure, tool allowlist, plan cap, and eviction all verified',
+  );
 } finally {
   await terminateAll();
   await rm(scratchRoot, { recursive: true, force: true });

@@ -99,9 +99,7 @@ if (pythonFound) {
       (pythonProbes.numpy.status === 0 ? pythonProbes.numpy.stdout.trim() : '缺失') +
       ' · torch ' +
       (pythonProbes.torch.status === 0 ? pythonProbes.torch.stdout.trim() : '缺失'),
-    stackOk
-      ? null
-      : 'python3 -m pip install --user numpy torch（starter-ppo 真实训练需要）',
+    stackOk ? null : 'python3 -m pip install --user numpy torch（starter-ppo 真实训练需要）',
   );
   record(
     'ONNX 导出',
@@ -149,7 +147,9 @@ record(
   '运行台账',
   OPTIONAL,
   'ok',
-  ledgerPath ? '自定义位置 ' + ledgerPath : '默认位置 data/sim2real-ledger.json（demo 使用临时台账）',
+  ledgerPath
+    ? '自定义位置 ' + ledgerPath
+    : '默认位置 data/sim2real-ledger.json（demo 使用临时台账）',
   null,
 );
 
@@ -178,9 +178,7 @@ for (const check of checks) {
   const icon = statusIcon[check.status];
   const color = plain ? '' : statusColor[check.status] || '';
   const level = check.level === REQUIRED ? '' : ' (可选)';
-  console.log(
-    `  ${color}${icon}${reset} ${check.name}${level} — ${check.detail}`,
-  );
+  console.log(`  ${color}${icon}${reset} ${check.name}${level} — ${check.detail}`);
   if (check.hint && check.status !== 'ok') console.log(`      ↳ ${check.hint}`);
 }
 const failed = checks.filter((c) => c.status === 'fail').length;
@@ -195,4 +193,6 @@ if (failed > 0) {
 if (warned > 0) {
   console.log('提醒项不阻塞，但建议处理以获得完整体验（真实训练 / GPU 加速）。');
 }
-console.log('下一步: npm run demo:starter（真实 PPO 训练闭环）或 npm run demo:sim2real（协议演示）。\n');
+console.log(
+  '下一步: npm run demo:starter（真实 PPO 训练闭环）或 npm run demo:sim2real（协议演示）。\n',
+);

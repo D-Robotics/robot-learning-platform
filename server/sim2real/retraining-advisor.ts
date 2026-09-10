@@ -96,7 +96,8 @@ export function adviseRetraining(input: {
   // is failing on the real floor, not just drifting).
   const samples = (input.telemetry ?? []).flatMap((record) => record.samples);
   const doneRatio = samples.length
-    ? samples.filter((sample: Sim2RealTelemetrySample) => sample.done === true).length / samples.length
+    ? samples.filter((sample: Sim2RealTelemetrySample) => sample.done === true).length /
+      samples.length
     : null;
   signals.push({
     id: 'done-ratio',

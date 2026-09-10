@@ -9,7 +9,9 @@ describe('task-pack eval release gate', () => {
       report: {
         taskId: 'originbot-goal-navigation',
         qualityGate: { passed: false, criteria: { minSuccessRate: 0.7, maxCollisionRate: 0.15 } },
-        trained: { envelopes: { nominal: { successRate: 0.83, collisionRate: 0.0, meanReward: 8.8 } } },
+        trained: {
+          envelopes: { nominal: { successRate: 0.83, collisionRate: 0.0, meanReward: 8.8 } },
+        },
       },
     });
     expect(verdict.passed).toBe(true);
@@ -19,9 +21,14 @@ describe('task-pack eval release gate', () => {
   });
 
   it('fails closed on missing report, missing metrics, and weak metrics', () => {
-    expect(validateTaskPackEvalForRelease({ taskId: 't', report: null, requireReport: true }).passed).toBe(false);
     expect(
-      validateTaskPackEvalForRelease({ taskId: 't', report: { taskId: 't', qualityGate: { criteria: { minSuccessRate: 0.7 } } } }).errors,
+      validateTaskPackEvalForRelease({ taskId: 't', report: null, requireReport: true }).passed,
+    ).toBe(false);
+    expect(
+      validateTaskPackEvalForRelease({
+        taskId: 't',
+        report: { taskId: 't', qualityGate: { criteria: { minSuccessRate: 0.7 } } },
+      }).errors,
     ).toContain('nominal envelope metrics missing from eval report');
     const weak = validateTaskPackEvalForRelease({
       taskId: 't',
@@ -57,7 +64,12 @@ describe('task-pack eval release gate', () => {
       report: {
         taskId: 't',
         qualityGate: { criteria: { minSuccessRate: 0.7, maxCollisionRate: 0.15 } },
-        trained: { envelopes: { nominal: { successRate: 0.83, collisionRate: 0.0 }, hard: { successRate: 0.1, collisionRate: 0.9 } } },
+        trained: {
+          envelopes: {
+            nominal: { successRate: 0.83, collisionRate: 0.0 },
+            hard: { successRate: 0.1, collisionRate: 0.9 },
+          },
+        },
       },
     });
     expect(verdict.passed).toBe(true);
@@ -72,17 +84,29 @@ describe('task-pack eval release gate', () => {
       taskId: 't',
       report: {
         taskId: 't',
-        qualityGate: { criteria: { minSuccessRate: 0.7, maxCollisionRate: 0.15, gateOn: 'ciLowerBound' } },
-        trained: { envelopes: { nominal: {
-          successRate: 0.72, collisionRate: 0.02, episodes: 50,
-          successRateCiLow: bounds!.low, successRateCiHigh: bounds!.high,
-          collisionRateCiLow: 0.0, collisionRateCiHigh: 0.1,
-        } } },
+        qualityGate: {
+          criteria: { minSuccessRate: 0.7, maxCollisionRate: 0.15, gateOn: 'ciLowerBound' },
+        },
+        trained: {
+          envelopes: {
+            nominal: {
+              successRate: 0.72,
+              collisionRate: 0.02,
+              episodes: 50,
+              successRateCiLow: bounds!.low,
+              successRateCiHigh: bounds!.high,
+              collisionRateCiLow: 0.0,
+              collisionRateCiHigh: 0.1,
+            },
+          },
+        },
       },
     });
     expect(verdict.gateOn).toBe('ciLowerBound');
     expect(verdict.passed).toBe(false);
-    expect(verdict.errors.some((error) => error.includes('CI low') && error.includes('below gate'))).toBe(true);
+    expect(
+      verdict.errors.some((error) => error.includes('CI low') && error.includes('below gate')),
+    ).toBe(true);
   });
 
   it('passes a CI-gated report whose 50-episode floor clears the gate', () => {
@@ -93,12 +117,22 @@ describe('task-pack eval release gate', () => {
       taskId: 't',
       report: {
         taskId: 't',
-        qualityGate: { criteria: { minSuccessRate: 0.7, maxCollisionRate: 0.15, gateOn: 'ciLowerBound' } },
-        trained: { envelopes: { nominal: {
-          successRate: 0.88, collisionRate: 0.0, episodes: 50,
-          successRateCiLow: success.low, successRateCiHigh: success.high,
-          collisionRateCiLow: collision.low, collisionRateCiHigh: collision.high,
-        } } },
+        qualityGate: {
+          criteria: { minSuccessRate: 0.7, maxCollisionRate: 0.15, gateOn: 'ciLowerBound' },
+        },
+        trained: {
+          envelopes: {
+            nominal: {
+              successRate: 0.88,
+              collisionRate: 0.0,
+              episodes: 50,
+              successRateCiLow: success.low,
+              successRateCiHigh: success.high,
+              collisionRateCiLow: collision.low,
+              collisionRateCiHigh: collision.high,
+            },
+          },
+        },
       },
     });
     expect(verdict.passed).toBe(true);
@@ -126,12 +160,20 @@ describe('task-pack eval release gate', () => {
       report: {
         taskId: 't',
         qualityGate: { criteria: { minSuccessRate: 0.7, gateOn: 'ciLowerBound' } },
-        trained: { envelopes: { nominal: {
-          successRate: 0.88, collisionRate: 0.0, episodes: 50,
-          // Forged floor: the recomputation must catch it.
-          successRateCiLow: 0.95, successRateCiHigh: success.high,
-          collisionRateCiLow: collision.low, collisionRateCiHigh: collision.high,
-        } } },
+        trained: {
+          envelopes: {
+            nominal: {
+              successRate: 0.88,
+              collisionRate: 0.0,
+              episodes: 50,
+              // Forged floor: the recomputation must catch it.
+              successRateCiLow: 0.95,
+              successRateCiHigh: success.high,
+              collisionRateCiLow: collision.low,
+              collisionRateCiHigh: collision.high,
+            },
+          },
+        },
       },
     });
     expect(verdict.passed).toBe(false);
@@ -142,7 +184,7 @@ describe('task-pack eval release gate', () => {
     expect(wilsonBounds(6, 0)).toBeNull();
     const six = wilsonBounds(6, 6)!;
     expect(six.low).toBeGreaterThan(0.5);
-    expect(six.low).toBeLessThan(0.7);  // 0.610: 6 episodes alone cannot certify a 0.7 gate
+    expect(six.low).toBeLessThan(0.7); // 0.610: 6 episodes alone cannot certify a 0.7 gate
     const fifty = wilsonBounds(50, 50)!;
     expect(fifty.low).toBeGreaterThan(six.low);
   });

@@ -23,7 +23,8 @@ export function registerSim2RealPlugin(plugin: Sim2RealPlugin): () => void {
   const id = String(plugin.id ?? '').trim();
   if (!validId(id)) throw new Error('sim2real_plugin_id_invalid');
   if (typeof plugin.onEvent !== 'function') throw new Error('sim2real_plugin_handler_invalid');
-  if (plugins.size >= MAX_PLUGINS && !plugins.has(id)) throw new Error('sim2real_plugin_quota_exceeded');
+  if (plugins.size >= MAX_PLUGINS && !plugins.has(id))
+    throw new Error('sim2real_plugin_quota_exceeded');
   const normalized: Sim2RealPlugin = {
     id,
     events: plugin.events === '*' ? '*' : [...new Set(plugin.events)],
@@ -41,7 +42,10 @@ export function registerSim2RealPlugin(plugin: Sim2RealPlugin): () => void {
   };
 }
 
-export function listSim2RealPlugins(): Array<{ id: string; events: Sim2RealDomainEventType[] | '*' }> {
+export function listSim2RealPlugins(): Array<{
+  id: string;
+  events: Sim2RealDomainEventType[] | '*';
+}> {
   return [...plugins.values()].map((plugin) => ({
     id: plugin.id,
     events: plugin.events === '*' ? '*' : [...plugin.events],
@@ -76,7 +80,10 @@ export async function emitSim2RealEvent<T>(
         try {
           await plugin.onEvent(event);
         } catch (error) {
-          console.error(`[sim2real] plugin ${plugin.id} failed for ${type}:`, error instanceof Error ? error.message : error);
+          console.error(
+            `[sim2real] plugin ${plugin.id} failed for ${type}:`,
+            error instanceof Error ? error.message : error,
+          );
         }
       });
       pluginTails.set(plugin.id, delivery);

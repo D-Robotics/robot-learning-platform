@@ -221,7 +221,8 @@ async function boot() {
   window.eval(appSource);
 
   for (let attempt = 0; attempt < 50; attempt += 1) {
-    if (window.document.querySelector('#main-content')?.getAttribute('aria-busy') === 'false') break;
+    if (window.document.querySelector('#main-content')?.getAttribute('aria-busy') === 'false')
+      break;
     await new Promise((resolve) => setTimeout(resolve, 10));
   }
   return { window, errors };
@@ -237,9 +238,9 @@ describe('Sim2Real workbench DOM behavior', () => {
 
     expect(window.document.body.dataset.activeView).toBe('train');
     expect(trainButton?.getAttribute('aria-current')).toBe('page');
-    expect(
-      window.document.querySelector<HTMLElement>('[data-view-section="train"]')?.hidden,
-    ).toBe(false);
+    expect(window.document.querySelector<HTMLElement>('[data-view-section="train"]')?.hidden).toBe(
+      false,
+    );
     expect(
       window.document.querySelector<HTMLElement>('[data-view-section="overview"]')?.hidden,
     ).toBe(true);
@@ -259,9 +260,7 @@ describe('Sim2Real workbench DOM behavior', () => {
     if (input) {
       input.value = '评测中心';
       input.dispatchEvent(new window.Event('input', { bubbles: true }));
-      input.dispatchEvent(
-        new window.KeyboardEvent('keydown', { key: 'Enter', bubbles: true }),
-      );
+      input.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
     }
     await new Promise((resolve) => setTimeout(resolve, 10));
     expect(window.document.body.dataset.activeView).toBe('evaluate');

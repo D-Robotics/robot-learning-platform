@@ -38,7 +38,12 @@ function loopbackBaseUrlOverride(value: string | undefined): string | null {
   try {
     const parsed = new URL(candidate);
     if (parsed.protocol !== 'http:') return null;
-    if (parsed.hostname !== '127.0.0.1' && parsed.hostname !== 'localhost' && parsed.hostname !== '[::1]') return null;
+    if (
+      parsed.hostname !== '127.0.0.1' &&
+      parsed.hostname !== 'localhost' &&
+      parsed.hostname !== '[::1]'
+    )
+      return null;
     if (parsed.pathname !== '/' || parsed.search || parsed.hash) return null;
     return candidate;
   } catch {
@@ -126,7 +131,9 @@ async function stationAgentJson(
     ? Math.min(Math.max(Number(options.timeoutMs) || 120_000, 500), 180_000)
     : Math.min(Math.max(Number(options.timeoutMs) || 5000, 500), 15_000);
   const token = String(process.env.RDK_SIM2REAL_BOARD_AGENT_TOKEN ?? '').trim();
-  const direct = baseUrl ? stationAgentDirectUrl(baseUrl, pathname, options, token, timeoutMs) : null;
+  const direct = baseUrl
+    ? stationAgentDirectUrl(baseUrl, pathname, options, token, timeoutMs)
+    : null;
   if (direct) {
     const result = await direct;
     if (result) return result;
@@ -177,10 +184,15 @@ function shellQuote(value: string): string {
 }
 
 function studioBridgeConfig(): { origin: string; deviceId: string; agentPort: number } | null {
-  const origin = String(process.env.RDK_SIM2REAL_STUDIO_EXEC_ORIGIN ?? '').trim().replace(/\/+$/, '');
+  const origin = String(process.env.RDK_SIM2REAL_STUDIO_EXEC_ORIGIN ?? '')
+    .trim()
+    .replace(/\/+$/, '');
   const deviceId = String(process.env.RDK_SIM2REAL_STUDIO_DEVICE_ID ?? '').trim();
   const agentPort = Number(process.env.RDK_SIM2REAL_STUDIO_AGENT_PORT ?? 19100);
-  if (!/^https?:\/\/[^\s/]+(?::\d+)?$/.test(origin) || (deviceId && !/^[A-Za-z0-9._:-]{1,160}$/.test(deviceId))) {
+  if (
+    !/^https?:\/\/[^\s/]+(?::\d+)?$/.test(origin) ||
+    (deviceId && !/^[A-Za-z0-9._:-]{1,160}$/.test(deviceId))
+  ) {
     return null;
   }
   if (!Number.isSafeInteger(agentPort) || agentPort < 1 || agentPort > 65535) return null;
@@ -236,22 +248,25 @@ async function studioBridgeAgentJson(
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
-    const response = await fetch(`${config.origin}/api/devices/${encodeURIComponent(deviceId)}/exec`, {
-      method: 'POST',
-      headers: {
-        accept: 'application/json',
-        'content-type': 'application/json',
-        cookie: options.cookieHeader,
-        origin: String(
-          process.env.RDK_SIM2REAL_PUBLIC_ORIGIN ??
-            process.env.RDK_STUDIO_WEB_PUBLIC_ORIGIN ??
-            'https://rdkstudio.d-robotics.cc',
-        ),
+    const response = await fetch(
+      `${config.origin}/api/devices/${encodeURIComponent(deviceId)}/exec`,
+      {
+        method: 'POST',
+        headers: {
+          accept: 'application/json',
+          'content-type': 'application/json',
+          cookie: options.cookieHeader,
+          origin: String(
+            process.env.RDK_SIM2REAL_PUBLIC_ORIGIN ??
+              process.env.RDK_STUDIO_WEB_PUBLIC_ORIGIN ??
+              'https://rdkstudio.d-robotics.cc',
+          ),
+        },
+        body: JSON.stringify({ command }),
+        signal: controller.signal,
+        redirect: 'error',
       },
-      body: JSON.stringify({ command }),
-      signal: controller.signal,
-      redirect: 'error',
-    });
+    );
     const outer = await boundedJsonObject(response);
     if (!response.ok || !outer) return { ok: false, status: response.status, payload: null };
     const output = typeof outer.output === 'string' ? outer.output.trim() : '';
@@ -265,9 +280,10 @@ async function studioBridgeAgentJson(
     return {
       ok: Boolean(payload && typeof payload === 'object' && !Array.isArray(payload)),
       status: response.status,
-      payload: payload && typeof payload === 'object' && !Array.isArray(payload)
-        ? (payload as Record<string, unknown>)
-        : null,
+      payload:
+        payload && typeof payload === 'object' && !Array.isArray(payload)
+          ? (payload as Record<string, unknown>)
+          : null,
     };
   } catch {
     return null;
@@ -287,31 +303,45 @@ async function studioBridgeAgentSnapshot(
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
-    const response = await fetch(`${config.origin}/api/devices/${encodeURIComponent(deviceId)}/exec`, {
-      method: 'POST',
-      headers: {
-        accept: 'application/json',
-        'content-type': 'application/json',
-        cookie: options.cookieHeader,
-        origin: String(
-          process.env.RDK_SIM2REAL_PUBLIC_ORIGIN ??
-            process.env.RDK_STUDIO_WEB_PUBLIC_ORIGIN ??
-            'https://rdkstudio.d-robotics.cc',
-        ),
+    const response = await fetch(
+      `${config.origin}/api/devices/${encodeURIComponent(deviceId)}/exec`,
+      {
+        method: 'POST',
+        headers: {
+          accept: 'application/json',
+          'content-type': 'application/json',
+          cookie: options.cookieHeader,
+          origin: String(
+            process.env.RDK_SIM2REAL_PUBLIC_ORIGIN ??
+              process.env.RDK_STUDIO_WEB_PUBLIC_ORIGIN ??
+              'https://rdkstudio.d-robotics.cc',
+          ),
+        },
+        body: JSON.stringify({ command: studioBridgeSnapshotCommand(token, config.agentPort) }),
+        signal: controller.signal,
+        redirect: 'error',
       },
-      body: JSON.stringify({ command: studioBridgeSnapshotCommand(token, config.agentPort) }),
-      signal: controller.signal,
-      redirect: 'error',
-    });
+    );
     const outer = await boundedJsonObject(response);
     if (!response.ok || !outer || typeof outer.output !== 'string') return null;
     const encoded = outer.output.replace(/\s+/g, '');
-    if (!encoded || encoded.length > Math.ceil(MAX_STATION_SNAPSHOT_BYTES * 4 / 3) || !/^[A-Za-z0-9+/=]+$/.test(encoded)) return null;
+    if (
+      !encoded ||
+      encoded.length > Math.ceil((MAX_STATION_SNAPSHOT_BYTES * 4) / 3) ||
+      !/^[A-Za-z0-9+/=]+$/.test(encoded)
+    )
+      return null;
     const bytes = Buffer.from(encoded, 'base64');
     if (!bytes.length || bytes.length > MAX_STATION_SNAPSHOT_BYTES) return null;
     // JPEG magic bytes prevent a command error or arbitrary text becoming a
     // browser image. The board agent also marks the frame as real-device.
-    if (bytes[0] !== 0xff || bytes[1] !== 0xd8 || bytes[bytes.length - 2] !== 0xff || bytes[bytes.length - 1] !== 0xd9) return null;
+    if (
+      bytes[0] !== 0xff ||
+      bytes[1] !== 0xd8 ||
+      bytes[bytes.length - 2] !== 0xff ||
+      bytes[bytes.length - 1] !== 0xd9
+    )
+      return null;
     return new Uint8Array(bytes);
   } catch {
     return null;
@@ -349,16 +379,29 @@ export async function stationAgentFetchWithStatus(
  */
 export async function stationAgentFetchStream(
   pathname: string,
-  options: { timeoutMs?: number; lifetimeMs?: number; cookieHeader?: string; deviceId?: string } = {},
+  options: {
+    timeoutMs?: number;
+    lifetimeMs?: number;
+    cookieHeader?: string;
+    deviceId?: string;
+  } = {},
 ): Promise<ReadableStream<Uint8Array>> {
   const baseUrl = boardAgentUrl();
   if (!/^\/[A-Za-z0-9._/-]+$/.test(pathname)) {
     throw new Error('invalid station stream path');
   }
   const timeoutMs = Math.min(Math.max(Number(options.timeoutMs) || 4000, 500), 10_000);
-  const lifetimeMs = Math.min(Math.max(Number(options.lifetimeMs) || 15 * 60 * 1000, 1000), 60 * 60 * 1000);
+  const lifetimeMs = Math.min(
+    Math.max(Number(options.lifetimeMs) || 15 * 60 * 1000, 1000),
+    60 * 60 * 1000,
+  );
   const token = String(process.env.RDK_SIM2REAL_BOARD_AGENT_TOKEN ?? '').trim();
-  if (!baseUrl && studioBridgeConfig() && options.cookieHeader && pathname === '/v1/station/status/stream') {
+  if (
+    !baseUrl &&
+    studioBridgeConfig() &&
+    options.cookieHeader &&
+    pathname === '/v1/station/status/stream'
+  ) {
     let closed = false;
     let timer: ReturnType<typeof setTimeout> | undefined;
     const encoder = new TextEncoder();
@@ -392,7 +435,12 @@ export async function stationAgentFetchStream(
     });
     return stream;
   }
-  if (!baseUrl && studioBridgeConfig() && options.cookieHeader && pathname === '/v1/station/camera.mjpeg') {
+  if (
+    !baseUrl &&
+    studioBridgeConfig() &&
+    options.cookieHeader &&
+    pathname === '/v1/station/camera.mjpeg'
+  ) {
     let closed = false;
     let timer: ReturnType<typeof setTimeout> | undefined;
     const boundary = 'rdk-board-station-frame';
@@ -404,7 +452,9 @@ export async function stationAgentFetchStream(
           while (!closed && Date.now() < deadline) {
             const frame = await studioBridgeAgentSnapshot(options, token, timeoutMs);
             if (!frame) break;
-            const header = encoder.encode(`--${boundary}\r\ncontent-type: image/jpeg\r\ncontent-length: ${frame.byteLength}\r\n\r\n`);
+            const header = encoder.encode(
+              `--${boundary}\r\ncontent-type: image/jpeg\r\ncontent-length: ${frame.byteLength}\r\n\r\n`,
+            );
             controller.enqueue(header);
             controller.enqueue(frame);
             controller.enqueue(encoder.encode('\r\n'));

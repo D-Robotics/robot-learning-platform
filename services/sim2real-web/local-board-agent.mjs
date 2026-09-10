@@ -112,7 +112,11 @@ function readBodyBounded(request, ceiling) {
 function stagePolicy(source) {
   const filename = typeof source?.filename === 'string' ? source.filename : '';
   if (!/^[\w.-]+\.onnx$/.test(filename) || filename.includes('..')) {
-    return { ok: false, error: 'policy-filename-invalid', message: '仅接受 policies 目录内的 .onnx 文件名' };
+    return {
+      ok: false,
+      error: 'policy-filename-invalid',
+      message: '仅接受 policies 目录内的 .onnx 文件名',
+    };
   }
   const raw = typeof source?.bytesBase64 === 'string' ? source.bytesBase64 : '';
   let payload;
@@ -137,7 +141,12 @@ function stagePolicy(source) {
   const digest = createHash('sha256').update(payload).digest('hex');
   const declared = typeof source?.sha256 === 'string' ? source.sha256.trim().toLowerCase() : '';
   if (!/^[a-f0-9]{64}$/.test(declared) || digest !== declared) {
-    return { ok: false, error: 'policy-digest-mismatch', message: '制品 SHA-256 与声明不一致；拒绝写入', actual: digest };
+    return {
+      ok: false,
+      error: 'policy-digest-mismatch',
+      message: '制品 SHA-256 与声明不一致；拒绝写入',
+      actual: digest,
+    };
   }
   const existing = stagedPolicies.get(filename);
   if (existing) {
@@ -149,10 +158,24 @@ function stagePolicy(source) {
         existing: existing.sha256,
       };
     }
-    return { ok: true, staged: true, path: filename, bytes: payload.length, sha256: digest, note: 'byte-identical to the staged file; no rewrite' };
+    return {
+      ok: true,
+      staged: true,
+      path: filename,
+      bytes: payload.length,
+      sha256: digest,
+      note: 'byte-identical to the staged file; no rewrite',
+    };
   }
   stagedPolicies.set(filename, { bytes: payload, sha256: digest });
-  return { ok: true, staged: true, path: filename, bytes: payload.length, sha256: digest, note: 'staged (reference agent, in-memory); loading stays a separate action' };
+  return {
+    ok: true,
+    staged: true,
+    path: filename,
+    bytes: payload.length,
+    sha256: digest,
+    note: 'staged (reference agent, in-memory); loading stays a separate action',
+  };
 }
 
 function listPolicies() {
@@ -189,16 +212,18 @@ function passportOutput() {
     String(process.env.RDK_SIM2REAL_BOARD_AGENT_BPU_TOOLCHAIN || '').trim() === 'present'
       ? 'present'
       : 'missing';
-  return [
-    BEGIN,
-    `arch=${arch}`,
-    `kernel=${kernel}`,
-    `python3=${python3}`,
-    `tros=${tros}`,
-    `disk_bytes=${Number.isFinite(diskBytes) ? Math.max(0, Math.floor(diskBytes)) : 0}`,
-    `bpu_toolchain=${bpuToolchain}`,
-    END,
-  ].join('\n') + '\n';
+  return (
+    [
+      BEGIN,
+      `arch=${arch}`,
+      `kernel=${kernel}`,
+      `python3=${python3}`,
+      `tros=${tros}`,
+      `disk_bytes=${Number.isFinite(diskBytes) ? Math.max(0, Math.floor(diskBytes)) : 0}`,
+      `bpu_toolchain=${bpuToolchain}`,
+      END,
+    ].join('\n') + '\n'
+  );
 }
 
 /**
@@ -337,7 +362,10 @@ export function createLocalBoardAgentServer() {
         ok: true,
         service: 'local-board-agent-reference',
         capabilities: ['read-only-preflight', 'host-station'],
-        stationCommands: STATION_COMMANDS.map((command) => ({ id: command.id, label: command.label })),
+        stationCommands: STATION_COMMANDS.map((command) => ({
+          id: command.id,
+          label: command.label,
+        })),
         actuatorControl: false,
         mock: true,
       });
@@ -360,7 +388,10 @@ export function createLocalBoardAgentServer() {
       } catch (error) {
         json(response, Number(error?.statusCode) || 400, {
           ok: false,
-          error: Number(error?.statusCode) === 413 ? 'policy-upload-too-large' : 'BOARD_AGENT_INVALID_JSON',
+          error:
+            Number(error?.statusCode) === 413
+              ? 'policy-upload-too-large'
+              : 'BOARD_AGENT_INVALID_JSON',
         });
       }
       return;
@@ -427,7 +458,8 @@ export function createLocalBoardAgentServer() {
 }
 
 if (process.argv[1] && fileURLToPath(import.meta.url) === path.resolve(process.argv[1])) {
-  const host = String(process.env.RDK_SIM2REAL_BOARD_AGENT_BIND_HOST || '127.0.0.1').trim() || '127.0.0.1';
+  const host =
+    String(process.env.RDK_SIM2REAL_BOARD_AGENT_BIND_HOST || '127.0.0.1').trim() || '127.0.0.1';
   const rawPort = Number(process.env.RDK_SIM2REAL_BOARD_AGENT_PORT || 19100);
   const port = Number.isInteger(rawPort) && rawPort >= 1024 && rawPort <= 65535 ? rawPort : 19100;
   const server = createLocalBoardAgentServer();

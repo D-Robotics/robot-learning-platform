@@ -4,19 +4,9 @@ export type ModelArtifactKind = 'source' | 'compiled';
 export type ModelArtifactRuntime = 'cpu-onnx' | 'bpu';
 
 export type ModelArtifactWorkload =
-  | 'locomotion'
-  | 'perception'
-  | 'navigation'
-  | 'speech'
-  | 'multimodal';
+  'locomotion' | 'perception' | 'navigation' | 'speech' | 'multimodal';
 
-export type ModelArtifactFormat =
-  | 'pytorch'
-  | 'onnx'
-  | 'bin'
-  | 'hbm'
-  | 'gguf'
-  | 'unknown';
+export type ModelArtifactFormat = 'pytorch' | 'onnx' | 'bin' | 'hbm' | 'gguf' | 'unknown';
 
 export interface ModelArtifactDescriptor {
   name: string;
@@ -45,11 +35,7 @@ export interface ModelPlatformTarget {
 }
 
 export type ModelCompatibilityStatus =
-  | 'compatible'
-  | 'requires-conversion'
-  | 'needs-validation'
-  | 'incompatible'
-  | 'unknown-platform';
+  'compatible' | 'requires-conversion' | 'needs-validation' | 'incompatible' | 'unknown-platform';
 
 export interface ModelCompatibilityResult {
   status: ModelCompatibilityStatus;

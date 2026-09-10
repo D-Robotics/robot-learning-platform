@@ -62,11 +62,15 @@ function spawnService(label, command, args, env) {
     process.stderr.write(`[${label}] ${String(chunk)}`);
   });
   child.once('error', (error) => {
-    process.stderr.write(`[${label}] process error: ${error instanceof Error ? error.stack || error.message : String(error)}\n`);
+    process.stderr.write(
+      `[${label}] process error: ${error instanceof Error ? error.stack || error.message : String(error)}\n`,
+    );
   });
   child.once('exit', (code, signal) => {
     if (code !== 0 && signal !== 'SIGTERM') {
-      process.stderr.write(`[${label}] exited unexpectedly: code=${code ?? 'null'} signal=${signal ?? 'null'}\n`);
+      process.stderr.write(
+        `[${label}] exited unexpectedly: code=${code ?? 'null'} signal=${signal ?? 'null'}\n`,
+      );
     }
   });
   return child;
@@ -98,13 +102,19 @@ async function fetchJson(url, init) {
   return { response, body, text };
 }
 
-async function waitForJson(url, { expectStatus = 200, timeoutMs = 30_000, label = url, predicate } = {}) {
+async function waitForJson(
+  url,
+  { expectStatus = 200, timeoutMs = 30_000, label = url, predicate } = {},
+) {
   const deadline = Date.now() + timeoutMs;
   let lastError;
   while (Date.now() < deadline) {
     try {
       const result = await fetchJson(url, { headers: { accept: 'application/json' } });
-      if (result.response.status === expectStatus && (!predicate || predicate(result.body, result.response))) {
+      if (
+        result.response.status === expectStatus &&
+        (!predicate || predicate(result.body, result.response))
+      ) {
         return result;
       }
       lastError = new Error(
@@ -229,7 +239,9 @@ async function main() {
   const boardBase = `http://127.0.0.1:${boardAgentPort}`;
 
   try {
-    console.log(`[sim2real-smoke] waiting for worker:${workerPort}, board agent:${boardAgentPort}, and web:${webPort} health`);
+    console.log(
+      `[sim2real-smoke] waiting for worker:${workerPort}, board agent:${boardAgentPort}, and web:${webPort} health`,
+    );
     const workerHealth = await waitForJson(`${workerBase}/healthz`, {
       expectStatus: 200,
       label: 'local worker health',
@@ -354,10 +366,13 @@ async function main() {
     });
     assert.equal(deployment.response.status, 201);
     const deploymentId = deployment.body.deployment.id;
-    const preflight = await fetchJson(`${base}/api/v1/duck/deployments/${encodeURIComponent(deploymentId)}/preflight`, {
-      method: 'POST',
-      headers: { accept: 'application/json' },
-    });
+    const preflight = await fetchJson(
+      `${base}/api/v1/duck/deployments/${encodeURIComponent(deploymentId)}/preflight`,
+      {
+        method: 'POST',
+        headers: { accept: 'application/json' },
+      },
+    );
     assert.equal(preflight.response.status, 409);
     assert.equal(preflight.body.code, 'SIM2REAL_PREFLIGHT_MOCK_ONLY');
     assert.equal(preflight.body.preflight.passed, false);
@@ -374,9 +389,14 @@ async function main() {
       postOverview.body.models.some((model) => model.id === modelId),
       true,
     );
-    assert.equal(postOverview.body.runs.some((run) => run.id === runId && run.status === 'completed'), true);
     assert.equal(
-      postOverview.body.devices.some((device) => device.id === 'x5-smoke' && device.boardPlatform === 'rdk-x5'),
+      postOverview.body.runs.some((run) => run.id === runId && run.status === 'completed'),
+      true,
+    );
+    assert.equal(
+      postOverview.body.devices.some(
+        (device) => device.id === 'x5-smoke' && device.boardPlatform === 'rdk-x5',
+      ),
       true,
     );
 
@@ -390,6 +410,9 @@ async function main() {
 }
 
 main().catch((error) => {
-  console.error('[sim2real-smoke] FAIL', error instanceof Error ? error.stack || error.message : error);
+  console.error(
+    '[sim2real-smoke] FAIL',
+    error instanceof Error ? error.stack || error.message : error,
+  );
   process.exitCode = 1;
 });

@@ -110,7 +110,10 @@
   }
 
   const translations = new Map([
-    ['the exact same trained policies that drive the real robot, live in your browser.', '与真实机器人相同的训练策略，直接在浏览器中运行。'],
+    [
+      'the exact same trained policies that drive the real robot, live in your browser.',
+      '与真实机器人相同的训练策略，直接在浏览器中运行。',
+    ],
     ['move', '移动'],
     ['arrows or zqsd', '方向键或 WASD'],
     ['kick', '踢球'],
@@ -161,17 +164,21 @@
   // the visual legend without changing the simulator's event handling.
   function patchControlKeyLabels() {
     const cards = [...document.querySelectorAll('div')];
-    const findCard = (label, keyCount) => cards
-      .filter((element) => {
-        const text = (element.innerText || '').trim();
-        return new RegExp(label, 'i').test(text) && element.querySelectorAll('kbd').length === keyCount;
-      })
-      .sort((a, b) => (a.innerText || '').length - (b.innerText || '').length)[0];
+    const findCard = (label, keyCount) =>
+      cards
+        .filter((element) => {
+          const text = (element.innerText || '').trim();
+          return (
+            new RegExp(label, 'i').test(text) && element.querySelectorAll('kbd').length === keyCount
+          );
+        })
+        .sort((a, b) => (a.innerText || '').length - (b.innerText || '').length)[0];
 
     const moveCard = findCard('移动|move', 4);
     if (moveCard) {
-      const hint = [...moveCard.querySelectorAll('div')]
-        .find((element) => /方向键或\s*(?:ZQSD|WASD)|arrows?\s+or\s+zqsd/i.test(element.textContent || ''));
+      const hint = [...moveCard.querySelectorAll('div')].find((element) =>
+        /方向键或\s*(?:ZQSD|WASD)|arrows?\s+or\s+zqsd/i.test(element.textContent || ''),
+      );
       if (hint && hint.textContent !== '方向键或 WASD') hint.textContent = '方向键或 WASD';
     }
 
@@ -196,8 +203,9 @@
   }
 
   function landingStartButton() {
-    return [...document.querySelectorAll('button')]
-      .find((element) => /开始仿真|waddle in/i.test(element.textContent || ''));
+    return [...document.querySelectorAll('button')].find((element) =>
+      /开始仿真|waddle in/i.test(element.textContent || ''),
+    );
   }
 
   function mountTouchLandingHelp() {
@@ -332,7 +340,7 @@
   function copyNumeric(value) {
     if (!value || typeof value.length !== 'number') return null;
     try {
-      return Array.from(value, (item) => Number.isFinite(Number(item)) ? Number(item) : 0);
+      return Array.from(value, (item) => (Number.isFinite(Number(item)) ? Number(item) : 0));
     } catch {
       return null;
     }
@@ -431,15 +439,25 @@
     recorder.timer = null;
     recorder.last = recorder.samples.length ? recordingHeader() : null;
     const panel = document.getElementById(RECORDER_PANEL_ID);
-    panel?.querySelector('[data-recorder-status]')?.replaceChildren(document.createTextNode(reason));
+    panel
+      ?.querySelector('[data-recorder-status]')
+      ?.replaceChildren(document.createTextNode(reason));
     panel?.classList.remove('is-recording');
     panel?.querySelector('[data-recorder-start]')?.removeAttribute('disabled');
     panel?.querySelector('[data-recorder-stop]')?.setAttribute('disabled', '');
-    panel?.querySelector('[data-recorder-export]')?.toggleAttribute('disabled', !recorder.samples.length);
-    panel?.querySelector('[data-recorder-clear]')?.toggleAttribute('disabled', !recorder.samples.length);
-    panel?.querySelector('[data-recorder-count]')?.replaceChildren(
-      document.createTextNode(`${recorder.samples.length} 帧 · ${recorder.samples.length ? (recorder.samples.at(-1).time || 0).toFixed(1) : '0.0'} 秒`),
-    );
+    panel
+      ?.querySelector('[data-recorder-export]')
+      ?.toggleAttribute('disabled', !recorder.samples.length);
+    panel
+      ?.querySelector('[data-recorder-clear]')
+      ?.toggleAttribute('disabled', !recorder.samples.length);
+    panel
+      ?.querySelector('[data-recorder-count]')
+      ?.replaceChildren(
+        document.createTextNode(
+          `${recorder.samples.length} 帧 · ${recorder.samples.length ? (recorder.samples.at(-1).time || 0).toFixed(1) : '0.0'} 秒`,
+        ),
+      );
   }
 
   function startRecording() {
@@ -454,7 +472,9 @@
     recordSample();
     const panel = document.getElementById(RECORDER_PANEL_ID);
     panel?.classList.add('is-recording');
-    panel?.querySelector('[data-recorder-status]')?.replaceChildren(document.createTextNode('录制中'));
+    panel
+      ?.querySelector('[data-recorder-status]')
+      ?.replaceChildren(document.createTextNode('录制中'));
     panel?.querySelector('[data-recorder-start]')?.setAttribute('disabled', '');
     panel?.querySelector('[data-recorder-stop]')?.removeAttribute('disabled');
     panel?.querySelector('[data-recorder-export]')?.setAttribute('disabled', '');
@@ -535,7 +555,8 @@
     const exportButton = panel.querySelector('[data-recorder-export]');
     const clear = panel.querySelector('[data-recorder-clear]');
     start.addEventListener('click', () => {
-      if (!startRecording()) panel.querySelector('[data-recorder-status]').textContent = '等待仿真引擎';
+      if (!startRecording())
+        panel.querySelector('[data-recorder-status]').textContent = '等待仿真引擎';
     });
     stop.addEventListener('click', () => stopRecording());
     exportButton.addEventListener('click', downloadRecording);
@@ -545,9 +566,15 @@
       stop: stopRecording,
       clear: clearRecording,
       download: downloadRecording,
-      get active() { return recorder.active; },
-      get sampleCount() { return recorder.samples.length; },
-      get lastHeader() { return recorder.last; },
+      get active() {
+        return recorder.active;
+      },
+      get sampleCount() {
+        return recorder.samples.length;
+      },
+      get lastHeader() {
+        return recorder.last;
+      },
       destroy() {
         stopRecording('已停止');
         if (recorder.uiTimer) clearInterval(recorder.uiTimer);
@@ -567,7 +594,8 @@
           panel.querySelector('[data-recorder-status]').textContent = '已就绪';
         }
       }
-      panel.querySelector('[data-recorder-count]').textContent = `${recorder.samples.length} 帧 · ${recorder.samples.length ? (recorder.samples.at(-1).time || 0).toFixed(1) : '0.0'} 秒`;
+      panel.querySelector('[data-recorder-count]').textContent =
+        `${recorder.samples.length} 帧 · ${recorder.samples.length ? (recorder.samples.at(-1).time || 0).toFixed(1) : '0.0'} 秒`;
     }, 500);
   }
 
@@ -581,13 +609,15 @@
       KeyE: 'e',
       Space: ' ',
     };
-    window.dispatchEvent(new KeyboardEvent('keydown', {
-      bubbles: true,
-      cancelable: true,
-      code,
-      key: keys[code] || code,
-      repeat: false,
-    }));
+    window.dispatchEvent(
+      new KeyboardEvent('keydown', {
+        bubbles: true,
+        cancelable: true,
+        code,
+        key: keys[code] || code,
+        repeat: false,
+      }),
+    );
     return true;
   }
 
@@ -609,9 +639,11 @@
     const current = runtime();
     const sources = current?.controller?.sources;
     if (!Array.isArray(sources)) return false;
-    const source = sources.find((candidate) =>
-      candidate && (candidate.id === 'keyboard' || candidate.id === 'touch') &&
-      typeof candidate.onAction === 'function',
+    const source = sources.find(
+      (candidate) =>
+        candidate &&
+        (candidate.id === 'keyboard' || candidate.id === 'touch') &&
+        typeof candidate.onAction === 'function',
     );
     if (!source) return false;
     try {
@@ -642,7 +674,13 @@
     const button = document.getElementById(id);
     if (!button) return false;
     const PointerCtor = window.PointerEvent || window.MouseEvent;
-    const init = { bubbles: true, cancelable: true, pointerId: 1, pointerType: 'mouse', buttons: 1 };
+    const init = {
+      bubbles: true,
+      cancelable: true,
+      pointerId: 1,
+      pointerType: 'mouse',
+      buttons: 1,
+    };
     button.dispatchEvent(new PointerCtor('pointerdown', init));
     button.dispatchEvent(new PointerCtor('pointerup', { ...init, buttons: 0 }));
     return true;
@@ -876,7 +914,9 @@
     const updateState = () => {
       const current = runtime();
       const ready = Boolean(current);
-      [...actionButtons, ...locoButtons, ...variantButtons].forEach((item) => { item.disabled = !ready; });
+      [...actionButtons, ...locoButtons, ...variantButtons].forEach((item) => {
+        item.disabled = !ready;
+      });
       if (!current) {
         setStatus('引擎加载中…');
         return;
@@ -898,7 +938,9 @@
       }
       const rollButton = panel.querySelector('[data-mobile-action="roll"]');
       setButtonText(rollButton, current.loco === 'rollers' ? '蹲伏' : '翻滚');
-      locoButtons.forEach((item) => item.setAttribute('aria-pressed', String(item.dataset.mobileLoco === current.loco)));
+      locoButtons.forEach((item) =>
+        item.setAttribute('aria-pressed', String(item.dataset.mobileLoco === current.loco)),
+      );
     };
 
     const showNotice = (message) => {
@@ -921,8 +963,7 @@
         let failureMessage = '当前引擎暂未提供此动作';
         if (action === 'sit') {
           sent = dispatchControllerAction('sitToggle') || dispatchShortcut('KeyR');
-        }
-        else if (action === 'pick') {
+        } else if (action === 'pick') {
           if (current.loco === 'rollers') {
             failureMessage = '滚轮模式不支持拾取，请切换到双足模式';
           } else if (typeof current.triggerGroundPick === 'function') {
@@ -985,7 +1026,10 @@
         } else if (action === 'ball') {
           sent = callRuntimeMethod(current, 'spawnBall') || dispatchControllerAction('spawnBall');
         } else if (action === 'reset') {
-          sent = callRuntimeMethod(current, 'resetSim') || dispatchControllerAction('reset') || dispatchShortcut('Space');
+          sent =
+            callRuntimeMethod(current, 'resetSim') ||
+            dispatchControllerAction('reset') ||
+            dispatchShortcut('Space');
         }
         if (!sent) {
           showNotice(failureMessage);
@@ -1005,41 +1049,62 @@
       toggle.setAttribute('aria-expanded', String(open));
       if (open) updateState();
     });
-    actionButtons.forEach((item) => item.addEventListener('click', () => invoke(item.dataset.mobileAction)));
-    locoButtons.forEach((item) => item.addEventListener('click', () => {
-      const current = runtime();
-      if (!current) return showNotice('仿真引擎尚未就绪');
-      try {
+    actionButtons.forEach((item) =>
+      item.addEventListener('click', () => invoke(item.dataset.mobileAction)),
+    );
+    locoButtons.forEach((item) =>
+      item.addEventListener('click', () => {
+        const current = runtime();
+        if (!current) return showNotice('仿真引擎尚未就绪');
+        try {
+          const api = window.__gameApi;
+          if (typeof api?.requestLoco === 'function') api.requestLoco(item.dataset.mobileLoco);
+          else current.setLoco?.(item.dataset.mobileLoco);
+          showNotice(
+            item.dataset.mobileLoco === 'rollers' ? '正在切换到滚轮模式' : '正在切换到双足模式',
+          );
+        } catch (error) {
+          console.warn('[microduck mobile controls] locomotion switch failed', error);
+          showNotice('模式切换失败');
+        }
+        setTimeout(updateState, 120);
+      }),
+    );
+    variantButtons.forEach((item) =>
+      item.addEventListener('click', () => {
         const api = window.__gameApi;
-        if (typeof api?.requestLoco === 'function') api.requestLoco(item.dataset.mobileLoco);
-        else current.setLoco?.(item.dataset.mobileLoco);
-        showNotice(item.dataset.mobileLoco === 'rollers' ? '正在切换到滚轮模式' : '正在切换到双足模式');
-      } catch (error) {
-        console.warn('[microduck mobile controls] locomotion switch failed', error);
-        showNotice('模式切换失败');
-      }
-      setTimeout(updateState, 120);
-    }));
-    variantButtons.forEach((item) => item.addEventListener('click', () => {
-      const api = window.__gameApi;
-      if (typeof api?.setVariant !== 'function') return showNotice('外观控制尚未就绪');
-      api.setVariant(item.dataset.mobileVariant);
-      variantButtons.forEach((candidate) => candidate.setAttribute('aria-pressed', String(candidate === item)));
-      showNotice('外观已切换');
-    }));
+        if (typeof api?.setVariant !== 'function') return showNotice('外观控制尚未就绪');
+        api.setVariant(item.dataset.mobileVariant);
+        variantButtons.forEach((candidate) =>
+          candidate.setAttribute('aria-pressed', String(candidate === item)),
+        );
+        showNotice('外观已切换');
+      }),
+    );
 
-    window.addEventListener('keydown', (event) => {
-      if (event.repeat || isLanding() || event.target instanceof HTMLInputElement || event.target instanceof HTMLTextAreaElement) return;
-      if (event.code === 'KeyB') {
-        event.preventDefault();
-        // B is a platform overlay shortcut.  The pinned upstream browser
-        // build exposes quack on touch/gamepad, not as a desktop key; capture
-        // this convenience key so a future upstream binding cannot fire two
-        // unrelated actions at once.
-        event.stopPropagation();
-        if (!dispatchQuack()) console.info('[microduck controls] quack is not exposed by this engine');
-      }
-    }, { capture: true });
+    window.addEventListener(
+      'keydown',
+      (event) => {
+        if (
+          event.repeat ||
+          isLanding() ||
+          event.target instanceof HTMLInputElement ||
+          event.target instanceof HTMLTextAreaElement
+        )
+          return;
+        if (event.code === 'KeyB') {
+          event.preventDefault();
+          // B is a platform overlay shortcut.  The pinned upstream browser
+          // build exposes quack on touch/gamepad, not as a desktop key; capture
+          // this convenience key so a future upstream binding cannot fire two
+          // unrelated actions at once.
+          event.stopPropagation();
+          if (!dispatchQuack())
+            console.info('[microduck controls] quack is not exposed by this engine');
+        }
+      },
+      { capture: true },
+    );
 
     const fullscreenButton = document.createElement('button');
     fullscreenButton.type = 'button';
@@ -1055,7 +1120,9 @@
         showNotice('浏览器不允许全屏，请用新标签页打开');
       }
     });
-    panel.querySelector('[data-mobile-action="reset"]')?.insertAdjacentElement('afterend', fullscreenButton);
+    panel
+      .querySelector('[data-mobile-action="reset"]')
+      ?.insertAdjacentElement('afterend', fullscreenButton);
 
     const refreshMobileVisibility = () => {
       const visible = !isLanding();
@@ -1105,7 +1172,8 @@
       padding: '15px 16px',
       border: '1px solid transparent',
       borderRadius: '18px',
-      background: 'linear-gradient(rgba(21, 19, 26, .96), rgba(21, 19, 26, .96)) padding-box, linear-gradient(135deg, rgba(255, 122, 47, .95), rgba(255, 45, 166, .9)) border-box',
+      background:
+        'linear-gradient(rgba(21, 19, 26, .96), rgba(21, 19, 26, .96)) padding-box, linear-gradient(135deg, rgba(255, 122, 47, .95), rgba(255, 45, 166, .9)) border-box',
       color: '#fff',
       textAlign: 'left',
       font: '600 13px/1 system-ui, -apple-system, sans-serif',
@@ -1192,7 +1260,8 @@
       textAlign: 'left',
       font: '600 12px/1 system-ui, -apple-system, sans-serif',
       cursor: 'pointer',
-      boxShadow: '0 8px 0 rgba(255, 45, 166, .3), 0 18px 38px rgba(0, 0, 0, .4), 0 0 28px rgba(255, 91, 86, .2)',
+      boxShadow:
+        '0 8px 0 rgba(255, 45, 166, .3), 0 18px 38px rgba(0, 0, 0, .4), 0 0 28px rgba(255, 91, 86, .2)',
       backdropFilter: 'blur(7px)',
       transition: 'transform .2s ease, box-shadow .2s ease',
     });
@@ -1209,7 +1278,11 @@
     };
     refreshVisibility();
     recorder.observer = new MutationObserver(refreshVisibility);
-    recorder.observer.observe(document.body, { childList: true, subtree: true, characterData: true });
+    recorder.observer.observe(document.body, {
+      childList: true,
+      subtree: true,
+      characterData: true,
+    });
   }
 
   document.addEventListener('keydown', (event) => {
@@ -1218,6 +1291,7 @@
   });
   document.addEventListener('keyup', (event) => recordInputEvent('keyup', event));
 
-  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', mount, { once: true });
+  if (document.readyState === 'loading')
+    document.addEventListener('DOMContentLoaded', mount, { once: true });
   else mount();
 })();

@@ -107,8 +107,10 @@ function requestIdempotencyKey(request, body) {
   const rawHeader = request.headers['idempotency-key'];
   const header = Array.isArray(rawHeader) ? rawHeader.join(',') : String(rawHeader || '').trim();
   const bodyKey = body?.idempotencyKey == null ? '' : String(body.idempotencyKey).trim();
-  if (header && !SAFE_IDEMPOTENCY_KEY.test(header)) throw idempotencyError('Idempotency-Key is invalid');
-  if (bodyKey && !SAFE_IDEMPOTENCY_KEY.test(bodyKey)) throw idempotencyError('idempotencyKey is invalid');
+  if (header && !SAFE_IDEMPOTENCY_KEY.test(header))
+    throw idempotencyError('Idempotency-Key is invalid');
+  if (bodyKey && !SAFE_IDEMPOTENCY_KEY.test(bodyKey))
+    throw idempotencyError('idempotencyKey is invalid');
   if (header && bodyKey && header !== bodyKey)
     throw idempotencyError('Idempotency-Key header and body value differ');
   return header || bodyKey || '';
@@ -160,7 +162,10 @@ async function writeIdempotencyIndex(index) {
 
 function serialized(task) {
   const next = mutationChain.then(task, task);
-  mutationChain = next.then(() => undefined, () => undefined);
+  mutationChain = next.then(
+    () => undefined,
+    () => undefined,
+  );
   return next;
 }
 
@@ -384,7 +389,8 @@ async function handleTrain(request, response) {
       const hash = idempotencyHash(`${accountId}\u0000${requestKey}`);
       const previous = index[hash];
       if (previous) {
-        if (previous.fingerprint !== fingerprint) throw idempotencyError('Idempotency-Key was reused for a different request', 409);
+        if (previous.fingerprint !== fingerprint)
+          throw idempotencyError('Idempotency-Key was reused for a different request', 409);
         const existing = await readJob(previous.runId);
         if (existing) {
           const current = materializeJob(existing);
@@ -401,7 +407,10 @@ async function handleTrain(request, response) {
         delete index[hash];
       }
     }
-    const robotSlug = text(parsed.robotId, 48).toLowerCase().replace(/[^a-z0-9-]+/g, '-') || 'robot';
+    const robotSlug =
+      text(parsed.robotId, 48)
+        .toLowerCase()
+        .replace(/[^a-z0-9-]+/g, '-') || 'robot';
     const runId = `mock-${robotSlug}-${randomUUID()}`;
     const job = {
       runId,

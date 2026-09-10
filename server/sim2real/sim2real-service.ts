@@ -332,7 +332,9 @@ function microduckBrowserSurface(): {
         (parsed.protocol === 'https:' || (parsed.protocol === 'http:' && loopback))
       ) {
         const proxyEnabled = !['0', 'false', 'no', 'off'].includes(
-          String(process.env.RDK_SIM2REAL_MICRODUCK_PROXY ?? '1').trim().toLowerCase(),
+          String(process.env.RDK_SIM2REAL_MICRODUCK_PROXY ?? '1')
+            .trim()
+            .toLowerCase(),
         );
         return {
           available: true,
@@ -547,11 +549,9 @@ async function probeLocalTrainingWorkerUncached(
 
 const LOCAL_HEALTH_CACHE_TTL_MS = 3_000;
 let localHealthCache:
-  | { key: string; expiresAt: number; result: Sim2RealLocalWorkerIntegration }
-  | undefined;
+  { key: string; expiresAt: number; result: Sim2RealLocalWorkerIntegration } | undefined;
 let localHealthProbeInFlight:
-  | { key: string; promise: Promise<Sim2RealLocalWorkerIntegration> }
-  | undefined;
+  { key: string; promise: Promise<Sim2RealLocalWorkerIntegration> } | undefined;
 
 /**
  * Coalesce overview requests and briefly cache both healthy and failed probes.

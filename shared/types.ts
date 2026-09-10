@@ -29,12 +29,7 @@ export interface Device {
    * "板子没识别出来", so operators can see which probe actually fired.
    */
   boardFamilyDetectedBy?:
-    | 'uname'
-    | 'os-release'
-    | 'device-tree'
-    | 'tegra-release'
-    | 'cpuinfo'
-    | 'timeout';
+    'uname' | 'os-release' | 'device-tree' | 'tegra-release' | 'cpuinfo' | 'timeout';
   /** Suggested web_fetch / search entry points for this board */
   researchSeeds?: string[];
   /** 启用 FRP 前备份的局域网 SSH 地址（切回局域网时使用） */

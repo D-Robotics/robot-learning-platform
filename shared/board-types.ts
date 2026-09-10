@@ -9,4 +9,11 @@ export type RdkPlatform = 'rdk-x3' | 'rdk-x5' | 'rdk-ultra' | 'rdk-s100' | 'rdk-
 /** 远程设备逻辑平台：厂商无关；具体探测由 board adapter 填充标签 */
 export type DevicePlatform = RdkPlatform | 'linux-generic' | (string & {});
 
-export const ALL_RDK_PLATFORMS: RdkPlatform[] = ['rdk-x3', 'rdk-x5', 'rdk-ultra', 'rdk-s100', 'rdk-s100p', 'rdk-s600'];
+export const ALL_RDK_PLATFORMS: RdkPlatform[] = [
+  'rdk-x3',
+  'rdk-x5',
+  'rdk-ultra',
+  'rdk-s100',
+  'rdk-s100p',
+  'rdk-s600',
+];

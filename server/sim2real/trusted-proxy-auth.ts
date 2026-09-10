@@ -42,7 +42,10 @@ function header(request: Request, name: string): string {
 }
 
 function safeHeader(value: string, maxLength: number): string {
-  return value.replace(/[\u0000-\u001f\u007f]/g, ' ').trim().slice(0, maxLength);
+  return value
+    .replace(/[\u0000-\u001f\u007f]/g, ' ')
+    .trim()
+    .slice(0, maxLength);
 }
 
 function requestPath(request: Request): string {
@@ -134,7 +137,10 @@ function verifyRequest(
   ) {
     return null;
   }
-  const runnerToken = safeHeader(header(request, TRUSTED_PROXY_HEADERS.runnerToken), MAX_TOKEN_LENGTH);
+  const runnerToken = safeHeader(
+    header(request, TRUSTED_PROXY_HEADERS.runnerToken),
+    MAX_TOKEN_LENGTH,
+  );
   const displayName = safeHeader(header(request, TRUSTED_PROXY_HEADERS.displayName), 120);
   const email = safeHeader(header(request, TRUSTED_PROXY_HEADERS.email), 240);
   const message = trustedProxyCanonicalMessage({
@@ -170,13 +176,15 @@ function isMutatingMethod(method: string): boolean {
  * deployment, replace this adapter with one backed by shared state (Redis or
  * the gateway's own idempotency layer) before enabling trusted-proxy mode.
  */
-export function createTrustedProxyAuth(options: {
-  secret?: string;
-  maxAgeSeconds?: number;
-  now?: () => number;
-  /** Disable only for deterministic adapter tests; keep enabled in production. */
-  replayProtection?: boolean;
-} = {}): Sim2RealAuthPort {
+export function createTrustedProxyAuth(
+  options: {
+    secret?: string;
+    maxAgeSeconds?: number;
+    now?: () => number;
+    /** Disable only for deterministic adapter tests; keep enabled in production. */
+    replayProtection?: boolean;
+  } = {},
+): Sim2RealAuthPort {
   const secret = configuredSecret(options.secret);
   const maxAge = maxAgeSeconds(options.maxAgeSeconds);
   const now = options.now ?? Date.now;

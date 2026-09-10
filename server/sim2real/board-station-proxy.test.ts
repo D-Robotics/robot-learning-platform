@@ -1,9 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import {
-  stationAgentFetch,
-  stationAgentFetchWithStatus,
-} from './board-station-proxy.js';
+import { stationAgentFetch, stationAgentFetchWithStatus } from './board-station-proxy.js';
 
 const originalAgentUrl = process.env.RDK_SIM2REAL_BOARD_AGENT_URL;
 const originalAgentToken = process.env.RDK_SIM2REAL_BOARD_AGENT_TOKEN;
@@ -81,7 +78,9 @@ describe('board-station proxy bounded body handling', () => {
         headers: { 'content-type': 'application/json' },
       }),
     );
-    await expect(stationAgentFetchWithStatus('/v1/station/drive', { method: 'POST' })).resolves.toEqual({
+    await expect(
+      stationAgentFetchWithStatus('/v1/station/drive', { method: 'POST' }),
+    ).resolves.toEqual({
       status: 409,
       payload: { ok: false, reason: 'drive_disabled' },
     });
@@ -100,10 +99,15 @@ describe('board-station proxy bounded body handling', () => {
     delete process.env.RDK_SIM2REAL_BOARD_AGENT_URL;
     process.env.RDK_SIM2REAL_STUDIO_EXEC_ORIGIN = 'http://127.0.0.1:18090';
     const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
-      new Response(JSON.stringify({ output: JSON.stringify({ ok: true, mock: false }) }), { status: 200 }),
+      new Response(JSON.stringify({ output: JSON.stringify({ ok: true, mock: false }) }), {
+        status: 200,
+      }),
     );
     await expect(
-      stationAgentFetch('/healthz', { cookieHeader: 'studio_session=test', deviceId: 'studio-device-2' }),
+      stationAgentFetch('/healthz', {
+        cookieHeader: 'studio_session=test',
+        deviceId: 'studio-device-2',
+      }),
     ).resolves.toEqual({ ok: true, mock: false });
     const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
     expect(url).toBe('http://127.0.0.1:18090/api/devices/studio-device-2/exec');

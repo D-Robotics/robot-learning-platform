@@ -1,15 +1,24 @@
 import type { NextFunction, Request, Response } from 'express';
 
-export function wrapAsync(handler: (request: Request, response: Response, next: NextFunction) => unknown) {
+export function wrapAsync(
+  handler: (request: Request, response: Response, next: NextFunction) => unknown,
+) {
   return (request: Request, response: Response, next: NextFunction): void => {
     Promise.resolve(handler(request, response, next)).catch(next);
   };
 }
 
-export function sendApiError(response: Response, status: number, code: string, message: string, extra: Record<string, unknown> = {}): void {
+export function sendApiError(
+  response: Response,
+  status: number,
+  code: string,
+  message: string,
+  extra: Record<string, unknown> = {},
+): void {
   // Express exposes getHeader, while lightweight route harnesses may provide
   // only status/json. Keep the correlation field best-effort at this boundary.
-  const requestId = typeof response.getHeader === 'function' ? response.getHeader('X-Request-Id') : undefined;
+  const requestId =
+    typeof response.getHeader === 'function' ? response.getHeader('X-Request-Id') : undefined;
   response.status(status).json({
     ok: false,
     error: code,

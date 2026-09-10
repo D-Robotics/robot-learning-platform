@@ -14,8 +14,14 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..')
 const tunnelManagerPath = path.join(root, 'dist-server/server/sim2real/board-tunnel-manager.js');
 const stationSwitchesPath = path.join(root, 'dist-server/server/sim2real/station-switches.js');
 
-assert.ok(fs.existsSync(tunnelManagerPath), 'run npm run build first (board-tunnel-manager.js missing)');
-assert.ok(fs.existsSync(stationSwitchesPath), 'run npm run build first (station-switches.js missing)');
+assert.ok(
+  fs.existsSync(tunnelManagerPath),
+  'run npm run build first (board-tunnel-manager.js missing)',
+);
+assert.ok(
+  fs.existsSync(stationSwitchesPath),
+  'run npm run build first (station-switches.js missing)',
+);
 
 const tunnelManager = await import(tunnelManagerPath);
 const stationSwitches = await import(stationSwitchesPath);
@@ -56,7 +62,9 @@ fs.writeFileSync(
   { mode: 0o755 },
 );
 const fakeSsh = path.join(binDir, 'ssh');
-fs.writeFileSync(fakeSsh, `#!/bin/sh\nexec "${process.execPath}" "${fakeSshJs}" "$@"\n`, { mode: 0o755 });
+fs.writeFileSync(fakeSsh, `#!/bin/sh\nexec "${process.execPath}" "${fakeSshJs}" "$@"\n`, {
+  mode: 0o755,
+});
 const sshLog = path.join(dataDir, 'ssh.log');
 process.env.FAKE_SSH_LOG = sshLog;
 const realPath = process.env.PATH;
@@ -94,17 +102,27 @@ const test = async (name, fn) => {
 
 // ---- tests -----------------------------------------------------------------
 await test('create + list + dedup + delete round-trips the record', async () => {
-  const created = await tunnelManager.createDeviceConnection(
-    { host: '10.185.136.180', label: 'OriginBot', username: 'root', port: 22 },
-  );
+  const created = await tunnelManager.createDeviceConnection({
+    host: '10.185.136.180',
+    label: 'OriginBot',
+    username: 'root',
+    port: 22,
+  });
   assert.ok(!('error' in created), `unexpected error: ${created.error}`);
   assert.match(created.id, /^board-[a-z0-9]{8}$/);
   assert.equal(created.lastCheckMessage, '尚未测试连接。');
   const dup = await tunnelManager.createDeviceConnection({ host: '10.185.136.180' });
   assert.equal(dup.error, 'ALREADY_EXISTS');
   assert.equal(tunnelManager.listDeviceConnections().length, 1);
-  assert.equal(tunnelManager.listDeviceConnections('alice@example.com').length, 0, 'multi-user mode must scope by owner');
-  const alice = await tunnelManager.createDeviceConnection({ host: '192.168.1.5' }, 'alice@example.com');
+  assert.equal(
+    tunnelManager.listDeviceConnections('alice@example.com').length,
+    0,
+    'multi-user mode must scope by owner',
+  );
+  const alice = await tunnelManager.createDeviceConnection(
+    { host: '192.168.1.5' },
+    'alice@example.com',
+  );
   assert.ok(!('error' in alice));
   assert.equal(tunnelManager.listDeviceConnections().length, 2, 'single-user mode sees all');
   assert.equal(tunnelManager.listDeviceConnections('alice@example.com').length, 1);
@@ -113,7 +131,13 @@ await test('create + list + dedup + delete round-trips the record', async () => 
 });
 
 await test('URL-ish hosts are rejected (SSRF guard on stored coordinates)', async () => {
-  for (const bad of ['http://10.0.0.1', 'https://board.example.com', 'user@host', 'host/path', '']) {
+  for (const bad of [
+    'http://10.0.0.1',
+    'https://board.example.com',
+    'user@host',
+    'host/path',
+    '',
+  ]) {
     const result = await tunnelManager.createDeviceConnection({ host: bad });
     assert.equal(result.error, 'INVALID_HOST', `host "${bad}" must be rejected`);
   }
@@ -137,7 +161,11 @@ await test('openDeviceConnectionTunnel probes healthz through the tunnel', async
   assert.ok(tunnelManager.activeDeviceConnections().includes(created.id));
   assert.equal(tunnelManager.activeTunnelAgentUrl(), opened.url);
   // the ssh shim saw the exact forward + host coordinates
-  const argv = fs.readFileSync(sshLog, 'utf8').trim().split('\n').find((line) => line.includes('-L'));
+  const argv = fs
+    .readFileSync(sshLog, 'utf8')
+    .trim()
+    .split('\n')
+    .find((line) => line.includes('-L'));
   assert.match(argv, new RegExp(`-L \\d+:127\\.0\\.0\\.1:${agentPort} root@127\\.0\\.0\\.1 -p 22`));
   // record persisted the healthy state
   const stored = tunnelManager.listDeviceConnections().find((item) => item.id === created.id);
@@ -157,10 +185,18 @@ await test('ssh failure fails closed: no tunnel, no stale record state', async (
   const opened = await tunnelManager.openDeviceConnectionTunnel(created.id);
   assert.equal('error' in opened, true);
   assert.match(opened.error, /SSH 连接失败：/);
-  assert.equal(tunnelManager.activeDeviceConnections().length, 0, 'failed tunnel must not stay in the live map');
+  assert.equal(
+    tunnelManager.activeDeviceConnections().length,
+    0,
+    'failed tunnel must not stay in the live map',
+  );
   assert.equal(tunnelManager.deviceConnectionAgentUrl(created.id), null);
   const stored = tunnelManager.listDeviceConnections().find((item) => item.id === created.id);
-  assert.equal(stored.lastCheckOk, null, 'open failure itself does not mutate lastCheck (route marks it)');
+  assert.equal(
+    stored.lastCheckOk,
+    null,
+    'open failure itself does not mutate lastCheck (route marks it)',
+  );
   await tunnelManager.deleteDeviceConnection(created.id);
 });
 
@@ -198,7 +234,9 @@ fs.rmSync(dataDir, { recursive: true, force: true });
 for (const line of results) console.log(line);
 const failed = results.filter((line) => line.startsWith('FAIL')).length;
 if (failed === 0) {
-  console.log('[sim2real device-connections] PASS — tunnels, records, scoping, and switches behave');
+  console.log(
+    '[sim2real device-connections] PASS — tunnels, records, scoping, and switches behave',
+  );
 } else {
   console.log(`[sim2real device-connections] ${failed} FAIL`);
 }

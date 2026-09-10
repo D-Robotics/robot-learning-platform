@@ -115,22 +115,25 @@ describe('deployment release evidence', () => {
     ['unsigned artifact', run({ artifact: { ...run().artifact!, sha256: undefined } })],
     ['non-deployable artifact', run({ artifact: { ...run().artifact!, deployable: false } })],
     ['no telemetry evaluation', run({ evaluation: undefined })],
-    ['synthetic telemetry only', run({
-      evaluation: {
-        evaluatedAt: '2026-09-10T00:06:00.000Z',
-        sampleCount: 200,
-        replay: {
+    [
+      'synthetic telemetry only',
+      run({
+        evaluation: {
+          evaluatedAt: '2026-09-10T00:06:00.000Z',
           sampleCount: 200,
-          durationSeconds: 20,
-          source: 'browser',
-          chunkCount: 1,
-          droppedCount: 0,
-          doneCount: 0,
-          fallCount: 0,
+          replay: {
+            sampleCount: 200,
+            durationSeconds: 20,
+            source: 'browser',
+            chunkCount: 1,
+            droppedCount: 0,
+            doneCount: 0,
+            fallCount: 0,
+          },
+          warnings: [],
         },
-        warnings: [],
-      },
-    })],
+      }),
+    ],
   ])('fails closed for %s', (_label, candidate) => {
     expect(
       validateRunForDeployment({ mode: 'canary', modelId: 'model-1', run: candidate }).passed,
@@ -151,8 +154,6 @@ describe('deployment release evidence', () => {
     };
     const verdict = validateRunForDeployment({ mode: 'canary', modelId: 'model-1', run: weak });
     expect(verdict.passed).toBe(false);
-    expect(verdict.errors).toEqual(
-      expect.arrayContaining([expect.stringContaining('CI low')]),
-    );
+    expect(verdict.errors).toEqual(expect.arrayContaining([expect.stringContaining('CI low')]));
   });
 });

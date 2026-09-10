@@ -81,4 +81,6 @@ delete profile.hardwareProfileId;
 fs.writeFileSync(adapterPath, `${JSON.stringify(manifest, null, 2)}\n`, { flag: 'wx' });
 fs.writeFileSync(profilePath, `${JSON.stringify(profile, null, 2)}\n`, { flag: 'wx' });
 console.log(`[adapter-scaffold] created ${adapterPath} and ${profilePath}`);
-console.log('[adapter-scaffold] template remains mock=true until CHANGE_ME fields are validated on hardware');
+console.log(
+  '[adapter-scaffold] template remains mock=true until CHANGE_ME fields are validated on hardware',
+);
