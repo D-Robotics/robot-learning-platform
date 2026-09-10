@@ -13,6 +13,15 @@
 
 ## 启用（双开关）
 
+> **推荐：网页内完成全部一次性配置**（RDK Studio 网页版风格）。在上位机页：
+>
+> 1. **「设备管理」面板** → 填板卡 IP / SSH 用户 / 端口 → 添加 → 点「连接」。平台在服务端建 SSH 隧道（`ssh -L`，复用部署脚本同一凭据路径，不存密码），并自动探测板端 agent 健康状态。
+> 2. **「运动开关」面板** → 板端行出现后点「驱动」开关：平台代理调用板端 `/v1/config`，原子改写 `agent.env` 中两个开关行并自动 `systemctl restart rdk-board-agent`（约 2 秒生效；运动窗口进行中会拒绝重启）。同面板的「平台 · 驱动金丝雀」开关开启平台侧闸门（持久化保存，开启需确认对话框）。
+>
+> 两个开关都亮后金丝雀面板解锁。急停不依赖任何开关。
+
+命令行等价流程（与网页操作完全等价，适合脚本化）：
+
 ```bash
 # 板端（OriginBot 上）：/root/rdk-board-agent/agent.env
 echo 'RDK_SIM2REAL_BOARD_AGENT_ENABLE_DRIVE=1' >> /root/rdk-board-agent/agent.env
@@ -20,6 +29,9 @@ ssh root@<board> systemctl restart rdk-board-agent
 
 # 平台侧（运行 Web 工作台的环境）
 RDK_SIM2REAL_STATION_DRIVE_ENABLED=1   # 加入 env 文件后重启工作台
+# 或运行时切换（无需重启；持久化到 <dataDir>/station-switches.json，运行时覆盖优先于 env）
+curl -X PUT http://127.0.0.1:18104/api/sim2real/board-station/switches \
+  -H 'content-type: application/json' -d '{"drive":true,"confirm":true}'
 ```
 
 验证两端都开：
@@ -99,10 +111,13 @@ curl -X POST .../drive/stop
 ### 案例 3：测完即关（默认态恢复）
 
 ```bash
+# 网页方式（推荐）：「运动开关」面板把「平台 · 驱动金丝雀」和板端「驱动」都点回关闭
+# 命令行等价：
 # 板端
 ssh root@<board> "sed -i '/ENABLE_DRIVE/d' /root/rdk-board-agent/agent.env; systemctl restart rdk-board-agent"
-# 平台侧 env 删除 RDK_SIM2REAL_STATION_DRIVE_ENABLED=1 后重启工作台
+# 平台侧 env 删除 RDK_SIM2REAL_STATION_DRIVE_ENABLED=1 后重启工作台（或网页开关关掉运行时覆盖）
 # 验证：两侧都应回 false，POST 应 409
+curl http://127.0.0.1:18104/api/sim2real/board-station/switches
 ```
 
 恢复只读后，面板回到「未启用」说明态，控制区隐藏；急停仍然可用（它不依赖开关）。

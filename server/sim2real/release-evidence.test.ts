@@ -25,6 +25,22 @@ function run(overrides: Partial<Sim2RealRunRecord> = {}): Sim2RealRunRecord {
       sha256: 'a'.repeat(64),
       deployable: true,
     },
+    evaluation: {
+      evaluatedAt: '2026-09-10T00:06:00.000Z',
+      sampleCount: 200,
+      referenceSampleCount: 200,
+      actionMae: 0.08,
+      replay: {
+        sampleCount: 200,
+        durationSeconds: 20,
+        source: 'board-agent',
+        chunkCount: 1,
+        droppedCount: 0,
+        doneCount: 0,
+        fallCount: 0,
+      },
+      warnings: [],
+    },
     taskEvaluation: {
       taskId: 'originbot-goal-navigation',
       qualityGate: {
@@ -98,6 +114,23 @@ describe('deployment release evidence', () => {
     ['unfinished run', run({ status: 'running' })],
     ['unsigned artifact', run({ artifact: { ...run().artifact!, sha256: undefined } })],
     ['non-deployable artifact', run({ artifact: { ...run().artifact!, deployable: false } })],
+    ['no telemetry evaluation', run({ evaluation: undefined })],
+    ['synthetic telemetry only', run({
+      evaluation: {
+        evaluatedAt: '2026-09-10T00:06:00.000Z',
+        sampleCount: 200,
+        replay: {
+          sampleCount: 200,
+          durationSeconds: 20,
+          source: 'browser',
+          chunkCount: 1,
+          droppedCount: 0,
+          doneCount: 0,
+          fallCount: 0,
+        },
+        warnings: [],
+      },
+    })],
   ])('fails closed for %s', (_label, candidate) => {
     expect(
       validateRunForDeployment({ mode: 'canary', modelId: 'model-1', run: candidate }).passed,

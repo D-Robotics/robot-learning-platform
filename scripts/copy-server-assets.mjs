@@ -71,3 +71,15 @@ copyFile(
   path.join('services', 'sim2real-web', 'local-board-agent.mjs'),
   path.join('dist-server', 'services', 'sim2real-web', 'local-board-agent.mjs'),
 );
+
+// The server embeds resolved task packs into runner payloads (robogo-runner
+// imports scripts/resolve-task-pack.mjs), and that resolver reads tasks/ +
+// adapters/ JSON. Ship all three so a dist deployment trains the declared
+// task instead of silently degrading to engine defaults.
+copyFile(
+  path.join('scripts', 'resolve-task-pack.mjs'),
+  path.join('dist-server', 'scripts', 'resolve-task-pack.mjs'),
+);
+copyTreeFiltered(path.join('tasks'), path.join('dist-server', 'tasks'));
+copyTreeFiltered(path.join('adapters'), path.join('dist-server', 'adapters'));
+copyTreeFiltered(path.join('engines'), path.join('dist-server', 'engines'));

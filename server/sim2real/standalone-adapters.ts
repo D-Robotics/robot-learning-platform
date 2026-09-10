@@ -6,6 +6,19 @@ import { Router } from 'express';
 import type { Device } from '../../shared/types.js';
 import type { Sim2RealAuthPort } from './sim2real-auth.js';
 import { studioCookieAuthConfigured } from './studio-cookie-auth.js';
+import {
+  activeTunnelAgentUrl,
+  setTunnelDataDirResolver,
+} from './board-tunnel-manager.js';
+
+// Wire the tunnel manager's data-dir resolution to the adapters' own resolver
+// (kept as an explicit init call instead of a direct import so this module
+// stays the single owner of storage paths).
+setTunnelDataDirResolver(resolveDataDir);
+
+function isMultiUserStandaloneAuth(): boolean {
+  return resolveStandaloneAuthMode() !== 'standalone' || isWebCloudDeployment();
+}
 
 const MAX_ROBOGO_API_RESPONSE_BYTES = 1_000_000;
 const BOARD_PREFLIGHT_BEGIN = '__STUDIO_SIM2REAL_PREFLIGHT_BEGIN__';
@@ -383,6 +396,11 @@ export function buildBoardPreflightCommand(): string {
     'printf "python3=%s\\n" "$(command -v python3 2>/dev/null || echo missing)"',
     'printf "tros=%s\\n" "$(if test -d /opt/tros || test -d /opt/ros; then echo present; else echo missing; fi)"',
     'printf "disk_bytes=%s\\n" "$(df -Pk /tmp 2>/dev/null | awk \'NR==2 {print $4 * 1024}\' || echo unknown)"',
+    // Honest BPU toolchain probe: report presence of the quantization
+    // (hbdk-sim) and on-device runtime (hbrtmlin/hbrt-tv) tools on PATH.
+    // Presence only — parsing versions here would let a partial install or
+    // an unusual version string silently fail deployment preflight.
+    'printf "bpu_toolchain=%s\\n" "$(if command -v hbdk-sim >/dev/null 2>&1 && (command -v hbrtmlin >/dev/null 2>&1 || command -v hbrt-tv >/dev/null 2>&1); then echo present; else echo missing; fi)"',
     `printf "${BOARD_PREFLIGHT_END}\\n"`,
   ].join('; ');
 }
@@ -398,12 +416,12 @@ function parseBoardPreflight(output: string): Record<string, string> {
     if (separator <= 0) continue;
     const key = line.slice(0, separator).trim();
     const value = line.slice(separator + 1).trim();
-    if (/^(?:arch|kernel|python3|tros|disk_bytes)$/.test(key)) fields[key] = value.slice(0, 255);
+    if (/^(?:arch|kernel|python3|tros|disk_bytes|bpu_toolchain)$/.test(key)) fields[key] = value.slice(0, 255);
   }
   // A board passport is only useful when the complete fixed probe was
   // returned.  Do not let a partial/malformed agent response look like a
   // successful detection with a handful of fields.
-  const required = ['arch', 'kernel', 'python3', 'tros', 'disk_bytes'];
+  const required = ['arch', 'kernel', 'python3', 'tros', 'disk_bytes', 'bpu_toolchain'];
   return required.every((key) => fields[key]) ? fields : {};
 }
 
@@ -411,29 +429,43 @@ function parseBoardPreflight(output: string): Record<string, string> {
  * BoardAgent base URL after the SSRF-safe parse: plain HTTP is limited to
  * loopback; remote agents must use TLS; credentials/query/hash are rejected.
  * Exported for the board-station proxy, which shares the same rule.
+ *
+ * In single-user (standalone) mode, a web-managed tunnel connection that is
+ * currently up takes precedence over the env URL: it is still a loopback URL
+ * (the tunnel process owns the outbound SSH), so the SSRF boundary is intact.
+ * Multi-user deployments never consult tunnels — their agent endpoint is
+ * deployment infrastructure, not per-operator state.
  */
 export function boardAgentUrl(): string | null {
   const raw = String(process.env.RDK_SIM2REAL_BOARD_AGENT_URL ?? '').trim().replace(/\/+$/, '');
-  if (!raw) return null;
-  try {
-    const parsed = new URL(raw);
-    const hostname = parsed.hostname.replace(/^\[|\]$/g, '').toLowerCase();
-    const loopback = ['localhost', '127.0.0.1', '::1'].includes(hostname);
-    // Plain HTTP is intentionally limited to loopback. A remote agent must
-    // use TLS so credentials and preflight results cannot be intercepted.
-    if (parsed.protocol !== 'https:' && !(parsed.protocol === 'http:' && loopback)) return null;
-    if (parsed.username || parsed.password || parsed.search || parsed.hash) return null;
-    return parsed.toString().replace(/\/+$/, '');
-  } catch {
-    return null;
+  let fromEnv: string | null = null;
+  if (raw) {
+    try {
+      const parsed = new URL(raw);
+      const hostname = parsed.hostname.replace(/^\[|\]$/g, '').toLowerCase();
+      const loopback = ['localhost', '127.0.0.1', '::1'].includes(hostname);
+      // Plain HTTP is intentionally limited to loopback. A remote agent must
+      // use TLS so credentials and preflight results cannot be intercepted.
+      if (parsed.protocol === 'https:' || (parsed.protocol === 'http:' && loopback)) {
+        if (!parsed.username && !parsed.password && !parsed.search && !parsed.hash) {
+          fromEnv = parsed.toString().replace(/\/+$/, '');
+        }
+      }
+    } catch {
+      fromEnv = null;
+    }
   }
+  if (!isMultiUserStandaloneAuth()) {
+    const tunneled = activeTunnelAgentUrl();
+    if (tunneled) return tunneled;
+  }
+  return fromEnv;
 }
 
 /** Whether the composition root has a syntactically safe BoardAgent endpoint. */
 export function isBoardAgentConfigured(): boolean {
   return Boolean(boardAgentUrl() || studioBridgeConfiguration());
 }
-
 /**
  * Shared Studio deployments can reach a board through the already-authenticated
  * Local Bridge WebSocket. Sim2Real uses Studio's device exec route as a narrow

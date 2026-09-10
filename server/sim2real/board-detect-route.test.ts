@@ -75,6 +75,7 @@ describe('standalone BoardAgent board-detect route', () => {
       'python3=/usr/bin/python3',
       'tros=present',
       `disk_bytes=${2 * 1024 ** 3}`,
+      'bpu_toolchain=present',
       '__STUDIO_SIM2REAL_PREFLIGHT_END__',
     ].join('\n');
     let command = '';

@@ -147,12 +147,21 @@ export interface Sim2RealControlBinding {
   source?: 'keyboard' | 'touch' | 'gamepad' | 'ui';
 }
 
+/**
+ * On-policy vs off-policy learner for the local starter engine. The spec is
+ * an allowlist, not a free string: a typo degrades to a 400 at submission
+ * time instead of silently training with PPO.
+ */
+export type Sim2RealTrainingAlgorithm = 'ppo' | 'sac';
+
 export interface Sim2RealTrainingSpec {
   profile: Sim2RealTrainingProfile;
   numEnvs: number;
   maxIterations: number;
   video: boolean;
   runName?: string;
+  /** Learner class; engines default to 'ppo' when omitted. */
+  algorithm?: Sim2RealTrainingAlgorithm;
 }
 
 export interface Sim2RealCheckpointRef {
@@ -686,6 +695,10 @@ export function normalizeTrainingSpec(value: unknown): {
   const runName = safeText(source.runName, 80);
   if (runName && !/^[a-zA-Z0-9][a-zA-Z0-9._-]{0,79}$/.test(runName))
     errors.push('training.runName contains unsupported characters');
+  const algorithm = safeText(source.algorithm, 12);
+  if (algorithm && algorithm !== 'ppo' && algorithm !== 'sac') {
+    errors.push('training.algorithm must be ppo or sac');
+  }
   if (errors.length) return { errors };
   return {
     errors,
@@ -695,6 +708,7 @@ export function normalizeTrainingSpec(value: unknown): {
       maxIterations,
       video: rawVideo as boolean,
       ...(runName ? { runName } : {}),
+      ...(algorithm ? { algorithm: algorithm as Sim2RealTrainingAlgorithm } : {}),
     },
   };
 }

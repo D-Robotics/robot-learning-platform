@@ -10,7 +10,7 @@ permissions:
 jobs:
   verify:
     runs-on: ubuntu-latest
-    # The verify chain runs 18 assertion scripts plus vitest and a release
+    # The verify chain runs 20+ assertion scripts plus vitest and a release
     # build; a cold npm ci and python probes add minutes on shared runners.
     timeout-minutes: 20
     steps:

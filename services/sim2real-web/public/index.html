@@ -53,9 +53,6 @@
               更多 <span aria-hidden="true">⌄</span>
             </button>
             <div class="top-menu-list" role="menu" id="top-menu-list" hidden>
-              <button class="top-menu-item" type="button" role="menuitemcheckbox" id="presentation-toggle" aria-pressed="false">
-                演示视图
-              </button>
               <button class="top-menu-item" type="button" role="menuitemcheckbox" id="notify-toggle" aria-pressed="false">
                 通知关
               </button>
@@ -630,6 +627,10 @@
                       <option value="low-vram">低显存 · 64 环境起步</option>
                       <option value="standard" selected>标准 · 1024 环境</option>
                       <option value="high-vram">高显存 · 4096 环境</option></select
+                    ><label class="field-label" for="training-algorithm">算法</label
+                    ><select id="training-algorithm" aria-label="选择强化学习算法">
+                      <option value="ppo" selected>PPO · 在策略</option>
+                      <option value="sac">SAC · 离策略</option></select
                     ><label class="field-label" for="compute-resource-select">训练资源</label
                     ><select id="compute-resource-select" aria-label="选择 GPU 训练资源">
                       <option value="">服务端默认本地 Worker</option>
@@ -1077,6 +1078,40 @@
             <div class="station-notice" id="station-notice" role="status" aria-live="polite" hidden>
               上位机未就绪：未配置板端 agent 或板卡设备。
             </div>
+            <article class="panel station-device-manager" id="station-device-manager">
+              <div class="panel-heading panel-heading-lean"><h2>设备管理</h2>
+                <span class="panel-caption">网页添加真机 · SSH 隧道 · 免命令行</span>
+              </div>
+              <p class="station-drive-note" id="station-device-manager-note">
+                在这里保存 OriginBot 的 SSH 地址并连接：平台会在服务器与板端之间建立
+                SSH 隧道（使用本机已有密钥，不保存密码），随后上位机、遥测、相机和预检
+                都自动指向这台真机。隧道断开或设备移除时恢复为默认（只读参考 agent）。
+              </p>
+              <div class="station-device-add" id="station-device-add">
+                <label for="station-device-host">板卡 IP / 主机名
+                  <input type="text" id="station-device-host" placeholder="10.185.136.180" spellcheck="false" autocomplete="off" />
+                </label>
+                <label for="station-device-user">SSH 用户
+                  <input type="text" id="station-device-user" value="root" spellcheck="false" autocomplete="off" />
+                </label>
+                <label for="station-device-port">SSH 端口
+                  <input type="number" id="station-device-port" value="22" min="1" max="65535" />
+                </label>
+                <label for="station-device-label">备注（可选）
+                  <input type="text" id="station-device-label" placeholder="OriginBot 演示机" maxlength="120" />
+                </label>
+                <button class="button station-device-add-btn" type="button" id="station-device-add-btn">
+                  添加设备
+                </button>
+              </div>
+              <div class="station-device-list" id="station-device-list">
+                <span class="station-topic-empty" id="station-device-list-empty">尚未添加设备。</span>
+              </div>
+              <p class="station-device-ssh-hint" id="station-device-ssh-hint">
+                提示：连接使用服务器本机的 ssh（与部署脚本同一凭据路径）。首次连接一块新板卡
+                相当于 <code>ssh root@&lt;IP&gt;</code>；需要已配置好密钥或 ssh-agent。
+              </p>
+            </article>
             <div class="station-layout">
               <article class="panel station-status-panel">
                 <div class="panel-heading panel-heading-lean"><h2>板卡实时状态</h2>
@@ -1205,6 +1240,52 @@
                   </button>
                   <span class="station-camera-state" id="station-camera-state">未连接</span>
                 </div>
+              </article>
+
+              <article class="panel station-switch-panel" id="station-switch-panel">
+                <div class="panel-heading panel-heading-lean"><h2>运动开关</h2>
+                  <span class="panel-caption">双开关 · 网页切换 · 急停永不依赖开关</span>
+                </div>
+                <p class="station-drive-note" id="station-switch-note">
+                  受限运动需要两侧开关同时开启：平台侧在这里切换（持久化保存），
+                  板端侧在连接真机后于此处切换（写板端 env 并自动重启 agent，约 2 秒生效）。
+                  开启即代表你确认操作者在场、场地已清空、急停可用。
+                </p>
+                <div class="station-switch-rows" id="station-switch-rows">
+                  <div class="station-switch-row">
+                    <div class="station-switch-info">
+                      <strong>平台 · 驱动金丝雀</strong>
+                      <span class="station-switch-sub">RDK_SIM2REAL_STATION_DRIVE_ENABLED（运行时覆盖）</span>
+                    </div>
+                    <button class="button station-switch-toggle" type="button" id="station-switch-drive" data-switch="drive" aria-pressed="false">
+                      开启
+                    </button>
+                  </div>
+                  <div class="station-switch-row">
+                    <div class="station-switch-info">
+                      <strong>平台 · 策略运行时</strong>
+                      <span class="station-switch-sub">RDK_SIM2REAL_STATION_POLICY_ENABLED（运行时覆盖）</span>
+                    </div>
+                    <button class="button station-switch-toggle" type="button" id="station-switch-policy" data-switch="policy" aria-pressed="false">
+                      开启
+                    </button>
+                  </div>
+                  <div class="station-switch-row" id="station-switch-board-row" hidden>
+                    <div class="station-switch-info">
+                      <strong id="station-switch-board-name">板端 · 驱动/策略开关</strong>
+                      <span class="station-switch-sub" id="station-switch-board-sub">写板端 env 并重启 agent（未连接真机）</span>
+                    </div>
+                    <div class="station-switch-board-buttons">
+                      <button class="button station-switch-toggle" type="button" id="station-switch-board-drive" data-board-switch="RDK_SIM2REAL_BOARD_AGENT_ENABLE_DRIVE" aria-pressed="false">
+                        驱动
+                      </button>
+                      <button class="button station-switch-toggle" type="button" id="station-switch-board-policy" data-board-switch="RDK_SIM2REAL_BOARD_AGENT_ENABLE_POLICY" aria-pressed="false">
+                        策略
+                      </button>
+                    </div>
+                  </div>
+                </div>
+                <div class="station-drive-state" id="station-switch-state" role="status" aria-live="polite">就绪</div>
               </article>
 
               <article class="panel station-drive-panel" id="station-drive-panel">
@@ -1439,6 +1520,7 @@
           <div class="run-detail-field"><span>模型</span><strong id="confirm-run-model">—</strong></div>
           <div class="run-detail-field"><span>动作任务</span><strong id="confirm-run-task">—</strong></div>
           <div class="run-detail-field"><span>训练档位</span><strong id="confirm-run-profile">—</strong></div>
+          <div class="run-detail-field"><span>算法</span><strong id="confirm-run-algorithm">PPO</strong></div>
           <div class="run-detail-field"><span>续训</span><strong id="confirm-run-resume">不续训</strong></div>
         </div>
         <div class="confirm-run-actions">

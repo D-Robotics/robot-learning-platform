@@ -10,6 +10,8 @@
 | 板载相机画面 | ✅ | MJPEG 流（multipart/x-mixed-replace），`<img>` 直接渲染 |
 | 白名单只读命令 | ✅ | TROS 节点/话题列表、磁盘用量、服务状态 |
 | 遥控/电机控制 | ⚠️ 默认关闭的受限驱动 | 双开关（平台 `RDK_SIM2REAL_STATION_DRIVE_ENABLED` + 板端 `RDK_SIM2REAL_BOARD_AGENT_ENABLE_DRIVE`）全开后提供 0.05–0.3 m/s / ≤2 s 的运动金丝雀；`actuatorControl` 全链路如实上报开关状态 |
+| 网页添加真机（设备管理） | ✅ | 上位机页「设备管理」面板：填 SSH 坐标 → 服务端建 loopback SSH 隧道 + 探测 agent；不存密码，认证走本机 ssh 密钥/代理（见下） |
+| 运动开关网页切换 | ✅ | 「运动开关」面板：平台侧持久化运行时覆盖（开启需确认）；板端侧经代理改 `agent.env` 两行并重启 agent |
 | 急停 | ✅ 恒可用 | `POST /api/sim2real/board-station/drive/stop` 绕过所有开关，空格键全局急停 |
 | 写板操作（下发制品、改参数、启停服务） | ❌ | 上板部署仍走部署页的 preflight → canary → live 流程 |
 
@@ -33,7 +35,7 @@ RDK_SIM2REAL_BOARD_AGENT_URL=http://127.0.0.1:19100 npm run dev:sim2real
 
 ## 线协议（agent 侧）
 
-BoardAgent 在部署预检协议之外新增 8 个端点（5 个只读 + 3 个受限驱动）：
+BoardAgent 在部署预检协议之外新增 10 个端点（6 个只读 + 3 个受限驱动 + 1 个受控配置）：
 
 ```
 GET  /healthz                       能力声明 + stationCommands 白名单
@@ -44,6 +46,8 @@ POST /v1/station/commands           { "id": "<白名单命令>" } → { ok, outp
 GET  /v1/station/drive              受限驱动状态（金丝雀）
 POST /v1/station/drive              钳制+时间盒的 cmd_vel（双开关全开才接受）
 POST /v1/station/drive/stop         零速急停（恒 200，绕过开关）
+GET  /v1/config                     两个运动开关的当前状态 + env 文件/systemd 状态
+POST /v1/config                     { "switches": { ...两个开关... } } 原子改写 env 行并重启服务（运动窗口中 409 拒绝）
 ```
 
 - 鉴权：与预检协议同一 `RDK_SIM2REAL_BOARD_AGENT_TOKEN`（Bearer）。
@@ -61,6 +65,20 @@ GET  /board-station/status/stream   逐字节转发 NDJSON（1 上游连接/客�
 GET  /board-station/camera.mjpeg    逐字节转发 MJPEG（同上）
 POST /board-station/commands        白名单再校验（服务端第二道闸）后转发
 GET  /board-station/devices         可作为上位机目标的可见板卡列表
+GET  /board-station/switches        平台侧两个运动开关的当前状态（agent 不可达也可读）
+PUT  /board-station/switches        切换平台侧开关（开启需 body.confirm=true；关闭恒允许；reset=true 清除运行时覆盖回退 env）
+```
+
+设备管理（`server/routes/sim2real-device-connection-routes.ts`，同一前缀 + 别名）：
+
+```
+GET    /device-connections                    已存连接 + 隧道活跃标记
+POST   /device-connections                    保存 SSH 坐标（host/端口/用户/备注）
+DELETE /device-connections/:connectionId      删除记录并拆隧道
+POST   /device-connections/:connectionId/connect      建 SSH 隧道 + 探测 /healthz
+POST   /device-connections/:connectionId/disconnect   拆隧道，恢复默认 agent 目标
+GET    /device-connections/:connectionId/config        代理读板端开关状态
+POST   /device-connections/:connectionId/config        代理改板端两个开关（写 env + 重启 agent）
 ```
 
 代理行为：
@@ -72,6 +90,25 @@ GET  /board-station/devices         可作为上位机目标的可见板卡列�
 - 请求体上限 64KB、JSON 响应上限 256KB、超时 4–15s 有界。
 - 直连模式不转发 Studio 凭据；Local Bridge 模式只转发当前浏览器已有的 Studio cookie，且 `redirect: 'error'` 防重定向 SSRF。
 - Local Bridge 无法承载长连接 MJPEG 时，平台轮询板端 `/v1/station/camera.snapshot`，在服务端重建同一 multipart 流；无相机仍返回 `CAMERA_UNAVAILABLE`，不生成合成画面。
+
+## 网页添加真机（设备管理 · RDK Studio 网页版风格）
+
+「连真机」与「开运动」的一次性配置现在都能在浏览器里完成，不需要命令行。上位机页新增两个面板：
+
+**「设备管理」面板**：
+
+1. 填板卡 IP / SSH 用户（默认 root）/ 端口（默认 22）/ 备注 → **添加**。只保存 SSH 坐标（`<dataDir>/device-connections.json`，0600），**不存任何密码**——认证走服务器本机 ssh 的既有密钥/跳板配置，与 `scripts/deploy-x5-board-agent.sh` 同一凭据路径。
+2. 点 **连接**：服务端进程 spawn `ssh -N -L <随机本地端口>:127.0.0.1:19100 root@<IP>`（BatchMode 非交互、ExitOnForwardFailure、失败即拆），然后探测转发端口的 `/healthz`。成功后板端遥测/相机/命令全部自动切到该隧道目标；失败时错误如实回显（SSH 原因），隧道不留残余。
+3. 因为隧道本地端是 loopback，代理看到的 agent URL 仍是 `http://127.0.0.1:<port>`——现有 SSRF 边界（明文 HTTP 仅限 loopback）、Bearer token、有界 fetch 全部原样保留。浏览器永远不直连板端。
+
+多用户部署下设备记录按 owner 隔离（同 devices.json 规则）；隧道覆盖 agent 目标的行为只在单用户 standalone 模式生效。
+
+**「运动开关」面板**：
+
+- **平台侧**两个开关：PUT 持久化到 `<dataDir>/station-switches.json`（0600）。运行时覆盖优先于 env 默认值——env 仍是部署时的默认答案；`reset` 可清除覆盖回退 env。**开启**必须过确认对话框 + API 层 `confirm=true` 双重确认（关方向恒允许——fail-safe 方向）。
+- **板端侧**两个开关（连接真机后才显示）：经平台代理调用板端 `/v1/config`，原子改写 `agent.env` 中对应的开关行（保留其他行）并 `systemctl restart rdk-board-agent`，约 2 秒生效。**运动窗口进行中会 409 拒绝**——绝不在机器人运动时换掉安全层。非 systemd 环境（手跑 agent）会如实报告「需手动重启」而不是假装已重启。
+
+两个面板共同遵守同一原则：开关只翻两个文档化的标志位，**永远不能**变成发速度命令的通道；急停不依赖任何开关。
 
 ## 接真机（X5）
 

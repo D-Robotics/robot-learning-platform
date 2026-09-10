@@ -1,5 +1,9 @@
 import type { Request, Response, Router } from 'express';
 
+import { mkdtempSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { registerSim2RealBoardStationRoutes } from './sim2real-board-station-routes.js';
@@ -7,7 +11,10 @@ import { registerSim2RealBoardStationRoutes } from './sim2real-board-station-rou
 const originalAgentUrl = process.env.RDK_SIM2REAL_BOARD_AGENT_URL;
 const originalAgentToken = process.env.RDK_SIM2REAL_BOARD_AGENT_TOKEN;
 const originalDriveEnabled = process.env.RDK_SIM2REAL_STATION_DRIVE_ENABLED;
+const originalStorageDir = process.env.RDK_SIM2REAL_STORAGE_DIR;
 const originalPolicyEnabled = process.env.RDK_SIM2REAL_STATION_POLICY_ENABLED;
+
+const tmpdirSync = () => mkdtempSync(join(tmpdir(), 'station-switch-test-'));
 
 const device = {
   id: 'x5-real-001',
@@ -39,6 +46,10 @@ function buildRouter() {
   };
   router.post = (path: string, ...handlers: Handler[]) => {
     router.stack.push({ route: { path, methods: { post: true }, stack: handlers.map((h) => ({ handle: h })) } } as never);
+    return router;
+  };
+  router.put = (path: string, ...handlers: Handler[]) => {
+    router.stack.push({ route: { path, methods: { put: true }, stack: handlers.map((h) => ({ handle: h })) } } as never);
     return router;
   };
   registerSim2RealBoardStationRoutes(router, {
@@ -86,6 +97,7 @@ function call(handler: Handler, init: { method?: string; body?: unknown; query?:
 }
 
 beforeEach(() => {
+  process.env.RDK_SIM2REAL_STORAGE_DIR = tmpdirSync();
   process.env.RDK_SIM2REAL_BOARD_AGENT_URL = 'http://127.0.0.1:19100';
   process.env.RDK_SIM2REAL_BOARD_AGENT_TOKEN = 'board-secret';
   delete process.env.RDK_SIM2REAL_STATION_DRIVE_ENABLED;
@@ -93,6 +105,8 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  if (originalStorageDir === undefined) delete process.env.RDK_SIM2REAL_STORAGE_DIR;
+  else process.env.RDK_SIM2REAL_STORAGE_DIR = originalStorageDir;
   if (originalAgentUrl === undefined) delete process.env.RDK_SIM2REAL_BOARD_AGENT_URL;
   else process.env.RDK_SIM2REAL_BOARD_AGENT_URL = originalAgentUrl;
   if (originalAgentToken === undefined) delete process.env.RDK_SIM2REAL_BOARD_AGENT_TOKEN;

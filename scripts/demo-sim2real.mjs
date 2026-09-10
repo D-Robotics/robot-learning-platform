@@ -158,8 +158,8 @@ process.once('SIGINT', () => shutdown(0));
 process.once('SIGTERM', () => shutdown(0));
 
 console.log('[demo] starting isolated Sim2Real presentation stack');
-// The query pins the RDK Duck workflow + presentation mode for a deterministic projector
-// run, even if a previous browser session stored a different product choice.
+// The query pins the RDK Duck workflow for a deterministic projector run,
+// even if a previous browser session stored a different product choice.
 console.log(`[demo] web: http://127.0.0.1:${env.RDK_SIM2REAL_PORT}/?demo=1`);
 console.log('[demo] flow: overview → simulation/replay → Mock protocol run → telemetry/evaluation → X5 preflight gate');
 console.log('[demo] telemetry sample: OriginBot 真机遥测可通过上位机接入；examples/telemetry-sample.jsonl 是 RDK Duck 契约演示数据');

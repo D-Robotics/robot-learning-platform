@@ -81,6 +81,23 @@ export function validateRunForDeployment(input: {
     artifactDigestPresent,
   };
 
+  // Real-robot telemetry backflow: a canary/live plan must rest on measured
+  // board evidence, not only on simulation-side metrics. Only source
+  // "board-agent" chunks count — browser/import/demo-fixture data is not a
+  // robot. Following the task-pack precedent, this is evidence-only for the
+  // summary surfaces: the verdict requires the samples to exist and to have
+  // been evaluated, but does not gate on the MAE/RMSE values (a threshold
+  // would couple the release gate to one controller's tuning).
+  const evaluation = run.evaluation;
+  const boardTelemetrySamples =
+    evaluation?.replay?.source === 'board-agent' ? evaluation.replay.sampleCount : 0;
+  checks.boardTelemetrySamples = boardTelemetrySamples || null;
+  if (boardTelemetrySamples <= 0) {
+    errors.push(
+      'board telemetry evidence is missing: ingest at least one board-agent telemetry chunk and run the evaluation before canary/live',
+    );
+  }
+
   if (run.taskEvaluation || run.taskId?.endsWith('-goal-navigation')) {
     if (!run.taskId) {
       errors.push('Task-Pack evaluation exists without a run taskId');

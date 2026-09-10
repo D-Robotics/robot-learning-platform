@@ -41,9 +41,11 @@ Authorization: Bearer <short-lived-agent-token>
 
 成功响应至少包含 `output` 字符串和可选的 `exitCode`、`device` 字段；`output` 必须包含
 `__STUDIO_SIM2REAL_PREFLIGHT_BEGIN__` / `__STUDIO_SIM2REAL_PREFLIGHT_END__` 之间的
-`arch`、`kernel`、`python3`、`tros`、`disk_bytes` 键。客户端限制响应体、超时和设备 ID，
-并且只允许 loopback HTTP 或 HTTPS。真实 agent 应在自己的边界执行权限校验和命令白名单，
-将 canary/live 与只读预检分开授权。
+`arch`、`kernel`、`python3`、`tros`、`disk_bytes`、`bpu_toolchain` 键（后者报
+`present`/`missing`：hbdk-sim 量化工具 + hbrtmlin/hbrt-tv 运行时工具的存在性探测，
+不解析版本——预检回显该事实但不作为部署硬阻断；当前下发的是 CPU ONNX 制品）。
+客户端限制响应体、超时和设备 ID，并且只允许 loopback HTTP 或 HTTPS。真实 agent 应
+在自己的边界执行权限校验和命令白名单，将 canary/live 与只读预检分开授权。
 
 设备页的 `POST /api/devices/:id/board/detect?persist=true` 复用同一只读 probe，并只通过
 `persistDeviceBoardDetection` 更新已登记设备的板型、型号和系统版本字段；它不会把 agent 返回的

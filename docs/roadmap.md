@@ -28,6 +28,10 @@
 | **统计功效 + 跨进程可复现（本轮新增）** | ✅ | Wilson CI 进 gate；torch 全局播种修复，同请求跨进程 eval 指标逐项相等（契约测试守护）；超参敏感性研究落档 `docs/research/` |
 | **PPO 数值稳定性根因修复（本轮新增）** | ✅ | clamp-动作 log-prob 悬崖 → NaN 的根因修复（训练未截断动作 + log-ratio 护栏），两条引擎路径统一；800/1600 迭代不再崩溃 |
 | **评测诚实化（本轮新增）** | ✅ | 碰撞/末端距离在 auto-reset 前采集（消除 collisionRate≡0 假象）；workspace.bound 越界终止；dwell 奖励破极限环（nominal 0%→90% 的根因，轨迹级诊断佐证） |
+| **SAC 算法路径（本轮新增）** | ✅ | `training.algorithm` UI→API→引擎全链（未知值 400）；twin-Q + 自动温度 alpha，与 PPO 同骨干/同 ONNX 契约/同评测门；`verify:starter-engine` 双算法断言（alphaCurve 非空 = 梯度真实执行） |
+| **rsl_rl 引擎适配器（本轮新增）** | ✅ | `engines/mjlab-rsl-rl-adapter/`：kinematic 后端经真实 rsl_rl `OnPolicyRunner` 训练 GoalNavEnv，`physicsBackend` 如实标注；mjlab 钩子为显式接入点；`verify:mjlab-adapter` 进 verify 链 |
+| **真机遥测发布证据（本轮新增）** | ✅ | canary/live 闸门要求 board-agent 来源遥测评测（证据非阈值语义，fail-closed）；`release-evidence` 12 测试 |
+| **BPU 工具链探针（本轮新增）** | ✅ | preflight 白名单命令新增 `bpu_toolchain=present/missing`（hbdk-sim + hbrtmlin/hbrt-tv 存在性，不猜版本）；三方（TS/mjs/Python）字节一致测试守护；预检结果如实回显、不作为硬阻断 |
 | 诚实性原则 | ✅ | mock 永远标注、遥测不伪造、fail-closed、急停常开 |
 
 ## 差距与计划
@@ -48,6 +52,8 @@
      板端运行时的声明化加载仍待做。
 3. **真机评测回写**：板端策略运行的 inferMs/published/指令序列回写为 Run 证据
    - 验收：记录页能看到一次"上板会话"的起止、推理统计与停止原因，标记 `mock:false`。
+   - 进展：board-agent 遥测回流已进发布闸门（canary/live 需真机遥测评评测证据，
+     fail-closed）；剩余：上板会话的起止/推理统计结构化展示。
 
 ### P2 — 多机型与规模化
 
@@ -57,6 +63,8 @@
 5. **BPU 推理路径**（现在是 CPUExecutionProvider）
    - 验收：RDK BPU 工具链编译量化模型，板端推理 provider 可切换且延迟显著低于 CPU
      路径，inferMs 如实上报两种模式。
+   - 进展：板端 BPU 工具链**存在性探针**已进 preflight（`bpu_toolchain=present/missing`，
+     不猜版本）；量化编译与 provider 切换仍待做。
 6. **视觉观测**（61D 里没有相机槽）
    - 验收：策略输入扩展出图像分支，板端相机帧进入观测构建，评测页可回放对齐帧。
 

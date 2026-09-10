@@ -83,17 +83,6 @@ function readProductPreference() {
   }
 }
 
-function readPresentationPreference() {
-  try {
-    const params = new URLSearchParams(window.location.search);
-    if (params.get('presentation') === '0') return false;
-    if (params.get('demo') === '1' || params.get('presentation') === '1') return true;
-    return window.localStorage?.getItem('rdk-duck-lab-presentation') === '1';
-  } catch {
-    return false;
-  }
-}
-
 function readNotifyPreference() {
   try {
     return window.localStorage?.getItem('rdk-duck-lab-notify') === '1';
@@ -253,6 +242,8 @@ const state = {
     streamReconnectTimer: null,
     cameraOn: false,
     log: [],
+    deviceManagerWired: false,
+    switchWired: false,
   },
 };
 
@@ -727,32 +718,12 @@ function setView(view, { updateHash = true, scroll = true } = {}) {
       window.location.pathname + window.location.search + '#' + wanted,
     );
   }
-  // Each workflow surface is a presentation frame. Reset the scroll position
-  // when switching frames so a sticky header or a previous deep scroll cannot
-  // hide the section title and its primary action during a live demo.
+  // Reset the scroll position when switching views so a sticky header or a
+  // previous deep scroll cannot hide the section title and its primary action.
   if (scroll) window.scrollTo({ top: 0, left: 0, behavior: 'auto' });
   // 评估页的真机对照快照只在视图内轮询，离开即停，避免后台空转。
   if (wanted === 'evaluate') originbotCompareStart();
   else originbotCompareStop();
-}
-
-function setPresentationMode(enabled, { persist = true } = {}) {
-  const active = Boolean(enabled);
-  document.body.classList.toggle('presentation-mode', active);
-  const toggle = $('presentation-toggle');
-  if (toggle) {
-    toggle.setAttribute('aria-pressed', active ? 'true' : 'false');
-    toggle.classList.toggle('is-active', active);
-    toggle.textContent = active ? '退出演示' : '演示视图';
-    toggle.title = active ? '退出适合投屏的演示视图' : '切换适合投屏的演示视图';
-  }
-  if (persist) {
-    try {
-      window.localStorage?.setItem('rdk-duck-lab-presentation', active ? '1' : '0');
-    } catch {
-      // Preference persistence is optional in file:// and privacy contexts.
-    }
-  }
 }
 
 function modelLabel(model) {
@@ -1640,6 +1611,9 @@ function openRecordDetails(record) {
     ['模型', record.modelId || '—'],
     ['创建时间', formatDate(record.createdAt)],
     ...(isRun && record.training?.profile ? [['训练档位', record.training.profile]] : []),
+    ...(isRun && record.training?.algorithm
+      ? [['算法', record.training.algorithm.toUpperCase()]]
+      : []),
     ...(isRun && record.training?.numEnvs ? [['并行环境', record.training.numEnvs]] : []),
     ...(isRun && record.training?.maxIterations
       ? [['最大迭代', record.training.maxIterations]]
@@ -3514,6 +3488,7 @@ function confirmRobogoRun() {
   setText('confirm-run-model', model ? modelLabel(model) : '未选择模型');
   setText('confirm-run-task', task.label || '—');
   setText('confirm-run-profile', profileLabel || '—');
+  setText('confirm-run-algorithm', $('training-algorithm')?.value?.toUpperCase() || 'PPO');
   setText(
     'confirm-run-resume',
     checkpointId && artifactRef ? checkpointId : '不续训',
@@ -3544,7 +3519,10 @@ async function runModel(backend) {
     const body = { modelId: model.id, backend, taskId: state.taskId, idempotencyKey: requestKey };
     if (backend === 'local' && state.selectedComputeResourceId) body.computeResourceId = state.selectedComputeResourceId;
     const profile = $('training-profile')?.value;
-    if ((backend === 'robogo' || backend === 'local') && profile) body.training = { profile };
+    const algorithm = $('training-algorithm')?.value;
+    if ((backend === 'robogo' || backend === 'local') && profile) {
+      body.training = { profile, ...(algorithm ? { algorithm } : {}) };
+    }
     const checkpointId = $('resume-checkpoint-id')?.value.trim() || '';
     const artifactRef = $('resume-artifact-ref')?.value.trim() || '';
     if (checkpointId || artifactRef) {
@@ -4648,6 +4626,284 @@ async function stationInit() {
     }
     stationLog('上位机初始化失败', 'error');
   }
+  // 设备管理（网页添加真机）与运动开关面板：只读拉取，无需板端就绪。
+  stationDeviceManagerLoad();
+  stationSwitchProbe();
+  wireDeviceManagerEvents();
+  wireStationSwitchEvents();
+}
+
+// ---- 设备管理（RDK Studio 网页版式添加设备 → 服务器侧 SSH 隧道） -------
+// 浏览器只提交 SSH 坐标；隧道进程、板端开关写入和 agent 探测都在服务端完成。
+
+function stationDeviceRow(connection) {
+  const live = connection.tunnelActive === true;
+  const item = document.createElement('div');
+  item.className = 'station-device-item';
+  item.dataset.connectionId = connection.id;
+  const lastCheck = connection.lastCheckedAt
+    ? `${connection.lastCheckOk === true ? '✓' : '✗'} ${connection.lastCheckMessage}`
+    : connection.lastCheckMessage || '尚未测试';
+  item.innerHTML = `
+    <div class="station-device-item-main">
+      <span class="station-device-item-title"></span>
+      <span class="station-device-item-meta"></span>
+    </div>
+    <span class="station-device-badge"></span>
+    <div class="station-device-item-actions">
+      <button class="button station-device-connect" type="button"></button>
+      <button class="button button-quiet" type="button" data-action="remove">移除</button>
+    </div>`;
+  item.querySelector('.station-device-item-title').textContent =
+    `${connection.label || connection.id} · ${connection.username}@${connection.host}`;
+  item.querySelector('.station-device-item-meta').textContent =
+    `SSH ${connection.port} · agent 端口 ${connection.agentPort} · ${lastCheck}`;
+  const badge = item.querySelector('.station-device-badge');
+  badge.textContent = live ? '已连接' : '未连接';
+  badge.classList.add(live ? 'live' : 'down');
+  const connectBtn = item.querySelector('.station-device-connect');
+  connectBtn.textContent = live ? '断开' : '连接';
+  connectBtn.dataset.action = live ? 'disconnect' : 'connect';
+  return item;
+}
+
+async function stationDeviceManagerLoad() {
+  const list = $('station-device-list');
+  if (!list) return;
+  let payload;
+  try {
+    payload = await request('/sim2real/device-connections');
+  } catch (error) {
+    stationLog(`设备管理不可用：${error instanceof Error ? error.message : '未知错误'}`, 'error');
+    return;
+  }
+  const connections = Array.isArray(payload?.connections) ? payload.connections : [];
+  list.replaceChildren();
+  if (!connections.length) {
+    const empty = document.createElement('span');
+    empty.className = 'station-topic-empty';
+    empty.id = 'station-device-list-empty';
+    empty.textContent = '尚未添加设备。';
+    list.append(empty);
+    return;
+  }
+  for (const connection of connections) list.append(stationDeviceRow(connection));
+  stationSwitchBoardProbe();
+}
+
+function wireDeviceManagerEvents() {
+  if (state.station.deviceManagerWired) return;
+  state.station.deviceManagerWired = true;
+  $('station-device-add-btn')?.addEventListener('click', async () => {
+    const host = String($('station-device-host')?.value || '').trim();
+    const username = String($('station-device-user')?.value || 'root').trim();
+    const port = Number($('station-device-port')?.value || 22);
+    const label = String($('station-device-label')?.value || '').trim();
+    if (!host) {
+      stationLog('请填写板卡 IP 或主机名（不带 http://）', 'error');
+      return;
+    }
+    try {
+      const created = await request('/sim2real/device-connections', {
+        method: 'POST',
+        body: JSON.stringify({ host, username, port, label }),
+      });
+      stationLog(`已添加设备 ${created?.connection?.label || host}，点击「连接」建立隧道`, 'ok');
+      $('station-device-host').value = '';
+      await stationDeviceManagerLoad();
+    } catch (error) {
+      stationLog(`添加失败：${error instanceof Error ? error.message : '未知错误'}`, 'error');
+    }
+  });
+  $('station-device-list')?.addEventListener('click', async (event) => {
+    const button = event.target instanceof Element ? event.target.closest('button') : null;
+    if (!button) return;
+    const item = button.closest('.station-device-item');
+    const connectionId = item?.dataset?.connectionId;
+    const action = button.dataset.action;
+    if (!connectionId || !action) return;
+    button.disabled = true;
+    try {
+      if (action === 'connect') {
+        stationLog('正在建立 SSH 隧道并探测板端 agent…');
+        const result = await request(`/sim2real/device-connections/${encodeURIComponent(connectionId)}/connect`, {
+          method: 'POST',
+        });
+        const probe = result?.probe;
+        stationLog(
+          probe?.ok === true
+            ? `已连接${result?.probe?.agentInfo?.boardModel ? `（${probe.agentInfo.boardModel}）` : ''}：${probe.message || '连接正常'}`
+            : `连接失败：${probe?.message || '未知错误'}`,
+          probe?.ok === true ? 'ok' : 'error',
+        );
+        // 隧道改变 boardAgentUrl 的解析结果：重新初始化上位机全部数据面。
+        stationInit();
+      } else if (action === 'disconnect') {
+        await request(`/sim2real/device-connections/${encodeURIComponent(connectionId)}/disconnect`, {
+          method: 'POST',
+        });
+        stationLog('隧道已断开，恢复默认 agent 目标');
+        stationInit();
+      } else if (action === 'remove') {
+        if (!window.confirm(`移除设备 ${item.querySelector('.station-device-item-title')?.textContent || connectionId}？隧道会一并断开。`)) {
+          button.disabled = false;
+          return;
+        }
+        await request(`/sim2real/device-connections/${encodeURIComponent(connectionId)}`, {
+          method: 'DELETE',
+        });
+        stationLog('设备已移除');
+        stationInit();
+      }
+    } catch (error) {
+      stationLog(`操作失败：${error instanceof Error ? error.message : '未知错误'}`, 'error');
+    } finally {
+      button.disabled = false;
+      await stationDeviceManagerLoad();
+    }
+  });
+}
+
+// ---- 运动开关（平台侧持久覆盖 + 板端 /v1/config 代理） -------------------
+
+function setSwitchButton(button, enabled) {
+  if (!button) return;
+  button.setAttribute('aria-pressed', enabled ? 'true' : 'false');
+  // 板端按钮保留“驱动/策略”标签；平台按钮显示开关语义。
+  if (!button.hasAttribute('data-board-switch')) button.textContent = enabled ? '已开启' : '开启';
+}
+
+async function stationSwitchProbe() {
+  try {
+    const payload = await request('/sim2real/board-station/switches');
+    setSwitchButton($('station-switch-drive'), payload?.drive === true);
+    setSwitchButton($('station-switch-policy'), payload?.policy === true);
+  } catch {
+    const stateLine = $('station-switch-state');
+    if (stateLine) stateLine.textContent = '平台开关状态读取失败（不影响急停）';
+  }
+  // 板端开关行：有活跃隧道才显示。
+  stationSwitchBoardProbe();
+}
+
+async function stationSwitchBoardProbe() {
+  const row = $('station-switch-board-row');
+  if (!row) return;
+  // 找第一个隧道活跃的连接。
+  let active = null;
+  try {
+    const payload = await request('/sim2real/device-connections');
+    active = (payload?.connections || []).find((item) => item.tunnelActive === true) || null;
+  } catch {
+    active = null;
+  }
+  if (!active) {
+    row.hidden = true;
+    setSwitchButton($('station-switch-board-drive'), false);
+    setSwitchButton($('station-switch-board-policy'), false);
+    return;
+  }
+  row.hidden = false;
+  $('station-switch-board-name')?.setAttribute(
+    'data-connection-id',
+    String(active.id || ''),
+  );
+  $('station-switch-board-sub').textContent =
+    `${active.label || active.host} · 写板端 env 并重启 agent（约 2 秒生效）`;
+  try {
+    const config = await request(`/sim2real/device-connections/${encodeURIComponent(active.id)}/config`);
+    const switches = config?.config?.switches || {};
+    setSwitchButton(
+      $('station-switch-board-drive'),
+      switches.RDK_SIM2REAL_BOARD_AGENT_ENABLE_DRIVE === true,
+    );
+    setSwitchButton(
+      $('station-switch-board-policy'),
+      switches.RDK_SIM2REAL_BOARD_AGENT_ENABLE_POLICY === true,
+    );
+  } catch (error) {
+    $('station-switch-board-sub').textContent = `板端开关状态不可达：${
+      error instanceof Error ? error.message : 'agent 版本过旧（无 /v1/config）'
+    }`;
+  }
+}
+
+function wireStationSwitchEvents() {
+  if (state.station.switchWired) return;
+  state.station.switchWired = true;
+  const stateLine = $('station-switch-state');
+  const setLine = (text) => { if (stateLine) stateLine.textContent = text; };
+
+  const platformToggle = async (name, next) => {
+    if (next) {
+      const confirmed = window.confirm(
+        '开启平台运动开关前请确认：操作者在机器人旁、场地已清空、急停随时可用。\n（板端开关仍需单独开启才会真正运动）',
+      );
+      if (!confirmed) return null;
+    }
+    await request('/sim2real/board-station/switches', {
+      method: 'PUT',
+      body: JSON.stringify(next ? { [name]: true, confirm: true } : { [name]: false }),
+    });
+    setLine(next ? `平台 ${name} 开关已开启（持久化保存）` : `平台 ${name} 开关已关闭`);
+    stationSwitchProbe();
+    stationProbeDrive();
+    stationProbePolicy();
+    return true;
+  };
+
+  $('station-switch-drive')?.addEventListener('click', async (event) => {
+    const button = event.currentTarget;
+    const next = button.getAttribute('aria-pressed') !== 'true';
+    button.disabled = true;
+    try { await platformToggle('drive', next); }
+    catch (error) { setLine(`切换失败：${error instanceof Error ? error.message : '未知错误'}`); }
+    finally { button.disabled = false; }
+  });
+  $('station-switch-policy')?.addEventListener('click', async (event) => {
+    const button = event.currentTarget;
+    const next = button.getAttribute('aria-pressed') !== 'true';
+    button.disabled = true;
+    try { await platformToggle('policy', next); }
+    catch (error) { setLine(`切换失败：${error instanceof Error ? error.message : '未知错误'}`); }
+    finally { button.disabled = false; }
+  });
+
+  const boardToggle = async (event) => {
+    const button = event.currentTarget;
+    const flag = button.dataset.boardSwitch;
+    const next = button.getAttribute('aria-pressed') !== 'true';
+    const connectionId = $('station-switch-board-name')?.getAttribute('data-connection-id');
+    if (!connectionId || !flag) return;
+    if (next) {
+      const confirmed = window.confirm(
+        '即将修改板端运动开关并重启板端 agent（约 2 秒，期间遥测短暂中断）。\n请再次确认操作者在场、场地清空。',
+      );
+      if (!confirmed) return;
+    }
+    button.disabled = true;
+    setLine('正在写入板端配置并重启 agent…');
+    try {
+      await request(`/sim2real/device-connections/${encodeURIComponent(connectionId)}/config`, {
+        method: 'POST',
+        body: JSON.stringify({ switches: { [flag]: next } }),
+      });
+      // agent 重启需要几秒：延迟后重读真实状态。
+      await new Promise((resolve) => setTimeout(resolve, 3000));
+      setLine(next ? '板端开关已开启（agent 已重启）' : '板端开关已关闭（agent 已重启）');
+      await stationSwitchBoardProbe();
+      stationProbeDrive();
+      stationProbePolicy();
+      stationInit();
+    } catch (error) {
+      setLine(`板端开关修改失败：${error instanceof Error ? error.message : '未知错误'}`);
+      await stationSwitchBoardProbe();
+    } finally {
+      button.disabled = false;
+    }
+  };
+  $('station-switch-board-drive')?.addEventListener('click', boardToggle);
+  $('station-switch-board-policy')?.addEventListener('click', boardToggle);
 }
 
 function stationTeardown() {
@@ -4743,14 +4999,6 @@ function wireEvents() {
   );
   $('refresh-button')?.addEventListener('click', () => loadOverview());
   wireCommandPalette();
-  $('presentation-toggle')?.addEventListener('click', () => {
-    setPresentationMode(!document.body.classList.contains('presentation-mode'));
-  });
-  document.addEventListener('keydown', (event) => {
-    if (event.key === 'Escape' && document.body.classList.contains('presentation-mode')) {
-      setPresentationMode(false);
-    }
-  });
   $('robogo-refresh-button')?.addEventListener('click', () => loadOverview());
   $('auth-retry-button')?.addEventListener('click', () => loadOverview());
   document.querySelectorAll('.auth-login-tab').forEach((tab) => {
@@ -5030,15 +5278,14 @@ function wireCommandPalette() {
 }
 
 wireEvents();
-setPresentationMode(readPresentationPreference(), { persist: false });
 syncNotifyToggle();
 setView(window.location.hash.slice(1) || 'overview', { updateHash: false });
 // Render the product boundary immediately, even while the account-scoped
 // overview request is still loading (important when RDK Duck was selected in
 // a previous session).
 renderAll();
-// Seed the editor silently on first paint; a toast here obscures the first
-// presentation frame before the operator has taken an action.
+// Seed the editor silently on first paint; a toast here would obscure the
+// landing view before the operator has taken an action.
 loadManifestTemplate({ notify: false });
 loadOverview();
 // 上位机视图懒初始化：首次切到 station 视图时再探测板端 agent，

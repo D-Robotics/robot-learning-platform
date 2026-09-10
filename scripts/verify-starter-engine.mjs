@@ -153,6 +153,64 @@ try {
       `(reward ${metrics.initialReward} -> ${metrics.reward}, ONNX ${artifact.sizeBytes} bytes, ` +
       `${telemetry.length} telemetry samples) via ${python}`,
   );
+
+  // ---- SAC path: same engine, off-policy learner, same artifact contract ----
+  const sacScratch = await mkdtemp(path.join(os.tmpdir(), 'rdk-starter-sac-'));
+  try {
+    const sacRequestPath = path.join(sacScratch, 'request.json');
+    const sacResultPath = path.join(sacScratch, 'result.json');
+    const request = JSON.parse(await readFile(requestPath, 'utf8'));
+    request.training.algorithm = 'sac';
+    request.model = { modelId: 'starter-sac-gate', version: '0.1.0-gate' };
+    await writeFile(sacRequestPath, JSON.stringify(request, null, 2));
+
+    const sacRun = spawnSync(
+      python,
+      [enginePath],
+      {
+        cwd: sacScratch,
+        encoding: 'utf8',
+        stdio: ['ignore', 'pipe', 'pipe'],
+        env: {
+          ...process.env,
+          RDK_SIM2REAL_REQUEST_FILE: sacRequestPath,
+          RDK_SIM2REAL_RESULT_FILE: sacResultPath,
+          // Enough columns to cross the SAC warmup threshold so at least one
+          // real gradient step (and an honest alphaCurve entry) is exercised.
+          RDK_STARTER_ENGINE_ITERATIONS: '10',
+          RDK_STARTER_ENGINE_ENVS: '16',
+          RDK_STARTER_ENGINE_STEPS: '64',
+        },
+        maxBuffer: 4 * 1024 * 1024,
+      },
+    );
+    if (sacRun.status !== 0) {
+      console.error(sacRun.stdout || '');
+      console.error(sacRun.stderr || '');
+      throw new Error(`starter engine (SAC) exited with ${sacRun.status}`);
+    }
+    const sacResult = JSON.parse(await readFile(sacResultPath, 'utf8'));
+    assert.equal(sacResult.metrics.algorithm, 'sac', 'SAC run must report algorithm=sac');
+    assert.equal(sacResult.deployable, false);
+    assert.equal(sacResult.artifact.format, 'onnx', 'SAC actor must export through the same ONNX contract');
+    const sacSummary = JSON.parse(
+      await readFile(path.join(sacScratch, 'training-summary.json'), 'utf8'),
+    );
+    assert.equal(sacSummary.algorithm, 'sac');
+    assert.ok(sacSummary.hyperparams.tau > 0, 'SAC hyperparams must be recorded for auditability');
+    assert.ok(
+      Array.isArray(sacSummary.alphaCurve) && sacSummary.alphaCurve.length > 0,
+      'warmup crossed: the SAC update must have actually run (alphaCurve recorded)',
+    );
+    assert.ok(Number.isFinite(sacSummary.alphaCurve[0]) && sacSummary.alphaCurve[0] > 0);
+    console.log(
+      `[starter-engine] PASS — SAC learner ran 10 iterations ` +
+        `(alpha ${sacSummary.alphaCurve[0]} -> ${sacSummary.alphaCurve.at(-1)}, ` +
+        `ONNX ${sacResult.artifact.sizeBytes} bytes) via ${python}`,
+    );
+  } finally {
+    await rm(sacScratch, { recursive: true, force: true });
+  }
 } finally {
   await rm(scratch, { recursive: true, force: true });
 }

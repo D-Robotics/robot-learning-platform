@@ -108,7 +108,7 @@ npm run demo:sim2real
 MJPEG 流与白名单只读命令，全部经 `/api/sim2real/board-station` 认证代理转发，浏览器不直连
 agent，也不存在任何电机控制通道；详见 [`docs/host-station.md`](docs/host-station.md)。
 
-打开 <http://127.0.0.1:18102/?demo=1>（启动器日志也会给出这个地址）。查询参数会固定 MicroDuck 和投屏演示视图；
+打开 <http://127.0.0.1:18102/?demo=1>（启动器日志也会给出这个地址）。查询参数会固定 MicroDuck 和行走任务；
 页面中的“仿真与录制”会打开已挂载的 MicroDuck 浏览器仿真；
 干净源码 checkout 未包含上游静态 bundle，未配置 `RDK_SIM2REAL_MICRODUCK_ROOT` 或 URL 时会显示安装指引页。
 “训练与模型”可选择本地 Mock runner；“评测与效果”支持导入浏览器录制的 JSON/JSONL 并显式绑定到 Run；

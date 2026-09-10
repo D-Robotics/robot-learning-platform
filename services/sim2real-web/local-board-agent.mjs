@@ -48,6 +48,7 @@ export function buildBoardPreflightCommand() {
     'printf "python3=%s\\n" "$(command -v python3 2>/dev/null || echo missing)"',
     'printf "tros=%s\\n" "$(if test -d /opt/tros || test -d /opt/ros; then echo present; else echo missing; fi)"',
     'printf "disk_bytes=%s\\n" "$(df -Pk /tmp 2>/dev/null | awk \'NR==2 {print $4 * 1024}\' || echo unknown)"',
+    'printf "bpu_toolchain=%s\\n" "$(if command -v hbdk-sim >/dev/null 2>&1 && (command -v hbrtmlin >/dev/null 2>&1 || command -v hbrt-tv >/dev/null 2>&1); then echo present; else echo missing; fi)"',
     `printf "${END}\\n"`,
   ].join('; ');
 }
@@ -95,6 +96,12 @@ function passportOutput() {
   const python3 = String(process.env.RDK_SIM2REAL_BOARD_AGENT_PYTHON3 || '/usr/bin/python3').trim();
   const tros = String(process.env.RDK_SIM2REAL_BOARD_AGENT_TROS || 'present').trim();
   const diskBytes = Number(process.env.RDK_SIM2REAL_BOARD_AGENT_DISK_BYTES || 8 * 1024 ** 3);
+  // The simulated agent mirrors the real agent's probe field; defaults to
+  // missing so the demo never claims a BPU toolchain the host does not have.
+  const bpuToolchain =
+    String(process.env.RDK_SIM2REAL_BOARD_AGENT_BPU_TOOLCHAIN || '').trim() === 'present'
+      ? 'present'
+      : 'missing';
   return [
     BEGIN,
     `arch=${arch}`,
@@ -102,6 +109,7 @@ function passportOutput() {
     `python3=${python3}`,
     `tros=${tros}`,
     `disk_bytes=${Number.isFinite(diskBytes) ? Math.max(0, Math.floor(diskBytes)) : 0}`,
+    `bpu_toolchain=${bpuToolchain}`,
     END,
   ].join('\n') + '\n';
 }

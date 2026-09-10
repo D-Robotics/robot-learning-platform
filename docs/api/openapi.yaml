@@ -922,6 +922,154 @@ paths:
           content: { application/json: { schema: { $ref: "#/components/schemas/DriveState" } } }
         "401": { $ref: "#/components/responses/AuthRequired" }
         "502": { description: Board agent unreachable; chassis watchdog still enforces rest. }
+  /api/v1/duck/board-station/switches:
+    get:
+      tags: [board-station]
+      summary: Platform-side motion switch states
+      operationId: getBoardStationSwitches
+      description: >-
+        Honest platform gate states for the constrained-drive canary and the
+        policy runtime. Values resolve as runtime override over the env
+        default (RDK_SIM2REAL_STATION_DRIVE_ENABLED / _POLICY_ENABLED).
+        Readable even when the board is unreachable.
+      responses:
+        "200":
+          description: Platform switch states.
+          content: { application/json: { schema: { $ref: "#/components/schemas/StationSwitchState" } } }
+        "401": { $ref: "#/components/responses/AuthRequired" }
+    put:
+      tags: [board-station]
+      summary: Toggle the platform-side motion switches
+      operationId: putBoardStationSwitches
+      description: >-
+        One half of the double gate: flips the platform drive/policy switches
+        (persisted runtime override, env remains the deploy default). Turning
+        a switch ON requires confirm=true in the same request (operator
+        present, area cleared); turning OFF is always allowed. The board-side
+        switches stay opt-in through the device-connection config surface.
+        Emergency stop never consults these switches.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/StationSwitchPatch" }
+      responses:
+        "200":
+          description: Updated switch states.
+          content: { application/json: { schema: { $ref: "#/components/schemas/StationSwitchState" } } }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/AuthRequired" }
+  /api/v1/duck/device-connections:
+    get:
+      tags: [devices]
+      summary: List saved board connections and live tunnel flags
+      operationId: listDeviceConnections
+      description: >-
+        Web-managed board connections (SSH coordinates). Each record reports
+        whether its loopback SSH tunnel is currently up. Credentials are
+        never stored: tunnels authenticate with the operator's local ssh
+        keys/agent, exactly like scripts/deploy-x5-board-agent.sh.
+      responses:
+        "200":
+          description: Saved connections.
+          content: { application/json: { schema: { $ref: "#/components/schemas/DeviceConnectionList" } } }
+        "401": { $ref: "#/components/responses/AuthRequired" }
+    post:
+      tags: [devices]
+      summary: Save SSH coordinates for one board
+      operationId: createDeviceConnection
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/DeviceConnectionInput" }
+      responses:
+        "201":
+          description: Connection saved (tunnel not opened yet).
+          content: { application/json: { schema: { $ref: "#/components/schemas/DeviceConnection" } } }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/AuthRequired" }
+        "409": { description: Same host/port/user connection already exists. }
+        "507": { description: Connection quota (50) exceeded. }
+  /api/v1/duck/device-connections/{connectionId}:
+    delete:
+      tags: [devices]
+      summary: Remove a saved connection and tear down its tunnel
+      operationId: deleteDeviceConnection
+      parameters:
+        - $ref: "#/components/parameters/ConnectionId"
+      responses:
+        "200": { description: Connection deleted. }
+        "401": { $ref: "#/components/responses/AuthRequired" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /api/v1/duck/device-connections/{connectionId}/connect:
+    post:
+      tags: [devices]
+      summary: Open the SSH tunnel and probe the board agent
+      operationId: connectDeviceConnection
+      description: >-
+        Spawns the server-side `ssh -N -L` loopback tunnel for this
+        connection and verifies the board agent's /healthz through it. Fails
+        closed: any SSH or health failure tears the tunnel down and reports
+        the reason verbatim (no synthesized success).
+      parameters:
+        - $ref: "#/components/parameters/ConnectionId"
+      responses:
+        "200":
+          description: Tunnel up and agent healthy.
+          content: { application/json: { schema: { $ref: "#/components/schemas/DeviceConnectionProbe" } } }
+        "401": { $ref: "#/components/responses/AuthRequired" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "502": { description: SSH or agent health failure (reason passed through). }
+        "503": { description: ssh client unavailable on the server. }
+  /api/v1/duck/device-connections/{connectionId}/disconnect:
+    post:
+      tags: [devices]
+      summary: Tear down this connection's tunnel
+      operationId: disconnectDeviceConnection
+      parameters:
+        - $ref: "#/components/parameters/ConnectionId"
+      responses:
+        "200": { description: Tunnel torn down. }
+        "401": { $ref: "#/components/responses/AuthRequired" }
+  /api/v1/duck/device-connections/{connectionId}/config:
+    get:
+      tags: [devices]
+      summary: Board-side motion switch states (through the tunnel)
+      operationId: getDeviceConnectionConfig
+      parameters:
+        - $ref: "#/components/parameters/ConnectionId"
+      responses:
+        "200":
+          description: Board switch states, env file path, restartability.
+          content: { application/json: { schema: { $ref: "#/components/schemas/BoardConfigState" } } }
+        "401": { $ref: "#/components/responses/AuthRequired" }
+        "409": { description: Tunnel is down; connect the device first. }
+        "502": { description: Board agent unreachable or predates /v1/config. }
+    post:
+      tags: [devices]
+      summary: Flip the board-side motion switches (agent restarts)
+      operationId: putDeviceConnectionConfig
+      description: >-
+        Accepts ONLY the two documented opt-in switches
+        (RDK_SIM2REAL_BOARD_AGENT_ENABLE_DRIVE / _ENABLE_POLICY). The board
+        agent rewrites its EnvironmentFile and restarts its own systemd unit
+        so it cold-starts through the normal publisher handshake and
+        watchdog; the restart is refused while a motion window is active.
+        This surface can never send a speed command.
+      parameters:
+        - $ref: "#/components/parameters/ConnectionId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/BoardConfigPatch" }
+      responses:
+        "200": { description: Switches applied; agent restarted (or env updated without restart on non-systemd boards). }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/AuthRequired" }
+        "409": { description: Tunnel down, motion window active, or the board refused the restart. }
+        "502": { description: Board agent unreachable; env untouched. }
   /api/v1/duck/compute-resources:
     get:
       tags: [workspace]
@@ -1007,6 +1155,12 @@ components:
       name: deviceId
       required: true
       schema: { type: string }
+    ConnectionId:
+      in: path
+      name: connectionId
+      required: true
+      schema: { type: string }
+      description: Board connection id from POST /device-connections.
     RunId:
       in: path
       name: runId
@@ -1228,6 +1382,106 @@ components:
           minimum: 0.2
           maximum: 2.0
           description: Motion window length in seconds; one command may never drive longer.
+    StationSwitchState:
+      type: object
+      required: [ok, drive, policy]
+      properties:
+        ok: { type: boolean }
+        drive:
+          type: boolean
+          description: Platform constrained-drive switch (runtime override over RDK_SIM2REAL_STATION_DRIVE_ENABLED).
+        policy:
+          type: boolean
+          description: Platform policy-runtime switch (runtime override over RDK_SIM2REAL_STATION_POLICY_ENABLED).
+    StationSwitchPatch:
+      type: object
+      properties:
+        drive: { type: boolean, description: New platform drive switch value. }
+        policy: { type: boolean, description: New platform policy switch value. }
+        confirm:
+          type: boolean
+          description: Required true when turning a switch ON (operator present, area cleared).
+        reset:
+          type: boolean
+          description: True to drop the runtime override and fall back to the env default.
+    DeviceConnection:
+      type: object
+      required: [id, label, host, port, username, agentPort, tunnelActive]
+      properties:
+        id: { type: string }
+        label: { type: string }
+        host: { type: string, description: SSH host/IP without scheme. }
+        port: { type: integer, description: SSH port (default 22). }
+        username: { type: string }
+        agentPort: { type: integer, description: Board agent port on the board (default 19100). }
+        tunnelActive: { type: boolean, description: True while this connection's loopback tunnel is up. }
+        createdAt: { type: string, format: date-time }
+        lastCheckedAt: { type: string, format: date-time, nullable: true }
+        lastCheckOk: { type: boolean, nullable: true }
+        lastCheckMessage: { type: string }
+    DeviceConnectionList:
+      type: object
+      required: [ok, connections]
+      properties:
+        ok: { type: boolean }
+        connections:
+          type: array
+          items: { $ref: "#/components/schemas/DeviceConnection" }
+        sshNote: { type: string }
+    DeviceConnectionInput:
+      type: object
+      required: [host]
+      properties:
+        host: { type: string, description: Board IP or hostname, no scheme. }
+        port: { type: integer, default: 22 }
+        username: { type: string, default: root }
+        label: { type: string }
+        agentPort: { type: integer, default: 19100 }
+    DeviceConnectionProbe:
+      type: object
+      required: [ok, connection, probe]
+      properties:
+        ok: { type: boolean }
+        connection: { $ref: "#/components/schemas/DeviceConnection" }
+        probe:
+          type: object
+          required: [ok, message]
+          properties:
+            ok: { type: boolean }
+            message: { type: string }
+            agentInfo:
+              type: object
+              properties:
+                mock: { type: boolean }
+                capabilities: { type: array, items: { type: string } }
+                boardModel: { type: string }
+    BoardConfigState:
+      type: object
+      required: [ok, switches, restartable]
+      properties:
+        ok: { type: boolean }
+        envFile: { type: string }
+        envFileExists: { type: boolean }
+        unit: { type: string }
+        systemdManaged: { type: boolean }
+        restartable: { type: boolean }
+        switches:
+          type: object
+          required: [RDK_SIM2REAL_BOARD_AGENT_ENABLE_DRIVE, RDK_SIM2REAL_BOARD_AGENT_ENABLE_POLICY]
+          properties:
+            RDK_SIM2REAL_BOARD_AGENT_ENABLE_DRIVE: { type: boolean }
+            RDK_SIM2REAL_BOARD_AGENT_ENABLE_POLICY: { type: boolean }
+    BoardConfigPatch:
+      type: object
+      required: [switches]
+      properties:
+        switches:
+          type: object
+          minProperties: 1
+          maxProperties: 2
+          propertyNames:
+            enum: [RDK_SIM2REAL_BOARD_AGENT_ENABLE_DRIVE, RDK_SIM2REAL_BOARD_AGENT_ENABLE_POLICY]
+          additionalProperties: { type: boolean }
     DriveState:
       type: object
       required: [ok, platformEnabled, drive]

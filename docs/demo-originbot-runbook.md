@@ -6,6 +6,7 @@
 
 ```bash
 npm ci
+npm run demo:originbot-live   # 一键只读体检：连接、遥测、闸门状态（见下）
 npm run verify:live-board
 curl http://127.0.0.1:19092/healthz   # GPU SSH 隧道
 curl http://127.0.0.1:18104/api/sim2real/board-station/status
@@ -13,11 +14,27 @@ curl http://127.0.0.1:18104/api/sim2real/board-station/status
 
 应看到真实 X5（`mock=false`）、OriginBot 传感器和 GPU Worker `configured=true`。
 
+`npm run demo:originbot-live`（[scripts/demo-originbot-live.mjs](../scripts/demo-originbot-live.mjs)）是演示的一键入口，等价于 runbook 第 6/9 节的只读部分：
+
+```bash
+npm run demo:originbot-live                    # 连接体检 + 遥测快照 + 闸门状态 + 演示入口
+npm run demo:originbot-live -- --watch 30      # 1 Hz 遥测流（电压/航向/里程计/CPU）
+npm run demo:originbot-live -- --stop          # 急停（绕过所有开关，恒可用）
+npm run demo:originbot-live -- --require-real # 彩排后切真机：连的还是 mock 时以码 2 失败
+```
+
+连接 mock 参考 agent 时它会明确标出 `mock=true` 并给出接真机三步；连真机后显示 `mock=false`。
+
+接真机有两条等价路径：
+
+- **网页内（推荐，免命令行）**：上位机页「设备管理」面板填板卡 IP → 添加 → 连接（服务端自动建 SSH 隧道并探测 agent）；「运动开关」面板里开平台/板端两侧开关。详见 [docs/host-station.md](host-station.md) 的「网页添加真机」一节。
+- **命令行（脚本化）**：板卡 IP 写入 `.env` 的 `RDK_SIM2REAL_BOARD_AGENT_URL=http://<IP>:19100` 后重启工作台（或用 `ssh -N -L 19100:127.0.0.1:19100 root@<IP>` 隧道），更新板端 agent 用 `bash scripts/deploy-x5-board-agent.sh`。
+
 ## 1. 启动平台与打开 OriginBot 产品线
 
 ```bash
 npm run dev:sim2real
-# 打开 http://127.0.0.1:18104/?presentation=1
+# 打开 http://127.0.0.1:18104/
 ```
 
 在侧栏项目卡的产品线下拉中选择 **OriginBot**，展示产品 Profile、硬件适配器、任务模板和设备上下文。
@@ -76,6 +93,13 @@ curl http://127.0.0.1:18104/api/sim2real/board-station/drive
 curl http://127.0.0.1:18104/api/sim2real/board-station/policy
 ```
 
+也可以一条命令看全（含 IMU 航向解算、里程计、电源、CPU/网络、TROS 话题计数）：
+
+```bash
+npm run demo:originbot-live              # 快照
+npm run demo:originbot-live -- --watch 30  # 演示中挂一个 1 Hz 遥测流
+```
+
 页面中展示：X5 型号、BoardAgent、CPU/内存/网络、IMU、里程计、电池、相机 MJPEG、TROS 话题和策略状态。真实数据必须显示 `mock=false`。
 
 也可以从左侧“快速入口”打开 **OriginBot 实时看板**（`/originbot-dashboard.html`）。看板每秒刷新真实状态，绘制仿真/真实轨迹对比，并显示策略运行状态；当设备或 agent 不可达时明确显示“状态不可达”，不伪造数据。
@@ -116,7 +140,14 @@ motionAuthorized=true/false（按当前开关）
 
 ## 9. 可选：低速运动 Canary
 
-仅在操作者人在场、场地清空、急停可用时执行。先确认：
+仅在操作者人在场、场地清空、急停可用时执行。双开关可以全程在网页「运动开关」面板开启（平台侧点开关、板端侧点开关，确认后自动重启板端 agent 约 2 秒），也可以命令行（见 [docs/actuator-drive.md](actuator-drive.md)）。脚本方式（自带零速 → 低速 → 急停三步和全部安全分支）：
+
+```bash
+npm run demo:originbot-live -- --canary --present
+# 自定义: --linear 0.05 --angular 0 --duration 2（数值会被双重钳制）
+```
+
+脚本在无 `--present`（人在场确认）、双开关未全开或驱动状态不可达时都会拒绝执行且不向板端发送任何运动命令；Ctrl+C 中断也会先发急停。也可以手工执行——先确认:
 
 ```bash
 curl http://127.0.0.1:18104/api/sim2real/board-station/drive

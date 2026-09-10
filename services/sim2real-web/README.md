@@ -90,7 +90,7 @@ RDK_SIM2REAL_BOARD_AGENT_URL=http://127.0.0.1:19100 npm run dev:sim2real
 生产环境请替换 `runOnDevice` 为组织维护的 BoardAgentPort，并通过 HTTPS、短期 token
 和独立的执行策略保护 canary/live。
 
-打开 http://127.0.0.1:18102/?demo=1（该参数固定 MicroDuck 和投屏演示视图）。生产构建应将入口编译到独立的 release 目录，并用
+打开 http://127.0.0.1:18102/?demo=1（该参数固定 MicroDuck 和行走任务）。生产构建应将入口编译到独立的 release 目录，并用
 `scripts/copy-server-assets.mjs` 把 `public/` 复制到相邻的静态资源目录。
 
 如果要显示浏览器 MicroDuck，请先把一个已审核、已固定版本的上游静态 release 挂到本地：

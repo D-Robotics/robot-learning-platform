@@ -9,10 +9,32 @@ import type {
 import { SAFE_ARTIFACT_REF } from '../../shared/sim2real.js';
 import { normalizeTaskEvaluationEvidence } from '../../shared/task-evaluation.js';
 import { Sim2RealError } from './sim2real-errors.js';
+import { resolveTaskPack } from '../../scripts/resolve-task-pack.mjs';
 
 const DEFAULT_TIMEOUT_MS = 30_000;
 const MAX_RESPONSE_BYTES = 1_000_000;
 const SAFE_IDEMPOTENCY_KEY = /^[\x21-\x7e]{1,128}$/;
+
+/**
+ * Resolve a declarative task pack for the runner payload, best-effort.
+ *
+ * The platform, not the engine, owns task/adapter resolution: when the
+ * submitted taskId names a pack under tasks/, the merged spec (reward,
+ * termination, curriculum, domain randomization, quality gate) is embedded
+ * into the request so a worker-side engine trains the declared task instead
+ * of whatever default it would pick. Unknown taskIds (RoboGo remote tasks,
+ * legacy ids) are left untouched — the extra field is additive and older
+ * runners ignore it.
+ */
+function resolvedTaskPack(taskId?: string): Record<string, unknown> | null {
+  if (!taskId || !/^[a-z][a-z0-9_-]{0,63}$/.test(taskId)) return null;
+  try {
+    const pack = resolveTaskPack(taskId) as unknown as Record<string, unknown>;
+    return pack && typeof pack === 'object' ? pack : null;
+  } catch {
+    return null;
+  }
+}
 export interface Sim2RealRobogoRunResult {
   status: 'queued' | 'running' | 'completed' | 'failed';
   externalRunId?: string;
@@ -427,6 +449,7 @@ function runnerPayload(
     simulator: manifest.simulator,
     artifacts: manifest.artifacts,
     ...(taskId ? { taskId } : {}),
+    ...(resolvedTaskPack(taskId) ? { task: resolvedTaskPack(taskId) } : {}),
     ...(training ? { training } : {}),
     ...(resumeFrom ? { resumeFrom } : {}),
     ...(idempotencyKey ? { idempotencyKey } : {}),

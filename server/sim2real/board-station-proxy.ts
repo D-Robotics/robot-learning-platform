@@ -20,6 +20,30 @@ export interface StationAgentFetchOptions {
   cookieHeader?: string;
   /** Device selected by the platform registry for the current request. */
   deviceId?: string;
+  /**
+   * Loopback-only base URL override for per-connection tunnels (device
+   * manager). Anything that is not a bare loopback HTTP origin is ignored so
+   * the SSRF boundary cannot move through this option.
+   */
+  baseUrl?: string;
+}
+
+/**
+ * Validate an agent base-URL override: bare HTTP origin on loopback only.
+ * Returns null for anything else so callers fall back to boardAgentUrl().
+ */
+function loopbackBaseUrlOverride(value: string | undefined): string | null {
+  const candidate = String(value ?? '').trim();
+  if (!candidate) return null;
+  try {
+    const parsed = new URL(candidate);
+    if (parsed.protocol !== 'http:') return null;
+    if (parsed.hostname !== '127.0.0.1' && parsed.hostname !== 'localhost' && parsed.hostname !== '[::1]') return null;
+    if (parsed.pathname !== '/' || parsed.search || parsed.hash) return null;
+    return candidate;
+  } catch {
+    return null;
+  }
 }
 
 interface StationAgentJson {
@@ -93,7 +117,7 @@ async function stationAgentJson(
   pathname: string,
   options: StationAgentFetchOptions = {},
 ): Promise<StationAgentJson | null> {
-  const baseUrl = boardAgentUrl();
+  const baseUrl = loopbackBaseUrlOverride(options.baseUrl) ?? boardAgentUrl();
   if (!/^\/[A-Za-z0-9._/-]+$/.test(pathname)) return null;
   const timeoutMs = Math.min(Math.max(Number(options.timeoutMs) || 5000, 500), 15_000);
   const token = String(process.env.RDK_SIM2REAL_BOARD_AGENT_TOKEN ?? '').trim();

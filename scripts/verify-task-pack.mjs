@@ -8,6 +8,7 @@
  */
 
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -46,11 +47,32 @@ for (const taskId of ['originbot-goal-navigation', 'generic-goal-navigation']) {
   assert.deepEqual(round.task.reward, pack.reward, `${taskId}: reward survives JSON round-trip`);
 
   // Engine request validation: spawn the runner with a broken contract to
-  // confirm it rejects a bad request instead of training silently.
+  // confirm the real entrypoint rejects a bad request before training.
   const bad = JSON.parse(JSON.stringify(request));
   bad.contract.observationSize = 0;
-  const probe = spawnSync('python3', ['-c', 'import json,sys; json.load(open(sys.argv[1]))', path.join(root, 'tasks', `${taskId}.json`)], { encoding: 'utf8' });
-  assert.equal(probe.status, 0, `${taskId}: task JSON parses`);
+  const probeDir = fs.mkdtempSync(path.join(root, '.task-pack-probe-'));
+  const requestPath = path.join(probeDir, 'request.json');
+  const resultPath = path.join(probeDir, 'result.json');
+  fs.writeFileSync(requestPath, JSON.stringify(bad));
+  try {
+    const probe = spawnSync('python3', [path.join(root, 'engines', 'starter-ppo', 'runner.py')], {
+      encoding: 'utf8',
+      timeout: 30_000,
+      env: {
+        ...process.env,
+        RDK_SIM2REAL_REQUEST_FILE: requestPath,
+        RDK_SIM2REAL_RESULT_FILE: resultPath,
+      },
+    });
+    assert.notEqual(probe.status, 0, `${taskId}: runner must reject an invalid contract`);
+    assert.match(
+      `${probe.stdout}\n${probe.stderr}`,
+      /contract\.observationSize and contract\.actionSize are required/,
+      `${taskId}: runner rejection should identify the invalid contract`,
+    );
+  } finally {
+    fs.rmSync(probeDir, { recursive: true, force: true });
+  }
 }
 
 // Board-runtime layout agreement: the 8D native layout must match the

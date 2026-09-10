@@ -894,6 +894,187 @@ def ppo_update(model, model_opt, flat_obs, flat_act, flat_logp, flat_adv, flat_r
             model_opt.step()
 
 
+# ---------------------------------------------------------------------------
+# Off-policy alternative: SAC. Same ActorCritic backbone, same ONNX export
+# contract, same evaluators — only the update rule changes, so an algorithm
+# A/B comparison (request.training.algorithm) is honest: both learners see
+# the same env, budget, and evaluation protocol.
+# ---------------------------------------------------------------------------
+SAC_HYPERPARAMS = {
+    "gamma": 0.99,
+    # Polyak averaging rate for the target critic/value network.
+    "tau": 0.005,
+    # Entropy temperature tuning: alpha minimizes J(alpha) = E[-log pi - H·alpha],
+    # target entropy is -dim(A) (SAC's standard heuristic for bounded torque
+    # commands). A fixed alpha would need per-task hand tuning.
+    "targetEntropyScale": 1.0,
+    "actorLr": 3e-4,
+    "criticLr": 3e-4,
+    "alphaLr": 3e-4,
+    # Replayed transitions per gradient step.
+    "batchSize": 256,
+    # Gradient steps per iteration: min(updatesPerStep * rollout_steps,
+    # maxUpdatesPerIteration). One update per collected step-column keeps the
+    # CPU starter inside its budget; the cap bounds the worst case at large
+    # rollout lengths. Both numbers land in training-summary.json so the
+    # update-to-data ratio is auditable, not implied.
+    "updatesPerStep": 1,
+    "maxUpdatesPerIteration": 32,
+    # Replay capacity. 8192 transitions ≈ 64 envs × 128 steps, one full PPO
+    # rollout — the CPU starter trains short-horizon tasks that do not need
+    # a larger buffer, and memory stays bounded on the worker.
+    "replayCapacity": 8192,
+    "warmupSteps": 512,
+    "initAlpha": 0.2,
+}
+
+
+class ReplayBuffer:
+    """Fixed-capacity uniform replay over (obs, action, reward, next_obs, done).
+
+    done=1 marks a true terminal (bootstrapping must stop); auto-reset
+    transitions after a done are stored with done=1 so the target y stops at
+    the terminal reward — identical semantics to the PPO GAE reset mask.
+    """
+
+    def __init__(self, capacity, obs_size, act_size, device):
+        self.capacity = int(capacity)
+        self.device = device
+        self.obs = torch.zeros((self.capacity, obs_size))
+        self.actions = torch.zeros((self.capacity, act_size))
+        self.rewards = torch.zeros(self.capacity)
+        self.next_obs = torch.zeros((self.capacity, obs_size))
+        self.dones = torch.zeros(self.capacity)
+        self.index = 0
+        self.size = 0
+
+    def push_batch(self, obs, actions, rewards, next_obs, dones):
+        """Append one vectorized step (numpy arrays, [num_envs, ...])."""
+        count = obs.shape[0]
+        for row in range(count):
+            slot = self.index
+            self.obs[slot] = torch.from_numpy(obs[row])
+            self.actions[slot] = torch.from_numpy(actions[row])
+            self.rewards[slot] = float(rewards[row])
+            self.next_obs[slot] = torch.from_numpy(next_obs[row])
+            self.dones[slot] = float(bool(dones[row]))
+            self.index = (self.index + 1) % self.capacity
+            self.size = min(self.size + 1, self.capacity)
+
+    def sample(self, batch_size, generator=None):
+        upper = self.size if self.size > 0 else 1
+        indices = torch.randint(0, upper, (min(batch_size, self.size),), generator=generator)
+        return (
+            self.obs[indices].to(self.device),
+            self.actions[indices].to(self.device),
+            self.rewards[indices].to(self.device),
+            self.next_obs[indices].to(self.device),
+            self.dones[indices].to(self.device),
+        )
+
+
+class SacLearner:
+    """SAC learner over the shared ActorCritic backbone.
+
+    The critic is a twin-Q head grafted onto the same trunk (twinQ1/twinQ2
+    plus a target copy updated by Polyak averaging). Deterministic
+    inference, ONNX export, and both evaluators reuse ActorCritic exactly
+    as PPO does — act(deterministic=True) is the SAC mean action, so the
+    deployment story is unchanged between algorithms.
+    """
+
+    def __init__(self, model, obs_size, act_size, device, hyperparams=None):
+        hp = dict(SAC_HYPERPARAMS)
+        if hyperparams:
+            hp.update(hyperparams)
+        self.hp = hp
+        self.model = model
+        self.device = device
+        self.act_size = act_size
+        self.log_alpha = torch.tensor(math.log(hp["initAlpha"]), device=device, requires_grad=True)
+        self.target_entropy = -hp["targetEntropyScale"] * act_size
+        self.actor_opt = torch.optim.Adam(model.parameters(), lr=hp["actorLr"])
+        # Twin-Q heads live outside the PPO-shaped ActorCritic so the shared
+        # trunk serves both algorithms; they are never exported (deployment
+        # only ever consumes the deterministic actor).
+        self.q1 = _TwinQ(obs_size, act_size).to(device)
+        self.q2 = _TwinQ(obs_size, act_size).to(device)
+        self.critic_opt = torch.optim.Adam(
+            list(self.q1.parameters()) + list(self.q2.parameters()), lr=hp["criticLr"]
+        )
+        self.alpha_opt = torch.optim.Adam([self.log_alpha], lr=hp["alphaLr"])
+        self.target_q1 = _TwinQ(obs_size, act_size).to(device)
+        self.target_q2 = _TwinQ(obs_size, act_size).to(device)
+        for target, source in ((self.target_q1, self.q1), (self.target_q2, self.q2)):
+            target.load_state_dict(source.state_dict())
+            for parameter in target.parameters():
+                parameter.requires_grad_(False)
+
+    def alpha(self):
+        return self.log_alpha.exp()
+
+    def update(self, buffer, rng):
+        """One gradient step from a uniform replay batch; returns loss dict."""
+        obs, action, reward, next_obs, done = buffer.sample(self.hp["batchSize"], generator=rng)
+        with torch.no_grad():
+            next_dist = self.model.distribution(next_obs)
+            next_action = next_dist.sample()
+            next_logp = next_dist.log_prob(next_action).sum(-1)
+            q1_target = self.target_q1(next_obs, next_action)
+            q2_target = self.target_q2(next_obs, next_action)
+            soft_value = torch.min(q1_target, q2_target) - self.alpha().detach() * next_logp
+            y = reward + self.hp["gamma"] * (1.0 - done) * soft_value
+        q1_error = (self.q1(obs, action) - y).pow(2)
+        q2_error = (self.q2(obs, action) - y).pow(2)
+        critic_loss = (q1_error + q2_error).mean()
+        self.critic_opt.zero_grad()
+        critic_loss.backward()
+        self.critic_opt.step()
+        self._sync_targets()
+
+        dist = self.model.distribution(obs)
+        sampled = dist.rsample()
+        logp = dist.log_prob(sampled).sum(-1)
+        actor_loss = (self.alpha().detach() * logp - torch.min(
+            self.q1(obs, sampled.detach()), self.q2(obs, sampled.detach())
+        )).mean()
+        self.actor_opt.zero_grad()
+        actor_loss.backward()
+        torch.nn.utils.clip_grad_norm_(self.model.parameters(), PPO_HYPERPARAMS["maxGradNorm"])
+        self.actor_opt.step()
+
+        alpha_loss = -(self.log_alpha * (logp.detach() + self.target_entropy)).mean()
+        self.alpha_opt.zero_grad()
+        alpha_loss.backward()
+        self.alpha_opt.step()
+        return {
+            "criticLoss": float(critic_loss.detach()),
+            "actorLoss": float(actor_loss.detach()),
+            "alpha": float(self.alpha().detach()),
+        }
+
+    def _sync_targets(self):
+        tau = self.hp["tau"]
+        for target, source in ((self.target_q1, self.q1), (self.target_q2, self.q2)):
+            for target_parameter, source_parameter in zip(target.parameters(), source.parameters()):
+                target_parameter.mul_(1.0 - tau).add_(source_parameter, alpha=tau)
+
+
+class _TwinQ(torch.nn.Module):
+    def __init__(self, obs_size, act_size, hidden=128):
+        super().__init__()
+        self.net = torch.nn.Sequential(
+            torch.nn.Linear(obs_size + act_size, hidden),
+            torch.nn.ReLU(),
+            torch.nn.Linear(hidden, hidden),
+            torch.nn.ReLU(),
+            torch.nn.Linear(hidden, 1),
+        )
+
+    def forward(self, obs, action):
+        return self.net(torch.cat([obs, action], dim=-1)).squeeze(-1)
+
+
 def collect_rollout(model, env, rollout_steps, device, step_fn):
     """Gather one PPO rollout from a vectorized env via step_fn(actions)->(reward, done).
 
@@ -921,6 +1102,50 @@ def collect_rollout(model, env, rollout_steps, device, step_fn):
         batch_done.append(torch.from_numpy(done.astype(np.float32)).to(device))
         obs = torch.from_numpy(env.observe()).to(device)
     return batch_obs, batch_act, batch_logp, batch_val, batch_rew, batch_done
+
+
+def requested_algorithm(training):
+    """Read request.training.algorithm with the same fail-loud contract as
+    the TS normalizer: unknown values raise, absence means PPO (the
+    platform default since the first engine build)."""
+    value = (training or {}).get("algorithm")
+    if value is None:
+        return "ppo"
+    text = str(value).strip().lower()
+    if text not in ("ppo", "sac"):
+        raise ValueError("training.algorithm must be 'ppo' or 'sac' (got {!r})".format(value))
+    return text
+
+
+def sac_collect(model, env, rollout_steps, device, step_fn):
+    """Gather one SAC transition batch.
+
+    Same UNCLAMPED-sample contract as collect_rollout: SAC stores the
+    action it actually sampled (log_prob is recomputed analytically in the
+    update, so no logp column is needed here), and the env saturates the
+    command at execution. step_fn(actions) -> (next_obs, reward, done).
+    """
+    obs = env.observe()
+    obs_list, act_list, rew_list, done_list, next_list = [], [], [], [], []
+    for _ in range(rollout_steps):
+        with torch.no_grad():
+            dist = model.distribution(torch.from_numpy(obs).to(device))
+            action = dist.sample()
+        action_np = action.clamp(-1.0, 1.0).cpu().numpy()
+        next_obs, reward, done = step_fn(action_np)
+        obs_list.append(obs)
+        act_list.append(action.cpu().numpy())
+        rew_list.append(reward)
+        done_list.append(done)
+        next_list.append(next_obs)
+        obs = next_obs
+    return (
+        np.concatenate(obs_list, axis=0),
+        np.concatenate(act_list, axis=0),
+        np.stack(rew_list, axis=0).reshape(-1),
+        np.stack(done_list, axis=0).reshape(-1),
+        np.concatenate(next_list, axis=0),
+    )
 
 
 def gae_returns(rewards, values, dones, gamma, lam):
@@ -971,9 +1196,10 @@ def train_goal_navigation(request, pack):
     if requested_device.type == "cuda":
         torch.cuda.manual_seed_all(seed)
     np.random.seed(seed % (2 ** 31))
+    algorithm = requested_algorithm(training)
     stdout(
-        "engine=start task={} profile={} iters={} envs={} steps={} obs={} act={} control={}Hz device={}{}".format(
-            pack["id"], profile, iterations, num_envs, rollout_steps, obs_size, act_size, control_hz,
+        "engine=start task={} profile={} algorithm={} iters={} envs={} steps={} obs={} act={} control={}Hz device={}{}".format(
+            pack["id"], profile, algorithm, iterations, num_envs, rollout_steps, obs_size, act_size, control_hz,
             requested_device.type, " ({})".format(device_name) if device_name != "cpu" else "",
         )
     )
@@ -981,27 +1207,54 @@ def train_goal_navigation(request, pack):
     env = GoalNavEnv(pack, num_envs, seed=seed)
     device = requested_device
     model = ActorCritic(obs_size, act_size).to(device)
-    model_opt = torch.optim.Adam(model.parameters(), lr=PPO_HYPERPARAMS["actorLr"])
     to_tensor = lambda array: torch.from_numpy(array).to(device)  # noqa: E731 - local shim
+    model_opt = torch.optim.Adam(model.parameters(), lr=PPO_HYPERPARAMS["actorLr"]) if algorithm != "sac" else None
+    if algorithm == "sac":
+        # SAC trains the SAME actor trunk through the learner; the PPO critic
+        # head stays present (ActorCritic is shared) but is updated only as
+        # part of the composite backbone gradient — the Q target supplies the
+        # value signal instead of the head's MSE.
+        learner = SacLearner(model, obs_size, act_size, device)
+        buffer = ReplayBuffer(SAC_HYPERPARAMS["replayCapacity"], obs_size, act_size, device)
+        replay_rng = torch.Generator(device="cpu")
+        replay_rng.manual_seed(seed)
 
     reward_curve = []
     success_curve = []
+    sac_curve = []
     started = time.time()
     for iteration in range(iterations):
-        batch = collect_rollout(
-            model, env, rollout_steps, device,
-            lambda actions: (lambda result: (result[1], result[2]))(env.step(actions)),
-        )
-        batch_obs, batch_act, batch_logp, batch_val, batch_rew, batch_done = batch
-        rewards = torch.stack(batch_rew)
-        values = torch.stack(batch_val)
-        dones = torch.stack(batch_done)
-        returns = gae_returns(rewards, values, dones, PPO_HYPERPARAMS["gamma"], PPO_HYPERPARAMS["gaeLambda"])
-        ppo_update(
-            model, model_opt,
-            torch.cat(batch_obs), torch.cat(batch_act), torch.cat(batch_logp),
-            (returns - values).reshape(-1), returns.reshape(-1), device,
-        )
+        if algorithm == "sac":
+            batch_obs, batch_act, batch_rew, batch_done, batch_next_obs = sac_collect(
+                model, env, rollout_steps, device,
+                lambda actions: (lambda result: (result[0], result[1], result[2]))(env.step(actions)),
+            )
+            buffer.push_batch(batch_obs, batch_act, batch_rew, batch_next_obs, batch_done)
+            if buffer.size >= SAC_HYPERPARAMS["warmupSteps"]:
+                updates = min(
+                    SAC_HYPERPARAMS["updatesPerStep"] * rollout_steps,
+                    SAC_HYPERPARAMS["maxUpdatesPerIteration"],
+                )
+                for _ in range(updates):
+                    losses = learner.update(buffer, replay_rng)
+                sac_curve.append(round(losses["alpha"], 4))
+            rewards = torch.from_numpy(batch_rew.astype(np.float32))
+        else:
+            batch = collect_rollout(
+                model, env, rollout_steps, device,
+                lambda actions: (lambda result: (result[1], result[2]))(env.step(actions)),
+            )
+            batch_obs, batch_act, batch_logp, batch_val, batch_rew, batch_done = batch
+            rewards = torch.stack(batch_rew)
+            values = torch.stack(batch_val)
+            dones = torch.stack(batch_done)
+            returns = gae_returns(rewards, values, dones, PPO_HYPERPARAMS["gamma"], PPO_HYPERPARAMS["gaeLambda"])
+            ppo_update(
+                model,
+                model_opt,
+                torch.cat(batch_obs), torch.cat(batch_act), torch.cat(batch_logp),
+                (returns - values).reshape(-1), returns.reshape(-1), device,
+            )
         reward_curve.append(round(float(rewards.mean()), 4))
         recent = env.success_history[-50:]
         success_curve.append(round(sum(recent) / len(recent), 3) if recent else 0.0)
@@ -1071,11 +1324,13 @@ def train_goal_navigation(request, pack):
                 "task": pack["id"],
                 "taskKind": "goal-navigation",
                 "profile": profile,
+                "algorithm": algorithm,
                 "iterations": iterations,
                 "numEnvs": num_envs,
                 "rolloutSteps": rollout_steps,
                 "seed": seed,
-                "hyperparams": PPO_HYPERPARAMS,
+                "hyperparams": SAC_HYPERPARAMS if algorithm == "sac" else PPO_HYPERPARAMS,
+                **({"alphaCurve": sac_curve} if algorithm == "sac" and sac_curve else {}),
                 "curriculum": {
                     "initialGoalDistance": pack["curriculum"]["initialGoalDistance"],
                     "finalGoalDistance": pack["curriculum"]["finalGoalDistance"],
@@ -1135,6 +1390,7 @@ def train_goal_navigation(request, pack):
         "metrics": {
             "contractValid": True,
             "engine": "starter-ppo",
+            "algorithm": algorithm,
             "taskId": pack["id"],
             "taskKind": "goal-navigation",
             "observationSize": obs_size,
@@ -1304,23 +1560,31 @@ def train(request):
 
     requested_device, device_name, cuda_requested = resolve_device()
     torch.set_num_threads(TORCH_THREADS if requested_device.type == "cpu" else max(TORCH_THREADS, 4))
+    algorithm = requested_algorithm(training)
     stdout(
-        "engine=start task=pendulum-chain-{}j profile={} iters={} envs={} steps={} obs={} act={} control={}Hz device={}{}".format(
-            joint_count, profile, iterations, num_envs, rollout_steps, obs_size, act_size, control_hz,
+        "engine=start task=pendulum-chain-{}j profile={} algorithm={} iters={} envs={} steps={} obs={} act={} control={}Hz device={}{}".format(
+            joint_count, profile, algorithm, iterations, num_envs, rollout_steps, obs_size, act_size, control_hz,
             requested_device.type, " ({})".format(device_name) if device_name != "cpu" else "",
         )
     )
     if not HAVE_ONNX:
         stdout("onnx wheel missing; ONNX export will be skipped ({})".format(ONNX_MISSING_HINT))
 
+    torch.manual_seed(7)
     env = PendulumChain(num_envs, joint_count, command_size, seed=7)
     device = requested_device
     model = ActorCritic(obs_size, act_size).to(device)
     # One optimizer over the full parameter set (shared body + actor head +
     # critic head) with the composite PPO loss; a split optimizer adds
     # bookkeeping without changing the CPU starter result.
-    model_opt = torch.optim.Adam(model.parameters(), lr=PPO_HYPERPARAMS["actorLr"])
+    model_opt = torch.optim.Adam(model.parameters(), lr=PPO_HYPERPARAMS["actorLr"]) if algorithm != "sac" else None
     to_tensor = lambda array: torch.from_numpy(array).to(device)  # noqa: E731 - local shim
+    sac_learner = sac_buffer = sac_rng = None
+    if algorithm == "sac":
+        sac_learner = SacLearner(model, obs_size, act_size, device)
+        sac_buffer = ReplayBuffer(SAC_HYPERPARAMS["replayCapacity"], obs_size, act_size, device)
+        sac_rng = torch.Generator(device="cpu")
+        sac_rng.manual_seed(7)
     initial_eval = evaluate_policy(model, joint_count, command_size, control_dt, physics_dt, decimation, seed=11)
     stdout(
         "eval before training: stepReward={:.3f} successRate={:.2f}".format(
@@ -1332,8 +1596,49 @@ def train(request):
     lam = PPO_HYPERPARAMS["gaeLambda"]
     clip = PPO_HYPERPARAMS["clip"]
     reward_curve = []
+    sac_curve = []
     started = time.time()
     for iteration in range(iterations):
+        if algorithm == "sac":
+            obs_np = env.observe()
+            obs_list, act_list, rew_list, done_list, next_list = [], [], [], [], []
+            for _ in range(rollout_steps):
+                with torch.no_grad():
+                    dist = model.distribution(to_tensor(obs_np))
+                    action = dist.sample()
+                next_obs_np, reward, done, _ = env.step(
+                    action.clamp(-1.0, 1.0).cpu().numpy(), physics_dt, decimation
+                )
+                obs_list.append(obs_np)
+                act_list.append(action.cpu().numpy())
+                rew_list.append(reward)
+                done_list.append(done)
+                next_list.append(next_obs_np)
+                obs_np = next_obs_np
+            sac_buffer.push_batch(
+                np.concatenate(obs_list, axis=0),
+                np.concatenate(act_list, axis=0),
+                np.stack(rew_list, axis=0).reshape(-1),
+                np.concatenate(next_list, axis=0),
+                np.stack(done_list, axis=0).reshape(-1),
+            )
+            mean_reward = float(np.mean(np.concatenate(rew_list, axis=0)))
+            if sac_buffer.size >= SAC_HYPERPARAMS["warmupSteps"]:
+                updates = min(
+                    SAC_HYPERPARAMS["updatesPerStep"] * rollout_steps,
+                    SAC_HYPERPARAMS["maxUpdatesPerIteration"],
+                )
+                for _ in range(updates):
+                    losses = sac_learner.update(sac_buffer, sac_rng)
+                sac_curve.append(round(losses["alpha"], 4))
+            reward_curve.append(round(mean_reward, 4))
+            if (iteration + 1) % max(1, iterations // 8) == 0:
+                stdout(
+                    "iter {}/{} meanStepReward={:.3f} elapsed={:.1f}s".format(
+                        iteration + 1, iterations, mean_reward, time.time() - started
+                    )
+                )
+            continue
         batch_obs, batch_act, batch_logp, batch_val, batch_rew, batch_done = [], [], [], [], [], []
         obs = to_tensor(env.observe())
         for _ in range(rollout_steps):
@@ -1456,10 +1761,12 @@ def train(request):
                 "engine": "starter-ppo",
                 "task": "pendulum-chain-{}j".format(joint_count),
                 "profile": profile,
+                "algorithm": algorithm,
                 "iterations": iterations,
                 "numEnvs": num_envs,
                 "rolloutSteps": rollout_steps,
-                "hyperparams": PPO_HYPERPARAMS,
+                "hyperparams": SAC_HYPERPARAMS if algorithm == "sac" else PPO_HYPERPARAMS,
+                **({"alphaCurve": sac_curve} if algorithm == "sac" and sac_curve else {}),
                 "physics": PHYSICS,
                 "controlHz": control_hz,
                 "physicsTimestepSeconds": physics_dt,
@@ -1498,6 +1805,7 @@ def train(request):
         "metrics": {
             "contractValid": True,
             "engine": "starter-ppo",
+            "algorithm": algorithm,
             "observationSize": obs_size,
             "actionSize": act_size,
             "reward": round(final_eval["episodeReward"], 4),

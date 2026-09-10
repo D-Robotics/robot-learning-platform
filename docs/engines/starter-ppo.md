@@ -4,8 +4,26 @@
 
 | 引擎 | 依赖 | 定位 |
 | --- | --- | --- |
-| `engines/starter-ppo` | numpy + torch（+ onnx 可选导出） | **开箱即用的真 PPO**：numpy 向量化 12 关节倒立摆物理 + torch PPO（**自动检测 CUDA**）+ ONNX 导出 + 遥测/baseline 导出 |
-| `engines/mjlab-rsl-rl-adapter` | mjlab + rsl-rl + GPU | 生产训练栈适配参考：填 3 个 PROJECT HOOK 后把大规模并行 PPO 接进同一平台 |
+| `engines/starter-ppo` | numpy + torch（+ onnx 可选导出） | **开箱即用的真 PPO/SAC**：numpy 向量化 12 关节倒立摆物理 + torch PPO 或 SAC（**自动检测 CUDA**）+ ONNX 导出 + 遥测/baseline 导出 |
+| `engines/mjlab-rsl-rl-adapter` | rsl-rl-lib==2.2.3（mjlab 可选） | 生产训练栈适配：kinematic 后端已可用真实 rsl_rl `OnPolicyRunner` 训练；mjlab 物理引擎为显式接入点 |
+
+## 算法选择：`training.algorithm`
+
+请求里 `training.algorithm` 为 `"ppo"`（默认）或 `"sac"`。两条算法路径：
+
+- **共享**：`ActorCritic` 骨干、ONNX 导出契约、评测器、质量门、遥测导出——算法 A/B
+  比较是诚实的（同环境、同预算、同评测协议），制品在板端运行时不可区分
+  （部署消费确定性 actor，SAC 的均值动作）。
+- **PPO**：在策略，GAE 优势 + clip ratio（log-ratio 护栏防 NaN）。
+- **SAC**：离策略，twin-Q 目标网络（Polyak）+ 自动温度 alpha（目标熵 −dim(A)）、
+  uniform replay（容量 8192，warmup 512）；超参全量落盘
+  `training-summary.json`（`SAC_HYPERPARAMS`，含 update-to-data 比率），`alphaCurve`
+  记录温度轨迹。`metrics.algorithm` / `training-summary.algorithm` 如实标注。
+
+TS 侧 `normalizeTrainingSpec` 与引擎侧 `requested_algorithm` 对未知算法名都
+直接拒绝（API 400 / 进程异常）——不会静默退回 PPO。验证：
+`npm run verify:starter-engine` 同时跑两个算法并断言 SAC 的 `alphaCurve` 非空
+（梯度真的执行过，而不是只走了采样路径）。
 
 设备选择：`RDK_STARTER_ENGINE_DEVICE=auto`（默认，CUDA 可用即用 GPU，否则 CPU）/ `cuda`（强制，不可用回退 CPU 并告警）/ `cpu`。`result.cuda` 如实反映实际设备；`training-summary.json` 记录 `device`/`deviceName`/`cudaRequested`。控制延迟始终按 CPU 单线程预算测量，ONNX 始终导出为 CPU runtime 制品。GPU 机器部署见 [`docs/gpu-runner.md`](../gpu-runner.md)。
 

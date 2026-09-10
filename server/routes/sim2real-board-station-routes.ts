@@ -2,6 +2,7 @@ import { type Request, type Response, type Router } from 'express';
 
 import { sendApiError, wrapAsync } from '../sim2real/http-helpers.js';
 import { isBoardAgentConfigured } from '../sim2real/standalone-adapters.js';
+import { stationSwitchEnabled, setStationSwitch, clearStationSwitch } from '../sim2real/station-switches.js';
 import {
   stationAgentFetch,
   stationAgentFetchStream,
@@ -382,12 +383,12 @@ export function registerSim2RealBoardStationRoutes(
   // ---- constrained drive (motion canary) --------------------------------
   // Motion requires BOTH switches: the board agent's
   // RDK_SIM2REAL_BOARD_AGENT_ENABLE_DRIVE=1 and the platform's
-  // RDK_SIM2REAL_STATION_DRIVE_ENABLED=1. Either one alone keeps the
-  // platform read-only. The proxy re-validates and clamps every value the
-  // browser sends; the agent clamps again on the board.
+  // RDK_SIM2REAL_STATION_DRIVE_ENABLED=1 (runtime-overridable through the
+  // station-switches surface, env remains the default). Either one alone
+  // keeps the platform read-only. The proxy re-validates and clamps every
+  // value the browser sends; the agent clamps again on the board.
 
-  const drivePlatformEnabled =
-    String(process.env.RDK_SIM2REAL_STATION_DRIVE_ENABLED ?? '').trim() === '1';
+  const drivePlatformEnabled = () => stationSwitchEnabled('drive');
   const DRIVE_PROXY_MAX_LINEAR = 0.3;
   const DRIVE_PROXY_MAX_ANGULAR = 1.0;
   const DRIVE_PROXY_MAX_WINDOW_SEC = 2.0;
@@ -427,9 +428,92 @@ export function registerSim2RealBoardStationRoutes(
       }
       response.json({
         ok: true,
-        platformEnabled: drivePlatformEnabled,
+        platformEnabled: drivePlatformEnabled(),
         drive: agent.drive ?? null,
         actuatorPolicy: agent.actuatorPolicy ?? null,
+      });
+    }),
+  );
+
+  /**
+   * GET /board-station/switches — platform-side switch states. Readable even
+   * when the board is unreachable so the UI can always render the honest
+   * gate state; `source` says whether the value came from a runtime override
+   * or the env default.
+   */
+  router.get(
+    api('/board-station/switches'),
+    wrapAsync(async (request, response) => {
+      const owner = requestOwner(request, response);
+      if (owner === null) return;
+      noStore(response);
+      response.json({
+        ok: true,
+        drive: stationSwitchEnabled('drive'),
+        policy: stationSwitchEnabled('policy'),
+      });
+    }),
+  );
+
+  /**
+   * PUT /board-station/switches — toggle the platform-side motion switches.
+   * This is ONE half of the double gate: the board agent's own switches stay
+   * opt-in through the device-connection config surface. Stopping is never
+   * gated, and switching OFF is always allowed (fail-safe direction).
+   */
+  router.put(
+    api('/board-station/switches'),
+    wrapAsync(async (request, response) => {
+      const owner = requestOwner(request, response);
+      if (owner === null) return;
+      noStore(response);
+      const body =
+        request.body && typeof request.body === 'object' && !Array.isArray(request.body)
+          ? (request.body as Record<string, unknown>)
+          : {};
+      const patch: { drive?: boolean; policy?: boolean } = {};
+      if (body.drive !== undefined) {
+        if (typeof body.drive !== 'boolean') {
+          sendApiError(response, 400, 'SIM2REAL_STATION_SWITCH_INVALID', 'drive 需为布尔值。', { retryable: false });
+          return;
+        }
+        patch.drive = body.drive;
+      }
+      if (body.policy !== undefined) {
+        if (typeof body.policy !== 'boolean') {
+          sendApiError(response, 400, 'SIM2REAL_STATION_SWITCH_INVALID', 'policy 需为布尔值。', { retryable: false });
+          return;
+        }
+        patch.policy = body.policy;
+      }
+      if (patch.drive === undefined && patch.policy === undefined) {
+        sendApiError(response, 400, 'SIM2REAL_STATION_SWITCH_INVALID', '需要 drive 或 policy 布尔字段。', { retryable: false });
+        return;
+      }
+      // Turning motion ON requires the operator's explicit confirmation flag
+      // in the same request, mirroring the drive panel's confirm dialog.
+      if ((patch.drive === true || patch.policy === true) && body.confirm !== true) {
+        sendApiError(
+          response,
+          400,
+          'SIM2REAL_STATION_SWITCH_CONFIRM_REQUIRED',
+          '开启运动开关需要 body.confirm=true（操作者在场、场地清空确认）。',
+          { retryable: false },
+        );
+        return;
+      }
+      if (patch.drive !== undefined) {
+        if (body.reset === true) clearStationSwitch('drive');
+        else setStationSwitch('drive', patch.drive);
+      }
+      if (patch.policy !== undefined) {
+        if (body.reset === true) clearStationSwitch('policy');
+        else setStationSwitch('policy', patch.policy);
+      }
+      response.json({
+        ok: true,
+        drive: stationSwitchEnabled('drive'),
+        policy: stationSwitchEnabled('policy'),
       });
     }),
   );
@@ -441,7 +525,7 @@ export function registerSim2RealBoardStationRoutes(
       const resolved = await resolveStation(request, response);
       if (!resolved) return;
       noStore(response);
-      if (!drivePlatformEnabled) {
+      if (!drivePlatformEnabled()) {
         sendApiError(
           response,
           409,
@@ -520,8 +604,7 @@ export function registerSim2RealBoardStationRoutes(
   // so policy motion requires all three. `policy/stop` (like drive/stop) is
   // always forwarded regardless of switches.
 
-  const policyPlatformEnabled =
-    String(process.env.RDK_SIM2REAL_STATION_POLICY_ENABLED ?? '').trim() === '1';
+  const policyPlatformEnabled = () => stationSwitchEnabled('policy');
 
   /** GET /board-station/policy — honest policy-runtime state. */
   router.get(
@@ -543,8 +626,8 @@ export function registerSim2RealBoardStationRoutes(
       }
       response.json({
         ok: true,
-        platformEnabled: policyPlatformEnabled,
-        drivePlatformEnabled,
+        platformEnabled: policyPlatformEnabled(),
+        drivePlatformEnabled: drivePlatformEnabled(),
         policy: agent.policy ?? null,
       });
     }),
@@ -557,7 +640,7 @@ export function registerSim2RealBoardStationRoutes(
       const resolved = await resolveStation(request, response);
       if (!resolved) return;
       noStore(response);
-      if (!policyPlatformEnabled) {
+      if (!policyPlatformEnabled()) {
         sendApiError(
           response,
           409,
@@ -614,7 +697,7 @@ export function registerSim2RealBoardStationRoutes(
       const resolved = await resolveStation(request, response);
       if (!resolved) return;
       noStore(response);
-      if (!policyPlatformEnabled) {
+      if (!policyPlatformEnabled()) {
         sendApiError(
           response,
           409,
@@ -624,7 +707,7 @@ export function registerSim2RealBoardStationRoutes(
         );
         return;
       }
-      if (!drivePlatformEnabled) {
+      if (!drivePlatformEnabled()) {
         sendApiError(
           response,
           409,
@@ -691,7 +774,7 @@ export function registerSim2RealBoardStationRoutes(
       const resolved = await resolveStation(request, response);
       if (!resolved) return;
       noStore(response);
-      if (!policyPlatformEnabled) {
+      if (!policyPlatformEnabled()) {
         sendApiError(
           response,
           409,

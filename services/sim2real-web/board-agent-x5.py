@@ -19,6 +19,8 @@ Wire contract (identical to services/sim2real-web/local-board-agent.mjs):
   POST /v1/station/policy/start          begin policy-driven motion (gated)
   POST /v1/station/policy/reset          clear a sticky fault (gated)
   POST /v1/station/policy/stop           zero output + halt (always on)
+  GET  /v1/config                        switch states + env file path (read-only)
+  POST /v1/config                        toggle drive/policy switches + restart
 
 Safety invariants (same as the reference agent):
 - token auth via RDK_SIM2REAL_BOARD_AGENT_TOKEN
@@ -35,6 +37,13 @@ Safety invariants (same as the reference agent):
 - `actuatorControl` mirrors the drive switch; `mock: false` reported honestly
 - camera stream reports 503 CAMERA_UNAVAILABLE when no device is connected;
   it never substitutes synthetic frames.
+- the web-managed switch surface (`/v1/config`) can only flip the two
+  opt-in switches (RDK_SIM2REAL_BOARD_AGENT_ENABLE_DRIVE / _ENABLE_POLICY),
+  never the token, ports or any other env. Applying a change writes the
+  env file and restarts this systemd unit; the agent then cold-starts with
+  the usual publisher handshake and watchdog. The restart is refused (and
+  the env untouched) while a motion window is active; stop endpoints stay
+  reachable during the whole exchange.
 
 Data sources: /proc/stat, /proc/meminfo, /proc/net/dev, thermal zones,
 statvfs, `ros2 topic list` (bounded), hobot_usb_cam device probe.
@@ -980,6 +989,103 @@ def _start_ob_sampler():
         _ob_thread.start()
 
 
+# ---- web-managed switch surface (/v1/config) ----------------------------
+# The two motion switches stay opt-in env flags; this surface only rewrites
+# those two lines in the unit's EnvironmentFile and restarts the unit so the
+# agent cold-starts through the normal publisher handshake + watchdog. The
+# token, ports, and every other env line pass through untouched.
+
+AGENT_ENV_FILE = os.environ.get(
+    "RDK_SIM2REAL_BOARD_AGENT_ENV_FILE", "/etc/rdk-board-agent/agent.env"
+)
+AGENT_UNIT_NAME = os.environ.get(
+    "RDK_SIM2REAL_BOARD_AGENT_UNIT", "rdk-board-agent.service"
+)
+_CONFIG_SWITCHES = ("RDK_SIM2REAL_BOARD_AGENT_ENABLE_DRIVE", "RDK_SIM2REAL_BOARD_AGENT_ENABLE_POLICY")
+
+
+def config_status():
+    """Switch states as this agent sees them, plus the env-file source."""
+    env_present = os.path.isfile(AGENT_ENV_FILE)
+    return {
+        "ok": True,
+        "envFile": AGENT_ENV_FILE,
+        "envFileExists": env_present,
+        "unit": AGENT_UNIT_NAME,
+        "systemdManaged": os.path.isdir("/run/systemd/system"),
+        "switches": {
+            "RDK_SIM2REAL_BOARD_AGENT_ENABLE_DRIVE": DRIVE_ENABLED,
+            "RDK_SIM2REAL_BOARD_AGENT_ENABLE_POLICY": POLICY_ENABLED,
+        },
+        "restartable": env_present and os.path.isdir("/run/systemd/system"),
+    }
+
+
+def _config_apply(desired):
+    """Rewrite the two switch lines in the env file, then restart the unit.
+
+    Returns a dict like the route responses: ok/error/message. The env file is
+    rewritten atomically; a restart is refused while a motion window is active
+    so a mid-motion unit restart can never swap the safety layer out from
+    under the robot."""
+    if not isinstance(desired, dict):
+        return {"ok": False, "error": "invalid-type"}
+    parsed = {}
+    for key in _CONFIG_SWITCHES:
+        if key in desired:
+            value = desired[key]
+            if not isinstance(value, bool):
+                return {"ok": False, "error": "invalid-value",
+                        "message": f"{key} 需为布尔值"}
+            parsed[key] = "1" if value else "0"
+    if not parsed:
+        return {"ok": False, "error": "no-switches"}
+    with _drive_lock:
+        if _drive_state["active"]:
+            return {"ok": False, "error": "motion-active",
+                    "message": "运动窗口进行中，拒绝重启；等待窗口结束或先急停。"}
+    if not os.path.isfile(AGENT_ENV_FILE):
+        return {"ok": False, "error": "env-file-missing",
+                "message": f"未找到 {AGENT_ENV_FILE}；此 agent 可能不是 systemd 部署。"}
+    try:
+        with open(AGENT_ENV_FILE, "r", encoding="utf-8") as handle:
+            lines = handle.read().splitlines()
+    except OSError as error:
+        return {"ok": False, "error": "env-read-failed", "message": str(error)}
+    kept = [line for line in lines
+            if line.split("=", 1)[0].strip() not in _CONFIG_SWITCHES]
+    for key, value in parsed.items():
+        kept.append(f"{key}={value}")
+    temporary = AGENT_ENV_FILE + ".agent-tmp"
+    try:
+        with open(temporary, "w", encoding="utf-8") as handle:
+            handle.write("\n".join(kept) + "\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary, AGENT_ENV_FILE)
+    except OSError as error:
+        try:
+            os.unlink(temporary)
+        except OSError:
+            pass
+        return {"ok": False, "error": "env-write-failed", "message": str(error)}
+    if not os.path.isdir("/run/systemd/system"):
+        # Not systemd-managed (e.g. developer running the agent by hand): the
+        # env is updated but this process keeps its current switches. Say so
+        # instead of pretending a restart happened.
+        return {"ok": True, "restarted": False, "switches": {"applied": parsed},
+                "message": "env 文件已更新；当前进程非 systemd 管理，需手动重启后生效。"}
+    restart = subprocess.run(
+        ["systemctl", "restart", AGENT_UNIT_NAME],
+        capture_output=True, text=True, timeout=15,
+    )
+    if restart.returncode != 0:
+        return {"ok": False, "error": "restart-failed",
+                "message": (restart.stderr or "").strip()[:300] or "systemctl restart 失败"}
+    return {"ok": True, "restarted": True, "switches": {"applied": parsed},
+            "message": "开关已写入 env 并重启服务；约 2 秒后重新查询状态确认。"}
+
+
 def find_camera_device():
     """Probe hobot_usb_cam device candidates read-only (no camera opened)."""
     candidates = []
@@ -1093,6 +1199,7 @@ def build_preflight_command():
         'printf "python3=%s\\n" "$(command -v python3 2>/dev/null || echo missing)"',
         'printf "tros=%s\\n" "$(if test -d /opt/tros || test -d /opt/ros; then echo present; else echo missing; fi)"',
         "printf \"disk_bytes=%s\\n\" \"$(df -Pk /tmp 2>/dev/null | awk 'NR==2 {print $4 * 1024}' || echo unknown)\"",
+        'printf "bpu_toolchain=%s\\n" "$(if command -v hbdk-sim >/dev/null 2>&1 && (command -v hbrtmlin >/dev/null 2>&1 || command -v hbrt-tv >/dev/null 2>&1); then echo present; else echo missing; fi)"',
         f'printf "{PREFLIGHT_END}\\n"',
     ])
 
@@ -1110,6 +1217,9 @@ def build_preflight_output():
         disk_bytes = str(st.f_bavail * st.f_frsize)
     except OSError:
         disk_bytes = "unknown"
+    # Same presence-only contract as the fixed probe string: the agent answers
+    # from its own PATH so the value is real, never assumed from the board model.
+    bpu = "present" if shutil.which("hbdk-sim") and (shutil.which("hbrtmlin") or shutil.which("hbrt-tv")) else "missing"
     lines = [
         PREFLIGHT_BEGIN,
         f"arch={arch}",
@@ -1117,6 +1227,7 @@ def build_preflight_output():
         f"python3={python3}",
         f"tros={tros}",
         f"disk_bytes={disk_bytes}",
+        f"bpu_toolchain={bpu}",
         PREFLIGHT_END,
     ]
     return "\n".join(lines) + "\n"
@@ -1226,6 +1337,9 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/v1/station/policy":
             self._json(200, {"ok": True, "policy": policy_status()})
             return
+        if path == "/v1/config":
+            self._json(200, config_status())
+            return
         if path == "/v1/station/status/stream":
             self._stream_ndjson()
             return
@@ -1284,6 +1398,13 @@ class Handler(BaseHTTPRequestHandler):
                                                                          "state": None}
             self._json(200 if res.get("ok") else 409, {"ok": res.get("ok", True),
                                                         "policy": policy_status()})
+            return
+        if path == "/v1/config":
+            # Switch writes are only meaningful through this same token-gated
+            # surface; the restart that applies them is refused mid-motion.
+            payload = self._read_json() or {}
+            result = _config_apply(payload.get("switches") if isinstance(payload.get("switches"), dict) else payload)
+            self._json(200 if result.get("ok") else 409, result)
             return
         self._json(404, {"ok": False, "error": "BOARD_AGENT_NOT_FOUND"})
 

@@ -83,6 +83,7 @@ import { LOCAL_SIM2REAL_AUTH, type Sim2RealAuthPort } from '../sim2real/sim2real
 import { validateRunForDeployment } from '../sim2real/release-evidence.js';
 import { registerSim2RealTelemetryRoutes } from './sim2real-telemetry-routes.js';
 import { registerSim2RealBoardStationRoutes } from './sim2real-board-station-routes.js';
+import { registerSim2RealDeviceConnectionRoutes } from './sim2real-device-connection-routes.js';
 import { registerSim2RealWorkspaceRoutes } from './sim2real-workspace-routes.js';
 
 type RunOnDevice = (
@@ -925,6 +926,8 @@ type PreflightCheck = {
   python3: string;
   tros: string;
   diskBytes: number | null;
+  /** 'present' only when the fixed probe found hbdk-sim + a runtime tool. */
+  bpuToolchain: 'present' | 'missing' | '';
 };
 
 function parsePreflightOutput(output: string): { checks: PreflightCheck; valid: boolean; reason: string } {
@@ -937,6 +940,7 @@ function parsePreflightOutput(output: string): { checks: PreflightCheck; valid: 
     python3: '',
     tros: '',
     diskBytes: null,
+    bpuToolchain: '',
   };
   if (begin < 0 || end < 0 || end <= begin) {
     return { checks: empty, valid: false, reason: '板端预检缺少完整的协议标记。' };
@@ -947,6 +951,7 @@ function parsePreflightOutput(output: string): { checks: PreflightCheck; valid: 
     if (separator <= 0) continue;
     fields.set(line.slice(0, separator).trim(), line.slice(separator + 1).trim());
   }
+  const bpuField = fields.get('bpu_toolchain') || '';
   const checks: PreflightCheck = {
     arch: fields.get('arch') || '',
     kernel: fields.get('kernel') || '',
@@ -955,6 +960,7 @@ function parsePreflightOutput(output: string): { checks: PreflightCheck; valid: 
     diskBytes: Number.isFinite(Number(fields.get('disk_bytes')))
       ? Number(fields.get('disk_bytes'))
       : null,
+    bpuToolchain: bpuField === 'present' ? 'present' : bpuField === 'missing' ? 'missing' : '',
   };
   const archOk = /^(?:aarch64|arm64)$/i.test(checks.arch);
   const kernelOk = /^[^\u0000\r\n]{1,160}$/.test(checks.kernel);
@@ -975,7 +981,16 @@ function parsePreflightOutput(output: string): { checks: PreflightCheck; valid: 
       reason: `板端预检未满足：${missing.join('、')}。`,
     };
   }
-  return { checks, valid: true, reason: '板端预检协议和基础环境检查通过。' };
+  return {
+    checks,
+    valid: true,
+    reason:
+      checks.bpuToolchain === 'present'
+        ? '板端预检协议和基础环境检查通过；BPU 工具链（hbdk-sim + 运行时工具）已就位。'
+        : checks.bpuToolchain === 'missing'
+          ? '板端预检协议和基础环境检查通过；未探测到 BPU 工具链，本部署继续按 CPU ONNX 制品下发。'
+          : '板端预检协议和基础环境检查通过。',
+  };
 }
 
 function markStep(
@@ -1229,6 +1244,17 @@ export function createSim2RealRouter(
       auth,
       requestOwner: (request, response) => requestOwner(request, response, auth),
       visibleDevices: visibleDevicesForAuth,
+    },
+    { prefix },
+  );
+
+  // Web-managed board connections (Studio 网页版-style device management):
+  // SSH coordinates + loopback tunnels + the board-side switch surface.
+  registerSim2RealDeviceConnectionRoutes(
+    router,
+    {
+      auth,
+      requestOwner: (request, response) => requestOwner(request, response, auth),
     },
     { prefix },
   );

@@ -87,11 +87,20 @@ assert.match(html, /id="top-menu-list"/, 'topbar menu must have a list surface')
 assert.match(app, /function wireTopMenu\(\)/, 'topbar menu must be wired');
 assert.doesNotMatch(
   html,
-  /presentation-toggle[\s\S]{0,80}refresh-button[\s\S]{0,80}notify-toggle[\s\S]{0,500}RDK Studio/,
-  'presentation/notify/refresh/Studio must not sit as four always-on topbar buttons',
+  /refresh-button[\s\S]{0,80}notify-toggle[\s\S]{0,500}RDK Studio[\s\S]{0,200}<a class="button/,
+  'notify/refresh/Studio actions must stay inside the menu, not as always-on topbar buttons',
 );
 assert.match(html, /id="onboarding-help-button"/, 'onboarding help stays a top-level affordance');
-assert.match(app, /function setPresentationMode\(enabled/, 'presentation mode logic must survive the menu move');
+assert.doesNotMatch(
+  html,
+  /id="presentation-toggle"|presentation-mode/,
+  'presentation view was removed: no dead toggle or body class may remain',
+);
+assert.doesNotMatch(
+  app,
+  /setPresentationMode|readPresentationPreference|presentation-toggle/,
+  'presentation mode logic must stay deleted from app.js',
+);
 
 // ---- IA: context strip is read-only, selectors live on their pages ----
 const stripHtml = html.slice(
@@ -153,7 +162,6 @@ assert.match(app, /event\.key === 'Escape'/, 'menus and modes must have a keyboa
 
 // ---- preserved behavior anchors (unchanged by the IA refactor) ----
 assert.match(html, /id="task-select"/, 'workspace must expose an action-task context');
-assert.match(html, /id="presentation-toggle"/, 'workspace must expose a reversible presentation view');
 assert.doesNotMatch(html, /section-kicker/, 'no legacy section kicker labels: keep the workflow surface compact');
 assert.doesNotMatch(html, /让一个动作/, 'the marketing hero must stay removed');
 assert.doesNotMatch(html, /data-pipeline-step/, 'the overview vertical pipeline duplicate must stay removed');

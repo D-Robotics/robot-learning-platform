@@ -130,6 +130,22 @@ async function completedRun(successRate = 0.88) {
       deployable: true,
     },
     taskEvaluation: taskEvaluation(successRate),
+    evaluation: {
+      evaluatedAt: new Date().toISOString(),
+      sampleCount: 120,
+      referenceSampleCount: 120,
+      actionMae: 0.07,
+      replay: {
+        sampleCount: 120,
+        durationSeconds: 12,
+        source: 'board-agent',
+        chunkCount: 1,
+        droppedCount: 0,
+        doneCount: 0,
+        fallCount: 0,
+      },
+      warnings: [],
+    },
     finishedAt: new Date().toISOString(),
   });
 }

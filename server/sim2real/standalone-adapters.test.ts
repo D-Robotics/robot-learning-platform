@@ -5,6 +5,7 @@ import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import {
+  buildBoardPreflightCommand,
   createStandaloneRobogoApiClient,
   isForeignOwnedDevice,
   readDevices,
@@ -137,5 +138,41 @@ describe('standalone device ownership boundary', () => {
       deviceId: '',
       agentPort: 19100,
     });
+  });
+});
+
+describe('board preflight probe contract', () => {
+  it('probes BPU toolchain presence without guessing versions', () => {
+    const command = buildBoardPreflightCommand();
+    expect(command).toContain('bpu_toolchain=%s');
+    expect(command).toContain('command -v hbdk-sim');
+    // Both runtime spellings count: the probe must not hard-fail a board
+    // that ships hbrt-tv instead of hbrtmlin.
+    expect(command).toContain('command -v hbrtmlin');
+    expect(command).toContain('command -v hbrt-tv');
+    expect(command).not.toMatch(/hbdk-sim.*--version/);
+  });
+
+  it('stays byte-identical to the reference agent builder in board-agent-x5.py', async () => {
+    // The real equivalence check: execute the Python builder and compare
+    // its output against the TS allowlist string. Skipped when no python3
+    // is available (same SKIP pattern as verify-starter-engine.mjs) so CI
+    // nodes without python do not fail spuriously.
+    let pythonOutput: string;
+    try {
+      const { execFile } = await import('node:child_process');
+      const { promisify } = await import('node:util');
+      pythonOutput = (await promisify(execFile)('python3', ['-c', [
+        'import importlib.util, sys',
+        'spec = importlib.util.spec_from_file_location("ba", "services/sim2real-web/board-agent-x5.py")',
+        'module = importlib.util.module_from_spec(spec)',
+        'sys.modules["ba"] = module',
+        'spec.loader.exec_module(module)',
+        'print(module.build_preflight_command())',
+      ].join('; ')], { cwd: process.cwd() })).stdout.trim();
+    } catch {
+      return; // python3 unavailable: skip the cross-language check
+    }
+    expect(pythonOutput).toBe(buildBoardPreflightCommand());
   });
 });

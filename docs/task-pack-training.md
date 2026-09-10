@@ -189,6 +189,31 @@ cd /tmp && RDK_SIM2REAL_REQUEST_FILE=request.json RDK_SIM2REAL_RESULT_FILE=resul
 python3 scripts/sensitivity-study.py /tmp/sensitivity-out
 ```
 
+## 算法选择（PPO / SAC，同一评测协议）
+
+`training.algorithm`（`ppo` | `sac`，缺省 `ppo`）从 Web UI 训练参数下拉一路传到
+引擎：TS 侧 `normalizeTrainingSpec` 对未知值直接 400，引擎侧 `requested_algorithm`
+同样拒绝未知值——拼写错误在提交时就报错，而不是悄悄用 PPO 训完。
+
+SAC 与 PPO 共享同一 `ActorCritic` 骨干、同一 ONNX 导出契约、同一评测器与质量门，
+只有更新规则不同（twin-Q + 目标网络 + 自动温度 alpha，超参数全量落盘
+`training-summary.json` 的 `SAC_HYPERPARAMS`，含可审计的 update-to-data 比率）。
+离线部署消费的始终是确定性 actor（`act(deterministic=True)` = SAC 均值动作），
+两个算法产出的制品在板端运行时不可区分。`alphaCurve` 记录温度的学习轨迹，
+`metrics.algorithm` 与 `training-summary.json.algorithm` 如实标注用了哪个学习器。
+
+验证：`npm run verify:starter-engine` 在同一台机器上先跑 20 迭代 PPO、再跑
+10 迭代 SAC（跨过 warmup 阈值，断言 alphaCurve 非空 = 梯度真的执行过）。
+
+## 真机遥测作为发布证据（canary/live）
+
+发布闸门 `validateRunForDeployment` 现在要求：canary/live 计划在提交前，
+run 必须已摄入**至少一块 board-agent 来源**的真机遥测并完成评测
+（POST `/telemetry` + POST `/runs/:id/evaluate`）。语义是**证据而非阈值**：
+闸门只检查 `evaluation.replay.source === 'board-agent'` 且样本数 > 0，
+不设 MAE/RMSE 阈值——阈值会把闸门耦合到某一版控制器的调参。浏览器演示
+遥测、导入遥测、demo-fixture 不满足此要求（fail-closed）。
+
 ## 诚实边界
 
 - S100 机型的验证是**纯仿真**的（profile 标注 `mock: true`）；它证明的是"平台换
@@ -202,3 +227,9 @@ python3 scripts/sensitivity-study.py /tmp/sensitivity-out
   `docs/research/goalnav-eval-2026-09-10-round2.json`。
 - 板端低速 canary 运动仍需平台双开关 + 现场安全区 + 急停演练（见 roadmap P1）。
 - 微型冒烟预算（smoke, 40 迭代）学不出策略，gate 会如实 FAIL——这是特性不是缺陷。
+- 服务端（local / RoboGo 后端）提交训练时由 `resolveTaskPack` 解析并嵌入 task-pack
+  到 runner 载荷——未知 taskId 只是缺 `task` 字段（旧 runner 忽略），不会 500。
+- `engines/mjlab-rsl-rl-adapter/` 的 kinematic 后端用真实 rsl_rl `OnPolicyRunner`
+  训练同一 GoalNavEnv（`result.physicsBackend` 如实标注 `starter-kinematic`）；
+  mjlab 物理引擎钩子仍是显式的 `NotImplementedError` 接入点，不假装已接入。
+  验证：`npm run verify:mjlab-adapter`。

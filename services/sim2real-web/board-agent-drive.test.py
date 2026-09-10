@@ -227,5 +227,105 @@ class DriveEnabledContract(unittest.TestCase):
         self.assertEqual(captured.get("RDK_BOARD_DRIVE_PERSIST"), "1")
 
 
+class BoardConfigSurfaceContract(unittest.TestCase):
+    """Web-managed switch surface (/v1/config): only the two documented
+    flags, atomic env rewrite preserving foreign lines, restart refused
+    mid-motion, honest non-systemd message."""
+
+    def setUp(self):
+        self.agent = load_agent_module(enable_drive=False)
+        self.workdir = tempfile.mkdtemp(prefix="board-config-test-")
+        self.env_file = os.path.join(self.workdir, "agent.env")
+        with open(self.env_file, "w") as handle:
+            handle.write(
+                "RDK_SIM2REAL_BOARD_AGENT_TOKEN=secret\n"
+                "RDK_SIM2REAL_BOARD_AGENT_ENABLE_DRIVE=0\n"
+                "RDK_SIM2REAL_BOARD_AGENT_BIND_HOST=0.0.0.0\n"
+            )
+        self.agent.AGENT_ENV_FILE = self.env_file
+
+    def test_config_status_reports_source_of_truth(self):
+        status = self.agent.config_status()
+        self.assertTrue(status["ok"])
+        self.assertEqual(
+            status["switches"]["RDK_SIM2REAL_BOARD_AGENT_ENABLE_DRIVE"],
+            self.agent.DRIVE_ENABLED,
+        )
+        self.assertTrue(status["envFileExists"])
+        self.assertIn(status["unit"], ("rdk-board-agent.service",
+                                       os.environ.get("RDK_SIM2REAL_BOARD_AGENT_UNIT", "rdk-board-agent.service")))
+
+    def test_apply_rewrites_only_the_two_switches(self):
+        with mock.patch.object(self.agent.subprocess, "run") as fake_run, \
+                mock.patch.object(os.path, "isdir", return_value=False):
+            fake_run.return_value = mock.Mock(returncode=0)
+            result = self.agent._config_apply(
+                {"RDK_SIM2REAL_BOARD_AGENT_ENABLE_DRIVE": True}
+            )
+        self.assertTrue(result["ok"])
+        self.assertFalse(result["restarted"])  # non-systemd path is honest
+        lines = open(self.env_file).read().splitlines()
+        self.assertIn("RDK_SIM2REAL_BOARD_AGENT_ENABLE_DRIVE=1", lines)
+        # Foreign lines survive the atomic rewrite.
+        self.assertIn("RDK_SIM2REAL_BOARD_AGENT_TOKEN=secret", lines)
+        self.assertIn("RDK_SIM2REAL_BOARD_AGENT_BIND_HOST=0.0.0.0", lines)
+        # The untouched sibling switch is preserved, not deleted.
+        self.assertNotIn("RDK_SIM2REAL_BOARD_AGENT_ENABLE_POLICY=1", lines)
+
+    def test_apply_rejects_unknown_keys_and_wrong_types(self):
+        result = self.agent._config_apply(
+            {"RDK_SIM2REAL_BOARD_AGENT_ENABLE_DRIVE": "yes"}
+        )
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["error"], "invalid-value")
+        # Unknown flags are dropped, not written.
+        content = open(self.env_file).read()
+        self.assertNotIn("POLICY", content.replace(
+            "RDK_SIM2REAL_BOARD_AGENT_ENABLE_POLICY", ""))
+
+    def test_apply_refuses_when_motion_window_active(self):
+        self.agent._drive_state["active"] = True
+        result = self.agent._config_apply(
+            {"RDK_SIM2REAL_BOARD_AGENT_ENABLE_DRIVE": True}
+        )
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["error"], "motion-active")
+        # env untouched
+        self.assertIn("RDK_SIM2REAL_BOARD_AGENT_ENABLE_DRIVE=0",
+                      open(self.env_file).read())
+
+    def test_apply_missing_env_file_is_honest(self):
+        os.unlink(self.env_file)
+        result = self.agent._config_apply(
+            {"RDK_SIM2REAL_BOARD_AGENT_ENABLE_DRIVE": True}
+        )
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["error"], "env-file-missing")
+
+    def test_apply_restarts_unit_when_systemd_managed(self):
+        captured = {}
+
+        class FakeCompleted(object):
+            returncode = 0
+            stderr = ""
+
+        def fake_run(argv, **kwargs):
+            captured["argv"] = argv
+            return FakeCompleted()
+
+        with mock.patch.object(self.agent.subprocess, "run", side_effect=fake_run), \
+                mock.patch.object(os.path, "isdir", return_value=True):
+            result = self.agent._config_apply(
+                {"RDK_SIM2REAL_BOARD_AGENT_ENABLE_POLICY": True}
+            )
+        self.assertTrue(result["ok"])
+        self.assertTrue(result["restarted"])
+        self.assertIn("systemctl", captured["argv"][0])
+        self.assertIn("restart", captured["argv"])
+        self.assertIn("RDK_SIM2REAL_BOARD_AGENT_ENABLE_POLICY=1",
+                      open(self.env_file).read())
+
+
 if __name__ == "__main__":
+
     unittest.main(verbosity=2)
