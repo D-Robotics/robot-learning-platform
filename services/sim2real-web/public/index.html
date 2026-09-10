@@ -5,7 +5,10 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="description" content="面向 RDK X5 的 Duck 仿真、训练与部署平台" />
     <title>RDK Duck Sim2Real Lab</title>
-    <link rel="stylesheet" href="./styles.css?v=duck-lab-26" />
+    <link rel="stylesheet" href="./styles.css?v=duck-lab-27" />
+    <link rel="stylesheet" href="./overview-clean.css?v=2" />
+    <link rel="stylesheet" href="./visual-polish.css?v=1" />
+    <link rel="stylesheet" href="./onboarding.css?v=1" />
   </head>
   <body class="theme-dark">
     <a class="skip-link" href="#main-content">跳到主要内容</a>
@@ -35,6 +38,7 @@
           >
         </div>
         <div class="top-actions">
+          <button class="button button-ghost" id="onboarding-help-button" type="button" title="重新打开新手指引">新手指引</button>
           <a
             class="button button-primary"
             id="login-link"
@@ -261,48 +265,9 @@
             aria-labelledby="overview-title"
           >
             <div class="section-heading section-heading-lean">
-              <h2 id="overview-title">总览</h2>
+              <div class="overview-page-title"><h2 id="overview-title">工作区总览</h2><p>从仿真到真实设备，跟进当前项目的每一步。</p></div>
               <span class="section-caption" id="hero-updated">—</span>
             </div>
-            <section class="workspace-command-bar" aria-label="工作区上下文与快捷操作">
-              <article class="workspace-context-card">
-                <div class="workspace-card-heading">
-                  <span class="workspace-kicker">PROJECT CONTEXT</span>
-                  <span class="state-badge state-neutral" id="workspace-context-state">草稿工作区</span>
-                </div>
-                <div class="workspace-project-row">
-                  <span class="workspace-project-mark" aria-hidden="true">◇</span>
-                  <div>
-                    <strong id="workspace-project-name">MicroDuck · X5 Starter</strong>
-                    <span id="workspace-project-meta">RDK X5 · Sim2Real Lab</span>
-                  </div>
-                </div>
-                <div class="workspace-context-details">
-                  <div><span>工作目录</span><strong id="workspace-root">~/rdk/sim2real</strong></div>
-                  <div><span>目标板卡</span><strong id="workspace-device-summary">跟随上方选择</strong></div>
-                </div>
-              </article>
-              <article class="workspace-quick-panel" aria-labelledby="workspace-quick-title">
-                <div class="workspace-card-heading">
-                  <div><span class="workspace-kicker">QUICK ACTIONS</span><h3 id="workspace-quick-title">从这里继续</h3></div>
-                  <span class="workspace-shortcut-hint" aria-label="打开命令面板快捷键">⌘ K</span>
-                </div>
-                <div class="workspace-quick-actions">
-                  <button class="quick-action" type="button" data-view-target="simulate"><span class="quick-action-icon">▶</span><span><strong>开始仿真</strong><small>录制一段动作</small></span><span class="quick-action-arrow">→</span></button>
-                  <button class="quick-action" type="button" data-view-target="train"><span class="quick-action-icon">⌁</span><span><strong>查看模型</strong><small>选择版本与训练方式</small></span><span class="quick-action-arrow">→</span></button>
-                  <button class="quick-action" type="button" data-view-target="deploy"><span class="quick-action-icon">↑</span><span><strong>准备部署</strong><small>检查设备与契约</small></span><span class="quick-action-arrow">→</span>
-                  </button>
-                </div>
-              </article>
-              <aside class="agent-entry-card" aria-labelledby="agent-entry-title">
-                <div class="agent-entry-orb" aria-hidden="true"><i class="status-dot"></i>✦</div>
-                <div class="agent-entry-copy">
-                  <div class="workspace-card-heading"><span class="workspace-kicker">RDK AGENT</span><span class="agent-status-label"><i class="status-dot"></i>可用</span></div>
-                  <h3 id="agent-entry-title">让 Agent 帮你检查设备</h3><p>连接、遥测和部署预检都在一个工作现场完成。</p>
-                  <button class="button button-primary button-small" id="agent-entry-button" type="button" data-view-target="station">打开设备工作台 <span aria-hidden="true">↗</span></button>
-                </div>
-              </aside>
-            </section>
             <div class="next-card">
               <div class="next-card-main">
                 <span class="next-badge">下一步</span>
@@ -317,6 +282,43 @@
                 </button>
               </div>
             </div>
+            <section class="project-workspace panel" id="project-workspace" aria-labelledby="project-workspace-title">
+              <div class="panel-heading panel-heading-lean project-workspace-heading">
+                <div>
+                  <h2 id="project-workspace-title">项目概况</h2>
+                </div>
+                <span class="panel-caption" id="workspace-last-saved">本地偏好已保存</span>
+              </div>
+              <div class="workspace-summary-grid" aria-label="项目摘要">
+                <button class="workspace-summary-card" type="button" data-workspace-view="records">
+                  <span class="workspace-summary-icon">↗</span>
+                  <span><small>最近运行</small><strong id="workspace-latest-run">暂无运行</strong><em id="workspace-latest-run-meta">从仿真或训练开始</em></span>
+                </button>
+                <button class="workspace-summary-card" type="button" data-workspace-view="contract">
+                  <span class="workspace-summary-icon workspace-summary-icon-violet">◈</span>
+                  <span><small>模型与制品</small><strong id="workspace-asset-count">0 个模型</strong><em id="workspace-asset-meta">登记 manifest 后可追溯</em></span>
+                </button>
+                <button class="workspace-summary-card" type="button" data-workspace-view="evaluate">
+                  <span class="workspace-summary-icon workspace-summary-icon-green">▤</span>
+                  <span><small>数据与评测</small><strong id="workspace-dataset-count">等待遥测</strong><em id="workspace-dataset-meta">导入证据后生成摘要</em></span>
+                </button>
+                <button class="workspace-summary-card" type="button" data-workspace-view="deploy">
+                  <span class="workspace-summary-icon workspace-summary-icon-orange">↑</span>
+                  <span><small>部署状态</small><strong id="workspace-deploy-status">尚未部署</strong><em id="workspace-deploy-meta">只读预检保护设备</em></span>
+                </button>
+              </div>
+              <div class="workspace-recent-row">
+                <div class="workspace-recent-heading"><div><strong>最近活动</strong><span id="workspace-recent-caption">按当前项目筛选</span></div><button type="button" class="overview-records-link" data-workspace-view="records">全部记录 <span aria-hidden="true">→</span></button></div>
+                <div class="workspace-recent-list" id="workspace-recent-list" aria-live="polite"><span class="empty-inline">加载项目活动…</span></div>
+              </div>
+            </section>
+            <details class="overview-environment" id="overview-environment">
+              <summary>
+                <span class="overview-environment-icon" aria-hidden="true">⌘</span>
+                <span><strong>环境与连接</strong><small>仿真器、训练后端、目标设备与存储</small></span>
+                <span class="overview-environment-toggle" aria-hidden="true">查看详情 <i>⌄</i></span>
+              </summary>
+              <div class="overview-environment-body">
             <div class="context-live" id="context-live" aria-label="当前状态">
               <div class="context-live-item">
                 <span>当前模型</span>
@@ -365,37 +367,47 @@
                 <p id="status-storage-detail">模型和运行可追溯</p>
               </article>
             </div>
-            <section class="project-workspace panel" id="project-workspace" aria-labelledby="project-workspace-title">
-              <div class="panel-heading panel-heading-lean project-workspace-heading">
-                <div>
-                  <span class="workspace-kicker">PROJECT WORKSPACE</span>
-                  <h2 id="project-workspace-title">项目进度</h2>
+            <section class="workspace-command-bar" aria-label="工作区上下文与快捷操作">
+              <article class="workspace-context-card">
+                <div class="workspace-card-heading">
+                  <span class="workspace-kicker">PROJECT CONTEXT</span>
+                  <span class="state-badge state-neutral" id="workspace-context-state">草稿工作区</span>
                 </div>
-                <span class="panel-caption" id="workspace-last-saved">本地偏好已保存</span>
-              </div>
-              <div class="workspace-summary-grid" aria-label="项目摘要">
-                <button class="workspace-summary-card" type="button" data-workspace-view="records">
-                  <span class="workspace-summary-icon">↗</span>
-                  <span><small>最近运行</small><strong id="workspace-latest-run">暂无运行</strong><em id="workspace-latest-run-meta">从仿真或训练开始</em></span>
-                </button>
-                <button class="workspace-summary-card" type="button" data-workspace-view="contract">
-                  <span class="workspace-summary-icon workspace-summary-icon-violet">◈</span>
-                  <span><small>模型与制品</small><strong id="workspace-asset-count">0 个模型</strong><em id="workspace-asset-meta">登记 manifest 后可追溯</em></span>
-                </button>
-                <button class="workspace-summary-card" type="button" data-workspace-view="evaluate">
-                  <span class="workspace-summary-icon workspace-summary-icon-green">▤</span>
-                  <span><small>数据与评测</small><strong id="workspace-dataset-count">等待遥测</strong><em id="workspace-dataset-meta">导入证据后生成摘要</em></span>
-                </button>
-                <button class="workspace-summary-card" type="button" data-workspace-view="deploy">
-                  <span class="workspace-summary-icon workspace-summary-icon-orange">↑</span>
-                  <span><small>部署状态</small><strong id="workspace-deploy-status">尚未部署</strong><em id="workspace-deploy-meta">只读预检保护设备</em></span>
-                </button>
-              </div>
-              <div class="workspace-recent-row">
-                <div class="workspace-recent-heading"><strong>最近活动</strong><span id="workspace-recent-caption">按当前项目筛选</span></div>
-                <div class="workspace-recent-list" id="workspace-recent-list" aria-live="polite"><span class="empty-inline">加载项目活动…</span></div>
-              </div>
+                <div class="workspace-project-row">
+                  <span class="workspace-project-mark" aria-hidden="true">◇</span>
+                  <div>
+                    <strong id="workspace-project-name">MicroDuck · X5 Starter</strong>
+                    <span id="workspace-project-meta">RDK X5 · Sim2Real Lab</span>
+                  </div>
+                </div>
+                <div class="workspace-context-details">
+                  <div><span>工作目录</span><strong id="workspace-root">~/rdk/sim2real</strong></div>
+                  <div><span>目标板卡</span><strong id="workspace-device-summary">跟随上方选择</strong></div>
+                </div>
+              </article>
+              <article class="workspace-quick-panel" aria-labelledby="workspace-quick-title">
+                <div class="workspace-card-heading">
+                  <div><span class="workspace-kicker">QUICK ACTIONS</span><h3 id="workspace-quick-title">从这里继续</h3></div>
+                  <span class="workspace-shortcut-hint" aria-label="打开命令面板快捷键">⌘ K</span>
+                </div>
+                <div class="workspace-quick-actions">
+                  <button class="quick-action" type="button" data-view-target="simulate"><span class="quick-action-icon">▶</span><span><strong>开始仿真</strong><small>录制一段动作</small></span><span class="quick-action-arrow">→</span></button>
+                  <button class="quick-action" type="button" data-view-target="train"><span class="quick-action-icon">⌁</span><span><strong>查看模型</strong><small>选择版本与训练方式</small></span><span class="quick-action-arrow">→</span></button>
+                  <button class="quick-action" type="button" data-view-target="deploy"><span class="quick-action-icon">↑</span><span><strong>准备部署</strong><small>检查设备与契约</small></span><span class="quick-action-arrow">→</span>
+                  </button>
+                </div>
+              </article>
+              <aside class="agent-entry-card" aria-labelledby="agent-entry-title">
+                <div class="agent-entry-orb" aria-hidden="true"><i class="status-dot"></i>✦</div>
+                <div class="agent-entry-copy">
+                  <div class="workspace-card-heading"><span class="workspace-kicker">RDK AGENT</span><span class="agent-status-label"><i class="status-dot"></i>可用</span></div>
+                  <h3 id="agent-entry-title">让 Agent 帮你检查设备</h3><p>连接、遥测和部署预检都在一个工作现场完成。</p>
+                  <button class="button button-primary button-small" id="agent-entry-button" type="button" data-view-target="station">打开设备工作台 <span aria-hidden="true">↗</span></button>
+                </div>
+              </aside>
             </section>
+              </div>
+            </details>
           </section>
 
           <section class="agent-chat-panel" id="agent-chat-panel" aria-labelledby="agent-chat-title">
@@ -417,7 +429,7 @@
               </div>
             </div>
             <form class="agent-chat-composer" id="agent-chat-form">
-              <input id="agent-chat-input" autocomplete="off" placeholder="例如：完成仿真、GPU 训练和 X5 真机预检" />
+              <input id="agent-chat-input" autocomplete="off" aria-label="描述要执行的任务" placeholder="例如：完成仿真、GPU 训练和 X5 真机预检" />
               <button class="button button-primary" type="submit">发送任务 ↗</button>
             </form>
           </section>
@@ -527,7 +539,7 @@
                 <div class="simulator-frame-wrap">
                   <iframe
                     id="simulator-frame"
-                    title="MicroDuck 浏览器仿真"
+                    title="当前产品浏览器仿真场景"
                     src="./mujoco/microduck/?cb=duck-lab-01"
                     loading="lazy"
                     allow="autoplay; fullscreen"
@@ -1519,7 +1531,8 @@
       Neither bundle imports another module, so classic scripts preserve the
       same ordering while working from both file:// and the served app.
     -->
-    <script src="./app.js?v=duck-lab-25"></script>
+    <script src="./app.js?v=duck-lab-27"></script>
     <script src="./agent-chat.js?v=agent-3"></script>
+    <script src="./onboarding.js?v=onboarding-1"></script>
   </body>
 </html>

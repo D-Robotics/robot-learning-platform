@@ -1,0 +1,96 @@
+/* Overview has one primary action and one project surface. Secondary system
+   diagnostics stay available in a native disclosure instead of competing with
+   the work itself. Existing data-rendering hooks are preserved in the markup. */
+[data-view-section="overview"] .section-heading {
+  align-items: flex-end;
+  margin: 6px 0 24px;
+  padding: 0;
+  border: 0;
+}
+.overview-page-title h2 { font-size: 24px; font-weight: 650; letter-spacing: -.045em; }
+.overview-page-title p { margin: 7px 0 0; color: var(--muted); font-size: 13px; }
+[data-view-section="overview"] .section-caption { padding-bottom: 2px; font-size: 11px; }
+[data-view-section="overview"] .next-card {
+  margin: 0 0 24px;
+  border: 1px solid rgba(255, 121, 24, .28);
+  border-radius: 12px;
+  background: linear-gradient(110deg, rgba(255, 121, 24, .07), rgba(255, 121, 24, .015));
+  box-shadow: none;
+}
+[data-view-section="overview"] .next-card-main { min-height: 82px; padding: 18px 20px; gap: 18px; }
+[data-view-section="overview"] .next-badge { font-size: 11px; }
+[data-view-section="overview"] .next-card h3 { flex: 1; font-size: 16px; font-weight: 600; line-height: 1.55; }
+[data-view-section="overview"] .next-card .button { min-height: 36px; padding: 9px 15px; font-size: 12px; white-space: nowrap; }
+[data-view-section="overview"] .project-workspace { margin: 0 0 20px; padding: 0; overflow: hidden; background: var(--panel); border: 1px solid var(--line); border-radius: 12px; }
+[data-view-section="overview"] .project-workspace-heading { margin: 0; padding: 20px 22px 18px; border: 0; }
+[data-view-section="overview"] .project-workspace-heading h2 { margin: 0; font-size: 15px; font-weight: 600; }
+[data-view-section="overview"] .workspace-last-saved, [data-view-section="overview"] .panel-caption { font-size: 11px; }
+[data-view-section="overview"] .workspace-summary-grid { gap: 0; margin: 0 22px 22px; padding: 0; border: 1px solid var(--line); border-radius: 9px; overflow: hidden; background: transparent; }
+[data-view-section="overview"] .workspace-summary-card { position: relative; display: flex; flex-direction: column; align-items: flex-start; gap: 13px; min-height: 150px; padding: 17px 18px; border: 0; border-right: 1px solid var(--line); border-radius: 0; background: transparent; box-shadow: none; }
+[data-view-section="overview"] .workspace-summary-card:last-child { border-right: 0; }
+[data-view-section="overview"] .workspace-summary-card:hover { transform: none; background: rgba(255,255,255,.025); }
+[data-view-section="overview"] .workspace-summary-icon { width: 26px; height: 26px; border-radius: 7px; font-size: 13px; }
+[data-view-section="overview"] .workspace-summary-card > span:last-child { display: block; width: 100%; min-width: 0; }
+[data-view-section="overview"] .workspace-summary-card small { font-size: 11px; }
+[data-view-section="overview"] .workspace-summary-card strong { margin-top: 8px; font-size: 14px; font-weight: 600; }
+[data-view-section="overview"] .workspace-summary-card em { margin-top: 6px; font-size: 10px; }
+[data-view-section="overview"] .workspace-recent-row { margin: 0; padding: 20px 22px 15px; border-top: 1px solid var(--line); }
+[data-view-section="overview"] .workspace-recent-heading { align-items: center; margin-bottom: 12px; font-size: 13px; }
+[data-view-section="overview"] .workspace-recent-heading > div { display: flex; align-items: baseline; gap: 10px; }
+[data-view-section="overview"] .workspace-recent-heading > div > span { font-size: 11px; }
+.overview-records-link { display: inline-flex; align-items: center; gap: 6px; padding: 5px 0 5px 10px; color: var(--muted); border: 0; background: transparent; font: inherit; font-size: 11px; cursor: pointer; }
+.overview-records-link:hover { color: var(--text); }
+[data-view-section="overview"] .workspace-recent-list { gap: 0; }
+[data-view-section="overview"] .workspace-recent-item { padding: 13px 0; border-radius: 0; border-top: 1px solid rgba(255,255,255,.04); }
+[data-view-section="overview"] .workspace-recent-item:first-child { border-top: 0; }
+[data-view-section="overview"] .workspace-recent-copy strong { font-size: 12px; font-weight: 500; }
+[data-view-section="overview"] .workspace-recent-copy small { margin-top: 5px; font-size: 10px; }
+.overview-environment { margin-bottom: 24px; border: 1px solid var(--line); border-radius: 10px; background: transparent; }
+.overview-environment > summary { display: flex; align-items: center; gap: 12px; padding: 16px 19px; list-style: none; cursor: pointer; }
+.overview-environment > summary::-webkit-details-marker { display: none; }
+.overview-environment > summary:hover { background: rgba(255,255,255,.02); }
+.overview-environment-icon { display: grid; place-items: center; width: 30px; height: 30px; color: var(--muted); border: 1px solid var(--line); border-radius: 7px; font-size: 16px; }
+.overview-environment > summary > span:nth-child(2) { flex: 1; min-width: 0; }
+.overview-environment > summary strong { display: block; font-size: 12px; font-weight: 550; }
+.overview-environment > summary small { display: block; margin-top: 4px; color: var(--muted); font-size: 11px; }
+.overview-environment-toggle { display: inline-flex; align-items: center; gap: 9px; color: var(--muted); font-size: 11px; }
+.overview-environment-toggle i { display: block; font-style: normal; font-size: 16px; transition: transform .15s; }
+.overview-environment[open] .overview-environment-toggle i { transform: rotate(180deg); }
+.overview-environment-body { padding: 0 18px 18px; }
+.overview-environment .context-live { margin-top: 6px; }
+.overview-environment .status-grid { grid-template-columns: repeat(2,minmax(0,1fr)); }
+.overview-environment .workspace-command-bar { margin: 16px 0 0; }
+.overview-environment .workspace-quick-panel { padding: 12px 0 0; border: 0; border-top: 1px solid var(--line); border-radius: 0; background: transparent; }
+.overview-environment .workspace-quick-panel .workspace-kicker { display: none; }
+.overview-environment .workspace-quick-panel h3 { color: var(--muted); font-weight: 500; }
+.overview-environment .agent-assistant { margin: 14px 0 0; }
+@media (max-width: 980px) {
+  [data-view-section="overview"] .workspace-summary-grid { grid-template-columns: repeat(2,minmax(0,1fr)); }
+  [data-view-section="overview"] .workspace-summary-card { min-height: 140px; }
+  [data-view-section="overview"] .workspace-summary-card:nth-child(2) { border-right: 0; }
+  [data-view-section="overview"] .workspace-summary-card:nth-child(-n+2) { border-bottom: 1px solid var(--line); }
+}
+@media (max-width: 720px) {
+  [data-view-section="overview"] .section-heading { margin: 4px 0 20px; }
+  .overview-page-title h2 { font-size: 22px; }
+  .overview-page-title p { font-size: 12px; line-height: 1.6; }
+  [data-view-section="overview"] .section-caption { display: none; }
+  [data-view-section="overview"] .next-card-main { flex-wrap: wrap; gap: 10px; padding: 16px; }
+  [data-view-section="overview"] .next-card h3 { flex-basis: calc(100% - 65px); font-size: 14px; }
+  [data-view-section="overview"] .next-card .button { width: 100%; }
+  [data-view-section="overview"] .project-workspace-heading { padding: 17px 16px; }
+  [data-view-section="overview"] .workspace-summary-grid { margin: 0 15px 17px; }
+  [data-view-section="overview"] .workspace-summary-card { padding: 14px 13px; }
+  [data-view-section="overview"] .workspace-summary-card strong { font-size: 12px; }
+  [data-view-section="overview"] .workspace-recent-row { padding: 17px 16px 12px; }
+  [data-view-section="overview"] .workspace-recent-heading > div > span { display: none; }
+  .overview-environment > summary { padding: 15px; }
+  .overview-environment-toggle { font-size: 0; gap: 0; }
+  .overview-environment .status-grid { grid-template-columns: 1fr; }
+}
+/* Keep the sidebar safety notice in document flow. The previous absolute
+   footer could cover quick links when the viewport is shorter than the nav. */
+@media (min-width: 981px) {
+  .sidebar { display: flex; flex-direction: column; min-height: calc(100vh - 124px); overflow: visible; }
+  .sidebar-bottom { position: static; margin-top: auto; padding-top: 18px; }
+}

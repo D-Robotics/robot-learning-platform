@@ -40,6 +40,7 @@ Data sources: /proc/stat, /proc/meminfo, /proc/net/dev, thermal zones,
 statvfs, `ros2 topic list` (bounded), hobot_usb_cam device probe.
 """
 
+import hmac
 import json
 import os
 import re
@@ -917,9 +918,20 @@ def policy_stop(reason="operator-stop"):
 
 def _policy_allowed_model_path(path):
     """Only models under the pinned policies dir are loadable, and the file
-    must exist and be a regular file (no traversal, no devices/sockets)."""
+    must exist and be a regular file (no traversal, no devices/sockets).
+
+    Accepts either a bare filename (resolved against the policies dir, which
+    is what the platform proxy sends) or a caller-supplied path already
+    inside that dir (what older platform builds sent); anything else is
+    rejected before it reaches the runtime."""
     if not isinstance(path, str) or not path:
         return False, "model-path-required"
+    if "/" not in path and "\\" not in path:
+        # Bare filename: reject separators smuggled in any other form (e.g.
+        # NUL bytes) before joining with the pinned dir.
+        if not re.match(r"^[\w.-]+$", path) or ".." in path:
+            return False, "model-path-invalid"
+        path = os.path.join(POLICY_ALLOWED_MODEL_DIR, path)
     base = os.path.realpath(POLICY_ALLOWED_MODEL_DIR)
     resolved = os.path.realpath(path)
     if not (resolved == base or resolved.startswith(base + os.sep)):
@@ -1170,7 +1182,10 @@ class Handler(BaseHTTPRequestHandler):
     def _authorized(self):
         if not TOKEN:
             return True
-        return self.headers.get("authorization") == f"Bearer {TOKEN}"
+        # Constant-time comparison: an attacker able to time responses must
+        # not learn the token byte by byte. hmac.compare_digest also refuses
+        # non-ASCII input, which `==` would silently accept.
+        return hmac.compare_digest(self.headers.get("authorization") or "", f"Bearer {TOKEN}")
 
     def do_GET(self):
         if not self._authorized():

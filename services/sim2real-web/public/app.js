@@ -276,14 +276,24 @@ function saveWorkspaceContext() {
 }
 
 function workspaceSummaryData() {
-  const remote = state.workspaceSummary;
-  const runs = state.overview?.runs || [];
-  const deployments = state.overview?.deployments || [];
-  const latestRun = remote?.latest?.run || runs.slice().sort((a, b) => String(b.createdAt || '').localeCompare(String(a.createdAt || '')))[0] || null;
-  const latestDeployment = remote?.latest?.deployment || deployments.slice().sort((a, b) => String(b.updatedAt || b.createdAt || '').localeCompare(String(a.updatedAt || a.createdAt || '')))[0] || null;
+  // The summary endpoint is account scoped, while the Studio workspace is
+  // product scoped. Derive the visible totals from the already filtered
+  // overview payload so switching MicroDuck / RDK Duck cannot surface a run
+  // or deployment belonging to another robot.
+  const modelIds = currentModelIds();
+  const allRuns = state.overview?.runs || [];
+  const allDeployments = state.overview?.deployments || [];
+  const runs = allRuns.filter((run) => modelIds.has(run.modelId));
+  const deployments = allDeployments.filter((deployment) => modelIds.has(deployment.modelId));
+  const latestRun = runs.slice().sort((a, b) => String(b.createdAt || '').localeCompare(String(a.createdAt || '')))[0] || null;
+  const latestDeployment = deployments.slice().sort((a, b) => String(b.updatedAt || b.createdAt || '').localeCompare(String(a.updatedAt || a.createdAt || '')))[0] || null;
+  const productModels = (state.overview?.models || []).filter(
+    (model) => model.manifest?.robot?.id === state.productId,
+  );
+  const datasets = (state.datasets || []).filter((dataset) => !dataset.modelId || modelIds.has(dataset.modelId));
   return {
-    counts: remote?.counts || {
-      models: state.overview?.models?.length || 0,
+    counts: {
+      models: productModels.length,
       runs: runs.length,
       activeRuns: runs.filter((run) => isActiveRunStatus(run.status)).length,
       deployments: deployments.length,
@@ -293,7 +303,7 @@ function workspaceSummaryData() {
     },
     latestRun,
     latestDeployment,
-    datasets: state.datasets || [],
+    datasets,
   };
 }
 
@@ -326,8 +336,8 @@ function renderProjectWorkspace() {
   const recentRoot = $('workspace-recent-list');
   if (recentRoot) {
     const recent = [
-      ...(state.overview?.runs || []).map((item) => Object.assign({ kindLabel: '运行' }, item)),
-      ...(state.overview?.deployments || []).map((item) => Object.assign({ kindLabel: '部署' }, item)),
+      ...(runsForCurrentModel() || []).map((item) => Object.assign({ kindLabel: '运行' }, item)),
+      ...(deploymentsForCurrentModel() || []).map((item) => Object.assign({ kindLabel: '部署' }, item)),
     ].sort((a, b) => String(b.createdAt || b.updatedAt || '').localeCompare(String(a.createdAt || a.updatedAt || ''))).slice(0, 3);
     recentRoot.replaceChildren();
     if (!recent.length) {
@@ -1008,6 +1018,10 @@ function renderIntegrations() {
   }
   setText('current-project-name', profile.projectName);
   setText('sidebar-product-name', profile.displayName);
+  // Keep device-facing screens aligned with the global target selector. A
+  // fixed “RDK X5” title becomes misleading as soon as another board profile
+  // is selected, which makes the deployment step look like a separate flow.
+  setText('deploy-title', device?.name ? `部署到 ${device.name}` : '部署与上线');
   setText('sidebar-kit-name', profile.kitName);
   setText('kit-card-title', profile.displayName + ' 套件');
   const microduckProduct = profile.id === 'microduck';
@@ -1486,9 +1500,13 @@ function renderHistory() {
   setText('records-count', records.length + ' 条记录');
   root.replaceChildren();
   if (!records.length) {
+    const hasBrowserSimulator = Boolean(selectedProductProfile().simulatorPath);
+    const emptyHint = hasBrowserSimulator
+      ? '还没有运行记录。先校验契约或打开浏览器仿真。'
+      : '还没有运行记录。先登记模型契约，再发起本地或 GPU 训练。';
     root.innerHTML = query
       ? '<div class="empty-state">没有匹配的记录，试试模型名、状态或后端。</div>'
-      : '<div class="empty-state">还没有运行记录。先校验契约或打开浏览器仿真。</div>';
+      : `<div class="empty-state">${emptyHint}</div>`;
     return;
   }
   for (const record of records) {
@@ -4714,9 +4732,10 @@ async function stationInit() {
     if (honestyNote) honestyNote.hidden = health?.agent?.mock !== true;
     const deviceName = $('station-device-name');
     if (deviceName) {
+      const selectedOption = $('device-select')?.selectedOptions?.[0];
       deviceName.textContent = health?.device?.name
         ? `${health.device.name}（${health.device.id}）`
-        : '（未选择）';
+        : selectedDevice()?.name || selectedDevice()?.id || selectedOption?.textContent || '（未选择）';
     }
     stationLog(
       health?.agent?.mock === true
@@ -4731,11 +4750,18 @@ async function stationInit() {
     stationProbePolicy();
   } catch (error) {
     state.station.ready = false;
+    const fallbackDevice = selectedDevice();
+    const deviceName = $('station-device-name');
+    const selectedOption = $('device-select')?.selectedOptions?.[0];
+    if (deviceName) {
+      deviceName.textContent = fallbackDevice?.name || fallbackDevice?.id || selectedOption?.textContent || '（未选择）';
+    }
     if (notice) {
+      const detail = error instanceof Error ? error.message : '板端 agent 或板卡设备不可用';
       notice.hidden = false;
       notice.textContent =
         '上位机未就绪：' +
-        (error instanceof Error ? error.message : '板端 agent 或板卡设备不可用') +
+        detail.replace(/[。.!！?？\s]+$/u, '') +
         '。请先运行 npm run dev:board-agent 并在部署页注册板卡。';
     }
     stationLog('上位机初始化失败', 'error');

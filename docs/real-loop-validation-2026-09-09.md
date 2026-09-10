@@ -4,8 +4,8 @@
 - GPU：120.48.90.140 · NVIDIA RTX 5090 32GB · CUDA 可用
 - X5：10.185.136.180 · D-Robotics RDK X5 V1.0 · RDK 3.1.1
 - 最新 GPU Run：`local-microduck-ppo-gpu-8c10760f-9872-458a-880c-860704538923`（completed）
-- 完整录屏：[real-loop-demo-2026-09-09-full.mp4](./real-loop-demo-2026-09-09-full.mp4)（约 4 分 34 秒，含仿真 + GPU + X5 上位机）
-- 仿真段：[simulation-demo-2026-09-09.mp4](./simulation-demo-2026-09-09.mp4)（约 42 秒，MuJoCo WASM / 50Hz / 前进动作）
+- 完整录屏：[real-loop-demo-2026-09-09-full.mp4](./real-loop-demo-2026-09-09-full.mp4)（约 4 分 34 秒，含仿真 + GPU + X5 上位机；文件已移出 git，本地目录或 Release 附件获取）
+- 仿真段：[simulation-demo-2026-09-09.mp4](./simulation-demo-2026-09-09.mp4)（约 42 秒，MuJoCo WASM / 50Hz / 前进动作；同上）
 - 记录明细：[real-loop-validation-2026-09-09.json](./real-loop-validation-2026-09-09.json)
 
 ## 已通过

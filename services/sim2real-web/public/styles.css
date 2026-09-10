@@ -2930,6 +2930,27 @@ h2 {
   }
 }
 
+/* When a product has no browser simulator, keep the gated empty state
+   proportionate to its message. The live iframe keeps the taller viewport,
+   while an unavailable adapter should not leave a half-empty canvas. */
+.simulator-frame-wrap:has(.simulator-product-gate:not([hidden])) {
+  min-height: 360px;
+}
+.simulator-frame-wrap:has(.simulator-product-gate:not([hidden])) .simulator-product-gate {
+  padding: 38px clamp(24px, 7vw, 72px);
+}
+.simulator-frame-wrap iframe[hidden] {
+  display: none !important;
+  width: 0;
+  height: 0;
+}
+
+/* A disconnected station is a status surface, not an error wall. Keep the
+   notice readable while leaving the telemetry cards available for inspection. */
+.station-notice {
+  line-height: 1.55;
+}
+
 /* Agent conversation drawer: keep the workflow canvas clear and make the
    assistant available from every view through a movable floating launcher. */
 .agent-floating-toggle {
@@ -4516,6 +4537,21 @@ button:focus-visible, a:focus-visible, select:focus-visible, input:focus-visible
 .safety-mini strong { color: var(--green-text); }
 .studio-link:hover { color: var(--accent-text); }
 
+/* Keep quick links and the safety notice in normal flow. The old absolute
+   footer could cover the last quick link on shorter laptop viewports. */
+.sidebar {
+  display: flex;
+  flex-direction: column;
+  max-height: calc(100vh - 124px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+.sidebar-bottom {
+  position: static;
+  margin-top: 20px;
+  padding-bottom: 2px;
+}
+
 .main-content { padding-top: 22px; }
 .hero { align-items: center; padding: 19px 0 21px; }
 .hero-copy { max-width: 680px; }
@@ -4827,3 +4863,9 @@ body.theme-dark .agent-assistant-health { max-width: 150px; }
   body.theme-dark .agent-assistant-body { display: block; margin-top: 8px; }
   body.theme-dark .agent-assistant-foot { margin-top: 8px; }
 }
+
+/* Agent feedback states stay legible while a long-running task is active. */
+.agent-event-error span { color: #ff9d9d; }
+.agent-chat-runtime.is-busy { color: #ffd36b; }
+.agent-chat-composer button[disabled] { opacity: .58; cursor: wait; }
+.agent-chat-composer input:disabled { opacity: .72; }

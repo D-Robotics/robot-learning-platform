@@ -6,6 +6,7 @@ import { fileURLToPath } from 'node:url';
 const here = path.dirname(fileURLToPath(import.meta.url));
 const html = fs.readFileSync(path.join(here, 'public', 'index.html'), 'utf8');
 const app = fs.readFileSync(path.join(here, 'public', 'app.js'), 'utf8');
+const onboarding = fs.readFileSync(path.join(here, 'public', 'onboarding.js'), 'utf8');
 
 const viewNames = [...app.matchAll(/WORKFLOW_VIEWS\s*=\s*\[([^\]]+)\]/g)][0][1]
   .match(/['"][^'"]+['"]/g)
@@ -48,6 +49,10 @@ assert.match(html, /id="presentation-toggle"/, 'workspace must expose a reversib
 assert.match(html, /id="agent-floating-toggle"/, 'Agent must be available from a compact floating launcher');
 assert.match(html, /id="agent-chat-close"/, 'Agent drawer must expose an explicit close action');
 assert.match(html, /id="agent-chat-backdrop"/, 'Agent drawer must expose a dismissible backdrop');
+assert.match(html, /onboarding\.js/, 'workspace must load the guided onboarding layer');
+assert.match(onboarding, /const steps = \[/, 'onboarding must define guided steps');
+assert.match(onboarding, /最佳实践/, 'onboarding must include practical guidance');
+assert.match(onboarding, /localStorage/, 'onboarding completion must persist locally');
 assert.match(html, /class="skip-link"/, 'workspace must expose a keyboard skip link');
 assert.doesNotMatch(
   html,
@@ -71,6 +76,9 @@ assert.match(app, /function setPresentationMode\(enabled/);
 assert.match(fs.readFileSync(path.join(here, 'public', 'agent-chat.js'), 'utf8'), /function setAgentDrawer\(open\)/);
 assert.match(fs.readFileSync(path.join(here, 'public', 'agent-chat.js'), 'utf8'), /AGENT_POSITION_KEY/);
 assert.match(fs.readFileSync(path.join(here, 'public', 'agent-chat.js'), 'utf8'), /关闭 Agent 对话/);
+assert.match(fs.readFileSync(path.join(here, 'public', 'agent-chat.js'), 'utf8'), /setAgentBusy\(busy/);
+assert.match(fs.readFileSync(path.join(here, 'public', 'agent-chat.js'), 'utf8'), /任务执行超过 2 分钟/);
+assert.match(fs.readFileSync(path.join(here, 'public', 'agent-chat.js'), 'utf8'), /运行状态获取失败/);
 assert.match(app, /function syncServicePill\(\)/, 'service status dot must follow loading and error state');
 assert.match(app, /event\.key === 'Escape'/, 'presentation mode must have a keyboard exit');
 assert.match(app, /function renderWorkflowProgress\(\)/);

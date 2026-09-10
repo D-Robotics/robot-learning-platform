@@ -587,7 +587,11 @@ export function registerSim2RealBoardStationRoutes(
       const agent = await stationAgentFetchWithStatus('/v1/station/policy/load', stationOptions(request, {
         method: 'POST',
         timeoutMs: 30_000, // model load + onnxruntime session init on board
-        body: JSON.stringify({ path: `/root/rdk-board-agent/policies/${path}` }),
+        // Send only the bare filename: the board resolves it inside its own
+        // pinned policies dir. Keeping the platform ignorant of the on-board
+        // directory layout avoids two hardcoded paths that can drift apart
+        // (or leak the board's root filesystem layout into the API).
+        body: JSON.stringify({ path }),
       }));
       if (!agent) {
         sendApiError(

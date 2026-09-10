@@ -12,3 +12,6 @@ __pycache__/
 !.env.example
 *.log
 artifacts/
+# Demo recordings are multi-MB binaries; publish them as GitHub Release
+# assets or external links instead of growing every clone.
+docs/*.mp4

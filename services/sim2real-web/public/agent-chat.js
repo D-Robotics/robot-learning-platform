@@ -6,6 +6,8 @@ const evidence = $('agent-evidence');
 const eventLog = $('agent-event-log');
 const form = $('agent-chat-form');
 const input = $('agent-chat-input');
+const submitButton = form?.querySelector('button[type="submit"]');
+const runtimeStatus = document.querySelector('.agent-chat-runtime');
 const HISTORY_KEY = 'rdk-sim2real-agent-history-v1';
 const SIMULATOR_ALLOWED_KEYS = new Set(['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'w', 'a', 's', 'd', 'q', 'e', 'f', 'r', 'g', 'c', 'm', 'b', ' ']);
 const simulatorBridge = { frame: null, ready: false, recording: false, events: [], connectedAt: null, startedAt: 0, downloadUrl: '', downloadName: '', videoUrl: '', videoName: '', recorder: null, videoError: '' };
@@ -41,6 +43,38 @@ function bridgeStatus() {
     note.dataset.agentRecording = '1';
     note.textContent = `视频录制：${simulatorBridge.videoError}`;
     evidence.append(note);
+  }
+}
+
+function setAgentBusy(busy, label = '') {
+  if (!form) return;
+  form.setAttribute('aria-busy', busy ? 'true' : 'false');
+  if (submitButton) {
+    submitButton.disabled = busy;
+    submitButton.setAttribute('aria-busy', busy ? 'true' : 'false');
+    submitButton.dataset.defaultLabel ||= submitButton.textContent.trim();
+    submitButton.textContent = busy ? (label || '执行中…') : submitButton.dataset.defaultLabel;
+  }
+  if (input) input.disabled = busy;
+  if (runtimeStatus) {
+    runtimeStatus.classList.toggle('is-busy', busy);
+    runtimeStatus.textContent = busy ? (label || '任务执行中…') : '工具链已连接';
+  }
+}
+
+function renderAgentError(error, retryable = true) {
+  const message = error instanceof Error ? error.message : String(error || '未知错误');
+  addMessage('agent', `任务未完成：${message}${retryable ? ' 可以检查连接后重试。' : ''}`);
+  if (eventLog) {
+    const row = document.createElement('div');
+    row.className = 'agent-event agent-event-error';
+    const time = document.createElement('time');
+    time.textContent = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+    const text = document.createElement('span');
+    text.textContent = message;
+    row.append(time, text);
+    eventLog.append(row);
+    eventLog.scrollTop = eventLog.scrollHeight;
   }
 }
 
@@ -175,6 +209,7 @@ function saveMessage(role, text) {
 }
 
 function addMessage(role, text, persist = true) {
+  if (!messages) return;
   const node = document.createElement('div');
   node.className = `agent-chat-message agent-chat-message-${role}`;
   node.innerHTML = `<strong>${role === 'user' ? '你' : 'Agent'}</strong><p></p>`;
@@ -296,23 +331,44 @@ async function runTask(message) {
   const modelId = $('model-select')?.value || undefined;
   const deviceId = $('device-select')?.value || undefined;
   const computeResourceId = $('compute-resource-select')?.value || undefined;
-  const { plan } = await api('/api/sim2real/agent/plan', { method: 'POST', body: JSON.stringify({ message, context: { modelId, deviceId, computeResourceId } }) });
+  const response = await api('/api/sim2real/agent/plan', { method: 'POST', body: JSON.stringify({ message, context: { modelId, deviceId, computeResourceId } }) });
+  const plan = response?.plan;
+  if (!plan || !Array.isArray(plan.steps) || !plan.steps.length || plan.steps.some((item) => !item || typeof item !== 'object')) throw new Error('服务没有返回有效的可执行计划');
   if (plan.steps.some((item) => item.tool === 'simulator.open')) {
     document.querySelector('[data-view-target="simulate"]')?.click();
     $('simulator-frame')?.scrollIntoView({ behavior: 'smooth', block: 'center' });
   }
   renderPlan(plan);
   addMessage('agent', `我会按 ${plan.steps.length} 步执行：${plan.steps.map((item) => item.label).join(' → ')}。真机动作保持安全门控。`);
-  const { run } = await api('/api/sim2real/agent/execute', { method: 'POST', body: JSON.stringify({ plan, approved: true }) });
+  const execution = await api('/api/sim2real/agent/execute', { method: 'POST', body: JSON.stringify({ plan, approved: true }) });
+  const run = execution?.run;
+  if (!run?.id || !Array.isArray(run.steps) || run.steps.some((item) => !item || typeof item !== 'object')) throw new Error('服务没有返回有效的运行记录');
   renderRun(run);
-  if (plan.steps.some((item) => item.tool === 'simulator.open')) void runSimulatorDemo(message);
-  const poll = async () => {
-    const result = await api(`/api/sim2real/agent/runs/${encodeURIComponent(run.id)}`);
+  if (plan.steps.some((item) => item.tool === 'simulator.open')) {
+    void runSimulatorDemo(message).catch((error) => renderAgentError(error, true));
+  }
+  const terminal = new Set(['completed', 'failed', 'blocked', 'cancelled', 'timed_out']);
+  let transientFailures = 0;
+  for (let attempt = 0; attempt < 180; attempt += 1) {
+    await new Promise((resolve) => window.setTimeout(resolve, attempt ? 700 : 250));
+    let result;
+    try {
+      result = await api(`/api/sim2real/agent/runs/${encodeURIComponent(run.id)}`);
+      transientFailures = 0;
+    } catch (error) {
+      transientFailures += 1;
+      if (transientFailures >= 4) throw new Error(`运行状态获取失败：${error.message}`);
+      if (runtimeStatus) runtimeStatus.textContent = `等待运行状态…（重试 ${transientFailures}/3）`;
+      continue;
+    }
+    if (!result?.run || !Array.isArray(result.run.steps) || result.run.steps.some((item) => !item || typeof item !== 'object')) throw new Error('运行状态响应无效');
     renderRun(result.run);
-    if (['queued', 'running'].includes(result.run.status)) setTimeout(poll, 700);
-    else addMessage('agent', result.run.status === 'completed' ? '任务完成。你可以打开记录查看运行证据。' : `任务结束：${result.run.status}`);
-  };
-  void poll();
+    if (terminal.has(result.run.status)) {
+      addMessage('agent', result.run.status === 'completed' ? '任务完成。你可以打开记录查看运行证据。' : `任务结束：${result.run.status}`);
+      return;
+    }
+  }
+  throw new Error('任务执行超过 2 分钟，已停止等待；可到运行记录查看后台状态');
 }
 
 form?.addEventListener('submit', (event) => {
@@ -321,7 +377,10 @@ form?.addEventListener('submit', (event) => {
   if (!message) return;
   input.value = '';
   addMessage('user', message);
-  void runTask(message).catch((error) => addMessage('agent', `无法执行：${error.message}`));
+  setAgentBusy(true, '正在生成计划…');
+  void runTask(message)
+    .catch((error) => renderAgentError(error, true))
+    .finally(() => setAgentBusy(false));
 });
 
 // The conversation lives in a drawer so it remains available without taking
@@ -336,13 +395,14 @@ let dragged = false;
 
 function setAgentDrawer(open) {
   if (!panel) return;
+  const restoreFocus = arguments.length < 2 || arguments[1] !== false;
   document.body.classList.toggle('agent-chat-open', open);
   panel.setAttribute('aria-hidden', open ? 'false' : 'true');
   launcher?.setAttribute('aria-expanded', open ? 'true' : 'false');
   launcher?.setAttribute('aria-label', open ? '关闭 Agent 对话' : '打开 Agent 对话');
   if (backdrop) backdrop.hidden = !open;
   if (open) window.setTimeout(() => input?.focus(), 80);
-  else window.setTimeout(() => launcher?.focus(), 0);
+  else if (restoreFocus) window.setTimeout(() => launcher?.focus(), 0);
 }
 
 launcher?.addEventListener('click', () => {
@@ -402,7 +462,7 @@ launcher?.addEventListener('pointerdown', (event) => {
   launcher.addEventListener('pointercancel', end);
 });
 
-setAgentDrawer(false);
+setAgentDrawer(false, false);
 
 restoreMessages();
 })();

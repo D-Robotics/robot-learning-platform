@@ -10,7 +10,9 @@ permissions:
 jobs:
   verify:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    # The verify chain runs 18 assertion scripts plus vitest and a release
+    # build; a cold npm ci and python probes add minutes on shared runners.
+    timeout-minutes: 20
     steps:
       - name: Check out
         uses: actions/checkout@v4
@@ -23,5 +25,7 @@ jobs:
         run: npm ci --ignore-scripts --no-audit --no-fund
       - name: Verify contracts, UI wiring, and deployment assets
         run: npm run verify
-      - name: Type-check and build release
-        run: npm run build
+      # `npm run verify` already ends with `npm run build`; keep a standalone
+      # type-check pass (no emit) as a fast signal without repeating the build.
+      - name: Type-check
+        run: npx tsc -p tsconfig.build.json --noEmit

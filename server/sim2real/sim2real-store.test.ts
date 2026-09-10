@@ -21,6 +21,7 @@ import {
   listSim2RealModels,
   listSim2RealRuns,
   reserveSim2RealRun,
+  updateSim2RealRun,
   SIM2REAL_LEDGER_MAX_BYTES,
   sim2RealActiveRunLimit,
   sim2RealStorageInfo,
@@ -306,6 +307,83 @@ describe('Sim2Real owner-scoped ledger', () => {
     });
   });
 
+  it('keeps terminal run states from being resurrected by stale runner polling', async () => {
+    await useTempStorage();
+    const manifest = structuredClone(BUILTIN_MICRODUCK_MODEL.manifest);
+    manifest.modelId = 'terminal-status-policy';
+    manifest.displayName = 'Terminal status policy';
+    manifest.version = '1.0.0';
+    const model = await createSim2RealModel(manifest, 'alice');
+    const run = await createSim2RealRun(
+      {
+        modelId: model.id,
+        backend: 'local',
+        status: 'running',
+        summary: 'runner active',
+        externalRunId: 'runner-1',
+      },
+      'alice',
+    );
+
+    await updateSim2RealRun(
+      run.id,
+      { status: 'completed', summary: 'runner completed', finishedAt: '2026-09-10T00:00:00.000Z' },
+      'alice',
+    );
+    const stale = await updateSim2RealRun(
+      run.id,
+      { status: 'running', summary: 'late stale runner snapshot' },
+      'alice',
+    );
+
+    expect(stale).toMatchObject({ status: 'completed', summary: 'runner completed' });
+    await expect(getSim2RealRun(run.id, 'alice')).resolves.toMatchObject({
+      status: 'completed',
+      summary: 'runner completed',
+      finishedAt: '2026-09-10T00:00:00.000Z',
+    });
+  });
+
+  it('keeps creation-time blocked runs terminal while allowing same-status metadata updates', async () => {
+    await useTempStorage();
+    const manifest = structuredClone(BUILTIN_MICRODUCK_MODEL.manifest);
+    manifest.modelId = 'blocked-terminal-policy';
+    manifest.displayName = 'Blocked terminal policy';
+    manifest.version = '1.0.0';
+    const model = await createSim2RealModel(manifest, 'alice');
+    const run = await createSim2RealRun(
+      {
+        modelId: model.id,
+        backend: 'robogo',
+        status: 'blocked',
+        summary: '共享部署未收到当前账号的 RoboGo 短期令牌；任务只登记，未向 runner 发送请求。',
+      },
+      'alice',
+    );
+
+    // A blocked run has no runner, so nothing may transition it to an active
+    // state; re-running the task creates a new run instead.
+    const resurrected = await updateSim2RealRun(
+      run.id,
+      { status: 'queued', summary: 'late poll claims a runner accepted the job' },
+      'alice',
+    );
+    expect(resurrected).toMatchObject({ status: 'blocked' });
+    await expect(getSim2RealRun(run.id, 'alice')).resolves.toMatchObject({ status: 'blocked' });
+
+    // Same-status patches (e.g. an operator note) are still applied — the
+    // guard only freezes the lifecycle, not the record.
+    const annotated = await updateSim2RealRun(
+      run.id,
+      { status: 'blocked', summary: '操作员备注：等待账号令牌后重新发起。' },
+      'alice',
+    );
+    expect(annotated).toMatchObject({
+      status: 'blocked',
+      summary: '操作员备注：等待账号令牌后重新发起。',
+    });
+  });
+
   it('rejects cross-chunk timestamp regressions while allowing ordered late chunks', async () => {
     await useTempStorage();
     const manifest = structuredClone(BUILTIN_MICRODUCK_MODEL.manifest);
@@ -346,6 +424,77 @@ describe('Sim2Real owner-scoped ledger', () => {
     await append(2, [0.04, 0.06]);
     await append(1, [0.02, 0.04]);
     await expect(listSim2RealTelemetry(run.id, 'alice', 10)).resolves.toHaveLength(3);
+  });
+
+  it('stores telemetry samples in per-run NDJSON shards, not the ledger', async () => {
+    const root = await useTempStorage();
+    const manifest = structuredClone(BUILTIN_MICRODUCK_MODEL.manifest);
+    manifest.modelId = 'shard-policy';
+    manifest.displayName = 'Shard policy';
+    manifest.version = '1.0.0';
+    const model = await createSim2RealModel(manifest, 'alice');
+    const run = await createSim2RealRun(
+      {
+        modelId: model.id,
+        backend: 'contract',
+        status: 'completed',
+        summary: 'contract checked',
+      },
+      'alice',
+    );
+
+    const appended = await appendSim2RealTelemetryWithResult(
+      {
+        runId: run.id,
+        modelId: model.id,
+        source: 'import',
+        samples: [{ t: 0 }, { t: 0.02 }],
+      },
+      'alice',
+    );
+    expect(appended.duplicate).toBe(false);
+
+    // The ledger keeps only a sample-stripped index row; the full record
+    // (samples included) lives in the run shard.
+    const ledger = JSON.parse(
+      await fs.readFile(path.join(root, 'sim2real.json'), 'utf8'),
+    ) as { telemetry: Array<Record<string, unknown>> };
+    expect(ledger.telemetry).toHaveLength(1);
+    expect(ledger.telemetry[0].samples).toBeUndefined();
+    const shard = await fs.readFile(path.join(root, 'telemetry', `${run.id}.jsonl`), 'utf8');
+    expect(shard).toContain('"samples"');
+
+    // Reads rehydrate the full record from the shard — and keep working after
+    // the in-memory cache is dropped (simulating a process restart).
+    invalidateSim2RealStoreCacheForTest();
+    const restored = await listSim2RealTelemetry(run.id, 'alice', 10);
+    expect(restored).toHaveLength(1);
+    expect(restored[0].samples).toEqual([{ t: 0 }, { t: 0.02 }]);
+
+    // Idempotent replay rehydrates the full record too, not the bare index row.
+    const replay = await appendSim2RealTelemetryWithResult(
+      {
+        runId: run.id,
+        modelId: model.id,
+        source: 'import',
+        idempotencyKey: 'key-1',
+        samples: [{ t: 1 }],
+      },
+      'alice',
+    );
+    expect(replay.duplicate).toBe(false);
+    const duplicate = await appendSim2RealTelemetryWithResult(
+      {
+        runId: run.id,
+        modelId: model.id,
+        source: 'import',
+        idempotencyKey: 'key-1',
+        samples: [{ t: 1 }],
+      },
+      'alice',
+    );
+    expect(duplicate.duplicate).toBe(true);
+    expect(duplicate.telemetry.samples).toEqual([{ t: 1 }]);
   });
 
   it('uses a bounded active-run default when the environment value is invalid', () => {

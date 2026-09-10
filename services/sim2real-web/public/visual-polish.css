@@ -1,0 +1,99 @@
+/* Focused visual polish: preserve the existing component vocabulary while
+   making empty and partial states easier to scan. This layer intentionally
+   contains no data or interaction rules. */
+
+/* Grid items should size to their own content. Stretching the short action
+   card to the height of a simulator/timeline makes the page look unfinished
+   when a resource is not connected yet. */
+.sim-layout,
+.train-layout,
+.deploy-layout,
+.evaluation-grid {
+  align-items: start;
+}
+
+.sim-layout > .panel,
+.train-layout > .panel,
+.deploy-layout > .panel,
+.evaluation-grid > .panel {
+  min-width: 0;
+}
+
+/* A missing adapter is a useful state, not a 500px blank canvas. Keep the
+   empty state prominent while returning the next action to the first screen. */
+.simulator-panel:has(.simulator-product-gate:not([hidden])) .simulator-frame-wrap {
+  min-height: 388px;
+}
+.simulator-panel:has(.simulator-product-gate:not([hidden])) .simulator-frame-wrap iframe {
+  height: 388px;
+}
+.simulator-panel:has(.simulator-product-gate:not([hidden])) .simulator-product-gate {
+  align-content: center;
+  padding: 34px clamp(26px, 6vw, 64px);
+}
+.simulator-panel:has(.simulator-product-gate:not([hidden])) .simulator-footer {
+  margin-top: 8px;
+}
+.guide-panel {
+  align-self: start;
+}
+
+/* Keep labels and values readable at the compact workstation scale. */
+.status-card-main strong,
+.context-live-item strong,
+.workspace-summary-card strong {
+  line-height: 1.35;
+}
+.status-card p,
+.context-live-item span,
+.workspace-summary-card small,
+.workspace-summary-card em {
+  line-height: 1.45;
+}
+
+/* Native selects should never force the context rail wider than the viewport. */
+.context-strip .context-field,
+.context-strip .context-field select {
+  min-width: 0;
+}
+.context-strip .context-field select {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Use one consistent keyboard focus treatment for cards that are buttons. */
+.workspace-summary-card:focus-visible,
+.quick-action:focus-visible,
+.nav-item:focus-visible,
+.side-link:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+@media (max-width: 720px) {
+  .simulator-panel:has(.simulator-product-gate:not([hidden])) .simulator-frame-wrap,
+  .simulator-panel:has(.simulator-product-gate:not([hidden])) .simulator-frame-wrap iframe {
+    min-height: 320px;
+    height: 320px;
+  }
+  .simulator-panel:has(.simulator-product-gate:not([hidden])) .simulator-product-gate {
+    padding: 26px 22px;
+  }
+  .simulator-product-gate strong {
+    font-size: 18px;
+    line-height: 1.35;
+  }
+  .simulator-product-gate p {
+    line-height: 1.6;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .view-section,
+  .button,
+  .quick-action,
+  .workspace-summary-card {
+    animation: none !important;
+    transition: none !important;
+  }
+}

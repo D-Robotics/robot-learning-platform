@@ -167,7 +167,7 @@ describe('board-station policy runtime proxy', () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
-  it('forwards a clean filename to the agent-resolved pinned path', async () => {
+  it('forwards only the bare filename and lets the board resolve its pinned dir', async () => {
     process.env.RDK_SIM2REAL_STATION_POLICY_ENABLED = '1';
     const fetchMock = mockAgent(200, {
       ok: true,
@@ -182,7 +182,7 @@ describe('board-station policy runtime proxy', () => {
     const sent = JSON.parse(
       String((fetchMock.mock.calls[0] as unknown[])[1]!.body),
     ) as Record<string, string>;
-    expect(sent).toEqual({ path: '/root/rdk-board-agent/policies/ppo-policy.onnx' });
+    expect(sent).toEqual({ path: 'ppo-policy.onnx' });
   });
 
   it('refuses start while the drive switch is off even with policy on', async () => {

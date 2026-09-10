@@ -1,0 +1,30 @@
+.onboarding-overlay[hidden] { display: none; }
+.onboarding-overlay { position: fixed; inset: 0; z-index: 1200; color: var(--text); }
+.onboarding-scrim { position: absolute; inset: 0; background: rgba(3, 8, 14, .72); backdrop-filter: blur(2px); }
+.onboarding-spotlight { position: fixed; z-index: 1; pointer-events: none; border: 2px solid rgba(255, 145, 65, .95); border-radius: 10px; box-shadow: 0 0 0 5px rgba(255, 121, 24, .18), 0 0 34px rgba(255, 121, 24, .35); animation: onboarding-pulse 1.8s ease-in-out infinite; transition: left .22s ease, top .22s ease, width .22s ease, height .22s ease; }
+.onboarding-card { position: fixed; z-index: 2; width: min(390px, calc(100vw - 32px)); padding: 19px 20px 16px; border: 1px solid rgba(255, 145, 65, .52); border-radius: 14px; background: linear-gradient(145deg, rgba(25, 35, 56, .98), rgba(12, 20, 34, .98)); box-shadow: 0 18px 60px rgba(0,0,0,.45), 0 0 0 1px rgba(255,255,255,.04) inset; animation: onboarding-card-in .22s ease both; }
+.onboarding-card.is-centered { inset: 50% auto auto 50%; transform: translate(-50%, -50%); }
+.onboarding-card-top, .onboarding-card-foot, .onboarding-actions, .onboarding-progress { display: flex; align-items: center; }
+.onboarding-card-top { justify-content: space-between; }
+.onboarding-kicker { color: var(--accent-text); font: 10px ui-monospace, SFMono-Regular, Menlo, monospace; letter-spacing: .13em; }
+.onboarding-close { width: 28px; height: 28px; border: 1px solid var(--line-strong); border-radius: 7px; color: var(--muted-strong); background: transparent; font-size: 19px; line-height: 1; cursor: pointer; }
+.onboarding-close:hover { color: var(--text); border-color: var(--accent); }
+.onboarding-progress { gap: 10px; margin-top: 16px; color: var(--muted); font-size: 11px; }
+.onboarding-progress-label { white-space: nowrap; }
+.onboarding-progress-track { flex: 1; height: 4px; overflow: hidden; border-radius: 99px; background: rgba(255,255,255,.11); }
+.onboarding-progress-track i { display: block; height: 100%; border-radius: inherit; background: linear-gradient(90deg, var(--accent), #ffc06d); transition: width .25s ease; }
+.onboarding-card h2 { margin: 17px 0 8px; font-size: 20px; letter-spacing: -.025em; }
+.onboarding-body { margin: 0; color: var(--muted-strong); font-size: 13px; line-height: 1.7; }
+.onboarding-best { display: grid; grid-template-columns: auto 1fr; gap: 9px; margin-top: 14px; padding: 10px 11px; border: 1px solid rgba(255, 121, 24, .22); border-radius: 8px; background: rgba(255, 121, 24, .08); }
+.onboarding-best span { color: var(--accent-text); font-size: 11px; font-weight: 650; white-space: nowrap; }
+.onboarding-best p { margin: 0; color: var(--muted-strong); font-size: 11px; line-height: 1.55; }
+.onboarding-card-foot { justify-content: space-between; gap: 12px; margin-top: 16px; }
+.onboarding-time { color: var(--muted); font-size: 10px; }
+.onboarding-actions { gap: 6px; }
+.onboarding-actions .button { min-height: 31px; }
+.onboarding-actions .button-primary { min-width: 88px; }
+body.onboarding-open { overflow: hidden; }
+@keyframes onboarding-pulse { 0%, 100% { opacity: .78; } 50% { opacity: 1; } }
+@keyframes onboarding-card-in { from { opacity: 0; } to { opacity: 1; } }
+@media (max-width: 640px) { .onboarding-card { padding: 16px; } .onboarding-card h2 { font-size: 18px; } .onboarding-body { font-size: 12px; } .onboarding-card-foot { align-items: flex-end; } .onboarding-time { max-width: 65px; line-height: 1.35; } .onboarding-actions .button { padding-inline: 8px; font-size: 11px; } }
+@media (prefers-reduced-motion: reduce) { .onboarding-spotlight, .onboarding-card { animation: none; transition: none; } .onboarding-progress-track i { transition: none; } }

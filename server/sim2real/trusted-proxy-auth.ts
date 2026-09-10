@@ -162,6 +162,14 @@ function isMutatingMethod(method: string): boolean {
   return ['POST', 'PUT', 'PATCH', 'DELETE'].includes(String(method).toUpperCase());
 }
 
+/**
+ * Replay protection state is process-local by design. This adapter targets a
+ * single-node standalone deployment; running multiple instances behind one
+ * gateway (cluster workers or horizontally scaled pods) splits the replay
+ * window across processes and weakens the guarantee. For a multi-instance
+ * deployment, replace this adapter with one backed by shared state (Redis or
+ * the gateway's own idempotency layer) before enabling trusted-proxy mode.
+ */
 export function createTrustedProxyAuth(options: {
   secret?: string;
   maxAgeSeconds?: number;

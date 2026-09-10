@@ -152,15 +152,50 @@ async function proxyMicroduck(request: express.Request, response: express.Respon
   const rawSuffix = (request.params as Record<string, string | string[]>).splat ?? '';
   const suffix = (Array.isArray(rawSuffix) ? rawSuffix.join('/') : String(rawSuffix)).replace(/^\/+/, '');
   const target = `${origin}${suffix ? `/${suffix}` : '/'}`;
+  // Rewritable content types (HTML/JS) must be fully buffered to rewrite the
+  // upstream absolute /bundle/ paths. Everything else — including the ~10 MB
+  // MuJoCo WASM — is streamed straight through so concurrent loads do not
+  // multiply memory usage inside this process.
+  const isRewritable = (contentType: string): boolean =>
+    contentType.includes('text/html') || contentType.includes('javascript');
+  // Immutable hashed assets (WASM, JS, fonts) can be cached by the browser
+  // for the session so a cold upstream is only paid once per client; HTML
+  // entry documents must always revalidate so a new release is picked up.
+  const cacheControlFor = (contentType: string): string =>
+    contentType.includes('text/html') ? 'no-cache' : 'public, max-age=3600';
   try {
     // The MuJoCo runtime is a ~10 MB WASM asset on a cold HF Space. Keep the
-    // bridge timeout long enough for that first load; subsequent browser loads
-    // are served from the browser cache.
+    // bridge timeout long enough for that first load; subsequent browser
+    // loads are served from the browser cache via cache-control above.
     const upstream = await fetch(target, { signal: AbortSignal.timeout(120_000) });
     response.status(upstream.status);
     const contentType = upstream.headers.get('content-type') || 'application/octet-stream';
     response.setHeader('content-type', contentType);
-    response.setHeader('cache-control', 'no-store');
+    response.setHeader('cache-control', cacheControlFor(contentType));
+    if (!upstream.body || !isRewritable(contentType)) {
+      response.setHeader('x-microduck-proxy', 'stream');
+      const reader = upstream.body?.getReader();
+      if (!reader) {
+        response.end(Buffer.from(await upstream.arrayBuffer()));
+        return;
+      }
+      request.on('close', () => { void reader.cancel().catch(() => undefined); });
+      response.on('error', () => { void reader.cancel().catch(() => undefined); });
+      try {
+        for (;;) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          if (value && !response.write(value)) {
+            await new Promise<void>((resolve) => response.once('drain', resolve));
+          }
+        }
+      } catch {
+        // upstream closed mid-stream
+      } finally {
+        response.end();
+      }
+      return;
+    }
     const bytes = new Uint8Array(await upstream.arrayBuffer());
     if (contentType.includes('text/html')) {
       const html = new TextDecoder().decode(bytes)
@@ -173,12 +208,8 @@ async function proxyMicroduck(request: express.Request, response: express.Respon
     // mounted below our same-origin prefix those URLs would escape the bridge
     // and hit the host app's HTML fallback, which WebAssembly reports as the
     // familiar "expected magic word" error. Rewrite only JavaScript assets.
-    if (contentType.includes('javascript')) {
-      const script = new TextDecoder().decode(bytes).replaceAll('/bundle/', '/mujoco/microduck-proxy/bundle/');
-      response.send(script);
-      return;
-    }
-    response.send(Buffer.from(bytes));
+    const script = new TextDecoder().decode(bytes).replaceAll('/bundle/', '/mujoco/microduck-proxy/bundle/');
+    response.send(script);
   } catch (error) {
     response.status(502).json({ ok: false, error: 'MICRODUCK_PROXY_UNAVAILABLE', message: jsonError(error) });
   }
@@ -231,7 +262,8 @@ export function createSim2RealWebApp(): Express {
         ? authAdapterConfigured
           ? studioSsoAdapterMode()
           : 'sso-adapter-required'
-        : 'local-single-user',      microduck: surface,
+        : 'local-single-user',
+      microduck: surface,
       microduckRequired,
       storage,
       ready:

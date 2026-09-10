@@ -17,7 +17,7 @@
  * Replace this process with the controlled RDK-X5 agent in a hardware
  * deployment; the wire contract is documented in docs/host-station.md.
  */
-import { randomUUID } from 'node:crypto';
+import { randomUUID, timingSafeEqual } from 'node:crypto';
 import { createServer } from 'node:http';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -80,7 +80,13 @@ function readBody(request) {
 function authorized(request) {
   const token = String(process.env.RDK_SIM2REAL_BOARD_AGENT_TOKEN || '').trim();
   if (!token) return true;
-  return request.headers.authorization === `Bearer ${token}`;
+  // Constant-time comparison so a network attacker cannot recover the token
+  // byte by byte from response timing. Length mismatch is still rejected
+  // before the comparison, which leaks only the header length (already
+  // visible on the wire), never token content.
+  const presented = Buffer.from(String(request.headers.authorization ?? ''), 'utf8');
+  const expected = Buffer.from(`Bearer ${token}`, 'utf8');
+  return presented.length === expected.length && timingSafeEqual(presented, expected);
 }
 
 function passportOutput() {
