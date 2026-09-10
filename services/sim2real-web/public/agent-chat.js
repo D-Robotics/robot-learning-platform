@@ -9,6 +9,9 @@ const input = $('agent-chat-input');
 const submitButton = form?.querySelector('button[type="submit"]');
 const runtimeStatus = document.querySelector('.agent-chat-runtime');
 const HISTORY_KEY = 'rdk-sim2real-agent-history-v1';
+// 部署时页面挂在网关的 /sim2real/ 前缀下（nginx 转发时剥掉该前缀），
+// 绝对 /api 路径必须带上同样的前缀，否则网关会返回 404。
+const API_MOUNT_PREFIX = window.location.pathname.startsWith('/sim2real') ? '/sim2real' : '';
 const SIMULATOR_ALLOWED_KEYS = new Set(['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'w', 'a', 's', 'd', 'q', 'e', 'f', 'r', 'g', 'c', 'm', 'b', ' ']);
 const simulatorBridge = { frame: null, ready: false, recording: false, events: [], connectedAt: null, startedAt: 0, downloadUrl: '', downloadName: '', videoUrl: '', videoName: '', recorder: null, videoError: '' };
 
@@ -231,7 +234,7 @@ function restoreMessages() {
 async function api(path, options = {}) {
   const headers = new Headers(options.headers || {});
   if (options.body && !headers.has('content-type')) headers.set('content-type', 'application/json');
-  const response = await fetch(path, { credentials: 'include', ...options, headers });
+  const response = await fetch(API_MOUNT_PREFIX + path, { credentials: 'include', ...options, headers });
   const payload = await response.json().catch(() => ({}));
   if (!response.ok) throw new Error(payload.message || payload.error || `请求失败（${response.status}）`);
   return payload;
