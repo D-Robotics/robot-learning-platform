@@ -59,6 +59,7 @@ export function resolveTaskPack(taskId, context = {}) {
     workspace: task.workspace,
     curriculum: task.curriculum,
     domainRandomization: task.domainRandomization,
+    evaluationConfig: task.evaluationConfig,
     qualityGate: task.qualityGate,
     controlHz,
     physicsTimestepSeconds,
@@ -69,7 +70,8 @@ export function resolveTaskPack(taskId, context = {}) {
   // The adapter's clamps are the single actuator truth: the engine, the
   // board runtime, and this resolver all read the same numbers.
   const dr = pack.domainRandomization || {};
-  for (const key of ['motorGain', 'lagTauSeconds', 'gyroNoiseStdRadSec', 'odomNoiseStdM', 'angularBiasRadSec', 'actionLatencySteps']) {
+  for (const key of ['motorGain', 'lagTauSeconds', 'gyroNoiseStdRadSec', 'odomNoiseStdM',
+                     'angularBiasRadSec', 'actionLatencySteps', 'odomDropoutProb', 'slipScale']) {
     if (dr[key]) pair(dr[key], `domainRandomization.${key}`);
   }
   return pack;

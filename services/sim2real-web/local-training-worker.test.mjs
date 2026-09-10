@@ -8,7 +8,7 @@ const fixtureDir = await mkdtemp(path.join(os.tmpdir(), 'rdk-local-worker-'));
 const fixture = path.join(fixtureDir, 'engine.mjs');
 await writeFile(
   fixture,
-  `import { writeFile } from 'node:fs/promises';\nconsole.error('Bearer fake-secret token=should-hide');\nawait new Promise((resolve) => setTimeout(resolve, 120));\nconst result = { checkpoint: { checkpointId: 'cp-1', artifactRef: 'artifact://microduck/cp-1', iteration: 1 }, metrics: { reward: 3.5, platformTokenLeaked: Boolean(process.env.RDK_SIM2REAL_LOCAL_RUNNER_TOKEN) }, deployable: false };\nif (process.env.RDK_SIM2REAL_TEST_LARGE_RESULT === '1') result.padding = 'x'.repeat(1_100_000);\nawait writeFile(process.env.RDK_SIM2REAL_RESULT_FILE, JSON.stringify(result));\n`,
+  `import { writeFile } from 'node:fs/promises';\nconsole.error('Bearer fake-secret token=should-hide');\nawait new Promise((resolve) => setTimeout(resolve, 120));\nconst result = { checkpoint: { checkpointId: 'cp-1', artifactRef: 'artifact://microduck/cp-1', iteration: 1 }, artifact: { artifactId: 'policy-1', artifactRef: 'artifact://microduck/policy-1', kind: 'source', format: 'onnx', deployable: true }, metrics: { reward: 3.5, platformTokenLeaked: Boolean(process.env.RDK_SIM2REAL_LOCAL_RUNNER_TOKEN) }, deployable: true };\nconst evalReport = { schemaVersion: 1, taskId: 'originbot-goal-navigation', trained: { envelopes: { nominal: { successRate: 0.88, collisionRate: 0, episodes: 50, successRateCiLow: 0.756, collisionRateCiHigh: 0.071 } } }, qualityGate: { criteria: { minSuccessRate: 0.7, maxCollisionRate: 0.15, gateOn: 'ciLowerBound' } } };\nif (process.env.RDK_SIM2REAL_TEST_LARGE_RESULT === '1') result.padding = 'x'.repeat(1_100_000);\nawait writeFile(process.env.RDK_SIM2REAL_JOB_DIR + '/policy.onnx', 'onnx-fixture');\nawait writeFile(process.env.RDK_SIM2REAL_RESULT_FILE, JSON.stringify(result));\nawait writeFile(process.env.RDK_SIM2REAL_JOB_DIR + '/eval-report.json', JSON.stringify(evalReport));\n`,
   { mode: 0o600 },
 );
 process.env.RDK_SIM2REAL_TRAIN_EXECUTABLE = process.execPath;
@@ -104,7 +104,12 @@ try {
   }
   assert.equal(status.status, 'completed', JSON.stringify(status));
   assert.equal(status.checkpoint.artifactRef, 'artifact://microduck/cp-1');
+  assert.equal(status.artifact.sizeBytes, 12);
+  assert.match(status.artifact.sha256, /^[a-f0-9]{64}$/);
   assert.equal(status.metrics.platformTokenLeaked, false);
+  assert.equal(status.taskEvaluation.taskId, 'originbot-goal-navigation');
+  assert.equal(status.taskEvaluation.trained.envelopes.nominal.episodes, 50);
+  assert.match(status.taskEvaluation.reportSha256, /^[a-f0-9]{64}$/);
   assert.match(status.stderrTail, /Bearer \[redacted\]/);
   assert.doesNotMatch(status.stderrTail, /should-hide/);
 

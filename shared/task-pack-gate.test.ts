@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { validateTaskPackEvalForRelease } from './artifact-quality-gate.js';
+import { validateTaskPackEvalForRelease, wilsonBounds } from './artifact-quality-gate.js';
 
 describe('task-pack eval release gate', () => {
   it('recomputes PASS from strong metrics even when the engine flag is false', () => {
@@ -15,6 +15,7 @@ describe('task-pack eval release gate', () => {
     expect(verdict.passed).toBe(true);
     expect(verdict.successRate).toBeCloseTo(0.83);
     expect(verdict.collisionRate).toBe(0);
+    expect(verdict.gateOn).toBe('point');
   });
 
   it('fails closed on missing report, missing metrics, and weak metrics', () => {
@@ -60,5 +61,89 @@ describe('task-pack eval release gate', () => {
       },
     });
     expect(verdict.passed).toBe(true);
+  });
+
+  it('judges on the CI lower bound when gateOn=ciLowerBound (weak floor fails)', () => {
+    // 50 episodes at 72% point success: Wilson 95% low is ~0.58, below the
+    // 0.7 gate. The point estimate would pass; the floor must not.
+    const bounds = wilsonBounds(36, 50);
+    expect(bounds).not.toBeNull();
+    const verdict = validateTaskPackEvalForRelease({
+      taskId: 't',
+      report: {
+        taskId: 't',
+        qualityGate: { criteria: { minSuccessRate: 0.7, maxCollisionRate: 0.15, gateOn: 'ciLowerBound' } },
+        trained: { envelopes: { nominal: {
+          successRate: 0.72, collisionRate: 0.02, episodes: 50,
+          successRateCiLow: bounds!.low, successRateCiHigh: bounds!.high,
+          collisionRateCiLow: 0.0, collisionRateCiHigh: 0.1,
+        } } },
+      },
+    });
+    expect(verdict.gateOn).toBe('ciLowerBound');
+    expect(verdict.passed).toBe(false);
+    expect(verdict.errors.some((error) => error.includes('CI low') && error.includes('below gate'))).toBe(true);
+  });
+
+  it('passes a CI-gated report whose 50-episode floor clears the gate', () => {
+    // 50 episodes, 44 successes (88%): Wilson 95% low ~0.76 clears 0.7.
+    const success = wilsonBounds(44, 50)!;
+    const collision = wilsonBounds(0, 50)!;
+    const verdict = validateTaskPackEvalForRelease({
+      taskId: 't',
+      report: {
+        taskId: 't',
+        qualityGate: { criteria: { minSuccessRate: 0.7, maxCollisionRate: 0.15, gateOn: 'ciLowerBound' } },
+        trained: { envelopes: { nominal: {
+          successRate: 0.88, collisionRate: 0.0, episodes: 50,
+          successRateCiLow: success.low, successRateCiHigh: success.high,
+          collisionRateCiLow: collision.low, collisionRateCiHigh: collision.high,
+        } } },
+      },
+    });
+    expect(verdict.passed).toBe(true);
+    expect(verdict.successRateCiLow).not.toBeNull();
+  });
+
+  it('fails closed when gateOn=ciLowerBound but bounds are missing', () => {
+    const verdict = validateTaskPackEvalForRelease({
+      taskId: 't',
+      report: {
+        taskId: 't',
+        qualityGate: { criteria: { minSuccessRate: 0.7, gateOn: 'ciLowerBound' } },
+        trained: { envelopes: { nominal: { successRate: 0.9, collisionRate: 0.0 } } },
+      },
+    });
+    expect(verdict.passed).toBe(false);
+    expect(verdict.errors.some((error) => error.includes('confidence bounds missing'))).toBe(true);
+  });
+
+  it('rejects hand-edited bounds that disagree with the recomputed interval', () => {
+    const success = wilsonBounds(44, 50)!;
+    const collision = wilsonBounds(0, 50)!;
+    const verdict = validateTaskPackEvalForRelease({
+      taskId: 't',
+      report: {
+        taskId: 't',
+        qualityGate: { criteria: { minSuccessRate: 0.7, gateOn: 'ciLowerBound' } },
+        trained: { envelopes: { nominal: {
+          successRate: 0.88, collisionRate: 0.0, episodes: 50,
+          // Forged floor: the recomputation must catch it.
+          successRateCiLow: 0.95, successRateCiHigh: success.high,
+          collisionRateCiLow: collision.low, collisionRateCiHigh: collision.high,
+        } } },
+      },
+    });
+    expect(verdict.passed).toBe(false);
+    expect(verdict.errors.some((error) => error.includes('CI low mismatch'))).toBe(true);
+  });
+
+  it('wilsonBounds: empty evidence is null, 6/6 has a ~0.61 floor, 50 eps tightens', () => {
+    expect(wilsonBounds(6, 0)).toBeNull();
+    const six = wilsonBounds(6, 6)!;
+    expect(six.low).toBeGreaterThan(0.5);
+    expect(six.low).toBeLessThan(0.7);  // 0.610: 6 episodes alone cannot certify a 0.7 gate
+    const fifty = wilsonBounds(50, 50)!;
+    expect(fifty.low).toBeGreaterThan(six.low);
   });
 });

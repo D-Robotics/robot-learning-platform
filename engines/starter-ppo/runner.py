@@ -290,16 +290,24 @@ class DomainParams:
     still a range) so eval A/B comparisons are reproducible.
     """
 
-    KEYS = ("motorGain", "lagTau", "gyroNoise", "odomNoise", "angularBias", "latencySteps")
+    KEYS = ("motorGain", "lagTau", "gyroNoise", "odomNoise", "angularBias",
+            "latencySteps", "odomDropout", "slipScale")
 
     def __init__(self, motor_gain=1.0, lag_tau=0.1, gyro_noise=0.0, odom_noise=0.0,
-                 angular_bias=0.0, latency_steps=0):
+                 angular_bias=0.0, latency_steps=0, odom_dropout=0.0, slip_scale=1.0):
         self.motor_gain = motor_gain
         self.lag_tau = lag_tau
         self.gyro_noise = gyro_noise
         self.odom_noise = odom_noise
         self.angular_bias = angular_bias
         self.latency_steps = int(latency_steps)
+        # Per-step probability that the whole observation frame is stale
+        # (the board runtime republishes the last good frame on a drop).
+        self.odom_dropout = odom_dropout
+        # Wheel-slip scale: true body motion = wheel-reported motion * slip.
+        # Odometry integrates the wheel speeds (slip-blind), so the believed
+        # pose drifts from the true pose exactly as on loose flooring.
+        self.slip_scale = slip_scale
 
     @classmethod
     def sample(cls, rng, spec):
@@ -318,6 +326,8 @@ class DomainParams:
             odom_noise=uniform("odomNoiseStdM", 0.0),
             angular_bias=uniform("angularBiasRadSec", 0.0),
             latency_steps=steps,
+            odom_dropout=uniform("odomDropoutProb", 0.0),
+            slip_scale=uniform("slipScale", 1.0),
         )
 
     def as_dict(self):
@@ -328,19 +338,25 @@ class DomainParams:
             "odomNoiseStdM": round(self.odom_noise, 4),
             "angularBiasRadSec": round(self.angular_bias, 4),
             "actionLatencySteps": self.latency_steps,
+            "odomDropoutProb": round(self.odom_dropout, 4),
+            "slipScale": round(self.slip_scale, 4),
         }
 
 
 def eval_domain_params(envelope):
-    """Build pinned DomainParams from a task eval envelope (6 numbers).
+    """Build pinned DomainParams from a task eval envelope.
 
     Envelope order: [motorGain, lagTauSeconds, gyroNoiseStdRadSec,
-    odomNoiseStdM, angularBiasRadSec, actionLatencySteps]. Every value is
-    pinned exactly, so envelope A/B comparisons are reproducible.
+    odomNoiseStdM, angularBiasRadSec, actionLatencySteps, odomDropoutProb,
+    slipScale]. Every value is pinned exactly, so envelope A/B comparisons
+    are reproducible. A legacy 6-number envelope keeps the old semantics
+    (no dropout, no slip) so old records stay re-loadable.
     """
-    motor_gain, lag_tau, gyro_noise, odom_noise, angular_bias, latency = [
-        float(value) for value in envelope
-    ]
+    values = [float(value) for value in envelope]
+    while len(values) < 8:
+        values.append(0.0 if len(values) < 7 else 1.0)
+    (motor_gain, lag_tau, gyro_noise, odom_noise, angular_bias,
+     latency, odom_dropout, slip_scale) = values
     return DomainParams(
         motor_gain=motor_gain,
         lag_tau=lag_tau,
@@ -348,7 +364,30 @@ def eval_domain_params(envelope):
         odom_noise=odom_noise,
         angular_bias=angular_bias,
         latency_steps=int(latency),
+        odom_dropout=odom_dropout,
+        slip_scale=slip_scale,
     )
+
+
+WILSON_Z = {0.90: 1.644854, 0.95: 1.959964, 0.99: 2.575829}
+
+
+def wilson_bounds(successes, total, confidence=0.95):
+    """Wilson score interval for a binomial proportion.
+
+    Returns (low, high), or None when there are no episodes — the caller
+    must treat that as missing evidence (fail closed), never as 0.
+    """
+    if total <= 0:
+        return None
+    z = WILSON_Z.get(round(float(confidence), 2))
+    if z is None:
+        raise ValueError("confidence must be one of 0.90/0.95/0.99")
+    p = successes / total
+    denom = 1.0 + z * z / total
+    center = (p + z * z / (2.0 * total)) / denom
+    spread = z * math.sqrt(p * (1.0 - p) / total + z * z / (4.0 * total * total)) / denom
+    return center - spread, center + spread
 
 
 class GoalNavEnv:
@@ -381,8 +420,17 @@ class GoalNavEnv:
         self.goal_distance = [pack["curriculum"]["initialGoalDistance"][0],
                               pack["curriculum"]["initialGoalDistance"][1]]
         self.success_history = []
-        # Vector state: x, y, yaw, gx, gy, v, w (cmd), v_lag, w_lag (lagged).
+        # Vector state (TRUE pose): x, y, yaw, gx, gy, v, w (cmd), v_lag, w_lag.
+        # The believed pose lives separately in self.odom [odom_x, odom_y,
+        # odom_yaw]: odometry integrates the wheel-reported velocities and is
+        # blind to wheel slip and body-rotation bias, so it drifts from the
+        # true pose exactly the way real odometry does. Success and collision
+        # are measured on the TRUE pose — a policy that only "believes" it
+        # arrived does not pass.
         self.state = np.zeros((num_envs, 8), dtype=np.float32)
+        self.odom = np.zeros((num_envs, 3), dtype=np.float32)
+        self.last_obs = np.zeros((num_envs, self.observation_size), dtype=np.float32)
+        self._obs_initialized = np.zeros(num_envs, dtype=bool)
         self.steps = np.zeros(num_envs, dtype=np.int64)
         self.domain = [DomainParams() for _ in range(num_envs)]
         self.action_fifo = [deque(maxlen=3) for _ in range(num_envs)]
@@ -390,14 +438,16 @@ class GoalNavEnv:
         self.has_obstacles = bool((pack.get("workspace") or {}).get("obstacles", {}).get("count", 0)) > 0
         self.timeout_steps = int(pack["termination"]["timeoutSteps"])
         self._collision_flags = np.zeros(num_envs, dtype=bool)
+        self._episode_final = {}
         self.reset()
 
     def _sample_obstacles(self):
         obstacles = []
         spec = (self.pack.get("workspace") or {}).get("obstacles") or {}
+        spread = float((self.pack.get("workspace") or {}).get("bound") or 1.5)
         for _ in range(int(spec.get("count", 0))):
-            obstacles.append((float(self.rng.uniform(-1.5, 1.5)),
-                              float(self.rng.uniform(-1.5, 1.5)),
+            obstacles.append((float(self.rng.uniform(-spread, spread)),
+                              float(self.rng.uniform(-spread, spread)),
                               float(spec.get("radius", 0.15))))
         return obstacles
 
@@ -411,6 +461,9 @@ class GoalNavEnv:
         self.state[:, 3] = distances * np.cos(angles)
         self.state[:, 4] = distances * np.sin(angles)
         self.state[:, 5:] = 0.0
+        self.odom[:, :] = 0.0
+        self.odom[:, 2] = self.state[:, 2]
+        self._obs_initialized[:] = False
         self.steps[:] = 0
         self._collision_flags[:] = False
         for env_idx in range(self.num_envs):
@@ -446,18 +499,37 @@ class GoalNavEnv:
         w_lag = self.state[env_idx, 7] + alpha * (target_w * domain.motor_gain - self.state[env_idx, 7])
         self.state[env_idx, 6] = v_lag
         self.state[env_idx, 7] = w_lag
+        # True body motion: wheel speeds degrade by slip, and an unmodeled
+        # rotation bias veers the chassis (wheel scrub, uneven floor).
         yaw = self.state[env_idx, 2] + (w_lag + domain.angular_bias) * self.control_dt
         yaw = (yaw + math.pi) % (2.0 * math.pi) - math.pi
         self.state[env_idx, 2] = yaw
-        self.state[env_idx, 0] += v_lag * math.cos(yaw) * self.control_dt
-        self.state[env_idx, 1] += v_lag * math.sin(yaw) * self.control_dt
+        self.state[env_idx, 0] += v_lag * domain.slip_scale * math.cos(yaw) * self.control_dt
+        self.state[env_idx, 1] += v_lag * domain.slip_scale * math.sin(yaw) * self.control_dt
+        # Odometry: integrates the wheel-reported velocities — slip- and
+        # bias-blind, so the believed pose drifts from the true pose.
+        odom_yaw = self.odom[env_idx, 2] + w_lag * self.control_dt
+        odom_yaw = (odom_yaw + math.pi) % (2.0 * math.pi) - math.pi
+        self.odom[env_idx, 2] = odom_yaw
+        self.odom[env_idx, 0] += v_lag * math.cos(odom_yaw) * self.control_dt
+        self.odom[env_idx, 1] += v_lag * math.sin(odom_yaw) * self.control_dt
 
     def step(self, action):
         """Advance all envs one control step. Returns (obs, reward, done,
         success_mask); auto-reset keeps rollouts dense and records episode
-        outcomes for the curriculum."""
+        outcomes for the curriculum.
+
+        Episodes terminate on goal reach, obstacle collision, timeout, or the
+        TRUE pose leaving workspace.bound (the arena edge an operator or
+        safety layer would stop the robot at — also caps how far the drifting
+        odometry input can wander, which keeps the value targets bounded).
+        Episode terminal state is captured BEFORE the auto-reset so
+        evaluation reads the real final distance and collision, not the
+        resampled state.
+        """
         reward_cfg = self.pack["reward"]
         goal_eps = float(self.pack["termination"]["goalDistance"])
+        workspace_bound = float((self.pack.get("workspace") or {}).get("bound") or 0.0)
         rewards = np.zeros(self.num_envs, dtype=np.float32)
         done = np.zeros(self.num_envs, dtype=bool)
         success = np.zeros(self.num_envs, dtype=bool)
@@ -477,17 +549,38 @@ class GoalNavEnv:
             if collided:
                 self._collision_flags[env_idx] = True
             success[env_idx] = distance[env_idx] < goal_eps
+            out_of_bound = (
+                workspace_bound > 0.0
+                and (abs(float(self.state[env_idx, 0])) > workspace_bound
+                     or abs(float(self.state[env_idx, 1])) > workspace_bound)
+            )
             reward = (
                 reward_cfg["progress"] * float(previous_distance[env_idx] - distance[env_idx])
                 + reward_cfg["actionPenalty"] * float(np.mean(np.abs(np.clip(action[env_idx], -1.0, 1.0))))
                 + (reward_cfg["goal"] if success[env_idx] else 0.0)
                 + (reward_cfg["collision"] if collided else 0.0)
             )
+            # Dwell bonus: paid every step spent inside the goal radius.
+            # Progress reward alone is flat on an orbit around the goal
+            # (per-step distance deltas cancel), which trains limit cycles
+            # that never settle — observed as nominal 0% with min-distance
+            # 0.16 m against a 0.12 m goal. The dwell term gives a dense
+            # gradient exactly where settling must be learned, and on
+            # hardware it is the same distance check the success rule uses.
+            if "dwell" in reward_cfg and distance[env_idx] < goal_eps * 1.5:
+                reward += reward_cfg["dwell"]
             rewards[env_idx] = reward
-            done[env_idx] = success[env_idx] or collided or self.steps[env_idx] >= self.timeout_steps
+            done[env_idx] = (success[env_idx] or collided
+                             or out_of_bound
+                             or self.steps[env_idx] >= self.timeout_steps)
         # Curriculum + auto-reset for finished episodes.
         reset_indices = np.nonzero(done)[0]
+        self._episode_final = {}
         for env_idx in reset_indices:
+            self._episode_final[env_idx] = {
+                "finalDistance": float(distance[env_idx]),
+                "collision": bool(self._collision_flags[env_idx]),
+            }
             self.success_history.append(bool(success[env_idx]))
         obs = self.observe()
         for env_idx in reset_indices:
@@ -497,9 +590,13 @@ class GoalNavEnv:
             self.state[env_idx, 0] = 0.0
             self.state[env_idx, 1] = 0.0
             self.state[env_idx, 2] = self.rng.uniform(-math.pi, math.pi)
-            self.state[env_idx, 3] = distance_value * math.cos(angles)
-            self.state[env_idx, 4] = distance_value * math.sin(angles)
+            self.state[env_idx, 3] = distance_value * np.cos(angles)
+            self.state[env_idx, 4] = distance_value * np.sin(angles)
             self.state[env_idx, 5:] = 0.0
+            self.odom[env_idx, :] = 0.0
+            self.odom[env_idx, 2] = self.state[env_idx, 2]
+            self._obs_initialized[env_idx] = False
+            self.last_obs[env_idx, :] = 0.0
             self.steps[env_idx] = 0
             self._collision_flags[env_idx] = False
             self.domain[env_idx] = DomainParams.sample(self.rng, self.pack.get("domainRandomization"))
@@ -526,38 +623,56 @@ class GoalNavEnv:
         out = np.zeros((self.num_envs, self.observation_size), dtype=np.float32)
         for env_idx in range(self.num_envs):
             out[env_idx] = self.observe_one(env_idx)
+        # Frame dropout: with per-episode probability the whole observation
+        # repeats the previous frame — exactly what the board runtime does
+        # when a sensor publish is missed (last good frame). All fresh-noise
+        # draws happen first so the RNG call order stays deterministic.
+        for env_idx in range(self.num_envs):
+            if (self._obs_initialized[env_idx]
+                    and self.rng.random() < self.domain[env_idx].odom_dropout):
+                out[env_idx] = self.last_obs[env_idx]
+            else:
+                self._obs_initialized[env_idx] = True
+            self.last_obs[env_idx] = out[env_idx]
         return out
 
     def observe_one(self, env_idx):
         domain = self.domain[env_idx]
         x, y, yaw, gx, gy = self.state[env_idx, :5]
+        odom_x, odom_y, odom_yaw = self.odom[env_idx]
         v_lag = float(self.state[env_idx, 6])
         w_lag = float(self.state[env_idx, 7])
         if self.observation_size == 8:
-            # Native board layout: x, y, sin, cos, dx, dy, v, w with noise.
+            # Native board layout: x, y, sin, cos, dx, dy, v, w — pose from
+            # odometry (the robot's own belief), goal delta derived from the
+            # same noisy pose so frame internals stay self-consistent.
+            noisy_x = odom_x + self.rng.normal(0.0, domain.odom_noise)
+            noisy_y = odom_y + self.rng.normal(0.0, domain.odom_noise)
             return np.asarray([
-                x + self.rng.normal(0.0, domain.odom_noise),
-                y + self.rng.normal(0.0, domain.odom_noise),
-                math.sin(yaw), math.cos(yaw),
-                gx - x, gy - y,
+                noisy_x, noisy_y,
+                math.sin(odom_yaw), math.cos(odom_yaw),
+                gx - noisy_x, gy - noisy_y,
                 v_lag, w_lag + self.rng.normal(0.0, domain.gyro_noise),
             ], dtype=np.float32)
         # Generic 42D layout: [gyro(3), gravity(3), last command(2),
-        # body-frame goal delta(2), twist(2), zeros(30)]. The goal delta is
-        # rotated into the chassis frame (derivable on hardware from the
-        # odom pose + goal): a goal-relative direction the policy can steer
-        # toward without an explicit yaw slot. Without this rotation the
+        # body-frame goal delta(2), twist(2), zeros(30)]. The gyro measures
+        # TRUE body angular rate (so the rotation bias is visible here, the
+        # only place it is); the goal delta is the odom-pose delta rotated
+        # into the chassis frame (derivable on hardware from the odom pose
+        # + goal): a goal-relative direction the policy can steer toward
+        # without an explicit yaw slot. Without this rotation the
         # world-frame delta is unlearnable — no heading information exists
         # anywhere else in the layout.
         out = np.zeros(self.observation_size, dtype=np.float32)
-        out[0:3] = (self.rng.normal(0.0, domain.gyro_noise, size=3))
+        out[0:3] = self.rng.normal(0.0, domain.gyro_noise, size=3)
+        out[2] += w_lag + domain.angular_bias
         out[3:6] = (0.0, 0.0, -1.0)  # projected gravity, upright chassis
         out[6:8] = (v_lag / self.max_linear if self.max_linear else 0.0,
                     w_lag / self.max_angular if self.max_angular else 0.0)
-        world_dx = gx - x
-        world_dy = gy - y
-        cos_yaw = math.cos(yaw)
-        sin_yaw = math.sin(yaw)
+        world_dx = gx - odom_x
+        world_dy = gy - odom_y
+        cos_yaw = math.cos(odom_yaw)
+        sin_yaw = math.sin(odom_yaw)
         out[8:10] = (cos_yaw * world_dx + sin_yaw * world_dy,
                      -sin_yaw * world_dx + cos_yaw * world_dy)
         out[10:12] = (v_lag, w_lag)
@@ -577,34 +692,44 @@ class GoalNavEnv:
         collided = False
         reached = False
         steps = 0
+        final_distance = None
         with torch.no_grad():
             obs_tensor = torch.from_numpy(obs).to(device)
             for step in range(single.timeout_steps):
                 action, _ = model.act(obs_tensor, deterministic=deterministic)
                 action_np = action.cpu().numpy()
                 next_obs, reward, done, success = single.step(action_np)
+                # Read the terminal state captured BEFORE the auto-reset —
+                # single.step() resamples collision flags and pose the moment
+                # an episode finishes, so post-reset reads always look clean.
+                term = single._episode_final.get(0)
+                step_collided = bool(term["collision"]) if (done[0] and term) else bool(single._collision_flags[0])
+                if done[0] and term:
+                    final_distance = term["finalDistance"]
                 rows.append({
                     "t": round(steps * self.control_dt, 4),
                     "observation": [round(float(v), 6) for v in obs[0]],
                     "action": [round(float(v), 6) for v in action_np[0]],
                     "reward": round(float(reward[0]), 6),
                     "done": bool(done[0]),
-                    "fall": bool(single._collision_flags[0]),
+                    "fall": step_collided,
                 })
                 obs = next_obs
                 obs_tensor = torch.from_numpy(obs).to(device)
                 steps += 1
-                collided = collided or bool(single._collision_flags[0])
+                collided = collided or step_collided
                 reached = reached or bool(success[0])
                 if done[0]:
                     break
+        if final_distance is None:
+            final_distance = float(np.hypot(single.state[0, 3] - single.state[0, 0],
+                                            single.state[0, 4] - single.state[0, 1]))
         return {
             "rows": rows,
             "success": reached,
             "collision": collided,
             "steps": steps,
-            "finalDistance": float(np.hypot(single.state[0, 3] - single.state[0, 0],
-                                            single.state[0, 4] - single.state[0, 1])),
+            "finalDistance": final_distance,
         }
 
 
@@ -751,7 +876,11 @@ def ppo_update(model, model_opt, flat_obs, flat_act, flat_logp, flat_adv, flat_r
         for mb_obs, mb_act, mb_logp, mb_adv, mb_ret in loader:
             dist = model.distribution(mb_obs)
             new_logp = dist.log_prob(mb_act).sum(-1)
-            ratio = (new_logp - mb_logp).exp()
+            # Log-space guard: clamp the log-ratio so a pathological tail
+            # (ratio ~ e^30) can never reach the unclamped PPO branch, whose
+            # gradient would overflow into NaN weights. Healthy ratios are
+            # untouched (|logp diff| stays O(1)).
+            ratio = (new_logp - mb_logp).clamp(-20.0, 20.0).exp()
             policy_loss = -torch.min(
                 ratio * mb_adv, ratio.clamp(1.0 - PPO_HYPERPARAMS["clip"], 1.0 + PPO_HYPERPARAMS["clip"]) * mb_adv,
             ).mean()
@@ -766,18 +895,26 @@ def ppo_update(model, model_opt, flat_obs, flat_act, flat_logp, flat_adv, flat_r
 
 
 def collect_rollout(model, env, rollout_steps, device, step_fn):
-    """Gather one PPO rollout from a vectorized env via step_fn(actions)->(reward, done)."""
+    """Gather one PPO rollout from a vectorized env via step_fn(actions)->(reward, done).
+
+    PPO trains on the UNCLAMPED sampled action with its own log-prob; the
+    env saturates the command at execution. Scoring the clamped point under
+    a drifting Gaussian mean is a log-prob cliff (mu far outside [-1, 1]
+    makes log_prob(+-1) astronomically negative), which is what blew the
+    importance ratio up to 1e28 and NaN'd the network once the navigation
+    task pushed means toward saturation.
+    """
     batch_obs, batch_act, batch_logp, batch_val, batch_rew, batch_done = [], [], [], [], [], []
     obs = torch.from_numpy(env.observe()).to(device)
     for _ in range(rollout_steps):
         with torch.no_grad():
             dist = model.distribution(obs)
-            action = dist.sample().clamp(-1.0, 1.0)
-            logp = dist.log_prob(action).sum(-1)
+            raw_action = dist.sample()
+            logp = dist.log_prob(raw_action).sum(-1)
             value = model.forward(obs)[1]
-        reward, done = step_fn(action.cpu().numpy())
+        reward, done = step_fn(raw_action.clamp(-1.0, 1.0).cpu().numpy())
         batch_obs.append(obs)
-        batch_act.append(action)
+        batch_act.append(raw_action)
         batch_logp.append(logp)
         batch_val.append(value)
         batch_rew.append(torch.from_numpy(reward.astype(np.float32)).to(device))
@@ -826,6 +963,14 @@ def train_goal_navigation(request, pack):
 
     requested_device, device_name, cuda_requested = resolve_device()
     torch.set_num_threads(TORCH_THREADS if requested_device.type == "cpu" else max(TORCH_THREADS, 4))
+    # Seed torch's global RNG from the pack seed: model init, action
+    # sampling, and DataLoader shuffle all consume it. Without this the
+    # same request trains a different policy in every process — the env
+    # alone was seeded, the learner never was.
+    torch.manual_seed(seed)
+    if requested_device.type == "cuda":
+        torch.cuda.manual_seed_all(seed)
+    np.random.seed(seed % (2 ** 31))
     stdout(
         "engine=start task={} profile={} iters={} envs={} steps={} obs={} act={} control={}Hz device={}{}".format(
             pack["id"], profile, iterations, num_envs, rollout_steps, obs_size, act_size, control_hz,
@@ -870,10 +1015,19 @@ def train_goal_navigation(request, pack):
 
     # ---- evaluation under pinned envelopes ----
     envelopes = (pack.get("domainRandomization") or {}).get("evalEnvelopes") or {}
+    eval_cfg = pack.get("evaluationConfig") or {}
+    episodes_per_envelope = clamp_int(eval_cfg.get("episodesPerEnvelope"), 1, 200, 50)
+    confidence = float(eval_cfg.get("confidenceLevel", 0.95))
     eval_seed = seed + 1000
-    trained_report = evaluate_goal_navigation(model, env, device, envelopes, eval_seed)
+    trained_report = evaluate_goal_navigation(
+        model, env, device, envelopes, eval_seed,
+        episodes_per_envelope=episodes_per_envelope, confidence=confidence,
+    )
     baseline_model = ActorCritic(obs_size, act_size).to(device)
-    baseline_report = evaluate_goal_navigation(baseline_model, env, device, envelopes, eval_seed)
+    baseline_report = evaluate_goal_navigation(
+        baseline_model, env, device, envelopes, eval_seed,
+        episodes_per_envelope=episodes_per_envelope, confidence=confidence,
+    )
     latency = measure_control_latency_ms(model.to("cpu"), obs_size, 1.0 / control_hz)
     model = model.to(device)
 
@@ -891,8 +1045,11 @@ def train_goal_navigation(request, pack):
     nominal = trained_report["envelopes"].get("nominal") or {}
     baseline_nominal = baseline_report["envelopes"].get("nominal") or {}
     stdout(
-        "eval nominal: successRate={:.2f} collisionRate={:.2f} (baseline {:.2f}/{:.2f}) gate={} gap={:+.2f}".format(
-            nominal.get("successRate", 0.0), nominal.get("collisionRate", 0.0),
+        "eval nominal: successRate={:.2f} [CI{:.0f}% {:.2f},{:.2f}] collisionRate={:.2f} ({} eps) "
+        "(baseline {:.2f}/{:.2f}) gate={} gap={:+.2f}".format(
+            nominal.get("successRate", 0.0), confidence * 100,
+            nominal.get("successRateCiLow", 0.0), nominal.get("successRateCiHigh", 0.0),
+            nominal.get("collisionRate", 0.0), nominal.get("episodes", 0),
             baseline_nominal.get("successRate", 0.0), baseline_nominal.get("collisionRate", 0.0),
             "PASS" if gate["passed"] else "FAIL",
             float(nominal.get("successRate", 0.0)) - float(baseline_nominal.get("successRate", 0.0)),
@@ -934,6 +1091,11 @@ def train_goal_navigation(request, pack):
                 "controlLatencyMs": latency,
                 "onnxExported": bool(onnx_bytes),
                 "trainingSeconds": round(time.time() - started, 1),
+                "evaluationConfig": {
+                    "episodesPerEnvelope": episodes_per_envelope,
+                    "confidenceLevel": confidence,
+                    "gateOn": str((pack.get("qualityGate") or {}).get("gateOn", "point")),
+                },
             },
             handle, indent=2,
         )
@@ -980,8 +1142,12 @@ def train_goal_navigation(request, pack):
             "reward": round(trained_report.get("meanReward", 0.0), 4),
             "initialReward": round(baseline_report.get("meanReward", 0.0), 4),
             "successRate": round(nominal.get("successRate", 0.0), 4),
+            "successRateCiLow": round(nominal.get("successRateCiLow", 0.0), 4),
+            "successRateCiHigh": round(nominal.get("successRateCiHigh", 0.0), 4),
+            "evalEpisodes": nominal.get("episodes"),
             "collisionRate": round(nominal.get("collisionRate", 0.0), 4),
             "hardSuccessRate": round((trained_report["envelopes"].get("hard") or {}).get("successRate", 0.0), 4),
+            "hardSuccessRateCiLow": round((trained_report["envelopes"].get("hard") or {}).get("successRateCiLow", 0.0), 4),
             "qualityGatePassed": gate["passed"],
             "controlLatencyMs": latency,
             "iterations": iterations,
@@ -994,16 +1160,21 @@ def train_goal_navigation(request, pack):
     return result
 
 
-def evaluate_goal_navigation(model, env, device, envelopes, seed, episodes_per_envelope=6):
+def evaluate_goal_navigation(model, env, device, envelopes, seed,
+                             episodes_per_envelope=50, confidence=0.95):
     """Evaluate an actor under each pinned envelope on a fixed seed.
 
     Envelope order: [motorGain, lagTauSeconds, gyroNoiseStdRadSec,
-    odomNoiseStdM, angularBiasRadSec, actionLatencySteps].
+    odomNoiseStdM, angularBiasRadSec, actionLatencySteps, odomDropoutProb,
+    slipScale]. Each envelope metric carries its episode count and Wilson
+    95% confidence bounds — a point estimate alone (5/6, 6/6...) claims
+    far more certainty than the evidence supports.
     """
     model.eval()
-    report = {"envelopes": {}, "jsonl": {}, "meanReward": 0.0}
+    report = {"envelopes": {}, "jsonl": {}, "meanReward": 0.0, "episodesPerEnvelope": episodes_per_envelope,
+              "confidenceLevel": confidence}
     rewards_all = []
-    for name, envelope in (envelopes or {"nominal": [1.0, 1.0, 0.1, 0.1, 0.0, 0.0, 0.0, 0]}).items():
+    for name, envelope in (envelopes or {"nominal": [1.0, 0.1, 0.01, 0.005, 0.0, 1, 0.0, 1.0]}).items():
         domain = eval_domain_params(envelope)
         successes, collisions, finals, lengths, rewards = 0, 0, [], [], []
         jsonl_rows = []
@@ -1018,9 +1189,16 @@ def evaluate_goal_navigation(model, env, device, envelopes, seed, episodes_per_e
             rewards.append(episode_reward)
             if episode == 0:
                 jsonl_rows = outcome["rows"]
+        success_ci = wilson_bounds(successes, episodes_per_envelope, confidence)
+        collision_ci = wilson_bounds(collisions, episodes_per_envelope, confidence)
         report["envelopes"][name] = {
+            "episodes": episodes_per_envelope,
             "successRate": successes / episodes_per_envelope,
+            "successRateCiLow": round(success_ci[0], 4),
+            "successRateCiHigh": round(success_ci[1], 4),
             "collisionRate": collisions / episodes_per_envelope,
+            "collisionRateCiLow": round(collision_ci[0], 4),
+            "collisionRateCiHigh": round(collision_ci[1], 4),
             "meanFinalDistance": round(float(np.mean(finals)), 4),
             "meanEpisodeLength": round(float(np.mean(lengths)), 2),
             "meanReward": round(float(np.mean(rewards)), 4),
@@ -1037,36 +1215,55 @@ def evaluate_quality_gate(report, quality_gate):
     """Apply the task's quality gate to the nominal-envelope metrics.
 
     A gate verdict is PASS only from measured evidence — never from a
-    missing metric (absent metrics fail closed).
+    missing metric (absent metrics fail closed). With gateOn
+    "ciLowerBound" the verdict uses the Wilson confidence bounds: success
+    is judged on the CI lower bound and collision on the CI upper bound,
+    so a 50-episode 84% point rate no longer hides the 71% floor. Missing
+    bounds under ciLowerBound fail closed, exactly like missing rates.
     """
     nominal = (report.get("envelopes") or {}).get("nominal") or {}
+    gate_on = str(quality_gate.get("gateOn", "point"))
     errors = []
+    if gate_on not in ("point", "ciLowerBound"):
+        errors.append("unknown gateOn {!r}".format(quality_gate.get("gateOn")))
     min_success = quality_gate.get("minSuccessRate")
     if min_success is not None:
-        if "successRate" not in nominal:
-            errors.append("nominal successRate missing")
-        elif nominal["successRate"] < float(min_success):
-            errors.append(
-                "successRate {:.2f} below gate {:.2f}".format(nominal["successRate"], float(min_success))
-            )
+        if gate_on == "ciLowerBound":
+            success_value = nominal.get("successRateCiLow")
+            label = "successRate CI low"
+        else:
+            success_value = nominal.get("successRate")
+            label = "successRate"
+        if success_value is None:
+            errors.append("nominal {} missing".format(label))
+        elif success_value < float(min_success):
+            errors.append("{} {:.4f} below gate {:.2f}".format(label, success_value, float(min_success)))
     max_collision = quality_gate.get("maxCollisionRate")
     if max_collision is not None:
-        if "collisionRate" not in nominal:
-            errors.append("nominal collisionRate missing")
-        elif nominal["collisionRate"] > float(max_collision):
-            errors.append(
-                "collisionRate {:.2f} above gate {:.2f}".format(nominal["collisionRate"], float(max_collision))
-            )
+        if gate_on == "ciLowerBound":
+            collision_value = nominal.get("collisionRateCiHigh")
+            label = "collisionRate CI high"
+        else:
+            collision_value = nominal.get("collisionRate")
+            label = "collisionRate"
+        if collision_value is None:
+            errors.append("nominal {} missing".format(label))
+        elif collision_value > float(max_collision):
+            errors.append("{} {:.4f} above gate {:.2f}".format(label, collision_value, float(max_collision)))
     return {
         "passed": not errors,
         "errors": errors,
         "criteria": {
             "minSuccessRate": min_success,
             "maxCollisionRate": max_collision,
+            "gateOn": gate_on,
         },
         "measured": {
             "successRate": nominal.get("successRate"),
             "collisionRate": nominal.get("collisionRate"),
+            "successRateCiLow": nominal.get("successRateCiLow"),
+            "collisionRateCiHigh": nominal.get("collisionRateCiHigh"),
+            "episodes": nominal.get("episodes"),
         },
     }
 
@@ -1142,10 +1339,13 @@ def train(request):
         for _ in range(rollout_steps):
             with torch.no_grad():
                 dist = model.distribution(obs)
-                action = dist.sample().clamp(-1.0, 1.0)
+                # Train on the unclamped sample (see collect_rollout): the env
+                # saturates the torque at execution, and PPO's ratio needs the
+                # log-prob of the point actually stored.
+                action = dist.sample()
                 logp = dist.log_prob(action).sum(-1)
                 value = model.forward(obs)[1]
-            next_obs_np, reward, done, _ = env.step(action.cpu().numpy(), physics_dt, decimation)
+            next_obs_np, reward, done, _ = env.step(action.clamp(-1.0, 1.0).cpu().numpy(), physics_dt, decimation)
             batch_obs.append(obs)
             batch_act.append(action)
             batch_logp.append(logp)
@@ -1187,7 +1387,8 @@ def train(request):
             for mb_obs, mb_act, mb_logp, mb_adv, mb_ret in loader:
                 dist = model.distribution(mb_obs)
                 new_logp = dist.log_prob(mb_act).sum(-1)
-                ratio = (new_logp - mb_logp).exp()
+                # Same log-space ratio guard as ppo_update().
+                ratio = (new_logp - mb_logp).clamp(-20.0, 20.0).exp()
                 policy_loss = -torch.min(
                     ratio * mb_adv,
                     ratio.clamp(1.0 - clip, 1.0 + clip) * mb_adv,

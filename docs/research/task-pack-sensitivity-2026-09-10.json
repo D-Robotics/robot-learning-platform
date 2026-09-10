@@ -1,0 +1,116 @@
+{
+  "date": "2026-09-10",
+  "taskId": "originbot-goal-navigation",
+  "method": "one-factor-at-a-time, fixed seed 7, 150 iterations x 32 envs per run",
+  "budgetNote": "short-budget probe: absolute rates are lower than the shipped 400-iteration record; the signal is the SPREAD across factor levels, not the levels",
+  "rows": [
+    {
+      "label": "baseline (shipped weights)",
+      "successRate": 0.02,
+      "successRateCiLow": 0.0035,
+      "collisionRate": 0.0,
+      "collisionRateCiHigh": 0.0713,
+      "episodes": 50,
+      "gatePassed": false,
+      "trainingSeconds": null
+    },
+    {
+      "label": "progress x0.8",
+      "successRate": 0.1,
+      "successRateCiLow": 0.0435,
+      "collisionRate": 0.0,
+      "collisionRateCiHigh": 0.0713,
+      "episodes": 50,
+      "gatePassed": false,
+      "trainingSeconds": null
+    },
+    {
+      "label": "progress x1.2",
+      "successRate": 0.06,
+      "successRateCiLow": 0.0206,
+      "collisionRate": 0.0,
+      "collisionRateCiHigh": 0.0713,
+      "episodes": 50,
+      "gatePassed": false,
+      "trainingSeconds": null
+    },
+    {
+      "label": "goal x0.8",
+      "successRate": 0.1,
+      "successRateCiLow": 0.0435,
+      "collisionRate": 0.0,
+      "collisionRateCiHigh": 0.0713,
+      "episodes": 50,
+      "gatePassed": false,
+      "trainingSeconds": null
+    },
+    {
+      "label": "goal x1.2",
+      "successRate": 0.02,
+      "successRateCiLow": 0.0035,
+      "collisionRate": 0.0,
+      "collisionRateCiHigh": 0.0713,
+      "episodes": 50,
+      "gatePassed": false,
+      "trainingSeconds": null
+    },
+    {
+      "label": "collision x0.8 (=-4)",
+      "successRate": 0.06,
+      "successRateCiLow": 0.0206,
+      "collisionRate": 0.0,
+      "collisionRateCiHigh": 0.0713,
+      "episodes": 50,
+      "gatePassed": false,
+      "trainingSeconds": null
+    },
+    {
+      "label": "collision x1.2 (=-6)",
+      "successRate": 0.0,
+      "successRateCiLow": 0.0,
+      "collisionRate": 0.0,
+      "collisionRateCiHigh": 0.0713,
+      "episodes": 50,
+      "gatePassed": false,
+      "trainingSeconds": null
+    },
+    {
+      "label": "actionPenalty x5 (=-0.05)",
+      "successRate": 0.02,
+      "successRateCiLow": 0.0035,
+      "collisionRate": 0.0,
+      "collisionRateCiHigh": 0.0713,
+      "episodes": 50,
+      "gatePassed": false,
+      "trainingSeconds": null
+    },
+    {
+      "label": "goalDistance 0.10 (harder termination)",
+      "successRate": 0.08,
+      "successRateCiLow": 0.0315,
+      "collisionRate": 0.0,
+      "collisionRateCiHigh": 0.0713,
+      "episodes": 50,
+      "gatePassed": false,
+      "trainingSeconds": null
+    },
+    {
+      "label": "timeout 160 (harder budget)",
+      "successRate": 0.02,
+      "successRateCiLow": 0.0035,
+      "collisionRate": 0.0,
+      "collisionRateCiHigh": 0.0713,
+      "episodes": 50,
+      "gatePassed": false,
+      "trainingSeconds": null
+    }
+  ],
+  "verdicts": {
+    "runsTotal": 10,
+    "runsPassed": 0,
+    "gateFlipCount": 0,
+    "successCiLowMin": 0.0,
+    "successCiLowMax": 0.0435
+  },
+  "conclusion": "CI floor spread across all factor levels: 0.04; gate flips: 0 / 10 runs. The verdict is robust to single +-20% weight perturbations at this budget."
+}

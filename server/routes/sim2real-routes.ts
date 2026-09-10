@@ -10,6 +10,7 @@ import type {
   Sim2RealModelRecord,
   Sim2RealRunArtifactMetadata,
   Sim2RealRunMetrics,
+  Sim2RealTaskEvaluationEvidence,
   Sim2RealRunBackend,
   Sim2RealRunRecord,
   Sim2RealRunStatus,
@@ -79,6 +80,7 @@ import {
   normalizeRunnerUrl,
 } from '../sim2real/robogo-runner.js';
 import { LOCAL_SIM2REAL_AUTH, type Sim2RealAuthPort } from '../sim2real/sim2real-auth.js';
+import { validateRunForDeployment } from '../sim2real/release-evidence.js';
 import { registerSim2RealTelemetryRoutes } from './sim2real-telemetry-routes.js';
 import { registerSim2RealBoardStationRoutes } from './sim2real-board-station-routes.js';
 import { registerSim2RealWorkspaceRoutes } from './sim2real-workspace-routes.js';
@@ -716,6 +718,7 @@ interface RunBackendOutcome {
   checkpoint?: Sim2RealCheckpointRef;
   artifact?: Sim2RealRunArtifactMetadata;
   metrics?: Sim2RealRunMetrics;
+  taskEvaluation?: Sim2RealTaskEvaluationEvidence;
 }
 
 /**
@@ -823,6 +826,7 @@ async function dispatchRunBackend(input: {
         ...(launched.checkpoint ? { checkpoint: launched.checkpoint } : {}),
         ...(launched.artifact ? { artifact: launched.artifact } : {}),
         ...(launched.metrics ? { metrics: launched.metrics } : {}),
+        ...(launched.taskEvaluation ? { taskEvaluation: launched.taskEvaluation } : {}),
       };
     } catch (error) {
       // A timeout/connection reset is ambiguous: the runner may have
@@ -871,6 +875,7 @@ async function dispatchRunBackend(input: {
         ...(launched.checkpoint ? { checkpoint: launched.checkpoint } : {}),
         ...(launched.artifact ? { artifact: launched.artifact } : {}),
         ...(launched.metrics ? { metrics: launched.metrics } : {}),
+        ...(launched.taskEvaluation ? { taskEvaluation: launched.taskEvaluation } : {}),
       };
     } catch (error) {
       // Treat only transport/ambiguous responses as outcome-unknown;
@@ -1310,6 +1315,7 @@ export function createSim2RealRouter(
               ...(latest.checkpoint ? { checkpoint: latest.checkpoint } : {}),
               ...(latest.artifact ? { artifact: latest.artifact } : {}),
               ...(latest.metrics ? { metrics: latest.metrics } : {}),
+              ...(latest.taskEvaluation ? { taskEvaluation: latest.taskEvaluation } : {}),
               ...((latest.status === 'completed' || latest.status === 'failed') && !run.finishedAt
                 ? { finishedAt: new Date().toISOString() }
                 : {}),
@@ -1515,6 +1521,7 @@ export function createSim2RealRouter(
           ...(latest.checkpoint ? { checkpoint: latest.checkpoint } : {}),
           ...(latest.artifact ? { artifact: latest.artifact } : {}),
           ...(latest.metrics ? { metrics: latest.metrics } : {}),
+          ...(latest.taskEvaluation ? { taskEvaluation: latest.taskEvaluation } : {}),
           ...((latest.status === 'completed' || latest.status === 'failed')
             ? { finishedAt: new Date().toISOString() }
             : {}),
@@ -1785,6 +1792,7 @@ export function createSim2RealRouter(
           ...(outcome.checkpoint ? { checkpoint: outcome.checkpoint } : {}),
           ...(outcome.artifact ? { artifact: outcome.artifact } : {}),
           ...(outcome.metrics ? { metrics: outcome.metrics } : {}),
+          ...(outcome.taskEvaluation ? { taskEvaluation: outcome.taskEvaluation } : {}),
           ...(outcome.status === 'completed' || outcome.status === 'failed'
             ? { finishedAt: now }
             : {}),
@@ -1848,6 +1856,7 @@ export function createSim2RealRouter(
       const idempotencyKey = idempotency.key;
       const modelId = String(body.modelId ?? '').trim();
       const deviceId = String(body.deviceId ?? '').trim();
+      const runId = String(body.runId ?? '').trim();
       const mode = body.mode == null ? 'preflight' : safeMode(body.mode);
       if (!modelId || !deviceId || !mode) {
         sendApiError(
@@ -1855,6 +1864,16 @@ export function createSim2RealRouter(
           400,
           'SIM2REAL_INVALID_DEPLOYMENT',
           'modelId、deviceId 和合法的 mode(preflight、canary 或 live) 必填',
+          { retryable: false },
+        );
+        return;
+      }
+      if (mode !== 'preflight' && !runId) {
+        sendApiError(
+          response,
+          400,
+          'SIM2REAL_RELEASE_RUN_REQUIRED',
+          'Canary / Live 部署必须绑定一条已完成且质量门通过的真实训练运行 runId。',
           { retryable: false },
         );
         return;
@@ -1906,18 +1925,53 @@ export function createSim2RealRouter(
         return;
       }
       const compatibility = compatibilityForManifest(model.manifest, targetPlatform);
+      const releaseRun = runId ? await getSim2RealRun(runId, owner) : null;
+      const releaseGate = validateRunForDeployment({
+        mode,
+        modelId: model.id,
+        run: releaseRun,
+      });
+      if (!releaseGate.passed) {
+        sendApiError(
+          response,
+          409,
+          'SIM2REAL_RELEASE_EVIDENCE_REJECTED',
+          `发布证据门未通过：${releaseGate.errors.join('；')}`,
+          { retryable: false, details: { releaseGate } },
+        );
+        return;
+      }
       const status = mode === 'live' ? 'blocked' : compatibility.deployable ? 'planned' : 'blocked';
       const deployment: Omit<Sim2RealDeploymentRecord, 'id' | 'createdAt' | 'updatedAt'> = {
         modelId: model.id,
+        ...(releaseRun ? { runId: releaseRun.id } : {}),
         deviceId: device.id,
         targetPlatform,
         mode,
         status,
         summary: deploymentSummary(mode, compatibility.deployable),
         compatibility,
-        steps: deploymentStepsFor(compatibility),
+        steps: [
+          ...(mode === 'preflight'
+            ? []
+            : [
+                {
+                  id: 'release-evidence',
+                  label: 'Verify training and Task-Pack evidence',
+                  status: 'completed' as const,
+                  detail: `Run ${releaseRun?.id ?? ''} passed the server-side release gate.`,
+                },
+              ]),
+          ...deploymentStepsFor(compatibility),
+        ],
+        ...(mode === 'preflight' ? {} : { releaseGate }),
       };
-      const requestFingerprint = JSON.stringify({ modelId: model.id, deviceId: device.id, mode });
+      const requestFingerprint = JSON.stringify({
+        modelId: model.id,
+        deviceId: device.id,
+        mode,
+        ...(runId ? { runId } : {}),
+      });
       try {
         const created = await createSim2RealDeploymentWithResult(deployment, owner, {
           ...(idempotencyKey ? { idempotencyKey } : {}),

@@ -11,6 +11,7 @@ import type {
   Sim2RealEvaluationSummary,
   Sim2RealRunArtifactMetadata,
   Sim2RealRunMetrics,
+  Sim2RealTaskEvaluationEvidence,
 } from './sim2real-telemetry.js';
 
 export type {
@@ -18,6 +19,8 @@ export type {
   Sim2RealReplaySummary,
   Sim2RealRunArtifactMetadata,
   Sim2RealRunMetrics,
+  Sim2RealTaskEvaluationEnvelope,
+  Sim2RealTaskEvaluationEvidence,
   Sim2RealTelemetryRecord,
   Sim2RealTelemetrySample,
   Sim2RealTelemetrySource,
@@ -255,6 +258,8 @@ export interface Sim2RealRunRecord {
   checkpoint?: Sim2RealCheckpointRef;
   artifact?: Sim2RealRunArtifactMetadata;
   metrics?: Sim2RealRunMetrics;
+  /** Sanitized Task-Pack eval report used by the server-side release gate. */
+  taskEvaluation?: Sim2RealTaskEvaluationEvidence;
   /** Latest platform-side telemetry evaluation; raw samples stay in the ledger. */
   evaluation?: Sim2RealEvaluationSummary;
   createdAt: string;
@@ -331,6 +336,8 @@ export interface Sim2RealDeploymentVerification {
 export interface Sim2RealDeploymentRecord {
   id: string;
   modelId: string;
+  /** Training run whose artifact and measurements authorize canary/live planning. */
+  runId?: string;
   deviceId: string;
   targetPlatform: string;
   mode: Sim2RealDeploymentMode;
@@ -340,6 +347,14 @@ export interface Sim2RealDeploymentRecord {
   steps: Sim2RealDeploymentStep[];
   history?: Sim2RealDeploymentHistoryEvent[];
   verification?: Sim2RealDeploymentVerification;
+  releaseGate?: {
+    passed: boolean;
+    checkedAt: string;
+    runId?: string;
+    taskId?: string;
+    errors: string[];
+    checks: Record<string, boolean | string | number | null>;
+  };
   /** Set when this plan was created to switch from another model version. */
   versionSwitchFrom?: string;
   createdAt: string;

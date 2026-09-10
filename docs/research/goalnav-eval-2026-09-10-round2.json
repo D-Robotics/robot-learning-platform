@@ -1,0 +1,259 @@
+{
+  "date": "2026-09-10",
+  "round": 2,
+  "summary": "Same-day re-validation after fixing three defects found by the CI-era eval harness: (1) collision telemetry was read after auto-reset so collisionRate was structurally 0.0; (2) PPO trained clamped actions with their own log-probs — a log-prob cliff that NaN'd the network around iteration 350 on the 8D layout; (3) progress-only reward admitted an orbit limit cycle (nominal 0% with min-distance 0.04 m short of the goal). All fixed in-engine; gates now judged on Wilson CI bounds with 50 episodes per envelope. Metrics below are the post-fix honest numbers, including runs that FAIL the gate.",
+  "defectsFoundAndFixed": [
+    {
+      "defect": "collisionRate always 0.0 in eval",
+      "rootCause": "rollout read _collision_flags after GoalNavEnv.step auto-reset had cleared it; finalDistance read the resampled pose",
+      "fix": "terminal state captured before reset (self._episode_final); rollout_episode uses it"
+    },
+    {
+      "defect": "network NaN at ~iteration 350 (8D layout)",
+      "rootCause": "PPO stored clamp(a,-1,1) with log-prob of the clamped point; when the Gaussian mean drifted outside [-1,1], log_prob(+-1) went to ~-30 per dim, the importance ratio overflowed to 1e28, and gradients poisoned the weights",
+      "fix": "train on the unclamped sampled action with its matching log-prob (env saturates at execution) + log-space ratio clamp at +-20; applied to both engine paths"
+    },
+    {
+      "defect": "nominal success 0% while hard was 88% (42D)",
+      "rootCause": "progress reward is flat on a goal orbit (per-step distance deltas cancel around the circle) — the policy converged to a limit cycle, entering the goal radius only by luck under the hard envelope's actuator lag",
+      "fix": "dwell reward (0.2 per step within 1.5x goal radius) + goalDistance 0.15; hardware cost is the same distance check"
+    },
+    {
+      "defect": "collision 12% point estimate failed the CI-upper gate",
+      "rootCause": "one-shot collision penalty teaches avoidance only through the value function — weak gradient before contact",
+      "fix": "obstacleProximity penalty (-0.3, ramping within 0.15 m of obstacle surface); computable on hardware against operator-mapped obstacles"
+    }
+  ],
+  "runs": [
+    {
+      "taskId": "originbot-goal-navigation",
+      "adapterId": "rdk-originbot",
+      "observationAdapterId": "originbot-imu-odom-v1",
+      "contract": "8->2",
+      "iterations": 800,
+      "numEnvs": 64,
+      "device": "cpu",
+      "trainedNominal": {
+        "successRate": 0.74,
+        "successRateCiLow": 0.6045,
+        "collisionRate": 0.12
+      },
+      "trainedHard": {
+        "successRate": 0.18
+      },
+      "gate": {
+        "passed": false,
+        "reason": "success CI low 0.60 < 0.70; collision CI high 0.23 > 0.15"
+      },
+      "note": "dwell-era run, before proximity penalty and curriculum cap"
+    },
+    {
+      "taskId": "generic-goal-navigation",
+      "adapterId": "generic-differential-drive",
+      "observationAdapterId": "imu-gravity-v1",
+      "contract": "42->2",
+      "iterations": 800,
+      "numEnvs": 64,
+      "device": "cpu",
+      "trainedNominal": {
+        "successRate": 0.9,
+        "successRateCiLow": 0.7864,
+        "successRateCiHigh": 0.9565,
+        "collisionRate": 0.12,
+        "collisionRateCiHigh": 0.238
+      },
+      "trainedHard": {
+        "successRate": 0.86,
+        "successRateCiLow": 0.7381
+      },
+      "baselineNominal": {
+        "successRate": 0.0
+      },
+      "gate": {
+        "passed": false,
+        "reason": "success CI low 0.79 >= 0.70 PASSES; collision CI high 0.238 > 0.15 fails"
+      },
+      "note": "dwell-era run; gate failure is collision-side only"
+    }
+  ],
+  "pending": [],
+  "honestyNotes": [
+    "All runs on development CPU; no hardware in the loop",
+    "Gate FAILs recorded as FAILs — the point of the CI-era gate",
+    "Old 2026-09-10 record's 83% PASS predates the collision-telemetry fix; its collisionRate 0.0 was the bug, not the physics"
+  ],
+  "experiments": [
+    {
+      "config": "dwell-era (reward +dwell 0.2, goalDistance 0.15, bound termination, no proximity)",
+      "originbot-8d": {
+        "iterations": 800,
+        "nominal": {
+          "successRate": 0.74,
+          "ciLow": 0.6045
+        },
+        "hard": 0.18,
+        "collision": 0.12
+      },
+      "s100-42d": {
+        "iterations": 800,
+        "nominal": {
+          "successRate": 0.9,
+          "ciLow": 0.7864,
+          "ciHigh": 0.9565
+        },
+        "hard": 0.86,
+        "collision": 0.12,
+        "collisionCiHigh": 0.238
+      },
+      "gateVerdict": "S100: success-side PASS, collision-side FAIL (CI high 0.238 > 0.15)"
+    },
+    {
+      "config": "+ obstacleProximity -0.3, band 0.15 (and originbot curriculum capped [1.4,1.6] x1.08)",
+      "originbot-8d": {
+        "iterations": 800,
+        "nominal": {
+          "successRate": 0.78,
+          "ciLow": 0.6476
+        },
+        "hard": 0.56,
+        "collision": 0.12
+      },
+      "s100-42d": {
+        "iterations": 800,
+        "nominal": {
+          "successRate": 0.68,
+          "ciLow": 0.5419
+        },
+        "collision": 0.18,
+        "collisionCiHigh": 0.308
+      },
+      "note": "S100 regressed on BOTH metrics; OriginBot improved"
+    },
+    {
+      "config": "+ obstacleProximity -0.1, band 0.10",
+      "originbot-8d": {
+        "iterations": 800,
+        "nominal": {
+          "successRate": 0.48,
+          "ciLow": 0.348
+        },
+        "hard": 0.54,
+        "collision": 0.12
+      },
+      "s100-42d": {
+        "iterations": 800,
+        "nominal": {
+          "successRate": 0.1,
+          "ciLow": 0.0435
+        },
+        "collision": 0.26
+      },
+      "note": "Both regressed further — non-monotone in the penalty weight"
+    },
+    {
+      "config": "1600 iterations, dwell-era + capped curriculum (pre-proximity)",
+      "originbot-8d": {
+        "iterations": 1600,
+        "nominal": {
+          "successRate": 0.52,
+          "ciLow": 0.3851
+        },
+        "hard": 0.5,
+        "collision": 0.2
+      },
+      "note": "Longer budget did NOT help 8D; curriculum reached [1.61,1.90]"
+    }
+  ],
+  "varianceLesson": "Single-run differences between reward configs swung nominal success by +-30 points NON-monotonically in the perturbed weight (S100: 90% -> 68% -> 10% as the proximity penalty went none -> -0.3 -> -0.1). With one training run per config and chaotic training dynamics, that pattern is noise-dominated, not a reward-shaping signal. Conclusions drawn from it would be unfalsifiable storytelling. What WAS established causally (trajectory-level diagnosis, not A/B comparison): the orbit limit cycle and its dwell fix. The proximity term was reverted; the honest lever for the collision-CI gate is more episodes per envelope (tighter CI) and/or genuinely better avoidance learning, which needs multi-seed evaluation to even measure.",
+  "finalConfig": {
+    "reward": {
+      "progress": 1.0,
+      "goal": 10,
+      "dwell": 0.2,
+      "collision": -5,
+      "actionPenalty": -0.01
+    },
+    "termination": {
+      "goalDistance": 0.15,
+      "timeoutSteps": 200,
+      "workspaceBound": 2.0
+    },
+    "originbotCurriculum": {
+      "finalGoalDistance": [
+        1.4,
+        1.6
+      ],
+      "expandFactor": 1.08
+    },
+    "genericCurriculum": {
+      "finalGoalDistance": [
+        1.5,
+        1.9
+      ],
+      "expandFactor": 1.15
+    },
+    "episodesPerEnvelope": 50,
+    "confidenceLevel": 0.95,
+    "gateOn": "ciLowerBound"
+  },
+  "confirmedFinalRuns": {
+    "originbot-8d": {
+      "iterations": 800,
+      "numEnvs": 64,
+      "device": "cpu",
+      "seed": 7,
+      "nominal": {
+        "successRate": 0.74,
+        "successRateCiLow": 0.6045,
+        "successRateCiHigh": 0.8413,
+        "collisionRate": 0.12
+      },
+      "hard": {
+        "successRate": 0.36,
+        "successRateCiLow": 0.2414
+      },
+      "baseline": {
+        "nominal": {
+          "successRate": 0.02
+        }
+      },
+      "gate": {
+        "passed": false,
+        "errors": [
+          "successRate CI low 0.6045 below gate 0.70",
+          "collisionRate CI high above gate 0.15"
+        ]
+      }
+    },
+    "s100-42d": {
+      "iterations": 800,
+      "numEnvs": 64,
+      "device": "cpu",
+      "seed": 7,
+      "nominal": {
+        "successRate": 0.9,
+        "successRateCiLow": 0.7864,
+        "successRateCiHigh": 0.9565,
+        "collisionRate": 0.12,
+        "collisionRateCiHigh": 0.238
+      },
+      "hard": {
+        "successRate": 0.86,
+        "successRateCiLow": 0.7381
+      },
+      "baseline": {
+        "nominal": {
+          "successRate": 0.0
+        }
+      },
+      "gate": {
+        "passed": false,
+        "errors": [
+          "collisionRate CI high 0.238 above gate 0.15"
+        ],
+        "note": "success-side PASSES the CI gate; only the collision CI upper bound fails"
+      }
+    }
+  },
+  "conclusion": "Engine correctness work is done and verified: no NaN (root cause fixed), honest collision telemetry, Wilson CI gating with cross-check, cross-process determinism. The S100 42D path clears the success-side CI gate (0.786 >= 0.70 at 50 episodes). What the gate still honestly refuses: collision CI upper bound 0.238 > 0.15 — point estimate 0.12 is under the bar but 50 episodes cannot certify it. The next real lever is avoidance learning measured across multiple seeds, or more episodes per envelope (100 -> CI width ~2x tighter). Chasing single-run success numbers was noise; the record above documents that detour so it is not repeated."
+}

@@ -38,6 +38,56 @@ export interface Sim2RealRunMetrics {
   cuda?: boolean;
 }
 
+/** Bounded metrics captured for one pinned Task-Pack evaluation envelope. */
+export interface Sim2RealTaskEvaluationEnvelope {
+  successRate?: number;
+  collisionRate?: number;
+  successRateCiLow?: number;
+  successRateCiHigh?: number;
+  collisionRateCiLow?: number;
+  collisionRateCiHigh?: number;
+  episodes?: number;
+  meanReward?: number;
+}
+
+/**
+ * Sanitized eval-report.json evidence returned by a training runner.
+ *
+ * The platform stores the measurements, not only the engine's PASS boolean,
+ * so the release boundary can independently recompute the verdict.
+ */
+export interface Sim2RealTaskEvaluationEvidence {
+  schemaVersion?: number;
+  taskId: string;
+  adapterId?: string;
+  observationAdapterId?: string;
+  trained?: {
+    envelopes?: Record<string, Sim2RealTaskEvaluationEnvelope>;
+    meanReward?: number;
+    episodesPerEnvelope?: number;
+    confidenceLevel?: number;
+  };
+  baseline?: {
+    envelopes?: Record<string, Sim2RealTaskEvaluationEnvelope>;
+    meanReward?: number;
+    episodesPerEnvelope?: number;
+    confidenceLevel?: number;
+  };
+  qualityGate?: {
+    passed?: boolean;
+    errors?: string[];
+    criteria?: {
+      minSuccessRate?: number;
+      maxCollisionRate?: number;
+      gateOn?: 'point' | 'ciLowerBound';
+    };
+  };
+  controlLatencyMs?: number;
+  seed?: number;
+  /** SHA-256 of the normalized runner report, retained for audit correlation. */
+  reportSha256?: string;
+}
+
 /**
  * Where a telemetry record came from.  `demo-fixture` is intentionally a
  * first-class value so a canned presentation trace stays marked as synthetic

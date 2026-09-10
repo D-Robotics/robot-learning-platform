@@ -1,0 +1,88 @@
+{
+  "schemaVersion": 1,
+  "taskId": "generic-goal-navigation",
+  "adapterId": "generic-differential-drive",
+  "observationAdapterId": "imu-gravity-v1",
+  "trained": {
+    "envelopes": {
+      "nominal": {
+        "episodes": 50,
+        "successRate": 0.82,
+        "successRateCiLow": 0.692,
+        "successRateCiHigh": 0.9023,
+        "collisionRate": 0.0,
+        "collisionRateCiLow": 0.0,
+        "collisionRateCiHigh": 0.0713,
+        "meanFinalDistance": 1.0,
+        "meanEpisodeLength": 37.52,
+        "meanReward": 7.7847
+      },
+      "hard": {
+        "episodes": 50,
+        "successRate": 0.76,
+        "successRateCiLow": 0.6259,
+        "successRateCiHigh": 0.857,
+        "collisionRate": 0.0,
+        "collisionRateCiLow": 0.0,
+        "collisionRateCiHigh": 0.0713,
+        "meanFinalDistance": 0.9845,
+        "meanEpisodeLength": 62.02,
+        "meanReward": 6.7519
+      }
+    },
+    "meanReward": 7.2683,
+    "episodesPerEnvelope": 50,
+    "confidenceLevel": 0.95
+  },
+  "baseline": {
+    "envelopes": {
+      "nominal": {
+        "episodes": 50,
+        "successRate": 0.0,
+        "successRateCiLow": 0.0,
+        "successRateCiHigh": 0.0713,
+        "collisionRate": 0.0,
+        "collisionRateCiLow": 0.0,
+        "collisionRateCiHigh": 0.0713,
+        "meanFinalDistance": 0.9948,
+        "meanEpisodeLength": 181.22,
+        "meanReward": -0.5697
+      },
+      "hard": {
+        "episodes": 50,
+        "successRate": 0.0,
+        "successRateCiLow": 0.0,
+        "successRateCiHigh": 0.0713,
+        "collisionRate": 0.0,
+        "collisionRateCiLow": 0.0,
+        "collisionRateCiHigh": 0.0713,
+        "meanFinalDistance": 1.0048,
+        "meanEpisodeLength": 183.46,
+        "meanReward": -0.5485
+      }
+    },
+    "meanReward": -0.5591,
+    "episodesPerEnvelope": 50,
+    "confidenceLevel": 0.95
+  },
+  "qualityGate": {
+    "passed": false,
+    "errors": [
+      "successRate CI low 0.6920 below gate 0.70"
+    ],
+    "criteria": {
+      "minSuccessRate": 0.7,
+      "maxCollisionRate": 0.15,
+      "gateOn": "ciLowerBound"
+    },
+    "measured": {
+      "successRate": 0.82,
+      "collisionRate": 0.0,
+      "successRateCiLow": 0.692,
+      "collisionRateCiHigh": 0.0713,
+      "episodes": 50
+    }
+  },
+  "controlLatencyMs": 0.05,
+  "seed": 1007
+}

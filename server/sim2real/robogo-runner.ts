@@ -3,9 +3,11 @@ import type {
   Sim2RealModelManifest,
   Sim2RealRunArtifactMetadata,
   Sim2RealRunMetrics,
+  Sim2RealTaskEvaluationEvidence,
   Sim2RealTrainingSpec,
 } from '../../shared/sim2real.js';
 import { SAFE_ARTIFACT_REF } from '../../shared/sim2real.js';
+import { normalizeTaskEvaluationEvidence } from '../../shared/task-evaluation.js';
 import { Sim2RealError } from './sim2real-errors.js';
 
 const DEFAULT_TIMEOUT_MS = 30_000;
@@ -21,6 +23,7 @@ export interface Sim2RealRobogoRunResult {
   checkpoint?: Sim2RealCheckpointRef;
   artifact?: Sim2RealRunArtifactMetadata;
   metrics?: Sim2RealRunMetrics;
+  taskEvaluation?: Sim2RealTaskEvaluationEvidence;
 }
 
 /**
@@ -382,6 +385,7 @@ function parseRunResult(payload: unknown): Sim2RealRobogoRunResult {
   const checkpoint = safeCheckpoint(source.checkpoint);
   const artifact = safeArtifact(source.artifact);
   const metrics = safeMetrics(source.metrics);
+  const taskEvaluation = normalizeTaskEvaluationEvidence(source.taskEvaluation);
   // Local workers report the honest device fact at the top level of the job
   // view (job.cuda), not inside metrics. Merge it in so the platform run
   // record can surface GPU usage; only an explicit boolean is trusted.
@@ -397,6 +401,7 @@ function parseRunResult(payload: unknown): Sim2RealRobogoRunResult {
     ...(checkpoint ? { checkpoint } : {}),
     ...(artifact ? { artifact } : {}),
     ...(metricsWithCuda ? { metrics: metricsWithCuda } : {}),
+    ...(taskEvaluation ? { taskEvaluation } : {}),
   };
 }
 

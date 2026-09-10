@@ -250,6 +250,23 @@ describe('RoboGo Sim2Real runner adapter', () => {
               fallRate: 0.18,
               iterations: 10,
             },
+            taskEvaluation: {
+              taskId: 'originbot-goal-navigation',
+              trained: {
+                envelopes: {
+                  nominal: { successRate: 0.88, collisionRate: 0, episodes: 50 },
+                },
+              },
+              qualityGate: {
+                passed: true,
+                criteria: {
+                  minSuccessRate: 0.7,
+                  maxCollisionRate: 0.15,
+                  gateOn: 'ciLowerBound',
+                },
+              },
+              injected: { shouldDisappear: true },
+            },
           }),
           { status: 200, headers: { 'content-type': 'application/json' } },
         );
@@ -263,7 +280,12 @@ describe('RoboGo Sim2Real runner adapter', () => {
       mock: true,
       artifact: { artifactId: 'mock-run-42-policy', deployable: false, threads: 1 },
       metrics: { contractValid: true, successRate: 0.72, iterations: 10 },
+      taskEvaluation: {
+        taskId: 'originbot-goal-navigation',
+        trained: { envelopes: { nominal: { successRate: 0.88, episodes: 50 } } },
+      },
     });
+    expect(result.taskEvaluation).not.toHaveProperty('injected');
   });
 
   it('merges the worker-level cuda flag into metrics without trusting non-boolean values', async () => {

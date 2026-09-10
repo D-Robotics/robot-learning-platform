@@ -27,6 +27,7 @@ const PORT = Number.isInteger(portValue) && portValue >= 1024 && portValue <= 65
 const DATA_DIR = path.resolve(String(process.env.RDK_SIM2REAL_LOCAL_WORKER_DATA_DIR || path.join(process.cwd(), '.data', 'local-worker')));
 const MAX_BODY = 2 * 1024 * 1024;
 const MAX_RESULT = 1 * 1024 * 1024;
+const MAX_ARTIFACT_BYTES = 10_000_000_000;
 const MAX_LOG = 64 * 1024;
 const MAX_JOBS = 1000;
 const MAX_CONCURRENT_JOBS_LIMIT = 32;
@@ -262,11 +263,10 @@ function ensureJobsLoaded() {
   return jobsLoadPromise;
 }
 
-async function readResult(job) {
+async function readBoundedJson(filePath) {
   let handle;
   try {
-    const resultPath = path.join(job.dir, 'result.json');
-    handle = await open(resultPath, 'r');
+    handle = await open(filePath, 'r');
     const info = await handle.stat();
     // A trainer is trusted to produce the result, but a bounded read keeps a
     // broken plugin from making the worker allocate unbounded memory. The
@@ -284,6 +284,51 @@ async function readResult(job) {
     return parsed;
   } catch {
     return null;
+  } finally {
+    await handle?.close().catch(() => undefined);
+  }
+}
+
+async function readResult(job) {
+  return readBoundedJson(path.join(job.dir, 'result.json'));
+}
+
+async function readTaskEvaluation(job, result) {
+  const embedded = result?.taskEvaluation;
+  const report =
+    embedded && typeof embedded === 'object' && !Array.isArray(embedded)
+      ? embedded
+      : await readBoundedJson(path.join(job.dir, 'eval-report.json'));
+  if (!report || typeof report !== 'object' || Array.isArray(report)) return null;
+  // The digest is not a signature; it gives operators a stable correlation
+  // key between the worker directory and the sanitized platform ledger row.
+  const normalized = JSON.stringify(report);
+  return {
+    ...report,
+    reportSha256: createHash('sha256').update(normalized).digest('hex'),
+  };
+}
+
+async function attachLocalArtifactDigest(job, artifact) {
+  if (!artifact || typeof artifact !== 'object' || Array.isArray(artifact)) return artifact;
+  if (text(artifact.format, 16).toLowerCase() !== 'onnx') return artifact;
+  let handle;
+  try {
+    // Engines materialize the portable actor at this fixed job-local path;
+    // never follow a runner-supplied filesystem path.
+    handle = await open(path.join(job.dir, 'policy.onnx'), 'r');
+    const info = await handle.stat();
+    if (!info.isFile() || info.size <= 0 || info.size > MAX_ARTIFACT_BYTES) return artifact;
+    const digest = createHash('sha256');
+    let bytes = 0;
+    for await (const chunk of handle.createReadStream()) {
+      bytes += chunk.length;
+      if (bytes > MAX_ARTIFACT_BYTES) return artifact;
+      digest.update(chunk);
+    }
+    return { ...artifact, sizeBytes: bytes, sha256: digest.digest('hex') };
+  } catch {
+    return artifact;
   } finally {
     await handle?.close().catch(() => undefined);
   }
@@ -335,13 +380,15 @@ async function finish(job, code, stdout, stderr) {
     const result = await readResult(job);
     const artifact = code === 0 && result ? resultArtifact(result) : null;
     if (artifact) {
+      const taskEvaluation = await readTaskEvaluation(job, result);
       job.status = 'completed';
       job.mock = false;
       job.cuda = Boolean(result.cuda);
       job.deployable = result.deployable === true;
       if (artifact.checkpoint) job.checkpoint = artifact.checkpoint;
-      if (artifact.artifact) job.artifact = artifact.artifact;
+      if (artifact.artifact) job.artifact = await attachLocalArtifactDigest(job, artifact.artifact);
       if (artifact.metrics) job.metrics = artifact.metrics;
+      if (taskEvaluation) job.taskEvaluation = taskEvaluation;
       job.message = '本地训练引擎已完成并返回受控制品引用。';
     } else {
       job.status = 'failed';

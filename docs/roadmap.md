@@ -21,10 +21,13 @@
 | **板端策略运行时（本轮新增）** | ✅ | 板上 load 真实 61→14 onnx → ready；start 无双开关被拒；stop 恒可用；推理 0.12ms/call |
 | 平台策略代理路由 + UI 面板 | ✅ | vitest 9/9；面板如实显示开关状态、obsSlots、推理指标 |
 | **Task-Pack 声明式训练（本轮新增）** | ✅ | 任务 JSON + 机型 JSON 驱动引擎；`verify:task-pack`/`verify:goalnav` 进 verify 链 |
-| **真实机器人任务训练（本轮新增）** | ✅ | 目标点导航：CPU 400 迭代 ≈166 s，成功率 0%→83%，gate PASS（`docs/task-pack-validation-2026-09-10.json`） |
-| **域随机化 + 课程学习（本轮新增）** | ✅ | 6 参数 episode 级随机化；钉死 nominal/hard 评测信封；课程 0.8→2.5 m；hard envelope 量化鲁棒性代价 |
-| **可量化质量门（本轮新增）** | ✅ | fail-closed；引擎 eval-report.json + TS 侧重算裁决（`validateTaskPackEvalForRelease`）；指标缺失=FAIL |
-| **第二机型（平台声明实证，本轮新增）** | ✅ | generic-differential-drive（S100 契约）42→2 同引擎同任务族训练成功，gate PASS；诚实标注 simulation-only |
+| **真实机器人任务训练（本轮新增）** | ✅ | 目标点导航：CPU 800 迭代，8D 布局 nominal 74%、42D 布局 90% [CI 0.79,0.96]；gate 以 Wilson CI 下界如实判定（碰撞侧 CI 上界未达标=诚实 FAIL） |
+| **域随机化 + 课程学习（本轮新增）** | ✅ | 8 参数 episode 级随机化（含丢帧/滑移）；钉死 nominal/hard 评测信封；课程按机型独立声明（8D 封顶 [1.4,1.6]）；hard envelope 量化鲁棒性代价 |
+| **可量化质量门（本轮新增）** | ✅ | fail-closed；Wilson 95% CI（50 episodes/信封）下界判定；引擎 eval-report.json + TS 侧重算裁决（`validateTaskPackEvalForRelease`）；指标或置信界缺失=FAIL |
+| **第二机型（平台声明实证，本轮新增）** | ✅ | generic-differential-drive（S100 契约）42→2 同引擎同任务族训练，nominal 90%、成功率侧过 CI 门；诚实标注 simulation-only |
+| **统计功效 + 跨进程可复现（本轮新增）** | ✅ | Wilson CI 进 gate；torch 全局播种修复，同请求跨进程 eval 指标逐项相等（契约测试守护）；超参敏感性研究落档 `docs/research/` |
+| **PPO 数值稳定性根因修复（本轮新增）** | ✅ | clamp-动作 log-prob 悬崖 → NaN 的根因修复（训练未截断动作 + log-ratio 护栏），两条引擎路径统一；800/1600 迭代不再崩溃 |
+| **评测诚实化（本轮新增）** | ✅ | 碰撞/末端距离在 auto-reset 前采集（消除 collisionRate≡0 假象）；workspace.bound 越界终止；dwell 奖励破极限环（nominal 0%→90% 的根因，轨迹级诊断佐证） |
 | 诚实性原则 | ✅ | mock 永远标注、遥测不伪造、fail-closed、急停常开 |
 
 ## 差距与计划
@@ -34,8 +37,9 @@
 1. **用 starter-ppo 真产物走通完整链**（目前演示模型结构真实但未训练）
    - 验收：`demo:starter` 产出的 `policy.onnx` → 传入板端 `policies/` → load ready →
      obsSlots 正常 → 推理指标连续 1Hz 出现在 station 页。
-   - 进展：task-pack 训练已在仿真侧产出 gate-PASS 的 `policy.onnx`（见
-     `docs/task-pack-validation-2026-09-10.json`）；待上板复跑同一验收。
+   - 进展：task-pack 训练已在仿真侧产出真实训练的 `policy.onnx`（42D 布局
+     nominal 90%、CI 下界过 0.70 gate；8D 布局 74% 待更长预算，见
+     `docs/research/goalnav-eval-2026-09-10-round2.json`）；待上板复跑同一验收。
 2. **观测适配的持久化配置**（现在是代码内写死 MicroDuck 契约形状）
    - 验收：机型适配包以声明文件存在（obs 槽位→真传感器/零填充、动作投影、钳制参数），
      平台按机型加载；新增机型不改 Python 运行时代码。

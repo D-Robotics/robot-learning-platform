@@ -27,6 +27,19 @@ for (const taskId of ['originbot-goal-navigation', 'generic-goal-navigation']) {
   assert.equal(request.task.id, taskId);
   assert.equal(typeof request.task.curriculum.expandFactor, 'number');
 
+  // Statistical-power contract: CI-gated packs must carry enough episodes
+  // and a supported confidence level, or the gate verdict is noise.
+  const evaluationConfig = request.task.evaluationConfig || {};
+  if (request.task.qualityGate?.gateOn === 'ciLowerBound') {
+    assert.ok((evaluationConfig.episodesPerEnvelope ?? 0) >= 30, `${taskId}: gateOn=ciLowerBound needs >=30 episodes per envelope`);
+    assert.ok([0.9, 0.95, 0.99].includes(evaluationConfig.confidenceLevel ?? 0.95), `${taskId}: confidenceLevel must be 0.9/0.95/0.99`);
+  }
+  // The 8-value envelopes must pin dropout/slip too (legacy 6 tolerated).
+  for (const [name, envelope] of Object.entries(pack.domainRandomization?.evalEnvelopes ?? {})) {
+    assert.ok([6, 8].includes(envelope.length), `${taskId}: evalEnvelopes.${name} must be 6 or 8 pinned values`);
+    assert.ok(envelope.every((x) => typeof x === 'number' && Number.isFinite(x)), `${taskId}: evalEnvelopes.${name} must be numbers`);
+  }
+
   // The request must round-trip through the worker's file protocol: the
   // engine reads the persisted body verbatim, so task survives JSON.
   const round = JSON.parse(JSON.stringify(request));
