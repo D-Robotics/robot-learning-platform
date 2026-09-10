@@ -1,0 +1,107 @@
+{
+  "date": "2026-09-10",
+  "runs": [
+    {
+      "taskId": "originbot-goal-navigation",
+      "adapterId": "rdk-originbot",
+      "observationAdapterId": "originbot-imu-odom-v1",
+      "contract": "8->2",
+      "iterations": 400,
+      "numEnvs": 64,
+      "trainingSeconds": 165.5,
+      "device": "cpu",
+      "curriculumReached": [
+        2.447,
+        2.5
+      ],
+      "trainedNominal": {
+        "successRate": 0.8333333333333334,
+        "collisionRate": 0.0,
+        "meanFinalDistance": 1.0155,
+        "meanEpisodeLength": 92.17,
+        "meanReward": 8.832
+      },
+      "trainedHard": {
+        "successRate": 0.5,
+        "collisionRate": 0.0,
+        "meanFinalDistance": 0.9518,
+        "meanEpisodeLength": 126.83,
+        "meanReward": 5.1663
+      },
+      "baselineNominal": {
+        "successRate": 0.0,
+        "collisionRate": 0.0,
+        "meanFinalDistance": 0.9523,
+        "meanEpisodeLength": 200.0,
+        "meanReward": -0.446
+      },
+      "qualityGate": {
+        "passed": true,
+        "errors": [],
+        "criteria": {
+          "minSuccessRate": 0.7,
+          "maxCollisionRate": 0.15
+        },
+        "measured": {
+          "successRate": 0.8333333333333334,
+          "collisionRate": 0.0
+        }
+      },
+      "controlLatencyMs": 0.049,
+      "onnxExported": true,
+      "mock": false,
+      "note": "CPU-only local training run; OriginBot layout matches board runtime native 8->2 path"
+    },
+    {
+      "taskId": "generic-goal-navigation",
+      "adapterId": "generic-differential-drive",
+      "observationAdapterId": "imu-gravity-v1",
+      "contract": "42->2",
+      "iterations": 400,
+      "numEnvs": 64,
+      "trainingSeconds": 175.0,
+      "device": "cpu",
+      "curriculumReached": [
+        2.5,
+        2.5
+      ],
+      "trainedNominal": {
+        "successRate": 0.8333333333333334,
+        "collisionRate": 0.0,
+        "meanFinalDistance": 0.9758,
+        "meanEpisodeLength": 39.17,
+        "meanReward": 8.11
+      },
+      "trainedHard": {
+        "successRate": 1.0,
+        "collisionRate": 0.0,
+        "meanFinalDistance": 1.077,
+        "meanEpisodeLength": 49.17,
+        "meanReward": 10.627
+      },
+      "baselineNominal": {
+        "successRate": 0.0,
+        "collisionRate": 0.0,
+        "meanFinalDistance": 0.9523,
+        "meanEpisodeLength": 200.0,
+        "meanReward": -0.0626
+      },
+      "qualityGate": {
+        "passed": true,
+        "errors": [],
+        "criteria": {
+          "minSuccessRate": 0.7,
+          "maxCollisionRate": 0.15
+        },
+        "measured": {
+          "successRate": 0.8333333333333334,
+          "collisionRate": 0.0
+        }
+      },
+      "controlLatencyMs": 0.049,
+      "onnxExported": true,
+      "mock": true,
+      "note": "CPU-only local training run; generic machine is simulation-only (mock=true)"
+    }
+  ]
+}
