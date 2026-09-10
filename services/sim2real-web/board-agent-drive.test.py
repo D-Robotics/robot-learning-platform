@@ -177,6 +177,55 @@ class DriveEnabledContract(unittest.TestCase):
         self.agent.TELEMETRY_SNAPSHOT_FILE = fresh_path
         self.assertEqual(self.agent._read_telemetry_snapshot(), {"batteryVoltage": 4.9})
 
+    def test_publisher_env_propagates_profile_drive_rate(self):
+        # Regression for 76b7bd4: DRIVE_PUBLISH_HZ lowered by the profile's
+        # decisionHz must reach the publisher process, otherwise it keeps
+        # re-publishing at the compile-time default and the watchdog window
+        # drifts. Capture the env Popen would receive without spawning bash.
+        profile_path = os.path.join(self.workdir, "rate-profile.json")
+        with open(profile_path, "w") as handle:
+            json.dump({"id": "custom-diff-drive", "runtime": {"decisionHz": 5}}, handle)
+        agent = load_agent_module(enable_drive=True, profile_path=profile_path)
+        self.assertEqual(agent.DRIVE_PUBLISH_HZ, 5)
+        self.agent.DRIVE_COMMAND_FILE = os.path.join(self.workdir, "cmd.yaml")
+        self.agent.DRIVE_PUBLISHER_READY = os.path.join(self.workdir, "pub.ready")
+        self.agent.DRIVE_PUBLISHER_SCRIPT = os.path.join(self.workdir, "nope.py")
+
+        captured = {}
+
+        class FakeProc(object):
+            def poll(self):
+                return None
+
+            def kill(self):
+                pass
+
+            def wait(self, timeout=None):
+                return None
+
+        def fake_popen(*args, **kwargs):
+            captured.update(kwargs.get("env") or {})
+            return FakeProc()
+
+        with mock.patch.object(agent.subprocess, "Popen", side_effect=fake_popen), \
+                mock.patch.object(
+                    os.path,
+                    "exists",
+                    side_effect=lambda p: p in (
+                        agent.DRIVE_PUBLISHER_SCRIPT,
+                        agent.DRIVE_COMMAND_FILE,
+                        agent.DRIVE_PUBLISHER_READY,
+                    ),
+                ):
+            # The marker exists, so the handshake wait loop returns True on
+            # its first cycle without sleeping on the real clock.
+            started = agent._start_drive_publisher()
+        self.assertTrue(started)
+        # decisionHz is parsed as float, so the env var is "5.0" not "5".
+        self.assertEqual(captured.get("RDK_BOARD_DRIVE_RATE_HZ"), "5.0")
+        self.assertEqual(captured.get("RDK_BOARD_DRIVE_CMD_TOPIC"), agent.DRIVE_COMMAND_TOPIC)
+        self.assertEqual(captured.get("RDK_BOARD_DRIVE_PERSIST"), "1")
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

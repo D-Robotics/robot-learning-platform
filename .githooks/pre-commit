@@ -1,0 +1,23 @@
+#!/bin/sh
+# Fast local gate before every commit (~5 s): syntax + types + unit tests.
+# The full `npm run verify` chain (18 assertion scripts + build + smoke)
+# stays in CI; do not duplicate it here or commits become slow enough to
+# get bypassed with --no-verify.
+#
+# Install once per clone: git config core.hooksPath .githooks
+
+set -e
+
+# Only guard files that the fast checks actually read.
+STAGED=$(git diff --cached --name-only --diff-filter=ACMR)
+if [ -z "$STAGED" ]; then
+  exit 0
+fi
+echo "$STAGED" | grep -qE '\.(ts|mjs|js|json)$' || exit 0
+
+node --check services/sim2real-web/public/app.js
+node --check services/sim2real-web/public/telemetry-core.js
+node services/sim2real-web/ui-ia.spec.mjs >/dev/null
+npx tsc -p tsconfig.build.json --noEmit
+npx vitest run --configLoader runner --changed HEAD >/dev/null
+echo "[pre-commit] fast gate passed: syntax, wiring, types, affected tests"

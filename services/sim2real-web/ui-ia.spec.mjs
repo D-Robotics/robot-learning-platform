@@ -8,6 +8,26 @@ const html = fs.readFileSync(path.join(here, 'public', 'index.html'), 'utf8');
 const app = fs.readFileSync(path.join(here, 'public', 'app.js'), 'utf8');
 const onboarding = fs.readFileSync(path.join(here, 'public', 'onboarding.js'), 'utf8');
 
+// ---- telemetry core wiring ----
+// Pure telemetry logic lives in public/telemetry-core.js so vitest can
+// execute it as a script and assert BEHAVIOR (telemetry-core.test.ts). This
+// spec additionally guards the wiring: load order and the delegation seams.
+const telemetryCore = fs.readFileSync(path.join(here, 'public', 'telemetry-core.js'), 'utf8');
+const coreTag = html.indexOf('telemetry-core.js');
+const appTag = html.indexOf('./app.js');
+assert.ok(coreTag >= 0, 'index.html must load telemetry-core.js');
+assert.ok(
+  appTag < 0 || coreTag < appTag,
+  'telemetry-core.js must load BEFORE app.js: app.js boots synchronously and its delegations resolve SimTelemetryCore at call time',
+);
+assert.match(telemetryCore, /root\.SimTelemetryCore = api/, 'telemetry-core.js must publish globalThis.SimTelemetryCore');
+assert.doesNotMatch(telemetryCore, /document\.|window\.location/, 'telemetry-core.js must stay DOM-free');
+assert.match(app, /SimTelemetryCore\.parseTelemetryText\(text\)/, 'app.js must delegate parseTelemetryText');
+assert.match(app, /SimTelemetryCore\.stationTelemetrySnapshot\(status\)/, 'app.js must delegate stationTelemetrySnapshot');
+assert.match(app, /SimTelemetryCore\.stationPowerView\(status\)/, 'app.js must read the station power surface from one view');
+assert.match(app, /SimTelemetryCore\.simulatorStatusLabels\(profile, browserAvailable\)/, 'app.js must delegate simulator labels');
+assert.match(app, /SimTelemetryCore\.stationImuQuaternion\(originbot\)/, 'app.js must delegate IMU quaternion parsing');
+
 const viewNames = [...app.matchAll(/WORKFLOW_VIEWS\s*=\s*\[([^\]]+)\]/g)][0][1]
   .match(/['"][^'"]+['"]/g)
   .map((value) => value.slice(1, -1));

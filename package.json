@@ -40,6 +40,7 @@
     "build": "tsc -p tsconfig.build.json && npm run build:assets",
     "build:assets": "node scripts/copy-server-assets.mjs",
     "test": "vitest run --configLoader runner",
+    "test:coverage": "vitest run --configLoader runner --coverage",
     "verify:ui": "node services/sim2real-web/ui-ia.spec.mjs",
     "verify:recorder": "node services/mujoco-web/microduck-community-overlay.test.mjs",
     "verify:deployment": "node scripts/verify-deployment-assets.mjs",
@@ -66,6 +67,7 @@
   "devDependencies": {
     "@types/express": "^5.0.3",
     "@types/node": "^22.13.10",
+    "@vitest/coverage-v8": "^3.2.7",
     "jsdom": "^29.1.1",
     "tsx": "^4.19.2",
     "typescript": "^5.7.3",

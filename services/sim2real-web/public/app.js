@@ -418,15 +418,11 @@ function formatDate(value) {
 }
 
 function formatTelemetrySeconds(value) {
-  const numeric = Number(value);
-  return Number.isFinite(numeric) ? numeric.toFixed(2) + 's' : '—';
+  return SimTelemetryCore.formatTelemetrySeconds(value);
 }
 
 function formatTelemetryRate(value) {
-  const numeric = Number(value);
-  if (!Number.isFinite(numeric) || numeric <= 0) return '—';
-  const rounded = Math.round(numeric * 10) / 10;
-  return rounded + 'Hz';
+  return SimTelemetryCore.formatTelemetryRate(value);
 }
 
 function setText(id, value) {
@@ -1034,20 +1030,9 @@ function renderIntegrations() {
   kitStatus?.classList.toggle('kit-status-ready', Boolean(model));
   kitStatus?.classList.toggle('kit-status-waiting', !model);
   setText('hero-updated', '更新于 ' + formatDate(new Date().toISOString()));
-  setText(
-    'status-simulator',
-    browserAvailable ? `浏览器 ${profile.displayName}` : profile.displayName + ' 仿真适配器',
-  );
-  setText(
-    'status-simulator-detail',
-    browserAvailable
-      ? microduckProduct
-        ? '固定官方参考策略'
-        : `${profile.displayName} 浏览器仿真适配器`
-      : microduckProduct
-        ? '等待挂载经过审核的静态 bundle'
-        : originbotProduct ? 'OriginBot 使用外部仿真/遥测适配器' : '当前产品线等待仿真适配器',
-  );
+  const simulatorLabels = SimTelemetryCore.simulatorStatusLabels(profile, browserAvailable);
+  setText('status-simulator', simulatorLabels.title);
+  setText('status-simulator-detail', simulatorLabels.detail);
   const robogoRunnerAvailable = simulator.robogo?.available === true;
   const robogoAccountReady = robogo.state === 'ready';
   const robogoLoginRequired = robogo.state === 'login_required';
@@ -1735,110 +1720,19 @@ function metricPercent(value) {
 }
 
 function finiteNumber(value) {
-  const number = typeof value === 'number' ? value : Number(value);
-  return Number.isFinite(number) ? number : null;
+  return SimTelemetryCore.finiteNumber(value);
 }
 
 function booleanValue(value) {
-  if (value === true || value === false) return value;
-  if (typeof value === 'number') return value !== 0;
-  if (typeof value === 'string') return ['1', 'true', 'yes', 'y'].includes(value.toLowerCase());
-  return false;
+  return SimTelemetryCore.booleanValue(value);
 }
-
-// Keep browser import capacity aligned with SIM2REAL_CONTRACT_LIMITS on the
-// server. RDK Duck manifests may legitimately declare vectors larger than
-// MicroDuck's 61/14 contract; truncating them here would make valid telemetry
-// impossible to publish.
-const MAX_TELEMETRY_VECTOR_VALUES = 4096;
 
 function normalizeTelemetrySample(value) {
-  if (!value || typeof value !== 'object') return null;
-  const raw = value;
-  const timestamp = finiteNumber(raw.t ?? raw.time ?? raw.timestamp);
-  if (timestamp === null) return null;
-  return {
-    t: timestamp,
-    ...(Array.isArray(raw.observation)
-      ? { observation: raw.observation.slice(0, MAX_TELEMETRY_VECTOR_VALUES) }
-      : {}),
-    ...(Array.isArray(raw.action)
-      ? { action: raw.action.slice(0, MAX_TELEMETRY_VECTOR_VALUES) }
-      : {}),
-    ...(finiteNumber(raw.reward) !== null ? { reward: finiteNumber(raw.reward) } : {}),
-    ...(raw.done != null ? { done: booleanValue(raw.done) } : {}),
-    ...(raw.fall != null ? { fall: booleanValue(raw.fall) } : {}),
-  };
+  return SimTelemetryCore.normalizeTelemetrySample(value);
 }
 
-const MAX_TELEMETRY_IMPORT_SAMPLES = 100_000;
-
 function parseTelemetryText(text) {
-  const lines = String(text || '')
-    .split(/\r?\n/)
-    .map((line) => line.trim())
-    .filter(Boolean);
-  if (!lines.length) throw new Error('遥测文件为空');
-  const values = [];
-  let skipped = 0;
-  let header = null;
-  const appendValues = (items) => {
-    if (values.length + items.length > MAX_TELEMETRY_IMPORT_SAMPLES) {
-      throw new Error(`遥测文件超过 ${MAX_TELEMETRY_IMPORT_SAMPLES} 帧上限，请先分段导入`);
-    }
-    values.push(...items);
-  };
-  for (const line of lines) {
-    let parsed;
-    try {
-      parsed = JSON.parse(line);
-    } catch {
-      skipped += 1;
-      continue;
-    }
-    if (Array.isArray(parsed)) {
-      appendValues(parsed);
-      continue;
-    }
-    if (parsed && typeof parsed === 'object' && Array.isArray(parsed.samples)) {
-      appendValues(parsed.samples);
-      header = parsed;
-      continue;
-    }
-    if (parsed?.type === 'header') {
-      header = parsed;
-      continue;
-    }
-    appendValues([parsed]);
-  }
-  const samples = values.map(normalizeTelemetrySample).filter(Boolean);
-  if (!samples.length) throw new Error('没有找到带 t/time 时间戳的有效遥测样本');
-  const firstTimestamp = samples[0].t;
-  const lastTimestamp = samples[samples.length - 1].t;
-  const durationSeconds = Math.max(0, lastTimestamp - firstTimestamp);
-  const rewardValues = samples.map((sample) => sample.reward).filter((value) => value != null);
-  return {
-    fileName: '',
-    source: header?.source || 'import',
-    contractId: header?.contractId || '',
-    samples,
-    skipped,
-    summary: {
-      sampleCount: samples.length,
-      durationSeconds,
-      sampleRateHz:
-        durationSeconds > 0 ? Math.round(((samples.length - 1) / durationSeconds) * 10) / 10 : null,
-      firstTimestamp,
-      lastTimestamp,
-      rewardMean: rewardValues.length
-        ? Math.round(
-            (rewardValues.reduce((sum, value) => sum + value, 0) / rewardValues.length) * 1000,
-          ) / 1000
-        : null,
-      doneCount: samples.filter((sample) => sample.done).length,
-      fallCount: samples.filter((sample) => sample.fall).length,
-    },
-  };
+  return SimTelemetryCore.parseTelemetryText(text);
 }
 
 function currentModelIds() {
@@ -2692,7 +2586,7 @@ async function originbotCompareRefresh() {
     // field so this panel keeps working for custom hardware profiles.
     const ob = stationTelemetrySnapshot(status);
     const panel = $('originbot-compare-panel');
-    const hasTelemetry = Object.keys(ob).length > 0;
+    const hasTelemetry = telemetryHasData(ob);
     if (panel) panel.dataset.live = hasTelemetry ? 'on' : 'off';
     const caption = panel?.querySelector('.panel-caption');
     if (caption) {
@@ -4014,38 +3908,26 @@ function stationPushSpark(rxBps, txBps) {
   }
 }
 
-/**
- * IMU 快照有两种形状：平铺 {x,y,z,w}（旧遥测节点）与嵌套
- * {quaternion:{...}, gyro:{...}}（新版遥测节点）。统一在这里解析，
- * 两条数据路径（罗盘、顶部航向）都用它，避免升级遥测节点后罗盘停转。
- */
+// Telemetry pure logic (snapshot normalization, IMU parsing, sample import)
+// lives in telemetry-core.js; these delegations keep the original call sites
+// and the ui-ia spec contract stable.
 function stationImuQuaternion(originbot) {
-  const imu = (originbot && originbot.imu) || {};
-  const q = imu.quaternion && typeof imu.quaternion === 'object' ? imu.quaternion : imu;
-  const x = Number(q.x);
-  const y = Number(q.y);
-  const z = Number(q.z);
-  const w = Number(q.w);
-  if (![x, y, z, w].every(Number.isFinite)) return null;
-  if (Math.hypot(x, y, z, w) < 1e-6) return null;
-  return { x, y, z, w };
+  return SimTelemetryCore.stationImuQuaternion(originbot);
 }
 
 function stationTelemetrySnapshot(status) {
-  for (const candidate of [status?.telemetry, status?.originbot]) {
-    if (candidate && typeof candidate === 'object' && Object.keys(candidate).length > 0) {
-      return candidate;
-    }
-  }
-  return {};
+  return SimTelemetryCore.stationTelemetrySnapshot(status);
+}
+
+function telemetryHasData(snapshot) {
+  return SimTelemetryCore.telemetryHasData(snapshot);
 }
 
 function stationRenderRobotTelemetry(status) {
   const wrap = $('station-robot-tele');
   if (!wrap) return;
   const originbot = stationTelemetrySnapshot(status);
-  const hasData =
-    originbot && typeof originbot === 'object' && Object.keys(originbot).length > 0;
+  const hasData = telemetryHasData(originbot);
   wrap.hidden = !hasData;
   if (!hasData) return;
   const setText = (id, value) => {
@@ -4158,29 +4040,15 @@ function stationRenderStatus(status) {
     Number(network.txKbPerSec),
   );
   // OriginBot telemetry is reported honestly by the agent: present only when
-  // the bringup stack is running, never synthesized here.
-  const originbot = stationTelemetrySnapshot(status);
-  const obVoltage = Number(originbot.batteryVoltage ?? originbot.battery?.voltage);
-  const displayVoltage = Number.isFinite(obVoltage) ? obVoltage : Number(power.voltage);
-  setText(
-    'station-power',
-    Number.isFinite(displayVoltage)
-      ? `${displayVoltage.toFixed(Number.isFinite(obVoltage) ? 2 : 1)}V`
-      : '--',
-  );
+  // the bringup stack is running, never synthesized here. Text and bar read
+  // the same stationPowerView so they can never disagree.
+  const powerView = SimTelemetryCore.stationPowerView(status);
+  const originbot = powerView.telemetry;
+  setText('station-power', powerView.powerText);
   const obQuat = stationImuQuaternion(originbot);
   const imuZ = obQuat ? obQuat.z : NaN;
   const imuW = obQuat ? obQuat.w : NaN;
-  setText(
-    'station-power-sub',
-    Number.isFinite(obVoltage)
-      ? `${status.profile?.displayName || status.adapterId || '设备'} 电池`
-      : Number.isFinite(displayVoltage)
-        ? `${status.profile?.displayName || status.adapterId || '设备'} 电源电压`
-        : Number.isFinite(power.current)
-          ? `电流 ${power.current.toFixed(1)}A`
-          : '无电源监控',
-  );
+  setText('station-power-sub', powerView.powerSubText);
   setText(
     'station-uptime',
     Number.isFinite(imuZ) && Number.isFinite(imuW)
@@ -4227,8 +4095,7 @@ function stationRenderStatus(status) {
     0.75,
     0.9,
   );
-  const powerRatio =
-    Number.isFinite(displayVoltage) ? Math.max(0, Math.min(1, (displayVoltage - 3.3) / (5.4 - 3.3))) : NaN;
+  const powerRatio = powerView.powerRatio;
   stationSetBar('station-power-bar', powerRatio, 0.35, 0.2, true);
   const profileTitle = $('station-robot-tele-title');
   if (profileTitle) {

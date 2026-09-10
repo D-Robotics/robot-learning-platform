@@ -1528,11 +1528,14 @@
       artifact is also opened directly from file:// during demos/review.  A
       module script is blocked by Chromium's CORS rules for file origins,
       which leaves the page rendered but without any navigation handlers.
-      Neither bundle imports another module, so classic scripts preserve the
-      same ordering while working from both file:// and the served app.
+      None of the bundles import another module, so classic scripts preserve
+      the same ordering while working from both file:// and the served app.
+      telemetry-core.js must stay FIRST: app.js boots synchronously and its
+      telemetry delegations resolve SimTelemetryCore at call time.
     -->
+    <script src="./telemetry-core.js?v=duck-lab-27"></script>
     <script src="./app.js?v=duck-lab-27"></script>
-    <script src="./agent-chat.js?v=agent-3"></script>
+    <script src="./agent-chat.js?v=agent-4"></script>
     <script src="./onboarding.js?v=onboarding-1"></script>
   </body>
 </html>
