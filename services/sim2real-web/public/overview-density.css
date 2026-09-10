@@ -1,0 +1,82 @@
+/* Typography scale + overview density normalization.
+   The shell already carries one design-token truth per theme; this layer maps
+   the remaining hard-coded font sizes of the overview work surface onto a
+   four-step scale — 11 / 13 / 15 / 24 — and shrinks the collapsed environment
+   drawer from four status cards to one inline strip, so the first screen
+   carries at most six panel-level surfaces. */
+
+/* ---- Step 1: map stray sizes to the scale ---- */
+[data-view-section="overview"] .workspace-summary-card em,
+[data-view-section="overview"] .workspace-recent-heading .overview-records-link span,
+[data-view-section="overview"] .status-card p { font-size: 11px; }
+
+[data-view-section="overview"] .section-caption,
+[data-view-section="overview"] .next-badge,
+[data-view-section="overview"] .panel-caption,
+[data-view-section="overview"] .workspace-summary-card small,
+[data-view-section="overview"] .workspace-recent-heading > div > span,
+[data-view-section="overview"] .overview-records-link { font-size: 11px; }
+
+[data-view-section="overview"] .next-card .button,
+[data-view-section="overview"] .agent-assistant .button,
+[data-view-section="overview"] .agent-assistant-action,
+[data-view-section="overview"] .overview-environment summary strong { font-size: 13px; }
+
+[data-view-section="overview"] .overview-page-title p,
+[data-view-section="overview"] .workspace-summary-icon,
+[data-view-section="overview"] .workspace-recent-heading > div > strong { font-size: 13px; }
+
+[data-view-section="overview"] .workspace-summary-card strong,
+[data-view-section="overview"] .empty-inline,
+[data-view-section="overview"] .agent-assistant .panel-kicker { font-size: 15px; }
+
+[data-view-section="overview"] .project-workspace-heading h2,
+[data-view-section="overview"] .agent-assistant-title-wrap h2,
+[data-view-section="overview"] .agent-assistant-lead strong { font-size: 15px; }
+
+[data-view-section="overview"] .next-card h3,
+[data-view-section="overview"] .overview-environment summary .overview-environment-icon,
+[data-view-section="overview"] .overview-environment-toggle i { font-size: 15px; }
+
+[data-view-section="overview"] .agent-assistant-mark { font-size: 15px; }
+[data-view-section="overview"] .agent-assistant-mode { font-size: 11px; }
+
+/* ---- Step 2: environment drawer becomes one inline strip ---- */
+[data-view-section="overview"] .overview-environment .status-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px 24px;
+  margin: 4px 0 0;
+  padding: 14px 16px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+}
+[data-view-section="overview"] .overview-environment .status-card {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+}
+[data-view-section="overview"] .overview-environment .status-card-main {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+[data-view-section="overview"] .overview-environment .status-card-main strong { font-size: 13px; }
+[data-view-section="overview"] .overview-environment .status-icon {
+  width: 24px;
+  height: 24px;
+  font-size: 13px;
+}
+[data-view-section="overview"] .overview-environment .status-card p {
+  max-width: 340px;
+  margin: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}

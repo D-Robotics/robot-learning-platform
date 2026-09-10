@@ -690,7 +690,6 @@ function setLoading(value) {
 
 const WORKFLOW_VIEWS = [
   'overview',
-  'contract',
   'simulate',
   'train',
   'evaluate',
@@ -2660,10 +2659,10 @@ function renderNextAction() {
   let copy = selectedTask().hint + '。先录一段可回放轨迹，再决定使用本地服务器还是 RoboGo 训练。';
   let label = '进入仿真与录制 →';
   if (!model) {
-    view = 'contract';
+    view = 'train';
     title = '先登记一个模型契约';
     copy = '选择产品线并导入 manifest，平台会先检查观测、动作、运行时和制品引用。';
-    label = '打开套件与契约 →';
+    label = '去训练页登记契约 →';
   } else if (latest && ['queued', 'running'].includes(String(latest.status))) {
     view = 'train';
     title = '训练任务正在运行';
@@ -2764,7 +2763,7 @@ function renderEvaluationNext() {
   if (!selectedModel()) {
     title.textContent = '下一步：先登记模型契约';
     button.textContent = '去登记契约 →';
-    button.dataset.viewTarget = 'contract';
+    button.dataset.viewTarget = 'train';
     delete button.dataset.action;
     line.style.background = 'var(--orange)';
     return;
@@ -3089,8 +3088,8 @@ function ensureAgentPanel() {
         <button class="button button-ghost button-small" id="agent-assistant-check" type="button">检查板端</button>
       </div>
     </div>`;
-  const statusGrid = overview.querySelector('#status-grid');
-  (statusGrid || overview.querySelector('.next-card'))?.after(panel);
+  const workspace = overview.querySelector('#project-workspace');
+  (workspace || overview.querySelector('.next-card'))?.after(panel);
   if (!state.agent.collapsed) {
     try {
       state.agent.collapsed = window.localStorage?.getItem(AGENT_COLLAPSED_KEY) === '1';
@@ -3137,11 +3136,27 @@ function agentSuggestionSet() {
   const device = selectedDevice();
   const latest = latestRun();
   const evidence = currentTelemetry();
+  const computeResources = state.overview?.computeResources || [];
+  const hasOnlineComputeResource = computeResources.some((resource) => resource.status === 'online');
   if (!model) {
     return {
       headline: '先登记模型契约，再开始训练',
       summary: '把观测、动作、运行时和制品引用放进一个可追溯 manifest。',
-      actions: [{ label: '去登记模型契约', view: 'contract' }, { label: '查看训练入口', view: 'train' }],
+      actions: [{ label: '去登记模型契约', view: 'train' }, { label: '查看训练入口', view: 'train' }],
+    };
+  }
+  if (!computeResources.length && state.overview?.integrations?.simulator?.local?.available !== true) {
+    return {
+      headline: '先接入一台自己的 GPU',
+      summary: '把 GPU Worker 地址和 Token 填入训练页，连接测试通过后，Agent 就能代你提交 smoke 训练并跟踪结果。',
+      actions: [{ label: '接入 GPU 资源', view: 'train' }, { label: '查看 GPU 接入说明', view: 'train' }],
+    };
+  }
+  if (computeResources.length && !hasOnlineComputeResource) {
+    return {
+      headline: '先测试 GPU Worker 连接',
+      summary: '当前 GPU 资源还没有在线状态；测试通过后再发起训练，避免任务进入不可达队列。',
+      actions: [{ label: '管理 GPU 资源', view: 'train' }, { label: '回到总览', view: 'overview' }],
     };
   }
   if (latest && isActiveRunStatus(latest.status)) {
@@ -3155,7 +3170,7 @@ function agentSuggestionSet() {
     return {
       headline: '上一次训练需要处理',
       summary: latest.summary || '查看失败详情，修复契约或运行后端后再重试。',
-      actions: [{ label: '查看失败详情', view: 'train' }, { label: '检查模型契约', view: 'contract' }],
+      actions: [{ label: '查看失败详情', view: 'train' }, { label: '检查模型契约', view: 'train' }],
     };
   }
   if (!evidence && latest && ['completed', 'ready'].includes(String(latest.status))) {
@@ -4716,6 +4731,13 @@ function wireEvents() {
   document.querySelectorAll('[data-view-target]').forEach((control) => {
     control.addEventListener('click', () => setView(control.dataset.viewTarget));
   });
+  wireTopMenu();
+  document.addEventListener('click', (event) => {
+    const opener = event.target instanceof Element ? event.target.closest('[data-agent-open]') : null;
+    if (opener && typeof window.setAgentDrawerOpen === 'function') {
+      window.setAgentDrawerOpen(true);
+    }
+  });
   window.addEventListener('hashchange', () =>
     setView(window.location.hash.slice(1), { updateHash: false }),
   );
@@ -4923,6 +4945,31 @@ const COMMANDS = [
   { id: 'station', label: '打开设备工作台', hint: '查看 X5 连接与只读诊断', view: 'station' },
   { id: 'refresh', label: '刷新工作区', hint: '重新加载项目状态与设备信息', action: () => loadOverview() },
 ];
+
+function wireTopMenu() {
+  const button = $('top-menu-button');
+  const list = $('top-menu-list');
+  if (!button || !list) return;
+  const setOpen = (open) => {
+    list.hidden = !open;
+    button.setAttribute('aria-expanded', open ? 'true' : 'false');
+  };
+  button.addEventListener('click', () => {
+    setOpen(list.hidden);
+  });
+  list.addEventListener('click', (event) => {
+    // A menu action was taken; collapse so the topbar stays quiet.
+    if (event.target instanceof Element && event.target.closest('.top-menu-item')) setOpen(false);
+  });
+  document.addEventListener('click', (event) => {
+    if (list.hidden) return;
+    if (event.target instanceof Element && event.target.closest('[data-top-menu]')) return;
+    setOpen(false);
+  });
+  document.addEventListener('keydown', (event) => {
+    if (event.key === 'Escape' && !list.hidden) setOpen(false);
+  });
+}
 
 function wireCommandPalette() {
   const dialog = $('command-palette');

@@ -20,7 +20,7 @@ npm run dev:sim2real
 # 打开 http://127.0.0.1:18104/?presentation=1
 ```
 
-在上下文条选择 **OriginBot**，展示产品 Profile、硬件适配器、任务模板和设备上下文。
+在侧栏项目卡的产品线下拉中选择 **OriginBot**，展示产品 Profile、硬件适配器、任务模板和设备上下文。
 
 ## 2. 展示多设备适配能力
 

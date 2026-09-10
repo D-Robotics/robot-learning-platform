@@ -317,8 +317,10 @@ export function createSim2RealWebApp(): Express {
   // aliases cannot drift in validation or side effects.
   app.use(createSim2RealRouter({ runOnDevice, auth: studioSsoAuth }));
   // Product Agent surface: the planner/executor owns the conversation task
-  // lifecycle and calls the same guarded Sim2Real APIs as the UI.
-  app.use(createSim2RealAgentRouter());
+  // lifecycle and calls the same guarded Sim2Real APIs as the UI. It shares
+  // the same auth port so shared deployments keep conversation evidence
+  // scoped to the verified account (fail-closed like the business routes).
+  app.use(createSim2RealAgentRouter({ auth: studioSsoAuth }));
   app.use(
     createSim2RealRouter(
       { runOnDevice, auth: studioSsoAuth },

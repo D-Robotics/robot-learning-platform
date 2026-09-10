@@ -7,6 +7,8 @@ const here = path.dirname(fileURLToPath(import.meta.url));
 const html = fs.readFileSync(path.join(here, 'public', 'index.html'), 'utf8');
 const app = fs.readFileSync(path.join(here, 'public', 'app.js'), 'utf8');
 const onboarding = fs.readFileSync(path.join(here, 'public', 'onboarding.js'), 'utf8');
+const agentChat = fs.readFileSync(path.join(here, 'public', 'agent-chat.js'), 'utf8');
+const cssIa = fs.readFileSync(path.join(here, 'public', 'refactor-ia.css'), 'utf8');
 
 // ---- telemetry core wiring ----
 // Pure telemetry logic lives in public/telemetry-core.js so vitest can
@@ -28,61 +30,142 @@ assert.match(app, /SimTelemetryCore\.stationPowerView\(status\)/, 'app.js must r
 assert.match(app, /SimTelemetryCore\.simulatorStatusLabels\(profile, browserAvailable\)/, 'app.js must delegate simulator labels');
 assert.match(app, /SimTelemetryCore\.stationImuQuaternion\(originbot\)/, 'app.js must delegate IMU quaternion parsing');
 
+// ---- IA: one navigation surface, grouped like RDK Studio ----
+// Core (overview + agent) / 流程 (01–04 real workflow) / 数据与工具 (records,
+// station). Contract is no longer a first-class view; it is a fold on train.
 const viewNames = [...app.matchAll(/WORKFLOW_VIEWS\s*=\s*\[([^\]]+)\]/g)][0][1]
   .match(/['"][^'"]+['"]/g)
   .map((value) => value.slice(1, -1));
 const sections = [...html.matchAll(/data-view-section="([^"]+)"/g)].map((match) => match[1]);
 const targets = [...html.matchAll(/data-view-target="([^"]+)"/g)].map((match) => match[1]);
-const workflowTargets = [
-  ...html.matchAll(/class="workflow-node"[^>]*data-view-target="([^"]+)"/g),
-].map((match) => match[1]);
-const navItems = (
-  html.match(/class="nav-item(?: is-active| nav-item-quiet)?"/g) || []
-).length;
-const duplicateNavs = html.match(/module-nav|module-item/g);
 
+assert.deepEqual(
+  viewNames,
+  ['overview', 'simulate', 'train', 'evaluate', 'deploy', 'records', 'station'],
+  'workflow views: contract folded into train; steps stay a real sequence',
+);
 assert.deepEqual(sections, viewNames, 'each workflow view must have a rendered section');
 assert.deepEqual(
   [...new Set(targets)].sort(),
   [...viewNames].sort(),
   'navigation targets must resolve to a workflow view',
 );
+
+const navItems = [...html.matchAll(/class="nav-item(?:\s[^"]*)?"/g)].length;
+assert.equal(navItems, 8, 'sidebar nav: overview + agent + steps 01-04 + records + station');
+const navLabels = [...html.matchAll(/class="nav-item(?:\s[^"]*)?"[\s\S]*?<strong>([^<]+)<\/strong>/g)]
+  .map((m) => m[1]);
 assert.deepEqual(
-  workflowTargets,
-  [],
-  'the horizontal workflow strip must stay removed: one navigation surface only',
+  navLabels,
+  ['工作台总览', 'Agent 对话', '仿真与录制', '训练与模型', '评测与效果', '部署与上线', '记录与版本', '设备上位机'],
+  'sidebar nav labels must match the three-group IA',
 );
-assert.equal(
-  navItems,
-  8,
-  'sidebar must expose a single workflow navigation: overview, steps 01-06, contract',
+const navGroups = [...html.matchAll(/class="nav-label">([^<]+)<\/div>/g)].map((m) => m[1]);
+assert.deepEqual(navGroups, ['核心', '流程', '数据与工具'], 'sidebar must group nav like RDK Studio: core / flow / data & tools');
+
+const html2 = html; // keep later assertions reading the same document
+assert.match(html, /overview-density\.css/, 'overview typography/density layer must be loaded');
+
+// Typography scale is locked at four steps; any new overview text size must
+// map onto 11/13/15/24 instead of reintroducing a fifth step.
+const densityCss = fs.readFileSync(path.join(here, 'public', 'overview-density.css'), 'utf8');
+assert.doesNotMatch(
+  densityCss,
+  /font-size:\s*(?:9|10|12|14|16|17|18)px/,
+  'overview density layer must only speak the 11/13/15/24 scale',
 );
-assert.equal(
-  duplicateNavs,
-  null,
-  'the duplicate “平台模块” secondary navigation must not regress',
+assert.match(
+  densityCss,
+  /\.overview-environment \.status-grid \{\s*display: flex/,
+  'environment status cards collapse into one inline strip',
 );
-assert.doesNotMatch(html, /section-kicker/, 'no legacy section kicker labels: keep the workflow surface compact');
-assert.doesNotMatch(html, /让一个动作/, 'the marketing hero must stay removed');
-assert.match(html, /id="task-select"/, 'workspace must expose an action-task context');
-assert.match(html, /id="presentation-toggle"/, 'workspace must expose a reversible presentation view');
-assert.match(html, /id="agent-floating-toggle"/, 'Agent must be available from a compact floating launcher');
+assert.match(densityCss, /\.status-card p \{[^}]*white-space: nowrap/, 'inline status detail must ellipsize instead of wrapping');
+
+// ---- IA: topbar collapsed to guide + one menu ----
+assert.match(html, /id="top-menu-button"/, 'topbar must collapse settings into one menu');
+assert.match(html, /id="top-menu-list"/, 'topbar menu must have a list surface');
+assert.match(app, /function wireTopMenu\(\)/, 'topbar menu must be wired');
+assert.doesNotMatch(
+  html,
+  /presentation-toggle[\s\S]{0,80}refresh-button[\s\S]{0,80}notify-toggle[\s\S]{0,500}RDK Studio/,
+  'presentation/notify/refresh/Studio must not sit as four always-on topbar buttons',
+);
+assert.match(html, /id="onboarding-help-button"/, 'onboarding help stays a top-level affordance');
+assert.match(app, /function setPresentationMode\(enabled/, 'presentation mode logic must survive the menu move');
+
+// ---- IA: context strip is read-only, selectors live on their pages ----
+const stripHtml = html.slice(
+  html.indexOf('class="context-strip"'),
+  html.indexOf('</section>', html.indexOf('class="context-strip"')),
+);
+assert.doesNotMatch(stripHtml, /<select/, 'context strip must be read-only: no global selectors');
+assert.match(stripHtml, /id="context-live-model"/, 'context strip keeps the live model status chip');
+assert.match(stripHtml, /id="context-live-device"/, 'context strip keeps the live device status chip');
+assert.match(stripHtml, /id="status-storage"/, 'context strip keeps the ledger health chip');
+
+assert.match(html, /sidebar-project[\s\S]{0,400}id="product-select"/, 'product selector lives in the sidebar project card');
+assert.match(html, /id="task-select"/, 'task selector must exist');
+assert.match(html, /guide-panel[\s\S]{0,2000}id="task-select"/, 'task selector lives on the simulate page');
+assert.match(html, /model-panel[\s\S]{0,2000}id="model-select"/, 'model selector lives on the train page');
+assert.match(html, /board-panel[\s\S]{0,2000}id="device-select"/, 'device selector lives on the deploy page');
+
+// ---- IA: contract registration folded into train ----
+assert.match(html, /id="contract-fold"/, 'train page must expose the contract fold');
+assert.match(html, /id="manifest-editor"/, 'manifest editor stays reachable inside the fold');
+assert.match(html, /id="contract-run-button"/, 'train page keeps the contract validation action');
+assert.match(
+  app,
+  /querySelector\('\.next-card'\)\)\?\.after\(panel\)/,
+  'agent suggestion panel anchors after the project workspace',
+);
+
+// ---- IA: agent entry points converge on one drawer ----
+assert.match(html, /data-agent-open/, 'sidebar Agent entry must use the shared drawer opener');
+assert.match(app, /window\.setAgentDrawerOpen === 'function'/, 'app.js must delegate agent opening to agent-chat.js');
+assert.match(agentChat, /window\.setAgentDrawerOpen = /, 'agent-chat.js must publish setAgentDrawerOpen');
+assert.match(agentChat, /agent-prompt-chip/, 'agent composer must expose example prompts');
+assert.match(agentChat, /form\.requestSubmit\(\)/, 'prompt chips must submit the task in one click, not just fill the input');
+assert.match(agentChat, /agent-task-card/, 'agent chat must render a conversation-native task card');
+assert.match(agentChat, /setAttribute\('role', 'progressbar'\)/, 'task card must expose an accessible progress bar');
+assert.match(agentChat, /updateTaskCard/, 'task card must update in place while polling the run');
+assert.match(agentChat, /agent-event-more/, 'event log must collapse history behind an expand control');
+assert.match(agentChat, /正在执行：/, 'runtime status must surface the live step label');
+assert.match(cssIa, /\.agent-task-card/, 'task card styles must exist in refactor-ia.css');
+assert.match(cssIa, /\.agent-task-progress/, 'task card progress bar styles must exist');
+assert.match(html, /id="agent-floating-toggle"/, 'Agent stays available from a compact floating launcher');
 assert.match(html, /id="agent-chat-close"/, 'Agent drawer must expose an explicit close action');
 assert.match(html, /id="agent-chat-backdrop"/, 'Agent drawer must expose a dismissible backdrop');
+
+// ---- onboarding ----
 assert.match(html, /onboarding\.js/, 'workspace must load the guided onboarding layer');
 assert.match(onboarding, /const steps = \[/, 'onboarding must define guided steps');
 assert.match(onboarding, /最佳实践/, 'onboarding must include practical guidance');
 assert.match(onboarding, /localStorage/, 'onboarding completion must persist locally');
+assert.match(onboarding, /在左侧项目卡里切换产品线/, 'onboarding step 01 must point at the sidebar product card');
+assert.match(onboarding, /view: 'simulate', kicker: '02/, 'onboarding step 02 must open the simulate page for the task selector');
+assert.match(onboarding, /view: 'train', kicker: '03/, 'onboarding step 03 must open the train page for the model selector');
+assert.match(onboarding, /view: 'deploy', kicker: '04/, 'onboarding step 04 must open the deploy page for the device selector');
+
+// ---- a11y baseline ----
 assert.match(html, /class="skip-link"/, 'workspace must expose a keyboard skip link');
-assert.doesNotMatch(
-  html,
-  /data-pipeline-step/,
-  'the overview vertical pipeline duplicate must stay removed',
-);
+assert.match(app, /main-content.*aria-busy/, 'loading state must be announced to assistive technology');
+assert.match(app, /event\.key === 'Escape'/, 'menus and modes must have a keyboard exit');
+
+// ---- preserved behavior anchors (unchanged by the IA refactor) ----
+assert.match(html, /id="task-select"/, 'workspace must expose an action-task context');
+assert.match(html, /id="presentation-toggle"/, 'workspace must expose a reversible presentation view');
+assert.doesNotMatch(html, /section-kicker/, 'no legacy section kicker labels: keep the workflow surface compact');
+assert.doesNotMatch(html, /让一个动作/, 'the marketing hero must stay removed');
+assert.doesNotMatch(html, /data-pipeline-step/, 'the overview vertical pipeline duplicate must stay removed');
 assert.doesNotMatch(
   html,
   /workspace-brief|safety-banner|brief-title/,
   'the hero brief and standing safety banner must stay removed',
+);
+assert.doesNotMatch(
+  html,
+  /workspace-command-bar|workspace-quick-panel|agent-entry-card/,
+  'the overview duplicate command bar (context/quick-actions/agent card) must stay removed',
 );
 assert.match(html, /id="run-detail-dialog"/, 'runs must have a detail surface');
 assert.match(html, /id="sim-action-list"/, 'simulation must show the manifest action library');
@@ -92,17 +175,8 @@ assert.equal(
   'records must expose all/run/deployment/artifact/telemetry filters',
 );
 assert.match(app, /function renderNextAction\(\)/);
-assert.match(app, /function setPresentationMode\(enabled/);
-assert.match(fs.readFileSync(path.join(here, 'public', 'agent-chat.js'), 'utf8'), /function setAgentDrawer\(open\)/);
-assert.match(fs.readFileSync(path.join(here, 'public', 'agent-chat.js'), 'utf8'), /AGENT_POSITION_KEY/);
-assert.match(fs.readFileSync(path.join(here, 'public', 'agent-chat.js'), 'utf8'), /关闭 Agent 对话/);
-assert.match(fs.readFileSync(path.join(here, 'public', 'agent-chat.js'), 'utf8'), /setAgentBusy\(busy/);
-assert.match(fs.readFileSync(path.join(here, 'public', 'agent-chat.js'), 'utf8'), /任务执行超过 2 分钟/);
-assert.match(fs.readFileSync(path.join(here, 'public', 'agent-chat.js'), 'utf8'), /运行状态获取失败/);
 assert.match(app, /function syncServicePill\(\)/, 'service status dot must follow loading and error state');
-assert.match(app, /event\.key === 'Escape'/, 'presentation mode must have a keyboard exit');
 assert.match(app, /function renderWorkflowProgress\(\)/);
-assert.match(app, /main-content.*aria-busy/, 'loading state must be announced to assistive technology');
 assert.match(app, /function openRecordDetails\(record\)/);
 assert.match(app, /function renderActionLibrary\(\)/);
 assert.match(app, /simulator\.controls/, 'action library must consume the manifest control map');
@@ -286,5 +360,5 @@ assert.doesNotMatch(
 );
 
 console.log(
-  `[sim2real-ui] PASS — ${viewNames.length} views, ${navItems} sidebar entries, single workflow navigation`,
+  `[sim2real-ui] PASS — ${viewNames.length} views, ${navItems} sidebar entries, grouped IA (core / flow / tools), read-only context strip`,
 );

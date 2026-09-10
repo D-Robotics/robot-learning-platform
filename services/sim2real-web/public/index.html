@@ -5,10 +5,12 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="description" content="面向 RDK X5 的 Duck 仿真、训练与部署平台" />
     <title>RDK Duck Sim2Real Lab</title>
-    <link rel="stylesheet" href="./styles.css?v=duck-lab-27" />
+    <link rel="stylesheet" href="./styles.css?v=duck-lab-28" />
     <link rel="stylesheet" href="./overview-clean.css?v=2" />
     <link rel="stylesheet" href="./visual-polish.css?v=1" />
     <link rel="stylesheet" href="./onboarding.css?v=1" />
+    <link rel="stylesheet" href="./refactor-ia.css?v=2" />
+    <link rel="stylesheet" href="./overview-density.css?v=1" />
   </head>
   <body class="theme-dark">
     <a class="skip-link" href="#main-content">跳到主要内容</a>
@@ -39,6 +41,32 @@
         </div>
         <div class="top-actions">
           <button class="button button-ghost" id="onboarding-help-button" type="button" title="重新打开新手指引">新手指引</button>
+          <div class="top-menu" data-top-menu>
+            <button
+              class="button button-ghost"
+              id="top-menu-button"
+              type="button"
+              aria-haspopup="menu"
+              aria-expanded="false"
+              title="工作区设置与工具"
+            >
+              更多 <span aria-hidden="true">⌄</span>
+            </button>
+            <div class="top-menu-list" role="menu" id="top-menu-list" hidden>
+              <button class="top-menu-item" type="button" role="menuitemcheckbox" id="presentation-toggle" aria-pressed="false">
+                演示视图
+              </button>
+              <button class="top-menu-item" type="button" role="menuitemcheckbox" id="notify-toggle" aria-pressed="false">
+                通知关
+              </button>
+              <button class="top-menu-item" type="button" role="menuitem" id="refresh-button">
+                刷新工作区
+              </button>
+              <a class="top-menu-item" role="menuitem" href="/rdkstudio/" target="_blank" rel="noreferrer">
+                RDK Studio ↗
+              </a>
+            </div>
+          </div>
           <a
             class="button button-primary"
             id="login-link"
@@ -47,27 +75,6 @@
             rel="noreferrer"
             hidden
             >登录工作区</a
-          ><button
-            class="button button-ghost"
-            id="presentation-toggle"
-            type="button"
-            aria-pressed="false"
-            title="切换适合投屏的演示视图"
-          >
-            演示视图
-          </button
-          ><button
-            class="button button-ghost"
-            id="notify-toggle"
-            type="button"
-            aria-pressed="false"
-            title="训练任务到达终态时发送系统通知"
-          >
-            通知关
-          </button
-          ><button class="button button-ghost" id="refresh-button" type="button">刷新</button
-          ><a class="button button-ghost" href="/rdkstudio/" target="_blank" rel="noreferrer"
-            >RDK Studio ↗</a
           >
         </div>
       </header>
@@ -78,7 +85,10 @@
             <span class="sidebar-project-icon">◇</span>
             <div>
               <strong id="sidebar-product-name">MicroDuck</strong
-              ><span id="sidebar-kit-name">RDK X5 Starter Kit</span>
+              ><select id="product-select" aria-label="选择产品线">
+                <option value="microduck">MicroDuck · 官方参考</option>
+                <option value="rdk-duck">RDK Duck · X5 产品</option>
+              </select>
             </div>
             <span
               class="sidebar-project-state is-waiting"
@@ -90,8 +100,8 @@
               >检查中</span
             >
           </div>
-          <div class="nav-label">工作台</div>
-          <nav class="workflow-nav" aria-label="Duck 工作流">
+          <div class="nav-label">核心</div>
+          <nav class="workflow-nav" aria-label="工作台导航">
             <button
               class="nav-item is-active"
               type="button"
@@ -99,53 +109,45 @@
               aria-current="page"
             >
               <span class="nav-index">◇</span
-              ><span><strong>总览</strong></span>
+              ><span><strong>工作台总览</strong></span>
             </button>
-            <button class="nav-item" type="button" data-view-target="simulate">
-              <span class="nav-index">01</span
-              ><span><strong>仿真</strong></span>
-            </button>
-            <button class="nav-item" type="button" data-view-target="train">
-              <span class="nav-index">02</span
-              ><span><strong>训练</strong></span>
-            </button>
-            <button class="nav-item" type="button" data-view-target="evaluate">
-              <span class="nav-index">03</span
-              ><span><strong>评测</strong></span>
-            </button>
-            <button class="nav-item" type="button" data-view-target="deploy">
-              <span class="nav-index">04</span
-              ><span><strong>部署</strong></span>
-            </button>
-            <button class="nav-item" type="button" data-view-target="records">
-              <span class="nav-index">05</span
-              ><span><strong>记录</strong></span>
-            </button>
-            <button class="nav-item" type="button" data-view-target="station">
-              <span class="nav-index">06</span
-              ><span><strong>上位机</strong></span>
-            </button>
-            <button class="nav-item nav-item-quiet" type="button" data-view-target="contract">
-              <span class="nav-index">◇</span
-              ><span><strong>套件与契约</strong></span>
+            <button class="nav-item" type="button" data-agent-open>
+              <span class="nav-index">✦</span
+              ><span><strong>Agent 对话</strong></span>
             </button>
           </nav>
           <div class="sidebar-divider sidebar-divider-compact"></div>
-          <div class="nav-label">快速入口</div>
-          <a
-            class="side-link"
-            id="microduck-entry-link"
-            href="./mujoco/microduck/"
-            target="_blank"
-            rel="noreferrer"
-            ><span>↗</span> 独立打开仿真</a
-          >
-          <a class="side-link" href="https://robogo.d-robotics.cc" target="_blank" rel="noreferrer"
-            ><span>↗</span> RoboGo 训练</a
-          >
-          <a class="side-link" id="originbot-dashboard-link" href="./originbot-dashboard.html" target="_blank" rel="noreferrer"
-            ><span>↗</span> OriginBot 实时看板</a
-          >
+          <div class="nav-label">流程</div>
+          <nav class="workflow-nav" aria-label="Sim2Real 工作流">
+            <button class="nav-item" type="button" data-view-target="simulate">
+              <span class="nav-index">01</span
+              ><span><strong>仿真与录制</strong></span>
+            </button>
+            <button class="nav-item" type="button" data-view-target="train">
+              <span class="nav-index">02</span
+              ><span><strong>训练与模型</strong></span>
+            </button>
+            <button class="nav-item" type="button" data-view-target="evaluate">
+              <span class="nav-index">03</span
+              ><span><strong>评测与效果</strong></span>
+            </button>
+            <button class="nav-item" type="button" data-view-target="deploy">
+              <span class="nav-index">04</span
+              ><span><strong>部署与上线</strong></span>
+            </button>
+          </nav>
+          <div class="sidebar-divider sidebar-divider-compact"></div>
+          <div class="nav-label">数据与工具</div>
+          <nav class="workflow-nav" aria-label="记录与设备工具">
+            <button class="nav-item" type="button" data-view-target="records">
+              <span class="nav-index">▦</span
+              ><span><strong>记录与版本</strong></span>
+            </button>
+            <button class="nav-item" type="button" data-view-target="station">
+              <span class="nav-index">⌂</span
+              ><span><strong>设备上位机</strong></span>
+            </button>
+          </nav>
           <div class="sidebar-bottom">
             <div class="safety-mini">
               <span>✓</span>
@@ -224,36 +226,28 @@
             </div>
           </section>
 
-          <section class="context-strip" aria-label="当前工作区选择">
-            <div class="context-field context-field-product">
-              <span class="field-label">产品线</span>
-              <select id="product-select" aria-label="选择产品线">
-                <option value="microduck">MicroDuck · 官方参考</option>
-                <option value="rdk-duck">RDK Duck · X5 产品</option>
-              </select>
-            </div>
-            <div class="context-field context-field-task">
-              <span class="field-label">当前动作任务</span>
-              <select id="task-select" aria-label="选择动作任务">
-                <option value="walk">行走</option>
-                <option value="turn">转向</option>
-                <option value="sit">坐下 / 站起</option>
-                <option value="recover">自恢复</option>
-                <option value="kick">踢球</option>
-                <option value="custom">自定义动作</option>
-              </select>
-            </div>
-            <div class="context-field context-field-wide">
-              <span class="field-label">当前模型</span
-              ><select id="model-select" aria-label="选择模型"></select>
-            </div>
-            <div class="context-field">
-              <span class="field-label">目标设备</span
-              ><select id="device-select" aria-label="选择板卡"></select>
+          <section class="context-strip" aria-label="当前工作区状态">
+            <div class="context-live" id="context-live" aria-label="当前状态">
+              <div class="context-live-item">
+                <span>当前模型</span>
+                <strong id="context-live-model">未选择</strong>
+              </div>
+              <div class="context-live-item">
+                <span>目标设备</span>
+                <strong id="context-live-device">未选择</strong>
+              </div>
+              <div class="context-live-item">
+                <span>任务</span>
+                <strong id="context-live-runs">空闲</strong>
+              </div>
+              <div class="context-live-item">
+                <span>算力后端</span>
+                <strong id="context-live-backend">检查中</strong>
+              </div>
             </div>
             <div class="context-health is-waiting" id="context-health">
               <span class="health-ring">●</span>
-              <div><span>工作区状态</span><strong id="status-storage">检查中</strong></div>
+              <div><span>台账</span><strong id="status-storage">检查中</strong></div>
             </div>
             <span id="model-count" class="sr-only">0 个模型</span
             ><span id="device-count" class="sr-only">0 块板卡</span>
@@ -319,93 +313,36 @@
                 <span class="overview-environment-toggle" aria-hidden="true">查看详情 <i>⌄</i></span>
               </summary>
               <div class="overview-environment-body">
-            <div class="context-live" id="context-live" aria-label="当前状态">
-              <div class="context-live-item">
-                <span>当前模型</span>
-                <strong id="context-live-model">未选择</strong>
-              </div>
-              <div class="context-live-item">
-                <span>当前板卡</span>
-                <strong id="context-live-device">未选择</strong>
-              </div>
-              <div class="context-live-item">
-                <span>进行中任务</span>
-                <strong id="context-live-runs">空闲</strong>
-              </div>
-              <div class="context-live-item">
-                <span>算力后端</span>
-                <strong id="context-live-backend">检查中</strong>
-              </div>
-            </div>
-            <div class="status-grid" id="status-grid" aria-label="集成状态">
-              <article class="status-card">
-                <div class="status-card-main">
-                  <span class="status-icon status-icon-blue">◉</span
-                  ><strong id="status-simulator">浏览器仿真</strong>
+                <div class="status-grid" id="status-grid" aria-label="集成状态">
+                  <article class="status-card">
+                    <div class="status-card-main">
+                      <span class="status-icon status-icon-blue">◉</span
+                      ><strong id="status-simulator">浏览器仿真</strong>
+                    </div>
+                    <p id="status-simulator-detail">固定参考策略</p>
+                  </article>
+                  <article class="status-card">
+                    <div class="status-card-main">
+                      <span class="status-icon status-icon-violet">⌁</span
+                      ><strong id="status-robogo">训练后端检查中</strong>
+                    </div>
+                    <p id="status-robogo-detail">本地优先</p>
+                  </article>
+                  <article class="status-card">
+                    <div class="status-card-main">
+                      <span class="status-icon status-icon-orange" id="status-board-icon">⌂</span
+                      ><strong id="status-board">尚未选择板卡</strong>
+                    </div>
+                    <p id="status-board-detail">连接后进行预检</p>
+                  </article>
+                  <article class="status-card">
+                    <div class="status-card-main">
+                      <span class="status-icon status-icon-orange">▣</span
+                      ><strong id="status-storage-card">按账号隔离</strong>
+                    </div>
+                    <p id="status-storage-detail">模型和运行可追溯</p>
+                  </article>
                 </div>
-                <p id="status-simulator-detail">固定参考策略</p>
-              </article>
-              <article class="status-card">
-                <div class="status-card-main">
-                  <span class="status-icon status-icon-violet">⌁</span
-                  ><strong id="status-robogo">训练后端检查中</strong>
-                </div>
-                <p id="status-robogo-detail">本地优先</p>
-              </article>
-              <article class="status-card">
-                <div class="status-card-main">
-                  <span class="status-icon status-icon-orange" id="status-board-icon">⌂</span
-                  ><strong id="status-board">尚未选择板卡</strong>
-                </div>
-                <p id="status-board-detail">连接后进行预检</p>
-              </article>
-              <article class="status-card">
-                <div class="status-card-main">
-                  <span class="status-icon status-icon-orange">▣</span
-                  ><strong id="status-storage-card">按账号隔离</strong>
-                </div>
-                <p id="status-storage-detail">模型和运行可追溯</p>
-              </article>
-            </div>
-            <section class="workspace-command-bar" aria-label="工作区上下文与快捷操作">
-              <article class="workspace-context-card">
-                <div class="workspace-card-heading">
-                  <span class="workspace-kicker">PROJECT CONTEXT</span>
-                  <span class="state-badge state-neutral" id="workspace-context-state">草稿工作区</span>
-                </div>
-                <div class="workspace-project-row">
-                  <span class="workspace-project-mark" aria-hidden="true">◇</span>
-                  <div>
-                    <strong id="workspace-project-name">MicroDuck · X5 Starter</strong>
-                    <span id="workspace-project-meta">RDK X5 · Sim2Real Lab</span>
-                  </div>
-                </div>
-                <div class="workspace-context-details">
-                  <div><span>工作目录</span><strong id="workspace-root">~/rdk/sim2real</strong></div>
-                  <div><span>目标板卡</span><strong id="workspace-device-summary">跟随上方选择</strong></div>
-                </div>
-              </article>
-              <article class="workspace-quick-panel" aria-labelledby="workspace-quick-title">
-                <div class="workspace-card-heading">
-                  <div><span class="workspace-kicker">QUICK ACTIONS</span><h3 id="workspace-quick-title">从这里继续</h3></div>
-                  <span class="workspace-shortcut-hint" aria-label="打开命令面板快捷键">⌘ K</span>
-                </div>
-                <div class="workspace-quick-actions">
-                  <button class="quick-action" type="button" data-view-target="simulate"><span class="quick-action-icon">▶</span><span><strong>开始仿真</strong><small>录制一段动作</small></span><span class="quick-action-arrow">→</span></button>
-                  <button class="quick-action" type="button" data-view-target="train"><span class="quick-action-icon">⌁</span><span><strong>查看模型</strong><small>选择版本与训练方式</small></span><span class="quick-action-arrow">→</span></button>
-                  <button class="quick-action" type="button" data-view-target="deploy"><span class="quick-action-icon">↑</span><span><strong>准备部署</strong><small>检查设备与契约</small></span><span class="quick-action-arrow">→</span>
-                  </button>
-                </div>
-              </article>
-              <aside class="agent-entry-card" aria-labelledby="agent-entry-title">
-                <div class="agent-entry-orb" aria-hidden="true"><i class="status-dot"></i>✦</div>
-                <div class="agent-entry-copy">
-                  <div class="workspace-card-heading"><span class="workspace-kicker">RDK AGENT</span><span class="agent-status-label"><i class="status-dot"></i>可用</span></div>
-                  <h3 id="agent-entry-title">让 Agent 帮你检查设备</h3><p>连接、遥测和部署预检都在一个工作现场完成。</p>
-                  <button class="button button-primary button-small" id="agent-entry-button" type="button" data-view-target="station">打开设备工作台 <span aria-hidden="true">↗</span></button>
-                </div>
-              </aside>
-            </section>
               </div>
             </details>
           </section>
@@ -432,89 +369,6 @@
               <input id="agent-chat-input" autocomplete="off" aria-label="描述要执行的任务" placeholder="例如：完成仿真、GPU 训练和 X5 真机预检" />
               <button class="button button-primary" type="submit">发送任务 ↗</button>
             </form>
-          </section>
-
-          <section
-            class="view-section"
-            data-view-section="contract"
-            hidden
-            aria-labelledby="contract-title"
-          >
-            <div class="section-heading section-heading-lean">
-              <h2 id="contract-title">套件与契约</h2>
-            </div>
-            <div class="records-layout">
-              <article class="panel manifest-panel">
-                <div class="panel-heading panel-heading-lean"><h2>登记你的模型</h2>
-                </div>
-                <textarea
-                  id="manifest-editor"
-                  spellcheck="false"
-                  aria-label="模型 manifest JSON"
-                ></textarea>
-                <div class="editor-actions">
-                  <button
-                    class="button button-ghost button-small"
-                    id="template-button"
-                    type="button"
-                  >
-                    载入模板</button
-                  ><label class="button button-ghost button-small file-input-button"
-                    >导入 manifest JSON<input
-                      id="manifest-file-input"
-                      type="file"
-                      accept=".json,application/json" /></label
-                  ><button
-                    class="button button-primary button-small"
-                    id="validate-button"
-                    type="button"
-                  >
-                    校验清单</button
-                  ><button
-                    class="button button-ghost button-small"
-                    id="register-button"
-                    type="button"
-                  >
-                    登记版本
-                  </button>
-                </div>
-                <div class="validation-result" id="validation-result" role="status">尚未校验</div>
-              </article>
-              <article class="panel contract-guide-panel">
-                <div class="panel-heading panel-heading-lean"><h2>契约检查清单</h2>
-                  <span class="state-badge state-neutral">FAIL-CLOSED</span>
-                </div>
-                <ul class="contract-check-list">
-                  <li>
-                    <span>01</span>
-                    <div>
-                      <strong>产品标识</strong><small>MicroDuck 与 RDK Duck 不共用机器人维度</small>
-                    </div>
-                  </li>
-                  <li>
-                    <span>02</span>
-                    <div>
-                      <strong>观测 / 动作布局</strong
-                      ><small>字段顺序、形状和控制频率必须自洽</small>
-                    </div>
-                  </li>
-                  <li>
-                    <span>03</span>
-                    <div>
-                      <strong>运行时分工</strong
-                      ><small>运控 CPU ONNX 单线程，感知制品走 X5 BPU</small>
-                    </div>
-                  </li>
-                  <li>
-                    <span>04</span>
-                    <div>
-                      <strong>制品引用</strong
-                      ><small>只接受不透明 artifact 引用和可追溯校验和</small>
-                    </div>
-                  </li>
-                </ul>
-              </article>
-            </div>
           </section>
 
           <section
@@ -590,6 +444,18 @@
                 </div>
               </article>
               <aside class="panel guide-panel">
+                <div class="sim-context-panel">
+                  <div class="field-label" for="task-select">当前动作任务</div>
+                  <select id="task-select" aria-label="选择动作任务">
+                    <option value="walk">行走</option>
+                    <option value="turn">转向</option>
+                    <option value="sit">坐下 / 站起</option>
+                    <option value="recover">自恢复</option>
+                    <option value="kick">踢球</option>
+                    <option value="custom">自定义动作</option>
+                  </select>
+                  <p class="small-note">动作任务贯穿仿真、训练和评测。</p>
+                </div>
                 <div class="sim-action-library" aria-label="当前模型动作库">
                   <div class="sim-action-library-heading">
                     <div>
@@ -601,6 +467,14 @@
                     选择一个模型后，这里会显示动作和按键。
                   </p>
                 </div>
+                <a
+                  class="side-link"
+                  id="microduck-entry-link"
+                  href="./mujoco/microduck/"
+                  target="_blank"
+                  rel="noreferrer"
+                  ><span>↗</span> 独立打开仿真</a
+                >
                 <button
                   class="button button-primary button-block"
                   type="button"
@@ -621,16 +495,98 @@
             <div class="section-heading section-heading-lean">
               <h2 id="train-title">训练与模型</h2>
             </div>
+            <details class="panel contract-fold" id="contract-fold">
+              <summary>
+                <span class="overview-environment-icon" aria-hidden="true">◈</span>
+                <span><strong>套件与契约 · 登记模型</strong><small>导入并校验 manifest，登记后模型可追溯</small></span>
+                <span class="overview-environment-toggle" aria-hidden="true">展开 <i>⌄</i></span>
+              </summary>
+              <div class="records-layout">
+                <article class="panel manifest-panel">
+                  <div class="panel-heading panel-heading-lean"><h2>登记你的模型</h2>
+                  </div>
+                  <textarea
+                    id="manifest-editor"
+                    spellcheck="false"
+                    aria-label="模型 manifest JSON"
+                  ></textarea>
+                  <div class="editor-actions">
+                    <button
+                      class="button button-ghost button-small"
+                      id="template-button"
+                      type="button"
+                    >
+                      载入模板</button
+                    ><label class="button button-ghost button-small file-input-button"
+                      >导入 manifest JSON<input
+                        id="manifest-file-input"
+                        type="file"
+                        accept=".json,application/json" /></label
+                    ><button
+                      class="button button-primary button-small"
+                      id="validate-button"
+                      type="button"
+                    >
+                      校验清单</button
+                    ><button
+                      class="button button-ghost button-small"
+                      id="register-button"
+                      type="button"
+                    >
+                      登记版本
+                    </button>
+                  </div>
+                  <div class="validation-result" id="validation-result" role="status">尚未校验</div>
+                </article>
+                <article class="panel contract-guide-panel">
+                  <div class="panel-heading panel-heading-lean"><h2>契约检查清单</h2>
+                    <span class="state-badge state-neutral">FAIL-CLOSED</span>
+                  </div>
+                  <ul class="contract-check-list">
+                    <li>
+                      <span>01</span>
+                      <div>
+                        <strong>产品标识</strong><small>MicroDuck 与 RDK Duck 不共用机器人维度</small>
+                      </div>
+                    </li>
+                    <li>
+                      <span>02</span>
+                      <div>
+                        <strong>观测 / 动作布局</strong
+                        ><small>字段顺序、形状和控制频率必须自洽</small>
+                      </div>
+                    </li>
+                    <li>
+                      <span>03</span>
+                      <div>
+                        <strong>运行时分工</strong
+                        ><small>运控 CPU ONNX 单线程，感知制品走 X5 BPU</small>
+                      </div>
+                    </li>
+                    <li>
+                      <span>04</span>
+                      <div>
+                        <strong>制品引用</strong
+                        ><small>只接受不透明 artifact 引用和可追溯校验和</small>
+                      </div>
+                    </li>
+                  </ul>
+                </article>
+              </div>
+            </details>
             <div class="train-layout">
               <article class="panel model-panel">
                 <div class="panel-heading panel-heading-lean"><h2>模型版本</h2>
-                  <button
-                    class="button button-ghost button-small"
-                    id="contract-run-button"
-                    type="button"
-                  >
-                    校验契约
-                  </button>
+                  <div class="model-panel-select">
+                    <select id="model-select" aria-label="选择模型"></select>
+                    <button
+                      class="button button-ghost button-small"
+                      id="contract-run-button"
+                      type="button"
+                    >
+                      校验契约
+                    </button>
+                  </div>
                 </div>
                 <div class="model-summary" id="model-summary">
                   <div class="empty-inline">等待模型台账加载</div>
@@ -819,7 +775,7 @@
               </article>
               <article class="panel originbot-compare-panel" id="originbot-compare-panel">
                 <div class="panel-heading panel-heading-lean"><h2>真机实时对照</h2>
-                  <span class="panel-caption">当前适配包 · 只读遥测</span>
+                  <a class="panel-caption" id="originbot-dashboard-link" href="./originbot-dashboard.html" target="_blank" rel="noreferrer">完整看板 ↗</a>
                 </div>
                 <div class="originbot-compare-body">
                   <div class="originbot-compare-metrics" id="originbot-compare-metrics">
@@ -983,6 +939,10 @@
               <article class="panel board-panel">
                 <div class="panel-heading panel-heading-lean"><h2>设备预检</h2>
                   <span class="deploy-safe">NO MOTOR</span>
+                </div>
+                <div class="deploy-device-select">
+                  <label class="field-label" for="device-select">目标板卡</label>
+                  <select id="device-select" aria-label="选择板卡"></select>
                 </div>
                 <div class="board-summary" id="board-summary">
                   <div class="empty-inline">没有可用板卡；先在设备管理中登记</div>
@@ -1533,9 +1493,9 @@
       telemetry-core.js must stay FIRST: app.js boots synchronously and its
       telemetry delegations resolve SimTelemetryCore at call time.
     -->
-    <script src="./telemetry-core.js?v=duck-lab-27"></script>
-    <script src="./app.js?v=duck-lab-27"></script>
-    <script src="./agent-chat.js?v=agent-4"></script>
-    <script src="./onboarding.js?v=onboarding-1"></script>
+    <script src="./telemetry-core.js?v=duck-lab-28"></script>
+    <script src="./app.js?v=duck-lab-28"></script>
+    <script src="./agent-chat.js?v=agent-6"></script>
+    <script src="./onboarding.js?v=onboarding-2"></script>
   </body>
 </html>

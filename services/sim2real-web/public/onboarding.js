@@ -1,10 +1,10 @@
 (() => {
   const STORAGE_KEY = 'rdk-duck-lab-onboarding-v1';
   const steps = [
-    { target: '#product-select', view: 'overview', kicker: '01 / 09 · 工作区', title: '先选产品线', body: 'MicroDuck 是开箱参考；RDK Duck 使用你们自己的契约、仿真和策略资产。切换产品线后，模型、运行记录和部署状态都会按产品隔离。', best: '最佳实践：先选产品线，再登记模型，避免把不同设备的证据混在一起。', time: '约 20 秒' },
-    { target: '#task-select', view: 'overview', kicker: '02 / 09 · 工作区', title: '确定动作任务', body: '从“行走”开始最容易验证闭环，也可以切换转向、坐下 / 站起、自恢复或踢球。动作任务会贯穿仿真、训练和评测。', best: '建议：一次只验证一个动作任务，先跑通再增加复杂动作。', time: '约 20 秒' },
-    { target: '#model-select', view: 'overview', kicker: '03 / 09 · 套件与契约', title: '确认模型版本', body: '模型契约定义观测、动作、关节和目标平台。没有模型时，打开“套件与契约”，载入模板、校验并登记；当前产品只会显示自己的模型。', best: '最佳实践：把版本和 manifest 一起保存，后续评测与部署才能追溯。', time: '约 1 分钟' },
-    { target: '#device-select', view: 'overview', kicker: '04 / 09 · 目标设备', title: '选择目标设备', body: '选择要验证的板卡。没有连接真机也可以继续仿真、训练和评测；部署会停在只读预检，不会把离线设备误报为可上线。', best: '无设备演示：选择登记的目标板卡即可查看流程，所有真机动作仍受安全门控。', time: '约 20 秒' },
+    { target: '#product-select', view: 'overview', kicker: '01 / 09 · 工作台', title: '先选产品线', body: '在左侧项目卡里切换产品线。MicroDuck 是开箱参考；RDK Duck 使用你们自己的契约、仿真和策略资产。切换后，模型、运行记录和部署状态都会按产品隔离。', best: '最佳实践：先选产品线，再登记模型，避免把不同设备的证据混在一起。', time: '约 20 秒' },
+    { target: '#task-select', view: 'simulate', kicker: '02 / 09 · 仿真与录制', title: '确定动作任务', body: '仿真页右侧选择动作任务。从“行走”开始最容易验证闭环，也可以切换转向、坐下 / 站起、自恢复或踢球。动作任务会贯穿仿真、训练和评测。', best: '建议：一次只验证一个动作任务，先跑通再增加复杂动作。', time: '约 20 秒' },
+    { target: '#model-select', view: 'train', kicker: '03 / 09 · 训练与模型', title: '确认模型版本', body: '训练页顶部选择模型。模型契约定义观测、动作、关节和目标平台。没有模型时，展开“套件与契约 · 登记模型”，载入模板、校验并登记；当前产品只会显示自己的模型。', best: '最佳实践：把版本和 manifest 一起保存，后续评测与部署才能追溯。', time: '约 1 分钟' },
+    { target: '#device-select', view: 'deploy', kicker: '04 / 09 · 部署与上线', title: '选择目标设备', body: '部署页顶部选择要验证的板卡。没有连接真机也可以继续仿真、训练和评测；部署会停在只读预检，不会把离线设备误报为可上线。', best: '无设备演示：选择登记的目标板卡即可查看流程，所有真机动作仍受安全门控。', time: '约 20 秒' },
     { target: '[data-view-target="simulate"]', view: 'simulate', kicker: '05 / 09 · 仿真与录制', title: '先做一段仿真', body: '仿真页用于运行场景和录制动作证据。录制文件可以下载为 JSONL，供复盘、训练和后续仿真 / 真机对照使用。', best: '建议：先录制 30–60 秒稳定动作；使用 Space 重置，再重复同一动作观察一致性。', time: '约 1 分钟' },
     { target: '[data-view-target="train"]', view: 'train', kicker: '06 / 09 · 训练', title: '再发起训练', body: '训练页可以选择本地 Worker、自己的 GPU Worker 或 RoboGo。先用冒烟档验证资源和契约，再升级到标准训练，运行状态会持续写入记录。', best: '最佳实践：先确认模型契约和算力后端，再提交长任务；不要用演示样例判断真实效果。', time: '约 1–5 分钟' },
     { target: '[data-view-target="evaluate"]', view: 'evaluate', kicker: '07 / 09 · 评测', title: '用遥测做评测', body: '评测页汇总成功率、跌倒率、控制延迟，并支持导入仿真或板端 JSONL。合成演示证据会明确标记，不会冒充真实评测。', best: '建议：保持同一动作任务和模型版本，再比较仿真与真机，结论才有意义。', time: '约 1 分钟' },

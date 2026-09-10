@@ -6,6 +6,7 @@ export type Sim2RealAgentIntent =
   | 'board-check'
   | 'deploy-preflight'
   | 'simulate'
+  | 'evaluation'
   | 'stop';
 
 export type Sim2RealAgentStep = {
@@ -24,6 +25,14 @@ export type Sim2RealAgentPlan = {
   safety: 'read-only' | 'compute' | 'guarded';
   steps: Sim2RealAgentStep[];
   rationale: string;
+  /**
+   * Caller-pinned targets from the chat context (UI dropdown selections).
+   * Without them the executor falls back to the workspace's first model and
+   * first device, which can silently train/deploy something the user did not
+   * pick.
+   */
+  modelId?: string;
+  deviceId?: string;
   computeResourceId?: string;
   createdAt: string;
 };
@@ -40,6 +49,7 @@ export function classifySim2RealAgentIntent(message: string): Sim2RealAgentInten
   if (!text) return 'board-check';
   if (/(停止|急停|stop|halt)/i.test(text)) return 'stop';
   if (/(完整|闭环|端云|真机|能力演示|全链路)/i.test(text)) return 'full-loop';
+  if (/(评测|评估|证据|指标|成功率|对比|evaluate|evidence)/i.test(text)) return 'evaluation';
   if (/(训练|gpu|cuda|跑一轮|强化学习)/i.test(text)) return 'gpu-train';
   if (/(部署|上板|加载模型|预检|preflight)/i.test(text)) return 'deploy-preflight';
   if (/(仿真|模拟器|录制|sim)/i.test(text)) return 'simulate';
@@ -99,6 +109,12 @@ export function createSim2RealAgentPlan(message: string, context?: Record<string
       safety: 'read-only',
       steps: [step('simulate', '打开 MicroDuck 仿真入口', 'simulator.open')],
     },
+    evaluation: {
+      intent,
+      goal: '汇总最近一次训练的评测证据与关键指标',
+      safety: 'read-only',
+      steps: [step('workspace', '读取最近训练运行', 'workspace.overview'), step('evaluate', '执行评测并汇总证据', 'evaluation.summarize')],
+    },
     stop: {
       intent,
       goal: '发送停止请求并确认驱动处于安全状态',
@@ -112,6 +128,8 @@ export function createSim2RealAgentPlan(message: string, context?: Record<string
     createdAt: new Date().toISOString(),
     rationale: 'Agent 根据任务关键词匹配能力范围，先读取上下文，再按依赖顺序调用受控工具；真机动作始终停在安全门控。',
     ...selected,
+    ...(modelId ? { modelId } : {}),
+    ...(deviceId ? { deviceId } : {}),
     ...(computeResourceId ? { computeResourceId } : {}),
   };
 }

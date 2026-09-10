@@ -512,7 +512,7 @@ paths:
           description: Idempotent replay.
           content: { application/json: { schema: { $ref: "#/components/schemas/DeploymentResponse" } } }
         "400": { $ref: "#/components/responses/BadRequest" }
-        "409": { description: Board detection or compatibility gate is not satisfied. }
+        "409": { description: Board detection, compatibility, or release-evidence gate is not satisfied. }
   /api/v1/duck/deployments/{deploymentId}:
     parameters:
       - $ref: "#/components/parameters/DeploymentId"
@@ -1295,7 +1295,7 @@ components:
       required: [id, robotId, jointCount, observationSize, actionSize, controlHz, physicsTimestepSeconds, decimation, observationLayout]
       properties:
         id: { type: string }
-        robotId: { type: string, enum: [microduck, rdk-duck] }
+        robotId: { type: string, enum: [microduck, rdk-duck, originbot] }
         jointCount: { type: integer, minimum: 1, maximum: 256 }
         observationSize: { type: integer, minimum: 1, maximum: 4096 }
         actionSize: { type: integer, minimum: 1, maximum: 4096 }
@@ -1333,7 +1333,7 @@ components:
         modelId: { type: string }
         displayName: { type: string }
         version: { type: string }
-        robot: { type: object, required: [id, variant], properties: { id: { type: string, enum: [microduck, rdk-duck] }, variant: { type: string } } }
+        robot: { type: object, required: [id, variant], properties: { id: { type: string, enum: [microduck, rdk-duck, originbot] }, variant: { type: string } } }
         contract: { $ref: "#/components/schemas/Contract" }
         simulator: { type: object, required: [backends, policyArtifactId], additionalProperties: true }
         artifacts: { type: array, minItems: 1, items: { $ref: "#/components/schemas/Artifact" } }
@@ -1364,6 +1364,54 @@ components:
         training: { $ref: "#/components/schemas/Training" }
         resumeFrom: { type: object, required: [checkpointId, artifactRef], properties: { checkpointId: { type: string }, artifactRef: { type: string }, iteration: { type: integer, minimum: 0 } } }
         idempotencyKey: { type: string, maxLength: 128 }
+    TaskEvaluationEnvelope:
+      type: object
+      properties:
+        successRate: { type: number, minimum: 0, maximum: 1 }
+        collisionRate: { type: number, minimum: 0, maximum: 1 }
+        successRateCiLow: { type: number, minimum: 0, maximum: 1 }
+        successRateCiHigh: { type: number, minimum: 0, maximum: 1 }
+        collisionRateCiLow: { type: number, minimum: 0, maximum: 1 }
+        collisionRateCiHigh: { type: number, minimum: 0, maximum: 1 }
+        episodes: { type: integer, minimum: 1, maximum: 100000 }
+        meanReward: { type: number }
+    TaskEvaluation:
+      type: object
+      required: [taskId]
+      description: Sanitized Task-Pack eval-report evidence. The server recomputes release eligibility from these measurements and never trusts the runner's boolean alone.
+      properties:
+        schemaVersion: { type: integer, minimum: 1 }
+        taskId: { type: string }
+        adapterId: { type: string }
+        observationAdapterId: { type: string }
+        trained:
+          type: object
+          properties:
+            envelopes: { type: object, additionalProperties: { $ref: "#/components/schemas/TaskEvaluationEnvelope" } }
+            meanReward: { type: number }
+            episodesPerEnvelope: { type: integer, minimum: 1 }
+            confidenceLevel: { type: number, minimum: 0.5, maximum: 0.9999 }
+        baseline:
+          type: object
+          properties:
+            envelopes: { type: object, additionalProperties: { $ref: "#/components/schemas/TaskEvaluationEnvelope" } }
+            meanReward: { type: number }
+            episodesPerEnvelope: { type: integer, minimum: 1 }
+            confidenceLevel: { type: number, minimum: 0.5, maximum: 0.9999 }
+        qualityGate:
+          type: object
+          properties:
+            passed: { type: boolean, description: Informational only; the server recomputes the verdict. }
+            errors: { type: array, maxItems: 32, items: { type: string, maxLength: 240 } }
+            criteria:
+              type: object
+              properties:
+                minSuccessRate: { type: number, minimum: 0, maximum: 1 }
+                maxCollisionRate: { type: number, minimum: 0, maximum: 1 }
+                gateOn: { type: string, enum: [point, ciLowerBound] }
+        controlLatencyMs: { type: number, minimum: 0, maximum: 60000 }
+        seed: { type: integer, minimum: 0 }
+        reportSha256: { type: string, pattern: "^[a-f0-9]{64}$" }
     Run:
       type: object
       required: [id, modelId, backend, status, summary, createdAt]
@@ -1382,6 +1430,7 @@ components:
         checkpoint: { type: object, additionalProperties: true }
         artifact: { type: object, additionalProperties: true }
         metrics: { type: object, additionalProperties: true }
+        taskEvaluation: { $ref: "#/components/schemas/TaskEvaluation" }
         createdAt: { type: string, format: date-time }
         finishedAt: { type: string, format: date-time }
     Model:
@@ -1407,11 +1456,13 @@ components:
         result: { type: object, additionalProperties: true }
     DeploymentRequest:
       type: object
+      description: runId and Idempotency-Key are mandatory when mode is canary or live; preflight remains read-only and does not require training evidence.
       required: [modelId, deviceId]
       properties:
         modelId: { type: string }
         deviceId: { type: string }
         mode: { type: string, enum: [preflight, canary, live], default: preflight }
+        runId: { type: string, description: Completed non-mock local/RoboGo run whose artifact and metrics authorize canary/live planning. }
         idempotencyKey: { type: string, maxLength: 128 }
     Deployment:
       type: object
@@ -1419,6 +1470,7 @@ components:
       properties:
         id: { type: string }
         modelId: { type: string }
+        runId: { type: string }
         deviceId: { type: string }
         targetPlatform: { type: string }
         mode: { type: string }
@@ -1445,6 +1497,16 @@ components:
             checkedAt: { type: string, format: date-time }
             checks: { type: object, additionalProperties: { type: [string, number, "null"] } }
             mock: { type: boolean }
+        releaseGate:
+          type: object
+          required: [passed, checkedAt, errors, checks]
+          properties:
+            passed: { type: boolean }
+            checkedAt: { type: string, format: date-time }
+            runId: { type: string }
+            taskId: { type: string }
+            errors: { type: array, items: { type: string } }
+            checks: { type: object, additionalProperties: { type: [boolean, string, number, "null"] } }
         versionSwitchFrom: { type: string }
         createdAt: { type: string, format: date-time }
         updatedAt: { type: string, format: date-time }

@@ -222,6 +222,115 @@ function addMessage(role, text, persist = true) {
   if (persist) saveMessage(role, text);
 }
 
+// Conversation-native task card: instead of narrating progress through
+// separate chat bubbles, one card per task carries the goal, live checklist,
+// progress bar, and result evidence. The chat stays a chat; the task lives
+// in a bounded, glanceable artifact.
+const STATUS_LABELS = { pending: '待执行', running: '执行中', completed: '完成', failed: '失败', blocked: '已阻断' };
+
+function renderTaskCard(run) {
+  const card = document.createElement('div');
+  card.className = 'agent-task-card';
+  card.dataset.runStatus = String(run.status || 'pending');
+  const steps = Array.isArray(run.steps) ? run.steps : [];
+  const done = steps.filter((item) => item.status === 'completed').length;
+  const percent = steps.length ? Math.round((done / steps.length) * 100) : 0;
+
+  const head = document.createElement('div');
+  head.className = 'agent-task-head';
+  const goal = document.createElement('strong');
+  goal.textContent = String(run.goal || run.intent || 'Agent 任务');
+  const badge = document.createElement('span');
+  badge.className = `agent-task-badge agent-task-badge-${run.status || 'pending'}`;
+  badge.textContent = ({ queued: '排队中', running: `${done}/${steps.length} 步`, completed: '已完成', failed: '失败', blocked: '已阻断' }[run.status] || run.status || '排队中');
+  head.append(goal, badge);
+
+  const bar = document.createElement('div');
+  bar.className = 'agent-task-progress';
+  bar.setAttribute('role', 'progressbar');
+  bar.setAttribute('aria-valuemin', '0');
+  bar.setAttribute('aria-valuemax', '100');
+  bar.setAttribute('aria-valuenow', String(percent));
+  const fill = document.createElement('i');
+  fill.style.width = `${percent}%`;
+  bar.append(fill);
+
+  const list = document.createElement('ol');
+  list.className = 'agent-task-steps';
+  for (const item of steps) {
+    const row = document.createElement('li');
+    row.dataset.stepId = String(item.id || 'step');
+    row.dataset.stepStatus = String(item.status || 'pending');
+    const marker = document.createElement('span');
+    marker.className = 'agent-step-dot';
+    marker.setAttribute('aria-hidden', 'true');
+    const label = document.createElement('span');
+    label.textContent = String(item.label || item.tool || '执行步骤');
+    const state = document.createElement('em');
+    state.textContent = item.detail || STATUS_LABELS[item.status] || item.status || STATUS_LABELS.pending;
+    row.append(marker, label, state);
+    list.append(row);
+  }
+  card.append(head, bar, list);
+
+  if (Array.isArray(run.evidence) && run.evidence.length) {
+    const box = document.createElement('div');
+    box.className = 'agent-task-evidence';
+    for (const item of run.evidence) {
+      const href = safeAgentHref(item.href);
+      const row = document.createElement(href ? 'a' : 'span');
+      row.textContent = `${String(item.label || '证据')}：${String(item.value || '—')}${href ? ' ↗' : ''}`;
+      if (href) row.href = href;
+      box.append(row);
+    }
+    card.append(box);
+  }
+
+  messages?.appendChild(card);
+  if (messages) messages.scrollTop = messages.scrollHeight;
+  return card;
+}
+
+function updateTaskCard(card, run) {
+  if (!card) return;
+  card.dataset.runStatus = String(run.status || 'pending');
+  const steps = Array.isArray(run.steps) ? run.steps : [];
+  const done = steps.filter((item) => item.status === 'completed').length;
+  const percent = steps.length ? Math.round((done / steps.length) * 100) : 0;
+  const badge = card.querySelector('.agent-task-badge');
+  if (badge) badge.textContent = ({ queued: '排队中', running: `${done}/${steps.length} 步`, completed: '已完成', failed: '失败', blocked: '已阻断' }[run.status] || run.status || '排队中');
+  const bar = card.querySelector('.agent-task-progress');
+  if (bar) {
+    bar.setAttribute('aria-valuenow', String(percent));
+    const fill = bar.querySelector('i');
+    if (fill) fill.style.width = `${percent}%`;
+  }
+  for (const item of steps) {
+    const row = card.querySelector(`.agent-task-steps [data-step-id="${CSS.escape(String(item.id))}"]`);
+    if (!row) continue;
+    row.dataset.stepStatus = String(item.status || 'pending');
+    const state = row.querySelector('em');
+    if (state) state.textContent = item.detail || STATUS_LABELS[item.status] || item.status || STATUS_LABELS.pending;
+  }
+  const evidenceBox = card.querySelector('.agent-task-evidence');
+  if (Array.isArray(run.evidence) && run.evidence.length) {
+    if (!evidenceBox) {
+      const box = document.createElement('div');
+      box.className = 'agent-task-evidence';
+      card.append(box);
+    }
+    const box = card.querySelector('.agent-task-evidence');
+    box.replaceChildren();
+    for (const item of run.evidence) {
+      const href = safeAgentHref(item.href);
+      const row = document.createElement(href ? 'a' : 'span');
+      row.textContent = `${String(item.label || '证据')}：${String(item.value || '—')}${href ? ' ↗' : ''}`;
+      if (href) row.href = href;
+      box.append(row);
+    }
+  }
+}
+
 function restoreMessages() {
   try {
     const history = JSON.parse(localStorage.getItem(HISTORY_KEY) || '[]');
@@ -314,10 +423,12 @@ function renderRun(run) {
     eventLog.append(empty);
     return;
   }
+  const recent = run.events.slice(-4);
+  const hidden = run.events.length - recent.length;
   const eventHeading = document.createElement('strong');
   eventHeading.textContent = '工具调用时间线';
   eventLog.append(eventHeading);
-  for (const item of run.events.slice(-24)) {
+  for (const item of recent) {
     const row = document.createElement('div');
     row.className = `agent-event agent-event-${item.type}`;
     const time = document.createElement('time');
@@ -326,6 +437,22 @@ function renderRun(run) {
     text.textContent = String(item.text || '');
     row.append(time, text);
     eventLog.append(row);
+  }
+  if (hidden > 0) {
+    const more = document.createElement('details');
+    more.className = 'agent-event-more';
+    more.innerHTML = `<summary>展开全部 ${run.events.length} 条</summary>`;
+    for (const item of run.events.slice(0, -4)) {
+      const row = document.createElement('div');
+      row.className = `agent-event agent-event-${item.type}`;
+      const time = document.createElement('time');
+      time.textContent = new Date(item.at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+      const text = document.createElement('span');
+      text.textContent = String(item.text || '');
+      row.append(time, text);
+      more.append(row);
+    }
+    eventLog.append(more);
   }
   bridgeStatus();
 }
@@ -342,16 +469,18 @@ async function runTask(message) {
     $('simulator-frame')?.scrollIntoView({ behavior: 'smooth', block: 'center' });
   }
   renderPlan(plan);
-  addMessage('agent', `我会按 ${plan.steps.length} 步执行：${plan.steps.map((item) => item.label).join(' → ')}。真机动作保持安全门控。`);
+  addMessage('agent', `收到，按 ${plan.steps.length} 步执行：${plan.steps.map((item) => item.label).join(' → ')}。`);
   const execution = await api('/api/sim2real/agent/execute', { method: 'POST', body: JSON.stringify({ plan, approved: true }) });
   const run = execution?.run;
   if (!run?.id || !Array.isArray(run.steps) || run.steps.some((item) => !item || typeof item !== 'object')) throw new Error('服务没有返回有效的运行记录');
   renderRun(run);
+  const taskCard = renderTaskCard(run);
   if (plan.steps.some((item) => item.tool === 'simulator.open')) {
     void runSimulatorDemo(message).catch((error) => renderAgentError(error, true));
   }
   const terminal = new Set(['completed', 'failed', 'blocked', 'cancelled', 'timed_out']);
   let transientFailures = 0;
+  let lastStepLabel = '';
   for (let attempt = 0; attempt < 180; attempt += 1) {
     await new Promise((resolve) => window.setTimeout(resolve, attempt ? 700 : 250));
     let result;
@@ -366,8 +495,17 @@ async function runTask(message) {
     }
     if (!result?.run || !Array.isArray(result.run.steps) || result.run.steps.some((item) => !item || typeof item !== 'object')) throw new Error('运行状态响应无效');
     renderRun(result.run);
+    updateTaskCard(taskCard, result.run);
+    const runningStep = result.run.steps.find((item) => item.status === 'running');
+    if (runningStep && runningStep.label !== lastStepLabel) {
+      lastStepLabel = runningStep.label;
+      if (runtimeStatus) runtimeStatus.textContent = `正在执行：${runningStep.label}…`;
+    }
     if (terminal.has(result.run.status)) {
-      addMessage('agent', result.run.status === 'completed' ? '任务完成。你可以打开记录查看运行证据。' : `任务结束：${result.run.status}`);
+      if (result.run.status === 'completed') {
+        const links = (result.run.evidence || []).filter((item) => item.href).length;
+        addMessage('agent', links ? '任务完成，证据卡片里可直接跳转运行记录。' : '任务完成。');
+      } else addMessage('agent', `任务结束：${STATUS_LABELS[result.run.status] || result.run.status}`);
       return;
     }
   }
@@ -424,6 +562,43 @@ $('agent-entry-button')?.addEventListener('click', () => {
   setAgentDrawer(true);
   input?.focus();
 });
+
+// The sidebar entry and any [data-agent-open] control share the drawer; the
+// canonical opener is exposed so app.js can delegate without a load-order
+// contract between the two classic scripts.
+window.setAgentDrawerOpen = (open) => {
+  setAgentDrawer(open);
+  if (open) input?.focus();
+};
+
+// Example prompts lower the blank-composer barrier: a first-time user sees
+// what the agent can actually do instead of an empty input.
+const EXAMPLE_PROMPTS = [
+  '跑一轮 GPU 冒烟训练并跟踪结果',
+  '检查 X5 板卡状态和磁盘用量',
+  '帮我生成只读部署预检计划',
+  '汇总最近一次训练的评测证据',
+];
+const composer = $('agent-chat-form');
+if (composer) {
+  const chips = document.createElement('div');
+  chips.className = 'agent-prompt-chips';
+  chips.setAttribute('aria-label', '示例任务');
+  for (const prompt of EXAMPLE_PROMPTS) {
+    const chip = document.createElement('button');
+    chip.type = 'button';
+    chip.className = 'agent-prompt-chip';
+    chip.textContent = prompt;
+    chip.title = '点击直接发送';
+    chip.addEventListener('click', () => {
+      if (!input || input.disabled || !form) return;
+      input.value = prompt;
+      form.requestSubmit();
+    });
+    chips.append(chip);
+  }
+  composer.before(chips);
+}
 
 try {
   const saved = JSON.parse(window.localStorage?.getItem(AGENT_POSITION_KEY) || 'null');
