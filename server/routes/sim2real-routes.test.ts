@@ -393,6 +393,58 @@ describe('Sim2Real HTTP routes', () => {
     expect(freshReplay.body).toMatchObject({ replay: { sampleCount: 3, chunkCount: 2 } });
   });
 
+  it('serves read-only retraining advice for an evaluated run (flywheel never auto-fires)', async () => {
+    const router = await fixture();
+    const registerResponse = await invoke(router, 'post', '/api/sim2real/models', {
+      body: { manifest: userManifest() },
+    });
+    const modelId = (registerResponse.body as { model: { id: string } }).model.id;
+    const runResponse = await invoke(router, 'post', '/api/sim2real/runs', {
+      body: { modelId, backend: 'contract', taskId: 'walk' },
+    });
+    const runId = (runResponse.body as { run: { id: string } }).run.id;
+    await invoke(router, 'post', '/api/sim2real/runs/:id/telemetry', {
+      params: { id: runId },
+      body: {
+        runId,
+        modelId,
+        source: 'import',
+        sequence: 1,
+        idempotencyKey: 'adv-1',
+        jsonl: [
+          JSON.stringify({ t: 0, observation: vector(61, 0), action: vector(14, 0) }),
+        ].join('\n'),
+      },
+    });
+
+    const advice = await invoke(router, 'get', '/api/sim2real/runs/:id/retraining-advice', {
+      params: { id: runId },
+    });
+    expect(advice.statusCode).toBe(200);
+    expect(advice.body).toMatchObject({
+      ok: true,
+      advice: {
+        runId,
+        // Import-sourced replay never counts as board evidence: honest
+        // insufficient-evidence, not a silent "healthy".
+        verdict: 'insufficient-evidence',
+        boardSamples: 0,
+      },
+    });
+    const adviceBody = advice.body as { advice: { signals: { id: string }[]; note: string } };
+    expect(adviceBody.advice.signals.map((signal) => signal.id)).toEqual([
+      'action-mae',
+      'done-ratio',
+      'stale-observation-ratio',
+    ]);
+    expect(adviceBody.advice.note).toContain('绝不自动发起');
+
+    const missing = await invoke(router, 'get', '/api/sim2real/runs/:id/retraining-advice', {
+      params: { id: 'run-does-not-exist' },
+    });
+    expect(missing.statusCode).toBe(404);
+  });
+
   it('preserves the demo-fixture source so synthetic evidence stays gated after refresh', async () => {
     const router = await fixture();
     const registerResponse = await invoke(router, 'post', '/api/sim2real/models', {

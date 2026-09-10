@@ -10,6 +10,7 @@ import {
 } from '../sim2real/board-station-proxy.js';
 import type { StationAgentFetchOptions } from '../sim2real/board-station-proxy.js';
 import type { Sim2RealAuthPort } from '../sim2real/sim2real-auth.js';
+import type { Sim2RealRunRecord } from '../../shared/sim2real.js';
 import type { Device } from '../../shared/types.js';
 
 /**
@@ -32,6 +33,13 @@ export interface Sim2RealBoardStationRouteDeps {
   auth: Sim2RealAuthPort;
   requestOwner: OwnerResolver;
   visibleDevices: (owner?: string) => Promise<readonly OwnedDevice[]>;
+  /** Owner-scoped run lookup used by policy staging to bind evidence. */
+  getRun?: (runId: string, owner?: string) => Promise<Sim2RealRunRecord | null>;
+  /**
+   * Fetch a completed run's ONNX bytes from its training worker. Returns
+   * { bytes, sha256 } on success; null when the artifact is unavailable.
+   */
+  fetchRunArtifact?: (run: Sim2RealRunRecord, owner?: string) => Promise<{ bytes: Buffer; sha256: string } | null>;
 }
 
 export interface Sim2RealBoardStationRouteOptions {
@@ -682,6 +690,166 @@ export function registerSim2RealBoardStationRoutes(
           502,
           'SIM2REAL_BOARD_AGENT_UNREACHABLE',
           '板端 agent 不可达，模型未加载。',
+          { retryable: true },
+        );
+        return;
+      }
+      response.status(agent.status).json(agent.payload);
+    }),
+  );
+
+  /** GET /board-station/policy/files — list staged board policies. */
+  router.get(
+    api('/board-station/policy/files'),
+    wrapAsync(async (request, response) => {
+      const resolved = await resolveStation(request, response);
+      if (!resolved) return;
+      noStore(response);
+      const agent = await stationAgentFetchWithStatus('/v1/station/policy/files', stationOptions(request, {
+        method: 'GET',
+        timeoutMs: 5000,
+      }));
+      if (!agent) {
+        sendApiError(
+          response,
+          502,
+          'SIM2REAL_BOARD_AGENT_UNREACHABLE',
+          '板端 agent 不可达，无法读取制品列表。',
+          { retryable: true },
+        );
+        return;
+      }
+      response.status(agent.status).json(agent.payload);
+    }),
+  );
+
+  /**
+   * POST /board-station/policy/stage — push a completed run's ONNX artifact
+   * to the board agent's pinned policies dir.
+   *
+   * The full training→board software loop: the platform re-reads the run's
+   * bytes from its worker (never trusting a client-supplied path), verifies
+   * the SHA-256 recorded at completion, requires the same release evidence
+   * as a canary plan, then uploads base64 bytes through the token-gated
+   * agent endpoint. Staging never loads the model and never moves a motor —
+   * load/start stay separate, switch-gated operator actions.
+   */
+  router.post(
+    api('/board-station/policy/stage'),
+    wrapAsync(async (request, response) => {
+      const resolved = await resolveStation(request, response);
+      if (!resolved) return;
+      noStore(response);
+      if (!policyPlatformEnabled()) {
+        sendApiError(
+          response,
+          409,
+          'SIM2REAL_STATION_POLICY_DISABLED',
+          '平台未开启策略运行时（RDK_SIM2REAL_STATION_POLICY_ENABLED），不能下发制品。',
+          { retryable: false },
+        );
+        return;
+      }
+      if (!deps.getRun || !deps.fetchRunArtifact) {
+        sendApiError(
+          response,
+          501,
+          'SIM2REAL_STATION_POLICY_STAGING_UNAVAILABLE',
+          '当前服务配置未接入训练制品源，无法下发。',
+          { retryable: false },
+        );
+        return;
+      }
+      const body =
+        request.body && typeof request.body === 'object' && !Array.isArray(request.body)
+          ? (request.body as Record<string, unknown>)
+          : {};
+      const runId = String(body.runId ?? '').trim();
+      if (!runId || !/^[\w.-]{1,120}$/.test(runId)) {
+        sendApiError(
+          response,
+          400,
+          'SIM2REAL_STATION_POLICY_INVALID_RUN',
+          'runId 无效：需要一条已完成训练运行的 ID。',
+          { retryable: false },
+        );
+        return;
+      }
+      const run = await deps.getRun(runId, resolved.owner);
+      if (!run) {
+        response.status(404).json({
+          ok: false,
+          error: 'SIM2REAL_RUN_NOT_FOUND',
+          message: '运行记录不存在，或不属于当前账号。',
+        });
+        return;
+      }
+      // Evidence-not-threshold, same as the canary gate: completed, real,
+      // non-mock runner, deployable ONNX artifact with a recorded digest.
+      const errors: string[] = [];
+      if (run.status !== 'completed') errors.push('运行未完成');
+      if (run.mock === true) errors.push('mock 运行不能下发制品');
+      if (run.backend !== 'local' && run.backend !== 'robogo') errors.push('非真实训练后端');
+      if (run.artifact?.format?.toLowerCase() !== 'onnx') errors.push('运行没有 ONNX 制品');
+      if (!run.artifact?.sha256) errors.push('制品缺少 SHA-256 摘要');
+      if (errors.length) {
+        sendApiError(
+          response,
+          409,
+          'SIM2REAL_STATION_POLICY_RUN_NOT_STAGED',
+          `发布证据不足：${errors.join('；')}`,
+          { retryable: false, details: { runId: run.id, status: run.status, mock: run.mock ?? false } },
+        );
+        return;
+      }
+      const artifact = await deps.fetchRunArtifact(run, resolved.owner);
+      if (!artifact) {
+        sendApiError(
+          response,
+          409,
+          'SIM2REAL_STATION_POLICY_ARTIFACT_UNAVAILABLE',
+          '无法从训练 worker 读取制品字节（任务可能来自远端或制品已清理）。',
+          { retryable: true },
+        );
+        return;
+      }
+      if (artifact.sha256 !== run.artifact?.sha256) {
+        sendApiError(
+          response,
+          409,
+          'SIM2REAL_STATION_POLICY_ARTIFACT_DIGEST_MISMATCH',
+          '制品字节与运行记录的 SHA-256 不一致，拒绝下发。',
+          { retryable: false },
+        );
+        return;
+      }
+      const filename = String(body.filename ?? '').trim() || `${run.id}.onnx`;
+      if (!/^[\w.-]+\.onnx$/.test(filename) || filename.includes('..')) {
+        sendApiError(
+          response,
+          400,
+          'SIM2REAL_STATION_POLICY_INVALID_FILENAME',
+          '目标文件名无效：仅接受 .onnx 文件名。',
+          { retryable: false },
+        );
+        return;
+      }
+      const agent = await stationAgentFetchWithStatus('/v1/station/policy/upload', stationOptions(request, {
+        method: 'POST',
+        // base64 inflates the body by ~4/3 over the 50 MB artifact ceiling.
+        timeoutMs: 120_000,
+        body: JSON.stringify({
+          filename,
+          bytesBase64: artifact.bytes.toString('base64'),
+          sha256: artifact.sha256,
+        }),
+      }));
+      if (!agent) {
+        sendApiError(
+          response,
+          502,
+          'SIM2REAL_BOARD_AGENT_UNREACHABLE',
+          '板端 agent 不可达，制品未下发。',
           { retryable: true },
         );
         return;

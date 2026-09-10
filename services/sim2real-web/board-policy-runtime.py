@@ -44,6 +44,7 @@ import json
 import os
 import signal
 import sys
+import tempfile
 import threading
 import time
 
@@ -123,6 +124,29 @@ _ros_topics = (_ADAPTER.get("ros") or {}).get("topics") if isinstance((_ADAPTER.
 _configured_topic = os.environ.get("RDK_SIM2REAL_COMMAND_TOPIC") or _actuator.get("commandTopic") or ((_ros_topics.get("cmdVel") or {}).get("name")) or "/cmd_vel"
 COMMAND_TOPIC = _configured_topic if isinstance(_configured_topic, str) and _configured_topic.startswith("/") else "/cmd_vel"
 COMMAND_MESSAGE_TYPE = str(_actuator.get("messageType") or ((_ros_topics.get("cmdVel") or {}).get("type")) or "geometry_msgs/msg/Twist")
+
+
+# ---- declarative observation layout + inference provider -----------------
+# The adapter's runtime block is the single declaration of HOW observations
+# are assembled and WHERE inference runs; the runtime code only implements
+# the declared layouts. "auto" preserves the legacy dimension-based pick for
+# older adapter files, but any layout this runtime does not know fails
+# closed at start — a mis-declared adapter must never silently feed a policy
+# a differently-shaped observation.
+KNOWN_OBSERVATION_LAYOUTS = ("imu-gravity-v1", "originbot-imu-odom-v1")
+OBSERVATION_LAYOUT = str(
+    os.environ.get("RDK_SIM2REAL_OBSERVATION_LAYOUT")
+    or _runtime.get("observationLayout")
+    or "auto"
+).strip().lower() or "auto"
+
+def _provider_request():
+    value = os.environ.get("RDK_BOARD_POLICY_PROVIDER", "").strip().lower()
+    if not value:
+        value = str(_runtime.get("inferenceProvider") or "cpu").strip().lower()
+    return value if value in ("cpu", "bpu") else "cpu"
+
+PROVIDER_REQUESTED = _provider_request()
 def _optional_float_env(name):
     try:
         value = float(os.environ[name])
@@ -139,12 +163,23 @@ def _clamp(value, lo, hi):
 
 
 def _atomic_write_json(path, payload):
-    tmp = path + ".tmp"
-    with open(tmp, "w", encoding="utf-8") as fh:
-        json.dump(payload, fh, ensure_ascii=False)
-        fh.flush()
-        os.fsync(fh.fileno())
-    os.replace(tmp, path)
+    # Unique temp name: the telemetry loop and the file-protocol thread both
+    # write the runtime state, so a fixed ".tmp" suffix lets two writers race
+    # on the rename (one os.replace() finds its file already gone).
+    directory = os.path.dirname(path) or "."
+    fd, tmp = tempfile.mkstemp(prefix=".state-", dir=directory)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            json.dump(payload, fh, ensure_ascii=False)
+            fh.flush()
+            os.fsync(fh.fileno())
+        os.replace(tmp, path)
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
 
 
 def _read_telemetry():
@@ -193,6 +228,8 @@ class PolicyRuntime:
                 "adapterId": ADAPTER_ID,
                 "actionProjection": ACTION_PROJECTION,
                 "commandTopic": COMMAND_TOPIC,
+                "observationLayout": OBSERVATION_LAYOUT,
+                "providerRequested": PROVIDER_REQUESTED,
                 "model": self._model_meta,
                 "command": self._command_dir,
                 "published": self._published,
@@ -223,7 +260,9 @@ class PolicyRuntime:
         if EXPECTED_OBS_DIM == 8 and EXPECTED_ACTION_DIM == 2:
             return {
                 "contract": "8D obs / 2D act (native OriginBot twist)",
-                "layout": "[x, y, sin(yaw), cos(yaw), goal_dx, goal_dy, v, w]",
+                "layoutDeclared": OBSERVATION_LAYOUT != "auto",
+                "layoutSource": "adapter declaration" if OBSERVATION_LAYOUT != "auto" else "auto (dimension-based)",
+                "layout": "originbot-imu-odom-v1" if OBSERVATION_LAYOUT == "auto" else OBSERVATION_LAYOUT,
                 "source": "real (/odom + /imu)",
                 "goal": "explicit RDK_SIM2REAL_GOAL_X/Y required",
                 "slots_real": 8,
@@ -278,8 +317,25 @@ class PolicyRuntime:
             size = os.path.getsize(model_path)
             if size > 50 * 1024 * 1024:
                 return {"ok": False, "error": "model-too-large"}
+            # Provider selection is explicit and fail-closed: a requested BPU
+            # provider that this onnxruntime build does not register refuses
+            # the load instead of silently falling back to CPU — the station
+            # UI then shows exactly what is available on this board.
+            available = list(rt.get_available_providers())
+            if PROVIDER_REQUESTED == "bpu":
+                bpu = [name for name in available if "bpu" in name.lower()]
+                if not bpu:
+                    return {
+                        "ok": False,
+                        "error": "bpu-provider-unavailable",
+                        "detail": "requested BPU inference but this onnxruntime provides: "
+                                  + ", ".join(available),
+                    }
+                session_providers = bpu
+            else:
+                session_providers = ["CPUExecutionProvider"]
             sess = rt.InferenceSession(
-                model_path, providers=["CPUExecutionProvider"]
+                model_path, providers=session_providers
             )
             inp = sess.get_inputs()[0]
             out = sess.get_outputs()[0]
@@ -289,6 +345,17 @@ class PolicyRuntime:
                 return {"ok": False, "error": "policy-input-dimension-mismatch", "expected": [EXPECTED_OBS_DIM, 8], "actual": input_dim}
             if output_dim not in (EXPECTED_ACTION_DIM, 2):
                 return {"ok": False, "error": "policy-output-dimension-mismatch", "expected": [EXPECTED_ACTION_DIM, 2], "actual": output_dim}
+            # Declared layout and loaded model must agree. "auto" keeps the
+            # legacy dimension pick (the 8 in the allowlists above); an
+            # explicitly declared layout pins the contract: the model input
+            # must match both the declared layout and the adapter's declared
+            # observationSize exactly — no cross-layout papering over.
+            if OBSERVATION_LAYOUT == "originbot-imu-odom-v1" and (input_dim != 8 or EXPECTED_OBS_DIM != 8):
+                return {"ok": False, "error": "layout-model-mismatch",
+                        "detail": "adapter declares originbot-imu-odom-v1 (observationSize=%d) but model input is %dD" % (EXPECTED_OBS_DIM, input_dim)}
+            if OBSERVATION_LAYOUT == "imu-gravity-v1" and input_dim != EXPECTED_OBS_DIM:
+                return {"ok": False, "error": "layout-model-mismatch",
+                        "detail": "adapter declares imu-gravity-v1 (contract head %dD) but model input is %dD" % (EXPECTED_OBS_DIM, input_dim)}
             # Select the adapter contract from the inspected model. This lets
             # OriginBot 8D->2D policies share the same runtime as 61D->14D
             # policies without a second board service.
@@ -300,6 +367,9 @@ class PolicyRuntime:
                 "bytes": size,
                 "inputDim": input_dim,
                 "outputDim": output_dim,
+                "provider": session_providers[0],
+                "providerRequested": PROVIDER_REQUESTED,
+                "providersAvailable": available[:8],
             }
             with self._lock:
                 self._model = sess
@@ -320,6 +390,10 @@ class PolicyRuntime:
                 return {"ok": False, "error": "no-model", "state": self._state}
             if self._state not in ("ready", "running"):
                 return {"ok": False, "error": "not-ready", "state": self._state}
+            if OBSERVATION_LAYOUT not in KNOWN_OBSERVATION_LAYOUTS and OBSERVATION_LAYOUT != "auto":
+                return {"ok": False, "error": "observation-layout-unknown",
+                        "detail": "adapter/env declares layout %r which this runtime does not implement" % OBSERVATION_LAYOUT,
+                        "known": list(KNOWN_OBSERVATION_LAYOUTS)}
             if EXPECTED_OBS_DIM == 8 and EXPECTED_ACTION_DIM == 2:
                 if goal_x is not None or goal_y is not None:
                     try:
@@ -395,7 +469,13 @@ class PolicyRuntime:
         # The OriginBot trainer and runtime share this exact native wheeled
         # layout. A real goal is mandatory: the policy must never infer a
         # target from a stale demo value or from the operator direction.
-        if EXPECTED_OBS_DIM == 8 and EXPECTED_ACTION_DIM == 2:
+        # The layout is selected by the adapter's declaration (with "auto"
+        # preserving the legacy dimension-based pick).
+        native_layout = (
+            OBSERVATION_LAYOUT == "originbot-imu-odom-v1"
+            or (OBSERVATION_LAYOUT == "auto" and EXPECTED_OBS_DIM == 8 and EXPECTED_ACTION_DIM == 2)
+        )
+        if native_layout:
             if self._goal[0] is None or self._goal[1] is None:
                 return None
             def _odom_value(*keys):

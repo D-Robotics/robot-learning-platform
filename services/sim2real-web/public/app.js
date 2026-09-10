@@ -865,7 +865,7 @@ function renderComputeResources() {
   for (const resource of resources) {
     const card = document.createElement('div'); card.className = 'compute-resource-card';
     const status = resource.status === 'online' ? '在线' : resource.status === 'offline' ? '离线' : '未测试';
-    card.innerHTML = `<div class="compute-resource-card-main"><strong></strong><span class="state-badge state-${resource.status === 'online' ? 'ok' : resource.status === 'offline' ? 'error' : 'neutral'}">${status}</span><small></small></div><div class="compute-resource-card-meta"></div><div class="compute-resource-card-actions"><button type="button" class="button button-ghost button-small" data-resource-action="test">测试连接</button><button type="button" class="button button-ghost button-small" data-resource-action="edit">编辑</button><button type="button" class="button button-ghost button-small" data-resource-action="delete">删除</button></div>`;
+    card.innerHTML = `<div class="compute-resource-card-main"><strong></strong><span class="state-badge state-${resource.status === 'online' ? 'ok' : resource.status === 'offline' ? 'error' : 'neutral'}">${status}</span><small></small></div><div class="compute-resource-card-meta"></div><div class="compute-resource-card-actions"><button type="button" class="button button-ghost button-small" data-resource-action="test">测试连接</button><button type="button" class="button button-ghost button-small" data-resource-action="edit">编辑</button><button type="button" class="button button-ghost button-small" data-resource-action="delete">删除</button></div>`; // escape-audit:allow status is a local literal ternary (在线/离线/未测试)
     card.querySelector('strong').textContent = resource.name;
     card.querySelector('small').textContent = resource.tokenConfigured ? '已配置访问令牌' : '未配置访问令牌';
     card.querySelector('.compute-resource-card-meta').textContent = [resource.gpuName, resource.cuda ? 'CUDA' : '', resource.runnerUrl, resource.message].filter(Boolean).join(' · ');
@@ -1461,7 +1461,7 @@ function renderHistory() {
       : '还没有运行记录。先登记模型契约，再发起本地或 GPU 训练。';
     root.innerHTML = query
       ? '<div class="empty-state">没有匹配的记录，试试模型名、状态或后端。</div>'
-      : `<div class="empty-state">${emptyHint}</div>`;
+      : `<div class="empty-state">${emptyHint}</div>`; // escape-audit:allow emptyHint is a local literal ternary
     return;
   }
   for (const record of records) {
@@ -1681,9 +1681,236 @@ function openRecordDetails(record) {
       ? '<div class="run-progress-warning">Mock 仅验证协议与台账，不能部署到真实设备。</div>'
       : syntheticRun || demoTelemetry
         ? '<div class="run-progress-warning">合成样例仅验证导入与回放流程，不能作为真实 X5 评测或发布依据。</div>'
+      : '') +
+    (isRun && !mockRun && !syntheticRun && ['completed', 'ready'].includes(String(record.status))
+      ? '<div class="run-retrain-card" id="run-retrain-card" data-run-id="' +
+        escapeHtml(record.id) +
+        '"><div class="run-retrain-heading">' +
+        '<strong class="run-detail-block-title">重训建议（遥测飞轮 · 只读分析）</strong>' +
+        '<button class="button button-ghost button-small" type="button" id="run-retrain-load">' +
+        '查看重训建议</button></div>' +
+        '<p class="run-retrain-hint">只读分析：平台不会自动发起训练，也不会改动任何运行状态；' +
+        '阈值是建议性的重训参考，不是发布门。</p>' +
+        '<div class="run-retrain-body" id="run-retrain-body" role="status" aria-live="polite">' +
+        '尚未分析。点击「查看重训建议」读取板端遥测漂移信号。</div></div>'
       : '');
   if (typeof dialog.showModal === 'function') dialog.showModal();
   else dialog.setAttribute('open', '');
+  if ($('run-retrain-card')) wireRunRetrainingAdvice(record);
+}
+
+// The verdict table and the measure formatter are pure logic, so they live in
+// telemetry-core.js (DOM-free, unit tested there). These wrappers keep the
+// advice panel's call sites unchanged.
+function retrainingVerdict(advice) {
+  return SimTelemetryCore.retrainingVerdict(advice?.verdict);
+}
+
+// Build plain nodes: every server string reaches the DOM through textContent,
+// never through an innerHTML template, so telemetry labels/evidence/summary
+// cannot execute markup.
+function retrainingElement(tag, className, text) {
+  const node = document.createElement(tag);
+  if (className) node.className = className;
+  if (text !== undefined && text !== null) node.textContent = String(text);
+  return node;
+}
+
+// A measured signal may legitimately be incomparable (no reference
+// trajectory, no telemetry window). That is not zero and not "—": say it.
+function formatRetrainingMeasure(value) {
+  return SimTelemetryCore.formatRetrainingMeasure(value);
+}
+
+function renderRetrainingAdvice(body, advice) {
+  const verdict = retrainingVerdict(advice);
+  const boardSamples = Number(advice?.boardSamples);
+  const signals = Array.isArray(advice?.signals) ? advice.signals : [];
+
+  body.replaceChildren();
+
+  const head = retrainingElement('div', 'run-retrain-status');
+  head.append(retrainingElement('div', 'run-retrain-verdict ' + verdict.className, verdict.label));
+  head.append(
+    retrainingElement(
+      'span',
+      'run-retrain-meta',
+      '板端样本 ' +
+        (Number.isFinite(boardSamples) ? boardSamples : '未知') +
+        ' 条' +
+        (advice?.checkedAt ? ' · 分析于 ' + formatDate(advice.checkedAt) : ''),
+    ),
+  );
+  body.append(head);
+
+  if (!verdict.recognized) {
+    // Defensive: an unknown verdict is reported as "insufficient-evidence"
+    // rather than silently shown as healthy.
+    body.append(
+      retrainingElement('p', 'run-retrain-summary', '服务端返回了未知结论，已按“证据不足”呈现。'),
+    );
+  }
+
+  body.append(
+    retrainingElement('p', 'run-retrain-summary', String(advice?.summary ?? '服务端未提供摘要。')),
+  );
+
+  if (verdict.className === 'is-insufficient-evidence') {
+    body.append(
+      retrainingElement(
+        'p',
+        'run-retrain-advisory',
+        '证据不足是诚实结论，不是错误：先在板上跑一次策略会话并回传遥测，再评估是否需要重训。',
+      ),
+    );
+  }
+
+  const list = retrainingElement('div', 'run-retrain-signals');
+  if (!signals.length) {
+    list.append(retrainingElement('div', 'run-retrain-signal', '服务端未返回任何漂移信号。'));
+  }
+  signals.forEach((signal) => {
+    const breached = signal?.breached === true;
+    const row = retrainingElement(
+      'div',
+      'run-retrain-signal' + (breached ? ' is-breached' : ''),
+    );
+    row.append(
+      retrainingElement(
+        'span',
+        'run-retrain-signal-label',
+        String(signal?.label ?? signal?.id ?? '未命名信号'),
+      ),
+    );
+    const value = formatRetrainingMeasure(signal?.value);
+    const threshold = formatRetrainingMeasure(signal?.threshold);
+    row.append(
+      retrainingElement(
+        'strong',
+        'run-retrain-signal-value',
+        (value ?? '不可比/无数据') + ' / 阈值 ' + (threshold ?? '不可比/无数据'),
+      ),
+    );
+    if (breached) {
+      row.append(retrainingElement('span', 'run-retrain-signal-flag', '已越限（建议重训信号）'));
+    }
+    row.append(
+      retrainingElement(
+        'small',
+        'run-retrain-signal-evidence',
+        String(signal?.evidence ?? '无补充证据'),
+      ),
+    );
+    list.append(row);
+  });
+  body.append(list);
+
+  body.append(
+    retrainingElement(
+      'p',
+      'run-retrain-advisory',
+      '阈值是建议性的重训参考，不是发布门；发布判定仍由评测与发布证据独立决定。',
+    ),
+  );
+
+  if (advice?.suggestedTraining && typeof advice.suggestedTraining === 'object') {
+    const suggested = retrainingElement('div', 'run-retrain-suggested');
+    suggested.append(
+      retrainingElement('strong', 'run-detail-block-title', '建议的训练请求体（只读）'),
+    );
+    suggested.append(
+      retrainingElement(
+        'p',
+        'run-retrain-readonly-note',
+        '需人工显式提交：平台不会自动发起训练，这里只原样展示服务端填好的 suggestedTraining 请求体。',
+      ),
+    );
+    let serialized = '';
+    try {
+      serialized = JSON.stringify(advice.suggestedTraining, null, 2) || '';
+    } catch {
+      serialized = '';
+    }
+    suggested.append(retrainingElement('pre', 'run-detail-code', serialized || '（无法序列化）'));
+    body.append(suggested);
+  }
+
+  body.append(
+    retrainingElement('p', 'run-retrain-note', String(advice?.note ?? '服务端未附加说明。')),
+  );
+}
+
+function renderRetrainingAdviceError(body, error, record) {
+  const payload = error instanceof ApiError ? error.payload : null;
+  const notFound =
+    (error instanceof ApiError && error.status === 404) ||
+    (payload && typeof payload === 'object' && payload.error === 'SIM2REAL_RUN_NOT_FOUND');
+  const box = retrainingElement('div', 'run-retrain-error' + (notFound ? ' is-not-found' : ''));
+  box.append(retrainingElement('strong', null, notFound ? '运行记录不存在' : '暂时无法获取重训建议'));
+  box.append(
+    retrainingElement(
+      'p',
+      null,
+      notFound
+        ? String(
+            (payload && typeof payload === 'object' && payload.message) ||
+              '运行记录不存在，或不属于当前账号——可能已被清理，请刷新记录列表后重试。',
+          )
+        : (error instanceof Error ? error.message : '未知错误') +
+            '。请稍后重试；本面板不会改动任何运行状态。',
+    ),
+  );
+  const retry = retrainingElement('button', 'button button-ghost button-small', '重试');
+  retry.type = 'button';
+  retry.id = 'run-retrain-retry';
+  retry.addEventListener('click', () => {
+    void loadRunRetrainingAdvice(record);
+  });
+  box.append(retry);
+  body.replaceChildren(box);
+}
+
+/**
+ * Retraining advice is the read-only half of the telemetry flywheel. The
+ * operator asks the server what the board telemetry suggests and this panel
+ * only reports it: the request is a plain authenticated GET and no training
+ * run is ever submitted from here. suggestedTraining is displayed as a
+ * pre-filled request body the human may act on elsewhere.
+ */
+async function loadRunRetrainingAdvice(record) {
+  const card = $('run-retrain-card');
+  if (!card || card.dataset.runId !== record.id) return;
+  const body = card.querySelector('#run-retrain-body');
+  const button = card.querySelector('#run-retrain-load');
+  if (!body) return;
+  if (button) button.disabled = true;
+  body.replaceChildren(
+    retrainingElement('p', 'run-retrain-summary', '分析中：正在拉取板端遥测漂移信号…'),
+  );
+  try {
+    const payload = await request(
+      '/sim2real/runs/' + encodeURIComponent(record.id) + '/retraining-advice',
+    );
+    if (card.dataset.runId !== record.id) return;
+    const advice = payload?.advice;
+    if (!advice || typeof advice !== 'object') {
+      throw new ApiError('服务端返回缺少 advice 字段', 0, payload);
+    }
+    renderRetrainingAdvice(body, advice);
+  } catch (error) {
+    if (card.dataset.runId !== record.id) return;
+    renderRetrainingAdviceError(body, error, record);
+  } finally {
+    if (button) button.disabled = false;
+  }
+}
+
+function wireRunRetrainingAdvice(record) {
+  const card = $('run-retrain-card');
+  if (!card) return;
+  card.querySelector('#run-retrain-load')?.addEventListener('click', () => {
+    void loadRunRetrainingAdvice(record);
+  });
 }
 
 function metricPercent(value) {
@@ -2536,11 +2763,11 @@ function renderRunComparison(runs) {
         width = max === min ? 100 : ((raw - min) / (max - min)) * 100;
         width = Math.max(8, Math.min(100, width));
       }
-      return `<div class="run-compare-metric"><span>${escapeHtml(metric.label)}</span><div class="run-compare-track"><i style="width:${width}%"></i></div><b>${escapeHtml(raw === null ? '—' : metric.format(raw))}</b></div>`;
+      return `<div class="run-compare-metric"><span>${escapeHtml(metric.label)}</span><div class="run-compare-track"><i style="width:${width}%"></i></div><b>${escapeHtml(raw === null ? '—' : metric.format(raw))}</b></div>`; // escape-audit:allow width is a number clamped to [8,100]
     }).join('');
     const mock = run.mock === true || run.evaluation?.replay?.source === 'demo-fixture';
-    const title = run.summary || run.taskId || run.backend || `Run ${index + 1}`;
-    return `<div class="run-compare-row"><div class="run-compare-name"><strong>${escapeHtml(title)}</strong><small>${escapeHtml(formatDate(run.createdAt))} · ${escapeHtml(statusLabel(run.status))}${mock ? ' · 演示' : ''}</small></div><div class="run-compare-metrics">${metricsHtml}</div></div>`;
+    const title = run.summary || run.taskId || run.backend || `Run ${index + 1}`; // escape-audit:allow index + 1 is a number
+    return `<div class="run-compare-row"><div class="run-compare-name"><strong>${escapeHtml(title)}</strong><small>${escapeHtml(formatDate(run.createdAt))} · ${escapeHtml(statusLabel(run.status))}${mock ? ' · 演示' : ''}</small></div><div class="run-compare-metrics">${metricsHtml}</div></div>`; // escape-audit:allow metricsHtml is built above from escaped values only
   }).join('');
 }
 
@@ -4346,6 +4573,8 @@ async function stationProbePolicy() {
       }
     }
     if (agent) stationRenderPolicy(agent);
+    // 平台策略开关开启时顺带拉一次板端制品列表（staging 面板随 controls 显示）。
+    if (platform) void stationRenderPolicyFiles();
   } catch {
     const controls = $('station-policy-controls');
     if (controls) controls.hidden = true;
@@ -4371,12 +4600,23 @@ function stationRenderPolicy(policy) {
   if (meta) {
     if (model && typeof model === 'object') {
       const kb = Number(model.bytes);
+      const provider = typeof model.provider === 'string' ? model.provider : 'CPU';
       meta.textContent =
         `${String(model.path ?? '?').split('/').pop()} · ${Number.isFinite(kb) ? `${Math.round(kb / 1024)}KB` : '?'} · ` +
-        `${Number(model.inputDim)}→${Number(model.outputDim)}`;
+        `${Number(model.inputDim)}→${Number(model.outputDim)} · ${provider}` +
+        (Array.isArray(policy.providersAvailable) && policy.providersAvailable.length
+          ? `（板端可用：${policy.providersAvailable.join('、')}）`
+          : '');
     } else {
       meta.textContent = '未加载模型';
     }
+  }
+  const layoutNode = $('station-policy-layout');
+  if (layoutNode) {
+    const layout = typeof policy.observationLayout === 'string' ? policy.observationLayout : null;
+    layoutNode.textContent = layout
+      ? `观测布局：${layout}${layout === 'auto' ? '（按维度自动）' : '（adapter 声明）'}`
+      : '观测布局：--';
   }
   const slots = policy.obsSlots;
   const slotsNode = $('station-policy-obsslots');
@@ -4431,6 +4671,79 @@ function stationRenderPolicy(policy) {
     }
   }
   stationUpdateFloatStop(policy.state === 'running' ? { active: true } : null);
+}
+
+async function stationPolicyStage() {
+  const runId = String($('station-policy-stage-run')?.value ?? '').trim();
+  if (!/^[\w.-]{1,120}$/.test(runId)) {
+    stationLog('runId 无效：仅接受训练记录的 runId（字母数字与 .-_）', 'error');
+    return;
+  }
+  const button = $('station-policy-stage-btn');
+  if (button) button.disabled = true;
+  try {
+    const payload = await request('/sim2real/board-station/policy/stage', {
+      method: 'POST',
+      body: JSON.stringify({ runId }),
+    });
+    if (payload?.ok) {
+      const staged = payload?.staged ?? {};
+      stationLog(
+        `制品已下发：${staged.filename ?? '?'}（${Math.round(Number(staged.bytes ?? 0) / 1024)}KB，` +
+        `SHA-256 ${String(staged.sha256 ?? '').slice(0, 12)}…）——只落盘，未加载未运动`,
+        'ok',
+      );
+      // 下发成功后把文件名填进加载框：staging 与加载仍是两个显式动作，
+      // 不代操作员点“加载”。
+      const modelName = $('station-policy-model-name');
+      if (modelName && typeof staged.filename === 'string') modelName.value = staged.filename;
+      void stationRenderPolicyFiles();
+    } else {
+      stationLog(`下发被拒绝：${payload?.error ?? payload?.reason ?? '未知原因'}`, 'error');
+    }
+  } catch (error) {
+    stationLog(`下发失败：${error instanceof Error ? error.message : '未知错误'}`, 'error');
+  } finally {
+    if (button) button.disabled = false;
+  }
+}
+
+/** 板端 policies/ 目录如实列表（agents 端点 → 平台代理）；失败则隐藏，不伪造。 */
+async function stationRenderPolicyFiles() {
+  const node = $('station-policy-files');
+  if (!node) return;
+  try {
+    const payload = await request('/sim2real/board-station/policy/files');
+    const files = Array.isArray(payload?.files) ? payload.files : null;
+    if (!files) {
+      node.hidden = true;
+      return;
+    }
+    node.replaceChildren();
+    if (!files.length) {
+      const empty = document.createElement('div');
+      empty.className = 'station-policy-files-empty';
+      empty.textContent = '板端 policies/ 目录为空（先下发一个训练产物）';
+      node.appendChild(empty);
+    } else {
+      files.forEach((file) => {
+        const row = document.createElement('div');
+        row.className = 'station-policy-files-row';
+        const name = document.createElement('span');
+        name.className = 'station-policy-files-name';
+        name.textContent = String(file?.name ?? '?');
+        const bytes = document.createElement('span');
+        bytes.className = 'station-policy-files-bytes';
+        const kb = Number(file?.bytes);
+        bytes.textContent = Number.isFinite(kb) && kb > 0 ? `${Math.round(kb / 1024)}KB` : '--';
+        row.append(name, bytes);
+        node.appendChild(row);
+      });
+    }
+    node.hidden = false;
+  } catch {
+    node.hidden = true;
+  }
 }
 
 async function stationPolicyLoad() {
@@ -4937,7 +5250,11 @@ function wireStationEvents() {
   $('station-drive-stop')?.addEventListener('click', () => {
     void stationEmergencyStop();
   });
-  // 策略面板：加载/启动（含确认）/停止/清故障；停止同样无任何前置条件。
+  // 策略面板：staging（产物→板端 policies/，只落盘不加载）→ 手动加载 → 启动（含确认）
+  // /停止/清故障；停止同样无任何前置条件。staging 与加载是两个显式动作。
+  $('station-policy-stage-btn')?.addEventListener('click', () => {
+    void stationPolicyStage();
+  });
   $('station-policy-load')?.addEventListener('click', () => {
     void stationPolicyLoad();
   });

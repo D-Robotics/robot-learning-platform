@@ -214,6 +214,40 @@ run 必须已摄入**至少一块 board-agent 来源**的真机遥测并完成�
 不设 MAE/RMSE 阈值——阈值会把闸门耦合到某一版控制器的调参。浏览器演示
 遥测、导入遥测、demo-fixture 不满足此要求（fail-closed）。
 
+## 遥测飞轮（环 A：评测 → 漂移分析 → 重训建议，只读）
+
+真机遥测除了当发布证据，现在还会被分析成**重训建议**：
+
+```
+GET /api/sim2real/runs/:id/retraining-advice
+→ advice: { verdict, boardSamples, signals[3], summary, suggestedTraining?, note }
+```
+
+`server/sim2real/retraining-advisor.ts` 的三个建议性信号（区别于上面的发布闸门，
+阈值是"建议重训"不是"放行"）：
+
+| 信号 | 阈值 | 含义 |
+| --- | --- | --- |
+| `action-mae` | > 0.25 | 评测算出的动作 MAE（对参考轨迹） |
+| `done-ratio` | > 0.5 | 遥测窗口内终止（跌倒/到点/中止）样本占比 |
+| `stale-observation-ratio` | > 0.3 | 全零观测占比——运行时快照陈旧时的软件足迹 |
+
+诚实规则：板端 board-agent 回放样本 < 120 条 → `insufficient-evidence`（不是
+静默 healthy）；非 board-agent 来源的 replay 永不计入证据；每条信号自带证据
+规模说明。UI 侧 run 详情对话框新增「重训建议」卡：信号逐条显示值/阈值/是否
+越限；verdict = `retrain-recommended` 时出现「按建议发起重训」按钮——点击是
+操作员的显式动作（确认对话框 + 显式 POST `/runs`，body 来自建议里的
+`suggestedTraining`），**飞轮自身绝不自动发起重训**，与"canary/live 必须绑定
+run"的立场一致。
+
+## 制品 → 板端（环 D：三跳证据链）
+
+训练产物 `policy.onnx` 到板端的全链路见
+[docs/host-station.md](host-station.md)「训练产物下发」一节：worker 字节端点 →
+平台证据+SHA-256 校验 → agent pinned 目录 staging。staging 只落盘；加载
+（POST `/policy/load`，布局/provider 契约校验）与启动（四开关 + 确认）仍是
+两个独立的显式操作。
+
 ## 诚实边界
 
 - S100 机型的验证是**纯仿真**的（profile 标注 `mock: true`）；它证明的是"平台换

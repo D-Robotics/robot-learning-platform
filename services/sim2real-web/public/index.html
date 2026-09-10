@@ -1356,6 +1356,25 @@
                   策略停止始终可用。
                 </p>
                 <div class="station-policy-controls" id="station-policy-controls" hidden>
+                  <div class="station-policy-stage" id="station-policy-stage">
+                    <label for="station-policy-stage-run">从训练产物下发策略（推荐闭环）</label>
+                    <div class="station-policy-model-row">
+                      <input
+                        type="text"
+                        id="station-policy-stage-run"
+                        placeholder="训练 runId（如 run-2026-…）"
+                        spellcheck="false"
+                        autocomplete="off"
+                      />
+                      <button class="button button-quiet station-policy-stage-btn" type="button" id="station-policy-stage-btn">
+                        下发制品到板端
+                      </button>
+                    </div>
+                    <div class="station-policy-model-meta" id="station-policy-stage-meta">
+                      平台校验发布证据与 SHA-256 后转发板端；staging 只落盘不加载不运动
+                    </div>
+                    <div class="station-policy-files" id="station-policy-files" hidden></div>
+                  </div>
                   <div class="station-policy-model">
                     <label for="station-policy-model-name">模型（板端 policies/ 目录）</label>
                     <div class="station-policy-model-row">
@@ -1372,6 +1391,9 @@
                     </div>
                     <div class="station-policy-model-meta" id="station-policy-model-meta">
                       未加载模型
+                    </div>
+                    <div class="station-policy-model-meta" id="station-policy-layout" title="观测装配布局：adapter 声明或按维度自动">
+                      观测布局：--
                     </div>
                   </div>
                   <div class="station-policy-slider">

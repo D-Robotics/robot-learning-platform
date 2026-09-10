@@ -51,3 +51,28 @@ Authorization: Bearer <short-lived-agent-token>
 `persistDeviceBoardDetection` 更新已登记设备的板型、型号和系统版本字段；它不会把 agent 返回的
 原始对象整体写回，也不会执行上传、启动或执行器动作。reference agent 的响应带 `mock: true`，
 所以部署闸门会保持 `blocked`，只能用来验证协议和界面。
+
+## Station 扩展端点（受控 staging，只落盘）
+
+上位机/板端策略链路在只读 commands 之外增加 station 系列端点（`/v1/station/*`，
+Bearer 同一 agent token；协议全表见 [docs/host-station.md](host-station.md)）。其中唯一
+的写盘端点是策略制品 staging：
+
+```http
+POST /v1/station/policy/upload
+{ "filename": "run-xxx.onnx", "bytesBase64": "...", "sha256": "<64 hex>" }
+```
+
+agent 侧的边界：文件名白名单（裸 `<word>.onnx`，禁路径分隔）、base64 规范校验、
+≤50MB、写盘前 SHA-256 验证、原子 tmp+rename、同名冲突要求哈希一致（幂等）。
+它**只写文件**——不改运行时状态、不加载模型、不发 /cmd_vel；平台侧
+`POST /board-station/policy/stage` 在转发前还会校验 run 的发布证据
+（completed / 非 mock / onnx / sha256 台账）并交叉比对 worker 重哈希的结果。
+真机 agent（`board-agent-x5.py`）与 reference agent（`local-board-agent.mjs`）
+语义逐条对齐。
+
+adapter JSON 的 `runtime` 段新增两个声明字段：`observationLayout`
+（`originbot-imu-odom-v1` / `imu-gravity-v1` / `auto`）与 `inferenceProvider`
+（`cpu` | `bpu`）。板端策略运行时按声明装配观测、选择 provider；BPU 请求在
+没有 BPU provider 的构建上拒绝加载（fail-closed），显式布局与模型维度矛盾
+同样拒绝——语义细节见 host-station 文档「推理 provider 与观测布局」。

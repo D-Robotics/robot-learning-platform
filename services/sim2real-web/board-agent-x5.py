@@ -15,6 +15,8 @@ Wire contract (identical to services/sim2real-web/local-board-agent.mjs):
   POST /v1/station/drive                 clamped, time-boxed cmd_vel (opt-in)
   POST /v1/station/drive/stop            zero-speed emergency stop (always on)
   GET  /v1/station/policy                policy-runtime state (honest, always)
+  GET  /v1/station/policy/files          list staged policies (name/size)
+  POST /v1/station/policy/upload         stage one SHA-256-verified ONNX (gated)
   POST /v1/station/policy/load           load a policies/ ONNX (gated)
   POST /v1/station/policy/start          begin policy-driven motion (gated)
   POST /v1/station/policy/reset          clear a sticky fault (gated)
@@ -49,6 +51,8 @@ Data sources: /proc/stat, /proc/meminfo, /proc/net/dev, thermal zones,
 statvfs, `ros2 topic list` (bounded), hobot_usb_cam device probe.
 """
 
+import base64
+import hashlib
 import hmac
 import json
 import os
@@ -70,6 +74,9 @@ if not (1024 <= PORT <= 65535):
     PORT = 19100
 
 MAX_BODY_BYTES = 64 * 1024
+# Policy upload ceiling: one bounded ONNX at a time, base64-inflated. Matches
+# the runtime's 50 MB model limit with headroom for JSON encoding.
+MAX_POLICY_BODY_BYTES = 68 * 1024 * 1024
 STATUS_INTERVAL_MS = 1000
 CAMERA_INTERVAL_MS = 200
 MAX_STREAM_CLIENTS = 4
@@ -897,6 +904,10 @@ def policy_status():
         "command": snap.get("command") if runtime_running and snap else 0.0 if snap else None,
         "published": snap.get("published") if runtime_running and snap else 0 if snap else None,
         "inferMs": snap.get("inferMs") if runtime_running and snap else None,
+        "provider": (snap.get("model") or {}).get("provider") if snap else None,
+        "providerRequested": snap.get("providerRequested") if snap else None,
+        "providersAvailable": (snap.get("model") or {}).get("providersAvailable") if snap else None,
+        "observationLayout": snap.get("observationLayout") if snap else None,
         "lastError": snap.get("lastError") if snap else None,
         "lastOp": snap.get("lastOp") if snap else None,
         "obsSlots": snap.get("obsSlots") if snap else None,
@@ -923,6 +934,81 @@ def policy_stop(reason="operator-stop"):
     else:
         res = {"ok": True, "state": None, "stoppedBy": "runtime-not-running"}
     return res
+
+
+# ---- policy artifact staging (upload into the pinned policies dir) -------
+def policy_stage(policy_bytes_b64, filename, sha256_hex):
+    """Store one uploaded ONNX into the pinned policies directory.
+
+    Contract, mirroring policy_load's fail-closed stance:
+      * filename must be a bare <word>.onnx name (no separators, no ..,
+        no NUL smuggling) so a staged file can never land outside the
+        pinned dir;
+      * bytes arrive base64-encoded inside the JSON body (bounded), are
+        size-checked (<= 50 MB, same as runtime load) and SHA-256-verified
+        against the caller's declared digest BEFORE anything touches disk;
+      * the write is atomic (tmp + rename) and never overwrites an existing
+        different model silently — a same-name upload must hash identically
+        or be refused;
+      * the runtime is never told to load it: staging and loading stay two
+        explicit operator actions.
+    """
+    if not POLICY_ENABLED:
+        return {"ok": False, "error": "policy-disabled"}
+    if not isinstance(filename, str) or not re.match(r"^[\w.-]+\.onnx$", filename) or ".." in filename:
+        return {"ok": False, "error": "policy-filename-invalid",
+                "message": "仅接受 policies 目录内的 .onnx 文件名"}
+    try:
+        payload = base64.b64decode(policy_bytes_b64 or "", validate=True)
+    except (ValueError, TypeError):
+        return {"ok": False, "error": "policy-bytes-invalid",
+                "message": "制品字节必须是合法 base64"}
+    if len(payload) == 0:
+        return {"ok": False, "error": "policy-bytes-empty"}
+    if len(payload) > 50 * 1024 * 1024:
+        return {"ok": False, "error": "policy-too-large",
+                "message": "制品超过 50MB 上限"}
+    digest = hashlib.sha256(payload).hexdigest()
+    if not isinstance(sha256_hex, str) or digest != sha256_hex.strip().lower():
+        return {"ok": False, "error": "policy-digest-mismatch",
+                "message": "制品 SHA-256 与声明不一致；拒绝写入",
+                "actual": digest}
+    os.makedirs(POLICY_ALLOWED_MODEL_DIR, mode=0o700, exist_ok=True)
+    target = os.path.join(POLICY_ALLOWED_MODEL_DIR, filename)
+    if os.path.exists(target):
+        with open(target, "rb") as fh:
+            existing = hashlib.sha256(fh.read()).hexdigest()
+        if existing != digest:
+            return {"ok": False, "error": "policy-name-conflict",
+                    "message": "同名制品已存在且内容不同；请先在板上删除或换名重传",
+                    "existing": existing}
+        return {"ok": True, "staged": True, "path": filename, "bytes": len(payload),
+                "sha256": digest, "note": "byte-identical to the staged file; no rewrite"}
+    tmp = target + ".tmp"
+    with open(tmp, "wb") as fh:
+        fh.write(payload)
+        fh.flush()
+        os.fsync(fh.fileno())
+    os.replace(tmp, target)
+    return {"ok": True, "staged": True, "path": filename, "bytes": len(payload),
+            "sha256": digest, "note": "staged into the pinned policies dir; loading stays a separate action"}
+
+
+def policy_list():
+    """List loadable ONNX files in the pinned policies dir (name/size only)."""
+    try:
+        entries = sorted(
+            (name, os.path.getsize(os.path.join(POLICY_ALLOWED_MODEL_DIR, name)))
+            for name in os.listdir(POLICY_ALLOWED_MODEL_DIR)
+            if re.match(r"^[\w.-]+\.onnx$", name)
+        ) if os.path.isdir(POLICY_ALLOWED_MODEL_DIR) else []
+    except OSError:
+        entries = []
+    return {
+        "ok": True,
+        "dir": POLICY_ALLOWED_MODEL_DIR,
+        "policies": [{"name": name, "bytes": size} for name, size in entries],
+    }
 
 
 def _policy_allowed_model_path(path):
@@ -1337,6 +1423,9 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/v1/station/policy":
             self._json(200, {"ok": True, "policy": policy_status()})
             return
+        if path == "/v1/station/policy/files":
+            self._json(200, policy_list())
+            return
         if path == "/v1/config":
             self._json(200, config_status())
             return
@@ -1399,6 +1488,26 @@ class Handler(BaseHTTPRequestHandler):
             self._json(200 if res.get("ok") else 409, {"ok": res.get("ok", True),
                                                         "policy": policy_status()})
             return
+        if path == "/v1/station/policy/upload":
+            # Bounded body (a whole base64'd ONNX), token-gated, and verified
+            # against the declared SHA-256 before any byte touches the pinned
+            # policies dir. Over size ceiling → reject without reading.
+            length = int(self.headers.get("content-length") or 0)
+            if length <= 0 or length > MAX_POLICY_BODY_BYTES:
+                self._json(413, {"ok": False, "error": "policy-upload-too-large"})
+                return
+            try:
+                payload = json.loads(self.rfile.read(length).decode("utf-8"))
+            except (ValueError, UnicodeDecodeError):
+                self._json(400, {"ok": False, "error": "BOARD_AGENT_INVALID_JSON"})
+                return
+            res = policy_stage(
+                payload.get("bytesBase64"),
+                payload.get("filename"),
+                payload.get("sha256"),
+            )
+            self._json(200 if res.get("ok") else 409, {**res, "policies": policy_list().get("policies", [])})
+            return
         if path == "/v1/config":
             # Switch writes are only meaningful through this same token-gated
             # surface; the restart that applies them is refused mid-motion.
@@ -1430,6 +1539,15 @@ class Handler(BaseHTTPRequestHandler):
     def _read_json(self):
         length = int(self.headers.get("content-length") or 0)
         if length <= 0 or length > MAX_BODY_BYTES:
+            return None
+        try:
+            return json.loads(self.rfile.read(length).decode("utf-8"))
+        except (ValueError, UnicodeDecodeError):
+            return None
+
+    def _read_json_bounded(self, ceiling):
+        length = int(self.headers.get("content-length") or 0)
+        if length <= 0 or length > ceiling:
             return None
         try:
             return json.loads(self.rfile.read(length).decode("utf-8"))

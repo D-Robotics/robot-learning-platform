@@ -119,7 +119,12 @@ async function stationAgentJson(
 ): Promise<StationAgentJson | null> {
   const baseUrl = loopbackBaseUrlOverride(options.baseUrl) ?? boardAgentUrl();
   if (!/^\/[A-Za-z0-9._/-]+$/.test(pathname)) return null;
-  const timeoutMs = Math.min(Math.max(Number(options.timeoutMs) || 5000, 500), 15_000);
+  // 15s default for state reads; policy staging moves a whole base64'd ONNX
+  // through one request and legitimately needs the higher ceiling.
+  const isPolicyUpload = pathname === '/v1/station/policy/upload';
+  const timeoutMs = isPolicyUpload
+    ? Math.min(Math.max(Number(options.timeoutMs) || 120_000, 500), 180_000)
+    : Math.min(Math.max(Number(options.timeoutMs) || 5000, 500), 15_000);
   const token = String(process.env.RDK_SIM2REAL_BOARD_AGENT_TOKEN ?? '').trim();
   const direct = baseUrl ? stationAgentDirectUrl(baseUrl, pathname, options, token, timeoutMs) : null;
   if (direct) {

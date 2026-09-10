@@ -71,7 +71,7 @@ import {
   updateSim2RealDeployment,
   sim2RealStorageInfo,
 } from '../sim2real/sim2real-store.js';
-import { requestLocalTraining, requestLocalTrainingStatus } from '../sim2real/local-runner.js';
+import { requestLocalTraining, requestLocalTrainingStatus, fetchLocalRunArtifact } from '../sim2real/local-runner.js';
 import {
   isSim2RealRunnerNotFound,
   isSim2RealRunnerOutcomeUnknown,
@@ -1244,6 +1244,13 @@ export function createSim2RealRouter(
       auth,
       requestOwner: (request, response) => requestOwner(request, response, auth),
       visibleDevices: visibleDevicesForAuth,
+      getRun: (runId, owner) => getSim2RealRun(runId, owner),
+      // Artifact bytes come from the run's own training worker; a run without
+      // an external id (remote/cleaned) simply cannot stage, fail-closed.
+      fetchRunArtifact: async (run, owner) => {
+        if (run.backend !== 'local' || !run.externalRunId) return null;
+        return fetchLocalRunArtifact({ externalRunId: run.externalRunId });
+      },
     },
     { prefix },
   );

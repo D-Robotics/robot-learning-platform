@@ -37,7 +37,12 @@ function routeHandler(router: Router, method: 'get' | 'post', path: string): Han
   return handler;
 }
 
-function buildRouter() {
+function buildRouter(
+  deps: {
+    getRun?: (runId: string, owner?: string) => Promise<unknown>;
+    fetchRunArtifact?: (run: unknown, owner?: string) => Promise<{ bytes: Buffer; sha256: string } | null>;
+  } = {},
+) {
   const router = {} as Router;
   router.stack = [];
   router.get = (path: string, ...handlers: Handler[]) => {
@@ -56,6 +61,8 @@ function buildRouter() {
     auth: { isMultiUserDeployment: () => false } as never,
     requestOwner: () => 'local-dev',
     visibleDevices: async () => [device],
+    ...(deps.getRun ? { getRun: deps.getRun as never } : {}),
+    ...(deps.fetchRunArtifact ? { fetchRunArtifact: deps.fetchRunArtifact as never } : {}),
   });
   return router;
 }
@@ -287,5 +294,125 @@ describe('board-station policy runtime proxy', () => {
     });
     expect(res.statusCode).toBe(502);
     expect(res.body).toMatchObject({ error: 'SIM2REAL_BOARD_AGENT_UNREACHABLE', retryable: true });
+  });
+
+  describe('policy staging (training artifact → board policies dir)', () => {
+    const artifactBytes = Buffer.from('fake-onnx-bytes-for-staging');
+    const artifactSha = 'a'.repeat(64);
+    const completedRun = {
+      id: 'run-stage-1',
+      modelId: 'model-1',
+      backend: 'local',
+      status: 'completed',
+      mock: false,
+      externalRunId: 'local-run-1',
+      artifact: { artifactId: 'policy', artifactRef: 'artifact://starter/x/policy.onnx', format: 'onnx', sha256: artifactSha },
+    };
+
+    it('refuses staging while the platform policy switch is off', async () => {
+      const fetchMock = vi.spyOn(globalThis, 'fetch');
+      const router = buildRouter({
+        getRun: async () => completedRun,
+        fetchRunArtifact: async () => ({ bytes: artifactBytes, sha256: artifactSha }),
+      });
+      const res = await call(routeHandler(router, 'post', '/api/sim2real/board-station/policy/stage'), {
+        method: 'POST',
+        body: { runId: 'run-stage-1' },
+      });
+      expect(res.statusCode).toBe(409);
+      expect(res.body).toMatchObject({ error: 'SIM2REAL_STATION_POLICY_DISABLED' });
+      expect(fetchMock).not.toHaveBeenCalled();
+    });
+
+    it('refuses without run evidence (mock / incomplete / no digest)', async () => {
+      process.env.RDK_SIM2REAL_STATION_POLICY_ENABLED = '1';
+      const router = buildRouter({
+        getRun: async () => ({ ...completedRun, mock: true }),
+        fetchRunArtifact: async () => null,
+      });
+      const res = await call(routeHandler(router, 'post', '/api/sim2real/board-station/policy/stage'), {
+        method: 'POST',
+        body: { runId: 'run-stage-1' },
+      });
+      expect(res.statusCode).toBe(409);
+      expect(res.body).toMatchObject({ error: 'SIM2REAL_STATION_POLICY_RUN_NOT_STAGED' });
+    });
+
+    it('refuses when the worker bytes no longer hash to the recorded digest', async () => {
+      process.env.RDK_SIM2REAL_STATION_POLICY_ENABLED = '1';
+      const router = buildRouter({
+        getRun: async () => completedRun,
+        fetchRunArtifact: async () => ({ bytes: artifactBytes, sha256: 'f'.repeat(64) }),
+      });
+      const res = await call(routeHandler(router, 'post', '/api/sim2real/board-station/policy/stage'), {
+        method: 'POST',
+        body: { runId: 'run-stage-1' },
+      });
+      expect(res.statusCode).toBe(409);
+      expect(res.body).toMatchObject({ error: 'SIM2REAL_STATION_POLICY_ARTIFACT_DIGEST_MISMATCH' });
+    });
+
+    it('uploads verified bytes base64 with the run-bound filename', async () => {
+      process.env.RDK_SIM2REAL_STATION_POLICY_ENABLED = '1';
+      const fetchMock = mockAgent(200, {
+        ok: true,
+        staged: true,
+        path: 'run-stage-1.onnx',
+        sha256: artifactSha,
+        policies: [{ name: 'run-stage-1.onnx', bytes: artifactBytes.length }],
+      });
+      const router = buildRouter({
+        getRun: async () => completedRun,
+        fetchRunArtifact: async () => ({ bytes: artifactBytes, sha256: artifactSha }),
+      });
+      const res = await call(routeHandler(router, 'post', '/api/sim2real/board-station/policy/stage'), {
+        method: 'POST',
+        body: { runId: 'run-stage-1' },
+      });
+      expect(res.statusCode).toBe(200);
+      expect(res.body).toMatchObject({ ok: true, staged: true, path: 'run-stage-1.onnx' });
+      const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+      expect(url).toBe('http://127.0.0.1:19100/v1/station/policy/upload');
+      expect(init.method).toBe('POST');
+      const sent = JSON.parse(String(init.body)) as Record<string, string>;
+      expect(sent.filename).toBe('run-stage-1.onnx');
+      expect(sent.sha256).toBe(artifactSha);
+      expect(Buffer.from(sent.bytesBase64, 'base64').toString('utf8')).toBe(
+        artifactBytes.toString('utf8'),
+      );
+      expect(init.headers).toMatchObject({ authorization: 'Bearer board-secret' });
+    });
+
+    it('rejects a smuggled traversal filename before the agent is called', async () => {
+      process.env.RDK_SIM2REAL_STATION_POLICY_ENABLED = '1';
+      const fetchMock = vi.spyOn(globalThis, 'fetch');
+      const router = buildRouter({
+        getRun: async () => completedRun,
+        fetchRunArtifact: async () => ({ bytes: artifactBytes, sha256: artifactSha }),
+      });
+      const res = await call(routeHandler(router, 'post', '/api/sim2real/board-station/policy/stage'), {
+        method: 'POST',
+        body: { runId: 'run-stage-1', filename: '../escape.onnx' },
+      });
+      expect(res.statusCode).toBe(400);
+      expect(res.body).toMatchObject({ error: 'SIM2REAL_STATION_POLICY_INVALID_FILENAME' });
+      expect(fetchMock).not.toHaveBeenCalled();
+    });
+
+    it('lists staged policies from the agent', async () => {
+      const fetchMock = mockAgent(200, {
+        ok: true,
+        dir: '/root/rdk-board-agent/policies',
+        policies: [{ name: 'run-stage-1.onnx', bytes: artifactBytes.length, sha256: artifactSha }],
+      });
+      const router = buildRouter();
+      const res = await call(routeHandler(router, 'get', '/api/sim2real/board-station/policy/files'));
+      expect(res.statusCode).toBe(200);
+      expect(res.body).toMatchObject({ ok: true, policies: [{ name: 'run-stage-1.onnx' }] });
+      expect(fetchMock).toHaveBeenCalledWith(
+        'http://127.0.0.1:19100/v1/station/policy/files',
+        expect.objectContaining({ method: 'GET' }),
+      );
+    });
   });
 });

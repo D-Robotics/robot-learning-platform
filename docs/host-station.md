@@ -12,8 +12,9 @@
 | 遥控/电机控制 | ⚠️ 默认关闭的受限驱动 | 双开关（平台 `RDK_SIM2REAL_STATION_DRIVE_ENABLED` + 板端 `RDK_SIM2REAL_BOARD_AGENT_ENABLE_DRIVE`）全开后提供 0.05–0.3 m/s / ≤2 s 的运动金丝雀；`actuatorControl` 全链路如实上报开关状态 |
 | 网页添加真机（设备管理） | ✅ | 上位机页「设备管理」面板：填 SSH 坐标 → 服务端建 loopback SSH 隧道 + 探测 agent；不存密码，认证走本机 ssh 密钥/代理（见下） |
 | 运动开关网页切换 | ✅ | 「运动开关」面板：平台侧持久化运行时覆盖（开启需确认）；板端侧经代理改 `agent.env` 两行并重启 agent |
+| 策略运行时（ONNX 推理 → /cmd_vel） | ✅ 三重开关 | 平台策略 + 平台驱动 + 板端策略/驱动四开关全开后可用；推理 provider 与观测布局如实上报（见下） |
+| 训练产物下发（staging） | ✅ | runId → 平台校验发布证据 + SHA-256 → 板端 `policies/` 目录；**只落盘，不加载不运动**，加载与启动仍是操作员的显式动作 |
 | 急停 | ✅ 恒可用 | `POST /api/sim2real/board-station/drive/stop` 绕过所有开关，空格键全局急停 |
-| 写板操作（下发制品、改参数、启停服务） | ❌ | 上板部署仍走部署页的 preflight → canary → live 流程 |
 
 本平台的安全立场：上位机默认是**观察面**。受限驱动是唯一例外且默认关闭——双开关、双重钳制、时间盒、底盘固件看门狗兜底，完整启用流程与操作案例见 [docs/actuator-drive.md](actuator-drive.md)。
 
@@ -35,7 +36,7 @@ RDK_SIM2REAL_BOARD_AGENT_URL=http://127.0.0.1:19100 npm run dev:sim2real
 
 ## 线协议（agent 侧）
 
-BoardAgent 在部署预检协议之外新增 10 个端点（6 个只读 + 3 个受限驱动 + 1 个受控配置）：
+BoardAgent 在部署预检协议之外新增 12 个端点（7 个只读 + 3 个受限驱动 + 2 个受控 staging/config）：
 
 ```
 GET  /healthz                       能力声明 + stationCommands 白名单
@@ -46,6 +47,9 @@ POST /v1/station/commands           { "id": "<白名单命令>" } → { ok, outp
 GET  /v1/station/drive              受限驱动状态（金丝雀）
 POST /v1/station/drive              钳制+时间盒的 cmd_vel（双开关全开才接受）
 POST /v1/station/drive/stop         零速急停（恒 200，绕过开关）
+GET  /v1/station/policy             策略运行时状态（provider/observationLayout 如实上报）
+GET  /v1/station/policy/files       板端 policies/ 目录列表（文件名 + 字节数）
+POST /v1/station/policy/upload      受控 staging：{ filename, bytesBase64, sha256 }（见下）
 GET  /v1/config                     两个运动开关的当前状态 + env 文件/systemd 状态
 POST /v1/config                     { "switches": { ...两个开关... } } 原子改写 env 行并重启服务（运动窗口中 409 拒绝）
 ```
@@ -67,6 +71,8 @@ POST /board-station/commands        白名单再校验（服务端第二道闸�
 GET  /board-station/devices         可作为上位机目标的可见板卡列表
 GET  /board-station/switches        平台侧两个运动开关的当前状态（agent 不可达也可读）
 PUT  /board-station/switches        切换平台侧开关（开启需 body.confirm=true；关闭恒允许；reset=true 清除运行时覆盖回退 env）
+GET  /board-station/policy/files    板端 policies/ 目录列表（代理 agent 只读端点）
+POST /board-station/policy/stage    训练产物下发（见下：三跳证据链，staging ≠ 加载 ≠ 运动）
 ```
 
 设备管理（`server/routes/sim2real-device-connection-routes.ts`，同一前缀 + 别名）：
@@ -110,6 +116,41 @@ POST   /device-connections/:connectionId/config        代理改板端两个开�
 
 两个面板共同遵守同一原则：开关只翻两个文档化的标志位，**永远不能**变成发速度命令的通道；急停不依赖任何开关。
 
+## 训练产物下发（环 D：制品 → 板端的三跳证据链）
+
+训练完的 `policy.onnx` 以前从未真正到达过板端（隐含 scp 手工假设）。现在整条链路显式、可校验：
+
+```text
+local-training-worker          平台 /board-station/policy/stage         board-agent
+GET /runs/:id/artifact   ◄──   ① 校验 run 发布证据（completed、   ③ 校验 SHA-256 后原子落盘
+（服务前再哈希一次，             非 mock、local 后端、onnx、sha256）    /root/rdk-board-agent/policies/
+ 携 x-artifact-sha256 头）  ② 拉取字节并交叉比对 run.artifact.sha256  <runId>.onnx
+```
+
+安全语义：
+
+- **三处哈希交叉验证**：worker 服务前重哈希、平台比对 run 台账记录、agent 写盘前验证 `sha256` 声明——任何一处不一致 409 拒绝（`artifact_digest_mismatch` / `SIM2REAL_STATION_POLICY_ARTIFACT_DIGEST_MISMATCH` / `policy-digest-mismatch`）。
+- **文件名白名单**：裸 `<word>.onnx`（`^[\w.-]+\.onnx$`，禁 `..`），默认 `${runId}.onnx`；同名冲突要求哈希完全一致（幂等重下发），否则 `policy-name-conflict`。
+- **staging ≠ 加载 ≠ 运动**：上传只落盘（原子 tmp+rename+fsync），不改运行时状态、不发 /cmd_vel；「加载」仍是显式 POST `/policy/load`，「启动」仍需四开关 + 确认对话框。三跳全部 token 门控（worker Bearer / 平台会话 / agent Bearer）。
+- **开关门**：平台 `RDK_SIM2REAL_STATION_POLICY_ENABLED` 关闭时 409 `SIM2REAL_STATION_POLICY_DISABLED`；agent 端 `RDK_SIM2REAL_BOARD_AGENT_ENABLE_POLICY` 关闭时 409。
+- 上传代理超时单独放宽到最多 180s（50MB base64），其余端点仍是 4–15s 有界。
+- 参考实现（`local-board-agent.mjs`）与真机实现（`board-agent-x5.py`）行为逐条对齐，`services/sim2real-web/local-board-agent.test.mjs` 同时覆盖两边语义。
+
+## 推理 provider 与观测布局（环 B/C：声明式 + fail-closed）
+
+策略运行时的两个新维度都从 adapter 声明派生，env 可覆盖：
+
+| 来源 | 环境变量 | 默认 | 语义 |
+| --- | --- | --- | --- |
+| `runtime.observationLayout` | `RDK_SIM2REAL_OBSERVATION_LAYOUT` | `auto` | `originbot-imu-odom-v1`（8D：x,y,sinθ,cosθ,dx,dy,v,w）/ `imu-gravity-v1`（契约头 61/42D）/ `auto`（保留按维度自动选择） |
+| `runtime.inferenceProvider` | `RDK_BOARD_POLICY_PROVIDER` | `cpu` | `cpu` / `bpu`；请求 bpu 但当前 onnxruntime 没有注册任何 bpu 命名的 provider 时**拒绝加载**（`bpu-provider-unavailable`，detail 列出实际可用列表），绝不静默降级到 CPU |
+
+显式声明的布局是契约：模型输入必须同时匹配布局要求和 adapter 声明的 `observationSize`，矛盾即 `layout-model-mismatch` 拒绝加载——不做跨布局凑合。未知布局名在 `start` 时 fail-closed（`observation-layout-unknown`），不猜测装配。
+
+`GET /v1/station/policy` 如实上报 `provider`（实际使用的 provider）、`providerRequested`（请求值）、`providersAvailable`（本板 onnxruntime 注册的全部 provider）与 `observationLayout`；上位机页「策略运行时」面板逐项显示，BPU 不可用时操作者能直接看到该装什么。
+
+契约测试：`npm run verify:policy-provider-layout`（真 onnxruntime 会话 + 真导出的 tiny ONNX，5 个断言场景，依赖缺失时 SKIP）。
+
 ## 接真机（X5）
 
 参考 agent 的每个端点对应真机上的只读数据源，替换 `services/sim2real-web/local-board-agent.mjs` 为受控 X5 agent：
@@ -123,7 +164,7 @@ TROS /imu + /odom
 board-telemetry-node.py ──► /tmp/board-telemetry-snapshot.json
       │                                  │
       │                                  ▼
-      │                    board-policy-runtime.py (ONNX CPU)
+      │                    board-policy-runtime.py（provider 按 adapter/env 选择，BPU fail-closed）
       │                                  │
       │                                  ├─► /cmd_vel（10 Hz，限速 + 500 ms 看门狗）
       │                                  └─► policy.jsonl（本地断网 spool）
@@ -132,7 +173,7 @@ board-telemetry-node.py ──► /tmp/board-telemetry-snapshot.json
 board-agent-x5.py ◄──────── HTTP ◄──── board-telemetry-uploader.py
       │
       ▼
-Sim2Real `/runs/:id/telemetry` → 回放 / MAE-RMSE / 发布闸门
+Sim2Real `/runs/:id/telemetry` → 回放 / MAE-RMSE / 发布闸门 → `/runs/:id/retraining-advice`（飞轮分析）
 ```
 
 板端启动时至少配置：

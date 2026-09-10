@@ -32,6 +32,10 @@
 | **rsl_rl 引擎适配器（本轮新增）** | ✅ | `engines/mjlab-rsl-rl-adapter/`：kinematic 后端经真实 rsl_rl `OnPolicyRunner` 训练 GoalNavEnv，`physicsBackend` 如实标注；mjlab 钩子为显式接入点；`verify:mjlab-adapter` 进 verify 链 |
 | **真机遥测发布证据（本轮新增）** | ✅ | canary/live 闸门要求 board-agent 来源遥测评测（证据非阈值语义，fail-closed）；`release-evidence` 12 测试 |
 | **BPU 工具链探针（本轮新增）** | ✅ | preflight 白名单命令新增 `bpu_toolchain=present/missing`（hbdk-sim + hbrtmlin/hbrt-tv 存在性，不猜版本）；三方（TS/mjs/Python）字节一致测试守护；预检结果如实回显、不作为硬阻断 |
+| **声明式观测布局（环 B，本轮新增）** | ✅ | adapter `runtime.observationLayout` 驱动板端观测装配（`originbot-imu-odom-v1` / `imu-gravity-v1` / `auto`）；显式布局与模型维度矛盾 → `layout-model-mismatch` 拒载；未知布局 start 拒绝；`verify:policy-provider-layout` 契约测试（真 onnxruntime 会话）进 verify 链 |
+| **BPU provider 可切换（环 C，本轮新增）** | ✅ | `RDK_BOARD_POLICY_PROVIDER`（env/adapter）选 cpu/bpu；bpu 请求在无 BPU provider 构建上 fail-closed 拒载（`bpu-provider-unavailable`，绝不静默降 CPU）；provider/providerRequested/providersAvailable 如实上报进 station UI |
+| **制品→板端下发（环 D，本轮新增）** | ✅ | worker `/runs/:id/artifact`（服务前重哈希）→ 平台 `/board-station/policy/stage`（发布证据 + SHA-256 交叉比对）→ agent `/policy/upload`（写盘前验哈希、原子落盘）；staging≠加载≠运动；station 页一键下发 + policies/ 列表 |
+| **遥测飞轮（环 A，本轮新增）** | ✅ | `GET /runs/:id/retraining-advice`：action-mae/done-ratio/stale-observation-ratio 三信号 + 120 样本证据底（不足=insufficient-evidence，非静默 healthy）；run 详情建议卡 + 操作员显式「按建议重训」；绝不自动发起 |
 | 诚实性原则 | ✅ | mock 永远标注、遥测不伪造、fail-closed、急停常开 |
 
 ## 差距与计划
@@ -43,17 +47,19 @@
      obsSlots 正常 → 推理指标连续 1Hz 出现在 station 页。
    - 进展：task-pack 训练已在仿真侧产出真实训练的 `policy.onnx`（42D 布局
      nominal 90%、CI 下界过 0.70 gate；8D 布局 74% 待更长预算，见
-     `docs/research/goalnav-eval-2026-09-10-round2.json`）；待上板复跑同一验收。
+     `docs/research/goalnav-eval-2026-09-10-round2.json`）；制品到板的下发链
+     （环 D）已闭环——station 页填 runId 即可校验+落盘 `policies/`；剩余：
+     上板复跑整条验收（真机在场）。
 2. **观测适配的持久化配置**（现在是代码内写死 MicroDuck 契约形状）
    - 验收：机型适配包以声明文件存在（obs 槽位→真传感器/零填充、动作投影、钳制参数），
      平台按机型加载；新增机型不改 Python 运行时代码。
-   - **已完成（训练侧）**：`adapters/*.json` + `tasks/*.json` 声明式 task-pack，
-     引擎按 adapter 选择观测布局（8D 原生 / 42D 通用），新机型零引擎改动（S100 实证）。
-     板端运行时的声明化加载仍待做。
+   - **已完成**：训练侧 `adapters/*.json` + `tasks/*.json` 声明式 task-pack（新机型
+     零引擎改动，S100 实证）；板端运行时已按 adapter `runtime.observationLayout`
+     声明装配观测（环 B 闭环），未知布局/布局-模型矛盾 fail-closed。
 3. **真机评测回写**：板端策略运行的 inferMs/published/指令序列回写为 Run 证据
    - 验收：记录页能看到一次"上板会话"的起止、推理统计与停止原因，标记 `mock:false`。
-   - 进展：board-agent 遥测回流已进发布闸门（canary/live 需真机遥测评评测证据，
-     fail-closed）；剩余：上板会话的起止/推理统计结构化展示。
+   - 进展：board-agent 遥测回流已进发布闸门（fail-closed）；遥测飞轮（环 A）把
+     板端漂移分析成重训建议（run 详情卡）；剩余：上板会话的起止/推理统计结构化展示。
 
 ### P2 — 多机型与规模化
 
@@ -63,8 +69,9 @@
 5. **BPU 推理路径**（现在是 CPUExecutionProvider）
    - 验收：RDK BPU 工具链编译量化模型，板端推理 provider 可切换且延迟显著低于 CPU
      路径，inferMs 如实上报两种模式。
-   - 进展：板端 BPU 工具链**存在性探针**已进 preflight（`bpu_toolchain=present/missing`，
-     不猜版本）；量化编译与 provider 切换仍待做。
+   - 进展：工具链存在性探针已进 preflight；provider 切换开关已闭环（环 C：
+     `RDK_BOARD_POLICY_PROVIDER`，fail-closed + station UI 如实显示可用列表）；
+     剩余：BPU 侧量化编译产物（hbdk 工具链）实测与延迟对比。
 6. **视觉观测**（61D 里没有相机槽）
    - 验收：策略输入扩展出图像分支，板端相机帧进入观测构建，评测页可回放对齐帧。
 

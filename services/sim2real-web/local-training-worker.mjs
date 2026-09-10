@@ -15,7 +15,8 @@
 
 import { createHash, randomUUID } from 'node:crypto';
 import { createServer } from 'node:http';
-import { mkdir, open, readdir, readFile, writeFile } from 'node:fs/promises';
+import { mkdir, open, readdir, readFile, stat, writeFile } from 'node:fs/promises';
+import { createReadStream } from 'node:fs';
 import { spawn } from 'node:child_process';
 import path from 'node:path';
 import process from 'node:process';
@@ -514,6 +515,80 @@ async function handleStatus(request, response, runId) {
   json(response, 200, publicJob(job));
 }
 
+/**
+ * GET /runs/:id/artifact — the completed run's policy.onnx bytes.
+ *
+ * The engine writes the portable actor at the fixed job-local path; this
+ * endpoint streams exactly those bytes so the platform can stage a
+ * deployment without ever following a runner-supplied filesystem path.
+ * Only completed non-mock jobs with an ONNX artifact serve bytes; anything
+ * else is 404/409 with an honest reason. The bytes never leave loopback
+ * and the bearer-token gate above already applied.
+ */
+async function handleArtifact(request, response) {
+  await ensureJobsLoaded();
+  const runId = decodeURIComponent((request.url || '').slice('/runs/'.length, -'/artifact'.length));
+  const job = jobs.get(runId);
+  if (!job) { json(response, 404, { ok: false, error: 'run_not_found' }); return; }
+  let owner;
+  try { owner = accountId(request, {}); } catch { json(response, 401, { ok: false, error: 'account_required' }); return; }
+  if (owner !== job.accountId) { json(response, 404, { ok: false, error: 'run_not_found' }); return; }
+  if (job.status !== 'completed') {
+    json(response, 409, { ok: false, error: 'run_not_completed', message: '只有已完成的任务才能读取制品字节。' });
+    return;
+  }
+  if (job.mock) {
+    json(response, 409, { ok: false, error: 'mock_run_has_no_artifact', message: 'mock 任务不产生可部署制品。' });
+    return;
+  }
+  if (job.artifact?.format?.toLowerCase() !== 'onnx') {
+    json(response, 409, { ok: false, error: 'artifact_not_onnx', message: '该任务没有 ONNX 制品可下发。' });
+    return;
+  }
+  const filePath = path.join(job.dir, 'policy.onnx');
+  let info;
+  try {
+    info = await stat(filePath);
+  } catch {
+    json(response, 409, { ok: false, error: 'artifact_file_missing', message: '制品文件缺失（引擎导出失败或已被清理）。' });
+    return;
+  }
+  if (!info.isFile() || info.size <= 0 || info.size > MAX_ARTIFACT_BYTES) {
+    json(response, 409, { ok: false, error: 'artifact_file_invalid', message: '制品文件无效。' });
+    return;
+  }
+  // Verify the bytes still hash to the digest recorded at completion: a
+  // corrupted or swapped file must never be staged as the trained policy.
+  if (job.artifact?.sha256) {
+    const digest = createHash('sha256');
+    let bytes = 0;
+    let handle;
+    try {
+      handle = await open(filePath, 'r');
+      for await (const chunk of handle.createReadStream()) {
+        bytes += chunk.length;
+        if (bytes > MAX_ARTIFACT_BYTES) break;
+        digest.update(chunk);
+      }
+    } finally {
+      await handle?.close().catch(() => undefined);
+    }
+    if (digest.digest('hex') !== job.artifact.sha256 || bytes !== info.size) {
+      json(response, 409, { ok: false, error: 'artifact_digest_mismatch', message: '制品字节与完成时记录的 SHA-256 不一致，拒绝下发。' });
+      return;
+    }
+  }
+  const stream = createReadStream(filePath);
+  response.statusCode = 200;
+  response.setHeader('content-type', 'application/octet-stream');
+  response.setHeader('content-length', info.size);
+  response.setHeader('x-artifact-sha256', String(job.artifact?.sha256 || ''));
+  response.setHeader('x-artifact-bytes', String(info.size));
+  response.setHeader('cache-control', 'no-store');
+  stream.on('error', () => response.destroy());
+  stream.pipe(response);
+}
+
 export function createLocalTrainingWorkerServer() {
   return createServer(async (request, response) => {
     try {
@@ -553,6 +628,7 @@ export function createLocalTrainingWorkerServer() {
         return;
       }
       if (request.method === 'POST' && request.url === '/train') { await handleTrain(request, response); return; }
+      if (request.method === 'GET' && request.url?.startsWith('/runs/') && request.url.endsWith('/artifact')) { await handleArtifact(request, response); return; }
       if (request.method === 'GET' && request.url?.startsWith('/runs/')) { await handleStatus(request, response, decodeURIComponent(request.url.slice('/runs/'.length))); return; }
       json(response, 404, { ok: false, error: 'not_found' });
     } catch (error) {

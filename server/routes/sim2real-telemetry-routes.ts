@@ -11,6 +11,7 @@ import {
 } from '../../shared/sim2real.js';
 import { sendApiError, wrapAsync } from '../sim2real/http-helpers.js';
 import { requestOwnsDevice } from '../sim2real/standalone-adapters.js';
+import { adviseRetraining } from '../sim2real/retraining-advisor.js';
 import {
   appendSim2RealTelemetryWithResult,
   evaluateSim2RealRun,
@@ -587,6 +588,31 @@ export function registerSim2RealTelemetryRoutes(
       );
       const evaluation = run.evaluation ?? buildEvaluation(telemetry, undefined);
       response.json({ ok: true, runId, replay: evaluation.replay, evaluation });
+    }),
+  );
+  router.get(
+    api('/runs/:id/retraining-advice'),
+    wrapAsync(async (request, response) => {
+      const owner = deps.requestOwner(request, response);
+      if (owner === null) return;
+      noStore(response);
+      const runId = String(request.params.id || '').trim();
+      const run = await getSim2RealRun(runId, owner);
+      if (!run) {
+        response.status(404).json({
+          ok: false,
+          error: 'SIM2REAL_RUN_NOT_FOUND',
+          message: '运行记录不存在，或不属于当前账号。',
+        });
+        return;
+      }
+      const telemetry = await listSim2RealTelemetry(
+        runId,
+        owner,
+        SIM2REAL_TELEMETRY_RECORD_CAP,
+      );
+      const advice = adviseRetraining({ run, evaluation: run.evaluation, telemetry });
+      response.json({ ok: true, advice });
     }),
   );
   router.post(

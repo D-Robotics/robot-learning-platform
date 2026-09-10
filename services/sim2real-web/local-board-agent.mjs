@@ -17,7 +17,7 @@
  * Replace this process with the controlled RDK-X5 agent in a hardware
  * deployment; the wire contract is documented in docs/host-station.md.
  */
-import { randomUUID, timingSafeEqual } from 'node:crypto';
+import { createHash, randomUUID, timingSafeEqual } from 'node:crypto';
 import { createServer } from 'node:http';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -34,10 +34,19 @@ import {
 } from './board-station.mjs';
 
 const MAX_BODY_BYTES = 64 * 1024;
+// Policy upload ceiling: matches the real agent's (68 MB covers a 50 MB ONNX
+// plus base64 inflation inside the JSON body).
+const MAX_POLICY_BODY_BYTES = 68 * 1024 * 1024;
 const BEGIN = '__STUDIO_SIM2REAL_PREFLIGHT_BEGIN__';
 const END = '__STUDIO_SIM2REAL_PREFLIGHT_END__';
 const BOUNDARY = 'rdk-board-station-frame';
 const STATION_STARTED_AT_MS = Date.now();
+
+// In-memory policies dir mirroring the real agent's pinned
+// /root/rdk-board-agent/policies. Values are { bytes: Buffer } so the
+// software loop can stage + load a trained policy without a board; every
+// staged entry carries the SHA-256 it was verified against at upload time.
+const stagedPolicies = new Map();
 
 export function buildBoardPreflightCommand() {
   return [
@@ -76,6 +85,84 @@ function readBody(request) {
     request.on('end', () => resolve(body));
     request.on('error', reject);
   });
+}
+
+function readBodyBounded(request, ceiling) {
+  return new Promise((resolve, reject) => {
+    let body = '';
+    request.on('data', (chunk) => {
+      body += chunk;
+      if (Buffer.byteLength(body) > ceiling) {
+        reject(Object.assign(new Error('request too large'), { statusCode: 413 }));
+        request.destroy();
+      }
+    });
+    request.on('end', () => resolve(body));
+    request.on('error', reject);
+  });
+}
+
+/**
+ * Stage one uploaded ONNX into the in-memory policies dir. Same contract as
+ * the real agent's policy_stage: bare <word>.onnx filename, base64 bytes,
+ * SHA-256 verified against the declared digest BEFORE storage, and a
+ * same-name conflict only resolves when the bytes hash identically. Staging
+ * and loading remain two explicit actions.
+ */
+function stagePolicy(source) {
+  const filename = typeof source?.filename === 'string' ? source.filename : '';
+  if (!/^[\w.-]+\.onnx$/.test(filename) || filename.includes('..')) {
+    return { ok: false, error: 'policy-filename-invalid', message: '仅接受 policies 目录内的 .onnx 文件名' };
+  }
+  const raw = typeof source?.bytesBase64 === 'string' ? source.bytesBase64 : '';
+  let payload;
+  try {
+    payload = Buffer.from(raw, 'base64');
+  } catch {
+    payload = null;
+  }
+  if (!payload || payload.length === 0) {
+    return { ok: false, error: 'policy-bytes-invalid', message: '制品字节必须是合法 base64' };
+  }
+  if (payload.length > 50 * 1024 * 1024) {
+    return { ok: false, error: 'policy-too-large', message: '制品超过 50MB 上限' };
+  }
+  // Buffer.from is lenient with invalid base64; round-trip the decoded bytes
+  // through a canonical re-encode and require the input to match exactly, so
+  // padding tricks or truncated encodings cannot smuggle different bytes
+  // past the digest check.
+  if (payload.toString('base64') !== raw) {
+    return { ok: false, error: 'policy-bytes-invalid', message: '制品字节必须是合法 base64' };
+  }
+  const digest = createHash('sha256').update(payload).digest('hex');
+  const declared = typeof source?.sha256 === 'string' ? source.sha256.trim().toLowerCase() : '';
+  if (!/^[a-f0-9]{64}$/.test(declared) || digest !== declared) {
+    return { ok: false, error: 'policy-digest-mismatch', message: '制品 SHA-256 与声明不一致；拒绝写入', actual: digest };
+  }
+  const existing = stagedPolicies.get(filename);
+  if (existing) {
+    if (existing.sha256 !== digest) {
+      return {
+        ok: false,
+        error: 'policy-name-conflict',
+        message: '同名制品已存在且内容不同；请先删除或换名重传',
+        existing: existing.sha256,
+      };
+    }
+    return { ok: true, staged: true, path: filename, bytes: payload.length, sha256: digest, note: 'byte-identical to the staged file; no rewrite' };
+  }
+  stagedPolicies.set(filename, { bytes: payload, sha256: digest });
+  return { ok: true, staged: true, path: filename, bytes: payload.length, sha256: digest, note: 'staged (reference agent, in-memory); loading stays a separate action' };
+}
+
+function listPolicies() {
+  return {
+    ok: true,
+    dir: '(reference agent, in-memory)',
+    policies: [...stagedPolicies.entries()]
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([name, entry]) => ({ name, bytes: entry.bytes.length, sha256: entry.sha256 })),
+  };
 }
 
 function authorized(request) {
@@ -259,6 +346,23 @@ export function createLocalBoardAgentServer() {
     if (request.method === 'GET' && request.url === '/v1/station/status') {
       const tick = Math.floor((Date.now() - STATION_STARTED_AT_MS) / STATION_STATUS_INTERVAL_MS);
       json(response, 200, buildStationStatus({ startedAtMs: STATION_STARTED_AT_MS, tick }));
+      return;
+    }
+    if (request.method === 'GET' && request.url === '/v1/station/policy/files') {
+      json(response, 200, listPolicies());
+      return;
+    }
+    if (request.method === 'POST' && request.url === '/v1/station/policy/upload') {
+      try {
+        const body = JSON.parse(await readBodyBounded(request, MAX_POLICY_BODY_BYTES));
+        const result = stagePolicy(body);
+        json(response, result.ok ? 200 : 409, { ...result, policies: listPolicies().policies });
+      } catch (error) {
+        json(response, Number(error?.statusCode) || 400, {
+          ok: false,
+          error: Number(error?.statusCode) === 413 ? 'policy-upload-too-large' : 'BOARD_AGENT_INVALID_JSON',
+        });
+      }
       return;
     }
     if (request.method === 'GET' && request.url === '/v1/station/status/stream') {

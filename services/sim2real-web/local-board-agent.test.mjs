@@ -121,6 +121,73 @@ try {
   const jpegStart = cameraBody.indexOf(Buffer.from([0xff, 0xd8, 0xff]));
   assert.ok(jpegStart > 0, 'camera stream must contain real JPEG SOI bytes');
 
+  // ---- policy staging surface (software loop closes here) ----
+  // A tiny valid "policy" byte blob; the reference agent only stores and
+  // verifies, it never loads — that stays the runtime's own gated action.
+  const { createHash } = await import('node:crypto');
+  const policyBytes = Buffer.from(Array.from({ length: 64 }, (_, i) => i & 0xff));
+  const policySha = createHash('sha256').update(policyBytes).digest('hex');
+
+  const emptyList = await fetch(`${base}/v1/station/policy/files`);
+  assert.equal(emptyList.status, 200);
+  const emptyPayload = await emptyList.json();
+  assert.deepEqual(emptyPayload.policies, []);
+
+  const traversal = await fetch(`${base}/v1/station/policy/upload`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ filename: '../escape.onnx', bytesBase64: policyBytes.toString('base64'), sha256: policySha }),
+  });
+  assert.equal(traversal.status, 409);
+  assert.equal((await traversal.json()).error, 'policy-filename-invalid');
+
+  const badDigest = await fetch(`${base}/v1/station/policy/upload`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ filename: 'probe.onnx', bytesBase64: policyBytes.toString('base64'), sha256: '0'.repeat(64) }),
+  });
+  assert.equal(badDigest.status, 409);
+  assert.equal((await badDigest.json()).error, 'policy-digest-mismatch');
+
+  const staged = await fetch(`${base}/v1/station/policy/upload`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ filename: 'probe.onnx', bytesBase64: policyBytes.toString('base64'), sha256: policySha }),
+  });
+  assert.equal(staged.status, 200);
+  const stagedPayload = await staged.json();
+  assert.equal(stagedPayload.ok, true);
+  assert.equal(stagedPayload.staged, true);
+  assert.equal(stagedPayload.path, 'probe.onnx');
+  assert.equal(stagedPayload.sha256, policySha);
+
+  const conflict = await fetch(`${base}/v1/station/policy/upload`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      filename: 'probe.onnx',
+      bytesBase64: Buffer.from('different-bytes').toString('base64'),
+      sha256: createHash('sha256').update('different-bytes').digest('hex'),
+    }),
+  });
+  assert.equal(conflict.status, 409);
+  assert.equal((await conflict.json()).error, 'policy-name-conflict');
+
+  const idempotentRestage = await fetch(`${base}/v1/station/policy/upload`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ filename: 'probe.onnx', bytesBase64: policyBytes.toString('base64'), sha256: policySha }),
+  });
+  assert.equal(idempotentRestage.status, 200);
+  assert.equal((await idempotentRestage.json()).note, 'byte-identical to the staged file; no rewrite');
+
+  const list = await fetch(`${base}/v1/station/policy/files`);
+  assert.equal(list.status, 200);
+  const listPayload = await list.json();
+  assert.equal(listPayload.policies.length, 1);
+  assert.equal(listPayload.policies[0].name, 'probe.onnx');
+  assert.equal(listPayload.policies[0].sha256, policySha);
+
   process.env.RDK_SIM2REAL_BOARD_AGENT_TOKEN = 'board-test-token';
   const unauthorized = await fetch(`${base}/healthz`);
   assert.equal(unauthorized.status, 401);

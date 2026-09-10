@@ -410,6 +410,60 @@ paths:
           description: Replay and evaluation summary.
           content: { application/json: { schema: { $ref: "#/components/schemas/ReplayResponse" } } }
         "404": { $ref: "#/components/responses/NotFound" }
+  /api/v1/duck/runs/{runId}/retraining-advice:
+    get:
+      tags: [telemetry]
+      summary: Read-only drift analysis and optional retraining suggestion
+      description: >-
+        Analyzes board telemetry drift (action MAE, done ratio, stale
+        observation ratio) and returns an advisory verdict plus a pre-filled
+        training request when retraining is recommended. Read-only: the
+        flywheel never submits a run; the operator must POST /runs explicitly.
+      operationId: getRetrainingAdvice
+      parameters:
+        - $ref: "#/components/parameters/RunId"
+      responses:
+        "200":
+          description: Advisory verdict, per-signal evidence, and optional suggested training request.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok: { type: boolean }
+                  advice:
+                    type: object
+                    properties:
+                      verdict: { type: string, enum: [retrain-recommended, healthy, insufficient-evidence] }
+                      checkedAt: { type: string, format: date-time }
+                      runId: { type: string }
+                      taskId: { type: string }
+                      boardSamples: { type: integer, minimum: 0 }
+                      summary: { type: string }
+                      note: { type: string }
+                      signals:
+                        type: array
+                        items:
+                          type: object
+                          properties:
+                            id: { type: string }
+                            label: { type: string }
+                            value: { type: [number, "null"] }
+                            threshold: { type: number }
+                            breached: { type: boolean }
+                            evidence: { type: string }
+                      suggestedTraining:
+                        type: object
+                        description: Present only on retrain-recommended; a request body for the operator to submit, never auto-fired.
+                        properties:
+                          taskId: { type: string }
+                          backend: { type: string, enum: [local] }
+                          training:
+                            type: object
+                            properties:
+                              profile: { type: string }
+                              algorithm: { type: string }
+        "404": { $ref: "#/components/responses/NotFound" }
   /api/v1/duck/runs/{runId}/evaluate:
     post:
       tags: [telemetry]
@@ -632,6 +686,95 @@ paths:
               schema: { $ref: "#/components/schemas/BoardPolicyResponse" }
         "401": { $ref: "#/components/responses/AuthRequired" }
         "404": { $ref: "#/components/responses/NotFound" }
+        "502": { description: Board agent unreachable. }
+  /api/v1/duck/board-station/policy/files:
+    get:
+      tags: [board-station]
+      summary: List staged policy files in the board policies directory
+      operationId: listBoardStationPolicyFiles
+      parameters:
+        - in: query
+          name: deviceId
+          schema: { type: string }
+      responses:
+        "200":
+          description: Read-only listing of the pinned board policies directory.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok: { type: boolean }
+                  files:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        name: { type: string }
+                        bytes: { type: integer, minimum: 0 }
+        "401": { $ref: "#/components/responses/AuthRequired" }
+        "502": { description: Board agent unreachable. }
+  /api/v1/duck/board-station/policy/stage:
+    post:
+      tags: [board-station]
+      summary: Stage a training artifact into the board policies directory
+      description: >-
+        Three-hop evidence chain: fetches the run's policy.onnx bytes from the
+        training worker, cross-checks the SHA-256 against the run ledger, and
+        forwards to the board agent which verifies the digest again before an
+        atomic write. Staging only writes the file — it never loads the model
+        and never moves the robot; loading and starting stay separate explicit
+        operator actions.
+      operationId: stageBoardStationPolicy
+      parameters:
+        - in: query
+          name: deviceId
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [runId]
+              properties:
+                runId: { type: string, pattern: "^[\\w.-]{1,120}$" }
+                filename:
+                  type: string
+                  description: Optional bare filename; defaults to <runId>.onnx.
+                  pattern: "^[\\w.-]+\\.onnx$"
+      responses:
+        "200":
+          description: Artifact staged into the board policies directory.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok: { type: boolean }
+                  staged:
+                    type: object
+                    properties:
+                      filename: { type: string }
+                      path: { type: string }
+                      bytes: { type: integer, minimum: 0 }
+                      sha256: { type: string }
+                  policies:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        name: { type: string }
+                        bytes: { type: integer, minimum: 0 }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/AuthRequired" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409":
+          description: >-
+            Platform policy gate disabled, run not staged-eligible (mock,
+            not completed, wrong backend/format, missing digest), artifact
+            unavailable, digest mismatch, or filename conflict.
+        "501": { description: Run artifact fetching is not wired on this deployment. }
         "502": { description: Board agent unreachable. }
   /api/v1/duck/board-station/policy/load:
     post:

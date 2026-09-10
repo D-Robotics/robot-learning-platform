@@ -113,6 +113,41 @@ try {
   assert.match(status.stderrTail, /Bearer \[redacted\]/);
   assert.doesNotMatch(status.stderrTail, /should-hide/);
 
+  // ---- artifact bytes endpoint (staging source for the board) ----
+  const artifactWrongOwner = await fetch(`${base}/runs/${encodeURIComponent(launched.runId)}/artifact`, {
+    headers: { 'x-sim2real-account': 'bob', authorization: 'Bearer worker-test-token' },
+  });
+  assert.equal(artifactWrongOwner.status, 404);
+
+  const artifactNoAuth = await fetch(`${base}/runs/${encodeURIComponent(launched.runId)}/artifact`);
+  assert.equal(artifactNoAuth.status, 401);
+
+  const artifact = await fetch(`${base}/runs/${encodeURIComponent(launched.runId)}/artifact`, {
+    headers: { 'x-sim2real-account': 'alice', authorization: 'Bearer worker-test-token' },
+  });
+  assert.equal(artifact.status, 200);
+  assert.equal(artifact.headers.get('content-type'), 'application/octet-stream');
+  assert.equal(artifact.headers.get('x-artifact-bytes'), '12');
+  assert.equal(artifact.headers.get('x-artifact-sha256'), status.artifact.sha256);
+  const artifactBytes = Buffer.from(await artifact.arrayBuffer());
+  assert.equal(artifactBytes.toString('utf8'), 'onnx-fixture');
+
+  const artifactMissing = await fetch(`${base}/runs/nonexistent-run/artifact`, {
+    headers: { 'x-sim2real-account': 'alice', authorization: 'Bearer worker-test-token' },
+  });
+  assert.equal(artifactMissing.status, 404);
+
+  // Corrupting the bytes after completion must fail the digest re-check
+  // fail-closed instead of serving swapped bytes.
+  const jobDir = path.join(fixtureDir, launched.runId);
+  await writeFile(path.join(jobDir, 'policy.onnx'), 'swapped-bytes');
+  const artifactCorrupted = await fetch(`${base}/runs/${encodeURIComponent(launched.runId)}/artifact`, {
+    headers: { 'x-sim2real-account': 'alice', authorization: 'Bearer worker-test-token' },
+  });
+  assert.equal(artifactCorrupted.status, 409);
+  assert.equal((await artifactCorrupted.json()).error, 'artifact_digest_mismatch');
+  await writeFile(path.join(jobDir, 'policy.onnx'), 'onnx-fixture');
+
   let secondStatus = second;
   for (let index = 0; index < 100 && (secondStatus.status === 'queued' || secondStatus.status === 'running'); index += 1) {
     await new Promise((resolve) => setTimeout(resolve, 20));
