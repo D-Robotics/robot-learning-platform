@@ -37,6 +37,17 @@
 .guide-panel {
   align-self: start;
 }
+.simulator-gate-steps {
+  width: min(620px, 100%);
+  margin: 18px auto 20px;
+  padding-left: 24px;
+  text-align: left;
+  color: var(--muted);
+  line-height: 1.55;
+}
+.simulator-gate-steps li + li { margin-top: 6px; }
+.simulator-gate-steps strong { color: var(--text); font-size: inherit; }
+.simulator-gate-actions { display: flex; flex-wrap: wrap; gap: 8px; justify-content: center; }
 
 /* Keep labels and values readable at the compact workstation scale. */
 .status-card-main strong,

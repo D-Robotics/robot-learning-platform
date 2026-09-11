@@ -400,9 +400,15 @@
                     <span class="gate-icon">◇</span>
                     <strong id="simulator-gate-title">RDK Duck 仿真适配器待配置</strong>
                     <p id="simulator-gate-copy">
-                      当前产品线不会复用 MicroDuck 的浏览器场景。请先导入真实契约
-                      manifest，或使用本地 headless 仿真 worker。
+                      当前产品线不会复用 MicroDuck 的浏览器场景。先准备真实契约 manifest
+                      或本地 headless 仿真 worker；连接真机是部署前的后续步骤。
                     </p>
+                    <ol class="simulator-gate-steps">
+                      <li><strong>先准备仿真</strong>：导入并校验当前产品线的真实 manifest，或启动本地 headless worker。</li>
+                      <li><strong>需要上真机时</strong>：到“板端上位机”添加并连接设备。</li>
+                      <li><strong>最后选择设备</strong>：回到“部署与上线”选择已连接的目标板卡，再执行预检。</li>
+                    </ol>
+                    <div class="simulator-gate-actions">
                     <button
                       id="simulator-gate-train"
                       class="button button-primary button-small"
@@ -411,6 +417,9 @@
                     >
                       去训练与模型 →
                     </button>
+                    <button class="button button-ghost button-small" type="button" data-view-target="station">去连接设备</button>
+                    <button class="button button-ghost button-small" type="button" data-view-target="deploy">去选择设备</button>
+                    </div>
                     <a
                       id="simulator-gate-install"
                       class="button button-primary button-small"
