@@ -226,6 +226,33 @@ function passportOutput() {
   );
 }
 
+function onboardingPreflight() {
+  const camera = String(process.env.RDK_SIM2REAL_BOARD_AGENT_CAMERA || 'fixture').trim();
+  const tros = String(process.env.RDK_SIM2REAL_BOARD_AGENT_TROS || 'present').trim() === 'present';
+  const topics = tros ? ['/imu', '/odom', '/cmd_vel'] : [];
+  const checks = {
+    identity: { ok: true, board: { platform: 'rdk-x5', model: 'RDK X5 (simulated)' } },
+    python: { ok: true, path: '/usr/bin/python3' },
+    tros: { ok: tros, setup: '/opt/tros' },
+    camera: { ok: camera !== 'missing', devices: camera === 'missing' ? [] : ['/dev/video-fixture'], cv2: true },
+    ros: { ok: topics.length > 0, topicCount: topics.length, topics, expected: {
+      imu: { name: '/imu', present: topics.includes('/imu') },
+      odom: { name: '/odom', present: topics.includes('/odom') },
+      cmdVel: { name: '/cmd_vel', present: topics.includes('/cmd_vel') },
+    } },
+    telemetry: { ok: tros, fresh: tros, fields: tros ? ['imu', 'odom'] : [] },
+    policy: { enabled: false, runtimeRunning: false, artifactDir: '(reference agent, in-memory)', artifactDirPresent: true, artifactCount: stagedPolicies.size },
+    safety: { driveEnabled: false, policyEnabled: false, motionAuthorized: false, limits: { maxLinear: 0, maxAngular: 0 }, emergencyStop: '/v1/station/drive/stop' },
+  };
+  const blockingChecks = Object.entries(checks).filter(([, value]) => value.ok === false).map(([key]) => key);
+  return {
+    ok: true, kind: 'originbot-onboarding-preflight', schemaVersion: 1, mock: true,
+    status: blockingChecks.length ? 'attention' : 'ready', ready: blockingChecks.length === 0,
+    blockingChecks, nextActions: blockingChecks.length ? ['reference agent is mock-only; connect a real board for release evidence'] : [],
+    checks, observedAt: new Date().toISOString(), motion: { started: false, note: 'onboarding preflight is read-only' },
+  };
+}
+
 /**
  * Heartbeat stream. Each line is a `buildStationStatus` snapshot; the stream
  * is capped by a shared client budget so a demo cannot fan out unbounded
@@ -369,6 +396,10 @@ export function createLocalBoardAgentServer() {
         actuatorControl: false,
         mock: true,
       });
+      return;
+    }
+    if (request.method === 'GET' && request.url === '/v1/onboarding/preflight') {
+      json(response, 200, onboardingPreflight());
       return;
     }
     if (request.method === 'GET' && request.url === '/v1/station/status') {

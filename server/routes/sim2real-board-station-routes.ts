@@ -254,6 +254,37 @@ export function registerSim2RealBoardStationRoutes(
     }),
   );
 
+  /**
+   * GET /board-station/onboarding/preflight — one structured, read-only
+   * passport for a newly attached OriginBot.  This is intentionally separate
+   * from the legacy shell-compatible deployment probe: the UI can render all
+   * missing prerequisites (camera, TROS, ROS topics, telemetry, safety
+   * switches) without ever receiving an arbitrary command channel.
+   */
+  router.get(
+    api('/board-station/onboarding/preflight'),
+    wrapAsync(async (request, response) => {
+      const resolved = await resolveStation(request, response);
+      if (!resolved) return;
+      noStore(response);
+      const passport = await stationAgentFetch(
+        '/v1/onboarding/preflight',
+        stationOptions(request, { timeoutMs: 6000 }),
+      );
+      if (!passport || typeof passport !== 'object') {
+        sendApiError(
+          response,
+          502,
+          'SIM2REAL_BOARD_AGENT_UNREACHABLE',
+          '板端 onboarding 预检不可达，请确认 agent 进程已启动。',
+          { retryable: true },
+        );
+        return;
+      }
+      response.json({ ok: true, deviceId: resolved.device.id, passport });
+    }),
+  );
+
   /** GET /board-station/status — one status snapshot. */
   router.get(
     api('/board-station/status'),

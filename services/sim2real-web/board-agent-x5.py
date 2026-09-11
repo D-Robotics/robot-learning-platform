@@ -1181,6 +1181,96 @@ def find_camera_device():
     return candidates
 
 
+def onboarding_preflight():
+    """Return a structured, read-only onboarding passport for a new board.
+
+    The legacy deployment probe intentionally stays byte-compatible with the
+    server contract.  This richer surface is additive: it lets a new device
+    be diagnosed in one call without granting the web layer arbitrary shell
+    access or silently enabling motion.  Every check is derived from local
+    observations; ``ready`` is never inferred from the board model alone.
+    """
+    camera_devices = find_camera_device()
+    topics = ros_topics_cached() or []
+    telemetry = originbot_telemetry_cached()
+    tros_present = os.path.exists(TROS_SETUP) or os.path.isdir("/opt/ros")
+    python_present = bool(shutil.which("python3"))
+    policy_dir = os.path.isdir(POLICY_ALLOWED_MODEL_DIR)
+    policy_files = policy_list().get("policies", [])
+    expected_topics = {
+        "imu": str((_profile_topics.get("imu") or {}).get("name") or "/imu"),
+        "odom": str((_profile_topics.get("odom") or {}).get("name") or "/odom"),
+        "cmdVel": DRIVE_COMMAND_TOPIC,
+    }
+    topic_names = set(str(item) for item in topics)
+    topic_checks = {
+        key: {"name": name, "present": name in topic_names}
+        for key, name in expected_topics.items()
+    }
+    checks = {
+        "identity": {
+            "ok": bool(_identity.get("platform") and _identity.get("model")),
+            "board": _identity,
+            "adapterId": _adapter_id,
+        },
+        "python": {"ok": python_present, "path": shutil.which("python3") or "missing"},
+        "tros": {"ok": tros_present, "setup": TROS_SETUP if os.path.exists(TROS_SETUP) else "/opt/ros"},
+        "camera": {"ok": bool(camera_devices), "devices": camera_devices, "cv2": CV2_AVAILABLE},
+        "ros": {
+            "ok": bool(topics),
+            "topicCount": len(topics),
+            "topics": sorted(topic_names)[:80],
+            "expected": topic_checks,
+        },
+        "telemetry": {
+            "ok": isinstance(telemetry, dict),
+            "fresh": isinstance(telemetry, dict),
+            "fields": sorted(telemetry.keys())[:32] if isinstance(telemetry, dict) else [],
+        },
+        "policy": {
+            "enabled": POLICY_ENABLED,
+            "runtimeRunning": _policy_runtime_alive(),
+            "artifactDir": POLICY_ALLOWED_MODEL_DIR,
+            "artifactDirPresent": policy_dir,
+            "artifactCount": len(policy_files),
+        },
+        "safety": {
+            "driveEnabled": DRIVE_ENABLED,
+            "policyEnabled": POLICY_ENABLED,
+            "motionAuthorized": DRIVE_ENABLED and POLICY_ENABLED,
+            "limits": _actuator_policy(),
+            "emergencyStop": "/v1/station/drive/stop",
+        },
+    }
+    required = ("identity", "python", "tros", "camera", "ros", "telemetry")
+    missing = [key for key in required if not checks[key]["ok"]]
+    next_actions = []
+    if not tros_present:
+        next_actions.append("install or source TROS (/opt/tros or /opt/ros)")
+    if not camera_devices:
+        next_actions.append("connect a V4L2 camera and verify /dev/video*")
+    if not topics:
+        next_actions.append("start the OriginBot bringup and verify ROS topics")
+    if not isinstance(telemetry, dict):
+        next_actions.append("start the read-only IMU/odom telemetry sampler")
+    if not POLICY_ENABLED:
+        next_actions.append("stage/load a policy first; keep policy motion disabled by default")
+    status = "ready" if not missing else "attention"
+    return {
+        "ok": True,
+        "kind": "originbot-onboarding-preflight",
+        "schemaVersion": 1,
+        "mock": False,
+        "status": status,
+        "ready": not missing,
+        "blockingChecks": missing,
+        "nextActions": next_actions,
+        "checks": checks,
+        "observedAt": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        "motion": {"started": False, "note": "onboarding preflight is read-only"},
+    }
+
+
 def build_status():
     now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
     cpu = cpu_percent()
@@ -1393,7 +1483,7 @@ class Handler(BaseHTTPRequestHandler):
             self._json(200, {
                 "ok": True,
                 "service": "rdk-x5-board-agent",
-                "capabilities": ["read-only-preflight", "host-station"]
+                "capabilities": ["read-only-preflight", "originbot-onboarding", "host-station"]
                 + (["constrained-drive"] if DRIVE_ENABLED else []),
                 "stationCommands": [{"id": c["id"], "label": c["label"]} for c in STATION_COMMANDS],
                 "actuatorControl": DRIVE_ENABLED,
@@ -1412,6 +1502,12 @@ class Handler(BaseHTTPRequestHandler):
                 },
                 "drive": drive_status(),
             })
+            return
+        if path == "/v1/onboarding/preflight":
+            # Additive structured passport for new-device onboarding.  It is
+            # deliberately read-only and does not start ROS, load a model, or
+            # touch an actuator.
+            self._json(200, onboarding_preflight())
             return
         if path == "/v1/station/status":
             self._json(200, {**build_status(), "drive": drive_status()})

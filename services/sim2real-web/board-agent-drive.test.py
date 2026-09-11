@@ -73,6 +73,23 @@ class DriveDisabledContract(unittest.TestCase):
         self.assertEqual(status["lastStopReason"], "operator-emergency-stop")
 
 
+class OnboardingPreflightContract(unittest.TestCase):
+    """The new-device passport is structured, honest, and read-only."""
+
+    def setUp(self):
+        self.agent = load_agent_module(enable_drive=False)
+
+    def test_passport_never_authorizes_motion(self):
+        passport = self.agent.onboarding_preflight()
+        self.assertTrue(passport["ok"])
+        self.assertEqual(passport["kind"], "originbot-onboarding-preflight")
+        self.assertFalse(passport["mock"])
+        self.assertFalse(passport["checks"]["safety"]["motionAuthorized"])
+        self.assertFalse(passport["motion"]["started"])
+        self.assertIn("camera", passport["checks"])
+        self.assertIn("telemetry", passport["checks"])
+
+
 class DriveEnabledContract(unittest.TestCase):
     def setUp(self):
         self.agent = load_agent_module(enable_drive=True)
