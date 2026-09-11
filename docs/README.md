@@ -10,6 +10,7 @@
 | [`demo-runbook.md`](demo-runbook.md) | 演示前的检查与操作顺序 |
 | [`demo-guide.md`](demo-guide.md) | 演示脚本与讲解要点 |
 | [`demo-originbot-runbook.md`](demo-originbot-runbook.md) | OriginBot 真机演示流程 |
+| [`new-originbot-server-runbook.md`](new-originbot-server-runbook.md) | 新服务器 + 新 OriginBot 全链路部署手册 |
 
 ## 安全与硬件
 
@@ -38,6 +39,7 @@
 | [`design/rdk-duck-product-design.md`](design/rdk-duck-product-design.md) | 产品设计 |
 | [`design/sim2real-90-acceptance.md`](design/sim2real-90-acceptance.md) | 90 分验收标准 |
 | [`design/sim2real-mvp-guide.md`](design/sim2real-mvp-guide.md) | MVP 流程指南 |
+| [`design/app-js-modularization.md`](design/app-js-modularization.md) | 前端模块化方案：模块模式、加载顺序、迁移顺序与验收标准 |
 | [`roadmap.md`](roadmap.md) | 已落地能力与差距计划 |
 | [`quality-scorecard.md`](quality-scorecard.md) | 9+ 质量门槛的自动门禁与待补现场证据 |
 | [`scalability.md`](scalability.md) | 存储容量边界与扩容路径 |
