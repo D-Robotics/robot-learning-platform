@@ -1155,11 +1155,15 @@ function renderIntegrations() {
   if (simulatorGateTitle) {
     simulatorGateTitle.textContent = microduckMissing
       ? 'MicroDuck 仿真资源尚未挂载'
-      : 'RDK Duck 仿真适配器待配置';
+      : originbotProduct
+        ? 'OriginBot 浏览器仿真已就绪'
+        : 'RDK Duck 仿真适配器待配置';
   }
   if (simulatorGateCopy) {
     simulatorGateCopy.textContent = microduckMissing
       ? '当前源码不内置上游静态包；请先按部署说明挂载经过审核的 release，再回到这里开始录制。'
+      : originbotProduct
+        ? '可直接在浏览器中生成 OriginBot 轨迹；真实设备连接、数据采集和部署预检在后续步骤完成。'
       : '当前产品线不会复用 MicroDuck 的浏览器场景。先准备真实契约 manifest 或本地 headless 仿真 worker；连接真机是部署前的后续步骤。';
   }
   if (simulatorGateTrain) simulatorGateTrain.hidden = microduckMissing;
@@ -1176,6 +1180,8 @@ function renderIntegrations() {
       ? '参考策略可用'
       : microduckProduct
         ? '资源待挂载'
+        : originbotProduct
+          ? 'OriginBot 浏览器仿真'
         : '适配器待配置',
   );
   setText('status-board', device ? device.boardPlatform || '待探测板型' : '尚未选择板卡');
