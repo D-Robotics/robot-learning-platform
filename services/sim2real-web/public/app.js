@@ -4973,7 +4973,7 @@ function stationDeviceRow(connection) {
   item.dataset.connectionId = connection.id;
   const lastCheck = connection.lastCheckedAt
     ? `${connection.lastCheckOk === true ? '✓' : '✗'} ${connection.lastCheckMessage}`
-    : connection.lastCheckMessage || '尚未测试';
+    : connection.lastCheckMessage || 'SSH 隧道尚未测试（实时遥测可独立在线）';
   item.innerHTML = `
     <div class="station-device-item-main">
       <span class="station-device-item-title"></span>
@@ -4989,7 +4989,10 @@ function stationDeviceRow(connection) {
   item.querySelector('.station-device-item-meta').textContent =
     `SSH ${connection.port} · agent 端口 ${connection.agentPort} · ${lastCheck}`;
   const badge = item.querySelector('.station-device-badge');
-  badge.textContent = live ? '已连接' : '未连接';
+  // The station telemetry stream and the SSH tunnel are independent paths:
+  // a live board status must not be presented as an SSH connection, and an
+  // untested SSH tunnel must not contradict a visible LIVE telemetry card.
+  badge.textContent = live ? 'SSH 已连接' : 'SSH 未验证';
   badge.classList.add(live ? 'live' : 'down');
   const connectBtn = item.querySelector('.station-device-connect');
   connectBtn.textContent = live ? '断开' : '连接';
