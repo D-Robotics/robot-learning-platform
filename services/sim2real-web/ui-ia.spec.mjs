@@ -249,23 +249,23 @@ assert.match(onboarding, /最佳实践/, 'onboarding must include practical guid
 assert.match(onboarding, /localStorage/, 'onboarding completion must persist locally');
 assert.match(
   onboarding,
-  /在左侧项目卡里切换产品线/,
+  /在左侧产品选择器选择“OriginBot · X5 真机”/,
   'onboarding step 01 must point at the sidebar product card',
 );
 assert.match(
   onboarding,
-  /view: 'simulate', kicker: '02/,
-  'onboarding step 02 must open the simulate page for the task selector',
+  /view: 'station', kicker: '02/,
+  'onboarding step 02 must open the station page for server and device setup',
 );
 assert.match(
   onboarding,
-  /view: 'train', kicker: '03/,
-  'onboarding step 03 must open the train page for the model selector',
+  /view: 'simulate', kicker: '03/,
+  'onboarding step 03 must open the simulate page for the OriginBot task',
 );
 assert.match(
   onboarding,
-  /view: 'deploy', kicker: '04/,
-  'onboarding step 04 must open the deploy page for the device selector',
+  /view: 'simulate', kicker: '04/,
+  'onboarding step 04 must open the simulate page for recording',
 );
 
 // ---- a11y baseline ----
