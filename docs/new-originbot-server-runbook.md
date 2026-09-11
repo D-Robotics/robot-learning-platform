@@ -20,6 +20,16 @@
 
 ## 1. 新 GPU 服务器准备
 
+平台提供只读服务器 onboarding 探针，不执行任意远程 shell：
+
+```bash
+RDK_GPU_HOST=<server-ip> RDK_GPU_PORT=22 RDK_GPU_USER=<user> \
+RDK_GPU_DIR=/opt/rdk-sim2real \
+node scripts/onboard-gpu-server.mjs --json
+```
+
+它会检查 SSH、公钥认证、`nvidia-smi`、Python、worker、虚拟环境和 HBDK。
+
 推荐 Ubuntu 22.04、Python 3.10/3.11、CUDA 与 GPU 驱动匹配。服务器上安装仓库和依赖：
 
 ```bash
@@ -89,6 +99,17 @@ policy.state=stopped 或 idle
 ```
 
 ## 3. 配置平台与设备连接
+
+新服务器和新 OriginBot 的只读接入验收：
+
+```bash
+RDK_ACCEPTANCE_SERVER_HOST=<server-ip> \
+RDK_ACCEPTANCE_BOARD_URL=http://<originbot-ip>:19100 \
+RDK_SIM2REAL_BOARD_AGENT_TOKEN=<token> \
+npm run accept:new-device -- --json
+```
+
+该命令不会启动训练、上传模型、打开驱动或发送运动指令；任何前置条件不满足都会明确返回 `blocked`。
 
 服务器 `.env` 至少设置：
 
