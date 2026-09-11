@@ -1,0 +1,11 @@
+<!doctype html>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>OriginBot Simulator</title>
+<style>body{margin:0;background:#111827;color:#e5e7eb;font:14px system-ui;padding:18px}canvas{width:100%;max-width:720px;background:#0b1220;border:1px solid #334155;border-radius:10px}button{margin:8px 6px 0 0;padding:8px 12px;border:1px solid #64748b;border-radius:7px;background:#1e293b;color:#fff}code{color:#93c5fd}</style>
+<h1>OriginBot 目标导航仿真</h1>
+<p>统一 <code>originbot-imu-odom-v1</code>（8D）→ <code>originbot-twist-v1</code>（2D）契约。轨迹可被平台录制器读取。</p>
+<canvas id="scene" width="720" height="420"></canvas><br>
+<button id="reset">重置</button><button id="record">开始录制</button><button id="stop">停止并导出 JSONL</button>
+<pre id="status"></pre>
+<script src="./sim.js"></script>

@@ -1,0 +1,42 @@
+{
+  "status": "completed",
+  "taskId": "originbot-visual-twist-v1",
+  "policyClass": "synthetic",
+  "deployable": false,
+  "source": {
+    "dataset": "browser-simulator",
+    "samples": 4096,
+    "contract": "8D observation -> 2D [linear, angular] twist",
+    "note": "The current MVP uses synthetic detection features, not raw camera pixels."
+  },
+  "training": {
+    "device": "cuda",
+    "deviceName": "NVIDIA GeForce RTX 5090",
+    "server": "120.48.90.140:2222",
+    "algorithm": "supervised-visual-twist",
+    "onnxOpset": 11
+  },
+  "compile": {
+    "target": "x5",
+    "tool": "hb_mapper makertbin",
+    "hbdk": "3.49.15",
+    "march": "bayes-e",
+    "artifact": "model.bin",
+    "sha256": "b771bee619e1af08309369064717c469266094766f61307eb5bb162f0601456e",
+    "sizeBytes": 264347
+  },
+  "x5LoadTest": {
+    "board": "10.185.136.180",
+    "runtime": "hobot_dnn.pyeasy_dnn",
+    "path": "/root/rdk-board-agent/vision-models/originbot-visual-twist-v1.synthetic.model.bin",
+    "inputShape": [1, 8, 1, 1],
+    "outputShape": [1, 2, 1, 1],
+    "forwardOk": true,
+    "sampleAction": [0.0031004799529910088, 0.04964658245444298]
+  },
+  "safety": {
+    "realPolicyLoad": false,
+    "driveExecuted": false,
+    "reason": "Synthetic policy is evidence-only and cannot unlock physical motion."
+  }
+}
