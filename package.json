@@ -36,6 +36,7 @@
     "demo:starter": "node scripts/demo-starter.mjs",
     "doctor": "node scripts/doctor.mjs",
     "accept:new-device": "node scripts/accept-new-device.mjs",
+    "onboard:stack": "node scripts/onboard-stack.mjs",
     "smoke:sim2real-local": "node scripts/sim2real-local-e2e-smoke.mjs",
     "verify:api-contract": "node scripts/verify-api-contract.mjs",
     "build": "tsc -p tsconfig.build.json && npm run build:assets",
