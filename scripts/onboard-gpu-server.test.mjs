@@ -13,7 +13,7 @@ const result = runOnboarding(flags, (_flags, command) => {
   if (command.startsWith('command -v nvidia-smi')) return { ok: true, status: 0, stdout: 'NVIDIA RTX 5090, 32768 MiB, 570.00', stderr: '' };
   if (command.startsWith('python3 -c')) return { ok: true, status: 0, stdout: '3.12.1', stderr: '' };
   if (command.startsWith('test -x')) return { ok: true, status: 0, stdout: '', stderr: '' };
-  if (command.startsWith('command -v hb_mapper')) return { ok: true, status: 0, stdout: 'hb_mapper 1.24.3', stderr: '' };
+  if (command.includes('hb_mapper')) return { ok: true, status: 0, stdout: 'hb_mapper 1.24.3', stderr: '' };
   return { ok: true, status: 0, stdout: '{"ok":true,"configured":true}', stderr: '' };
 });
 

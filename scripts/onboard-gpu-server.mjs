@@ -106,7 +106,7 @@ export function runOnboarding(flags, runner = probeCommand) {
     run('python', 'python3 -c "import sys; print(sys.version.split()[0])"', (p) => ({ detail: p.stdout, error: p.ok ? undefined : p.stderr || 'python3 unavailable' })),
     run('workspace', `test -x ${remoteDir}/.venv/bin/python`, (p) => ({ detail: p.ok ? `${flags.dir}/.venv/bin/python` : 'missing .venv/bin/python' })),
     run('worker', `python3 -c "import urllib.request; r=urllib.request.urlopen('http://127.0.0.1:19091/healthz', timeout=3); print(r.read().decode())"`, (p) => ({ detail: p.stdout, error: p.ok ? undefined : p.stderr || 'worker healthz unavailable' })),
-    run('hbdk', 'command -v hb_mapper >/dev/null && hb_mapper --version', (p) => ({ detail: p.stdout, error: p.ok ? undefined : p.stderr || 'hb_mapper unavailable' })),
+    run('hbdk', `if test -x ${remoteDir}/.venv/bin/hb_mapper; then ${remoteDir}/.venv/bin/hb_mapper --version; elif command -v hb_mapper >/dev/null; then hb_mapper --version; else exit 127; fi`, (p) => ({ detail: p.stdout, error: p.ok ? undefined : p.stderr || 'hb_mapper unavailable' })),
   ];
   const ok = checks.every((item) => item.ok);
   return {
