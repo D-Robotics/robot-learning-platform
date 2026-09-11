@@ -59,7 +59,12 @@ const ACTION_TASKS = Object.freeze({
   recover: { label: '自恢复', hint: '跌倒检测与起身策略' },
   kick: { label: '踢球', hint: '目标交互与动作衔接' },
   custom: { label: '自定义动作', hint: '使用自己的策略包' },
+  'goal-navigation': { label: '目标导航', hint: '基于 odom/IMU 的目标点导航' },
+  'visual-twist': { label: '视觉跟随', hint: '相机观测到线速度/角速度' },
+  'data-collection': { label: '数据采集', hint: '同步记录图像、状态和动作' },
 });
+
+const ORIGINBOT_TASK_IDS = Object.freeze(['goal-navigation', 'visual-twist', 'data-collection', 'custom']);
 
 function readTaskPreference() {
   try {
@@ -760,7 +765,17 @@ function renderSelects() {
   const computeSelect = $('compute-resource-select');
   if (!PRODUCT_PROFILES[state.productId]) state.productId = 'microduck';
   if (productSelect) productSelect.value = state.productId;
-  if (taskSelect) taskSelect.value = state.taskId;
+  if (taskSelect) {
+    const taskIds = state.productId === 'originbot' ? ORIGINBOT_TASK_IDS : Object.keys(ACTION_TASKS).filter((id) => !ORIGINBOT_TASK_IDS.includes(id));
+    taskSelect.replaceChildren(...taskIds.map((id) => {
+      const option = document.createElement('option');
+      option.value = id;
+      option.textContent = ACTION_TASKS[id].label;
+      return option;
+    }));
+    if (!taskIds.includes(state.taskId)) state.taskId = state.productId === 'originbot' ? 'goal-navigation' : 'walk';
+    taskSelect.value = state.taskId;
+  }
   if (modelSelect) {
     modelSelect.replaceChildren();
     if (!models.length) {
@@ -1132,9 +1147,11 @@ function renderIntegrations() {
   const simulatorGateTrain = $('simulator-gate-train');
   const simulatorGateInstall = $('simulator-gate-install');
   const configuredBrowserEntry = safeLaunchUrl(simulator.browser?.entryUrl);
-  const browserEntry = simulator.browser?.entryUrl
-    ? configuredBrowserEntry || appRelativePath(SIMULATOR_PATH)
-    : appRelativePath(SIMULATOR_PATH);
+  const browserEntry = originbotProduct
+    ? appRelativePath('/originbot-sim/')
+    : simulator.browser?.entryUrl
+      ? configuredBrowserEntry || appRelativePath(SIMULATOR_PATH)
+      : appRelativePath(SIMULATOR_PATH);
   const microduckMissing = profile.id === 'microduck' && simulator.browser?.state === 'missing';
   if (simulatorFrame && simulatorFrame.getAttribute('src') !== browserEntry) {
     simulatorFrame.setAttribute('src', browserEntry);
