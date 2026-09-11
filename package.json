@@ -60,6 +60,8 @@
     "verify:hardware-profiles": "node scripts/verify-hardware-adapters.mjs && node scripts/verify-hardware-profile.mjs",
     "verify:real-loop": "node scripts/verify-real-loop.mjs",
     "verify:starter-engine": "node scripts/verify-starter-engine.mjs",
+    "compile:policy": "node scripts/compile-policy.mjs",
+    "verify:vision-model": "node scripts/verify-vision-model.mjs",
     "verify:mjlab-adapter": "node scripts/verify-mjlab-adapter.mjs",
     "verify": "npm run verify:ui && npm run verify:escape-audit && npm run verify:task-pack && npm run verify:task-templates && npm run verify:goalnav && npm run verify:originbot-env && npm run verify:originbot-telemetry && npm run verify:recorder && npm run verify:deployment && npm run verify:examples && npm run verify:local-worker && npm run verify:board-agent && npm run verify:device-connections && npm run verify:board-drive && npm run verify:policy-runtime && npm run verify:policy-provider-layout && npm run verify:hardware-profiles && npm run verify:real-loop && npm run verify:starter-engine && npm run verify:mjlab-adapter && npm run build && npm run verify:api-contract && npm run smoke:sim2real-local && node services/sim2real-web/server-wiring.spec.mjs && npm test",
     "verify:goalnav": "python3 engines/rdk-rl-env/test_goal_navigation.py",
