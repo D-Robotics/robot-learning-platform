@@ -200,7 +200,8 @@ def _read_telemetry():
 class PolicyRuntime:
     def __init__(self):
         self._lock = threading.Lock()
-        self._model = None            # onnxruntime InferenceSession or None
+        self._model = None            # onnxruntime session or hobot_dnn model
+        self._model_kind = None       # onnx | bpu
         self._model_meta = None       # {path, bytes, inputDim, outputDim}
         self._state = "idle"          # idle | ready | running | fault
         self._last_error = None
@@ -310,6 +311,32 @@ class PolicyRuntime:
     def load(self, model_path):
         global EXPECTED_OBS_DIM, EXPECTED_ACTION_DIM
         try:
+            if model_path.lower().endswith('.bin'):
+                import numpy as np
+                from hobot_dnn import pyeasy_dnn
+                if not os.path.isfile(model_path):
+                    return {"ok": False, "error": "model-file-missing"}
+                size = os.path.getsize(model_path)
+                if size > 50 * 1024 * 1024:
+                    return {"ok": False, "error": "model-too-large"}
+                loaded = pyeasy_dnn.load(model_path)
+                if not loaded:
+                    return {"ok": False, "error": "bpu-model-empty"}
+                model = loaded[0]
+                in_shape = tuple(int(v) for v in model.inputs[0].buffer.shape)
+                out_shape = tuple(int(v) for v in model.outputs[0].buffer.shape)
+                if in_shape != (1, 8, 1, 1) or out_shape != (1, 2, 1, 1):
+                    return {"ok": False, "error": "policy-shape-mismatch", "expectedInput": [1, 8, 1, 1], "actualInput": list(in_shape), "expectedOutput": [1, 2, 1, 1], "actualOutput": list(out_shape)}
+                EXPECTED_OBS_DIM = 8
+                EXPECTED_ACTION_DIM = 2
+                meta = {"path": model_path, "bytes": size, "inputDim": 8, "outputDim": 2, "provider": "hobot_dnn", "providerRequested": PROVIDER_REQUESTED, "format": "bpu-bin", "inputShape": list(in_shape), "outputShape": list(out_shape)}
+                with self._lock:
+                    self._model = model
+                    self._model_kind = "bpu"
+                    self._model_meta = meta
+                    self._state = "ready" if self._state == "idle" else self._state
+                    self._last_error = None
+                return {"ok": True, "model": meta}
             import onnxruntime as rt
 
             if not os.path.isfile(model_path):
@@ -373,6 +400,7 @@ class PolicyRuntime:
             }
             with self._lock:
                 self._model = sess
+                self._model_kind = "onnx"
                 self._model_meta = meta
                 self._state = "ready" if self._state == "idle" else self._state
                 self._last_error = None
@@ -569,9 +597,12 @@ class PolicyRuntime:
                 import numpy as np
 
                 t_infer = time.time()
-                result = self._model.run(
-                    None, {self._model.get_inputs()[0].name: np.array([obs], dtype=np.float32)}
-                )[0][0]
+                if self._model_kind == "bpu":
+                    result = self._model.forward(np.array(obs, dtype=np.float32).reshape(1, 8, 1, 1))[0].buffer.reshape(-1)
+                else:
+                    result = self._model.run(
+                        None, {self._model.get_inputs()[0].name: np.array([obs], dtype=np.float32)}
+                    )[0][0]
                 infer_ms = (time.time() - t_infer) * 1000
                 action = [float(v) for v in result]
                 linear, angular = self._project_action(action)

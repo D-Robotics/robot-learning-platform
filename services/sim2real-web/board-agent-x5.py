@@ -955,9 +955,9 @@ def policy_stage(policy_bytes_b64, filename, sha256_hex):
     """
     if not POLICY_ENABLED:
         return {"ok": False, "error": "policy-disabled"}
-    if not isinstance(filename, str) or not re.match(r"^[\w.-]+\.onnx$", filename) or ".." in filename:
+    if not isinstance(filename, str) or not re.match(r"^[\w.-]+\.(?:onnx|bin)$", filename) or ".." in filename:
         return {"ok": False, "error": "policy-filename-invalid",
-                "message": "仅接受 policies 目录内的 .onnx 文件名"}
+                "message": "仅接受 policies 目录内的 .onnx 或 .bin 文件名"}
     try:
         payload = base64.b64decode(policy_bytes_b64 or "", validate=True)
     except (ValueError, TypeError):
@@ -1000,7 +1000,7 @@ def policy_list():
         entries = sorted(
             (name, os.path.getsize(os.path.join(POLICY_ALLOWED_MODEL_DIR, name)))
             for name in os.listdir(POLICY_ALLOWED_MODEL_DIR)
-            if re.match(r"^[\w.-]+\.onnx$", name)
+            if re.match(r"^[\w.-]+\.(?:onnx|bin)$", name)
         ) if os.path.isdir(POLICY_ALLOWED_MODEL_DIR) else []
     except OSError:
         entries = []
