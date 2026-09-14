@@ -5,7 +5,14 @@ import type { NextFunction, Request, Response } from 'express';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import { BUILTIN_MICRODUCK_MODEL, type Sim2RealRunRecord } from '../../shared/sim2real.js';
-import { createSim2RealRun } from '../sim2real/sim2real-store.js';
+import {
+  createSim2RealArtifactWithResult,
+  createSim2RealEvaluationWithResult,
+  createSim2RealRun,
+  getSim2RealRun,
+  updateSim2RealDeployment,
+  updateSim2RealArtifactStatus,
+} from '../sim2real/sim2real-store.js';
 import { createSim2RealRouter } from './sim2real-routes.js';
 
 const roots: string[] = [];
@@ -109,7 +116,7 @@ function taskEvaluation(successRate = 0.88): NonNullable<Sim2RealRunRecord['task
 }
 
 async function completedRun(successRate = 0.88) {
-  return createSim2RealRun({
+  const run = await createSim2RealRun({
     modelId: BUILTIN_MICRODUCK_MODEL.id,
     taskId: 'originbot-goal-navigation',
     backend: 'local',
@@ -139,6 +146,8 @@ async function completedRun(successRate = 0.88) {
         sampleCount: 120,
         durationSeconds: 12,
         source: 'board-agent',
+        attested: true,
+        deviceId: 'board-1',
         chunkCount: 1,
         droppedCount: 0,
         doneCount: 0,
@@ -148,6 +157,51 @@ async function completedRun(successRate = 0.88) {
     },
     finishedAt: new Date().toISOString(),
   });
+  // Canary/live plans now require first-class, immutable release evidence.
+  // Build the same attested evaluation + published artifact lineage that the
+  // production evaluator would materialize instead of relying on legacy
+  // denormalized run fields.
+  const evaluation = await createSim2RealEvaluationWithResult(
+    {
+      runId: run.id,
+      modelId: run.modelId,
+      datasetIds: [],
+      status: 'passed',
+      summary: 'attested board replay evaluation',
+      source: 'platform',
+      attested: true,
+      report: run.evaluation,
+      taskEvaluation: run.taskEvaluation,
+      contractId: BUILTIN_MICRODUCK_MODEL.manifest.contract.id,
+    },
+    undefined,
+    { allowInitialTerminal: true, idempotencyKey: `evaluation-${run.id}` },
+  );
+  const artifact = await createSim2RealArtifactWithResult(
+    {
+      artifactId: 'release-policy',
+      version: 'v1',
+      name: 'Release policy',
+      role: 'compiled-policy',
+      kind: 'compiled',
+      format: 'onnx',
+      runtime: 'cpu-onnx',
+      workload: 'locomotion',
+      ref: 'artifact://release-policy/v1',
+      sha256: 'b'.repeat(64),
+      modelId: run.modelId,
+      runId: run.id,
+      datasetIds: [],
+      evaluationIds: [evaluation.evaluation.id],
+      contractId: BUILTIN_MICRODUCK_MODEL.manifest.contract.id,
+      status: 'draft',
+    },
+    undefined,
+    { idempotencyKey: `artifact-${run.id}` },
+  );
+  await updateSim2RealArtifactStatus(artifact.artifact.id, 'validated');
+  await updateSim2RealArtifactStatus(artifact.artifact.id, 'published');
+  return (await getSim2RealRun(run.id))!;
 }
 
 describe('deployment route release evidence gate', () => {
@@ -209,11 +263,24 @@ describe('deployment route release evidence gate', () => {
       status: 'blocked',
       runId: run.id,
       releaseGate: { passed: true, runId: run.id },
+      approval: { status: 'pending' },
     });
     expect(response.body.deployment.steps).toEqual(
       expect.arrayContaining([
         expect.objectContaining({ id: 'release-evidence', status: 'completed' }),
       ]),
     );
+    await expect(
+      updateSim2RealDeployment(response.body.deployment.id, { status: 'ready' }),
+    ).rejects.toMatchObject({ code: 'sim2real_deployment_transition_invalid' });
+    const rejected = await invoke(router, 'post', '/api/sim2real/deployments/:id/approval', {
+      params: { id: response.body.deployment.id },
+      body: { decision: 'rejected', note: 'compatibility review pending' },
+    });
+    expect(rejected.statusCode).toBe(200);
+    expect(rejected.body.deployment).toMatchObject({
+      status: 'blocked',
+      approval: { status: 'rejected', note: 'compatibility review pending' },
+    });
   });
 });

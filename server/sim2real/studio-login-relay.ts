@@ -24,6 +24,9 @@ import type { Sim2RealAuthPort } from './sim2real-auth.js';
  */
 const STUDIO_SHELL_LOGIN_TIMEOUT_MS = 30_000;
 const MAX_RELAY_BODY_BYTES = 8_192;
+const MAX_RELAY_RESPONSE_BYTES = MAX_RELAY_BODY_BYTES * 8;
+const MAX_RELAY_SET_COOKIE_COUNT = 8;
+const MAX_RELAY_SET_COOKIE_CHARS = 8_192;
 const DEFAULT_SHELL_URL = 'https://rdkstudio.d-robotics.cc';
 
 const RESET_COOKIE = `${STUDIO_WEB_CLOUD_SESSION_COOKIE}=; Path=/; HttpOnly; SameSite=Lax; Secure; Max-Age=0`;
@@ -41,7 +44,7 @@ function studioShellLoginUrl(): string | null {
     const hostname = parsed.hostname.replace(/^\[|\]$/g, '').toLowerCase();
     const loopback = ['localhost', '127.0.0.1', '::1'].includes(hostname);
     if (parsed.protocol !== 'https:' && !(parsed.protocol === 'http:' && loopback)) return null;
-    if (parsed.username || parsed.password || parsed.hash) return null;
+    if (parsed.username || parsed.password || parsed.search || parsed.hash) return null;
     return parsed.toString();
   } catch {
     return null;
@@ -58,7 +61,14 @@ function studioShellBaseUrl(): string | null {
     const hostname = parsed.hostname.replace(/^\[|\]$/g, '').toLowerCase();
     const loopback = ['localhost', '127.0.0.1', '::1'].includes(hostname);
     if (parsed.protocol !== 'https:' && !(parsed.protocol === 'http:' && loopback)) return null;
-    if (parsed.username || parsed.password || parsed.hash) return null;
+    if (
+      parsed.username ||
+      parsed.password ||
+      parsed.search ||
+      parsed.hash ||
+      parsed.pathname !== '/'
+    )
+      return null;
     return parsed.toString();
   } catch {
     return null;
@@ -73,6 +83,76 @@ function studioRedirectTarget(): string | null {
 
 function relayJson(response: Response, status: number, payload: unknown): void {
   response.status(status).setHeader('Cache-Control', 'no-store').json(payload);
+}
+
+type UpstreamResponse = Awaited<ReturnType<typeof fetch>>;
+
+function assertRelayResponseLength(response: UpstreamResponse): void {
+  const raw = response.headers.get('content-length');
+  if (raw == null || raw.trim() === '') return;
+  const value = raw.trim();
+  if (!/^\d+$/.test(value)) throw new Error('relay_response_length_invalid');
+  const bytes = Number(value);
+  if (!Number.isSafeInteger(bytes) || bytes > MAX_RELAY_RESPONSE_BYTES) {
+    throw new Error('relay_response_too_large');
+  }
+}
+
+/** Read the login shell response before parsing or reflecting any fields. */
+async function boundedRelayResponseText(response: UpstreamResponse): Promise<string> {
+  assertRelayResponseLength(response);
+  if (!response.body) {
+    const text = await response.text();
+    if (Buffer.byteLength(text, 'utf8') > MAX_RELAY_RESPONSE_BYTES) {
+      throw new Error('relay_response_too_large');
+    }
+    return text;
+  }
+  const reader = response.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  try {
+    while (true) {
+      const next = await reader.read();
+      if (next.done) break;
+      total += next.value.byteLength;
+      if (!Number.isSafeInteger(total) || total > MAX_RELAY_RESPONSE_BYTES) {
+        await reader.cancel().catch(() => undefined);
+        throw new Error('relay_response_too_large');
+      }
+      chunks.push(next.value);
+    }
+  } finally {
+    reader.releaseLock();
+  }
+  return new TextDecoder().decode(Buffer.concat(chunks.map((chunk) => Buffer.from(chunk))));
+}
+
+function safeRelayText(value: unknown, fallback: string, maxLength = 500): string {
+  if (typeof value !== 'string' || !value.trim()) return fallback;
+  return value
+    .replace(/[\u0000-\u001f\u007f]/g, ' ')
+    .replace(/((?:password|passwd|token|secret|authorization)\s*[:=]\s*)[^\s,;]+/gi, '$1[redacted]')
+    .trim()
+    .slice(0, maxLength);
+}
+
+function safeRelayErrorCode(value: unknown, fallback: string): string {
+  if (typeof value !== 'string') return fallback;
+  const code = value.trim();
+  return /^[A-Za-z0-9][A-Za-z0-9._:-]{0,119}$/.test(code) ? code : fallback;
+}
+
+function safeRelaySetCookies(setCookie: string[]): string[] {
+  return setCookie
+    .filter(
+      (cookie) =>
+        typeof cookie === 'string' &&
+        cookie.length <= MAX_RELAY_SET_COOKIE_CHARS &&
+        !/[\u0000-\u001f\u007f]/.test(cookie) &&
+        cookie.startsWith(`${STUDIO_WEB_CLOUD_SESSION_COOKIE}=`),
+    )
+    .slice(0, MAX_RELAY_SET_COOKIE_COUNT);
 }
 
 async function relayLoginUpstream(
@@ -92,11 +172,11 @@ async function relayLoginUpstream(
         'content-type': 'application/json',
       },
       body: serialized,
-      redirect: 'manual',
+      redirect: 'error',
       signal: controller.signal,
     });
-    const text = await response.text().catch(() => '');
-    if (text.length > MAX_RELAY_BODY_BYTES * 8) return null;
+    const text = await boundedRelayResponseText(response).catch(() => null);
+    if (text === null) return null;
     let payload: unknown = null;
     if (text) {
       try {
@@ -105,7 +185,7 @@ async function relayLoginUpstream(
         payload = { ok: false, error: 'SIM2REAL_LOGIN_RELAY_INVALID_RESPONSE' };
       }
     }
-    const setCookie = response.headers.getSetCookie?.() ?? [];
+    const setCookie = safeRelaySetCookies(response.headers.getSetCookie?.() ?? []);
     return { status: response.status, setCookie, payload };
   } catch {
     return null;
@@ -260,7 +340,7 @@ export function createStudioLoginRelayRouter(
         return;
       }
       const payload =
-        relayed.payload && typeof relayed.payload === 'object'
+        relayed.payload && typeof relayed.payload === 'object' && !Array.isArray(relayed.payload)
           ? (relayed.payload as Record<string, unknown>)
           : {};
       if (relayed.status >= 200 && relayed.status < 300 && payload.ok !== true) {
@@ -268,16 +348,16 @@ export function createStudioLoginRelayRouter(
         // Preserve the status so the frontend can show the real reason.
         relayJson(response, relayed.status >= 400 ? relayed.status : 409, {
           ok: false,
-          error: String(payload.error ?? 'SIM2REAL_LOGIN_REJECTED'),
-          message: String(payload.message ?? payload.error ?? '登录未通过账号中心校验。'),
+          error: safeRelayErrorCode(payload.error, 'SIM2REAL_LOGIN_REJECTED'),
+          message: safeRelayText(payload.message ?? payload.error, '登录未通过账号中心校验。'),
         });
         return;
       }
       if (relayed.status >= 400) {
         relayJson(response, relayed.status, {
           ok: false,
-          error: String(payload.error ?? 'SIM2REAL_LOGIN_REJECTED'),
-          message: String(payload.message ?? payload.error ?? '登录未通过账号中心校验。'),
+          error: safeRelayErrorCode(payload.error, 'SIM2REAL_LOGIN_REJECTED'),
+          message: safeRelayText(payload.message ?? payload.error, '登录未通过账号中心校验。'),
         });
         return;
       }

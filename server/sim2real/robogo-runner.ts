@@ -6,6 +6,7 @@ import type {
   Sim2RealTaskEvaluationEvidence,
   Sim2RealTrainingSpec,
 } from '../../shared/sim2real.js';
+import { isIP } from 'node:net';
 import { SAFE_ARTIFACT_REF } from '../../shared/sim2real.js';
 import { normalizeTaskEvaluationEvidence } from '../../shared/task-evaluation.js';
 import { Sim2RealError } from './sim2real-errors.js';
@@ -134,6 +135,69 @@ function isPrivateHttpHost(hostname: string): boolean {
   return /^fc[0-9a-f]{2}:/i.test(host) || /^fd[0-9a-f]{2}:/i.test(host);
 }
 
+/**
+ * A user-owned runner URL is an outbound request primitive.  HTTPS is the
+ * normal transport for remote workers, but allowing a literal private target
+ * would let a shared deployment probe loopback, cloud metadata, or another
+ * tenant's RFC1918 service.  Keep the check literal-host based so existing
+ * private HTTP/SSH-tunnel workers remain valid; operators that intentionally
+ * expose a private HTTPS worker can opt it in with an exact host allowlist.
+ */
+function isPrivateNetworkHost(hostname: string): boolean {
+  const host = hostname.replace(/^\[|\]$/g, '').toLowerCase();
+  if (host === 'localhost' || host === '::1' || host === '127.0.0.1') return true;
+  const ipVersion = isIP(host);
+  if (ipVersion === 4) {
+    const octets = host.split('.').map((item) => Number(item));
+    if (octets.length !== 4 || octets.some((item) => !Number.isInteger(item))) return true;
+    const [a, b] = octets;
+    return (
+      a === 0 ||
+      a === 10 ||
+      a === 127 ||
+      (a === 100 && b >= 64 && b <= 127) ||
+      (a === 169 && b === 254) ||
+      (a === 172 && b >= 16 && b <= 31) ||
+      (a === 192 && b === 0) ||
+      (a === 192 && b === 168) ||
+      (a === 198 && (b === 18 || b === 19)) ||
+      a >= 224
+    );
+  }
+  if (ipVersion === 6) {
+    return (
+      host === '::' ||
+      host === '::1' ||
+      // WHATWG URL canonicalizes IPv4-mapped IPv6 literals to hexadecimal
+      // (`::ffff:7f00:1`), so reject the whole mapped range rather than
+      // attempting a second, lossy IPv4 parser here.
+      host.startsWith('::ffff:') ||
+      host.startsWith('fc') ||
+      host.startsWith('fd') ||
+      host.startsWith('fe8') ||
+      host.startsWith('fe9') ||
+      host.startsWith('fea') ||
+      host.startsWith('feb')
+    );
+  }
+  return false;
+}
+
+function privateHttpsHostAllowed(hostname: string): boolean {
+  const host = hostname.replace(/^\[|\]$/g, '').toLowerCase();
+  const configured = String(process.env.RDK_SIM2REAL_COMPUTE_ALLOW_PRIVATE_HTTPS_HOSTS ?? '');
+  return configured
+    .split(',')
+    .map((item) =>
+      item
+        .trim()
+        .toLowerCase()
+        .replace(/^\[|\]$/g, ''),
+    )
+    .filter(Boolean)
+    .some((item) => item === host);
+}
+
 export function normalizeRunnerUrl(
   raw: string | undefined,
   options: { localHttp?: boolean } = {},
@@ -154,6 +218,13 @@ export function normalizeRunnerUrl(
     parsed.protocol === 'http:' && options.localHttp === true && isPrivateHttpHost(parsed.hostname);
   if (parsed.protocol !== 'https:' && !localHttp) {
     throw new Sim2RealError('sim2real_robogo_runner_url_must_be_https');
+  }
+  if (
+    parsed.protocol === 'https:' &&
+    isPrivateNetworkHost(parsed.hostname) &&
+    !privateHttpsHostAllowed(parsed.hostname)
+  ) {
+    throw new Sim2RealError('sim2real_robogo_runner_url_invalid');
   }
   if (parsed.username || parsed.password || parsed.search || parsed.hash) {
     throw new Sim2RealError('sim2real_robogo_runner_url_invalid');
@@ -233,6 +304,17 @@ function boundedTimeout(raw: unknown): number {
 }
 
 async function boundedResponseText(response: Response): Promise<string> {
+  const declaredRaw = response.headers.get('content-length');
+  if (declaredRaw != null && declaredRaw.trim() !== '') {
+    const normalized = declaredRaw.trim();
+    if (!/^\d+$/.test(normalized)) {
+      throw new Sim2RealError('sim2real_runner_response_too_large');
+    }
+    const declared = Number(normalized);
+    if (!Number.isSafeInteger(declared) || declared > MAX_RESPONSE_BYTES) {
+      throw new Sim2RealError('sim2real_runner_response_too_large');
+    }
+  }
   if (!response.body) {
     const text = await response.text();
     if (Buffer.byteLength(text, 'utf8') > MAX_RESPONSE_BYTES)

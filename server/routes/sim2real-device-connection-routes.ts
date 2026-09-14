@@ -52,7 +52,7 @@ const CONNECTION_ERRORS: Record<string, { status: number; code: string; message:
   QUOTA_EXCEEDED: {
     status: 507,
     code: 'SIM2REAL_DEVICE_CONNECTION_QUOTA',
-    message: '连接记录数量达到上限（50）。',
+    message: '连接记录数量达到上限（单账号 50 条，单实例 500 条）。',
   },
   NOT_FOUND: {
     status: 404,
@@ -158,6 +158,8 @@ export function registerSim2RealDeviceConnectionRoutes(
           username: body.username == null ? undefined : String(body.username),
           label: body.label == null ? undefined : String(body.label),
           agentPort: body.agentPort == null ? undefined : Number(body.agentPort),
+          profile: body.profile == null ? undefined : String(body.profile),
+          transport: body.transport == null ? undefined : String(body.transport),
         },
         multiUser ? owner : undefined,
       );
@@ -235,7 +237,16 @@ export function registerSim2RealDeviceConnectionRoutes(
       const owner = requestOwner(request, response);
       if (owner === null) return;
       const id = String(request.params.connectionId || '');
-      await closeDeviceConnectionTunnel(id);
+      // Keep tunnel teardown owner-scoped just like list/delete/config.  A
+      // tunnel id is intentionally opaque, but it is still an API resource
+      // identifier; accepting a guessed id here would let one shared-mode
+      // account tear down another account's active board connection.
+      const visible = listDeviceConnections(multiUser ? owner : undefined);
+      if (!visible.some((connection) => connection.id === id)) {
+        connectionError(response, 'NOT_FOUND', '连接记录不存在。');
+        return;
+      }
+      await closeDeviceConnectionTunnel(id, multiUser ? owner : undefined);
       noStore(response);
       response.json({ ok: true, disconnected: true });
     }),

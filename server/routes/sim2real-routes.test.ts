@@ -7,7 +7,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 
 import { BUILTIN_MICRODUCK_MODEL, type Sim2RealModelManifest } from '../../shared/sim2real.js';
 import type { Sim2RealAuthPort } from '../sim2real/sim2real-auth.js';
-import { reserveSim2RealRun } from '../sim2real/sim2real-store.js';
+import { reserveSim2RealRun, updateSim2RealComputeResource } from '../sim2real/sim2real-store.js';
 import { createSim2RealRouter } from './sim2real-routes.js';
 
 const roots: string[] = [];
@@ -15,7 +15,14 @@ const previousStorage = process.env.RDK_SIM2REAL_STORAGE_DIR;
 const previousData = process.env.RDK_DATA_DIR;
 const previousRunner = process.env.RDK_SIM2REAL_ROBOGO_RUNNER_URL;
 const previousLocalRunner = process.env.RDK_SIM2REAL_LOCAL_RUNNER_URL;
+const previousLocalRunnerToken = process.env.RDK_SIM2REAL_LOCAL_RUNNER_TOKEN;
+const previousNodeEnv = process.env.NODE_ENV;
+const previousDeployment = process.env.RDK_SIM2REAL_DEPLOYMENT;
+const previousComputeHealthTtl = process.env.RDK_SIM2REAL_COMPUTE_HEALTH_TTL_SECONDS;
 const previousMaxActiveRuns = process.env.RDK_SIM2REAL_MAX_ACTIVE_RUNS;
+const previousStudioOrigin = process.env.RDK_SIM2REAL_STUDIO_ORIGIN;
+const previousStudioExecOrigin = process.env.RDK_SIM2REAL_STUDIO_EXEC_ORIGIN;
+const previousStudioTimeout = process.env.RDK_SIM2REAL_STUDIO_UPSTREAM_TIMEOUT_MS;
 
 afterEach(async () => {
   await Promise.all(roots.splice(0).map((root) => fs.rm(root, { recursive: true, force: true })));
@@ -27,8 +34,24 @@ afterEach(async () => {
   else process.env.RDK_SIM2REAL_ROBOGO_RUNNER_URL = previousRunner;
   if (previousLocalRunner === undefined) delete process.env.RDK_SIM2REAL_LOCAL_RUNNER_URL;
   else process.env.RDK_SIM2REAL_LOCAL_RUNNER_URL = previousLocalRunner;
+  if (previousLocalRunnerToken === undefined) delete process.env.RDK_SIM2REAL_LOCAL_RUNNER_TOKEN;
+  else process.env.RDK_SIM2REAL_LOCAL_RUNNER_TOKEN = previousLocalRunnerToken;
+  if (previousNodeEnv === undefined) delete process.env.NODE_ENV;
+  else process.env.NODE_ENV = previousNodeEnv;
+  if (previousDeployment === undefined) delete process.env.RDK_SIM2REAL_DEPLOYMENT;
+  else process.env.RDK_SIM2REAL_DEPLOYMENT = previousDeployment;
+  if (previousComputeHealthTtl === undefined)
+    delete process.env.RDK_SIM2REAL_COMPUTE_HEALTH_TTL_SECONDS;
+  else process.env.RDK_SIM2REAL_COMPUTE_HEALTH_TTL_SECONDS = previousComputeHealthTtl;
   if (previousMaxActiveRuns === undefined) delete process.env.RDK_SIM2REAL_MAX_ACTIVE_RUNS;
   else process.env.RDK_SIM2REAL_MAX_ACTIVE_RUNS = previousMaxActiveRuns;
+  if (previousStudioOrigin === undefined) delete process.env.RDK_SIM2REAL_STUDIO_ORIGIN;
+  else process.env.RDK_SIM2REAL_STUDIO_ORIGIN = previousStudioOrigin;
+  if (previousStudioExecOrigin === undefined) delete process.env.RDK_SIM2REAL_STUDIO_EXEC_ORIGIN;
+  else process.env.RDK_SIM2REAL_STUDIO_EXEC_ORIGIN = previousStudioExecOrigin;
+  if (previousStudioTimeout === undefined)
+    delete process.env.RDK_SIM2REAL_STUDIO_UPSTREAM_TIMEOUT_MS;
+  else process.env.RDK_SIM2REAL_STUDIO_UPSTREAM_TIMEOUT_MS = previousStudioTimeout;
 });
 
 async function fixture() {
@@ -38,6 +61,31 @@ async function fixture() {
   process.env.RDK_DATA_DIR = path.join(root, 'data');
   process.env.RDK_SIM2REAL_DEPLOYMENT = 'local';
   return createSim2RealRouter();
+}
+
+/**
+ * Board-agent telemetry is only accepted for a visible device, so tests that
+ * upload board chunks need a registry row. Write the minimal standalone
+ * device shape directly (no credentials; the registry is a shared local
+ * JSON file owned by the device manager).
+ */
+async function registerFixtureDevice(id: string) {
+  const file = path.join(process.env.RDK_SIM2REAL_STORAGE_DIR as string, 'devices.json');
+  await fs.mkdir(path.dirname(file), { recursive: true });
+  await fs.writeFile(
+    file,
+    JSON.stringify([
+      {
+        id,
+        name: `${id} fixture`,
+        host: '127.0.0.1',
+        port: 22,
+        username: 'root',
+        status: 'connected',
+        lastCheckedAt: new Date().toISOString(),
+      },
+    ]),
+  );
 }
 
 type RecordedResponse = Response & {
@@ -120,6 +168,38 @@ function vector(size: number, value: number): number[] {
 }
 
 describe('Sim2Real HTTP routes', () => {
+  it('persists dataset version, digest and validated run lineage', async () => {
+    const router = await fixture();
+    const run = await invoke(router, 'post', '/api/sim2real/runs', {
+      body: { modelId: BUILTIN_MICRODUCK_MODEL.id, backend: 'contract' },
+    });
+    expect(run.statusCode).toBe(201);
+    const runId = (run.body as { run: { id: string } }).run.id;
+    const dataset = await invoke(router, 'post', '/api/sim2real/datasets', {
+      body: {
+        name: 'walk-v1',
+        version: 'v1.2.0',
+        sha256: 'a'.repeat(64),
+        contractId: 'microduck-policy-v1',
+        sourceRunId: runId,
+        sampleCount: 100,
+      },
+    });
+    expect(dataset.statusCode).toBe(201);
+    expect(dataset.body).toMatchObject({
+      dataset: {
+        version: 'v1.2.0',
+        sha256: 'a'.repeat(64),
+        contractId: 'microduck-policy-v1',
+        sourceRunId: runId,
+      },
+    });
+    const invalid = await invoke(router, 'post', '/api/sim2real/datasets', {
+      body: { name: 'bad', sourceRunId: 'missing-run' },
+    });
+    expect(invalid.statusCode).toBe(422);
+  });
+
   it('creates an owner-scoped project and compares its experiment runs', async () => {
     const router = await fixture();
     const dataset = await invoke(router, 'post', '/api/sim2real/datasets', {
@@ -236,6 +316,38 @@ describe('Sim2Real HTTP routes', () => {
     expect(deployments.body).toMatchObject({ ok: true, deployments: [] });
   });
 
+  it('returns a unified artifact catalog with task and model filters', async () => {
+    const router = await fixture();
+    const registered = await invoke(router, 'post', '/api/sim2real/models', {
+      body: { manifest: userManifest() },
+    });
+    const modelId = (registered.body as { model: { id: string } }).model.id;
+    const createdRun = await invoke(router, 'post', '/api/sim2real/runs', {
+      body: { modelId, backend: 'contract', taskId: 'turn' },
+    });
+    expect(createdRun.statusCode).toBe(201);
+
+    const all = await invoke(router, 'get', '/api/sim2real/artifacts');
+    expect(all.statusCode).toBe(200);
+    expect(all.body).toMatchObject({ ok: true });
+    const artifacts = (all.body as { artifacts: Array<{ type: string; modelId?: string }> })
+      .artifacts;
+    expect(artifacts).toEqual(
+      expect.arrayContaining([expect.objectContaining({ type: 'model', modelId })]),
+    );
+
+    const filtered = await invoke(router, 'get', '/api/sim2real/artifacts', {
+      query: { type: 'model', modelId, limit: '1' },
+    });
+    expect(filtered.statusCode).toBe(200);
+    expect(
+      (filtered.body as { artifacts: Array<{ type: string; modelId?: string }> }).artifacts,
+    ).toHaveLength(1);
+    expect(
+      (filtered.body as { artifacts: Array<{ type: string; modelId?: string }> }).artifacts[0],
+    ).toMatchObject({ type: 'model', modelId });
+  });
+
   it('serves a lightweight owner-scoped workspace summary', async () => {
     const router = await fixture();
     const registered = await invoke(router, 'post', '/api/sim2real/models', {
@@ -252,7 +364,7 @@ describe('Sim2Real HTTP routes', () => {
     expect(response.body).toMatchObject({
       ok: true,
       counts: {
-        models: 2,
+        models: 3,
         runs: 1,
         activeRuns: 0,
         deployments: 0,
@@ -334,7 +446,17 @@ describe('Sim2Real HTTP routes', () => {
       sequence: 1,
       idempotencyKey: 'chunk-1',
       jsonl: [
-        JSON.stringify({ t: 0, observation: vector(61, 0), action: vector(14, 0), reward: 1 }),
+        JSON.stringify({
+          t: 0,
+          observation: vector(61, 0),
+          action: vector(14, 0),
+          reward: 1,
+          cmd_vel: { linear: 0.2, angular: -0.3 },
+          actionOutput: 'normalized-twist',
+          actionScale: { linear: 0.3, angular: 1, units: 'm/s,rad/s' },
+          controlHz: 10,
+          controlPeriodSeconds: 0.1,
+        }),
         JSON.stringify({
           // `time` is an exporter alias accepted at the HTTP boundary and
           // normalized to the canonical stored `t` field.
@@ -362,8 +484,40 @@ describe('Sim2Real HTTP routes', () => {
     expect(listed.statusCode).toBe(200);
     expect(listed.body).toMatchObject({
       count: 1,
-      telemetry: [{ samples: [{ t: 0 }, { t: 0.02 }] }],
+      telemetry: [
+        {
+          samples: [
+            {
+              t: 0,
+              cmd_vel: { linear: 0.2, angular: -0.3 },
+              actionOutput: 'normalized-twist',
+              actionScale: { linear: 0.3, angular: 1, units: 'm/s,rad/s' },
+              controlHz: 10,
+              controlPeriodSeconds: 0.1,
+            },
+            { t: 0.02 },
+          ],
+        },
+      ],
     });
+
+    const invalidMetadata = await invoke(router, 'post', '/api/sim2real/telemetry', {
+      body: {
+        runId,
+        modelId,
+        source: 'import',
+        samples: [
+          {
+            t: 0.03,
+            cmd_vel: { linear: 0.31, angular: 0 },
+            actionOutput: 'unknown-output',
+            controlHz: 0,
+          },
+        ],
+      },
+    });
+    expect(invalidMetadata.statusCode).toBe(400);
+    expect(invalidMetadata.body).toMatchObject({ code: 'SIM2REAL_INVALID_TELEMETRY' });
 
     const evaluated = await invoke(router, 'post', '/api/sim2real/runs/:id/evaluate', {
       params: { id: runId },
@@ -388,6 +542,8 @@ describe('Sim2Real HTTP routes', () => {
     });
     expect(replay.statusCode).toBe(200);
     expect(replay.body).toMatchObject({ replay: { sampleCount: 2, chunkCount: 1 } });
+    expect(replay.body.frames).toHaveLength(2);
+    expect(replay.body.frames[1]).toMatchObject({ t: 0.02, action: vector(14, 1) });
 
     // Appending after an evaluation must invalidate the cached summary; the
     // next replay should include every accepted chunk, not the old score.
@@ -407,6 +563,7 @@ describe('Sim2Real HTTP routes', () => {
     });
     expect(freshReplay.statusCode).toBe(200);
     expect(freshReplay.body).toMatchObject({ replay: { sampleCount: 3, chunkCount: 2 } });
+    expect(freshReplay.body.frames).toHaveLength(3);
   });
 
   it('serves read-only retraining advice for an evaluated run (flywheel never auto-fires)', async () => {
@@ -459,6 +616,188 @@ describe('Sim2Real HTTP routes', () => {
       params: { id: 'run-does-not-exist' },
     });
     expect(missing.statusCode).toBe(404);
+  });
+
+  it('ingests board session lifecycle markers, keeps them out of replay stats, and serves board-sessions', async () => {
+    const router = await fixture();
+    const registerResponse = await invoke(router, 'post', '/api/sim2real/models', {
+      body: { manifest: userManifest() },
+    });
+    const modelId = (registerResponse.body as { model: { id: string } }).model.id;
+    const runResponse = await invoke(router, 'post', '/api/sim2real/runs', {
+      body: { modelId, backend: 'contract', taskId: 'walk' },
+    });
+    const runId = (runResponse.body as { run: { id: string } }).run.id;
+    await registerFixtureDevice('device-1');
+
+    // A board chunk mixing control samples with lifecycle markers: the
+    // uploader batches whatever the spool holds between checkpoints.
+    const markerChunk = await invoke(router, 'post', '/api/sim2real/runs/:id/telemetry', {
+      params: { id: runId },
+      body: {
+        source: 'board-agent',
+        deviceId: 'device-1',
+        sequence: 100,
+        idempotencyKey: 'board-marker-1',
+        samples: [
+          {
+            t: 0,
+            event: {
+              kind: 'session-started',
+              sessionId: 'sess-11111111-2222-3333-4444-555555555555',
+              startedAt: '2026-09-14T00:00:01Z',
+              adapterId: 'originbot-differential-drive',
+              controlHz: 10,
+              mock: false,
+              model: {
+                sha256: 'ab'.repeat(32),
+                provider: 'CPUExecutionProvider',
+                inputDim: 61,
+                outputDim: 14,
+                bytes: 95 * 1024,
+              },
+            },
+          },
+          { t: 0.1, observation: vector(61, 0), action: vector(14, 0), done: true },
+          {
+            t: 3.2,
+            event: {
+              kind: 'session-stopped',
+              sessionId: 'sess-11111111-2222-3333-4444-555555555555',
+              startedAt: '2026-09-14T00:00:01Z',
+              stoppedAt: '2026-09-14T00:00:04Z',
+              stopReason: 'operator-stop',
+              inferenceCount: 31,
+              durationSec: 3.0,
+              inferMs: 1.4,
+              published: 31,
+              mock: false,
+            },
+          },
+        ],
+      },
+    });
+    expect(markerChunk.statusCode).toBe(201);
+    expect(markerChunk.body).toMatchObject({ acceptedSamples: 3 });
+
+    // Replay statistics describe control data only: one sample, not three.
+    const replay = await invoke(router, 'get', '/api/sim2real/runs/:id/replay', {
+      params: { id: runId },
+    });
+    expect(replay.statusCode).toBe(200);
+    expect(replay.body).toMatchObject({
+      replay: { sampleCount: 1, chunkCount: 1, doneCount: 1 },
+    });
+
+    // Lifecycle markers must not appear in the replay frames either.
+    const frames = (replay.body as { frames: unknown[] }).frames;
+    expect(frames).toHaveLength(1);
+    expect(frames[0]).not.toHaveProperty('event');
+
+    const sessions = await invoke(router, 'get', '/api/sim2real/runs/:id/board-sessions', {
+      params: { id: runId },
+    });
+    expect(sessions.statusCode).toBe(200);
+    expect(sessions.body).toMatchObject({
+      ok: true,
+      runId,
+      count: 1,
+      sessions: [
+        {
+          sessionId: 'sess-11111111-2222-3333-4444-555555555555',
+          startedAt: '2026-09-14T00:00:01Z',
+          stoppedAt: '2026-09-14T00:00:04Z',
+          stopReason: 'operator-stop',
+          inferenceCount: 31,
+          inferMs: 1.4,
+          published: 31,
+          deviceId: 'device-1',
+          // Cookie-owner uploads are not server-attested: review-only.
+          attested: false,
+          chunks: 1,
+          events: 2,
+          model: { sha256: 'ab'.repeat(32) },
+        },
+      ],
+    });
+
+    const missing = await invoke(router, 'get', '/api/sim2real/runs/:id/board-sessions', {
+      params: { id: 'run-does-not-exist' },
+    });
+    expect(missing.statusCode).toBe(404);
+  });
+
+  it('rejects lifecycle markers that carry control data or malformed fields', async () => {
+    const router = await fixture();
+    const registerResponse = await invoke(router, 'post', '/api/sim2real/models', {
+      body: { manifest: userManifest() },
+    });
+    const modelId = (registerResponse.body as { model: { id: string } }).model.id;
+    const runResponse = await invoke(router, 'post', '/api/sim2real/runs', {
+      body: { modelId, backend: 'contract', taskId: 'walk' },
+    });
+    const runId = (runResponse.body as { run: { id: string } }).run.id;
+    await registerFixtureDevice('device-1');
+
+    const mixed = await invoke(router, 'post', '/api/sim2real/runs/:id/telemetry', {
+      params: { id: runId },
+      body: {
+        source: 'board-agent',
+        deviceId: 'device-1',
+        sequence: 100,
+        samples: [
+          {
+            t: 0,
+            action: vector(14, 0),
+            event: { kind: 'session-started', sessionId: 'sess-1' },
+          },
+        ],
+      },
+    });
+    expect(mixed.statusCode).toBe(400);
+    expect(mixed.body).toMatchObject({ code: 'SIM2REAL_INVALID_TELEMETRY' });
+
+    const noSessionId = await invoke(router, 'post', '/api/sim2real/runs/:id/telemetry', {
+      params: { id: runId },
+      body: {
+        source: 'board-agent',
+        deviceId: 'device-1',
+        sequence: 101,
+        samples: [{ t: 0, event: { kind: 'session-started' } }],
+      },
+    });
+    expect(noSessionId.statusCode).toBe(400);
+
+    const unknownKind = await invoke(router, 'post', '/api/sim2real/runs/:id/telemetry', {
+      params: { id: runId },
+      body: {
+        source: 'board-agent',
+        deviceId: 'device-1',
+        sequence: 102,
+        samples: [{ t: 0, event: { kind: 'session-restarted', sessionId: 'sess-1' } }],
+      },
+    });
+    expect(unknownKind.statusCode).toBe(400);
+
+    const badTimestamp = await invoke(router, 'post', '/api/sim2real/runs/:id/telemetry', {
+      params: { id: runId },
+      body: {
+        source: 'board-agent',
+        deviceId: 'device-1',
+        sequence: 103,
+        samples: [
+          {
+            t: 0,
+            event: {
+              kind: 'session-started',
+              sessionId: 'sess-1',
+              startedAt: '14/09/2026 00:00:01',
+            },
+          },
+        ],
+      },
+    });
+    expect(badTimestamp.statusCode).toBe(400);
   });
 
   it('preserves the demo-fixture source so synthetic evidence stays gated after refresh', async () => {
@@ -1032,6 +1371,368 @@ describe('Sim2Real HTTP routes', () => {
     }
   });
 
+  it('requires a strong token before registering a production GPU worker', async () => {
+    process.env.NODE_ENV = 'production';
+    const router = await fixture();
+    const response = await invoke(router, 'post', '/api/sim2real/compute-resources', {
+      body: {
+        name: 'exposed-gpu',
+        runnerUrl: 'http://10.0.0.8:19091/train',
+        runnerToken: 'short-fixture-token',
+      },
+    });
+    expect(response.statusCode).toBe(400);
+    expect(response.body).toMatchObject({ code: 'SIM2REAL_INVALID_COMPUTE_RESOURCE_TOKEN' });
+  });
+
+  it('probes a compute worker with redirect, payload, and body-size guards', async () => {
+    const router = await fixture();
+    const created = await invoke(router, 'post', '/api/sim2real/compute-resources', {
+      body: {
+        name: 'loopback-gpu',
+        runnerUrl: 'http://127.0.0.1:19091/train',
+      },
+    });
+    expect(created.statusCode).toBe(201);
+    const resourceId = (created.body as { computeResource: { id: string } }).computeResource.id;
+    const originalFetch = globalThis.fetch;
+    let calls = 0;
+    globalThis.fetch = (async (_input, init) => {
+      calls += 1;
+      expect(init?.redirect).toBe('error');
+      if (calls === 1) {
+        return new Response(JSON.stringify({ ok: false }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        });
+      }
+      return new Response('x'.repeat(33 * 1024), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      });
+    }) as typeof fetch;
+    try {
+      const invalidHealth = await invoke(
+        router,
+        'post',
+        '/api/sim2real/compute-resources/:id/test',
+        { params: { id: resourceId } },
+      );
+      expect(invalidHealth.statusCode).toBe(200);
+      expect(invalidHealth.body).toMatchObject({
+        connected: false,
+        computeResource: { status: 'offline', message: 'Worker 返回无效健康响应。' },
+      });
+
+      const oversizedHealth = await invoke(
+        router,
+        'post',
+        '/api/sim2real/compute-resources/:id/test',
+        { params: { id: resourceId } },
+      );
+      expect(oversizedHealth.statusCode).toBe(200);
+      expect(oversizedHealth.body).toMatchObject({
+        connected: false,
+        computeResource: {
+          status: 'offline',
+          message: 'Worker 健康响应过大或无法读取，已拒绝。',
+        },
+      });
+      expect(calls).toBe(2);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it('runs through an account-owned GPU resource when the global runner is absent', async () => {
+    delete process.env.RDK_SIM2REAL_LOCAL_RUNNER_URL;
+    const originalFetch = globalThis.fetch;
+    const calls: string[] = [];
+    globalThis.fetch = (async (input) => {
+      const url = String(input);
+      calls.push(url);
+      if (url.endsWith('/healthz')) {
+        return new Response(
+          JSON.stringify({
+            ok: true,
+            worker: 'sim2real-local',
+            cuda: true,
+            gpuName: 'Test GPU',
+            maxConcurrentJobs: 2,
+          }),
+          { status: 200, headers: { 'content-type': 'application/json' } },
+        );
+      }
+      return new Response(JSON.stringify({ status: 'queued', runId: 'resource-run-1' }), {
+        status: 202,
+        headers: { 'content-type': 'application/json' },
+      });
+    }) as typeof fetch;
+    try {
+      const router = await fixture();
+      const created = await invoke(router, 'post', '/api/sim2real/compute-resources', {
+        body: { name: 'owned-gpu', runnerUrl: 'http://127.0.0.1:19091/train' },
+      });
+      expect(created.statusCode).toBe(201);
+      const resourceId = (created.body as { computeResource: { id: string } }).computeResource.id;
+      const tested = await invoke(router, 'post', '/api/sim2real/compute-resources/:id/test', {
+        params: { id: resourceId },
+      });
+      expect(tested.body).toMatchObject({
+        connected: true,
+        computeResource: {
+          status: 'online',
+          cuda: true,
+          gpuName: 'Test GPU',
+          maxConcurrentJobs: 2,
+        },
+      });
+
+      const manifest = userManifest();
+      manifest.simulator.backends = ['local'];
+      const registered = await invoke(router, 'post', '/api/sim2real/models', {
+        body: { manifest },
+      });
+      const modelId = (registered.body as { model: { id: string } }).model.id;
+      const run = await invoke(router, 'post', '/api/sim2real/runs', {
+        body: {
+          modelId,
+          backend: 'local',
+          computeResourceId: resourceId,
+          idempotencyKey: 'owned-resource-run-1',
+        },
+      });
+      expect(run.statusCode).toBe(201);
+      expect(run.body).toMatchObject({
+        run: { status: 'queued', externalRunId: 'resource-run-1', computeResourceId: resourceId },
+      });
+      expect(calls).toEqual(['http://127.0.0.1:19091/healthz', 'http://127.0.0.1:19091/train']);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it('invalidates GPU health evidence when its endpoint or token changes', async () => {
+    delete process.env.RDK_SIM2REAL_LOCAL_RUNNER_URL;
+    const originalFetch = globalThis.fetch;
+    const calls: string[] = [];
+    globalThis.fetch = (async (input) => {
+      const url = String(input);
+      calls.push(url);
+      if (url.endsWith('/healthz')) {
+        return new Response(JSON.stringify({ ok: true, worker: 'sim2real-local', cuda: true }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        });
+      }
+      return new Response(JSON.stringify({ status: 'queued', runId: 'must-not-launch' }), {
+        status: 202,
+        headers: { 'content-type': 'application/json' },
+      });
+    }) as typeof fetch;
+    try {
+      const router = await fixture();
+      const created = await invoke(router, 'post', '/api/sim2real/compute-resources', {
+        body: { name: 'mutable-gpu', runnerUrl: 'http://127.0.0.1:19091/train' },
+      });
+      const resourceId = (created.body as { computeResource: { id: string } }).computeResource.id;
+      const firstTest = await invoke(router, 'post', '/api/sim2real/compute-resources/:id/test', {
+        params: { id: resourceId },
+      });
+      expect(firstTest.body).toMatchObject({
+        connected: true,
+        computeResource: { status: 'online' },
+      });
+
+      const endpointPatch = await invoke(router, 'patch', '/api/sim2real/compute-resources/:id', {
+        params: { id: resourceId },
+        body: { runnerUrl: 'http://127.0.0.1:19092/train' },
+      });
+      expect(endpointPatch.body).toMatchObject({
+        computeResource: { status: 'unknown', message: '尚未重新测试。' },
+      });
+      expect(
+        (endpointPatch.body as { computeResource: Record<string, unknown> }).computeResource,
+      ).not.toHaveProperty('lastCheckedAt');
+
+      const secondTest = await invoke(router, 'post', '/api/sim2real/compute-resources/:id/test', {
+        params: { id: resourceId },
+      });
+      expect(secondTest.body).toMatchObject({
+        connected: true,
+        computeResource: { status: 'online' },
+      });
+
+      const tokenPatch = await invoke(router, 'patch', '/api/sim2real/compute-resources/:id', {
+        params: { id: resourceId },
+        body: { runnerToken: 'loopback-token-rotated' },
+      });
+      expect(tokenPatch.body).toMatchObject({
+        computeResource: { status: 'unknown', message: '尚未重新测试。' },
+      });
+
+      const manifest = userManifest();
+      manifest.simulator.backends = ['local'];
+      const registered = await invoke(router, 'post', '/api/sim2real/models', {
+        body: { manifest },
+      });
+      const modelId = (registered.body as { model: { id: string } }).model.id;
+      const launch = await invoke(router, 'post', '/api/sim2real/runs', {
+        body: {
+          modelId,
+          backend: 'local',
+          computeResourceId: resourceId,
+          idempotencyKey: 'stale-compute-health-run',
+        },
+      });
+      expect(launch.statusCode).toBe(201);
+      expect(launch.body).toMatchObject({
+        run: { status: 'blocked', summary: expect.stringContaining('最近一次健康检查') },
+      });
+      // Two successful health checks were allowed; after the token edit the
+      // stale resource must be blocked before the /train side effect.
+      expect(calls).toEqual(['http://127.0.0.1:19091/healthz', 'http://127.0.0.1:19092/healthz']);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it('never falls back to the global runner after a selected GPU resource is deleted', async () => {
+    process.env.RDK_SIM2REAL_LOCAL_RUNNER_URL = 'http://127.0.0.1:18198/train';
+    const originalFetch = globalThis.fetch;
+    const calls: string[] = [];
+    globalThis.fetch = (async (input) => {
+      const url = String(input);
+      calls.push(url);
+      if (url.endsWith('/healthz')) {
+        return new Response(JSON.stringify({ ok: true }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        });
+      }
+      return new Response(JSON.stringify({ status: 'queued', runId: 'deleted-resource-run' }), {
+        status: 202,
+        headers: { 'content-type': 'application/json' },
+      });
+    }) as typeof fetch;
+    try {
+      const router = await fixture();
+      const created = await invoke(router, 'post', '/api/sim2real/compute-resources', {
+        body: { name: 'temporary-gpu', runnerUrl: 'http://127.0.0.1:19091/train' },
+      });
+      const resourceId = (created.body as { computeResource: { id: string } }).computeResource.id;
+      await invoke(router, 'post', '/api/sim2real/compute-resources/:id/test', {
+        params: { id: resourceId },
+      });
+      const manifest = userManifest();
+      manifest.simulator.backends = ['local'];
+      const registered = await invoke(router, 'post', '/api/sim2real/models', {
+        body: { manifest },
+      });
+      const modelId = (registered.body as { model: { id: string } }).model.id;
+      const launched = await invoke(router, 'post', '/api/sim2real/runs', {
+        body: {
+          modelId,
+          backend: 'local',
+          computeResourceId: resourceId,
+          idempotencyKey: 'deleted-resource-run-key',
+        },
+      });
+      const runId = (launched.body as { run: { id: string } }).run.id;
+      expect(launched.body).toMatchObject({ run: { status: 'queued' } });
+      await invoke(router, 'delete', '/api/sim2real/compute-resources/:id', {
+        params: { id: resourceId },
+      });
+
+      const status = await invoke(router, 'get', '/api/sim2real/runs/:id', {
+        params: { id: runId },
+      });
+      expect(status.statusCode).toBe(409);
+      expect(status.body).toMatchObject({ code: 'SIM2REAL_COMPUTE_RESOURCE_NOT_FOUND' });
+      expect(calls).toEqual(['http://127.0.0.1:19091/healthz', 'http://127.0.0.1:19091/train']);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it('expires online GPU health evidence before launch and reconciliation', async () => {
+    process.env.RDK_SIM2REAL_COMPUTE_HEALTH_TTL_SECONDS = '30';
+    const router = await fixture();
+    const created = await invoke(router, 'post', '/api/sim2real/compute-resources', {
+      body: { name: 'stale-gpu', runnerUrl: 'http://127.0.0.1:19091/train' },
+    });
+    const resourceId = (created.body as { computeResource: { id: string } }).computeResource.id;
+    await invoke(router, 'post', '/api/sim2real/compute-resources/:id/test', {
+      params: { id: resourceId },
+    });
+    await updateSim2RealComputeResource(
+      resourceId,
+      {
+        status: 'online',
+        lastCheckedAt: new Date(Date.now() - 31_000).toISOString(),
+      } as never,
+      undefined,
+    );
+
+    const listed = await invoke(router, 'get', '/api/sim2real/compute-resources');
+    expect(listed.body).toMatchObject({
+      computeResources: [{ id: resourceId, status: 'unknown' }],
+    });
+
+    const manifest = userManifest();
+    manifest.simulator.backends = ['local'];
+    const registered = await invoke(router, 'post', '/api/sim2real/models', {
+      body: { manifest },
+    });
+    const modelId = (registered.body as { model: { id: string } }).model.id;
+    const originalFetch = globalThis.fetch;
+    let calls = 0;
+    globalThis.fetch = (async () => {
+      calls += 1;
+      throw new Error('stale resource must not call a runner');
+    }) as typeof fetch;
+    try {
+      const launch = await invoke(router, 'post', '/api/sim2real/runs', {
+        body: {
+          modelId,
+          backend: 'local',
+          computeResourceId: resourceId,
+          idempotencyKey: 'stale-resource-launch',
+        },
+      });
+      expect(launch.body).toMatchObject({
+        run: {
+          status: 'blocked',
+          summary: expect.stringContaining('超过 30 秒'),
+        },
+      });
+
+      const reserved = await reserveSim2RealRun(
+        {
+          modelId,
+          backend: 'local',
+          computeResourceId: resourceId,
+          status: 'queued',
+          summary: 'reserved before stale reconcile',
+        },
+        undefined,
+        { idempotencyKey: 'stale-resource-reconcile' },
+      );
+      const reconcile = await invoke(router, 'post', '/api/sim2real/runs/:id/reconcile', {
+        params: { id: reserved.run.id },
+        body: { externalRunId: 'stale-run-1', confirm: true },
+      });
+      expect(reconcile.statusCode).toBe(503);
+      expect(reconcile.body).toMatchObject({
+        code: 'SIM2REAL_COMPUTE_RESOURCE_HEALTH_STALE',
+        retryable: true,
+      });
+      expect(calls).toBe(0);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
   it('enforces the active local/RoboGo run quota before launching another runner job', async () => {
     process.env.RDK_SIM2REAL_LOCAL_RUNNER_URL = 'http://127.0.0.1:18198/train';
     process.env.RDK_SIM2REAL_MAX_ACTIVE_RUNS = '1';
@@ -1362,6 +2063,229 @@ describe('Sim2Real HTTP routes', () => {
       expect(
         (unchanged.body as { run: Record<string, unknown> }).run.externalRunId,
       ).toBeUndefined();
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it('projects Local Bridge status and forwards only the browser session cookie', async () => {
+    process.env.RDK_SIM2REAL_STUDIO_ORIGIN = 'https://studio.example.test';
+    const originalFetch = globalThis.fetch;
+    let calledUrl = '';
+    let calledInit: RequestInit | undefined;
+    globalThis.fetch = (async (input, init) => {
+      calledUrl = String(input);
+      calledInit = init;
+      return new Response(
+        JSON.stringify({
+          ok: true,
+          secret: 'upstream-secret',
+          bridges: [
+            {
+              bridgeId: 'bridge-a',
+              online: true,
+              devices: [
+                {
+                  id: 'device-a',
+                  host: '10.0.0.2',
+                  name: 'OriginBot',
+                  username: 'root',
+                  transport: 'ssh',
+                  probeOk: true,
+                  token: 'must-not-leak',
+                },
+              ],
+            },
+          ],
+        }),
+        { status: 200, headers: { 'content-type': 'application/json' } },
+      );
+    }) as typeof fetch;
+    try {
+      const router = await fixture();
+      const response = await invoke(router, 'get', '/api/sim2real/local-bridge/status', {
+        headers: { cookie: 'studio_session=abc123' },
+      });
+      expect(response.statusCode).toBe(200);
+      expect(response.body).toEqual({
+        ok: true,
+        bridges: [
+          {
+            bridgeId: 'bridge-a',
+            online: true,
+            devices: [
+              {
+                bridgeDeviceId: 'device-a',
+                id: 'device-a',
+                host: '10.0.0.2',
+                name: 'OriginBot',
+                username: 'root',
+                transport: 'ssh',
+                probeOk: true,
+              },
+            ],
+          },
+        ],
+      });
+      expect(JSON.stringify(response.body)).not.toContain('upstream-secret');
+      expect(JSON.stringify(response.body)).not.toContain('must-not-leak');
+      expect(calledUrl).toBe('https://studio.example.test/api/local-bridge/status');
+      expect(calledInit?.redirect).toBe('error');
+      expect(calledInit?.headers).toMatchObject({
+        accept: 'application/json',
+        cookie: 'studio_session=abc123',
+      });
+      expect(calledInit?.signal).toBeInstanceOf(AbortSignal);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it('whitelists Local Bridge pairing and connect payloads', async () => {
+    process.env.RDK_SIM2REAL_STUDIO_ORIGIN = 'https://studio.example.test';
+    const originalFetch = globalThis.fetch;
+    const calls: Array<{ url: string; init?: RequestInit }> = [];
+    globalThis.fetch = (async (input, init) => {
+      calls.push({ url: String(input), init });
+      if (String(input).endsWith('/pairing-code')) {
+        return new Response(
+          JSON.stringify({
+            ok: true,
+            command: '#!/bin/sh\necho connected',
+            oneliner: 'echo connected',
+            message: 'ready',
+            secret: 'do-not-forward',
+          }),
+          { status: 200, headers: { 'content-type': 'application/json' } },
+        );
+      }
+      return new Response(
+        JSON.stringify({
+          ok: true,
+          device: {
+            bridgeId: 'bridge-a',
+            bridgeDeviceId: 'device-a',
+            id: 'device-a',
+            name: 'OriginBot',
+            host: '10.0.0.2',
+            port: 22,
+            username: 'root',
+            transport: 'ssh',
+            boardPlatform: 'x5',
+            boardModel: 'originbot',
+            secret: 'do-not-forward',
+          },
+          secret: 'do-not-forward',
+        }),
+        { status: 200, headers: { 'content-type': 'application/json' } },
+      );
+    }) as typeof fetch;
+    try {
+      const router = await fixture();
+      const pairing = await invoke(router, 'post', '/api/sim2real/local-bridge/pairing-code', {
+        headers: { cookie: 'studio_session=abc123' },
+        body: {
+          host: '10.0.0.2',
+          sshUser: 'root',
+          sshPort: 22,
+          sshPassword: 'p@ss word',
+          secret: 'drop-me',
+        },
+      });
+      expect(pairing.statusCode).toBe(200);
+      expect(pairing.body).toEqual({
+        ok: true,
+        command: '#!/bin/sh\necho connected',
+        oneliner: 'echo connected',
+        message: 'ready',
+      });
+      expect(JSON.stringify(pairing.body)).not.toContain('do-not-forward');
+      expect(JSON.parse(String(calls[0]?.init?.body))).toEqual({
+        host: '10.0.0.2',
+        sshUser: 'root',
+        sshPort: 22,
+        sshPassword: 'p@ss word',
+      });
+      expect(calls[0]?.init?.redirect).toBe('error');
+
+      const connected = await invoke(
+        router,
+        'post',
+        '/api/sim2real/local-bridge/devices/:bridgeDeviceId/connect',
+        {
+          params: { bridgeDeviceId: 'device-a' },
+          headers: { cookie: 'studio_session=abc123' },
+          body: { bridgeId: 'bridge-a', secret: 'drop-me' },
+        },
+      );
+      expect(connected.statusCode).toBe(200);
+      expect(connected.body).toMatchObject({
+        ok: true,
+        device: {
+          bridgeId: 'bridge-a',
+          bridgeDeviceId: 'device-a',
+          host: '10.0.0.2',
+          boardPlatform: 'x5',
+          boardModel: 'originbot',
+        },
+      });
+      expect(JSON.stringify(connected.body)).not.toContain('do-not-forward');
+      expect(JSON.parse(String(calls[1]?.init?.body))).toEqual({ bridgeId: 'bridge-a' });
+      expect(calls[1]?.init?.redirect).toBe('error');
+      expect(calls[1]?.init?.headers).toMatchObject({ cookie: 'studio_session=abc123' });
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it('collapses Local Bridge transport, timeout, and oversized responses to generic 502 errors', async () => {
+    process.env.RDK_SIM2REAL_STUDIO_ORIGIN = 'https://studio.example.test';
+    process.env.RDK_SIM2REAL_STUDIO_UPSTREAM_TIMEOUT_MS = '100';
+    const originalFetch = globalThis.fetch;
+    let call = 0;
+    const redirects: unknown[] = [];
+    globalThis.fetch = (async (_input, init) => {
+      redirects.push(init?.redirect);
+      call += 1;
+      if (call === 1) throw new Error('proxy body contains secret=abc');
+      if (call === 2) {
+        const stream = new ReadableStream<Uint8Array>({
+          start(controller) {
+            controller.enqueue(new TextEncoder().encode('x'.repeat(70 * 1024)));
+            controller.close();
+          },
+        });
+        return new Response(stream, { status: 200 });
+      }
+      return new Promise<Response>((_resolve, reject) => {
+        init?.signal?.addEventListener('abort', () => reject(new Error('timeout secret=abc')), {
+          once: true,
+        });
+      });
+    }) as typeof fetch;
+    try {
+      const router = await fixture();
+      const transport = await invoke(router, 'get', '/api/sim2real/local-bridge/status');
+      expect(transport.statusCode).toBe(502);
+      expect(transport.body).toMatchObject({
+        code: 'SIM2REAL_STUDIO_BRIDGE_UNAVAILABLE',
+        retryable: true,
+      });
+      expect(JSON.stringify(transport.body)).not.toContain('secret=abc');
+
+      const oversized = await invoke(router, 'post', '/api/sim2real/local-bridge/pairing-code', {
+        body: { host: '10.0.0.2', sshUser: 'root', sshPort: 22 },
+      });
+      expect(oversized.statusCode).toBe(502);
+      expect(JSON.stringify(oversized.body)).not.toContain('x'.repeat(32));
+
+      const timeout = await invoke(router, 'get', '/api/sim2real/local-bridge/status');
+      expect(timeout.statusCode).toBe(502);
+      expect(timeout.body).toMatchObject({
+        code: 'SIM2REAL_STUDIO_BRIDGE_UNAVAILABLE',
+        retryable: true,
+      });
+      expect(redirects).toEqual(['error', 'error', 'error']);
     } finally {
       globalThis.fetch = originalFetch;
     }

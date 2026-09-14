@@ -93,8 +93,12 @@ export function adviseRetraining(input: {
 
   // Signal 2 — telemetry window health: how much of the recorded window the
   // robot reported done/fall (termination-heavy windows suggest the policy
-  // is failing on the real floor, not just drifting).
-  const samples = (input.telemetry ?? []).flatMap((record) => record.samples);
+  // is failing on the real floor, not just drifting). Lifecycle event
+  // markers are session bookkeeping, not control samples, so they are
+  // excluded from the ratios.
+  const samples = (input.telemetry ?? [])
+    .flatMap((record) => record.samples)
+    .filter((sample: Sim2RealTelemetrySample) => !sample.event);
   const doneRatio = samples.length
     ? samples.filter((sample: Sim2RealTelemetrySample) => sample.done === true).length /
       samples.length

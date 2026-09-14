@@ -12,8 +12,12 @@ import {
 import { isSim2RealError } from './sim2real-errors.js';
 import {
   appendSim2RealTelemetryWithResult,
+  createSim2RealArtifactWithResult,
+  createSim2RealDeployment,
+  createSim2RealEvaluationWithResult,
   createSim2RealModel,
   createSim2RealRun,
+  decideSim2RealDeploymentApproval,
   evaluateSim2RealRun,
   getSim2RealModel,
   getSim2RealRun,
@@ -22,10 +26,16 @@ import {
   listSim2RealModels,
   listSim2RealRuns,
   reserveSim2RealRun,
+  updateSim2RealArtifactStatus,
   updateSim2RealRun,
   SIM2REAL_LEDGER_MAX_BYTES,
   SIM2REAL_TELEMETRY_RECORD_CAP,
+  DEFAULT_COMPUTE_HEALTH_TTL_SECONDS,
+  MAX_COMPUTE_HEALTH_TTL_SECONDS,
+  MIN_COMPUTE_HEALTH_TTL_SECONDS,
+  isSim2RealComputeResourceHealthFresh,
   sim2RealActiveRunLimit,
+  sim2RealComputeHealthTtlSeconds,
   sim2RealStorageInfo,
   sim2RealStorageReadiness,
   sim2RealTelemetryRetentionDays,
@@ -37,6 +47,7 @@ const previousDeployment = process.env.RDK_SIM2REAL_DEPLOYMENT;
 const previousMaxActiveRuns = process.env.RDK_SIM2REAL_MAX_ACTIVE_RUNS;
 const previousActiveRunTtl = process.env.RDK_SIM2REAL_ACTIVE_RUN_TTL_SECONDS;
 const previousRetention = process.env.RDK_SIM2REAL_TELEMETRY_RETENTION_DAYS;
+const previousComputeHealthTtl = process.env.RDK_SIM2REAL_COMPUTE_HEALTH_TTL_SECONDS;
 const previousLease = process.env.RDK_SIM2REAL_STORAGE_LEASE;
 
 afterEach(async () => {
@@ -52,6 +63,9 @@ afterEach(async () => {
   else process.env.RDK_SIM2REAL_ACTIVE_RUN_TTL_SECONDS = previousActiveRunTtl;
   if (previousRetention === undefined) delete process.env.RDK_SIM2REAL_TELEMETRY_RETENTION_DAYS;
   else process.env.RDK_SIM2REAL_TELEMETRY_RETENTION_DAYS = previousRetention;
+  if (previousComputeHealthTtl === undefined)
+    delete process.env.RDK_SIM2REAL_COMPUTE_HEALTH_TTL_SECONDS;
+  else process.env.RDK_SIM2REAL_COMPUTE_HEALTH_TTL_SECONDS = previousComputeHealthTtl;
   if (previousLease === undefined) delete process.env.RDK_SIM2REAL_STORAGE_LEASE;
   else process.env.RDK_SIM2REAL_STORAGE_LEASE = previousLease;
 });
@@ -84,6 +98,46 @@ function summaryFor(telemetry: readonly Sim2RealTelemetryRecord[]): Sim2RealEval
 }
 
 describe('Sim2Real owner-scoped ledger', () => {
+  it('bounds the GPU health lease and expires old online evidence', () => {
+    delete process.env.RDK_SIM2REAL_COMPUTE_HEALTH_TTL_SECONDS;
+    expect(sim2RealComputeHealthTtlSeconds()).toBe(DEFAULT_COMPUTE_HEALTH_TTL_SECONDS);
+    process.env.RDK_SIM2REAL_COMPUTE_HEALTH_TTL_SECONDS = String(MIN_COMPUTE_HEALTH_TTL_SECONDS);
+    expect(sim2RealComputeHealthTtlSeconds()).toBe(MIN_COMPUTE_HEALTH_TTL_SECONDS);
+    process.env.RDK_SIM2REAL_COMPUTE_HEALTH_TTL_SECONDS = String(MAX_COMPUTE_HEALTH_TTL_SECONDS);
+    expect(sim2RealComputeHealthTtlSeconds()).toBe(MAX_COMPUTE_HEALTH_TTL_SECONDS);
+    for (const invalid of ['0', '29', '86401', '1.5', 'not-a-number']) {
+      process.env.RDK_SIM2REAL_COMPUTE_HEALTH_TTL_SECONDS = invalid;
+      expect(sim2RealComputeHealthTtlSeconds()).toBe(DEFAULT_COMPUTE_HEALTH_TTL_SECONDS);
+    }
+
+    const now = Date.parse('2026-09-13T00:00:00.000Z');
+    process.env.RDK_SIM2REAL_COMPUTE_HEALTH_TTL_SECONDS = '30';
+    expect(
+      isSim2RealComputeResourceHealthFresh(
+        { status: 'online', lastCheckedAt: new Date(now - 30_000).toISOString() },
+        now,
+      ),
+    ).toBe(true);
+    expect(
+      isSim2RealComputeResourceHealthFresh(
+        { status: 'online', lastCheckedAt: new Date(now - 30_001).toISOString() },
+        now,
+      ),
+    ).toBe(false);
+    expect(
+      isSim2RealComputeResourceHealthFresh(
+        { status: 'offline', lastCheckedAt: new Date(now).toISOString() },
+        now,
+      ),
+    ).toBe(false);
+    expect(
+      isSim2RealComputeResourceHealthFresh(
+        { status: 'online', lastCheckedAt: new Date(now + 1_000).toISOString() },
+        now,
+      ),
+    ).toBe(false);
+  });
+
   it('keeps models and run history isolated by owner and omits owner fields from responses', async () => {
     const root = await useTempStorage();
     const manifest = structuredClone(BUILTIN_MICRODUCK_MODEL.manifest);
@@ -111,7 +165,7 @@ describe('Sim2Real owner-scoped ledger', () => {
         }),
       ]),
     );
-    expect(await listSim2RealModels('bob')).toHaveLength(1);
+    expect(await listSim2RealModels('bob')).toHaveLength(2);
     expect(await getSim2RealModel(model.id, 'bob')).toBeNull();
     expect(await listSim2RealRuns('bob')).toHaveLength(0);
     expect(await listSim2RealRuns('alice')).toHaveLength(1);
@@ -130,7 +184,7 @@ describe('Sim2Real owner-scoped ledger', () => {
     await expect(
       createSim2RealModel(structuredClone(BUILTIN_MICRODUCK_MODEL.manifest), 'alice'),
     ).rejects.toThrow('sim2real_storage_not_configured');
-    await expect(listSim2RealModels('alice')).resolves.toHaveLength(1);
+    await expect(listSim2RealModels('alice')).resolves.toHaveLength(2);
   });
 
   it('marks a corrupt ledger unready and never overwrites it as an empty database', async () => {
@@ -316,6 +370,181 @@ describe('Sim2Real owner-scoped ledger', () => {
     });
   });
 
+  it('invalidates first-class passed evidence when newer telemetry arrives', async () => {
+    await useTempStorage();
+    const { modelId, runId } = await seedRun('evaluation-freshness');
+    await appendSim2RealTelemetryWithResult(
+      {
+        runId,
+        modelId,
+        source: 'import',
+        samples: [{ t: 0 }],
+      },
+      'alice',
+    );
+    const evaluated = await evaluateSim2RealRun(runId, 'alice', ({ telemetry }) =>
+      summaryFor(telemetry),
+    );
+    expect(evaluated).not.toBeNull();
+    const created = await createSim2RealEvaluationWithResult(
+      {
+        runId,
+        modelId,
+        datasetIds: [],
+        status: 'passed',
+        summary: 'attested fixture',
+        report: {
+          ...evaluated!.evaluation,
+          replay: { ...evaluated!.evaluation.replay, attested: true },
+        },
+        source: 'platform',
+        attested: true,
+        telemetryRevision: evaluated!.telemetryRevision,
+      },
+      'alice',
+      { allowInitialTerminal: true, idempotencyKey: 'freshness-eval' },
+    );
+    expect(created.evaluation).toMatchObject({
+      status: 'passed',
+      telemetryRevision: evaluated!.telemetryRevision,
+    });
+    await expect(getSim2RealRun(runId, 'alice')).resolves.toMatchObject({
+      evaluationId: created.evaluation.id,
+      telemetryRevision: evaluated!.telemetryRevision,
+    });
+
+    await appendSim2RealTelemetryWithResult(
+      {
+        runId,
+        modelId,
+        source: 'import',
+        samples: [{ t: 1 }],
+      },
+      'alice',
+    );
+    const invalidatedRun = await getSim2RealRun(runId, 'alice');
+    expect(invalidatedRun).toBeDefined();
+    expect(invalidatedRun).not.toHaveProperty('evaluationId');
+    expect(invalidatedRun).not.toHaveProperty('telemetryRevision');
+    expect(invalidatedRun).not.toHaveProperty('evaluation');
+    const ledgerFile = path.join(process.env.RDK_SIM2REAL_STORAGE_DIR!, 'sim2real.json');
+    const ledger = JSON.parse(await fs.readFile(ledgerFile, 'utf8')) as {
+      evaluations: Array<Record<string, unknown>>;
+    };
+    expect(ledger.evaluations).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: created.evaluation.id,
+          stale: true,
+          staleReason: 'new telemetry appended; rerun evaluation',
+        }),
+      ]),
+    );
+  });
+
+  it('rechecks release evidence at approval and refuses a plan made stale afterwards', async () => {
+    await useTempStorage();
+    const { modelId, runId } = await seedRun('approval-freshness');
+    const run = await getSim2RealRun(runId, 'alice');
+    expect(run).toBeDefined();
+    const report: Sim2RealEvaluationSummary = {
+      evaluatedAt: new Date().toISOString(),
+      sampleCount: 10,
+      replay: {
+        sampleCount: 10,
+        durationSeconds: 1,
+        source: 'board-agent',
+        attested: true,
+        deviceId: 'board-1',
+        chunkCount: 1,
+        droppedCount: 0,
+        doneCount: 1,
+        fallCount: 0,
+      },
+      warnings: [],
+    };
+    const evaluation = await createSim2RealEvaluationWithResult(
+      {
+        runId,
+        modelId,
+        datasetIds: [],
+        status: 'passed',
+        summary: 'board evidence',
+        report,
+        source: 'platform',
+        attested: true,
+      },
+      'alice',
+      { allowInitialTerminal: true, idempotencyKey: 'approval-freshness-eval' },
+    );
+    const artifact = await createSim2RealArtifactWithResult(
+      {
+        artifactId: 'approval-freshness-policy',
+        version: 'v1',
+        name: 'Approval freshness policy',
+        role: 'compiled-policy',
+        kind: 'compiled',
+        format: 'bin',
+        ref: 'artifact://approval-freshness/v1',
+        sha256: 'c'.repeat(64),
+        modelId,
+        runId,
+        datasetIds: [],
+        evaluationIds: [evaluation.evaluation.id],
+        targetPlatforms: ['rdk-x5'],
+        toolchainTarget: 'rdk-x5',
+        acceleratorArchitecture: 'bayes-e',
+        status: 'draft',
+      },
+      'alice',
+      { idempotencyKey: 'approval-freshness-artifact' },
+    );
+    await updateSim2RealArtifactStatus(artifact.artifact.id, 'validated', 'alice');
+    await updateSim2RealArtifactStatus(artifact.artifact.id, 'published', 'alice');
+    const deployment = await createSim2RealDeployment(
+      {
+        modelId,
+        runId,
+        artifactId: artifact.artifact.id,
+        evaluationId: evaluation.evaluation.id,
+        deviceId: 'board-1',
+        targetPlatform: 'rdk-x5',
+        mode: 'canary',
+        status: 'planned',
+        summary: 'awaiting approval',
+        compatibility: {
+          platformId: 'rdk-x5',
+          status: 'compatible',
+          result: {} as never,
+          deployable: true,
+          reason: 'compiled artifact matches board',
+        },
+        steps: [],
+        releaseGate: {
+          passed: true,
+          checkedAt: new Date().toISOString(),
+          runId,
+          errors: [],
+          checks: { boardTelemetryAttested: true, boardTelemetrySamples: 10 },
+        },
+      },
+      'alice',
+    );
+
+    await appendSim2RealTelemetryWithResult(
+      {
+        runId,
+        modelId,
+        source: 'import',
+        samples: [{ t: 0 }],
+      },
+      'alice',
+    );
+    await expect(
+      decideSim2RealDeploymentApproval(deployment.id, 'approved', 'alice', 'alice'),
+    ).rejects.toMatchObject({ code: 'sim2real_evaluation_stale' });
+  });
+
   it('keeps terminal run states from being resurrected by stale runner polling', async () => {
     await useTempStorage();
     const manifest = structuredClone(BUILTIN_MICRODUCK_MODEL.manifest);
@@ -455,7 +684,17 @@ describe('Sim2Real owner-scoped ledger', () => {
         runId: run.id,
         modelId: model.id,
         source: 'import',
-        samples: [{ t: 0 }, { t: 0.02 }],
+        samples: [
+          {
+            t: 0,
+            cmd_vel: { linear: 0.2, angular: -0.3 },
+            actionOutput: 'normalized-twist',
+            actionScale: { linear: 0.3, angular: 1, units: 'm/s,rad/s' },
+            controlHz: 10,
+            controlPeriodSeconds: 0.1,
+          },
+          { t: 0.02 },
+        ],
       },
       'alice',
     );
@@ -476,7 +715,17 @@ describe('Sim2Real owner-scoped ledger', () => {
     invalidateSim2RealStoreCacheForTest();
     const restored = await listSim2RealTelemetry(run.id, 'alice', 10);
     expect(restored).toHaveLength(1);
-    expect(restored[0].samples).toEqual([{ t: 0 }, { t: 0.02 }]);
+    expect(restored[0].samples).toEqual([
+      {
+        t: 0,
+        cmd_vel: { linear: 0.2, angular: -0.3 },
+        actionOutput: 'normalized-twist',
+        actionScale: { linear: 0.3, angular: 1, units: 'm/s,rad/s' },
+        controlHz: 10,
+        controlPeriodSeconds: 0.1,
+      },
+      { t: 0.02 },
+    ]);
 
     // Idempotent replay rehydrates the full record too, not the bare index row.
     const replay = await appendSim2RealTelemetryWithResult(
@@ -502,6 +751,40 @@ describe('Sim2Real owner-scoped ledger', () => {
     );
     expect(duplicate.duplicate).toBe(true);
     expect(duplicate.telemetry.samples).toEqual([{ t: 1 }]);
+  });
+
+  it('ignores shard lines that never received a committed ledger index', async () => {
+    const root = await useTempStorage();
+    const { modelId, runId } = await seedRun('orphan-shard');
+    const accepted = await appendSim2RealTelemetryWithResult(
+      {
+        runId,
+        modelId,
+        source: 'import',
+        sequence: 0,
+        samples: [{ t: 0 }],
+      },
+      'alice',
+    );
+    const orphan = {
+      ...accepted.telemetry,
+      id: 'orphan-shard-row',
+      sequence: 1,
+      samples: [{ t: 1 }],
+      receivedAt: new Date().toISOString(),
+    };
+    // Simulate a crash after the append-first shard write but before the
+    // ledger index rename. The orphan remains on disk and must be invisible
+    // after a process restart/cache invalidation.
+    await fs.appendFile(telemetryShardFile(root, runId), `${JSON.stringify(orphan)}\n`, 'utf8');
+    invalidateSim2RealStoreCacheForTest();
+
+    await expect(listSim2RealTelemetry(runId, 'alice', 10)).resolves.toMatchObject([
+      { id: accepted.telemetry.id, sequence: 0 },
+    ]);
+    await expect(
+      listSim2RealTelemetry(runId, 'alice', SIM2REAL_TELEMETRY_RECORD_CAP),
+    ).resolves.toHaveLength(1);
   });
 
   it('uses a bounded active-run default when the environment value is invalid', () => {
@@ -793,6 +1076,29 @@ describe('Sim2Real telemetry retention', () => {
     const listed = await listSim2RealTelemetry(runId, 'alice', 10);
     expect(listed).toHaveLength(1);
     expect(listed[0]).toMatchObject({ sequence: 2, samples: [{ t: 2 }] });
+  });
+
+  it('releases run sample quota before admitting a fresh chunk', async () => {
+    const root = await useTempStorage();
+    const { modelId, runId } = await seedRun('retention-quota');
+    // Fill the exact per-run sample budget with one old shard row. The next
+    // chunk is only admissible when retention removes that row before quota
+    // accounting; the pre-fix ordering rejected it as 100001 samples.
+    const samples = Array.from({ length: 100_000 }, (_, index) => ({ t: index }));
+    await appendSim2RealTelemetryWithResult(
+      { runId, modelId, source: 'import', sequence: 0, samples },
+      'alice',
+    );
+    await ageRunTelemetry(root, runId, 30);
+    process.env.RDK_SIM2REAL_TELEMETRY_RETENTION_DAYS = '1';
+
+    await expect(
+      appendSim2RealTelemetryWithResult(
+        { runId, modelId, source: 'import', sequence: 1, samples: [{ t: 100_000 }] },
+        'alice',
+      ),
+    ).resolves.toMatchObject({ duplicate: false });
+    await expect(readShardLines(root, runId)).resolves.toHaveLength(1);
   });
 
   it('treats malformed or out-of-range retention values as disabled', () => {

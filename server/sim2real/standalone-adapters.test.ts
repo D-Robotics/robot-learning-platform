@@ -8,12 +8,18 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import {
   buildBoardPreflightCommand,
+  boardAgentTokenConfigured,
+  boardAgentTokenRequired,
+  isBoardAgentConfigured,
   createStandaloneRobogoApiClient,
   isForeignOwnedDevice,
+  persistDeviceBoardDetection,
   readDevices,
   requestOwnsDevice,
+  safeStudioOrigin,
   studioBridgeConfiguration,
   studioSecurityHeadersMiddleware,
+  upsertBridgeDevice,
 } from './standalone-adapters.js';
 import { createSim2RealWebApp } from '../../services/sim2real-web/server.js';
 
@@ -23,6 +29,10 @@ const previousToken = process.env.RDK_SIM2REAL_ROBOGO_TOKEN;
 const previousStorage = process.env.RDK_SIM2REAL_STORAGE_DIR;
 const previousStudioOrigin = process.env.RDK_SIM2REAL_STUDIO_EXEC_ORIGIN;
 const previousStudioDevice = process.env.RDK_SIM2REAL_STUDIO_DEVICE_ID;
+const previousBoardAgentUrl = process.env.RDK_SIM2REAL_BOARD_AGENT_URL;
+const previousBoardAgentToken = process.env.RDK_SIM2REAL_BOARD_AGENT_TOKEN;
+const previousNodeEnv = process.env.NODE_ENV;
+const previousDeployment = process.env.RDK_SIM2REAL_DEPLOYMENT;
 const temporaryRoots: string[] = [];
 
 afterEach(async () => {
@@ -39,6 +49,14 @@ afterEach(async () => {
   else process.env.RDK_SIM2REAL_STUDIO_EXEC_ORIGIN = previousStudioOrigin;
   if (previousStudioDevice === undefined) delete process.env.RDK_SIM2REAL_STUDIO_DEVICE_ID;
   else process.env.RDK_SIM2REAL_STUDIO_DEVICE_ID = previousStudioDevice;
+  if (previousBoardAgentUrl === undefined) delete process.env.RDK_SIM2REAL_BOARD_AGENT_URL;
+  else process.env.RDK_SIM2REAL_BOARD_AGENT_URL = previousBoardAgentUrl;
+  if (previousBoardAgentToken === undefined) delete process.env.RDK_SIM2REAL_BOARD_AGENT_TOKEN;
+  else process.env.RDK_SIM2REAL_BOARD_AGENT_TOKEN = previousBoardAgentToken;
+  if (previousNodeEnv === undefined) delete process.env.NODE_ENV;
+  else process.env.NODE_ENV = previousNodeEnv;
+  if (previousDeployment === undefined) delete process.env.RDK_SIM2REAL_DEPLOYMENT;
+  else process.env.RDK_SIM2REAL_DEPLOYMENT = previousDeployment;
 });
 
 describe('standalone device ownership boundary', () => {
@@ -120,6 +138,97 @@ describe('standalone device ownership boundary', () => {
     expect(devices[0]).not.toHaveProperty('pluginSecret');
   });
 
+  it('keeps same-named bridge devices isolated across owners', async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'rdk-sim2real-bridge-owners-'));
+    temporaryRoots.push(root);
+    process.env.RDK_SIM2REAL_STORAGE_DIR = root;
+
+    const first = await upsertBridgeDevice({
+      ownerKey: 'sso:alice:web',
+      bridgeId: 'bridge-a',
+      bridgeDeviceId: 'shared-device-id',
+      host: '127.0.0.1',
+    });
+    const second = await upsertBridgeDevice({
+      ownerKey: 'sso:bob:web',
+      bridgeId: 'bridge-b',
+      bridgeDeviceId: 'shared-device-id',
+      host: '127.0.0.2',
+    });
+    const devices = await readDevices();
+
+    expect(first.id).not.toBe(second.id);
+    expect(devices).toHaveLength(2);
+    expect(devices).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ id: first.id, bridgeOwnerKey: 'sso:alice:web' }),
+        expect.objectContaining({ id: second.id, bridgeOwnerKey: 'sso:bob:web' }),
+      ]),
+    );
+
+    // Reconnecting the first tenant updates its own row rather than deleting
+    // the second tenant's row with the colliding legacy id.
+    const reconnected = await upsertBridgeDevice({
+      ownerKey: 'sso:alice:web',
+      bridgeId: 'bridge-a',
+      bridgeDeviceId: 'shared-device-id',
+      host: '127.0.0.3',
+    });
+    expect(reconnected.id).toBe(first.id);
+    expect(await readDevices()).toHaveLength(2);
+  });
+
+  it('persists board passport fields only on the selected owner row', async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'rdk-sim2real-detect-owners-'));
+    temporaryRoots.push(root);
+    process.env.RDK_SIM2REAL_STORAGE_DIR = root;
+    const rows = [
+      {
+        id: 'same-device-id',
+        host: '127.0.0.1',
+        username: 'root',
+        status: 'connected',
+        lastCheckedAt: '2026-09-04T00:00:00.000Z',
+        connectionMode: 'bridge',
+        bridgeDeviceId: 'board-a',
+        bridgeOwnerKey: 'sso:alice:web',
+        boardPlatform: 'old-alice',
+      },
+      {
+        id: 'same-device-id',
+        host: '127.0.0.2',
+        username: 'root',
+        status: 'connected',
+        lastCheckedAt: '2026-09-04T00:00:00.000Z',
+        connectionMode: 'bridge',
+        bridgeDeviceId: 'board-b',
+        bridgeOwnerKey: 'sso:bob:web',
+        boardPlatform: 'old-bob',
+      },
+    ];
+    await fs.writeFile(path.join(root, 'devices.json'), JSON.stringify(rows), 'utf8');
+
+    expect(
+      await persistDeviceBoardDetection(
+        'same-device-id',
+        { boardPlatform: 'rdk-x5', boardModel: 'x5', boardOsVersion: 'linux' },
+        { multiUser: true, ownerKey: 'sso:alice:web' },
+      ),
+    ).toBe(true);
+    const persisted = JSON.parse(await fs.readFile(path.join(root, 'devices.json'), 'utf8'));
+    expect(persisted).toEqual([
+      expect.objectContaining({ boardPlatform: 'rdk-x5', bridgeOwnerKey: 'sso:alice:web' }),
+      expect.objectContaining({ boardPlatform: 'old-bob', bridgeOwnerKey: 'sso:bob:web' }),
+    ]);
+    expect(
+      await persistDeviceBoardDetection(
+        'same-device-id',
+        { boardPlatform: 'should-not-write' },
+        { multiUser: true },
+      ),
+    ).toBe(false);
+  });
+
   it('does not fall back to a global RoboGo token unless private mode opts in', async () => {
     process.env.RDK_SIM2REAL_ROBOGO_API_URL = 'https://robogo.example.test';
     process.env.RDK_SIM2REAL_ROBOGO_TOKEN = 'global-token';
@@ -141,6 +250,47 @@ describe('standalone device ownership boundary', () => {
     expect(requests).toEqual(['Bearer global-token']);
   });
 
+  it('bounds RoboGo transport responses and rejects redirects and malformed paths', async () => {
+    process.env.RDK_SIM2REAL_ROBOGO_API_URL = 'https://robogo.example.test';
+    process.env.RDK_SIM2REAL_ROBOGO_TOKEN = 'a'.repeat(40);
+    const inits: RequestInit[] = [];
+    const fetchImpl = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+      inits.push(init ?? {});
+      return new Response('{}', {
+        status: 200,
+        headers: { 'content-length': 'not-a-length' },
+      });
+    }) as typeof fetch;
+    const client = createStandaloneRobogoApiClient({ fetchImpl, allowEnvironmentToken: true });
+    await expect(client.request('alice', { method: 'GET', path: '/summary' })).rejects.toThrow(
+      'robogo_api_response_too_large',
+    );
+    expect(inits[0]?.redirect).toBe('error');
+
+    await expect(client.request('alice', { method: 'GET', path: '/../private' })).rejects.toThrow(
+      'robogo_api_path_invalid',
+    );
+    expect(inits).toHaveLength(1);
+  });
+
+  it('limits chunked RoboGo responses before JSON parsing', async () => {
+    process.env.RDK_SIM2REAL_ROBOGO_API_URL = 'https://robogo.example.test';
+    process.env.RDK_SIM2REAL_ROBOGO_TOKEN = 'b'.repeat(40);
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new Uint8Array(1_000_001));
+        controller.close();
+      },
+    });
+    const client = createStandaloneRobogoApiClient({
+      fetchImpl: (async () => new Response(stream, { status: 200 })) as typeof fetch,
+      allowEnvironmentToken: true,
+    });
+    await expect(client.request('alice', { method: 'GET', path: '/summary' })).rejects.toThrow(
+      'robogo_api_response_too_large',
+    );
+  });
+
   it('allows the visible device registry to provide the Studio bridge id', () => {
     process.env.RDK_SIM2REAL_STUDIO_EXEC_ORIGIN = 'http://127.0.0.1:18090';
     delete process.env.RDK_SIM2REAL_STUDIO_DEVICE_ID;
@@ -149,6 +299,28 @@ describe('standalone device ownership boundary', () => {
       deviceId: '',
       agentPort: 19100,
     });
+  });
+
+  it('never forwards session cookies to a plain-http remote Studio origin', () => {
+    expect(safeStudioOrigin('http://studio.example.test')).toBeNull();
+    expect(safeStudioOrigin('https://studio.example.test')).toBe('https://studio.example.test');
+    expect(safeStudioOrigin('http://127.0.0.1:18090')).toBe('http://127.0.0.1:18090');
+    expect(safeStudioOrigin('https://user:pass@studio.example.test')).toBeNull();
+    expect(safeStudioOrigin('https://studio.example.test/path')).toBeNull();
+  });
+
+  it('fails closed when production points at a BoardAgent without a strong bearer', () => {
+    process.env.NODE_ENV = 'production';
+    process.env.RDK_SIM2REAL_DEPLOYMENT = 'web-cloud';
+    process.env.RDK_SIM2REAL_BOARD_AGENT_URL = 'https://board-agent.example.test';
+    delete process.env.RDK_SIM2REAL_BOARD_AGENT_TOKEN;
+    expect(boardAgentTokenRequired()).toBe(true);
+    expect(boardAgentTokenConfigured()).toBe(false);
+    expect(isBoardAgentConfigured()).toBe(false);
+
+    process.env.RDK_SIM2REAL_BOARD_AGENT_TOKEN = 'board-agent-production-random-secret-0123456789';
+    expect(boardAgentTokenConfigured()).toBe(true);
+    expect(isBoardAgentConfigured()).toBe(true);
   });
 });
 
@@ -416,9 +588,11 @@ describe('originbot dashboard asset extraction', () => {
     const script = await fs.readFile(path.join(publicRoot, 'originbot-dashboard.js'), 'utf8');
     const css = await fs.readFile(path.join(publicRoot, 'originbot-dashboard.css'), 'utf8');
     expect(script.trim().length).toBeGreaterThan(0);
-    expect(script).toContain(
-      "const base=location.pathname.startsWith('/sim2real/')?'/sim2real':'';",
-    );
+    // The dashboard prefers the server-provided base-path meta tag, infers
+    // its mount from the filename, and retains the legacy standalone fallback.
+    expect(script).toContain('meta[name="rdk-sim2real-base-path"]');
+    expect(script).toContain("pathName.endsWith('/originbot-dashboard.html')");
+    expect(script).toContain("pathName.startsWith('/sim2real/')?'/sim2real':''");
     expect(script).toContain('tick();');
     expect(css.trim().length).toBeGreaterThan(0);
     expect(css).toContain('.grid{display:grid');

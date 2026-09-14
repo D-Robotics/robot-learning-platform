@@ -13,6 +13,7 @@ import type {
   Sim2RealRunBackend,
   Sim2RealRunRecord,
   Sim2RealRunStatus,
+  Sim2RealComputeResource,
 } from '../../shared/sim2real.js';
 import {
   MICRODUCK_SIM2REAL_CONTRACT,
@@ -25,7 +26,12 @@ import {
   type Sim2RealRobotId,
   validateSim2RealManifest,
 } from '../../shared/sim2real.js';
-import { sendApiError, sendInternalApiError, wrapAsync } from '../sim2real/http-helpers.js';
+import {
+  redactInternalError,
+  sendApiError,
+  sendInternalApiError,
+  wrapAsync,
+} from '../sim2real/http-helpers.js';
 import {
   Sim2RealError,
   sim2RealErrorCode,
@@ -36,6 +42,8 @@ import {
   isForeignOwnedDevice,
   readDevices,
   requestOwnsDevice,
+  safeStudioOrigin,
+  upsertBridgeDevice,
 } from '../sim2real/standalone-adapters.js';
 import {
   compatibilityForManifest,
@@ -55,6 +63,8 @@ import {
   findSim2RealRunByIdempotency,
   reserveSim2RealRun,
   getSim2RealRun,
+  getSim2RealArtifact,
+  getSim2RealEvaluation,
   getSim2RealDeployment,
   getSim2RealModel,
   listSim2RealDeployments,
@@ -63,21 +73,28 @@ import {
   getSim2RealProject,
   listSim2RealProjects,
   listSim2RealDatasets,
+  listSim2RealArtifacts,
   listSim2RealComputeResources,
   getSim2RealComputeResourceSecret,
   createSim2RealComputeResource,
   updateSim2RealComputeResource,
   deleteSim2RealComputeResource,
+  isSim2RealComputeResourceHealthFresh,
+  sim2RealComputeHealthTtlSeconds,
   sim2RealActiveRunLimit,
   updateSim2RealRun,
   updateSim2RealRunForReconcile,
   updateSim2RealDeployment,
+  decideSim2RealDeploymentApproval,
   sim2RealStorageInfo,
 } from '../sim2real/sim2real-store.js';
 import {
   requestLocalTraining,
   requestLocalTrainingStatus,
   fetchLocalRunArtifact,
+  localRunnerTokenFormatValid,
+  localRunnerTokenRequired,
+  localRunnerTokenUsable,
 } from '../sim2real/local-runner.js';
 import {
   isSim2RealRunnerNotFound,
@@ -87,11 +104,18 @@ import {
   normalizeRunnerUrl,
 } from '../sim2real/robogo-runner.js';
 import { LOCAL_SIM2REAL_AUTH, type Sim2RealAuthPort } from '../sim2real/sim2real-auth.js';
+import {
+  principalCan,
+  SIM2REAL_PERMISSIONS,
+  type Sim2RealPermission,
+} from '../sim2real/sim2real-rbac.js';
 import { validateRunForDeployment } from '../sim2real/release-evidence.js';
 import { registerSim2RealTelemetryRoutes } from './sim2real-telemetry-routes.js';
 import { registerSim2RealBoardStationRoutes } from './sim2real-board-station-routes.js';
 import { registerSim2RealDeviceConnectionRoutes } from './sim2real-device-connection-routes.js';
 import { registerSim2RealWorkspaceRoutes } from './sim2real-workspace-routes.js';
+import { registerSim2RealAuditRoutes } from './sim2real-audit-routes.js';
+import { deviceConnectionAgentUrl } from '../sim2real/board-tunnel-manager.js';
 
 type RunOnDevice = (
   request: Request,
@@ -104,6 +128,8 @@ type RunOnDevice = (
     rejectOnNonZeroExit?: boolean;
     stdoutCharLimit?: number;
     abortSignal?: AbortSignal;
+    bridgeDeviceId?: string;
+    bridgeOwnerKey?: string | null;
   },
 ) => Promise<{
   device: unknown;
@@ -117,6 +143,497 @@ type OwnedDevice = Device & { bridgeOwnerKey?: string };
 
 function noStore(response: Response): void {
   response.setHeader('Cache-Control', 'no-store');
+}
+
+function queryText(value: unknown, max = 160): string {
+  return (Array.isArray(value) ? value[0] : value == null ? '' : String(value))
+    .trim()
+    .slice(0, max)
+    .toLowerCase();
+}
+
+const COMPUTE_HEALTH_RESPONSE_MAX_BYTES = 32 * 1024;
+
+/** Keep operator-visible worker fields bounded and free of terminal controls. */
+function safeComputeHealthText(value: unknown, max = 160): string {
+  if (typeof value !== 'string') return '';
+  let output = '';
+  for (const character of value) {
+    const code = character.codePointAt(0) ?? 0;
+    output += code >= 0 && code <= 0x1f ? ' ' : code === 0x7f ? ' ' : character;
+    if (output.length >= max) break;
+  }
+  return output.trim().slice(0, max);
+}
+
+/**
+ * Compute resources are user-owned outbound credentials.  A loopback worker
+ * in local development can intentionally run without a token, but production
+ * and every non-loopback endpoint must use the same strong bearer policy as
+ * the local runner adapter.  Keep syntax validation separate so a short
+ * development fixture is still accepted on loopback while control characters
+ * can never reach a request header or the JSON ledger.
+ */
+function computeRunnerTokenError(runnerUrl: string, runnerToken: string): string | null {
+  if (!localRunnerTokenFormatValid(runnerToken)) {
+    return 'Runner token 不能包含控制字符，且长度不能超过 4096 字节。';
+  }
+  if (localRunnerTokenRequired(runnerUrl) && !localRunnerTokenUsable(runnerToken)) {
+    return '生产或非本机 Runner 必须配置至少 32 字节的随机 bearer token。';
+  }
+  return null;
+}
+
+/**
+ * Read a health response without allowing a remote worker to make this web
+ * process buffer an unbounded body.  A content-length hint is checked before
+ * streaming, then the stream is bounded again for chunked responses.
+ */
+async function boundedComputeHealthText(response: globalThis.Response): Promise<string> {
+  const declared = response.headers.get('content-length');
+  if (declared != null) {
+    const normalized = declared.trim();
+    const length = /^\d+$/.test(normalized) ? Number(normalized) : Number.NaN;
+    if (!Number.isSafeInteger(length) || length < 0 || length > COMPUTE_HEALTH_RESPONSE_MAX_BYTES) {
+      throw new Error('compute_health_response_too_large');
+    }
+  }
+  if (!response.body) {
+    const text = await response.text();
+    if (Buffer.byteLength(text, 'utf8') > COMPUTE_HEALTH_RESPONSE_MAX_BYTES) {
+      throw new Error('compute_health_response_too_large');
+    }
+    return text;
+  }
+  const reader = response.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  try {
+    while (true) {
+      const next = await reader.read();
+      if (next.done) break;
+      total += next.value.byteLength;
+      if (total > COMPUTE_HEALTH_RESPONSE_MAX_BYTES) {
+        await reader.cancel().catch(() => undefined);
+        throw new Error('compute_health_response_too_large');
+      }
+      chunks.push(next.value);
+    }
+  } finally {
+    reader.releaseLock();
+  }
+  return new TextDecoder().decode(Buffer.concat(chunks.map((chunk) => Buffer.from(chunk))));
+}
+
+/**
+ * Studio's Local Bridge is a browser-session transport boundary.  Keep the
+ * boundary deliberately smaller than the general worker clients: a bridge
+ * response is never forwarded verbatim, and a stalled or chunked upstream
+ * cannot make this process retain an unbounded body.
+ */
+export const SIM2REAL_STUDIO_UPSTREAM_TIMEOUT_MS = 15_000;
+export const SIM2REAL_STUDIO_UPSTREAM_MAX_RESPONSE_BYTES = 256 * 1024;
+const SIM2REAL_STUDIO_PAIRING_MAX_RESPONSE_BYTES = 64 * 1024;
+const SIM2REAL_STUDIO_COOKIE_MAX_LENGTH = 8 * 1024;
+const SIM2REAL_STUDIO_COMMAND_MAX_LENGTH = 64 * 1024;
+const SIM2REAL_STUDIO_BRIDGE_MAX_COUNT = 32;
+const SIM2REAL_STUDIO_DEVICE_MAX_COUNT = 128;
+const SIM2REAL_STUDIO_TIMEOUT_ENV = 'RDK_SIM2REAL_STUDIO_UPSTREAM_TIMEOUT_MS';
+const STUDIO_BRIDGE_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,159}$/;
+const STUDIO_TEXT_CONTROL = /[\u0000-\u001f\u007f]/;
+const STUDIO_CONTROL = /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/;
+
+function studioUpstreamTimeoutMs(): number {
+  const configured = Number(process.env[SIM2REAL_STUDIO_TIMEOUT_ENV]);
+  return Number.isSafeInteger(configured) && configured >= 100 && configured <= 30_000
+    ? configured
+    : SIM2REAL_STUDIO_UPSTREAM_TIMEOUT_MS;
+}
+
+function studioSafeText(value: unknown, maxLength: number): string | undefined {
+  if (typeof value !== 'string') return undefined;
+  const text = value.trim();
+  if (
+    !text ||
+    text.length > maxLength ||
+    Buffer.byteLength(text, 'utf8') > maxLength ||
+    STUDIO_TEXT_CONTROL.test(text)
+  ) {
+    return undefined;
+  }
+  return text;
+}
+
+/** Shell scripts may contain line breaks, but never terminal escape/control bytes. */
+function studioSafeCommand(value: unknown): string | undefined {
+  if (typeof value !== 'string') return undefined;
+  const text = value.trim();
+  if (
+    !text ||
+    text.length > SIM2REAL_STUDIO_COMMAND_MAX_LENGTH ||
+    Buffer.byteLength(text, 'utf8') > SIM2REAL_STUDIO_COMMAND_MAX_LENGTH ||
+    STUDIO_CONTROL.test(text)
+  ) {
+    return undefined;
+  }
+  return text;
+}
+
+function studioSafeId(value: unknown): string | undefined {
+  const text = studioSafeText(value, 160);
+  return text && STUDIO_BRIDGE_ID.test(text) ? text : undefined;
+}
+
+function studioSafePort(value: unknown): number | undefined {
+  const port = typeof value === 'number' ? value : Number(value);
+  return Number.isSafeInteger(port) && port >= 1 && port <= 65_535 ? port : undefined;
+}
+
+function studioObject(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : null;
+}
+
+function studioForwardCookie(request: Request): string | undefined {
+  const value = request.headers?.cookie;
+  if (
+    typeof value !== 'string' ||
+    !value ||
+    value.length > SIM2REAL_STUDIO_COOKIE_MAX_LENGTH ||
+    /[\u0000-\u001f\u007f]/.test(value)
+  ) {
+    return undefined;
+  }
+  return value;
+}
+
+async function readBoundedStudioResponseText(
+  response: globalThis.Response,
+  maxBytes: number,
+  signal: AbortSignal,
+): Promise<string> {
+  const declared = response.headers.get('content-length');
+  if (declared !== null) {
+    const normalized = declared.trim();
+    if (!/^\d+$/.test(normalized)) throw new Error('studio_bridge_response_invalid_length');
+    const length = Number(normalized);
+    if (!Number.isSafeInteger(length) || length > maxBytes) {
+      throw new Error('studio_bridge_response_too_large');
+    }
+  }
+  // A real Fetch response exposes a readable body for JSON. Treat a null
+  // body as a protocol failure instead of calling an adapter-provided
+  // unbounded text() fallback.
+  if (!response.body) throw new Error('studio_bridge_response_empty');
+  const reader = response.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  const cancelOnAbort = () => {
+    void reader.cancel().catch(() => undefined);
+  };
+  signal.addEventListener('abort', cancelOnAbort, { once: true });
+  try {
+    while (true) {
+      if (signal.aborted) throw new Error('studio_bridge_timeout');
+      const next = await reader.read();
+      if (next.done) break;
+      const chunk = next.value;
+      total += chunk.byteLength;
+      if (!Number.isSafeInteger(total) || total > maxBytes) {
+        await reader.cancel().catch(() => undefined);
+        throw new Error('studio_bridge_response_too_large');
+      }
+      chunks.push(chunk);
+    }
+  } finally {
+    signal.removeEventListener('abort', cancelOnAbort);
+    reader.releaseLock();
+  }
+  return new TextDecoder().decode(Buffer.concat(chunks.map((chunk) => Buffer.from(chunk))));
+}
+
+interface StudioBridgeJsonResponse {
+  status: number;
+  ok: boolean;
+  payload: Record<string, unknown>;
+}
+
+/**
+ * Fetch one fixed Studio endpoint.  The timeout races both fetch and body
+ * consumption, while the signal is still passed to fetch so real transports
+ * close their socket as soon as the deadline expires.
+ */
+async function fetchStudioBridgeJson(
+  origin: string,
+  path: string,
+  request: Request,
+  options: {
+    method?: 'GET' | 'POST';
+    body?: Record<string, unknown>;
+    maxBytes?: number;
+  } = {},
+): Promise<StudioBridgeJsonResponse | null> {
+  const timeoutSignal = AbortSignal.timeout(studioUpstreamTimeoutMs());
+  let onAbort: ((event: Event) => void) | undefined;
+  const timeout = new Promise<never>((_resolve, reject) => {
+    onAbort = () => reject(new Error('studio_bridge_timeout'));
+    if (timeoutSignal.aborted) onAbort(new Event('abort'));
+    else timeoutSignal.addEventListener('abort', onAbort, { once: true });
+  });
+  let upstream: globalThis.Response | undefined;
+  try {
+    const headers: Record<string, string> = { accept: 'application/json' };
+    const cookie = studioForwardCookie(request);
+    if (cookie) headers.cookie = cookie;
+    let body: string | undefined;
+    if (options.body) {
+      headers['content-type'] = 'application/json';
+      body = JSON.stringify(options.body);
+    }
+    upstream = await Promise.race([
+      fetch(`${origin}${path}`, {
+        method: options.method ?? 'GET',
+        headers,
+        ...(body === undefined ? {} : { body }),
+        redirect: 'error',
+        signal: timeoutSignal,
+      }),
+      timeout,
+    ]);
+    const raw = await Promise.race([
+      readBoundedStudioResponseText(
+        upstream,
+        options.maxBytes ?? SIM2REAL_STUDIO_UPSTREAM_MAX_RESPONSE_BYTES,
+        timeoutSignal,
+      ),
+      timeout,
+    ]);
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(raw);
+    } catch {
+      return null;
+    }
+    const payload = studioObject(parsed);
+    if (!payload) return null;
+    return { status: upstream.status, ok: upstream.ok, payload };
+  } catch {
+    // Do not expose fetch/redirect/proxy text to the browser.  Cancellation is
+    // best-effort because a custom test adapter may not implement body.cancel.
+    void upstream?.body?.cancel().catch(() => undefined);
+    return null;
+  } finally {
+    if (onAbort) timeoutSignal.removeEventListener('abort', onAbort);
+  }
+}
+
+function studioBridgeDeviceProjection(
+  value: unknown,
+  options: { requireHost?: boolean } = {},
+): Record<string, unknown> | null {
+  const source = studioObject(value);
+  if (!source) return null;
+  const id = studioSafeId(source.id);
+  const bridgeDeviceId = studioSafeId(source.bridgeDeviceId) || id;
+  if (!bridgeDeviceId) return null;
+  const host = studioSafeText(source.host, 255);
+  if (options.requireHost && !host) return null;
+  const name = studioSafeText(source.name, 120);
+  const label = studioSafeText(source.label, 120);
+  const username = studioSafeText(source.username, 160) || studioSafeText(source.sshUser, 160);
+  const port = source.port == null ? undefined : studioSafePort(source.port);
+  if (source.port != null && port === undefined) return null;
+  const rawTransport = source.bridgeTransport ?? source.transport;
+  const transport =
+    rawTransport === 'ssh' || rawTransport === 'usb-ethernet' || rawTransport === 'serial'
+      ? rawTransport
+      : undefined;
+  const boardPlatform = studioSafeText(source.boardPlatform, 80);
+  const boardModel = studioSafeText(source.boardModel, 120);
+  return {
+    bridgeDeviceId,
+    ...(id ? { id } : {}),
+    ...(studioSafeId(source.bridgeId) ? { bridgeId: studioSafeId(source.bridgeId) } : {}),
+    ...(name ? { name } : {}),
+    ...(label ? { label } : {}),
+    ...(host ? { host } : {}),
+    ...(port === undefined ? {} : { port }),
+    ...(username ? { username } : {}),
+    ...(transport ? { transport } : {}),
+    ...(typeof source.probeOk === 'boolean' ? { probeOk: source.probeOk } : {}),
+    ...(boardPlatform ? { boardPlatform } : {}),
+    ...(boardModel ? { boardModel } : {}),
+  };
+}
+
+function projectStudioBridgeStatus(
+  payload: Record<string, unknown>,
+): Record<string, unknown> | null {
+  if (!Array.isArray(payload.bridges)) return null;
+  const bridges = payload.bridges.slice(0, SIM2REAL_STUDIO_BRIDGE_MAX_COUNT).flatMap((value) => {
+    const source = studioObject(value);
+    const bridgeId = studioSafeId(source?.bridgeId);
+    if (!source || !bridgeId) return [];
+    const devices = Array.isArray(source.devices)
+      ? source.devices
+          .slice(0, SIM2REAL_STUDIO_DEVICE_MAX_COUNT)
+          .map((device) => studioBridgeDeviceProjection(device))
+          .filter((device): device is Record<string, unknown> => device !== null)
+      : [];
+    return [
+      {
+        bridgeId,
+        online: source.online === true,
+        devices,
+      },
+    ];
+  });
+  return {
+    ...(payload.ok === true ? { ok: true } : {}),
+    bridges,
+  };
+}
+
+function projectStudioPairing(payload: Record<string, unknown>): Record<string, unknown> | null {
+  const command = studioSafeCommand(payload.command);
+  if (!command) return null;
+  const oneliner = studioSafeCommand(payload.oneliner);
+  const message = studioSafeText(payload.message, 400);
+  return {
+    ok: true,
+    command,
+    ...(oneliner ? { oneliner } : {}),
+    ...(message ? { message } : {}),
+  };
+}
+
+function projectStudioConnect(
+  payload: Record<string, unknown>,
+): { response: Record<string, unknown>; device: Record<string, unknown> } | null {
+  const device = studioBridgeDeviceProjection(payload.device, { requireHost: true });
+  if (!device) return null;
+  const message = studioSafeText(payload.message, 400);
+  return {
+    device,
+    response: {
+      ok: true,
+      device,
+      ...(message ? { message } : {}),
+    },
+  };
+}
+
+function studioBridgeUpstreamError(response: Response): void {
+  noStore(response);
+  sendApiError(
+    response,
+    502,
+    'SIM2REAL_STUDIO_BRIDGE_UNAVAILABLE',
+    'Studio Bridge 暂时不可用，请稍后重试。',
+    { retryable: true },
+  );
+}
+
+function studioBridgeConfigError(response: Response): void {
+  noStore(response);
+  sendApiError(
+    response,
+    503,
+    'SIM2REAL_STUDIO_BRIDGE_UNAVAILABLE',
+    'Studio Bridge 地址未通过安全校验。',
+    { retryable: false },
+  );
+}
+
+function studioPairingRequestBody(value: unknown): Record<string, unknown> | null {
+  const source = studioObject(value);
+  if (!source) return null;
+  const host = studioSafeText(source.host, 255);
+  const sshUser = studioSafeText(source.sshUser, 160);
+  if (!host || !sshUser) return null;
+  const sshPort = source.sshPort == null ? undefined : studioSafePort(source.sshPort);
+  if (source.sshPort != null && sshPort === undefined) return null;
+  let sshPassword: string | undefined;
+  if (source.sshPassword != null) {
+    if (
+      typeof source.sshPassword !== 'string' ||
+      source.sshPassword.length > 4_096 ||
+      /[\u0000-\u001f\u007f]/.test(source.sshPassword)
+    ) {
+      return null;
+    }
+    sshPassword = source.sshPassword;
+  }
+  return {
+    host,
+    sshUser,
+    ...(sshPort === undefined ? {} : { sshPort }),
+    ...(sshPassword === undefined ? {} : { sshPassword }),
+  };
+}
+
+function studioConnectRequestBody(value: unknown): Record<string, unknown> | null {
+  const source = studioObject(value);
+  if (!source) return null;
+  if (source.bridgeId == null) return {};
+  const bridgeId = studioSafeId(source.bridgeId);
+  return bridgeId ? { bridgeId } : null;
+}
+
+interface ComputeHealthPayload {
+  cuda?: boolean;
+  gpuName?: string;
+  vramMb?: number;
+  maxConcurrentJobs?: number;
+}
+
+/** Accept only the small, explicit health contract used by the worker. */
+function parseComputeHealthPayload(text: string): ComputeHealthPayload | null {
+  let parsed: unknown;
+  try {
+    parsed = text ? JSON.parse(text) : null;
+  } catch {
+    return null;
+  }
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return null;
+  const source = parsed as Record<string, unknown>;
+  // HTTP 200 alone is not proof that a worker is configured or ready.  The
+  // worker's explicit boolean is the source of truth for readiness.
+  if (source.ok !== true) return null;
+  const boundedInteger = (key: string, min: number, max: number): number | undefined => {
+    if (source[key] == null) return undefined;
+    const value = Number(source[key]);
+    return Number.isSafeInteger(value) && value >= min && value <= max ? value : undefined;
+  };
+  const maxConcurrentJobs = boundedInteger('maxConcurrentJobs', 1, 32);
+  const vramMb = boundedInteger('vramMb', 0, 2_000_000);
+  // If a worker sends a field, reject malformed values rather than silently
+  // storing a misleading partial health record.
+  if (source.maxConcurrentJobs != null && maxConcurrentJobs == null) return null;
+  if (source.vramMb != null && vramMb == null) return null;
+  const gpuName = safeComputeHealthText(source.gpuName, 160);
+  return {
+    ...(typeof source.cuda === 'boolean' ? { cuda: source.cuda } : {}),
+    ...(gpuName ? { gpuName } : {}),
+    ...(vramMb == null ? {} : { vramMb }),
+    ...(maxConcurrentJobs == null ? {} : { maxConcurrentJobs }),
+  };
+}
+
+function computeResourceHealthFailure(
+  resource: Pick<Sim2RealComputeResource, 'status' | 'lastCheckedAt'>,
+): 'stale' | 'not-ready' | null {
+  if (isSim2RealComputeResourceHealthFresh(resource)) return null;
+  const checkedAt = resource.lastCheckedAt ? Date.parse(resource.lastCheckedAt) : Number.NaN;
+  if (
+    resource.lastCheckedAt &&
+    Number.isFinite(checkedAt) &&
+    Date.now() - checkedAt > sim2RealComputeHealthTtlSeconds() * 1_000
+  ) {
+    return 'stale';
+  }
+  return 'not-ready';
 }
 
 /** Shared deployments fail closed when no SSO owner is present. */
@@ -145,6 +662,24 @@ function requestOwner(
       {
         retryable: false,
       },
+    );
+    return null;
+  }
+  // An authenticated account is not automatically a reader once an adapter
+  // emits explicit role claims.  `principalCan` deliberately treats an empty
+  // or unknown claim as deny-all; enforce that policy at the shared owner
+  // boundary so every read route (workspace, lineage, audit, telemetry and
+  // deployment details) fails closed consistently.  Without this check a
+  // malformed role claim could still enumerate its own tenant's records even
+  // though all mutations were correctly denied.
+  if (!principalCan(principal, SIM2REAL_PERMISSIONS.read)) {
+    noStore(response);
+    sendApiError(
+      response,
+      403,
+      'SIM2REAL_PERMISSION_DENIED',
+      '当前账号没有读取 Sim2Real 工作区的权限。',
+      { retryable: false, permission: SIM2REAL_PERMISSIONS.read },
     );
     return null;
   }
@@ -181,6 +716,7 @@ function runRequestFingerprint(input: {
   experimentId?: string;
   label?: string;
   computeResourceId?: string;
+  datasetIds?: string[];
 }): string {
   return JSON.stringify({
     modelId: input.modelId,
@@ -192,6 +728,7 @@ function runRequestFingerprint(input: {
     experimentId: input.experimentId || null,
     label: input.label || null,
     computeResourceId: input.computeResourceId || null,
+    datasetIds: input.datasetIds || [],
   });
 }
 
@@ -262,6 +799,14 @@ function normalizeResumeFrom(value: unknown): { value?: Sim2RealCheckpointRef; e
 
 function ownerKey(owner: string | undefined): string | null {
   return owner ? `sso:${owner}:web` : null;
+}
+
+function configuredStudioOrigin(): string | null {
+  return safeStudioOrigin(
+    process.env.RDK_SIM2REAL_STUDIO_ORIGIN ||
+      process.env.RDK_SIM2REAL_STUDIO_EXEC_ORIGIN ||
+      'https://rdkstudio.d-robotics.cc',
+  );
 }
 
 async function visibleDevices(
@@ -438,16 +983,30 @@ const STORAGE_HTTP_CODES = [
   'sim2real_storage_quota_exceeded',
   'sim2real_model_version_exists',
   'sim2real_model_quota_exceeded',
+  'sim2real_dataset_version_exists',
+  'sim2real_dataset_transition_invalid',
+  'sim2real_dataset_not_mutable',
+  'sim2real_artifact_version_exists',
+  'sim2real_artifact_idempotency_conflict',
+  'sim2real_artifact_not_mutable',
+  'sim2real_artifact_lineage_invalid',
+  'sim2real_run_lineage_invalid',
+  'sim2real_evaluation_lineage_invalid',
+  'sim2real_evaluation_stale',
+  'sim2real_evaluation_transition_invalid',
+  'sim2real_evaluation_idempotency_conflict',
   'sim2real_run_quota_exceeded',
   'sim2real_deployment_quota_exceeded',
   'sim2real_run_idempotency_required',
   'sim2real_run_idempotency_conflict',
   'sim2real_run_reservation_lost',
   'sim2real_telemetry_idempotency_conflict',
+  'sim2real_telemetry_attestation_sequence_required',
   'sim2real_telemetry_timestamp_order',
   'sim2real_telemetry_quota_exceeded',
   'sim2real_active_run_quota_exceeded',
   'sim2real_deployment_idempotency_conflict',
+  'sim2real_deployment_transition_invalid',
   'sim2real_runner_token_invalid',
   'sim2real_runner_account_invalid',
   'sim2real_runner_response_too_large',
@@ -515,6 +1074,78 @@ const STORAGE_ERROR_HTTP: Readonly<
     message: 'sim2real 台账记录已达到单实例上限，请迁移到数据库或对象存储 adapter 后再继续。',
     retryable: false,
   },
+  sim2real_dataset_version_exists: {
+    status: 409,
+    code: 'SIM2REAL_DATASET_VERSION_EXISTS',
+    message: '同一数据集名称和版本已登记；请创建新的版本号。',
+    retryable: false,
+  },
+  sim2real_dataset_transition_invalid: {
+    status: 409,
+    code: 'SIM2REAL_DATASET_TRANSITION_INVALID',
+    message: '数据集状态转换不合法；已准备或撤销的数据集不能回退覆盖。',
+    retryable: false,
+  },
+  sim2real_dataset_not_mutable: {
+    status: 409,
+    code: 'SIM2REAL_DATASET_NOT_MUTABLE',
+    message: '数据集快照不可原地修改；请登记新的版本。',
+    retryable: false,
+  },
+  sim2real_artifact_version_exists: {
+    status: 409,
+    code: 'SIM2REAL_ARTIFACT_VERSION_EXISTS',
+    message: '同一制品名称和版本已登记且内容不同；发布制品不可覆盖，请使用新版本。',
+    retryable: false,
+  },
+  sim2real_artifact_idempotency_conflict: {
+    status: 409,
+    code: 'SIM2REAL_ARTIFACT_IDEMPOTENCY_CONFLICT',
+    message: '制品 Idempotency-Key 已用于另一份制品请求，请更换 key。',
+    retryable: false,
+  },
+  sim2real_artifact_not_mutable: {
+    status: 409,
+    code: 'SIM2REAL_ARTIFACT_NOT_MUTABLE',
+    message: '已发布制品不可原地修改；如需下线请使用撤销操作。',
+    retryable: false,
+  },
+  sim2real_artifact_lineage_invalid: {
+    status: 422,
+    code: 'SIM2REAL_ARTIFACT_LINEAGE_INVALID',
+    message: '制品血缘引用无效，或引用了不属于当前账号的资源。',
+    retryable: false,
+  },
+  sim2real_run_lineage_invalid: {
+    status: 422,
+    code: 'SIM2REAL_RUN_LINEAGE_INVALID',
+    message: '运行的项目、数据集或制品引用无效，或不属于当前账号。',
+    retryable: false,
+  },
+  sim2real_evaluation_lineage_invalid: {
+    status: 422,
+    code: 'SIM2REAL_EVALUATION_LINEAGE_INVALID',
+    message: '评测血缘引用无效，或引用了不属于当前账号的资源。',
+    retryable: false,
+  },
+  sim2real_evaluation_stale: {
+    status: 409,
+    code: 'SIM2REAL_EVALUATION_STALE',
+    message: '评测所依据的遥测已被更新；请重新运行评测后再提交发布计划。',
+    retryable: false,
+  },
+  sim2real_evaluation_transition_invalid: {
+    status: 409,
+    code: 'SIM2REAL_EVALUATION_TRANSITION_INVALID',
+    message: '评测状态不能回退或覆盖已完成结果。',
+    retryable: false,
+  },
+  sim2real_evaluation_idempotency_conflict: {
+    status: 409,
+    code: 'SIM2REAL_EVALUATION_IDEMPOTENCY_CONFLICT',
+    message: '评测 Idempotency-Key 已用于另一份评测请求，请更换 key。',
+    retryable: false,
+  },
   sim2real_run_quota_exceeded: {
     status: 507,
     code: 'SIM2REAL_LEDGER_QUOTA_EXCEEDED',
@@ -551,6 +1182,12 @@ const STORAGE_ERROR_HTTP: Readonly<
     message: '遥测 Idempotency-Key 已用于另一份数据，请更换 key。',
     retryable: false,
   },
+  sim2real_telemetry_attestation_sequence_required: {
+    status: 400,
+    code: 'SIM2REAL_TELEMETRY_SEQUENCE_REQUIRED',
+    message: '受信 board-agent 遥测必须携带 sequence 序号。',
+    retryable: false,
+  },
   sim2real_telemetry_timestamp_order: {
     status: 409,
     code: 'SIM2REAL_TELEMETRY_TIMESTAMP_ORDER',
@@ -574,6 +1211,12 @@ const STORAGE_ERROR_HTTP: Readonly<
     status: 409,
     code: 'SIM2REAL_DEPLOYMENT_IDEMPOTENCY_CONFLICT',
     message: '部署 Idempotency-Key 已用于另一份计划，请更换 key。',
+    retryable: false,
+  },
+  sim2real_deployment_transition_invalid: {
+    status: 409,
+    code: 'SIM2REAL_DEPLOYMENT_TRANSITION_INVALID',
+    message: '部署状态转换不合法，请刷新当前计划后重试。',
     retryable: false,
   },
   sim2real_runner_token_invalid: {
@@ -645,6 +1288,7 @@ interface ParsedRunRequest {
   experimentId?: string;
   label?: string;
   computeResourceId?: string;
+  datasetIds?: string[];
 }
 
 /** Validate and normalize the POST /runs body; failures are API-shaped. */
@@ -716,6 +1360,29 @@ function parseRunRequest(
   const experimentId = String(body.experimentId ?? '').trim();
   const label = String(body.label ?? '').trim();
   const computeResourceId = String(body.computeResourceId ?? '').trim();
+  const rawDatasetIds = body.datasetIds;
+  let datasetIds: string[] | undefined;
+  if (rawDatasetIds !== undefined) {
+    if (!Array.isArray(rawDatasetIds) || rawDatasetIds.length > 500) {
+      return {
+        apiError: {
+          status: 400,
+          code: 'SIM2REAL_INVALID_DATASET_LINEAGE',
+          message: 'datasetIds 必须是最多 500 个字符串的数组。',
+        },
+      };
+    }
+    datasetIds = [...new Set(rawDatasetIds.map((id) => String(id).trim()).filter(Boolean))];
+    if (datasetIds.some((id) => !/^[a-zA-Z0-9][a-zA-Z0-9._-]{0,127}$/.test(id))) {
+      return {
+        apiError: {
+          status: 400,
+          code: 'SIM2REAL_INVALID_DATASET_LINEAGE',
+          message: 'datasetIds 包含无效标识。',
+        },
+      };
+    }
+  }
   if (projectId && !/^[a-zA-Z0-9_-]{1,120}$/.test(projectId))
     return {
       apiError: { status: 400, code: 'SIM2REAL_INVALID_PROJECT', message: 'projectId 格式无效' },
@@ -764,6 +1431,7 @@ function parseRunRequest(
       ...(experimentId ? { experimentId } : {}),
       ...(label ? { label } : {}),
       ...(computeResourceId ? { computeResourceId } : {}),
+      ...(datasetIds ? { datasetIds } : {}),
     },
   };
 }
@@ -816,6 +1484,17 @@ async function dispatchRunBackend(input: {
   const robogoSupported = model.manifest.simulator.backends.includes('robogo');
   const localSupported = model.manifest.simulator.backends.includes('local');
   const integrations = simulatorIntegration();
+  // Built-in OriginBot uses the platform's lightweight browser adapter. It is
+  // deliberately independent from the optional MicroDuck service so a user
+  // can start simulation and training before attaching real hardware.
+  const browserIntegration =
+    model.manifest.robot.id === 'originbot'
+      ? {
+          available: true,
+          entryUrl: model.manifest.simulator.entryUrl || '/originbot-sim/',
+          reason: 'OriginBot 浏览器仿真适配器已内置。',
+        }
+      : integrations.browser;
   const isBuiltin = model.builtin === true;
   const failedSummary = (kind: 'robogo' | 'local') =>
     kind === 'robogo'
@@ -843,20 +1522,20 @@ async function dispatchRunBackend(input: {
       },
     };
   }
-  if (backend === 'browser' && browserSupported && isBuiltin && integrations.browser.available) {
+  if (backend === 'browser' && browserSupported && isBuiltin && browserIntegration.available) {
     return {
       status: 'ready',
       summary: '官方参考策略已准备好在浏览器 MicroDuck 仿真中运行。',
       // Use the integration's public entry so a reverse-proxy prefix such
       // as /sim2real is preserved for API/CLI consumers as well as the SPA.
       launchUrl:
-        integrations.browser.entryUrl || model.manifest.simulator.entryUrl || '/mujoco/microduck/',
+        browserIntegration.entryUrl || model.manifest.simulator.entryUrl || '/mujoco/microduck/',
     };
   }
   if (backend === 'browser' && browserSupported && isBuiltin) {
     return {
       status: 'blocked',
-      summary: integrations.browser.reason || '浏览器 MicroDuck 仿真资源尚未挂载。',
+      summary: browserIntegration.reason || '浏览器仿真资源尚未挂载。',
     };
   }
   if (backend === 'browser' && browserSupported) {
@@ -923,7 +1602,15 @@ async function dispatchRunBackend(input: {
       };
     }
   }
-  if (backend === 'local' && localSupported && integrations.local.available) {
+  // A user-owned compute resource carries its own worker URL/token and can
+  // be used even when the deployment-wide default local runner is absent or
+  // deliberately blocked.  The request adapter still re-validates the URL
+  // and bearer before any network side effect.
+  if (
+    backend === 'local' &&
+    localSupported &&
+    (integrations.local.available || Boolean(computeResourceId))
+  ) {
     const accountId = accountIdFor();
     if (!accountId) {
       return {
@@ -937,6 +1624,26 @@ async function dispatchRunBackend(input: {
     if (computeResourceId && !selectedResource) {
       return { status: 'blocked', summary: '所选 GPU 训练资源不存在，或不属于当前账号。' };
     }
+    const resourceHealthFailure = selectedResource
+      ? computeResourceHealthFailure(selectedResource.resource)
+      : null;
+    if (computeResourceId && resourceHealthFailure) {
+      return {
+        status: 'blocked',
+        summary:
+          resourceHealthFailure === 'stale'
+            ? `所选 GPU 训练资源的健康检查已超过 ${sim2RealComputeHealthTtlSeconds()} 秒；请重新测试连接。`
+            : '所选 GPU 训练资源尚未通过最近一次健康检查；请先测试连接并确认在线。',
+      };
+    }
+    const selectedRunner = computeResourceId
+      ? {
+          // Pass explicit values, including an empty token, so a deleted or
+          // redacted resource can never fall back to deployment-wide env vars.
+          runnerUrl: selectedResource!.resource.runnerUrl,
+          runnerToken: selectedResource!.runnerToken ?? '',
+        }
+      : {};
     try {
       const launched = await requestLocalTraining({
         accountId,
@@ -945,10 +1652,7 @@ async function dispatchRunBackend(input: {
         resumeFrom,
         taskId: taskId || undefined,
         idempotencyKey,
-        ...(selectedResource?.resource.runnerUrl
-          ? { runnerUrl: selectedResource.resource.runnerUrl }
-          : {}),
-        ...(selectedResource?.runnerToken ? { runnerToken: selectedResource.runnerToken } : {}),
+        ...selectedRunner,
       });
       return {
         status: launched.status,
@@ -1028,7 +1732,9 @@ function parsePreflightOutput(output: string): {
   valid: boolean;
   reason: string;
 } {
-  const text = String(output ?? '');
+  // `runOnDevice` applies its own stdout limit, but this parser is also called
+  // from injected adapters and must remain bounded at its trust boundary.
+  const text = String(output ?? '').slice(0, 12_000);
   const begin = text.indexOf(PREFLIGHT_BEGIN);
   const end = text.indexOf(PREFLIGHT_END, begin + PREFLIGHT_BEGIN.length);
   const empty: PreflightCheck = {
@@ -1046,7 +1752,17 @@ function parsePreflightOutput(output: string): {
   for (const line of text.slice(begin + PREFLIGHT_BEGIN.length, end).split(/\r?\n/)) {
     const separator = line.indexOf('=');
     if (separator <= 0) continue;
-    fields.set(line.slice(0, separator).trim(), line.slice(separator + 1).trim());
+    const key = line
+      .slice(0, separator)
+      .replace(/[\u0000-\u001f\u007f]/g, '')
+      .trim()
+      .slice(0, 64);
+    const value = line
+      .slice(separator + 1)
+      .replace(/[\u0000-\u001f\u007f]/g, '')
+      .trim()
+      .slice(0, 512);
+    if (key) fields.set(key, value);
   }
   const bpuField = fields.get('bpu_toolchain') || '';
   const checks: PreflightCheck = {
@@ -1054,14 +1770,17 @@ function parsePreflightOutput(output: string): {
     kernel: fields.get('kernel') || '',
     python3: fields.get('python3') || '',
     tros: fields.get('tros') || '',
-    diskBytes: Number.isFinite(Number(fields.get('disk_bytes')))
-      ? Number(fields.get('disk_bytes'))
-      : null,
+    diskBytes: (() => {
+      const value = Number(fields.get('disk_bytes'));
+      return Number.isSafeInteger(value) && value >= 0 ? value : null;
+    })(),
     bpuToolchain: bpuField === 'present' ? 'present' : bpuField === 'missing' ? 'missing' : '',
   };
   const archOk = /^(?:aarch64|arm64)$/i.test(checks.arch);
-  const kernelOk = /^[^\u0000\r\n]{1,160}$/.test(checks.kernel);
-  const pythonOk = /^\/[^\s\u0000\r\n]+$/.test(checks.python3);
+  const kernelOk = /^[^\u0000-\u001f\u007f\r\n]{1,160}$/.test(checks.kernel);
+  const pythonOk = /^\/[A-Za-z0-9._+@%=-]{1,511}(?:\/[A-Za-z0-9._+@%=-]{1,511})*$/.test(
+    checks.python3,
+  );
   const trosOk = checks.tros === 'present';
   const diskOk = checks.diskBytes !== null && checks.diskBytes >= PREFLIGHT_MIN_DISK_BYTES;
   if (!archOk || !kernelOk || !pythonOk || !trosOk || !diskOk) {
@@ -1122,6 +1841,90 @@ function normalizeApiPrefix(value: string | undefined): string {
   return prefix;
 }
 
+type MutationAccess = Sim2RealPermission | 'edit-or-operate' | null;
+
+function requestPathname(request: Request): string {
+  const raw = String(request.path || request.originalUrl || request.url || '');
+  return raw.split('?', 1)[0].toLowerCase();
+}
+
+/**
+ * Map mutating HTTP calls to the least privilege they need.  The router is
+ * shared by the legacy and versioned prefixes, so this lives at the common
+ * boundary instead of relying on every resource module to remember a role
+ * check.  Read-only POSTs (validation and the station command allow-list)
+ * stay available to viewers; emergency stops remain reachable so a safety
+ * action can never be blocked by an expired role claim.
+ */
+function mutationAccess(request: Request): MutationAccess {
+  const method = String(request.method || '').toUpperCase();
+  if (!['POST', 'PUT', 'PATCH', 'DELETE'].includes(method)) return null;
+  const pathname = requestPathname(request);
+  if (pathname.endsWith('/models/validate') || pathname.endsWith('/board-station/commands')) {
+    return SIM2REAL_PERMISSIONS.read;
+  }
+  if (
+    pathname.endsWith('/board-station/drive/stop') ||
+    pathname.endsWith('/board-station/policy/stop')
+  ) {
+    return null;
+  }
+  // Human approval is a governance action. Operators can prepare and execute
+  // a plan, while only owner/admin principals may authorize it in a shared
+  // deployment.
+  if (/\/deployments\/[^/]+\/approval$/.test(pathname)) {
+    return SIM2REAL_PERMISSIONS.approve;
+  }
+  // Loading/staging changes the selected policy but does not enable motion;
+  // either an editor or an operator may perform that preparation step.
+  if (/\/board-station\/policy\/(?:load|stage)$/.test(pathname)) {
+    return 'edit-or-operate';
+  }
+  // These paths can reach a board, a runner, or a deployment target.
+  if (
+    /\/(?:deployments|telemetry|board-station|device-connections|local-bridge)(?:\/|$)/.test(
+      pathname,
+    )
+  ) {
+    return SIM2REAL_PERMISSIONS.operate;
+  }
+  // Training, cancellation, reconciliation and evaluation are operational
+  // actions; permit either the editor or operator role to keep the workspace
+  // useful while still excluding a read-only viewer.
+  if (/\/runs(?:\/|$)/.test(pathname)) return 'edit-or-operate';
+  return SIM2REAL_PERMISSIONS.edit;
+}
+
+function enforceMutationAccess(
+  request: Request,
+  response: Response,
+  auth: Sim2RealAuthPort,
+): boolean {
+  if (!auth.isMultiUserDeployment()) return true;
+  const access = mutationAccess(request);
+  if (access === null) return true;
+  const principal = auth.resolvePrincipal(request);
+  // Let the resource handler produce the canonical authentication response
+  // when there is no principal; this preserves its owner-scope semantics and
+  // avoids leaking whether a resource exists.
+  if (!principal) return true;
+  const allowed =
+    access === 'edit-or-operate'
+      ? principalCan(principal, SIM2REAL_PERMISSIONS.edit) ||
+        principalCan(principal, SIM2REAL_PERMISSIONS.operate)
+      : principalCan(principal, access);
+  if (allowed) return true;
+  noStore(response);
+  sendApiError(
+    response,
+    403,
+    'SIM2REAL_PERMISSION_DENIED',
+    '当前账号没有执行此操作的权限。请联系项目管理员或切换到具备相应角色的账号。',
+    { retryable: false, permission: access },
+  );
+  return false;
+}
+
 export function createSim2RealRouter(
   deps: { runOnDevice?: RunOnDevice; auth?: Sim2RealAuthPort } = {},
   options: Sim2RealRouterOptions = {},
@@ -1132,6 +1935,12 @@ export function createSim2RealRouter(
   const auth = deps.auth ?? LOCAL_SIM2REAL_AUTH;
   const visibleDevicesForAuth = (owner?: string) =>
     visibleDevices(owner, auth.isMultiUserDeployment());
+
+  // One shared guard covers every route registered below, including both the
+  // core handlers and the telemetry/device sub-routers.
+  router.use((request, response, next) => {
+    if (enforceMutationAccess(request, response, auth)) next();
+  });
 
   router.get(
     api('/overview'),
@@ -1256,6 +2065,14 @@ export function createSim2RealRouter(
     },
     { prefix },
   );
+  registerSim2RealAuditRoutes(
+    router,
+    {
+      auth,
+      requestOwner: (request, response) => requestOwner(request, response, auth),
+    },
+    { prefix },
+  );
 
   // User-owned local GPU resources. Credentials stay in the server ledger;
   // list responses only expose whether a token is configured.
@@ -1281,7 +2098,12 @@ export function createSim2RealRouter(
       const name = String(body.name ?? '').trim();
       const runnerUrlRaw = String(body.runnerUrl ?? '').trim();
       const runnerToken = String(body.runnerToken ?? '').trim();
-      if (!name || name.length > 120 || !runnerUrlRaw) {
+      if (
+        !name ||
+        name.length > 120 ||
+        safeComputeHealthText(name, 120) !== name ||
+        !runnerUrlRaw
+      ) {
         sendApiError(
           response,
           400,
@@ -1291,9 +2113,18 @@ export function createSim2RealRouter(
         );
         return;
       }
+      if (runnerUrlRaw.length > 2048) {
+        sendApiError(response, 400, 'SIM2REAL_INVALID_COMPUTE_RESOURCE_URL', 'Runner 地址过长。', {
+          retryable: false,
+        });
+        return;
+      }
       let runnerUrl: string;
       try {
         runnerUrl = normalizeRunnerUrl(runnerUrlRaw, { localHttp: true });
+        const parsedUrl = new URL(runnerUrl);
+        const pathname = parsedUrl.pathname.replace(/\/+$/, '');
+        if (!pathname.endsWith('/train')) throw new Error('runner path must end with /train');
       } catch {
         sendApiError(
           response,
@@ -1302,6 +2133,13 @@ export function createSim2RealRouter(
           'Runner 地址必须是合法的 HTTP(S) /train 地址。',
           { retryable: false },
         );
+        return;
+      }
+      const tokenError = computeRunnerTokenError(runnerUrl, runnerToken);
+      if (tokenError) {
+        sendApiError(response, 400, 'SIM2REAL_INVALID_COMPUTE_RESOURCE_TOKEN', tokenError, {
+          retryable: false,
+        });
         return;
       }
       const maxConcurrentJobs = Number(body.maxConcurrentJobs ?? 1);
@@ -1345,11 +2183,52 @@ export function createSim2RealRouter(
           ? (request.body as Record<string, unknown>)
           : {};
       const patch: Record<string, unknown> = {};
-      if (body.name !== undefined) patch.name = String(body.name).trim();
-      if (body.runnerToken !== undefined) patch.runnerToken = String(body.runnerToken).trim();
+      if (body.name !== undefined) {
+        const name = String(body.name).trim();
+        if (!name || name.length > 120 || safeComputeHealthText(name, 120) !== name) {
+          sendApiError(
+            response,
+            400,
+            'SIM2REAL_INVALID_COMPUTE_RESOURCE',
+            '名称不能为空、不能超过 120 个字符或包含控制字符。',
+            { retryable: false },
+          );
+          return;
+        }
+        patch.name = name;
+      }
+      if (body.runnerToken !== undefined) {
+        const runnerToken = String(body.runnerToken).trim();
+        if (!localRunnerTokenFormatValid(runnerToken)) {
+          sendApiError(
+            response,
+            400,
+            'SIM2REAL_INVALID_COMPUTE_RESOURCE_TOKEN',
+            'Runner token 不能包含控制字符，且长度不能超过 4096 字节。',
+            { retryable: false },
+          );
+          return;
+        }
+        patch.runnerToken = runnerToken;
+      }
       if (body.runnerUrl !== undefined) {
+        const runnerUrlRaw = String(body.runnerUrl).trim();
+        if (!runnerUrlRaw || runnerUrlRaw.length > 2048) {
+          sendApiError(
+            response,
+            400,
+            'SIM2REAL_INVALID_COMPUTE_RESOURCE_URL',
+            'Runner 地址不能为空且不能超过 2048 个字符。',
+            { retryable: false },
+          );
+          return;
+        }
         try {
-          patch.runnerUrl = normalizeRunnerUrl(String(body.runnerUrl).trim(), { localHttp: true });
+          const normalized = normalizeRunnerUrl(runnerUrlRaw, { localHttp: true });
+          const parsedUrl = new URL(normalized);
+          const pathname = parsedUrl.pathname.replace(/\/+$/, '');
+          if (!pathname.endsWith('/train')) throw new Error('runner path must end with /train');
+          patch.runnerUrl = normalized;
         } catch {
           sendApiError(
             response,
@@ -1360,6 +2239,45 @@ export function createSim2RealRouter(
           );
           return;
         }
+      }
+      if (body.maxConcurrentJobs !== undefined) {
+        const maxConcurrentJobs = Number(body.maxConcurrentJobs);
+        if (
+          !Number.isInteger(maxConcurrentJobs) ||
+          maxConcurrentJobs < 1 ||
+          maxConcurrentJobs > 32
+        ) {
+          sendApiError(
+            response,
+            400,
+            'SIM2REAL_INVALID_COMPUTE_RESOURCE',
+            '并发任务数必须是 1 到 32。',
+            { retryable: false },
+          );
+          return;
+        }
+        patch.maxConcurrentJobs = maxConcurrentJobs;
+      }
+
+      // Resolve the effective URL/token before writing.  Omitting a token on
+      // PATCH preserves the existing secret; explicitly sending an empty
+      // token clears it and therefore fails closed for remote/production URLs.
+      const existing = await getSim2RealComputeResourceSecret(String(request.params.id), owner);
+      if (!existing) {
+        response.status(404).json({ ok: false, error: 'SIM2REAL_COMPUTE_RESOURCE_NOT_FOUND' });
+        return;
+      }
+      const effectiveUrl = String(patch.runnerUrl ?? existing.resource.runnerUrl);
+      const effectiveToken =
+        patch.runnerToken !== undefined
+          ? String(patch.runnerToken)
+          : String(existing.runnerToken ?? '');
+      const tokenError = computeRunnerTokenError(effectiveUrl, effectiveToken);
+      if (tokenError) {
+        sendApiError(response, 400, 'SIM2REAL_INVALID_COMPUTE_RESOURCE_TOKEN', tokenError, {
+          retryable: false,
+        });
+        return;
       }
       const resource = await updateSim2RealComputeResource(
         String(request.params.id),
@@ -1399,40 +2317,86 @@ export function createSim2RealRouter(
         return;
       }
       const checkedAt = new Date().toISOString();
-      let patch: Record<string, unknown>;
-      try {
-        const parsed = new URL(secret.resource.runnerUrl);
-        parsed.pathname = parsed.pathname.replace(/\/train\/?$/, '/healthz');
-        const headers: Record<string, string> = { accept: 'application/json' };
-        if (secret.runnerToken) headers.authorization = `Bearer ${secret.runnerToken}`;
-        const controller = new AbortController();
-        const timer = setTimeout(() => controller.abort(), 5_000);
-        const result = await fetch(parsed, { headers, signal: controller.signal });
-        clearTimeout(timer);
-        const bodyText = await result.text();
-        let payload: Record<string, unknown> = {};
-        try {
-          payload = bodyText ? JSON.parse(bodyText) : {};
-        } catch {
-          /* ignore */
-        }
-        const healthy = result.ok && payload?.ok !== false;
-        patch = {
-          status: healthy ? 'online' : 'offline',
-          message: healthy ? 'GPU Worker 连接正常。' : `Worker 返回 HTTP ${result.status}。`,
-          lastCheckedAt: checkedAt,
-          ...(payload?.cuda != null ? { cuda: payload.cuda === true } : {}),
-          ...(payload?.gpuName ? { gpuName: String(payload.gpuName).slice(0, 160) } : {}),
-          ...(payload?.maxConcurrentJobs
-            ? { maxConcurrentJobs: Number(payload.maxConcurrentJobs) }
-            : {}),
-        };
-      } catch (error) {
+      let patch: Record<string, unknown> = {
+        status: 'offline',
+        message: '尚未完成 Worker 健康检查。',
+        lastCheckedAt: checkedAt,
+      };
+      const runnerUrl = String(secret.resource.runnerUrl);
+      const runnerToken = String(secret.runnerToken ?? '').trim();
+      const tokenError = computeRunnerTokenError(runnerUrl, runnerToken);
+      if (tokenError) {
+        // Persist the failed state so the UI cannot mistake a configured but
+        // unauthenticated resource for an available GPU.  Crucially, do not
+        // make a network request with a missing/weak credential.
         patch = {
           status: 'offline',
-          message: `连接失败：${error instanceof Error ? error.message : '无法连接 Worker'}`,
+          message: tokenError,
           lastCheckedAt: checkedAt,
         };
+      } else {
+        try {
+          const parsed = new URL(normalizeRunnerUrl(runnerUrl, { localHttp: true }));
+          const pathName = parsed.pathname.replace(/\/+$/, '');
+          if (!pathName.endsWith('/train')) throw new Error('runner path must end with /train');
+          parsed.pathname = pathName.slice(0, -'/train'.length) + '/healthz';
+          parsed.search = '';
+          parsed.hash = '';
+          const headers: Record<string, string> = { accept: 'application/json' };
+          if (runnerToken) headers.authorization = `Bearer ${runnerToken}`;
+          const controller = new AbortController();
+          const timer = setTimeout(() => controller.abort(), 5_000);
+          try {
+            const result = await fetch(parsed, {
+              headers,
+              redirect: 'error',
+              signal: controller.signal,
+            });
+            let bodyText: string;
+            let bodyReadable = true;
+            try {
+              bodyText = await boundedComputeHealthText(result);
+            } catch {
+              bodyReadable = false;
+              bodyText = '';
+              patch = {
+                status: 'offline',
+                message: 'Worker 健康响应过大或无法读取，已拒绝。',
+                lastCheckedAt: checkedAt,
+              };
+            }
+            if (bodyReadable) {
+              const payload = result.ok ? parseComputeHealthPayload(bodyText) : null;
+              const healthy = result.ok && payload !== null;
+              patch = {
+                status: healthy ? 'online' : 'offline',
+                message: healthy
+                  ? 'GPU Worker 连接正常。'
+                  : result.ok
+                    ? 'Worker 返回无效健康响应。'
+                    : `Worker 返回 HTTP ${result.status}。`,
+                lastCheckedAt: checkedAt,
+                ...(payload?.cuda == null ? {} : { cuda: payload.cuda }),
+                ...(payload?.gpuName ? { gpuName: payload.gpuName } : {}),
+                ...(payload?.vramMb == null ? {} : { vramMb: payload.vramMb }),
+                ...(payload?.maxConcurrentJobs == null
+                  ? {}
+                  : { maxConcurrentJobs: payload.maxConcurrentJobs }),
+              };
+            }
+          } finally {
+            clearTimeout(timer);
+          }
+        } catch (error) {
+          patch = {
+            status: 'offline',
+            message:
+              error instanceof Error && error.name === 'AbortError'
+                ? '连接超时：Worker 未在 5 秒内响应。'
+                : '连接失败：Worker 不可达或健康响应无效。',
+            lastCheckedAt: checkedAt,
+          };
+        }
       }
       const updated = await updateSim2RealComputeResource(
         secret.resource.id,
@@ -1464,12 +2428,36 @@ export function createSim2RealRouter(
       auth,
       requestOwner: (request, response) => requestOwner(request, response, auth),
       visibleDevices: visibleDevicesForAuth,
+      resolveDeviceAgentUrl: (deviceId, stationOwner) =>
+        deviceConnectionAgentUrl(deviceId, stationOwner),
       getRun: (runId, owner) => getSim2RealRun(runId, owner),
       // Artifact bytes come from the run's own training worker; a run without
       // an external id (remote/cleaned) simply cannot stage, fail-closed.
-      fetchRunArtifact: async (run, _owner) => {
+      fetchRunArtifact: async (run, runOwner) => {
         if (run.backend !== 'local' || !run.externalRunId) return null;
-        return fetchLocalRunArtifact({ externalRunId: run.externalRunId });
+        const selectedResource = run.computeResourceId
+          ? await getSim2RealComputeResourceSecret(run.computeResourceId, runOwner)
+          : null;
+        // A run tied to a deleted resource must never silently download from
+        // the deployment-wide worker; doing so could stage a different run's
+        // artifact under the same external id.
+        if (run.computeResourceId && !selectedResource) return null;
+        if (
+          run.computeResourceId &&
+          selectedResource &&
+          computeResourceHealthFailure(selectedResource.resource)
+        ) {
+          return null;
+        }
+        return fetchLocalRunArtifact({
+          externalRunId: run.externalRunId,
+          ...(run.computeResourceId
+            ? {
+                runnerUrl: selectedResource!.resource.runnerUrl,
+                runnerToken: selectedResource!.runnerToken ?? '',
+              }
+            : {}),
+        });
       },
     },
     { prefix },
@@ -1484,6 +2472,161 @@ export function createSim2RealRouter(
       requestOwner: (request, response) => requestOwner(request, response, auth),
     },
     { prefix },
+  );
+
+  // Keep the Sim2Real surface independent: the shared Studio Local Bridge
+  // protocol is exposed through a Sim2Real-owned API path.
+  router.get(
+    api('/local-bridge/status'),
+    wrapAsync(async (request, response) => {
+      const owner = requestOwner(request, response, auth);
+      if (owner === null) return;
+      void owner;
+      const origin = configuredStudioOrigin();
+      if (!origin) {
+        studioBridgeConfigError(response);
+        return;
+      }
+      const upstream = await fetchStudioBridgeJson(origin, '/api/local-bridge/status', request);
+      if (!upstream || !upstream.ok) {
+        studioBridgeUpstreamError(response);
+        return;
+      }
+      const projected = projectStudioBridgeStatus(upstream.payload);
+      if (!projected) {
+        studioBridgeUpstreamError(response);
+        return;
+      }
+      noStore(response);
+      response.status(200).json(projected);
+    }),
+  );
+  router.post(
+    api('/local-bridge/pairing-code'),
+    wrapAsync(async (request, response) => {
+      const owner = requestOwner(request, response, auth);
+      if (owner === null) return;
+      void owner;
+      const origin = configuredStudioOrigin();
+      if (!origin) {
+        studioBridgeConfigError(response);
+        return;
+      }
+      const body = studioPairingRequestBody(request.body);
+      if (!body) {
+        noStore(response);
+        sendApiError(response, 400, 'SIM2REAL_INVALID_BRIDGE_REQUEST', 'Bridge 配对参数无效。', {
+          retryable: false,
+        });
+        return;
+      }
+      const upstream = await fetchStudioBridgeJson(
+        origin,
+        '/api/local-bridge/pairing-code',
+        request,
+        { method: 'POST', body, maxBytes: SIM2REAL_STUDIO_PAIRING_MAX_RESPONSE_BYTES },
+      );
+      if (!upstream || !upstream.ok) {
+        studioBridgeUpstreamError(response);
+        return;
+      }
+      const projected = projectStudioPairing(upstream.payload);
+      if (!projected) {
+        studioBridgeUpstreamError(response);
+        return;
+      }
+      noStore(response);
+      response.status(200).json(projected);
+    }),
+  );
+  router.post(
+    api('/local-bridge/devices/:bridgeDeviceId/connect'),
+    wrapAsync(async (request, response) => {
+      const owner = requestOwner(request, response, auth);
+      if (owner === null) return;
+      const origin = configuredStudioOrigin();
+      if (!origin) {
+        studioBridgeConfigError(response);
+        return;
+      }
+      const bridgeDeviceId = studioSafeId(request.params?.bridgeDeviceId);
+      const body = studioConnectRequestBody(request.body);
+      if (!bridgeDeviceId || !body) {
+        noStore(response);
+        sendApiError(response, 400, 'SIM2REAL_INVALID_BRIDGE_REQUEST', 'Bridge 设备参数无效。', {
+          retryable: false,
+        });
+        return;
+      }
+      const upstream = await fetchStudioBridgeJson(
+        origin,
+        `/api/local-bridge/devices/${encodeURIComponent(bridgeDeviceId)}/connect`,
+        request,
+        { method: 'POST', body },
+      );
+      if (!upstream || !upstream.ok) {
+        studioBridgeUpstreamError(response);
+        return;
+      }
+      const projected = projectStudioConnect(upstream.payload);
+      if (!projected) {
+        studioBridgeUpstreamError(response);
+        return;
+      }
+      const device = projected.device;
+      const bridgeId = studioSafeId(device.bridgeId) || studioSafeId(body.bridgeId);
+      if (!bridgeId) {
+        studioBridgeUpstreamError(response);
+        return;
+      }
+      try {
+        const registered = await upsertBridgeDevice({
+          ownerKey: owner ? `sso:${owner}:web` : 'local:default',
+          bridgeId,
+          bridgeDeviceId,
+          name:
+            typeof device.name === 'string'
+              ? device.name
+              : typeof device.label === 'string'
+                ? device.label
+                : undefined,
+          host: String(device.host || '').trim(),
+          port: Number(device.port || 22),
+          username: typeof device.username === 'string' ? device.username : 'root',
+          transport:
+            device.transport === 'ssh' ||
+            device.transport === 'usb-ethernet' ||
+            device.transport === 'serial'
+              ? device.transport
+              : 'ssh',
+          boardPlatform:
+            typeof device.boardPlatform === 'string' ? device.boardPlatform : undefined,
+          boardModel: typeof device.boardModel === 'string' ? device.boardModel : undefined,
+        });
+        // `upsertBridgeDevice` preserves legacy registry fields for a stable
+        // reconnect. Project the returned record again before it crosses the
+        // HTTP boundary so an older row containing credentials can never be
+        // reflected into the browser response.
+        const publicDevice = studioBridgeDeviceProjection(registered, { requireHost: true });
+        if (!publicDevice) {
+          studioBridgeUpstreamError(response);
+          return;
+        }
+        projected.response.device = publicDevice;
+        noStore(response);
+        response.status(200).json(projected.response);
+      } catch {
+        noStore(response);
+        response.status(502).json({
+          ok: false,
+          error: 'SIM2REAL_DEVICE_REGISTRATION_FAILED',
+          code: 'SIM2REAL_DEVICE_REGISTRATION_FAILED',
+          message: 'Bridge 已连接，但设备登记失败，请重试。',
+          retryable: true,
+        });
+      }
+      return;
+    }),
   );
 
   router.post(
@@ -1543,17 +2686,52 @@ export function createSim2RealRouter(
             const selectedResource = run.computeResourceId
               ? await getSim2RealComputeResourceSecret(run.computeResourceId, owner)
               : null;
+            if (run.backend === 'local' && run.computeResourceId && !selectedResource) {
+              sendApiError(
+                response,
+                409,
+                'SIM2REAL_COMPUTE_RESOURCE_NOT_FOUND',
+                '该运行所选的 GPU 资源已删除或不属于当前账号，拒绝回退到全局 runner。',
+                { retryable: false },
+              );
+              return;
+            }
+            if (run.backend === 'local' && run.computeResourceId && selectedResource) {
+              const healthFailure = computeResourceHealthFailure(selectedResource.resource);
+              if (healthFailure === 'stale') {
+                sendApiError(
+                  response,
+                  503,
+                  'SIM2REAL_COMPUTE_RESOURCE_HEALTH_STALE',
+                  `所选 GPU 资源健康检查已超过 ${sim2RealComputeHealthTtlSeconds()} 秒；状态暂时未知，请先测试连接。`,
+                  { retryable: true, retryAfterSeconds: 15 },
+                );
+                return;
+              }
+              if (healthFailure === 'not-ready') {
+                sendApiError(
+                  response,
+                  503,
+                  'SIM2REAL_COMPUTE_RESOURCE_NOT_READY',
+                  '所选 GPU 资源尚未通过健康检查，状态暂时未知，请先测试连接。',
+                  { retryable: true, retryAfterSeconds: 15 },
+                );
+                return;
+              }
+            }
+            const selectedRunner =
+              run.backend === 'local' && run.computeResourceId
+                ? {
+                    runnerUrl: selectedResource!.resource.runnerUrl,
+                    runnerToken: selectedResource!.runnerToken ?? '',
+                  }
+                : {};
             const latest =
               run.backend === 'local'
                 ? await requestLocalTrainingStatus({
                     accountId,
                     externalRunId: run.externalRunId,
-                    ...(selectedResource?.resource.runnerUrl
-                      ? { runnerUrl: selectedResource.resource.runnerUrl }
-                      : {}),
-                    ...(selectedResource?.runnerToken
-                      ? { runnerToken: selectedResource.runnerToken }
-                      : {}),
+                    ...selectedRunner,
                   })
                 : await requestRobogoTrainingStatus({
                     accountId,
@@ -1610,7 +2788,7 @@ export function createSim2RealRouter(
             // instead of inventing completion or silently polling forever.
             console.warn(
               `[sim2real] status lookup failed for ${run.id}`,
-              error instanceof Error ? error.message : error,
+              redactInternalError(error),
             );
             const message = error instanceof Error ? error.message : String(error ?? '');
             if (
@@ -1738,17 +2916,52 @@ export function createSim2RealRouter(
         const selectedResource = run.computeResourceId
           ? await getSim2RealComputeResourceSecret(run.computeResourceId, owner)
           : null;
+        if (run.backend === 'local' && run.computeResourceId && !selectedResource) {
+          sendApiError(
+            response,
+            409,
+            'SIM2REAL_COMPUTE_RESOURCE_NOT_FOUND',
+            '该运行所选的 GPU 资源已删除或不属于当前账号，拒绝回退到全局 runner。',
+            { retryable: false },
+          );
+          return;
+        }
+        if (run.backend === 'local' && run.computeResourceId && selectedResource) {
+          const healthFailure = computeResourceHealthFailure(selectedResource.resource);
+          if (healthFailure === 'stale') {
+            sendApiError(
+              response,
+              503,
+              'SIM2REAL_COMPUTE_RESOURCE_HEALTH_STALE',
+              `所选 GPU 资源健康检查已超过 ${sim2RealComputeHealthTtlSeconds()} 秒；对账状态暂时未知，请先测试连接。`,
+              { retryable: true, retryAfterSeconds: 15 },
+            );
+            return;
+          }
+          if (healthFailure === 'not-ready') {
+            sendApiError(
+              response,
+              503,
+              'SIM2REAL_COMPUTE_RESOURCE_NOT_READY',
+              '所选 GPU 资源尚未通过健康检查，对账状态暂时未知，请先测试连接。',
+              { retryable: true, retryAfterSeconds: 15 },
+            );
+            return;
+          }
+        }
+        const selectedRunner =
+          run.backend === 'local' && run.computeResourceId
+            ? {
+                runnerUrl: selectedResource!.resource.runnerUrl,
+                runnerToken: selectedResource!.runnerToken ?? '',
+              }
+            : {};
         const latest =
           run.backend === 'local'
             ? await requestLocalTrainingStatus({
                 accountId,
                 externalRunId,
-                ...(selectedResource?.resource.runnerUrl
-                  ? { runnerUrl: selectedResource.resource.runnerUrl }
-                  : {}),
-                ...(selectedResource?.runnerToken
-                  ? { runnerToken: selectedResource.runnerToken }
-                  : {}),
+                ...selectedRunner,
               })
             : await requestRobogoTrainingStatus({
                 accountId,
@@ -1796,7 +3009,7 @@ export function createSim2RealRouter(
       } catch (error) {
         console.warn(
           `[sim2real] reconcile status lookup failed for ${run.id}`,
-          error instanceof Error ? error.message : error,
+          redactInternalError(error),
         );
         if (isSim2RealRunnerNotFound(error)) {
           // A 404 proves only that the supplied external id is absent; do not
@@ -1949,6 +3162,7 @@ export function createSim2RealRouter(
         experimentId,
         label,
         computeResourceId,
+        datasetIds: requestedDatasetIds,
       } = parsed;
       const model = await getSim2RealModel(modelId, owner);
       if (!model) {
@@ -1967,6 +3181,40 @@ export function createSim2RealRouter(
         });
         return;
       }
+      // A project supplies its dataset snapshot by default.  An explicit
+      // datasetIds array overrides that default, but every id must be visible
+      // to the current account and match the model contract when declared.
+      const project = projectId ? await getSim2RealProject(projectId, owner) : null;
+      const datasetIds = requestedDatasetIds ?? project?.datasetIds ?? [];
+      if (datasetIds.length) {
+        const datasets = await listSim2RealDatasets(owner);
+        const byId = new Map(datasets.map((dataset) => [dataset.id, dataset]));
+        const contractId = model.manifest.contract.id;
+        const invalid = datasetIds.find((id) => !byId.has(id));
+        if (invalid) {
+          sendApiError(
+            response,
+            422,
+            'SIM2REAL_DATASET_LINEAGE_INVALID',
+            'datasetIds 包含不存在或不属于当前账号的数据集。',
+            { retryable: false },
+          );
+          return;
+        }
+        const mismatch = datasetIds.find(
+          (id) => byId.get(id)?.contractId && byId.get(id)?.contractId !== contractId,
+        );
+        if (mismatch) {
+          sendApiError(
+            response,
+            422,
+            'SIM2REAL_DATASET_CONTRACT_MISMATCH',
+            '数据集契约与训练模型契约不一致。',
+            { retryable: false },
+          );
+          return;
+        }
+      }
       const requestFingerprint = runRequestFingerprint({
         modelId: model.id,
         backend,
@@ -1977,6 +3225,7 @@ export function createSim2RealRouter(
         experimentId,
         label,
         computeResourceId,
+        datasetIds,
       });
       const replay = await findIdempotentRunReplay(idempotencyKey, requestFingerprint, owner);
       if (replay === 'fingerprint-conflict') {
@@ -2019,6 +3268,7 @@ export function createSim2RealRouter(
               ...(taskId ? { taskId } : {}),
               backend,
               ...(computeResourceId ? { computeResourceId } : {}),
+              ...(datasetIds.length ? { datasetIds } : {}),
               status: 'queued',
               summary:
                 backend === 'robogo'
@@ -2080,6 +3330,7 @@ export function createSim2RealRouter(
                 ...(taskId ? { taskId } : {}),
                 backend,
                 ...(computeResourceId ? { computeResourceId } : {}),
+                ...(datasetIds.length ? { datasetIds } : {}),
                 ...finalRunInput,
                 ...(training ? { training } : {}),
                 ...(resumeFrom ? { resumeFrom } : {}),
@@ -2103,8 +3354,35 @@ export function createSim2RealRouter(
       if (owner === null) return;
       noStore(response);
       const models = await listSim2RealModels(owner);
-      const runs = await listSim2RealRuns(owner);
-      response.json({ ok: true, runs: runs.map((run) => publicRun(run, models)) });
+      const allRuns = await listSim2RealRuns(owner);
+      const taskId = queryText(request.query.taskId);
+      const modelId = queryText(request.query.modelId);
+      const projectId = queryText(request.query.projectId);
+      const status = queryText(request.query.status);
+      const backend = queryText(request.query.backend);
+      const search = queryText(request.query.q ?? request.query.search);
+      const rawLimit = Number(request.query.limit ?? 200);
+      const limit = Number.isFinite(rawLimit)
+        ? Math.max(1, Math.min(500, Math.trunc(rawLimit)))
+        : 200;
+      const runs = allRuns
+        .filter(
+          (run) =>
+            (!taskId || run.taskId?.toLowerCase() === taskId) &&
+            (!modelId || run.modelId.toLowerCase() === modelId) &&
+            (!projectId || run.projectId?.toLowerCase() === projectId) &&
+            (!status || run.status.toLowerCase() === status) &&
+            (!backend || run.backend.toLowerCase() === backend) &&
+            (!search ||
+              `${run.id} ${run.label ?? ''} ${run.summary}`.toLowerCase().includes(search)),
+        )
+        .slice(0, limit);
+      response.json({
+        ok: true,
+        runs: runs.map((run) => publicRun(run, models)),
+        total: runs.length,
+        available: allRuns.length,
+      });
     }),
   );
 
@@ -2129,6 +3407,8 @@ export function createSim2RealRouter(
       const modelId = String(body.modelId ?? '').trim();
       const deviceId = String(body.deviceId ?? '').trim();
       const runId = String(body.runId ?? '').trim();
+      const requestedArtifactId = String(body.artifactId ?? '').trim();
+      const requestedEvaluationId = String(body.evaluationId ?? '').trim();
       const mode = body.mode == null ? 'preflight' : safeMode(body.mode);
       if (!modelId || !deviceId || !mode) {
         sendApiError(
@@ -2198,11 +3478,124 @@ export function createSim2RealRouter(
       }
       const compatibility = compatibilityForManifest(model.manifest, targetPlatform);
       const releaseRun = runId ? await getSim2RealRun(runId, owner) : null;
+      // When a run has first-class lineage, pin its latest published artifact
+      // and passed evaluation automatically. Legacy runs may still rely on
+      // embedded runner metadata, preserving the existing API contract.
+      let artifactId = requestedArtifactId || undefined;
+      let evaluationId = requestedEvaluationId || undefined;
+      if (releaseRun && !artifactId && releaseRun.artifactIds?.length) {
+        const artifacts = await listSim2RealArtifacts(owner);
+        const candidate = [...artifacts]
+          .filter(
+            (artifact) =>
+              releaseRun.artifactIds?.includes(artifact.id) && artifact.status === 'published',
+          )
+          .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))[0];
+        if (candidate) artifactId = candidate.id;
+      }
+      if (releaseRun && !evaluationId && releaseRun.evaluationId) {
+        const evaluation = await getSim2RealEvaluation(releaseRun.evaluationId, owner);
+        if (evaluation) evaluationId = evaluation.id;
+      }
+      if (mode !== 'preflight' && !artifactId) {
+        sendApiError(
+          response,
+          409,
+          'SIM2REAL_ARTIFACT_BINDING_REQUIRED',
+          'Canary / Live 必须绑定一条已发布的一等制品记录。请先注册并发布制品，再创建部署计划。',
+          { retryable: false },
+        );
+        return;
+      }
+      if (mode !== 'preflight' && !evaluationId) {
+        sendApiError(
+          response,
+          409,
+          'SIM2REAL_EVALUATION_BINDING_REQUIRED',
+          'Canary / Live 必须绑定一条通过且已验证的一等评测记录。',
+          { retryable: false },
+        );
+        return;
+      }
+      let releaseEvaluation: Awaited<ReturnType<typeof getSim2RealEvaluation>> = null;
+      if (mode !== 'preflight' && artifactId) {
+        const artifact = await getSim2RealArtifact(artifactId, owner);
+        if (!artifact || artifact.status !== 'published') {
+          sendApiError(
+            response,
+            409,
+            'SIM2REAL_ARTIFACT_NOT_RELEASEABLE',
+            'Canary / Live 必须绑定已发布且未撤销的不可变制品。',
+            { retryable: false },
+          );
+          return;
+        }
+        if (!releaseRun || artifact.modelId !== model.id || artifact.runId !== releaseRun.id) {
+          sendApiError(
+            response,
+            409,
+            'SIM2REAL_ARTIFACT_LINEAGE_INVALID',
+            '制品与模型或训练运行的血缘不一致。',
+            { retryable: false },
+          );
+          return;
+        }
+      }
+      if (mode !== 'preflight' && evaluationId) {
+        const evaluation = await getSim2RealEvaluation(evaluationId, owner);
+        releaseEvaluation = evaluation;
+        if (
+          evaluation?.stale === true ||
+          (evaluation?.telemetryRevision &&
+            (!releaseRun ||
+              releaseRun.telemetryRevision !== evaluation.telemetryRevision ||
+              releaseRun.evaluationId !== evaluation.id))
+        ) {
+          sendApiError(
+            response,
+            409,
+            'SIM2REAL_EVALUATION_STALE',
+            '评测所依据的遥测已被更新；请重新运行评测后再提交发布计划。',
+            { retryable: false },
+          );
+          return;
+        }
+        if (
+          !evaluation ||
+          evaluation.status !== 'passed' ||
+          evaluation.attested !== true ||
+          evaluation.report?.replay?.attested !== true ||
+          evaluation.modelId !== model.id ||
+          !releaseRun ||
+          evaluation.runId !== releaseRun.id ||
+          (evaluation.artifactId && evaluation.artifactId !== artifactId)
+        ) {
+          sendApiError(
+            response,
+            409,
+            'SIM2REAL_EVALUATION_LINEAGE_INVALID',
+            'Canary / Live 必须绑定同一模型运行的通过评测证据。',
+            { retryable: false },
+          );
+          return;
+        }
+      }
+      // The first-class evaluation report is the canonical release evidence;
+      // use it for the gate even when a legacy embedded run summary differs.
+      const releaseRunForGate =
+        releaseRun && releaseEvaluation?.report
+          ? { ...releaseRun, evaluation: releaseEvaluation.report }
+          : releaseRun;
       const releaseGate = validateRunForDeployment({
         mode,
         modelId: model.id,
-        run: releaseRun,
+        run: releaseRunForGate,
       });
+      if (mode !== 'preflight') {
+        releaseGate.checks.artifactBinding = Boolean(artifactId);
+        releaseGate.checks.evaluationBinding = Boolean(evaluationId);
+        releaseGate.checks.evaluationAttested = releaseEvaluation?.attested === true;
+      }
       if (!releaseGate.passed) {
         sendApiError(
           response,
@@ -2217,6 +3610,8 @@ export function createSim2RealRouter(
       const deployment: Omit<Sim2RealDeploymentRecord, 'id' | 'createdAt' | 'updatedAt'> = {
         modelId: model.id,
         ...(releaseRun ? { runId: releaseRun.id } : {}),
+        ...(artifactId ? { artifactId } : {}),
+        ...(evaluationId ? { evaluationId } : {}),
         deviceId: device.id,
         targetPlatform,
         mode,
@@ -2243,6 +3638,8 @@ export function createSim2RealRouter(
         deviceId: device.id,
         mode,
         ...(runId ? { runId } : {}),
+        ...(artifactId ? { artifactId } : {}),
+        ...(evaluationId ? { evaluationId } : {}),
       });
       try {
         const created = await createSim2RealDeploymentWithResult(deployment, owner, {
@@ -2316,6 +3713,70 @@ export function createSim2RealRouter(
         history: deployment.history ?? [],
         verification: deployment.verification ?? null,
       });
+    }),
+  );
+
+  /**
+   * Record the human approval decision for a canary/live plan. Approval only
+   * moves the control-plane record to ready; a board-agent executor remains
+   * responsible for the physical rollout.
+   */
+  router.post(
+    api('/deployments/:id/approval'),
+    wrapAsync(async (request, response) => {
+      const owner = requestOwner(request, response, auth);
+      if (owner === null) return;
+      noStore(response);
+      const body =
+        request.body && typeof request.body === 'object' && !Array.isArray(request.body)
+          ? (request.body as Record<string, unknown>)
+          : {};
+      const rawDecision = String(body.decision ?? '')
+        .trim()
+        .toLowerCase();
+      const decision =
+        rawDecision === 'approved' || rawDecision === 'approve'
+          ? ('approved' as const)
+          : rawDecision === 'rejected' || rawDecision === 'reject'
+            ? ('rejected' as const)
+            : typeof body.approved === 'boolean'
+              ? body.approved
+                ? ('approved' as const)
+                : ('rejected' as const)
+              : null;
+      if (!decision) {
+        sendApiError(
+          response,
+          400,
+          'SIM2REAL_INVALID_DEPLOYMENT',
+          'approval 需要 decision=approved 或 rejected（也兼容 approved 布尔值）。',
+          { retryable: false },
+        );
+        return;
+      }
+      const id = String(request.params.id || '').trim();
+      const deployment = await getSim2RealDeployment(id, owner);
+      if (!deployment) {
+        response.status(404).json({
+          ok: false,
+          error: 'SIM2REAL_DEPLOYMENT_NOT_FOUND',
+          message: '部署计划不存在，或不属于当前账号。',
+        });
+        return;
+      }
+      const principal = auth.resolvePrincipal(request);
+      try {
+        const updated = await decideSim2RealDeploymentApproval(
+          id,
+          decision,
+          owner,
+          principal?.accountId ?? owner ?? 'local-operator',
+          typeof body.note === 'string' ? body.note : undefined,
+        );
+        response.json({ ok: true, deployment: updated });
+      } catch (error) {
+        storageError(request, response, error, 'sim2real-deployment-approval');
+      }
     }),
   );
 
@@ -2552,6 +4013,12 @@ export function createSim2RealRouter(
             usePool: true,
             rejectOnNonZeroExit: false,
             stdoutCharLimit: 12_000,
+            ...(device.connectionMode === 'bridge'
+              ? {
+                  bridgeDeviceId: device.bridgeDeviceId,
+                  bridgeOwnerKey: device.bridgeOwnerKey ?? (owner ? `sso:${owner}:web` : null),
+                }
+              : {}),
           },
         );
         if (!executed) {

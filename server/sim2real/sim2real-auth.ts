@@ -12,6 +12,8 @@ export type Sim2RealPrincipal = {
   accountId: string;
   displayName?: string;
   email?: string;
+  /** Optional role claims supplied by a verified deployment adapter. */
+  roles?: string[];
 };
 
 export type Sim2RealAuthPort = {

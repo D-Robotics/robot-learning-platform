@@ -1,5 +1,6 @@
 import type {
   ModelArtifactDescriptor,
+  ModelArtifactKind,
   ModelArtifactFormat,
   ModelArtifactRuntime,
   ModelArtifactWorkload,
@@ -20,9 +21,15 @@ export type {
   Sim2RealRunMetrics,
   Sim2RealTaskEvaluationEnvelope,
   Sim2RealTaskEvaluationEvidence,
+  Sim2RealActionOutput,
+  Sim2RealTelemetryActionScale,
+  Sim2RealTelemetryBoardSessionEvent,
+  Sim2RealTelemetryBoardSessionEventKind,
+  Sim2RealBoardSessionSummary,
   Sim2RealTelemetryRecord,
   Sim2RealTelemetrySample,
   Sim2RealTelemetrySource,
+  Sim2RealTelemetryTwist,
 } from './sim2real-telemetry.js';
 
 export const SIM2REAL_SCHEMA_VERSION = 1 as const;
@@ -179,6 +186,13 @@ export interface Sim2RealContract {
   physicsTimestepSeconds: number;
   decimation: number;
   observationLayout: Array<{ name: string; size: number }>;
+  /** Explicit adapter identities keep simulator, trainer and board wiring aligned. */
+  observationAdapterId?: string;
+  actionAdapterId?: string;
+  actionOutput?: 'physical-twist' | 'normalized-twist';
+  actionScale?: { linear: number; angular: number; units?: 'm/s,rad/s' };
+  calibrationId?: string;
+  schemaHash?: string;
 }
 
 export interface Sim2RealArtifact extends ModelArtifactDescriptor {
@@ -240,6 +254,14 @@ export interface Sim2RealRunRecord {
   computeResourceId?: string;
   /** Optional project context for experiment history and comparison. */
   projectId?: string;
+  /** Dataset snapshots consumed by this run (immutable ids). */
+  datasetIds?: string[];
+  /** First-class registry artifact ids produced or selected by this run. */
+  artifactIds?: string[];
+  /** Latest first-class evaluation associated with this run. */
+  evaluationId?: string;
+  /** Content identity of the telemetry snapshot used by the latest evaluation. */
+  telemetryRevision?: string;
   /** Stable user-defined experiment group used to compare runs. */
   experimentId?: string;
   label?: string;
@@ -277,14 +299,101 @@ export interface Sim2RealRunRecord {
 export interface Sim2RealDatasetRecord {
   id: string;
   name: string;
+  /** Immutable logical version supplied by the collector or exporter. */
+  version?: string;
   description?: string;
   uri?: string;
   format?: string;
+  /** Digest of the dataset payload when it is stored outside the ledger. */
+  sha256?: string;
+  /** Contract and run lineage make training/evaluation reproducible. */
+  contractId?: string;
+  sourceRunId?: string;
   sampleCount?: number;
   sizeBytes?: number;
   tags?: string[];
+  /** Lifecycle state; legacy rows without this field are treated as ready. */
+  status?: Sim2RealDatasetStatus;
   createdAt: string;
   updatedAt: string;
+}
+
+export type Sim2RealDatasetStatus = 'registered' | 'ready' | 'revoked';
+
+/**
+ * A durable artifact registry row.  Model-manifest artifacts remain useful
+ * for compatibility, while this record is the immutable release unit that a
+ * deployment can point at.  Once published, metadata is append-only; only a
+ * revocation marker may be added.
+ */
+export type Sim2RealArtifactLifecycleStatus = 'draft' | 'validated' | 'published' | 'revoked';
+
+export interface Sim2RealArtifactRecord {
+  id: string;
+  /** Stable logical artifact name, e.g. `originbot-goal-policy`. */
+  artifactId: string;
+  /** Immutable producer version; `latest` is intentionally disallowed. */
+  version: string;
+  name: string;
+  role: Sim2RealArtifactRole;
+  kind: ModelArtifactKind;
+  format: ModelArtifactFormat;
+  runtime?: ModelArtifactRuntime;
+  workload?: ModelArtifactWorkload;
+  threads?: number;
+  targetPlatforms?: string[];
+  toolchainTarget?: string;
+  acceleratorArchitecture?: string;
+  runtimePackage?: string;
+  /** Opaque managed-store handle; local paths and URLs are rejected. */
+  ref: string;
+  /** Published artifacts must always carry a content digest. */
+  sha256: string;
+  sizeBytes?: number;
+  modelId?: string;
+  runId?: string;
+  datasetIds: string[];
+  evaluationIds: string[];
+  contractId?: string;
+  status: Sim2RealArtifactLifecycleStatus;
+  metadata?: Record<string, string | number | boolean | null>;
+  createdAt: string;
+  updatedAt: string;
+  publishedAt?: string;
+  revokedAt?: string;
+  revocationReason?: string;
+}
+
+export type Sim2RealEvaluationStatus = 'pending' | 'running' | 'passed' | 'failed' | 'invalid';
+
+/** First-class evaluation evidence linked to a run and optional artifact. */
+export interface Sim2RealEvaluationRecord {
+  id: string;
+  runId: string;
+  modelId: string;
+  artifactId?: string;
+  datasetIds: string[];
+  projectId?: string;
+  taskId?: string;
+  status: Sim2RealEvaluationStatus;
+  summary: string;
+  report?: Sim2RealEvaluationSummary;
+  taskEvaluation?: Sim2RealTaskEvaluationEvidence;
+  source: 'platform' | 'runner' | 'import';
+  /** Server-derived attestation marker; client supplied values are ignored. */
+  attested?: boolean;
+  /** Content identity of the telemetry snapshot used to compute this result. */
+  telemetryRevision?: string;
+  /** Set by the ingest boundary when newer telemetry supersedes this result. */
+  stale?: boolean;
+  staleAt?: string;
+  staleReason?: string;
+  deviceId?: string;
+  contractId?: string;
+  seed?: number;
+  createdAt: string;
+  updatedAt: string;
+  completedAt?: string;
 }
 
 export interface Sim2RealProjectRecord {
@@ -311,7 +420,26 @@ export interface Sim2RealDeploymentStep {
 }
 
 export type Sim2RealDeploymentEventType =
-  'created' | 'status_changed' | 'preflight' | 'cancelled' | 'version_switched' | 'updated';
+  | 'created'
+  | 'status_changed'
+  | 'preflight'
+  | 'cancelled'
+  | 'version_switched'
+  | 'approval_approved'
+  | 'approval_rejected'
+  | 'updated';
+
+export type Sim2RealDeploymentApprovalStatus = 'pending' | 'approved' | 'rejected';
+
+/** Human authorization recorded before a canary/live executor may act. */
+export interface Sim2RealDeploymentApproval {
+  status: Sim2RealDeploymentApprovalStatus;
+  requestedAt: string;
+  requestedBy?: string;
+  decidedAt?: string;
+  decidedBy?: string;
+  note?: string;
+}
 
 /** Append-only lifecycle evidence kept with a deployment plan. */
 export interface Sim2RealDeploymentHistoryEvent {
@@ -335,6 +463,10 @@ export interface Sim2RealDeploymentRecord {
   modelId: string;
   /** Training run whose artifact and measurements authorize canary/live planning. */
   runId?: string;
+  /** Immutable registry artifact authorized by the release gate. */
+  artifactId?: string;
+  /** First-class evaluation evidence used for canary/live planning. */
+  evaluationId?: string;
   deviceId: string;
   targetPlatform: string;
   mode: Sim2RealDeploymentMode;
@@ -343,6 +475,8 @@ export interface Sim2RealDeploymentRecord {
   compatibility: Sim2RealCompatibilityView;
   steps: Sim2RealDeploymentStep[];
   history?: Sim2RealDeploymentHistoryEvent[];
+  /** Explicit human gate for canary/live execution. */
+  approval?: Sim2RealDeploymentApproval;
   verification?: Sim2RealDeploymentVerification;
   releaseGate?: {
     passed: boolean;
@@ -744,6 +878,21 @@ function positiveInteger(
   return parsed;
 }
 
+function nonNegativeInteger(
+  value: unknown,
+  label: string,
+  errors: string[],
+  max = Number.MAX_SAFE_INTEGER,
+): number {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed < 0 || !Number.isSafeInteger(parsed)) {
+    errors.push(`${label} must be a non-negative integer`);
+    return 0;
+  }
+  if (parsed > max) errors.push(`${label} must be at most ${max}`);
+  return parsed;
+}
+
 function normalizeLayout(
   value: unknown,
   errors: string[],
@@ -932,12 +1081,19 @@ export function validateSim2RealManifest(input: unknown): Sim2RealValidationResu
     robotId: productId,
     jointCount: isFixedMicroDuck
       ? exactNumber(contract.jointCount, 14, 'contract.jointCount', errors)
-      : positiveInteger(
-          contract.jointCount,
-          'contract.jointCount',
-          errors,
-          SIM2REAL_CONTRACT_LIMITS.maxJointCount,
-        ),
+      : productId === 'originbot'
+        ? nonNegativeInteger(
+            contract.jointCount,
+            'contract.jointCount',
+            errors,
+            SIM2REAL_CONTRACT_LIMITS.maxJointCount,
+          )
+        : positiveInteger(
+            contract.jointCount,
+            'contract.jointCount',
+            errors,
+            SIM2REAL_CONTRACT_LIMITS.maxJointCount,
+          ),
     observationSize: isFixedMicroDuck
       ? exactNumber(contract.observationSize, 61, 'contract.observationSize', errors)
       : positiveInteger(
@@ -1337,6 +1493,77 @@ export const BUILTIN_MICRODUCK_MODEL: Sim2RealModelRecord = {
       source: 'Pollen Robotics MicroDuck public simulator',
       notes:
         'Built-in reference only; user policy switching is gated by the manifest and artifact checks.',
+    },
+  },
+};
+
+/** Contract-complete OriginBot starter so the mobile workflow is usable before
+ * a user imports a custom policy. The artifact is deliberately a reference
+ * placeholder: it enables simulation, recording, training and evaluation, but
+ * never implies a deployable real-robot policy. */
+export const BUILTIN_ORIGINBOT_MODEL: Sim2RealModelRecord = {
+  id: 'builtin-originbot-goal-navigation',
+  builtin: true,
+  createdAt: '2026-01-01T00:00:00.000Z',
+  updatedAt: '2026-01-01T00:00:00.000Z',
+  manifest: {
+    schemaVersion: SIM2REAL_SCHEMA_VERSION,
+    modelId: 'originbot-policy-v1',
+    displayName: 'OriginBot 目标导航起始策略',
+    version: 'starter-v1',
+    robot: { id: 'originbot', variant: 'differential-drive' },
+    contract: {
+      id: 'originbot-policy-v1',
+      robotId: 'originbot',
+      jointCount: 0,
+      observationSize: 8,
+      actionSize: 2,
+      controlHz: 10,
+      physicsTimestepSeconds: 0.1,
+      decimation: 1,
+      observationLayout: [
+        { name: 'x', size: 1 },
+        { name: 'y', size: 1 },
+        { name: 'sin_yaw', size: 1 },
+        { name: 'cos_yaw', size: 1 },
+        { name: 'goal_dx', size: 1 },
+        { name: 'goal_dy', size: 1 },
+        { name: 'linear_velocity', size: 1 },
+        { name: 'angular_velocity', size: 1 },
+      ],
+    },
+    simulator: {
+      backends: ['browser', 'local'],
+      policyArtifactId: 'originbot-starter-policy',
+      policyBundle: {
+        defaultPolicyId: 'goal-navigation',
+        policies: [
+          {
+            id: 'goal-navigation',
+            label: '目标导航',
+            artifactId: 'originbot-starter-policy',
+            description: 'OriginBot 8D 观测 / 2D 差速动作起始策略。',
+          },
+        ],
+      },
+      entryUrl: '/originbot-sim/',
+    },
+    artifacts: [
+      {
+        id: 'originbot-starter-policy',
+        role: 'policy',
+        name: 'originbot-policy.onnx',
+        kind: 'source',
+        format: 'onnx',
+        runtime: 'cpu-onnx',
+        workload: 'locomotion',
+        threads: 1,
+        ref: 'artifact://originbot/starter-policy',
+      },
+    ],
+    metadata: {
+      source: 'RDK OriginBot built-in starter contract',
+      notes: '可直接仿真、录制、训练和评测；真机部署前必须替换为真实训练制品并完成遥测与预检。',
     },
   },
 };

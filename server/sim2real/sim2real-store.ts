@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import * as fsSync from 'node:fs';
 import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
@@ -6,20 +6,28 @@ import { StringDecoder } from 'node:string_decoder';
 
 import type {
   Sim2RealDeploymentEventType,
+  Sim2RealDeploymentApprovalStatus,
   Sim2RealDeploymentRecord,
   Sim2RealEvaluationSummary,
+  Sim2RealEvaluationRecord,
+  Sim2RealArtifactRecord,
+  Sim2RealArtifactLifecycleStatus,
   Sim2RealModelManifest,
   Sim2RealModelRecord,
   Sim2RealProjectRecord,
   Sim2RealDatasetRecord,
+  Sim2RealDatasetStatus,
   Sim2RealComputeResource,
   Sim2RealRunRecord,
   Sim2RealRunStatus,
   Sim2RealTelemetryRecord,
+  Sim2RealEvaluationStatus,
 } from '../../shared/sim2real.js';
-import { BUILTIN_MICRODUCK_MODEL } from '../../shared/sim2real.js';
+import { BUILTIN_MICRODUCK_MODEL, BUILTIN_ORIGINBOT_MODEL } from '../../shared/sim2real.js';
 import { Sim2RealError } from './sim2real-errors.js';
 import { emitSim2RealEvent } from './sim2real-events.js';
+import { redactInternalError } from './http-helpers.js';
+import { validateRunForDeployment } from './release-evidence.js';
 import { isWebCloudDeployment, resolveDataDir } from './standalone-adapters.js';
 import { acquireStorageLease } from './storage-lease.js';
 
@@ -32,6 +40,8 @@ const PUBLIC_RUN_LIST_CAP = 200;
 const DEPLOYMENT_CAP = 200;
 const PROJECT_CAP = 100;
 const DATASET_CAP = 500;
+const ARTIFACT_CAP = 2_000;
+const EVALUATION_CAP = 2_000;
 export const DEFAULT_ACTIVE_RUN_CAP = 4;
 // A reservation that never receives a runner id (for example, a process
 // crash between submit and ledger update) must not occupy an account slot
@@ -40,6 +50,10 @@ export const DEFAULT_ACTIVE_RUN_CAP = 4;
 export const DEFAULT_ACTIVE_RUN_TTL_SECONDS = 24 * 60 * 60;
 export const MIN_ACTIVE_RUN_TTL_SECONDS = 5 * 60;
 export const MAX_ACTIVE_RUN_TTL_SECONDS = 7 * 24 * 60 * 60;
+/** A worker health result is a lease for a bounded period, never a permanent fact. */
+export const DEFAULT_COMPUTE_HEALTH_TTL_SECONDS = 10 * 60;
+export const MIN_COMPUTE_HEALTH_TTL_SECONDS = 30;
+export const MAX_COMPUTE_HEALTH_TTL_SECONDS = 24 * 60 * 60;
 /** JSON ledger guard for the single-instance MVP store. */
 export const SIM2REAL_LEDGER_MAX_BYTES = 768 * 1024 * 1024;
 const READINESS_CACHE_TTL_MS = 5_000;
@@ -80,6 +94,32 @@ export function sim2RealActiveRunTtlSeconds(): number {
     parsed <= MAX_ACTIVE_RUN_TTL_SECONDS
     ? parsed
     : DEFAULT_ACTIVE_RUN_TTL_SECONDS;
+}
+
+/**
+ * Maximum age of a successful GPU worker health probe. Invalid values fall
+ * back to the safe default rather than disabling the freshness gate.
+ */
+export function sim2RealComputeHealthTtlSeconds(): number {
+  const raw = String(process.env.RDK_SIM2REAL_COMPUTE_HEALTH_TTL_SECONDS ?? '').trim();
+  if (!raw) return DEFAULT_COMPUTE_HEALTH_TTL_SECONDS;
+  const parsed = Number(raw);
+  return Number.isSafeInteger(parsed) &&
+    parsed >= MIN_COMPUTE_HEALTH_TTL_SECONDS &&
+    parsed <= MAX_COMPUTE_HEALTH_TTL_SECONDS
+    ? parsed
+    : DEFAULT_COMPUTE_HEALTH_TTL_SECONDS;
+}
+
+/** Whether an account-owned worker has a recent, successful health lease. */
+export function isSim2RealComputeResourceHealthFresh(
+  resource: Pick<Sim2RealComputeResource, 'status' | 'lastCheckedAt'>,
+  nowMs = Date.now(),
+): boolean {
+  if (resource.status !== 'online' || !resource.lastCheckedAt) return false;
+  const checkedAtMs = Date.parse(resource.lastCheckedAt);
+  if (!Number.isFinite(checkedAtMs) || checkedAtMs > nowMs) return false;
+  return nowMs - checkedAtMs <= sim2RealComputeHealthTtlSeconds() * 1_000;
 }
 
 /** Hard upper bound for the retention window: ten years, in days. */
@@ -131,11 +171,25 @@ type StoredDeployment = Sim2RealDeploymentRecord & {
 };
 type StoredProject = Sim2RealProjectRecord & { owner?: string };
 type StoredDataset = Sim2RealDatasetRecord & { owner?: string };
+type StoredArtifact = Sim2RealArtifactRecord & {
+  owner?: string;
+  /** Internal request dedupe metadata; never returned to clients. */
+  _idempotencyKey?: string;
+  _requestFingerprint?: string;
+};
+type StoredEvaluation = Sim2RealEvaluationRecord & {
+  owner?: string;
+  /** Internal request dedupe metadata; never returned to clients. */
+  _idempotencyKey?: string;
+  _requestFingerprint?: string;
+};
 type StoredComputeResource = Sim2RealComputeResource & { owner?: string; runnerToken?: string };
 type StoredTelemetry = Sim2RealTelemetryRecord & {
   owner?: string;
   /** Internal idempotency fingerprint; never returned to clients. */
   _requestFingerprint?: string;
+  /** Fingerprint of the accepted chunk independent of transport sequence. */
+  _contentFingerprint?: string;
 };
 
 /**
@@ -150,6 +204,7 @@ type StoredTelemetry = Sim2RealTelemetryRecord & {
 type TelemetryShardRecord = Sim2RealTelemetryRecord & {
   owner?: string;
   _requestFingerprint?: string;
+  _contentFingerprint?: string;
 };
 
 interface Sim2RealLedger {
@@ -160,6 +215,8 @@ interface Sim2RealLedger {
   telemetry: StoredTelemetry[];
   projects: StoredProject[];
   datasets: StoredDataset[];
+  artifacts: StoredArtifact[];
+  evaluations: StoredEvaluation[];
   computeResources: StoredComputeResource[];
 }
 
@@ -255,6 +312,8 @@ function emptyLedger(): Sim2RealLedger {
     telemetry: [],
     projects: [],
     datasets: [],
+    artifacts: [],
+    evaluations: [],
     computeResources: [],
   };
 }
@@ -331,6 +390,22 @@ function validLedgerShape(value: Record<string, unknown>): boolean {
     })
   )
     return false;
+  if (
+    !(value.deployments as Array<Record<string, unknown>>).every((deployment) => {
+      if (deployment.approval === undefined) return true;
+      if (!isRecord(deployment.approval)) return false;
+      const approval = deployment.approval;
+      return (
+        ['pending', 'approved', 'rejected'].includes(String(approval.status)) &&
+        typeof approval.requestedAt === 'string' &&
+        (approval.requestedBy === undefined || typeof approval.requestedBy === 'string') &&
+        (approval.decidedAt === undefined || typeof approval.decidedAt === 'string') &&
+        (approval.decidedBy === undefined || typeof approval.decidedBy === 'string') &&
+        (approval.note === undefined || typeof approval.note === 'string')
+      );
+    })
+  )
+    return false;
   // Telemetry rows come in two shapes: legacy inline rows carry their samples
   // array; shard-backed index rows deliberately omit it. Accept either.
   const telemetryRowsOk =
@@ -344,6 +419,10 @@ function validLedgerShape(value: Record<string, unknown>): boolean {
       ) {
         return false;
       }
+      // Attestation is a server-derived provenance bit.  Keep the ledger
+      // parser strict so a hand-edited/corrupt row cannot turn into release
+      // evidence by carrying a truthy string or number.
+      if (item.attested !== undefined && typeof item.attested !== 'boolean') return false;
       return item.samples === undefined || Array.isArray(item.samples);
     });
   if (!telemetryRowsOk) {
@@ -352,9 +431,13 @@ function validLedgerShape(value: Record<string, unknown>): boolean {
   if ((value.telemetry as unknown[]).length > SIM2REAL_TELEMETRY_RECORD_CAP) return false;
   if (value.projects !== undefined && !Array.isArray(value.projects)) return false;
   if (value.datasets !== undefined && !Array.isArray(value.datasets)) return false;
+  if (value.artifacts !== undefined && !Array.isArray(value.artifacts)) return false;
+  if (value.evaluations !== undefined && !Array.isArray(value.evaluations)) return false;
   if (value.computeResources !== undefined && !Array.isArray(value.computeResources)) return false;
   if (Array.isArray(value.projects) && value.projects.length > PROJECT_CAP) return false;
   if (Array.isArray(value.datasets) && value.datasets.length > DATASET_CAP) return false;
+  if (Array.isArray(value.artifacts) && value.artifacts.length > ARTIFACT_CAP) return false;
+  if (Array.isArray(value.evaluations) && value.evaluations.length > EVALUATION_CAP) return false;
   if (Array.isArray(value.computeResources) && value.computeResources.length > 100) return false;
   if (Array.isArray(value.projects)) {
     if (!validRecordArray(value.projects, ['id', 'name', 'slug', 'createdAt', 'updatedAt']))
@@ -373,6 +456,107 @@ function validLedgerShape(value: Record<string, unknown>): boolean {
   if (
     Array.isArray(value.datasets) &&
     !validRecordArray(value.datasets, ['id', 'name', 'createdAt', 'updatedAt'])
+  )
+    return false;
+  if (
+    Array.isArray(value.datasets) &&
+    !(value.datasets as Array<Record<string, unknown>>).every(
+      (item) =>
+        item.status === undefined ||
+        ['registered', 'ready', 'revoked'].includes(String(item.status)),
+    )
+  )
+    return false;
+  if (
+    Array.isArray(value.artifacts) &&
+    !validRecordArray(value.artifacts, [
+      'id',
+      'artifactId',
+      'version',
+      'name',
+      'role',
+      'kind',
+      'format',
+      'ref',
+      'sha256',
+      'status',
+      'createdAt',
+      'updatedAt',
+    ])
+  )
+    return false;
+  if (
+    Array.isArray(value.artifacts) &&
+    !(value.artifacts as Array<Record<string, unknown>>).every(
+      (item) =>
+        Array.isArray(item.datasetIds) &&
+        Array.isArray(item.evaluationIds) &&
+        (item.datasetIds as unknown[]).every((id) => typeof id === 'string') &&
+        (item.evaluationIds as unknown[]).every((id) => typeof id === 'string'),
+    )
+  )
+    return false;
+  if (
+    Array.isArray(value.artifacts) &&
+    !(value.artifacts as Array<Record<string, unknown>>).every((item) =>
+      ['draft', 'validated', 'published', 'revoked'].includes(String(item.status)),
+    )
+  )
+    return false;
+  if (
+    Array.isArray(value.evaluations) &&
+    !validRecordArray(value.evaluations, [
+      'id',
+      'runId',
+      'modelId',
+      'status',
+      'summary',
+      'source',
+      'createdAt',
+      'updatedAt',
+    ])
+  )
+    return false;
+  if (
+    Array.isArray(value.evaluations) &&
+    !(value.evaluations as Array<Record<string, unknown>>).every(
+      (item) =>
+        Array.isArray(item.datasetIds) &&
+        (item.datasetIds as unknown[]).every((id) => typeof id === 'string'),
+    )
+  )
+    return false;
+  if (
+    Array.isArray(value.evaluations) &&
+    !(value.evaluations as Array<Record<string, unknown>>).every((item) =>
+      ['pending', 'running', 'passed', 'failed', 'invalid'].includes(String(item.status)),
+    )
+  )
+    return false;
+  // Freshness metadata is server-owned. Keep the parser strict so a hand
+  // edited ledger cannot make an old evaluation look current or attach an
+  // invalid revision to a run.
+  if (
+    !(value.runs as Array<Record<string, unknown>>).every(
+      (item) =>
+        (item.telemetryRevision === undefined ||
+          (typeof item.telemetryRevision === 'string' &&
+            /^[a-f0-9]{64}$/i.test(item.telemetryRevision))) &&
+        (item.evaluationId === undefined || typeof item.evaluationId === 'string'),
+    )
+  )
+    return false;
+  if (
+    Array.isArray(value.evaluations) &&
+    !(value.evaluations as Array<Record<string, unknown>>).every(
+      (item) =>
+        (item.telemetryRevision === undefined ||
+          (typeof item.telemetryRevision === 'string' &&
+            /^[a-f0-9]{64}$/i.test(item.telemetryRevision))) &&
+        (item.stale === undefined || typeof item.stale === 'boolean') &&
+        (item.staleAt === undefined || typeof item.staleAt === 'string') &&
+        (item.staleReason === undefined || typeof item.staleReason === 'string'),
+    )
   )
     return false;
   if (
@@ -417,10 +601,7 @@ export async function sim2RealStorageReadiness(): Promise<Sim2RealStorageInfo> {
       readinessCache = { file, size: -1, mtimeMs: 0, checkedAt: now, info: result };
       return result;
     }
-    console.error(
-      '[sim2real] readiness ledger stat failed:',
-      error instanceof Error ? error.message : error,
-    );
+    console.error('[sim2real] readiness ledger stat failed:', redactInternalError(error));
     return {
       ...info,
       writable: false,
@@ -456,10 +637,7 @@ export async function sim2RealStorageReadiness(): Promise<Sim2RealStorageInfo> {
       readinessCache = { file, size: -1, mtimeMs: 0, checkedAt: now, info };
       return info;
     }
-    console.error(
-      '[sim2real] readiness ledger check failed:',
-      error instanceof Error ? error.message : error,
-    );
+    console.error('[sim2real] readiness ledger check failed:', redactInternalError(error));
     const result = {
       ...info,
       writable: false,
@@ -557,6 +735,8 @@ async function readLedger(): Promise<Sim2RealLedger> {
         telemetry: arrayOf<StoredTelemetry>(parsed.telemetry),
         projects: arrayOf<StoredProject>(parsed.projects),
         datasets: arrayOf<StoredDataset>(parsed.datasets),
+        artifacts: arrayOf<StoredArtifact>(parsed.artifacts),
+        evaluations: arrayOf<StoredEvaluation>(parsed.evaluations),
         computeResources: arrayOf<StoredComputeResource>(parsed.computeResources),
       };
       cache = { file, value, size: afterStat.size, mtimeMs: afterStat.mtimeMs };
@@ -585,7 +765,7 @@ async function readLedger(): Promise<Sim2RealLedger> {
     // in the process log for operators.
     console.error(
       '[sim2real] ledger unreadable; refusing to continue:',
-      error instanceof Error ? error.message : error,
+      redactInternalError(error),
     );
     const failure = new Sim2RealError('sim2real_storage_unavailable');
     failure.cause = error;
@@ -680,7 +860,11 @@ function parseTelemetryShardLine(
  * samples (written by ledger versions before the split) come from the ledger
  * itself, so old data keeps working without a migration pass.
  */
-async function readTelemetryShard(runId: string, owner?: string): Promise<TelemetryShardRecord[]> {
+async function readTelemetryShard(
+  runId: string,
+  owner?: string,
+  indexedIds?: ReadonlySet<string>,
+): Promise<TelemetryShardRecord[]> {
   const shard = telemetryShardPath(runId);
   if (!shard) return [];
   let raw: string;
@@ -693,7 +877,13 @@ async function readTelemetryShard(runId: string, owner?: string): Promise<Teleme
   const records: TelemetryShardRecord[] = [];
   for (const line of raw.split('\n')) {
     const record = parseTelemetryShardLine(line, owner);
-    if (record) records.push(record);
+    // Shards are append-first and the ledger index is the commit marker. A
+    // process crash between those writes can leave an orphan line; never let
+    // that line become visible after restart. Callers that have a ledger pass
+    // the committed id set. The optional form preserves the low-level reader's
+    // utility for migration/diagnostic callers that intentionally inspect all
+    // lines.
+    if (record && (!indexedIds || indexedIds.has(record.id))) records.push(record);
   }
   return records;
 }
@@ -710,6 +900,7 @@ async function readTelemetryShardBounded(
   runId: string,
   owner: string | undefined,
   maxRecords: number,
+  indexedIds?: ReadonlySet<string>,
 ): Promise<TelemetryShardRecord[]> {
   if (!Number.isFinite(maxRecords) || maxRecords <= 0) return [];
   const shard = telemetryShardPath(runId);
@@ -739,7 +930,7 @@ async function readTelemetryShardBounded(
         const line = pending.slice(0, newline);
         pending = pending.slice(newline + 1);
         const record = parseTelemetryShardLine(line, owner);
-        if (record) {
+        if (record && (!indexedIds || indexedIds.has(record.id))) {
           records.push(record);
           if (records.length >= maxRecords) break readChunks;
         }
@@ -751,7 +942,7 @@ async function readTelemetryShardBounded(
     if (records.length < maxRecords) {
       const tail = `${pending}${decoder.end()}`;
       const record = parseTelemetryShardLine(tail, owner);
-      if (record) records.push(record);
+      if (record && (!indexedIds || indexedIds.has(record.id))) records.push(record);
     }
   } finally {
     await handle.close();
@@ -861,6 +1052,24 @@ function ownerMatches(record: { owner?: string }, owner: string | undefined): bo
   return (record.owner ?? '') === (owner ?? '');
 }
 
+/**
+ * The ledger index is the commit marker for a shard line. Keep the lookup in
+ * one helper so every read path (full, bounded, idempotency and quota checks)
+ * applies the same owner/run boundary and cannot accidentally expose an
+ * append-first orphan after a crash.
+ */
+function committedTelemetryIds(
+  ledger: Sim2RealLedger,
+  runId: string,
+  owner: string | undefined,
+): ReadonlySet<string> {
+  return new Set(
+    ledger.telemetry
+      .filter((item) => item.runId === runId && ownerMatches(item, owner))
+      .map((item) => item.id),
+  );
+}
+
 function withoutOwner<T extends { owner?: string }>(record: T): Omit<T, 'owner'> {
   const { owner: _owner, ...publicRecord } = record;
   return publicRecord;
@@ -876,7 +1085,11 @@ function withoutRunPrivate(record: StoredRun): Sim2RealRunRecord {
 }
 
 function withoutTelemetryPrivate(record: StoredTelemetry): Sim2RealTelemetryRecord {
-  const { _requestFingerprint: _fingerprint, ...owned } = withoutOwner(record);
+  const {
+    _requestFingerprint: _fingerprint,
+    _contentFingerprint: _contentFingerprint,
+    ...owned
+  } = withoutOwner(record);
   return owned as Sim2RealTelemetryRecord;
 }
 
@@ -897,13 +1110,79 @@ function withoutDatasetPrivate(record: StoredDataset): Sim2RealDatasetRecord {
   return withoutOwner(record) as Sim2RealDatasetRecord;
 }
 
+function withoutArtifactPrivate(record: StoredArtifact): Sim2RealArtifactRecord {
+  const {
+    _idempotencyKey: _key,
+    _requestFingerprint: _fingerprint,
+    ...owned
+  } = withoutOwner(record);
+  return owned as Sim2RealArtifactRecord;
+}
+
+function withoutEvaluationPrivate(record: StoredEvaluation): Sim2RealEvaluationRecord {
+  const {
+    _idempotencyKey: _key,
+    _requestFingerprint: _fingerprint,
+    ...owned
+  } = withoutOwner(record);
+  return owned as Sim2RealEvaluationRecord;
+}
+
 function withoutComputeResourcePrivate(record: StoredComputeResource): Sim2RealComputeResource {
   const { runnerToken: _token, ...publicRecord } = withoutOwner(record);
   return {
     ...publicRecord,
+    // Do not advertise an old "online" result as executable. The durable
+    // row stays intact for audit/history, while every public read re-evaluates
+    // the bounded health lease against the current TTL policy.
+    status:
+      record.status === 'online' && !isSim2RealComputeResourceHealthFresh(record)
+        ? 'unknown'
+        : record.status,
     tokenConfigured: Boolean(record.runnerToken),
   } as Sim2RealComputeResource;
 }
+
+const DEPLOYMENT_STATUS_TRANSITIONS: Readonly<
+  Record<Sim2RealDeploymentRecord['status'], readonly Sim2RealDeploymentRecord['status'][]>
+> = Object.freeze({
+  planned: ['planned', 'running', 'ready', 'blocked', 'failed', 'cancelled'],
+  running: ['running', 'ready', 'blocked', 'failed', 'cancelled'],
+  ready: ['ready', 'running', 'completed', 'blocked', 'cancelled'],
+  blocked: ['blocked', 'planned', 'running', 'failed', 'cancelled'],
+  failed: ['failed', 'planned', 'cancelled'],
+  completed: ['completed'],
+  cancelled: ['cancelled'],
+});
+
+/** Dataset snapshots move forward through registration and readiness. */
+const DATASET_STATUS_TRANSITIONS: Readonly<
+  Record<Sim2RealDatasetStatus, readonly Sim2RealDatasetStatus[]>
+> = Object.freeze({
+  registered: ['registered', 'ready', 'revoked'],
+  ready: ['ready', 'revoked'],
+  revoked: ['revoked'],
+});
+
+/** Evaluation evidence is append-only once a terminal result is recorded. */
+const EVALUATION_STATUS_TRANSITIONS: Readonly<
+  Record<Sim2RealEvaluationStatus, readonly Sim2RealEvaluationStatus[]>
+> = Object.freeze({
+  pending: ['pending', 'running', 'failed', 'invalid'],
+  running: ['running', 'passed', 'failed', 'invalid'],
+  passed: ['passed'],
+  failed: ['failed'],
+  invalid: ['invalid'],
+});
+
+const ARTIFACT_STATUS_TRANSITIONS: Readonly<
+  Record<Sim2RealArtifactLifecycleStatus, readonly Sim2RealArtifactLifecycleStatus[]>
+> = Object.freeze({
+  draft: ['draft', 'validated', 'revoked'],
+  validated: ['validated', 'published', 'revoked'],
+  published: ['published', 'revoked'],
+  revoked: ['revoked'],
+});
 
 function copy<T>(value: T): T {
   return JSON.parse(JSON.stringify(value)) as T;
@@ -920,6 +1199,88 @@ function telemetryUsage(records: readonly StoredTelemetry[]): { samples: number;
     bytes += Buffer.byteLength(JSON.stringify(record), 'utf8');
   }
   return { samples, bytes };
+}
+
+/**
+ * Stable content identity for a telemetry chunk. Keep this digest private in
+ * the ledger; it is only a deduplication primitive, never a release credential.
+ */
+function telemetryContentFingerprint(
+  input: Pick<
+    Sim2RealTelemetryRecord,
+    | 'runId'
+    | 'modelId'
+    | 'source'
+    | 'deviceId'
+    | 'contractId'
+    | 'attested'
+    | 'droppedCount'
+    | 'samples'
+  >,
+): string {
+  return createHash('sha256')
+    .update(
+      JSON.stringify({
+        runId: input.runId,
+        modelId: input.modelId,
+        source: input.source,
+        deviceId: input.deviceId ?? null,
+        contractId: input.contractId ?? null,
+        attested: input.attested === true,
+        droppedCount: input.droppedCount ?? null,
+        samples: input.samples,
+      }),
+    )
+    .digest('hex');
+}
+
+function telemetryRequestFingerprint(
+  input: Pick<
+    Sim2RealTelemetryRecord,
+    | 'runId'
+    | 'modelId'
+    | 'source'
+    | 'deviceId'
+    | 'contractId'
+    | 'attested'
+    | 'sequence'
+    | 'droppedCount'
+    | 'samples'
+  >,
+): string {
+  return createHash('sha256')
+    .update(
+      JSON.stringify({
+        runId: input.runId,
+        modelId: input.modelId,
+        source: input.source,
+        deviceId: input.deviceId ?? null,
+        contractId: input.contractId ?? null,
+        attested: input.attested === true,
+        sequence: input.sequence ?? null,
+        droppedCount: input.droppedCount ?? null,
+        samples: input.samples,
+      }),
+    )
+    .digest('hex');
+}
+
+/**
+ * Stable identity for the exact accepted telemetry set used by an
+ * evaluation.  The digest deliberately includes chunk ids and private
+ * content fingerprints when available; it is a freshness marker, not a
+ * bearer credential.  If a process crashes after appending a shard line but
+ * before committing its ledger index, the indexed read path below excludes
+ * that line and therefore excludes it from this revision too.
+ */
+function telemetryRevision(records: readonly Sim2RealTelemetryRecord[]): string {
+  const rows = [...records].sort(compareTelemetryRecords).map((record) => ({
+    id: record.id,
+    sequence: record.sequence ?? null,
+    receivedAt: record.receivedAt,
+    content: (record as StoredTelemetry)._contentFingerprint ?? telemetryContentFingerprint(record),
+  }));
+  return createHash('sha256').update(JSON.stringify(rows)).digest('hex');
 }
 
 /**
@@ -987,7 +1348,7 @@ export async function listSim2RealModels(owner?: string): Promise<Sim2RealModelR
     .filter((item) => ownerMatches(item, owner))
     .slice(0, MODEL_CAP)
     .map((item) => copy(withoutOwner(item)) as Sim2RealModelRecord);
-  return [copy(BUILTIN_MICRODUCK_MODEL), ...custom];
+  return [copy(BUILTIN_MICRODUCK_MODEL), copy(BUILTIN_ORIGINBOT_MODEL), ...custom];
 }
 
 export async function listSim2RealProjects(owner?: string): Promise<Sim2RealProjectRecord[]> {
@@ -1084,11 +1445,56 @@ export async function createSim2RealDataset(
   ensureWritable();
   return serialized(async () => {
     const ledger = await readLedger();
+    // Registration is deliberately a separate step from readiness. A client
+    // cannot self-attest that an imported snapshot is ready at creation time;
+    // promotion goes through updateSim2RealDatasetStatus after validation.
+    const status = input.status ?? 'registered';
+    if (status !== 'registered') {
+      throw new Sim2RealError('sim2real_dataset_transition_invalid');
+    }
+    if (!DATASET_STATUS_TRANSITIONS[status]) {
+      throw new Sim2RealError('sim2real_dataset_transition_invalid');
+    }
+    if (input.sourceRunId) {
+      const sourceRun = ledger.runs.find(
+        (item) => item.id === input.sourceRunId && ownerMatches(item, owner),
+      );
+      if (!sourceRun) throw new Sim2RealError('sim2real_run_lineage_invalid');
+      if (input.contractId) {
+        const sourceModel =
+          sourceRun.modelId === BUILTIN_MICRODUCK_MODEL.id
+            ? BUILTIN_MICRODUCK_MODEL
+            : sourceRun.modelId === BUILTIN_ORIGINBOT_MODEL.id
+              ? BUILTIN_ORIGINBOT_MODEL
+              : ledger.models.find(
+                  (item) => item.id === sourceRun.modelId && ownerMatches(item, owner),
+                );
+        if (
+          sourceModel?.manifest.contract.id &&
+          sourceModel.manifest.contract.id !== input.contractId
+        ) {
+          throw new Sim2RealError('sim2real_run_lineage_invalid');
+        }
+      }
+    }
     if (ledger.datasets.length >= DATASET_CAP)
       throw new Sim2RealError('sim2real_storage_quota_exceeded');
+    // A versioned dataset is an immutable snapshot.  Keep legacy unversioned
+    // imports permissive, but never allow the same logical name/version to be
+    // silently replaced by a second payload.
+    if (
+      input.version &&
+      ledger.datasets.some(
+        (item) =>
+          ownerMatches(item, owner) && item.name === input.name && item.version === input.version,
+      )
+    ) {
+      throw new Sim2RealError('sim2real_dataset_version_exists');
+    }
     const now = new Date().toISOString();
     const record: StoredDataset = {
       ...copy(input),
+      status,
       id: randomUUID(),
       createdAt: now,
       updatedAt: now,
@@ -1098,6 +1504,783 @@ export async function createSim2RealDataset(
     void emitSim2RealEvent('dataset.created', record.id, withoutDatasetPrivate(record), owner);
     return copy(withoutDatasetPrivate(record));
   });
+}
+
+export async function getSim2RealDataset(
+  id: string,
+  owner?: string,
+): Promise<Sim2RealDatasetRecord | null> {
+  const wanted = String(id ?? '').trim();
+  if (!wanted) return null;
+  const ledger = await readLedger();
+  const found = ledger.datasets.find((item) => item.id === wanted && ownerMatches(item, owner));
+  return found ? copy(withoutDatasetPrivate(found)) : null;
+}
+
+/**
+ * Change only the lifecycle marker of an immutable dataset snapshot. Payload
+ * metadata (digest, URI, sample count, contract and tags) is intentionally
+ * excluded from this API; a correction must be registered as a new version.
+ */
+export async function updateSim2RealDatasetStatus(
+  id: string,
+  status: Sim2RealDatasetStatus,
+  owner?: string,
+): Promise<Sim2RealDatasetRecord | null> {
+  ensureWritable();
+  return serialized(async () => {
+    const ledger = await readLedger();
+    const index = ledger.datasets.findIndex((item) => item.id === id && ownerMatches(item, owner));
+    if (index < 0) return null;
+    const current = ledger.datasets[index];
+    if ((current.status ?? 'ready') === 'revoked' && status !== 'revoked') {
+      throw new Sim2RealError('sim2real_dataset_not_mutable');
+    }
+    const currentStatus = current.status ?? 'ready';
+    if (!DATASET_STATUS_TRANSITIONS[currentStatus]?.includes(status)) {
+      throw new Sim2RealError('sim2real_dataset_transition_invalid');
+    }
+    if (status === currentStatus && current.status === status) {
+      return copy(withoutDatasetPrivate(current));
+    }
+    const updated: StoredDataset = {
+      ...current,
+      status,
+      updatedAt: new Date().toISOString(),
+    };
+    const datasets = [...ledger.datasets];
+    datasets[index] = updated;
+    await writeLedger({ ...ledger, datasets });
+    void emitSim2RealEvent('dataset.updated', updated.id, withoutDatasetPrivate(updated), owner);
+    return copy(withoutDatasetPrivate(updated));
+  });
+}
+
+export async function revokeSim2RealDataset(
+  id: string,
+  owner?: string,
+): Promise<Sim2RealDatasetRecord | null> {
+  return updateSim2RealDatasetStatus(id, 'revoked', owner);
+}
+
+export interface Sim2RealArtifactCreateResult {
+  artifact: Sim2RealArtifactRecord;
+  duplicate: boolean;
+}
+
+export interface Sim2RealArtifactCreateOptions {
+  idempotencyKey?: string;
+  requestFingerprint?: string;
+}
+
+function artifactImmutableFingerprint(
+  input: Omit<Sim2RealArtifactRecord, 'id' | 'createdAt' | 'updatedAt'>,
+): string {
+  // Status/timestamps are lifecycle metadata; the payload identity is the
+  // logical version, digest, and all lineage/compatibility fields.
+  return JSON.stringify({
+    artifactId: input.artifactId,
+    version: input.version,
+    name: input.name,
+    role: input.role,
+    kind: input.kind,
+    format: input.format,
+    runtime: input.runtime ?? null,
+    workload: input.workload ?? null,
+    threads: input.threads ?? null,
+    targetPlatforms: input.targetPlatforms ?? [],
+    toolchainTarget: input.toolchainTarget ?? null,
+    acceleratorArchitecture: input.acceleratorArchitecture ?? null,
+    runtimePackage: input.runtimePackage ?? null,
+    ref: input.ref,
+    sha256: input.sha256.toLowerCase(),
+    sizeBytes: input.sizeBytes ?? null,
+    modelId: input.modelId ?? null,
+    runId: input.runId ?? null,
+    datasetIds: [...(input.datasetIds ?? [])].sort(),
+    evaluationIds: [...(input.evaluationIds ?? [])].sort(),
+    contractId: input.contractId ?? null,
+    metadata: input.metadata ?? null,
+  });
+}
+
+function visibleModelInLedger(ledger: Sim2RealLedger, modelId: string, owner?: string): boolean {
+  return (
+    modelId === BUILTIN_MICRODUCK_MODEL.id ||
+    modelId === BUILTIN_ORIGINBOT_MODEL.id ||
+    ledger.models.some((item) => item.id === modelId && ownerMatches(item, owner))
+  );
+}
+
+function modelForRunLineage(
+  ledger: Sim2RealLedger,
+  modelId: string,
+  owner?: string,
+): Sim2RealModelRecord | StoredModel | null {
+  if (modelId === BUILTIN_MICRODUCK_MODEL.id) return BUILTIN_MICRODUCK_MODEL;
+  if (modelId === BUILTIN_ORIGINBOT_MODEL.id) return BUILTIN_ORIGINBOT_MODEL;
+  return ledger.models.find((item) => item.id === modelId && ownerMatches(item, owner)) ?? null;
+}
+
+function artifactLineageError(detail: string): Sim2RealError {
+  return new Sim2RealError('sim2real_artifact_lineage_invalid', { detail });
+}
+
+/**
+ * Register one immutable artifact version.  The JSON ledger stores metadata
+ * only; bytes are owned by the configured artifact/object-store adapter and
+ * are addressed exclusively through the opaque artifact:// ref.
+ */
+export async function createSim2RealArtifactWithResult(
+  input: Omit<Sim2RealArtifactRecord, 'id' | 'createdAt' | 'updatedAt'>,
+  owner: string | undefined,
+  options: Sim2RealArtifactCreateOptions = {},
+): Promise<Sim2RealArtifactCreateResult> {
+  ensureWritable();
+  return serialized(async () => {
+    const ledger = await readLedger();
+    const artifactId = String(input.artifactId ?? '').trim();
+    const version = String(input.version ?? '').trim();
+    if (!artifactId || !version || version.toLowerCase() === 'latest') {
+      throw artifactLineageError('artifactId/version is required and version=latest is forbidden');
+    }
+    if (!/^[a-zA-Z][a-zA-Z0-9._-]{0,127}$/.test(artifactId)) {
+      throw artifactLineageError('artifactId format is invalid');
+    }
+    if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(version)) {
+      throw artifactLineageError('version format is invalid');
+    }
+    const datasetIds = [
+      ...new Set((input.datasetIds ?? []).map((id) => String(id).trim()).filter(Boolean)),
+    ];
+    const evaluationIds = [
+      ...new Set((input.evaluationIds ?? []).map((id) => String(id).trim()).filter(Boolean)),
+    ];
+    for (const datasetId of datasetIds) {
+      if (!ledger.datasets.some((item) => item.id === datasetId && ownerMatches(item, owner))) {
+        throw artifactLineageError(`dataset ${datasetId} does not belong to this account`);
+      }
+    }
+    for (const evaluationId of evaluationIds) {
+      if (
+        !ledger.evaluations.some((item) => item.id === evaluationId && ownerMatches(item, owner))
+      ) {
+        throw artifactLineageError(`evaluation ${evaluationId} does not belong to this account`);
+      }
+    }
+    let modelId = input.modelId?.trim() || undefined;
+    const runId = input.runId?.trim() || undefined;
+    if (runId) {
+      const run = ledger.runs.find((item) => item.id === runId && ownerMatches(item, owner));
+      if (!run) throw artifactLineageError(`run ${runId} does not belong to this account`);
+      if (modelId && modelId !== run.modelId) {
+        throw artifactLineageError('artifact modelId does not match run.modelId');
+      }
+      modelId = run.modelId;
+    }
+    if (modelId && !visibleModelInLedger(ledger, modelId, owner)) {
+      throw artifactLineageError(`model ${modelId} does not belong to this account`);
+    }
+    if (input.contractId && modelId) {
+      const model =
+        modelId === BUILTIN_MICRODUCK_MODEL.id
+          ? BUILTIN_MICRODUCK_MODEL
+          : modelId === BUILTIN_ORIGINBOT_MODEL.id
+            ? BUILTIN_ORIGINBOT_MODEL
+            : ledger.models.find((item) => item.id === modelId && ownerMatches(item, owner));
+      if (model && model.manifest.contract.id !== input.contractId) {
+        throw artifactLineageError('artifact contractId does not match model contract');
+      }
+    }
+    for (const evaluationId of evaluationIds) {
+      const evaluation = ledger.evaluations.find(
+        (item) => item.id === evaluationId && ownerMatches(item, owner),
+      );
+      if (
+        !evaluation ||
+        (modelId && evaluation.modelId !== modelId) ||
+        (runId && evaluation.runId !== runId) ||
+        (evaluation.status === 'passed' &&
+          (evaluation.attested !== true || evaluation.report?.replay?.attested !== true))
+      ) {
+        throw artifactLineageError(`evaluation ${evaluationId} does not match artifact lineage`);
+      }
+    }
+    const canonicalModel = modelId ? modelForRunLineage(ledger, modelId, owner) : null;
+    const canonicalContractId = canonicalModel?.manifest.contract.id;
+    // New registry rows always begin in draft. Publication is an explicit,
+    // auditable transition through updateSim2RealArtifactStatus; accepting a
+    // terminal status here would let an importer bypass validation entirely.
+    if (input.status !== undefined && input.status !== 'draft') {
+      throw artifactLineageError('new artifacts must start in draft status');
+    }
+    const normalized: Omit<Sim2RealArtifactRecord, 'id' | 'createdAt' | 'updatedAt'> = {
+      ...copy(input),
+      artifactId,
+      version,
+      ...(modelId ? { modelId } : {}),
+      ...(runId ? { runId } : {}),
+      datasetIds,
+      evaluationIds,
+      ...(input.contractId || !canonicalContractId ? {} : { contractId: canonicalContractId }),
+      sha256: String(input.sha256 ?? '').toLowerCase(),
+      status: 'draft',
+    };
+    if (!ARTIFACT_STATUS_TRANSITIONS[normalized.status]) {
+      throw new Sim2RealError('sim2real_artifact_lineage_invalid');
+    }
+    if (normalized.status === 'revoked') {
+      throw new Sim2RealError('sim2real_artifact_not_mutable');
+    }
+    const idempotencyKey = String(options.idempotencyKey ?? '').trim();
+    if (idempotencyKey) {
+      const byKey = ledger.artifacts.find(
+        (item) => item._idempotencyKey === idempotencyKey && ownerMatches(item, owner),
+      );
+      if (byKey) {
+        if (
+          options.requestFingerprint &&
+          byKey._requestFingerprint &&
+          options.requestFingerprint !== byKey._requestFingerprint
+        ) {
+          throw new Sim2RealError('sim2real_artifact_idempotency_conflict');
+        }
+        return { artifact: copy(withoutArtifactPrivate(byKey)), duplicate: true };
+      }
+    }
+    const sameVersion = ledger.artifacts.find(
+      (item) =>
+        ownerMatches(item, owner) && item.artifactId === artifactId && item.version === version,
+    );
+    if (sameVersion) {
+      if (artifactImmutableFingerprint(sameVersion) !== artifactImmutableFingerprint(normalized)) {
+        throw new Sim2RealError('sim2real_artifact_version_exists');
+      }
+      return { artifact: copy(withoutArtifactPrivate(sameVersion)), duplicate: true };
+    }
+    if (ledger.artifacts.length >= ARTIFACT_CAP) {
+      throw new Sim2RealError('sim2real_storage_quota_exceeded');
+    }
+    const now = new Date().toISOString();
+    const status = normalized.status;
+    if (status === 'published' && !normalized.sha256) {
+      throw artifactLineageError('published artifacts require sha256');
+    }
+    const record: StoredArtifact = {
+      ...normalized,
+      id: randomUUID(),
+      createdAt: now,
+      updatedAt: now,
+      ...(status === 'published' ? { publishedAt: now } : {}),
+      ...(owner ? { owner } : {}),
+      ...(idempotencyKey ? { _idempotencyKey: idempotencyKey } : {}),
+      ...(options.requestFingerprint ? { _requestFingerprint: options.requestFingerprint } : {}),
+    };
+    let runs = ledger.runs;
+    if (runId) {
+      runs = ledger.runs.map((run) =>
+        run.id === runId && ownerMatches(run, owner)
+          ? { ...run, artifactIds: [...new Set([...(run.artifactIds ?? []), record.id])] }
+          : run,
+      );
+    }
+    await writeLedger({
+      ...ledger,
+      runs,
+      artifacts: [record, ...ledger.artifacts],
+    });
+    void emitSim2RealEvent('artifact.created', record.id, withoutArtifactPrivate(record), owner);
+    return { artifact: copy(withoutArtifactPrivate(record)), duplicate: false };
+  });
+}
+
+export async function createSim2RealArtifact(
+  input: Omit<Sim2RealArtifactRecord, 'id' | 'createdAt' | 'updatedAt'>,
+  owner?: string,
+): Promise<Sim2RealArtifactRecord> {
+  return (await createSim2RealArtifactWithResult(input, owner)).artifact;
+}
+
+export async function listSim2RealArtifacts(owner?: string): Promise<Sim2RealArtifactRecord[]> {
+  const ledger = await readLedger();
+  return ledger.artifacts
+    .filter((item) => ownerMatches(item, owner))
+    .slice(0, ARTIFACT_CAP)
+    .map((item) => copy(withoutArtifactPrivate(item)));
+}
+
+export async function getSim2RealArtifact(
+  id: string,
+  owner?: string,
+): Promise<Sim2RealArtifactRecord | null> {
+  const wanted = String(id ?? '').trim();
+  if (!wanted) return null;
+  const ledger = await readLedger();
+  const found = ledger.artifacts.find((item) => item.id === wanted && ownerMatches(item, owner));
+  return found ? copy(withoutArtifactPrivate(found)) : null;
+}
+
+/** Advance an artifact lifecycle marker without changing immutable payload. */
+export async function updateSim2RealArtifactStatus(
+  id: string,
+  status: Sim2RealArtifactLifecycleStatus,
+  owner?: string,
+  reason = '',
+): Promise<Sim2RealArtifactRecord | null> {
+  ensureWritable();
+  return serialized(async () => {
+    const ledger = await readLedger();
+    const index = ledger.artifacts.findIndex((item) => item.id === id && ownerMatches(item, owner));
+    if (index < 0) return null;
+    const current = ledger.artifacts[index];
+    if (!ARTIFACT_STATUS_TRANSITIONS[current.status]?.includes(status)) {
+      if (current.status === 'revoked' && status !== 'revoked') {
+        throw new Sim2RealError('sim2real_artifact_not_mutable');
+      }
+      throw new Sim2RealError('sim2real_artifact_lineage_invalid');
+    }
+    if (current.status === 'revoked' && status !== 'revoked') {
+      throw new Sim2RealError('sim2real_artifact_not_mutable');
+    }
+    if (status === 'published' && !current.sha256) {
+      throw artifactLineageError('published artifacts require sha256');
+    }
+    if (status === 'published' && current.evaluationIds.length) {
+      for (const evaluationId of current.evaluationIds) {
+        const evaluation = ledger.evaluations.find(
+          (item) => item.id === evaluationId && ownerMatches(item, owner),
+        );
+        if (
+          !evaluation ||
+          evaluation.status !== 'passed' ||
+          evaluation.attested !== true ||
+          evaluation.report?.replay?.attested !== true ||
+          (current.modelId && evaluation.modelId !== current.modelId) ||
+          (current.runId && evaluation.runId !== current.runId)
+        ) {
+          throw artifactLineageError('published artifacts require passed, attested evaluations');
+        }
+      }
+    }
+    if (status === current.status) return copy(withoutArtifactPrivate(current));
+    const now = new Date().toISOString();
+    const updated: StoredArtifact = {
+      ...current,
+      status,
+      updatedAt: now,
+      ...(status === 'published' && !current.publishedAt ? { publishedAt: now } : {}),
+      ...(status === 'revoked'
+        ? {
+            revokedAt: current.revokedAt ?? now,
+            ...(reason.trim() ? { revocationReason: reason.trim().slice(0, 500) } : {}),
+          }
+        : {}),
+    };
+    const artifacts = [...ledger.artifacts];
+    artifacts[index] = updated;
+    await writeLedger({ ...ledger, artifacts });
+    void emitSim2RealEvent(
+      status === 'revoked' ? 'artifact.revoked' : 'artifact.updated',
+      updated.id,
+      withoutArtifactPrivate(updated),
+      owner,
+    );
+    return copy(withoutArtifactPrivate(updated));
+  });
+}
+
+export async function validateSim2RealArtifact(
+  id: string,
+  owner?: string,
+): Promise<Sim2RealArtifactRecord | null> {
+  return updateSim2RealArtifactStatus(id, 'validated', owner);
+}
+
+export async function publishSim2RealArtifact(
+  id: string,
+  owner?: string,
+): Promise<Sim2RealArtifactRecord | null> {
+  return updateSim2RealArtifactStatus(id, 'published', owner);
+}
+
+/** Revoke an artifact version while preserving all historical evidence. */
+export async function revokeSim2RealArtifact(
+  id: string,
+  reason: string,
+  owner?: string,
+): Promise<Sim2RealArtifactRecord | null> {
+  return updateSim2RealArtifactStatus(id, 'revoked', owner, reason);
+}
+
+export async function listSim2RealEvaluations(owner?: string): Promise<Sim2RealEvaluationRecord[]> {
+  const ledger = await readLedger();
+  return ledger.evaluations
+    .filter((item) => ownerMatches(item, owner))
+    .slice(0, EVALUATION_CAP)
+    .map((item) => copy(withoutEvaluationPrivate(item)));
+}
+
+export async function getSim2RealEvaluation(
+  id: string,
+  owner?: string,
+): Promise<Sim2RealEvaluationRecord | null> {
+  const wanted = String(id ?? '').trim();
+  if (!wanted) return null;
+  const ledger = await readLedger();
+  const found = ledger.evaluations.find((item) => item.id === wanted && ownerMatches(item, owner));
+  return found ? copy(withoutEvaluationPrivate(found)) : null;
+}
+
+export interface Sim2RealEvaluationCreateResult {
+  evaluation: Sim2RealEvaluationRecord;
+  duplicate: boolean;
+}
+
+export interface Sim2RealEvaluationCreateOptions {
+  idempotencyKey?: string;
+  requestFingerprint?: string;
+  /** Internal server path for a freshly computed, independently attested result. */
+  allowInitialTerminal?: boolean;
+}
+
+export async function createSim2RealEvaluationWithResult(
+  input: Omit<Sim2RealEvaluationRecord, 'id' | 'createdAt' | 'updatedAt'>,
+  owner: string | undefined,
+  options: Sim2RealEvaluationCreateOptions = {},
+): Promise<Sim2RealEvaluationCreateResult> {
+  ensureWritable();
+  return serialized(async () => {
+    const ledger = await readLedger();
+    if (!EVALUATION_STATUS_TRANSITIONS[input.status]) {
+      throw new Sim2RealError('sim2real_evaluation_transition_invalid');
+    }
+    // Public registration is intentionally two-phase: a row starts pending,
+    // then a trusted evaluator advances it. The telemetry route may opt into
+    // an independently computed terminal result via the internal flag below.
+    if (!options.allowInitialTerminal && input.status !== 'pending') {
+      throw new Sim2RealError('sim2real_evaluation_transition_invalid');
+    }
+    if (!['platform', 'runner', 'import'].includes(input.source)) {
+      throw new Sim2RealError('sim2real_evaluation_lineage_invalid');
+    }
+    if (input.source === 'import' && input.status === 'passed') {
+      throw new Sim2RealError('sim2real_evaluation_lineage_invalid');
+    }
+    const run = ledger.runs.find((item) => item.id === input.runId && ownerMatches(item, owner));
+    if (!run || input.modelId !== run.modelId) {
+      throw new Sim2RealError('sim2real_evaluation_lineage_invalid');
+    }
+    const requestedTelemetryRevision = String(input.telemetryRevision ?? '').trim();
+    if (requestedTelemetryRevision) {
+      if (!/^[a-f0-9]{64}$/i.test(requestedTelemetryRevision)) {
+        throw new Sim2RealError('sim2real_evaluation_lineage_invalid');
+      }
+      // The evaluator and materializer are separate API operations for
+      // backwards compatibility, so bind a terminal record to the exact
+      // snapshot that the serialized evaluator observed. If ingest won the
+      // race in between, the run revision is cleared and this operation fails
+      // closed instead of publishing a result for an older snapshot.
+      if (run.telemetryRevision !== requestedTelemetryRevision) {
+        throw new Sim2RealError('sim2real_evaluation_stale');
+      }
+    } else if (
+      options.allowInitialTerminal &&
+      input.source === 'platform' &&
+      (input.status === 'passed' || input.status === 'failed') &&
+      run.telemetryRevision
+    ) {
+      // A platform terminal result for a run that already has a revision must
+      // carry that revision. This prevents a caller from bypassing the
+      // freshness binding by omitting the field.
+      throw new Sim2RealError('sim2real_evaluation_stale');
+    }
+    if (input.projectId && input.projectId !== run.projectId) {
+      throw new Sim2RealError('sim2real_evaluation_lineage_invalid');
+    }
+    if (input.taskId && run.taskId && input.taskId !== run.taskId) {
+      throw new Sim2RealError('sim2real_evaluation_lineage_invalid');
+    }
+    const model = modelForRunLineage(ledger, run.modelId, owner);
+    const canonicalContractId = model?.manifest.contract.id;
+    if (input.contractId && canonicalContractId && input.contractId !== canonicalContractId) {
+      throw new Sim2RealError('sim2real_evaluation_lineage_invalid');
+    }
+    const datasetIds = [
+      ...new Set((input.datasetIds ?? []).map((id) => String(id).trim()).filter(Boolean)),
+    ];
+    for (const datasetId of datasetIds) {
+      const dataset = ledger.datasets.find(
+        (item) => item.id === datasetId && ownerMatches(item, owner),
+      );
+      if (!dataset || (dataset.status ?? 'ready') === 'revoked') {
+        throw new Sim2RealError('sim2real_evaluation_lineage_invalid');
+      }
+      if (canonicalContractId && dataset.contractId && dataset.contractId !== canonicalContractId) {
+        throw new Sim2RealError('sim2real_evaluation_lineage_invalid');
+      }
+    }
+    let artifact: StoredArtifact | undefined;
+    if (input.artifactId) {
+      artifact = ledger.artifacts.find(
+        (item) => item.id === input.artifactId && ownerMatches(item, owner),
+      );
+      if (
+        !artifact ||
+        artifact.status === 'revoked' ||
+        (artifact.modelId && artifact.modelId !== run.modelId) ||
+        (artifact.runId && artifact.runId !== run.id)
+      ) {
+        throw new Sim2RealError('sim2real_evaluation_lineage_invalid');
+      }
+    }
+    if (input.seed !== undefined && (!Number.isSafeInteger(input.seed) || input.seed < 0)) {
+      throw new Sim2RealError('sim2real_evaluation_lineage_invalid');
+    }
+    // `stale*` is server-owned metadata. Never accept it from a public body,
+    // even when an adapter forwards an object with extra properties.
+    const {
+      stale: _stale,
+      staleAt: _staleAt,
+      staleReason: _staleReason,
+      telemetryRevision: _telemetryRevision,
+      ...safeInput
+    } = copy(input) as Omit<Sim2RealEvaluationRecord, 'id' | 'createdAt' | 'updatedAt'>;
+    const normalized: Omit<Sim2RealEvaluationRecord, 'id' | 'createdAt' | 'updatedAt'> = {
+      ...safeInput,
+      runId: run.id,
+      modelId: run.modelId,
+      datasetIds,
+      ...(input.projectId || run.projectId ? { projectId: input.projectId ?? run.projectId } : {}),
+      ...(input.taskId || run.taskId ? { taskId: input.taskId ?? run.taskId } : {}),
+      ...(input.contractId || !canonicalContractId ? {} : { contractId: canonicalContractId }),
+      ...(requestedTelemetryRevision ? { telemetryRevision: requestedTelemetryRevision } : {}),
+      summary:
+        String(input.summary ?? '')
+          .trim()
+          .slice(0, 500) || '评测记录已登记。',
+    };
+    if (normalized.attested !== undefined && typeof normalized.attested !== 'boolean') {
+      throw new Sim2RealError('sim2real_evaluation_lineage_invalid');
+    }
+    const idempotencyKey = String(options.idempotencyKey ?? '').trim();
+    if (idempotencyKey) {
+      const existing = ledger.evaluations.find(
+        (item) => item._idempotencyKey === idempotencyKey && ownerMatches(item, owner),
+      );
+      if (existing) {
+        if (
+          options.requestFingerprint &&
+          existing._requestFingerprint &&
+          options.requestFingerprint !== existing._requestFingerprint
+        ) {
+          throw new Sim2RealError('sim2real_evaluation_idempotency_conflict');
+        }
+        return { evaluation: copy(withoutEvaluationPrivate(existing)), duplicate: true };
+      }
+    }
+    if (ledger.evaluations.length >= EVALUATION_CAP) {
+      throw new Sim2RealError('sim2real_storage_quota_exceeded');
+    }
+    const now = new Date().toISOString();
+    const status = normalized.status;
+    const record: StoredEvaluation = {
+      ...normalized,
+      id: randomUUID(),
+      createdAt: now,
+      updatedAt: now,
+      ...(status === 'passed' || status === 'failed' || status === 'invalid'
+        ? { completedAt: input.completedAt ?? now }
+        : {}),
+      ...(owner ? { owner } : {}),
+      ...(idempotencyKey ? { _idempotencyKey: idempotencyKey } : {}),
+      ...(options.requestFingerprint ? { _requestFingerprint: options.requestFingerprint } : {}),
+    };
+    const runs = ledger.runs.map((item) =>
+      item.id === run.id && ownerMatches(item, owner) ? { ...item, evaluationId: record.id } : item,
+    );
+    const artifacts = artifact
+      ? ledger.artifacts.map((item) =>
+          item.id === artifact!.id && ownerMatches(item, owner)
+            ? { ...item, evaluationIds: [...new Set([...(item.evaluationIds ?? []), record.id])] }
+            : item,
+        )
+      : ledger.artifacts;
+    await writeLedger({ ...ledger, runs, artifacts, evaluations: [record, ...ledger.evaluations] });
+    void emitSim2RealEvent(
+      'evaluation.created',
+      record.id,
+      withoutEvaluationPrivate(record),
+      owner,
+    );
+    return { evaluation: copy(withoutEvaluationPrivate(record)), duplicate: false };
+  });
+}
+
+export async function createSim2RealEvaluation(
+  input: Omit<Sim2RealEvaluationRecord, 'id' | 'createdAt' | 'updatedAt'>,
+  owner?: string,
+): Promise<Sim2RealEvaluationRecord> {
+  return (await createSim2RealEvaluationWithResult(input, owner)).evaluation;
+}
+
+/** Update mutable evaluation evidence while enforcing a forward-only state machine. */
+export async function updateSim2RealEvaluation(
+  id: string,
+  patch: Partial<
+    Pick<
+      Sim2RealEvaluationRecord,
+      'status' | 'summary' | 'report' | 'taskEvaluation' | 'deviceId' | 'completedAt'
+    >
+  >,
+  owner?: string,
+  options: { trusted?: boolean } = {},
+): Promise<Sim2RealEvaluationRecord | null> {
+  ensureWritable();
+  return serialized(async () => {
+    const ledger = await readLedger();
+    const index = ledger.evaluations.findIndex(
+      (item) => item.id === id && ownerMatches(item, owner),
+    );
+    if (index < 0) return null;
+    const current = ledger.evaluations[index];
+    const nextStatus = patch.status ?? current.status;
+    if (!EVALUATION_STATUS_TRANSITIONS[current.status]?.includes(nextStatus)) {
+      throw new Sim2RealError('sim2real_evaluation_transition_invalid');
+    }
+    if (
+      current.status !== nextStatus &&
+      (current.status === 'passed' || current.status === 'failed' || current.status === 'invalid')
+    ) {
+      throw new Sim2RealError('sim2real_evaluation_transition_invalid');
+    }
+    // A passed result must come from a server-side evaluator (or a future
+    // signed runner adapter). The public PATCH route never sets `trusted`, so
+    // a caller cannot self-attest arbitrary report fields as release evidence.
+    if (nextStatus === 'passed' && options.trusted !== true) {
+      throw new Sim2RealError('sim2real_evaluation_lineage_invalid');
+    }
+    const now = new Date().toISOString();
+    const updated: StoredEvaluation = {
+      ...current,
+      ...copy(patch),
+      status: nextStatus,
+      summary:
+        patch.summary === undefined ? current.summary : String(patch.summary).trim().slice(0, 500),
+      updatedAt: now,
+      ...(nextStatus === 'passed' || nextStatus === 'failed' || nextStatus === 'invalid'
+        ? { completedAt: patch.completedAt ?? current.completedAt ?? now }
+        : {}),
+    };
+    const evaluations = [...ledger.evaluations];
+    evaluations[index] = updated;
+    await writeLedger({ ...ledger, evaluations });
+    void emitSim2RealEvent(
+      'evaluation.updated',
+      updated.id,
+      withoutEvaluationPrivate(updated),
+      owner,
+    );
+    return copy(withoutEvaluationPrivate(updated));
+  });
+}
+
+export interface Sim2RealLineage {
+  project: Sim2RealProjectRecord | null;
+  datasets: Sim2RealDatasetRecord[];
+  run: Sim2RealRunRecord | null;
+  /** All runs in the selected project; `run` is the anchor when one exists. */
+  runs: Sim2RealRunRecord[];
+  artifacts: Sim2RealArtifactRecord[];
+  evaluations: Sim2RealEvaluationRecord[];
+  deployments: Sim2RealDeploymentRecord[];
+}
+
+/** Return one owner-scoped, bidirectionally linked evidence graph. */
+export async function getSim2RealLineage(
+  input: { runId?: string; artifactId?: string; evaluationId?: string; projectId?: string },
+  owner?: string,
+): Promise<Sim2RealLineage | null> {
+  const ledger = await readLedger();
+  const ownedRuns = ledger.runs.filter((item) => ownerMatches(item, owner));
+  const ownedArtifacts = ledger.artifacts.filter((item) => ownerMatches(item, owner));
+  const ownedEvaluations = ledger.evaluations.filter((item) => ownerMatches(item, owner));
+  const anchorArtifact = input.artifactId
+    ? ownedArtifacts.find((item) => item.id === input.artifactId)
+    : undefined;
+  const anchorEvaluation = input.evaluationId
+    ? ownedEvaluations.find((item) => item.id === input.evaluationId)
+    : undefined;
+  if (input.artifactId && !anchorArtifact) return null;
+  if (input.evaluationId && !anchorEvaluation) return null;
+  const anchorRun = input.runId
+    ? ownedRuns.find((item) => item.id === input.runId)
+    : anchorArtifact?.runId
+      ? ownedRuns.find((item) => item.id === anchorArtifact.runId)
+      : anchorEvaluation
+        ? ownedRuns.find((item) => item.id === anchorEvaluation.runId)
+        : undefined;
+  if (input.runId && !anchorRun) return null;
+  const projectId = input.projectId ?? anchorRun?.projectId;
+  const project = projectId
+    ? ledger.projects.find((item) => item.id === projectId && ownerMatches(item, owner))
+    : undefined;
+  if (input.projectId && !project) return null;
+  const projectRuns = project ? ownedRuns.filter((item) => item.projectId === project.id) : [];
+  const runs = [
+    ...new Map(
+      [...projectRuns, ...(anchorRun ? [anchorRun] : [])].map((item) => [item.id, item]),
+    ).values(),
+  ];
+  const runIds = new Set(runs.map((item) => item.id));
+  if (anchorArtifact?.runId) runIds.add(anchorArtifact.runId);
+  if (anchorEvaluation?.runId) runIds.add(anchorEvaluation.runId);
+  const modelIds = new Set<string>([
+    ...(project?.modelIds ?? []),
+    ...runs.map((item) => item.modelId),
+    ...(anchorArtifact?.modelId ? [anchorArtifact.modelId] : []),
+    ...(anchorEvaluation?.modelId ? [anchorEvaluation.modelId] : []),
+  ]);
+  const artifacts = ownedArtifacts.filter(
+    (item) =>
+      item.id === input.artifactId ||
+      runIds.has(item.runId ?? '') ||
+      (!!item.modelId && modelIds.has(item.modelId)),
+  );
+  const evaluationIds = new Set<string>([
+    ...runs.flatMap((item) => (item.evaluationId ? [item.evaluationId] : [])),
+    ...artifacts.flatMap((item) => item.evaluationIds ?? []),
+    ...(input.evaluationId ? [input.evaluationId] : []),
+  ]);
+  const evaluations = ownedEvaluations.filter(
+    (item) => evaluationIds.has(item.id) || runIds.has(item.runId),
+  );
+  const datasetIds = new Set<string>([
+    ...(project?.datasetIds ?? []),
+    ...runs.flatMap((item) => item.datasetIds ?? []),
+    ...artifacts.flatMap((item) => item.datasetIds ?? []),
+    ...evaluations.flatMap((item) => item.datasetIds ?? []),
+  ]);
+  const datasets = ledger.datasets.filter(
+    (item) => ownerMatches(item, owner) && datasetIds.has(item.id),
+  );
+  const deployments = ledger.deployments.filter(
+    (item) =>
+      ownerMatches(item, owner) &&
+      (runIds.has(item.runId ?? '') ||
+        (!!item.artifactId && artifacts.some((artifact) => artifact.id === item.artifactId)) ||
+        (!!item.evaluationId &&
+          evaluations.some((evaluation) => evaluation.id === item.evaluationId)) ||
+        modelIds.has(item.modelId)),
+  );
+  return {
+    project: project ? copy(withoutProjectPrivate(project)) : null,
+    datasets: datasets.map((item) => copy(withoutDatasetPrivate(item))),
+    run: anchorRun ? copy(withoutRunPrivate(anchorRun)) : null,
+    runs: runs.map((item) => copy(withoutRunPrivate(item))),
+    artifacts: artifacts.map((item) => copy(withoutArtifactPrivate(item))),
+    evaluations: evaluations.map((item) => copy(withoutEvaluationPrivate(item))),
+    deployments: deployments.map((item) => copy(withoutDeploymentPrivate(item))),
+  };
 }
 
 export async function listSim2RealComputeResources(
@@ -1195,6 +2378,18 @@ export async function updateSim2RealComputeResource(
         patch.runnerToken !== undefined ? Boolean(patch.runnerToken) : Boolean(current.runnerToken),
       updatedAt: new Date().toISOString(),
     };
+    // A worker's health evidence is bound to the exact endpoint and bearer
+    // that were tested. Editing either credential invalidates that evidence;
+    // retain the operator's configured concurrency cap, but force a fresh
+    // connection test before the resource can launch another run.
+    if (patch.runnerUrl !== undefined || patch.runnerToken !== undefined) {
+      updated.status = 'unknown';
+      updated.message = '尚未重新测试。';
+      delete updated.gpuName;
+      delete updated.cuda;
+      delete updated.vramMb;
+      delete updated.lastCheckedAt;
+    }
     const next = [...resources];
     next[index] = updated;
     await writeLedger({ ...ledger, computeResources: next });
@@ -1221,9 +2416,69 @@ export async function getSim2RealModel(
   const wanted = String(id ?? '').trim();
   if (!wanted) return null;
   if (wanted === BUILTIN_MICRODUCK_MODEL.id) return copy(BUILTIN_MICRODUCK_MODEL);
+  if (wanted === BUILTIN_ORIGINBOT_MODEL.id) return copy(BUILTIN_ORIGINBOT_MODEL);
   const ledger = await readLedger();
   const found = ledger.models.find((item) => item.id === wanted && ownerMatches(item, owner));
   return found ? (copy(withoutOwner(found)) as Sim2RealModelRecord) : null;
+}
+
+function normalizeLineageIds(value: unknown): string[] {
+  return [
+    ...new Set(Array.isArray(value) ? value.map((id) => String(id).trim()).filter(Boolean) : []),
+  ];
+}
+
+function assertRunLineage(
+  ledger: Sim2RealLedger,
+  input: Pick<Sim2RealRunRecord, 'modelId' | 'projectId' | 'datasetIds' | 'artifactIds'>,
+  owner?: string,
+): void {
+  if (!visibleModelInLedger(ledger, input.modelId, owner)) {
+    throw new Sim2RealError('sim2real_run_lineage_invalid');
+  }
+  if (
+    input.projectId &&
+    !ledger.projects.some((item) => item.id === input.projectId && ownerMatches(item, owner))
+  ) {
+    throw new Sim2RealError('sim2real_run_lineage_invalid');
+  }
+  const project = input.projectId
+    ? ledger.projects.find((item) => item.id === input.projectId && ownerMatches(item, owner))
+    : undefined;
+  if (project && project.modelIds.length && !project.modelIds.includes(input.modelId)) {
+    throw new Sim2RealError('sim2real_run_lineage_invalid');
+  }
+  const model =
+    input.modelId === BUILTIN_MICRODUCK_MODEL.id
+      ? BUILTIN_MICRODUCK_MODEL
+      : input.modelId === BUILTIN_ORIGINBOT_MODEL.id
+        ? BUILTIN_ORIGINBOT_MODEL
+        : ledger.models.find((item) => item.id === input.modelId && ownerMatches(item, owner));
+  const contractId = model?.manifest.contract.id;
+  for (const datasetId of normalizeLineageIds(input.datasetIds)) {
+    const dataset = ledger.datasets.find(
+      (item) => item.id === datasetId && ownerMatches(item, owner),
+    );
+    if (!dataset || (dataset.status ?? 'ready') === 'revoked') {
+      throw new Sim2RealError('sim2real_run_lineage_invalid');
+    }
+    if (contractId && dataset.contractId && dataset.contractId !== contractId) {
+      throw new Sim2RealError('sim2real_run_lineage_invalid');
+    }
+  }
+  for (const artifactId of normalizeLineageIds(input.artifactIds)) {
+    const artifact = ledger.artifacts.find(
+      (item) => item.id === artifactId && ownerMatches(item, owner),
+    );
+    if (
+      !artifact ||
+      artifact.status === 'revoked' ||
+      (artifact.modelId && artifact.modelId !== input.modelId) ||
+      (contractId && artifact.contractId && artifact.contractId !== contractId)
+    ) {
+      throw new Sim2RealError('sim2real_run_lineage_invalid');
+    }
+  }
 }
 
 export async function createSim2RealModel(
@@ -1239,7 +2494,11 @@ export async function createSim2RealModel(
         item.manifest.modelId === manifest.modelId &&
         item.manifest.version === manifest.version,
     );
-    if (duplicate || manifest.modelId === BUILTIN_MICRODUCK_MODEL.manifest.modelId) {
+    if (
+      duplicate ||
+      manifest.modelId === BUILTIN_MICRODUCK_MODEL.manifest.modelId ||
+      manifest.modelId === BUILTIN_ORIGINBOT_MODEL.manifest.modelId
+    ) {
       throw new Sim2RealError('sim2real_model_version_exists');
     }
     if (ledger.models.length >= MODEL_CAP) {
@@ -1408,6 +2667,7 @@ export async function reserveSim2RealRun(
     const expired = expireStaleActiveRunnerRuns(loaded);
     const ledger = expired.changed ? expired.ledger : loaded;
     if (expired.changed) await writeLedger(ledger);
+    assertRunLineage(ledger, input, owner);
     const existing = ledger.runs.find(
       (item) => item._idempotencyKey === idempotencyKey && ownerMatches(item, owner),
     );
@@ -1432,6 +2692,18 @@ export async function reserveSim2RealRun(
     }
     const record: StoredRun = {
       ...copy(input),
+      ...(input.productId
+        ? {}
+        : modelForRunLineage(ledger, input.modelId, owner)?.manifest.robot.id
+          ? { productId: modelForRunLineage(ledger, input.modelId, owner)!.manifest.robot.id }
+          : {}),
+      ...(input.contractId
+        ? {}
+        : modelForRunLineage(ledger, input.modelId, owner)?.manifest.contract.id
+          ? { contractId: modelForRunLineage(ledger, input.modelId, owner)!.manifest.contract.id }
+          : {}),
+      ...(input.datasetIds ? { datasetIds: normalizeLineageIds(input.datasetIds) } : {}),
+      ...(input.artifactIds ? { artifactIds: normalizeLineageIds(input.artifactIds) } : {}),
       id: randomUUID(),
       createdAt: new Date().toISOString(),
       ...(owner ? { owner } : {}),
@@ -1455,6 +2727,7 @@ export async function createSim2RealRun(
   ensureWritable();
   return serialized(async () => {
     const ledger = await readLedger();
+    assertRunLineage(ledger, input, owner);
     const idempotencyKey = String(options.idempotencyKey ?? '').trim();
     if (idempotencyKey) {
       const existing = ledger.runs.find(
@@ -1473,6 +2746,18 @@ export async function createSim2RealRun(
     }
     const record: StoredRun = {
       ...copy(input),
+      ...(input.productId
+        ? {}
+        : modelForRunLineage(ledger, input.modelId, owner)?.manifest.robot.id
+          ? { productId: modelForRunLineage(ledger, input.modelId, owner)!.manifest.robot.id }
+          : {}),
+      ...(input.contractId
+        ? {}
+        : modelForRunLineage(ledger, input.modelId, owner)?.manifest.contract.id
+          ? { contractId: modelForRunLineage(ledger, input.modelId, owner)!.manifest.contract.id }
+          : {}),
+      ...(input.datasetIds ? { datasetIds: normalizeLineageIds(input.datasetIds) } : {}),
+      ...(input.artifactIds ? { artifactIds: normalizeLineageIds(input.artifactIds) } : {}),
       id: randomUUID(),
       createdAt: new Date().toISOString(),
       ...(owner ? { owner } : {}),
@@ -1592,6 +2877,8 @@ export interface Sim2RealRunEvaluationContext {
   run: Sim2RealRunRecord;
   /** Every accepted telemetry chunk for the run, in ledger order. */
   telemetry: Sim2RealTelemetryRecord[];
+  /** Stable identity of the accepted telemetry snapshot. */
+  telemetryRevision: string;
 }
 
 /**
@@ -1610,20 +2897,27 @@ export async function evaluateSim2RealRun(
   id: string,
   owner: string | undefined,
   evaluator: (context: Sim2RealRunEvaluationContext) => Sim2RealEvaluationSummary,
-): Promise<{ run: Sim2RealRunRecord; evaluation: Sim2RealEvaluationSummary } | null> {
+): Promise<{
+  run: Sim2RealRunRecord;
+  evaluation: Sim2RealEvaluationSummary;
+  telemetryRevision: string;
+} | null> {
   ensureWritable();
   return serialized(async () => {
     const ledger = await readLedger();
     const index = ledger.runs.findIndex((item) => item.id === id && ownerMatches(item, owner));
     if (index < 0) return null;
     const current = ledger.runs[index];
+    const telemetry = (await loadRunTelemetry(id, owner)).map((item) =>
+      copy(withoutTelemetryPrivate(item as StoredTelemetry)),
+    );
+    const revision = telemetryRevision(telemetry);
     const context: Sim2RealRunEvaluationContext = {
       run: copy(withoutRunPrivate(current)),
       // Full chunks (samples) come from the run shard; the ledger keeps only
       // index rows now. Legacy inline rows are merged in by loadRunTelemetry.
-      telemetry: (await loadRunTelemetry(id, owner)).map((item) =>
-        copy(withoutTelemetryPrivate(item as StoredTelemetry)),
-      ),
+      telemetry,
+      telemetryRevision: revision,
     };
     // Copy the callback result before putting it into the ledger so a caller
     // cannot mutate the in-memory cache after this serialized operation.
@@ -1631,6 +2925,7 @@ export async function evaluateSim2RealRun(
     const updated: StoredRun = {
       ...current,
       evaluation,
+      telemetryRevision: revision,
     };
     const runs = [...ledger.runs];
     runs[index] = updated;
@@ -1639,6 +2934,7 @@ export async function evaluateSim2RealRun(
     return {
       run: copy(withoutRunPrivate(updated)),
       evaluation: copy(evaluation),
+      telemetryRevision: revision,
     };
   });
 }
@@ -1649,10 +2945,11 @@ export async function evaluateSim2RealRun(
  */
 async function loadRunTelemetry(runId: string, owner?: string): Promise<TelemetryShardRecord[]> {
   const ledger = await readLedger();
+  const indexedIds = committedTelemetryIds(ledger, runId, owner);
   const inlineLegacy = ledger.telemetry.filter(
     (item) => item.runId === runId && ownerMatches(item, owner) && Array.isArray(item.samples),
   ) as unknown as TelemetryShardRecord[];
-  const merged = [...(await readTelemetryShard(runId, owner)), ...inlineLegacy];
+  const merged = [...(await readTelemetryShard(runId, owner, indexedIds)), ...inlineLegacy];
   return merged.sort(compareTelemetryRecords);
 }
 
@@ -1685,7 +2982,8 @@ async function loadRunTelemetryBounded(
     (item) => item.runId === runId && ownerMatches(item, owner) && Array.isArray(item.samples),
   ) as unknown as TelemetryShardRecord[];
   const headSize = maxRecords + inlineLegacy.length;
-  const head = await readTelemetryShardBounded(runId, owner, headSize);
+  const indexedIds = committedTelemetryIds(ledger, runId, owner);
+  const head = await readTelemetryShardBounded(runId, owner, headSize, indexedIds);
   // A short head means the bounded read already reached the end of the shard,
   // so it is the whole shard and needs no verification. Otherwise every
   // shard-backed row in the ledger's top `headSize` must be present in it.
@@ -1753,7 +3051,9 @@ export async function findSim2RealTelemetryByIdempotency(
   if (!found) return null;
   // Index rows carry no samples; rehydrate from the shard when the caller
   // needs the full record.
-  const full = (await readTelemetryShard(runId, owner)).find((item) => item.id === found.id);
+  const full = (
+    await readTelemetryShard(runId, owner, committedTelemetryIds(ledger, runId, owner))
+  ).find((item) => item.id === found.id);
   const resolved = full ?? found;
   return resolved ? copy(withoutTelemetryPrivate(resolved as StoredTelemetry)) : null;
 }
@@ -1774,7 +3074,8 @@ export async function appendSim2RealTelemetryWithResult(
   ensureWritable();
   return serialized(async () => {
     const ledger = await readLedger();
-    const requestFingerprint = input._requestFingerprint;
+    const requestFingerprint = input._requestFingerprint || telemetryRequestFingerprint(input);
+    const contentFingerprint = telemetryContentFingerprint(input);
     if (input.idempotencyKey) {
       const existing = ledger.telemetry.find(
         (item) =>
@@ -1790,14 +3091,57 @@ export async function appendSim2RealTelemetryWithResult(
         ) {
           throw new Sim2RealError('sim2real_telemetry_idempotency_conflict');
         }
-        const full = (await readTelemetryShard(input.runId, owner)).find(
-          (item) => item.id === existing.id,
-        );
+        const full = (
+          await readTelemetryShard(
+            input.runId,
+            owner,
+            committedTelemetryIds(ledger, input.runId, owner),
+          )
+        ).find((item) => item.id === existing.id);
         const resolved = full ?? existing;
         return {
           telemetry: copy(withoutTelemetryPrivate(resolved as StoredTelemetry)),
           duplicate: true,
         };
+      }
+    }
+    // Signed board uploads may be retried after a network timeout with a new
+    // HTTP idempotency key. A sequence is the durable chunk identity: the same
+    // sequence and digest is a duplicate, while reusing a sequence with other
+    // bytes is rejected. Do not deduplicate solely by content because a real
+    // robot can legitimately emit two identical stationary chunks.
+    if (input.attested === true && input.source === 'board-agent') {
+      if (input.sequence === undefined) {
+        throw new Sim2RealError('sim2real_telemetry_attestation_sequence_required');
+      }
+      const sameSequence = ledger.telemetry.find(
+        (item) =>
+          item.runId === input.runId &&
+          item.deviceId === input.deviceId &&
+          item.source === 'board-agent' &&
+          item.sequence === input.sequence &&
+          ownerMatches(item, owner) &&
+          item.attested === true,
+      );
+      if (sameSequence) {
+        const full = (
+          await readTelemetryShard(
+            input.runId,
+            owner,
+            committedTelemetryIds(ledger, input.runId, owner),
+          )
+        ).find((item) => item.id === sameSequence.id);
+        const existingContent =
+          sameSequence._contentFingerprint ||
+          (full ? telemetryContentFingerprint(full) : undefined);
+        if (existingContent === contentFingerprint) {
+          const resolved = full ?? sameSequence;
+          return {
+            telemetry: copy(withoutTelemetryPrivate(resolved as StoredTelemetry)),
+            duplicate: true,
+          };
+        }
+        throw new Sim2RealError('sim2real_telemetry_idempotency_conflict');
       }
     }
     const { _requestFingerprint: _fingerprint, ...publicInput } = input;
@@ -1807,19 +3151,52 @@ export async function appendSim2RealTelemetryWithResult(
       receivedAt: new Date().toISOString(),
       ...(owner ? { owner } : {}),
       ...(requestFingerprint ? { _requestFingerprint: requestFingerprint } : {}),
+      ...(contentFingerprint ? { _contentFingerprint: contentFingerprint } : {}),
     };
+    // Retention is evaluated before quota accounting.  Otherwise rows that
+    // are about to be removed from this run still consume the owner/run byte
+    // and sample budgets, making an enabled retention policy unable to free
+    // capacity.  Physical pruning remains scoped to the run being appended;
+    // untouched historical runs are reclaimed on their next append (or by the
+    // explicit storage maintenance job).
+    const retentionDays = sim2RealTelemetryRetentionDays();
+    const expiredIndexIds =
+      retentionDays > 0
+        ? expiredTelemetryIndexIds(
+            ledger,
+            input.runId,
+            owner,
+            Date.now() - retentionDays * MS_PER_DAY,
+          )
+        : new Set<string>();
+
     // Quota and timeline checks run over the full chunk history (shard plus
-    // legacy inline rows), not the sample-stripped index rows.
-    const runHistory = await loadRunTelemetry(input.runId, owner);
+    // legacy inline rows), not the sample-stripped index rows. Rows selected
+    // for this append's retention prune are excluded from both checks.
+    const runHistory = (await loadRunTelemetry(input.runId, owner)).filter(
+      (item) => !expiredIndexIds.has(item.id),
+    );
     const ownerHistory: TelemetryShardRecord[] = [];
+    const loadedShardRuns = new Set<string>();
     for (const item of ledger.telemetry) {
       if (!ownerMatches(item, owner)) continue;
-      if (Array.isArray(item.samples) && item.samples.length) {
+      // Inline rows and shard-backed rows can coexist for a run after an
+      // upgrade/import. Count each inline row, while loading that run's shard
+      // exactly once even when the first index row still carries samples.
+      if (Array.isArray(item.samples) && item.samples.length && !expiredIndexIds.has(item.id)) {
         ownerHistory.push(item as unknown as TelemetryShardRecord);
-      } else {
+      }
+      if (!loadedShardRuns.has(item.runId)) {
+        loadedShardRuns.add(item.runId);
         ownerHistory.push(
-          ...(await readTelemetryShard(item.runId, owner)).filter((shardItem) =>
-            ownerMatches(shardItem, owner),
+          ...(
+            await readTelemetryShard(
+              item.runId,
+              owner,
+              committedTelemetryIds(ledger, item.runId, owner),
+            )
+          ).filter(
+            (shardItem) => ownerMatches(shardItem, owner) && !expiredIndexIds.has(shardItem.id),
           ),
         );
       }
@@ -1840,20 +3217,6 @@ export async function appendSim2RealTelemetryWithResult(
     ) {
       throw new Sim2RealError('sim2real_telemetry_quota_exceeded');
     }
-    // Retention is opt-in (default 0 = disabled). When enabled, prune this
-    // run's shard-backed rows that fell out of the window. The deletion is
-    // per-run because only the shard being appended to is rewritten; an
-    // untouched old run is reclaimed the next time a chunk is appended to it.
-    const retentionDays = sim2RealTelemetryRetentionDays();
-    const expiredIndexIds =
-      retentionDays > 0
-        ? expiredTelemetryIndexIds(
-            ledger,
-            input.runId,
-            owner,
-            Date.now() - retentionDays * MS_PER_DAY,
-          )
-        : new Set<string>();
     // Count the record cap against the index rows that will remain after the
     // prune, so retention actually frees room instead of permanently pinning
     // the store at its limit.
@@ -1868,9 +3231,29 @@ export async function appendSim2RealTelemetryWithResult(
     // summary in the same serialized write so GET /replay can never return a
     // stale score after an import (and a concurrent append cannot race a
     // separate "clear evaluation" update).
+    const now = new Date().toISOString();
+    const evaluations = ledger.evaluations.map((item) =>
+      item.runId === record.runId &&
+      ownerMatches(item, owner) &&
+      item.status === 'passed' &&
+      item.stale !== true
+        ? {
+            ...item,
+            stale: true,
+            staleAt: now,
+            staleReason: 'new telemetry appended; rerun evaluation',
+            updatedAt: now,
+          }
+        : item,
+    );
     const runs = ledger.runs.map((item) =>
       item.id === record.runId && ownerMatches(item, owner)
-        ? { ...item, evaluation: undefined }
+        ? {
+            ...item,
+            evaluation: undefined,
+            evaluationId: undefined,
+            telemetryRevision: undefined,
+          }
         : item,
     );
     const { samples: _samples, ...indexRow } = record;
@@ -1880,6 +3263,7 @@ export async function appendSim2RealTelemetryWithResult(
     await writeLedger({
       ...ledger,
       runs,
+      evaluations,
       telemetry: [indexRow as StoredTelemetry, ...retainedIndexRows],
     });
     // The shard is rewritten after the index rows are durable. A crash in
@@ -1893,7 +3277,12 @@ export async function appendSim2RealTelemetryWithResult(
     void emitSim2RealEvent(
       'telemetry.appended',
       record.runId,
-      { telemetryId: record.id, sequence: record.sequence, sampleCount: record.samples.length },
+      {
+        telemetryId: record.id,
+        sequence: record.sequence,
+        sampleCount: record.samples.length,
+        ...(record.attested === true ? { attested: true } : {}),
+      },
       owner,
     );
     return {
@@ -1944,6 +3333,63 @@ export async function createSim2RealDeploymentWithResult(
   ensureWritable();
   return serialized(async () => {
     const ledger = await readLedger();
+    if (input.mode !== 'preflight' && (!input.runId || !input.artifactId || !input.evaluationId)) {
+      // A canary/live plan is a release record, not merely a device command.
+      // Require all three first-class lineage anchors so an old embedded-only
+      // run cannot bypass immutable artifact/evaluation provenance.
+      throw new Sim2RealError('sim2real_artifact_lineage_invalid');
+    }
+    if (input.artifactId) {
+      const artifact = ledger.artifacts.find(
+        (item) => item.id === input.artifactId && ownerMatches(item, owner),
+      );
+      if (!artifact || artifact.status !== 'published') {
+        throw new Sim2RealError('sim2real_artifact_lineage_invalid');
+      }
+      if (
+        input.mode !== 'preflight' &&
+        (artifact.modelId !== input.modelId || artifact.runId !== input.runId)
+      ) {
+        throw new Sim2RealError('sim2real_artifact_lineage_invalid');
+      }
+      if (artifact.modelId && artifact.modelId !== input.modelId) {
+        throw new Sim2RealError('sim2real_artifact_lineage_invalid');
+      }
+      if (input.runId && artifact.runId && artifact.runId !== input.runId) {
+        throw new Sim2RealError('sim2real_artifact_lineage_invalid');
+      }
+    }
+    if (input.evaluationId) {
+      const evaluation = ledger.evaluations.find(
+        (item) => item.id === input.evaluationId && ownerMatches(item, owner),
+      );
+      const releaseRun = input.runId
+        ? ledger.runs.find((item) => item.id === input.runId && ownerMatches(item, owner))
+        : undefined;
+      if (
+        evaluation?.stale === true ||
+        (evaluation?.telemetryRevision &&
+          (!releaseRun ||
+            releaseRun.telemetryRevision !== evaluation.telemetryRevision ||
+            releaseRun.evaluationId !== evaluation.id))
+      ) {
+        throw new Sim2RealError('sim2real_evaluation_stale');
+      }
+      if (
+        !evaluation ||
+        evaluation.status !== 'passed' ||
+        evaluation.attested !== true ||
+        evaluation.report?.replay?.attested !== true
+      ) {
+        throw new Sim2RealError('sim2real_evaluation_lineage_invalid');
+      }
+      if (evaluation.modelId !== input.modelId || evaluation.runId !== input.runId) {
+        throw new Sim2RealError('sim2real_evaluation_lineage_invalid');
+      }
+      if (input.artifactId && evaluation.artifactId && evaluation.artifactId !== input.artifactId) {
+        throw new Sim2RealError('sim2real_evaluation_lineage_invalid');
+      }
+    }
     const idempotencyKey = String(options.idempotencyKey ?? '').trim();
     if (idempotencyKey) {
       const existing = ledger.deployments.find(
@@ -1961,11 +3407,24 @@ export async function createSim2RealDeploymentWithResult(
       }
     }
     const now = new Date().toISOString();
+    // Approval is server-owned. A client may request a canary/live plan, but
+    // it can never smuggle an already-approved decision through the create
+    // endpoint. The explicit approval operation below is the only transition.
+    const { approval: _approval, ...safeInput } = copy(input);
+    const approval =
+      input.mode === 'preflight'
+        ? undefined
+        : {
+            status: 'pending' as const,
+            requestedAt: now,
+            ...(owner ? { requestedBy: owner } : {}),
+          };
     const record: StoredDeployment = {
-      ...copy(input),
+      ...safeInput,
       id: randomUUID(),
       createdAt: now,
       updatedAt: now,
+      ...(approval ? { approval } : {}),
       history: [
         {
           id: randomUUID(),
@@ -2003,6 +3462,159 @@ export async function createSim2RealDeployment(
   return (await createSim2RealDeploymentWithResult(input, owner)).deployment;
 }
 
+/**
+ * Record the human decision that authorizes a canary/live plan. This changes
+ * only the durable control-plane state; a separate board-agent executor must
+ * consume a ready plan before any model is sent to hardware.
+ */
+export async function decideSim2RealDeploymentApproval(
+  id: string,
+  decision: Extract<Sim2RealDeploymentApprovalStatus, 'approved' | 'rejected'>,
+  owner?: string,
+  actor?: string,
+  note?: string,
+): Promise<Sim2RealDeploymentRecord | null> {
+  ensureWritable();
+  return serialized(async () => {
+    const ledger = await readLedger();
+    const index = ledger.deployments.findIndex(
+      (item) => item.id === id && ownerMatches(item, owner),
+    );
+    if (index < 0) return null;
+    const current = ledger.deployments[index];
+    if (current.mode === 'preflight' || !['planned', 'blocked', 'ready'].includes(current.status)) {
+      throw new Sim2RealError('sim2real_deployment_transition_invalid');
+    }
+    const existing = current.approval;
+    if (existing?.status === decision) {
+      return copy(withoutDeploymentPrivate(current));
+    }
+    if (decision === 'approved') {
+      if (existing?.status === 'rejected') {
+        throw new Sim2RealError('sim2real_deployment_transition_invalid');
+      }
+      if (
+        current.releaseGate?.passed !== true ||
+        current.compatibility.deployable !== true ||
+        !current.runId ||
+        !current.artifactId ||
+        !current.evaluationId
+      ) {
+        throw new Sim2RealError('sim2real_deployment_transition_invalid');
+      }
+
+      // Re-read the evidence graph at the approval boundary. A deployment
+      // plan can sit in pending for hours while a board agent appends newer
+      // telemetry, an evaluator revokes a result, or an artifact is
+      // withdrawn. The release gate stored on the plan is an audit snapshot;
+      // it is not an approval credential. Approval must bind to the current
+      // run/artifact/evaluation rows or fail closed.
+      const approvalRun = ledger.runs.find(
+        (item) => item.id === current.runId && ownerMatches(item, owner),
+      );
+      const approvalArtifact = ledger.artifacts.find(
+        (item) => item.id === current.artifactId && ownerMatches(item, owner),
+      );
+      const approvalEvaluation = ledger.evaluations.find(
+        (item) => item.id === current.evaluationId && ownerMatches(item, owner),
+      );
+      if (
+        approvalEvaluation?.stale === true ||
+        (approvalEvaluation?.telemetryRevision &&
+          (!approvalRun || approvalRun.telemetryRevision !== approvalEvaluation.telemetryRevision))
+      ) {
+        throw new Sim2RealError('sim2real_evaluation_stale');
+      }
+      if (
+        !approvalRun ||
+        !approvalArtifact ||
+        approvalArtifact.status !== 'published' ||
+        approvalArtifact.modelId !== current.modelId ||
+        approvalArtifact.runId !== approvalRun.id ||
+        !approvalEvaluation ||
+        approvalEvaluation.status !== 'passed' ||
+        approvalEvaluation.attested !== true ||
+        approvalEvaluation.report?.replay?.attested !== true ||
+        approvalEvaluation.modelId !== current.modelId ||
+        approvalEvaluation.runId !== approvalRun.id ||
+        approvalRun.evaluationId !== approvalEvaluation.id
+      ) {
+        throw new Sim2RealError('sim2real_deployment_transition_invalid');
+      }
+      const currentGateRun = approvalEvaluation.report
+        ? { ...approvalRun, evaluation: approvalEvaluation.report }
+        : approvalRun;
+      const currentGate = validateRunForDeployment({
+        mode: current.mode,
+        modelId: current.modelId,
+        run: currentGateRun,
+      });
+      if (!currentGate.passed) {
+        throw new Sim2RealError('sim2real_deployment_transition_invalid', {
+          detail: currentGate.errors.join('; '),
+        });
+      }
+    }
+    const now = new Date().toISOString();
+    const normalizedActor = String(actor ?? owner ?? '')
+      .replace(/[\u0000-\u001f\u007f]/g, '')
+      .trim()
+      .slice(0, 160);
+    const normalizedNote = String(note ?? '')
+      .replace(/[\u0000-\u001f\u007f]/g, '')
+      .trim()
+      .slice(0, 500);
+    const nextStatus: Sim2RealDeploymentRecord['status'] =
+      decision === 'approved' ? 'ready' : 'blocked';
+    const nextApproval = {
+      ...(existing ?? {
+        status: 'pending' as const,
+        requestedAt: current.createdAt,
+        ...(owner ? { requestedBy: owner } : {}),
+      }),
+      status: decision,
+      decidedAt: now,
+      ...(normalizedActor ? { decidedBy: normalizedActor } : {}),
+      ...(normalizedNote ? { note: normalizedNote } : {}),
+    };
+    const history = [
+      ...(current.history ?? []),
+      {
+        id: randomUUID(),
+        type:
+          decision === 'approved' ? ('approval_approved' as const) : ('approval_rejected' as const),
+        status: nextStatus,
+        summary:
+          decision === 'approved'
+            ? '人工审批已通过；计划已进入 ready，等待受控 board agent 执行。'
+            : normalizedNote || '人工审批已拒绝；未执行模型下发或电机动作。',
+        createdAt: now,
+      },
+    ].slice(-100);
+    const updated: StoredDeployment = {
+      ...current,
+      status: nextStatus,
+      approval: nextApproval,
+      summary:
+        decision === 'approved'
+          ? '人工审批已通过；等待受控 board agent 执行。'
+          : normalizedNote || '人工审批已拒绝；未执行模型下发或电机动作。',
+      history,
+      updatedAt: now,
+    };
+    const deployments = [...ledger.deployments];
+    deployments[index] = updated;
+    await writeLedger({ ...ledger, deployments });
+    void emitSim2RealEvent(
+      'deployment.updated',
+      updated.id,
+      withoutDeploymentPrivate(updated),
+      owner,
+    );
+    return copy(withoutDeploymentPrivate(updated));
+  });
+}
+
 export async function updateSim2RealDeployment(
   id: string,
   patch: Partial<
@@ -2025,6 +3637,21 @@ export async function updateSim2RealDeployment(
     // let that late completion resurrect the cancelled lifecycle.
     if (current.status === 'cancelled' && patch.status !== 'cancelled') {
       return copy(withoutDeploymentPrivate(current));
+    }
+    if (patch.status && !DEPLOYMENT_STATUS_TRANSITIONS[current.status].includes(patch.status)) {
+      throw new Sim2RealError('sim2real_deployment_transition_invalid');
+    }
+    // `ready` is the hand-off point at which an external board executor may
+    // act. Preflight plans can become ready after their read-only probe; a
+    // canary/live plan must first carry the explicit human approval recorded
+    // by decideSim2RealDeploymentApproval. Keep this invariant in the store,
+    // rather than trusting every future adapter to remember the route guard.
+    if (
+      patch.status === 'ready' &&
+      current.mode !== 'preflight' &&
+      current.approval?.status !== 'approved'
+    ) {
+      throw new Sim2RealError('sim2real_deployment_transition_invalid');
     }
     const now = new Date().toISOString();
     const statusChanged = patch.status && patch.status !== current.status;

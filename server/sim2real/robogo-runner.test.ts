@@ -19,6 +19,26 @@ describe('RoboGo Sim2Real runner adapter', () => {
     );
   });
 
+  it('rejects literal private HTTPS targets unless the operator explicitly allowlists them', () => {
+    const previous = process.env.RDK_SIM2REAL_COMPUTE_ALLOW_PRIVATE_HTTPS_HOSTS;
+    delete process.env.RDK_SIM2REAL_COMPUTE_ALLOW_PRIVATE_HTTPS_HOSTS;
+    try {
+      expect(() => normalizeRunnerUrl('https://127.0.0.1:19090/train')).toThrow(
+        'sim2real_robogo_runner_url_invalid',
+      );
+      expect(() => normalizeRunnerUrl('https://[::ffff:127.0.0.1]:19090/train')).toThrow(
+        'sim2real_robogo_runner_url_invalid',
+      );
+      process.env.RDK_SIM2REAL_COMPUTE_ALLOW_PRIVATE_HTTPS_HOSTS = '127.0.0.1';
+      expect(normalizeRunnerUrl('https://127.0.0.1:19090/train')).toBe(
+        'https://127.0.0.1:19090/train',
+      );
+    } finally {
+      if (previous === undefined) delete process.env.RDK_SIM2REAL_COMPUTE_ALLOW_PRIVATE_HTTPS_HOSTS;
+      else process.env.RDK_SIM2REAL_COMPUTE_ALLOW_PRIVATE_HTTPS_HOSTS = previous;
+    }
+  });
+
   it('fails closed when no explicit runner URL is configured', async () => {
     await expect(
       requestRobogoTraining({
@@ -186,6 +206,41 @@ describe('RoboGo Sim2Real runner adapter', () => {
           })) as typeof fetch,
       }),
     ).rejects.toSatisfy((error: unknown) => isSim2RealRunnerOutcomeUnknown(error));
+  });
+
+  it('fails closed on malformed or oversized declared runner response lengths', async () => {
+    const request = {
+      accountId: 'alice',
+      manifest: BUILTIN_MICRODUCK_MODEL.manifest,
+      runnerUrl: 'https://runner.example.test/train',
+    } as const;
+    let capturedInit: RequestInit | undefined;
+    await expect(
+      requestRobogoTraining({
+        ...request,
+        fetchImpl: (async (_input, init) => {
+          capturedInit = init;
+          return new Response('{}', {
+            status: 400,
+            headers: { 'content-length': 'not-a-length' },
+          });
+        }) as typeof fetch,
+      }),
+    ).rejects.toThrow('sim2real_runner_response_too_large');
+    expect(capturedInit?.redirect).toBe('error');
+
+    await expect(
+      requestRobogoTrainingStatus({
+        accountId: 'alice',
+        externalRunId: 'run-1',
+        runnerUrl: 'https://runner.example.test/train',
+        fetchImpl: (async () =>
+          new Response('{}', {
+            status: 200,
+            headers: { 'content-length': '1000001' },
+          })) as typeof fetch,
+      }),
+    ).rejects.toThrow('sim2real_runner_response_too_large');
   });
 
   it('normalizes common runner terminal states without hiding failures', async () => {

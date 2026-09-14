@@ -63,6 +63,7 @@ type WebCloudCookieUser = {
   name: string;
   email: string;
   avatar?: string;
+  roles?: string[];
 };
 
 type WebCloudCookiePayload = {
@@ -136,6 +137,14 @@ export function decodeStudioWebCloudCookie(
       ) {
         return null;
       }
+      const rawRoles = (user as Record<string, unknown>).roles;
+      const normalizedRoles = Array.isArray(rawRoles)
+        ? rawRoles
+            .filter((role: unknown): role is string => typeof role === 'string')
+            .map((role: string) => role.trim().toLowerCase())
+            .filter(Boolean)
+            .slice(0, 16)
+        : [];
       return {
         v: 1,
         user: {
@@ -151,6 +160,7 @@ export function decodeStudioWebCloudCookie(
           ...(typeof (user as Record<string, unknown>).avatar === 'string'
             ? { avatar: String((user as Record<string, unknown>).avatar) }
             : {}),
+          ...(Array.isArray(rawRoles) ? { roles: normalizedRoles } : {}),
         },
         expiresAt,
         ...(typeof parsed.accessToken === 'string' && parsed.accessToken.trim()
@@ -207,6 +217,10 @@ function resolveIdentity(
       ...(safeAccountText(payload.user.email, 240)
         ? { email: payload.user.email.trim().slice(0, 240) }
         : {}),
+      // Preserve an explicitly supplied empty role list.  Omitting the field
+      // means a legacy fully trusted adapter; an empty list is an explicit
+      // deny-all claim and must not fall through to that compatibility path.
+      ...(Array.isArray(payload.user.roles) ? { roles: payload.user.roles.slice(0, 16) } : {}),
     },
     ...(safeAccountText(payload.accessToken, 4_096) ? { runnerToken: payload.accessToken } : {}),
     expiresAt: payload.expiresAt,

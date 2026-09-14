@@ -152,6 +152,59 @@ describe('task-pack eval release gate', () => {
     expect(verdict.errors.some((error) => error.includes('confidence bounds missing'))).toBe(true);
   });
 
+  it('recomputes confidence bounds at the engine-declared confidence level', () => {
+    const success = wilsonBounds(44, 50, 0.9)!;
+    const collision = wilsonBounds(0, 50, 0.9)!;
+    const verdict = validateTaskPackEvalForRelease({
+      taskId: 't',
+      report: {
+        taskId: 't',
+        qualityGate: {
+          criteria: { minSuccessRate: 0.7, maxCollisionRate: 0.15, gateOn: 'ciLowerBound' },
+        },
+        trained: {
+          confidenceLevel: 0.9,
+          envelopes: {
+            nominal: {
+              successRate: 0.88,
+              collisionRate: 0.0,
+              episodes: 50,
+              successRateCiLow: success.low,
+              successRateCiHigh: success.high,
+              collisionRateCiLow: collision.low,
+              collisionRateCiHigh: collision.high,
+            },
+          },
+        },
+      },
+    });
+    expect(verdict.passed).toBe(true);
+  });
+
+  it('rejects an unsupported confidence level instead of silently using 95%', () => {
+    const verdict = validateTaskPackEvalForRelease({
+      taskId: 't',
+      report: {
+        taskId: 't',
+        qualityGate: { criteria: { minSuccessRate: 0.7, gateOn: 'ciLowerBound' } },
+        trained: {
+          confidenceLevel: 0.8,
+          envelopes: {
+            nominal: {
+              successRate: 0.9,
+              collisionRate: 0.0,
+              episodes: 50,
+              successRateCiLow: 0.8,
+              collisionRateCiHigh: 0.1,
+            },
+          },
+        },
+      },
+    });
+    expect(verdict.passed).toBe(false);
+    expect(verdict.errors).toContain('confidenceLevel must be 0.9, 0.95, or 0.99');
+  });
+
   it('rejects hand-edited bounds that disagree with the recomputed interval', () => {
     const success = wilsonBounds(44, 50)!;
     const collision = wilsonBounds(0, 50)!;

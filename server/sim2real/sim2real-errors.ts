@@ -19,17 +19,31 @@ export type Sim2RealErrorCode =
   | 'sim2real_storage_writer_conflict'
   | 'sim2real_model_version_exists'
   | 'sim2real_model_quota_exceeded'
+  | 'sim2real_dataset_version_exists'
+  | 'sim2real_dataset_transition_invalid'
+  | 'sim2real_dataset_not_mutable'
+  | 'sim2real_artifact_version_exists'
+  | 'sim2real_artifact_idempotency_conflict'
+  | 'sim2real_artifact_not_mutable'
+  | 'sim2real_artifact_lineage_invalid'
+  | 'sim2real_run_lineage_invalid'
+  | 'sim2real_evaluation_lineage_invalid'
+  | 'sim2real_evaluation_stale'
+  | 'sim2real_evaluation_transition_invalid'
+  | 'sim2real_evaluation_idempotency_conflict'
   | 'sim2real_run_quota_exceeded'
   | 'sim2real_deployment_quota_exceeded'
   | 'sim2real_run_idempotency_required'
   | 'sim2real_run_idempotency_conflict'
   | 'sim2real_run_reservation_lost'
   | 'sim2real_telemetry_idempotency_conflict'
+  | 'sim2real_telemetry_attestation_sequence_required'
   | 'sim2real_telemetry_timestamp_order'
   | 'sim2real_telemetry_quota_exceeded'
   | 'sim2real_telemetry_run_id_invalid'
   | 'sim2real_active_run_quota_exceeded'
   | 'sim2real_deployment_idempotency_conflict'
+  | 'sim2real_deployment_transition_invalid'
   | 'sim2real_runner_token_invalid'
   | 'sim2real_runner_account_invalid'
   | 'sim2real_runner_response_too_large'
@@ -88,17 +102,31 @@ const SIM2REAL_ERROR_CODE_SET = new Set<string>([
   'sim2real_storage_writer_conflict',
   'sim2real_model_version_exists',
   'sim2real_model_quota_exceeded',
+  'sim2real_dataset_version_exists',
+  'sim2real_dataset_transition_invalid',
+  'sim2real_dataset_not_mutable',
+  'sim2real_artifact_version_exists',
+  'sim2real_artifact_idempotency_conflict',
+  'sim2real_artifact_not_mutable',
+  'sim2real_artifact_lineage_invalid',
+  'sim2real_run_lineage_invalid',
+  'sim2real_evaluation_lineage_invalid',
+  'sim2real_evaluation_stale',
+  'sim2real_evaluation_transition_invalid',
+  'sim2real_evaluation_idempotency_conflict',
   'sim2real_run_quota_exceeded',
   'sim2real_deployment_quota_exceeded',
   'sim2real_run_idempotency_required',
   'sim2real_run_idempotency_conflict',
   'sim2real_run_reservation_lost',
   'sim2real_telemetry_idempotency_conflict',
+  'sim2real_telemetry_attestation_sequence_required',
   'sim2real_telemetry_timestamp_order',
   'sim2real_telemetry_quota_exceeded',
   'sim2real_telemetry_run_id_invalid',
   'sim2real_active_run_quota_exceeded',
   'sim2real_deployment_idempotency_conflict',
+  'sim2real_deployment_transition_invalid',
   'sim2real_runner_token_invalid',
   'sim2real_runner_account_invalid',
   'sim2real_runner_response_too_large',

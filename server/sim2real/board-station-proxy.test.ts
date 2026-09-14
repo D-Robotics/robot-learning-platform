@@ -1,17 +1,25 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { stationAgentFetch, stationAgentFetchWithStatus } from './board-station-proxy.js';
+import {
+  stationAgentFetch,
+  stationAgentFetchStream,
+  stationAgentFetchWithStatus,
+} from './board-station-proxy.js';
 
 const originalAgentUrl = process.env.RDK_SIM2REAL_BOARD_AGENT_URL;
 const originalAgentToken = process.env.RDK_SIM2REAL_BOARD_AGENT_TOKEN;
 const originalStudioOrigin = process.env.RDK_SIM2REAL_STUDIO_EXEC_ORIGIN;
 const originalStudioDevice = process.env.RDK_SIM2REAL_STUDIO_DEVICE_ID;
+const originalPublicOrigin = process.env.RDK_SIM2REAL_PUBLIC_ORIGIN;
+const originalStudioPublicOrigin = process.env.RDK_STUDIO_WEB_PUBLIC_ORIGIN;
 
 beforeEach(() => {
   process.env.RDK_SIM2REAL_BOARD_AGENT_URL = 'http://127.0.0.1:19100';
   process.env.RDK_SIM2REAL_BOARD_AGENT_TOKEN = 'board-secret';
   process.env.RDK_SIM2REAL_STUDIO_EXEC_ORIGIN = '';
   delete process.env.RDK_SIM2REAL_STUDIO_DEVICE_ID;
+  delete process.env.RDK_SIM2REAL_PUBLIC_ORIGIN;
+  delete process.env.RDK_STUDIO_WEB_PUBLIC_ORIGIN;
 });
 
 afterEach(() => {
@@ -23,6 +31,10 @@ afterEach(() => {
   else process.env.RDK_SIM2REAL_STUDIO_EXEC_ORIGIN = originalStudioOrigin;
   if (originalStudioDevice === undefined) delete process.env.RDK_SIM2REAL_STUDIO_DEVICE_ID;
   else process.env.RDK_SIM2REAL_STUDIO_DEVICE_ID = originalStudioDevice;
+  if (originalPublicOrigin === undefined) delete process.env.RDK_SIM2REAL_PUBLIC_ORIGIN;
+  else process.env.RDK_SIM2REAL_PUBLIC_ORIGIN = originalPublicOrigin;
+  if (originalStudioPublicOrigin === undefined) delete process.env.RDK_STUDIO_WEB_PUBLIC_ORIGIN;
+  else process.env.RDK_STUDIO_WEB_PUBLIC_ORIGIN = originalStudioPublicOrigin;
   vi.restoreAllMocks();
 });
 
@@ -95,6 +107,29 @@ describe('board-station proxy bounded body handling', () => {
     await expect(stationAgentFetch('/v1/station/status')).resolves.toBeNull();
   });
 
+  it('fails closed on malformed content-length and canonicalizes safe IPv6 loopback URLs', async () => {
+    const malformed = new Response('{}', {
+      status: 200,
+      headers: { 'content-length': 'not-a-number' },
+    });
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(malformed);
+    await expect(
+      stationAgentFetch('/v1/station/status', { baseUrl: 'http://[::1]:19100/' }),
+    ).resolves.toBeNull();
+    expect(fetchMock).toHaveBeenCalledWith(
+      'http://[::1]:19100/v1/station/status',
+      expect.objectContaining({ redirect: 'error' }),
+    );
+
+    delete process.env.RDK_SIM2REAL_BOARD_AGENT_URL;
+    await expect(
+      stationAgentFetch('/v1/station/status', { baseUrl: 'http://user:pass@127.0.0.1:19100/' }),
+    ).resolves.toBeNull();
+    // Invalid userinfo must not trigger another network request (there is no
+    // configured fallback endpoint in this half of the assertion).
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
   it('uses a per-request Studio bridge device id when direct BoardAgent is absent', async () => {
     delete process.env.RDK_SIM2REAL_BOARD_AGENT_URL;
     process.env.RDK_SIM2REAL_STUDIO_EXEC_ORIGIN = 'http://127.0.0.1:18090';
@@ -112,5 +147,84 @@ describe('board-station proxy bounded body handling', () => {
     const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
     expect(url).toBe('http://127.0.0.1:18090/api/devices/studio-device-2/exec');
     expect((init.headers as Record<string, string>).cookie).toBe('studio_session=test');
+    expect((init.headers as Record<string, string>).origin).toBe('https://rdkstudio.d-robotics.cc');
+  });
+
+  it('rejects oversized or control-character cookies before the Studio bridge', async () => {
+    delete process.env.RDK_SIM2REAL_BOARD_AGENT_URL;
+    process.env.RDK_SIM2REAL_STUDIO_EXEC_ORIGIN = 'http://127.0.0.1:18090';
+    const fetchMock = vi.spyOn(globalThis, 'fetch');
+    for (const cookieHeader of ['c'.repeat(16_385), 'studio_session=test\nX-Evil: yes']) {
+      await expect(
+        stationAgentFetch('/healthz', { cookieHeader, deviceId: 'studio-device-2' }),
+      ).resolves.toBeNull();
+    }
+    await expect(
+      stationAgentFetchStream('/v1/station/status/stream', {
+        cookieHeader: 'studio_session=test\nX-Evil: yes',
+        deviceId: 'studio-device-2',
+      }),
+    ).rejects.toThrow('station agent unavailable');
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('rejects oversized or control-character bridge origins before fetch', async () => {
+    delete process.env.RDK_SIM2REAL_BOARD_AGENT_URL;
+    process.env.RDK_SIM2REAL_STUDIO_EXEC_ORIGIN = 'http://127.0.0.1:18090';
+    const fetchMock = vi.spyOn(globalThis, 'fetch');
+    for (const origin of [
+      'https://studio.example.' + 'a'.repeat(600),
+      'https://studio.example\t',
+    ]) {
+      process.env.RDK_SIM2REAL_PUBLIC_ORIGIN = origin;
+      await expect(
+        stationAgentFetch('/healthz', {
+          cookieHeader: 'studio_session=test',
+          deviceId: 'studio-device-2',
+        }),
+      ).resolves.toBeNull();
+    }
+    for (const execOrigin of ['http://127.0.0.1:18090\t', 'http://127.0.0.1:' + '9'.repeat(600)]) {
+      delete process.env.RDK_SIM2REAL_PUBLIC_ORIGIN;
+      process.env.RDK_SIM2REAL_STUDIO_EXEC_ORIGIN = execOrigin;
+      await expect(
+        stationAgentFetch('/healthz', {
+          cookieHeader: 'studio_session=test',
+          deviceId: 'studio-device-2',
+        }),
+      ).resolves.toBeNull();
+    }
+    expect(fetchMock).not.toHaveBeenCalled();
+
+    process.env.RDK_SIM2REAL_PUBLIC_ORIGIN = 'https://studio.example.test\t';
+    await expect(
+      stationAgentFetchStream('/v1/station/status/stream', {
+        cookieHeader: 'studio_session=test',
+        deviceId: 'studio-device-2',
+      }),
+    ).rejects.toThrow('station agent unavailable');
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('uses a validated per-device loopback URL for streaming endpoints', async () => {
+    const encoder = new TextEncoder();
+    const upstream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(encoder.encode('{"ok":true}\n'));
+        controller.close();
+      },
+    });
+    const fetchMock = vi
+      .spyOn(globalThis, 'fetch')
+      .mockResolvedValue(new Response(upstream, { status: 200 }));
+    const stream = await stationAgentFetchStream('/v1/station/status/stream', {
+      baseUrl: 'http://127.0.0.1:19201',
+      lifetimeMs: 5_000,
+    });
+    await stream.cancel();
+    expect(fetchMock).toHaveBeenCalledWith(
+      'http://127.0.0.1:19201/v1/station/status/stream',
+      expect.objectContaining({ redirect: 'error' }),
+    );
   });
 });

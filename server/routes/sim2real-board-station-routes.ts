@@ -16,6 +16,7 @@ import type { StationAgentFetchOptions } from '../sim2real/board-station-proxy.j
 import type { Sim2RealAuthPort } from '../sim2real/sim2real-auth.js';
 import type { Sim2RealRunRecord } from '../../shared/sim2real.js';
 import type { Device } from '../../shared/types.js';
+import { principalCan, SIM2REAL_PERMISSIONS } from '../sim2real/sim2real-rbac.js';
 
 /**
  * Read-only host-station command whitelist. Kept identical to
@@ -37,6 +38,8 @@ export interface Sim2RealBoardStationRouteDeps {
   auth: Sim2RealAuthPort;
   requestOwner: OwnerResolver;
   visibleDevices: (owner?: string) => Promise<readonly OwnedDevice[]>;
+  /** Resolve an active loopback URL for a web-managed device tunnel. */
+  resolveDeviceAgentUrl?: (deviceId: string, owner?: string) => string | null;
   /** Owner-scoped run lookup used by policy staging to bind evidence. */
   getRun?: (runId: string, owner?: string) => Promise<Sim2RealRunRecord | null>;
   /**
@@ -66,6 +69,57 @@ function normalizeStationApiPrefix(value: string | undefined): string {
 
 function noStore(response: Response): void {
   response.setHeader('Cache-Control', 'no-store');
+}
+
+/**
+ * A board station is an optional, operator-attached resource.  Read-only
+ * views must be able to render that resource's absence without turning the
+ * whole Sim2Real workspace into an error page.  Keep this response distinct
+ * from transport failures on mutating routes: `ok` means the platform API
+ * answered, while `available=false` means no live BoardAgent was reachable.
+ */
+function sendStationOffline(
+  response: Response,
+  message: string,
+  extra: Record<string, unknown> = {},
+): void {
+  noStore(response);
+  response.status(200).json({
+    ok: true,
+    available: false,
+    state: 'offline',
+    error: 'SIM2REAL_BOARD_AGENT_OFFLINE',
+    code: 'SIM2REAL_BOARD_AGENT_OFFLINE',
+    message,
+    retryable: true,
+    ...extra,
+  });
+}
+
+function offlineAgent(message: string): Record<string, unknown> {
+  return {
+    available: false,
+    state: 'offline',
+    reason: message,
+    mock: false,
+  };
+}
+
+function sendStationOfflineStream(response: Response, message: string): void {
+  response.writeHead(200, {
+    'content-type': 'application/x-ndjson; charset=utf-8',
+    'cache-control': 'no-store',
+    'x-board-station': 'offline',
+  });
+  response.end(
+    `${JSON.stringify({
+      available: false,
+      state: 'offline',
+      reason: 'board-agent-unreachable',
+      message,
+      timestamp: null,
+    })}\n`,
+  );
 }
 
 /**
@@ -150,7 +204,7 @@ export function registerSim2RealBoardStationRoutes(
 ): void {
   const prefix = normalizeStationApiPrefix(options.prefix);
   const api = (suffix: string): string => `${prefix}${suffix}`;
-  const { auth, requestOwner, visibleDevices } = deps;
+  const { auth, requestOwner, visibleDevices, resolveDeviceAgentUrl } = deps;
   const multiUser = auth.isMultiUserDeployment();
   const stationOptions = (
     request: Request,
@@ -166,9 +220,44 @@ export function registerSim2RealBoardStationRoutes(
           options.deviceId ??
           '',
       ).trim() || undefined,
+    baseUrl:
+      String(
+        (request as Request & { __stationAgentBaseUrl?: string }).__stationAgentBaseUrl ??
+          options.baseUrl ??
+          '',
+      ).trim() || undefined,
   });
   const visibleDevicesForAuth = (owner?: string) =>
     multiUser ? visibleDevices(owner) : visibleDevices(undefined);
+
+  /** Enforce optional verified role claims on actuator/model mutations. */
+  const requirePermission = (
+    request: Request,
+    response: Response,
+    permission:
+      (typeof SIM2REAL_PERMISSIONS)[keyof typeof SIM2REAL_PERMISSIONS] | 'edit-or-operate',
+  ): boolean => {
+    if (!multiUser) return true;
+    const principal = auth.resolvePrincipal(request);
+    const allowed =
+      permission === 'edit-or-operate'
+        ? Boolean(
+            principal &&
+            (principalCan(principal, SIM2REAL_PERMISSIONS.edit) ||
+              principalCan(principal, SIM2REAL_PERMISSIONS.operate)),
+          )
+        : Boolean(principal && principalCan(principal, permission));
+    if (allowed) return true;
+    noStore(response);
+    sendApiError(
+      response,
+      403,
+      'SIM2REAL_PERMISSION_DENIED',
+      '当前账号没有执行此操作的权限；请联系项目管理员。',
+      { retryable: false, permission },
+    );
+    return false;
+  };
 
   /** Resolve the station target: the configured agent plus a visible device. */
   const resolveStation = async (request: Request, response: Response) => {
@@ -204,6 +293,11 @@ export function registerSim2RealBoardStationRoutes(
     (request as Request & { __stationDeviceId?: string }).__stationDeviceId = String(
       device.bridgeDeviceId ?? device.id,
     ).trim();
+    // Device connections own a loopback-only SSH tunnel. Carry its URL on the
+    // request so JSON and streaming station calls select the same device;
+    // the proxy validates the URL again before making any network request.
+    (request as Request & { __stationAgentBaseUrl?: string }).__stationAgentBaseUrl =
+      resolveDeviceAgentUrl?.(device.id, multiUser ? (owner ?? undefined) : undefined) ?? undefined;
     return { device, owner };
   };
 
@@ -219,12 +313,20 @@ export function registerSim2RealBoardStationRoutes(
         stationOptions(request, { timeoutMs: 4000 }),
       );
       if (!agent) {
-        sendApiError(
+        sendStationOffline(
           response,
-          502,
-          'SIM2REAL_BOARD_AGENT_UNREACHABLE',
-          '板端 agent 不可达，请确认 agent 进程已启动（npm run dev:board-agent）。',
-          { retryable: true },
+          '当前没有可达的板端 agent；仿真和训练工作流仍可使用。请接入实体板卡并启动 rdk-board-agent。',
+          {
+            device: {
+              id: resolved.device.id,
+              name: resolved.device.name,
+              status: resolved.device.status,
+              boardPlatform: resolved.device.boardPlatform ?? null,
+              boardModel: resolved.device.boardModel ?? null,
+            },
+            agent: offlineAgent('板端 agent 不可达或尚未启动'),
+            cameraSupported: false,
+          },
         );
         return;
       }
@@ -297,13 +399,14 @@ export function registerSim2RealBoardStationRoutes(
         stationOptions(request, { timeoutMs: 5000 }),
       );
       if (!status || typeof status !== 'object') {
-        sendApiError(
-          response,
-          502,
-          'SIM2REAL_BOARD_AGENT_UNREACHABLE',
-          '板端状态不可达，请确认 agent 进程已启动。',
-          { retryable: true },
-        );
+        sendStationOffline(response, '实体板卡当前离线，暂时没有可读取的状态或传感器数据。', {
+          status: {
+            available: false,
+            state: 'offline',
+            reason: 'board-agent-unreachable',
+            timestamp: null,
+          },
+        });
         return;
       }
       response.json({ ok: true, status });
@@ -331,12 +434,9 @@ export function registerSim2RealBoardStationRoutes(
         upstream = null;
       }
       if (!upstream) {
-        sendApiError(
+        sendStationOfflineStream(
           response,
-          502,
-          'SIM2REAL_BOARD_AGENT_UNREACHABLE',
-          '板端状态流不可达，请确认 agent 进程已启动。',
-          { retryable: true },
+          '实体板卡当前离线，状态流将在板端 agent 恢复后重新连接。',
         );
         return;
       }
@@ -487,8 +587,16 @@ export function registerSim2RealBoardStationRoutes(
       noStore(response);
       const agent = await stationAgentFetch('/v1/station/drive', stationOptions(request));
       if (!agent) {
-        sendApiError(response, 502, 'SIM2REAL_BOARD_AGENT_UNREACHABLE', '板端驱动状态不可达。', {
-          retryable: true,
+        sendStationOffline(response, '实体板卡当前离线，无法读取驱动状态。', {
+          drive: {
+            available: false,
+            state: 'offline',
+            enabled: false,
+            active: false,
+            lastStopReason: 'board-agent-unreachable',
+          },
+          platformEnabled: drivePlatformEnabled(),
+          actuatorPolicy: null,
         });
         return;
       }
@@ -532,6 +640,7 @@ export function registerSim2RealBoardStationRoutes(
     wrapAsync(async (request, response) => {
       const owner = requestOwner(request, response);
       if (owner === null) return;
+      if (!requirePermission(request, response, SIM2REAL_PERMISSIONS.operate)) return;
       noStore(response);
       const body =
         request.body && typeof request.body === 'object' && !Array.isArray(request.body)
@@ -600,6 +709,7 @@ export function registerSim2RealBoardStationRoutes(
     wrapAsync(async (request, response) => {
       const resolved = await resolveStation(request, response);
       if (!resolved) return;
+      if (!requirePermission(request, response, SIM2REAL_PERMISSIONS.operate)) return;
       noStore(response);
       if (!drivePlatformEnabled()) {
         sendApiError(
@@ -697,13 +807,16 @@ export function registerSim2RealBoardStationRoutes(
       noStore(response);
       const agent = await stationAgentFetch('/v1/station/policy', stationOptions(request));
       if (!agent || typeof agent !== 'object') {
-        sendApiError(
-          response,
-          502,
-          'SIM2REAL_BOARD_AGENT_UNREACHABLE',
-          '板端策略运行时状态不可达。',
-          { retryable: true },
-        );
+        sendStationOffline(response, '实体板卡当前离线，无法读取策略运行时状态。', {
+          platformEnabled: policyPlatformEnabled(),
+          drivePlatformEnabled: drivePlatformEnabled(),
+          policy: {
+            ...offlineAgent('board-agent-unreachable'),
+            enabled: false,
+            runtimeRunning: false,
+            motionAuthorized: false,
+          },
+        });
         return;
       }
       response.json({
@@ -721,6 +834,7 @@ export function registerSim2RealBoardStationRoutes(
     wrapAsync(async (request, response) => {
       const resolved = await resolveStation(request, response);
       if (!resolved) return;
+      if (!requirePermission(request, response, 'edit-or-operate')) return;
       noStore(response);
       if (!policyPlatformEnabled()) {
         sendApiError(
@@ -790,13 +904,9 @@ export function registerSim2RealBoardStationRoutes(
         }),
       );
       if (!agent) {
-        sendApiError(
-          response,
-          502,
-          'SIM2REAL_BOARD_AGENT_UNREACHABLE',
-          '板端 agent 不可达，无法读取制品列表。',
-          { retryable: true },
-        );
+        sendStationOffline(response, '实体板卡当前离线，暂时无法读取板端策略制品列表。', {
+          files: [],
+        });
         return;
       }
       response.status(agent.status).json(agent.payload);
@@ -819,6 +929,7 @@ export function registerSim2RealBoardStationRoutes(
     wrapAsync(async (request, response) => {
       const resolved = await resolveStation(request, response);
       if (!resolved) return;
+      if (!requirePermission(request, response, 'edit-or-operate')) return;
       noStore(response);
       if (!policyPlatformEnabled()) {
         sendApiError(
@@ -950,6 +1061,7 @@ export function registerSim2RealBoardStationRoutes(
     wrapAsync(async (request, response) => {
       const resolved = await resolveStation(request, response);
       if (!resolved) return;
+      if (!requirePermission(request, response, SIM2REAL_PERMISSIONS.operate)) return;
       noStore(response);
       if (!policyPlatformEnabled()) {
         sendApiError(
@@ -1033,6 +1145,7 @@ export function registerSim2RealBoardStationRoutes(
     wrapAsync(async (request, response) => {
       const resolved = await resolveStation(request, response);
       if (!resolved) return;
+      if (!requirePermission(request, response, SIM2REAL_PERMISSIONS.operate)) return;
       noStore(response);
       if (!policyPlatformEnabled()) {
         sendApiError(

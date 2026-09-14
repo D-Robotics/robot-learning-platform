@@ -22,7 +22,12 @@ import {
 import { evaluateModelCompatibility } from './standalone-compatibility.js';
 import { sim2RealStorageInfo } from './sim2real-store.js';
 import { isRobogoRunnerConfigured, normalizeRunnerUrl } from './robogo-runner.js';
-import { isLocalRunnerConfigured } from './local-runner.js';
+import {
+  isLocalRunnerConfigured,
+  localRunnerConnectionReady,
+  localRunnerTokenRequired,
+  localRunnerTokenUsable,
+} from './local-runner.js';
 
 function publicPath(pathname: string): string {
   const rawBase = String(process.env.RDK_SIM2REAL_PUBLIC_BASE_PATH ?? '').trim();
@@ -370,6 +375,7 @@ export function simulatorIntegration(): {
 } {
   const runnerConfigured = isRobogoRunnerConfigured();
   const localRunnerConfigured = isLocalRunnerConfigured();
+  const localRunnerReady = localRunnerConnectionReady();
   const localRunnerMock = process.env.RDK_SIM2REAL_LOCAL_RUNNER_MODE === 'mock';
   const boardAgentConfigured = isBoardAgentConfigured();
   return {
@@ -387,19 +393,23 @@ export function simulatorIntegration(): {
         : 'The RoboGo runner adapter is not configured; the Studio will not start a billable machine automatically.',
     },
     local: {
-      available: localRunnerConfigured,
+      available: localRunnerReady,
       reachable: false,
       healthy: false,
       configured: localRunnerConfigured,
       reason: localRunnerConfigured
-        ? localRunnerMock
-          ? '本地 Mock worker 已连接：无 CUDA，仅用于契约与流程演练，不生成可部署模型。'
-          : 'A local training runner is configured for this deployment.'
+        ? !localRunnerReady
+          ? '本地训练 worker 已配置，但远程/生产 bearer token 缺失或不符合强度要求。'
+          : localRunnerMock
+            ? '本地 Mock worker 已连接：无 CUDA，仅用于契约与流程演练，不生成可部署模型。'
+            : 'A local training runner is configured for this deployment.'
         : 'The local training runner is not configured; configure an internal worker endpoint first.',
       message: localRunnerConfigured
-        ? localRunnerMock
-          ? '本地 Mock worker 已配置，待健康检查。'
-          : '本地训练 worker 已配置，待健康检查。'
+        ? !localRunnerReady
+          ? '本地训练 worker 已配置，但 bearer token 未满足生产要求。'
+          : localRunnerMock
+            ? '本地 Mock worker 已配置，待健康检查。'
+            : '本地训练 worker 已配置，待健康检查。'
         : '本地训练 worker 未配置。',
       ...(localRunnerMock ? { mock: true } : {}),
     },
@@ -430,9 +440,17 @@ const MAX_LOCAL_HEALTH_RESPONSE_BYTES = 32 * 1024;
 
 /** Read only the small, aggregate health payload; never buffer an arbitrary worker response. */
 async function boundedHealthResponseText(response: Response): Promise<string> {
-  const declaredLength = Number(response.headers.get('content-length') || 0);
-  if (Number.isFinite(declaredLength) && declaredLength > MAX_LOCAL_HEALTH_RESPONSE_BYTES) {
-    throw new Error('local_worker_health_response_too_large');
+  const declaredHeader = response.headers.get('content-length');
+  if (declaredHeader !== null) {
+    const normalized = declaredHeader.trim();
+    const declaredLength = /^\d+$/.test(normalized) ? Number(normalized) : Number.NaN;
+    if (
+      !Number.isSafeInteger(declaredLength) ||
+      declaredLength < 0 ||
+      declaredLength > MAX_LOCAL_HEALTH_RESPONSE_BYTES
+    ) {
+      throw new Error('local_worker_health_response_too_large');
+    }
   }
   // A standard Fetch Response with a null body is an empty response. Do not
   // call an adapter-provided `text()` fallback here: custom fetch shims could
@@ -473,7 +491,9 @@ async function probeLocalTrainingWorkerUncached(
       ...configured,
       reachable: false,
       healthy: false,
-      message: '本地训练 worker 未配置；不会发起网络探测。',
+      message: configured.configured
+        ? configured.message || '本地训练 worker 认证配置未就绪；不会发起网络探测。'
+        : '本地训练 worker 未配置；不会发起网络探测。',
     };
   }
   const healthUrl = localWorkerHealthUrl();
@@ -487,6 +507,17 @@ async function probeLocalTrainingWorkerUncached(
   }
   const fetchImpl = options.fetchImpl ?? fetch;
   const timeoutMs = Math.max(250, Math.min(2_000, Number(options.timeoutMs) || 1_200));
+  const runnerToken = String(process.env.RDK_SIM2REAL_LOCAL_RUNNER_TOKEN ?? '').trim();
+  if (localRunnerTokenRequired()) {
+    if (!localRunnerTokenUsable(runnerToken)) {
+      return {
+        ...configured,
+        reachable: false,
+        healthy: false,
+        message: '本地训练 worker 已配置，但远程/生产 bearer token 缺失或不符合强度要求。',
+      };
+    }
+  }
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
   const startedAt = Date.now();
@@ -496,6 +527,9 @@ async function probeLocalTrainingWorkerUncached(
       response = await fetchImpl(healthUrl, {
         method: 'GET',
         redirect: 'error',
+        // /healthz is deliberately an aggregate, credential-free probe. The
+        // strong-token check above protects production configuration without
+        // putting the bearer into a proxy/access-log surface unnecessarily.
         headers: { accept: 'application/json' },
         signal: controller.signal,
       });

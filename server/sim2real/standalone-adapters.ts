@@ -1,10 +1,11 @@
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import type { Request, RequestHandler, Response } from 'express';
 import { Router } from 'express';
 import type { Device } from '../../shared/types.js';
 import type { Sim2RealAuthPort } from './sim2real-auth.js';
+import { principalCan, SIM2REAL_PERMISSIONS } from './sim2real-rbac.js';
 import { studioCookieAuthConfigured } from './studio-cookie-auth.js';
 import { activeTunnelAgentUrl, setTunnelDataDirResolver } from './board-tunnel-manager.js';
 
@@ -18,6 +19,17 @@ function isMultiUserStandaloneAuth(): boolean {
 }
 
 const MAX_ROBOGO_API_RESPONSE_BYTES = 1_000_000;
+/** Keep every server-to-server adapter response bounded before JSON parsing. */
+const MAX_BOARD_AGENT_RESPONSE_BYTES = 1_000_000;
+const MAX_BOARD_AGENT_OUTPUT_CHARS = 12_000;
+const MAX_BOARD_AGENT_COMMANDS = 8;
+const MAX_BOARD_AGENT_COMMAND_CHARS = 16_000;
+const MAX_BOARD_AGENT_REQUEST_BYTES = 128_000;
+const MAX_BOARD_AGENT_COOKIE_CHARS = 16_384;
+const DEFAULT_ADAPTER_TIMEOUT_MS = 45_000;
+const MIN_ADAPTER_TIMEOUT_MS = 1_000;
+const MAX_ADAPTER_TIMEOUT_MS = 60_000;
+type FetchResponse = Awaited<ReturnType<typeof fetch>>;
 const BOARD_PREFLIGHT_BEGIN = '__STUDIO_SIM2REAL_PREFLIGHT_BEGIN__';
 const BOARD_PREFLIGHT_END = '__STUDIO_SIM2REAL_PREFLIGHT_END__';
 let deviceWriteQueue: Promise<unknown> = Promise.resolve();
@@ -152,6 +164,37 @@ function microduckRedirectOrigin(): string | null {
       parsed.hostname.replace(/^\[|\]$/g, ''),
     );
     if (parsed.username || parsed.password || parsed.search || parsed.hash) return null;
+    if (parsed.protocol !== 'https:' && !(parsed.protocol === 'http:' && loopback)) return null;
+    return parsed.origin;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Validate an origin that will receive a browser session cookie. Remote
+ * origins must use TLS; plain HTTP is accepted only for loopback development
+ * endpoints. Paths, credentials, queries and fragments are rejected so an
+ * environment typo cannot turn the bridge into a cookie forwarding proxy.
+ */
+export function safeStudioOrigin(value: unknown): string | null {
+  const raw = String(value ?? '')
+    .trim()
+    .replace(/\/+$/, '');
+  if (!raw) return null;
+  try {
+    const parsed = new URL(raw);
+    const hostname = parsed.hostname.replace(/^\[|\]$/g, '').toLowerCase();
+    const loopback = ['localhost', '127.0.0.1', '::1'].includes(hostname);
+    if (
+      parsed.username ||
+      parsed.password ||
+      parsed.pathname !== '/' ||
+      parsed.search ||
+      parsed.hash
+    ) {
+      return null;
+    }
     if (parsed.protocol !== 'https:' && !(parsed.protocol === 'http:' && loopback)) return null;
     return parsed.origin;
   } catch {
@@ -523,6 +566,104 @@ export async function readDevices(): Promise<Device[]> {
   }
 }
 
+/** Register a device discovered through the user's Local Bridge. This is the
+ * canonical hand-off between Studio's bridge session and Sim2Real's
+ * owner-scoped deployment registry. */
+export async function upsertBridgeDevice(input: {
+  ownerKey: string;
+  bridgeId: string;
+  bridgeDeviceId: string;
+  name?: string;
+  host: string;
+  port?: number;
+  username?: string;
+  transport?: 'ssh' | 'usb-ethernet' | 'serial';
+  boardPlatform?: string | null;
+  boardModel?: string | null;
+}): Promise<Device> {
+  const clean = (value: unknown, max: number): string | undefined => {
+    if (typeof value !== 'string') return undefined;
+    const text = value.trim();
+    return text && text.length <= max && !/[\u0000-\u001f\u007f]/.test(text) ? text : undefined;
+  };
+  const bridgeId = clean(input.bridgeId, 160);
+  const bridgeDeviceId = clean(input.bridgeDeviceId, 160);
+  const ownerKey = clean(input.ownerKey, 200);
+  const host = clean(input.host, 255);
+  if (!bridgeId || !bridgeDeviceId || !ownerKey || !host) throw new Error('invalid_bridge_device');
+  const username = clean(input.username, 160) || 'root';
+  const port =
+    Number.isSafeInteger(input.port) && Number(input.port) >= 1 && Number(input.port) <= 65535
+      ? Number(input.port)
+      : 22;
+  const file = path.join(resolveDataDir(), 'devices.json');
+  await fs.mkdir(path.dirname(file), { recursive: true, mode: 0o700 });
+  const operation = deviceWriteQueue.then(async () => {
+    let parsed: unknown = [];
+    try {
+      parsed = JSON.parse(await fs.readFile(file, 'utf8'));
+    } catch {
+      // A missing or malformed bridge cache is recoverable; rebuild it from
+      // the device returned by the authenticated Local Bridge call.
+    }
+    const devices = Array.isArray(parsed) ? (parsed as Array<Record<string, unknown>>) : [];
+    const same = (item: Record<string, unknown>) =>
+      item &&
+      item.connectionMode === 'bridge' &&
+      item.bridgeDeviceId === bridgeDeviceId &&
+      item.bridgeOwnerKey === ownerKey;
+    const existing: Record<string, unknown> = devices.find(same) ?? {};
+    const baseGeneratedId = `bridge-${bridgeDeviceId.replace(/[^A-Za-z0-9._:-]/g, '-').slice(0, 120)}`;
+    // A bridge device id is scoped by the authenticated bridge owner.  The
+    // historical id format was derived from the device id alone, so two
+    // tenants connecting devices with the same bridge id could accidentally
+    // overwrite one another during the atomic registry rewrite.  Keep the
+    // short legacy id when it is free, but add a deterministic owner suffix
+    // on collision; this preserves reconnect stability without exposing the
+    // account id in the device identifier.
+    const ownerSuffix = createHash('sha256').update(ownerKey).digest('hex').slice(0, 12);
+    const generatedId =
+      devices.some((item) => item?.id === baseGeneratedId && item?.bridgeOwnerKey !== ownerKey) &&
+      !existing.id
+        ? `${baseGeneratedId}-${ownerSuffix}`.slice(0, 160)
+        : baseGeneratedId;
+    const device = {
+      ...existing,
+      // Bridge device ids may contain transport/user separators such as @.
+      // Keep the persisted platform id URL-safe and stable across reconnects.
+      id:
+        typeof existing.id === 'string' && /^[a-zA-Z0-9][a-zA-Z0-9._:-]{0,159}$/.test(existing.id)
+          ? existing.id
+          : generatedId,
+      name: clean(input.name, 120) || existing.name || `${username}@${host}`,
+      host,
+      port,
+      username,
+      status: 'connected',
+      lastCheckedAt: new Date().toISOString(),
+      connectionMode: 'bridge',
+      bridgeId,
+      bridgeDeviceId,
+      bridgeTransport: input.transport || 'ssh',
+      bridgeOwnerKey: ownerKey,
+      ...(clean(input.boardPlatform, 80) ? { boardPlatform: clean(input.boardPlatform, 80) } : {}),
+      ...(clean(input.boardModel, 120) ? { boardModel: clean(input.boardModel, 120) } : {}),
+    } as Device & { bridgeOwnerKey: string };
+    const next = [
+      device,
+      ...devices.filter(
+        (item) => !same(item) && !(item?.id === device.id && item?.bridgeOwnerKey === ownerKey),
+      ),
+    ].slice(0, 500);
+    const temporary = `${file}.${randomUUID()}.tmp`;
+    await fs.writeFile(temporary, JSON.stringify(next, null, 2), { mode: 0o600 });
+    await fs.rename(temporary, file);
+    return device;
+  });
+  deviceWriteQueue = operation.catch(() => undefined);
+  return operation;
+}
+
 /**
  * Persist only board passport fields through the standalone device adapter.
  * The device registry remains the owner of credentials and other fields; this
@@ -536,9 +677,20 @@ export function persistDeviceBoardDetection(
     boardOsVersion?: string | null;
     researchSeeds?: string[];
   },
+  scope: {
+    /** Shared deployments must provide the owner key selected by the route. */
+    ownerKey?: string | null;
+    /** Single-user standalone mode intentionally keeps legacy id-only updates. */
+    multiUser?: boolean;
+  } = {},
 ): Promise<boolean> {
   const operation = deviceWriteQueue.then(async () => {
     if (!/^[a-zA-Z0-9][a-zA-Z0-9._:-]{0,159}$/.test(id)) return false;
+    const multiUser = scope.multiUser === true;
+    const ownerKey = typeof scope.ownerKey === 'string' ? scope.ownerKey.trim() : '';
+    // In a shared deployment an owner-less persistence request is ambiguous;
+    // fail closed instead of updating every record that happens to share an id.
+    if (multiUser && !ownerKey) return false;
     const clean = (value: unknown, max: number): string | null => {
       if (value == null) return null;
       if (typeof value !== 'string') return null;
@@ -567,6 +719,7 @@ export function persistDeviceBoardDetection(
       if (!item || typeof item !== 'object' || Array.isArray(item)) return item;
       const source = item as Record<string, unknown>;
       if (source.id !== id) return item;
+      if (multiUser && source.bridgeOwnerKey !== ownerKey) return item;
       found = true;
       return {
         ...source,
@@ -629,7 +782,136 @@ export function requestOwnsDevice(
 type BoardAgentRunOptions = {
   timeoutMs?: number;
   abortSignal?: AbortSignal;
+  /** Exact bridge row selected after the caller's owner check. */
+  bridgeDeviceId?: string;
+  bridgeOwnerKey?: string | null;
 };
+
+function adapterTimeout(raw: unknown, fallback = DEFAULT_ADAPTER_TIMEOUT_MS): number {
+  const value = Number(raw ?? fallback);
+  return Number.isFinite(value)
+    ? Math.min(MAX_ADAPTER_TIMEOUT_MS, Math.max(MIN_ADAPTER_TIMEOUT_MS, Math.round(value)))
+    : fallback;
+}
+
+/**
+ * Validate a response length before consuming an untrusted upstream body.
+ * `Number('garbage')` is intentionally not treated as zero: malformed
+ * framing is a transport failure and must fail closed.
+ */
+function assertResponseLength(response: FetchResponse, maxBytes: number, errorCode: string): void {
+  const raw = response.headers?.get('content-length');
+  if (raw == null || raw.trim() === '') return;
+  const normalized = raw.trim();
+  if (!/^\d+$/.test(normalized)) throw new Error(errorCode);
+  const declared = Number(normalized);
+  if (!Number.isSafeInteger(declared) || declared > maxBytes) throw new Error(errorCode);
+}
+
+/** Read an upstream response with a byte cap before handing it to JSON.parse. */
+async function boundedAdapterResponseText(
+  response: FetchResponse,
+  maxBytes: number,
+  errorCode: string,
+): Promise<string> {
+  assertResponseLength(response, maxBytes, errorCode);
+  if (!response.body) {
+    const text = await response.text();
+    if (Buffer.byteLength(text, 'utf8') > maxBytes) throw new Error(errorCode);
+    return text;
+  }
+  const reader = response.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  try {
+    while (true) {
+      const next = await reader.read();
+      if (next.done) break;
+      const chunk = next.value;
+      total += chunk.byteLength;
+      if (!Number.isSafeInteger(total) || total > maxBytes) {
+        await reader.cancel().catch(() => undefined);
+        throw new Error(errorCode);
+      }
+      chunks.push(chunk);
+    }
+  } finally {
+    reader.releaseLock();
+  }
+  return new TextDecoder().decode(Buffer.concat(chunks.map((chunk) => Buffer.from(chunk))));
+}
+
+function safeAgentOutput(value: unknown): string {
+  if (typeof value !== 'string' || !value) return '';
+  const cleaned = value.replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/g, '');
+  return cleaned.length <= MAX_BOARD_AGENT_OUTPUT_CHARS
+    ? cleaned
+    : cleaned.slice(0, MAX_BOARD_AGENT_OUTPUT_CHARS);
+}
+
+/**
+ * Project an agent device record onto the small public device shape.  Agent
+ * responses are third-party input and may contain SSH credentials, tokens or
+ * plugin-private fields; spreading the object would expose those values to a
+ * later route or log.
+ */
+function projectBoardAgentDevice(value: unknown, fallbackId: string): Record<string, unknown> {
+  const result: Record<string, unknown> = { id: fallbackId };
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return result;
+  const source = value as Record<string, unknown>;
+  const textFields = [
+    ['id', 160],
+    ['name', 120],
+    ['kind', 80],
+    ['status', 32],
+    ['boardPlatform', 80],
+    ['boardModel', 120],
+    ['boardOsVersion', 120],
+    ['osVersion', 120],
+    ['model', 120],
+    ['transport', 32],
+  ] as const;
+  for (const [key, maxLength] of textFields) {
+    const raw = source[key];
+    if (
+      typeof raw === 'string' &&
+      raw.trim() &&
+      raw.length <= maxLength &&
+      !/[\u0000-\u001f\u007f]/.test(raw)
+    ) {
+      result[key] = raw.trim();
+    }
+  }
+  for (const key of ['online', 'mock', 'actuatorControl']) {
+    if (typeof source[key] === 'boolean') result[key] = source[key];
+  }
+  const port = source.port;
+  if (typeof port === 'number' && Number.isSafeInteger(port) && port >= 1 && port <= 65_535) {
+    result.port = port;
+  }
+  // The transport is selected by the requested registry id. Do not let an
+  // upstream payload silently rebind the result to a different device.
+  result.id = fallbackId;
+  return result;
+}
+
+function validBoardAgentInput(id: unknown, commands: unknown): commands is string[] {
+  if (
+    typeof id !== 'string' ||
+    !/^[a-zA-Z0-9][a-zA-Z0-9._:-]{0,159}$/.test(id) ||
+    !Array.isArray(commands) ||
+    commands.length === 0 ||
+    commands.length > MAX_BOARD_AGENT_COMMANDS
+  ) {
+    return false;
+  }
+  return commands.every(
+    (command) =>
+      typeof command === 'string' &&
+      command.length <= MAX_BOARD_AGENT_COMMAND_CHARS &&
+      !/[\u0000-\u001f\u007f]/.test(command),
+  );
+}
 
 /** Fixed read-only probe shared by the deployment and device-detect routes. */
 export function buildBoardPreflightCommand(): string {
@@ -710,9 +992,51 @@ export function boardAgentUrl(): string | null {
   return fromEnv;
 }
 
+/**
+ * A direct BoardAgent endpoint is an internal service-to-service trust
+ * boundary.  Local development may intentionally use a loopback reference
+ * agent without a token, but a production/web-cloud process must never fall
+ * back to an unauthenticated agent just because the endpoint is reachable.
+ * Studio Local Bridge is a separate, browser-session-authenticated path and
+ * therefore does not require this static bearer token.
+ */
+export function boardAgentTokenRequired(endpointConfigured = false): boolean {
+  const production =
+    String(process.env.NODE_ENV ?? '')
+      .trim()
+      .toLowerCase() === 'production' || isWebCloudDeployment();
+  const envConfigured = Boolean(String(process.env.RDK_SIM2REAL_BOARD_AGENT_URL ?? '').trim());
+  return production && (endpointConfigured || envConfigured);
+}
+
+/** Return only whether the configured BoardAgent bearer is strong enough for
+ * a production service.  The secret itself remains private to the adapter. */
+export function boardAgentTokenConfigured(): boolean {
+  const token = String(process.env.RDK_SIM2REAL_BOARD_AGENT_TOKEN ?? '').trim();
+  if (token.length < 32 || token.length > 4096 || /[\u0000-\u001f\u007f]/.test(token)) {
+    return false;
+  }
+  // Reject copied template values and one-character/repeated placeholders.
+  if (
+    /^(?:replace(?:[-_ ]?with)?(?:[-_ ].*)?|change(?:[-_ ]?me)?(?:[-_ ].*)?|changeme(?:[-_ ].*)?|example(?:[-_ ].*)?|placeholder(?:[-_ ].*)?|default(?:[-_ ]?secret)?(?:[-_ ].*)?|dummy(?:[-_ ].*)?|password(?:[-_ ].*)?|your[-_ ]?(?:secret|key)(?:[-_ ].*)?|secret(?:[-_ ].*)?)$/i.test(
+      token,
+    )
+  ) {
+    return false;
+  }
+  return new Set(token).size >= 2;
+}
+
+/** True when a configured endpoint can be used safely by this process. */
+export function boardAgentConnectionReady(): boolean {
+  const endpoint = boardAgentUrl();
+  if (!endpoint) return Boolean(studioBridgeConfiguration());
+  return !boardAgentTokenRequired(Boolean(endpoint)) || boardAgentTokenConfigured();
+}
+
 /** Whether the composition root has a syntactically safe BoardAgent endpoint. */
 export function isBoardAgentConfigured(): boolean {
-  return Boolean(boardAgentUrl() || studioBridgeConfiguration());
+  return boardAgentConnectionReady();
 }
 /**
  * Shared Studio deployments can reach a board through the already-authenticated
@@ -724,12 +1048,10 @@ export function studioBridgeConfiguration(): {
   deviceId: string;
   agentPort: number;
 } | null {
-  const origin = String(process.env.RDK_SIM2REAL_STUDIO_EXEC_ORIGIN ?? '')
-    .trim()
-    .replace(/\/+$/, '');
+  const origin = safeStudioOrigin(process.env.RDK_SIM2REAL_STUDIO_EXEC_ORIGIN);
   const deviceId = String(process.env.RDK_SIM2REAL_STUDIO_DEVICE_ID ?? '').trim();
   const agentPort = Number(process.env.RDK_SIM2REAL_STUDIO_AGENT_PORT ?? 19100);
-  if (!/^https?:\/\/[^\s/]+(?::\d+)?$/.test(origin)) return null;
+  if (!origin) return null;
   // The registry can supply a per-device Studio bridge id. Keep the
   // environment value optional so one deployment can serve multiple bridge
   // devices; a non-empty value still receives the same strict validation.
@@ -748,7 +1070,7 @@ export function studioBridgeConfiguration(): {
  * function with an authenticated BoardAgentPort that owns actuator policy.
  */
 export const runOnDevice = async (
-  _request: Request,
+  request: Request,
   _response: Response,
   id: string,
   commands: string[],
@@ -760,19 +1082,118 @@ export const runOnDevice = async (
   mock?: boolean;
   actuatorControl?: boolean;
 } | null> => {
-  const baseUrl = boardAgentUrl();
+  // Validate the target and command envelope before looking up a bridge
+  // record.  This keeps malformed calls from reaching either transport and
+  // avoids invoking `.join()` on attacker-controlled non-arrays.
+  if (!validBoardAgentInput(id, commands)) return null;
+  const serializedCommand = commands.join('; ');
   if (
-    !baseUrl ||
-    !/^[a-zA-Z0-9][a-zA-Z0-9._:-]{0,159}$/.test(id) ||
-    !Array.isArray(commands) ||
-    !commands.length ||
-    commands.length > 8 ||
-    commands.some((command) => typeof command !== 'string' || command.length > 16_000)
-  )
+    Buffer.byteLength(JSON.stringify({ command: serializedCommand }), 'utf8') >
+    MAX_BOARD_AGENT_REQUEST_BYTES
+  ) {
     return null;
+  }
+  // A Bridge device is reached through the operator's authenticated Studio
+  // session. Keep this path ahead of the static BoardAgent URL so a dynamic
+  // device selected in the web UI is the same execution target used by
+  // preflight and deployment.
+  const bridgeHintProvided =
+    Object.prototype.hasOwnProperty.call(options, 'bridgeDeviceId') ||
+    Object.prototype.hasOwnProperty.call(options, 'bridgeOwnerKey');
+  const requestedBridgeDeviceId = String(options.bridgeDeviceId ?? '').trim();
+  const requestedBridgeOwnerKey = String(options.bridgeOwnerKey ?? '').trim();
+  const bridgeTarget = (await readDevices()).find(
+    (device) =>
+      device.id === id &&
+      device.connectionMode === 'bridge' &&
+      (!requestedBridgeDeviceId || device.bridgeDeviceId === requestedBridgeDeviceId) &&
+      (!requestedBridgeOwnerKey ||
+        (device as Device & { bridgeOwnerKey?: string }).bridgeOwnerKey ===
+          requestedBridgeOwnerKey),
+  );
+  // The route passes the exact row it authorized. If that row disappeared or
+  // changed between the ownership read and execution, fail closed instead of
+  // selecting another tenant's colliding id or silently falling back to a
+  // process-wide agent.
+  if (bridgeHintProvided && !bridgeTarget) return null;
+  const bridgeDeviceId = String(bridgeTarget?.bridgeDeviceId || '').trim();
+  const cookie = String(request?.headers?.cookie || '').trim();
+  const studioOrigin = safeStudioOrigin(
+    process.env.RDK_SIM2REAL_STUDIO_EXEC_ORIGIN ||
+      process.env.RDK_SIM2REAL_STUDIO_ORIGIN ||
+      process.env.RDK_STUDIO_WEB_PUBLIC_ORIGIN ||
+      'https://rdkstudio.d-robotics.cc',
+  );
+  const safeCookie =
+    cookie.length <= MAX_BOARD_AGENT_COOKIE_CHARS && !/[\u0000-\u001f\u007f]/.test(cookie)
+      ? cookie
+      : '';
+  if (bridgeDeviceId && safeCookie && studioOrigin) {
+    const timeoutMs = adapterTimeout(options.timeoutMs);
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+      const response = await fetch(
+        `${studioOrigin}/api/devices/${encodeURIComponent(bridgeDeviceId)}/exec`,
+        {
+          method: 'POST',
+          headers: {
+            accept: 'application/json',
+            'content-type': 'application/json',
+            cookie: safeCookie,
+            origin: String(
+              safeStudioOrigin(
+                process.env.RDK_SIM2REAL_PUBLIC_ORIGIN || process.env.RDK_STUDIO_WEB_PUBLIC_ORIGIN,
+              ) || studioOrigin,
+            ),
+          },
+          body: JSON.stringify({ command: serializedCommand }),
+          signal: controller.signal,
+          redirect: 'error',
+        },
+      );
+      if (response.ok) {
+        const raw = await boundedAdapterResponseText(
+          response,
+          MAX_BOARD_AGENT_RESPONSE_BYTES,
+          'board_agent_response_too_large',
+        );
+        const parsed: unknown = raw ? JSON.parse(raw) : null;
+        if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+          const outer = parsed as Record<string, unknown>;
+          const output = safeAgentOutput(outer.output);
+          if (output) {
+            const exitCode =
+              typeof outer.exitCode === 'number' && Number.isSafeInteger(outer.exitCode)
+                ? outer.exitCode
+                : undefined;
+            const outerDevice = projectBoardAgentDevice(outer.device, id);
+            return {
+              device: outerDevice,
+              output,
+              ...(exitCode === undefined ? {} : { exitCode }),
+              ...(typeof outer.mock === 'boolean' ? { mock: outer.mock } : {}),
+              ...(typeof outer.actuatorControl === 'boolean'
+                ? { actuatorControl: outer.actuatorControl }
+                : {}),
+            };
+          }
+        }
+      }
+    } catch {
+      // Fall through to the configured static/tunnel agent. A transient
+      // Bridge failure should produce the normal unavailable result.
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
+  const baseUrl = boardAgentUrl();
+  if (!baseUrl) return null;
+  if (boardAgentTokenRequired(Boolean(baseUrl)) && !boardAgentTokenConfigured()) return null;
   const token = String(process.env.RDK_SIM2REAL_BOARD_AGENT_TOKEN ?? '').trim();
   if (token.length > 4096 || /[\u0000-\u001f\u007f]/.test(token)) return null;
-  const timeoutMs = Math.min(Math.max(Number(options.timeoutMs) || 45_000, 1_000), 60_000);
+  const timeoutMs = adapterTimeout(options.timeoutMs);
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   const abort = () => controller.abort();
@@ -787,22 +1208,28 @@ export const runOnDevice = async (
       },
       body: JSON.stringify({ commands: commands.slice(0, 8) }),
       signal: controller.signal,
+      redirect: 'error',
     });
     if (!response.ok) return null;
-    const contentLength = Number(response.headers.get('content-length') || 0);
-    if (Number.isFinite(contentLength) && contentLength > MAX_ROBOGO_API_RESPONSE_BYTES)
-      return null;
-    const raw = await response.text();
-    if (Buffer.byteLength(raw, 'utf8') > MAX_ROBOGO_API_RESPONSE_BYTES) return null;
-    const payload = JSON.parse(raw) as Record<string, unknown>;
-    const output = typeof payload.output === 'string' ? payload.output : '';
-    if (!output || output.length > 12_000) return null;
-    const device = payload.device && typeof payload.device === 'object' ? payload.device : { id };
-    const exitCode = Number(payload.exitCode);
+    const raw = await boundedAdapterResponseText(
+      response,
+      MAX_BOARD_AGENT_RESPONSE_BYTES,
+      'board_agent_response_too_large',
+    );
+    const parsed: unknown = raw ? JSON.parse(raw) : null;
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return null;
+    const payload = parsed as Record<string, unknown>;
+    const output = safeAgentOutput(payload.output);
+    if (!output) return null;
+    const device = projectBoardAgentDevice(payload.device, id);
+    const exitCode =
+      typeof payload.exitCode === 'number' && Number.isSafeInteger(payload.exitCode)
+        ? payload.exitCode
+        : undefined;
     return {
       device,
       output,
-      ...(Number.isSafeInteger(exitCode) ? { exitCode } : {}),
+      ...(exitCode === undefined ? {} : { exitCode }),
       ...(typeof payload.mock === 'boolean' ? { mock: payload.mock } : {}),
       ...(typeof payload.actuatorControl === 'boolean'
         ? { actuatorControl: payload.actuatorControl }
@@ -839,7 +1266,7 @@ export function createDeviceBoardDetectRouter(
         return;
       }
       const id = String(request.params.id || '').trim();
-      if (!/^[a-zA-Z0-9][a-zA-Z0-9._:-]{0,159}$/.test(id)) {
+      if (!id || id.length > 160 || /[\u0000-\u001f\u007f]/.test(id)) {
         response.status(400).json({
           ok: false,
           error: 'SIM2REAL_DEVICE_ID_INVALID',
@@ -847,9 +1274,16 @@ export function createDeviceBoardDetectRouter(
         });
         return;
       }
-      const devices = (await readDevices()) as Array<Device & { bridgeOwnerKey?: string }>;
-      const device = devices.find((item) => item.id === id);
       const ownerKey = principal?.accountId ? `sso:${principal.accountId}:web` : null;
+      const devices = (await readDevices()) as Array<Device & { bridgeOwnerKey?: string }>;
+      // Resolve the same owner-scoped row that will be passed to the runner;
+      // duplicate bridge ids are valid across tenants and must not make one
+      // account accidentally select another account's record.
+      const device = devices.find(
+        (item) =>
+          item.id === id &&
+          requestOwnsDevice(request, item, ownerKey, auth.isMultiUserDeployment()),
+      );
       if (!device || !requestOwnsDevice(request, device, ownerKey, auth.isMultiUserDeployment())) {
         response.status(404).json({
           ok: false,
@@ -860,6 +1294,12 @@ export function createDeviceBoardDetectRouter(
       }
       const executed = await runner(request, response, id, [buildBoardPreflightCommand()], {
         timeoutMs: 45_000,
+        ...(device.connectionMode === 'bridge'
+          ? {
+              bridgeDeviceId: device.bridgeDeviceId,
+              bridgeOwnerKey: device.bridgeOwnerKey ?? ownerKey,
+            }
+          : {}),
       });
       if (!executed) {
         response.status(503).json({
@@ -893,16 +1333,39 @@ export function createDeviceBoardDetectRouter(
       const model = safeField('boardModel') || safeField('model');
       const osVersion =
         safeField('boardOsVersion') || safeField('osVersion') || safeField('kernel');
-      const persisted =
-        String(request.query.persist ?? '').toLowerCase() === '1' ||
-        String(request.query.persist ?? '').toLowerCase() === 'true'
-          ? await persistDeviceBoardDetection(id, {
+      const persistRequested = ['1', 'true'].includes(
+        String(request.query.persist ?? '').toLowerCase(),
+      );
+      if (
+        persistRequested &&
+        auth.isMultiUserDeployment() &&
+        !principalCan(principal, SIM2REAL_PERMISSIONS.edit) &&
+        !principalCan(principal, SIM2REAL_PERMISSIONS.operate)
+      ) {
+        response.status(403).json({
+          ok: false,
+          error: 'SIM2REAL_PERMISSION_DENIED',
+          code: 'SIM2REAL_PERMISSION_DENIED',
+          message: '当前账号没有保存设备预检元数据的权限。',
+          retryable: false,
+        });
+        return;
+      }
+      const persisted = persistRequested
+        ? await persistDeviceBoardDetection(
+            id,
+            {
               boardPlatform: platform || null,
               boardModel: model || null,
               boardOsVersion: osVersion || null,
               researchSeeds: [],
-            })
-          : false;
+            },
+            {
+              ownerKey,
+              multiUser: auth.isMultiUserDeployment(),
+            },
+          )
+        : false;
       response.json({
         ok: true,
         platform: platform || null,
@@ -935,7 +1398,59 @@ export function createStandaloneRobogoApiClient(
   const baseUrl = String(process.env.RDK_SIM2REAL_ROBOGO_API_URL || '')
     .trim()
     .replace(/\/+$/, '');
-  if (!/^https:\/\//i.test(baseUrl)) throw new Error('robogo_api_not_configured');
+  let parsedBase: URL;
+  try {
+    parsedBase = new URL(baseUrl);
+  } catch {
+    throw new Error('robogo_api_not_configured');
+  }
+  if (
+    parsedBase.protocol !== 'https:' ||
+    parsedBase.username ||
+    parsedBase.password ||
+    parsedBase.search ||
+    parsedBase.hash ||
+    /[\u0000-\u001f\u007f]/.test(baseUrl)
+  ) {
+    throw new Error('robogo_api_not_configured');
+  }
+  const normalizedBasePath = parsedBase.pathname.replace(/\/+$/, '');
+  const resolveRequestUrl = (rawPath: unknown): string => {
+    const requestPath = String(rawPath ?? '').trim();
+    if (
+      !requestPath.startsWith('/') ||
+      requestPath.length > 1_024 ||
+      /[\u0000-\u001f\u007f\\]/.test(requestPath)
+    ) {
+      throw new Error('robogo_api_path_invalid');
+    }
+    let decodedPath = requestPath;
+    try {
+      decodedPath = decodeURIComponent(requestPath);
+    } catch {
+      throw new Error('robogo_api_path_invalid');
+    }
+    const pathBeforeQuery = decodedPath.split(/[?#]/, 1)[0] ?? '';
+    if (pathBeforeQuery.split('/').some((segment) => segment === '..')) {
+      throw new Error('robogo_api_path_invalid');
+    }
+    let target: URL;
+    try {
+      target = new URL(`${normalizedBasePath}${requestPath}`, parsedBase.origin);
+    } catch {
+      throw new Error('robogo_api_path_invalid');
+    }
+    if (
+      target.origin !== parsedBase.origin ||
+      target.username ||
+      target.password ||
+      target.hash ||
+      target.pathname.split('/').some((segment) => segment === '..')
+    ) {
+      throw new Error('robogo_api_path_invalid');
+    }
+    return target.toString();
+  };
   return {
     async request(accountId: string, input: { method: string; path: string; timeoutMs?: number }) {
       const token = String(
@@ -949,51 +1464,45 @@ export function createStandaloneRobogoApiClient(
       if (!accountId || accountId.length > 160 || /[\u0000-\u001f\u007f/]/.test(accountId)) {
         throw new Error('robogo_api_account_invalid');
       }
+      const method = String(input.method ?? '')
+        .trim()
+        .toUpperCase();
+      if (!/^[A-Z]{1,16}$/.test(method)) throw new Error('robogo_api_method_invalid');
+      const targetUrl = resolveRequestUrl(input.path);
       const controller = new AbortController();
-      const timer = setTimeout(() => controller.abort(), input.timeoutMs ?? 12_000);
+      const timer = setTimeout(() => controller.abort(), adapterTimeout(input.timeoutMs, 12_000));
       try {
-        const response = await (options.fetchImpl || fetch)(`${baseUrl}${input.path}`, {
-          method: input.method,
+        const response = await (options.fetchImpl || fetch)(targetUrl, {
+          method,
           headers: {
             accept: 'application/json',
             authorization: `Bearer ${token}`,
             'x-sim2real-account': accountId,
           },
           signal: controller.signal,
+          redirect: 'error',
         });
-        if (!response.ok) throw new Error(`robogo_http_${response.status}`);
-        const declaredLength = Number(response.headers.get('content-length') || 0);
-        if (Number.isFinite(declaredLength) && declaredLength > MAX_ROBOGO_API_RESPONSE_BYTES) {
-          throw new Error('robogo_api_response_too_large');
+        if (!response.ok) {
+          await boundedAdapterResponseText(
+            response,
+            MAX_ROBOGO_API_RESPONSE_BYTES,
+            'robogo_api_response_too_large',
+          ).catch(() => undefined);
+          throw new Error(`robogo_http_${response.status}`);
         }
-        if (!response.body) {
-          const raw = await response.text();
-          if (Buffer.byteLength(raw, 'utf8') > MAX_ROBOGO_API_RESPONSE_BYTES) {
-            throw new Error('robogo_api_response_too_large');
-          }
-          return raw ? (JSON.parse(raw) as unknown) : null;
-        }
-        const reader = response.body.getReader();
-        const chunks: Uint8Array[] = [];
-        let total = 0;
-        try {
-          while (true) {
-            const next = await reader.read();
-            if (next.done) break;
-            total += next.value.byteLength;
-            if (total > MAX_ROBOGO_API_RESPONSE_BYTES) {
-              await reader.cancel();
-              throw new Error('robogo_api_response_too_large');
-            }
-            chunks.push(next.value);
-          }
-        } finally {
-          reader.releaseLock();
-        }
-        const raw = new TextDecoder().decode(
-          Buffer.concat(chunks.map((chunk) => Buffer.from(chunk))),
+        const raw = await boundedAdapterResponseText(
+          response,
+          MAX_ROBOGO_API_RESPONSE_BYTES,
+          'robogo_api_response_too_large',
         );
-        return raw ? (JSON.parse(raw) as unknown) : null;
+        if (!raw) return null;
+        let payload: unknown;
+        try {
+          payload = JSON.parse(raw) as unknown;
+        } catch {
+          throw new Error('robogo_api_invalid_json');
+        }
+        return payload;
       } finally {
         clearTimeout(timer);
       }

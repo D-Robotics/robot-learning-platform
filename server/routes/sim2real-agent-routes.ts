@@ -7,6 +7,7 @@ import {
   type Sim2RealAgentRun,
   type Sim2RealAgentStep,
 } from '../sim2real/sim2real-agent.js';
+import { principalCan, SIM2REAL_PERMISSIONS } from '../sim2real/sim2real-rbac.js';
 
 /**
  * Agent runs are conversation-scoped diagnostics, not ledger records: they
@@ -15,6 +16,9 @@ import {
  * within minutes (training polling is capped) and become evictable then.
  */
 const MAX_AGENT_RUNS = 200;
+/** Keep asynchronous Agent work bounded even when callers never poll/finish. */
+export const MAX_ACTIVE_AGENT_RUNS_TOTAL = 200;
+export const MAX_ACTIVE_AGENT_RUNS_PER_OWNER = 32;
 /** The planner emits at most 6 steps; allow headroom, reject crafted floods. */
 const MAX_AGENT_PLAN_STEPS = 12;
 /**
@@ -31,10 +35,74 @@ const KNOWN_TOOLS: ReadonlySet<string> = new Set([
   'safety.gate',
   'evaluation.summarize',
   'board.stop',
+  'conversation.reply',
 ]);
+
+// Approval is a server-side property of a tool, never a client-controlled
+// boolean on an arbitrary plan. These operations create durable evidence or
+// contact a runner, so an execute request must carry the explicit approval
+// flag even if a crafted plan omits/changes `requiresApproval`.
+const APPROVAL_TOOLS: ReadonlySet<string> = new Set([
+  'training.gpu',
+  'evaluation.summarize',
+  'deployment.preflight',
+]);
+
+const AGENT_INTENTS: ReadonlySet<string> = new Set([
+  'conversation',
+  'full-loop',
+  'gpu-train',
+  'board-check',
+  'deploy-preflight',
+  'simulate',
+  'evaluation',
+  'stop',
+]);
+const AGENT_SAFETY: ReadonlySet<string> = new Set(['read-only', 'compute', 'guarded']);
+const SAFE_AGENT_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,159}$/;
 
 type HeaderCarrier = { headers: Record<string, string | undefined> };
 type AgentRequestInit = { method?: string; headers?: Record<string, string>; body?: string };
+
+/**
+ * The Agent router calls the standalone service through a loopback HTTP hop.
+ * Keep that hop bounded even when the downstream route is wedged or returns a
+ * response that is much larger than the small envelopes Agent actually reads.
+ * The environment override is deliberately narrow: a typo falls back to the
+ * safe default instead of disabling the timeout altogether.
+ */
+export const SIM2REAL_AGENT_EXECUTOR_TIMEOUT_ENV =
+  'RDK_SIM2REAL_AGENT_EXECUTOR_TIMEOUT_MS' as const;
+export const SIM2REAL_AGENT_EXECUTOR_DEFAULT_TIMEOUT_MS = 15_000;
+export const SIM2REAL_AGENT_EXECUTOR_MIN_TIMEOUT_MS = 1_000;
+export const SIM2REAL_AGENT_EXECUTOR_MAX_TIMEOUT_MS = 60_000;
+export const SIM2REAL_AGENT_RESPONSE_MAX_BYTES = 256 * 1024;
+export const SIM2REAL_AGENT_EXECUTOR_TIMEOUT_ERROR = 'sim2real_agent_executor_timeout';
+export const SIM2REAL_AGENT_EXECUTOR_UNAVAILABLE_ERROR = 'sim2real_agent_executor_unavailable';
+export const SIM2REAL_AGENT_RESPONSE_TOO_LARGE_ERROR = 'sim2real_agent_response_too_large';
+export const SIM2REAL_AGENT_RESPONSE_INVALID_ERROR = 'sim2real_agent_response_invalid';
+
+export function resolveSim2RealAgentExecutorTimeout(
+  raw: unknown = process.env[SIM2REAL_AGENT_EXECUTOR_TIMEOUT_ENV],
+): number {
+  const text = String(raw ?? '').trim();
+  if (!/^\d+$/.test(text)) return SIM2REAL_AGENT_EXECUTOR_DEFAULT_TIMEOUT_MS;
+  const value = Number(text);
+  return Number.isSafeInteger(value) &&
+    value >= SIM2REAL_AGENT_EXECUTOR_MIN_TIMEOUT_MS &&
+    value <= SIM2REAL_AGENT_EXECUTOR_MAX_TIMEOUT_MS
+    ? value
+    : SIM2REAL_AGENT_EXECUTOR_DEFAULT_TIMEOUT_MS;
+}
+
+async function cancelAgentResponse(response: Response): Promise<void> {
+  try {
+    await response.body?.cancel();
+  } catch {
+    // The body may already be closed by the fetch implementation. The caller
+    // still receives the stable boundary error below.
+  }
+}
 
 /**
  * Loose envelope for the loopback JSON this router reads. Fields are optional
@@ -44,6 +112,7 @@ type AgentRequestInit = { method?: string; headers?: Record<string, string>; bod
  * exactly what a bare `any` used to allow.
  */
 interface AgentPayload {
+  ok?: boolean;
   message?: string;
   error?: string;
   status?: string;
@@ -90,23 +159,120 @@ function messageOf(body: unknown): string {
   const message = (body as AgentPayload).message;
   return typeof message === 'string' ? message.slice(0, 2_000) : '';
 }
+
+function safeAgentText(value: unknown, fallback: string, max = 500): string {
+  const text = typeof value === 'string' ? value.replace(/[\u0000-\u001f\u007f]/g, '').trim() : '';
+  return (text || fallback).slice(0, max);
+}
+
+type NormalizedAgentPlan = Sim2RealAgentPlan;
+
+/** Validate the plan envelope and derive all executable step metadata server-side. */
+function normalizeAgentPlan(
+  value: unknown,
+): { plan: NormalizedAgentPlan; approvalRequired: boolean } | { error: string } {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return { error: '缺少有效的 Agent 计划。' };
+  }
+  const source = value as Record<string, unknown>;
+  const id = String(source.id ?? '').trim();
+  if (!SAFE_AGENT_ID.test(id)) return { error: 'Agent 计划 ID 格式无效。' };
+  const rawSteps = source.steps;
+  if (!Array.isArray(rawSteps) || !rawSteps.length || rawSteps.length > MAX_AGENT_PLAN_STEPS) {
+    return { error: `Agent 计划最多 ${MAX_AGENT_PLAN_STEPS} 步且至少包含一步。` };
+  }
+  const seen = new Set<string>();
+  const steps: Sim2RealAgentStep[] = [];
+  for (let index = 0; index < rawSteps.length; index += 1) {
+    const item = rawSteps[index];
+    if (!item || typeof item !== 'object' || Array.isArray(item)) {
+      return { error: '计划包含无效步骤。' };
+    }
+    const candidate = item as Record<string, unknown>;
+    const tool = String(candidate.tool ?? '').trim();
+    if (!KNOWN_TOOLS.has(tool)) return { error: '计划包含未知或不受支持的工具步骤。' };
+    const stepId = String(candidate.id ?? `step-${index + 1}`).trim();
+    if (!SAFE_AGENT_ID.test(stepId) || seen.has(stepId)) {
+      return { error: '计划步骤 ID 无效或重复。' };
+    }
+    seen.add(stepId);
+    const requiresApproval = APPROVAL_TOOLS.has(tool);
+    steps.push({
+      id: stepId,
+      label: safeAgentText(candidate.label, tool, 180),
+      tool,
+      status: 'pending',
+      ...(requiresApproval ? { requiresApproval: true } : {}),
+    });
+  }
+  const intent = String(source.intent ?? 'conversation').trim();
+  const safety = String(source.safety ?? 'read-only').trim();
+  if (!AGENT_INTENTS.has(intent) || !AGENT_SAFETY.has(safety)) {
+    return { error: '计划的 intent 或 safety 字段无效。' };
+  }
+  const optionalId = (key: string): { value?: string; invalid?: boolean } => {
+    const candidate = String(source[key] ?? '').trim();
+    if (!candidate) return {};
+    return SAFE_AGENT_ID.test(candidate) ? { value: candidate } : { invalid: true };
+  };
+  const modelId = optionalId('modelId');
+  const deviceId = optionalId('deviceId');
+  const computeResourceId = optionalId('computeResourceId');
+  if (modelId.invalid || deviceId.invalid || computeResourceId.invalid) {
+    return { error: '计划中的模型、设备或计算资源 ID 格式无效。' };
+  }
+  const plan: Sim2RealAgentPlan = {
+    id,
+    intent: intent as Sim2RealAgentPlan['intent'],
+    goal: safeAgentText(source.goal, '执行受控 Agent 任务。'),
+    safety: safety as Sim2RealAgentPlan['safety'],
+    steps,
+    rationale: safeAgentText(source.rationale, '按依赖顺序执行受控工具。'),
+    ...(modelId.value ? { modelId: modelId.value } : {}),
+    ...(deviceId.value ? { deviceId: deviceId.value } : {}),
+    ...(computeResourceId.value ? { computeResourceId: computeResourceId.value } : {}),
+    createdAt: new Date().toISOString(),
+  };
+  return { plan, approvalRequired: steps.some((step) => APPROVAL_TOOLS.has(step.tool)) };
+}
 function updateStep(
   run: Sim2RealAgentRun,
   id: string,
   status: Sim2RealAgentStep['status'],
   detail?: string,
 ) {
+  const safeDetail = detail ? safeAgentText(detail, '执行未完成。', 500) : undefined;
   run.steps = run.steps.map((item) =>
-    item.id === id ? { ...item, status, ...(detail ? { detail } : {}) } : item,
+    item.id === id ? { ...item, status, ...(safeDetail ? { detail: safeDetail } : {}) } : item,
   );
   run.updatedAt = now();
 }
+
+const MAX_AGENT_EVIDENCE_ITEMS = 64;
+
+function safeAgentHref(value: unknown): string | undefined {
+  const text = safeAgentText(value, '', 500);
+  if (!text) return undefined;
+  return /^(?:#|\/(?!\/)|https:\/\/)/i.test(text) ? text : undefined;
+}
+
+/** Add a bounded, terminal-safe evidence record at the conversation boundary. */
+function addEvidence(run: Sim2RealAgentRun, label: unknown, value: unknown, href?: unknown): void {
+  if (run.evidence.length >= MAX_AGENT_EVIDENCE_ITEMS) return;
+  const hrefValue = safeAgentHref(href);
+  run.evidence.push({
+    label: safeAgentText(label, '证据', 120),
+    value: safeAgentText(value, '—', 500),
+    ...(hrefValue ? { href: hrefValue } : {}),
+  });
+}
+
 function addEvent(
   run: Sim2RealAgentRun,
   type: Sim2RealAgentRun['events'][number]['type'],
   text: string,
 ) {
-  run.events.push({ at: now(), type, text });
+  run.events.push({ at: now(), type, text: safeAgentText(text, 'Agent 事件', 1_000) });
   run.updatedAt = now();
 }
 
@@ -156,6 +322,17 @@ function pruneRuns(): void {
   }
 }
 
+function activeAgentRuns(owner: string | undefined): { total: number; owner: number } {
+  let total = 0;
+  let scoped = 0;
+  for (const entry of runs.values()) {
+    if (entry.run.status !== 'queued' && entry.run.status !== 'running') continue;
+    total += 1;
+    if (entry.owner === owner) scoped += 1;
+  }
+  return { total, owner: scoped };
+}
+
 async function executeWithRetry(
   execute: AgentRequestExecutor,
   request: HeaderCarrier,
@@ -173,26 +350,142 @@ async function executeWithRetry(
   return last!;
 }
 
-function localExecutor(): AgentRequestExecutor {
+/** Read one loopback response without buffering an unbounded body. */
+export async function readSim2RealAgentResponseText(response: Response): Promise<string> {
+  const declared = response.headers.get('content-length');
+  if (declared !== null) {
+    const length = Number(declared);
+    if (!Number.isSafeInteger(length) || length < 0 || length > SIM2REAL_AGENT_RESPONSE_MAX_BYTES) {
+      await cancelAgentResponse(response);
+      throw new Error(SIM2REAL_AGENT_RESPONSE_TOO_LARGE_ERROR);
+    }
+  }
+  // A standard Fetch Response with a null body is an empty response. Keep the
+  // text() fallback for lightweight fetch shims, but apply the same byte cap
+  // after decoding so a custom adapter cannot bypass the limit.
+  if (!response.body) {
+    const text = await response.text();
+    if (Buffer.byteLength(text, 'utf8') > SIM2REAL_AGENT_RESPONSE_MAX_BYTES) {
+      throw new Error(SIM2REAL_AGENT_RESPONSE_TOO_LARGE_ERROR);
+    }
+    return text;
+  }
+  const reader = response.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  try {
+    while (true) {
+      const next = await reader.read();
+      if (next.done) break;
+      total += next.value.byteLength;
+      if (total > SIM2REAL_AGENT_RESPONSE_MAX_BYTES) {
+        await reader.cancel().catch(() => undefined);
+        throw new Error(SIM2REAL_AGENT_RESPONSE_TOO_LARGE_ERROR);
+      }
+      chunks.push(next.value);
+    }
+  } finally {
+    reader.releaseLock();
+  }
+  return new TextDecoder().decode(Buffer.concat(chunks.map((chunk) => Buffer.from(chunk))));
+}
+
+export type Sim2RealAgentLocalExecutorOptions = {
+  fetchImpl?: typeof fetch;
+  port?: number;
+  /** Test/deployment override; values outside the safe range use the default. */
+  timeoutMs?: unknown;
+};
+
+function agentExecutorPort(raw: unknown): number {
+  const value = Number(raw ?? process.env.RDK_SIM2REAL_PORT ?? 18_102);
+  return Number.isInteger(value) && value >= 1_024 && value <= 65_535 ? value : 18_102;
+}
+
+function parsedAgentPayload(text: string): AgentPayload {
+  if (!text) return {};
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    // Never copy an upstream body into the Agent run event. It may contain
+    // credentials or a proxy-generated HTML page; callers only need a stable
+    // protocol error to decide whether to retry.
+    throw new Error(SIM2REAL_AGENT_RESPONSE_INVALID_ERROR);
+  }
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    // A successful HTTP status with an HTML page, scalar, or array is still a
+    // protocol failure. Treating it as `{}` used to let orchestration continue
+    // with empty model/device lists and potentially select a fallback target.
+    throw new Error(SIM2REAL_AGENT_RESPONSE_INVALID_ERROR);
+  }
+  return parsed as AgentPayload;
+}
+
+/**
+ * Keep machine-readable hints needed by the orchestration path while dropping
+ * free-form upstream error text. A local route may be fronted by a proxy that
+ * returns HTML or credentials in `message`; that content must never become a
+ * conversation-scoped Agent event.
+ */
+function scrubAgentErrorPayload(body: AgentPayload): AgentPayload {
+  // This is the only non-2xx code the orchestration path interprets. Keep the
+  // allow-list exact so an upstream can never smuggle a credential-looking
+  // string through an otherwise "code-shaped" error field.
+  const mockOnly = body.error === 'SIM2REAL_PREFLIGHT_MOCK_ONLY';
+  return {
+    ...(mockOnly ? { error: 'SIM2REAL_PREFLIGHT_MOCK_ONLY' } : {}),
+    ...(body.preflight?.mock === true ? { preflight: { mock: true } } : {}),
+  };
+}
+
+/**
+ * Build the default in-process Agent executor with a bounded timeout and body.
+ * Keeping the fetch implementation injectable makes the boundary directly
+ * testable without opening a second HTTP server.
+ */
+export function createSim2RealAgentLocalExecutor(
+  options: Sim2RealAgentLocalExecutorOptions = {},
+): AgentRequestExecutor {
+  const fetchImpl = options.fetchImpl ?? fetch;
+  const timeoutMs = resolveSim2RealAgentExecutorTimeout(options.timeoutMs);
+  const port = agentExecutorPort(options.port);
   return async (request, path, init = {}) => {
-    const port = Number(process.env.RDK_SIM2REAL_PORT ?? 18102);
     const headers: Record<string, string> = { accept: 'application/json', ...(init.headers ?? {}) };
     if (request.headers.cookie) headers.cookie = request.headers.cookie;
     if (request.headers.authorization) headers.authorization = request.headers.authorization;
-    const response = await fetch(`http://127.0.0.1:${port}${path}`, {
-      method: init.method,
-      headers,
-      body: init.body,
-    });
-    const text = await response.text();
-    let body: AgentPayload = {};
+    const signal = AbortSignal.timeout(timeoutMs);
     try {
-      body = text ? JSON.parse(text) : {};
-    } catch {
-      body = { message: text.slice(0, 500) };
+      const response = await fetchImpl(`http://127.0.0.1:${port}${path}`, {
+        method: init.method,
+        headers,
+        body: init.body,
+        redirect: 'error',
+        signal,
+      });
+      const payload = parsedAgentPayload(await readSim2RealAgentResponseText(response));
+      return {
+        status: response.status,
+        body: response.status >= 400 ? scrubAgentErrorPayload(payload) : payload,
+      };
+    } catch (error) {
+      if (error instanceof Error && error.message === SIM2REAL_AGENT_RESPONSE_TOO_LARGE_ERROR) {
+        throw error;
+      }
+      if (error instanceof Error && error.message === SIM2REAL_AGENT_RESPONSE_INVALID_ERROR) {
+        throw error;
+      }
+      if (signal.aborted) throw new Error(SIM2REAL_AGENT_EXECUTOR_TIMEOUT_ERROR);
+      // Transport and redirect failures intentionally collapse to one stable
+      // message. Never expose a fetch error or upstream response body in the
+      // conversation-scoped Agent record.
+      throw new Error(SIM2REAL_AGENT_EXECUTOR_UNAVAILABLE_ERROR);
     }
-    return { status: response.status, body };
   };
+}
+
+function localExecutor(): AgentRequestExecutor {
+  return createSim2RealAgentLocalExecutor();
 }
 
 export function createSim2RealAgentRouter(
@@ -225,44 +518,64 @@ export function createSim2RealAgentRouter(
       });
       return;
     }
-    const plan = request.body?.plan as Sim2RealAgentPlan | undefined;
-    if (!plan?.id || !Array.isArray(plan.steps) || !plan.steps.length) {
-      response.status(400).json({
+    const principal = auth.resolvePrincipal(request);
+    if (auth.isMultiUserDeployment() && !principalCan(principal, SIM2REAL_PERMISSIONS.agent)) {
+      response.status(403).json({
         ok: false,
-        error: 'SIM2REAL_AGENT_PLAN_REQUIRED',
-        message: '缺少有效的 Agent 计划。',
+        error: 'SIM2REAL_PERMISSION_DENIED',
+        code: 'SIM2REAL_PERMISSION_DENIED',
+        message: '当前账号没有执行 Agent 操作的权限。',
+        retryable: false,
       });
       return;
     }
-    if (plan.steps.length > MAX_AGENT_PLAN_STEPS) {
-      response.status(400).json({
-        ok: false,
-        error: 'SIM2REAL_AGENT_PLAN_TOO_LARGE',
-        message: `Agent 计划最多 ${MAX_AGENT_PLAN_STEPS} 步。`,
-      });
-      return;
-    }
-    if (
-      plan.steps.some(
-        (item) =>
-          !item ||
-          typeof item !== 'object' ||
-          typeof item.tool !== 'string' ||
-          !KNOWN_TOOLS.has(item.tool),
-      )
-    ) {
+    const normalized = normalizeAgentPlan(request.body?.plan);
+    if ('error' in normalized) {
       response.status(400).json({
         ok: false,
         error: 'SIM2REAL_AGENT_PLAN_INVALID',
-        message: '计划包含未知或不受支持的工具步骤。',
+        message: normalized.error,
       });
       return;
     }
-    if (plan.steps.some((item) => item.requiresApproval && request.body?.approved !== true)) {
+    const { plan, approvalRequired } = normalized;
+    if (approvalRequired && request.body?.approved !== true) {
       response.status(409).json({
         ok: false,
         error: 'SIM2REAL_AGENT_APPROVAL_REQUIRED',
         message: '该计划包含需要显式批准的动作。',
+      });
+      return;
+    }
+    // A plan id is the agent's durable client-side idempotency key. Retries
+    // happen frequently when the browser loses the polling connection; never
+    // start a second training/deployment side effect for the same plan. Keep
+    // the response shape stable and return a generic 404 for a cross-account
+    // collision so the id cannot be used as a run-existence oracle.
+    const existing = runs.get(plan.id);
+    if (existing) {
+      if (existing.owner !== owner) {
+        response.status(404).json({ ok: false, error: 'SIM2REAL_AGENT_RUN_NOT_FOUND' });
+        return;
+      }
+      response.setHeader('Cache-Control', 'no-store');
+      response.status(202).json({ ok: true, run: existing.run, duplicate: true });
+      return;
+    }
+    const active = activeAgentRuns(owner);
+    if (
+      active.total >= MAX_ACTIVE_AGENT_RUNS_TOTAL ||
+      active.owner >= MAX_ACTIVE_AGENT_RUNS_PER_OWNER
+    ) {
+      response.setHeader('Cache-Control', 'no-store');
+      response.setHeader('Retry-After', '30');
+      response.status(429).json({
+        ok: false,
+        error: 'SIM2REAL_AGENT_ACTIVE_QUOTA',
+        code: 'SIM2REAL_AGENT_ACTIVE_QUOTA',
+        message: '当前 Agent 已有过多排队或运行中的任务，请等待完成后再试。',
+        retryable: true,
+        retryAfterSeconds: 30,
       });
       return;
     }
@@ -326,6 +639,19 @@ function resolveAgentDeviceId(run: Sim2RealAgentRun, overview: AgentPayload): st
   return String(overview?.devices?.[0]?.id ?? '');
 }
 
+const AGENT_TRAINING_IN_FLIGHT = new Set(['queued', 'running']);
+const AGENT_TRAINING_TERMINAL = new Set(['completed', 'failed', 'blocked']);
+
+function normalizedTrainingStatus(value: unknown): string {
+  return typeof value === 'string' ? value.trim().toLowerCase().slice(0, 32) : '';
+}
+
+function trainingRunId(value: unknown): string | null {
+  if (typeof value !== 'string') return null;
+  const id = value.trim();
+  return SAFE_AGENT_ID.test(id) ? id : null;
+}
+
 async function runAgent(
   run: Sim2RealAgentRun,
   request: HeaderCarrier,
@@ -342,11 +668,13 @@ async function runAgent(
       if (item.tool === 'workspace.overview') {
         const result = await execute(request, '/api/sim2real/overview');
         overview = result.body;
-        if (result.status >= 400) throw new Error(overview?.message || '工作区读取失败');
-        run.evidence.push({
-          label: '模型/设备',
-          value: `${overview.models?.length ?? 0} 个模型，${overview.devices?.length ?? 0} 块板卡`,
-        });
+        if (result.status >= 400)
+          throw new Error(safeAgentText(overview?.message, '工作区读取失败'));
+        addEvidence(
+          run,
+          '模型/设备',
+          `${overview.models?.length ?? 0} 个模型，${overview.devices?.length ?? 0} 块板卡`,
+        );
       } else if (item.tool === 'simulator.open') {
         const configuredEntry =
           overview?.integrations?.simulator?.browser?.entryUrl ||
@@ -357,7 +685,14 @@ async function runAgent(
               ? '/mujoco/microduck-proxy/'
               : '/mujoco/microduck/'),
         );
-        run.evidence.push({ label: '仿真入口', value: entryUrl, href: entryUrl });
+        addEvidence(run, '仿真入口', entryUrl, entryUrl);
+      } else if (item.tool === 'conversation.reply') {
+        addEvidence(
+          run,
+          'Agent',
+          '你好！我可以帮你检查工作区、启动仿真、提交训练，或检查已连接的板端。',
+        );
+        completionDetail = '已回复';
       } else if (item.tool === 'training.gpu') {
         const modelId = resolveAgentModelId(run, overview);
         const result = await executeWithRetry(execute, request, '/api/sim2real/runs', {
@@ -371,41 +706,66 @@ async function runAgent(
             ...(run.computeResourceId ? { computeResourceId: run.computeResourceId } : {}),
           }),
         });
-        if (result.status >= 400) throw new Error(result.body?.message || 'GPU 训练提交失败');
+        if (result.status >= 400)
+          throw new Error(safeAgentText(result.body?.message, 'GPU 训练提交失败'));
         const trainingRun = result.body?.run;
-        let trainingStatus = String(trainingRun?.status ?? 'queued');
-        if (trainingRun?.id && ['queued', 'running'].includes(trainingStatus)) {
+        if (!trainingRun || typeof trainingRun !== 'object' || Array.isArray(trainingRun)) {
+          throw new Error('GPU 训练提交未返回有效运行记录');
+        }
+        const runId = trainingRunId(trainingRun.id);
+        if (!runId) throw new Error('GPU 训练提交未返回有效运行 ID');
+        let trainingStatus = normalizedTrainingStatus(trainingRun.status);
+        if (
+          !AGENT_TRAINING_IN_FLIGHT.has(trainingStatus) &&
+          !AGENT_TRAINING_TERMINAL.has(trainingStatus)
+        ) {
+          throw new Error('GPU 训练返回了未知状态');
+        }
+        if (AGENT_TRAINING_IN_FLIGHT.has(trainingStatus)) {
           for (
             let attempt = 0;
-            attempt < 30 && ['queued', 'running'].includes(trainingStatus);
+            attempt < 30 && AGENT_TRAINING_IN_FLIGHT.has(trainingStatus);
             attempt += 1
           ) {
             await new Promise((resolve) => setTimeout(resolve, 1_000));
             const statusResult = await execute(
               request,
-              `/api/sim2real/runs/${encodeURIComponent(trainingRun.id)}`,
+              `/api/sim2real/runs/${encodeURIComponent(runId)}`,
             );
-            trainingStatus = String(statusResult.body?.run?.status ?? trainingStatus);
+            if (statusResult.status >= 400)
+              throw new Error('GPU 训练状态查询失败，无法确认任务结果');
+            const polledRun = statusResult.body?.run;
+            if (!polledRun || typeof polledRun !== 'object' || Array.isArray(polledRun)) {
+              throw new Error('GPU 训练状态响应无效，无法确认任务结果');
+            }
+            const nextStatus = normalizedTrainingStatus(polledRun.status);
+            if (
+              !AGENT_TRAINING_IN_FLIGHT.has(nextStatus) &&
+              !AGENT_TRAINING_TERMINAL.has(nextStatus)
+            ) {
+              throw new Error('GPU 训练状态响应未知，无法确认任务结果');
+            }
+            trainingStatus = nextStatus;
           }
         }
-        run.evidence.push({
-          label: 'GPU 训练',
-          value: `${trainingRun?.id ?? '已提交'} · ${trainingStatus}`,
-          href: trainingRun?.id ? `#records/${trainingRun.id}` : undefined,
-        });
-        if (['failed', 'blocked'].includes(trainingStatus))
+        addEvidence(run, 'GPU 训练', `${runId} · ${trainingStatus}`, `#records/${runId}`);
+        if (trainingStatus === 'failed' || trainingStatus === 'blocked')
           throw new Error(`GPU 训练${trainingStatus === 'failed' ? '失败' : '被阻断'}`);
+        if (AGENT_TRAINING_IN_FLIGHT.has(trainingStatus))
+          throw new Error('GPU 训练状态轮询超时，结果尚未确认');
       } else if (item.tool === 'board.health') {
         const result = await executeWithRetry(
           execute,
           request,
           '/api/sim2real/board-station/health',
         );
-        if (result.status >= 400) throw new Error(result.body?.message || '板端健康检查失败');
-        run.evidence.push({
-          label: 'X5 BoardAgent',
-          value: result.body?.agent?.state ?? result.body?.status ?? 'connected',
-        });
+        if (result.status >= 400)
+          throw new Error(safeAgentText(result.body?.message, '板端健康检查失败'));
+        addEvidence(
+          run,
+          'X5 BoardAgent',
+          result.body?.agent?.state ?? result.body?.status ?? 'connected',
+        );
       } else if (item.tool === 'deployment.preflight') {
         const modelId = resolveAgentModelId(run, overview);
         const deviceId = resolveAgentDeviceId(run, overview);
@@ -418,7 +778,8 @@ async function runAgent(
           },
           body: JSON.stringify({ modelId, deviceId, mode: 'preflight' }),
         });
-        if (created.status >= 400) throw new Error(created.body?.message || '部署计划创建失败');
+        if (created.status >= 400)
+          throw new Error(safeAgentText(created.body?.message, '部署计划创建失败'));
         const deploymentId = created.body?.deployment?.id;
         if (!deploymentId) throw new Error('部署计划创建未返回 ID');
         const result = await execute(
@@ -431,26 +792,28 @@ async function runAgent(
           (result.body?.error === 'SIM2REAL_PREFLIGHT_MOCK_ONLY' ||
             result.body?.preflight?.mock === true);
         if (result.status >= 400 && !mockDrill)
-          throw new Error(result.body?.message || '只读预检失败');
+          throw new Error(safeAgentText(result.body?.message, '只读预检失败'));
         const checks = result.body?.preflight?.checks ?? {};
         const checkSummary = Object.entries(checks)
           .filter(([, value]) => value != null)
           .slice(0, 4)
           .map(([key, value]) => `${key}=${String(value).slice(0, 40)}`)
           .join(' · ');
-        run.evidence.push({
-          label: mockDrill ? '只读预检（演练）' : '真机预检',
-          value: mockDrill
+        addEvidence(
+          run,
+          mockDrill ? '只读预检（演练）' : '真机预检',
+          mockDrill
             ? `协议验证通过 · 模拟 BoardAgent，非真机证据${checkSummary ? `（${checkSummary}）` : ''}`
             : result.body?.preflight?.passed
               ? '通过（未启用电机）'
               : '未通过',
-          href: `#deploy`,
-        });
-        run.evidence.push({
-          label: '部署计划',
-          value: `${deploymentId} · ${created.body?.deployment?.status ?? 'created'}`,
-        });
+          '#deploy',
+        );
+        addEvidence(
+          run,
+          '部署计划',
+          `${deploymentId} · ${created.body?.deployment?.status ?? 'created'}`,
+        );
         if (mockDrill) completionDetail = '协议演练完成 · 证据标记为模拟';
       } else if (item.tool === 'evaluation.summarize') {
         const latest =
@@ -464,41 +827,66 @@ async function runAgent(
           `/api/sim2real/runs/${encodeURIComponent(runId)}/evaluate`,
           { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' },
         );
-        if (evaluated.status >= 400) throw new Error(evaluated.body?.message || '评测执行失败');
+        if (evaluated.status >= 400)
+          throw new Error(safeAgentText(evaluated.body?.message, '评测执行失败'));
         const metrics = evaluated.body?.run?.metrics ?? {};
         const replay = evaluated.body?.evaluation?.replay ?? {};
         const percent = (value: unknown) =>
           Number.isFinite(Number(value)) ? `${Math.round(Number(value) * 100)}%` : '—';
-        run.evidence.push({
-          label: '评测运行',
-          value: `${runId} · ${latest?.modelId ?? '未知模型'}`,
-          href: `#records/${runId}`,
-        });
-        run.evidence.push({
-          label: '关键指标',
-          value: `reward ${Number(metrics.reward ?? NaN).toFixed(2)} · 成功率 ${percent(metrics.successRate)} · 跌倒率 ${percent(metrics.fallRate)} · 迭代 ${metrics.iterations ?? '—'}`,
-        });
-        run.evidence.push({
-          label: '遥测证据',
-          value: `${replay.sampleCount ?? 0} 个样本 · ${replay.fallCount ?? 0} 次跌倒 · ${replay.doneCount ?? 0} 次结束`,
-        });
+        addEvidence(
+          run,
+          '评测运行',
+          `${runId} · ${latest?.modelId ?? '未知模型'}`,
+          `#records/${runId}`,
+        );
+        addEvidence(
+          run,
+          '关键指标',
+          `reward ${Number(metrics.reward ?? NaN).toFixed(2)} · 成功率 ${percent(metrics.successRate)} · 跌倒率 ${percent(metrics.fallRate)} · 迭代 ${metrics.iterations ?? '—'}`,
+        );
+        addEvidence(
+          run,
+          '遥测证据',
+          `${replay.sampleCount ?? 0} 个样本 · ${replay.fallCount ?? 0} 次跌倒 · ${replay.doneCount ?? 0} 次结束`,
+        );
         const warnings = evaluated.body?.evaluation?.warnings ?? [];
-        if (warnings.length)
-          run.evidence.push({ label: '证据提示', value: String(warnings[0]).slice(0, 120) });
+        if (warnings.length) addEvidence(run, '证据提示', warnings[0]);
       } else if (item.tool === 'safety.gate') {
-        run.evidence.push({ label: '动作安全门', value: 'drive disabled · live policy 未执行' });
+        addEvidence(run, '动作安全门', 'drive disabled · live policy 未执行');
       } else if (item.tool === 'board.stop') {
-        await execute(request, '/api/sim2real/board-station/policy/stop', {
-          method: 'POST',
-          headers: { 'content-type': 'application/json' },
-          body: '{}',
-        });
-        await execute(request, '/api/sim2real/board-station/drive/stop', {
-          method: 'POST',
-          headers: { 'content-type': 'application/json' },
-          body: '{}',
-        });
-        run.evidence.push({ label: '停止确认', value: '策略与驱动停止请求已发送' });
+        let policyStop: Awaited<ReturnType<AgentRequestExecutor>> | null = null;
+        let driveStop: Awaited<ReturnType<AgentRequestExecutor>> | null = null;
+        try {
+          policyStop = await execute(request, '/api/sim2real/board-station/policy/stop', {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: '{}',
+          });
+        } catch {
+          // Always attempt the independent emergency drive stop below.
+        }
+        try {
+          driveStop = await execute(request, '/api/sim2real/board-station/drive/stop', {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: '{}',
+          });
+        } catch {
+          // The fixed failure below records that the safety state is unknown.
+        }
+        if (
+          !policyStop ||
+          !driveStop ||
+          policyStop.status < 200 ||
+          policyStop.status >= 300 ||
+          driveStop.status < 200 ||
+          driveStop.status >= 300 ||
+          policyStop.body?.ok === false ||
+          driveStop.body?.ok === false
+        ) {
+          throw new Error('停止命令未能同时确认策略与驱动状态');
+        }
+        addEvidence(run, '停止确认', '策略与驱动停止请求均已确认');
       }
       updateStep(run, item.id, 'completed', completionDetail ?? '完成');
       addEvent(run, 'tool_result', `${item.label} 完成`);
@@ -507,10 +895,10 @@ async function runAgent(
     addEvent(run, 'message', '任务完成，证据已写入本次 Agent 运行。');
   } catch (error) {
     const current = run.steps.find((item) => item.status === 'running');
-    if (current)
-      updateStep(run, current.id, 'failed', error instanceof Error ? error.message : String(error));
+    const detail = safeAgentText(error instanceof Error ? error.message : error, 'Agent 执行失败');
+    if (current) updateStep(run, current.id, 'failed', detail);
     run.status = 'failed';
-    addEvent(run, 'message', error instanceof Error ? error.message : String(error));
+    addEvent(run, 'message', detail);
   } finally {
     // Runs reach terminal status asynchronously, long after their entry was
     // inserted. Sweeping at settle time (not just insert time) is what keeps

@@ -193,6 +193,88 @@ describe('studio login relay routes', () => {
     delete process.env.RDK_SIM2REAL_STUDIO_SHELL_URL;
   });
 
+  it('uses an error redirect policy and bounds malformed or chunked shell responses', async () => {
+    process.env.RDK_SIM2REAL_STUDIO_SHELL_URL = 'https://studio.example';
+    let capturedInit: RequestInit | undefined;
+    const malformed = createStudioLoginRelayRouter({
+      fetchImpl: (async (_input, init) => {
+        capturedInit = init;
+        return new Response('{}', {
+          status: 200,
+          headers: { 'content-length': 'not-a-length' },
+        });
+      }) as typeof fetch,
+    });
+    const malformedResult = await callRelay(malformed, {
+      path: '/api/sso/login',
+      method: 'POST',
+      body: { method: 'account', userName: 'alice', password: 'pw' },
+    });
+    expect(malformedResult.status).toBe(502);
+    expect(capturedInit?.redirect).toBe('error');
+
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new Uint8Array(65_537));
+        controller.close();
+      },
+    });
+    const oversized = createStudioLoginRelayRouter({
+      fetchImpl: (async () => new Response(stream, { status: 200 })) as typeof fetch,
+    });
+    const oversizedResult = await callRelay(oversized, {
+      path: '/api/sso/login',
+      method: 'POST',
+      body: { method: 'account', userName: 'alice', password: 'pw' },
+    });
+    expect(oversizedResult.status).toBe(502);
+    delete process.env.RDK_SIM2REAL_STUDIO_SHELL_URL;
+  });
+
+  it('bounds and redacts upstream login error fields', async () => {
+    process.env.RDK_SIM2REAL_STUDIO_SHELL_URL = 'https://studio.example';
+    const upstream = new Response(
+      JSON.stringify({
+        ok: false,
+        error: 'bad code\nwith controls',
+        message: 'token=super-secret password=hunter2',
+      }),
+      { status: 409, headers: { 'content-type': 'application/json' } },
+    );
+    const router = createStudioLoginRelayRouter({ fetchImpl: fakeFetchSequence([upstream]) });
+    const result = await callRelay(router, {
+      path: '/api/sso/login',
+      method: 'POST',
+      body: { method: 'account', userName: 'alice', password: 'wrong' },
+    });
+    expect(result.status).toBe(409);
+    expect(String(result.body.message)).toContain('token=[redacted]');
+    expect(String(result.body.message)).toContain('password=[redacted]');
+    expect(String(result.body.message)).not.toContain('super-secret');
+    expect(String(result.body.message)).not.toContain('hunter2');
+    expect(result.body.error).toBe('SIM2REAL_LOGIN_REJECTED');
+    delete process.env.RDK_SIM2REAL_STUDIO_SHELL_URL;
+  });
+
+  it('rejects a shell base URL with a query before contacting it', async () => {
+    process.env.RDK_SIM2REAL_STUDIO_SHELL_URL = 'https://studio.example/?redirect=evil';
+    let calls = 0;
+    const router = createStudioLoginRelayRouter({
+      fetchImpl: (async () => {
+        calls += 1;
+        return studioLoginResponse();
+      }) as typeof fetch,
+    });
+    const result = await callRelay(router, {
+      path: '/api/sso/login',
+      method: 'POST',
+      body: { method: 'account', userName: 'alice', password: 'pw' },
+    });
+    expect(result.status).toBe(503);
+    expect(calls).toBe(0);
+    delete process.env.RDK_SIM2REAL_STUDIO_SHELL_URL;
+  });
+
   it('POST /api/sso/logout clears the session cookie', async () => {
     const router = createStudioLoginRelayRouter({ fetchImpl: fakeFetchSequence([]) });
     const result = await callRelay(router, { path: '/api/sso/logout', method: 'POST' });

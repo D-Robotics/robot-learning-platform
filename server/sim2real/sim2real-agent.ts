@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 
 export type Sim2RealAgentIntent =
+  | 'conversation'
   | 'full-loop'
   | 'gpu-train'
   | 'board-check'
@@ -48,18 +49,79 @@ export type Sim2RealAgentRun = Sim2RealAgentPlan & {
   updatedAt: string;
 };
 
+/** Extensible skill registry. Product integrations can add skills without
+ * changing the planner's dispatch code. */
+export type Sim2RealAgentSkill = {
+  intent: Sim2RealAgentIntent;
+  signals: RegExp[];
+  label: string;
+  tool: string;
+};
+
+export const SIM2REAL_AGENT_SKILLS: Sim2RealAgentSkill[] = [
+  {
+    intent: 'stop',
+    signals: [/(停止|急停|stop|halt)/i],
+    label: '停止板端策略与驱动',
+    tool: 'board.stop',
+  },
+  {
+    intent: 'full-loop',
+    signals: [/(完整|闭环|端云|真机|能力演示|全链路)/i],
+    label: '执行端云真机闭环',
+    tool: 'workflow.full-loop',
+  },
+  {
+    intent: 'evaluation',
+    signals: [/(评测|评估|证据|指标|对比|evaluate|evidence)/i],
+    label: '汇总评测证据',
+    tool: 'evaluation.summarize',
+  },
+  {
+    intent: 'gpu-train',
+    signals: [/(训练|gpu|cuda|冒烟|强化学习)/i],
+    label: '提交 GPU 训练',
+    tool: 'training.gpu',
+  },
+  {
+    intent: 'deploy-preflight',
+    signals: [/(部署|上板|加载模型|预检|preflight)/i],
+    label: '执行部署预检',
+    tool: 'deployment.preflight',
+  },
+  {
+    intent: 'simulate',
+    signals: [/(仿真|模拟器|录制|sim)/i],
+    label: '打开仿真器',
+    tool: 'simulator.open',
+  },
+  {
+    intent: 'board-check',
+    signals: [/(板卡|设备|相机|遥测|状态|健康|x5|rdk)/i],
+    label: '检查板端状态',
+    tool: 'board.health',
+  },
+];
+
 export function classifySim2RealAgentIntent(message: string): Sim2RealAgentIntent {
   const text = String(message ?? '')
     .trim()
     .toLowerCase();
-  if (!text) return 'board-check';
-  if (/(停止|急停|stop|halt)/i.test(text)) return 'stop';
-  if (/(完整|闭环|端云|真机|能力演示|全链路)/i.test(text)) return 'full-loop';
-  if (/(评测|评估|证据|指标|成功率|对比|evaluate|evidence)/i.test(text)) return 'evaluation';
-  if (/(训练|gpu|cuda|跑一轮|强化学习)/i.test(text)) return 'gpu-train';
-  if (/(部署|上板|加载模型|预检|preflight)/i.test(text)) return 'deploy-preflight';
-  if (/(仿真|模拟器|录制|sim)/i.test(text)) return 'simulate';
-  return 'board-check';
+  if (
+    !text ||
+    /^(你好|您好|嗨|hello|hi|在吗|谢谢|感谢|早上好|下午好|晚上好)(啊|呀|呢)?[!！。,.， ]*$/i.test(
+      text,
+    )
+  )
+    return 'conversation';
+  // Shell commands and credentials are not training intents. Never let a pasted
+  // ssh/curl command trigger GPU or board actions by keyword coincidence.
+  if (/\b(ssh|scp|curl|wget)\b|preferredauthentications|passwordauthentication/i.test(text))
+    return 'conversation';
+  const hit = SIM2REAL_AGENT_SKILLS.find((skill) =>
+    skill.signals.some((signal) => signal.test(text)),
+  );
+  return hit?.intent ?? 'conversation';
 }
 
 const step = (
@@ -80,6 +142,18 @@ export function createSim2RealAgentPlan(
   context?: Record<string, unknown>,
 ): Sim2RealAgentPlan {
   const intent = classifySim2RealAgentIntent(message);
+  const text = String(message ?? '').toLowerCase();
+  // Compose capabilities for natural requests such as “训练后评测并部署”.
+  // The executor already understands these tools; the planner only supplies
+  // the dependency ordered graph.
+  const wantsTrain =
+    /(开始|提交|运行|跑一轮|重新|启动).{0,8}(训练|gpu|cuda|冒烟|强化学习)|\b(gpu|cuda)\s*(训练)?/i.test(
+      text,
+    );
+  const wantsEval = /(评测|评估|指标|证据|evaluate|evidence)/i.test(text);
+  const wantsDeploy = /(部署|上板|加载模型|预检|preflight)/i.test(text);
+  const wantsBoard = /(板卡|设备|相机|遥测|健康|x5|rdk)/i.test(text);
+  const wantsSim = /(仿真|模拟器|录制|sim)/i.test(text);
   const modelId = String(context?.modelId ?? '').trim();
   const deviceId = String(context?.deviceId ?? '').trim();
   const computeResourceId = String(context?.computeResourceId ?? '').trim();
@@ -95,6 +169,12 @@ export function createSim2RealAgentPlan(
     Sim2RealAgentIntent,
     Omit<Sim2RealAgentPlan, 'id' | 'createdAt' | 'rationale'>
   > = {
+    conversation: {
+      intent,
+      goal: '回复用户并保持 Agent 待命',
+      safety: 'read-only',
+      steps: [step('reply', '回复用户消息', 'conversation.reply')],
+    },
     'full-loop': {
       intent,
       goal: `完成仿真 → GPU 训练 → X5 真机只读预检的演示闭环${common}`,
@@ -156,6 +236,35 @@ export function createSim2RealAgentPlan(
     },
   };
   const selected = plans[intent];
+  if (
+    intent !== 'conversation' &&
+    [wantsTrain, wantsEval, wantsDeploy, wantsBoard, wantsSim].filter(Boolean).length > 1
+  ) {
+    const composed: Sim2RealAgentStep[] = [
+      step('workspace', '读取当前工作区与模型契约', 'workspace.overview'),
+      ...(wantsSim ? [step('simulate', '打开 MicroDuck 仿真入口', 'simulator.open')] : []),
+      ...(wantsTrain ? [step('train', '提交 GPU smoke 训练', 'training.gpu')] : []),
+      ...(wantsEval ? [step('evaluate', '执行评测并汇总证据', 'evaluation.summarize')] : []),
+      ...(wantsBoard ? [step('board', '读取 X5 BoardAgent 健康状态', 'board.health')] : []),
+      ...(wantsDeploy
+        ? [step('preflight', '执行部署计划和只读 preflight', 'deployment.preflight')]
+        : []),
+      step('safety', '确认真机动作仍处于安全门控', 'safety.gate'),
+    ];
+    return {
+      id: randomUUID(),
+      createdAt: new Date().toISOString(),
+      intent: 'full-loop',
+      goal: `按依赖顺序完成：${composed.map((item) => item.label).join(' → ')}`,
+      safety: wantsDeploy ? 'guarded' : wantsTrain ? 'compute' : 'read-only',
+      steps: composed,
+      rationale:
+        '通过技能注册表组合用户明确提到的能力，并按工作区、训练、评测、设备、部署依赖排序。',
+      ...(modelId ? { modelId } : {}),
+      ...(deviceId ? { deviceId } : {}),
+      ...(computeResourceId ? { computeResourceId } : {}),
+    };
+  }
   return {
     id: randomUUID(),
     createdAt: new Date().toISOString(),

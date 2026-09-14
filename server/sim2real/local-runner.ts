@@ -1,3 +1,5 @@
+import { createHash } from 'node:crypto';
+
 import type {
   Sim2RealCheckpointRef,
   Sim2RealModelManifest,
@@ -5,10 +7,97 @@ import type {
 } from '../../shared/sim2real.js';
 import {
   isLocalRunnerConfigured as isRunnerConfigured,
+  normalizeRunnerUrl,
   requestRobogoTraining,
   requestRobogoTrainingStatus,
   type Sim2RealRobogoRunResult,
 } from './robogo-runner.js';
+import { Sim2RealError } from './sim2real-errors.js';
+
+const WEAK_RUNNER_TOKEN_RE =
+  /^(?:replace(?:[-_ ]?with)?(?:[-_ ].*)?|change(?:[-_ ]?me)?(?:[-_ ].*)?|changeme(?:[-_ ]?.*)?|example(?:[-_ ].*)?|placeholder(?:[-_ ].*)?|default(?:[-_ ]?secret)?(?:[-_ ].*)?|dummy(?:[-_ ].*)?|password(?:[-_ ].*)?|your[-_ ]?(?:secret|key)(?:[-_ ].*)?|secret(?:[-_ ].*)?)$/i;
+const REPEATED_RUNNER_TOKEN_RE = /^(.)\1{31,}$/s;
+
+function containsControlCharacter(value: string): boolean {
+  for (const character of value) {
+    const code = character.codePointAt(0) ?? 0;
+    if ((code >= 0 && code <= 0x1f) || code === 0x7f) return true;
+  }
+  return false;
+}
+
+/** Token syntax check shared by route-level credential validation. */
+export function localRunnerTokenFormatValid(value: unknown): boolean {
+  const token = String(value ?? '').trim();
+  return Buffer.byteLength(token, 'utf8') <= 4096 && !containsControlCharacter(token);
+}
+
+function loopbackHost(hostname: string): boolean {
+  const host = String(hostname || '')
+    .trim()
+    .toLowerCase()
+    .replace(/^\[|\]$/g, '');
+  return host === '127.0.0.1' || host === 'localhost' || host === '::1';
+}
+
+/** Match the local worker's exposed-endpoint token policy. */
+export function localRunnerTokenUsable(value: unknown): boolean {
+  const token = String(value ?? '').trim();
+  return (
+    Boolean(token) &&
+    Buffer.byteLength(token, 'utf8') >= 32 &&
+    Buffer.byteLength(token, 'utf8') <= 4096 &&
+    localRunnerTokenFormatValid(token) &&
+    !WEAK_RUNNER_TOKEN_RE.test(token) &&
+    !REPEATED_RUNNER_TOKEN_RE.test(token)
+  );
+}
+
+/**
+ * A loopback development worker may use a short fixture token (or no token),
+ * while production and every non-loopback endpoint must be authenticated.
+ * Keeping this check in the outbound adapter prevents a misconfigured server
+ * from sending a job to an exposed worker before the worker can reject it.
+ */
+export function localRunnerTokenRequired(rawUrl?: string): boolean {
+  const production =
+    String(process.env.NODE_ENV ?? '')
+      .trim()
+      .toLowerCase() === 'production' ||
+    String(process.env.RDK_SIM2REAL_DEPLOYMENT ?? '')
+      .trim()
+      .toLowerCase() === 'web-cloud' ||
+    String(process.env.RDK_STUDIO_DEPLOYMENT_PROFILE ?? '')
+      .trim()
+      .toLowerCase() === 'web-cloud';
+  if (production) return true;
+  try {
+    const parsed = new URL(
+      normalizeRunnerUrl(rawUrl ?? process.env.RDK_SIM2REAL_LOCAL_RUNNER_URL ?? '', {
+        localHttp: true,
+      }),
+    );
+    return !loopbackHost(parsed.hostname);
+  } catch {
+    return false;
+  }
+}
+
+/** Whether a configured endpoint is safe to advertise as executable. */
+export function localRunnerConnectionReady(rawUrl?: string, token?: string): boolean {
+  const url = rawUrl ?? process.env.RDK_SIM2REAL_LOCAL_RUNNER_URL ?? '';
+  if (!isRunnerConfigured(url)) return false;
+  const effectiveToken = String(token ?? process.env.RDK_SIM2REAL_LOCAL_RUNNER_TOKEN ?? '').trim();
+  return !localRunnerTokenRequired(url) || localRunnerTokenUsable(effectiveToken);
+}
+
+function assertLocalRunnerToken(rawUrl: string | undefined, token: string): void {
+  if (localRunnerTokenRequired(rawUrl) && !localRunnerTokenUsable(token)) {
+    throw new Sim2RealError('sim2real_runner_token_invalid', {
+      detail: '远程或生产 local runner 必须配置至少 32 字节随机 bearer token。',
+    });
+  }
+}
 
 /**
  * Local training uses the same narrow runner protocol as RoboGo, but points at
@@ -19,7 +108,7 @@ export function isLocalRunnerConfigured(raw?: string): boolean {
   return isRunnerConfigured(raw ?? process.env.RDK_SIM2REAL_LOCAL_RUNNER_URL ?? '');
 }
 
-export function requestLocalTraining(input: {
+export async function requestLocalTraining(input: {
   accountId: string;
   requestToken?: string | null;
   manifest: Sim2RealModelManifest;
@@ -35,6 +124,8 @@ export function requestLocalTraining(input: {
   const localToken = String(
     input.runnerToken ?? process.env.RDK_SIM2REAL_LOCAL_RUNNER_TOKEN ?? '',
   ).trim();
+  const runnerUrl = input.runnerUrl ?? process.env.RDK_SIM2REAL_LOCAL_RUNNER_URL ?? '';
+  assertLocalRunnerToken(runnerUrl, localToken);
   return requestRobogoTraining({
     ...input,
     // A local worker is an internal deployment boundary.  Never forward the
@@ -43,13 +134,13 @@ export function requestLocalTraining(input: {
     requestToken: localToken || undefined,
     // Pass an explicit empty value when the local endpoint is unset so the
     // generic adapter can never fall back to the RoboGo endpoint.
-    runnerUrl: input.runnerUrl ?? process.env.RDK_SIM2REAL_LOCAL_RUNNER_URL ?? '',
+    runnerUrl,
     allowPrivateHttp: true,
     allowEnvironmentToken: false,
   });
 }
 
-export function requestLocalTrainingStatus(input: {
+export async function requestLocalTrainingStatus(input: {
   accountId: string;
   requestToken?: string | null;
   externalRunId: string;
@@ -62,10 +153,12 @@ export function requestLocalTrainingStatus(input: {
   const localToken = String(
     input.runnerToken ?? process.env.RDK_SIM2REAL_LOCAL_RUNNER_TOKEN ?? '',
   ).trim();
+  const runnerUrl = input.runnerUrl ?? process.env.RDK_SIM2REAL_LOCAL_RUNNER_URL ?? '';
+  assertLocalRunnerToken(runnerUrl, localToken);
   return requestRobogoTrainingStatus({
     ...input,
     requestToken: localToken || undefined,
-    runnerUrl: input.runnerUrl ?? process.env.RDK_SIM2REAL_LOCAL_RUNNER_URL ?? '',
+    runnerUrl,
     allowPrivateHttp: true,
     allowEnvironmentToken: false,
   });
@@ -85,10 +178,15 @@ export async function fetchLocalRunArtifact(input: {
   runnerToken?: string;
   timeoutMs?: number;
 }): Promise<{ bytes: Buffer; sha256: string } | null> {
-  const runnerUrl = (input.runnerUrl ?? process.env.RDK_SIM2REAL_LOCAL_RUNNER_URL ?? '')
-    .trim()
-    .replace(/\/+$/, '');
-  if (!runnerUrl) return null;
+  let runnerUrl: string;
+  try {
+    runnerUrl = normalizeRunnerUrl(
+      input.runnerUrl ?? process.env.RDK_SIM2REAL_LOCAL_RUNNER_URL ?? '',
+      { localHttp: true },
+    );
+  } catch {
+    return null;
+  }
   const controller = new AbortController();
   const timer = setTimeout(
     () => controller.abort(),
@@ -98,6 +196,7 @@ export async function fetchLocalRunArtifact(input: {
     const token = String(
       input.runnerToken ?? process.env.RDK_SIM2REAL_LOCAL_RUNNER_TOKEN ?? '',
     ).trim();
+    if (localRunnerTokenRequired(runnerUrl) && !localRunnerTokenUsable(token)) return null;
     const response = await (input.fetchImpl ?? fetch)(
       `${runnerUrl}/runs/${encodeURIComponent(input.externalRunId)}/artifact`,
       {
@@ -135,6 +234,11 @@ export async function fetchLocalRunArtifact(input: {
       .trim()
       .toLowerCase();
     if (!/^[a-f0-9]{64}$/.test(sha256)) return null;
+    // Do not trust a worker-provided digest by itself.  The digest is part of
+    // the release evidence chain, so verify the downloaded bytes locally
+    // before handing them to BoardStation for staging.
+    const computedSha256 = createHash('sha256').update(bytes).digest('hex');
+    if (computedSha256 !== sha256) return null;
     return { bytes, sha256 };
   } catch {
     return null;

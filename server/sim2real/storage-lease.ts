@@ -32,6 +32,7 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 
 import { Sim2RealError } from './sim2real-errors.js';
+import { redactInternalError } from './http-helpers.js';
 
 export const STORAGE_LEASE_SCHEMA_VERSION = 1 as const;
 export const STORAGE_LEASE_FILE_NAME = 'writer-lease.json';
@@ -252,7 +253,7 @@ function writerConflictError(detail: string, cause?: unknown): Sim2RealError {
   // contract relied on by log alerts and `sim2RealErrorCode`); the actionable
   // Chinese explanation travels in the documented `detail` field and is also
   // logged so an operator sees it without a debugger.
-  console.error(`[sim2real] ${detail}`);
+  console.error(`[sim2real] ${redactInternalError(detail)}`);
   return new Sim2RealError('sim2real_storage_writer_conflict', {
     detail,
     ...(cause === undefined ? {} : { cause }),

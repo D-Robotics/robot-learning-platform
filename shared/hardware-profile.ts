@@ -33,7 +33,12 @@ export interface HardwareProfile {
     maxAngular: number;
     watchdogMs: number;
   };
-  runtime?: { decisionHz?: number; actionProjection?: 'paired' | 'identity' | string };
+  runtime?: {
+    decisionHz?: number;
+    actionProjection?: 'paired' | 'identity' | string;
+    /** Units emitted by a 2D twist policy head before safety clamping. */
+    actionOutput?: 'physical-twist' | 'normalized-twist' | string;
+  };
   safety?: { maxLinear?: number; maxAngular?: number; sensorStallSec?: number };
   policy: {
     observationAdapterId: string;
@@ -179,6 +184,17 @@ export function validateHardwareProfile(input: unknown): {
     errors.push('runtime.decisionHz must be 1..50');
   if (runtime.actionProjection !== undefined && !String(runtime.actionProjection).trim())
     errors.push('runtime.actionProjection is invalid');
+  if (
+    runtime.actionOutput !== undefined &&
+    !['physical-twist', 'normalized-twist'].includes(String(runtime.actionOutput).trim())
+  )
+    errors.push('runtime.actionOutput must be physical-twist or normalized-twist');
+  if (
+    actionSize === 2 &&
+    runtime.actionProjection === 'identity' &&
+    !['physical-twist', 'normalized-twist'].includes(String(runtime.actionOutput ?? '').trim())
+  )
+    errors.push('2D identity policies must declare runtime.actionOutput');
   const safety = asJsonObject(value.safety);
   if (
     safety.maxLinear !== undefined &&

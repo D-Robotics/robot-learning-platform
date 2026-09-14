@@ -285,6 +285,40 @@ describe('Sim2Real compatibility service', () => {
     }
   });
 
+  it('fails the local worker probe before network access when production auth is missing', async () => {
+    const previousUrl = process.env.RDK_SIM2REAL_LOCAL_RUNNER_URL;
+    const previousToken = process.env.RDK_SIM2REAL_LOCAL_RUNNER_TOKEN;
+    const previousNodeEnv = process.env.NODE_ENV;
+    const originalFetch = globalThis.fetch;
+    let calls = 0;
+    process.env.RDK_SIM2REAL_LOCAL_RUNNER_URL = 'http://127.0.0.1:19102/train';
+    process.env.NODE_ENV = 'production';
+    delete process.env.RDK_SIM2REAL_LOCAL_RUNNER_TOKEN;
+    globalThis.fetch = (async () => {
+      calls += 1;
+      return new Response('{}');
+    }) as typeof fetch;
+    try {
+      const result = await probeLocalTrainingWorker({
+        available: true,
+        reachable: false,
+        healthy: false,
+        message: 'configured',
+      });
+      expect(result).toMatchObject({ reachable: false, healthy: false });
+      expect(result.message).toContain('bearer token');
+      expect(calls).toBe(0);
+    } finally {
+      globalThis.fetch = originalFetch;
+      if (previousUrl === undefined) delete process.env.RDK_SIM2REAL_LOCAL_RUNNER_URL;
+      else process.env.RDK_SIM2REAL_LOCAL_RUNNER_URL = previousUrl;
+      if (previousToken === undefined) delete process.env.RDK_SIM2REAL_LOCAL_RUNNER_TOKEN;
+      else process.env.RDK_SIM2REAL_LOCAL_RUNNER_TOKEN = previousToken;
+      if (previousNodeEnv === undefined) delete process.env.NODE_ENV;
+      else process.env.NODE_ENV = previousNodeEnv;
+    }
+  });
+
   it('rejects health redirects and oversized payloads without calling them reachable and healthy', async () => {
     const previousUrl = process.env.RDK_SIM2REAL_LOCAL_RUNNER_URL;
     process.env.RDK_SIM2REAL_LOCAL_RUNNER_URL = 'http://127.0.0.1:19102/train';
@@ -312,6 +346,16 @@ describe('Sim2Real compatibility service', () => {
       });
       expect(oversized).toMatchObject({ reachable: true, healthy: false });
       expect(oversized.message).toContain('响应无效');
+
+      const malformed = await probeLocalTrainingWorker(configured, {
+        fetchImpl: (async () =>
+          new Response('{}', {
+            status: 200,
+            headers: { 'content-length': 'not-a-length' },
+          })) as typeof fetch,
+      });
+      expect(malformed).toMatchObject({ reachable: true, healthy: false });
+      expect(malformed.message).toContain('响应无效');
     } finally {
       if (previousUrl === undefined) delete process.env.RDK_SIM2REAL_LOCAL_RUNNER_URL;
       else process.env.RDK_SIM2REAL_LOCAL_RUNNER_URL = previousUrl;

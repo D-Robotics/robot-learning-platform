@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import type { Sim2RealDomainEvent, Sim2RealDomainEventType } from '../../shared/sim2real-events.js';
+import { redactInternalError } from './http-helpers.js';
 
 export type Sim2RealEventHandler = (event: Sim2RealDomainEvent) => void | Promise<void>;
 
@@ -82,7 +83,7 @@ export async function emitSim2RealEvent<T>(
         } catch (error) {
           console.error(
             `[sim2real] plugin ${plugin.id} failed for ${type}:`,
-            error instanceof Error ? error.message : error,
+            redactInternalError(error),
           );
         }
       });

@@ -1,4 +1,9 @@
-import { boardAgentUrl } from './standalone-adapters.js';
+import {
+  boardAgentTokenConfigured,
+  boardAgentTokenRequired,
+  boardAgentUrl,
+  safeStudioOrigin,
+} from './standalone-adapters.js';
 
 /**
  * Bounded HTTP client for the host-station (上位机) BoardAgent surface.
@@ -11,6 +16,50 @@ import { boardAgentUrl } from './standalone-adapters.js';
 
 const MAX_STATION_JSON_BYTES = 256 * 1024;
 const MAX_STATION_SNAPSHOT_BYTES = 180 * 1024;
+// A browser cookie header is forwarded only to the authenticated Studio
+// bridge. Keep the input bounded before it reaches fetch/undici so an
+// attacker cannot turn a station request into an unbounded header allocation.
+const MAX_STUDIO_BRIDGE_COOKIE_CHARS = 16_384;
+// An Origin is normally well below 256 characters. 512 leaves room for a
+// deployment subdomain while keeping malformed environment values bounded.
+const MAX_STUDIO_BRIDGE_ORIGIN_CHARS = 512;
+const DEFAULT_STUDIO_BRIDGE_ORIGIN = 'https://rdkstudio.d-robotics.cc';
+
+function safeStudioBridgeCookie(value: unknown): string | null {
+  if (typeof value !== 'string') return null;
+  const raw = value;
+  // Check controls before trim: String.prototype.trim() would otherwise hide
+  // a trailing CR/LF or tab supplied by a request header.
+  if (raw.length > MAX_STUDIO_BRIDGE_COOKIE_CHARS || /[\u0000-\u001f\u007f]/.test(raw)) {
+    return null;
+  }
+  const cookie = raw.trim();
+  return cookie ? cookie : null;
+}
+
+function safeStudioBridgeOrigin(value: unknown): string | null {
+  const raw = String(value ?? '');
+  // Validate the raw value before URL parsing. WHATWG URL intentionally
+  // strips some ASCII controls, which would make a malformed environment
+  // value look valid after normalization.
+  if (raw.length > MAX_STUDIO_BRIDGE_ORIGIN_CHARS || /[\u0000-\u001f\u007f]/.test(raw)) {
+    return null;
+  }
+  return safeStudioOrigin(raw);
+}
+
+function studioBridgeRequestOrigin(): string | null {
+  const configured =
+    process.env.RDK_SIM2REAL_PUBLIC_ORIGIN ?? process.env.RDK_STUDIO_WEB_PUBLIC_ORIGIN;
+  // Preserve the historical default when neither public-origin variable is
+  // configured (or is deliberately blank), while failing closed on a
+  // non-empty malformed value instead of forwarding it as an HTTP header.
+  const raw =
+    configured === undefined || configured.trim() === ''
+      ? DEFAULT_STUDIO_BRIDGE_ORIGIN
+      : configured;
+  return safeStudioBridgeOrigin(raw);
+}
 
 export interface StationAgentFetchOptions {
   method?: 'GET' | 'POST';
@@ -37,15 +86,21 @@ function loopbackBaseUrlOverride(value: string | undefined): string | null {
   if (!candidate) return null;
   try {
     const parsed = new URL(candidate);
+    const hostname = parsed.hostname.replace(/^\[|\]$/g, '').toLowerCase();
     if (parsed.protocol !== 'http:') return null;
+    if (!['127.0.0.1', 'localhost', '::1'].includes(hostname)) return null;
+    // A loopback URL is still an internal trust boundary. Reject userinfo so
+    // an environment typo cannot smuggle credentials into the agent request;
+    // return the canonical origin so callers never inherit a path/query.
     if (
-      parsed.hostname !== '127.0.0.1' &&
-      parsed.hostname !== 'localhost' &&
-      parsed.hostname !== '[::1]'
+      parsed.username ||
+      parsed.password ||
+      parsed.pathname !== '/' ||
+      parsed.search ||
+      parsed.hash
     )
       return null;
-    if (parsed.pathname !== '/' || parsed.search || parsed.hash) return null;
-    return candidate;
+    return parsed.origin;
   } catch {
     return null;
   }
@@ -73,14 +128,24 @@ async function cancelQuietly(response: Response): Promise<void> {
  * (the caller decides whether that is a 502 or a pass-through refusal).
  */
 async function boundedJsonObject(response: Response): Promise<Record<string, unknown> | null> {
-  const declaredLength = Number(response.headers.get('content-length') || 0);
-  if (Number.isFinite(declaredLength) && declaredLength > MAX_STATION_JSON_BYTES) {
-    await cancelQuietly(response);
-    return null;
+  const declaredHeader = response.headers.get('content-length');
+  if (declaredHeader !== null) {
+    const normalized = declaredHeader.trim();
+    const declaredLength = /^\d+$/.test(normalized) ? Number(normalized) : Number.NaN;
+    if (
+      !Number.isSafeInteger(declaredLength) ||
+      declaredLength < 0 ||
+      declaredLength > MAX_STATION_JSON_BYTES
+    ) {
+      await cancelQuietly(response);
+      return null;
+    }
   }
-  // A standard Fetch Response with a null body is an empty response; parse
-  // that as invalid JSON rather than calling a text() fallback, which an
-  // injected fetch shim could use to hand us an unbounded string.
+  /*
+   * Do not use response.text() here. A null body is an invalid station JSON
+   * response, and a custom fetch adapter must not bypass the byte budget with
+   * an unbounded text() implementation.
+   */
   if (!response.body) return null;
   const reader = response.body.getReader();
   const chunks: Uint8Array[] = [];
@@ -89,9 +154,10 @@ async function boundedJsonObject(response: Response): Promise<Record<string, unk
     for (;;) {
       const { done, value } = await reader.read();
       if (done) break;
+      if (!value) return null;
       total += value.byteLength;
       if (total > MAX_STATION_JSON_BYTES) {
-        await reader.cancel();
+        await reader.cancel().catch(() => undefined);
         return null;
       }
       chunks.push(value);
@@ -124,6 +190,14 @@ async function stationAgentJson(
 ): Promise<StationAgentJson | null> {
   const baseUrl = loopbackBaseUrlOverride(options.baseUrl) ?? boardAgentUrl();
   if (!/^\/[A-Za-z0-9._/-]+$/.test(pathname)) return null;
+  // A static BoardAgent is a service-to-service boundary.  In production or
+  // web-cloud mode an omitted/weak bearer must make the call unavailable
+  // rather than silently downgrading to an unauthenticated agent.  The
+  // Studio-bridge fallback below remains cookie-authenticated and is allowed
+  // when no direct endpoint is ready.
+  if (baseUrl && boardAgentTokenRequired(Boolean(baseUrl)) && !boardAgentTokenConfigured()) {
+    return null;
+  }
   // 15s default for state reads; policy staging moves a whole base64'd ONNX
   // through one request and legitimately needs the higher ceiling.
   const isPolicyUpload = pathname === '/v1/station/policy/upload';
@@ -184,15 +258,10 @@ function shellQuote(value: string): string {
 }
 
 function studioBridgeConfig(): { origin: string; deviceId: string; agentPort: number } | null {
-  const origin = String(process.env.RDK_SIM2REAL_STUDIO_EXEC_ORIGIN ?? '')
-    .trim()
-    .replace(/\/+$/, '');
+  const origin = safeStudioBridgeOrigin(process.env.RDK_SIM2REAL_STUDIO_EXEC_ORIGIN);
   const deviceId = String(process.env.RDK_SIM2REAL_STUDIO_DEVICE_ID ?? '').trim();
   const agentPort = Number(process.env.RDK_SIM2REAL_STUDIO_AGENT_PORT ?? 19100);
-  if (
-    !/^https?:\/\/[^\s/]+(?::\d+)?$/.test(origin) ||
-    (deviceId && !/^[A-Za-z0-9._:-]{1,160}$/.test(deviceId))
-  ) {
+  if (!origin || (deviceId && !/^[A-Za-z0-9._:-]{1,160}$/.test(deviceId))) {
     return null;
   }
   if (!Number.isSafeInteger(agentPort) || agentPort < 1 || agentPort > 65535) return null;
@@ -242,7 +311,9 @@ async function studioBridgeAgentJson(
 ): Promise<StationAgentJson | null> {
   const config = studioBridgeConfig();
   const deviceId = String(options.deviceId || config?.deviceId || '').trim();
-  if (!config || !deviceId || !options.cookieHeader) return null;
+  const cookie = safeStudioBridgeCookie(options.cookieHeader);
+  const requestOrigin = studioBridgeRequestOrigin();
+  if (!config || !deviceId || !cookie || !requestOrigin) return null;
   const command = studioBridgeCommand(pathname, options, token, config.agentPort);
   if (!command) return null;
   const controller = new AbortController();
@@ -255,12 +326,8 @@ async function studioBridgeAgentJson(
         headers: {
           accept: 'application/json',
           'content-type': 'application/json',
-          cookie: options.cookieHeader,
-          origin: String(
-            process.env.RDK_SIM2REAL_PUBLIC_ORIGIN ??
-              process.env.RDK_STUDIO_WEB_PUBLIC_ORIGIN ??
-              'https://rdkstudio.d-robotics.cc',
-          ),
+          cookie,
+          origin: requestOrigin,
         },
         body: JSON.stringify({ command }),
         signal: controller.signal,
@@ -299,7 +366,9 @@ async function studioBridgeAgentSnapshot(
 ): Promise<Uint8Array | null> {
   const config = studioBridgeConfig();
   const deviceId = String(options.deviceId || config?.deviceId || '').trim();
-  if (!config || !deviceId || !options.cookieHeader) return null;
+  const cookie = safeStudioBridgeCookie(options.cookieHeader);
+  const requestOrigin = studioBridgeRequestOrigin();
+  if (!config || !deviceId || !cookie || !requestOrigin) return null;
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
@@ -310,12 +379,8 @@ async function studioBridgeAgentSnapshot(
         headers: {
           accept: 'application/json',
           'content-type': 'application/json',
-          cookie: options.cookieHeader,
-          origin: String(
-            process.env.RDK_SIM2REAL_PUBLIC_ORIGIN ??
-              process.env.RDK_STUDIO_WEB_PUBLIC_ORIGIN ??
-              'https://rdkstudio.d-robotics.cc',
-          ),
+          cookie,
+          origin: requestOrigin,
         },
         body: JSON.stringify({ command: studioBridgeSnapshotCommand(token, config.agentPort) }),
         signal: controller.signal,
@@ -384,9 +449,14 @@ export async function stationAgentFetchStream(
     lifetimeMs?: number;
     cookieHeader?: string;
     deviceId?: string;
+    /** Loopback tunnel URL for a web-managed per-device connection. */
+    baseUrl?: string;
   } = {},
 ): Promise<ReadableStream<Uint8Array>> {
-  const baseUrl = boardAgentUrl();
+  // A connected device can have its own SSH loopback tunnel. Prefer that
+  // explicitly supplied URL, while retaining the process-wide BoardAgent
+  // endpoint for legacy deployments and the Studio bridge fallback.
+  const baseUrl = loopbackBaseUrlOverride(options.baseUrl) ?? boardAgentUrl();
   if (!/^\/[A-Za-z0-9._/-]+$/.test(pathname)) {
     throw new Error('invalid station stream path');
   }
@@ -396,10 +466,14 @@ export async function stationAgentFetchStream(
     60 * 60 * 1000,
   );
   const token = String(process.env.RDK_SIM2REAL_BOARD_AGENT_TOKEN ?? '').trim();
+  const bridgeCookie = safeStudioBridgeCookie(options.cookieHeader);
+  const bridgeConfig = !baseUrl ? studioBridgeConfig() : null;
+  const bridgeOrigin = bridgeConfig ? studioBridgeRequestOrigin() : null;
   if (
     !baseUrl &&
-    studioBridgeConfig() &&
-    options.cookieHeader &&
+    bridgeConfig &&
+    bridgeOrigin &&
+    bridgeCookie &&
     pathname === '/v1/station/status/stream'
   ) {
     let closed = false;
@@ -412,7 +486,7 @@ export async function stationAgentFetchStream(
           while (!closed && Date.now() < deadline) {
             const payload = await stationAgentFetch('/v1/station/status', {
               timeoutMs,
-              cookieHeader: options.cookieHeader,
+              cookieHeader: bridgeCookie,
               deviceId: options.deviceId,
             });
             if (!payload) break;
@@ -437,8 +511,9 @@ export async function stationAgentFetchStream(
   }
   if (
     !baseUrl &&
-    studioBridgeConfig() &&
-    options.cookieHeader &&
+    bridgeConfig &&
+    bridgeOrigin &&
+    bridgeCookie &&
     pathname === '/v1/station/camera.mjpeg'
   ) {
     let closed = false;
@@ -450,7 +525,11 @@ export async function stationAgentFetchStream(
         const deadline = Date.now() + lifetimeMs;
         try {
           while (!closed && Date.now() < deadline) {
-            const frame = await studioBridgeAgentSnapshot(options, token, timeoutMs);
+            const frame = await studioBridgeAgentSnapshot(
+              { ...options, cookieHeader: bridgeCookie },
+              token,
+              timeoutMs,
+            );
             if (!frame) break;
             const header = encoder.encode(
               `--${boundary}\r\ncontent-type: image/jpeg\r\ncontent-length: ${frame.byteLength}\r\n\r\n`,
@@ -477,6 +556,9 @@ export async function stationAgentFetchStream(
     return stream;
   }
   if (!baseUrl) throw new Error('station agent unavailable');
+  if (boardAgentTokenRequired(Boolean(baseUrl)) && !boardAgentTokenConfigured()) {
+    throw new Error('station agent credentials unavailable');
+  }
   const controller = new AbortController();
   const connectTimer = setTimeout(() => controller.abort(), timeoutMs);
   let body: ReadableStream<Uint8Array> | null = null;

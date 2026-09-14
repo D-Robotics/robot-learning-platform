@@ -65,6 +65,17 @@ describe('hardware profile contract', () => {
     expect(result.errors).toContain('runtime.decisionHz must be 1..50');
   });
 
+  it('rejects an undeclared twist output unit', () => {
+    const result = validateHardwareProfile({
+      ...validProfile,
+      runtime: { actionOutput: 'raw-policy-values' },
+    });
+    expect(result.valid).toBe(false);
+    expect(result.errors).toContain(
+      'runtime.actionOutput must be physical-twist or normalized-twist',
+    );
+  });
+
   it('keeps synthetic profile provenance explicit', () => {
     const result = validateHardwareProfile({
       ...validProfile,

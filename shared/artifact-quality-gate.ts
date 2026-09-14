@@ -32,6 +32,8 @@ export interface TaskPackEvalReport {
     envelopes?: Record<string, EnvelopeMetrics>;
     meanReward?: unknown;
     episodesPerEnvelope?: unknown;
+    /** Confidence used by the engine when it computed CI bounds. */
+    confidenceLevel?: unknown;
   };
   seed?: number;
 }
@@ -66,7 +68,16 @@ export function wilsonBounds(
   total: number,
   confidence = 0.95,
 ): { low: number; high: number } | null {
-  if (!Number.isFinite(successes) || !Number.isFinite(total) || total <= 0) return null;
+  if (
+    !Number.isFinite(successes) ||
+    !Number.isFinite(total) ||
+    !Number.isSafeInteger(successes) ||
+    !Number.isSafeInteger(total) ||
+    total <= 0 ||
+    successes < 0 ||
+    successes > total
+  )
+    return null;
   const z = WILSON_Z[Math.round(confidence * 100) / 100];
   if (!z) return null;
   const p = successes / total;
@@ -100,6 +111,10 @@ export function validateTaskPackEvalForRelease(v: TaskPackGateInput): {
   gateOn: 'point' | 'ciLowerBound';
 } {
   const errors: string[] = [];
+  const boundedRate = (value: unknown): number | null =>
+    typeof value === 'number' && Number.isFinite(value) && value >= 0 && value <= 1 ? value : null;
+  const validEpisodes = (value: unknown): number | null =>
+    typeof value === 'number' && Number.isSafeInteger(value) && value >= 1 ? value : null;
   const report = v.report;
   if (!report || typeof report !== 'object') {
     errors.push(
@@ -125,18 +140,38 @@ export function validateTaskPackEvalForRelease(v: TaskPackGateInput): {
   if (gateOnRaw !== 'point' && gateOnRaw !== 'ciLowerBound')
     errors.push(`unknown gateOn ${gateOnRaw}`);
   const gateOn: 'point' | 'ciLowerBound' = gateOnRaw === 'ciLowerBound' ? 'ciLowerBound' : 'point';
-  const minSuccessRate =
-    typeof criteria.minSuccessRate === 'number' ? criteria.minSuccessRate : null;
-  const maxCollisionRate =
-    typeof criteria.maxCollisionRate === 'number' ? criteria.maxCollisionRate : null;
+  // The engine records the confidence level alongside its bounds.  Older
+  // reports predate that field and are interpreted as the historical 95%
+  // default; a present but unsupported value fails closed rather than being
+  // silently recomputed at a different confidence level.
+  const confidenceRaw = report.trained?.confidenceLevel;
+  const confidence = confidenceRaw === undefined ? 0.95 : Number(confidenceRaw);
+  const supportedConfidence = [0.9, 0.95, 0.99].includes(confidence);
+  if (confidenceRaw !== undefined && !supportedConfidence)
+    errors.push('confidenceLevel must be 0.9, 0.95, or 0.99');
+  const minSuccessRate = boundedRate(criteria.minSuccessRate);
+  const maxCollisionRate = boundedRate(criteria.maxCollisionRate);
+  if (criteria.minSuccessRate !== undefined && minSuccessRate === null)
+    errors.push('minSuccessRate must be a finite rate between 0 and 1');
+  if (criteria.maxCollisionRate !== undefined && maxCollisionRate === null)
+    errors.push('maxCollisionRate must be a finite rate between 0 and 1');
   const nominal = report.trained?.envelopes?.nominal ?? null;
-  const successRate = typeof nominal?.successRate === 'number' ? nominal.successRate : null;
-  const collisionRate = typeof nominal?.collisionRate === 'number' ? nominal.collisionRate : null;
-  const successRateCiLow =
-    typeof nominal?.successRateCiLow === 'number' ? nominal.successRateCiLow : null;
-  const collisionRateCiHigh =
-    typeof nominal?.collisionRateCiHigh === 'number' ? nominal.collisionRateCiHigh : null;
-  const episodes = typeof nominal?.episodes === 'number' ? nominal.episodes : null;
+  const successRate = boundedRate(nominal?.successRate);
+  const collisionRate = boundedRate(nominal?.collisionRate);
+  const successRateCiLow = boundedRate(nominal?.successRateCiLow);
+  const collisionRateCiHigh = boundedRate(nominal?.collisionRateCiHigh);
+  const episodes = validEpisodes(nominal?.episodes);
+  for (const [label, raw, normalized] of [
+    ['successRate', nominal?.successRate, successRate],
+    ['collisionRate', nominal?.collisionRate, collisionRate],
+    ['successRateCiLow', nominal?.successRateCiLow, successRateCiLow],
+    ['collisionRateCiHigh', nominal?.collisionRateCiHigh, collisionRateCiHigh],
+  ] as const) {
+    if (raw !== undefined && normalized === null)
+      errors.push(`${label} must be a finite rate between 0 and 1`);
+  }
+  if (nominal?.episodes !== undefined && episodes === null)
+    errors.push('nominal episodes must be a positive safe integer');
   if (gateOn === 'ciLowerBound') {
     if (successRateCiLow === null || collisionRateCiHigh === null) {
       errors.push(
@@ -147,14 +182,18 @@ export function validateTaskPackEvalForRelease(v: TaskPackGateInput): {
       // numbers: a corrupted or hand-edited report cannot pass silently.
       const successes = Math.round(successRate * episodes);
       const collisions = collisionRate === null ? null : Math.round(collisionRate * episodes);
-      const successBounds = wilsonBounds(successes, episodes, 0.95);
+      const successBounds = supportedConfidence
+        ? wilsonBounds(successes, episodes, confidence)
+        : null;
       if (successBounds && Math.abs(successBounds.low - successRateCiLow) > 0.01) {
         errors.push(
           `successRate CI low mismatch: recomputed ${successBounds.low.toFixed(4)} vs reported ${successRateCiLow.toFixed(4)}`,
         );
       }
       if (collisions !== null) {
-        const collisionBounds = wilsonBounds(collisions, episodes, 0.95);
+        const collisionBounds = supportedConfidence
+          ? wilsonBounds(collisions, episodes, confidence)
+          : null;
         if (collisionBounds && Math.abs(collisionBounds.high - collisionRateCiHigh) > 0.01) {
           errors.push(
             `collisionRate CI high mismatch: recomputed ${collisionBounds.high.toFixed(4)} vs reported ${collisionRateCiHigh.toFixed(4)}`,

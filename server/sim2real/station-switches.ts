@@ -1,7 +1,20 @@
-import { existsSync, readFileSync, writeFileSync, renameSync, mkdirSync } from 'node:fs';
+import {
+  closeSync,
+  constants as fsConstants,
+  existsSync,
+  fstatSync,
+  lstatSync,
+  mkdirSync,
+  openSync,
+  readFileSync,
+  renameSync,
+  unlinkSync,
+  writeFileSync,
+} from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import path from 'node:path';
 
+import { Sim2RealError } from './sim2real-errors.js';
 import { resolveDataDir } from './standalone-adapters.js';
 
 /**
@@ -33,17 +46,99 @@ interface StoredSwitches {
   policy?: boolean;
 }
 
+const MAX_SWITCHES_FILE_BYTES = 16 * 1024;
+const NO_FOLLOW = Number(fsConstants.O_NOFOLLOW ?? 0);
+// Avoid blocking forever if an override path is replaced with a FIFO before
+// the regular-file check. O_NONBLOCK has no effect on normal files.
+const NO_BLOCK = Number(fsConstants.O_NONBLOCK ?? 0);
+
+function storageUnavailable(detail: string, cause?: unknown): Sim2RealError {
+  return new Sim2RealError('sim2real_storage_unavailable', {
+    detail,
+    ...(cause === undefined ? {} : { cause }),
+  });
+}
+
 function readOverrides(): StoredSwitches {
+  const file = switchesFile();
+  let descriptor: number | undefined;
   try {
-    const parsed: unknown = JSON.parse(readFileSync(switchesFile(), 'utf8'));
-    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return {};
+    // O_NOFOLLOW prevents a symlinked override from changing the effective
+    // safety state.  Keep an lstat fallback for a platform whose Node runtime
+    // does not expose the flag; supported Unix hosts take the race-resistant
+    // descriptor path below.
+    if (!NO_FOLLOW) {
+      const linkStat = lstatSync(file);
+      if (linkStat.isSymbolicLink() || !linkStat.isFile()) {
+        throw new Error('station switch registry is not a regular file');
+      }
+    }
+    descriptor = openSync(file, fsConstants.O_RDONLY | NO_FOLLOW | NO_BLOCK);
+    const stat = fstatSync(descriptor);
+    if (!stat.isFile()) throw new Error('station switch registry is not a regular file');
+    if ((stat.mode & 0o077) !== 0 || (stat.mode & 0o400) === 0) {
+      throw new Error('station switch registry permissions are unsafe');
+    }
+    if (stat.size > MAX_SWITCHES_FILE_BYTES) {
+      throw new Error('station switch registry exceeds the size limit');
+    }
+    const parsed: unknown = JSON.parse(readFileSync(descriptor, 'utf8'));
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+      throw new Error('station switch registry shape is invalid');
+    }
     const source = parsed as Record<string, unknown>;
+    const unknownKeys = Object.keys(source).filter((key) => key !== 'drive' && key !== 'policy');
+    if (unknownKeys.length) throw new Error('station switch registry contains unknown keys');
+    if (
+      (source.drive !== undefined && typeof source.drive !== 'boolean') ||
+      (source.policy !== undefined && typeof source.policy !== 'boolean')
+    ) {
+      throw new Error('station switch registry contains a non-boolean override');
+    }
     return {
-      drive: source.drive === true || source.drive === false ? source.drive : undefined,
-      policy: source.policy === true || source.policy === false ? source.policy : undefined,
+      drive: typeof source.drive === 'boolean' ? source.drive : undefined,
+      policy: typeof source.policy === 'boolean' ? source.policy : undefined,
     };
-  } catch {
-    return {};
+  } catch (error) {
+    // A missing override file is the documented state in which env defaults
+    // apply. Any other failure is different: falling back to an env value can
+    // accidentally turn motion on after the durable state became corrupt.
+    if ((error as NodeJS.ErrnoException)?.code === 'ENOENT') return {};
+    if (error instanceof Sim2RealError) throw error;
+    throw storageUnavailable(
+      'station switch registry is unreadable; refusing to infer an enabled motion state',
+      error,
+    );
+  } finally {
+    if (descriptor !== undefined) {
+      try {
+        closeSync(descriptor);
+      } catch {
+        /* Preserve the read result/error; a close failure never enables a switch. */
+      }
+    }
+  }
+}
+
+function writeOverrides(next: StoredSwitches): void {
+  const file = switchesFile();
+  const temporary = `${file}.${randomUUID()}.tmp`;
+  try {
+    const dir = resolveDataDir();
+    if (!existsSync(dir)) mkdirSync(dir, { recursive: true, mode: 0o700 });
+    writeFileSync(temporary, JSON.stringify(next, null, 2), { mode: 0o600, flag: 'wx' });
+    renameSync(temporary, file);
+  } catch (error) {
+    try {
+      unlinkSync(temporary);
+    } catch {
+      /* best-effort cleanup; preserve the original write failure */
+    }
+    if (error instanceof Sim2RealError) throw error;
+    throw storageUnavailable(
+      'station switch registry could not be persisted; refusing to report a successful toggle',
+      error,
+    );
   }
 }
 
@@ -57,11 +152,7 @@ export function stationSwitchEnabled(name: StationSwitch): boolean {
 /** Persist an explicit override for one switch. */
 export function setStationSwitch(name: StationSwitch, enabled: boolean): void {
   const next = { ...readOverrides(), [name]: enabled === true };
-  const dir = resolveDataDir();
-  if (!existsSync(dir)) mkdirSync(dir, { recursive: true, mode: 0o700 });
-  const temporary = `${switchesFile()}.${randomUUID()}.tmp`;
-  writeFileSync(temporary, JSON.stringify(next, null, 2), { mode: 0o600 });
-  renameSync(temporary, switchesFile());
+  writeOverrides(next);
 }
 
 /** Drop one switch's override, falling back to the env default. */
@@ -69,9 +160,5 @@ export function clearStationSwitch(name: StationSwitch): void {
   const current = readOverrides();
   if (!(name in current)) return;
   delete current[name];
-  const dir = resolveDataDir();
-  if (!existsSync(dir)) mkdirSync(dir, { recursive: true, mode: 0o700 });
-  const temporary = `${switchesFile()}.${randomUUID()}.tmp`;
-  writeFileSync(temporary, JSON.stringify(current, null, 2), { mode: 0o600 });
-  renameSync(temporary, switchesFile());
+  writeOverrides(current);
 }

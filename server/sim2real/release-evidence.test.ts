@@ -34,6 +34,7 @@ function run(overrides: Partial<Sim2RealRunRecord> = {}): Sim2RealRunRecord {
         sampleCount: 200,
         durationSeconds: 20,
         source: 'board-agent',
+        attested: true,
         chunkCount: 1,
         droppedCount: 0,
         doneCount: 0,

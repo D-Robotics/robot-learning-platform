@@ -19,6 +19,7 @@ export const TRUSTED_PROXY_HEADERS = Object.freeze({
   signature: 'x-rdk-auth-signature',
   displayName: 'x-rdk-display-name',
   email: 'x-rdk-email',
+  roles: 'x-rdk-roles',
   runnerToken: 'x-rdk-robogo-token',
 });
 
@@ -68,6 +69,32 @@ function requestPath(request: Request): string {
 
 /** Canonical string that the SSO gateway must sign with HMAC-SHA256. */
 export function trustedProxyCanonicalMessage(input: {
+  method: string;
+  path: string;
+  accountId: string;
+  timestamp: string;
+  runnerToken?: string;
+  displayName?: string;
+  email?: string;
+  roles?: string;
+}): string {
+  const parts = [
+    String(input.timestamp).trim(),
+    String(input.method || 'GET').toUpperCase(),
+    String(input.path || '/'),
+    String(input.accountId),
+    String(input.runnerToken || ''),
+    String(input.displayName || ''),
+    String(input.email || ''),
+  ];
+  // Preserve the original seven-line wire format when the gateway does not
+  // send roles. Role-aware gateways opt into the eighth signed line.
+  if (input.roles !== undefined) parts.push(String(input.roles || ''));
+  return parts.join('\n');
+}
+
+/** Canonical form used by gateways before role claims were introduced. */
+function trustedProxyLegacyCanonicalMessage(input: {
   method: string;
   path: string;
   accountId: string;
@@ -143,6 +170,9 @@ function verifyRequest(
   );
   const displayName = safeHeader(header(request, TRUSTED_PROXY_HEADERS.displayName), 120);
   const email = safeHeader(header(request, TRUSTED_PROXY_HEADERS.email), 240);
+  const rawRolesHeader = request.headers[TRUSTED_PROXY_HEADERS.roles];
+  const rolesHeaderPresent = rawRolesHeader !== undefined;
+  const roles = safeHeader(header(request, TRUSTED_PROXY_HEADERS.roles), 512);
   const message = trustedProxyCanonicalMessage({
     method: request.method,
     path: requestPath(request),
@@ -151,14 +181,49 @@ function verifyRequest(
     runnerToken,
     displayName,
     email,
+    ...(rolesHeaderPresent ? { roles } : {}),
   });
   const expected = createHmac('sha256', secret).update(message).digest();
-  if (expected.length !== signature.length || !timingSafeEqual(expected, signature)) return null;
+  let signatureValid = expected.length === signature.length && timingSafeEqual(expected, signature);
+  // Accept signatures from older gateways when no role claim is present. A
+  // role header itself is only accepted when signed by the new canonical
+  // format, so clients cannot self-escalate by adding a plain header.
+  if (!signatureValid && !rolesHeaderPresent) {
+    const legacy = createHmac('sha256', secret)
+      .update(
+        trustedProxyLegacyCanonicalMessage({
+          method: request.method,
+          path: requestPath(request),
+          accountId,
+          timestamp,
+          runnerToken,
+          displayName,
+          email,
+        }),
+      )
+      .digest();
+    signatureValid = legacy.length === signature.length && timingSafeEqual(legacy, signature);
+  }
+  if (!signatureValid) return null;
+  const normalizedRoles = roles
+    ? [
+        ...new Set(
+          roles
+            .split(',')
+            .map((role) => role.trim().toLowerCase())
+            .filter(Boolean),
+        ),
+      ].slice(0, 16)
+    : [];
   return {
     principal: {
       accountId,
       ...(displayName ? { displayName } : {}),
       ...(email ? { email } : {}),
+      // Preserve an explicitly supplied role claim even when all values are
+      // unknown. The RBAC layer then fails closed instead of treating the
+      // malformed claim as a legacy, fully trusted principal.
+      ...(rolesHeaderPresent ? { roles: normalizedRoles } : {}),
     },
     ...(runnerToken ? { runnerToken } : {}),
   };

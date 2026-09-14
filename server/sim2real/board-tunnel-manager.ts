@@ -1,7 +1,21 @@
 import { spawn, spawnSync, type ChildProcess } from 'node:child_process';
-import { existsSync, mkdirSync, readFileSync, writeFileSync, renameSync } from 'node:fs';
+import {
+  closeSync,
+  constants as fsConstants,
+  existsSync,
+  fstatSync,
+  lstatSync,
+  mkdirSync,
+  openSync,
+  readFileSync,
+  renameSync,
+  unlinkSync,
+  writeFileSync,
+} from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import path from 'node:path';
+
+import { Sim2RealError } from './sim2real-errors.js';
 
 /**
  * Data directory resolver is injected to avoid a circular import with
@@ -46,6 +60,8 @@ export interface DeviceConnectionRecord {
   lastCheckedAt: string | null;
   lastCheckOk: boolean | null;
   lastCheckMessage: string;
+  profile?: string;
+  transport?: string;
 }
 
 interface StoredConnection extends DeviceConnectionRecord {
@@ -55,18 +71,60 @@ interface StoredConnection extends DeviceConnectionRecord {
 const TUNNEL_SSH_CONNECT_TIMEOUT_SEC = 8;
 const MAX_LOCAL_PORT = 65_530;
 const MIN_LOCAL_PORT = 20_000;
+// A connection registry is deliberately bounded (at most 50 records per
+// owner and 500 per instance), but the read path still needs a byte bound.
+// Without one, an operator or a compromised volume could make every list
+// request allocate an unbounded string before the JSON parser gets a chance to
+// reject it.
+const MAX_CONNECTION_RECORDS = 500;
+const MAX_CONNECTIONS_FILE_BYTES = 1 * 1024 * 1024;
+const MAX_HEALTH_RESPONSE_BYTES = 32 * 1024;
+const NO_FOLLOW = Number(fsConstants.O_NOFOLLOW ?? 0);
+// Keep a FIFO replacement from blocking the synchronous registry read before
+// fstat can reject it. O_NONBLOCK is harmless for regular files.
+const NO_BLOCK = Number(fsConstants.O_NONBLOCK ?? 0);
+const STORED_CONNECTION_KEYS = new Set([
+  'id',
+  'label',
+  'host',
+  'port',
+  'username',
+  'agentPort',
+  'localPort',
+  'createdAt',
+  'lastCheckedAt',
+  'lastCheckOk',
+  'lastCheckMessage',
+  'profile',
+  'transport',
+  'ownerKey',
+]);
 const portRange = () =>
   MIN_LOCAL_PORT + Math.floor(Math.random() * (MAX_LOCAL_PORT - MIN_LOCAL_PORT));
 
 interface TunnelState {
+  connectionId: string;
   process: ChildProcess;
   localPort: number;
   startedAt: number;
   lastExit?: { code: number | null; signal: NodeJS.Signals | null };
 }
 
+type DeviceConnectionTunnelResult = { url: string; probe: TunnelProbeResult } | { error: string };
+
 const tunnels = new Map<string, TunnelState>();
-let connectionWriteQueue: Promise<unknown> = Promise.resolve();
+// A browser can issue duplicate connect requests (double-click, retry after a
+// slow SSH handshake, or two tabs).  Keep one in-flight operation per owner
+// and connection id so a second request cannot replace the first ChildProcess
+// in `tunnels` and leave an orphaned SSH process behind.
+const openingTunnels = new Map<string, Promise<DeviceConnectionTunnelResult>>();
+// All connection mutations must include their read-modify-write sequence in
+// this queue.  Queuing only the final write is insufficient: two concurrent
+// creates can both read the same old array and the later write then erases the
+// first record.  The queue is process-local, matching the single web process
+// that owns the tunnel map; the atomic rename below keeps individual reads
+// crash-safe as well.
+let connectionWriteQueue: Promise<void> = Promise.resolve();
 
 function connectionsFile(): string {
   return path.join(resolveDataDirImpl(), 'device-connections.json');
@@ -100,55 +158,251 @@ function isSshAvailable(): boolean {
   return probe.status === 0 || probe.error === undefined;
 }
 
+function storageUnavailable(detail: string, cause?: unknown): Sim2RealError {
+  return new Sim2RealError('sim2real_storage_unavailable', {
+    detail,
+    ...(cause === undefined ? {} : { cause }),
+  });
+}
+
+function hasControlCharacters(value: string): boolean {
+  for (let index = 0; index < value.length; index += 1) {
+    const code = value.charCodeAt(index);
+    if (code <= 0x1f || code === 0x7f) return true;
+  }
+  return false;
+}
+
+function recordPort(item: Record<string, unknown>, key: string, fallback: number, min = 0): number {
+  const value = item[key];
+  if (value === undefined) return fallback;
+  if (typeof value !== 'number' && typeof value !== 'string') throw new Error(`invalid ${key}`);
+  if (typeof value === 'string' && !value.trim()) throw new Error(`invalid ${key}`);
+  const port = Number(value);
+  if (!Number.isSafeInteger(port) || port < min || port > 65_535) {
+    throw new Error(`invalid ${key}`);
+  }
+  return port;
+}
+
+function parseStoredConnection(item: unknown): StoredConnection {
+  if (!item || typeof item !== 'object' || Array.isArray(item)) {
+    throw new Error('device connection record is not an object');
+  }
+  const source = item as Record<string, unknown>;
+  const unknownKeys = Object.keys(source).filter((key) => !STORED_CONNECTION_KEYS.has(key));
+  if (unknownKeys.length) throw new Error('device connection record contains unknown fields');
+  if (source.host !== undefined && typeof source.host !== 'string') {
+    throw new Error('invalid device connection host type');
+  }
+  const host = normalizeHost(source.host);
+  if (!host) throw new Error('invalid device connection host');
+  if (source.id !== undefined && typeof source.id !== 'string') {
+    throw new Error('invalid device connection id type');
+  }
+  const id = String(source.id ?? '').trim();
+  if (!/^[a-zA-Z0-9][a-zA-Z0-9._:-]{0,79}$/.test(id)) {
+    throw new Error('invalid device connection id');
+  }
+  if (source.username !== undefined && typeof source.username !== 'string') {
+    throw new Error('invalid device connection username type');
+  }
+  if (typeof source.username === 'string' && source.username.length > 64) {
+    throw new Error('invalid device connection username length');
+  }
+  const username = String(source.username ?? 'root')
+    .trim()
+    .slice(0, 64);
+  if (!/^[a-zA-Z0-9_][a-zA-Z0-9._-]{0,63}$/.test(username)) {
+    throw new Error('invalid device connection username');
+  }
+  if (source.label !== undefined && typeof source.label !== 'string') {
+    throw new Error('invalid device connection label type');
+  }
+  if (typeof source.label === 'string' && source.label.length > 120) {
+    throw new Error('invalid device connection label length');
+  }
+  const label = String(source.label ?? '')
+    .trim()
+    .slice(0, 120);
+  if (typeof source.createdAt !== 'string') throw new Error('invalid device connection createdAt');
+  const createdAt = source.createdAt.trim();
+  if (!createdAt || createdAt.length > 64) throw new Error('invalid device connection createdAt');
+  if (
+    source.lastCheckedAt !== undefined &&
+    source.lastCheckedAt !== null &&
+    (typeof source.lastCheckedAt !== 'string' || source.lastCheckedAt.length > 64)
+  ) {
+    throw new Error('invalid device connection lastCheckedAt');
+  }
+  if (
+    source.lastCheckOk !== undefined &&
+    source.lastCheckOk !== null &&
+    typeof source.lastCheckOk !== 'boolean'
+  ) {
+    throw new Error('invalid device connection lastCheckOk');
+  }
+  if (
+    source.lastCheckMessage !== undefined &&
+    (typeof source.lastCheckMessage !== 'string' || source.lastCheckMessage.length > 400)
+  ) {
+    throw new Error('invalid device connection lastCheckMessage');
+  }
+  if (source.ownerKey !== undefined) {
+    if (
+      typeof source.ownerKey !== 'string' ||
+      !source.ownerKey ||
+      source.ownerKey.length > 200 ||
+      hasControlCharacters(source.ownerKey)
+    ) {
+      throw new Error('invalid device connection ownerKey');
+    }
+  }
+  if (
+    source.profile !== undefined &&
+    (typeof source.profile !== 'string' || !source.profile || source.profile.length > 64)
+  ) {
+    throw new Error('invalid device connection profile');
+  }
+  if (source.transport !== undefined) {
+    if (source.transport !== 'ssh' && source.transport !== 'bridge') {
+      throw new Error('invalid device connection transport');
+    }
+  }
+  return {
+    id,
+    label,
+    host,
+    port: recordPort(source, 'port', 22, 1),
+    username,
+    agentPort: recordPort(source, 'agentPort', 19_100, 1),
+    localPort: recordPort(source, 'localPort', 0),
+    createdAt,
+    lastCheckedAt:
+      typeof source.lastCheckedAt === 'string' && source.lastCheckedAt
+        ? source.lastCheckedAt
+        : null,
+    lastCheckOk: source.lastCheckOk === true ? true : source.lastCheckOk === false ? false : null,
+    lastCheckMessage: String(source.lastCheckMessage ?? '').slice(0, 400),
+    ...(typeof source.profile === 'string' && source.profile
+      ? { profile: source.profile.slice(0, 64) }
+      : {}),
+    ...(source.transport === 'ssh' || source.transport === 'bridge'
+      ? { transport: source.transport }
+      : {}),
+    ...(typeof source.ownerKey === 'string' && source.ownerKey
+      ? { ownerKey: source.ownerKey.slice(0, 200) }
+      : {}),
+  };
+}
+
+/**
+ * Read the registry without ever treating an existing failure as an empty
+ * database.  A previous implementation did exactly that, so a later create
+ * could replace a corrupt, unreadable, or symlinked file and silently destroy
+ * the operator's records.  The descriptor is opened with O_NOFOLLOW where the
+ * host supports it and then checked again with fstat, closing the small
+ * lstat/read race around a mutable path.
+ */
 function readConnections(): StoredConnection[] {
+  const file = connectionsFile();
+  let descriptor: number | undefined;
   try {
-    const parsed: unknown = JSON.parse(readFileSync(connectionsFile(), 'utf8'));
-    if (!Array.isArray(parsed)) return [];
-    return parsed
-      .slice(0, 100)
-      .filter((item): item is Record<string, unknown> =>
-        Boolean(item && typeof item === 'object' && !Array.isArray(item)),
-      )
-      .map((item): StoredConnection | null => {
-        const host = normalizeHost(item.host);
-        if (!host) return null;
-        return {
-          id: String(item.id ?? '').trim(),
-          label: String(item.label ?? '')
-            .trim()
-            .slice(0, 120),
-          host,
-          port: normalizePort(item.port, 22, 1, 65_535),
-          username: String(item.username ?? 'root')
-            .trim()
-            .slice(0, 64),
-          agentPort: normalizePort(item.agentPort, 19_100, 1, 65_535),
-          localPort: normalizePort(item.localPort, 0, 0, 65_535),
-          createdAt: String(item.createdAt ?? ''),
-          lastCheckedAt: item.lastCheckedAt ? String(item.lastCheckedAt) : null,
-          lastCheckOk: item.lastCheckOk === true ? true : item.lastCheckOk === false ? false : null,
-          lastCheckMessage: String(item.lastCheckMessage ?? '').slice(0, 400),
-          ownerKey: item.ownerKey ? String(item.ownerKey).slice(0, 200) : undefined,
-        };
-      })
-      .filter(
-        (item): item is StoredConnection =>
-          item !== null && /^[a-zA-Z0-9][a-zA-Z0-9._:-]{0,79}$/.test(item.id),
-      );
-  } catch {
-    return [];
+    // O_NOFOLLOW is available on the Unix hosts supported by the board
+    // service.  Keep an explicit lstat fallback for platforms whose Node
+    // runtime does not expose it, so a final-path symlink is never accepted.
+    if (!NO_FOLLOW) {
+      const linkStat = lstatSync(file);
+      if (linkStat.isSymbolicLink() || !linkStat.isFile()) {
+        throw new Error('device connection registry is not a regular file');
+      }
+    }
+    descriptor = openSync(file, fsConstants.O_RDONLY | NO_FOLLOW | NO_BLOCK);
+    const stat = fstatSync(descriptor);
+    if (!stat.isFile()) throw new Error('device connection registry is not a regular file');
+    if ((stat.mode & 0o077) !== 0 || (stat.mode & 0o400) === 0) {
+      throw new Error('device connection registry permissions are unsafe');
+    }
+    if (stat.size > MAX_CONNECTIONS_FILE_BYTES) {
+      throw new Error('device connection registry exceeds the size limit');
+    }
+    const parsed: unknown = JSON.parse(readFileSync(descriptor, 'utf8'));
+    if (!Array.isArray(parsed) || parsed.length > MAX_CONNECTION_RECORDS) {
+      throw new Error('device connection registry shape is invalid');
+    }
+    const records = parsed.map(parseStoredConnection);
+    const ids = new Set<string>();
+    for (const record of records) {
+      if (ids.has(record.id)) throw new Error('device connection registry contains duplicate ids');
+      ids.add(record.id);
+    }
+    return records;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException)?.code === 'ENOENT') return [];
+    if (error instanceof Sim2RealError) throw error;
+    throw storageUnavailable(
+      'device connection registry is unreadable; refusing to overwrite existing records',
+      error,
+    );
+  } finally {
+    if (descriptor !== undefined) {
+      try {
+        closeSync(descriptor);
+      } catch {
+        /* The read result is already bounded; a close failure cannot make it safe to write. */
+      }
+    }
   }
 }
 
-function persistConnections(next: StoredConnection[]): Promise<void> {
-  const operation = connectionWriteQueue.then(() => {
+function writeConnections(next: StoredConnection[]): void {
+  const file = connectionsFile();
+  const temporary = `${file}.${randomUUID()}.tmp`;
+  try {
     ensureDataDir();
-    const temporary = `${connectionsFile()}.${randomUUID()}.tmp`;
-    writeFileSync(temporary, JSON.stringify(next, null, 2), { mode: 0o600 });
-    renameSync(temporary, connectionsFile());
-  });
-  connectionWriteQueue = operation.catch(() => undefined);
-  return operation as Promise<void>;
+    if (next.length > MAX_CONNECTION_RECORDS) {
+      throw new Sim2RealError('sim2real_storage_quota_exceeded', {
+        detail: `device connection registry exceeds ${MAX_CONNECTION_RECORDS} records`,
+      });
+    }
+    const ids = new Set<string>();
+    for (const record of next) {
+      if (ids.has(record.id)) {
+        throw new Sim2RealError('sim2real_storage_unavailable', {
+          detail: 'device connection registry contains duplicate ids',
+        });
+      }
+      ids.add(record.id);
+    }
+    const serialized = JSON.stringify(next, null, 2);
+    if (Buffer.byteLength(serialized, 'utf8') > MAX_CONNECTIONS_FILE_BYTES) {
+      throw new Sim2RealError('sim2real_storage_quota_exceeded', {
+        detail: 'device connection registry exceeds its byte limit',
+      });
+    }
+    writeFileSync(temporary, serialized, { mode: 0o600, flag: 'wx' });
+    renameSync(temporary, file);
+  } catch (error) {
+    try {
+      unlinkSync(temporary);
+    } catch {
+      /* best-effort cleanup; preserve the original write failure */
+    }
+    if (error instanceof Sim2RealError) throw error;
+    throw storageUnavailable(
+      'device connection registry could not be persisted; refusing to report a successful mutation',
+      error,
+    );
+  }
+}
+
+function serializedConnectionMutation<T>(task: () => T | PromiseLike<T>): Promise<T> {
+  const operation = connectionWriteQueue.then(task, task);
+  connectionWriteQueue = operation.then(
+    () => undefined,
+    () => undefined,
+  );
+  return operation;
 }
 
 function ownerScope(owner: string | undefined): {
@@ -163,6 +417,14 @@ function ownerScope(owner: string | undefined): {
   };
 }
 
+function tunnelKey(id: string, owner: string | undefined): string {
+  // Use the same normalized owner scope as registry access.  The owner is
+  // part of the live-tunnel key so two tenants with a colliding/manual record
+  // id cannot probe or tear down each other's SSH process.
+  const { ownerKey } = ownerScope(owner);
+  return JSON.stringify([ownerKey, id]);
+}
+
 export function listDeviceConnections(owner?: string): DeviceConnectionRecord[] {
   const { matches } = ownerScope(owner);
   return readConnections()
@@ -175,7 +437,7 @@ export function deviceConnectionAgentUrl(id: string, owner?: string): string | n
   const { matches } = ownerScope(owner);
   const record = readConnections().find((item) => item.id === id && matches(item));
   if (!record) return null;
-  const state = tunnels.get(id);
+  const state = tunnels.get(tunnelKey(id, owner));
   if (!state || state.process.exitCode !== null || state.process.signalCode !== null) return null;
   return `http://127.0.0.1:${state.localPort}`;
 }
@@ -199,10 +461,55 @@ async function probeAgent(localPort: number): Promise<TunnelProbeResult> {
         accept: 'application/json',
         ...(token ? { authorization: `Bearer ${token}` } : {}),
       },
+      redirect: 'error',
       signal: AbortSignal.timeout(4000),
     });
     if (!response.ok) return { ok: false, message: `板端 agent 返回 HTTP ${response.status}` };
-    const body = (await response.json().catch(() => null)) as Record<string, unknown> | null;
+    const declaredHeader = response.headers.get('content-length');
+    if (declaredHeader !== null) {
+      const normalized = declaredHeader.trim();
+      const contentLength = /^\d+$/.test(normalized) ? Number(normalized) : Number.NaN;
+      if (
+        !Number.isSafeInteger(contentLength) ||
+        contentLength < 0 ||
+        contentLength > MAX_HEALTH_RESPONSE_BYTES
+      ) {
+        return { ok: false, message: '板端 agent 健康响应长度无效或过大' };
+      }
+    }
+    if (!response.body) return { ok: false, message: '板端 agent 健康响应为空' };
+    const reader = response.body.getReader();
+    const chunks: Uint8Array[] = [];
+    let totalBytes = 0;
+    try {
+      while (true) {
+        const chunk = await reader.read();
+        if (chunk.done) break;
+        const value = chunk.value;
+        totalBytes += value.byteLength;
+        if (totalBytes > MAX_HEALTH_RESPONSE_BYTES) {
+          await reader.cancel();
+          return { ok: false, message: '板端 agent 健康响应过大' };
+        }
+        chunks.push(value);
+      }
+    } finally {
+      reader.releaseLock();
+    }
+    const bodyText = Buffer.concat(
+      chunks.map((chunk) => Buffer.from(chunk)),
+      totalBytes,
+    ).toString('utf8');
+    let body: Record<string, unknown> | null;
+    try {
+      const parsed: unknown = JSON.parse(bodyText);
+      body =
+        parsed && typeof parsed === 'object' && !Array.isArray(parsed)
+          ? (parsed as Record<string, unknown>)
+          : null;
+    } catch {
+      body = null;
+    }
     if (!body) return { ok: false, message: '板端 agent 健康响应不是合法 JSON' };
     const board =
       body.board && typeof body.board === 'object' ? (body.board as Record<string, unknown>) : null;
@@ -231,20 +538,39 @@ async function probeAgent(localPort: number): Promise<TunnelProbeResult> {
  * answers on the forwarded loopback port. Fails closed: any SSH or health
  * failure tears the tunnel down and reports honestly.
  */
-export async function openDeviceConnectionTunnel(
+export function openDeviceConnectionTunnel(
   id: string,
   owner?: string,
-): Promise<{ url: string; probe: TunnelProbeResult } | { error: string }> {
+): Promise<DeviceConnectionTunnelResult> {
+  const key = tunnelKey(id, owner);
+  const pending = openingTunnels.get(key);
+  if (pending) return pending;
+  const operation = openDeviceConnectionTunnelInternal(id, owner);
+  openingTunnels.set(key, operation);
+  const clear = () => {
+    if (openingTunnels.get(key) === operation) openingTunnels.delete(key);
+  };
+  // Handle both outcomes so a rejected storage/SSH path cannot leave a stale
+  // Promise that turns every later retry into the old failure.
+  void operation.then(clear, clear);
+  return operation;
+}
+
+async function openDeviceConnectionTunnelInternal(
+  id: string,
+  owner?: string,
+): Promise<DeviceConnectionTunnelResult> {
   const { matches } = ownerScope(owner);
+  const key = tunnelKey(id, owner);
   const record = readConnections().find((item) => item.id === id && matches(item));
   if (!record) return { error: 'NOT_FOUND' };
   if (!isSshAvailable()) return { error: 'SSH_UNAVAILABLE' };
 
-  const existing = tunnels.get(id);
+  const existing = tunnels.get(key);
   if (existing && existing.process.exitCode === null && existing.process.signalCode === null) {
     const probe = await probeAgent(existing.localPort);
     if (probe.ok) return { url: `http://127.0.0.1:${existing.localPort}`, probe };
-    await closeDeviceConnectionTunnel(id);
+    await closeDeviceConnectionTunnel(id, owner);
   }
 
   const localPort = portRange();
@@ -282,7 +608,12 @@ export async function openDeviceConnectionTunnel(
       stderrTail = `${stderrTail}${chunk}`.slice(-500);
     });
   }
-  tunnels.set(id, { process: child, localPort, startedAt: Date.now() });
+  tunnels.set(key, {
+    connectionId: id,
+    process: child,
+    localPort,
+    startedAt: Date.now(),
+  });
 
   // Wait until ssh either establishes the forward (process keeps running) or
   // exits. ExitOnForwardFailure turns a failed forward into a quick exit.
@@ -297,38 +628,56 @@ export async function openDeviceConnectionTunnel(
     },
   );
   if (exited) {
-    tunnels.delete(id);
+    if (tunnels.get(key)?.process === child) tunnels.delete(key);
     const reason = stderrTail.trim() || `ssh 退出（code=${exited.code}）`;
     return { error: `SSH 连接失败：${reason}` };
   }
 
   const probe = await probeAgent(localPort);
   if (!probe.ok) {
-    await closeDeviceConnectionTunnel(id);
+    await closeDeviceConnectionTunnel(id, owner);
     return { error: probe.message };
   }
 
-  // Persist the healthy state so the UI can show it after refresh.
-  const next = readConnections().map((item) =>
-    item.id === id
-      ? {
-          ...item,
-          localPort,
-          lastCheckedAt: new Date().toISOString(),
-          lastCheckOk: true,
-          lastCheckMessage: probe.message,
-        }
-      : item,
-  );
-  await persistConnections(next);
+  // Persist the healthy state so the UI can show it after refresh.  Read the
+  // latest registry inside the mutation queue: a create/delete that completed
+  // while the SSH probe was running must never be overwritten by this update.
+  try {
+    const persisted = await serializedConnectionMutation(() => {
+      const existing = readConnections();
+      const index = existing.findIndex((item) => item.id === id && matches(item));
+      if (index < 0) return false;
+      const next = [...existing];
+      next[index] = {
+        ...next[index],
+        localPort,
+        lastCheckedAt: new Date().toISOString(),
+        lastCheckOk: true,
+        lastCheckMessage: probe.message,
+      };
+      writeConnections(next);
+      return true;
+    });
+    if (!persisted) {
+      await closeDeviceConnectionTunnel(id, owner);
+      return { error: 'NOT_FOUND' };
+    }
+  } catch (error) {
+    // A healthy tunnel whose durable record could not be updated is not a
+    // usable connection after refresh.  Tear it down before surfacing the
+    // storage error so the live map cannot advertise an untracked tunnel.
+    await closeDeviceConnectionTunnel(id, owner);
+    throw error;
+  }
   return { url: `http://127.0.0.1:${localPort}`, probe };
 }
 
 /** Tear down one connection's tunnel (idempotent). */
-export function closeDeviceConnectionTunnel(id: string): Promise<void> {
-  const state = tunnels.get(id);
+export function closeDeviceConnectionTunnel(id: string, owner?: string): Promise<void> {
+  const key = tunnelKey(id, owner);
+  const state = tunnels.get(key);
   if (!state) return Promise.resolve();
-  tunnels.delete(id);
+  if (tunnels.get(key) === state) tunnels.delete(key);
   return new Promise((resolve) => {
     const forceKill = setTimeout(() => {
       try {
@@ -353,7 +702,7 @@ export function closeDeviceConnectionTunnel(id: string): Promise<void> {
 export function activeDeviceConnections(): string[] {
   return [...tunnels.entries()]
     .filter(([, state]) => state.process.exitCode === null && state.process.signalCode === null)
-    .map(([id]) => id);
+    .map(([, state]) => state.connectionId);
 }
 
 /**
@@ -381,6 +730,8 @@ export interface CreateConnectionInput {
   username?: string;
   label?: string;
   agentPort?: number;
+  profile?: string;
+  transport?: string;
 }
 
 export async function createDeviceConnection(
@@ -396,41 +747,63 @@ export async function createDeviceConnection(
     .slice(0, 120);
   const port = normalizePort(input.port, 22, 1, 65_535);
   const agentPort = normalizePort(input.agentPort, 19_100, 1, 65_535);
-  const existing = readConnections();
-  if (
-    existing.some((item) => item.host === host && item.port === port && item.username === username)
-  ) {
-    return { error: 'ALREADY_EXISTS' };
-  }
-  if (existing.length >= 50) return { error: 'QUOTA_EXCEEDED' };
   const { ownerKey } = ownerScope(owner);
-  const record: StoredConnection = {
-    id: `board-${randomUUID().slice(0, 8)}`,
-    label: label || `${username}@${host}`,
-    host,
-    port,
-    username,
-    agentPort,
-    localPort: 0,
-    createdAt: new Date().toISOString(),
-    lastCheckedAt: null,
-    lastCheckOk: null,
-    lastCheckMessage: '尚未测试连接。',
-    ...(ownerKey ? { ownerKey } : {}),
-  };
-  await persistConnections([...existing, record]);
-  const { ownerKey: _ownerKey, ...publicRecord } = record;
-  return publicRecord;
+  return serializedConnectionMutation(async () => {
+    const existing = readConnections();
+    // Shared deployments must meter connection records per tenant. A global
+    // duplicate check would disclose another account's SSH coordinates through
+    // a 409, and a global 50-row cap would let one noisy tenant exhaust every
+    // other tenant's onboarding capacity. Standalone mode keeps the historical
+    // process-wide behaviour because it has one operator-owned registry.
+    const scopedExisting = ownerKey
+      ? existing.filter((item) => item.ownerKey === ownerKey)
+      : existing;
+    if (
+      scopedExisting.some(
+        (item) => item.host === host && item.port === port && item.username === username,
+      )
+    ) {
+      return { error: 'ALREADY_EXISTS' };
+    }
+    if (scopedExisting.length >= 50 || existing.length >= MAX_CONNECTION_RECORDS) {
+      return { error: 'QUOTA_EXCEEDED' };
+    }
+    let id = `board-${randomUUID().slice(0, 8)}`;
+    while (existing.some((item) => item.id === id)) {
+      id = `board-${randomUUID().slice(0, 8)}`;
+    }
+    const record: StoredConnection = {
+      id,
+      label: label || `${username}@${host}`,
+      host,
+      port,
+      username,
+      agentPort,
+      profile: String(input.profile || 'custom').slice(0, 64),
+      transport: input.transport === 'bridge' ? 'bridge' : 'ssh',
+      localPort: 0,
+      createdAt: new Date().toISOString(),
+      lastCheckedAt: null,
+      lastCheckOk: null,
+      lastCheckMessage: '尚未测试连接。',
+      ...(ownerKey ? { ownerKey } : {}),
+    };
+    writeConnections([...existing, record]);
+    const { ownerKey: _ownerKey, ...publicRecord } = record;
+    return publicRecord;
+  });
 }
 
 export async function deleteDeviceConnection(id: string, owner?: string): Promise<boolean> {
-  await closeDeviceConnectionTunnel(id);
+  await closeDeviceConnectionTunnel(id, owner);
   const { matches } = ownerScope(owner);
-  const existing = readConnections();
-  const next = existing.filter((item) => !(item.id === id && matches(item)));
-  if (next.length === existing.length) return false;
-  await persistConnections(next);
-  return true;
+  return serializedConnectionMutation(() => {
+    const existing = readConnections();
+    const next = existing.filter((item) => !(item.id === id && matches(item)));
+    if (next.length === existing.length) return false;
+    writeConnections(next);
+    return true;
+  });
 }
 
 /** Record a failed probe result on the stored record. */
@@ -441,17 +814,19 @@ export async function markConnectionCheck(
   owner?: string,
 ): Promise<void> {
   const { matches } = ownerScope(owner);
-  const next = readConnections().map((item) =>
-    item.id === id && matches(item)
-      ? {
-          ...item,
-          lastCheckedAt: new Date().toISOString(),
-          lastCheckOk: ok,
-          lastCheckMessage: String(message).slice(0, 400),
-        }
-      : item,
-  );
-  await persistConnections(next);
+  await serializedConnectionMutation(() => {
+    const existing = readConnections();
+    const index = existing.findIndex((item) => item.id === id && matches(item));
+    if (index < 0) return;
+    const next = [...existing];
+    next[index] = {
+      ...next[index],
+      lastCheckedAt: new Date().toISOString(),
+      lastCheckOk: ok,
+      lastCheckMessage: String(message).slice(0, 400),
+    };
+    writeConnections(next);
+  });
 }
 
 process.once('exit', () => {

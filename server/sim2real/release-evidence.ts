@@ -54,7 +54,7 @@ export function validateRunForDeployment(input: {
   const contractValid = run.metrics?.contractValid === true;
   const deployableArtifact = run.artifact?.deployable === true;
   const artifactRefPresent = Boolean(run.artifact?.artifactRef);
-  const artifactDigestPresent = Boolean(run.artifact?.sha256);
+  const artifactDigestPresent = /^[a-f0-9]{64}$/i.test(String(run.artifact?.sha256 ?? ''));
   const errors: string[] = [];
 
   if (!sameModel) errors.push('training run belongs to a different model');
@@ -86,12 +86,23 @@ export function validateRunForDeployment(input: {
   // been evaluated, but does not gate on the MAE/RMSE values (a threshold
   // would couple the release gate to one controller's tuning).
   const evaluation = run.evaluation;
+  const replay = evaluation?.replay;
+  const replaySampleCount = replay?.sampleCount;
+  const replaySampleCountValid =
+    typeof replaySampleCount === 'number' &&
+    Number.isSafeInteger(replaySampleCount) &&
+    replaySampleCount > 0;
+  const boardTelemetryAttested = replay?.source === 'board-agent' && replay.attested === true;
   const boardTelemetrySamples =
-    evaluation?.replay?.source === 'board-agent' ? evaluation.replay.sampleCount : 0;
+    boardTelemetryAttested && replaySampleCountValid ? replaySampleCount : 0;
   checks.boardTelemetrySamples = boardTelemetrySamples || null;
+  checks.boardTelemetryAttested = boardTelemetryAttested;
+  checks.boardTelemetrySampleCountValid = replaySampleCountValid;
   if (boardTelemetrySamples <= 0) {
     errors.push(
-      'board telemetry evidence is missing: ingest at least one board-agent telemetry chunk and run the evaluation before canary/live',
+      boardTelemetryAttested
+        ? 'board telemetry evidence is missing or has an invalid sample count: ingest at least one attested board-agent chunk and run the evaluation before canary/live'
+        : 'board telemetry evidence is not attested: ingest through the signed board-agent channel and run the evaluation before canary/live',
     );
   }
 
@@ -150,14 +161,18 @@ export function validateRunForDeployment(input: {
     const fallRate = run.metrics?.fallRate;
     checks.successRate = successRate ?? null;
     checks.fallRate = fallRate ?? null;
-    if (typeof successRate !== 'number') {
+    const validRate = (value: unknown): value is number =>
+      typeof value === 'number' && Number.isFinite(value) && value >= 0 && value <= 1;
+    if (!validRate(successRate)) {
       errors.push('training successRate is missing');
     } else if (successRate < DEFAULT_MIN_SUCCESS_RATE) {
       errors.push(
         `training successRate ${successRate.toFixed(2)} is below ${DEFAULT_MIN_SUCCESS_RATE.toFixed(2)}`,
       );
     }
-    if (typeof fallRate === 'number' && fallRate > DEFAULT_MAX_FALL_RATE) {
+    if (fallRate !== undefined && !validRate(fallRate)) {
+      errors.push('training fallRate is outside the valid 0..1 range');
+    } else if (validRate(fallRate) && fallRate > DEFAULT_MAX_FALL_RATE) {
       errors.push(
         `training fallRate ${fallRate.toFixed(2)} is above ${DEFAULT_MAX_FALL_RATE.toFixed(2)}`,
       );
