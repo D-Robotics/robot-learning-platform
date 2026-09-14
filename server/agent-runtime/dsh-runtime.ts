@@ -37,6 +37,23 @@ export function dshRuntimeEnabled(value: unknown = process.env.RDK_SIM2REAL_DSH_
   );
 }
 
+/**
+ * Resolve the DSH session persistence root, defaulting into the product's
+ * configured storage directory. Sandboxed units (ProtectSystem=strict) keep
+ * only the storage directory writable, and DSH creates its session files
+ * lazily on the first turn — a cwd default would pass startup composition and
+ * fail every real turn. The default also keeps sessions across release
+ * switches; an explicit RDK_SIM2REAL_DSH_HOME always wins.
+ */
+export function resolveDshPersistenceRoot(
+  storageRoot: () => string,
+  home = process.env.RDK_SIM2REAL_DSH_HOME,
+): string {
+  const explicit = String(home ?? '').trim();
+  if (explicit) return explicit;
+  return path.join(storageRoot(), 'dsh-sessions');
+}
+
 export async function createDshRuntime(options: DshRuntimeOptions): Promise<Context> {
   const ctx = new Context();
   const gatewayBaseUrl = String(
@@ -83,6 +100,7 @@ export async function createDshRuntime(options: DshRuntimeOptions): Promise<Cont
 }
 
 import { randomUUID } from 'node:crypto';
+import path from 'node:path';
 import { SessionId, type SessionEvent } from '@deepseek-ai/dsh-session';
 import { createUserMessage } from '@deepseek-ai/dsh-llm';
 
@@ -132,6 +150,17 @@ function mapTurnFailure(failure: { code: string; message: string }): DshAgentFai
     return new DshAgentFailure(
       'DSH_CREDENTIAL_MISSING',
       'DSH 已启用但缺少模型凭证：请在服务端配置 RDK_SIM2REAL_DSH_API_KEY 或 DEEPSEEK_API_KEY 后重启。',
+    );
+  }
+  // The DeepSeek adapter reports an OpenAI-compatible gateway's 404 as
+  // `HTTP_404` (or a generic UNKNOWN wrapping "404/not found"): the SDK cannot
+  // know whether the configured base URL is the official API or a gateway.
+  // Point operators at the path-prefix mismatch explicitly instead of a code
+  // they cannot act on.
+  if (/404|not found/i.test(`${failure.code} ${failure.message}`)) {
+    return new DshAgentFailure(
+      'DSH_GATEWAY_PATH_NOT_FOUND',
+      'DSH 网关返回 404：请检查 RDK_SIM2REAL_DSH_BASE_URL（OpenAI 兼容网关通常需要 /v1 前缀）。',
     );
   }
   return new DshAgentFailure(

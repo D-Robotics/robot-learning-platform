@@ -7,7 +7,15 @@
  */
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { existsSync, realpathSync, statSync, readFileSync } from 'node:fs';
+import {
+  existsSync,
+  realpathSync,
+  statSync,
+  readFileSync,
+  mkdirSync,
+  accessSync,
+  constants as fsConstants,
+} from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import type { Server as HttpServer } from 'node:http';
 
@@ -28,6 +36,7 @@ import {
   ssoAuthMiddleware,
   storageRequestContextMiddleware,
   studioSecurityHeadersMiddleware,
+  resolveDataDir,
 } from '../../server/sim2real/standalone-adapters.js';
 import { createStudioLoginRelayRouter } from '../../server/sim2real/studio-login-relay.js';
 import { createRateLimitMiddleware } from '../../server/sim2real/rate-limit.js';
@@ -52,6 +61,7 @@ import {
   createDshRuntime,
   DshAgentFailure,
   dshRuntimeEnabled,
+  resolveDshPersistenceRoot,
 } from '../../server/agent-runtime/dsh-runtime.js';
 import {
   createDshAuthChannel,
@@ -1007,9 +1017,17 @@ export async function startSim2RealWebServer(): Promise<void> {
   if (dshRuntimeEnabled()) {
     try {
       const capabilityHandlers = createDshCapabilityHandlers();
+      // Sandboxed units (ProtectSystem=strict) keep only the storage directory
+      // writable, and DSH lazily creates its session files on the first turn —
+      // a cwd default would pass startup composition and fail every real turn.
+      // Default into the configured storage root, but fail closed at startup
+      // when that root is read-only instead of shipping a runtime that cannot
+      // complete a turn.
+      const persistenceRoot = resolveDshPersistenceRoot(resolveDataDir);
+      mkdirSync(persistenceRoot, { recursive: true, mode: 0o700 });
+      accessSync(persistenceRoot, fsConstants.R_OK | fsConstants.W_OK);
       const dsh = await createDshRuntime({
-        persistenceRoot:
-          process.env.RDK_SIM2REAL_DSH_HOME || path.join(process.cwd(), '.sim2real-dsh'),
+        persistenceRoot,
         capabilityHandlers,
       });
       app.locals.dshRuntime = dsh;

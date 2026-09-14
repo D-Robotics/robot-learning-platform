@@ -7,7 +7,7 @@ import type { AddressInfo } from 'node:net';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { Context } from '@deepseek-ai/cordis';
 
-import { askDsh, createDshRuntime, DshAgentFailure } from './dsh-runtime.js';
+import { askDsh, createDshRuntime, DshAgentFailure, resolveDshPersistenceRoot } from './dsh-runtime.js';
 
 /**
  * The runtime is exercised against a real DSH composition with a local
@@ -105,6 +105,19 @@ async function composeRuntime(): Promise<Context> {
   openRuntimes.push(ctx);
   return ctx;
 }
+
+describe('DSH persistence root resolution', () => {
+  it('defaults into the configured storage root so sandboxed units stay writable', () => {
+    // ProtectSystem=strict deployments whitelist only RDK_SIM2REAL_STORAGE_DIR;
+    // a cwd default would be read-only and fail the first turn.
+    expect(resolveDshPersistenceRoot(() => '/opt/data')).toBe('/opt/data/dsh-sessions');
+  });
+
+  it('lets an explicit RDK_SIM2REAL_DSH_HOME win over the storage default', () => {
+    expect(resolveDshPersistenceRoot(() => '/opt/data', '/var/lib/dsh')).toBe('/var/lib/dsh');
+    expect(resolveDshPersistenceRoot(() => '/opt/data', '  ')).toBe('/opt/data/dsh-sessions');
+  });
+});
 
 describe('DSH runtime chat composition', () => {
   it('bridges the dedicated API key into the provider credential seam and returns the reply', async () => {
@@ -248,6 +261,29 @@ describe('DSH runtime chat composition', () => {
     await expect(askDsh(ctx, '你好')).rejects.toMatchObject({
       code: 'DSH_TURN_FAILED',
       name: 'DshAgentFailure',
+    });
+  }, 60_000);
+
+  it('maps upstream 404s to a base-URL path hint instead of opaque UNKNOWN', async () => {
+    // An OpenAI-compatible gateway serves chat completions under /v1; a
+    // missing prefix surfaces as 404 on the DeepSeek adapter's request.
+    const gateway = await startChatGateway((request, response) => {
+      if (!request.url.startsWith('/v1/chat/completions')) {
+        response.writeHead(404, { 'content-type': 'application/json' });
+        response.end(JSON.stringify({ error: { message: '404 page not found' } }));
+        return;
+      }
+      sseReply(response, ['OK']);
+    });
+    // Deliberately point at the gateway root so the adapter's request misses
+    // the /v1 prefix, exactly like the production misconfiguration did.
+    process.env.RDK_SIM2REAL_DSH_BASE_URL = gateway.baseUrl;
+    process.env.RDK_SIM2REAL_DSH_API_KEY = 'dedicated-dsh-key';
+    const ctx = await composeRuntime();
+
+    await expect(askDsh(ctx, '你好')).rejects.toMatchObject({
+      code: 'DSH_GATEWAY_PATH_NOT_FOUND',
+      message: expect.stringContaining('/v1'),
     });
   }, 60_000);
 });
