@@ -248,6 +248,18 @@ async function boot(options: BootOptions = {}) {
         configurable: true,
         value() {
           this.setAttribute('open', '');
+          // The retrain confirmation now uses the product-styled
+          // #confirm-action-dialog instead of window.confirm. Drive its
+          // decision from BootOptions.confirmResult so the old semantics
+          // (accepted by default, cancel on false) keep working.
+          if (this.id === 'confirm-action-dialog') {
+            confirmNotes.push(this.querySelector('#confirm-action-note')?.textContent ?? '');
+            const decisionId =
+              (options.confirmResult ?? true)
+                ? '#confirm-action-approve'
+                : '#confirm-action-cancel';
+            this.querySelector<HTMLButtonElement>(decisionId)?.click();
+          }
         },
       },
       close: {
@@ -260,6 +272,10 @@ async function boot(options: BootOptions = {}) {
     });
   }
   const calls: FetchCall[] = [];
+  // #confirm-action-dialog renders its copy into #confirm-action-note before
+  // showModal(); capture it so tests can assert the operator-facing text the
+  // same way they previously asserted window.confirm's message argument.
+  const confirmNotes: string[] = [];
   const confirm = vi.fn(() => options.confirmResult ?? true);
   Object.assign(window, {
     confirm,
@@ -322,7 +338,7 @@ async function boot(options: BootOptions = {}) {
       break;
     await new Promise((resolve) => setTimeout(resolve, 10));
   }
-  return { window, errors, calls, confirm };
+  return { window, errors, calls, confirm, confirmNotes };
 }
 
 const flush = () => new Promise((resolve) => setTimeout(resolve, 25));
@@ -542,7 +558,7 @@ describe('Sim2Real retraining advice panel (read-only analysis + explicit operat
   });
 
   it('submits exactly one training run after the operator confirms', async () => {
-    const { window, calls, confirm } = await boot({
+    const { window, calls, confirmNotes } = await boot({
       advice: recommendedAdvice(),
       confirmResult: true,
     });
@@ -552,8 +568,8 @@ describe('Sim2Real retraining advice panel (read-only analysis + explicit operat
     body.querySelector<HTMLButtonElement>('#run-retrain-submit')?.click();
     await flush();
 
-    expect(confirm).toHaveBeenCalledTimes(1);
-    const confirmText = String(confirm.mock.calls[0]?.[0] ?? '');
+    expect(confirmNotes).toHaveLength(1);
+    const confirmText = confirmNotes[0] ?? '';
     expect(confirmText).toContain('显式动作');
     expect(confirmText).toContain('分析本身不会自动发起任何训练');
     expect(confirmText).toContain('walk');
@@ -583,7 +599,7 @@ describe('Sim2Real retraining advice panel (read-only analysis + explicit operat
   });
 
   it('does not submit anything when the operator cancels the confirmation', async () => {
-    const { window, calls, confirm } = await boot({
+    const { window, calls, confirmNotes } = await boot({
       advice: recommendedAdvice(),
       confirmResult: false,
     });
@@ -593,7 +609,7 @@ describe('Sim2Real retraining advice panel (read-only analysis + explicit operat
     body.querySelector<HTMLButtonElement>('#run-retrain-submit')?.click();
     await flush();
 
-    expect(confirm).toHaveBeenCalledTimes(1);
+    expect(confirmNotes).toHaveLength(1);
     expect(
       calls.slice(before).some((call) => String(call.init?.method ?? '').toUpperCase() === 'POST'),
     ).toBe(false);
@@ -649,7 +665,7 @@ describe('Sim2Real retraining advice panel (read-only analysis + explicit operat
   });
 
   it('aborts without a POST and reports inline when no model id is resolvable', async () => {
-    const { window, calls, confirm } = await boot({
+    const { window, calls, confirmNotes } = await boot({
       advice: recommendedAdvice(),
       confirmResult: true,
     });
@@ -666,7 +682,7 @@ describe('Sim2Real retraining advice panel (read-only analysis + explicit operat
     await internals.submitRetrainingFromAdvice?.({ id: RUN_ID, modelId: '' }, recommendedAdvice());
     await flush();
 
-    expect(confirm).not.toHaveBeenCalled();
+    expect(confirmNotes).toHaveLength(0);
     expect(
       calls.slice(before).some((call) => String(call.init?.method ?? '').toUpperCase() === 'POST'),
     ).toBe(false);

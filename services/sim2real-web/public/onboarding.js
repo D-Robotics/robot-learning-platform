@@ -35,7 +35,7 @@
     card.style.left = `${Math.max(16, left)}px`; card.style.top = `${Math.max(16, top)}px`;
   }
   function render() {
-    const step = steps[index]; if (step.view && typeof setView === 'function') setView(step.view);
+    const step = steps[index]; if (step.view && typeof setView === 'function') setView(step.view, { focus: false });
     overlay.querySelector('#onboarding-kicker').textContent = step.kicker; overlay.querySelector('#onboarding-progress-label').textContent = `第 ${index + 1} / ${steps.length} 步`; overlay.querySelector('#onboarding-progress-bar').style.width = `${((index + 1) / steps.length) * 100}%`; overlay.querySelector('#onboarding-title').textContent = step.title; overlay.querySelector('#onboarding-body').textContent = step.body; overlay.querySelector('#onboarding-best').textContent = step.best; overlay.querySelector('#onboarding-time').textContent = `预计 ${step.time}`; overlay.querySelector('#onboarding-prev').disabled = index === 0; overlay.querySelector('#onboarding-next').textContent = index === steps.length - 1 ? '完成指引 ✓' : '下一步 →'; window.requestAnimationFrame(place);
   }
   function start() { if (!overlay) build(); lastFocus = document.activeElement; index = 0; overlay.hidden = false; document.body.classList.add('onboarding-open'); render(); window.setTimeout(() => overlay.querySelector('#onboarding-next')?.focus(), 0); }

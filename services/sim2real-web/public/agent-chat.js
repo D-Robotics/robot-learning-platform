@@ -76,9 +76,25 @@ function setAgentBusy(busy, label = '') {
   }
 }
 
-function renderAgentError(error, retryable = true) {
+function renderAgentError(error, retryable = true, lastMessage = '') {
   const message = error instanceof Error ? error.message : String(error || '未知错误');
-  addMessage('agent', `任务未完成：${message}${retryable ? ' 可以检查连接后重试。' : ''}`);
+  const node = addMessage('agent', `任务未完成：${message}${retryable ? ' 可以重试。' : ''}`);
+  // Recovery must be one click: the user's instruction was already consumed
+  // by the failed submit, so the error message carries it back as a retry
+  // action instead of forcing a retype.
+  if (retryable && lastMessage && node && input) {
+    const retry = document.createElement('button');
+    retry.type = 'button';
+    retry.className = 'button button-ghost button-small agent-retry';
+    retry.textContent = '重试这条指令';
+    retry.addEventListener('click', () => {
+      retry.remove();
+      input.value = lastMessage;
+      input.focus();
+      if (form) form.requestSubmit();
+    });
+    node.append(retry);
+  }
   if (eventLog) {
     const row = document.createElement('div');
     row.className = 'agent-event agent-event-error';
@@ -223,7 +239,7 @@ function saveMessage(role, text) {
 }
 
 function addMessage(role, text, persist = true) {
-  if (!messages) return;
+  if (!messages) return null;
   const node = document.createElement('div');
   node.className = `agent-chat-message agent-chat-message-${role}`;
   node.innerHTML = `<strong>${role === 'user' ? '你' : 'Agent'}</strong><p></p>`;
@@ -231,6 +247,7 @@ function addMessage(role, text, persist = true) {
   messages.appendChild(node);
   messages.scrollTop = messages.scrollHeight;
   if (persist) saveMessage(role, text);
+  return node;
 }
 
 // Conversation-native task card: instead of narrating progress through
@@ -539,7 +556,7 @@ async function runTask(message) {
   renderRun(run);
   const taskCard = renderTaskCard(run);
   if (plan.steps.some((item) => item.tool === 'simulator.open')) {
-    void runSimulatorDemo(message).catch((error) => renderAgentError(error, true));
+    void runSimulatorDemo(message).catch((error) => renderAgentError(error, true, message));
   }
   const terminal = new Set(['completed', 'partial', 'failed', 'blocked', 'cancelled', 'timed_out']);
   let transientFailures = 0;
@@ -586,7 +603,7 @@ form?.addEventListener('submit', (event) => {
   addMessage('user', message);
   setAgentBusy(true, '正在生成计划…');
   void runTask(message)
-    .catch((error) => renderAgentError(error, true))
+    .catch((error) => renderAgentError(error, true, message))
     .finally(() => setAgentBusy(false));
 });
 

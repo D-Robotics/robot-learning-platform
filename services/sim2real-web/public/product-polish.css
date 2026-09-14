@@ -1,48 +1,38 @@
-/* Product polish: one calm, editorial system on top of the legacy component CSS. */
+/* Product polish: one calm, editorial system on top of the legacy component CSS.
+   The shell ships theme-dark only (index.html hardcodes it). This layer must not
+   re-declare palette tokens: a half-applied light reskin here previously left
+   dark-theme text (e.g. .safety-mini strong) on light surfaces at ~1.4:1. */
 :root {
-  --bg-deep: #f6f7f9;
-  --bg: #ffffff;
-  --panel: #ffffff;
-  --panel-raised: #ffffff;
-  --panel-soft: #f7f8fa;
-  --line: #e7e9ee;
-  --line-strong: #d7dbe3;
-  --text: #171a21;
-  --muted: #737985;
-  --muted-strong: #4f5663;
-  --accent: #e85b22;
-  --accent-hover: #cf4c18;
-  --accent-strong: #b94314;
-  --accent-text: #b94314;
-  --shadow: 0 10px 30px rgba(20, 28, 45, .06);
+  --shadow: 0 10px 30px rgba(2, 8, 14, 0.38);
 }
 
-body { background: var(--bg-deep); color: var(--text); }
+/* Layout-only polish: sizing, rhythm and radii. All colors continue to come
+   from the theme-dark tokens in styles.css so this layer stays theme-safe. */
 .app-shell { width: min(1480px, calc(100% - 56px)); padding: 18px 0 40px; }
 .topbar { min-height: 62px; padding: 0 0 16px; border-bottom: 1px solid var(--line); }
 .brand { gap: 11px; }
 .brand-mark { width: 36px; height: 36px; border-radius: 10px; }
 .brand strong { font-size: 15px; }
-.brand-kicker { color: var(--muted); font-size: 8px; letter-spacing: .14em; }
+.brand-kicker { color: var(--muted); font-size: 11px; letter-spacing: .14em; }
 .topbar-context { font-size: 12px; }
 .top-actions { gap: 6px; }
 .button { min-height: 34px; border-radius: 8px; padding: 7px 12px; font-size: 12px; }
-.button-primary { box-shadow: 0 4px 12px rgba(232,91,34,.18); }
+.button-primary { box-shadow: 0 4px 12px rgba(255, 116, 31, 0.18); }
 
 .shell-layout { grid-template-columns: 220px minmax(0, 1fr); gap: 42px; }
 .sidebar { top: 12px; min-height: calc(100vh - 130px); padding: 24px 0 12px; }
-.sidebar-project { margin-bottom: 24px; padding: 9px; border-radius: 11px; background: #fff; box-shadow: 0 2px 8px rgba(20,28,45,.03); }
+.sidebar-project { margin-bottom: 24px; padding: 9px; border-radius: 11px; background: var(--panel); }
 .sidebar-project-icon { width: 28px; height: 28px; border-radius: 8px; }
-.nav-label { margin: 0 10px 7px; font-size: 9px; letter-spacing: .12em; }
+.nav-label { margin: 0 10px 7px; font-size: 11px; letter-spacing: .12em; }
 .workflow-nav { gap: 3px; }
 .nav-item { min-height: 38px; border-radius: 8px; padding: 8px 10px; }
-.nav-item.is-active { border-color: transparent; color: var(--accent-strong); background: #fff1eb; box-shadow: inset 3px 0 0 var(--accent); }
+.nav-item.is-active { border-color: rgba(255, 121, 24, 0.42); color: var(--text); background: rgba(255, 121, 24, 0.12); box-shadow: inset 3px 0 0 var(--accent); }
 .nav-item strong { font-size: 12px; }
 .sidebar-divider-compact { margin: 19px 10px; }
-.safety-mini { border-radius: 10px; padding: 9px; background: #eef8f1; }
+.safety-mini { border-radius: 10px; padding: 9px; }
 
 .main-content { padding: 28px 0 0; }
-.context-strip { margin-bottom: 24px; border: 1px solid var(--line); border-radius: 12px; background: #fff; box-shadow: 0 2px 8px rgba(20,28,45,.025); }
+.context-strip { margin-bottom: 24px; border: 1px solid var(--line); border-radius: 12px; background: var(--panel); }
 .context-live { gap: 0; }
 .context-live-item { min-height: 58px; padding: 10px 16px; border-right: 1px solid var(--line); border-radius: 0; background: transparent; }
 .context-live-item:last-child { border-right: 0; }
@@ -50,29 +40,20 @@ body { background: var(--bg-deep); color: var(--text); }
 .section-heading { margin-bottom: 18px; }
 .overview-page-title h2 { font-size: 27px; letter-spacing: -.045em; }
 .overview-page-title p { margin: 6px 0 0; color: var(--muted); font-size: 12px; }
-.next-card { grid-template-columns: 1fr 190px; min-height: 164px; margin-bottom: 18px; border: 1px solid #f5c7b5; border-radius: 14px; background: linear-gradient(110deg,#fff8f4,#fff 75%); box-shadow: none; }
+.next-card { grid-template-columns: 1fr 190px; min-height: 164px; margin-bottom: 18px; border-radius: 14px; }
 .next-card-main { padding: 24px 25px; }
 .next-card h3 { margin: 12px 0 16px; font-size: 22px; }
-.project-workspace { border: 1px solid var(--line); border-radius: 13px; background: #fff; box-shadow: none; }
+.project-workspace { border: 1px solid var(--line); border-radius: 13px; background: var(--panel); }
 .project-workspace-heading { padding: 16px 18px; border-bottom: 1px solid var(--line); }
 .project-workspace-heading h2 { font-size: 16px; }
 .workspace-summary-grid { grid-template-columns: repeat(4,minmax(0,1fr)); gap: 0; padding: 0; }
-.workspace-summary-card { min-height: 92px; border: 0; border-right: 1px solid var(--line); border-radius: 0; padding: 16px; background: #fff; }
+.workspace-summary-card { min-height: 92px; border: 0; border-right: 1px solid var(--line); border-radius: 0; padding: 16px; }
 .workspace-summary-card:last-child { border-right: 0; }
-.workspace-summary-card:hover { transform: none; background: #fffaf7; }
 .workspace-summary-icon { width: 28px; height: 28px; border-radius: 8px; }
-.workspace-summary-card small { margin-top: 9px; font-size: 10px; }
+.workspace-summary-card small { margin-top: 9px; font-size: 11px; }
 .workspace-summary-card strong { font-size: 13px; }
-.workspace-summary-card em { font-size: 10px; }
+.workspace-summary-card em { font-size: 11px; }
 .workspace-recent-row { padding: 14px 18px 17px; border-top: 1px solid var(--line); }
-.overview-environment { margin-top: 14px; border: 1px solid var(--line); border-radius: 12px; background: #111b25; }
-.overview-environment summary { padding: 14px 16px; }
-.overview-environment-body { padding: 0 14px 14px; }
-.status-grid { grid-template-columns: repeat(4,minmax(0,1fr)); gap: 8px; }
-.status-card { min-height: 78px; border-radius: 9px; padding: 11px; background: #152333; }
-.overview-environment summary:hover { background: rgba(255,255,255,.03); }
-.overview-environment .status-card { border-color: #2b3a4b; box-shadow: none; }
-.overview-environment .status-card p { color: #91a0b2; }
 
 .panel { border-color: var(--line); border-radius: 12px; box-shadow: none; }
 .section-heading-lean h2 { font-size: 22px; }
@@ -84,7 +65,7 @@ body.agent-chat-open .agent-chat-layout { grid-template-columns: 180px minmax(0,
 .agent-chat-sessions { padding: 14px 10px; border-right: 1px solid #293649; background: #121b29; }
 .agent-new-session, .agent-session-item { width: 100%; border: 1px solid #344258; border-radius: 8px; padding: 9px 10px; color: #d8e2f0; text-align: left; background: transparent; cursor: pointer; font: inherit; font-size: 11px; }
 .agent-new-session { color: #ff9a62; border-color: rgba(255,116,31,.4); }
-.agent-session-label { margin: 20px 8px 7px; color: #7f8da2; font-size: 10px; }
+.agent-session-label { margin: 20px 8px 7px; color: #7f8da2; font-size: 11px; }
 .agent-session-item { border-color: transparent; color: #a9b6c8; }
 .agent-session-item.is-active, .agent-session-item:hover { background: #1d2a3c; color: #fff; }
 body.agent-chat-open .agent-chat-messages { max-height: 520px; padding: 22px; border: 0; border-radius: 0; background: #0f1722; }
@@ -104,17 +85,16 @@ body.agent-chat-open .agent-chat-composer input { min-height: 44px; border-color
 [data-view-section="overview"] .next-card { margin-top: 22px; }
 [data-view-section="overview"] .project-workspace { margin-top: 20px; }
 
-/* Host station: keep the live board panel fluid even when an empty state has
-   long, unbroken labels. The legacy grid allowed its first track to collapse. */
-.station-layout { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); width: 100%; min-width: 0; align-items: stretch; }
+/* Host station: single fluid column keeps the live board panel usable even
+   when an empty state has long, unbroken labels. The theme-dark product shell
+   stacks the station panels vertically; no !important guards are needed once
+   this layer is the only station-layout voice. */
+.station-layout { display: block; width: 100%; min-width: 0; }
+.station-layout > * { margin: 0 0 16px; }
 .station-status-panel, .station-camera-panel, .station-command-panel, .station-drive-panel { min-width: 0; width: 100%; }
 .station-metric-grid, .station-tele-grid, .station-command-grid { min-width: 0; }
 .station-metric-card { min-width: 0; }
 .station-metric-label, .station-metric-sub, .station-device-line { overflow-wrap: anywhere; }
-/* Final guard against the legacy grid rules collapsing the first track. */
-body.theme-dark .station-layout { display: block !important; width: 100% !important; min-width: 0 !important; }
-body.theme-dark .station-layout > * { display: block !important; width: 100% !important; min-width: 0 !important; margin: 0 0 16px; }
-body.theme-dark .station-status-panel { grid-column: auto !important; grid-row: auto !important; }
 .station-studio-connect { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin: 14px 0 16px; padding: 13px 14px; border: 1px solid rgba(255,116,31,.28); border-radius: 10px; background: rgba(255,116,31,.07); }
 .station-studio-connect strong, .station-studio-connect small { display: block; }
 .station-studio-connect strong { font-size: 13px; }
@@ -148,9 +128,6 @@ body.theme-dark .station-status-panel { grid-column: auto !important; grid-row: 
   .workspace-summary-card:nth-child(2) { border-right: 0; }
   .workspace-summary-card:nth-child(-n+2) { border-bottom: 1px solid var(--line); }
 }
-@media (max-width: 1100px) {
-  .station-layout { grid-template-columns: minmax(0, 1fr); }
-  .station-status-panel, .station-camera-panel, .station-command-panel, .station-drive-panel { grid-column: 1; grid-row: auto; }
 }
 @media (max-width: 560px) {
   .app-shell { width: calc(100% - 24px); }

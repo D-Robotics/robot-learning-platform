@@ -706,6 +706,18 @@
                     </div>
                     <span class="state-badge state-neutral" id="run-progress-status">—</span>
                   </div>
+                  <div
+                    class="run-progress-track"
+                    id="run-progress-track"
+                    role="progressbar"
+                    aria-labelledby="run-progress-title"
+                    aria-valuemin="0"
+                    aria-valuemax="100"
+                    hidden
+                  >
+                    <i id="run-progress-fill"></i>
+                    <span class="run-progress-track-note" id="run-progress-track-note"></span>
+                  </div>
                   <div class="run-progress-meta" id="run-progress-meta"></div>
                   <div class="run-progress-warning" id="run-progress-warning" hidden>
                     Mock 只验证协议和台账，不会生成可部署模型。
@@ -1708,6 +1720,22 @@
           <button class="button button-ghost" id="confirm-run-cancel" type="button">取消</button
           ><button class="button button-primary" id="confirm-run-approve" type="button">
             确认提交
+          </button>
+        </div>
+      </div>
+    </dialog>
+    <dialog class="run-dialog" id="confirm-action-dialog" aria-labelledby="confirm-action-title">
+      <div class="run-dialog-heading">
+        <div>
+          <h2 id="confirm-action-title">确认操作</h2>
+        </div>
+      </div>
+      <div class="run-detail-body">
+        <p class="confirm-run-note" id="confirm-action-note" style="white-space: pre-line"></p>
+        <div class="confirm-run-actions">
+          <button class="button button-ghost" id="confirm-action-cancel" type="button">取消</button
+          ><button class="button button-primary" id="confirm-action-approve" type="button">
+            确认执行
           </button>
         </div>
       </div>

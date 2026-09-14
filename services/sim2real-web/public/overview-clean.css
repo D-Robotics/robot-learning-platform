@@ -33,7 +33,7 @@
 [data-view-section="overview"] .workspace-summary-card > span:last-child { display: block; width: 100%; min-width: 0; }
 [data-view-section="overview"] .workspace-summary-card small { font-size: 11px; }
 [data-view-section="overview"] .workspace-summary-card strong { margin-top: 8px; font-size: 14px; font-weight: 600; }
-[data-view-section="overview"] .workspace-summary-card em { margin-top: 6px; font-size: 10px; }
+[data-view-section="overview"] .workspace-summary-card em { margin-top: 6px; font-size: 11px; }
 [data-view-section="overview"] .workspace-recent-row { margin: 0; padding: 20px 22px 15px; border-top: 1px solid var(--line); }
 [data-view-section="overview"] .workspace-recent-heading { align-items: center; margin-bottom: 12px; font-size: 13px; }
 [data-view-section="overview"] .workspace-recent-heading > div { display: flex; align-items: baseline; gap: 10px; }
@@ -44,7 +44,7 @@
 [data-view-section="overview"] .workspace-recent-item { padding: 13px 0; border-radius: 0; border-top: 1px solid rgba(255,255,255,.04); }
 [data-view-section="overview"] .workspace-recent-item:first-child { border-top: 0; }
 [data-view-section="overview"] .workspace-recent-copy strong { font-size: 12px; font-weight: 500; }
-[data-view-section="overview"] .workspace-recent-copy small { margin-top: 5px; font-size: 10px; }
+[data-view-section="overview"] .workspace-recent-copy small { margin-top: 5px; font-size: 11px; }
 .overview-environment { margin-bottom: 24px; border: 1px solid var(--line); border-radius: 10px; background: transparent; }
 .overview-environment > summary { display: flex; align-items: center; gap: 12px; padding: 16px 19px; list-style: none; cursor: pointer; }
 .overview-environment > summary::-webkit-details-marker { display: none; }

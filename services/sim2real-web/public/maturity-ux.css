@@ -17,7 +17,7 @@
 }
 .sidebar-project-context > label {
   color: var(--muted);
-  font-size: 10px;
+  font-size: 11px;
   line-height: 1.2;
 }
 .sidebar-project-context-row {
@@ -57,7 +57,7 @@
 .sidebar-project-context > small {
   overflow: hidden;
   color: var(--muted);
-  font-size: 9px;
+  font-size: 11px;
   line-height: 1.35;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -203,7 +203,7 @@ button:disabled { cursor: not-allowed; }
   border: 1px solid var(--line);
   border-radius: 999px;
   color: var(--muted-strong);
-  font-size: 10px;
+  font-size: 11px;
   line-height: 1.2;
   white-space: nowrap;
 }
@@ -227,7 +227,7 @@ button:disabled { cursor: not-allowed; }
 }
 .station-policy-session strong { color: var(--text); font-size: 11px; }
 .station-policy-session span,
-.station-policy-session small { color: var(--muted); font-size: 10px; line-height: 1.45; }
+.station-policy-session small { color: var(--muted); font-size: 11px; line-height: 1.45; }
 .station-policy-session[data-state="running"] { border-color: rgba(85,217,154,.42); }
 .station-policy-session[data-state="running"] span { color: var(--green-text); }
 .station-policy-session[data-state="stopped"] { border-color: rgba(101,169,255,.35); }

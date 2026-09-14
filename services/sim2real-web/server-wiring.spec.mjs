@@ -36,7 +36,7 @@ assert.doesNotMatch(standalone, /from ['"].*server\/(?:sso|storage|agent-runtime
 assert.doesNotMatch(businessRoutes, /from ['"].*server\/(?:sso|storage|agent-runtime)\.js['"]/);
 assert.match(adapters, /Never infer an identity from a client-controlled header/);
 assert.match(copyAssets, /services.*sim2real-web.*public/);
-assert.match(originbotHtml, /MuJoCo 物理引擎 · 20 Hz 控制/);
+assert.match(originbotHtml, /<span>MuJoCo 3D<\/span><span>20 Hz 控制<\/span>/);
 assert.match(originbotHtml, /<script\s+src="\.\/sim\.js\?v=\d+"/);
 assert.match(originbotHtml, /id="scan-readout"/);
 assert.match(originbotHtml, /id="depth-readout"/);

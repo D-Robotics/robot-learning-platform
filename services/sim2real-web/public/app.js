@@ -274,6 +274,7 @@ const state = {
   notifyEnabled: readNotifyPreference(),
   notifiedRunIds: new Set(),
   confirmRunResolve: null,
+  confirmActionResolve: null,
   recordsTab: 'all',
   trainModule: (() => {
     try {
@@ -624,6 +625,32 @@ function setActionHint(id, stateName, message) {
   node.textContent = String(message || '');
 }
 
+// View names for the polite screen-reader announcement on view switch.
+const VIEW_ANNOUNCEMENTS = {
+  overview: '工作台总览',
+  simulate: '仿真与录制',
+  train: '强化学习训练',
+  evaluate: 'Sim2Real 评测',
+  deploy: '部署与反馈',
+  records: '调试与记录',
+  station: '设备上位机',
+};
+
+// One polite live region for view-switch announcements: nav buttons keep
+// focus, so without this a screen reader never hears that the page changed.
+function announce(text) {
+  let node = document.getElementById('view-announcer');
+  if (!node) {
+    node = document.createElement('div');
+    node.id = 'view-announcer';
+    node.className = 'sr-only';
+    node.setAttribute('role', 'status');
+    node.setAttribute('aria-live', 'polite');
+    document.body.append(node);
+  }
+  node.textContent = String(text || '');
+}
+
 let lastToastKey = ''; let lastToastAt = 0;
 function showToast(message, tone = 'normal') {
   const region = $('toast-region');
@@ -933,6 +960,10 @@ async function request(path, options = {}) {
 }
 
 function setLoading(value) {
+  // Idempotent: repeating the same state (e.g. the non-silent finally after a
+  // silent poll never set loading) must not rewrite aria-busy/classList, which
+  // fires attribute mutations for assistive tech and observers on every poll.
+  if (state.loading === value && state.overview) return;
   state.loading = value;
   document.body.classList.toggle('is-loading', value);
   $('main-content')?.setAttribute('aria-busy', value ? 'true' : 'false');
@@ -958,8 +989,9 @@ const WORKFLOW_VIEWS = [
   'station',
 ];
 
-function setView(view, { updateHash = true, scroll = true } = {}) {
+function setView(view, { updateHash = true, scroll = true, focus = true } = {}) {
   const wanted = WORKFLOW_VIEWS.includes(view) ? view : 'overview';
+  const changed = document.body.dataset.activeView !== wanted;
   document.body.dataset.activeView = wanted;
   document.querySelectorAll('[data-view-section]').forEach((section) => {
     section.hidden = section.dataset.viewSection !== wanted;
@@ -981,8 +1013,12 @@ function setView(view, { updateHash = true, scroll = true } = {}) {
     }
   });
   if (updateHash && window.location.hash !== '#' + wanted) {
-    window.history.replaceState(
-      null,
+    // Each in-app navigation becomes a real history entry so the browser Back
+    // button steps between views instead of leaving the app entirely.
+    // popstate (wired in wireEvents) drives the reverse direction; hashchange
+    // from manual hash edits still re-syncs via updateHash=false.
+    window.history.pushState(
+      { rdkView: wanted },
       '',
       window.location.pathname + window.location.search + '#' + wanted,
     );
@@ -990,9 +1026,21 @@ function setView(view, { updateHash = true, scroll = true } = {}) {
   // Reset the scroll position when switching views so a sticky header or a
   // previous deep scroll cannot hide the section title and its primary action.
   if (scroll) window.scrollTo({ top: 0, left: 0, behavior: 'auto' });
+  // Keyboard and screen-reader users otherwise stay on the sidebar button
+  // while the entire main content swaps beneath them. Move focus into the
+  // view and announce the switch; skip when the change came from popstate
+  // while focus already lives in the main content (e.g. deep link boot).
+  if (changed && focus) {
+    const main = $('main-content');
+    if (main && !main.contains(document.activeElement)) main.focus({ preventScroll: true });
+    announce(`已切换到：${VIEW_ANNOUNCEMENTS[wanted] || wanted}`);
+  }
   // 评估页的真机对照快照只在视图内轮询，离开即停，避免后台空转。
   if (wanted === 'evaluate') originbotCompareStart();
   else originbotCompareStop();
+  // 设备轮询同理：只在视图内跑，离开即停（stationInit 会按需重启）。
+  if (wanted === 'station') stationBridgePollResume();
+  else stationBridgePollPause();
 }
 
 function setTrainModule(module, { persist = true } = {}) {
@@ -1292,16 +1340,36 @@ function renderSelects() {
   const computeSelect = $('compute-resource-select');
   if (!PRODUCT_PROFILES[state.productId]) state.productId = 'microduck';
   if (productSelect) productSelect.value = state.productId;
+  // Rebuilding a focused select mid-poll drops the caret/selection and makes
+  // an open dropdown pop closed. Rebuild only when the option list or the
+  // intended value actually changed; otherwise leave the live DOM alone.
+  const syncSelect = (select, options, value) => {
+    if (!select) return;
+    const unchanged =
+      select.options.length === options.length &&
+      options.every((option, index) =>
+        select.options[index]?.value === option.value &&
+        select.options[index]?.textContent === option.textContent,
+      ) &&
+      select.value === value;
+    if (unchanged) return;
+    select.replaceChildren(...options.map((option) => {
+      const el = document.createElement('option');
+      el.value = option.value;
+      el.textContent = option.textContent;
+      if (option.ai) el.dataset.ai = 'true';
+      return el;
+    }));
+    select.value = value;
+  };
   if (taskSelect) {
     const taskIds = state.productId === 'originbot' ? ORIGINBOT_TASK_IDS : Object.keys(ACTION_TASKS).filter((id) => !ORIGINBOT_TASK_IDS.includes(id));
-    taskSelect.replaceChildren(...taskIds.map((id) => {
-      const option = document.createElement('option');
-      option.value = id;
-      option.textContent = ACTION_TASKS[id].label;
-      return option;
-    }));
     if (!taskIds.includes(state.taskId)) state.taskId = state.productId === 'originbot' ? 'goal-navigation' : 'walk';
-    taskSelect.value = state.taskId;
+    syncSelect(
+      taskSelect,
+      taskIds.map((id) => ({ value: id, textContent: ACTION_TASKS[id].label })),
+      state.taskId,
+    );
     // Keep the task context visibly in sync with the native select.  The
     // action library below describes the model's controls, while this note
     // describes the workflow task selected by the operator.  Previously the
@@ -1317,62 +1385,49 @@ function renderSelects() {
     });
   }
   if (modelSelect) {
-    modelSelect.replaceChildren();
-    if (!models.length) {
-      const option = document.createElement('option');
-      option.value = '';
-      option.textContent =
-        state.productId === 'rdk-duck' ? '暂无 RDK Duck 模型 · 请导入 manifest' : state.productId === 'originbot' ? '暂无 OriginBot 模型 · 请导入 manifest' : '暂无模型';
-      modelSelect.append(option);
-    }
-    for (const model of models) {
-      const option = document.createElement('option');
-      option.value = model.id;
-      option.textContent = modelLabel(model);
-      modelSelect.append(option);
-    }
     if (!models.some((model) => model.id === state.selectedModelId)) {
       state.selectedModelId = models[0]?.id || '';
     }
-    modelSelect.value = state.selectedModelId;
+    syncSelect(
+      modelSelect,
+      models.length
+        ? models.map((model) => ({ value: model.id, textContent: modelLabel(model) }))
+        : [{
+            value: '',
+            textContent:
+              state.productId === 'rdk-duck' ? '暂无 RDK Duck 模型 · 请导入 manifest' : state.productId === 'originbot' ? '暂无 OriginBot 模型 · 请导入 manifest' : '暂无模型',
+          }],
+      state.selectedModelId,
+    );
   }
   if (deviceSelect) {
-    deviceSelect.replaceChildren();
     if (!devices.length) {
-      const option = document.createElement('option');
-      option.value = '';
-      option.textContent = '没有已登记的板卡';
-      deviceSelect.append(option);
       state.selectedDeviceId = '';
-    } else {
-      for (const device of devices) {
-        const option = document.createElement('option');
-        option.value = device.id;
-        option.textContent = device.name || device.id;
-        deviceSelect.append(option);
-      }
-      if (!devices.some((device) => device.id === state.selectedDeviceId)) {
-        state.selectedDeviceId = devices[0]?.id || '';
-      }
-      deviceSelect.value = state.selectedDeviceId;
+    } else if (!devices.some((device) => device.id === state.selectedDeviceId)) {
+      state.selectedDeviceId = devices[0]?.id || '';
     }
+    syncSelect(
+      deviceSelect,
+      devices.length
+        ? devices.map((device) => ({ value: device.id, textContent: device.name || device.id }))
+        : [{ value: '', textContent: '没有已登记的板卡' }],
+      state.selectedDeviceId,
+    );
   }
   if (computeSelect) {
     const resources = state.overview?.computeResources || [];
-    computeSelect.replaceChildren();
-    const defaultOption = document.createElement('option');
-    defaultOption.value = '';
-    defaultOption.textContent = 'AI 自动选择（推荐）';
-    defaultOption.dataset.ai = 'true';
-    computeSelect.append(defaultOption);
-    for (const resource of resources) {
-      const option = document.createElement('option');
-      option.value = resource.id;
-      option.textContent = `${resource.name} · ${resource.status === 'online' ? '在线' : resource.status === 'offline' ? '离线' : '未测试'}`;
-      computeSelect.append(option);
-    }
     if (!resources.some((resource) => resource.id === state.selectedComputeResourceId)) state.selectedComputeResourceId = '';
-    computeSelect.value = state.selectedComputeResourceId;
+    syncSelect(
+      computeSelect,
+      [
+        { value: '', textContent: 'AI 自动选择（推荐）', ai: true },
+        ...resources.map((resource) => ({
+          value: resource.id,
+          textContent: `${resource.name} · ${resource.status === 'online' ? '在线' : resource.status === 'offline' ? '离线' : '未测试'}`,
+        })),
+      ],
+      state.selectedComputeResourceId,
+    );
   }
   setText('model-count', models.length + ' 个 ' + selectedProductProfile().displayName + ' 模型');
   setText('device-count', devices.length + ' 块板卡');
@@ -1425,7 +1480,12 @@ async function handleComputeResourceAction(action, resource) {
   }
   try {
     if (action === 'delete') {
-      if (!window.confirm('确定删除“' + resource.name + '”？')) return;
+      const approved = await confirmAction({
+        title: '删除 GPU 资源',
+        note: `确定删除“${resource.name}”？删除后引用它的训练提交会回到服务端默认 Worker。`,
+        approveLabel: '删除',
+      });
+      if (!approved) return;
       await request('/sim2real/compute-resources/' + encodeURIComponent(resource.id), { method: 'DELETE' });
       if (state.selectedComputeResourceId === resource.id) state.selectedComputeResourceId = '';
       showToast('GPU 资源已删除', 'success');
@@ -2706,13 +2766,16 @@ async function submitRetrainingFromAdvice(record, advice) {
   }
   const taskId = suggested.taskId ?? record?.taskId;
   const profile = suggested.training?.profile ?? 'standard';
-  const acknowledged = window.confirm(
-    '即将按建议提交一次新的本地训练（任务 ' +
+  const acknowledged = await confirmAction({
+    title: '按建议发起重训',
+    note:
+      '即将按建议提交一次新的本地训练（任务 ' +
       (taskId ?? '未指定') +
       '，档位 ' +
       profile +
       '）。\n这是操作员的显式动作：会真实发起一次本地强化学习训练；分析本身不会自动发起任何训练。',
-  );
+    approveLabel: '显式提交重训',
+  });
   if (!acknowledged) {
     setStatus('已取消：未提交任何请求。');
     return;
@@ -4372,6 +4435,46 @@ function renderRunProgress() {
     meta.innerHTML = chips.map((chip) => '<span>' + escapeHtml(chip) + '</span>').join('');
   }
   $('run-progress-warning')?.toggleAttribute('hidden', latest.mock !== true);
+  renderRunProgressTrack(latest);
+}
+
+// Honest progress for long trainings: the server exposes no completion
+// fraction, so the bar is driven by checkpoint iteration against the run's
+// target. Without a target it degrades to an indeterminate "in flight" bar —
+// never a fabricated percentage.
+function renderRunProgressTrack(run) {
+  const track = $('run-progress-track');
+  const fill = $('run-progress-fill');
+  const note = $('run-progress-track-note');
+  if (!track || !fill) return;
+  const active = run.status === 'queued' || run.status === 'running';
+  if (!active || run.mock === true) {
+    track.hidden = true;
+    track.removeAttribute('aria-valuenow');
+    return;
+  }
+  track.hidden = false;
+  track.classList.toggle('is-indeterminate', !run.training?.targetIterations);
+  const done = Number(run.checkpoint?.iteration) || 0;
+  const target = Number(run.training?.targetIterations) || 0;
+  if (target > 0) {
+    const percent = Math.max(0, Math.min(100, Math.round((done / target) * 100)));
+    fill.style.width = percent + '%';
+    track.setAttribute('aria-valuenow', String(percent));
+    if (note) note.textContent = `checkpoint ${done} / ${target} 轮`;
+  } else {
+    fill.style.width = '';
+    track.removeAttribute('aria-valuenow');
+    if (note) {
+      const elapsed = run.createdAt ? Math.round((Date.now() - new Date(run.createdAt).getTime()) / 60000) : 0;
+      note.textContent =
+        done > 0
+          ? `运行中 · 已到 checkpoint ${done} 轮${elapsed > 0 ? ` · 约 ${elapsed} 分钟` : ''}`
+          : run.status === 'queued'
+            ? '排队中 · 等待 runner 认领'
+            : '运行中 · 尚无 checkpoint 回报';
+    }
+  }
 }
 
 function recordCollection() {
@@ -4469,7 +4572,7 @@ function ensureAgentPanelStyles() {
     .agent-assistant-title-wrap { gap: 10px; min-width: 0; }
     .agent-assistant-title-wrap h2 { margin: 2px 0 0; font-size: 17px; }
     .agent-assistant-mark { display: grid; place-items: center; width: 30px; height: 30px; border-radius: 9px; background: rgba(86,212,255,.13); color: var(--cyan, #56d4ff); font-size: 17px; }
-    .agent-assistant-mode { margin-left: 4px; padding: 3px 7px; border: 1px solid rgba(116,230,176,.3); border-radius: 999px; color: var(--green, #74e6b0); font-size: 10px; white-space: nowrap; }
+    .agent-assistant-mode { margin-left: 4px; padding: 3px 7px; border: 1px solid rgba(116,230,176,.3); border-radius: 999px; color: var(--green, #74e6b0); font-size: 11px; white-space: nowrap; }
     .agent-assistant-body { margin-top: 14px; }
     .agent-assistant[data-collapsed="true"] .agent-assistant-body { display: none; }
     .agent-assistant-lead strong { display: block; font-size: 15px; }
@@ -4798,9 +4901,9 @@ async function refreshActiveRuns() {
   }
 }
 
-async function loadOverview({ quiet = false } = {}) {
+async function loadOverview({ quiet = false, silent = false } = {}) {
   if (state.loading) return;
-  setLoading(true);
+  setLoading(!silent);
   if (!state.overview) {
     setWorkspaceStatus('loading', '正在连接工作区', '正在读取项目、模型和设备状态…');
   }
@@ -4813,11 +4916,16 @@ async function loadOverview({ quiet = false } = {}) {
     // The summary is intentionally lightweight and remains useful to future
     // dashboard surfaces. It is allowed to fail independently from the main
     // overview so the primary workflow still works on older gateways.
-    const [summaryResult, projectsResult, datasetsResult] = await Promise.allSettled([
-      request('/sim2real/workspace-summary'),
-      request('/sim2real/projects'),
-      request('/sim2real/datasets'),
-    ]);
+    // Silent polls (background refresh while a run is active) skip the three
+    // slow-changing aux lists: they only churn requests and re-render churn,
+    // while the operator's live interest is the run status itself.
+    const [summaryResult, projectsResult, datasetsResult] = silent
+      ? [{ status: 'fulfilled', value: undefined }, { status: 'fulfilled', value: undefined }, { status: 'fulfilled', value: undefined }]
+      : await Promise.allSettled([
+          request('/sim2real/workspace-summary'),
+          request('/sim2real/projects'),
+          request('/sim2real/datasets'),
+        ]);
     state.workspaceSummary = summaryResult.status === 'fulfilled' ? summaryResult.value : state.workspaceSummary;
     const projectsAvailable = projectsResult.status === 'fulfilled' && Array.isArray(projectsResult.value?.projects);
     const datasetsAvailable = datasetsResult.status === 'fulfilled' && Array.isArray(datasetsResult.value?.datasets);
@@ -4835,7 +4943,9 @@ async function loadOverview({ quiet = false } = {}) {
     clearAuthGate();
     await refreshActiveRuns();
     renderAll();
-    await loadModelDetails();
+    // Model details rarely change while a run is in flight; re-fetching them
+    // every silent poll doubles request volume for zero operator value.
+    if (!silent) await loadModelDetails();
     setText('hero-updated', '更新于 ' + formatDate(new Date().toISOString()));
     if (summaryResult.status === 'rejected' || projectsResult.status === 'rejected' || datasetsResult.status === 'rejected') {
       const failed = [summaryResult, projectsResult, datasetsResult].filter((result) => result.status === 'rejected').length;
@@ -4861,19 +4971,31 @@ async function loadOverview({ quiet = false } = {}) {
       setWorkspaceStatus('error', '工作区连接失败', `${detail}。检查服务后可以重试。`, { retry: true });
     }
   } finally {
-    setLoading(false);
-    // The first render happens while the overview request is in flight, so
-    // context actions are intentionally disabled there. Reconcile the
-    // controls after loading ends; otherwise a successful request leaves the
-    // project creator and run actions visually enabled but functionally inert.
-    renderProjectContext();
-    renderIntegrations();
+    if (silent) {
+      // Silent polls never touched the loading chrome (setLoading(false) is
+      // safe to skip), but still reconcile the CTA states in case the poll
+      // changed run/device availability.
+      renderProjectContext();
+      renderIntegrations();
+    } else {
+      setLoading(false);
+      // The first render happens while the overview request is in flight, so
+      // context actions are intentionally disabled there. Reconcile the
+      // controls after loading ends; otherwise a successful request leaves the
+      // project creator and run actions visually enabled but functionally inert.
+      renderProjectContext();
+      renderIntegrations();
+    }
     scheduleOverviewPolling();
   }
 }
 
 function scheduleOverviewPolling() {
   if (overviewPollTimer !== null) window.clearTimeout(overviewPollTimer);
+  // A hidden tab cannot inform anyone; holding the poll avoids burning the
+  // rate limit (1200/5min) while the operator reads another window. The
+  // visibilitychange handler in wireEvents re-arms it on return.
+  if (document.visibilityState !== 'visible') return;
   const hasActiveRun = runsForCurrentModel().some((run) =>
     ['queued', 'running'].includes(String(run.status || '').toLowerCase()),
   );
@@ -4884,7 +5006,7 @@ function scheduleOverviewPolling() {
   overviewPollTimer = window.setTimeout(
     () => {
       overviewPollTimer = null;
-      void loadOverview({ quiet: true });
+      void loadOverview({ quiet: true, silent: true });
     },
     hasActiveRun ? activeDelay : 30_000,
   );
@@ -4984,6 +5106,35 @@ function settleConfirmRun(approved) {
   if (dialog instanceof HTMLDialogElement && dialog.open) dialog.close();
   const resolve = state.confirmRunResolve;
   state.confirmRunResolve = null;
+  if (resolve) resolve(approved);
+}
+
+// Product-styled replacement for window.confirm(): one dialog skin for every
+// consequential action (motion, board switches, resource deletion). Focus is
+// trapped natively by <dialog>, Escape cancels, and the promise always settles.
+function confirmAction({ title, note, approveLabel = '确认执行' } = {}) {
+  const dialog = $('confirm-action-dialog');
+  if (!(dialog instanceof HTMLDialogElement)) return Promise.resolve(window.confirm(note || title || ''));
+  if (state.confirmActionResolve) state.confirmActionResolve(false);
+  state.confirmActionResolve = null;
+  setText('confirm-action-title', title || '确认操作');
+  const noteNode = $('confirm-action-note');
+  if (noteNode) noteNode.textContent = String(note || '');
+  setText('confirm-action-approve', approveLabel);
+  return new Promise((resolve) => {
+    state.confirmActionResolve = resolve;
+    dialog.showModal();
+  });
+}
+
+function settleConfirmAction(approved) {
+  // Grab and clear the pending resolver BEFORE dialog.close(): the close
+  // event can fire synchronously (JSDOM), and its listener must not see a
+  // still-pending promise and settle it a second time with a different value.
+  const resolve = state.confirmActionResolve;
+  state.confirmActionResolve = null;
+  const dialog = $('confirm-action-dialog');
+  if (dialog instanceof HTMLDialogElement && dialog.open) dialog.close();
   if (resolve) resolve(approved);
 }
 
@@ -5859,11 +6010,14 @@ function stationReadDriveInputs() {
 
 async function stationSendDrive() {
   const { linear, angular, durationSec } = stationReadDriveInputs();
-  const acknowledged = window.confirm(
-    `即将让 OriginBot 以 ${linear.toFixed(2)} m/s（转向 ${angular.toFixed(2)} rad/s）运动 ${durationSec.toFixed(1)} 秒。\n` +
+  const acknowledged = await confirmAction({
+    title: '确认底盘运动（受控 Canary）',
+    note:
+      `即将让 OriginBot 以 ${linear.toFixed(2)} m/s（转向 ${angular.toFixed(2)} rad/s）运动 ${durationSec.toFixed(1)} 秒。\n` +
       '请确认机器人周围无障碍物、桌面/场地已清空。\n' +
       '急停按钮随时可用；底盘 500ms 看门狗兜底。',
-  );
+    approveLabel: '执行运动',
+  });
   if (!acknowledged) return;
   try {
     const payload = await request('/sim2real/board-station/drive', {
@@ -6216,11 +6370,14 @@ async function stationPolicyStart() {
     stationLog('目标点必须是数值（单位：米）', 'error');
     return;
   }
-  const acknowledged = window.confirm(
-    `即将让 OriginBot 由策略网络驱动运动（方向指令 ${direction.toFixed(1)}${goalX !== undefined && goalY !== undefined ? `，目标 ${goalX.toFixed(2)}, ${goalY.toFixed(2)} m` : ''}）。\n` +
-    '策略输出将被钳制在 0.3 m/s / 1.0 rad/s 内，500ms 无命令底盘自动停车。\n' +
-    '请确认机器人周围无障碍物、场地已清空，急停按钮随时可用。',
-  );
+  const acknowledged = await confirmAction({
+    title: '确认策略驱动运动',
+    note:
+      `即将让 OriginBot 由策略网络驱动运动（方向指令 ${direction.toFixed(1)}${goalX !== undefined && goalY !== undefined ? `，目标 ${goalX.toFixed(2)}, ${goalY.toFixed(2)} m` : ''}）。\n` +
+      '策略输出将被钳制在 0.3 m/s / 1.0 rad/s 内，500ms 无命令底盘自动停车。\n' +
+      '请确认机器人周围无障碍物、场地已清空，急停按钮随时可用。',
+    approveLabel: '启动策略',
+  });
   if (!acknowledged) return;
   try {
     const payload = await request('/sim2real/board-station/policy/start', {
@@ -6493,15 +6650,26 @@ async function stationDeviceManagerLoad() {
   }
   for (const connection of connections) list.append(stationDeviceRow(connection));
   if (bridgeDevices.length) stationLog(`已发现 ${bridgeDevices.length} 台本地 Bridge 设备，可直接连接`, 'ok');
-  if (!state.station.bridgePollTimer) {
-    state.station.bridgePollTimer = window.setInterval(() => {
-      if (document.visibilityState === 'visible') void stationDeviceManagerLoad();
-    }, 3000);
-  }
+  stationBridgePollResume();
   // The software workflow remains usable without a board. This manager is
   // only a hardware discovery surface, so an SSH failure must not block the
   // Bridge poll or the simulation/training paths.
   stationSwitchBoardProbe();
+}
+
+// The Bridge discovery poll only runs while the station view is visible.
+// Leaving the view (or hiding the tab) clears the timer; returning re-arms it.
+function stationBridgePollResume() {
+  if (state.station.bridgePollTimer) return;
+  state.station.bridgePollTimer = window.setInterval(() => {
+    if (document.visibilityState === 'visible') void stationDeviceManagerLoad();
+  }, 3000);
+}
+
+function stationBridgePollPause() {
+  if (!state.station.bridgePollTimer) return;
+  window.clearInterval(state.station.bridgePollTimer);
+  state.station.bridgePollTimer = null;
 }
 
 function wireDeviceManagerEvents() {
@@ -6617,7 +6785,12 @@ function wireDeviceManagerEvents() {
         stationLog('隧道已断开，恢复默认 agent 目标');
         stationInit();
       } else if (action === 'remove') {
-        if (!window.confirm(`移除设备 ${item.querySelector('.station-device-item-title')?.textContent || connectionId}？隧道会一并断开。`)) {
+        const approved = await confirmAction({
+          title: '移除设备',
+          note: `移除设备 ${item.querySelector('.station-device-item-title')?.textContent || connectionId}？隧道会一并断开。`,
+          approveLabel: '移除设备',
+        });
+        if (!approved) {
           button.disabled = false;
           return;
         }
@@ -6708,9 +6881,11 @@ function wireStationSwitchEvents() {
 
   const platformToggle = async (name, next) => {
     if (next) {
-      const confirmed = window.confirm(
-        '开启平台运动开关前请确认：操作者在机器人旁、场地已清空、急停随时可用。\n（板端开关仍需单独开启才会真正运动）',
-      );
+      const confirmed = await confirmAction({
+        title: '开启平台运动开关',
+        note: '开启平台运动开关前请确认：操作者在机器人旁、场地已清空、急停随时可用。\n（板端开关仍需单独开启才会真正运动）',
+        approveLabel: '开启开关',
+      });
       if (!confirmed) return null;
     }
     await request('/sim2real/board-station/switches', {
@@ -6748,9 +6923,11 @@ function wireStationSwitchEvents() {
     const connectionId = $('station-switch-board-name')?.getAttribute('data-connection-id');
     if (!connectionId || !flag) return;
     if (next) {
-      const confirmed = window.confirm(
-        '即将修改板端运动开关并重启板端 agent（约 2 秒，期间遥测短暂中断）。\n请再次确认操作者在场、场地清空。',
-      );
+      const confirmed = await confirmAction({
+        title: '修改板端运动开关',
+        note: '即将修改板端运动开关并重启板端 agent（约 2 秒，期间遥测短暂中断）。\n请再次确认操作者在场、场地清空。',
+        approveLabel: '写入并重启',
+      });
       if (!confirmed) return;
     }
     button.disabled = true;
@@ -6874,7 +7051,23 @@ function wireEvents() {
   window.addEventListener('hashchange', () =>
     setView(window.location.hash.slice(1), { updateHash: false }),
   );
+  // Back/forward now walks the pushed view history instead of leaving the
+  // app. updateHash=false keeps popstate from re-pushing an entry.
+  window.addEventListener('popstate', () => {
+    const view = window.location.hash.slice(1);
+    setView(WORKFLOW_VIEWS.includes(view) ? view : 'overview', { updateHash: false });
+  });
   window.addEventListener('message', handleMicroduckRecordingReady);
+  // Hidden tabs keep their data but stop paying for it: the overview poll is
+  // cancelled on hide and refreshed once on return (scheduleOverviewPolling
+  // refuses to arm while hidden, so a loadOverview that lands mid-hide does
+  // not restart the cycle either).
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible') {
+      if (!state.loading && state.overview) void loadOverview({ quiet: true, silent: true });
+      else scheduleOverviewPolling();
+    }
+  });
   $('refresh-button')?.addEventListener('click', () => loadOverview());
   $('workspace-status-retry')?.addEventListener('click', () => {
     if (!state.loading) void loadOverview();
@@ -7191,6 +7384,16 @@ function wireEvents() {
   });
   $('confirm-run-cancel')?.addEventListener('click', () => settleConfirmRun(false));
   $('confirm-run-approve')?.addEventListener('click', () => settleConfirmRun(true));
+  $('confirm-action-cancel')?.addEventListener('click', () => settleConfirmAction(false));
+  $('confirm-action-approve')?.addEventListener('click', () => settleConfirmAction(true));
+  const confirmActionDialog = $('confirm-action-dialog');
+  confirmActionDialog?.addEventListener('cancel', (event) => {
+    event.preventDefault();
+    settleConfirmAction(false);
+  });
+  confirmActionDialog?.addEventListener('close', () => {
+    if (state.confirmActionResolve) settleConfirmAction(false);
+  });
   const confirmRunDialog = $('confirm-run-dialog');
   confirmRunDialog?.addEventListener('cancel', (event) => {
     event.preventDefault();
@@ -7312,7 +7515,9 @@ function wireCommandPalette() {
 
 wireEvents();
 syncNotifyToggle();
-setView(window.location.hash.slice(1) || 'overview', { updateHash: false });
+// Boot view restore: no push, no focus grab, no announcement — it is the
+// first paint, not a navigation.
+setView(window.location.hash.slice(1) || 'overview', { updateHash: false, focus: false });
 // Render the product boundary immediately, even while the account-scoped
 // overview request is still loading (important when RDK Duck was selected in
 // a previous session).

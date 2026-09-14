@@ -79,7 +79,7 @@
 }
 .context-strip .context-live-item span {
   color: var(--muted);
-  font-size: 10.5px;
+  font-size: 11px;
   white-space: nowrap;
 }
 .context-strip .context-live-item strong {
