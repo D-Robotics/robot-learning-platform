@@ -3,8 +3,17 @@
 import fs from 'node:fs';
 import path from 'node:path';
 
-const [id = 'new-robot', family = 'diff-drive', displayName = 'New RDK Robot'] =
-  process.argv.slice(2);
+const args = process.argv.slice(2);
+if (args.includes('--help') || args.includes('-h')) {
+  console.log(
+    'Usage: npm run create:adapter -- <id> [diff-drive|omni-drive|joint|custom] [displayName]',
+  );
+  console.log(
+    'Creates adapters/<id>.json and profiles/<id>-profile.json. Replace CHANGE_ME, then run npm run verify:hardware-profiles.',
+  );
+  process.exit(0);
+}
+const [id = 'new-robot', family = 'diff-drive', displayName = 'New RDK Robot'] = args;
 const families = new Set(['diff-drive', 'omni-drive', 'joint', 'custom']);
 if (!/^[a-z][a-z0-9-]{1,63}$/.test(id) || !families.has(family)) {
   throw new Error(

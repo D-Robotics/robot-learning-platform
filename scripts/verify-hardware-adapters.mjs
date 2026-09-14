@@ -26,10 +26,11 @@ for (const file of files) {
     if (!String(topics[sensor].name).startsWith('/'))
       throw new Error(`${file}: ros.topics.${sensor}.name must be absolute`);
   }
-  if (profile.actuator?.kind !== 'diff-drive' || !profile.actuator.commandTopic) {
-    throw new Error(`${file}: only declared differential-drive actuator profiles are accepted`);
-  }
-  if (profile.actuator.commandTopic !== topics.cmdVel.name)
+  const actuatorFamily = profile.actuator?.kind;
+  if (!['diff-drive', 'omni-drive', 'joint', 'custom'].includes(actuatorFamily))
+    throw new Error(`${file}: actuator.kind must be diff-drive, omni-drive, joint, or custom`);
+  if (!profile.actuator.commandTopic) throw new Error(`${file}: actuator.commandTopic is required`);
+  if (actuatorFamily === 'diff-drive' && profile.actuator.commandTopic !== topics.cmdVel.name)
     throw new Error(`${file}: cmdVel topic must match actuator.commandTopic`);
   if (!profile.actuator.messageType?.includes('/'))
     throw new Error(`${file}: actuator.messageType required`);
@@ -47,6 +48,14 @@ for (const file of files) {
     profile.capabilities.some((item) => typeof item !== 'string' || !item.trim())
   )
     throw new Error(`${file}: capabilities must be a non-empty string array`);
+  if (
+    profile.policy.actionSize === 2 &&
+    profile.runtime?.actionProjection === 'identity' &&
+    !['physical-twist', 'normalized-twist'].includes(String(profile.runtime?.actionOutput || ''))
+  )
+    throw new Error(
+      `${file}: 2D identity policies must declare runtime.actionOutput (physical-twist or normalized-twist)`,
+    );
 }
 console.log(
   `[hardware-adapters] PASS — ${files.length} declarative profiles validated (${[...ids].join(', ')})`,

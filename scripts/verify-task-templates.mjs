@@ -45,6 +45,12 @@ for (const f of files) {
   if (!(c.expandFactor > 1)) throw Error(`${f}: curriculum.expandFactor must exceed 1`);
   const d = v.domainRandomization || {};
   for (const k of DR_KEYS) if (d[k]) pair(d[k], `${f}: domainRandomization.${k}`);
+  if (
+    d.actionLatencySteps &&
+    (!d.actionLatencySteps.every((x) => Number.isInteger(x) && x >= 0) ||
+      d.actionLatencySteps[0] > d.actionLatencySteps[1])
+  )
+    throw Error(`${f}: domainRandomization.actionLatencySteps must be non-negative integers`);
   if (d.odomDropoutProb)
     if (!(d.odomDropoutProb[0] >= 0 && d.odomDropoutProb[1] <= 1))
       throw Error(`${f}: domainRandomization.odomDropoutProb must be a probability in [0,1]`);
@@ -63,6 +69,10 @@ for (const f of files) {
       )
         throw Error(
           `${f}: domainRandomization.evalEnvelopes.${name} must be 6 or 8 numbers [motorGain, lagTauSeconds, gyroNoise, odomNoise, angularBias, latencySteps, (odomDropout, slipScale)]`,
+        );
+      if (!Number.isInteger(e[5]) || e[5] < 0)
+        throw Error(
+          `${f}: domainRandomization.evalEnvelopes.${name}[5] latencySteps must be a non-negative integer`,
         );
     }
   const q = v.qualityGate || {};

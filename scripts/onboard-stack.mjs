@@ -11,7 +11,10 @@ import { fileURLToPath } from 'node:url';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const json = process.argv.includes('--json');
-const env = { ...process.env, RDK_ACCEPTANCE_TIMEOUT_MS: process.env.RDK_ACCEPTANCE_TIMEOUT_MS || '8000' };
+const env = {
+  ...process.env,
+  RDK_ACCEPTANCE_TIMEOUT_MS: process.env.RDK_ACCEPTANCE_TIMEOUT_MS || '8000',
+};
 
 function run(script, args, extraEnv = {}) {
   const result = spawnSync(process.execPath, [path.join(root, 'scripts', script), ...args], {
@@ -21,12 +24,26 @@ function run(script, args, extraEnv = {}) {
     maxBuffer: 2_000_000,
   });
   let parsed = null;
-  try { parsed = JSON.parse(result.stdout || ''); } catch {}
+  try {
+    parsed = JSON.parse(result.stdout || '');
+  } catch {
+    // The probe output is optional; the caller still receives the raw streams.
+  }
   return { exitCode: result.status ?? 1, parsed, stdout: result.stdout, stderr: result.stderr };
 }
 
 function main() {
-  const server = run('onboard-gpu-server.mjs', ['--host', process.env.RDK_GPU_HOST || '', '--port', process.env.RDK_GPU_PORT || '22', '--user', process.env.RDK_GPU_USER || '', '--dir', process.env.RDK_GPU_DIR || '~/rdk-sim2real', '--json']);
+  const server = run('onboard-gpu-server.mjs', [
+    '--host',
+    process.env.RDK_GPU_HOST || '',
+    '--port',
+    process.env.RDK_GPU_PORT || '22',
+    '--user',
+    process.env.RDK_GPU_USER || '',
+    '--dir',
+    process.env.RDK_GPU_DIR || '~/rdk-sim2real',
+    '--json',
+  ]);
   const device = run('accept-new-device.mjs', ['--json', '--allow-missing']);
   const result = {
     schemaVersion: 1,
@@ -36,9 +53,10 @@ function main() {
     server: server.parsed || { ok: false, error: server.stderr?.trim() || 'server probe failed' },
     device: device.parsed || { ok: false, error: device.stderr?.trim() || 'device probe failed' },
     ok: Boolean(server.parsed?.ok && device.parsed?.ok),
-    next: server.parsed?.ok && device.parsed?.ok
-      ? 'ready-for-data-training-compile-load-gated-motion'
-      : 'fix-blocked-checks-before-training-or-deployment',
+    next:
+      server.parsed?.ok && device.parsed?.ok
+        ? 'ready-for-data-training-compile-load-gated-motion'
+        : 'fix-blocked-checks-before-training-or-deployment',
   };
   if (json) console.log(JSON.stringify(result, null, 2));
   else {

@@ -28,7 +28,10 @@ const resultPath = value('result');
 
 function fail(error, message, extra = {}) {
   const result = { ok: false, status: 'blocked', error, message, target, ...extra };
-  if (resultPath) return import('node:fs/promises').then(({ writeFile }) => writeFile(resultPath, JSON.stringify(result, null, 2)));
+  if (resultPath)
+    return import('node:fs/promises').then(({ writeFile }) =>
+      writeFile(resultPath, JSON.stringify(result, null, 2)),
+    );
   console.error(JSON.stringify(result));
   process.exitCode = 2;
   return Promise.resolve();
@@ -52,23 +55,56 @@ if (!input || !output) {
   } else if (!info.isFile() || info.size === 0) {
     await fail('source-artifact-invalid', 'source artifact must be a non-empty file');
   } else {
-  const compiler = String(process.env.RDK_BPU_COMPILER || '').trim();
-  if (target !== 'x5' || !compiler || !path.isAbsolute(compiler)) {
-    await fail('bpu-toolchain-unavailable', 'set an absolute RDK_BPU_COMPILER supplied by the board toolchain; source ONNX remains non-deployable', { compiler: compiler || null, source: resolvedInput });
-  } else {
-    const child = spawn(compiler, ['--input', resolvedInput, '--output', resolvedOutput], { stdio: ['ignore', 'pipe', 'pipe'], shell: false });
-    let stderr = '';
-    child.stderr.on('data', (chunk) => { stderr += chunk.toString().slice(-4000); });
-    child.stdout.resume();
-    child.once('error', async () => { await fail('bpu-compile-failed', 'compiler could not be started', { compiler }); });
-    child.once('close', async (code) => {
-      if (code !== 0) return fail('bpu-compile-failed', stderr || `compiler exited with ${code}`, { compiler, exitCode: code });
-      const bytes = await readFile(resolvedOutput);
-      if (!bytes.length) return fail('compiled-artifact-empty', 'compiler produced an empty artifact', { compiler });
-      const result = { ok: true, status: 'completed', target, compiler, format: 'bin', deployable: true, artifact: { artifactRef: `artifact://compiled/${target}/${path.basename(resolvedOutput)}`, sha256: createHash('sha256').update(bytes).digest('hex'), sizeBytes: bytes.length } };
-      if (resultPath) await (await import('node:fs/promises')).writeFile(resultPath, JSON.stringify(result, null, 2));
-      else console.log(JSON.stringify(result));
-    });
-  }
+    const compiler = String(process.env.RDK_BPU_COMPILER || '').trim();
+    if (target !== 'x5' || !compiler || !path.isAbsolute(compiler)) {
+      await fail(
+        'bpu-toolchain-unavailable',
+        'set an absolute RDK_BPU_COMPILER supplied by the board toolchain; source ONNX remains non-deployable',
+        { compiler: compiler || null, source: resolvedInput },
+      );
+    } else {
+      const child = spawn(compiler, ['--input', resolvedInput, '--output', resolvedOutput], {
+        stdio: ['ignore', 'pipe', 'pipe'],
+        shell: false,
+      });
+      let stderr = '';
+      child.stderr.on('data', (chunk) => {
+        stderr += chunk.toString().slice(-4000);
+      });
+      child.stdout.resume();
+      child.once('error', async () => {
+        await fail('bpu-compile-failed', 'compiler could not be started', { compiler });
+      });
+      child.once('close', async (code) => {
+        if (code !== 0)
+          return fail('bpu-compile-failed', stderr || `compiler exited with ${code}`, {
+            compiler,
+            exitCode: code,
+          });
+        const bytes = await readFile(resolvedOutput);
+        if (!bytes.length)
+          return fail('compiled-artifact-empty', 'compiler produced an empty artifact', {
+            compiler,
+          });
+        const result = {
+          ok: true,
+          status: 'completed',
+          target,
+          compiler,
+          format: 'bin',
+          deployable: true,
+          artifact: {
+            artifactRef: `artifact://compiled/${target}/${path.basename(resolvedOutput)}`,
+            sha256: createHash('sha256').update(bytes).digest('hex'),
+            sizeBytes: bytes.length,
+          },
+        };
+        if (resultPath)
+          await (
+            await import('node:fs/promises')
+          ).writeFile(resultPath, JSON.stringify(result, null, 2));
+        else console.log(JSON.stringify(result));
+      });
+    }
   }
 }

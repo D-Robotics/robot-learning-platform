@@ -71,6 +71,17 @@ for (const file of files) {
   )
     fail('runtime.decisionHz must be 1..50');
   if (
+    p.runtime?.actionOutput !== undefined &&
+    !['physical-twist', 'normalized-twist'].includes(String(p.runtime.actionOutput).trim())
+  )
+    fail('runtime.actionOutput must be physical-twist or normalized-twist');
+  if (
+    p.policy?.actionSize === 2 &&
+    p.runtime?.actionProjection === 'identity' &&
+    !['physical-twist', 'normalized-twist'].includes(String(p.runtime?.actionOutput || ''))
+  )
+    fail('2D identity policies must declare runtime.actionOutput');
+  if (
     p.safety?.sensorStallSec !== undefined &&
     (Number(p.safety.sensorStallSec) < 0.1 || Number(p.safety.sensorStallSec) > 2)
   )

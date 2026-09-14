@@ -19,7 +19,13 @@ const required = [
   ],
   [
     'services/sim2real-web/board-telemetry-uploader.py',
-    ['idempotency-key', 'source', 'board-agent'],
+    [
+      'RDK_SIM2REAL_TELEMETRY_ATTESTATION_TOKEN',
+      'RDK_SIM2REAL_TELEMETRY_TOKEN',
+      'idempotency-key',
+      'source',
+      'board-agent',
+    ],
   ],
   [
     'services/sim2real-web/rdk-board-telemetry-uploader.service',

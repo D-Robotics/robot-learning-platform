@@ -72,6 +72,25 @@ copyFile(
   path.join('dist-server', 'services', 'sim2real-web', 'local-board-agent.mjs'),
 );
 
+// Ship the dependency-free operational CLIs with a compiled release. They are
+// intentionally kept beside the server output so an operator can run a
+// post-deploy probe or a maintenance-window backup without a source checkout.
+for (const file of [
+  'verify-production-config.mjs',
+  'verify-production-config.test.mjs',
+  'probe-sim2real.mjs',
+  'sim2real-storage-backup.mjs',
+  'sim2real-nightly-backup.sh',
+  'verify-storage-backup.mjs',
+  'verify-service-probe.mjs',
+]) {
+  copyFile(path.join('scripts', file), path.join('dist-server', 'scripts', file));
+}
+copyFile(
+  path.join('services', 'sim2real-web', 'sim2real.production.env.example'),
+  path.join('dist-server', 'services', 'sim2real-web', 'sim2real.production.env.example'),
+);
+
 // The server embeds resolved task packs into runner payloads (robogo-runner
 // imports scripts/resolve-task-pack.mjs), and that resolver reads tasks/ +
 // adapters/ JSON. Ship all three so a dist deployment trains the declared

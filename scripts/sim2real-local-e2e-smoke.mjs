@@ -135,9 +135,12 @@ async function main() {
   const storageDir = path.join(scratchRoot, 'storage');
   const workerDataDir = path.join(scratchRoot, 'worker');
   const engineDir = path.join(scratchRoot, 'engine');
-  await mkdir(storageDir, { recursive: true });
-  await mkdir(workerDataDir, { recursive: true });
-  await mkdir(engineDir, { recursive: true });
+  // The audit stream shares the storage root and requires the same private
+  // 0700 boundary as a production ledger.  Keep the disposable smoke fixture
+  // honest so a passing flow also proves the audit path is writable/healthy.
+  await mkdir(storageDir, { recursive: true, mode: 0o700 });
+  await mkdir(workerDataDir, { recursive: true, mode: 0o700 });
+  await mkdir(engineDir, { recursive: true, mode: 0o700 });
   const manifest = JSON.parse(await readFile(manifestPath, 'utf8'));
   manifest.modelId = 'rdk-duck-smoke-local-e2e';
   manifest.displayName = 'RDK Duck local smoke';
@@ -399,6 +402,18 @@ async function main() {
       ),
       true,
     );
+
+    // The smoke path must exercise the same private audit boundary as a
+    // production write instance. A successful domain flow with a failed
+    // audit append is not a healthy release signal.
+    const auditHealth = await fetchJson(`${base}/api/v1/duck/audit/health`, {
+      headers: { accept: 'application/json' },
+    });
+    assert.equal(auditHealth.response.status, 200);
+    assert.equal(auditHealth.body.ok, true);
+    assert.equal(auditHealth.body.readable, true);
+    assert.equal(auditHealth.body.writable, true);
+    assert.ok(Number(auditHealth.body.eventCount) >= 1);
 
     console.log(
       '[sim2real-smoke] PASS overview -> local run completion -> idempotent replay -> mock board preflight blocked',

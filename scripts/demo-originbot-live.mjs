@@ -338,7 +338,7 @@ try {
         );
         console.log(
           dim(
-            '  开启: 板端 /root/rdk-board-agent/agent.env 加 RDK_SIM2REAL_BOARD_AGENT_ENABLE_DRIVE=1 并重启服务;',
+            '  开启: 板端 /etc/rdk-board-agent/agent.env 加 RDK_SIM2REAL_BOARD_AGENT_ENABLE_DRIVE=1 并重启服务;',
           ),
         );
         console.log(

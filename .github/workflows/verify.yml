@@ -27,11 +27,34 @@ jobs:
           node-version: ${{ matrix.node-version }}
           cache: npm
       - name: Install dependencies
-        run: npm ci --ignore-scripts --no-audit --no-fund
+        run: npm ci --ignore-scripts --no-fund
       - name: Lint
-        run: npm run lint
+        # Warnings are release debt in a mature product; keep CI aligned with
+        # the repository's local gate so a new warning cannot quietly merge.
+        run: npm run lint -- --max-warnings=0
+      - name: Format
+        run: npm run format:check
       - name: Verify contracts, UI wiring, and deployment assets
         run: npm run verify
+      - name: Validate systemd units
+        # Ubuntu runners provide systemd-analyze; keep the repository's local
+        # macOS workflow usable while making the Linux deployment syntax a CI
+        # release gate.
+        run: VERIFY_SYSTEMD=1 npm run verify:deployment
+      - name: Coverage gate
+        if: matrix.node-version == 22
+        run: npm run test:coverage
+      - name: Production dependency audit
+        if: matrix.node-version == 22
+        run: npm audit --omit=dev --audit-level=high
+      - name: Full dependency audit
+        if: matrix.node-version == 22
+        # Keep the test/tooling graph clean as well; this is intentionally
+        # separate from the production gate so its scope remains obvious.
+        run: npm audit --audit-level=moderate
+      - name: Public release security scan
+        if: matrix.node-version == 22
+        run: npm run verify:security
       # `npm run verify` already ends with `npm run build`; keep a standalone
       # type-check pass (no emit) as a fast signal without repeating the build.
       - name: Type-check

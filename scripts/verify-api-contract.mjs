@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { readFileSync, statSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -25,6 +25,41 @@ import { fileURLToPath } from 'node:url';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const openapiText = readFileSync(path.join(root, 'docs/api/openapi.yaml'), 'utf8');
+
+// The contract introspection imports compiled route factories so it behaves
+// exactly like the production service.  A stale or missing ignored
+// `dist-server` would otherwise make this check silently validate an older
+// API.  Fail with an actionable build hint before importing any module.
+const runtimeModules = [
+  ['server/routes/sim2real-routes.ts', 'dist-server/server/routes/sim2real-routes.js'],
+  ['server/routes/sim2real-agent-routes.ts', 'dist-server/server/routes/sim2real-agent-routes.js'],
+  ['server/sim2real/studio-login-relay.ts', 'dist-server/server/sim2real/studio-login-relay.js'],
+  ['server/sim2real/standalone-adapters.ts', 'dist-server/server/sim2real/standalone-adapters.js'],
+  // The standalone composition root owns a small set of API routes that are
+  // intentionally outside the reusable routers (capability discovery and the
+  // optional DSH chat bridge). Keep the compiled root in the freshness check
+  // so this gate cannot validate an older direct surface by accident.
+  ['services/sim2real-web/server.ts', 'dist-server/services/sim2real-web/server.js'],
+];
+for (const [source, compiled] of runtimeModules) {
+  const sourcePath = path.join(root, source);
+  const compiledPath = path.join(root, compiled);
+  let sourceStat;
+  let compiledStat;
+  try {
+    sourceStat = statSync(sourcePath);
+    compiledStat = statSync(compiledPath);
+  } catch {
+    throw new Error(
+      `[api-contract] compiled route module missing (${compiled}); run "npm run build" before verifying the API contract`,
+    );
+  }
+  if (sourceStat.mtimeMs > compiledStat.mtimeMs + 1000) {
+    throw new Error(
+      `[api-contract] compiled route module is older than ${source}; run "npm run build" before verifying the API contract`,
+    );
+  }
+}
 
 /** Extract declared paths + methods from the OpenAPI YAML without a parser. */
 function declaredOperations(text) {
@@ -72,6 +107,24 @@ function collectRoutes(router, prefix = '') {
   return found;
 }
 
+/**
+ * Collect only route layers registered directly on a composition-root app.
+ * Mounted routers are covered by their own factory checks above; recursing
+ * here would pull the legacy alias into the versioned contract comparison.
+ */
+function collectDirectRoutes(router) {
+  const found = [];
+  for (const layer of router?.stack ?? []) {
+    if (!layer.route) continue;
+    const routePath = Array.isArray(layer.route.path) ? layer.route.path[0] : layer.route.path;
+    if (typeof routePath !== 'string') continue;
+    for (const [method, enabled] of Object.entries(layer.route.methods ?? {})) {
+      if (enabled) found.push([method, routePath]);
+    }
+  }
+  return found;
+}
+
 function normalizeRoutePath(routePath) {
   return (
     routePath
@@ -93,12 +146,16 @@ const { createDeviceBoardDetectRouter } = await import(
 const { createSim2RealAgentRouter } = await import(
   path.join(root, 'dist-server/server/routes/sim2real-agent-routes.js')
 );
+const { createSim2RealWebApp } = await import(
+  path.join(root, 'dist-server/services/sim2real-web/server.js')
+);
 
 const legacyRouter = createSim2RealRouter({});
 const versionedRouter = createSim2RealRouter({}, { prefix: SIM2REAL_VERSIONED_API_PREFIX });
 const relayRouter = createStudioLoginRelayRouter();
 const boardDetectRouter = createDeviceBoardDetectRouter(undefined, {});
 const agentRouter = createSim2RealAgentRouter();
+const webApp = createSim2RealWebApp();
 
 const legacyRoutes = collectRoutes(legacyRouter).map(([method, p]) => [
   method,
@@ -135,6 +192,12 @@ const runtimeRoutes = new Set([
   ...collectRoutes(relayRouter).map(([m, p]) => `${m} ${normalizeRoutePath(p)}`),
   ...collectRoutes(boardDetectRouter).map(([m, p]) => `${m} ${normalizeRoutePath(p)}`),
   ...collectRoutes(agentRouter).map(([m, p]) => `${m} ${normalizeRoutePath(p)}`),
+  // Do not recurse into mounted routers here: their legacy/versioned aliases
+  // are already represented above. These are only the direct API layers
+  // registered by the standalone composition root itself.
+  ...collectDirectRoutes(webApp.router)
+    .filter(([, p]) => p.startsWith('/api/sim2real/'))
+    .map(([m, p]) => `${m} ${normalizeRoutePath(p)}`),
 ]);
 
 const declared = declaredOperations(openapiText);

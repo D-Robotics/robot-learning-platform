@@ -79,11 +79,7 @@ function run(command, commandArgs, options = {}) {
 
 function checkLocalRuntime() {
   const nodeMajor = Number(process.versions.node.split('.')[0]);
-  add(
-    '本地 Node.js',
-    nodeMajor >= 20 ? 'pass' : 'blocked',
-    `${process.version}（需要 Node 20+）`,
-  );
+  add('本地 Node.js', nodeMajor >= 20 ? 'pass' : 'blocked', `${process.version}（需要 Node 20+）`);
   const python = env('RDK_STARTER_ENGINE_PYTHON') || 'python3';
   const probe = run(python, ['-c', 'import torch, onnx; print(torch.__version__)']);
   add(
@@ -101,7 +97,7 @@ function checkSshServer() {
       'GPU 服务器 SSH',
       'blocked',
       '未配置 RDK_ACCEPTANCE_SERVER_HOST',
-      '设置主机、用户和端口；例如 RDK_ACCEPTANCE_SERVER_HOST=10.0.0.20',
+      '设置主机、用户和端口；例如 RDK_ACCEPTANCE_SERVER_HOST=board-host.example.internal',
     );
     return;
   }
@@ -146,7 +142,9 @@ function checkCompiler() {
   add(
     'HBDK 编译器',
     result.status === 0 ? 'pass' : 'blocked',
-    result.status === 0 ? (result.stdout || result.stderr).trim().slice(0, 240) : (result.stderr || '执行失败').trim(),
+    result.status === 0
+      ? (result.stdout || result.stderr).trim().slice(0, 240)
+      : (result.stderr || '执行失败').trim(),
     result.status === 0 ? '' : '安装与 X5 匹配的 HBDK/OpenExplorer 工具链',
   );
 }
@@ -189,37 +187,75 @@ async function main() {
   } else {
     const headers = authHeaders('RDK_ACCEPTANCE_PLATFORM_TOKEN');
     await getJson('平台健康检查', url(platform, '/healthz'), headers);
-    const overview = await getJson('平台工作区/设备清单', url(platform, '/api/sim2real/overview'), headers);
+    const overview = await getJson(
+      '平台工作区/设备清单',
+      url(platform, '/api/sim2real/overview'),
+      headers,
+    );
     if (overview) {
       const devices = Array.isArray(overview.devices) ? overview.devices.length : 0;
-      add('平台设备注册', devices > 0 ? 'pass' : 'blocked', `${devices} 个设备`, '先在设备连接页登记 OriginBot');
+      add(
+        '平台设备注册',
+        devices > 0 ? 'pass' : 'blocked',
+        `${devices} 个设备`,
+        '先在设备连接页登记 OriginBot',
+      );
     }
   }
 
   const worker = env('RDK_ACCEPTANCE_WORKER_URL') || env('RDK_SIM2REAL_LOCAL_RUNNER_URL');
   if (!worker) {
-    add('GPU worker API', 'blocked', '未配置 RDK_ACCEPTANCE_WORKER_URL', '例如 http://127.0.0.1:19091/train');
+    add(
+      'GPU worker API',
+      'blocked',
+      '未配置 RDK_ACCEPTANCE_WORKER_URL',
+      '例如 http://127.0.0.1:19091/train',
+    );
   } else {
     const health = worker.replace(/\/train\/?$/, '/healthz').replace(/\/+$/, '/healthz');
-    const body = await getJson('GPU worker 健康检查', health, authHeaders('RDK_SIM2REAL_LOCAL_RUNNER_TOKEN'));
+    const body = await getJson(
+      'GPU worker 健康检查',
+      health,
+      authHeaders('RDK_SIM2REAL_LOCAL_RUNNER_TOKEN'),
+    );
     if (body && body.configured !== true)
-      add('GPU worker 真实引擎', 'blocked', 'worker 可达但 configured=false', '设置 RDK_SIM2REAL_TRAIN_EXECUTABLE 和 RDK_SIM2REAL_TRAIN_ARGS_JSON');
+      add(
+        'GPU worker 真实引擎',
+        'blocked',
+        'worker 可达但 configured=false',
+        '设置 RDK_SIM2REAL_TRAIN_EXECUTABLE 和 RDK_SIM2REAL_TRAIN_ARGS_JSON',
+      );
   }
 
   const board = env('RDK_ACCEPTANCE_BOARD_URL') || env('RDK_SIM2REAL_BOARD_AGENT_URL');
   if (!board) {
-    add('OriginBot board-agent', 'blocked', '未配置 RDK_ACCEPTANCE_BOARD_URL', '例如 http://10.0.0.30:19100');
+    add(
+      'OriginBot board-agent',
+      'blocked',
+      '未配置 RDK_ACCEPTANCE_BOARD_URL',
+      '例如 http://board-agent.example.internal:19100',
+    );
   } else {
     const headers = authHeaders('RDK_SIM2REAL_BOARD_AGENT_TOKEN');
     const health = await getJson('OriginBot board-agent 健康检查', url(board, '/healthz'), headers);
     if (health && health.mock !== false)
-      add('OriginBot 真实设备门禁', 'blocked', `mock=${String(health.mock)}`, '必须连接真实 board-agent，mock=true 只能用于协议演练');
+      add(
+        'OriginBot 真实设备门禁',
+        'blocked',
+        `mock=${String(health.mock)}`,
+        '必须连接真实 board-agent，mock=true 只能用于协议演练',
+      );
     const status = await getJson('OriginBot 真实遥测', url(board, '/v1/station/status'), headers);
     if (status) {
       const real = status?.board?.mock === false || status?.mock === false;
       const imu = status?.originbot?.imu != null || status?.imu != null;
       const odom = status?.originbot?.odom != null || status?.odom != null;
-      add('OriginBot IMU/odom', real && imu && odom ? 'pass' : 'blocked', `real=${real} imu=${imu} odom=${odom}`, '检查 /imu、/odom 发布和 board-agent 遥测适配');
+      add(
+        'OriginBot IMU/odom',
+        real && imu && odom ? 'pass' : 'blocked',
+        `real=${real} imu=${imu} odom=${odom}`,
+        '检查 /imu、/odom 发布和 board-agent 遥测适配',
+      );
     }
     await getJson('OriginBot 策略文件清单', url(board, '/v1/station/policy/files'), headers);
   }
@@ -236,8 +272,13 @@ async function main() {
   if (jsonOutput) console.log(JSON.stringify(result, null, 2));
   else {
     console.log('\n新服务器 + OriginBot 接入验收（只读）');
-    for (const check of checks) console.log(`  ${check.status === 'pass' ? '✓' : check.status === 'warn' ? '!' : '✗'} ${check.name} — ${check.detail}`);
-    console.log(`\n结论：${result.ok ? 'PASS，可进入训练/部署阶段' : `BLOCKED，${blocked} 个前置条件未满足`}（未发送运动指令）`);
+    for (const check of checks)
+      console.log(
+        `  ${check.status === 'pass' ? '✓' : check.status === 'warn' ? '!' : '✗'} ${check.name} — ${check.detail}`,
+      );
+    console.log(
+      `\n结论：${result.ok ? 'PASS，可进入训练/部署阶段' : `BLOCKED，${blocked} 个前置条件未满足`}（未发送运动指令）`,
+    );
     for (const check of checks.filter((item) => item.hint)) console.log(`  ↳ ${check.hint}`);
   }
   if (blocked > 0 && !allowMissing) process.exitCode = 1;
@@ -247,4 +288,3 @@ main().catch((error) => {
   console.error(`[accept:new-device] ${error instanceof Error ? error.message : String(error)}`);
   process.exitCode = 1;
 });
-

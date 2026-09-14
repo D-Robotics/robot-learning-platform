@@ -12,6 +12,10 @@ __pycache__/
 !.env.example
 *.log
 artifacts/
+# Local Sim2Real ledger snapshots can contain telemetry and account metadata.
+# Keep them out of commits; production backups belong in an encrypted backup
+# volume or object store.
+backups/
 # Demo recordings are multi-MB binaries; publish them as GitHub Release
 # assets or external links instead of growing every clone.
 docs/*.mp4

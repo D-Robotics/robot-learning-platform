@@ -64,6 +64,8 @@ export function resolveTaskPack(taskId, context = {}) {
     kind: 'goal-navigation',
     id: task.id,
     displayName: task.displayName,
+    observationAdapterId: task.observationAdapterId,
+    actionAdapterId: task.actionAdapterId,
     adapter,
     reward: task.reward,
     termination: task.termination,
@@ -97,6 +99,20 @@ export function resolveTaskPack(taskId, context = {}) {
   ]) {
     if (dr[key]) pair(dr[key], `domainRandomization.${key}`);
   }
+  if (
+    dr.actionLatencySteps &&
+    !dr.actionLatencySteps.every((value) => Number.isInteger(value) && value >= 0)
+  ) {
+    throw new Error('domainRandomization.actionLatencySteps must be non-negative integers');
+  }
+  for (const [name, envelope] of Object.entries(dr.evalEnvelopes || {})) {
+    if (![6, 8].includes(envelope.length))
+      throw new Error(`domainRandomization.evalEnvelopes.${name} must contain 6 or 8 values`);
+    if (!Number.isInteger(envelope[5]) || envelope[5] < 0)
+      throw new Error(
+        `domainRandomization.evalEnvelopes.${name}[5] latencySteps must be a non-negative integer`,
+      );
+  }
   return pack;
 }
 
@@ -114,6 +130,15 @@ export function trainingRequestFor(pack, context = {}) {
       controlHz: pack.controlHz,
       physicsTimestepSeconds: pack.physicsTimestepSeconds,
       decimation: pack.decimation,
+      observationAdapterId: pack.observationAdapterId,
+      actionAdapterId: pack.actionAdapterId,
+      actionOutput: pack.adapter.runtime?.actionOutput,
+      actionScale: {
+        linear: Number(pack.adapter.actuator?.maxLinear ?? 0.3),
+        angular: Number(pack.adapter.actuator?.maxAngular ?? 1),
+        units: 'm/s,rad/s',
+      },
+      observationLayout: [{ name: pack.observationAdapterId, size: observationSize }],
     },
     model: {
       modelId: context.modelId || `${pack.id}-ppo`,

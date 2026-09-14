@@ -15,8 +15,13 @@ assert.equal(model.device.input.format, 'nv12');
 assert.equal(model.artifact.kind, 'compiled');
 assert.equal(model.artifact.format, 'bin');
 assert.equal(model.artifact.runtime, 'bpu');
-assert.match(model.artifact.sourceUrl, /^https:\/\/archive\.d-robotics\.cc\/downloads\/rdk_model_zoo\/rdk_x5\//);
+assert.match(
+  model.artifact.sourceUrl,
+  /^https:\/\/archive\.d-robotics\.cc\/downloads\/rdk_model_zoo\/rdk_x5\//,
+);
 assert.equal(model.observation.size, model.observation.fields.length);
 assert.equal(model.observation.missingTarget, 'zero-with-confidence-0');
 assert.equal(model.provenance.mock, false);
-console.log('[vision-model] PASS — official X5 YOLO11n manifest and 8D target observation contract validated');
+console.log(
+  '[vision-model] PASS — official X5 YOLO11n manifest and 8D target observation contract validated',
+);

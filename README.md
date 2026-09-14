@@ -26,11 +26,13 @@ Node.js 建议使用 22 LTS（最低满足 lockfile 的 Node 20.19+）。
 | 你想做什么 | 从哪里开始 | 结果是什么 |
 | --- | --- | --- |
 | 亲手演示一个动作 | **仿真与录制** | 浏览器轨迹 JSON / JSONL |
-| 训练一个策略 | **训练与模型** | 本地 Mock、本地 worker 或 RoboGo Run |
-| 判断仿真是否接近真机 | **评测与效果** | 遥测、回放和虚实偏差摘要 |
-| 给 X5 做上线准备 | **部署到 X5** | 契约、板型、制品和只读预检 |
+| 训练一个策略 | **强化学习训练** | 本地 Mock、本地 worker 或 RoboGo Run |
+| 判断仿真是否接近真机 | **Sim2Real 评测** | 遥测、回放和虚实偏差摘要 |
+| 给 X5 做上线准备 | **部署与反馈** | 契约、板型、制品和只读预检 |
 
 平台把“可视化入口”和“受控执行”分开：浏览器负责观察和录制，服务端负责权限、制品、幂等和审计，板端/云端 adapter 负责真正的训练或部署。
+
+产品定位、同类能力对标和当前成熟度判断见 [`docs/product-maturity-plan.md`](docs/product-maturity-plan.md)。一句话概括：这是 **RDK 机器人策略的证据链与安全交付控制面**，重点是把 Run、制品、评测、板型预检和人工审批连成可审计发布链。
 
 ### 三条训练路径
 
@@ -53,11 +55,11 @@ Mock 的 `completed` 只表示协议演练完成，不代表真实 PPO 权重或
 | mjlab + rsl-rl GPU 训练 | 🔌 | 参考适配器在 `engines/mjlab-rsl-rl-adapter/`，需自备训练栈与 GPU |
 | RoboGo 适配接口 | 🔌 | 需要服务端配置真实地址、凭据和网络策略 |
 | RDK-X5 真机采集 / BoardAgent / OTA | 🧩 | 提供端口、预检和部署边界，需接入实际设备 |
-| 真机遥测（IMU/里程计/电池） | ✅ | 常驻只读遥测节点 + 认证代理 + 评估页同屏对比（参考机型 OriginBot，话题清单可换机型） |
-| 真机受限驱动（运动金丝雀） | ✅ 默认关闭 | 通用 `/cmd_vel` 通道：双开关 + 双重钳制 + 时间盒 + 急停恒可用，见 [docs/actuator-drive.md](docs/actuator-drive.md) |
+| 真机遥测（IMU/里程计/电池） | 🟡 参考实现 | 常驻只读遥测节点 + 认证代理 + 评估页同屏对比已具备；参考机型 OriginBot 的现场证据需按发布清单归档 |
+| 真机受限驱动（运动金丝雀） | 🧩 代码门禁已具备 | 通用 `/cmd_vel` 通道默认关闭，含双开关 + 双重钳制 + 时间盒 + 急停恒可用；真实运动验收见 [docs/actuator-drive.md](docs/actuator-drive.md) |
 | 生产加固（CSP / 限流 / 结构化日志 / 指标） | ✅ | 自家页面严格 `script-src 'self'`、进程内限流 429、JSON 行日志、Prometheus `/metrics`；MicroDuck 上游 bundle 所在的 `/mujoco` 刻意放宽，见 [docs/operations.md](docs/operations.md) |
 | 遥测有界读 + 保留策略 | ✅ | 小 `limit` 的遥测列表不再解析整个分片；可按天淘汰过期遥测（默认关闭），见 [docs/scalability.md](docs/scalability.md) |
-| 多副本生产存储 | 🗺️ | MVP 使用单实例 ledger，规模化迁移 PostgreSQL + 对象存储 |
+| 多实例部署 | 🟡 部分 | **1 写 + N 只读副本**：写者持文件租约，第二个写者 fail-fast；只读副本用 `RDK_SIM2REAL_STORAGE_READ_ONLY=1` 安全扩读。多写者仍需 PostgreSQL + 对象存储，见 [docs/scalability.md](docs/scalability.md) |
 
 <div align="center">
 
@@ -106,15 +108,15 @@ npm run demo:sim2real
 `RDK_SIM2REAL_BOARD_AGENT_URL=http://127.0.0.1:19100`；该 reference agent 只返回模拟板卡信息，
 不会连接设备、执行命令或开启电机。
 
-同一进程也提供**上位机**协议（工作台第 07 步「上位机」视图）：板卡实时状态心跳、板载相机
+同一进程也提供**设备上位机**协议（工作台「数据与工具 → 设备上位机」视图）：板卡实时状态心跳、板载相机
 MJPEG 流与白名单只读命令，全部经 `/api/sim2real/board-station` 认证代理转发，浏览器不直连
 agent，也不存在任何电机控制通道；详见 [`docs/host-station.md`](docs/host-station.md)。
 
 打开 <http://127.0.0.1:18102/?demo=1>（启动器日志也会给出这个地址）。查询参数会固定 MicroDuck 和行走任务；
 页面中的“仿真与录制”会打开已挂载的 MicroDuck 浏览器仿真；
 干净源码 checkout 未包含上游静态 bundle，未配置 `RDK_SIM2REAL_MICRODUCK_ROOT` 或 URL 时会显示安装指引页。
-“训练与模型”可选择本地 Mock runner；“评测与效果”支持导入浏览器录制的 JSON/JSONL 并显式绑定到 Run；
-“部署到 X5”只做契约、板型和只读预检，不会在网页层直接开启电机。
+“强化学习训练”可选择本地 Mock runner；“Sim2Real 评测”支持导入浏览器录制的 JSON/JSONL 并显式绑定到 Run；
+“部署与反馈”只做契约、板型和只读预检，不会在网页层直接开启电机。
 
 如果现场暂时没有可录制的 MicroDuck bundle，评测页可以点击“载入合成演示证据”继续展示上传和评测
 流程；该证据固定为 MicroDuck 61D/14D 合成样例，不代表真实 X5 遥测。
@@ -141,7 +143,7 @@ npm run format:check
 
 | 目录 | 内容 |
 | --- | --- |
-| `services/sim2real-web` | 独立 Web 入口、六模块工作流 UI、Mock worker 与服务单元示例 |
+| `services/sim2real-web` | 独立 Web 入口、总览 + 四流程 + 两工具工作流 UI、Mock worker 与服务单元示例 |
 | `services/mujoco-web` | MicroDuck 静态入口、中文交互覆盖层、社区二维码和浏览器轨迹录制 |
 | `shared` | MicroDuck 61D observation / 14D action / 50 Hz 契约、模型制品和遥测类型 |
 | `server/routes` | Sim2Real HTTP API（模型、运行、部署、遥测） |
@@ -150,6 +152,8 @@ npm run format:check
 | `docs/sim2real-plugins.md` | 事件驱动扩展层：实验追踪、对象存储、通知和硬件适配器 |
 | `docs/assets` | README 首屏与工作台示意图（自绘 SVG，无运行时依赖） |
 | `docs/design` | 产品设计、MVP/90 分验收、Sim2Real 方案和端到端流程 |
+
+总览页还提供动态“研发闭环评分”，按契约、训练、评测、发布和项目血缘五项软件证据给出下一步建议；数据集可记录版本、SHA-256、契约和来源运行，详见 [`docs/dataset-lineage.md`](docs/dataset-lineage.md)。
 
 ## 训练与部署边界
 

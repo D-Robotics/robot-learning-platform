@@ -16,14 +16,17 @@ export default defineConfig({
       // no unit test loads).
       include: ['server/**/*.ts', 'shared/**/*.ts', 'services/**/*.ts'],
       exclude: [...coverageConfigDefaults.exclude, '**/*.test.ts', '**/*.spec.ts'],
-      // Thresholds sit ~3 points below the measured baseline (lines 69.17%,
-      // statements 69.17%, functions 82.82%, branches 64.56%) so in-flight
-      // refactors do not fail the gate on noise. They only run when coverage
-      // is enabled (`npm run test:coverage`), not for `npm test`.
+      // Vitest 4's V8 remapper counts function boundaries more precisely than
+      // the previous Vitest 3 release. The current baseline is lines 73.40%,
+      // statements 69.94%, functions 75.56%, and branches 63.83%; keep a
+      // small buffer below each measured value so ordinary refactors do not
+      // fail on noise while genuinely untested paths remain visible. These
+      // thresholds only run when coverage is enabled (`npm run test:coverage`),
+      // not for `npm test`.
       thresholds: {
-        lines: 66,
-        statements: 66,
-        functions: 79,
+        lines: 71,
+        statements: 68,
+        functions: 74,
         branches: 61,
       },
     },

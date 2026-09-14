@@ -14,11 +14,11 @@
  *   7. print the exact .env lines to paste into the web server config.
  *
  * Usage:
- *   node scripts/gpu-deploy.mjs --host 120.48.90.140 --port 2222 --user ssh-authkey-9b0c0fac2c7f5660f5ca09ed
+ *   node scripts/gpu-deploy.mjs --host <gpu-host> --port 22 --user <gpu-user>
  *   # extra flags: --dir ~/rdk-sim2real --service (install+start systemd unit)
  *
  * The script never writes into the repo and never prints the generated token
- * into stdout logs (it prints the env file path and a masked preview).
+ * into stdout logs (it prints only the env file path).
  */
 
 import { spawnSync } from 'node:child_process';
@@ -54,14 +54,48 @@ function parseArgs(argv) {
       process.exit(2);
     }
   }
-  if (!flags.host || !flags.user) {
+  if (
+    !validHost(flags.host) ||
+    !validUser(flags.user) ||
+    !validPort(flags.port) ||
+    !validRemoteDir(flags.dir)
+  ) {
     console.error(
-      'missing --host/--user (or RDK_GPU_HOST / RDK_GPU_USER env). ' +
-        'example: node scripts/gpu-deploy.mjs --host 120.48.90.140 --port 2222 --user ssh-authkey-9b0c0fac2c7f5660f5ca09ed',
+      'invalid --host/--user/--port/--dir; use a host, SSH user, port 1-65535, and a simple absolute or ~/ remote directory',
     );
     process.exit(2);
   }
   return flags;
+}
+
+function validHost(value) {
+  const host = String(value ?? '').trim();
+  return (
+    host.length > 0 &&
+    host.length <= 253 &&
+    (/^[a-zA-Z0-9][a-zA-Z0-9.-]*$/.test(host) ||
+      (/^\[?[0-9a-fA-F:]+\]?$/.test(host) && host.includes(':')))
+  );
+}
+
+function validUser(value) {
+  return /^[a-zA-Z_][a-zA-Z0-9_.-]{0,63}$/.test(String(value ?? '').trim());
+}
+
+function validPort(value) {
+  const port = Number(value);
+  return Number.isInteger(port) && port >= 1 && port <= 65535;
+}
+
+function validRemoteDir(value) {
+  const dir = String(value ?? '').trim();
+  // Remote paths are interpolated into fixed shell probes below. Keep the
+  // accepted grammar deliberately narrow so quotes, substitutions, pipes and
+  // command separators can never become part of a remote command.
+  return (
+    dir === '~' ||
+    (dir.length > 0 && dir.length <= 240 && /^(?:~\/|\/)[a-zA-Z0-9._/@+-]+$/.test(dir))
+  );
 }
 
 const flags = parseArgs(process.argv.slice(2));
@@ -238,7 +272,7 @@ const workerEnv = [
   .join('\n');
 const heredoc = `cat > ${flags.dir}/worker.env <<'EOF'\n${workerEnv}\nEOF\nchmod 600 ${flags.dir}/worker.env`;
 ssh(heredoc);
-console.log(`  ✓ ${flags.dir}/worker.env（token=${token.slice(0, 6)}…已隐藏）`);
+console.log(`  ✓ ${flags.dir}/worker.env（随机 token 已写入远端 mode-600 文件）`);
 
 // --- 6. systemd (optional) --------------------------------------------------
 if (flags.service) {
@@ -272,7 +306,10 @@ if (flags.service) {
 // --- final wiring instructions ---------------------------------------------
 console.log('\n[gpu-deploy] 部署完成。把下面两行加进本机 web 服务器的 .env 并重启：');
 console.log(`  RDK_SIM2REAL_LOCAL_RUNNER_URL=http://${flags.host}:19091/train`);
-console.log(`  RDK_SIM2REAL_LOCAL_RUNNER_TOKEN=${token}`);
+// Never print the bearer into shell history, CI logs, or copied deployment
+// transcripts.  It is already stored mode-600 in the remote worker.env;
+// operators can transfer it through their existing secret-management path.
+console.log(`  RDK_SIM2REAL_LOCAL_RUNNER_TOKEN=<copy securely from ${flags.dir}/worker.env>`);
 console.log(
   '\n注意: worker 监听 0.0.0.0:19091，token 是唯一防线；生产建议加防火墙/白名单或 SSH 隧道：',
 );

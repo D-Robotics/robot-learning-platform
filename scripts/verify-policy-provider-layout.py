@@ -22,6 +22,7 @@ import json
 import os
 import sys
 import tempfile
+import warnings
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 RUNTIME_PATH = os.path.join(HERE, "..", "services", "sim2real-web", "board-policy-runtime.py")
@@ -42,7 +43,19 @@ def _export_tiny_onnx(path, in_dim, out_dim):
     torch.manual_seed(11)
     model = torch.nn.Linear(in_dim, out_dim, bias=False)
     dummy = torch.zeros(1, in_dim)
-    torch.onnx.export(model, dummy, path, input_names=["obs"], output_names=["act"])
+    # Keep the legacy exporter explicit for the minimal contract fixture. The
+    # new dynamo exporter needs the optional onnxscript package, while this
+    # verifier intentionally runs with the smallest torch/onnxruntime stack.
+    with warnings.catch_warnings():
+        warnings.filterwarnings("ignore", category=DeprecationWarning)
+        torch.onnx.export(
+            model,
+            dummy,
+            path,
+            input_names=["obs"],
+            output_names=["act"],
+            dynamo=False,
+        )
 
 
 def _load_runtime(env):
@@ -75,6 +88,8 @@ def main():
     tmp = tempfile.mkdtemp(prefix="policy-provider-")
     model_8 = os.path.join(tmp, "native8.onnx")
     _export_tiny_onnx(model_8, 8, 2)
+    model_61 = os.path.join(tmp, "contract61.onnx")
+    _export_tiny_onnx(model_61, 61, 14)
 
     state = os.path.join(tmp, "state.json")
     base_env = {
@@ -157,6 +172,70 @@ def main():
     assert not start.get("ok") and start.get("error") == "observation-layout-unknown", start
     assert "vision-transformer-v9" in str(start.get("detail")), start
     print("unknown layout fail-closed: observation-layout-unknown OK")
+
+    # 6) A long-lived runtime may reload a different contract after an 8D
+    # native model.  The second load must reset to the adapter-declared 61D
+    # contract instead of inheriting the previous model's 8D dimensions.
+    reload_adapter = os.path.join(tmp, "adapter-reload.json")
+    with open(reload_adapter, "w", encoding="utf-8") as fh:
+        json.dump({"id": "test-reload", "runtime": {"actionProjection": "paired"},
+                   "policy": {"observationSize": 61, "actionSize": 14}}, fh)
+    runtime = _load_runtime({**base_env, "RDK_SIM2REAL_ADAPTER_CONFIG": reload_adapter,
+                             "RDK_SIM2REAL_POLICY_OBS_DIM": "61",
+                             "RDK_SIM2REAL_POLICY_ACTION_DIM": "14"})
+    rt_obj = runtime.PolicyRuntime()
+    first = rt_obj.load(model_8)
+    assert first.get("ok"), first
+    failed = rt_obj.load(os.path.join(tmp, "missing-replacement.onnx"))
+    assert not failed.get("ok") and failed.get("error") == "model-file-missing", failed
+    assert rt_obj.snapshot()["model"] is None and rt_obj.snapshot()["state"] == "idle", rt_obj.snapshot()
+    second = rt_obj.load(model_61)
+    assert second.get("ok"), second
+    assert second["model"]["inputDim"] == 61 and second["model"]["outputDim"] == 14, second
+    print("model reload: adapter contract restored after native 8D load OK")
+
+    # 7) Identity projection cannot accept a leg-style output head and then
+    # silently use its first two values as (v, w).
+    identity_adapter = os.path.join(tmp, "adapter-identity.json")
+    with open(identity_adapter, "w", encoding="utf-8") as fh:
+        json.dump({"id": "test-identity", "runtime": {"observationLayout": "imu-gravity-v1", "actionProjection": "identity"},
+                   "policy": {"observationSize": 61, "actionSize": 14}}, fh)
+    runtime = _load_runtime({**base_env, "RDK_SIM2REAL_ADAPTER_CONFIG": identity_adapter,
+                             "RDK_SIM2REAL_POLICY_OBS_DIM": "61",
+                             "RDK_SIM2REAL_POLICY_ACTION_DIM": "14"})
+    result = runtime.PolicyRuntime().load(model_61)
+    assert not result.get("ok") and result.get("error") == "identity-action-dimension-mismatch", result
+    print("identity projection/head mismatch refused: OK")
+
+    # 8) A normalized 2D head is scaled exactly once by the adapter limits,
+    # and the selected mode is carried in model metadata/snapshot.
+    normalized_adapter = os.path.join(tmp, "adapter-normalized.json")
+    with open(normalized_adapter, "w", encoding="utf-8") as fh:
+        json.dump({"id": "test-normalized", "runtime": {"actionOutput": "normalized-twist"},
+                   "policy": {"observationSize": 8, "actionSize": 2}}, fh)
+    runtime = _load_runtime({**base_env, "RDK_SIM2REAL_ADAPTER_CONFIG": normalized_adapter,
+                             "RDK_SIM2REAL_POLICY_OBS_DIM": "8",
+                             "RDK_SIM2REAL_POLICY_ACTION_DIM": "2"})
+    rt_obj = runtime.PolicyRuntime()
+    res = rt_obj.load(model_8)
+    assert res.get("ok") and res["model"]["actionOutput"] == "normalized-twist", res
+    linear, angular = rt_obj._project_action([0.5, -0.5])
+    assert abs(linear - 0.5 * runtime.MAX_LINEAR) < 1e-9, (linear, runtime.MAX_LINEAR)
+    assert abs(angular + 0.5 * runtime.MAX_ANGULAR) < 1e-9, (angular, runtime.MAX_ANGULAR)
+    assert rt_obj.snapshot()["actionOutput"] == "normalized-twist"
+    print("normalized twist scaling + metadata: OK")
+
+    # 9) An unknown units declaration refuses model load instead of guessing.
+    invalid_output_adapter = os.path.join(tmp, "adapter-invalid-output.json")
+    with open(invalid_output_adapter, "w", encoding="utf-8") as fh:
+        json.dump({"id": "test-invalid-output", "runtime": {"actionOutput": "guess"},
+                   "policy": {"observationSize": 8, "actionSize": 2}}, fh)
+    runtime = _load_runtime({**base_env, "RDK_SIM2REAL_ADAPTER_CONFIG": invalid_output_adapter,
+                             "RDK_SIM2REAL_POLICY_OBS_DIM": "8",
+                             "RDK_SIM2REAL_POLICY_ACTION_DIM": "2"})
+    result = runtime.PolicyRuntime().load(model_8)
+    assert not result.get("ok") and result.get("error") == "action-output-mode-invalid", result
+    print("unknown action output mode refused: OK")
 
     print("PASS: policy provider selection + declared observation layout")
     return 0
