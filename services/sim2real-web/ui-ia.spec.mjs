@@ -123,7 +123,7 @@ assert.match(
 );
 
 // ---- IA: one navigation surface, grouped like RDK Studio ----
-// Core (overview + agent) / 流程 (01–04 real workflow) / 数据与工具 (records,
+// 开始 (overview + agent) / 学习闭环 (01–04 real workflow) / 资源与工具 (records,
 // station). Contract is no longer a first-class view; it is a fold on train.
 const viewNames = [...app.matchAll(/WORKFLOW_VIEWS\s*=\s*\[([^\]]+)\]/g)][0][1]
   .match(/['"][^'"]+['"]/g)
@@ -165,8 +165,8 @@ assert.deepEqual(
 const navGroups = [...html.matchAll(/class="nav-label">([^<]+)<\/div>/g)].map((m) => m[1]);
 assert.deepEqual(
   navGroups,
-  ['核心', '流程', '数据与工具'],
-  'sidebar must group nav like RDK Studio: core / flow / data & tools',
+  ['开始', '学习闭环', '资源与工具'],
+  'sidebar must group nav around the learning loop: start / loop / resources & tools',
 );
 
 assert.match(html, /overview-density\.css/, 'overview typography/density layer must be loaded');
@@ -673,5 +673,5 @@ assert.match(
 assert.doesNotMatch(app, /:19100/, 'the browser must never hardcode the board agent port');
 
 console.log(
-  `[sim2real-ui] PASS — ${viewNames.length} views, ${navItems} sidebar entries, grouped IA (core / flow / tools), read-only context strip`,
+  `[sim2real-ui] PASS — ${viewNames.length} views, ${navItems} sidebar entries, grouped IA (start / learning loop / resources & tools), read-only context strip`,
 );
