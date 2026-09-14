@@ -1699,31 +1699,6 @@
         <div class="empty-inline">选择一条运行记录查看详情。</div>
       </div>
     </dialog>
-    <dialog class="run-dialog" id="confirm-run-dialog" aria-labelledby="confirm-run-title">
-      <div class="run-dialog-heading">
-        <div>
-          <h2 id="confirm-run-title">确认提交云端训练</h2>
-        </div>
-      </div>
-      <div class="run-detail-body">
-        <p class="confirm-run-note">
-          该请求会消耗 RoboGo 云端算力并占用一个任务名额；提交后由服务端校验当前账号授权，未授权时会明确标记为 blocked。
-        </p>
-        <div class="run-detail-grid">
-          <div class="run-detail-field"><span>模型</span><strong id="confirm-run-model">—</strong></div>
-          <div class="run-detail-field"><span>动作任务</span><strong id="confirm-run-task">—</strong></div>
-          <div class="run-detail-field"><span>训练档位</span><strong id="confirm-run-profile">—</strong></div>
-          <div class="run-detail-field"><span>算法</span><strong id="confirm-run-algorithm">PPO</strong></div>
-          <div class="run-detail-field"><span>续训</span><strong id="confirm-run-resume">不续训</strong></div>
-        </div>
-        <div class="confirm-run-actions">
-          <button class="button button-ghost" id="confirm-run-cancel" type="button">取消</button
-          ><button class="button button-primary" id="confirm-run-approve" type="button">
-            确认提交
-          </button>
-        </div>
-      </div>
-    </dialog>
     <dialog class="run-dialog" id="confirm-action-dialog" aria-labelledby="confirm-action-title">
       <div class="run-dialog-heading">
         <div>
@@ -1732,6 +1707,7 @@
       </div>
       <div class="run-detail-body">
         <p class="confirm-run-note" id="confirm-action-note" style="white-space: pre-line"></p>
+        <div class="run-detail-grid" id="confirm-action-details" hidden></div>
         <div class="confirm-run-actions">
           <button class="button button-ghost" id="confirm-action-cancel" type="button">取消</button
           ><button class="button button-primary" id="confirm-action-approve" type="button">
@@ -1812,8 +1788,8 @@
       telemetry delegations resolve SimTelemetryCore at call time.
     -->
     <script src="./telemetry-core.js?v=duck-lab-29"></script>
-    <script src="./app.js?v=duck-lab-32"></script>
-    <script src="./agent-chat.js?v=agent-7"></script>
+    <script src="./app.js?v=duck-lab-33"></script>
+    <script src="./agent-chat.js?v=agent-8"></script>
     <script src="./onboarding.js?v=onboarding-2"></script>
   </body>
 </html>

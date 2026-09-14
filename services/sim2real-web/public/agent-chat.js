@@ -9,20 +9,6 @@ const input = $('agent-chat-input');
 const submitButton = form?.querySelector('button[type="submit"]');
 const runtimeStatus = document.querySelector('.agent-chat-runtime');
 const HISTORY_KEY = 'rdk-sim2real-agent-history-v1';
-// The server injects the canonical reverse-proxy prefix into the HTML. Keep a
-// fallback for file:// demos and older cached documents.
-const API_MOUNT_PREFIX = (() => {
-  const configured =
-    typeof document !== 'undefined'
-      ? document.querySelector('meta[name="rdk-sim2real-base-path"]')?.getAttribute('content')
-      : '';
-  if (configured && configured !== '__RDK_SIM2REAL_BASE_PATH__') {
-    const normalized = String(configured).trim().replace(/\/+$/, '');
-    if (/^\/[A-Za-z0-9._~-]+(?:\/[A-Za-z0-9._~-]+)*$/.test(normalized)) return normalized;
-    if (!normalized) return '';
-  }
-  return window.location.pathname.startsWith('/sim2real') ? '/sim2real' : '';
-})();
 const SIMULATOR_ALLOWED_KEYS = new Set(['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'w', 'a', 's', 'd', 'q', 'e', 'f', 'r', 'g', 'c', 'm', 'b', ' ']);
 const simulatorBridge = { frame: null, ready: false, recording: false, events: [], connectedAt: null, startedAt: 0, downloadUrl: '', downloadName: '', videoUrl: '', videoName: '', recorder: null, videoError: '' };
 
@@ -394,27 +380,18 @@ class AgentApiError extends Error {
   }
 }
 
+// Same-page classic script: app.js's request() already owns the canonical URL
+// prefix, credentials, JSON parsing and the auth gate. Reuse it and keep only
+// the agent surface's error type so UI branches stay on a stable class.
 async function api(path, options = {}) {
-  const headers = new Headers(options.headers || {});
-  if (options.body && !headers.has('content-type')) headers.set('content-type', 'application/json');
-  let response;
   try {
-    response = await fetch(API_MOUNT_PREFIX + path, { credentials: 'include', ...options, headers });
+    return await request(path, options);
   } catch (error) {
-    // Keep a stable status field for transport failures as well. Callers can
-    // distinguish an unavailable DSH endpoint (503) from a disconnected
-    // browser without parsing an implementation-specific Error message.
-    throw new AgentApiError(error instanceof Error ? error.message : '网络连接失败', 0, null);
+    if (error instanceof ApiError) {
+      throw new AgentApiError(error.message, error.status, error.payload);
+    }
+    throw error;
   }
-  const payload = await response.json().catch(() => ({}));
-  if (!response.ok) {
-    const message =
-      payload && typeof payload === 'object' && (payload.message || payload.error)
-        ? payload.message || payload.error
-        : `请求失败（${response.status}）`;
-    throw new AgentApiError(String(message), response.status, payload);
-  }
-  return payload;
 }
 
 function renderPlan(plan) {
@@ -535,13 +512,13 @@ async function runTask(message) {
   const actionIntent = /(训练|gpu|cuda|板卡|设备|仿真|录制|评测|部署|预检|停止|急停|ssh|curl)/i.test(message);
   if (!actionIntent) {
     try {
-      const dsh = await api('/api/sim2real/dsh/chat', { method: 'POST', body: JSON.stringify({ message }) });
+      const dsh = await api('/sim2real/dsh/chat', { method: 'POST', body: JSON.stringify({ message }) });
       if (dsh?.ok && dsh.text) { addMessage('agent', dsh.text); return; }
     } catch (error) {
       if (!(error && error.status === 503)) throw error;
     }
   }
-  const response = await api('/api/sim2real/agent/plan', { method: 'POST', body: JSON.stringify({ message, context: { modelId, deviceId, computeResourceId } }) });
+  const response = await api('/sim2real/agent/plan', { method: 'POST', body: JSON.stringify({ message, context: { modelId, deviceId, computeResourceId } }) });
   const plan = response?.plan;
   if (!plan || !Array.isArray(plan.steps) || !plan.steps.length || plan.steps.some((item) => !item || typeof item !== 'object')) throw new Error('服务没有返回有效的可执行计划');
   if (plan.steps.some((item) => item.tool === 'simulator.open')) {
@@ -550,7 +527,7 @@ async function runTask(message) {
   }
   renderPlan(plan);
   addMessage('agent', `收到，按 ${plan.steps.length} 步执行：${plan.steps.map((item) => item.label).join(' → ')}。`);
-  const execution = await api('/api/sim2real/agent/execute', { method: 'POST', body: JSON.stringify({ plan, approved: true }) });
+  const execution = await api('/sim2real/agent/execute', { method: 'POST', body: JSON.stringify({ plan, approved: true }) });
   const run = execution?.run;
   if (!run?.id || !Array.isArray(run.steps) || run.steps.some((item) => !item || typeof item !== 'object')) throw new Error('服务没有返回有效的运行记录');
   renderRun(run);
@@ -565,7 +542,7 @@ async function runTask(message) {
     await new Promise((resolve) => window.setTimeout(resolve, attempt ? 700 : 250));
     let result;
     try {
-      result = await api(`/api/sim2real/agent/runs/${encodeURIComponent(run.id)}`);
+      result = await api(`/sim2real/agent/runs/${encodeURIComponent(run.id)}`);
       transientFailures = 0;
     } catch (error) {
       transientFailures += 1;

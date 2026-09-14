@@ -45,10 +45,45 @@ function boot(fetchImpl: typeof fetch) {
     pretendToBeVisual: true,
   });
   openWindows.push(dom.window);
+  // agent-chat.js is a same-page classic script: its api() reuses app.js's
+  // global request()/ApiError. This harness boots agent-chat without app.js,
+  // so provide the contract app.js would supply (URL prefix from the same
+  // BASE_PATH heuristic, JSON parsing, ApiError with a stable status field).
+  class ApiErrorShim extends Error {
+    status: number;
+    payload: unknown;
+    constructor(message: string, status: number, payload: unknown) {
+      super(message);
+      this.name = 'ApiError';
+      this.status = status;
+      this.payload = payload;
+    }
+  }
   Object.assign(dom.window, {
     fetch: fetchImpl,
     Headers,
     Response,
+    ApiError: ApiErrorShim,
+    request: async (path: string, options: Record<string, unknown> = {}) => {
+      const headers = Object.assign(
+        options.body ? { 'content-type': 'application/json' } : {},
+        (options.headers as Record<string, string>) || {},
+      );
+      const response = await fetchImpl(
+        '/sim2real/api' + String(path),
+        Object.assign({}, options, { credentials: 'same-origin', headers }),
+      );
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        const body = payload as { message?: string; error?: string };
+        throw new ApiErrorShim(
+          String(body?.message || body?.error || `请求失败（${response.status}）`),
+          response.status,
+          payload,
+        );
+      }
+      return payload;
+    },
   });
   dom.window.eval(agentSource);
   return dom.window;

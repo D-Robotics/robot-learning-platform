@@ -273,7 +273,6 @@ const state = {
   projectId: readProjectPreference(),
   notifyEnabled: readNotifyPreference(),
   notifiedRunIds: new Set(),
-  confirmRunResolve: null,
   confirmActionResolve: null,
   recordsTab: 'all',
   trainModule: (() => {
@@ -312,7 +311,6 @@ const state = {
     cameraOn: false,
     log: [],
     deviceManagerWired: false,
-    bridgePollTimer: null,
     switchWired: false,
   },
 };
@@ -574,10 +572,121 @@ function renderDeploymentTimeline() {
   $('deploy-recovery-note')?.toggleAttribute('hidden', !deployment || !['failed', 'blocked'].includes(String(deployment.status || '').toLowerCase()));
 }
 
-let overviewPollTimer = null;
+// ---- Scoped polling: one mechanism for every periodic refresh -------------
+// A poll declares its cadence (nextDelay), the views it may run in, and
+// whether it fires immediately on view entry. The two global choke points —
+// setView and the visibilitychange handler — drive every poll through this
+// registry, so a new periodic refresh cannot re-implement (or forget) the
+// guards again.
+const scopedPolls = [];
+
+function createScopedPoll({ name, nextDelay, views = null, immediate = false, resume = 'arm', tick }) {
+  const poll = {
+    name,
+    views: views ? new Set(views) : null,
+    immediate,
+    resume,
+    tick,
+    nextDelayFn: typeof nextDelay === 'function' ? nextDelay : () => Number(nextDelay) || 0,
+    wanted: false,
+    timer: null,
+    inFlight: false,
+    enabled() {
+      return !poll.views || poll.views.has(document.body.dataset.activeView);
+    },
+    run() {
+      if (poll.inFlight) return;
+      // A hidden tab cannot inform anyone; skip the work and hold the chain.
+      // resumeScopedPolls re-arms it when the tab returns.
+      if (document.visibilityState !== 'visible') return;
+      poll.inFlight = true;
+      Promise.resolve()
+        .then(() => poll.tick())
+        .catch(() => {})
+        .finally(() => {
+          poll.inFlight = false;
+          poll.arm();
+        });
+    },
+    arm() {
+      if (poll.timer !== null || !poll.wanted) return;
+      if (document.visibilityState !== 'visible') return;
+      if (!poll.enabled()) return;
+      poll.timer = window.setTimeout(() => {
+        poll.timer = null;
+        poll.run();
+      }, poll.nextDelayFn());
+    },
+    refresh() {
+      if (poll.inFlight) return;
+      poll.run();
+    },
+    rearm() {
+      poll.wanted = true;
+      poll.stop();
+      poll.arm();
+    },
+    enter() {
+      poll.wanted = true;
+      poll.stop();
+      if (poll.immediate) poll.refresh();
+      else poll.arm();
+    },
+    leave() {
+      poll.wanted = false;
+      poll.stop();
+    },
+    stop() {
+      if (poll.timer !== null) {
+        window.clearTimeout(poll.timer);
+        poll.timer = null;
+      }
+    },
+  };
+  scopedPolls.push(poll);
+  return poll;
+}
+
+// View-scoped polls start/stop as the operator walks views; always-on polls
+// (no views scope) are managed by their owners via rearm().
+function syncScopedPolls() {
+  for (const poll of scopedPolls) {
+    if (!poll.views) continue;
+    if (poll.enabled()) poll.enter();
+    else poll.leave();
+  }
+}
+
+// Tab returned: held polls resume. resume:'refresh' polls tick immediately
+// (a returning operator wants current data, not a stale cycle); the rest
+// re-arm at their normal cadence.
+function resumeScopedPolls() {
+  for (const poll of scopedPolls) {
+    if (!poll.wanted || poll.timer !== null) continue;
+    if (poll.resume === 'refresh') poll.refresh();
+    else poll.arm();
+  }
+}
+
 const runStatusFailures = new Map();
 let runStatusBackoffUntil = 0;
 let runStatusNoticeAt = 0;
+
+// The workbench heartbeat: always wanted on every view, faster while a run is
+// active, backed off after run-status failures, silent (no loading chrome),
+// and refreshing once when the tab returns.
+const overviewPoll = createScopedPoll({
+  name: 'overview',
+  resume: 'refresh',
+  nextDelay: () => {
+    const hasActiveRun = runsForCurrentModel().some((run) =>
+      ['queued', 'running'].includes(String(run.status || '').toLowerCase()),
+    );
+    const backoffActive = runStatusBackoffUntil > Date.now();
+    return hasActiveRun ? (backoffActive ? Math.max(30_000, runStatusBackoffUntil - Date.now()) : 5_000) : 30_000;
+  },
+  tick: () => loadOverview({ quiet: true, silent: true }),
+});
 
 const $ = (id) => document.getElementById(id);
 
@@ -604,6 +713,31 @@ function formatTelemetryRate(value) {
 function setText(id, value) {
   const node = $(id);
   if (node) node.textContent = String(value ?? '');
+}
+
+// The one way to populate a <select>: rebuild only when the option list or
+// the intended value actually changed. Rebuilding a focused select mid-poll
+// drops the caret/selection and makes an open dropdown pop closed.
+// options: [{ value, textContent, title?, ai? }]
+function syncSelect(select, options, value) {
+  if (!select) return;
+  const unchanged =
+    select.options.length === options.length &&
+    options.every((option, index) =>
+      select.options[index]?.value === option.value &&
+      select.options[index]?.textContent === option.textContent,
+    ) &&
+    select.value === value;
+  if (unchanged) return;
+  select.replaceChildren(...options.map((option) => {
+    const el = document.createElement('option');
+    el.value = option.value;
+    el.textContent = option.textContent;
+    if (option.title) el.title = option.title;
+    if (option.ai) el.dataset.ai = 'true';
+    return el;
+  }));
+  select.value = value;
 }
 
 function setStatusSurface(node, stateName, label) {
@@ -1035,12 +1169,9 @@ function setView(view, { updateHash = true, scroll = true, focus = true } = {}) 
     if (main && !main.contains(document.activeElement)) main.focus({ preventScroll: true });
     announce(`已切换到：${VIEW_ANNOUNCEMENTS[wanted] || wanted}`);
   }
-  // 评估页的真机对照快照只在视图内轮询，离开即停，避免后台空转。
-  if (wanted === 'evaluate') originbotCompareStart();
-  else originbotCompareStop();
-  // 设备轮询同理：只在视图内跑，离开即停（stationInit 会按需重启）。
-  if (wanted === 'station') stationBridgePollResume();
-  else stationBridgePollPause();
+  // 视图内轮询统一由注册表收发：进入视图启动（评估页立即刷一帧），离开即停，
+  // 避免后台空转。
+  syncScopedPolls();
 }
 
 function setTrainModule(module, { persist = true } = {}) {
@@ -1156,19 +1287,18 @@ function renderProjectContext() {
   }
   if (select) {
     const current = state.projectId;
-    select.replaceChildren();
-    const all = document.createElement('option');
-    all.value = '';
-    all.textContent = '全部项目';
-    select.append(all);
-    for (const item of state.projects || []) {
-      const option = document.createElement('option');
-      option.value = String(item.id);
-      option.textContent = projectDisplayName(item);
-      if (item.description) option.title = String(item.description);
-      select.append(option);
-    }
-    select.value = current && (state.projects || []).some((item) => String(item.id) === current) ? current : '';
+    syncSelect(
+      select,
+      [
+        { value: '', textContent: '全部项目' },
+        ...(state.projects || []).map((item) => ({
+          value: String(item.id),
+          textContent: projectDisplayName(item),
+          title: item.description ? String(item.description) : '',
+        })),
+      ],
+      current && (state.projects || []).some((item) => String(item.id) === current) ? current : '',
+    );
   }
   const profile = selectedProductProfile();
   const header = project ? `${projectDisplayName(project)} · ${profile.displayName}` : profile.projectName;
@@ -1340,28 +1470,6 @@ function renderSelects() {
   const computeSelect = $('compute-resource-select');
   if (!PRODUCT_PROFILES[state.productId]) state.productId = 'microduck';
   if (productSelect) productSelect.value = state.productId;
-  // Rebuilding a focused select mid-poll drops the caret/selection and makes
-  // an open dropdown pop closed. Rebuild only when the option list or the
-  // intended value actually changed; otherwise leave the live DOM alone.
-  const syncSelect = (select, options, value) => {
-    if (!select) return;
-    const unchanged =
-      select.options.length === options.length &&
-      options.every((option, index) =>
-        select.options[index]?.value === option.value &&
-        select.options[index]?.textContent === option.textContent,
-      ) &&
-      select.value === value;
-    if (unchanged) return;
-    select.replaceChildren(...options.map((option) => {
-      const el = document.createElement('option');
-      el.value = option.value;
-      el.textContent = option.textContent;
-      if (option.ai) el.dataset.ai = 'true';
-      return el;
-    }));
-    select.value = value;
-  };
   if (taskSelect) {
     const taskIds = state.productId === 'originbot' ? ORIGINBOT_TASK_IDS : Object.keys(ACTION_TASKS).filter((id) => !ORIGINBOT_TASK_IDS.includes(id));
     if (!taskIds.includes(state.taskId)) state.taskId = state.productId === 'originbot' ? 'goal-navigation' : 'walk';
@@ -3616,8 +3724,11 @@ function renderReplayPlayer() {
   if (!select || !play || !stop || !seek) return;
   const runs = replayRuns();
   const current = state.replay.runId || runs[0]?.id || '';
-  select.replaceChildren(...runs.map((run) => { const option = document.createElement('option'); option.value = run.id; option.textContent = `${run.id.slice(0, 8)} · ${statusLabel(run.status)}`; return option; }));
-  select.value = runs.some((run) => run.id === current) ? current : '';
+  syncSelect(
+    select,
+    runs.map((run) => ({ value: run.id, textContent: `${run.id.slice(0, 8)} · ${statusLabel(run.status)}` })),
+    runs.some((run) => run.id === current) ? current : '',
+  );
   const loaded = state.replay.loaded && state.replay.runId === select.value;
   seek.max = String(Math.max(0, state.replay.frames.length - 1));
   seek.value = String(Math.min(state.replay.index, Math.max(0, state.replay.frames.length - 1)));
@@ -3999,8 +4110,6 @@ function renderRunComparison(runs) {
 // 与效果对比图并排显示当下真机侧写：电压、IMU 航向、里程计。数据缺失时
 // 如实显示「无数据」，绝不合成。轮询只在 evaluate 视图内进行。
 
-let originbotCompareTimer = null;
-
 async function originbotCompareRefresh() {
   try {
     const payload = await request('/sim2real/board-station/status');
@@ -4060,18 +4169,14 @@ async function originbotCompareRefresh() {
   }
 }
 
-function originbotCompareStart() {
-  if (originbotCompareTimer) return;
-  void originbotCompareRefresh();
-  originbotCompareTimer = setInterval(originbotCompareRefresh, 2000);
-}
-
-function originbotCompareStop() {
-  if (originbotCompareTimer) {
-    clearInterval(originbotCompareTimer);
-    originbotCompareTimer = null;
-  }
-}
+// 只在 evaluate 视图内轮询；进入视图立即刷一帧，离开即停。
+const originbotComparePoll = createScopedPoll({
+  name: 'originbot-compare',
+  views: ['evaluate'],
+  immediate: true,
+  nextDelay: 2000,
+  tick: originbotCompareRefresh,
+});
 
 function renderNextAction() {
   const evidence = currentTelemetry();
@@ -4902,6 +5007,8 @@ async function refreshActiveRuns() {
 }
 
 async function loadOverview({ quiet = false, silent = false } = {}) {
+  // A foreground load and a background poll must never overlap; whichever
+  // got there first wins (this also keeps the poll's own chain serialized).
   if (state.loading) return;
   setLoading(!silent);
   if (!state.overview) {
@@ -4990,26 +5097,11 @@ async function loadOverview({ quiet = false, silent = false } = {}) {
   }
 }
 
+// The poll chain schedules itself after each tick (loadOverview's finally).
+// This entry point just restarts the chain — e.g. after the tab returns or a
+// foreground refresh finished — at the current cadence.
 function scheduleOverviewPolling() {
-  if (overviewPollTimer !== null) window.clearTimeout(overviewPollTimer);
-  // A hidden tab cannot inform anyone; holding the poll avoids burning the
-  // rate limit (1200/5min) while the operator reads another window. The
-  // visibilitychange handler in wireEvents re-arms it on return.
-  if (document.visibilityState !== 'visible') return;
-  const hasActiveRun = runsForCurrentModel().some((run) =>
-    ['queued', 'running'].includes(String(run.status || '').toLowerCase()),
-  );
-  const backoffActive = runStatusBackoffUntil > Date.now();
-  const activeDelay = backoffActive
-    ? Math.max(30_000, runStatusBackoffUntil - Date.now())
-    : 5_000;
-  overviewPollTimer = window.setTimeout(
-    () => {
-      overviewPollTimer = null;
-      void loadOverview({ quiet: true, silent: true });
-    },
-    hasActiveRun ? activeDelay : 30_000,
-  );
+  overviewPoll.rearm();
 }
 
 function readEditorManifest() {
@@ -5101,18 +5193,12 @@ async function registerEditor() {
   }
 }
 
-function settleConfirmRun(approved) {
-  const dialog = $('confirm-run-dialog');
-  if (dialog instanceof HTMLDialogElement && dialog.open) dialog.close();
-  const resolve = state.confirmRunResolve;
-  state.confirmRunResolve = null;
-  if (resolve) resolve(approved);
-}
-
 // Product-styled replacement for window.confirm(): one dialog skin for every
-// consequential action (motion, board switches, resource deletion). Focus is
-// trapped natively by <dialog>, Escape cancels, and the promise always settles.
-function confirmAction({ title, note, approveLabel = '确认执行' } = {}) {
+// consequential action (motion, board switches, resource deletion, cloud
+// training). Focus is trapped natively by <dialog>, Escape cancels, and the
+// promise always settles. `details` renders the shared label/value grid for
+// decisions that benefit from a structured summary (e.g. cloud training).
+function confirmAction({ title, note, approveLabel = '确认执行', details = null } = {}) {
   const dialog = $('confirm-action-dialog');
   if (!(dialog instanceof HTMLDialogElement)) return Promise.resolve(window.confirm(note || title || ''));
   if (state.confirmActionResolve) state.confirmActionResolve(false);
@@ -5120,6 +5206,23 @@ function confirmAction({ title, note, approveLabel = '确认执行' } = {}) {
   setText('confirm-action-title', title || '确认操作');
   const noteNode = $('confirm-action-note');
   if (noteNode) noteNode.textContent = String(note || '');
+  const grid = $('confirm-action-details');
+  if (grid) {
+    const entries = Array.isArray(details) ? details.filter((item) => item && item.label) : [];
+    grid.replaceChildren(
+      ...entries.map((item) => {
+        const field = document.createElement('div');
+        field.className = 'run-detail-field';
+        const label = document.createElement('span');
+        label.textContent = String(item.label);
+        const value = document.createElement('strong');
+        value.textContent = String(item.value ?? '—');
+        field.append(label, value);
+        return field;
+      }),
+    );
+    grid.hidden = entries.length === 0;
+  }
   setText('confirm-action-approve', approveLabel);
   return new Promise((resolve) => {
     state.confirmActionResolve = resolve;
@@ -5141,7 +5244,6 @@ function settleConfirmAction(approved) {
 // Studio-style explicit confirmation before a billable action: the caller
 // gets the operator's decision, and the dialog never submits by itself.
 function confirmRobogoRun() {
-  const dialog = $('confirm-run-dialog');
   const model = selectedModel();
   const task = selectedTask();
   const profileValue = $('training-profile')?.value || 'standard';
@@ -5150,20 +5252,17 @@ function confirmRobogoRun() {
     profileValue;
   const checkpointId = $('resume-checkpoint-id')?.value.trim() || '';
   const artifactRef = $('resume-artifact-ref')?.value.trim() || '';
-  if (state.confirmRunResolve) state.confirmRunResolve(false);
-  state.confirmRunResolve = null;
-  if (!(dialog instanceof HTMLDialogElement)) return Promise.resolve(true);
-  setText('confirm-run-model', model ? modelLabel(model) : '未选择模型');
-  setText('confirm-run-task', task.label || '—');
-  setText('confirm-run-profile', profileLabel || '—');
-  setText('confirm-run-algorithm', $('training-algorithm')?.value?.toUpperCase() || 'PPO');
-  setText(
-    'confirm-run-resume',
-    checkpointId && artifactRef ? checkpointId : '不续训',
-  );
-  return new Promise((resolve) => {
-    state.confirmRunResolve = resolve;
-    dialog.showModal();
+  return confirmAction({
+    title: '确认提交云端训练',
+    note: '该请求会消耗 RoboGo 云端算力并占用一个任务名额；提交后由服务端校验当前账号授权，未授权时会明确标记为 blocked。',
+    approveLabel: '确认提交',
+    details: [
+      { label: '模型', value: model ? modelLabel(model) : '未选择模型' },
+      { label: '动作任务', value: task.label || '—' },
+      { label: '训练档位', value: profileLabel || '—' },
+      { label: '算法', value: $('training-algorithm')?.value?.toUpperCase() || 'PPO' },
+      { label: '续训', value: checkpointId && artifactRef ? checkpointId : '不续训' },
+    ],
   });
 }
 
@@ -6657,19 +6756,18 @@ async function stationDeviceManagerLoad() {
   stationSwitchBoardProbe();
 }
 
-// The Bridge discovery poll only runs while the station view is visible.
-// Leaving the view (or hiding the tab) clears the timer; returning re-arms it.
-function stationBridgePollResume() {
-  if (state.station.bridgePollTimer) return;
-  state.station.bridgePollTimer = window.setInterval(() => {
-    if (document.visibilityState === 'visible') void stationDeviceManagerLoad();
-  }, 3000);
-}
+// The Bridge discovery poll only runs while the station view is visible:
+// entering the view (via syncScopedPolls) or the device manager refresh
+// re-arms it; leaving the view or hiding the tab clears the timer.
+const stationBridgePoll = createScopedPoll({
+  name: 'station-bridge',
+  views: ['station'],
+  nextDelay: 3000,
+  tick: stationDeviceManagerLoad,
+});
 
-function stationBridgePollPause() {
-  if (!state.station.bridgePollTimer) return;
-  window.clearInterval(state.station.bridgePollTimer);
-  state.station.bridgePollTimer = null;
+function stationBridgePollResume() {
+  stationBridgePoll.rearm();
 }
 
 function wireDeviceManagerEvents() {
@@ -7058,15 +7156,11 @@ function wireEvents() {
     setView(WORKFLOW_VIEWS.includes(view) ? view : 'overview', { updateHash: false });
   });
   window.addEventListener('message', handleMicroduckRecordingReady);
-  // Hidden tabs keep their data but stop paying for it: the overview poll is
-  // cancelled on hide and refreshed once on return (scheduleOverviewPolling
-  // refuses to arm while hidden, so a loadOverview that lands mid-hide does
-  // not restart the cycle either).
+  // Hidden tabs keep their data but stop paying for it: every scoped poll
+  // holds its timer while hidden and is resumed here on return (the overview
+  // poll refreshes immediately; view-scoped polls re-arm at cadence).
   document.addEventListener('visibilitychange', () => {
-    if (document.visibilityState === 'visible') {
-      if (!state.loading && state.overview) void loadOverview({ quiet: true, silent: true });
-      else scheduleOverviewPolling();
-    }
+    if (document.visibilityState === 'visible') resumeScopedPolls();
   });
   $('refresh-button')?.addEventListener('click', () => loadOverview());
   $('workspace-status-retry')?.addEventListener('click', () => {
@@ -7382,8 +7476,6 @@ function wireEvents() {
   $('notify-toggle')?.addEventListener('click', () => {
     void toggleNotifyPreference();
   });
-  $('confirm-run-cancel')?.addEventListener('click', () => settleConfirmRun(false));
-  $('confirm-run-approve')?.addEventListener('click', () => settleConfirmRun(true));
   $('confirm-action-cancel')?.addEventListener('click', () => settleConfirmAction(false));
   $('confirm-action-approve')?.addEventListener('click', () => settleConfirmAction(true));
   const confirmActionDialog = $('confirm-action-dialog');
@@ -7393,16 +7485,6 @@ function wireEvents() {
   });
   confirmActionDialog?.addEventListener('close', () => {
     if (state.confirmActionResolve) settleConfirmAction(false);
-  });
-  const confirmRunDialog = $('confirm-run-dialog');
-  confirmRunDialog?.addEventListener('cancel', (event) => {
-    event.preventDefault();
-    settleConfirmRun(false);
-  });
-  confirmRunDialog?.addEventListener('close', () => {
-    // Guard against a settleConfirmRun no-op path leaving a dangling promise
-    // (e.g. a programmatic close from elsewhere in the page).
-    if (state.confirmRunResolve) settleConfirmRun(false);
   });
   $('detect-button')?.addEventListener('click', () => {
     setView('deploy');
