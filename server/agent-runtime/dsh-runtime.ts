@@ -112,10 +112,24 @@ export async function askDsh(ctx: Context, prompt: string, options: { model?: st
       )
       .map((event) => event.data.message);
     const text = messages
-      .flatMap((message) => message.content || [])
-      .filter((block) => block.type === 'text')
-      .map((block) => block.text)
-      .join('');
+      .flatMap((message) => {
+        if (typeof message === 'string') return [message];
+        const content = message?.content;
+        if (typeof content === 'string') return [content];
+        if (!Array.isArray(content)) return [];
+        return content.flatMap((block) => {
+          if (typeof block === 'string') return [block];
+          if (
+            block &&
+            typeof block === 'object' &&
+            typeof (block as { text?: unknown }).text === 'string'
+          )
+            return [(block as { text: string }).text];
+          return [];
+        });
+      })
+      .join('')
+      .trim();
     return {
       sessionId: id,
       text: text || 'DSH 已完成本轮，但没有返回文本。',
