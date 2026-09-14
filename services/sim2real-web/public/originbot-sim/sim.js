@@ -5,6 +5,10 @@
   const canvas = $('scene');
   const context = canvas?.getContext('2d');
   if (!canvas || !context) return;
+  const mapCanvas = $('map-view');
+  const mapContext = mapCanvas?.getContext('2d');
+  const lidarCanvas = $('lidar-view');
+  const lidarContext = lidarCanvas?.getContext('2d');
 
   // The MuJoCo service is mounted independently from the Sim2Real app. Keep
   // the base configurable for installations that put both routes below one
@@ -38,6 +42,9 @@
   let loopBusy = false;
   let imageErrorAt = 0;
   let lastFrameAt = 0;
+  let lastDepthAt = 0;
+  let depthObjectUrl = null;
+  let lastOutcome = '';
   let pageUnloading = false;
 
   const finite = (value, fallback = 0) =>
@@ -138,9 +145,96 @@
     }
     if (exportButton) exportButton.disabled = rows.length === 0;
     if (status) {
-      status.textContent = running ? (recording ? '● 录制中' : '● 运行中') : '● 已暂停';
-      status.classList.toggle('paused', !running);
+      const reached = latestState && distanceToGoal(latestState) <= GOAL_EPSILON;
+      const collision = Boolean(latestState?.collision);
+      const outcome = collision ? 'collision' : reached ? 'goal' : '';
+      status.textContent = outcome === 'collision' ? '● 发生碰撞' : outcome === 'goal' ? '● 已到达目标' : running ? (recording ? '● 录制中' : '● 运行中') : '● 已暂停';
+      status.classList.toggle('paused', !running && !outcome);
+      status.classList.toggle('warn', outcome === 'collision');
+      if (outcome && outcome !== lastOutcome) {
+        setEvent(outcome === 'collision' ? '检测到碰撞，已记录为终止状态。' : '已到达目标点，当前距离小于 0.12 m。', outcome === 'collision' ? 'warn' : 'ok');
+      }
+      lastOutcome = outcome;
     }
+  }
+
+  function worldToMap(x, y, width, height) {
+    const scale = Math.min(width, height) / 8;
+    return { x: width / 2 + x * scale, y: height / 2 - y * scale };
+  }
+
+  function drawMap(state) {
+    if (!mapContext || !mapCanvas) return;
+    const width = mapCanvas.width;
+    const height = mapCanvas.height;
+    mapContext.clearRect(0, 0, width, height);
+    mapContext.fillStyle = '#07111b';
+    mapContext.fillRect(0, 0, width, height);
+    mapContext.strokeStyle = '#193044';
+    mapContext.lineWidth = 1;
+    for (let i = -4; i <= 4; i += 1) {
+      const x = worldToMap(i, 0, width, height).x;
+      const y = worldToMap(0, i, width, height).y;
+      mapContext.beginPath(); mapContext.moveTo(x, 0); mapContext.lineTo(x, height); mapContext.stroke();
+      mapContext.beginPath(); mapContext.moveTo(0, y); mapContext.lineTo(width, y); mapContext.stroke();
+    }
+    const position = positionOf(state);
+    const robot = worldToMap(position.x, position.y, width, height);
+    const target = worldToMap(goal.x, goal.y, width, height);
+    mapContext.strokeStyle = '#ffad68';
+    mapContext.setLineDash([4, 4]);
+    mapContext.beginPath(); mapContext.moveTo(robot.x, robot.y); mapContext.lineTo(target.x, target.y); mapContext.stroke();
+    mapContext.setLineDash([]);
+    mapContext.fillStyle = '#ffad68';
+    mapContext.beginPath(); mapContext.arc(target.x, target.y, 6, 0, Math.PI * 2); mapContext.fill();
+    mapContext.strokeStyle = '#fff0d7'; mapContext.lineWidth = 2; mapContext.stroke();
+    const yaw = yawOf(state);
+    mapContext.save(); mapContext.translate(robot.x, robot.y); mapContext.rotate(-yaw);
+    mapContext.fillStyle = state?.collision ? '#ff6d5a' : '#62a7ff';
+    mapContext.beginPath(); mapContext.moveTo(11, 0); mapContext.lineTo(-8, -7); mapContext.lineTo(-5, 7); mapContext.closePath(); mapContext.fill();
+    mapContext.restore();
+    const scan = Array.isArray(state?.sensors?.scan) ? state.sensors.scan : [];
+    const meta = state?.sensors?.scanMeta || {};
+    const start = finite(meta.angleMin, -Math.PI / 2);
+    const increment = finite(meta.angleIncrement, scan.length > 1 ? Math.PI / Math.max(1, scan.length - 1) : 0);
+    mapContext.fillStyle = '#55ddb0aa';
+    scan.forEach((range, index) => {
+      const distance = finite(range, 0);
+      if (distance <= 0 || distance > 4) return;
+      const angle = start + increment * index + yaw;
+      const point = worldToMap(position.x + Math.cos(angle) * distance, position.y + Math.sin(angle) * distance, width, height);
+      mapContext.fillRect(point.x - 1, point.y - 1, 2, 2);
+    });
+    if ($('map-readout')) $('map-readout').textContent = `目标 ${distanceToGoal(state).toFixed(2)} m`;
+  }
+
+  function drawLidar(state) {
+    if (!lidarContext || !lidarCanvas) return;
+    const width = lidarCanvas.width;
+    const height = lidarCanvas.height;
+    const cx = width / 2;
+    const cy = height / 2;
+    const radius = Math.min(width, height) * .42;
+    lidarContext.clearRect(0, 0, width, height);
+    lidarContext.fillStyle = '#07111b'; lidarContext.fillRect(0, 0, width, height);
+    lidarContext.strokeStyle = '#193044'; lidarContext.lineWidth = 1;
+    [0.25, 0.5, 0.75, 1].forEach((ratio) => { lidarContext.beginPath(); lidarContext.arc(cx, cy, radius * ratio, 0, Math.PI * 2); lidarContext.stroke(); });
+    const scan = Array.isArray(state?.sensors?.scan) ? state.sensors.scan : [];
+    const meta = state?.sensors?.scanMeta || {};
+    const start = finite(meta.angleMin, -Math.PI / 2);
+    const increment = finite(meta.angleIncrement, scan.length > 1 ? Math.PI / Math.max(1, scan.length - 1) : 0);
+    const rangeMax = finite(meta.rangeMax, 4);
+    lidarContext.fillStyle = '#55ddb0';
+    scan.forEach((range, index) => {
+      const distance = finite(range, 0);
+      if (distance <= 0) return;
+      const angle = start + increment * index;
+      const px = cx + Math.cos(angle) * radius * Math.min(distance / rangeMax, 1);
+      const py = cy - Math.sin(angle) * radius * Math.min(distance / rangeMax, 1);
+      lidarContext.fillRect(px - 1, py - 1, 2, 2);
+    });
+    lidarContext.fillStyle = '#62a7ff'; lidarContext.beginPath(); lidarContext.arc(cx, cy, 5, 0, Math.PI * 2); lidarContext.fill();
+    if ($('lidar-readout')) $('lidar-readout').textContent = `${scan.length} beams · ${rangeMax.toFixed(1)} m`;
   }
 
   function updateReadouts(state) {
@@ -305,14 +399,35 @@
     });
   }
 
+  async function drawDepth() {
+    if (!sessionId || !document.getElementById('depth-view')) return;
+    const response = await fetch(`${API_ROOT}/sessions/${sessionId}/depth.jpg?t=${Date.now()}`, {
+      cache: 'no-store', headers: { accept: 'image/jpeg' },
+    });
+    if (!response.ok) throw new Error(`depth ${response.status}`);
+    const nextUrl = URL.createObjectURL(await response.blob());
+    const previousUrl = depthObjectUrl;
+    depthObjectUrl = nextUrl;
+    const image = $('depth-view');
+    image.src = nextUrl;
+    if (previousUrl) URL.revokeObjectURL(previousUrl);
+    if ($('depth-readout-mini')) $('depth-readout-mini').textContent = '实时 · mono8';
+  }
+
   async function render(state, { forceFrame = false } = {}) {
     latestState = state;
     updateReadouts(state);
+    drawMap(state);
+    drawLidar(state);
     $('observation').textContent = JSON.stringify(state?.sensors || {}, null, 2);
     $('action').textContent = JSON.stringify(state?.cmd_vel || {}, null, 2);
     if (!forceFrame && Date.now() - lastFrameAt < FRAME_MS) return;
     try {
       await drawFrame();
+      if (forceFrame || Date.now() - lastDepthAt >= 300) {
+        await drawDepth();
+        lastDepthAt = Date.now();
+      }
       lastFrameAt = Date.now();
     } catch (error) {
       // Do not turn a transient JPEG request into a noisy event every 50 ms.
@@ -507,5 +622,6 @@
 
   window.addEventListener('pagehide', () => {
     releaseSession();
+    if (depthObjectUrl) URL.revokeObjectURL(depthObjectUrl);
   });
 })();
