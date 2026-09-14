@@ -17,7 +17,17 @@ process.env.RDK_SIM2REAL_LOCAL_WORKER_DATA_DIR = fixtureDir;
 process.env.RDK_SIM2REAL_LOCAL_RUNNER_TOKEN = 'worker-test-token';
 process.env.RDK_SIM2REAL_MAX_CONCURRENT_JOBS = '1';
 
-const { createLocalTrainingWorkerServer } = await import('./local-training-worker.mjs');
+const { createLocalTrainingWorkerServer, runnerTokenRequired, runnerTokenUsable } =
+  await import('./local-training-worker.mjs');
+const previousNodeEnv = process.env.NODE_ENV;
+const previousDeployment = process.env.RDK_SIM2REAL_DEPLOYMENT;
+process.env.NODE_ENV = 'development';
+delete process.env.RDK_SIM2REAL_DEPLOYMENT;
+assert.equal(runnerTokenUsable('worker-test-token'), false);
+assert.equal(runnerTokenUsable('a'.repeat(32)), false);
+assert.equal(runnerTokenUsable('ab'.repeat(16)), true);
+assert.equal(runnerTokenRequired('0.0.0.0', { NODE_ENV: 'development' }), true);
+assert.equal(runnerTokenRequired('127.0.0.1', { NODE_ENV: 'development' }), false);
 const server = createLocalTrainingWorkerServer();
 let serverToClose = server;
 await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
@@ -37,6 +47,28 @@ try {
   const healthBody = await health.json();
   assert.equal(healthBody.maxConcurrentJobs, 1);
   assert.equal(healthBody.activeJobs, 0);
+
+  // A production process must reject both a missing and a weak token even on
+  // loopback. The development fixture token remains accepted by the local
+  // loopback server after the environment is restored below.
+  process.env.NODE_ENV = 'production';
+  delete process.env.RDK_SIM2REAL_LOCAL_RUNNER_TOKEN;
+  const productionHealth = await fetch(`${base}/healthz`);
+  assert.equal(productionHealth.status, 503);
+  assert.equal((await productionHealth.json()).error, 'worker_auth_not_configured');
+  process.env.RDK_SIM2REAL_LOCAL_RUNNER_TOKEN = 'worker-test-token';
+  const weakProductionHealth = await fetch(`${base}/healthz`);
+  assert.equal(weakProductionHealth.status, 503);
+  assert.equal((await weakProductionHealth.json()).authTokenUsable, false);
+  process.env.RDK_SIM2REAL_LOCAL_RUNNER_TOKEN = 'ab'.repeat(16);
+  const strongProductionHealth = await fetch(`${base}/healthz`);
+  assert.equal(strongProductionHealth.status, 200);
+  assert.equal((await strongProductionHealth.json()).authTokenUsable, true);
+  if (previousNodeEnv === undefined) delete process.env.NODE_ENV;
+  else process.env.NODE_ENV = previousNodeEnv;
+  if (previousDeployment === undefined) delete process.env.RDK_SIM2REAL_DEPLOYMENT;
+  else process.env.RDK_SIM2REAL_DEPLOYMENT = previousDeployment;
+  process.env.RDK_SIM2REAL_LOCAL_RUNNER_TOKEN = 'worker-test-token';
 
   const unauthorized = await fetch(`${base}/train`, {
     method: 'POST',
@@ -264,4 +296,8 @@ try {
   delete process.env.RDK_SIM2REAL_LOCAL_RUNNER_TOKEN;
   delete process.env.RDK_SIM2REAL_MAX_CONCURRENT_JOBS;
   delete process.env.RDK_SIM2REAL_TEST_LARGE_RESULT;
+  if (previousNodeEnv === undefined) delete process.env.NODE_ENV;
+  else process.env.NODE_ENV = previousNodeEnv;
+  if (previousDeployment === undefined) delete process.env.RDK_SIM2REAL_DEPLOYMENT;
+  else process.env.RDK_SIM2REAL_DEPLOYMENT = previousDeployment;
 }

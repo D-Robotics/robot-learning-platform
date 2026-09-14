@@ -9,9 +9,20 @@ const input = $('agent-chat-input');
 const submitButton = form?.querySelector('button[type="submit"]');
 const runtimeStatus = document.querySelector('.agent-chat-runtime');
 const HISTORY_KEY = 'rdk-sim2real-agent-history-v1';
-// 部署时页面挂在网关的 /sim2real/ 前缀下（nginx 转发时剥掉该前缀），
-// 绝对 /api 路径必须带上同样的前缀，否则网关会返回 404。
-const API_MOUNT_PREFIX = window.location.pathname.startsWith('/sim2real') ? '/sim2real' : '';
+// The server injects the canonical reverse-proxy prefix into the HTML. Keep a
+// fallback for file:// demos and older cached documents.
+const API_MOUNT_PREFIX = (() => {
+  const configured =
+    typeof document !== 'undefined'
+      ? document.querySelector('meta[name="rdk-sim2real-base-path"]')?.getAttribute('content')
+      : '';
+  if (configured && configured !== '__RDK_SIM2REAL_BASE_PATH__') {
+    const normalized = String(configured).trim().replace(/\/+$/, '');
+    if (/^\/[A-Za-z0-9._~-]+(?:\/[A-Za-z0-9._~-]+)*$/.test(normalized)) return normalized;
+    if (!normalized) return '';
+  }
+  return window.location.pathname.startsWith('/sim2real') ? '/sim2real' : '';
+})();
 const SIMULATOR_ALLOWED_KEYS = new Set(['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'w', 'a', 's', 'd', 'q', 'e', 'f', 'r', 'g', 'c', 'm', 'b', ' ']);
 const simulatorBridge = { frame: null, ready: false, recording: false, events: [], connectedAt: null, startedAt: 0, downloadUrl: '', downloadName: '', videoUrl: '', videoName: '', recorder: null, videoError: '' };
 
@@ -226,14 +237,15 @@ function addMessage(role, text, persist = true) {
 // separate chat bubbles, one card per task carries the goal, live checklist,
 // progress bar, and result evidence. The chat stays a chat; the task lives
 // in a bounded, glanceable artifact.
-const STATUS_LABELS = { pending: '待执行', running: '执行中', completed: '完成', failed: '失败', blocked: '已阻断' };
+const STATUS_LABELS = { pending: '待执行', running: '执行中', completed: '完成', partial: '部分完成 · 需处理', failed: '失败', blocked: '已阻断' };
 
 function renderTaskCard(run) {
   const card = document.createElement('div');
   card.className = 'agent-task-card';
-  card.dataset.runStatus = String(run.status || 'pending');
   const steps = Array.isArray(run.steps) ? run.steps : [];
   const done = steps.filter((item) => item.status === 'completed').length;
+  const displayStatus = run.status === 'failed' && done > 0 ? 'partial' : run.status;
+  card.dataset.runStatus = String(displayStatus || 'pending');
   const percent = steps.length ? Math.round((done / steps.length) * 100) : 0;
 
   const head = document.createElement('div');
@@ -241,8 +253,8 @@ function renderTaskCard(run) {
   const goal = document.createElement('strong');
   goal.textContent = String(run.goal || run.intent || 'Agent 任务');
   const badge = document.createElement('span');
-  badge.className = `agent-task-badge agent-task-badge-${run.status || 'pending'}`;
-  badge.textContent = ({ queued: '排队中', running: `${done}/${steps.length} 步`, completed: '已完成', failed: '失败', blocked: '已阻断' }[run.status] || run.status || '排队中');
+  badge.className = `agent-task-badge agent-task-badge-${displayStatus || 'pending'}`;
+  badge.textContent = ({ queued: '排队中', running: `${done}/${steps.length} 步`, completed: '已完成', partial: '部分完成 · 需处理', failed: '失败', blocked: '已阻断' }[displayStatus] || displayStatus || '排队中');
   head.append(goal, badge);
 
   const bar = document.createElement('div');
@@ -340,12 +352,51 @@ function restoreMessages() {
   } catch { /* ignore corrupt browser-only history */ }
 }
 
+function initSessionRail() {
+  const list = $('agent-session-list');
+  const fresh = $('agent-new-session');
+  if (!list) return;
+  let history = [];
+  try { history = JSON.parse(localStorage.getItem(HISTORY_KEY) || '[]'); } catch { history = []; }
+  if (history.length) {
+    const item = document.createElement('button');
+    item.type = 'button'; item.className = 'agent-session-item';
+    item.textContent = history.find((entry) => entry.role === 'user')?.text?.slice(0, 20) || '最近一次对话';
+    item.title = '本地历史对话';
+    list.append(item);
+  }
+  fresh?.addEventListener('click', () => { localStorage.removeItem(HISTORY_KEY); messages?.replaceChildren(); addMessage('agent', '新的对话已开始。告诉我你要完成什么？', false); list.querySelectorAll('.agent-session-item').forEach((node) => node.classList.remove('is-active')); });
+}
+
+class AgentApiError extends Error {
+  constructor(message, status, payload) {
+    super(message);
+    this.name = 'AgentApiError';
+    this.status = status;
+    this.payload = payload;
+  }
+}
+
 async function api(path, options = {}) {
   const headers = new Headers(options.headers || {});
   if (options.body && !headers.has('content-type')) headers.set('content-type', 'application/json');
-  const response = await fetch(API_MOUNT_PREFIX + path, { credentials: 'include', ...options, headers });
+  let response;
+  try {
+    response = await fetch(API_MOUNT_PREFIX + path, { credentials: 'include', ...options, headers });
+  } catch (error) {
+    // Keep a stable status field for transport failures as well. Callers can
+    // distinguish an unavailable DSH endpoint (503) from a disconnected
+    // browser without parsing an implementation-specific Error message.
+    throw new AgentApiError(error instanceof Error ? error.message : '网络连接失败', 0, null);
+  }
   const payload = await response.json().catch(() => ({}));
-  if (!response.ok) throw new Error(payload.message || payload.error || `请求失败（${response.status}）`);
+  if (!response.ok) {
+    const message =
+      payload && typeof payload === 'object' && (payload.message || payload.error)
+        ? payload.message || payload.error
+        : `请求失败（${response.status}）`;
+    throw new AgentApiError(String(message), response.status, payload);
+  }
   return payload;
 }
 
@@ -461,6 +512,18 @@ async function runTask(message) {
   const modelId = $('model-select')?.value || undefined;
   const deviceId = $('device-select')?.value || undefined;
   const computeResourceId = $('compute-resource-select')?.value || undefined;
+  // Natural conversation is handled by the official DSH runtime when enabled;
+  // explicit product actions retain the guarded domain planner until their DSH
+  // tool bindings are available.
+  const actionIntent = /(训练|gpu|cuda|板卡|设备|仿真|录制|评测|部署|预检|停止|急停|ssh|curl)/i.test(message);
+  if (!actionIntent) {
+    try {
+      const dsh = await api('/api/sim2real/dsh/chat', { method: 'POST', body: JSON.stringify({ message }) });
+      if (dsh?.ok && dsh.text) { addMessage('agent', dsh.text); return; }
+    } catch (error) {
+      if (!(error && error.status === 503)) throw error;
+    }
+  }
   const response = await api('/api/sim2real/agent/plan', { method: 'POST', body: JSON.stringify({ message, context: { modelId, deviceId, computeResourceId } }) });
   const plan = response?.plan;
   if (!plan || !Array.isArray(plan.steps) || !plan.steps.length || plan.steps.some((item) => !item || typeof item !== 'object')) throw new Error('服务没有返回有效的可执行计划');
@@ -478,7 +541,7 @@ async function runTask(message) {
   if (plan.steps.some((item) => item.tool === 'simulator.open')) {
     void runSimulatorDemo(message).catch((error) => renderAgentError(error, true));
   }
-  const terminal = new Set(['completed', 'failed', 'blocked', 'cancelled', 'timed_out']);
+  const terminal = new Set(['completed', 'partial', 'failed', 'blocked', 'cancelled', 'timed_out']);
   let transientFailures = 0;
   let lastStepLabel = '';
   for (let attempt = 0; attempt < 180; attempt += 1) {
@@ -505,7 +568,10 @@ async function runTask(message) {
       if (result.run.status === 'completed') {
         const links = (result.run.evidence || []).filter((item) => item.href).length;
         addMessage('agent', links ? '任务完成，证据卡片里可直接跳转运行记录。' : '任务完成。');
-      } else addMessage('agent', `任务结束：${STATUS_LABELS[result.run.status] || result.run.status}`);
+      } else {
+        const completed = (result.run.steps || []).filter((item) => item.status === 'completed').length;
+        addMessage('agent', completed > 0 ? '任务部分完成：已完成的证据已保留，请按任务卡中的失败步骤处理后再重试。' : `任务结束：${STATUS_LABELS[result.run.status] || result.run.status}`);
+      }
       return;
     }
   }
@@ -533,17 +599,58 @@ const backdrop = $('agent-chat-backdrop');
 const closeButton = $('agent-chat-close');
 const AGENT_POSITION_KEY = 'rdk-duck-lab-agent-position-v1';
 let dragged = false;
+let drawerRestoreFocus = null;
+
+function drawerFocusableElements() {
+  if (!panel) return [];
+  return [...panel.querySelectorAll(
+    'a[href], area[href], button:not([disabled]), input:not([disabled]), textarea:not([disabled]), select:not([disabled]), [tabindex]:not([tabindex="-1"])',
+  )].filter((element) => !element.closest('[hidden]') && element.getAttribute('aria-hidden') !== 'true');
+}
 
 function setAgentDrawer(open) {
   if (!panel) return;
   const restoreFocus = arguments.length < 2 || arguments[1] !== false;
+  const wasOpen = document.body.classList.contains('agent-chat-open');
+  if (open && !wasOpen) {
+    const active = document.activeElement;
+    drawerRestoreFocus =
+      active instanceof HTMLElement &&
+      active !== document.body &&
+      active !== document.documentElement &&
+      !active.closest('[hidden]') &&
+      !active.hasAttribute('disabled')
+        ? active
+        : launcher;
+  }
   document.body.classList.toggle('agent-chat-open', open);
   panel.setAttribute('aria-hidden', open ? 'false' : 'true');
+  panel.tabIndex = -1;
   launcher?.setAttribute('aria-expanded', open ? 'true' : 'false');
   launcher?.setAttribute('aria-label', open ? '关闭 Agent 对话' : '打开 Agent 对话');
   if (backdrop) backdrop.hidden = !open;
-  if (open) window.setTimeout(() => input?.focus(), 80);
-  else if (restoreFocus) window.setTimeout(() => launcher?.focus(), 0);
+  if (open) {
+    window.setTimeout(() => {
+      if (!document.body.classList.contains('agent-chat-open')) return;
+      const target = input && !input.disabled ? input : drawerFocusableElements()[0] || panel;
+      target.focus();
+    }, 80);
+  } else if (wasOpen && restoreFocus) {
+    const target = drawerRestoreFocus;
+    drawerRestoreFocus = null;
+    window.setTimeout(() => {
+      if (
+        target?.isConnected &&
+        !target.closest?.('[hidden]') &&
+        !target.hasAttribute?.('disabled') &&
+        typeof target.focus === 'function'
+      )
+        target.focus();
+      else launcher?.focus();
+    }, 0);
+  } else if (!open) {
+    drawerRestoreFocus = null;
+  }
 }
 
 launcher?.addEventListener('click', () => {
@@ -553,7 +660,28 @@ launcher?.addEventListener('click', () => {
 closeButton?.addEventListener('click', () => setAgentDrawer(false));
 backdrop?.addEventListener('click', () => setAgentDrawer(false));
 document.addEventListener('keydown', (event) => {
-  if (event.key === 'Escape' && document.body.classList.contains('agent-chat-open')) setAgentDrawer(false);
+  if (!document.body.classList.contains('agent-chat-open')) return;
+  if (event.key === 'Escape') {
+    setAgentDrawer(false);
+    return;
+  }
+  if (event.key !== 'Tab') return;
+  const focusable = drawerFocusableElements();
+  if (!focusable.length) {
+    event.preventDefault();
+    panel?.focus();
+    return;
+  }
+  const active = document.activeElement;
+  if (event.shiftKey) {
+    if (active === focusable[0] || !panel?.contains(active)) {
+      event.preventDefault();
+      focusable[focusable.length - 1].focus();
+    }
+  } else if (active === focusable[focusable.length - 1] || !panel?.contains(active)) {
+    event.preventDefault();
+    focusable[0].focus();
+  }
 });
 
 // Preserve the old entry card affordance, but open the same drawer instead of
@@ -643,4 +771,5 @@ launcher?.addEventListener('pointerdown', (event) => {
 setAgentDrawer(false, false);
 
 restoreMessages();
+initSessionRail();
 })();

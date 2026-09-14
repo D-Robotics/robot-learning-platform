@@ -410,6 +410,30 @@
     ].join('\n');
   }
 
+  // The recorder is embedded inside the Sim2Real workbench.  Keep the local
+  // download for standalone use, but also publish a small ready signal so the
+  // parent can pull the complete JSONL through the exposed API and place it in
+  // the platform's telemetry/evaluation flow.  Sending only metadata here
+  // avoids copying a potentially multi-minute trajectory through postMessage.
+  function notifyParentRecordingReady() {
+    if (!recorder.samples.length || window.parent === window) return;
+    try {
+      window.parent.postMessage(
+        {
+          type: 'rdk-microduck-recording-ready',
+          format: 'microduck-trajectory-v1',
+          sampleCount: recorder.samples.length,
+          durationSeconds: recorder.samples.at(-1)?.time || 0,
+          contractId: 'microduck-policy-v1',
+        },
+        '*',
+      );
+    } catch {
+      // A detached or cross-origin parent may reject the signal. The local
+      // export button remains available in that case.
+    }
+  }
+
   function downloadRecording() {
     if (!recorder.samples.length) return false;
     const stamp = new Date().toISOString().replace(/[:.]/g, '-');
@@ -438,6 +462,7 @@
     if (recorder.timer) clearInterval(recorder.timer);
     recorder.timer = null;
     recorder.last = recorder.samples.length ? recordingHeader() : null;
+    notifyParentRecordingReady();
     const panel = document.getElementById(RECORDER_PANEL_ID);
     panel
       ?.querySelector('[data-recorder-status]')
@@ -574,6 +599,9 @@
       },
       get lastHeader() {
         return recorder.last;
+      },
+      getText() {
+        return recorder.samples.length ? recordingText() : '';
       },
       destroy() {
         stopRecording('已停止');
@@ -1284,6 +1312,36 @@
       characterData: true,
     });
   }
+
+  // Host workbench replay bridge. New simulator builds may expose an
+  // applyReplayFrame(frame) hook; older builds still receive a cancellable
+  // custom event so integrations can consume the exact same frame contract.
+  window.addEventListener('message', (event) => {
+    const payload = event?.data;
+    if (!payload || payload.type !== 'rdk-replay-frame' || !payload.frame) return;
+    const frame = payload.frame;
+    const current = runtime();
+    let applied = false;
+    for (const method of ['applyReplayFrame', 'setReplayFrame', 'replayFrame']) {
+      if (typeof current?.[method] !== 'function') continue;
+      try {
+        current[method](frame);
+        applied = true;
+        break;
+      } catch (error) {
+        console.warn('[microduck replay] frame apply failed', error);
+      }
+    }
+    try {
+      window.dispatchEvent(
+        new CustomEvent('rdk-replay-frame', {
+          detail: { ...frame, index: payload.index, runId: payload.runId, applied },
+        }),
+      );
+    } catch {
+      /* isolated runtimes may not support CustomEvent */
+    }
+  });
 
   document.addEventListener('keydown', (event) => {
     recordInputEvent('keydown', event);

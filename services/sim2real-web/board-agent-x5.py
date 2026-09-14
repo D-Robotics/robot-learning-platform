@@ -54,18 +54,67 @@ statvfs, `ros2 topic list` (bounded), hobot_usb_cam device probe.
 import base64
 import hashlib
 import hmac
+import ipaddress
 import json
+import math
 import os
 import re
 import shutil
+import stat
 import subprocess
 import sys
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
+# The board bundle is deployed as a flat directory (the filename contains a
+# hyphen, so it is not a Python package).  Keep the shared IPC helper beside
+# the scripts and make spec-loaded development tests resolve it identically.
+_MODULE_DIR = os.path.dirname(os.path.abspath(__file__))
+if _MODULE_DIR not in sys.path:
+    sys.path.insert(0, _MODULE_DIR)
+from board_ipc import (
+    atomic_write_bytes,
+    atomic_write_text,
+    ensure_private_parent,
+    ipc_path,
+    secure_exists,
+    secure_open_read,
+    secure_open_append,
+    secure_read_json,
+    secure_size,
+    secure_unlink,
+)
+
 TOKEN = os.environ.get("RDK_SIM2REAL_BOARD_AGENT_TOKEN", "").strip()
-HOST = os.environ.get("RDK_SIM2REAL_BOARD_AGENT_BIND_HOST", "127.0.0.1") or "127.0.0.1"
+HOST = (os.environ.get("RDK_SIM2REAL_BOARD_AGENT_BIND_HOST", "127.0.0.1") or "127.0.0.1").strip()
+
+
+def _loopback_bind_host(value):
+    """Return whether a bind value is unambiguously loopback-only.
+
+    An empty token is a supported development convenience only when the
+    socket cannot accept traffic from another host.  Reject hostnames other
+    than ``localhost`` here instead of resolving them at import time: DNS can
+    change after startup and turn an apparently safe configuration into a
+    network-facing one.
+    """
+    normalized = str(value or "").strip().lower().strip("[]")
+    if normalized == "localhost":
+        return True
+    try:
+        return ipaddress.ip_address(normalized).is_loopback
+    except ValueError:
+        return False
+
+
+if not TOKEN and not _loopback_bind_host(HOST):
+    raise RuntimeError(
+        "RDK_SIM2REAL_BOARD_AGENT_TOKEN is required when "
+        "RDK_SIM2REAL_BOARD_AGENT_BIND_HOST is not loopback"
+    )
+
+
 try:
     PORT = int(os.environ.get("RDK_SIM2REAL_BOARD_AGENT_PORT", "19100"))
 except ValueError:
@@ -74,6 +123,10 @@ if not (1024 <= PORT <= 65535):
     PORT = 19100
 
 MAX_BODY_BYTES = 64 * 1024
+# Bodyless control routes accept the platform's historical ``{}`` JSON body
+# for compatibility, but never read an unbounded payload just to decide that
+# it is empty.
+MAX_EMPTY_BODY_BYTES = 4 * 1024
 # Policy upload ceiling: one bounded ONNX at a time, base64-inflated. Matches
 # the runtime's 50 MB model limit with headroom for JSON encoding.
 MAX_POLICY_BODY_BYTES = 68 * 1024 * 1024
@@ -318,7 +371,14 @@ def run_ros2_list(kind):
         return {"ok": False, "error": "tros-missing"}
     try:
         result = subprocess.run(
-            ["bash", "-c", f"source {TROS_SETUP} && timeout 6 ros2 {kind} list"],
+            [
+                "bash",
+                "-c",
+                'source "$1" && timeout 6 ros2 "$2" list',
+                "rdk-ros2-list",
+                TROS_SETUP,
+                kind,
+            ],
             capture_output=True,
             text=True,
             timeout=8,
@@ -384,9 +444,12 @@ _drive_state = {
 _drive_lock = threading.Lock()
 _drive_proc = None  # subprocess running the persistent ros2 topic pub
 
-# The yaml the publisher consumes lives in /tmp; it is rewritten under the
-# lock before each deadline extension. Only this agent writes it.
-DRIVE_COMMAND_FILE = "/tmp/rdk-board-agent-drive.yaml"
+# The command/handshake files live in a root-only runtime directory. Direct
+# file overrides remain supported for field compatibility, but board_ipc
+# validates them at every operation and rejects public or symlinked paths.
+DRIVE_COMMAND_FILE = ipc_path(
+    "RDK_BOARD_DRIVE_CMD_FILE", "drive-command.yaml"
+)
 
 
 def _drive_log(msg):
@@ -405,6 +468,44 @@ def _actuator_policy():
     }
 
 
+def _drive_feedback():
+    """Return best-effort measured motion feedback for the drive surface.
+
+    The command state is not proof that the chassis moved: a controller can
+    be stopped, disconnected, or blocked while the command window is active.
+    Keep the command state and measured odometry separate so callers can
+    render that distinction without turning telemetry into a motion gate.
+    """
+    with _ob_lock:
+        telemetry = _ob_state.get("data")
+        sampled_at = float(_ob_state.get("ts") or 0.0)
+    odom = telemetry.get("odom") if isinstance(telemetry, dict) else None
+    if not isinstance(odom, dict):
+        return {
+            "available": False,
+            "fresh": False,
+            "linearX": None,
+            "angularZ": None,
+            "positionX": None,
+            "positionY": None,
+            "ageMs": None,
+        }
+    age_ms = max(0, int((time.time() - sampled_at) * 1000)) if sampled_at else None
+    fresh = age_ms is not None and age_ms <= TELEMETRY_SNAPSHOT_STALE_SEC * 1000
+    def number(name):
+        value = odom.get(name)
+        return float(value) if isinstance(value, (int, float)) and math.isfinite(value) else None
+    return {
+        "available": True,
+        "fresh": fresh,
+        "linearX": number("linearX"),
+        "angularZ": number("angularZ"),
+        "positionX": number("positionX"),
+        "positionY": number("positionY"),
+        "ageMs": age_ms,
+    }
+
+
 def drive_status():
     with _drive_lock:
         return {
@@ -416,6 +517,9 @@ def drive_status():
             if _drive_state["active"] else 0,
             "lastStopReason": _drive_state["lastStopReason"],
             "published": _drive_state["published"],
+            # Feedback is observational only; command acceptance remains
+            # represented by active/lastStopReason above.
+            "feedback": _drive_feedback(),
         }
 
 
@@ -430,12 +534,9 @@ def _write_drive_yaml(linear, angular):
         "  y: 0.0\n"
         f"  z: {angular}\n"
     )
-    tmp = DRIVE_COMMAND_FILE + ".tmp"
-    with open(tmp, "w") as handle:
-        handle.write(content)
-        handle.flush()
-        os.fsync(handle.fileno())
-    os.replace(tmp, DRIVE_COMMAND_FILE)
+    # board_ipc uses a random O_EXCL temp inode, validates the private parent
+    # and target, fsyncs both file and directory, and rejects symlinks.
+    atomic_write_text(DRIVE_COMMAND_FILE, content)
 
 
 # The publisher is a small rclpy script deployed next to this agent. It
@@ -449,8 +550,11 @@ DRIVE_PUBLISHER_SCRIPT = os.environ.get(
 )
 
 
-DRIVE_PUBLISHER_READY = os.environ.get(
-    "RDK_BOARD_DRIVE_READY", "/tmp/board-drive-publisher.ready"
+DRIVE_PUBLISHER_READY = ipc_path(
+    "RDK_BOARD_DRIVE_READY", "drive-publisher.ready"
+)
+DRIVE_PUBLISHER_LOG = ipc_path(
+    "RDK_BOARD_DRIVE_LOG", "drive-publisher.log"
 )
 DRIVE_PUBLISHER_READY_TIMEOUT = 8.0  # spawn + rclpy import + DDS discovery
 
@@ -473,28 +577,43 @@ def _start_drive_publisher():
     # can never outlive any launch attempt. The marker is only consumed by
     # this function's wait loop, so a live publisher losing it is harmless.
     try:
-        os.unlink(DRIVE_PUBLISHER_READY)
+        secure_unlink(DRIVE_PUBLISHER_READY)
     except OSError:
+        # A missing or unsafe marker must never make a launch look ready. The
+        # subsequent secure_exists() checks keep the handshake fail-closed.
         pass
     if not os.path.exists(DRIVE_PUBLISHER_SCRIPT):
         return False
     # The command file must exist BEFORE the publisher starts, otherwise its
     # first cycles publish nothing and motion starts late.
-    if not os.path.exists(DRIVE_COMMAND_FILE):
+    try:
+        command_exists = secure_exists(DRIVE_COMMAND_FILE)
+    except OSError:
+        command_exists = False
+    if not command_exists:
         try:
             _write_drive_yaml(0.0, 0.0)
         except OSError:
             return False
     try:
         _drive_proc = subprocess.Popen(
-            ["bash", "-c",
-             f"source {TROS_SETUP} 2>/dev/null && "
-             f"exec python3 {DRIVE_PUBLISHER_SCRIPT}"],
+            [
+                "bash",
+                "-c",
+                'set -e; source "$1" 2>/dev/null && exec python3 "$2"',
+                "rdk-drive-publisher",
+                TROS_SETUP,
+                DRIVE_PUBLISHER_SCRIPT,
+            ],
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
             env={**os.environ, "HOME": "/root", "TERM": "dumb",
                  "RDK_BOARD_DRIVE_PERSIST": "1",
                  "RDK_BOARD_DRIVE_CMD_TOPIC": DRIVE_COMMAND_TOPIC,
+                 "RDK_BOARD_RUNTIME_DIR": os.path.dirname(DRIVE_COMMAND_FILE),
+                 "RDK_BOARD_DRIVE_CMD_FILE": DRIVE_COMMAND_FILE,
+                 "RDK_BOARD_DRIVE_READY": DRIVE_PUBLISHER_READY,
+                 "RDK_BOARD_DRIVE_LOG": DRIVE_PUBLISHER_LOG,
                  "RDK_BOARD_DRIVE_RATE_HZ": str(DRIVE_PUBLISH_HZ),
                  "ROS_LOG_DIR": "/var/lib/rdk-board-agent/roslogs",
                  "PATH": "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"},
@@ -507,8 +626,12 @@ def _start_drive_publisher():
         if _drive_proc.poll() is not None:
             _drive_proc = None
             return False
-        if os.path.exists(DRIVE_PUBLISHER_READY):
-            return True
+        try:
+            if secure_exists(DRIVE_PUBLISHER_READY):
+                return True
+        except OSError:
+            # Unsafe marker paths are treated exactly like a missing marker.
+            pass
         time.sleep(0.1)
     _drive_log("publisher failed to signal ready; killing")
     try:
@@ -534,9 +657,18 @@ def _stop_drive_publisher():
         _drive_proc = None
     for path in (DRIVE_COMMAND_FILE, DRIVE_PUBLISHER_READY):
         try:
-            os.unlink(path)
+            secure_unlink(path)
         except OSError:
             pass
+
+
+def _finite_number(value):
+    """Return true for JSON numeric scalars that are safe to actuate."""
+    return (
+        isinstance(value, (int, float))
+        and not isinstance(value, bool)
+        and math.isfinite(float(value))
+    )
 
 
 def drive_command(linear, angular, duration_sec):
@@ -545,7 +677,7 @@ def drive_command(linear, angular, duration_sec):
     so an explicit command can never extend motion by more than that."""
     if not DRIVE_ENABLED:
         return False, "drive-disabled"
-    if not isinstance(linear, (int, float)) or not isinstance(angular, (int, float)):
+    if not _finite_number(linear) or not _finite_number(angular):
         return False, "invalid-type"
     linear = float(linear)
     angular = float(angular)
@@ -553,6 +685,9 @@ def drive_command(linear, angular, duration_sec):
         return False, "linear-out-of-range"
     if not (DRIVE_MAX_ANGULAR >= angular >= -DRIVE_MAX_ANGULAR):
         return False, "angular-out-of-range"
+    if not _finite_number(duration_sec):
+        return False, "invalid-type"
+    duration_sec = float(duration_sec)
     if not (0 < duration_sec <= DRIVE_MAX_WINDOW_SEC):
         return False, "duration-out-of-range"
     _drive_log(f"cmd lin={linear} ang={angular} dur={duration_sec}")
@@ -642,8 +777,8 @@ TELEMETRY_NODE_SCRIPT = os.environ.get(
     "RDK_BOARD_TELEMETRY_NODE",
     os.path.join(os.path.dirname(os.path.abspath(__file__)), "board-telemetry-node.py"),
 )
-TELEMETRY_SNAPSHOT_FILE = os.environ.get(
-    "RDK_BOARD_TELEMETRY_SNAPSHOT", "/tmp/board-telemetry-snapshot.json"
+TELEMETRY_SNAPSHOT_FILE = ipc_path(
+    "RDK_BOARD_TELEMETRY_SNAPSHOT", "telemetry-snapshot.json"
 )
 TELEMETRY_SNAPSHOT_STALE_SEC = 5.0
 _telemetry_proc = None
@@ -660,26 +795,41 @@ def _start_telemetry_node():
     global _telemetry_proc
     if not os.path.exists(TELEMETRY_NODE_SCRIPT) or not os.path.exists(TROS_SETUP):
         return False
+    telemetry_log = None
     try:
         # Keep diagnostics inside the service's declared writable state
-        # directory; ProtectSystem=strict makes /var/log read-only.
-        telemetry_log = open(
-            "/var/lib/rdk-board-agent/telemetry/sampler.log", "a", encoding="utf-8"
+        # directory; open it through the same no-symlink helper as IPC files.
+        telemetry_log_fd = secure_open_append(
+            "/var/lib/rdk-board-agent/telemetry/sampler.log"
         )
+        telemetry_log = os.fdopen(telemetry_log_fd, "a", encoding="utf-8")
         _telemetry_proc = subprocess.Popen(
-            ["bash", "-c",
-             f"source {TROS_SETUP} 2>/dev/null && "
-             f"source {ORIGINBOT_WS_SETUP} 2>/dev/null && "
-             f"exec python3 {TELEMETRY_NODE_SCRIPT}"],
+            [
+                "bash",
+                "-c",
+                'set -e; source "$1" 2>/dev/null && source "$2" 2>/dev/null && exec python3 "$3"',
+                "rdk-telemetry-node",
+                TROS_SETUP,
+                ORIGINBOT_WS_SETUP,
+                TELEMETRY_NODE_SCRIPT,
+            ],
             stdout=telemetry_log,
             stderr=telemetry_log,
             env={**os.environ, "HOME": "/root", "TERM": "dumb",
+                 "RDK_BOARD_RUNTIME_DIR": os.path.dirname(TELEMETRY_SNAPSHOT_FILE),
+                 "RDK_BOARD_TELEMETRY_SNAPSHOT": TELEMETRY_SNAPSHOT_FILE,
                  "ROS_LOG_DIR": "/var/lib/rdk-board-agent/roslogs",
                  "PATH": "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"},
         )
         telemetry_log.close()
+        telemetry_log = None
         return True
     except OSError:
+        if telemetry_log is not None:
+            try:
+                telemetry_log.close()
+            except OSError:
+                pass
         _telemetry_proc = None
         return False
 
@@ -687,9 +837,8 @@ def _start_telemetry_node():
 def _read_telemetry_snapshot():
     """Read the sampler node's snapshot; None when absent or stale."""
     try:
-        with open(TELEMETRY_SNAPSHOT_FILE, "r", encoding="utf-8") as handle:
-            payload = json.load(handle)
-    except (OSError, ValueError):
+        payload = secure_read_json(TELEMETRY_SNAPSHOT_FILE)
+    except (OSError, ValueError, TypeError):
         return None
     ts = payload.get("ts")
     if not isinstance(ts, (int, float)) or time.time() - ts > TELEMETRY_SNAPSHOT_STALE_SEC:
@@ -744,11 +893,11 @@ POLICY_RUNTIME_SCRIPT = os.environ.get(
     "RDK_BOARD_POLICY_RUNTIME",
     os.path.join(os.path.dirname(os.path.abspath(__file__)), "board-policy-runtime.py"),
 )
-POLICY_CMD_FILE = os.environ.get("RDK_BOARD_POLICY_CMD", "/tmp/board-policy-runtime-cmd.json")
-POLICY_STATE_FILE = os.environ.get(
-    "RDK_BOARD_POLICY_STATE", "/tmp/board-policy-runtime-state.json"
+POLICY_CMD_FILE = ipc_path("RDK_BOARD_POLICY_CMD", "policy-runtime-cmd.json")
+POLICY_STATE_FILE = ipc_path("RDK_BOARD_POLICY_STATE", "policy-runtime-state.json")
+POLICY_RUNTIME_READY = ipc_path(
+    "RDK_BOARD_POLICY_READY", "policy-runtime.ready"
 )
-POLICY_RUNTIME_READY = "/tmp/board-policy-runtime.ready"
 POLICY_READY_TIMEOUT = 20.0  # rclpy init + onnxruntime import on the board
 POLICY_APPLY_TIMEOUT = 10.0  # file-protocol round trip for load/start
 POLICY_ALLOWED_MODEL_DIR = "/root/rdk-board-agent/policies"
@@ -761,9 +910,8 @@ _policy_seq = 0
 def _policy_read_state(max_age=None):
     """Read the runtime's state file; None when absent (or stale)."""
     try:
-        with open(POLICY_STATE_FILE, "r", encoding="utf-8") as fh:
-            snap = json.load(fh)
-    except (OSError, ValueError):
+        snap = secure_read_json(POLICY_STATE_FILE)
+    except (OSError, ValueError, TypeError):
         return None
     if max_age is not None:
         ts = snap.get("ts")
@@ -788,20 +936,30 @@ def _start_policy_runtime():
     if _policy_runtime_alive():
         return True
     try:
-        os.unlink(POLICY_RUNTIME_READY)
+        secure_unlink(POLICY_RUNTIME_READY)
     except OSError:
         pass
     if not os.path.exists(POLICY_RUNTIME_SCRIPT):
         return False
     try:
         _policy_proc = subprocess.Popen(
-            ["bash", "-c",
-             f"source {TROS_SETUP} 2>/dev/null && "
-             f"source {ORIGINBOT_WS_SETUP} 2>/dev/null && "
-             f"exec python3 {POLICY_RUNTIME_SCRIPT}"],
+            [
+                "bash",
+                "-c",
+                'set -e; source "$1" 2>/dev/null && source "$2" 2>/dev/null && exec python3 "$3"',
+                "rdk-policy-runtime",
+                TROS_SETUP,
+                ORIGINBOT_WS_SETUP,
+                POLICY_RUNTIME_SCRIPT,
+            ],
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
             env={**os.environ, "HOME": "/root", "TERM": "dumb",
+                 "RDK_BOARD_RUNTIME_DIR": os.path.dirname(POLICY_CMD_FILE),
+                 "RDK_BOARD_POLICY_CMD": POLICY_CMD_FILE,
+                 "RDK_BOARD_POLICY_STATE": POLICY_STATE_FILE,
+                 "RDK_BOARD_POLICY_READY": POLICY_RUNTIME_READY,
+                 "RDK_BOARD_TELEMETRY_SNAPSHOT": TELEMETRY_SNAPSHOT_FILE,
                  "ROS_LOG_DIR": "/var/lib/rdk-board-agent/roslogs",
                  "PATH": "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"},
         )
@@ -813,8 +971,11 @@ def _start_policy_runtime():
         if _policy_proc.poll() is not None:
             _policy_proc = None
             return False
-        if os.path.exists(POLICY_RUNTIME_READY):
-            return True
+        try:
+            if secure_exists(POLICY_RUNTIME_READY):
+                return True
+        except OSError:
+            pass
         time.sleep(0.1)
     try:
         _policy_proc.terminate()
@@ -839,7 +1000,7 @@ def _stop_policy_runtime():
         _policy_proc = None
     for path in (POLICY_CMD_FILE, POLICY_RUNTIME_READY):
         try:
-            os.unlink(path)
+            secure_unlink(path)
         except OSError:
             pass
 
@@ -856,13 +1017,11 @@ def _policy_send(op, **fields):
         _policy_seq += 1
         seq = _policy_seq
     req = {"op": op, "seq": seq, **fields}
-    tmp = POLICY_CMD_FILE + ".tmp"
     try:
-        with open(tmp, "w", encoding="utf-8") as fh:
-            json.dump(req, fh)
-            fh.flush()
-            os.fsync(fh.fileno())
-        os.replace(tmp, POLICY_CMD_FILE)
+        atomic_write_text(
+            POLICY_CMD_FILE,
+            json.dumps(req, ensure_ascii=False, separators=(",", ":")),
+        )
     except OSError:
         return {"ok": False, "error": "cmd-file-write-failed"}
     # The runtime polls at 50 ms; state file rewrite is atomic. Wait until
@@ -908,9 +1067,31 @@ def policy_status():
         "providerRequested": snap.get("providerRequested") if snap else None,
         "providersAvailable": (snap.get("model") or {}).get("providersAvailable") if snap else None,
         "observationLayout": snap.get("observationLayout") if snap else None,
+        "actionProjection": snap.get("actionProjection") if snap else None,
+        "actionOutput": snap.get("actionOutput") if snap else None,
+        "actionOutputConfigError": snap.get("actionOutputConfigError") if snap else None,
+        "actionScale": snap.get("actionScale") if snap else None,
+        "controlHz": snap.get("controlHz") if snap else None,
+        "controlPeriodSeconds": snap.get("controlPeriodSeconds") if snap else None,
+        "lastCmdVel": snap.get("lastCmdVel") if snap else None,
         "lastError": snap.get("lastError") if snap else None,
         "lastOp": snap.get("lastOp") if snap else None,
         "obsSlots": snap.get("obsSlots") if snap else None,
+        # Structured session evidence is kept separate from the live state so
+        # a stopped process still exposes the last model fingerprint, start /
+        # stop timestamps and inference count for Run reconciliation.
+        "session": snap.get("session") if snap else None,
+        "sessionId": (snap.get("session") or {}).get("id") if snap else None,
+        "sessionStartedAt": (snap.get("session") or {}).get("startedAt") if snap else None,
+        "sessionStoppedAt": (snap.get("session") or {}).get("stoppedAt") if snap else None,
+        "sessionStopReason": (snap.get("session") or {}).get("stopReason") if snap else None,
+        "inferenceCount": (snap.get("session") or {}).get("inferenceCount") if snap else None,
+        "lastInferenceAt": (snap.get("session") or {}).get("lastInferenceAt") if snap else None,
+        # Policy commands use the same bounded cmd_vel channel as the manual
+        # canary, but the policy runtime has its own state machine. Expose
+        # measured odometry here so a running policy cannot be mistaken for
+        # proof that the chassis actually moved.
+        "feedback": _drive_feedback(),
         "limits": {
             "maxLinear": DRIVE_MAX_LINEAR,
             "maxAngular": DRIVE_MAX_ANGULAR,
@@ -973,23 +1154,51 @@ def policy_stage(policy_bytes_b64, filename, sha256_hex):
         return {"ok": False, "error": "policy-digest-mismatch",
                 "message": "制品 SHA-256 与声明不一致；拒绝写入",
                 "actual": digest}
-    os.makedirs(POLICY_ALLOWED_MODEL_DIR, mode=0o700, exist_ok=True)
     target = os.path.join(POLICY_ALLOWED_MODEL_DIR, filename)
-    if os.path.exists(target):
-        with open(target, "rb") as fh:
-            existing = hashlib.sha256(fh.read()).hexdigest()
+    try:
+        # Ensure the pinned directory itself is a private, trusted boundary;
+        # this also creates it on a fresh board without following a symlink.
+        ensure_private_parent(target, create=True)
+        target_exists = secure_exists(target)
+    except OSError:
+        return {"ok": False, "error": "policy-path-unsafe",
+                "message": "策略目录或目标文件不是受信任的 root-only 路径"}
+    if target_exists:
+        fd = None
+        try:
+            fd = secure_open_read(target)
+            with os.fdopen(fd, "rb", closefd=True) as fh:
+                fd = None
+                existing_size = 0
+                existing_digest = hashlib.sha256()
+                for chunk in iter(lambda: fh.read(1024 * 1024), b""):
+                    existing_size += len(chunk)
+                    if existing_size > 50 * 1024 * 1024:
+                        return {"ok": False, "error": "policy-too-large"}
+                    existing_digest.update(chunk)
+            existing = existing_digest.hexdigest()
+        except OSError:
+            return {"ok": False, "error": "policy-path-unsafe",
+                    "message": "同名策略文件不是受信任的普通文件"}
+        finally:
+            if fd is not None:
+                try:
+                    os.close(fd)
+                except OSError:
+                    pass
         if existing != digest:
             return {"ok": False, "error": "policy-name-conflict",
                     "message": "同名制品已存在且内容不同；请先在板上删除或换名重传",
                     "existing": existing}
         return {"ok": True, "staged": True, "path": filename, "bytes": len(payload),
                 "sha256": digest, "note": "byte-identical to the staged file; no rewrite"}
-    tmp = target + ".tmp"
-    with open(tmp, "wb") as fh:
-        fh.write(payload)
-        fh.flush()
-        os.fsync(fh.fileno())
-    os.replace(tmp, target)
+    try:
+        # Random O_EXCL temp + O_NOFOLLOW target checks eliminate the historic
+        # target + ".tmp" symlink race and fsync the model before publishing it.
+        atomic_write_bytes(target, payload, max_bytes=50 * 1024 * 1024)
+    except OSError:
+        return {"ok": False, "error": "policy-write-failed",
+                "message": "策略文件写入失败；拒绝继续"}
     return {"ok": True, "staged": True, "path": filename, "bytes": len(payload),
             "sha256": digest, "note": "staged into the pinned policies dir; loading stays a separate action"}
 
@@ -997,11 +1206,23 @@ def policy_stage(policy_bytes_b64, filename, sha256_hex):
 def policy_list():
     """List loadable ONNX files in the pinned policies dir (name/size only)."""
     try:
-        entries = sorted(
-            (name, os.path.getsize(os.path.join(POLICY_ALLOWED_MODEL_DIR, name)))
-            for name in os.listdir(POLICY_ALLOWED_MODEL_DIR)
-            if re.match(r"^[\w.-]+\.(?:onnx|bin)$", name)
-        ) if os.path.isdir(POLICY_ALLOWED_MODEL_DIR) else []
+        ensure_private_parent(
+            os.path.join(POLICY_ALLOWED_MODEL_DIR, ".policy-list-probe"),
+            create=False,
+        )
+        entries = []
+        for name in os.listdir(POLICY_ALLOWED_MODEL_DIR):
+            if not re.match(r"^[\w.-]+\.(?:onnx|bin)$", name):
+                continue
+            try:
+                entries.append(
+                    (name, secure_size(os.path.join(POLICY_ALLOWED_MODEL_DIR, name)))
+                )
+            except OSError:
+                # Symlink/non-regular/foreign-owned entries are omitted rather
+                # than exposed as loadable artifacts.
+                continue
+        entries.sort()
     except OSError:
         entries = []
     return {
@@ -1031,10 +1252,22 @@ def _policy_allowed_model_path(path):
     resolved = os.path.realpath(path)
     if not (resolved == base or resolved.startswith(base + os.sep)):
         return False, "model-path-outside-allowed-dir"
-    if not os.path.isfile(resolved):
-        return False, "model-file-missing"
-    if os.path.getsize(resolved) > 50 * 1024 * 1024:
+    try:
+        # The policy directory and the selected inode must both be private
+        # regular files.  realpath containment alone would allow an in-tree
+        # symlink to silently change between validation and load.
+        ensure_private_parent(resolved, create=False)
+        if os.path.islink(path) or os.path.islink(resolved):
+            return False, "model-file-symlink"
+        if not os.path.isfile(resolved):
+            return False, "model-file-missing"
+        model_size = secure_size(resolved)
+    except OSError:
+        return False, "model-file-unsafe"
+    if model_size > 50 * 1024 * 1024:
         return False, "model-too-large"
+    if model_size <= 0:
+        return False, "model-file-missing"
     return True, resolved
 
 
@@ -1054,8 +1287,14 @@ def policy_start(direction, goal_x=None, goal_y=None):
         # Gate honesty: refuse before touching the runtime, explain both gates.
         return {"ok": False, "error": "drive-disabled",
                 "message": "policy start requires RDK_SIM2REAL_BOARD_AGENT_ENABLE_DRIVE=1 too"}
-    if not isinstance(direction, (int, float)):
+    if not _finite_number(direction):
         return {"ok": False, "error": "invalid-type"}
+    if (goal_x is None) != (goal_y is None):
+        return {"ok": False, "error": "invalid-goal",
+                "message": "goalX 与 goalY 必须同时提供或同时省略"}
+    if goal_x is not None and (not _finite_number(goal_x) or not _finite_number(goal_y)):
+        return {"ok": False, "error": "invalid-goal",
+                "message": "goalX/goalY 必须是有限数字"}
     snap = _policy_read_state()
     model = snap.get("model") if isinstance(snap, dict) else None
     if isinstance(model, dict) and model.get("inputDim") == 8:
@@ -1092,7 +1331,15 @@ _CONFIG_SWITCHES = ("RDK_SIM2REAL_BOARD_AGENT_ENABLE_DRIVE", "RDK_SIM2REAL_BOARD
 
 def config_status():
     """Switch states as this agent sees them, plus the env-file source."""
-    env_present = os.path.isfile(AGENT_ENV_FILE)
+    try:
+        env_info = os.lstat(AGENT_ENV_FILE)
+        env_present = (
+            stat.S_ISREG(env_info.st_mode)
+            and env_info.st_uid == (0 if os.geteuid() == 0 else os.geteuid())
+            and (env_info.st_mode & 0o7777) == 0o600
+        )
+    except OSError:
+        env_present = False
     return {
         "ok": True,
         "envFile": AGENT_ENV_FILE,
@@ -1130,9 +1377,31 @@ def _config_apply(desired):
         if _drive_state["active"]:
             return {"ok": False, "error": "motion-active",
                     "message": "运动窗口进行中，拒绝重启；等待窗口结束或先急停。"}
-    if not os.path.isfile(AGENT_ENV_FILE):
+    expected_uid = 0 if os.geteuid() == 0 else os.geteuid()
+    try:
+        env_info = os.lstat(AGENT_ENV_FILE)
+    except OSError:
+        env_info = None
+    if env_info is None:
         return {"ok": False, "error": "env-file-missing",
                 "message": f"未找到 {AGENT_ENV_FILE}；此 agent 可能不是 systemd 部署。"}
+    if os.path.islink(AGENT_ENV_FILE) or not stat.S_ISREG(env_info.st_mode):
+        return {"ok": False, "error": "env-file-unsafe",
+                "message": "env 文件必须是普通文件，拒绝跟随符号链接。"}
+    if env_info.st_uid != expected_uid:
+        return {"ok": False, "error": "env-file-owner",
+                "message": "env 文件必须由运行账号所有。"}
+    if (env_info.st_mode & 0o7777) != 0o600:
+        return {"ok": False, "error": "env-file-permissions",
+                "message": "env 文件必须保持 0600 权限，避免泄露 agent token。"}
+    parent = os.path.dirname(AGENT_ENV_FILE) or "."
+    try:
+        parent_info = os.lstat(parent)
+        if not stat.S_ISDIR(parent_info.st_mode) or stat.S_ISLNK(parent_info.st_mode):
+            return {"ok": False, "error": "env-directory-unsafe",
+                    "message": "env 文件所在目录必须是普通目录。"}
+    except OSError as error:
+        return {"ok": False, "error": "env-directory-missing", "message": str(error)}
     try:
         with open(AGENT_ENV_FILE, "r", encoding="utf-8") as handle:
             lines = handle.read().splitlines()
@@ -1143,13 +1412,36 @@ def _config_apply(desired):
     for key, value in parsed.items():
         kept.append(f"{key}={value}")
     temporary = AGENT_ENV_FILE + ".agent-tmp"
+    temp_fd = None
     try:
-        with open(temporary, "w", encoding="utf-8") as handle:
+        flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
+        if hasattr(os, "O_NOFOLLOW"):
+            flags |= os.O_NOFOLLOW
+        temp_fd = os.open(temporary, flags, 0o600)
+        os.fchmod(temp_fd, 0o600)
+        with os.fdopen(temp_fd, "w", encoding="utf-8") as handle:
+            temp_fd = None
             handle.write("\n".join(kept) + "\n")
             handle.flush()
             os.fsync(handle.fileno())
         os.replace(temporary, AGENT_ENV_FILE)
+        # A successful rename is durable only after the containing directory is
+        # synced.  Keep the token-bearing EnvironmentFile update atomic across
+        # a board reboot or sudden power loss.
+        dir_flags = os.O_RDONLY
+        if hasattr(os, "O_DIRECTORY"):
+            dir_flags |= os.O_DIRECTORY
+        directory_fd = os.open(parent, dir_flags)
+        try:
+            os.fsync(directory_fd)
+        finally:
+            os.close(directory_fd)
     except OSError as error:
+        if temp_fd is not None:
+            try:
+                os.close(temp_fd)
+            except OSError:
+                pass
         try:
             os.unlink(temporary)
         except OSError:
@@ -1454,6 +1746,19 @@ class Handler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
     server_version = "rdk-board-agent/1.0"
 
+    # A board agent is commonly exposed through a local tunnel, so a client
+    # that opens a socket and then drips headers/body bytes must not be able to
+    # pin one of the threaded request workers forever.  Keep the timeout on the
+    # socket itself; route-level command timeouts cannot protect this phase.
+    def setup(self):
+        super().setup()
+        try:
+            self.connection.settimeout(30.0)
+        except OSError:
+            # Test doubles and unusual embedded sockets may not expose a
+            # writable timeout.  The normal HTTP server still works there.
+            pass
+
     def log_message(self, fmt, *args):  # keep the board journal quiet
         sys.stderr.write("[board-agent] " + (fmt % args) + "\n")
 
@@ -1474,7 +1779,146 @@ class Handler(BaseHTTPRequestHandler):
         # non-ASCII input, which `==` would silently accept.
         return hmac.compare_digest(self.headers.get("authorization") or "", f"Bearer {TOKEN}")
 
+    def _header_values(self, name):
+        """Return every occurrence of an HTTP header, preserving duplicates.
+
+        ``Message.get()`` returns only the first value.  That is unsafe for
+        framing headers because a second (possibly conflicting) value can be
+        interpreted differently by a proxy in front of this process.  The
+        small dict fallback keeps the helper easy to exercise with the test
+        doubles used by the board contract tests.
+        """
+        getter = getattr(self.headers, "get_all", None)
+        if callable(getter):
+            values = getter(name) or []
+            return [str(value) for value in values]
+        value = self.headers.get(name)
+        return [] if value is None else [str(value)]
+
+    def _framing_headers_valid(self):
+        """Validate framing syntax before authentication or route dispatch.
+
+        Python's ``BaseHTTPRequestHandler`` deliberately leaves chunked body
+        decoding to applications.  This agent does not implement a chunk
+        decoder, so every non-identity transfer coding is rejected.  Multiple
+        or comma-separated ``Content-Length`` values are rejected even when
+        they happen to contain the same number; accepting them would make the
+        request boundary depend on which intermediary parsed the request.
+        """
+        transfer_values = self._header_values("transfer-encoding")
+        if len(transfer_values) > 1:
+            self.close_connection = True
+            return False
+        if transfer_values:
+            transfer = transfer_values[0].strip().lower()
+            if not transfer or "," in transfer or transfer != "identity":
+                self.close_connection = True
+                return False
+        content_lengths = self._header_values("content-length")
+        if len(content_lengths) > 1:
+            self.close_connection = True
+            return False
+        if content_lengths:
+            raw = content_lengths[0]
+            if "," in raw or not re.fullmatch(r"[0-9]+", raw.strip()):
+                self.close_connection = True
+                return False
+        return True
+
+    def _declared_body_length(self):
+        """Return a syntactically valid declared length, or ``None``.
+
+        A missing ``Content-Length`` is represented as zero for the routes in
+        this agent that do not accept a body.  Unsupported transfer codings
+        and malformed/duplicate lengths close the connection first.
+        """
+        if not self._framing_headers_valid():
+            return None
+        values = self._header_values("content-length")
+        if not values:
+            return 0
+        try:
+            return int(values[0].strip())
+        except (TypeError, ValueError):
+            self.close_connection = True
+            return None
+
+    def _require_empty_body(self):
+        """Reject a body on a logically bodyless route.
+
+        ``Content-Length: 0`` and an absent length are valid empty requests.
+        The platform historically sent ``{}`` to stop/reset endpoints, so a
+        small, strictly empty JSON object is consumed and accepted as well.
+        Any other body is consumed when bounded, then rejected with the
+        connection marked for close; an oversized body is rejected without
+        reading and likewise closed, preventing unread bytes from becoming a
+        second HTTP/1.1 request.
+        """
+        length = self._declared_body_length()
+        if length is None or length < 0:
+            self.close_connection = True
+            return False
+        if length == 0:
+            return True
+        if length > MAX_EMPTY_BODY_BYTES:
+            self.close_connection = True
+            return False
+        try:
+            raw = self.rfile.read(length)
+        except (OSError, ValueError):
+            self.close_connection = True
+            return False
+        if len(raw) != length:
+            self.close_connection = True
+            return False
+        try:
+            payload = json.loads(raw.decode("utf-8"))
+        except (UnicodeDecodeError, ValueError):
+            self.close_connection = True
+            return False
+        if isinstance(payload, dict) and not payload:
+            return True
+        self.close_connection = True
+        return False
+
+    def _content_length(self, ceiling, *, allow_empty=False):
+        """Return a safe body length, closing the connection on bad framing.
+
+        ``BaseHTTPRequestHandler`` does not decode chunked request bodies. If
+        we simply return an empty payload for a malformed/oversized request,
+        unread bytes can be interpreted as the next request on a persistent
+        HTTP/1.1 connection.  Marking that connection for close makes the
+        rejection deterministic and prevents request-smuggling style desync.
+        """
+        if not self._framing_headers_valid():
+            return None
+        values = self._header_values("content-length")
+        if not values:
+            if allow_empty:
+                return 0
+            self.close_connection = True
+            return None
+        try:
+            length = int(values[0].strip())
+        except (TypeError, ValueError):
+            self.close_connection = True
+            return None
+        if length < 0 or (length == 0 and not allow_empty) or length > ceiling:
+            self.close_connection = True
+            return None
+        return length
+
     def do_GET(self):
+        # GET handlers never consume a request body.  Validate the framing
+        # before auth/dispatch and close on any declared bytes so a body
+        # cannot be reinterpreted as the next request on keep-alive.
+        if not self._framing_headers_valid():
+            self._json(400, {"ok": False, "error": "BOARD_AGENT_INVALID_FRAMING"})
+            return
+        if self._declared_body_length() != 0:
+            self.close_connection = True
+            self._json(400, {"ok": False, "error": "BOARD_AGENT_BODY_NOT_ALLOWED"})
+            return
         if not self._authorized():
             self._json(401, {"ok": False, "error": "BOARD_AGENT_UNAUTHORIZED"})
             return
@@ -1537,7 +1981,20 @@ class Handler(BaseHTTPRequestHandler):
         self._json(404, {"ok": False, "error": "BOARD_AGENT_NOT_FOUND"})
 
     def do_POST(self):
+        # Validate duplicate/conflicting framing headers before authentication.
+        # This agent does not implement chunked decoding, and returning an
+        # error while leaving an unread body on a persistent socket would
+        # desynchronise the next request.
+        if not self._framing_headers_valid():
+            self._json(400, {"ok": False, "error": "BOARD_AGENT_INVALID_FRAMING"})
+            return
         if not self._authorized():
+            # An authenticated route would consume its body below; an
+            # unauthenticated request is rejected before route dispatch.  Close
+            # whenever it declares bytes so those bytes cannot become a second
+            # request after the 401 response.
+            if self._declared_body_length() not in (0, None):
+                self.close_connection = True
             self._json(401, {"ok": False, "error": "BOARD_AGENT_UNAUTHORIZED"})
             return
         path = self.path.split("?")[0]
@@ -1552,6 +2009,9 @@ class Handler(BaseHTTPRequestHandler):
             self._station_drive()
             return
         if path == "/v1/station/drive/stop":
+            if not self._require_empty_body():
+                self._json(400, {"ok": False, "error": "BOARD_AGENT_BODY_NOT_ALLOWED"})
+                return
             # Emergency stop is always accepted — even when drive is disabled
             # — so the UI stop button never has a failure mode.
             drive_stop("operator-emergency-stop")
@@ -1560,6 +2020,9 @@ class Handler(BaseHTTPRequestHandler):
                              "note": "zero-speed frame published; chassis watchdog enforces rest"})
             return
         if path == "/v1/station/policy/stop":
+            if not self._require_empty_body():
+                self._json(400, {"ok": False, "error": "BOARD_AGENT_BODY_NOT_ALLOWED"})
+                return
             # Same always-on stance as drive/stop: stopping is never refused.
             res = policy_stop("operator-stop")
             drive_stop("operator-stop")  # belt-and-braces zero the canary too
@@ -1567,18 +2030,27 @@ class Handler(BaseHTTPRequestHandler):
                              "note": "policy output zeroed; chassis watchdog enforces rest"})
             return
         if path == "/v1/station/policy/load":
-            payload = self._read_json() or {}
+            payload = self._read_json()
+            if not isinstance(payload, dict):
+                self._json(400, {"ok": False, "error": "BOARD_AGENT_INVALID_JSON"})
+                return
             res = policy_load(str(payload.get("path", "")))
             self._json(200 if res.get("ok") else 409,
                        {**res, "policy": policy_status()})
             return
         if path == "/v1/station/policy/start":
-            payload = self._read_json() or {}
+            payload = self._read_json()
+            if not isinstance(payload, dict):
+                self._json(400, {"ok": False, "error": "BOARD_AGENT_INVALID_JSON"})
+                return
             res = policy_start(payload.get("direction", 0.0), payload.get("goalX"), payload.get("goalY"))
             self._json(200 if res.get("ok") else 409,
                        {**res, "policy": policy_status()})
             return
         if path == "/v1/station/policy/reset":
+            if not self._require_empty_body():
+                self._json(400, {"ok": False, "error": "BOARD_AGENT_BODY_NOT_ALLOWED"})
+                return
             res = _policy_send("reset") if _policy_runtime_alive() else {"ok": True,
                                                                          "state": None}
             self._json(200 if res.get("ok") else 409, {"ok": res.get("ok", True),
@@ -1588,13 +2060,20 @@ class Handler(BaseHTTPRequestHandler):
             # Bounded body (a whole base64'd ONNX), token-gated, and verified
             # against the declared SHA-256 before any byte touches the pinned
             # policies dir. Over size ceiling → reject without reading.
-            length = int(self.headers.get("content-length") or 0)
-            if length <= 0 or length > MAX_POLICY_BODY_BYTES:
+            length = self._content_length(MAX_POLICY_BODY_BYTES)
+            if length is None:
                 self._json(413, {"ok": False, "error": "policy-upload-too-large"})
                 return
             try:
-                payload = json.loads(self.rfile.read(length).decode("utf-8"))
+                raw = self.rfile.read(length)
+                if len(raw) != length:
+                    self.close_connection = True
+                    raise ValueError("short request body")
+                payload = json.loads(raw.decode("utf-8"))
             except (ValueError, UnicodeDecodeError):
+                self._json(400, {"ok": False, "error": "BOARD_AGENT_INVALID_JSON"})
+                return
+            if not isinstance(payload, dict):
                 self._json(400, {"ok": False, "error": "BOARD_AGENT_INVALID_JSON"})
                 return
             res = policy_stage(
@@ -1607,14 +2086,23 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/v1/config":
             # Switch writes are only meaningful through this same token-gated
             # surface; the restart that applies them is refused mid-motion.
-            payload = self._read_json() or {}
+            payload = self._read_json()
+            if not isinstance(payload, dict):
+                self._json(400, {"ok": False, "error": "BOARD_AGENT_INVALID_JSON"})
+                return
             result = _config_apply(payload.get("switches") if isinstance(payload.get("switches"), dict) else payload)
             self._json(200 if result.get("ok") else 409, result)
+            return
+        if not self._require_empty_body():
+            self._json(400, {"ok": False, "error": "BOARD_AGENT_BODY_NOT_ALLOWED"})
             return
         self._json(404, {"ok": False, "error": "BOARD_AGENT_NOT_FOUND"})
 
     def _station_drive(self):
-        payload = self._read_json() or {}
+        payload = self._read_json()
+        if not isinstance(payload, dict):
+            self._json(400, {"ok": False, "error": "BOARD_AGENT_INVALID_JSON"})
+            return
         ok, reason = drive_command(
             payload.get("linear", 0.0),
             payload.get("angular", 0.0),
@@ -1633,25 +2121,46 @@ class Handler(BaseHTTPRequestHandler):
         self._json(200, {"ok": True, "drive": drive_status()})
 
     def _read_json(self):
-        length = int(self.headers.get("content-length") or 0)
-        if length <= 0 or length > MAX_BODY_BYTES:
+        length = self._content_length(MAX_BODY_BYTES)
+        if length is None:
             return None
         try:
-            return json.loads(self.rfile.read(length).decode("utf-8"))
+            raw = self.rfile.read(length)
+            if len(raw) != length:
+                self.close_connection = True
+                return None
+            payload = json.loads(raw.decode("utf-8"))
+            if not isinstance(payload, dict):
+                self.close_connection = True
+                return None
+            return payload
         except (ValueError, UnicodeDecodeError):
+            self.close_connection = True
             return None
 
     def _read_json_bounded(self, ceiling):
-        length = int(self.headers.get("content-length") or 0)
-        if length <= 0 or length > ceiling:
+        length = self._content_length(ceiling)
+        if length is None:
             return None
         try:
-            return json.loads(self.rfile.read(length).decode("utf-8"))
+            raw = self.rfile.read(length)
+            if len(raw) != length:
+                self.close_connection = True
+                return None
+            payload = json.loads(raw.decode("utf-8"))
+            if not isinstance(payload, dict):
+                self.close_connection = True
+                return None
+            return payload
         except (ValueError, UnicodeDecodeError):
+            self.close_connection = True
             return None
 
     def _station_command(self):
-        payload = self._read_json() or {}
+        payload = self._read_json()
+        if not isinstance(payload, dict):
+            self._json(400, {"ok": False, "error": "BOARD_AGENT_INVALID_JSON"})
+            return
         command_id = str(payload.get("id", "")).strip()
         if command_id not in COMMAND_IDS:
             self._json(403, {
@@ -1665,7 +2174,10 @@ class Handler(BaseHTTPRequestHandler):
         self._json(200, result)
 
     def _device_commands(self, device_id):
-        payload = self._read_json() or {}
+        payload = self._read_json()
+        if not isinstance(payload, dict):
+            self._json(400, {"ok": False, "error": "BOARD_AGENT_INVALID_JSON"})
+            return
         commands = payload.get("commands")
         if not isinstance(commands, list) or not commands or len(commands) > 8:
             self._json(400, {"ok": False, "error": "BOARD_AGENT_INVALID_COMMANDS"})

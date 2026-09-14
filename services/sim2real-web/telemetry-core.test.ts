@@ -285,9 +285,56 @@ describe('normalizeTelemetrySample', () => {
     expect(core.normalizeTelemetrySample({ t: 1, done: null })).toEqual({ t: 1 });
     expect(core.normalizeTelemetrySample({ t: 1, fall: undefined })).toEqual({ t: 1 });
   });
+
+  it('preserves bounded command provenance and drops invalid metadata', () => {
+    expect(
+      core.normalizeTelemetrySample({
+        t: 1,
+        cmd_vel: { linear: 0.2, angular: -0.5 },
+        actionOutput: 'NORMALIZED-TWIST',
+        actionScale: { linear: 0.3, angular: 1, units: 'm/s,rad/s' },
+        controlHz: 10,
+        controlPeriodSeconds: 0.1,
+      }),
+    ).toEqual({
+      t: 1,
+      cmd_vel: { linear: 0.2, angular: -0.5 },
+      actionOutput: 'normalized-twist',
+      actionScale: { linear: 0.3, angular: 1, units: 'm/s,rad/s' },
+      controlHz: 10,
+      controlPeriodSeconds: 0.1,
+    });
+    expect(
+      core.normalizeTelemetrySample({
+        t: 1,
+        cmdVel: { linear: 0.1, angular: 0 },
+        actionOutput: 'guess',
+        actionScale: { linear: 0.31, angular: 1 },
+        controlHz: 0,
+        controlPeriodSeconds: 0.001,
+      }),
+    ).toEqual({ t: 1, cmd_vel: { linear: 0.1, angular: 0 } });
+  });
 });
 
 describe('parseTelemetryText', () => {
+  it('counts UTF-8 bytes without treating UTF-16 code units as bytes', () => {
+    expect(core.exceedsUtf8ByteLimit('abc', 3)).toBe(false);
+    expect(core.exceedsUtf8ByteLimit('abc', 2)).toBe(true);
+    expect(core.exceedsUtf8ByteLimit('😀', 4)).toBe(false);
+    expect(core.exceedsUtf8ByteLimit('😀', 3)).toBe(true);
+    // A lone surrogate is replaced by U+FFFD by Blob/TextEncoder semantics.
+    expect(core.exceedsUtf8ByteLimit('\ud800', 3)).toBe(false);
+    expect(core.exceedsUtf8ByteLimit('\ud800', 2)).toBe(true);
+  });
+
+  it('rejects an oversized malformed line before splitting it', () => {
+    const oversized = 'x'.repeat(core.MAX_TELEMETRY_IMPORT_BYTES + 1);
+    expect(() => core.parseTelemetryText(oversized)).toThrow(
+      `遥测文件超过 ${core.MAX_TELEMETRY_IMPORT_BYTES} 字节上限，请先分段导入`,
+    );
+  });
+
   it('parses JSONL into samples with a summary', () => {
     const evidence = core.parseTelemetryText(
       '{"t":0,"reward":0.1}\n{"t":0.5,"reward":0.4}\n{"t":1.0,"reward":0.5,"done":true}\n',
@@ -672,6 +719,9 @@ describe('stateClass / statusLabel', () => {
     expect(core.statusLabel('cancelled')).toBe('已取消');
     expect(core.statusLabel('registered')).toBe('已登记');
     expect(core.statusLabel('demo')).toBe('演示样例');
+    expect(core.statusLabel('succeeded')).toBe('已成功');
+    expect(core.statusLabel('available')).toBe('可用');
+    expect(core.statusLabel('restricted')).toBe('受限');
   });
 
   it('looks up case-insensitively and otherwise echoes the raw value', () => {

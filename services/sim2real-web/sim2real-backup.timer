@@ -1,0 +1,11 @@
+[Unit]
+Description=Nightly verified Sim2Real ledger backup
+
+[Timer]
+OnCalendar=*-*-* 03:15:00
+Persistent=true
+RandomizedDelaySec=10m
+Unit=sim2real-backup.service
+
+[Install]
+WantedBy=timers.target

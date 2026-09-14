@@ -9,6 +9,13 @@ class ModelDefinition:
     actuator_names: tuple[str, ...]
     xml: str
     initial_qpos: tuple[float, ...]
+    # Geometry and sensor metadata are kept beside the MJCF so route handlers
+    # cannot silently drift from the calibrated robot model.
+    wheel_radius: float | None = None
+    track_width: float | None = None
+    max_wheel_speed: float | None = None
+    lidar_angles: tuple[float, ...] = ()
+    lidar_range_max: float | None = None
 
 
 CARTPOLE_XML = r"""
@@ -82,6 +89,99 @@ DOUBLE_PENDULUM_XML = r"""
 </mujoco>
 """
 
+ORIGINBOT_XML = r"""
+<mujoco model="originbot">
+  <compiler angle="radian" autolimits="true"/>
+  <option timestep="0.01" gravity="0 0 -9.81" integrator="implicitfast"/>
+  <visual><global offwidth="960" offheight="640"/></visual>
+  <asset>
+    <texture name="floor_tex" type="2d" builtin="checker" rgb1="0.16 0.18 0.22" rgb2="0.08 0.09 0.12" width="512" height="512"/>
+    <material name="floor" texture="floor_tex" texrepeat="12 12"/>
+  </asset>
+  <worldbody>
+    <light name="key" pos="2 -3 5" dir="-0.2 0.3 -1" directional="true" diffuse="0.9 0.9 1"/>
+    <geom name="floor" type="plane" size="8 8 .05" material="floor"/>
+    <geom name="wall_n" type="box" pos="0 4 .25" size="4 .08 .25" rgba=".25 .3 .38 1"/>
+    <geom name="wall_s" type="box" pos="0 -4 .25" size="4 .08 .25" rgba=".25 .3 .38 1"/>
+    <geom name="wall_e" type="box" pos="4 0 .25" size=".08 4 .25" rgba=".25 .3 .38 1"/>
+    <geom name="wall_w" type="box" pos="-4 0 .25" size=".08 4 .25" rgba=".25 .3 .38 1"/>
+    <geom name="obstacle_a" type="box" pos="1.2 .8 .2" size=".28 .45 .2" rgba=".62 .28 .18 1"/>
+    <geom name="obstacle_b" type="cylinder" pos="-1.0 -1.1 .22" size=".32 .22" rgba=".62 .28 .18 1"/>
+    <body name="base" pos="0 0 .16">
+      <freejoint name="base_free"/>
+      <geom name="chassis" type="box" size=".28 .23 .10" mass="4" rgba=".12 .42 .8 1"/>
+      <geom name="top" type="cylinder" pos="0 0 .13" size=".16 .025" mass=".2" rgba=".18 .62 .95 1"/>
+      <body name="left_wheel" pos="0 .25 -.08"><joint name="left_wheel_joint" type="hinge" axis="0 1 0" damping=".08"/><geom name="left_wheel_geom" type="cylinder" quat=".7071 .7071 0 0" size=".09 .035" mass=".35" friction="1.2 .01 .001" rgba=".04 .05 .07 1"/></body>
+      <body name="right_wheel" pos="0 -.25 -.08"><joint name="right_wheel_joint" type="hinge" axis="0 1 0" damping=".08"/><geom name="right_wheel_geom" type="cylinder" quat=".7071 .7071 0 0" size=".09 .035" mass=".35" friction="1.2 .01 .001" rgba=".04 .05 .07 1"/></body>
+      <geom name="caster" type="sphere" pos="-.20 0 -.07" size=".055" mass=".1" friction=".8 .01 .001" rgba=".15 .15 .18 1"/>
+      <!-- Keep odometry at the base origin; the IMU is intentionally mounted
+           above it and must not be used as the odom position reference. -->
+      <site name="odom" pos="0 0 0" size=".012" rgba="0 1 0 1"/>
+      <site name="imu" pos="0 0 .18" size=".015" rgba="1 0 0 1"/>
+      <!-- Site local +Z is the ray direction.  Nineteen rays cover a 180
+           degree forward fan at 10 degree increments (-90..+90). -->
+      <site name="ray_00" pos=".30 0 .12" quat=".7071 .7071 0 0" size=".01"/>
+      <site name="ray_01" pos=".30 0 .12" quat=".7071 .6964 .1228 0" size=".01"/>
+      <site name="ray_02" pos=".30 0 .12" quat=".7071 .6645 .2418 0" size=".01"/>
+      <site name="ray_03" pos=".30 0 .12" quat=".7071 .6124 .3536 0" size=".01"/>
+      <site name="ray_04" pos=".30 0 .12" quat=".7071 .5425 .4545 0" size=".01"/>
+      <site name="ray_05" pos=".30 0 .12" quat=".7071 .4545 .5425 0" size=".01"/>
+      <site name="ray_06" pos=".30 0 .12" quat=".7071 .3536 .6124 0" size=".01"/>
+      <site name="ray_07" pos=".30 0 .12" quat=".7071 .2418 .6645 0" size=".01"/>
+      <site name="ray_08" pos=".30 0 .12" quat=".7071 .1228 .6964 0" size=".01"/>
+      <site name="ray_09" pos=".30 0 .12" quat=".7071 0 .7071 0" size=".01"/>
+      <site name="ray_10" pos=".30 0 .12" quat=".7071 -.1228 .6964 0" size=".01"/>
+      <site name="ray_11" pos=".30 0 .12" quat=".7071 -.2418 .6645 0" size=".01"/>
+      <site name="ray_12" pos=".30 0 .12" quat=".7071 -.3536 .6124 0" size=".01"/>
+      <site name="ray_13" pos=".30 0 .12" quat=".7071 -.4545 .5425 0" size=".01"/>
+      <site name="ray_14" pos=".30 0 .12" quat=".7071 -.5425 .4545 0" size=".01"/>
+      <site name="ray_15" pos=".30 0 .12" quat=".7071 -.6124 .3536 0" size=".01"/>
+      <site name="ray_16" pos=".30 0 .12" quat=".7071 -.6645 .2418 0" size=".01"/>
+      <site name="ray_17" pos=".30 0 .12" quat=".7071 -.6964 .1228 0" size=".01"/>
+      <site name="ray_18" pos=".30 0 .12" quat=".7071 -.7071 0 0" size=".01"/>
+      <!-- Forward RGB/depth camera. MuJoCo cameras look along local -Z;
+           local X=-robot Y and a 15 degree-down local Y make -Z point
+           slightly down along robot +X, so the floor and obstacles stay in
+           view. The raw endpoint converts metric depth to millimetres. -->
+      <camera name="depth_camera" pos=".34 0 .25" xyaxes="0 -1 0 .259 0 .966" fovy="78"/>
+    </body>
+    <camera name="overview" pos="3.8 -5.2 3.4" xyaxes=".81 .59 0 -.32 .44 .84"/>
+  </worldbody>
+  <sensor>
+    <framequat name="imu_orientation" objtype="site" objname="imu"/>
+    <gyro name="imu_gyro" site="imu"/>
+    <accelerometer name="imu_accel" site="imu"/>
+    <framepos name="odom_position" objtype="site" objname="odom"/>
+    <rangefinder name="lidar_00" site="ray_00" cutoff="4"/>
+    <rangefinder name="lidar_01" site="ray_01" cutoff="4"/>
+    <rangefinder name="lidar_02" site="ray_02" cutoff="4"/>
+    <rangefinder name="lidar_03" site="ray_03" cutoff="4"/>
+    <rangefinder name="lidar_04" site="ray_04" cutoff="4"/>
+    <rangefinder name="lidar_05" site="ray_05" cutoff="4"/>
+    <rangefinder name="lidar_06" site="ray_06" cutoff="4"/>
+    <rangefinder name="lidar_07" site="ray_07" cutoff="4"/>
+    <rangefinder name="lidar_08" site="ray_08" cutoff="4"/>
+    <rangefinder name="lidar_09" site="ray_09" cutoff="4"/>
+    <rangefinder name="lidar_10" site="ray_10" cutoff="4"/>
+    <rangefinder name="lidar_11" site="ray_11" cutoff="4"/>
+    <rangefinder name="lidar_12" site="ray_12" cutoff="4"/>
+    <rangefinder name="lidar_13" site="ray_13" cutoff="4"/>
+    <rangefinder name="lidar_14" site="ray_14" cutoff="4"/>
+    <rangefinder name="lidar_15" site="ray_15" cutoff="4"/>
+    <rangefinder name="lidar_16" site="ray_16" cutoff="4"/>
+    <rangefinder name="lidar_17" site="ray_17" cutoff="4"/>
+    <rangefinder name="lidar_18" site="ray_18" cutoff="4"/>
+  </sensor>
+  <actuator>
+    <!-- MuJoCo's velocity actuator models the embedded wheel controller.  Its
+         control is wheel rad/s; app.py still returns the resulting actuator
+         force so the command-to-torque path remains observable. -->
+    <velocity name="left_wheel" joint="left_wheel_joint" kv="8" ctrllimited="true" ctrlrange="-8 8"/>
+    <velocity name="right_wheel" joint="right_wheel_joint" kv="8" ctrllimited="true" ctrlrange="-8 8"/>
+  </actuator>
+</mujoco>
+"""
+
 
 MODEL_DEFINITIONS = {
     "cartpole": ModelDefinition(
@@ -99,5 +199,18 @@ MODEL_DEFINITIONS = {
         actuator_names=("shoulder torque", "elbow torque"),
         xml=DOUBLE_PENDULUM_XML,
         initial_qpos=(1.05, -0.72),
+    ),
+    "originbot": ModelDefinition(
+        key="originbot",
+        name="OriginBot X5",
+        description="差速轮 OriginBot：底盘、双驱轮、万向轮、19 束前向激光与障碍场景。",
+        actuator_names=("左轮角速度", "右轮角速度"),
+        xml=ORIGINBOT_XML,
+        initial_qpos=(0.0, 0.0, 0.17, 1.0, 0.0, 0.0, 0.0),
+        wheel_radius=0.09,
+        track_width=0.50,
+        max_wheel_speed=8.0,
+        lidar_angles=tuple(float(-1.5707963267948966 + i * 0.17453292519943295) for i in range(19)),
+        lidar_range_max=4.0,
     ),
 }

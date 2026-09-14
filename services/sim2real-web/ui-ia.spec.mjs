@@ -10,6 +10,40 @@ const onboarding = fs.readFileSync(path.join(here, 'public', 'onboarding.js'), '
 const agentChat = fs.readFileSync(path.join(here, 'public', 'agent-chat.js'), 'utf8');
 const cssIa = fs.readFileSync(path.join(here, 'public', 'refactor-ia.css'), 'utf8');
 
+// ---- accessibility anchors ----
+// Every labelled region must resolve to a real heading. A stale aria-labelledby
+// silently removes the region from a screen reader's landmark tree, so keep the
+// check structural rather than relying on a manual visual pass.
+for (const element of [...html.matchAll(/aria-labelledby="([^"]+)"/g)]) {
+  for (const id of element[1].split(/\s+/)) {
+    assert.match(
+      html,
+      new RegExp(`(?:id|data-[^=]+)="${id.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}"`),
+      `aria-labelledby target must exist: ${id}`,
+    );
+  }
+}
+assert.match(
+  html,
+  /id="telemetry-title"[^>]*>遥测回放与证据/,
+  'telemetry panel must expose a real heading for aria-labelledby',
+);
+assert.match(
+  html,
+  /id="contract-panel-tip"/,
+  'contract guidance copy must be replaceable when the product line changes',
+);
+assert.match(
+  html,
+  /role="menuitemcheckbox"[^>]*aria-checked="false"/,
+  'notification menu item must expose the checkbox state with aria-checked',
+);
+assert.match(
+  html,
+  /data-auth-method="account"[^>]*aria-selected="true"[^>]*tabindex="0"/,
+  'the active SSO method tab must expose its selection and keyboard position',
+);
+
 // ---- telemetry core wiring ----
 // Pure telemetry logic lives in public/telemetry-core.js so vitest can
 // execute it as a script and assert BEHAVIOR (telemetry-core.test.ts). This
@@ -36,6 +70,36 @@ assert.match(
   app,
   /SimTelemetryCore\.parseTelemetryText\(text\)/,
   'app.js must delegate parseTelemetryText',
+);
+assert.match(
+  telemetryCore,
+  /MAX_TELEMETRY_IMPORT_BYTES\s*=\s*32 \* 1024 \* 1024/,
+  'telemetry parser must enforce a bounded UTF-8 import size',
+);
+assert.match(
+  telemetryCore,
+  /function exceedsUtf8ByteLimit\(value, maxBytes\)/,
+  'telemetry parser must count bytes without allocating an encoded copy',
+);
+assert.match(
+  app,
+  /readImportTextWithinLimit\(\s*file,\s*MAX_MANIFEST_IMPORT_BYTES,\s*'manifest 文件',\s*'请精简 JSON 后再导入'/,
+  'manifest file imports must be bounded before JSON.parse',
+);
+assert.match(
+  app,
+  /SimTelemetryCore\.MAX_TELEMETRY_IMPORT_BYTES/,
+  'telemetry file imports must share the parser byte limit',
+);
+assert.match(
+  html,
+  /导入 manifest JSON（≤2 MiB）/,
+  'manifest import limit must be visible before selection',
+);
+assert.match(
+  html,
+  /JSONL（单文件 ≤32 MiB）/,
+  'telemetry import limit must be visible before selection',
 );
 assert.match(
   app,
@@ -90,10 +154,10 @@ assert.deepEqual(
     '工作台总览',
     'Agent 对话',
     '仿真与录制',
-    '训练与模型',
-    '评测与效果',
-    '部署与上线',
-    '记录与版本',
+    '强化学习训练',
+    'Sim2Real 评测',
+    '部署与反馈',
+    '调试与记录',
     '设备上位机',
   ],
   'sidebar nav labels must match the three-group IA',
@@ -232,6 +296,22 @@ assert.match(
   'event log must collapse history behind an expand control',
 );
 assert.match(agentChat, /正在执行：/, 'runtime status must surface the live step label');
+assert.match(
+  agentChat,
+  /class AgentApiError/,
+  'Agent API errors must preserve HTTP status for fallback decisions',
+);
+assert.match(
+  agentChat,
+  /error\.status === 503/,
+  'a disabled DSH endpoint must fall back to the guarded planner',
+);
+assert.match(agentChat, /event\.key !== 'Tab'/, 'Agent drawer must trap keyboard focus while open');
+assert.match(
+  agentChat,
+  /drawerRestoreFocus/,
+  'Agent drawer must restore focus to its opener on close',
+);
 assert.match(cssIa, /\.agent-task-card/, 'task card styles must exist in refactor-ia.css');
 assert.match(cssIa, /\.agent-task-progress/, 'task card progress bar styles must exist');
 assert.match(
@@ -249,8 +329,8 @@ assert.match(onboarding, /最佳实践/, 'onboarding must include practical guid
 assert.match(onboarding, /localStorage/, 'onboarding completion must persist locally');
 assert.match(
   onboarding,
-  /在左侧产品选择器选择“OriginBot · X5 真机”/,
-  'onboarding step 01 must point at the sidebar product card',
+  /在左侧产品选择器选择要使用的机器人、仿真器或硬件适配器/,
+  'onboarding step 01 must explain generic product selection',
 );
 assert.match(
   onboarding,

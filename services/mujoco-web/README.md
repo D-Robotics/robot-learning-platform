@@ -145,6 +145,49 @@ Python MuJoCo API（`/api/sessions`、`/step`、`/reset` 和 JPEG frame）是公
 实际验证一次 `POST /api/sessions`、`GET .../frame.jpg` 和 `POST .../step`，因为
 `/healthz` 只证明 Python 进程活着，不证明 EGL/渲染设备可用。
 
+每个会话最多闲置 30 分钟；显式 DELETE、访问过期会话和后台 janitor 都会回收模型和 EGL
+渲染器，因此即使没有新的创建请求，崩溃/挂起的浏览器也不会一直占用资源。`/healthz`
+会返回当前 active/capacity、TTL 和 janitor 间隔，便于监控资源水位。
+客户端结束页面或切换模型时应调用 `DELETE /api/sessions/{id}`，该接口会立即释放会话
+资源并返回 `{"ok":true,"closed":true}`。浏览器页面已使用 `keepalive` 发送这个请求，
+但它只是尽力而为，服务端 TTL 仍是最终兜底。过期或已删除的会话统一返回 404，不会因为
+一次状态轮询而重新激活。
+`GET /api/sessions/{id}/state` 也显式返回 `Cache-Control: no-store`，策略循环不会从
+浏览器或反向代理读到旧的传感器状态。
+
+### OriginBot differential-drive contract
+
+`POST /api/sessions` with `{"model":"originbot","seed":7,"domain_randomization":true}`
+creates the reviewed OriginBot MJCF scene. The response carries the effective seed,
+episode randomization parameters, actuator limits, a 20 Hz `controlPeriod`, and the
+sensor contract. If randomization is enabled without a seed, the service mints and
+returns one so the run can be reproduced.
+
+`POST /api/sessions/{id}/cmd_vel` accepts bounded `linear` (m/s) and `angular`
+(rad/s) fields. It converts them to left/right wheel rad/s using the 90 mm wheel and
+500 mm track calibration, applies both the robot and MJCF limits, advances one 50 ms
+control period (five 10 ms physics steps), and returns the requested/applied wheel
+speeds, requested/applied `linear` and `angular` values, plus actuator torque
+feedback. On the high-level `cmd_vel` path, `linear`/`angular` remain the
+requested command for compatibility; `appliedLinear`/`appliedAngular` are the
+twist implied by the bounded wheel speeds. The low-level `step` path reports
+the applied control in both pairs. The browser reference loop is 20 Hz; the
+X5 board profile currently publishes `/cmd_vel` at 10 Hz, so a policy exporter
+must use the returned `controlHz`/`controlPeriod` fields (and resample its
+trajectory explicitly) instead of assuming the preview cadence is the board
+cadence. The state also exposes body-frame odometry,
+IMU quaternion/gyro/accelerometer values, a 19-beam forward scan, and raw named
+MuJoCo sensor values. `sensors.scan` stays a flat array for existing clients;
+`sensors.scanMeta` adds the beam `count`, angles, validity, saturation, and raw returns.
+
+The RGB preview is `frame.jpg`. `depth.jpg` is an 8-bit normalized preview, while
+`depth.png` is the metric unsigned-16-bit millimetre frame (`0` means invalid),
+with matching `X-Depth-*` headers. Both endpoints are cache-free so a browser or
+recorder cannot replay an old frame.
+The forward depth camera is pitched down 15 degrees toward the robot's +X
+axis; rangefinder debug lines are removed from rendered RGB/depth pixels while
+the numeric laser scan remains available in the state contract.
+
 ## Microduck
 
 The default `/mujoco/` entry redirects to the official browser-based

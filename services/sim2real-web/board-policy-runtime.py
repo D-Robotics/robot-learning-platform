@@ -11,6 +11,9 @@ uses. Every safety property of the drive canary applies here unchanged:
   * watchdog floor (chassis firmware zeroes 500 ms after cmd_vel goes silent)
   * emergency stop honored (zero-speed frame + process halt)
   * honest telemetry (publishes what it actually commanded; never fabricates)
+  * source-fresh observations (IMU/odom monotonic sample timestamps must be
+    inside the same stall budget; a refreshed wrapper file cannot hide a
+    frozen ROS topic)
 
 Observation mapping (the sim→real adapter). The MicroDuck contract expects
 [gyro(3), projected_gravity(3), joint_position_error(14), joint_velocity(14),
@@ -25,7 +28,11 @@ Action mapping: the policy output is a 61→14 MLP; a differential base cannot
 actuate 14 leg joints, so the runtime projects the action onto base motion
 with an explicit, logged projection (mean of antagonistic pairs → forward
 speed; asymmetry → yaw rate) and clamps to the same bounds as the canary.
-For wheeled policies trained directly on (v, w) the projection is identity.
+For wheeled policies trained directly on (v, w) the projection is identity;
+the separate ``runtime.actionOutput`` declaration says whether that head is
+already physical (``physical-twist``) or normalized to [-1, 1]
+(``normalized-twist``).  The latter is scaled by the adapter's safety limits
+before publication.
 
 OriginBot's native 8→2 contract uses the same observation layout as the
 reference environment: [x, y, sin(yaw), cos(yaw), goal_dx, goal_dy, v, w].
@@ -41,17 +48,38 @@ state snapshot as `lastOp` (seq-correlated) so callers see honest errors.
 """
 
 import json
+import hashlib
+import math
 import os
 import signal
 import sys
-import tempfile
 import threading
 import time
+import uuid
 
-RUNTIME_STATE_FILE = os.environ.get(
-    "RDK_BOARD_POLICY_STATE", "/tmp/board-policy-runtime-state.json"
+_MODULE_DIR = os.path.dirname(os.path.abspath(__file__))
+if _MODULE_DIR not in sys.path:
+    sys.path.insert(0, _MODULE_DIR)
+from board_ipc import (
+    atomic_write_json,
+    ensure_private_parent,
+    ipc_path,
+    secure_append_text,
+    secure_read_json,
+    secure_read_text,
+    secure_size,
 )
-TELEMETRY_SPOOL_FILE = os.environ.get(
+
+RUNTIME_STATE_FILE = ipc_path("RDK_BOARD_POLICY_STATE", "policy-runtime-state.json")
+
+
+def _configured_private_file(env_name, default_path):
+    if env_name in os.environ:
+        return ipc_path(env_name, os.path.basename(default_path))
+    return default_path
+
+
+TELEMETRY_SPOOL_FILE = _configured_private_file(
     "RDK_BOARD_TELEMETRY_SPOOL", "/var/lib/rdk-board-agent/telemetry/policy.jsonl"
 )
 TELEMETRY_RUN_ID = os.environ.get("RDK_SIM2REAL_RUN_ID", "").strip()
@@ -59,8 +87,8 @@ TELEMETRY_MODEL_ID = os.environ.get("RDK_SIM2REAL_MODEL_ID", "").strip()
 TELEMETRY_DEVICE_ID = os.environ.get("RDK_SIM2REAL_DEVICE_ID", "").strip()
 TELEMETRY_CONTRACT_ID = os.environ.get("RDK_SIM2REAL_CONTRACT_ID", "").strip()
 TELEMETRY_MAX_BYTES = int(os.environ.get("RDK_BOARD_TELEMETRY_SPOOL_MAX_BYTES", str(256 * 1024 * 1024)))
-TELEMETRY_SNAPSHOT_FILE = os.environ.get(
-    "RDK_BOARD_TELEMETRY_SNAPSHOT", "/tmp/board-telemetry-snapshot.json"
+TELEMETRY_SNAPSHOT_FILE = ipc_path(
+    "RDK_BOARD_TELEMETRY_SNAPSHOT", "telemetry-snapshot.json"
 )
 
 def _bounded_env(name, default, lo, hi):
@@ -111,6 +139,12 @@ def _policy_dimension(env_name, profile_key, default):
 
 EXPECTED_OBS_DIM = _policy_dimension("RDK_SIM2REAL_POLICY_OBS_DIM", "observationSize", 61)
 EXPECTED_ACTION_DIM = _policy_dimension("RDK_SIM2REAL_POLICY_ACTION_DIM", "actionSize", 14)
+# Keep the adapter-declared contract immutable across model reloads.  The
+# native 8D/BPU path temporarily selects an 8→2 model contract below, but a
+# later load must be validated against the profile again rather than inheriting
+# dimensions from the previous model in this long-lived process.
+DECLARED_OBS_DIM = EXPECTED_OBS_DIM
+DECLARED_ACTION_DIM = EXPECTED_ACTION_DIM
 MAX_LINEAR = _bounded_env("RDK_SIM2REAL_MAX_LINEAR", _safety.get("maxLinear", 0.3), 0.01, 0.3)
 MAX_ANGULAR = _bounded_env("RDK_SIM2REAL_MAX_ANGULAR", _safety.get("maxAngular", 1.0), 0.05, 1.0)
 DECISION_HZ = _bounded_env("RDK_SIM2REAL_DECISION_HZ", _runtime.get("decisionHz", 10), 1, 50)
@@ -119,6 +153,13 @@ STALL_LIMIT_SEC = _bounded_env("RDK_SIM2REAL_SENSOR_STALL_SEC", _safety.get("sen
 ACTION_PROJECTION = os.environ.get("RDK_SIM2REAL_ACTION_PROJECTION", _runtime.get("actionProjection", "paired"))
 if ACTION_PROJECTION not in ("paired", "identity"):
     ACTION_PROJECTION = "paired"
+_configured_action_output = os.environ.get(
+    "RDK_SIM2REAL_ACTION_OUTPUT", _runtime.get("actionOutput", "physical-twist")
+)
+ACTION_OUTPUT = str(_configured_action_output or "physical-twist").strip().lower()[:80]
+ACTION_OUTPUT_CONFIG_ERROR = None
+if ACTION_OUTPUT not in ("physical-twist", "normalized-twist"):
+    ACTION_OUTPUT_CONFIG_ERROR = ACTION_OUTPUT
 _actuator = _ADAPTER.get("actuator") if isinstance(_ADAPTER.get("actuator"), dict) else {}
 _ros_topics = (_ADAPTER.get("ros") or {}).get("topics") if isinstance((_ADAPTER.get("ros") or {}).get("topics"), dict) else {}
 _configured_topic = os.environ.get("RDK_SIM2REAL_COMMAND_TOPIC") or _actuator.get("commandTopic") or ((_ros_topics.get("cmdVel") or {}).get("name")) or "/cmd_vel"
@@ -163,38 +204,74 @@ def _clamp(value, lo, hi):
 
 
 def _atomic_write_json(path, payload):
-    # Unique temp name: the telemetry loop and the file-protocol thread both
-    # write the runtime state, so a fixed ".tmp" suffix lets two writers race
-    # on the rename (one os.replace() finds its file already gone).
-    directory = os.path.dirname(path) or "."
-    fd, tmp = tempfile.mkstemp(prefix=".state-", dir=directory)
+    # Keep this local name for callers/tests while delegating all path and
+    # inode handling to the shared O_EXCL + O_NOFOLLOW implementation.
+    return atomic_write_json(path, payload)
+
+
+def _iso_timestamp(epoch):
+    """Return a bounded UTC ISO-8601 timestamp for evidence fields."""
+    if epoch is None:
+        return None
     try:
-        with os.fdopen(fd, "w", encoding="utf-8") as fh:
-            json.dump(payload, fh, ensure_ascii=False)
-            fh.flush()
-            os.fsync(fh.fileno())
-        os.replace(tmp, path)
-    except BaseException:
-        try:
-            os.unlink(tmp)
-        except OSError:
-            pass
-        raise
+        return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(float(epoch)))
+    except (TypeError, ValueError, OverflowError):
+        return None
+
+
+def _sha256_file(path):
+    """Hash a regular model file without loading it all into memory."""
+    digest = hashlib.sha256()
+    try:
+        with open(path, "rb") as fh:
+            for chunk in iter(lambda: fh.read(1024 * 1024), b""):
+                digest.update(chunk)
+    except OSError:
+        return None
+    return digest.hexdigest()
 
 
 def _read_telemetry():
     """Latest board telemetry snapshot (None when absent/stale)."""
     try:
-        with open(TELEMETRY_SNAPSHOT_FILE, "r", encoding="utf-8") as fh:
-            snap = json.load(fh)
+        snap = secure_read_json(TELEMETRY_SNAPSHOT_FILE)
         # The policy loop must use the same freshness budget as the safety
         # watchdog.  A stale snapshot is not a valid observation.
-        if time.time() - float(snap.get("ts", 0)) > STALL_LIMIT_SEC:
+        snapshot_ts = float(snap.get("ts", 0))
+        now = time.time()
+        # Reject malformed and implausibly future wall-clock values too.  A
+        # clock jump must never turn an old sensor frame into a fresh one.
+        if not math.isfinite(snapshot_ts) or snapshot_ts - now > 0.25:
+            return None
+        if now - snapshot_ts > STALL_LIMIT_SEC:
             return None
         data = snap.get("data")
         return data if isinstance(data, dict) else None
     except (OSError, TypeError, ValueError):
         return None
+
+
+def _sensor_sample_fresh(sensor, *, now_monotonic_ns=None):
+    """Validate the source timestamp carried by a sensor sample.
+
+    The sampler rewrites the wrapper file periodically.  Looking only at the
+    wrapper's ``ts`` therefore cannot detect a frozen ROS topic.  Motion
+    policies require a monotonic source timestamp on every sensor they use;
+    missing metadata fails closed instead of accepting a legacy/unverifiable
+    frame.  A small future tolerance handles scheduling/clock conversion
+    noise but still rejects impossible timestamps.
+    """
+    if not isinstance(sensor, dict):
+        return False
+    try:
+        sample_ns = int(sensor.get("sampleMonotonicNs"))
+    except (TypeError, ValueError, OverflowError):
+        return False
+    if sample_ns <= 0:
+        return False
+    now_ns = time.monotonic_ns() if now_monotonic_ns is None else int(now_monotonic_ns)
+    age_sec = (now_ns - sample_ns) / 1_000_000_000.0
+    return math.isfinite(age_sec) and age_sec >= -0.25 and age_sec <= STALL_LIMIT_SEC
 
 
 class PolicyRuntime:
@@ -218,9 +295,26 @@ class PolicyRuntime:
         self._last_cmd = (0.0, 0.0)
         self._telemetry_dropped = 0
         self._goal = (ORIGINBOT_GOAL_X, ORIGINBOT_GOAL_Y)
+        # A policy load and a policy motion session are separate lifecycle
+        # objects.  The session fields below make every board run auditable:
+        # callers can tell which exact model was active, when motion began,
+        # how many inferences were published, and why it stopped.  Evidence
+        # survives a stop/fault until the next explicit start; it is never
+        # replaced by a fabricated "healthy" snapshot.
+        self._session_id = None
+        self._session_started_at = None
+        self._session_stopped_at = None
+        self._session_stop_reason = "never-started"
+        self._session_stop_event_emitted = False
+        self._inference_count = 0
+        self._last_inference_at = None
 
     # ---- state reporting ------------------------------------------------
     def snapshot(self):
+        try:
+            spool_bytes = secure_size(TELEMETRY_SPOOL_FILE)
+        except OSError:
+            spool_bytes = 0
         with self._lock:
             return {
                 "ok": True,
@@ -228,22 +322,54 @@ class PolicyRuntime:
                 "state": self._state,
                 "adapterId": ADAPTER_ID,
                 "actionProjection": ACTION_PROJECTION,
+                "actionOutput": ACTION_OUTPUT,
+                "actionOutputConfigError": ACTION_OUTPUT_CONFIG_ERROR,
+                "actionScale": {
+                    "linear": float(MAX_LINEAR),
+                    "angular": float(MAX_ANGULAR),
+                    "units": "m/s,rad/s",
+                },
                 "commandTopic": COMMAND_TOPIC,
                 "observationLayout": OBSERVATION_LAYOUT,
                 "providerRequested": PROVIDER_REQUESTED,
                 "model": self._model_meta,
                 "command": self._command_dir,
+                "lastCmdVel": {
+                    "linear": float(self._last_cmd[0]),
+                    "angular": float(self._last_cmd[1]),
+                },
+                "controlHz": int(DECISION_HZ),
+                "controlPeriodSeconds": float(1.0 / DECISION_HZ),
                 "published": self._published,
                 "inferMs": round(self._infer_ms_avg, 2),
                 "lastError": self._last_error,
                 "lastOp": self._last_op,
+                "session": {
+                    "id": self._session_id,
+                    "startedAt": _iso_timestamp(self._session_started_at),
+                    "stoppedAt": _iso_timestamp(self._session_stopped_at),
+                    "stopReason": self._session_stop_reason,
+                    "inferenceCount": self._inference_count,
+                    "lastInferenceAt": _iso_timestamp(self._last_inference_at),
+                    "durationSec": round(
+                        max(
+                            0.0,
+                            (self._session_stopped_at or time.time())
+                            - self._session_started_at,
+                        ),
+                        3,
+                    )
+                    if self._session_started_at
+                    else 0.0,
+                    "mock": False,
+                },
                 "obsSlots": self._obs_slot_report(),
                 "goal": {"x": self._goal[0], "y": self._goal[1]}
                 if EXPECTED_OBS_DIM == 8 and EXPECTED_ACTION_DIM == 2
                 else None,
                 "telemetry": {
                     "spool": TELEMETRY_SPOOL_FILE,
-                    "bytes": os.path.getsize(TELEMETRY_SPOOL_FILE) if os.path.exists(TELEMETRY_SPOOL_FILE) else 0,
+                    "bytes": spool_bytes,
                     "maxBytes": TELEMETRY_MAX_BYTES,
                     "dropped": self._telemetry_dropped,
                 },
@@ -310,6 +436,31 @@ class PolicyRuntime:
 
     def load(self, model_path):
         global EXPECTED_OBS_DIM, EXPECTED_ACTION_DIM
+        with self._lock:
+            if self._state == "running":
+                return {"ok": False, "error": "model-load-while-running", "state": self._state}
+            if ACTION_OUTPUT_CONFIG_ERROR is not None:
+                return {
+                    "ok": False,
+                    "error": "action-output-mode-invalid",
+                    "detail": "runtime.actionOutput must be physical-twist or normalized-twist",
+                    "actual": ACTION_OUTPUT_CONFIG_ERROR,
+                }
+            # Loading is transactional from the actuator's point of view. A
+            # failed replacement must not leave the previous model object
+            # paired with the newly reset contract dimensions. Clear the old
+            # model first; callers must explicitly load a valid replacement
+            # before motion can become ready again.
+            self._model = None
+            self._model_kind = None
+            self._model_meta = None
+            self._state = "idle"
+            self._last_error = None
+            # Do not let a previous 8D native load poison the next contract
+            # check (or vice versa).  A model reload is a fresh declaration
+            # boundary even though the process remains alive.
+            EXPECTED_OBS_DIM = DECLARED_OBS_DIM
+            EXPECTED_ACTION_DIM = DECLARED_ACTION_DIM
         try:
             if model_path.lower().endswith('.bin'):
                 import numpy as np
@@ -329,7 +480,9 @@ class PolicyRuntime:
                     return {"ok": False, "error": "policy-shape-mismatch", "expectedInput": [1, 8, 1, 1], "actualInput": list(in_shape), "expectedOutput": [1, 2, 1, 1], "actualOutput": list(out_shape)}
                 EXPECTED_OBS_DIM = 8
                 EXPECTED_ACTION_DIM = 2
-                meta = {"path": model_path, "bytes": size, "inputDim": 8, "outputDim": 2, "provider": "hobot_dnn", "providerRequested": PROVIDER_REQUESTED, "format": "bpu-bin", "inputShape": list(in_shape), "outputShape": list(out_shape)}
+                meta = {"path": model_path, "bytes": size, "inputDim": 8, "outputDim": 2, "provider": "hobot_dnn", "providerRequested": PROVIDER_REQUESTED, "format": "bpu-bin", "inputShape": list(in_shape), "outputShape": list(out_shape), "sha256": _sha256_file(model_path)}
+                meta["actionOutput"] = ACTION_OUTPUT
+                meta["actionScale"] = {"linear": float(MAX_LINEAR), "angular": float(MAX_ANGULAR), "units": "m/s,rad/s"}
                 with self._lock:
                     self._model = model
                     self._model_kind = "bpu"
@@ -372,6 +525,13 @@ class PolicyRuntime:
                 return {"ok": False, "error": "policy-input-dimension-mismatch", "expected": [EXPECTED_OBS_DIM, 8], "actual": input_dim}
             if output_dim not in (EXPECTED_ACTION_DIM, 2):
                 return {"ok": False, "error": "policy-output-dimension-mismatch", "expected": [EXPECTED_ACTION_DIM, 2], "actual": output_dim}
+            if ACTION_PROJECTION == "identity" and output_dim != 2:
+                return {
+                    "ok": False,
+                    "error": "identity-action-dimension-mismatch",
+                    "detail": "identity projection requires a 2D (linear, angular) policy head",
+                    "actual": output_dim,
+                }
             # Declared layout and loaded model must agree. "auto" keeps the
             # legacy dimension pick (the 8 in the allowlists above); an
             # explicitly declared layout pins the contract: the model input
@@ -397,6 +557,9 @@ class PolicyRuntime:
                 "provider": session_providers[0],
                 "providerRequested": PROVIDER_REQUESTED,
                 "providersAvailable": available[:8],
+                "sha256": _sha256_file(model_path),
+                "actionOutput": ACTION_OUTPUT,
+                "actionScale": {"linear": float(MAX_LINEAR), "angular": float(MAX_ANGULAR), "units": "m/s,rad/s"},
             }
             with self._lock:
                 self._model = sess
@@ -439,28 +602,67 @@ class PolicyRuntime:
             self._state = "running"
             self._started_at = time.time()
             self._published = 0
+            self._session_id = str(uuid.uuid4())
+            self._session_started_at = self._started_at
+            self._session_stopped_at = None
+            self._session_stop_reason = None
+            self._session_stop_event_emitted = False
+            self._inference_count = 0
+            self._last_inference_at = None
             self._stop_flag.clear()
+            # Snapshot the session facts under the lock; the event append
+            # below does file I/O and must not hold the control lock.
+            started_event = {
+                "kind": "session-started",
+                "sessionId": self._session_id,
+                "startedAt": _iso_timestamp(self._session_started_at),
+                "adapterId": ADAPTER_ID,
+                "controlHz": int(DECISION_HZ),
+                "mock": False,
+                "model": self._session_model_summary(),
+            }
+        self._append_event_record(started_event)
         threading.Thread(target=self._loop, daemon=True).start()
         return {"ok": True, "state": "running"}
 
     def stop(self, reason="operator-stop"):
+        now = time.time()
         with self._lock:
             if self._state == "running":
                 self._state = "idle"
+                self._session_stopped_at = now
+                self._session_stop_reason = str(reason or "operator-stop")[:120]
+            elif self._session_id and self._session_stopped_at is None:
+                # A concurrent loop/fault may have already changed state; keep
+                # the first terminal timestamp and reason deterministic.
+                self._session_stopped_at = now
+                self._session_stop_reason = str(reason or "operator-stop")[:120]
+            elif not self._session_id:
+                self._session_stop_reason = str(reason or "operator-stop")[:120]
             self._command_dir = 0.0
             self._stop_flag.set()
+            stopped_event = self._session_stopped_event_locked()
         # Publish one zero frame immediately on the ROS side (below); the
         # chassis watchdog covers the 500 ms gap regardless.
         self._publish_zero(reason)
+        if stopped_event is not None:
+            self._append_event_record(stopped_event)
         return {"ok": True, "state": self._state, "reason": reason}
 
     def _fault(self, message):
+        now = time.time()
         with self._lock:
             self._state = "fault"
             self._last_error = message[:200]
             self._command_dir = 0.0
+            if self._session_id and self._session_stopped_at is None:
+                self._session_stopped_at = now
+                self._session_stop_reason = "fault:" + message[:60]
+            stopped_event = self._session_stopped_event_locked()
         self._stop_flag.set()
         self._publish_zero("fault:" + message[:60])
+        if stopped_event is not None:
+            self._append_event_record(stopped_event)
 
     # ---- observation building -------------------------------------------
     def _build_observation(self):
@@ -481,6 +683,12 @@ class PolicyRuntime:
             return None
         imu = tel.get("imu") or {}
         odom = tel.get("odom") or {}
+        # Validate source samples before decoding values.  The outer snapshot
+        # timestamp only proves that the sampler process is alive; these
+        # per-sensor stamps prove that the IMU/odom topics themselves are
+        # advancing within the same watchdog budget.
+        if not _sensor_sample_fresh(imu):
+            return None
         # Telemetry-node ships two shapes: flat {x,y,z,w} (older) and nested
         # {quaternion, gyro, linearAcceleration} (newer). Accept both so this
         # runtime works with either snapshot producer on the board.
@@ -504,6 +712,8 @@ class PolicyRuntime:
             or (OBSERVATION_LAYOUT == "auto" and EXPECTED_OBS_DIM == 8 and EXPECTED_ACTION_DIM == 2)
         )
         if native_layout:
+            if not _sensor_sample_fresh(odom):
+                return None
             if self._goal[0] is None or self._goal[1] is None:
                 return None
             def _odom_value(*keys):
@@ -537,13 +747,23 @@ class PolicyRuntime:
         if any(value is None for value in gyro_values + quaternion_values):
             return None
         gx, gy, gz = gyro_values
-        # projected gravity from quaternion (roll/pitch only; yaw-independent)
+        # projected gravity from quaternion (roll/pitch only; yaw-independent).
+        # The training environments use the conventional robotics vector
+        # ``gravity = (0, 0, -1)``; keeping that sign here is load-bearing:
+        # feeding +1 to a policy trained on -1 produces a valid-shaped but
+        # semantically inverted observation and can drive a real base.
         qx, qy, qz, qw = quaternion_values
-        if math.sqrt(qx * qx + qy * qy + qz * qz + qw * qw) < 1e-6:
+        quaternion_norm = math.sqrt(qx * qx + qy * qy + qz * qz + qw * qw)
+        if quaternion_norm < 1e-6:
             return None
-        pg_x = 2 * (qx * qz - qw * qy)
-        pg_y = 2 * (qw * qx + qy * qz)
-        pg_z = 1 - 2 * (qx * qx + qy * qy)
+        # ROS publishers normally normalize orientation, but this boundary is
+        # also used with recorded/replayed telemetry.  Normalize here so a
+        # harmless serializer scale cannot change the policy's gravity
+        # magnitude while preserving the zero-norm fail-closed guard.
+        qx, qy, qz, qw = (value / quaternion_norm for value in (qx, qy, qz, qw))
+        pg_x = 2 * (qw * qy - qx * qz)
+        pg_y = 2 * (-qw * qx - qy * qz)
+        pg_z = 2 * (qx * qx + qy * qy) - 1
 
         head = [gx, gy, gz, pg_x, pg_y, pg_z]
         last = self._last_action or [0.0] * EXPECTED_ACTION_DIM
@@ -561,11 +781,27 @@ class PolicyRuntime:
 
         For a 14-D leg-style output, antagonistic-pair statistics carry a
         walking-intent signal: pair mean ~ forward drive, left/right asymmetry
-        ~ yaw. For 2-D (v, w) policies the mapping is identity. Both paths
-        clamp to the canary limits.
+        ~ yaw. For 2-D policies the declared action output mode determines
+        whether values are physical or normalized. Both paths clamp to the
+        canary limits.
         """
-        if len(action) == 2 or ACTION_PROJECTION == "identity":
+        if len(action) not in (2, EXPECTED_ACTION_DIM):
+            raise ValueError(
+                "policy output length %d does not match 2 or declared %d"
+                % (len(action), EXPECTED_ACTION_DIM)
+            )
+        if not all(math.isfinite(float(value)) for value in action):
+            raise ValueError("policy output contains non-finite value")
+        # Identity means the policy head is already (v, w).  Silently taking
+        # the first two values of a leg-style head would make a malformed
+        # adapter drive a real chassis with unrelated joint outputs.
+        if ACTION_PROJECTION == "identity" and len(action) != 2:
+            raise ValueError("identity action projection requires exactly 2 outputs")
+        if len(action) == 2:
             linear, angular = float(action[0]), float(action[1] if len(action) > 1 else 0.0)
+            if ACTION_OUTPUT == "normalized-twist":
+                linear *= MAX_LINEAR
+                angular *= MAX_ANGULAR
         else:
             half = len(action) // 2
             left = action[:half]
@@ -590,8 +826,7 @@ class PolicyRuntime:
                 obs = self._build_observation()
                 if obs is None:
                     self._publish_zero("telemetry-stale")
-                    self._maybe_stats(stats_t, stale=True)
-                    stats_t = stats_t  # keep window
+                    stats_t = self._maybe_stats(stats_t, stale=True)
                     time.sleep(period)
                     continue
                 import numpy as np
@@ -607,11 +842,13 @@ class PolicyRuntime:
                 action = [float(v) for v in result]
                 linear, angular = self._project_action(action)
                 self._publish_cmd(linear, angular)
-                self._append_telemetry(obs, action)
+                self._append_telemetry(obs, action, (linear, angular))
                 with self._lock:
                     self._last_obs = obs
                     self._last_action = action[:EXPECTED_ACTION_DIM]
                     self._published += 1
+                    self._inference_count += 1
+                    self._last_inference_at = time.time()
                     self._infer_ms_avg = (
                         0.9 * self._infer_ms_avg + 0.1 * infer_ms
                         if self._infer_ms_avg
@@ -628,7 +865,76 @@ class PolicyRuntime:
         self._publish_zero("stopped")
         self._write_state()
 
-    def _append_telemetry(self, observation, action):
+    def _session_model_summary(self):
+        # Bounded fingerprint of the artifact that is active for the session.
+        # The full meta stays in the state snapshot; events carry only the
+        # fields the platform needs to correlate a session with a run's
+        # artifacts (sha256) and its inference provider.
+        meta = self._model_meta or {}
+        return {
+            key: meta.get(key)
+            for key in ("sha256", "provider", "inputDim", "outputDim", "bytes")
+            if meta.get(key) is not None
+        }
+
+    def _session_stopped_event_locked(self):
+        # Caller holds the lock. Returns the terminal event payload for the
+        # current session, or None when no session ever started (e.g. a fault
+        # during startup) or when a stop path already emitted this session's
+        # event — a double stop (operator + sigterm) must not produce two
+        # terminal records for one session.
+        if not self._session_id or self._session_stopped_at is None:
+            return None
+        if self._session_stop_event_emitted:
+            return None
+        self._session_stop_event_emitted = True
+        return {
+            "kind": "session-stopped",
+            "sessionId": self._session_id,
+            "startedAt": _iso_timestamp(self._session_started_at),
+            "stoppedAt": _iso_timestamp(self._session_stopped_at),
+            "stopReason": self._session_stop_reason,
+            "inferenceCount": self._inference_count,
+            "lastInferenceAt": _iso_timestamp(self._last_inference_at),
+            "durationSec": round(
+                max(0.0, self._session_stopped_at - (self._session_started_at or self._session_stopped_at)),
+                3,
+            ),
+            "inferMs": round(self._infer_ms_avg, 2),
+            "published": self._published,
+            "mock": False,
+        }
+
+    def _append_event_record(self, event):
+        """Persist a session lifecycle event beside the sample spool.
+
+        Events ride the same bounded, append-only spool so the uploader
+        carries them with identical retry/idempotency semantics. The platform
+        keeps them out of replay statistics and aggregates them into board
+        sessions; like samples, event loss never blocks motion.
+        """
+        if not TELEMETRY_RUN_ID:
+            return
+        try:
+            ensure_private_parent(TELEMETRY_SPOOL_FILE, create=True)
+            if secure_size(TELEMETRY_SPOOL_FILE) >= TELEMETRY_MAX_BYTES:
+                self._telemetry_dropped += 1
+                return
+            record = {
+                "source": "board-agent",
+                "t": max(0.0, time.time() - (self._started_at or time.time())),
+                "event": event,
+            }
+            secure_append_text(
+                TELEMETRY_SPOOL_FILE,
+                json.dumps(record, separators=(",", ":")) + "\n",
+            )
+        except OSError:
+            # Identical stance to sample telemetry: motion must continue under
+            # the watchdog; spool loss is surfaced by health checks instead.
+            return
+
+    def _append_telemetry(self, observation, action, cmd_vel=None):
         """Persist the exact observation/action pair used for inference.
 
         The spool is append-only and bounded. A separate uploader can retry
@@ -637,20 +943,58 @@ class PolicyRuntime:
         if not TELEMETRY_RUN_ID:
             return
         try:
-            directory = os.path.dirname(TELEMETRY_SPOOL_FILE)
-            if directory:
-                os.makedirs(directory, mode=0o700, exist_ok=True)
-            if os.path.exists(TELEMETRY_SPOOL_FILE) and os.path.getsize(TELEMETRY_SPOOL_FILE) >= TELEMETRY_MAX_BYTES:
+            ensure_private_parent(TELEMETRY_SPOOL_FILE, create=True)
+            if secure_size(TELEMETRY_SPOOL_FILE) >= TELEMETRY_MAX_BYTES:
                 self._telemetry_dropped += 1
                 return
             record = {
+                "source": "board-agent",
                 "t": max(0.0, time.time() - (self._started_at or time.time())),
                 "observation": [float(v) for v in observation],
                 "action": [float(v) for v in action],
+                # ``action`` is the model head output (often normalized),
+                # while calibration and replay analysis need the bounded
+                # physical command that was actually published to ROS.
+                "cmd_vel": {
+                    "linear": float(cmd_vel[0]),
+                    "angular": float(cmd_vel[1]),
+                } if cmd_vel is not None else None,
+                "controlPeriodSeconds": float(1.0 / DECISION_HZ),
+                "controlHz": int(DECISION_HZ),
+                "actionOutput": ACTION_OUTPUT,
+                "actionScale": {
+                    "linear": float(MAX_LINEAR),
+                    "angular": float(MAX_ANGULAR),
+                    "units": "m/s,rad/s",
+                },
             }
-            with open(TELEMETRY_SPOOL_FILE, "a", encoding="utf-8") as fh:
-                fh.write(json.dumps(record, separators=(",", ":")) + "\n")
-                fh.flush()
+            # Preserve the measured base state needed for calibration and
+            # replay.  For the native 8D contract the heading is already
+            # encoded as sin/cos in the exact observation supplied to the
+            # model, so deriving yaw here avoids copying an untrusted global
+            # pose or introducing a second sensor timestamp.
+            native_layout = (
+                OBSERVATION_LAYOUT == "originbot-imu-odom-v1"
+                or (
+                    OBSERVATION_LAYOUT == "auto"
+                    and EXPECTED_OBS_DIM == 8
+                    and EXPECTED_ACTION_DIM == 2
+                )
+            )
+            if len(observation) >= 8 and native_layout:
+                record["telemetry"] = {
+                    "odom": {
+                        "x": float(observation[0]),
+                        "y": float(observation[1]),
+                        "yaw": float(math.atan2(observation[2], observation[3])),
+                        "linearX": float(observation[6]),
+                        "angularZ": float(observation[7]),
+                    }
+                }
+            secure_append_text(
+                TELEMETRY_SPOOL_FILE,
+                json.dumps(record, separators=(",", ":")) + "\n",
+            )
         except OSError:
             # Motion must continue under the watchdog; telemetry loss is
             # surfaced by the uploader/health checks rather than blocking it.
@@ -698,7 +1042,8 @@ class PolicyRuntime:
 # The agent writes JSON requests to a command file; we apply them and rewrite
 # the state file. This decouples the rclpy thread from the agent's HTTP loop
 # the same way the drive publisher does it.
-CMD_FILE = os.environ.get("RDK_BOARD_POLICY_CMD", "/tmp/board-policy-runtime-cmd.json")
+CMD_FILE = ipc_path("RDK_BOARD_POLICY_CMD", "policy-runtime-cmd.json")
+READY_FILE = ipc_path("RDK_BOARD_POLICY_READY", "policy-runtime.ready")
 
 
 def _serve_file_protocol(runtime):
@@ -707,8 +1052,7 @@ def _serve_file_protocol(runtime):
     while True:
         time.sleep(0.05)
         try:
-            with open(CMD_FILE, "r", encoding="utf-8") as fh:
-                raw = fh.read()
+            raw = secure_read_text(CMD_FILE)
         except OSError:
             continue
         if raw == last_seen or not raw.strip():
@@ -741,7 +1085,7 @@ def main():
     runtime._write_state()
     # Ready marker: the supervising agent waits for this before trusting the
     # file protocol (mirrors the drive publisher handshake).
-    _atomic_write_json("/tmp/board-policy-runtime.ready", {"pid": os.getpid()})
+    _atomic_write_json(READY_FILE, {"pid": os.getpid()})
     ros = runtime.bind_ros()
     if not ros.get("ok"):
         runtime._fault(ros.get("error", "ros-unavailable"))

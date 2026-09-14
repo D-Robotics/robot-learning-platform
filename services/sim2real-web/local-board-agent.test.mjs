@@ -4,10 +4,20 @@ import process from 'node:process';
 const previousToken = process.env.RDK_SIM2REAL_BOARD_AGENT_TOKEN;
 delete process.env.RDK_SIM2REAL_BOARD_AGENT_TOKEN;
 
-const { buildBoardPreflightCommand, createLocalBoardAgentServer } =
-  await import('./local-board-agent.mjs');
+const {
+  BOARD_AGENT_HTTP_HEADERS_TIMEOUT_MS,
+  BOARD_AGENT_HTTP_KEEP_ALIVE_TIMEOUT_MS,
+  BOARD_AGENT_HTTP_MAX_REQUESTS_PER_SOCKET,
+  BOARD_AGENT_HTTP_REQUEST_TIMEOUT_MS,
+  buildBoardPreflightCommand,
+  createLocalBoardAgentServer,
+} = await import('./local-board-agent.mjs');
 const { STATION_COMMANDS } = await import('./board-station.mjs');
 const server = createLocalBoardAgentServer();
+assert.equal(server.requestTimeout, BOARD_AGENT_HTTP_REQUEST_TIMEOUT_MS);
+assert.equal(server.headersTimeout, BOARD_AGENT_HTTP_HEADERS_TIMEOUT_MS);
+assert.equal(server.keepAliveTimeout, BOARD_AGENT_HTTP_KEEP_ALIVE_TIMEOUT_MS);
+assert.equal(server.maxRequestsPerSocket, BOARD_AGENT_HTTP_MAX_REQUESTS_PER_SOCKET);
 await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
 const address = server.address();
 const base = `http://127.0.0.1:${address.port}`;

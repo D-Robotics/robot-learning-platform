@@ -25,7 +25,7 @@ RDK 板型兼容性检查 + read-only preflight
 canary、live、制品转换/下发仍需要单独配置受控适配器。
 
 产品信息架构和交互边界见仓库根目录的
-`docs/design/rdk-duck-product-design.md`。页面固定为“总览 + 六个业务模块”，顶部用“仿真与录制 → 训练与导出 → 评测与效果 → 预检与上板”引导新用户，避免把所有操作堆在同一张看板上。
+`docs/design/rdk-duck-product-design.md`。页面固定为“工作台总览 + 四个流程页 + 两个数据与工具页”，另有可随时打开的 Agent 对话抽屉；顶部用“仿真与录制 → 强化学习训练 → Sim2Real 评测 → 部署与反馈”引导新用户，避免把所有操作堆在同一张看板上。
 
 外部客户端的版本化请求/响应契约见仓库根目录的 `docs/api/openapi.yaml`，配套的调用顺序和认证边界见 `docs/api/README.md`。
 
@@ -37,6 +37,23 @@ canary、live、制品转换/下发仍需要单独配置受控适配器。
 流程；页面会把它标成演示样例，不能当作真实 X5 遥测。
 如果将样例绑定到 Mock Run，API 会以 `source=demo-fixture` 持久化来源；刷新页面或打开记录时仍会保留
 合成标记，不会解锁真实评测、预检或发布。
+
+板端上传器可以使用短期 HMAC-SHA256 attestation：服务端配置
+`RDK_SIM2REAL_TELEMETRY_ATTESTATION_SECRET`（至少 32 个随机字节），由受信发放端签发
+JWT 兼容的 `Bearer` token，claims 必须包含 `owner`、`runId`、`deviceId` 和 Unix 秒级 `exp`。
+上传到 `POST /api/v1/duck/telemetry`（旧路径 `/api/sim2real/telemetry` 同样支持）时，服务端会
+用 token 的 owner 绑定 Run/设备，即使请求没有 Studio cookie；只有验签成功的
+`source=board-agent` chunk 才会写入 `attested=true`，并在回放/评测中形成 attested evidence。
+token 过期、签名不匹配、Run 或设备 claim 与请求不一致都会被拒绝。未携带 token 的旧上传流程
+保持兼容，但其 `board-agent` 来源只属于 review-only 证据，不能解锁发布。
+
+`board-telemetry-uploader.py` 使用板端变量
+`RDK_SIM2REAL_TELEMETRY_ATTESTATION_TOKEN` 发送这个短期 token；每个 chunk 必须带单调的
+`sequence`，网络重试会按 `(run, device, sequence, 内容摘要)` 幂等处理。token 应由受信的
+发放服务用服务端 secret 签发并在过期前轮换，板端只保存 token，不保存
+`RDK_SIM2REAL_TELEMETRY_ATTESTATION_SECRET`。旧变量 `RDK_SIM2REAL_TELEMETRY_TOKEN` 仍可读取
+以支持滚动升级，但其中的静态 token 不会获得 attested 资格；服务启动和生产配置检查都会拒绝
+模板占位符、重复字符或少于 32 字节的签名 key。
 
 ## 多用户账号与 Studio 解耦
 
@@ -154,8 +171,12 @@ sudo install -d -o sim2real -g sim2real -m 0700 /var/lib/rdk-robot-learning-plat
    secret/可选连接配置：
 
    ```bash
-   sudo install -o root -g root -m 0600 services/sim2real-web/sim2real.production.env.example \
-     /etc/rdk-robot-learning-platform-sim2real.env
+   if sudo test -e /etc/rdk-robot-learning-platform-sim2real.env; then
+     sudo chmod 600 /etc/rdk-robot-learning-platform-sim2real.env
+   else
+     sudo install -o root -g root -m 0600 services/sim2real-web/sim2real.production.env.example \
+       /etc/rdk-robot-learning-platform-sim2real.env
+   fi
    openssl rand -hex 32
    # 将上一步输出粘贴到 RDK_SIM2REAL_TRUSTED_PROXY_SECRET= 后，再执行：
    sudo awk -F= '/^RDK_SIM2REAL_TRUSTED_PROXY_SECRET=/{print length($2)}' \
@@ -184,13 +205,20 @@ sudo install -d -o sim2real -g sim2real -m 0700 /var/lib/rdk-robot-learning-plat
      /etc/systemd/system/standalone-sim2real.service
    sudo install -o root -g root -m 0644 services/sim2real-web/sim2real-mock-worker.service \
      /etc/systemd/system/sim2real-mock-worker.service
+   # 仅在启用 RDK_SIM2REAL_AUDIT_FILE=/var/log/rdk-sim2real/audit.ndjson
+   # 时创建；standalone unit 已为该目录保留写权限。
+   sudo install -d -o sim2real -g sim2real -m 0700 /var/log/rdk-sim2real
+   # DSH 是显式启用的可选运行时；只有设置 RDK_SIM2REAL_DSH_RUNTIME=1
+   # 并配置 provider credential 后才需要这个会话目录，unit 只开放此目录。
+   sudo install -d -o sim2real -g sim2real -m 0700 /var/lib/sim2real/dsh
    sudo systemctl daemon-reload
    ```
 
    若要挂载到已有 Studio 主机并复用安全适配器，先创建
    `/etc/rdkstudio-sim2real-adapter.ready`，再使用 `studio-integrated-sim2real.service`；该 unit
    是针对旧 Studio 主机路径的兼容样例，启用前必须由运维审阅其中的用户、路径和环境文件，
-   并确认真实 SSO adapter 已接入。不要在未接入真实 SSO adapter 时启用它。两个 unit 不能同时占用 18102。
+   并确认真实 SSO adapter 已接入。它还要求 root-only 的 `/etc/sim2real-web-runner.env`（0600）
+   提供遥测 attestation secret；不要在未接入真实 SSO adapter 或该环境文件时启用它。两个 unit 不能同时占用 18102。
 5. 安装 Nginx 路由。先确保 HTTPS server block 中存在
    `server_name rdkstudio.d-robotics.cc;`，再安装独立控制面路由：
 

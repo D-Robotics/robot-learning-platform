@@ -103,7 +103,7 @@ const test = async (name, fn) => {
 // ---- tests -----------------------------------------------------------------
 await test('create + list + dedup + delete round-trips the record', async () => {
   const created = await tunnelManager.createDeviceConnection({
-    host: '10.185.136.180',
+    host: '192.0.2.10',
     label: 'OriginBot',
     username: 'root',
     port: 22,
@@ -111,7 +111,7 @@ await test('create + list + dedup + delete round-trips the record', async () => 
   assert.ok(!('error' in created), `unexpected error: ${created.error}`);
   assert.match(created.id, /^board-[a-z0-9]{8}$/);
   assert.equal(created.lastCheckMessage, '尚未测试连接。');
-  const dup = await tunnelManager.createDeviceConnection({ host: '10.185.136.180' });
+  const dup = await tunnelManager.createDeviceConnection({ host: '192.0.2.10' });
   assert.equal(dup.error, 'ALREADY_EXISTS');
   assert.equal(tunnelManager.listDeviceConnections().length, 1);
   assert.equal(
@@ -176,6 +176,69 @@ await test('openDeviceConnectionTunnel probes healthz through the tunnel', async
   assert.equal(tunnelManager.deviceConnectionAgentUrl(created.id), null);
   assert.equal(tunnelManager.activeTunnelAgentUrl(), null);
   await tunnelManager.deleteDeviceConnection(created.id);
+});
+
+await test('concurrent connect requests share one in-flight tunnel', async () => {
+  withFakeSsh('');
+  const created = await tunnelManager.createDeviceConnection({
+    host: '127.0.0.1',
+    port: 22,
+    agentPort,
+  });
+  assert.ok(!('error' in created));
+  const before = fs.existsSync(sshLog)
+    ? fs.readFileSync(sshLog, 'utf8').trim().split('\n').length
+    : 0;
+  const firstPromise = tunnelManager.openDeviceConnectionTunnel(created.id);
+  const secondPromise = tunnelManager.openDeviceConnectionTunnel(created.id);
+  const [first, second] = await Promise.all([firstPromise, secondPromise]);
+  assert.ok(!('error' in first), `first open failed: ${first.error}`);
+  assert.ok(!('error' in second), `second open failed: ${second.error}`);
+  assert.equal(first.url, second.url, 'duplicate requests must share the same loopback tunnel');
+  const after = fs.readFileSync(sshLog, 'utf8').trim().split('\n').length;
+  assert.equal(after - before, 1, 'duplicate requests must spawn exactly one ssh process');
+  await tunnelManager.closeDeviceConnectionTunnel(created.id);
+  await tunnelManager.deleteDeviceConnection(created.id);
+});
+
+await test('different owners do not share an in-flight tunnel for a colliding id', async () => {
+  withFakeSsh('fail');
+  const registry = path.join(dataDir, 'device-connections.json');
+  const collisionId = 'board-owner-collision';
+  const records = [
+    {
+      id: collisionId,
+      label: 'Alice board',
+      host: '192.0.2.21',
+      port: 22,
+      username: 'root',
+      agentPort: 19_100,
+      localPort: 0,
+      createdAt: new Date(0).toISOString(),
+      lastCheckedAt: null,
+      lastCheckOk: null,
+      lastCheckMessage: '尚未测试连接。',
+      profile: 'custom',
+      transport: 'ssh',
+      ownerKey: 'sso:alice@example.com:web',
+    },
+  ];
+  fs.writeFileSync(registry, JSON.stringify(records, null, 2), { mode: 0o600 });
+  const before = fs.readFileSync(sshLog, 'utf8').trim().split('\n').filter(Boolean).length;
+  const alicePromise = tunnelManager.openDeviceConnectionTunnel(collisionId, 'alice@example.com');
+  const bobPromise = tunnelManager.openDeviceConnectionTunnel(collisionId, 'bob@example.com');
+  assert.notEqual(alicePromise, bobPromise, 'owner scopes must have separate in-flight entries');
+  const [alice, bob] = await Promise.all([alicePromise, bobPromise]);
+  assert.match(alice.error, /SSH 连接失败：/);
+  assert.equal(bob.error, 'NOT_FOUND', "another owner must not inherit Alice's result");
+  const after = fs.readFileSync(sshLog, 'utf8').trim().split('\n').filter(Boolean).length;
+  assert.equal(after - before, 1, "an unauthorized owner must not start or reuse Alice's ssh");
+  // A failed operation must be removed from the map so a later retry is not
+  // pinned to the previous result.
+  const retry = await tunnelManager.openDeviceConnectionTunnel(collisionId, 'alice@example.com');
+  assert.match(retry.error, /SSH 连接失败：/);
+  const retried = fs.readFileSync(sshLog, 'utf8').trim().split('\n').filter(Boolean).length;
+  assert.equal(retried - after, 1);
 });
 
 await test('ssh failure fails closed: no tunnel, no stale record state', async () => {

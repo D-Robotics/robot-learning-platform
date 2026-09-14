@@ -17,8 +17,12 @@ NoNewPrivileges=true
 # HTTP contract; keep this path readable while all callers remain token gated.
 ProtectHome=false
 ProtectSystem=strict
-ReadWritePaths=/var/lib/rdk-board-agent /var/lib/rdk-board-agent/telemetry /tmp
-PrivateTmp=false
+UMask=0077
+# All command, ready, state and telemetry IPC lives in this root-only
+# directory.  Keep /tmp private to the unit and never grant the service a
+# shared public IPC path.
+ReadWritePaths=/var/lib/rdk-board-agent /var/lib/rdk-board-agent/runtime /var/lib/rdk-board-agent/telemetry /root/rdk-board-agent/policies
+PrivateTmp=true
 
 [Install]
 WantedBy=multi-user.target

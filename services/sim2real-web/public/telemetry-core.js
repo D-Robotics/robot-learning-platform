@@ -94,6 +94,67 @@
   // MicroDuck's 61/14 contract; truncating them here would make valid telemetry
   // impossible to publish.
   const MAX_TELEMETRY_VECTOR_VALUES = 4096;
+  const TELEMETRY_CMD_VEL_LIMITS = Object.freeze({ linear: 0.3, angular: 1 });
+  const TELEMETRY_ACTION_SCALE_LIMITS = Object.freeze({ linear: 0.3, angular: 1 });
+  const TELEMETRY_CONTROL_HZ_LIMITS = Object.freeze({ min: 1, max: 50 });
+  const TELEMETRY_CONTROL_PERIOD_LIMITS = Object.freeze({ min: 0.02, max: 1 });
+
+  function boundedTelemetryNumber(value, minimum, maximum, integer) {
+    // Imported metadata is normalized to numbers before upload. Reject
+    // booleans/empty strings so a malformed unit cannot become zero through
+    // Number(false) or Number('').
+    if (typeof value === 'boolean' || value == null || value === '') return null;
+    const number = finiteNumber(value);
+    if (
+      number === null ||
+      (integer && !Number.isSafeInteger(number)) ||
+      number < minimum ||
+      number > maximum
+    ) {
+      return null;
+    }
+    return number;
+  }
+
+  function normalizeTelemetryTwist(value) {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+    const linear = boundedTelemetryNumber(
+      value.linear,
+      -TELEMETRY_CMD_VEL_LIMITS.linear,
+      TELEMETRY_CMD_VEL_LIMITS.linear,
+      false,
+    );
+    const angular = boundedTelemetryNumber(
+      value.angular,
+      -TELEMETRY_CMD_VEL_LIMITS.angular,
+      TELEMETRY_CMD_VEL_LIMITS.angular,
+      false,
+    );
+    return linear === null || angular === null ? null : { linear, angular };
+  }
+
+  function normalizeTelemetryActionScale(value) {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+    const linear = boundedTelemetryNumber(
+      value.linear,
+      Number.EPSILON,
+      TELEMETRY_ACTION_SCALE_LIMITS.linear,
+      false,
+    );
+    const angular = boundedTelemetryNumber(
+      value.angular,
+      Number.EPSILON,
+      TELEMETRY_ACTION_SCALE_LIMITS.angular,
+      false,
+    );
+    if (linear === null || angular === null) return null;
+    if (value.units != null && value.units !== 'm/s,rad/s') return null;
+    return {
+      linear,
+      angular,
+      ...(value.units != null ? { units: 'm/s,rad/s' } : {}),
+    };
+  }
 
   function normalizeTelemetrySample(value) {
     if (!value || typeof value !== 'object') return null;
@@ -111,13 +172,85 @@
       ...(finiteNumber(raw.reward) !== null ? { reward: finiteNumber(raw.reward) } : {}),
       ...(raw.done != null ? { done: booleanValue(raw.done) } : {}),
       ...(raw.fall != null ? { fall: booleanValue(raw.fall) } : {}),
+      ...(() => {
+        const cmdVel = normalizeTelemetryTwist(raw.cmd_vel ?? raw.cmdVel);
+        return cmdVel ? { cmd_vel: cmdVel } : {};
+      })(),
+      ...(() => {
+        if (typeof raw.actionOutput !== 'string') return {};
+        const actionOutput = raw.actionOutput.trim().toLowerCase();
+        return actionOutput === 'physical-twist' || actionOutput === 'normalized-twist'
+          ? { actionOutput }
+          : {};
+      })(),
+      ...(() => {
+        const actionScale = normalizeTelemetryActionScale(raw.actionScale);
+        return actionScale ? { actionScale } : {};
+      })(),
+      ...(() => {
+        const controlHz = boundedTelemetryNumber(
+          raw.controlHz,
+          TELEMETRY_CONTROL_HZ_LIMITS.min,
+          TELEMETRY_CONTROL_HZ_LIMITS.max,
+          true,
+        );
+        return controlHz === null ? {} : { controlHz };
+      })(),
+      ...(() => {
+        const controlPeriodSeconds = boundedTelemetryNumber(
+          raw.controlPeriodSeconds,
+          TELEMETRY_CONTROL_PERIOD_LIMITS.min,
+          TELEMETRY_CONTROL_PERIOD_LIMITS.max,
+          false,
+        );
+        return controlPeriodSeconds === null ? {} : { controlPeriodSeconds };
+      })(),
     };
   }
 
+  // Keep the browser parser bounded before it calls split()/JSON.parse(). A
+  // malformed single line can otherwise allocate several copies of a very
+  // large string even when it contains no valid samples. This is a local
+  // review limit; the server's per-run ingest quota remains the source of
+  // truth for persisted evidence.
+  const MAX_TELEMETRY_IMPORT_BYTES = 32 * 1024 * 1024;
   const MAX_TELEMETRY_IMPORT_SAMPLES = 100_000;
 
+  // Count UTF-8 bytes without allocating a second encoded copy of the input.
+  // TextEncoder().encode(text) is tempting here, but it doubles peak memory
+  // precisely on the hostile input this guard is meant to reject. Lone
+  // surrogates follow the browser's UTF-8 replacement semantics (3 bytes),
+  // while a valid pair occupies 4 bytes.
+  function exceedsUtf8ByteLimit(value, maxBytes) {
+    if (!Number.isSafeInteger(maxBytes) || maxBytes < 0) return true;
+    const text = typeof value === 'string' ? value : String(value ?? '');
+    let bytes = 0;
+    for (let index = 0; index < text.length; index += 1) {
+      const code = text.charCodeAt(index);
+      if (code <= 0x7f) bytes += 1;
+      else if (code <= 0x7ff) bytes += 2;
+      else if (code >= 0xd800 && code <= 0xdbff) {
+        const next = text.charCodeAt(index + 1);
+        if (next >= 0xdc00 && next <= 0xdfff) {
+          bytes += 4;
+          index += 1;
+        } else {
+          bytes += 3;
+        }
+      } else {
+        bytes += 3;
+      }
+      if (bytes > maxBytes) return true;
+    }
+    return false;
+  }
+
   function parseTelemetryText(text) {
-    const lines = String(text || '')
+    const sourceText = String(text || '');
+    if (exceedsUtf8ByteLimit(sourceText, MAX_TELEMETRY_IMPORT_BYTES)) {
+      throw new Error(`遥测文件超过 ${MAX_TELEMETRY_IMPORT_BYTES} 字节上限，请先分段导入`);
+    }
+    const lines = sourceText
       .split(/\r?\n/)
       .map((line) => line.trim())
       .filter(Boolean);
@@ -315,11 +448,11 @@
 
   function stateClass(status) {
     const normalized = String(status || '').toLowerCase();
-    if (['ready', 'completed', 'success'].includes(normalized)) return 'state-success';
-    if (['blocked', 'queued', 'partial', 'running', 'planned'].includes(normalized)) {
+    if (['ready', 'completed', 'success', 'succeeded', 'available', 'online', 'connected', 'healthy'].includes(normalized)) return 'state-success';
+    if (['blocked', 'queued', 'pending', 'waiting', 'partial', 'running', 'planned', 'mock', 'simulated', 'degraded', 'restricted', 'loading'].includes(normalized)) {
       return 'state-partial';
     }
-    if (['failed', 'error'].includes(normalized)) return 'state-error';
+    if (['failed', 'error', 'offline', 'disconnected', 'incompatible'].includes(normalized)) return 'state-error';
     return 'state-neutral';
   }
 
@@ -328,14 +461,40 @@
       {
         queued: '排队中',
         running: '运行中',
+        pending: '待处理',
+        waiting: '等待中',
+        idle: '空闲',
         completed: '已完成',
+        succeeded: '已成功',
+        success: '成功',
         ready: '可运行',
+        available: '可用',
         planned: '已计划',
         blocked: '已阻断',
         failed: '失败',
         cancelled: '已取消',
         registered: '已登记',
         demo: '演示样例',
+        mock: '模拟',
+        simulated: '模拟',
+        real: '真实',
+        restricted: '受限',
+        reversible: '可回滚',
+        partial: '部分就绪',
+        connected: '已连接',
+        disconnected: '未连接',
+        offline: '离线',
+        online: '在线',
+        unknown: '未知',
+        compatible: '兼容',
+        incompatible: '不兼容',
+        'requires-conversion': '需要转换',
+        'needs-validation': '待验证',
+        healthy: '健康',
+        degraded: '降级',
+        stopped: '已停止',
+        loading: '加载中',
+        login_required: '需要登录',
       }[String(status || '').toLowerCase()] || String(status || '未知')
     );
   }
@@ -432,7 +591,9 @@
 
   return {
     MAX_TELEMETRY_VECTOR_VALUES,
+    MAX_TELEMETRY_IMPORT_BYTES,
     MAX_TELEMETRY_IMPORT_SAMPLES,
+    exceedsUtf8ByteLimit,
     finiteNumber,
     booleanValue,
     formatTelemetrySeconds,

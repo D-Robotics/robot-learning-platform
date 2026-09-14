@@ -36,7 +36,8 @@
   cursor: pointer;
 }
 .top-menu-item:hover { color: var(--text); background: rgba(127, 169, 255, 0.08); }
-.top-menu-item[aria-pressed="true"]::after {
+.top-menu-item[aria-pressed="true"]::after,
+.top-menu-item[aria-checked="true"]::after {
   content: "✓";
   color: var(--green-text);
   font-size: 11px;
@@ -188,6 +189,7 @@
 }
 .agent-task-card[data-run-status="completed"] { border-left-color: #74e6b0; }
 .agent-task-card[data-run-status="failed"] { border-left-color: #ff9098; }
+.agent-task-card[data-run-status="partial"] { border-left-color: #ffd36b; }
 .agent-task-card[data-run-status="blocked"] { border-left-color: #ffd36b; }
 .agent-task-head { display: flex; align-items: center; gap: 10px; }
 .agent-task-head strong { font-size: 13px; line-height: 1.35; }
@@ -204,6 +206,7 @@
 .agent-task-badge-running { border-color: rgba(255, 211, 107, 0.5); color: #ffd36b; }
 .agent-task-badge-completed { border-color: rgba(116, 230, 176, 0.5); color: #74e6b0; }
 .agent-task-badge-failed, .agent-task-badge-blocked { border-color: rgba(255, 144, 152, 0.5); color: #ff9098; }
+.agent-task-badge-partial { border-color: rgba(255, 211, 107, 0.5); color: #ffd36b; }
 .agent-task-progress {
   height: 4px;
   border-radius: 2px;

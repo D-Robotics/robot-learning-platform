@@ -24,17 +24,27 @@ import os
 import sys
 import time
 
+# This script is copied as a flat file beside board-agent-x5.py.  Resolve the
+# shared helper explicitly so direct invocation and spec-loaded tests use the
+# same private-path checks.
+_MODULE_DIR = os.path.dirname(os.path.abspath(__file__))
+if _MODULE_DIR not in sys.path:
+    sys.path.insert(0, _MODULE_DIR)
+from board_ipc import (
+    atomic_write_text,
+    ipc_path,
+    secure_read_text,
+    secure_unlink,
+    secure_append_text,
+)
+
 import rclpy
 import yaml
 from geometry_msgs.msg import Twist
 
-CMD_FILE = os.environ.get(
-    "RDK_BOARD_DRIVE_CMD_FILE", "/tmp/rdk-board-agent-drive.yaml"
-)
-READY_FILE = os.environ.get(
-    "RDK_BOARD_DRIVE_READY", "/tmp/board-drive-publisher.ready"
-)
-LOG_FILE = os.environ.get("RDK_BOARD_DRIVE_LOG", "/tmp/board-drive-publisher.log")
+CMD_FILE = ipc_path("RDK_BOARD_DRIVE_CMD_FILE", "drive-command.yaml")
+READY_FILE = ipc_path("RDK_BOARD_DRIVE_READY", "drive-publisher.ready")
+LOG_FILE = ipc_path("RDK_BOARD_DRIVE_LOG", "drive-publisher.log")
 RATE_HZ = float(os.environ.get("RDK_BOARD_DRIVE_RATE_HZ", "10"))
 COMMAND_TOPIC = os.environ.get("RDK_BOARD_DRIVE_CMD_TOPIC", "/cmd_vel").strip() or "/cmd_vel"
 if not COMMAND_TOPIC.startswith("/"):
@@ -54,16 +64,14 @@ READY_WAIT_SEC = 4.0  # max time to wait for the chassis subscription
 
 def log(msg):
     try:
-        with open(LOG_FILE, "a", encoding="utf-8") as handle:
-            handle.write(f"{time.time():.3f} pid={os.getpid()} {msg}\n")
+        secure_append_text(LOG_FILE, f"{time.time():.3f} pid={os.getpid()} {msg}\n")
     except OSError:
         pass
 
 
 def read_cmd():
     try:
-        with open(CMD_FILE, "r", encoding="utf-8") as handle:
-            data = yaml.safe_load(handle) or {}
+        data = yaml.safe_load(secure_read_text(CMD_FILE)) or {}
     except (OSError, yaml.YAMLError) as exc:
         return 0.0, 0.0, f"read-failed: {exc!r}"
     linear = ((data.get("linear") or {}).get("x")) or 0.0
@@ -99,8 +107,7 @@ def main():
             pass
         return 3
     try:
-        with open(READY_FILE, "w", encoding="utf-8") as handle:
-            handle.write(f"{os.getpid()} {time.time()}\n")
+        atomic_write_text(READY_FILE, f"{os.getpid()} {time.time()}\n")
         log(f"ready with {subscribers} subscriber(s)")
     except OSError:
         log(f"ready with {subscribers} subscriber(s) (marker write failed)")
@@ -151,7 +158,7 @@ def main():
             # SIGTERM can race the shutdown: rcl may already be torn down.
             pass
         try:
-            os.unlink(READY_FILE)
+            secure_unlink(READY_FILE)
         except OSError:
             pass
         log(f"exit after {cycles} cycles")

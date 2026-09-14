@@ -1,0 +1,259 @@
+/*
+ * Product maturity layer
+ *
+ * This file is intentionally small and loaded last.  It gives the existing
+ * workbench a stable visual language for workspace context, explicit blocked
+ * states, and recoverable connection errors without changing the legacy
+ * component tokens.
+ */
+
+/* ---- Project context --------------------------------------------------- */
+.sidebar-project-context {
+  display: grid;
+  gap: 4px;
+  margin-top: 9px;
+  padding-top: 9px;
+  border-top: 1px solid var(--line);
+}
+.sidebar-project-context > label {
+  color: var(--muted);
+  font-size: 10px;
+  line-height: 1.2;
+}
+.sidebar-project-context-row {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+}
+.sidebar-project-context-row select {
+  flex: 1 1 auto;
+  min-width: 0;
+  margin-top: 0;
+}
+.sidebar-project-add {
+  display: grid;
+  place-items: center;
+  flex: 0 0 auto;
+  width: 27px;
+  height: 27px;
+  padding: 0;
+  border: 1px solid var(--line-strong);
+  border-radius: 7px;
+  color: var(--accent-text);
+  background: transparent;
+  cursor: pointer;
+  font: inherit;
+  font-size: 16px;
+  line-height: 1;
+}
+.sidebar-project-add:hover,
+.sidebar-project-add:focus-visible {
+  border-color: var(--accent);
+  background: rgba(255, 121, 24, .1);
+  outline: none;
+}
+.sidebar-project-add:disabled { opacity: .45; cursor: wait; }
+.sidebar-project-context > small {
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 9px;
+  line-height: 1.35;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ---- Recoverable workspace connection state --------------------------- */
+.workspace-status-banner {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 0 0 14px;
+  padding: 10px 12px;
+  border: 1px solid var(--line-strong);
+  border-radius: 10px;
+  background: var(--panel);
+}
+.workspace-status-icon {
+  display: grid;
+  place-items: center;
+  flex: 0 0 auto;
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  color: var(--orange);
+  background: rgba(255,194,103,.14);
+  font-weight: 700;
+}
+.workspace-status-copy {
+  display: grid;
+  min-width: 0;
+  gap: 2px;
+  flex: 1 1 auto;
+}
+.workspace-status-copy strong {
+  color: var(--text);
+  font-size: 12px;
+  line-height: 1.3;
+}
+.workspace-status-copy span {
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.4;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.workspace-status-banner.is-loading { border-color: rgba(101,169,255,.32); }
+.workspace-status-banner.is-loading .workspace-status-icon {
+  color: var(--blue);
+  background: rgba(101,169,255,.14);
+}
+.workspace-status-banner.is-error { border-color: rgba(255,116,124,.45); }
+.workspace-status-banner.is-error .workspace-status-icon {
+  color: var(--red);
+  background: rgba(255,116,124,.14);
+}
+.workspace-status-banner.is-success { border-color: rgba(85,217,154,.38); }
+.workspace-status-banner.is-success .workspace-status-icon {
+  color: var(--green);
+  background: rgba(85,217,154,.14);
+}
+
+/* ---- Explicit action blocking ---------------------------------------- */
+.action-block-hint,
+.deploy-action-hint {
+  display: block;
+  margin: 9px 0 0;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.5;
+}
+.action-block-hint[data-state="blocked"],
+.deploy-action-hint[data-state="blocked"] { color: var(--orange); }
+.action-block-hint[data-state="ready"] { color: var(--green-text); }
+button:disabled { cursor: not-allowed; }
+
+/* ---- Status surfaces -------------------------------------------------- */
+.status-card[data-state="ready"] { border-color: rgba(85,217,154,.35); }
+.status-card[data-state="partial"] { border-color: rgba(255,194,103,.35); }
+.status-card[data-state="blocked"],
+.status-card[data-state="error"] { border-color: rgba(255,116,124,.38); }
+.status-card[data-state]::after {
+  display: block;
+  width: 6px;
+  height: 6px;
+  margin: 8px 0 0 auto;
+  border-radius: 50%;
+  background: var(--muted);
+  content: '';
+}
+.status-card[data-state="ready"]::after { background: var(--green); }
+.status-card[data-state="partial"]::after { background: var(--orange); }
+.status-card[data-state="blocked"]::after,
+.status-card[data-state="error"]::after { background: var(--red); }
+
+.board-empty {
+  display: grid;
+  gap: 7px;
+  justify-items: start;
+  margin: 0;
+  padding: 14px;
+  border: 1px dashed var(--line-strong);
+  border-radius: 9px;
+  background: var(--panel-soft);
+}
+.board-empty strong { color: var(--text); font-size: 13px; }
+.board-empty span { color: var(--muted); font-size: 11px; line-height: 1.45; }
+.project-empty { display: grid; gap: 7px; justify-items: start; margin: 0; padding: 12px; border: 1px dashed var(--line-strong); border-radius: 9px; background: var(--panel-soft); }
+.project-empty strong { color: var(--text); font-size: 12px; }
+.project-empty span { color: var(--muted); font-size: 11px; line-height: 1.45; }
+.telemetry-empty { display: grid; gap: 7px; justify-items: start; margin: 0; padding: 14px; border: 1px dashed var(--line-strong); border-radius: 9px; background: var(--panel-soft); }
+.telemetry-empty strong { color: var(--text); font-size: 13px; }
+.telemetry-empty span { color: var(--muted); font-size: 11px; line-height: 1.45; }
+.telemetry-empty-actions { display: flex; flex-wrap: wrap; gap: 7px; }
+
+/* Release steps expose the same state vocabulary to sighted and assistive
+ * users. The base IA styles own spacing and typography; this layer only adds
+ * the state border so a blocked gate is visible without opening the details. */
+.release-step[data-state="ready"] { border-color: rgba(85,217,154,.42); }
+.release-step[data-state="current"] { border-color: rgba(101,169,255,.42); }
+.release-step[data-state="blocked"] { border-color: rgba(255,194,103,.38); }
+.release-step[data-state="failed"] { border-color: rgba(255,116,124,.48); }
+.release-step[data-state="locked"] { opacity: .72; }
+
+.platform-score-item[data-state="ready"] { border-color: rgba(85,217,154,.35); }
+.platform-score-item[data-state="partial"] { border-color: rgba(255,194,103,.35); }
+.platform-score-item[data-state="blocked"] { border-color: rgba(255,116,124,.3); }
+.platform-score-item[data-state="partial"] i::after { background: var(--orange); }
+.platform-score-item[data-state="blocked"] i::after { background: var(--red); }
+
+/* ---- Artifact and record rows ---------------------------------------- */
+.run-detail-title-row { display: flex; align-items: center; flex-wrap: wrap; gap: 9px; }
+.run-detail-title-row h2 { margin: 0; }
+.artifact-row { align-items: flex-start; }
+.artifact-row-main { display: grid; min-width: 0; gap: 3px; }
+.artifact-row .artifact-state,
+.history-status { flex: 0 0 auto; }
+.artifact-state {
+  display: inline-flex;
+  align-items: center;
+  min-height: 21px;
+  padding: 2px 7px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  color: var(--muted-strong);
+  font-size: 10px;
+  line-height: 1.2;
+  white-space: nowrap;
+}
+.artifact-state.state-success { border-color: rgba(85,217,154,.4); color: var(--green-text); }
+.artifact-state.state-partial { border-color: rgba(255,194,103,.4); color: var(--orange); }
+.artifact-state.state-error { border-color: rgba(255,116,124,.4); color: var(--red); }
+.artifact-row[data-state="blocked"] .artifact-name { color: var(--orange); }
+.history-status.state-success { color: var(--green-text); }
+.history-status.state-partial { color: var(--orange); }
+.history-status.state-error { color: var(--red); }
+
+/* Board policy lifecycle evidence stays visible after a run stops. */
+.station-policy-session {
+  display: grid;
+  gap: 3px;
+  margin-top: 10px;
+  padding: 9px 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel-soft);
+}
+.station-policy-session strong { color: var(--text); font-size: 11px; }
+.station-policy-session span,
+.station-policy-session small { color: var(--muted); font-size: 10px; line-height: 1.45; }
+.station-policy-session[data-state="running"] { border-color: rgba(85,217,154,.42); }
+.station-policy-session[data-state="running"] span { color: var(--green-text); }
+.station-policy-session[data-state="stopped"] { border-color: rgba(101,169,255,.35); }
+.station-policy-session[data-state="stopped"] span { color: var(--blue); }
+.station-policy-session[data-state="waiting"] { border-style: dashed; }
+
+/* ---- Project dialog --------------------------------------------------- */
+.project-dialog { width: min(520px, calc(100vw - 32px)); }
+.project-dialog form { display: grid; gap: 12px; }
+.project-dialog-intro,
+.project-dialog-scope,
+.project-dialog-error { margin: 0; color: var(--muted); font-size: 12px; line-height: 1.55; }
+.project-dialog-scope { padding: 9px 10px; border: 1px solid var(--line); border-radius: 8px; background: rgba(255,255,255,.03); }
+.project-dialog-error { color: var(--red); }
+.project-dialog-field { display: grid; gap: 5px; color: var(--muted-strong); font-size: 11px; }
+.project-dialog-field input,
+.project-dialog-field textarea { width: 100%; box-sizing: border-box; }
+.project-dialog-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 4px; }
+
+@media (max-width: 720px) {
+  .workspace-status-banner { align-items: flex-start; }
+  .workspace-status-copy span { white-space: normal; }
+  .workspace-status-banner .button { align-self: center; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .workspace-status-banner,
+  .sidebar-project-add { transition: none !important; }
+}

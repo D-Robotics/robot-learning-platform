@@ -7,6 +7,14 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..')
 const standalone = fs.readFileSync(path.join(root, 'services/sim2real-web/server.ts'), 'utf8');
 const businessRoutes = fs.readFileSync(path.join(root, 'server/routes/sim2real-routes.ts'), 'utf8');
 const copyAssets = fs.readFileSync(path.join(root, 'scripts/copy-server-assets.mjs'), 'utf8');
+const originbotHtml = fs.readFileSync(
+  path.join(root, 'services/sim2real-web/public/originbot-sim/index.html'),
+  'utf8',
+);
+const originbotSim = fs.readFileSync(
+  path.join(root, 'services/sim2real-web/public/originbot-sim/sim.js'),
+  'utf8',
+);
 const boardAgent = fs.readFileSync(
   path.join(root, 'services/sim2real-web/local-board-agent.mjs'),
   'utf8',
@@ -28,6 +36,20 @@ assert.doesNotMatch(standalone, /from ['"].*server\/(?:sso|storage|agent-runtime
 assert.doesNotMatch(businessRoutes, /from ['"].*server\/(?:sso|storage|agent-runtime)\.js['"]/);
 assert.match(adapters, /Never infer an identity from a client-controlled header/);
 assert.match(copyAssets, /services.*sim2real-web.*public/);
+assert.match(originbotHtml, /MuJoCo 物理引擎 · 20 Hz 控制/);
+assert.match(originbotHtml, /<script\s+src="\.\/sim\.js\?v=\d+"/);
+assert.match(originbotHtml, /id="scan-readout"/);
+assert.match(originbotHtml, /id="depth-readout"/);
+assert.match(originbotSim, /const API_ROOT = `\$\{mujocoBase\}\/api`/);
+assert.match(originbotSim, /buildObs: \(\) => observationOf/);
+assert.match(originbotSim, /source: 'originbot-sim'/);
+assert.match(originbotSim, /telemetry: telemetryOf/);
+assert.match(originbotSim, /aria-pressed/);
+assert.match(
+  standalone,
+  /normalizedPath\.includes\(`\$\{path\.sep\}originbot-sim\$\{path\.sep\}`\)/,
+  'OriginBot assets must revalidate after a release',
+);
 assert.match(boardAgent, /actuatorControl: false/);
 assert.match(boardAgent, /never executes shell|never opens SSH|never opens SSH/);
 assert.match(boardAgent, /BOARD_AGENT_READ_ONLY/);
@@ -68,8 +90,13 @@ assert.match(
 );
 assert.match(
   stationProxy,
-  /cookie: options\.cookieHeader/,
-  'only the browser request cookie may authorize Studio bridge access',
+  /const cookie = safeStudioBridgeCookie\(options\.cookieHeader\)/,
+  'the Studio bridge must sanitize the browser request cookie before forwarding',
+);
+assert.match(
+  stationProxy,
+  /cookie,\s*origin:/,
+  'only the sanitized browser request cookie may authorize Studio bridge access',
 );
 
 // Web-managed device connections (RDK Studio 网页版-style 添加设备) must keep

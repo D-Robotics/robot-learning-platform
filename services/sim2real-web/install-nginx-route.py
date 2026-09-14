@@ -7,8 +7,8 @@ CONFIG = Path(os.environ.get("RDK_SIM2REAL_NGINX_CONFIG", "/etc/nginx/conf.d/rdk
 MARKER = "    server_name rdkstudio.d-robotics.cc;\n"
 ROUTE = """
     # BEGIN RDK_SIM2REAL_MANAGED_ROUTE
-    location = /sim2real { return 301 /sim2real/; }
-    location /sim2real/ {
+    location = /robotics-learning { return 301 /robotics-learning/; }
+    location /robotics-learning/ {
         proxy_pass http://127.0.0.1:18102/;
         proxy_http_version 1.1;
         proxy_set_header Host $host;
@@ -25,8 +25,8 @@ ROUTE = """
 """
 
 REQUIRED_ROUTE_PARTS = (
-    "location = /sim2real { return 301 /sim2real/; }",
-    "location /sim2real/ {",
+    "location = /robotics-learning { return 301 /robotics-learning/; }",
+    "location /robotics-learning/ {",
     "proxy_pass http://127.0.0.1:18102/;",
     "proxy_http_version 1.1;",
     "proxy_set_header X-Forwarded-Proto $scheme;",
@@ -44,7 +44,7 @@ def route_matches(content: str) -> bool:
     ask for a reviewed migration instead of claiming success.
     """
     exact_location_count = sum(
-        line.strip() == "location /sim2real/ {" for line in content.splitlines()
+        line.strip() == "location /robotics-learning/ {" for line in content.splitlines()
     )
     return exact_location_count == 1 and all(
         part in content for part in REQUIRED_ROUTE_PARTS
@@ -92,12 +92,12 @@ def main() -> None:
     block = target_server_block(content)
     if not block:
         raise SystemExit("expected rdkstudio HTTPS server block was not found or is unbalanced")
-    if any(line.strip() == "location /sim2real/ {" for line in content.splitlines()):
+    if any(line.strip() == "location /robotics-learning/ {" for line in content.splitlines()):
         if route_matches(block):
             print("sim2real route already present and validated")
             return
         raise SystemExit(
-            "an existing /sim2real/ route does not match the managed block; "
+            "an existing /robotics-learning/ route does not match the managed block; "
             "review and migrate it manually"
         )
     mode = CONFIG.stat().st_mode & 0o7777

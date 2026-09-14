@@ -1,11 +1,28 @@
 const CONTRACT_ID = 'microduck-policy-v1';
 const SIMULATOR_PATH = '/mujoco/microduck/';
-const BASE_PATH = window.location.pathname.startsWith('/sim2real') ? '/sim2real' : '';
+// Keep manifest imports aligned with the server's 2 MiB JSON body limit. The
+// telemetry limit is owned by telemetry-core.js so the parser and file reader
+// cannot drift apart.
+const MAX_MANIFEST_IMPORT_BYTES = 2 * 1024 * 1024;
+const BASE_PATH = (() => {
+  const configured =
+    typeof document !== 'undefined'
+      ? document.querySelector('meta[name="rdk-sim2real-base-path"]')?.getAttribute('content')
+      : '';
+  if (configured && configured !== '__RDK_SIM2REAL_BASE_PATH__') {
+    const normalized = String(configured).trim().replace(/\/+$/, '');
+    if (/^\/[A-Za-z0-9._~-]+(?:\/[A-Za-z0-9._~-]+)*$/.test(normalized)) return normalized;
+    if (!normalized) return '';
+  }
+  // File:// demos and older cached HTML keep the historical heuristic as a
+  // compatibility fallback.
+  return window.location.pathname.startsWith('/sim2real') ? '/sim2real' : '';
+})();
 
 function appRelativePath(value) {
   const raw = String(value || '').trim();
   if (!raw || raw.startsWith('//') || /^https?:\/\//i.test(raw)) return raw;
-  if (BASE_PATH && raw.startsWith('/mujoco/')) return BASE_PATH + raw;
+  if (BASE_PATH && (raw.startsWith('/mujoco/') || raw.startsWith('/originbot-sim/'))) return BASE_PATH + raw;
   return raw;
 }
 const PRODUCT_PROFILES = Object.freeze({
@@ -96,6 +113,28 @@ function readNotifyPreference() {
   }
 }
 
+const WORKSPACE_PREF_KEY = 'rdk-duck-lab-workspace-context';
+
+function readWorkspacePreference(field) {
+  try {
+    const raw = window.localStorage?.getItem(WORKSPACE_PREF_KEY);
+    if (!raw) return '';
+    const parsed = JSON.parse(raw);
+    return typeof parsed?.[field] === 'string' ? parsed[field].trim() : '';
+  } catch {
+    return '';
+  }
+}
+
+// Project selection is a workspace preference, while the project records
+// themselves remain account-scoped on the server.  Keep only the opaque id in
+// local storage so a renamed project or a different account cannot leak stale
+// labels into the first paint; renderProjectContext() validates it against the
+// freshly loaded project list before showing it as selected.
+function readProjectPreference() {
+  return readWorkspacePreference('projectId');
+}
+
 // The terminal/active status vocabularies live in telemetry-core.js; app.js
 // only keeps the delegation seam so call sites stay unchanged.
 function isTerminalRunStatus(status) {
@@ -135,6 +174,7 @@ function syncNotifyToggle() {
     state.notifyEnabled && typeof Notification !== 'undefined' && Notification.permission === 'granted';
   button.textContent = state.notifyEnabled ? '通知开' : '通知关';
   button.setAttribute('aria-pressed', state.notifyEnabled ? 'true' : 'false');
+  button.setAttribute('aria-checked', state.notifyEnabled ? 'true' : 'false');
   button.classList.toggle('is-active', granted);
 }
 
@@ -174,6 +214,7 @@ function renderContextLive() {
   const activeRuns = runsForCurrentModel().filter((run) => isActiveRunStatus(run.status));
   const robogo = state.overview?.integrations?.robogo || {};
   const localRunner = state.overview?.integrations?.simulator?.local || {};
+  const project = selectedProject();
   let backendLabel = '检查中';
   if (state.authRequired) backendLabel = '需要登录';
   else if (state.serviceError) backendLabel = '服务不可用';
@@ -181,8 +222,16 @@ function renderContextLive() {
   else if (localRunner.available === true && localRunner.healthy === true) backendLabel = '本地就绪';
   else if (localRunner.available === true) backendLabel = '本地已配置';
   setText(
+    'context-live-project',
+    project ? projectDisplayName(project) : state.projectsLoaded && state.projects?.length ? '全部项目' : '检查中',
+  );
+  setText(
     'context-live-model',
     model ? modelLabel(model) : (state.overview?.models?.length ? '未选择' : '暂无模型'),
+  );
+  setText(
+    'context-live-task',
+    selectedTask().label,
   );
   setText(
     'context-live-device',
@@ -202,13 +251,16 @@ const state = {
   overview: null,
   workspaceSummary: null,
   projects: [],
+  projectsLoaded: false,
+  projectsLoadError: false,
   datasets: [],
+  datasetsLoaded: false,
   productProfiles: null,
   model: null,
   compatibility: [],
   validation: null,
-  selectedModelId: '',
-  selectedDeviceId: '',
+  selectedModelId: readWorkspacePreference('modelId'),
+  selectedDeviceId: readWorkspacePreference('deviceId'),
   selectedComputeResourceId: '',
   computeResourceEditingId: '',
   activeDeployment: null,
@@ -218,13 +270,23 @@ const state = {
   authNoticeShown: false,
   productId: readProductPreference(),
   taskId: readTaskPreference(),
+  projectId: readProjectPreference(),
   notifyEnabled: readNotifyPreference(),
   notifiedRunIds: new Set(),
   confirmRunResolve: null,
   recordsTab: 'all',
+  trainModule: (() => {
+    try {
+      const value = window.localStorage?.getItem('rdk-lab-train-module');
+      return ['run', 'contract', 'resources'].includes(value) ? value : 'run';
+    } catch {
+      return 'run';
+    }
+  })(),
   recordsQuery: '',
   selectedRecord: null,
   telemetry: null,
+  replay: { runId: '', frames: [], index: 0, timer: null, speed: 1, loaded: false },
   publishingTelemetry: false,
   runSubmitting: false,
   deploymentSubmitting: false,
@@ -238,6 +300,8 @@ const state = {
   },
   station: {
     ready: false,
+    offline: false,
+    offlineReason: '',
     mock: false,
     device: null,
     statusReader: null,
@@ -247,11 +311,10 @@ const state = {
     cameraOn: false,
     log: [],
     deviceManagerWired: false,
+    bridgePollTimer: null,
     switchWired: false,
   },
 };
-
-const WORKSPACE_PREF_KEY = 'rdk-duck-lab-workspace-context';
 
 function saveWorkspaceContext() {
   try {
@@ -260,6 +323,7 @@ function saveWorkspaceContext() {
       JSON.stringify({
         productId: state.productId,
         taskId: state.taskId,
+        projectId: state.projectId,
         modelId: state.selectedModelId,
         deviceId: state.selectedDeviceId,
         savedAt: new Date().toISOString(),
@@ -278,14 +342,23 @@ function workspaceSummaryData() {
   const modelIds = currentModelIds();
   const allRuns = state.overview?.runs || [];
   const allDeployments = state.overview?.deployments || [];
-  const runs = allRuns.filter((run) => modelIds.has(run.modelId));
-  const deployments = allDeployments.filter((deployment) => modelIds.has(deployment.modelId));
+  const runs = allRuns.filter((run) => modelIds.has(run.modelId) && projectIncludesRecord(run));
+  const deployments = allDeployments.filter(
+    (deployment) => modelIds.has(deployment.modelId) && projectIncludesRecord(deployment),
+  );
   const latestRun = runs.slice().sort((a, b) => String(b.createdAt || '').localeCompare(String(a.createdAt || '')))[0] || null;
   const latestDeployment = deployments.slice().sort((a, b) => String(b.updatedAt || b.createdAt || '').localeCompare(String(a.updatedAt || a.createdAt || '')))[0] || null;
   const productModels = (state.overview?.models || []).filter(
-    (model) => model.manifest?.robot?.id === state.productId,
+    (model) =>
+      model.manifest?.robot?.id === state.productId &&
+      (!projectModelIds() || projectModelIds().has(String(model.id))),
   );
-  const datasets = (state.datasets || []).filter((dataset) => !dataset.modelId || modelIds.has(dataset.modelId));
+  const linkedDatasetIds = projectDatasetIds();
+  const datasets = (state.datasets || []).filter(
+    (dataset) =>
+      (!linkedDatasetIds || linkedDatasetIds.has(String(dataset.id))) &&
+      (!dataset.modelId || modelIds.has(dataset.modelId)),
+  );
   return {
     counts: {
       models: productModels.length,
@@ -300,6 +373,81 @@ function workspaceSummaryData() {
     latestDeployment,
     datasets,
   };
+}
+
+function renderPlatformScorecard() {
+  const grid = $('platform-scorecard-grid');
+  const total = $('platform-score-total');
+  if (!grid || !total) return;
+  const model = selectedModel();
+  const telemetry = currentTelemetry();
+  const runs = runsForCurrentModel();
+  const deployments = deploymentsForCurrentModel();
+  const latestRun = runs.slice().sort((a, b) => String(b.createdAt || '').localeCompare(String(a.createdAt || '')))[0];
+  const latestDeployment = deployments.slice().sort((a, b) => String(b.updatedAt || b.createdAt || '').localeCompare(String(a.updatedAt || a.createdAt || '')))[0];
+  const local = state.overview?.integrations?.simulator?.local || {};
+  const robogo = state.overview?.integrations?.robogo || {};
+  const hasContract = Boolean(model?.manifest?.contract?.id);
+  const hasArtifact = Boolean(model?.manifest?.artifacts?.some((artifact) => artifact?.ref));
+  const contractState = hasContract && hasArtifact ? 'ready' : model ? 'partial' : 'blocked';
+  const trainingComplete = Boolean(
+    latestRun && ['completed', 'ready'].includes(String(latestRun.status || '').toLowerCase()),
+  );
+  const trainingConfigured = Boolean(
+    latestRun || local.available === true || robogo.state === 'ready',
+  );
+  const trainingState = trainingComplete ? 'ready' : trainingConfigured ? 'partial' : 'blocked';
+  const evaluationExists = Boolean(
+    telemetry?.summary || latestRun?.evaluation || latestRun?.taskEvaluation,
+  );
+  const evaluationState = hasReleaseGradeEvidence(telemetry, latestRun)
+    ? 'ready'
+    : evaluationExists
+      ? 'partial'
+      : 'blocked';
+  const deploymentVerified = Boolean(
+    latestDeployment?.verification || latestDeployment?.releaseGate,
+  );
+  const deploymentState = deploymentVerified
+    ? 'ready'
+    : latestDeployment
+      ? 'partial'
+      : 'blocked';
+  const project = selectedProject();
+  const traceabilityState = project
+    ? (projectModelIds(project)?.size || projectDatasetIds(project)?.size || latestRun?.projectId === project.id)
+      ? 'ready'
+      : 'partial'
+    : state.projects?.length || state.datasets?.length || latestRun?.projectId
+      ? 'partial'
+      : 'blocked';
+  const checks = [
+    ['契约与制品', contractState, contractState === 'ready' ? '输入输出和受管引用已登记' : model ? '契约或制品引用还不完整' : '先登记 manifest'],
+    ['训练执行', trainingState, trainingComplete ? statusLabel(latestRun.status) : trainingConfigured ? '后端已配置，等待完成 Run' : '等待 runner'],
+    ['Sim2Real 评测', evaluationState, evaluationState === 'ready' ? '受信证据可用于发布' : evaluationExists ? '证据已保存 · 来源未验证' : '导入遥测或轨迹'],
+    ['设备发布', deploymentState, deploymentState === 'ready' ? statusLabel(latestDeployment.status) : latestDeployment ? '预检计划已生成，等待结果' : '先做只读预检'],
+    ['项目可追溯', traceabilityState, traceabilityState === 'ready' ? '项目与数据已关联' : project ? '项目已创建，等待绑定资源' : '建立项目或数据集'],
+  ];
+  const points = checks.reduce((sum, item) => sum + (item[1] === 'ready' ? 2 : item[1] === 'partial' ? 1 : 0), 0);
+  total.textContent = (points / 2).toFixed(1);
+  grid.replaceChildren();
+  for (const [label, stateName, detail] of checks) {
+    const item = document.createElement('article');
+    item.className = `platform-score-item is-${stateName}`;
+    item.dataset.state = stateName;
+    const title = document.createElement('strong');
+    title.textContent = String(label);
+    const copy = document.createElement('span');
+    copy.textContent = String(detail);
+    const bar = document.createElement('i');
+    bar.style.setProperty('--score', stateName === 'ready' ? '100%' : stateName === 'partial' ? '58%' : '18%');
+    item.append(title, copy, bar);
+    grid.append(item);
+  }
+  const note = $('platform-scorecard-note');
+  if (note) note.textContent = points === 10
+    ? '软件闭环已具备完整证据；真实 X5 运动安全记录仍需现场验收。'
+    : '完成上面的下一步即可提高软件门槛；真实 X5 运动安全记录和签名制品会单独计入现场验收。';
 }
 
 function renderProjectWorkspace() {
@@ -330,13 +478,20 @@ function renderProjectWorkspace() {
   }
   const recentRoot = $('workspace-recent-list');
   if (recentRoot) {
+    const project = selectedProject();
+    setText(
+      'workspace-recent-caption',
+      project ? `${projectDisplayName(project)} · 按项目筛选` : '按当前项目筛选',
+    );
     const recent = [
       ...(runsForCurrentModel() || []).map((item) => Object.assign({ kindLabel: '运行' }, item)),
       ...(deploymentsForCurrentModel() || []).map((item) => Object.assign({ kindLabel: '部署' }, item)),
     ].sort((a, b) => String(b.createdAt || b.updatedAt || '').localeCompare(String(a.createdAt || a.updatedAt || ''))).slice(0, 3);
     recentRoot.replaceChildren();
     if (!recent.length) {
-      recentRoot.innerHTML = '<span class="empty-inline">还没有活动。完成一次仿真、训练或预检后会显示在这里。</span>';
+      recentRoot.innerHTML = project // escape-audit:allow both branches are fixed local literals
+        ? '<div class="empty-state project-empty"><strong>项目还没有活动</strong><span>先在训练页绑定模型，再开始仿真、强化学习训练或只读预检。</span><button type="button" class="button button-primary button-small" data-workspace-view="train">去准备模型 →</button></div>'
+        : '<span class="empty-inline">还没有活动。完成一次仿真、训练或预检后会显示在这里。</span>';
     } else {
       for (const item of recent) {
         const row = document.createElement('button');
@@ -361,11 +516,49 @@ function renderDeploymentTimeline() {
   const deployment = state.activeDeployment || deploymentsForCurrentModel().find((item) => item.modelId === model?.id && item.deviceId === device?.id);
   const latest = latestRun();
   const evidence = currentTelemetry();
+  const releaseGradeEvidence = hasReleaseGradeEvidence(evidence, latest);
+  const trainingState = releaseGradeEvidence
+    ? 'done'
+    : evidence || latest?.mock === true
+      ? 'attention'
+      : latest?.status === 'completed'
+        ? 'done'
+        : latest
+          ? 'attention'
+          : 'pending';
+  const trainingDetail = releaseGradeEvidence
+    ? '受信遥测已绑定当前工作区'
+    : evidence
+      ? '证据已导入 · 来源未验证'
+      : latest?.mock === true
+        ? '协议演示完成 · 不可作为真实评测'
+        : latest
+          ? statusLabel(latest.status)
+          : '需要一次训练或评测 Run';
+  const deviceState = device?.status === 'connected' || device?.status === 'ready' ? 'done' : device ? 'attention' : 'pending';
+  const deviceDetail = device ? `${device.name || device.id} · ${device.status || '待连接'}${device.status === 'connected' ? ' · 仍需验证 BoardAgent 心跳' : ''}` : '尚未选择目标设备';
+  const preflightState = deployment && ['ready', 'completed'].includes(String(deployment.status || '')) ? 'done' : deployment ? 'attention' : 'pending';
+  const approvalState = deployment?.approval?.status || 'pending';
+  const approvalDetail = deployment
+    ? approvalState === 'approved'
+      ? '人工审批已通过 · 等待受控 BoardAgent 执行'
+      : approvalState === 'rejected'
+        ? `人工审批已拒绝${deployment.approval?.note ? ' · ' + deployment.approval.note : ''}`
+        : '等待 owner/admin 人工审批；网页不会直接启动执行器'
+    : '需要先生成通过证据门的 Canary / Live 计划';
+  const approvalTimelineState = !deployment
+    ? 'pending'
+    : approvalState === 'approved'
+      ? 'done'
+      : approvalState === 'rejected'
+        ? 'attention'
+        : 'pending';
   const entries = [
     { label: '模型契约', detail: model ? `${modelLabel(model)} 已选定` : '尚未选择模型', state: model ? 'done' : 'pending' },
-    { label: '训练 / 评测证据', detail: evidence ? '遥测已绑定当前工作区' : latest ? statusLabel(latest.status) : '等待运行结果', state: evidence ? 'done' : latest?.status === 'completed' ? 'attention' : 'pending' },
-    { label: '目标板卡', detail: device ? `${device.name || device.id} · ${device.status || '待连接'}` : '尚未选择板卡', state: device ? 'done' : 'pending' },
-    { label: '只读预检', detail: deployment ? statusLabel(deployment.status) : '生成计划后执行', state: deployment && ['ready', 'completed'].includes(String(deployment.status || '')) ? 'done' : deployment ? 'attention' : 'pending' },
+    { label: '训练与评测', detail: trainingDetail, state: trainingState },
+    { label: '目标设备', detail: deviceDetail, state: deviceState },
+    { label: '只读预检', detail: deployment ? statusLabel(deployment.status) : '生成计划后执行；不会启动执行器', state: preflightState },
+    { label: 'Canary / Live', detail: approvalDetail, state: approvalTimelineState },
   ];
   root.replaceChildren();
   for (const entry of entries) {
@@ -412,13 +605,45 @@ function setText(id, value) {
   if (node) node.textContent = String(value ?? '');
 }
 
+function setStatusSurface(node, stateName, label) {
+  if (!node) return;
+  const allowed = ['ready', 'partial', 'blocked', 'error', 'waiting'];
+  const normalized = allowed.includes(stateName) ? stateName : 'waiting';
+  node.dataset.state = normalized;
+  const actionLabel = node.dataset.workspaceView ? '；按 Enter 打开设备管理' : '';
+  node.setAttribute('aria-label', `${label || node.getAttribute('aria-label') || '状态'}${actionLabel}`);
+}
+
+function setActionHint(id, stateName, message) {
+  const node = $(id);
+  if (!node) return;
+  const normalized = ['ready', 'blocked', 'waiting', 'error'].includes(stateName)
+    ? stateName
+    : 'waiting';
+  node.dataset.state = normalized;
+  node.textContent = String(message || '');
+}
+
+let lastToastKey = ''; let lastToastAt = 0;
 function showToast(message, tone = 'normal') {
   const region = $('toast-region');
   if (!region) return;
   const toast = document.createElement('div');
   toast.className =
     'toast' + (tone === 'error' ? ' toast-error' : tone === 'success' ? ' toast-success' : '');
-  toast.textContent = message;
+  const raw = String(message ?? '');
+  const toastKey = `${tone}:${raw}`;
+  const now = Date.now();
+  if (toastKey === lastToastKey && now - lastToastAt < 2500) return;
+  lastToastKey = toastKey; lastToastAt = now;
+  const translated = raw
+    .replace(/API path does not exist\.?/gi, 'API 路径不存在。')
+    .replace(/Request failed \((\d+)\)/gi, '请求失败（$1）。')
+    .replace(/Failed to fetch/gi, '网络连接失败，请检查服务是否在线。')
+    .replace(/NetworkError/gi, '网络连接失败，请检查网络。')
+    .replace(/Unauthorized|Authentication required/gi, '请先登录后再继续。')
+    .replace(/Timeout|timed out/gi, '请求超时，请检查设备或服务连接。');
+  toast.textContent = translated;
   region.append(toast);
   window.setTimeout(() => toast.remove(), 4800);
 }
@@ -504,7 +729,10 @@ function setAuthMethod(method) {
   if (!AUTH_METHOD_FIELDS[method]) return;
   authMethod = method;
   document.querySelectorAll('.auth-login-tab').forEach((tab) => {
-    tab.classList.toggle('is-active', tab.dataset.authMethod === method);
+    const active = tab.dataset.authMethod === method;
+    tab.classList.toggle('is-active', active);
+    tab.setAttribute('aria-selected', active ? 'true' : 'false');
+    tab.setAttribute('tabindex', active ? '0' : '-1');
   });
   const visible = new Set(AUTH_METHOD_FIELDS[method]);
   document.querySelectorAll('[data-auth-field]').forEach((field) => {
@@ -619,6 +847,34 @@ function syncServicePill() {
   servicePill.classList.toggle('is-error', error);
 }
 
+function setWorkspaceStatus(kind, title, message, { retry = false } = {}) {
+  const banner = $('workspace-status-banner');
+  if (!banner) return;
+  const normalized = ['loading', 'error', 'warning', 'success'].includes(kind) ? kind : 'warning';
+  banner.hidden = false;
+  banner.dataset.state = normalized;
+  banner.setAttribute('role', normalized === 'error' ? 'alert' : 'status');
+  banner.classList.remove('is-loading', 'is-error', 'is-warning', 'is-success');
+  banner.classList.add(`is-${normalized}`);
+  setText('workspace-status-title', title || '工作区状态');
+  setText('workspace-status-message', message || '');
+  const button = $('workspace-status-retry');
+  if (button) {
+    button.hidden = !retry;
+    button.disabled = state.loading;
+  }
+  const icon = $('workspace-status-icon');
+  if (icon) icon.textContent = normalized === 'success' ? '✓' : normalized === 'loading' ? '…' : '!';
+}
+
+function clearWorkspaceStatus() {
+  const banner = $('workspace-status-banner');
+  if (!banner) return;
+  banner.hidden = true;
+  banner.removeAttribute('data-state');
+  banner.setAttribute('role', 'status');
+}
+
 class ApiError extends Error {
   constructor(message, status, payload) {
     super(message);
@@ -626,6 +882,20 @@ class ApiError extends Error {
     this.status = status;
     this.payload = payload;
   }
+}
+function friendlyError(error, fallback = '操作失败') {
+  const code = error?.payload?.error || error?.payload?.code;
+  const map = {
+    SIM2REAL_INVALID_MANIFEST: '模型清单不符合要求，请先点击“校验清单”查看具体问题。',
+    SIM2REAL_MODEL_EXISTS: '这个模型版本已经登记过了。',
+    SIM2REAL_PROJECT_EXISTS: '当前账号已有相同项目标识，请换一个项目标识。',
+    SIM2REAL_INVALID_PROJECT: '项目名称或项目标识不符合要求，请检查后重试。',
+    SIM2REAL_PROJECT_REFERENCE_INVALID: '项目引用的模型或数据集不可用，请刷新后重试。',
+    SIM2REAL_AUTH_REQUIRED: '请先登录后再执行此操作。',
+  };
+  const raw = error instanceof Error ? error.message : fallback;
+  if (map[code]) return map[code];
+  return raw.replace(/contract\.jointCount must be a positive number/gi, '关节数量必须是大于 0 的数字').replace(/must be a positive number/gi, '必须是大于 0 的数字').replace(/is required/gi, '为必填项');
 }
 
 async function request(path, options = {}) {
@@ -667,6 +937,14 @@ function setLoading(value) {
   document.body.classList.toggle('is-loading', value);
   $('main-content')?.setAttribute('aria-busy', value ? 'true' : 'false');
   $('refresh-button')?.toggleAttribute('disabled', value);
+  // `loadOverview()` renders the workspace while its request is still in
+  // flight.  Keep the project CTA in sync when that request settles; without
+  // this final transition it stays disabled after the initial loading paint
+  // until another unrelated render happens.
+  const projectCreate = $('project-create-button');
+  if (projectCreate) projectCreate.disabled = value || state.authRequired;
+  const retry = $('workspace-status-retry');
+  if (retry) retry.disabled = value;
   syncServicePill();
 }
 
@@ -717,6 +995,23 @@ function setView(view, { updateHash = true, scroll = true } = {}) {
   else originbotCompareStop();
 }
 
+function setTrainModule(module, { persist = true } = {}) {
+  const wanted = ['run', 'contract', 'resources'].includes(module) ? module : 'run';
+  state.trainModule = wanted;
+  const section = document.querySelector('[data-view-section="train"]');
+  section?.setAttribute('data-active-train-module', wanted);
+  section?.querySelector('.train-layout')?.setAttribute('data-train-active-module', wanted);
+  section?.querySelectorAll('[data-train-module-tab]').forEach((tab) => {
+    const active = tab.dataset.trainModuleTab === wanted;
+    tab.classList.toggle('is-active', active);
+    tab.setAttribute('aria-selected', active ? 'true' : 'false');
+    tab.tabIndex = active ? 0 : -1;
+  });
+  if (persist) {
+    try { window.localStorage?.setItem('rdk-lab-train-module', wanted); } catch { /* optional */ }
+  }
+}
+
 function modelLabel(model) {
   const name = model?.manifest?.displayName || model?.manifest?.modelId || '未命名模型';
   const version = model?.manifest?.version ? ' · ' + model.manifest.version : '';
@@ -724,11 +1019,18 @@ function modelLabel(model) {
 }
 
 function selectedModel() {
+  const linkedModelIds = projectModelIds();
   return (
     state.overview?.models?.find(
       (model) =>
-        model.id === state.selectedModelId && model.manifest?.robot?.id === state.productId,
-    ) || (state.model?.manifest?.robot?.id === state.productId ? state.model : null)
+        String(model.id) === String(state.selectedModelId) &&
+        model.manifest?.robot?.id === state.productId &&
+        (!linkedModelIds || linkedModelIds.has(String(model.id))),
+    ) ||
+    (state.model?.manifest?.robot?.id === state.productId &&
+    (!linkedModelIds || linkedModelIds.has(String(state.model.id)))
+      ? state.model
+      : null)
   );
 }
 
@@ -736,6 +1038,227 @@ function selectedProductProfile() {
   const fallback = PRODUCT_PROFILES[state.productId] || PRODUCT_PROFILES.microduck;
   const remote = state.productProfiles?.find((profile) => profile.id === state.productId);
   return remote ? Object.assign({}, fallback, remote) : fallback;
+}
+
+function selectedProject() {
+  const id = String(state.projectId || '');
+  return id ? state.projects?.find((project) => String(project.id) === id) || null : null;
+}
+
+function projectModelIds(project = selectedProject()) {
+  if (!project) return null;
+  return new Set(
+    (Array.isArray(project.modelIds) ? project.modelIds : [])
+      .map((id) => String(id).trim())
+      .filter(Boolean),
+  );
+}
+
+function projectDatasetIds(project = selectedProject()) {
+  if (!project) return null;
+  return new Set(
+    (Array.isArray(project.datasetIds) ? project.datasetIds : [])
+      .map((id) => String(id).trim())
+      .filter(Boolean),
+  );
+}
+
+function projectIncludesRecord(record) {
+  const project = selectedProject();
+  if (!project) return true;
+  // Legacy records may not carry projectId. Keep them visible only when their
+  // model or dataset is explicitly linked to the selected project. An empty
+  // project therefore has a truthful empty state instead of silently showing
+  // account-wide runs that cannot be attributed to it.
+  if (record?.projectId) return String(record.projectId) === String(project.id);
+  const modelIds = projectModelIds(project);
+  if (record?.modelId) return modelIds.has(String(record.modelId));
+  const datasetIds = projectDatasetIds(project);
+  if (record?.datasetId) return datasetIds.has(String(record.datasetId));
+  return false;
+}
+
+function projectDisplayName(project) {
+  return String(project?.name || project?.slug || '未命名项目').trim() || '未命名项目';
+}
+
+function projectLabelById(projectId) {
+  const id = String(projectId || '').trim();
+  if (!id) return '';
+  const project = (state.projects || []).find((item) => String(item.id) === id);
+  return project ? projectDisplayName(project) : id;
+}
+
+function stampTelemetryContext(evidence) {
+  if (!evidence || typeof evidence !== 'object') return evidence;
+  const model = selectedModel();
+  if (!evidence.modelId && model?.id) evidence.modelId = model.id;
+  if (!evidence.projectId && state.projectId) evidence.projectId = state.projectId;
+  return evidence;
+}
+
+function renderProjectContext() {
+  const select = $('project-select');
+  const project = selectedProject();
+  // A project can be removed or become invisible after an account switch. Do
+  // not leave a stale local id selected; fall back to the account-wide view.
+  if (state.projectsLoaded && state.projectId && !project) {
+    state.projectId = '';
+    saveWorkspaceContext();
+  }
+  if (select) {
+    const current = state.projectId;
+    select.replaceChildren();
+    const all = document.createElement('option');
+    all.value = '';
+    all.textContent = '全部项目';
+    select.append(all);
+    for (const item of state.projects || []) {
+      const option = document.createElement('option');
+      option.value = String(item.id);
+      option.textContent = projectDisplayName(item);
+      if (item.description) option.title = String(item.description);
+      select.append(option);
+    }
+    select.value = current && (state.projects || []).some((item) => String(item.id) === current) ? current : '';
+  }
+  const profile = selectedProductProfile();
+  const header = project ? `${projectDisplayName(project)} · ${profile.displayName}` : profile.projectName;
+  setText('current-project-name', header);
+  const note = $('project-context-note');
+  if (note) {
+    if (state.projectsLoadError) note.textContent = '项目列表暂不可用 · 点击“重新连接”重试';
+    else if (!state.overview || !state.projectsLoaded) note.textContent = '项目列表加载中…';
+    else if (project) {
+      const modelCount = projectModelIds(project)?.size || 0;
+      const datasetCount = projectDatasetIds(project)?.size || 0;
+      note.textContent = `${modelCount} 个模型 · ${datasetCount} 个数据集已绑定`;
+    } else {
+      note.textContent = state.projects?.length ? `${state.projects.length} 个项目 · 显示全部资源` : '还没有项目 · 可先创建一个';
+    }
+  }
+  const scope = $('project-dialog-scope');
+  if (scope) {
+    const model = selectedModel();
+    scope.textContent = model
+      ? `创建后会绑定当前模型“${modelLabel(model)}”；数据集可以在项目详情中继续关联。`
+      : '当前还没有选中的模型；可以先创建空项目，再从训练页登记模型。';
+  }
+  const create = $('project-create-button');
+  if (create) create.disabled = state.authRequired || state.serviceError || state.loading;
+}
+
+function projectSlugFromName(value) {
+  const slug = String(value || '')
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 56);
+  return slug || `project-${Date.now().toString(36)}`;
+}
+
+function setProjectDialogError(message) {
+  const node = $('project-dialog-error');
+  if (!node) return;
+  node.textContent = String(message || '');
+  node.hidden = !message;
+}
+
+function openProjectDialog() {
+  const dialog = $('project-dialog');
+  if (!(dialog instanceof HTMLDialogElement)) return;
+  const name = $('project-name-input');
+  const slug = $('project-slug-input');
+  const description = $('project-description-input');
+  if (name) name.value = '';
+  if (slug) {
+    slug.value = '';
+    delete slug.dataset.touched;
+  }
+  if (description) description.value = '';
+  setProjectDialogError('');
+  renderProjectContext();
+  if (typeof dialog.showModal === 'function') dialog.showModal();
+  else dialog.setAttribute('open', '');
+  window.requestAnimationFrame(() => name?.focus());
+}
+
+let projectSubmitting = false;
+
+async function submitProject(event) {
+  event.preventDefault();
+  if (projectSubmitting) return;
+  const name = String($('project-name-input')?.value || '').trim();
+  if (!name) {
+    setProjectDialogError('请输入项目名称。');
+    $('project-name-input')?.focus();
+    return;
+  }
+  const slugInput = String($('project-slug-input')?.value || '').trim().toLowerCase();
+  const slug = slugInput || projectSlugFromName(name);
+  if (!/^[a-z0-9][a-z0-9-]{1,63}$/.test(slug)) {
+    setProjectDialogError('项目标识需为 2–64 位小写字母、数字或短横线。');
+    $('project-slug-input')?.focus();
+    return;
+  }
+  projectSubmitting = true;
+  const submit = $('project-dialog-submit');
+  if (submit) {
+    submit.disabled = true;
+    submit.textContent = '创建中…';
+  }
+  setProjectDialogError('');
+  const model = selectedModel();
+  try {
+    const payload = await request('/sim2real/projects', {
+      method: 'POST',
+      body: JSON.stringify({
+        name,
+        slug,
+        description: String($('project-description-input')?.value || '').trim(),
+        modelIds: model?.id ? [model.id] : [],
+        datasetIds: [],
+      }),
+    });
+    const project = payload?.project;
+    if (!project?.id) throw new Error('项目创建成功但未返回项目 ID');
+    state.projects = [project, ...(state.projects || []).filter((item) => String(item.id) !== String(project.id))];
+    state.projectsLoaded = true;
+    state.projectsLoadError = false;
+    state.projectId = project.id;
+    saveWorkspaceContext();
+    const dialog = $('project-dialog');
+    if (dialog instanceof HTMLDialogElement && dialog.open) dialog.close();
+    else dialog?.removeAttribute('open');
+    renderAll();
+    showToast(`项目“${projectDisplayName(project)}”已创建`, 'success');
+  } catch (error) {
+    setProjectDialogError(friendlyError(error, '项目创建失败，请稍后重试。'));
+  } finally {
+    projectSubmitting = false;
+    if (submit) {
+      submit.disabled = false;
+      submit.textContent = '创建项目';
+    }
+  }
+}
+
+async function attachModelToSelectedProject(modelId) {
+  const project = selectedProject();
+  const id = String(modelId || '').trim();
+  if (!project || !id) return project;
+  const modelIds = [...new Set([...(Array.isArray(project.modelIds) ? project.modelIds : []), id])];
+  if (modelIds.length === (project.modelIds || []).length) return project;
+  const payload = await request('/sim2real/projects/' + encodeURIComponent(project.id), {
+    method: 'PATCH',
+    body: JSON.stringify({ modelIds }),
+  });
+  const updated = payload?.project || { ...project, modelIds };
+  state.projects = (state.projects || []).map((item) => String(item.id) === String(updated.id) ? updated : item);
+  state.projectsLoaded = true;
+  state.projectsLoadError = false;
+  return updated;
 }
 
 function selectedTask() {
@@ -756,7 +1279,11 @@ function statusLabel(status) {
 
 function renderSelects() {
   const allModels = state.overview?.models || [];
-  const models = allModels.filter((model) => model.manifest?.robot?.id === state.productId);
+  const linkedModelIds = projectModelIds();
+  const models = allModels.filter((model) =>
+    model.manifest?.robot?.id === state.productId &&
+    (!linkedModelIds || linkedModelIds.has(String(model.id))),
+  );
   const devices = state.overview?.devices || [];
   const taskSelect = $('task-select');
   const productSelect = $('product-select');
@@ -775,6 +1302,19 @@ function renderSelects() {
     }));
     if (!taskIds.includes(state.taskId)) state.taskId = state.productId === 'originbot' ? 'goal-navigation' : 'walk';
     taskSelect.value = state.taskId;
+    // Keep the task context visibly in sync with the native select.  The
+    // action library below describes the model's controls, while this note
+    // describes the workflow task selected by the operator.  Previously the
+    // select changed state but the neighbouring copy stayed static, making a
+    // successful change look like a no-op.
+    const taskNote = taskSelect.closest('.sim-context-panel')?.querySelector('.small-note');
+    if (taskNote) {
+      const task = selectedTask();
+      taskNote.textContent = `${task.hint}。点击仿真器“开始录制”生成轨迹，录制后可在评测页回放。`;
+    }
+    document.querySelectorAll('[data-replay-task-link]').forEach((link) => {
+      link.textContent = `查看「${selectedTask().label}」最近回放 ↗`;
+    });
   }
   if (modelSelect) {
     modelSelect.replaceChildren();
@@ -822,7 +1362,8 @@ function renderSelects() {
     computeSelect.replaceChildren();
     const defaultOption = document.createElement('option');
     defaultOption.value = '';
-    defaultOption.textContent = '服务端默认本地 Worker';
+    defaultOption.textContent = 'AI 自动选择（推荐）';
+    defaultOption.dataset.ai = 'true';
     computeSelect.append(defaultOption);
     for (const resource of resources) {
       const option = document.createElement('option');
@@ -835,6 +1376,7 @@ function renderSelects() {
   }
   setText('model-count', models.length + ' 个 ' + selectedProductProfile().displayName + ' 模型');
   setText('device-count', devices.length + ' 块板卡');
+  renderProjectContext();
 }
 
 function renderComputeResources() {
@@ -918,6 +1460,7 @@ function renderIntegrations() {
   const simulator = integrations.simulator || {};
   const boardAgent = simulator.boardAgent || {};
   const profile = selectedProductProfile();
+  const originbotProduct = profile.id === 'originbot';
   const model = selectedModel();
   const device = selectedDevice();
   const targetDeployment =
@@ -931,15 +1474,27 @@ function renderIntegrations() {
   const latest = latestRun();
   const currentEvidence = currentTelemetry();
   const latestRealEvidence = hasReleaseGradeEvidence(currentEvidence, latest);
-  const localConfigured = local.available === true;
+  const computeResources = state.overview?.computeResources || [];
+  const selectedComputeResource = computeResources.find(
+    (resource) => String(resource.id) === String(state.selectedComputeResourceId),
+  );
+  const selectedResourceReady = selectedComputeResource?.status === 'online';
+  // `configured` distinguishes an endpoint that exists but is blocked by a
+  // missing production bearer from an endpoint that has not been registered;
+  // both are unavailable for execution, but they need different operator
+  // guidance in the workbench.
+  const localConfigured = local.configured === true || local.available === true;
+  const localAuthReady = local.available === true || selectedResourceReady;
   const localReachable = local.reachable === true;
   const localHealthy = local.healthy === true;
-  const localReady = localConfigured && localReachable && localHealthy;
+  const localReady = selectedResourceReady || (localAuthReady && localReachable && localHealthy);
   const overviewReady = Boolean(state.overview);
   // Only advertise a browser simulator after the account-scoped overview has
   // confirmed its surface. A missing/disabled server surface stays gated.
   const browserAvailable =
-    overviewReady && Boolean(profile.simulatorPath) && simulator.browser?.available !== false;
+    overviewReady &&
+    Boolean(profile.simulatorPath) &&
+    (originbotProduct || simulator.browser?.available !== false);
   setText(
     'service-status',
     state.authRequired
@@ -966,16 +1521,17 @@ function renderIntegrations() {
     accountLogout.hidden = !accountLabel;
     accountLogout.title = accountLabel ? '退出当前 RDK 账号' : '';
   }
-  setText('current-project-name', profile.projectName);
+  // The header follows the selected project while retaining the robot profile
+  // as a suffix, so operators can always tell which context a run belongs to.
+  renderProjectContext();
   setText('sidebar-product-name', profile.displayName);
   // Keep device-facing screens aligned with the global target selector. A
   // fixed “RDK X5” title becomes misleading as soon as another board profile
   // is selected, which makes the deployment step look like a separate flow.
-  setText('deploy-title', device?.name ? `部署到 ${device.name}` : '部署与上线');
+  setText('deploy-title', device?.name ? `部署到 ${device.name}` : '部署到目标设备');
   setText('sidebar-kit-name', profile.kitName);
   setText('kit-card-title', profile.displayName + ' 套件');
   const microduckProduct = profile.id === 'microduck';
-  const originbotProduct = profile.id === 'originbot';
   const kitStatusLabel = $('kit-status-label');
   const kitStatus = kitStatusLabel?.closest('.kit-status');
   if (kitStatusLabel) {
@@ -1013,12 +1569,12 @@ function renderIntegrations() {
     : softwareDemoReady
       ? {
           state: 'demo',
-          label: '软件演示就绪',
+          label: '工作区可用',
           title: browserRunnable
             ? targetReady && !latestRealEvidence
-              ? '软件流程可演示；当前 Run 仍缺少真实评测证据'
-              : '软件流程可演示；X5 只读预检尚未通过'
-            : 'Mock、台账和合成证据可演示；真实 MicroDuck 场景仍需挂载 bundle',
+              ? '可运行仿真、录制和训练流程；尚缺真实评测证据，不能视为真机就绪'
+              : '可运行软件流程；设备只读预检尚未通过，不能视为真机就绪'
+            : '模型、台账和软件流程可用；真实设备仍需通过 Local Bridge 和板端预检',
         }
       : {
           state: 'waiting',
@@ -1047,26 +1603,42 @@ function renderIntegrations() {
   );
   setText(
     'local-run-button',
-    local.available ? (local.mock ? '运行 Mock 协议演示' : '发起本地训练') : '登记本地训练',
+    selectedResourceReady
+      ? '使用已连接 GPU 资源'
+      : localAuthReady
+      ? local.mock
+        ? '运行 Mock 协议演示'
+        : '发起本地强化学习训练'
+      : localConfigured
+        ? '修复本地训练 worker'
+        : '登记本地训练 worker',
   );
   const localRunButton = $('local-run-button');
   if (localRunButton) {
-    localRunButton.title = local.mock
+    localRunButton.title = selectedResourceReady
+      ? '向已测试的 GPU 训练资源提交 PPO / SAC 任务'
+      : local.mock
       ? '仅验证训练协议和运行台账，不生成可部署模型'
-      : local.available
-        ? '向已配置的本地训练 worker 提交任务'
-        : '当前没有可用的本地训练 worker';
+      : localAuthReady
+        ? '向已配置的本地强化学习 worker 提交 PPO / SAC 任务'
+        : localConfigured
+          ? '本地 worker 已登记，但认证配置未就绪；请补充至少 32 字节随机 bearer token'
+          : '当前没有可用的本地强化学习 worker';
   }
   setText(
     'status-robogo',
-    localReady
+    selectedResourceReady
+      ? 'GPU 资源已连接'
+      : localReady
       ? local.mock
         ? '本地 Mock 已连接'
         : '本地训练已连接'
       : localConfigured && localReachable
         ? '本地 worker 检查失败'
-        : localConfigured
-          ? '本地 worker 不可达'
+        : localConfigured && !localAuthReady
+          ? '本地 worker 认证待修复'
+          : localConfigured
+            ? '本地 worker 不可达'
           : robogo.state === 'ready'
             ? 'RoboGo 已连接'
             : robogo.state === 'login_required'
@@ -1075,8 +1647,10 @@ function renderIntegrations() {
   );
   setText(
     'status-robogo-detail',
-    localConfigured
-      ? local.message || local.reason || '本地 worker 状态未知'
+    selectedResourceReady
+      ? `${selectedComputeResource?.name || '所选 GPU'} 已通过连接测试。`
+      : localConfigured
+        ? local.message || local.reason || '本地 worker 状态未知'
       : robogo.message || local.reason || '只读读取训练资源',
   );
   const storageLabel = !storageKnown ? '检查中' : storage.writable ? '台账可写' : '需要共享存储';
@@ -1088,6 +1662,66 @@ function renderIntegrations() {
   contextHealth?.classList.toggle('is-ready', contextState === 'ready');
   contextHealth?.classList.toggle('is-blocked', contextState === 'blocked');
   contextHealth?.classList.toggle('is-waiting', contextState === 'waiting');
+  const simulatorCard = $('status-simulator')?.closest('.status-card');
+  const runnerCard = $('status-robogo')?.closest('.status-card');
+  const boardCard = $('status-board')?.closest('.status-card');
+  const storageCard = $('status-storage-card')?.closest('.status-card');
+  setStatusSurface(
+    simulatorCard,
+    !overviewReady ? 'waiting' : browserAvailable ? 'ready' : 'blocked',
+    simulatorLabels.detail,
+  );
+  setStatusSurface(
+    runnerCard,
+    !overviewReady
+      ? 'waiting'
+      : localReady || robogoReady
+        ? 'ready'
+        : localConfigured || selectedResourceReady
+          ? 'error'
+          : 'blocked',
+    localReady || robogoReady ? '训练后端可用' : '训练后端待配置',
+  );
+  setStatusSurface(
+    boardCard,
+    !overviewReady ? 'waiting' : targetReady ? 'ready' : device ? 'partial' : 'blocked',
+    device ? (targetReady ? '目标设备预检通过' : '目标设备待预检') : '尚未选择目标设备',
+  );
+  setStatusSurface(
+    storageCard,
+    !storageKnown ? 'waiting' : storageReady ? 'ready' : 'blocked',
+    storageReady ? '台账可写' : '需要共享存储',
+  );
+  const actionHint = state.runSubmitting
+    ? ['waiting', '正在提交运行请求…']
+    : !overviewReady
+      ? ['waiting', '正在读取模型、项目和训练后端状态…']
+    : !model
+      ? ['blocked', '请先在“模型契约”中载入并登记一个模型。']
+      : !storageReady
+        ? ['blocked', '台账不可写；训练和登记操作已阻断，请先配置共享存储。']
+        : !hasRunnablePath
+          ? ['blocked', '没有可用的训练后端；先接入本地 Worker、GPU 资源或 RoboGo。']
+          : ['ready', '模型已就绪：可选择浏览器回放，或提交本地 / RoboGo 强化学习训练。'];
+  setActionHint('run-action-hint', actionHint[0], actionHint[1]);
+  const deployHint = !overviewReady
+    ? '正在读取设备和 BoardAgent 状态…'
+    : !model
+    ? '先在训练页登记模型契约。'
+    : !device
+      ? '先到设备上位机登记并选择目标板卡。'
+      : !targetDeployment
+        ? '模型和板卡已选择；点击“生成预检计划”开始只读检查。'
+        : boardAgent.available !== true
+          ? `预检计划已生成，但当前 BoardAgent 不可用：${boardAgent.reason || '请在部署环境接入 agent'}`
+          : targetReady
+            ? '只读预检已通过；Canary / Live 仍需要人工批准和安全开关。'
+            : '预检计划已生成；点击“执行只读预检”查看兼容性结果。';
+  setActionHint(
+    'deploy-action-hint',
+    !overviewReady ? 'waiting' : targetReady ? 'ready' : !model || !device ? 'blocked' : 'waiting',
+    deployHint,
+  );
   $('browser-run-button')?.toggleAttribute('disabled', state.runSubmitting || !model || !browserAvailable);
   $('browser-run-button')?.setAttribute(
     'title',
@@ -1147,11 +1781,14 @@ function renderIntegrations() {
   const simulatorGateTrain = $('simulator-gate-train');
   const simulatorGateInstall = $('simulator-gate-install');
   const configuredBrowserEntry = safeLaunchUrl(simulator.browser?.entryUrl);
+  const localMicroduckMounted = microduckProduct && simulator.browser?.state === 'mounted';
   const browserEntry = originbotProduct
     ? appRelativePath('/originbot-sim/')
-    : simulator.browser?.entryUrl
-      ? configuredBrowserEntry || appRelativePath(SIMULATOR_PATH)
-      : appRelativePath(SIMULATOR_PATH);
+    : localMicroduckMounted
+      ? appRelativePath('/mujoco/microduck/')
+      : simulator.browser?.entryUrl
+        ? configuredBrowserEntry || appRelativePath(SIMULATOR_PATH)
+        : appRelativePath(SIMULATOR_PATH);
   const microduckMissing = profile.id === 'microduck' && simulator.browser?.state === 'missing';
   if (simulatorFrame && simulatorFrame.getAttribute('src') !== browserEntry) {
     simulatorFrame.setAttribute('src', browserEntry);
@@ -1184,6 +1821,13 @@ function renderIntegrations() {
       : '当前产品线不会复用 MicroDuck 的浏览器场景。先准备真实契约 manifest 或本地 headless 仿真 worker；连接真机是部署前的后续步骤。';
   }
   if (simulatorGateTrain) simulatorGateTrain.hidden = microduckMissing;
+  if (simulatorGateTrain && originbotProduct) {
+    simulatorGateTrain.textContent = '使用默认模板开始 →';
+    simulatorGateTrain.title = '进入训练页，直接使用内置 OriginBot starter manifest；也可在那里替换为自己的 manifest';
+  } else if (simulatorGateTrain) {
+    simulatorGateTrain.textContent = '去训练与模型 →';
+    simulatorGateTrain.removeAttribute('title');
+  }
   if (simulatorGateInstall) {
     simulatorGateInstall.hidden = !microduckMissing;
     simulatorGateInstall.setAttribute('href', browserEntry);
@@ -1201,8 +1845,17 @@ function renderIntegrations() {
           ? 'OriginBot 浏览器仿真'
         : '适配器待配置',
   );
+  const evidenceStatus = $('simulator-evidence-status');
+  const browserEvidence = state.telemetry?.source === 'browser-microduck';
+  evidenceStatus?.classList.toggle('is-ready', browserEvidence);
+  if (evidenceStatus) {
+    evidenceStatus.textContent = browserEvidence
+      ? `已同步 ${state.telemetry.summary.sampleCount} 帧到评测证据`
+      : '录制后自动同步到评测证据';
+  }
   setText('status-board', device ? device.boardPlatform || '待探测板型' : '尚未选择板卡');
-  setText('status-board-detail', device ? device.status || '设备状态未知' : '连接后进行板端预检');
+  setText('status-board-detail', device ? device.status || '设备状态未知' : '真机流程需要先连接设备');
+  setText('status-board-action', device ? '打开设备管理 →' : '去连接设备 →');
   const boardIcon = $('status-board-icon');
   if (boardIcon) {
     boardIcon.classList.remove('status-icon-green', 'status-icon-blue', 'status-icon-orange');
@@ -1252,17 +1905,31 @@ function renderIntegrations() {
 
 function renderModel() {
   const model = selectedModel();
+  const product = selectedProductProfile();
+  setText('train-onboarding-model-help', `载入 ${product.displayName} 默认模板并登记`);
+  setText('train-onboarding-title', `${product.displayName} · 按 3 步完成一次强化学习训练`);
+  setText('contract-panel-tip', `推荐：载入 ${product.displayName} 模板 → 校验 → 登记`);
+  setText('template-button', `载入 ${product.displayName} 模板`);
   const summary = $('model-summary');
   const artifacts = $('artifact-list');
   const compatibility = $('compatibility-list');
   if (!model) {
     state.model = null;
-    if (summary) summary.innerHTML = '<div class="empty-inline">没有可显示的模型</div>';
+    updateTrainProgress(1);
+    if (summary) summary.innerHTML = `<div class="model-empty-guide"><strong>还没有 ${escapeHtml(product.displayName)} 模型</strong><span>先展开上方“套件与契约”，载入模板并登记版本。</span><button class="button button-primary button-small" type="button" data-empty-model-action>载入 ${escapeHtml(product.displayName)} 模板 →</button></div>`;
+    summary?.querySelector('[data-empty-model-action]')?.addEventListener('click', () => {
+      document.querySelector('#contract-fold')?.setAttribute('open', '');
+      document.querySelector('#template-button')?.click();
+      document.querySelector('#manifest-editor')?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    });
     if (artifacts) artifacts.replaceChildren();
     if (compatibility) compatibility.replaceChildren();
     return;
   }
   state.model = model;
+  // The built-in starter already satisfies step 1. Do not make users edit or
+  // re-register JSON before they can reach replay and training.
+  updateTrainProgress(2);
   const manifest = model.manifest || {};
   if (summary) {
     const note = model.builtin
@@ -1300,6 +1967,8 @@ function renderModel() {
     for (const artifact of manifest.artifacts || []) {
       const row = document.createElement('div');
       row.className = 'artifact-row';
+      const presentation = artifactPresentation(artifact);
+      row.dataset.state = presentation.key;
       const runtimeLabel =
         artifact.runtime === 'cpu-onnx'
           ? 'CPU ONNX · 单线程'
@@ -1313,7 +1982,7 @@ function renderModel() {
             ? '感知'
             : artifact.workload || '通用';
       row.innerHTML =
-        '<span class="artifact-name">' +
+        '<span class="artifact-row-main"><span class="artifact-name">' +
         escapeHtml(artifact.name || artifact.id) +
         '</span><span class="artifact-meta">' +
         escapeHtml(artifact.role || '') +
@@ -1323,6 +1992,10 @@ function renderModel() {
         escapeHtml(workloadLabel) +
         ' · ' +
         escapeHtml(runtimeLabel) +
+        '</span></span><span class="artifact-state ' +
+        stateClass(presentation.key === 'ready' ? 'ready' : presentation.key === 'blocked' ? 'failed' : 'partial') +
+        '" title="' + escapeHtml(presentation.detail) + '">' +
+        escapeHtml(presentation.label) +
         '</span>';
       artifacts.append(row);
     }
@@ -1356,6 +2029,11 @@ function renderActionLibrary() {
   const root = $('sim-action-list');
   const empty = $('sim-action-empty');
   if (!root || !empty) return;
+  const task = selectedTask();
+  setText('task-context-note', `${task.hint}。切换后会同步仿真、训练和评测参数。`);
+  const heading = root.closest('.sim-action-library')?.querySelector('.sim-action-library-heading strong');
+  if (heading) heading.textContent = `当前任务 · ${task.label}`;
+  const taskStatus = $('sim-action-task-status');
   const simulator = state.model?.manifest?.simulator || {};
   // Runtime/UI controls are separate from policy artifacts: reset, quack and
   // camera actions do not necessarily have an ONNX artifact behind them.
@@ -1367,6 +2045,14 @@ function renderActionLibrary() {
   const entries = controls.length ? controls : policies;
   root.replaceChildren();
   empty.hidden = entries.length > 0;
+  if (taskStatus) {
+    const declared = policies.some((policy) => policy.id === state.taskId || policy.taskId === state.taskId);
+    const needsPolicy = policies.length > 0 && state.taskId !== 'custom' && !declared;
+    taskStatus.hidden = !needsPolicy;
+    taskStatus.textContent = needsPolicy
+      ? `当前模型策略包未声明“${task.label}”。可以先记录该任务，但开始训练前需要导入对应 manifest。`
+      : `任务参数已切换为“${task.label}”：${task.hint}。`;
+  }
   for (const policy of entries) {
     const item = document.createElement('div');
     item.className = 'sim-action-item';
@@ -1385,12 +2071,30 @@ function renderActionLibrary() {
   }
 }
 
+function artifactPresentation(artifact) {
+  const ref = String(artifact?.ref || '').trim();
+  if (!ref) return { key: 'blocked', label: '缺少引用', detail: '需要受管 artifact:// 引用' };
+  if (!/^artifact:\/\/[^\s]+$/i.test(ref)) {
+    return { key: 'blocked', label: '引用无效', detail: '只接受受管 artifact:// 引用' };
+  }
+  if (artifact?.role === 'compiled-policy') {
+    return artifact.sha256
+      ? { key: 'ready', label: '可发布', detail: '已编译并带校验和' }
+      : { key: 'partial', label: '待校验', detail: '已编译，尚未登记校验和' };
+  }
+  if (artifact?.role === 'policy' && artifact?.runtime === 'cpu-onnx') {
+    return { key: 'partial', label: '可训练 · 待编译', detail: 'CPU ONNX 可运行；上板前需要目标制品' };
+  }
+  return { key: 'registered', label: '已登记', detail: '源制品已纳入模型版本' };
+}
+
 function renderBoard() {
   const device = selectedDevice();
   const summary = $('board-summary');
   if (!summary) return;
   if (!device) {
-    summary.innerHTML = '<div class="empty-inline">没有可用板卡；先在设备管理中登记</div>';
+    summary.innerHTML =
+      '<div class="empty-state board-empty"><strong>还没有目标板卡</strong><span>部署只会读取设备状态；先登记一块板卡，再生成只读预检计划。</span><button type="button" class="button button-ghost button-small" data-workspace-view="station">去设备管理登记 →</button></div>';
     return;
   }
   const platform = device.boardPlatform || '待探测';
@@ -1408,20 +2112,33 @@ function renderBoard() {
     : device.boardPlatform
       ? 'is-detected'
       : 'is-waiting';
+  const deviceStatus = statusLabel(device.status || 'unknown');
+  const preflightLabel = preflightReady ? '预检通过' : device.boardPlatform ? '待预检' : '待探测';
+  const blockedReason = preflightReady
+    ? '只读预检已通过；执行动作仍由受控 BoardAgent 和人工批准保护。'
+    : !device.boardPlatform
+      ? '先点击“探测板型”，确认目标设备与契约匹配。'
+      : deployment
+        ? `当前预检状态：${statusLabel(deployment.status)}。`
+        : '先生成预检计划，再执行只读检查。';
   summary.innerHTML =
     '<div class="board-summary-row"><strong>' +
     escapeHtml(device.name || device.id) +
     '</strong><span class="board-chip ' +
     boardStateClass +
     '">' +
-    escapeHtml(platform) +
+    escapeHtml(platform + ' · ' + preflightLabel) +
     '</span></div><div class="board-details"><span>状态：' +
-    escapeHtml(device.status || 'unknown') +
+    escapeHtml(deviceStatus) +
     '</span><span>连接：' +
     escapeHtml(device.connectionMode || 'ssh') +
     '</span><span>可达性：' +
-    escapeHtml(reachable) +
-    '</span></div>';
+    escapeHtml(statusLabel(reachable)) +
+    '</span></div><p class="board-block-reason" data-state="' +
+    (preflightReady ? 'ready' : 'blocked') +
+    '">' +
+    escapeHtml(blockedReason) +
+    '</p>';
 }
 
 function renderHistory() {
@@ -1437,6 +2154,8 @@ function renderHistory() {
         record.status,
         record.summary,
         record.modelId,
+        record.taskId,
+        record.taskId && ACTION_TASKS[record.taskId]?.label,
         record.backend,
         record.mode,
       ]
@@ -1452,8 +2171,13 @@ function renderHistory() {
       ? '还没有运行记录。先校验契约或打开浏览器仿真。'
       : '还没有运行记录。先登记模型契约，再发起本地或 GPU 训练。';
     root.innerHTML = query
-      ? '<div class="empty-state">没有匹配的记录，试试模型名、状态或后端。</div>'
-      : `<div class="empty-state">${emptyHint}</div>`; // escape-audit:allow emptyHint is a local literal ternary
+      ? '<div class="empty-state records-empty"><strong>没有匹配的记录</strong><span>试试模型名、状态或后端，或清空筛选查看全部。</span><button type="button" class="button button-ghost button-small" data-empty-action="clear-search">清空搜索</button></div>'
+      : `<div class="empty-state records-empty"><strong>${emptyHint}</strong><span>每条记录都会关联当前任务、模型和时间，可从这里打开详情或进入下一步。</span><div class="records-empty-actions"><button type="button" class="button button-primary button-small" data-empty-action="simulate">打开仿真录制</button><button type="button" class="button button-ghost button-small" data-empty-action="train">去强化学习训练</button></div></div>`; // escape-audit:allow emptyHint is a local literal ternary
+    root.querySelectorAll('[data-empty-action]').forEach((button) => button.addEventListener('click', () => {
+      const action = button.dataset.emptyAction;
+      if (action === 'clear-search') { const input = $('record-search'); if (input) input.value = ''; state.recordsQuery = ''; renderHistory(); return; }
+      setView(action === 'train' ? 'train' : 'simulate');
+    }));
     return;
   }
   for (const record of records) {
@@ -1597,6 +2321,7 @@ function openRecordDetails(record) {
     ...(isRun && record.taskId
       ? [['动作任务', ACTION_TASKS[record.taskId]?.label || record.taskId]]
       : []),
+    ...(record.projectId ? [['项目', projectLabelById(record.projectId)]] : []),
     ['模型', record.modelId || '—'],
     ['创建时间', formatDate(record.createdAt)],
     ...(isRun && record.training?.profile ? [['训练档位', record.training.profile]] : []),
@@ -1608,6 +2333,7 @@ function openRecordDetails(record) {
       ? [['最大迭代', record.training.maxIterations]]
       : []),
     ...(isArtifact && record.role ? [['制品角色', record.role]] : []),
+    ...(isArtifact ? [['制品状态', record.label || artifactPresentation(record).label]] : []),
     ...(isArtifact && record.format ? [['格式', record.format]] : []),
     ...(isTelemetry && record.telemetrySummary?.sampleCount != null
       ? [['样本数', record.telemetrySummary.sampleCount]]
@@ -1621,6 +2347,21 @@ function openRecordDetails(record) {
     'run-detail-title',
     isRun ? '运行详情' : isArtifact ? '制品详情' : isTelemetry ? '遥测证据详情' : '发布计划详情',
   );
+  const detailStatus = $('run-detail-status');
+  if (detailStatus) {
+    const statusText = mockRun
+      ? '协议演示'
+      : syntheticRun || demoTelemetry
+        ? '演示样例'
+        : statusLabel(record.status);
+    detailStatus.className =
+      'state-badge ' +
+      (mockRun || syntheticRun || demoTelemetry ? 'state-demo' : stateClass(record.status));
+    detailStatus.textContent = statusText;
+    detailStatus.title = mockRun || syntheticRun || demoTelemetry
+      ? '该记录不能作为真实设备评测或发布依据。'
+      : '当前记录状态';
+  }
   body.innerHTML =
     '<div class="run-detail-grid">' +
     fields
@@ -1671,6 +2412,18 @@ function openRecordDetails(record) {
       : syntheticRun || demoTelemetry
         ? '<div class="run-progress-warning">合成样例仅验证导入与回放流程，不能作为真实 X5 评测或发布依据。</div>'
       : '') +
+    (isRun && !mockRun && !syntheticRun
+      ? '<div class="run-board-sessions" id="run-board-sessions" data-run-id="' +
+        escapeHtml(record.id) +
+        '"><div class="run-retrain-heading">' +
+        '<strong class="run-detail-block-title">上板会话（板端运行证据）</strong>' +
+        '<button class="button button-ghost button-small" type="button" id="run-board-sessions-load">' +
+        '查看上板会话</button></div>' +
+        '<p class="run-retrain-hint">会话事件（起止 / 推理统计 / 停止原因）来自板端遥测标记；' +
+        '未 attested 的会话仅作审阅，不构成发布证据。</p>' +
+        '<div class="run-retrain-body" id="run-board-sessions-body" role="status" aria-live="polite">' +
+        '尚未读取。点击「查看上板会话」读取板端策略会话记录。</div></div>'
+      : '') +
     (isRun && !mockRun && !syntheticRun && ['completed', 'ready'].includes(String(record.status))
       ? '<div class="run-retrain-card" id="run-retrain-card" data-run-id="' +
         escapeHtml(record.id) +
@@ -1686,6 +2439,7 @@ function openRecordDetails(record) {
   if (typeof dialog.showModal === 'function') dialog.showModal();
   else dialog.setAttribute('open', '');
   if ($('run-retrain-card')) wireRunRetrainingAdvice(record);
+  if ($('run-board-sessions')) wireRunBoardSessions(record);
 }
 
 // The verdict table and the measure formatter are pure logic, so they live in
@@ -1957,7 +2711,7 @@ async function submitRetrainingFromAdvice(record, advice) {
       (taskId ?? '未指定') +
       '，档位 ' +
       profile +
-      '）。\n这是操作员的显式动作：会真实发起一次本地训练；分析本身不会自动发起任何训练。',
+      '）。\n这是操作员的显式动作：会真实发起一次本地强化学习训练；分析本身不会自动发起任何训练。',
   );
   if (!acknowledged) {
     setStatus('已取消：未提交任何请求。');
@@ -1970,9 +2724,11 @@ async function submitRetrainingFromAdvice(record, advice) {
   }
   setStatus('正在提交重训请求…');
   try {
+    const requestBody = retrainingRequestBody(record, advice, modelId);
+    if (state.projectId) requestBody.projectId = state.projectId;
     const payload = await request('/sim2real/runs', {
       method: 'POST',
-      body: JSON.stringify(retrainingRequestBody(record, advice, modelId)),
+      body: JSON.stringify(requestBody),
     });
     const run = payload?.run || {};
     setStatus(
@@ -2007,6 +2763,196 @@ function wireRunRetrainingAdvice(record) {
   });
 }
 
+// ---- board sessions (structured board-run evidence) ------------------------
+// The session list is a read-only GET like the retraining advice: opening the
+// dialog never fires a POST, and every server string reaches the DOM through
+// textContent (retrainingElement), never an innerHTML template.
+function formatBoardSessionTimestamp(stamp) {
+  if (!stamp) return '未知';
+  const parsed = new Date(stamp);
+  return Number.isNaN(parsed.getTime()) ? String(stamp) : formatDate(parsed.toISOString());
+}
+
+function boardSessionStopLabel(session) {
+  if (!session.stoppedAt) return '中断（未见停止事件，如进程被杀）';
+  const reason = String(session.stopReason || 'unknown');
+  if (reason.startsWith('fault:')) return '故障：' + reason.slice('fault:'.length);
+  if (reason === 'operator-stop') return '操作员停止';
+  if (reason === 'sigterm') return '进程终止（sigterm）';
+  if (reason === 'telemetry-stale') return '遥测陈旧保护停止';
+  return reason;
+}
+
+function renderBoardSessions(body, sessions) {
+  body.replaceChildren();
+  const list = Array.isArray(sessions) ? sessions : [];
+  if (!list.length) {
+    body.append(
+      retrainingElement(
+        'p',
+        'run-retrain-summary',
+        '该 run 暂无上板会话记录：没有回传任何板端策略会话事件。先在 station 页完成一次策略 start→stop 并回传遥测。',
+      ),
+    );
+    return;
+  }
+  const count = retrainingElement('p', 'run-retrain-meta', '共 ' + list.length + ' 个会话');
+  body.append(count);
+  list.forEach((session, index) => {
+    const attested = session?.attested === true;
+    const card = retrainingElement('div', 'run-board-session' + (attested ? '' : ' is-review-only'));
+    const head = retrainingElement('div', 'run-board-session-head');
+    head.append(retrainingElement('strong', null, '会话 #' + (index + 1)));
+    head.append(
+      retrainingElement(
+        'span',
+        'run-board-session-attest' + (attested ? ' is-attested' : ''),
+        attested ? 'attested' : 'review-only',
+      ),
+    );
+    if (session?.mock === true) {
+      head.append(retrainingElement('span', 'run-board-session-attest is-mock', 'mock'));
+    }
+    card.append(head);
+    const fields = [
+      ['会话 ID', String(session?.sessionId ?? '未知')],
+      ['开始', formatBoardSessionTimestamp(session?.startedAt)],
+      ['结束', boardSessionStopLabel(session)],
+      ['推理次数', session?.inferenceCount != null ? String(session.inferenceCount) : '未知'],
+      [
+        '平均推理延迟',
+        session?.inferMs != null && Number.isFinite(Number(session.inferMs))
+          ? Number(session.inferMs).toFixed(2) + ' ms'
+          : '未知',
+      ],
+      [
+        '发布命令数',
+        session?.published != null ? String(session.published) : '未知',
+      ],
+      [
+        '持续时长',
+        session?.durationSec != null && Number.isFinite(Number(session.durationSec))
+          ? session.durationSec.toFixed(1) + ' s'
+          : '未知',
+      ],
+      [
+        '控制频率',
+        session?.controlHz != null ? String(session.controlHz) + ' Hz' : '未知',
+      ],
+      [
+        '设备',
+        String(session?.deviceId ?? '未知'),
+      ],
+    ];
+    const grid = retrainingElement('div', 'run-detail-grid');
+    fields.forEach(([label, value]) => {
+      const field = retrainingElement('div', 'run-detail-field');
+      field.append(retrainingElement('span', null, label));
+      field.append(retrainingElement('strong', null, value));
+      grid.append(field);
+    });
+    card.append(grid);
+    const model = session?.model;
+    if (model && typeof model === 'object') {
+      const sha = String(model.sha256 ?? '');
+      const modelLine = [
+        model.provider ? String(model.provider) : null,
+        model.inputDim != null && model.outputDim != null
+          ? model.inputDim + '→' + model.outputDim
+          : null,
+        model.bytes != null ? Math.max(1, Math.round(Number(model.bytes) / 1024)) + 'KB' : null,
+        sha ? sha.slice(0, 12) : null,
+      ]
+        .filter(Boolean)
+        .join(' · ');
+      card.append(
+        retrainingElement(
+          'p',
+          'run-board-session-model',
+          '模型指纹：' + (modelLine || '事件未携带模型信息'),
+        ),
+      );
+    }
+    body.append(card);
+  });
+  body.append(
+    retrainingElement(
+      'p',
+      'run-retrain-advisory',
+      '上板会话是只读证据回放：读取不触发任何板端动作；未 attested 的会话不满足发布闸门。',
+    ),
+  );
+}
+
+function renderBoardSessionsError(body, error) {
+  const payload = error instanceof ApiError ? error.payload : null;
+  const notFound =
+    (error instanceof ApiError && error.status === 404) ||
+    (payload && typeof payload === 'object' && payload.error === 'SIM2REAL_RUN_NOT_FOUND');
+  const box = retrainingElement('div', 'run-retrain-error' + (notFound ? ' is-not-found' : ''));
+  box.append(retrainingElement('strong', null, notFound ? '运行记录不存在' : '暂时无法读取上板会话'));
+  box.append(
+    retrainingElement(
+      'p',
+      null,
+      notFound
+        ? String(
+            (payload && typeof payload === 'object' && payload.message) ||
+              '运行记录不存在，或不属于当前账号——可能已被清理，请刷新记录列表后重试。',
+          )
+        : (error instanceof Error ? error.message : '未知错误') +
+            '。请稍后重试；本面板不会改动任何运行状态。',
+    ),
+  );
+  const retry = retrainingElement('button', 'button button-ghost button-small', '重试');
+  retry.type = 'button';
+  retry.id = 'run-board-sessions-retry';
+  box.append(retry);
+  body.replaceChildren(box);
+}
+
+async function loadRunBoardSessions(record) {
+  const card = $('run-board-sessions');
+  if (!card || card.dataset.runId !== record.id) return;
+  const body = card.querySelector('#run-board-sessions-body');
+  const button = card.querySelector('#run-board-sessions-load');
+  if (!body) return;
+  if (button) button.disabled = true;
+  body.replaceChildren(
+    retrainingElement('p', 'run-retrain-summary', '读取中：正在拉取板端策略会话事件…'),
+  );
+  try {
+    const payload = await request(
+      '/sim2real/runs/' + encodeURIComponent(record.id) + '/board-sessions',
+    );
+    if (card.dataset.runId !== record.id) return;
+    const sessions = payload?.sessions;
+    if (!Array.isArray(sessions)) {
+      throw new ApiError('服务端返回缺少 sessions 数组', 0, payload);
+    }
+    renderBoardSessions(body, sessions);
+  } catch (error) {
+    if (card.dataset.runId !== record.id) return;
+    renderBoardSessionsError(body, error);
+    const retry = body.querySelector('#run-board-sessions-retry');
+    if (retry) {
+      retry.addEventListener('click', () => {
+        void loadRunBoardSessions(record);
+      });
+    }
+  } finally {
+    if (button) button.disabled = false;
+  }
+}
+
+function wireRunBoardSessions(record) {
+  const card = $('run-board-sessions');
+  if (!card) return;
+  card.querySelector('#run-board-sessions-load')?.addEventListener('click', () => {
+    void loadRunBoardSessions(record);
+  });
+}
+
 function metricPercent(value) {
   return SimTelemetryCore.metricPercent(value);
 }
@@ -2027,30 +2973,129 @@ function parseTelemetryText(text) {
   return SimTelemetryCore.parseTelemetryText(text);
 }
 
+function importSizeError(label, maxBytes, guidance = '请先分段导入') {
+  return new Error(`${label}超过 ${maxBytes} 字节上限，${guidance}`);
+}
+
+// File.size is a byte count, but keeping the bounded slice and a decoded-text
+// check makes this safe for test doubles and unusual Blob implementations too.
+// The slice prevents file.text() from materializing an unbounded payload before
+// the parser has a chance to reject it.
+async function readImportTextWithinLimit(
+  file,
+  maxBytes,
+  label,
+  guidance = '请先分段导入',
+) {
+  let declaredSize;
+  try {
+    declaredSize = Number(file?.size);
+  } catch {
+    declaredSize = NaN;
+  }
+  if (!Number.isSafeInteger(maxBytes) || maxBytes < 0) {
+    throw new Error(`${label}导入上限配置无效`);
+  }
+  if (!Number.isSafeInteger(declaredSize) || declaredSize < 0) {
+    throw new Error(`${label}大小无法确认，导入已停止`);
+  }
+  if (declaredSize > maxBytes) throw importSizeError(label, maxBytes, guidance);
+  if (typeof file?.slice !== 'function') {
+    throw new Error(`${label}无法安全读取，请使用支持文件分段读取的浏览器`);
+  }
+  const boundedFile = file.slice(0, maxBytes + 1);
+  if (typeof boundedFile?.text !== 'function') {
+    throw new Error(`${label}读取失败，请重试`);
+  }
+  const text = await boundedFile.text();
+  if (SimTelemetryCore.exceedsUtf8ByteLimit(text, maxBytes)) {
+    throw importSizeError(label, maxBytes, guidance);
+  }
+  return text;
+}
+
+function handleMicroduckRecordingReady(event) {
+  const data = event?.data;
+  if (!data || data.type !== 'rdk-microduck-recording-ready') return;
+  if (data.format !== 'microduck-trajectory-v1') return;
+  // Accept the same-origin mounted simulator (and `null` for local file://
+  // previews), while ignoring unsolicited messages from other frames.
+  if (event.origin && event.origin !== window.location.origin && event.origin !== 'null') return;
+  if (state.productId !== 'microduck') {
+    showToast('录制来自 MicroDuck，请先切换到 MicroDuck 产品线', 'error');
+    return;
+  }
+  const frame = $('simulator-frame');
+  if (frame?.contentWindow && event.source && event.source !== frame.contentWindow) return;
+  // The iframe sends metadata only. Pulling the text through the recorder API
+  // keeps large trajectories out of postMessage while still supporting a
+  // standalone/cross-origin fallback when the child includes text itself.
+  let text = typeof data.text === 'string' ? data.text : '';
+  if (!text && event.source && typeof event.source.__microduckRecorder?.getText === 'function') {
+    try { text = event.source.__microduckRecorder.getText(); } catch { /* ignore */ }
+  }
+  if (!text && frame?.contentWindow && typeof frame.contentWindow.__microduckRecorder?.getText === 'function') {
+    try { text = frame.contentWindow.__microduckRecorder.getText(); } catch { /* ignore */ }
+  }
+  if (!text) {
+    showToast('录制已停止，但无法读取轨迹；请在仿真面板点击“导出 JSONL”后导入', 'error');
+    return;
+  }
+  try {
+    const evidence = parseTelemetryText(text);
+    evidence.fileName = 'microduck-browser-recording.jsonl';
+    evidence.source = 'browser-microduck';
+    evidence.contractId = data.contractId || evidence.contractId || CONTRACT_ID;
+    evidence.recording = {
+      sampleCount: Number(data.sampleCount) || evidence.summary.sampleCount,
+      durationSeconds: Number(data.durationSeconds) || evidence.summary.durationSeconds,
+    };
+    state.telemetry = stampTelemetryContext(evidence);
+    renderAll();
+    const status = $('simulator-evidence-status');
+    status?.classList.add('is-ready');
+    if (status) status.textContent = `已同步 ${evidence.summary.sampleCount} 帧到评测证据`;
+    showToast(`MicroDuck 动作录制已同步：${evidence.summary.sampleCount} 帧，可到“评测与效果”上传到当前 Run`, 'success');
+  } catch (error) {
+    showToast(error instanceof Error ? `录制解析失败：${error.message}` : '录制解析失败，请导出 JSONL 后重试', 'error');
+  }
+}
+
 function currentModelIds() {
   const selected = selectedModel();
-  if (selected?.id) return new Set([selected.id]);
+  const linkedModelIds = projectModelIds();
+  if (selected?.id && (!linkedModelIds || linkedModelIds.has(String(selected.id)))) {
+    return new Set([selected.id]);
+  }
   return new Set(
     (state.overview?.models || [])
-      .filter((model) => model.manifest?.robot?.id === state.productId)
+      .filter((model) =>
+        model.manifest?.robot?.id === state.productId &&
+        (!linkedModelIds || linkedModelIds.has(String(model.id))),
+      )
       .map((model) => model.id),
   );
 }
 
 function runsForCurrentModel() {
   const ids = currentModelIds();
-  return (state.overview?.runs || []).filter((run) => ids.has(run.modelId));
+  return (state.overview?.runs || []).filter(
+    (run) => ids.has(run.modelId) && projectIncludesRecord(run),
+  );
 }
 
 function deploymentsForCurrentModel() {
   const ids = currentModelIds();
-  return (state.overview?.deployments || []).filter((deployment) => ids.has(deployment.modelId));
+  return (state.overview?.deployments || []).filter(
+    (deployment) => ids.has(deployment.modelId) && projectIncludesRecord(deployment),
+  );
 }
 
 function currentTelemetry() {
   const evidence = state.telemetry;
   if (!evidence) return null;
-  return evidence.modelId && !currentModelIds().has(evidence.modelId) ? null : evidence;
+  if (evidence.modelId && !currentModelIds().has(evidence.modelId)) return null;
+  return projectIncludesRecord(evidence) ? evidence : null;
 }
 
 function latestRun() {
@@ -2427,7 +3472,9 @@ function renderTelemetryEvidence() {
     stateBadge.className = 'state-badge state-neutral';
     stateBadge.textContent = '尚未导入';
     root.innerHTML =
-      '<div class="empty-inline">等待导入遥测；训练完成后可用它做仿真 / 真机对照。</div>';
+      '<div class="empty-state telemetry-empty"><strong>还没有评测证据</strong><span>导入 JSONL 或先运行仿真，系统会生成可回放的 Sim2Real 摘要。</span><div class="telemetry-empty-actions"><button type="button" class="button button-primary button-small" data-telemetry-empty-action="import">导入遥测 JSONL</button><button type="button" class="button button-ghost button-small" data-telemetry-empty-action="simulate">去仿真录制 →</button></div></div>';
+    root.querySelector('[data-telemetry-empty-action="import"]')?.addEventListener('click', () => $('telemetry-file-input')?.click());
+    root.querySelector('[data-telemetry-empty-action="simulate"]')?.addEventListener('click', () => setView('simulate'));
     timeline.hidden = true;
     renderTelemetryVisuals();
     clear.disabled = true;
@@ -2494,14 +3541,87 @@ function renderTelemetryEvidence() {
   }
 }
 
+function replayRuns() {
+  return [...runsForCurrentModel()].filter((run) => Number(run.evaluation?.replay?.sampleCount || 0) > 0 || run.status === 'completed').slice(0, 30);
+}
+
+function renderReplayPlayer() {
+  const select = $('replay-run-select');
+  const play = $('replay-play-button');
+  const stop = $('replay-stop-button');
+  const seek = $('replay-seek');
+  if (!select || !play || !stop || !seek) return;
+  const runs = replayRuns();
+  const current = state.replay.runId || runs[0]?.id || '';
+  select.replaceChildren(...runs.map((run) => { const option = document.createElement('option'); option.value = run.id; option.textContent = `${run.id.slice(0, 8)} · ${statusLabel(run.status)}`; return option; }));
+  select.value = runs.some((run) => run.id === current) ? current : '';
+  const loaded = state.replay.loaded && state.replay.runId === select.value;
+  seek.max = String(Math.max(0, state.replay.frames.length - 1));
+  seek.value = String(Math.min(state.replay.index, Math.max(0, state.replay.frames.length - 1)));
+  seek.disabled = !loaded || !state.replay.frames.length;
+  play.disabled = !loaded || !state.replay.frames.length;
+  stop.disabled = !loaded || !state.replay.frames.length;
+  play.textContent = state.replay.timer ? '❚❚ 暂停' : '▶ 播放';
+  const frame = state.replay.frames[state.replay.index];
+  setText('replay-frame-label', `${state.replay.frames.length ? state.replay.index + 1 : 0} / ${state.replay.frames.length} 帧`);
+  setText('replay-time-label', frame ? formatTelemetrySeconds(frame.t) : '0.00s');
+  setText('replay-status', loaded ? `已加载 ${state.replay.frames.length} 帧` : (runs.length ? '选择运行并加载回放' : '暂无可回放运行'));
+  setText('replay-frame-detail', frame ? `当前帧 ${state.replay.index + 1} · observation ${frame.observation?.length || 0}D · action ${frame.action?.length || 0}D` : '加载后可拖动时间轴；回放帧会同步发送到嵌入仿真器。');
+}
+
+function sendReplayFrame() {
+  const frame = state.replay.frames[state.replay.index];
+  if (!frame) return;
+  const iframe = $('simulator-frame');
+  try { iframe?.contentWindow?.postMessage({ type: 'rdk-replay-frame', frame, index: state.replay.index, runId: state.replay.runId }, '*'); } catch { /* cross-origin iframe may reject; controls still work */ }
+  renderReplayPlayer();
+}
+
+function stopReplay() {
+  if (state.replay.timer) clearInterval(state.replay.timer);
+  state.replay.timer = null;
+  renderReplayPlayer();
+}
+
+function toggleReplay() {
+  if (!state.replay.frames.length) return;
+  if (state.replay.timer) { stopReplay(); return; }
+  state.replay.timer = setInterval(() => {
+    if (state.replay.index >= state.replay.frames.length - 1) { stopReplay(); return; }
+    state.replay.index += 1; sendReplayFrame();
+  }, Math.max(10, 20 / Number(state.replay.speed || 1)));
+  sendReplayFrame();
+}
+
+async function loadRunReplay() {
+  const select = $('replay-run-select');
+  const runId = String(select?.value || '').trim();
+  if (!runId) { showToast('请选择包含遥测的运行记录', 'error'); return; }
+  stopReplay();
+  try {
+    const payload = await request('/sim2real/runs/' + encodeURIComponent(runId) + '/replay');
+    const frames = (Array.isArray(payload?.frames) ? payload.frames : []).map((sample) => ({ ...sample, t: Number(sample.t ?? sample.time ?? 0) })).sort((a, b) => a.t - b.t);
+    state.replay = { ...state.replay, runId, frames, index: 0, loaded: true, timer: null };
+    renderReplayPlayer();
+    sendReplayFrame();
+    showToast(frames.length ? `已加载 ${frames.length} 帧，可开始回放` : '该运行没有原始遥测帧', frames.length ? 'success' : 'normal');
+  } catch (error) { showToast(error instanceof Error ? error.message : '回放加载失败', 'error'); }
+}
+
 async function importTelemetryFile(event) {
   const input = event.target;
   const file = input?.files?.[0];
   if (!file) return;
   try {
-    const evidence = parseTelemetryText(await file.text());
+    const evidence = parseTelemetryText(
+      await readImportTextWithinLimit(
+        file,
+        SimTelemetryCore.MAX_TELEMETRY_IMPORT_BYTES,
+        '遥测文件',
+      ),
+    );
     evidence.fileName = file.name;
-    state.telemetry = evidence;
+    state.telemetry = stampTelemetryContext(evidence);
     renderAll();
     const skippedHint = evidence.skipped ? `，跳过 ${evidence.skipped} 条无效行` : '';
     showToast(
@@ -2529,7 +3649,7 @@ async function loadDemoTelemetry() {
     const evidence = parseTelemetryText(await response.text());
     evidence.fileName = 'microduck-telemetry-sample.jsonl';
     evidence.source = 'demo-fixture';
-    state.telemetry = evidence;
+    state.telemetry = stampTelemetryContext(evidence);
     renderAll();
     showToast('已载入合成演示证据；它不会代表真实 X5 遥测', 'normal');
   } catch (error) {
@@ -2570,6 +3690,7 @@ async function publishTelemetry() {
   }
   state.publishingTelemetry = true;
   renderTelemetryEvidence();
+  renderReplayPlayer();
   try {
     const samples = evidence.samples || [];
     // Keep a generous margin below Express/nginx's 2 MiB limit. A legal
@@ -2820,6 +3941,15 @@ let originbotCompareTimer = null;
 async function originbotCompareRefresh() {
   try {
     const payload = await request('/sim2real/board-station/status');
+    if (payload?.available === false || payload?.state === 'offline') {
+      const panel = $('originbot-compare-panel');
+      if (panel) panel.dataset.live = 'off';
+      setText('ob-compare-voltage', '无数据');
+      setText('ob-compare-heading', '无数据');
+      setText('ob-compare-odom', '无数据');
+      setText('ob-compare-source', `板卡离线 · ${String(payload.message || '等待实体板卡接入')}`);
+      return;
+    }
     const status = payload?.status || {};
     // The board agent exposes the adapter telemetry under both `originbot`
     // (legacy clients) and `telemetry` (generic clients). Prefer the generic
@@ -2897,7 +4027,7 @@ function renderNextAction() {
   const deployments = deploymentsForCurrentModel();
   let view = 'simulate';
   let title = '先在仿真里验证「' + selectedTask().label + '」';
-  let copy = selectedTask().hint + '。先录一段可回放轨迹，再决定使用本地服务器还是 RoboGo 训练。';
+  let copy = selectedTask().hint + '。回放用于验证策略，强化学习训练可直接选择本地 GPU 或 RoboGo 提交。';
   let label = '进入仿真与录制 →';
   if (!model) {
     view = 'train';
@@ -3097,6 +4227,7 @@ function renderReleaseGate() {
     if (!node) return;
     node.classList.remove('is-ready', 'is-current', 'is-blocked', 'is-failed', 'is-locked');
     node.classList.add('is-' + stateName);
+    node.dataset.state = stateName;
     const index = node.querySelector('.release-step-index');
     if (index)
       index.textContent =
@@ -3108,11 +4239,15 @@ function renderReleaseGate() {
               ? '01'
               : key === 'evaluation'
                 ? '02'
-                : key === 'canary'
+                : key === 'preflight'
                   ? '03'
-                  : '04';
+                  : key === 'canary'
+                    ? '04'
+                    : '05';
     const small = node.querySelector('small');
     if (small && detail) small.textContent = detail;
+    const title = node.querySelector('strong')?.textContent?.trim() || key;
+    node.setAttribute('aria-label', `${title}：${detail || '状态未知'}`);
   };
   update(
     'contract',
@@ -3142,16 +4277,63 @@ function renderReleaseGate() {
               ? '来源未验证；需要真实 worker 指标或受信 attested replay'
             : '需要评测指标或遥测证据',
   );
-  update('canary', 'blocked', '需要 X5 Board Agent；网页不会直接开电机');
-  update('live', 'locked', '人工批准后开放');
+  update(
+    'preflight',
+    preflightReady ? 'ready' : deployment ? 'current' : 'locked',
+    preflightReady
+      ? '设备、工具链和制品预检通过'
+      : deployment
+        ? '计划已生成；执行只读检查查看结果'
+        : '先生成只读预检计划',
+  );
+  const approvalStatus = deployment?.approval?.status;
+  update(
+    'canary',
+    approvalStatus === 'approved' ? 'ready' : approvalStatus === 'rejected' ? 'failed' : 'blocked',
+    approvalStatus === 'approved'
+      ? '人工审批已通过；等待受控 BoardAgent 执行'
+      : approvalStatus === 'rejected'
+        ? '人工审批已拒绝；请修复证据或兼容性问题后重新建计划'
+        : '需要目标设备 BoardAgent、owner/admin 人工审批和双开关；网页不会直接启动执行器',
+  );
+  update(
+    'live',
+    approvalStatus === 'approved' && deployment?.mode === 'live' ? 'ready' : 'locked',
+    approvalStatus === 'approved' && deployment?.mode === 'live'
+      ? '人工审批已通过；等待外部发布适配器执行'
+      : '人工批准后开放',
+  );
 }
 
 function renderWorkflowProgress() {
-  // The workflow state used to be mirrored into a vertical pipeline on the
-  // overview and a horizontal strip above every view. Both were removed in the
-  // declutter pass; readiness now surfaces only through the next-action card,
-  // the status grid, and each step view itself.
-  return;
+  const rail = $('workflow-progress-strip');
+  if (!rail) return;
+  const model = selectedModel();
+  const latest = latestRun();
+  const telemetry = currentTelemetry();
+  const deployment = deploymentsForCurrentModel().slice().sort((a, b) => String(b.updatedAt || b.createdAt || '').localeCompare(String(a.updatedAt || a.createdAt || '')))[0];
+  const contractReady = Boolean(model?.manifest?.contract?.id && model?.manifest?.artifacts?.length);
+  const replayReady = Boolean(telemetry?.summary || latest?.evaluation?.replay || latest?.taskEvaluation?.replay);
+  const trainingReady = Boolean(latest && ['completed', 'ready'].includes(String(latest.status || '').toLowerCase()));
+  const evaluationReady = Boolean(telemetry?.summary || latest?.evaluation || latest?.taskEvaluation);
+  const deployReady = Boolean(deployment && ['ready', 'completed', 'planned', 'running'].includes(String(deployment.status || '').toLowerCase()));
+  const states = { simulate: replayReady ? 'complete' : 'current', train: trainingReady ? 'complete' : contractReady ? 'current' : 'blocked', evaluate: evaluationReady ? 'complete' : replayReady || trainingReady ? 'current' : 'blocked', deploy: deployReady ? 'complete' : evaluationReady ? 'current' : 'blocked' };
+  const current = Object.entries(states).find(([, value]) => value === 'current')?.[0] || 'deploy';
+  const summary = $('workflow-progress-summary');
+  if (summary) summary.textContent = ({ simulate: '回放可选，用于验证策略', train: '模型已就绪，开始配置训练', evaluate: '打开评测查看回放', deploy: '评测完成，可生成预检计划' })[current] || '按步骤完成闭环';
+  rail.querySelectorAll('[data-workflow-step]').forEach((item) => {
+    const key = item.dataset.workflowStep;
+    item.classList.toggle('is-current', key === current);
+    item.classList.toggle('is-complete', states[key] === 'complete');
+    item.classList.toggle('is-blocked', states[key] === 'blocked');
+    const button = item.querySelector('button');
+    if (button) {
+      const blocked = states[key] === 'blocked';
+      const label = button.textContent.trim();
+      button.setAttribute('aria-label', blocked ? `${label}（尚未满足前置条件）` : label);
+      button.title = blocked ? '完成前面的步骤后可进入' : `打开${button.querySelector('strong')?.textContent || ''}`;
+    }
+  });
 }
 
 function renderRunProgress() {
@@ -3202,16 +4384,20 @@ function recordCollection() {
   const artifacts = (state.overview?.models || [])
     .filter((model) => currentModelIds().has(model.id))
     .flatMap((model) =>
-    (model.manifest?.artifacts || []).map((artifact) =>
-      Object.assign({}, artifact, {
-        id: model.id + ':' + artifact.id,
-        modelId: model.id,
-        kind: 'artifact · ' + (artifact.role || artifact.format || 'model'),
-        recordType: 'artifact',
-        status: 'registered',
-        summary: artifact.name || artifact.id,
-        createdAt: model.updatedAt || model.createdAt,
-      }),
+      (model.manifest?.artifacts || []).map((artifact) =>
+        Object.assign({}, artifact, (() => {
+          const presentation = artifactPresentation(artifact);
+          return {
+            ...presentation,
+            id: model.id + ':' + artifact.id,
+            modelId: model.id,
+            kind: 'artifact · ' + (artifact.role || artifact.format || 'model'),
+            recordType: 'artifact',
+            status: presentation.key,
+            summary: artifact.name || artifact.id,
+            createdAt: model.updatedAt || model.createdAt,
+          };
+        })()),
       ),
     );
   const evidence = currentTelemetry();
@@ -3228,6 +4414,8 @@ function recordCollection() {
           status: evidence.source === 'demo-fixture' ? 'demo' : 'registered',
           summary: evidence.fileName || '本地遥测证据',
           source: evidence.source,
+          modelId: evidence.modelId,
+          projectId: evidence.projectId,
           createdAt: new Date().toISOString(),
           telemetrySummary: evidence.summary,
         },
@@ -3247,6 +4435,8 @@ function recordCollection() {
               ' 帧 · ' +
               formatTelemetrySeconds(persistedReplay.durationSeconds),
             source: persistedReplay.source || 'import',
+            modelId: latest.modelId,
+            projectId: latest.projectId,
             createdAt: latest.createdAt,
             telemetrySummary: persistedReplay,
           },
@@ -3521,6 +4711,7 @@ function renderAll() {
   renderActionLibrary();
   renderBoard();
   renderEvaluation();
+  renderReplayPlayer();
   renderHistory();
   renderRunProgress();
   renderNextAction();
@@ -3528,6 +4719,7 @@ function renderAll() {
   renderReleaseGate();
   renderWorkflowProgress();
   renderProjectWorkspace();
+  renderPlatformScorecard();
   renderAgentPanel();
 }
 
@@ -3609,6 +4801,9 @@ async function refreshActiveRuns() {
 async function loadOverview({ quiet = false } = {}) {
   if (state.loading) return;
   setLoading(true);
+  if (!state.overview) {
+    setWorkspaceStatus('loading', '正在连接工作区', '正在读取项目、模型和设备状态…');
+  }
   try {
     const payload = await request(
       '/sim2real/overview?productId=' + encodeURIComponent(state.productId),
@@ -3623,9 +4818,18 @@ async function loadOverview({ quiet = false } = {}) {
       request('/sim2real/projects'),
       request('/sim2real/datasets'),
     ]);
-    state.workspaceSummary = summaryResult.status === 'fulfilled' ? summaryResult.value : null;
-    state.projects = projectsResult.status === 'fulfilled' && Array.isArray(projectsResult.value?.projects) ? projectsResult.value.projects : [];
-    state.datasets = datasetsResult.status === 'fulfilled' && Array.isArray(datasetsResult.value?.datasets) ? datasetsResult.value.datasets : [];
+    state.workspaceSummary = summaryResult.status === 'fulfilled' ? summaryResult.value : state.workspaceSummary;
+    const projectsAvailable = projectsResult.status === 'fulfilled' && Array.isArray(projectsResult.value?.projects);
+    const datasetsAvailable = datasetsResult.status === 'fulfilled' && Array.isArray(datasetsResult.value?.datasets);
+    if (projectsAvailable) state.projects = projectsResult.value.projects;
+    if (datasetsAvailable) state.datasets = datasetsResult.value.datasets;
+    state.projectsLoaded = projectsAvailable || state.projectsLoaded;
+    state.projectsLoadError = !projectsAvailable;
+    state.datasetsLoaded = datasetsAvailable || state.datasetsLoaded;
+    if (projectsAvailable && state.projectId && !state.projects.some((project) => String(project.id) === String(state.projectId))) {
+      state.projectId = '';
+      saveWorkspaceContext();
+    }
     state.serviceError = false;
     state.productProfiles = Array.isArray(payload.productProfiles) ? payload.productProfiles : null;
     clearAuthGate();
@@ -3633,6 +4837,12 @@ async function loadOverview({ quiet = false } = {}) {
     renderAll();
     await loadModelDetails();
     setText('hero-updated', '更新于 ' + formatDate(new Date().toISOString()));
+    if (summaryResult.status === 'rejected' || projectsResult.status === 'rejected' || datasetsResult.status === 'rejected') {
+      const failed = [summaryResult, projectsResult, datasetsResult].filter((result) => result.status === 'rejected').length;
+      setWorkspaceStatus('warning', '工作区已连接，但部分数据暂不可用', `${failed} 个辅助数据源未响应；核心模型和运行状态仍可使用。`, { retry: true });
+    } else {
+      clearWorkspaceStatus();
+    }
   } catch (error) {
     state.serviceError = !(error instanceof ApiError && error.status === 401);
     if (!(error instanceof ApiError && error.status === 401) && !quiet) {
@@ -3644,8 +4854,20 @@ async function loadOverview({ quiet = false } = {}) {
     );
     syncServicePill();
     renderEvaluationNext();
+    if (error instanceof ApiError && error.status === 401) {
+      clearWorkspaceStatus();
+    } else {
+      const detail = friendlyError(error, '无法读取工作区状态').replace(/[。.!！?？\s]+$/u, '');
+      setWorkspaceStatus('error', '工作区连接失败', `${detail}。检查服务后可以重试。`, { retry: true });
+    }
   } finally {
     setLoading(false);
+    // The first render happens while the overview request is in flight, so
+    // context actions are intentionally disabled there. Reconcile the
+    // controls after loading ends; otherwise a successful request leaves the
+    // project creator and run actions visually enabled but functionally inert.
+    renderProjectContext();
+    renderIntegrations();
     scheduleOverviewPolling();
   }
 }
@@ -3682,6 +4904,7 @@ function showValidation(payload) {
   if (!result) return;
   result.className = 'validation-result ' + (payload.validation?.valid ? 'is-ok' : 'is-error');
   if (payload.validation?.valid) {
+    updateTrainProgress(2);
     const warnings = payload.validation.warnings?.length
       ? '；' + payload.validation.warnings.length + ' 个提示'
       : '';
@@ -3690,6 +4913,13 @@ function showValidation(payload) {
     const first = payload.validation?.errors?.[0] || '清单不合法';
     result.textContent = '校验未通过：' + first;
   }
+}
+
+function updateTrainProgress(step) {
+  document.querySelectorAll('.train-onboarding-step').forEach((node, index) => {
+    node.classList.toggle('is-current', index === step - 1);
+    node.classList.toggle('is-complete', index < step - 1);
+  });
 }
 
 async function validateEditor() {
@@ -3706,10 +4936,10 @@ async function validateEditor() {
     const result = $('validation-result');
     if (result) {
       result.className = 'validation-result is-error';
-      result.textContent = error instanceof Error ? error.message : '校验失败';
+      result.textContent = friendlyError(error, '校验失败');
     }
     if (!(error instanceof ApiError && error.status === 401))
-      showToast(error instanceof Error ? error.message : '校验失败', 'error');
+      showToast(friendlyError(error, '校验失败'), 'error');
   }
 }
 
@@ -3720,12 +4950,32 @@ async function registerEditor() {
       method: 'POST',
       body: JSON.stringify({ manifest }),
     });
-    showToast('模型版本已登记', 'success');
+    let projectBindingFailed = false;
+    if (payload.model?.id && selectedProject()) {
+      try {
+        await attachModelToSelectedProject(payload.model.id);
+      } catch {
+        projectBindingFailed = true;
+        state.projectId = '';
+        saveWorkspaceContext();
+      }
+    }
+    showToast(
+      projectBindingFailed
+        ? '模型已登记，但当前项目绑定失败；已切换到全部项目，请稍后重试绑定。'
+        : '模型版本已登记' + (state.projectId ? '，已绑定当前项目' : ''),
+      projectBindingFailed ? 'error' : 'success',
+    );
     $('manifest-editor').value = JSON.stringify(payload.model?.manifest || manifest, null, 2);
+    updateTrainProgress(2);
+    const result = $('validation-result');
+    if (result) { result.className = 'validation-result is-ok'; result.textContent = '模型版本已登记，可以直接配置并提交强化学习训练；回放为可选。'; }
     await loadOverview({ quiet: true });
   } catch (error) {
-    if (!(error instanceof ApiError && error.status === 401))
-      showToast(error instanceof Error ? error.message : '模型登记失败', 'error');
+    const message = friendlyError(error, '模型登记失败');
+    const result = $('validation-result');
+    if (result) { result.className = 'validation-result is-error'; result.textContent = message; }
+    if (!(error instanceof ApiError && error.status === 401)) showToast(message, 'error');
   }
 }
 
@@ -3783,8 +5033,23 @@ async function runModel(backend) {
     const requestKey =
       globalThis.crypto?.randomUUID?.() ||
       `run-${Date.now()}-${Math.random().toString(16).slice(2)}`;
-    const body = { modelId: model.id, backend, taskId: state.taskId, idempotencyKey: requestKey };
-    if (backend === 'local' && state.selectedComputeResourceId) body.computeResourceId = state.selectedComputeResourceId;
+    const body = {
+      modelId: model.id,
+      backend,
+      taskId: state.taskId,
+      idempotencyKey: requestKey,
+      ...(state.projectId ? { projectId: state.projectId } : {}),
+    };
+    if (backend === 'local') {
+      // AI 模式会优先使用已测试在线且并发有余量的 GPU；没有可用资源时回退到服务端默认 Worker。
+      if (state.selectedComputeResourceId) {
+        body.computeResourceId = state.selectedComputeResourceId;
+      } else {
+        const resources = state.overview?.computeResources || [];
+        const online = resources.find((resource) => resource.status === 'online' && (resource.activeJobs == null || resource.activeJobs < (resource.maxConcurrentJobs || 1)));
+        if (online) body.computeResourceId = online.id;
+      }
+    }
     const profile = $('training-profile')?.value;
     const algorithm = $('training-algorithm')?.value;
     if ((backend === 'robogo' || backend === 'local') && profile) {
@@ -3804,6 +5069,9 @@ async function runModel(backend) {
       body: JSON.stringify(body),
     });
     const run = payload.run || {};
+    if (backend === 'browser' && ['completed', 'ready', 'queued', 'running'].includes(String(run.status || ''))) {
+      updateTrainProgress(3);
+    }
     showToast(
       run.summary || '运行请求已记录',
       run.status === 'completed' || run.status === 'ready' ? 'success' : 'normal',
@@ -3913,6 +5181,21 @@ async function executePreflight() {
 
 function loadManifestTemplate({ notify = true } = {}) {
   const profile = selectedProductProfile();
+  if (profile.id === 'originbot') {
+    const template = {
+      schemaVersion: 1,
+      modelId: 'my-originbot-policy', displayName: '我的 OriginBot 目标导航策略', version: '0.1.0',
+      robot: { id: 'originbot', variant: 'differential-drive' },
+      contract: { id: 'originbot-policy-v1', robotId: 'originbot', jointCount: 12, observationSize: 8, actionSize: 2, controlHz: 10, physicsTimestepSeconds: 0.1, decimation: 1,
+        observationLayout: [{ name: 'x', size: 1 }, { name: 'y', size: 1 }, { name: 'sin_yaw', size: 1 }, { name: 'cos_yaw', size: 1 }, { name: 'goal_dx', size: 1 }, { name: 'goal_dy', size: 1 }, { name: 'linear_velocity', size: 1 }, { name: 'angular_velocity', size: 1 }] },
+      simulator: { backends: ['browser', 'local'], policyArtifactId: 'policy-onnx', policyBundle: { defaultPolicyId: 'goal-navigation', policies: [{ id: 'goal-navigation', label: '目标导航', artifactId: 'policy-onnx' }] }, entryUrl: '/originbot-sim/' },
+      artifacts: [{ id: 'policy-onnx', role: 'policy', name: 'originbot-policy.onnx', kind: 'source', format: 'onnx', runtime: 'cpu-onnx', workload: 'locomotion', threads: 1, ref: 'artifact://replace-with-managed-artifact' }],
+      metadata: { source: 'OriginBot local or RoboGo export', notes: '8D 观测 / 2D 差速动作；可直接仿真、录制、训练和评测。' },
+    };
+    $('manifest-editor').value = JSON.stringify(template, null, 2);
+    if (notify) showToast('已载入 OriginBot 默认 manifest 模板；可直接校验或按需修改');
+    return;
+  }
   if (profile.id === 'rdk-duck') {
     // Contract-complete template: 42D/12D matches the starter-ppo engine
     // (engines/starter-ppo/runner.py), so a new user can register, validate,
@@ -4042,7 +5325,14 @@ async function importManifestFile(event) {
   const file = input?.files?.[0];
   if (!file) return;
   try {
-    const parsed = JSON.parse(await file.text());
+    const parsed = JSON.parse(
+      await readImportTextWithinLimit(
+        file,
+        MAX_MANIFEST_IMPORT_BYTES,
+        'manifest 文件',
+        '请精简 JSON 后再导入',
+      ),
+    );
     $('manifest-editor').value = JSON.stringify(parsed, null, 2);
     showToast('已导入本地 manifest；请先校验再登记', 'success');
   } catch (error) {
@@ -4265,6 +5555,34 @@ function stationRenderStatus(status) {
     const node = $(id);
     if (node) node.textContent = value;
   };
+  if (status.available === false || status.state === 'offline') {
+    const reason = String(status.message || status.reason || '实体板卡离线');
+    if (freshness) {
+      freshness.textContent = `板卡离线 · ${reason}`;
+      freshness.classList.add('is-stale');
+    }
+    ['station-cpu', 'station-cpu-temp', 'station-memory', 'station-memory-sub',
+      'station-network', 'station-disk', 'station-disk-sub', 'station-power',
+      'station-power-sub', 'station-uptime', 'station-uptime-sub',
+      'station-drive-state', 'station-tele-heading', 'station-tele-battery',
+      'station-tele-odom', 'station-tele-vel'].forEach((id) => setText(id, '无数据'));
+    setText('station-network-sub', '等待板卡接入');
+    setText('station-tele-battery-sub', '无实体板卡遥测');
+    setText('station-tele-heading-sub', '无实体板卡 IMU');
+    stationSetBar('station-cpu-bar', NaN, 0.6, 0.85);
+    stationSetBar('station-memory-bar', NaN, 0.7, 0.9);
+    stationSetBar('station-disk-bar', NaN, 0.75, 0.9);
+    stationSetBar('station-power-bar', NaN, 0.35, 0.2, true);
+    stationUpdateFloatStop(null);
+    const liveBadge = $('station-live-badge');
+    if (liveBadge) {
+      liveBadge.hidden = false;
+      liveBadge.textContent = 'OFFLINE';
+      liveBadge.classList.add('is-stale');
+    }
+    stationRenderPolicy({ state: 'offline', lastError: reason, available: false });
+    return;
+  }
   setText('station-cpu', Number.isFinite(cpu.percent) ? `${cpu.percent.toFixed(1)}%` : '--');
   setText(
     'station-cpu-temp',
@@ -4338,13 +5656,20 @@ function stationRenderStatus(status) {
   const drive = status.drive;
   const driveState = $('station-drive-state');
   if (driveState) {
+    const feedback = drive?.feedback;
+    const feedbackReady = feedback?.fresh === true && Number.isFinite(Number(feedback.linearX));
+    const feedbackText = feedbackReady
+      ? ` · 实测 ${Number(feedback.linearX).toFixed(2)} m/s · ${Number(feedback.angularZ || 0).toFixed(2)} rad/s`
+      : feedback?.available === true
+        ? ' · 实测遥测陈旧'
+        : '';
     if (drive && drive.active) {
       const remaining = Number.isFinite(Number(drive.remainingMs)) ? drive.remainingMs : 0;
       driveState.textContent =
-        `运动中 ${Number(drive.linear).toFixed(2)} m/s · ${Number(drive.angular).toFixed(2)} rad/s · 剩余 ${(remaining / 1000).toFixed(1)}s`;
+        `运动中 ${Number(drive.linear).toFixed(2)} m/s · ${Number(drive.angular).toFixed(2)} rad/s · 剩余 ${(remaining / 1000).toFixed(1)}s${feedbackText}`;
     } else {
       const reason = drive && drive.lastStopReason ? String(drive.lastStopReason) : '空闲';
-      driveState.textContent = `空闲（${reason}）`;
+      driveState.textContent = `空闲（${reason}）${feedbackText}`;
     }
   }
   stationUpdateFloatStop(drive);
@@ -4410,7 +5735,7 @@ function stationClearStreamReconnect() {
 function stationScheduleStreamReconnect() {
   // 一次网络抖动或 agent 重启不应让上位机永久显示 "--"：指数退避重连，
   // 上限 30 秒；视图切走（teardown）时清除定时器。
-  if (!state.station.ready || state.station.statusReader) return;
+  if (!state.station.ready || state.station.offline || state.station.statusReader) return;
   stationClearStreamReconnect();
   const attempts = Math.min(state.station.streamReconnectAttempts + 1, 5);
   state.station.streamReconnectAttempts = attempts;
@@ -4449,7 +5774,12 @@ function stationStartStatusStream() {
           buffer = buffer.slice(newline + 1);
           if (!line) continue;
           try {
-            stationRenderStatus(JSON.parse(line));
+            const snapshot = JSON.parse(line);
+            if (snapshot?.available === false || snapshot?.state === 'offline') {
+              state.station.offline = true;
+              state.station.offlineReason = String(snapshot.message || '实体板卡离线');
+            }
+            stationRenderStatus(snapshot);
           } catch {
             /* skip malformed heartbeat line */
           }
@@ -4483,7 +5813,21 @@ function stationStartStatusStream() {
 async function stationProbeDrive() {
   try {
     const payload = await request('/sim2real/board-station/drive');
+    if (payload?.available === false || payload?.state === 'offline') {
+      const controls = $('station-drive-controls');
+      const note = $('station-drive-note');
+      if (controls) controls.hidden = true;
+      if (note) note.textContent = `板卡离线：${String(payload.message || '接入实体板卡后才能读取驱动状态。')}`;
+      return;
+    }
     const enabled = payload?.platformEnabled === true && payload?.drive?.enabled === true;
+    const policy = payload?.actuatorPolicy || {};
+    const maxLinear = Number(policy.maxLinear);
+    const maxAngular = Number(policy.maxAngular);
+    const watchdogMs = Number(policy.watchdogMs);
+    setText('station-control-limits', `${Number.isFinite(maxLinear) ? maxLinear.toFixed(2) : '0.30'} m/s · ${Number.isFinite(maxAngular) ? maxAngular.toFixed(2) : '1.00'} rad/s`);
+    setText('station-control-watchdog', `${Number.isFinite(watchdogMs) ? Math.round(watchdogMs) : 500} ms 自动停车`);
+    setText('station-control-path', policy.commandTopic ? `策略动作 → ${policy.commandTopic}` : '策略动作 → /cmd_vel');
     const controls = $('station-drive-controls');
     const note = $('station-drive-note');
     if (controls) controls.hidden = !enabled;
@@ -4586,6 +5930,13 @@ function wireStationFloatStop() {
 async function stationProbePolicy() {
   try {
     const payload = await request('/sim2real/board-station/policy');
+    if (payload?.available === false || payload?.state === 'offline') {
+      const controls = $('station-policy-controls');
+      const note = $('station-policy-note');
+      if (controls) controls.hidden = true;
+      if (note) note.textContent = `板卡离线：${String(payload.message || '接入实体板卡后才能读取策略运行时。')}`;
+      return;
+    }
     const platform = payload?.platformEnabled === true;
     const drivePlatform = payload?.drivePlatformEnabled === true;
     const agent = payload?.policy;
@@ -4635,28 +5986,75 @@ function stationRenderPolicy(policy) {
   setText('station-policy-published', Number.isFinite(Number(policy.published)) ? String(Math.round(Number(policy.published))) : '0');
   const cmd = Number(policy.command);
   setText('station-policy-command', Number.isFinite(cmd) ? cmd.toFixed(1) : '0.0');
+  const feedback = policy.feedback;
+  const actualLinear = Number(feedback?.linearX);
+  const actualAngular = Number(feedback?.angularZ);
+  setText(
+    'station-policy-actual',
+    feedback?.fresh === true && Number.isFinite(actualLinear)
+      ? `${actualLinear.toFixed(2)} m/s · ${Number.isFinite(actualAngular) ? actualAngular.toFixed(2) : '--'} rad/s`
+      : feedback?.available === true
+        ? '遥测陈旧'
+        : '--',
+  );
   const model = policy.model;
   const meta = $('station-policy-model-meta');
   if (meta) {
     if (model && typeof model === 'object') {
       const kb = Number(model.bytes);
       const provider = typeof model.provider === 'string' ? model.provider : 'CPU';
+      const digest = typeof model.sha256 === 'string' && model.sha256.length >= 12
+        ? ` · sha256 ${model.sha256.slice(0, 12)}…`
+        : '';
       meta.textContent =
         `${String(model.path ?? '?').split('/').pop()} · ${Number.isFinite(kb) ? `${Math.round(kb / 1024)}KB` : '?'} · ` +
         `${Number(model.inputDim)}→${Number(model.outputDim)} · ${provider}` +
         (Array.isArray(policy.providersAvailable) && policy.providersAvailable.length
           ? `（板端可用：${policy.providersAvailable.join('、')}）`
-          : '');
+          : '') + digest;
     } else {
       meta.textContent = '未加载模型';
     }
   }
+  const sessionNode = $('station-policy-session');
+  if (sessionNode) {
+    const rawSession = policy.session && typeof policy.session === 'object'
+      ? policy.session
+      : (policy.sessionId ? {
+          id: policy.sessionId,
+          startedAt: policy.sessionStartedAt,
+          stoppedAt: policy.sessionStoppedAt,
+          stopReason: policy.sessionStopReason,
+          inferenceCount: policy.inferenceCount,
+          lastInferenceAt: policy.lastInferenceAt,
+          mock: false,
+        } : null);
+    const session = rawSession || {};
+    const sessionId = typeof session.id === 'string' && session.id ? session.id : '';
+    const started = typeof session.startedAt === 'string' ? session.startedAt : '';
+    const stopped = typeof session.stoppedAt === 'string' ? session.stoppedAt : '';
+    const reason = typeof session.stopReason === 'string' && session.stopReason ? session.stopReason : '—';
+    const count = Number(session.inferenceCount);
+    const mock = session.mock === true;
+    const stateLabel = !sessionId ? '尚未启动策略' : stopped ? `已停止 · ${reason}` : '运行中 · 未停止';
+    const lifecycle = sessionId
+      ? `会话 ${sessionId.slice(0, 12)}${sessionId.length > 12 ? '…' : ''} · ${started || '起始时间未知'}${stopped ? ` → ${stopped}` : ''}`
+      : '等待下一次 start；停止和故障证据会保留到下一次会话。';
+    const evidence = `${lifecycle} · 推理 ${Number.isFinite(count) ? Math.max(0, Math.round(count)) : 0} 次${mock ? ' · mock' : ' · mock:false'}`;
+    setText('station-policy-session-state', stateLabel);
+    setText('station-policy-session-meta', evidence);
+    sessionNode.dataset.state = !sessionId ? 'waiting' : stopped ? 'stopped' : 'running';
+  }
   const layoutNode = $('station-policy-layout');
   if (layoutNode) {
     const layout = typeof policy.observationLayout === 'string' ? policy.observationLayout : null;
+    const actionOutput = typeof policy.actionOutput === 'string' ? policy.actionOutput : null;
+    const controlHz = Number(policy.controlHz);
+    const actionLabel = actionOutput ? ` · 动作单位：${actionOutput}` : '';
+    const rateLabel = Number.isFinite(controlHz) && controlHz > 0 ? ` · 控制：${controlHz} Hz` : '';
     layoutNode.textContent = layout
-      ? `观测布局：${layout}${layout === 'auto' ? '（按维度自动）' : '（adapter 声明）'}`
-      : '观测布局：--';
+      ? `观测布局：${layout}${layout === 'auto' ? '（按维度自动）' : '（adapter 声明）'}${actionLabel}${rateLabel}`
+      : `观测布局：--${actionLabel}${rateLabel}`;
   }
   const slots = policy.obsSlots;
   const slotsNode = $('station-policy-obsslots');
@@ -4938,7 +6336,30 @@ async function stationInit() {
   const honestyNote = $('station-honesty-note');
   try {
     const health = await request('/sim2real/board-station/health');
+    if (health?.available === false || health?.state === 'offline') {
+      state.station.ready = false;
+      state.station.offline = true;
+      state.station.offlineReason = String(health.message || '当前没有可达的实体板卡');
+      state.station.device = health?.device ?? null;
+      const fallbackDevice = selectedDevice();
+      const deviceName = $('station-device-name');
+      const selectedOption = $('device-select')?.selectedOptions?.[0];
+      if (deviceName) {
+        deviceName.textContent = health?.device?.name
+          ? `${health.device.name}（${health.device.id}）`
+          : fallbackDevice?.name || fallbackDevice?.id || selectedOption?.textContent || '（未选择）';
+      }
+      if (notice) {
+        notice.hidden = false;
+        notice.textContent = `上位机离线：${state.station.offlineReason} 仿真、训练与数据分析仍可使用。`;
+      }
+      if (honestyNote) honestyNote.hidden = false;
+      stationLog(`上位机离线：${state.station.offlineReason}`, 'info');
+      return;
+    }
     state.station.ready = true;
+    state.station.offline = false;
+    state.station.offlineReason = '';
     state.station.mock = health?.agent?.mock === true;
     state.station.device = health?.device ?? null;
     if (notice) notice.hidden = true;
@@ -4972,10 +6393,11 @@ async function stationInit() {
     if (notice) {
       const detail = error instanceof Error ? error.message : '板端 agent 或板卡设备不可用';
       notice.hidden = false;
+      const cleanDetail = detail.replace(/[。.!！?？\s]+$/u, '');
       notice.textContent =
         '上位机未就绪：' +
-        detail.replace(/[。.!！?？\s]+$/u, '') +
-        '。请先运行 npm run dev:board-agent 并在部署页注册板卡。';
+        cleanDetail +
+        '。请确认板卡上的 rdk-board-agent 已启动、19100 端口可达，并在设备列表中完成接入。';
     }
     stationLog('上位机初始化失败', 'error');
   }
@@ -4986,8 +6408,9 @@ async function stationInit() {
   wireStationSwitchEvents();
 }
 
-// ---- 设备管理（RDK Studio 网页版式添加设备 → 服务器侧 SSH 隧道） -------
-// 浏览器只提交 SSH 坐标；隧道进程、板端开关写入和 agent 探测都在服务端完成。
+// ---- 设备管理（RDK Studio Local Bridge 优先，SSH 仅作独立部署备用） -------
+// 共享 Studio 部署通过浏览器已有会话走 Local Bridge；这里的 SSH 记录仅供
+// 服务器与板卡确实网络可达的独立部署使用。
 
 function stationDeviceRow(connection) {
   const live = connection.tunnelActive === true;
@@ -5023,27 +6446,61 @@ function stationDeviceRow(connection) {
   return item;
 }
 
+function stationBridgeRow(bridge, device) {
+  const item = document.createElement('div');
+  item.className = 'station-device-item';
+  item.dataset.bridgeDeviceId = device.bridgeDeviceId || device.id || '';
+  item.dataset.bridgeId = bridge.bridgeId || '';
+  const registered = (state.overview?.devices || []).find((candidate) => candidate.bridgeDeviceId && candidate.bridgeDeviceId === device.bridgeDeviceId);
+  item.innerHTML = '<div class="station-device-item-main"><span class="station-device-item-title"></span><span class="station-device-item-meta"></span></div><span class="station-device-badge live">Bridge 在线</span><div class="station-device-item-actions"><button class="button station-device-connect" type="button" data-action="bridge-connect"></button></div>';
+  item.querySelector('.station-device-item-title').textContent = device.name || device.host || '本地板卡';
+  item.querySelector('.station-device-item-meta').textContent = `${device.username || 'root'}@${device.host || '本机网络'} · ${device.transport || 'ssh'} · ${device.probeOk === true ? 'SSH 已验证' : '等待验证'}`;
+  const button = item.querySelector('.station-device-connect');
+  if (registered) {
+    button.textContent = '已接入 · 设为目标';
+    button.dataset.action = 'bridge-select';
+    button.dataset.deviceId = registered.id;
+  } else {
+    button.textContent = '接入平台';
+  }
+  return item;
+}
+
 async function stationDeviceManagerLoad() {
   const list = $('station-device-list');
   if (!list) return;
-  let payload;
-  try {
-    payload = await request('/sim2real/device-connections');
-  } catch (error) {
-    stationLog(`设备管理不可用：${error instanceof Error ? error.message : '未知错误'}`, 'error');
-    return;
-  }
+  let payload = null;
+  let deviceConnectionsError = null;
+  try { payload = await request('/sim2real/device-connections'); }
+  catch (error) { deviceConnectionsError = error; }
   const connections = Array.isArray(payload?.connections) ? payload.connections : [];
+  let bridgeStatus = null;
+  try {
+    bridgeStatus = await request('/sim2real/local-bridge/status');
+  } catch (error) {
+    if (!deviceConnectionsError) stationLog(`Local Bridge 状态暂不可用：${error instanceof Error ? error.message : '未知错误'}`, 'error');
+  }
   list.replaceChildren();
-  if (!connections.length) {
+  const bridges = Array.isArray(bridgeStatus?.bridges) ? bridgeStatus.bridges : [];
+  const bridgeDevices = bridges.flatMap((bridge) => bridge.online !== false ? (bridge.devices || []).map((device) => ({ bridge, device })) : []);
+  for (const entry of bridgeDevices) list.append(stationBridgeRow(entry.bridge, entry.device));
+  if (!connections.length && !bridgeDevices.length) {
     const empty = document.createElement('span');
     empty.className = 'station-topic-empty';
     empty.id = 'station-device-list-empty';
-    empty.textContent = '尚未添加设备。';
+    empty.textContent = deviceConnectionsError ? '暂时无法读取设备列表；Local Bridge 在线后会自动刷新。' : '尚未添加设备。';
     list.append(empty);
-    return;
   }
   for (const connection of connections) list.append(stationDeviceRow(connection));
+  if (bridgeDevices.length) stationLog(`已发现 ${bridgeDevices.length} 台本地 Bridge 设备，可直接连接`, 'ok');
+  if (!state.station.bridgePollTimer) {
+    state.station.bridgePollTimer = window.setInterval(() => {
+      if (document.visibilityState === 'visible') void stationDeviceManagerLoad();
+    }, 3000);
+  }
+  // The software workflow remains usable without a board. This manager is
+  // only a hardware discovery surface, so an SSH failure must not block the
+  // Bridge poll or the simulation/training paths.
   stationSwitchBoardProbe();
 }
 
@@ -5053,8 +6510,11 @@ function wireDeviceManagerEvents() {
   $('station-device-add-btn')?.addEventListener('click', async () => {
     const host = String($('station-device-host')?.value || '').trim();
     const username = String($('station-device-user')?.value || 'root').trim();
+    const password = String($('station-device-password')?.value || '');
     const port = Number($('station-device-port')?.value || 22);
     const label = String($('station-device-label')?.value || '').trim();
+    const profile = String($('station-device-profile')?.value || 'custom');
+    const transport = String($('station-device-transport')?.value || 'ssh');
     if (!host) {
       stationLog('请填写板卡 IP 或主机名（不带 http://）', 'error');
       return;
@@ -5062,14 +6522,43 @@ function wireDeviceManagerEvents() {
     try {
       const created = await request('/sim2real/device-connections', {
         method: 'POST',
-        body: JSON.stringify({ host, username, port, label }),
+        body: JSON.stringify({ host, username, port, label, profile, transport }),
       });
-      stationLog(`已添加设备 ${created?.connection?.label || host}，点击「连接」建立隧道`, 'ok');
+      stationLog(`已添加 SSH 备用设备 ${created?.connection?.label || host}，仅在服务器可达板卡时使用`, 'ok');
+      try { localStorage.setItem(`rdk-device-profile:${created?.connection?.id || host}`, JSON.stringify({ profile, transport })); } catch {}
       $('station-device-host').value = '';
       await stationDeviceManagerLoad();
     } catch (error) {
       stationLog(`添加失败：${error instanceof Error ? error.message : '未知错误'}`, 'error');
     }
+  });
+  $('station-device-script-btn')?.addEventListener('click', async () => {
+    const host = String($('station-device-host')?.value || '').trim();
+    const user = String($('station-device-user')?.value || 'root').trim() || 'root';
+    const password = String($('station-device-password')?.value || '');
+    const port = Number($('station-device-port')?.value || 22);
+    if (!host) { showToast('请先填写板卡 IP 或主机名。', 'error'); return; }
+    let script = '';
+    try {
+      // The Studio host exposes the shared Local Bridge protocol under its
+      // mounted API path; the Sim2Real UI owns the flow and never redirects.
+      const pairing = await request('/sim2real/local-bridge/pairing-code', { method: 'POST', body: JSON.stringify({ host, sshUser: user, sshPort: port, ...(password ? { sshPassword: password } : {}) }) });
+      if (!pairing.command) throw new Error(pairing.message || '无法生成连接命令，请先登录。');
+      script = pairing.oneliner || pairing.command;
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : '无法生成连接命令，请先登录。', 'error');
+      return;
+    }
+    const output = $('station-connect-script');
+    const text = $('station-connect-script-text');
+    if (text) text.value = script;
+    output?.removeAttribute('hidden');
+    try { await navigator.clipboard?.writeText(script); showToast('连接脚本已生成并复制。', 'success'); } catch { showToast('连接脚本已生成，请手动复制。', 'normal'); }
+  });
+  $('station-connect-script-copy')?.addEventListener('click', async () => {
+    const text = $('station-connect-script-text');
+    if (!text) return;
+    try { await navigator.clipboard.writeText(text.value); showToast('脚本已复制。', 'success'); } catch { text.select(); document.execCommand('copy'); showToast('脚本已复制。', 'success'); }
   });
   $('station-device-list')?.addEventListener('click', async (event) => {
     const button = event.target instanceof Element ? event.target.closest('button') : null;
@@ -5077,6 +6566,33 @@ function wireDeviceManagerEvents() {
     const item = button.closest('.station-device-item');
     const connectionId = item?.dataset?.connectionId;
     const action = button.dataset.action;
+    if (action === 'bridge-connect') {
+      button.disabled = true;
+      button.textContent = '接入中…';
+      showToast('正在把这块板卡接入 Sim2Real，请稍候…', 'normal');
+      try {
+        stationLog('正在把本地 Bridge 设备接入 Sim2Real…');
+        const bridgeDeviceId = item?.dataset?.bridgeDeviceId;
+        const bridgeId = item?.dataset?.bridgeId;
+        const result = await request(`/sim2real/local-bridge/devices/${encodeURIComponent(bridgeDeviceId)}/connect`, { method: 'POST', body: JSON.stringify({ bridgeId }) });
+        const payload = result || {};
+        if (!result.ok) throw new Error(payload.message || 'Bridge 设备连接失败');
+        stationLog('Bridge 设备已连接，目标设备列表已更新。', 'ok');
+        showToast('设备已接入 Sim2Real，可以进行预检。', 'success');
+        await loadOverview({ quiet: true });
+        stationInit();
+      } catch (error) { const message = error instanceof Error ? error.message : 'Bridge 设备连接失败'; stationLog(message, 'error'); showToast(message, 'error'); }
+      finally { button.disabled = false; await stationDeviceManagerLoad(); }
+      return;
+    }
+    if (action === 'bridge-select') {
+      state.selectedDeviceId = button.dataset.deviceId || '';
+      saveWorkspaceContext();
+      renderAll();
+      showToast('已选择目标设备；现在可继续做预检或部署。', 'success');
+      button.disabled = false;
+      return;
+    }
     if (!connectionId || !action) return;
     button.disabled = true;
     try {
@@ -5279,7 +6795,8 @@ function wireStationEvents() {
   });
   // 运动滑条的实时读数；急停不设任何前置条件。
   $('station-drive-speed')?.addEventListener('input', (event) => {
-    setText('station-drive-speed-out', `${Number(event.target.value).toFixed(2)} m/s`);
+    const value = Number(event.target.value);
+    setText('station-drive-speed-out', `${value >= 0 ? '+' : ''}${value.toFixed(2)} m/s`);
   });
   $('station-drive-omega')?.addEventListener('input', (event) => {
     setText('station-drive-omega-out', `${Number(event.target.value).toFixed(1)} rad/s`);
@@ -5357,7 +6874,11 @@ function wireEvents() {
   window.addEventListener('hashchange', () =>
     setView(window.location.hash.slice(1), { updateHash: false }),
   );
+  window.addEventListener('message', handleMicroduckRecordingReady);
   $('refresh-button')?.addEventListener('click', () => loadOverview());
+  $('workspace-status-retry')?.addEventListener('click', () => {
+    if (!state.loading) void loadOverview();
+  });
   wireCommandPalette();
   $('robogo-refresh-button')?.addEventListener('click', () => loadOverview());
   $('auth-retry-button')?.addEventListener('click', () => loadOverview());
@@ -5374,6 +6895,105 @@ function wireEvents() {
   $('account-pill-logout')?.addEventListener('click', () => {
     void logoutAccount();
   });
+  $('project-create-button')?.addEventListener('click', openProjectDialog);
+  $('project-select')?.addEventListener('change', (event) => {
+    const next = String(event.target?.value || '');
+    state.projectId = (state.projects || []).some((project) => String(project.id) === next) ? next : '';
+    // A project may intentionally contain no model yet. Keep the current
+    // selection when it remains valid; otherwise renderSelects() chooses the
+    // first model linked to the new project and exposes the empty state.
+    if (state.projectId) {
+      const ids = projectModelIds();
+      if (ids && state.selectedModelId && !ids.has(String(state.selectedModelId))) state.selectedModelId = '';
+    }
+    state.activeDeployment = null;
+    state.telemetry = null;
+    saveWorkspaceContext();
+    renderAll();
+    showToast(state.projectId ? `已切换项目：${projectDisplayName(selectedProject())}` : '已切换到全部项目', 'success');
+  });
+  $('project-form')?.addEventListener('submit', (event) => {
+    void submitProject(event);
+  });
+  $('project-dialog-close')?.addEventListener('click', () => {
+    const dialog = $('project-dialog');
+    if (dialog instanceof HTMLDialogElement && dialog.open) dialog.close();
+    else dialog?.removeAttribute('open');
+  });
+  $('project-dialog-cancel')?.addEventListener('click', () => {
+    const dialog = $('project-dialog');
+    if (dialog instanceof HTMLDialogElement && dialog.open) dialog.close();
+    else dialog?.removeAttribute('open');
+  });
+  $('project-name-input')?.addEventListener('input', (event) => {
+    const slug = $('project-slug-input');
+    if (!slug || slug.dataset.touched === '1') return;
+    slug.value = projectSlugFromName(event.target?.value || '');
+  });
+  $('project-slug-input')?.addEventListener('input', (event) => {
+    if (event.target) event.target.dataset.touched = '1';
+  });
+  $('project-dialog')?.addEventListener('cancel', (event) => {
+    event.preventDefault();
+    const dialog = $('project-dialog');
+    if (dialog instanceof HTMLDialogElement && dialog.open) dialog.close();
+  });
+  const setSubmodule = (group, module) => {
+    if (group === 'train') {
+      setTrainModule(module);
+    } else if (group === 'station') {
+      const section = document.querySelector('[data-view-section="station"]');
+      const layout = document.querySelector('[data-view-section="station"] .station-layout');
+      section?.setAttribute('data-active-station-module', module);
+      layout?.setAttribute('data-active-station-module', module);
+      document.querySelectorAll('[data-station-module-tab]').forEach((tab) => {
+        const active = tab.dataset.stationModuleTab === module;
+        tab.classList.toggle('is-active', active);
+        tab.setAttribute('aria-selected', active ? 'true' : 'false');
+      });
+    }
+  };
+  document.querySelectorAll('[data-train-module-tab]').forEach((tab) => {
+    tab.addEventListener('click', () => setSubmodule('train', tab.dataset.trainModuleTab || 'run'));
+  });
+  document.querySelectorAll('[data-station-module-tab]').forEach((tab) => {
+    tab.addEventListener('click', () => setSubmodule('station', tab.dataset.stationModuleTab || 'telemetry'));
+  });
+  setSubmodule('train', state.trainModule);
+  setSubmodule('station', 'devices');
+  const openTrainStep = (step) => {
+    if (step === 1) {
+      setView('train');
+      document.querySelector('#contract-fold')?.setAttribute('open', '');
+      document.querySelector('#template-button')?.focus();
+    } else if (step === 2) {
+      // Replay is optional for RL. Step 2 opens training configuration directly.
+      setView('train');
+      setSubmodule('train', 'run');
+      const panel = $('training-profile')?.closest('.train-panel') || $('local-run-button')?.closest('.train-panel');
+      panel?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      $('training-profile')?.focus();
+    } else {
+      setView('train');
+      const button = $('local-run-button');
+      const panel = button?.closest('.train-panel') || button;
+      panel?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      if (button && !button.disabled) button.focus();
+      else {
+        // The step remains actionable even when no runner is configured: guide the
+        // operator to the training panel instead of making the card appear inert.
+        button?.focus();
+        showToast('请先在训练方式中登记或选择本地 / RoboGo worker。', 'normal');
+      }
+    }
+  };
+  document.querySelectorAll('[data-train-step]').forEach((step) => {
+    const activate = () => openTrainStep(Number(step.dataset.trainStep || 1));
+    step.addEventListener('click', activate);
+    step.addEventListener('keydown', (event) => {
+      if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); activate(); }
+    });
+  });
   $('task-select')?.addEventListener('change', (event) => {
     const next = event.target.value;
     if (!ACTION_TASKS[next]) return;
@@ -5384,8 +7004,13 @@ function wireEvents() {
     } catch {
       // Preference persistence is optional in file:// and privacy contexts.
     }
-    renderAll();
+    // Keep the selector responsive even when another dashboard panel fails to refresh.
+    // The task is used by training payloads and the context panel can update independently.
+    renderSelects();
+    renderSimulationGuide();
+    setText('task-context-note', `${ACTION_TASKS[next].hint}。该任务会随运行记录进入训练和评测。`);
     showToast('当前动作任务：' + ACTION_TASKS[next].label, 'success');
+    try { renderAll(); } catch (error) { console.warn('任务面板刷新失败，已保留当前动作：', error); }
   });
   document.querySelectorAll('[data-record-tab]').forEach((control) => {
     control.addEventListener('click', () => {
@@ -5402,16 +7027,47 @@ function wireEvents() {
     const control = event.target instanceof Element ? event.target.closest('[data-workspace-view]') : null;
     if (!control) return;
     const view = control.dataset.workspaceView;
-    if (view) setView(view);
+    if (view === 'contract') {
+      setView('train');
+      setTrainModule('contract');
+      document.querySelector('#contract-fold')?.setAttribute('open', '');
+      document.querySelector('#template-button')?.focus();
+    } else if (view) setView(view);
+  });
+  document.addEventListener('keydown', (event) => {
+    if (event.key !== 'Enter' && event.key !== ' ') return;
+    const control = event.target instanceof Element ? event.target.closest('[data-workspace-view]') : null;
+    if (!control || control instanceof HTMLButtonElement || control instanceof HTMLAnchorElement) return;
+    event.preventDefault();
+    control.click();
   });
   $('record-search')?.addEventListener('input', (event) => {
     state.recordsQuery = String(event.target.value || '');
     renderHistory();
   });
+  document.querySelectorAll('[data-replay-task-link]').forEach((link) => {
+    link.addEventListener('click', (event) => {
+      event.preventDefault();
+      const task = ACTION_TASKS[state.taskId];
+      const input = $('record-search');
+      if (input && task) {
+        input.value = task.label;
+        state.recordsQuery = task.label;
+      }
+      setView('records');
+      renderHistory();
+    });
+  });
   $('telemetry-file-input')?.addEventListener('change', importTelemetryFile);
   $('telemetry-demo-button')?.addEventListener('click', () => loadDemoTelemetry());
   $('telemetry-clear-button')?.addEventListener('click', clearTelemetry);
   $('telemetry-publish-button')?.addEventListener('click', () => publishTelemetry());
+  $('replay-load-button')?.addEventListener('click', () => { void loadRunReplay(); });
+  $('replay-play-button')?.addEventListener('click', toggleReplay);
+  $('replay-stop-button')?.addEventListener('click', () => { state.replay.index = 0; stopReplay(); sendReplayFrame(); });
+  $('replay-run-select')?.addEventListener('change', (event) => { state.replay.runId = String(event.target.value || ''); state.replay.loaded = false; state.replay.frames = []; state.replay.index = 0; stopReplay(); renderReplayPlayer(); });
+  $('replay-speed-select')?.addEventListener('change', (event) => { state.replay.speed = Number(event.target.value || 1); if (state.replay.timer) { stopReplay(); toggleReplay(); } });
+  $('replay-seek')?.addEventListener('input', (event) => { state.replay.index = Number(event.target.value || 0); sendReplayFrame(); });
   $('evaluation-next-button')?.addEventListener('click', (event) => {
     if (event.currentTarget?.dataset.action === 'import-telemetry') {
       event.preventDefault();
@@ -5431,10 +7087,24 @@ function wireEvents() {
     if (!PRODUCT_PROFILES[next]) return;
     state.productId = next;
     state.selectedModelId = '';
+    // A project can span several robot profiles. Keep it only when it links a
+    // model for the newly selected product; otherwise return to the account
+    // view rather than showing a misleading empty project context.
+    const project = selectedProject();
+    if (project?.modelIds?.length) {
+      const productModelIds = new Set(
+        (state.overview?.models || [])
+          .filter((item) => item.manifest?.robot?.id === next)
+          .map((item) => String(item.id)),
+      );
+      if (!project.modelIds.some((id) => productModelIds.has(String(id)))) state.projectId = '';
+    }
     state.model = null;
     state.compatibility = [];
     state.activeDeployment = null;
     state.telemetry = null;
+    stopReplay();
+    state.replay = { runId: '', frames: [], index: 0, timer: null, speed: 1, loaded: false };
     saveWorkspaceContext();
     try {
       window.localStorage?.setItem('rdk-duck-lab-product', next);
@@ -5444,10 +7114,13 @@ function wireEvents() {
     renderAll();
     await loadOverview({ quiet: true });
     loadManifestTemplate();
+    const nextProfile = PRODUCT_PROFILES[next];
     showToast(
       next === 'rdk-duck'
         ? '已切换到 RDK Duck；请导入或填写真实契约 manifest'
-        : '已切换到 MicroDuck 官方参考',
+        : next === 'originbot'
+          ? '已切换到 OriginBot；默认模板可直接开始仿真和训练'
+          : '已切换到 MicroDuck 官方参考',
       'success',
     );
   });

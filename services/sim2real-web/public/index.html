@@ -3,24 +3,31 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <meta name="description" content="面向 RDK X5 的 Duck 仿真、训练与部署平台" />
-    <title>RDK Duck Sim2Real Lab</title>
+    <meta name="description" content="RDK Robot Learning Studio：面向多种 RDK 设备的仿真、训练、评测与部署工作台" />
+    <!-- The server replaces this marker with the configured reverse-proxy
+         prefix.  Keeping it in the document makes arbitrary mounts (for
+         example /robot-lab) work without hard-coded client paths. -->
+    <meta name="rdk-sim2real-base-path" content="__RDK_SIM2REAL_BASE_PATH__" />
+    <title>RDK Robot Learning Platform</title>
     <link rel="stylesheet" href="./styles.css?v=duck-lab-28" />
     <link rel="stylesheet" href="./overview-clean.css?v=2" />
-    <link rel="stylesheet" href="./visual-polish.css?v=1" />
+    <link rel="stylesheet" href="./visual-polish.css?v=2" />
     <link rel="stylesheet" href="./onboarding.css?v=1" />
     <link rel="stylesheet" href="./refactor-ia.css?v=2" />
     <link rel="stylesheet" href="./overview-density.css?v=1" />
+    <link rel="stylesheet" href="./product-polish.css?v=3" />
+    <link rel="stylesheet" href="./workflow-ux.css?v=1" />
+    <link rel="stylesheet" href="./maturity-ux.css?v=2" />
   </head>
   <body class="theme-dark">
     <a class="skip-link" href="#main-content">跳到主要内容</a>
     <div class="app-shell">
       <header class="topbar">
-        <a class="brand" href="./" aria-label="RDK Duck Sim2Real Lab 首页">
+        <a class="brand" href="./" aria-label="RDK Robot Learning Studio 首页">
           <span class="brand-mark">D</span>
           <span
-            ><span class="brand-kicker">RDK X5 · SIM2REAL PLATFORM</span
-            ><strong>Sim2Real Lab</strong></span
+            ><span class="brand-kicker">RDK ROBOT LEARNING PLATFORM</span
+            ><strong>Robot Learning Workbench</strong></span
           >
         </a>
         <div class="topbar-context">
@@ -53,7 +60,7 @@
               更多 <span aria-hidden="true">⌄</span>
             </button>
             <div class="top-menu-list" role="menu" id="top-menu-list" hidden>
-              <button class="top-menu-item" type="button" role="menuitemcheckbox" id="notify-toggle" aria-pressed="false">
+              <button class="top-menu-item" type="button" role="menuitemcheckbox" id="notify-toggle" aria-checked="false" aria-pressed="false">
                 通知关
               </button>
               <button class="top-menu-item" type="button" role="menuitem" id="refresh-button">
@@ -87,6 +94,16 @@
                 <option value="originbot">OriginBot · X5 真机</option>
                 <option value="rdk-duck">RDK Duck · X5 产品</option>
               </select>
+              <div class="sidebar-project-context">
+                <label for="project-select">项目</label>
+                <div class="sidebar-project-context-row">
+                  <select id="project-select" aria-label="选择当前项目">
+                    <option value="">全部项目</option>
+                  </select>
+                  <button class="sidebar-project-add" id="project-create-button" type="button" aria-label="新建项目" title="新建项目">＋</button>
+                </div>
+                <small id="project-context-note">工作区加载中…</small>
+              </div>
             </div>
             <span
               class="sidebar-project-state is-waiting"
@@ -107,7 +124,7 @@
               aria-current="page"
             >
               <span class="nav-index">◇</span
-              ><span><strong>工作台总览</strong></span>
+              ><span><strong>工作台总览</strong><small>配置项目、模型与设备</small></span>
             </button>
             <button class="nav-item" type="button" data-agent-open>
               <span class="nav-index">✦</span
@@ -123,15 +140,15 @@
             </button>
             <button class="nav-item" type="button" data-view-target="train">
               <span class="nav-index">02</span
-              ><span><strong>训练与模型</strong></span>
+              ><span><strong>强化学习训练</strong></span>
             </button>
             <button class="nav-item" type="button" data-view-target="evaluate">
               <span class="nav-index">03</span
-              ><span><strong>评测与效果</strong></span>
+              ><span><strong>Sim2Real 评测</strong><small>仿真与真机效果对比</small></span>
             </button>
             <button class="nav-item" type="button" data-view-target="deploy">
               <span class="nav-index">04</span
-              ><span><strong>部署与上线</strong></span>
+              ><span><strong>部署与反馈</strong><small>预检、发布和运行状态</small></span>
             </button>
           </nav>
           <div class="sidebar-divider sidebar-divider-compact"></div>
@@ -139,7 +156,7 @@
           <nav class="workflow-nav" aria-label="记录与设备工具">
             <button class="nav-item" type="button" data-view-target="records">
               <span class="nav-index">▦</span
-              ><span><strong>记录与版本</strong></span>
+              ><span><strong>调试与记录</strong><small>运行日志、错误和版本</small></span>
             </button>
             <button class="nav-item" type="button" data-view-target="station">
               <span class="nav-index">⌂</span
@@ -164,13 +181,13 @@
               </p>
               <form class="auth-login-form" id="auth-login-form" novalidate>
                 <div class="auth-login-tabs" role="tablist" aria-label="登录方式">
-                  <button type="button" class="auth-login-tab is-active" data-auth-method="account" role="tab">
+                  <button type="button" class="auth-login-tab is-active" data-auth-method="account" role="tab" aria-selected="true" tabindex="0">
                     账号密码
                   </button>
-                  <button type="button" class="auth-login-tab" data-auth-method="sms" role="tab">
+                  <button type="button" class="auth-login-tab" data-auth-method="sms" role="tab" aria-selected="false" tabindex="-1">
                     短信登录
                   </button>
-                  <button type="button" class="auth-login-tab" data-auth-method="email" role="tab">
+                  <button type="button" class="auth-login-tab" data-auth-method="email" role="tab" aria-selected="false" tabindex="-1">
                     邮箱登录
                   </button>
                 </div>
@@ -227,6 +244,10 @@
           <section class="context-strip" aria-label="当前工作区状态">
             <div class="context-live" id="context-live" aria-label="当前状态">
               <div class="context-live-item">
+                <span>当前项目</span>
+                <strong id="context-live-project">全部项目</strong>
+              </div>
+              <div class="context-live-item">
                 <span>当前模型</span>
                 <strong id="context-live-model">未选择</strong>
               </div>
@@ -235,7 +256,11 @@
                 <strong id="context-live-device">未选择</strong>
               </div>
               <div class="context-live-item">
-                <span>任务</span>
+                <span>动作任务</span>
+                <strong id="context-live-task">行走</strong>
+              </div>
+              <div class="context-live-item">
+                <span>运行状态</span>
                 <strong id="context-live-runs">空闲</strong>
               </div>
               <div class="context-live-item">
@@ -251,13 +276,32 @@
             ><span id="device-count" class="sr-only">0 块板卡</span>
           </section>
 
+          <div class="workspace-status-banner" id="workspace-status-banner" role="status" aria-live="polite" hidden>
+            <span class="workspace-status-icon" aria-hidden="true">!</span>
+            <div class="workspace-status-copy">
+              <strong id="workspace-status-title">工作区状态</strong>
+              <span id="workspace-status-message"></span>
+            </div>
+            <button class="button button-ghost button-small" id="workspace-status-retry" type="button">重新连接</button>
+          </div>
+
+          <nav class="workflow-progress-strip" id="workflow-progress-strip" aria-label="闭环进度">
+            <div class="workflow-progress-intro"><span class="eyebrow">闭环进度</span><strong id="workflow-progress-summary">从仿真开始</strong></div>
+            <ol class="workflow-progress-steps">
+              <li data-workflow-step="simulate"><button type="button" data-view-target="simulate"><b>1</b><span><strong>仿真录制</strong><small>生成可回放轨迹</small></span></button></li>
+              <li data-workflow-step="train"><button type="button" data-view-target="train"><b>2</b><span><strong>强化学习</strong><small>训练策略模型</small></span></button></li>
+              <li data-workflow-step="evaluate"><button type="button" data-view-target="evaluate"><b>3</b><span><strong>评测回放</strong><small>对比仿真与真机</small></span></button></li>
+              <li data-workflow-step="deploy"><button type="button" data-view-target="deploy"><b>4</b><span><strong>部署反馈</strong><small>预检后受控上线</small></span></button></li>
+            </ol>
+          </nav>
+
           <section
             class="view-section"
             data-view-section="overview"
             aria-labelledby="overview-title"
           >
             <div class="section-heading section-heading-lean">
-              <div class="overview-page-title"><h2 id="overview-title">工作区总览</h2><p>从仿真到真实设备，跟进当前项目的每一步。</p></div>
+              <div class="overview-page-title"><h2 id="overview-title">准备工作台</h2><p>先选机器人和任务即可开始仿真、录制和训练；需要真机时再连接设备。</p></div>
               <span class="section-caption" id="hero-updated">—</span>
             </div>
             <div class="next-card">
@@ -274,6 +318,23 @@
                 </button>
               </div>
             </div>
+            <section class="first-run-path panel" aria-labelledby="first-run-path-title">
+              <div class="first-run-path-heading"><div><span class="eyebrow">第一次使用</span><h2 id="first-run-path-title">从默认配置跑通一轮闭环</h2></div><span class="panel-caption">完成后再做高级配置</span></div>
+              <div class="first-run-path-steps">
+                <button type="button" class="first-run-path-step is-current" data-view-target="simulate"><b>1</b><span><strong>先看仿真</strong><small>理解动作和观测</small></span><i>→</i></button>
+                <button type="button" class="first-run-path-step" data-view-target="train"><b>2</b><span><strong>再跑训练</strong><small>使用默认模型配置</small></span><i>→</i></button>
+                <button type="button" class="first-run-path-step" data-view-target="evaluate"><b>3</b><span><strong>检查效果</strong><small>导入轨迹或遥测</small></span><i>→</i></button>
+                <button type="button" class="first-run-path-step" data-view-target="station"><b>4</b><span><strong>需要真机时再连接</strong><small>通过 Local Bridge 接入设备</small></span><i>→</i></button>
+              </div>
+            </section>
+            <section class="platform-scorecard panel" aria-labelledby="platform-scorecard-title">
+              <div class="platform-scorecard-heading">
+                <div><span class="eyebrow">平台健康度</span><h2 id="platform-scorecard-title">研发闭环评分</h2><p>把“能演示”与“能上真机”分开显示，下一步始终有据可依。</p></div>
+                <div class="platform-scorecard-total"><strong id="platform-score-total">—</strong><span>/ 10 软件门槛</span></div>
+              </div>
+              <div class="platform-scorecard-grid" id="platform-scorecard-grid" aria-live="polite"><span class="empty-inline">正在检查契约、训练、评测和设备证据…</span></div>
+              <div class="platform-scorecard-foot"><span id="platform-scorecard-note">真实 X5 运动证据和签名制品会单独计入现场验收。</span><button type="button" class="button button-ghost button-small" data-view-target="records">查看证据记录 →</button></div>
+            </section>
             <section class="project-workspace panel" id="project-workspace" aria-labelledby="project-workspace-title">
               <div class="panel-heading panel-heading-lean project-workspace-heading">
                 <div>
@@ -312,7 +373,7 @@
               </summary>
               <div class="overview-environment-body">
                 <div class="status-grid" id="status-grid" aria-label="集成状态">
-                  <article class="status-card">
+                  <article class="status-card status-card-device" data-workspace-view="station" tabindex="0" role="button" aria-label="打开设备管理">
                     <div class="status-card-main">
                       <span class="status-icon status-icon-blue">◉</span
                       ><strong id="status-simulator">浏览器仿真</strong>
@@ -331,7 +392,7 @@
                       <span class="status-icon status-icon-orange" id="status-board-icon">⌂</span
                       ><strong id="status-board">尚未选择板卡</strong>
                     </div>
-                    <p id="status-board-detail">连接后进行预检</p>
+                    <p id="status-board-detail">连接后进行预检</p><span class="status-card-action" id="status-board-action">去连接设备 →</span>
                   </article>
                   <article class="status-card">
                     <div class="status-card-main">
@@ -345,7 +406,7 @@
             </details>
           </section>
 
-          <section class="agent-chat-panel" id="agent-chat-panel" aria-labelledby="agent-chat-title">
+          <section class="agent-chat-panel" id="agent-chat-panel" role="dialog" aria-modal="true" aria-hidden="true" aria-labelledby="agent-chat-title">
             <div class="agent-chat-heading">
               <div><span class="workspace-kicker">RDK STUDIO AGENT</span><h2 id="agent-chat-title">对话式任务 Agent</h2></div>
               <div class="agent-chat-heading-actions">
@@ -354,6 +415,11 @@
               </div>
             </div>
             <div class="agent-chat-layout">
+              <aside class="agent-chat-sessions" aria-label="对话历史">
+                <button class="agent-new-session" id="agent-new-session" type="button">＋ 新建对话</button>
+                <div class="agent-session-label">最近对话</div>
+                <div id="agent-session-list"><button class="agent-session-item is-active" type="button">当前对话</button></div>
+              </aside>
               <div class="agent-chat-messages" id="agent-chat-messages" aria-live="polite">
                 <div class="agent-chat-message agent-chat-message-agent"><strong>Agent</strong><p>告诉我你要完成什么。例如：跑一轮 GPU 训练，检查 X5，再做只读预检。</p></div>
               </div>
@@ -448,11 +514,12 @@
                 <div class="simulator-footer">
                   <span id="simulator-run-status">参考策略可用</span
                   ><span class="mono" id="simulator-runtime-label">资源状态 · 需挂载</span>
+                  <span class="simulator-evidence-status" id="simulator-evidence-status">录制后自动同步到评测证据</span>
                 </div>
               </article>
               <aside class="panel guide-panel">
                 <div class="sim-context-panel">
-                  <div class="field-label" for="task-select">当前动作任务</div>
+                  <label class="field-label" for="task-select">当前动作任务</label>
                   <select id="task-select" aria-label="选择动作任务">
                     <option value="walk">行走</option>
                     <option value="turn">转向</option>
@@ -461,7 +528,8 @@
                     <option value="kick">踢球</option>
                     <option value="custom">自定义动作</option>
                   </select>
-                  <p class="small-note">动作任务贯穿仿真、训练和评测。</p>
+                  <p id="task-context-note" class="small-note">切换任务后请点击“开始录制”生成轨迹；录制完成即可在评测页回放。</p>
+                  <a class="side-link" href="#records" data-replay-task-link>查看该任务的最近回放 ↗</a>
                 </div>
                 <div class="sim-action-library" aria-label="当前模型动作库">
                   <div class="sim-action-library-heading">
@@ -473,6 +541,7 @@
                   <p id="sim-action-empty" class="small-note">
                     选择一个模型后，这里会显示动作和按键。
                   </p>
+                  <p id="sim-action-task-status" class="small-note" hidden></p>
                 </div>
                 <a
                   class="side-link"
@@ -487,7 +556,7 @@
                   type="button"
                   data-view-target="train"
                 >
-                  下一步：选择训练方式 →
+              下一步：配置强化学习训练 →
                 </button>
               </aside>
             </div>
@@ -496,13 +565,31 @@
           <section
             class="view-section"
             data-view-section="train"
+            data-active-train-module="run"
             hidden
             aria-labelledby="train-title"
           >
             <div class="section-heading section-heading-lean">
-              <h2 id="train-title">训练与模型</h2>
+              <h2 id="train-title">强化学习训练与模型</h2>
             </div>
-            <details class="panel contract-fold" id="contract-fold">
+            <div class="submodule-tabs" role="tablist" aria-label="强化学习工作台模块">
+              <button class="submodule-tab is-active" type="button" role="tab" aria-selected="true" data-train-module-tab="run">训练工作台<small>模型、算法与提交</small></button>
+              <button class="submodule-tab" type="button" role="tab" aria-selected="false" data-train-module-tab="contract">模型契约<small>Manifest 与兼容性</small></button>
+              <button class="submodule-tab" type="button" role="tab" aria-selected="false" data-train-module-tab="resources">算力资源<small>GPU Worker 管理</small></button>
+            </div>
+            <div class="train-onboarding" role="note" aria-label="训练流程引导">
+              <div class="train-onboarding-heading">
+                <div><span class="eyebrow">新手流程</span><h3 id="train-onboarding-title">按 3 步完成一次训练</h3></div>
+                <span class="train-onboarding-note">预计 2–5 分钟</span>
+              </div>
+              <div class="train-onboarding-steps">
+                <div class="train-onboarding-step is-current" data-train-step="1" role="button" tabindex="0"><b>1</b><div><strong>准备模型</strong><small id="train-onboarding-model-help">载入默认模板并登记</small></div></div>
+                <div class="train-onboarding-step" data-train-step="2" role="button" tabindex="0"><b>2</b><div><strong>配置训练</strong><small>选择算法与算力资源</small></div></div>
+                <div class="train-onboarding-step" data-train-step="3" role="button" tabindex="0"><b>3</b><div><strong>开始强化学习训练</strong><small>选择 GPU 和 PPO / SAC 后提交任务</small></div></div>
+              </div>
+              <p class="train-onboarding-help">第一次使用？先点击“载入模板”，不用编辑 JSON。回放是可选的验证工具；强化学习训练可直接提交 PPO / SAC 任务。</p>
+            </div>
+            <details class="panel contract-fold" id="contract-fold" data-train-module="contract">
               <summary>
                 <span class="overview-environment-icon" aria-hidden="true">◈</span>
                 <span><strong>套件与契约 · 登记模型</strong><small>导入并校验 manifest，登记后模型可追溯</small></span>
@@ -510,8 +597,10 @@
               </summary>
               <div class="records-layout">
                 <article class="panel manifest-panel">
-                  <div class="panel-heading panel-heading-lean"><h2>登记你的模型</h2>
+                  <div class="panel-heading panel-heading-lean"><h2>第 1 步 · 准备模型</h2>
+                    <small class="panel-tip" id="contract-panel-tip">推荐：载入当前产品模板 → 校验 → 登记</small>
                   </div>
+                  <div class="manifest-explainer"><strong>这一步是做什么？</strong><span>把模型的输入、输出和设备要求登记进工作区，后续训练、评测和部署都会用它做兼容性检查。</span><em>第一次使用：点击“载入模板”，然后依次点击“校验清单”和“登记版本”。</em></div>
                   <textarea
                     id="manifest-editor"
                     spellcheck="false"
@@ -523,9 +612,9 @@
                       id="template-button"
                       type="button"
                     >
-                      载入模板</button
+                      载入当前产品模板</button
                     ><label class="button button-ghost button-small file-input-button"
-                      >导入 manifest JSON<input
+                      >导入 manifest JSON（≤2 MiB）<input
                         id="manifest-file-input"
                         type="file"
                         accept=".json,application/json" /></label
@@ -581,8 +670,8 @@
                 </article>
               </div>
             </details>
-            <div class="train-layout">
-              <article class="panel model-panel">
+            <div class="train-layout" data-train-active-module="run">
+              <article class="panel model-panel" data-train-module="run">
                 <div class="panel-heading panel-heading-lean"><h2>模型版本</h2>
                   <div class="model-panel-select">
                     <select id="model-select" aria-label="选择模型"></select>
@@ -604,11 +693,12 @@
                   <button class="button button-primary" id="browser-run-button" type="button">
                     浏览器回放</button
                   ><button class="button button-primary" id="local-run-button" type="button">
-                    发起本地训练</button
+                    发起本地强化学习训练</button
                   ><button class="button button-ghost" id="robogo-run-button" type="button">
                     登记 RoboGo 训练
                   </button>
                 </div>
+                <p class="action-block-hint" id="run-action-hint" role="status" aria-live="polite">选择模型后可提交训练或回放。</p>
                 <div class="run-progress-card" id="run-progress-card" hidden>
                   <div class="run-progress-heading">
                     <div>
@@ -663,7 +753,7 @@
                   </div>
                 </details>
               </article>
-              <article class="panel robogo-panel">
+              <article class="panel robogo-panel" data-train-module="run">
                 <div class="panel-heading panel-heading-lean"><h2>算力后端</h2>
                   <span id="robogo-state-badge" class="state-badge state-neutral">检查中</span>
                 </div>
@@ -699,9 +789,9 @@
                   >
                 </div>
               </article>
-              <article class="panel compute-resources-panel">
+              <article class="panel compute-resources-panel" data-train-module="resources">
                 <div class="panel-heading panel-heading-lean">
-                  <div><h2>我的 GPU 训练资源</h2><p class="panel-caption">接入自己的 GPU Worker，凭据仅保存在服务端</p></div>
+                  <div><h2>我的 GPU 训练资源</h2><p class="panel-caption">支持本地 Worker、远程 Runner 等多种连接；选择“AI 自动选择”会自动探测在线资源并回退到默认 Worker</p></div>
                   <span id="compute-resource-count" class="state-badge state-neutral">0 个</span>
                 </div>
                 <div id="compute-resource-list" class="compute-resource-list"><p class="empty-inline">还没有接入 GPU。添加后可在上方训练资源中选择。</p></div>
@@ -726,7 +816,7 @@
             aria-labelledby="evaluate-title"
           >
             <div class="section-heading section-heading-lean">
-              <h2 id="evaluate-title">评测与效果</h2>
+              <h2 id="evaluate-title">Sim2Real 评测</h2><p class="section-lead">把仿真轨迹和真机遥测放在一起，确认策略是否真的有效。</p>
             </div>
             <div class="evaluation-banner">
               <div class="evaluation-status-mark" id="eval-status-mark">○</div>
@@ -811,15 +901,15 @@
               </div>
             </article>
             <article class="panel telemetry-panel" aria-labelledby="telemetry-title">
-              <div class="panel-heading panel-heading-lean"><h2>遥测回放与证据</h2>
+              <div class="panel-heading panel-heading-lean"><h2 id="telemetry-title">遥测回放与证据</h2>
                 <span class="state-badge state-neutral" id="telemetry-state">尚未导入</span>
               </div>
               <div class="telemetry-intro">
-                <p>导入 X5 Agent 或浏览器录制的 JSONL，本地解析、不上传。</p>
+                <p>导入 X5 Agent 或浏览器录制的 JSONL（单文件 ≤32 MiB），本地解析、不上传。</p>
                 <label
                   class="button button-ghost button-small file-input-button telemetry-file-button"
                 >
-                  导入遥测 JSONL<input
+                  导入遥测 JSONL（≤32 MiB）<input
                     id="telemetry-file-input"
                     type="file"
                     accept=".jsonl,.json,.ndjson,application/json,text/plain"
@@ -843,6 +933,19 @@
                   <span id="telemetry-timeline-start">0.00s</span
                   ><span id="telemetry-timeline-end">0.00s</span>
                 </div>
+              </div>
+              <div class="replay-player" id="replay-player" aria-label="逐帧回放播放器">
+                <div class="replay-player-heading"><strong>逐帧回放</strong><span id="replay-status">选择一个运行记录后加载</span></div>
+                <div class="replay-player-controls">
+                  <select id="replay-run-select" aria-label="选择要回放的运行"></select>
+                  <button class="button button-primary button-small" id="replay-load-button" type="button">加载回放</button>
+                  <button class="button button-ghost button-small" id="replay-play-button" type="button" disabled>▶ 播放</button>
+                  <button class="button button-ghost button-small" id="replay-stop-button" type="button" disabled>■ 停止</button>
+                  <label class="replay-speed">倍速 <select id="replay-speed-select"><option value="0.5">0.5×</option><option value="1" selected>1×</option><option value="2">2×</option><option value="4">4×</option></select></label>
+                </div>
+                <input id="replay-seek" type="range" min="0" max="0" value="0" step="1" disabled aria-label="回放进度" />
+                <div class="replay-player-meta"><span id="replay-frame-label">0 / 0 帧</span><span id="replay-time-label">0.00s</span></div>
+                <p class="small-note" id="replay-frame-detail">加载后可拖动时间轴；回放帧会同步发送到嵌入仿真器。</p>
               </div>
               <div class="telemetry-visuals" id="telemetry-visuals" hidden>
                 <div class="telemetry-chart-block">
@@ -944,7 +1047,7 @@
             aria-labelledby="deploy-title"
           >
             <div class="section-heading section-heading-lean">
-              <h2 id="deploy-title">部署到 RDK X5</h2>
+              <h2 id="deploy-title">部署与反馈</h2><p class="section-lead">先只读预检，再看部署反馈；任何执行动作都需要单独批准。</p>
             </div>
             <div class="deploy-layout">
               <article class="panel board-panel">
@@ -967,6 +1070,7 @@
                     执行只读预检
                   </button>
                 </div>
+                <p class="deploy-action-hint" id="deploy-action-hint" role="status" aria-live="polite">先选择模型和目标板卡，再生成只读预检计划。</p>
                 <p class="small-note">
                   预检只读取架构、系统目录和磁盘信息；不会下发模型、启动节点或驱动电机。
                 </p>
@@ -975,21 +1079,25 @@
                 <div class="panel-heading panel-heading-lean"><h2>上线闸门</h2><span class="panel-caption" id="deploy-flow-caption">按证据推进</span></div>
                 <div class="release-steps">
                   <div class="release-step is-ready" data-release-step="contract">
-                    <span class="release-step-index">✓</span>
-                    <div><strong>契约通过</strong><small>观测、动作、频率一致</small></div>
+                    <span class="release-step-index">01</span>
+                    <div><strong>模型契约</strong><small>观测、动作、频率与目标 profile 一致</small></div>
                   </div>
                   <div class="release-step" data-release-step="evaluation">
                     <span class="release-step-index">02</span>
                     <div>
-                      <strong>评测与板端预检</strong><small>指标达标后确认 X5 环境和运行时</small>
+                      <strong>训练与评测</strong><small>需要真实来源、指标和可追溯证据</small>
                     </div>
                   </div>
-                  <div class="release-step is-locked" data-release-step="canary">
+                  <div class="release-step is-locked" data-release-step="preflight">
                     <span class="release-step-index">03</span>
-                    <div><strong>无电机 Canary</strong><small>需要板端 Agent</small></div>
+                    <div><strong>目标运行时预检</strong><small>验证设备、工具链和制品；不会启动执行器</small></div>
+                  </div>
+                  <div class="release-step is-locked" data-release-step="canary">
+                    <span class="release-step-index">04</span>
+                    <div><strong>受控 Canary</strong><small>需要人工安全确认和双开关</small></div>
                   </div>
                   <div class="release-step is-locked" data-release-step="live">
-                    <span class="release-step-index">04</span>
+                    <span class="release-step-index">05</span>
                     <div><strong>Live</strong><small>人工批准后开放</small></div>
                   </div>
                 </div>
@@ -1012,11 +1120,11 @@
             aria-labelledby="records-title"
           >
             <div class="section-heading section-heading-lean">
-              <h2 id="records-title">记录与版本</h2>
+              <h2 id="records-title">制品库</h2><p class="section-lead">仿真录制、强化学习模型、评测证据和部署制品统一管理，可按任务追踪和回放。</p>
             </div>
             <div class="records-layout records-single">
               <article class="panel history-panel">
-                <div class="panel-heading panel-heading-lean"><h2>运行与发布记录</h2>
+                <div class="panel-heading panel-heading-lean"><h2>全部制品与运行</h2>
                   <span class="panel-caption" id="records-count">最近 30 条</span>
                 </div>
                 <div class="records-toolbar" role="toolbar" aria-label="记录筛选">
@@ -1035,7 +1143,7 @@
                       data-record-tab="run"
                       aria-pressed="false"
                     >
-                      Runs
+                    Runs
                     </button>
                     <button
                       class="record-tab"
@@ -1043,7 +1151,7 @@
                       data-record-tab="deploy"
                       aria-pressed="false"
                     >
-                      发布
+                    发布
                     </button>
                     <button
                       class="record-tab"
@@ -1051,7 +1159,7 @@
                       data-record-tab="artifact"
                       aria-pressed="false"
                     >
-                      制品
+                    制品
                     </button>
                     <button
                       class="record-tab"
@@ -1059,7 +1167,7 @@
                       data-record-tab="telemetry"
                       aria-pressed="false"
                     >
-                      遥测
+                    遥测
                     </button>
                   </div>
                   <input
@@ -1085,24 +1193,36 @@
             <div class="section-heading section-heading-lean">
               <h2 id="station-title">板端上位机</h2>
             </div>
+            <div class="submodule-tabs" role="tablist" aria-label="设备上位机模块">
+              <button class="submodule-tab is-active" type="button" role="tab" aria-selected="true" data-station-module-tab="devices">设备连接<small>Bridge、板卡与能力</small></button>
+              <button class="submodule-tab" type="button" role="tab" aria-selected="false" data-station-module-tab="telemetry">遥测概览<small>状态、相机与话题</small></button>
+              <button class="submodule-tab" type="button" role="tab" aria-selected="false" data-station-module-tab="control">安全控制<small>开关、急停与低速控制</small></button>
+              <button class="submodule-tab" type="button" role="tab" aria-selected="false" data-station-module-tab="policy">策略运行时<small>制品加载与策略状态</small></button>
+              <button class="submodule-tab" type="button" role="tab" aria-selected="false" data-station-module-tab="diagnostics">诊断命令<small>TROS 与系统检查</small></button>
+            </div>
             <div class="station-notice" id="station-notice" role="status" aria-live="polite" hidden>
               上位机未就绪：未配置板端 agent 或板卡设备。
             </div>
-            <article class="panel station-device-manager" id="station-device-manager">
+            <article class="panel station-device-manager" id="station-device-manager" data-station-module="devices">
               <div class="panel-heading panel-heading-lean"><h2>设备管理</h2>
-                <span class="panel-caption">网页添加真机 · SSH 隧道 · 免命令行</span>
+                <span class="panel-caption">平台内添加 · 受控连接 · 状态可追踪</span>
               </div>
               <p class="station-drive-note" id="station-device-manager-note">
-                在这里保存 OriginBot 的 SSH 地址并连接：平台会在服务器与板端之间建立
-                SSH 隧道（使用本机已有密钥，不保存密码），随后上位机、遥测、相机和预检
-                都自动指向这台真机。隧道断开或设备移除时恢复为默认（只读参考 agent）。
+                Sim2Real 原生管理设备连接：填写板卡地址后由平台建立受控连接，
+                设备档案、连接状态、心跳、能力检查和后续预检都在本工作台内完成。
               </p>
+              <div class="station-studio-connect">
+                <div><strong>原生连接设备</strong><small>填写板卡地址并添加，Sim2Real 会建立受控隧道并读取设备状态。</small></div>
+              </div>
               <div class="station-device-add" id="station-device-add">
                 <label for="station-device-host">板卡 IP / 主机名
-                  <input type="text" id="station-device-host" placeholder="10.185.136.180" spellcheck="false" autocomplete="off" />
+                  <input type="text" id="station-device-host" placeholder="例如 board-host.example.internal" spellcheck="false" autocomplete="off" />
                 </label>
                 <label for="station-device-user">SSH 用户
                   <input type="text" id="station-device-user" value="root" spellcheck="false" autocomplete="off" />
+                </label>
+                <label for="station-device-password">SSH 密码（仅本次配对）
+                  <input type="password" id="station-device-password" placeholder="不会保存" autocomplete="new-password" />
                 </label>
                 <label for="station-device-port">SSH 端口
                   <input type="number" id="station-device-port" value="22" min="1" max="65535" />
@@ -1110,20 +1230,35 @@
                 <label for="station-device-label">备注（可选）
                   <input type="text" id="station-device-label" placeholder="OriginBot 演示机" maxlength="120" />
                 </label>
+                <label for="station-device-profile">设备档案
+                  <select id="station-device-profile"><option value="originbot-x5">OriginBot · X5</option><option value="microduck-x5">MicroDuck · X5</option><option value="custom">自定义设备</option></select>
+                </label>
+                <label for="station-device-transport">连接方式
+                  <select id="station-device-transport"><option value="ssh">SSH 隧道</option><option value="bridge">Local Bridge</option></select>
+                </label>
                 <button class="button station-device-add-btn" type="button" id="station-device-add-btn">
-                  添加设备
+                  添加设备与能力档案
                 </button>
+                <button class="button button-primary station-device-script-btn" type="button" id="station-device-script-btn">接入向导（首次使用）</button>
+              </div>
+              <div class="station-connect-script" id="station-connect-script" hidden>
+                <div><strong>首次配对脚本</strong><small>首次配对需要在可访问板卡的终端运行一次；配对完成后，连接、检测和预检均在平台内完成。</small></div>
+                <textarea id="station-connect-script-text" readonly aria-label="设备连接脚本"></textarea>
+                <button class="button button-ghost button-small" type="button" id="station-connect-script-copy">复制脚本</button>
               </div>
               <div class="station-device-list" id="station-device-list">
                 <span class="station-topic-empty" id="station-device-list-empty">尚未添加设备。</span>
               </div>
+              <p class="station-device-ssh-hint" id="station-bridge-hint">
+                如果已连接 RDK Studio Local Bridge，设备会在上方板卡选择器中直接出现；无需在这里重复添加 SSH。
+              </p>
               <p class="station-device-ssh-hint" id="station-device-ssh-hint">
-                提示：连接使用服务器本机的 ssh（与部署脚本同一凭据路径）。首次连接一块新板卡
-                相当于 <code>ssh root@&lt;IP&gt;</code>；需要已配置好密钥或 ssh-agent。
+                提示：RDK Studio 场景不需要填写 SSH。下方 SSH 仅用于服务器能直接访问板卡的独立部署，
+                需要服务器已有密钥或 ssh-agent。
               </p>
             </article>
             <div class="station-layout">
-              <article class="panel station-status-panel">
+              <article class="panel station-status-panel" data-station-module="telemetry">
                 <div class="panel-heading panel-heading-lean"><h2>板卡实时状态</h2>
                   <span class="station-live-badge" id="station-live-badge" hidden>
                     <span class="station-live-dot" aria-hidden="true"></span>LIVE
@@ -1230,7 +1365,7 @@
                 </p>
               </article>
 
-              <article class="panel station-camera-panel">
+              <article class="panel station-camera-panel" data-station-module="telemetry">
                 <div class="panel-heading panel-heading-lean"><h2>板载相机</h2>
                   <span class="panel-caption">MJPEG 流（只读）</span>
                 </div>
@@ -1252,7 +1387,7 @@
                 </div>
               </article>
 
-              <article class="panel station-switch-panel" id="station-switch-panel">
+              <article class="panel station-switch-panel" id="station-switch-panel" data-station-module="control">
                 <div class="panel-heading panel-heading-lean"><h2>运动开关</h2>
                   <span class="panel-caption">双开关 · 网页切换 · 急停永不依赖开关</span>
                 </div>
@@ -1298,7 +1433,7 @@
                 <div class="station-drive-state" id="station-switch-state" role="status" aria-live="polite">就绪</div>
               </article>
 
-              <article class="panel station-drive-panel" id="station-drive-panel">
+              <article class="panel station-drive-panel" id="station-drive-panel" data-station-module="control">
                 <div class="panel-heading panel-heading-lean"><h2>运动 Canary</h2>
                   <span class="panel-caption">受限驱动 · 双开关 · 速度/时限钳制</span>
                 </div>
@@ -1307,13 +1442,18 @@
                   （RDK_SIM2REAL_STATION_DRIVE_ENABLED / RDK_SIM2REAL_BOARD_AGENT_ENABLE_DRIVE）；
                   急停始终可用。
                 </p>
+                <div class="station-control-contract" aria-label="运动控制契约">
+                  <div><span>动作映射</span><strong id="station-control-path">策略动作 → /cmd_vel</strong></div>
+                  <div><span>安全限幅</span><strong id="station-control-limits">0.30 m/s · 1.00 rad/s</strong></div>
+                  <div><span>反馈看门狗</span><strong id="station-control-watchdog">500 ms 自动停车</strong></div>
+                </div>
                 <div class="station-drive-controls" id="station-drive-controls" hidden>
                   <div class="station-drive-slider">
-                    <label for="station-drive-speed">线速度 <output id="station-drive-speed-out">0.10 m/s</output></label>
+                    <label for="station-drive-speed">线速度（后退为负） <output id="station-drive-speed-out">+0.10 m/s</output></label>
                     <input
                       type="range"
                       id="station-drive-speed"
-                      min="0.05"
+                      min="-0.3"
                       max="0.3"
                       step="0.05"
                       value="0.1"
@@ -1355,7 +1495,7 @@
                 </div>
               </article>
 
-              <article class="panel station-policy-panel" id="station-policy-panel">
+              <article class="panel station-policy-panel" id="station-policy-panel" data-station-module="policy">
                 <div class="panel-heading panel-heading-lean"><h2>策略运行时</h2>
                   <span class="panel-caption">ONNX 推理 · 三重开关 · 同一受限通道</span>
                 </div>
@@ -1455,13 +1595,22 @@
                       <span class="station-policy-stat-label">命令</span>
                       <span class="station-policy-stat-value" id="station-policy-command">0.0</span>
                     </div>
+                    <div class="station-policy-stat">
+                      <span class="station-policy-stat-label">实测速度</span>
+                      <span class="station-policy-stat-value" id="station-policy-actual">--</span>
+                    </div>
+                  </div>
+                  <div class="station-policy-session" id="station-policy-session" role="status" aria-live="polite">
+                    <strong>上板会话证据</strong>
+                    <span id="station-policy-session-state">尚未启动策略</span>
+                    <small id="station-policy-session-meta">每次 start / stop 都会记录会话 ID、起止时间、停止原因和推理次数。</small>
                   </div>
                   <div class="station-policy-obsslots" id="station-policy-obsslots" hidden></div>
                   <div class="station-policy-lasterr" id="station-policy-lasterr" hidden></div>
                 </div>
               </article>
 
-              <article class="panel station-command-panel">
+              <article class="panel station-command-panel" data-station-module="diagnostics">
                 <div class="panel-heading panel-heading-lean"><h2>命令面板</h2>
                   <span class="panel-caption">白名单只读命令</span>
                 </div>
@@ -1515,7 +1664,7 @@
         </main>
       </div>
       <footer class="footer">
-        <span>RDK Duck Lab · standalone web service</span
+        <span>RDK Robot Learning Platform · Robot Learning Workbench</span
           ><span
           ><a href="/rdkstudio/">RDK Studio</a><span id="microduck-footer-item"> ·
           <a id="microduck-footer-link" href="./mujoco/microduck/">MicroDuck</a></span> ·
@@ -1528,7 +1677,7 @@
     <dialog class="run-dialog" id="run-detail-dialog" aria-labelledby="run-detail-title">
       <div class="run-dialog-heading">
         <div>
-          <h2 id="run-detail-title">运行详情</h2>
+          <div class="run-detail-title-row"><h2 id="run-detail-title">运行详情</h2><span class="state-badge state-neutral" id="run-detail-status">—</span></div>
         </div>
         <button class="button button-ghost button-small" id="run-detail-close" type="button">
           关闭
@@ -1562,6 +1711,33 @@
           </button>
         </div>
       </div>
+    </dialog>
+    <dialog class="run-dialog project-dialog" id="project-dialog" aria-labelledby="project-dialog-title">
+      <form id="project-form" method="dialog" novalidate>
+        <div class="run-dialog-heading">
+          <div>
+            <span class="workspace-kicker">WORKSPACE CONTEXT</span>
+            <h2 id="project-dialog-title">新建项目</h2>
+          </div>
+          <button class="button button-ghost button-small" id="project-dialog-close" type="button">关闭</button>
+        </div>
+        <p class="project-dialog-intro">项目会把当前机器人、模型、训练运行和评测证据放在同一条可追溯链路中。创建后可以随时切换项目。</p>
+        <label class="project-dialog-field" for="project-name-input">项目名称
+          <input id="project-name-input" name="name" required maxlength="160" placeholder="例如：OriginBot 目标导航" autocomplete="off" />
+        </label>
+        <label class="project-dialog-field" for="project-slug-input">项目标识（可选）
+          <input id="project-slug-input" name="slug" maxlength="64" placeholder="originbot-goal-navigation" autocomplete="off" spellcheck="false" />
+        </label>
+        <label class="project-dialog-field" for="project-description-input">备注（可选）
+          <textarea id="project-description-input" name="description" maxlength="4000" rows="3" placeholder="记录目标、设备或验收范围"></textarea>
+        </label>
+        <p class="project-dialog-scope" id="project-dialog-scope">创建后会绑定当前选中的模型（如果有）。</p>
+        <p class="project-dialog-error" id="project-dialog-error" role="alert" hidden></p>
+        <div class="project-dialog-actions">
+          <button class="button button-ghost" id="project-dialog-cancel" type="button">取消</button>
+          <button class="button button-primary" id="project-dialog-submit" type="submit">创建项目</button>
+        </div>
+      </form>
     </dialog>
     <dialog class="command-palette" id="command-palette" aria-labelledby="command-palette-title">
       <div class="command-palette-shell">
@@ -1607,9 +1783,9 @@
       telemetry-core.js must stay FIRST: app.js boots synchronously and its
       telemetry delegations resolve SimTelemetryCore at call time.
     -->
-    <script src="./telemetry-core.js?v=duck-lab-28"></script>
-    <script src="./app.js?v=duck-lab-28"></script>
-    <script src="./agent-chat.js?v=agent-6"></script>
+    <script src="./telemetry-core.js?v=duck-lab-29"></script>
+    <script src="./app.js?v=duck-lab-32"></script>
+    <script src="./agent-chat.js?v=agent-7"></script>
     <script src="./onboarding.js?v=onboarding-2"></script>
   </body>
 </html>

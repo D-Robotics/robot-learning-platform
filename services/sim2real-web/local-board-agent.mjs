@@ -37,6 +37,17 @@ const MAX_BODY_BYTES = 64 * 1024;
 // Policy upload ceiling: matches the real agent's (68 MB covers a 50 MB ONNX
 // plus base64 inflation inside the JSON body).
 const MAX_POLICY_BODY_BYTES = 68 * 1024 * 1024;
+/**
+ * Keep the reference agent's HTTP lifecycle bounded like the production
+ * control plane.  The request timeout covers slow request bodies (including
+ * policy uploads); the headers timeout closes slowloris connections before a
+ * handler is entered.  Streams intentionally remain long lived, while every
+ * regular response asks the client to close its connection explicitly.
+ */
+export const BOARD_AGENT_HTTP_REQUEST_TIMEOUT_MS = 120_000;
+export const BOARD_AGENT_HTTP_HEADERS_TIMEOUT_MS = 15_000;
+export const BOARD_AGENT_HTTP_KEEP_ALIVE_TIMEOUT_MS = 5_000;
+export const BOARD_AGENT_HTTP_MAX_REQUESTS_PER_SOCKET = 1_000;
 const BEGIN = '__STUDIO_SIM2REAL_PREFLIGHT_BEGIN__';
 const END = '__STUDIO_SIM2REAL_PREFLIGHT_END__';
 const BOUNDARY = 'rdk-board-station-frame';
@@ -72,34 +83,100 @@ function json(response, status, payload) {
   response.end(body);
 }
 
-function readBody(request) {
-  return new Promise((resolve, reject) => {
-    let body = '';
-    request.on('data', (chunk) => {
-      body += chunk;
-      if (Buffer.byteLength(body) > MAX_BODY_BYTES) {
-        reject(Object.assign(new Error('request too large'), { statusCode: 413 }));
-        request.destroy();
-      }
-    });
-    request.on('end', () => resolve(body));
-    request.on('error', reject);
-  });
+/**
+ * Reject ambiguous HTTP/1.1 request framing before a route can return without
+ * consuming the body.  Node's parser rejects some conflicting headers itself,
+ * but keeping this check at the application boundary makes the reference
+ * agent's contract explicit and protects embedders that provide an
+ * IncomingMessage-like test/server wrapper.
+ */
+function requestFramingError(request) {
+  const transferEncoding = request.headers['transfer-encoding'];
+  if (transferEncoding !== undefined) {
+    const values = Array.isArray(transferEncoding) ? transferEncoding : [transferEncoding];
+    if (
+      values.length !== 1 ||
+      typeof values[0] !== 'string' ||
+      values[0].trim().toLowerCase() !== 'identity'
+    ) {
+      return 'BOARD_AGENT_INVALID_FRAMING';
+    }
+  }
+  const rawLength = request.headers['content-length'];
+  if (rawLength === undefined) return null;
+  const values = Array.isArray(rawLength) ? rawLength : [rawLength];
+  if (values.length !== 1 || typeof values[0] !== 'string') {
+    return 'BOARD_AGENT_INVALID_FRAMING';
+  }
+  const normalized = values[0].trim();
+  if (!/^[0-9]+$/.test(normalized) || normalized.includes(',')) {
+    return 'BOARD_AGENT_INVALID_FRAMING';
+  }
+  const length = Number(normalized);
+  if (!Number.isSafeInteger(length)) return 'BOARD_AGENT_INVALID_FRAMING';
+  return null;
+}
+
+function requestBodyLength(request) {
+  const rawLength = request.headers['content-length'];
+  if (rawLength === undefined) return 0;
+  const value = Array.isArray(rawLength) ? rawLength[0] : rawLength;
+  const length = Number(String(value).trim());
+  return Number.isSafeInteger(length) && length >= 0 ? length : null;
+}
+
+function rejectUnexpectedBody(request, response) {
+  const framingError = requestFramingError(request);
+  if (framingError) {
+    request.destroy();
+    return true;
+  }
+  const length = requestBodyLength(request);
+  if (length !== 0) {
+    // Do not drain a body on routes that never use it.  Closing the socket is
+    // deterministic and prevents the unread bytes becoming the next request.
+    response.shouldKeepAlive = false;
+    json(response, 400, { ok: false, error: 'BOARD_AGENT_BODY_NOT_ALLOWED' });
+    return true;
+  }
+  return false;
 }
 
 function readBodyBounded(request, ceiling) {
   return new Promise((resolve, reject) => {
-    let body = '';
+    const chunks = [];
+    let size = 0;
+    let settled = false;
+    const fail = (error) => {
+      if (settled) return;
+      settled = true;
+      reject(error);
+      request.destroy();
+    };
     request.on('data', (chunk) => {
-      body += chunk;
-      if (Buffer.byteLength(body) > ceiling) {
-        reject(Object.assign(new Error('request too large'), { statusCode: 413 }));
-        request.destroy();
+      if (settled) return;
+      const bytes = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+      size += bytes.byteLength;
+      if (size > ceiling) {
+        fail(Object.assign(new Error('request too large'), { statusCode: 413 }));
+        return;
       }
+      chunks.push(bytes);
     });
-    request.on('end', () => resolve(body));
-    request.on('error', reject);
+    request.on('aborted', () =>
+      fail(Object.assign(new Error('request aborted'), { statusCode: 400 })),
+    );
+    request.on('end', () => {
+      if (settled) return;
+      settled = true;
+      resolve(Buffer.concat(chunks, size).toString('utf8'));
+    });
+    request.on('error', fail);
   });
+}
+
+function readBody(request) {
+  return readBodyBounded(request, MAX_BODY_BYTES);
 }
 
 /**
@@ -234,22 +311,54 @@ function onboardingPreflight() {
     identity: { ok: true, board: { platform: 'rdk-x5', model: 'RDK X5 (simulated)' } },
     python: { ok: true, path: '/usr/bin/python3' },
     tros: { ok: tros, setup: '/opt/tros' },
-    camera: { ok: camera !== 'missing', devices: camera === 'missing' ? [] : ['/dev/video-fixture'], cv2: true },
-    ros: { ok: topics.length > 0, topicCount: topics.length, topics, expected: {
-      imu: { name: '/imu', present: topics.includes('/imu') },
-      odom: { name: '/odom', present: topics.includes('/odom') },
-      cmdVel: { name: '/cmd_vel', present: topics.includes('/cmd_vel') },
-    } },
+    camera: {
+      ok: camera !== 'missing',
+      devices: camera === 'missing' ? [] : ['/dev/video-fixture'],
+      cv2: true,
+    },
+    ros: {
+      ok: topics.length > 0,
+      topicCount: topics.length,
+      topics,
+      expected: {
+        imu: { name: '/imu', present: topics.includes('/imu') },
+        odom: { name: '/odom', present: topics.includes('/odom') },
+        cmdVel: { name: '/cmd_vel', present: topics.includes('/cmd_vel') },
+      },
+    },
     telemetry: { ok: tros, fresh: tros, fields: tros ? ['imu', 'odom'] : [] },
-    policy: { enabled: false, runtimeRunning: false, artifactDir: '(reference agent, in-memory)', artifactDirPresent: true, artifactCount: stagedPolicies.size },
-    safety: { driveEnabled: false, policyEnabled: false, motionAuthorized: false, limits: { maxLinear: 0, maxAngular: 0 }, emergencyStop: '/v1/station/drive/stop' },
+    policy: {
+      enabled: false,
+      runtimeRunning: false,
+      artifactDir: '(reference agent, in-memory)',
+      artifactDirPresent: true,
+      artifactCount: stagedPolicies.size,
+    },
+    safety: {
+      driveEnabled: false,
+      policyEnabled: false,
+      motionAuthorized: false,
+      limits: { maxLinear: 0, maxAngular: 0 },
+      emergencyStop: '/v1/station/drive/stop',
+    },
   };
-  const blockingChecks = Object.entries(checks).filter(([, value]) => value.ok === false).map(([key]) => key);
+  const blockingChecks = Object.entries(checks)
+    .filter(([, value]) => value.ok === false)
+    .map(([key]) => key);
   return {
-    ok: true, kind: 'originbot-onboarding-preflight', schemaVersion: 1, mock: true,
-    status: blockingChecks.length ? 'attention' : 'ready', ready: blockingChecks.length === 0,
-    blockingChecks, nextActions: blockingChecks.length ? ['reference agent is mock-only; connect a real board for release evidence'] : [],
-    checks, observedAt: new Date().toISOString(), motion: { started: false, note: 'onboarding preflight is read-only' },
+    ok: true,
+    kind: 'originbot-onboarding-preflight',
+    schemaVersion: 1,
+    mock: true,
+    status: blockingChecks.length ? 'attention' : 'ready',
+    ready: blockingChecks.length === 0,
+    blockingChecks,
+    nextActions: blockingChecks.length
+      ? ['reference agent is mock-only; connect a real board for release evidence']
+      : [],
+    checks,
+    observedAt: new Date().toISOString(),
+    motion: { started: false, note: 'onboarding preflight is read-only' },
   };
 }
 
@@ -375,16 +484,37 @@ function handleStationCommand(request, response) {
     });
 }
 
+/**
+ * Apply the same bounded HTTP lifecycle to both the test/reference process
+ * and direct CLI starts. Keeping this in one function makes the contract
+ * inspectable by deployment checks and prevents a future entry point from
+ * silently restoring Node's much looser defaults.
+ */
+export function hardenLocalBoardAgentHttpServer(server) {
+  server.requestTimeout = BOARD_AGENT_HTTP_REQUEST_TIMEOUT_MS;
+  server.headersTimeout = BOARD_AGENT_HTTP_HEADERS_TIMEOUT_MS;
+  server.keepAliveTimeout = BOARD_AGENT_HTTP_KEEP_ALIVE_TIMEOUT_MS;
+  server.maxRequestsPerSocket = BOARD_AGENT_HTTP_MAX_REQUESTS_PER_SOCKET;
+  return server;
+}
+
 export function createLocalBoardAgentServer() {
   // One shared budget across every stream of this process: a demo browser
   // cannot fan out unbounded status/camera timers per tab.
   const streams = { clients: 0 };
-  return createServer(async (request, response) => {
+  const server = createServer(async (request, response) => {
+    const framingError = requestFramingError(request);
+    if (framingError) {
+      request.destroy();
+      return;
+    }
     if (!authorized(request)) {
+      if ((requestBodyLength(request) || 0) > 0) response.shouldKeepAlive = false;
       json(response, 401, { ok: false, error: 'BOARD_AGENT_UNAUTHORIZED' });
       return;
     }
     if (request.method === 'GET' && request.url === '/healthz') {
+      if (rejectUnexpectedBody(request, response)) return;
       json(response, 200, {
         ok: true,
         service: 'local-board-agent-reference',
@@ -399,15 +529,18 @@ export function createLocalBoardAgentServer() {
       return;
     }
     if (request.method === 'GET' && request.url === '/v1/onboarding/preflight') {
+      if (rejectUnexpectedBody(request, response)) return;
       json(response, 200, onboardingPreflight());
       return;
     }
     if (request.method === 'GET' && request.url === '/v1/station/status') {
+      if (rejectUnexpectedBody(request, response)) return;
       const tick = Math.floor((Date.now() - STATION_STARTED_AT_MS) / STATION_STATUS_INTERVAL_MS);
       json(response, 200, buildStationStatus({ startedAtMs: STATION_STARTED_AT_MS, tick }));
       return;
     }
     if (request.method === 'GET' && request.url === '/v1/station/policy/files') {
+      if (rejectUnexpectedBody(request, response)) return;
       json(response, 200, listPolicies());
       return;
     }
@@ -428,10 +561,12 @@ export function createLocalBoardAgentServer() {
       return;
     }
     if (request.method === 'GET' && request.url === '/v1/station/status/stream') {
+      if (rejectUnexpectedBody(request, response)) return;
       pipeStationStatusStream(request, response, streams);
       return;
     }
     if (request.method === 'GET' && request.url === '/v1/station/camera.mjpeg') {
+      if (rejectUnexpectedBody(request, response)) return;
       pipeStationCamera(request, response, streams);
       return;
     }
@@ -440,6 +575,7 @@ export function createLocalBoardAgentServer() {
       return;
     }
     if (request.method !== 'POST' || !/^\/v1\/devices\/[^/]+\/commands$/.test(request.url || '')) {
+      if (request.method === 'POST' && rejectUnexpectedBody(request, response)) return;
       json(response, 404, { ok: false, error: 'BOARD_AGENT_NOT_FOUND' });
       return;
     }
@@ -486,6 +622,7 @@ export function createLocalBoardAgentServer() {
       });
     }
   });
+  return hardenLocalBoardAgentHttpServer(server);
 }
 
 if (process.argv[1] && fileURLToPath(import.meta.url) === path.resolve(process.argv[1])) {
@@ -494,6 +631,7 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === path.resolve(process.a
   const rawPort = Number(process.env.RDK_SIM2REAL_BOARD_AGENT_PORT || 19100);
   const port = Number.isInteger(rawPort) && rawPort >= 1024 && rawPort <= 65535 ? rawPort : 19100;
   const server = createLocalBoardAgentServer();
+  let closing = false;
   server.listen(port, host, () => {
     console.log(`local BoardAgent reference listening on http://${host}:${port}`);
     console.log(
@@ -501,7 +639,18 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === path.resolve(process.a
     );
   });
   function shutdown() {
-    server.close(() => process.exit(0));
+    if (closing) return;
+    closing = true;
+    // Terminate long-lived station streams during service shutdown so a
+    // SIGTERM cannot wait forever for a browser tab to disconnect.
+    server.closeIdleConnections?.();
+    server.closeAllConnections?.();
+    const forceExit = setTimeout(() => process.exit(1), 5_000);
+    forceExit.unref();
+    server.close(() => {
+      clearTimeout(forceExit);
+      process.exit(0);
+    });
   }
   process.once('SIGINT', shutdown);
   process.once('SIGTERM', shutdown);

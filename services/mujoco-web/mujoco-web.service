@@ -12,6 +12,7 @@ Group=mujoco
 WorkingDirectory=/opt/mujoco-web/current
 Environment=MUJOCO_GL=egl
 Environment=PYTHONUNBUFFERED=1
+Environment=XDG_CACHE_HOME=/tmp/mujoco-web-cache
 ExecStart=/opt/mujoco-web/venv/bin/uvicorn app:app --host 127.0.0.1 --port 18100 --workers 1
 Restart=always
 RestartSec=3

@@ -20,13 +20,34 @@ Environment=RDK_SIM2REAL_PUBLIC_BASE_PATH=/sim2real
 Environment=RDK_SIM2REAL_BIND_HOST=127.0.0.1
 Environment=RDK_SIM2REAL_PORT=18102
 Environment=RDK_SIM2REAL_STORAGE_DIR=/var/lib/rdk-robot-learning-platform/sim2real
+Environment=RDK_SIM2REAL_DSH_HOME=/var/lib/sim2real/dsh
+Environment=EXPRESS_TRUST_PROXY=1
+Environment=RDK_SIM2REAL_RATE_LIMIT_PER_MINUTE=1200
+Environment=RDK_SIM2REAL_LOG_LEVEL=info
+Environment=RDK_SIM2REAL_CSP_DISABLE=0
+Environment=RDK_SIM2REAL_ENABLE_HSTS=1
+Environment=RDK_SIM2REAL_STORAGE_LEASE=1
+Environment=RDK_SIM2REAL_STORAGE_READ_ONLY=0
 Environment=PATH=/usr/local/bin:/usr/bin:/bin
 ExecStartPre=/usr/bin/test ${RDK_SIM2REAL_DEPLOYMENT} = web-cloud
 ExecStartPre=/usr/bin/test ${NODE_ENV} = production
 ExecStartPre=/usr/bin/test ${RDK_SIM2REAL_SSO_REQUIRED} = 1
 ExecStartPre=/usr/bin/test ${RDK_SIM2REAL_AUTH_MODE} = trusted-proxy
+ExecStartPre=/usr/bin/test ${EXPRESS_TRUST_PROXY} = 1
+ExecStartPre=/usr/bin/test ${RDK_SIM2REAL_RATE_LIMIT_PER_MINUTE} = 1200
+ExecStartPre=/usr/bin/test ${RDK_SIM2REAL_LOG_LEVEL} = info
+ExecStartPre=/usr/bin/test ${RDK_SIM2REAL_CSP_DISABLE} = 0
+ExecStartPre=/usr/bin/test ${RDK_SIM2REAL_ENABLE_HSTS} = 1
+ExecStartPre=/usr/bin/test ${RDK_SIM2REAL_STORAGE_LEASE} = 1
+ExecStartPre=/usr/bin/test ${RDK_SIM2REAL_STORAGE_READ_ONLY} = 0
+ExecStartPre=/usr/bin/test ${RDK_SIM2REAL_DSH_HOME} = /var/lib/sim2real/dsh
+ExecStartPre=/usr/bin/test ${PATH} = /usr/local/bin:/usr/bin:/bin
 ExecStartPre=/bin/sh -c 'test -n "$${RDK_SIM2REAL_TRUSTED_PROXY_SECRET}"'
 ExecStartPre=/usr/bin/env node -e "if (Buffer.byteLength(process.env.RDK_SIM2REAL_TRUSTED_PROXY_SECRET || '', 'utf8') < 32) process.exit(1)"
+# Board evidence is gated on a separate HMAC key. Accept a legacy alias while
+# rotating, but reject the checked-in template value and other weak defaults
+# before the web process can start.
+ExecStartPre=/usr/bin/env node -e "const s=(process.env.RDK_SIM2REAL_TELEMETRY_ATTESTATION_SECRET||process.env.RDK_SIM2REAL_TELEMETRY_TOKEN_SECRET||process.env.RDK_SIM2REAL_TELEMETRY_HMAC_SECRET||'').trim();const weak=!s||Buffer.byteLength(s,'utf8')<32||/^(?:replace(?:[-_ ]?with)?(?:[-_ ].*)?|change(?:[-_ ]?me)?(?:[-_ ].*)?|changeme(?:[-_ ].*)?|example(?:[-_ ].*)?|placeholder(?:[-_ ].*)?|default(?:[-_ ]?secret)?(?:[-_ ].*)?|dummy(?:[-_ ].*)?|password(?:[-_ ].*)?|your[-_ ]?(?:secret|key)(?:[-_ ].*)?|secret(?:[-_ ].*)?)$/i.test(s)||new Set(s).size<2;if(weak)process.exit(1)"
 ExecStartPre=/usr/bin/test ${RDK_SIM2REAL_BIND_HOST} = 127.0.0.1
 ExecStartPre=/usr/bin/test ${RDK_SIM2REAL_PORT} = 18102
 ExecStartPre=/usr/bin/test ${RDK_SIM2REAL_PUBLIC_BASE_PATH} = /sim2real
@@ -42,6 +63,15 @@ ProtectSystem=strict
 PrivateDevices=true
 RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
 ReadWritePaths=/var/lib/rdk-robot-learning-platform/sim2real
+# The optional dedicated audit stream is configured by
+# RDK_SIM2REAL_AUDIT_FILE (the documented path is below).  ProtectSystem=strict
+# otherwise makes a healthy-looking service unable to append evidence and
+# /readyz correctly degrades to 503 after the first audit write.
+ReadWritePaths=/var/log/rdk-sim2real
+# DSH JSONL session persistence is deliberately outside the Sim2Real ledger;
+# keep it writable under ProtectSystem=strict without broadening the release
+# tree.  The production env template points here by default.
+ReadWritePaths=/var/lib/sim2real/dsh
 
 [Install]
 WantedBy=multi-user.target

@@ -2934,6 +2934,55 @@ h2 {
   display: grid;
   gap: 8px;
 }
+/* ---- 上板会话卡（板端策略运行的结构化证据回放） ---- */
+.run-board-sessions {
+  margin-top: 12px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: rgba(28, 28, 26, 0.02);
+  display: grid;
+  gap: 8px;
+}
+.run-board-session {
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--bg-elev, #fff);
+  display: grid;
+  gap: 6px;
+}
+.run-board-session.is-review-only {
+  border-style: dashed;
+}
+.run-board-session-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.run-board-session-attest {
+  padding: 1px 8px;
+  border: 1px solid currentColor;
+  border-radius: 999px;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  color: var(--muted);
+}
+.run-board-session-attest.is-attested {
+  color: #1e7f4f;
+}
+.run-board-session-attest.is-mock {
+  color: #b3660a;
+}
+.run-board-session-model {
+  margin: 0;
+  font-size: 11px;
+  color: var(--muted);
+  font-family: var(--mono, monospace);
+  word-break: break-all;
+}
 .run-retrain-heading {
   display: flex;
   align-items: center;

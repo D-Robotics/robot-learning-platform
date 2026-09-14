@@ -1,0 +1,14 @@
+[Unit]
+Description=Verified Sim2Real ledger backup
+After=sim2real-web.service
+
+[Service]
+Type=oneshot
+User=root
+ExecStart=/opt/sim2real-web/current/dist-server/scripts/sim2real-nightly-backup.sh
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=strict
+ReadWritePaths=/opt/sim2real-web/data /var/backups/rdk-sim2real
+

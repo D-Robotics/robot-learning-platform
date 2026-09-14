@@ -3,6 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="rdk-sim2real-base-path" content="__RDK_SIM2REAL_BASE_PATH__">
   <title>OriginBot 实时 Sim2Real</title>
   <link rel="stylesheet" href="./originbot-dashboard.css">
 </head>
@@ -10,17 +11,17 @@
   <a href="./">← 返回平台</a>
   <h1>OriginBot · 实时 Sim2Real</h1>
   <p class="muted">真实里程计与仿真参考轨迹并排核对。真机状态每秒刷新；本页只读取数据。</p>
-  <p id="connection" role="status" aria-live="polite">正在连接板端…</p>
+  <p id="connection" role="status" aria-live="polite" aria-atomic="true">正在连接板端…</p>
   <div class="grid">
     <section class="card">
       <h2>轨迹对比</h2>
-      <canvas id="plot" width="900" height="420" aria-label="橙色仿真轨迹与绿色真实里程计，坐标单位为米"></canvas>
+      <canvas id="plot" width="900" height="420" role="img" aria-label="橙色仿真轨迹与绿色真实里程计，坐标单位为米"></canvas>
       <p><span style="color:#ff8a52">● 仿真参考</span>　<span style="color:#7ee787">● 真实里程计</span>　<small id="counts"></small></p>
       <div class="actions"><button id="sample" type="button">加载仿真示例</button><button id="clear-real" type="button">清空本页真机轨迹</button></div>
       <label>导入自己的仿真 JSONL <input id="sim-file" type="file" accept=".jsonl,.json,text/plain,application/json"></label>
       <p id="sim-note" class="muted" role="status">尚未加载仿真。参考轨迹与真机使用各自的里程计原点，不构成自动误差评测。</p>
     </section>
-    <section class="card"><h2>真实状态</h2><div class="kv" id="status"></div><h2>策略</h2><p id="policy-state">加载中…</p><details><summary>策略详情</summary><pre id="policy"></pre></details></section>
+    <section class="card"><h2>真实状态</h2><div class="kv" id="status" aria-live="polite" aria-label="实时设备状态"></div><h2>策略</h2><p id="policy-state" role="status" aria-live="polite">加载中…</p><details><summary>策略详情</summary><pre id="policy"></pre></details></section>
   </div>
 </main>
 <script src="./originbot-dashboard.js"></script></body></html>

@@ -6,6 +6,7 @@ let running = false;
 let frameBusy = false;
 let controls = [];
 let frameObjectUrl = null;
+let pageUnloading = false;
 
 async function request(path, options = {}) {
   const response = await fetch(`./api/${path}`, {
@@ -17,6 +18,16 @@ async function request(path, options = {}) {
     throw new Error(detail || `HTTP ${response.status}`);
   }
   return response.json();
+}
+
+async function closeSession(id = session?.id) {
+  if (!id) return;
+  try {
+    await request(`sessions/${id}`, { method: "DELETE" });
+  } catch {
+    // The server TTL remains the fallback when a tab is closed or a gateway
+    // goes away before the explicit release reaches it.
+  }
 }
 
 function setStatus(text, error = false) {
@@ -99,7 +110,15 @@ async function openModel(key) {
   $("#run").classList.remove("running");
   $("#run").textContent = "▶ 运行";
   setStatus("创建会话…");
+  const previousSessionId = session?.id;
+  session = null;
+  if (previousSessionId) await closeSession(previousSessionId);
   session = await request("sessions", { method: "POST", body: JSON.stringify({ model: key }) });
+  if (pageUnloading) {
+    await closeSession(session.id);
+    session = null;
+    return;
+  }
   $("#model-title").textContent = session.model.name;
   $("#model-description").textContent = session.model.description;
   renderActuators(session.model);
@@ -154,6 +173,16 @@ boot().catch((error) => {
 });
 
 window.addEventListener("beforeunload", () => {
+  pageUnloading = true;
   if (frameObjectUrl) URL.revokeObjectURL(frameObjectUrl);
   frameObjectUrl = null;
+  if (session?.id) {
+    // keepalive lets the browser finish the small DELETE while unloading;
+    // the server-side TTL still protects clients that cannot send it.
+    fetch(`./api/sessions/${session.id}`, {
+      method: "DELETE",
+      keepalive: true,
+      headers: { accept: "application/json" },
+    }).catch(() => {});
+  }
 });

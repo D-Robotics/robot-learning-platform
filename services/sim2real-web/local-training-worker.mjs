@@ -48,6 +48,54 @@ const activeChildren = new Set();
 const finalizingJobs = new Set();
 let jobsLoadPromise;
 
+function loopbackHost(host) {
+  const value = String(host || '')
+    .trim()
+    .toLowerCase()
+    .replace(/^\[|\]$/g, '');
+  return value === '127.0.0.1' || value === 'localhost' || value === '::1';
+}
+
+/**
+ * The reference worker is intentionally convenient on loopback in local
+ * development. Once it is exposed by a production/web-cloud process, an
+ * empty token would turn the runner into an unauthenticated code-execution
+ * boundary, so authorization becomes mandatory and readiness reports the
+ * configuration error.
+ */
+const WEAK_RUNNER_TOKEN_RE =
+  /^(?:replace(?:[-_ ]?with)?(?:[-_ ].*)?|change(?:[-_ ]?me)?(?:[-_ ].*)?|changeme(?:[-_ ]?.*)?|example(?:[-_ ].*)?|placeholder(?:[-_ ].*)?|default(?:[-_ ]?secret)?(?:[-_ ].*)?|dummy(?:[-_ ].*)?|password(?:[-_ ].*)?|your[-_ ]?(?:secret|key)(?:[-_ ].*)?|secret(?:[-_ ].*)?)$/i;
+const REPEATED_RUNNER_TOKEN_RE = /^(.)\1{31,}$/s;
+
+/**
+ * A token is considered usable for an exposed worker only when it has the
+ * same minimum entropy/placeholder protections as the production config gate.
+ * Local loopback development may still use a short fixture token, but an
+ * operator cannot accidentally expose that fixture token through a remote
+ * bind or a production deployment.
+ */
+export function runnerTokenUsable(value) {
+  const token = String(value ?? '').trim();
+  return (
+    Boolean(token) &&
+    Buffer.byteLength(token, 'utf8') >= 32 &&
+    Buffer.byteLength(token, 'utf8') <= 4096 &&
+    !/[\u0000-\u001f\u007f]/.test(token) &&
+    !WEAK_RUNNER_TOKEN_RE.test(token) &&
+    !REPEATED_RUNNER_TOKEN_RE.test(token)
+  );
+}
+
+export function runnerTokenRequired(host = HOST, environment = process.env) {
+  return (
+    !loopbackHost(host) ||
+    String(environment.NODE_ENV || '')
+      .trim()
+      .toLowerCase() === 'production' ||
+    String(environment.RDK_SIM2REAL_DEPLOYMENT || '').trim() === 'web-cloud'
+  );
+}
+
 function text(value, max = 500) {
   return typeof value === 'string'
     ? value
@@ -74,6 +122,10 @@ function json(response, status, payload) {
 
 function authorized(request) {
   const configured = String(process.env.RDK_SIM2REAL_LOCAL_RUNNER_TOKEN || '').trim();
+  // In an exposed/production worker, a non-empty but weak token is just as
+  // unsafe as no token. Keep the permissive empty-token behavior only for a
+  // loopback development process.
+  if (runnerTokenRequired() && !runnerTokenUsable(configured)) return false;
   return !configured || request.headers.authorization === `Bearer ${configured}`;
 }
 
@@ -767,11 +819,18 @@ export function createLocalTrainingWorkerServer() {
           });
           return;
         }
-        json(response, configured ? 200 : 503, {
-          ok: configured,
+        const tokenValue = String(process.env.RDK_SIM2REAL_LOCAL_RUNNER_TOKEN || '').trim();
+        const tokenConfigured = Boolean(tokenValue);
+        const tokenUsable = runnerTokenUsable(tokenValue);
+        const authReady = !runnerTokenRequired() || tokenUsable;
+        json(response, configured && authReady ? 200 : 503, {
+          ok: configured && authReady,
           worker: 'sim2real-local',
           mode: 'external-engine',
           configured,
+          authConfigured: tokenConfigured,
+          authTokenUsable: tokenUsable,
+          ...(authReady ? {} : { error: 'worker_auth_not_configured' }),
           maxConcurrentJobs: maxConcurrentJobs(),
           activeJobs: activeJobs.size,
           queuedJobs: queuedJobs.length,

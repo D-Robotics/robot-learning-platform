@@ -3,7 +3,8 @@
 
 Replaces the per-sample `ros2 topic echo --once` subprocesses (three Python
 interpreters + DDS discovery every 2 s, ~80% of a core). This node subscribes
-once and writes a small JSON snapshot at 2 Hz; the agent reads that file.
+once and writes a small JSON snapshot at 10 Hz by default; the agent reads
+that file.
 
 Strictly read-only: subscriptions only, never publishes, never calls a
 service, never moves the robot. Absence of the bringup stack is reported by
@@ -19,16 +20,34 @@ import os
 import sys
 import time
 
+# Keep the telemetry writer on the same private IPC contract as the agent and
+# policy runtime.  The flat deployment layout means this helper is imported by
+# path rather than as a package.
+_MODULE_DIR = os.path.dirname(os.path.abspath(__file__))
+if _MODULE_DIR not in sys.path:
+    sys.path.insert(0, _MODULE_DIR)
+from board_ipc import atomic_write_json, ipc_path, secure_unlink
+
 import rclpy
 from nav_msgs.msg import Odometry
 from rclpy.node import Node
 from rclpy.qos import QoSProfile, ReliabilityPolicy
 from sensor_msgs.msg import Imu
 
-SNAPSHOT_FILE = os.environ.get(
-    "RDK_BOARD_TELEMETRY_SNAPSHOT", "/tmp/board-telemetry-snapshot.json"
+SNAPSHOT_FILE = ipc_path(
+    "RDK_BOARD_TELEMETRY_SNAPSHOT", "telemetry-snapshot.json"
 )
-SNAPSHOT_HZ = float(os.environ.get("RDK_BOARD_TELEMETRY_HZ", "2"))
+# The policy watchdog is intentionally tight (normally 500 ms).  A 2 Hz
+# writer can therefore publish a snapshot just as the previous sensor sample
+# crosses that boundary, and a frozen IMU/odom value can look fresh merely
+# because the wrapper file keeps changing.  Write often enough that the
+# snapshot cadence is comfortably inside the policy budget; the payload is
+# tiny and the atomic replace is bounded.
+try:
+    _snapshot_hz = float(os.environ.get("RDK_BOARD_TELEMETRY_HZ", "10"))
+except (TypeError, ValueError):
+    _snapshot_hz = 10.0
+SNAPSHOT_HZ = max(1.0, min(50.0, _snapshot_hz)) if _snapshot_hz == _snapshot_hz else 10.0
 STALE_SEC = 5.0  # snapshot older than this means "no fresh data"
 ADAPTER_CONFIG_PATH = os.environ.get("RDK_SIM2REAL_ADAPTER_CONFIG", "").strip()
 
@@ -117,6 +136,7 @@ class TelemetryNode(Node):
             "z": q.z,
             "w": q.w,
             "ts": time.time(),
+            "monotonicNs": time.monotonic_ns(),
         }
 
     def _on_odom(self, msg):
@@ -128,6 +148,7 @@ class TelemetryNode(Node):
             "linearX": twist.linear.x,
             "angularZ": twist.angular.z,
             "ts": time.time(),
+            "monotonicNs": time.monotonic_ns(),
         }
 
     def _on_status(self, msg):
@@ -147,12 +168,19 @@ class TelemetryNode(Node):
                 "quaternion": dict(self._imu["quaternion"]),
                 "gyro": dict(self._imu["gyro"]),
                 "linearAcceleration": dict(self._imu["linearAcceleration"]),
+                # These are the source sample times, rather than the file
+                # write time.  Consumers that drive actuators must validate
+                # them; otherwise a healthy writer can mask a stalled topic.
+                "sampleTs": float(self._imu["ts"]),
+                "sampleMonotonicNs": int(self._imu["monotonicNs"]),
             }
         if self._odom and now - self._odom["ts"] <= STALE_SEC:
             data["odom"] = {
                 k: self._odom[k]
                 for k in ("positionX", "positionY", "linearX", "angularZ")
             }
+            data["odom"]["sampleTs"] = float(self._odom["ts"])
+            data["odom"]["sampleMonotonicNs"] = int(self._odom["monotonicNs"])
         if self._battery and now - self._battery["ts"] <= STALE_SEC:
             data["batteryVoltage"] = self._battery["voltage"]
         payload = {
@@ -164,11 +192,8 @@ class TelemetryNode(Node):
             "topics": {"imu": IMU_TOPIC, "odom": ODOM_TOPIC, "battery": BATTERY_TOPIC},
             "data": data if data else None,
         }
-        tmp = SNAPSHOT_FILE + ".tmp"
         try:
-            with open(tmp, "w", encoding="utf-8") as handle:
-                json.dump(payload, handle)
-            os.replace(tmp, SNAPSHOT_FILE)
+            atomic_write_json(SNAPSHOT_FILE, payload)
         except Exception as exc:  # keep the sampler alive and make failures observable
             print(f"telemetry snapshot write failed: {exc!r}", file=sys.stderr, flush=True)
 
@@ -202,7 +227,7 @@ def main():
         except Exception:
             pass
         try:
-            os.unlink(SNAPSHOT_FILE)
+            secure_unlink(SNAPSHOT_FILE)
         except OSError:
             pass
     return 0

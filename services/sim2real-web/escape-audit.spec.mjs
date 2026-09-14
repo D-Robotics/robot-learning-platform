@@ -23,18 +23,23 @@
  * Run with `node services/sim2real-web/escape-audit.spec.mjs`.
  * This script is also wired into the `verify` chain as `verify:escape-audit`.
  */
-import { readFileSync } from 'node:fs';
+import { readdirSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
-const TARGETS = [
-  'public/app.js',
-  'public/agent-chat.js',
-  'public/telemetry-core.js',
-  'public/onboarding.js',
-  'public/originbot-dashboard.js',
-];
+
+/**
+ * Every first-party classic script the workbench ships. Discovered instead of
+ * listed so a new module cannot silently escape the audit — the failure mode a
+ * hard-coded list would hide.
+ */
+function discoverTargets() {
+  return readdirSync(path.join(HERE, 'public'), { withFileTypes: true })
+    .filter((entry) => entry.isFile() && entry.name.endsWith('.js'))
+    .map((entry) => `public/${entry.name}`)
+    .sort();
+}
 
 /**
  * Callees that make an interpolation safe. Each entry records *why* it is
@@ -543,6 +548,12 @@ function selfTest() {
 /* ------------------------------------------------------------------ */
 
 selfTest();
+
+const TARGETS = discoverTargets();
+if (!TARGETS.length) {
+  console.error('escape-audit: no first-party scripts found under public/ — refusing to pass');
+  process.exit(1);
+}
 
 const allViolations = [];
 for (const target of TARGETS) {

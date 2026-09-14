@@ -1,4 +1,11 @@
-  const base=location.pathname.startsWith('/sim2real/')?'/sim2real':'';
+  const configured=document.querySelector('meta[name="rdk-sim2real-base-path"]')?.getAttribute('content')||'';
+  const pathName=location.pathname;
+  const inferred=pathName.endsWith('/originbot-dashboard.html')
+    ? pathName.slice(0,-'/originbot-dashboard.html'.length).replace(/\/+$/,'')
+    : '';
+  const base=(configured&&configured!=='__RDK_SIM2REAL_BASE_PATH__')
+    ? configured.replace(/\/+$/,'')
+    : (inferred || (pathName.startsWith('/sim2real/')?'/sim2real':''));
   const sim=[],real=[],$=id=>document.getElementById(id); let lastTimestamp=null;
   const number=v=>typeof v==='number'&&Number.isFinite(v)?v:null;
   const val=(v,suffix='')=>number(v)===null?'—':v.toFixed(3)+suffix;
