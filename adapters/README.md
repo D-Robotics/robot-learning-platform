@@ -10,4 +10,8 @@
 4. 实现 observation/action/telemetry adapter，并接入 BoardAgent。
 5. 运行 `npm run verify:hardware-adapters` 和设备专属 smoke test。
 
+也可以直接运行 `npm run create:adapter -- <id> <family> <displayName>` 生成模板；完成
+`CHANGE_ME` 字段后运行 `npm run verify:adapters`。模板默认 `provenance.mock=true`，
+只有替换为真实板卡话题并通过 `npm run verify:live-board` 后，才应进入运动 Canary。
+
 OriginBot 的 `originbot-differential-drive.json` 是参考实现；RDK Duck 只需新增自己的 manifest 和适配器。

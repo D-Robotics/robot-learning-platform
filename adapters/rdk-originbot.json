@@ -45,6 +45,7 @@
   "runtime": {
     "decisionHz": 10,
     "actionProjection": "paired",
+    "actionOutput": "normalized-twist",
     "observationLayout": "originbot-imu-odom-v1"
   },
   "safety": {

@@ -22,7 +22,7 @@
     "maxAngular": 1.0,
     "watchdogMs": 500
   },
-  "runtime": { "decisionHz": 10, "actionProjection": "paired" },
+  "runtime": { "decisionHz": 10, "actionProjection": "paired", "actionOutput": "normalized-twist" },
   "safety": { "maxLinear": 0.3, "maxAngular": 1.0, "sensorStallSec": 0.5 },
   "policy": {
     "observationAdapterId": "imu-gravity-v1",

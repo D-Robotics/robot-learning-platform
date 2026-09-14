@@ -123,9 +123,8 @@ class GoalNavEnvContract(unittest.TestCase):
         self.assertEqual(self.env.observation_size, 8)
         self.assertEqual(self.env.action_size, 2)
         generic = load_pack()
-        generic["adapter"] = json.load(
-            open(os.path.join(REPO, "adapters", "generic-differential-drive.json"))
-        )
+        with open(os.path.join(REPO, "adapters", "generic-differential-drive.json")) as handle:
+            generic["adapter"] = json.load(handle)
         env42 = runner.GoalNavEnv(generic, num_envs=2, seed=7)
         self.assertEqual(env42.observation_size, 42)
         obs = env42.observe_one(0)
@@ -156,6 +155,15 @@ class GoalNavEnvContract(unittest.TestCase):
         # 8-value envelope pins dropout and slip too.
         self.assertAlmostEqual(domain.odom_dropout, 0.05)
         self.assertAlmostEqual(domain.slip_scale, 0.8)
+
+    def test_latency_contract_rejects_fractional_steps(self):
+        with self.assertRaises(ValueError):
+            runner.DomainParams.sample(
+                runner.np.random.default_rng(1),
+                {"actionLatencySteps": [0.5, 2]},
+            )
+        with self.assertRaises(ValueError):
+            runner.eval_domain_params([1.0, 0.1, 0.0, 0.0, 0.0, 1.5, 0.0, 1.0])
 
     def test_legacy_six_value_envelope_keeps_old_semantics(self):
         domain = runner.eval_domain_params([0.8, 0.25, 0.02, 0.05, 0.05, 2])
@@ -199,6 +207,43 @@ class GoalNavEnvContract(unittest.TestCase):
         x_after = float(env.state[0, 0])
         self.assertLess(x_after - x_before, env.max_linear * env.control_dt)
         self.assertGreater(x_after - x_before, 0.0)
+
+    def test_action_latency_is_exact_and_zero_is_immediate(self):
+        """The simulator must match board transport semantics for N steps.
+
+        A stale queue implementation can pass aggregate training tests while
+        shifting every command by one or more control periods.  Check all
+        supported envelope values explicitly, including the startup zero
+        prefix that protects the actuator while a delayed command is in
+        flight.
+        """
+        for latency in (0, 1, 2):
+            env = runner.GoalNavEnv(self.pack, num_envs=1, seed=17)
+            env.has_obstacles = False
+            # Remove random lag/noise so the applied command is observable in
+            # the true state velocity after one control step.
+            env.domain = [runner.DomainParams(latency_steps=latency, lag_tau=0.0)]
+            applied = []
+            for _ in range(latency + 1):
+                env.step(runner.np.asarray([[1.0, 0.0]], dtype=runner.np.float32))
+                applied.append(float(env.state[0, 6]))
+            expected_zero_prefix = [0.0] * latency
+            self.assertEqual(applied[:latency], expected_zero_prefix,
+                             "latency=%d startup commands must be zero" % latency)
+            self.assertAlmostEqual(applied[latency], env.max_linear, places=6,
+                                   msg="latency=%d must apply command after exactly N steps" % latency)
+
+        # A reset must clear delayed commands; the first command of the new
+        # episode cannot inherit the previous episode's queue.
+        env = runner.GoalNavEnv(self.pack, num_envs=1, seed=19)
+        env.has_obstacles = False
+        env.domain = [runner.DomainParams(latency_steps=2, lag_tau=0.0)]
+        env.step(runner.np.asarray([[1.0, 0.0]], dtype=runner.np.float32))
+        env.reset()
+        env.domain = [runner.DomainParams(latency_steps=2, lag_tau=0.0)]
+        env.step(runner.np.asarray([[1.0, 0.0]], dtype=runner.np.float32))
+        self.assertAlmostEqual(float(env.state[0, 6]), 0.0, places=6,
+                               msg="reset must restore delayed startup zeros")
 
     def test_collision_terminates_with_negative_reward(self):
         env = runner.GoalNavEnv(self.pack, num_envs=1, seed=3)
@@ -320,6 +365,33 @@ class GoalNavEnvContract(unittest.TestCase):
             )
         after = model.forward(obs0)[0].detach()
         self.assertFalse(torch.allclose(before, after))
+
+    def test_sac_policy_is_bounded_and_q_gradient_reaches_actor(self):
+        """Guard the SAC-specific contract, not only the PPO path.
+
+        SAC must train in the same bounded action space consumed by the
+        environment, and its actor loss must backpropagate through Q(s, a).
+        A detached sampled action can still produce an alpha curve, so this
+        direct gradient check catches that silent training failure.
+        """
+        torch.manual_seed(23)
+        model = runner.ActorCritic(8, 2)
+        learner = runner.SacLearner(model, 8, 2, torch.device("cpu"))
+        obs = torch.randn(16, 8)
+        action, logp = model.sac_action(obs)
+        self.assertTrue(torch.isfinite(logp).all())
+        self.assertLessEqual(float(action.detach().max()), 1.0)
+        self.assertGreaterEqual(float(action.detach().min()), -1.0)
+        for parameter in (*learner.q1.parameters(), *learner.q2.parameters()):
+            parameter.requires_grad_(False)
+        actor_loss = -learner.q1(obs, action).mean()
+        actor_loss.backward()
+        actor_grad = sum(
+            float(parameter.grad.abs().sum())
+            for parameter in model.parameters()
+            if parameter.grad is not None
+        )
+        self.assertGreater(actor_grad, 0.0, "Q gradient must reach the SAC actor")
 
 
 class StatisticsContract(unittest.TestCase):

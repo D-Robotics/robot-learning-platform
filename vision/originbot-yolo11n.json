@@ -3,7 +3,11 @@
   "id": "originbot-yolo11n-bpu",
   "displayName": "OriginBot X5 YOLO11n 感知适配器",
   "task": "object-detection",
-  "device": { "platform": "rdk-x5", "cameraTopic": "/image_raw", "input": { "width": 640, "height": 640, "format": "nv12" } },
+  "device": {
+    "platform": "rdk-x5",
+    "cameraTopic": "/image_raw",
+    "input": { "width": 640, "height": 640, "format": "nv12" }
+  },
   "artifact": {
     "kind": "compiled",
     "format": "bin",
@@ -15,10 +19,23 @@
   "outputs": { "classes": "coco-80", "boxes": true, "scores": true },
   "observation": {
     "id": "originbot-vision-target-v1",
-    "fields": ["target_dx_norm", "target_dy_norm", "target_width_norm", "target_height_norm", "target_confidence", "imu_yaw", "linear_velocity", "angular_velocity"],
+    "fields": [
+      "target_dx_norm",
+      "target_dy_norm",
+      "target_width_norm",
+      "target_height_norm",
+      "target_confidence",
+      "imu_yaw",
+      "linear_velocity",
+      "angular_velocity"
+    ],
     "size": 8,
     "missingTarget": "zero-with-confidence-0",
     "controlPolicy": "originbot-visual-twist-v1"
   },
-  "provenance": { "kind": "official-model-zoo", "mock": false, "note": "Official D-Robotics RDK X5 Model Zoo artifact; download and verify SHA-256 before staging." }
+  "provenance": {
+    "kind": "official-model-zoo",
+    "mock": false,
+    "note": "Official D-Robotics RDK X5 Model Zoo artifact; download and verify SHA-256 before staging."
+  }
 }

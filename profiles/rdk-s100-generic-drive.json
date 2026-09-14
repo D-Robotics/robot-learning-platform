@@ -52,7 +52,8 @@
   },
   "runtime": {
     "decisionHz": 10,
-    "actionProjection": "identity"
+    "actionProjection": "identity",
+    "actionOutput": "normalized-twist"
   },
   "safety": {
     "maxLinear": 0.3,

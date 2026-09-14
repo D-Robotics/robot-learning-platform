@@ -318,7 +318,13 @@ class DomainParams:
             return float(rng.uniform(values[0], values[1]))
         # Integer latency drawn from its own inclusive range.
         latency = (spec or {}).get("actionLatencySteps") or [0, 0]
-        steps = int(rng.integers(int(latency[0]), int(latency[1]) + 1))
+        latency_values = [float(latency[0]), float(latency[1])]
+        if (
+            not all(math.isfinite(value) and value >= 0 and value.is_integer() for value in latency_values)
+            or latency_values[0] > latency_values[1]
+        ):
+            raise ValueError("domainRandomization.actionLatencySteps must be non-negative integers")
+        steps = int(rng.integers(int(latency_values[0]), int(latency_values[1]) + 1))
         return cls(
             motor_gain=uniform("motorGain", 1.0),
             lag_tau=uniform("lagTauSeconds", 0.05),
@@ -353,10 +359,14 @@ def eval_domain_params(envelope):
     (no dropout, no slip) so old records stay re-loadable.
     """
     values = [float(value) for value in envelope]
+    if not all(math.isfinite(value) for value in values):
+        raise ValueError("evaluation envelope values must be finite")
     while len(values) < 8:
         values.append(0.0 if len(values) < 7 else 1.0)
     (motor_gain, lag_tau, gyro_noise, odom_noise, angular_bias,
      latency, odom_dropout, slip_scale) = values
+    if latency < 0 or not latency.is_integer():
+        raise ValueError("evaluation envelope actionLatencySteps must be a non-negative integer")
     return DomainParams(
         motor_gain=motor_gain,
         lag_tau=lag_tau,
@@ -433,7 +443,13 @@ class GoalNavEnv:
         self._obs_initialized = np.zeros(num_envs, dtype=bool)
         self.steps = np.zeros(num_envs, dtype=np.int64)
         self.domain = [DomainParams() for _ in range(num_envs)]
-        self.action_fifo = [deque(maxlen=3) for _ in range(num_envs)]
+        # Seed each queue with N zero commands at episode start.  Popping one
+        # entry per step then gives exact transport latency (N=0 is
+        # immediate).  A fixed maxlen queue made latency=0 accidentally
+        # behave like a multi-step delay and silently truncated larger
+        # declared envelopes.
+        self.action_fifo = [deque() for _ in range(num_envs)]
+        self._queue_latency = np.zeros(num_envs, dtype=np.int64)
         self.obstacles = [self._sample_obstacles() for _ in range(num_envs)]
         self.has_obstacles = bool((pack.get("workspace") or {}).get("obstacles", {}).get("count", 0)) > 0
         self.timeout_steps = int(pack["termination"]["timeoutSteps"])
@@ -469,6 +485,9 @@ class GoalNavEnv:
         for env_idx in range(self.num_envs):
             self.domain[env_idx] = DomainParams.sample(self.rng, self.pack.get("domainRandomization"))
             self.action_fifo[env_idx].clear()
+            latency = max(0, int(self.domain[env_idx].latency_steps))
+            self.action_fifo[env_idx].extend([(0.0, 0.0)] * latency)
+            self._queue_latency[env_idx] = latency
             self.obstacles[env_idx] = self._sample_obstacles()
         return self.observe()
 
@@ -486,10 +505,19 @@ class GoalNavEnv:
         linear = float(np.clip(action[0], -1.0, 1.0)) * self.max_linear
         angular = float(np.clip(action[1], -1.0, 1.0)) * self.max_angular
         fifo = self.action_fifo[env_idx]
+        latency = max(0, int(domain.latency_steps))
+        # Domain parameters are normally episode-scoped.  Keep direct
+        # evaluation/tests safe when a caller injects a pinned envelope after
+        # reset by restarting the queue with the matching zero prefix.
+        if int(self._queue_latency[env_idx]) != latency:
+            fifo.clear()
+            fifo.extend([(0.0, 0.0)] * latency)
+            self._queue_latency[env_idx] = latency
         fifo.append((linear, angular))
-        # Latency: execute the command from N steps ago (agent must be robust
-        # to delayed actuation; the FIFO holds at most 3 entries).
-        delayed = fifo[0] if len(fifo) > domain.latency_steps else fifo[0]
+        # Latency: execute the command from N steps ago.  The zero prefix
+        # makes the first N calls safe zero commands and applies command k at
+        # step k+N.
+        delayed = fifo.popleft()
         target_v, target_w = delayed
         # First-order actuator lag toward the delayed target, scaled by the
         # motor gain (a weak motor converges to a slower top speed).
@@ -601,6 +629,9 @@ class GoalNavEnv:
             self._collision_flags[env_idx] = False
             self.domain[env_idx] = DomainParams.sample(self.rng, self.pack.get("domainRandomization"))
             self.action_fifo[env_idx].clear()
+            latency = max(0, int(self.domain[env_idx].latency_steps))
+            self.action_fifo[env_idx].extend([(0.0, 0.0)] * latency)
+            self._queue_latency[env_idx] = latency
             self.obstacles[env_idx] = self._sample_obstacles()
             obs[env_idx] = self.observe_one(env_idx)
         self._maybe_expand_curriculum()
@@ -678,7 +709,7 @@ class GoalNavEnv:
         out[10:12] = (v_lag, w_lag)
         return out
 
-    def rollout_episode(self, model, device, seed, domain, deterministic=True):
+    def rollout_episode(self, model, device, seed, domain, deterministic=True, squashed=False):
         """Run one full episode for evaluation; returns per-step rows.
 
         Builds a dedicated single-env seeded from `seed` so evaluation never
@@ -696,7 +727,7 @@ class GoalNavEnv:
         with torch.no_grad():
             obs_tensor = torch.from_numpy(obs).to(device)
             for step in range(single.timeout_steps):
-                action, _ = model.act(obs_tensor, deterministic=deterministic)
+                action, _ = model.act(obs_tensor, deterministic=deterministic, squashed=squashed)
                 action_np = action.cpu().numpy()
                 next_obs, reward, done, success = single.step(action_np)
                 # Read the terminal state captured BEFORE the auto-reset —
@@ -755,14 +786,30 @@ class ActorCritic(torch.nn.Module):
         std = self.log_std.clamp(-1.5, 0.0).exp().expand_as(mu)
         return torch.distributions.Normal(mu, std)
 
-    def act(self, obs, deterministic=False):
+    def act(self, obs, deterministic=False, squashed=False):
         dist = self.distribution(obs)
+        if squashed:
+            # SAC uses a tanh-squashed Gaussian.  Keeping this opt-in leaves
+            # the historical PPO log-prob contract untouched while ensuring
+            # every SAC action seen by the critic and environment is bounded
+            # by the same [-1, 1] actuator contract.
+            latent = dist.mean if deterministic else dist.rsample()
+            action = torch.tanh(latent)
+            logp = (
+                dist.log_prob(latent)
+                - torch.log(1.0 - action.pow(2) + 1e-6)
+            ).sum(-1)
+            return action, logp
         action = dist.mean if deterministic else dist.sample()
         return action.clamp(-1.0, 1.0), dist.log_prob(action.clamp(-1.0, 1.0)).sum(-1)
 
+    def sac_action(self, obs, deterministic=False):
+        """Return a bounded SAC action and its tanh-corrected log-probability."""
+        return self.act(obs, deterministic=deterministic, squashed=True)
+
 
 def evaluate_policy(model, joint_count, command_size, control_dt, physics_dt, decimation,
-                    seed, episodes=EVAL_EPISODES, collect_jsonl=False):
+                    seed, episodes=EVAL_EPISODES, collect_jsonl=False, squashed=False):
     """Run whole episodes without auto-reset; record true per-episode stats.
 
     Episodes run one at a time (a few hundred single-env steps each) because
@@ -782,7 +829,7 @@ def evaluate_policy(model, joint_count, command_size, control_dt, physics_dt, de
             steps = 0
             fell = False
             for step in range(EPISODE_CONTROL_STEPS):
-                action, _ = model.act(obs, deterministic=True)
+                action, _ = model.act(obs, deterministic=True, squashed=squashed)
                 next_obs, reward, done, fallen_now = env.step(
                     action.cpu().numpy(), physics_dt, decimation, auto_reset=False
                 )
@@ -817,21 +864,21 @@ def evaluate_policy(model, joint_count, command_size, control_dt, physics_dt, de
     }
 
 
-def measure_control_latency_ms(model, obs_size, control_dt):
+def measure_control_latency_ms(model, obs_size, control_dt, squashed=False):
     """Single-sample inference latency for the one-thread CPU budget."""
     model.eval()
     sample = torch.zeros(1, obs_size)
     with torch.no_grad():
-        model.act(sample, deterministic=True)  # warm-up
+        model.act(sample, deterministic=True, squashed=squashed)  # warm-up
         timings = []
         for _ in range(32):
             started = time.perf_counter()
-            model.act(sample, deterministic=True)
+            model.act(sample, deterministic=True, squashed=squashed)
             timings.append((time.perf_counter() - started) * 1000.0)
     return round(float(np.median(timings)), 3)
 
 
-def export_onnx(model, obs_size, act_size, path):
+def export_onnx(model, obs_size, act_size, path, squashed=False):
     model.eval()
     dummy = torch.zeros(1, obs_size)
 
@@ -842,7 +889,7 @@ def export_onnx(model, obs_size, act_size, path):
 
         def forward(self, observation):
             mu, _ = self.ac.forward(observation)
-            return mu.clamp(-1.0, 1.0)
+            return torch.tanh(mu) if squashed else mu.clamp(-1.0, 1.0)
 
     actor = ActorOnly(model)
     import warnings
@@ -977,10 +1024,9 @@ class SacLearner:
     """SAC learner over the shared ActorCritic backbone.
 
     The critic is a twin-Q head grafted onto the same trunk (twinQ1/twinQ2
-    plus a target copy updated by Polyak averaging). Deterministic
-    inference, ONNX export, and both evaluators reuse ActorCritic exactly
-    as PPO does — act(deterministic=True) is the SAC mean action, so the
-    deployment story is unchanged between algorithms.
+    plus a target copy updated by Polyak averaging). SAC uses a
+    tanh-squashed Gaussian during learning and deterministic tanh(mean) for
+    evaluation/export; the Q heads are never exported.
     """
 
     def __init__(self, model, obs_size, act_size, device, hyperparams=None):
@@ -1017,9 +1063,10 @@ class SacLearner:
         """One gradient step from a uniform replay batch; returns loss dict."""
         obs, action, reward, next_obs, done = buffer.sample(self.hp["batchSize"], generator=rng)
         with torch.no_grad():
-            next_dist = self.model.distribution(next_obs)
-            next_action = next_dist.sample()
-            next_logp = next_dist.log_prob(next_action).sum(-1)
+            # SAC's policy is a tanh-squashed Gaussian.  The correction term
+            # in sac_action keeps the entropy target in the bounded action
+            # space actually consumed by the environment.
+            next_action, next_logp = self.model.sac_action(next_obs)
             q1_target = self.target_q1(next_obs, next_action)
             q2_target = self.target_q2(next_obs, next_action)
             soft_value = torch.min(q1_target, q2_target) - self.alpha().detach() * next_logp
@@ -1032,16 +1079,21 @@ class SacLearner:
         self.critic_opt.step()
         self._sync_targets()
 
-        dist = self.model.distribution(obs)
-        sampled = dist.rsample()
-        logp = dist.log_prob(sampled).sum(-1)
+        sampled, logp = self.model.sac_action(obs)
+        # Do not detach the sampled action: SAC's actor gradient must flow
+        # through Q(s, a).  Freeze critic parameters for this phase so the
+        # actor update does not accumulate an unused critic gradient.
+        for parameter in (*self.q1.parameters(), *self.q2.parameters()):
+            parameter.requires_grad_(False)
         actor_loss = (self.alpha().detach() * logp - torch.min(
-            self.q1(obs, sampled.detach()), self.q2(obs, sampled.detach())
+            self.q1(obs, sampled), self.q2(obs, sampled)
         )).mean()
         self.actor_opt.zero_grad()
         actor_loss.backward()
         torch.nn.utils.clip_grad_norm_(self.model.parameters(), PPO_HYPERPARAMS["maxGradNorm"])
         self.actor_opt.step()
+        for parameter in (*self.q1.parameters(), *self.q2.parameters()):
+            parameter.requires_grad_(True)
 
         alpha_loss = -(self.log_alpha * (logp.detach() + self.target_entropy)).mean()
         self.alpha_opt.zero_grad()
@@ -1120,17 +1172,18 @@ def requested_algorithm(training):
 def sac_collect(model, env, rollout_steps, device, step_fn):
     """Gather one SAC transition batch.
 
-    Same UNCLAMPED-sample contract as collect_rollout: SAC stores the
-    action it actually sampled (log_prob is recomputed analytically in the
-    update, so no logp column is needed here), and the env saturates the
-    command at execution. step_fn(actions) -> (next_obs, reward, done).
+    SAC stores the bounded tanh-squashed action it actually sampled (log_prob
+    is recomputed analytically in the update, so no logp column is needed
+    here). The explicit clamp at the environment boundary is only a final
+    numerical guard. step_fn(actions) -> (next_obs, reward, done).
     """
     obs = env.observe()
     obs_list, act_list, rew_list, done_list, next_list = [], [], [], [], []
     for _ in range(rollout_steps):
         with torch.no_grad():
-            dist = model.distribution(torch.from_numpy(obs).to(device))
-            action = dist.sample()
+            action, _ = model.sac_action(torch.from_numpy(obs).to(device))
+        # sac_action is already bounded; keep the explicit clamp as a final
+        # numerical guard before crossing the environment boundary.
         action_np = action.clamp(-1.0, 1.0).cpu().numpy()
         next_obs, reward, done = step_fn(action_np)
         obs_list.append(obs)
@@ -1275,19 +1328,25 @@ def train_goal_navigation(request, pack):
     trained_report = evaluate_goal_navigation(
         model, env, device, envelopes, eval_seed,
         episodes_per_envelope=episodes_per_envelope, confidence=confidence,
+        squashed=algorithm == "sac",
     )
     baseline_model = ActorCritic(obs_size, act_size).to(device)
     baseline_report = evaluate_goal_navigation(
         baseline_model, env, device, envelopes, eval_seed,
         episodes_per_envelope=episodes_per_envelope, confidence=confidence,
+        squashed=algorithm == "sac",
     )
-    latency = measure_control_latency_ms(model.to("cpu"), obs_size, 1.0 / control_hz)
+    latency = measure_control_latency_ms(
+        model.to("cpu"), obs_size, 1.0 / control_hz, squashed=algorithm == "sac"
+    )
     model = model.to(device)
 
     onnx_bytes = 0
     if HAVE_ONNX:
         try:
-            onnx_bytes = export_onnx(model.to("cpu"), obs_size, act_size, "policy.onnx")
+            onnx_bytes = export_onnx(
+                model.to("cpu"), obs_size, act_size, "policy.onnx", squashed=algorithm == "sac"
+            )
             model = model.to(device)
             stdout("exported policy.onnx ({} bytes)".format(onnx_bytes))
         except Exception as error:  # noqa: BLE001 - export failure must not lose the run
@@ -1337,6 +1396,7 @@ def train_goal_navigation(request, pack):
                     "reachedGoalDistance": [round(env.goal_distance[0], 3), round(env.goal_distance[1], 3)],
                 },
                 "controlHz": control_hz,
+                "actionOutput": "normalized-twist" if act_size == 2 else "physical-joint",
                 "rewardCurve": reward_curve,
                 "successCurve": success_curve,
                 "device": requested_device.type,
@@ -1385,6 +1445,7 @@ def train_goal_navigation(request, pack):
             "format": "onnx" if onnx_bytes else "unknown",
             **({"runtime": "cpu-onnx", "workload": "goal-navigation", "threads": 1} if onnx_bytes else {}),
             **({"sizeBytes": onnx_bytes} if onnx_bytes else {}),
+            "actionOutput": "normalized-twist" if act_size == 2 else "physical-joint",
             "deployable": False,
         },
         "metrics": {
@@ -1395,6 +1456,7 @@ def train_goal_navigation(request, pack):
             "taskKind": "goal-navigation",
             "observationSize": obs_size,
             "actionSize": act_size,
+            "actionOutput": "normalized-twist" if act_size == 2 else "physical-joint",
             "reward": round(trained_report.get("meanReward", 0.0), 4),
             "initialReward": round(baseline_report.get("meanReward", 0.0), 4),
             "successRate": round(nominal.get("successRate", 0.0), 4),
@@ -1411,13 +1473,14 @@ def train_goal_navigation(request, pack):
             "telemetrySamples": sum(len(rows) for rows in trained_report["jsonl"].values()),
         },
         "deployable": False,
+        "actionOutput": "normalized-twist" if act_size == 2 else "physical-joint",
         "cuda": requested_device.type == "cuda",
     }
     return result
 
 
 def evaluate_goal_navigation(model, env, device, envelopes, seed,
-                             episodes_per_envelope=50, confidence=0.95):
+                             episodes_per_envelope=50, confidence=0.95, squashed=False):
     """Evaluate an actor under each pinned envelope on a fixed seed.
 
     Envelope order: [motorGain, lagTauSeconds, gyroNoiseStdRadSec,
@@ -1436,7 +1499,7 @@ def evaluate_goal_navigation(model, env, device, envelopes, seed,
         jsonl_rows = []
         for episode in range(episodes_per_envelope):
             episode_seed = seed * 7919 + episode
-            outcome = env.rollout_episode(model, device, episode_seed, domain)
+            outcome = env.rollout_episode(model, device, episode_seed, domain, squashed=squashed)
             successes += int(outcome["success"])
             collisions += int(outcome["collision"])
             finals.append(outcome["finalDistance"])
@@ -1585,7 +1648,10 @@ def train(request):
         sac_buffer = ReplayBuffer(SAC_HYPERPARAMS["replayCapacity"], obs_size, act_size, device)
         sac_rng = torch.Generator(device="cpu")
         sac_rng.manual_seed(7)
-    initial_eval = evaluate_policy(model, joint_count, command_size, control_dt, physics_dt, decimation, seed=11)
+    initial_eval = evaluate_policy(
+        model, joint_count, command_size, control_dt, physics_dt, decimation,
+        seed=11, squashed=algorithm == "sac",
+    )
     stdout(
         "eval before training: stepReward={:.3f} successRate={:.2f}".format(
             initial_eval["meanStepReward"], initial_eval["successRate"]
@@ -1604,8 +1670,7 @@ def train(request):
             obs_list, act_list, rew_list, done_list, next_list = [], [], [], [], []
             for _ in range(rollout_steps):
                 with torch.no_grad():
-                    dist = model.distribution(to_tensor(obs_np))
-                    action = dist.sample()
+                    action, _ = model.sac_action(to_tensor(obs_np))
                 next_obs_np, reward, done, _ = env.step(
                     action.clamp(-1.0, 1.0).cpu().numpy(), physics_dt, decimation
                 )
@@ -1721,11 +1786,11 @@ def train(request):
 
     final_eval = evaluate_policy(
         model, joint_count, command_size, control_dt, physics_dt, decimation,
-        seed=11, collect_jsonl=True,
+        seed=11, collect_jsonl=True, squashed=algorithm == "sac",
     )
     baseline_eval = evaluate_policy(
         ActorCritic(obs_size, act_size).to(device), joint_count, command_size, control_dt, physics_dt,
-        decimation, seed=11, collect_jsonl=True,
+        decimation, seed=11, collect_jsonl=True, squashed=algorithm == "sac",
     )
     stdout(
         "eval after training: stepReward={:.3f} successRate={:.2f} (baseline {:.3f}/{:.2f})".format(
@@ -1736,13 +1801,17 @@ def train(request):
     # The latency figure describes the board-like one-thread CPU budget the
     # artifact targets, so it is always measured on CPU — a GPU training run
     # must not advertise GPU inference latency.
-    latency = measure_control_latency_ms(model.to("cpu"), obs_size, control_dt)
+    latency = measure_control_latency_ms(
+        model.to("cpu"), obs_size, control_dt, squashed=algorithm == "sac"
+    )
     model = model.to(device)
 
     onnx_bytes = 0
     if HAVE_ONNX:
         try:
-            onnx_bytes = export_onnx(model.to("cpu"), obs_size, act_size, "policy.onnx")
+            onnx_bytes = export_onnx(
+                model.to("cpu"), obs_size, act_size, "policy.onnx", squashed=algorithm == "sac"
+            )
             model = model.to(device)
             stdout("exported policy.onnx ({} bytes)".format(onnx_bytes))
         except Exception as error:  # noqa: BLE001 - export failure must not lose the run

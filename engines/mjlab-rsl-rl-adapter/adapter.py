@@ -285,9 +285,12 @@ def evaluate_kinematic(runner, pack, seed, episodes_per_envelope, confidence):
         def __init__(self, actor):
             self.actor = actor
 
-        def act(self, obs_tensor, deterministic=True):
+        def act(self, obs_tensor, deterministic=True, squashed=False):
             with torch.inference_mode():
-                action = self.actor.act_inference(obs_tensor)
+                if squashed and hasattr(self.actor, "sac_action"):
+                    action, _ = self.actor.sac_action(obs_tensor, deterministic=deterministic)
+                else:
+                    action = self.actor.act_inference(obs_tensor)
             return action.clamp(-1.0, 1.0), torch.zeros(action.shape[0], device=action.device)
 
         @property
