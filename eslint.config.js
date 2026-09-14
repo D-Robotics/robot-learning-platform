@@ -165,9 +165,12 @@ export default tseslint.config(
         ...globals.browser,
         // app.js defines `setView` as a classic-script global that
         // onboarding.js calls, and telemetry-core.js probes the CommonJS
-        // `module` binding inside its UMD wrapper.
+        // `module` binding inside its UMD wrapper. agent-chat.js reuses
+        // app.js's canonical `request`/`ApiError` contract the same way.
         setView: 'readonly',
         module: 'readonly',
+        request: 'readonly',
+        ApiError: 'readonly',
       },
     },
     rules: {

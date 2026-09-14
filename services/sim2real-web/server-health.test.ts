@@ -4,7 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import type { AddressInfo } from 'node:net';
 
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import {
   createSim2RealWebApp,
@@ -17,6 +17,24 @@ import {
   SIM2REAL_HTTP_REQUEST_TIMEOUT_MS,
 } from './server.js';
 import { flushSim2RealAudit } from '../../server/sim2real/audit-log.js';
+import { askDsh as mockedAskDsh, DshAgentFailure } from '../../server/agent-runtime/dsh-runtime.js';
+
+// The route test below swaps the agent loop entry for a rejecting stub, so
+// the HTTP contract (502 + operator hint, never a silent fallback) can be
+// asserted without booting the real DSH plugin stack; the composition itself
+// is covered end to end in server/agent-runtime/dsh-runtime.test.ts.
+vi.mock('../../server/agent-runtime/dsh-runtime.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../server/agent-runtime/dsh-runtime.js')>();
+  return {
+    ...actual,
+    askDsh: vi.fn(async () => {
+      throw new DshAgentFailure(
+        'DSH_CREDENTIAL_MISSING',
+        'DSH 已启用但缺少模型凭证：请在服务端配置 RDK_SIM2REAL_DSH_API_KEY 或 DEEPSEEK_API_KEY 后重启。',
+      );
+    }),
+  };
+});
 
 const originalEnv = { ...process.env };
 const temporaryRoots: string[] = [];
@@ -151,6 +169,43 @@ describe('standalone Sim2Real health and optional simulator surface', () => {
     const disabled = await post({ message: 'hello', model: 'deepseek-chat' });
     expect(disabled.status).toBe(503);
     expect(await disabled.json()).toMatchObject({ error: 'DSH_RUNTIME_DISABLED' });
+  });
+
+  it('surfaces a DSH turn failure as a stable 502 with its operator hint instead of a silent fallback', async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'rdk-sim2real-dsh-route-'));
+    temporaryRoots.push(root);
+    process.env.RDK_SIM2REAL_DEPLOYMENT = 'local';
+    process.env.RDK_SIM2REAL_STORAGE_DIR = path.join(root, 'ledger');
+    process.env.RDK_SIM2REAL_REQUIRE_MICRODUCK = '0';
+    delete process.env.RDK_SIM2REAL_MICRODUCK_ROOT;
+    delete process.env.RDK_SIM2REAL_MICRODUCK_URL;
+    const app = createSim2RealWebApp();
+    // DSH composition happens in the startup path, not the app factory; the
+    // route reads the runtime from locals, which is exactly the seam this
+    // test drives (the mocked askDsh rejects with the documented failure).
+    (app.locals as Record<string, unknown>).dshRuntime = { __stub: 'dsh-route-fixture' };
+    const server = app.listen(0, '127.0.0.1');
+    openServers.push(server);
+    await new Promise<void>((resolve, reject) => {
+      server.once('listening', () => resolve());
+      server.once('error', reject);
+    });
+    const address = server.address() as AddressInfo;
+
+    const response = await fetch(`http://127.0.0.1:${address.port}/api/sim2real/dsh/chat`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ message: '你好' }),
+    });
+    const payload = await response.json();
+    expect(response.status).toBe(502);
+    expect(payload).toMatchObject({
+      ok: false,
+      error: 'DSH_CREDENTIAL_MISSING',
+      message: expect.stringContaining('RDK_SIM2REAL_DSH_API_KEY'),
+    });
+    expect(payload.requestId).toBeTypeOf('string');
+    expect(mockedAskDsh).toHaveBeenCalledOnce();
   });
 
   it('projects DSH events to non-sensitive metadata before returning them', () => {

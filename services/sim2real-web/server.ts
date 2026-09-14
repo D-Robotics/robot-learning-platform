@@ -48,10 +48,15 @@ import {
 } from '../../server/routes/sim2real-routes.js';
 import { createSim2RealAgentRouter } from '../../server/routes/sim2real-agent-routes.js';
 import {
-  createDshRuntime,
   askDsh,
+  createDshRuntime,
+  DshAgentFailure,
   dshRuntimeEnabled,
 } from '../../server/agent-runtime/dsh-runtime.js';
+import {
+  createDshAuthChannel,
+  createDshCapabilityHandlers,
+} from '../../server/agent-runtime/dsh-capability-handlers.js';
 import {
   listCapabilities,
   // DSH's product tools are reported separately from the legacy planner
@@ -501,9 +506,12 @@ export function createSim2RealWebApp(): Express {
       dsh: {
         configured: dshRuntimeEnabled(),
         initialized: dsh,
-        // `bound: false` is intentional in the public reference service: the
-        // board/GPU adapters are deployment-owned and are not silently faked.
-        capabilities: listDshCapabilityCatalog(),
+        // Handlers are bound at startup in startSim2RealWebServer; this app
+        // factory is also used by tests without a DSH composition, so the
+        // catalog reflects whatever handlers the runtime received.
+        capabilities:
+          (app.locals as { dshCapabilityCatalog?: ReturnType<typeof listDshCapabilityCatalog> })
+            .dshCapabilityCatalog ?? listDshCapabilityCatalog(),
       },
     });
   });
@@ -686,7 +694,36 @@ export function createSim2RealWebApp(): Express {
       return;
     }
     try {
-      const result = await askDsh(runtime, prompt, { ...(model ? { model } : {}) });
+      // Forward the caller's session to tool executions for this turn. In
+      // single-user mode the loopback routes accept the request directly;
+      // in shared deployments the forwarded cookie/authorization keeps RBAC
+      // enforced per principal instead of running tools as the server.
+      const forwarded: Record<string, string> = {};
+      if (request.headers.cookie) forwarded.cookie = String(request.headers.cookie);
+      if (request.headers.authorization)
+        forwarded.authorization = String(request.headers.authorization);
+      // Surface the UI's current model/device selection to the model without
+      // trusting it: the tools re-validate any id against the workspace.
+      const rawContext = request.body?.context;
+      const contextId = (value: unknown): string =>
+        typeof value === 'string' && value.trim() && value.length <= 128 ? value.trim() : '';
+      const contextPart = [
+        contextId(rawContext?.modelId) ? `modelId=${contextId(rawContext.modelId)}` : '',
+        contextId(rawContext?.deviceId) ? `deviceId=${contextId(rawContext.deviceId)}` : '',
+        contextId(rawContext?.computeResourceId)
+          ? `computeResourceId=${contextId(rawContext.computeResourceId)}`
+          : '',
+      ]
+        .filter(Boolean)
+        .join(' ');
+      const turnPrompt = contextPart ? `${prompt}\n\n[当前工作区选择] ${contextPart}` : prompt;
+      const channel = (app.locals as Record<string, unknown>).dshAuthChannel as
+        ReturnType<typeof createDshAuthChannel> | undefined;
+      const result = channel
+        ? await channel.withAuth(forwarded, () =>
+            askDsh(runtime, turnPrompt, { ...(model ? { model } : {}) }),
+          )
+        : await askDsh(runtime, turnPrompt, { ...(model ? { model } : {}) });
       response.json({
         ok: true,
         sessionId: result.sessionId,
@@ -695,6 +732,21 @@ export function createSim2RealWebApp(): Express {
       });
     } catch (error) {
       console.error('[sim2real-web] DSH chat failed:', redactInternalError(error));
+      // A turn failure with a reviewed code carries its own user-facing
+      // message (for example the missing-credential hint). Everything else
+      // keeps the generic upstream response so provider internals never cross
+      // the browser boundary. This is deliberately not a 503: the runtime is
+      // enabled but misconfigured, and silently falling back to the legacy
+      // canned-reply planner would hide the real problem.
+      if (error instanceof DshAgentFailure) {
+        response.status(502).json({
+          ok: false,
+          error: error.code,
+          message: error.message,
+          ...(responseRequestId(response) ? { requestId: responseRequestId(response) } : {}),
+        });
+        return;
+      }
       sendPublicUpstreamError(response, 'DSH_CHAT_FAILED', 'dsh');
     }
   });
@@ -947,14 +999,24 @@ export async function startSim2RealWebServer(): Promise<void> {
     }
   }
   // DSH is composed once per service process. Product routes may expose only
-  // atomic capabilities; they never construct a second agent loop.
+  // atomic capabilities; they never construct a second agent loop. The
+  // capability handlers call this service's own authenticated routes, so
+  // RBAC, motion switches and release gates apply to model-initiated actions
+  // exactly as they do to the web UI.
+  const dshAuthChannel = createDshAuthChannel();
   if (dshRuntimeEnabled()) {
     try {
+      const capabilityHandlers = createDshCapabilityHandlers();
       const dsh = await createDshRuntime({
         persistenceRoot:
           process.env.RDK_SIM2REAL_DSH_HOME || path.join(process.cwd(), '.sim2real-dsh'),
+        capabilityHandlers,
       });
       app.locals.dshRuntime = dsh;
+      app.locals.dshAuthChannel = dshAuthChannel;
+      (
+        app.locals as { dshCapabilityCatalog?: ReturnType<typeof listDshCapabilityCatalog> }
+      ).dshCapabilityCatalog = listDshCapabilityCatalog(capabilityHandlers);
       console.log('[sim2real-web] DSH runtime composed');
     } catch (error) {
       console.error('[sim2real-web] DSH runtime failed:', redactInternalError(error));

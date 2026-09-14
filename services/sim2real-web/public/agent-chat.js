@@ -506,17 +506,18 @@ async function runTask(message) {
   const modelId = $('model-select')?.value || undefined;
   const deviceId = $('device-select')?.value || undefined;
   const computeResourceId = $('compute-resource-select')?.value || undefined;
-  // Natural conversation is handled by the official DSH runtime when enabled;
-  // explicit product actions retain the guarded domain planner until their DSH
-  // tool bindings are available.
-  const actionIntent = /(训练|gpu|cuda|板卡|设备|仿真|录制|评测|部署|预检|停止|急停|ssh|curl)/i.test(message);
-  if (!actionIntent) {
-    try {
-      const dsh = await api('/sim2real/dsh/chat', { method: 'POST', body: JSON.stringify({ message }) });
-      if (dsh?.ok && dsh.text) { addMessage('agent', dsh.text); return; }
-    } catch (error) {
-      if (!(error && error.status === 503)) throw error;
-    }
+  // Everything goes to the official DSH runtime when it is enabled — the
+  // model decides when to call the rdk_* tools (training, board, deployment
+  // …), and every tool call rides the authenticated domain routes. Only a
+  // disabled runtime (503) falls back to the guarded legacy planner.
+  try {
+    const dsh = await api('/sim2real/dsh/chat', {
+      method: 'POST',
+      body: JSON.stringify({ message, context: { modelId, deviceId, computeResourceId } }),
+    });
+    if (dsh?.ok && dsh.text) { addMessage('agent', dsh.text); return; }
+  } catch (error) {
+    if (!(error && error.status === 503)) throw error;
   }
   const response = await api('/sim2real/agent/plan', { method: 'POST', body: JSON.stringify({ message, context: { modelId, deviceId, computeResourceId } }) });
   const plan = response?.plan;

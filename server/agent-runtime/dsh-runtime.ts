@@ -42,11 +42,15 @@ export async function createDshRuntime(options: DshRuntimeOptions): Promise<Cont
   const gatewayBaseUrl = String(
     process.env.RDK_SIM2REAL_DSH_BASE_URL || process.env.RDK_STUDIO_LLM_BASE_URL || '',
   ).trim();
+  // The DeepSeek adapter has no `apiKey` config field: it resolves its
+  // credential lazily from the launching environment (`DEEPSEEK_API_KEY`, or
+  // the `apiKeyEnv` reference). Bridge the dedicated variable before the
+  // plugins load so it actually reaches the provider, with the same "dedicated
+  // setting wins" precedence as the model below.
+  const dedicatedApiKey = String(process.env.RDK_SIM2REAL_DSH_API_KEY ?? '').trim();
+  if (dedicatedApiKey) process.env.DEEPSEEK_API_KEY = dedicatedApiKey;
   const deepseekOptions = {
     ...(gatewayBaseUrl ? { baseURL: gatewayBaseUrl } : {}),
-    ...(process.env.RDK_SIM2REAL_DSH_API_KEY
-      ? { apiKey: process.env.RDK_SIM2REAL_DSH_API_KEY }
-      : {}),
     ...(options.deepseek ?? {}),
   };
   try {
@@ -81,6 +85,61 @@ export async function createDshRuntime(options: DshRuntimeOptions): Promise<Cont
 import { randomUUID } from 'node:crypto';
 import { SessionId, type SessionEvent } from '@deepseek-ai/dsh-session';
 import { createUserMessage } from '@deepseek-ai/dsh-llm';
+
+/**
+ * A DSH turn that ended in an error. Carries only a stable code and a
+ * user-facing message; provider internals stay in the server-side logs so the
+ * HTTP surface never leaks transport details or credentials.
+ */
+export class DshAgentFailure extends Error {
+  constructor(
+    readonly code: string,
+    message: string,
+  ) {
+    super(message);
+    this.name = 'DshAgentFailure';
+  }
+}
+
+/**
+ * Inspect the session's turn summaries and return the terminal error of the
+ * last turn, if any. The SDK's `turn/end` events are the authoritative
+ * outcome: a turn can fail without producing any assistant message (for
+ * example a missing provider credential), which must not be reported as a
+ * successful empty reply.
+ */
+function lastTurnFailure(events: readonly unknown[]): { code: string; message: string } | null {
+  for (let index = events.length - 1; index >= 0; index -= 1) {
+    const event = events[index];
+    if (!event || typeof event !== 'object') continue;
+    const source = event as { type?: unknown; data?: unknown };
+    if (source.type !== 'turn/end') continue;
+    const data = source.data as
+      { reason?: { kind?: unknown; error?: { code?: unknown; message?: unknown } } } | undefined;
+    const reason = data?.reason;
+    if (!reason || reason.kind !== 'error') return null;
+    const error = reason.error ?? {};
+    return {
+      code: typeof error.code === 'string' ? error.code : '',
+      message: typeof error.message === 'string' ? error.message : '',
+    };
+  }
+  return null;
+}
+
+function mapTurnFailure(failure: { code: string; message: string }): DshAgentFailure {
+  if (failure.code === 'MISSING_CREDENTIAL') {
+    return new DshAgentFailure(
+      'DSH_CREDENTIAL_MISSING',
+      'DSH 已启用但缺少模型凭证：请在服务端配置 RDK_SIM2REAL_DSH_API_KEY 或 DEEPSEEK_API_KEY 后重启。',
+    );
+  }
+  return new DshAgentFailure(
+    'DSH_TURN_FAILED',
+    `DSH 本轮对话失败${failure.code ? `（${failure.code}）` : ''}，请稍后重试。`,
+  );
+}
+
 export async function askDsh(ctx: Context, prompt: string, options: { model?: string } = {}) {
   const id = SessionId(`sim2real-${randomUUID()}`);
   const handle = await ctx.agents.create({
@@ -106,11 +165,16 @@ export async function askDsh(ctx: Context, prompt: string, options: { model?: st
     );
     await handle.agent.whenIdle();
     const events = handle.agent.session.events;
+    const failure = lastTurnFailure(events);
+    if (failure) throw mapTurnFailure(failure);
     const messages = events
       .filter(
         (event): event is SessionEvent<'assistant/message'> => event.type === 'assistant/message',
       )
       .map((event) => event.data.message);
+    // Visible answer text only. Reasoning models stream their thinking as
+    // separate `type: "reasoning"` blocks on the same message; flattening every
+    // block with a `.text` field would prepend that preamble to the user's reply.
     const text = messages
       .flatMap((message) => {
         if (typeof message === 'string') return [message];
@@ -119,12 +183,9 @@ export async function askDsh(ctx: Context, prompt: string, options: { model?: st
         if (!Array.isArray(content)) return [];
         return content.flatMap((block) => {
           if (typeof block === 'string') return [block];
-          if (
-            block &&
-            typeof block === 'object' &&
-            typeof (block as { text?: unknown }).text === 'string'
-          )
-            return [(block as { text: string }).text];
+          const candidate = block as { type?: unknown; text?: unknown };
+          if (candidate?.type === 'text' && typeof candidate.text === 'string')
+            return [candidate.text];
           return [];
         });
       })

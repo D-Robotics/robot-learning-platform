@@ -22,3 +22,7 @@ docs/*.mp4
 
 # Local GUI-test screenshot artifacts, not source.
 gui-test-screenshots/
+
+# DSH session persistence root (default ./.sim2real-dsh); contains per-conversation
+# transcripts and is relocatable via RDK_SIM2REAL_DSH_HOME.
+.sim2real-dsh/
