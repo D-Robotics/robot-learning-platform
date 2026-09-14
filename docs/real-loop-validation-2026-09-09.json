@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "date": "2026-09-09T04:42:19.568Z",
   "gpu": {
-    "host": "120.48.90.140",
+    "host": "<gpu-host>",
     "runId": "local-microduck-ppo-gpu-8c10760f-9872-458a-880c-860704538923",
     "cuda": true,
     "backend": "local",
@@ -25,7 +25,7 @@
     }
   },
   "board": {
-    "host": "10.185.136.180",
+    "host": "<board-host>",
     "deviceId": null,
     "platform": "rdk-x5",
     "model": "D-Robotics RDK X5 V1.0"

@@ -64,9 +64,9 @@
       <text x="18" y="22" class="nav-active">总览</text><text x="18" y="38" class="micro">下一步做什么</text><text x="187" y="29" class="metric" font-size="13">01</text>
       <text x="18" y="80" class="nav">仿真与录制</text><text x="18" y="98" class="micro">演示 · 记录 · 回放</text><text x="187" y="88" class="micro">02</text>
       <text x="18" y="140" class="nav">训练与模型</text><text x="18" y="158" class="micro">本地 · Mock · RoboGo</text><text x="187" y="148" class="micro">03</text>
-      <text x="18" y="200" class="nav">评测与效果</text><text x="18" y="218" class="micro">仿真 / 真机对比</text><text x="187" y="208" class="micro">04</text>
-      <text x="18" y="260" class="nav">部署到 X5</text><text x="18" y="278" class="micro">预检 · Canary · Live</text><text x="187" y="268" class="micro">05</text>
-      <text x="18" y="320" class="nav">记录与版本</text><text x="18" y="338" class="micro">制品 · 运行 · 审计</text><text x="187" y="328" class="micro">06</text>
+      <text x="18" y="200" class="nav">Sim2Real 评测</text><text x="18" y="218" class="micro">仿真 / 真机对比</text><text x="187" y="208" class="micro">04</text>
+      <text x="18" y="260" class="nav">部署与反馈</text><text x="18" y="278" class="micro">预检 · Canary · Live</text><text x="187" y="268" class="micro">05</text>
+      <text x="18" y="320" class="nav">调试与记录</text><text x="18" y="338" class="micro">制品 · 运行 · 审计</text><text x="187" y="328" class="micro">06</text>
     </g>
     <path d="M25 567h190" stroke="#2d3340"/>
     <text x="25" y="596" class="label">QUICK ENTRY</text>
@@ -107,7 +107,7 @@
       <g transform="translate(662 190)">
         <rect width="312" height="187" rx="15" fill="#151a23" stroke="#333a49"/>
         <text x="22" y="31" class="label">03 / EVALUATION</text>
-        <text x="22" y="61" class="h2">评测与效果</text>
+        <text x="22" y="61" class="h2">Sim2Real 评测</text>
         <text x="22" y="86" class="body">仿真 / 真机同轴对比</text>
         <path d="M22 139C61 126 76 147 111 123S166 141 194 109s57 10 95-22" fill="none" stroke="#55d7ff" stroke-width="3"/>
         <path d="M22 148C62 142 79 157 111 142s53 12 84-13 51 6 94-9" fill="none" stroke="#ff7433" stroke-width="3" stroke-dasharray="6 5"/>
@@ -127,7 +127,7 @@
       <g transform="translate(644 400)">
         <rect width="330" height="153" rx="15" fill="#151a23" stroke="#ff7433" stroke-opacity=".55"/>
         <text x="22" y="32" class="label">DEPLOY GATE</text>
-        <text x="22" y="61" class="h2">部署到 X5</text>
+        <text x="22" y="61" class="h2">部署与反馈</text>
         <text x="22" y="86" class="body">先预检，再 Canary / Live</text>
         <rect x="22" y="107" width="286" height="27" rx="7" fill="#1c2b26"/>
         <circle cx="39" cy="120.5" r="5" fill="#45df9c"/><text x="53" y="125" class="micro" fill="#a5edc6">网页不会直接开电机</text>

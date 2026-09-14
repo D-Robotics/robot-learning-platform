@@ -7,12 +7,12 @@
 
 ## 一、平台是什么（30 秒开场）
 
-**RDK 机器人学习平台（Sim2Real Lab）** —— 从浏览器仿真到 RDK-X5 真机部署的机器人强化学习工作台。
+**RDK 机器人学习平台（Sim2Real Lab）** —— 从浏览器仿真到 RDK-X5 受控发布的机器人策略工作台。
 
-一句话讲清定位：**它是一个通用平台，不是只会“遛鸭”的玩具**。浏览器仿真是低门槛入口，
-录制、训练、评测、部署围绕同一份可追溯的模型契约组织；OriginBot 是第一台参考机型，
-话题清单和契约参数都可换机型。所有数据如实标注：真实数据 `mock: false`，合成数据
-永远带标签，绝不伪造。
+一句话讲清定位：**它是 RDK 机器人策略的证据链与安全交付控制面**。浏览器仿真是低门槛
+入口，录制、训练、评测、预检、审批和发布围绕同一份可追溯的模型契约组织；OriginBot 是
+第一台参考机型，话题清单和契约参数通过适配包扩展。所有数据如实标注：真实数据 `mock: false`，
+合成数据永远带标签，绝不伪造。
 
 ```
 浏览器仿真/录制 ──→ 训练（本地/GPU/云端）──→ ONNX 制品 ──→ 评测（仿真vs真机）
@@ -33,10 +33,10 @@
 | **总览** | 工作区上下文、Agent 下一步建议、安全边界状态 | 一屏讲完平台定位 |
 | **训练页 · 契约折叠面板** | 登记模型、契约检查清单（61D obs / 14D act / 50Hz） | “契约先行”的设计理念 |
 | **仿真与录制** | MicroDuck 浏览器仿真 + 中文控制层 + 轨迹录制 JSON/JSONL | 亲手遛鸭、录动作 |
-| **训练与模型** | 三条路径：Mock 协议演练 / starter-ppo 真训练 / RoboGo 云端 | 真训练 `mock=false`、真 ONNX 制品 |
-| **评测与效果** | 遥测导入、回放、仿真vs真机偏差、**真机实时对照** | 关键指标诚实显示“合成证据·非真实遥测” |
-| **部署到 X5** | 契约/板型/制品预检、上线闸门 | 只读预检 fail-closed，不越权 |
-| **记录与版本** | Run、发布计划、已保存回放三类证据 | 刷新页面数据仍在，可追溯 |
+| **强化学习训练** | 三条路径：Mock 协议演练 / starter-ppo 真训练 / RoboGo 云端 | 真训练 `mock=false`、真 ONNX 制品 |
+| **Sim2Real 评测** | 遥测导入、回放、仿真vs真机偏差、**真机实时对照** | 关键指标诚实显示“合成证据·非真实遥测” |
+| **部署与反馈** | 契约/板型/制品预检、上线闸门 | 只读预检 fail-closed，不越权 |
+| **调试与记录** | Run、发布计划、已保存回放三类证据 | 刷新页面数据仍在，可追溯 |
 | **板端上位机**（#station） | 真机遥测、运动金丝雀、策略运行时、命令面板 | **本次演示核心**，详见下节 |
 
 | **对话式 Agent** | 中文任务解析、异步任务状态、工具调用日志、运行证据 | 一句话串起仿真 / GPU / X5 预检 |
@@ -63,11 +63,11 @@
 打开 `http://127.0.0.1:18102/?demo=1`（需先 `npm run demo:sim2real`）或直接用 18104。
 
 1. **总览** → 点开上下文，讲四步流程与安全边界。
-2. **训练与模型** → “运行 Mock 协议演示”：`queued → running → completed`，运行卡片
+2. **强化学习训练** → “运行 Mock 协议演示”：`queued → running → completed`，运行卡片
    明确写“协议演示”，详情 `mock=true`、`deployable=false` 是刻意保留的证据。
-3. **评测与效果** → “载入合成演示证据”（8 帧 61D/14D 50Hz）→ “上传演示样例并评测”：
+3. **Sim2Real 评测** → “载入合成演示证据”（8 帧 61D/14D 50Hz）→ “上传演示样例并评测”：
    页面标注“合成证据 · 非真实遥测”，性能数字留空——诚实设计。
-4. **部署到 X5** → “生成预检计划” → “执行只读预检”：预期 `SIM2REAL_PREFLIGHT_MOCK_ONLY`、
+4. **部署与反馈** → “生成预检计划” → “执行只读预检”：预期 `SIM2REAL_PREFLIGHT_MOCK_ONLY`、
    `NO MOTOR`——**这是演示成功的安全结果**，不要讲成部署成功。
 
 ### 第二幕：真训练（2 分钟）
@@ -137,7 +137,7 @@ MicroDuck 全身动力学），`deployable=false` 保持诚实。
 ### 0. 启动平台（Mac 终端）
 
 ```bash
-cd /Users/d-robotics/Desktop/超级智能体/rdk-robot-learning-platform-public
+cd /path/to/rdk-robot-learning-platform-public
 set -a && source /tmp/gpu-stack-restart.env && set +a
 nohup node dist-server/services/sim2real-web/server.js > /tmp/sim2real-server-18104.log 2>&1 &
 ```
@@ -146,9 +146,9 @@ nohup node dist-server/services/sim2real-web/server.js > /tmp/sim2real-server-18
 > ```bash
 > cat > /tmp/gpu-stack-restart.env <<'EOF'
 > RDK_SIM2REAL_LOCAL_RUNNER_URL=http://127.0.0.1:19091/train
-> RDK_SIM2REAL_LOCAL_RUNNER_TOKEN=23e262dd694c1932f77326ad8b2411906fd443cb9e29210d
+> RDK_SIM2REAL_LOCAL_RUNNER_TOKEN=<generate-with-openssl-rand-hex-32>
 > RDK_SIM2REAL_LOCAL_RUNNER_MODE=external
-> RDK_SIM2REAL_STORAGE_DIR=/Users/d-robotics/.rdk-sim2real-gpu-verify/ledger
+> RDK_SIM2REAL_STORAGE_DIR=/tmp/rdk-sim2real-gpu-verify/ledger
 > RDK_SIM2REAL_BOARD_AGENT_URL=http://[::1]:19100
 > RDK_SIM2REAL_BOARD_AGENT_TOKEN=<板 /etc/rdk-board-agent/agent.env 里的 TOKEN>
 > RDK_SIM2REAL_PORT=18104
@@ -165,14 +165,14 @@ curl -s http://127.0.0.1:18104/api/sim2real/board-station/health
 curl -s http://127.0.0.1:18104/api/sim2real/board-station/status | head -c 600
 
 # 隧道断了就重建：
-sshpass -p root ssh -f -N -L '[::1]:19100:127.0.0.1:19100' root@10.185.136.180
+ssh -f -N -L '[::1]:19100:127.0.0.1:19100' "${RDK_X5_SSH_TARGET:?set root@<board-host>}"
 ```
 
 ### 2. 要演示策略运行时（可选，提前 2 分钟）
 
 ```bash
 # 板侧开开关（/etc/rdk-board-agent/agent.env 追加三行后重启）
-sshpass -p root ssh root@10.185.136.180 \
+ssh "${RDK_X5_SSH_TARGET:?set root@<board-host>}" \
   'sed -i "s/ENABLE_POLICY=0/ENABLE_POLICY=0/" /etc/rdk-board-agent/agent.env; \
    grep -q OBS_DIM /etc/rdk-board-agent/agent.env || \
    echo -e "RDK_SIM2REAL_POLICY_OBS_DIM=42\nRDK_SIM2REAL_POLICY_ACTION_DIM=12\nRDK_SIM2REAL_BOARD_AGENT_ENABLE_POLICY=1" >> /etc/rdk-board-agent/agent.env; \
@@ -189,7 +189,7 @@ set -a && source /tmp/gpu-stack-restart.env && set +a && \
 
 ```bash
 # 板侧关开关
-sshpass -p root ssh root@10.185.136.180 \
+ssh "${RDK_X5_SSH_TARGET:?set root@<board-host>}" \
   'sed -i "s/ENABLE_POLICY=1/ENABLE_POLICY=0/" /etc/rdk-board-agent/agent.env; \
    systemctl restart rdk-board-agent'
 
@@ -201,7 +201,7 @@ set -a && source /tmp/gpu-stack-restart.env && set +a && \
 
 ### 连接参数（备忘）
 
-- 板：`root@10.185.136.180`（密码 root），agent 19100 端口
+- 板：`$RDK_X5_SSH_TARGET`（使用 SSH key/agent，不在仓库记录密码），agent 19100 端口
 - 平台：`http://127.0.0.1:18104`（station：`#station`）
 - 板上模型：`policy.onnx`（真训练 95KB 42→12）、`demo-policy.onnx`（结构真实 61→14 未训练）
 - 仓库内同款环境文件：`/tmp/gpu-stack-restart.env`；投屏用 18104，演示软件闭环用 18102

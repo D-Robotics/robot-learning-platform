@@ -12,7 +12,7 @@
   "training": {
     "device": "cuda",
     "deviceName": "NVIDIA GeForce RTX 5090",
-    "server": "120.48.90.140:2222",
+    "server": "<gpu-host>:2222",
     "algorithm": "supervised-visual-twist",
     "onnxOpset": 11
   },
@@ -26,7 +26,7 @@
     "sizeBytes": 264347
   },
   "x5LoadTest": {
-    "board": "10.185.136.180",
+    "board": "<board-host>",
     "runtime": "hobot_dnn.pyeasy_dnn",
     "path": "/root/rdk-board-agent/vision-models/originbot-visual-twist-v1.synthetic.model.bin",
     "inputShape": [1, 8, 1, 1],

@@ -28,7 +28,7 @@ npm run demo:originbot-live -- --require-real # 彩排后切真机：连的还�
 接真机有两条等价路径：
 
 - **网页内（推荐，免命令行）**：上位机页「设备管理」面板填板卡 IP → 添加 → 连接（服务端自动建 SSH 隧道并探测 agent）；「运动开关」面板里开平台/板端两侧开关。详见 [docs/host-station.md](host-station.md) 的「网页添加真机」一节。
-- **命令行（脚本化）**：板卡 IP 写入 `.env` 的 `RDK_SIM2REAL_BOARD_AGENT_URL=http://<IP>:19100` 后重启工作台（或用 `ssh -N -L 19100:127.0.0.1:19100 root@<IP>` 隧道），更新板端 agent 用 `bash scripts/deploy-x5-board-agent.sh`。
+- **命令行（脚本化）**：新板先运行 `RDK_X5_SSH_TARGET=root@<IP> ./scripts/install-x5-board-agent.sh` 完成显式 unit/目录初始化；确认环境后再运行 `RDK_X5_SSH_TARGET=root@<IP> ./scripts/deploy-x5-board-agent.sh` 更新代码。板卡 IP 写入 `.env` 的 `RDK_SIM2REAL_BOARD_AGENT_URL=http://<IP>:19100` 后重启工作台（或用 `ssh -N -L 19100:127.0.0.1:19100 root@<IP>` 隧道）。初始化脚本默认不启动服务，按 runbook 审阅 token 后再单独启用 agent。
 
 ## 1. 启动平台与打开 OriginBot 产品线
 
@@ -130,7 +130,7 @@ motionAuthorized=true/false（按当前开关）
 
 ## 8. 只读设备预检
 
-在“部署到 X5”页面选择真实 OriginBot，执行：
+在“部署与反馈”页面选择真实 OriginBot，执行：
 
 ```text
 探测板型 → 生成预检计划 → 执行只读预检

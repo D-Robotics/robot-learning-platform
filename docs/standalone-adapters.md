@@ -16,7 +16,7 @@
   `RDK_SIM2REAL_BOARD_AGENT_URL=http://127.0.0.1:19100` 可完成只读 board passport
   预检和板型探测。它只返回模拟的 aarch64/TROS/磁盘信息，拒绝未知命令，绝不执行 shell、SSH、模型下发
   或电机控制；因此它是联调工具，不是真机 agent。`?persist=true` 只会通过本地设备适配器更新
-  已登记设备的板卡元数据，不会写入凭据或执行设备动作。
+已登记设备的板卡元数据，不会写入凭据或执行设备动作。
 - ledger → PostgreSQL + 对象存储
 - RoboGo API client → 组织内部的服务端 token broker
 
@@ -49,7 +49,9 @@ Authorization: Bearer <short-lived-agent-token>
 
 设备页的 `POST /api/devices/:id/board/detect?persist=true` 复用同一只读 probe，并只通过
 `persistDeviceBoardDetection` 更新已登记设备的板型、型号和系统版本字段；它不会把 agent 返回的
-原始对象整体写回，也不会执行上传、启动或执行器动作。reference agent 的响应带 `mock: true`，
+原始对象整体写回，也不会执行上传、启动或执行器动作。共享部署会把写入限定到当前已验证 owner
+的设备行；缺少 owner scope 时直接拒绝，避免不同账号使用相同设备 ID 时互相改写元数据。
+reference agent 的响应带 `mock: true`，
 所以部署闸门会保持 `blocked`，只能用来验证协议和界面。
 
 ## Station 扩展端点（受控 staging，只落盘）

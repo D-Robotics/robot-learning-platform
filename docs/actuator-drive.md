@@ -23,8 +23,8 @@
 命令行等价流程（与网页操作完全等价，适合脚本化）：
 
 ```bash
-# 板端（OriginBot 上）：/root/rdk-board-agent/agent.env
-echo 'RDK_SIM2REAL_BOARD_AGENT_ENABLE_DRIVE=1' >> /root/rdk-board-agent/agent.env
+# 板端（OriginBot 上）：systemd 与 agent 共用的 root-only 环境文件
+echo 'RDK_SIM2REAL_BOARD_AGENT_ENABLE_DRIVE=1' >> /etc/rdk-board-agent/agent.env
 ssh root@<board> systemctl restart rdk-board-agent
 
 # 平台侧（运行 Web 工作台的环境）
@@ -81,9 +81,13 @@ POST /api/sim2real/board-station/drive/stop
 | --- | --- |
 | `board-agent-x5.py` | HTTP 面 + 运动窗口状态机 + watchdog 线程（窗口到期强制归零） |
 | `board-drive-publisher.py` | 常驻 rclpy 发布器：10 Hz 读命令 YAML 并发 `/cmd_vel`；每周期重读文件（改速 ≤100 ms 生效）；冷启动就绪握手（确认底盘订阅后才写 ready 标记，agent 等到标记才开窗）；退出前补发零速帧 |
-| `board-telemetry-node.py` | 常驻只读遥测节点：订阅机型遥测话题（参考机型 OriginBot：`/imu` `/odom` `/originbot_status`），2 Hz 写 JSON 快照（替代每 2 秒 3 个 `ros2 topic echo` 子进程，CPU 约 -80%）；换机型时只改这一文件的话题清单 |
+| `board-telemetry-node.py` | 常驻只读遥测节点：订阅机型遥测话题（参考机型 OriginBot：`/imu` `/odom` `/originbot_status`），默认 10 Hz 写 JSON 快照，并保留每个 IMU/odom 样本的 `sampleMonotonicNs`（策略运行时按 500 ms 看门狗逐传感器校验；快照文件刷新本身不再掩盖冻结话题）；替代每 2 秒 3 个 `ros2 topic echo` 子进程，CPU 约 -80%；换机型时只改这一文件的话题清单 |
 
-命令文件 `/tmp/rdk-board-agent-drive.yaml` 由 agent 原子重写（tmp+fsync+replace）；急停 = 写零速 + agent 状态归零，发布器 100 ms 内跟进，底盘看门狗兜底。
+命令文件默认位于 `/var/lib/rdk-board-agent/runtime/drive-command.yaml`（runtime 目录
+`0700`、文件 `0600`），由 agent 使用随机 `O_EXCL` 临时 inode、`O_NOFOLLOW`、
+`fsync` 和原子 rename 重写；急停 = 写零速 + agent 状态归零，发布器 100 ms 内跟进，
+底盘看门狗兜底。旧版 `RDK_BOARD_DRIVE_CMD_FILE` 覆盖只有在安全的绝对路径和 0700
+父目录下才会生效。
 
 ## 案例
 
@@ -114,7 +118,7 @@ curl -X POST .../drive/stop
 # 网页方式（推荐）：「运动开关」面板把「平台 · 驱动金丝雀」和板端「驱动」都点回关闭
 # 命令行等价：
 # 板端
-ssh root@<board> "sed -i '/ENABLE_DRIVE/d' /root/rdk-board-agent/agent.env; systemctl restart rdk-board-agent"
+ssh root@<board> "sed -i '/ENABLE_DRIVE/d' /etc/rdk-board-agent/agent.env; systemctl restart rdk-board-agent"
 # 平台侧 env 删除 RDK_SIM2REAL_STATION_DRIVE_ENABLED=1 后重启工作台（或网页开关关掉运行时覆盖）
 # 验证：两侧都应回 false，POST 应 409
 curl http://127.0.0.1:18104/api/sim2real/board-station/switches
@@ -135,7 +139,7 @@ curl http://127.0.0.1:18104/api/sim2real/board-station/switches
 
 | 现象 | 含义 / 处理 |
 | --- | --- |
-| `409 publisher-unavailable` | 发布器 8 秒内未完成就绪握手（TROS 环境坏、底盘不在）。看 `journalctl -u rdk-board-agent | grep drive` 与 `/tmp/board-drive-publisher.log` |
+| `409 publisher-unavailable` | 发布器 8 秒内未完成就绪握手（TROS 环境坏、底盘不在）。看 `journalctl -u rdk-board-agent | grep drive` 与 `/var/lib/rdk-board-agent/runtime/drive-publisher.log` |
 | 命令 accepted 但机器人不动 | `originbot-bringup` 是否 active；`/cmd_vel` 订阅者是否存在（`ros2 topic info /cmd_vel`）；看发布器日志 `cmd -> lin=...` 是否出现目标速度 |
 | 面板不出现滑条 | 双开关任一未开，或平台代理不可达（面板说明文字会区分这两种情况） |
 | 遥测卡片变「无数据」 | bringup 停了或遥测节点挂了（agent 会自动重启它）；agent 重启后首几秒为空属正常 |

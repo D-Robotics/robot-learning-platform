@@ -107,11 +107,14 @@ POST   /device-connections/:connectionId/config        代理改板端两个开�
 2. 点 **连接**：服务端进程 spawn `ssh -N -L <随机本地端口>:127.0.0.1:19100 root@<IP>`（BatchMode 非交互、ExitOnForwardFailure、失败即拆），然后探测转发端口的 `/healthz`。成功后板端遥测/相机/命令全部自动切到该隧道目标；失败时错误如实回显（SSH 原因），隧道不留残余。
 3. 因为隧道本地端是 loopback，代理看到的 agent URL 仍是 `http://127.0.0.1:<port>`——现有 SSRF 边界（明文 HTTP 仅限 loopback）、Bearer token、有界 fetch 全部原样保留。浏览器永远不直连板端。
 
+设备记录按账号最多 50 条，单实例注册表最多 500 条；注册表损坏、不可读、超出大小或被符号链接替代时，服务返回 503 并保留原文件，不会把它当作空列表覆盖已有坐标。
+
 多用户部署下设备记录按 owner 隔离（同 devices.json 规则）；隧道覆盖 agent 目标的行为只在单用户 standalone 模式生效。
 
 **「运动开关」面板**：
 
 - **平台侧**两个开关：PUT 持久化到 `<dataDir>/station-switches.json`（0600）。运行时覆盖优先于 env 默认值——env 仍是部署时的默认答案；`reset` 可清除覆盖回退 env。**开启**必须过确认对话框 + API 层 `confirm=true` 双重确认（关方向恒允许——fail-safe 方向）。
+- 开关文件损坏、不可读、过大或被符号链接替代时，平台拒绝推断状态并返回 503；不会在未知状态下沿用一个可能为 `1` 的 env 值。
 - **板端侧**两个开关（连接真机后才显示）：经平台代理调用板端 `/v1/config`，原子改写 `agent.env` 中对应的开关行（保留其他行）并 `systemctl restart rdk-board-agent`，约 2 秒生效。**运动窗口进行中会 409 拒绝**——绝不在机器人运动时换掉安全层。非 systemd 环境（手跑 agent）会如实报告「需手动重启」而不是假装已重启。
 
 两个面板共同遵守同一原则：开关只翻两个文档化的标志位，**永远不能**变成发速度命令的通道；急停不依赖任何开关。
@@ -161,7 +164,7 @@ GET /runs/:id/artifact   ◄──   ① 校验 run 发布证据（completed、 
 TROS /imu + /odom
       │
       ▼
-board-telemetry-node.py ──► /tmp/board-telemetry-snapshot.json
+board-telemetry-node.py ──► /var/lib/rdk-board-agent/runtime/telemetry-snapshot.json
       │                                  │
       │                                  ▼
       │                    board-policy-runtime.py（provider 按 adapter/env 选择，BPU fail-closed）
@@ -176,6 +179,12 @@ board-agent-x5.py ◄──────── HTTP ◄──── board-telemet
 Sim2Real `/runs/:id/telemetry` → 回放 / MAE-RMSE / 发布闸门 → `/runs/:id/retraining-advice`（飞轮分析）
 ```
 
+板端进程间的 command、ready、policy state 和 telemetry snapshot 默认写入
+`/var/lib/rdk-board-agent/runtime`（目录 `0700`、文件 `0600`）。可用
+`RDK_BOARD_RUNTIME_DIR` 或既有的 `RDK_BOARD_*_FILE`、`RDK_BOARD_*_READY`、
+`RDK_BOARD_*_LOG` 环境变量做现场迁移；覆盖路径必须是绝对路径并位于当前用户/root
+拥有的 `0700` 父目录中，公共 `/tmp`、符号链接、非普通文件会被拒绝。
+
 板端启动时至少配置：
 
 ```bash
@@ -183,6 +192,11 @@ export RDK_SIM2REAL_BOARD_AGENT_TOKEN='<随机 32 字节以上 token>'
 export RDK_SIM2REAL_BOARD_AGENT_ENABLE_DRIVE=1
 export RDK_SIM2REAL_BOARD_AGENT_ENABLE_POLICY=1
 export RDK_BOARD_TELEMETRY_SPOOL=/var/lib/rdk-board-agent/telemetry/policy.jsonl
+# Board IPC defaults to the root-only 0700 runtime directory.  Legacy direct
+# file overrides (RDK_BOARD_*_FILE / RDK_BOARD_*_READY / RDK_BOARD_*_LOG) are
+# accepted only when their parent is an owner-only 0700 directory; public
+# /tmp paths and symlinks fail closed.
+export RDK_BOARD_RUNTIME_DIR=/var/lib/rdk-board-agent/runtime
 python3 board-agent-x5.py
 ```
 

@@ -22,7 +22,7 @@ policy.onnx + eval-report.json（含质量门裁决）+ telemetry.jsonl
 | 机型 | 观测布局 | 维度 | 状态 |
 | --- | --- | --- | --- |
 | OriginBot（rdk-originbot） | `originbot-imu-odom-v1`：x, y, sin, cos, dx, dy, v, w | 8→2 | CPU 训练 nominal 成功率 74–83%（见复现一节的预算说明），gate 以 CI 下界如实判定 |
-| 通用差速（S100 契约） | `imu-gravity-v1`：gyro, gravity, 指令, 机体系目标差, twist, 零填充 | 42→2 | 800 迭代 nominal 90% [CI 0.79, 0.96]、hard 86%（诚实标注 synthetic，未接真机） |
+| 通用差速（S100 契约） | `imu-gravity-v1`：gyro, gravity（直立时 `[0,0,-1]`）, 指令, 机体系目标差, twist, 零填充 | 42→2 | 800 迭代 nominal 90% [CI 0.79, 0.96]、hard 86%（诚实标注 synthetic，未接真机） |
 
 42D 布局的**机体坐标系目标差**（slots 8–10）是可学习的必要条件：世界系差量不含
 朝向信息，策略无从转向。真实硬件上该量由 odom 位姿 + 目标点旋转得到。

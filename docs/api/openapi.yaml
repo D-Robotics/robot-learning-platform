@@ -141,6 +141,32 @@ paths:
               schema:
                 $ref: "#/components/schemas/WorkspaceSummaryResponse"
         "401": { $ref: "#/components/responses/AuthRequired" }
+  /api/v1/duck/audit:
+    get:
+      tags: [workspace]
+      summary: Read the owner-scoped mutation audit trail
+      operationId: listAuditEvents
+      parameters:
+        - in: query
+          name: limit
+          schema: { type: integer, minimum: 1, maximum: 2000, default: 200 }
+        - in: query
+          name: resourceType
+          schema: { type: string, maxLength: 80 }
+        - in: query
+          name: outcome
+          schema: { type: string, enum: [succeeded, failed, denied] }
+      responses:
+        "200": { description: Audit events, content: { application/json: { schema: { $ref: "#/components/schemas/AuditResponse" } } } }
+        "401": { $ref: "#/components/responses/AuthRequired" }
+  /api/v1/duck/audit/health:
+    get:
+      tags: [workspace]
+      summary: Check audit stream availability
+      operationId: getAuditHealth
+      responses:
+        "200": { description: Audit health, content: { application/json: { schema: { $ref: "#/components/schemas/AuditHealthResponse" } } } }
+        "401": { $ref: "#/components/responses/AuthRequired" }
   /api/v1/duck/projects:
     get:
       tags: [workspace]
@@ -354,6 +380,9 @@ paths:
       tags: [telemetry]
       summary: Append one ordered telemetry chunk
       operationId: appendTelemetry
+      security:
+        - cookieAuth: []
+        - telemetryBearer: []
       parameters:
         - $ref: "#/components/parameters/IdempotencyKey"
       requestBody:
@@ -370,6 +399,9 @@ paths:
           content: { application/json: { schema: { $ref: "#/components/schemas/TelemetryResponse" } } }
         "400": { $ref: "#/components/responses/BadRequest" }
         "413": { description: Telemetry quota exceeded. }
+        "401": { $ref: "#/components/responses/AuthRequired" }
+        "403": { description: Bearer attestation owner, binding, or source mismatch. }
+        "409": { description: Idempotency or telemetry sequence conflict. }
   /api/v1/duck/runs/{runId}/telemetry:
     parameters:
       - $ref: "#/components/parameters/RunId"
@@ -386,6 +418,9 @@ paths:
       tags: [telemetry]
       summary: Append a chunk using the run id in the path
       operationId: appendRunTelemetry
+      security:
+        - cookieAuth: []
+        - telemetryBearer: []
       parameters:
         - $ref: "#/components/parameters/IdempotencyKey"
       requestBody:
@@ -398,6 +433,9 @@ paths:
           description: Chunk accepted.
           content: { application/json: { schema: { $ref: "#/components/schemas/TelemetryResponse" } } }
         "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/AuthRequired" }
+        "403": { description: Bearer attestation owner, binding, or source mismatch. }
+        "409": { description: Idempotency or telemetry sequence conflict. }
   /api/v1/duck/runs/{runId}/replay:
     get:
       tags: [telemetry]
@@ -464,6 +502,38 @@ paths:
                               profile: { type: string }
                               algorithm: { type: string }
         "404": { $ref: "#/components/responses/NotFound" }
+  /api/v1/duck/runs/{runId}/board-sessions:
+    get:
+      tags: [telemetry]
+      summary: Reconstruct board policy sessions from lifecycle events
+      description: >-
+        Aggregates the session-started / session-stopped lifecycle markers
+        carried in board-agent telemetry chunks into one summary per policy
+        motion session: start/stop times, stop reason, inference statistics,
+        and the model fingerprint that was active. A session whose stop marker
+        never arrived (process killed mid-motion) keeps an absent stoppedAt
+        and is reported as interrupted, never as a clean stop. Sessions are
+        attested only when every contributing chunk was server-attested;
+        otherwise they are review-only evidence.
+      operationId: listBoardSessions
+      parameters:
+        - $ref: "#/components/parameters/RunId"
+      responses:
+        "200":
+          description: Board sessions reconstructed from accepted telemetry chunks.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [ok, runId, sessions, count]
+                properties:
+                  ok: { const: true }
+                  runId: { type: string }
+                  count: { type: integer, minimum: 0 }
+                  sessions:
+                    type: array
+                    items: { $ref: "#/components/schemas/BoardSessionSummary" }
+        "404": { $ref: "#/components/responses/NotFound" }
   /api/v1/duck/runs/{runId}/evaluate:
     post:
       tags: [telemetry]
@@ -520,6 +590,7 @@ paths:
       responses:
         "202": { description: Run accepted. }
         "409": { description: Explicit approval required. }
+        "429": { description: Per-account or process-wide active Agent run quota reached; retry after completion. }
   /api/sim2real/agent/runs/{runId}:
     get:
       tags: [agent]
@@ -530,6 +601,102 @@ paths:
       responses:
         "200": { description: Agent run snapshot. }
         "404": { $ref: "#/components/responses/NotFound" }
+  /api/sim2real/agent/capabilities:
+    get:
+      tags: [agent]
+      summary: Discover the capabilities exposed by this deployment
+      operationId: listSim2RealAgentCapabilities
+      security: []
+      description: >-
+        Public metadata for clients that need to render the Agent surface. The
+        legacy planner atoms and the DSH catalog are reported separately;
+        `dsh.capabilities[].bound` is false when a deployment has not supplied a real
+        product handler. Discovery never grants permission to execute an
+        operation.
+      responses:
+        "200":
+          description: Capability catalogs and runtime state.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [ok, runtime, capabilities, dsh]
+                properties:
+                  ok: { const: true }
+                  runtime: { type: string, enum: [legacy, dsh, dsh-configured] }
+                  capabilities:
+                    type: array
+                    items:
+                      type: object
+                      required: [id, description, readOnly]
+                      properties:
+                        id: { type: string }
+                        description: { type: string }
+                        readOnly: { type: boolean }
+                  dsh:
+                    type: object
+                    required: [configured, initialized, capabilities]
+                    properties:
+                      configured: { type: boolean }
+                      initialized: { type: boolean }
+                      capabilities:
+                        type: array
+                        items:
+                          type: object
+                          required: [id, description, readOnly, bound]
+                          properties:
+                            id: { type: string }
+                            description: { type: string }
+                            readOnly: { type: boolean }
+                            bound: { type: boolean }
+  /api/sim2real/dsh/chat:
+    post:
+      tags: [agent]
+      summary: Send one prompt to the deployment-owned DSH runtime
+      operationId: askSim2RealDsh
+      description: >-
+        Authenticated execution endpoint. The runtime is available only when
+        `RDK_SIM2REAL_DSH_RUNTIME` is enabled and its provider is configured;
+        product capability handlers remain deployment-owned. The service
+        returns a bounded session event tail for diagnostics and never exposes
+        provider transport errors verbatim.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [message]
+              properties:
+                message: { type: string, minLength: 1, maxLength: 12000 }
+                model: { type: string, minLength: 1, maxLength: 160, pattern: "^[A-Za-z0-9][A-Za-z0-9._:/-]{0,159}$" }
+      responses:
+        "200":
+          description: DSH response and session evidence.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [ok, sessionId, text, events]
+                properties:
+                  ok: { const: true }
+                  sessionId: { type: string }
+                  text: { type: string, maxLength: 20000 }
+                  events:
+                    type: array
+                    maxItems: 50
+                    items:
+                      type: object
+                      required: [type]
+                      additionalProperties: false
+                      properties:
+                        type: { type: string, maxLength: 80 }
+                        at: { type: string, maxLength: 80 }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/AuthRequired" }
+        "403": { description: Account lacks the Agent permission. }
+        "502": { description: DSH provider or runtime failure (generic, retryable). }
+        "503": { description: DSH runtime is not enabled on this deployment. }
   /api/v1/duck/deployments:
     get:
       tags: [deployments]
@@ -613,6 +780,33 @@ paths:
                   history: { type: array, items: { type: object, additionalProperties: true } }
                   verification: { type: [object, "null"], additionalProperties: true }
         "404": { $ref: "#/components/responses/NotFound" }
+  /api/v1/duck/deployments/{deploymentId}/approval:
+    post:
+      tags: [deployments]
+      summary: Record the human approval decision for a canary/live plan
+      operationId: decideDeploymentApproval
+      parameters:
+        - $ref: "#/components/parameters/DeploymentId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                decision: { type: string, enum: [approved, rejected] }
+                approved: { type: boolean, description: Legacy boolean alias for decision. }
+                note: { type: string, maxLength: 500 }
+              anyOf:
+                - required: [decision]
+                - required: [approved]
+      responses:
+        "200":
+          description: Updated approval state; ready plans still require a board-agent executor.
+          content: { application/json: { schema: { $ref: "#/components/schemas/DeploymentResponse" } } }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { description: Evidence gate, compatibility, or lifecycle state does not permit the decision. }
   /api/v1/duck/deployments/{deploymentId}/version-switch:
     post:
       tags: [deployments]
@@ -687,6 +881,73 @@ paths:
         "401": { $ref: "#/components/responses/AuthRequired" }
         "404": { $ref: "#/components/responses/NotFound" }
         "502": { description: Board agent unreachable. }
+  /api/v1/duck/board-station/onboarding/preflight:
+    get:
+      tags: [board-station]
+      summary: Read the structured board onboarding preflight passport
+      operationId: getBoardStationOnboardingPreflight
+      parameters:
+        - in: query
+          name: deviceId
+          schema: { type: string }
+      responses:
+        "200":
+          description: Structured read-only board passport.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [ok, deviceId, passport]
+                properties:
+                  ok: { type: boolean }
+                  deviceId: { type: string }
+                  passport: { type: object, additionalProperties: true }
+        "401": { $ref: "#/components/responses/AuthRequired" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "502": { description: Board agent unreachable. }
+  /api/v1/duck/local-bridge/status:
+    get:
+      tags: [devices]
+      summary: Read the current Local Bridge discovery status
+      operationId: getLocalBridgeStatus
+      responses:
+        "200":
+          description: Bridge sessions and discovered devices.
+          content: { application/json: { schema: { type: object, additionalProperties: true } } }
+        "401": { $ref: "#/components/responses/AuthRequired" }
+  /api/v1/duck/local-bridge/pairing-code:
+    post:
+      tags: [devices]
+      summary: Create a short-lived Local Bridge pairing command
+      operationId: createLocalBridgePairingCode
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object, additionalProperties: true }
+      responses:
+        "200": { description: Pairing command created. }
+        "401": { $ref: "#/components/responses/AuthRequired" }
+  /api/v1/duck/local-bridge/devices/{bridgeDeviceId}/connect:
+    post:
+      tags: [devices]
+      summary: Register a discovered Local Bridge device in Sim2Real
+      operationId: connectLocalBridgeDevice
+      parameters:
+        - in: path
+          name: bridgeDeviceId
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema: { type: object, additionalProperties: true }
+      responses:
+        "200": { description: Device connected and registered. }
+        "401": { $ref: "#/components/responses/AuthRequired" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "502": { description: Bridge device registration failed. }
   /api/v1/duck/board-station/policy/files:
     get:
       tags: [board-station]
@@ -705,7 +966,7 @@ paths:
                 type: object
                 properties:
                   ok: { type: boolean }
-                  files:
+                  policies:
                     type: array
                     items:
                       type: object
@@ -752,13 +1013,10 @@ paths:
                 type: object
                 properties:
                   ok: { type: boolean }
-                  staged:
-                    type: object
-                    properties:
-                      filename: { type: string }
-                      path: { type: string }
-                      bytes: { type: integer, minimum: 0 }
-                      sha256: { type: string }
+                  staged: { type: boolean }
+                  path: { type: string }
+                  bytes: { type: integer, minimum: 0 }
+                  sha256: { type: string }
                   policies:
                     type: array
                     items:
@@ -1267,6 +1525,296 @@ paths:
       responses:
         "200": { description: Probe result returned. }
         "404": { $ref: "#/components/responses/NotFound" }
+  /api/v1/duck/datasets/{id}:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema: { type: string }
+    get:
+      tags: [workspace]
+      summary: Read one immutable dataset snapshot
+      operationId: getDataset
+      responses:
+        "200": { description: Dataset, content: { application/json: { schema: { $ref: "#/components/schemas/DatasetResponse" } } } }
+        "401": { $ref: "#/components/responses/AuthRequired" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    patch:
+      tags: [workspace]
+      summary: Advance a dataset lifecycle state
+      operationId: updateDatasetStatus
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [status]
+              properties:
+                status: { type: string, enum: [registered, ready, revoked] }
+      responses:
+        "200": { description: Dataset state updated, content: { application/json: { schema: { $ref: "#/components/schemas/DatasetResponse" } } } }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/AuthRequired" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { description: Invalid or terminal lifecycle transition. }
+  /api/v1/duck/datasets/{id}/revoke:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema: { type: string }
+    post:
+      tags: [workspace]
+      summary: Revoke an immutable dataset snapshot
+      operationId: revokeDataset
+      responses:
+        "200": { description: Dataset revoked, content: { application/json: { schema: { $ref: "#/components/schemas/DatasetResponse" } } } }
+        "401": { $ref: "#/components/responses/AuthRequired" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { description: Dataset lifecycle transition is invalid. }
+  /api/v1/duck/artifacts:
+    get:
+      tags: [workspace]
+      summary: List immutable model artifacts and legacy catalog entries
+      operationId: listArtifacts
+      parameters:
+        - in: query
+          name: type
+          schema: { type: string, enum: [model, checkpoint, recording, dataset, deployment, artifact] }
+        - in: query
+          name: modelId
+          schema: { type: string }
+        - in: query
+          name: runId
+          schema: { type: string }
+        - in: query
+          name: projectId
+          schema: { type: string }
+        - in: query
+          name: taskId
+          schema: { type: string }
+        - in: query
+          name: status
+          schema: { type: string }
+        - in: query
+          name: limit
+          schema: { type: integer, minimum: 1, maximum: 500, default: 200 }
+      responses:
+        "200": { description: Artifact catalog, content: { application/json: { schema: { $ref: "#/components/schemas/ArtifactsResponse" } } } }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/AuthRequired" }
+    post:
+      tags: [workspace]
+      summary: Register one immutable artifact version
+      operationId: createArtifact
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json: { schema: { $ref: "#/components/schemas/ArtifactInput" } }
+      responses:
+        "201": { description: Artifact registered, content: { application/json: { schema: { $ref: "#/components/schemas/ArtifactRecordResponse" } } } }
+        "200": { description: Idempotent replay, content: { application/json: { schema: { $ref: "#/components/schemas/ArtifactRecordResponse" } } } }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/AuthRequired" }
+        "409": { description: Artifact version or idempotency conflict. }
+        "422": { description: Artifact lineage is invalid. }
+  /api/v1/duck/artifacts/{id}:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema: { type: string }
+    get:
+      tags: [workspace]
+      summary: Read one immutable artifact version
+      operationId: getArtifact
+      responses:
+        "200": { description: Artifact, content: { application/json: { schema: { $ref: "#/components/schemas/ArtifactRecordResponse" } } } }
+        "401": { $ref: "#/components/responses/AuthRequired" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    patch:
+      tags: [workspace]
+      summary: Advance an artifact lifecycle state
+      operationId: updateArtifactStatus
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [status]
+              properties:
+                status: { type: string, enum: [validated, published, revoked] }
+                reason: { type: string, maxLength: 500 }
+      responses:
+        "200": { description: Artifact state updated, content: { application/json: { schema: { $ref: "#/components/schemas/ArtifactRecordResponse" } } } }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/AuthRequired" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { description: Artifact lifecycle transition is invalid. }
+  /api/v1/duck/artifacts/{id}/validate:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema: { type: string }
+    post:
+      tags: [workspace]
+      summary: Validate an artifact version before publication
+      operationId: validateArtifact
+      responses:
+        "200": { description: Artifact validated, content: { application/json: { schema: { $ref: "#/components/schemas/ArtifactRecordResponse" } } } }
+        "401": { $ref: "#/components/responses/AuthRequired" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { description: Artifact lifecycle transition is invalid. }
+  /api/v1/duck/artifacts/{id}/publish:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema: { type: string }
+    post:
+      tags: [workspace]
+      summary: Publish an immutable artifact version
+      operationId: publishArtifact
+      responses:
+        "200": { description: Artifact published, content: { application/json: { schema: { $ref: "#/components/schemas/ArtifactRecordResponse" } } } }
+        "401": { $ref: "#/components/responses/AuthRequired" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { description: Artifact must be validated before publication. }
+  /api/v1/duck/artifacts/{id}/revoke:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema: { type: string }
+    post:
+      tags: [workspace]
+      summary: Revoke an artifact version while retaining evidence
+      operationId: revokeArtifact
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties: { reason: { type: string, maxLength: 500 } }
+      responses:
+        "200": { description: Artifact revoked, content: { application/json: { schema: { $ref: "#/components/schemas/ArtifactRecordResponse" } } } }
+        "401": { $ref: "#/components/responses/AuthRequired" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { description: Artifact lifecycle transition is invalid. }
+  /api/v1/duck/evaluations:
+    get:
+      tags: [runs]
+      summary: List first-class evaluation evidence
+      operationId: listEvaluations
+      parameters:
+        - in: query
+          name: runId
+          schema: { type: string }
+        - in: query
+          name: artifactId
+          schema: { type: string }
+        - in: query
+          name: status
+          schema: { type: string, enum: [pending, running, passed, failed, invalid] }
+        - in: query
+          name: limit
+          schema: { type: integer, minimum: 1, maximum: 500, default: 200 }
+      responses:
+        "200": { description: Evaluation evidence, content: { application/json: { schema: { $ref: "#/components/schemas/EvaluationsResponse" } } } }
+        "401": { $ref: "#/components/responses/AuthRequired" }
+    post:
+      tags: [runs]
+      summary: Register evaluation evidence for a run
+      operationId: createEvaluation
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json: { schema: { $ref: "#/components/schemas/EvaluationInput" } }
+      responses:
+        "201": { description: Evaluation created, content: { application/json: { schema: { $ref: "#/components/schemas/EvaluationRecordResponse" } } } }
+        "200": { description: Idempotent replay, content: { application/json: { schema: { $ref: "#/components/schemas/EvaluationRecordResponse" } } } }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/AuthRequired" }
+        "422": { description: Evaluation lineage is invalid. }
+  /api/v1/duck/evaluations/{id}:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema: { type: string }
+    get:
+      tags: [runs]
+      summary: Read one evaluation evidence record
+      operationId: getEvaluation
+      responses:
+        "200": { description: Evaluation, content: { application/json: { schema: { $ref: "#/components/schemas/EvaluationRecordResponse" } } } }
+        "401": { $ref: "#/components/responses/AuthRequired" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    patch:
+      tags: [runs]
+      summary: Advance evaluation status or append result evidence
+      operationId: updateEvaluation
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                status: { type: string, enum: [pending, running, passed, failed, invalid] }
+                summary: { type: string, maxLength: 500 }
+                report: { type: object, additionalProperties: true }
+                taskEvaluation: { $ref: "#/components/schemas/TaskEvaluation" }
+                deviceId: { type: string }
+      responses:
+        "200": { description: Evaluation updated, content: { application/json: { schema: { $ref: "#/components/schemas/EvaluationRecordResponse" } } } }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/AuthRequired" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { description: Evaluation lifecycle transition is invalid. }
+  /api/v1/duck/lineage:
+    get:
+      tags: [workspace]
+      summary: Read the owner-scoped dataset to deployment lineage graph
+      operationId: getLineage
+      parameters:
+        - in: query
+          name: runId
+          schema: { type: string }
+        - in: query
+          name: artifactId
+          schema: { type: string }
+        - in: query
+          name: evaluationId
+          schema: { type: string }
+        - in: query
+          name: projectId
+          schema: { type: string }
+          description: Exactly one selector is required.
+      responses:
+        "200": { description: Lineage graph, content: { application/json: { schema: { $ref: "#/components/schemas/LineageResponse" } } } }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/AuthRequired" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /api/v1/duck/runs/{runId}/lineage:
+    parameters:
+      - $ref: "#/components/parameters/RunId"
+    get:
+      tags: [runs]
+      summary: Read lineage anchored at one run
+      operationId: getRunLineage
+      responses:
+        "200": { description: Lineage graph, content: { application/json: { schema: { $ref: "#/components/schemas/LineageResponse" } } } }
+        "401": { $ref: "#/components/responses/AuthRequired" }
+        "404": { $ref: "#/components/responses/NotFound" }
 components:
   securitySchemes:
     cookieAuth:
@@ -1278,6 +1826,18 @@ components:
         the reference studio-cookie-auth adapter verifies it with
         AES-256-GCM (v1.iv.tag.ciphertext). The reference local adapter has
         no login.
+    telemetryBearer:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: >-
+        Short-lived server-issued HS256 board-agent attestation. Claims bind
+        owner, runId and deviceId and include an exp Unix timestamp. Bearer
+        uploads must include a non-negative chunk sequence; retries with the
+        same (run, device, sequence, content) are idempotent while a conflicting
+        sequence is rejected. The telemetry service sets attested=true only
+        after successful verification; this credential cannot be used for other
+        API resources. Legacy uploads without this credential remain review-only.
   parameters:
     ProductId:
       in: query
@@ -1316,7 +1876,9 @@ components:
       schema: { type: string }
     ProjectId:
       in: path
-      name: projectId
+      # The runtime keeps the legacy `:id` mount parameter for this resource;
+      # keep the versioned OpenAPI template aligned with the actual route.
+      name: id
       required: true
       schema: { type: string }
   responses:
@@ -1363,12 +1925,17 @@ components:
       properties:
         id: { type: string }
         name: { type: string }
+        version: { type: string, maxLength: 64 }
         description: { type: string }
         uri: { type: string }
         format: { type: string }
+        sha256: { type: string, pattern: "^[a-f0-9]{64}$" }
+        contractId: { type: string }
+        sourceRunId: { type: string }
         sampleCount: { type: integer, minimum: 0 }
         sizeBytes: { type: integer, minimum: 0 }
         tags: { type: array, items: { type: string } }
+        status: { type: string, enum: [registered, ready, revoked] }
         createdAt: { type: string, format: date-time }
         updatedAt: { type: string, format: date-time }
     DatasetInput:
@@ -1376,12 +1943,17 @@ components:
       required: [name]
       properties:
         name: { type: string, maxLength: 160 }
+        version: { type: string, maxLength: 64 }
         description: { type: string, maxLength: 4000 }
         uri: { type: string, maxLength: 2048 }
         format: { type: string, maxLength: 32 }
+        sha256: { type: string, pattern: "^[a-f0-9]{64}$" }
+        contractId: { type: string, maxLength: 128 }
+        sourceRunId: { type: string, maxLength: 128 }
         sampleCount: { type: integer, minimum: 0 }
         sizeBytes: { type: integer, minimum: 0 }
         tags: { type: array, maxItems: 32, items: { type: string } }
+        status: { type: string, enum: [registered, ready] }
     ProjectsResponse:
       type: object
       required: [ok, projects]
@@ -1421,6 +1993,211 @@ components:
       properties:
         ok: { const: true }
         dataset: { $ref: "#/components/schemas/Dataset" }
+    ArtifactRecord:
+      type: object
+      required: [id, artifactId, version, name, role, kind, format, ref, sha256, datasetIds, evaluationIds, status, createdAt, updatedAt]
+      properties:
+        id: { type: string }
+        artifactId: { type: string, maxLength: 128 }
+        version: { type: string, maxLength: 64, pattern: '^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$' }
+        name: { type: string, maxLength: 180 }
+        role: { type: string, enum: [policy, compiled-policy, calibration] }
+        kind: { type: string, enum: [source, compiled] }
+        format: { type: string, enum: [pytorch, onnx, bin, hbm, gguf, unknown] }
+        runtime: { type: string, enum: [cpu-onnx, bpu] }
+        workload: { type: string, enum: [locomotion, perception, navigation, speech, multimodal] }
+        threads: { type: integer, minimum: 1, maximum: 128 }
+        targetPlatforms: { type: array, items: { type: string } }
+        toolchainTarget: { type: string }
+        acceleratorArchitecture: { type: string }
+        runtimePackage: { type: string }
+        ref: { type: string, pattern: '^artifact://' }
+        sha256: { type: string, pattern: '^[a-f0-9]{64}$' }
+        sizeBytes: { type: integer, minimum: 0 }
+        modelId: { type: string }
+        runId: { type: string }
+        datasetIds: { type: array, items: { type: string } }
+        evaluationIds: { type: array, items: { type: string } }
+        contractId: { type: string }
+        status: { type: string, enum: [draft, validated, published, revoked] }
+        metadata: { type: object, additionalProperties: true }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+        publishedAt: { type: string, format: date-time }
+        revokedAt: { type: string, format: date-time }
+        revocationReason: { type: string }
+    ArtifactInput:
+      type: object
+      required: [artifactId, version, name, role, kind, format, ref, sha256]
+      properties:
+        artifactId: { type: string, maxLength: 128 }
+        version: { type: string, maxLength: 64 }
+        name: { type: string, maxLength: 180 }
+        role: { type: string, enum: [policy, compiled-policy, calibration] }
+        kind: { type: string, enum: [source, compiled] }
+        format: { type: string, enum: [pytorch, onnx, bin, hbm, gguf, unknown] }
+        runtime: { type: string, enum: [cpu-onnx, bpu] }
+        workload: { type: string, enum: [locomotion, perception, navigation, speech, multimodal] }
+        threads: { type: integer, minimum: 1, maximum: 128 }
+        targetPlatforms: { type: array, maxItems: 16, items: { type: string } }
+        toolchainTarget: { type: string, maxLength: 128 }
+        acceleratorArchitecture: { type: string, maxLength: 64 }
+        runtimePackage: { type: string, maxLength: 128 }
+        ref: { type: string, pattern: '^artifact://' }
+        sha256: { type: string, pattern: '^[a-f0-9]{64}$' }
+        sizeBytes: { type: integer, minimum: 0 }
+        modelId: { type: string }
+        runId: { type: string }
+        datasetIds: { type: array, maxItems: 500, items: { type: string } }
+        evaluationIds: { type: array, maxItems: 500, items: { type: string } }
+        contractId: { type: string }
+        status: { type: string, enum: [draft, validated, published] }
+        metadata: { type: object, additionalProperties: true }
+        idempotencyKey: { type: string, maxLength: 128 }
+    ArtifactCatalogEntry:
+      type: object
+      required: [id, type, name, status, createdAt]
+      properties:
+        id: { type: string }
+        type: { type: string, enum: [model, checkpoint, recording, dataset, deployment, artifact] }
+        name: { type: string }
+        status: { type: string }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+        modelId: { type: string }
+        runId: { type: string }
+        projectId: { type: string }
+        taskId: { type: string }
+        datasetIds: { type: array, items: { type: string } }
+        artifactIds: { type: array, items: { type: string } }
+        format: { type: string }
+        uri: { type: string }
+        sizeBytes: { type: integer, minimum: 0 }
+        sampleCount: { type: integer, minimum: 0 }
+        metadata: { type: object, additionalProperties: true }
+    ArtifactsResponse:
+      type: object
+      required: [ok, artifacts, total, available]
+      properties:
+        ok: { const: true }
+        artifacts: { type: array, items: { $ref: "#/components/schemas/ArtifactCatalogEntry" } }
+        total: { type: integer, minimum: 0 }
+        available: { type: integer, minimum: 0 }
+    ArtifactRecordResponse:
+      type: object
+      required: [ok, artifact]
+      properties:
+        ok: { const: true }
+        artifact: { $ref: "#/components/schemas/ArtifactRecord" }
+        idempotentReplay: { type: boolean }
+    EvaluationRecord:
+      type: object
+      required: [id, runId, modelId, datasetIds, status, summary, source, createdAt, updatedAt]
+      properties:
+        id: { type: string }
+        runId: { type: string }
+        modelId: { type: string }
+        artifactId: { type: string }
+        datasetIds: { type: array, items: { type: string } }
+        projectId: { type: string }
+        taskId: { type: string }
+        status: { type: string, enum: [pending, running, passed, failed, invalid] }
+        summary: { type: string }
+        report: { type: object, additionalProperties: true }
+        taskEvaluation: { $ref: "#/components/schemas/TaskEvaluation" }
+        source: { type: string, enum: [platform, runner, import] }
+        deviceId: { type: string }
+        contractId: { type: string }
+        seed: { type: integer, minimum: 0 }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+        completedAt: { type: string, format: date-time }
+    EvaluationInput:
+      type: object
+      required: [runId]
+      properties:
+        runId: { type: string }
+        artifactId: { type: string }
+        datasetIds: { type: array, maxItems: 500, items: { type: string } }
+        projectId: { type: string }
+        taskId: { type: string }
+        status: { type: string, enum: [pending, running, passed, failed, invalid], default: pending }
+        summary: { type: string, maxLength: 500 }
+        report: { type: object, additionalProperties: true }
+        taskEvaluation: { $ref: "#/components/schemas/TaskEvaluation" }
+        source: { type: string, enum: [platform, runner, import], default: import }
+        deviceId: { type: string }
+        contractId: { type: string }
+        seed: { type: integer, minimum: 0 }
+        idempotencyKey: { type: string, maxLength: 128 }
+    EvaluationsResponse:
+      type: object
+      required: [ok, evaluations, total, available]
+      properties:
+        ok: { const: true }
+        evaluations: { type: array, items: { $ref: "#/components/schemas/EvaluationRecord" } }
+        total: { type: integer, minimum: 0 }
+        available: { type: integer, minimum: 0 }
+    EvaluationRecordResponse:
+      type: object
+      required: [ok, evaluation]
+      properties:
+        ok: { const: true }
+        evaluation: { $ref: "#/components/schemas/EvaluationRecord" }
+        idempotentReplay: { type: boolean }
+    LineageResponse:
+      type: object
+      required: [ok, lineage]
+      properties:
+        ok: { const: true }
+        lineage:
+          type: object
+          required: [project, datasets, run, runs, artifacts, evaluations, deployments]
+          properties:
+            project:
+              oneOf:
+                - $ref: "#/components/schemas/Project"
+                - type: "null"
+            datasets: { type: array, items: { $ref: "#/components/schemas/Dataset" } }
+            run:
+              oneOf:
+                - $ref: "#/components/schemas/Run"
+                - type: "null"
+            runs: { type: array, items: { $ref: "#/components/schemas/Run" } }
+            artifacts: { type: array, items: { $ref: "#/components/schemas/ArtifactRecord" } }
+            evaluations: { type: array, items: { $ref: "#/components/schemas/EvaluationRecord" } }
+            deployments: { type: array, items: { $ref: "#/components/schemas/Deployment" } }
+    AuditEvent:
+      type: object
+      required: [id, at, action, resourceType, outcome, status]
+      properties:
+        id: { type: string }
+        at: { type: string, format: date-time }
+        owner: { type: string }
+        actor: { type: object, additionalProperties: true }
+        action: { type: string }
+        resourceType: { type: string }
+        resourceId: { type: string }
+        outcome: { type: string, enum: [succeeded, failed, denied] }
+        status: { type: integer, minimum: 100, maximum: 599 }
+        requestId: { type: string }
+        details: { type: object, additionalProperties: true }
+    AuditResponse:
+      type: object
+      required: [ok, events, total]
+      properties:
+        ok: { const: true }
+        events: { type: array, items: { $ref: "#/components/schemas/AuditEvent" } }
+        total: { type: integer, minimum: 0 }
+    AuditHealthResponse:
+      type: object
+      required: [ok, configured, readable, writable]
+      properties:
+        ok: { type: boolean }
+        configured: { type: boolean }
+        readable: { type: boolean }
+        writable: { type: boolean }
+        eventCount: { type: integer, minimum: 0, nullable: true }
     SsoLoginRequest:
       type: object
       required: [method]
@@ -1758,6 +2535,11 @@ components:
         modelId: { type: string }
         backend: { type: string, enum: [browser, local, robogo, contract] }
         taskId: { type: string }
+        projectId: { type: string }
+        experimentId: { type: string }
+        label: { type: string, maxLength: 120 }
+        computeResourceId: { type: string }
+        datasetIds: { type: array, maxItems: 500, items: { type: string } }
         training: { $ref: "#/components/schemas/Training" }
         resumeFrom: { type: object, required: [checkpointId, artifactRef], properties: { checkpointId: { type: string }, artifactRef: { type: string }, iteration: { type: integer, minimum: 0 } } }
         idempotencyKey: { type: string, maxLength: 128 }
@@ -1818,6 +2600,10 @@ components:
         productId: { type: string, enum: [microduck, rdk-duck] }
         contractId: { type: string }
         taskId: { type: string }
+        projectId: { type: string }
+        datasetIds: { type: array, items: { type: string } }
+        artifactIds: { type: array, items: { type: string } }
+        evaluationId: { type: string }
         backend: { type: string, enum: [browser, local, robogo, contract] }
         status: { type: string, enum: [ready, queued, running, completed, blocked, failed] }
         summary: { type: string }
@@ -1860,6 +2646,8 @@ components:
         deviceId: { type: string }
         mode: { type: string, enum: [preflight, canary, live], default: preflight }
         runId: { type: string, description: Completed non-mock local/RoboGo run whose artifact and metrics authorize canary/live planning. }
+        artifactId: { type: string, description: Immutable published artifact authorized by the release gate. }
+        evaluationId: { type: string, description: Passed evaluation evidence associated with the run. }
         idempotencyKey: { type: string, maxLength: 128 }
     Deployment:
       type: object
@@ -1868,6 +2656,8 @@ components:
         id: { type: string }
         modelId: { type: string }
         runId: { type: string }
+        artifactId: { type: string }
+        evaluationId: { type: string }
         deviceId: { type: string }
         targetPlatform: { type: string }
         mode: { type: string }
@@ -1882,10 +2672,20 @@ components:
             required: [id, type, status, summary, createdAt]
             properties:
               id: { type: string }
-              type: { type: string, enum: [created, status_changed, preflight, cancelled, version_switched, updated] }
+              type: { type: string, enum: [created, status_changed, preflight, cancelled, version_switched, approval_approved, approval_rejected, updated] }
               status: { type: string }
               summary: { type: string }
               createdAt: { type: string, format: date-time }
+        approval:
+          type: object
+          required: [status, requestedAt]
+          properties:
+            status: { type: string, enum: [pending, approved, rejected] }
+            requestedAt: { type: string, format: date-time }
+            requestedBy: { type: string }
+            decidedAt: { type: string, format: date-time }
+            decidedBy: { type: string }
+            note: { type: string, maxLength: 500 }
         verification:
           type: object
           required: [passed, checkedAt]
@@ -1917,6 +2717,80 @@ components:
         reward: { type: number }
         done: { type: boolean }
         fall: { type: boolean }
+        cmd_vel:
+          type: object
+          required: [linear, angular]
+          properties:
+            linear: { type: number, minimum: -0.3, maximum: 0.3 }
+            angular: { type: number, minimum: -1, maximum: 1 }
+        actionOutput: { type: string, enum: [physical-twist, normalized-twist] }
+        actionScale:
+          type: object
+          required: [linear, angular]
+          properties:
+            linear: { type: number, exclusiveMinimum: 0, maximum: 0.3 }
+            angular: { type: number, exclusiveMinimum: 0, maximum: 1 }
+            units: { type: string, enum: ['m/s,rad/s'] }
+        controlHz: { type: integer, minimum: 1, maximum: 50 }
+        controlPeriodSeconds: { type: number, minimum: 0.02, maximum: 1 }
+        event:
+          description: >-
+            Board policy-session lifecycle marker. A sample carrying `event`
+            must not carry observation/action/control fields; markers are
+            excluded from replay statistics and aggregated by
+            /runs/{runId}/board-sessions instead.
+          type: object
+          required: [kind, sessionId]
+          properties:
+            kind: { type: string, enum: [session-started, session-stopped] }
+            sessionId: { type: string, maxLength: 64 }
+            startedAt: { type: string, format: date-time }
+            stoppedAt: { type: string, format: date-time }
+            stopReason: { type: string, maxLength: 120 }
+            inferenceCount: { type: integer, minimum: 0 }
+            lastInferenceAt: { type: string, format: date-time }
+            durationSec: { type: number, minimum: 0, maximum: 86400 }
+            inferMs: { type: number, minimum: 0, maximum: 10000 }
+            published: { type: integer, minimum: 0 }
+            mock: { type: boolean }
+            adapterId: { type: string, maxLength: 80 }
+            controlHz: { type: integer, minimum: 1, maximum: 50 }
+            model:
+              type: object
+              properties:
+                sha256: { type: string, pattern: "^[a-f0-9]{64}$" }
+                provider: { type: string, maxLength: 64 }
+                inputDim: { type: integer, minimum: 1 }
+                outputDim: { type: integer, minimum: 1 }
+                bytes: { type: integer, minimum: 0 }
+    BoardSessionSummary:
+      type: object
+      required: [sessionId, attested, chunks, events]
+      properties:
+        sessionId: { type: string }
+        startedAt: { type: string, format: date-time }
+        stoppedAt: { type: string, format: date-time }
+        stopReason: { type: string }
+        lastInferenceAt: { type: string, format: date-time }
+        inferenceCount: { type: integer, minimum: 0 }
+        published: { type: integer, minimum: 0 }
+        inferMs: { type: number, minimum: 0 }
+        durationSec: { type: number, minimum: 0 }
+        mock: { type: boolean }
+        adapterId: { type: string }
+        controlHz: { type: integer, minimum: 1, maximum: 50 }
+        deviceId: { type: string }
+        attested: { type: boolean }
+        chunks: { type: integer, minimum: 1 }
+        events: { type: integer, minimum: 1 }
+        model:
+          type: object
+          properties:
+            sha256: { type: string, pattern: "^[a-f0-9]{64}$" }
+            provider: { type: string }
+            inputDim: { type: integer, minimum: 1 }
+            outputDim: { type: integer, minimum: 1 }
+            bytes: { type: integer, minimum: 0 }
     TelemetryRequestWithoutRunId:
       type: object
       properties:
@@ -2100,11 +2974,23 @@ components:
     ReplayResponse:
       type: object
       required: [ok, runId, replay, evaluation]
-      properties: { ok: { const: true }, runId: { type: string }, replay: { type: object, additionalProperties: true }, evaluation: { type: object, additionalProperties: true } }
+      properties:
+        ok: { const: true }
+        runId: { type: string }
+        replay: { type: object, additionalProperties: true }
+        evaluation: { type: object, additionalProperties: true }
+        # The replay endpoint returns the accepted raw samples for deterministic
+        # frame seeking; keep this in the contract rather than relying on
+        # additionalProperties.
+        frames: { type: array, items: { $ref: "#/components/schemas/TelemetrySample" } }
     EvaluationResponse:
       type: object
       required: [ok, evaluation]
-      properties: { ok: { const: true }, run: { $ref: "#/components/schemas/Run" }, evaluation: { type: object, additionalProperties: true } }
+      properties:
+        ok: { const: true }
+        run: { $ref: "#/components/schemas/Run" }
+        evaluation: { type: object, additionalProperties: true }
+        evaluationRecord: { $ref: "#/components/schemas/EvaluationRecord" }
     DeploymentResponse:
       type: object
       required: [ok, deployment]

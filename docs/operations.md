@@ -2,6 +2,8 @@
 
 这份文档只讲**部署方需要显式确认的开关**。默认值是给本地开发用的，生产环境请逐项核对，不要照抄 `.env.example`。
 
+发布前配置、部署后健康探针、文件台账备份/恢复和共享存储迁移的可执行 runbook 见 [`production-operations.md`](production-operations.md)。
+
 ## 暴露面与认证
 
 | 变量 | 作用 | 生产建议 |
@@ -22,6 +24,11 @@
 超限返回 `429`，响应体为 `{ ok:false, error:'SIM2REAL_RATE_LIMITED', message }`，并带 `Retry-After` 与 `X-RateLimit-Limit` / `X-RateLimit-Remaining` / `X-RateLimit-Reset`。健康检查（`/healthz`、`/readyz`）与 `/metrics` 不计数。
 
 这是**进程内**限流：多副本部署时每个副本各算一份，真正的边缘防护仍应由网关承担。
+
+## HTTP 连接边界
+
+服务启动时会固定设置请求超时 120 秒、请求头超时 15 秒、keep-alive 5 秒，并把单个连接最多
+处理的请求数限制为 1000。上传遥测应使用小 JSON 分片；不要依赖长连接承载无限大的请求或流。
 
 ## 安全响应头
 
@@ -51,7 +58,7 @@
 | --- | --- | --- |
 | `RDK_SIM2REAL_LOG_LEVEL` | `info` | `debug` / `info` / `warn` / `error` / `silent`；非法值回退 `info` |
 
-输出为 JSON Lines（stdout），每个 API 请求一条完成事件，字段为固定白名单：`ts`、`level`、`msg`、`event`、`requestId`、`method`、`path`、`route`、`status`、`durationMs`（控制字符会被剥离）。`Authorization`、`Cookie`、token、secret、密码与请求体**永不**被读取或写入日志。`X-Request-Id` 会透传网关传入的值，便于跨层排查；5xx 以 `error` 级别记录。
+输出为 JSON Lines（stdout），每个 API 请求一条完成事件，字段为固定白名单：`ts`、`level`、`msg`、`event`、`requestId`、`method`、`path`、`route`、`status`、`durationMs`（控制字符会被剥离）。观测、审计和限流在 JSON 解析器之前生效，因此非法 JSON、超大请求体和 `429` 也会留下状态证据；日志与审计**永不**读取或写入请求体。`Authorization`、`Cookie`、token、secret、密码同样不会进入输出。`X-Request-Id` 会透传网关传入的值，便于跨层排查；5xx 以 `error` 级别记录。
 
 ## 指标
 
@@ -83,7 +90,10 @@
 | `RDK_SIM2REAL_TELEMETRY_RETENTION_DAYS` | `0`（不淘汰） | 正整数时按天淘汰过期遥测（分片与台账索引一起），上限 3650；非法值按 0 处理 |
 | `RDK_SIM2REAL_STORAGE_LEASE` | 开启 | 仅字面量 `0` 关闭写者租约。关闭后两个进程写同一 `RDK_SIM2REAL_STORAGE_DIR` 会互相覆盖台账，**仅限排障** |
 | `RDK_SIM2REAL_STORAGE_LEASE_STALE_SECONDS` | `300` | 跨主机判定租约过期的秒数（10..86400，非法值回退 300）；同主机优先用 pid 存活判定 |
+| `RDK_SIM2REAL_STORAGE_READ_ONLY` | 关闭 | 只读副本模式：所有写操作 fail-closed，且不获取/续租写者租约。用于「1 写 N 读」横向扩读；只读副本**不会**因为别人持有租约而失败 |
 | `RDK_SIM2REAL_MAX_ACTIVE_RUNS` | `4` | 每账号并发的 queued/running 上限，上限 100 |
 | `RDK_SIM2REAL_ACTIVE_RUN_TTL_SECONDS` | `86400` | 崩溃窗口预留的回收时间（5 分钟–7 天） |
+| `RDK_SIM2REAL_COMPUTE_HEALTH_TTL_SECONDS` | `600` | GPU Worker 健康检查的可执行租约（30 秒–24 小时）；过期的 online 资源在训练、状态对账和制品下发路径一律视为未知，必须重新测试连接 |
+| `RDK_SIM2REAL_COMPUTE_ALLOW_PRIVATE_HTTPS_HOSTS` | 空 | 直连私网 HTTPS GPU Worker 的精确主机/IP 白名单（逗号分隔）；共享部署默认拒绝私网字面量，优先使用 loopback SSH 隧道 |
 
 容量规划与扩容路径见 [`scalability.md`](scalability.md)。生产环境请显式设置保留天数，避免遥测无界增长后在写入侧被 fail-closed 挡住。

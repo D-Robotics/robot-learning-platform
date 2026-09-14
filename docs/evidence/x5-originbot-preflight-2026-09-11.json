@@ -1,0 +1,292 @@
+{
+  "capturedAt": "2026-09-11T13:29:57.010702+00:00",
+  "device": "<board-host>",
+  "health": {
+    "ok": true,
+    "service": "rdk-x5-board-agent",
+    "capabilities": [
+      "read-only-preflight",
+      "host-station",
+      "constrained-drive"
+    ],
+    "stationCommands": [
+      {
+        "id": "list-tros-nodes",
+        "label": "TROS 节点列表"
+      },
+      {
+        "id": "list-tros-topics",
+        "label": "TROS 话题列表"
+      },
+      {
+        "id": "disk-usage",
+        "label": "磁盘用量"
+      },
+      {
+        "id": "service-status",
+        "label": "服务状态"
+      }
+    ],
+    "actuatorControl": true,
+    "actuatorPolicy": {
+      "enabled": true,
+      "maxLinear": 0.3,
+      "maxAngular": 1.0,
+      "maxWindowSec": 2.0,
+      "publishHz": 10,
+      "chassisWatchdogMs": 500,
+      "emergencyStop": "/v1/station/drive/stop (always available)"
+    },
+    "mock": false,
+    "board": {
+      "platform": "rdk-x5",
+      "family": "rdk-custom",
+      "model": "D-Robotics RDK X5 V1.0",
+      "os": "Ubuntu 22.04.5 LTS",
+      "rdkVersion": "3.1.1"
+    },
+    "profile": {
+      "id": "rdk-x5-originbot-real",
+      "displayName": "自研 RDK X5 差速底盘（现场设备）",
+      "capabilities": [
+        "imu",
+        "odom",
+        "battery",
+        "twist",
+        "cpu-onnx",
+        "camera-devices"
+      ]
+    },
+    "adapterId": "rdk-x5-originbot-real",
+    "camera": {
+      "devices": [
+        "/dev/video0",
+        "/dev/video1"
+      ],
+      "cv2": true
+    },
+    "drive": {
+      "enabled": true,
+      "active": false,
+      "linear": 0.0,
+      "angular": 0.0,
+      "remainingMs": 0,
+      "lastStopReason": "operator-emergency-stop",
+      "published": 10
+    }
+  },
+  "status": {
+    "timestamp": "2026-09-11T13:29:55Z",
+    "board": {
+      "platform": "rdk-x5",
+      "model": "D-Robotics RDK X5 V1.0",
+      "mock": false
+    },
+    "profile": {
+      "id": "rdk-x5-originbot-real",
+      "displayName": "自研 RDK X5 差速底盘（现场设备）",
+      "capabilities": [
+        "imu",
+        "odom",
+        "battery",
+        "twist",
+        "cpu-onnx",
+        "camera-devices"
+      ]
+    },
+    "adapterId": "rdk-x5-originbot-real",
+    "cpu": {
+      "percent": 11.1,
+      "temperatureC": 57.4
+    },
+    "memory": {
+      "totalMB": 7080,
+      "usedMB": 934
+    },
+    "disk": {
+      "totalMB": 59608,
+      "usedMB": 11704
+    },
+    "network": {
+      "mode": "ethernet",
+      "rxKbPerSec": 0,
+      "txKbPerSec": 1
+    },
+    "power": {
+      "voltage": 4.98
+    },
+    "originbot": {
+      "imu": {
+        "quaternion": {
+          "x": -0.001643395977848315,
+          "y": 0.0008743828173032102,
+          "z": 0.11308184898627618,
+          "w": 0.9935839321034703
+        },
+        "gyro": {
+          "x": -0.013848437927663326,
+          "y": 0.004261057823896408,
+          "z": 0.00532632227987051
+        },
+        "linearAcceleration": {
+          "x": -0.15791015326976776,
+          "y": -0.6268554925918579,
+          "z": 39.91777420043945
+        }
+      },
+      "odom": {
+        "positionX": 0.005847996566444635,
+        "positionY": -0.0002793671446852386,
+        "linearX": 0.0,
+        "angularZ": 0.0
+      },
+      "batteryVoltage": 4.98
+    },
+    "telemetry": {
+      "imu": {
+        "quaternion": {
+          "x": -0.001643395977848315,
+          "y": 0.0008743828173032102,
+          "z": 0.11308184898627618,
+          "w": 0.9935839321034703
+        },
+        "gyro": {
+          "x": -0.013848437927663326,
+          "y": 0.004261057823896408,
+          "z": 0.00532632227987051
+        },
+        "linearAcceleration": {
+          "x": -0.15791015326976776,
+          "y": -0.6268554925918579,
+          "z": 39.91777420043945
+        }
+      },
+      "odom": {
+        "positionX": 0.005847996566444635,
+        "positionY": -0.0002793671446852386,
+        "linearX": 0.0,
+        "angularZ": 0.0
+      },
+      "batteryVoltage": 4.98
+    },
+    "originbotNote": "read-only ros2 topic echo; the agent never publishes or moves the robot",
+    "topics": [
+      {
+        "name": "/cmd_vel"
+      },
+      {
+        "name": "/imu"
+      },
+      {
+        "name": "/odom"
+      },
+      {
+        "name": "/originbot_status"
+      },
+      {
+        "name": "/parameter_events"
+      },
+      {
+        "name": "/rosout"
+      },
+      {
+        "name": "/tf"
+      },
+      {
+        "name": "/tf_static"
+      }
+    ],
+    "uptimeSec": 30430,
+    "cameraDevices": [
+      "/dev/video0",
+      "/dev/video1"
+    ],
+    "actuatorControl": true,
+    "policy": {
+      "enabled": true,
+      "runtimeRunning": true,
+      "driveEnabled": true,
+      "motionAuthorized": true,
+      "state": "ready",
+      "model": {
+        "path": "/root/rdk-board-agent/policies/originbot-visual-twist-v1.synthetic.model.bin",
+        "bytes": 264347,
+        "inputDim": 8,
+        "outputDim": 2,
+        "provider": "hobot_dnn",
+        "providerRequested": "cpu",
+        "format": "bpu-bin",
+        "inputShape": [
+          1,
+          8,
+          1,
+          1
+        ],
+        "outputShape": [
+          1,
+          2,
+          1,
+          1
+        ]
+      },
+      "command": 0.0,
+      "published": 0,
+      "inferMs": 0.0,
+      "provider": "hobot_dnn",
+      "providerRequested": "cpu",
+      "providersAvailable": null,
+      "observationLayout": "auto",
+      "lastError": null,
+      "lastOp": {
+        "op": "stop",
+        "seq": 2,
+        "ok": true,
+        "error": null,
+        "detail": null,
+        "at": 1789107827.954
+      },
+      "obsSlots": {
+        "contract": "8D obs / 2D act (native OriginBot twist)",
+        "layoutDeclared": false,
+        "layoutSource": "auto (dimension-based)",
+        "layout": "originbot-imu-odom-v1",
+        "source": "real (/odom + /imu)",
+        "goal": "explicit RDK_SIM2REAL_GOAL_X/Y required",
+        "slots_real": 8,
+        "slots_adapter": 0
+      },
+      "limits": {
+        "maxLinear": 0.3,
+        "maxAngular": 1.0,
+        "decisionHz": 10,
+        "chassisWatchdogMs": 500
+      },
+      "note": "trained-policy inference on board; motion requires drive+policy switches, output is speed-clamped and watchdog-floored exactly like the drive canary"
+    },
+    "drive": {
+      "enabled": true,
+      "active": false,
+      "linear": 0.0,
+      "angular": 0.0,
+      "remainingMs": 0,
+      "lastStopReason": "operator-emergency-stop",
+      "published": 10
+    }
+  },
+  "preflight": {
+    "ok": true,
+    "device": {
+      "id": "x5-real-10-185-136-180",
+      "kind": "rdk-custom",
+      "boardPlatform": "rdk-x5",
+      "boardModel": "D-Robotics RDK X5 V1.0",
+      "boardOsVersion": "Ubuntu 22.04.5 LTS"
+    },
+    "output": "__STUDIO_SIM2REAL_PREFLIGHT_BEGIN__\narch=aarch64\nkernel=6.1.83\npython3=/usr/bin/python3\ntros=present\ndisk_bytes=50231828480\nbpu_toolchain=missing\n__STUDIO_SIM2REAL_PREFLIGHT_END__\n",
+    "exitCode": 0,
+    "mock": false,
+    "actuatorControl": false
+  },
+  "motionExecuted": false,
+  "note": "只读验收；未执行驱动。"
+}

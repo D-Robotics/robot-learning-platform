@@ -1,0 +1,28 @@
+{
+  "capturedAt": "2026-09-11T13:40:43.927906+00:00",
+  "registry": "local-rehearsal",
+  "production": false,
+  "artifact": {
+    "artifactId": "originbot-visual-twist-v1.synthetic",
+    "version": "2026-09-11.1",
+    "format": "bpu-bin",
+    "targetPlatform": "rdk-x5",
+    "bytes": 264347,
+    "sha256": "b771bee619e1af08309369064717c469266094766f61307eb5bb162f0601456e",
+    "source": "<board-host>:/root/rdk-board-agent/policies/originbot-visual-twist-v1.synthetic.model.bin",
+    "immutable": true
+  },
+  "signatureAlgorithm": "HMAC-SHA256 (ephemeral rehearsal key)",
+  "signature": "f1dc229bb6726a05e803ecab2963707f5b92e2728021d72cb3da8434f950d135",
+  "versions": [
+    "2026-09-11.1",
+    "2026-09-11.2"
+  ],
+  "rollback": {
+    "from": "2026-09-11.2",
+    "to": "2026-09-11.1",
+    "verified": true
+  },
+  "digestVerified": true,
+  "note": "真实 X5 上的现有 bpu-bin 字节参与校验；未写入生产 registry。"
+}

@@ -35,6 +35,9 @@ GET overview
   → POST runs/{id}/telemetry + POST runs/{id}/evaluate
   → POST deployments (mode=preflight)
   → POST deployments/{id}/preflight
+  → POST deployments (mode=canary/live, with first-class evidence)
+  → POST deployments/{id}/approval (owner/admin decision)
+  → external BoardAgent consumes ready plan
 ```
 
 遥测 `source` 可以是 `board-agent`、`browser`、`import` 或 `demo-fixture`；最后一个值只
@@ -43,6 +46,10 @@ GET overview
 `preflight` 是固定的只读板端探针。reference BoardAgent 返回 `mock=true` 时，服务会
 明确保持 `409 SIM2REAL_PREFLIGHT_MOCK_ONLY`，不会把协议演练当成真机就绪，也不会执行
 电机或任意 shell 命令。
+
+Canary/Live 计划创建后默认为 `approval.status=pending`；审批接口只记录治理决定，
+通过后将计划置为 `ready`，不会直接下发模型或开启电机。共享部署中审批要求
+`owner`/`admin` 权限，真实执行、时间盒、现场确认和回滚由受控 BoardAgent 适配器完成。
 
 ## 与 Studio / MCP 的关系
 

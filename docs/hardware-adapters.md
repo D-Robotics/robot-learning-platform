@@ -12,7 +12,7 @@
 `actuator.commandTopic` / `actuator.messageType`，策略维度统一放在 `policy`。
 旧版 `platforms`、`sensors.*.topic`、`actuator.type` 字段不再作为独立契约；这样仿真、板端遥测节点、策略运行时和预检脚本读取的是同一份字段定义。
 
-板端策略运行时支持通过 `RDK_SIM2REAL_ADAPTER_CONFIG` 加载 JSON 适配包。适配包可以配置 `runtime.decisionHz`、`runtime.actionProjection`、`safety.maxLinear`、`safety.maxAngular` 和 `safety.sensorStallSec`。环境变量可以覆盖部署参数，但运行时始终把值限制在平台安全上限内；配置缺失或损坏时回退到安全默认值并保持停止优先。
+板端策略运行时支持通过 `RDK_SIM2REAL_ADAPTER_CONFIG` 加载 JSON 适配包。适配包可以配置 `runtime.decisionHz`、`runtime.actionProjection`、`runtime.actionOutput`、`safety.maxLinear`、`safety.maxAngular` 和 `safety.sensorStallSec`。`runtime.actionOutput` 必须明确为 `physical-twist`（策略输出已经是 m/s、rad/s）或 `normalized-twist`（策略输出为 [-1,1]，运行时按安全上限缩放）；OriginBot PPO 适配包使用后者。环境变量可以覆盖部署参数，但运行时始终把值限制在平台安全上限内，未知单位直接拒绝加载并保持停止优先。
 
 新增机型的最小步骤是：
 

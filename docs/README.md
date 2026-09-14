@@ -6,7 +6,7 @@
 
 | 文档 | 用途 |
 | --- | --- |
-| [`user-guide.md`](user-guide.md) | 使用手册与最佳实践（六模块工作流） |
+| [`user-guide.md`](user-guide.md) | 使用手册与最佳实践（核心、流程、数据与工具） |
 | [`demo-runbook.md`](demo-runbook.md) | 演示前的检查与操作顺序 |
 | [`demo-guide.md`](demo-guide.md) | 演示脚本与讲解要点 |
 | [`demo-originbot-runbook.md`](demo-originbot-runbook.md) | OriginBot 真机演示流程 |
@@ -21,6 +21,7 @@
 | [`host-station.md`](host-station.md) | 上位机视图：心跳、板载相机流、白名单只读命令 |
 | [`standalone-adapters.md`](standalone-adapters.md) | 独立部署的认证与 adapter 边界 |
 | [`operations.md`](operations.md) | 生产环境变量、限流、CSP、日志与指标 |
+| [`production-operations.md`](production-operations.md) | 发布配置门禁、部署后探针、备份恢复与迁移 runbook |
 
 ## 训练与引擎
 
@@ -42,15 +43,20 @@
 | [`design/app-js-modularization.md`](design/app-js-modularization.md) | 前端模块化方案：模块模式、加载顺序、迁移顺序与验收标准 |
 | [`roadmap.md`](roadmap.md) | 已落地能力与差距计划 |
 | [`quality-scorecard.md`](quality-scorecard.md) | 9+ 质量门槛的自动门禁与待补现场证据 |
+| [`dataset-lineage.md`](dataset-lineage.md) | 数据集版本、摘要与训练血缘 |
 | [`scalability.md`](scalability.md) | 存储容量边界与扩容路径 |
 | [`release-checklist.md`](release-checklist.md) | 公开发布阻塞项清单 |
+| [`field-evidence-runbook.md`](field-evidence-runbook.md) | X5、第二种实体机器人与生产制品回滚验收 |
 | [`api/openapi.yaml`](api/openapi.yaml) | 版本化 HTTP API 契约（`/api/v1/duck`） |
 
 ## 证据归档
 
 `research/` 与 `real-loop-*` 是带日期的评测/真机验证证据，属于**历史记录**，不要当作当前能力声明；当前能力以 `roadmap.md` 与代码为准。
 
+本轮真实 X5 + OriginBot 现场证据：[`evidence/x5-originbot-preflight-2026-09-11.json`](evidence/x5-originbot-preflight-2026-09-11.json)（只读预检）和 [`evidence/x5-originbot-canary-2026-09-11.json`](evidence/x5-originbot-canary-2026-09-11.json)（0.02 m/s、1 秒低速 canary、watchdog 与急停）。
+真实 X5 上现有 BPU 制品的摘要校验与版本回滚 rehearsal：[`evidence/artifact-registry-rehearsal-2026-09-11.json`](evidence/artifact-registry-rehearsal-2026-09-11.json)；该文件明确标记为非生产 registry。
+
 ## 已知重复
 
-- `design/sim2real-mvp-guide.html` 与 `design/sim2real-mvp-guide.md` 是同一份内容的两份载体；修改时请以 `.md` 为准并同步 `.html`，或直接删除 `.html`（尚无自动生成脚本）。
+- ~~`design/sim2real-mvp-guide.html` 与 `design/sim2real-mvp-guide.md` 双载体~~：`.html` 已删除（2026-09-14），[`design/sim2real-mvp-guide.md`](design/sim2real-mvp-guide.md) 是唯一载体。
 - `design/sim2real-90-acceptance.md`、`quality-scorecard.md`、`release-checklist.md` 三者视角不同（验收标准 / 自动门禁 / 发布阻塞项），但都涉及"什么算完成"；改动其中一份时请交叉检查另外两份。

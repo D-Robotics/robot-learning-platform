@@ -76,7 +76,7 @@ npm run dev:local-worker &
 npm run dev:sim2real
 ```
 
-然后在工作台「训练与模型」选 local backend 提交任务。worker 保证：`shell:false`、绝对路径引擎、凭据不出现在子进程环境、未写回合法 `artifact://` 结果的任务**不会**被标记为完成。
+然后在工作台「强化学习训练」选 local backend 提交任务。worker 保证：`shell:false`、绝对路径引擎、凭据不出现在子进程环境、未写回合法 `artifact://` 结果的任务**不会**被标记为完成。
 
 ## 换成你自己的机器人
 

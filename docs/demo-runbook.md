@@ -20,16 +20,16 @@ npm run demo:sim2real
 ## 90 秒讲解顺序
 
 1. **总览**：说明顶部上下文、四步交付流程和“安全边界已开启”。
-2. **训练与模型**：点击“运行 Mock 协议演示”，展示 `queued → running → completed`。
+2. **强化学习训练**：点击“运行 Mock 协议演示”，展示 `queued → running → completed`。
    运行卡片会写明“协议演示”，详情里的 `mock=true` 和 `deployable=false` 是刻意保留的
    证据。
-3. **评测与效果**：点击“载入合成演示证据”，确认 8 帧、61D/14D、50Hz；再点击
+3. **Sim2Real 评测**：点击“载入合成演示证据”，确认 8 帧、61D/14D、50Hz；再点击
    “上传演示样例并评测（不解锁发布）”。关键指标只显示契约状态，性能数字保持为空，
    页面会标出“合成证据 · 非真实遥测”。
-4. **部署到 X5**：点击“生成预检计划”，再点“执行只读预检”。预期返回
+4. **部署与反馈**：点击“生成预检计划”，再点“执行只读预检”。预期返回
    `SIM2REAL_PREFLIGHT_MOCK_ONLY`，页面显示“协议已验证，但不是真机预检证据”和
    `NO MOTOR`。这是演示成功的安全结果，不要把它改讲成部署成功。
-5. **记录与版本**：打开记录页，展示 Run、发布计划和“已保存回放”三类证据；刷新页面后，
+5. **调试与记录**：打开记录页，展示 Run、发布计划和“已保存回放”三类证据；刷新页面后，
    回放摘要仍在，且继续标记为演示样例。
 
 ## 有上游 MicroDuck 资源时
@@ -87,13 +87,19 @@ npm run demo:starter
 
 ### 策略上板前置（板端一次性）
 
+首次使用新板时，先在仓库主机执行一次显式初始化；它只安装 systemd unit、目录和缺失的环境骨架，默认不启动或覆盖运行中的 unit：
+
+```bash
+RDK_X5_SSH_TARGET="${RDK_X5_SSH_TARGET:?set root@<board-host>}" ./scripts/install-x5-board-agent.sh
+```
+
 ```bash
 # 1. 板上装依赖（已装过则跳过）
-sshpass -p root ssh root@10.185.136.180 'python3 -m pip install --no-cache-dir onnxruntime numpy'
+ssh "${RDK_X5_SSH_TARGET:?set root@<board-host>}" 'python3 -m pip install --no-cache-dir onnxruntime numpy'
 
 # 2. 传模型（只用 policies/ 目录内的 .onnx 文件名，代理会拒绝路径穿越）
-sshpass -p root scp local-path/policy.onnx \
-  root@10.185.136.180:/root/rdk-board-agent/policies/policy.onnx
+scp local-path/policy.onnx \
+  "${RDK_X5_SSH_TARGET:?set root@<board-host>}:/root/rdk-board-agent/policies/policy.onnx"
 
 # 3. 契约维度必须与模型一致（starter-ppo pendulum-chain-12j 是 42→12；
 #    MicroDuck 底盘契约是 61→14。runtime 会拒绝维度不符的模型——这是
@@ -104,10 +110,11 @@ sshpass -p root scp local-path/policy.onnx \
 # 4. 开三重开关（演示完建议全部关回）
 #    Mac 侧: RDK_SIM2REAL_STATION_POLICY_ENABLED=1 RDK_SIM2REAL_STATION_DRIVE_ENABLED=1
 #    板 侧: agent.env 里 RDK_SIM2REAL_BOARD_AGENT_ENABLE_DRIVE=1 + ENABLE_POLICY=1
-#    然后: sshpass -p root ssh root@10.185.136.180 'systemctl restart rdk-board-agent'
+#    然后: ssh "${RDK_X5_SSH_TARGET:?set root@<board-host>}" 'systemctl restart rdk-board-agent'
 
 # 5. 更新 X5 板端 agent（有 SSH/SCP 路径时执行；Studio Bridge 不需要额外隧道）
-RDK_X5_SSH_TARGET=root@10.185.136.180 ./scripts/deploy-x5-board-agent.sh
+#    这是 update-only 代码事务，不负责首次安装 systemd unit。
+RDK_X5_SSH_TARGET="${RDK_X5_SSH_TARGET:?set root@<board-host>}" ./scripts/deploy-x5-board-agent.sh
 
 # 6. 线上平台复用 RDK Studio Local Bridge：保持本机 bridge 客户端运行，
 #    在 Studio 中确认 RDK X5 已连接，然后打开 Sim2Real Station 页面。
@@ -127,11 +134,22 @@ sim→real 的诚实边界。任务本体是 pendulum-chain（摆链保持平衡
 
 ### 演示前 30 秒预检清单
 
+一键自动预检（全部只读 GET，逐项 ✓/✗ + 修复提示，`--json` 供脚本消费）：
+
+```bash
+npm run demo:preflight              # 彩排级：mock 参考数据可接受（降级提示）
+npm run demo:preflight -- --strict  # 正式演示：mock 时以退出码 2 失败
+```
+
+自动覆盖以下各项；也可手动核对：
+
 - [ ] `curl -s http://127.0.0.1:18104/api/sim2real/board-station/health` 返回 `ok: true` 且
       `mock: false`（如果板不可达，先重建隧道，再 `systemctl restart rdk-board-agent`）。
 - [ ] station 页罗盘在转（= 真 IMU 流活着），电池显示 ~5V。
 - [ ] 板端策略运行时状态：`GET /api/sim2real/board-station/policy` → 开关状态与你的演示
       计划一致（只演示加载/推理时保持 start 不可达即可，被拒绝时页面会给出准确原因）。
+- [ ] 板端策略制品在位：`GET /api/sim2real/board-station/policy/files` 列出
+      `policies/policy.onnx`（真训练制品，见上文 scp 步骤）。
 - [ ] 板卡掉线时的退路：切换到本地参考 agent（`RDK_SIM2REAL_BOARD_AGENT_URL` 指向
       `local-board-agent`），遥测卡继续渲染（页脚标注模拟），讲解词强调"诚实降级，不伪造"。
 

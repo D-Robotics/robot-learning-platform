@@ -14,7 +14,10 @@ RDK Studio 是可选的 AI 入口，不是该平台的运行时依赖：部署�
 证据投影，Skill 不承载模型校验或权限逻辑。这样网页、CLI、RDK Studio 和未来客户端可以
 共享同一套接口，同时保持 Studio 与 Sim2Real 的独立发布节奏。注意：本公开仓库目前只提供
 API 与适配契约，不包含 `duck-lab-mcp`、`microduck-mcp` 或 DSH Skill 实现；这些名称代表
-可选的外部集成，未装配时网页和 CLI 仍可独立运行。
+可选的外部集成，未装配时网页和 CLI 仍可独立运行。仓库内的官方 DSH runtime 只负责会话、
+对话和生命周期编排；`/api/sim2real/agent/capabilities` 会明确返回每个 `rdk_*` 工具的
+`bound` 状态，未注入 Board/GPU adapter 时不会把占位工具暴露给模型，也不会把成功提示伪装成
+真实训练或上板。
 
 ```text
 RDK Studio → 外部 Skill / MCP（可选） → Sim2Real API → 台账 / 事件 / 权限
@@ -30,7 +33,7 @@ Canary、Live 等变更在 Execute 阶段显式审批；local 与 RoboGo 不自�
 
 Sim2Real Web 采用两层导航：
 
-1. **交付工作流**：仿真与录制 → 训练与导出 → 评测与效果 → 预检与上板。它是新用户的顺序引导，也允许从任一步回退重跑。
+1. **交付工作流**：仿真与录制 → 强化学习训练 → Sim2Real 评测 → 部署与反馈。它是新用户的顺序引导，也允许从任一步回退重跑。
 2. **平台模块**：套件与契约、仿真与数据、训练中心、评测中心、设备与发布、记录与审计。它是熟悉用户的直接入口，每个模块只维护自己的空态、阻断和重试。
 
 产品线、模型、目标设备和账号健康度放在全局上下文条；首页只负责状态判断和跳转，业务表单留在对应模块内。这个结构借鉴了 [LeRobot 的端到端文档主线](https://huggingface.co/docs/lerobot/main/index)、[LeLab 的图形化工作区](https://huggingface.co/docs/lerobot/lelab) 和 [Isaac Lab 的模块化仿真/学习分层](https://docs.nvidia.com/learning/physical-ai/getting-started-with-isaac-lab/latest/train-your-first-robot-with-isaac-lab/02-how-isaac-lab-accelerates-reinforcement-learning.html)，但平台契约、设备和安全边界仍由本项目自己定义。

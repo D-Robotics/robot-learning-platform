@@ -1,0 +1,638 @@
+{
+  "capturedAt": "2026-09-11T13:33:16.396586+00:00",
+  "device": "<board-host>",
+  "mock": false,
+  "before": {
+    "timestamp": "2026-09-11T13:33:16Z",
+    "board": {
+      "platform": "rdk-x5",
+      "model": "D-Robotics RDK X5 V1.0",
+      "mock": false
+    },
+    "profile": {
+      "id": "rdk-x5-originbot-real",
+      "displayName": "自研 RDK X5 差速底盘（现场设备）",
+      "capabilities": [
+        "imu",
+        "odom",
+        "battery",
+        "twist",
+        "cpu-onnx",
+        "camera-devices"
+      ]
+    },
+    "adapterId": "rdk-x5-originbot-real",
+    "cpu": {
+      "percent": 11.0,
+      "temperatureC": 56.3
+    },
+    "memory": {
+      "totalMB": 7080,
+      "usedMB": 925
+    },
+    "disk": {
+      "totalMB": 59608,
+      "usedMB": 11704
+    },
+    "network": {
+      "mode": "ethernet",
+      "rxKbPerSec": 0,
+      "txKbPerSec": 1
+    },
+    "power": {
+      "voltage": 5.0
+    },
+    "originbot": {
+      "imu": {
+        "quaternion": {
+          "x": -0.003775843759063961,
+          "y": 0.0005353681124091142,
+          "z": 0.11303550204168278,
+          "w": 0.9935836309355524
+        },
+        "gyro": {
+          "x": -0.012783173471689224,
+          "y": 0.00532632227987051,
+          "z": 0.006391586735844612
+        },
+        "linearAcceleration": {
+          "x": -0.15312500298023224,
+          "y": -0.684277355670929,
+          "z": 39.97998046875
+        }
+      },
+      "odom": {
+        "positionX": 0.005847996566444635,
+        "positionY": -0.0002793671446852386,
+        "linearX": 0.0,
+        "angularZ": 0.0
+      },
+      "batteryVoltage": 5.0
+    },
+    "telemetry": {
+      "imu": {
+        "quaternion": {
+          "x": -0.003775843759063961,
+          "y": 0.0005353681124091142,
+          "z": 0.11303550204168278,
+          "w": 0.9935836309355524
+        },
+        "gyro": {
+          "x": -0.012783173471689224,
+          "y": 0.00532632227987051,
+          "z": 0.006391586735844612
+        },
+        "linearAcceleration": {
+          "x": -0.15312500298023224,
+          "y": -0.684277355670929,
+          "z": 39.97998046875
+        }
+      },
+      "odom": {
+        "positionX": 0.005847996566444635,
+        "positionY": -0.0002793671446852386,
+        "linearX": 0.0,
+        "angularZ": 0.0
+      },
+      "batteryVoltage": 5.0
+    },
+    "originbotNote": "read-only ros2 topic echo; the agent never publishes or moves the robot",
+    "topics": [
+      {
+        "name": "/cmd_vel"
+      },
+      {
+        "name": "/imu"
+      },
+      {
+        "name": "/odom"
+      },
+      {
+        "name": "/originbot_status"
+      },
+      {
+        "name": "/parameter_events"
+      },
+      {
+        "name": "/rosout"
+      },
+      {
+        "name": "/tf"
+      },
+      {
+        "name": "/tf_static"
+      }
+    ],
+    "uptimeSec": 30630,
+    "cameraDevices": [
+      "/dev/video0",
+      "/dev/video1"
+    ],
+    "actuatorControl": true,
+    "policy": {
+      "enabled": true,
+      "runtimeRunning": true,
+      "driveEnabled": true,
+      "motionAuthorized": true,
+      "state": "ready",
+      "model": {
+        "path": "/root/rdk-board-agent/policies/originbot-visual-twist-v1.synthetic.model.bin",
+        "bytes": 264347,
+        "inputDim": 8,
+        "outputDim": 2,
+        "provider": "hobot_dnn",
+        "providerRequested": "cpu",
+        "format": "bpu-bin",
+        "inputShape": [
+          1,
+          8,
+          1,
+          1
+        ],
+        "outputShape": [
+          1,
+          2,
+          1,
+          1
+        ]
+      },
+      "command": 0.0,
+      "published": 0,
+      "inferMs": 0.0,
+      "provider": "hobot_dnn",
+      "providerRequested": "cpu",
+      "providersAvailable": null,
+      "observationLayout": "auto",
+      "lastError": null,
+      "lastOp": {
+        "op": "stop",
+        "seq": 2,
+        "ok": true,
+        "error": null,
+        "detail": null,
+        "at": 1789107827.954
+      },
+      "obsSlots": {
+        "contract": "8D obs / 2D act (native OriginBot twist)",
+        "layoutDeclared": false,
+        "layoutSource": "auto (dimension-based)",
+        "layout": "originbot-imu-odom-v1",
+        "source": "real (/odom + /imu)",
+        "goal": "explicit RDK_SIM2REAL_GOAL_X/Y required",
+        "slots_real": 8,
+        "slots_adapter": 0
+      },
+      "limits": {
+        "maxLinear": 0.3,
+        "maxAngular": 1.0,
+        "decisionHz": 10,
+        "chassisWatchdogMs": 500
+      },
+      "note": "trained-policy inference on board; motion requires drive+policy switches, output is speed-clamped and watchdog-floored exactly like the drive canary"
+    },
+    "drive": {
+      "enabled": true,
+      "active": false,
+      "linear": 0.0,
+      "angular": 0.0,
+      "remainingMs": 0,
+      "lastStopReason": "operator-emergency-stop",
+      "published": 10
+    }
+  },
+  "driveCommand": [
+    200,
+    {
+      "ok": true,
+      "drive": {
+        "enabled": true,
+        "active": true,
+        "linear": 0.02,
+        "angular": 0.0,
+        "remainingMs": 992,
+        "lastStopReason": "driving",
+        "published": 11
+      }
+    }
+  ],
+  "afterWatchdog": {
+    "timestamp": "2026-09-11T13:33:17Z",
+    "board": {
+      "platform": "rdk-x5",
+      "model": "D-Robotics RDK X5 V1.0",
+      "mock": false
+    },
+    "profile": {
+      "id": "rdk-x5-originbot-real",
+      "displayName": "自研 RDK X5 差速底盘（现场设备）",
+      "capabilities": [
+        "imu",
+        "odom",
+        "battery",
+        "twist",
+        "cpu-onnx",
+        "camera-devices"
+      ]
+    },
+    "adapterId": "rdk-x5-originbot-real",
+    "cpu": {
+      "percent": 8.1,
+      "temperatureC": 55.8
+    },
+    "memory": {
+      "totalMB": 7080,
+      "usedMB": 926
+    },
+    "disk": {
+      "totalMB": 59608,
+      "usedMB": 11704
+    },
+    "network": {
+      "mode": "ethernet",
+      "rxKbPerSec": 1,
+      "txKbPerSec": 1
+    },
+    "power": {
+      "voltage": 4.99
+    },
+    "originbot": {
+      "imu": {
+        "quaternion": {
+          "x": -0.003775843759063961,
+          "y": 0.0005353681124091142,
+          "z": 0.11303550204168278,
+          "w": 0.9935836309355524
+        },
+        "gyro": {
+          "x": -0.012783173471689224,
+          "y": 0.00532632227987051,
+          "z": 0.006391586735844612
+        },
+        "linearAcceleration": {
+          "x": -0.12441406399011612,
+          "y": -0.6651366949081421,
+          "z": 39.975196838378906
+        }
+      },
+      "odom": {
+        "positionX": 0.005994708277285099,
+        "positionY": -0.0002949022746179253,
+        "linearX": 0.0,
+        "angularZ": 0.0
+      },
+      "batteryVoltage": 4.99
+    },
+    "telemetry": {
+      "imu": {
+        "quaternion": {
+          "x": -0.003775843759063961,
+          "y": 0.0005353681124091142,
+          "z": 0.11303550204168278,
+          "w": 0.9935836309355524
+        },
+        "gyro": {
+          "x": -0.012783173471689224,
+          "y": 0.00532632227987051,
+          "z": 0.006391586735844612
+        },
+        "linearAcceleration": {
+          "x": -0.12441406399011612,
+          "y": -0.6651366949081421,
+          "z": 39.975196838378906
+        }
+      },
+      "odom": {
+        "positionX": 0.005994708277285099,
+        "positionY": -0.0002949022746179253,
+        "linearX": 0.0,
+        "angularZ": 0.0
+      },
+      "batteryVoltage": 4.99
+    },
+    "originbotNote": "read-only ros2 topic echo; the agent never publishes or moves the robot",
+    "topics": [
+      {
+        "name": "/cmd_vel"
+      },
+      {
+        "name": "/imu"
+      },
+      {
+        "name": "/odom"
+      },
+      {
+        "name": "/originbot_status"
+      },
+      {
+        "name": "/parameter_events"
+      },
+      {
+        "name": "/rosout"
+      },
+      {
+        "name": "/tf"
+      },
+      {
+        "name": "/tf_static"
+      }
+    ],
+    "uptimeSec": 30631,
+    "cameraDevices": [
+      "/dev/video0",
+      "/dev/video1"
+    ],
+    "actuatorControl": true,
+    "policy": {
+      "enabled": true,
+      "runtimeRunning": true,
+      "driveEnabled": true,
+      "motionAuthorized": true,
+      "state": "ready",
+      "model": {
+        "path": "/root/rdk-board-agent/policies/originbot-visual-twist-v1.synthetic.model.bin",
+        "bytes": 264347,
+        "inputDim": 8,
+        "outputDim": 2,
+        "provider": "hobot_dnn",
+        "providerRequested": "cpu",
+        "format": "bpu-bin",
+        "inputShape": [
+          1,
+          8,
+          1,
+          1
+        ],
+        "outputShape": [
+          1,
+          2,
+          1,
+          1
+        ]
+      },
+      "command": 0.0,
+      "published": 0,
+      "inferMs": 0.0,
+      "provider": "hobot_dnn",
+      "providerRequested": "cpu",
+      "providersAvailable": null,
+      "observationLayout": "auto",
+      "lastError": null,
+      "lastOp": {
+        "op": "stop",
+        "seq": 2,
+        "ok": true,
+        "error": null,
+        "detail": null,
+        "at": 1789107827.954
+      },
+      "obsSlots": {
+        "contract": "8D obs / 2D act (native OriginBot twist)",
+        "layoutDeclared": false,
+        "layoutSource": "auto (dimension-based)",
+        "layout": "originbot-imu-odom-v1",
+        "source": "real (/odom + /imu)",
+        "goal": "explicit RDK_SIM2REAL_GOAL_X/Y required",
+        "slots_real": 8,
+        "slots_adapter": 0
+      },
+      "limits": {
+        "maxLinear": 0.3,
+        "maxAngular": 1.0,
+        "decisionHz": 10,
+        "chassisWatchdogMs": 500
+      },
+      "note": "trained-policy inference on board; motion requires drive+policy switches, output is speed-clamped and watchdog-floored exactly like the drive canary"
+    },
+    "drive": {
+      "enabled": true,
+      "active": false,
+      "linear": 0.0,
+      "angular": 0.0,
+      "remainingMs": 0,
+      "lastStopReason": "window-expired",
+      "published": 11
+    }
+  },
+  "emergencyStop": [
+    200,
+    {
+      "ok": true,
+      "drive": {
+        "enabled": true,
+        "active": false,
+        "linear": 0.0,
+        "angular": 0.0,
+        "remainingMs": 0,
+        "lastStopReason": "operator-emergency-stop",
+        "published": 11
+      },
+      "note": "zero-speed frame published; chassis watchdog enforces rest"
+    }
+  ],
+  "afterStop": {
+    "timestamp": "2026-09-11T13:33:18Z",
+    "board": {
+      "platform": "rdk-x5",
+      "model": "D-Robotics RDK X5 V1.0",
+      "mock": false
+    },
+    "profile": {
+      "id": "rdk-x5-originbot-real",
+      "displayName": "自研 RDK X5 差速底盘（现场设备）",
+      "capabilities": [
+        "imu",
+        "odom",
+        "battery",
+        "twist",
+        "cpu-onnx",
+        "camera-devices"
+      ]
+    },
+    "adapterId": "rdk-x5-originbot-real",
+    "cpu": {
+      "percent": 8.2,
+      "temperatureC": 55.8
+    },
+    "memory": {
+      "totalMB": 7080,
+      "usedMB": 926
+    },
+    "disk": {
+      "totalMB": 59608,
+      "usedMB": 11704
+    },
+    "network": {
+      "mode": "ethernet",
+      "rxKbPerSec": 0,
+      "txKbPerSec": 0
+    },
+    "power": {
+      "voltage": 4.99
+    },
+    "originbot": {
+      "imu": {
+        "quaternion": {
+          "x": -0.003775843759063961,
+          "y": 0.0005353681124091142,
+          "z": 0.11303550204168278,
+          "w": 0.9935836309355524
+        },
+        "gyro": {
+          "x": -0.012783173471689224,
+          "y": 0.00532632227987051,
+          "z": 0.006391586735844612
+        },
+        "linearAcceleration": {
+          "x": -0.12441406399011612,
+          "y": -0.6651366949081421,
+          "z": 39.975196838378906
+        }
+      },
+      "odom": {
+        "positionX": 0.005994708277285099,
+        "positionY": -0.0002949022746179253,
+        "linearX": 0.0,
+        "angularZ": 0.0
+      },
+      "batteryVoltage": 4.99
+    },
+    "telemetry": {
+      "imu": {
+        "quaternion": {
+          "x": -0.003775843759063961,
+          "y": 0.0005353681124091142,
+          "z": 0.11303550204168278,
+          "w": 0.9935836309355524
+        },
+        "gyro": {
+          "x": -0.012783173471689224,
+          "y": 0.00532632227987051,
+          "z": 0.006391586735844612
+        },
+        "linearAcceleration": {
+          "x": -0.12441406399011612,
+          "y": -0.6651366949081421,
+          "z": 39.975196838378906
+        }
+      },
+      "odom": {
+        "positionX": 0.005994708277285099,
+        "positionY": -0.0002949022746179253,
+        "linearX": 0.0,
+        "angularZ": 0.0
+      },
+      "batteryVoltage": 4.99
+    },
+    "originbotNote": "read-only ros2 topic echo; the agent never publishes or moves the robot",
+    "topics": [
+      {
+        "name": "/cmd_vel"
+      },
+      {
+        "name": "/imu"
+      },
+      {
+        "name": "/odom"
+      },
+      {
+        "name": "/originbot_status"
+      },
+      {
+        "name": "/parameter_events"
+      },
+      {
+        "name": "/rosout"
+      },
+      {
+        "name": "/tf"
+      },
+      {
+        "name": "/tf_static"
+      }
+    ],
+    "uptimeSec": 30632,
+    "cameraDevices": [
+      "/dev/video0",
+      "/dev/video1"
+    ],
+    "actuatorControl": true,
+    "policy": {
+      "enabled": true,
+      "runtimeRunning": true,
+      "driveEnabled": true,
+      "motionAuthorized": true,
+      "state": "ready",
+      "model": {
+        "path": "/root/rdk-board-agent/policies/originbot-visual-twist-v1.synthetic.model.bin",
+        "bytes": 264347,
+        "inputDim": 8,
+        "outputDim": 2,
+        "provider": "hobot_dnn",
+        "providerRequested": "cpu",
+        "format": "bpu-bin",
+        "inputShape": [
+          1,
+          8,
+          1,
+          1
+        ],
+        "outputShape": [
+          1,
+          2,
+          1,
+          1
+        ]
+      },
+      "command": 0.0,
+      "published": 0,
+      "inferMs": 0.0,
+      "provider": "hobot_dnn",
+      "providerRequested": "cpu",
+      "providersAvailable": null,
+      "observationLayout": "auto",
+      "lastError": null,
+      "lastOp": {
+        "op": "stop",
+        "seq": 3,
+        "ok": true,
+        "error": null,
+        "detail": null,
+        "at": 1789133597.757
+      },
+      "obsSlots": {
+        "contract": "8D obs / 2D act (native OriginBot twist)",
+        "layoutDeclared": false,
+        "layoutSource": "auto (dimension-based)",
+        "layout": "originbot-imu-odom-v1",
+        "source": "real (/odom + /imu)",
+        "goal": "explicit RDK_SIM2REAL_GOAL_X/Y required",
+        "slots_real": 8,
+        "slots_adapter": 0
+      },
+      "limits": {
+        "maxLinear": 0.3,
+        "maxAngular": 1.0,
+        "decisionHz": 10,
+        "chassisWatchdogMs": 500
+      },
+      "note": "trained-policy inference on board; motion requires drive+policy switches, output is speed-clamped and watchdog-floored exactly like the drive canary"
+    },
+    "drive": {
+      "enabled": true,
+      "active": false,
+      "linear": 0.0,
+      "angular": 0.0,
+      "remainingMs": 0,
+      "lastStopReason": "operator-emergency-stop",
+      "published": 11
+    }
+  },
+  "motionExecuted": true,
+  "safetyChecks": {
+    "lowSpeedMps": 0.02,
+    "durationSec": 1.0,
+    "stopIssued": true,
+    "watchdogInactiveAfterWindow": true,
+    "zeroAfterStop": true
+  }
+}

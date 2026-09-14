@@ -17,14 +17,15 @@ node scripts/gpu-deploy.mjs --host <gpu-ip> --port <ssh-port> --user <ssh-user> 
 5. 生成 `~/rdk-sim2real/worker.env`（含随机 runner token，`chmod 600`；`--dir ~/...` 会解析为绝对路径，worker 要求可执行文件路径必须绝对）；
 6. `--service` 时安装并启动 `systemd --user` 服务 `rdk-sim2real-worker`。
 
-结束时打印需要粘贴到本机 web 服务器 `.env` 的两行：
+结束时打印 URL 和 token 的安全取值说明。脚本不会把 bearer 写入终端日志；从远端
+`worker.env` 通过组织的 secret 管理或受控 SSH 通道取值，再写入本机 web 服务器 `.env`：
 
 ```
 RDK_SIM2REAL_LOCAL_RUNNER_URL=http://<gpu-ip>:19091/train
-RDK_SIM2REAL_LOCAL_RUNNER_TOKEN=<随机 token>
+RDK_SIM2REAL_LOCAL_RUNNER_TOKEN=<从远端 worker.env 安全复制>
 ```
 
-重启 web 服务器后，工作台「训练与模型」选 **local** backend 提交任务即可。
+重启 web 服务器后，工作台「强化学习训练」选 **local** backend 提交任务即可。
 
 ## 在平台页面管理自己的 GPU
 
@@ -36,6 +37,15 @@ RDK_SIM2REAL_LOCAL_RUNNER_TOKEN=<随机 token>
 4. 资源支持编辑、删除，训练记录会保留所选资源 id，后续状态查询继续访问对应 Worker。
 
 凭据只保存在服务端台账，列表和运行记录不会返回 token。对应接口为 `GET/POST/PATCH/DELETE /api/sim2real/compute-resources`，连通性检查使用 `POST /api/sim2real/compute-resources/:id/test`。
+
+共享部署会拒绝字面量私网地址上的 HTTPS Runner（例如
+`https://127.0.0.1/...`、RFC1918 或云元数据地址），避免账号持有者把平台进程
+当作 SSRF 探针。内网 GPU 优先使用上面的 loopback SSH 隧道；确需直连私网 HTTPS
+时，由运维在服务环境中设置 `RDK_SIM2REAL_COMPUTE_ALLOW_PRIVATE_HTTPS_HOSTS`
+为逗号分隔的精确主机名/IP 白名单。HTTP 私网 Runner 的现有本地模式规则不变。
+
+连通性检查不是永久授权：默认 600 秒后健康租约过期（可用
+`RDK_SIM2REAL_COMPUTE_HEALTH_TTL_SECONDS` 调整到 30–86400 秒）。过期资源会在训练启动、运行状态对账和制品下发时 fail-closed，页面会显示“未测试”，重新点击“测试连接”后才恢复可用。
 
 ## 设备自动检测（诚实上报）
 

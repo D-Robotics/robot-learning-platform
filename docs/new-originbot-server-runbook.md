@@ -69,7 +69,41 @@ GPU 训练结果必须包含 `mock=false`、`cuda=true`（或明确的 CPU 结�
 - `hobot_dnn`/BPU runtime；
 - board-agent systemd 服务。
 
-在板端安装 board-agent，生成独立 token，并设置环境文件：
+在板端安装 board-agent，先从仓库所在主机执行一次显式的 fresh-board 初始化：
+
+```bash
+RDK_X5_SSH_TARGET="${RDK_X5_SSH_TARGET:?set root@<board-host>}" \
+  ./scripts/install-x5-board-agent.sh
+```
+
+这个脚本只安装 reviewed systemd unit、root-only 状态目录和缺失的环境文件骨架；默认不启动、停止或重启服务，也不会覆盖已有 unit 或环境文件。需要替换现有 unit 时必须人工审阅后显式加 `--force`。初始化完成后再用 update-only 部署脚本传代码：
+
+```bash
+RDK_X5_SSH_TARGET="${RDK_X5_SSH_TARGET:?set root@<board-host>}" \
+  ./scripts/deploy-x5-board-agent.sh
+```
+
+确认 token 和开关后，再在板端显式启用 agent；telemetry uploader 需另外填写
+`/etc/rdk-board-agent/telemetry.env` 并由运维单独启用。这样首次安装和后续代码更新的边界清晰，更新脚本不会隐式改变运行中的 unit。
+
+如果现场不能执行初始化脚本，也可以按下面的手工目录步骤安装；生成独立 token，并设置环境文件：
+
+这里的环境文件必须是 `/etc/rdk-board-agent/agent.env`（root:root、`chmod 600`）：这是
+`rdk-board-agent.service` 的 `EnvironmentFile`，也是 `/v1/config` 网页开关默认改写的真源。
+策略制品仍固定放在 `/root/rdk-board-agent/policies`，代码放在 `/opt/rdk-board-agent`；不要把
+token 或开关文件放进代码目录。初始化脚本和后续部署脚本都会预创建
+`/var/lib/rdk-board-agent/{telemetry,roslogs}`，手工安装 unit 时也必须先创建这两个 root-only
+目录，否则遥测 sampler 无法打开日志而会持续 stale。
+
+```bash
+sudo install -d -o root -g root -m 0700 /etc/rdk-board-agent
+sudo install -d -o root -g root -m 0700 /var/lib/rdk-board-agent/telemetry /var/lib/rdk-board-agent/roslogs
+if sudo test -e /etc/rdk-board-agent/agent.env; then
+  sudo chmod 600 /etc/rdk-board-agent/agent.env
+else
+  sudo install -o root -g root -m 0600 /dev/null /etc/rdk-board-agent/agent.env
+fi
+```
 
 ```ini
 RDK_SIM2REAL_BOARD_AGENT_TOKEN=<随机长 token>
@@ -78,6 +112,13 @@ RDK_SIM2REAL_BOARD_AGENT_ENABLE_DRIVE=0
 RDK_SIM2REAL_BOARD_AGENT_ENABLE_POLICY=0
 RDK_SIM2REAL_MAX_LINEAR=0.05
 RDK_SIM2REAL_MAX_ANGULAR=0.2
+```
+
+代码部署并确认 `agent.env` 后，才显式启用 agent（这一步会启动服务）：
+
+```bash
+ssh "${RDK_X5_SSH_TARGET:?set root@<board-host>}" \
+  'systemctl enable --now rdk-board-agent.service'
 ```
 
 新设备第一次必须保持两个运动开关关闭。启动后从平台执行：
@@ -165,7 +206,7 @@ action:      [linear, angular]
 
 采集前确认机器人处于安全区域；采集结束必须调用 stop 并核对 `drive.active=false`。
 
-## 6. GPU 训练与导出
+## 6. GPU 强化学习训练
 
 训练阶段由平台提交 run 到 GPU worker。每个 run 应保存：
 
@@ -258,4 +299,4 @@ linear=0, angular=0 after stop
 
 ## 当前诚实边界
 
-本手册的通路已经在 OriginBot/X5 上验证到真实 BPU 推理和低速策略输出。新设备/新服务器可以按此流程完成配置，但真正泛化的视觉策略质量仍取决于新设备的相机标定、真实动作数据和任务定义；平台不会替用户凭空制造这些信息。
+本手册的通路已经在 OriginBot/X5 上验证到真实 BPU 模型加载/前向、受限低速驱动与看门狗/急停归零；现有归档证据没有把合成策略输出作为真实策略行走成功，也没有宣称视觉策略已经达到可发布质量。新设备/新服务器可以按此流程完成配置，但真正泛化的视觉策略质量仍取决于新设备的相机标定、真实动作数据和任务定义；平台不会替用户凭空制造这些信息。

@@ -1,7 +1,10 @@
 # Sim2Real 平台路线图（差距分析 → 验收标准）
 
-定位：**通用机器人强化学习平台**。OriginBot 是第一台参考机型，不是平台边界；换一台
-底盘机器人应当只需要换"机型适配包"（观测槽位映射 + 动作投影 + 安全参数），而不是改平台。
+定位：**RDK 机器人策略的证据链与安全交付控制面**。平台用通用机器人学习工作流承载
+不同机型，但当前产品承诺聚焦于可审计的 Run → Artifact → Evaluation → Deployment 链路。
+OriginBot 是第一台参考机型；换一台底盘机器人应当只需要换“机型适配包”（观测槽位映射 +
+动作投影 + 安全参数），而不是改平台。通用机型生态属于后续扩展目标，不把尚未完成的现场
+适配和车队能力写成当前承诺。
 
 ## 术语
 
@@ -16,9 +19,9 @@
 | 真实 PPO starter（numpy+torch） | ✅ | `npm run demo:starter` 产出真实 `policy.onnx`，`mock=false` |
 | ONNX 导出契约（61D/14D/50Hz） | ✅ | shared/sim2real.ts 契约 + 测试断言布局 |
 | 板端只读预检（X5） | ✅ | 白名单命令 + 预检探针，token 认证 |
-| 上位机站（真实遥测流） | ✅ | 浏览器 → 代理 → 隧道 → agent → TROS，`mock:false` |
-| 受限驱动 Canary | ✅ | 双开关、速度钳制 0.3/1.0、窗口 ≤2s、底盘看门狗 500ms |
-| **板端策略运行时（本轮新增）** | ✅ | 板上 load 真实 61→14 onnx → ready；start 无双开关被拒；stop 恒可用；推理 0.12ms/call |
+| 上位机站（真实遥测流） | 🟡 参考实现 | 浏览器 → 代理 → 隧道 → agent → TROS 的代码路径与契约已具备；现场 `mock:false` 证据仍按发布清单归档 |
+| 受限驱动 Canary | 🧩 代码门禁已具备 | 双开关、速度钳制 0.3/1.0、窗口 ≤2s、底盘看门狗 500ms；真实运动验收仍需现场记录 |
+| **板端策略运行时（本轮新增）** | 🧩 参考运行时 | 板上 load 真实 61→14 onnx → ready 的路径、拒载和 stop 恒可用契约已验证；现场推理/运动指标需设备验收 |
 | 平台策略代理路由 + UI 面板 | ✅ | vitest 9/9；面板如实显示开关状态、obsSlots、推理指标 |
 | **Task-Pack 声明式训练（本轮新增）** | ✅ | 任务 JSON + 机型 JSON 驱动引擎；`verify:task-pack`/`verify:goalnav` 进 verify 链 |
 | **真实机器人任务训练（本轮新增）** | ✅ | 目标点导航：CPU 800 迭代，8D 布局 nominal 74%、42D 布局 90% [CI 0.79,0.96]；gate 以 Wilson CI 下界如实判定（碰撞侧 CI 上界未达标=诚实 FAIL） |
@@ -40,10 +43,16 @@
 | **遥测有界读 + 保留（本轮新增）** | ✅ | 小 `limit` 的列表请求解析到第 N 条即停止（乱序迟到分块自动回退全量以保证逐字节一致）；`RDK_SIM2REAL_TELEMETRY_RETENTION_DAYS` 按天淘汰过期遥测，分片与台账索引同生共死，默认关闭 |
 | **单写者租约（本轮新增）** | ✅ | 写台账前获取/续租 `<storage>/writer-lease.json`；同主机按 pid 存活、跨主机按心跳新鲜度判定；冲突 fail-closed 并映射为 503 + `retryable:false` + 可执行建议；`RDK_SIM2REAL_STORAGE_LEASE=0` 可关闭（排障用） |
 | **前端注入门禁（本轮新增）** | ✅ | `verify:escape-audit` 扫描 `innerHTML`/`outerHTML` 模板插值，未转义即失败；豁免必须带理由，写在模板字面量文本里的"注释"不被承认 |
-| **工程护栏（本轮新增）** | ✅ | ESLint（flat config，error 级零违规）+ Prettier + EditorConfig；覆盖率阈值（lines/stmts 66、funcs 79、branches 61）；Dependabot（npm/Actions/pip）；CI Node 20/22/24 矩阵 |
+| **工程护栏（本轮新增）** | ✅ | ESLint（flat config，error 级零违规）+ Prettier + EditorConfig；Vitest 4.1.11 覆盖率阈值（lines 71、statements 68、functions 74、branches 61）；Dependabot（npm/Actions/pip）；CI Node 20/22/24 矩阵 |
 | 诚实性原则 | ✅ | mock 永远标注、遥测不伪造、fail-closed、急停常开 |
 
 ## 差距与计划
+
+> **当前发布边界（请勿把计划记录当成执行完成）**：仓库内的 deployment API
+> 已实现证据门禁、只读 preflight、Canary/Live 计划和显式人工审批（`/approval`）。
+> 审批通过只会把计划置为 `ready`，不会伪称已经上板；真实 BoardAgent 执行、
+> 时间盒、现场确认和自动回滚仍由外部发布适配器完成。公开发布前必须保留该边界，
+> 不能把“审批通过”写成“已上线”。
 
 ### P1 — 训练→上板闭环的真实性
 
@@ -63,8 +72,12 @@
      声明装配观测（环 B 闭环），未知布局/布局-模型矛盾 fail-closed。
 3. **真机评测回写**：板端策略运行的 inferMs/published/指令序列回写为 Run 证据
    - 验收：记录页能看到一次"上板会话"的起止、推理统计与停止原因，标记 `mock:false`。
-   - 进展：board-agent 遥测回流已进发布闸门（fail-closed）；遥测飞轮（环 A）把
-     板端漂移分析成重训建议（run 详情卡）；剩余：上板会话的起止/推理统计结构化展示。
+   - **已完成（代码侧）**：board-agent 遥测回流已进发布闸门（fail-closed）；遥测飞轮
+     （环 A）把板端漂移分析成重训建议（run 详情卡）；板端会话的起止/推理统计/停止
+     原因已结构化展示——runtime 把 `session-started`/`session-stopped` 生命周期事件
+     写入遥测 spool、随样本同链路上传，`GET /runs/:id/board-sessions` 聚合后渲染进
+     run 详情"上板会话"卡（模型指纹、attested 徽章、中断会话如实标注"未见停止
+     事件"）。剩余：真机在场复跑一轮，确认 spool→上传→run 详情全链证据一致。
 
 ### P2 — 多机型与规模化
 
@@ -84,10 +97,16 @@
 
 7. **制品编译/签名/OTA 回滚**：上板模型带版本与校验，失败自动回退
    - 验收：坏模型 load 拒绝且 runtime 回到 ready/fault 可恢复态；板上可查当前模型指纹。
+   - 进展：模型指纹（sha256/provider/维度/字节数）已随会话事件上板→入 run 详情
+     "上板会话"卡（`GET /runs/:id/board-sessions` 的 `model` 字段），station 页
+     model 卡同步显示；剩余：坏模型 load 拒绝的板端实测与自动回退演练。
 8. **多人权限**：策略开关按用户角色下放，操作审计入台账
-   - 验收：无权限用户看到的面板与 API 一致地只读；每次 load/start/stop 留审计记录。
+   - **已完成控制面**：角色权限、跨租户边界、部署审批和 NDJSON 审计已落地；剩余
+     是把审计事件接入组织的 SIEM/长期不可变存储，并在真机适配器侧复核每个执行动作。
 9. **演示自动预检脚本**：`demo:sim2real` 前一键检查（板可达/隧道/开关/模型在位）
-   - 验收：脚本输出逐项 ✓/✗ 与修复提示；demo-runbook 的清单与之对应。
+   - **已完成**：`npm run demo:preflight`——全部只读 GET，逐项 ✓/✗ + 修复提示，
+     `--strict` 拒绝 mock、`--json` 供脚本消费；自测 `npm run verify:demo-preflight`
+     守护 ✓/✗ 分级与"永不发 POST"的安全不变量；demo-runbook 清单已与之一一对应。
 
 ## 安全不变量（任何路线项都不得破坏）
 
