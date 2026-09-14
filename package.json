@@ -32,6 +32,7 @@
     "dev:mock-worker": "node scripts/run-with-env.mjs node services/sim2real-web/mock-local-worker.mjs",
     "dev:local-worker": "node scripts/run-with-env.mjs node services/sim2real-web/local-training-worker.mjs",
     "dev:board-agent": "node scripts/run-with-env.mjs node services/sim2real-web/local-board-agent.mjs",
+    "train:offline-bc": "python3 engines/offline-bc/train_bc.py",
     "demo:sim2real": "node scripts/demo-sim2real.mjs",
     "demo:starter": "node scripts/demo-starter.mjs",
     "demo:preflight": "node scripts/demo-preflight.mjs",
