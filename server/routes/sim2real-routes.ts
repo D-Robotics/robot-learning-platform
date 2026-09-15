@@ -2028,19 +2028,25 @@ export function createSim2RealRouter(
   const api = (suffix: string): string => `${prefix}${suffix}`;
 
   // Public, immutable seed assets for the first task-pack flywheel.
-  router.get(api('/task-packs/:taskId/failure-cases'), wrapAsync(async (request, response) => {
-    noStore(response);
-    if (String(request.params.taskId || '') !== 'goal-navigation-clear-arena') {
-      response.status(404).json({ ok: false, error: 'TASK_PACK_NOT_FOUND' });
-      return;
-    }
-    try {
-      const file = await readFile(path.resolve(process.cwd(), 'data/failure-cases/goal-navigation-seed.json'), 'utf8');
-      response.json({ ok: true, ...JSON.parse(file) });
-    } catch {
-      response.status(503).json({ ok: false, error: 'TASK_PACK_ASSET_UNAVAILABLE' });
-    }
-  }));
+  router.get(
+    api('/task-packs/:taskId/failure-cases'),
+    wrapAsync(async (request, response) => {
+      noStore(response);
+      if (String(request.params.taskId || '') !== 'goal-navigation-clear-arena') {
+        response.status(404).json({ ok: false, error: 'TASK_PACK_NOT_FOUND' });
+        return;
+      }
+      try {
+        const file = await readFile(
+          path.resolve(process.cwd(), 'data/failure-cases/goal-navigation-seed.json'),
+          'utf8',
+        );
+        response.json({ ok: true, ...JSON.parse(file) });
+      } catch {
+        response.status(503).json({ ok: false, error: 'TASK_PACK_ASSET_UNAVAILABLE' });
+      }
+    }),
+  );
   const auth = deps.auth ?? LOCAL_SIM2REAL_AUTH;
   const visibleDevicesForAuth = (owner?: string) =>
     visibleDevices(owner, auth.isMultiUserDeployment());

@@ -22,11 +22,7 @@ interface RawResponse {
   body: string;
 }
 
-function httpRequest(
-  method: string,
-  url: string,
-  body?: string,
-): Promise<RawResponse> {
+function httpRequest(method: string, url: string, body?: string): Promise<RawResponse> {
   return new Promise((resolve, reject) => {
     const request = http.request(url, { method }, (message) => {
       const chunks: Buffer[] = [];
@@ -64,9 +60,7 @@ describe('configuredMujocoWebUrl', () => {
   });
 
   it('accepts clean loopback and remote http/https origins', () => {
-    expect(configuredMujocoWebUrl('http://127.0.0.1:18100')?.href).toBe(
-      'http://127.0.0.1:18100/',
-    );
+    expect(configuredMujocoWebUrl('http://127.0.0.1:18100')?.href).toBe('http://127.0.0.1:18100/');
     expect(configuredMujocoWebUrl(' http://localhost:18100/ ')?.href).toBe(
       'http://localhost:18100/',
     );
@@ -116,7 +110,10 @@ describe('mujoco api bridge', () => {
   });
 
   // Minimal fake of the mujoco-web API surface the simulator page uses.
-  async function startMujocoUpstream(): Promise<{ baseUrl: string; hits: http.IncomingHttpHeaders[] }> {
+  async function startMujocoUpstream(): Promise<{
+    baseUrl: string;
+    hits: http.IncomingHttpHeaders[];
+  }> {
     const hits: http.IncomingHttpHeaders[] = [];
     const app = express();
     const seen: Array<http.IncomingHttpHeaders & { rawBody?: string }> = [];
@@ -169,10 +166,7 @@ describe('mujoco api bridge', () => {
     expect(created.headers['x-mujoco-bridge']).toBe('forward');
     expect(JSON.parse(created.body).id).toBe('sess-42');
 
-    const state = await httpRequest(
-      'GET',
-      `${baseUrl}/mujoco/api/sessions/sess-42/state?t=123`,
-    );
+    const state = await httpRequest('GET', `${baseUrl}/mujoco/api/sessions/sess-42/state?t=123`);
     expect(state.status).toBe(200);
     expect(JSON.parse(state.body).id).toBe('sess-42');
     expect(JSON.parse(state.body).t).toBe('123');

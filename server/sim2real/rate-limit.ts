@@ -40,9 +40,7 @@ export const RATE_LIMIT_EXEMPT_PATHS: readonly string[] = Object.freeze([
  * keeps its own session cap and body bounds, so this stays an SPA-side
  * limiter, not the only net.
  */
-export const RATE_LIMIT_EXEMPT_PREFIXES: readonly string[] = Object.freeze([
-  '/mujoco/api/',
-]);
+export const RATE_LIMIT_EXEMPT_PREFIXES: readonly string[] = Object.freeze(['/mujoco/api/']);
 
 export function isRateLimitExemptPath(requestPath: unknown): boolean {
   const normalized = String(requestPath ?? '');
@@ -98,7 +96,6 @@ export function resolveRateLimitPerMinute(
   if (!Number.isSafeInteger(value)) return DEFAULT_RATE_LIMIT_PER_MINUTE;
   return value > MAX_CONFIGURED_LIMIT ? MAX_CONFIGURED_LIMIT : value;
 }
-
 
 /** Keeps account ids out of the counters while still separating tenants. */
 export function hashRateLimitKey(value: string): string {

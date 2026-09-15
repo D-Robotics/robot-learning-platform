@@ -31,7 +31,9 @@ const ALLOWED_ORIGIN_PROTOCOLS = new Set(['http:', 'https:']);
  * are accepted; anything else (empty, malformed, other schemes) is `null`
  * and the bridge reports "not configured" instead of guessing a target.
  */
-export function configuredMujocoWebUrl(raw: unknown = process.env[MUJOCO_BRIDGE_URL_ENV]): URL | null {
+export function configuredMujocoWebUrl(
+  raw: unknown = process.env[MUJOCO_BRIDGE_URL_ENV],
+): URL | null {
   const value = String(raw ?? '').trim();
   if (!value) return null;
   let parsed: URL;
