@@ -121,6 +121,9 @@ async function openModel(key) {
   }
   $("#model-title").textContent = session.model.name;
   $("#model-description").textContent = session.model.description;
+  $("#model-source").textContent =
+    session.model.source === "registry" ? "部署方注册表 · 受审模型" : "平台内置模型";
+  $("#model-source").classList.toggle("registry", session.model.source === "registry");
   renderActuators(session.model);
   updateReadouts(session);
   await refreshFrame();
@@ -161,7 +164,10 @@ async function boot() {
   modelCatalog.forEach((model) => {
     const option = document.createElement("option");
     option.value = model.key;
-    option.textContent = model.name;
+    // Registry entries are deployer-supplied; marking them keeps the
+    // provenance visible before a session is opened.
+    option.textContent =
+      model.source === "registry" ? `${model.name} · 部署方` : model.name;
     select.append(option);
   });
   await openModel(modelCatalog[0].key);

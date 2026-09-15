@@ -48,6 +48,16 @@ input[type="range"] { accent-color: var(--cyan); width: 110px; }
 .control-section { padding-bottom: 22px; margin-bottom: 21px; border-bottom: 1px solid var(--line); }
 select { width: 100%; margin: 3px 0 9px; }
 .muted { color: var(--muted); font-size: 12px; line-height: 1.55; }
+/* Model provenance chip: builtin vs deployer-reviewed registry entry. */
+.model-source {
+  margin: 0;
+  font-size: 11px;
+  color: var(--muted);
+  letter-spacing: 0.02em;
+}
+.model-source.registry {
+  color: var(--orange, #d08770);
+}
 .actuators { display: grid; gap: 16px; margin-top: 17px; }
 .actuator-row { display: grid; gap: 7px; }
 .actuator-label { display: flex; justify-content: space-between; font-size: 13px; }
