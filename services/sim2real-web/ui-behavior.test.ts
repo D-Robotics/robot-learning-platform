@@ -62,7 +62,7 @@ function model() {
   };
 }
 
-function overview() {
+function overview(runs?: unknown[]) {
   const selectedModel = model();
   const contract = selectedModel.manifest.contract;
   return {
@@ -85,7 +85,7 @@ function overview() {
     availableContracts: [],
     contracts: { microduck: [], originbot: [], 'rdk-duck': [] },
     models: [selectedModel],
-    runs: [
+    runs: runs || [
       {
         id: 'mock-run-1',
         modelId: selectedModel.id,
@@ -172,6 +172,7 @@ async function boot(
     projects?: unknown[];
     failOverview?: boolean;
     createdProject?: unknown;
+    runs?: unknown[];
   } = {},
 ) {
   const dom = new JSDOM(html, {
@@ -237,7 +238,7 @@ async function boot(
           },
         );
       }
-      if (url.includes('/overview')) payload = overview();
+      if (url.includes('/overview')) payload = overview(options.runs);
       else if (url.includes('/workspace-summary')) {
         payload = { ok: true, counts: { models: 1, runs: 1, deployments: 0, devices: 0 } };
       } else if (url.endsWith('/projects') && method === 'POST')
@@ -354,6 +355,56 @@ describe('Sim2Real workbench DOM behavior', () => {
     expect(quality?.textContent).toContain('Mock 协议演示 · 非真实 RL');
     expect(window.document.querySelector('#eval-success')?.textContent).toBe('—');
     expect(window.document.querySelector('#eval-fall')?.textContent).toBe('—');
+    expect(errors).toEqual([]);
+  });
+
+  it('surfaces the engine-reported physics backend on the run card, chip and detail dialog', async () => {
+    const selectedModel = model();
+    const { window, errors } = await boot({
+      runs: [
+        {
+          id: 'mjx-run-1',
+          modelId: selectedModel.id,
+          backend: 'local',
+          status: 'completed',
+          summary: 'mjx smoke run',
+          mock: false,
+          metrics: {
+            contractValid: true,
+            observationSize: 61,
+            actionSize: 14,
+            physicsBackend: 'mjx',
+            engine: 'mjx-ppo',
+          },
+          createdAt: '2026-09-14T00:00:00.000Z',
+        },
+      ],
+    });
+    // train view hosts the run-progress card (the chip) and the history rows
+    window.document
+      .querySelector<HTMLButtonElement>('.sidebar [data-view-target="train"]')
+      ?.click();
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    const meta = window.document.querySelector('#run-progress-meta');
+    expect(meta?.textContent).toContain('物理 · MuJoCo MJX');
+    const physicsChip = meta?.querySelector('.physics-chip');
+    expect(physicsChip?.textContent).toContain('物理 · MuJoCo MJX');
+
+    const row = window.document.querySelector<HTMLButtonElement>('.history-row');
+    row?.click();
+    const dialog = window.document.querySelector<HTMLDialogElement>('#run-detail-dialog');
+    expect(dialog?.hasAttribute('open')).toBe(true);
+    const body = window.document.querySelector('#run-detail-body');
+    // detail grid fields
+    expect(body?.textContent).toContain('物理后端');
+    expect(body?.textContent).toContain('MuJoCo MJX（接触动力学）');
+    expect(body?.textContent).toContain('训练引擎');
+    expect(body?.textContent).toContain('mjx-ppo');
+    // first-class metric cards
+    const cards = body?.querySelectorAll('.run-metric-card') || [];
+    const labels = Array.from(cards).map((card) => card.querySelector('span')?.textContent);
+    expect(labels).toContain('物理后端');
+    expect(labels).toContain('训练引擎');
     expect(errors).toEqual([]);
   });
 

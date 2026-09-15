@@ -430,6 +430,18 @@ function safeMetrics(value: unknown): Sim2RealRunMetrics | undefined {
     const value = Number(source[key]);
     return Number.isFinite(value) && value >= min && value <= max ? value : undefined;
   };
+  // Engine self-labeling (which physics trained the policy, which engine
+  // produced the run) — bounded to a safe identifier charset so a hostile
+  // worker cannot smuggle markup through the ledger/UI path.
+  const safeLabel = (key: string): string | undefined => {
+    const value = source[key];
+    if (value == null) return undefined;
+    return typeof value === 'string' && /^[a-zA-Z0-9][a-zA-Z0-9._-]{0,63}$/.test(value)
+      ? value
+      : undefined;
+  };
+  const physicsBackend = safeLabel('physicsBackend');
+  const engine = safeLabel('engine');
   return {
     contractValid,
     observationSize,
@@ -448,6 +460,8 @@ function safeMetrics(value: unknown): Sim2RealRunMetrics | undefined {
     ...(bounded('iterations', 0, 2_000_000) == null
       ? {}
       : { iterations: bounded('iterations', 0, 2_000_000) }),
+    ...(physicsBackend == null ? {} : { physicsBackend }),
+    ...(engine == null ? {} : { engine }),
     ...(source.cuda === true ? { cuda: true } : source.cuda === false ? { cuda: false } : {}),
   };
 }

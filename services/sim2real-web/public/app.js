@@ -2384,6 +2384,14 @@ function renderHistory() {
   }
 }
 
+// Honest physics-backend labels: an engine self-reports which physics
+// actually trained the policy; the label must never overstate it.
+const PHYSICS_BACKEND_LABELS = {
+  mjx: 'MuJoCo MJX（接触动力学）',
+  'starter-kinematic': 'starter 运动学（无接触）',
+  mujoco: 'MuJoCo CPU',
+};
+
 // Human-readable metric cards for the run detail dialog. Every known metric
 // field gets a labeled card; anything the schema gains later still shows up in
 // the raw JSON block below instead of silently disappearing.
@@ -2396,6 +2404,12 @@ const RUN_METRIC_CARDS = [
   ['controlLatencyMs', '控制延迟', (value) =>
     typeof value === 'number' && Number.isFinite(value) ? value.toFixed(1) + 'ms' : '—'],
   ['iterations', '迭代数', (value) => formatMetricNumber(value, 0)],
+  ['engine', '训练引擎', (value) => (typeof value === 'string' ? value : '—')],
+  [
+    'physicsBackend',
+    '物理后端',
+    (value) => (typeof value === 'string' ? PHYSICS_BACKEND_LABELS[value] || value : '—'),
+  ],
   [
     'cuda',
     '训练设备',
@@ -2495,6 +2509,10 @@ function openRecordDetails(record) {
     ...(isRun && record.training?.profile ? [['训练档位', record.training.profile]] : []),
     ...(isRun && record.training?.algorithm
       ? [['算法', record.training.algorithm.toUpperCase()]]
+      : []),
+    ...(isRun && record.metrics?.engine ? [['训练引擎', record.metrics.engine]] : []),
+    ...(isRun && record.metrics?.physicsBackend
+      ? [['物理后端', PHYSICS_BACKEND_LABELS[record.metrics.physicsBackend] || record.metrics.physicsBackend]]
       : []),
     ...(isRun && record.training?.numEnvs ? [['并行环境', record.training.numEnvs]] : []),
     ...(isRun && record.training?.maxIterations
@@ -4532,12 +4550,22 @@ function renderRunProgress() {
         ? '动作 · ' + ACTION_TASKS[latest.taskId].label
         : '',
       latest.backend ? '后端 · ' + latest.backend : '',
+      latest.metrics?.physicsBackend
+        ? '物理 · ' + (PHYSICS_BACKEND_LABELS[latest.metrics.physicsBackend] || latest.metrics.physicsBackend)
+        : '',
       latest.training?.profile ? '档位 · ' + latest.training.profile : '',
       latest.training?.numEnvs ? '环境 · ' + latest.training.numEnvs : '',
       latest.checkpoint?.iteration != null ? 'checkpoint · ' + latest.checkpoint.iteration : '',
       latest.createdAt ? '创建 · ' + formatDate(latest.createdAt) : '',
     ].filter(Boolean);
     meta.innerHTML = chips.map((chip) => '<span>' + escapeHtml(chip) + '</span>').join('');
+    // The physics chip is the engine's honest self-label; anchor it with the
+    // stronger border. Chips share one span shape, so find it by its stable
+    // "物理 · " prefix.
+    const physicsChip = Array.from(meta.children).find((el) =>
+      el.textContent?.startsWith('物理 · '),
+    );
+    physicsChip?.classList.add('physics-chip');
   }
   $('run-progress-warning')?.toggleAttribute('hidden', latest.mock !== true);
   renderRunProgressTrack(latest);

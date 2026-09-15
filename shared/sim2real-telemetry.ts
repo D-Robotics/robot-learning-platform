@@ -31,6 +31,15 @@ export interface Sim2RealRunMetrics {
   controlLatencyMs?: number;
   iterations?: number;
   /**
+   * Physics backend the engine actually trained on (e.g. "mjx" for real
+   * MuJoCo contact dynamics via MJX, "starter-kinematic" for the starter
+   * GoalNavEnv fallback). Honest engine self-labeling; absent means the
+   * backend did not report it.
+   */
+  physicsBackend?: string;
+  /** Engine id that produced the run (e.g. "mjx-ppo", "mjlab-rsl-rl"). */
+  engine?: string;
+  /**
    * True only when the training backend actually ran on CUDA. A requested but
    * unavailable GPU falls back to CPU and must stay false; an absent value
    * means the backend did not report it (never assume GPU).

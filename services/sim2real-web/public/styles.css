@@ -2769,6 +2769,11 @@ h2 {
   padding: 4px 7px;
   background: rgba(28, 28, 26, 0.02);
 }
+/* Physics-backend chip: the engine's own honest claim of which physics
+   trained the policy — anchored with the stronger border. */
+.run-progress-meta .physics-chip {
+  border-color: var(--line-strong, var(--line));
+}
 .run-progress-track {
   position: relative;
   height: 22px;
