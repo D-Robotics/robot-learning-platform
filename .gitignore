@@ -30,3 +30,10 @@ gui-test-screenshots/
 
 # Local operator notes; may contain private infrastructure addresses.
 docs/server-inventory.local.md
+
+# ZCode agent session plans reference local machine paths and internal
+# deployment topology; they are working notes, not repo content.
+.zcode/
+
+# MuJoCo runtime log written next to the CWD of physics backends.
+MUJOCO_LOG.TXT
