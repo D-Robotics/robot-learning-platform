@@ -1,7 +1,7 @@
 import http from 'node:http';
 import type { AddressInfo } from 'node:net';
 import express from 'express';
-import type { NextFunction, Request, Response } from 'express';
+import type { Request } from 'express';
 
 import { afterEach, describe, expect, it } from 'vitest';
 

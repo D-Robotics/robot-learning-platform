@@ -1,4 +1,4 @@
-import type { Request, RequestHandler, Response } from 'express';
+import type { RequestHandler, Response } from 'express';
 
 /**
  * Local MuJoCo Web bridge.

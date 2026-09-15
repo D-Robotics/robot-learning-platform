@@ -59,10 +59,6 @@ interface CachedEntry {
 
 const staticCache = new Map<string, CachedEntry>();
 
-interface ZlibError extends Error {
-  errno?: number;
-}
-
 function acceptsGzip(request: Request): boolean {
   const header = request.headers['accept-encoding'];
   const value = Array.isArray(header) ? header[0] : header;
