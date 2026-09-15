@@ -2326,6 +2326,8 @@ function renderHistory() {
         record.taskId && ACTION_TASKS[record.taskId]?.label,
         record.backend,
         record.mode,
+        record.recordType === 'run' && record.metrics?.physicsBackend,
+        record.recordType === 'run' && record.metrics?.engine,
       ]
         .filter(Boolean)
         .some((value) => String(value).toLowerCase().includes(query));
@@ -2359,6 +2361,13 @@ function renderHistory() {
     const syntheticRun =
       record.recordType === 'run' && record.evaluation?.replay?.source === 'demo-fixture';
     const demoTelemetry = record.recordType === 'telemetry' && record.source === 'demo-fixture';
+    // Rows compare runs at a glance, so the chip uses the compact label;
+    // the full label stays in the detail dialog and metric cards.
+    const physicsChip =
+      record.recordType === 'run' && record.metrics?.physicsBackend
+        ? PHYSICS_BACKEND_SHORT[record.metrics.physicsBackend] ||
+          '物理 · ' + record.metrics.physicsBackend
+        : '';
     row.innerHTML =
       '<span class="history-time">' +
       escapeHtml(formatDate(record.createdAt)) +
@@ -2368,6 +2377,9 @@ function renderHistory() {
       ) +
       '</span><span class="history-summary">' +
       escapeHtml(record.summary || record.modelId || '') +
+      (physicsChip
+        ? '<span class="history-physics">' + escapeHtml(physicsChip) + '</span>'
+        : '') +
       '</span><span class="history-status history-status-' +
       escapeHtml(status) +
       '">' +
@@ -2390,6 +2402,14 @@ const PHYSICS_BACKEND_LABELS = {
   mjx: 'MuJoCo MJX（接触动力学）',
   'starter-kinematic': 'starter 运动学（无接触）',
   mujoco: 'MuJoCo CPU',
+};
+
+// Compact form for the history rows: rows compare runs at a glance, so
+// the full label stays in the detail dialog and the metric cards.
+const PHYSICS_BACKEND_SHORT = {
+  mjx: '物理 · MJX',
+  'starter-kinematic': '物理 · 运动学',
+  mujoco: '物理 · MuJoCo',
 };
 
 // Human-readable metric cards for the run detail dialog. Every known metric

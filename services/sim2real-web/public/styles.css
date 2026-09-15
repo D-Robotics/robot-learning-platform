@@ -2774,6 +2774,19 @@ h2 {
 .run-progress-meta .physics-chip {
   border-color: var(--line-strong, var(--line));
 }
+/* History rows carry the compact physics label inline with the summary
+   so runs from different engines are told apart without opening details. */
+.history-physics {
+  display: inline-block;
+  margin-left: 8px;
+  padding: 1px 7px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  color: var(--muted);
+  font-size: 10.5px;
+  white-space: nowrap;
+  vertical-align: 1px;
+}
 .run-progress-track {
   position: relative;
   height: 22px;

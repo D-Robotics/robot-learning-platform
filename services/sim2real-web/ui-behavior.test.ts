@@ -391,6 +391,9 @@ describe('Sim2Real workbench DOM behavior', () => {
     expect(physicsChip?.textContent).toContain('物理 · MuJoCo MJX');
 
     const row = window.document.querySelector<HTMLButtonElement>('.history-row');
+    // the row itself tells engines apart without opening the dialog
+    const rowPhysics = row?.querySelector('.history-physics');
+    expect(rowPhysics?.textContent).toContain('物理 · MJX');
     row?.click();
     const dialog = window.document.querySelector<HTMLDialogElement>('#run-detail-dialog');
     expect(dialog?.hasAttribute('open')).toBe(true);
