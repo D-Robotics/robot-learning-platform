@@ -620,3 +620,69 @@ html.theme-dark .onboard-item.is-current .onboard-cta {
     border-bottom: 1px solid var(--line);
   }
 }
+
+/* ---------- ④ 布局密度：消除宽屏留白（pro-skin 布局层） ----------
+   三个来源：
+   1. product-polish.css 11 行把外壳限到 min(1480px, 100% - 56px)——
+      超宽屏两侧空地持续变大，且 1480 已低于现代笔记本满宽。
+   2. styles.css 1731 把仿真 iframe 高度写死 500px，宽屏上画布上下
+      留白随宽度增加；高度跟随视口后不再依赖宽度。
+   3. 32px 网格沟 + 19px 面板内衬在 1440 下约吃掉 4% 可视面积。
+   全部通过 pro-skin 层同优先级覆盖，不回改 styles.css。 */
+
+.app-shell {
+  width: min(1760px, calc(100% - 40px));
+  padding: 14px 0 30px;
+}
+
+/* 面板内衬微收：19px → 16px，与参考版 12px 和 workbench 密度层一致。 */
+.panel {
+  padding: 16px;
+}
+
+/* 仿真画布：500px 写死高改为跟随视口（上限 720px），宽屏不再留白。 */
+.simulator-frame-wrap,
+.simulator-frame-wrap iframe {
+  min-height: 60vh;
+  height: 60vh;
+}
+
+/* 网格沟与侧栏：32px 沟 → 24px；232px 侧栏 → 210px；915px 以下降级
+   回单列（原 820 断点提前到 915，避免右栏过窄）。 */
+.shell-layout {
+  grid-template-columns: 210px minmax(0, 1fr);
+  gap: 24px;
+}
+
+.sim-layout,
+.train-layout,
+.deploy-layout,
+.records-layout {
+  gap: 14px;
+}
+
+@media (min-width: 1081px) and (max-width: 1280px) {
+  .app-shell {
+    width: min(1480px, calc(100% - 32px));
+  }
+}
+
+@media (max-width: 1080px) {
+  .app-shell {
+    width: min(100% - 24px, 740px);
+  }
+  /* ④ 的桌面双列规则在源顺序上晚于 ③ 段的窄屏回退，会把它压掉——
+     这里必须重申单列，窄屏才回到侧栏上收的原生布局。 */
+  .shell-layout {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 16px;
+  }
+  .panel {
+    padding: 14px;
+  }
+  .simulator-frame-wrap,
+  .simulator-frame-wrap iframe {
+    min-height: 58vh;
+    height: 58vh;
+  }
+}
