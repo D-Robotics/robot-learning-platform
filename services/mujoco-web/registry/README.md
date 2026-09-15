@@ -46,6 +46,15 @@
 `controlPeriod`（20 Hz）等路径随之可用；`lidar_angles`/`lidar_range_max` 与
 `wheel_radius` 是一组元数据，单独出现会被拒绝。
 
+## 相机约定
+
+浏览器的渲染画面使用名为 `overview` 的固定相机。内置模型都定义了它；
+注册表模型**不是必须**提供：没有 `overview` 相机时，服务自动用 MuJoCo
+默认自由相机渲染（视角不可控但画面可用）。想要可控的教学视角，就在
+MJCF 的 `worldbody` 里加 `<camera name="overview" pos="..." xyaxes="..."/>`。
+深度端点（`depth.jpg` / `depth.png`）对非 originbot 模型同样先找 `overview`
+相机，找不到时也回退默认相机。
+
 ## 放样例
 
 `example-model.json.example` 是一个最小可编译条目。启用方式：

@@ -575,9 +575,21 @@ def _hide_sensor_debug_geometry(
                 geom.category = 0
 
 
+def _named_camera_or_default(session: SimulationSession, name: str) -> str | int:
+    """Builtin models define the named cameras; a registry entry may compile
+    cleanly without them. Resolve to the name when present, else -1 (MuJoCo's
+    free-camera sentinel for update_scene) instead of failing the endpoint —
+    update_scene raises TypeError on None, so -1 is the value that actually
+    selects the default camera.
+    """
+    model = session.data.model
+    camera_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_CAMERA, name)
+    return name if isinstance(camera_id, int) and camera_id >= 0 else -1
+
+
 def _render(session: SimulationSession) -> bytes:
     renderer = _renderer(session, "rgb")
-    renderer.update_scene(session.data, camera="overview")
+    renderer.update_scene(session.data, camera=_named_camera_or_default(session, "overview"))
     _hide_sensor_debug_geometry(renderer)
     pixels = renderer.render()
     image = Image.fromarray(pixels, mode="RGB")
@@ -683,7 +695,11 @@ def session_depth(session_id: str) -> Response:
     with _sessions_lock:
         session = _get_session(session_id)
         renderer = _renderer(session, "depth")
-        camera = "depth_camera" if session.definition.key == "originbot" else "overview"
+        camera = (
+            "depth_camera"
+            if session.definition.key == "originbot"
+            else _named_camera_or_default(session, "overview")
+        )
         renderer.update_scene(session.data, camera=camera)
         _hide_sensor_debug_geometry(renderer, rangefinder_only=True)
         renderer.enable_depth_rendering()
@@ -711,7 +727,11 @@ def session_depth_raw(session_id: str) -> Response:
     with _sessions_lock:
         session = _get_session(session_id)
         renderer = _renderer(session, "depth")
-        camera = "depth_camera" if session.definition.key == "originbot" else "overview"
+        camera = (
+            "depth_camera"
+            if session.definition.key == "originbot"
+            else _named_camera_or_default(session, "overview")
+        )
         renderer.update_scene(session.data, camera=camera)
         _hide_sensor_debug_geometry(renderer, rangefinder_only=True)
         renderer.enable_depth_rendering()
