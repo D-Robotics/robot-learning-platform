@@ -114,6 +114,30 @@ After updating either `current` directory, run `systemctl restart` for the
 corresponding unit; `enable --now` alone does not reload an already-running
 process.
 
+#### Deployer model registry (optional extra models)
+
+The service ships with the reviewed builtin models (cartpole,
+double-pendulum, originbot). Deployers can add their **own reviewed MJCF
+models** without touching code: drop a `<key>.json` entry into
+`services/mujoco-web/registry/` following the contract in
+`registry/README.md` (a minimal `example-model.json.example` sits beside it
+and is never loaded). Entries arrive through your config management, not
+through a network upload — the directory itself is the reviewed whitelist.
+
+Every entry is shape-validated **and compiled with real MuJoCo at service
+startup**; an invalid entry (bad MJCF, actuator-count mismatch with
+`actuator_names`, a key colliding with a builtin) makes the process refuse
+to start instead of serving a broken model. Valid entries appear in
+`/api/models` and the browser model dropdown automatically, labeled
+`source: "registry"` (builtin models answer `source: "builtin"`). CI covers
+the same checks through `npm run verify:mujoco-models` (SKIP without
+mujoco).
+
+Because the production release is a copy under `/opt/mujoco-web/current`,
+deploy the registry with the release — `sudo cp -a` of the checkout already
+carries `registry/`; afterwards `systemctl restart mujoco-web.service` and
+verify with `curl http://127.0.0.1:18100/api/models`.
+
 If the HTTPS virtual host has not yet received a MuJoCo route, install the
 safe, marker-based routes and validate Nginx before reloading it. Run the
 base route first; the second installer adds the MicroDuck redirect and the

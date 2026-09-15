@@ -1,0 +1,8 @@
+{
+  "key": "example-mass",
+  "name": "示例滑块（注册表样例）",
+  "description": "registry/README.md 的最小可编译样例：一个水平滑动的质量块，单个推力执行器。把本文件复制为 <key>.json 即被注册表加载。",
+  "actuator_names": ["推力"],
+  "xml": "<mujoco model=\"example_mass\"><compiler angle=\"radian\" autolimits=\"true\"/><option timestep=\"0.01\" gravity=\"0 0 -9.81\" integrator=\"implicitfast\"/><visual><global offwidth=\"640\" offheight=\"480\"/></visual><asset><texture name=\"checker\" type=\"2d\" builtin=\"checker\" rgb1=\"0.14 0.17 0.21\" rgb2=\"0.08 0.09 0.12\" width=\"512\" height=\"512\"/><material name=\"floor\" texture=\"checker\" texrepeat=\"8 8\"/></asset><worldbody><light name=\"key\" pos=\"0 -3 5\" dir=\"0 0 -1\" directional=\"true\"/><geom name=\"floor\" type=\"plane\" size=\"5 5 0.05\" material=\"floor\"/><body name=\"mass\" pos=\"0 0 0.12\"><joint name=\"slide\" type=\"slide\" axis=\"1 0 0\" range=\"-1.5 1.5\" limited=\"true\" damping=\"1.2\"/><geom name=\"box\" type=\"box\" size=\"0.12 0.12 0.10\" mass=\"2\" rgba=\"0.12 0.55 0.95 1\"/></body><camera name=\"overview\" pos=\"2 -3.5 1.8\" xyaxes=\"0.9 0.4 0 -0.15 0.35 0.9\"/></worldbody><actuator><motor name=\"push\" joint=\"slide\" gear=\"12\" ctrllimited=\"true\" ctrlrange=\"-1 1\"/></actuator></mujoco>",
+  "initial_qpos": [0.0]
+}

@@ -272,6 +272,7 @@ def _metadata(definition: ModelDefinition, model: mujoco.MjModel) -> dict[str, A
         "key": definition.key,
         "name": definition.name,
         "description": definition.description,
+        "source": definition.source,
         "timestep": float(model.opt.timestep),
         "controlPeriod": CMD_VEL_STEP_SECONDS if definition.wheel_radius is not None else float(model.opt.timestep),
         "controlHz": round(1.0 / CMD_VEL_STEP_SECONDS) if definition.wheel_radius is not None else round(1.0 / float(model.opt.timestep)),
@@ -590,6 +591,7 @@ def models() -> dict[str, Any]:
                 "key": definition.key,
                 "name": definition.name,
                 "description": definition.description,
+                "source": definition.source,
                 "actuators": list(definition.actuator_names),
                 **({
                     "wheelRadius": definition.wheel_radius,

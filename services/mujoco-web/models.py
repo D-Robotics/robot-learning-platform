@@ -1,4 +1,10 @@
 from dataclasses import dataclass
+import json
+import math
+import pathlib
+import re
+
+import mujoco
 
 
 @dataclass(frozen=True)
@@ -16,6 +22,9 @@ class ModelDefinition:
     max_wheel_speed: float | None = None
     lidar_angles: tuple[float, ...] = ()
     lidar_range_max: float | None = None
+    # Provenance: "builtin" models ship with the platform; "registry" models
+    # are deployer-reviewed entries from services/mujoco-web/registry/.
+    source: str = "builtin"
 
 
 CARTPOLE_XML = r"""
@@ -214,3 +223,180 @@ MODEL_DEFINITIONS = {
         lidar_range_max=4.0,
     ),
 }
+
+
+# ---------------------------------------------------------------------------
+# Deployer model registry
+#
+# The registry is a filesystem whitelist, reviewed like code: entries land
+# here through deployer config management (git/scp/ansible), never through a
+# network upload endpoint. See registry/README.md for the entry contract.
+# Every entry is shape-validated AND compiled with real MuJoCo at import
+# time; an invalid entry raises so the service refuses to start instead of
+# serving a broken model (fail-closed).
+# ---------------------------------------------------------------------------
+
+_REGISTRY_DIR = pathlib.Path(__file__).resolve().parent / "registry"
+_KEY_PATTERN = re.compile(r"^[a-z0-9][a-z0-9-]{0,31}$")
+# Matches the StepRequest controls cap in app.py.
+_MAX_ACTUATORS = 32
+
+
+def _registry_error(path: pathlib.Path, reason: str) -> ValueError:
+    return ValueError(f"mujoco-web model registry {path.name}: {reason}")
+
+
+def _registry_string(path: pathlib.Path, raw: dict, field: str, max_length: int) -> str:
+    value = raw.get(field)
+    if not isinstance(value, str):
+        raise _registry_error(path, f"'{field}' must be a string")
+    value = value.strip()
+    if not value or len(value) > max_length:
+        raise _registry_error(path, f"'{field}' must be 1..{max_length} characters")
+    return value
+
+
+def _registry_number(
+    path: pathlib.Path,
+    raw: dict,
+    field: str,
+    *,
+    minimum: float,
+    required: bool,
+) -> float | None:
+    if field not in raw:
+        if required:
+            raise _registry_error(path, f"'{field}' is required")
+        return None
+    value = raw[field]
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise _registry_error(path, f"'{field}' must be a number")
+    value = float(value)
+    if not math.isfinite(value) or value < minimum:
+        raise _registry_error(path, f"'{field}' must be a finite number >= {minimum}")
+    return value
+
+
+def _load_registry_entry(path: pathlib.Path) -> ModelDefinition:
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise _registry_error(path, f"cannot read JSON ({exc})") from exc
+    if not isinstance(raw, dict):
+        raise _registry_error(path, "top-level value must be a JSON object")
+
+    key = _registry_string(path, raw, "key", 32)
+    if not _KEY_PATTERN.fullmatch(key):
+        raise _registry_error(path, "'key' must match [a-z0-9][a-z0-9-]* (max 32)")
+    name = _registry_string(path, raw, "name", 64)
+    description = _registry_string(path, raw, "description", 400)
+
+    xml = raw.get("xml")
+    if not isinstance(xml, str) or not xml.strip() or len(xml) > 200_000:
+        raise _registry_error(path, "'xml' must be a non-empty MJCF string (max 200000 characters)")
+
+    actuator_raw = raw.get("actuator_names")
+    if not isinstance(actuator_raw, list) or not 1 <= len(actuator_raw) <= _MAX_ACTUATORS:
+        raise _registry_error(path, f"'actuator_names' must be a list of 1..{_MAX_ACTUATORS} names")
+    actuator_names: list[str] = []
+    for item in actuator_raw:
+        if not isinstance(item, str) or not item.strip() or len(item) > 64:
+            raise _registry_error(path, "actuator names must be 1..64 character strings")
+        actuator_names.append(item.strip())
+
+    qpos_raw = raw.get("initial_qpos", [])
+    if not isinstance(qpos_raw, list) or len(qpos_raw) > 64:
+        raise _registry_error(path, "'initial_qpos' must be a list of at most 64 numbers")
+    initial_qpos: list[float] = []
+    for item in qpos_raw:
+        if isinstance(item, bool) or not isinstance(item, (int, float)) or not math.isfinite(float(item)):
+            raise _registry_error(path, "'initial_qpos' entries must be finite numbers")
+        initial_qpos.append(float(item))
+
+    wheel_radius = _registry_number(path, raw, "wheel_radius", minimum=1e-4, required=False)
+    track_width = _registry_number(path, raw, "track_width", minimum=1e-4, required=False)
+    max_wheel_speed = _registry_number(path, raw, "max_wheel_speed", minimum=1e-4, required=False)
+    lidar_range_max = _registry_number(path, raw, "lidar_range_max", minimum=1e-4, required=False)
+    lidar_raw = raw.get("lidar_angles", [])
+    if not isinstance(lidar_raw, list) or len(lidar_raw) > 64:
+        raise _registry_error(path, "'lidar_angles' must be a list of at most 64 angles")
+    lidar_angles: list[float] = []
+    for item in lidar_raw:
+        if isinstance(item, bool) or not isinstance(item, (int, float)) or not math.isfinite(float(item)):
+            raise _registry_error(path, "'lidar_angles' entries must be finite numbers")
+        lidar_angles.append(float(item))
+    if (lidar_angles or lidar_range_max is not None) and wheel_radius is None:
+        raise _registry_error(
+            path,
+            "'lidar_angles'/'lidar_range_max' require 'wheel_radius' (differential-drive metadata is one group)",
+        )
+
+    # Compile with real MuJoCo before the definition is accepted. This is the
+    # fail-closed gate: route handlers index actuator metadata by position, so
+    # a compiled actuator count that disagrees with actuator_names means the
+    # entry lies about the robot and must stop the service, not serve it.
+    try:
+        compiled = mujoco.MjModel.from_xml_string(xml)
+    except Exception as exc:  # mujoco raises ValueError on bad MJCF
+        raise _registry_error(path, f"MJCF does not compile ({exc})") from exc
+    if compiled.nu != len(actuator_names):
+        raise _registry_error(
+            path,
+            f"'actuator_names' has {len(actuator_names)} entries but the MJCF exposes {compiled.nu} actuators",
+        )
+    if compiled.nq < len(initial_qpos):
+        raise _registry_error(
+            path,
+            f"'initial_qpos' has {len(initial_qpos)} values but the MJCF has {compiled.nq} position DOFs",
+        )
+
+    return ModelDefinition(
+        key=key,
+        name=name,
+        description=description,
+        actuator_names=tuple(actuator_names),
+        xml=xml,
+        initial_qpos=tuple(initial_qpos),
+        wheel_radius=wheel_radius,
+        track_width=track_width,
+        max_wheel_speed=max_wheel_speed,
+        lidar_angles=tuple(lidar_angles),
+        lidar_range_max=lidar_range_max,
+        source="registry",
+    )
+
+
+def load_registry_models(
+    registry_dir: pathlib.Path | None = None,
+    reserved_keys: frozenset[str] | set[str] = frozenset(),
+) -> dict[str, ModelDefinition]:
+    """Load deployer-reviewed models from the registry directory.
+
+    Only strict ``*.json`` files are considered (README.md and the
+    ``*.json.example`` sample are ignored). Keys colliding with builtin
+    models or another registry entry raise, so a deployer cannot silently
+    shadow a reviewed platform model.
+    """
+    directory = _REGISTRY_DIR if registry_dir is None else pathlib.Path(registry_dir)
+    if not directory.is_dir():
+        return {}
+    definitions: dict[str, ModelDefinition] = {}
+    taken: set[str] = set(reserved_keys)
+    for path in sorted(directory.glob("*.json")):
+        definition = _load_registry_entry(path)
+        if definition.key in taken:
+            raise _registry_error(
+                path,
+                f"key '{definition.key}' is already used by a builtin or another registry entry",
+            )
+        taken.add(definition.key)
+        definitions[definition.key] = definition
+    return definitions
+
+
+# Registry models merge at import time so every route that reads
+# MODEL_DEFINITIONS serves deployer-provisioned models with zero route
+# changes, and an invalid entry stops the process at startup.
+MODEL_DEFINITIONS.update(
+    load_registry_models(reserved_keys=frozenset(MODEL_DEFINITIONS))
+)
