@@ -46,6 +46,10 @@
   let depthObjectUrl = null;
   let lastOutcome = '';
   let pageUnloading = false;
+  // Recorded replay trajectory and policy-drive session state (driven by
+  // postMessage from the parent Sim2Real Run page).
+  let replayTrace = null;
+  let policySession = null;
 
   const finite = (value, fallback = 0) =>
     Number.isFinite(Number(value)) ? Number(value) : fallback;
@@ -81,9 +85,28 @@
       } catch {
         // Keep the status useful even when a gateway closes the body.
       }
-      throw new Error(`${response.status} ${detail || response.statusText || 'request failed'}`);
+      throw new Error(`${response.status} ${describeUpstreamFailure(response, detail)}`);
     }
     return response.json();
+  }
+
+  // A gateway/bridge failure arrives as JSON (`{"error":"..."}`) or as an
+  // HTML error page (Express fallbacks). Surfacing the raw HTML flooded the
+  // diagnostics bar with markup; project both shapes to one short line.
+  function describeUpstreamFailure(response, detail) {
+    const contentType = String(response.headers.get('content-type') || '');
+    if (contentType.includes('application/json')) {
+      try {
+        const parsed = JSON.parse(detail);
+        const code = typeof parsed?.error === 'string' ? parsed.error : '';
+        const message = typeof parsed?.message === 'string' ? parsed.message : '';
+        return [code, message].filter(Boolean).join('：') || 'request failed';
+      } catch {
+        return 'request failed';
+      }
+    }
+    const text = String(detail || '').replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+    return text.slice(0, 80) || response.statusText || 'request failed';
   }
 
   function releaseSession() {
@@ -177,6 +200,22 @@
       const y = worldToMap(0, i, width, height).y;
       mapContext.beginPath(); mapContext.moveTo(x, 0); mapContext.lineTo(x, height); mapContext.stroke();
       mapContext.beginPath(); mapContext.moveTo(0, y); mapContext.lineTo(width, y); mapContext.stroke();
+    }
+    // Recorded replay trajectory (from the parent Run page): a fading trail
+    // so the operator can see the full evaluation rollout, not just the
+    // per-frame marker.
+    if (replayTrace && replayTrace.positions.length) {
+      mapContext.strokeStyle = '#55ddb0';
+      mapContext.lineWidth = 2;
+      mapContext.globalAlpha = 0.7;
+      mapContext.beginPath();
+      replayTrace.positions.forEach((point, index) => {
+        const pixel = worldToMap(point.x, point.y, width, height);
+        if (index === 0) mapContext.moveTo(pixel.x, pixel.y);
+        else mapContext.lineTo(pixel.x, pixel.y);
+      });
+      mapContext.stroke();
+      mapContext.globalAlpha = 1;
     }
     const position = positionOf(state);
     const robot = worldToMap(position.x, position.y, width, height);
@@ -487,6 +526,202 @@
     updateGoalReadout();
     setEvent(message, 'ok');
   }
+
+  // ---- embedded replay / policy-drive channel (parent app.js) ----
+  // The parent Run page posts frames of a completed run's evaluation
+  // telemetry. Rendering keeps the physics session untouched: the replay is
+  // recorded evidence, not a re-simulation, so it paints onto the map view
+  // as a trajectory trace while the robot marker follows the frame's
+  // position.
+  function renderReplayFrame(frame) {
+    if (!frame || !Array.isArray(frame.observation)) return;
+    const [x, y] = frame.observation;
+    if (!Number.isFinite(x) || !Number.isFinite(y)) return;
+    if (!replayTrace) replayTrace = { positions: [], t: [] };
+    replayTrace.positions.push({ x, y });
+    replayTrace.t.push(finite(frame.t));
+    if (replayTrace.positions.length > 2000) {
+      replayTrace.positions.shift();
+      replayTrace.t.shift();
+    }
+    const mockState = {
+      qpos: [x, y, 0, 1, 0, 0, 0],
+      sensors: {
+        odom: { x, y },
+        scan: Array.isArray(frame.observation) ? [] : [],
+      },
+      time: finite(frame.t),
+    };
+    drawMap(mockState);
+    if ($('map-readout')) {
+      $('map-readout').textContent = `回放 t=${finite(frame.t).toFixed(2)} s`;
+    }
+    setEvent(`回放帧 ${replayTrace.positions.length}：position (${x.toFixed(2)}, ${y.toFixed(2)})`, 'ok');
+  }
+
+  // Policy trial runs entirely inside this page (microduck pattern): the
+  // parent posts only clonable data (runId + API root); postMessage cannot
+  // carry functions, so the ONNX session, the bytes fetch, and the inference
+  // loop all live here. Status flows back through 'rdk-policy-status'.
+  const postPolicyStatus = (phase, message) => {
+    try {
+      window.parent?.postMessage({ type: 'rdk-policy-status', phase, message }, '*');
+    } catch {
+      // A detached or cross-origin parent simply misses the status update;
+      // the local event line below still informs this page.
+    }
+  };
+
+  let ortRuntime = null;
+  async function loadOrt() {
+    if (ortRuntime) return ortRuntime;
+    await new Promise((resolve, reject) => {
+      const script = document.createElement('script');
+      // This page lives at <base>/originbot-sim/; the vendored runtime sits
+      // at <base>/vendor/ — same origin, no CDN.
+      script.src = new URL('../vendor/onnxruntime-web/dist/ort.min.js', document.baseURI).toString();
+      script.onload = resolve;
+      script.onerror = () => reject(new Error('ONNX 运行时脚本加载失败'));
+      document.head.appendChild(script);
+    });
+    const ort = window?.ort;
+    if (!ort) throw new Error('ONNX 运行时未正确暴露 window.ort');
+    ort.env.wasm.wasmPaths = new URL('../vendor/onnxruntime-web/dist/', document.baseURI).toString();
+    ort.env.wasm.numThreads = 1;
+    ortRuntime = ort;
+    return ort;
+  }
+
+  async function startPolicyRun(options = {}) {
+    if (policySession) {
+      setEvent('策略试跑已在进行中。', 'warn');
+      return;
+    }
+    const runId = String(options.runId || '').trim();
+    const apiRoot = String(options.apiRoot || '').trim();
+    if (!runId || !apiRoot) {
+      setEvent('父页面未提供 runId / apiRoot，无法试跑策略。', 'warn');
+      postPolicyStatus('failed', '缺少 runId 或 apiRoot。');
+      return;
+    }
+    if (!sessionId) {
+      setEvent('MuJoCo 会话不可用，策略试跑中止。', 'warn');
+      postPolicyStatus('failed', 'MuJoCo 会话不可用。');
+      return;
+    }
+    policySession = {
+      runId,
+      maxSteps: finite(options.maxSteps, 600),
+      steps: 0,
+      session: null,
+    };
+    setEvent(`策略试跑开始：run ${runId.slice(0, 8)}（最多 ${policySession.maxSteps} 步）。`, 'ok');
+    postPolicyStatus('loading', '正在加载浏览器 ONNX 运行时…');
+    try {
+      const ort = await loadOrt();
+      const response = await fetch(
+        `${apiRoot.replace(/\/+$/, '')}/runs/${encodeURIComponent(runId)}/policy.onnx`,
+        { credentials: 'same-origin', cache: 'no-store', headers: { accept: 'application/octet-stream' } },
+      );
+      if (!response.ok) throw new Error(`策略字节获取失败（HTTP ${response.status}）`);
+      const bytes = await response.arrayBuffer();
+      if (!bytes.byteLength) throw new Error('策略字节为空');
+      postPolicyStatus('loading', '正在编译 ONNX 模型（首次约数秒）…');
+      policySession.session = await ort.InferenceSession.create(bytes, {
+        executionProviders: ['wasm'],
+        graphOptimizationLevel: 'all',
+      });
+      postPolicyStatus('running', `模型已编译，开始推理（${policySession.maxSteps} 步上限）。`);
+      runPolicyStep();
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      setEvent(`策略试跑启动失败：${message}`, 'warn');
+      postPolicyStatus('failed', message);
+      policySession = null;
+    }
+  }
+
+  async function runPolicyStep() {
+    if (!policySession || !policySession.session) return;
+    if (policySession.steps >= policySession.maxSteps) {
+      const reached = latestState && distanceToGoal(latestState) <= GOAL_EPSILON;
+      const message = `策略试跑结束：${policySession.steps} 步${reached ? '，到达目标点。' : '，达到步数上限。'}`;
+      setEvent(message, reached ? 'ok' : 'warn');
+      postPolicyStatus('finished', message);
+      policySession = null;
+      return;
+    }
+    try {
+      const state = await api(`sessions/${sessionId}/state`);
+      const ort = ortRuntime;
+      const obs = observationOf(state);
+      const session = policySession.session;
+      const inputName = session.inputNames[0] || 'observation';
+      const outputName = session.outputNames[0] || 'action';
+      const results = await session.run({
+        [inputName]: new ort.Tensor('float32', Float32Array.from(obs.map(finite)), [1, obs.length]),
+      });
+      const output = results[outputName]?.data;
+      const action = [finite(output?.[0]), finite(output?.[1])];
+      const maxLinear = finite(state?.cmd_vel?.maxLinear, 0.3);
+      const maxAngular = finite(state?.cmd_vel?.maxAngular, 1.0);
+      // The policy head is normalized [-1, 1]; project to the same physical
+      // twist bounds the built-in navigator and the board runtime use.
+      const command = {
+        linear: clamp(action[0], -1, 1) * maxLinear,
+        angular: clamp(action[1], -1, 1) * maxAngular,
+      };
+      const next = await api(`sessions/${sessionId}/cmd_vel`, {
+        method: 'POST',
+        body: JSON.stringify(command),
+      });
+      policySession.steps += 1;
+      await render(next);
+      if (distanceToGoal(next) <= GOAL_EPSILON || next?.collision) {
+        const collided = Boolean(next?.collision);
+        const message = `策略试跑结束：${policySession.steps} 步，${collided ? '发生碰撞。' : '到达目标点。'}`;
+        setEvent(message, collided ? 'warn' : 'ok');
+        postPolicyStatus('finished', message);
+        policySession = null;
+        return;
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      setEvent(`策略试跑失败：${message}`, 'warn');
+      postPolicyStatus('failed', message);
+      policySession = null;
+      return;
+    }
+    if (policySession) {
+      window.setTimeout(runPolicyStep, LOOP_MS);
+    }
+  }
+
+  window.addEventListener('message', (event) => {
+    const data = event.data;
+    if (!data || typeof data !== 'object') return;
+    if (data.type === 'rdk-replay-frame' && data.frame) {
+      renderReplayFrame(data.frame);
+      return;
+    }
+    if (data.type === 'rdk-policy-run') {
+      startPolicyRun(data);
+      return;
+    }
+    if (data.type === 'rdk-policy-stop') {
+      if (policySession) {
+        policySession = null;
+        setEvent('策略试跑已手动停止。', 'warn');
+        postPolicyStatus('stopped', '策略试跑已手动停止。');
+      }
+      return;
+    }
+    if (data.type === 'rdk-replay-clear') {
+      replayTrace = null;
+      setEvent('回放轨迹已清除，恢复实时地图。', 'ok');
+      if (latestState) drawMap(latestState);
+    }
+  });
 
   function clearRecording(message) {
     rows = [];

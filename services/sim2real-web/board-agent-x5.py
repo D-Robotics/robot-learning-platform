@@ -1114,6 +1114,10 @@ def policy_stop(reason="operator-stop"):
             res = {"ok": True, "state": "idle", "stoppedBy": "process-terminated"}
     else:
         res = {"ok": True, "state": None, "stoppedBy": "runtime-not-running"}
+    # Policy motion held exclusive /cmd_vel ownership (the resident drive
+    # publisher was torn down at session start). Restore the publisher so the
+    # next manual drive window is latency-free again.
+    _rewarm_drive_publisher()
     return res
 
 
@@ -1304,7 +1308,27 @@ def policy_start(direction, goal_x=None, goal_y=None):
     payload = {"direction": float(direction)}
     if goal_x is not None or goal_y is not None:
         payload.update({"goalX": goal_x, "goalY": goal_y})
-    return _policy_send("start", **payload)
+    # Exclusive /cmd_vel ownership: the resident drive publisher streams idle
+    # zeros at 10 Hz whenever the drive switch is on, so a policy session
+    # would interleave its own frames with zeros — the chassis target speed
+    # resets every cycle and the robot never accelerates. Policy motion is a
+    # separate motion authority: tear the publisher down first and re-warm it
+    # when the session ends. drive_command re-warms on demand anyway, so the
+    # manual canary path is unaffected.
+    _stop_drive_publisher()
+    res = _policy_send("start", **payload)
+    if not (isinstance(res, dict) and res.get("ok")):
+        _rewarm_drive_publisher()
+    return res
+
+
+def _rewarm_drive_publisher():
+    """Asynchronously restore the resident publisher after policy motion
+    releases /cmd_vel. Boot pre-warm exists to keep the first manual drive
+    window latency-free; this restores the same steady state. Failures are
+    harmless — drive_command starts the publisher on demand."""
+    if DRIVE_ENABLED:
+        threading.Thread(target=_start_drive_publisher, daemon=True).start()
 
 
 def _start_ob_sampler():

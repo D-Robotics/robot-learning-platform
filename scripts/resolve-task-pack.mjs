@@ -66,6 +66,7 @@ export function resolveTaskPack(taskId, context = {}) {
     displayName: task.displayName,
     observationAdapterId: task.observationAdapterId,
     actionAdapterId: task.actionAdapterId,
+    recommendedEngine: task.recommendedEngine,
     adapter,
     reward: task.reward,
     termination: task.termination,
@@ -84,6 +85,17 @@ export function resolveTaskPack(taskId, context = {}) {
       note: 'Declarative task pack resolved from tasks/ + adapters/.',
     },
   };
+  // Engine routing is platform policy, so the recommendation is validated at
+  // resolve time: an unknown id fails loudly here instead of being silently
+  // dropped (and later defaulting the task to the kinematic engine).
+  if (
+    task.recommendedEngine != null &&
+    !['starter-ppo', 'mjx-ppo'].includes(task.recommendedEngine)
+  ) {
+    throw new Error(
+      `recommendedEngine must be 'starter-ppo' or 'mjx-ppo' (got ${JSON.stringify(task.recommendedEngine)})`,
+    );
+  }
   // The adapter's clamps are the single actuator truth: the engine, the
   // board runtime, and this resolver all read the same numbers.
   const dr = pack.domainRandomization || {};

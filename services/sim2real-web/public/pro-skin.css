@@ -1,0 +1,622 @@
+/* pro-workbench 皮肤层：把主平台整体重皮为专业工作台视觉。
+   策略：① 重新定义设计令牌（继承级最高、改动面最小——styles.css 里
+   所有 var() 引用自动跟随）；② 覆盖少量结构性规则（密度、圆角、
+   阴影、顶栏/侧栏形态）；③ 新组件（管道/清单/⌘K）已在
+   workbench-pro.css，这里只调密度对齐。加载顺序在所有样式之后。
+
+   v4：引入 Rust 参考版的完整橙色色阶（orange-50/100/200/500/600/700）
+   与语义三件套（文字/浅底/描边），所有徽章/标签的浅底从半透明改为
+   实色，避免 alpha 混合在异底上漂移；新增 mono 微标签变量
+   --font-label，eyebrow/kicker 一族统一切换。
+
+   深浅主题与主平台同机制：html.theme-dark 单类翻转。 */
+
+/* ---------- 0. 深色模式残余覆盖：styles.css 的 theme-dark 段在
+   令牌层之后还有结构性规则（更宽的 shell、更高的顶栏），必须在
+   皮肤层里显式压回去 ---------- */
+html.theme-dark .app-shell {
+  width: 100%;
+  max-width: none;
+  padding-top: 0;
+}
+
+html.theme-dark .topbar {
+  min-height: 54px;
+  padding: 0 18px;
+}
+
+/* ---------- ① 令牌层 ---------- */
+
+/* mono 标签字体：所有 9-10px 大写微标签共用，是"开发者工具气质"的
+   签名（Linear/GitHub/Vercel 同款做法）。 */
+:root {
+  --font-label: ui-monospace, 'SF Mono', SFMono-Regular, 'JetBrains Mono',
+    'Cascadia Code', Menlo, Consolas, 'Liberation Mono', monospace;
+
+  --bg: #fbfbf9;
+  --bg-deep: #f6f4ee;
+  --bg-soft: #f3f1ea;
+  --panel: #ffffff;
+  --panel-raised: #ffffff;
+  --panel-soft: #faf9f5;
+  --line: rgba(27, 27, 24, 0.11);
+  --line-strong: rgba(27, 27, 24, 0.22);
+  --text: #1b1b18;
+  --muted: #6f6a5f;
+  --muted-strong: #55514a;
+
+  /* 橙色色阶（对齐参考版 Tailwind orange，浅色主题用 500 段主色） */
+  --orange-50: #fff7ed;
+  --orange-100: #ffedd5;
+  --orange-200: #fed7aa;
+  --orange-300: #fdba74;
+  --orange-400: #fb923c;
+  --orange-500: #f97316;
+  --orange-600: #ea580c;
+  --orange-700: #c2410c;
+
+  --accent: #f97316;
+  --accent-hover: #ea8a3a;
+  --accent-strong: #ea580c;
+  --accent-text: #c2410c;
+  /* 实色浅底替代半透明：徽章/激活卡/光环在任何面板底色上表现一致 */
+  --accent-soft: #fff7ed;
+  --accent-ring: #fed7aa;
+  --accent-glow: #ffedd5;
+  --cyan: #c2410c;
+  --violet: #b34d00;
+
+  /* 语义三件套：文字 / 实色浅底 / 描边，徽章与状态卡共用 */
+  --green: #16a34a;
+  --green-soft: #f0fdf4;
+  --green-border: #bbf7d0;
+  --green-text: #15803d;
+  --red: #dc2626;
+  --red-soft: #fef2f2;
+  --red-border: #fecaca;
+  --red-text: #b91c1c;
+  --amber: #c28a1d;
+  --amber-soft: #fffbeb;
+  --amber-border: #fde68a;
+  --amber-text: #a16207;
+  --shadow: 0 10px 30px rgba(27, 27, 24, 0.08);
+  --shadow-strong: 0 10px 30px rgba(27, 27, 24, 0.12);
+}
+
+html.theme-dark {
+  --bg: #0b1219;
+  --bg-deep: #0b1219;
+  --bg-soft: #0e1620;
+  --panel: #101b24;
+  --panel-raised: #101b24;
+  --panel-soft: #0d1620;
+  --line: rgba(154, 177, 201, 0.15);
+  --line-strong: rgba(154, 177, 201, 0.32);
+  --text: #edf3fa;
+  --muted: #8fa3b8;
+  --muted-strong: #a9bccd;
+
+  /* 深色主题的橙色降饱和提亮（参考版没有深色模式，这里是自定的
+     可访问色）：50/100/200 用低透明度实底叠在深面板上。 */
+  --orange-50: rgba(249, 115, 22, 0.09);
+  --orange-100: rgba(249, 115, 22, 0.14);
+  --orange-200: rgba(253, 186, 116, 0.35);
+  --orange-300: rgba(253, 186, 116, 0.55);
+  --orange-400: #fb923c;
+  --orange-500: #ff9d4d;
+  --orange-600: #f97316;
+  --orange-700: #ea580c;
+
+  --accent: #ff9d4d;
+  --accent-hover: #ffb061;
+  --accent-strong: #ff8f3d;
+  --accent-text: #ffb377;
+  --accent-soft: rgba(249, 115, 22, 0.11);
+  --accent-ring: rgba(253, 186, 116, 0.4);
+  --accent-glow: rgba(249, 115, 22, 0.16);
+  --cyan: #ffb377;
+  --violet: #ffb377;
+  --green: #5ec57f;
+  --green-soft: rgba(22, 163, 74, 0.13);
+  --green-border: rgba(22, 163, 74, 0.35);
+  --green-text: #7fd398;
+  --red: #e26868;
+  --red-soft: rgba(220, 38, 38, 0.13);
+  --red-border: rgba(220, 38, 38, 0.38);
+  --red-text: #f08a8a;
+  --amber: #d9a83f;
+  --amber-soft: rgba(217, 119, 6, 0.13);
+  --amber-border: rgba(217, 119, 6, 0.38);
+  --amber-text: #e5b567;
+  --shadow: 0 10px 30px rgba(0, 0, 0, 0.45);
+  --shadow-strong: 0 14px 36px rgba(0, 0, 0, 0.5);
+}
+
+/* ---------- ② 结构层：密度与形态 ---------- */
+
+body {
+  font-size: 13.5px;
+  line-height: 1.65;
+  /* 去掉主平台的品牌色氛围渐变：预览页是纯净底色工作台 */
+  background: var(--bg);
+}
+
+html.theme-dark body::before {
+  display: none;
+}
+
+/* 顶栏内容压扁：预览页 54px 单行靠的是小尺寸 brand 与紧凑右侧 */
+.brand-mark {
+  width: 28px;
+  height: 28px;
+  border-radius: 8px;
+  font-size: 14px;
+  box-shadow: none;
+  background: var(--accent);
+}
+
+.brand-kicker {
+  font-size: 9.5px;
+  letter-spacing: 0.1em;
+}
+
+.brand strong {
+  font-size: 13.5px;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+}
+
+html.theme-dark .brand-mark {
+  width: 28px;
+  height: 28px;
+  border-radius: 8px;
+  font-size: 14px;
+  box-shadow: none;
+}
+
+.topbar-context {
+  gap: 8px;
+  font-size: 11.5px;
+  flex-wrap: nowrap;
+  overflow: hidden;
+}
+
+.top-actions {
+  flex-wrap: nowrap;
+  gap: 7px;
+}
+
+.top-actions .button {
+  min-height: 30px;
+  padding: 4px 10px;
+  font-size: 12px;
+}
+
+.cmdk-trigger {
+  height: 30px;
+  padding: 0 9px;
+}
+
+.top-menu .button {
+  min-height: 30px;
+}
+
+/* 顶栏：贴边 sticky 窄条，pro-workbench 的 54px 形态 */
+.topbar {
+  position: sticky;
+  top: 0;
+  z-index: 40;
+  align-items: center;
+  gap: 18px;
+  min-height: 54px;
+  width: 100%;
+  margin: 0;
+  padding: 0 18px;
+  border-bottom: 1px solid var(--line);
+  background: var(--bg);
+  box-shadow: none;
+}
+
+.app-shell {
+  width: 100%;
+  max-width: none;
+  margin: 0;
+  padding: 0;
+}
+
+/* shell-layout 原本是 grid；改为全宽 flex 感知更接近预览页的贴边侧栏 */
+.shell-layout {
+  display: grid;
+  grid-template-columns: 200px minmax(0, 1fr);
+  gap: 0;
+  align-items: stretch;
+}
+
+.sidebar {
+  position: sticky;
+  top: 54px;
+  height: calc(100vh - 54px);
+  min-height: 0;
+  margin: 0;
+  padding: 18px 10px 30px 14px;
+  border-right: 1px solid var(--line);
+  overflow-y: auto;
+}
+
+/* 主内容区贴边内边距（覆盖 .main-content 的 35px 顶部外距与 view 各自的
+   侧向内边距——预览页主区是 26/30 内边距的整片滚动区） */
+.main-content {
+  padding: 22px 28px 70px;
+}
+
+[data-view-section] {
+  padding: 0;
+}
+
+.view-section {
+  padding: 0;
+}
+
+/* 侧栏导航项：预览页形态——无描边、激活左侧橙色竖条 */
+.nav-item {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  border: none;
+  border-radius: 8px;
+  padding: 7px 10px;
+  background: transparent;
+  position: relative;
+}
+
+.nav-item:hover {
+  border-color: transparent;
+  background: var(--bg-soft);
+}
+
+.nav-item.is-active {
+  border-color: transparent;
+  background: var(--accent-soft);
+  color: var(--accent-text);
+  font-weight: 600;
+}
+
+.nav-item.is-active::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 7px;
+  bottom: 7px;
+  width: 3px;
+  border-radius: 3px;
+  background: var(--accent);
+}
+
+.module-item.is-active {
+  border-color: transparent;
+  background: var(--accent-soft);
+}
+
+/* 卡片：预览页 12px 圆角、无重阴影、16/18 内边距 */
+.panel {
+  border-radius: 12px;
+  box-shadow: none;
+  padding: 16px 18px;
+}
+
+/* 按钮：实心橙、9px 圆角、去掉渐变和高光（预览页是平的） */
+.button {
+  min-height: 34px;
+  border-radius: 9px;
+  background: var(--panel);
+  font-weight: 550;
+}
+
+.button:hover {
+  background: var(--panel);
+}
+
+.button-primary {
+  background: var(--accent);
+  color: #ffffff;
+  border: none;
+  box-shadow: none;
+  font-weight: 600;
+}
+
+.button-primary:hover {
+  background: var(--accent-hover);
+  box-shadow: var(--shadow);
+}
+
+html.theme-dark .button:not(.button-primary) {
+  background: var(--panel-soft);
+}
+
+html.theme-dark .button-primary {
+  color: #14100b;
+}
+
+/* 徽标统一胶囊形 */
+.state-badge,
+.contract-badge,
+.live-label {
+  border-radius: 999px;
+}
+
+/* ---------- ②b mono 微标签族：eyebrow / kicker / context-label 一律
+   9-10px monospace 600 + .12em。这是参考版"开发者工具气质"的核心签名，
+   一条规则族贡献一半的专业观感。
+   选择器必须包含 workflow-ux / visual-polish 里的上下文变体
+   （.workflow-progress-intro .eyebrow 等 0,2,0 优先级），皮肤层靠
+   加载顺序在同优先级上胜出。 ---------- */
+
+.eyebrow,
+.brand-kicker,
+.card-kicker,
+.panel-kicker,
+.nav-label,
+.context-label,
+.field-label,
+.section-caption,
+.panel-caption,
+.workflow-progress-intro .eyebrow,
+.train-onboarding .eyebrow,
+[data-view-section='overview'] .section-caption,
+[data-view-section='overview'] .panel-caption,
+[data-view-section='overview'] .workspace-last-saved {
+  font-family: var(--font-label);
+  font-size: 9px;
+  font-weight: 600;
+  letter-spacing: 0.12em;
+  color: var(--muted);
+}
+
+/* eyebrow 在面板语境里点橙色（参考版 .eyebrow 用 --accent）。
+   上下文变体（0,2,0）必须同优先级跟色，否则会赢过下面 0,1,0 的
+   橙色规则、退回上面的 muted。 */
+.eyebrow,
+.panel-kicker,
+.card-kicker,
+.workflow-progress-intro .eyebrow,
+.train-onboarding .eyebrow {
+  color: var(--accent);
+}
+
+/* ---------- ②c 状态徽章：实色浅底三件套 + 6px 圆点 + running 脉冲。
+   覆盖 styles.css 2141 起的旧徽章规则（那里只改了描边和文字色，
+   没有底色），保持与参考版 status 胶囊一致的形态。 ---------- */
+
+.state-badge {
+  min-height: 22px;
+  padding: 3px 10px;
+  gap: 6px;
+  font-size: 10px;
+  font-weight: 600;
+  background: var(--bg-soft);
+}
+
+.state-badge.state-success,
+.state-badge.state-ready,
+.state-badge.state-ok {
+  color: var(--green-text);
+  border-color: var(--green-border);
+  background: var(--green-soft);
+}
+
+.state-badge.state-success .status-dot,
+.state-badge.state-ready .status-dot,
+.state-badge.state-ok .status-dot {
+  background: var(--green);
+  box-shadow: 0 0 12px var(--green);
+}
+
+.state-badge.state-running,
+.state-badge.state-partial,
+.state-badge.state-warn {
+  color: var(--accent-text);
+  border-color: var(--accent-ring);
+  background: var(--accent-soft);
+}
+
+.state-badge.state-running .status-dot {
+  background: var(--accent);
+  box-shadow: 0 0 12px var(--accent);
+  animation: pro-status-pulse 1.6s infinite;
+}
+
+.state-badge.state-blocked,
+.state-badge.state-error {
+  color: var(--red-text);
+  border-color: var(--red-border);
+  background: var(--red-soft);
+}
+
+.state-badge.state-blocked .status-dot,
+.state-badge.state-error .status-dot {
+  background: var(--red);
+  box-shadow: 0 0 12px var(--red);
+}
+
+.state-badge.state-neutral,
+.state-badge.state-demo {
+  color: var(--muted-strong);
+  border-color: var(--line);
+  background: var(--bg-soft);
+}
+
+.state-badge .status-dot {
+  width: 6px;
+  height: 6px;
+  flex: none;
+  box-shadow: none;
+}
+
+@keyframes pro-status-pulse {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 color-mix(in srgb, var(--accent) 35%, transparent);
+  }
+  55% {
+    box-shadow: 0 0 0 5px color-mix(in srgb, var(--accent) 0%, transparent);
+  }
+}
+
+/* ---------- ②d hero / next-card：参考版 .hero 的橙色浅底卡形态 ----------
+   原版 next-card 是渐变 + 双栏；皮肤层保留布局，只把底/边换成
+   实色橙浅底 + ring 描边。overview-clean.css 的
+   [data-view-section="overview"] .next-card（0,2,1）也要覆盖。 */
+.next-card,
+[data-view-section='overview'] .next-card {
+  border-color: var(--accent-ring);
+  background: var(--accent-soft);
+  box-shadow: none;
+}
+
+/* styles.css 4873 的 html.theme-dark .next-card 是 (0,2,1) 且带渐变底，
+   皮肤层的浅色规则 (0,2,0) 压不过它——必须同名同优先级跟一条暗色版。 */
+html.theme-dark .next-card,
+html.theme-dark [data-view-section='overview'] .next-card {
+  border-color: var(--accent-ring);
+  background: var(--accent-soft);
+  box-shadow: none;
+}
+
+.next-badge,
+[data-view-section='overview'] .next-badge {
+  font-family: var(--font-label);
+  font-size: 9px;
+  font-weight: 600;
+  letter-spacing: 0.12em;
+  color: var(--accent-text);
+  background: transparent;
+  border: none;
+}
+
+html.theme-dark .next-badge {
+  background: transparent;
+}
+
+/* ---------- ②e 激活光环：见文件末尾 ③ 段之后的 .onboard-item.is-current
+   （.onboard-item 的 border-radius: 0 在 ③ 段声明，光环必须在它之后
+   才能以同优先级胜出）。 ---------- */
+
+@media (prefers-reduced-motion: reduce) {
+  .state-badge.state-running .status-dot,
+  .pulse,
+  .status-dot {
+    animation: none !important;
+  }
+}
+
+/* kbd：预览页键盘帽样式。选择器需并上 styles.css / workbench-pro.css 的
+   上下文变体（.command-palette kbd 等 0,2,0），其中 .cmdk-trigger kbd
+   显式 font-family: inherit 必须被覆盖。 */
+kbd,
+.command-palette kbd,
+.sim-action-item kbd,
+.cmdk-trigger kbd {
+  display: inline-grid;
+  place-items: center;
+  min-width: 20px;
+  height: 20px;
+  padding: 0 5px;
+  border: 1px solid var(--line-strong);
+  border-bottom-width: 2px;
+  border-radius: 5px;
+  background: var(--panel);
+  font-family: var(--font-label);
+  font-size: 10px;
+  color: var(--text);
+}
+
+/* 视图切换动画：预览页的轻入场 */
+[data-view-section],
+.view-section {
+  animation: pro-skin-in 0.25s ease;
+}
+
+@keyframes pro-skin-in {
+  from {
+    opacity: 0;
+    transform: translateY(5px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+/* ---------- ③ 与 workbench-pro.css 的密度对齐 ---------- */
+
+.onboard-card-bar {
+  padding: 0 0 12px;
+  border-bottom: none;
+}
+
+.onboard-list {
+  padding: 0;
+}
+
+.onboard-item {
+  border-top: 1px solid var(--line);
+  border-radius: 0;
+  grid-template-columns: 22px 20px minmax(0, 1fr) auto;
+  padding: 10px 2px;
+}
+
+.onboard-item:first-child {
+  border-top: none;
+}
+
+.onboard-meter i {
+  background: var(--accent);
+}
+
+.onboard-cta {
+  border-radius: 7px;
+  height: 27px;
+  padding: 0 11px;
+  font-size: 12px;
+}
+
+.onboard-item.is-current .onboard-cta {
+  border-color: transparent;
+  background: var(--accent);
+  color: #ffffff;
+  font-weight: 600;
+}
+
+html.theme-dark .onboard-item.is-current .onboard-cta {
+  color: #14100b;
+}
+
+.pipeline-stage {
+  font-size: 12px;
+}
+
+/* ②e 激活光环（声明在 ③ 之后以覆盖 .onboard-item 的 0 圆角）：
+   参考版 .stage-card.stage-active 的橙描边 + 3px 浅橙光环。 */
+.onboard-item.is-current {
+  border-color: var(--accent-ring);
+  border-radius: 9px;
+  box-shadow: 0 0 0 3px var(--accent-glow);
+}
+
+.pipeline-stage.is-current {
+  border-radius: 8px;
+  box-shadow: 0 0 0 3px var(--accent-glow);
+}
+
+/* 窄屏：回到主平台原有的响应式行为（侧栏上收） */
+@media (max-width: 1080px) {
+  .shell-layout {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .sidebar {
+    position: static;
+    height: auto;
+    border-right: none;
+    border-bottom: 1px solid var(--line);
+  }
+}

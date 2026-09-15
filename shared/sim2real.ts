@@ -11,6 +11,7 @@ import type {
   Sim2RealEvaluationSummary,
   Sim2RealRunArtifactMetadata,
   Sim2RealRunMetrics,
+  Sim2RealRunProgressPoint,
   Sim2RealTaskEvaluationEvidence,
 } from './sim2real-telemetry.js';
 
@@ -19,6 +20,7 @@ export type {
   Sim2RealReplaySummary,
   Sim2RealRunArtifactMetadata,
   Sim2RealRunMetrics,
+  Sim2RealRunProgressPoint,
   Sim2RealTaskEvaluationEnvelope,
   Sim2RealTaskEvaluationEvidence,
   Sim2RealActionOutput,
@@ -160,6 +162,15 @@ export interface Sim2RealControlBinding {
  */
 export type Sim2RealTrainingAlgorithm = 'ppo' | 'sac';
 
+/**
+ * Worker-side engine routing. 'starter-ppo' is the CPU-friendly kinematic
+ * pipeline; 'mjx-ppo' runs the MuJoCo MJX contact-dynamics engine. Task packs
+ * may recommend an engine, an explicit submission always wins, and a worker
+ * that has not registered the engine fails closed instead of silently
+ * training with a different physics backend.
+ */
+export type Sim2RealTrainingEngine = 'starter-ppo' | 'mjx-ppo';
+
 export interface Sim2RealTrainingSpec {
   profile: Sim2RealTrainingProfile;
   numEnvs: number;
@@ -168,6 +179,8 @@ export interface Sim2RealTrainingSpec {
   runName?: string;
   /** Learner class; engines default to 'ppo' when omitted. */
   algorithm?: Sim2RealTrainingAlgorithm;
+  /** Engine the worker must route to; omitted keeps the platform default. */
+  engine?: Sim2RealTrainingEngine;
 }
 
 export interface Sim2RealCheckpointRef {
@@ -288,6 +301,8 @@ export interface Sim2RealRunRecord {
   checkpoint?: Sim2RealCheckpointRef;
   artifact?: Sim2RealRunArtifactMetadata;
   metrics?: Sim2RealRunMetrics;
+  /** Live curve points reported while the run was executing (worker-parsed). */
+  progress?: Sim2RealRunProgressPoint[];
   /** Sanitized Task-Pack eval report used by the server-side release gate. */
   taskEvaluation?: Sim2RealTaskEvaluationEvidence;
   /** Latest platform-side telemetry evaluation; raw samples stay in the ledger. */
@@ -529,6 +544,12 @@ export interface Sim2RealLocalWorkerIntegration {
   activeJobs?: number;
   queuedJobs?: number;
   responseMs?: number;
+  /**
+   * Engine ids the worker registered (healthz `engines`), e.g.
+   * ['default', 'mjx-ppo']. Absent when the worker did not report them; the
+   * 'default' entry maps to the base RDK_SIM2REAL_TRAIN_EXECUTABLE engine.
+   */
+  engines?: string[];
   /** Legacy/configuration detail retained for clients that predate health probes. */
   reason?: string;
   message: string;
@@ -575,6 +596,13 @@ export interface Sim2RealOverview {
   models: Array<Sim2RealModelRecord>;
   runs: Sim2RealRunRecord[];
   deployments: Sim2RealDeploymentRecord[];
+  /**
+   * First-class registry artifacts feeding the promotion-flow view
+   * (candidate → validated → published). Capped at 100 newest.
+   */
+  artifacts: Sim2RealArtifactRecord[];
+  /** First-class evaluation evidence records (passed gate ⇒ promotable). */
+  evaluations: Sim2RealEvaluationRecord[];
   devices: Sim2RealDeviceSummary[];
   integrations: {
     simulator: {
@@ -644,6 +672,7 @@ const ALLOWED_TRAINING_PROFILES = new Set<Sim2RealTrainingProfile>([
   'standard',
   'high-vram',
 ]);
+const ALLOWED_TRAINING_ENGINES = new Set<Sim2RealTrainingEngine>(['starter-ppo', 'mjx-ppo']);
 const SAFE_ID = /^[a-z][a-z0-9-]{1,63}$/;
 const SHA256 = /^[a-f0-9]{64}$/i;
 const SENSITIVE_REF = /(?:password|passwd|secret|token|api[_-]?key|private[_-]?key)/i;
@@ -821,6 +850,12 @@ export function normalizeTrainingSpec(value: unknown): {
   if (algorithm && algorithm !== 'ppo' && algorithm !== 'sac') {
     errors.push('training.algorithm must be ppo or sac');
   }
+  // Same allowlist rationale as algorithm: a typo must 400 at submission
+  // time instead of falling through to whichever engine the worker default.
+  const engine = safeText(source.engine, 32);
+  if (engine && !ALLOWED_TRAINING_ENGINES.has(engine as Sim2RealTrainingEngine)) {
+    errors.push('training.engine must be starter-ppo or mjx-ppo');
+  }
   if (errors.length) return { errors };
   return {
     errors,
@@ -831,8 +866,26 @@ export function normalizeTrainingSpec(value: unknown): {
       video: rawVideo as boolean,
       ...(runName ? { runName } : {}),
       ...(algorithm ? { algorithm: algorithm as Sim2RealTrainingAlgorithm } : {}),
+      ...(engine ? { engine: engine as Sim2RealTrainingEngine } : {}),
     },
   };
+}
+
+/**
+ * Apply a task pack's engine recommendation to a spec that chose none.
+ *
+ * Only the non-default recommendation is injected: 'starter-ppo' is the
+ * platform-wide default, so injecting it would add a field that breaks
+ * single-engine workers registered under a custom engine id. Kinematic
+ * task packs therefore simply omit the field.
+ */
+export function applyTaskEngineRecommendation(
+  spec: Sim2RealTrainingSpec,
+  recommendedEngine?: string | null,
+): Sim2RealTrainingSpec {
+  if (spec.engine) return spec;
+  if (recommendedEngine === 'mjx-ppo') return { ...spec, engine: 'mjx-ppo' };
+  return spec;
 }
 
 function exactNumber(value: unknown, expected: number, label: string, errors: string[]): number {

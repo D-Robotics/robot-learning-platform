@@ -1,0 +1,44 @@
+{
+  "schemaVersion": 1,
+  "id": "originbot-x5-diffdrive",
+  "description": "OriginBot (RDK X5) 差速底盘标定单一来源。services/mujoco-web 的可视仿真 MJCF 与 engines/mjx-adapter 的训练 MJCF 都从本文件取共享几何/执行器数字；任何标定变更只改这里，两边同时生效。",
+  "provenance": {
+    "source": "rdk-robot-learning-platform-public 仓库标定（2026-09 首次固化）",
+    "consumers": [
+      "services/mujoco-web/models.py (ORIGINBOT_XML)",
+      "engines/mjx-adapter/adapter.py (MJCF_TEMPLATE/BASE_HEIGHT)"
+    ],
+    "notes": "两个 MJCF 变体刻意保留场景差异（服务版含墙/激光/深度相机；训练版极简 + analytic 障碍），但共享机器人本体标定：底盘/顶柱/双轮/伺服参数/基座高度。差异清单见 assets/originbot/README.md。"
+  },
+  "base": {
+    "height": 0.16,
+    "chassisSize": [0.28, 0.23, 0.1],
+    "chassisMass": 4.0,
+    "chassisRgba": ".12 .42 .8 1",
+    "topPosZ": 0.13,
+    "topSize": [0.16, 0.025],
+    "topMass": 0.2,
+    "topRgba": ".18 .62 .95 1"
+  },
+  "wheels": {
+    "radius": 0.09,
+    "halfWidth": 0.035,
+    "trackWidth": 0.5,
+    "offsetY": 0.25,
+    "offsetZ": -0.08,
+    "mass": 0.35,
+    "damping": 0.08,
+    "friction": "1.2 .01 .001",
+    "quat": ".7071 .7071 0 0",
+    "rgba": ".04 .05 .07 1",
+    "servoKv": 8,
+    "ctrlRange": [-8, 8],
+    "maxTorque": 2.0,
+    "maxWheelSpeed": 8.0
+  },
+  "caster": {
+    "posX": -0.2,
+    "size": 0.055,
+    "mass": 0.1
+  }
+}

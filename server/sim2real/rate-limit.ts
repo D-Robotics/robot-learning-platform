@@ -32,6 +32,24 @@ export const RATE_LIMIT_EXEMPT_PATHS: readonly string[] = Object.freeze([
   '/metrics',
 ]);
 
+/**
+ * Prefix exemptions: paths below these never consume tokens.  The OriginBot
+ * simulator control loop polls state and posts cmd_vel at 20 Hz (≈2 400
+ * requests/minute) through the local MuJoCo bridge, which would exhaust the
+ * default 1 200/minute budget within 30 seconds.  The upstream MuJoCo service
+ * keeps its own session cap and body bounds, so this stays an SPA-side
+ * limiter, not the only net.
+ */
+export const RATE_LIMIT_EXEMPT_PREFIXES: readonly string[] = Object.freeze([
+  '/mujoco/api/',
+]);
+
+export function isRateLimitExemptPath(requestPath: unknown): boolean {
+  const normalized = String(requestPath ?? '');
+  if (RATE_LIMIT_EXEMPT_PATHS.includes(normalized)) return true;
+  return RATE_LIMIT_EXEMPT_PREFIXES.some((prefix) => normalized.startsWith(prefix));
+}
+
 const MAX_CONFIGURED_LIMIT = 10_000_000;
 const MAX_OWNER_KEY_LENGTH = 320;
 const MAX_ADDRESS_LENGTH = 64;
@@ -81,9 +99,6 @@ export function resolveRateLimitPerMinute(
   return value > MAX_CONFIGURED_LIMIT ? MAX_CONFIGURED_LIMIT : value;
 }
 
-export function isRateLimitExemptPath(requestPath: unknown): boolean {
-  return RATE_LIMIT_EXEMPT_PATHS.includes(String(requestPath ?? ''));
-}
 
 /** Keeps account ids out of the counters while still separating tenants. */
 export function hashRateLimitKey(value: string): string {

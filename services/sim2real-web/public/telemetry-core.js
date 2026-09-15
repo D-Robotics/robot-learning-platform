@@ -449,7 +449,10 @@
   function stateClass(status) {
     const normalized = String(status || '').toLowerCase();
     if (['ready', 'completed', 'success', 'succeeded', 'available', 'online', 'connected', 'healthy'].includes(normalized)) return 'state-success';
-    if (['blocked', 'queued', 'pending', 'waiting', 'partial', 'running', 'planned', 'mock', 'simulated', 'degraded', 'restricted', 'loading'].includes(normalized)) {
+    // Active work is its own state: the badge gets a pulsing dot so "running"
+    // reads differently from "waiting for input" (both previously partial).
+    if (['running', 'queued'].includes(normalized)) return 'state-running';
+    if (['blocked', 'pending', 'waiting', 'partial', 'planned', 'mock', 'simulated', 'degraded', 'restricted', 'loading'].includes(normalized)) {
       return 'state-partial';
     }
     if (['failed', 'error', 'offline', 'disconnected', 'incompatible'].includes(normalized)) return 'state-error';

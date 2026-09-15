@@ -8,7 +8,7 @@ const fixtureDir = await mkdtemp(path.join(os.tmpdir(), 'rdk-local-worker-'));
 const fixture = path.join(fixtureDir, 'engine.mjs');
 await writeFile(
   fixture,
-  `import { writeFile } from 'node:fs/promises';\nconsole.error('Bearer fake-secret token=should-hide');\nawait new Promise((resolve) => setTimeout(resolve, 120));\nconst result = { checkpoint: { checkpointId: 'cp-1', artifactRef: 'artifact://microduck/cp-1', iteration: 1 }, artifact: { artifactId: 'policy-1', artifactRef: 'artifact://microduck/policy-1', kind: 'source', format: 'onnx', deployable: true }, metrics: { reward: 3.5, platformTokenLeaked: Boolean(process.env.RDK_SIM2REAL_LOCAL_RUNNER_TOKEN) }, deployable: true };\nconst evalReport = { schemaVersion: 1, taskId: 'originbot-goal-navigation', trained: { envelopes: { nominal: { successRate: 0.88, collisionRate: 0, episodes: 50, successRateCiLow: 0.756, collisionRateCiHigh: 0.071 } } }, qualityGate: { criteria: { minSuccessRate: 0.7, maxCollisionRate: 0.15, gateOn: 'ciLowerBound' } } };\nif (process.env.RDK_SIM2REAL_TEST_LARGE_RESULT === '1') result.padding = 'x'.repeat(1_100_000);\nawait writeFile(process.env.RDK_SIM2REAL_JOB_DIR + '/policy.onnx', 'onnx-fixture');\nawait writeFile(process.env.RDK_SIM2REAL_RESULT_FILE, JSON.stringify(result));\nawait writeFile(process.env.RDK_SIM2REAL_JOB_DIR + '/eval-report.json', JSON.stringify(evalReport));\n`,
+  `import { writeFile } from 'node:fs/promises';\nconsole.error('Bearer fake-secret token=should-hide');\nconsole.log('[engine] engine=start task=goal-navigation profile=smoke iters=4 envs=16 device=cuda');\nconsole.log('[engine] iter 1/4 meanReward=-0.004 recentSuccess=0.00 goalRange=[0.80,1.20] elapsed=0.7s');\nconsole.log('[engine] iter 2/4 meanReward=-0.006 recentSuccess=0.01 goalRange=[0.80,1.20] elapsed=1.1s');\nawait new Promise((resolve) => setTimeout(resolve, 30));\n// A partially-flushed duplicate must not create a backward or duplicate point.\nconsole.log('[engine] iter 2/4 meanReward=-0.006 recentSuccess=0.01 goalRange=[0.80,1.20] elapsed=1.1s iter 3/4 meanReward=0.003 recentSuccess=0.04 goalRange=[0.80,1.20] elapsed=1.4s');\nconsole.log('[engine] iter 4/4 meanReward=0.012 recentSuccess=0.06 goalRange=[0.80,1.20] elapsed=1.8s');\nawait new Promise((resolve) => setTimeout(resolve, 90));\nconst result = { checkpoint: { checkpointId: 'cp-1', artifactRef: 'artifact://microduck/cp-1', iteration: 1 }, artifact: { artifactId: 'policy-1', artifactRef: 'artifact://microduck/policy-1', kind: 'source', format: 'onnx', deployable: true }, metrics: { reward: 3.5, platformTokenLeaked: Boolean(process.env.RDK_SIM2REAL_LOCAL_RUNNER_TOKEN) }, deployable: true };\nconst evalReport = { schemaVersion: 1, taskId: 'originbot-goal-navigation', trained: { envelopes: { nominal: { successRate: 0.88, collisionRate: 0, episodes: 50, successRateCiLow: 0.756, collisionRateCiHigh: 0.071 } } }, qualityGate: { criteria: { minSuccessRate: 0.7, maxCollisionRate: 0.15, gateOn: 'ciLowerBound' } } };\nif (process.env.RDK_SIM2REAL_TEST_LARGE_RESULT === '1') result.padding = 'x'.repeat(1_100_000);\nawait writeFile(process.env.RDK_SIM2REAL_JOB_DIR + '/policy.onnx', 'onnx-fixture');\nawait writeFile(process.env.RDK_SIM2REAL_RESULT_FILE, JSON.stringify(result));\nawait writeFile(process.env.RDK_SIM2REAL_JOB_DIR + '/eval-report.json', JSON.stringify(evalReport));\n`,
   { mode: 0o600 },
 );
 process.env.RDK_SIM2REAL_TRAIN_EXECUTABLE = process.execPath;
@@ -151,6 +151,20 @@ try {
   assert.match(status.taskEvaluation.reportSha256, /^[a-f0-9]{64}$/);
   assert.match(status.stderrTail, /Bearer \[redacted\]/);
   assert.doesNotMatch(status.stderrTail, /should-hide/);
+  // Live progress: stdout lines parsed into strictly-advancing points, and
+  // the completed view keeps them for the run detail chart. The duplicated
+  // iter-2 line (partial flush overlap) must not produce a 5th point.
+  assert.ok(Array.isArray(status.progress), 'completed job must expose progress array');
+  assert.equal(status.progress.length, 4);
+  assert.deepEqual(
+    status.progress.map((point) => point.iteration),
+    [1, 2, 3, 4],
+  );
+  assert.equal(status.progress[0].totalIterations, 4);
+  assert.equal(status.progress[3].meanReward, 0.012);
+  assert.equal(status.progress[3].recentSuccess, 0.06);
+  assert.equal(status.progress[3].elapsedSeconds, 1.8);
+  assert.match(status.progress[0].at, /^\d{4}-\d{2}-\d{2}T/);
 
   // ---- artifact bytes endpoint (staging source for the board) ----
   const artifactWrongOwner = await fetch(
@@ -264,6 +278,124 @@ try {
   const persistedEntries = await readdir(fixtureDir, { withFileTypes: true });
   assert.equal(persistedEntries.filter((entry) => entry.isDirectory()).length, 3);
 
+  // ---- multi-engine routing: RDK_SIM2REAL_TRAIN_ENGINES_JSON ----
+  // A second fixture engine is registered under 'mjx-ppo' and writes a
+  // distinct marker into the result so the test proves the request really
+  // reached the routed engine, not the default one.
+  const mjxFixture = path.join(fixtureDir, 'mjx-engine.mjs');
+  await writeFile(
+    mjxFixture,
+    `import { writeFile } from 'node:fs/promises';\n` +
+      `import { readFile } from 'node:fs/promises';\n` +
+      `const request = JSON.parse(await readFile(process.env.RDK_SIM2REAL_REQUEST_FILE, 'utf8'));\n` +
+      `if (request.training?.engine !== 'mjx-ppo') throw new Error('mjx engine received wrong routing');\n` +
+      `console.log('[mjx-engine] iter 1/2 meanReward=0.01 recentSuccess=0.10 elapsed=0.1s');\n` +
+      `await writeFile(process.env.RDK_SIM2REAL_RESULT_FILE, JSON.stringify({\n` +
+      `  checkpoint: { checkpointId: 'mjx-cp-1', artifactRef: 'artifact://microduck/mjx-cp-1', iteration: 1 },\n` +
+      `  artifact: { artifactId: 'mjx-policy', artifactRef: 'artifact://microduck/mjx-policy', kind: 'source', format: 'onnx', deployable: false },\n` +
+      `  metrics: { reward: 0.5, engine: 'mjx-ppo', physicsBackend: 'mjx' },\n` +
+      `  deployable: false,\n` +
+      `}));\n`,
+    { mode: 0o600 },
+  );
+  process.env.RDK_SIM2REAL_TRAIN_EXECUTABLE = process.execPath;
+  process.env.RDK_SIM2REAL_TRAIN_ARGS_JSON = JSON.stringify([fixture]);
+  process.env.RDK_SIM2REAL_TRAIN_ENGINES_JSON = JSON.stringify({
+    'mjx-ppo': { executable: process.execPath, args: [mjxFixture] },
+  });
+  const enginesHealth = await fetch(`${base}/healthz`);
+  assert.equal(enginesHealth.status, 200);
+  const enginesBody = await enginesHealth.json();
+  assert.deepEqual(enginesBody.engines, ['default', 'mjx-ppo']);
+
+  const unregistered = await fetch(`${base}/train`, {
+    method: 'POST',
+    headers: {
+      'content-type': 'application/json',
+      'x-sim2real-account': 'alice',
+      authorization: 'Bearer worker-test-token',
+      'idempotency-key': 'engine-unregistered',
+    },
+    body: JSON.stringify({
+      ...request,
+      model: { modelId: 'microduck-engine-typo', version: 'v1' },
+      training: { profile: 'smoke', engine: 'mjx' },
+    }),
+  });
+  assert.equal(unregistered.status, 400);
+  assert.equal((await unregistered.json()).error, 'engine_not_registered');
+
+  const mjxLaunch = await fetch(`${base}/train`, {
+    method: 'POST',
+    headers: {
+      'content-type': 'application/json',
+      'x-sim2real-account': 'alice',
+      authorization: 'Bearer worker-test-token',
+      'idempotency-key': 'engine-mjx-run',
+    },
+    body: JSON.stringify({
+      ...request,
+      model: { modelId: 'microduck-mjx-run', version: 'v1' },
+      training: { profile: 'smoke', engine: 'mjx-ppo' },
+    }),
+  });
+  assert.equal(mjxLaunch.status, 202);
+  const mjxLaunched = await mjxLaunch.json();
+  assert.equal(mjxLaunched.engine, 'mjx-ppo');
+  let mjxStatus = mjxLaunched;
+  for (
+    let index = 0;
+    index < 30 && (mjxStatus.status === 'queued' || mjxStatus.status === 'running');
+    index += 1
+  ) {
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    const statusResponse = await fetch(`${base}/runs/${encodeURIComponent(mjxLaunched.runId)}`, {
+      headers: { 'x-sim2real-account': 'alice', authorization: 'Bearer worker-test-token' },
+    });
+    mjxStatus = await statusResponse.json();
+  }
+  assert.equal(mjxStatus.status, 'completed', JSON.stringify(mjxStatus));
+  assert.equal(mjxStatus.metrics.engine, 'mjx-ppo');
+  assert.equal(mjxStatus.metrics.physicsBackend, 'mjx');
+  assert.equal(mjxStatus.deployable, false);
+
+  // Default routing is untouched when no engine is selected: the job goes to
+  // the base RDK_SIM2REAL_TRAIN_EXECUTABLE engine even with the registry set.
+  const defaultLaunch = await fetch(`${base}/train`, {
+    method: 'POST',
+    headers: {
+      'content-type': 'application/json',
+      'x-sim2real-account': 'alice',
+      authorization: 'Bearer worker-test-token',
+      'idempotency-key': 'engine-default-run',
+    },
+    body: JSON.stringify({
+      ...request,
+      model: { modelId: 'microduck-default-engine', version: 'v1' },
+    }),
+  });
+  assert.equal(defaultLaunch.status, 202);
+  let defaultStatus = await defaultLaunch.json();
+  for (
+    let index = 0;
+    index < 100 && (defaultStatus.status === 'queued' || defaultStatus.status === 'running');
+    index += 1
+  ) {
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    const statusResponse = await fetch(`${base}/runs/${encodeURIComponent(defaultStatus.runId)}`, {
+      headers: { 'x-sim2real-account': 'alice', authorization: 'Bearer worker-test-token' },
+    });
+    defaultStatus = await statusResponse.json();
+  }
+  assert.equal(defaultStatus.status, 'completed', JSON.stringify(defaultStatus));
+  assert.equal(defaultStatus.checkpoint.artifactRef, 'artifact://microduck/cp-1');
+
+  process.env.RDK_SIM2REAL_TRAIN_ENGINES_JSON = 'not-json';
+  const invalidEnginesHealth = await fetch(`${base}/healthz`);
+  assert.equal(invalidEnginesHealth.status, 503);
+  assert.equal((await invalidEnginesHealth.json()).error, 'worker_configuration_invalid');
+  delete process.env.RDK_SIM2REAL_TRAIN_ENGINES_JSON;
+
   // A fresh worker process must recover terminal records so polling and
   // idempotency do not silently forget a completed run after a restart.
   server.closeIdleConnections?.();
@@ -292,6 +424,7 @@ try {
   await rm(fixtureDir, { recursive: true, force: true });
   delete process.env.RDK_SIM2REAL_TRAIN_EXECUTABLE;
   delete process.env.RDK_SIM2REAL_TRAIN_ARGS_JSON;
+  delete process.env.RDK_SIM2REAL_TRAIN_ENGINES_JSON;
   delete process.env.RDK_SIM2REAL_LOCAL_WORKER_DATA_DIR;
   delete process.env.RDK_SIM2REAL_LOCAL_RUNNER_TOKEN;
   delete process.env.RDK_SIM2REAL_MAX_CONCURRENT_JOBS;

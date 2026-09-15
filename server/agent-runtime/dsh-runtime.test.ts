@@ -7,7 +7,12 @@ import type { AddressInfo } from 'node:net';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { Context } from '@deepseek-ai/cordis';
 
-import { askDsh, createDshRuntime, DshAgentFailure, resolveDshPersistenceRoot } from './dsh-runtime.js';
+import {
+  askDsh,
+  createDshRuntime,
+  DshAgentFailure,
+  resolveDshPersistenceRoot,
+} from './dsh-runtime.js';
 
 /**
  * The runtime is exercised against a real DSH composition with a local

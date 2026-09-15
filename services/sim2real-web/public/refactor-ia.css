@@ -185,7 +185,7 @@
   border: 1px solid var(--line);
   border-left: 3px solid rgba(255, 211, 107, 0.75);
   border-radius: 10px;
-  background: rgba(7, 12, 27, 0.5);
+  background: var(--panel-soft, rgba(7, 12, 27, 0.5));
 }
 .agent-task-card[data-run-status="completed"] { border-left-color: #74e6b0; }
 .agent-task-card[data-run-status="failed"] { border-left-color: #ff9098; }

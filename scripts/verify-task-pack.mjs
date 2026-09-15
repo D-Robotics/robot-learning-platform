@@ -116,6 +116,18 @@ assert.deepEqual(originbot.reward, generic.reward, 'both machines share the task
 assert.notEqual(originbot.adapter.id, generic.adapter.id, 'different adapter packs');
 assert.equal(generic.provenance.mock, true, 'virtual machine stays honestly labeled');
 
+// Engine recommendation contract: the physics-dense pack recommends MJX and
+// the kinematic packs stay silent (platform default), while the resolver
+// refuses unknown engine ids instead of silently dropping them.
+const physics = resolveTaskPack('originbot-physics-navigation');
+assert.equal(physics.recommendedEngine, 'mjx-ppo', 'physics-dense pack recommends MJX');
+assert.equal(originbot.recommendedEngine, undefined, 'kinematic pack stays engine-silent');
+assert.throws(
+  () => resolveTaskPack('goal-navigation-clear-arena'),
+  /recommendedEngine/,
+  'legacy pack with an unknown engine id must fail loudly at resolve time',
+);
+
 console.log(
   '[task-pack] PASS — 2 packs resolved, layouts aligned with board runtime, request shape valid',
 );

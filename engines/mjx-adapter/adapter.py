@@ -160,8 +160,18 @@ def safe_slug(value, fallback):
 def jax_device_summary():
     kinds = []
     for device in jax.devices():
-        kind = getattr(device, "device_kind", None) or getattr(device, "platform", "?")
+        # jax>=0.5: device_kind is the marketing name ("NVIDIA GeForce RTX
+        # 5090"), which contains neither "gpu" nor "cuda" — the platform
+        # attribute ("gpu"/"cpu"/"tpu") is the reliable accelerator signal.
+        # Match on both so old and new jax report CUDA honestly.
+        kind = (
+            getattr(device, "device_kind", None)
+            or getattr(device, "platform", "?")
+        )
+        platform = str(getattr(device, "platform", "")).lower()
         kinds.append(str(kind).lower())
+        if "cuda" in platform or "gpu" in platform or "rocm" in platform:
+            kinds[-1] = platform + ":" + kinds[-1]
     cuda = any(("gpu" in kind or "cuda" in kind or "rocm" in kind) for kind in kinds)
     return ",".join(kinds), cuda
 

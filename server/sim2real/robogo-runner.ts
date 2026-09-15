@@ -3,6 +3,7 @@ import type {
   Sim2RealModelManifest,
   Sim2RealRunArtifactMetadata,
   Sim2RealRunMetrics,
+  Sim2RealRunProgressPoint,
   Sim2RealTaskEvaluationEvidence,
   Sim2RealTrainingSpec,
 } from '../../shared/sim2real.js';
@@ -27,7 +28,7 @@ const SAFE_IDEMPOTENCY_KEY = /^[\x21-\x7e]{1,128}$/;
  * legacy ids) are left untouched — the extra field is additive and older
  * runners ignore it.
  */
-function resolvedTaskPack(taskId?: string): Record<string, unknown> | null {
+export function resolvedTaskPack(taskId?: string): Record<string, unknown> | null {
   if (!taskId || !/^[a-z][a-z0-9_-]{0,63}$/.test(taskId)) return null;
   try {
     const pack = resolveTaskPack(taskId) as unknown as Record<string, unknown>;
@@ -47,6 +48,8 @@ export interface Sim2RealRobogoRunResult {
   artifact?: Sim2RealRunArtifactMetadata;
   metrics?: Sim2RealRunMetrics;
   taskEvaluation?: Sim2RealTaskEvaluationEvidence;
+  /** Live training curve points reported by the worker while the engine runs. */
+  progress?: Sim2RealRunProgressPoint[];
 }
 
 /**
@@ -280,7 +283,7 @@ function safeToken(raw: unknown): string {
   return token;
 }
 
-function safeAccountId(raw: string): string {
+export function safeAccountId(raw: string): string {
   const accountId = String(raw ?? '').trim();
   if (!accountId || accountId.length > 160 || /[\u0000-\u001f\u007f/]/.test(accountId)) {
     throw new Sim2RealError('sim2real_runner_account_invalid');
@@ -466,6 +469,43 @@ function safeMetrics(value: unknown): Sim2RealRunMetrics | undefined {
   };
 }
 
+function safeProgressPoints(value: unknown): Sim2RealRunProgressPoint[] | undefined {
+  if (!Array.isArray(value) || !value.length) return undefined;
+  const points: Sim2RealRunProgressPoint[] = [];
+  let lastIteration = 0;
+  for (const entry of value.slice(0, 512)) {
+    if (!entry || typeof entry !== 'object' || Array.isArray(entry)) continue;
+    const point = entry as Record<string, unknown>;
+    const iteration = Number(point.iteration);
+    const totalIterations = Number(point.totalIterations);
+    const meanReward = Number(point.meanReward);
+    const recentSuccess = Number(point.recentSuccess);
+    if (
+      !Number.isSafeInteger(iteration) ||
+      iteration < 1 ||
+      iteration <= lastIteration ||
+      !Number.isSafeInteger(totalIterations) ||
+      totalIterations < 1 ||
+      !Number.isFinite(meanReward) ||
+      !Number.isFinite(recentSuccess)
+    ) {
+      continue;
+    }
+    lastIteration = iteration;
+    const elapsedSeconds = Number(point.elapsedSeconds);
+    const at = safeText(point.at, 40);
+    points.push({
+      iteration,
+      totalIterations,
+      meanReward,
+      recentSuccess,
+      ...(Number.isFinite(elapsedSeconds) && elapsedSeconds >= 0 ? { elapsedSeconds } : {}),
+      ...(at ? { at } : {}),
+    });
+  }
+  return points.length ? points : undefined;
+}
+
 function parseRunResult(payload: unknown): Sim2RealRobogoRunResult {
   const source =
     payload && typeof payload === 'object' && !Array.isArray(payload)
@@ -507,6 +547,11 @@ function parseRunResult(payload: unknown): Sim2RealRobogoRunResult {
   const artifact = safeArtifact(source.artifact);
   const metrics = safeMetrics(source.metrics);
   const taskEvaluation = normalizeTaskEvaluationEvidence(source.taskEvaluation);
+  // Live progress points: local workers parse engine stdout while running and
+  // expose a bounded array. Only strictly-advancing, numerically sane points
+  // pass; anything else is dropped so a hostile runner cannot bloat the run
+  // record or the status response.
+  const progress = safeProgressPoints(source.progress);
   // Local workers report the honest device fact at the top level of the job
   // view (job.cuda), not inside metrics. Merge it in so the platform run
   // record can surface GPU usage; only an explicit boolean is trusted.
@@ -525,6 +570,7 @@ function parseRunResult(payload: unknown): Sim2RealRobogoRunResult {
     ...(artifact ? { artifact } : {}),
     ...(metricsWithCuda ? { metrics: metricsWithCuda } : {}),
     ...(taskEvaluation ? { taskEvaluation } : {}),
+    ...(progress ? { progress } : {}),
   };
 }
 

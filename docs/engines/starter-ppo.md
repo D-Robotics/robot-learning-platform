@@ -64,6 +64,18 @@ python3 -m pip install --user numpy torch onnx
 - `telemetry.jsonl` — 训练后评测轨迹（前 200 步，可上传平台评测）
 - `baseline-telemetry.jsonl` — 未训练基线轨迹（评测页的 reference）
 - `training-summary.json` — 超参、物理常数、reward 曲线、控制延迟
+- `checkpoints/iter-XXXXX.pt` — 周期 checkpoint（每 iterations//8 轮 + 最后一轮）
+
+## 周期 checkpoint 与 best 策略选择
+
+训练循环按 `max(1, iterations // 8)` 的间隔保存 `checkpoints/iter-XXXXX.pt`（含 `model_state`、曲线尾部、观测/动作维度）。训练结束后，引擎会**探测**最后 4 个 checkpoint（每个 4 回合轻量评测，按 successRate → collisionRate → 迭代数排序），把探测最优的权重用于正式评测和 `policy.onnx` 导出——最后一轮不一定是最好的策略。排序键末位是迭代数降序：平分时最新者胜，探测只会"提升"不会静默倒退。探测失败（文件损坏等）静默回退最终权重，不会让任务失败。选择结果记录在 `training-summary.json` 的 `checkpoints` 块和 `result.json` 的 `checkpoint.selectedIteration / selectedByProbe`。
+
+## Run 页自动回放与浏览器策略试跑
+
+运行完成后的两条闭环（无需手动导入）：
+
+- **自动挂载评测回放**：状态轮询首次观察到 `completed` 时，平台从 worker 拉取该任务的 `telemetry.jsonl`（`GET /runs/:id/telemetry`，与制品同一套所有权/完成态校验），以确定性幂等键 `eval-replay-<runId>` 分块（≤5000 样本/块）写入遥测管线，`source: 'browser'`。前端随后自动加载 `GET /runs/:id/replay` 并把帧推给嵌入仿真器画轨迹（不驱动物理）。对账（reconcile）路径保持单请求契约，不额外拉取。
+- **浏览器 ONNX 策略试跑**：`GET /runs/:id/policy.onnx` 下发经 SHA-256 校验的策略字节（与板端下发同一套证据门槛：completed、非 mock、本地后端、有摘要）。Run 页「策略试跑」按钮通过 postMessage 让嵌入仿真器用本地 vendored 的 ONNX Runtime Web（`public/vendor/onnxruntime-web/`，无 CDN、wasm 同源）推理 8D 观测 → 2D normalized-twist，经仿真器自己的 `/cmd_vel` 投影驱动小车。推理全程在 iframe 内完成（postMessage 不能传函数），状态通过 `rdk-policy-status` 消息回报。试跑是操作员辅助视角，不构成发布证据。
 
 ## 把引擎接入常驻服务
 
@@ -78,6 +90,11 @@ npm run dev:sim2real
 ```
 
 然后在工作台「强化学习训练」选 local backend 提交任务。worker 保证：`shell:false`、绝对路径引擎、凭据不出现在子进程环境、未写回合法 `artifact://` 结果的任务**不会**被标记为完成。
+
+starter 是请求未指定 `training.engine` 时的**平台默认引擎**。同机注册其他引擎（如
+MJX）时保持本引擎为基础配置即可，见
+[`engines/mjx-adapter` 的双引擎注册](mjx-adapter.md)；Kinematic 任务包
+（`goal-navigation` 系列）不声明 `recommendedEngine`，始终默认走这里。
 
 ## 换成你自己的机器人
 

@@ -2,6 +2,7 @@
 """Small deterministic tests for board telemetry credential selection."""
 
 import importlib.util
+import json
 import os
 import pathlib
 import stat
@@ -76,6 +77,39 @@ class TelemetryUploaderFileSecurityTests(unittest.TestCase):
             handle.write('{"secret":true}\n')
         os.symlink(outside, self.spool)
         self.assertEqual(MODULE._read_batch(0), ([], 0))
+
+    def test_batch_closes_at_session_boundary(self):
+        # The runtime resets t at each session; a batch that crosses the
+        # boundary is rejected whole by the ingest API's non-decreasing-t
+        # rule, so the reader must stop before the first decreasing t.
+        rows = [
+            {"t": 0.0, "observation": [0.1], "action": [0.2]},
+            {"t": 0.1, "observation": [0.1], "action": [0.2]},
+            {"t": 0.2, "observation": [0.1], "action": [0.2]},
+            {"t": 0.002, "observation": [0.1], "action": [0.2]},
+            {"t": 0.1, "observation": [0.1], "action": [0.2]},
+        ]
+        with open(self.spool, "w") as handle:
+            for row in rows:
+                handle.write(json.dumps(row) + "\n")
+        batch, end = MODULE._read_batch(0)
+        self.assertEqual([item["t"] for item in batch], [0.0, 0.1, 0.2])
+        self.assertEqual(end, sum(len(json.dumps(row) + "\n") for row in rows[:3]))
+
+    def test_batch_continues_across_event_markers(self):
+        # Event rows ride the same spool with their own session-relative t;
+        # only a decreasing t on a control sample closes the batch.
+        rows = [
+            {"t": 1.0, "observation": [0.1], "action": [0.2]},
+            {"t": 1.5, "event": {"kind": "session-stopped"}},
+            {"t": 1.6, "observation": [0.1], "action": [0.2]},
+        ]
+        with open(self.spool, "w") as handle:
+            for row in rows:
+                handle.write(json.dumps(row) + "\n")
+        batch, end = MODULE._read_batch(0)
+        self.assertEqual(len(batch), 3)
+        self.assertEqual(end, sum(len(json.dumps(row) + "\n") for row in rows))
 
 
 if __name__ == "__main__":

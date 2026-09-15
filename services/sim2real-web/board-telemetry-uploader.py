@@ -103,6 +103,7 @@ def _save_offset(value):
 def _read_batch(start):
     rows = []
     end = start
+    last_t = None
     handle = None
     try:
         handle = secure_open_read(SPOOL)
@@ -124,6 +125,20 @@ def _read_batch(start):
                         break
                     continue
                 if isinstance(item, dict):
+                    # The runtime resets its clock at every policy session,
+                    # so `t` restarts near zero after each session-stopped
+                    # event. The ingest API rejects a whole chunk whose
+                    # samples are not ordered by non-decreasing t, so close
+                    # the batch at that boundary and let the next batch start
+                    # the new session instead of replaying a rejected mix.
+                    item_t = item.get("t")
+                    if rows and isinstance(item_t, (int, float)) and last_t is not None:
+                        if item_t < last_t:
+                            end -= len(raw)
+                            break
+                        last_t = item_t
+                    elif isinstance(item_t, (int, float)):
+                        last_t = item_t
                     rows.append(item)
     except OSError:
         return [], start
@@ -162,11 +177,28 @@ def _post(samples, start, end):
     try:
         with urllib.request.urlopen(request, timeout=15) as response:
             if response.status < 200 or response.status >= 300:
-                return False
+                return False, response.status
             response.read(1024)
-            return True
+            return True, response.status
+    except urllib.error.HTTPError as exc:
+        # Transport succeeded and the server refused the chunk. Retry alone
+        # cannot fix a permanent 4xx (e.g. the run's telemetry timeline is
+        # already past this session's clock), so surface the refusal in the
+        # journal instead of silently looping; the checkpoint stays put and
+        # the data is not lost.
+        detail = ""
+        try:
+            detail = exc.read(400).decode("utf-8", "replace")
+        except (OSError, ValueError):
+            pass
+        print(
+            "[telemetry-uploader] chunk at offset %d rejected: HTTP %s %s"
+            % (start, exc.code, detail),
+            flush=True,
+        )
+        return False, exc.code
     except (urllib.error.URLError, TimeoutError, OSError):
-        return False
+        return False, 0
 
 
 def main():
@@ -190,7 +222,8 @@ def main():
         if not samples:
             time.sleep(1.0)
             continue
-        if _post(samples, offset, end):
+        ok, status = _post(samples, offset, end)
+        if ok:
             offset = end
             _save_offset(offset)
             backoff = 1.0

@@ -14,7 +14,7 @@ import {
   type Sim2RealTelemetrySource,
   type Sim2RealTelemetryTwist,
 } from '../../shared/sim2real.js';
-import { sendApiError, wrapAsync } from '../sim2real/http-helpers.js';
+import { redactInternalError, sendApiError, wrapAsync } from '../sim2real/http-helpers.js';
 import { setSim2RealAuditContext } from '../sim2real/audit-log.js';
 import { requestOwnsDevice } from '../sim2real/standalone-adapters.js';
 import { adviseRetraining } from '../sim2real/retraining-advisor.js';
@@ -75,6 +75,12 @@ export interface Sim2RealTelemetryRouteDeps {
   storageError: StorageError;
   /** Optional external verifier; the local HMAC verifier remains the default. */
   resolveTelemetryIdentity?: Sim2RealTelemetryIdentityResolver;
+  /**
+   * Optional ops-event hook fired when a telemetry append throws after
+   * validation (storage failures, shard write errors). Receives only
+   * low-sensitivity context: run id, source and the redacted error message.
+   */
+  onIngestFailure?: (input: { runId: string; source: string; message: string }) => void;
 }
 
 export interface Sim2RealTelemetryRouteOptions {
@@ -566,13 +572,20 @@ function parseTelemetryBody(body: unknown): {
   if (rawSamples.length > TELEMETRY_SAMPLE_CAP)
     return { error: `at most ${TELEMETRY_SAMPLE_CAP} samples are accepted per chunk` };
   const samples: Sim2RealTelemetrySample[] = [];
-  let previousT = -Infinity;
+  let previousT: number | undefined;
   for (const [index, item] of rawSamples.entries()) {
     const normalized = normalizeTelemetrySample(item, index);
     if (normalized.error || !normalized.sample) return { error: normalized.error };
-    if (normalized.sample.t < previousT)
-      return { error: 'samples must be ordered by non-decreasing t' };
-    previousT = normalized.sample.t;
+    // The board runtime resets its clock at every session-started marker;
+    // ordering restarts there instead of rejecting the new session's
+    // near-zero timestamps as disorder.
+    if (normalized.sample.event?.kind === 'session-started') {
+      previousT = undefined;
+    } else {
+      if (previousT != null && normalized.sample.t < previousT)
+        return { error: 'samples must be ordered by non-decreasing t' };
+      previousT = normalized.sample.t;
+    }
     samples.push(normalized.sample);
   }
   return { samples };
@@ -692,12 +705,37 @@ function buildEvaluation(
   // replay statistics (counts, rates, terminations, error metrics) describe
   // what the robot did, while session markers are aggregated separately by
   // /runs/:id/board-sessions.
-  const samples = orderedRecords
-    .flatMap((record) => record.samples)
-    .filter((sample) => !sample.event);
+  const flatSamples = orderedRecords.flatMap((record) => record.samples);
+  const samples = flatSamples.filter((sample) => !sample.event);
+  // The board runtime resets its clock at every policy session, so duration
+  // and rate are computed per session segment and summed — a multi-session
+  // run must not report a first-to-last span that silently includes the
+  // gaps between sessions.
+  const sessionIds = new Set<string>();
+  const segments: number[][] = [];
+  let currentSegment: number[] = [];
+  const closeSegment = () => {
+    if (currentSegment.length) {
+      segments.push(currentSegment);
+      currentSegment = [];
+    }
+  };
+  for (const sample of flatSamples) {
+    if (sample.event) {
+      closeSegment();
+      if (sample.event.sessionId) sessionIds.add(sample.event.sessionId);
+      continue;
+    }
+    currentSegment.push(sample.t);
+  }
+  closeSegment();
+  const duration = segments.reduce(
+    (sum, segment) =>
+      segment.length > 1 ? sum + Math.max(0, segment[segment.length - 1] - segment[0]) : sum,
+    0,
+  );
   const first = samples[0]?.t;
   const last = samples.at(-1)?.t;
-  const duration = first != null && last != null ? Math.max(0, last - first) : 0;
   // A run can receive more than one chunk, and older clients did not enforce
   // a single provenance value across those chunks.  If any chunk is the
   // built-in presentation fixture, classify the complete replay as synthetic
@@ -736,8 +774,9 @@ function buildEvaluation(
     sampleCount: samples.length,
     durationSeconds: duration,
     ...(duration > 0 && samples.length > 1
-      ? { sampleRateHz: (samples.length - 1) / duration }
+      ? { sampleRateHz: (samples.length - segments.length) / duration }
       : {}),
+    ...(sessionIds.size ? { sessionCount: sessionIds.size } : {}),
     ...(first == null ? {} : { firstTimestamp: first }),
     ...(last == null ? {} : { lastTimestamp: last }),
     source: replaySource,
@@ -797,7 +836,7 @@ function buildEvaluation(
       'telemetry samples declare mixed action units/scales; calibration must be reviewed before deployment',
     );
   if (declaredControlHz.length === 1 && duration > 0 && samples.length > 1) {
-    const observedRate = (samples.length - 1) / duration;
+    const observedRate = (samples.length - segments.length) / duration;
     if (Math.abs(observedRate - declaredControlHz[0]) > Math.max(1, declaredControlHz[0] * 0.15))
       warnings.push(
         `observed sample rate ${observedRate.toFixed(2)}Hz differs from declared ${declaredControlHz[0]}Hz`,
@@ -815,6 +854,11 @@ function buildEvaluation(
   }
   if (sources.includes('board-agent') && !replayAttested) {
     warnings.push('board-agent replay is not server-attested; it is review-only evidence');
+  }
+  if (sessionIds.size > 1) {
+    warnings.push(
+      `replay contains ${sessionIds.size} policy sessions; duration is summed per session because the board clock resets between sessions`,
+    );
   }
   const action = reference ? vectorErrors(samples, reference, 'action') : {};
   const observation = reference ? vectorErrors(samples, reference, 'observation') : {};
@@ -1222,6 +1266,17 @@ export function registerSim2RealTelemetryRoutes(
           : { acceptedSamples: appended.telemetry.samples.length }),
       });
     } catch (error) {
+      if (deps.onIngestFailure) {
+        try {
+          deps.onIngestFailure({
+            runId,
+            source,
+            message: redactInternalError(error),
+          });
+        } catch {
+          // A reporting hook must never change the storage error response.
+        }
+      }
       deps.storageError(request, response, error, 'sim2real-telemetry-ingest');
     }
   };

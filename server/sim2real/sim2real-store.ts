@@ -1301,12 +1301,17 @@ function compareTelemetryRecords(
 }
 
 /**
- * Reject a newly accepted chunk if the timeline would go backwards at a
- * chunk boundary.  The HTTP parser already validates ordering inside one
- * chunk, but the ledger is also reachable by local/board adapters and must
- * enforce the invariant at the serialized write boundary.  Sequence numbers
- * are deliberately used when present so chunks that arrive out of order can
+ * Reject a newly accepted chunk if the timeline would go backwards.  The
+ * check walks one flat, sequence-ordered sample stream (the run's chunk
+ * history plus the incoming chunk), so the invariant holds identically
+ * inside a chunk and across chunk boundaries.  Sequence numbers are
+ * deliberately used when present so chunks that arrive out of order can
  * still be accepted when their logical timeline is valid.
+ *
+ * The board runtime resets its per-session clock at every session-started
+ * marker: a timestamp regression that lands exactly on such a marker is the
+ * documented start of a new policy session, not disorder, so the scan
+ * restarts there.  Any other regression is rejected.
  */
 function assertTelemetryTimeline(
   records: readonly StoredTelemetry[],
@@ -1316,29 +1321,26 @@ function assertTelemetryTimeline(
   const ordered = [...records, incoming]
     .filter((item) => item.runId === incoming.runId && ownerMatches(item, owner))
     .sort(compareTelemetryRecords);
-  let previousLast: number | undefined;
+  let previousT: number | undefined;
   for (const record of ordered) {
     const samples = Array.isArray(record.samples) ? record.samples : [];
-    if (!samples.length) continue;
-    let previousInChunk: number | undefined;
     for (const sample of samples) {
+      // A new policy session restarts the board's clock, so the next
+      // session's samples legitimately begin near zero again.
+      if (sample?.event?.kind === 'session-started') {
+        previousT = undefined;
+        continue;
+      }
       const timestamp = Number(sample?.t);
       // Legacy ledgers are allowed to contain records written before the
       // timestamp invariant existed.  Skip malformed legacy values here;
       // route-level validation still rejects malformed new input.
       if (!Number.isFinite(timestamp)) continue;
-      if (previousInChunk != null && timestamp < previousInChunk) {
+      if (previousT != null && timestamp < previousT) {
         throw new Sim2RealError('sim2real_telemetry_timestamp_order');
       }
-      previousInChunk = timestamp;
+      previousT = timestamp;
     }
-    const first = Number(samples[0]?.t);
-    const last = Number(samples.at(-1)?.t);
-    if (!Number.isFinite(first) || !Number.isFinite(last)) continue;
-    if (previousLast != null && first < previousLast) {
-      throw new Sim2RealError('sim2real_telemetry_timestamp_order');
-    }
-    previousLast = last;
   }
 }
 
@@ -2786,6 +2788,7 @@ export async function updateSim2RealRun(
       | 'taskEvaluation'
       | 'evaluation'
       | 'checkpoint'
+      | 'progress'
       | 'finishedAt'
       | 'mock'
       | 'artifact'
@@ -2845,6 +2848,7 @@ export async function updateSim2RealRunForReconcile(
       | 'taskEvaluation'
       | 'evaluation'
       | 'checkpoint'
+      | 'progress'
       | 'finishedAt'
       | 'mock'
       | 'artifact'

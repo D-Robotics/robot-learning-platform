@@ -1,0 +1,11 @@
+-- Production schema for replacing the single-process JSON ledger.
+-- Every business row is tenant scoped; application transactions must set
+-- SET LOCAL rdk.account_id before reads/writes (RLS is fail-closed).
+CREATE EXTENSION IF NOT EXISTS pgcrypto;
+CREATE TABLE IF NOT EXISTS projects (id uuid PRIMARY KEY DEFAULT gen_random_uuid(), account_id text NOT NULL, name text NOT NULL, created_at timestamptz NOT NULL DEFAULT now());
+CREATE TABLE IF NOT EXISTS models (id uuid PRIMARY KEY DEFAULT gen_random_uuid(), account_id text NOT NULL, project_id uuid REFERENCES projects(id), manifest jsonb NOT NULL, created_at timestamptz NOT NULL DEFAULT now());
+CREATE TABLE IF NOT EXISTS runs (id uuid PRIMARY KEY DEFAULT gen_random_uuid(), account_id text NOT NULL, project_id uuid REFERENCES projects(id), model_id uuid REFERENCES models(id), status text NOT NULL, idempotency_key text, payload jsonb NOT NULL, created_at timestamptz NOT NULL DEFAULT now(), UNIQUE(account_id,idempotency_key));
+CREATE TABLE IF NOT EXISTS artifacts (id uuid PRIMARY KEY DEFAULT gen_random_uuid(), account_id text NOT NULL, model_id uuid REFERENCES models(id), version text NOT NULL, sha256 text NOT NULL, bytes bigint NOT NULL, signature text NOT NULL, uri text NOT NULL, immutable boolean NOT NULL DEFAULT true, created_at timestamptz NOT NULL DEFAULT now(), UNIQUE(account_id,model_id,version), UNIQUE(account_id,sha256));
+CREATE TABLE IF NOT EXISTS telemetry_chunks (id uuid PRIMARY KEY DEFAULT gen_random_uuid(), account_id text NOT NULL, run_id uuid NOT NULL REFERENCES runs(id), chunk_key text NOT NULL, sha256 text NOT NULL, sample_count integer NOT NULL, object_uri text NOT NULL, created_at timestamptz NOT NULL DEFAULT now(), UNIQUE(run_id,chunk_key));
+ALTER TABLE projects ENABLE ROW LEVEL SECURITY; ALTER TABLE models ENABLE ROW LEVEL SECURITY; ALTER TABLE runs ENABLE ROW LEVEL SECURITY; ALTER TABLE artifacts ENABLE ROW LEVEL SECURITY; ALTER TABLE telemetry_chunks ENABLE ROW LEVEL SECURITY;
+DO $$ DECLARE t text; BEGIN FOREACH t IN ARRAY ARRAY['projects','models','runs','artifacts','telemetry_chunks'] LOOP EXECUTE format('CREATE POLICY tenant_isolation ON %I USING (account_id = current_setting(''rdk.account_id'', true)) WITH CHECK (account_id = current_setting(''rdk.account_id'', true))', t); END LOOP; END $$;

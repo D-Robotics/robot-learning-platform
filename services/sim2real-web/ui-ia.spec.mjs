@@ -123,8 +123,8 @@ assert.match(
 );
 
 // ---- IA: one navigation surface, grouped like RDK Studio ----
-// 开始 (overview + agent) / 学习闭环 (01–04 real workflow) / 资源与工具 (records,
-// station). Contract is no longer a first-class view; it is a fold on train.
+// 开始 (overview + agent) / 学习闭环 (01–04 real workflow) / 资源与工具 (compute,
+// records, station). Contract remains a fold on train.
 const viewNames = [...app.matchAll(/WORKFLOW_VIEWS\s*=\s*\[([^\]]+)\]/g)][0][1]
   .match(/['"][^'"]+['"]/g)
   .map((value) => value.slice(1, -1));
@@ -133,10 +133,14 @@ const targets = [...html.matchAll(/data-view-target="([^"]+)"/g)].map((match) =>
 
 assert.deepEqual(
   viewNames,
-  ['overview', 'simulate', 'train', 'evaluate', 'deploy', 'records', 'station'],
-  'workflow views: contract folded into train; steps stay a real sequence',
+  ['overview', 'simulate', 'train', 'resources', 'evaluate', 'deploy', 'records', 'station'],
+  'workflow views: management concerns are separated from the learning loop',
 );
-assert.deepEqual(sections, viewNames, 'each workflow view must have a rendered section');
+assert.deepEqual(
+  [...sections].sort(),
+  [...viewNames].sort(),
+  'each workflow view must have a rendered section',
+);
 assert.deepEqual(
   [...new Set(targets)].sort(),
   [...viewNames].sort(),
@@ -144,7 +148,11 @@ assert.deepEqual(
 );
 
 const navItems = [...html.matchAll(/class="nav-item(?:\s[^"]*)?"/g)].length;
-assert.equal(navItems, 8, 'sidebar nav: overview + agent + steps 01-04 + records + station');
+assert.equal(
+  navItems,
+  9,
+  'sidebar nav: overview + agent + steps 01-04 + compute + records + station',
+);
 const navLabels = [
   ...html.matchAll(/class="nav-item(?:\s[^"]*)?"[\s\S]*?<strong>([^<]+)<\/strong>/g),
 ].map((m) => m[1]);
@@ -157,6 +165,7 @@ assert.deepEqual(
     '强化学习训练',
     'Sim2Real 评测',
     '部署与反馈',
+    'GPU 与算力',
     '调试与记录',
     '设备上位机',
   ],

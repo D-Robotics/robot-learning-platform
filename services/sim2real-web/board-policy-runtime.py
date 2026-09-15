@@ -860,10 +860,29 @@ class PolicyRuntime:
             except Exception as exc:  # noqa: BLE001 - any loop failure stops motion
                 self._fault("loop: " + str(exc))
                 return
+            self._spin_ros_once()
             elapsed = time.time() - t0
             time.sleep(max(0.0, period - elapsed))
         self._publish_zero("stopped")
         self._write_state()
+
+    def _spin_ros_once(self):
+        """Pump the rclpy executor so DDS discovery and reliable writes drain.
+
+        rclpy publish() only queues; without a periodic spin the writer
+        endpoints never finish discovery and messages silently never reach the
+        chassis. This is a bounded, non-blocking pump (subscribers would run
+        here too if the runtime ever subscribes).
+        """
+        node = self._node
+        if node is None:
+            return
+        try:
+            import rclpy
+
+            rclpy.spin_once(node, timeout_sec=0.0)
+        except Exception:  # noqa: BLE001 - transport pump must never kill motion
+            pass
 
     def _session_model_summary(self):
         # Bounded fingerprint of the artifact that is active for the session.

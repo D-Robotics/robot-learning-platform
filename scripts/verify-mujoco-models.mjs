@@ -129,6 +129,17 @@ for key, definition in sorted(models.MODEL_DEFINITIONS.items()):
         f"source={definition.source} — compile+10 steps OK"
     )
 
+# The OriginBot body/wheel actuator XML is injected from the shared
+# assets/originbot module; prove the rendered XML still carries the velocity
+# wheel actuators (the embedded wheel-controller contract app.py relies on).
+originbot_xml = models.MODEL_DEFINITIONS["originbot"].xml
+assert '<velocity name="left_wheel"' in originbot_xml, (
+    "originbot: rendered XML lost the left_wheel velocity actuator"
+)
+assert '<velocity name="right_wheel"' in originbot_xml, (
+    "originbot: rendered XML lost the right_wheel velocity actuator"
+)
+
 # ---- 2. registry contract: the loader is fail-closed -----------------------
 example = json.loads(
     (REPO / "services" / "mujoco-web" / "registry" / "example-model.json.example").read_text(

@@ -1,0 +1,623 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>轻量实验室 · 设计预览</title>
+    <script src="./theme-boot.js?v=2"></script>
+    <style>
+      /* ===== tokens：与主站同源的 Aurora 浅色 / operator 深色 ===== */
+      :root {
+        color-scheme: light;
+        --bg: #fbfbf9;
+        --bg-soft: #f3f1ea;
+        --panel: #ffffff;
+        --line: rgba(27, 27, 24, 0.12);
+        --line-strong: rgba(27, 27, 24, 0.2);
+        --text: #1b1b18;
+        --muted: #6f6a5f;
+        --accent: #ff7918;
+        --accent-soft: rgba(255, 121, 24, 0.12);
+        --accent-text: #b34d00;
+        --green: #46a062;
+        --green-soft: rgba(70, 160, 98, 0.12);
+        --dot: rgba(27, 27, 24, 0.055);
+        --shadow: 0 12px 32px rgba(27, 27, 24, 0.07);
+      }
+      html.theme-dark {
+        color-scheme: dark;
+        --bg: #0b1219;
+        --bg-soft: #0e1620;
+        --panel: #101b24;
+        --line: rgba(154, 177, 201, 0.16);
+        --line-strong: rgba(154, 177, 201, 0.3);
+        --text: #edf3fa;
+        --muted: #8fa3b8;
+        --accent: #ff9d4d;
+        --accent-soft: rgba(255, 157, 77, 0.14);
+        --accent-text: #ffb377;
+        --green: #5ec57f;
+        --green-soft: rgba(94, 197, 127, 0.14);
+        --dot: rgba(237, 243, 250, 0.05);
+        --shadow: 0 12px 32px rgba(0, 0, 0, 0.4);
+      }
+      * { box-sizing: border-box; }
+      html, body { margin: 0; padding: 0; }
+      body {
+        font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "PingFang SC",
+          "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+        background: var(--bg);
+        color: var(--text);
+        line-height: 1.7;
+        -webkit-font-smoothing: antialiased;
+      }
+      body::before {
+        content: '';
+        position: fixed;
+        inset: 0;
+        pointer-events: none;
+        background-image: radial-gradient(var(--dot) 1px, transparent 1px);
+        background-size: 22px 22px;
+      }
+
+      /* ===== header ===== */
+      .lab-header {
+        position: sticky;
+        top: 0;
+        z-index: 10;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+        padding: 12px 22px;
+        background: var(--bg);
+        border-bottom: 1px solid var(--line);
+      }
+      .lab-brand { font-size: 15px; font-weight: 700; letter-spacing: -0.01em; }
+      .lab-brand-tag {
+        margin-left: 8px;
+        padding: 2px 8px;
+        border: 1px solid var(--line);
+        border-radius: 999px;
+        font-size: 11px;
+        font-weight: 500;
+        color: var(--muted);
+        vertical-align: 2px;
+      }
+      .lab-header-actions { display: flex; align-items: center; gap: 14px; }
+      .icon-btn {
+        width: 34px;
+        height: 34px;
+        border: 1px solid var(--line);
+        border-radius: 10px;
+        background: var(--panel);
+        color: var(--text);
+        font-size: 15px;
+        cursor: pointer;
+      }
+      .icon-btn:hover { border-color: var(--line-strong); }
+
+      /* 高级模式开关 */
+      .adv-switch { display: flex; align-items: center; gap: 8px; cursor: pointer; user-select: none; }
+      .adv-switch input { position: absolute; opacity: 0; pointer-events: none; }
+      .adv-track {
+        position: relative;
+        width: 38px;
+        height: 22px;
+        border-radius: 999px;
+        background: var(--bg-soft);
+        border: 1px solid var(--line);
+        transition: background 0.2s;
+      }
+      .adv-knob {
+        position: absolute;
+        top: 2px;
+        left: 2px;
+        width: 16px;
+        height: 16px;
+        border-radius: 50%;
+        background: var(--muted);
+        transition: transform 0.2s, background 0.2s;
+      }
+      .adv-switch input:checked + .adv-track { background: var(--accent-soft); border-color: var(--accent); }
+      .adv-switch input:checked + .adv-track .adv-knob { transform: translateX(16px); background: var(--accent); }
+      .adv-label { font-size: 12px; color: var(--muted); }
+      .adv-switch input:checked ~ .adv-label { color: var(--accent-text); font-weight: 600; }
+
+      /* 进度条 */
+      .lab-progress { position: sticky; top: 59px; z-index: 9; height: 3px; background: var(--line); }
+      .lab-progress-fill { height: 100%; width: 0; background: var(--accent); transition: width 0.4s ease; }
+
+      /* ===== 主体单列 ===== */
+      .lab-main { max-width: 720px; margin: 0 auto; padding: 40px 22px 80px; }
+      .lab-view { animation: view-in 0.35s ease; }
+      @keyframes view-in {
+        from { opacity: 0; transform: translateY(8px); }
+        to { opacity: 1; transform: none; }
+      }
+
+      .guest-note {
+        display: inline-block;
+        padding: 3px 12px;
+        border: 1px solid var(--line);
+        border-radius: 999px;
+        background: var(--panel);
+        color: var(--muted);
+        font-size: 12px;
+      }
+      .lab-hero {
+        margin: 18px 0 12px;
+        font-size: clamp(28px, 5.4vw, 40px);
+        line-height: 1.25;
+        letter-spacing: -0.03em;
+        font-weight: 800;
+      }
+      .lab-lede { margin: 0 0 34px; color: var(--muted); font-size: 16px; }
+
+      /* ===== 关卡列表 ===== */
+      .quest-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 12px; }
+      .quest-item {
+        display: flex;
+        align-items: center;
+        gap: 16px;
+        padding: 16px 18px;
+        border: 1px solid var(--line);
+        border-radius: 14px;
+        background: var(--panel);
+        cursor: pointer;
+        transition: transform 0.15s, border-color 0.15s, box-shadow 0.15s;
+      }
+      .quest-item:hover { transform: translateY(-2px); box-shadow: var(--shadow); }
+      .quest-item.is-done { border-color: var(--green); background: var(--green-soft); }
+      .quest-item.is-next { border-color: var(--accent); background: var(--panel); box-shadow: var(--shadow); }
+      .quest-num {
+        flex: none;
+        display: grid;
+        place-items: center;
+        width: 36px;
+        height: 36px;
+        border-radius: 50%;
+        border: 1.5px solid var(--line-strong);
+        font-weight: 700;
+        font-size: 15px;
+        color: var(--muted);
+      }
+      .quest-item.is-next .quest-num { border-color: var(--accent); color: var(--accent); }
+      .quest-item.is-done .quest-num { border-color: var(--green); color: var(--green); }
+      .quest-body { flex: 1; min-width: 0; }
+      .quest-body strong { display: block; font-size: 15px; letter-spacing: -0.01em; }
+      .quest-body span { display: block; color: var(--muted); font-size: 13px; }
+      .quest-state {
+        flex: none;
+        font-size: 12px;
+        color: var(--muted);
+        white-space: nowrap;
+      }
+      .quest-state[data-state='done'] { color: var(--green); font-weight: 600; }
+      .quest-state[data-state='next'] { color: var(--accent-text); font-weight: 600; }
+
+      /* ===== 完成卡 ===== */
+      .final-card {
+        margin-top: 26px;
+        padding: 22px 24px;
+        border: 1px solid var(--accent);
+        border-radius: 16px;
+        background: linear-gradient(120deg, var(--accent-soft), var(--panel) 60%);
+      }
+      .final-card strong { font-size: 19px; letter-spacing: -0.02em; }
+      .final-card p { margin: 8px 0 16px; color: var(--muted); font-size: 14px; }
+      .final-actions { display: flex; flex-wrap: wrap; gap: 10px; }
+
+      /* ===== 高级模式面板 ===== */
+      .advanced-panel {
+        margin-top: 40px;
+        padding: 22px 24px;
+        border: 1px dashed var(--line-strong);
+        border-radius: 16px;
+        background: var(--bg-soft);
+      }
+      .advanced-panel h2 { margin: 0 0 4px; font-size: 17px; letter-spacing: -0.02em; }
+      .advanced-panel > p { margin: 0 0 16px; color: var(--muted); font-size: 13px; }
+      .adv-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
+      .adv-tile {
+        padding: 14px;
+        border: 1px solid var(--line);
+        border-radius: 12px;
+        background: var(--panel);
+      }
+      .adv-tile-icon { font-size: 18px; line-height: 1; }
+      .adv-tile strong { display: block; margin: 6px 0 2px; font-size: 13px; }
+      .adv-tile span { display: block; color: var(--muted); font-size: 11.5px; line-height: 1.5; }
+      .adv-enter {
+        display: inline-block;
+        margin-top: 16px;
+        color: var(--accent-text);
+        font-size: 13px;
+        font-weight: 600;
+        text-decoration: none;
+      }
+      .adv-enter:hover { text-decoration: underline; }
+
+      /* ===== 步骤页 ===== */
+      .step-eyebrow {
+        margin: 0 0 10px;
+        color: var(--accent-text);
+        font-size: 12px;
+        font-weight: 700;
+        letter-spacing: 0.14em;
+      }
+      .step-title {
+        margin: 0 0 12px;
+        font-size: clamp(26px, 4.6vw, 34px);
+        line-height: 1.3;
+        letter-spacing: -0.03em;
+        font-weight: 800;
+      }
+      .step-lede { margin: 0 0 26px; color: var(--muted); font-size: 15.5px; }
+
+      .demo-frame { margin-bottom: 14px; }
+      .demo-frame iframe {
+        display: block;
+        width: 100%;
+        aspect-ratio: 16 / 10;
+        border: 1px solid var(--line);
+        border-radius: 14px;
+        background: var(--bg-soft);
+      }
+      .demo-fallback { margin: 8px 0 0; text-align: right; }
+      .demo-fallback a { color: var(--muted); font-size: 12px; text-decoration: none; }
+      .demo-fallback a:hover { color: var(--accent-text); }
+
+      .key-hints {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 10px 18px;
+        margin: 18px 0 26px;
+        padding: 14px 16px;
+        border: 1px solid var(--line);
+        border-radius: 12px;
+        background: var(--panel);
+      }
+      .key-hint { display: flex; align-items: center; gap: 8px; font-size: 12.5px; color: var(--muted); }
+      kbd {
+        display: inline-grid;
+        place-items: center;
+        min-width: 26px;
+        height: 26px;
+        padding: 0 6px;
+        border: 1px solid var(--line-strong);
+        border-bottom-width: 2.5px;
+        border-radius: 7px;
+        background: var(--panel);
+        font-family: ui-monospace, "SF Mono", Menlo, monospace;
+        font-size: 12px;
+        color: var(--text);
+      }
+
+      .demo-card {
+        margin-bottom: 22px;
+        padding: 18px 20px;
+        border: 1px solid var(--line);
+        border-radius: 14px;
+        background: var(--panel);
+      }
+      .train-stats { display: flex; gap: 22px; margin-bottom: 12px; flex-wrap: wrap; }
+      .train-stats span { color: var(--muted); font-size: 12.5px; }
+      .train-stats strong { margin-left: 6px; font-size: 15px; color: var(--text); font-variant-numeric: tabular-nums; }
+      .train-chart { width: 100%; height: 150px; display: block; }
+      .chart-axis { stroke: var(--line-strong); stroke-width: 1; }
+      .train-curve { fill: none; stroke: var(--accent); stroke-width: 2.5; stroke-linejoin: round; }
+      .chart-label { font-size: 10px; fill: var(--muted); }
+      .demo-caption { margin: 10px 0 0; color: var(--muted); font-size: 11.5px; }
+      .train-controls { margin-top: 12px; }
+
+      .compare-legend { display: flex; gap: 18px; margin: 10px 0 4px; font-size: 12px; color: var(--muted); }
+      .legend-chip { display: inline-block; width: 18px; height: 0; border-top: 2.5px solid var(--accent); margin-right: 6px; vertical-align: 3px; }
+      .legend-chip.is-real { border-top-style: dashed; border-top-color: var(--muted); }
+      .sim-curve { fill: none; stroke: var(--accent); stroke-width: 2.5; stroke-linejoin: round; }
+      .real-curve { fill: none; stroke: var(--muted); stroke-width: 2.5; stroke-dasharray: 6 5; stroke-linejoin: round; }
+      .gap-line { stroke: var(--line-strong); stroke-width: 1.2; }
+      .gap-text { font-size: 11px; fill: var(--muted); }
+
+      .video-poster {
+        display: grid;
+        place-items: center;
+        gap: 10px;
+        aspect-ratio: 16 / 9;
+        margin-bottom: 22px;
+        border: 1.5px dashed var(--line-strong);
+        border-radius: 14px;
+        background: radial-gradient(circle at 50% 42%, var(--accent-soft), var(--bg-soft) 70%);
+        text-align: center;
+      }
+      .video-play {
+        display: grid;
+        place-items: center;
+        width: 58px;
+        height: 58px;
+        border-radius: 50%;
+        background: var(--accent);
+        color: #fff;
+        font-size: 22px;
+        box-shadow: var(--shadow);
+      }
+      .video-poster em { color: var(--muted); font-size: 13px; font-style: normal; }
+
+      .deploy-checklist { margin-bottom: 26px; }
+      .deploy-checklist h2 { margin: 0 0 10px; font-size: 15px; letter-spacing: -0.01em; }
+      .deploy-checklist ul { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
+      .deploy-checklist li {
+        display: flex;
+        gap: 10px;
+        padding: 11px 14px;
+        border: 1px solid var(--line);
+        border-radius: 10px;
+        background: var(--panel);
+        font-size: 13.5px;
+      }
+      .deploy-checklist li::before { content: '✓'; color: var(--green); font-weight: 700; }
+      .deploy-checklist li span { color: var(--muted); }
+
+      .step-actions { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; }
+
+      /* ===== 按钮 ===== */
+      .btn-primary {
+        display: inline-flex;
+        align-items: center;
+        padding: 12px 24px;
+        border: none;
+        border-radius: 11px;
+        background: var(--accent);
+        color: #fff;
+        font-size: 15px;
+        font-weight: 600;
+        font-family: inherit;
+        text-decoration: none;
+        cursor: pointer;
+        transition: transform 0.12s, box-shadow 0.12s;
+      }
+      .btn-primary:hover { transform: translateY(-1px); box-shadow: var(--shadow); }
+      .btn-ghost {
+        display: inline-flex;
+        align-items: center;
+        padding: 12px 20px;
+        border: 1px solid var(--line);
+        border-radius: 11px;
+        background: var(--panel);
+        color: var(--text);
+        font-size: 14px;
+        font-family: inherit;
+        text-decoration: none;
+        cursor: pointer;
+      }
+      .btn-ghost:hover { border-color: var(--line-strong); }
+      .btn-small { padding: 8px 16px; font-size: 13px; border-radius: 9px; }
+
+      /* ===== footer ===== */
+      .lab-footer {
+        max-width: 720px;
+        margin: 0 auto;
+        padding: 0 22px 44px;
+        color: var(--muted);
+        font-size: 12px;
+      }
+      .lab-footer a { color: var(--muted); }
+      .lab-footer a:hover { color: var(--accent-text); }
+
+      @media (max-width: 640px) {
+        .adv-grid { grid-template-columns: 1fr; }
+        .lab-progress { top: 58px; }
+        .quest-state { display: none; }
+      }
+    </style>
+  </head>
+  <body>
+    <header class="lab-header">
+      <div class="lab-brand">RDK 学习实验室<span class="lab-brand-tag">轻量版 · 预览</span></div>
+      <div class="lab-header-actions">
+        <label class="adv-switch" title="切换到完整工作台界面层">
+          <input type="checkbox" id="advanced-toggle" />
+          <span class="adv-track"><span class="adv-knob"></span></span>
+          <span class="adv-label">高级模式</span>
+        </label>
+        <button class="icon-btn" id="theme-toggle" type="button" aria-label="切换主题" title="切换主题">◐</button>
+      </div>
+    </header>
+    <div class="lab-progress"><div class="lab-progress-fill" id="progress-fill"></div></div>
+
+    <main class="lab-main">
+      <!-- ============ 首页：关卡地图 ============ -->
+      <section class="lab-view" data-view="home">
+        <p class="guest-note">游客模式 · 不注册也能玩完整关</p>
+        <h1 class="lab-hero">5 分钟，看懂机器人<br />怎么从「玩」学会「走」</h1>
+        <p class="lab-lede">
+          四个小关卡，走完一条真实的强化学习闭环：亲手操控 → 看策略自学 → 量出差距 → 部署上真机。
+          每关约一分钟。
+        </p>
+
+        <ol class="quest-list" id="quest-list">
+          <li class="quest-item" data-step="1">
+            <span class="quest-num">1</span>
+            <div class="quest-body">
+              <strong>让小鸭动起来</strong>
+              <span>用键盘操控仿真机器人踢个球，感受真实的物理</span>
+            </div>
+            <span class="quest-state" data-state="todo">未开始</span>
+          </li>
+          <li class="quest-item" data-step="2">
+            <span class="quest-num">2</span>
+            <div class="quest-body">
+              <strong>看 AI 自己学会走路</strong>
+              <span>没有人写「怎么迈腿」，只有试错和得分</span>
+            </div>
+            <span class="quest-state" data-state="todo">未开始</span>
+          </li>
+          <li class="quest-item" data-step="3">
+            <span class="quest-num">3</span>
+            <div class="quest-body">
+              <strong>仿真和真机，差在哪</strong>
+              <span>同一个策略放进两个世界，量出那段差距</span>
+            </div>
+            <span class="quest-state" data-state="todo">未开始</span>
+          </li>
+          <li class="quest-item" data-step="4">
+            <span class="quest-num">4</span>
+            <div class="quest-body">
+              <strong>上真机</strong>
+              <span>把学会的策略，推进真实的 RDK 板子</span>
+            </div>
+            <span class="quest-state" data-state="todo">未开始</span>
+          </li>
+        </ol>
+
+        <div class="final-card" id="final-card" hidden>
+          <strong>你已经看懂了完整闭环 🎉</strong>
+          <p>
+            操控 → 自学 → 差距 → 真机。接下来可以自己跑一遍：登录后训练记录会保存，
+            还能把策略部署到你自己的板子上。
+          </p>
+          <div class="final-actions">
+            <a class="btn-primary btn-small" href="/">登录，开始自己的闭环 →</a>
+            <button class="btn-ghost btn-small" id="quest-reset" type="button">再玩一遍</button>
+          </div>
+        </div>
+
+        <section class="advanced-panel" id="advanced-panel" hidden>
+          <h2>高级模式</h2>
+          <p>完整工作台原封不动地收在这一层——开关只切换界面，不删任何功能。</p>
+          <div class="adv-grid">
+            <div class="adv-tile"><div class="adv-tile-icon">📋</div><strong>契约登记</strong><span>观测 / 动作 / 运行时一致性校验</span></div>
+            <div class="adv-tile"><div class="adv-tile-icon">🏋️</div><strong>训练任务</strong><span>本地 GPU 或 RoboGo 托管提交</span></div>
+            <div class="adv-tile"><div class="adv-tile-icon">📊</div><strong>评测证据</strong><span>仿真 ↔ 真机对比与留痕</span></div>
+            <div class="adv-tile"><div class="adv-tile-icon">🖥️</div><strong>设备管理</strong><span>板型探测 · 只读预检</span></div>
+            <div class="adv-tile"><div class="adv-tile-icon">🚀</div><strong>部署发布</strong><span>版本 · 回滚 · 发布计划</span></div>
+            <div class="adv-tile"><div class="adv-tile-icon">🔗</div><strong>审计链</strong><span>全程操作可追溯</span></div>
+          </div>
+          <a class="adv-enter" href="/">进入完整工作台 →</a>
+        </section>
+      </section>
+
+      <!-- ============ 第 1 关：操控仿真 ============ -->
+      <section class="lab-view" data-view="step-1" hidden>
+        <p class="step-eyebrow">第 1 步 · 共 4 步</p>
+        <h1 class="step-title">让小鸭动起来</h1>
+        <p class="step-lede">
+          这一步不需要任何知识。用键盘把小鸭推出去踢个球——它的重心、摩擦、打滑，
+          全都是后面 AI 要靠「试错」自己学会的东西。这就是它要学的世界。
+        </p>
+        <div class="demo-frame">
+          <iframe id="sim-frame" src="/mujoco/microduck/" title="MicroDuck 浏览器仿真"></iframe>
+          <div class="demo-fallback"><a href="/mujoco/microduck/" target="_blank" rel="noreferrer">加载不出？在新标签页直接打开仿真 ↗</a></div>
+        </div>
+        <div class="key-hints">
+          <span class="key-hint"><kbd>W</kbd>前进</span>
+          <span class="key-hint"><kbd>S</kbd>后退</span>
+          <span class="key-hint"><kbd>A</kbd><kbd>D</kbd>转向</span>
+          <span class="key-hint"><kbd>Q</kbd>左踢</span>
+          <span class="key-hint"><kbd>E</kbd>右踢</span>
+        </div>
+        <div class="step-actions">
+          <button class="btn-primary" type="button" data-complete="1" data-goto="step-2">玩好了，看 AI 学 →</button>
+          <a class="btn-ghost" href="#home">返回关卡地图</a>
+        </div>
+      </section>
+
+      <!-- ============ 第 2 关：训练动画 ============ -->
+      <section class="lab-view" data-view="step-2" hidden>
+        <p class="step-eyebrow">第 2 步 · 共 4 步</p>
+        <h1 class="step-title">看 AI 自己学会走路</h1>
+        <p class="step-lede">
+          没有人编写「怎么迈腿」。算法（PPO）只拿到一个目标——走得越远、得分越高——
+          然后试错几百万次。下面这条曲线，就是它的学习成绩单：分数从 12 涨到 187。
+        </p>
+        <div class="demo-card">
+          <div class="train-stats">
+            <span>奖励<strong id="train-reward">12</strong></span>
+            <span>回合<strong id="train-episode">0</strong></span>
+            <span>虚拟耗时<strong id="train-time">0:00</strong></span>
+          </div>
+          <svg class="train-chart" viewBox="0 0 320 140" preserveAspectRatio="none" aria-label="训练奖励曲线">
+            <line class="chart-axis" x1="0" y1="120" x2="320" y2="120"></line>
+            <text class="chart-label" x="4" y="134">训练时间 →</text>
+            <text class="chart-label" x="4" y="112">奖励 ↑</text>
+            <polyline class="train-curve" id="train-curve" points="0,118"></polyline>
+          </svg>
+          <p class="demo-caption">示意数据 · 真实训练通常持续数小时，此处约 6 秒演绎</p>
+          <div class="train-controls">
+            <button class="btn-ghost btn-small" id="train-replay" type="button">↺ 重播动画</button>
+          </div>
+        </div>
+        <div class="step-actions">
+          <button class="btn-primary" type="button" data-complete="2" data-goto="step-3">看懂了，量差距 →</button>
+          <a class="btn-ghost" href="#home">返回关卡地图</a>
+        </div>
+      </section>
+
+      <!-- ============ 第 3 关：对比评测 ============ -->
+      <section class="lab-view" data-view="step-3" hidden>
+        <p class="step-eyebrow">第 3 步 · 共 4 步</p>
+        <h1 class="step-title">仿真和真机，差在哪</h1>
+        <p class="step-lede">
+          同一个策略，放进仿真里 90 分，放到真机上只有 72 分。这段差距就是 Sim2Real
+          的核心难题——也是这个平台真正要做的事：先把差距量出来，再一步步缩小它。
+        </p>
+        <div class="demo-card">
+          <svg class="train-chart" viewBox="0 0 320 150" preserveAspectRatio="none" aria-label="仿真与真机得分对比">
+            <line class="chart-axis" x1="0" y1="122" x2="320" y2="122"></line>
+            <polyline class="sim-curve" points="0,118 40,112 80,100 120,86 160,66 200,50 240,40 280,34 320,30"></polyline>
+            <polyline class="real-curve" points="0,118 40,113 80,106 120,96 160,86 200,76 240,68 280,62 320,58"></polyline>
+            <line class="gap-line" x1="300" y1="30" x2="300" y2="58"></line>
+            <line class="gap-line" x1="294" y1="30" x2="306" y2="30"></line>
+            <line class="gap-line" x1="294" y1="58" x2="306" y2="58"></line>
+            <text class="gap-text" x="236" y="20">仿真 90 分</text>
+            <text class="gap-text" x="236" y="47">真机 72 分</text>
+            <text class="gap-text" x="308" y="48">差 ≈ 18 分</text>
+            <text class="chart-label" x="4" y="136">评测轮次 →</text>
+            <text class="chart-label" x="4" y="112">得分 ↑</text>
+          </svg>
+          <div class="compare-legend">
+            <span><i class="legend-chip"></i>仿真环境</span>
+            <span><i class="legend-chip is-real"></i>真机环境</span>
+          </div>
+          <p class="demo-caption">示意数据 · 平台上的真实评测会记录每轮回放与得分证据</p>
+        </div>
+        <div class="step-actions">
+          <button class="btn-primary" type="button" data-complete="3" data-goto="step-4">最后一步，上真机 →</button>
+          <a class="btn-ghost" href="#home">返回关卡地图</a>
+        </div>
+      </section>
+
+      <!-- ============ 第 4 关：真机部署 ============ -->
+      <section class="lab-view" data-view="step-4" hidden>
+        <p class="step-eyebrow">第 4 步 · 共 4 步</p>
+        <h1 class="step-title">上真机</h1>
+        <p class="step-lede">
+          最后一步：把训练好的策略推到真实的 RDK 板子上。真机画面这里是占位示意，
+          但下面的部署流程，是完整工作台里真实存在的。
+        </p>
+        <div class="video-poster">
+          <div class="video-play">▶</div>
+          <em>真机行走演示视频 · 占位</em>
+        </div>
+        <div class="deploy-checklist">
+          <h2>真实部署时，平台会替你把住这些关</h2>
+          <ul>
+            <li>只读预检 <span>板型 / 温度 / 固件先体检，确认没问题才动手</span></li>
+            <li>版本与回滚 <span>每次部署都有版本号，跑坏了可以一键退回</span></li>
+            <li>全程留证据 <span>谁在什么时候部署了什么，审计链全部可追溯</span></li>
+          </ul>
+        </div>
+        <div class="step-actions">
+          <button class="btn-primary" type="button" data-complete="4" data-goto="home" id="finish-quest">完成闯关 🎉</button>
+          <a class="btn-ghost" href="#home">返回关卡地图</a>
+        </div>
+      </section>
+    </main>
+
+    <footer class="lab-footer">
+      轻量层设计预览 · 训练曲线与真机画面为示意数据 · <a href="/">返回完整工作台</a>
+    </footer>
+
+    <script src="./light-lab.js?v=2"></script>
+  </body>
+</html>

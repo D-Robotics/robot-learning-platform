@@ -89,14 +89,15 @@ RDK_SIM2REAL_LOCAL_RUNNER_TOKEN=<从远端 worker.env 安全复制>
 ```bash
 # GPU 机上
 mkdir -p ~/rdk-sim2real && cd ~/rdk-sim2real
-# 从仓库复制 services/sim2real-web/local-training-worker.mjs、engines/starter-ppo/runner.py
-python3 -m venv .venv && .venv/bin/python -m pip install numpy torch onnx
+# 从仓库复制 services/sim2real-web/local-training-worker.mjs、engines/starter-ppo/runner.py、engines/mjx-adapter/adapter.py
+python3 -m venv .venv && .venv/bin/python -m pip install numpy torch onnx jax mujoco mujoco-mjx optax
 cat > worker.env <<'EOF'
 RDK_SIM2REAL_LOCAL_WORKER_HOST=127.0.0.1
 RDK_SIM2REAL_LOCAL_WORKER_PORT=19091
 RDK_SIM2REAL_LOCAL_WORKER_DATA_DIR=$HOME/rdk-sim2real/worker-data
 RDK_SIM2REAL_TRAIN_EXECUTABLE=$HOME/rdk-sim2real/.venv/bin/python
 RDK_SIM2REAL_TRAIN_ARGS_JSON='["$HOME/rdk-sim2real/engines/starter-ppo/runner.py"]'
+RDK_SIM2REAL_TRAIN_ENGINES_JSON='{"mjx-ppo":{"executable":"$HOME/rdk-sim2real/.venv/bin/python","args":["$HOME/rdk-sim2real/engines/mjx-adapter/adapter.py"]}}'
 RDK_SIM2REAL_MAX_CONCURRENT_JOBS=1
 RDK_SIM2REAL_LOCAL_RUNNER_TOKEN=<随机长字符串>
 RDK_STARTER_ENGINE_DEVICE=auto
@@ -105,6 +106,12 @@ chmod 600 worker.env
 set -a && . ./worker.env && set +a
 node services/sim2real-web/local-training-worker.mjs
 ```
+
+注意 `worker.env` 里 `$HOME` 不会被 systemd/手动 `source` 二次展开时统一替换——
+为稳妥可直接写绝对路径（`/home/<user>/rdk-sim2real/...`）。`engines` 注册后
+`healthz` 回报 `["default","mjx-ppo"]`，训练页引擎选择器才放行 MJX 选项；
+提交带 `training.engine="mjx-ppo"`（或选择物理密集任务包 `originbot-physics-navigation`
+未显式改引擎）即路由到 MJX。
 
 本机 `.env`（web 服务器）：
 

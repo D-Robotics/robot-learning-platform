@@ -1,0 +1,931 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>RDK Sim2Real 工作台 · 专业版引导预览</title>
+    <script src="./theme-boot.js?v=2"></script>
+    <style>
+      /* 专业工作台方向的设计预览：深度功能为主体，引导（上手清单、
+         上下文提示、渐进披露、命令面板）作为易用性层存在。
+         CSP：样式允许内联，脚本必须外链（script-src 'self'）。 */
+      :root {
+        color-scheme: light;
+        --bg: #fbfbf9;
+        --bg-soft: #f3f1ea;
+        --panel: #ffffff;
+        --panel-soft: #faf9f5;
+        --line: rgba(27, 27, 24, 0.11);
+        --line-strong: rgba(27, 27, 24, 0.22);
+        --text: #1b1b18;
+        --muted: #6f6a5f;
+        --faint: #a09a8c;
+        --accent: #ff7918;
+        --accent-text: #b34d00;
+        --accent-soft: rgba(255, 121, 24, 0.1);
+        --green: #46a062;
+        --green-soft: rgba(70, 160, 98, 0.12);
+        --red: #d24242;
+        --red-soft: rgba(210, 66, 66, 0.09);
+        --amber: #c28a1d;
+        --shadow: 0 10px 30px rgba(27, 27, 24, 0.08);
+        --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+      }
+      html.theme-dark {
+        color-scheme: dark;
+        --bg: #0b1219;
+        --bg-soft: #0e1620;
+        --panel: #101b24;
+        --panel-soft: #0d1620;
+        --line: rgba(154, 177, 201, 0.15);
+        --line-strong: rgba(154, 177, 201, 0.32);
+        --text: #edf3fa;
+        --muted: #8fa3b8;
+        --faint: #5e7186;
+        --accent: #ff9d4d;
+        --accent-text: #ffb377;
+        --accent-soft: rgba(255, 157, 77, 0.13);
+        --green: #5ec57f;
+        --green-soft: rgba(94, 197, 127, 0.14);
+        --red: #e26868;
+        --red-soft: rgba(226, 104, 104, 0.12);
+        --amber: #d9a83f;
+        --shadow: 0 10px 30px rgba(0, 0, 0, 0.45);
+      }
+      * { box-sizing: border-box; }
+      html, body { margin: 0; padding: 0; }
+      body {
+        font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "PingFang SC",
+          "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+        background: var(--bg);
+        color: var(--text);
+        font-size: 13.5px;
+        line-height: 1.65;
+        -webkit-font-smoothing: antialiased;
+      }
+      a { color: var(--accent-text); }
+
+      /* ===== 顶栏：品牌 + 闭环管线 + 全局动作 ===== */
+      .pw-header {
+        position: sticky;
+        top: 0;
+        z-index: 40;
+        display: flex;
+        align-items: center;
+        gap: 20px;
+        height: 54px;
+        padding: 0 18px;
+        background: var(--bg);
+        border-bottom: 1px solid var(--line);
+      }
+      .pw-brand { font-weight: 700; font-size: 14px; letter-spacing: -0.01em; white-space: nowrap; }
+      .pw-brand span { color: var(--muted); font-weight: 500; }
+
+      .pw-pipeline { display: flex; align-items: center; gap: 0; flex: 1; min-width: 0; overflow: hidden; }
+      .pw-stage { display: flex; align-items: center; gap: 7px; white-space: nowrap; }
+      .pw-stage + .pw-stage::before {
+        content: '';
+        width: 26px;
+        height: 1px;
+        background: var(--line-strong);
+        margin: 0 8px;
+      }
+      .pw-stage-dot {
+        width: 8px;
+        height: 8px;
+        border-radius: 50%;
+        background: var(--faint);
+        flex: none;
+      }
+      .pw-stage-label { font-size: 12px; color: var(--muted); }
+      .pw-stage.is-done .pw-stage-dot { background: var(--green); }
+      .pw-stage.is-done .pw-stage-label { color: var(--text); }
+      .pw-stage.is-active .pw-stage-dot {
+        background: var(--accent);
+        box-shadow: 0 0 0 3.5px var(--accent-soft);
+      }
+      .pw-stage.is-active .pw-stage-label { color: var(--accent-text); font-weight: 600; }
+
+      .pw-header-right { display: flex; align-items: center; gap: 10px; white-space: nowrap; }
+      .pw-cmdk-btn {
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        height: 30px;
+        padding: 0 10px 0 12px;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        background: var(--panel);
+        color: var(--muted);
+        font-family: inherit;
+        font-size: 12px;
+        cursor: pointer;
+      }
+      .pw-cmdk-btn:hover { border-color: var(--line-strong); color: var(--text); }
+      .pw-cmdk-btn kbd { font-size: 11px; }
+      .pw-guest-chip {
+        padding: 2px 9px;
+        border: 1px solid var(--line);
+        border-radius: 999px;
+        font-size: 11px;
+        color: var(--muted);
+      }
+      .pw-icon-btn {
+        width: 30px;
+        height: 30px;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        background: var(--panel);
+        color: var(--text);
+        font-size: 13px;
+        cursor: pointer;
+      }
+      .pw-icon-btn:hover { border-color: var(--line-strong); }
+
+      /* ===== 布局：侧栏 + 主区 ===== */
+      .pw-shell { display: flex; min-height: calc(100vh - 54px); }
+      .pw-nav {
+        flex: none;
+        width: 178px;
+        padding: 18px 10px 30px 14px;
+        border-right: 1px solid var(--line);
+        position: sticky;
+        top: 54px;
+        align-self: flex-start;
+        height: calc(100vh - 54px);
+        overflow-y: auto;
+      }
+      .pw-nav-group { margin-bottom: 18px; }
+      .pw-nav-group-label {
+        margin: 0 10px 6px;
+        font-size: 10.5px;
+        font-weight: 600;
+        letter-spacing: 0.12em;
+        text-transform: uppercase;
+        color: var(--faint);
+      }
+      .pw-nav-item {
+        display: flex;
+        align-items: center;
+        gap: 9px;
+        width: 100%;
+        padding: 7px 10px;
+        border: none;
+        border-radius: 8px;
+        background: transparent;
+        color: var(--muted);
+        font-family: inherit;
+        font-size: 13px;
+        text-align: left;
+        cursor: pointer;
+        position: relative;
+      }
+      .pw-nav-item:hover { background: var(--bg-soft); color: var(--text); }
+      .pw-nav-item.is-active { background: var(--accent-soft); color: var(--accent-text); font-weight: 600; }
+      .pw-nav-item.is-active::before {
+        content: '';
+        position: absolute;
+        left: 0;
+        top: 7px;
+        bottom: 7px;
+        width: 3px;
+        border-radius: 3px;
+        background: var(--accent);
+      }
+      .pw-nav-item .pw-nav-ico { width: 16px; text-align: center; flex: none; opacity: 0.9; }
+      .pw-nav-item .pw-nav-hint { margin-left: auto; font-size: 10px; color: var(--faint); }
+
+      .pw-main { flex: 1; min-width: 0; padding: 26px 30px 70px; }
+      .pw-view { animation: pw-in 0.25s ease; }
+      @keyframes pw-in { from { opacity: 0; transform: translateY(5px); } to { opacity: 1; transform: none; } }
+
+      /* ===== 通用卡片 / 徽标 / 按钮 ===== */
+      .pw-card {
+        border: 1px solid var(--line);
+        border-radius: 12px;
+        background: var(--panel);
+        padding: 16px 18px;
+      }
+      .pw-card + .pw-card { margin-top: 14px; }
+      .pw-card-head { display: flex; align-items: baseline; gap: 10px; margin-bottom: 4px; }
+      .pw-card-title { font-size: 14px; font-weight: 700; letter-spacing: -0.01em; }
+      .pw-card-sub { font-size: 12px; color: var(--muted); }
+      .pw-card-head .pw-right { margin-left: auto; }
+
+      .pw-badge {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        padding: 1.5px 9px;
+        border: 1px solid var(--line);
+        border-radius: 999px;
+        font-size: 11.5px;
+        color: var(--muted);
+        font-variant-numeric: tabular-nums;
+      }
+      .pw-badge::before { content: ''; width: 6px; height: 6px; border-radius: 50%; background: var(--faint); }
+      .pw-badge.is-ok { color: var(--green); border-color: var(--green-soft); background: var(--green-soft); }
+      .pw-badge.is-ok::before { background: var(--green); }
+      .pw-badge.is-run { color: var(--accent-text); border-color: var(--accent-soft); background: var(--accent-soft); }
+      .pw-badge.is-run::before { background: var(--accent); animation: pw-pulse 1.6s infinite; }
+      .pw-badge.is-err { color: var(--red); border-color: var(--red-soft); background: var(--red-soft); }
+      .pw-badge.is-err::before { background: var(--red); }
+      .pw-badge.is-warn { color: var(--amber); }
+      .pw-badge.is-warn::before { background: var(--amber); }
+      @keyframes pw-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.35; } }
+
+      .pw-btn {
+        display: inline-flex;
+        align-items: center;
+        gap: 7px;
+        height: 34px;
+        padding: 0 16px;
+        border: none;
+        border-radius: 9px;
+        background: var(--accent);
+        color: #fff;
+        font-family: inherit;
+        font-size: 13px;
+        font-weight: 600;
+        cursor: pointer;
+        transition: transform 0.1s, box-shadow 0.1s;
+        white-space: nowrap;
+      }
+      .pw-btn:hover { transform: translateY(-1px); box-shadow: var(--shadow); }
+      .pw-btn.is-ghost {
+        height: 32px;
+        background: var(--panel);
+        color: var(--text);
+        border: 1px solid var(--line);
+        font-weight: 500;
+      }
+      .pw-btn.is-ghost:hover { border-color: var(--line-strong); box-shadow: none; }
+      .pw-btn.is-small { height: 27px; padding: 0 11px; font-size: 12px; border-radius: 7px; }
+      .pw-btn.is-rec { background: var(--red); }
+      .pw-btn:disabled { opacity: 0.55; cursor: default; transform: none; box-shadow: none; }
+
+      kbd {
+        display: inline-grid;
+        place-items: center;
+        min-width: 20px;
+        height: 20px;
+        padding: 0 5px;
+        border: 1px solid var(--line-strong);
+        border-bottom-width: 2px;
+        border-radius: 5px;
+        background: var(--panel);
+        font-family: var(--mono);
+        font-size: 11px;
+        color: var(--text);
+      }
+      .pw-mono { font-family: var(--mono); font-size: 12px; }
+
+      /* ===== 上手清单（引导层核心） ===== */
+      .pw-onboard { border-color: var(--line-strong); }
+      .pw-onboard-bar { display: flex; align-items: center; gap: 14px; margin-bottom: 10px; }
+      .pw-onboard-prog { flex: 1; height: 4px; border-radius: 4px; background: var(--bg-soft); overflow: hidden; }
+      .pw-onboard-prog i { display: block; height: 100%; background: var(--accent); width: 0; transition: width 0.35s; }
+      .pw-onboard-count { font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; white-space: nowrap; }
+      .pw-olist { list-style: none; margin: 0; padding: 0; }
+      .pw-oitem {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        padding: 9px 2px;
+        border-top: 1px solid var(--line);
+      }
+      .pw-oitem:first-child { border-top: none; }
+      .pw-oitem-dot {
+        flex: none;
+        width: 20px;
+        height: 20px;
+        border-radius: 50%;
+        border: 1.5px solid var(--line-strong);
+        display: grid;
+        place-items: center;
+        font-size: 11px;
+        color: transparent;
+      }
+      .pw-oitem.is-done .pw-oitem-dot { border-color: var(--green); background: var(--green-soft); color: var(--green); }
+      .pw-oitem.is-done .pw-oitem-dot::after { content: '✓'; font-weight: 700; }
+      .pw-oitem.is-current .pw-oitem-dot { border-color: var(--accent); color: var(--accent-text); }
+      .pw-oitem.is-current .pw-oitem-dot::after { content: '●'; font-size: 8px; }
+      .pw-oitem-body { flex: 1; min-width: 0; }
+      .pw-oitem-body strong { display: block; font-size: 13px; }
+      .pw-oitem-body span { display: block; font-size: 12px; color: var(--muted); }
+      .pw-oitem.is-done .pw-oitem-body strong { color: var(--muted); }
+      .pw-oitem-meta { flex: none; display: flex; align-items: center; gap: 10px; }
+      .pw-oitem-done-label { font-size: 12px; color: var(--green); white-space: nowrap; }
+      .pw-oitem-stepno {
+        flex: none;
+        font-family: var(--mono);
+        font-size: 11px;
+        color: var(--faint);
+        width: 34px;
+      }
+
+      /* ===== 概览两栏 ===== */
+      .pw-overview-grid { display: grid; grid-template-columns: minmax(0, 1fr) 300px; gap: 14px; align-items: start; max-width: 1120px; }
+      .pw-col { min-width: 0; }
+
+      /* 下一步卡 */
+      .pw-next { border-color: var(--accent); background: linear-gradient(115deg, var(--accent-soft), var(--panel) 55%); }
+      .pw-next-eyebrow { font-size: 10.5px; font-weight: 700; letter-spacing: 0.14em; color: var(--accent-text); text-transform: uppercase; }
+      .pw-next-title { margin: 3px 0 4px; font-size: 16.5px; font-weight: 750; letter-spacing: -0.02em; }
+      .pw-next-copy { margin: 0 0 12px; font-size: 12.5px; color: var(--muted); }
+
+      /* 表格 */
+      .pw-table { width: 100%; border-collapse: collapse; }
+      .pw-table th {
+        text-align: left;
+        padding: 7px 10px;
+        border-bottom: 1px solid var(--line-strong);
+        font-size: 10.5px;
+        font-weight: 600;
+        letter-spacing: 0.1em;
+        text-transform: uppercase;
+        color: var(--faint);
+        white-space: nowrap;
+      }
+      .pw-table td {
+        padding: 9px 10px;
+        border-bottom: 1px solid var(--line);
+        font-size: 12.5px;
+        font-variant-numeric: tabular-nums;
+        white-space: nowrap;
+      }
+      .pw-table tr:last-child td { border-bottom: none; }
+      .pw-table .is-num { text-align: right; }
+
+      /* 系统状态 */
+      .pw-sysrow { display: flex; align-items: center; gap: 10px; padding: 8px 0; border-top: 1px solid var(--line); font-size: 12.5px; }
+      .pw-sysrow:first-of-type { border-top: none; }
+      .pw-sysrow b { font-weight: 600; }
+      .pw-sysrow .pw-sys-val { margin-left: auto; color: var(--muted); }
+
+      /* ===== 上下文引导条（每个工具页顶部） ===== */
+      .pw-context {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        margin-bottom: 14px;
+        padding: 9px 14px;
+        border: 1px solid var(--line);
+        border-left: 3px solid var(--accent);
+        border-radius: 9px;
+        background: var(--panel-soft);
+        font-size: 12.5px;
+        color: var(--muted);
+      }
+      .pw-context b { color: var(--text); font-weight: 600; }
+      .pw-context .pw-ctx-step { color: var(--accent-text); font-weight: 700; font-family: var(--mono); font-size: 11px; white-space: nowrap; }
+
+      /* ===== 工具页头 ===== */
+      .pw-tool-head { display: flex; align-items: center; gap: 12px; margin-bottom: 4px; flex-wrap: wrap; }
+      .pw-tool-title { margin: 0; font-size: 19px; font-weight: 750; letter-spacing: -0.02em; }
+      .pw-tool-head .pw-right { margin-left: auto; display: flex; gap: 10px; align-items: center; }
+
+      .pw-frame { margin: 14px 0 10px; }
+      .pw-frame iframe {
+        display: block;
+        width: 100%;
+        aspect-ratio: 16 / 9.5;
+        border: 1px solid var(--line);
+        border-radius: 11px;
+        background: var(--bg-soft);
+      }
+      .pw-frame-alt { text-align: right; margin-top: 6px; }
+      .pw-frame-alt a { font-size: 11.5px; color: var(--faint); text-decoration: none; }
+      .pw-frame-alt a:hover { color: var(--accent-text); }
+
+      /* 键位（紧凑专业样式） */
+      .pw-keys {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 6px 16px;
+        padding: 9px 13px;
+        border: 1px solid var(--line);
+        border-radius: 9px;
+        background: var(--panel);
+        font-size: 12px;
+        color: var(--muted);
+      }
+      .pw-keys span { display: inline-flex; align-items: center; gap: 6px; }
+
+      /* 证据同步条 */
+      .pw-evidence {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        margin-top: 12px;
+        padding: 10px 14px;
+        border: 1px solid var(--line);
+        border-radius: 9px;
+        background: var(--panel-soft);
+        font-size: 12.5px;
+        color: var(--muted);
+      }
+      .pw-evidence.is-saved { border-color: var(--green-soft); background: var(--green-soft); color: var(--green); }
+
+      /* ===== 高级选项抽屉（渐进披露） ===== */
+      .pw-adv { margin-top: 14px; border: 1px solid var(--line); border-radius: 11px; background: var(--panel); overflow: hidden; }
+      .pw-adv-summary {
+        display: flex;
+        align-items: center;
+        gap: 9px;
+        width: 100%;
+        padding: 11px 15px;
+        border: none;
+        background: transparent;
+        font-family: inherit;
+        font-size: 13px;
+        color: var(--muted);
+        cursor: pointer;
+        text-align: left;
+      }
+      .pw-adv-summary:hover { color: var(--text); }
+      .pw-adv-summary .pw-chevron { transition: transform 0.2s; }
+      .pw-adv.is-open .pw-adv-summary .pw-chevron { transform: rotate(90deg); }
+      .pw-adv-summary .pw-adv-count { margin-left: auto; font-size: 11.5px; color: var(--accent-text); }
+      .pw-adv-body { display: none; padding: 4px 15px 15px; border-top: 1px solid var(--line); }
+      .pw-adv.is-open .pw-adv-body { display: block; }
+      .pw-adv-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 12px 18px; padding-top: 10px; }
+      .pw-field label { display: block; font-size: 11.5px; color: var(--muted); margin-bottom: 4px; }
+      .pw-field input[type='range'] { width: 100%; accent-color: var(--accent); }
+      .pw-field input[type='number'], .pw-field input[type='text'] {
+        width: 100%;
+        height: 30px;
+        padding: 0 9px;
+        border: 1px solid var(--line);
+        border-radius: 7px;
+        background: var(--bg-soft);
+        color: var(--text);
+        font-family: var(--mono);
+        font-size: 12px;
+      }
+      .pw-field output { font-family: var(--mono); font-size: 11.5px; color: var(--text); }
+
+      /* ===== 空状态（训练页） ===== */
+      .pw-empty { text-align: center; padding: 46px 20px 40px; }
+      .pw-empty-ico {
+        display: grid;
+        place-items: center;
+        width: 56px;
+        height: 56px;
+        margin: 0 auto 14px;
+        border: 1.5px dashed var(--line-strong);
+        border-radius: 15px;
+        font-size: 24px;
+        color: var(--faint);
+        background: var(--bg-soft);
+      }
+      .pw-empty h3 { margin: 0 0 6px; font-size: 16.5px; letter-spacing: -0.02em; }
+      .pw-empty p { margin: 0 auto 18px; max-width: 420px; font-size: 12.5px; color: var(--muted); }
+      .pw-empty-actions { display: flex; justify-content: center; gap: 10px; flex-wrap: wrap; }
+      .pw-templates { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 16px; }
+      .pw-tpl { text-align: left; padding: 13px 15px; border: 1px solid var(--line); border-radius: 10px; background: var(--panel-soft); cursor: pointer; font-family: inherit; color: var(--text); }
+      .pw-tpl:hover { border-color: var(--accent); }
+      .pw-tpl.is-picked { border-color: var(--accent); background: var(--accent-soft); }
+      .pw-tpl strong { display: block; font-size: 13px; }
+      .pw-tpl span { display: block; font-size: 11.5px; color: var(--muted); font-variant-numeric: tabular-nums; }
+
+      /* 运行中任务卡 */
+      .pw-runmeta { display: flex; gap: 20px; flex-wrap: wrap; margin: 8px 0 10px; font-size: 12.5px; color: var(--muted); }
+      .pw-runmeta b { color: var(--text); font-variant-numeric: tabular-nums; }
+      .pw-runbar { height: 5px; border-radius: 5px; background: var(--bg-soft); overflow: hidden; }
+      .pw-runbar i { display: block; height: 100%; width: 0; background: var(--accent); transition: width 0.4s; }
+      .pw-runbar.is-done i { background: var(--green); }
+
+      /* ===== 命令面板 ===== */
+      .pw-cmdk-back {
+        position: fixed;
+        inset: 0;
+        z-index: 60;
+        background: rgba(10, 14, 20, 0.45);
+        backdrop-filter: blur(3px);
+        display: grid;
+        place-items: start center;
+        padding-top: 14vh;
+      }
+      /* 类选择器的 display: grid 会盖过 hidden 属性的 UA 样式，
+         必须显式声明 [hidden] 态，否则面板永远显示、无法关闭。 */
+      .pw-cmdk-back[hidden] { display: none; }
+      .pw-cmdk-box {
+        width: min(560px, calc(100vw - 40px));
+        border: 1px solid var(--line-strong);
+        border-radius: 13px;
+        background: var(--panel);
+        box-shadow: var(--shadow);
+        overflow: hidden;
+        animation: pw-in 0.18s ease;
+      }
+      .pw-cmdk-input {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        padding: 13px 16px;
+        border-bottom: 1px solid var(--line);
+      }
+      .pw-cmdk-input input {
+        flex: 1;
+        border: none;
+        background: transparent;
+        color: var(--text);
+        font-family: inherit;
+        font-size: 14px;
+        outline: none;
+      }
+      .pw-cmdk-input input::placeholder { color: var(--faint); }
+      .pw-cmdk-close {
+        flex: none;
+        width: 24px;
+        height: 24px;
+        border: none;
+        border-radius: 6px;
+        background: transparent;
+        color: var(--muted);
+        font-size: 16px;
+        line-height: 1;
+        cursor: pointer;
+      }
+      .pw-cmdk-close:hover { background: var(--bg-soft); color: var(--text); }
+      .pw-cmdk-list { list-style: none; margin: 0; padding: 6px; max-height: 320px; overflow-y: auto; }
+      .pw-cmdk-item {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        padding: 9px 12px;
+        border-radius: 8px;
+        font-size: 13px;
+        cursor: pointer;
+      }
+      .pw-cmdk-item .pw-cmdk-hint { margin-left: auto; }
+      .pw-cmdk-item.is-sel { background: var(--accent-soft); color: var(--accent-text); }
+      .pw-cmdk-item.is-sel kbd { border-color: transparent; background: transparent; opacity: 0.8; }
+      .pw-cmdk-empty { padding: 18px; text-align: center; color: var(--faint); font-size: 12.5px; }
+      .pw-cmdk-foot {
+        display: flex;
+        gap: 14px;
+        padding: 8px 14px;
+        border-top: 1px solid var(--line);
+        font-size: 11px;
+        color: var(--faint);
+      }
+
+      /* ===== Toast ===== */
+      .pw-toast {
+        position: fixed;
+        left: 50%;
+        bottom: 26px;
+        transform: translateX(-50%);
+        z-index: 70;
+        padding: 9px 18px;
+        border: 1px solid var(--line-strong);
+        border-radius: 10px;
+        background: var(--panel);
+        box-shadow: var(--shadow);
+        font-size: 12.5px;
+        color: var(--text);
+        animation: pw-in 0.2s ease;
+        max-width: min(480px, 90vw);
+      }
+
+      /* ===== 页脚 ===== */
+      .pw-foot { margin-top: 30px; font-size: 11.5px; color: var(--faint); }
+      .pw-foot a { color: var(--faint); text-decoration: none; }
+      .pw-foot a:hover { color: var(--accent-text); }
+
+      @media (max-width: 900px) {
+        .pw-overview-grid { grid-template-columns: 1fr; }
+        .pw-nav { display: none; }
+        .pw-stage-label { display: none; }
+        .pw-main { padding: 20px 16px 60px; }
+        .pw-templates { grid-template-columns: 1fr; }
+      }
+    </style>
+  </head>
+  <body>
+    <header class="pw-header">
+      <div class="pw-brand">RDK Sim2Real <span>工作台</span></div>
+      <nav class="pw-pipeline" id="pipeline" aria-label="闭环进度">
+        <div class="pw-stage" data-stage="1"><i class="pw-stage-dot"></i><span class="pw-stage-label">契约</span></div>
+        <div class="pw-stage" data-stage="2"><i class="pw-stage-dot"></i><span class="pw-stage-label">仿真</span></div>
+        <div class="pw-stage" data-stage="3"><i class="pw-stage-dot"></i><span class="pw-stage-label">训练</span></div>
+        <div class="pw-stage" data-stage="4"><i class="pw-stage-dot"></i><span class="pw-stage-label">评测</span></div>
+        <div class="pw-stage" data-stage="5"><i class="pw-stage-dot"></i><span class="pw-stage-label">部署</span></div>
+      </nav>
+      <div class="pw-header-right">
+        <button class="pw-cmdk-btn" id="cmdk-open" type="button"><kbd>⌘K</kbd><span>命令面板</span></button>
+        <span class="pw-guest-chip">游客模式</span>
+        <button class="pw-icon-btn" id="theme-toggle" type="button" aria-label="切换主题" title="切换主题">◐</button>
+      </div>
+    </header>
+
+    <div class="pw-shell">
+      <aside class="pw-nav">
+        <div class="pw-nav-group">
+          <div class="pw-nav-group-label">工作流</div>
+          <button class="pw-nav-item is-active" type="button" data-nav="overview"><span class="pw-nav-ico">◧</span>概览<span class="pw-nav-hint">⌘1</span></button>
+          <button class="pw-nav-item" type="button" data-nav="sim"><span class="pw-nav-ico">▶</span>仿真与录制<span class="pw-nav-hint">⌘2</span></button>
+          <button class="pw-nav-item" type="button" data-nav="train"><span class="pw-nav-ico">↗</span>训练<span class="pw-nav-hint">⌘3</span></button>
+          <button class="pw-nav-item" type="button" data-nav="soon"><span class="pw-nav-ico">⟟</span>评测对比</button>
+          <button class="pw-nav-item" type="button" data-nav="soon"><span class="pw-nav-ico">⌗</span>设备管理</button>
+          <button class="pw-nav-item" type="button" data-nav="soon"><span class="pw-nav-ico">⇪</span>部署发布</button>
+        </div>
+        <div class="pw-nav-group">
+          <div class="pw-nav-group-label">工作区</div>
+          <button class="pw-nav-item" type="button" data-nav="soon"><span class="pw-nav-ico">≡</span>项目与模型</button>
+          <button class="pw-nav-item" type="button" data-nav="soon"><span class="pw-nav-ico">◷</span>审计与记录</button>
+        </div>
+      </aside>
+
+      <main class="pw-main">
+        <!-- ============ 概览 ============ -->
+        <section class="pw-view" data-view="overview">
+          <div class="pw-overview-grid">
+            <div class="pw-col">
+              <div class="pw-card pw-onboard">
+                <div class="pw-onboard-bar">
+                  <div class="pw-card-title">上手 · 走完第一个闭环</div>
+                  <div class="pw-onboard-prog"><i id="onboard-fill"></i></div>
+                  <div class="pw-onboard-count" id="onboard-count">1/5</div>
+                </div>
+                <ol class="pw-olist" id="onboard-list">
+                  <li class="pw-oitem" data-step="1">
+                    <span class="pw-oitem-stepno">01</span>
+                    <span class="pw-oitem-dot"></span>
+                    <div class="pw-oitem-body">
+                      <strong>导入模型契约</strong>
+                      <span>校验 manifest 的观测、动作、运行时一致性</span>
+                    </div>
+                    <div class="pw-oitem-meta"><span class="pw-oitem-done-label">已完成</span></div>
+                  </li>
+                  <li class="pw-oitem" data-step="2">
+                    <span class="pw-oitem-stepno">02</span>
+                    <span class="pw-oitem-dot"></span>
+                    <div class="pw-oitem-body">
+                      <strong>在仿真中验证</strong>
+                      <span>录一段轨迹，生成第一条可回放证据</span>
+                    </div>
+                    <div class="pw-oitem-meta"><button class="pw-btn is-small" type="button" data-goto-step="2">打开仿真 →</button></div>
+                  </li>
+                  <li class="pw-oitem" data-step="3">
+                    <span class="pw-oitem-stepno">03</span>
+                    <span class="pw-oitem-dot"></span>
+                    <div class="pw-oitem-body">
+                      <strong>发起第一次训练</strong>
+                      <span>用 starter 模板提交 PPO 任务，跟踪奖励曲线</span>
+                    </div>
+                    <div class="pw-oitem-meta"><button class="pw-btn is-ghost is-small" type="button" data-goto-step="3">去发起 →</button></div>
+                  </li>
+                  <li class="pw-oitem" data-step="4">
+                    <span class="pw-oitem-stepno">04</span>
+                    <span class="pw-oitem-dot"></span>
+                    <div class="pw-oitem-body">
+                      <strong>查看评测对比</strong>
+                      <span>仿真与真机同策略回放，量化 Sim2Real 差距</span>
+                    </div>
+                    <div class="pw-oitem-meta"><span class="pw-badge is-warn">需登录</span></div>
+                  </li>
+                  <li class="pw-oitem" data-step="5">
+                    <span class="pw-oitem-stepno">05</span>
+                    <span class="pw-oitem-dot"></span>
+                    <div class="pw-oitem-body">
+                      <strong>部署到真机</strong>
+                      <span>只读预检通过后，把策略推进 RDK 板卡</span>
+                    </div>
+                    <div class="pw-oitem-meta"><span class="pw-badge is-warn">需登录</span></div>
+                  </li>
+                </ol>
+              </div>
+
+              <div class="pw-card pw-next">
+                <div class="pw-next-eyebrow">下一步</div>
+                <div class="pw-next-title" id="next-title">在仿真中验证「行走」策略</div>
+                <p class="pw-next-copy" id="next-copy">
+                  契约已通过校验。打开仿真录 30 秒轨迹，平台会自动生成可回放证据，供后续对比使用。
+                </p>
+                <div class="pw-next-actions">
+                  <button class="pw-btn" type="button" data-goto-step="2">打开仿真与录制 →</button>
+                  <button class="pw-btn is-ghost" type="button" data-cmd="palette">全部命令 <kbd>⌘K</kbd></button>
+                </div>
+              </div>
+
+              <div class="pw-card">
+                <div class="pw-card-head">
+                  <div class="pw-card-title">最近任务</div>
+                  <div class="pw-card-sub">当前项目 · MicroDuck X5 Starter</div>
+                  <div class="pw-right"><button class="pw-btn is-ghost is-small" type="button" data-nav="train">全部任务 →</button></div>
+                </div>
+                <table class="pw-table">
+                  <thead>
+                    <tr><th>ID</th><th>任务</th><th>后端</th><th>状态</th><th class="is-num">奖励</th><th class="is-num">时长</th></tr>
+                  </thead>
+                  <tbody id="runs-body">
+                    <tr>
+                      <td class="pw-mono">run-0041</td><td>行走 · robust-v3</td><td>RoboGo</td>
+                      <td><span class="pw-badge is-ok">已完成</span></td>
+                      <td class="is-num">187.2</td><td class="is-num">2h 03m</td>
+                    </tr>
+                    <tr>
+                      <td class="pw-mono">run-0040</td><td>行走 · baseline</td><td>本地 GPU</td>
+                      <td><span class="pw-badge is-err">失败 · OOM</span></td>
+                      <td class="is-num">—</td><td class="is-num">0h 41m</td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+              <div class="pw-card" id="failure-cases-card">
+                <div class="pw-card-head">
+                  <div class="pw-card-title">失败案例库</div>
+                  <button class="pw-btn pw-btn-quiet" id="failure-cases-reload" type="button">刷新</button>
+                </div>
+                <div class="pw-card-sub" id="failure-cases-status" aria-live="polite">正在加载清场目标点导航案例…</div>
+                <div id="failure-cases-list" style="margin-top:10px"></div>
+                <button class="pw-btn pw-btn-primary" id="failure-cases-fork" type="button" style="margin-top:12px" disabled>Fork 任务包并开始训练</button>
+              </div>
+            </div>
+
+            <div class="pw-col">
+              <div class="pw-card">
+                <div class="pw-card-head"><div class="pw-card-title">系统状态</div></div>
+                <div class="pw-sysrow"><b>计算资源</b><span class="pw-sys-val"><span class="pw-badge is-ok">1× GPU 在线</span></span></div>
+                <div class="pw-sysrow"><b>仿真环境</b><span class="pw-sys-val">MuJoCo WASM · 50Hz</span></div>
+                <div class="pw-sysrow"><b>板卡</b><span class="pw-sys-val"><span class="pw-badge is-warn">未连接</span></span></div>
+                <div class="pw-sysrow"><b>审计链</b><span class="pw-sys-val"><span class="pw-badge is-ok">正常</span></span></div>
+              </div>
+              <div class="pw-card">
+                <div class="pw-card-head"><div class="pw-card-title">效率</div></div>
+                <div class="pw-keys" style="border: none; padding: 4px 0; background: transparent;">
+                  <span><kbd>⌘K</kbd>命令面板</span>
+                  <span><kbd>⌘1</kbd><kbd>⌘2</kbd><kbd>⌘3</kbd>切换视图</span>
+                  <span><kbd>R</kbd>开始 / 停止录制</span>
+                </div>
+                <p class="pw-card-sub" style="margin-top: 8px;">
+                  常用动作都有快捷键；不确定时按 <b>⌘K</b> 搜索命令。
+                </p>
+              </div>
+            </div>
+          </div>
+          <div class="pw-foot">
+            专业版引导预览 · 任务数据为示意 · <a href="/">返回现有工作台</a>
+          </div>
+        </section>
+
+        <!-- ============ 仿真与录制 ============ -->
+        <section class="pw-view" data-view="sim" hidden>
+          <div class="pw-context">
+            <span class="pw-ctx-step">02 / 05</span>
+            <span><b>闭环第 2 步 · 仿真验证</b> — 策略来源 starter 模板；录 30 秒轨迹即可生成第一条评测证据。</span>
+          </div>
+          <div class="pw-tool-head">
+            <h1 class="pw-tool-title">仿真与录制</h1>
+            <span class="pw-badge is-ok">MuJoCo WASM · 50Hz</span>
+            <div class="pw-right">
+              <button class="pw-btn is-rec" id="rec-button" type="button">⏺ 开始录制</button>
+            </div>
+          </div>
+
+          <div class="pw-frame">
+            <iframe id="sim-frame" src="/mujoco/microduck/" title="MicroDuck 浏览器仿真"></iframe>
+            <div class="pw-frame-alt"><a href="/mujoco/microduck/" target="_blank" rel="noreferrer">独立打开仿真 ↗</a></div>
+          </div>
+
+          <div class="pw-keys">
+            <span><kbd>W</kbd><kbd>S</kbd>前进 / 后退</span>
+            <span><kbd>A</kbd><kbd>D</kbd>转向</span>
+            <span><kbd>Q</kbd><kbd>E</kbd>左踢 / 右踢</span>
+            <span><kbd>R</kbd>录制开关</span>
+          </div>
+
+          <div class="pw-evidence" id="evidence-line">
+            录制的轨迹将自动同步为评测证据 · <b>游客模式下不落盘</b>，登录后保存
+          </div>
+
+          <div class="pw-adv" id="adv-drawer">
+            <button class="pw-adv-summary" type="button" id="adv-toggle">
+              <span class="pw-chevron">›</span> 高级选项 · 域随机化
+              <span class="pw-adv-count">3 项默认关闭</span>
+            </button>
+            <div class="pw-adv-body">
+              <div class="pw-adv-grid">
+                <div class="pw-field">
+                  <label>摩擦系数扰动 <output id="fric-out">±20%</output></label>
+                  <input type="range" min="0" max="50" value="20" id="fric-range" />
+                </div>
+                <div class="pw-field">
+                  <label>连杆质量扰动 <output id="mass-out">±10%</output></label>
+                  <input type="range" min="0" max="30" value="10" id="mass-range" />
+                </div>
+                <div class="pw-field">
+                  <label>传感延迟（ms）</label>
+                  <input type="number" value="8" min="0" max="80" step="1" id="latency-input" />
+                </div>
+                <div class="pw-field">
+                  <label>随机种子</label>
+                  <input type="text" value="sim-0x1f" id="seed-input" />
+                </div>
+              </div>
+              <p class="pw-card-sub" style="margin-top: 10px;">
+                开启后录制数据会标记「域随机化」，用于训练抗扰动策略。默认关闭，不影响基础验证。
+              </p>
+            </div>
+          </div>
+          <div class="pw-foot">完整版此页还包含：回放列表、轨迹对比、导出数据集。</div>
+        </section>
+
+        <!-- ============ 训练 ============ -->
+        <section class="pw-view" data-view="train" hidden>
+          <div class="pw-context">
+            <span class="pw-ctx-step">03 / 05</span>
+            <span><b>闭环第 3 步 · 强化学习训练</b> — 契约与仿真证据就绪后，从模板提交第一个 PPO 任务。</span>
+          </div>
+          <div class="pw-tool-head">
+            <h1 class="pw-tool-title">训练任务</h1>
+            <span class="pw-badge is-ok">本地 GPU · 1× 在线</span>
+          </div>
+
+          <div class="pw-card">
+            <div class="pw-empty" id="train-empty">
+              <div class="pw-empty-ico">↗</div>
+              <h3>还没有训练任务</h3>
+              <p>
+                从一份验证过的 starter 模板开始：契约已通过校验、超参为社区基线，直接提交即可跑通闭环。
+              </p>
+              <div class="pw-empty-actions">
+                <button class="pw-btn" type="button" id="train-submit">用 Starter PPO 模板开始训练 →</button>
+                <button class="pw-btn is-ghost" type="button" data-cmd="soon">导入自定义契约</button>
+              </div>
+              <div class="pw-templates">
+                <button class="pw-tpl is-picked" type="button" data-tpl="baseline">
+                  <strong>行走 · baseline</strong>
+                  <span>约 2h · 奖励目标 180+ · 社区基线超参</span>
+                </button>
+                <button class="pw-tpl" type="button" data-tpl="robust">
+                  <strong>行走 · robust-v3</strong>
+                  <span>约 3.5h · 域随机化 · 抗扰动进阶</span>
+                </button>
+              </div>
+            </div>
+
+            <div id="train-run" hidden>
+              <div class="pw-card-head">
+                <div>
+                  <div class="pw-card-title pw-mono" id="run-id">run-0042</div>
+                  <div class="pw-card-sub" id="run-desc">行走 · baseline · Starter PPO 模板</div>
+                </div>
+                <div class="pw-right">
+                  <span class="pw-badge is-run" id="run-status">运行中</span>
+                  <button class="pw-btn is-ghost is-small" type="button" data-cmd="soon" id="run-detail">查看详情 →</button>
+                </div>
+              </div>
+              <div class="pw-runmeta">
+                <span>后端 <b>本地 GPU</b></span>
+                <span>预计 <b id="run-eta">1h 58m</b></span>
+                <span>当前奖励 <b id="run-reward">—</b></span>
+                <span>回合 <b id="run-episode">0</b></span>
+              </div>
+              <div class="pw-runbar" id="run-bar"><i></i></div>
+            </div>
+          </div>
+
+          <div class="pw-adv">
+            <button class="pw-adv-summary" type="button" data-adv-toggle>
+              <span class="pw-chevron">›</span> 高级选项 · 训练超参
+              <span class="pw-adv-count">模板已预置，可覆盖</span>
+            </button>
+            <div class="pw-adv-body">
+              <div class="pw-adv-grid">
+                <div class="pw-field"><label>学习率</label><input type="text" value="3e-4" /></div>
+                <div class="pw-field"><label>并行环境数</label><input type="number" value="64" /></div>
+                <div class="pw-field"><label>总步数</label><input type="number" value="20000000" /></div>
+                <div class="pw-field"><label>γ (折扣)</label><input type="text" value="0.99" /></div>
+              </div>
+              <p class="pw-card-sub" style="margin-top: 10px;">
+                模板超参即可跑通；覆盖后提交前会重新校验与契约的一致性。
+              </p>
+            </div>
+          </div>
+          <div class="pw-foot">完整版此页还包含：奖励曲线、任务队列、多后端切换、训练资源池。</div>
+        </section>
+      </main>
+    </div>
+
+    <!-- ============ 命令面板 ============ -->
+    <div class="pw-cmdk-back" id="cmdk-back" hidden>
+      <div class="pw-cmdk-box" role="dialog" aria-label="命令面板">
+        <div class="pw-cmdk-input">
+          <kbd>⌘K</kbd>
+          <input type="text" id="cmdk-input" placeholder="搜索命令：仿真、录制、训练、设备…" autocomplete="off" />
+          <button class="pw-cmdk-close" id="cmdk-close" type="button" aria-label="关闭命令面板">×</button>
+        </div>
+        <ul class="pw-cmdk-list" id="cmdk-list"></ul>
+        <div class="pw-cmdk-foot"><span><kbd>↑↓</kbd>选择</span><span><kbd>↵</kbd>执行</span><span><kbd>esc</kbd>关闭</span></div>
+      </div>
+    </div>
+
+    <div class="pw-toast" id="toast" hidden></div>
+
+    <script src="./pro-workbench.js?v=3"></script>
+  </body>
+</html>

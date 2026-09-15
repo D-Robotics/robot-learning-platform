@@ -1,4 +1,6 @@
 import { Router, type Request, type Response } from 'express';
+import { readFile } from 'node:fs/promises';
+import path from 'node:path';
 
 import type { Device } from '../../shared/types.js';
 import type {
@@ -14,9 +16,11 @@ import type {
   Sim2RealRunRecord,
   Sim2RealRunStatus,
   Sim2RealComputeResource,
+  Sim2RealTelemetrySample,
 } from '../../shared/sim2real.js';
 import {
   MICRODUCK_SIM2REAL_CONTRACT,
+  applyTaskEngineRecommendation,
   normalizeTrainingSpec,
   SIM2REAL_PRODUCT_PROFILES,
   SIM2REAL_SCHEMA_VERSION,
@@ -74,6 +78,7 @@ import {
   listSim2RealProjects,
   listSim2RealDatasets,
   listSim2RealArtifacts,
+  listSim2RealEvaluations,
   listSim2RealComputeResources,
   getSim2RealComputeResourceSecret,
   createSim2RealComputeResource,
@@ -87,11 +92,13 @@ import {
   updateSim2RealDeployment,
   decideSim2RealDeploymentApproval,
   sim2RealStorageInfo,
+  appendSim2RealTelemetryWithResult,
 } from '../sim2real/sim2real-store.js';
 import {
   requestLocalTraining,
   requestLocalTrainingStatus,
   fetchLocalRunArtifact,
+  fetchLocalRunTelemetry,
   localRunnerTokenFormatValid,
   localRunnerTokenRequired,
   localRunnerTokenUsable,
@@ -102,6 +109,7 @@ import {
   requestRobogoTraining,
   requestRobogoTrainingStatus,
   normalizeRunnerUrl,
+  resolvedTaskPack,
 } from '../sim2real/robogo-runner.js';
 import { LOCAL_SIM2REAL_AUTH, type Sim2RealAuthPort } from '../sim2real/sim2real-auth.js';
 import {
@@ -110,7 +118,10 @@ import {
   type Sim2RealPermission,
 } from '../sim2real/sim2real-rbac.js';
 import { validateRunForDeployment } from '../sim2real/release-evidence.js';
-import { registerSim2RealTelemetryRoutes } from './sim2real-telemetry-routes.js';
+import {
+  registerSim2RealTelemetryRoutes,
+  type Sim2RealTelemetryRouteDeps,
+} from './sim2real-telemetry-routes.js';
 import { registerSim2RealBoardStationRoutes } from './sim2real-board-station-routes.js';
 import { registerSim2RealDeviceConnectionRoutes } from './sim2real-device-connection-routes.js';
 import { registerSim2RealWorkspaceRoutes } from './sim2real-workspace-routes.js';
@@ -1191,7 +1202,8 @@ const STORAGE_ERROR_HTTP: Readonly<
   sim2real_telemetry_timestamp_order: {
     status: 409,
     code: 'SIM2REAL_TELEMETRY_TIMESTAMP_ORDER',
-    message: '遥测分片时间戳必须按序连续；请检查 sequence 或从上一个分片的末尾继续上传。',
+    message:
+      '遥测时间戳必须非递减；同一策略会话内请保持时钟单调，新会话需以 session-started 标记开始以重置时间线。',
     retryable: false,
   },
   sim2real_telemetry_quota_exceeded: {
@@ -1349,6 +1361,21 @@ function parseRunRequest(
       };
     }
     training = trainingResult.spec;
+    // Task packs may recommend an engine (physics-dense tasks → MJX). The
+    // recommendation only fills in a spec that chose none, so an explicit
+    // user/agent submission always wins and the ledger keeps the default
+    // when the task has no opinion.
+    if (taskId) {
+      try {
+        const pack = resolvedTaskPack(taskId);
+        const recommended =
+          pack && typeof pack.recommendedEngine === 'string' ? pack.recommendedEngine : null;
+        training = applyTaskEngineRecommendation(training, recommended);
+      } catch {
+        // resolvedTaskPack already throws through the runner path; keep the
+        // recommendation application non-fatal here.
+      }
+    }
   }
   const resumeResult = normalizeResumeFrom(body.resumeFrom);
   if (resumeResult.error) {
@@ -1831,6 +1858,12 @@ export interface Sim2RealRouterOptions {
    * implementation and no drift between clients.
    */
   prefix?: string;
+  /**
+   * Optional ops-event hook for telemetry ingest failures. Passed through to
+   * the telemetry routes so an external reporter can observe storage errors
+   * without the route module importing any transport.
+   */
+  onTelemetryIngestFailure?: Sim2RealTelemetryRouteDeps['onIngestFailure'];
 }
 
 function normalizeApiPrefix(value: string | undefined): string {
@@ -1925,16 +1958,121 @@ function enforceMutationAccess(
   return false;
 }
 
+/**
+ * Auto-attach a completed local run's evaluation telemetry to the replay
+ * pipeline. The starter engine already records hard-envelope policy rollouts
+ * (telemetry.jsonl) while evaluating; without this the operator had to
+ * re-record evidence by hand before the run page could show a replay.
+ * Idempotency: the append is keyed by a deterministic idempotency key derived
+ * from the run, so a repeated status poll or a reconcile after completion
+ * can never duplicate chunks. Any failure is logged and swallowed — the
+ * status response must not fail because replay evidence is unavailable.
+ */
+async function autoAttachEvaluationTelemetry(
+  run: Sim2RealRunRecord,
+  owner: string | undefined,
+  isMultiUser: boolean,
+  resolveRunner: (
+    computeResourceId: string | undefined,
+  ) => Promise<{ runnerUrl: string; runnerToken: string } | null>,
+): Promise<void> {
+  if (run.backend !== 'local' || !run.externalRunId) return;
+  try {
+    const workerAccount = owner ?? (isMultiUser ? '' : 'local-dev');
+    if (!workerAccount) return;
+    const runner = await resolveRunner(run.computeResourceId);
+    const telemetry = await fetchLocalRunTelemetry({
+      accountId: workerAccount,
+      externalRunId: run.externalRunId,
+      ...(runner ? { runnerUrl: runner.runnerUrl, runnerToken: runner.runnerToken } : {}),
+    });
+    if (!telemetry || telemetry.sampleCount === 0) return;
+    const CHUNK_SIZE = 5_000;
+    for (let offset = 0; offset < telemetry.lines.length; offset += CHUNK_SIZE) {
+      const samples = telemetry.lines
+        .slice(offset, offset + CHUNK_SIZE)
+        .map((line) => JSON.parse(line)) as Sim2RealTelemetrySample[];
+      await appendSim2RealTelemetryWithResult(
+        {
+          runId: run.id,
+          modelId: run.modelId,
+          source: 'browser',
+          ...(run.contractId ? { contractId: run.contractId } : {}),
+          samples,
+          idempotencyKey:
+            offset === 0
+              ? `eval-replay-${run.id}`
+              : `eval-replay-${run.id}-${Math.floor(offset / CHUNK_SIZE)}`,
+        },
+        owner,
+      );
+    }
+    console.log(
+      `[sim2real] auto-attached ${telemetry.sampleCount} evaluation samples to run ${run.id}`,
+    );
+  } catch (error) {
+    console.warn(
+      `[sim2real] evaluation telemetry auto-attach failed for ${run.id}`,
+      redactInternalError(error),
+    );
+  }
+}
+
 export function createSim2RealRouter(
   deps: { runOnDevice?: RunOnDevice; auth?: Sim2RealAuthPort } = {},
   options: Sim2RealRouterOptions = {},
 ): Router {
   const router = Router();
+
   const prefix = normalizeApiPrefix(options.prefix);
   const api = (suffix: string): string => `${prefix}${suffix}`;
+
+  // Public, immutable seed assets for the first task-pack flywheel.
+  router.get(api('/task-packs/:taskId/failure-cases'), wrapAsync(async (request, response) => {
+    noStore(response);
+    if (String(request.params.taskId || '') !== 'goal-navigation-clear-arena') {
+      response.status(404).json({ ok: false, error: 'TASK_PACK_NOT_FOUND' });
+      return;
+    }
+    try {
+      const file = await readFile(path.resolve(process.cwd(), 'data/failure-cases/goal-navigation-seed.json'), 'utf8');
+      response.json({ ok: true, ...JSON.parse(file) });
+    } catch {
+      response.status(503).json({ ok: false, error: 'TASK_PACK_ASSET_UNAVAILABLE' });
+    }
+  }));
   const auth = deps.auth ?? LOCAL_SIM2REAL_AUTH;
   const visibleDevicesForAuth = (owner?: string) =>
     visibleDevices(owner, auth.isMultiUserDeployment());
+
+  // Resolve the worker coordinates for a run's compute resource, or null when
+  // the run should not reach a worker at all (deleted resource, failing
+  // health, or no resource configured). Shared by the artifact staging path
+  // and the evaluation-telemetry auto-attach below.
+  const resolveRunRunner = async (
+    computeResourceId: string | undefined,
+    owner: string | undefined,
+  ): Promise<{ runnerUrl: string; runnerToken: string } | null> => {
+    if (!computeResourceId) return null;
+    const selectedResource = await getSim2RealComputeResourceSecret(computeResourceId, owner);
+    // A run tied to a deleted resource must never silently download from the
+    // deployment-wide worker; doing so could stage a different run's data
+    // under the same external id.
+    if (!selectedResource) return null;
+    if (computeResourceHealthFailure(selectedResource.resource)) return null;
+    return {
+      runnerUrl: selectedResource.resource.runnerUrl,
+      runnerToken: selectedResource.runnerToken ?? '',
+    };
+  };
+
+  // Auto-attach the engine's own evaluation telemetry when a run first
+  // reaches a terminal state through this router's status paths. Idempotent
+  // via the store's idempotency key, fail-closed via the fetch's nulls.
+  const attachEvalTelemetryForRun = (run: Sim2RealRunRecord, owner: string | undefined) =>
+    autoAttachEvaluationTelemetry(run, owner, auth.isMultiUserDeployment(), (computeResourceId) =>
+      resolveRunRunner(computeResourceId, owner),
+    );
 
   // One shared guard covers every route registered below, including both the
   // core handlers and the telemetry/device sub-routers.
@@ -1951,20 +2089,31 @@ export function createSim2RealRouter(
       const selectedProductId = requestedProduct(request.query.productId);
       noStore(response);
       const simulator = simulatorIntegration();
-      const [models, runs, deployments, devices, robogo, localWorker, computeResources] =
-        await Promise.all([
-          listSim2RealModels(owner),
-          listSim2RealRuns(owner),
-          listSim2RealDeployments(owner),
-          visibleDevicesForAuth(owner),
-          probeRobogoIntegration(
-            String(auth.resolvePrincipal(request)?.accountId ?? owner ?? ''),
-            auth.resolveAccessToken(request),
-            { multiUser: auth.isMultiUserDeployment() },
-          ),
-          probeLocalTrainingWorker(simulator.local),
-          listSim2RealComputeResources(owner),
-        ]);
+      const [
+        models,
+        runs,
+        deployments,
+        devices,
+        robogo,
+        localWorker,
+        computeResources,
+        artifacts,
+        evaluations,
+      ] = await Promise.all([
+        listSim2RealModels(owner),
+        listSim2RealRuns(owner),
+        listSim2RealDeployments(owner),
+        visibleDevicesForAuth(owner),
+        probeRobogoIntegration(
+          String(auth.resolvePrincipal(request)?.accountId ?? owner ?? ''),
+          auth.resolveAccessToken(request),
+          { multiUser: auth.isMultiUserDeployment() },
+        ),
+        probeLocalTrainingWorker(simulator.local),
+        listSim2RealComputeResources(owner),
+        listSim2RealArtifacts(owner),
+        listSim2RealEvaluations(owner),
+      ]);
       const contractRegistry = availableContractsFor(models);
       const selectedContracts = contractRegistry.contracts[selectedProductId];
       // MicroDuck has one fixed, built-in contract.  RDK Duck is
@@ -1998,6 +2147,12 @@ export function createSim2RealRouter(
         models: models.map(publicModel),
         runs: runs.map((run) => publicRun(run, models)),
         deployments: deployments.map((deployment) => publicDeployment(deployment, models)),
+        // Promotion-flow surfaces: the first-class registry (artifact
+        // lifecycle) and evaluation evidence are what the deploy view's
+        // candidate → validated → published chain renders. Capped like the
+        // other lists so one account cannot bloat every overview poll.
+        artifacts: artifacts.slice(0, 100),
+        evaluations: evaluations.slice(0, 100),
         computeResources,
         devices: devices.map(publicDeviceSummary),
         integrations: {
@@ -2418,6 +2573,9 @@ export function createSim2RealRouter(
       requestOwner: (request, response) => requestOwner(request, response, auth),
       visibleDevices: visibleDevicesForAuth,
       storageError,
+      ...(options.onTelemetryIngestFailure
+        ? { onIngestFailure: options.onTelemetryIngestFailure }
+        : {}),
     },
     { prefix },
   );
@@ -2435,6 +2593,12 @@ export function createSim2RealRouter(
       // an external id (remote/cleaned) simply cannot stage, fail-closed.
       fetchRunArtifact: async (run, runOwner) => {
         if (run.backend !== 'local' || !run.externalRunId) return null;
+        // The worker gates /runs/:id on the account that submitted the job.
+        // Training submission falls back to 'local-dev' in single-user mode,
+        // so the artifact fetch must resolve to the same account or the
+        // worker will (correctly) refuse the byte read.
+        const workerAccount = runOwner ?? (auth.isMultiUserDeployment() ? '' : 'local-dev');
+        if (!workerAccount) return null;
         const selectedResource = run.computeResourceId
           ? await getSim2RealComputeResourceSecret(run.computeResourceId, runOwner)
           : null;
@@ -2450,6 +2614,7 @@ export function createSim2RealRouter(
           return null;
         }
         return fetchLocalRunArtifact({
+          accountId: workerAccount,
           externalRunId: run.externalRunId,
           ...(run.computeResourceId
             ? {
@@ -2747,11 +2912,19 @@ export function createSim2RealRouter(
               ...(latest.artifact ? { artifact: latest.artifact } : {}),
               ...(latest.metrics ? { metrics: latest.metrics } : {}),
               ...(latest.taskEvaluation ? { taskEvaluation: latest.taskEvaluation } : {}),
+              ...(latest.progress ? { progress: latest.progress } : {}),
               ...((latest.status === 'completed' || latest.status === 'failed') && !run.finishedAt
                 ? { finishedAt: new Date().toISOString() }
                 : {}),
             };
             current = (await updateSim2RealRun(run.id, update, owner)) ?? run;
+            // The poll only runs while the ledger copy is queued/running, so a
+            // completed status here is always the first observed completion:
+            // pull the engine's evaluation telemetry into the replay pipeline
+            // so the run page can render it without manual re-recording.
+            if (current.status === 'completed') {
+              await attachEvalTelemetryForRun(current, owner);
+            }
           } catch (error) {
             if (isSim2RealRunnerNotFound(error)) {
               // The platform run still exists, but the remote job is
@@ -2811,6 +2984,91 @@ export function createSim2RealRouter(
         }
       }
       response.json({ ok: true, run: current });
+    }),
+  );
+
+  /**
+   * GET /runs/:id/policy.onnx — the completed run's portable policy bytes for
+   * the browser-side trial run (same evidence gates as board staging: only a
+   * completed, real, non-mock local run with a digest-verified ONNX artifact
+   * serves bytes). The browser trial is an operator aid, never release
+   * evidence; the digest is still verified so the bytes the operator sees
+   * match the ones that would be staged to a board.
+   */
+  router.get(
+    api('/runs/:id/policy.onnx'),
+    wrapAsync(async (request, response) => {
+      const owner = requestOwner(request, response, auth);
+      if (owner === null) return;
+      noStore(response);
+      const run = await getSim2RealRun(String(request.params.id || ''), owner);
+      if (!run) {
+        response.status(404).json({
+          ok: false,
+          error: 'SIM2REAL_RUN_NOT_FOUND',
+          message: '运行记录不存在，或不属于当前账号。',
+        });
+        return;
+      }
+      const errors: string[] = [];
+      if (run.status !== 'completed') errors.push('运行未完成');
+      if (run.mock === true) errors.push('mock 运行没有可试跑的策略');
+      if (run.backend !== 'local' && run.backend !== 'robogo') errors.push('非真实训练后端');
+      if (run.artifact?.format?.toLowerCase() !== 'onnx') errors.push('运行没有 ONNX 制品');
+      if (errors.length) {
+        sendApiError(response, 409, 'SIM2REAL_POLICY_TRIAL_NOT_AVAILABLE', errors.join('；'), {
+          retryable: false,
+          details: { runId: run.id, status: run.status },
+        });
+        return;
+      }
+      if (run.backend !== 'local' || !run.externalRunId) {
+        sendApiError(
+          response,
+          409,
+          'SIM2REAL_POLICY_TRIAL_NOT_AVAILABLE',
+          '该运行的制品字节不可从本平台读取（可能来自远端 runner 或已清理）。',
+          { retryable: true },
+        );
+        return;
+      }
+      const workerAccount = owner ?? (auth.isMultiUserDeployment() ? '' : 'local-dev');
+      if (!workerAccount) {
+        sendApiError(response, 401, 'SIM2REAL_AUTH_REQUIRED', '当前会话没有可用账号。', {
+          retryable: false,
+        });
+        return;
+      }
+      const runner = await resolveRunRunner(run.computeResourceId, owner);
+      const artifact = await fetchLocalRunArtifact({
+        accountId: workerAccount,
+        externalRunId: run.externalRunId,
+        ...(runner ? { runnerUrl: runner.runnerUrl, runnerToken: runner.runnerToken } : {}),
+      });
+      if (!artifact) {
+        sendApiError(
+          response,
+          409,
+          'SIM2REAL_POLICY_TRIAL_ARTIFACT_UNAVAILABLE',
+          '无法从训练 worker 读取制品字节（任务可能来自远端或制品已清理）。',
+          { retryable: true },
+        );
+        return;
+      }
+      if (run.artifact?.sha256 && artifact.sha256 !== run.artifact.sha256) {
+        sendApiError(
+          response,
+          409,
+          'SIM2REAL_POLICY_TRIAL_ARTIFACT_DIGEST_MISMATCH',
+          '制品字节与运行记录的 SHA-256 不一致，拒绝下发。',
+          { retryable: false },
+        );
+        return;
+      }
+      response.setHeader('Content-Type', 'application/octet-stream');
+      response.setHeader('Content-Length', String(artifact.bytes.byteLength));
+      response.setHeader('X-Artifact-Sha256', artifact.sha256);
+      response.end(artifact.bytes);
     }),
   );
 
@@ -3005,6 +3263,10 @@ export function createSim2RealRouter(
           );
           return;
         }
+        // No telemetry auto-attach here: reconcile exists only to recover the
+        // external id, and its contract is one runner request per call. The
+        // run page's status poll (or the next GET /runs/:id after completion)
+        // attaches evaluation evidence instead.
         response.json({ ok: true, reconciled: true, run: updated });
       } catch (error) {
         console.warn(

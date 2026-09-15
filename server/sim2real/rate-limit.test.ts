@@ -105,6 +105,20 @@ describe('rate limit configuration', () => {
     expect(isRateLimitExemptPath('/api/sim2real/overview')).toBe(false);
     expect(isRateLimitExemptPath('/')).toBe(false);
   });
+
+  it('exempts the MuJoCo simulator bridge used by the 20 Hz control loop', () => {
+    for (const path of [
+      '/mujoco/api/sessions',
+      '/mujoco/api/sessions/ba711af0/state',
+      '/mujoco/api/sessions/ba711af0/cmd_vel',
+    ]) {
+      expect(isRateLimitExemptPath(path)).toBe(true);
+    }
+    // The static microduck surface and other mujoco paths are still limited.
+    expect(isRateLimitExemptPath('/mujoco/api')).toBe(false);
+    expect(isRateLimitExemptPath('/mujoco/microduck/')).toBe(false);
+    expect(isRateLimitExemptPath('/mujoco-foo/api/sessions')).toBe(false);
+  });
 });
 
 describe('rate limit middleware', () => {

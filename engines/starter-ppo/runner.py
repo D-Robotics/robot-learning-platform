@@ -1275,6 +1275,14 @@ def train_goal_navigation(request, pack):
     reward_curve = []
     success_curve = []
     sac_curve = []
+    # Periodic checkpoints (Playground-style): a mid-training crash used to
+    # lose everything, and the final iteration is not necessarily the best
+    # policy. Keep the last state per interval and pick the export candidate
+    # by measured eval performance, never by "it was last".
+    checkpoint_dir = "checkpoints"
+    os.makedirs(checkpoint_dir, exist_ok=True)
+    checkpoint_every = max(1, iterations // 8)
+    saved_checkpoints = []
     started = time.time()
     for iteration in range(iterations):
         if algorithm == "sac":
@@ -1311,6 +1319,29 @@ def train_goal_navigation(request, pack):
         reward_curve.append(round(float(rewards.mean()), 4))
         recent = env.success_history[-50:]
         success_curve.append(round(sum(recent) / len(recent), 3) if recent else 0.0)
+        if (iteration + 1) % checkpoint_every == 0 or (iteration + 1) == iterations:
+            try:
+                ckpt_path = os.path.join(checkpoint_dir, "iter-{:05d}.pt".format(iteration + 1))
+                torch.save(
+                    {
+                        "iteration": iteration + 1,
+                        "model_state": model.state_dict(),
+                        "algorithm": algorithm,
+                        "rewardCurveTail": reward_curve[-8:],
+                        "successCurveTail": success_curve[-8:],
+                        "obsSize": obs_size,
+                        "actSize": act_size,
+                    },
+                    ckpt_path,
+                )
+                saved_checkpoints.append(ckpt_path)
+                stdout(
+                    "checkpoint saved: {} (iter {}, recentSuccess={:.2f})".format(
+                        ckpt_path, iteration + 1, success_curve[-1]
+                    )
+                )
+            except Exception as error:  # noqa: BLE001 - checkpointing is best-effort
+                stdout("checkpoint save failed: {}".format(error))
         if (iteration + 1) % max(1, iterations // 8) == 0:
             stdout(
                 "iter {}/{} meanReward={:.3f} recentSuccess={:.2f} goalRange=[{:.2f},{:.2f}] elapsed={:.1f}s".format(
@@ -1325,6 +1356,77 @@ def train_goal_navigation(request, pack):
     episodes_per_envelope = clamp_int(eval_cfg.get("episodesPerEnvelope"), 1, 200, 50)
     confidence = float(eval_cfg.get("confidenceLevel", 0.95))
     eval_seed = seed + 1000
+    # ---- best-checkpoint selection (probe, don't trust "last") ----
+    # The pinned-envelope report and the ONNX export below must use the best
+    # measured policy, not merely the newest one. Probe the late checkpoints
+    # (the final iteration is always checkpointed, so it stays in the race)
+    # with a light evaluation and promote the winner into `model`. Any
+    # failure leaves the untouched final weights in place.
+    best_checkpoint = {
+        "saved": len(saved_checkpoints),
+        "selectedIteration": iterations,
+        "probedIterations": [],
+        "probeScore": None,
+        "probeEpisodesPerEnvelope": 0,
+    }
+    if len(saved_checkpoints) > 1:
+        probe_episodes = 4
+        probe_seed = seed + 2000
+        candidates = []
+        for path in saved_checkpoints[-4:]:
+            try:
+                ckpt = torch.load(path, map_location=device)
+                candidate = ActorCritic(obs_size, act_size).to(device)
+                candidate.load_state_dict(ckpt["model_state"])
+                probe = evaluate_goal_navigation(
+                    candidate, env, device, envelopes, probe_seed,
+                    episodes_per_envelope=probe_episodes, confidence=confidence,
+                    squashed=algorithm == "sac",
+                )
+                success_scores = [
+                    float((metrics or {}).get("successRate", 0.0))
+                    for metrics in probe["envelopes"].values()
+                ]
+                collision_scores = [
+                    float((metrics or {}).get("collisionRate", 0.0))
+                    for metrics in probe["envelopes"].values()
+                ]
+                candidates.append(
+                    {
+                        "iteration": int(ckpt.get("iteration", 0)),
+                        "state": ckpt["model_state"],
+                        "success": sum(success_scores) / len(success_scores) if success_scores else 0.0,
+                        "collisions": sum(collision_scores) / len(collision_scores) if collision_scores else 0.0,
+                    }
+                )
+                best_checkpoint["probedIterations"].append(candidates[-1]["iteration"])
+            except Exception as error:  # noqa: BLE001 - a bad checkpoint must not fail the run
+                stdout("checkpoint probe failed for {}: {}".format(path, error))
+        if candidates:
+            # Rank by probe success, then collision rate, then iteration: on
+            # ties the LATEST checkpoint wins, so the probe can promote a
+            # better older snapshot but never silently regress to a weaker
+            # one on a measurement tie.
+            winner = sorted(
+                candidates,
+                key=lambda item: (-item["success"], item["collisions"], -item["iteration"]),
+            )[0]
+            best_checkpoint["selectedIteration"] = winner["iteration"]
+            best_checkpoint["probeScore"] = round(winner["success"], 4)
+            best_checkpoint["probeEpisodesPerEnvelope"] = probe_episodes
+            if winner["iteration"] != iterations:
+                model.load_state_dict(winner["state"])
+                stdout(
+                    "best checkpoint: iter {} (probe success {:.2f} beat final iter {})".format(
+                        winner["iteration"], winner["success"], iterations
+                    )
+                )
+            else:
+                stdout(
+                    "best checkpoint: final iter {} (probe success {:.2f})".format(
+                        iterations, winner["success"]
+                    )
+                )
     trained_report = evaluate_goal_navigation(
         model, env, device, envelopes, eval_seed,
         episodes_per_envelope=episodes_per_envelope, confidence=confidence,
@@ -1399,6 +1501,7 @@ def train_goal_navigation(request, pack):
                 "actionOutput": "normalized-twist" if act_size == 2 else "physical-joint",
                 "rewardCurve": reward_curve,
                 "successCurve": success_curve,
+                "checkpoints": best_checkpoint,
                 "device": requested_device.type,
                 **({"deviceName": device_name} if device_name != "cpu" else {}),
                 "eval": {k: v for k, v in trained_report.items() if k not in ("jsonl",)},
@@ -1437,6 +1540,9 @@ def train_goal_navigation(request, pack):
             "checkpointId": "starter-ppo-{}".format(slug_version),
             "artifactRef": "artifact://starter/{}/{}/checkpoint".format(slug_model, slug_version),
             "iteration": iterations,
+            "savedCheckpoints": len(saved_checkpoints),
+            "selectedIteration": best_checkpoint["selectedIteration"],
+            "selectedByProbe": best_checkpoint["probeScore"] is not None,
         },
         "artifact": {
             "artifactId": "{}-policy".format(slug_model),

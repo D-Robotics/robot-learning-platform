@@ -213,7 +213,10 @@ export async function askDsh(ctx: Context, prompt: string, options: { model?: st
         return content.flatMap((block) => {
           if (typeof block === 'string') return [block];
           const candidate = block as { type?: unknown; text?: unknown };
-          if (candidate?.type === 'text' && typeof candidate.text === 'string')
+          if (
+            typeof candidate.text === 'string' &&
+            (!candidate.type || ['text', 'output_text'].includes(String(candidate.type)))
+          )
             return [candidate.text];
           return [];
         });

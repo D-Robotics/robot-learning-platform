@@ -62,7 +62,10 @@ function model() {
   };
 }
 
-function overview(runs?: unknown[]) {
+function overview(
+  runs?: unknown[],
+  extras: { artifacts?: unknown[]; evaluations?: unknown[]; deployments?: unknown[] } = {},
+) {
   const selectedModel = model();
   const contract = selectedModel.manifest.contract;
   return {
@@ -103,9 +106,11 @@ function overview(runs?: unknown[]) {
         createdAt: '2026-09-10T00:00:00.000Z',
       },
     ],
-    deployments: [],
+    deployments: extras.deployments || [],
     devices: [],
     computeResources: [],
+    artifacts: extras.artifacts || [],
+    evaluations: extras.evaluations || [],
     integrations: {
       simulator: {
         browser: { available: true, entryUrl: '/mujoco/microduck/' },
@@ -173,6 +178,9 @@ async function boot(
     failOverview?: boolean;
     createdProject?: unknown;
     runs?: unknown[];
+    artifacts?: unknown[];
+    evaluations?: unknown[];
+    overviewDeployments?: unknown[];
   } = {},
 ) {
   const dom = new JSDOM(html, {
@@ -238,9 +246,34 @@ async function boot(
           },
         );
       }
-      if (url.includes('/overview')) payload = overview(options.runs);
+      if (url.includes('/overview'))
+        payload = overview(options.runs, {
+          artifacts: options.artifacts,
+          evaluations: options.evaluations,
+          deployments: options.overviewDeployments,
+        });
       else if (url.includes('/workspace-summary')) {
         payload = { ok: true, counts: { models: 1, runs: 1, deployments: 0, devices: 0 } };
+      } else if (url.includes('/lineage?')) {
+        payload = {
+          ok: true,
+          lineage: {
+            project: null,
+            datasets: [{ id: 'dataset-1', name: 'walk traces', version: 'v3' }],
+            run: { id: 'real-run-1', status: 'completed' },
+            runs: [{ id: 'real-run-1', status: 'completed' }],
+            artifacts: [
+              {
+                id: 'artifact-1',
+                artifactId: 'walk-policy',
+                name: 'Walk policy',
+                status: 'published',
+              },
+            ],
+            evaluations: [{ id: 'evaluation-1', status: 'passed', attested: true }],
+            deployments: [],
+          },
+        };
       } else if (url.endsWith('/projects') && method === 'POST')
         payload = { ok: true, project: options.createdProject || project() };
       else if (url.endsWith('/projects')) payload = { ok: true, projects: options.projects || [] };
@@ -439,6 +472,146 @@ describe('Sim2Real workbench DOM behavior', () => {
     const labels = Array.from(cards).map((card) => card.querySelector('span')?.textContent);
     expect(labels).toContain('物理后端');
     expect(labels).toContain('训练引擎');
+    expect(errors).toEqual([]);
+  });
+
+  it('renders the promotion flow chain from first-class artifact and evaluation evidence', async () => {
+    const selectedModel = model();
+    const run = {
+      id: 'real-run-1',
+      modelId: selectedModel.id,
+      backend: 'local',
+      status: 'completed',
+      summary: 'real training run',
+      mock: false,
+      metrics: { engine: 'mjx-ppo' },
+      createdAt: '2026-09-14T00:00:00.000Z',
+    };
+    const artifact = {
+      id: 'artifact-1',
+      artifactId: 'walk-policy',
+      version: 'v1',
+      name: 'Walk policy',
+      role: 'policy',
+      kind: 'source',
+      format: 'onnx',
+      runtime: 'cpu-onnx',
+      ref: 'artifact://walk-policy/v1',
+      sha256: 'c'.repeat(64),
+      sizeBytes: 73728,
+      modelId: selectedModel.id,
+      runId: run.id,
+      datasetIds: [],
+      evaluationIds: ['evaluation-1'],
+      status: 'published',
+      createdAt: '2026-09-14T00:00:00.000Z',
+      updatedAt: '2026-09-14T00:00:00.000Z',
+      publishedAt: '2026-09-14T01:00:00.000Z',
+    };
+    const evaluation = {
+      id: 'evaluation-1',
+      runId: run.id,
+      modelId: selectedModel.id,
+      artifactId: 'artifact-1',
+      datasetIds: [],
+      status: 'passed',
+      summary: 'quality gate passed',
+      source: 'runner',
+      attested: true,
+      taskEvaluation: { taskId: 'originbot-physics-navigation', qualityGate: { passed: true } },
+      createdAt: '2026-09-14T00:00:00.000Z',
+      updatedAt: '2026-09-14T00:00:00.000Z',
+      completedAt: '2026-09-14T00:30:00.000Z',
+    };
+    const { window, errors, requests } = await boot({
+      runs: [run],
+      artifacts: [artifact],
+      evaluations: [evaluation],
+    });
+
+    // The chain renders one link per producing run, ordered by the artifact
+    // name and lifecycle state, with run/evaluation/deployment evidence chips.
+    const chain = window.document.querySelectorAll('#promotion-chain .promotion-item');
+    expect(chain.length).toBe(1);
+    const item = chain[0];
+    expect(item.classList.contains('is-artifact')).toBe(true);
+    expect(item.classList.contains('is-published')).toBe(true);
+    expect(item.textContent).toContain('Walk policy');
+    expect(item.textContent).toContain('已发布');
+    expect(item.textContent).toContain('mjx-ppo');
+    expect(item.textContent).toContain('质量门');
+    expect(item.textContent).toContain('通过');
+    expect(item.textContent).toContain('KB');
+
+    // Stage summary reflects the published state end to end.
+    const publishedStage = window.document.querySelector('[data-promotion-stage="published"]');
+    expect(publishedStage?.classList.contains('is-ready')).toBe(true);
+    expect(window.document.querySelector('#promotion-flow-caption')?.textContent).toContain(
+      '已发布',
+    );
+
+    // A published artifact offers revoke, never publish; the revoke call must
+    // hit the real registry route prefix (/sim2real/artifacts), not a guessed
+    // workspace path.
+    const actions = Array.from(item.querySelectorAll('[data-promotion-action]'));
+    expect(actions.map((button) => button.dataset.promotionAction)).toEqual(['revoke']);
+    const revokeButton = actions[0] as HTMLButtonElement;
+    revokeButton.click();
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    const confirmApprove =
+      window.document.querySelector<HTMLButtonElement>('#confirm-action-approve');
+    confirmApprove?.click();
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    const revokeRequest = requests.find(
+      (request) => request.method === 'POST' && request.url.includes('/sim2real/artifacts/'),
+    );
+    expect(revokeRequest?.url).toBe('/sim2real/api/sim2real/artifacts/artifact-1/revoke');
+    expect(revokeRequest?.body).toMatchObject({
+      reason: expect.stringContaining('撤销'),
+    });
+
+    // The lineage toggle fetches the run-scoped graph and renders its hops.
+    const lineageButton = item.querySelector<HTMLButtonElement>('[data-lineage-toggle]');
+    expect(lineageButton).not.toBeNull();
+    lineageButton?.click();
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    const lineageRequest = requests.find(
+      (request) => request.url.includes('/sim2real/lineage?') && request.method === 'GET',
+    );
+    expect(lineageRequest?.url).toContain('runId=real-run-1');
+    const panel = item.querySelector('.promotion-lineage');
+    expect(panel?.hidden).toBe(false);
+    expect(panel?.textContent).toContain('数据集');
+    expect(panel?.textContent).toContain('walk traces · v3');
+    expect(panel?.textContent).toContain('制品');
+    expect(panel?.textContent).toContain('Walk policy · 已发布');
+    expect(panel?.textContent).toContain('评测');
+    expect(panel?.textContent).toContain('evaluation-1 · passed · attested');
+    // Second click collapses the panel without a second request.
+    const requestsBefore = requests.length;
+    lineageButton?.click();
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(panel?.hidden).toBe(true);
+    expect(requests.length).toBe(requestsBefore);
+
+    // Clicking the link opens the record detail dialog on the artifact.
+    (item as HTMLElement).click();
+    const dialog = window.document.querySelector<HTMLDialogElement>('#run-detail-dialog');
+    expect(dialog?.hasAttribute('open')).toBe(true);
+    expect(window.document.querySelector('#run-detail-body')?.textContent).toContain(
+      'c'.repeat(64).slice(0, 12),
+    );
+    expect(errors).toEqual([]);
+  });
+
+  it('keeps the promotion chain empty state honest when no registry evidence exists', async () => {
+    const { window, errors } = await boot();
+    const chain = window.document.querySelector('#promotion-chain');
+    expect(chain?.textContent).toContain('还没有可展示的晋级链');
+    const stages = Array.from(
+      window.document.querySelectorAll('.promotion-stage'),
+    ) as HTMLElement[];
+    expect(stages.every((stage) => stage.classList.contains('is-locked'))).toBe(true);
     expect(errors).toEqual([]);
   });
 

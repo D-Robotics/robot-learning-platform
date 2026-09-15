@@ -21,7 +21,10 @@ const boardAgent = fs.readFileSync(
 );
 
 assert.match(standalone, /export function createSim2RealWebApp/);
-assert.match(standalone, /createSim2RealRouter\(\{ runOnDevice, auth: studioSsoAuth \}\)/);
+// The router takes an optional second argument (telemetry-ingest failure
+// reporter, versioned-prefix options), so pin the ports argument and tolerate
+// the trailing options object.
+assert.match(standalone, /createSim2RealRouter\(\s*\{ runOnDevice, auth: studioSsoAuth \},/);
 assert.match(standalone, /studio-sso-auth/);
 assert.match(
   standalone,

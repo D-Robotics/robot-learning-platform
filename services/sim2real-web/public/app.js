@@ -178,6 +178,61 @@ function syncNotifyToggle() {
   button.classList.toggle('is-active', granted);
 }
 
+/* Theme toggle: theme-boot.js (first script in <head>, CSP-safe external)
+   resolves the initial theme (stored → OS → dark) before first paint. This
+   module owns the toggle button face, persistence, and live OS-preference
+   tracking once the user has an explicit choice. The theme class lives on
+   <html> only — every theme-dark CSS rule is scoped from there, so one
+   flip retints the whole app. */
+const THEME_STORAGE_KEY = 'rdk-lab-theme';
+
+function currentTheme() {
+  return document.documentElement.classList.contains('theme-dark') ? 'dark' : 'light';
+}
+
+function applyTheme(theme) {
+  document.documentElement.classList.toggle('theme-dark', theme === 'dark');
+}
+
+function toggleTheme() {
+  const next = currentTheme() === 'dark' ? 'light' : 'dark';
+  applyTheme(next);
+  try {
+    window.localStorage?.setItem(THEME_STORAGE_KEY, next);
+  } catch {
+    // Storage may be unavailable (private mode); the in-session toggle still works.
+  }
+  syncThemeToggle();
+}
+
+function syncThemeToggle() {
+  const button = $('theme-toggle');
+  if (!button) return;
+  const dark = currentTheme() === 'dark';
+  button.textContent = dark ? '☀' : '☾';
+  button.setAttribute('aria-pressed', dark ? 'true' : 'false');
+  button.setAttribute('aria-label', dark ? '切换到浅色主题' : '切换到深色主题');
+  button.title = dark ? '切换到浅色主题' : '切换到深色主题';
+}
+
+/* Follow OS theme changes only while the user has no stored preference, so
+   an explicit choice is never overridden by a system settings flip. */
+function wireThemeSystemTracking() {
+  const media = window.matchMedia?.('(prefers-color-scheme: dark)');
+  if (!media?.addEventListener) return;
+  media.addEventListener('change', (event) => {
+    let hasStored = false;
+    try {
+      hasStored = Boolean(window.localStorage?.getItem(THEME_STORAGE_KEY));
+    } catch {
+      hasStored = false;
+    }
+    if (hasStored) return;
+    applyTheme(event.matches ? 'dark' : 'light');
+    syncThemeToggle();
+  });
+}
+
 async function toggleNotifyPreference() {
   if (!state.notifyEnabled) {
     if (typeof Notification === 'undefined') {
@@ -216,7 +271,7 @@ function renderContextLive() {
   const localRunner = state.overview?.integrations?.simulator?.local || {};
   const project = selectedProject();
   let backendLabel = '检查中';
-  if (state.authRequired) backendLabel = '需要登录';
+  if (state.authRequired) backendLabel = '游客模式（可直接仿真）';
   else if (state.serviceError) backendLabel = '服务不可用';
   else if (robogo.state === 'ready') backendLabel = 'RoboGo 就绪';
   else if (localRunner.available === true && localRunner.healthy === true) backendLabel = '本地就绪';
@@ -249,6 +304,10 @@ function renderContextLive() {
 
 const state = {
   overview: null,
+  // Guest fallback: the public healthz payload (simulator surface, login
+  // mode) so logged-out visitors still learn whether the browser simulator
+  // is playable before they decide to sign in.
+  publicHealth: null,
   workspaceSummary: null,
   projects: [],
   projectsLoaded: false,
@@ -505,6 +564,7 @@ function renderProjectWorkspace() {
   const saved = $('workspace-last-saved');
   if (saved) saved.textContent = `最近同步 ${formatDate(state.workspaceSummary?.generatedAt || new Date().toISOString())}`;
   renderDeploymentTimeline();
+  renderPromotionFlow();
 }
 
 function renderDeploymentTimeline() {
@@ -570,6 +630,459 @@ function renderDeploymentTimeline() {
   setText('deploy-timeline-status', active);
   setText('deploy-flow-caption', deployment ? `更新于 ${formatDate(deployment.updatedAt || deployment.createdAt)}` : '按证据推进');
   $('deploy-recovery-note')?.toggleAttribute('hidden', !deployment || !['failed', 'blocked'].includes(String(deployment.status || '').toLowerCase()));
+}
+
+// ---- 模型晋级流：训练产物 → 候选 → 验证 → 发布 -----------------------------
+// The overview payload now carries first-class artifact and evaluation records.
+// This view turns that evidence chain into a visible product: each run that
+// produced a registry artifact renders as a chain link with its evaluation,
+// artifact lifecycle, and deployment consumption. Nothing here invents
+// evidence — every chip comes from a ledger record field.
+
+const ARTIFACT_STATUS_LABELS = {
+  draft: '候选',
+  validated: '已验证',
+  published: '已发布',
+  revoked: '已撤销',
+};
+
+function promotionRecordsForCurrentModel() {
+  const ids = currentModelIds();
+  const artifacts = (state.overview?.artifacts || []).filter(
+    (artifact) => ids.has(artifact.modelId) && projectIncludesRecord(artifact),
+  );
+  const evaluations = (state.overview?.evaluations || []).filter(
+    (evaluation) =>
+      ids.has(evaluation.modelId) &&
+      (!evaluation.artifactId || artifacts.some((artifact) => artifact.id === evaluation.artifactId)) &&
+      projectIncludesRecord(evaluation),
+  );
+  const deployments = deploymentsForCurrentModel().filter(
+    (deployment) => deployment.artifactId || deployment.evaluationId,
+  );
+  return { artifacts, evaluations, deployments };
+}
+
+// Latest-first run ordering, then link records that belong to the same run so
+// the chain reads top-down as one promotion story per training run.
+function promotionChainLinks() {
+  const { artifacts, evaluations, deployments } = promotionRecordsForCurrentModel();
+  const runs = [...runsForCurrentModel()].sort((a, b) =>
+    String(b.createdAt || '').localeCompare(String(a.createdAt || '')),
+  );
+  const links = [];
+  const artifactByRun = new Map();
+  for (const artifact of artifacts) {
+    if (artifact.runId && !artifactByRun.has(artifact.runId)) artifactByRun.set(artifact.runId, artifact);
+  }
+  const evaluationByRun = new Map();
+  const evaluationById = new Map(evaluations.map((evaluation) => [evaluation.id, evaluation]));
+  for (const evaluation of evaluations) {
+    if (evaluation.runId && !evaluationByRun.has(evaluation.runId)) evaluationByRun.set(evaluation.runId, evaluation);
+  }
+  const deploymentByArtifact = new Map();
+  const deploymentByEvaluation = new Map();
+  for (const deployment of deployments) {
+    if (deployment.artifactId && !deploymentByArtifact.has(deployment.artifactId)) {
+      deploymentByArtifact.set(deployment.artifactId, deployment);
+    }
+    if (deployment.evaluationId && !deploymentByEvaluation.has(deployment.evaluationId)) {
+      deploymentByEvaluation.set(deployment.evaluationId, deployment);
+    }
+  }
+  for (const run of runs) {
+    const artifact = artifactByRun.get(run.id) || null;
+    const evaluation =
+      evaluationByRun.get(run.id) ||
+      (artifact ? evaluationById.get(artifact.evaluationIds?.[0] || '') || null : null) ||
+      (run.evaluationId ? evaluationById.get(run.evaluationId) || null : null);
+    const deployment =
+      (artifact ? deploymentByArtifact.get(artifact.id) || null : null) ||
+      (evaluation ? deploymentByEvaluation.get(evaluation.id) || null : null);
+    if (!artifact && !evaluation && !deployment) continue;
+    links.push({ run, artifact, evaluation, deployment });
+  }
+  // Orphan records the run ledger cannot reach still deserve a visible slot.
+  const linkedArtifactIds = new Set(links.map((link) => link.artifact?.id).filter(Boolean));
+  for (const artifact of artifacts) {
+    if (linkedArtifactIds.has(artifact.id)) continue;
+    const evaluation = evaluationById.get(artifact.evaluationIds?.[0] || '') || null;
+    links.push({
+      run: null,
+      artifact,
+      evaluation,
+      deployment: deploymentByArtifact.get(artifact.id) || null,
+    });
+  }
+  return links.slice(0, 12);
+}
+
+function renderPromotionFlow() {
+  const root = $('promotion-chain');
+  if (!root) return;
+  const links = promotionChainLinks();
+  const { artifacts, evaluations, deployments } = promotionRecordsForCurrentModel();
+  renderPromotionStages(artifacts, evaluations, deployments);
+  root.replaceChildren();
+  if (!links.length) {
+    const empty = document.createElement('li');
+    empty.className = 'promotion-chain-empty';
+    empty.textContent =
+      '当前模型还没有可展示的晋级链：完成一次真实训练并发布制品后，这里会按 产物 → 评测 → 制品 → 部署 展示证据。';
+    root.append(empty);
+    return;
+  }
+  for (const link of links) root.append(promotionLinkItem(link));
+}
+
+function renderPromotionStages(artifacts, evaluations, deployments) {
+  const published = artifacts.filter((artifact) => artifact.status === 'published');
+  const validated = artifacts.filter((artifact) => artifact.status === 'validated');
+  const passed = evaluations.filter(
+    (evaluation) => evaluation.status === 'passed' && !evaluation.stale,
+  );
+  const hasDraft = artifacts.some((artifact) => artifact.status === 'draft');
+  const candidatesState = artifacts.length ? (hasDraft ? 'current' : 'ready') : 'locked';
+  const validatedState = validated.length || published.length ? 'ready' : passed.length ? 'current' : artifacts.length ? 'blocked' : 'locked';
+  const publishedState = published.length
+    ? 'ready'
+    : deployments.length
+      ? 'current'
+      : validated.length || passed.length
+        ? 'blocked'
+        : 'locked';
+  const stages = [
+    { key: 'candidates', state: candidatesState, detail: artifacts.length ? `${artifacts.length} 个制品候选` : '还没有注册制品' },
+    { key: 'validated', state: validatedState, detail: passed.length ? `${passed.length} 条评测通过` : validated.length ? `${validated.length} 个已验证` : '等待评测通过' },
+    { key: 'published', state: publishedState, detail: published.length ? `${published.length} 个已发布` : deployments.length ? '已有部署消费发布制品' : '等待发布' },
+  ];
+  for (const stage of stages) {
+    const node = document.querySelector('[data-promotion-stage="' + stage.key + '"]');
+    if (!node) continue;
+    node.classList.remove('is-ready', 'is-current', 'is-blocked', 'is-locked');
+    node.classList.add('is-' + stage.state);
+    const small = node.querySelector('small');
+    if (small) small.textContent = stage.detail;
+    const title = node.querySelector('strong')?.textContent?.trim() || stage.key;
+    node.setAttribute('aria-label', `${title}：${stage.detail}`);
+  }
+  const caption = $('promotion-flow-caption');
+  if (caption) {
+    caption.textContent = published.length
+      ? `${published.length} 个制品已发布 · 链路可见`
+      : artifacts.length
+        ? `${artifacts.length} 个制品在晋级流中`
+        : '训练产物 → 候选 → 验证 → 发布';
+  }
+}
+
+function promotionLinkItem(link) {
+  const { run, artifact, evaluation, deployment } = link;
+  const item = document.createElement('li');
+  item.className = 'promotion-item';
+  const chips = [];
+  const chip = (label, value) =>
+    value === undefined || value === null || value === '' ? null : `<dt>${escapeHtml(label)}</dt><dd><b>${escapeHtml(String(value))}</b></dd>`;
+  const parts = [];
+  if (artifact) {
+    item.classList.add('is-artifact', 'is-' + artifact.status);
+    parts.push(
+      '<span class="promotion-item-marker">' + (artifact.status === 'published' ? '✓' : artifact.status === 'revoked' ? '×' : '◆') + '</span>' +
+      '<div class="promotion-item-main">' +
+      '<div class="promotion-item-title"><strong>' + escapeHtml(artifact.name || artifact.artifactId) + '</strong>' +
+      '<span>' + escapeHtml(ARTIFACT_STATUS_LABELS[artifact.status] || artifact.status) + '</span></div>' +
+      '<dl class="promotion-item-detail">' +
+      [chip('版本', artifact.version), chip('格式', artifact.format?.toUpperCase()), chip('角色', artifact.role), chip('运行时', artifact.runtime)].filter(Boolean).join('') +
+      '</dl></div>',
+    );
+    chips.push(['SHA-256', shortDigest(artifact.sha256)]);
+    if (artifact.sizeBytes) chips.push(['体积', formatBytes(artifact.sizeBytes)]);
+    if (artifact.publishedAt) chips.push(['发布于', formatDate(artifact.publishedAt)]);
+    if (artifact.revokedAt) chips.push(['撤销于', formatDate(artifact.revokedAt)]);
+  } else if (evaluation) {
+    item.classList.add('is-evaluation', 'is-' + evaluation.status);
+    parts.push(
+      '<span class="promotion-item-marker">' + (evaluation.status === 'passed' ? '✓' : evaluation.status === 'failed' ? '×' : '·') + '</span>' +
+      '<div class="promotion-item-main">' +
+      '<div class="promotion-item-title"><strong>评测证据</strong><span>' + escapeHtml(evaluation.status === 'passed' ? '通过' : evaluation.status === 'failed' ? '失败' : evaluation.status) + (evaluation.attested ? ' · attested' : '') + '</span></div>' +
+      '</div>',
+    );
+  } else if (deployment) {
+    item.classList.add('is-deployment');
+    parts.push(
+      '<span class="promotion-item-marker">⇗</span>' +
+      '<div class="promotion-item-main"><div class="promotion-item-title"><strong>部署计划</strong><span>' + escapeHtml(deployment.mode) + ' · ' + escapeHtml(statusLabel(deployment.status)) + '</span></div></div>',
+    );
+  }
+  // Run provenance: every link shows which training run produced the evidence.
+  if (run) {
+    chips.unshift(['训练 Run', run.id], ['状态', statusLabel(run.status)]);
+    if (run.taskId) chips.splice(2, 0, ['任务', run.taskId]);
+    if (run.metrics?.engine) chips.splice(3, 0, ['引擎', run.metrics.engine]);
+  }
+  if (evaluation) {
+    chips.push(['评测', evaluation.id]);
+    if (evaluation.taskId) chips.push(['评测任务', evaluation.taskId]);
+    const gate = evaluation.taskEvaluation?.qualityGate;
+    if (gate) {
+      chips.push(['质量门', gate.passed === true ? '通过' : gate.passed === false ? '未通过' : '未报告']);
+    }
+    if (evaluation.stale) chips.push(['证据', '已被更新遥测取代']);
+  }
+  if (deployment) {
+    chips.push(['部署', deployment.id], ['模式', deployment.mode]);
+    if (deployment.releaseGate) {
+      chips.push(['发布闸门', deployment.releaseGate.passed ? '通过' : '未通过']);
+    }
+  }
+  const evidenceBlock = chips.length
+    ? '<div class="promotion-item-evidence"><dl class="promotion-item-detail">' +
+      chips
+        .map(([label, value]) =>
+          value === undefined || value === null || value === '' ? '' : `<dt>${escapeHtml(label)}</dt><dd><b>${escapeHtml(String(value))}</b></dd>`,
+        )
+        .join('') +
+      '</dl></div>'
+    : '';
+  const errorNote =
+    artifact?.status === 'revoked' && artifact.revocationReason
+      ? '<p class="promotion-item-error">撤销原因：' + escapeHtml(artifact.revocationReason) + '</p>'
+      : evaluation?.status === 'failed'
+        ? '<p class="promotion-item-error">评测未通过：' + escapeHtml(evaluation.summary || '无详细说明') + '</p>'
+        : '';
+  const actions = promotionActionButtons(artifact);
+  // escape-audit:allow every joined segment is literal HTML with escapeHtml() on record fields; actions markup is static.
+  item.innerHTML = parts.join('') + evidenceBlock + errorNote + actions;
+  // Detail dialog on the whole row mirrors the records-view behavior.
+  item.addEventListener('click', () => openPromotionDetail(link));
+  item.querySelectorAll('[data-promotion-action]').forEach((button) => {
+    button.addEventListener('click', (event) => {
+      event.stopPropagation();
+      handlePromotionAction(button.dataset.promotionAction, artifact, link);
+    });
+  });
+  if (link.run || link.artifact) appendLineageToggle(item, link);
+  return item;
+}
+
+// The lineage endpoint takes exactly one selector (runId / artifactId /
+// evaluationId / projectId). A promotion link prefers its producing run so the
+// graph covers every hop: datasets → run → artifacts → evaluations → deployments.
+function appendLineageToggle(item, link) {
+  const actions = item.querySelector('.promotion-item-actions');
+  const host = actions || item.querySelector('.promotion-item-main');
+  if (!host) return;
+  const button = document.createElement('button');
+  button.type = 'button';
+  button.className = 'button button-ghost button-small';
+  button.dataset.lineageToggle = 'true';
+  button.textContent = '血缘';
+  if (actions) actions.append(button);
+  else host.after(button);
+  button.addEventListener('click', (event) => {
+    event.stopPropagation();
+    void togglePromotionLineage(item, link, button);
+  });
+}
+
+async function togglePromotionLineage(item, link, button) {
+  let panel = item.querySelector('.promotion-lineage');
+  if (panel && !panel.hidden) {
+    panel.hidden = true;
+    return;
+  }
+  if (!panel) {
+    panel = document.createElement('div');
+    panel.className = 'promotion-lineage';
+    panel.hidden = true;
+    item.append(panel);
+  }
+  if (!link.lineage) {
+    panel.replaceChildren(promotionLineageNote('正在读取证据血缘…'));
+    panel.hidden = false;
+    button.disabled = true;
+    try {
+      const selector = link.run
+        ? 'runId=' + encodeURIComponent(link.run.id)
+        : 'artifactId=' + encodeURIComponent(link.artifact.id);
+      const payload = await request('/sim2real/lineage?' + selector);
+      link.lineage = payload?.lineage || null;
+    } catch (error) {
+      panel.replaceChildren(
+        promotionLineageNote(
+          '血缘读取失败：' +
+            (error instanceof Error ? error.message : '服务暂不可用') +
+            '（可重试）',
+        ),
+      );
+      button.disabled = false;
+      return;
+    }
+    button.disabled = false;
+  }
+  panel.replaceChildren(...promotionLineageNodes(link.lineage, link));
+  panel.hidden = false;
+}
+
+function promotionLineageNote(text) {
+  const note = document.createElement('p');
+  note.className = 'promotion-chain-empty';
+  note.textContent = text;
+  return note;
+}
+
+// Renders the server's bidirectional evidence graph as compact text rows.
+// Built entirely with createElement/textContent so record fields can never
+// reach innerHTML.
+function promotionLineageNodes(lineage, link) {
+  if (!lineage) return [promotionLineageNote('该记录暂无可读血缘。')];
+  const rows = [];
+  const push = (label, text) => {
+    const row = document.createElement('p');
+    row.className = 'promotion-lineage-row';
+    const tag = document.createElement('span');
+    tag.textContent = label;
+    const value = document.createElement('b');
+    value.textContent = text;
+    row.append(tag, value);
+    rows.push(row);
+  };
+  const datasets = Array.isArray(lineage.datasets) ? lineage.datasets : [];
+  for (const dataset of datasets.slice(0, 4)) {
+    push('数据集', `${dataset.name || dataset.id}${dataset.version ? ' · ' + dataset.version : ''}`);
+  }
+  if (!datasets.length) push('数据集', '无');
+  const runs = Array.isArray(lineage.runs) ? lineage.runs : lineage.run ? [lineage.run] : [];
+  for (const run of runs.slice(0, 4)) {
+    if (link.run && run.id === link.run.id) continue;
+    push('关联 Run', `${run.id} · ${statusLabel(run.status)}`);
+  }
+  const artifacts = Array.isArray(lineage.artifacts) ? lineage.artifacts : [];
+  for (const artifact of artifacts.slice(0, 4)) {
+    push(
+      '制品',
+      `${artifact.name || artifact.artifactId} · ${ARTIFACT_STATUS_LABELS[artifact.status] || artifact.status}`,
+    );
+  }
+  const evaluations = Array.isArray(lineage.evaluations) ? lineage.evaluations : [];
+  for (const evaluation of evaluations.slice(0, 4)) {
+    push(
+      '评测',
+      `${evaluation.id} · ${evaluation.status}${evaluation.attested ? ' · attested' : ''}`,
+    );
+  }
+  const deployments = Array.isArray(lineage.deployments) ? lineage.deployments : [];
+  for (const deployment of deployments.slice(0, 4)) {
+    push(
+      '部署',
+      `${deployment.id} · ${deployment.mode} · ${statusLabel(deployment.status)}${
+        deployment.releaseGate ? ' · 闸门' + (deployment.releaseGate.passed ? '通过' : '未通过') : ''
+      }`,
+    );
+  }
+  const heading = document.createElement('p');
+  heading.className = 'promotion-lineage-heading';
+  heading.textContent = link.run
+    ? `证据血缘 · Run ${link.run.id}`
+    : `证据血缘 · 制品 ${link.artifact.id}`;
+  return [heading, ...rows];
+}
+
+function promotionActionButtons(artifact) {
+  if (!artifact) return '';
+  const actions = [];
+  if (artifact.status === 'draft' || artifact.status === 'validated') {
+    actions.push('<button class="button button-ghost button-small" type="button" data-promotion-action="validate">标记验证</button>');
+  }
+  if ((artifact.status === 'draft' || artifact.status === 'validated') && artifact.sha256) {
+    actions.push('<button class="button button-primary button-small" type="button" data-promotion-action="publish">发布制品</button>');
+  }
+  if (artifact.status === 'validated' && !artifact.sha256) {
+    actions.push('<span class="small-note">发布前需登记 sha256 内容摘要</span>');
+  }
+  if (artifact.status === 'published') {
+    actions.push('<button class="button button-ghost button-small" type="button" data-promotion-action="revoke">撤销发布</button>');
+  }
+  if (!actions.length) return '';
+  return '<div class="promotion-item-actions">' + actions.join('') + '</div>';
+}
+
+function shortDigest(value) {
+  const text = String(value || '');
+  if (!text) return null;
+  return text.length > 12 ? text.slice(0, 12) + '…' : text;
+}
+
+function formatBytes(value) {
+  const bytes = Number(value);
+  if (!Number.isFinite(bytes) || bytes < 0) return null;
+  if (bytes < 1024) return bytes + ' B';
+  if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
+  return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
+}
+
+function openPromotionDetail(link) {
+  const record = link.artifact
+    ? Object.assign({}, link.artifact, {
+        recordType: 'artifact',
+        kind: 'artifact · ' + (link.artifact.role || link.artifact.format || 'model'),
+        summary: link.artifact.name || link.artifact.artifactId,
+        label: ARTIFACT_STATUS_LABELS[link.artifact.status] || link.artifact.status,
+      })
+    : link.evaluation
+      ? Object.assign({}, link.evaluation, {
+          recordType: 'evaluation',
+          kind: 'evaluation · ' + link.evaluation.status,
+          summary: link.evaluation.summary || link.evaluation.id,
+        })
+      : link.deployment;
+  if (record) openRecordDetails(record);
+}
+
+async function handlePromotionAction(action, artifact, link) {
+  if (!artifact || !action) return;
+  const labels = { validate: '验证', publish: '发布', revoke: '撤销' };
+  const label = labels[action] || action;
+  if (action === 'publish') {
+    const approved = await confirmAction({
+      title: '确认发布制品',
+      note: '发布后该制品可用于 Canary / Live 部署计划的发布闸门校验；发布记录会保留发布时间与操作者。',
+      approveLabel: '确认发布',
+      details: [
+        { label: '制品', value: artifact.name || artifact.artifactId },
+        { label: '版本', value: artifact.version },
+        { label: 'SHA-256', value: artifact.sha256 ? shortDigest(artifact.sha256) : '未登记（发布会被拒绝）' },
+      ],
+    });
+    if (!approved) return;
+  } else if (action === 'revoke') {
+    const approved = await confirmAction({
+      title: '确认撤销制品',
+      note: '撤销后该版本不再可用于新的部署计划；操作会写入审计记录。',
+      approveLabel: '确认撤销',
+      details: [
+        { label: '制品', value: artifact.name || artifact.artifactId },
+        { label: '版本', value: artifact.version },
+      ],
+    });
+    if (!approved) return;
+  }
+  try {
+    const payload = await request('/sim2real/artifacts/' + encodeURIComponent(artifact.id) + '/' + action, {
+      method: 'POST',
+      ...(action === 'revoke' ? { body: JSON.stringify({ reason: '操作员在晋级流面板撤销制品版本。' }) } : {}),
+    });
+    showToast(
+      payload?.artifact
+        ? `制品已${label}：${payload.artifact.name || payload.artifact.artifactId}（${ARTIFACT_STATUS_LABELS[payload.artifact.status] || payload.artifact.status}）`
+        : `制品已${label}`,
+      'success',
+    );
+    await loadOverview({ quiet: true });
+  } catch (error) {
+    if (!(error instanceof ApiError && error.status === 401))
+      showToast(error instanceof Error ? error.message : `制品${label}失败`, 'error');
+  }
 }
 
 // ---- Scoped polling: one mechanism for every periodic refresh -------------
@@ -688,6 +1201,59 @@ const overviewPoll = createScopedPoll({
   tick: () => loadOverview({ quiet: true, silent: true }),
 });
 
+// ── Event-driven refresh (SSE) ──────────────────────────────────────────────
+// The server bridges its domain event bus (run/deployment/evaluation/telemetry
+// mutations) to /api/v1/duck/events. Events trigger an immediate silent
+// overview refresh instead of waiting for the next poll cycle; the poll
+// chain stays armed as the fallback whenever the stream is unavailable.
+// High-frequency run.updated frames during training are coalesced by a
+// trailing-edge throttle so the UI refreshes at most every 2s.
+const SSE_THROTTLE_MS = 2000;
+const SSE_EVENT_NAMES = [
+  'run.created',
+  'run.updated',
+  'deployment.created',
+  'deployment.updated',
+  'evaluation.created',
+  'evaluation.updated',
+  'telemetry.appended',
+  'artifact.created',
+  'model.created',
+  'project.created',
+  'project.updated',
+];
+let sseSource = null;
+let sseRefreshQueued = false;
+let sseRefreshTimer = null;
+
+function sseThrottledRefresh() {
+  if (sseRefreshQueued) return;
+  sseRefreshQueued = true;
+  sseRefreshTimer = window.setTimeout(() => {
+    sseRefreshQueued = false;
+    sseRefreshTimer = null;
+    if (document.visibilityState !== 'visible') return;
+    void loadOverview({ quiet: true, silent: true }).catch(() => {});
+  }, SSE_THROTTLE_MS);
+}
+
+function connectEventStream() {
+  if (!window.EventSource) return;
+  try {
+    const source = new EventSource(apiPath('/v1/duck/events'));
+    sseSource = source;
+    for (const name of SSE_EVENT_NAMES) {
+      source.addEventListener(name, sseThrottledRefresh);
+    }
+    source.addEventListener('error', () => {
+      // EventSource auto-reconnects; the poll chain remains the fallback
+      // while disconnected, so no user-facing handling is needed here.
+    });
+  } catch {
+    sseSource = null;
+  }
+}
+
 const $ = (id) => document.getElementById(id);
 
 function apiPath(path) {
@@ -800,7 +1366,7 @@ function showToast(message, tone = 'normal') {
   const translated = raw
     .replace(/API path does not exist\.?/gi, 'API 路径不存在。')
     .replace(/Request failed \((\d+)\)/gi, '请求失败（$1）。')
-    .replace(/Failed to fetch/gi, '网络连接失败，请检查服务是否在线。')
+    .replace(/Failed to fetch/gi, window.location.protocol === 'file:' ? '当前页面是 file:// 预览，Agent 任务需要通过 npm run dev:sim2real 启动服务后访问。' : '网络连接失败，请检查服务是否在线。')
     .replace(/NetworkError/gi, '网络连接失败，请检查网络。')
     .replace(/Unauthorized|Authentication required/gi, '请先登录后再继续。')
     .replace(/Timeout|timed out/gi, '请求超时，请检查设备或服务连接。');
@@ -918,6 +1484,27 @@ function setAuthLoginError(message) {
   node.hidden = !message;
 }
 
+/* Guest fallback probe: /api/healthz is the one intentionally public surface.
+   It tells a logged-out visitor whether the browser simulator is mounted and
+   where SSO lives, so the "play first, sign in later" promise works without
+   any account-scoped data. */
+async function fetchPublicHealth() {
+  if (state.publicHealth) return state.publicHealth;
+  try {
+    const response = await fetch(apiPath('/healthz'), { credentials: 'same-origin' });
+    if (!response.ok) return null;
+    const payload = await response.json();
+    if (payload && typeof payload === 'object') {
+      state.publicHealth = payload;
+      renderIntegrations();
+    }
+  } catch {
+    // Offline or blocked: fall back to the built-in static entry, which the
+    // server resolves (mounted/redirect/unavailable) per request anyway.
+  }
+  return state.publicHealth;
+}
+
 function setAuthGate(payload) {
   state.authRequired = true;
   const loginUrl = withLocalReturnTo(safeLoginUrl(
@@ -928,18 +1515,24 @@ function setAuthGate(payload) {
   const gate = $('auth-gate');
   const loginButton = $('auth-login-button');
   const loginLink = $('login-link');
+  const bannerLogin = $('auth-gate-banner-login');
+  // The gate is a dismissible banner, not a wall: the simulator stays fully
+  // playable while logged out, so first-contact visitors can try the product
+  // before any account step. The full login form opens on demand.
   if (gate) gate.hidden = false;
-  for (const node of [loginButton, loginLink]) {
+  for (const node of [loginButton, loginLink, bannerLogin]) {
     if (!node) continue;
     node.setAttribute('href', loginUrl);
     node.hidden = false;
   }
-  setText('service-status', '需要登录');
+  setText('service-status', '游客模式');
   syncServicePill();
+  void fetchPublicHealth();
+  renderNextAction();
   renderEvaluationNext();
   if (!state.authNoticeShown) {
     state.authNoticeShown = true;
-    showToast('请先登录 RDK 账号，再加载你的 Sim2Real 工作区。', 'error');
+    showToast('当前为游客模式：仿真可直接试玩；训练记录与真机部署需要登录。', 'normal');
   }
 }
 
@@ -994,6 +1587,13 @@ function clearAuthGate() {
   state.authNoticeShown = false;
   $('auth-gate')?.setAttribute('hidden', '');
   $('login-link')?.setAttribute('hidden', '');
+  const panel = $('auth-gate-panel');
+  const toggle = $('auth-gate-toggle');
+  if (panel) panel.hidden = true;
+  if (toggle) {
+    toggle.setAttribute('aria-expanded', 'false');
+    toggle.textContent = '登录 / 展开表单';
+  }
   setAuthLoginError('');
   syncServicePill();
 }
@@ -1117,6 +1717,7 @@ const WORKFLOW_VIEWS = [
   'overview',
   'simulate',
   'train',
+  'resources',
   'evaluate',
   'deploy',
   'records',
@@ -1554,10 +2155,11 @@ function renderComputeResources() {
   for (const resource of resources) {
     const card = document.createElement('div'); card.className = 'compute-resource-card';
     const status = resource.status === 'online' ? '在线' : resource.status === 'offline' ? '离线' : '未测试';
-    card.innerHTML = `<div class="compute-resource-card-main"><strong></strong><span class="state-badge state-${resource.status === 'online' ? 'ok' : resource.status === 'offline' ? 'error' : 'neutral'}">${status}</span><small></small></div><div class="compute-resource-card-meta"></div><div class="compute-resource-card-actions"><button type="button" class="button button-ghost button-small" data-resource-action="test">测试连接</button><button type="button" class="button button-ghost button-small" data-resource-action="edit">编辑</button><button type="button" class="button button-ghost button-small" data-resource-action="delete">删除</button></div>`; // escape-audit:allow status is a local literal ternary (在线/离线/未测试)
+    card.innerHTML = `<div class="compute-resource-card-main"><strong></strong><span class="state-badge state-${resource.status === 'online' ? 'ok' : resource.status === 'offline' ? 'error' : 'neutral'}">${status}</span><small></small></div><div class="compute-resource-card-meta"></div><div class="compute-resource-card-actions"><button type="button" class="button button-ghost button-small" data-resource-action="test">重新检查</button><button type="button" class="button button-ghost button-small" data-resource-action="edit">编辑</button><button type="button" class="button button-ghost button-small" data-resource-action="delete">删除</button></div>`; // escape-audit:allow status is a local literal ternary (在线/离线/未测试)
     card.querySelector('strong').textContent = resource.name;
     card.querySelector('small').textContent = resource.tokenConfigured ? '已配置访问令牌' : '未配置访问令牌';
-    card.querySelector('.compute-resource-card-meta').textContent = [resource.gpuName, resource.cuda ? 'CUDA' : '', resource.runnerUrl, resource.message].filter(Boolean).join(' · ');
+    const sourceLabel = resource.source === 'local-agent' ? '用户本地 Agent' : resource.source === 'robogo' ? 'RoboGo 云端' : '服务器 Runner';
+    card.querySelector('.compute-resource-card-meta').textContent = [sourceLabel, resource.gpuName, resource.cuda ? 'CUDA' : '', resource.runnerUrl, resource.message].filter(Boolean).join(' · ');
     card.querySelectorAll('[data-resource-action]').forEach((button) => button.addEventListener('click', () => handleComputeResourceAction(button.dataset.resourceAction, resource)));
     list.append(card);
   }
@@ -1619,6 +2221,21 @@ async function saveComputeResource(event) {
   } catch (error) { setText('compute-resource-form-status', error instanceof Error ? error.message : '保存失败'); }
 }
 
+async function autoDetectLocalGpuAgent() {
+  const status = $('compute-resource-form-status');
+  setText('compute-resource-form-status', '正在查找本机 GPU Agent…');
+  try {
+    const response = await fetch('http://127.0.0.1:19190/healthz', { signal: AbortSignal.timeout(1500) });
+    if (!response.ok) throw new Error('Agent 未启动');
+    const payload = await response.json();
+    $('compute-resource-name').value = payload.resources?.[0]?.name || '本机 GPU Agent';
+    $('compute-resource-url').value = 'http://127.0.0.1:19190/proxy';
+    setText('compute-resource-form-status', '已发现本机 Agent，点击“添加 GPU”完成接入。');
+  } catch {
+    setText('compute-resource-form-status', '未发现 Agent。请先运行 npm run dev:gpu-agent，再点一次自动发现。');
+  }
+}
+
 function renderIntegrations() {
   const integrations = state.overview?.integrations || {};
   const identity = state.overview?.identity || null;
@@ -1657,16 +2274,23 @@ function renderIntegrations() {
   const localHealthy = local.healthy === true;
   const localReady = selectedResourceReady || (localAuthReady && localReachable && localHealthy);
   const overviewReady = Boolean(state.overview);
-  // Only advertise a browser simulator after the account-scoped overview has
-  // confirmed its surface. A missing/disabled server surface stays gated.
-  const browserAvailable =
-    overviewReady &&
-    Boolean(profile.simulatorPath) &&
-    (originbotProduct || simulator.browser?.available !== false);
+  // Logged-in users learn the simulator surface from the account-scoped
+  // overview. A guest (401 on overview) instead reads the public healthz
+  // probe, so the sandbox is playable without any account — the surface
+  // gate itself (missing/redirect/mounted) is identical on both paths.
+  const guestHealth = state.authRequired ? state.publicHealth : null;
+  const guestSimulatorMounted = guestHealth
+    ? guestHealth.microduck?.state !== 'missing'
+    : false;
+  const browserAvailable = Boolean(
+    (overviewReady || guestSimulatorMounted) &&
+      profile.simulatorPath &&
+      (originbotProduct || simulator.browser?.available !== false),
+  );
   setText(
     'service-status',
     state.authRequired
-      ? '需要登录'
+      ? '游客模式'
       : state.serviceError
         ? '服务不可用'
         : overviewReady
@@ -2060,11 +2684,31 @@ function renderIntegrations() {
             ? `并发 ${local.activeJobs ?? 0}/${local.maxConcurrentJobs}`
             : '',
           Number.isInteger(local.queuedJobs) ? `排队 ${local.queuedJobs}` : '',
+          Array.isArray(local.engines) && local.engines.length
+            ? `引擎 ${local.engines.join(' / ')}`
+            : '',
         ]
           .filter(Boolean)
           .join(' · ')
       : robogo.message || '本地 / RoboGo 训练后端不可用',
   );
+  // Engine selector honesty: an MJX selection needs the worker to actually
+  // route to the mjx engine. Dim the option (and say why) when the configured
+  // worker did not report it, instead of letting the submit fail at the worker.
+  const engineSelect = $('training-engine');
+  if (engineSelect) {
+    const reported = Array.isArray(local.engines) ? local.engines : null;
+    const engineKnown = (id) => reported == null || reported.includes(id) || reported.includes('default');
+    for (const option of engineSelect.querySelectorAll('option[value="mjx-ppo"], option[value="starter-ppo"]')) {
+      const known = engineKnown(option.value);
+      option.disabled = !known;
+      option.textContent = known
+        ? option.textContent.replace(' · worker 未注册', '')
+        : option.textContent.includes(' · worker 未注册')
+          ? option.textContent
+          : `${option.textContent} · worker 未注册`;
+    }
+  }
   setText('robogo-board-label', localConfigured ? '运行中任务' : '可见算力资源');
   setText('robogo-machine-label', localConfigured ? '排队任务' : '开发机');
   setText('robogo-board-count', localConfigured ? local.activeJobs ?? '—' : robogo.availableBoardCount ?? '—');
@@ -2232,9 +2876,9 @@ function renderActionLibrary() {
     item.innerHTML =
       '<strong>' +
       escapeHtml(policy.label || policy.id) +
-      '</strong><span>' +
+      '</strong><kbd>' +
       escapeHtml(keys) +
-      '</span>';
+      '</kbd>';
     root.append(item);
   }
 }
@@ -2488,6 +3132,7 @@ function openRecordDetails(record) {
   const isRun = record.recordType === 'run';
   const isArtifact = record.recordType === 'artifact';
   const isTelemetry = record.recordType === 'telemetry';
+  const isEvaluation = record.recordType === 'evaluation';
   const mockRun = isRun && record.mock === true;
   const syntheticRun = isRun && record.evaluation?.replay?.source === 'demo-fixture';
   const demoTelemetry = isTelemetry && record.source === 'demo-fixture';
@@ -2500,7 +3145,9 @@ function openRecordDetails(record) {
           ? '模型制品'
           : isTelemetry
             ? '遥测证据'
-            : '设备发布计划',
+            : isEvaluation
+              ? '评测证据'
+              : '设备发布计划',
     ],
     [
       '状态',
@@ -2518,7 +3165,9 @@ function openRecordDetails(record) {
           ? record.runtime || '—'
           : isTelemetry
             ? record.source || 'import'
-            : record.mode || '—',
+            : isEvaluation
+              ? record.source || 'platform'
+              : record.mode || '—',
     ],
     ...(isRun && record.taskId
       ? [['动作任务', ACTION_TASKS[record.taskId]?.label || record.taskId]]
@@ -2529,6 +3178,9 @@ function openRecordDetails(record) {
     ...(isRun && record.training?.profile ? [['训练档位', record.training.profile]] : []),
     ...(isRun && record.training?.algorithm
       ? [['算法', record.training.algorithm.toUpperCase()]]
+      : []),
+    ...(isRun && record.training?.engine
+      ? [['指定引擎', record.training.engine]]
       : []),
     ...(isRun && record.metrics?.engine ? [['训练引擎', record.metrics.engine]] : []),
     ...(isRun && record.metrics?.physicsBackend
@@ -2547,11 +3199,22 @@ function openRecordDetails(record) {
     ...(isTelemetry && record.telemetrySummary?.durationSeconds != null
       ? [['时长', formatTelemetrySeconds(record.telemetrySummary.durationSeconds)]]
       : []),
+    ...(isEvaluation && record.runId ? [['训练 Run', record.runId]] : []),
+    ...(isEvaluation && record.attested === true ? [['服务器签证', 'attested']] : []),
+    ...(isEvaluation && record.stale ? [['证据时效', '已被更新遥测取代']] : []),
     ...(!isRun && !isArtifact && record.deviceId ? [['目标设备', record.deviceId]] : []),
   ];
   setText(
     'run-detail-title',
-    isRun ? '运行详情' : isArtifact ? '制品详情' : isTelemetry ? '遥测证据详情' : '发布计划详情',
+    isRun
+      ? '运行详情'
+      : isArtifact
+        ? '制品详情'
+        : isTelemetry
+          ? '遥测证据详情'
+          : isEvaluation
+            ? '评测证据详情'
+            : '发布计划详情',
   );
   const detailStatus = $('run-detail-status');
   if (detailStatus) {
@@ -2586,6 +3249,11 @@ function openRecordDetails(record) {
     (isRun && record.metrics && !syntheticRun
       ? renderRunMetricCards(record) + renderRunMetricsRaw(record)
       : '') +
+    (isRun && runProgressPoints(record).length
+      ? '<div class="run-detail-live-chart"><strong class="run-detail-block-title">训练曲线（引擎回报）</strong>' +
+        '<canvas id="run-detail-progress-canvas" width="720" height="200" aria-label="训练奖励与成功率曲线"></canvas>' +
+        '<p class="small-note">绿线为每轮均值奖励（左轴），蓝线为近期成功率（右轴）。数据点由 worker 从引擎 stdout 解析，仅来自本次运行。</p></div>'
+      : '') +
     (isRun && record.checkpoint
       ? '<div><strong class="run-detail-block-title">Checkpoint</strong><pre class="run-detail-code">' +
         escapeHtml(JSON.stringify(record.checkpoint, null, 2)) +
@@ -2611,6 +3279,27 @@ function openRecordDetails(record) {
     (isTelemetry
       ? '<div><strong class="run-detail-block-title">遥测摘要</strong><pre class="run-detail-code">' +
         escapeHtml(JSON.stringify(record.telemetrySummary || {}, null, 2)) +
+        '</pre></div>'
+      : '') +
+    (isEvaluation
+      ? '<div><strong class="run-detail-block-title">评测证据</strong><pre class="run-detail-code">' +
+        escapeHtml(
+          JSON.stringify(
+            {
+              id: record.id,
+              runId: record.runId,
+              artifactId: record.artifactId,
+              status: record.status,
+              attested: record.attested,
+              stale: record.stale,
+              summary: record.summary,
+              report: record.report,
+              taskEvaluation: record.taskEvaluation,
+            },
+            null,
+            2,
+          ),
+        ) +
         '</pre></div>'
       : '') +
     (mockRun
@@ -2644,6 +3333,8 @@ function openRecordDetails(record) {
       : '');
   if (typeof dialog.showModal === 'function') dialog.showModal();
   else dialog.setAttribute('open', '');
+  const detailCanvas = $('run-detail-progress-canvas');
+  if (detailCanvas) drawRunProgressChart(detailCanvas, runProgressPoints(record));
   if ($('run-retrain-card')) wireRunRetrainingAdvice(record);
   if ($('run-board-sessions')) wireRunBoardSessions(record);
 }
@@ -3809,15 +4500,109 @@ async function loadRunReplay() {
   const select = $('replay-run-select');
   const runId = String(select?.value || '').trim();
   if (!runId) { showToast('请选择包含遥测的运行记录', 'error'); return; }
-  stopReplay();
+  await fetchAndMountReplay(runId, { interactive: true });
+}
+
+// Server-side completion already auto-attached the engine's evaluation
+// telemetry; this retry exists because the attach and the next poll race:
+// a 404/empty on the first attempt is expected and re-attempted a few times
+// with backoff, not surfaced as an error.
+async function autoLoadRunReplay(runId, { interactive = false } = {}) {
+  if (state.replay.autoLoadedFor === runId) return;
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    const loaded = await fetchAndMountReplay(runId, { interactive });
+    if (loaded) { state.replay.autoLoadedFor = runId; return; }
+    await new Promise((resolve) => setTimeout(resolve, 1500 * (attempt + 1)));
+  }
+}
+
+async function fetchAndMountReplay(runId, { interactive = false } = {}) {
   try {
     const payload = await request('/sim2real/runs/' + encodeURIComponent(runId) + '/replay');
     const frames = (Array.isArray(payload?.frames) ? payload.frames : []).map((sample) => ({ ...sample, t: Number(sample.t ?? sample.time ?? 0) })).sort((a, b) => a.t - b.t);
-    state.replay = { ...state.replay, runId, frames, index: 0, loaded: true, timer: null };
+    if (!frames.length) {
+      if (interactive) showToast('该运行没有原始遥测帧', 'normal');
+      return false;
+    }
+    stopReplay();
+    state.replay = { ...state.replay, runId, frames, index: 0, loaded: true, timer: null, autoLoadedFor: runId };
     renderReplayPlayer();
     sendReplayFrame();
-    showToast(frames.length ? `已加载 ${frames.length} 帧，可开始回放` : '该运行没有原始遥测帧', frames.length ? 'success' : 'normal');
-  } catch (error) { showToast(error instanceof Error ? error.message : '回放加载失败', 'error'); }
+    if (interactive) showToast(`已加载 ${frames.length} 帧，可开始回放`, 'success');
+    else showToast(`评测回放已自动挂载：${frames.length} 帧（${runId.slice(0, 8)}）`, 'normal');
+    return true;
+  } catch (error) {
+    if (interactive) showToast(error instanceof Error ? error.message : '回放加载失败', 'error');
+    return false;
+  }
+}
+
+// ---- browser ONNX policy trial (drives the embedded simulator) ----
+// Mirrors the microduck pattern: the trained policy runs fully in-browser
+// with ONNX Runtime Web (vendored under /vendor/onnxruntime-web, no CDN).
+// postMessage cannot carry functions, so the iframe performs the inference
+// itself; this side only sends the clonable runId/apiRoot and relays the
+// status messages the simulator posts back.
+const policyTrial = { runId: '', running: false };
+
+function setPolicyTrialStatus(text) {
+  const status = $('policy-trial-status');
+  if (status) status.textContent = text;
+  const button = $('policy-trial-button');
+  const stopButton = $('policy-trial-stop');
+  if (button) { button.disabled = policyTrial.running; button.textContent = policyTrial.running ? '试跑中…' : '🚀 策略试跑（浏览器推理）'; }
+  if (stopButton) stopButton.disabled = !policyTrial.running;
+}
+
+window.addEventListener('message', (event) => {
+  const data = event.data;
+  if (!data || typeof data !== 'object' || data.type !== 'rdk-policy-status') return;
+  const message = String(data.message || '');
+  if (data.phase === 'running') {
+    policyTrial.running = true;
+    setPolicyTrialStatus(message || '策略试跑进行中：浏览器 wasm 推理驱动仿真器。');
+  } else if (data.phase === 'finished' || data.phase === 'failed' || data.phase === 'stopped') {
+    policyTrial.running = false;
+    setPolicyTrialStatus(message || '策略试跑已结束。');
+    if (data.phase === 'failed') showToast(message || '策略试跑失败', 'error');
+    else if (data.phase === 'finished') showToast(message || '策略试跑结束', 'normal');
+  } else if (data.phase === 'loading') {
+    setPolicyTrialStatus(message || '正在准备浏览器推理…');
+  }
+});
+
+function startPolicyTrial() {
+  if (policyTrial.running) return;
+  const runId = state.replay.runId || String($('replay-run-select')?.value || '').trim();
+  if (!runId) { showToast('请先加载一个已完成运行的回放，再试跑策略', 'error'); return; }
+  const iframe = $('simulator-frame');
+  if (!iframe?.contentWindow) { showToast('嵌入仿真器不可用', 'error'); return; }
+  policyTrial.runId = runId;
+  policyTrial.running = true;
+  setPolicyTrialStatus('正在启动浏览器推理…');
+  try {
+    iframe.contentWindow.postMessage(
+      {
+        type: 'rdk-policy-run',
+        runId,
+        apiRoot: apiPath('/sim2real'),
+        maxSteps: 600,
+      },
+      '*',
+    );
+  } catch (error) {
+    policyTrial.running = false;
+    const message = error instanceof Error ? error.message : '策略试跑启动失败';
+    setPolicyTrialStatus('试跑失败：' + message);
+    showToast(message, 'error');
+  }
+}
+
+function stopPolicyTrial() {
+  if (!policyTrial.running) return;
+  const iframe = $('simulator-frame');
+  try { iframe?.contentWindow?.postMessage({ type: 'rdk-policy-stop' }, '*'); } catch { /* cross-origin iframe may reject */ }
+  setPolicyTrialStatus('正在停止策略试跑…');
 }
 
 async function importTelemetryFile(event) {
@@ -4109,21 +4894,113 @@ function renderEvaluation() {
 
 // A compact, honest comparison view for the last few Runs. It deliberately
 // leaves missing metrics blank and marks protocol/demo runs, so operators can
-// spot a trend without mistaking a receipt for real robot performance.
+// spot a trend without mistaking a receipt for real robot performance. The
+// operator picks the metric and how many runs to compare; runs with live
+// progress points are overlaid on one reward-curve canvas.
+const RUN_COMPARE_METRICS = {
+  successRate: { label: '成功率', format: (value) => { const v = metricPercent(value); return v == null ? '—' : `${v}%`; }, },
+  reward: { label: '平均奖励', format: (value) => formatMetricNumber(value, 2) },
+  fallRate: { label: '跌倒率', format: (value) => { const v = metricPercent(value); return v == null ? '—' : `${v}%`; } },
+  episodeLength: { label: '平均步数', format: (value) => formatMetricNumber(value, 1) },
+  iterations: { label: '迭代数', format: (value) => formatMetricNumber(value, 0) },
+};
+const RUN_COMPARE_COLORS = ['#55ddb0', '#60a5fa', '#f0b429', '#e879a6', '#a78bfa', '#34d399', '#7dd3fc', '#fca5a5'];
+const RUN_COMPARE_CANVAS_W = 720;
+const RUN_COMPARE_CANVAS_H = 260;
+
+function runCompareState() {
+  const metricKey = String($('run-compare-metric')?.value || 'successRate');
+  const metric = RUN_COMPARE_METRICS[metricKey] ? metricKey : 'successRate';
+  const countRaw = Number($('run-compare-count')?.value || 5);
+  const count = [5, 10, 20].includes(countRaw) ? countRaw : 5;
+  return { metric, count };
+}
+
+function drawRunCompareChart(runs) {
+  const wrap = $('run-comparison-chart');
+  const canvas = $('run-compare-canvas');
+  if (!wrap || !canvas) return;
+  const series = runs
+    .map((run, index) => ({ run, points: runProgressPoints(run), color: RUN_COMPARE_COLORS[index % RUN_COMPARE_COLORS.length] }))
+    .filter((entry) => entry.points.length > 1);
+  wrap.hidden = !series.length;
+  if (!series.length) return;
+  const ctx = clearCanvas(canvas, RUN_COMPARE_CANVAS_W, RUN_COMPARE_CANVAS_H);
+  if (!ctx) return;
+  const width = RUN_COMPARE_CANVAS_W;
+  const height = RUN_COMPARE_CANVAS_H;
+  const plotLeft = 46;
+  const plotRight = width - 10;
+  const plotTop = 28;
+  const plotBottom = height - 20;
+  const plotWidth = plotRight - plotLeft;
+  const plotHeight = plotBottom - plotTop;
+  const iterationMax = Math.max(
+    ...series.flatMap((entry) => entry.points.map((point) => point.iteration)),
+  );
+  const rewards = series.flatMap((entry) => entry.points.map((point) => point.meanReward));
+  let rewardMin = Math.min(0, ...rewards);
+  let rewardMax = Math.max(0, ...rewards);
+  if (rewardMin === rewardMax) rewardMax = rewardMin + 1;
+  const rewardPad = (rewardMax - rewardMin) * 0.08;
+  rewardMin -= rewardPad;
+  rewardMax += rewardPad;
+  const xOf = (iteration) => plotLeft + (iteration / (iterationMax || 1)) * plotWidth;
+  const yOf = (reward) => plotBottom - ((reward - rewardMin) / (rewardMax - rewardMin)) * plotHeight;
+  ctx.font = CANVAS_TEXT_STYLE;
+  ctx.strokeStyle = 'rgba(28, 28, 26, 0.12)';
+  ctx.lineWidth = 1;
+  ctx.fillStyle = CANVAS_TEXT_COLOR;
+  ctx.textAlign = 'right';
+  for (const reward of [rewardMax, (rewardMax + rewardMin) / 2, rewardMin]) {
+    const y = Math.round(yOf(reward)) + 0.5;
+    if (y <= plotTop || y >= plotBottom) continue;
+    ctx.beginPath();
+    ctx.moveTo(plotLeft, y);
+    ctx.lineTo(plotRight, y);
+    ctx.stroke();
+    ctx.fillText(reward.toFixed(2), plotLeft - 4, y + 3);
+  }
+  ctx.fillText('iter 0', plotLeft, plotBottom + 12);
+  ctx.fillText(String(iterationMax), plotRight, plotBottom + 12);
+  // Series + inline legend swatches above the plot.
+  ctx.textAlign = 'left';
+  let legendX = plotLeft;
+  series.forEach((entry) => {
+    ctx.strokeStyle = entry.color;
+    ctx.lineWidth = 1.8;
+    ctx.beginPath();
+    entry.points.forEach((point, index) => {
+      const x = xOf(point.iteration);
+      const y = yOf(point.meanReward);
+      if (index === 0) ctx.moveTo(x, y);
+      else ctx.lineTo(x, y);
+    });
+    ctx.stroke();
+    ctx.fillStyle = entry.color;
+    const legend = `#${String(entry.run.indexLabel || '')}`;
+    ctx.fillText(legend === '#' ? '' : legend, legendX, plotTop - 6);
+    legendX += ctx.measureText(legend).width + 14;
+  });
+}
+
 function renderRunComparison(runs) {
   const root = $('run-comparison');
   if (!root) return;
-  const recent = (runs || []).slice(0, 5);
+  const { metric, count } = runCompareState();
+  const recent = (runs || []).slice(0, count);
   setText('run-comparison-caption', recent.length ? `最近 ${recent.length} 次` : '暂无数据');
+  drawRunCompareChart(recent.map((run, index) => ({ ...run, indexLabel: index + 1 })));
   if (!recent.length) {
     root.innerHTML = '<div class="empty-inline">完成一次训练或评测后，这里会显示可比较的指标。</div>';
     return;
   }
   const metrics = [
+    { key: metric, label: RUN_COMPARE_METRICS[metric].label, format: RUN_COMPARE_METRICS[metric].format },
     { key: 'successRate', label: '成功率', format: (value) => { const v = metricPercent(value); return v == null ? '—' : `${v}%`; } },
     { key: 'fallRate', label: '跌倒率', format: (value) => { const v = metricPercent(value); return v == null ? '—' : `${v}%`; } },
     { key: 'reward', label: '平均奖励', format: (value) => formatMetricNumber(value, 2) },
-  ];
+  ].filter((entry, index, all) => all.findIndex((other) => other.key === entry.key) === index);
   const values = Object.fromEntries(metrics.map((metric) => [metric.key, recent.map((run) => finiteNumber(run?.metrics?.[metric.key])).filter((value) => value !== null)]));
   root.innerHTML = recent.map((run, index) => {
     const metricsHtml = metrics.map((metric) => {
@@ -4140,8 +5017,26 @@ function renderRunComparison(runs) {
     }).join('');
     const mock = run.mock === true || run.evaluation?.replay?.source === 'demo-fixture';
     const title = run.summary || run.taskId || run.backend || `Run ${index + 1}`; // escape-audit:allow index + 1 is a number
-    return `<div class="run-compare-row"><div class="run-compare-name"><strong>${escapeHtml(title)}</strong><small>${escapeHtml(formatDate(run.createdAt))} · ${escapeHtml(statusLabel(run.status))}${mock ? ' · 演示' : ''}</small></div><div class="run-compare-metrics">${metricsHtml}</div></div>`; // escape-audit:allow metricsHtml is built above from escaped values only
+    const legendColor = RUN_COMPARE_COLORS[index % RUN_COMPARE_COLORS.length];
+    return `<div class="run-compare-row"><div class="run-compare-name"><strong><i class="run-compare-swatch" style="background:${legendColor}"></i>${escapeHtml(title)}</strong><small>${escapeHtml(formatDate(run.createdAt))} · ${escapeHtml(statusLabel(run.status))}${mock ? ' · 演示' : ''}</small></div><div class="run-compare-metrics">${metricsHtml}</div></div>`; // escape-audit:allow metricsHtml is built above from escaped values only; legendColor is a fixed palette constant
   }).join('');
+}
+
+// Comparison controls re-render on change; the chart redraws from the same
+// overview data without another fetch.
+function wireRunComparisonControls() {
+  $('run-compare-metric')?.addEventListener('change', () => {
+    renderRunComparison(runsForCurrentModelSortedForCompare());
+  });
+  $('run-compare-count')?.addEventListener('change', () => {
+    renderRunComparison(runsForCurrentModelSortedForCompare());
+  });
+}
+
+function runsForCurrentModelSortedForCompare() {
+  return [...runsForCurrentModel()].sort((a, b) =>
+    String(b.createdAt || '').localeCompare(String(a.createdAt || '')),
+  );
 }
 
 // ---- 真机实时对照（评估页，OriginBot 只读遥测 2s 快照） -------------------
@@ -4235,7 +5130,16 @@ function renderNextAction() {
   let title = '先在仿真里验证「' + selectedTask().label + '」';
   let copy = selectedTask().hint + '。回放用于验证策略，强化学习训练可直接选择本地 GPU 或 RoboGo 提交。';
   let label = '进入仿真与录制 →';
-  if (!model) {
+  // Zero-friction first contact: anonymous visitors get the playable simulator
+  // as the primary CTA instead of an auth wall. Training history, evaluation
+  // evidence and device deployment need an account; exploring the physics
+  // sandbox does not.
+  if (state.authRequired) {
+    view = 'simulate';
+    title = '不用登录，先玩一段仿真';
+    copy = '内置 MicroDuck 物理仿真可以直接运行：选个任务、录一段轨迹、看看回放。要保存训练记录和连接真机时再登录也不迟。';
+    label = '直接开始仿真 →';
+  } else if (!model) {
     view = 'train';
     title = '先登记一个模型契约';
     copy = '选择产品线并导入 manifest，平台会先检查观测、动作、运行时和制品引用。';
@@ -4301,6 +5205,7 @@ function renderNextAction() {
     label = '打开记录与版本 →';
   }
   setText('next-action-title', title);
+  setText('next-action-copy', copy);
   const button = $('next-action-button');
   if (button) {
     button.dataset.viewTarget = view;
@@ -4540,6 +5445,115 @@ function renderWorkflowProgress() {
       button.title = blocked ? '完成前面的步骤后可进入' : `打开${button.querySelector('strong')?.textContent || ''}`;
     }
   });
+  // Mirror the same loop states onto the sidebar nav so completed stages
+  // carry a ✓ the same way the in-page progress strip does; the sidebar is
+  // the persistent wayfinding surface across every view.
+  document.querySelectorAll('.workflow-nav .nav-item[data-view-target]').forEach((item) => {
+    const key = item.dataset.viewTarget;
+    const stepState = Object.hasOwn(states, key) ? states[key] : null;
+    item.classList.toggle('is-complete', stepState === 'complete');
+    if (stepState === 'complete') {
+      item.setAttribute('aria-label', `${item.textContent.trim()}（已完成）`);
+    } else {
+      item.removeAttribute('aria-label');
+    }
+  });
+}
+
+// 顶栏闭环管道：把 renderWorkflowProgress 的同一份阶段状态镜像到
+// topbar，让任何视图下都能一眼看到闭环走到了哪一步（pro-workbench
+// 专业工作台模式的入口层）。
+function renderTopbarPipeline() {
+  const rail = $('topbar-pipeline');
+  if (!rail) return;
+  // 阶段状态推导与 renderWorkflowProgress 保持同源：契约就绪即可进入
+  // 训练，回放/训练完成进入评测，部署证据就绪才算闭环。
+  const model = selectedModel();
+  const latest = latestRun();
+  const telemetry = currentTelemetry();
+  const contractReady = Boolean(model?.manifest?.contract?.id && model?.manifest?.artifacts?.length);
+  const replayReady = Boolean(telemetry?.summary || latest?.evaluation?.replay || latest?.taskEvaluation?.replay);
+  const trainingReady = Boolean(latest && ['completed', 'ready'].includes(String(latest.status || '').toLowerCase()));
+  const evaluationReady = Boolean(telemetry?.summary || latest?.evaluation || latest?.taskEvaluation);
+  const deployment = deploymentsForCurrentModel().slice().sort((a, b) =>
+    String(b.updatedAt || b.createdAt || '').localeCompare(String(a.updatedAt || a.createdAt || '')),
+  )[0];
+  const deployReady = Boolean(deployment && ['ready', 'completed', 'planned', 'running'].includes(String(deployment.status || '').toLowerCase()));
+  const states = {
+    simulate: replayReady ? 'complete' : 'current',
+    train: trainingReady ? 'complete' : contractReady ? 'current' : 'blocked',
+    evaluate: evaluationReady ? 'complete' : replayReady || trainingReady ? 'current' : 'blocked',
+    deploy: deployReady ? 'complete' : evaluationReady ? 'current' : 'blocked',
+  };
+  rail.querySelectorAll('[data-pipeline-stage]').forEach((item) => {
+    const value = states[item.dataset.pipelineStage];
+    item.classList.toggle('is-complete', value === 'complete');
+    item.classList.toggle('is-current', value === 'current');
+    item.classList.toggle('is-blocked', value === 'blocked');
+    const label = item.querySelector('span')?.textContent || '';
+    item.title =
+      value === 'complete' ? `${label} · 已完成` : value === 'blocked' ? `${label} · 未满足前置条件` : `${label} · 进行中`;
+  });
+}
+
+// 概览上手清单：同一份闭环状态落到四步清单上，每步的 meta 区域按状态
+// 渲染“已完成 / 去做 → / 需登录”，游客在后两步看到登录引导而不是死链。
+function renderOnboardChecklist() {
+  const list = $('onboard-list');
+  if (!list) return;
+  const model = selectedModel();
+  const latest = latestRun();
+  const telemetry = currentTelemetry();
+  const contractReady = Boolean(model?.manifest?.contract?.id && model?.manifest?.artifacts?.length);
+  const replayReady = Boolean(telemetry?.summary || latest?.evaluation?.replay || latest?.taskEvaluation?.replay);
+  const trainingReady = Boolean(latest && ['completed', 'ready'].includes(String(latest.status || '').toLowerCase()));
+  const evaluationReady = Boolean(telemetry?.summary || latest?.evaluation || latest?.taskEvaluation);
+  const deployReady = Boolean(deploymentsForCurrentModel().length);
+  const guest = state.authRequired === true;
+  const steps = [
+    { key: 'simulate', done: replayReady, view: 'simulate', cta: '打开仿真 →', locked: false },
+    { key: 'train', done: trainingReady, view: 'train', cta: '去发起训练 →', locked: guest && !contractReady },
+    { key: 'evaluate', done: evaluationReady, view: 'evaluate', cta: '查看评测 →', locked: guest },
+    { key: 'deploy', done: deployReady, view: 'deploy', cta: '生成预检 →', locked: guest },
+  ];
+  // 第一个未完成且未锁定的步骤是“当前步”。
+  const currentKey = steps.find((step) => !step.done && !step.locked)?.key || null;
+  const doneCount = steps.filter((step) => step.done).length;
+  let foundCurrent = false;
+  list.querySelectorAll('.onboard-item').forEach((item) => {
+    const step = steps.find((entry) => entry.key === item.dataset.onboardStep);
+    if (!step) return;
+    const isCurrent = step.key === currentKey && !foundCurrent;
+    if (isCurrent) foundCurrent = true;
+    item.classList.toggle('is-complete', step.done);
+    item.classList.toggle('is-current', isCurrent);
+    item.classList.toggle('is-pending', !step.done && !isCurrent);
+    const meta = item.querySelector('[data-onboard-meta]');
+    if (meta) {
+      meta.replaceChildren();
+      if (step.done) {
+        const done = document.createElement('span');
+        done.className = 'onboard-done';
+        done.textContent = '已完成 ✓';
+        meta.append(done);
+      } else if (step.locked) {
+        const locked = document.createElement('span');
+        locked.className = 'onboard-locked';
+        locked.textContent = '需登录';
+        meta.append(locked);
+      } else {
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.className = 'onboard-cta';
+        button.textContent = step.cta;
+        button.dataset.viewTarget = step.view;
+        meta.append(button);
+      }
+    }
+  });
+  const fill = $('onboard-fill');
+  if (fill) fill.style.width = `${Math.round((doneCount / steps.length) * 100)}%`;
+  setText('onboard-count', `${doneCount} / ${steps.length}`);
 }
 
 function renderRunProgress() {
@@ -4570,6 +5584,7 @@ function renderRunProgress() {
         ? '动作 · ' + ACTION_TASKS[latest.taskId].label
         : '',
       latest.backend ? '后端 · ' + latest.backend : '',
+      latest.training?.engine ? '引擎 · ' + latest.training.engine : '',
       latest.metrics?.physicsBackend
         ? '物理 · ' + (PHYSICS_BACKEND_LABELS[latest.metrics.physicsBackend] || latest.metrics.physicsBackend)
         : '',
@@ -4589,6 +5604,128 @@ function renderRunProgress() {
   }
   $('run-progress-warning')?.toggleAttribute('hidden', latest.mock !== true);
   renderRunProgressTrack(latest);
+  renderRunProgressLiveChart(latest);
+}
+
+// Live training curve: worker-parsed stdout progress points, drawn on the
+// same fixed-resolution canvas pattern as the telemetry visuals. Two lines —
+// mean reward (left scale) and recent success rate (right scale, 0..1). The
+// chart never invents points; an engine that reports nothing shows nothing.
+const RUN_PROGRESS_CANVAS_W = 720;
+const RUN_PROGRESS_CANVAS_H = 200;
+
+function runProgressPoints(run) {
+  if (!Array.isArray(run?.progress)) return [];
+  return run.progress.filter(
+    (point) =>
+      point &&
+      Number.isFinite(Number(point.iteration)) &&
+      Number.isFinite(Number(point.meanReward)) &&
+      Number.isFinite(Number(point.recentSuccess)),
+  );
+}
+
+function drawRunProgressChart(canvas, points, { title = '' } = {}) {
+  const ctx = clearCanvas(canvas, RUN_PROGRESS_CANVAS_W, RUN_PROGRESS_CANVAS_H);
+  if (!ctx) return false;
+  const width = RUN_PROGRESS_CANVAS_W;
+  const height = RUN_PROGRESS_CANVAS_H;
+  if (!points.length) {
+    drawCanvasPlaceholder(ctx, width, height, '暂无训练曲线数据');
+    return false;
+  }
+  const plotLeft = 46;
+  const plotRight = width - 40;
+  const plotTop = 16;
+  const plotBottom = height - 20;
+  const plotWidth = plotRight - plotLeft;
+  const plotHeight = plotBottom - plotTop;
+  const lastTotal = points[points.length - 1].totalIterations || points[points.length - 1].iteration;
+  const iterationMax = Math.max(lastTotal, points[points.length - 1].iteration);
+  const rewards = points.map((point) => point.meanReward);
+  let rewardMin = Math.min(0, ...rewards);
+  let rewardMax = Math.max(0, ...rewards);
+  if (rewardMin === rewardMax) rewardMax = rewardMin + 1;
+  const rewardPad = (rewardMax - rewardMin) * 0.08;
+  rewardMin -= rewardPad;
+  rewardMax += rewardPad;
+  const xOf = (iteration) => plotLeft + (iteration / (iterationMax || 1)) * plotWidth;
+  const yReward = (reward) => plotBottom - ((reward - rewardMin) / (rewardMax - rewardMin)) * plotHeight;
+  const ySuccess = (rate) => plotTop + (1 - Math.max(0, Math.min(1, rate))) * plotHeight;
+  ctx.font = CANVAS_TEXT_STYLE;
+  ctx.strokeStyle = 'rgba(28, 28, 26, 0.12)';
+  ctx.lineWidth = 1;
+  // Grid: reward ticks on the left, success ticks (0/50/100%) on the right.
+  ctx.fillStyle = CANVAS_TEXT_COLOR;
+  ctx.textAlign = 'right';
+  for (const reward of [rewardMax, (rewardMax + rewardMin) / 2, rewardMin]) {
+    const y = Math.round(yReward(reward)) + 0.5;
+    if (y <= plotTop || y >= plotBottom) continue;
+    ctx.beginPath();
+    ctx.moveTo(plotLeft, y);
+    ctx.lineTo(plotRight, y);
+    ctx.stroke();
+    ctx.fillText(reward.toFixed(2), plotLeft - 4, y + 3);
+  }
+  ctx.textAlign = 'left';
+  for (const [rate, label] of [[0, '0%'], [0.5, '50%'], [1, '100%']]) {
+    const y = Math.round(ySuccess(rate)) + 0.5;
+    ctx.fillText(label, plotRight + 4, y + 3);
+  }
+  ctx.textAlign = 'right';
+  ctx.fillText('iter 0', plotLeft, plotBottom + 12);
+  ctx.fillText(String(iterationMax), plotRight, plotBottom + 12);
+  ctx.textAlign = 'left';
+  if (title) {
+    ctx.fillStyle = CANVAS_TEXT_COLOR;
+    ctx.fillText(title, plotLeft, plotTop - 4);
+  }
+  // Success rate line first (secondary), then reward on top (primary).
+  ctx.strokeStyle = 'rgba(96, 165, 250, 0.9)';
+  ctx.lineWidth = 1.5;
+  ctx.beginPath();
+  points.forEach((point, index) => {
+    const x = xOf(point.iteration);
+    const y = ySuccess(point.recentSuccess);
+    if (index === 0) ctx.moveTo(x, y);
+    else ctx.lineTo(x, y);
+  });
+  ctx.stroke();
+  ctx.strokeStyle = 'rgba(85, 221, 176, 0.95)';
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  points.forEach((point, index) => {
+    const x = xOf(point.iteration);
+    const y = yReward(point.meanReward);
+    if (index === 0) ctx.moveTo(x, y);
+    else ctx.lineTo(x, y);
+  });
+  ctx.stroke();
+  return true;
+}
+
+function renderRunProgressLiveChart(run) {
+  const wrap = $('run-progress-live-chart');
+  const canvas = $('run-progress-live-canvas');
+  if (!wrap || !canvas) return;
+  const points = runProgressPoints(run);
+  const active = run.status === 'queued' || run.status === 'running';
+  // Show while training (even with no points yet — "waiting for first point"
+  // is honest state), and keep visible after completion when points exist.
+  const show = (active && run.mock !== true) || points.length > 0;
+  wrap.hidden = !show;
+  if (!show) return;
+  const caption = $('run-progress-live-caption');
+  if (caption) {
+    if (!points.length) {
+      caption.textContent = '等待引擎回报首个数据点…';
+    } else {
+      const last = points[points.length - 1];
+      const total = last.totalIterations || last.iteration;
+      caption.textContent = `iter ${last.iteration}/${total} · 奖励 ${formatMetricNumber(last.meanReward, 3)} · 成功率 ${metricPercent(last.recentSuccess)}%`;
+    }
+  }
+  drawRunProgressChart(canvas, points);
 }
 
 // Honest progress for long trainings: the server exposes no completion
@@ -4974,9 +6111,12 @@ function renderAll() {
   renderEvaluationNext();
   renderReleaseGate();
   renderWorkflowProgress();
+  renderTopbarPipeline();
+  renderOnboardChecklist();
   renderProjectWorkspace();
   renderPlatformScorecard();
   renderAgentPanel();
+  renderPromotionFlow();
 }
 
 async function loadModelDetails(modelId = state.selectedModelId) {
@@ -5050,6 +6190,14 @@ async function refreshActiveRuns() {
     ) {
       state.notifiedRunIds.add(next.id);
       notifyRunTerminal(next);
+      // Completed runs auto-mount their evaluation evidence: the server
+      // attaches the engine's hard-envelope telemetry on the completion
+      // transition, so the next poll's replay fetch has frames. Load it
+      // without stealing focus so the operator sees the finished policy's
+      // behavior immediately instead of hunting for the run in the select.
+      if (String(next.status).toLowerCase() === 'completed') {
+        void autoLoadRunReplay(next.id);
+      }
     }
   }
 }
@@ -5115,7 +6263,7 @@ async function loadOverview({ quiet = false, silent = false } = {}) {
     }
     setText(
       'service-status',
-      error instanceof ApiError && error.status === 401 ? '需要登录' : '服务不可用',
+      error instanceof ApiError && error.status === 401 ? '游客模式' : '服务不可用',
     );
     syncServicePill();
     renderEvaluationNext();
@@ -5309,6 +6457,11 @@ function confirmRobogoRun() {
       { label: '动作任务', value: task.label || '—' },
       { label: '训练档位', value: profileLabel || '—' },
       { label: '算法', value: $('training-algorithm')?.value?.toUpperCase() || 'PPO' },
+      {
+        label: '训练引擎',
+        value:
+          $('training-engine')?.selectedOptions?.[0]?.textContent?.trim() || 'worker 默认引擎',
+      },
       { label: '续训', value: checkpointId && artifactRef ? checkpointId : '不续训' },
     ],
   });
@@ -5350,8 +6503,9 @@ async function runModel(backend) {
     }
     const profile = $('training-profile')?.value;
     const algorithm = $('training-algorithm')?.value;
+    const engine = $('training-engine')?.value;
     if ((backend === 'robogo' || backend === 'local') && profile) {
-      body.training = { profile, ...(algorithm ? { algorithm } : {}) };
+      body.training = { profile, ...(algorithm ? { algorithm } : {}), ...(engine ? { engine } : {}) };
     }
     const checkpointId = $('resume-checkpoint-id')?.value.trim() || '';
     const artifactRef = $('resume-artifact-ref')?.value.trim() || '';
@@ -7217,6 +8371,18 @@ function wireEvents() {
   wireCommandPalette();
   $('robogo-refresh-button')?.addEventListener('click', () => loadOverview());
   $('auth-retry-button')?.addEventListener('click', () => loadOverview());
+  // Guest banner expand/collapse: the login form is opt-in, never forced.
+  $('auth-gate-toggle')?.addEventListener('click', () => {
+    const panel = $('auth-gate-panel');
+    const toggle = $('auth-gate-toggle');
+    const gate = $('auth-gate');
+    if (!panel || !toggle) return;
+    const expanding = panel.hidden;
+    panel.hidden = !expanding;
+    toggle.setAttribute('aria-expanded', expanding ? 'true' : 'false');
+    toggle.textContent = expanding ? '收起表单' : '登录 / 展开表单';
+    if (expanding) panel.querySelector('input')?.focus();
+  });
   document.querySelectorAll('.auth-login-tab').forEach((tab) => {
     tab.addEventListener('click', () => setAuthMethod(tab.dataset.authMethod || 'account'));
   });
@@ -7230,6 +8396,7 @@ function wireEvents() {
   $('account-pill-logout')?.addEventListener('click', () => {
     void logoutAccount();
   });
+  wireRunComparisonControls();
   $('project-create-button')?.addEventListener('click', openProjectDialog);
   $('project-select')?.addEventListener('change', (event) => {
     const next = String(event.target?.value || '');
@@ -7403,6 +8570,8 @@ function wireEvents() {
   $('replay-run-select')?.addEventListener('change', (event) => { state.replay.runId = String(event.target.value || ''); state.replay.loaded = false; state.replay.frames = []; state.replay.index = 0; stopReplay(); renderReplayPlayer(); });
   $('replay-speed-select')?.addEventListener('change', (event) => { state.replay.speed = Number(event.target.value || 1); if (state.replay.timer) { stopReplay(); toggleReplay(); } });
   $('replay-seek')?.addEventListener('input', (event) => { state.replay.index = Number(event.target.value || 0); sendReplayFrame(); });
+  $('policy-trial-button')?.addEventListener('click', startPolicyTrial);
+  $('policy-trial-stop')?.addEventListener('click', stopPolicyTrial);
   $('evaluation-next-button')?.addEventListener('click', (event) => {
     if (event.currentTarget?.dataset.action === 'import-telemetry') {
       event.preventDefault();
@@ -7479,6 +8648,7 @@ function wireEvents() {
   });
   $('compute-resource-form')?.addEventListener('submit', saveComputeResource);
   $('compute-resource-cancel')?.addEventListener('click', resetComputeResourceForm);
+  $('compute-resource-autodetect')?.addEventListener('click', () => void autoDetectLocalGpuAgent());
   $('template-button')?.addEventListener('click', loadManifestTemplate);
   $('manifest-file-input')?.addEventListener('change', importManifestFile);
   $('validate-button')?.addEventListener('click', validateEditor);
@@ -7524,6 +8694,8 @@ function wireEvents() {
   $('notify-toggle')?.addEventListener('click', () => {
     void toggleNotifyPreference();
   });
+  $('theme-toggle')?.addEventListener('click', toggleTheme);
+  wireThemeSystemTracking();
   $('confirm-action-cancel')?.addEventListener('click', () => settleConfirmAction(false));
   $('confirm-action-approve')?.addEventListener('click', () => settleConfirmAction(true));
   const confirmActionDialog = $('confirm-action-dialog');
@@ -7550,14 +8722,17 @@ function wireEvents() {
 }
 
 const COMMANDS = [
-  { id: 'overview', label: '打开总览', hint: '查看项目进度与工作区状态', view: 'overview' },
-  { id: 'simulate', label: '开始仿真与录制', hint: '打开浏览器仿真', view: 'simulate' },
-  { id: 'train', label: '查看训练', hint: '选择模型与训练后端', view: 'train' },
-  { id: 'evaluate', label: '打开评测中心', hint: '查看指标与遥测证据', view: 'evaluate' },
-  { id: 'deploy', label: '准备部署', hint: '检查板卡与模型契约', view: 'deploy' },
-  { id: 'records', label: '查看运行记录', hint: '搜索 Run、部署与遥测', view: 'records' },
-  { id: 'station', label: '打开设备工作台', hint: '查看 X5 连接与只读诊断', view: 'station' },
+  { id: 'overview', label: '打开总览', hint: '查看项目进度与工作区状态 · ⌘1', view: 'overview' },
+  { id: 'simulate', label: '开始仿真与录制', hint: '打开浏览器仿真 · ⌘2', view: 'simulate' },
+  { id: 'train', label: '查看训练', hint: '选择模型与训练后端 · ⌘3', view: 'train' },
+  { id: 'evaluate', label: '打开评测中心', hint: '查看指标与遥测证据 · ⌘4', view: 'evaluate' },
+  { id: 'deploy', label: '准备部署', hint: '检查板卡与模型契约 · ⌘5', view: 'deploy' },
+  { id: 'records', label: '查看运行记录', hint: '搜索 Run、部署与遥测 · ⌘6', view: 'records' },
+  { id: 'station', label: '打开设备工作台', hint: '查看 X5 连接与只读诊断 · ⌘7', view: 'station' },
   { id: 'refresh', label: '刷新工作区', hint: '重新加载项目状态与设备信息', action: () => loadOverview() },
+  { id: 'login', label: '登录工作区', hint: '前往 RDK Studio 登录，解锁训练记录与真机部署', action: () => window.open('/rdkstudio/', '_blank', 'noopener') },
+  { id: 'agent', label: '呼出 Agent 助手', hint: '按当前阻塞项生成下一步计划', action: () => { if (typeof window.setAgentDrawerOpen === 'function') window.setAgentDrawerOpen(true); } },
+  { id: 'onboarding', label: '重看新手指引', hint: '12 步走完整个平台', action: () => $('onboarding-help-button')?.click() },
 ];
 
 function wireTopMenu() {
@@ -7641,10 +8816,28 @@ function wireCommandPalette() {
   document.addEventListener('keydown', (event) => {
     if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'k') { event.preventDefault(); open(); }
   });
+  // 顶栏可见触发按钮：⌘K 不能只藏在键盘里——专业工具的入口必须可见。
+  $('command-palette-trigger')?.addEventListener('click', () => open());
+}
+
+// ⌘1–⌘7 直接切视图（与命令面板 hint 里的编号一致）。
+function wireViewShortcuts() {
+  document.addEventListener('keydown', (event) => {
+    if (!(event.metaKey || event.ctrlKey) || event.altKey) return;
+    const index = Number(event.key);
+    if (!Number.isInteger(index) || index < 1 || index > WORKFLOW_VIEWS.length) return;
+    const target = event.target;
+    if (target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement) return;
+    event.preventDefault();
+    setView(WORKFLOW_VIEWS[index - 1]);
+  });
 }
 
 wireEvents();
+wireViewShortcuts();
 syncNotifyToggle();
+syncThemeToggle();
+connectEventStream();
 // Boot view restore: no push, no focus grab, no announcement — it is the
 // first paint, not a navigation.
 setView(window.location.hash.slice(1) || 'overview', { updateHash: false, focus: false });

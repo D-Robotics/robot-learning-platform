@@ -204,4 +204,69 @@ describe('Sim2Real lifecycle registry routes', () => {
     expect(replay.statusCode).toBe(200);
     expect(replay.body).toMatchObject({ idempotentReplay: true });
   });
+
+  it('exposes first-class artifacts and evaluations in the overview payload for the promotion flow', async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'rdk-sim2real-overview-promotion-'));
+    roots.push(root);
+    process.env.RDK_SIM2REAL_STORAGE_DIR = path.join(root, 'sim2real');
+    process.env.RDK_DATA_DIR = path.join(root, 'data');
+    process.env.RDK_SIM2REAL_DEPLOYMENT = 'local';
+    const router = createSim2RealRouter();
+
+    const run = await invoke(router, 'post', '/api/sim2real/runs', {
+      body: { modelId: BUILTIN_MICRODUCK_MODEL.id, backend: 'contract' },
+    });
+    expect(run.statusCode).toBe(201);
+    const runId = (run.body as { run: { id: string } }).run.id;
+    const artifact = await invoke(router, 'post', '/api/sim2real/artifacts', {
+      headers: { 'idempotency-key': 'overview-artifact-1' },
+      body: {
+        artifactId: 'overview-policy',
+        version: 'v1',
+        name: 'Overview policy',
+        role: 'policy',
+        kind: 'source',
+        format: 'onnx',
+        ref: 'artifact://overview-policy/v1',
+        sha256: 'b'.repeat(64),
+        modelId: BUILTIN_MICRODUCK_MODEL.id,
+        runId,
+        datasetIds: [],
+        evaluationIds: [],
+        status: 'draft',
+      },
+    });
+    expect(artifact.statusCode).toBe(201);
+    const artifactId = (artifact.body as { artifact: { id: string } }).artifact.id;
+    expect(
+      (
+        await invoke(router, 'post', '/api/sim2real/artifacts/:id/validate', {
+          params: { id: artifactId },
+        })
+      ).statusCode,
+    ).toBe(200);
+    expect(
+      (
+        await invoke(router, 'post', '/api/sim2real/artifacts/:id/publish', {
+          params: { id: artifactId },
+        })
+      ).statusCode,
+    ).toBe(200);
+
+    const overview = await invoke(router, 'get', '/api/sim2real/overview', {
+      query: { productId: 'microduck' },
+    });
+    expect(overview.statusCode).toBe(200);
+    const payload = overview.body as {
+      artifacts: Array<{ id: string; status: string; runId: string; sha256: string }>;
+      evaluations: Array<{ id: string }>;
+    };
+    expect(Array.isArray(payload.artifacts)).toBe(true);
+    expect(payload.artifacts).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ id: artifactId, status: 'published', runId }),
+      ]),
+    );
+    expect(Array.isArray(payload.evaluations)).toBe(true);
+  });
 });

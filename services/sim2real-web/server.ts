@@ -40,8 +40,12 @@ import {
 } from '../../server/sim2real/standalone-adapters.js';
 import { createStudioLoginRelayRouter } from '../../server/sim2real/studio-login-relay.js';
 import { createRateLimitMiddleware } from '../../server/sim2real/rate-limit.js';
+import { createMujocoApiBridge } from '../../server/sim2real/mujoco-bridge.js';
+import { createResponseCompressionMiddleware } from '../../server/sim2real/response-compression.js';
 import { redactInternalError } from '../../server/sim2real/http-helpers.js';
 import { createSim2RealObservability } from '../../server/sim2real/observability.js';
+import { createDobsOpsReporter } from '../../server/sim2real/dobs-ops-reporter.js';
+import { registerSim2RealPlugin } from '../../server/sim2real/sim2real-events.js';
 import {
   createSim2RealAuditMiddleware,
   sim2RealAuditHealth,
@@ -55,6 +59,7 @@ import {
   createSim2RealRouter,
   SIM2REAL_VERSIONED_API_PREFIX,
 } from '../../server/routes/sim2real-routes.js';
+import { createSim2RealEventsSseRouter } from '../../server/routes/sim2real-events-sse.js';
 import { createSim2RealAgentRouter } from '../../server/routes/sim2real-agent-routes.js';
 import {
   askDsh,
@@ -478,13 +483,38 @@ export function createSim2RealWebApp(): Express {
   app.use(storageRequestContextMiddleware);
   app.use(studioSecurityHeadersMiddleware);
 
+  // gzip 响应压缩（零依赖，Node zlib）。379KB 的 app.js 在弱网下是首屏
+  // 主要瓶颈；API JSON 顺带受益。SSE 与已编码的代理流在中间件内部跳过。
+  // 放在安全头之后、观测之前：压缩是传输层关注点，不改变审计语义。
+  app.use(createResponseCompressionMiddleware());
+
   // Install request observability, audit and rate limiting before the JSON
   // parser.  A malformed or oversized body is still a request that must be
   // counted, bounded and (for mutating API calls) auditable; Express otherwise
   // jumps straight to the error handler and silently skips all three layers.
   // Each app instance owns its own registry, which keeps counters isolated
   // between tests and embedded deployments.
-  const observability = createSim2RealObservability();
+  const dobsReporter = createDobsOpsReporter();
+  const observability = createSim2RealObservability({
+    ...(dobsReporter.enabled
+      ? {
+          // 5xx 埋点旁路：中间件保持零传输，网络投递归 reporter。
+          onServerError: (input) => {
+            dobsReporter.reportEvent({
+              eventCode: 'http_5xx',
+              outcome: 'error',
+              safeSummary: `${input.method} ${input.route} ${input.status}`,
+              metadata: {
+                method: input.method,
+                route: input.route,
+                status: input.status,
+                ...(input.requestId ? { requestId: input.requestId } : {}),
+              },
+            });
+          },
+        }
+      : {}),
+  });
   app.use(observability.requestMiddleware);
   app.use(createSim2RealAuditMiddleware(studioSsoAuth));
   app.use(
@@ -592,6 +622,7 @@ export function createSim2RealWebApp(): Express {
           ? { tokenConfigured: boardAgentTokenConfigured() }
           : {}),
       },
+      dobs: dobsReporter.health(),
       // Readiness is the traffic gate, so every configured hard dependency
       // must be healthy.  An optional MicroDuck bundle may remain absent, but
       // a declared BoardAgent with bad credentials, a missing SSO adapter, or
@@ -763,7 +794,29 @@ export function createSim2RealWebApp(): Express {
   // Studio-cookie deployments also expose a credential relay so the workbench
   // can log in directly (POST /api/sso/login) instead of bouncing users to
   // the Studio main shell. The relay adopts the same site-wide cookie.
-  app.use(createStudioLoginRelayRouter({ auth: studioSsoAuth }));
+  app.use(
+    createStudioLoginRelayRouter({
+      auth: studioSsoAuth,
+      ...(dobsReporter.enabled
+        ? {
+            // 登录埋点：只带 method/outcome/错误码，凭证字段绝不外传。
+            onLoginAttempt: (attempt) => {
+              dobsReporter.reportEvent({
+                eventCode: 'sso_login_attempt',
+                outcome: attempt.outcome,
+                ...(attempt.outcome === 'error' ? { severityHint: 'warning' } : {}),
+                safeSummary: `login ${attempt.method} ${attempt.outcome}`,
+                metadata: {
+                  method: attempt.method,
+                  ...(attempt.statusCode ? { statusCode: attempt.statusCode } : {}),
+                  ...(attempt.errorCode ? { errorCode: attempt.errorCode } : {}),
+                },
+              });
+            },
+          }
+        : {}),
+    }),
+  );
 
   // Board detection is read-only unless the caller explicitly asks the
   // existing route to persist the detected metadata. The sim2real router
@@ -776,7 +829,31 @@ export function createSim2RealWebApp(): Express {
   // exposing the stable product API under `/api/v1/duck`. Both routers are
   // created by the same factory and share the same auth/store adapters, so the
   // aliases cannot drift in validation or side effects.
-  app.use(createSim2RealRouter({ runOnDevice, auth: studioSsoAuth }));
+  app.use(
+    createSim2RealRouter(
+      { runOnDevice, auth: studioSsoAuth },
+      {
+        ...(dobsReporter.enabled
+          ? {
+              onTelemetryIngestFailure: (failure: {
+                runId: string;
+                source: string;
+                message: string;
+              }) => {
+                dobsReporter.reportEvent({
+                  eventCode: 'telemetry_ingest_failed',
+                  outcome: 'error',
+                  severityHint: 'warning',
+                  safeSummary: failure.message,
+                  metadata: { source: failure.source },
+                  correlation: { runId: failure.runId },
+                });
+              },
+            }
+          : {}),
+      },
+    ),
+  );
   // Product Agent surface: the planner/executor owns the conversation task
   // lifecycle and calls the same guarded Sim2Real APIs as the UI. It shares
   // the same auth port so shared deployments keep conversation evidence
@@ -785,9 +862,67 @@ export function createSim2RealWebApp(): Express {
   app.use(
     createSim2RealRouter(
       { runOnDevice, auth: studioSsoAuth },
-      { prefix: SIM2REAL_VERSIONED_API_PREFIX },
+      {
+        prefix: SIM2REAL_VERSIONED_API_PREFIX,
+        ...(dobsReporter.enabled
+          ? {
+              onTelemetryIngestFailure: (failure) => {
+                dobsReporter.reportEvent({
+                  eventCode: 'telemetry_ingest_failed',
+                  outcome: 'error',
+                  severityHint: 'warning',
+                  safeSummary: failure.message,
+                  metadata: { source: failure.source },
+                  correlation: { runId: failure.runId },
+                });
+              },
+            }
+          : {}),
+      },
     ),
   );
+
+  // Event-driven UI: bridge the store's domain events to browser
+  // EventSource streams under both API prefixes. Owner filtering reuses the
+  // business auth port, so shared deployments stay tenant-isolated.
+  app.use(createSim2RealEventsSseRouter({ auth: studioSsoAuth }));
+  app.use(
+    createSim2RealEventsSseRouter({ prefix: SIM2REAL_VERSIONED_API_PREFIX, auth: studioSsoAuth }),
+  );
+
+  // d-obs 埋点插件：领域事件（run/deployment/model/project 生命周期）→ 低敏
+  // ops 事件批量上报。注册在工厂内（与 SSE 插件同一模式，replace-by-id 不
+  // 累积），未配置 env 时 reporter 停用、onDomainEvent 直接空转。
+  if (dobsReporter.enabled) {
+    registerSim2RealPlugin({
+      id: 'dobs-ops-reporter',
+      events: dobsReporter.domainEventFilter,
+      onEvent: (event) => dobsReporter.onDomainEvent(event),
+    });
+    // 进程级错误埋点：先上报再维持默认崩溃行为（Node 对 uncaught 仍是
+    // crash-on-exit；unhandledRejection 默认 warn）。fire-and-forget：flush
+    // 有 6s 超时，最坏情况只是这条事件没送达。
+    for (const signal of ['uncaughtException', 'unhandledRejection'] as const) {
+      process.on(signal, (error: unknown) => {
+        dobsReporter.reportEvent({
+          eventCode: 'process_unhandled_error',
+          outcome: 'error',
+          severityHint: 'critical',
+          safeSummary: redactInternalError(error),
+          metadata: { kind: signal },
+        });
+        void dobsReporter.flush().catch(() => {});
+      });
+    }
+  }
+
+  // Same-origin bridge for the local MuJoCo Web service. In production nginx
+  // owns `/mujoco/` and forwards to 127.0.0.1:18100 itself; in local dev
+  // there is no nginx, so this route reproduces that hop for the OriginBot
+  // simulator iframe (`/mujoco/api/sessions...` at a 20 Hz control rate).
+  // The route is opt-in via RDK_SIM2REAL_MUJOCO_WEB_URL so deployments that
+  // keep nginx forwarding (or run without MuJoCo) see no behavior change.
+  app.all('/mujoco/api/{*splat}', createMujocoApiBridge());
 
   // Same-origin MicroDuck proxy used by the Agent control bridge. Register it
   // before the legacy `/mujoco/microduck` route because Express wildcard

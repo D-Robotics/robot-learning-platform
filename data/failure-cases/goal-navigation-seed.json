@@ -1,0 +1,24 @@
+{
+  "schemaVersion": 1,
+  "taskId": "goal-navigation-clear-arena",
+  "cases": [
+    {
+      "id": "goalnav-seed-timeout",
+      "title": "目标接近但超时",
+      "failureType": "timeout",
+      "environment": "nominal",
+      "reproducible": true,
+      "expectedAction": "增加远距离目标样本，并检查 curriculum 是否已扩展",
+      "trajectoryRef": "dataset://goal-navigation-clear-arena/failures/timeout-v1"
+    },
+    {
+      "id": "goalnav-seed-overshoot",
+      "title": "接近目标后冲过终点",
+      "failureType": "overshoot",
+      "environment": "hard",
+      "reproducible": true,
+      "expectedAction": "增加动作延迟和制动阶段样本，比较 action-mae 与 goalDistance",
+      "trajectoryRef": "dataset://goal-navigation-clear-arena/failures/overshoot-v1"
+    }
+  ]
+}

@@ -27,3 +27,6 @@ gui-test-screenshots/
 # relocatable via RDK_SIM2REAL_DSH_HOME (defaults under the storage ledger).
 .sim2real-dsh/
 .data/dsh-sessions/
+
+# Local operator notes; may contain private infrastructure addresses.
+docs/server-inventory.local.md

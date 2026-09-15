@@ -34,4 +34,6 @@ registerSim2RealPlugin({
 
 台账中的 owner、幂等键和请求指纹不会进入 `data`；遥测事件只携带 chunk id、sequence 和 sampleCount。插件应自行实现幂等（以 `event.id` 为事件键），并把较大的样本或模型制品写入对象存储后只传引用。
 
+内置的 `dobs-ops-reporter` 插件就是一个完整范例：它把领域事件映射为低敏 ops 事件批量上报给 d-obs 可观测工作台（`server/sim2real/dobs-ops-reporter.ts`，env 配置见 `docs/operations.md` 的「d-obs 事件埋点」），传输失败绝不影响台账写入。
+
 目前总线是单进程最佳努力投递，适合个人部署和本地扩展。需要跨进程可靠投递时，保留同一 `Sim2RealDomainEvent` 契约，将注册器替换为 outbox/消息队列 adapter 即可。

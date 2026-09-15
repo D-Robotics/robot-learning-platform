@@ -3,8 +3,17 @@ import json
 import math
 import pathlib
 import re
+import sys
 
 import mujoco
+
+# assets/originbot is the single source of truth for the shared robot body
+# calibration (Menagerie-style); add the repo root so the asset module stays
+# importable without installing anything.
+_REPO_ROOT = pathlib.Path(__file__).resolve().parents[2]
+if str(_REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(_REPO_ROOT))
+import assets.originbot.originbot as _originbot  # noqa: E402
 
 
 @dataclass(frozen=True)
@@ -118,11 +127,7 @@ ORIGINBOT_XML = r"""
     <geom name="obstacle_b" type="cylinder" pos="-1.0 -1.1 .22" size=".32 .22" rgba=".62 .28 .18 1"/>
     <body name="base" pos="0 0 .16">
       <freejoint name="base_free"/>
-      <geom name="chassis" type="box" size=".28 .23 .10" mass="4" rgba=".12 .42 .8 1"/>
-      <geom name="top" type="cylinder" pos="0 0 .13" size=".16 .025" mass=".2" rgba=".18 .62 .95 1"/>
-      <body name="left_wheel" pos="0 .25 -.08"><joint name="left_wheel_joint" type="hinge" axis="0 1 0" damping=".08"/><geom name="left_wheel_geom" type="cylinder" quat=".7071 .7071 0 0" size=".09 .035" mass=".35" friction="1.2 .01 .001" rgba=".04 .05 .07 1"/></body>
-      <body name="right_wheel" pos="0 -.25 -.08"><joint name="right_wheel_joint" type="hinge" axis="0 1 0" damping=".08"/><geom name="right_wheel_geom" type="cylinder" quat=".7071 .7071 0 0" size=".09 .035" mass=".35" friction="1.2 .01 .001" rgba=".04 .05 .07 1"/></body>
-      <geom name="caster" type="sphere" pos="-.20 0 -.07" size=".055" mass=".1" friction=".8 .01 .001" rgba=".15 .15 .18 1"/>
+      {ROBOT_BODIES}
       <!-- Keep odometry at the base origin; the IMU is intentionally mounted
            above it and must not be used as the odom position reference. -->
       <site name="odom" pos="0 0 0" size=".012" rgba="0 1 0 1"/>
@@ -185,11 +190,13 @@ ORIGINBOT_XML = r"""
     <!-- MuJoCo's velocity actuator models the embedded wheel controller.  Its
          control is wheel rad/s; app.py still returns the resulting actuator
          force so the command-to-torque path remains observable. -->
-    <velocity name="left_wheel" joint="left_wheel_joint" kv="8" ctrllimited="true" ctrlrange="-8 8"/>
-    <velocity name="right_wheel" joint="right_wheel_joint" kv="8" ctrllimited="true" ctrlrange="-8 8"/>
+    {WHEEL_ACTUATORS}
   </actuator>
 </mujoco>
-"""
+""".format(
+    ROBOT_BODIES=_originbot.robot_bodies(caster_offset_z=-0.07),
+    WHEEL_ACTUATORS=_originbot.wheel_actuators(),
+)
 
 
 MODEL_DEFINITIONS = {

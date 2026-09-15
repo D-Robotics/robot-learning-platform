@@ -9,6 +9,7 @@ import {
   type Sim2RealEvaluationSummary,
   type Sim2RealTelemetryRecord,
 } from '../../shared/sim2real.js';
+import type { Sim2RealTelemetrySample } from '../../shared/sim2real-telemetry.js';
 import { isSim2RealError } from './sim2real-errors.js';
 import {
   appendSim2RealTelemetryWithResult,
@@ -660,6 +661,69 @@ describe('Sim2Real owner-scoped ledger', () => {
     await append(2, [0.04, 0.06]);
     await append(1, [0.02, 0.04]);
     await expect(listSim2RealTelemetry(run.id, 'alice', 10)).resolves.toHaveLength(3);
+  });
+
+  it('allows the per-session clock reset at session-started markers while rejecting real disorder', async () => {
+    await useTempStorage();
+    const manifest = structuredClone(BUILTIN_MICRODUCK_MODEL.manifest);
+    manifest.modelId = 'session-reset-policy';
+    manifest.displayName = 'Session reset policy';
+    manifest.version = '1.0.0';
+    const model = await createSim2RealModel(manifest, 'alice');
+    const run = await createSim2RealRun(
+      {
+        modelId: model.id,
+        backend: 'contract',
+        status: 'completed',
+        summary: 'contract checked',
+      },
+      'alice',
+    );
+    const marker = (kind: 'session-started' | 'session-stopped', t: number) => ({
+      t,
+      event: { kind, sessionId: 'sess-00000000-0000-0000-0000-000000000001' },
+    });
+    const append = (sequence: number, samples: unknown[]) =>
+      appendSim2RealTelemetryWithResult(
+        {
+          runId: run.id,
+          modelId: model.id,
+          source: 'import',
+          sequence,
+          samples: samples as Sim2RealTelemetrySample[],
+        },
+        'alice',
+      );
+
+    // The board runtime restarts its clock near zero at every policy session:
+    // a regression that lands exactly on a session-started marker is the new
+    // session's beginning, not disorder — across chunk boundaries...
+    await append(0, [marker('session-started', 0), { t: 0.1 }, { t: 0.2 }]);
+    await append(1, [
+      marker('session-stopped', 0.21),
+      marker('session-started', 0),
+      { t: 0.05 },
+      { t: 0.1 },
+    ]);
+    // ...and inside one chunk.
+    await append(2, [
+      marker('session-stopped', 0.11),
+      marker('session-started', 0.01),
+      { t: 0.02 },
+    ]);
+    await expect(listSim2RealTelemetry(run.id, 'alice', 10)).resolves.toHaveLength(3);
+
+    // A regression without a session-started marker at the boundary is still
+    // real disorder and must be rejected.
+    await expect(append(3, [{ t: 0.001 }, { t: 0.002 }])).rejects.toThrow(
+      'sim2real_telemetry_timestamp_order',
+    );
+    // Even with a session marker, timestamps inside one session must stay
+    // monotonic: the marker only resets the clock, it does not legalize a
+    // backwards step before it.
+    await expect(
+      append(4, [{ t: 5 }, marker('session-started', 4), { t: 0.1 }, { t: 0.05 }]),
+    ).rejects.toThrow('sim2real_telemetry_timestamp_order');
   });
 
   it('stores telemetry samples in per-run NDJSON shards, not the ledger', async () => {

@@ -116,6 +116,13 @@ function responseRecorder(
       resolve(response as RecordedResponse);
       return response;
     },
+    // Binary endpoints (policy bytes) finish with end(); record the chunk so
+    // byte-serving routes stay testable without a real HTTP server.
+    end(chunk?: unknown) {
+      if (chunk != null) response.body = chunk;
+      resolve(response as RecordedResponse);
+      return response;
+    },
   } as unknown as RecordedResponse;
   void reject;
   return response;
@@ -616,6 +623,87 @@ describe('Sim2Real HTTP routes', () => {
       params: { id: 'run-does-not-exist' },
     });
     expect(missing.statusCode).toBe(404);
+  });
+
+  it('accepts the per-session clock reset at session markers and sums replay duration per session', async () => {
+    const router = await fixture();
+    const registerResponse = await invoke(router, 'post', '/api/sim2real/models', {
+      body: { manifest: userManifest() },
+    });
+    const modelId = (registerResponse.body as { model: { id: string } }).model.id;
+    const runResponse = await invoke(router, 'post', '/api/sim2real/runs', {
+      body: { modelId, backend: 'contract', taskId: 'walk' },
+    });
+    const runId = (runResponse.body as { run: { id: string } }).run.id;
+    await registerFixtureDevice('device-1');
+
+    const sessionId = 'sess-00000000-0000-0000-0000-000000000001';
+    // One chunk carrying two full policy sessions back to back: the board
+    // clock restarts near zero after the session-stopped marker, so the
+    // second session-started sample is followed by t values below the first
+    // session's last timestamp.
+    const chunk = await invoke(router, 'post', '/api/sim2real/runs/:id/telemetry', {
+      params: { id: runId },
+      body: {
+        source: 'board-agent',
+        deviceId: 'device-1',
+        sequence: 1,
+        idempotencyKey: 'session-reset-1',
+        samples: [
+          { t: 0, event: { kind: 'session-started', sessionId } },
+          { t: 0.1, observation: vector(61, 0), action: vector(14, 0) },
+          { t: 0.2, observation: vector(61, 0), action: vector(14, 0) },
+          { t: 0.21, event: { kind: 'session-stopped', sessionId } },
+          {
+            t: 0,
+            event: {
+              kind: 'session-started',
+              sessionId: 'sess-00000000-0000-0000-0000-000000000002',
+            },
+          },
+          { t: 0.05, observation: vector(61, 1), action: vector(14, 1) },
+          { t: 0.15, observation: vector(61, 1), action: vector(14, 1) },
+          {
+            t: 0.16,
+            event: {
+              kind: 'session-stopped',
+              sessionId: 'sess-00000000-0000-0000-0000-000000000002',
+            },
+          },
+        ],
+      },
+    });
+    expect(chunk.statusCode).toBe(201);
+
+    // Regression without a session-started marker at the boundary is still
+    // rejected inside one chunk.
+    const disordered = await invoke(router, 'post', '/api/sim2real/runs/:id/telemetry', {
+      params: { id: runId },
+      body: {
+        source: 'board-agent',
+        deviceId: 'device-1',
+        sequence: 2,
+        idempotencyKey: 'session-reset-2',
+        samples: [
+          { t: 0.3, observation: vector(61, 0), action: vector(14, 0) },
+          { t: 0.25, observation: vector(61, 0), action: vector(14, 0) },
+        ],
+      },
+    });
+    expect(disordered.statusCode).toBe(400);
+
+    // Duration is summed per session segment (0.1 + 0.1 = 0.2), not the
+    // first-to-last span (0.15) and not the marker count; sessionCount
+    // reports the distinct sessions observed.
+    const replay = await invoke(router, 'get', '/api/sim2real/runs/:id/replay', {
+      params: { id: runId },
+    });
+    expect(replay.statusCode).toBe(200);
+    expect(replay.body).toMatchObject({
+      replay: { sampleCount: 4, chunkCount: 1, durationSeconds: 0.2, sessionCount: 2 },
+    });
+    const warnings = (replay.body as { evaluation: { warnings: string[] } }).evaluation.warnings;
+    expect(warnings.join('\n')).toContain('2 policy sessions');
   });
 
   it('ingests board session lifecycle markers, keeps them out of replay stats, and serves board-sessions', async () => {
@@ -1371,6 +1459,142 @@ describe('Sim2Real HTTP routes', () => {
     }
   });
 
+  it('routes an explicit training engine through to the local worker payload', async () => {
+    process.env.RDK_SIM2REAL_LOCAL_RUNNER_URL = 'http://127.0.0.1:18199/train';
+    delete process.env.RDK_SIM2REAL_ROBOGO_RUNNER_URL;
+    const originalFetch = globalThis.fetch;
+    let workerTraining: Record<string, unknown> | undefined;
+    globalThis.fetch = (async (_input, init) => {
+      const body = JSON.parse(String(init?.body || '{}')) as Record<string, unknown>;
+      workerTraining = body.training as Record<string, unknown>;
+      return new Response(JSON.stringify({ status: 'queued', runId: 'local-engine-run-1' }), {
+        status: 202,
+        headers: { 'content-type': 'application/json' },
+      });
+    }) as typeof fetch;
+    try {
+      const router = await fixture();
+      const manifest = userManifest();
+      manifest.simulator.backends = ['local'];
+      const registerResponse = await invoke(router, 'post', '/api/sim2real/models', {
+        body: { manifest },
+      });
+      const registered = registerResponse.body as { model: { id: string } };
+      const response = await invoke(router, 'post', '/api/sim2real/runs', {
+        body: {
+          modelId: registered.model.id,
+          backend: 'local',
+          idempotencyKey: 'local-engine-run-1',
+          training: { profile: 'smoke', engine: 'mjx-ppo' },
+        },
+      });
+      expect(response.statusCode).toBe(201);
+      const run = (response.body as { run: Record<string, unknown> }).run;
+      expect(run.training).toMatchObject({ profile: 'smoke', engine: 'mjx-ppo' });
+      expect(workerTraining).toMatchObject({ profile: 'smoke', engine: 'mjx-ppo' });
+
+      // A typo'd engine is rejected at the API boundary with the same
+      // code path as other invalid training parameters.
+      const rejected = await invoke(router, 'post', '/api/sim2real/runs', {
+        body: {
+          modelId: registered.model.id,
+          backend: 'local',
+          idempotencyKey: 'local-engine-run-typo',
+          training: { profile: 'smoke', engine: 'isaac' },
+        },
+      });
+      expect(rejected.statusCode).toBe(400);
+      expect(rejected.body).toMatchObject({ code: 'SIM2REAL_INVALID_TRAINING' });
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it('injects a physics-dense task pack engine recommendation but never overrides an explicit choice', async () => {
+    process.env.RDK_SIM2REAL_LOCAL_RUNNER_URL = 'http://127.0.0.1:18199/train';
+    delete process.env.RDK_SIM2REAL_ROBOGO_RUNNER_URL;
+    const originalFetch = globalThis.fetch;
+    const workerTrainings: Record<string, unknown>[] = [];
+    globalThis.fetch = (async (_input, init) => {
+      const body = JSON.parse(String(init?.body || '{}')) as Record<string, unknown>;
+      workerTrainings.push(body.training as Record<string, unknown>);
+      return new Response(JSON.stringify({ status: 'queued', runId: 'local-engine-rec-1' }), {
+        status: 202,
+        headers: { 'content-type': 'application/json' },
+      });
+    }) as typeof fetch;
+    try {
+      const router = await fixture();
+      const manifest = userManifest();
+      manifest.simulator.backends = ['local'];
+      const registerResponse = await invoke(router, 'post', '/api/sim2real/models', {
+        body: { manifest },
+      });
+      const registered = registerResponse.body as { model: { id: string } };
+
+      // No explicit engine: the physics-dense pack's recommendation fills in
+      // mjx-ppo for both the ledger record and the worker payload.
+      const recommended = await invoke(router, 'post', '/api/sim2real/runs', {
+        body: {
+          modelId: registered.model.id,
+          backend: 'local',
+          idempotencyKey: 'local-engine-rec-recommended',
+          taskId: 'originbot-physics-navigation',
+          training: { profile: 'smoke' },
+        },
+      });
+      expect(recommended.statusCode).toBe(201);
+      const run = (recommended.body as { run: Record<string, unknown> }).run;
+      expect(run.training).toMatchObject({ profile: 'smoke', engine: 'mjx-ppo' });
+      expect(workerTrainings[workerTrainings.length - 1]).toMatchObject({
+        profile: 'smoke',
+        engine: 'mjx-ppo',
+      });
+
+      // An explicit starter-ppo choice wins over the same recommendation.
+      const explicit = await invoke(router, 'post', '/api/sim2real/runs', {
+        body: {
+          modelId: registered.model.id,
+          backend: 'local',
+          idempotencyKey: 'local-engine-rec-explicit',
+          taskId: 'originbot-physics-navigation',
+          training: { profile: 'smoke', engine: 'starter-ppo' },
+        },
+      });
+      expect(explicit.statusCode).toBe(201);
+      expect((explicit.body as { run: Record<string, unknown> }).run.training).toMatchObject({
+        profile: 'smoke',
+        engine: 'starter-ppo',
+      });
+      expect(workerTrainings[workerTrainings.length - 1]).toMatchObject({
+        profile: 'smoke',
+        engine: 'starter-ppo',
+      });
+
+      // A kinematic task pack stays engine-silent: the spec keeps the
+      // platform default and the worker payload carries no engine field.
+      const kinematic = await invoke(router, 'post', '/api/sim2real/runs', {
+        body: {
+          modelId: registered.model.id,
+          backend: 'local',
+          idempotencyKey: 'local-engine-rec-kinematic',
+          taskId: 'originbot-goal-navigation',
+          training: { profile: 'smoke' },
+        },
+      });
+      expect(kinematic.statusCode).toBe(201);
+      expect((kinematic.body as { run: Record<string, unknown> }).run.training).toMatchObject({
+        profile: 'smoke',
+      });
+      expect((kinematic.body as { run: Record<string, unknown> }).run.training).not.toHaveProperty(
+        'engine',
+      );
+      expect(workerTrainings[workerTrainings.length - 1]).not.toHaveProperty('engine');
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
   it('requires a strong token before registering a production GPU worker', async () => {
     process.env.NODE_ENV = 'production';
     const router = await fixture();
@@ -1771,6 +1995,191 @@ describe('Sim2Real HTTP routes', () => {
         retryAfterSeconds: 30,
       });
       expect(calls).toBe(1);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it('auto-attaches evaluation telemetry when a status poll first observes completion', async () => {
+    process.env.RDK_SIM2REAL_LOCAL_RUNNER_URL = 'http://127.0.0.1:18198/train';
+    const originalFetch = globalThis.fetch;
+    const telemetryJsonl = [
+      JSON.stringify({
+        t: 0,
+        observation: [0, 0, 0, 1, 1, 0, 0, 0],
+        action: [0.1, 0],
+        reward: 0,
+        done: false,
+      }),
+      JSON.stringify({
+        t: 0.1,
+        observation: [0.05, 0, 0, 1, 0.95, 0, 0.05, 0],
+        action: [0.1, 0.1],
+        reward: 0.05,
+        done: false,
+      }),
+    ].join('\n');
+    const requests: string[] = [];
+    globalThis.fetch = (async (input) => {
+      const url = String(input);
+      requests.push(url);
+      if (url.endsWith('/telemetry')) {
+        const bytes = new TextEncoder().encode(telemetryJsonl);
+        return new Response(bytes, {
+          status: 200,
+          headers: {
+            'content-type': 'application/x-ndjson',
+            'content-length': String(bytes.byteLength),
+          },
+        });
+      }
+      if (url.endsWith('/train')) {
+        // Launch answer: the job is accepted and still queued, so the run
+        // stays pollable and the completion transition happens via GET.
+        return new Response(JSON.stringify({ status: 'queued', runId: 'eval-attach-run' }), {
+          status: 202,
+          headers: { 'content-type': 'application/json' },
+        });
+      }
+      // Worker status view: completed run with an ONNX artifact record.
+      return new Response(
+        JSON.stringify({
+          status: 'completed',
+          runId: 'eval-attach-run',
+          artifact: {
+            artifactRef: 'artifact://starter/eval-attach/0.1/policy.onnx',
+            format: 'onnx',
+            sha256: 'b'.repeat(64),
+            sizeBytes: 1024,
+          },
+          progress: [
+            {
+              iteration: 1,
+              totalIterations: 4,
+              meanReward: -0.004,
+              recentSuccess: 0,
+              elapsedSeconds: 0.7,
+            },
+            {
+              iteration: 2,
+              totalIterations: 4,
+              meanReward: -0.006,
+              recentSuccess: 0.01,
+              elapsedSeconds: 1.1,
+            },
+          ],
+        }),
+        { status: 200, headers: { 'content-type': 'application/json' } },
+      );
+    }) as typeof fetch;
+    try {
+      const router = await fixture();
+      const manifest = userManifest();
+      manifest.simulator.backends = ['local'];
+      const registerResponse = await invoke(router, 'post', '/api/sim2real/models', {
+        body: { manifest },
+      });
+      const modelId = (registerResponse.body as { model: { id: string } }).model.id;
+      const started = await invoke(router, 'post', '/api/sim2real/runs', {
+        body: { modelId, backend: 'local', idempotencyKey: 'eval-attach-key' },
+      });
+      expect(started.statusCode).toBe(201);
+      const runId = (started.body as { run: { id: string } }).run.id;
+      // The status poll transitions the run to completed and auto-attaches.
+      const status = await invoke(router, 'get', '/api/sim2real/runs/:id', {
+        params: { id: runId },
+      });
+      expect(status.statusCode).toBe(200);
+      expect((status.body as { run: Record<string, unknown> }).run.status).toBe('completed');
+      expect(requests.some((url) => url.endsWith('/runs/eval-attach-run/telemetry'))).toBe(true);
+      // Worker-parsed live progress flows onto the run record and the status
+      // view so the train page can draw the live curve.
+      const progressPoints = (status.body as { run: { progress?: unknown[] } }).run.progress;
+      expect(Array.isArray(progressPoints) && progressPoints.length).toBe(2);
+      expect((progressPoints as Array<Record<string, unknown>>)[0]).toMatchObject({
+        iteration: 1,
+        totalIterations: 4,
+        meanReward: -0.004,
+      });
+      // The replay endpoint now returns the engine's evaluation frames.
+      const replay = await invoke(router, 'get', '/api/sim2real/runs/:id/replay', {
+        params: { id: runId },
+      });
+      expect(replay.statusCode).toBe(200);
+      const frames = (replay.body as { frames: unknown[] }).frames;
+      expect(Array.isArray(frames) && frames.length).toBe(2);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it('serves digest-verified policy bytes for the browser trial only after completion', async () => {
+    process.env.RDK_SIM2REAL_LOCAL_RUNNER_URL = 'http://127.0.0.1:18198/train';
+    const originalFetch = globalThis.fetch;
+    const { createHash } = await import('node:crypto');
+    const policyBytes = Buffer.from('fake-onnx-policy-bytes-for-trial');
+    const digest = createHash('sha256').update(policyBytes).digest('hex');
+    globalThis.fetch = (async (input) => {
+      const url = String(input);
+      if (url.endsWith('/artifact')) {
+        return new Response(new Uint8Array(policyBytes), {
+          status: 200,
+          headers: {
+            'content-type': 'application/octet-stream',
+            'content-length': String(policyBytes.byteLength),
+            'x-artifact-sha256': digest,
+          },
+        });
+      }
+      if (url.endsWith('/train')) {
+        // Launch answer keeps the run queued so the completion transition
+        // happens through the status poll below.
+        return new Response(JSON.stringify({ status: 'queued', runId: 'trial-bytes-run' }), {
+          status: 202,
+          headers: { 'content-type': 'application/json' },
+        });
+      }
+      return new Response(
+        JSON.stringify({
+          status: 'completed',
+          runId: 'trial-bytes-run',
+          artifact: {
+            artifactId: 'trial-policy',
+            artifactRef: 'artifact://starter/trial/0.1/policy.onnx',
+            kind: 'source',
+            format: 'onnx',
+            sha256: digest,
+            sizeBytes: policyBytes.byteLength,
+          },
+        }),
+        { status: 200, headers: { 'content-type': 'application/json' } },
+      );
+    }) as typeof fetch;
+    try {
+      const router = await fixture();
+      const manifest = userManifest();
+      manifest.simulator.backends = ['local'];
+      const registerResponse = await invoke(router, 'post', '/api/sim2real/models', {
+        body: { manifest },
+      });
+      const modelId = (registerResponse.body as { model: { id: string } }).model.id;
+      const started = await invoke(router, 'post', '/api/sim2real/runs', {
+        body: { modelId, backend: 'local', idempotencyKey: 'trial-bytes-key' },
+      });
+      const runId = (started.body as { run: { id: string } }).run.id;
+      // Before the completion transition the trial endpoint fails closed.
+      const early = await invoke(router, 'get', '/api/sim2real/runs/:id/policy.onnx', {
+        params: { id: runId },
+      });
+      expect(early.statusCode).toBe(409);
+      expect(early.body).toMatchObject({ code: 'SIM2REAL_POLICY_TRIAL_NOT_AVAILABLE' });
+      // Complete the run via the status poll.
+      await invoke(router, 'get', '/api/sim2real/runs/:id', { params: { id: runId } });
+      const trial = await invoke(router, 'get', '/api/sim2real/runs/:id/policy.onnx', {
+        params: { id: runId },
+      });
+      expect(trial.statusCode).toBe(200);
+      expect(trial.headers['x-artifact-sha256']).toBe(digest);
     } finally {
       globalThis.fetch = originalFetch;
     }

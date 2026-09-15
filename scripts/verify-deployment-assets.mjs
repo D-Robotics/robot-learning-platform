@@ -265,7 +265,7 @@ const mujocoStaticApp = read('services/mujoco-web/static/app.js');
 const mujocoModels = read('services/mujoco-web/models.py');
 const mujocoUnit = read('services/mujoco-web/mujoco-web.service');
 assert.match(originbotHtml, /MuJoCo 3D/);
-assert.match(originbotHtml, /<script\s+src="\.\/sim\.js\?v=10"/);
+assert.match(originbotHtml, /<script\s+src="\.\/sim\.js\?v=12"/);
 assert.match(originbotSim, /const API_ROOT = `\$\{mujocoBase\}\/api`/);
 assert.match(originbotSim, /source: 'originbot-sim'/);
 assert.match(originbotSim, /domain_randomization: domainRandomization/);
@@ -338,7 +338,17 @@ assert.match(boardTelemetryUploader, /atomic_write_text\(CHECKPOINT/);
 assert.match(boardTelemetryUploader, /secure_read_text\(CHECKPOINT/);
 assert.match(mujocoModels, /name="depth_camera"/);
 assert.match(mujocoModels, /name="depth_camera"[^>]*xyaxes="0 -1 0 \.259 0 \.966"/);
-assert.match(mujocoModels, /<velocity name="left_wheel"/);
+// OriginBot body and wheel actuators now come from the shared
+// assets/originbot module (single source of truth, same as the mjx adapter).
+// The *rendered* XML check — velocity actuator present after .format() —
+// lives in verify-mujoco-models.mjs, which actually imports and compiles the
+// model; here we pin the wiring so the body cannot silently fork back into
+// an inline copy.
+assert.match(mujocoModels, /import assets\.originbot\.originbot as _originbot/);
+assert.match(mujocoModels, /ROBOT_BODIES=_originbot\.robot_bodies\(/);
+assert.match(mujocoModels, /WHEEL_ACTUATORS=_originbot\.wheel_actuators\(/);
+assert.match(mujocoModels, /\{ROBOT_BODIES\}/);
+assert.match(mujocoModels, /\{WHEEL_ACTUATORS\}/);
 assert.match(mujocoUnit, /Environment=XDG_CACHE_HOME=\/tmp\/mujoco-web-cache/);
 
 const productionEnv = read('services/sim2real-web/sim2real.production.env.example');

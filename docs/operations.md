@@ -73,6 +73,30 @@
 
 `/metrics` **不带鉴权**（与 `/healthz` 一致），否则标准 Prometheus 抓取无法工作。它只暴露计数、直方图与归一化路由标签——如果这在你环境里仍属敏感信息，请在入口网关按来源 IP 或内网策略限制，而不是修改应用鉴权。
 
+## d-obs 事件埋点
+
+平台可以把业务与运维事件批量上报给同级的 d-obs 可观测工作台（`POST /api/ops/events`，租户 token 鉴权），点亮其总览页的"最近事件"、5xx/登录统计组件。与每分钟健康拨测（租户 `sim2real`）互补：拨测回答"活着吗"，事件埋点回答"发生了什么"。
+
+| 变量 | 默认 | 说明 |
+| --- | --- | --- |
+| `RDK_SIM2REAL_DOBS_URL` | 未设置（停用） | d-obs 基地址，如 `http://127.0.0.1:18093` |
+| `RDK_SIM2REAL_DOBS_TOKEN_FILE` | 未设置（停用） | 64-hex 租户探针 token 文件（`/var/lib/d-obs/probes/sim2real.token`），两者齐备才启用 |
+| `RDK_SIM2REAL_DOBS_REPORT_ENABLED` | `1` | kill switch：`0` 立即停投递（事件直接丢弃），业务流量不受影响 |
+
+第一批埋点（component 固定 `sim2real-web`，契约见 d-obs `docs/event-ingest.md`）：
+
+| event_code | 触发点 | outcome 语义 |
+| --- | --- | --- |
+| `run_created` / `run_status_changed` | 领域事件总线插件（`dobs-ops-reporter`） | status=failed/blocked → `error`，否则 `ok` |
+| `deployment_created` / `deployment_status_changed` | 同上 | 同上 |
+| `model_registered`、`project_*`、`dataset_*`、`evaluation_*`、`artifact_*` | 同上 | `ok` |
+| `http_5xx` | 请求观测中间件 5xx 分支（归一化 route/status） | `error` |
+| `sso_login_attempt` | 登录中继（仅 method/outcome/错误码，无凭证字段） | `ok` / `rejected` / `error` |
+| `process_unhandled_error` | `uncaughtException` / `unhandledRejection`（先上报再维持原行为） | `error` |
+| `telemetry_ingest_failed` | 遥测摄取存储失败（`correlation.runId` 关联） | `error` |
+
+投递语义：内存队列上限 1000（溢出丢最旧并计数），满 8 条或每 5 秒批量单飞 POST（≤64 条/批，6s 超时）；失败退避 5s→30s→120s，连续 5 次失败熔断丢批。`eventId` 为幂等键（d-obs 按指纹去重 1h），整批重放安全。`/healthz` 的 `dobs` 字段暴露 `enabled/configured/queued/dropped/lastErrorAt/lastFlushAt`。
+
 ## 健康检查
 
 | 端点 | 语义 |

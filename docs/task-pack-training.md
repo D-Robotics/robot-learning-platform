@@ -254,6 +254,18 @@ run"的立场一致。
 （POST `/policy/load`，布局/provider 契约校验）与启动（四开关 + 确认）仍是
 两个独立的显式操作。
 
+## 晋级流可视化（部署页）
+
+三跳证据链之前还有一条**制品晋级流**（draft → validated → published → 部署消费），
+现在在部署页「模型晋级流」面板里可见：`GET /overview` 返回一等 `artifacts` /
+`evaluations`（各取最新 100 条），前端按「产生注册制品的训练 Run」聚合成链目，
+展示制品生命周期、评测质量门、attested 签证、部署发布闸门与 SHA-256 摘要；
+draft 可标记验证、validated（含 sha256）可发布、published 可撤销（写审计原因）。
+每条链目带「血缘」按钮，按 runId 就地展开 `GET /lineage` 的完整证据图
+（数据集 → 关联 Run → 制品 → 评测 → 部署）。配套 API：
+`POST /artifacts/:id/{validate,publish,revoke}` 与 `GET /lineage?runId=`
+（见 `docs/api/openapi.yaml`）。面板只渲染台账真实记录，空态如实说明。
+
 ## 诚实边界
 
 - S100 机型的验证是**纯仿真**的（profile 标注 `mock: true`）；它证明的是"平台换

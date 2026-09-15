@@ -9,17 +9,24 @@
          example /robot-lab) work without hard-coded client paths. -->
     <meta name="rdk-sim2real-base-path" content="__RDK_SIM2REAL_BASE_PATH__" />
     <title>RDK Robot Learning Platform</title>
-    <link rel="stylesheet" href="./styles.css?v=duck-lab-30" />
-    <link rel="stylesheet" href="./overview-clean.css?v=2" />
-    <link rel="stylesheet" href="./visual-polish.css?v=2" />
-    <link rel="stylesheet" href="./onboarding.css?v=1" />
-    <link rel="stylesheet" href="./refactor-ia.css?v=2" />
-    <link rel="stylesheet" href="./overview-density.css?v=1" />
-    <link rel="stylesheet" href="./product-polish.css?v=3" />
-    <link rel="stylesheet" href="./workflow-ux.css?v=1" />
-    <link rel="stylesheet" href="./maturity-ux.css?v=2" />
+    <!-- Anti-flash: theme-boot.js is a same-origin classic script (CSP-safe,
+         no inline) that resolves the theme (stored → OS → dark) and classes
+         <html> before the stylesheets parse, so the first paint carries the
+         right scheme. app.js exposes the toggle on top of these globals. -->
+    <script src="./theme-boot.js?v=2"></script>
+    <link rel="stylesheet" href="./styles.css?v=duck-lab-33" />
+    <link rel="stylesheet" href="./overview-clean.css?v=3" />
+    <link rel="stylesheet" href="./visual-polish.css?v=5" />
+    <link rel="stylesheet" href="./onboarding.css?v=2" />
+    <link rel="stylesheet" href="./refactor-ia.css?v=4" />
+    <link rel="stylesheet" href="./overview-density.css?v=2" />
+    <link rel="stylesheet" href="./product-polish.css?v=5" />
+    <link rel="stylesheet" href="./workflow-ux.css?v=3" />
+    <link rel="stylesheet" href="./maturity-ux.css?v=3" />
+    <link rel="stylesheet" href="./workbench-pro.css?v=1" />
+    <link rel="stylesheet" href="./pro-skin.css?v=7" />
   </head>
-  <body class="theme-dark">
+  <body>
     <a class="skip-link" href="#main-content">跳到主要内容</a>
     <div class="app-shell">
       <header class="topbar">
@@ -30,6 +37,15 @@
             ><strong>Robot Learning Workbench</strong></span
           >
         </a>
+        <nav class="topbar-pipeline" id="topbar-pipeline" aria-label="研发闭环阶段">
+          <button class="pipeline-stage" type="button" data-pipeline-stage="simulate" data-view-target="simulate"><i></i><span>契约·仿真</span></button>
+          <span class="pipeline-sep" aria-hidden="true"></span>
+          <button class="pipeline-stage" type="button" data-pipeline-stage="train" data-view-target="train"><i></i><span>训练</span></button>
+          <span class="pipeline-sep" aria-hidden="true"></span>
+          <button class="pipeline-stage" type="button" data-pipeline-stage="evaluate" data-view-target="evaluate"><i></i><span>评测</span></button>
+          <span class="pipeline-sep" aria-hidden="true"></span>
+          <button class="pipeline-stage" type="button" data-pipeline-stage="deploy" data-view-target="deploy"><i></i><span>部署</span></button>
+        </nav>
         <div class="topbar-context">
           <span class="context-label">当前项目</span
           ><strong id="current-project-name">MicroDuck · X5 Starter</strong
@@ -47,6 +63,10 @@
           >
         </div>
         <div class="top-actions">
+          <button class="cmdk-trigger" id="command-palette-trigger" type="button" title="命令面板（⌘K）">
+            <kbd>⌘K</kbd><span>命令</span>
+          </button>
+          <button class="button button-ghost" id="theme-toggle" type="button" aria-label="切换主题" title="切换主题">◐</button>
           <button class="button button-ghost" id="onboarding-help-button" type="button" title="重新打开新手指引">新手指引</button>
           <div class="top-menu" data-top-menu>
             <button
@@ -154,6 +174,7 @@
           <div class="sidebar-divider sidebar-divider-compact"></div>
           <div class="nav-label">资源与工具</div>
           <nav class="workflow-nav" aria-label="记录与设备工具">
+            <button class="nav-item" type="button" data-view-target="resources"><span class="nav-index">▣</span><span><strong>GPU 与算力</strong><small>本机、远端与云端资源</small></span></button>
             <button class="nav-item" type="button" data-view-target="records">
               <span class="nav-index">▦</span
               ><span><strong>调试与记录</strong><small>运行日志、错误和版本</small></span>
@@ -173,8 +194,26 @@
         </aside>
 
         <main class="main-content" id="main-content" tabindex="-1">
+          <!-- Guest banner: the workspace (simulator, action library, replay)
+               stays fully usable logged out. The banner collapses to one line
+               by default so first-contact visitors see the product, not an
+               auth wall; the full login form opens on demand. -->
           <section class="auth-gate" id="auth-gate" aria-live="polite" hidden>
-            <div class="auth-gate-panel">
+            <div class="auth-gate-banner">
+              <strong class="auth-gate-banner-title">游客模式</strong>
+              <span class="auth-gate-banner-copy">仿真可以直接试玩；保存训练记录和连接真机时再登录。</span>
+              <button
+                class="button button-ghost button-small"
+                id="auth-gate-toggle"
+                type="button"
+                aria-expanded="false"
+                aria-controls="auth-gate-panel"
+              >
+                登录 / 展开表单
+              </button>
+              <a class="auth-gate-banner-link" id="auth-gate-banner-login" href="/rdkstudio/" target="_blank" rel="noreferrer">直接去 RDK Studio 登录 ↗</a>
+            </div>
+            <div class="auth-gate-panel" id="auth-gate-panel" hidden>
               <strong class="auth-gate-title">登录 RDK 账号</strong>
               <p class="auth-gate-hint">
                 与 RDK Studio 使用同一账号中心（SSO）；在这里登录后，Studio 主站同时保持登录。
@@ -308,6 +347,7 @@
               <div class="next-card-main">
                 <span class="next-badge">下一步</span>
                 <h3 id="next-action-title">从一个动作任务开始</h3>
+                <p id="next-action-copy">选一个任务，先在仿真里跑起来。</p>
                 <button
                   class="button button-primary"
                   id="next-action-button"
@@ -318,14 +358,34 @@
                 </button>
               </div>
             </div>
-            <section class="first-run-path panel" aria-labelledby="first-run-path-title">
-              <div class="first-run-path-heading"><div><span class="eyebrow">第一次使用</span><h2 id="first-run-path-title">从默认配置跑通一轮闭环</h2></div><span class="panel-caption">完成后再做高级配置</span></div>
-              <div class="first-run-path-steps">
-                <button type="button" class="first-run-path-step is-current" data-view-target="simulate"><b>1</b><span><strong>先看仿真</strong><small>理解动作和观测</small></span><i>→</i></button>
-                <button type="button" class="first-run-path-step" data-view-target="train"><b>2</b><span><strong>再跑训练</strong><small>使用默认模型配置</small></span><i>→</i></button>
-                <button type="button" class="first-run-path-step" data-view-target="evaluate"><b>3</b><span><strong>检查效果</strong><small>导入轨迹或遥测</small></span><i>→</i></button>
-                <button type="button" class="first-run-path-step" data-view-target="station"><b>4</b><span><strong>需要真机时再连接</strong><small>通过 Local Bridge 接入设备</small></span><i>→</i></button>
+            <section class="first-run-path panel" aria-labelledby="first-run-path-title" id="onboard-card">
+              <div class="onboard-card-bar">
+                <h2 id="first-run-path-title">上手 · 走完第一个闭环</h2>
+                <div class="onboard-meter" aria-hidden="true"><i id="onboard-fill"></i></div>
+                <span class="onboard-count" id="onboard-count">— / 4</span>
               </div>
+              <ol class="onboard-list" id="onboard-list">
+                <li class="onboard-item" data-onboard-step="simulate">
+                  <span class="onboard-item-no">01</span><span class="onboard-item-dot"></span>
+                  <div class="onboard-item-body"><strong>在仿真中验证</strong><span>运行 MicroDuck 仿真，录制一段可回放轨迹</span></div>
+                  <div class="onboard-item-meta" data-onboard-meta></div>
+                </li>
+                <li class="onboard-item" data-onboard-step="train">
+                  <span class="onboard-item-no">02</span><span class="onboard-item-dot"></span>
+                  <div class="onboard-item-body"><strong>发起第一次训练</strong><span>用 starter 模板提交 PPO 任务，跟踪奖励曲线</span></div>
+                  <div class="onboard-item-meta" data-onboard-meta></div>
+                </li>
+                <li class="onboard-item" data-onboard-step="evaluate">
+                  <span class="onboard-item-no">03</span><span class="onboard-item-dot"></span>
+                  <div class="onboard-item-body"><strong>查看评测证据</strong><span>检查成功率、跌倒率与控制延迟</span></div>
+                  <div class="onboard-item-meta" data-onboard-meta></div>
+                </li>
+                <li class="onboard-item" data-onboard-step="deploy">
+                  <span class="onboard-item-no">04</span><span class="onboard-item-dot"></span>
+                  <div class="onboard-item-body"><strong>部署到真机</strong><span>只读预检通过后，把策略推进 RDK 板卡</span></div>
+                  <div class="onboard-item-meta" data-onboard-meta></div>
+                </li>
+              </ol>
             </section>
             <section class="platform-scorecard panel" aria-labelledby="platform-scorecard-title">
               <div class="platform-scorecard-heading">
@@ -575,7 +635,7 @@
             <div class="submodule-tabs" role="tablist" aria-label="强化学习工作台模块">
               <button class="submodule-tab is-active" type="button" role="tab" aria-selected="true" data-train-module-tab="run">训练工作台<small>模型、算法与提交</small></button>
               <button class="submodule-tab" type="button" role="tab" aria-selected="false" data-train-module-tab="contract">模型契约<small>Manifest 与兼容性</small></button>
-              <button class="submodule-tab" type="button" role="tab" aria-selected="false" data-train-module-tab="resources">算力资源<small>GPU Worker 管理</small></button>
+              
             </div>
             <div class="train-onboarding" role="note" aria-label="训练流程引导">
               <div class="train-onboarding-heading">
@@ -719,6 +779,21 @@
                     <span class="run-progress-track-note" id="run-progress-track-note"></span>
                   </div>
                   <div class="run-progress-meta" id="run-progress-meta"></div>
+                  <div class="run-progress-live-chart" id="run-progress-live-chart" hidden>
+                    <div class="run-progress-live-heading">
+                      <strong>实时训练曲线</strong>
+                      <span class="panel-caption" id="run-progress-live-caption">—</span>
+                    </div>
+                    <canvas
+                      id="run-progress-live-canvas"
+                      width="720"
+                      height="200"
+                      aria-label="训练中实时奖励与成功率曲线"
+                    ></canvas>
+                    <p class="small-note" id="run-progress-live-note">
+                      引擎每个 checkpoint 间隔回报一次均值奖励与近期成功率；数据来自 worker 解析的引擎 stdout。
+                    </p>
+                  </div>
                   <div class="run-progress-warning" id="run-progress-warning" hidden>
                     Mock 只验证协议和台账，不会生成可部署模型。
                   </div>
@@ -743,6 +818,11 @@
                     ><select id="training-algorithm" aria-label="选择强化学习算法">
                       <option value="ppo" selected>PPO · 在策略</option>
                       <option value="sac">SAC · 离策略</option></select
+                    ><label class="field-label" for="training-engine">训练引擎</label
+                    ><select id="training-engine" aria-label="选择训练引擎">
+                      <option value="" selected>默认 · worker 配置的引擎</option>
+                      <option value="starter-ppo">starter-ppo · 运动学（CPU 友好）</option>
+                      <option value="mjx-ppo">MJX · MuJoCo 接触动力学</option></select
                     ><label class="field-label" for="compute-resource-select">训练资源</label
                     ><select id="compute-resource-select" aria-label="选择 GPU 训练资源">
                       <option value="">服务端默认本地 Worker</option>
@@ -802,23 +882,7 @@
                   >
                 </div>
               </article>
-              <article class="panel compute-resources-panel" data-train-module="resources">
-                <div class="panel-heading panel-heading-lean">
-                  <div><h2>我的 GPU 训练资源</h2><p class="panel-caption">支持本地 Worker、远程 Runner 等多种连接；选择“AI 自动选择”会自动探测在线资源并回退到默认 Worker</p></div>
-                  <span id="compute-resource-count" class="state-badge state-neutral">0 个</span>
-                </div>
-                <div id="compute-resource-list" class="compute-resource-list"><p class="empty-inline">还没有接入 GPU。添加后可在上方训练资源中选择。</p></div>
-                <form id="compute-resource-form" class="compute-resource-form">
-                  <input id="compute-resource-editing-id" type="hidden" />
-                  <div class="compute-resource-form-grid">
-                    <label class="field-label">名称<input id="compute-resource-name" required maxlength="120" placeholder="我的 RTX 5090" /></label>
-                    <label class="field-label">Runner 地址<input id="compute-resource-url" required placeholder="http://127.0.0.1:19091/train" /></label>
-                    <label class="field-label">访问令牌<input id="compute-resource-token" type="password" autocomplete="new-password" placeholder="可选" /></label>
-                    <label class="field-label">并发任务<input id="compute-resource-concurrency" type="number" min="1" max="32" value="1" /></label>
-                  </div>
-                  <div class="compute-resource-form-actions"><button class="button button-primary button-small" type="submit" id="compute-resource-save">添加 GPU</button><button class="button button-ghost button-small" type="button" id="compute-resource-cancel" hidden>取消编辑</button><span id="compute-resource-form-status" class="small-note"></span></div>
-                </form>
-              </article>
+
             </div>
           </section>
 
@@ -909,6 +973,33 @@
                 <div><h2 id="run-comparison-title">最近实验对比</h2><p class="panel-subtitle">用同一模型的最近 Run 快速判断趋势</p></div>
                 <span class="panel-caption" id="run-comparison-caption">最近 5 次</span>
               </div>
+              <div class="run-comparison-controls">
+                <label class="field-label" for="run-compare-metric">对比指标</label
+                ><select id="run-compare-metric" aria-label="选择对比指标">
+                  <option value="successRate" selected>成功率</option>
+                  <option value="reward">平均奖励</option>
+                  <option value="fallRate">跌倒率</option>
+                  <option value="episodeLength">平均步数</option>
+                  <option value="iterations">迭代数</option>
+                </select>
+                <label class="field-label" for="run-compare-count">对比数量</label
+                ><select id="run-compare-count" aria-label="选择对比的 run 数量">
+                  <option value="5" selected>最近 5 次</option>
+                  <option value="10">最近 10 次</option>
+                  <option value="20">最近 20 次</option>
+                </select>
+              </div>
+              <div class="run-comparison-chart" id="run-comparison-chart" hidden>
+                <canvas
+                  id="run-compare-canvas"
+                  width="720"
+                  height="260"
+                  aria-label="多次运行的训练曲线叠加对比"
+                ></canvas>
+                <p class="small-note" id="run-compare-chart-note">
+                  叠加各次运行的训练曲线（均值奖励，左轴）；图例顺序与下方列表一致。
+                </p>
+              </div>
               <div class="run-comparison" id="run-comparison" aria-live="polite">
                 <div class="empty-inline">完成一次训练或评测后，这里会显示可比较的指标。</div>
               </div>
@@ -959,6 +1050,11 @@
                 <input id="replay-seek" type="range" min="0" max="0" value="0" step="1" disabled aria-label="回放进度" />
                 <div class="replay-player-meta"><span id="replay-frame-label">0 / 0 帧</span><span id="replay-time-label">0.00s</span></div>
                 <p class="small-note" id="replay-frame-detail">加载后可拖动时间轴；回放帧会同步发送到嵌入仿真器。</p>
+                <div class="replay-player-controls policy-trial" id="policy-trial-controls">
+                  <button class="button button-primary button-small" id="policy-trial-button" type="button">🚀 策略试跑（浏览器推理）</button>
+                  <button class="button button-ghost button-small" id="policy-trial-stop" type="button" disabled>■ 停止试跑</button>
+                  <span id="policy-trial-status" class="small-note">在嵌入仿真器中用本机浏览器运行该策略的 ONNX 模型。</span>
+                </div>
               </div>
               <div class="telemetry-visuals" id="telemetry-visuals" hidden>
                 <div class="telemetry-chart-block">
@@ -1118,10 +1214,63 @@
                   <div class="deploy-timeline-heading"><strong>部署时间线</strong><span id="deploy-timeline-status">等待预检</span></div>
                   <ol id="deploy-timeline-list"><li class="deploy-timeline-empty">生成预检计划后，这里会显示模型、板卡和证据状态。</li></ol>
                 </div>
+                <div class="promotion-flow" aria-label="模型晋级流">
+                  <div class="promotion-flow-heading">
+                    <strong>模型晋级流</strong><span id="promotion-flow-caption">训练产物 → 候选 → 验证 → 发布</span>
+                  </div>
+                  <div class="promotion-stages" id="promotion-stages">
+                    <div class="promotion-stage" data-promotion-stage="candidates">
+                      <span class="promotion-stage-index">候选</span>
+                      <div><strong>训练产物</strong><small>训练完成后的 ONNX 制品与评测证据</small></div>
+                    </div>
+                    <div class="promotion-stage" data-promotion-stage="validated">
+                      <span class="promotion-stage-index">验证</span>
+                      <div><strong>候选验证</strong><small>质量门与评测通过，制品标记 validated</small></div>
+                    </div>
+                    <div class="promotion-stage" data-promotion-stage="published">
+                      <span class="promotion-stage-index">发布</span>
+                      <div><strong>发布上线</strong><small>published 制品进入 Canary / Live 计划</small></div>
+                    </div>
+                  </div>
+                  <ol class="promotion-chain" id="promotion-chain" aria-label="晋级链证据">
+                    <li class="promotion-chain-empty">当前模型还没有可展示的晋级链：完成一次真实训练并发布制品后，这里会按 产物 → 评测 → 制品 → 部署 展示证据。</li>
+                  </ol>
+                </div>
                 <div class="deploy-recovery-note" id="deploy-recovery-note" hidden>
                   <span class="deploy-recovery-icon">↶</span><span><strong>可以安全回到上一版本</strong><small>当前只读预检不会修改板端；如需回滚，请从记录中选择上一份已验证制品。</small></span>
                   <button class="button button-ghost button-small" type="button" data-workspace-view="records">查看记录</button>
                 </div>
+              </article>
+            </div>
+          </section>
+
+          <section
+            class="view-section"
+            data-view-section="resources"
+            hidden
+            aria-labelledby="resources-title"
+          >
+            <div class="section-heading section-heading-lean">
+              <h2 id="resources-title">GPU 与算力资源</h2>
+              <p class="section-lead">管理本机 Agent、远端 GPU 和云端算力。训练页面只选择资源，不在这里混入训练配置。</p>
+            </div>
+            <div class="records-layout records-single">
+              <article class="panel compute-resources-panel">
+                <div class="panel-heading panel-heading-lean">
+                  <div><h2>我的 GPU 训练资源</h2><p class="panel-caption">在本页直接连接本机或远端 GPU。首次使用请在用户电脑启动 Local Agent：<code>npm run dev:gpu-agent</code>；页面随后通过 127.0.0.1 建立 SSH 隧道，核心服务器不会接触你的 GPU。</p></div>
+                  <span id="compute-resource-count" class="state-badge state-neutral">0 个</span>
+                </div>
+                <div id="compute-resource-list" class="compute-resource-list"><p class="empty-inline">还没有接入 GPU。添加后可在上方训练资源中选择。</p></div>
+                <form id="compute-resource-form" class="compute-resource-form">
+                  <input id="compute-resource-editing-id" type="hidden" />
+                  <div class="compute-resource-form-grid">
+                    <label class="field-label">名称<input id="compute-resource-name" required maxlength="120" placeholder="我的 RTX 5090" /></label>
+                    <label class="field-label">Runner 地址<input id="compute-resource-url" required placeholder="http://127.0.0.1:19091/train" /></label>
+                    <label class="field-label">访问令牌<input id="compute-resource-token" type="password" autocomplete="new-password" placeholder="可选" /></label>
+                    <label class="field-label">并发任务<input id="compute-resource-concurrency" type="number" min="1" max="32" value="1" /></label>
+                  </div>
+                  <div class="compute-resource-form-actions"><button class="button button-ghost button-small" type="button" id="compute-resource-autodetect">① 自动发现本机 Agent</button><button class="button button-primary button-small" type="submit" id="compute-resource-save">② 添加 GPU</button><button class="button button-ghost button-small" type="button" id="compute-resource-cancel" hidden>取消编辑</button><span id="compute-resource-form-status" class="small-note" role="status"></span></div>
+                </form>
               </article>
             </div>
           </section>
@@ -1787,10 +1936,13 @@
       the same ordering while working from both file:// and the served app.
       telemetry-core.js must stay FIRST: app.js boots synchronously and its
       telemetry delegations resolve SimTelemetryCore at call time.
+      defer keeps that same DOM-ready execution order while letting all four
+      downloads start in parallel during HTML parse instead of serially
+      blocking the parser at body end.
     -->
-    <script src="./telemetry-core.js?v=duck-lab-29"></script>
-    <script src="./app.js?v=duck-lab-35"></script>
-    <script src="./agent-chat.js?v=agent-8"></script>
-    <script src="./onboarding.js?v=onboarding-2"></script>
+    <script defer src="./telemetry-core.js?v=duck-lab-30"></script>
+    <script defer src="./app.js?v=duck-lab-38"></script>
+    <script defer src="./agent-chat.js?v=agent-9"></script>
+    <script defer src="./onboarding.js?v=onboarding-3"></script>
   </body>
 </html>

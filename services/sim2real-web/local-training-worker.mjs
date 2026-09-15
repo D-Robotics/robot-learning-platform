@@ -37,6 +37,85 @@ const MAX_BODY = 2 * 1024 * 1024;
 const MAX_RESULT = 1 * 1024 * 1024;
 const MAX_ARTIFACT_BYTES = 10_000_000_000;
 const MAX_LOG = 64 * 1024;
+// Live progress points are bounded so a status poll can never grow unbounded.
+// Engines print one line every ~iterations/8, so 512 points covers even the
+// 600-iteration high-vram profile with room to spare.
+const MAX_PROGRESS_POINTS = 512;
+// Both shipped engines emit the same line shape (starter-ppo runner.py and
+// the mjx adapter), so one pattern keeps the worker engine-agnostic:
+//   [starter-ppo] iter 12/400 meanReward=0.041 recentSuccess=0.38 goalRange=[0.80,1.20] elapsed=107.6s
+const PROGRESS_LINE_RE =
+  /iter (\d+)\/(\d+) meanReward=(-?\d+(?:\.\d+)?) recentSuccess=(\d+(?:\.\d+)?)(?: goalRange=\[([^\]]*)\])?(?: elapsed=(\d+(?:\.\d+)?)s)?/g;
+
+function parseProgressLine(chunk, job) {
+  for (const match of String(chunk).matchAll(PROGRESS_LINE_RE)) {
+    const iteration = Number(match[1]);
+    const total = Number(match[2]);
+    const meanReward = Number(match[3]);
+    const recentSuccess = Number(match[4]);
+    if (
+      !Number.isSafeInteger(iteration) ||
+      iteration < 1 ||
+      !Number.isSafeInteger(total) ||
+      total < 1 ||
+      !Number.isFinite(meanReward) ||
+      !Number.isFinite(recentSuccess)
+    ) {
+      continue;
+    }
+    const elapsed = Number(match[6]);
+    const point = {
+      iteration,
+      totalIterations: total,
+      meanReward,
+      recentSuccess,
+      ...(Number.isFinite(elapsed) ? { elapsedSeconds: elapsed } : {}),
+      at: new Date().toISOString(),
+    };
+    // Engines may flush partial lines across chunk boundaries; the regex can
+    // re-match an already-counted iteration from an overlapping buffer. Only
+    // strictly advancing iterations become points.
+    const previous = job.progress?.[job.progress.length - 1];
+    if (previous && iteration <= previous.iteration) continue;
+    (job.progress ??= []).push(point);
+    if (job.progress.length > MAX_PROGRESS_POINTS) {
+      job.progress.splice(0, job.progress.length - MAX_PROGRESS_POINTS);
+    }
+  }
+}
+
+function safeProgress(job) {
+  if (!Array.isArray(job.progress)) return undefined;
+  const points = [];
+  let lastIteration = 0;
+  for (const raw of job.progress) {
+    if (!raw || typeof raw !== 'object') continue;
+    const iteration = Number(raw.iteration);
+    const total = Number(raw.totalIterations);
+    const meanReward = Number(raw.meanReward);
+    const recentSuccess = Number(raw.recentSuccess);
+    if (
+      !Number.isSafeInteger(iteration) ||
+      iteration < lastIteration ||
+      !Number.isSafeInteger(total) ||
+      !Number.isFinite(meanReward) ||
+      !Number.isFinite(recentSuccess)
+    ) {
+      continue;
+    }
+    lastIteration = iteration;
+    const elapsed = Number(raw.elapsedSeconds);
+    points.push({
+      iteration,
+      totalIterations: total,
+      meanReward,
+      recentSuccess,
+      ...(Number.isFinite(elapsed) ? { elapsedSeconds: elapsed } : {}),
+      ...(typeof raw.at === 'string' && /^\d{4}-\d{2}-\d{2}T/.test(raw.at) ? { at: raw.at } : {}),
+    });
+  }
+  return points.length ? points : undefined;
+}
 const MAX_JOBS = 1000;
 const MAX_CONCURRENT_JOBS_LIMIT = 32;
 const SAFE_RUN_ID = /^[a-zA-Z0-9][a-zA-Z0-9._-]{0,199}$/;
@@ -258,6 +337,110 @@ function executableConfig() {
   return { executable, args };
 }
 
+/**
+ * Multi-engine routing table.
+ *
+ * The base RDK_SIM2REAL_TRAIN_EXECUTABLE keeps working unchanged: it is the
+ * default engine and any request without training.engine goes there. A worker
+ * that registered additional engines (e.g. the MJX contact-dynamics engine on
+ * a GPU box) routes training.engine='mjx-ppo' to its own executable; unknown
+ * engine ids fail closed with a clear 400 instead of silently training with
+ * the wrong physics backend.
+ */
+function workerEngines() {
+  const entries = new Map();
+  const base = executableConfig();
+  if (base) entries.set('default', { id: 'default', ...base });
+  const raw = String(process.env.RDK_SIM2REAL_TRAIN_ENGINES_JSON || '').trim();
+  if (!raw) return entries;
+  let parsed;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    throw fail(
+      'RDK_SIM2REAL_TRAIN_ENGINES_JSON must be a JSON object',
+      500,
+      'worker_configuration_invalid',
+    );
+  }
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    throw fail(
+      'RDK_SIM2REAL_TRAIN_ENGINES_JSON must be a JSON object',
+      500,
+      'worker_configuration_invalid',
+    );
+  }
+  for (const [id, value] of Object.entries(parsed)) {
+    if (!/^[a-z][a-z0-9-]{1,31}$/.test(id)) {
+      throw fail(
+        'RDK_SIM2REAL_TRAIN_ENGINES_JSON keys must look like engine ids (lowercase, dashes)',
+        500,
+        'worker_configuration_invalid',
+      );
+    }
+    if (!value || typeof value !== 'object') {
+      throw fail(
+        `RDK_SIM2REAL_TRAIN_ENGINES_JSON.${id} must be an object with executable and args`,
+        500,
+        'worker_configuration_invalid',
+      );
+    }
+    const executable = String(value.executable || '').trim();
+    if (!path.isAbsolute(executable) || executable.includes('\0')) {
+      throw fail(
+        `RDK_SIM2REAL_TRAIN_ENGINES_JSON.${id}.executable must be an absolute path`,
+        500,
+        'worker_configuration_invalid',
+      );
+    }
+    const args = value.args;
+    if (
+      !Array.isArray(args) ||
+      args.some((item) => typeof item !== 'string' || item.length > 500)
+    ) {
+      throw fail(
+        `RDK_SIM2REAL_TRAIN_ENGINES_JSON.${id}.args must be an array of strings`,
+        500,
+        'worker_configuration_invalid',
+      );
+    }
+    if (entries.has(id)) {
+      throw fail(
+        `RDK_SIM2REAL_TRAIN_ENGINES_JSON.${id} collides with a reserved engine id`,
+        500,
+        'worker_configuration_invalid',
+      );
+    }
+    entries.set(id, { id, executable, args });
+  }
+  return entries;
+}
+
+const ENGINE_ID_RE = /^[a-z][a-z0-9-]{1,31}$/;
+
+function engineFor(request) {
+  const engines = workerEngines();
+  const requested = String(request?.training?.engine || '').trim();
+  if (!requested) {
+    const fallback = engines.get('default');
+    if (!fallback) return null;
+    return { engineId: 'default', executable: fallback.executable, args: fallback.args };
+  }
+  if (!ENGINE_ID_RE.test(requested)) {
+    throw fail('training.engine is not a valid engine id');
+  }
+  const selected = engines.get(requested);
+  if (!selected) {
+    const available = [...engines.keys()].sort().join(', ') || 'none';
+    throw fail(
+      `training engine "${requested}" is not registered on this worker (available: ${available})`,
+      400,
+      'engine_not_registered',
+    );
+  }
+  return { engineId: selected.id, executable: selected.executable, args: selected.args };
+}
+
 function maxConcurrentJobs() {
   const raw = String(process.env.RDK_SIM2REAL_MAX_CONCURRENT_JOBS || '1').trim();
   const value = Number(raw);
@@ -285,8 +468,11 @@ function publicJob(job) {
     idempotencyKey: _idempotencyKey,
     timeout: _timeout,
     pid: _pid,
+    progress: _progress,
     ...visible
   } = job;
+  const progress = safeProgress(job);
+  if (progress) visible.progress = progress;
   if (visible.status === 'queued') {
     const position = queuedJobs.indexOf(job);
     visible.queuePosition = position >= 0 ? position + 1 : null;
@@ -482,6 +668,13 @@ async function launch(job, config) {
   let stderr = '';
   child.stdout.on('data', (chunk) => {
     stdout = (stdout + String(chunk)).slice(-MAX_LOG);
+    // Live progress is parsed from the same stream the tail captures, so the
+    // status route reflects training curve points while the engine runs.
+    try {
+      parseProgressLine(chunk, job);
+    } catch {
+      // A malformed line never breaks training; the tail still records it.
+    }
   });
   child.stderr.on('data', (chunk) => {
     stderr = (stderr + String(chunk)).slice(-MAX_LOG);
@@ -574,12 +767,22 @@ async function pumpQueue() {
     if (!job || job.status !== 'queued') continue;
     let config;
     try {
-      config = executableConfig();
+      // Engine routing is resolved at launch time from the persisted request
+      // (surviving worker restarts), not from the submit-time check alone.
+      config = engineFor(job.request);
     } catch (error) {
       job.status = 'failed';
       job.finishedAt = new Date().toISOString();
       job.errorCode = error?.errorCode || 'worker_configuration_invalid';
       job.message = text(error?.message) || 'worker configuration is invalid';
+      await persist(job).catch(() => undefined);
+      continue;
+    }
+    if (!config) {
+      job.status = 'failed';
+      job.finishedAt = new Date().toISOString();
+      job.errorCode = 'real_worker_not_configured';
+      job.message = '未配置真实训练引擎；任务不会伪造 PPO 完成。';
       await persist(job).catch(() => undefined);
       continue;
     }
@@ -610,9 +813,9 @@ async function persist(job) {
 async function handleTrain(request, response) {
   await ensureJobsLoaded();
   const source = await bodyJson(request);
-  const config = executableConfig();
+  const engines = workerEngines();
   maxConcurrentJobs();
-  if (!config) {
+  if (!engines.size) {
     json(response, 503, {
       ok: false,
       error: 'real_worker_not_configured',
@@ -621,6 +824,9 @@ async function handleTrain(request, response) {
     return;
   }
   const normalized = validate(source);
+  // Fail an unregistered engine at submit time (400) so the caller can retry
+  // with a valid one; the launch-time check stays as the durable backstop.
+  engineFor(source);
   const owner = accountId(request, source);
   const key = requestKey(request, source);
   const fingerprint = requestFingerprint(source, owner);
@@ -651,6 +857,9 @@ async function handleTrain(request, response) {
     modelId: normalized.modelId,
     version: normalized.version,
     profile: normalized.profile,
+    ...(String(source?.training?.engine || '').trim()
+      ? { engine: String(source.training.engine).trim() }
+      : {}),
     idempotencyKey: key,
     fingerprint,
     request: source,
@@ -798,13 +1007,92 @@ async function handleArtifact(request, response) {
   stream.pipe(response);
 }
 
+/**
+ * GET /runs/:id/telemetry — the completed run's evaluation telemetry.jsonl
+ * bytes (hard-envelope policy rollouts the engine already produced).
+ *
+ * This lets the platform auto-attach the run's evaluation evidence to the
+ * existing replay pipeline without the browser re-simulating anything. Same
+ * ownership gate as handleArtifact; only completed non-mock jobs serve
+ * bytes, and the payload stays under the same ceiling as artifacts.
+ */
+async function handleTelemetry(request, response) {
+  await ensureJobsLoaded();
+  const runId = decodeURIComponent(
+    (request.url || '').slice('/runs/'.length, -'/telemetry'.length),
+  );
+  const job = jobs.get(runId);
+  if (!job) {
+    json(response, 404, { ok: false, error: 'run_not_found' });
+    return;
+  }
+  let owner;
+  try {
+    owner = accountId(request, {});
+  } catch {
+    json(response, 401, { ok: false, error: 'account_required' });
+    return;
+  }
+  if (owner !== job.accountId) {
+    json(response, 404, { ok: false, error: 'run_not_found' });
+    return;
+  }
+  if (job.status !== 'completed') {
+    json(response, 409, {
+      ok: false,
+      error: 'run_not_completed',
+      message: '只有已完成的任务才能读取评测遥测。',
+    });
+    return;
+  }
+  if (job.mock) {
+    json(response, 409, {
+      ok: false,
+      error: 'mock_run_has_no_telemetry',
+      message: 'mock 任务不产生评测遥测。',
+    });
+    return;
+  }
+  const filePath = path.join(job.dir, 'telemetry.jsonl');
+  let info;
+  try {
+    info = await stat(filePath);
+  } catch {
+    json(response, 409, {
+      ok: false,
+      error: 'telemetry_file_missing',
+      message: '评测遥测文件缺失（引擎未写出或已被清理）。',
+    });
+    return;
+  }
+  if (!info.isFile() || info.size <= 0 || info.size > MAX_ARTIFACT_BYTES) {
+    json(response, 409, {
+      ok: false,
+      error: 'telemetry_file_invalid',
+      message: '评测遥测文件无效。',
+    });
+    return;
+  }
+  const stream = createReadStream(filePath);
+  response.statusCode = 200;
+  response.setHeader('content-type', 'application/x-ndjson');
+  response.setHeader('content-length', info.size);
+  response.setHeader('x-telemetry-bytes', String(info.size));
+  response.setHeader('cache-control', 'no-store');
+  stream.on('error', () => response.destroy());
+  stream.pipe(response);
+}
+
 export function createLocalTrainingWorkerServer() {
   return createServer(async (request, response) => {
     try {
       if (request.method === 'GET' && request.url === '/healthz') {
         let configured = false;
+        let engineIds = [];
         try {
-          configured = Boolean(executableConfig());
+          const engines = workerEngines();
+          configured = engines.size > 0;
+          engineIds = [...engines.keys()].sort();
           maxConcurrentJobs();
         } catch (error) {
           json(response, 503, {
@@ -828,6 +1116,7 @@ export function createLocalTrainingWorkerServer() {
           worker: 'sim2real-local',
           mode: 'external-engine',
           configured,
+          engines: engineIds,
           authConfigured: tokenConfigured,
           authTokenUsable: tokenUsable,
           ...(authReady ? {} : { error: 'worker_auth_not_configured' }),
@@ -853,6 +1142,14 @@ export function createLocalTrainingWorkerServer() {
         request.url.endsWith('/artifact')
       ) {
         await handleArtifact(request, response);
+        return;
+      }
+      if (
+        request.method === 'GET' &&
+        request.url?.startsWith('/runs/') &&
+        request.url.endsWith('/telemetry')
+      ) {
+        await handleTelemetry(request, response);
         return;
       }
       if (request.method === 'GET' && request.url?.startsWith('/runs/')) {

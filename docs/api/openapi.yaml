@@ -375,6 +375,33 @@ paths:
           content: { application/json: { schema: { $ref: "#/components/schemas/RunResponse" } } }
         "400": { $ref: "#/components/responses/BadRequest" }
         "409": { description: Run is not reconcilable or the id does not match. }
+  /api/v1/duck/runs/{runId}/policy.onnx:
+    get:
+      tags: [runs]
+      summary: Download the completed run's ONNX policy bytes for the browser trial
+      operationId: getRunPolicyOnnx
+      description: >-
+        Serves the digest-verified ONNX artifact of a completed, real (non-mock)
+        local run so the browser trial runs the exact bytes that would be
+        staged to a board. The browser trial is an operator aid and never
+        release evidence. The response carries the worker-recomputed
+        X-Artifact-Sha256 header and is rejected when it diverges from the
+        ledger's recorded digest.
+      parameters:
+        - $ref: "#/components/parameters/RunId"
+      responses:
+        "200":
+          description: ONNX policy bytes.
+          content:
+            application/octet-stream:
+              schema: { type: string, format: binary }
+        "401": { $ref: "#/components/responses/AuthRequired" }
+        "404": { description: Run not found or not owned by the account. }
+        "409":
+          description: >-
+            Trial not available: run unfinished, mock, wrong backend, no ONNX
+            artifact, artifact bytes unreadable, or digest mismatch
+            (SIM2REAL_POLICY_TRIAL_*).
   /api/v1/duck/telemetry:
     post:
       tags: [telemetry]
@@ -2888,6 +2915,14 @@ components:
         deployments: { type: array, items: { $ref: "#/components/schemas/Deployment" } }
         devices: { type: array, items: { $ref: "#/components/schemas/DeviceSummary" } }
         integrations: { $ref: "#/components/schemas/Integrations" }
+        artifacts:
+          type: array
+          description: First-class immutable registry artifacts (newest 100) powering the promotion-flow view.
+          items: { $ref: "#/components/schemas/ArtifactRecord" }
+        evaluations:
+          type: array
+          description: First-class evaluation evidence records (newest 100) linked to runs and artifacts.
+          items: { $ref: "#/components/schemas/EvaluationRecord" }
     DeviceSummary:
       type: object
       required: [id, name, status]

@@ -10,6 +10,7 @@ import {
   normalizeRunnerUrl,
   requestRobogoTraining,
   requestRobogoTrainingStatus,
+  safeAccountId,
   type Sim2RealRobogoRunResult,
 } from './robogo-runner.js';
 import { Sim2RealError } from './sim2real-errors.js';
@@ -172,12 +173,15 @@ export async function requestLocalTrainingStatus(input: {
  * mismatch — staging must fail closed, never fall back to a guess.
  */
 export async function fetchLocalRunArtifact(input: {
+  /** The worker gates every /runs/:id route on the owning account. */
+  accountId: string;
   externalRunId: string;
   fetchImpl?: typeof fetch;
   runnerUrl?: string;
   runnerToken?: string;
   timeoutMs?: number;
 }): Promise<{ bytes: Buffer; sha256: string } | null> {
+  const accountId = safeAccountId(input.accountId);
   let runnerUrl: string;
   try {
     runnerUrl = normalizeRunnerUrl(
@@ -197,12 +201,20 @@ export async function fetchLocalRunArtifact(input: {
       input.runnerToken ?? process.env.RDK_SIM2REAL_LOCAL_RUNNER_TOKEN ?? '',
     ).trim();
     if (localRunnerTokenRequired(runnerUrl) && !localRunnerTokenUsable(token)) return null;
+    // Mirror statusUrl's /train handling: the runner URL is conventionally
+    // configured with the POST endpoint path, but /runs/:id routes live at
+    // the worker root. Without this the artifact fetch 404s on every
+    // deployment that kept the conventional suffix.
+    const parsedRunner = new URL(runnerUrl);
+    const runnerPath = parsedRunner.pathname.replace(/\/+$/, '');
+    if (runnerPath.endsWith('/train')) parsedRunner.pathname = runnerPath.slice(0, -6);
     const response = await (input.fetchImpl ?? fetch)(
-      `${runnerUrl}/runs/${encodeURIComponent(input.externalRunId)}/artifact`,
+      `${parsedRunner.toString().replace(/\/+$/, '')}/runs/${encodeURIComponent(input.externalRunId)}/artifact`,
       {
         method: 'GET',
         headers: {
           accept: 'application/octet-stream',
+          'x-sim2real-account': accountId,
           ...(token ? { authorization: `Bearer ${token}` } : {}),
         },
         redirect: 'error',
@@ -240,6 +252,111 @@ export async function fetchLocalRunArtifact(input: {
     const computedSha256 = createHash('sha256').update(bytes).digest('hex');
     if (computedSha256 !== sha256) return null;
     return { bytes, sha256 };
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/**
+ * Fetch a completed local-worker run's evaluation telemetry.jsonl bytes
+ * (GET /runs/:id/telemetry). The engine already recorded hard-envelope
+ * rollouts while evaluating; this returns those rows so the platform can
+ * attach the run's own evidence to the replay pipeline. Returns null for
+ * any transport failure, non-2xx, size anomaly, or invalid NDJSON — the
+ * auto-attach path must fail closed and simply leave the run without
+ * replay data instead of inventing any.
+ */
+export async function fetchLocalRunTelemetry(input: {
+  /** The worker gates every /runs/:id route on the owning account. */
+  accountId: string;
+  externalRunId: string;
+  fetchImpl?: typeof fetch;
+  runnerUrl?: string;
+  runnerToken?: string;
+  timeoutMs?: number;
+}): Promise<{ lines: string[]; sampleCount: number } | null> {
+  const accountId = safeAccountId(input.accountId);
+  let runnerUrl: string;
+  try {
+    runnerUrl = normalizeRunnerUrl(
+      input.runnerUrl ?? process.env.RDK_SIM2REAL_LOCAL_RUNNER_URL ?? '',
+      { localHttp: true },
+    );
+  } catch {
+    return null;
+  }
+  const controller = new AbortController();
+  const timer = setTimeout(
+    () => controller.abort(),
+    Math.min(Math.max(input.timeoutMs ?? 30_000, 1000), 120_000),
+  );
+  try {
+    const token = String(
+      input.runnerToken ?? process.env.RDK_SIM2REAL_LOCAL_RUNNER_TOKEN ?? '',
+    ).trim();
+    if (localRunnerTokenRequired(runnerUrl) && !localRunnerTokenUsable(token)) return null;
+    // Same /train-suffix convention as fetchLocalRunArtifact: /runs/:id
+    // routes live at the worker root.
+    const parsedRunner = new URL(runnerUrl);
+    const runnerPath = parsedRunner.pathname.replace(/\/+$/, '');
+    if (runnerPath.endsWith('/train')) parsedRunner.pathname = runnerPath.slice(0, -6);
+    const response = await (input.fetchImpl ?? fetch)(
+      `${parsedRunner.toString().replace(/\/+$/, '')}/runs/${encodeURIComponent(input.externalRunId)}/telemetry`,
+      {
+        method: 'GET',
+        headers: {
+          accept: 'application/x-ndjson',
+          'x-sim2real-account': accountId,
+          ...(token ? { authorization: `Bearer ${token}` } : {}),
+        },
+        redirect: 'error',
+        signal: controller.signal,
+      },
+    );
+    if (!response.ok) return null;
+    const declared = Number(response.headers.get('content-length') || 0);
+    if (!Number.isFinite(declared) || declared <= 0 || declared > 50 * 1024 * 1024) return null;
+    if (!response.body) return null;
+    const reader = response.body.getReader();
+    const chunks: Uint8Array[] = [];
+    let total = 0;
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      total += value.byteLength;
+      if (total > 50 * 1024 * 1024) {
+        await reader.cancel().catch(() => undefined);
+        return null;
+      }
+      chunks.push(value);
+    }
+    if (total !== declared) return null;
+    const text = Buffer.concat(chunks).toString('utf8');
+    const lines = text
+      .split('\n')
+      .map((line) => line.trim())
+      .filter((line) => line.length > 0);
+    if (lines.length === 0 || lines.length > 50_000) return null;
+    // Validate NDJSON shape before anything touches the store: every row must
+    // be an object carrying a numeric `t` and bounded observation/action
+    // arrays matching the telemetry sample schema.
+    let sampleCount = 0;
+    for (const line of lines) {
+      let row: unknown;
+      try {
+        row = JSON.parse(line);
+      } catch {
+        return null;
+      }
+      if (!row || typeof row !== 'object' || Array.isArray(row)) return null;
+      const record = row as Record<string, unknown>;
+      const t = Number(record.t);
+      if (!Number.isFinite(t) || t < 0) return null;
+      sampleCount += 1;
+    }
+    return { lines, sampleCount };
   } catch {
     return null;
   } finally {

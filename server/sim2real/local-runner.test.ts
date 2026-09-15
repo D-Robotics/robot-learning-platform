@@ -95,22 +95,32 @@ describe('local Sim2Real runner adapter', () => {
   it('verifies downloaded artifact bytes against the worker digest', async () => {
     const bytes = Buffer.from('onnx-fixture');
     const digest = createHash('sha256').update(bytes).digest('hex');
-    const fetchImpl = (async () =>
-      new Response(bytes, {
+    let seenAccountHeader = '';
+    const fetchImpl = (async (url: unknown, init?: RequestInit) => {
+      seenAccountHeader = String(
+        (init?.headers as Record<string, string>)?.['x-sim2real-account'] ?? '',
+      );
+      return new Response(bytes, {
         status: 200,
         headers: {
           'content-length': String(bytes.length),
           'x-artifact-sha256': digest,
         },
-      })) as typeof fetch;
+      });
+    }) as typeof fetch;
     const valid = await fetchLocalRunArtifact({
+      accountId: 'alice',
       externalRunId: 'artifact-run-1',
       runnerUrl: 'http://127.0.0.1:18198/train',
       fetchImpl,
     });
     expect(valid).toMatchObject({ bytes, sha256: digest });
+    // The worker gates /runs/:id on the owning account; the artifact fetch
+    // must send the same header the train/status calls do.
+    expect(seenAccountHeader).toBe('alice');
 
     const invalid = await fetchLocalRunArtifact({
+      accountId: 'alice',
       externalRunId: 'artifact-run-1',
       runnerUrl: 'http://127.0.0.1:18198/train',
       fetchImpl: (async () =>

@@ -229,7 +229,16 @@ function addMessage(role, text, persist = true) {
   const node = document.createElement('div');
   node.className = `agent-chat-message agent-chat-message-${role}`;
   node.innerHTML = `<strong>${role === 'user' ? '你' : 'Agent'}</strong><p></p>`;
-  node.querySelector('p').textContent = text;
+  const paragraph = node.querySelector('p');
+  const source = String(text ?? '');
+  // Render the small Markdown subset used by agent replies while escaping
+  // arbitrary model output first.
+  const escaped = source.replace(/[&<>"']/g, (c) => ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;' }[c]));
+  paragraph.innerHTML = escaped
+    .replace(/^###?\s+(.+)$/gm, '<strong>$1</strong>')
+    .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
+    .replace(/`([^`]+)`/g, '<code>$1</code>')
+    .replace(/\n/g, '<br>');
   messages.appendChild(node);
   messages.scrollTop = messages.scrollHeight;
   if (persist) saveMessage(role, text);

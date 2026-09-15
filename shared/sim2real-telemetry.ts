@@ -47,6 +47,20 @@ export interface Sim2RealRunMetrics {
   cuda?: boolean;
 }
 
+/**
+ * One live training-curve sample parsed from engine stdout while the run is
+ * still executing. The worker bounds the array (≤512 strictly-advancing
+ * points), so persisting it on the run record is cheap and replay-safe.
+ */
+export interface Sim2RealRunProgressPoint {
+  iteration: number;
+  totalIterations: number;
+  meanReward: number;
+  recentSuccess: number;
+  elapsedSeconds?: number;
+  at?: string;
+}
+
 /** Bounded metrics captured for one pinned Task-Pack evaluation envelope. */
 export interface Sim2RealTaskEvaluationEnvelope {
   successRate?: number;
@@ -248,6 +262,12 @@ export interface Sim2RealReplaySummary {
   rewardMean?: number;
   doneCount: number;
   fallCount: number;
+  /**
+   * Distinct board policy sessions observed in lifecycle markers, when any.
+   * Duration and rate are summed per session because the board clock resets
+   * at every session-started marker.
+   */
+  sessionCount?: number;
 }
 
 export interface Sim2RealEvaluationSummary {

@@ -1,0 +1,116 @@
+{
+  "schemaVersion": 1,
+  "id": "goal-navigation-clear-arena",
+  "displayName": "清场目标点导航（真机 Canary 场景）",
+  "adapterId": "generic-differential-drive",
+  "observationAdapterId": "imu-gravity-v1",
+  "actionAdapterId": "diff-drive-vw-v1",
+  "reward": {
+    "progress": 1.0,
+    "collision": -5,
+    "goal": 10,
+    "actionPenalty": -0.01,
+    "dwell": 0.2
+  },
+  "termination": {
+    "goalDistance": 0.15,
+    "timeoutSteps": 200
+  },
+  "workspace": {
+    "bound": 2.0,
+    "obstacles": {
+      "count": 0,
+      "radius": 0.15
+    }
+  },
+  "curriculum": {
+    "initialGoalDistance": [
+      0.8,
+      1.2
+    ],
+    "finalGoalDistance": [
+      1.5,
+      1.9
+    ],
+    "expandFactor": 1.15,
+    "successRateThreshold": 0.7,
+    "lookbackEpisodes": 50
+  },
+  "domainRandomization": {
+    "motorGain": [
+      0.8,
+      1.2
+    ],
+    "lagTauSeconds": [
+      0.05,
+      0.25
+    ],
+    "gyroNoiseStdRadSec": [
+      0.0,
+      0.05
+    ],
+    "odomNoiseStdM": [
+      0.0,
+      0.02
+    ],
+    "angularBiasRadSec": [
+      -0.05,
+      0.05
+    ],
+    "actionLatencySteps": [
+      0,
+      2
+    ],
+    "odomDropoutProb": [
+      0.0,
+      0.05
+    ],
+    "slipScale": [
+      0.8,
+      1.0
+    ],
+    "evalEnvelopes": {
+      "nominal": [
+        1.0,
+        0.1,
+        0.01,
+        0.005,
+        0.0,
+        1,
+        0.0,
+        1.0
+      ],
+      "hard": [
+        0.8,
+        0.25,
+        0.02,
+        0.05,
+        0.05,
+        2,
+        0.05,
+        0.8
+      ]
+    }
+  },
+  "evaluationConfig": {
+    "episodesPerEnvelope": 100,
+    "confidenceLevel": 0.95
+  },
+  "qualityGate": {
+    "minSuccessRate": 0.7,
+    "maxCollisionRate": 0.15,
+    "gateOn": "ciLowerBound"
+  },
+  "evaluation": [
+    "successRate",
+    "collisionRate",
+    "goalDistance",
+    "controlLatency"
+  ],
+  "provenance": {
+    "kind": "virtual-reference-machine",
+    "mock": true,
+    "note": "Empty-arena variant of generic-goal-navigation for the real-OriginBot canary: the imu-gravity-v1 42D observation carries no obstacle signal and the board runtime supplies none either, so obstacle avoidance is structurally out of contract. The deployed scenario is an operator-cleared floor, which this task models exactly; actuator lag/slip/bias domain randomization is unchanged and is what sim2real robustness is actually judged on. Trained in simulation only; real-board acceptance is the low-speed canary itself."
+  },
+  "recommendedEngine": "isaac-sim"
+}

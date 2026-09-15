@@ -136,13 +136,13 @@
     transition: none !important;
   }
 }
-.train-onboarding{margin:14px 0 16px;padding:18px 20px;border:1px solid rgba(255,138,58,.35);border-radius:14px;background:linear-gradient(110deg,rgba(255,138,58,.10),rgba(16,29,39,.88));}
-.submodule-tabs{display:flex;gap:8px;margin:12px 0 14px;padding:5px;border:1px solid #263b47;border-radius:12px;background:#0b151d;overflow:auto}
-.submodule-tab{flex:1;min-width:150px;padding:10px 14px;border:1px solid transparent;border-radius:8px;background:transparent;color:#b9c8d1;text-align:left;font:inherit;cursor:pointer;transition:.18s ease}
-.submodule-tab small{display:block;margin-top:3px;color:#718791;font-size:11px}
-.submodule-tab:hover,.submodule-tab:focus-visible{border-color:#49606c;outline:none;color:#eaf2f4}
-.submodule-tab.is-active{border-color:#ff8a3a;background:rgba(255,138,58,.12);color:#fff}
-.submodule-tab.is-active small{color:#ffc08f}
+.train-onboarding{margin:14px 0 16px;padding:18px 20px;border:1px solid color-mix(in srgb,var(--accent) 35%,transparent);border-radius:14px;background:linear-gradient(110deg,color-mix(in srgb,var(--accent) 10%,transparent),var(--panel));}
+.submodule-tabs{display:flex;gap:8px;margin:12px 0 14px;padding:5px;border:1px solid var(--line-strong);border-radius:12px;background:var(--panel-soft);overflow:auto}
+.submodule-tab{flex:1;min-width:150px;padding:10px 14px;border:1px solid transparent;border-radius:8px;background:transparent;color:var(--muted-strong);text-align:left;font:inherit;cursor:pointer;transition:.18s ease}
+.submodule-tab small{display:block;margin-top:3px;color:var(--muted);font-size:11px}
+.submodule-tab:hover,.submodule-tab:focus-visible{border-color:var(--line-strong);outline:none;color:var(--text)}
+.submodule-tab.is-active{border-color:var(--accent);background:color-mix(in srgb,var(--accent) 12%,transparent);color:var(--text)}
+.submodule-tab.is-active small{color:var(--accent-text)}
 .view-section[data-active-train-module="run"] .contract-fold,.view-section[data-active-train-module="run"] .compute-resources-panel{display:none}
 .view-section[data-active-train-module="contract"] .compute-resources-panel{display:none}
 .view-section[data-active-train-module="resources"] .contract-fold{display:none}
@@ -162,19 +162,26 @@
 .station-layout[data-active-station-module="control"] > [data-station-module="control"],
 .station-layout[data-active-station-module="policy"] > [data-station-module="policy"],
 .station-layout[data-active-station-module="diagnostics"] > [data-station-module="diagnostics"]{display:block}
-.station-control-contract{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;margin:12px 0 14px;padding:10px;border:1px solid rgba(76,112,127,.45);border-radius:10px;background:rgba(8,19,27,.5)}
-.station-control-contract div{min-width:0}.station-control-contract span,.station-control-contract strong{display:block}.station-control-contract span{color:#8299a5;font-size:11px}.station-control-contract strong{margin-top:3px;color:#dbe8ec;font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.station-control-contract{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;margin:12px 0 14px;padding:10px;border:1px solid var(--line-strong);border-radius:10px;background:var(--panel-soft)}
+.station-control-contract div{min-width:0}.station-control-contract span,.station-control-contract strong{display:block}.station-control-contract span{color:var(--muted);font-size:11px}.station-control-contract strong{margin-top:3px;color:var(--text);font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 @media (max-width:720px){.station-control-contract{grid-template-columns:1fr}}
 .view-section[data-active-station-module]:not([data-active-station-module="devices"]) .station-device-manager{display:none}
 .view-section[data-active-station-module="devices"] .station-layout{display:none}
 .view-section[data-active-station-module="devices"] .station-device-manager{display:block}
 @media (max-width:720px){.submodule-tabs{margin-left:-2px;margin-right:-2px}.submodule-tab{min-width:128px;padding:9px 11px}}
-.model-empty-guide{display:flex;flex-direction:column;align-items:flex-start;gap:8px;padding:18px}.model-empty-guide strong{font-size:17px}.model-empty-guide span{color:#9eb0ba;font-size:12px}.model-empty-guide .button{margin-top:4px}
-.train-onboarding-heading{display:flex;align-items:flex-start;justify-content:space-between;gap:16px}.train-onboarding h3{margin:3px 0 0;font-size:20px}.train-onboarding-note{color:#ffc08f;font-size:12px;padding-top:7px}.train-onboarding .eyebrow{color:#ff9a50;font-size:11px;letter-spacing:.12em;text-transform:uppercase}.train-onboarding-steps{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-top:16px}.train-onboarding-step{display:flex;gap:10px;align-items:center;padding:11px 12px;border:1px solid #29404d;border-radius:10px;background:#0d1820}.train-onboarding-step b{display:grid;place-items:center;width:26px;height:26px;border-radius:50%;background:#263b47;color:#b9c8d1}.train-onboarding-step strong,.train-onboarding-step small{display:block}.train-onboarding-step small{margin-top:3px;color:#91a4ae;font-size:11px}.train-onboarding-step.is-current{border-color:#ff8a3a}.train-onboarding-step.is-current b{background:#ff8a3a;color:#111}.train-onboarding-help{margin:13px 0 0;color:#b4c3ca;font-size:12px}.panel-tip{color:#9eb0ba;font-size:11px;font-weight:400}.manifest-panel h2{margin-bottom:2px}
+.model-empty-guide{display:flex;flex-direction:column;align-items:flex-start;gap:8px;padding:18px}.model-empty-guide strong{font-size:17px}.model-empty-guide span{color:var(--muted);font-size:12px}.model-empty-guide .button{margin-top:4px}
+.train-onboarding-heading{display:flex;align-items:flex-start;justify-content:space-between;gap:16px}.train-onboarding h3{margin:3px 0 0;font-size:20px}.train-onboarding-note{color:var(--accent-text);font-size:12px;padding-top:7px}.train-onboarding .eyebrow{color:var(--accent-text);font-size:11px;letter-spacing:.12em;text-transform:uppercase}.train-onboarding-steps{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-top:16px}.train-onboarding-step{display:flex;gap:10px;align-items:center;padding:11px 12px;border:1px solid var(--line);border-radius:10px;background:var(--panel-soft)}.train-onboarding-step b{display:grid;place-items:center;width:26px;height:26px;border-radius:50%;background:var(--panel-raised);color:var(--muted-strong)}.train-onboarding-step strong,.train-onboarding-step small{display:block}.train-onboarding-step small{margin-top:3px;color:var(--muted);font-size:11px}.train-onboarding-step.is-current{border-color:var(--accent)}.train-onboarding-step.is-current b{background:var(--accent);color:var(--panel-raised)}.train-onboarding-help{margin:13px 0 0;color:var(--muted-strong);font-size:12px}.panel-tip{color:var(--muted);font-size:11px;font-weight:400}.manifest-panel h2{margin-bottom:2px}
 @media (max-width:720px){.train-onboarding-steps{grid-template-columns:1fr}.train-onboarding-heading{display:block}.train-onboarding-note{display:block}}
 
-/* Unified workspace refresh: one clear hierarchy across all modules. */
-:root{--surface-1:#101b24;--surface-2:#14232d;--line:#29404d;--accent:#ff8a3a;--muted:#8fa3ad}
+/* Unified workspace refresh: one clear hierarchy across all modules.
+   --surface-1/2 are this layer's own panel tokens: light resolves them to
+   the Aurora panel scale, dark keeps the original navy literals. The old
+   --line/--accent/--muted re-declarations here were dead code in the
+   dark-only shell (shadowed by body-level tokens) and are removed: had
+   they stayed, this late-loading layer would have overridden the operator
+   token block now that all dark tokens resolve at html level. */
+:root{--surface-1:var(--panel);--surface-2:var(--panel-raised)}
+html.theme-dark{--surface-1:#101b24;--surface-2:#14232d}
 .view-section{max-width:1180px;margin:0 auto;padding:28px 32px 64px}
 .section-heading{margin:0 0 18px;border-bottom:1px solid var(--line);padding-bottom:16px}
 .section-heading h2{font-size:26px;letter-spacing:-.02em;margin:0}

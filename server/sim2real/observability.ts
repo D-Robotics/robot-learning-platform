@@ -346,6 +346,18 @@ export type RequestObservabilityOptions = {
   logger: Sim2RealLogger;
   metrics: Sim2RealMetrics;
   now?: () => number;
+  /**
+   * Optional 5xx side channel for external ops-event reporting. The middleware
+   * stays transport-free; the callback owns any network delivery and must
+   * never throw (handler errors would escape the response 'finish' listener).
+   */
+  onServerError?: (input: {
+    method: string;
+    route: string;
+    status: number;
+    requestId?: string;
+    durationMs: number;
+  }) => void;
 };
 
 /**
@@ -378,6 +390,19 @@ export function createRequestObservabilityMiddleware(
         status,
         durationMs,
       });
+      if (status >= 500 && options.onServerError) {
+        try {
+          options.onServerError({
+            method,
+            route,
+            status,
+            requestId: typeof header === 'string' ? header : undefined,
+            durationMs,
+          });
+        } catch {
+          // A reporting hook must never break the finish listener.
+        }
+      }
     });
     next();
   };
@@ -391,7 +416,10 @@ export type Sim2RealObservability = {
 };
 
 export function createSim2RealObservability(
-  options: Sim2RealLoggerOptions & { maxRouteLabels?: number } = {},
+  options: Sim2RealLoggerOptions & {
+    maxRouteLabels?: number;
+    onServerError?: RequestObservabilityOptions['onServerError'];
+  } = {},
 ): Sim2RealObservability {
   const logger = createSim2RealLogger(options);
   const metrics = createSim2RealMetrics({ maxRouteLabels: options.maxRouteLabels });
@@ -402,6 +430,7 @@ export function createSim2RealObservability(
       logger,
       metrics,
       now: options.now,
+      ...(options.onServerError ? { onServerError: options.onServerError } : {}),
     }),
     renderMetrics: () => metrics.renderPrometheus(),
   };

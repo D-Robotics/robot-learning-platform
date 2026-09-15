@@ -575,6 +575,17 @@ async function probeLocalTrainingWorkerUncached(
     if (maxConcurrentJobs !== undefined) result.maxConcurrentJobs = maxConcurrentJobs;
     if (activeJobs !== undefined) result.activeJobs = activeJobs;
     if (queuedJobs !== undefined) result.queuedJobs = queuedJobs;
+    // Engine registry surfaced by the worker's healthz: lets the train UI
+    // show honestly which engines (e.g. MJX contact dynamics) the configured
+    // worker can actually route to, instead of guessing from marketing.
+    if (Array.isArray(payload.engines)) {
+      const engines = payload.engines
+        .filter((item): item is string => typeof item === 'string')
+        .map((item) => item.trim().toLowerCase())
+        .filter((item) => /^[a-z][a-z0-9-]{1,31}$/.test(item))
+        .slice(0, 16);
+      if (engines.length) result.engines = [...new Set(engines)];
+    }
     return result;
   } finally {
     clearTimeout(timeout);

@@ -29,6 +29,24 @@ RDK_SIM2REAL_TRAIN_ARGS_JSON=["/abs/path/to/engines/mjx-adapter/adapter.py"]
 RDK_SIM2REAL_LOCAL_RUNNER_URL=http://127.0.0.1:19091/train
 ```
 
+**双引擎同机注册（推荐，GPU 机标准形态）**：基础 `RDK_SIM2REAL_TRAIN_EXECUTABLE`
+保持 starter 引擎不动，另用 `RDK_SIM2REAL_TRAIN_ENGINES_JSON` 注册 MJX；请求带
+`training.engine="mjx-ppo"` 时路由到 MJX，不带时仍走默认 starter：
+
+```bash
+RDK_SIM2REAL_TRAIN_EXECUTABLE=/usr/bin/python3
+RDK_SIM2REAL_TRAIN_ARGS_JSON=["/abs/path/to/engines/starter-ppo/runner.py"]
+RDK_SIM2REAL_TRAIN_ENGINES_JSON='{"mjx-ppo":{"executable":"/usr/bin/python3","args":["/abs/path/to/engines/mjx-adapter/adapter.py"]}}'
+```
+
+worker `healthz` 会回报 `engines: ["default","mjx-ppo"]`，训练页的引擎选择器据此
+诚实显示 MJX 是否可用；未注册引擎 id 的请求得到 400 `engine_not_registered`，
+绝不静默换引擎训练。
+
+任务包可以声明 `recommendedEngine`：`originbot-physics-navigation`（物理密集）推荐
+`mjx-ppo`，提交未显式选引擎时自动采用；`goal-navigation` 系列保持沉默（运动学
+够用且便宜）。用户/Agent 显式选择永远优先。
+
 工作台「强化学习训练」提交任务后，台账会标注 `训练引擎 mjx-ppo`，运行卡片出现
 「物理 · MuJoCo MJX（接触动力学）」——这是 `metrics.physicsBackend` 一路透传的结果，
 不是前端写死的标签。

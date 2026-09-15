@@ -242,15 +242,28 @@ export function studioLoginInfo(): {
   };
 }
 
+/**
+ * Optional ops-event hook for login attempts. Receives only low-sensitivity
+ * outcome data (method/outcode/upstream status); credentials are never passed.
+ */
+export type StudioLoginAttemptReporter = (input: {
+  method: string;
+  outcome: 'ok' | 'rejected' | 'error';
+  statusCode?: number;
+  errorCode?: string;
+}) => void;
+
 export function createStudioLoginRelayRouter(
   options: {
     auth?: Sim2RealAuthPort;
     fetchImpl?: typeof fetch;
+    onLoginAttempt?: StudioLoginAttemptReporter;
   } = {},
 ): Router {
   const router = Router();
   const auth = options.auth;
   const fetchImpl = options.fetchImpl ?? fetch;
+  const onLoginAttempt = options.onLoginAttempt;
 
   /** GET /api/sso/session — 401/200 with the current cookie identity. */
   router.get('/api/sso/session', (request, response) => {
@@ -331,6 +344,7 @@ export function createStudioLoginRelayRouter(
       }
       const relayed = await relayLoginUpstream(target, forwarded, fetchImpl).catch(() => null);
       if (!relayed) {
+        onLoginAttempt?.({ method, outcome: 'error', errorCode: 'RELAY_UNREACHABLE' });
         relayJson(response, 502, {
           ok: false,
           error: 'SIM2REAL_LOGIN_RELAY_UNREACHABLE',
@@ -346,6 +360,12 @@ export function createStudioLoginRelayRouter(
       if (relayed.status >= 200 && relayed.status < 300 && payload.ok !== true) {
         // Studio returns its own JSON error shape (409 wrong password, etc.).
         // Preserve the status so the frontend can show the real reason.
+        onLoginAttempt?.({
+          method,
+          outcome: 'rejected',
+          statusCode: relayed.status,
+          errorCode: safeRelayErrorCode(payload.error, 'SIM2REAL_LOGIN_REJECTED'),
+        });
         relayJson(response, relayed.status >= 400 ? relayed.status : 409, {
           ok: false,
           error: safeRelayErrorCode(payload.error, 'SIM2REAL_LOGIN_REJECTED'),
@@ -354,6 +374,12 @@ export function createStudioLoginRelayRouter(
         return;
       }
       if (relayed.status >= 400) {
+        onLoginAttempt?.({
+          method,
+          outcome: 'rejected',
+          statusCode: relayed.status,
+          errorCode: safeRelayErrorCode(payload.error, 'SIM2REAL_LOGIN_REJECTED'),
+        });
         relayJson(response, relayed.status, {
           ok: false,
           error: safeRelayErrorCode(payload.error, 'SIM2REAL_LOGIN_REJECTED'),
@@ -362,6 +388,7 @@ export function createStudioLoginRelayRouter(
         return;
       }
       if (!hasUsableCookie(relayed.setCookie)) {
+        onLoginAttempt?.({ method, outcome: 'error', errorCode: 'COOKIE_MISSING' });
         relayJson(response, 502, {
           ok: false,
           error: 'SIM2REAL_LOGIN_COOKIE_MISSING',
@@ -378,6 +405,7 @@ export function createStudioLoginRelayRouter(
         ? decodeStudioWebCloudCookie(parseCookieValueFromSetCookie(adoptedCookie))
         : null;
       if (!decoded) {
+        onLoginAttempt?.({ method, outcome: 'error', errorCode: 'COOKIE_INVALID' });
         relayJson(response, 502, {
           ok: false,
           error: 'SIM2REAL_LOGIN_COOKIE_INVALID',
@@ -385,6 +413,7 @@ export function createStudioLoginRelayRouter(
         });
         return;
       }
+      onLoginAttempt?.({ method, outcome: 'ok', statusCode: 200 });
       relayJson(response, 200, {
         ok: true,
         identity: {

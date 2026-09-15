@@ -689,8 +689,13 @@ describe('stateClass / statusLabel', () => {
     for (const status of ['ready', 'completed', 'success']) {
       expect(core.stateClass(status)).toBe('state-success');
     }
-    for (const status of ['blocked', 'queued', 'partial', 'running', 'planned']) {
+    for (const status of ['blocked', 'partial', 'planned']) {
       expect(core.stateClass(status)).toBe('state-partial');
+    }
+    // Active work pulses in the UI: running and queued are their own class
+    // so they never collapse into the generic "waiting" partial look.
+    for (const status of ['running', 'queued']) {
+      expect(core.stateClass(status)).toBe('state-running');
     }
     for (const status of ['failed', 'error']) {
       expect(core.stateClass(status)).toBe('state-error');
