@@ -378,6 +378,20 @@ describe('Sim2Real workbench DOM behavior', () => {
           },
           createdAt: '2026-09-14T00:00:00.000Z',
         },
+        {
+          id: 'starter-run-1',
+          modelId: selectedModel.id,
+          backend: 'local',
+          status: 'completed',
+          summary: 'starter smoke run',
+          mock: false,
+          metrics: {
+            contractValid: true,
+            observationSize: 61,
+            actionSize: 14,
+          },
+          createdAt: '2026-09-13T00:00:00.000Z',
+        },
       ],
     });
     // train view hosts the run-progress card (the chip) and the history rows
@@ -390,11 +404,28 @@ describe('Sim2Real workbench DOM behavior', () => {
     const physicsChip = meta?.querySelector('.physics-chip');
     expect(physicsChip?.textContent).toContain('物理 · MuJoCo MJX');
 
-    const row = window.document.querySelector<HTMLButtonElement>('.history-row');
+    // only the engine-labeled run carries a row chip; the starter run and the
+    // model artifact row stay clean
+    const rows = Array.from(window.document.querySelectorAll('.history-row'));
+    expect(rows.length).toBeGreaterThanOrEqual(2);
+    const chips = rows.map((r) => r.querySelector('.history-physics')?.textContent || null);
+    expect(chips.filter((chip) => chip != null)).toEqual(['物理 · MJX']);
+
+    // typing the backend token filters the ledger to the engine's runs
+    const search = window.document.querySelector<HTMLInputElement>('#record-search');
+    search?.dispatchEvent(new window.Event('input', { bubbles: true }));
+    if (search) search.value = 'mjx';
+    search?.dispatchEvent(new window.Event('input', { bubbles: true }));
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    const filtered = Array.from(window.document.querySelectorAll('.history-row'));
+    expect(filtered).toHaveLength(1);
+    expect(filtered[0].textContent).toContain('mjx smoke run');
+
+    const row = filtered[0] as HTMLButtonElement;
     // the row itself tells engines apart without opening the dialog
-    const rowPhysics = row?.querySelector('.history-physics');
+    const rowPhysics = row.querySelector('.history-physics');
     expect(rowPhysics?.textContent).toContain('物理 · MJX');
-    row?.click();
+    row.click();
     const dialog = window.document.querySelector<HTMLDialogElement>('#run-detail-dialog');
     expect(dialog?.hasAttribute('open')).toBe(true);
     const body = window.document.querySelector('#run-detail-body');
