@@ -137,6 +137,23 @@ app = FastAPI(
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
 
+@app.middleware("http")
+async def content_security_policy(request: Request, call_next):
+    """Second layer behind the escaping fix for registry-supplied names.
+
+    The page only loads its own module script, its own stylesheet, same-origin
+    API responses and rendered frames as blob: URLs, so 'self' plus blob:
+    images covers everything it legitimately uses. The browser rejects any
+    script that a future injection regression would try to run.
+    """
+    response = await call_next(request)
+    response.headers["Content-Security-Policy"] = (
+        "default-src 'self'; img-src 'self' blob:; "
+        "object-src 'none'; base-uri 'self'; frame-ancestors 'self'"
+    )
+    return response
+
+
 @app.exception_handler(RequestValidationError)
 async def request_validation_handler(_request: Request, exc: RequestValidationError) -> JSONResponse:
     """Return finite, serializable 422 details even for NaN/Inf JSON input.
