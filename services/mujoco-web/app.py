@@ -151,6 +151,14 @@ async def content_security_policy(request: Request, call_next):
         "default-src 'self'; img-src 'self' blob:; "
         "object-src 'none'; base-uri 'self'; frame-ancestors 'self'"
     )
+    # The Nginx route adds X-Content-Type-Options and Referrer-Policy at the
+    # proxy layer; the service sets the same baseline itself so direct access
+    # (dev, localhost port-forward) matches the hardened proxy responses.
+    # Mirrors studioSecurityHeadersMiddleware in the sim2real server.
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["Referrer-Policy"] = "same-origin"
+    response.headers["X-Frame-Options"] = "SAMEORIGIN"
+    response.headers["Permissions-Policy"] = "camera=(), microphone=(), geolocation=()"
     return response
 
 
