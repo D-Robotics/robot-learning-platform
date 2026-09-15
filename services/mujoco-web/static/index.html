@@ -1,65 +1,70 @@
-<!doctype html>
+<!DOCTYPE html>
 <html lang="zh-CN">
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>MuJoCo Web Playground</title>
     <link rel="stylesheet" href="./static/styles.css" />
+    <script src="./static/app.js" type="module"></script>
   </head>
   <body>
     <main class="shell">
       <header class="topbar">
         <div>
-          <p class="eyebrow">RDK STUDIO · PHYSICS LAB</p>
-          <h1>MuJoCo Playground</h1>
-          <p class="subtitle">在浏览器里直接运行 MuJoCo 物理仿真，服务端计算、实时渲染。</p>
+          <p class="eyebrow">RDK STUDIO · MUJOCO</p>
+          <h1>Playground</h1>
+          <p class="subtitle" data-i18n="subtitle">在浏览器里直接运行 MuJoCo 物理仿真，服务端计算、实时渲染。</p>
         </div>
-        <div class="engine-badge"><span class="pulse"></span> MuJoCo <span id="engine-version">loading</span></div>
+        <div class="engine-badge"><span class="pulse"></span> MuJoCo <span id="engine-version">loading</span>
+          <select id="lang-select" aria-label="Language / 语言">
+            <option value="zh">中文</option>
+            <option value="en">English</option>
+          </select>
+        </div>
       </header>
 
       <section class="workspace">
         <div class="stage-card">
           <div class="stage-head">
             <div>
-              <span class="label">LIVE SIMULATION</span>
-              <h2 id="model-title">正在载入模型…</h2>
+              <span class="label" data-i18n="liveSimulation">实时仿真</span>
+              <h2 id="model-title" data-i18n="loadingModel">正在载入模型…</h2>
             </div>
-            <div class="status" id="status">连接中</div>
+            <div class="status" id="status" data-i18n="connecting">连接中</div>
           </div>
           <div class="canvas-wrap">
             <img id="frame" alt="MuJoCo simulation frame" />
             <div class="frame-overlay"><span id="sim-time">t = 0.000 s</span><span>640 × 480</span></div>
           </div>
           <div class="transport">
-            <button class="primary" id="run">▶ 运行</button>
-            <button id="step">单步</button>
-            <button id="reset">重置</button>
-            <label class="speed">速度 <input id="speed" type="range" min="1" max="8" value="3" /><span id="speed-value">3×</span></label>
+            <button class="primary" id="run" data-i18n="run">▶ 运行</button>
+            <button id="step" data-i18n="step">单步</button>
+            <button id="reset" data-i18n="reset">重置</button>
+            <label class="speed"><span data-i18n="speed">速度</span> <input id="speed" type="range" min="1" max="8" value="3" /><span id="speed-value">3×</span></label>
           </div>
         </div>
 
         <aside class="control-card">
           <div class="control-section">
-            <span class="label">MODEL</span>
+            <span class="label" data-i18n="model">模型</span>
             <select id="model-select"></select>
             <p id="model-description" class="muted"></p>
             <p id="model-source" class="model-source">—</p>
           </div>
           <div class="control-section">
-            <div class="section-title"><span class="label">ACTUATORS</span><span class="muted">-1 … +1</span></div>
-            <div id="actuators" class="actuators"><p class="muted">载入控制器…</p></div>
+            <div class="section-title"><span class="label" data-i18n="actuators">执行器</span><span class="muted" data-i18n="actuatorRange">-1 … +1</span></div>
+            <div id="actuators" class="actuators"><p class="muted" data-i18n="loadingControls">载入控制器…</p></div>
           </div>
           <div class="readouts">
-            <div><span>物理时间</span><strong id="readout-time">0.000 s</strong></div>
-            <div><span>关节自由度</span><strong id="readout-dof">—</strong></div>
-            <div><span>会话</span><strong id="readout-session">—</strong></div>
+            <div><span data-i18n="physicsTime">物理时间</span><strong id="readout-time">0.000 s</strong></div>
+            <div><span data-i18n="dof">关节自由度</span><strong id="readout-dof">—</strong></div>
+            <div><span data-i18n="session">会话</span><strong id="readout-session">—</strong></div>
           </div>
-          <p class="safety-note">仅运行内置与注册表受审模型 · 不执行上传的 XML、Python 或 shell 命令</p>
+          <p class="safety-note" data-i18n="safetyNote">仅运行内置与注册表受审模型 · 不执行上传的 XML、Python 或 shell 命令</p>
         </aside>
       </section>
 
-      <footer>MuJoCo server playground · 适合教学、控制器原型和动力学快速验证</footer>
+      <footer data-i18n="footer">MuJoCo 仿真演练场 · 适合教学、控制器原型和动力学快速验证</footer>
     </main>
-    <script src="./static/app.js" type="module"></script>
   </body>
 </html>

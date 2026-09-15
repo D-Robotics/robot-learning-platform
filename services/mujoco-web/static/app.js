@@ -1,3 +1,5 @@
+import { LANGUAGES, t, builtinModelCopy } from "./lang.js";
+
 const $ = (selector) => document.querySelector(selector);
 
 let session = null;
@@ -7,6 +9,7 @@ let frameBusy = false;
 let controls = [];
 let frameObjectUrl = null;
 let pageUnloading = false;
+let lang = "zh";
 
 async function request(path, options = {}) {
   const response = await fetch(`./api/${path}`, {
@@ -33,6 +36,20 @@ async function closeSession(id = session?.id) {
 function setStatus(text, error = false) {
   $("#status").textContent = text;
   $("#status").style.color = error ? "#ff8e8e" : "var(--green)";
+}
+
+function applyLang() {
+  document.documentElement.lang = lang === "zh" ? "zh-CN" : "en";
+  document.querySelectorAll("[data-i18n]").forEach((element) => {
+    const value = t(lang, element.dataset.i18n);
+    if (value !== undefined) element.textContent = value;
+  });
+  $("#run").textContent = running ? t(lang, "pause") : t(lang, "run");
+  // Re-label the model picker and the open model's copy, then close the loop
+  // for the live status area so a language flip never mixes scripts.
+  renderModelOptions();
+  if (session) renderModelCopy(session.model);
+  if (!session && !$("#status").textContent) setStatus(t(lang, "connecting"));
 }
 
 function renderActuators(model) {
@@ -109,11 +126,42 @@ async function tick() {
   requestAnimationFrame(tick);
 }
 
+function renderModelCopy(model) {
+  // Builtin model names/descriptions ship in English in the data layer;
+  // map them per language here. Registry entries keep their deployer text.
+  const builtin = model.source !== "registry" ? builtinModelCopy(lang, model.key) : null;
+  $("#model-title").textContent = builtin ? builtin.name : model.name;
+  $("#model-description").textContent = builtin ? builtin.description : model.description;
+  $("#model-source").textContent =
+    model.source === "registry" ? t(lang, "modelSourceRegistry") : t(lang, "modelSourceBuiltin");
+  $("#model-source").classList.toggle("registry", model.source === "registry");
+}
+
+function renderModelOptions() {
+  const select = $("#model-select");
+  const previous = select.value;
+  select.replaceChildren();
+  modelCatalog.forEach((model) => {
+    const option = document.createElement("option");
+    option.value = model.key;
+    const builtin = model.source !== "registry" ? builtinModelCopy(lang, model.key) : null;
+    // Registry entries are deployer-supplied; marking them keeps the
+    // provenance visible before a session is opened.
+    option.textContent = builtin
+      ? builtin.name
+      : model.source === "registry"
+        ? `${model.name}${t(lang, "registrySuffix")}`
+        : model.name;
+    select.append(option);
+  });
+  if (previous) select.value = previous;
+}
+
 async function openModel(key) {
   running = false;
   $("#run").classList.remove("running");
-  $("#run").textContent = "▶ 运行";
-  setStatus("创建会话…");
+  $("#run").textContent = t(lang, "run");
+  setStatus(t(lang, "creatingSession"));
   const previousSessionId = session?.id;
   session = null;
   if (previousSessionId) await closeSession(previousSessionId);
@@ -123,21 +171,17 @@ async function openModel(key) {
     session = null;
     return;
   }
-  $("#model-title").textContent = session.model.name;
-  $("#model-description").textContent = session.model.description;
-  $("#model-source").textContent =
-    session.model.source === "registry" ? "部署方注册表 · 受审模型" : "平台内置模型";
-  $("#model-source").classList.toggle("registry", session.model.source === "registry");
+  renderModelCopy(session.model);
   renderActuators(session.model);
   updateReadouts(session);
   await refreshFrame();
-  setStatus("就绪");
+  setStatus(t(lang, "ready"));
 }
 
 $("#run").addEventListener("click", () => {
   running = !running;
   $("#run").classList.toggle("running", running);
-  $("#run").textContent = running ? "Ⅱ 暂停" : "▶ 运行";
+  $("#run").textContent = running ? t(lang, "pause") : t(lang, "run");
   if (running) tick();
 });
 
@@ -154,32 +198,33 @@ $("#reset").addEventListener("click", async () => {
   if (!session) return;
   await request(`sessions/${session.id}/reset`, { method: "POST" });
   await refreshFrame();
-  setStatus("已重置");
+  setStatus(t(lang, "resetDone"));
 });
 
 $("#speed").addEventListener("input", () => { $("#speed-value").textContent = `${$("#speed").value}×`; });
 $("#model-select").addEventListener("change", (event) => openModel(event.target.value).catch((error) => setStatus(error.message, true)));
 
+$("#lang-select").addEventListener("change", (event) => {
+  lang = event.target.value;
+  localStorage.setItem("mujoco-web-lang", lang);
+  applyLang();
+});
+
 async function boot() {
+  const saved = localStorage.getItem("mujoco-web-lang");
+  if (saved && LANGUAGES.includes(saved)) lang = saved;
+  $("#lang-select").value = lang;
+  applyLang();
   const [health, catalog] = await Promise.all([fetch("./healthz").then((response) => response.json()), request("models")]);
   $("#engine-version").textContent = `v${health.mujoco_version}`;
   modelCatalog = catalog.models;
-  const select = $("#model-select");
-  modelCatalog.forEach((model) => {
-    const option = document.createElement("option");
-    option.value = model.key;
-    // Registry entries are deployer-supplied; marking them keeps the
-    // provenance visible before a session is opened.
-    option.textContent =
-      model.source === "registry" ? `${model.name} · 部署方` : model.name;
-    select.append(option);
-  });
+  renderModelOptions();
   await openModel(modelCatalog[0].key);
 }
 
 boot().catch((error) => {
   setStatus(error.message, true);
-  $("#model-title").textContent = "无法连接 MuJoCo 服务";
+  $("#model-title").textContent = t(lang, "cannotConnect");
 });
 
 window.addEventListener("beforeunload", () => {
