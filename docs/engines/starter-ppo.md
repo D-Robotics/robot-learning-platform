@@ -6,6 +6,7 @@
 | --- | --- | --- |
 | `engines/starter-ppo` | numpy + torch（+ onnx 可选导出） | **开箱即用的真 PPO/SAC**：numpy 向量化 12 关节倒立摆物理 + torch PPO 或 SAC（**自动检测 CUDA**）+ ONNX 导出 + 遥测/baseline 导出 |
 | `engines/mjlab-rsl-rl-adapter` | rsl-rl-lib==2.2.3（mjlab 可选） | 生产训练栈适配：kinematic 后端已可用真实 rsl_rl `OnPolicyRunner` 训练；mjlab 物理引擎为显式接入点 |
+| `engines/mjx-adapter` | jax + mujoco(含 `mujoco.mjx`) + optax + onnx | 真 MuJoCo 接触动力学（MJX 批量物理 + 纯 JAX PPO，无 flax/brax/torch 依赖）；本机 CPU 跑真路径，见 [`mjx-adapter.md`](mjx-adapter.md) |
 
 ## 算法选择：`training.algorithm`
 
@@ -88,5 +89,6 @@ npm run dev:sim2real
 ## 边界（诚实声明）
 
 - `starter-ppo` 的物理是 numpy 二阶近似倒立摆链，不是 MicroDuck 全身动力学；它证明的是**训练管线、契约流转、制品导出和评测闭环都是真的**。
+- 需要真 MuJoCo 接触动力学时用 [`engines/mjx-adapter`](mjx-adapter.md)（纯 JAX，CPU 可跑真路径，台账标注 `physicsBackend=mjx`）。
 - `deployable` 永远为 `false`：上板需要 X5 编译制品（`.bin`/`.hbm`）+ 板端只读预检，平台会在预检处强制拦截。
 - 大规模训练（万级并行、域随机化、电机模型）请使用 `mjlab-rsl-rl-adapter` + GPU。

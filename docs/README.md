@@ -28,6 +28,7 @@
 | 文档 | 用途 |
 | --- | --- |
 | [`engines/starter-ppo.md`](engines/starter-ppo.md) | CPU 真实 PPO/SAC 训练与 ONNX 导出 |
+| [`engines/mjx-adapter.md`](engines/mjx-adapter.md) | MJX 引擎：纯 JAX PPO + 真 MuJoCo 接触动力学 |
 | [`task-pack-training.md`](task-pack-training.md) | 声明式 task-pack 训练与质量门 |
 | [`gpu-runner.md`](gpu-runner.md) | 独立 GPU 机器上的训练 runner 部署 |
 | [`sim2real-plugins.md`](sim2real-plugins.md) | 事件扩展层：实验追踪、对象存储、通知、硬件适配 |

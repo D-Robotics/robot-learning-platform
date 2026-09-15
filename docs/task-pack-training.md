@@ -27,6 +27,12 @@ policy.onnx + eval-report.json（含质量门裁决）+ telemetry.jsonl
 42D 布局的**机体坐标系目标差**（slots 8–10）是可学习的必要条件：世界系差量不含
 朝向信息，策略无从转向。真实硬件上该量由 odom 位姿 + 目标点旋转得到。
 
+任务包是**引擎无关**的：`engines/starter-ppo/runner.py`（运动学）与
+`engines/mjx-adapter/adapter.py`（MuJoCo 接触动力学，纯 JAX PPO）消费同一份
+pack，DR/奖励/终止/课程语义 1:1 相同，只有物理保真度不同——台账用
+`metrics.physicsBackend`（`starter-kinematic` / `mjx`）如实区分，质量门跨引擎可比。
+MJX 引擎的物理差异与诚实边界见 [`engines/mjx-adapter.md`](engines/mjx-adapter.md)。
+
 ## 观测布局与板端运行时对齐
 
 `board-policy-runtime.py` 按契约维度选择映射：

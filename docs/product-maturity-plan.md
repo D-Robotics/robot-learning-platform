@@ -15,7 +15,7 @@ RDK Robot Learning Platform 是面向 RDK 机器人产品的策略研发与安�
 | 能力类别 | 成熟同类的强项 | 本平台当前取舍 | 需要补齐的差距 |
 | --- | --- | --- | --- |
 | 实验、数据和制品管理 | W&B Models、MLflow 在实验追踪、数据/制品版本、血缘、协作和 Registry 生态上成熟 | 已有 Project → Dataset → Run → Artifact → Evaluation → Deployment 一等血缘、不可变发布和审计 | PostgreSQL、对象存储、搜索/协作、跨团队权限和大规模查询 |
-| 机器人仿真与训练 | NVIDIA Isaac Lab 侧重高保真 GPU 仿真、多 GPU 训练和丰富任务/机型生态 | 侧重契约驱动、可复核 Task-Pack、CPU starter 和可替换训练适配器 | 高保真动力学、GPU 集群编排、更多任务和真实 sim-to-real 复现 |
+| 机器人仿真与训练 | NVIDIA Isaac Lab 侧重高保真 GPU 仿真、多 GPU 训练和丰富任务/机型生态 | 侧重契约驱动、可复核 Task-Pack、CPU starter 和可替换训练适配器；已含 MJX 引擎（真 MuJoCo 接触动力学 + 纯 JAX PPO，CPU 可验证、GPU 放大吞吐）与 mujoco-web 部署方模型注册表 | 物理级域随机化等高保真动力学、GPU 集群编排、更多任务和真实 sim-to-real 复现 |
 | 真实机器人数据与策略部署 | Hugging Face LeRobot 侧重硬件无关控制、遥操作、标准化数据集和 rollout 工具 | 侧重 RDK 板型契约、attested telemetry、release gate、只读预检和人工审批 | 更广的传感器/机器人生态、视频数据管线、策略社区和一键 rollout |
 | 车队与 OTA | AWS 当前推荐的 Greengrass v2 体系侧重设备注册、应用包、OTA job、状态回报和监控 | 只负责单次发布计划的证据与安全边界，物理执行留给 BoardAgent | 设备编组、OTA、灰度比例、自动回滚、跨地域运维 |
 | 机器人安全交付 | 通用 MLOps 产品通常把硬件急停、板型兼容和执行前证据留给外部系统 | 这是本平台的差异化重点：契约校验、attestation、遥测新鲜度、证据门、只读 preflight、审批和 fail-closed | 真实多机型现场证据、硬件签名/安全启动、时间盒与回滚执行器 |
