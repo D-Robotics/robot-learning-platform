@@ -42,7 +42,11 @@ function renderActuators(model) {
   model.actuators.forEach((actuator, index) => {
     const row = document.createElement("div");
     row.className = "actuator-row";
-    row.innerHTML = `<div class="actuator-label"><span>${actuator.name}</span><output>0.00</output></div>`;
+    // Actuator names reach this page from deployer registry entries; they are
+    // plain text here, never HTML (registry validation does not restrict the
+    // character set, and the page is served without a CSP header).
+    row.innerHTML = `<div class="actuator-label"><span></span><output>0.00</output></div>`;
+    row.querySelector(".actuator-label span").textContent = actuator.name;
     const input = document.createElement("input");
     input.type = "range";
     input.min = actuator.min;
