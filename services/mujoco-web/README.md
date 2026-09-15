@@ -127,7 +127,11 @@ through a network upload — the directory itself is the reviewed whitelist.
 Every entry is shape-validated **and compiled with real MuJoCo at service
 startup**; an invalid entry (bad MJCF, actuator-count mismatch with
 `actuator_names`, a key colliding with a builtin) makes the process refuse
-to start instead of serving a broken model. Valid entries appear in
+to start instead of serving a broken model. The registry is read **once at
+startup** — there is no hot reload, by design: after adding or editing an
+entry, restart the service (dev: restart uvicorn; production: `systemctl
+restart mujoco-web.service`) so the fail-closed compile checks run again.
+Valid entries appear in
 `/api/models` and the browser model dropdown automatically, labeled
 `source: "registry"` (builtin models answer `source: "builtin"`). CI covers
 the same checks through `npm run verify:mujoco-models` (SKIP without
