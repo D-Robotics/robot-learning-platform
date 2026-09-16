@@ -181,6 +181,8 @@ async function boot(
     artifacts?: unknown[];
     evaluations?: unknown[];
     overviewDeployments?: unknown[];
+    /** Frames the replay endpoint returns; drives the aligned camera frame tests. */
+    replayFrames?: unknown[];
   } = {},
 ) {
   const dom = new JSDOM(html, {
@@ -280,6 +282,12 @@ async function boot(
       else if (url.endsWith('/datasets')) payload = { ok: true, datasets: [] };
       else if (url.includes('/models/model-1')) {
         payload = { ok: true, model: model(), compatibility: [] };
+      } else if (url.includes('/replay') && options.replayFrames) {
+        payload = {
+          ok: true,
+          frames: options.replayFrames,
+          replay: { sampleCount: options.replayFrames.length },
+        };
       } else payload = { ok: true };
       return new Response(JSON.stringify(payload), {
         status: 200,
@@ -335,6 +343,103 @@ describe('Sim2Real workbench DOM behavior', () => {
     expect(
       window.document.querySelector<HTMLElement>('[data-view-section="overview"]')?.hidden,
     ).toBe(true);
+    expect(errors).toEqual([]);
+  });
+
+  it('shows the nearest aligned camera frame and says when it is not the sampled one', async () => {
+    // The board spools frames sparsely (one every RDK_SIM2REAL_FRAME_STRIDE
+    // samples), so most replay positions have no frame of their own. The player
+    // must still show a picture, and must say which frame it is showing: a
+    // nearby image presented as the current sample would be a quiet factual
+    // error about what the policy actually observed.
+    const cameraFrame = {
+      encoding: 'rgb8',
+      width: 2,
+      height: 2,
+      channels: 3,
+      // 12 bytes: four RGB pixels.
+      data: Buffer.from([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]).toString('base64'),
+    };
+    const frames = [
+      { t: 0.1, observation: [1], cameraFrame },
+      { t: 0.2, observation: [2] },
+      { t: 0.3, observation: [3] },
+      { t: 0.8, observation: [4], cameraFrame },
+      { t: 0.9, observation: [5] },
+    ];
+    const { window, errors } = await boot({ replayFrames: frames });
+
+    const drawn: Uint8ClampedArray[] = [];
+    Object.defineProperty(window.HTMLCanvasElement.prototype, 'getContext', {
+      configurable: true,
+      value() {
+        return {
+          createImageData: (width: number, height: number) => ({
+            width,
+            height,
+            data: new Uint8ClampedArray(width * height * 4),
+          }),
+          putImageData: (image: { data: Uint8ClampedArray }) => drawn.push(image.data),
+          clearRect: () => undefined,
+        };
+      },
+    });
+
+    window.document.querySelector<HTMLButtonElement>('#replay-load-button')?.click();
+    await new Promise((resolve) => setTimeout(resolve, 30));
+
+    const figure = window.document.querySelector<HTMLElement>('#replay-camera');
+    const note = window.document.querySelector<HTMLElement>('#replay-camera-note');
+    // Index 0 is itself a framed sample: it must read as the sample's own frame.
+    expect(figure?.hidden).toBe(false);
+    expect(note?.textContent).toContain('本采样点');
+    expect(note?.textContent).toContain('2×2');
+    expect(drawn.length).toBeGreaterThan(0);
+    // The decoder must map the flat RGB payload onto RGBA, not copy it verbatim.
+    const firstDraw = drawn[drawn.length - 1];
+    expect(Array.from(firstDraw.slice(0, 4))).toEqual([1, 2, 3, 255]);
+    expect(Array.from(firstDraw.slice(4, 8))).toEqual([4, 5, 6, 255]);
+
+    // Index 2 has no frame; index 0 is nearer (2 back) than index 3 (1 forward),
+    // so the forward one wins and the note must not claim it is the sample.
+    const seek = window.document.querySelector<HTMLInputElement>('#replay-seek');
+    if (seek) {
+      seek.value = '2';
+      seek.dispatchEvent(new window.Event('input', { bubbles: true }));
+    }
+    expect(note?.textContent).toContain('最近帧');
+    expect(note?.textContent).toContain('非本采样点');
+    expect(note?.textContent).toContain('t=0.80s');
+    expect(note?.textContent).toContain('0.50s');
+    expect(errors).toEqual([]);
+
+    // Index 1 is one step from either side, and the at-or-before frame wins the
+    // tie so scrubbing backwards stays stable.
+    if (seek) {
+      seek.value = '1';
+      seek.dispatchEvent(new window.Event('input', { bubbles: true }));
+    }
+    expect(note?.textContent).toContain('t=0.10s');
+    expect(errors).toEqual([]);
+  });
+
+  it('stays neutral for a run whose samples carry no camera frame at all', async () => {
+    // Every vector-only run looks like this, so it is the common case. It must
+    // not show an empty canvas, which could be read as a real observation.
+    const { window, errors } = await boot({
+      replayFrames: [
+        { t: 0.1, observation: [1] },
+        { t: 0.2, observation: [2] },
+      ],
+    });
+
+    window.document.querySelector<HTMLButtonElement>('#replay-load-button')?.click();
+    await new Promise((resolve) => setTimeout(resolve, 30));
+
+    const figure = window.document.querySelector<HTMLElement>('#replay-camera');
+    const note = window.document.querySelector<HTMLElement>('#replay-camera-note');
+    expect(figure?.hidden).toBe(true);
+    expect(note?.textContent).toContain('没有对齐的相机帧');
     expect(errors).toEqual([]);
   });
 

@@ -4473,20 +4473,67 @@ function renderReplayPlayer() {
   renderReplayCameraFrame(frame);
 }
 
-// Aligned camera frame for the current replay frame.
+// Indices of the replay frames that actually carry a camera frame.
+//
+// The board spools frames sparsely (one every `RDK_SIM2REAL_FRAME_STRIDE`
+// samples, ~1 Hz at the default) while samples arrive at control rate, so only a
+// fraction of the timeline has a frame of its own. Showing nothing for the rest
+// would make scrubbing look broken, so the nearest frame is shown instead - and
+// said to be the nearest one. Memoised because the index would otherwise be
+// rebuilt on every scrub tick.
+//
+// The run id is part of the key on purpose: `state.replay` is reset in place on a
+// few paths, so a reload of the SAME run can leave the array identity comparison
+// matching while the contents were emptied. Keying on the identity alone would
+// then serve a stale index and show nothing.
+let replayFrameIndex = { source: null, runId: '', indices: [] };
+function replayFrameIndices(frames) {
+  const runId = state.replay.runId;
+  if (replayFrameIndex.source === frames && replayFrameIndex.runId === runId) {
+    return replayFrameIndex.indices;
+  }
+  const indices = [];
+  for (let index = 0; index < frames.length; index += 1) {
+    if (frames[index]?.cameraFrame) indices.push(index);
+  }
+  replayFrameIndex = { source: frames, runId, indices };
+  return indices;
+}
+
+/** Frames carry their own decoded timestamp; this is the scrub position. */
+function replayFrameTime(frame, index) {
+  const value = Number(frame?.t);
+  return Number.isFinite(value) ? value : index;
+}
+
+/** Nearest frame carrying a camera frame: at-or-before, else the first after. */
+function nearestCameraFrameIndex(frames, index) {
+  const indices = replayFrameIndices(frames);
+  if (!indices.length) return -1;
+  const after = indices.findIndex((candidate) => candidate > index);
+  if (after === -1) return indices[indices.length - 1];
+  if (after === 0) return indices[0];
+  const before = indices[after - 1];
+  const next = indices[after];
+  return index - before <= next - index ? before : next;
+}
+
+// Aligned camera frame for the current replay position.
 //
 // A frame is the only way to see what a vision policy actually observed, so it
-// is rendered from the payload itself and never synthesised: a run without
-// frames (every vector-only run) shows a neutral "no aligned camera frame" note
-// rather than an empty or placeholder image that could be mistaken for a real
-// observation. Nothing is guessed about the layout either - the declared
-// channels decide how the flat pixel list is read.
+// is rendered from the payload itself and never synthesised. Nothing is guessed
+// about the layout either - the declared channels decide how the flat pixel list
+// is read. When the displayed frame is not the sample under the playhead, the
+// note says so and names the frame's own timestamp, because a nearby image read
+// as the current one would be a quiet factual error about what the policy saw.
 function renderReplayCameraFrame(frame) {
   const figure = $('replay-camera');
   const canvas = $('replay-camera-canvas');
   const note = $('replay-camera-note');
   if (!figure || !canvas || !note) return;
-  const camera = frame?.cameraFrame;
+  const frames = state.replay.frames;
+  const sourceIndex = frames.length ? nearestCameraFrameIndex(frames, state.replay.index) : -1;
+  const camera = sourceIndex >= 0 ? frames[sourceIndex]?.cameraFrame : null;
   if (!camera) {
     figure.hidden = true;
     note.textContent = '该运行没有对齐的相机帧（向量观测回放）。';
@@ -4518,7 +4565,15 @@ function renderReplayCameraFrame(frame) {
       image.data[target + 3] = 255;
     }
     context.putImageData(image, 0, 0);
-    note.textContent = `相机帧 ${width}×${height} · ${channels === 1 ? 'mono8' : camera.encoding} · 第 ${state.replay.index + 1} 帧`;
+    const shape = `${width}×${height} · ${channels === 1 ? 'mono8' : camera.encoding}`;
+    if (sourceIndex === state.replay.index) {
+      note.textContent = `相机帧 ${shape} · 第 ${sourceIndex + 1} 帧（本采样点）`;
+    } else {
+      const sourceTime = replayFrameTime(frames[sourceIndex], sourceIndex);
+      const hereTime = replayFrameTime(frame, state.replay.index);
+      const delta = Math.abs(hereTime - sourceTime);
+      note.textContent = `相机帧 ${shape} · 最近帧 t=${formatTelemetrySeconds(sourceTime)}（与当前位置相差 ${delta.toFixed(2)}s，非本采样点）`;
+    }
   } catch {
     // A frame that fails to decode is reported as unusable instead of leaving
     // the previous frame on screen as if it belonged to this sample.
@@ -4526,7 +4581,6 @@ function renderReplayCameraFrame(frame) {
     note.textContent = '相机帧数据无法解码，已隐藏以免误读。';
   }
 }
-
 function sendReplayFrame() {
   const frame = state.replay.frames[state.replay.index];
   if (!frame) return;
