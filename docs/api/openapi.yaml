@@ -110,6 +110,24 @@ paths:
                 required: [ok]
                 properties:
                   ok: { const: true }
+  /api/v1/duck/task-packs/{taskId}/failure-cases:
+    get:
+      tags: [workspace]
+      summary: Read the public seed failure-case pack for a task pack
+      description: >
+        Public, immutable seed assets for the first task-pack flywheel. Only
+        goal-navigation-clear-arena is served today; the route is
+        unauthenticated so demos can cite it without credentials.
+      operationId: getTaskPackFailureCases
+      parameters:
+        - in: path
+          name: taskId
+          required: true
+          schema: { type: string }
+      responses:
+        "200": { description: Failure-case seed entries, content: { application/json: { schema: { type: object } } } }
+        "404": { description: "Unknown task pack: { ok: false, error: TASK_PACK_NOT_FOUND }" }
+        "503": { description: "Seed asset unavailable: { ok: false, error: TASK_PACK_ASSET_UNAVAILABLE }" }
   /api/v1/duck/overview:
     get:
       tags: [workspace]
