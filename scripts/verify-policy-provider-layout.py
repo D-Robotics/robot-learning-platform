@@ -437,6 +437,79 @@ def main():
     assert result["model"]["imageShape"] is None, result["model"]
     print("vector-only layout ignores the camera: OK")
 
+
+    # 10j) Producer/consumer schema agreement. The node and the runtime are
+    #      separate processes that never share a type, so the frame schema is
+    #      only a convention. Build a snapshot in EXACTLY the shape
+    #      board-telemetry-node.py writes (shape/channel metadata plus the
+    #      source sample stamps) and assert the real runtime consumes it. This
+    #      is the check that would fail if either side renamed a field.
+    runtime = _vision_runtime({"RDK_SIM2REAL_OBSERVATION_LAYOUT": "imu-gravity-camera-v1",
+                               "RDK_SIM2REAL_OBSERVATION_IMAGE": "%dx%dx%d" % (channels, height, width)})
+    rt_obj = runtime.PolicyRuntime()
+    assert rt_obj.load(vision_model).get("ok")
+    node_style_snapshot = {
+        "ts": time.time(),
+        "sourceMonotonicNs": time.monotonic_ns(),
+        "seq": 7,
+        "adapterId": "test-vision",
+        "topics": {"imu": "/imu", "odom": "/odom", "battery": "/originbot_status",
+                   "camera": "/camera/image_raw"},
+        "cameraShape": [channels, height, width],
+        "cameraDropped": 0,
+        "data": {
+            "imu": {
+                "quaternion": {"x": 0.0, "y": 0.0, "z": 0.0, "w": 1.0},
+                "gyro": {"x": 0.1, "y": 0.2, "z": 0.3},
+                "sampleTs": time.time(),
+                "sampleMonotonicNs": time.monotonic_ns(),
+            },
+            "camera": {
+                "channels": channels,
+                "height": height,
+                "width": width,
+                "encoding": "rgb8",
+                "data": [7] * frame_len,
+                "sampleTs": time.time(),
+                "sampleMonotonicNs": time.monotonic_ns(),
+            },
+        },
+    }
+    with open(snapshot, "w", encoding="utf-8") as fh:
+        json.dump(node_style_snapshot, fh)
+    step = rt_obj._build_observation_for_inference()
+    assert step is not None, "the runtime must consume a node-shaped snapshot"
+    _vector, frame = step
+    assert frame is not None and len(frame) == frame_len and frame[0] == 7.0, frame
+    print("node-shaped snapshot consumed by the real runtime: OK")
+
+    # 10k) The converter itself, driven the way the node drives it. Exercises the
+    #      real module with a real encoded buffer, including row padding.
+    sys.path.insert(0, os.path.join(HERE, "..", "services", "sim2real-web"))
+    import board_camera_frame as _bcf
+
+    assert _bcf.parse_shape("%dx%dx%d" % (channels, height, width)) == (channels, height, width)
+    # A source row is 2 valid pixels (6 bytes) plus 3 bytes of row padding, so
+    # step (9) is deliberately larger than width*channels (6).
+    source_width = 2
+    source_step = source_width * 3 + 3
+    padded = bytearray()
+    for _row in range(2):
+        padded.extend(bytes([9, 9, 9]))          # pixel 1
+        padded.extend(bytes([30, 30, 30]))       # pixel 2
+        padded.extend(bytes([255, 255, 255]))    # padding the converter must skip
+    converted = _bcf.frame_to_nhwc(encoding="rgb8", width=source_width, height=2,
+                                   step=source_step, data=bytes(padded),
+                                   channels=channels, out_height=1, out_width=1)
+    assert converted is not None and len(converted) == channels, converted
+    # Box average over all four pixels: (9 + 30) / 2 = 19.5. The padding bytes
+    # are 255 on purpose -- if they were read, this would come out much higher.
+    assert converted == [19.5, 19.5, 19.5], converted
+    assert _bcf.frame_to_nhwc(encoding="yuv422", width=1, height=1, step=2,
+                              data=b"\x01\x02", channels=3,
+                              out_height=1, out_width=1) is None
+    print("camera frame converter (row padding + unknown encoding refusal): OK")
+
     print("PASS: policy provider selection + declared observation layout")
     return 0
 

@@ -34,6 +34,9 @@ from rclpy.node import Node
 from rclpy.qos import QoSProfile, ReliabilityPolicy
 from sensor_msgs.msg import Imu
 
+from board_camera_frame import declared_shape as declared_camera_shape
+from board_camera_frame import frame_to_nhwc
+
 SNAPSHOT_FILE = ipc_path(
     "RDK_BOARD_TELEMETRY_SNAPSHOT", "telemetry-snapshot.json"
 )
@@ -80,6 +83,12 @@ def _topic(name, default):
 IMU_TOPIC = os.environ.get("RDK_SIM2REAL_IMU_TOPIC", _topic("imu", "/imu"))
 ODOM_TOPIC = os.environ.get("RDK_SIM2REAL_ODOM_TOPIC", _topic("odom", "/odom"))
 BATTERY_TOPIC = os.environ.get("RDK_SIM2REAL_BATTERY_TOPIC", _topic("battery", "/originbot_status"))
+# The camera topic is only subscribed when the adapter declares a frame shape.
+# Without the declaration the sampler stays exactly as it was: a camera block in
+# the snapshot is an input a vision policy will consume, so it must never appear
+# unless the operator has stated which geometry the policy was trained for.
+CAMERA_TOPIC = os.environ.get("RDK_SIM2REAL_CAMERA_TOPIC", _topic("camera", "/camera/image_raw"))
+CAMERA_SHAPE = declared_camera_shape()
 
 
 class TelemetryNode(Node):
@@ -96,6 +105,8 @@ class TelemetryNode(Node):
         self._imu = None
         self._odom = None
         self._battery = None
+        self._camera = None
+        self._camera_dropped = 0
         self._seq = 0
         self.create_subscription(Imu, IMU_TOPIC, self._on_imu, sensor_qos)
         self.create_subscription(Odometry, ODOM_TOPIC, self._on_odom, sensor_qos)
@@ -104,7 +115,33 @@ class TelemetryNode(Node):
             self.create_subscription(
                 self._status_type, BATTERY_TOPIC, self._on_status, status_qos
             )
+        self._load_camera_type()
         self.create_timer(1.0 / SNAPSHOT_HZ, self._write_snapshot)
+
+    def _load_camera_type(self):
+        """Subscribe to the camera only when a frame shape is declared.
+
+        Lazily imported and wrapped: a board without sensor_msgs.image, without
+        the camera bringup, or with a malformed topic name must keep sampling
+        IMU/odom/battery rather than dying at startup. The snapshot then simply
+        has no camera block, which the policy runtime treats as fail-closed.
+        """
+        if CAMERA_SHAPE is None:
+            return
+        try:
+            from sensor_msgs.msg import Image
+        except ImportError:
+            print(
+                "camera declared but sensor_msgs.msg.Image is unavailable; "
+                "sampling without a camera block",
+                file=sys.stderr,
+                flush=True,
+            )
+            return
+        try:
+            self.create_subscription(Image, CAMERA_TOPIC, self._on_image, sensor_qos)
+        except Exception as exc:  # noqa: BLE001 - never let this stop the sampler
+            print(f"camera subscription failed: {exc!r}", file=sys.stderr, flush=True)
 
     @staticmethod
     def _load_status_type():
@@ -116,6 +153,40 @@ class TelemetryNode(Node):
             return OriginbotStatus
         except ImportError:
             return None
+
+    def _on_image(self, msg):
+        """Convert one camera frame to the declared shape, or drop it.
+
+        A dropped frame is counted and never emitted: the policy runtime rejects
+        a frame whose length or channel count does not match the declaration, so
+        emitting a malformed one would only move the failure to the control loop.
+        """
+        channels, height, width = CAMERA_SHAPE
+        frame = frame_to_nhwc(
+            encoding=getattr(msg, "encoding", ""),
+            width=getattr(msg, "width", 0),
+            height=getattr(msg, "height", 0),
+            step=getattr(msg, "step", 0),
+            data=getattr(msg, "data", b""),
+            channels=channels,
+            out_height=height,
+            out_width=width,
+        )
+        if frame is None:
+            self._camera_dropped += 1
+            return
+        self._camera = {
+            "channels": channels,
+            "height": height,
+            "width": width,
+            "encoding": str(getattr(msg, "encoding", ""))[:16],
+            # Quantised to the integer pixel values the sensor actually
+            # produced. The snapshot is rewritten at SNAPSHOT_HZ and a float
+            # list would roughly double its size for no extra information.
+            "data": [int(round(value)) for value in frame],
+            "ts": time.time(),
+            "monotonicNs": time.monotonic_ns(),
+        }
 
     def _on_imu(self, msg):
         q = msg.orientation
@@ -183,6 +254,22 @@ class TelemetryNode(Node):
             data["odom"]["sampleMonotonicNs"] = int(self._odom["monotonicNs"])
         if self._battery and now - self._battery["ts"] <= STALE_SEC:
             data["batteryVoltage"] = self._battery["voltage"]
+        if self._camera and now - self._camera["ts"] <= STALE_SEC:
+            # Shape and channel count travel with the frame so the consumer can
+            # verify them instead of trusting the producer. frame_to_nhwc
+            # already guarantees the length, so a block that reaches here is
+            # internally consistent by construction.
+            data["camera"] = {
+                "channels": self._camera["channels"],
+                "height": self._camera["height"],
+                "width": self._camera["width"],
+                "encoding": self._camera["encoding"],
+                "data": list(self._camera["data"]),
+                # Source sample time, matching the imu/odom contract: a healthy
+                # writer must not be able to mask a frozen camera topic.
+                "sampleTs": float(self._camera["ts"]),
+                "sampleMonotonicNs": int(self._camera["monotonicNs"]),
+            }
         payload = {
             "ts": now,
             "sourceWallTimeMs": int(now * 1000),
@@ -192,6 +279,12 @@ class TelemetryNode(Node):
             "topics": {"imu": IMU_TOPIC, "odom": ODOM_TOPIC, "battery": BATTERY_TOPIC},
             "data": data if data else None,
         }
+        if CAMERA_SHAPE is not None:
+            # Report the camera wiring even when no frame is currently arriving,
+            # so a missing block can be told apart from an unconfigured camera.
+            payload["topics"]["camera"] = CAMERA_TOPIC
+            payload["cameraShape"] = list(CAMERA_SHAPE)
+            payload["cameraDropped"] = self._camera_dropped
         try:
             atomic_write_json(SNAPSHOT_FILE, payload)
         except Exception as exc:  # keep the sampler alive and make failures observable
