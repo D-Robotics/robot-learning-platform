@@ -178,7 +178,7 @@ ssh(
 const sshShell = `ssh -p ${flags.port} -o BatchMode=yes -o ConnectTimeout=10`;
 // --relative keeps each file's repository-relative subpath on the target,
 // so runner.py lands at <dir>/engines/starter-ppo/runner.py (not flattened).
-let synced =
+const synced =
   spawnSync(
     'rsync',
     [
@@ -213,7 +213,6 @@ if (!synced) {
       process.exit(1);
     }
   }
-  synced = true;
 }
 console.log('  ✓ 已同步 worker + 引擎 + manifest');
 

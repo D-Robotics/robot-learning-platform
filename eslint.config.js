@@ -77,6 +77,13 @@ const correctnessRules = {
   'no-sparse-arrays': 'error',
   'use-isnan': 'error',
   'valid-typeof': 'error',
+  // Added to `@eslint/js` recommended in v10. Every hit is either a dead
+  // initialiser (`let x = null` followed by an assignment in both the try and
+  // catch arms) or a reassignment whose value is never read again, so a hit is
+  // always a real defect rather than a style opinion. Held at `error` because
+  // the pre-existing violations this rule surfaced when the bump landed were
+  // resolved rather than silenced - see the note in warningRules.
+  'no-useless-assignment': 'error',
 };
 
 // Style/noise rules that already fire widely; reported but never blocking.
@@ -86,12 +93,6 @@ const warningRules = {
   'no-useless-escape': 'warn',
   'no-regex-spaces': 'warn',
   'prefer-const': 'warn',
-  // Added to `@eslint/js` recommended in v10. Its hits here are all the
-  // `let x = null; try { x = ... } catch { x = ... }` epilogue, i.e. a dead
-  // initial assignment, never a dropped result — so it is demoted rather than
-  // rewritten. Keep it as a warning: the finding stays queryable, and a future
-  // hit that does discard a computed value will not be silently optimized away.
-  'no-useless-assignment': 'warn',
   'no-console': 'off',
   // The repo deliberately matches control characters while sanitizing
   // untrusted terminal/worker output, so this stays advisory.

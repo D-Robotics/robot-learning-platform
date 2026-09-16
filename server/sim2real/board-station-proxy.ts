@@ -561,7 +561,7 @@ export async function stationAgentFetchStream(
   }
   const controller = new AbortController();
   const connectTimer = setTimeout(() => controller.abort(), timeoutMs);
-  let body: ReadableStream<Uint8Array> | null = null;
+  let body: ReadableStream<Uint8Array> | null;
   try {
     const response = await fetch(`${baseUrl}${pathname}`, {
       method: 'GET',

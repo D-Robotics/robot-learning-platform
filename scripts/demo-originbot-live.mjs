@@ -64,7 +64,7 @@ async function api(base, path, init = {}, timeoutMs = 6000) {
     signal: AbortSignal.timeout(timeoutMs),
   });
   const text = await response.text();
-  let body = null;
+  let body;
   try {
     body = text ? JSON.parse(text) : null;
   } catch {

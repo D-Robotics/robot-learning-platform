@@ -1424,7 +1424,7 @@ export function createStandaloneRobogoApiClient(
     ) {
       throw new Error('robogo_api_path_invalid');
     }
-    let decodedPath = requestPath;
+    let decodedPath;
     try {
       decodedPath = decodeURIComponent(requestPath);
     } catch {

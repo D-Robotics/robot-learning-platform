@@ -316,7 +316,7 @@ function executableConfig() {
       500,
       'worker_configuration_invalid',
     );
-  let args = [];
+  let args;
   const rawArgs = String(process.env.RDK_SIM2REAL_TRAIN_ARGS_JSON || '[]').trim();
   try {
     args = JSON.parse(rawArgs);

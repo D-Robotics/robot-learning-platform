@@ -56,7 +56,7 @@ const server = http.createServer((req, res) => {
       raw += chunk;
     });
     req.on('end', () => {
-      let body = {};
+      let body;
       try {
         body = JSON.parse(raw || '{}');
       } catch {
@@ -68,7 +68,7 @@ const server = http.createServer((req, res) => {
         res.end(JSON.stringify({ ok: false, error: 'invalid login method' }));
         return;
       }
-      let account = null;
+      let account;
       if (method === 'account') {
         const user = ACCOUNTS.get(String(body.userName || '').trim());
         account = user && String(body.password || '') === user.password ? user : null;

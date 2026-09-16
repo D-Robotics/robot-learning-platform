@@ -52,7 +52,7 @@ async function api(base, path, timeoutMs = 5000) {
     signal: AbortSignal.timeout(timeoutMs),
   });
   const text = await response.text();
-  let body = null;
+  let body;
   try {
     body = text ? JSON.parse(text) : null;
   } catch {
@@ -96,7 +96,7 @@ const fmt = (value, digits = 2) => (typeof value === 'number' ? value.toFixed(di
 const volts = (status) => status?.power?.voltage ?? status?.originbot?.batteryVoltage;
 
 // ---- run -------------------------------------------------------------------
-let base = null;
+let base;
 let exitCode = 0;
 try {
   base = await resolveBase();

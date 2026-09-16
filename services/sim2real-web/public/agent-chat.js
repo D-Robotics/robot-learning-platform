@@ -368,7 +368,7 @@ function initSessionRail() {
   const list = $('agent-session-list');
   const fresh = $('agent-new-session');
   if (!list) return;
-  let history = [];
+  let history;
   try { history = JSON.parse(localStorage.getItem(HISTORY_KEY) || '[]'); } catch { history = []; }
   if (history.length) {
     const item = document.createElement('button');

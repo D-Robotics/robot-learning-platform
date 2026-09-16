@@ -116,7 +116,7 @@ export function resolveClientAddress(request: Request): string {
 }
 
 export function resolveRateLimitKey(request: Request, options: RateLimitKeyOptions = {}): string {
-  let owner = '';
+  let owner;
   try {
     owner = String(options.resolveOwner?.(request) ?? '').trim();
   } catch {

@@ -241,8 +241,8 @@ async function main() {
 
   const base = `http://127.0.0.1:${webPort}`;
   const workerBase = `http://127.0.0.1:${workerPort}`;
-  let jobDir = null;
-  let runId = null;
+  let jobDir;
+  let runId;
   try {
     console.log(`[demo:starter] waiting for worker:${workerPort} and web:${webPort}`);
     const workerHealth = await waitForJson(`${workerBase}/healthz`, {

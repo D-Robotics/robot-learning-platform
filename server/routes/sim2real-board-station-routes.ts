@@ -424,7 +424,7 @@ export function registerSim2RealBoardStationRoutes(
       const resolved = await resolveStation(request, response);
       if (!resolved) return;
       noStore(response);
-      let upstream: ReadableStream<Uint8Array> | null = null;
+      let upstream: ReadableStream<Uint8Array> | null;
       try {
         upstream = await stationAgentFetchStream(
           '/v1/station/status/stream',
@@ -456,7 +456,7 @@ export function registerSim2RealBoardStationRoutes(
       const resolved = await resolveStation(request, response);
       if (!resolved) return;
       noStore(response);
-      let upstream: ReadableStream<Uint8Array> | null = null;
+      let upstream: ReadableStream<Uint8Array> | null;
       try {
         upstream = await stationAgentFetchStream(
           '/v1/station/camera.mjpeg',
