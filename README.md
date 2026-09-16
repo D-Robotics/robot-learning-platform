@@ -7,7 +7,7 @@
 面向 MicroDuck 与 RDK-X5 的机器人学习工作台：仿真、录制、训练、评测、部署和虚实迭代，都围绕同一份可追溯模型契约组织。
 
 [![verify](https://github.com/D-Robotics/robot-learning-platform/actions/workflows/verify.yml/badge.svg)](https://github.com/D-Robotics/robot-learning-platform/actions/workflows/verify.yml)
-[![Node.js](https://img.shields.io/badge/Node.js-20.19%2B-339933?logo=nodedotjs&logoColor=white)](https://nodejs.org/)
+[![Node.js](https://img.shields.io/badge/Node.js-22.22.2%2B-339933?logo=nodedotjs&logoColor=white)](https://nodejs.org/)
 [![API](https://img.shields.io/badge/API-versioned%20%2Fapi%2Fv1%2Fduck-ff7433)](docs/api/openapi.yaml)
 [![状态](https://img.shields.io/badge/Mock%20闭环-可运行-16a085)](#30-秒上手)
 
@@ -17,7 +17,7 @@
 
 > **一句话理解：这不是一个只能“遛鸭”的游戏。** 浏览器仿真是低门槛的动作入口；录制结果进入统一契约，随后可以交给本地 worker（默认 Mock）或 RoboGo adapter，最后通过制品、评测和 RDK-X5 预检进入受控的真机迭代。
 
-Node.js 需要 22 LTS 或更高（DSH 会话持久化依赖 node:zlib 的 zstd API，Node 20 不提供）。
+Node.js 需要 `^22.22.2 || ^24.15.0 || >=26.0.0`（与 `package.json` 的 `engines` 以及 `.nvmrc` 一致）。下界由工具链本身决定：`jsdom@30` 要求 `^22.22.2 || ^24.15.0 || >=26`，高于 `vitest@5` 的 `^22.12.0 || ^24.0.0 || >=26`。Node 20 不提供 DSH 会话持久化依赖的 `node:zlib` zstd API；Node 23、25 等非 LTS 奇数版本也不在支持范围内。
 
 > 当前版本是可公开审阅的独立产品源代码与参考实现。默认可以用本地 Mock worker 验证“仿真 → 训练请求 → 运行台账 → 遥测评测”流程；真实 RoboGo、RDK-X5 板端 agent、SSO/OIDC 与 OTA 由部署方通过 adapter 注入，仓库不包含任何账号、密钥或设备地址。
 

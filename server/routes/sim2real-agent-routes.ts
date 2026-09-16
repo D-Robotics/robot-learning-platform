@@ -475,10 +475,18 @@ export function createSim2RealAgentLocalExecutor(
       if (error instanceof Error && error.message === SIM2REAL_AGENT_RESPONSE_INVALID_ERROR) {
         throw error;
       }
+      // `preserve-caught-error` asks for `{ cause: error }`. Attaching the
+      // original would put the transport failure (and any upstream response
+      // fragment a custom fetch impl hung off it) back into the
+      // conversation-scoped Agent record, which is exactly what this collapse
+      // exists to prevent. The stable code is the whole point, so the rule is
+      // disabled here rather than satisfied.
+      // eslint-disable-next-line preserve-caught-error
       if (signal.aborted) throw new Error(SIM2REAL_AGENT_EXECUTOR_TIMEOUT_ERROR);
       // Transport and redirect failures intentionally collapse to one stable
       // message. Never expose a fetch error or upstream response body in the
       // conversation-scoped Agent record.
+      // eslint-disable-next-line preserve-caught-error -- same collapse: the cause is what would leak the upstream failure
       throw new Error(SIM2REAL_AGENT_EXECUTOR_UNAVAILABLE_ERROR);
     }
   };

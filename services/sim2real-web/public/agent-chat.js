@@ -556,7 +556,10 @@ async function runTask(message) {
       transientFailures = 0;
     } catch (error) {
       transientFailures += 1;
-      if (transientFailures >= 4) throw new Error(`运行状态获取失败：${error.message}`);
+      // The message is surfaced to the operator, so the cause is kept instead of
+      // flattened away: this is the terminal failure after four attempts, and
+      // the original request/HTTP error is what makes it diagnosable.
+      if (transientFailures >= 4) throw new Error(`运行状态获取失败：${error.message}`, { cause: error });
       if (runtimeStatus) runtimeStatus.textContent = `等待运行状态…（重试 ${transientFailures}/3）`;
       continue;
     }
