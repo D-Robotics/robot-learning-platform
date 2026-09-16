@@ -47,7 +47,7 @@ Environment=RDK_SIM2REAL_CSP_DISABLE=0
 Environment=RDK_SIM2REAL_ENABLE_HSTS=1
 Environment=RDK_SIM2REAL_STORAGE_LEASE=1
 Environment=RDK_SIM2REAL_STORAGE_READ_ONLY=0
-Environment=PATH=/opt/node-v22.16.0-linux-x64/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin
+Environment=PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin
 ExecStartPre=/usr/bin/test -s /etc/rdkstudio-sim2real-adapter.ready
 ExecStartPre=/usr/bin/grep -qx 'RDK_SIM2REAL_ADAPTER_READY=1' /etc/rdkstudio-sim2real-adapter.ready
 ExecStartPre=/usr/bin/test -s /etc/sim2real-web-auth.env
@@ -61,16 +61,16 @@ ExecStartPre=/usr/bin/test ${RDK_SIM2REAL_STORAGE_LEASE} = 1
 ExecStartPre=/usr/bin/test ${RDK_SIM2REAL_STORAGE_READ_ONLY} = 0
 ExecStartPre=/usr/bin/test ${RDK_SIM2REAL_DSH_HOME} = /opt/sim2real-web/data/dsh
 ExecStartPre=/bin/sh -c 'test -n "$${RDK_SIM2REAL_TRUSTED_PROXY_SECRET}"'
-ExecStartPre=/opt/node-v22.16.0-linux-x64/bin/node -e "if (Buffer.byteLength(process.env.RDK_SIM2REAL_TRUSTED_PROXY_SECRET || '', 'utf8') < 32) process.exit(1)"
+ExecStartPre=/usr/bin/env node -e "if (Buffer.byteLength(process.env.RDK_SIM2REAL_TRUSTED_PROXY_SECRET || '', 'utf8') < 32) process.exit(1)"
 # Board evidence is gated on a separate HMAC key. Accept a legacy alias while
 # rotating, but reject the checked-in template value and other weak defaults
 # before the web process can start.
-ExecStartPre=/opt/node-v22.16.0-linux-x64/bin/node -e "const s=(process.env.RDK_SIM2REAL_TELEMETRY_ATTESTATION_SECRET||process.env.RDK_SIM2REAL_TELEMETRY_TOKEN_SECRET||process.env.RDK_SIM2REAL_TELEMETRY_HMAC_SECRET||'').trim();const weak=!s||Buffer.byteLength(s,'utf8')<32||/^(?:replace(?:[-_ ]?with)?(?:[-_ ].*)?|change(?:[-_ ]?me)?(?:[-_ ].*)?|changeme(?:[-_ ].*)?|example(?:[-_ ].*)?|placeholder(?:[-_ ].*)?|default(?:[-_ ]?secret)?(?:[-_ ].*)?|dummy(?:[-_ ].*)?|password(?:[-_ ].*)?|your[-_ ]?(?:secret|key)(?:[-_ ].*)?|secret(?:[-_ ].*)?)$/i.test(s)||new Set(s).size<2;if(weak)process.exit(1)"
+ExecStartPre=/usr/bin/env node -e "const s=(process.env.RDK_SIM2REAL_TELEMETRY_ATTESTATION_SECRET||process.env.RDK_SIM2REAL_TELEMETRY_TOKEN_SECRET||process.env.RDK_SIM2REAL_TELEMETRY_HMAC_SECRET||'').trim();const weak=!s||Buffer.byteLength(s,'utf8')<32||/^(?:replace(?:[-_ ]?with)?(?:[-_ ].*)?|change(?:[-_ ]?me)?(?:[-_ ].*)?|changeme(?:[-_ ].*)?|example(?:[-_ ].*)?|placeholder(?:[-_ ].*)?|default(?:[-_ ]?secret)?(?:[-_ ].*)?|dummy(?:[-_ ].*)?|password(?:[-_ ].*)?|your[-_ ]?(?:secret|key)(?:[-_ ].*)?|secret(?:[-_ ].*)?)$/i.test(s)||new Set(s).size<2;if(weak)process.exit(1)"
 ExecStartPre=/usr/bin/test ${RDK_SIM2REAL_BIND_HOST} = 127.0.0.1
 ExecStartPre=/usr/bin/test ${RDK_SIM2REAL_PORT} = 18102
 ExecStartPre=/usr/bin/test ${RDK_SIM2REAL_PUBLIC_BASE_PATH} = /sim2real
 ExecStartPre=/usr/bin/test ${RDK_SIM2REAL_STORAGE_DIR} = /opt/sim2real-web/data
-ExecStart=/opt/node-v22.16.0-linux-x64/bin/node /opt/sim2real-web/current/dist-server/services/sim2real-web/server.js
+ExecStart=/usr/bin/env node /opt/sim2real-web/current/dist-server/services/sim2real-web/server.js
 Restart=always
 RestartSec=3
 NoNewPrivileges=true

@@ -17,7 +17,7 @@
 
 > **一句话理解：这不是一个只能“遛鸭”的游戏。** 浏览器仿真是低门槛的动作入口；录制结果进入统一契约，随后可以交给本地 worker（默认 Mock）或 RoboGo adapter，最后通过制品、评测和 RDK-X5 预检进入受控的真机迭代。
 
-Node.js 建议使用 22 LTS（最低满足 lockfile 的 Node 20.19+）。
+Node.js 需要 22 LTS 或更高（DSH 会话持久化依赖 node:zlib 的 zstd API，Node 20 不提供）。
 
 > 当前版本是可公开审阅的独立产品源代码与参考实现。默认可以用本地 Mock worker 验证“仿真 → 训练请求 → 运行台账 → 遥测评测”流程；真实 RoboGo、RDK-X5 板端 agent、SSO/OIDC 与 OTA 由部署方通过 adapter 注入，仓库不包含任何账号、密钥或设备地址。
 

@@ -17,7 +17,9 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        node-version: [20, 22, 24]
+        # Node 20 is retired: the DSH session-persistence dependency imports
+        # node:zlib zstd helpers statically, which only exist on Node 22+.
+        node-version: [22, 24]
     steps:
       - name: Check out
         uses: actions/checkout@v4
