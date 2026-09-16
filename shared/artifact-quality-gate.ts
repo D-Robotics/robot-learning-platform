@@ -1,3 +1,5 @@
+import type { Sim2RealObservationLayoutItem } from './sim2real.js';
+
 export interface ArtifactCheckInput {
   observationSize: number;
   actionSize: number;
@@ -18,6 +20,87 @@ export function validateArtifactForDeployment(v: ArtifactCheckInput): {
   if (v.deployable === false) e.push('artifact is marked non-deployable');
   if (v.maxAbsAction !== undefined && v.maxAbsAction > 1) e.push('action exceeds normalized limit');
   return { passed: e.length === 0, errors: e };
+}
+
+/** One model input as reported by onnxruntime (`Session.get_inputs()`). */
+export interface ModelInputSignature {
+  name: string;
+  /** Declared shape; symbolic or dynamic entries are non-numeric. */
+  shape: readonly unknown[];
+}
+
+function positiveInt(value: unknown): number {
+  return typeof value === 'number' && Number.isSafeInteger(value) && value > 0 ? value : 0;
+}
+
+/**
+ * Checks that a loaded model's inputs can actually carry the image branch its
+ * contract declares.
+ *
+ * Context: an image slot is declared by shape and flattened into
+ * `observationSize`, which means every dimension-only check in the platform
+ * still passes for a vision contract — `observationSize === sum(layout sizes)`
+ * holds whether or not the model really accepts an image. The mismatch would
+ * otherwise surface only at inference time, on the board, after the policy was
+ * already staged. This gate moves that failure to the earliest point where the
+ * export's inputs are known.
+ *
+ * Rules (each fails closed rather than guessing):
+ * - a contract with no image slot needs no image input and is exempt;
+ * - a vision contract is matched to the single rank-4 input by channel count
+ *   and minimum spatial extent;
+ * - symbolic (batch) axes are tolerated, but a dynamic channel axis is not,
+ *   because it cannot be proven to match the declared channel count.
+ */
+export function validateVisionObservationAgainstModelInputs(v: {
+  layout: readonly Sim2RealObservationLayoutItem[];
+  inputs: readonly ModelInputSignature[];
+}): { passed: boolean; errors: string[] } {
+  const errors: string[] = [];
+  const imageSlots = v.layout.filter(
+    (item): item is Extract<Sim2RealObservationLayoutItem, { modality: 'image' }> =>
+      'modality' in item && item.modality === 'image',
+  );
+  if (imageSlots.length > 1) {
+    errors.push(
+      `contract declares ${imageSlots.length} image slots; this gate only certifies a single image branch`,
+    );
+  }
+  if (imageSlots.length === 1) {
+    const slot = imageSlots[0]!;
+    const rank4 = v.inputs.filter((input) => input.shape.length === 4);
+    if (rank4.length !== 1) {
+      errors.push(
+        `vision contract declares image slot "${slot.name}" but the model exposes ${rank4.length} rank-4 inputs (expected exactly 1)`,
+      );
+    } else {
+      const input = rank4[0]!;
+      // NHWC: [batch, height, width, channels].
+      const channels = positiveInt(input.shape[3]);
+      if (channels === 0) {
+        errors.push(
+          `model input "${input.name}" channel axis is dynamic; a vision contract requires a fixed channel count (${slot.channels})`,
+        );
+      } else if (channels !== slot.channels) {
+        errors.push(
+          `model input "${input.name}" has ${channels} channels but contract image slot "${slot.name}" declares ${slot.channels}`,
+        );
+      }
+      const height = positiveInt(input.shape[1]);
+      const width = positiveInt(input.shape[2]);
+      if (height !== 0 && height < slot.height) {
+        errors.push(
+          `model input "${input.name}" height ${height} is smaller than the declared image height ${slot.height}`,
+        );
+      }
+      if (width !== 0 && width < slot.width) {
+        errors.push(
+          `model input "${input.name}" width ${width} is smaller than the declared image width ${slot.width}`,
+        );
+      }
+    }
+  }
+  return { passed: errors.length === 0, errors };
 }
 
 export interface TaskPackEvalReport {

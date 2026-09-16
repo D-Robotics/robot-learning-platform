@@ -74,6 +74,12 @@ export const SIM2REAL_CONTRACT_LIMITS = Object.freeze({
   maxDecimation: 256,
   maxObservationLayoutEntries: 16,
   maxObservationLayoutItemSize: 4096,
+  // Image slots are declared by shape rather than by raw length. These bounds
+  // keep a syntactically valid manifest from asking a board runtime to
+  // allocate an unbounded frame buffer.
+  maxObservationImageChannels: 4,
+  maxObservationImageHeight: 1_080,
+  maxObservationImageWidth: 1_920,
 });
 
 /** Product lines share a workflow, not a policy contract. */
@@ -189,6 +195,28 @@ export interface Sim2RealCheckpointRef {
   iteration?: number;
 }
 
+/**
+ * One declared observation slot.
+ *
+ * `size` is always the flat element count of the slot, so the sum of every
+ * entry's `size` stays equal to the flat `contract.observationSize`. That
+ * invariant is asserted by the contract validator, the local worker and the
+ * board runtime, so introducing an image slot must not break it: an image slot
+ * reports the flattened `channels * height * width` as its `size` and carries
+ * the shape alongside it. A vector slot therefore stays exactly
+ * `{ name, size }` and every pre-existing contract is unchanged.
+ */
+export type Sim2RealObservationLayoutItem =
+  | { name: string; size: number }
+  | {
+      name: string;
+      size: number;
+      modality: 'image';
+      channels: number;
+      height: number;
+      width: number;
+    };
+
 export interface Sim2RealContract {
   id: string;
   robotId: Sim2RealRobotId;
@@ -198,7 +226,7 @@ export interface Sim2RealContract {
   controlHz: number;
   physicsTimestepSeconds: number;
   decimation: number;
-  observationLayout: Array<{ name: string; size: number }>;
+  observationLayout: Sim2RealObservationLayoutItem[];
   /** Explicit adapter identities keep simulator, trainer and board wiring aligned. */
   observationAdapterId?: string;
   actionAdapterId?: string;
@@ -949,8 +977,8 @@ function nonNegativeInteger(
 function normalizeLayout(
   value: unknown,
   errors: string[],
-  expected?: readonly { name: string; size: number }[],
-): Array<{ name: string; size: number }> {
+  expected?: readonly Sim2RealObservationLayoutItem[],
+): Sim2RealObservationLayoutItem[] {
   if (!Array.isArray(value)) {
     errors.push('contract.observationLayout is required');
     return expected?.map((item) => ({ ...item })) || [];
@@ -960,28 +988,106 @@ function normalizeLayout(
       `contract.observationLayout must contain at most ${SIM2REAL_CONTRACT_LIMITS.maxObservationLayoutEntries} entries`,
     );
   }
-  const layout = value.slice(0, 16).map((item) => {
-    const source = record(item);
-    const name = safeText(source.name, 64);
-    const size = positiveFinite(source.size);
-    if (!name) errors.push('contract.observationLayout item name is required');
-    if (
-      !size ||
-      !Number.isSafeInteger(size) ||
-      size > SIM2REAL_CONTRACT_LIMITS.maxObservationLayoutItemSize
-    ) {
-      errors.push(
-        `contract.observationLayout item size must be a positive integer at most ${SIM2REAL_CONTRACT_LIMITS.maxObservationLayoutItemSize}`,
-      );
-    }
-    return { name, size: size ? Math.floor(size) : 0 };
-  });
+  const layout = value
+    .slice(0, SIM2REAL_CONTRACT_LIMITS.maxObservationLayoutEntries)
+    .map((item): Sim2RealObservationLayoutItem => {
+      const source = record(item);
+      const name = safeText(source.name, 64);
+      const size = positiveFinite(source.size);
+      if (!name) errors.push('contract.observationLayout item name is required');
+
+      // Modality is opt-in. An absent modality is the original vector slot, so
+      // every pre-existing contract keeps its exact meaning; anything other
+      // than an explicit `image` is rejected rather than quietly treated as a
+      // vector, because a mis-declared modality is a contract bug that would
+      // otherwise surface as a shape error deep inside a training engine.
+      if (source.modality !== undefined && source.modality !== 'image') {
+        errors.push(
+          `contract.observationLayout item modality must be "image" when present (got ${JSON.stringify(source.modality)})`,
+        );
+        return { name, size: size ? Math.floor(size) : 0 };
+      }
+
+      if (source.modality === 'image') {
+        const rawChannels = positiveFinite(source.channels);
+        const rawHeight = positiveFinite(source.height);
+        const rawWidth = positiveFinite(source.width);
+        const channels = rawChannels === null ? 0 : Math.floor(rawChannels);
+        const height = rawHeight === null ? 0 : Math.floor(rawHeight);
+        const width = rawWidth === null ? 0 : Math.floor(rawWidth);
+        const shapeOk =
+          channels >= 1 &&
+          height >= 1 &&
+          width >= 1 &&
+          channels <= SIM2REAL_CONTRACT_LIMITS.maxObservationImageChannels &&
+          height <= SIM2REAL_CONTRACT_LIMITS.maxObservationImageHeight &&
+          width <= SIM2REAL_CONTRACT_LIMITS.maxObservationImageWidth;
+        if (!shapeOk) {
+          errors.push(
+            `contract.observationLayout image item shape must be positive integers within ` +
+              `${SIM2REAL_CONTRACT_LIMITS.maxObservationImageChannels}x` +
+              `${SIM2REAL_CONTRACT_LIMITS.maxObservationImageHeight}x` +
+              `${SIM2REAL_CONTRACT_LIMITS.maxObservationImageWidth}`,
+          );
+          return { name, size: size ? Math.floor(size) : 0 };
+        }
+        const flat = channels * height * width;
+        // The flat total is what keeps the layout-sum invariant meaningful, so
+        // a mismatch is a hard error instead of a silent preference for one of
+        // the two numbers.
+        if (Math.floor(size ?? 0) !== flat) {
+          errors.push(
+            `contract.observationLayout image item "${name}" size must equal channels*height*width (${flat})`,
+          );
+        }
+        if (flat > SIM2REAL_CONTRACT_LIMITS.maxObservationLayoutItemSize) {
+          errors.push(
+            `contract.observationLayout image item "${name}" exceeds ${SIM2REAL_CONTRACT_LIMITS.maxObservationLayoutItemSize} flattened elements`,
+          );
+        }
+        return {
+          name,
+          size: flat,
+          modality: 'image',
+          channels,
+          height,
+          width,
+        };
+      }
+
+      if (
+        source.channels !== undefined ||
+        source.height !== undefined ||
+        source.width !== undefined
+      ) {
+        errors.push(
+          `contract.observationLayout item "${name}" declares an image shape without modality "image"`,
+        );
+      }
+      if (
+        !size ||
+        !Number.isSafeInteger(size) ||
+        size > SIM2REAL_CONTRACT_LIMITS.maxObservationLayoutItemSize
+      ) {
+        errors.push(
+          `contract.observationLayout item size must be a positive integer at most ${SIM2REAL_CONTRACT_LIMITS.maxObservationLayoutItemSize}`,
+        );
+      }
+      return { name, size: size ? Math.floor(size) : 0 };
+    });
   if (expected) {
     if (
       layout.length !== expected.length ||
-      layout.some(
-        (item, index) => item.name !== expected[index]?.name || item.size !== expected[index]?.size,
-      )
+      layout.some((item, index) => {
+        const reference = expected[index];
+        return (
+          !reference ||
+          item.name !== reference.name ||
+          item.size !== reference.size ||
+          ('modality' in item ? item.modality : undefined) !==
+            (reference && 'modality' in reference ? reference.modality : undefined)
+        );
+      })
     ) {
       errors.push('contract.observationLayout does not match the MicroDuck policy contract');
     }
