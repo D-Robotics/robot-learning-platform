@@ -122,19 +122,17 @@ try {
 
   // 2. A vision contract is accepted and keeps its shape through normalization.
   //
-  // The 32x32 shape is not an aesthetic choice: the platform's flat per-frame
-  // observation budget is `SIM2REAL_CONTRACT_LIMITS.maxObservationSize` (4096
-  // elements), and an image slot is counted in it because `size` is the
-  // flattened element count. 32*32*3 = 3072 fits; a realistic 64x64 RGB frame
-  // (12288) or any camera-native resolution does not. That collision is a real
-  // open decision for the product, not something this gate should paper over,
-  // so the rehearsal uses a shape that fits and the budget question stays
-  // visible in the report.
-  const imageHeight = 32;
-  const imageWidth = 32;
+  // A realistic frame on purpose: 3x64x64 = 12288 elements, three times the
+  // platform's 4096-element flat VECTOR budget. Images are budgeted by their
+  // declared shape rather than by that cap, so this shape must be accepted —
+  // that separation is what makes a real camera declarable at all, and this
+  // rehearsal is where it is pinned.
+  const imageHeight = 64;
+  const imageWidth = 64;
   const channels = 3;
   const flatImage = channels * imageHeight * imageWidth;
   const vectorSize = 6;
+  if (flatImage <= 4096) fail('the rehearsal frame must exceed the flat vector budget');
   const visionManifest = structuredClone(BUILTIN_MICRODUCK_MODEL.manifest);
   visionManifest.modelId = 'vision-goal-navigation';
   visionManifest.robot = { id: 'originbot', variant: 'differential-drive' };
@@ -142,7 +140,8 @@ try {
     ...visionManifest.contract,
     id: 'originbot-policy-vision-v1',
     robotId: 'originbot',
-    observationSize: vectorSize + flatImage,
+    // observationSize is the flat VECTOR width, so the image is excluded.
+    observationSize: vectorSize,
     observationLayout: [
       { name: 'imu-gravity', size: vectorSize },
       {
@@ -177,9 +176,21 @@ try {
   if (!camera || camera.modality !== 'image' || camera.size !== flatImage) {
     fail(`the image slot did not survive normalization: ${JSON.stringify(camera)}`);
   }
-  const total = normalized.reduce((sum, item) => sum + item.size, 0);
-  if (total !== vision.manifest.contract.observationSize) {
-    fail(`layout sum ${total} != observationSize ${vision.manifest.contract.observationSize}`);
+  // observationSize is the flat VECTOR width, so the image must NOT be counted
+  // here — and the frame must be big enough that counting it would fail, which
+  // is what proves the split is real rather than incidental.
+  const vectorTotal = normalized.reduce(
+    (sum, item) => sum + ('modality' in item ? 0 : item.size),
+    0,
+  );
+  if (vectorTotal !== vision.manifest.contract.observationSize) {
+    fail(
+      `vector slot sum ${vectorTotal} != observationSize ${vision.manifest.contract.observationSize}`,
+    );
+  }
+  const naiveTotal = normalized.reduce((sum, item) => sum + item.size, 0);
+  if (naiveTotal === vision.manifest.contract.observationSize) {
+    fail('the rehearsal frame is not large enough to distinguish the two budgets');
   }
   // A shape that contradicts the declared size must be refused, not trusted.
   const contradictory = structuredClone(visionManifest);
@@ -198,7 +209,7 @@ try {
     fail('an image slot whose size contradicts its shape was accepted');
   }
   console.log(
-    `[vision-observation] contract: 61D MicroDuck stays vector-only; vision contract accepted (${vectorSize}D vector + ${channels}x${imageHeight}x${imageWidth} image, flat ${total}); contradictory shape refused`,
+    `[vision-observation] contract: 61D MicroDuck stays vector-only; vision contract accepted (${vectorSize}D vector + ${channels}x${imageHeight}x${imageWidth} image, vector ${vectorTotal}) via separate budgets; contradictory shape refused`,
   );
 
   // 3. Real ONNX input signatures. A dimension-only check cannot tell these

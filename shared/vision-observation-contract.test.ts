@@ -8,13 +8,12 @@ import {
 /**
  * Vision observation contract.
  *
- * The platform originally declared observations as a flat list of scalar slots
- * whose sizes must sum to the flat `observationSize`. Adding an image branch
- * therefore must not weaken that invariant, because the contract validator, the
- * local worker and the board runtime all assert it independently. These cases
- * pin the mechanism: an image slot reports the *flattened* element count as its
- * `size` and carries its shape alongside, so a vector-only contract keeps its
- * exact previous meaning.
+ * The platform declares observations as a list of slots, and `observationSize`
+ * is the policy's flat VECTOR input width. Image slots carry their own shape and
+ * are budgeted by it rather than by the 4096-element flat cap, because a single
+ * realistic camera frame (3x64x64 = 12288) is already several times that cap.
+ * These cases pin both halves of that: images are accepted and normalized with
+ * their shape, and the vector sum still has to equal `observationSize` exactly.
  */
 
 /** Builds a manifest with an image-capable contract, defaulting to a valid one. */
@@ -54,9 +53,12 @@ function manifestWithImageLayout(
   return base;
 }
 
-const IMAGE_ONLY_LAYOUT = [
-  { name: 'camera', size: 3 * 8 * 8, modality: 'image', channels: 3, height: 8, width: 8 },
+/** A 3x64x64 frame plus the six vector values a navigation policy still needs. */
+const VISION_LAYOUT = [
+  { name: 'imu-gravity', size: 6 },
+  { name: 'camera', size: 3 * 64 * 64, modality: 'image', channels: 3, height: 64, width: 64 },
 ];
+const VISION_VECTOR_SIZE = 6;
 
 describe('vision observation contract', () => {
   it('keeps the vector-only MicroDuck contract byte-identical', () => {
@@ -72,15 +74,18 @@ describe('vision observation contract', () => {
   });
 
   it('accepts an image layout and preserves its shape through normalization', () => {
-    const result = validateSim2RealManifest(manifestWithImageLayout(IMAGE_ONLY_LAYOUT, 192));
+    const result = validateSim2RealManifest(
+      manifestWithImageLayout(VISION_LAYOUT, VISION_VECTOR_SIZE),
+    );
     if (!result.valid) console.log(result.errors);
     expect(result.valid).toBe(true);
     expect(result.manifest?.contract.observationLayout).toEqual([
-      { name: 'camera', size: 192, modality: 'image', channels: 3, height: 8, width: 8 },
+      { name: 'imu-gravity', size: 6 },
+      { name: 'camera', size: 12288, modality: 'image', channels: 3, height: 64, width: 64 },
     ]);
   });
 
-  it('accepts a mixed vector+image layout whose flat sizes still sum to observationSize', () => {
+  it('accepts a mixed vector+image layout and only sums the vector slots', () => {
     const result = validateSim2RealManifest(
       manifestWithImageLayout(
         [
@@ -88,15 +93,26 @@ describe('vision observation contract', () => {
           { name: 'camera', size: 3 * 4 * 4, modality: 'image', channels: 3, height: 4, width: 4 },
           { name: 'goal', size: 2 },
         ],
-        56,
+        8,
       ),
     );
     if (!result.valid) console.log(result.errors);
     expect(result.valid).toBe(true);
     const layout = result.manifest?.contract.observationLayout ?? [];
-    const total = layout.reduce((sum, item) => sum + item.size, 0);
-    expect(total).toBe(56);
+    // 6 + 2 vector values; the 48-element frame is budgeted by its shape.
+    expect(layout.reduce((sum, item) => sum + item.size, 0)).toBe(56);
     expect(layout.map((item) => item.name)).toEqual(['imu-gravity', 'camera', 'goal']);
+  });
+
+  it('accepts a realistic camera frame that exceeds the flat vector budget', () => {
+    // This is the case that forced the budget split. The flat per-frame cap is
+    // 4096 elements, so a 3x64x64 frame (12288) must NOT be rejected for
+    // exceeding it, while the vector half must still fit inside it.
+    expect(VISION_LAYOUT[1]!.size).toBeGreaterThan(4096);
+    const result = validateSim2RealManifest(
+      manifestWithImageLayout(VISION_LAYOUT, VISION_VECTOR_SIZE),
+    );
+    expect(result.valid).toBe(true);
   });
 
   it('rejects an image slot whose size disagrees with channels*height*width', () => {
@@ -144,41 +160,49 @@ describe('vision observation contract', () => {
     expect(result.errors.join('\n')).toMatch(/declares an image shape without modality "image"/);
   });
 
-  it('rejects an image bigger than the platform observation budget', () => {
-    // Worth stating explicitly because it is easy to assume the per-item budget
-    // is the binding limit: it is not. The layout-sum invariant means a single
-    // slot can never exceed the flat total, and `maxObservationSize` (4096) is
-    // the same number as `maxObservationLayoutItemSize`, so `observationSize`
-    // always rejects first. The per-item check stays as defence in depth for a
-    // future change that raises the total without revisiting the item budget.
-    const result = validateSim2RealManifest(
-      manifestWithImageLayout(IMAGE_ONLY_LAYOUT, 5_000, {
-        observationLayout: [
-          { name: 'camera', size: 5_000, modality: 'image', channels: 4, height: 25, width: 50 },
-        ],
-      }),
-    );
-    expect(result.valid).toBe(false);
-    expect(result.errors.join('\n')).toMatch(/contract\.observationSize must be at most 4096/);
-  });
-
   it('rejects an image shape outside the per-axis bounds', () => {
-    // 5 channels exceeds maxObservationImageChannels (4). 5*8*8 = 320 keeps the
-    // flat total legal, so this isolates the shape bound from the total bound.
+    // 5 channels exceeds maxObservationImageChannels (4). The vector half stays
+    // valid at 6 so the rejection isolates the shape bound.
     const result = validateSim2RealManifest(
       manifestWithImageLayout(
-        [{ name: 'camera', size: 320, modality: 'image', channels: 5, height: 8, width: 8 }],
-        320,
+        [
+          { name: 'imu-gravity', size: 6 },
+          { name: 'camera', size: 5 * 8 * 8, modality: 'image', channels: 5, height: 8, width: 8 },
+        ],
+        6,
       ),
     );
     expect(result.valid).toBe(false);
     expect(result.errors.join('\n')).toMatch(/image item shape must be positive integers within/);
   });
 
-  it('still requires the layout to sum to observationSize when an image is present', () => {
-    // 192 declared, 190 summed: the pre-existing invariant must keep holding.
-    const result = validateSim2RealManifest(manifestWithImageLayout(IMAGE_ONLY_LAYOUT, 190));
+  it('still requires the vector slots to sum to observationSize when an image is present', () => {
+    // The image does not contribute, so 8 vector values declared against
+    // observationSize 6 must still fail.
+    const result = validateSim2RealManifest(
+      manifestWithImageLayout(
+        [
+          { name: 'imu-gravity', size: 6 },
+          { name: 'goal', size: 2 },
+          { name: 'camera', size: 3 * 4 * 4, modality: 'image', channels: 3, height: 4, width: 4 },
+        ],
+        6,
+      ),
+    );
     expect(result.valid).toBe(false);
     expect(result.errors.join('\n')).toMatch(/sizes must add up to contract\.observationSize/);
+  });
+
+  it('rejects a vision contract with no vector slot at all', () => {
+    // A pure-image contract would need observationSize 0, which the platform
+    // rejects, and a visual policy still needs its state vector. Fail loudly
+    // rather than accepting a contract whose vector input width cannot exist.
+    const result = validateSim2RealManifest(
+      manifestWithImageLayout(
+        [{ name: 'camera', size: 3 * 4 * 4, modality: 'image', channels: 3, height: 4, width: 4 }],
+        48,
+      ),
+    );
+    expect(result.valid).toBe(false);
   });
 });

@@ -80,6 +80,11 @@ export const SIM2REAL_CONTRACT_LIMITS = Object.freeze({
   maxObservationImageChannels: 4,
   maxObservationImageHeight: 1_080,
   maxObservationImageWidth: 1_920,
+  // Image elements are budgeted separately from the 4096-element flat vector
+  // budget: no realistic camera frame fits in 4096, so sharing one number would
+  // mean either rejecting every real frame or raising a safety cap designed for
+  // flat vectors. A full-HD RGBA frame is the largest accepted single frame.
+  maxObservationImageElements: 4 * 1_080 * 1_920,
 });
 
 /** Product lines share a workflow, not a policy contract. */
@@ -198,13 +203,16 @@ export interface Sim2RealCheckpointRef {
 /**
  * One declared observation slot.
  *
- * `size` is always the flat element count of the slot, so the sum of every
- * entry's `size` stays equal to the flat `contract.observationSize`. That
- * invariant is asserted by the contract validator, the local worker and the
- * board runtime, so introducing an image slot must not break it: an image slot
- * reports the flattened `channels * height * width` as its `size` and carries
- * the shape alongside it. A vector slot therefore stays exactly
- * `{ name, size }` and every pre-existing contract is unchanged.
+ * `size` is always the flat element count of the slot: for a vector slot that
+ * is its width, and for an image slot it is `channels * height * width`, with
+ * the shape carried alongside for consumers that need to reshape the frame.
+ *
+ * Budgeting: `observationSize` is the policy's flat VECTOR input width, so only
+ * vector slots are summed against it (see the invariant in
+ * `validateSim2RealManifest`). An image slot is bounded by its declared shape
+ * instead, because a single realistic camera frame is already several times the
+ * 4096-element flat budget. A vector slot is therefore still exactly
+ * `{ name, size }` and every pre-existing contract keeps its exact meaning.
  */
 export type Sim2RealObservationLayoutItem =
   | { name: string; size: number }
@@ -1032,17 +1040,22 @@ function normalizeLayout(
           return { name, size: size ? Math.floor(size) : 0 };
         }
         const flat = channels * height * width;
-        // The flat total is what keeps the layout-sum invariant meaningful, so
-        // a mismatch is a hard error instead of a silent preference for one of
-        // the two numbers.
+        // `size` is derived from the declared shape rather than trusted, so a
+        // disagreement is a hard error instead of a silent preference for one
+        // of the two numbers.
         if (Math.floor(size ?? 0) !== flat) {
           errors.push(
             `contract.observationLayout image item "${name}" size must equal channels*height*width (${flat})`,
           );
         }
-        if (flat > SIM2REAL_CONTRACT_LIMITS.maxObservationLayoutItemSize) {
+        // Image elements are budgeted separately from flat vector slots: the
+        // vector budget is 4096 elements, which no real frame fits inside, while
+        // `maxObservationLayoutItemSize` exists to bound a single flat vector
+        // slot. Exceeding this one means the declared shape is implausible (a
+        // full-HD RGBA frame is the largest thing this platform will accept).
+        if (flat > SIM2REAL_CONTRACT_LIMITS.maxObservationImageElements) {
           errors.push(
-            `contract.observationLayout image item "${name}" exceeds ${SIM2REAL_CONTRACT_LIMITS.maxObservationLayoutItemSize} flattened elements`,
+            `contract.observationLayout image item "${name}" exceeds ${SIM2REAL_CONTRACT_LIMITS.maxObservationImageElements} elements`,
           );
         }
         return {
@@ -1312,11 +1325,28 @@ export function validateSim2RealManifest(input: unknown): Sim2RealValidationResu
     errors.push(`contract.id must start with ${profile.contractIdPrefix}`);
   }
   if (!isFixedMicroDuck) {
-    const layoutTotal = normalizedContract.observationLayout.reduce(
-      (sum, item) => sum + item.size,
+    // `observationSize` is the policy's flat VECTOR input width, so image slots
+    // are deliberately excluded from this sum.
+    //
+    // Counting an image here was the first attempt and it does not survive
+    // contact with the platform: the flat per-frame budget is 4096 elements
+    // (`SIM2REAL_CONTRACT_LIMITS.maxObservationSize`, duplicated in the
+    // adapter/profile validators, the RoboGo runner, the mock worker and the
+    // board runtime) while a single 3x64x64 camera frame is already 12288. Tying
+    // the two together would mean either no realistic camera can ever be
+    // declared, or a safety cap designed for flat vectors has to be raised for
+    // everyone. Neither is acceptable, so images are budgeted by their declared
+    // shape (bounded by the per-axis limits in `normalizeLayout`) and the sum
+    // check keeps applying to exactly what it applied to before.
+    //
+    // Backward compatibility is total: every pre-existing contract is
+    // vector-only, so for those this reduces to the original
+    // `sum(all slots) === observationSize`.
+    const vectorTotal = normalizedContract.observationLayout.reduce(
+      (sum, item) => sum + ('modality' in item ? 0 : item.size),
       0,
     );
-    if (layoutTotal !== normalizedContract.observationSize) {
+    if (vectorTotal !== normalizedContract.observationSize) {
       errors.push('contract.observationLayout sizes must add up to contract.observationSize');
     }
   }
