@@ -28,7 +28,7 @@
 - [ ] `npm ci && npm run verify` 在干净 checkout 上全绿（verify 已包含公开面安全扫描）。
 - [ ] `npx tsc --noEmit` 全绿。
 - [ ] `npm run lint` 与 `npm run format:check` 全绿。
-- [ ] CI 在 Node 20 / 22 / 24 三个版本上全绿。
+- [ ] CI 在 Node 22 / 24 两个版本上全绿（Node 20 已退役，见 `.github/workflows/verify.yml`）。
 
 ## 运营配置
 

@@ -43,7 +43,7 @@ OriginBot 是第一台参考机型；换一台底盘机器人应当只需要换�
 | **遥测有界读 + 保留（本轮新增）** | ✅ | 小 `limit` 的列表请求解析到第 N 条即停止（乱序迟到分块自动回退全量以保证逐字节一致）；`RDK_SIM2REAL_TELEMETRY_RETENTION_DAYS` 按天淘汰过期遥测，分片与台账索引同生共死，默认关闭 |
 | **单写者租约（本轮新增）** | ✅ | 写台账前获取/续租 `<storage>/writer-lease.json`；同主机按 pid 存活、跨主机按心跳新鲜度判定；冲突 fail-closed 并映射为 503 + `retryable:false` + 可执行建议；`RDK_SIM2REAL_STORAGE_LEASE=0` 可关闭（排障用） |
 | **前端注入门禁（本轮新增）** | ✅ | `verify:escape-audit` 扫描 `innerHTML`/`outerHTML` 模板插值，未转义即失败；豁免必须带理由，写在模板字面量文本里的"注释"不被承认 |
-| **工程护栏（本轮新增）** | ✅ | ESLint（flat config，error 级零违规）+ Prettier + EditorConfig；Vitest 4.1.11 覆盖率阈值（lines 71、statements 68、functions 74、branches 61）；Dependabot（npm/Actions/pip）；CI Node 20/22/24 矩阵 |
+| **工程护栏（本轮新增）** | ✅ | ESLint（flat config，error 级零违规）+ Prettier + EditorConfig；Vitest 5 覆盖率阈值（lines 71、statements 68、functions 74、branches 61）；Dependabot（npm/Actions/pip）；CI Node 22/24 矩阵（Node 20 已退役） |
 | 诚实性原则 | ✅ | mock 永远标注、遥测不伪造、fail-closed、急停常开 |
 
 ## 差距与计划
