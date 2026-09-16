@@ -510,6 +510,65 @@ def main():
                               out_height=1, out_width=1) is None
     print("camera frame converter (row padding + unknown encoding refusal): OK")
 
+
+    # 10l) Frame spooling for the uploader. The board uploader is a pass-through
+    #      of the spool, so a frame that reaches the spool reaches the platform;
+    #      the stride is what keeps the bounded, non-evicting spool from being
+    #      dominated by images.
+    import base64 as _base64
+
+    spool = os.path.join(tmp, "frame-spool.jsonl")
+    runtime = _vision_runtime({
+        "RDK_SIM2REAL_OBSERVATION_LAYOUT": "imu-gravity-camera-v1",
+        "RDK_SIM2REAL_OBSERVATION_IMAGE": "%dx%dx%d" % (channels, height, width),
+        "RDK_SIM2REAL_RUN_ID": "run-frame-spool",
+        "RDK_BOARD_TELEMETRY_SPOOL": spool,
+        "RDK_SIM2REAL_FRAME_STRIDE": "2",
+    })
+    rt_obj = runtime.PolicyRuntime()
+    assert rt_obj.load(vision_model).get("ok")
+    _write_snapshot(snapshot, {"channels": channels, "data": [5] * frame_len})
+    step = rt_obj._build_observation_for_inference()
+    assert step is not None
+    vector, frame = step
+    for _ in range(4):
+        rt_obj._append_telemetry(vector, [0.0, 0.0], (0.0, 0.0), frame)
+    with open(spool, "r", encoding="utf-8") as fh:
+        records = [json.loads(line) for line in fh if line.strip()]
+    assert len(records) == 4, len(records)
+    framed = [r for r in records if "cameraFrame" in r]
+    # Stride 2 over indices 1..4 means samples 2 and 4 carry a frame.
+    assert len(framed) == 2, [r.get("cameraFrame") is not None for r in records]
+    assert [i for i, r in enumerate(records, start=1) if "cameraFrame" in r] == [2, 4]
+    payload = framed[0]["cameraFrame"]
+    assert payload["encoding"] == "rgb8" and payload["channels"] == channels, payload
+    assert payload["width"] == width and payload["height"] == height, payload
+    assert len(_base64.b64decode(payload["data"])) == frame_len
+    # The vector observation must stay a flat float list: calibration and replay
+    # analysis read it as one, so the frame may not be folded into it.
+    assert all(isinstance(v, float) for v in records[0]["observation"]), records[0]["observation"][:3]
+    print("frame spooling honours the stride and keeps the observation flat: OK")
+
+    # 10m) Stride 0 disables frame spooling entirely (a board without a vision
+    #      policy, or one with a tight spool budget).
+    spool_off = os.path.join(tmp, "frame-spool-off.jsonl")
+    runtime = _vision_runtime({
+        "RDK_SIM2REAL_OBSERVATION_LAYOUT": "imu-gravity-camera-v1",
+        "RDK_SIM2REAL_OBSERVATION_IMAGE": "%dx%dx%d" % (channels, height, width),
+        "RDK_SIM2REAL_RUN_ID": "run-frame-spool-off",
+        "RDK_BOARD_TELEMETRY_SPOOL": spool_off,
+        "RDK_SIM2REAL_FRAME_STRIDE": "0",
+    })
+    rt_obj = runtime.PolicyRuntime()
+    assert rt_obj.load(vision_model).get("ok")
+    for _ in range(4):
+        rt_obj._append_telemetry(vector, [0.0, 0.0], (0.0, 0.0), frame)
+    with open(spool_off, "r", encoding="utf-8") as fh:
+        off_records = [json.loads(line) for line in fh if line.strip()]
+    assert len(off_records) == 4, len(off_records)
+    assert all("cameraFrame" not in r for r in off_records)
+    print("frame stride 0 disables frame spooling: OK")
+
     print("PASS: policy provider selection + declared observation layout")
     return 0
 

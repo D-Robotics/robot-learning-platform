@@ -48,6 +48,7 @@ state snapshot as `lastOp` (seq-correlated) so callers see honest errors.
 """
 
 import json
+import base64
 import hashlib
 import math
 import os
@@ -209,6 +210,23 @@ def _visual_image_shape():
 
 
 VISUAL_IMAGE_SHAPE = _visual_image_shape()
+
+
+def _frame_stride():
+    """How many samples apart the spooled camera frames are.
+
+    ``0`` disables frame spooling entirely, which is what a board without a
+    vision policy or with a tight spool budget should set. Bounded so a typo
+    cannot turn the spool into a video stream.
+    """
+    try:
+        value = int(os.environ.get("RDK_SIM2REAL_FRAME_STRIDE", "10"))
+    except (TypeError, ValueError):
+        value = 10
+    return max(0, min(600, value))
+
+
+TELEMETRY_FRAME_STRIDE = _frame_stride()
 
 def _provider_request():
     value = os.environ.get("RDK_BOARD_POLICY_PROVIDER", "").strip().lower()
@@ -375,6 +393,8 @@ class PolicyRuntime:
         # raise, and any raise in the loop stops motion).
         self._vector_input_name = ""
         self._image_input_name = ""
+        # Counts spooled samples so frames can be emitted every Nth one.
+        self._spool_sample_index = 0
         self._state = "idle"          # idle | ready | running | fault
         self._last_error = None
         self._last_op = None          # {op, seq, ok, error, detail, at}
@@ -1052,7 +1072,7 @@ class PolicyRuntime:
                 action = [float(v) for v in result]
                 linear, angular = self._project_action(action)
                 self._publish_cmd(linear, angular)
-                self._append_telemetry(obs, action, (linear, angular))
+                self._append_telemetry(obs, action, (linear, angular), frame)
                 with self._lock:
                     self._last_obs = obs
                     self._last_action = action[:EXPECTED_ACTION_DIM]
@@ -1163,7 +1183,7 @@ class PolicyRuntime:
             # the watchdog; spool loss is surfaced by health checks instead.
             return
 
-    def _append_telemetry(self, observation, action, cmd_vel=None):
+    def _append_telemetry(self, observation, action, cmd_vel=None, camera_frame=None):
         """Persist the exact observation/action pair used for inference.
 
         The spool is append-only and bounded. A separate uploader can retry
@@ -1176,6 +1196,7 @@ class PolicyRuntime:
             if secure_size(TELEMETRY_SPOOL_FILE) >= TELEMETRY_MAX_BYTES:
                 self._telemetry_dropped += 1
                 return
+            self._spool_sample_index += 1
             record = {
                 "source": "board-agent",
                 "t": max(0.0, time.time() - (self._started_at or time.time())),
@@ -1197,6 +1218,36 @@ class PolicyRuntime:
                     "units": "m/s,rad/s",
                 },
             }
+            # Sparse aligned camera frame for the evaluation page. The vector
+            # observation stays a flat float list - calibration and replay
+            # analysis read it as one - so the frame rides in its own field.
+            #
+            # Emitted once every TELEMETRY_FRAME_STRIDE samples rather than every
+            # step: a frame per control step would multiply the spool by orders
+            # of magnitude (a 3x64x64 frame is 12288 bytes against ~300 bytes of
+            # vector data), and the spool is bounded at TELEMETRY_MAX_BYTES with
+            # no eviction. Striding keeps frames spread across the whole timeline
+            # for scrubbing while holding the cost to roughly one frame per
+            # second at the default decision rate.
+            if (
+                camera_frame is not None
+                and TELEMETRY_FRAME_STRIDE > 0
+                and VISUAL_IMAGE_SHAPE is not None
+                and self._spool_sample_index % TELEMETRY_FRAME_STRIDE == 0
+            ):
+                channels, _height, _width = VISUAL_IMAGE_SHAPE
+                record["cameraFrame"] = {
+                    "encoding": "rgb8" if channels == 3 else "mono8",
+                    "width": int(_width),
+                    "height": int(_height),
+                    "channels": int(channels),
+                    "data": base64.b64encode(
+                        bytes(
+                            max(0, min(255, int(round(float(value)))))
+                            for value in camera_frame
+                        )
+                    ).decode("ascii"),
+                }
             # Preserve the measured base state needed for calibration and
             # replay.  For the native 8D contract the heading is already
             # encoded as sin/cos in the exact observation supplied to the
