@@ -13,7 +13,14 @@ WorkingDirectory=/opt/mujoco-web/current
 Environment=MUJOCO_GL=egl
 Environment=PYTHONUNBUFFERED=1
 Environment=XDG_CACHE_HOME=/tmp/mujoco-web-cache
-ExecStart=/opt/mujoco-web/venv/bin/uvicorn app:app --host 127.0.0.1 --port 18100 --workers 1
+# Launch via the venv's interpreter with `-m uvicorn` rather than the venv's
+# uvicorn shim so the ExecStart binary (/usr/bin/env python3) resolves on any
+# machine — the venv path only survives as a working-directory-relative module
+# lookup. PATH below puts the venv's bin first so `python3` and `uvicorn`
+# resolve to the venv's copies; the ConditionPathExists gates still prove the
+# venv is installed before the unit can start in production.
+Environment=PATH=/opt/mujoco-web/venv/bin:/usr/local/bin:/usr/bin:/bin
+ExecStart=/usr/bin/env python3 -m uvicorn app:app --host 127.0.0.1 --port 18100 --workers 1
 Restart=always
 RestartSec=3
 NoNewPrivileges=true
