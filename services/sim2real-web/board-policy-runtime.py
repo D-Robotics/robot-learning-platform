@@ -174,12 +174,41 @@ COMMAND_MESSAGE_TYPE = str(_actuator.get("messageType") or ((_ros_topics.get("cm
 # older adapter files, but any layout this runtime does not know fails
 # closed at start — a mis-declared adapter must never silently feed a policy
 # a differently-shaped observation.
-KNOWN_OBSERVATION_LAYOUTS = ("imu-gravity-v1", "originbot-imu-odom-v1")
+KNOWN_OBSERVATION_LAYOUTS = ("imu-gravity-v1", "originbot-imu-odom-v1", "imu-gravity-camera-v1")
 OBSERVATION_LAYOUT = str(
     os.environ.get("RDK_SIM2REAL_OBSERVATION_LAYOUT")
     or _runtime.get("observationLayout")
     or "auto"
 ).strip().lower() or "auto"
+
+VISION_LAYOUT = OBSERVATION_LAYOUT == "imu-gravity-camera-v1"
+
+
+def _visual_image_shape():
+    """``(channels, height, width)`` declared by the adapter, or ``None``.
+
+    The image shape is board hardware configuration (which camera, which
+    downscale), not something the runtime may guess: a policy that expects
+    3x64x64 fed a differently-shaped frame would either raise mid-loop or, worse,
+    be fed a silently reinterpreted buffer. A vision layout with no declared
+    shape therefore fails at start rather than at the first frame.
+    """
+    raw = os.environ.get("RDK_SIM2REAL_OBSERVATION_IMAGE", "").strip().lower()
+    if not raw:
+        return None
+    parts = raw.replace(",", "x").split("x")
+    if len(parts) != 3:
+        return None
+    try:
+        values = tuple(int(part) for part in parts)
+    except (TypeError, ValueError):
+        return None
+    if any(value < 1 or value > 4096 for value in values):
+        return None
+    return values
+
+
+VISUAL_IMAGE_SHAPE = _visual_image_shape()
 
 def _provider_request():
     value = os.environ.get("RDK_BOARD_POLICY_PROVIDER", "").strip().lower()
@@ -274,12 +303,78 @@ def _sensor_sample_fresh(sensor, *, now_monotonic_ns=None):
     return math.isfinite(age_sec) and age_sec >= -0.25 and age_sec <= STALL_LIMIT_SEC
 
 
+def _read_camera_frame():
+    """The declared image as a flat float list, or ``None``.
+
+    Fail-closed on every axis, because the alternative is a policy acting on a
+    fabricated or silently reinterpreted frame:
+
+    - the snapshot must exist and be fresh (same wall-clock rules as the IMU);
+    - the frame must carry a monotonic source stamp inside the same stall
+      budget, so a frozen camera topic cannot be mistaken for a live one;
+    - its channel count and length must match the declared shape exactly, so a
+      driver that changed resolution or pixel format fails instead of being
+      reshaped into something plausible.
+
+    The frame is intentionally NOT written to the telemetry spool: that spool
+    carries flat float observation/action pairs at control rate, and a frame per
+    step would inflate it by orders of magnitude. Frames are inference input,
+    not telemetry, and replay uses the recorded vector observation.
+    """
+    if VISUAL_IMAGE_SHAPE is None:
+        return None
+    channels, height, width = VISUAL_IMAGE_SHAPE
+    try:
+        snap = secure_read_json(TELEMETRY_SNAPSHOT_FILE)
+        snapshot_ts = float(snap.get("ts", 0))
+        now = time.time()
+        if not math.isfinite(snapshot_ts) or snapshot_ts - now > 0.25:
+            return None
+        if now - snapshot_ts > STALL_LIMIT_SEC:
+            return None
+        data = snap.get("data")
+        if not isinstance(data, dict):
+            return None
+        camera = data.get("camera")
+        if not _sensor_sample_fresh(camera):
+            return None
+        frame = camera.get("data")
+        if not isinstance(frame, list):
+            return None
+        try:
+            declared_channels = int(camera.get("channels", channels))
+        except (TypeError, ValueError, OverflowError):
+            return None
+        if declared_channels != channels:
+            return None
+        expected = channels * height * width
+        if len(frame) != expected:
+            return None
+        values = []
+        for value in frame:
+            try:
+                numeric = float(value)
+            except (TypeError, ValueError):
+                return None
+            if not math.isfinite(numeric):
+                return None
+            values.append(numeric)
+        return values
+    except (OSError, TypeError, ValueError):
+        return None
+
+
 class PolicyRuntime:
     def __init__(self):
         self._lock = threading.Lock()
         self._model = None            # onnxruntime session or hobot_dnn model
         self._model_kind = None       # onnx | bpu
         self._model_meta = None       # {path, bytes, inputDim, outputDim}
+        # Resolved at load time from the real session inputs so the control loop
+        # never has to search for them (a lookup failure inside the loop would
+        # raise, and any raise in the loop stops motion).
+        self._vector_input_name = ""
+        self._image_input_name = ""
         self._state = "idle"          # idle | ready | running | fault
         self._last_error = None
         self._last_op = None          # {op, seq, ok, error, detail, at}
@@ -396,7 +491,7 @@ class PolicyRuntime:
                 "slots_adapter": 0,
             }
         filled = 6 + min(EXPECTED_ACTION_DIM, max(0, EXPECTED_OBS_DIM - 6))
-        return {
+        report = {
             "contract": f"{EXPECTED_OBS_DIM}D obs / {EXPECTED_ACTION_DIM}D act (or 2D vw)",
             "gyro": "real (/imu angular_velocity)",
             "projected_gravity": "real (quaternion-derived, roll/pitch)",
@@ -410,6 +505,19 @@ class PolicyRuntime:
             "slots_adapter": max(0, EXPECTED_OBS_DIM - 6),
             "note": f"slots 0-5 real sensors; slots 6-{filled - 1} adapter (last_action/command); any remainder zero-padded to {EXPECTED_OBS_DIM}D",
         }
+        if VISION_LAYOUT:
+            # The image is a separate model input, not a slot in the vector
+            # contract, so it is reported separately rather than inflating
+            # slots_real. Absent shape/input means the load path already failed,
+            # so reaching here with a missing one would be a bug worth showing.
+            report["image"] = (
+                "real (camera frame -> model image input)"
+                if VISUAL_IMAGE_SHAPE and self._image_input_name
+                else "missing (no declared shape or no model image input)"
+            )
+            report["imageShape"] = list(VISUAL_IMAGE_SHAPE) if VISUAL_IMAGE_SHAPE else None
+            report["imageInput"] = self._image_input_name or None
+        return report
 
     # ---- lifecycle ------------------------------------------------------
     def _record_op(self, op, req, res):
@@ -517,7 +625,20 @@ class PolicyRuntime:
             sess = rt.InferenceSession(
                 model_path, providers=session_providers
             )
-            inp = sess.get_inputs()[0]
+            inputs = sess.get_inputs()
+            # The vector input is matched by RANK, not by position: a vision
+            # export has two inputs and onnxruntime does not promise an order,
+            # so `get_inputs()[0]` would silently read the image's last axis as
+            # the observation width on a model that happened to list it first.
+            vector_inputs = [i for i in inputs if len(i.shape) == 2]
+            if not vector_inputs:
+                return {
+                    "ok": False,
+                    "error": "policy-input-dimension-mismatch",
+                    "detail": "no rank-2 observation input in this model",
+                    "actual": [list(i.shape) for i in inputs],
+                }
+            inp = vector_inputs[0]
             out = sess.get_outputs()[0]
             input_dim = int(inp.shape[-1]) if inp.shape and isinstance(inp.shape[-1], (int, float)) else 0
             output_dim = int(out.shape[-1]) if out.shape and isinstance(out.shape[-1], (int, float)) else 0
@@ -543,10 +664,54 @@ class PolicyRuntime:
             if OBSERVATION_LAYOUT == "imu-gravity-v1" and input_dim != EXPECTED_OBS_DIM:
                 return {"ok": False, "error": "layout-model-mismatch",
                         "detail": "adapter declares imu-gravity-v1 (contract head %dD) but model input is %dD" % (EXPECTED_OBS_DIM, input_dim)}
+            # ---- vision branch ---------------------------------------------
+            # A declared vision layout is a claim that this model consumes a
+            # camera frame. Check it against the real session inputs now, the
+            # same way the vector layouts are checked, so a model exported
+            # without its image branch is rejected at load instead of failing
+            # (or worse, being read as vector-only) at the first frame.
+            image_input_name = ""
+            if VISION_LAYOUT:
+                if VISUAL_IMAGE_SHAPE is None:
+                    return {
+                        "ok": False,
+                        "error": "observation-image-shape-missing",
+                        "detail": "layout imu-gravity-camera-v1 requires "
+                                  "RDK_SIM2REAL_OBSERVATION_IMAGE (channelsxheightxwidth)",
+                    }
+                channels, height, width = VISUAL_IMAGE_SHAPE
+                rank4 = [i for i in inputs if len(i.shape) == 4]
+                if len(rank4) != 1:
+                    return {
+                        "ok": False,
+                        "error": "layout-model-mismatch",
+                        "detail": "layout imu-gravity-camera-v1 requires exactly one rank-4 image "
+                                  "input; this model exposes %d" % len(rank4),
+                    }
+                image_input = rank4[0]
+                image_input_name = str(image_input.name)
+                declared_channels = image_input.shape[-1]
+                if not isinstance(declared_channels, (int, float)):
+                    return {
+                        "ok": False,
+                        "error": "layout-model-mismatch",
+                        "detail": "model image input %r has a dynamic channel axis; the declared "
+                                  "shape %dx%dx%d cannot be verified" % (image_input.name, channels, height, width),
+                    }
+                if int(declared_channels) != channels:
+                    return {
+                        "ok": False,
+                        "error": "layout-model-mismatch",
+                        "detail": "declared image has %d channels but model input %r has %d"
+                                  % (channels, image_input.name, int(declared_channels)),
+                    }
+            if not image_input_name and not inp.name:
+                return {"ok": False, "error": "policy-input-name-missing"}
+            vector_input_name = str(inp.name)
             # Select the adapter contract from the inspected model. This lets
             # OriginBot 8D->2D policies share the same runtime as 61D->14D
             # policies without a second board service.
-            if input_dim == 8:
+            if input_dim == 8 and not VISION_LAYOUT:
                 EXPECTED_OBS_DIM = 8
                 EXPECTED_ACTION_DIM = 2
             meta = {
@@ -560,11 +725,16 @@ class PolicyRuntime:
                 "sha256": _sha256_file(model_path),
                 "actionOutput": ACTION_OUTPUT,
                 "actionScale": {"linear": float(MAX_LINEAR), "angular": float(MAX_ANGULAR), "units": "m/s,rad/s"},
+                "observationLayout": OBSERVATION_LAYOUT,
+                "imageInput": image_input_name or None,
+                "imageShape": list(VISUAL_IMAGE_SHAPE) if (VISION_LAYOUT and VISUAL_IMAGE_SHAPE) else None,
             }
             with self._lock:
                 self._model = sess
                 self._model_kind = "onnx"
                 self._model_meta = meta
+                self._vector_input_name = vector_input_name
+                self._image_input_name = image_input_name
                 self._state = "ready" if self._state == "idle" else self._state
                 self._last_error = None
             return {"ok": True, "model": meta}
@@ -776,6 +946,32 @@ class PolicyRuntime:
             obs = obs + [0.0] * (EXPECTED_OBS_DIM - len(obs))
         return obs
 
+    def _build_observation_for_inference(self):
+        """``(vector, image)`` for one inference step.
+
+        The vector half is always ``_build_observation()`` — the same
+        real-sensor head and the same fail-closed ``None`` — so a vision policy
+        keeps exactly the vector semantics (and the staleness budget) of a
+        vector-only one. ``image`` is ``None`` unless this runtime was started
+        with an explicitly declared vision layout, and a missing or malformed
+        frame yields ``None`` for the whole tuple so the caller takes the same
+        bounded zero-output path it takes for stale telemetry. A policy must
+        never act on a fabricated frame.
+        """
+        vector = self._build_observation()
+        if vector is None:
+            return None
+        if not VISION_LAYOUT or VISUAL_IMAGE_SHAPE is None:
+            return vector, None
+        frame = _read_camera_frame()
+        # A vision policy must never act on a fabricated or missing frame. Return
+        # None for the WHOLE step (not an empty frame) so the caller takes the
+        # same bounded zero-output path it takes for stale IMU/odom telemetry.
+        # Returning a tuple here would push the failure into numpy.reshape inside
+        # the control loop, and any raise in the loop stops motion.
+        if frame is None:
+            return None
+        return vector, frame
     def _project_action(self, action):
         """Map policy output onto bounded (linear, angular) base motion.
 
@@ -823,20 +1019,34 @@ class PolicyRuntime:
         while not self._stop_flag.is_set():
             t0 = time.time()
             try:
-                obs = self._build_observation()
-                if obs is None:
+                step = self._build_observation_for_inference()
+                if step is None:
                     self._publish_zero("telemetry-stale")
                     stats_t = self._maybe_stats(stats_t, stale=True)
                     time.sleep(period)
                     continue
+                obs, frame = step
                 import numpy as np
 
                 t_infer = time.time()
                 if self._model_kind == "bpu":
                     result = self._model.forward(np.array(obs, dtype=np.float32).reshape(1, 8, 1, 1))[0].buffer.reshape(-1)
+                elif self._image_input_name:
+                    # Vision export: the frame goes in as NHWC so the board does
+                    # no implicit layout guess. Both feeds were validated against
+                    # the declared shape at load time.
+                    channels, height, width = VISUAL_IMAGE_SHAPE
+                    image = np.array(frame, dtype=np.float32).reshape(1, height, width, channels)
+                    result = self._model.run(
+                        None,
+                        {
+                            self._vector_input_name: np.array([obs], dtype=np.float32),
+                            self._image_input_name: image,
+                        },
+                    )[0][0]
                 else:
                     result = self._model.run(
-                        None, {self._model.get_inputs()[0].name: np.array([obs], dtype=np.float32)}
+                        None, {self._vector_input_name: np.array([obs], dtype=np.float32)}
                     )[0][0]
                 infer_ms = (time.time() - t_infer) * 1000
                 action = [float(v) for v in result]

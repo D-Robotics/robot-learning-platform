@@ -22,6 +22,7 @@ import json
 import os
 import sys
 import tempfile
+import time
 import warnings
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -78,6 +79,79 @@ def _load_runtime(env):
             else:
                 os.environ[name] = value
     return module
+
+
+def _export_vision_onnx(path, obs_dim, channels, height, width):
+    """Two-input export: a rank-2 observation plus an NHWC camera frame.
+
+    The head pools the frame, so the graph accepts any declared resolution and
+    the verifier can exercise more than one contract shape.
+    """
+    import torch
+
+    class VisionNet(torch.nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.head = torch.nn.LazyLinear(2)
+
+        def forward(self, obs, image):
+            pooled = image.mean(dim=(2, 3))
+            return torch.tanh(self.head(torch.cat([obs, pooled], dim=1)))
+
+    model = VisionNet().eval()
+    with torch.no_grad():
+        # Initialise the lazy parameters before export; torch refuses to export
+        # an uninitialised LazyModule.
+        model(torch.zeros(1, obs_dim), torch.zeros(1, height, width, channels))
+    with warnings.catch_warnings():
+        warnings.filterwarnings("ignore", category=DeprecationWarning)
+        torch.onnx.export(
+            model,
+            (torch.zeros(1, obs_dim), torch.zeros(1, height, width, channels)),
+            path,
+            input_names=["obs", "image"],
+            output_names=["act"],
+            dynamo=False,
+        )
+    # Pin the IR version so the file loads on the smallest onnxruntime stack.
+    import onnx
+
+    graph = onnx.load(path)
+    graph.ir_version = 8
+    onnx.save(graph, path)
+
+
+def _write_snapshot(path, camera):
+    """Telemetry snapshot with a real IMU head and the given camera block."""
+    now = time.time()
+    body = {
+        "ts": now,
+        "data": {
+            "imu": {
+                "quaternion": {"x": 0.0, "y": 0.0, "z": 0.0, "w": 1.0},
+                "gyro": {"x": 0.1, "y": 0.2, "z": 0.3},
+                "sampleMonotonicNs": time.monotonic_ns(),
+            }
+        },
+    }
+    if camera is not None:
+        camera = dict(camera)
+        camera.setdefault("sampleMonotonicNs", time.monotonic_ns())
+        body["data"]["camera"] = camera
+    with open(path, "w", encoding="utf-8") as fh:
+        json.dump(body, fh)
+
+
+def _vision_adapter(path, obs_dim, action_dim, layout):
+    with open(path, "w", encoding="utf-8") as fh:
+        json.dump(
+            {
+                "id": "test-vision",
+                "runtime": {"observationLayout": layout, "actionProjection": "identity"},
+                "policy": {"observationSize": obs_dim, "actionSize": action_dim},
+            },
+            fh,
+        )
 
 
 def main():
@@ -236,6 +310,132 @@ def main():
     result = runtime.PolicyRuntime().load(model_8)
     assert not result.get("ok") and result.get("error") == "action-output-mode-invalid", result
     print("unknown action output mode refused: OK")
+
+
+    # 10) Vision layout: the image branch is a separate model input, so it is
+    #     validated against the real session inputs and read from the telemetry
+    #     snapshot fail-closed.
+    import time as _time
+
+    channels, height, width = 3, 4, 4
+    frame_len = channels * height * width
+    vision_model = os.path.join(tmp, "vision.onnx")
+    _export_vision_onnx(vision_model, 6, channels, height, width)
+    snapshot = os.path.join(tmp, "telemetry-snapshot.json")
+    vision_adapter_path = os.path.join(tmp, "adapter-vision.json")
+    _vision_adapter(vision_adapter_path, 6, 2, "imu-gravity-camera-v1")
+
+    def _vision_runtime(extra_env):
+        return _load_runtime(
+            {
+                **base_env,
+                "RDK_SIM2REAL_ADAPTER_CONFIG": vision_adapter_path,
+                "RDK_SIM2REAL_POLICY_OBS_DIM": "6",
+                "RDK_SIM2REAL_POLICY_ACTION_DIM": "2",
+                "RDK_BOARD_TELEMETRY_SNAPSHOT": snapshot,
+                **extra_env,
+            }
+        )
+
+    # 10a) A vision layout with no declared image shape must refuse to load: the
+    #      runtime cannot guess which camera geometry the policy was trained for.
+    runtime = _vision_runtime({"RDK_SIM2REAL_OBSERVATION_LAYOUT": "imu-gravity-camera-v1",
+                               "RDK_SIM2REAL_OBSERVATION_IMAGE": None})
+    result = runtime.PolicyRuntime().load(vision_model)
+    assert not result.get("ok") and result.get("error") == "observation-image-shape-missing", result
+    print("vision layout without declared image shape refused: OK")
+
+    # 10b) A model without an image branch must be refused for a vision layout
+    #      instead of being treated as vector-only.
+    runtime = _vision_runtime({"RDK_SIM2REAL_OBSERVATION_LAYOUT": "imu-gravity-camera-v1",
+                               "RDK_SIM2REAL_OBSERVATION_IMAGE": "%dx%dx%d" % (channels, height, width)})
+    result = runtime.PolicyRuntime().load(model_8 if os.path.exists(model_8) else vision_model)
+    # model_8 has one rank-2 input and no image input, so this must fail closed.
+    assert not result.get("ok"), result
+    assert result.get("error") == "layout-model-mismatch", result
+    assert "rank-4" in result.get("detail", ""), result
+    print("vision layout without a model image input refused: %s" % result["error"])
+
+    # 10c) Declared channel count must match the model's real image channel axis.
+    runtime = _vision_runtime({"RDK_SIM2REAL_OBSERVATION_LAYOUT": "imu-gravity-camera-v1",
+                               "RDK_SIM2REAL_OBSERVATION_IMAGE": "1x%dx%d" % (height, width)})
+    result = runtime.PolicyRuntime().load(vision_model)
+    assert not result.get("ok") and result.get("error") == "layout-model-mismatch", result
+    assert "channels" in result.get("detail", ""), result
+    print("vision channel mismatch refused: OK")
+
+    # 10d) The happy path: load succeeds, the vector half keeps its exact
+    #      vector-only semantics, and the frame is read at the declared shape.
+    runtime = _vision_runtime({"RDK_SIM2REAL_OBSERVATION_LAYOUT": "imu-gravity-camera-v1",
+                               "RDK_SIM2REAL_OBSERVATION_IMAGE": "%dx%dx%d" % (channels, height, width)})
+    rt_obj = runtime.PolicyRuntime()
+    result = rt_obj.load(vision_model)
+    assert result.get("ok"), result
+    meta = result["model"]
+    assert meta["observationLayout"] == "imu-gravity-camera-v1", meta
+    assert meta["imageInput"] == "image", meta
+    assert meta["imageShape"] == [channels, height, width], meta
+    assert meta["inputDim"] == 6, meta
+
+    _write_snapshot(snapshot, {"channels": channels, "data": [0.25] * frame_len})
+    step = rt_obj._build_observation_for_inference()
+    assert step is not None, "a fresh frame and IMU must produce an observation"
+    vector, frame = step
+    assert len(vector) == 6, vector
+    assert frame is not None and len(frame) == frame_len, frame
+    assert frame[0] == 0.25, frame[0]
+    print("vision observation: %dD vector + %dx%dx%d frame assembled" % (len(vector), channels, height, width))
+
+    # 10e) A frozen camera topic must fail closed even while the wrapper file is
+    #      being rewritten with a fresh timestamp.
+    stale_ns = time.monotonic_ns() - int(10 * 1_000_000_000)
+    _write_snapshot(snapshot, {"channels": channels, "data": [0.25] * frame_len,
+                              "sampleMonotonicNs": stale_ns})
+    assert rt_obj._build_observation_for_inference() is None, "a frozen camera must not produce an observation"
+    print("stale camera frame refused: OK")
+
+    # 10f) A truncated frame fails closed rather than being padded or reshaped.
+    _write_snapshot(snapshot, {"channels": channels, "data": [0.25] * (frame_len - 1)})
+    assert rt_obj._build_observation_for_inference() is None, "a short frame must not produce an observation"
+    print("truncated frame refused: OK")
+
+    # 10g) A frame with a non-finite value fails closed: NaN must never reach a
+    #      policy as if it were a real pixel.
+    bad = [0.25] * frame_len
+    bad[3] = float("nan")
+    _write_snapshot(snapshot, {"channels": channels, "data": bad})
+    assert rt_obj._build_observation_for_inference() is None, "a NaN frame must not produce an observation"
+    print("non-finite frame refused: OK")
+
+    # 10h) A missing camera block fails closed, and no frame is written to the
+    #      vector telemetry spool (images are inference input, not telemetry).
+    _write_snapshot(snapshot, None)
+    assert rt_obj._build_observation_for_inference() is None, "a missing camera must not produce an observation"
+    print("missing camera block refused: OK")
+
+    # 10i) A vector-only layout must not read the camera at all: the same missing
+    #      camera block is irrelevant when the layout does not declare an image.
+    vector_only_model = os.path.join(tmp, "vector-only.onnx")
+    _export_tiny_onnx(vector_only_model, 8, 2)
+    vector_adapter_path = os.path.join(tmp, "adapter-vector-only.json")
+    _vision_adapter(vector_adapter_path, 8, 2, "originbot-imu-odom-v1")
+    runtime = _load_runtime(
+        {
+            **base_env,
+            "RDK_SIM2REAL_ADAPTER_CONFIG": vector_adapter_path,
+            "RDK_SIM2REAL_POLICY_OBS_DIM": "8",
+            "RDK_SIM2REAL_POLICY_ACTION_DIM": "2",
+            "RDK_BOARD_TELEMETRY_SNAPSHOT": snapshot,
+            "RDK_SIM2REAL_OBSERVATION_LAYOUT": "originbot-imu-odom-v1",
+            "RDK_SIM2REAL_OBSERVATION_IMAGE": None,
+        }
+    )
+    rt_obj = runtime.PolicyRuntime()
+    result = rt_obj.load(vector_only_model)
+    assert result.get("ok"), result
+    assert result["model"]["imageInput"] is None, result["model"]
+    assert result["model"]["imageShape"] is None, result["model"]
+    print("vector-only layout ignores the camera: OK")
 
     print("PASS: policy provider selection + declared observation layout")
     return 0
