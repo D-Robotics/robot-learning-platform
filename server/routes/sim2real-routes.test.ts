@@ -625,6 +625,154 @@ describe('Sim2Real HTTP routes', () => {
     expect(missing.statusCode).toBe(404);
   });
 
+  it('carries aligned camera frames from board telemetry into replay, refusing dishonest ones', async () => {
+    const router = await fixture();
+    const registerResponse = await invoke(router, 'post', '/api/sim2real/models', {
+      body: { manifest: userManifest() },
+    });
+    const modelId = (registerResponse.body as { model: { id: string } }).model.id;
+    const runResponse = await invoke(router, 'post', '/api/sim2real/runs', {
+      body: { modelId, backend: 'contract', taskId: 'walk' },
+    });
+    const runId = (runResponse.body as { run: { id: string } }).run.id;
+    await registerFixtureDevice('device-1');
+
+    // 2x2 rgb8: 12 bytes. Base64 computed from the exact bytes, so a decoder
+    // that off-by-ones the padding cannot pass by accident.
+    const frame = {
+      encoding: 'rgb8',
+      width: 2,
+      height: 2,
+      channels: 3,
+      data: 'ChQeKDI8RlBaZG54',
+    };
+    const accepted = await invoke(router, 'post', '/api/sim2real/runs/:id/telemetry', {
+      params: { id: runId },
+      body: {
+        source: 'board-agent',
+        deviceId: 'device-1',
+        sequence: 1,
+        idempotencyKey: 'camera-frame-1',
+        samples: [
+          { t: 0, observation: vector(61, 0), action: vector(14, 0), cameraFrame: frame },
+          { t: 0.02, observation: vector(61, 1), action: vector(14, 1) },
+        ],
+      },
+    });
+    expect(accepted.statusCode).toBe(201);
+
+    // The evaluation page reads frames from the replay endpoint, so the frame
+    // must survive ingest -> store -> replay unchanged, including the payload.
+    const replay = await invoke(router, 'get', '/api/sim2real/runs/:id/replay', {
+      params: { id: runId },
+    });
+    expect(replay.statusCode).toBe(200);
+    const frames = (replay.body as { frames: { cameraFrame?: typeof frame }[] }).frames;
+    expect(frames).toHaveLength(2);
+    expect(frames[0]?.cameraFrame).toEqual(frame);
+    // A vector-only sample in the same chunk must stay frame-free rather than
+    // inheriting its neighbour's image.
+    expect(frames[1]).not.toHaveProperty('cameraFrame');
+
+    // A frame whose declared shape disagrees with its payload would render as a
+    // sheared image while every downstream count still looked healthy.
+    const shortPayload = await invoke(router, 'post', '/api/sim2real/runs/:id/telemetry', {
+      params: { id: runId },
+      body: {
+        source: 'board-agent',
+        deviceId: 'device-1',
+        sequence: 2,
+        samples: [
+          {
+            t: 0,
+            observation: vector(61, 0),
+            action: vector(14, 0),
+            cameraFrame: { ...frame, width: 3 },
+          },
+        ],
+      },
+    });
+    expect(shortPayload.statusCode).toBe(400);
+    expect(shortPayload.body).toMatchObject({ code: 'SIM2REAL_INVALID_TELEMETRY' });
+    expect(String((shortPayload.body as { message?: string }).message)).toMatch(
+      /decodes to 12 bytes/,
+    );
+
+    // mono8 declares one byte per pixel; claiming three channels would decode to
+    // three times the declared geometry.
+    const encodingMismatch = await invoke(router, 'post', '/api/sim2real/runs/:id/telemetry', {
+      params: { id: runId },
+      body: {
+        source: 'board-agent',
+        deviceId: 'device-1',
+        sequence: 3,
+        samples: [
+          {
+            t: 0,
+            observation: vector(61, 0),
+            action: vector(14, 0),
+            cameraFrame: { ...frame, encoding: 'mono8' },
+          },
+        ],
+      },
+    });
+    expect(encodingMismatch.statusCode).toBe(400);
+
+    // Frames are attestable board evidence: an imported chunk must not be able
+    // to place fabricated pixels beside real control data.
+    const importedFrame = await invoke(router, 'post', '/api/sim2real/runs/:id/telemetry', {
+      params: { id: runId },
+      body: {
+        source: 'import',
+        sequence: 4,
+        samples: [{ t: 0, observation: vector(61, 0), action: vector(14, 0), cameraFrame: frame }],
+      },
+    });
+    expect(importedFrame.statusCode).toBe(400);
+    expect(String((importedFrame.body as { message?: string }).message)).toMatch(
+      /only accepted from board-agent/,
+    );
+
+    // Lifecycle markers carry no control data, and the replay filter excludes
+    // them, so a frame there would be silently dropped evidence.
+    const onEvent = await invoke(router, 'post', '/api/sim2real/runs/:id/telemetry', {
+      params: { id: runId },
+      body: {
+        source: 'board-agent',
+        deviceId: 'device-1',
+        sequence: 5,
+        samples: [
+          {
+            t: 0,
+            cameraFrame: frame,
+            event: { kind: 'session-started', sessionId: 'sess-camera' },
+          },
+        ],
+      },
+    });
+    expect(onEvent.statusCode).toBe(400);
+
+    // Non-base64 and otherwise malformed frames are refused up front.
+    for (const bad of [
+      { ...frame, data: 'not base64!!' },
+      { ...frame, channels: 4 },
+      { ...frame, width: 0 },
+      { ...frame, encoding: 'yuv422' },
+      { ...frame, data: 12345 },
+    ]) {
+      const rejected = await invoke(router, 'post', '/api/sim2real/runs/:id/telemetry', {
+        params: { id: runId },
+        body: {
+          source: 'board-agent',
+          deviceId: 'device-1',
+          sequence: 6,
+          samples: [{ t: 0, observation: vector(61, 0), action: vector(14, 0), cameraFrame: bad }],
+        },
+      });
+      expect(rejected.statusCode).toBe(400);
+    }
+  });
+
   it('accepts the per-session clock reset at session markers and sums replay duration per session', async () => {
     const router = await fixture();
     const registerResponse = await invoke(router, 'post', '/api/sim2real/models', {

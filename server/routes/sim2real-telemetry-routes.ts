@@ -132,6 +132,17 @@ const TELEMETRY_CMD_VEL_LIMITS = Object.freeze({ linear: 0.3, angular: 1 });
 const TELEMETRY_ACTION_SCALE_LIMITS = Object.freeze({ linear: 0.3, angular: 1 });
 const TELEMETRY_CONTROL_HZ_LIMITS = Object.freeze({ min: 1, max: 50 });
 const TELEMETRY_CONTROL_PERIOD_LIMITS = Object.freeze({ min: 0.02, max: 1 });
+// Aligned camera frames for vision policies. The per-frame byte budget is the
+// same largest frame the contract validator accepts (4 channels x 1080 x 1920),
+// and the shape bounds match its per-axis bounds so a frame the contract could
+// declare is a frame the transport will carry.
+const TELEMETRY_FRAME_ENCODINGS = new Set(['rgb8', 'bgr8', 'mono8']);
+const TELEMETRY_FRAME_MAX_BYTES = 4 * 1_080 * 1_920;
+const TELEMETRY_FRAME_MAX_AXIS = SIM2REAL_CONTRACT_LIMITS.maxObservationImageWidth;
+const TELEMETRY_FRAME_MAX_HEIGHT = SIM2REAL_CONTRACT_LIMITS.maxObservationImageHeight;
+// Standard base64 only. Accepting base64url or a data-URL prefix would mean
+// three decoders to keep consistent, and the frame is bounded anyway.
+const TELEMETRY_FRAME_BASE64 = /^[A-Za-z0-9+/]+={0,2}$/;
 const TELEMETRY_ACTION_OUTPUTS = new Set<Sim2RealActionOutput>([
   'physical-twist',
   'normalized-twist',
@@ -155,6 +166,10 @@ const EVENT_FORBIDDEN_SAMPLE_FIELDS = [
   'fall',
   'cmd_vel',
   'cmdVel',
+  // An aligned camera frame is control evidence for the same reason an
+  // observation is: the replay filter drops lifecycle markers, so a frame on one
+  // would be discarded silently rather than rejected visibly.
+  'cameraFrame',
 ] as const;
 
 function noStore(response: Response): void {
@@ -541,6 +556,13 @@ function normalizeTelemetrySample(
     if (controlPeriodSeconds.error) return { error: controlPeriodSeconds.error };
     sample.controlPeriodSeconds = controlPeriodSeconds.value;
   }
+  if (source.cameraFrame != null) {
+    // Carried through verbatim after `validateCameraFrames` has checked it. This
+    // parser is a per-field whitelist, so a new field that is validated but not
+    // copied here is silently dropped between ingest and storage - which is
+    // exactly what happened before this branch existed.
+    sample.cameraFrame = source.cameraFrame as Sim2RealTelemetrySample['cameraFrame'];
+  }
   return { sample };
 }
 
@@ -632,6 +654,84 @@ function validateContractDimensions(
     if (sample.action && sample.action.length !== contract.actionSize) {
       return `samples[${index}].action must contain exactly ${contract.actionSize} values`;
     }
+  }
+  return undefined;
+}
+
+/**
+ * Validates one aligned camera frame.
+ *
+ * A frame is evidence of what a vision policy saw, so every field is checked
+ * against the payload rather than trusted: the declared shape must describe
+ * exactly the bytes carried, because a frame whose length disagrees with its
+ * header would be rendered by the evaluation page as a sheared image while every
+ * downstream count still looked healthy.
+ */
+function validateCameraFrame(value: unknown, index: number): string | undefined {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    return `samples[${index}].cameraFrame must be an object`;
+  }
+  const frame = value as Record<string, unknown>;
+  if (typeof frame.encoding !== 'string' || !TELEMETRY_FRAME_ENCODINGS.has(frame.encoding)) {
+    return `samples[${index}].cameraFrame.encoding must be one of ${[...TELEMETRY_FRAME_ENCODINGS].join(', ')}`;
+  }
+  const width = Number(frame.width);
+  const height = Number(frame.height);
+  const channels = Number(frame.channels);
+  if (!Number.isSafeInteger(width) || width < 1 || width > TELEMETRY_FRAME_MAX_AXIS) {
+    return `samples[${index}].cameraFrame.width must be an integer in [1, ${TELEMETRY_FRAME_MAX_AXIS}]`;
+  }
+  if (!Number.isSafeInteger(height) || height < 1 || height > TELEMETRY_FRAME_MAX_HEIGHT) {
+    return `samples[${index}].cameraFrame.height must be an integer in [1, ${TELEMETRY_FRAME_MAX_HEIGHT}]`;
+  }
+  if (channels !== 1 && channels !== 3) {
+    return `samples[${index}].cameraFrame.channels must be 1 or 3`;
+  }
+  // mono8 carries one byte per pixel; the colour encodings carry three. A
+  // mismatch (mono declared as rgb8) would decode to three times the declared
+  // geometry, so it is refused here rather than reinterpreted.
+  const bytesPerPixel = frame.encoding === 'mono8' ? 1 : 3;
+  if (bytesPerPixel !== channels) {
+    return `samples[${index}].cameraFrame.encoding ${frame.encoding} does not match ${channels} channel(s)`;
+  }
+  const expectedBytes = width * height * channels;
+  if (expectedBytes > TELEMETRY_FRAME_MAX_BYTES) {
+    return `samples[${index}].cameraFrame exceeds ${TELEMETRY_FRAME_MAX_BYTES} bytes`;
+  }
+  if (typeof frame.data !== 'string' || !TELEMETRY_FRAME_BASE64.test(frame.data)) {
+    return `samples[${index}].cameraFrame.data must be standard base64`;
+  }
+  // The exact length matters: base64 without padding is accepted by some
+  // decoders, so the decoded size is what decides whether the header is honest.
+  const decoded = Buffer.from(frame.data, 'base64');
+  if (decoded.length !== expectedBytes) {
+    return `samples[${index}].cameraFrame.data decodes to ${decoded.length} bytes but ${width}x${height}x${channels} needs ${expectedBytes}`;
+  }
+  return undefined;
+}
+
+/** Every sample's frame must be well formed and belong to a board run. */
+function validateCameraFrames(
+  samples: readonly (Sim2RealTelemetrySample & { cameraFrame?: unknown })[],
+  source: Sim2RealTelemetrySource | undefined,
+): string | undefined {
+  let sawFrame = false;
+  for (const [index, sample] of samples.entries()) {
+    if (sample.cameraFrame === undefined) continue;
+    sawFrame = true;
+    if (sample.event) {
+      // Lifecycle markers carry no control data by contract, and the replay
+      // filter excludes them; a frame there would be silently dropped evidence.
+      return `samples[${index}].cameraFrame is not allowed on a lifecycle event sample`;
+    }
+    const error = validateCameraFrame(sample.cameraFrame, index);
+    if (error) return error;
+  }
+  if (sawFrame && source !== 'board-agent') {
+    // Frames are attestable board evidence. Allowing them on imported or
+    // synthetic chunks would let fabricated pixels sit beside real control data
+    // with no way for the evaluation page to tell them apart.
+    return 'cameraFrame is only accepted from board-agent telemetry';
   }
   return undefined;
 }
@@ -1191,6 +1291,16 @@ export function registerSim2RealTelemetryRoutes(
         });
         return;
       }
+    }
+    // Frames are checked whether or not a model resolved: the shape/length
+    // agreement and the board-agent provenance rule are properties of the
+    // payload, not of the contract.
+    const frameError = validateCameraFrames(parsed.samples, source);
+    if (frameError) {
+      sendApiError(response, 400, 'SIM2REAL_INVALID_TELEMETRY', frameError, {
+        retryable: false,
+      });
+      return;
     }
     const sequence = safeNonNegativeInteger(body.sequence, 'sequence');
     if (sequence.error) {

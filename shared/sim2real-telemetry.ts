@@ -174,6 +174,29 @@ export interface Sim2RealTelemetryBoardSessionEvent {
   };
 }
 
+/** Encodings accepted for an aligned camera frame. */
+export type Sim2RealCameraFrameEncoding = 'rgb8' | 'bgr8' | 'mono8';
+
+/**
+ * The camera frame a vision policy actually observed at this sample.
+ *
+ * Carried only by attested board-agent telemetry: a frame is evidence of what
+ * the policy saw, so an arbitrary imported frame would let synthetic pixels sit
+ * next to real control data. `data` is standard base64 of
+ * `channels * width * height` raw bytes in `encoding` order, which keeps the
+ * frame compact enough to ride the telemetry chunk instead of needing a second
+ * upload path, and lets the transport verify the payload is exactly the size its
+ * declared shape claims.
+ */
+export interface Sim2RealTelemetryCameraFrame {
+  encoding: Sim2RealCameraFrameEncoding;
+  width: number;
+  height: number;
+  channels: 1 | 3;
+  /** Base64 of channels*width*height bytes. */
+  data: string;
+}
+
 /** A bounded, normalized time-series sample accepted by the ingest endpoint. */
 export interface Sim2RealTelemetrySample {
   /** Monotonic timestamp in seconds relative to the run. */
@@ -193,6 +216,8 @@ export interface Sim2RealTelemetrySample {
   controlHz?: number;
   /** Effective period corresponding to controlHz, in seconds. */
   controlPeriodSeconds?: number;
+  /** Aligned camera frame for a vision policy; absent for vector-only runs. */
+  cameraFrame?: Sim2RealTelemetryCameraFrame;
   /** Lifecycle event marker; event samples never carry observation/action. */
   event?: Sim2RealTelemetryBoardSessionEvent;
 }

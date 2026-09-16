@@ -4470,6 +4470,61 @@ function renderReplayPlayer() {
   setText('replay-time-label', frame ? formatTelemetrySeconds(frame.t) : '0.00s');
   setText('replay-status', loaded ? `已加载 ${state.replay.frames.length} 帧` : (runs.length ? '选择运行并加载回放' : '暂无可回放运行'));
   setText('replay-frame-detail', frame ? `当前帧 ${state.replay.index + 1} · observation ${frame.observation?.length || 0}D · action ${frame.action?.length || 0}D` : '加载后可拖动时间轴；回放帧会同步发送到嵌入仿真器。');
+  renderReplayCameraFrame(frame);
+}
+
+// Aligned camera frame for the current replay frame.
+//
+// A frame is the only way to see what a vision policy actually observed, so it
+// is rendered from the payload itself and never synthesised: a run without
+// frames (every vector-only run) shows a neutral "no aligned camera frame" note
+// rather than an empty or placeholder image that could be mistaken for a real
+// observation. Nothing is guessed about the layout either - the declared
+// channels decide how the flat pixel list is read.
+function renderReplayCameraFrame(frame) {
+  const figure = $('replay-camera');
+  const canvas = $('replay-camera-canvas');
+  const note = $('replay-camera-note');
+  if (!figure || !canvas || !note) return;
+  const camera = frame?.cameraFrame;
+  if (!camera) {
+    figure.hidden = true;
+    note.textContent = '该运行没有对齐的相机帧（向量观测回放）。';
+    return;
+  }
+  figure.hidden = false;
+  const { width, height, channels } = camera;
+  canvas.width = width;
+  canvas.height = height;
+  canvas.style.aspectRatio = `${width} / ${height}`;
+  const context = canvas.getContext('2d');
+  if (!context) {
+    note.textContent = '当前浏览器无法绘制相机帧。';
+    return;
+  }
+  try {
+    const binary = atob(String(camera.data || ''));
+    if (binary.length !== width * height * channels) throw new Error('frame length');
+    const image = context.createImageData(width, height);
+    for (let pixel = 0; pixel < width * height; pixel += 1) {
+      const source = pixel * channels;
+      const target = pixel * 4;
+      const red = binary.charCodeAt(source);
+      const green = channels === 1 ? red : binary.charCodeAt(source + 1);
+      const blue = channels === 1 ? red : binary.charCodeAt(source + 2);
+      image.data[target] = red;
+      image.data[target + 1] = green;
+      image.data[target + 2] = blue;
+      image.data[target + 3] = 255;
+    }
+    context.putImageData(image, 0, 0);
+    note.textContent = `相机帧 ${width}×${height} · ${channels === 1 ? 'mono8' : camera.encoding} · 第 ${state.replay.index + 1} 帧`;
+  } catch {
+    // A frame that fails to decode is reported as unusable instead of leaving
+    // the previous frame on screen as if it belonged to this sample.
+    context.clearRect(0, 0, width, height);
+    note.textContent = '相机帧数据无法解码，已隐藏以免误读。';
+  }
 }
 
 function sendReplayFrame() {

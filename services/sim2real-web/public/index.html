@@ -1050,6 +1050,10 @@
                 <input id="replay-seek" type="range" min="0" max="0" value="0" step="1" disabled aria-label="回放进度" />
                 <div class="replay-player-meta"><span id="replay-frame-label">0 / 0 帧</span><span id="replay-time-label">0.00s</span></div>
                 <p class="small-note" id="replay-frame-detail">加载后可拖动时间轴；回放帧会同步发送到嵌入仿真器。</p>
+                <figure class="replay-camera" id="replay-camera" hidden>
+                  <canvas id="replay-camera-canvas" width="1" height="1" role="img" aria-label="该回放帧对应的相机画面"></canvas>
+                  <figcaption class="small-note" id="replay-camera-note">该运行没有对齐的相机帧（向量观测回放）。</figcaption>
+                </figure>
                 <div class="replay-player-controls policy-trial" id="policy-trial-controls">
                   <button class="button button-primary button-small" id="policy-trial-button" type="button">🚀 策略试跑（浏览器推理）</button>
                   <button class="button button-ghost button-small" id="policy-trial-stop" type="button" disabled>■ 停止试跑</button>
