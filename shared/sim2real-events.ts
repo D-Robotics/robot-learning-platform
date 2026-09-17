@@ -20,7 +20,8 @@ export type Sim2RealDomainEventType =
   | 'run.updated'
   | 'telemetry.appended'
   | 'deployment.created'
-  | 'deployment.updated';
+  | 'deployment.updated'
+  | 'feedback.created';
 
 export interface Sim2RealDomainEvent<T = unknown> {
   id: string;

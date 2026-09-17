@@ -2,7 +2,7 @@ import { Router, type Request } from 'express';
 
 import { LOCAL_SIM2REAL_AUTH, type Sim2RealAuthPort } from '../sim2real/sim2real-auth.js';
 import {
-  createSim2RealAgentPlan,
+  createSim2RealAgentPlanVariants,
   type Sim2RealAgentPlan,
   type Sim2RealAgentRun,
   type Sim2RealAgentStep,
@@ -512,9 +512,12 @@ export function createSim2RealAgentRouter(
       });
       return;
     }
-    const plan = createSim2RealAgentPlan(message, request.body?.context);
+    const variants = createSim2RealAgentPlanVariants(message, request.body?.context);
+    const plan = variants.find((item) => item.key === 'thorough')?.plan ?? variants[0].plan;
     response.setHeader('Cache-Control', 'no-store');
-    response.json({ ok: true, plan });
+    // `plan` stays the backward-compatible default (the thorough variant);
+    // `variants` is the plan-choice surface for clients that render it.
+    response.json({ ok: true, plan, variants });
   });
   router.post('/api/sim2real/agent/execute', (request, response) => {
     const owner = agentOwnerKey(request, auth);

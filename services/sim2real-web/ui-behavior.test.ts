@@ -183,6 +183,14 @@ async function boot(
     overviewDeployments?: unknown[];
     /** Frames the replay endpoint returns; drives the aligned camera frame tests. */
     replayFrames?: unknown[];
+    /** Notices payload served by GET /sim2real/notices. */
+    notices?: unknown[];
+    /** Controls whether POST /sim2real/feedback succeeds. */
+    feedbackFails?: boolean;
+    /** Payload served by GET /sim2real/feedback/summary. */
+    feedbackSummary?: unknown;
+    /** Seeded rdk-duck-lab-workspace-context payload (G13 pre-selection). */
+    workspaceContext?: Record<string, unknown>;
   } = {},
 ) {
   const dom = new JSDOM(html, {
@@ -192,6 +200,12 @@ async function boot(
   });
   openWindows.push(dom.window);
   const { window } = dom;
+  if (options.workspaceContext) {
+    window.localStorage.setItem(
+      'rdk-duck-lab-workspace-context',
+      JSON.stringify(options.workspaceContext),
+    );
+  }
   const errors: string[] = [];
   const requests: Array<{ url: string; method: string; body: unknown }> = [];
   window.addEventListener('error', (event) => errors.push(event.error?.message || event.message));
@@ -287,6 +301,41 @@ async function boot(
           ok: true,
           frames: options.replayFrames,
           replay: { sampleCount: options.replayFrames.length },
+        };
+      } else if (url.includes('/sim2real/notices')) {
+        payload = { ok: true, notices: options.notices || [] };
+      } else if (url.includes('/sim2real/feedback/summary')) {
+        payload = {
+          ok: true,
+          summary:
+            options.feedbackSummary !== undefined
+              ? options.feedbackSummary
+              : {
+                  total: 3,
+                  accurate: 2,
+                  inaccurate: 1,
+                  windowDays: 30,
+                  bySurface: [
+                    { surface: 'retraining-advice', total: 2, accurate: 2 },
+                    { surface: 'agent-reply', total: 1, accurate: 0 },
+                  ],
+                },
+        };
+      } else if (url.includes('/sim2real/feedback') && method === 'POST') {
+        if (options.feedbackFails) {
+          return new Response(
+            JSON.stringify({ ok: false, error: 'SIM2REAL_STORAGE_WRITER_CONFLICT' }),
+            { status: 503, headers: { 'content-type': 'application/json' } },
+          );
+        }
+        payload = {
+          ok: true,
+          feedback: {
+            id: 'feedback-1',
+            surface: (body as { surface?: string })?.surface || 'run-record',
+            verdict: (body as { verdict?: string })?.verdict || 'accurate',
+            createdAt: new Date().toISOString(),
+          },
         };
       } else payload = { ok: true };
       return new Response(JSON.stringify(payload), {
@@ -848,6 +897,261 @@ describe('Sim2Real workbench DOM behavior', () => {
     expect(window.document.querySelector('#toast-region')?.textContent).toContain(
       'manifest 文件超过 2097152 字节上限，请精简 JSON 后再导入',
     );
+    expect(errors).toEqual([]);
+  });
+
+  it('renders the workspace notices strip with version and degraded rows, dismissible per notice', async () => {
+    const { window, errors } = await boot({
+      notices: [
+        {
+          id: 'platform-version:0.9.9-test',
+          kind: 'info',
+          title: '当前平台版本 0.9.9-test',
+          at: '2026-09-17T00:00:00.000Z',
+        },
+        {
+          id: 'platform-degraded',
+          kind: 'degraded',
+          title: '平台存在降级项',
+          detail: '当前降级：storage-not-configured。相关功能可能不可用或使用替代数据。',
+          at: '2026-09-17T00:00:00.000Z',
+        },
+      ],
+    });
+    const strip = window.document.querySelector('#workspace-notices');
+    expect(strip?.getAttribute('hidden')).toBe(null);
+    const rows = [...(strip?.querySelectorAll('.workspace-notice') || [])];
+    expect(rows).toHaveLength(2);
+    expect(rows[0]?.className).toContain('kind-info');
+    expect(rows[0]?.textContent).toContain('当前平台版本 0.9.9-test');
+    expect(rows[1]?.className).toContain('kind-degraded');
+    expect(rows[1]?.textContent).toContain('storage-not-configured');
+
+    // First paint records the version; no reload CTA may appear for it.
+    expect(rows[0]?.querySelector('.workspace-notice-reload')).toBeNull();
+
+    rows[1]?.querySelector<HTMLButtonElement>('.workspace-notice-dismiss')?.click();
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    const remaining = [...(strip?.querySelectorAll('.workspace-notice') || [])];
+    expect(remaining).toHaveLength(1);
+    expect(remaining[0]?.textContent).toContain('当前平台版本');
+    expect(errors).toEqual([]);
+  });
+
+  it('upgrades a version change into a reload CTA instead of a forced refresh', async () => {
+    const { window, errors } = await boot({
+      notices: [
+        {
+          id: 'platform-version:0.9.9-test',
+          kind: 'info',
+          title: '当前平台版本 0.9.9-test',
+          at: '2026-09-17T00:00:00.000Z',
+        },
+      ],
+    });
+    // The server upgraded mid-session: flip the mocked /notices payload to a
+    // new version, then re-run the same fetch the overview cycle performs.
+    const fetchMock = window.fetch as unknown as ReturnType<typeof vi.fn>;
+    fetchMock.mockImplementation(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      const payload = url.includes('/sim2real/notices')
+        ? {
+            ok: true,
+            notices: [
+              {
+                id: 'platform-version:1.0.0',
+                kind: 'info',
+                title: '当前平台版本 1.0.0',
+                at: '2026-09-17T00:00:00.000Z',
+              },
+            ],
+          }
+        : { ok: true };
+      return new Response(JSON.stringify(payload), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      });
+    });
+    // Force past the 60s cooldown the same way a long session would.
+    window.dispatchEvent(new window.Event('sim2real-refetch-notices'));
+    const flushed = await new Promise((resolve) => setTimeout(resolve, 50));
+    const row = window.document.querySelector('#workspace-notices .workspace-notice');
+    expect(row?.className).toContain('is-changed');
+    expect(row?.textContent).toContain('平台已更新到 1.0.0');
+    const reload = row?.querySelector<HTMLButtonElement>('.workspace-notice-reload');
+    expect(reload, 'reload CTA must exist').toBeTruthy();
+    expect(flushed).toBeUndefined();
+    expect(errors).toEqual([]);
+  });
+
+  it('keeps the notices strip hidden when the server reports nothing', async () => {
+    const { window, errors } = await boot({ notices: [] });
+    expect(window.document.querySelector('#workspace-notices')?.hidden).toBe(true);
+    expect(errors).toEqual([]);
+  });
+
+  it('submits granular feedback from the retraining advice panel and reports inline', async () => {
+    const realRun = {
+      id: 'run-gate-1',
+      modelId: 'model-1',
+      backend: 'local',
+      status: 'completed',
+      summary: 'gate fixture',
+      mock: false,
+      taskId: 'walk',
+      metrics: { contractValid: true, observationSize: 61, actionSize: 14, successRate: 0.9 },
+      taskEvaluation: {
+        qualityGate: {
+          passed: false,
+          errors: ['envelope nominal: policy fell in all episodes'],
+          criteria: { minSuccessRate: 0.7, maxCollisionRate: 0.1, gateOn: 'ciLowerBound' },
+        },
+      },
+      createdAt: '2026-09-16T00:00:00.000Z',
+    };
+    const { window, errors, requests } = await boot({ runs: [realRun] });
+
+    // The eval banner must surface the qualified/unqualified verdict from
+    // the server-side gate, not invent one client-side.
+    window.document
+      .querySelector<HTMLButtonElement>('.sidebar [data-view-target="evaluate"]')
+      ?.click();
+    const badge = window.document.querySelector('#eval-run-quality') as HTMLElement;
+    expect(badge?.hidden).toBe(false);
+    expect(badge?.textContent).toContain('质量门未通过 · Unqualified');
+    expect(badge?.className).toContain('state-error');
+    expect(badge?.title).toContain('envelope nominal');
+    expect(window.document.querySelector('#eval-run-status')?.textContent).toContain(
+      '质量门未通过',
+    );
+
+    // Run-detail dialog: feedback anchored to this run record.
+    window.document
+      .querySelector<HTMLButtonElement>('.sidebar [data-view-target="records"]')
+      ?.click();
+    window.document.querySelector<HTMLButtonElement>('[data-record-id="run-gate-1"]')?.click();
+    const mount = window.document.querySelector('#run-record-feedback');
+    expect(mount, 'run detail must mount the feedback control').toBeTruthy();
+    const inaccurate = mount?.querySelector<HTMLButtonElement>('.feedback-vote-inaccurate');
+    expect(inaccurate).toBeTruthy();
+    inaccurate?.click();
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    const posted = requests.find(
+      (call) => call.url.includes('/sim2real/feedback') && call.method === 'POST',
+    );
+    expect(posted).toBeTruthy();
+    expect(posted?.body).toMatchObject({ surface: 'run-record', verdict: 'inaccurate' });
+    const control = mount?.querySelector('.feedback-control') as HTMLElement;
+    expect(control?.className).toContain('is-submitted');
+    expect(mount?.querySelector('.feedback-control-status')?.textContent).toContain('已记录');
+    expect(errors).toEqual([]);
+  });
+
+  it('keeps the granular feedback retryable inline when the POST fails', async () => {
+    const realRun = {
+      id: 'run-gate-2',
+      modelId: 'model-1',
+      backend: 'local',
+      status: 'completed',
+      summary: 'gate fixture 2',
+      mock: false,
+      taskId: 'walk',
+      metrics: { contractValid: true, observationSize: 61, actionSize: 14, successRate: 0.9 },
+      createdAt: '2026-09-16T00:00:00.000Z',
+    };
+    const { window, errors } = await boot({ runs: [realRun], feedbackFails: true });
+    window.document
+      .querySelector<HTMLButtonElement>('.sidebar [data-view-target="records"]')
+      ?.click();
+    window.document.querySelector<HTMLButtonElement>('[data-record-id="run-gate-2"]')?.click();
+    const mount = window.document.querySelector('#run-record-feedback');
+    const accurate = mount?.querySelector<HTMLButtonElement>('.feedback-vote-accurate');
+    accurate?.click();
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    const control = mount?.querySelector('.feedback-control') as HTMLElement;
+    expect(control?.className).not.toContain('is-submitted');
+    expect(mount?.querySelector('.feedback-control-status')?.textContent).toContain('重试');
+    // Buttons re-enabled so the retry is one click, not a retype.
+    expect(accurate?.disabled).toBe(false);
+    expect(errors).toEqual([]);
+  });
+
+  it('lazy-loads the feedback reliance summary on first expand (Bakusevych #38)', async () => {
+    const { window, errors, requests } = await boot();
+
+    const panel = window.document.querySelector<HTMLDetailsElement>('#feedback-summary-panel');
+    expect(panel, 'overview must mount the feedback summary panel').toBeTruthy();
+    const mount = window.document.querySelector('#feedback-summary');
+    expect(mount?.textContent).toContain('打开后加载汇总…');
+    // Collapsed panel must not have cost a summary request yet.
+    expect(requests.some((call) => call.url.includes('/sim2real/feedback/summary'))).toBe(false);
+
+    panel?.setAttribute('open', '');
+    await new Promise((resolve) => setTimeout(resolve, 50));
+
+    const fetched = requests.filter((call) => call.url.includes('/sim2real/feedback/summary'));
+    expect(fetched).toHaveLength(1);
+    const head = mount?.querySelector('.feedback-summary-head');
+    expect(head?.textContent).toContain('近 30 天反馈汇总');
+    expect(head?.textContent).toContain('3 条 · 准确 67%');
+    const share = head?.querySelector('.feedback-summary-share');
+    expect(share?.className).not.toContain('is-positive');
+    const rows = Array.from(mount?.querySelectorAll('.feedback-summary-row') || []);
+    expect(
+      rows.map((row) => row.querySelector('.feedback-summary-row-label')?.textContent),
+    ).toEqual(['重训建议', 'Agent 回复']);
+    expect(rows[0]?.querySelector('.feedback-summary-row-value')?.textContent).toBe('2/2 准确');
+    expect(rows[1]?.querySelector('.feedback-summary-row-value')?.textContent).toBe('0/1 准确');
+    // Reliance statement: counts only, and the telemetry-only contract is spelled out.
+    expect(mount?.querySelector('.feedback-summary-note')?.textContent).toContain(
+      '不参与发布或晋级闸门',
+    );
+    // No identifiers beyond aggregates: the render surface has no note text.
+    expect(JSON.stringify(mount?.textContent)).not.toContain('owner');
+    expect(errors).toEqual([]);
+  });
+
+  it('renders an honest empty state when no feedback has been recorded yet', async () => {
+    const { window, errors } = await boot({
+      feedbackSummary: { total: 0, accurate: 0, inaccurate: 0, windowDays: 30, bySurface: [] },
+    });
+    const panel = window.document.querySelector<HTMLDetailsElement>('#feedback-summary-panel');
+    panel?.setAttribute('open', '');
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    const mount = window.document.querySelector('#feedback-summary');
+    expect(mount?.querySelector('.feedback-summary-empty')?.textContent).toContain(
+      '还没有已记录的反馈',
+    );
+    expect(mount?.querySelectorAll('.feedback-summary-row')).toHaveLength(0);
+    expect(errors).toEqual([]);
+  });
+
+  it('pre-selects the remembered training profile and labels it (Amershi G13)', async () => {
+    const { window, errors } = await boot({
+      workspaceContext: { trainingProfile: 'high-vram' },
+    });
+    const select = window.document.querySelector<HTMLSelectElement>('#training-profile');
+    expect(select?.value).toBe('high-vram');
+    const note = window.document.querySelector('[data-training-profile-note]');
+    // Pre-selection is labeled, never silent.
+    expect(note?.hidden).toBe(false);
+    expect(note?.textContent).toContain('已按你上次的选择预选');
+
+    select?.dispatchEvent(new window.Event('change', { bubbles: true }));
+    const selectAfter = window.document.querySelector<HTMLSelectElement>('#training-profile');
+    const nextValue = selectAfter?.value || 'standard';
+    const stored = JSON.parse(
+      window.localStorage.getItem('rdk-duck-lab-workspace-context') || '{}',
+    ) as Record<string, unknown>;
+    expect(stored.trainingProfile).toBe(nextValue);
+    expect(errors).toEqual([]);
+  });
+
+  it('falls back to defaults when no training profile preference exists', async () => {
+    const { window, errors } = await boot();
+    const select = window.document.querySelector<HTMLSelectElement>('#training-profile');
+    expect(select?.value).toBe('standard');
+    expect(window.document.querySelector('[data-training-profile-note]')?.hidden).toBe(true);
     expect(errors).toEqual([]);
   });
 });

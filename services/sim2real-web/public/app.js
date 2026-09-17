@@ -316,6 +316,10 @@ const state = {
   // mode) so logged-out visitors still learn whether the browser simulator
   // is playable before they decide to sign in.
   publicHealth: null,
+  // Workspace notices (G18): the platform version seen at first paint; a
+  // later fetch that disagrees upgrades the version notice into a reload
+  // CTA instead of a forced refresh.
+  noticeFirstVersion: null,
   workspaceSummary: null,
   projects: [],
   projectsLoaded: false,
@@ -349,6 +353,13 @@ const state = {
     } catch {
       return 'run';
     }
+  })(),
+  // Explicit preference (Amershi G13): the last training profile the operator
+  // actually used, restored on load and visibly labeled as pre-selected —
+  // never applied silently, always one click to change.
+  trainingProfile: (() => {
+    const value = readWorkspacePreference('trainingProfile');
+    return ['smoke', 'low-vram', 'standard', 'high-vram'].includes(value) ? value : '';
   })(),
   recordsQuery: '',
   selectedRecord: null,
@@ -392,6 +403,7 @@ function saveWorkspaceContext() {
         projectId: state.projectId,
         modelId: state.selectedModelId,
         deviceId: state.selectedDeviceId,
+        trainingProfile: state.trainingProfile,
         savedAt: new Date().toISOString(),
       }),
     );
@@ -1644,6 +1656,119 @@ function clearWorkspaceStatus() {
   banner.setAttribute('role', 'status');
 }
 
+// ---- Workspace notices (Amershi G18: notify users about changes) -------
+// The strip is passive and dismissible: version + degraded-state notices
+// from GET /sim2real/notices. A version change since first paint upgrades
+// the notice into a reload CTA — answering the "界面是旧的" FAQ without a
+// forced refresh. All nodes are createElement/textContent, no innerHTML.
+const WORKSPACE_NOTICES_DISMISS_KEY = 'sim2real.notice-dismissed.v1';
+const WORKSPACE_NOTICES_REFETCH_MS = 60000;
+let workspaceNoticesLastFetchMs = 0;
+
+function readDismissedWorkspaceNotices() {
+  try {
+    const parsed = JSON.parse(window.localStorage.getItem(WORKSPACE_NOTICES_DISMISS_KEY) || '[]');
+    return Array.isArray(parsed) ? parsed.filter((id) => typeof id === 'string') : [];
+  } catch {
+    return [];
+  }
+}
+
+function dismissWorkspaceNotice(id) {
+  try {
+    const next = Array.from(new Set([...readDismissedWorkspaceNotices(), String(id)])).slice(-20);
+    window.localStorage.setItem(WORKSPACE_NOTICES_DISMISS_KEY, JSON.stringify(next));
+  } catch {
+    // localStorage unavailable (private mode): the notice reappears next
+    // load, which is acceptable for an informational strip.
+  }
+}
+
+function workspaceNoticeVersion(id) {
+  const match = /^platform-version:(.+)$/.exec(String(id));
+  return match ? match[1] : null;
+}
+
+function renderWorkspaceNotices(items) {
+  const strip = $('workspace-notices');
+  if (!strip) return;
+  const dismissed = new Set(readDismissedWorkspaceNotices());
+  const fragment = document.createDocumentFragment();
+  for (const item of items) {
+    if (!item || typeof item !== 'object') continue;
+    const id = String(item.id || '');
+    if (!id || dismissed.has(id)) continue;
+    const kind = item.kind === 'degraded' ? 'degraded' : 'info';
+    const row = document.createElement('div');
+    row.className = 'workspace-notice kind-' + kind;
+    const icon = document.createElement('span');
+    icon.className = 'workspace-notice-icon';
+    icon.setAttribute('aria-hidden', 'true');
+    icon.textContent = kind === 'degraded' ? '!' : 'i';
+    const copy = document.createElement('div');
+    copy.className = 'workspace-notice-copy';
+    const title = document.createElement('strong');
+    title.textContent = String(item.title || '平台通知');
+    copy.append(title);
+    if (item.detail) {
+      const detail = document.createElement('span');
+      detail.textContent = String(item.detail);
+      copy.append(detail);
+    }
+    row.append(icon, copy);
+    const version = workspaceNoticeVersion(id);
+    if (version && state.noticeFirstVersion && state.noticeFirstVersion !== version) {
+      row.classList.add('is-changed');
+      title.textContent = '平台已更新到 ' + version;
+      const reload = document.createElement('button');
+      reload.type = 'button';
+      reload.className = 'button button-ghost button-small workspace-notice-reload';
+      reload.textContent = '刷新页面';
+      reload.addEventListener('click', () => window.location.reload());
+      row.append(reload);
+    }
+    const close = document.createElement('button');
+    close.type = 'button';
+    close.className = 'workspace-notice-dismiss';
+    close.setAttribute('aria-label', '关闭这条通知');
+    close.textContent = '✕';
+    close.addEventListener('click', () => {
+      dismissWorkspaceNotice(id);
+      row.remove();
+      strip.hidden = strip.childElementCount === 0;
+    });
+    row.append(close);
+    fragment.append(row);
+  }
+  strip.replaceChildren(fragment);
+  strip.hidden = strip.childElementCount === 0;
+}
+
+async function loadWorkspaceNotices({ force = false } = {}) {
+  const strip = $('workspace-notices');
+  if (!strip) return;
+  const now = Date.now();
+  if (!force && now - workspaceNoticesLastFetchMs < WORKSPACE_NOTICES_REFETCH_MS) return;
+  workspaceNoticesLastFetchMs = now;
+  try {
+    const payload = await request('/sim2real/notices');
+    const items = Array.isArray(payload?.notices) ? payload.notices : [];
+    if (state.noticeFirstVersion === null) {
+      for (const item of items) {
+        const version = workspaceNoticeVersion(String(item?.id || ''));
+        if (version) {
+          state.noticeFirstVersion = version;
+          break;
+        }
+      }
+    }
+    renderWorkspaceNotices(items);
+  } catch {
+    // Notices are informational; connection problems are already the
+    // status banner's job, so a failed fetch leaves the strip as-is.
+  }
+}
+
 class ApiError extends Error {
   constructor(message, status, payload) {
     super(message);
@@ -2715,15 +2840,17 @@ function renderIntegrations() {
           .join(' · ')
       : robogo.message || '本地 / RoboGo 训练后端不可用',
   );
-  // Engine selector honesty: an MJX selection needs the worker to actually
-  // route to the mjx engine. Dim the option (and say why) when the configured
-  // worker did not report it, instead of letting the submit fail at the worker.
+  // Engine selector honesty: a specific engine selection needs the worker to
+  // actually route to that engine. Dim the option (and say why) when the
+  // configured worker did not report it, instead of letting the submit fail
+  // at the worker.
   const engineSelect = $('training-engine');
   if (engineSelect) {
     const reported = Array.isArray(local.engines) ? local.engines : null;
     const engineKnown = (id) => reported == null || reported.includes(id) || reported.includes('default');
     for (const option of engineSelect.querySelectorAll(
-      'option[value="mjx-ppo"], option[value="starter-ppo"], option[value="microduck-rl"]',
+      'option[value="starter-ppo"], option[value="mjx-ppo"], option[value="microduck-rl"], ' +
+        'option[value="visual-ppo"], option[value="dm-control-ppo"], option[value="mjlab-rsl-rl"]',
     )) {
       const known = engineKnown(option.value);
       option.disabled = !known;
@@ -2738,6 +2865,68 @@ function renderIntegrations() {
   setText('robogo-machine-label', localConfigured ? '排队任务' : '开发机');
   setText('robogo-board-count', localConfigured ? local.activeJobs ?? '—' : robogo.availableBoardCount ?? '—');
   setText('robogo-machine-count', localConfigured ? local.queuedJobs ?? '—' : robogo.developmentMachineCount ?? '—');
+}
+
+// Engine capability map: what each selectable engine ACTUALLY is, said in the
+// same honest terms the result physicsBackend will carry. The note renders
+// under the engine selector so an operator sees the physics/observation
+// trade-off before submitting, not after reading the run ledger.
+const ENGINE_CAPABILITIES = Object.freeze({
+  'starter-ppo': {
+    name: 'starter-ppo',
+    badges: ['运动学', 'CPU 友好', '部署链路同构'],
+    desc: '解析运动学（单轮运动 + 执行器滞后/延迟域随机化），不模拟接触；训练快、门控与板载评测同构。',
+  },
+  'mjx-ppo': {
+    name: 'MJX',
+    badges: ['MuJoCo 接触动力学', '墙/障碍物理', '物理级域随机化'],
+    desc: 'MuJoCo-MJX 真实接触动力学：墙面碰撞、mocap 球障碍、伺服力矩饱和与摩擦系数逐环境随机化。',
+  },
+  'visual-ppo': {
+    name: 'visual-ppo',
+    badges: ['像素观测', '顶置相机 48×48', 'CPU MuJoCo'],
+    desc: '观测是 MuJoCo 渲染的真实顶置相机灰度图 + 4 维本体感觉；CNN 策略端到端从像素学导航（cpu-mujoco-vision）。',
+  },
+  'dm-control-ppo': {
+    name: 'dm-control-ppo',
+    badges: ['dm_env 生态', 'CPU MuJoCo', 'TimeStep 协议'],
+    desc: 'DeepMind dm_control 环境协议（rl.control.Environment/Task 钩子）驱动共享 MuJoCo 场景；同一 8D 板载观测与质量门（dm-control-mujoco）。',
+  },
+  'microduck-rl': {
+    name: 'microduck-rl',
+    badges: ['mjlab 并行物理', 'CUDA', '万级环境'],
+    desc: 'mjlab GPU 并行物理 + rsl-rl PPO，面向服务器级批量训练（需 CUDA worker 注册）。',
+  },
+  'mjlab-rsl-rl': {
+    name: 'mjlab-rsl-rl',
+    badges: ['mjlab 物理', 'rsl-rl PPO', 'CUDA'],
+    desc: 'mjlab 真物理 + rsl-rl 生产级 PPO；无 mjlab 时诚实回退 starter-kinematic 并如实标注（结果永不混淆）。',
+  },
+});
+
+function renderEngineCapability() {
+  const note = $('engine-capability-note');
+  const engineSelect = $('training-engine');
+  if (!note || !engineSelect) return;
+  const value = String(engineSelect.value || '');
+  const capability = value ? ENGINE_CAPABILITIES[value] : null;
+  if (!capability) {
+    note.hidden = true;
+    return;
+  }
+  note.hidden = false;
+  setText('engine-capability-name', capability.name);
+  const badges = $('engine-capability-badges');
+  if (badges) {
+    badges.innerHTML = '';
+    for (const badge of capability.badges) {
+      const tag = document.createElement('span');
+      tag.className = 'engine-capability-badge';
+      tag.textContent = badge;
+      badges.appendChild(tag);
+    }
+  }
+  setText('engine-capability-desc', capability.desc);
 }
 
 function renderModel() {
@@ -3401,6 +3590,7 @@ function openRecordDetails(record) {
   if (detailCanvas) drawRunProgressChart(detailCanvas, runProgressPoints(record));
   if ($('run-retrain-card')) wireRunRetrainingAdvice(record);
   if ($('run-board-sessions')) wireRunBoardSessions(record);
+  wireRunRecordFeedback(record);
 }
 
 // The verdict table and the measure formatter are pure logic, so they live in
@@ -3520,22 +3710,69 @@ function renderRetrainingAdvice(body, advice, record) {
   if (advice?.suggestedTraining && typeof advice.suggestedTraining === 'object') {
     const suggested = retrainingElement('div', 'run-retrain-suggested');
     suggested.append(
-      retrainingElement('strong', 'run-detail-block-title', '建议的训练请求体（只读）'),
+      retrainingElement('strong', 'run-detail-block-title', '建议的训练请求体（可调整档位）'),
     );
     suggested.append(
       retrainingElement(
         'p',
         'run-retrain-readonly-note',
-        '需人工显式提交：平台不会自动发起训练，这里只原样展示服务端填好的 suggestedTraining 请求体。',
+        '需人工显式提交：平台不会自动发起训练。请求体按服务端建议预填；下方档位可改，提交前会再次确认。',
       ),
     );
-    let serialized = '';
-    try {
-      serialized = JSON.stringify(advice.suggestedTraining, null, 2) || '';
-    } catch {
-      serialized = '';
+    // Malleable advice (Bakusevych #29): the suggested profile is a starting
+    // point, not a verdict. The operator can reshape it before the explicit
+    // submit; the JSON preview below reflects the current pick.
+    const profileRow = retrainingElement('div', 'run-retrain-profile-row');
+    const profileLabel = retrainingElement('label', 'run-retrain-profile-label', '训练档位');
+    profileLabel.setAttribute('for', 'run-retrain-profile');
+    const profileSelect = document.createElement('select');
+    profileSelect.id = 'run-retrain-profile';
+    profileSelect.className = 'run-retrain-profile-select';
+    profileSelect.setAttribute('aria-label', '选择重训档位');
+    const suggestedProfile = String(advice.suggestedTraining.training?.profile || 'standard');
+    const profileChoices = [
+      ['smoke', '冒烟 · 64 环境 / 5 轮'],
+      ['low-vram', '低显存 · 64 环境起步'],
+      ['standard', '标准 · 1024 环境'],
+      ['high-vram', '高显存 · 4096 环境'],
+    ];
+    for (const [value, text] of profileChoices) {
+      const option = document.createElement('option');
+      option.value = value;
+      option.textContent = text;
+      profileSelect.append(option);
     }
-    suggested.append(retrainingElement('pre', 'run-detail-code', serialized || '（无法序列化）'));
+    profileSelect.value = profileChoices.some(([value]) => value === suggestedProfile)
+      ? suggestedProfile
+      : 'standard';
+    const adjustNote = retrainingElement(
+      'span',
+      'run-retrain-profile-note',
+      '已按建议预选；可改选更轻/更重的档位再提交。',
+    );
+    profileRow.append(profileLabel, profileSelect, adjustNote);
+    suggested.append(profileRow);
+    const preview = retrainingElement('pre', 'run-detail-code run-retrain-preview');
+    const renderPreview = () => {
+      let serialized = '';
+      try {
+        serialized =
+          JSON.stringify(
+            {
+              ...advice.suggestedTraining,
+              training: { ...advice.suggestedTraining.training, profile: profileSelect.value },
+            },
+            null,
+            2,
+          ) || '';
+      } catch {
+        serialized = '';
+      }
+      preview.textContent = serialized || '（无法序列化）';
+    };
+    profileSelect.addEventListener('change', renderPreview);
+    renderPreview();
+    suggested.append(preview);
     body.append(suggested);
 
     // The retrain action exists only for the affirmative verdict AND a usable
@@ -3546,7 +3783,7 @@ function renderRetrainingAdvice(body, advice, record) {
       const submit = retrainingElement(
         'button',
         'button button-primary button-small',
-        '按建议发起重训',
+        '按当前档位发起重训',
       );
       submit.type = 'button';
       submit.id = 'run-retrain-submit';
@@ -3566,6 +3803,14 @@ function renderRetrainingAdvice(body, advice, record) {
   body.append(
     retrainingElement('p', 'run-retrain-note', String(advice?.note ?? '服务端未附加说明。')),
   );
+
+  const feedbackMount = retrainingElement('div', 'run-retrain-feedback');
+  body.append(feedbackMount);
+  wireFeedbackControl(feedbackMount, {
+    surface: 'retraining-advice',
+    runId: record?.id,
+    contextLabel: '针对本次重训建议（阈值是建议性的，你的反馈会帮助校准它们）',
+  });
 }
 
 function renderRetrainingAdviceError(body, error, record) {
@@ -3666,14 +3911,21 @@ async function submitRetrainingFromAdvice(record, advice) {
     return;
   }
   const taskId = suggested.taskId ?? record?.taskId;
-  const profile = suggested.training?.profile ?? 'standard';
+  // The operator may have reshaped the suggestion (Bakusevych #29): the
+  // profile select defaults to the server's suggestion but is editable, and
+  // this submit honors whatever it currently says.
+  const selectedProfile = String($('run-retrain-profile')?.value || '');
+  const profile = selectedProfile || suggested.training?.profile || 'standard';
   const acknowledged = await confirmAction({
     title: '按建议发起重训',
     note:
-      '即将按建议提交一次新的本地训练（任务 ' +
+      '即将提交一次新的本地训练（任务 ' +
       (taskId ?? '未指定') +
       '，档位 ' +
       profile +
+      (selectedProfile && selectedProfile !== suggested.training?.profile
+        ? '（你已调整，非原始建议）'
+        : '') +
       '）。\n这是操作员的显式动作：会真实发起一次本地强化学习训练；分析本身不会自动发起任何训练。',
     approveLabel: '显式提交重训',
   });
@@ -3681,7 +3933,7 @@ async function submitRetrainingFromAdvice(record, advice) {
     setStatus('已取消：未提交任何请求。');
     return;
   }
-  const idleLabel = button ? button.textContent : '按建议发起重训';
+  const idleLabel = button ? button.textContent : '按当前档位发起重训';
   if (button) {
     button.disabled = true;
     button.textContent = '提交中…';
@@ -3689,6 +3941,7 @@ async function submitRetrainingFromAdvice(record, advice) {
   setStatus('正在提交重训请求…');
   try {
     const requestBody = retrainingRequestBody(record, advice, modelId);
+    if (selectedProfile) requestBody.training = { ...requestBody.training, profile: selectedProfile };
     if (state.projectId) requestBody.projectId = state.projectId;
     const payload = await request('/sim2real/runs', {
       method: 'POST',
@@ -3714,7 +3967,7 @@ async function submitRetrainingFromAdvice(record, advice) {
   } finally {
     if (button) {
       button.disabled = false;
-      button.textContent = idleLabel || '按建议发起重训';
+      button.textContent = idleLabel || '按当前档位发起重训';
     }
   }
 }
@@ -3916,6 +4169,228 @@ function wireRunBoardSessions(record) {
     void loadRunBoardSessions(record);
   });
 }
+
+// ---- granular feedback (Amershi G15) ----------------------------------------
+// One shared control for every feedback surface: two closed verdicts plus an
+// optional bounded note. It posts exactly once per explicit click and reports
+// inline; feedback is operational telemetry and never unlocks or gates
+// anything, so failures degrade to an inline retry hint, never a modal.
+function feedbackElement(tag, className, text) {
+  return retrainingElement(tag, className, text);
+}
+
+const FEEDBACK_NOTE_LIMIT = 600;
+
+async function submitWorkspaceFeedback(surface, verdict, note, runId) {
+  return request('/sim2real/feedback', {
+    method: 'POST',
+    body: JSON.stringify({
+      surface,
+      verdict,
+      ...(note ? { note } : {}),
+      ...(runId ? { runId } : {}),
+    }),
+  });
+}
+
+/**
+ * Append a feedback control into `mount`. `surface` and `runId` follow the
+ * server's closed contract; verdicts are fixed ('accurate' | 'inaccurate').
+ * All nodes are built via createElement/textContent — no innerHTML — so
+ * nothing the user types can execute markup.
+ */
+function wireFeedbackControl(mount, { surface, runId, contextLabel }) {
+  if (!mount || mount.dataset.feedbackWired === '1') return;
+  mount.dataset.feedbackWired = '1';
+
+  const box = feedbackElement('div', 'feedback-control');
+  box.append(feedbackElement('strong', 'feedback-control-title', '这条信息准确吗？'));
+  if (contextLabel) {
+    box.append(feedbackElement('small', 'feedback-control-context', String(contextLabel)));
+  }
+
+  const actions = feedbackElement('div', 'feedback-control-actions');
+  const note = document.createElement('textarea');
+  note.className = 'feedback-control-note';
+  note.rows = 2;
+  note.maxLength = FEEDBACK_NOTE_LIMIT;
+  note.setAttribute('aria-label', '补充说明（可选）');
+  note.placeholder = '可选：说明哪里不准确，最多 ' + FEEDBACK_NOTE_LIMIT + ' 字';
+  const status = feedbackElement('span', 'feedback-control-status', '');
+  status.setAttribute('role', 'status');
+  status.setAttribute('aria-live', 'polite');
+
+  const buttons = [
+    { verdict: 'accurate', label: '准确', className: 'feedback-vote-accurate' },
+    { verdict: 'inaccurate', label: '不准确', className: 'feedback-vote-inaccurate' },
+  ].map(({ verdict, label, className }) => {
+    const button = feedbackElement('button', 'button button-ghost button-small ' + className, label);
+    button.type = 'button';
+    button.addEventListener('click', () => {
+      const trimmed = (note.value || '').trim();
+      if (trimmed.length > FEEDBACK_NOTE_LIMIT) {
+        status.textContent = '备注超过 ' + FEEDBACK_NOTE_LIMIT + ' 字上限，请精简后重试。';
+        return;
+      }
+      for (const other of actions.querySelectorAll('button')) other.disabled = true;
+      button.textContent = '提交中…';
+      status.textContent = '';
+      void (async () => {
+        try {
+          await submitWorkspaceFeedback(surface, verdict, trimmed, runId);
+          status.textContent = verdict === 'accurate' ? '已记录：感谢确认。' : '已记录：感谢指出，会用于改进建议质量。';
+          note.value = '';
+          box.classList.add('is-submitted');
+          showToast('反馈已记录', 'success');
+        } catch (error) {
+          status.textContent =
+            '反馈暂未保存：' +
+            (error instanceof Error ? error.message : '未知错误') +
+            '。可再点一次重试。';
+          showToast('反馈提交失败', 'error');
+        } finally {
+          for (const other of actions.querySelectorAll('button')) other.disabled = false;
+          button.textContent = label;
+        }
+      })();
+    });
+    return button;
+  });
+
+  actions.append(...buttons, note, status);
+  box.append(actions);
+  mount.append(box);
+}
+
+/** Run-detail dialog: feedback anchored to this run record. */
+function wireRunRecordFeedback(record) {
+  const dialog = $('run-detail-dialog');
+  if (!dialog) return;
+  const body = $('run-detail-body');
+  if (!body) return;
+  let mount = document.getElementById('run-record-feedback');
+  if (!mount) {
+    mount = feedbackElement('div', 'run-record-feedback');
+    mount.id = 'run-record-feedback';
+    body.append(mount);
+  } else {
+    // Reopening a different record resets the wiring so the runId stays true.
+    mount.replaceChildren();
+    delete mount.dataset.feedbackWired;
+  }
+  wireFeedbackControl(mount, {
+    surface: 'run-record',
+    runId: record?.id,
+    contextLabel: '针对当前打开的运行记录',
+  });
+}
+
+// ---- feedback reliance summary (Bakusevych #38 / Amershi G17) ---------------
+// Closes the feedback loop visibly: after a verdict is recorded the user can
+// see what feedback added up to (counts + accuracy share per surface). The
+// panel is passive and owner-scoped; failures degrade to a retry button,
+// never to fabricated numbers.
+const FEEDBACK_SUMMARY_SURFACE_LABELS = {
+  'retraining-advice': '重训建议',
+  'agent-reply': 'Agent 回复',
+  'run-record': '运行记录',
+};
+
+function renderFeedbackSummary(mount, summary) {
+  mount.replaceChildren();
+  const total = Number(summary?.total) || 0;
+  if (!total) {
+    mount.append(
+      feedbackElement(
+        'p',
+        'feedback-summary-empty',
+        '还没有已记录的反馈。你在评测结果、运行记录和 Agent 回复下的「准确 / 不准确」会汇总到这里。',
+      ),
+    );
+    return;
+  }
+  const accurate = Number(summary?.accurate) || 0;
+  const share = Math.round((accurate / total) * 100);
+  const head = feedbackElement('div', 'feedback-summary-head');
+  head.append(
+    feedbackElement(
+      'strong',
+      'feedback-summary-title',
+      `近 ${String(summary?.windowDays || 30)} 天反馈汇总`,
+    ),
+    feedbackElement(
+      'span',
+      'feedback-summary-share' + (share >= 70 ? ' is-positive' : share <= 40 ? 'is-negative' : ''),
+      `${total} 条 · 准确 ${share}%`,
+    ),
+  );
+  mount.append(head);
+  const list = feedbackElement('div', 'feedback-summary-rows');
+  for (const row of Array.isArray(summary?.bySurface) ? summary.bySurface : []) {
+    const item = feedbackElement('div', 'feedback-summary-row');
+    const label =
+      FEEDBACK_SUMMARY_SURFACE_LABELS[row?.surface] || String(row?.surface || '其他');
+    item.append(feedbackElement('span', 'feedback-summary-row-label', label));
+    const accurateCount = Number(row?.accurate) || 0;
+    const totalCount = Number(row?.total) || 0;
+    const bar = feedbackElement('div', 'feedback-summary-bar');
+    const fill = document.createElement('i');
+    fill.style.width = totalCount ? `${Math.round((accurateCount / totalCount) * 100)}%` : '0%';
+    bar.append(fill);
+    item.append(bar);
+    item.append(
+      feedbackElement(
+        'span',
+        'feedback-summary-row-value',
+        `${accurateCount}/${totalCount} 准确`,
+      ),
+    );
+    list.append(item);
+  }
+  mount.append(list);
+  mount.append(
+    feedbackElement(
+      'p',
+      'feedback-summary-note',
+      '反馈仅用于改进建议质量（运营遥测），不参与发布或晋级闸门。',
+    ),
+  );
+}
+
+async function loadFeedbackSummary() {
+  const mount = $('feedback-summary');
+  if (!mount || mount.dataset.loading === '1') return;
+  mount.dataset.loading = '1';
+  try {
+    const payload = await request('/sim2real/feedback/summary');
+    renderFeedbackSummary(mount, payload?.summary);
+  } catch (error) {
+    mount.replaceChildren();
+    const retry = feedbackElement('button', 'button button-ghost button-small', '重新加载');
+    retry.type = 'button';
+    retry.addEventListener('click', () => {
+      delete mount.dataset.loading;
+      void loadFeedbackSummary();
+    });
+    mount.append(
+      feedbackElement(
+        'p',
+        'feedback-summary-error',
+        '反馈汇总暂不可用：' + (error instanceof Error ? error.message : '未知错误') + '。',
+      ),
+      retry,
+    );
+  } finally {
+    delete mount.dataset.loading;
+  }
+}
+
+// Lazy load on first expand: the summary is only worth a request when the
+// operator actually opens the panel; every later expand re-fetches so the
+// counts stay current after new verdicts.
+$('feedback-summary-panel')?.addEventListener('toggle', () => {
+  if ($('feedback-summary-panel')?.open) void loadFeedbackSummary();
+});
 
 function metricPercent(value) {
   return SimTelemetryCore.metricPercent(value);
@@ -4983,20 +5458,50 @@ function renderEvaluation() {
   );
   const quality = $('eval-run-quality');
   if (quality) {
-    const showQuality = mockRun || demoEvidence || unverifiedEvidence;
+    // The task-pack gate verdict is the only qualified/unqualified claim the
+    // banner may make: it comes from the run's taskEvaluation.qualityGate
+    // (server-side), so a false verdict is never invented client-side.
+    const gate = !mockRun && !demoEvidence ? latest?.taskEvaluation?.qualityGate : null;
+    const gateReported = Boolean(gate && (gate.passed === true || gate.passed === false));
+    const gateFailed = gateReported && gate.passed === false;
+    const showQuality = mockRun || demoEvidence || unverifiedEvidence || gateReported;
     quality.hidden = !showQuality;
     quality.className =
-      'state-badge ' + (unverifiedEvidence && !mockRun && !demoEvidence ? 'state-partial' : 'state-demo') + ' evaluation-quality';
-    quality.textContent = mockRun
-      ? 'Mock 协议演示 · 非真实 RL'
-      : demoEvidence
-        ? '合成证据 · 非真实遥测'
-        : '来源未验证 · 不能证明 X5';
-    quality.title = mockRun
-      ? '该运行只验证训练协议和台账，不生成可部署模型或真实 RL 指标。'
-      : demoEvidence
-        ? '该遥测由页面内置合成样例生成，不代表真实 X5。'
-        : '该回放的 source 由上传方声明，尚未经过受信适配器验证，不能作为 X5 真实性证明。';
+      'state-badge ' +
+      (gateReported
+        ? gate.passed
+          ? 'state-success'
+          : 'state-error'
+        : unverifiedEvidence && !mockRun && !demoEvidence
+          ? 'state-partial'
+          : 'state-demo') +
+      ' evaluation-quality';
+    quality.textContent = gateReported
+      ? gate.passed
+        ? '质量门通过 · Qualified'
+        : '质量门未通过 · Unqualified'
+      : mockRun
+        ? 'Mock 协议演示 · 非真实 RL'
+        : demoEvidence
+          ? '合成证据 · 非真实遥测'
+          : '来源未验证 · 不能证明 X5';
+    quality.title = gateReported
+      ? gate.passed
+        ? '任务包质量门（成功率/碰撞率等判据）判定通过，评测结论可用于发布证据链。'
+        : '任务包质量门判定未通过：' +
+          (Array.isArray(gate.errors) && gate.errors.length ? gate.errors.join('；') : '未返回具体原因。')
+      : mockRun
+        ? '该运行只验证训练协议和台账，不生成可部署模型或真实 RL 指标。'
+        : demoEvidence
+          ? '该遥测由页面内置合成样例生成，不代表真实 X5。'
+          : '该回放的 source 由上传方声明，尚未经过受信适配器验证，不能作为 X5 真实性证明。';
+    // An unqualified verdict is exactly the kind of "AI 出错时" moment the
+    // banner must not flatten into "评测已完成" — downgrade the status label
+    // so the operator sees the failure, not just the badge.
+    if (gateFailed && (statusLabel === '评测已完成' || statusLabel === '等待评测结果')) {
+      statusLabel = '评测完成 · 质量门未通过';
+      setText('eval-run-status', statusLabel);
+    }
   }
   setText(
     'eval-metrics-note',
@@ -6069,7 +6574,7 @@ function ensureAgentPanelStyles() {
     .agent-assistant-title-wrap { gap: 10px; min-width: 0; }
     .agent-assistant-title-wrap h2 { margin: 2px 0 0; font-size: 17px; }
     .agent-assistant-mark { display: grid; place-items: center; width: 30px; height: 30px; border-radius: 9px; background: rgba(86,212,255,.13); color: var(--cyan, #56d4ff); font-size: 17px; }
-    .agent-assistant-mode { margin-left: 4px; padding: 3px 7px; border: 1px solid rgba(116,230,176,.3); border-radius: 999px; color: var(--green, #74e6b0); font-size: 12px; white-space: nowrap; }
+    .agent-assistant-mode { margin-left: 4px; padding: 3px 7px; border: 1px solid var(--green-border); border-radius: 999px; color: var(--green-text); background: var(--green-soft); font-size: 12px; white-space: nowrap; }
     .agent-assistant-body { margin-top: 14px; }
     .agent-assistant[data-collapsed="true"] .agent-assistant-body { display: none; }
     .agent-assistant-lead strong { display: block; font-size: 15px; }
@@ -6450,6 +6955,9 @@ async function loadOverview({ quiet = false, silent = false } = {}) {
     }
     state.serviceError = false;
     state.productProfiles = Array.isArray(payload.productProfiles) ? payload.productProfiles : null;
+    // Notices piggyback on the overview cycle (cooldown-guarded) so a server
+    // restart mid-session surfaces the version change without a manual reload.
+    void loadWorkspaceNotices();
     clearAuthGate();
     await refreshActiveRuns();
     renderAll();
@@ -8725,6 +9233,25 @@ function wireEvents() {
       if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); activate(); }
     });
   });
+  $('training-engine')?.addEventListener('change', () => {
+    renderEngineCapability();
+  });
+  renderEngineCapability();
+  // G13 explicit preference: restore the last-used training profile and label
+  // it; every change persists for the next visit. The saved value never
+  // reaches the submit body on its own — the select stays the single source.
+  const trainingProfileSelect = $('training-profile');
+  if (trainingProfileSelect) {
+    if (state.trainingProfile) {
+      trainingProfileSelect.value = state.trainingProfile;
+      const note = window.document.querySelector('[data-training-profile-note]');
+      if (note) note.hidden = false;
+    }
+    trainingProfileSelect.addEventListener('change', () => {
+      state.trainingProfile = trainingProfileSelect.value || '';
+      saveWorkspaceContext();
+    });
+  }
   $('task-select')?.addEventListener('change', (event) => {
     const next = event.target.value;
     if (!ACTION_TASKS[next]) return;
@@ -9225,6 +9752,13 @@ renderAll();
 // landing view before the operator has taken an action.
 loadManifestTemplate({ notify: false });
 loadOverview();
+loadWorkspaceNotices({ force: true });
+// Re-check hook for long sessions and tests: the overview cycle re-fetches
+// notices only on its own cadence, so an explicit nudge (server restart
+// during a demo, or the spec harness) bypasses the cooldown deterministically.
+window.addEventListener('sim2real-refetch-notices', () => {
+  void loadWorkspaceNotices({ force: true });
+});
 // 上位机视图懒初始化：首次切到 station 视图时再探测板端 agent，
 // 避免无板卡环境下的多余请求与误导性错误横幅。
 const stationViewObserver = new MutationObserver(() => {

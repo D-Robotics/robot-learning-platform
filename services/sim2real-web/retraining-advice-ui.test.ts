@@ -388,6 +388,12 @@ describe('Sim2Real retraining advice panel (read-only analysis + explicit operat
     // separate, explicitly-clicked operator button.
     expect(body.textContent).toContain('需人工显式提交');
     expect(body.textContent).toContain('平台不会自动发起训练');
+    // Malleable advice (Bakusevych #29): the suggested profile is preselected
+    // in an editable select, and the JSON preview reflects the current pick.
+    const profileSelect = body.querySelector<HTMLSelectElement>('#run-retrain-profile');
+    expect(profileSelect, 'suggested training must expose the profile select').not.toBeNull();
+    expect(profileSelect?.value).toBe('standard');
+    expect(body.querySelector('.run-retrain-profile-note')?.textContent).toContain('已按建议预选');
     expect(body.querySelector('.run-retrain-suggested pre')?.textContent).toContain(
       '"profile": "standard"',
     );
@@ -396,7 +402,7 @@ describe('Sim2Real retraining advice panel (read-only analysis + explicit operat
     );
     const submit = body.querySelector<HTMLButtonElement>('#run-retrain-submit');
     expect(submit, 'retrain-recommended must offer the explicit operator action').not.toBeNull();
-    expect(submit?.textContent).toBe('按建议发起重训');
+    expect(submit?.textContent).toBe('按当前档位发起重训');
     expect(submit?.disabled).toBe(false);
 
     // The server note is always surfaced.
@@ -595,7 +601,85 @@ describe('Sim2Real retraining advice panel (read-only analysis + explicit operat
     );
     const submit = body.querySelector<HTMLButtonElement>('#run-retrain-submit');
     expect(submit?.disabled).toBe(false);
-    expect(submit?.textContent).toBe('按建议发起重训');
+    expect(submit?.textContent).toBe('按当前档位发起重训');
+  });
+
+  it('lets the operator reshape the suggested profile before submitting (Bakusevych #29)', async () => {
+    const { window, calls, confirmNotes } = await boot({
+      advice: recommendedAdvice(),
+      confirmResult: true,
+    });
+    const { body } = await openAdvicePanel(window);
+    const before = calls.length;
+
+    // The suggestion preselects its own profile; the operator downshifts it.
+    const profileSelect = body.querySelector<HTMLSelectElement>('#run-retrain-profile');
+    expect(profileSelect?.value).toBe('standard');
+    profileSelect!.value = 'low-vram';
+    profileSelect?.dispatchEvent(new window.Event('change', { bubbles: true }));
+
+    // The JSON preview is malleable output: it re-serializes with the new
+    // profile while the rest of the suggested body stays untouched.
+    const preview = body.querySelector('.run-retrain-suggested pre')?.textContent ?? '';
+    expect(preview).toContain('"profile": "low-vram"');
+    expect(preview).toContain('"algorithm": "sac"');
+    expect(preview).not.toContain('"profile": "standard"');
+
+    body.querySelector<HTMLButtonElement>('#run-retrain-submit')?.click();
+    await flush();
+
+    // The confirmation must flag that the submitted value is the operator's
+    // adjustment, not the original recommendation.
+    expect(confirmNotes).toHaveLength(1);
+    expect(confirmNotes[0]).toContain('你已调整，非原始建议');
+    expect(confirmNotes[0]).toContain('low-vram');
+
+    const runCalls = calls
+      .slice(before)
+      .filter((call) => String(call.init?.method ?? '').toUpperCase() === 'POST');
+    expect(runCalls).toHaveLength(1);
+    const sent = JSON.parse(String(runCalls[0]?.init?.body));
+    expect(sent.training).toMatchObject({ profile: 'low-vram', algorithm: 'sac' });
+  });
+
+  it('submits the suggested profile unchanged when the operator keeps the preselection', async () => {
+    const { window, calls, confirmNotes } = await boot({
+      advice: recommendedAdvice(),
+      confirmResult: true,
+    });
+    const { body } = await openAdvicePanel(window);
+    const before = calls.length;
+
+    // No adjustment: the select still holds the server-suggested value.
+    expect(body.querySelector<HTMLSelectElement>('#run-retrain-profile')?.value).toBe('standard');
+    body.querySelector<HTMLButtonElement>('#run-retrain-submit')?.click();
+    await flush();
+
+    expect(confirmNotes[0]).not.toContain('非原始建议');
+    const runCalls = calls
+      .slice(before)
+      .filter((call) => String(call.init?.method ?? '').toUpperCase() === 'POST');
+    expect(runCalls).toHaveLength(1);
+    const sent = JSON.parse(String(runCalls[0]?.init?.body));
+    expect(sent.training).toMatchObject({ profile: 'standard', algorithm: 'sac' });
+  });
+
+  it('falls back to the suggested profile when the select is missing from the DOM', async () => {
+    const { window } = await boot({ advice: recommendedAdvice(), confirmResult: true });
+    const { body } = await openAdvicePanel(window);
+    // Simulate a stale DOM: the select node is gone before the submit fires.
+    body.querySelector<HTMLSelectElement>('#run-retrain-profile')?.remove();
+    const internals = window as unknown as {
+      submitRetrainingFromAdvice?: (record: unknown, advice: unknown) => Promise<void>;
+    };
+    await internals.submitRetrainingFromAdvice?.(
+      { id: RUN_ID, modelId: 'model-1', backend: 'local', taskId: 'walk' },
+      recommendedAdvice(),
+    );
+    await flush();
+    expect(body.querySelector('#run-retrain-submit-status')?.textContent).toContain(
+      'run-retrain-1',
+    );
   });
 
   it('does not submit anything when the operator cancels the confirmation', async () => {
@@ -640,7 +724,7 @@ describe('Sim2Real retraining advice panel (read-only analysis + explicit operat
     release?.();
     await flush();
     expect(submit?.disabled).toBe(false);
-    expect(submit?.textContent).toBe('按建议发起重训');
+    expect(submit?.textContent).toBe('按当前档位发起重训');
   });
 
   it('shows an inline retryable error and re-enables the button when the POST fails', async () => {
@@ -660,7 +744,7 @@ describe('Sim2Real retraining advice panel (read-only analysis + explicit operat
     expect(status?.textContent).toContain('提交失败');
     expect(status?.textContent).toContain('本地 worker 暂不可用');
     expect(submit?.disabled).toBe(false);
-    expect(submit?.textContent).toBe('按建议发起重训');
+    expect(submit?.textContent).toBe('按当前档位发起重训');
     expect(errors).toEqual([]);
   });
 

@@ -350,6 +350,43 @@ describe('standalone Sim2Real health and optional simulator surface', () => {
     });
   });
 
+  it('serves the SPA and its assets correctly under an unstripped /sim2real/ prefix', async () => {
+    const { baseUrl } = await fixture();
+    // Operators reach the root-mounted standalone server through an
+    // unstripped `/sim2real/` prefix (bookmarks, tunnels, proxies without
+    // trailing-slash stripping). The server rewrites the prefix away — the
+    // same contract the production gateway applies — so the SPA works there.
+    // Previously `/sim2real/app.css` was answered by the SPA wildcard with
+    // index.html + `text/html`, nosniff/CSP rejected the stylesheet, and the
+    // page rendered unstyled (the "fullscreen whitespace" symptom).
+    const css = await fetch(`${baseUrl}/sim2real/app.css?v=32`);
+    expect(css.status).toBe(200);
+    expect(css.headers.get('content-type')).toMatch(/text\/css/);
+    expect((await css.text()).length).toBeGreaterThan(1000);
+
+    const script = await fetch(`${baseUrl}/sim2real/app.js?v=duck-lab`);
+    expect(script.status).toBe(200);
+    expect(script.headers.get('content-type')).toMatch(/javascript/);
+
+    // The prefixed API alias is rewritten onto the real API surface.
+    const overview = await fetch(`${baseUrl}/sim2real/api/sim2real/overview`);
+    expect(overview.status).toBe(200);
+    expect(overview.headers.get('content-type')).toMatch(/application\/json/);
+    expect(await overview.json()).toMatchObject({ ok: true });
+
+    // The bare prefix canonicalizes to the root entry.
+    const bare = await fetch(`${baseUrl}/sim2real`, { redirect: 'manual' });
+    expect(bare.status).toBe(308);
+    expect(bare.headers.get('location')).toBe('/');
+
+    // Unknown deep routes still resolve to the HTML entry so the SPA router
+    // can own them.
+    const route = await fetch(`${baseUrl}/sim2real/overview`);
+    expect(route.status).toBe(200);
+    expect(route.headers.get('content-type')).toMatch(/text\/html/);
+    expect(await route.text()).toContain('<!doctype html>');
+  });
+
   it('observes, rate-limits and audits malformed JSON before the parser short-circuits', async () => {
     process.env.RDK_SIM2REAL_RATE_LIMIT_PER_MINUTE = '1';
     const { baseUrl } = await fixture();

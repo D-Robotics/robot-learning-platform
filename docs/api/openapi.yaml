@@ -1860,6 +1860,63 @@ paths:
         "200": { description: Lineage graph, content: { application/json: { schema: { $ref: "#/components/schemas/LineageResponse" } } } }
         "401": { $ref: "#/components/responses/AuthRequired" }
         "404": { $ref: "#/components/responses/NotFound" }
+  /api/v1/duck/feedback:
+    post:
+      tags: [workspace]
+      summary: Record one piece of granular workspace feedback
+      operationId: createFeedback
+      description: >-
+        Operational telemetry only — feedback never feeds promotion or release
+        gates. Unknown surface/verdict values degrade to closed contract
+        defaults and are echoed in a `degraded` block instead of being
+        rejected, so stale clients keep working.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [surface, verdict]
+              properties:
+                surface:
+                  type: string
+                  enum: [retraining-advice, agent-reply, run-record]
+                verdict:
+                  type: string
+                  enum: [accurate, inaccurate]
+                note: { type: string, maxLength: 600 }
+                runId: { type: string, maxLength: 120 }
+      responses:
+        "201": { description: Feedback saved, content: { application/json: { schema: { type: object } } } }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/AuthRequired" }
+    get:
+      tags: [workspace]
+      summary: List the caller's feedback with the closed contract values
+      operationId: listFeedback
+      responses:
+        "200": { description: Feedback records, content: { application/json: { schema: { type: object } } } }
+        "401": { $ref: "#/components/responses/AuthRequired" }
+  /api/v1/duck/feedback/summary:
+    get:
+      tags: [workspace]
+      summary: Aggregate reliance summary of the caller's feedback
+      operationId: getFeedbackSummary
+      responses:
+        "200": { description: Per-surface counts and accuracy share, content: { application/json: { schema: { type: object } } } }
+        "401": { $ref: "#/components/responses/AuthRequired" }
+  /api/v1/duck/notices:
+    get:
+      tags: [workspace]
+      summary: Read workspace notices (anonymous; packaging and health identity)
+      operationId: getWorkspaceNotices
+      security: []
+      description: >-
+        Served, never stored: the package version is the release identity and
+        the storage readiness snapshot is the health identity, so there is no
+        second source of truth that can drift. Accessible without a session.
+      responses:
+        "200": { description: Current notices, content: { application/json: { schema: { type: object } } } }
 components:
   securitySchemes:
     cookieAuth:

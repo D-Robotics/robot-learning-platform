@@ -20,7 +20,7 @@
          theme x view screenshots). See services/sim2real-web/ui-layout-invariants.mjs
          for the guards that keep new overrides from re-introducing layering. -->
     <link rel="stylesheet" href="./tokens.css?v=2" />
-    <link rel="stylesheet" href="./app.css?v=14" />
+    <link rel="stylesheet" href="./app.css?v=32" />
   </head>
   <body>
     <a class="skip-link" href="#main-content">跳到主要内容</a>
@@ -343,6 +343,8 @@
             <button class="button button-ghost button-small" id="workspace-status-retry" type="button">重新连接</button>
           </div>
 
+          <div class="workspace-notices" id="workspace-notices" role="region" aria-label="平台通知" hidden></div>
+
           <nav class="workflow-progress-strip" id="workflow-progress-strip" aria-label="闭环进度">
             <div class="workflow-progress-intro"><span class="eyebrow">学习进度</span><strong id="workflow-progress-summary">从准备数据开始</strong></div>
             <ol class="workflow-progress-steps">
@@ -483,6 +485,16 @@
                 </div>
               </div>
             </details>
+          <details class="overview-environment feedback-summary-panel" id="feedback-summary-panel">
+            <summary>
+              <span class="overview-environment-icon" aria-hidden="true">✓</span>
+              <span><strong>反馈效果汇总</strong><small>你的「准确 / 不准确」投票去向</small></span>
+              <span class="overview-environment-toggle" aria-hidden="true">查看详情 <i>⌄</i></span>
+            </summary>
+            <div class="feedback-summary" id="feedback-summary" role="status" aria-live="polite">
+              <span class="empty-inline">打开后加载汇总…</span>
+            </div>
+          </details>
           </section>
 
           <section class="agent-chat-panel" id="agent-chat-panel" role="dialog" aria-modal="true" aria-hidden="true" aria-labelledby="agent-chat-title">
@@ -497,7 +509,7 @@
               <aside class="agent-chat-sessions" aria-label="对话历史">
                 <button class="agent-new-session" id="agent-new-session" type="button">＋ 新建对话</button>
                 <div class="agent-session-label">最近对话</div>
-                <div id="agent-session-list"><button class="agent-session-item is-active" type="button">当前对话</button></div>
+                <div id="agent-session-list"><button class="agent-session-item is-active" type="button" data-static-current>当前对话</button></div>
               </aside>
               <div class="agent-chat-messages" id="agent-chat-messages" aria-live="polite">
                 <div class="agent-chat-message agent-chat-message-agent"><strong>Agent</strong><p>告诉我你要完成什么。例如：跑一轮 GPU 训练，检查 X5，再做只读预检。</p></div>
@@ -827,7 +839,7 @@
                 <details class="training-controls">
                   <summary>训练参数与续训</summary>
                   <div class="training-grid">
-                    <label class="field-label" for="training-profile">训练档位</label
+                    <label class="field-label" for="training-profile">训练档位<small class="profile-pref-note" data-training-profile-note hidden>已按你上次的选择预选</small></label
                     ><select id="training-profile" aria-label="选择训练档位">
                       <option value="smoke">冒烟 · 64 环境 / 5 轮</option>
                       <option value="low-vram">低显存 · 64 环境起步</option>
@@ -842,7 +854,10 @@
                       <option value="" selected>默认 · worker 配置的引擎</option>
                       <option value="starter-ppo">starter-ppo · 运动学（CPU 友好）</option>
                       <option value="mjx-ppo">MJX · MuJoCo 接触动力学</option>
-                      <option value="microduck-rl">microduck-rl · mjlab 并行物理（CUDA）</option></select
+                      <option value="visual-ppo">visual-ppo · 顶置相机像素观测（CPU MuJoCo）</option>
+                      <option value="dm-control-ppo">dm-control-ppo · DeepMind 生态 env API（CPU MuJoCo）</option>
+                      <option value="microduck-rl">microduck-rl · mjlab 并行物理（CUDA）</option>
+                      <option value="mjlab-rsl-rl">mjlab-rsl-rl · mjlab 物理 + rsl-rl PPO（CUDA）</option></select
                     ><label class="field-label" for="compute-resource-select">训练资源</label
                     ><select id="compute-resource-select" aria-label="选择 GPU 训练资源">
                       <option value="">服务端默认本地 Worker</option>
@@ -861,7 +876,11 @@
                       type="text"
                       placeholder="artifact://model/checkpoint-1500"
                       autocomplete="off"
-                    />
+                    /><div class="engine-capability-note" id="engine-capability-note" hidden>
+                      <span class="engine-capability-name" id="engine-capability-name"></span>
+                      <span class="engine-capability-badges" id="engine-capability-badges"></span>
+                      <p class="engine-capability-desc" id="engine-capability-desc"></p>
+                    </div>
                   </div>
                 </details>
               </article>
@@ -1965,8 +1984,8 @@
       blocking the parser at body end.
     -->
     <script defer src="./telemetry-core.js?v=duck-lab-30"></script>
-    <script defer src="./app.js?v=duck-lab-41"></script>
-    <script defer src="./agent-chat.js?v=agent-9"></script>
+    <script defer src="./app.js?v=duck-lab-45"></script>
+    <script defer src="./agent-chat.js?v=agent-11"></script>
     <script defer src="./onboarding.js?v=onboarding-5"></script>
   </body>
 </html>

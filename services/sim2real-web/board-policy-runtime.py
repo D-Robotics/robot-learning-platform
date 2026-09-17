@@ -382,6 +382,34 @@ def _read_camera_frame():
         return None
 
 
+def wheeled_observation_layout(obs_dim, action_dim):
+    """Named segments the wheeled adapter fills, as (name, width, provenance).
+
+    Single source of truth for the slot arithmetic: the load path refuses a
+    contract these do not fit exactly, and `_build_observation` writes exactly
+    these. Keeping one function means the check cannot drift from the assembly.
+    """
+    remaining = max(0, obs_dim - 6)
+    action_width = min(action_dim, remaining)
+    command_width = 1 if remaining > action_width else 0
+    return (
+        ("gyro", 3, "real"),
+        ("projected_gravity", 3, "real"),
+        ("last_action", action_width, "adapter"),
+        ("command", command_width, "adapter"),
+    )
+
+
+def wheeled_observation_size(obs_dim, action_dim):
+    """Total slots `wheeled_observation_layout` fills.
+
+    Never exceeds `obs_dim`: the layout caps itself. That is a property of this
+    arithmetic, not a checked precondition, and it means the assembly can never
+    overflow the contract -- the shortfall (if any) is zero-padded by design.
+    """
+    return sum(width for _, width, _ in wheeled_observation_layout(obs_dim, action_dim))
+
+
 class PolicyRuntime:
     def __init__(self):
         self._lock = threading.Lock()
@@ -401,6 +429,10 @@ class PolicyRuntime:
         self._command_dir = 0.0       # operator direction command (-1..1)
         self._last_obs = None
         self._last_action = None
+        # Named observation segments the wheeled adapter actually wrote, as
+        # (name, width, provenance). Populated by _build_observation so the slot
+        # report describes the real assembly instead of a hand-written literal.
+        self._obs_segments = ()
         self._published = 0
         self._infer_ms_avg = 0.0
         self._started_at = None
@@ -510,20 +542,50 @@ class PolicyRuntime:
                 "slots_real": 8,
                 "slots_adapter": 0,
             }
-        filled = 6 + min(EXPECTED_ACTION_DIM, max(0, EXPECTED_OBS_DIM - 6))
+        # Built from the recorded segments (what _build_observation actually
+        # wrote) rather than a hand-written literal: the previous strings said
+        # "slots 0-5 real; slots 6-N adapter" without knowing whether that was
+        # true, so a contract the adapter did not fit would have been described
+        # confidently and wrongly. Before the first observation there is nothing
+        # to report yet, which is stated rather than guessed.
+        with self._lock:
+            segments = self._obs_segments
+        if not segments:
+            return {
+                "contract": f"{EXPECTED_OBS_DIM}D obs / {EXPECTED_ACTION_DIM}D act (or 2D vw)",
+                "source": "no observation assembled yet in this session",
+                "slots_real": 0,
+                "slots_adapter": 0,
+                "slotPlan": [
+                    {"name": name, "width": width, "provenance": provenance}
+                    for name, width, provenance in wheeled_observation_layout(
+                        EXPECTED_OBS_DIM, EXPECTED_ACTION_DIM
+                    )
+                ],
+            }
+        offset = 0
+        entries = []
+        for name, width, provenance in segments:
+            entries.append(
+                {
+                    "name": name,
+                    "range": f"{offset}-{offset + width - 1}" if width else "absent",
+                    "width": width,
+                    "provenance": provenance,
+                }
+            )
+            offset += width
+        real = sum(width for _, width, provenance in segments if provenance == "real")
+        adapter = sum(width for _, width, provenance in segments if provenance == "adapter")
         report = {
             "contract": f"{EXPECTED_OBS_DIM}D obs / {EXPECTED_ACTION_DIM}D act (or 2D vw)",
-            "gyro": "real (/imu angular_velocity)",
-            "projected_gravity": "real (quaternion-derived, roll/pitch)",
-            "last_action": "real (previous projected action)"
-            if EXPECTED_OBS_DIM > 6
-            else "absent (contract too small)",
-            "command": f"operator ({self._command_dir:+.2f})"
-            if EXPECTED_OBS_DIM > 6 + EXPECTED_ACTION_DIM
-            else "zero-padded (no room after action slots)",
-            "slots_real": 6,
-            "slots_adapter": max(0, EXPECTED_OBS_DIM - 6),
-            "note": f"slots 0-5 real sensors; slots 6-{filled - 1} adapter (last_action/command); any remainder zero-padded to {EXPECTED_OBS_DIM}D",
+            "source": "real sensors where marked real; other slots are honest adapter values",
+            "slots_real": real,
+            "slots_adapter": adapter,
+            "slots_total": offset,
+            "slots": entries,
+            "note": "ranges describe what the adapter actually wrote this session; "
+                    f"the assembled vector is exactly {offset} slots and must equal the contract",
         }
         if VISION_LAYOUT:
             # The image is a separate model input, not a slot in the vector
@@ -988,15 +1050,34 @@ class PolicyRuntime:
         pg_y = 2 * (-qw * qx - qy * qz)
         pg_z = 2 * (qx * qx + qy * qy) - 1
 
+        segments = wheeled_observation_layout(EXPECTED_OBS_DIM, EXPECTED_ACTION_DIM)
+        action_width = segments[2][1]
         head = [gx, gy, gz, pg_x, pg_y, pg_z]
-        last = self._last_action or [0.0] * EXPECTED_ACTION_DIM
-        tail = (
-            [round(v, 4) for v in last]
-            + [self._command_dir]
-        )
-        obs = (head + tail)[:EXPECTED_OBS_DIM]
-        if len(obs) < EXPECTED_OBS_DIM:
-            obs = obs + [0.0] * (EXPECTED_OBS_DIM - len(obs))
+        # Exactly the declared width: a recorded action of a different length
+        # (a contract change mid-session) must not shift the command slot.
+        last = (self._last_action or [])[:action_width]
+        last = last + [0.0] * (action_width - len(last))
+        tail = [round(v, 4) for v in last]
+        if segments[3][1]:
+            tail = tail + [self._command_dir]
+        assembled = head + tail
+        if len(assembled) > EXPECTED_OBS_DIM:
+            # Unreachable by construction (`wheeled_observation_layout` caps
+            # itself), kept as an assertion rather than a silent truncation: an
+            # overflow here would mean the layout arithmetic and this assembly
+            # disagree, which must surface as a fault, never as a policy quietly
+            # reading shifted slots.
+            raise ValueError(
+                "observation assembly produced %d values for a %dD contract"
+                % (len(assembled), EXPECTED_OBS_DIM)
+            )
+        # A shortfall is the documented partial-adapter behaviour: the slots this
+        # board cannot source are zero-filled so the vector matches the contract.
+        obs = assembled + [0.0] * (EXPECTED_OBS_DIM - len(assembled))
+        with self._lock:
+            # Recorded so the slot report describes what was actually written
+            # rather than a hand-written literal that could drift from the code.
+            self._obs_segments = segments
         return obs
 
     def _build_observation_for_inference(self):

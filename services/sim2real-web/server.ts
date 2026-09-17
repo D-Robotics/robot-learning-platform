@@ -479,6 +479,31 @@ export function createSim2RealWebApp(): Express {
     next();
   });
 
+  // Standalone deployments mount the SPA at `/`, but operators frequently
+  // reach them through an unstripped `/sim2real/` prefix (bookmark, tunnel,
+  // reverse proxy that forgot proxy_pass trailing-slash semantics). The
+  // production gateway strips the prefix before forwarding; mirror that
+  // contract here by rewriting `/sim2real/...` to `/...` before any route
+  // sees it, and canonicalizing the prefix root to `/` so relative asset
+  // links resolve against the served document. When a base path is actually
+  // configured (RDK_SIM2REAL_PUBLIC_BASE_PATH) the gateway is expected to
+  // strip it, so the rewrite is skipped to avoid double-stripping.
+  const externalOnlyPrefix = configuredPublicBasePath() === '' ? '/sim2real' : null;
+  if (externalOnlyPrefix) {
+    app.use((request, response, next) => {
+      // request.path stays raw (prefix intact) for log fidelity; only
+      // request.url is rewritten, which is what Express routing consumes.
+      if (request.path === externalOnlyPrefix) {
+        response.redirect(308, '/');
+        return;
+      }
+      if (request.path.startsWith(`${externalOnlyPrefix}/`)) {
+        request.url = request.url.slice(externalOnlyPrefix.length);
+      }
+      next();
+    });
+  }
+
   // Keep the same signed-cookie context as the board/device adapters.
   app.use(storageRequestContextMiddleware);
   app.use(studioSecurityHeadersMiddleware);
@@ -1040,9 +1065,49 @@ export function createSim2RealWebApp(): Express {
   );
   // Express 5 wildcard syntax keeps the SPA fallback compatible with paths
   // such as `/` and `/sim2real/` without the legacy path-to-regexp pattern.
+  // Static-asset extensions must NOT fall back to the HTML entry: when the
+  // standalone server is reached through an unstripped proxy prefix
+  // (`https://host/sim2real/app.css` with no RDK_SIM2REAL_PUBLIC_BASE_PATH
+  // set), serving index.html as `text/html` makes the browser reject the
+  // stylesheet/script under nosniff + CSP and the SPA renders unstyled —
+  // a broken layout that looks like a whitespace bug. 404 keeps the failure
+  // honest and diagnosable instead.
+  const STATIC_ASSET_EXTENSIONS = new Set([
+    '.css',
+    '.js',
+    '.mjs',
+    '.map',
+    '.json',
+    '.png',
+    '.jpg',
+    '.jpeg',
+    '.gif',
+    '.svg',
+    '.webp',
+    '.avif',
+    '.ico',
+    '.woff',
+    '.woff2',
+    '.ttf',
+    '.eot',
+    '.wasm',
+  ]);
   app.get('/{*splat}', (request, response, next) => {
     if (request.path.startsWith('/api/')) {
       next();
+      return;
+    }
+    const assetSuffix = path.extname(request.path).toLowerCase();
+    if (assetSuffix && STATIC_ASSET_EXTENSIONS.has(assetSuffix)) {
+      response
+        .status(404)
+        .setHeader('Cache-Control', 'no-store')
+        .json({
+          ok: false,
+          error: 'SIM2REAL_STATIC_ASSET_NOT_FOUND',
+          message: '静态资源不存在；请从应用入口页访问，或为反向代理配置正确的路径剥离/基路径。',
+          requestId: response.getHeader('X-Request-Id'),
+        });
       return;
     }
     sendIndexDocument(response);

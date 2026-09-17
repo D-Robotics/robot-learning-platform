@@ -26,6 +26,13 @@ import type {
 import { BUILTIN_MICRODUCK_MODEL, BUILTIN_ORIGINBOT_MODEL } from '../../shared/sim2real.js';
 import { Sim2RealError } from './sim2real-errors.js';
 import { emitSim2RealEvent } from './sim2real-events.js';
+import {
+  appendSim2RealFeedback,
+  isSim2RealFeedbackRecord,
+  listSim2RealFeedback,
+  summarizeSim2RealFeedback,
+  type Sim2RealFeedbackRecord,
+} from './workspace-feedback.js';
 import { redactInternalError } from './http-helpers.js';
 import { validateRunForDeployment } from './release-evidence.js';
 import { isWebCloudDeployment, resolveDataDir } from './standalone-adapters.js';
@@ -42,6 +49,8 @@ const PROJECT_CAP = 100;
 const DATASET_CAP = 500;
 const ARTIFACT_CAP = 2_000;
 const EVALUATION_CAP = 2_000;
+// Granular user feedback (G15): small, bounded, FIFO-trimmed in the ledger.
+const FEEDBACK_CAP = 500;
 export const DEFAULT_ACTIVE_RUN_CAP = 4;
 // A reservation that never receives a runner id (for example, a process
 // crash between submit and ledger update) must not occupy an account slot
@@ -218,6 +227,7 @@ interface Sim2RealLedger {
   artifacts: StoredArtifact[];
   evaluations: StoredEvaluation[];
   computeResources: StoredComputeResource[];
+  feedback: unknown[];
 }
 
 export interface Sim2RealStorageInfo {
@@ -315,6 +325,7 @@ function emptyLedger(): Sim2RealLedger {
     artifacts: [],
     evaluations: [],
     computeResources: [],
+    feedback: [],
   };
 }
 
@@ -434,10 +445,14 @@ function validLedgerShape(value: Record<string, unknown>): boolean {
   if (value.artifacts !== undefined && !Array.isArray(value.artifacts)) return false;
   if (value.evaluations !== undefined && !Array.isArray(value.evaluations)) return false;
   if (value.computeResources !== undefined && !Array.isArray(value.computeResources)) return false;
+  // Feedback (G15) is optional in ledger shape so pre-existing ledgers keep
+  // parsing; entries are filtered by the closed-shape guard at read/write time.
+  if (value.feedback !== undefined && !Array.isArray(value.feedback)) return false;
   if (Array.isArray(value.projects) && value.projects.length > PROJECT_CAP) return false;
   if (Array.isArray(value.datasets) && value.datasets.length > DATASET_CAP) return false;
   if (Array.isArray(value.artifacts) && value.artifacts.length > ARTIFACT_CAP) return false;
   if (Array.isArray(value.evaluations) && value.evaluations.length > EVALUATION_CAP) return false;
+  if (Array.isArray(value.feedback) && value.feedback.length > FEEDBACK_CAP) return false;
   if (Array.isArray(value.computeResources) && value.computeResources.length > 100) return false;
   if (Array.isArray(value.projects)) {
     if (!validRecordArray(value.projects, ['id', 'name', 'slug', 'createdAt', 'updatedAt']))
@@ -738,6 +753,7 @@ async function readLedger(): Promise<Sim2RealLedger> {
         artifacts: arrayOf<StoredArtifact>(parsed.artifacts),
         evaluations: arrayOf<StoredEvaluation>(parsed.evaluations),
         computeResources: arrayOf<StoredComputeResource>(parsed.computeResources),
+        feedback: arrayOf<unknown>(parsed.feedback),
       };
       cache = { file, value, size: afterStat.size, mtimeMs: afterStat.mtimeMs };
       return value;
@@ -3695,6 +3711,41 @@ export async function updateSim2RealDeployment(
     return copy(withoutDeploymentPrivate(updated));
   });
 }
+
+// ---- granular user feedback (Amershi G15) -----------------------------------
+// Feedback is operational telemetry only: nothing here can influence the
+// promotion/release gates. Storage follows the same ledger discipline as every
+// other collection — serialized writes, owner scoping, bounded size.
+
+export async function createSim2RealFeedback(
+  input: Omit<Sim2RealFeedbackRecord, 'id' | 'createdAt'>,
+  owner?: string,
+): Promise<Sim2RealFeedbackRecord> {
+  ensureWritable();
+  return serialized(async () => {
+    const ledger = await readLedger();
+    return appendSim2RealFeedback(ledger.feedback ?? [], input, owner, async (next) => {
+      await writeLedger({ ...ledger, feedback: next });
+    });
+  });
+}
+
+export async function listSim2RealFeedbackRecords(
+  owner?: string,
+): Promise<Sim2RealFeedbackRecord[]> {
+  const ledger = await readLedger();
+  return listSim2RealFeedback(ledger.feedback ?? [], owner);
+}
+
+/** Reliance summary (Bakusevych #38 / G17): aggregate view of the same
+ *  owner-scoped feedback — counts and accuracy share, never identities. */
+export async function summarizeSim2RealFeedbackRecords(owner?: string) {
+  const ledger = await readLedger();
+  return summarizeSim2RealFeedback(ledger.feedback ?? [], owner);
+}
+
+/** Shape guard re-export so routes can validate ledger-loaded rows cheaply. */
+export { isSim2RealFeedbackRecord };
 
 /** Test hook: clears only the in-process cache; it never deletes user data. */
 export function invalidateSim2RealStoreCacheForTest(): void {

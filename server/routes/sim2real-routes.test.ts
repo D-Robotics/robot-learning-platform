@@ -2880,4 +2880,152 @@ describe('Sim2Real HTTP routes', () => {
       'RDK_SIM2REAL_STORAGE_DIR',
     );
   });
+
+  it('stores granular feedback with owner scoping, bounded notes and closed-contract degradation', async () => {
+    const router = await fixture();
+
+    const posted = await invoke(router, 'post', '/api/sim2real/feedback', {
+      body: {
+        surface: 'retraining-advice',
+        verdict: 'inaccurate',
+        note: '阈值太宽松，实际板上表现更差。',
+        runId: 'run-feedback-1',
+      },
+    });
+    expect(posted.statusCode).toBe(201);
+    const created = (posted.body as { feedback: Record<string, unknown> }).feedback;
+    expect(created.surface).toBe('retraining-advice');
+    expect(created.verdict).toBe('inaccurate');
+    expect(created.note).toBe('阈值太宽松，实际板上表现更差。');
+    expect(created.runId).toBe('run-feedback-1');
+    expect(typeof created.id).toBe('string');
+    expect(typeof created.createdAt).toBe('string');
+    expect(posted.body).not.toHaveProperty('degraded');
+
+    // Stale-client values degrade instead of 4xx: unknown surface/verdict map
+    // into the closed contract and the response flags the degradation.
+    const degraded = await invoke(router, 'post', '/api/sim2real/feedback', {
+      body: { surface: 'legacy-widget', verdict: 'kinda' },
+    });
+    expect(degraded.statusCode).toBe(201);
+    const degradedRecord = (degraded.body as { feedback: Record<string, unknown> }).feedback;
+    expect(degradedRecord.surface).toBe('run-record');
+    expect(degradedRecord.verdict).toBe('inaccurate');
+    expect((degraded.body as { degraded: Record<string, boolean> }).degraded).toMatchObject({
+      surface: true,
+      verdict: true,
+    });
+
+    const listed = await invoke(router, 'get', '/api/sim2real/feedback');
+    expect(listed.statusCode).toBe(200);
+    const list = listed.body as {
+      feedback: Array<Record<string, unknown>>;
+      surfaces: string[];
+      verdicts: string[];
+      noteMaxChars: number;
+    };
+    expect(list.feedback).toHaveLength(2);
+    expect(list.surfaces).toEqual(['retraining-advice', 'agent-reply', 'run-record']);
+    expect(list.verdicts).toEqual(['accurate', 'inaccurate']);
+    expect(list.noteMaxChars).toBe(600);
+    // Owner private marker must never leak into the API surface.
+    expect(JSON.stringify(list.feedback)).not.toContain('"owner"');
+
+    const rejected = await invoke(router, 'post', '/api/sim2real/feedback', {
+      body: { surface: 'run-record', verdict: 'accurate', note: 'x'.repeat(601) },
+    });
+    expect(rejected.statusCode).toBe(400);
+    expect(rejected.body).toMatchObject({ code: 'SIM2REAL_INVALID_FEEDBACK' });
+  });
+
+  it('summarizes feedback into reliance aggregates without leaking owners (Bakusevych #38)', async () => {
+    const router = await fixture();
+    // Seed: two accurate retraining-advice votes, one inaccurate agent-reply.
+    for (const [surface, verdict] of [
+      ['retraining-advice', 'accurate'],
+      ['retraining-advice', 'accurate'],
+      ['agent-reply', 'inaccurate'],
+    ] as const) {
+      const posted = await invoke(router, 'post', '/api/sim2real/feedback', {
+        body: { surface, verdict },
+      });
+      expect(posted.statusCode).toBe(201);
+    }
+
+    const summarized = await invoke(router, 'get', '/api/sim2real/feedback/summary');
+    expect(summarized.statusCode).toBe(200);
+    const summary = (summarized.body as { summary: Record<string, unknown> }).summary;
+    expect(summary.total).toBe(3);
+    expect(summary.accurate).toBe(2);
+    expect(summary.inaccurate).toBe(1);
+    expect(summary.windowDays).toBe(30);
+    expect(summary.bySurface).toEqual([
+      { surface: 'retraining-advice', total: 2, accurate: 2 },
+      { surface: 'agent-reply', total: 1, accurate: 0 },
+    ]);
+    // Aggregates only — no notes, no ids, no owners.
+    expect(JSON.stringify(summary)).not.toContain('"owner"');
+    expect(JSON.stringify(summary)).not.toContain('note');
+
+    // A fresh storage dir reports an honest empty summary, not an error.
+    const empty = await invoke(await fixture(), 'get', '/api/sim2real/feedback/summary');
+    expect(empty.statusCode).toBe(200);
+    expect(
+      (empty.body as { summary: { total: number; bySurface: unknown[] } }).summary,
+    ).toMatchObject({
+      total: 0,
+      accurate: 0,
+      inaccurate: 0,
+    });
+    expect((empty.body as { summary: { bySurface: unknown[] } }).summary.bySurface).toEqual([]);
+  });
+
+  it('enforces the summary window: stale records drop out of "近 30 天" counts', async () => {
+    // The label promises a rolling window, so the aggregation must actually
+    // apply it — a record older than windowDays is excluded even though it is
+    // still stored (the list endpoint keeps serving it).
+    const summarize = (await import('../sim2real/workspace-feedback.js')).summarizeSim2RealFeedback;
+    const now = new Date().toISOString();
+    const stale = {
+      id: 'fb-stale',
+      surface: 'run-record',
+      verdict: 'accurate',
+      note: '旧投票，不该再计入近 30 天汇总',
+      createdAt: new Date(Date.now() - 35 * 24 * 60 * 60 * 1000).toISOString(),
+    };
+    const fresh = {
+      id: 'fb-fresh',
+      surface: 'run-record',
+      verdict: 'inaccurate',
+      note: '新投票',
+      createdAt: now,
+    };
+    const result = summarize([stale, fresh], undefined);
+    expect(result.total).toBe(1);
+    expect(result.inaccurate).toBe(1);
+    expect(result.windowDays).toBe(30);
+    // A record whose createdAt cannot be parsed is excluded rather than
+    // relabeled into the window.
+    const unparseable = summarize(
+      [{ ...fresh, id: 'fb-bad-date', createdAt: 'not-a-date' }, fresh],
+      undefined,
+    );
+    expect(unparseable.total).toBe(1);
+  });
+
+  it('serves workspace notices anonymously: package version plus degraded storage state', async () => {
+    const router = await fixture();
+    const notices = await invoke(router, 'get', '/api/sim2real/notices');
+    expect(notices.statusCode).toBe(200);
+    const payload = notices.body as {
+      notices: Array<{ id: string; kind: string; title: string; detail?: string }>;
+    };
+    const version = payload.notices.find((item) => item.id.startsWith('platform-version:'));
+    expect(version, 'version notice is always present').toBeTruthy();
+    expect(version?.kind).toBe('info');
+    expect(version?.title).toMatch(/^当前平台版本 /);
+    // A writable fixture storage dir must not fabricate a degraded notice.
+    expect(payload.notices.find((item) => item.id === 'platform-degraded')).toBeUndefined();
+    expect(notices.headers['cache-control']).toContain('no-store');
+  });
 });

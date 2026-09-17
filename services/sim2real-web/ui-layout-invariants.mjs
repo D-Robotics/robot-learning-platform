@@ -104,6 +104,25 @@ function mediaMatches(media, width) {
   return true;
 }
 
+/** Split a selector list on commas that are NOT inside parentheses. */
+function splitTopLevel(text) {
+  const out = [];
+  let depth = 0;
+  let cur = '';
+  for (const ch of text) {
+    if (ch === '(') depth += 1;
+    if (ch === ')') depth -= 1;
+    if (ch === ',' && depth === 0) {
+      out.push(cur);
+      cur = '';
+    } else {
+      cur += ch;
+    }
+  }
+  if (cur) out.push(cur);
+  return out;
+}
+
 const decl = (body, prop) => {
   const m = body.match(new RegExp('(?:^|;)\\s*' + prop + '\\s*:([^;}]*)'));
   return m ? m[1].trim() : null;
@@ -219,7 +238,15 @@ export function assertStyleInvariants(publicDir) {
   const ALLOWED_SUB_12 = new Set(['10.5px']);
   for (const { file, css } of sheets) {
     for (const r of rules(css, { file })) {
-      const size = decl(r.body, 'font-size');
+      // `font-size` AND the `font:` shorthand. The shorthand is usually written
+      // across lines (`font:\n    11px ui-monospace, …`), so a line-based grep
+      // misses it — which is how nine 11px mono labels survived a floor that
+      // claimed to allow only 10.5px.
+      const size =
+        decl(r.body, 'font-size') ??
+        (/(?:^|;)\s*font\s*:[^;]*?([\d.]+)px/.exec(r.body)?.[1]
+          ? `${/(?:^|;)\s*font\s*:[^;]*?([\d.]+)px/.exec(r.body)[1]}px`
+          : null);
       if (!size) continue;
       const m = size.match(/^([\d.]+)px$/);
       if (!m || Number(m[1]) >= 12) continue;
@@ -252,6 +279,39 @@ export function assertStyleInvariants(publicDir) {
     );
   }
 
+  // ---- 6b. spacing must come from the scale ----
+  // Before this, 1147 spacing declarations used 41 distinct px values: 9/10/11
+  // and 6/7 and 12/13/14 all coexisted, which is what reads as "simultaneously
+  // too airy and too cramped" — there was no ruler, so every gap was whatever
+  // the author typed that day. 462 declarations were snapped to the nearest
+  // step (average displacement 1.41px, max 3px) and verified against the
+  // 11-viewport sweep. New work must use the scale.
+  const SPACING_SCALE = new Set([2, 4, 6, 8, 10, 12, 16, 20, 24, 32, 40, 48]);
+  const SPACING_PROPS =
+    /^(padding|margin)(-(top|right|bottom|left|inline|block)(-(start|end))?)?$|^gap$|^(row|column)-gap$/;
+  const offScale = [];
+  for (const { file, css } of sheets) {
+    for (const r of rules(css, { file })) {
+      for (const decl of r.body.split(';')) {
+        const [prop, ...rest] = decl.split(':');
+        if (!prop || !SPACING_PROPS.test(prop.trim())) continue;
+        const value = rest.join(':');
+        for (const m of value.matchAll(/(^|[\s(])(-?[\d.]+)px/g)) {
+          const raw = Number(m[2]);
+          // Negative values are optical nudges (pull a badge up 3px), not rhythm;
+          // >=60px is one-off layout sizing (page gutters, hero padding).
+          if (raw <= 0 || raw >= 60) continue;
+          if (!SPACING_SCALE.has(raw)) offScale.push(`${file}:${r.line} ${prop.trim()}: ${raw}px`);
+        }
+      }
+    }
+  }
+  assert.equal(
+    offScale.length,
+    0,
+    `spacing must use the scale ${[...SPACING_SCALE].join('/')}px (values under 60px); found ${offScale.length}: ${offScale.slice(0, 6).join(', ')}`,
+  );
+
   // ---- 7. the layering must not grow ----
   // app.css is eleven historical layers concatenated in load order. That is why
   // the same selector is defined up to 14 times, and a change to a component's
@@ -282,7 +342,11 @@ export function assertStyleInvariants(publicDir) {
   //   recorded, reviewed exception, not a template.
   // Lower this whenever another verified batch lands; raise it only with a
   // note like the one above.
-  const CROSS_LAYER_BUDGET = 305;
+  // 305 → 306 (2026-09-17): the G18 workspace-notice strip adds one responsive
+  // override pair (.workspace-notice-copy span base + its 720px media rule)
+  // that mirrors the existing .workspace-status-copy span pattern in the same
+  // maturity-ux layer. No new layer, no new component family.
+  const CROSS_LAYER_BUDGET = 306;
   const appCss = sheets.find((sh) => sh.file === 'app.css');
   if (appCss) {
     const bannerRe = /\/\* =+ ([a-z-]+\.css) —/g;
@@ -297,7 +361,11 @@ export function assertStyleInvariants(publicDir) {
     const seen = new Map();
     for (const chunk of chunks) {
       for (const m of deComment(chunk).matchAll(/(^|\})([^{}@]+)\{/g)) {
-        for (const sel of m[2].split(',')) {
+        // Split on top-level commas only. A naive split(',') also cuts inside
+        // functional pseudo-classes — `:is(button, a.button, .button)` became
+        // three fragments — which produced phantom cross-layer selectors and
+        // tripped this very ratchet with a false positive.
+        for (const sel of splitTopLevel(m[2])) {
           const t = sel.trim();
           if (!t) continue;
           seen.set(t, (seen.get(t) || 0) + 1);

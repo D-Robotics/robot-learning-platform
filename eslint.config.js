@@ -41,6 +41,7 @@ const CONTROL_CHAR_SANITIZER_FILES = [
   'server/sim2real/robogo-runner.ts',
   'server/sim2real/audit-log.ts',
   'server/sim2real/sim2real-store.ts',
+  'server/sim2real/workspace-feedback.ts',
   'server/sim2real/standalone-adapters.ts',
   'server/sim2real/board-station-proxy.ts',
   'server/sim2real/studio-cookie-auth.ts',
@@ -173,11 +174,14 @@ export default tseslint.config(
         // app.js defines `setView` as a classic-script global that
         // onboarding.js calls, and telemetry-core.js probes the CommonJS
         // `module` binding inside its UMD wrapper. agent-chat.js reuses
-        // app.js's canonical `request`/`ApiError` contract the same way.
+        // app.js's canonical `request`/`ApiError` contract the same way, and
+        // app.js's `wireFeedbackControl` builder renders the G15 feedback
+        // control under agent-chat.js messages.
         setView: 'readonly',
         module: 'readonly',
         request: 'readonly',
         ApiError: 'readonly',
+        wireFeedbackControl: 'readonly',
       },
     },
     rules: {

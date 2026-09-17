@@ -38,6 +38,17 @@ export type Sim2RealAgentPlan = {
   createdAt: string;
 };
 
+/** A named alternative way to serve the same goal (plan diversity, Bakusevych
+ * 2026 #2): the client lets the operator pick between variants instead of
+ * treating the first plan as final. Variants only differ in shape, never in
+ * the tool vocabulary or safety posture. */
+export type Sim2RealAgentPlanVariant = {
+  key: 'fastest' | 'thorough' | 'read-only';
+  label: string;
+  rationale: string;
+  plan: Sim2RealAgentPlan;
+};
+
 export type Sim2RealAgentRun = Sim2RealAgentPlan & {
   status: 'queued' | 'running' | 'completed' | 'blocked' | 'failed';
   events: Array<{
@@ -275,4 +286,95 @@ export function createSim2RealAgentPlan(
     ...(deviceId ? { deviceId } : {}),
     ...(computeResourceId ? { computeResourceId } : {}),
   };
+}
+
+/** Derive a trimmed, read-only-only view of a plan: same goal, but every
+ *  write/approval tool is filtered down to its read-only preamble. Used by
+ *  variants so an operator can always pick a zero-side-effect path. */
+function readOnlyProjection(plan: Sim2RealAgentPlan): Sim2RealAgentPlan {
+  const writeTools: ReadonlySet<string> = new Set([
+    'training.gpu',
+    'deployment.preflight',
+    'board.stop',
+  ]);
+  const steps = plan.steps.filter((item) => !writeTools.has(item.tool));
+  return {
+    ...plan,
+    id: randomUUID(),
+    safety: 'read-only',
+    steps: steps.length
+      ? steps
+      : [step('workspace', '读取当前工作区与模型契约', 'workspace.overview')],
+    rationale: '只读变体：跳过所有会创建运行或触发部署的工具，仅汇总当前工作区状态。',
+    createdAt: new Date().toISOString(),
+  };
+}
+
+const VARIANT_LABELS: Record<Sim2RealAgentPlanVariant['key'], string> = {
+  fastest: '快速 · 仅核心步骤',
+  thorough: '完整 · 按依赖顺序全链路',
+  'read-only': '只读 · 零副作用检查',
+};
+
+/**
+ * Offer the goal as alternative plans (generative variability done honestly:
+ * the variants are deterministic re-scopings, not seeded randomness). The
+ * primary plan is always `thorough`; `fastest` keeps only the steps that do
+ * the requested work; `read-only` keeps the zero-side-effect subset.
+ */
+export function createSim2RealAgentPlanVariants(
+  message: string,
+  context?: Record<string, unknown>,
+): Sim2RealAgentPlanVariant[] {
+  const primary = createSim2RealAgentPlan(message, context);
+  if (primary.intent === 'conversation') {
+    return [
+      {
+        key: 'thorough',
+        label: VARIANT_LABELS.thorough,
+        rationale: primary.rationale,
+        plan: primary,
+      },
+    ];
+  }
+  const coreTools: ReadonlySet<string> = new Set([
+    'training.gpu',
+    'evaluation.summarize',
+    'deployment.preflight',
+    'board.health',
+    'board.stop',
+    'simulator.open',
+    'conversation.reply',
+  ]);
+  const fastestSteps = primary.steps.filter((item) => coreTools.has(item.tool));
+  const fastest: Sim2RealAgentPlan =
+    fastestSteps.length && fastestSteps.length < primary.steps.length
+      ? {
+          ...primary,
+          id: randomUUID(),
+          steps: fastestSteps,
+          rationale: '快速变体：省略工作区/安全确认等前置步骤，只执行与目标直接相关的工具。',
+          createdAt: new Date().toISOString(),
+        }
+      : primary;
+  return [
+    {
+      key: 'fastest',
+      label: VARIANT_LABELS.fastest,
+      rationale: fastest.rationale,
+      plan: fastest,
+    },
+    {
+      key: 'thorough',
+      label: VARIANT_LABELS.thorough,
+      rationale: primary.rationale,
+      plan: primary,
+    },
+    {
+      key: 'read-only',
+      label: VARIANT_LABELS['read-only'],
+      rationale: '先零副作用地看清现状再决定要不要执行写操作。',
+      plan: readOnlyProjection(primary),
+    },
+  ];
 }

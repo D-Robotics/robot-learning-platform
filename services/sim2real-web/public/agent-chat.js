@@ -9,6 +9,10 @@ const input = $('agent-chat-input');
 const submitButton = form?.querySelector('button[type="submit"]');
 const runtimeStatus = document.querySelector('.agent-chat-runtime');
 const HISTORY_KEY = 'rdk-sim2real-agent-history-v1';
+const SESSIONS_KEY = 'rdk-sim2real-agent-sessions-v1';
+const SESSIONS_CAP = 12;
+const SESSION_MESSAGES_CAP = 24;
+const SESSION_TITLES = { pending: '待执行', running: '执行中', completed: '已完成', partial: '部分完成', failed: '失败', blocked: '已阻断' };
 const SIMULATOR_ALLOWED_KEYS = new Set(['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'w', 'a', 's', 'd', 'q', 'e', 'f', 'r', 'g', 'c', 'm', 'b', ' ']);
 const simulatorBridge = { frame: null, ready: false, recording: false, events: [], connectedAt: null, startedAt: 0, downloadUrl: '', downloadName: '', videoUrl: '', videoName: '', recorder: null, videoError: '' };
 
@@ -222,6 +226,159 @@ function saveMessage(role, text) {
     history.push({ role, text: String(text).slice(0, 2_000) });
     localStorage.setItem(HISTORY_KEY, JSON.stringify(history.slice(-24)));
   } catch { /* local history is best effort */ }
+  appendCurrentSessionMessage(role, text);
+}
+
+// ---- Multi-session persistence (Amershi G12: remember recent context) ----
+// Sessions are browser-local records of this drawer's conversations: the
+// message log plus the terminal task-card snapshot, so reopening a session
+// restores both the chat and the structured evidence. No server round-trip,
+// bounded counts, all rendering via createElement/textContent.
+
+let activeSessionId = null;
+
+function readSessions() {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(SESSIONS_KEY) || '[]');
+    if (!Array.isArray(parsed)) return [];
+    return parsed.filter(
+      (item) =>
+        item &&
+        typeof item === 'object' &&
+        typeof item.id === 'string' &&
+        Array.isArray(item.messages) &&
+        item.messages.every(
+          (message) => message && typeof message === 'object' && typeof message.role === 'string',
+        ),
+    );
+  } catch {
+    return [];
+  }
+}
+
+function writeSessions(sessions) {
+  try {
+    localStorage.setItem(SESSIONS_KEY, JSON.stringify(sessions.slice(0, SESSIONS_CAP)));
+  } catch { /* storage full or unavailable: keep working in-memory */ }
+}
+
+function sanitizeSessionMessages(messages) {
+  return (Array.isArray(messages) ? messages : [])
+    .filter((item) => item && typeof item === 'object' && typeof item.text === 'string')
+    .slice(-SESSION_MESSAGES_CAP)
+    .map((item) => ({ role: item.role === 'user' ? 'user' : 'agent', text: String(item.text).slice(0, 2_000) }));
+}
+
+function ensureSession(summary) {
+  const sessions = readSessions();
+  let record = sessions.find((item) => item.id === activeSessionId);
+  if (!record) {
+    record = {
+      id: 'sess-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 8),
+      createdAt: new Date().toISOString(),
+      messages: [],
+      title: '',
+      task: null,
+    };
+    writeSessions([record, ...sessions]);
+  }
+  activeSessionId = record.id;
+  if (summary !== undefined) {
+    record.task = sanitizeTaskCard(summary);
+    record.updatedAt = new Date().toISOString();
+    persistSession(record);
+  }
+  return record;
+}
+
+function persistSession(record) {
+  const sessions = readSessions();
+  const index = sessions.findIndex((item) => item.id === record.id);
+  if (index === -1) {
+    sessions.unshift(record);
+    writeSessions(sessions);
+    return;
+  }
+  sessions[index] = record;
+  // Newest activity floats a session to the top, capped to SESSIONS_CAP.
+  writeSessions([record, ...sessions.slice(0, index), ...sessions.slice(index + 1)]);
+}
+
+function sanitizeTaskCard(run) {
+  if (!run || typeof run !== 'object') return null;
+  return {
+    goal: String(run.goal || run.intent || '').slice(0, 200) || 'Agent 任务',
+    status: String(run.status || 'pending'),
+    steps: (Array.isArray(run.steps) ? run.steps : []).slice(0, 20).map((item) => ({
+      id: String(item?.id || 'step'),
+      label: String(item?.label || item?.tool || '执行步骤').slice(0, 120),
+      status: String(item?.status || 'pending'),
+      detail: item?.detail ? String(item.detail).slice(0, 300) : '',
+    })),
+    evidence: (Array.isArray(run.evidence) ? run.evidence : []).slice(0, 10).map((item) => ({
+      label: String(item?.label || '证据').slice(0, 80),
+      value: String(item?.value || '—').slice(0, 200),
+      href: safeAgentHref(item?.href),
+    })),
+  };
+}
+
+function appendCurrentSessionMessage(role, text) {
+  if (!activeSessionId) return;
+  const sessions = readSessions();
+  const record = sessions.find((item) => item.id === activeSessionId);
+  if (!record) return;
+  record.messages = sanitizeSessionMessages([
+    ...record.messages,
+    { role, text: String(text).slice(0, 2_000) },
+  ]);
+  if (!record.title && role === 'user') record.title = String(text).slice(0, 20);
+  record.updatedAt = new Date().toISOString();
+  persistSession(record);
+}
+
+function renderRestoredTaskCard(task) {
+  if (!messages) return;
+  const card = document.createElement('div');
+  card.className = 'agent-task-card agent-task-card-restored';
+  const head = document.createElement('div');
+  head.className = 'agent-task-head';
+  const goal = document.createElement('strong');
+  goal.textContent = String(task.goal || 'Agent 任务');
+  const badge = document.createElement('span');
+  badge.className = 'agent-task-badge agent-task-badge-' + (task.status || 'pending');
+  badge.textContent = SESSION_TITLES[task.status] || task.status || '待执行';
+  head.append(goal, badge);
+  card.append(head);
+  const note = document.createElement('div');
+  note.className = 'agent-task-restored-note';
+  note.textContent = '历史任务卡（只读回放，不能续跑）';
+  card.append(note);
+  const list = document.createElement('ol');
+  list.className = 'agent-task-steps';
+  for (const item of task.steps || []) {
+    const row = document.createElement('li');
+    row.dataset.stepStatus = String(item.status || 'pending');
+    const label = document.createElement('span');
+    label.textContent = String(item.label || '执行步骤');
+    const state = document.createElement('em');
+    state.textContent = item.detail || SESSION_TITLES[item.status] || item.status || '待执行';
+    row.append(label, state);
+    list.append(row);
+  }
+  card.append(list);
+  if (Array.isArray(task.evidence) && task.evidence.length) {
+    const box = document.createElement('div');
+    box.className = 'agent-task-evidence';
+    for (const item of task.evidence) {
+      const row = document.createElement(item.href ? 'a' : 'span');
+      row.textContent = `${String(item.label || '证据')}：${String(item.value || '—')}${item.href ? ' ↗' : ''}`;
+      if (item.href) row.href = item.href;
+      box.append(row);
+    }
+    card.append(box);
+  }
+  messages.append(card);
 }
 
 function addMessage(role, text, persist = true) {
@@ -240,6 +397,19 @@ function addMessage(role, text, persist = true) {
     .replace(/`([^`]+)`/g, '<code>$1</code>')
     .replace(/\n/g, '<br>');
   messages.appendChild(node);
+  // Granular feedback (Amershi G15): every persisted agent reply can be voted
+  // accurate/inaccurate. Restored (persist=false) history keeps the control
+  // too — the judgement outlives the session. app.js owns the shared control
+  // builder; classic scripts share the global scope by design.
+  if (role === 'agent' && typeof wireFeedbackControl === 'function') {
+    const mount = document.createElement('div');
+    mount.className = 'agent-message-feedback';
+    node.append(mount);
+    wireFeedbackControl(mount, {
+      surface: 'agent-reply',
+      contextLabel: '针对这条 Agent 回复',
+    });
+  }
   messages.scrollTop = messages.scrollHeight;
   if (persist) saveMessage(role, text);
   return node;
@@ -364,20 +534,96 @@ function restoreMessages() {
   } catch { /* ignore corrupt browser-only history */ }
 }
 
+function renderSessionTranscript(record) {
+  messages?.replaceChildren();
+  if (record.messages?.length) {
+    record.messages.forEach((item) =>
+      addMessage(item.role === 'user' ? 'user' : 'agent', String(item.text || ''), false),
+    );
+  } else {
+    addMessage('agent', '这个会话还没有消息。', false);
+  }
+  if (record.task && record.task.status) renderRestoredTaskCard(record.task);
+}
+
+function startFreshSession(list) {
+  activeSessionId = null;
+  localStorage.removeItem(HISTORY_KEY);
+  // Enforce the storage cap on every rail operation, so an over-cap seed
+  // (older format or manual editing) is trimmed, not just on next persist.
+  writeSessions(readSessions());
+  messages?.replaceChildren();
+  addMessage('agent', '新的对话已开始。告诉我你要完成什么？', false);
+  renderSessionRail(list);
+}
+
+function openSession(session, list) {
+  activeSessionId = session.id;
+  localStorage.removeItem(HISTORY_KEY);
+  renderSessionTranscript(session);
+  renderSessionRail(list);
+}
+
+function renderSessionRail(list) {
+  if (!list) return;
+  const sessions = readSessions();
+  const current = list.querySelector('.agent-session-item[data-static-current]');
+  list.replaceChildren();
+  if (current) list.append(current);
+  for (const session of sessions) {
+    if (session.id === activeSessionId) continue;
+    const item = document.createElement('button');
+    item.type = 'button';
+    item.className = 'agent-session-item';
+    item.textContent = String(session.title || '未命名对话');
+    item.title = '打开本地历史会话（含任务卡回放）';
+    item.addEventListener('click', () => openSession(session, list));
+    list.append(item);
+  }
+  const currentLabel = list.querySelector('.agent-session-item[data-static-current]');
+  if (currentLabel) {
+    const active = list.querySelector('.is-active');
+    if (active && active !== currentLabel) currentLabel.classList.remove('is-active');
+    if (!active) currentLabel.classList.add('is-active');
+  }
+}
+
 function initSessionRail() {
   const list = $('agent-session-list');
   const fresh = $('agent-new-session');
   if (!list) return;
-  let history;
-  try { history = JSON.parse(localStorage.getItem(HISTORY_KEY) || '[]'); } catch { history = []; }
-  if (history.length) {
-    const item = document.createElement('button');
-    item.type = 'button'; item.className = 'agent-session-item';
-    item.textContent = history.find((entry) => entry.role === 'user')?.text?.slice(0, 20) || '最近一次对话';
-    item.title = '本地历史对话';
-    list.append(item);
+  const sessions = readSessions();
+  if (sessions.length) {
+    // The session store is authoritative once it exists (it also carries the
+    // task cards); the legacy single-history key is only a pre-multisession
+    // fallback, so it is never allowed to duplicate a stored session.
+    activeSessionId = sessions[0].id;
+    renderSessionTranscript(sessions[0]);
+  } else {
+    // Adopt any pre-multisession history (messages only) as a session on
+    // first load so existing users keep their last conversation in the rail.
+    const legacyHistory = (() => {
+      try {
+        const parsed = JSON.parse(localStorage.getItem(HISTORY_KEY) || '[]');
+        return Array.isArray(parsed) ? parsed.filter((item) => item && typeof item?.text === 'string') : [];
+      } catch { return []; }
+    })();
+    if (legacyHistory.length) {
+      const record = {
+        id: 'sess-legacy-' + Math.random().toString(36).slice(2, 8),
+        createdAt: new Date().toISOString(),
+        adoptedLegacy: true,
+        title: legacyHistory.find((entry) => entry.role === 'user')?.text?.slice(0, 20) || '最近一次对话',
+        messages: sanitizeSessionMessages(legacyHistory),
+        task: null,
+      };
+      writeSessions([record]);
+      activeSessionId = record.id;
+      restoreMessages();
+    }
   }
-  fresh?.addEventListener('click', () => { localStorage.removeItem(HISTORY_KEY); messages?.replaceChildren(); addMessage('agent', '新的对话已开始。告诉我你要完成什么？', false); list.querySelectorAll('.agent-session-item').forEach((node) => node.classList.remove('is-active')); });
+  renderSessionRail(list);
+  fresh?.addEventListener('click', () => startFreshSession(list));
 }
 
 class AgentApiError extends Error {
@@ -403,8 +649,62 @@ async function api(path, options = {}) {
   }
 }
 
-function renderPlan(plan) {
-  planCard.replaceChildren();
+// Plan choice (Bakusevych 2026 #2): the planner returns 2–3 deterministic
+// re-scopings of the same goal. This renders a one-shot picker as an agent
+// message and resolves with the chosen (or default) plan. It never auto-
+// executes anything: resolution only happens on an explicit click, and the
+// cancel path rejects so runTask reports "已取消" instead of firing.
+function choosePlanVariant(variants, fallbackPlan) {
+  return new Promise((resolve) => {
+    const node = document.createElement('div');
+    node.className = 'agent-plan-picker';
+    const intro = document.createElement('div');
+    intro.className = 'agent-plan-picker-intro';
+    intro.textContent = '同一目标有几种执行方式，选一种开始（默认完整执行）：';
+    node.append(intro);
+    const list = document.createElement('div');
+    list.className = 'agent-plan-picker-list';
+    let settled = false;
+    const finish = (plan, cancelled) => {
+      if (settled) return;
+      settled = true;
+      node.querySelectorAll('button').forEach((button) => { button.disabled = true; });
+      if (cancelled) node.replaceChildren(intro), (intro.textContent = '已取消：未执行任何步骤。');
+      node.classList.add('is-answered');
+      resolve(plan);
+    };
+    for (const variant of variants) {
+      if (!variant || typeof variant !== 'object' || !variant.plan) continue;
+      const option = document.createElement('button');
+      option.type = 'button';
+      option.className =
+        'agent-plan-option' + (variant.key === 'thorough' ? ' is-default' : '');
+      const label = document.createElement('strong');
+      label.textContent = String(variant.label || variant.key || '备选计划');
+      const meta = document.createElement('small');
+      meta.textContent = `${(variant.plan.steps || []).length} 步 · ${String(variant.plan.safety || 'read-only')}`;
+      const why = document.createElement('span');
+      why.textContent = String(variant.rationale || '');
+      option.append(label, meta, why);
+      option.addEventListener('click', () => finish(variant.plan, false));
+      list.append(option);
+    }
+    if (!list.children.length) { resolve(fallbackPlan); return; }
+    const cancel = document.createElement('button');
+    cancel.type = 'button';
+    cancel.className = 'button button-ghost button-small agent-plan-cancel';
+    cancel.textContent = '先不执行';
+    cancel.addEventListener('click', () => finish(null, true));
+    node.append(list, cancel);
+    messages?.appendChild(node);
+    if (messages) messages.scrollTop = messages.scrollHeight;
+    // The pick must not strand the chat if the user navigates away: resolve
+    // with no plan so runTask stops before any execute call.
+    window.setTimeout(() => { if (!settled) finish(null, true); }, 120_000);
+  });
+}
+
+function renderPlan(plan) {  planCard.replaceChildren();
   const title = document.createElement('div');
   title.className = 'agent-plan-title';
   const goal = document.createElement('strong');
@@ -529,8 +829,19 @@ async function runTask(message) {
     if (!(error && error.status === 503)) throw error;
   }
   const response = await api('/sim2real/agent/plan', { method: 'POST', body: JSON.stringify({ message, context: { modelId, deviceId, computeResourceId } }) });
-  const plan = response?.plan;
+  let plan = response?.plan;
+  const variants = Array.isArray(response?.variants) ? response.variants : [];
+  if (!plan && variants.length) plan = variants.find((item) => item?.key === 'thorough')?.plan;
   if (!plan || !Array.isArray(plan.steps) || !plan.steps.length || plan.steps.some((item) => !item || typeof item !== 'object')) throw new Error('服务没有返回有效的可执行计划');
+  // Plan diversity (Bakusevych #2): when the server offers alternative ways to
+  // reach the same goal, the operator picks one instead of accepting the
+  // first plan as final. The pause is client-side only — execute stays a
+  // separate, operator-visible action either way.
+  if (variants.length > 1) plan = await choosePlanVariant(variants, plan);
+  if (!plan) {
+    addMessage('agent', '已取消：未提交执行请求，可随时重新发起。');
+    return;
+  }
   if (plan.steps.some((item) => item.tool === 'simulator.open')) {
     document.querySelector('[data-view-target="simulate"]')?.click();
     $('simulator-frame')?.scrollIntoView({ behavior: 'smooth', block: 'center' });
@@ -542,6 +853,10 @@ async function runTask(message) {
   if (!run?.id || !Array.isArray(run.steps) || run.steps.some((item) => !item || typeof item !== 'object')) throw new Error('服务没有返回有效的运行记录');
   renderRun(run);
   const taskCard = renderTaskCard(run);
+  // A live task belongs to the session in flight: snapshot it so reopening
+  // this session later replays the terminal card read-only.
+  const sessionRecord = ensureSession(sanitizeTaskCard(run));
+  activeSessionId = sessionRecord.id;
   if (plan.steps.some((item) => item.tool === 'simulator.open')) {
     void runSimulatorDemo(message).catch((error) => renderAgentError(error, true, message));
   }
@@ -572,6 +887,15 @@ async function runTask(message) {
       if (runtimeStatus) runtimeStatus.textContent = `正在执行：${runningStep.label}…`;
     }
     if (terminal.has(result.run.status)) {
+      if (activeSessionId) {
+        const sessions = readSessions();
+        const record = sessions.find((item) => item.id === activeSessionId);
+        if (record) {
+          record.task = sanitizeTaskCard(result.run);
+          record.updatedAt = new Date().toISOString();
+          persistSession(record);
+        }
+      }
       if (result.run.status === 'completed') {
         const links = (result.run.evidence || []).filter((item) => item.href).length;
         addMessage('agent', links ? '任务完成，证据卡片里可直接跳转运行记录。' : '任务完成。');
@@ -590,6 +914,10 @@ form?.addEventListener('submit', (event) => {
   const message = input.value.trim();
   if (!message) return;
   input.value = '';
+  // The session record is created with the first user message, so the
+  // transcript lands in one place even if planning fails before any task
+  // card exists.
+  if (!activeSessionId) ensureSession();
   addMessage('user', message);
   setAgentBusy(true, '正在生成计划…');
   void runTask(message)
@@ -777,6 +1105,5 @@ launcher?.addEventListener('pointerdown', (event) => {
 
 setAgentDrawer(false, false);
 
-restoreMessages();
 initSessionRail();
 })();

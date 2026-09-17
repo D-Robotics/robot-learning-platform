@@ -1,6 +1,8 @@
 import { Router, type Request, type Response } from 'express';
+import { readFileSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 import type { Device } from '../../shared/types.js';
 import type {
@@ -92,7 +94,11 @@ import {
   updateSim2RealDeployment,
   decideSim2RealDeploymentApproval,
   sim2RealStorageInfo,
+  sim2RealStorageReadiness,
   appendSim2RealTelemetryWithResult,
+  createSim2RealFeedback,
+  listSim2RealFeedbackRecords,
+  summarizeSim2RealFeedbackRecords,
 } from '../sim2real/sim2real-store.js';
 import {
   requestLocalTraining,
@@ -127,6 +133,13 @@ import { registerSim2RealDeviceConnectionRoutes } from './sim2real-device-connec
 import { registerSim2RealWorkspaceRoutes } from './sim2real-workspace-routes.js';
 import { registerSim2RealAuditRoutes } from './sim2real-audit-routes.js';
 import { deviceConnectionAgentUrl } from '../sim2real/board-tunnel-manager.js';
+import {
+  FEEDBACK_NOTE_MAX_CHARS,
+  FEEDBACK_SURFACES,
+  FEEDBACK_VERDICTS,
+  normalizeSim2RealFeedback,
+  sim2RealWorkspaceNotices,
+} from '../sim2real/workspace-feedback.js';
 
 type RunOnDevice = (
   request: Request,
@@ -645,6 +658,40 @@ function computeResourceHealthFailure(
     return 'stale';
   }
   return 'not-ready';
+}
+
+/**
+ * Notices are pure workspace state, not account state: accept an optional
+ * owner so logged-out visitors still learn the platform version and any
+ * degraded integrations, without gaining any record access.
+ */
+function requestOwnerOptional(
+  request: Request,
+  _response: Response,
+  auth: Sim2RealAuthPort,
+): string | undefined {
+  if (!auth.isMultiUserDeployment()) return undefined;
+  const id = String(auth.resolvePrincipal(request)?.accountId ?? '').trim();
+  return /^[^\u0000-\u001f\u007f]{1,160}$/.test(id) && !id.includes('/') ? id : undefined;
+}
+
+const PACKAGE_JSON_CANDIDATES = [
+  // Standalone dev server: services/sim2real-web/server.ts -> repo root.
+  path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../package.json'),
+  // Compiled dist-server: routes/sim2real-routes.js -> dist-server root.
+  path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../package.json'),
+];
+
+function workspacePackageVersion(): string {
+  for (const file of PACKAGE_JSON_CANDIDATES) {
+    try {
+      const value = JSON.parse(readFileSync(file, 'utf8')) as { version?: string };
+      if (value.version) return String(value.version);
+    } catch {
+      // Missing/unreadable candidate is expected for one layout per process.
+    }
+  }
+  return 'unknown';
 }
 
 /** Shared deployments fail closed when no SSO owner is present. */
@@ -2226,6 +2273,121 @@ export function createSim2RealRouter(
     },
     { prefix },
   );
+
+  // ---- granular feedback + workspace notices (Amershi G15 / G18) ----------
+  // Feedback is operational telemetry only: it never feeds promotion or
+  // release gates, so it needs the read permission only and degrades closed
+  // contract values instead of rejecting stale clients.
+  router.post(
+    api('/feedback'),
+    wrapAsync(async (request, response) => {
+      const owner = requestOwner(request, response, auth);
+      if (owner === null) return;
+      const body =
+        request.body && typeof request.body === 'object'
+          ? (request.body as Record<string, unknown>)
+          : {};
+      const noteRaw = String(body.note ?? '');
+      if (noteRaw.length > FEEDBACK_NOTE_MAX_CHARS) {
+        sendApiError(
+          response,
+          400,
+          'SIM2REAL_INVALID_FEEDBACK',
+          `反馈备注超过 ${FEEDBACK_NOTE_MAX_CHARS} 字上限。`,
+          { retryable: false },
+        );
+        return;
+      }
+      const runIdRaw = String(body.runId ?? '');
+      if (runIdRaw.length > 120) {
+        sendApiError(response, 400, 'SIM2REAL_INVALID_FEEDBACK', 'runId 过长。', {
+          retryable: false,
+        });
+        return;
+      }
+      const { record, degraded } = normalizeSim2RealFeedback({
+        surface: String(body.surface ?? ''),
+        verdict: String(body.verdict ?? ''),
+        note: noteRaw,
+        ...(runIdRaw ? { runId: runIdRaw } : {}),
+      });
+      try {
+        const saved = await createSim2RealFeedback(record, owner);
+        response.status(201).json({
+          ok: true,
+          feedback: saved,
+          ...(degraded.surface || degraded.verdict ? { degraded } : {}),
+        });
+      } catch (error) {
+        storageError(request, response, error, 'sim2real-feedback-create');
+      }
+    }),
+  );
+
+  router.get(
+    api('/feedback'),
+    wrapAsync(async (request, response) => {
+      const owner = requestOwner(request, response, auth);
+      if (owner === null) return;
+      noStore(response);
+      try {
+        const feedback = await listSim2RealFeedbackRecords(owner);
+        response.json({
+          ok: true,
+          feedback,
+          surfaces: FEEDBACK_SURFACES,
+          verdicts: FEEDBACK_VERDICTS,
+          noteMaxChars: FEEDBACK_NOTE_MAX_CHARS,
+        });
+      } catch (error) {
+        storageError(request, response, error, 'sim2real-feedback-list');
+      }
+    }),
+  );
+
+  // Reliance summary (Bakusevych #38 / Amershi G17): aggregates only — counts
+  // per surface plus accuracy share — so users can see what their feedback
+  // added up to. Same owner scoping as the raw list; never a release input.
+  router.get(
+    api('/feedback/summary'),
+    wrapAsync(async (request, response) => {
+      const owner = requestOwner(request, response, auth);
+      if (owner === null) return;
+      noStore(response);
+      try {
+        const summary = await summarizeSim2RealFeedbackRecords(owner);
+        response.json({ ok: true, summary });
+      } catch (error) {
+        storageError(request, response, error, 'sim2real-feedback-summary');
+      }
+    }),
+  );
+
+  // Workspace notices are served, never stored: the package version is the
+  // release identity and the readiness snapshot is the health identity, so
+  // there is no second source of truth that can drift. Anonymous healthz
+  // already exists; this route adds the operator-facing packaging.
+  router.get(
+    api('/notices'),
+    wrapAsync(async (request, response) => {
+      requestOwnerOptional(request, response, auth);
+      noStore(response);
+      const storage = await sim2RealStorageReadiness();
+      const degraded = storage.writable ? [] : ['storage-not-configured'];
+      const version = workspacePackageVersion();
+      response.json({
+        ok: true,
+        notices: sim2RealWorkspaceNotices({
+          version,
+          degraded,
+          degradedMessage: storage.writable
+            ? undefined
+            : '台账存储不可写，训练与评测记录暂不能保存',
+        }),
+      });
+    }),
+  );
+
   registerSim2RealAuditRoutes(
     router,
     {

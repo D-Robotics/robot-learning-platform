@@ -731,6 +731,41 @@ class PolicyRuntimeInputBindingContract(unittest.TestCase):
         self.assertEqual(result["stateInputs"], ["h_in", "c_in"])
         self.assertIn("zeroed history", result["detail"])
 
+    def test_slot_report_describes_what_was_actually_written(self):
+        """The observation slot report must come from the assembly, not a literal.
+
+        It previously hand-wrote "slots 0-5 real; slots 6-N adapter", which was
+        right only by coincidence and could not notice a contract the adapter did
+        not fill. The report now derives from the segments the builder recorded,
+        so these assertions fail if the two ever separate again.
+        """
+        runtime = self.runtime_module
+        for obs_dim, act_dim in ((61, 14), (42, 12), (8, 2), (12, 4)):
+            segments = runtime.wheeled_observation_layout(obs_dim, act_dim)
+            filled = runtime.wheeled_observation_size(obs_dim, act_dim)
+            # The layout caps itself, so the assembly can never overflow the
+            # contract; the remainder is zero-padded by design.
+            self.assertLessEqual(filled, obs_dim, (obs_dim, act_dim))
+
+            policy = runtime.PolicyRuntime()
+            policy._model_meta = {"path": "fixture"}
+            before = policy._obs_slot_report()
+            self.assertIn("no observation assembled", before["source"])
+            self.assertNotIn("slots", before)
+
+            policy._obs_segments = segments
+            report = policy._obs_slot_report()
+            ranges = [(entry["name"], entry["range"]) for entry in report["slots"]]
+            offset = 0
+            for name, width, provenance in segments:
+                expected = f"{offset}-{offset + width - 1}" if width else "absent"
+                self.assertIn((name, expected), ranges, (obs_dim, act_dim, name))
+                offset += width
+            self.assertEqual(report["slots_total"], filled, (obs_dim, act_dim))
+            self.assertEqual(
+                report["slots_real"] + report["slots_adapter"], filled, (obs_dim, act_dim)
+            )
+
     def test_feed_forward_export_still_loads(self):
         if not _optional_onnx_stack():
             self.skipTest("numpy/onnx unavailable on this machine")

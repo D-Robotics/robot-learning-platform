@@ -13,6 +13,7 @@ import {
 import {
   classifySim2RealAgentIntent,
   createSim2RealAgentPlan,
+  createSim2RealAgentPlanVariants,
 } from '../sim2real/sim2real-agent.js';
 
 describe('Sim2Real Agent planner', () => {
@@ -49,6 +50,39 @@ describe('Sim2Real Agent planner', () => {
       'workspace.overview',
       'evaluation.summarize',
     ]);
+  });
+
+  it('offers deterministic plan variants for the same goal (Bakusevych #2)', () => {
+    const variants = createSim2RealAgentPlanVariants('完成仿真、GPU训练、检查X5并做真机预检');
+    expect(variants.map((variant) => variant.key)).toEqual(['fastest', 'thorough', 'read-only']);
+    const thorough = variants.find((variant) => variant.key === 'thorough')!.plan;
+    // The thorough variant is the primary plan unchanged.
+    expect(thorough.steps.map((item) => item.tool)).toContain('training.gpu');
+    expect(thorough.safety).toBe('guarded');
+    // The fastest variant drops the preamble steps but keeps the work steps.
+    const fastest = variants.find((variant) => variant.key === 'fastest')!.plan;
+    expect(
+      fastest.steps.every(
+        (item) =>
+          item.id !== 'workspace' ||
+          item.tool !== 'workspace.overview' ||
+          fastest.steps.length === thorough.steps.length,
+      ),
+    ).toBe(true);
+    expect(fastest.steps.map((item) => item.tool)).toContain('training.gpu');
+    // The read-only variant can never reach a write/approval tool.
+    const readOnly = variants.find((variant) => variant.key === 'read-only')!.plan;
+    expect(readOnly.safety).toBe('read-only');
+    for (const item of readOnly.steps) {
+      expect(['training.gpu', 'deployment.preflight', 'board.stop']).not.toContain(item.tool);
+    }
+  });
+
+  it('keeps conversation replies single-variant — there is nothing to choose', () => {
+    const variants = createSim2RealAgentPlanVariants('你好');
+    expect(variants).toHaveLength(1);
+    expect(variants[0].key).toBe('thorough');
+    expect(variants[0].plan.intent).toBe('conversation');
   });
 });
 
@@ -209,6 +243,14 @@ describe('Sim2Real Agent route', () => {
     expect(planResponse.statusCode).toBe(200);
     const plan = planResponse.body.plan;
     expect(plan.steps[0].tool).toBe('board.health');
+    // The plan route serves both surfaces: `plan` stays the compatible
+    // default (thorough) and `variants` carries the choice set.
+    expect(Array.isArray(planResponse.body.variants)).toBe(true);
+    expect(planResponse.body.variants.length).toBeGreaterThanOrEqual(1);
+    const thorough = planResponse.body.variants.find(
+      (variant: { key: string }) => variant.key === 'thorough',
+    );
+    expect(thorough?.plan.id).toBe(plan.id);
     const runResponse = await invoke(executeLayer!.route.stack[0].handle, {
       body: { plan, approved: true },
     });
