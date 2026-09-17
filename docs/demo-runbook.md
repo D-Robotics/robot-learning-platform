@@ -50,7 +50,7 @@ RDK_SIM2REAL_MICRODUCK_ROOT=/opt/microduck-web/current npm run demo:sim2real
 需要真实 PPO 闭环（不再只是协议演练）时，另开一个终端：
 
 ```bash
-python3 -m pip install --user numpy torch onnx   # 一次性
+python3 -m pip install --user -r engines/starter-ppo/requirements.txt   # 一次性，锁定版本 + 哈希
 npm run demo:starter
 ```
 

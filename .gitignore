@@ -20,6 +20,14 @@ backups/
 # assets or external links instead of growing every clone.
 docs/*.mp4
 
+# BPU compile outputs (X5 .bin / .hbm) and calibration blobs are build
+# artifacts: reproduce them with engines/microduck-rl-adapter/x5/rdk-bpu-compile.sh
+# and verify the digest recorded in that directory's README.
+*.bin
+*.hbm
+engines/microduck-rl-adapter/x5/calib_raw/
+engines/microduck-rl-adapter/x5/workspace/
+
 # Local GUI-test screenshot artifacts, not source.
 gui-test-screenshots/
 
@@ -37,3 +45,19 @@ docs/server-inventory.local.md
 
 # MuJoCo runtime log written next to the CWD of physics backends.
 MUJOCO_LOG.TXT
+
+# Local python envs for engine harnesses (recreate with the engine README).
+.eval-venv/
+
+# Root-level rehearsal/run outputs (scripts write these into scratch/job dirs;
+# a bare `python3 board-latency-rehearsal.py` style run drops them at the root).
+/telemetry.jsonl
+/baseline-telemetry.jsonl
+/policy.onnx
+/training-summary.json
+# SQLite temp sidecar created when a sqlite :memory: handle gets a file backing.
+**:memory:.ses
+/.pytest_cache/
+.pytest_cache/
+# sqlite :memory: temp sidecar, wherever a run drops it
+/:memory:.ses

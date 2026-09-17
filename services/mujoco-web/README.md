@@ -265,6 +265,34 @@ recorder (`infer_policy.py --save-csv` / `--record`). That path records the
 CPU MuJoCo rehearsal; the browser panel is the equivalent for the deployed
 WASM/ONNX simulator.
 
+## Loading a trained policy into the browser duck
+
+The same overlay adds a `策略装载` panel: it lists the account's completed local
+training runs that carry a digest-verified ONNX artifact, and hands the chosen
+run to the simulator's own move loader (`window.rl.loadCustomPolicy`). The
+platform contributes no policy maths — upstream already validates that the graph
+takes the robot's 61D observation and emits 14 actions, installs it in the walk
+slot, and reverts to the stock policy with a reason when a custom move
+misbehaves. The panel surfaces that reason verbatim.
+
+Server side, this needs two things that are easy to miss:
+
+- `GET /api/sim2real/runs/:id/policy.onnx` serves the bytes and carries
+  `Access-Control-Allow-Origin: *`, because upstream's loader accepts only
+  absolute `http(s)://...onnx` URLs and a deployment may mount the simulator on
+  its own origin. The route is still gated on run ownership, terminal status,
+  non-mock provenance and a digest match; it exposes no credential and no
+  telemetry.
+- The artifact fetch resolves the run's **compute resource** and fails closed
+  when that resource's health lease has expired (default 600 s). Re-run
+  `测试连接` in the workbench when the panel reports the artifact is
+  unavailable — the lease is a freshness check, not a permanent grant.
+
+A deployment that publishes the simulator only as a redirect to an external
+build (no mounted static bundle) cannot show this panel at all: the overlay
+never loads. Point `RDK_SIM2REAL_MICRODUCK_ROOT` at a reviewed local release and
+install the overlay below to get it.
+
 For a downloaded upstream release, install the additive overlay once per
 release (the production `current` directory is normally an atomic symlink):
 

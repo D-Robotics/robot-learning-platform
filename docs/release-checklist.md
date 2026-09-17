@@ -18,6 +18,15 @@
 ## 诚信性（不完成就不能宣称"真机可用"）
 
 - [ ] **真机运动证据**：X5 上由策略实际驱动的安全运动记录，含急停、watchdog、回滚与原始遥测。
+- [ ] **板端延迟 rehearsal 收据**：对**将要上板的同一份 ONNX 字节**在 X5 上跑一次
+      `python3 services/sim2real-web/board-latency-rehearsal.py --model ... --decision-hz <控制率>`，
+      收据 `stage` 必须是 `board-onnx`、`artifactSha256` 与部署字节一致、判定达标且未过期。
+      `validateArtifactForDeployment` 对声称可部署的制品**强制要求**这份收据；训练主机上的
+      `controlLatencyMs`（`host-torch`）不能替代它。契约测试 `npm run verify:board-latency` 只能证明
+      探针与门禁一致，**不能替代真板测量**，见 [`host-station.md`](host-station.md)。
+- [ ] **打开上板门禁**：在现场板卡上设置 `RDK_SIM2REAL_STATION_POLICY_REQUIRE_REHEARSAL=1`，并用
+      真实收据完成一次 `policy/load`。这是**可选的部署收紧**（默认关，行为不变），因此必须有人
+      显式决定并记录；未打开的部署只能宣称"时序证据可见"，不能宣称"没有证据就上不了板"。
 - [ ] **第二台实体机型**：完成同一任务模板的独立验证（当前只有 `generic-differential-drive` 的仿真声明实证）。
 - [ ] **制品签名与回滚演练**：真实 artifact registry 的签名、不可变存储、跨版本回滚各演练一次。软件侧的隔离 rehearsal 可用 `npm run verify:artifact-registry` 先验收，但不能替代生产对象存储证据。
 

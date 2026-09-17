@@ -39,7 +39,7 @@ npm run demo:starter
 依赖缺失时该命令会明确退出并给出安装指引，不伪造训练结果：
 
 ```bash
-python3 -m pip install --user numpy torch onnx
+python3 -m pip install --user -r engines/starter-ppo/requirements.txt   # 锁定版本 + 哈希校验
 ```
 
 ## starter-ppo 契约
@@ -64,7 +64,52 @@ python3 -m pip install --user numpy torch onnx
 - `telemetry.jsonl` — 训练后评测轨迹（前 200 步，可上传平台评测）
 - `baseline-telemetry.jsonl` — 未训练基线轨迹（评测页的 reference）
 - `training-summary.json` — 超参、物理常数、reward 曲线、控制延迟
+- `SHA256SUMS` — 本次运行**全部产物**的摘要清单（见下）
 - `checkpoints/iter-XXXXX.pt` — 周期 checkpoint（每 iterations//8 轮 + 最后一轮）
+
+### 血缘与完整性：`source` + `SHA256SUMS`
+
+每个引擎在结果里报告两样东西，解决的是两个不同的"说不清"：
+
+**0. 归因的两个半边。** 可复现需要同时回答"哪份代码"和"哪套库"：`sourceCommit` 只答前者，
+而 `torch.onnx.export` 的产物会随版本变化，数值也会随 torch 版本漂移。所以每个结果同时带：
+
+```json
+"source": {"known": true, "commit": "eec53b5…", "dirty": true, "ref": "main"},
+"dependencies": {"numpy": "2.0.2", "torch": "2.8.0", "onnx": "1.19.1", "onnxruntime": "1.19.2"}
+```
+
+`dependencies` 记录的是**实际安装**的版本（`importlib.metadata` 查询，不是请求值），缺哪个就不写哪个。
+`npm run verify:training-provenance` 会真跑引擎并断言两者都在、且版本是具体值（不断言具体版本号，
+那属于锁文件的职责）。运行详情页显示短哈希与依赖版本。
+
+**1. 这段代码是哪个版本？** 包里只有 `starter-ppo-0.1.0` 这类版本号，树一旦往前走就答不出
+"这个 onnx 是哪份 reward/observation 代码训出来的"。所以 result 顶层带一个 `source`：
+
+```json
+"source": {"known": true, "commit": "eec53b5…", "dirty": true,
+           "repository": "https://github.com/…", "ref": "main"}
+```
+
+- `dirty: true` 表示工作树有未提交改动 —— 记录的 commit **不能**完整描述实际运行的代码。
+  如实说出来，比暗示可精确复现更重要；`dirty` 为 `null` 表示无法判定。
+- 没有 `.git`（打包上板的安装、容器）时是 `{"known": false, "reason": …}`：**不编造**身份，也不让训练失败。
+- 同一个 commit 也进 `metrics.sourceCommit`，与 `measurementStage` 同层，运行详情页显示短哈希。
+
+三个引擎统一。`mjx-adapter` 的推理延迟另标 `measurementStage: "host-jax"` —— 它是 JAX 前向，
+不是 torch 也不是 onnx，不套用别的阶段名。
+
+**2. 这个目录里的东西是一起产出的吗？** 单个文件的摘要证明不了同目录其它文件没被动过。
+引擎在写 `result.json` **之前**按目录实际内容生成 `SHA256SUMS`（自动收录，未来新增产物不会漏掉；
+只排除 `SHA256SUMS` 自身与作为输入的 `request.json`）。worker 在发布 run 之前逐条核验：
+
+| 情况 | 行为 |
+| --- | --- |
+| 全部匹配 | run 完成，`artifactVerification.verified = true`，列出已核验文件 |
+| 有 `SHA256SUMS` 但内容不符 / 文件缺失 / 格式损坏 | **run 失败**（`artifact_manifest_mismatch` 等），不发布任何制品 —— 这是损坏或被改写，必须 fail-closed |
+| 没有 `SHA256SUMS` | 视为**早于该契约的引擎**：run 仍完成，但 `verified: false` 随记录同行，下游不能把它读成"已核验完整性" |
+
+`result.json` 自身不在清单内（它写在清单之后），其完整性由平台归一化后的 `reportSha256` 单独覆盖。
 
 ## 周期 checkpoint 与 best 策略选择
 

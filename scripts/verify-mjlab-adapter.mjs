@@ -43,7 +43,7 @@ const python = pythonInterpreter();
 if (!python) {
   console.log(
     '[mjlab-adapter] SKIP — python3 with numpy+torch+rsl_rl+onnx not found. ' +
-      'Install with: python3 -m pip install --user numpy torch onnx rsl-rl-lib==2.2.3',
+      'Install with: python3 -m pip install --user -r engines/mjlab-rsl-rl-adapter/requirements.txt',
   );
   process.exit(0);
 }

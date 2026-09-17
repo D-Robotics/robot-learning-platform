@@ -16,7 +16,7 @@ GPU 栈的显式接入点（mjlab 侧 HOOK 未填时诚实回退）。`mjx-adapt
 
 ```bash
 # 依赖（用户目录安装，可逆；--index-url 用 CPU 版 jax 即可）
-python3 -m pip install --user jax mujoco optax onnx
+python3 -m pip install --user -r engines/mjx-adapter/requirements.txt   # 锁定版本 + 哈希校验
 # 端到端验证（真实跑 2 迭代 + 强制回退路径；无 Python 栈的机器 SKIP 退出 0）
 npm run verify:mjx-adapter
 ```

@@ -60,6 +60,7 @@ Mock 的 `completed` 只表示协议演练完成，不代表真实 PPO 权重或
 | RDK-X5 真机采集 / BoardAgent / OTA | 🧩 | 提供端口、预检和部署边界，需接入实际设备 |
 | 真机遥测（IMU/里程计/电池） | 🟡 参考实现 | 常驻只读遥测节点 + 认证代理 + 评估页同屏对比已具备；参考机型 OriginBot 的现场证据需按发布清单归档 |
 | 真机受限驱动（运动金丝雀） | 🧩 代码门禁已具备 | 通用 `/cmd_vel` 通道默认关闭，含双开关 + 双重钳制 + 时间盒 + 急停恒可用；真实运动验收见 [docs/actuator-drive.md](docs/actuator-drive.md) |
+| 板端延迟 rehearsal（上板时序证据） | 🧩 代码门禁已具备 | `services/sim2real-web/board-latency-rehearsal.py` 复用真实 runtime 加载路径在板上采样，产出 `board-onnx` 收据；`validateArtifactForDeployment` 对**声称可部署**的制品强制要求新鲜、同字节、达标且自洽的收据，训练主机的 `host-torch` 数字不再能替代它。探针与门禁一致性见 `npm run verify:board-latency`；**收据自动入库与真实 X5 测量待现场验收**，见 [docs/host-station.md](docs/host-station.md) |
 | 生产加固（CSP / 限流 / 结构化日志 / 指标） | ✅ | 自家页面严格 `script-src 'self'`、进程内限流 429、JSON 行日志、Prometheus `/metrics`；MicroDuck 上游 bundle 所在的 `/mujoco` 刻意放宽，见 [docs/operations.md](docs/operations.md) |
 | 遥测有界读 + 保留策略 | ✅ | 小 `limit` 的遥测列表不再解析整个分片；可按天淘汰过期遥测（默认关闭），见 [docs/scalability.md](docs/scalability.md) |
 | 多实例部署 | 🟡 部分 | **1 写 + N 只读副本**：写者持文件租约，第二个写者 fail-fast；只读副本用 `RDK_SIM2REAL_STORAGE_READ_ONLY=1` 安全扩读。多写者仍需 PostgreSQL + 对象存储，见 [docs/scalability.md](docs/scalability.md) |

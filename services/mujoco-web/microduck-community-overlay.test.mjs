@@ -92,3 +92,101 @@ test('browser recorder captures contract observations and actions from window.rl
   recorder.destroy();
   dom.window.close();
 });
+
+test('policy panel loads a trained run into window.rl.loadCustomPolicy', async () => {
+  const dom = new JSDOM(
+    '<!doctype html><html><head></head><body><main>MicroDuck simulation</main></body></html>',
+    {
+      url: 'https://studio.example.test/mujoco/microduck/',
+      runScripts: 'dangerously',
+      pretendToBeVisual: true,
+    },
+  );
+  const { window } = dom;
+  window.matchMedia = () => ({ matches: false });
+
+  const loaded = [];
+  const cleared = [];
+  window.rl = {
+    buildObs: () => Float32Array.from({ length: 61 }),
+    lastAction: Float32Array.from({ length: 14 }),
+    loadCustomPolicy: async (ref) => {
+      loaded.push(ref);
+    },
+    clearCustomPolicy: () => cleared.push(true),
+  };
+
+  const runs = [
+    {
+      id: 'run-trained',
+      backend: 'local',
+      status: 'completed',
+      mock: false,
+      taskId: 'walk',
+      modelId: 'microduck-official',
+      artifact: { format: 'onnx', sha256: 'a'.repeat(64) },
+      metrics: { iterations: 1500 },
+    },
+    // Must be filtered out: mock provenance, unfinished, or not a policy.
+    {
+      id: 'run-mock',
+      backend: 'local',
+      status: 'completed',
+      mock: true,
+      artifact: { format: 'onnx' },
+    },
+    { id: 'run-running', backend: 'local', status: 'running', artifact: { format: 'onnx' } },
+    {
+      id: 'run-browser',
+      backend: 'browser',
+      status: 'completed',
+      artifact: { format: 'onnx' },
+    },
+  ];
+  const requested = [];
+  window.fetch = async (url) => {
+    requested.push(String(url));
+    return {
+      ok: true,
+      status: 200,
+      json: async () => ({ runs }),
+    };
+  };
+
+  window.eval(overlaySource);
+  await new Promise((resolve) => setTimeout(resolve, 30));
+
+  const api = window.__microduckPolicy;
+  assert.ok(api, 'policy API should be exposed for UI and smoke tests');
+  await api.refresh();
+  assert.equal(requested.length, 1);
+  assert.match(requested[0], /\/api\/sim2real\/runs$/);
+  assert.deepEqual(
+    api.runs.map((run) => run.id),
+    ['run-trained'],
+    'only completed, real, ONNX-bearing local runs may be offered',
+  );
+
+  await api.load('run-trained');
+  assert.equal(loaded.length, 1);
+  assert.match(
+    loaded[0],
+    /^https:\/\/studio\.example\.test\/api\/sim2real\/runs\/run-trained\/policy\.onnx$/,
+    'upstream accepts only absolute http(s) .onnx URLs',
+  );
+  assert.equal(api.current, 'run-trained');
+
+  // A policy the simulator rejects must be reported, not swallowed.
+  window.rl.loadCustomPolicy = async () => {
+    throw new Error('outputs 12 actions (sim drives 14)');
+  };
+  await api.load('run-trained');
+  assert.equal(api.current, null, 'a rejected load must not be remembered as active');
+  const status = window.document.querySelector('#rdk-microduck-policy [data-policy-status]');
+  assert.match(status.textContent, /outputs 12 actions/);
+
+  api.clear();
+  assert.equal(cleared.length, 1);
+  api.destroy();
+  dom.window.close();
+});

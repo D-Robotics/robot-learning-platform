@@ -183,7 +183,7 @@ async function main() {
   if (!python) {
     console.error(
       '[demo:starter] 需要 python3 且安装 numpy + torch + onnx。\n' +
-        '安装：python3 -m pip install --user numpy torch onnx\n' +
+        '安装：python3 -m pip install --user -r engines/starter-ppo/requirements.txt\n' +
         '（无 ML 依赖时可用 npm run demo:sim2real 体验协议闭环）',
     );
     process.exit(2);

@@ -99,7 +99,12 @@
   "qualityGate": {
     "minSuccessRate": 0.7,
     "maxCollisionRate": 0.15,
-    "gateOn": "ciLowerBound"
+    "gateOn": "ciLowerBound",
+    "maxActionChangeRms": 0.5,
+    "ablation": {
+      "requireBaseline": true,
+      "minSuccessRateDelta": 0.3
+    }
   },
   "evaluation": [
     "successRate",

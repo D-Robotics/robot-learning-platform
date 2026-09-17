@@ -53,6 +53,49 @@ for (const taskId of ['originbot-goal-navigation', 'generic-goal-navigation']) {
       `${taskId}: confidenceLevel must be 0.9/0.95/0.99`,
     );
   }
+  // Beyond pass/fail: a smoothness ceiling and an ablation requirement. Both are
+  // optional, but a pack that declares one must declare it in a form the engine
+  // and the release gate can actually judge — a criterion with no threshold (or
+  // an unknown key) would read as "required" while enforcing nothing.
+  const gate = request.task.qualityGate ?? {};
+  if (gate.maxActionChangeRms !== undefined) {
+    assert.ok(
+      typeof gate.maxActionChangeRms === 'number' &&
+        Number.isFinite(gate.maxActionChangeRms) &&
+        gate.maxActionChangeRms > 0,
+      `${taskId}: qualityGate.maxActionChangeRms must be a finite positive number`,
+    );
+  }
+  if (gate.ablation !== undefined) {
+    const ablation = gate.ablation;
+    assert.ok(
+      ablation && typeof ablation === 'object' && !Array.isArray(ablation),
+      `${taskId}: qualityGate.ablation must be an object`,
+    );
+    const keys = Object.keys(ablation).sort();
+    assert.deepEqual(
+      keys,
+      keys.filter((key) => ['requireBaseline', 'minSuccessRateDelta'].includes(key)),
+      `${taskId}: qualityGate.ablation has an unknown key (allowed: requireBaseline, minSuccessRateDelta)`,
+    );
+    assert.ok(keys.length > 0, `${taskId}: qualityGate.ablation must state a requirement`);
+    if (ablation.requireBaseline !== undefined) {
+      assert.equal(
+        typeof ablation.requireBaseline,
+        'boolean',
+        `${taskId}: ablation.requireBaseline must be a boolean`,
+      );
+    }
+    if (ablation.minSuccessRateDelta !== undefined) {
+      assert.ok(
+        typeof ablation.minSuccessRateDelta === 'number' &&
+          Number.isFinite(ablation.minSuccessRateDelta) &&
+          ablation.minSuccessRateDelta > 0 &&
+          ablation.minSuccessRateDelta <= 1,
+        `${taskId}: ablation.minSuccessRateDelta must be a rate in (0, 1]`,
+      );
+    }
+  }
   // The 8-value envelopes must pin dropout/slip too (legacy 6 tolerated).
   for (const [name, envelope] of Object.entries(pack.domainRandomization?.evalEnvelopes ?? {})) {
     assert.ok(

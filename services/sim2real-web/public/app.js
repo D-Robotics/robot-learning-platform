@@ -173,7 +173,9 @@ function syncNotifyToggle() {
   const granted =
     state.notifyEnabled && typeof Notification !== 'undefined' && Notification.permission === 'granted';
   button.textContent = state.notifyEnabled ? '通知开' : '通知关';
-  button.setAttribute('aria-pressed', state.notifyEnabled ? 'true' : 'false');
+  // role="menuitemcheckbox" 只认 aria-checked；aria-pressed 在这个 role 上是
+  // 无效属性，会让读屏报出两种互相矛盾的开关状态。（HTML 里已去掉，这里也
+  // 必须去掉，否则 JS 每次同步都会把它加回来。）
   button.setAttribute('aria-checked', state.notifyEnabled ? 'true' : 'false');
   button.classList.toggle('is-active', granted);
 }
@@ -209,7 +211,13 @@ function syncThemeToggle() {
   const button = $('theme-toggle');
   if (!button) return;
   const dark = currentTheme() === 'dark';
-  button.textContent = dark ? '☀' : '☾';
+  // 图标字形对读屏是噪音（按钮本身已有 aria-label）。用 aria-hidden 的
+  // 子节点承载字形，而不是把字形写成按钮的 textContent。
+  button.replaceChildren();
+  const glyph = document.createElement('span');
+  glyph.setAttribute('aria-hidden', 'true');
+  glyph.textContent = dark ? '☀' : '☾';
+  button.append(glyph);
   button.setAttribute('aria-pressed', dark ? 'true' : 'false');
   button.setAttribute('aria-label', dark ? '切换到浅色主题' : '切换到深色主题');
   button.title = dark ? '切换到浅色主题' : '切换到深色主题';
@@ -623,7 +631,7 @@ function renderDeploymentTimeline() {
   for (const entry of entries) {
     const item = document.createElement('li');
     item.className = `deploy-timeline-item is-${entry.state}`;
-    item.innerHTML = `<span class="deploy-timeline-marker">${entry.state === 'done' ? '✓' : entry.state === 'attention' ? '!' : '·'}</span><span><strong>${escapeHtml(entry.label)}</strong><small>${escapeHtml(entry.detail)}</small></span>`;
+    item.innerHTML = `<span class="deploy-timeline-marker" aria-hidden="true">${entry.state === 'done' ? '✓' : entry.state === 'attention' ? '!' : '·'}</span><span><strong>${escapeHtml(entry.label)}</strong><small>${escapeHtml(entry.detail)}</small></span>`;
     root.append(item);
   }
   const active = deployment ? statusLabel(deployment.status) : '等待预检';
@@ -787,7 +795,7 @@ function promotionLinkItem(link) {
   if (artifact) {
     item.classList.add('is-artifact', 'is-' + artifact.status);
     parts.push(
-      '<span class="promotion-item-marker">' + (artifact.status === 'published' ? '✓' : artifact.status === 'revoked' ? '×' : '◆') + '</span>' +
+      '<span class="promotion-item-marker" aria-hidden="true">' + (artifact.status === 'published' ? '✓' : artifact.status === 'revoked' ? '×' : '◆') + '</span>' +
       '<div class="promotion-item-main">' +
       '<div class="promotion-item-title"><strong>' + escapeHtml(artifact.name || artifact.artifactId) + '</strong>' +
       '<span>' + escapeHtml(ARTIFACT_STATUS_LABELS[artifact.status] || artifact.status) + '</span></div>' +
@@ -802,7 +810,7 @@ function promotionLinkItem(link) {
   } else if (evaluation) {
     item.classList.add('is-evaluation', 'is-' + evaluation.status);
     parts.push(
-      '<span class="promotion-item-marker">' + (evaluation.status === 'passed' ? '✓' : evaluation.status === 'failed' ? '×' : '·') + '</span>' +
+      '<span class="promotion-item-marker" aria-hidden="true">' + (evaluation.status === 'passed' ? '✓' : evaluation.status === 'failed' ? '×' : '·') + '</span>' +
       '<div class="promotion-item-main">' +
       '<div class="promotion-item-title"><strong>评测证据</strong><span>' + escapeHtml(evaluation.status === 'passed' ? '通过' : evaluation.status === 'failed' ? '失败' : evaluation.status) + (evaluation.attested ? ' · attested' : '') + '</span></div>' +
       '</div>',
@@ -1737,6 +1745,8 @@ function setView(view, { updateHash = true, scroll = true, focus = true } = {}) 
       control.classList.contains('nav-item') ||
       control.classList.contains('module-item');
     control.classList.toggle('is-active', active && isNavigationControl);
+    // 顶栏管道是只读进度指示器（导航由侧栏独占），所以它只在 [data-view-target]
+    // 序列之外单独更新"你正在看哪个阶段"。
     // Keep one canonical current-page announcement for screen readers. The
     // module cards and workflow strip still receive the visual active class,
     // but they are alternate entry points rather than additional pages.
@@ -1746,6 +1756,14 @@ function setView(view, { updateHash = true, scroll = true, focus = true } = {}) 
     } else {
       control.removeAttribute('aria-current');
     }
+  });
+  // 只读的顶栏闭环进度：标出"正在看的阶段"。它与 is-current（进度上的
+  //「下一步」）是两个概念，用 aria-current="step" 单独表达。
+  document.querySelectorAll('.pipeline-stage[data-pipeline-stage]').forEach((stage) => {
+    const viewing = stage.dataset.pipelineStage === wanted;
+    stage.classList.toggle('is-viewing', viewing);
+    if (viewing) stage.setAttribute('aria-current', 'step');
+    else stage.removeAttribute('aria-current');
   });
   if (updateHash && window.location.hash !== '#' + wanted) {
     // Each in-app navigation becomes a real history entry so the browser Back
@@ -1773,6 +1791,11 @@ function setView(view, { updateHash = true, scroll = true, focus = true } = {}) 
   // 视图内轮询统一由注册表收发：进入视图启动（评估页立即刷一帧），离开即停，
   // 避免后台空转。
   syncScopedPolls();
+  // 窄屏下从抽屉里点了一个目的地就收起抽屉，否则正文仍被盖住。
+  closeSidebarDrawer({ restoreFocus: false });
+  // 视图切换会重排正文，截断情况随之改变（hidden 是属性变化，观察器里
+  // 单独过滤了它，这里再主动排一次以免依赖时序）。
+  scheduleTruncationTitles();
 }
 
 function setTrainModule(module, { persist = true } = {}) {
@@ -2699,7 +2722,9 @@ function renderIntegrations() {
   if (engineSelect) {
     const reported = Array.isArray(local.engines) ? local.engines : null;
     const engineKnown = (id) => reported == null || reported.includes(id) || reported.includes('default');
-    for (const option of engineSelect.querySelectorAll('option[value="mjx-ppo"], option[value="starter-ppo"]')) {
+    for (const option of engineSelect.querySelectorAll(
+      'option[value="mjx-ppo"], option[value="starter-ppo"], option[value="microduck-rl"]',
+    )) {
       const known = engineKnown(option.value);
       option.disabled = !known;
       option.textContent = known
@@ -2916,23 +2941,33 @@ function renderBoard() {
     deploymentsForCurrentModel().find(
       (item) => item.modelId === selectedModel()?.id && item.deviceId === device.id,
     );
-  const preflightReady = Boolean(
-    deployment && ['ready', 'completed'].includes(String(deployment.status || '')),
-  );
-  const boardStateClass = preflightReady
-    ? 'is-ready'
-    : device.boardPlatform
-      ? 'is-detected'
-      : 'is-waiting';
+  // 预检状态的单一来源。以前 chip 只看 preflightReady 布尔值（status 是
+  // ready/completed 吗），正文却直接打印 deployment.status，于是"预检失败"
+  // 的设备会同时显示「待预检」和「当前预检状态：失败。」——同一张卡片上
+  // 两句话互相矛盾。现在 chip、样式和正文都从这一份映射里取。
+  const preflightState = (() => {
+    if (!device.boardPlatform) return { key: 'undetected', label: '待探测', stateClass: 'is-waiting' };
+    if (!deployment) return { key: 'unplanned', label: '待预检', stateClass: 'is-waiting' };
+    const status = String(deployment.status || '').toLowerCase();
+    if (['ready', 'completed'].includes(status)) return { key: 'passed', label: '预检通过', stateClass: 'is-ready' };
+    if (status === 'failed') return { key: 'failed', label: '预检失败', stateClass: 'is-failed' };
+    if (status === 'running') return { key: 'running', label: '预检中', stateClass: 'is-detected' };
+    if (['planned', 'pending', 'queued'].includes(status)) return { key: 'planned', label: '待执行预检', stateClass: 'is-detected' };
+    return { key: 'other', label: statusLabel(deployment.status), stateClass: 'is-detected' };
+  })();
+  const preflightReady = preflightState.key === 'passed';
+  const boardStateClass = preflightState.stateClass;
   const deviceStatus = statusLabel(device.status || 'unknown');
-  const preflightLabel = preflightReady ? '预检通过' : device.boardPlatform ? '待预检' : '待探测';
+  const preflightLabel = preflightState.label;
   const blockedReason = preflightReady
     ? '只读预检已通过；执行动作仍由受控 BoardAgent 和人工批准保护。'
-    : !device.boardPlatform
+    : preflightState.key === 'undetected'
       ? '先点击“探测板型”，确认目标设备与契约匹配。'
-      : deployment
-        ? `当前预检状态：${statusLabel(deployment.status)}。`
-        : '先生成预检计划，再执行只读检查。';
+      : preflightState.key === 'unplanned'
+        ? '先生成预检计划，再执行只读检查。'
+        : preflightState.key === 'failed'
+          ? `预检失败：${deployment?.lastError || deployment?.reason || '未通过兼容性检查'}。修正后重新执行只读预检。`
+          : `当前预检状态：${preflightLabel}。`;
   summary.innerHTML =
     '<div class="board-summary-row"><strong>' +
     escapeHtml(device.name || device.id) +
@@ -3056,17 +3091,46 @@ const PHYSICS_BACKEND_SHORT = {
   mujoco: '物理 · MuJoCo',
 };
 
+// A latency figure only means something with its measurement stage attached: a
+// training-host forward pass and an on-board one differ by an order of
+// magnitude, and only the latter describes a control-loop budget. Runs written
+// before the stage was declared are labelled as undeclared rather than being
+// shown as if they had been measured on the board.
+const MEASUREMENT_STAGE_LABELS = {
+  'host-torch': '训练主机 PyTorch 前向',
+  'host-onnx': '训练主机 ONNX 前向',
+  'board-onnx': '板端 ONNX 前向',
+  'sim-step': '仿真步进耗时',
+};
+
+function controlLatencyLabel(metrics) {
+  const stage = metrics && metrics.measurementStage;
+  return '控制延迟（' + (MEASUREMENT_STAGE_LABELS[stage] || '测量阶段未声明') + '）';
+}
+
 // Human-readable metric cards for the run detail dialog. Every known metric
 // field gets a labeled card; anything the schema gains later still shows up in
-// the raw JSON block below instead of silently disappearing.
+// the raw JSON block below instead of silently disappearing. A label may be a
+// function of the whole metrics object when it depends on another field.
 const RUN_METRIC_CARDS = [
   ['contractValid', '契约状态', (value) => (value === true ? '通过' : value === false ? '失败' : '—')],
   ['successRate', '成功率', (value) => formatMetricPercent(value)],
   ['fallRate', '跌倒率', (value) => formatMetricPercent(value)],
   ['reward', '平均奖励', (value) => formatMetricNumber(value, 3)],
   ['episodeLength', '平均步数', (value) => formatMetricNumber(value, 1)],
-  ['controlLatencyMs', '控制延迟', (value) =>
+  ['controlLatencyMs', controlLatencyLabel, (value) =>
     typeof value === 'number' && Number.isFinite(value) ? value.toFixed(1) + 'ms' : '—'],
+  ['sourceCommit', '训练代码版本', (value) => (typeof value === 'string' ? value.slice(0, 10) : '—')],
+  [
+    'dependencyVersions',
+    '依赖版本',
+    (value) =>
+      value && typeof value === 'object'
+        ? Object.entries(value)
+            .map(([name, version]) => name + ' ' + version)
+            .join(' · ')
+        : '—',
+  ],
   ['iterations', '迭代数', (value) => formatMetricNumber(value, 0)],
   ['engine', '训练引擎', (value) => (typeof value === 'string' ? value : '—')],
   [
@@ -3099,7 +3163,7 @@ function renderRunMetricCards(record) {
       (key === 'fallRate' && Number(metrics.fallRate) > 0.2 ? ' is-warn' : '') +
       (key === 'contractValid' ? (metrics[key] === true ? ' is-ok' : ' is-error') : '') +
       '"><span>' +
-      escapeHtml(label) +
+      escapeHtml(typeof label === 'function' ? label(metrics) : label) +
       '</span><strong>' +
       escapeHtml(format(metrics[key])) +
       '</strong></div>',
@@ -4581,6 +4645,7 @@ function renderReplayCameraFrame(frame) {
     note.textContent = '相机帧数据无法解码，已隐藏以免误读。';
   }
 }
+
 function sendReplayFrame() {
   const frame = state.replay.frames[state.replay.index];
   if (!frame) return;
@@ -4957,6 +5022,14 @@ function renderEvaluation() {
     typeof performanceMetrics.controlLatencyMs === 'number'
       ? performanceMetrics.controlLatencyMs + 'ms'
       : '—',
+  );
+  // The number is meaningless without its stage, so the caption travels with
+  // it: a host-side figure must never read as an on-board control budget.
+  setText(
+    'eval-latency-label',
+    typeof performanceMetrics.controlLatencyMs === 'number'
+      ? controlLatencyLabel(performanceMetrics)
+      : '控制延迟',
   );
 
   // A local Mock run is a protocol receipt, not a simulator or X5 sample.
@@ -5525,20 +5598,49 @@ function renderReleaseGate() {
   );
 }
 
-function renderWorkflowProgress() {
-  const rail = $('workflow-progress-strip');
-  if (!rail) return;
+// 闭环四阶段的唯一状态来源。
+// 顶栏管道和页面内进度条以前各自推导一遍，而且都写成
+// `X ? 'complete' : 'current'`，于是"未完成的阶段"全是 current——
+// 契约就绪时「契约·仿真」和「训练」会同时点亮。现在只有
+// 「最靠后的、已解锁且未完成」的那一个阶段是 current，其余已解锁的
+// 阶段标 ready（可进入但不是下一步），未解锁的标 blocked。
+const LOOP_STAGES = ['simulate', 'train', 'evaluate', 'deploy'];
+function deriveLoopStates() {
   const model = selectedModel();
   const latest = latestRun();
   const telemetry = currentTelemetry();
-  const deployment = deploymentsForCurrentModel().slice().sort((a, b) => String(b.updatedAt || b.createdAt || '').localeCompare(String(a.updatedAt || a.createdAt || '')))[0];
+  const deployment = deploymentsForCurrentModel()
+    .slice()
+    .sort((a, b) => String(b.updatedAt || b.createdAt || '').localeCompare(String(a.updatedAt || a.createdAt || '')))[0];
+  const complete = {
+    simulate: Boolean(telemetry?.summary || latest?.evaluation?.replay || latest?.taskEvaluation?.replay),
+    train: Boolean(latest && ['completed', 'ready'].includes(String(latest.status || '').toLowerCase())),
+    evaluate: Boolean(telemetry?.summary || latest?.evaluation || latest?.taskEvaluation),
+    deploy: Boolean(deployment && ['ready', 'completed', 'planned', 'running'].includes(String(deployment.status || '').toLowerCase())),
+  };
   const contractReady = Boolean(model?.manifest?.contract?.id && model?.manifest?.artifacts?.length);
-  const replayReady = Boolean(telemetry?.summary || latest?.evaluation?.replay || latest?.taskEvaluation?.replay);
-  const trainingReady = Boolean(latest && ['completed', 'ready'].includes(String(latest.status || '').toLowerCase()));
-  const evaluationReady = Boolean(telemetry?.summary || latest?.evaluation || latest?.taskEvaluation);
-  const deployReady = Boolean(deployment && ['ready', 'completed', 'planned', 'running'].includes(String(deployment.status || '').toLowerCase()));
-  const states = { simulate: replayReady ? 'complete' : 'current', train: trainingReady ? 'complete' : contractReady ? 'current' : 'blocked', evaluate: evaluationReady ? 'complete' : replayReady || trainingReady ? 'current' : 'blocked', deploy: deployReady ? 'complete' : evaluationReady ? 'current' : 'blocked' };
-  const current = Object.entries(states).find(([, value]) => value === 'current')?.[0] || 'deploy';
+  const unlocked = {
+    simulate: true,
+    train: contractReady,
+    evaluate: complete.simulate || complete.train,
+    deploy: complete.evaluate,
+  };
+  // 「下一步」= 最靠前的、已解锁且未完成的阶段；其余已解锁的阶段是 ready
+  // （可以进入，但不是建议的下一步），未解锁的是 blocked。与概览首跑清单
+  // 的 currentKey 取法一致，避免两处进度条各指一步。
+  const actionable = LOOP_STAGES.filter((key) => !complete[key] && unlocked[key]);
+  const current = actionable.length ? actionable[0] : null;
+  const states = {};
+  for (const key of LOOP_STAGES) {
+    states[key] = complete[key] ? 'complete' : key === current ? 'current' : unlocked[key] ? 'ready' : 'blocked';
+  }
+  return { states, current };
+}
+
+function renderWorkflowProgress() {
+  const rail = $('workflow-progress-strip');
+  if (!rail) return;
+  const { states, current } = deriveLoopStates();
   const summary = $('workflow-progress-summary');
   if (summary) summary.textContent = ({ simulate: '回放可选，用于验证策略', train: '模型已就绪，开始配置训练', evaluate: '打开评测查看回放', deploy: '评测完成，可生成预检计划' })[current] || '按步骤完成闭环';
   rail.querySelectorAll('[data-workflow-step]').forEach((item) => {
@@ -5575,33 +5677,29 @@ function renderWorkflowProgress() {
 function renderTopbarPipeline() {
   const rail = $('topbar-pipeline');
   if (!rail) return;
-  // 阶段状态推导与 renderWorkflowProgress 保持同源：契约就绪即可进入
-  // 训练，回放/训练完成进入评测，部署证据就绪才算闭环。
-  const model = selectedModel();
-  const latest = latestRun();
-  const telemetry = currentTelemetry();
-  const contractReady = Boolean(model?.manifest?.contract?.id && model?.manifest?.artifacts?.length);
-  const replayReady = Boolean(telemetry?.summary || latest?.evaluation?.replay || latest?.taskEvaluation?.replay);
-  const trainingReady = Boolean(latest && ['completed', 'ready'].includes(String(latest.status || '').toLowerCase()));
-  const evaluationReady = Boolean(telemetry?.summary || latest?.evaluation || latest?.taskEvaluation);
-  const deployment = deploymentsForCurrentModel().slice().sort((a, b) =>
-    String(b.updatedAt || b.createdAt || '').localeCompare(String(a.updatedAt || a.createdAt || '')),
-  )[0];
-  const deployReady = Boolean(deployment && ['ready', 'completed', 'planned', 'running'].includes(String(deployment.status || '').toLowerCase()));
-  const states = {
-    simulate: replayReady ? 'complete' : 'current',
-    train: trainingReady ? 'complete' : contractReady ? 'current' : 'blocked',
-    evaluate: evaluationReady ? 'complete' : replayReady || trainingReady ? 'current' : 'blocked',
-    deploy: deployReady ? 'complete' : evaluationReady ? 'current' : 'blocked',
-  };
+  // 与 renderWorkflowProgress 共用 deriveLoopStates()：以前这里复制了一份
+  // 推导逻辑，两处容易漂移，而且都会同时点亮多个阶段。
+  const { states } = deriveLoopStates();
   rail.querySelectorAll('[data-pipeline-stage]').forEach((item) => {
     const value = states[item.dataset.pipelineStage];
     item.classList.toggle('is-complete', value === 'complete');
     item.classList.toggle('is-current', value === 'current');
+    item.classList.toggle('is-ready', value === 'ready');
     item.classList.toggle('is-blocked', value === 'blocked');
     const label = item.querySelector('span')?.textContent || '';
-    item.title =
-      value === 'complete' ? `${label} · 已完成` : value === 'blocked' ? `${label} · 未满足前置条件` : `${label} · 进行中`;
+    // 顶栏同时表达两件事，用 title 把它们讲清楚：
+    //   · is-viewing（aria-current="step"）= 你正在看哪个阶段
+    //   · is-current / is-ready / is-blocked = 闭环进度与门禁
+    const viewing = item.classList.contains('is-viewing');
+    const gate =
+      value === 'complete'
+        ? '已完成'
+        : value === 'current'
+          ? '建议的下一步'
+          : value === 'ready'
+            ? '可以进入'
+            : '未满足前置条件';
+    item.title = viewing ? `${label} · 当前页面 · ${gate}` : `${label} · ${gate}`;
   });
 }
 
@@ -5971,7 +6069,7 @@ function ensureAgentPanelStyles() {
     .agent-assistant-title-wrap { gap: 10px; min-width: 0; }
     .agent-assistant-title-wrap h2 { margin: 2px 0 0; font-size: 17px; }
     .agent-assistant-mark { display: grid; place-items: center; width: 30px; height: 30px; border-radius: 9px; background: rgba(86,212,255,.13); color: var(--cyan, #56d4ff); font-size: 17px; }
-    .agent-assistant-mode { margin-left: 4px; padding: 3px 7px; border: 1px solid rgba(116,230,176,.3); border-radius: 999px; color: var(--green, #74e6b0); font-size: 11px; white-space: nowrap; }
+    .agent-assistant-mode { margin-left: 4px; padding: 3px 7px; border: 1px solid rgba(116,230,176,.3); border-radius: 999px; color: var(--green, #74e6b0); font-size: 12px; white-space: nowrap; }
     .agent-assistant-body { margin-top: 14px; }
     .agent-assistant[data-collapsed="true"] .agent-assistant-body { display: none; }
     .agent-assistant-lead strong { display: block; font-size: 15px; }
@@ -5980,7 +6078,7 @@ function ensureAgentPanelStyles() {
     .agent-assistant-action { display: inline-flex; align-items: center; min-height: 32px; padding: 7px 11px; border: 1px solid rgba(86,212,255,.28); border-radius: 7px; background: rgba(86,212,255,.06); color: var(--text, #eef5ff); cursor: pointer; font: inherit; font-size: 12px; text-decoration: none; transition: border-color .16s ease, background .16s ease, transform .16s ease; }
     .agent-assistant-action:hover { border-color: var(--cyan, #56d4ff); background: rgba(86,212,255,.13); transform: translateY(-1px); }
     .agent-assistant-foot { justify-content: space-between; gap: 10px; margin-top: 15px; padding-top: 11px; border-top: 1px solid color-mix(in srgb, var(--line, #27354a) 80%, transparent); }
-    .agent-assistant-health { color: var(--muted, #91a4bd); font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .agent-assistant-health { color: var(--muted, #91a4bd); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .agent-assistant-health[data-state="ready"] { color: var(--green, #74e6b0); }
     .agent-assistant-health[data-state="error"] { color: var(--red, #ff9098); }
     @media (max-width: 600px) { .agent-assistant { padding: 15px; } .agent-assistant-mode { display: none; } .agent-assistant-foot { align-items: flex-start; } }
@@ -7918,7 +8016,13 @@ async function stationInit() {
       }
       if (notice) {
         notice.hidden = false;
-        notice.textContent = `上位机离线：${state.station.offlineReason} 仿真、训练与数据分析仍可使用。`;
+        // 服务端给的 offlineReason 里可能已经带了"仍可使用"的说明，无脑追加
+        // 会让横幅把同一件事说两遍（实测渲染出"仿真和训练工作流仍可使用…
+        // 仿真、训练与数据分析仍可使用。"）。
+        const offlineReason = String(state.station.offlineReason || '').trim();
+        notice.textContent = `上位机离线：${offlineReason}${
+          offlineReason.includes('仍可使用') ? '' : ' 仿真、训练与数据分析仍可使用。'
+        }`;
       }
       if (honestyNote) honestyNote.hidden = false;
       stationLog(`上位机离线：${state.station.offlineReason}`, 'info');
@@ -8451,6 +8555,20 @@ function wireEvents() {
     control.addEventListener('click', () => setView(control.dataset.viewTarget));
   });
   wireTopMenu();
+  wireSidebarDrawer();
+  wireTablists();
+  // 轮询和视图切换都会重写正文，截断提示要跟着重算。
+  if (typeof MutationObserver === 'function') {
+    new MutationObserver(scheduleTruncationTitles).observe(document.body, {
+      childList: true,
+      subtree: true,
+      characterData: true,
+      attributes: true,
+      attributeFilter: ['hidden'],
+    });
+  }
+  window.addEventListener('resize', scheduleTruncationTitles, { passive: true });
+  scheduleTruncationTitles();
   document.addEventListener('click', (event) => {
     const opener = event.target instanceof Element ? event.target.closest('[data-agent-open]') : null;
     if (opener && typeof window.setAgentDrawerOpen === 'function') {
@@ -8561,6 +8679,8 @@ function wireEvents() {
         const active = tab.dataset.stationModuleTab === module;
         tab.classList.toggle('is-active', active);
         tab.setAttribute('aria-selected', active ? 'true' : 'false');
+        // roving tabindex：整组 tab 只占一个 Tab 停靠点，组内用方向键移动。
+        tab.setAttribute('tabindex', active ? '0' : '-1');
       });
     }
   };
@@ -8844,6 +8964,123 @@ const COMMANDS = [
   { id: 'onboarding', label: '重看新手指引', hint: '12 步走完整个平台', action: () => $('onboarding-help-button')?.click() },
 ];
 
+// 窄屏侧栏抽屉。
+// ≤1080px 时侧栏原本是 position:static 的整块，直接堆在正文上方：390×844
+// 上顶栏+侧栏占掉 806px（首屏 95%），页面标题落在 y=1457。现在侧栏在窄屏
+// 变成一个可开合的抽屉，正文回到首屏，导航由顶栏的开关按钮唤起。
+const SIDEBAR_DRAWER_QUERY = '(max-width: 1080px)';
+function sidebarDrawerAvailable() {
+  return typeof window.matchMedia === 'function' && window.matchMedia(SIDEBAR_DRAWER_QUERY).matches;
+}
+
+function setSidebarDrawer(open, { restoreFocus = true } = {}) {
+  const shell = document.querySelector('.app-shell');
+  const toggle = $('sidebar-toggle');
+  const backdrop = $('sidebar-backdrop');
+  const sidebar = $('platform-sidebar');
+  if (!shell || !toggle) return;
+  const next = Boolean(open) && sidebarDrawerAvailable();
+  shell.classList.toggle('is-sidebar-open', next);
+  toggle.setAttribute('aria-expanded', next ? 'true' : 'false');
+  toggle.setAttribute('aria-label', next ? '关闭导航菜单' : '打开导航菜单');
+  toggle.title = next ? '关闭导航菜单' : '打开导航菜单';
+  if (backdrop) backdrop.hidden = !next;
+  // 抽屉打开时锁住页面滚动，否则在手机上滑动会同时滚动正文。
+  document.body.classList.toggle('sidebar-drawer-open', next);
+  if (next) {
+    sidebar?.querySelector('.nav-item, button, a, select')?.focus({ preventScroll: true });
+  } else if (restoreFocus && document.activeElement === toggle) {
+    toggle.focus({ preventScroll: true });
+  }
+}
+
+function closeSidebarDrawer(options) {
+  setSidebarDrawer(false, options);
+}
+
+function wireSidebarDrawer() {
+  const toggle = $('sidebar-toggle');
+  const backdrop = $('sidebar-backdrop');
+  if (!toggle) return;
+  toggle.addEventListener('click', () => {
+    const open = document.querySelector('.app-shell')?.classList.contains('is-sidebar-open');
+    setSidebarDrawer(!open);
+  });
+  backdrop?.addEventListener('click', () => setSidebarDrawer(false));
+  document.addEventListener('keydown', (event) => {
+    if (event.key !== 'Escape') return;
+    const open = document.querySelector('.app-shell')?.classList.contains('is-sidebar-open');
+    if (open) {
+      setSidebarDrawer(false);
+      toggle.focus({ preventScroll: true });
+    }
+  });
+  // 视口回到桌面宽度时抽屉必须失效，否则 .is-sidebar-open 会留在一个
+  // 已经不需要它的布局上。
+  const mq = typeof window.matchMedia === 'function' ? window.matchMedia(SIDEBAR_DRAWER_QUERY) : null;
+  const onChange = (event) => {
+    if (!event.matches) setSidebarDrawer(false, { restoreFocus: false });
+  };
+  if (mq) {
+    if (typeof mq.addEventListener === 'function') mq.addEventListener('change', onChange);
+    else if (typeof mq.addListener === 'function') mq.addListener(onChange);
+  }
+}
+
+// WAI-ARIA tabs 键盘约定。三个 tablist（登录方式 / 训练模块 / 设备上位机模块）
+// 以前只支持鼠标点击：方向键无反应，而且 station 的 5 个 tab 全是 Tab 停靠点。
+// 这里的 tab 都是"激活即切换"的本地面板，没有异步成本，所以方向键直接跟随激活。
+function wireTablist(tablist) {
+  const tabs = [...tablist.querySelectorAll('[role="tab"]')].filter((tab) => !tab.disabled);
+  if (tabs.length < 2) return;
+  tablist.addEventListener('keydown', (event) => {
+    const step = { ArrowRight: 1, ArrowDown: 1, ArrowLeft: -1, ArrowUp: -1 }[event.key];
+    const current = tabs.indexOf(document.activeElement);
+    let next = null;
+    if (step) next = tabs[(current + step + tabs.length) % tabs.length];
+    else if (event.key === 'Home') next = tabs[0];
+    else if (event.key === 'End') next = tabs[tabs.length - 1];
+    if (!next) return;
+    event.preventDefault();
+    next.focus();
+    next.click();
+  });
+}
+
+function wireTablists() {
+  document.querySelectorAll('[role="tablist"]').forEach(wireTablist);
+}
+
+// 被 CSS 截断且没有 title 的文本，用户永远看不到完整内容。审查里最要命的
+// 两例：「项目列表暂不可用 · 点击"重新连接"重试」在桌面端被截到 68px，正好
+// 把"怎么恢复"整段藏掉；运行卡住的解释句在 289px 容器里装 831px 文本。
+// 这里只在元素确实被截断（scrollWidth > clientWidth）时补 title，不碰布局，
+// 所以对"本来就想省略"的场景也没有副作用。debounce + 变更观察，避免每次
+// 轮询渲染都同步扫一遍 DOM。
+function syncTruncationTitles(root = document) {
+  for (const scope of ['#main-content', '.sidebar', '.context-strip', '.topbar']) {
+    const host = root.querySelector(scope);
+    if (!host) continue;
+    for (const el of host.querySelectorAll('*')) {
+      // 便宜的存在性检查放在前面：绝大多数元素没有溢出。
+      if (el.clientWidth <= 4 || el.scrollWidth <= el.clientWidth + 2) continue;
+      if (![...el.childNodes].some((node) => node.nodeType === 3 && node.textContent.trim().length > 1)) continue;
+      if (el.classList.contains('sr-only')) continue;
+      const text = (el.textContent || '').trim().replace(/\s+/g, ' ');
+      if (!text) continue;
+      if (el.getAttribute('title') !== text) el.setAttribute('title', text);
+    }
+  }
+}
+let truncationTimer = 0;
+function scheduleTruncationTitles() {
+  window.clearTimeout(truncationTimer);
+  truncationTimer = window.setTimeout(() => {
+    truncationTimer = 0;
+    syncTruncationTitles();
+  }, 220);
+}
+
 function wireTopMenu() {
   const button = $('top-menu-button');
   const list = $('top-menu-list');
@@ -8867,6 +9104,29 @@ function wireTopMenu() {
   document.addEventListener('keydown', (event) => {
     if (event.key === 'Escape' && !list.hidden) setOpen(false);
   });
+  // WAI-ARIA menu 约定：方向键在菜单项之间移动，Home/End 跳首尾。菜单项本身是
+  // 可聚焦的 <button>/<a>，所以这里只负责移动焦点，不改动激活语义。
+  list.addEventListener('keydown', (event) => {
+    const items = [...list.querySelectorAll('.top-menu-item')].filter((el) => !el.disabled);
+    if (items.length < 2) return;
+    const step = { ArrowDown: 1, ArrowUp: -1 }[event.key];
+    const current = items.indexOf(document.activeElement);
+    let next = null;
+    if (step) next = items[(current + step + items.length) % items.length];
+    else if (event.key === 'Home') next = items[0];
+    else if (event.key === 'End') next = items[items.length - 1];
+    if (!next) return;
+    event.preventDefault();
+    next.focus();
+  });
+  // opening the menu with the keyboard should land on the first item
+  button.addEventListener('keydown', (event) => {
+    if (event.key !== 'ArrowDown' && event.key !== 'ArrowUp') return;
+    event.preventDefault();
+    setOpen(true);
+    const items = [...list.querySelectorAll('.top-menu-item')];
+    (event.key === 'ArrowDown' ? items[0] : items[items.length - 1])?.focus();
+  });
 }
 
 function wireCommandPalette() {
@@ -8882,18 +9142,26 @@ function wireCommandPalette() {
     list.replaceChildren();
     if (!matches.length) {
       list.innerHTML = '<div class="command-palette-empty">没有匹配的操作</div>';
+      input.removeAttribute('aria-activedescendant');
       return;
     }
     matches.forEach((command, index) => {
       const button = document.createElement('button');
       button.type = 'button';
+      button.id = `command-palette-option-${index}`;
       button.className = 'command-palette-item' + (index === activeIndex ? ' is-active' : '');
       button.setAttribute('role', 'option');
       button.setAttribute('aria-selected', index === activeIndex ? 'true' : 'false');
+      // listbox 的约定是：焦点留在输入框上，用 aria-activedescendant 播报
+      // 当前项。以前每个 option 都是 <button>，于是 12 个命令各自变成一个
+      // Tab 停靠点，而且方向键移动时读屏完全不知道选中项变了。
+      button.tabIndex = -1;
       button.innerHTML = `<span class="command-palette-item-icon">${command.view ? '↗' : '↻'}</span><span><strong>${escapeHtml(command.label)}</strong><small>${escapeHtml(command.hint)}</small></span><kbd>${command.view ? '打开' : '执行'}</kbd>`;
       button.addEventListener('click', () => executeCommand(command));
       list.append(button);
     });
+    // 让输入框把"当前高亮项"暴露给辅助技术。
+    input.setAttribute('aria-activedescendant', `command-palette-option-${activeIndex}`);
   };
   const open = () => {
     input.value = '';
@@ -8902,8 +9170,7 @@ function wireCommandPalette() {
     if (typeof dialog.showModal === 'function') dialog.showModal();
     else dialog.setAttribute('open', '');
     window.requestAnimationFrame(() => input.focus());
-  };
-  const close = () => {
+  };  const close = () => {
     if (typeof dialog.close === 'function' && dialog.open) dialog.close();
     else dialog.removeAttribute('open');
   };

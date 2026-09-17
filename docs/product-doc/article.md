@@ -122,7 +122,7 @@ npm run demo:sim2real
 真实 CPU PPO：
 
 ```bash
-python3 -m pip install --user numpy torch onnx
+python3 -m pip install --user -r engines/starter-ppo/requirements.txt
 npm run demo:starter
 ```
 

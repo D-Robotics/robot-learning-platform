@@ -99,7 +99,9 @@ if (pythonFound) {
       (pythonProbes.numpy.status === 0 ? pythonProbes.numpy.stdout.trim() : '缺失') +
       ' · torch ' +
       (pythonProbes.torch.status === 0 ? pythonProbes.torch.stdout.trim() : '缺失'),
-    stackOk ? null : 'python3 -m pip install --user numpy torch（starter-ppo 真实训练需要）',
+    stackOk
+      ? null
+      : 'python3 -m pip install --user -r engines/starter-ppo/requirements.txt（starter-ppo 真实训练需要，锁定版本）',
   );
   record(
     'ONNX 导出',
@@ -121,7 +123,7 @@ if (pythonFound) {
     REQUIRED,
     'warn',
     '未找到 python3（demo:starter 真实训练路径不可用，仅 demo:sim2real 协议演示可跑）',
-    'brew install python@3.12 && python3 -m pip install --user numpy torch onnx',
+    'brew install python@3.12 && python3 -m pip install --user -r engines/starter-ppo/requirements.txt',
   );
 }
 

@@ -42,7 +42,7 @@ const python = pythonInterpreter();
 if (!python) {
   console.log(
     '[starter-engine] SKIP — python3 with numpy+torch not found. ' +
-      'Install with: python3 -m pip install --user numpy torch onnx',
+      'Install with: python3 -m pip install --user -r engines/starter-ppo/requirements.txt',
   );
   process.exit(0);
 }

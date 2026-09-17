@@ -33,6 +33,8 @@
 | [`gpu-runner.md`](gpu-runner.md) | 独立 GPU 机器上的训练 runner 部署 |
 | [`sim2real-plugins.md`](sim2real-plugins.md) | 事件扩展层：实验追踪、对象存储、通知、硬件适配 |
 
+| [`lineage.md`](lineage.md) | **按 task id 的纵向迭代血缘**（含失败路径与放弃原因） |
+
 ## 架构、边界与验收
 
 | 文档 | 用途 |

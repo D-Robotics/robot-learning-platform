@@ -12,6 +12,20 @@
   const RECORDER_PANEL_ID = 'rdk-microduck-recorder';
   const RECORDER_STYLE_ID = 'rdk-microduck-recorder-style';
   const RECORDER_MAX_STEPS = 30_000; // 10 minutes at the 50 Hz policy loop.
+  const POLICY_PANEL_ID = 'rdk-microduck-policy';
+  const POLICY_STYLE_ID = 'rdk-microduck-policy-style';
+  // The platform's own run list. Same origin as this page in the standard
+  // deployment; a deployment that mounts the simulator elsewhere can point the
+  // panel at its API with ?rdkApi=https://studio.example.com.
+  const POLICY_API_BASE = (() => {
+    try {
+      const override = new URLSearchParams(window.location.search).get('rdkApi');
+      if (override) return String(override).replace(/\/+$/, '');
+    } catch {
+      /* keep the same-origin default */
+    }
+    return '';
+  })();
   const QR_SRC = './community/microduck-wechat.png';
 
   function style(element, values) {
@@ -625,6 +639,252 @@
       panel.querySelector('[data-recorder-count]').textContent =
         `${recorder.samples.length} 帧 · ${recorder.samples.length ? (recorder.samples.at(-1).time || 0).toFixed(1) : '0.0'} 秒`;
     }, 500);
+  }
+
+  /**
+   * Load a policy trained on the platform straight into this simulation.
+   *
+   * The upstream bundle already owns the hard part: `window.rl.loadCustomPolicy(ref)`
+   * accepts an absolute .onnx URL, validates that the graph takes the robot's 61D
+   * observation and emits 14 actions (the same contract the platform's training
+   * manifest pins), loads it into the walk slot, and — importantly — reverts to
+   * the stock policy and reports a reason whenever the move misbehaves. The
+   * panel therefore adds no policy maths of its own; it lists the account's
+   * completed runs, hands the simulator the platform's digest-verified bytes
+   * URL, and shows what the simulator reports back.
+   */
+  function mountPolicyPanel() {
+    if (document.getElementById(POLICY_PANEL_ID)) return;
+
+    if (!document.getElementById(POLICY_STYLE_ID)) {
+      const styleTag = document.createElement('style');
+      styleTag.id = POLICY_STYLE_ID;
+      styleTag.textContent = `
+        #${POLICY_PANEL_ID} {
+          position: fixed;
+          left: clamp(14px, 2.5vw, 32px);
+          bottom: calc(clamp(14px, 2.5vw, 32px) + 190px);
+          z-index: 2147483644;
+          width: min(286px, calc(100vw - 28px));
+          padding: 12px;
+          border: 1px solid rgba(255, 176, 103, .34);
+          border-radius: 14px;
+          background: rgba(9, 13, 22, .92);
+          color: #fff;
+          box-shadow: 0 16px 38px rgba(0, 0, 0, .38), 0 0 28px rgba(255, 176, 103, .08);
+          backdrop-filter: blur(13px);
+          font: 600 11px/1.35 system-ui, -apple-system, sans-serif;
+        }
+        #${POLICY_PANEL_ID}[hidden] { display: none; }
+        #${POLICY_PANEL_ID} .rdk-policy-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 8px; }
+        #${POLICY_PANEL_ID} .rdk-policy-head strong { color: #ffb067; font-size: 13px; }
+        #${POLICY_PANEL_ID} .rdk-policy-status { color: rgba(255, 255, 255, .62); font-size: 10px; text-align: right; }
+        #${POLICY_PANEL_ID}.is-active { border-color: rgba(113, 229, 174, .7); }
+        #${POLICY_PANEL_ID}.is-active .rdk-policy-status { color: #71e5ae; }
+        #${POLICY_PANEL_ID}.is-error { border-color: rgba(255, 92, 113, .8); }
+        #${POLICY_PANEL_ID}.is-error .rdk-policy-status { color: #ff8d91; }
+        #${POLICY_PANEL_ID} .rdk-policy-note { margin: 0 0 8px; color: rgba(255, 255, 255, .52); font-size: 10px; }
+        #${POLICY_PANEL_ID} .rdk-policy-list { display: grid; gap: 5px; max-height: 168px; overflow-y: auto; margin-bottom: 8px; }
+        #${POLICY_PANEL_ID} .rdk-policy-item { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 6px; align-items: center; padding: 6px 7px; border: 1px solid rgba(255, 255, 255, .12); border-radius: 8px; background: rgba(255, 255, 255, .04); }
+        #${POLICY_PANEL_ID} .rdk-policy-item.is-current { border-color: rgba(113, 229, 174, .6); }
+        #${POLICY_PANEL_ID} .rdk-policy-item-meta { min-width: 0; }
+        #${POLICY_PANEL_ID} .rdk-policy-item-meta strong { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; }
+        #${POLICY_PANEL_ID} .rdk-policy-item-meta span { color: rgba(255, 255, 255, .5); font: 9px ui-monospace, SFMono-Regular, Menlo, monospace; }
+        #${POLICY_PANEL_ID} .rdk-policy-empty { padding: 7px; border: 1px dashed rgba(255, 255, 255, .18); border-radius: 8px; color: rgba(255, 255, 255, .5); font-size: 10px; }
+        #${POLICY_PANEL_ID} button { min-height: 28px; border: 1px solid rgba(255, 255, 255, .2); border-radius: 8px; padding: 4px 8px; color: #fff; background: rgba(255, 255, 255, .07); cursor: pointer; font: 700 10px/1 system-ui, -apple-system, sans-serif; }
+        #${POLICY_PANEL_ID} button:hover:not(:disabled) { border-color: rgba(255, 176, 103, .75); background: rgba(255, 176, 103, .12); }
+        #${POLICY_PANEL_ID} button:disabled { opacity: .38; cursor: not-allowed; }
+        #${POLICY_PANEL_ID} .rdk-policy-actions { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; }
+        @media (max-width: 650px) {
+          #${POLICY_PANEL_ID} { left: 12px; right: 12px; bottom: auto; top: 12px; width: auto; }
+        }
+      `;
+      document.head.append(styleTag);
+    }
+
+    const panel = document.createElement('section');
+    panel.id = POLICY_PANEL_ID;
+    panel.hidden = true;
+    panel.setAttribute('aria-label', 'MicroDuck 策略装载');
+    panel.innerHTML = `
+      <div class="rdk-policy-head"><strong>策略装载</strong><span class="rdk-policy-status" data-policy-status>未连接平台</span></div>
+      <p class="rdk-policy-note">把平台上训练好的 <code>policy.onnx</code> 直接装进这只鸭子。仿真引擎会校验 61D 观测 / 14D 动作，不匹配会拒绝并还原原策略。</p>
+      <div class="rdk-policy-list" data-policy-list><div class="rdk-policy-empty">点击“刷新训练结果”读取已完成的训练</div></div>
+      <div class="rdk-policy-actions">
+        <button type="button" data-policy-refresh disabled>刷新训练结果</button>
+        <button type="button" data-policy-clear disabled>还原官方策略</button>
+      </div>
+    `;
+    document.body.append(panel);
+
+    const status = panel.querySelector('[data-policy-status]');
+    const list = panel.querySelector('[data-policy-list]');
+    const refresh = panel.querySelector('[data-policy-refresh]');
+    const clearButton = panel.querySelector('[data-policy-clear]');
+
+    const state = { runs: [], current: null, busy: false, loaded: false };
+
+    function setStatus(text, mode) {
+      status.textContent = text;
+      panel.classList.toggle('is-active', mode === 'active');
+      panel.classList.toggle('is-error', mode === 'error');
+    }
+
+    function policyLoaderReady() {
+      const current = runtime();
+      return Boolean(current && typeof current.loadCustomPolicy === 'function');
+    }
+
+    function runLabel(run) {
+      const digest = String((run.artifact && run.artifact.sha256) || '').slice(0, 8);
+      const iteration = Number(run.metrics && run.metrics.iterations);
+      const parts = [run.taskId || 'run'];
+      if (Number.isFinite(iteration)) parts.push(`iter ${iteration}`);
+      if (digest) parts.push(digest);
+      return parts.join(' · ');
+    }
+
+    function renderList() {
+      list.textContent = '';
+      if (!state.runs.length) {
+        const empty = document.createElement('div');
+        empty.className = 'rdk-policy-empty';
+        empty.textContent = state.loaded
+          ? '还没有带 ONNX 制品的已完成训练'
+          : '点击“刷新训练结果”读取已完成的训练';
+        list.append(empty);
+        return;
+      }
+      for (const run of state.runs) {
+        const item = document.createElement('div');
+        item.className = 'rdk-policy-item';
+        if (state.current === run.id) item.classList.add('is-current');
+        const meta = document.createElement('div');
+        meta.className = 'rdk-policy-item-meta';
+        const title = document.createElement('strong');
+        title.textContent = run.modelId || run.id;
+        const sub = document.createElement('span');
+        sub.textContent = runLabel(run);
+        meta.append(title, sub);
+        const load = document.createElement('button');
+        load.type = 'button';
+        load.textContent = state.current === run.id ? '已装载' : '装载';
+        load.disabled = state.busy || state.current === run.id || !policyLoaderReady();
+        load.addEventListener('click', () => loadPolicy(run));
+        item.append(meta, load);
+        list.append(item);
+      }
+    }
+
+    async function refreshRuns() {
+      if (state.busy) return;
+      state.busy = true;
+      refresh.disabled = true;
+      setStatus('读取训练记录…');
+      try {
+        const response = await fetch(`${POLICY_API_BASE}/api/sim2real/runs`, {
+          headers: { accept: 'application/json' },
+          credentials: 'same-origin',
+        });
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        const payload = await response.json();
+        const runs = Array.isArray(payload.runs) ? payload.runs : [];
+        state.runs = runs.filter(
+          (run) =>
+            run &&
+            run.backend === 'local' &&
+            run.mock !== true &&
+            run.status === 'completed' &&
+            run.artifact &&
+            String(run.artifact.format || '').toLowerCase() === 'onnx',
+        );
+        state.loaded = true;
+        setStatus(state.runs.length ? `${state.runs.length} 个可用策略` : '暂无可用策略');
+      } catch (error) {
+        state.runs = [];
+        state.loaded = true;
+        setStatus(`平台不可达：${error?.message || error}`, 'error');
+      } finally {
+        state.busy = false;
+        refresh.disabled = false;
+        renderList();
+      }
+    }
+
+    async function loadPolicy(run) {
+      const current = runtime();
+      if (!current || typeof current.loadCustomPolicy !== 'function') {
+        setStatus('仿真引擎未就绪', 'error');
+        return;
+      }
+      const absolute = new URL(
+        `${POLICY_API_BASE}/api/sim2real/runs/${encodeURIComponent(run.id)}/policy.onnx`,
+        window.location.href,
+      ).href;
+      setStatus('装载中…');
+      renderList();
+      try {
+        await current.loadCustomPolicy(absolute);
+        state.current = run.id;
+        setStatus('已装载到行走槽位', 'active');
+      } catch (error) {
+        // The simulator reverts to the stock policy itself and rejects a
+        // graph whose observation/action dims do not match the robot; surface
+        // its reason verbatim instead of inventing one.
+        state.current = null;
+        setStatus(String(error?.message || error).slice(0, 120), 'error');
+      } finally {
+        renderList();
+        clearButton.disabled = !state.current;
+      }
+    }
+
+    function clearPolicy() {
+      const current = runtime();
+      if (current && typeof current.clearCustomPolicy === 'function') current.clearCustomPolicy();
+      state.current = null;
+      clearButton.disabled = true;
+      setStatus('已还原官方策略', 'active');
+      renderList();
+    }
+
+    refresh.addEventListener('click', () => void refreshRuns());
+    clearButton.addEventListener('click', clearPolicy);
+
+    const uiTimer = setInterval(() => {
+      panel.hidden = isLanding();
+      const ready = policyLoaderReady();
+      refresh.disabled = state.busy;
+      const active = runtime()?.customPolicy;
+      if (active && active.status === 'active' && !state.current) {
+        // The operator can also load a move from the simulator's own menu;
+        // mirror whatever is actually active instead of claiming otherwise.
+        state.current = null;
+        setStatus(`引擎已装载：${active.name || active.ref}`, 'active');
+      }
+      if (!ready)
+        setStatus('等待仿真引擎', panel.classList.contains('is-error') ? 'error' : undefined);
+      for (const button of list.querySelectorAll('button')) button.disabled = state.busy || !ready;
+    }, 700);
+
+    window.__microduckPolicy = {
+      refresh: refreshRuns,
+      load: (runId) => {
+        const run = state.runs.find((candidate) => candidate.id === runId);
+        return run ? loadPolicy(run) : Promise.reject(new Error('unknown run'));
+      },
+      clear: clearPolicy,
+      get runs() {
+        return state.runs.slice();
+      },
+      get current() {
+        return state.current;
+      },
+      destroy() {
+        clearInterval(uiTimer);
+        panel.remove();
+      },
+    };
   }
 
   function dispatchShortcut(code) {
@@ -1252,6 +1512,7 @@
 
     const mobileControls = mountMobileControls();
     mountRecorder();
+    mountPolicyPanel();
 
     const wall = document.createElement('button');
     wall.id = WALL_ID;

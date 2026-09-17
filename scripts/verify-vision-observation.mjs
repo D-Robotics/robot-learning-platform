@@ -38,9 +38,12 @@ const fail = (message) => {
 async function loadShared(relative) {
   const built = path.join(ROOT, 'dist-server', 'shared', relative.replace(/\.ts$/, '.js'));
   if (existsSync(built)) return import(pathToFileURL(built).href);
+  // tsx 4 exports `tsImport`, not `import`; the latter silently does not exist,
+  // which would make this fallback dead code for every script that uses it.
   const tsx = await import('tsx/esm/api').catch(() => null);
-  if (!tsx) fail(`cannot load shared/${relative}: no build output and tsx is unavailable`);
-  return tsx.import(path.join(ROOT, 'shared', relative), import.meta.url);
+  if (!tsx?.tsImport)
+    fail(`cannot load shared/${relative}: no build output and tsx is unavailable`);
+  return tsx.tsImport(path.join(ROOT, 'shared', relative), import.meta.url);
 }
 
 function pythonCanImport(...modules) {
