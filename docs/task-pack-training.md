@@ -27,11 +27,14 @@ policy.onnx + eval-report.json（含质量门裁决）+ telemetry.jsonl
 42D 布局的**机体坐标系目标差**（slots 8–10）是可学习的必要条件：世界系差量不含
 朝向信息，策略无从转向。真实硬件上该量由 odom 位姿 + 目标点旋转得到。
 
-任务包是**引擎无关**的：`engines/starter-ppo/runner.py`（运动学）与
-`engines/mjx-adapter/adapter.py`（MuJoCo 接触动力学，纯 JAX PPO）消费同一份
+任务包是**引擎无关**的：`engines/starter-ppo/runner.py`（运动学）、
+`engines/mjx-adapter/adapter.py`（MuJoCo 接触动力学，纯 JAX PPO）、
+`engines/visual-ppo/adapter.py`（顶置相机像素观测）与
+`engines/dm-control-adapter/adapter.py`（dm_control env API）消费同一份
 pack，DR/奖励/终止/课程语义 1:1 相同，只有物理保真度不同——台账用
-`metrics.physicsBackend`（`starter-kinematic` / `mjx`）如实区分，质量门跨引擎可比。
-MJX 引擎的物理差异与诚实边界见 [`engines/mjx-adapter.md`](engines/mjx-adapter.md)。
+`metrics.physicsBackend`（`starter-kinematic` / `mjx` / `cpu-mujoco-vision` /
+`dm-control-mujoco`）如实区分，质量门跨引擎可比。
+MJX 引擎的物理差异与诚实边界见 [`docs/engines/mjx-adapter.md`](engines/mjx-adapter.md)。
 
 ## 观测布局与板端运行时对齐
 
@@ -72,6 +75,13 @@ MJX 引擎的物理差异与诚实边界见 [`engines/mjx-adapter.md`](engines/m
 - `nominal`：标称动力学 —— 质量门只看这组；
 - `hard`：弱电机 + 大噪声 + 2 步延迟 + 5% 丢帧 + 0.8 滑移 —— 只向人报告
   鲁棒性，不参与发布裁决。
+
+上表全部是**指令级/观测级** DR（扰动发生在动作进入物理前、观测离开物理后，
+任何引擎语义一致）。MJX 引擎额外支持**物理级** DR：任务包声明
+`physicalDomainRandomization`（`wheelFrictionScale` / `chassisMassScale` /
+`wheelServoKvScale`，按 episode 重采样并写进 vmap 轨迹），轮-地摩擦、底盘质量
+与伺服增益真的变——不声明的包行为与历史逐位一致。细则见
+[`docs/engines/mjx-adapter.md`](engines/mjx-adapter.md)。
 
 ## 课程学习
 

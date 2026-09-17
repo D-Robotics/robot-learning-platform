@@ -22,6 +22,7 @@ What these tests protect:
 
 import json
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -51,27 +52,38 @@ PACK_PATH = os.path.join(REPO, "tasks", "originbot-goal-navigation.json")
 
 
 def load_pack():
-    with open(PACK_PATH) as handle:
-        task = json.load(handle)
-    with open(os.path.join(REPO, "adapters", "rdk-originbot.json")) as handle:
-        adapter = json.load(handle)
-    return {
-        "schemaVersion": 1,
-        "kind": "goal-navigation",
-        "id": task["id"],
-        "adapter": adapter,
-        "reward": task["reward"],
-        "termination": task["termination"],
-        "workspace": task["workspace"],
-        "curriculum": task["curriculum"],
-        "domainRandomization": task["domainRandomization"],
-        "evaluationConfig": task.get("evaluationConfig"),
-        "qualityGate": task["qualityGate"],
-        "controlHz": 10,
-        "physicsTimestepSeconds": 0.02,
-        "decimation": 1,
-        "seed": 7,
-    }
+    """Load the pack the way the platform hands it to the engine: resolved.
+
+    The runner only accepts a pack carrying `rewardFormula` — the resolver
+    expands the legacy `reward` map into that form (scripts/resolve-task-pack.mjs),
+    so a hand-assembled dict here would test a pack shape production never
+    produces. `tests/test_environment_reward_parity.py` already covers the
+    resolver path in-process; this file exercises the engine contract, so it
+    asks the resolver for the same pack and then pins the fields the tests
+    below explicitly vary (controlHz/decimation/seed).
+    """
+    node = shutil.which("node")
+    if node is None:
+        raise unittest.SkipTest("node is unavailable; cannot resolve a task pack")
+    script = (
+        "import { resolveTaskPack } from "
+        + json.dumps("file://" + os.path.join(REPO, "scripts", "resolve-task-pack.mjs"))
+        + ";\nprocess.stdout.write(JSON.stringify(resolveTaskPack('originbot-goal-navigation')));\n"
+    )
+    resolved = subprocess.run(
+        [node, "--input-type=module", "-e", script],
+        capture_output=True,
+        text=True,
+        timeout=60,
+        cwd=REPO,
+        check=True,
+    )
+    pack = json.loads(resolved.stdout)
+    pack["controlHz"] = 10
+    pack["physicsTimestepSeconds"] = 0.02
+    pack["decimation"] = 1
+    pack["seed"] = 7
+    return pack
 
 
 def build_request(pack, iterations=2, envs=4):

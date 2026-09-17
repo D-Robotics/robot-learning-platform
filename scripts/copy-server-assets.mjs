@@ -99,6 +99,12 @@ copyFile(
   path.join('scripts', 'resolve-task-pack.mjs'),
   path.join('dist-server', 'scripts', 'resolve-task-pack.mjs'),
 );
+// The resolver imports the reward vocabulary, so a dist deployment needs it too
+// or every task resolution fails on a missing module.
+copyFile(
+  path.join('scripts', 'reward-vocabulary.mjs'),
+  path.join('dist-server', 'scripts', 'reward-vocabulary.mjs'),
+);
 copyTreeFiltered(path.join('tasks'), path.join('dist-server', 'tasks'));
 copyTreeFiltered(path.join('adapters'), path.join('dist-server', 'adapters'));
 copyTreeFiltered(path.join('engines'), path.join('dist-server', 'engines'));

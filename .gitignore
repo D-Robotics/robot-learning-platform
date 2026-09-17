@@ -61,3 +61,13 @@ MUJOCO_LOG.TXT
 .pytest_cache/
 # sqlite :memory: temp sidecar, wherever a run drops it
 /:memory:.ses
+
+# Engine worker result artifacts (worker runs write these into the engine
+# directory when launched bare from there; real receipts live in job dirs /
+# the artifact registry). No other engine has these committed, so keep the
+# mjlab adapter directory clean the same way.
+engines/*/telemetry.jsonl
+engines/*/baseline-telemetry.jsonl
+engines/*/policy.onnx
+engines/*/training-summary.json
+engines/*/eval-report.json

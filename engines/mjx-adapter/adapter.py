@@ -86,6 +86,30 @@ ADAPTER_ID = "mjx-ppo"
 # with more substeps so control timing stays exact.
 _MJX_MAX_PHYSICS_DT = 0.01
 
+# Physical-domain DR knobs (task-pack `physicalDomainRandomization`), applied
+# as traced per-env scalings of the SHARED mjx model inside the vmap'd step
+# (probe_mjx.py check_traced_physical_dr: vmap(step) with scaled
+# geom_friction/body_mass/body_inertia/actuator_gainprm/actuator_biasprm runs
+# and produces distinct trajectories). Each key defaults to [1.0, 1.0]
+# (no randomization); the sampled multipliers ride in the env state next to
+# the command-level domain vector.
+_PHYSICAL_DR_KEYS = (
+    "wheelFrictionScale", "chassisMassScale", "wheelServoKvScale",
+)
+_PHYSICAL_DR_DEFAULTS = {
+    "wheelFrictionScale": [1.0, 1.0],
+    "chassisMassScale": [1.0, 1.0],
+    "wheelServoKvScale": [1.0, 1.0],
+}
+
+# Mocap obstacle sphere radius (visual radius; the task's analytic radius
+# stays the termination authority). Sphere CENTER z equals the geom radius
+# so the ball sits exactly on the floor — a lower center interpenetrates
+# the floor and the contact solver diverges (probe-verified: z=0.05 with
+# r=0.15 launches the robot to z=2.9 then NaN in 3 control steps).
+_OBSTACLE_GEOM_RADIUS = 0.15
+_OBSTACLE_CENTER_Z = _OBSTACLE_GEOM_RADIUS
+
 # Mirrors engines/starter-ppo budgets: a CPU trainer must clamp instead of
 # silently burning hours; the result records what actually ran.
 PROFILE_BUDGETS = {
@@ -201,6 +225,34 @@ def dependency_versions():
     packages = ("numpy", "torch", "onnx", "onnxruntime", "onnxscript", "jax", "mujoco")
     resolved = {name: version_of(name) for name in packages}
     return {name: version for name, version in resolved.items() if version is not None}
+
+
+
+def dependency_lock_digest():
+    """SHA-256 of this engine's pinned lock, or None when it is not shipped.
+
+    The lock is the *intended* environment; `dependency_versions()` reports only
+    the handful of libraries the engine imports directly, so a transitive
+    package can differ between the lock and the machine that ran the training
+    without anything noticing. Recording the lock's digest makes that auditable
+    after the fact: two runs with the same digest used the same declared
+    dependency set, and a run whose digest differs from the current lock was
+    produced under a different one.
+
+    Best-effort by design: a packaged board install has no `requirements.txt`
+    beside the engine, so an absent digest is reported as `None` rather than
+    failing the run or inventing one.
+    """
+    import hashlib
+
+    engine_dir = os.path.dirname(os.path.abspath(__file__))
+    lock = os.path.join(engine_dir, "requirements.txt")
+    try:
+        with open(lock, "rb") as handle:
+            payload = handle.read()
+    except OSError:
+        return None
+    return hashlib.sha256(payload).hexdigest()
 
 
 def source_revision():
@@ -720,6 +772,8 @@ MJCF_TEMPLATE = """
   <option timestep="{TIMESTEP}" gravity="0 0 -9.81" integrator="implicitfast"/>
   <worldbody>
     <geom name="floor" type="plane" size="12 12 0.1"/>
+    {WALLS}
+    {OBSTACLES}
     <body name="base" pos="0 0 {BASE_HEIGHT}">
       <freejoint name="base_free"/>
       <geom name="chassis" type="box" size="{CHASSIS_SIZE}" mass="{CHASSIS_MASS}" friction="0.1"/>
@@ -733,8 +787,34 @@ MJCF_TEMPLATE = """
 </mujoco>
 """
 
+# Wall placement. A vertical plane is single-sided: only the half-space its
+# normal points into collides, so every wall quat points its normal inward
+# (probe_mjx.py check_walls_block_robot: a robot at max command plateaus at
+# the wall with ncon contacts, never crosses).
+_WALL_QUATS = {
+    "x+": "0.7071 0 -0.7071 0",   # normal -x
+    "x-": "0.7071 0 0.7071 0",    # normal +x
+    "y+": "0.7071 0.7071 0 0",    # normal -y
+    "y-": "0.7071 -0.7071 0 0",   # normal +y
+}
+_WALL_MARGIN = 0.05
 
-def build_mjcf(physics_dt):
+
+def _walls_xml(inset):
+    """Four inward-normal walls at ±inset; probe-verified to block the robot."""
+    positions = {
+        "x+": (inset, 0.0), "x-": (-inset, 0.0),
+        "y+": (0.0, inset), "y-": (0.0, -inset),
+    }
+    return "\n      ".join(
+        '<geom name="wall_{axis}" type="plane" size="6 6 0.1" pos="{x} {y} 0" quat="{q}"/>'.format(
+            axis=axis, x=x, y=y, q=_WALL_QUATS[axis],
+        )
+        for axis, (x, y) in positions.items()
+    )
+
+
+def build_mjcf(physics_dt, workspace_bound=0.0, obstacle_count=0):
     # Geometry mirrors the calibrated OriginBot single source
     # (assets/originbot/calibration.json; cylinder wheels r=0.09 on the
     # center line, track 0.50, kv=8 wheel servos). Three deviations, all
@@ -752,17 +832,34 @@ def build_mjcf(physics_dt):
     #     kv*error torque — 26.6 N·m per wheel at full command — wheelies
     #     the robot off the floor at every spin-up; a real gearmotor
     #     saturates, and so does this model
-    # No walls or box obstacles in this MJCF: MJX has no cylinder-box
-    # collision, and obstacles are task-level analytic circles anyway
-    # (which is what keeps the quality gate cross-engine comparable).
+    # Scene fidelity (probe_mjx.py): obstacles are SPHERE bodies under mocap
+    # — the only shape family MuJoCo-MJX collides against every robot part
+    # (cylinder-box is unsupported, probe-asserted) — and workspace walls
+    # are inward-normal vertical planes. Obstacles move by writing per-env
+    # mocap_pos inside the vmap'd step; the analytic circle judgment stays
+    # authoritative for task termination so the quality gate remains
+    # cross-engine comparable with the starter.
     wheels = _originbot.wheel_bodies_template()
     base = _originbot.BASE
     chassis = base["chassisSize"]
+    bound = float(workspace_bound) if workspace_bound else 0.0
+    walls = _walls_xml(bound + _WALL_MARGIN) if bound > 0.0 else ""
+    obstacles = ""
+    if obstacle_count > 0:
+        obstacles = "\n      ".join(
+            '<body name="obs_{i}" mocap="true" pos="0 0 {z}">'
+            '<geom name="obs_geom_{i}" type="sphere" size="{r}"/></body>'.format(
+                i=i, z=_OBSTACLE_CENTER_Z, r=_OBSTACLE_GEOM_RADIUS,
+            )
+            for i in range(obstacle_count)
+        )
     return MJCF_TEMPLATE.format(
         TIMESTEP=repr(float(physics_dt)),
         BASE_HEIGHT=repr(REST_HEIGHT),
         CHASSIS_SIZE="{} {} {}".format(chassis[0], chassis[1], chassis[2]),
         CHASSIS_MASS=float(base["chassisMass"]),
+        WALLS=walls,
+        OBSTACLES=obstacles,
         WHEEL_BODIES=wheels,
         CASTER='<geom name="caster" pos="{x} 0 {z}" type="sphere" size="{s}" mass="{m}" friction="0.02 0.005 0.001"/>'.format(
             x=_originbot.CASTER["posX"], z=-0.115, s=_originbot.CASTER["size"], m=_originbot.CASTER["mass"]),
@@ -770,6 +867,57 @@ def build_mjcf(physics_dt):
             "wheel_first", forcerange=float(_originbot.WHEELS["maxTorque"])
         ),
     )
+
+
+def _measure_spawn_clearance(mj_model, mj_data, obstacle_radius):
+    """Distance from the spawn origin to the farthest robot-geom point.
+
+    Rotates the compiled model's fixed geoms through a yaw sweep (the
+    freejoint spawn draws any yaw) and measures the max xy norm over every
+    robot geom's bounding-box corners, so obstacle spawns projected past
+    this ring plus the obstacle radius can never start interpenetrating
+    the robot. Host-side, once per env build; not on the jit path.
+    """
+    robot_geoms = [
+        i for i in range(mj_model.ngeom)
+        if mujoco.mj_id2name(mj_model, mujoco.mjtObj.mjOBJ_GEOM, i)
+        not in ("floor",) and not mujoco.mj_id2name(
+            mj_model, mujoco.mjtObj.mjOBJ_GEOM, i
+        ).startswith(("wall_", "obs_geom_"))
+    ]
+    worst = 0.0
+    for yaw in np.linspace(-math.pi, math.pi, 12):
+        quat = [np.cos(yaw / 2.0), 0.0, 0.0, np.sin(yaw / 2.0)]
+        for i in robot_geoms:
+            geom = mj_model.geom(i)
+            if geom.type == mujoco.mjtGeom.mjGEOM_BOX:
+                h = np.asarray(geom.size)
+                corners = np.array([
+                    [sx * h[0], sy * h[1], 0.0]  # plan distance: z irrelevant
+                    for sx in (-1, 1) for sy in (-1, 1)
+                ])
+            elif geom.type == mujoco.mjtGeom.mjGEOM_SPHERE:
+                r = float(geom.size[0])
+                corners = np.array([
+                    [r, 0.0, 0.0], [0.0, r, 0.0], [-r, 0.0, 0.0], [0.0, -r, 0.0],
+                ])
+            elif geom.type == mujoco.mjtGeom.mjGEOM_CYLINDER:
+                r = float(geom.size[0])
+                corners = np.array([
+                    [r, 0.0, 0.0], [0.0, r, 0.0], [-r, 0.0, 0.0], [0.0, -r, 0.0],
+                ])
+            else:
+                continue
+            # geom frame -> body frame: pos + rotated corner, then yaw
+            # the whole thing about the spawn origin (base at the origin).
+            for corner in corners:
+                world = np.zeros(3)
+                mujoco.mju_rotVecQuat(world, corner, np.asarray(geom.quat))
+                p = np.asarray(geom.pos) + world
+                rotated = np.zeros(3)
+                mujoco.mju_rotVecQuat(rotated, p, np.asarray(quat))
+                worst = max(worst, float(np.hypot(rotated[0], rotated[1])))
+    return worst + float(obstacle_radius) + 0.05
 
 
 def _quat_yaw(q):
@@ -842,6 +990,29 @@ class MjxGoalNavEnv:
         )
         self.dr_mins = jnp.asarray([dr_range(k, d)[0] for k, d in dr_keys], dtype=jnp.float32)
         self.dr_maxs = jnp.asarray([dr_range(k, d)[1] for k, d in dr_keys], dtype=jnp.float32)
+        # Physical-level DR: per-env traced scalings of friction / mass / kv
+        # (probe_mjx.py check_traced_physical_dr). Defaults keep the
+        # historical behavior exactly when the task pack does not opt in.
+        phys_dr = pack.get("physicalDomainRandomization") or {}
+        phys_keys = (
+            ("wheelFrictionScale", [1.0, 1.0]),
+            ("chassisMassScale", [1.0, 1.0]),
+            ("wheelServoKvScale", [1.0, 1.0]),
+        )
+        self.phys_dr_mins = jnp.asarray(
+            [dr_range(k, d)[0] for k, d in phys_keys if phys_dr.get(k) is not None]
+            + [dr_range(k, d)[0] for k, d in phys_keys if phys_dr.get(k) is None],
+            dtype=jnp.float32,
+        )
+        self.phys_dr_maxs = jnp.asarray(
+            [dr_range(k, d)[1] for k, d in phys_keys if phys_dr.get(k) is not None]
+            + [dr_range(k, d)[1] for k, d in phys_keys if phys_dr.get(k) is None],
+            dtype=jnp.float32,
+        )
+        self.physical_dr_active = bool(
+            any(phys_dr.get(k) is not None and dr_range(k, d)[0] != dr_range(k, d)[1]
+                for k, d in phys_keys)
+        )
         latency_range = dr.get("actionLatencySteps") or [0, 0]
         self.latency_min = int(latency_range[0])
         self.latency_max = int(latency_range[1])
@@ -869,12 +1040,63 @@ class MjxGoalNavEnv:
         self.success_history = []
         self._initial_goal = [float(initial_goal[0]), float(initial_goal[1])]
 
-        mj_model = mujoco.MjModel.from_xml_string(build_mjcf(self.physics_dt))
+        mj_model = mujoco.MjModel.from_xml_string(
+            build_mjcf(self.physics_dt, self.workspace_bound, self.obstacle_count)
+        )
         mj_data = mujoco.MjData(mj_model)
         mujoco.mj_forward(mj_model, mj_data)
         self.mjx_model = mjx.put_model(mj_model)
         self._template = mjx.put_data(mj_model, mj_data)
         self._zero_nv = jnp.zeros(mj_model.nv)
+        # Model indices the traced physical DR and mocap writes target.
+        # Cached once because they are compile-time constants of the shared
+        # model; the probe asserts the geom names this depends on.
+        self._geom_ids = {
+            mujoco.mj_id2name(mj_model, mujoco.mjtObj.mjOBJ_GEOM, i): i
+            for i in range(mj_model.ngeom)
+        }
+        self._wheel_geom_rows = jnp.asarray(
+            [self._geom_ids["wheel_left_geom"], self._geom_ids["wheel_right_geom"]]
+        )
+        self._base_body_row = 1  # world=0, base=1 (build_mjcf layout)
+        self._nmocap = mj_model.nmocap
+        self._mujoco_model = mj_model  # for probes/tests; not on the jit path
+        # Obstacle spawn clearance, MEASURED from the compiled model: the
+        # max xy radius of every robot geom corner at the rest pose plus
+        # the obstacle radius. Rotation-invariant, so one number bounds
+        # every spawn yaw (an obstacle outside this ring can never start an
+        # episode interpenetrating the chassis or a wheel).
+        self._spawn_clear = _measure_spawn_clearance(mj_model, mj_data, self.obstacle_radius)
+        # Sampling geometry for the obstacle placement in _sample_reset_state,
+        # derived once and VALIDATED here: a task pack whose workspace cannot
+        # host its obstacles must fail at build time with a readable cause,
+        # not NaN mid-run (see the placement comment in _sample_reset_state).
+        if self.obstacle_count:
+            # Worst-case pairwise distance between two slot-jittered
+            # placements (both at the inner radius, relative angle
+            # pi/count) must clear two obstacle radii plus slack.
+            self._slot_jitter = math.pi / (2.0 * self.obstacle_count)
+            min_pair = 2.0 * self._spawn_clear * math.sin(math.pi / (2.0 * self.obstacle_count))
+            if min_pair < 2.0 * self.obstacle_radius + 0.02:
+                raise ValueError(
+                    "%d obstacle(s) of radius %.2f cannot stay separated inside the spawn "
+                    "ring r>=%.3f (worst-case pairwise distance %.3f); reduce obstacle "
+                    "count/radius or enlarge the workspace"
+                    % (self.obstacle_count, self.obstacle_radius, self._spawn_clear, min_pair)
+                )
+            wall_safe = (
+                self.workspace_bound + _WALL_MARGIN - self.obstacle_radius - 0.01
+                if self.workspace_bound > 0.0
+                else None
+            )
+            r_max = self.obstacle_spread if wall_safe is None else min(self.obstacle_spread, wall_safe)
+            if r_max <= self._spawn_clear:
+                raise ValueError(
+                    "workspace cannot host obstacles: max placement radius %.3f falls inside "
+                    "the robot spawn clearance %.3f (bound=%.2f, obstacle radius=%.2f)"
+                    % (r_max, self._spawn_clear, self.workspace_bound, self.obstacle_radius)
+                )
+            self._r_max = r_max
 
         self._train_step = jax.jit(
             jax.vmap(self._train_step_one, in_axes=(0, 0, None, None))
@@ -907,18 +1129,49 @@ class MjxGoalNavEnv:
         latency) and quietly degenerate the randomization.
         """
         k_goal, k_angle, k_yaw, k_obs, k_domain, k_latency, k_carry, k_noise = jax.random.split(key, 8)
+        k_phys = k_domain  # reuse split below when physical DR is active
+        if self.physical_dr_active:
+            _k_goal, _k_angle, _k_yaw, _k_obs, k_phys, k_domain, k_latency, k_carry, k_noise = jax.random.split(key, 9)
         distance = jax.random.uniform(k_goal, (), minval=goal_lo, maxval=goal_hi)
         angle = jax.random.uniform(k_angle, (), minval=0.0, maxval=2.0 * math.pi)
         yaw = jax.random.uniform(k_yaw, (), minval=-math.pi, maxval=math.pi)
         goal = jnp.stack([distance * jnp.cos(angle), distance * jnp.sin(angle)])
         if self.obstacle_count:
-            obstacles = jax.random.uniform(
-                k_obs, (self.obstacle_count, 3),
-                minval=-self.obstacle_spread, maxval=self.obstacle_spread,
-            ).at[:, 2].set(self.obstacle_radius)
+            # Obstacle placement is CONSTRUCTED, not sampled-then-repaired.
+            # Every initial static-static penetration — obstacle into a wall,
+            # obstacle into obstacle, obstacle into the resting robot —
+            # destabilizes the MJX contact solver (a wall-penetrating or
+            # mutually-overlapping sphere NaNs qpos within ~180 physics
+            # steps while CPU MuJoCo stays finite; the pinned eval envelope
+            # hit exactly this). A rejection loop cannot express the early
+            # exit under jit, so the guarantee lives in the sampling
+            # geometry instead, validated once in __init__:
+            #   radius in [spawn_clear, r_max]  -> never starts inside the
+            #     measured robot footprint, and never crosses a wall;
+            #   angle  = one jittered slot per obstacle -> pairwise distance
+            #     has the analytic lower bound 2*spawn_clear*sin(pi/2count),
+            #     independent of the sampled radii.
+            k_rot, k_slot, k_rad = jax.random.split(k_obs, 3)
+            rotation = jax.random.uniform(k_rot, (), minval=0.0, maxval=2.0 * math.pi)
+            slot = 2.0 * math.pi / self.obstacle_count
+            angles = rotation + slot * jnp.arange(self.obstacle_count) + jax.random.uniform(
+                k_slot, (self.obstacle_count,),
+                minval=-self._slot_jitter, maxval=self._slot_jitter,
+            )
+            radii = jax.random.uniform(
+                k_rad, (self.obstacle_count,),
+                minval=self._spawn_clear, maxval=self._r_max,
+            )
+            xy = jnp.stack([radii * jnp.cos(angles), radii * jnp.sin(angles)], axis=1)
+            obstacles = jnp.concatenate(
+                [xy, jnp.full((self.obstacle_count, 1), self.obstacle_radius)], axis=1
+            )
         else:
             obstacles = jnp.zeros((0, 3))
         domain = self.dr_mins + jax.random.uniform(k_domain, (7,)) * (self.dr_maxs - self.dr_mins)
+        phys_domain = self.phys_dr_mins + jax.random.uniform(
+            k_phys, (3,)
+        ) * (self.phys_dr_maxs - self.phys_dr_mins)
         latency = jax.random.randint(
             k_latency, (), minval=self.latency_min, maxval=self.latency_max + 1
         )
@@ -928,6 +1181,16 @@ class MjxGoalNavEnv:
             jnp.zeros(2),
         ])
         data = self._template.replace(qpos=init_qpos, qvel=self._zero_nv)
+        # Mocap obstacles sit at their sampled positions from the first
+        # forward (z lifted to the geom center height); per-env values are
+        # written into data.mocap_pos by _apply_physical_domain below.
+        mocap_pos = jnp.tile(
+            jnp.zeros((1, 3)).at[0, 2].set(_OBSTACLE_CENTER_Z), (max(self._nmocap, 1), 1)
+        )[: self._nmocap]
+        if self.obstacle_count:
+            mocap_pos = jnp.concatenate(
+                [obstacles[:, :2], jnp.full((self.obstacle_count, 1), _OBSTACLE_CENTER_Z)], axis=1
+            )
         odom = jnp.stack([jnp.asarray(0.0), jnp.asarray(0.0), yaw])
         obs = self._build_obs(
             domain, k_noise, odom, goal, yaw,
@@ -940,6 +1203,8 @@ class MjxGoalNavEnv:
             "goal": goal,
             "obstacles": obstacles,
             "domain": domain,
+            "phys_domain": phys_domain,
+            "mocap_pos": mocap_pos,
             "latency": latency,
             "fifo": jnp.zeros((self._fifo_capacity + 1, 2)),
             "odom": odom,
@@ -994,8 +1259,40 @@ class MjxGoalNavEnv:
         return jnp.clip(jnp.stack([left, right]), -MAX_WHEEL_SPEED, MAX_WHEEL_SPEED)
 
     def _physics_rollout(self, state, ctrl):
+        """Decimated MJX stepping with this env's physical DR applied.
+
+        The model is the SHARED mjx pytree; per-env randomization scales
+        its leaves inside the vmap'd trace (probe-verified). Wheel friction
+        scales geom_friction rows, mass/inertia scale the base body, kv
+        scales actuator_gainprm[:,0] AND biasprm[:,2] together — for a
+        velocity servo the two must stay consistent or the servo target
+        itself shifts. With all multipliers at 1.0 the leaves are
+        untouched and physics is bitwise the historical behavior.
+        """
         data = state["data"].replace(ctrl=ctrl)
-        data = jax.lax.fori_loop(0, self.decimation, lambda _i, d: mjx.step(self.mjx_model, d), data)
+        if self._nmocap:
+            data = data.replace(mocap_pos=state["mocap_pos"])
+        model = self.mjx_model
+        if self.physical_dr_active:
+            friction_scale, mass_scale, kv_scale = state["phys_domain"][0], state["phys_domain"][1], state["phys_domain"][2]
+            gf = model.geom_friction.at[self._wheel_geom_rows, 0].set(
+                model.geom_friction[self._wheel_geom_rows, 0] * friction_scale
+            )
+            bm = model.body_mass.at[self._base_body_row].set(
+                model.body_mass[self._base_body_row] * mass_scale
+            )
+            bi = model.body_inertia.at[self._base_body_row].set(
+                model.body_inertia[self._base_body_row] * mass_scale
+            )
+            gp = model.actuator_gainprm.at[:, 0].set(
+                model.actuator_gainprm[:, 0] * kv_scale
+            )
+            bp = model.actuator_biasprm.at[:, 2].set(
+                model.actuator_biasprm[:, 2] * kv_scale
+            )
+            model = model.replace(geom_friction=gf, body_mass=bm, body_inertia=bi,
+                                  actuator_gainprm=gp, actuator_biasprm=bp)
+        data = jax.lax.fori_loop(0, self.decimation, lambda _i, d: mjx.step(model, d), data)
         return data
 
     def _read_truth(self, data):
@@ -1102,6 +1399,8 @@ class MjxGoalNavEnv:
             "goal": state["goal"],
             "obstacles": state["obstacles"],
             "domain": state["domain"],
+            "phys_domain": state["phys_domain"],
+            "mocap_pos": state["mocap_pos"],
             "latency": state["latency"],
             "fifo": fifo,
             "odom": odom,
@@ -1201,9 +1500,12 @@ class MjxGoalNavEnv:
             )
         )(keys)
         # Pin the envelope: exact domain values and exact latency for every
-        # episode — the whole point of a pinned-envelope A/B.
+        # episode — the whole point of a pinned-envelope A/B. Physical DR
+        # multipliers pin at 1.0 (the calibrated robot): pinned envelopes
+        # compare command/observation degradation, not physical drift.
         state["domain"] = jnp.tile(domain, (episodes, 1))
         state["latency"] = jnp.full((episodes,), int(latency), dtype=jnp.int32)
+        state["phys_domain"] = jnp.ones((episodes, 3))
 
         obs = np.asarray(state["last_obs"])
         rewards_sum = np.zeros(episodes, dtype=np.float64)
@@ -1243,6 +1545,20 @@ class MjxGoalNavEnv:
                 "finalDistance": float(final_dist[episode]),
                 "episodeReward": float(rewards_sum[episode]),
             })
+        # A diverged MJX episode produces NaN rewards. Python's json.dump
+        # would happily emit bare NaN, which is not JSON: the platform worker
+        # and every Node consumer then fail to parse the result at all, and
+        # the run's real failure mode (physics divergence) is erased by a
+        # serialization error. Refuse here instead, so the engine exits
+        # non-zero with a readable cause and the platform marks the run
+        # failed. Never coerce NaN to 0 — that would fabricate a reward.
+        if not np.all(np.isfinite(rewards_sum)):
+            bad = int(np.argmax(~np.isfinite(rewards_sum)))
+            raise ValueError(
+                "evaluation episode {} diverged: reward is non-finite "
+                "(NaN/Inf) — the physics run is unstable; refusing to "
+                "report a reward that cannot be serialized honestly".format(bad)
+            )
         return outcomes, rows
 
 
@@ -1564,11 +1880,14 @@ def main():
                 "controlHz": control_hz,
                 "physicsTimestepSeconds": physics_dt,
                 "decimation": decimation,
+                "sceneFidelity": {
+                    "walls": bool(getattr(env, "workspace_bound", 0.0) > 0.0) if use_mjx else False,
+                    "physicalObstacles": int(getattr(env, "obstacle_count", 0)) if use_mjx else 0,
+                    "physicalDomainRandomization": bool(getattr(env, "physical_dr_active", False)) if use_mjx else False,
+                },
                 "eval": {k: v for k, v in trained_report.items() if k != "jsonl"},
                 "baseline": {k: v for k, v in baseline_report.items() if k != "jsonl"},
                 "controlLatencyMs": latency,
-                "measurementStage": "host-jax",
-                "sourceCommit": source_commit_short(),
                 "measurementStage": "host-jax",
                 "sourceCommit": source_commit_short(),
                 "onnxExported": bool(onnx_bytes),
@@ -1589,8 +1908,6 @@ def main():
                 "baseline": {k: v for k, v in baseline_report.items() if k != "jsonl"},
                 "qualityGate": gate,
                 "controlLatencyMs": latency,
-                "measurementStage": "host-jax",
-                "sourceCommit": source_commit_short(),
                 "measurementStage": "host-jax",
                 "sourceCommit": source_commit_short(),
                 "seed": eval_seed,
@@ -1667,6 +1984,7 @@ def main():
         "deployable": False,
         "source": source_revision(),
         "dependencies": dependency_versions(),
+        "dependencyLockSha256": dependency_lock_digest(),
         "cuda": cuda,
         "physicsBackend": physics_backend,
     }
@@ -1674,8 +1992,12 @@ def main():
     # result so the consumer can verify the bundle it is about to trust.
     write_artifact_manifest(os.path.dirname(os.path.abspath(result_path)))
 
+    # allow_nan=False is a contract, not a nicety: the platform worker parses
+    # this file with a strict JSON parser, and a bare NaN token would make the
+    # whole result unreadable (masking whatever actually went wrong) on every
+    # consumer. A ValueError here names the offending key.
     with open(result_path, "w") as handle:
-        json.dump(result, handle, indent=2)
+        json.dump(result, handle, indent=2, allow_nan=False)
     stdout("wrote result (physicsBackend={})".format(physics_backend))
 
 

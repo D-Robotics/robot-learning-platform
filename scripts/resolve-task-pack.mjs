@@ -23,6 +23,8 @@ import { fileURLToPath } from 'node:url';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
+import { resolveRewardFormula } from './reward-vocabulary.mjs';
+
 function readJson(relativePath) {
   return JSON.parse(fs.readFileSync(path.join(root, relativePath), 'utf8'));
 }
@@ -59,6 +61,27 @@ export function resolveTaskPack(taskId, context = {}) {
   const physicsTimestepSeconds = Number(context.physicsTimestepSeconds) || 0.02;
   const decimation = Math.max(1, Math.round(controlHz * physicsTimestepSeconds));
 
+  // Engine routing is platform policy, so the recommendation is validated here:
+  // an unknown id fails loudly instead of being silently dropped (and later
+  // defaulting the task to the kinematic engine). It is resolved before the
+  // reward, because the reward vocabulary is checked against the engine that
+  // will actually run the task.
+  if (
+    task.recommendedEngine != null &&
+    !['starter-ppo', 'mjx-ppo'].includes(task.recommendedEngine)
+  ) {
+    throw new Error(
+      `recommendedEngine must be 'starter-ppo' or 'mjx-ppo' (got ${JSON.stringify(task.recommendedEngine)})`,
+    );
+  }
+  // Packs without a recommendation run on the platform default (the kinematic
+  // starter engine), which is also what its capability set is checked against.
+  const engine = task.recommendedEngine || 'starter-ppo';
+  const rewardFormula = resolveRewardFormula(
+    { reward: task.reward, rewardFormula: task.rewardFormula },
+    engine,
+  );
+
   const pack = {
     schemaVersion: 1,
     kind: 'goal-navigation',
@@ -69,6 +92,10 @@ export function resolveTaskPack(taskId, context = {}) {
     recommendedEngine: task.recommendedEngine,
     adapter,
     reward: task.reward,
+    // The validated reward, in the vocabulary form the engines evaluate. A pack
+    // that declared no formula carries the expansion of its legacy `reward` map,
+    // so every engine has exactly one representation to implement.
+    rewardFormula,
     termination: task.termination,
     workspace: task.workspace,
     curriculum: task.curriculum,
@@ -85,17 +112,6 @@ export function resolveTaskPack(taskId, context = {}) {
       note: 'Declarative task pack resolved from tasks/ + adapters/.',
     },
   };
-  // Engine routing is platform policy, so the recommendation is validated at
-  // resolve time: an unknown id fails loudly here instead of being silently
-  // dropped (and later defaulting the task to the kinematic engine).
-  if (
-    task.recommendedEngine != null &&
-    !['starter-ppo', 'mjx-ppo'].includes(task.recommendedEngine)
-  ) {
-    throw new Error(
-      `recommendedEngine must be 'starter-ppo' or 'mjx-ppo' (got ${JSON.stringify(task.recommendedEngine)})`,
-    );
-  }
   // The adapter's clamps are the single actuator truth: the engine, the
   // board runtime, and this resolver all read the same numbers.
   const dr = pack.domainRandomization || {};

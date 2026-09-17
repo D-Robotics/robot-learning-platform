@@ -78,6 +78,19 @@ starter `GoalNavEnv` 的域随机化本来就是**指令级与观测级**语义�
 | `angularBiasRadSec` / `odomDropoutProb` | 陀螺零偏 / 里程计丢帧 |
 | `evalEnvelopes`（nominal/hard 等） | 逐包络钉死 DR 参数的批量冻结评测 |
 
+物理级域随机化（`physicalDomainRandomization`，按 episode 重采样并写进 vmap 轨迹，
+默认不开启——不 opt-in 的任务包行为与历史完全一致）：
+
+| 字段 | 作用位置 |
+| --- | --- |
+| `wheelFrictionScale` | 轮-地摩擦行（`geom_friction`，进入接触求解器） |
+| `chassisMassScale` | 底盘质量与惯量（`body_mass`/`body_inertia` 同比） |
+| `wheelServoKvScale` | 轮伺服增益 `actuator_gainprm` |
+
+`training-summary.json` 的 `physicalDomainRandomization: true` 如实上报该次训练是否
+真的采样了物理级 DR；`test_mjx_adapter.py` 断言开 DR 后不同物理域产生可区分的轨迹、
+不 opt-in 时行为与历史逐位一致——被 jit 常量折叠掉的 DR 是最隐蔽的假随机化。
+
 这样质量门跨引擎可比：starter（运动学）、mjx（接触动力学）、mjlab（未来 GPU 物理）
 跑的是**同一个任务、同一套指标、只有物理保真度不同**。
 
@@ -154,5 +167,5 @@ optax，参数是裸 pytree——flax/brax/任何 neural-lib 都不是依赖。�
   仿真、**高于** starter 运动学——台账的 `physicsBackend` 就是让这个差异可见。
 - `deployable` 恒为 `false`：上板需要 X5 编译制品 + 板端只读预检，平台在预检处强制拦截。
 - MJX 不是平台硬依赖：无 jax 时 verify SKIP、CI 与「无 GPU 可跑通」承诺不变。
-- 域随机化仍是指令级/观测级（与 starter 同语义），**不是**物理级 DR（质量/摩擦
-  随机化留给 mjlab 真路径）。
+- 域随机化分两层：**指令级/观测级**（`domainRandomization`，与 starter 同语义）+
+  **物理级**（`physicalDomainRandomization`，任务包显式 opt-in，见下节）。

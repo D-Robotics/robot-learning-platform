@@ -75,6 +75,20 @@ CALIBRATED_KP = 2.0
 #: before the gains were calibrated.
 CALIBRATED_FORCE_CEILING_NM = 0.976
 
+#: bam-ctrl actuator constants — mirror ``_BAM_ACTUATOR_KWARGS`` in the upstream
+#: ``microduck_constants.py`` (the values every shipped policy trains against)
+#: with the voltage DR collapsed to the nominal midpoint, exactly as the
+#: upstream CPU rehearsal script does (``scripts/infer_policy.py`` defaults).
+DEFAULT_BAM_VIN = 7.4
+DEFAULT_BAM_VIN_DROP_GAIN = 0.1
+DEFAULT_BAM_VIN_MIN = 6.0
+
+#: Stiff friction constraint the vendor BAM actuator installs on every servo
+#: dof (warp has no noslip solver, so BAM stiffens frictionloss instead; the
+#: upstream CPU rehearsal mirrors it — ``infer_policy.py``).
+BAM_STIFF_SOLREF_FRICTION = (-5.0e4, -2.0e2)
+BAM_STIFF_SOLIMP_FRICTION = (0.99, 0.9999, 0.001, 0.5, 2.0)
+
 
 #: Physics presets. mjlab's own defaults differ from what a bare MJCF load gets
 #: from MuJoCo, and the difference is not cosmetic: ``implicitfast`` is what the
@@ -186,7 +200,22 @@ class SceneSpec:
     trunk_body: str = "trunk_base"
 
 
-def find_scene(model_root: str | Path, *, with_ball: bool) -> SceneSpec:
+def find_scene(
+    model_root: str | Path,
+    *,
+    with_ball: bool,
+    variant: str = "groundcontact",
+) -> SceneSpec:
+    """Pick the upstream MJCF scene to load.
+
+    ``variant`` selects the robot model: ``"groundcontact"`` (default, the
+    upstream ``scene.xml`` with 11 colliding geoms — a standup/full-contact
+    model) or ``"walk"`` (``scene_walk.xml``, 5 colliding geoms — the model the
+    velocity/walking policies are actually trained on, and the one the upstream
+    CPU rehearsal uses for them). The two are not interchangeable for
+    locomotion evaluation: extra collision geoms create contact forces during
+    gait that training never saw.
+    """
     root = Path(model_root)
     robot_dir = root / "src" / "mjlab_microduck" / "robot" / "microduck"
     if not robot_dir.is_dir():
@@ -198,9 +227,14 @@ def find_scene(model_root: str | Path, *, with_ball: bool) -> SceneSpec:
         if not scene.is_file():
             raise FileNotFoundError(f"{scene} not found (upstream scene_ball.xml)")
         return SceneSpec(xml=scene, has_ball=True)
-    scene = robot_dir / "scene.xml"
+    if variant == "groundcontact":
+        scene = robot_dir / "scene.xml"
+    elif variant == "walk":
+        scene = robot_dir / "scene_walk.xml"
+    else:
+        raise ValueError(f"unknown scene variant {variant!r}; known: groundcontact, walk")
     if not scene.is_file():
-        raise FileNotFoundError(f"{scene} not found (upstream scene.xml)")
+        raise FileNotFoundError(f"{scene} not found (upstream scene)")
     return SceneSpec(xml=scene, has_ball=False)
 
 
@@ -216,6 +250,15 @@ class MicroDuckSim:
       through MuJoCo as a direct motor actuator. Kept for comparison; see
       ``microduck_eval/actuator.py`` for why its duty gain (0.575 N·m/rad) is
       about 3.5x softer than the calibrated position actuator.
+    * ``"bam-ctrl"`` — the vendor ``bam.mujoco.MujocoController`` itself: the
+      exact actuator path the policies are trained against (firmware P-loop +
+      DC-motor equation at every physics step, load-dependent
+      friction/damping rewrite, voltage sag). Measured to be the only variant
+      where the 4096x6000 walking policy both stands and walks; the standalone
+      BAM port differs from it in the load-dependent terms. Note: under this
+      model the zero-action baseline itself falls (effective duty gain ~1.1
+      is below the ~1.5 standing threshold), so harness qualification
+      compares policies against the *same-actuator* floor.
     """
 
     def __init__(
@@ -233,14 +276,26 @@ class MicroDuckSim:
         import mujoco
 
         self.mujoco = mujoco
-        self.model = mujoco.MjModel.from_xml_path(str(spec.xml))
+        if actuator_model == "bam-ctrl":
+            # dof_solref/solimp_friction only exist on the spec, not on the
+            # compiled model, so the BAM rewrite must happen before compile.
+            mj_spec = mujoco.MjSpec.from_file(str(spec.xml))
+            for joint in mj_spec.joints:
+                if joint.name in SERVO_JOINT_ORDER:
+                    joint.damping = np.zeros((3, 1))
+                    joint.frictionloss = 0.0
+                    joint.solref_friction = list(BAM_STIFF_SOLREF_FRICTION)
+                    joint.solimp_friction = list(BAM_STIFF_SOLIMP_FRICTION)
+            self.model = mj_spec.compile()
+        else:
+            self.model = mujoco.MjModel.from_xml_path(str(spec.xml))
         self.data = mujoco.MjData(self.model)
         self.spec = spec
         self.action_scale = float(action_scale)
         self.physics_preset = physics
         self.collision_preset = collisions
-        if actuator_model not in ("bam", "mjcf"):
-            raise ValueError(f"actuator_model must be 'bam' or 'mjcf', got {actuator_model!r}")
+        if actuator_model not in ("bam", "bam-ctrl", "mjcf"):
+            raise ValueError(f"actuator_model must be 'bam', 'bam-ctrl' or 'mjcf', got {actuator_model!r}")
         self.actuator_model = actuator_model
 
         self.joint_ids: list[int] = []
@@ -282,7 +337,15 @@ class MicroDuckSim:
         apply_physics_preset(self.model, physics)
         collision_facts = apply_collision_preset(self.model, collisions)
 
+        imu_gyro = mujoco.mj_name2id(
+            self.model, mujoco.mjtObj.mjOBJ_SENSOR, "imu_ang_vel"
+        )
+        self._imu_gyro_adr = (
+            int(self.model.sensor_adr[imu_gyro]) if imu_gyro >= 0 else None
+        )
+
         self.bam_params = None
+        self._bam_controller = None
         self.actuator_facts: dict[str, object] = {
             **collision_facts,
             "physicsPreset": physics,
@@ -298,6 +361,60 @@ class MicroDuckSim:
                 apply_calibrated_position_gains(
                     self.model, self.actuator_ids, kp=kp, force_ceiling=force_ceiling
                 )
+            )
+        elif actuator_model == "bam-ctrl":
+            # The vendor controller drives compiled actuators directly, so the
+            # MJCF must be rewritten exactly the way the training-side
+            # bam.mjlab.BamActuator.edit_spec does it: position actuators
+            # become torque motors with the voltage-bounded forcerange, joint
+            # damping/frictionloss zeroed (the controller rewrites them from
+            # load every step), and the stiff friction constraint applied.
+            from bam.model import load_model as bam_load_model
+            from bam.mujoco import MujocoController
+
+            motor = bam_load_model(motor_name="xl330", model="m6")
+            if kp is not None:
+                motor.actuator.kp = float(kp)
+            motor.actuator.vin = DEFAULT_BAM_VIN
+            ceiling = float(motor.actuator.vin * motor.kt.value / motor.R.value)
+            for actuator_id in self.actuator_ids:
+                self.model.actuator_dyntype[actuator_id] = int(mujoco.mjtDyn.mjDYN_NONE)
+                self.model.actuator_biastype[actuator_id] = int(mujoco.mjtBias.mjBIAS_NONE)
+                self.model.actuator_gaintype[actuator_id] = int(mujoco.mjtGain.mjGAIN_FIXED)
+                self.model.actuator_gainprm[actuator_id, :] = 0.0
+                self.model.actuator_gainprm[actuator_id, 0] = 1.0
+                self.model.actuator_biasprm[actuator_id, :] = 0.0
+                self.model.actuator_forcerange[actuator_id, 0] = -ceiling
+                self.model.actuator_forcerange[actuator_id, 1] = ceiling
+                self.model.actuator_forcelimited[actuator_id] = 1
+                self.model.actuator_ctrllimited[actuator_id] = 0
+                self.model.actuator_gear[actuator_id, :] = 0.0
+                self.model.actuator_gear[actuator_id, 0] = 1.0
+            for joint_id in self.joint_ids:
+                dof = int(self.model.jnt_dofadr[joint_id])
+                self.model.dof_damping[dof] = 0.0
+                self.model.dof_frictionloss[dof] = 0.0
+            mujoco.mj_setConst(self.model, self.data)
+            self._bam_controller = MujocoController(
+                motor,
+                [name for name in SERVO_JOINT_ORDER],
+                self.model,
+                self.data,
+                vin_drop_gain=DEFAULT_BAM_VIN_DROP_GAIN,
+                vin_min=DEFAULT_BAM_VIN_MIN,
+            )
+            self.actuator_facts.update(
+                {
+                    "bamEngine": "bam.mujoco.MujocoController@200Hz",
+                    "bamMotor": "xl330-m6",
+                    "bamKpFirmware": float(motor.actuator.kp),
+                    "bamVin": float(motor.actuator.vin),
+                    "bamVinDropGain": DEFAULT_BAM_VIN_DROP_GAIN,
+                    "bamVinMin": DEFAULT_BAM_VIN_MIN,
+                    "bamStallTorqueNm": ceiling,
+                    "bamMaxCurrent": None,
+                    "actionDelayLag": 0,
+                }
             )
         else:
             from .actuator import load_bam_params, torque as bam_torque
@@ -341,6 +458,11 @@ class MicroDuckSim:
             self.data.qpos[qpos_index] = self.default_pose[index]
         self.data.ctrl[:] = 0.0
         self.model.body_mass[self.trunk_id] = self.base_mass * (1.0 + payload_fraction)
+        if self.actuator_model == "bam-ctrl":
+            # Clears the controller's voltage-sag state and aligns its position
+            # target with the reset pose, mirroring the upstream reset recipe.
+            self._bam_controller.reset(self.data.qpos)
+            self._bam_controller.q_target[:] = self.default_pose
         if self.ball_qpos is not None and ball_distance is not None:
             self.data.qpos[self.ball_qpos + 0] = base_xy[0] + ball_distance * np.cos(base_yaw)
             self.data.qpos[self.ball_qpos + 1] = base_xy[1] + ball_distance * np.sin(base_yaw)
@@ -362,10 +484,16 @@ class MicroDuckSim:
     def base_ang_vel(self) -> np.ndarray:
         """Trunk angular velocity in the trunk frame (the policy's 1st slot).
 
-        The upstream trainer reads this from an IMU gyro on the trunk; here it is
-        the free-joint velocity rotated into the trunk frame, which is the same
-        physical quantity without the sensor's noise model.
+        The upstream trainer and its CPU rehearsal both read the ``imu_ang_vel``
+        gyro sensor, whose frame is the IMU site (aligned with the trunk); a
+        hand-rolled frame transform is not bit-equal to it once the robot moves
+        (measured up to ~2.6 rad/s difference during a step), and the 4096
+        walking policy falls when fed the wrong channel while standing fine on
+        the right one. Read the same sensor; fall back to the kinematic
+        computation only for models that do not declare it.
         """
+        if self._imu_gyro_adr is not None:
+            return self.data.sensordata[self._imu_gyro_adr : self._imu_gyro_adr + 3].copy()
         quat = self.data.xquat[self.trunk_id]
         velocity = np.zeros(6, dtype=np.float64)
         result = np.zeros(6, dtype=np.float64)
@@ -402,6 +530,11 @@ class MicroDuckSim:
     # ---- stepping --------------------------------------------------------
     def apply_action(self, action: np.ndarray) -> None:
         target = self.default_pose + action * self.action_scale
+        if self.actuator_model == "bam-ctrl":
+            # The firmware position loop lives inside the controller; the
+            # target is consumed by update() at every physics step.
+            self._bam_controller.q_target[:] = target
+            return
         if self.bam_params is None:
             for offset, actuator_id in enumerate(self.actuator_ids):
                 self.data.ctrl[actuator_id] = float(target[offset])
@@ -419,6 +552,10 @@ class MicroDuckSim:
 
     def advance(self) -> None:
         for _ in range(self.substeps):
+            if self.actuator_model == "bam-ctrl":
+                # The firmware loop and the load-dependent friction rewrite run
+                # at physics rate (200 Hz), exactly as during training.
+                self._bam_controller.update()
             self.mujoco.mj_step(self.model, self.data)
         # mj_step integrates qpos/qvel but leaves derived state (xpos, xquat,
         # contacts, sensordata) as of the *previous* step, so every measurement

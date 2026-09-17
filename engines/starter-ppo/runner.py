@@ -46,6 +46,23 @@ import time
 from collections import deque
 
 
+def _engines_dir_on_path():
+    """Put the `engines/` directory on sys.path so the shared reward vocabulary
+    is importable. `engines/starter-ppo` carries a hyphen and cannot be a package
+    itself, so the shared module sits one level up."""
+    engines_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    if engines_dir not in sys.path:
+        sys.path.insert(0, engines_dir)
+
+
+_engines_dir_on_path()
+from reward_vocabulary import (  # noqa: E402  (import after sys.path setup)
+    VectorRewardTracker,
+    evaluate_formula_vector,
+    historical_reward,
+)
+
+
 
 def write_artifact_manifest(job_dir, names=None):
     """Write SHA256SUMS covering every file this run produced.
@@ -122,6 +139,34 @@ def dependency_versions():
     packages = ("numpy", "torch", "onnx", "onnxruntime", "onnxscript", "jax", "mujoco")
     resolved = {name: version_of(name) for name in packages}
     return {name: version for name, version in resolved.items() if version is not None}
+
+
+
+def dependency_lock_digest():
+    """SHA-256 of this engine's pinned lock, or None when it is not shipped.
+
+    The lock is the *intended* environment; `dependency_versions()` reports only
+    the handful of libraries the engine imports directly, so a transitive
+    package can differ between the lock and the machine that ran the training
+    without anything noticing. Recording the lock's digest makes that auditable
+    after the fact: two runs with the same digest used the same declared
+    dependency set, and a run whose digest differs from the current lock was
+    produced under a different one.
+
+    Best-effort by design: a packaged board install has no `requirements.txt`
+    beside the engine, so an absent digest is reported as `None` rather than
+    failing the run or inventing one.
+    """
+    import hashlib
+
+    engine_dir = os.path.dirname(os.path.abspath(__file__))
+    lock = os.path.join(engine_dir, "requirements.txt")
+    try:
+        with open(lock, "rb") as handle:
+            payload = handle.read()
+    except OSError:
+        return None
+    return hashlib.sha256(payload).hexdigest()
 
 
 def source_revision():
@@ -584,6 +629,21 @@ class GoalNavEnv:
         self.timeout_steps = int(pack["termination"]["timeoutSteps"])
         self._collision_flags = np.zeros(num_envs, dtype=bool)
         self._episode_final = {}
+        # The reward is a validated vocabulary formula, not a fixed expression.
+        # A pack that declares `rewardFormula` gets exactly that; a legacy pack
+        # gets its `reward` map expanded by the resolver into the same form, so a
+        # single evaluation path serves both.
+        self.reward_formula = pack.get("rewardFormula")
+        if not self.reward_formula:
+            raise ValueError(
+                "pack carries no rewardFormula; resolve the pack through "
+                "scripts/resolve-task-pack.mjs so the legacy `reward` map is expanded"
+            )
+        self._reward_tracker = VectorRewardTracker(num_envs)
+        self._prev_distance = np.zeros(num_envs, dtype=np.float32)
+        # Per-term totals, so a run can report what each term actually paid
+        # rather than only the sum.
+        self.reward_term_totals = {}
         self.reset()
 
     def _sample_obstacles(self):
@@ -684,7 +744,6 @@ class GoalNavEnv:
         evaluation reads the real final distance and collision, not the
         resampled state.
         """
-        reward_cfg = self.pack["reward"]
         goal_eps = float(self.pack["termination"]["goalDistance"])
         workspace_bound = float((self.pack.get("workspace") or {}).get("bound") or 0.0)
         rewards = np.zeros(self.num_envs, dtype=np.float32)
@@ -699,39 +758,59 @@ class GoalNavEnv:
         self.steps += 1
         distance = np.hypot(self.state[:, 3] - self.state[:, 0],
                             self.state[:, 4] - self.state[:, 1])
+        collision_now = np.zeros(self.num_envs, dtype=bool)
         for env_idx in range(self.num_envs):
-            if done[env_idx]:
-                continue
             collided = self._collided(env_idx)
+            collision_now[env_idx] = collided
             if collided:
                 self._collision_flags[env_idx] = True
-            success[env_idx] = distance[env_idx] < goal_eps
-            out_of_bound = (
-                workspace_bound > 0.0
-                and (abs(float(self.state[env_idx, 0])) > workspace_bound
-                     or abs(float(self.state[env_idx, 1])) > workspace_bound)
+        success = distance < goal_eps
+        if workspace_bound > 0.0:
+            out_of_bound = (np.abs(self.state[:, 0]) > workspace_bound) | (
+                np.abs(self.state[:, 1]) > workspace_bound
             )
-            reward = (
-                reward_cfg["progress"] * float(previous_distance[env_idx] - distance[env_idx])
-                + reward_cfg["actionPenalty"] * float(np.mean(np.abs(np.clip(action[env_idx], -1.0, 1.0))))
-                + (reward_cfg["goal"] if success[env_idx] else 0.0)
-                + (reward_cfg["collision"] if collided else 0.0)
+        else:
+            out_of_bound = np.zeros(self.num_envs, dtype=bool)
+
+        # The reward is the pack's validated vocabulary formula, evaluated
+        # vectorised. Every term the pack declared is measured here; a term this
+        # environment cannot measure was already refused at resolve time, so an
+        # absent feature means "not measured this step", never "silently skipped".
+        features = {
+            "progress": distance,
+            "goal_reach": success.astype(np.float32),
+            "collision": collision_now.astype(np.float32),
+            "action_magnitude": np.mean(
+                np.abs(np.clip(action, -1.0, 1.0)), axis=1
+            ).astype(np.float32),
+            # Dwell is the same distance check the success rule uses on hardware.
+            # Progress reward alone is flat on an orbit around the goal (per-step
+            # distance deltas cancel), which trains limit cycles that never
+            # settle -- observed as nominal 0% with min-distance 0.16 m against a
+            # 0.12 m goal.
+            "goal_hold": (distance < goal_eps * 1.5).astype(np.float32),
+        }
+        previous = {"progress": previous_distance}
+        rewards, contributions = evaluate_formula_vector(
+            self.reward_formula,
+            features,
+            previous=previous,
+            tracker=self._reward_tracker,
+            iteration=int(self.pack.get("_iteration", 0)),
+        )
+        for name, values in contributions.items():
+            self.reward_term_totals[name] = (
+                self.reward_term_totals.get(name, 0.0) + float(np.sum(values))
             )
-            # Dwell bonus: paid every step spent inside the goal radius.
-            # Progress reward alone is flat on an orbit around the goal
-            # (per-step distance deltas cancel), which trains limit cycles
-            # that never settle — observed as nominal 0% with min-distance
-            # 0.16 m against a 0.12 m goal. The dwell term gives a dense
-            # gradient exactly where settling must be learned, and on
-            # hardware it is the same distance check the success rule uses.
-            if "dwell" in reward_cfg and distance[env_idx] < goal_eps * 1.5:
-                reward += reward_cfg["dwell"]
-            rewards[env_idx] = reward
-            done[env_idx] = (success[env_idx] or collided
-                             or out_of_bound
-                             or self.steps[env_idx] >= self.timeout_steps)
+        done = success | collision_now | out_of_bound | (
+            self.steps >= self.timeout_steps
+        )
         # Curriculum + auto-reset for finished episodes.
         reset_indices = np.nonzero(done)[0]
+        # A rate-limited payment is per episode, so nothing may carry over into
+        # the next one -- otherwise a fresh episode could inherit the slew
+        # position and the bonus could be collected twice.
+        self._reward_tracker.reset(reset_indices)
         self._episode_final = {}
         for env_idx in reset_indices:
             self._episode_final[env_idx] = {
@@ -1743,6 +1822,7 @@ def train_goal_navigation(request, pack):
         "deployable": False,
         "source": source_revision(),
         "dependencies": dependency_versions(),
+        "dependencyLockSha256": dependency_lock_digest(),
         "actionOutput": "normalized-twist" if act_size == 2 else "physical-joint",
         "cuda": requested_device.type == "cuda",
     }
@@ -2221,6 +2301,7 @@ def train(request):
         "deployable": False,
         "source": source_revision(),
         "dependencies": dependency_versions(),
+        "dependencyLockSha256": dependency_lock_digest(),
         # Honest device report: true only when training actually ran on CUDA.
         # A requested-but-unavailable cuda falls back to cpu and stays false.
         "cuda": requested_device.type == "cuda",

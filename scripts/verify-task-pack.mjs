@@ -96,6 +96,36 @@ for (const taskId of ['originbot-goal-navigation', 'generic-goal-navigation']) {
       );
     }
   }
+  // Every pack must carry a resolved reward formula, and it must be legal for
+  // the engine that will run it. A pack whose reward the engine cannot measure
+  // is refused at resolve time (see the capability check in the vocabulary), so
+  // this asserts the resolved shape rather than re-deriving it.
+  assert.ok(
+    Array.isArray(pack.rewardFormula) && pack.rewardFormula.length > 0,
+    `${taskId}: resolved pack carries no rewardFormula`,
+  );
+  for (const entry of pack.rewardFormula) {
+    assert.ok(
+      ['potential', 'shaping', 'penalty', 'bonus', 'rate_limit', 'smoothness'].includes(entry.op),
+      `${taskId}: unknown reward op ${JSON.stringify(entry.op)}`,
+    );
+    assert.ok(
+      typeof entry.weight === 'number' && entry.weight > 0,
+      `${taskId}: reward term ${entry.term} must carry a positive magnitude`,
+    );
+    assert.ok(
+      ['rises', 'falls'].includes(entry.improves),
+      `${taskId}: reward term ${entry.term} must declare its improvement direction`,
+    );
+  }
+  // The reward map and the formula must not both be author-declared: the
+  // resolver refuses that, so a pack carrying both would never have resolved.
+  assert.equal(
+    request.task.rewardFormula !== undefined && request.task.reward !== undefined,
+    true,
+    `${taskId}: the resolved pack carries both forms, which is only valid because the resolver produced it`,
+  );
+
   // The 8-value envelopes must pin dropout/slip too (legacy 6 tolerated).
   for (const [name, envelope] of Object.entries(pack.domainRandomization?.evalEnvelopes ?? {})) {
     assert.ok(

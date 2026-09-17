@@ -37,14 +37,26 @@ export type {
 export const SIM2REAL_SCHEMA_VERSION = 1 as const;
 export const MICRODUCK_SIM2REAL_CONTRACT_ID = 'microduck-policy-v1' as const;
 
-export const MICRODUCK_OBSERVATION_LAYOUT = [
-  { name: 'gyro', size: 3 },
-  { name: 'projected_gravity', size: 3 },
-  { name: 'joint_position_error', size: 14 },
-  { name: 'joint_velocity', size: 14 },
-  { name: 'last_action', size: 14 },
-  { name: 'command', size: 13 },
-] as const;
+/**
+ * The 61D MicroDuck observation contract, in slot order.
+ *
+ * Frozen at runtime, not just `as const`: `as const` is a compile-time promise,
+ * and this object is the contract every policy in the family is hot-swappable
+ * against. A runtime mutation (a test helper editing slots, a migration writing
+ * through the export) would silently rebind every consumer to a different
+ * layout — the exact failure mode the reference training repository guards by
+ * declaring that a slot is never deleted, only zero-padded.
+ */
+export const MICRODUCK_OBSERVATION_LAYOUT: readonly Sim2RealObservationLayoutItem[] = Object.freeze(
+  [
+    { name: 'gyro', size: 3 },
+    { name: 'projected_gravity', size: 3 },
+    { name: 'joint_position_error', size: 14 },
+    { name: 'joint_velocity', size: 14 },
+    { name: 'last_action', size: 14 },
+    { name: 'command', size: 13 },
+  ].map((item) => Object.freeze(item)),
+);
 
 export const MICRODUCK_SIM2REAL_CONTRACT = Object.freeze({
   id: MICRODUCK_SIM2REAL_CONTRACT_ID,

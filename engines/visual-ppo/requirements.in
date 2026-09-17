@@ -1,0 +1,11 @@
+# visual-ppo engine: camera-pixel observations from CPU MuJoCo.
+# Shares the mjx-adapter venv (mujoco 3.13 + jax + optax + onnx) — this file
+# documents the direct imports so a dedicated venv can be reproduced:
+#
+#   python3 -m venv .venv && .venv/bin/pip install -r <(sort -u requirements.in)
+mujoco>=3.13,<3.14
+jax[cpu]
+optax
+numpy
+onnx
+onnxruntime

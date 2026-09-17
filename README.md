@@ -41,10 +41,12 @@ Node.js 需要 `^22.22.2 || ^24.15.0 || >=26.0.0`（与 `package.json` 的 `engi
 | **本地 / Mock** | 没有 CUDA、先验证产品和协议 | 任务台账、状态流转、遥测、评测、回放 | `LocalRunnerPort` |
 | **本地 / starter-ppo** | 无 GPU 但要看真实训练 | `mock=false` 的真 PPO、ONNX 导出、遥测评测（`npm run demo:starter`） | `engines/starter-ppo` |
 | **本地 / MJX** | 要真 MuJoCo 接触动力学（CPU 即可） | 真 MuJoCo 物理 + 纯 JAX PPO + ONNX/质量门证据（`npm run verify:mjx-adapter`） | `engines/mjx-adapter` |
+| **本地 / 视觉观测** | 要「顶置相机像素 → 策略」端到端 | 纯 JAX PPO + ONNX 导出 ≡ JAX 前向（`npm run verify:vision-observation`） | `engines/visual-ppo` |
+| **本地 / dm_control** | 要 DeepMind 生态 env API | dm_control `rl.control.Environment` + 同一 MJCF 物理（`npm run verify:dm-control-adapter`） | `engines/dm-control-adapter` |
 | **本地 / 行为克隆** | 有示教/录制数据，想直接克隆策略 | 真 MLP BC + train/val 分离 + ONNX 数值等价证明（`npm run verify:offline-bc`） | `engines/offline-bc` |
 | **RoboGo** | 有云端算力和训练账号 | manifest 校验、请求边界、token 不出浏览器、状态 reconcile | `RoboGoRunnerPort` |
 
-Mock 的 `completed` 只表示协议演练完成，不代表真实 PPO 权重或可部署模型；真实训练必须由已配置的 runner 明确返回制品。starter-ppo 返回的是真实训练产物（`mock=false`），但其 numpy 物理不是 MicroDuck 全身动力学；MJX 引擎跑真 MuJoCo 接触动力学（台账标注 `physicsBackend=mjx`）；两者 `deployable` 恒为 `false`。
+Mock 的 `completed` 只表示协议演练完成，不代表真实 PPO 权重或可部署模型；真实训练必须由已配置的 runner 明确返回制品。starter-ppo 返回的是真实训练产物（`mock=false`），但其 numpy 物理不是 MicroDuck 全身动力学；MJX 引擎跑真 MuJoCo 接触动力学（台账标注 `physicsBackend=mjx`）；dm_control 适配器跑同一 MJCF 物理但经 DeepMind 生态 env API（`physicsBackend=dm-control-mujoco`）；视觉训练引擎吃顶置相机像素观测（`physicsBackend=cpu-mujoco-vision`）。所有本地引擎 `deployable` 恒为 `false`。
 
 ### 当前能力边界（诚实版）
 
@@ -54,9 +56,12 @@ Mock 的 `completed` 只表示协议演练完成，不代表真实 PPO 权重或
 | 动作录制、契约校验、JSONL 导入 | ✅ | 可在本地直接验收 |
 | 本地 Mock 闭环 | ✅ | 无 CUDA 可跑通 API 和 UI 流程 |
 | **CPU 真实 PPO 训练（starter-ppo）** | ✅ | `npm run demo:starter`：真训练 + 真 ONNX + 遥测评测，无 GPU 依赖 |
+| **视觉观测训练（顶置相机像素 → 策略）** | ✅ | `engines/visual-ppo`：真 JAX PPO 吃 64×64 顶置相机渲染 + 板载 8D 混合观测，ONNX 导出与 JAX 前向数值等价，`npm run verify:vision-observation` |
+| **物理级域随机化（质量/摩擦/执行器）** | ✅ | MJX 引擎任务包契约新增 `physicalDomainRandomization`（轮摩擦、底盘质量、伺服 kv 按 episode 重采样并进入 vmap 轨迹），`npm run verify:mjx-adapter` 实证质量被真实改变 |
+| **dm_control 生态适配** | ✅ | `engines/dm-control-adapter`：dm_control 1.x `rl.control.Environment`/`Task` 钩子 + 与 MJX 同源 MJCF 物理，`npm run verify:dm-control-adapter`；Playground 侧如实结论见 [docs/engines/dm-control-adapter.md](docs/engines/dm-control-adapter.md) |
 | **MJX 引擎（MuJoCo 接触动力学，纯 JAX）** | ✅ | `npm run verify:mjx-adapter`：真 MJX 物理 + 纯 JAX PPO + 质量门证据，本机 CPU 可验证（无 jax 时 SKIP）；GPU 按 profile 放大吞吐。见 [docs/engines/mjx-adapter.md](docs/engines/mjx-adapter.md) |
 | **mujoco-web 部署方模型注册表** | ✅ | 受审 MJCF 白名单 + 启动时真实编译 fail-closed（`npm run verify:mujoco-models`）；不开放任意上传 |
-| mjlab + rsl-rl GPU 训练 | 🔌 | 参考适配器在 `engines/mjlab-rsl-rl-adapter/`，需自备训练栈与 GPU |
+| mjlab + rsl-rl GPU 训练 | 🔌 | 参考适配器在 `engines/mjlab-rsl-rl-adapter/`：rsl-rl `OnPolicyRunner` 真跑 2 迭代（`npm run verify:mjlab-adapter`，CPU 可验证），mjlab GPU 物理侧需自备 GPU 训练栈；物理级 DR 与 dm_control 生态接入已补齐见上表 |
 | RoboGo 适配接口 | 🔌 | 需要服务端配置真实地址、凭据和网络策略 |
 | RDK-X5 真机采集 / BoardAgent / OTA | 🧩 | 提供端口、预检和部署边界，需接入实际设备 |
 | 真机遥测（IMU/里程计/电池） | 🟡 参考实现 | 常驻只读遥测节点 + 认证代理 + 评估页同屏对比已具备；参考机型 OriginBot 的现场证据需按发布清单归档 |

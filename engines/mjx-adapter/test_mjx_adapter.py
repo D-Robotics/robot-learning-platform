@@ -338,6 +338,174 @@ class MjxEnvTests(unittest.TestCase):
 
 
 @unittest.skipUnless(HAVE_JAX, "jax not installed")
+class MjxSceneFidelityTests(unittest.TestCase):
+    """Physical obstacles, workspace walls, and physical-level DR."""
+
+    @classmethod
+    def setUpClass(cls):
+        try:
+            import mujoco  # noqa: F401
+            from mujoco import mjx  # noqa: F401
+        except ImportError:
+            raise unittest.SkipTest("mujoco+mujoco-mjx not installed")
+        cls.adapter = load_adapter()
+        cls.pack = load_resolved_pack()
+
+    def make_env(self, pack=None, num_envs=4):
+        return self.adapter.MjxGoalNavEnv(
+            pack or self.pack, num_envs, seed=7, physics_dt=0.01,
+            obs_layout="originbot-imu-odom-v1",
+        )
+
+    def test_scene_with_obstacles_and_walls_compiles_and_steps(self):
+        import jax.numpy as jnp
+        import numpy as np
+
+        env = self.make_env(num_envs=2)
+        env.reset()
+        obs, _rew, done, _succ = env.step(np.zeros((2, 2), dtype=np.float32))
+        self.assertEqual(obs.shape, (2, 8))
+        self.assertEqual(env._nmocap, env.obstacle_count, "mocap bodies must match obstacle count")
+        self.assertEqual(
+            int(env._mujoco_model.nmocap), env.obstacle_count,
+            "compiled model must carry the mocap obstacles",
+        )
+        wall_names = [
+            self.adapter.mujoco.mj_id2name(env._mujoco_model, self.adapter.mujoco.mjtObj.mjOBJ_GEOM, i)
+            for i in range(env._mujoco_model.ngeom)
+        ]
+        for wall in ("wall_x+", "wall_x-", "wall_y+", "wall_y-"):
+            self.assertIn(wall, wall_names, "workspace walls must be compiled into the MJCF")
+
+    def test_obstacle_placements_never_start_penetrating(self):
+        """The regression behind the pinned-eval NaN: a mocap sphere that
+        starts inside a wall or inside another sphere destabilizes the MJX
+        contact solver (wall-penetrating sphere NaNs qpos in ~180 physics
+        steps while CPU MuJoCo stays finite). Placement is constructed so
+        every sampled reset has zero static penetration by geometry, and
+        this test pins that contract across seeds."""
+        import jax
+        import numpy as np
+
+        env = self.make_env(num_envs=1)
+        wall_lim = env.workspace_bound + 0.05  # bound + wall margin
+        for seed in range(60):
+            state = env._sample_reset_state(jax.random.PRNGKey(seed), 0.5, 1.0)
+            xy = np.asarray(state["obstacles"])[:, :2]
+            radii = np.linalg.norm(xy, axis=1)
+            self.assertGreater(
+                radii.min(), env._spawn_clear - 1e-4,
+                "obstacle sampled inside the measured robot spawn clearance",
+            )
+            # wall clearance: surface must stay inside the wall plane
+            self.assertTrue(
+                np.all(np.abs(xy) + env.obstacle_radius <= wall_lim + 1e-4),
+                f"obstacle surface crosses a wall (xy={xy.tolist()})",
+            )
+            for i in range(len(xy)):
+                for j in range(i + 1, len(xy)):
+                    self.assertGreater(
+                        np.linalg.norm(xy[i] - xy[j]),
+                        2 * env.obstacle_radius + 0.018,
+                        "two obstacles start overlapping (solver diverges)",
+                    )
+
+    def test_pinned_eval_with_obstacles_runs_finite(self):
+        """The exact failure verify:mjx-adapter hit: run_episodes must
+        complete with finite rewards on the shipped pack (the zero policy
+        doubles as the untrained-baseline path)."""
+        import numpy as np
+
+        env = self.make_env(num_envs=1)
+        domain = (1.0, 0.05, 0.0, 0.0, 0.0, 0, 0.0, 1.0)
+        outcomes, _rows = env.run_episodes(
+            lambda obs: np.zeros((obs.shape[0], 2), dtype=np.float32),
+            domain, seed=0, episodes=3,
+        )
+        for outcome in outcomes:
+            self.assertTrue(math.isfinite(outcome["episodeReward"]))
+            self.assertTrue(math.isfinite(outcome["finalDistance"]))
+
+    def test_unhostable_obstacle_pack_fails_closed_at_build(self):
+        """A workspace too small for its obstacles must raise a readable
+        ValueError at env construction, never NaN mid-run."""
+        pack = json.loads(json.dumps(self.pack))
+        pack["workspace"] = {"bound": 0.4, "obstacles": {"count": 3, "radius": 0.15}}
+        with self.assertRaises(ValueError) as ctx:
+            self.make_env(pack=pack, num_envs=1)
+        self.assertIn("obstacle", str(ctx.exception))
+
+    def test_walls_block_robot_at_max_command(self):
+        """A robot driven at max command into the wall must plateau at the
+        wall (never cross the bound). Same regression the probe pins, at
+        env granularity."""
+        import numpy as np
+
+        import jax.numpy as jnp
+
+        env = self.make_env(num_envs=1)
+        bound = env.workspace_bound
+        self.assertGreater(bound, 0.0, "task pack must declare a workspace bound")
+        state = dict(env.state)
+        # 7-tuple [gain, lag, gyro, odom, bias, dropout, slip]: perfectly
+        # calibrated, non-slipping robot; yaw pinned to face the +x wall.
+        state["domain"] = jnp.asarray(
+            [[1.0, 0.05, 0.0, 0.0, 0.0, 0.0, 1.0]], dtype=jnp.float32
+        )
+        state["latency"] = jnp.zeros((1,), dtype=jnp.int32)
+        qpos = np.asarray(state["data"].qpos).copy()
+        qpos[0][3:7] = [1.0, 0.0, 0.0, 0.0]  # identity quat: heading = +x
+        state["data"] = state["data"].replace(qpos=jnp.asarray(qpos))
+        env.state = state
+        # step() is the TRAINING interface (auto-resets finished episodes),
+        # so the wall plateau must be read from the trajectory's peak, not
+        # the final (possibly freshly reset) state.
+        max_x = 0.0
+        for _ in range(400):
+            env.step(np.array([[1.0, 0.0]], dtype=np.float32))
+            max_x = max(max_x, float(np.asarray(env.state["data"].qpos)[0][0]))
+        self.assertLess(max_x, bound + 0.15, f"robot crossed the wall (x={max_x:.3f} > {bound})")
+        self.assertGreater(max_x, bound - 0.6, f"robot never reached the wall (x={max_x:.3f})")
+
+    def test_physical_dr_changes_trajectories(self):
+        """Physical DR multipliers (friction/mass/kv) must produce distinct
+        trajectories; with all multipliers pinned to 1.0 the physics is the
+        historical behavior."""
+        import jax.numpy as jnp
+        import numpy as np
+
+        pack = json.loads(json.dumps(self.pack))
+        pack["physicalDomainRandomization"] = {
+            "wheelFrictionScale": [0.5, 1.5],
+            "chassisMassScale": [0.8, 1.2],
+            "wheelServoKvScale": [0.7, 1.3],
+        }
+        env = self.make_env(pack=pack, num_envs=3)
+        state = dict(env.state)
+        state["domain"] = np.array([[1.0, 0.05, 0.0, 0.0, 0.0, 0.0, 1.0]] * 3, dtype=np.float32)
+        state["latency"] = np.zeros((3,), dtype=np.int32)
+        # Pin three clearly different physical domains.
+        state["phys_domain"] = jnp.asarray(
+            [[1.0, 1.0, 1.0], [0.6, 0.8, 0.7], [1.4, 1.2, 1.3]], dtype=jnp.float32
+        )
+        env.state = state
+        for _ in range(30):
+            env.step(np.ones((3, 2), dtype=np.float32))
+        xs = np.asarray(env.state["data"].qpos)[:, 0]
+        self.assertEqual(len(set(np.round(xs, 4))), 3, f"physical DR must differentiate trajectories, xs={xs}")
+
+    def test_physical_dr_disabled_keeps_single_model(self):
+        """Default pack (no physicalDomainRandomization) keeps the exact
+        historical single-model path — the feature is opt-in."""
+        import numpy as np
+
+        env = self.make_env(num_envs=2)
+        self.assertFalse(env.physical_dr_active)
+        obs = env.step(np.ones((2, 2), dtype=np.float32))
+        self.assertEqual(obs[0].shape, (2, 8))
+
+
+@unittest.skipUnless(HAVE_JAX, "jax not installed")
 class ResultShapeTests(unittest.TestCase):
     """End-to-end file protocol at smoke budget (2 iterations, 4 envs)."""
 

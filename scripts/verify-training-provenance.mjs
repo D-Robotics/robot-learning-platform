@@ -18,6 +18,7 @@
  * matching the repository's convention for optional engine probes.
  */
 import { spawnSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { existsSync, readFileSync } from 'node:fs';
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
@@ -140,6 +141,30 @@ function checkProvenance(result, label) {
   // may legitimately report a smaller set, so this is a floor, not a list.
   if (!('numpy' in dependencies)) {
     fail(`${label}: dependencies must include numpy (the array layer every engine uses)`);
+  }
+
+  // The lock digest is the only thing that covers TRANSITIVE packages:
+  // `dependencies` names the few libraries the engine imports directly, so a
+  // transitive package (filelock, fsspec, ...) can differ between the lock and
+  // the machine that ran the training with nothing noticing. Requiring the digest
+  // when the lock is shipped, and cross-checking it, closes that gap.
+  const lockPath = path.join(ROOT, 'engines', label, 'requirements.txt');
+  const shipped = existsSync(lockPath);
+  const recorded = result.dependencyLockSha256;
+  if (shipped) {
+    const expected = createHash('sha256').update(readFileSync(lockPath)).digest('hex');
+    if (recorded === null || recorded === undefined) {
+      fail(
+        `${label}: engines/${label}/requirements.txt exists but the result records no dependencyLockSha256; ` +
+          'a run that cannot name its locked dependency set is not auditable',
+      );
+    }
+    if (recorded !== expected) {
+      fail(
+        `${label}: dependencyLockSha256 ${recorded} does not match the current lock (${expected}); the run was ` +
+          'produced under a different pinned dependency set',
+      );
+    }
   }
   return source.known === true ? source.commit.slice(0, 10) : `unknown (${source.reason})`;
 }

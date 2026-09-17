@@ -111,6 +111,24 @@ python3 -m pip install --user -r engines/starter-ppo/requirements.txt   # 锁定
 
 `result.json` 自身不在清单内（它写在清单之后），其完整性由平台归一化后的 `reportSha256` 单独覆盖。
 
+### 为什么传递依赖也必须显式钉住（实测教训）
+
+初版只钉直接依赖，`uv pip compile` 负责传递闭包。结果 `verify:engine-locks` **在干净缓存下误报过期**：
+`requirements.in` 一个字没改，`filelock` 却解析出两个不同版本（3.32.7 与 4.0.0）——因为
+`torch 2.8.0` 对 `filelock` **没有上界约束**。
+
+这暴露了一个容易忽略的事实：**锁文件无法回溯性地固定未来的解析**。它不是"从今往后的保证"，
+而是"这一次解析的快照"；只要传递依赖里有一个无人约束，下次新解析就可能不同。
+
+所以当前做法是：**发现漂移就把那个传递依赖钉进 `requirements.in`**（现已钉 `filelock`），
+让 `requirements.in → requirements.txt` 成为一个**稳定的函数**，而不是某次解析的偶然结果。
+`npm run verify:engine-locks` 因此连续运行结果一致，而不是随上游发版翻转。
+
+顺带记录一个仍然存在的边界：`dependencies` 只采集引擎直接导入的少数几个库
+（numpy / torch / onnx / onnxruntime / jax / mujoco），所以**传递依赖的版本无法与之逐一比对**。
+补上这个洞的是 `dependencyLockSha256`：每个产物记录**锁定文件自身的摘要**，门禁校验它与当前锁一致。
+这样两个 run 是否使用同一套声明的依赖集合，是可以事后审计的——即使无法逐包核对。
+
 ## 周期 checkpoint 与 best 策略选择
 
 训练循环按 `max(1, iterations // 8)` 的间隔保存 `checkpoints/iter-XXXXX.pt`（含 `model_state`、曲线尾部、观测/动作维度）。训练结束后，引擎会**探测**最后 4 个 checkpoint（每个 4 回合轻量评测，按 successRate → collisionRate → 迭代数排序），把探测最优的权重用于正式评测和 `policy.onnx` 导出——最后一轮不一定是最好的策略。排序键末位是迭代数降序：平分时最新者胜，探测只会"提升"不会静默倒退。探测失败（文件损坏等）静默回退最终权重，不会让任务失败。选择结果记录在 `training-summary.json` 的 `checkpoints` 块和 `result.json` 的 `checkpoint.selectedIteration / selectedByProbe`。

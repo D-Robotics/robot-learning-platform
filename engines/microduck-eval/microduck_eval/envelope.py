@@ -123,6 +123,14 @@ class EvalEnvelope:
 #: Nominal: flat ground, factory calibration, no disturbance. This is the
 #: envelope whose Wilson lower bound the release gate reads.
 #:
+#: The command is the rated walking speed (``RATED_FORWARD_SPEED_MPS``): the
+#: velocity policy is *commanded* locomotion, and a zero command tells it to
+#: stand still — which it then does, making every walking-velocity number
+#: measure the wrong thing. The 2026-09-16/17 harness-unqualified evidence was
+#: produced with a zero command; the fix pairs with the gyro-channel fix in
+#: ``sim.py`` (both are recorded in
+#: ``docs/actuator-fidelity-investigation.md``).
+#:
 #: The ball sits in front of the trunk at the upstream spawn offset (0.09 m past
 #: the toe, which lands ~0.225 m ahead of the trunk origin) with the same ±2 cm
 #: placement error upstream randomizes — the actor is ball-blind, so this error
@@ -140,6 +148,7 @@ NOMINAL = EvalEnvelope(
         ball_distance_jitter=0.02,
         ball_lateral_jitter=0.01,
     ),
+    command=CommandProfile(lin_vel_x=RATED_FORWARD_SPEED_MPS),
     notes="工厂标定、无障碍、无外部扰动；球位前向 ±2cm（与上游 BALL_POS_NOISE_XY 同量级）",
 )
 
@@ -158,6 +167,7 @@ HARD = EvalEnvelope(
         ball_distance_jitter=0.05,
         ball_lateral_jitter=0.04,
     ),
+    command=CommandProfile(lin_vel_x=RATED_FORWARD_SPEED_MPS),
     command_dropout=0.02,
     gyro_noise_std=0.05,
     payload_fraction=0.05,

@@ -1,0 +1,212 @@
+{
+  "schemaVersion": 1,
+  "taskId": "walking-velocity",
+  "adapterId": "microduck-cpu-eval",
+  "observationAdapterId": "microduck-61d-v1",
+  "trained": {
+    "envelopes": {
+      "nominal": {
+        "episodes": 50,
+        "successRate": 1.0,
+        "successRateCiLow": 0.9287,
+        "successRateCiHigh": 1.0,
+        "collisionRate": 0.0,
+        "collisionRateCiLow": 0.0,
+        "collisionRateCiHigh": 0.0713,
+        "fallRate": 0.0,
+        "fallRateCiLow": 0.0,
+        "fallRateCiHigh": 0.0713,
+        "meanReward": 0.0,
+        "meanEpisodeLength": 4.0,
+        "commandedSpeedMps": 0.4,
+        "commandedSpeedMpsStd": 0.0,
+        "forwardM": 0.8484,
+        "forwardMStd": 0.0504,
+        "maxTiltRad": 0.1038,
+        "maxTiltRadStd": 0.0034,
+        "meanSpeedMps": 0.259,
+        "meanSpeedMpsStd": 0.0044,
+        "minBaseHeightM": 0.1142,
+        "minBaseHeightMStd": 0.0,
+        "speedTrackingErrorMps": 0.1411,
+        "speedTrackingErrorMpsStd": 0.0044
+      },
+      "hard": {
+        "episodes": 50,
+        "successRate": 1.0,
+        "successRateCiLow": 0.9287,
+        "successRateCiHigh": 1.0,
+        "collisionRate": 0.0,
+        "collisionRateCiLow": 0.0,
+        "collisionRateCiHigh": 0.0713,
+        "fallRate": 0.0,
+        "fallRateCiLow": 0.0,
+        "fallRateCiHigh": 0.0713,
+        "meanReward": 0.0,
+        "meanEpisodeLength": 4.0,
+        "commandedSpeedMps": 0.4,
+        "commandedSpeedMpsStd": 0.0,
+        "forwardM": 0.8839,
+        "forwardMStd": 0.0653,
+        "maxTiltRad": 0.0961,
+        "maxTiltRadStd": 0.0069,
+        "meanSpeedMps": 0.2669,
+        "meanSpeedMpsStd": 0.0082,
+        "minBaseHeightM": 0.1145,
+        "minBaseHeightMStd": 0.0003,
+        "speedTrackingErrorMps": 0.1331,
+        "speedTrackingErrorMpsStd": 0.0082
+      }
+    },
+    "meanReward": 0.0,
+    "episodesPerEnvelope": 50,
+    "confidenceLevel": 0.95
+  },
+  "baseline": {
+    "envelopes": {
+      "nominal": {
+        "episodes": 50,
+        "successRate": 0.0,
+        "successRateCiLow": 0.0,
+        "successRateCiHigh": 0.0713,
+        "collisionRate": 0.0,
+        "collisionRateCiLow": 0.0,
+        "collisionRateCiHigh": 0.0713,
+        "fallRate": 0.0,
+        "fallRateCiLow": 0.0,
+        "fallRateCiHigh": 0.0713,
+        "meanReward": 0.0,
+        "meanEpisodeLength": 4.0,
+        "commandedSpeedMps": 0.4,
+        "commandedSpeedMpsStd": 0.0,
+        "forwardM": 0.0052,
+        "forwardMStd": 0.0,
+        "maxTiltRad": 0.0811,
+        "maxTiltRadStd": 0.0003,
+        "meanSpeedMps": 0.0006,
+        "meanSpeedMpsStd": 0.0,
+        "minBaseHeightM": 0.1154,
+        "minBaseHeightMStd": 0.0,
+        "speedTrackingErrorMps": 0.3994,
+        "speedTrackingErrorMpsStd": 0.0
+      },
+      "hard": {
+        "episodes": 50,
+        "successRate": 0.0,
+        "successRateCiLow": 0.0,
+        "successRateCiHigh": 0.0713,
+        "collisionRate": 0.0,
+        "collisionRateCiLow": 0.0,
+        "collisionRateCiHigh": 0.0713,
+        "fallRate": 0.0,
+        "fallRateCiLow": 0.0,
+        "fallRateCiHigh": 0.0713,
+        "meanReward": 0.0,
+        "meanEpisodeLength": 4.0,
+        "commandedSpeedMps": 0.4,
+        "commandedSpeedMpsStd": 0.0,
+        "forwardM": 0.0047,
+        "forwardMStd": 0.0,
+        "maxTiltRad": 0.0732,
+        "maxTiltRadStd": 0.0003,
+        "meanSpeedMps": 0.0005,
+        "meanSpeedMpsStd": 0.0,
+        "minBaseHeightM": 0.1154,
+        "minBaseHeightMStd": 0.0,
+        "speedTrackingErrorMps": 0.3995,
+        "speedTrackingErrorMpsStd": 0.0
+      }
+    },
+    "meanReward": 0.0,
+    "episodesPerEnvelope": 50,
+    "confidenceLevel": 0.95
+  },
+  "qualityGate": {
+    "passed": true,
+    "errors": [],
+    "criteria": {
+      "minSuccessRate": 0.7,
+      "maxCollisionRate": 0.1,
+      "gateOn": "ciLowerBound"
+    }
+  },
+  "seed": 20260916,
+  "controlLatencyMs": 19341.705,
+  "measurementStage": "sim-step",
+  "harnessQualification": {
+    "passed": true,
+    "reasons": [],
+    "envelopes": {
+      "nominal": {
+        "episodes": 50,
+        "baselineFallRate": 0.0,
+        "baselineMeanBaseHeightM": 0.1154,
+        "trainedFallRate": 0.0
+      },
+      "hard": {
+        "episodes": 50,
+        "baselineFallRate": 0.0,
+        "baselineMeanBaseHeightM": 0.1154,
+        "trainedFallRate": 0.0
+      }
+    }
+  },
+  "dynamicsFacts": {
+    "dynamics": "cpu-mujoco",
+    "actuator": "bam-mujoco-controller",
+    "actuatorFacts": {
+      "collisionPreset": "full",
+      "footCollisionGeoms": 2,
+      "otherCollisionGeoms": 0,
+      "physicsPreset": "mjlab",
+      "integrator": 3,
+      "cone": 0,
+      "tolerance": 1e-8,
+      "model": "bam-ctrl",
+      "sceneKp": 0.55,
+      "sceneForceRangeNm": 0.96,
+      "bamEngine": "bam.mujoco.MujocoController@200Hz",
+      "bamMotor": "xl330-m6",
+      "bamKpFirmware": 400.0,
+      "bamVin": 7.4,
+      "bamVinDropGain": 0.1,
+      "bamVinMin": 6.0,
+      "bamStallTorqueNm": 0.9634015946604082,
+      "bamMaxCurrent": null,
+      "actionDelayLag": 0
+    },
+    "bamAvailable": true,
+    "simulator": "mujoco-3.13.0",
+    "python": "3.12.13",
+    "scene": "scene_walk.xml",
+    "sceneSha256": "6e23146c1a5025473b55ec94cbe37b08104ca388b7eb005ea277f8230736c8be",
+    "policy": "/tmp/policy-4096.onnx",
+    "policySha256": "4e464979fcea85bfaac9fc9788a7dd8d68367372bda012a5e25f432f627025ca",
+    "policyFacts": {
+      "recurrent": false,
+      "stateInputs": [],
+      "stateOutputs": []
+    },
+    "baselinePolicy": {
+      "path": "builtin:zero-action",
+      "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "recurrent": false,
+      "stateInputs": [],
+      "stateOutputs": []
+    },
+    "actionScale": 1.0,
+    "controlHz": 50.0,
+    "jointOrderVerified": true,
+    "taskDefinition": {
+      "taskId": "walking-velocity",
+      "speedToleranceMps": 0.15,
+      "minForwardM": 0.2,
+      "fallHeightM": 0.06,
+      "fallTiltRad": 1.05,
+      "steadyWindowStartS": 1.0
+    },
+    "envelopeNames": ["nominal", "hard"],
+    "parallelEnvs": 1,
+    "notes": "CPU single-environment MuJoCo rollout with the MJCF position actuators. The upstream trainer uses mjlab/MuJoCo Warp with the BAM servo model; rates from the two dynamics are not interchangeable."
+  }
+}

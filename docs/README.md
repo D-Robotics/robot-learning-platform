@@ -28,7 +28,9 @@
 | 文档 | 用途 |
 | --- | --- |
 | [`engines/starter-ppo.md`](engines/starter-ppo.md) | CPU 真实 PPO/SAC 训练与 ONNX 导出 |
-| [`engines/mjx-adapter.md`](engines/mjx-adapter.md) | MJX 引擎：纯 JAX PPO + 真 MuJoCo 接触动力学 |
+| [`engines/mjx-adapter.md`](engines/mjx-adapter.md) | MJX 引擎：纯 JAX PPO + 真 MuJoCo 接触动力学 + 物理级域随机化 |
+| [`engines/visual-ppo.md`](engines/visual-ppo.md) | 视觉观测训练：顶置相机像素 → CNN PPO → Conv ONNX |
+| [`engines/dm-control-adapter.md`](engines/dm-control-adapter.md) | dm_control 生态适配 + Playground 可用性如实结论 |
 | [`engines/offline-bc.md`](engines/offline-bc.md) | 模仿学习路径：示教数据 → MLP 行为克隆 → ONNX（数值等价证明） |
 | [`task-pack-training.md`](task-pack-training.md) | 声明式 task-pack 训练与质量门 |
 | [`gpu-runner.md`](gpu-runner.md) | 独立 GPU 机器上的训练 runner 部署 |
@@ -52,6 +54,7 @@
 | [`release-checklist.md`](release-checklist.md) | 公开发布阻塞项清单 |
 | [`field-evidence-runbook.md`](field-evidence-runbook.md) | X5、第二种实体机器人与生产制品回滚验收 |
 | [`api/openapi.yaml`](api/openapi.yaml) | 版本化 HTTP API 契约（`/api/v1/duck`） |
+| [`proposals/custom-reward-vocabulary.md`](proposals/custom-reward-vocabulary.md) | **设计依据（核心已实现）**：声明式奖励词汇表与逐引擎能力门禁，真源 `scripts/reward-vocabulary.mjs` |
 
 ## 证据归档
 

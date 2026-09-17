@@ -62,8 +62,10 @@ engines/microduck-eval/
 * 本评测器在 **CPU MuJoCo** 上单环境步进，**不是** mjlab + MuJoCo Warp 的并行物理。
   同一条策略在两套动力学下的成功率**可以不同**——契约要求报告里如实标注
   `dynamics` 字段（`cpu-mujoco` / `mjlab-mujoco-warp`），跨动力学的结果不允许直接比较。
-* 默认使用上游 MJCF 的**位置执行器**；上游训练的 BAM 电机模型（反电动势、摩擦、电压
-  控制律）在 CPU 侧不可用。报告必须标注 `actuator` 字段。
+* 默认使用上游 MJCF 的**位置执行器**（标定 kp）；`--actuator-model bam-ctrl` 可切换到
+  厂商 `bam.mujoco.MujocoController`——上游训练执行器的 CPU 官方实现（固件 P 环、
+  电机方程、负载相关摩擦、电压跌落，200 Hz）。评测学习出的行走策略时**必须**用
+  `bam-ctrl` + `--scene-variant walk`。报告必须标注 `actuator` / `scene` 字段。
 * 循环策略的状态清零发生在**每个 episode 开始**；同一策略在前馈图评测里
   "看起来一样"不代表行为一样——`policyFacts.recurrent` 就是为此必须出现在报告里。
 * 因此本目录的第一价值不是"给出结论"，而是**把结论的前提写死在报告里**：没有
@@ -94,6 +96,18 @@ cd engines/microduck-eval
   --out eval-balance.json
 ```
 
+评学习出的行走策略（训练执行器 + 训练场景模型）：
+
+```bash
+../../.eval-venv/bin/python -m microduck_eval.report \
+  --task walking-velocity --policy /path/policy.onnx \
+  --model-root /path/to/microduck_rl \
+  --actuator-model bam-ctrl --scene-variant walk \
+  --trusted-policy \
+  --envelopes nominal,hard --episodes 50 \
+  --out eval-walking.json
+```
+
 `--baseline-policy` 缺省仍是零动作地板（装置资格读它）；给了参照策略后，
 "新策略比上一版好多少"是同一信封里并排的两列数字，不是 README 里的一句话。
 
@@ -115,18 +129,38 @@ cd engines/microduck-eval
 完整扫描表与两个必须记住的坑见
 [`docs/eval-report-contract.md`](docs/eval-report-contract.md) 第 6 节。
 
-**装置能不能判学习策略？现在还不行，而且这件事已经被机制化。** 拿一次真训练产物
-（`walk`，256 环境 × 1500 轮、奖励 62.2）复评：策略前进 0.134 m（零动作 0.003 m）、
-速度误差 0.217（基线 0.400）——**学是学到了，但每次都摔**。于是 `harnessQualification`
-多了第二条判据（仅在 `--trusted-policy` 时生效）：
+**装置能不能判学习策略？第 2 轮答案是"不能"且已机制化取证；第 3 轮（09-17）修复结案：
+能。** 第 2 轮把被评对象换成**足量训练**的产物（`Mjlab-Velocity-Flat-MicroDuck`，
+4096 环境 × 6000 轮，末轮奖励 113.45，**回合长度 938.56/1000 步 ≈ 训练环境里能站
+18.8 秒**），本机结果是：
 
-> 零动作基线站住、被评策略每个 episode 都摔 ⇒ 装置不合格，`qualityGate` 强制 FAIL，
-> 理由写明"不能判定学习策略，成功率无意义"。
+| | 训练策略 | 零动作基线 |
+| --- | --- | --- |
+| 成功 / 摔倒 | 0.00 / **1.00** | 0.00 / 0.00 |
+| 前进 / 速度误差 | +0.497 m / 0.133 | +0.003 m / 0.400 |
 
-这条规则是双刃的：装置不合格时，它既不许认证一个好策略，也不许判死一个坏策略。
-把 BAM 电压模型真正接对仍是启用这套评测器的前置条件；逐项排除记录（刚度/阻尼/延迟/
-积分器/求解器/接触/armature/策略来历，以及"4096 环境在 113 轮就超过 256 环境跑满 1500 轮"
-这条样本效率证据）见
+它在本机**学到的东西是可见的**（前进是基线的 166 倍、速度误差改善 3 倍），但仍然每次都摔。
+因此 `harnessQualification` 会判装置不合格、`qualityGate` 强制 FAIL，理由写明
+"不能判定学习策略，成功率无意义"——这条规则是双刃的：装置不合格时，它既不许认证一个好策略，
+也不许判死一个坏策略。
+
+已经排除的：**观测层**（在 GPU 机器上用训练侧技术栈导出 HOME 帧的 61 维观测，与本机
+**最大绝对差 0.000e+00**，关节序、投影重力、角速度、重力矩、damping/frictionloss/armature/timestep 全部一致）、
+位置伺服 kp 0.55→128、BAM 电压端口 kp_fw 100→3200、厂商 `bam.mujoco.MujocoController`、
+以及上游同款摩擦模型——**训练策略在任何配置下都没站住过一次**。
+
+完整对照表与下一步判据见
 [`docs/actuator-fidelity-investigation.md`](docs/actuator-fidelity-investigation.md)。
+
+**第 3 轮结案（2026-09-17）**：上游 CPU 复现证明该策略能站能走——Warp/CPU 物理差异
+不是根因；真正的根因是本机两处自身缺陷：
+
+1. `base_ang_vel` 观测通道算错（手拼空间速度 ≠ IMU 陀螺，运动中差达 2.65 rad/s；
+   HOME 静止逐位对照恰好掩盖了它）→ 改读 `imu_ang_vel` 传感器；
+2. 行走信封命令恒为零（`CommandProfile()` 默认值从未接上 0.4 m/s）→ 策略被命令
+   站着不动且照做。修复后 + `bam-ctrl` + `scene_walk.xml`：
+   **nominal 与 hard 各 50/50 成功、0 跌倒，qualityGate 与 harnessQualification 全过**
+   （`evidence/eval-walking-4096-trained-qualified-2026-09-17.json`）。
+   逐帧证据链与方法论教训（静止逐位对照验证不了动态通道）见调查文档 §7。
 
 

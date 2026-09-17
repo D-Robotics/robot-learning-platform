@@ -33,10 +33,13 @@ OriginBot 是第一台参考机型；换一台底盘机器人应当只需要换�
 | **评测诚实化（本轮新增）** | ✅ | 碰撞/末端距离在 auto-reset 前采集（消除 collisionRate≡0 假象）；workspace.bound 越界终止；dwell 奖励破极限环（nominal 0%→90% 的根因，轨迹级诊断佐证） |
 | **SAC 算法路径（本轮新增）** | ✅ | `training.algorithm` UI→API→引擎全链（未知值 400）；twin-Q + 自动温度 alpha，与 PPO 同骨干/同 ONNX 契约/同评测门；`verify:starter-engine` 双算法断言（alphaCurve 非空 = 梯度真实执行） |
 | **rsl_rl 引擎适配器（本轮新增）** | ✅ | `engines/mjlab-rsl-rl-adapter/`：kinematic 后端经真实 rsl_rl `OnPolicyRunner` 训练 GoalNavEnv，`physicsBackend` 如实标注；mjlab 钩子为显式接入点；`verify:mjlab-adapter` 进 verify 链 |
+| **视觉观测训练引擎（本轮新增）** | ✅ | `engines/visual-ppo/`：CPU MuJoCo 离屏渲染 48×48 顶置相机帧 + 4D 本体感受 → 纯 JAX CNN+PPO → Conv 算子 ONNX（与 JAX 前向数值等价断言）；无渲染栈 exit 3 拒绝，`physicsBackend=cpu-mujoco-vision`；`verify:vision-observation` 进 verify 链，见 [docs/engines/visual-ppo.md](engines/visual-ppo.md) |
+| **物理级域随机化（本轮新增）** | ✅ | MJX 引擎任务包契约新增 `physicalDomainRandomization`（轮摩擦/底盘质量/伺服 kv 按 episode 重采样，写进 vmap 轨迹，jit 常量折叠有回归断言）；不 opt-in 的包行为与历史逐位一致 |
+| **dm_control 生态适配（本轮新增）** | ✅ | `engines/dm-control-adapter/`：dm_control 1.x `rl.control.Environment`/`Task` 钩子驱动平台 goal-navigation 任务，物理与 MJX 同源 MJCF（`physicsBackend=dm-control-mujoco` 复合名，如实标注）；`verify:dm-control-adapter` + 15 单元测试进 verify 链；Playground 不在 PyPI 的如实结论由 `scripts/probe-dm-control-ecosystem.mjs` 记录，见 [docs/engines/dm-control-adapter.md](engines/dm-control-adapter.md) |
 | **模仿学习路径（offline-bc v2，本轮新增）** | ✅ | `engines/offline-bc/`：v1 线性占位换真 MLP + Adam + train/val 分离（标准化只从 train 估计）+ 确定性种子 + ONNX 导出带 onnxruntime 数值等价证明（未验证的导出不落盘）；非线性拟合对闭式线性基线的显著优势是硬测试；fail-closed 数据规则全保留；provenance 三块（source/dependencies/dependencyLockSha256）与 runner 引擎同规范，`verify:offline-bc` + `verify:training-provenance` 均已覆盖，见 [docs/engines/offline-bc.md](engines/offline-bc.md) |
 | **真机遥测发布证据（本轮新增）** | ✅ | canary/live 闸门要求 board-agent 来源遥测评测（证据非阈值语义，fail-closed）；`release-evidence` 12 测试 |
 | **BPU 工具链探针（本轮新增）** | ✅ | preflight 白名单命令新增 `bpu_toolchain=present/missing`（hbdk-sim + hbrtmlin/hbrt-tv 存在性，不猜版本）；三方（TS/mjs/Python）字节一致测试守护；预检结果如实回显、不作为硬阻断 |
-| **MicroDuck 任务级评测底座（本轮新增）** | 🟡 门禁/诚实性已通，执行器保真度待解 | `engines/microduck-eval/`：CPU MuJoCo 无头回放 + 信封（seed/回合/初态/球位/丢帧/噪声/负载）+ 任务判据（踢球需位移≥0.35 m 且峰值球速≥0.5 m/s 且未摔倒）+ Wilson 与平台公式逐位一致 + `dynamicsFacts` 强制记录动力学/执行器/场景/policy 摘要；**声明式任务规格**（`--task-spec`：阈值/信封/命令由 JSON 驱动，`duck-stand` 作为纯声明式新任务族落地，坏 spec 一律报错）；**装置资格双重 fail-closed**：(a) 零动作基线全倒 ⇒ 装置不合格；(b) 带 `--trusted-policy` 时训练策略全倒而基线站住 ⇒ 装置不合格（既不许认证好策略，也不许判死坏策略）；TS 归一化层保留任务测量量并提升 `fallRate`/`meanEpisodeLength`。`verify:microduck-eval` 已进 verify 链（无 MuJoCo 时如实 SKIP）。**实测缺口**：真训练产物（256×1500，奖励 62.2，前进是基线 45 倍）在本机每次都摔 → 执行器保真度未闭环，逐项排除与样本效率证据见 `engines/microduck-eval/docs/actuator-fidelity-investigation.md` |
+| **MicroDuck 任务级评测底座（本轮新增）** | 🟡 门禁/诚实性已通，执行器保真度待解 | `engines/microduck-eval/`：CPU MuJoCo 无头回放 + 信封（seed/回合/初态/球位/丢帧/噪声/负载）+ 任务判据（踢球需位移≥0.35 m 且峰值球速≥0.5 m/s 且未摔倒）+ Wilson 与平台公式逐位一致 + `dynamicsFacts` 强制记录动力学/执行器/场景/policy 摘要；**声明式任务规格**（`--task-spec`：阈值/信封/命令由 JSON 驱动，`duck-stand` 作为纯声明式新任务族落地，坏 spec 一律报错）；**装置资格双重 fail-closed**：(a) 零动作基线全倒 ⇒ 装置不合格；(b) 带 `--trusted-policy` 时训练策略全倒而基线站住 ⇒ 装置不合格（既不许认证好策略，也不许判死坏策略）；TS 归一化层保留任务测量量并提升 `fallRate`/`meanEpisodeLength`。`verify:microduck-eval` 已进 verify 链（无 MuJoCo 时如实 SKIP）。**实测缺口**：足量训练产物（4096×6000，训练环境回合长度 938/1000 步≈18.8 秒）在本机每次都摔，而观测层已与训练侧逐位一致（差 0.0）→ 分歧在动力学/执行器，逐项扫描（位置伺服 0.55→128、BAM 端口、厂商 `bam.mujoco.MujocoController`、上游摩擦模型）全部未通过，详见 `engines/microduck-eval/docs/actuator-fidelity-investigation.md` |
 | **声明式观测布局（环 B，本轮新增）** | ✅ | adapter `runtime.observationLayout` 驱动板端观测装配（`originbot-imu-odom-v1` / `imu-gravity-v1` / `auto`）；显式布局与模型维度矛盾 → `layout-model-mismatch` 拒载；未知布局 start 拒绝；`verify:policy-provider-layout` 契约测试（真 onnxruntime 会话）进 verify 链 |
 | **BPU provider 可切换（环 C，本轮新增）** | ✅ | `RDK_BOARD_POLICY_PROVIDER`（env/adapter）选 cpu/bpu；bpu 请求在无 BPU provider 构建上 fail-closed 拒载（`bpu-provider-unavailable`，绝不静默降 CPU）；provider/providerRequested/providersAvailable 如实上报进 station UI |
 | **制品→板端下发（环 D，本轮新增）** | ✅ | worker `/runs/:id/artifact`（服务前重哈希）→ 平台 `/board-station/policy/stage`（发布证据 + SHA-256 交叉比对）→ agent `/policy/upload`（写盘前验哈希、原子落盘）；staging≠加载≠运动；station 页一键下发 + policies/ 列表 |
@@ -92,7 +95,8 @@ OriginBot 是第一台参考机型；换一台底盘机器人应当只需要换�
    - 进展：工具链存在性探针已进 preflight；provider 切换开关已闭环（环 C：
      `RDK_BOARD_POLICY_PROVIDER`，fail-closed + station UI 如实显示可用列表）；
      剩余：BPU 侧量化编译产物（hbdk 工具链）实测与延迟对比。
-6. **视觉观测**（61D 里没有相机槽）
+6. **视觉观测上板**（训练侧已闭合：`engines/visual-ppo` 真像素训练 + ONNX 数值等价；
+   61D 契约里的相机槽与板端相机帧观测装配仍开放）
    - 验收：策略输入扩展出图像分支，板端相机帧进入观测构建，评测页可回放对齐帧。
 
 ### P2 — 工程与运营

@@ -1,0 +1,13 @@
+# dm-control-adapter engine: DeepMind's env API over the shared MuJoCo scene.
+# Shares the mjx-adapter venv (mujoco 3.13 + jax + optax + onnx + dm_control
+# 1.0.46) — this file documents the direct imports so a dedicated venv can
+# be reproduced:
+#
+#   python3 -m venv .venv && .venv/bin/pip install -r <(sort -u requirements.in)
+dm-control>=1.0.46,<2
+mujoco>=3.13,<3.14
+jax[cpu]
+optax
+numpy
+onnx
+onnxruntime

@@ -12,3 +12,9 @@
 numpy==2.0.2
 torch==2.8.0
 rsl-rl-lib==2.2.3
+
+# Transitive pins. `uv pip compile` resolves these, but nothing constrains them,
+# so a fresh resolve picks up newer releases (filelock went 3.32.7 -> 4.0.0 with
+# no change to this file). Pinning here is what makes the lock a *reproducible*
+# function of this file instead of a snapshot of one resolve.
+filelock==3.32.7

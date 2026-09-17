@@ -60,8 +60,9 @@ def _evaluate_envelope(
     kp: float | None,
     force_ceiling: float | None,
     scene: "SceneSpec | None" = None,
+    scene_variant: str = "groundcontact",
 ) -> EnvelopeResult:
-    spec = scene or find_scene(model_root, with_ball=with_ball)
+    spec = scene or find_scene(model_root, with_ball=with_ball, variant=scene_variant)
     # One sim per envelope, not per episode: rollout() resets data (and the
     # payload mass) itself, so recompiling the MJCF 50 times for a 60 s
     # endurance envelope would only add compile time to the measurement.
@@ -172,6 +173,7 @@ def build_report(args: argparse.Namespace) -> dict[str, Any]:
                 actuator_model=args.actuator_model,
                 kp=args.kp,
                 force_ceiling=args.force_ceiling,
+                scene_variant=args.scene_variant,
             )
         )
         if not args.no_baseline:
@@ -187,6 +189,7 @@ def build_report(args: argparse.Namespace) -> dict[str, Any]:
                     actuator_model=args.actuator_model,
                     kp=args.kp,
                     force_ceiling=args.force_ceiling,
+                    scene_variant=args.scene_variant,
                 )
             )
         latencies.append(time.time() - started)
@@ -228,7 +231,7 @@ def build_report(args: argparse.Namespace) -> dict[str, Any]:
         # how good the trained numbers look.
         errors.extend(f"harness unqualified: {reason}" for reason in qualification["reasons"])
 
-    spec = find_scene(args.model_root, with_ball=with_ball)
+    spec = find_scene(args.model_root, with_ball=with_ball, variant=args.scene_variant)
     probe = MicroDuckSim(
         spec, actuator_model=args.actuator_model, kp=args.kp, force_ceiling=args.force_ceiling
     )
@@ -253,9 +256,13 @@ def build_report(args: argparse.Namespace) -> dict[str, Any]:
         "harnessQualification": qualification,
         "dynamicsFacts": {
             "dynamics": "cpu-mujoco",
-            "actuator": "mjcf-position" if args.actuator_model == "mjcf" else "bam-voltage-port",
+            "actuator": {
+                "mjcf": "mjcf-position",
+                "bam": "bam-voltage-port",
+                "bam-ctrl": "bam-mujoco-controller",
+            }[args.actuator_model],
             "actuatorFacts": probe.actuator_facts,
-            "bamAvailable": args.actuator_model == "bam",
+            "bamAvailable": args.actuator_model in ("bam", "bam-ctrl"),
             "simulator": f"mujoco-{_mujoco_version()}",
             "python": platform.python_version(),
             "scene": spec.xml.name,
@@ -333,14 +340,22 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument(
         "--actuator-model",
-        choices=["mjcf", "bam"],
+        choices=["mjcf", "bam", "bam-ctrl"],
         default="mjcf",
-        help="mjcf = calibrated position actuator (default); bam = XL330 voltage-control port",
+        help="mjcf = calibrated position actuator (default); bam = XL330 voltage-control port; "
+             "bam-ctrl = vendor bam.mujoco.MujocoController (the exact training actuator path)",
     )
     parser.add_argument("--kp", type=float, default=None,
                         help="override the calibrated position stiffness (mjcf model only)")
     parser.add_argument("--force-ceiling", type=float, default=None,
                         help="override the torque ceiling in N.m (mjcf model only)")
+    parser.add_argument(
+        "--scene-variant",
+        choices=["groundcontact", "walk"],
+        default="groundcontact",
+        help="robot model to load: groundcontact (scene.xml, default) or walk "
+             "(scene_walk.xml — the model locomotion policies are trained on)",
+    )
     parser.add_argument("--json-indent", type=int, default=2)
     return parser.parse_args(argv)
 
