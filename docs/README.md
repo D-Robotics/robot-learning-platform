@@ -29,6 +29,7 @@
 | --- | --- |
 | [`engines/starter-ppo.md`](engines/starter-ppo.md) | CPU 真实 PPO/SAC 训练与 ONNX 导出 |
 | [`engines/mjx-adapter.md`](engines/mjx-adapter.md) | MJX 引擎：纯 JAX PPO + 真 MuJoCo 接触动力学 |
+| [`engines/offline-bc.md`](engines/offline-bc.md) | 模仿学习路径：示教数据 → MLP 行为克隆 → ONNX（数值等价证明） |
 | [`task-pack-training.md`](task-pack-training.md) | 声明式 task-pack 训练与质量门 |
 | [`gpu-runner.md`](gpu-runner.md) | 独立 GPU 机器上的训练 runner 部署 |
 | [`sim2real-plugins.md`](sim2real-plugins.md) | 事件扩展层：实验追踪、对象存储、通知、硬件适配 |

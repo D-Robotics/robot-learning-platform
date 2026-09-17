@@ -1,0 +1,18 @@
+# Direct dependencies of the offline-bc engine.
+#
+# Pinned transitively in requirements.txt (`uv pip compile --generate-hashes`),
+# so a training run is reproducible in both halves of the provenance contract:
+# `sourceCommit` names the code and the lock names the libraries. The engine also
+# records the versions it actually imported in each result's `dependencies`
+# block, which is what `npm run verify:training-provenance` asserts.
+#
+# Regenerate after editing this file:
+#     npm run lock:engines
+
+# The trainer core is NumPy-only, so a machine without ONNX still trains and
+# saves models (the export is honestly skipped). `onnx` is what `--onnx` needs;
+# `onnxruntime` backs the export-time equivalence check and is an optional,
+# separately installed runtime — when present it is recorded in the result's
+# `dependencies` block.
+numpy==2.0.2
+onnx==1.19.1

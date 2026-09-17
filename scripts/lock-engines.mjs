@@ -29,7 +29,13 @@ import { fileURLToPath } from 'node:url';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(HERE, '..');
-const ENGINES = ['starter-ppo', 'mjx-adapter', 'mjlab-rsl-rl-adapter', 'microduck-eval'];
+const ENGINES = [
+  'starter-ppo',
+  'mjx-adapter',
+  'mjlab-rsl-rl-adapter',
+  'microduck-eval',
+  'offline-bc',
+];
 const check = process.argv.includes('--check');
 
 /**

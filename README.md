@@ -41,6 +41,7 @@ Node.js 需要 `^22.22.2 || ^24.15.0 || >=26.0.0`（与 `package.json` 的 `engi
 | **本地 / Mock** | 没有 CUDA、先验证产品和协议 | 任务台账、状态流转、遥测、评测、回放 | `LocalRunnerPort` |
 | **本地 / starter-ppo** | 无 GPU 但要看真实训练 | `mock=false` 的真 PPO、ONNX 导出、遥测评测（`npm run demo:starter`） | `engines/starter-ppo` |
 | **本地 / MJX** | 要真 MuJoCo 接触动力学（CPU 即可） | 真 MuJoCo 物理 + 纯 JAX PPO + ONNX/质量门证据（`npm run verify:mjx-adapter`） | `engines/mjx-adapter` |
+| **本地 / 行为克隆** | 有示教/录制数据，想直接克隆策略 | 真 MLP BC + train/val 分离 + ONNX 数值等价证明（`npm run verify:offline-bc`） | `engines/offline-bc` |
 | **RoboGo** | 有云端算力和训练账号 | manifest 校验、请求边界、token 不出浏览器、状态 reconcile | `RoboGoRunnerPort` |
 
 Mock 的 `completed` 只表示协议演练完成，不代表真实 PPO 权重或可部署模型；真实训练必须由已配置的 runner 明确返回制品。starter-ppo 返回的是真实训练产物（`mock=false`），但其 numpy 物理不是 MicroDuck 全身动力学；MJX 引擎跑真 MuJoCo 接触动力学（台账标注 `physicsBackend=mjx`）；两者 `deployable` 恒为 `false`。

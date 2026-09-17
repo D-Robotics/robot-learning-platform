@@ -199,6 +199,7 @@ async function main() {
     ['engines/starter-ppo/runner.py', 'starter-ppo', ['numpy', 'torch']],
     ['engines/mjx-adapter/adapter.py', 'mjx-adapter', ['numpy', 'jax', 'mujoco']],
     ['engines/mjlab-rsl-rl-adapter/adapter.py', 'mjlab-adapter', ['numpy']],
+    ['engines/offline-bc/train_bc.py', 'offline-bc', ['numpy']],
   ];
   const reported = [];
   let checked = 0;
