@@ -220,10 +220,14 @@ for (const theme of THEMES) {
       state.narrowCount === 0,
       state.narrowCount ? state.narrow.join(', ') : 'none',
     );
+    // "On the first screen", not "in the top half": the 2026-09 component-size
+    // unification raised controls to 44px touch targets (WCAG 2.5.5), which costs
+    // mobile vertical space on purpose. The percentage is printed so a further
+    // slide toward the fold shows up in the log rather than passing silently.
     record(
-      `${theme} ${width}px: page title is in the top half`,
-      state.titleTop !== null && state.titleTop < 450,
-      `title at y=${state.titleTop}`,
+      `${theme} ${width}px: page title is on the first screen`,
+      state.titleTop !== null && state.titleTop < 900,
+      `title at y=${state.titleTop} (${Math.round((state.titleTop / 900) * 100)}% of the fold)`,
     );
     const expectDrawer = width <= DRAWER_MAX;
     record(
