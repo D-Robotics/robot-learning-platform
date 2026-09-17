@@ -100,6 +100,9 @@ export const SIM2REAL_HTTP_MAX_REQUESTS_PER_SOCKET = 1_000;
 const SIM2REAL_DSH_MAX_PROMPT_CHARS = 12_000;
 const SIM2REAL_DSH_MAX_MODEL_CHARS = 160;
 const SIM2REAL_DSH_MAX_RESPONSE_CHARS = 20_000;
+/** Reasoning is a diagnostic trace, so its budget is tighter than the reply's. */
+const SIM2REAL_DSH_MAX_REASONING_CHARS = 8_000;
+const SIM2REAL_DSH_MAX_TOOL_TRAIL = 30;
 const SAFE_DSH_MODEL = /^[A-Za-z0-9][A-Za-z0-9._:/-]{0,159}$/;
 
 /**
@@ -138,6 +141,53 @@ export function publicDshText(value: unknown): string {
   if (!text) return 'DSH 已完成本轮，但没有返回文本。';
   if (text.length <= SIM2REAL_DSH_MAX_RESPONSE_CHARS) return text;
   return `${text.slice(0, SIM2REAL_DSH_MAX_RESPONSE_CHARS - 1)}…`;
+}
+
+/**
+ * The model's reasoning/thinking trace, offered to the browser as an optional
+ * collapsible. Same control-character scrub as the reply text, with its own
+ * (tighter) budget: thinking is a trace, not the deliverable, and a runaway
+ * reasoning stream must not dominate the payload.
+ */
+export function publicDshReasoning(value: unknown): string {
+  const text =
+    typeof value === 'string'
+      ? value.replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/g, '')
+      : '';
+  if (text.length <= SIM2REAL_DSH_MAX_REASONING_CHARS) return text;
+  return `${text.slice(0, SIM2REAL_DSH_MAX_REASONING_CHARS - 1)}…`;
+}
+
+/**
+ * Project the turn's tool calls into a compact trail for the chat UI: one
+ * entry per call (tool name + step), with the paired outcome marking
+ * success/failure. The runtime already walks the complete event list (stream
+ * chunks push tool events out of any fixed tail window); this pass only
+ * bounds and sanitizes what crosses the browser boundary. Names and outcomes
+ * only — raw `arguments` and result payloads stay server-side (they can carry
+ * ids and credentials), which keeps this a diagnostic surface rather than a
+ * data exfiltration path.
+ */
+export function publicDshToolTrail(
+  value: unknown,
+): Array<{ name: string; step: number; ok: boolean }> {
+  if (!Array.isArray(value)) return [];
+  const seen: Array<{ name: string; step: number; ok: boolean | null }> = [];
+  for (const item of value) {
+    if (!item || typeof item !== 'object' || Array.isArray(item)) continue;
+    const source = item as { name?: unknown; step?: unknown; ok?: unknown };
+    if (typeof source.name !== 'string' || !source.name) continue;
+    const name = source.name.replace(/[\u0000-\u001f\u007f]/g, '').slice(0, 80);
+    const step = Number(source.step);
+    if (!name || !Number.isInteger(step)) continue;
+    if (typeof source.ok !== 'boolean') continue;
+    const entry = seen.find((candidate) => candidate.name === name && candidate.step === step);
+    if (entry) entry.ok = source.ok;
+    else seen.push({ name, step, ok: source.ok });
+  }
+  return seen
+    .slice(-SIM2REAL_DSH_MAX_TOOL_TRAIL)
+    .map((entry) => ({ name: entry.name, step: entry.step, ok: Boolean(entry.ok) }));
 }
 /**
  * A reviewed MicroDuck release is allowed to contain a large WASM binary, but
@@ -794,6 +844,8 @@ export function createSim2RealWebApp(): Express {
         ok: true,
         sessionId: result.sessionId,
         text: publicDshText(result.text),
+        reasoning: publicDshReasoning(result.reasoning),
+        toolTrail: publicDshToolTrail(result.toolTrail),
         events: publicDshEventTail(result.events),
       });
     } catch (error) {

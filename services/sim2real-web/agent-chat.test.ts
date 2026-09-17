@@ -138,6 +138,50 @@ describe('Agent chat browser behavior', () => {
     );
   });
 
+  it('renders the DSH reasoning trace and tool timeline without leaking them into the reply text', async () => {
+    const fetchImpl = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith('/api/sim2real/dsh/chat')) {
+        return jsonResponse({
+          ok: true,
+          text: "I'll check the workspace.\n## 工作区\n- 2 个模型",
+          reasoning: '先调 overview 工具，再汇总。',
+          toolTrail: [
+            { name: 'rdk_workspace_overview', step: 1, ok: true },
+            { name: 'rdk_training_submit', step: 2, ok: false },
+          ],
+          events: [],
+        });
+      }
+      return jsonResponse({ ok: true });
+    });
+    const window = boot(fetchImpl);
+    const input = window.document.querySelector<HTMLInputElement>('#agent-chat-input');
+    const form = window.document.querySelector<HTMLFormElement>('#agent-chat-form');
+    if (!input || !form) throw new Error('agent chat fixture is incomplete');
+    input.value = '总结工作区';
+    form.dispatchEvent(new window.Event('submit', { bubbles: true, cancelable: true }));
+    await wait(30);
+
+    const messages = window.document.querySelector('#agent-chat-messages');
+    if (!messages) throw new Error('missing message log');
+    // The English preamble is stripped from the reply body.
+    const reply = messages.querySelector('.agent-chat-message-agent p');
+    expect(reply?.textContent).not.toContain("I'll check the workspace.");
+    expect(reply?.textContent).toContain('工作区');
+    // The reasoning renders as a collapsed disclosure, separate from the reply.
+    const reasoning = messages.querySelector('.agent-dsh-reasoning');
+    expect(reasoning?.textContent).toContain('思考过程');
+    expect(reasoning?.querySelector('summary')?.textContent).toContain('思考过程');
+    expect(reasoning?.querySelector('p')?.textContent).toContain('先调 overview 工具');
+    // The tool timeline renders one row per call, failures marked.
+    const trail = messages.querySelectorAll('.agent-dsh-trail-item');
+    expect(trail.length).toBe(2);
+    expect(trail[0]?.textContent).toContain('读取工作区总览');
+    expect(trail[1]?.classList.contains('is-failed')).toBe(true);
+    expect(trail[1]?.textContent).toContain('提交训练');
+  });
+
   it('traps keyboard focus in the drawer and restores the opener on close', async () => {
     const window = boot(vi.fn(async () => jsonResponse({ ok: true })));
     const launcher = window.document.querySelector<HTMLButtonElement>('#agent-floating-toggle');

@@ -381,6 +381,130 @@ function renderRestoredTaskCard(task) {
   messages.append(card);
 }
 
+// Model replies from bilingual gateways often start with an English preamble
+// before the real answer ("I'll read the workspace overview." + 中文正文); in
+// tool-using turns there is one such sentence per step. The server strips the
+// whole leading ASCII run; this is the client-side fallback for responses that
+// arrive without server processing (mocked dev responses, older servers).
+// Same conservative boundaries: stop at the first non-ASCII line, structural
+// Markdown, or an over-long English line; keep the original if everything was
+// English prose.
+function stripEnglishPreamble(text) {
+  const source = String(text ?? '');
+  const lines = source.split(/\r?\n/);
+  const limit = Math.min(lines.length, 6);
+  let index = 0;
+  let stripChars = 0;
+  while (index < limit) {
+    const line = lines[index];
+    if (!line.trim()) {
+      stripChars += line.length + 1;
+      index += 1;
+      continue;
+    }
+    if (!/^[\x20-\x7e]*$/.test(line)) break;
+    if (line.length > 240) break;
+    if (/^(#{1,6}\s|[-*]\s|\||```|>\s|\d+\.\s)/.test(line)) break;
+    stripChars += line.length + 1;
+    index += 1;
+  }
+  if (index >= lines.length) return source;
+  if (index >= limit && limit < lines.length) return source;
+  const rest = source.slice(stripChars).replace(/^(?:\r?\n)+/, '');
+  return rest.trim() ? rest : source;
+}
+
+// Multi-step turns concatenate per-step narrations inline on one line ahead of
+// the answer ("I'll read the overview.Workspace read.## 工作区总览…"). Strip a
+// leading ASCII run within the first line, ending at the first CJK character;
+// past four inline sentences the English is treated as content.
+function stripInlineEnglishPreamble(text) {
+  const source = String(text ?? '');
+  const firstBreak = source.search(/\r?\n/);
+  const firstLine = firstBreak === -1 ? source : source.slice(0, firstBreak);
+  if (firstLine.length > 400) return source;
+  let boundary = -1;
+  for (let index = 0; index < firstLine.length; index += 1) {
+    const code = firstLine.charCodeAt(index);
+    if (code < 0x20 || code > 0x7e) { boundary = index; break; }
+  }
+  if (boundary === -1) return source;
+  const inline = firstLine.slice(0, boundary);
+  if (!inline.trim()) return source;
+  const sentenceEnds = (inline.match(/[.!?:](?:\s|$)/g) || []).length;
+  if (sentenceEnds > 4) return source;
+  while (boundary > 0 && firstLine.charCodeAt(boundary - 1) === 0x23) boundary -= 1;
+  const remainder = firstLine.slice(boundary);
+  const rebuilt = `${remainder}${firstBreak === -1 ? '' : source.slice(firstBreak)}`;
+  return rebuilt.trim() ? rebuilt : source;
+}
+
+function stripDshPreamble(text) {
+  return stripInlineEnglishPreamble(stripEnglishPreamble(text));
+}
+
+const DSH_TOOL_LABELS = {
+  rdk_workspace_overview: '读取工作区总览',
+  rdk_device_discover: '发现设备',
+  rdk_device_connect: '连接设备',
+  rdk_board_health: '读取板端健康',
+  rdk_training_submit: '提交训练',
+  rdk_training_status: '查询训练状态',
+  rdk_simulator_open: '打开仿真',
+  rdk_evaluation_summarize: '汇总评测',
+  rdk_deployment_preflight: '部署预检',
+  rdk_board_stop: '停止板端',
+};
+
+// A compact tool timeline for DSH replies: what the model called and whether
+// each call succeeded, without any arguments or payloads (the server projects
+// the same names-out-only shape). It makes a tool-using reply auditable at a
+// glance instead of a wall of prose.
+function renderDshToolTrail(trail) {
+  const items = (Array.isArray(trail) ? trail : []).filter(
+    (item) => item && typeof item.name === 'string' && typeof item.ok === 'boolean',
+  );
+  if (!items.length) return null;
+  const box = document.createElement('details');
+  box.className = 'agent-dsh-trail';
+  const summary = document.createElement('summary');
+  const failed = items.filter((item) => !item.ok).length;
+  summary.textContent = `工具调用 ${items.length} 次${failed ? ` · ${failed} 次失败` : ''}`;
+  box.append(summary);
+  for (const item of items) {
+    const row = document.createElement('span');
+    row.className = `agent-dsh-trail-item${item.ok ? '' : ' is-failed'}`;
+    row.textContent = `${item.ok ? '✓' : '✕'} ${DSH_TOOL_LABELS[item.name] || item.name}`;
+    box.append(row);
+  }
+  return box;
+}
+
+// The reasoning trace ships separately from the reply text so it can be
+// disclosed on demand: a default-collapsed details block keeps the drawer
+// calm while keeping the "how did it think" surface one click away.
+function renderDshReasoning(reasoning) {
+  const text = String(reasoning ?? '').trim();
+  if (!text) return null;
+  const box = document.createElement('details');
+  box.className = 'agent-dsh-reasoning';
+  const summary = document.createElement('summary');
+  summary.textContent = '思考过程';
+  const body = document.createElement('p');
+  body.textContent = text.slice(0, 8_000);
+  box.append(summary, body);
+  return box;
+}
+
+function renderDshReply(dsh) {
+  const node = addMessage('agent', stripDshPreamble(dsh.text));
+  const trail = renderDshToolTrail(dsh.toolTrail);
+  if (trail) node?.append(trail);
+  const reasoning = renderDshReasoning(dsh.reasoning);
+  if (reasoning) node?.append(reasoning);
+  return node;
+}
+
 function addMessage(role, text, persist = true) {
   if (!messages) return null;
   const node = document.createElement('div');
@@ -820,11 +944,12 @@ async function runTask(message) {
   // …), and every tool call rides the authenticated domain routes. Only a
   // disabled runtime (503) falls back to the guarded legacy planner.
   try {
+    setAgentBusy(true, '模型思考与工具执行中…');
     const dsh = await api('/sim2real/dsh/chat', {
       method: 'POST',
       body: JSON.stringify({ message, context: { modelId, deviceId, computeResourceId } }),
     });
-    if (dsh?.ok && dsh.text) { addMessage('agent', dsh.text); return; }
+    if (dsh?.ok && dsh.text) { renderDshReply(dsh); return; }
   } catch (error) {
     if (!(error && error.status === 503)) throw error;
   }

@@ -10,7 +10,9 @@ import {
   createSim2RealWebApp,
   hardenSim2RealHttpServer,
   publicDshEventTail,
+  publicDshReasoning,
   publicDshText,
+  publicDshToolTrail,
   SIM2REAL_HTTP_HEADERS_TIMEOUT_MS,
   SIM2REAL_HTTP_KEEP_ALIVE_TIMEOUT_MS,
   SIM2REAL_HTTP_MAX_REQUESTS_PER_SOCKET,
@@ -228,6 +230,32 @@ describe('standalone Sim2Real health and optional simulator surface', () => {
     expect(large).not.toContain('\u0000');
     expect(large.length).toBe(20_000);
     expect(large.endsWith('…')).toBe(true);
+  });
+
+  it('scrubs and budgets the reasoning trace and projects tool outcomes only', () => {
+    const reasoning = publicDshReasoning(`think\u0002${'y'.repeat(9_000)}`);
+    expect(reasoning).not.toContain('\u0002');
+    expect(reasoning.length).toBe(8_000);
+    expect(reasoning.endsWith('…')).toBe(true);
+    expect(publicDshReasoning(42)).toBe('');
+
+    // The runtime hands over precomputed name/step/ok entries; this pass
+    // bounds the count and scrubs names.
+    const many: Array<{ name: string; step: number; ok: boolean }> = Array.from(
+      { length: 60 },
+      (_, index) => ({ name: `tool-${index}`, step: index + 1, ok: true }),
+    );
+    const trail = publicDshToolTrail([
+      ...many,
+      { name: `bad\u0000name`, step: 61, ok: false },
+      { name: 'ok-tool', step: 62, ok: true },
+      { name: '', step: 63, ok: true },
+      { name: 'no-boolean', step: 64 },
+    ]);
+    expect(trail.length).toBe(30);
+    expect(trail.at(-1)).toEqual({ name: 'ok-tool', step: 62, ok: true });
+    expect(trail.every((entry) => !entry.name.includes('\u0000'))).toBe(true);
+    expect(publicDshToolTrail('not-an-array')).toEqual([]);
   });
 
   it('can make the browser release a hard readiness dependency', async () => {

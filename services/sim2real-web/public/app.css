@@ -4246,6 +4246,42 @@ body.is-loading .app-shell {
   color: var(--muted-strong);
 }
 
+/* DSH reasoning trace and tool timeline: optional disclosures attached to an
+   agent reply. Collapsed by default so a tool-using turn stays a compact
+   answer; one click opens the "how it thought / what it called" evidence. */
+.agent-dsh-reasoning,
+.agent-dsh-trail {
+  margin-top: 8px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--panel-soft);
+  padding: 6px 10px;
+  font-size: 12px;
+}
+.agent-dsh-reasoning summary,
+.agent-dsh-trail summary {
+  cursor: pointer;
+  color: var(--muted-strong);
+  user-select: none;
+  line-height: 1.8;
+}
+.agent-dsh-reasoning p {
+  margin: 4px 0 6px;
+  color: var(--muted);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  max-height: 220px;
+  overflow-y: auto;
+}
+.agent-dsh-trail-item {
+  display: block;
+  color: var(--green-text);
+  line-height: 1.7;
+}
+.agent-dsh-trail-item.is-failed {
+  color: var(--red-text);
+}
+
 /* Recent-run comparison: compact enough for the evaluation workspace, with
    visible empty/missing states instead of fabricated values. */
 .run-comparison-panel { margin-top: 16px; }

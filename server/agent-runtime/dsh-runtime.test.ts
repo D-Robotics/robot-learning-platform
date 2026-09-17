@@ -12,6 +12,8 @@ import {
   createDshRuntime,
   DshAgentFailure,
   resolveDshPersistenceRoot,
+  stripEnglishPreamble,
+  stripInlineEnglishPreamble,
 } from './dsh-runtime.js';
 
 /**
@@ -124,6 +126,64 @@ describe('DSH persistence root resolution', () => {
   });
 });
 
+describe('DSH reply preamble stripping', () => {
+  it('drops a pure-ASCII English first line when a following body exists', () => {
+    expect(
+      stripEnglishPreamble("I'll read the workspace overview for you.\n\n## 模型\n- 内置模型 2 个"),
+    ).toBe('## 模型\n- 内置模型 2 个');
+  });
+
+  it('strips the whole per-step English preface of a tool-using turn', () => {
+    expect(
+      stripEnglishPreamble(
+        "I'll start by reading the workspace overview.\nNow let me summarize the evaluation.\n已完成两次只读读取。\n\n## 结果",
+      ),
+    ).toBe('已完成两次只读读取。\n\n## 结果');
+  });
+
+  it('keeps a single-line answer, a Chinese first line, and a long English body', () => {
+    // All-English answers survive: their first line is their body.
+    expect(stripEnglishPreamble('Training completed in 90 seconds.')).toBe(
+      'Training completed in 90 seconds.',
+    );
+    // A Chinese first line is never touched.
+    expect(stripEnglishPreamble('已完成。\n后续步骤如下')).toBe('已完成。\n后续步骤如下');
+    // An over-long first line is treated as content, not preamble.
+    const longLine = `x`.repeat(300);
+    expect(stripEnglishPreamble(`${longLine}\nbody`)).toBe(`${longLine}\nbody`);
+  });
+
+  it('stops stripping at structural Markdown and caps the preface length', () => {
+    // A Markdown heading ends the preface even when it is pure ASCII: the real
+    // answer is starting.
+    expect(stripEnglishPreamble('Let me summarize.\n## Summary\n- item')).toBe(
+      '## Summary\n- item',
+    );
+    // An all-English message whose first six lines are short sentences is kept
+    // verbatim: past the cap, the English is the content.
+    const englishProse = Array.from({ length: 8 }, (_, i) => `Line number ${i} here.`).join('\n');
+    expect(stripEnglishPreamble(englishProse)).toBe(englishProse);
+  });
+
+  it('strips inline per-step narrations that share the first line with the answer', () => {
+    // askDsh joins per-step text with '', so step narrations land inline ahead
+    // of the CJK answer on the SAME line. The narration and its glued
+    // Markdown marker go; the answer text survives.
+    expect(
+      stripInlineEnglishPreamble(
+        "I'll read the overview.Workspace read.## 工作区总览\n\n**模型**：7 个",
+      ),
+    ).toBe('工作区总览\n\n**模型**：7 个');
+    // Chinese-first lines and pure-ASCII lines are untouched.
+    expect(stripInlineEnglishPreamble('已完成。\n后续')).toBe('已完成。\n后续');
+    expect(stripInlineEnglishPreamble('All English line.')).toBe('All English line.');
+    // Five or more inline sentences read as content, not narration.
+    const dense =
+      'One sentence. Two sentence. Three sentence. Four sentence. Five sentence.然后是中文。';
+    expect(stripInlineEnglishPreamble(dense)).toBe(dense);
+  });
+});
+
 describe('DSH runtime chat composition', () => {
   it('bridges the dedicated API key into the provider credential seam and returns the reply', async () => {
     const gateway = await startChatGateway((request, response) => {
@@ -170,6 +230,10 @@ describe('DSH runtime chat composition', () => {
 
     expect(result.text).toBe('我是 RDK 工作台智能体。');
     expect(result.text).not.toContain('直接回答');
+    // The thinking is offered separately instead of being discarded, so the
+    // chat UI can render an optional trace without polluting the reply.
+    expect(result.reasoning).toContain('用户让我介绍自己');
+    expect(result.reasoning).toContain('组织语言');
   }, 60_000);
 
   it('binds product capability tools so the model can call them mid-turn', async () => {
@@ -233,6 +297,9 @@ describe('DSH runtime chat composition', () => {
     // The dispatched tool call must be visible in the projected event tail.
     const toolCalls = result.events.filter((event) => event.type === 'tool/call');
     expect(toolCalls.length).toBeGreaterThanOrEqual(1);
+    // And in the dedicated trail: streaming chunks push tool events out of the
+    // fixed event tail, so the trail is computed from the full event list.
+    expect(result.toolTrail).toEqual([{ name: 'rdk_workspace_overview', step: 1, ok: true }]);
   }, 60_000);
 
   it('fails closed with a credential hint instead of a fake empty reply when no key is configured', async () => {

@@ -169,6 +169,178 @@ function mapTurnFailure(failure: { code: string; message: string }): DshAgentFai
   );
 }
 
+/**
+ * Drop the English preamble a bilingual model prepends before its real answer
+ * (e.g. "I'll read the workspace overview for you." before the Chinese reply).
+ * In tool-using turns the model emits one such sentence per step, so the rule
+ * strips the ENTIRE leading run of pure-ASCII lines, not just the first line.
+ * Boundaries that stop the strip: the first line containing CJK or other
+ * non-ASCII text, a Markdown heading/table/fence (structure signals the real
+ * answer), or an over-long English line (an English body's first sentence).
+ * A line count cap keeps an all-English answer's body intact when its opening
+ * happens to be several short sentences: past the cap we assume the English
+ * IS the content and return the original text.
+ */
+export function stripEnglishPreamble(text: string): string {
+  const source = String(text ?? '');
+  const lines = source.split(/\r?\n/);
+  const limit = Math.min(lines.length, 6);
+  let index = 0;
+  let stripChars = 0;
+  while (index < limit) {
+    const line = lines[index];
+    if (!line.trim()) {
+      // Blank line inside the preamble: still ASCII-only so far; keep scanning
+      // but remember how much would be stripped.
+      stripChars += line.length + 1;
+      index += 1;
+      continue;
+    }
+    if (!/^[\x20-\x7e]*$/.test(line)) break; // non-ASCII: the real answer starts here
+    if (line.length > 240) break; // too long to be a throwaway preamble line
+    if (/^(#{1,6}\s|[-*]\s|\||```|>\s|\d+\.\s)/.test(line)) break; // structural Markdown
+    stripChars += line.length + 1;
+    index += 1;
+  }
+  if (index >= lines.length) return source; // the whole message was English prose
+  // The cap fired while every scanned line still looked like preamble: an
+  // all-English message whose opening happens to be several short sentences.
+  // Treat the English as the content instead of stripping into the body.
+  if (index >= limit && limit < lines.length) return source;
+  const rest = source.slice(stripChars).replace(/^(?:\r?\n)+/, '');
+  return rest.trim() ? rest : source;
+}
+
+/**
+ * The runtime joins per-step assistant text with `join('')`, so a multi-step
+ * turn can land its English narrations inline on ONE line ahead of the real
+ * answer ("I'll read the overview.Workspace read.## 工作区总览…"). Line-based
+ * stripping cannot see that. This pass strips a leading ASCII run within the
+ * first line, ending at the first CJK character, structural Markdown, or a
+ * sentence-past-the-cap boundary (three sentences is narration; five is
+ * content). Only the first line is touched, and only up to 400 characters in.
+ */
+export function stripInlineEnglishPreamble(text: string): string {
+  const source = String(text ?? '');
+  const firstBreak = source.search(/\r?\n/);
+  const firstLine = firstBreak === -1 ? source : source.slice(0, firstBreak);
+  if (firstLine.length > 400) return source;
+  // Find the first character that is not printable ASCII: CJK starts there.
+  let boundary = -1;
+  for (let index = 0; index < firstLine.length; index += 1) {
+    const code = firstLine.charCodeAt(index);
+    if (code < 0x20 || code > 0x7e) {
+      boundary = index;
+      break;
+    }
+  }
+  if (boundary === -1) return source; // the line is pure ASCII: line pass owns it
+  const inline = firstLine.slice(0, boundary);
+  const sentenceEnds = (inline.match(/[.!?:](?:\s|$)/g) || []).length;
+  if (!inline.trim()) return source;
+  if (sentenceEnds > 4) return source; // too much English inline: treat as content
+  // Narrations can be glued directly onto the answer's Markdown marker
+  // ("...overview.## 工作区总览"): walk the boundary back over immediately
+  // preceding heading/hash characters so the marker survives the strip.
+  while (boundary > 0 && firstLine.charCodeAt(boundary - 1) === 0x23) boundary -= 1;
+  const remainder = firstLine.slice(boundary);
+  const rebuilt = `${remainder}${firstBreak === -1 ? '' : source.slice(firstBreak)}`;
+  return rebuilt.trim() ? rebuilt : source;
+}
+
+/**
+ * Collect the model's reasoning/thinking blocks into one string. Reasoning
+ * models stream their thinking as separate `type: "reasoning"` blocks on the
+ * same message; the visible answer stays in `type: "text"` blocks. Keeping the
+ * two apart lets the UI offer the thinking as an optional trace instead of
+ * either prepending it to the reply or discarding it.
+ */
+function reasoningTextOf(events: readonly unknown[]): string {
+  return events
+    .filter(
+      (item): item is SessionEvent<'assistant/message'> =>
+        Boolean(item) &&
+        typeof item === 'object' &&
+        (item as { type?: unknown }).type === 'assistant/message',
+    )
+    .flatMap((event) => {
+      const message = event.data.message;
+      if (typeof message === 'string') return [];
+      const content = message?.content;
+      if (!Array.isArray(content)) return [];
+      return content.flatMap((block) => {
+        if (typeof block === 'string') return [];
+        const candidate = block as { type?: unknown; text?: unknown };
+        return candidate.type === 'reasoning' && typeof candidate.text === 'string'
+          ? [candidate.text]
+          : [];
+      });
+    })
+    .join('')
+    .trim();
+}
+
+/**
+ * Project the tool calls of a turn into name + step + outcome entries. This
+ * walks the FULL event list — the response's 50-event diagnostic tail is
+ * routinely flooded by `assistant/chunk` stream events, which would slice the
+ * `tool/call` records out of a tool-using turn and hide exactly the calls the
+ * chat UI wants to show. Arguments and result payloads stay here.
+ */
+export function toolTrailOf(
+  events: readonly unknown[],
+): Array<{ name: string; step: number; ok: boolean }> {
+  const trail: Array<{ name: string; step: number; ok: boolean | null }> = [];
+  const byCallId = new Map<string, { name: string; step: number; ok: boolean | null }>();
+  for (const item of events) {
+    if (!item || typeof item !== 'object') continue;
+    const source = item as {
+      type?: unknown;
+      data?: {
+        name?: unknown;
+        step?: unknown;
+        callId?: unknown;
+        message?: { toolCallId?: unknown } | string;
+        error?: unknown;
+      };
+    };
+    if (source.type === 'tool/call') {
+      const name = typeof source.data?.name === 'string' ? source.data.name.slice(0, 80) : '';
+      const step = Number(source.data?.step);
+      if (!name || !Number.isInteger(step)) continue;
+      const entry = { name, step, ok: null };
+      trail.push(entry);
+      if (typeof source.data?.callId === 'string' && source.data.callId)
+        byCallId.set(source.data.callId, entry);
+      continue;
+    }
+    if (source.type === 'tool/result') {
+      const message = source.data?.message;
+      const callId =
+        typeof message === 'object' && message !== null
+          ? typeof message.toolCallId === 'string'
+            ? message.toolCallId
+            : ''
+          : '';
+      const failed = Boolean(source.data?.error);
+      const entry = (callId && byCallId.get(callId)) || pendingEntryOf(trail);
+      if (entry) entry.ok = !failed;
+    }
+  }
+  return trail
+    .filter((entry): entry is { name: string; step: number; ok: boolean } => entry.ok !== null)
+    .map((entry) => ({ name: entry.name, step: entry.step, ok: Boolean(entry.ok) }));
+}
+
+function pendingEntryOf(
+  trail: Array<{ name: string; step: number; ok: boolean | null }>,
+): { name: string; step: number; ok: boolean | null } | undefined {
+  for (let index = trail.length - 1; index >= 0; index -= 1) {
+    if (trail[index].ok === null) return trail[index];
+  }
+  return undefined;
+}
+
 export async function askDsh(ctx: Context, prompt: string, options: { model?: string } = {}) {
   const id = SessionId(`sim2real-${randomUUID()}`);
   const handle = await ctx.agents.create({
@@ -198,7 +370,10 @@ export async function askDsh(ctx: Context, prompt: string, options: { model?: st
     if (failure) throw mapTurnFailure(failure);
     const messages = events
       .filter(
-        (event): event is SessionEvent<'assistant/message'> => event.type === 'assistant/message',
+        (item): item is SessionEvent<'assistant/message'> =>
+          Boolean(item) &&
+          typeof item === 'object' &&
+          (item as { type?: unknown }).type === 'assistant/message',
       )
       .map((event) => event.data.message);
     // Visible answer text only. Reasoning models stream their thinking as
@@ -225,7 +400,13 @@ export async function askDsh(ctx: Context, prompt: string, options: { model?: st
       .trim();
     return {
       sessionId: id,
-      text: text || 'DSH 已完成本轮，但没有返回文本。',
+      text:
+        stripInlineEnglishPreamble(stripEnglishPreamble(text)) ||
+        'DSH 已完成本轮，但没有返回文本。',
+      reasoning: reasoningTextOf(events),
+      // Walk the complete event list, not the tail below: streaming chunks
+      // push tool events out of any fixed window.
+      toolTrail: toolTrailOf(events),
       events: events.slice(-50),
     };
   } finally {
