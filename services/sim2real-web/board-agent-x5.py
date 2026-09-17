@@ -1207,8 +1207,43 @@ def policy_stage(policy_bytes_b64, filename, sha256_hex):
             "sha256": digest, "note": "staged into the pinned policies dir; loading stays a separate action"}
 
 
+def _policy_file_digest(path):
+    """SHA-256 of a staged policy, or None when it cannot be read safely."""
+    digest = hashlib.sha256()
+    fd = None
+    try:
+        fd = secure_open_read(path)
+        while True:
+            chunk = os.read(fd, 1024 * 1024)
+            if not chunk:
+                break
+            digest.update(chunk)
+    except OSError:
+        return None
+    finally:
+        if fd is not None:
+            try:
+                os.close(fd)
+            except OSError:
+                pass
+    return digest.hexdigest()
+
+
+# Digest of every listed policy as (size, mtime_ns, sha256). Hashing up to 50 MB
+# on every list request would be wasteful, and the digest is what binds a board
+# latency rehearsal to the bytes it measured, so it is cached until the file
+# actually changes. A test can clear it; nothing else needs to.
+_POLICY_DIGEST_CACHE = {}
+
+
 def policy_list():
-    """List loadable ONNX files in the pinned policies dir (name/size only)."""
+    """List loadable ONNX files in the pinned policies dir.
+
+    Each entry carries the size and the SHA-256 of the file on disk. The digest
+    is not decoration: `shared/board-rehearsal.ts` binds a rehearsal receipt to
+    an artifact by digest, so a policy cannot be certified by a rehearsal that
+    measured different bytes.
+    """
     try:
         ensure_private_parent(
             os.path.join(POLICY_ALLOWED_MODEL_DIR, ".policy-list-probe"),
@@ -1218,21 +1253,32 @@ def policy_list():
         for name in os.listdir(POLICY_ALLOWED_MODEL_DIR):
             if not re.match(r"^[\w.-]+\.(?:onnx|bin)$", name):
                 continue
+            path = os.path.join(POLICY_ALLOWED_MODEL_DIR, name)
             try:
-                entries.append(
-                    (name, secure_size(os.path.join(POLICY_ALLOWED_MODEL_DIR, name)))
-                )
+                size = secure_size(path)
+                stat = os.stat(path)
             except OSError:
                 # Symlink/non-regular/foreign-owned entries are omitted rather
                 # than exposed as loadable artifacts.
                 continue
+            fingerprint = (size, getattr(stat, "st_mtime_ns", None))
+            cached = _POLICY_DIGEST_CACHE.get(name)
+            if cached and cached[0] == fingerprint:
+                sha256 = cached[1]
+            else:
+                sha256 = _policy_file_digest(path)
+                _POLICY_DIGEST_CACHE[name] = (fingerprint, sha256)
+            entries.append((name, size, sha256))
         entries.sort()
     except OSError:
         entries = []
     return {
         "ok": True,
         "dir": POLICY_ALLOWED_MODEL_DIR,
-        "policies": [{"name": name, "bytes": size} for name, size in entries],
+        "policies": [
+            {"name": name, "bytes": size, **({"sha256": sha256} if sha256 else {})}
+            for name, size, sha256 in entries
+        ],
     }
 
 

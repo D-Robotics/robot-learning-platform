@@ -8,6 +8,7 @@ import type {
   Sim2RealTrainingSpec,
 } from '../../shared/sim2real.js';
 import { isIP } from 'node:net';
+import { normalizeLatencyMeasurementStage } from '../../shared/board-rehearsal.js';
 import { SAFE_ARTIFACT_REF } from '../../shared/sim2real.js';
 import { normalizeTaskEvaluationEvidence } from '../../shared/task-evaluation.js';
 import { Sim2RealError } from './sim2real-errors.js';
@@ -409,6 +410,18 @@ function safeArtifact(value: unknown): Sim2RealRunArtifactMetadata | undefined {
   };
 }
 
+/** Bounded `{library: version}` map from an untrusted engine result. */
+function dependencyVersions(value: unknown): { dependencyVersions: Record<string, string> } | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  const normalized: Record<string, string> = {};
+  for (const [name, version] of Object.entries(value as Record<string, unknown>).slice(0, 16)) {
+    if (!/^[a-z0-9][a-z0-9._-]{0,31}$/i.test(name)) continue;
+    if (typeof version !== 'string' || !/^[0-9][0-9a-z.+-]{0,31}$/i.test(version)) continue;
+    normalized[name] = version;
+  }
+  return Object.keys(normalized).length ? { dependencyVersions: normalized } : null;
+}
+
 function safeMetrics(value: unknown): Sim2RealRunMetrics | undefined {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
   const source = value as Record<string, unknown>;
@@ -460,6 +473,19 @@ function safeMetrics(value: unknown): Sim2RealRunMetrics | undefined {
     ...(bounded('controlLatencyMs', 0, 10_000) == null
       ? {}
       : { controlLatencyMs: bounded('controlLatencyMs', 0, 10_000) }),
+    // A latency figure without a declared stage is reported as "unknown" rather
+    // than silently presented as a control-loop budget.
+    ...(source.measurementStage === undefined
+      ? {}
+      : { measurementStage: normalizeLatencyMeasurementStage(source.measurementStage) }),
+    // Source provenance is an audit field, so a malformed value is dropped
+    // rather than displayed as if it identified a revision.
+    ...(typeof source.sourceCommit === 'string' && /^[a-f0-9]{40}$/i.test(source.sourceCommit)
+      ? { sourceCommit: source.sourceCommit.toLowerCase() }
+      : {}),
+    // Library versions are an untrusted boundary like any other: keep only
+    // plausible names and concrete versions, capped in count and length.
+    ...(dependencyVersions(source.dependencyVersions) ?? {}),
     ...(bounded('iterations', 0, 2_000_000) == null
       ? {}
       : { iterations: bounded('iterations', 0, 2_000_000) }),

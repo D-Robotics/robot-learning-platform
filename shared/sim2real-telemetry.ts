@@ -1,3 +1,4 @@
+import type { LatencyMeasurementStage } from './board-rehearsal.js';
 import type {
   ModelArtifactFormat,
   ModelArtifactKind,
@@ -28,7 +29,29 @@ export interface Sim2RealRunMetrics {
   successRate?: number;
   fallRate?: number;
   episodeLength?: number;
+  /** Latency figure; interpret only with {@link measurementStage}. */
   controlLatencyMs?: number;
+  /**
+   * Where {@link controlLatencyMs} was measured. The starter engine measures a
+   * PyTorch forward pass on the training host, so it reports `host-torch`; a
+   * board rehearsal reports `board-onnx`. Never inferred.
+   */
+  measurementStage?: LatencyMeasurementStage;
+  /**
+   * Commit of the training code that produced this artifact. A package version
+   * such as `starter-ppo-0.1.0` cannot answer "which reward/observation code
+   * trained this policy?" once the tree has moved on. Absent means the engine
+   * could not determine it (no `.git`, e.g. a packaged board install) — never
+   * filled in with a guess.
+   */
+  sourceCommit?: string;
+  /**
+   * Versions of the libraries that actually produced the artifact, as installed
+   * (`{torch: "2.8.0", ...}`). A commit names the code but not the numerics:
+   * `torch.onnx.export` output changes between releases, so both halves are
+   * needed to reproduce a run. Absent means the engine did not report them.
+   */
+  dependencyVersions?: Record<string, string>;
   iterations?: number;
   /**
    * Physics backend the engine actually trained on (e.g. "mjx" for real
@@ -71,6 +94,19 @@ export interface Sim2RealTaskEvaluationEnvelope {
   collisionRateCiHigh?: number;
   episodes?: number;
   meanReward?: number;
+  /** Falls are tracked apart from 1 - successRate: a policy can fail a task
+   * while standing still, or fall after completing it. */
+  fallRate?: number;
+  fallRateCiLow?: number;
+  fallRateCiHigh?: number;
+  meanEpisodeLength?: number;
+  /**
+   * Task-specific measurements in physical units (metres, m/s, radians …),
+   * e.g. MicroDuck's `ballTravelM` / `ballPeakSpeedMps`. Numbers only, and they
+   * are evidence for a human reader — never folded into the release verdict,
+   * which reads `successRate` / `collisionRate` alone.
+   */
+  measurements?: Record<string, number>;
 }
 
 /**
@@ -105,7 +141,18 @@ export interface Sim2RealTaskEvaluationEvidence {
       gateOn?: 'point' | 'ciLowerBound';
     };
   };
+  /**
+   * A latency figure whose meaning depends on {@link measurementStage}. Read it
+   * only together with that stage: figures from different stages (training-host
+   * torch, training-host ONNX, board ONNX, simulated step) are not comparable.
+   */
   controlLatencyMs?: number;
+  /**
+   * Where {@link controlLatencyMs} was measured. Absent means the producer did
+   * not declare it, which normalizes to "unknown" — never to a board claim.
+   * Only `board-onnx` may support a deployment verdict.
+   */
+  measurementStage?: LatencyMeasurementStage;
   seed?: number;
   /** SHA-256 of the normalized runner report, retained for audit correlation. */
   reportSha256?: string;

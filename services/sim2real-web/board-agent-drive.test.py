@@ -19,6 +19,7 @@ import hashlib
 import json
 import io
 import os
+import shutil
 import stat
 import sys
 import tempfile
@@ -378,6 +379,51 @@ class DriveEnabledContract(unittest.TestCase):
         self.assertEqual(policy["chassisWatchdogMs"], 500)
         self.assertIn("drive/stop", policy["emergencyStop"])
 
+    def test_policy_list_reports_the_digest_it_will_be_judged_by(self):
+        """A staged policy's digest binds a board rehearsal to real bytes.
+
+        `policy/stage` already returns the SHA-256 it verified, and the platform
+        rehearsal gate compares that digest with the one a rehearsal measured.
+        The listing therefore has to carry it too — a name and size alone cannot
+        answer "will I load the bytes that were measured?".
+        """
+        policy_dir = os.path.join(self.workdir, "policies")
+        os.mkdir(policy_dir, 0o700)
+        self.agent.POLICY_ALLOWED_MODEL_DIR = policy_dir
+        self.agent._POLICY_DIGEST_CACHE.clear()
+        payload = b"tiny-policy-bytes"
+        target = os.path.join(policy_dir, "demo.onnx")
+        with open(target, "wb") as handle:
+            handle.write(payload)
+        os.chmod(target, 0o600)
+        listed = self.agent.policy_list()["policies"]
+        self.assertEqual(len(listed), 1)
+        self.assertEqual(listed[0]["name"], "demo.onnx")
+        self.assertEqual(listed[0]["bytes"], len(payload))
+        self.assertEqual(listed[0]["sha256"], hashlib.sha256(payload).hexdigest())
+        # The digest is cached per (size, mtime) so a 50 MB artifact is not
+        # re-hashed on every poll, and a rewrite must invalidate that cache.
+        self.assertEqual(self.agent.policy_list()["policies"], listed)
+        with open(target, "wb") as handle:
+            handle.write(b"changed-policy-bytes")
+        os.chmod(target, 0o600)
+        changed = self.agent.policy_list()["policies"][0]
+        self.assertNotEqual(changed["sha256"], listed[0]["sha256"])
+        self.assertEqual(changed["sha256"], hashlib.sha256(b"changed-policy-bytes").hexdigest())
+
+    def test_policy_list_omits_entries_it_cannot_read_safely(self):
+        policy_dir = os.path.join(self.workdir, "policies")
+        os.mkdir(policy_dir, 0o700)
+        self.agent.POLICY_ALLOWED_MODEL_DIR = policy_dir
+        self.agent._POLICY_DIGEST_CACHE.clear()
+        outside = os.path.join(self.workdir, "outside.onnx")
+        with open(outside, "wb") as handle:
+            handle.write(b"outside")
+        os.symlink(outside, os.path.join(policy_dir, "linked.onnx"))
+        with open(os.path.join(policy_dir, "README.txt"), "w") as handle:
+            handle.write("not a policy")
+        self.assertEqual(self.agent.policy_list()["policies"], [])
+
     def test_profile_wiring_lowers_limits_and_selects_command_topic(self):
         profile_path = os.path.join(self.workdir, "custom-profile.json")
         with open(profile_path, "w") as handle:
@@ -595,6 +641,106 @@ class BoardConfigSurfaceContract(unittest.TestCase):
         with open(self.env_file) as handle:
             content = handle.read()
         self.assertIn("RDK_SIM2REAL_BOARD_AGENT_ENABLE_POLICY=1", content)
+
+
+def load_policy_runtime_module():
+    """Spec-load board-policy-runtime.py (hyphenated name, stdlib-only imports)."""
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location(
+        "board_policy_runtime_test", os.path.join(HERE, "board-policy-runtime.py")
+    )
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def _optional_onnx_stack():
+    """numpy/onnx for building probe graphs, or None when unavailable."""
+    try:
+        import numpy  # noqa: F401
+        import onnx  # noqa: F401
+    except ImportError:
+        return None
+    return True
+
+
+class PolicyRuntimeInputBindingContract(unittest.TestCase):
+    """The board runtime must refuse inputs it cannot actually feed.
+
+    A recurrent export's `h_in`/`c_in` carry the policy's memory. ONNX Runtime
+    would default them to zeros on every step, so the duck would run a policy
+    that never remembers anything: actions look plausible and are wrong. Until
+    this runtime carries state, that export has to be refused at load.
+    """
+
+    def setUp(self):
+        self.workdir = tempfile.mkdtemp(prefix="policy-runtime-binding-")
+        self.addCleanup(shutil.rmtree, self.workdir, ignore_errors=True)
+        self.runtime_module = load_policy_runtime_module()
+
+    def _write_model(self, inputs, outputs, name):
+        import numpy as np
+        import onnx
+        from onnx import TensorProto, helper, numpy_helper
+
+        nodes = []
+        inits = []
+        for index, (tensor_name, shape) in enumerate(inputs):
+            if len(shape) == 2:
+                weight = (np.random.RandomState(index).randn(shape[1], 14) * 0.05).astype(
+                    np.float32
+                )
+                bias = np.zeros(14, dtype=np.float32)
+                nodes.append(helper.make_node("MatMul", [tensor_name, f"w{index}"], [f"h{index}"]))
+                nodes.append(helper.make_node("Add", [f"h{index}", f"b{index}"], ["action"]))
+                inits.append(numpy_helper.from_array(weight, f"w{index}"))
+                inits.append(numpy_helper.from_array(bias, f"b{index}"))
+            else:
+                nodes.append(helper.make_node("Identity", [tensor_name], [outputs[index][0]]))
+        graph = helper.make_graph(
+            nodes,
+            name,
+            [
+                helper.make_tensor_value_info(tensor_name, TensorProto.FLOAT, list(shape))
+                for tensor_name, shape in inputs
+            ],
+            [
+                helper.make_tensor_value_info(tensor_name, TensorProto.FLOAT, list(shape))
+                for tensor_name, shape in outputs
+            ],
+            inits,
+        )
+        model = helper.make_model(graph, opset_imports=[helper.make_opsetid("", 17)])
+        model.ir_version = 9
+        target = os.path.join(self.workdir, f"{name}.onnx")
+        onnx.save(model, target)
+        return target
+
+    def test_recurrent_export_is_refused_with_its_state_inputs_named(self):
+        if not _optional_onnx_stack():
+            self.skipTest("numpy/onnx unavailable on this machine")
+        model = self._write_model(
+            [("obs", (1, 61)), ("h_in", (1, 1, 256)), ("c_in", (1, 1, 256))],
+            [("action", (1, 14)), ("h_out", (1, 1, 256)), ("c_out", (1, 1, 256))],
+            "recurrent",
+        )
+        result = self.runtime_module.PolicyRuntime().load(model)
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["error"], "policy-state-input-unsupported")
+        self.assertEqual(result["stateInputs"], ["h_in", "c_in"])
+        self.assertIn("zeroed history", result["detail"])
+
+    def test_feed_forward_export_still_loads(self):
+        if not _optional_onnx_stack():
+            self.skipTest("numpy/onnx unavailable on this machine")
+        model = self._write_model(
+            [("obs", (1, 61))], [("action", (1, 14))], "feedforward"
+        )
+        result = self.runtime_module.PolicyRuntime().load(model)
+        self.assertTrue(result["ok"], result)
+        self.assertEqual(result["model"]["inputDim"], 61)
+        self.assertEqual(result["model"]["outputDim"], 14)
 
 
 if __name__ == "__main__":

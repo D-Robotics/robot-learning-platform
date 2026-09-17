@@ -728,6 +728,39 @@ class PolicyRuntime:
             if not image_input_name and not inp.name:
                 return {"ok": False, "error": "policy-input-name-missing"}
             vector_input_name = str(inp.name)
+            # ---- recurrent state: refuse, do not silently run on zeros ------
+            # This runtime binds exactly two input roles, the observation (and,
+            # for a vision export, the frame). A recurrent export adds history
+            # inputs (h_in/c_in) whose carried values are the whole point of the
+            # policy. ONNX Runtime would happily default them to zeros on every
+            # step, so the duck would run a policy that never remembers anything
+            # and produce plausible-looking but wrong actions -- far worse than
+            # refusing. Until the carried-state contract is implemented here, a
+            # graph that exposes unbound inputs is rejected at load, with their
+            # names in the error so the operator knows what to fix.
+            bound_names = {str(inp.name)}
+            if image_input_name:
+                bound_names.add(image_input_name)
+            unbound_inputs = [item for item in inputs if str(item.name) not in bound_names]
+            state_inputs = [item for item in unbound_inputs if len(item.shape) == 3]
+            if state_inputs:
+                return {
+                    "ok": False,
+                    "error": "policy-state-input-unsupported",
+                    "detail": "this export carries recurrent state (%s) but the board runtime does "
+                              "not carry it across steps yet; loading it would run the policy on "
+                              "zeroed history every step"
+                              % ", ".join(str(item.name) for item in state_inputs),
+                    "stateInputs": [str(item.name) for item in state_inputs],
+                }
+            if unbound_inputs:
+                return {
+                    "ok": False,
+                    "error": "policy-input-unbound",
+                    "detail": "this export declares inputs (%s) that the board runtime cannot feed"
+                              % ", ".join(str(item.name) for item in unbound_inputs),
+                    "unboundInputs": [str(item.name) for item in unbound_inputs],
+                }
             # Select the adapter contract from the inspected model. This lets
             # OriginBot 8D->2D policies share the same runtime as 61D->14D
             # policies without a second board service.
