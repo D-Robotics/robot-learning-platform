@@ -14,22 +14,34 @@
          <html> before the stylesheets parse, so the first paint carries the
          right scheme. app.js exposes the toggle on top of these globals. -->
     <script src="./theme-boot.js?v=2"></script>
-    <link rel="stylesheet" href="./styles.css?v=duck-lab-33" />
-    <link rel="stylesheet" href="./overview-clean.css?v=3" />
-    <link rel="stylesheet" href="./visual-polish.css?v=5" />
-    <link rel="stylesheet" href="./onboarding.css?v=2" />
-    <link rel="stylesheet" href="./refactor-ia.css?v=4" />
-    <link rel="stylesheet" href="./overview-density.css?v=2" />
-    <link rel="stylesheet" href="./product-polish.css?v=5" />
-    <link rel="stylesheet" href="./workflow-ux.css?v=3" />
-    <link rel="stylesheet" href="./maturity-ux.css?v=3" />
-    <link rel="stylesheet" href="./workbench-pro.css?v=1" />
-    <link rel="stylesheet" href="./pro-skin.css?v=9" />
+    <!-- Two stylesheets: tokens.css owns every custom property, app.css owns
+         every rule. They were eleven layers merged in load order; the cascade
+         is preserved exactly (verified by a full pixel diff of 62 viewport x
+         theme x view screenshots). See services/sim2real-web/ui-layout-invariants.mjs
+         for the guards that keep new overrides from re-introducing layering. -->
+    <link rel="stylesheet" href="./tokens.css?v=2" />
+    <link rel="stylesheet" href="./app.css?v=13" />
   </head>
   <body>
     <a class="skip-link" href="#main-content">跳到主要内容</a>
+    <!-- 页面此前完全没有 h1，标题大纲从 h2 开始（h2×37 / h3×2），读屏用户
+         拿不到"这是什么页面"的最高层级标题。视图区标题继续用 h2：8 个视图
+         各自是一个 section，只有当前视图不带 hidden，所以任一时刻恰好
+         一个大纲根。 -->
+    <h1 class="sr-only">RDK Robot Learning Studio · 机器人学习工作台</h1>
     <div class="app-shell">
       <header class="topbar">
+        <button
+          class="sidebar-toggle"
+          id="sidebar-toggle"
+          type="button"
+          aria-expanded="false"
+          aria-controls="platform-sidebar"
+          aria-label="打开导航菜单"
+          title="打开导航菜单"
+        >
+          <span aria-hidden="true">☰</span>
+        </button>
         <a class="brand" href="./" aria-label="RDK Robot Learning Studio 首页">
           <span class="brand-mark">D</span>
           <span
@@ -37,15 +49,21 @@
             ><strong>Robot Learning Workbench</strong></span
           >
         </a>
-        <nav class="topbar-pipeline" id="topbar-pipeline" aria-label="研发闭环阶段">
-          <button class="pipeline-stage" type="button" data-pipeline-stage="simulate" data-view-target="simulate"><i></i><span>契约·仿真</span></button>
+        <!-- 闭环进度：只读指示器，不是导航。
+             这 4 个阶段以前是 <button data-view-target>，点了去的地方和侧栏
+             「学习闭环」那 4 项完全相同 —— 同一屏上两套入口指向同一批页面，
+             而顶栏表达的其实是"闭环走到哪 + 哪些被门禁挡住"，两种语义挤在一个
+             控件里，于是"当前位置"和"进度"永远对不上。现在导航只由侧栏负责，
+             这里只报告状态；aria-current="step" 表示"你正在看的阶段"。 -->
+        <ol class="topbar-pipeline" id="topbar-pipeline" aria-label="闭环进度">
+          <li class="pipeline-stage" data-pipeline-stage="simulate"><i aria-hidden="true"></i><span>仿真与录制</span></li>
           <span class="pipeline-sep" aria-hidden="true"></span>
-          <button class="pipeline-stage" type="button" data-pipeline-stage="train" data-view-target="train"><i></i><span>训练</span></button>
+          <li class="pipeline-stage" data-pipeline-stage="train"><i aria-hidden="true"></i><span>强化学习训练</span></li>
           <span class="pipeline-sep" aria-hidden="true"></span>
-          <button class="pipeline-stage" type="button" data-pipeline-stage="evaluate" data-view-target="evaluate"><i></i><span>评测</span></button>
+          <li class="pipeline-stage" data-pipeline-stage="evaluate"><i aria-hidden="true"></i><span>Sim2Real 评测</span></li>
           <span class="pipeline-sep" aria-hidden="true"></span>
-          <button class="pipeline-stage" type="button" data-pipeline-stage="deploy" data-view-target="deploy"><i></i><span>部署</span></button>
-        </nav>
+          <li class="pipeline-stage" data-pipeline-stage="deploy"><i aria-hidden="true"></i><span>部署与反馈</span></li>
+        </ol>
         <div class="topbar-context">
           <span class="context-label">当前项目</span
           ><strong id="current-project-name">MicroDuck · X5 Starter</strong
@@ -66,7 +84,7 @@
           <button class="cmdk-trigger" id="command-palette-trigger" type="button" title="命令面板（⌘K）">
             <kbd>⌘K</kbd><span>命令</span>
           </button>
-          <button class="button button-ghost" id="theme-toggle" type="button" aria-label="切换主题" title="切换主题">◐</button>
+          <button class="button button-ghost" id="theme-toggle" type="button" aria-label="切换主题" title="切换主题"><span aria-hidden="true">◐</span></button>
           <button class="button button-ghost" id="onboarding-help-button" type="button" title="重新打开新手指引">新手指引</button>
           <div class="top-menu" data-top-menu>
             <button
@@ -80,7 +98,7 @@
               更多 <span aria-hidden="true">⌄</span>
             </button>
             <div class="top-menu-list" role="menu" id="top-menu-list" hidden>
-              <button class="top-menu-item" type="button" role="menuitemcheckbox" id="notify-toggle" aria-checked="false" aria-pressed="false">
+              <button class="top-menu-item" type="button" role="menuitemcheckbox" id="notify-toggle" aria-checked="false">
                 通知关
               </button>
               <button class="top-menu-item" type="button" role="menuitem" id="refresh-button">
@@ -104,9 +122,10 @@
       </header>
 
       <div class="shell-layout">
-        <aside class="sidebar" aria-label="平台导航">
+        <div class="sidebar-backdrop" id="sidebar-backdrop" hidden></div>
+        <aside class="sidebar" id="platform-sidebar" aria-label="平台导航">
           <div class="sidebar-project">
-            <span class="sidebar-project-icon">◇</span>
+            <span class="sidebar-project-icon" aria-hidden="true">◇</span>
             <div>
               <strong id="sidebar-product-name">MicroDuck</strong
               ><select id="product-select" aria-label="选择产品线">
@@ -143,11 +162,11 @@
               data-view-target="overview"
               aria-current="page"
             >
-              <span class="nav-index">◇</span
+              <span class="nav-index" aria-hidden="true">◇</span
               ><span><strong>工作台总览</strong><small>配置项目、模型与设备</small></span>
             </button>
             <button class="nav-item" type="button" data-agent-open>
-              <span class="nav-index">✦</span
+              <span class="nav-index" aria-hidden="true">✦</span
               ><span><strong>Agent 对话</strong></span>
             </button>
           </nav>
@@ -174,19 +193,19 @@
           <div class="sidebar-divider sidebar-divider-compact"></div>
           <div class="nav-label">资源与工具</div>
           <nav class="workflow-nav" aria-label="记录与设备工具">
-            <button class="nav-item" type="button" data-view-target="resources"><span class="nav-index">▣</span><span><strong>GPU 与算力</strong><small>本机、远端与云端资源</small></span></button>
+            <button class="nav-item" type="button" data-view-target="resources"><span class="nav-index" aria-hidden="true">▣</span><span><strong>GPU 与算力</strong><small>本机、远端与云端资源</small></span></button>
             <button class="nav-item" type="button" data-view-target="records">
-              <span class="nav-index">▦</span
+              <span class="nav-index" aria-hidden="true">▦</span
               ><span><strong>调试与记录</strong><small>运行日志、错误和版本</small></span>
             </button>
             <button class="nav-item" type="button" data-view-target="station">
-              <span class="nav-index">⌂</span
+              <span class="nav-index" aria-hidden="true">⌂</span
               ><span><strong>设备上位机</strong></span>
             </button>
           </nav>
           <div class="sidebar-bottom">
             <div class="safety-mini">
-              <span>✓</span>
+              <span aria-hidden="true">✓</span>
               <div><strong>安全模式</strong><small>网页不会直接开电机</small></div>
             </div>
             <a href="/rdkstudio/" class="studio-link">在 RDK Studio 中使用 ↗</a>
@@ -198,7 +217,7 @@
                stays fully usable logged out. The banner collapses to one line
                by default so first-contact visitors see the product, not an
                auth wall; the full login form opens on demand. -->
-          <section class="auth-gate" id="auth-gate" aria-live="polite" hidden>
+          <section class="auth-gate" id="auth-gate" hidden>
             <div class="auth-gate-banner">
               <strong class="auth-gate-banner-title">游客模式</strong>
               <span class="auth-gate-banner-copy">仿真可以直接试玩；保存训练记录和连接真机时再登录。</span>
@@ -218,15 +237,15 @@
               <p class="auth-gate-hint">
                 与 RDK Studio 使用同一账号中心（SSO）；在这里登录后，Studio 主站同时保持登录。
               </p>
-              <form class="auth-login-form" id="auth-login-form" novalidate>
+              <form class="auth-login-form" id="auth-login-form" novalidate role="tabpanel" aria-labelledby="auth-tab-account">
                 <div class="auth-login-tabs" role="tablist" aria-label="登录方式">
-                  <button type="button" class="auth-login-tab is-active" data-auth-method="account" role="tab" aria-selected="true" tabindex="0">
+                  <button type="button" class="auth-login-tab is-active" id="auth-tab-account" data-auth-method="account" role="tab" aria-controls="auth-login-form" aria-selected="true" tabindex="0">
                     账号密码
                   </button>
-                  <button type="button" class="auth-login-tab" data-auth-method="sms" role="tab" aria-selected="false" tabindex="-1">
+                  <button type="button" class="auth-login-tab" id="auth-tab-sms" data-auth-method="sms" role="tab" aria-controls="auth-login-form" aria-selected="false" tabindex="-1">
                     短信登录
                   </button>
-                  <button type="button" class="auth-login-tab" data-auth-method="email" role="tab" aria-selected="false" tabindex="-1">
+                  <button type="button" class="auth-login-tab" id="auth-tab-email" data-auth-method="email" role="tab" aria-controls="auth-login-form" aria-selected="false" tabindex="-1">
                     邮箱登录
                   </button>
                 </div>
@@ -308,7 +327,7 @@
               </div>
             </div>
             <div class="context-health is-waiting" id="context-health">
-              <span class="health-ring">●</span>
+              <span class="health-ring" aria-hidden="true">●</span>
               <div><span>台账</span><strong id="status-storage">检查中</strong></div>
             </div>
             <span id="model-count" class="sr-only">0 个模型</span
@@ -327,10 +346,10 @@
           <nav class="workflow-progress-strip" id="workflow-progress-strip" aria-label="闭环进度">
             <div class="workflow-progress-intro"><span class="eyebrow">学习进度</span><strong id="workflow-progress-summary">从准备数据开始</strong></div>
             <ol class="workflow-progress-steps">
-              <li data-workflow-step="simulate"><button type="button" data-view-target="simulate"><b>1</b><span><strong>仿真录制</strong><small>生成可回放轨迹</small></span></button></li>
-              <li data-workflow-step="train"><button type="button" data-view-target="train"><b>2</b><span><strong>强化学习</strong><small>训练策略模型</small></span></button></li>
-              <li data-workflow-step="evaluate"><button type="button" data-view-target="evaluate"><b>3</b><span><strong>评测回放</strong><small>对比仿真与真机</small></span></button></li>
-              <li data-workflow-step="deploy"><button type="button" data-view-target="deploy"><b>4</b><span><strong>部署反馈</strong><small>预检后受控上线</small></span></button></li>
+              <li data-workflow-step="simulate"><button type="button" data-view-target="simulate"><b>1</b><span><strong>仿真与录制</strong><small>生成可回放轨迹</small></span></button></li>
+              <li data-workflow-step="train"><button type="button" data-view-target="train"><b>2</b><span><strong>强化学习训练</strong><small>训练策略模型</small></span></button></li>
+              <li data-workflow-step="evaluate"><button type="button" data-view-target="evaluate"><b>3</b><span><strong>Sim2Real 评测</strong><small>对比仿真与真机</small></span></button></li>
+              <li data-workflow-step="deploy"><button type="button" data-view-target="deploy"><b>4</b><span><strong>部署与反馈</strong><small>预检后受控上线</small></span></button></li>
             </ol>
           </nav>
 
@@ -404,19 +423,19 @@
               </div>
               <div class="workspace-summary-grid" aria-label="项目摘要">
                 <button class="workspace-summary-card" type="button" data-workspace-view="records">
-                  <span class="workspace-summary-icon">↗</span>
+                  <span class="workspace-summary-icon" aria-hidden="true">↗</span>
                   <span><small>最近运行</small><strong id="workspace-latest-run">暂无运行</strong><em id="workspace-latest-run-meta">从仿真或训练开始</em></span>
                 </button>
                 <button class="workspace-summary-card" type="button" data-workspace-view="contract">
-                  <span class="workspace-summary-icon workspace-summary-icon-violet">◈</span>
+                  <span class="workspace-summary-icon workspace-summary-icon-violet" aria-hidden="true">◈</span>
                   <span><small>模型与制品</small><strong id="workspace-asset-count">0 个模型</strong><em id="workspace-asset-meta">登记 manifest 后可追溯</em></span>
                 </button>
                 <button class="workspace-summary-card" type="button" data-workspace-view="evaluate">
-                  <span class="workspace-summary-icon workspace-summary-icon-green">▤</span>
+                  <span class="workspace-summary-icon workspace-summary-icon-green" aria-hidden="true">▤</span>
                   <span><small>数据与评测</small><strong id="workspace-dataset-count">等待遥测</strong><em id="workspace-dataset-meta">导入证据后生成摘要</em></span>
                 </button>
                 <button class="workspace-summary-card" type="button" data-workspace-view="deploy">
-                  <span class="workspace-summary-icon workspace-summary-icon-orange">↑</span>
+                  <span class="workspace-summary-icon workspace-summary-icon-orange" aria-hidden="true">↑</span>
                   <span><small>部署状态</small><strong id="workspace-deploy-status">尚未部署</strong><em id="workspace-deploy-meta">只读预检保护设备</em></span>
                 </button>
               </div>
@@ -435,28 +454,28 @@
                 <div class="status-grid" id="status-grid" aria-label="集成状态">
                   <article class="status-card status-card-device" data-workspace-view="station" tabindex="0" role="button" aria-label="打开设备管理">
                     <div class="status-card-main">
-                      <span class="status-icon status-icon-blue">◉</span
+                      <span class="status-icon status-icon-blue" aria-hidden="true">◉</span
                       ><strong id="status-simulator">浏览器仿真</strong>
                     </div>
                     <p id="status-simulator-detail">固定参考策略</p>
                   </article>
                   <article class="status-card">
                     <div class="status-card-main">
-                      <span class="status-icon status-icon-violet">⌁</span
+                      <span class="status-icon status-icon-violet" aria-hidden="true">⌁</span
                       ><strong id="status-robogo">训练后端检查中</strong>
                     </div>
                     <p id="status-robogo-detail">本地优先</p>
                   </article>
                   <article class="status-card">
                     <div class="status-card-main">
-                      <span class="status-icon status-icon-orange" id="status-board-icon">⌂</span
+                      <span class="status-icon status-icon-orange" id="status-board-icon" aria-hidden="true">⌂</span
                       ><strong id="status-board">尚未选择板卡</strong>
                     </div>
                     <p id="status-board-detail">连接后进行预检</p><span class="status-card-action" id="status-board-action">去连接设备 →</span>
                   </article>
                   <article class="status-card">
                     <div class="status-card-main">
-                      <span class="status-icon status-icon-orange">▣</span
+                      <span class="status-icon status-icon-orange" aria-hidden="true">▣</span
                       ><strong id="status-storage-card">按账号隔离</strong>
                     </div>
                     <p id="status-storage-detail">模型和运行可追溯</p>
@@ -524,7 +543,7 @@
                     allowfullscreen
                   ></iframe>
                   <div class="simulator-product-gate" id="simulator-product-gate" hidden>
-                    <span class="gate-icon">◇</span>
+                    <span class="gate-icon" aria-hidden="true">◇</span>
                     <strong id="simulator-gate-title">RDK Duck 仿真适配器待配置</strong>
                     <p id="simulator-gate-copy">
                       当前产品线不会复用 MicroDuck 的浏览器场景。先准备真实契约 manifest
@@ -609,7 +628,7 @@
                   href="./mujoco/microduck/"
                   target="_blank"
                   rel="noreferrer"
-                  ><span>↗</span> 独立打开仿真</a
+                  ><span aria-hidden="true">↗</span> 独立打开仿真</a
                 >
                 <button
                   class="button button-primary button-block"
@@ -633,8 +652,8 @@
               <h2 id="train-title">强化学习训练与模型</h2>
             </div>
             <div class="submodule-tabs" role="tablist" aria-label="强化学习工作台模块">
-              <button class="submodule-tab is-active" type="button" role="tab" aria-selected="true" data-train-module-tab="run">训练工作台<small>模型、算法与提交</small></button>
-              <button class="submodule-tab" type="button" role="tab" aria-selected="false" data-train-module-tab="contract">模型契约<small>Manifest 与兼容性</small></button>
+              <button class="submodule-tab is-active" type="button" role="tab" id="train-tab-run" aria-controls="train-module-run-model train-module-run-robogo" aria-selected="true" data-train-module-tab="run">训练工作台<small>模型、算法与提交</small></button>
+              <button class="submodule-tab" type="button" role="tab" id="train-tab-contract" aria-controls="contract-fold" aria-selected="false" data-train-module-tab="contract">模型契约<small>Manifest 与兼容性</small></button>
               
             </div>
             <div class="train-onboarding" role="note" aria-label="训练流程引导">
@@ -649,7 +668,7 @@
               </div>
               <p class="train-onboarding-help">第一次使用？先点击“载入模板”，不用编辑 JSON。回放是可选的验证工具；强化学习训练可直接提交 PPO / SAC 任务。</p>
             </div>
-            <details class="panel contract-fold" id="contract-fold" data-train-module="contract">
+            <details class="panel contract-fold" id="contract-fold" data-train-module="contract" role="tabpanel" aria-labelledby="train-tab-contract">
               <summary>
                 <span class="overview-environment-icon" aria-hidden="true">◈</span>
                 <span><strong>套件与契约 · 登记模型</strong><small>导入并校验 manifest，登记后模型可追溯</small></span>
@@ -731,7 +750,7 @@
               </div>
             </details>
             <div class="train-layout" data-train-active-module="run">
-              <article class="panel model-panel" data-train-module="run">
+              <article class="panel model-panel" id="train-module-run-model" data-train-module="run" role="tabpanel" aria-labelledby="train-tab-run">
                 <div class="panel-heading panel-heading-lean"><h2>模型版本</h2>
                   <div class="model-panel-select">
                     <select id="model-select" aria-label="选择模型"></select>
@@ -764,7 +783,7 @@
                     <div>
                       <strong id="run-progress-title">等待训练任务</strong>
                     </div>
-                    <span class="state-badge state-neutral" id="run-progress-status">—</span>
+                    <span class="state-badge state-neutral" id="run-progress-status" role="status" aria-live="polite">—</span>
                   </div>
                   <div
                     class="run-progress-track"
@@ -784,7 +803,7 @@
                       <strong>实时训练曲线</strong>
                       <span class="panel-caption" id="run-progress-live-caption">—</span>
                     </div>
-                    <canvas
+                    <canvas role="img"
                       id="run-progress-live-canvas"
                       width="720"
                       height="200"
@@ -822,7 +841,8 @@
                     ><select id="training-engine" aria-label="选择训练引擎">
                       <option value="" selected>默认 · worker 配置的引擎</option>
                       <option value="starter-ppo">starter-ppo · 运动学（CPU 友好）</option>
-                      <option value="mjx-ppo">MJX · MuJoCo 接触动力学</option></select
+                      <option value="mjx-ppo">MJX · MuJoCo 接触动力学</option>
+                      <option value="microduck-rl">microduck-rl · mjlab 并行物理（CUDA）</option></select
                     ><label class="field-label" for="compute-resource-select">训练资源</label
                     ><select id="compute-resource-select" aria-label="选择 GPU 训练资源">
                       <option value="">服务端默认本地 Worker</option>
@@ -845,18 +865,18 @@
                   </div>
                 </details>
               </article>
-              <article class="panel robogo-panel" data-train-module="run">
+              <article class="panel robogo-panel" id="train-module-run-robogo" data-train-module="run" role="tabpanel" aria-labelledby="train-tab-run">
                 <div class="panel-heading panel-heading-lean"><h2>算力后端</h2>
                   <span id="robogo-state-badge" class="state-badge state-neutral">检查中</span>
                 </div>
                 <div class="backend-choice">
                   <div class="backend-choice-card is-primary">
-                    <span class="backend-icon">⌂</span>
+                    <span class="backend-icon" aria-hidden="true">⌂</span>
                     <div><strong>本地服务器</strong><small>无 RoboGo 账号也能运行</small></div>
                     <span class="choice-tag">默认</span>
                   </div>
                   <div class="backend-choice-card">
-                    <span class="backend-icon">☁</span>
+                    <span class="backend-icon" aria-hidden="true">☁</span>
                     <div><strong>RoboGo</strong><small>云端算力，可选接入</small></div>
                   </div>
                 </div>
@@ -923,7 +943,7 @@
                   <div class="metric"><strong id="eval-success">—</strong><span>成功率</span></div>
                   <div class="metric"><strong id="eval-fall">—</strong><span>跌倒率</span></div>
                   <div class="metric">
-                    <strong id="eval-latency">—</strong><span>控制延迟</span>
+                    <strong id="eval-latency">—</strong><span id="eval-latency-label">控制延迟</span>
                   </div>
                 </div>
                 <p class="small-note" id="eval-metrics-note">指标由训练 worker 或 X5 Agent 回写。</p>
@@ -947,8 +967,8 @@
                   </div>
                 </div>
                 <div class="compare-note">
-                  <span class="compare-dot compare-dot-sim"></span> 浏览器 / 离线 MuJoCo
-                  <span class="compare-dot compare-dot-real"></span> 板端 Agent
+                  <span class="compare-dot compare-dot-sim" aria-hidden="true"></span> 浏览器 / 离线 MuJoCo
+                  <span class="compare-dot compare-dot-real" aria-hidden="true"></span> 板端 Agent
                 </div>
               </article>
               <article class="panel originbot-compare-panel" id="originbot-compare-panel">
@@ -990,7 +1010,7 @@
                 </select>
               </div>
               <div class="run-comparison-chart" id="run-comparison-chart" hidden>
-                <canvas
+                <canvas role="img"
                   id="run-compare-canvas"
                   width="720"
                   height="260"
@@ -1165,7 +1185,7 @@
             <div class="deploy-layout">
               <article class="panel board-panel">
                 <div class="panel-heading panel-heading-lean"><h2>设备预检</h2>
-                  <span class="deploy-safe">NO MOTOR</span>
+                  <span class="deploy-safe" lang="en" title="No motor: 只读预检，不会驱动电机">NO MOTOR</span>
                 </div>
                 <div class="deploy-device-select">
                   <label class="field-label" for="device-select">目标板卡</label>
@@ -1241,7 +1261,7 @@
                   </ol>
                 </div>
                 <div class="deploy-recovery-note" id="deploy-recovery-note" hidden>
-                  <span class="deploy-recovery-icon">↶</span><span><strong>可以安全回到上一版本</strong><small>当前只读预检不会修改板端；如需回滚，请从记录中选择上一份已验证制品。</small></span>
+                  <span class="deploy-recovery-icon" aria-hidden="true">↶</span><span><strong>可以安全回到上一版本</strong><small>当前只读预检不会修改板端；如需回滚，请从记录中选择上一份已验证制品。</small></span>
                   <button class="button button-ghost button-small" type="button" data-workspace-view="records">查看记录</button>
                 </div>
               </article>
@@ -1273,7 +1293,7 @@
                     <label class="field-label">访问令牌<input id="compute-resource-token" type="password" autocomplete="new-password" placeholder="可选" /></label>
                     <label class="field-label">并发任务<input id="compute-resource-concurrency" type="number" min="1" max="32" value="1" /></label>
                   </div>
-                  <div class="compute-resource-form-actions"><button class="button button-ghost button-small" type="button" id="compute-resource-autodetect">① 自动发现本机 Agent</button><button class="button button-primary button-small" type="submit" id="compute-resource-save">② 添加 GPU</button><button class="button button-ghost button-small" type="button" id="compute-resource-cancel" hidden>取消编辑</button><span id="compute-resource-form-status" class="small-note" role="status"></span></div>
+                  <div class="compute-resource-form-actions"><button class="button button-ghost button-small" type="button" id="compute-resource-autodetect">自动发现本机 Agent</button><button class="button button-primary button-small" type="submit" id="compute-resource-save">添加 GPU</button><button class="button button-ghost button-small" type="button" id="compute-resource-cancel" hidden>取消编辑</button><span id="compute-resource-form-status" class="small-note" role="status"></span></div>
                 </form>
               </article>
             </div>
@@ -1360,16 +1380,16 @@
               <h2 id="station-title">板端上位机</h2>
             </div>
             <div class="submodule-tabs" role="tablist" aria-label="设备上位机模块">
-              <button class="submodule-tab is-active" type="button" role="tab" aria-selected="true" data-station-module-tab="devices">设备连接<small>Bridge、板卡与能力</small></button>
-              <button class="submodule-tab" type="button" role="tab" aria-selected="false" data-station-module-tab="telemetry">遥测概览<small>状态、相机与话题</small></button>
-              <button class="submodule-tab" type="button" role="tab" aria-selected="false" data-station-module-tab="control">安全控制<small>开关、急停与低速控制</small></button>
-              <button class="submodule-tab" type="button" role="tab" aria-selected="false" data-station-module-tab="policy">策略运行时<small>制品加载与策略状态</small></button>
-              <button class="submodule-tab" type="button" role="tab" aria-selected="false" data-station-module-tab="diagnostics">诊断命令<small>TROS 与系统检查</small></button>
+              <button id="station-tab-devices" aria-controls="station-device-manager" class="submodule-tab is-active" type="button" role="tab" aria-selected="true" data-station-module-tab="devices">设备连接<small>Bridge、板卡与能力</small></button>
+              <button id="station-tab-telemetry" aria-controls="station-module-telemetry-status station-module-telemetry-camera" class="submodule-tab" type="button" role="tab" aria-selected="false" data-station-module-tab="telemetry">遥测概览<small>状态、相机与话题</small></button>
+              <button id="station-tab-control" aria-controls="station-switch-panel station-drive-panel" class="submodule-tab" type="button" role="tab" aria-selected="false" data-station-module-tab="control">安全控制<small>开关、急停与低速控制</small></button>
+              <button id="station-tab-policy" aria-controls="station-policy-panel" class="submodule-tab" type="button" role="tab" aria-selected="false" data-station-module-tab="policy">策略运行时<small>制品加载与策略状态</small></button>
+              <button id="station-tab-diagnostics" aria-controls="station-module-diagnostics-command" class="submodule-tab" type="button" role="tab" aria-selected="false" data-station-module-tab="diagnostics">诊断命令<small>TROS 与系统检查</small></button>
             </div>
             <div class="station-notice" id="station-notice" role="status" aria-live="polite" hidden>
               上位机未就绪：未配置板端 agent 或板卡设备。
             </div>
-            <article class="panel station-device-manager" id="station-device-manager" data-station-module="devices">
+            <article role="tabpanel" aria-labelledby="station-tab-devices" class="panel station-device-manager" id="station-device-manager" data-station-module="devices">
               <div class="panel-heading panel-heading-lean"><h2>设备管理</h2>
                 <span class="panel-caption">平台内添加 · 受控连接 · 状态可追踪</span>
               </div>
@@ -1424,7 +1444,7 @@
               </p>
             </article>
             <div class="station-layout">
-              <article class="panel station-status-panel" data-station-module="telemetry">
+              <article id="station-module-telemetry-status" role="tabpanel" aria-labelledby="station-tab-telemetry" class="panel station-status-panel" data-station-module="telemetry">
                 <div class="panel-heading panel-heading-lean"><h2>板卡实时状态</h2>
                   <span class="station-live-badge" id="station-live-badge" hidden>
                     <span class="station-live-dot" aria-hidden="true"></span>LIVE
@@ -1531,7 +1551,7 @@
                 </p>
               </article>
 
-              <article class="panel station-camera-panel" data-station-module="telemetry">
+              <article class="panel station-camera-panel" id="station-module-telemetry-camera" data-station-module="telemetry" role="tabpanel" aria-labelledby="station-tab-telemetry">
                 <div class="panel-heading panel-heading-lean"><h2>板载相机</h2>
                   <span class="panel-caption">MJPEG 流（只读）</span>
                 </div>
@@ -1553,7 +1573,7 @@
                 </div>
               </article>
 
-              <article class="panel station-switch-panel" id="station-switch-panel" data-station-module="control">
+              <article role="tabpanel" aria-labelledby="station-tab-control" class="panel station-switch-panel" id="station-switch-panel" data-station-module="control">
                 <div class="panel-heading panel-heading-lean"><h2>运动开关</h2>
                   <span class="panel-caption">双开关 · 网页切换 · 急停永不依赖开关</span>
                 </div>
@@ -1599,7 +1619,7 @@
                 <div class="station-drive-state" id="station-switch-state" role="status" aria-live="polite">就绪</div>
               </article>
 
-              <article class="panel station-drive-panel" id="station-drive-panel" data-station-module="control">
+              <article role="tabpanel" aria-labelledby="station-tab-control" class="panel station-drive-panel" id="station-drive-panel" data-station-module="control">
                 <div class="panel-heading panel-heading-lean"><h2>运动 Canary</h2>
                   <span class="panel-caption">受限驱动 · 双开关 · 速度/时限钳制</span>
                 </div>
@@ -1661,7 +1681,7 @@
                 </div>
               </article>
 
-              <article class="panel station-policy-panel" id="station-policy-panel" data-station-module="policy">
+              <article role="tabpanel" aria-labelledby="station-tab-policy" class="panel station-policy-panel" id="station-policy-panel" data-station-module="policy">
                 <div class="panel-heading panel-heading-lean"><h2>策略运行时</h2>
                   <span class="panel-caption">ONNX 推理 · 三重开关 · 同一受限通道</span>
                 </div>
@@ -1776,7 +1796,7 @@
                 </div>
               </article>
 
-              <article class="panel station-command-panel" data-station-module="diagnostics">
+              <article id="station-module-diagnostics-command" role="tabpanel" aria-labelledby="station-tab-diagnostics" class="panel station-command-panel" data-station-module="diagnostics">
                 <div class="panel-heading panel-heading-lean"><h2>命令面板</h2>
                   <span class="panel-caption">白名单只读命令</span>
                 </div>
@@ -1853,7 +1873,7 @@
         <div class="empty-inline">选择一条运行记录查看详情。</div>
       </div>
     </dialog>
-    <dialog class="run-dialog" id="confirm-action-dialog" aria-labelledby="confirm-action-title">
+    <dialog class="run-dialog" id="confirm-action-dialog" aria-labelledby="confirm-action-title" aria-describedby="confirm-action-note">
       <div class="run-dialog-heading">
         <div>
           <h2 id="confirm-action-title">确认操作</h2>
@@ -1945,8 +1965,8 @@
       blocking the parser at body end.
     -->
     <script defer src="./telemetry-core.js?v=duck-lab-30"></script>
-    <script defer src="./app.js?v=duck-lab-38"></script>
+    <script defer src="./app.js?v=duck-lab-41"></script>
     <script defer src="./agent-chat.js?v=agent-9"></script>
-    <script defer src="./onboarding.js?v=onboarding-3"></script>
+    <script defer src="./onboarding.js?v=onboarding-5"></script>
   </body>
 </html>

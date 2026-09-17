@@ -204,6 +204,16 @@ export default tseslint.config(
     },
   },
   {
+    // ui-responsive.spec.mjs embeds browser-context code inside
+    // page.evaluate() callbacks: document/getComputedStyle/MutationObserver
+    // resolve in the Chromium page, not in this Node process, so no-undef needs
+    // the browser vocabulary on top of the node globals NODE_JS_FILES provides.
+    files: ['services/sim2real-web/ui-responsive.spec.mjs'],
+    languageOptions: {
+      globals: globals.browser,
+    },
+  },
+  {
     files: CONTROL_CHAR_SANITIZER_FILES,
     rules: {
       'no-control-regex': 'off',

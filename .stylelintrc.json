@@ -1,0 +1,31 @@
+{
+  "//": "只开「正确性」规则，刻意不引入任何风格规则（排序、空行、命名习惯）。这个仓库已经有一份被历史上十一个样式层覆盖过的 216KB 样式表，风格规则会淹出几千条噪音，而真正要抓的是「声明被改坏但语法仍然合法」这一类的错误 —— 比如 position/bottom 被拼成 posim: 5px。",
+  "rules": {
+    "property-no-unknown": [
+      true,
+      {
+        "ignoreProperties": ["composes", "compose-with"],
+        "ignoreSelectors": [":export", ":import"]
+      }
+    ],
+    "declaration-block-no-duplicate-properties": [
+      true,
+      { "ignore": ["consecutive-duplicates-with-different-syntaxes"] }
+    ],
+    "declaration-block-no-shorthand-property-overrides": true,
+    "no-invalid-double-slash-comments": true,
+    "no-invalid-position-at-import-rule": true,
+    "block-no-empty": true,
+    "comment-no-empty": true,
+    "function-linear-gradient-no-nonstandard-direction": true,
+    "function-no-unknown": true,
+    "media-feature-name-no-unknown": true,
+    "selector-pseudo-class-no-unknown": true,
+    "selector-pseudo-element-no-unknown": true,
+    "at-rule-no-unknown": true,
+    "color-no-invalid-hex": true,
+    "unit-no-unknown": true,
+    "string-no-newline": true,
+    "no-descending-specificity": null
+  }
+}

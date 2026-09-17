@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -8,7 +9,29 @@ const html = fs.readFileSync(path.join(here, 'public', 'index.html'), 'utf8');
 const app = fs.readFileSync(path.join(here, 'public', 'app.js'), 'utf8');
 const onboarding = fs.readFileSync(path.join(here, 'public', 'onboarding.js'), 'utf8');
 const agentChat = fs.readFileSync(path.join(here, 'public', 'agent-chat.js'), 'utf8');
-const cssIa = fs.readFileSync(path.join(here, 'public', 'refactor-ia.css'), 'utf8');
+// The eleven style layers were merged into tokens.css (custom properties only)
+// + app.css (every rule), in the original load order. The filename-specific
+// assertions below now point at the merged files.
+const cssApp = fs.readFileSync(path.join(here, 'public', 'app.css'), 'utf8');
+const cssIa = cssApp;
+
+import {
+  assertStyleInvariants,
+  assertMarkupInvariants,
+  assertGuardsAreLive,
+} from './ui-layout-invariants.mjs';
+
+// ---- layout / style invariants ----
+// Every check in ui-layout-invariants.mjs exists because this repository
+// actually shipped the bug it guards (unguarded desktop grid leaking into the
+// drawer range, token palettes duplicated across layers, a z-index tie resolved
+// by load order, CJK metadata below the legibility floor). Cheap and
+// dependency-free, so it runs here in the default verify chain.
+const invariantSummary = assertStyleInvariants(path.join(here, 'public'));
+// Prove each guard rejects its own regression fixture, so a passing run means
+// something (this runs the guards against temporary bad CSS and requires a throw).
+const liveGuards = assertGuardsAreLive(path.join(here, 'public'), os.tmpdir());
+const markupSummary = assertMarkupInvariants(html);
 
 // ---- accessibility anchors ----
 // Every labelled region must resolve to a real heading. A stale aria-labelledby
@@ -178,15 +201,28 @@ assert.deepEqual(
   'sidebar must group nav around the learning loop: start / loop / resources & tools',
 );
 
-assert.match(html, /overview-density\.css/, 'overview typography/density layer must be loaded');
+assert.match(html, /app\.css/, 'the merged app.css must be loaded');
+assert.match(html, /tokens\.css/, 'the single token source must be loaded');
 
 // Typography scale is locked at four steps; any new overview text size must
-// map onto 11/13/15/24 instead of reintroducing a fifth step.
-const densityCss = fs.readFileSync(path.join(here, 'public', 'overview-density.css'), 'utf8');
+// map onto 12/13/15/24 instead of reintroducing a fifth step.
+// The floor moved 11px -> 12px: 11px CJK metadata was the smallest reading text
+// in the product and measured poorly for legibility, so the whole UI now floors
+// at 12px (the mono micro-label family additionally moved 9px -> 10.5px).
+// Scoped to the density SECTION of the merged file — app.css contains every
+// layer, so matching the whole file would flag other layers' heading sizes.
+// (assertStyleInvariants re-checks the same scale, so a failure surfaces twice.)
+const densityBanner = /\/\* =+ overview-density\.css[^*]*=+ \*\//.exec(cssApp);
+assert.ok(densityBanner, 'app.css must keep the overview-density section banner');
+const densityEnd = cssApp.indexOf(
+  '/* ========================',
+  densityBanner.index + densityBanner[0].length,
+);
+const densityCss = cssApp.slice(densityBanner.index, densityEnd === -1 ? undefined : densityEnd);
 assert.doesNotMatch(
   densityCss,
-  /font-size:\s*(?:9|10|12|14|16|17|18)px/,
-  'overview density layer must only speak the 11/13/15/24 scale',
+  /font-size:\s*(?:9|10|11|14|16|17|18)px/,
+  'overview density layer must only speak the 12/13/15/24 scale',
 );
 assert.match(
   densityCss,
@@ -321,7 +357,7 @@ assert.match(
   /drawerRestoreFocus/,
   'Agent drawer must restore focus to its opener on close',
 );
-assert.match(cssIa, /\.agent-task-card/, 'task card styles must exist in refactor-ia.css');
+assert.match(cssIa, /\.agent-task-card/, 'task card styles must exist in the merged app.css');
 assert.match(cssIa, /\.agent-task-progress/, 'task card progress bar styles must exist');
 assert.match(
   html,
@@ -682,5 +718,5 @@ assert.match(
 assert.doesNotMatch(app, /:19100/, 'the browser must never hardcode the board agent port');
 
 console.log(
-  `[sim2real-ui] PASS — ${viewNames.length} views, ${navItems} sidebar entries, grouped IA (start / learning loop / resources & tools), read-only context strip`,
+  `[sim2real-ui] PASS — ${viewNames.length} views, ${navItems} sidebar entries, grouped IA (start / learning loop / resources & tools), read-only context strip; ${invariantSummary.stylesheets} stylesheets (tokens.css + app.css), ${markupSummary.tabs} tabs / ${markupSummary.panels} tabpanels, ${invariantSummary.pages} pages, ${invariantSummary.layers} style layers (cross-layer selectors ${invariantSummary.crossLayerSelectors}/${invariantSummary.crossLayerBudget}), ${liveGuards.length} guards self-tested`,
 );

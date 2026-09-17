@@ -15,11 +15,60 @@
     { target: '#agent-floating-toggle', view: null, kicker: '12 / 12 · Agent', title: '让 Agent 编排下一步', body: '右下角 Agent 可以按当前阻塞项生成下一步计划，并调用服务器、设备和训练工具。危险动作始终需要人工确认。', best: '直接说“检查 OriginBot 并继续到下一步”即可。', time: '随时可用' },
   ];
   let index = 0, overlay = null, spotlight = null, card = null, lastFocus = null;
+  // 指引声明了 role="dialog" aria-modal="true"，所以必须真的把背景隔离掉：
+  // 以前只有一层视觉 scrim，键盘 Tab 仍能走到后面的工作台，屏幕阅读器也仍能
+  // 读到被"盖住"的内容。inert 覆盖 body 下除指引本身以外的交互节点。
+  function setBackgroundInert(inert) {
+    for (const node of [document.querySelector('.app-shell'), document.getElementById('agent-floating-toggle')]) {
+      if (node) node.inert = inert;
+    }
+  }
+  // Tab 循环限制在卡片内。agent-chat.js 里已有一个手动循环的先例，这里沿用
+  // 同样的写法，避免引入依赖。
+  function trapTab(event) {
+    if (event.key !== 'Tab' || !card) return;
+    const focusables = [...card.querySelectorAll('button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])')].filter(
+      (el) => !el.disabled && el.getClientRects().length,
+    );
+    if (!focusables.length) {
+      event.preventDefault();
+      card.focus();
+      return;
+    }
+    const first = focusables[0];
+    const last = focusables[focusables.length - 1];
+    const active = document.activeElement;
+    if (!card.contains(active)) {
+      event.preventDefault();
+      first.focus();
+    } else if (event.shiftKey && active === first) {
+      event.preventDefault();
+      last.focus();
+    } else if (!event.shiftKey && active === last) {
+      event.preventDefault();
+      first.focus();
+    }
+  }
+  // 首次访问自动弹出的前提是「用户还没开始操作」。以前固定 900ms 弹出，正好
+  // 撞上用户刚开始滚动或点击的那一刻，会把焦点抢走；现在一旦检测到交互就
+  // 不再自动弹出，顶栏的「新手指引」按钮随时可以手动打开。
+  let userInteracted = false;
+  for (const type of ['pointerdown', 'keydown', 'wheel', 'touchstart']) {
+    window.addEventListener(type, () => { userInteracted = true; }, { once: true, passive: true, capture: true });
+  }
   const targetFor = (step) => step.target ? document.querySelector(step.target) : null;
   function build() {
     overlay = document.createElement('div'); overlay.className = 'onboarding-overlay'; overlay.hidden = true;
     overlay.innerHTML = `<div class="onboarding-scrim"></div><div class="onboarding-spotlight" aria-hidden="true"></div><section class="onboarding-card" role="dialog" aria-modal="true" aria-labelledby="onboarding-title" tabindex="-1"><div class="onboarding-card-top"><span class="onboarding-kicker" id="onboarding-kicker"></span><button class="onboarding-close" type="button" aria-label="关闭新手指引">×</button></div><div class="onboarding-progress"><span id="onboarding-progress-label"></span><span class="onboarding-progress-track"><i id="onboarding-progress-bar"></i></span></div><h2 id="onboarding-title"></h2><p class="onboarding-body" id="onboarding-body"></p><div class="onboarding-best"><span>最佳实践</span><p id="onboarding-best"></p></div><div class="onboarding-card-foot"><span id="onboarding-time"></span><div class="onboarding-actions"><button class="button button-ghost button-small" id="onboarding-skip" type="button">跳过</button><button class="button button-ghost button-small" id="onboarding-prev" type="button">上一步</button><button class="button button-primary button-small" id="onboarding-next" type="button">下一步 →</button></div></div></section>`;
     document.body.append(overlay); spotlight = overlay.querySelector('.onboarding-spotlight'); card = overlay.querySelector('.onboarding-card');
+    // 兜底：inert 一旦留在 .app-shell 上，整个工作台会永久失去交互能力。
+    // finish() 是唯一的正常释放路径，但如果有代码（或测试）直接把覆盖层从
+    // DOM 摘掉，这里保证 inert 会跟着释放。
+    if (typeof MutationObserver === 'function') {
+      new MutationObserver(() => {
+        if (!document.body.contains(overlay)) setBackgroundInert(false);
+      }).observe(document.body, { childList: true });
+    }
     overlay.querySelector('.onboarding-close').addEventListener('click', finish); overlay.querySelector('#onboarding-skip').addEventListener('click', finish);
     overlay.querySelector('#onboarding-prev').addEventListener('click', () => { if (index > 0) { index -= 1; render(); } });
     overlay.querySelector('#onboarding-next').addEventListener('click', () => { if (index >= steps.length - 1) finish(); else { index += 1; render(); } });
@@ -38,8 +87,18 @@
     const step = steps[index]; if (step.view && typeof setView === 'function') setView(step.view, { focus: false });
     overlay.querySelector('#onboarding-kicker').textContent = step.kicker; overlay.querySelector('#onboarding-progress-label').textContent = `第 ${index + 1} / ${steps.length} 步`; overlay.querySelector('#onboarding-progress-bar').style.width = `${((index + 1) / steps.length) * 100}%`; overlay.querySelector('#onboarding-title').textContent = step.title; overlay.querySelector('#onboarding-body').textContent = step.body; overlay.querySelector('#onboarding-best').textContent = step.best; overlay.querySelector('#onboarding-time').textContent = `预计 ${step.time}`; overlay.querySelector('#onboarding-prev').disabled = index === 0; overlay.querySelector('#onboarding-next').textContent = index === steps.length - 1 ? '完成指引 ✓' : '下一步 →'; window.requestAnimationFrame(place);
   }
-  function start() { if (!overlay) build(); lastFocus = document.activeElement; index = 0; overlay.hidden = false; document.body.classList.add('onboarding-open'); render(); window.setTimeout(() => overlay.querySelector('#onboarding-next')?.focus(), 0); }
-  function finish() { if (!overlay) return; overlay.hidden = true; document.body.classList.remove('onboarding-open'); try { window.localStorage?.setItem(STORAGE_KEY, 'done'); } catch { /* storage may be unavailable (private mode): onboarding still works */ } if (lastFocus && typeof lastFocus.focus === 'function') lastFocus.focus(); }
-  document.getElementById('onboarding-help-button')?.addEventListener('click', start); document.addEventListener('keydown', (event) => { if (!overlay?.hidden && event.key === 'Escape') { event.preventDefault(); finish(); } }); window.addEventListener('resize', () => window.requestAnimationFrame(place)); window.addEventListener('scroll', () => window.requestAnimationFrame(place), { passive: true });
-  window.setTimeout(() => { let seen = false; try { seen = window.localStorage?.getItem(STORAGE_KEY) === 'done'; } catch { /* storage may be unavailable (private mode): onboarding still works */ } const forced = new URLSearchParams(window.location.search).get('tour') === '1'; if ((!seen || forced) && (!document.getElementById('auth-gate') || document.getElementById('auth-gate').hidden)) start(); }, 900);
+  function start() { if (!overlay) build(); lastFocus = document.activeElement; index = 0; overlay.hidden = false; document.body.classList.add('onboarding-open'); setBackgroundInert(true); render(); window.setTimeout(() => card?.focus(), 0); }
+  function finish() { if (!overlay) return; overlay.hidden = true; document.body.classList.remove('onboarding-open'); setBackgroundInert(false); try { window.localStorage?.setItem(STORAGE_KEY, 'done'); } catch { /* storage may be unavailable (private mode): onboarding still works */ } if (lastFocus && typeof lastFocus.focus === 'function') lastFocus.focus(); }
+  document.getElementById('onboarding-help-button')?.addEventListener('click', start); document.addEventListener('keydown', (event) => { if (!overlay || overlay.hidden) return; if (event.key === 'Escape') { event.preventDefault(); finish(); return; } trapTab(event); }); window.addEventListener('resize', () => window.requestAnimationFrame(place)); window.addEventListener('scroll', () => window.requestAnimationFrame(place), { passive: true });
+  // 等 DOM 就绪后再起算延迟：脚本是 defer 加载的，固定计时会从解析期开始
+  // 计时，目标元素可能还没渲染出来。
+  const armAutoStart = () => window.setTimeout(() => {
+    if (userInteracted) return;
+    let seen = false;
+    try { seen = window.localStorage?.getItem(STORAGE_KEY) === 'done'; } catch { /* storage may be unavailable (private mode): onboarding still works */ }
+    const forced = new URLSearchParams(window.location.search).get('tour') === '1';
+    if ((!seen || forced) && (!document.getElementById('auth-gate') || document.getElementById('auth-gate').hidden)) start();
+  }, 900);
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', armAutoStart, { once: true });
+  else armAutoStart();
 })();

@@ -1,0 +1,68 @@
+name: ui-visual
+
+# Browser-level UI regression sweep.
+#
+# The main `verify` job runs the dependency-free static gate
+# (services/sim2real-web/ui-layout-invariants.mjs). This job adds what only a real
+# browser can see: that the stylesheets actually parse, that 11 viewports x 2
+# themes hold their layout, and that the accessibility tree exposes usable names
+# and landmarks.
+#
+# Playwright is installed with --no-save so the dependency stays out of
+# package.json/package-lock: this is an optional, additive gate, and the static
+# gate above still protects a clone that never installs a browser.
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  responsive:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Check out
+        uses: actions/checkout@v7
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+      - name: Install dependencies
+        run: npm ci --ignore-scripts --no-fund
+      - name: Install Playwright, Chromium and stylelint (not added to package.json)
+        run: |
+          npm i --no-save --no-package-lock playwright@1.63.0 stylelint@17
+          npx playwright install --with-deps chromium
+      - name: Lint the stylesheets for correctness
+        # Catches declarations that are syntactically valid but semantically broken
+        # (e.g. "position: absolute" + "bottom: 5px" spliced into "posim: 5px").
+        # The browser parses such a rule happily, so neither the parse-integrity
+        # check nor any screenshot can see it. Correctness rules only — no style
+        # preferences, which would drown a 216 KB stylesheet in noise.
+        run: npx stylelint "services/sim2real-web/public/*.css"
+      - name: Build the served assets
+        # The service serves the built tree, so the sweep must run against a build
+        # to test what users actually receive.
+        run: npm run build
+      - name: Start the Sim2Real service
+        run: |
+          npm run dev:sim2real > /tmp/sim2real.log 2>&1 &
+          for i in $(seq 1 60); do
+            if curl -fsS http://127.0.0.1:18102/ > /dev/null; then exit 0; fi
+            sleep 1
+          done
+          echo "service did not come up; log follows"; cat /tmp/sim2real.log; exit 1
+      - name: Run the UI regression sweep
+        env:
+          RDK_SIM2REAL_BASE_URL: http://127.0.0.1:18102/
+        run: node services/sim2real-web/ui-responsive.spec.mjs
+      - name: Upload the service log on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: sim2real-service-log
+          path: /tmp/sim2real.log
+          if-no-files-found: ignore

@@ -1,0 +1,122 @@
+/* ============================================================================
+   tokens.css — 主题令牌的唯一真源（唯一例外：color-scheme）。
+
+   由 consolidate-css.mjs 从 11 个样式层里抽出全部自定义属性声明得到。
+   此前同一批令牌在 styles.css / pro-skin.css / product-polish.css 里各声明
+   一遍，靠加载顺序决胜，于是"改了 styles.css 顶部却没反应"——修一个颜色要
+   先搞清楚哪个文件最后加载。现在只有这里有权声明令牌。
+
+   重名的令牌保留最后一次声明，与合并前的取胜者一致（已用像素对照验证）。
+   ============================================================================ */
+:root {
+  color-scheme: light;
+  --blue: #2563eb;
+  --orange: #d97706;
+  --orange-text: #854d0e;
+  --surface-1:var(--panel);
+  --surface-2:var(--panel-raised);
+  --font-label: ui-monospace, 'SF Mono', SFMono-Regular, 'JetBrains Mono',
+    'Cascadia Code', Menlo, Consolas, 'Liberation Mono', monospace;
+  --bg: #fbfbf9;
+  --bg-deep: #f6f4ee;
+  --bg-soft: #f3f1ea;
+  --panel: #ffffff;
+  --panel-raised: #ffffff;
+  --panel-soft: #faf9f5;
+  --line: rgba(27, 27, 24, 0.11);
+  --line-strong: rgba(27, 27, 24, 0.22);
+  --text: #1b1b18;
+  --muted: #6f6a5f;
+  --muted-strong: #55514a;
+  --orange-50: #fff7ed;
+  --orange-100: #ffedd5;
+  --orange-200: #fed7aa;
+  --orange-300: #fdba74;
+  --orange-400: #fb923c;
+  --orange-500: #f97316;
+  --orange-600: #ea580c;
+  --orange-700: #c2410c;
+  --accent: #f97316;
+  --accent-hover: #ea8a3a;
+  --accent-strong: #ea580c;
+  --accent-text: #9a3412;
+  --accent-soft: #fff7ed;
+  --accent-ring: #fed7aa;
+  --accent-glow: #ffedd5;
+  --cyan: #9a3412;
+  --violet: #9a3412;
+  --green: #16a34a;
+  --green-soft: #f0fdf4;
+  --green-border: #bbf7d0;
+  --green-text: #166534;
+  --red: #dc2626;
+  --red-soft: #fef2f2;
+  --red-border: #fecaca;
+  --red-text: #991b1b;
+  --amber: #c28a1d;
+  --amber-soft: #fffbeb;
+  --amber-border: #fde68a;
+  --amber-text: #854d0e;
+  --shadow: 0 10px 30px rgba(27, 27, 24, 0.08);
+  --shadow-strong: 0 10px 30px rgba(27, 27, 24, 0.12);
+  --z-sticky: 100;
+  --z-chat-backdrop: 1090;
+  --z-chat-panel: 1100;
+  --z-drawer-backdrop: 1150;
+  --z-drawer: 1160;
+  --z-agent-fab: 1190;
+  --z-tour: 1200;
+  --z-toast: 1300;
+}
+
+html.theme-dark {
+  color-scheme: dark;
+  --blue: #73a7ff;
+  --orange: #ffc05a;
+  --orange-text: #ffc05a;
+  --surface-1:#101b24;
+  --surface-2:#14232d;
+  --shadow: 0 10px 30px rgba(2, 8, 14, 0.38);
+  --bg: #0b1219;
+  --bg-deep: #0b1219;
+  --bg-soft: #0e1620;
+  --panel: #101b24;
+  --panel-raised: #101b24;
+  --panel-soft: #0d1620;
+  --line: rgba(154, 177, 201, 0.15);
+  --line-strong: rgba(154, 177, 201, 0.32);
+  --text: #edf3fa;
+  --muted: #8fa3b8;
+  --muted-strong: #a9bccd;
+  --orange-50: rgba(249, 115, 22, 0.09);
+  --orange-100: rgba(249, 115, 22, 0.14);
+  --orange-200: rgba(253, 186, 116, 0.35);
+  --orange-300: rgba(253, 186, 116, 0.55);
+  --orange-400: #fb923c;
+  --orange-500: #ff9d4d;
+  --orange-600: #f97316;
+  --orange-700: #ea580c;
+  --accent: #ff9d4d;
+  --accent-hover: #ffb061;
+  --accent-strong: #ff8f3d;
+  --accent-text: #ffb377;
+  --accent-soft: rgba(249, 115, 22, 0.11);
+  --accent-ring: rgba(253, 186, 116, 0.4);
+  --accent-glow: rgba(249, 115, 22, 0.16);
+  --cyan: #ffb377;
+  --violet: #ffb377;
+  --green: #5ec57f;
+  --green-soft: rgba(22, 163, 74, 0.13);
+  --green-border: rgba(22, 163, 74, 0.35);
+  --green-text: #7fd398;
+  --red: #e26868;
+  --red-soft: rgba(220, 38, 38, 0.13);
+  --red-border: rgba(220, 38, 38, 0.38);
+  --red-text: #f08a8a;
+  --amber: #d9a83f;
+  --amber-soft: rgba(217, 119, 6, 0.13);
+  --amber-border: rgba(217, 119, 6, 0.38);
+  --amber-text: #e5b567;
+  --shadow: 0 10px 30px rgba(0, 0, 0, 0.45);
+  --shadow-strong: 0 14px 36px rgba(0, 0, 0, 0.5);
+}
