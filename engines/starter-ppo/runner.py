@@ -45,6 +45,135 @@ import sys
 import time
 from collections import deque
 
+
+
+def write_artifact_manifest(job_dir, names=None):
+    """Write SHA256SUMS covering every file this run produced.
+
+    A run's outputs travel together (policy, telemetry, evaluation report), and a
+    digest for one file does not show that the rest are the ones that were
+    produced. This manifest is what a consumer verifies as a set: the worker
+    hashes every listed file and refuses the bundle on any mismatch, so a
+    partially copied or later-edited job directory cannot be read as intact.
+
+    The listing is discovered from the directory rather than hard-coded, so a
+    future artifact cannot silently fall outside the manifest; only the two
+    protocol files are excluded. `result.json` is written after this manifest
+    (and its integrity is covered separately by the platform's normalized
+    `reportSha256`), and `request.json` is an input, not an output.
+    """
+    import hashlib
+
+    directory = os.path.abspath(job_dir)
+    excluded = {"SHA256SUMS", "result.json", "request.json"}
+    candidates = sorted(names) if names is not None else sorted(os.listdir(directory))
+    lines = []
+    for name in candidates:
+        if name in excluded or os.sep in name or name.startswith("."):
+            continue
+        path = os.path.join(directory, name)
+        try:
+            if not os.path.isfile(path):
+                continue
+            digest = hashlib.sha256()
+            with open(path, "rb") as handle:
+                for chunk in iter(lambda: handle.read(1 << 20), b""):
+                    digest.update(chunk)
+        except OSError:
+            # A file that cannot be read is not listed; inventing an entry would
+            # make the manifest unverifiable.
+            continue
+        lines.append("%s  %s" % (digest.hexdigest(), name))
+    if not lines:
+        raise RuntimeError("no artifacts to record in SHA256SUMS under %s" % directory)
+    target = os.path.join(directory, "SHA256SUMS")
+    with open(target, "w") as handle:
+        handle.write("\n".join(lines) + "\n")
+    return target
+
+
+
+def source_commit_short():
+    """Commit id for the run's metrics, or None when it cannot be determined."""
+    revision = source_revision()
+    return revision.get("commit") if revision.get("known") else None
+
+
+
+def dependency_versions():
+    """Versions of the libraries that actually produced this artifact.
+
+    `sourceCommit` answers "which code?" but not "which libraries?". A training
+    run is reproducible only if both are pinned: numerics move between torch
+    releases, and `torch.onnx.export` output changes with the exporter/opset in
+    use. Reporting the *installed* versions (never the requested ones) makes a
+    result auditable after the environment has moved on, and `uv.lock`-style
+    pinning can be layered on top without changing this contract.
+    """
+    from importlib import metadata
+
+    def version_of(distribution):
+        try:
+            return metadata.version(distribution)
+        except Exception:  # noqa: BLE001 - a missing library is simply absent
+            return None
+
+    # Distribution names differ from import names for the ONNX exporter helper.
+    packages = ("numpy", "torch", "onnx", "onnxruntime", "onnxscript", "jax", "mujoco")
+    resolved = {name: version_of(name) for name in packages}
+    return {name: version for name, version in resolved.items() if version is not None}
+
+
+def source_revision():
+    """Exact revision of the training code that produced this artifact.
+
+    A result carries a package version such as "starter-ppo-0.1.0", which cannot
+    answer "which reward/observation code trained this policy?" once the tree has
+    moved on. This records the commit and whether the working tree was clean, so
+    a later reviewer can retrieve the code or discount the run.
+
+    Best-effort by design: a checkout without `.git` (a packaged board install, a
+    container) yields `known=False` rather than failing the run or inventing an
+    identity.
+    """
+    import subprocess
+
+    def run(*args):
+        return subprocess.run(
+            ["git", *args],
+            capture_output=True,
+            text=True,
+            timeout=10,
+            cwd=os.path.dirname(os.path.abspath(__file__)),
+        )
+
+    try:
+        head = run("rev-parse", "HEAD")
+        if head.returncode != 0:
+            return {"known": False, "reason": "not-a-git-checkout"}
+        commit = head.stdout.strip().lower()
+        if len(commit) != 40:
+            return {"known": False, "reason": "unexpected-revision-format"}
+        status = run("status", "--porcelain")
+        remote = run("config", "--get", "remote.origin.url")
+        branch = run("rev-parse", "--abbrev-ref", "HEAD")
+        provenance = {
+            "known": True,
+            "commit": commit,
+            # A dirty tree means the recorded commit does not fully describe the
+            # code that ran; say so instead of implying exact reproducibility.
+            "dirty": bool(status.stdout.strip()) if status.returncode == 0 else None,
+        }
+        if remote.returncode == 0 and remote.stdout.strip():
+            provenance["repository"] = remote.stdout.strip()[:200]
+        if branch.returncode == 0 and branch.stdout.strip():
+            provenance["ref"] = branch.stdout.strip()[:120]
+        return provenance
+    except (OSError, subprocess.SubprocessError):
+        return {"known": False, "reason": "git-unavailable"}
+
+
+
 try:
     import numpy as np
 except ImportError:  # pragma: no cover - environment guard
@@ -724,11 +853,17 @@ class GoalNavEnv:
         reached = False
         steps = 0
         final_distance = None
+        action_change_sq = []
+        previous_action = None
         with torch.no_grad():
             obs_tensor = torch.from_numpy(obs).to(device)
             for step in range(single.timeout_steps):
                 action, _ = model.act(obs_tensor, deterministic=deterministic, squashed=squashed)
                 action_np = action.cpu().numpy()
+                if previous_action is not None:
+                    delta = action_np[0] - previous_action
+                    action_change_sq.append(float(np.dot(delta, delta)))
+                previous_action = action_np[0]
                 next_obs, reward, done, success = single.step(action_np)
                 # Read the terminal state captured BEFORE the auto-reset —
                 # single.step() resamples collision flags and pose the moment
@@ -761,6 +896,11 @@ class GoalNavEnv:
             "collision": collided,
             "steps": steps,
             "finalDistance": final_distance,
+            # None for a one-step episode: a single sample has no change to
+            # describe, and reporting 0.0 would read as "perfectly smooth".
+            "actionChangeRms": (
+                float(np.sqrt(np.mean(action_change_sq))) if action_change_sq else None
+            ),
         }
 
 
@@ -821,6 +961,12 @@ def evaluate_policy(model, joint_count, command_size, control_dt, physics_dt, de
     env = PendulumChain(1, joint_count, command_size, seed)
     returns, lengths, fell_flags = [], [], []
     jsonl_rows = []
+    # Action-change RMS is the "is this actually usable motion?" figure that a
+    # success rate cannot express: a policy can survive every episode while
+    # chattering the actuators. It costs one subtraction per step because the
+    # loop already holds both actions, and it is reported for whatever policy is
+    # evaluated, so a task can gate on smoothness and compare against a baseline.
+    action_change_sq = []
     with torch.no_grad():
         for episode in range(episodes):
             env.reset()
@@ -828,8 +974,13 @@ def evaluate_policy(model, joint_count, command_size, control_dt, physics_dt, de
             episode_return = 0.0
             steps = 0
             fell = False
+            previous_action = None
             for step in range(EPISODE_CONTROL_STEPS):
                 action, _ = model.act(obs, deterministic=True, squashed=squashed)
+                if previous_action is not None:
+                    delta = action - previous_action
+                    action_change_sq.append(float((delta * delta).sum().item()))
+                previous_action = action
                 next_obs, reward, done, fallen_now = env.step(
                     action.cpu().numpy(), physics_dt, decimation, auto_reset=False
                 )
@@ -860,6 +1011,9 @@ def evaluate_policy(model, joint_count, command_size, control_dt, physics_dt, de
         "successRate": survived / episodes,
         "fallRate": float(np.mean(fell_flags)),
         "episodeLength": float(np.mean(lengths)),
+        "actionChangeRms": (
+            float(np.sqrt(np.mean(action_change_sq))) if action_change_sq else None
+        ),
         "jsonl": jsonl_rows,
     }
 
@@ -1455,7 +1609,9 @@ def train_goal_navigation(request, pack):
             model = model.to(device)
             stdout("ONNX export failed: {}; continuing without it".format(error))
 
-    gate = evaluate_quality_gate(trained_report, pack.get("qualityGate") or {})
+    gate = evaluate_quality_gate(
+        trained_report, pack.get("qualityGate") or {}, baseline_report
+    )
     nominal = trained_report["envelopes"].get("nominal") or {}
     baseline_nominal = baseline_report["envelopes"].get("nominal") or {}
     stdout(
@@ -1507,6 +1663,8 @@ def train_goal_navigation(request, pack):
                 "eval": {k: v for k, v in trained_report.items() if k not in ("jsonl",)},
                 "baseline": {k: v for k, v in baseline_report.items() if k not in ("jsonl",)},
                 "controlLatencyMs": latency,
+                "measurementStage": "host-torch",
+                "sourceCommit": source_commit_short(),
                 "onnxExported": bool(onnx_bytes),
                 "trainingSeconds": round(time.time() - started, 1),
                 "evaluationConfig": {
@@ -1528,6 +1686,8 @@ def train_goal_navigation(request, pack):
                 "baseline": {k: v for k, v in baseline_report.items() if k != "jsonl"},
                 "qualityGate": gate,
                 "controlLatencyMs": latency,
+                "measurementStage": "host-torch",
+                "sourceCommit": source_commit_short(),
                 "seed": eval_seed,
             },
             handle, indent=2,
@@ -1574,11 +1734,15 @@ def train_goal_navigation(request, pack):
             "hardSuccessRateCiLow": round((trained_report["envelopes"].get("hard") or {}).get("successRateCiLow", 0.0), 4),
             "qualityGatePassed": gate["passed"],
             "controlLatencyMs": latency,
+            "measurementStage": "host-torch",
+            "sourceCommit": source_commit_short(),
             "iterations": iterations,
             "onnxExported": bool(onnx_bytes),
             "telemetrySamples": sum(len(rows) for rows in trained_report["jsonl"].values()),
         },
         "deployable": False,
+        "source": source_revision(),
+        "dependencies": dependency_versions(),
         "actionOutput": "normalized-twist" if act_size == 2 else "physical-joint",
         "cuda": requested_device.type == "cuda",
     }
@@ -1602,6 +1766,7 @@ def evaluate_goal_navigation(model, env, device, envelopes, seed,
     for name, envelope in (envelopes or {"nominal": [1.0, 0.1, 0.01, 0.005, 0.0, 1, 0.0, 1.0]}).items():
         domain = eval_domain_params(envelope)
         successes, collisions, finals, lengths, rewards = 0, 0, [], [], []
+        action_changes = []
         jsonl_rows = []
         for episode in range(episodes_per_envelope):
             episode_seed = seed * 7919 + episode
@@ -1612,6 +1777,8 @@ def evaluate_goal_navigation(model, env, device, envelopes, seed,
             lengths.append(outcome["steps"])
             episode_reward = sum(row["reward"] for row in outcome["rows"])
             rewards.append(episode_reward)
+            if outcome.get("actionChangeRms") is not None:
+                action_changes.append(outcome["actionChangeRms"])
             if episode == 0:
                 jsonl_rows = outcome["rows"]
         success_ci = wilson_bounds(successes, episodes_per_envelope, confidence)
@@ -1627,6 +1794,12 @@ def evaluate_goal_navigation(model, env, device, envelopes, seed,
             "meanFinalDistance": round(float(np.mean(finals)), 4),
             "meanEpisodeLength": round(float(np.mean(lengths)), 2),
             "meanReward": round(float(np.mean(rewards)), 4),
+            # The non-success figure a task can gate on: a policy can survive
+            # every episode while chattering its actuators, and no pass/fail rate
+            # expresses that.
+            "actionChangeRms": (
+                round(float(np.mean(action_changes)), 6) if action_changes else None
+            ),
         }
         report["jsonl"][name] = jsonl_rows
         rewards_all.extend(rewards)
@@ -1636,7 +1809,7 @@ def evaluate_goal_navigation(model, env, device, envelopes, seed,
     return report
 
 
-def evaluate_quality_gate(report, quality_gate):
+def evaluate_quality_gate(report, quality_gate, baseline=None):
     """Apply the task's quality gate to the nominal-envelope metrics.
 
     A gate verdict is PASS only from measured evidence — never from a
@@ -1645,8 +1818,19 @@ def evaluate_quality_gate(report, quality_gate):
     is judged on the CI lower bound and collision on the CI upper bound,
     so a 50-episode 84% point rate no longer hides the 71% floor. Missing
     bounds under ciLowerBound fail closed, exactly like missing rates.
+
+    Two optional criteria beyond the pass/fail rates:
+
+    * ``maxActionChangeRms`` — a smoothness ceiling. A policy can survive every
+      episode while chattering its actuators, and a success rate cannot express
+      that. The figure is measured for whichever policy is evaluated.
+    * ``ablation`` — the trained policy must beat the untrained baseline by
+      enough to show training did something. ``requireBaseline`` additionally
+      refuses a run that cannot demonstrate the comparison at all, so "we could
+      not measure it" cannot be read as "it passed".
     """
     nominal = (report.get("envelopes") or {}).get("nominal") or {}
+    baseline_nominal = ((baseline or {}).get("envelopes") or {}).get("nominal") or {}
     gate_on = str(quality_gate.get("gateOn", "point"))
     errors = []
     if gate_on not in ("point", "ciLowerBound"):
@@ -1675,6 +1859,35 @@ def evaluate_quality_gate(report, quality_gate):
             errors.append("nominal {} missing".format(label))
         elif collision_value > float(max_collision):
             errors.append("{} {:.4f} above gate {:.2f}".format(label, collision_value, float(max_collision)))
+    max_action_change = quality_gate.get("maxActionChangeRms")
+    action_change = nominal.get("actionChangeRms")
+    if max_action_change is not None:
+        if action_change is None:
+            errors.append("nominal actionChangeRms missing")
+        elif float(action_change) > float(max_action_change):
+            errors.append(
+                "actionChangeRms {:.4f} above gate {:.4f}".format(
+                    float(action_change), float(max_action_change)
+                )
+            )
+    ablation = quality_gate.get("ablation") or {}
+    if isinstance(ablation, dict) and ablation:
+        min_delta = ablation.get("minSuccessRateDelta")
+        baseline_success = baseline_nominal.get("successRate")
+        if ablation.get("requireBaseline") and not baseline_nominal:
+            errors.append("ablation requires a baseline report, but none was evaluated")
+        elif min_delta is not None:
+            trained_success = nominal.get("successRate")
+            if trained_success is None:
+                errors.append("nominal successRate missing for the ablation comparison")
+            elif baseline_success is None:
+                errors.append("baseline successRate missing for the ablation comparison")
+            elif float(trained_success) - float(baseline_success) < float(min_delta):
+                errors.append(
+                    "ablation: trained successRate {:.4f} minus baseline {:.4f} is below the required delta {:.4f}".format(
+                        float(trained_success), float(baseline_success), float(min_delta)
+                    )
+                )
     return {
         "passed": not errors,
         "errors": errors,
@@ -1682,6 +1895,8 @@ def evaluate_quality_gate(report, quality_gate):
             "minSuccessRate": min_success,
             "maxCollisionRate": max_collision,
             "gateOn": gate_on,
+            **({"maxActionChangeRms": max_action_change} if max_action_change is not None else {}),
+            **({"ablation": ablation} if ablation else {}),
         },
         "measured": {
             "successRate": nominal.get("successRate"),
@@ -1689,6 +1904,12 @@ def evaluate_quality_gate(report, quality_gate):
             "successRateCiLow": nominal.get("successRateCiLow"),
             "collisionRateCiHigh": nominal.get("collisionRateCiHigh"),
             "episodes": nominal.get("episodes"),
+            **({"actionChangeRms": action_change} if action_change is not None else {}),
+            **(
+                {"baselineSuccessRate": baseline_nominal.get("successRate")}
+                if baseline_nominal
+                else {}
+            ),
         },
     }
 
@@ -1953,6 +2174,8 @@ def train(request):
                 "eval": {k: v for k, v in final_eval.items() if k != "jsonl"},
                 "baseline": {k: v for k, v in baseline_eval.items() if k != "jsonl"},
                 "controlLatencyMs": latency,
+                "measurementStage": "host-torch",
+                "sourceCommit": source_commit_short(),
                 "onnxExported": bool(onnx_bytes),
                 "trainingSeconds": round(time.time() - started, 1),
             },
@@ -1989,11 +2212,15 @@ def train(request):
             "fallRate": round(final_eval["fallRate"], 4),
             "episodeLength": round(final_eval["episodeLength"], 2),
             "controlLatencyMs": latency,
+            "measurementStage": "host-torch",
+            "sourceCommit": source_commit_short(),
             "iterations": iterations,
             "onnxExported": bool(onnx_bytes),
             "telemetrySamples": len(final_eval["jsonl"]),
         },
         "deployable": False,
+        "source": source_revision(),
+        "dependencies": dependency_versions(),
         # Honest device report: true only when training actually ran on CUDA.
         # A requested-but-unavailable cuda falls back to cpu and stays false.
         "cuda": requested_device.type == "cuda",
@@ -2020,6 +2247,10 @@ def main():
         raise ValueError("contract.observationSize and contract.actionSize are required")
 
     result = train(request)
+    # Integrity manifest for the artifacts this run produced. Written before the
+    # result so the consumer can verify the bundle it is about to trust.
+    write_artifact_manifest(os.path.dirname(os.path.abspath(result_path)))
+
     with open(result_path, "w") as handle:
         json.dump(result, handle, indent=2)
     stdout("wrote result with real PPO training artifacts")

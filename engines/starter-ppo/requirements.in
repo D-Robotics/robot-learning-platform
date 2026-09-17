@@ -1,0 +1,17 @@
+# Direct dependencies of the starter-ppo engine.
+#
+# Pinned transitively in requirements.txt (`uv pip compile --generate-hashes`),
+# so a training run is reproducible in both halves of the provenance contract:
+# `sourceCommit` names the code and the lock names the libraries. The engine also
+# records the versions it actually imported in each result's `dependencies`
+# block, which is what `npm run verify:training-provenance` asserts.
+#
+# Regenerate after editing this file:
+#     npm run lock:engines
+
+# Torch is pinned as the tested CPU/standard wheel. A GPU deployment installs
+# its own build from the CUDA index; that wheel is a deliberate deployment
+# choice and is recorded per-run in `dependencies.torch`.
+numpy==2.0.2
+torch==2.8.0
+onnx==1.19.1

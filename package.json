@@ -78,10 +78,17 @@
     "compile:policy": "node scripts/compile-policy.mjs",
     "verify:vision-model": "node scripts/verify-vision-model.mjs",
     "verify:gpu-onboarding": "node scripts/onboard-gpu-server.test.mjs",
+    "verify:board-latency": "node scripts/verify-board-latency.mjs",
+    "verify:policy-input-binding": "node scripts/verify-policy-input-binding.mjs",
     "verify:mjlab-adapter": "node scripts/verify-mjlab-adapter.mjs",
     "verify:mjx-adapter": "node scripts/verify-mjx-adapter.mjs",
+    "verify:microduck-rl-adapter": "node scripts/verify-microduck-rl-adapter.mjs",
     "verify:mujoco-models": "node scripts/verify-mujoco-models.mjs",
-    "verify": "npm run format:check && npm run verify:ui && npm run verify:escape-audit && npm run verify:task-pack && npm run verify:task-templates && npm run verify:goalnav && npm run verify:originbot-env && npm run verify:originbot-calibration && npm run verify:originbot-telemetry && npm run verify:recorder && npm run verify:deployment && npm run verify:security && npm run verify:production-config && npm run verify:production-config-test && npm run verify:storage-backup && npm run verify:service-probe && npm run verify:examples && npm run verify:local-worker && npm run verify:board-agent && npm run build && npm run verify:device-connections && npm run verify:board-drive && npm run verify:board-uploader && npm run verify:policy-runtime && npm run verify:policy-provider-layout && npm run verify:hardware-profiles && npm run verify:real-loop && npm run verify:starter-engine && npm run verify:artifact-registry && npm run verify:vision-observation && npm run verify:mjlab-adapter && npm run verify:mjx-adapter && npm run verify:mujoco-models && npm run verify:api-contract && npm run smoke:sim2real-local && node services/sim2real-web/server-wiring.spec.mjs && npm test",
+    "verify": "npm run format:check && npm run verify:ui && npm run verify:escape-audit && npm run verify:task-pack && npm run verify:task-templates && npm run verify:quality-gate-parity && npm run verify:goalnav && npm run verify:originbot-env && npm run verify:originbot-calibration && npm run verify:originbot-telemetry && npm run verify:recorder && npm run verify:deployment && npm run verify:security && npm run verify:production-config && npm run verify:production-config-test && npm run verify:storage-backup && npm run verify:service-probe && npm run verify:examples && npm run verify:local-worker && npm run verify:board-agent && npm run build && npm run verify:device-connections && npm run verify:board-drive && npm run verify:board-uploader && npm run verify:policy-runtime && npm run verify:policy-provider-layout && npm run verify:hardware-profiles && npm run verify:real-loop && npm run verify:starter-engine && npm run verify:engine-locks && npm run verify:training-provenance && npm run verify:artifact-registry && npm run verify:board-latency && npm run verify:policy-input-binding && npm run verify:vision-observation && npm run verify:mjlab-adapter && npm run verify:mjx-adapter && npm run verify:microduck-rl-adapter && npm run verify:microduck-eval && npm run verify:mujoco-models && npm run verify:api-contract && npm run smoke:sim2real-local && node services/sim2real-web/server-wiring.spec.mjs && npm test",
+    "verify:quality-gate-parity": "python3 tests/test_quality_gate_parity.py",
+    "lock:engines": "node scripts/lock-engines.mjs",
+    "verify:engine-locks": "node scripts/lock-engines.mjs --check",
+    "verify:training-provenance": "node scripts/verify-training-provenance.mjs",
     "verify:goalnav": "python3 engines/rdk-rl-env/test_goal_navigation.py",
     "verify:originbot-env": "python3 engines/rdk-rl-env/test_originbot_env.py",
     "verify:demo-preflight": "node scripts/demo-preflight.test.mjs",
@@ -94,7 +101,8 @@
     "verify:originbot-telemetry": "node scripts/verify-originbot-telemetry.mjs",
     "verify:live-board": "node scripts/verify-live-board.mjs",
     "train:originbot": "python3 engines/rdk-rl-env/train_originbot.py",
-    "verify:vision-observation": "node scripts/verify-vision-observation.mjs"
+    "verify:vision-observation": "node scripts/verify-vision-observation.mjs",
+    "verify:microduck-eval": "node scripts/verify-microduck-eval.mjs"
   },
   "dependencies": {
     "@deepseek-ai/cordis": "4.0.2",

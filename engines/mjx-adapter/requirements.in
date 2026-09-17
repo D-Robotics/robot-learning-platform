@@ -1,0 +1,17 @@
+# Direct dependencies of the MJX adapter.
+#
+# Pinned transitively in requirements.txt (`uv pip compile --generate-hashes`),
+# so a training run is reproducible in both halves of the provenance contract:
+# `sourceCommit` names the code and the lock names the libraries. The engine also
+# records the versions it actually imported in each result's `dependencies`
+# block, which is what `npm run verify:training-provenance` asserts.
+#
+# Regenerate after editing this file:
+#     npm run lock:engines
+
+numpy==2.5.3
+jax==0.11.1
+mujoco==3.13.0
+mujoco-mjx==3.13.0
+optax==0.2.8
+onnx==1.22.0

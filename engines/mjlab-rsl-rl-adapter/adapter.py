@@ -31,6 +31,135 @@ import os
 import sys
 import time
 
+
+
+def write_artifact_manifest(job_dir, names=None):
+    """Write SHA256SUMS covering every file this run produced.
+
+    A run's outputs travel together (policy, telemetry, evaluation report), and a
+    digest for one file does not show that the rest are the ones that were
+    produced. This manifest is what a consumer verifies as a set: the worker
+    hashes every listed file and refuses the bundle on any mismatch, so a
+    partially copied or later-edited job directory cannot be read as intact.
+
+    The listing is discovered from the directory rather than hard-coded, so a
+    future artifact cannot silently fall outside the manifest; only the two
+    protocol files are excluded. `result.json` is written after this manifest
+    (and its integrity is covered separately by the platform's normalized
+    `reportSha256`), and `request.json` is an input, not an output.
+    """
+    import hashlib
+
+    directory = os.path.abspath(job_dir)
+    excluded = {"SHA256SUMS", "result.json", "request.json"}
+    candidates = sorted(names) if names is not None else sorted(os.listdir(directory))
+    lines = []
+    for name in candidates:
+        if name in excluded or os.sep in name or name.startswith("."):
+            continue
+        path = os.path.join(directory, name)
+        try:
+            if not os.path.isfile(path):
+                continue
+            digest = hashlib.sha256()
+            with open(path, "rb") as handle:
+                for chunk in iter(lambda: handle.read(1 << 20), b""):
+                    digest.update(chunk)
+        except OSError:
+            # A file that cannot be read is not listed; inventing an entry would
+            # make the manifest unverifiable.
+            continue
+        lines.append("%s  %s" % (digest.hexdigest(), name))
+    if not lines:
+        raise RuntimeError("no artifacts to record in SHA256SUMS under %s" % directory)
+    target = os.path.join(directory, "SHA256SUMS")
+    with open(target, "w") as handle:
+        handle.write("\n".join(lines) + "\n")
+    return target
+
+
+
+def source_commit_short():
+    """Commit id for the run's metrics, or None when it cannot be determined."""
+    revision = source_revision()
+    return revision.get("commit") if revision.get("known") else None
+
+
+
+def dependency_versions():
+    """Versions of the libraries that actually produced this artifact.
+
+    `sourceCommit` answers "which code?" but not "which libraries?". A training
+    run is reproducible only if both are pinned: numerics move between torch
+    releases, and `torch.onnx.export` output changes with the exporter/opset in
+    use. Reporting the *installed* versions (never the requested ones) makes a
+    result auditable after the environment has moved on, and `uv.lock`-style
+    pinning can be layered on top without changing this contract.
+    """
+    from importlib import metadata
+
+    def version_of(distribution):
+        try:
+            return metadata.version(distribution)
+        except Exception:  # noqa: BLE001 - a missing library is simply absent
+            return None
+
+    # Distribution names differ from import names for the ONNX exporter helper.
+    packages = ("numpy", "torch", "onnx", "onnxruntime", "onnxscript", "jax", "mujoco")
+    resolved = {name: version_of(name) for name in packages}
+    return {name: version for name, version in resolved.items() if version is not None}
+
+
+def source_revision():
+    """Exact revision of the training code that produced this artifact.
+
+    A result carries a package version such as "starter-ppo-0.1.0", which cannot
+    answer "which reward/observation code trained this policy?" once the tree has
+    moved on. This records the commit and whether the working tree was clean, so
+    a later reviewer can retrieve the code or discount the run.
+
+    Best-effort by design: a checkout without `.git` (a packaged board install, a
+    container) yields `known=False` rather than failing the run or inventing an
+    identity.
+    """
+    import subprocess
+
+    def run(*args):
+        return subprocess.run(
+            ["git", *args],
+            capture_output=True,
+            text=True,
+            timeout=10,
+            cwd=os.path.dirname(os.path.abspath(__file__)),
+        )
+
+    try:
+        head = run("rev-parse", "HEAD")
+        if head.returncode != 0:
+            return {"known": False, "reason": "not-a-git-checkout"}
+        commit = head.stdout.strip().lower()
+        if len(commit) != 40:
+            return {"known": False, "reason": "unexpected-revision-format"}
+        status = run("status", "--porcelain")
+        remote = run("config", "--get", "remote.origin.url")
+        branch = run("rev-parse", "--abbrev-ref", "HEAD")
+        provenance = {
+            "known": True,
+            "commit": commit,
+            # A dirty tree means the recorded commit does not fully describe the
+            # code that ran; say so instead of implying exact reproducibility.
+            "dirty": bool(status.stdout.strip()) if status.returncode == 0 else None,
+        }
+        if remote.returncode == 0 and remote.stdout.strip():
+            provenance["repository"] = remote.stdout.strip()[:200]
+        if branch.returncode == 0 and branch.stdout.strip():
+            provenance["ref"] = branch.stdout.strip()[:120]
+        return provenance
+    except (OSError, subprocess.SubprocessError):
+        return {"known": False, "reason": "git-unavailable"}
+
+
+
 try:
     import numpy as np
 except ImportError:  # pragma: no cover - environment guard
@@ -316,7 +445,9 @@ def evaluate_kinematic(runner, pack, seed, episodes_per_envelope, confidence):
         baseline_model, env, device, envelopes, eval_seed,
         episodes_per_envelope=episodes_per_envelope, confidence=confidence,
     )
-    gate = starter.evaluate_quality_gate(trained_report, pack.get("qualityGate") or {})
+    gate = starter.evaluate_quality_gate(
+        trained_report, pack.get("qualityGate") or {}, baseline_report
+    )
     return trained_report, baseline_report, gate
 
 
@@ -486,6 +617,8 @@ def main():
                     "eval": {k: v for k, v in trained_report.items() if k != "jsonl"},
                     "baseline": {k: v for k, v in baseline_report.items() if k != "jsonl"},
                     "controlLatencyMs": latency,
+                    "measurementStage": "host-torch",
+                    "sourceCommit": source_commit_short(),
                     "onnxExported": bool(onnx_bytes),
                     "trainingSeconds": training_seconds,
                 },
@@ -504,6 +637,8 @@ def main():
                     "baseline": {k: v for k, v in baseline_report.items() if k != "jsonl"},
                     "qualityGate": gate,
                     "controlLatencyMs": latency,
+                    "measurementStage": "host-torch",
+                    "sourceCommit": source_commit_short(),
                     "seed": seed + 1000,
                 },
                 handle, indent=2,
@@ -562,6 +697,8 @@ def main():
                     "reward": round(trained_report.get("meanReward", 0.0), 4),
                     "qualityGatePassed": gate["passed"],
                     "controlLatencyMs": latency,
+                    "measurementStage": "host-torch",
+                    "sourceCommit": source_commit_short(),
                     "onnxExported": bool(onnx_bytes),
                     "telemetrySamples": sum(len(rows) for rows in trained_report.get("jsonl", {}).values()),
                 }
@@ -578,16 +715,24 @@ def main():
                 "baseline": {k: v for k, v in baseline_report.items() if k != "jsonl"},
                 "qualityGate": gate,
                 "controlLatencyMs": latency,
+                "measurementStage": "host-torch",
+                "sourceCommit": source_commit_short(),
                 "seed": seed + 1000,
             }
             if pack and physics_backend == "starter-kinematic" else None
         ),
         "deployable": False,
+        "source": source_revision(),
+        "dependencies": dependency_versions(),
         "cuda": device == "cuda",
         "physicsBackend": physics_backend,
     }
     if result["taskEvaluation"] is None:
         del result["taskEvaluation"]
+    # Integrity manifest for the artifacts this run produced. Written before the
+    # result so the consumer can verify the bundle it is about to trust.
+    write_artifact_manifest(os.path.dirname(os.path.abspath(result_path)))
+
     with open(result_path, "w") as handle:
         json.dump(result, handle, indent=2)
     stdout("wrote result (physicsBackend={})".format(physics_backend))
