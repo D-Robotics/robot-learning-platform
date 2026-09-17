@@ -1,0 +1,207 @@
+{
+  "schemaVersion": 1,
+  "taskId": "walking-velocity",
+  "adapterId": "microduck-cpu-eval",
+  "observationAdapterId": "microduck-61d-v1",
+  "trained": {
+    "envelopes": {
+      "nominal": {
+        "episodes": 50,
+        "successRate": 0.0,
+        "successRateCiLow": 0.0,
+        "successRateCiHigh": 0.0713,
+        "collisionRate": 0.92,
+        "collisionRateCiLow": 0.8116,
+        "collisionRateCiHigh": 0.9685,
+        "fallRate": 1.0,
+        "fallRateCiLow": 0.9287,
+        "fallRateCiHigh": 1.0,
+        "meanReward": 0.0,
+        "meanEpisodeLength": 4.0,
+        "commandedSpeedMps": 0.4,
+        "commandedSpeedMpsStd": 0.0,
+        "forwardM": 0.1338,
+        "forwardMStd": 0.2227,
+        "maxTiltRad": 2.4188,
+        "maxTiltRadStd": 0.5447,
+        "meanSpeedMps": 0.1861,
+        "meanSpeedMpsStd": 0.0842,
+        "minBaseHeightM": 0.0362,
+        "minBaseHeightMStd": 0.0027,
+        "speedTrackingErrorMps": 0.2165,
+        "speedTrackingErrorMpsStd": 0.077
+      },
+      "hard": {
+        "episodes": 50,
+        "successRate": 0.0,
+        "successRateCiLow": 0.0,
+        "successRateCiHigh": 0.0713,
+        "collisionRate": 0.94,
+        "collisionRateCiLow": 0.8378,
+        "collisionRateCiHigh": 0.9794,
+        "fallRate": 1.0,
+        "fallRateCiLow": 0.9287,
+        "fallRateCiHigh": 1.0,
+        "meanReward": 0.0,
+        "meanEpisodeLength": 4.0,
+        "commandedSpeedMps": 0.4,
+        "commandedSpeedMpsStd": 0.0,
+        "forwardM": 0.0311,
+        "forwardMStd": 0.1744,
+        "maxTiltRad": 2.4532,
+        "maxTiltRadStd": 0.5501,
+        "meanSpeedMps": 0.1945,
+        "meanSpeedMpsStd": 0.0752,
+        "minBaseHeightM": 0.0363,
+        "minBaseHeightMStd": 0.0023,
+        "speedTrackingErrorMps": 0.2055,
+        "speedTrackingErrorMpsStd": 0.0752
+      }
+    },
+    "meanReward": 0.0,
+    "episodesPerEnvelope": 50,
+    "confidenceLevel": 0.95
+  },
+  "baseline": {
+    "envelopes": {
+      "nominal": {
+        "episodes": 50,
+        "successRate": 0.0,
+        "successRateCiLow": 0.0,
+        "successRateCiHigh": 0.0713,
+        "collisionRate": 0.0,
+        "collisionRateCiLow": 0.0,
+        "collisionRateCiHigh": 0.0713,
+        "fallRate": 0.0,
+        "fallRateCiLow": 0.0,
+        "fallRateCiHigh": 0.0713,
+        "meanReward": 0.0,
+        "meanEpisodeLength": 4.0,
+        "commandedSpeedMps": 0.4,
+        "commandedSpeedMpsStd": 0.0,
+        "forwardM": 0.0026,
+        "forwardMStd": 0.0,
+        "maxTiltRad": 0.0503,
+        "maxTiltRadStd": 0.0,
+        "meanSpeedMps": 0.0001,
+        "meanSpeedMpsStd": 0.0,
+        "minBaseHeightM": 0.1154,
+        "minBaseHeightMStd": 0.0,
+        "speedTrackingErrorMps": 0.3999,
+        "speedTrackingErrorMpsStd": 0.0
+      },
+      "hard": {
+        "episodes": 50,
+        "successRate": 0.0,
+        "successRateCiLow": 0.0,
+        "successRateCiHigh": 0.0713,
+        "collisionRate": 0.0,
+        "collisionRateCiLow": 0.0,
+        "collisionRateCiHigh": 0.0713,
+        "fallRate": 0.0,
+        "fallRateCiLow": 0.0,
+        "fallRateCiHigh": 0.0713,
+        "meanReward": 0.0,
+        "meanEpisodeLength": 4.0,
+        "commandedSpeedMps": 0.4,
+        "commandedSpeedMpsStd": 0.0,
+        "forwardM": 0.0026,
+        "forwardMStd": 0.0,
+        "maxTiltRad": 0.0471,
+        "maxTiltRadStd": 0.0001,
+        "meanSpeedMps": 0.0001,
+        "meanSpeedMpsStd": 0.0,
+        "minBaseHeightM": 0.1154,
+        "minBaseHeightMStd": 0.0,
+        "speedTrackingErrorMps": 0.3999,
+        "speedTrackingErrorMpsStd": 0.0
+      }
+    },
+    "meanReward": 0.0,
+    "episodesPerEnvelope": 50,
+    "confidenceLevel": 0.95
+  },
+  "qualityGate": {
+    "passed": false,
+    "errors": [
+      "envelope nominal: the evaluated policy fell in all 50 episodes while the baseline stood — a policy that trained successfully should not be uniformly worse than holding still, so the harness cannot currently judge learned policies (actuator/dynamics fidelity), and no success rate from it is meaningful",
+      "envelope hard: the evaluated policy fell in all 50 episodes while the baseline stood — a policy that trained successfully should not be uniformly worse than holding still, so the harness cannot currently judge learned policies (actuator/dynamics fidelity), and no success rate from it is meaningful",
+      "harness unqualified: no success rate from this harness is meaningful"
+    ],
+    "criteria": {
+      "minSuccessRate": 0.7,
+      "maxCollisionRate": 0.1,
+      "gateOn": "ciLowerBound"
+    }
+  },
+  "seed": 20260916,
+  "controlLatencyMs": 0.0,
+  "harnessQualification": {
+    "passed": false,
+    "reasons": [
+      "envelope nominal: the evaluated policy fell in all 50 episodes while the baseline stood — a policy that trained successfully should not be uniformly worse than holding still, so the harness cannot currently judge learned policies (actuator/dynamics fidelity), and no success rate from it is meaningful",
+      "envelope hard: the evaluated policy fell in all 50 episodes while the baseline stood — a policy that trained successfully should not be uniformly worse than holding still, so the harness cannot currently judge learned policies (actuator/dynamics fidelity), and no success rate from it is meaningful"
+    ],
+    "envelopes": {
+      "nominal": {
+        "episodes": 50,
+        "baselineFallRate": 0.0,
+        "baselineMeanBaseHeightM": 0.1154,
+        "trainedFallRate": 1.0
+      },
+      "hard": {
+        "episodes": 50,
+        "baselineFallRate": 0.0,
+        "baselineMeanBaseHeightM": 0.1154,
+        "trainedFallRate": 1.0
+      }
+    }
+  },
+  "dynamicsFacts": {
+    "dynamics": "cpu-mujoco",
+    "actuator": "mjcf-position",
+    "actuatorFacts": {
+      "collisionPreset": "full",
+      "footCollisionGeoms": 2,
+      "otherCollisionGeoms": 0,
+      "physicsPreset": "mjlab",
+      "integrator": 3,
+      "cone": 0,
+      "tolerance": 1e-8,
+      "model": "mjcf",
+      "sceneKp": 0.55,
+      "sceneForceRangeNm": 0.96,
+      "calibratedKp": 2.0,
+      "forceCeilingNm": 0.976,
+      "calibratedForStanding": true
+    },
+    "bamAvailable": false,
+    "simulator": "mujoco-3.13.0",
+    "python": "3.12.13",
+    "scene": "scene.xml",
+    "sceneSha256": "0d2f58227a3e1c4caae4e847a368ae83516d0f398f428c4e96737b67dd894ef1",
+    "policy": "/tmp/policy-walk-trained.onnx",
+    "policySha256": "0e2934a227056a909e0eee6bca327a2e6035c86d0045d41fc5941b321a7c9632",
+    "actionScale": 1.0,
+    "controlHz": 50.0,
+    "jointOrderVerified": true,
+    "ratedForwardSpeedMps": 0.4,
+    "commandProfile": {
+      "twist": [0.4, 0.0, 0.0],
+      "headPose": [0.0, 0.0, 0.0, 0.0],
+      "bodyPose": [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+    },
+    "taskDefinition": {
+      "taskId": "walking-velocity",
+      "speedToleranceMps": 0.15,
+      "minForwardM": 0.2,
+      "fallHeightM": 0.06,
+      "fallTiltRad": 1.05,
+      "steadyWindowStartS": 1.0
+    },
+    "envelopeNames": ["nominal", "hard"],
+    "parallelEnvs": 1,
+    "policyProvenance": "real training run fb5e96be (microduck-rl, 256 env x 1500 iters, mean reward 62.2) fetched from the platform worker",
+    "notes": "CPU single-environment MuJoCo rollout. Harness qualification FAILED: a trained policy fell in every episode while the zero-action baseline stood, so this harness cannot yet judge learned MicroDuck policies."
+  }
+}

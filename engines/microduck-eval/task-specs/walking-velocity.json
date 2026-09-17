@@ -1,0 +1,36 @@
+{
+  "schemaVersion": 1,
+  "id": "walking-velocity",
+  "kind": "velocity",
+  "displayName": "行走速度跟踪（0.4 m/s）",
+  "parameters": {
+    "speedToleranceMps": 0.15,
+    "minForwardM": 0.2,
+    "fallHeightM": 0.06,
+    "fallTiltRad": 1.05,
+    "steadyWindowStartS": 1.0
+  },
+  "envelopes": {
+    "nominal": {
+      "seed": 20260916,
+      "episodes": 50,
+      "episodeSeconds": 4.0,
+      "basePosJitter": [0.005, 0.005, 0.0],
+      "baseYawJitter": 0.02,
+      "twist": [0.4, 0.0, 0.0],
+      "notes": "额定前进速度 0.4 m/s（上游训练范围 lin_vel_x ±0.4 m/s）"
+    },
+    "hard": {
+      "seed": 20260917,
+      "episodes": 50,
+      "episodeSeconds": 4.0,
+      "basePosJitter": [0.02, 0.02, 0.0],
+      "baseYawJitter": 0.12,
+      "twist": [0.4, 0.0, 0.0],
+      "commandDropout": 0.02,
+      "gyroNoiseStd": 0.05,
+      "payloadFraction": 0.05,
+      "notes": "同额定速度，但加初始位姿偏移、丢帧、陀螺噪声与负载"
+    }
+  }
+}

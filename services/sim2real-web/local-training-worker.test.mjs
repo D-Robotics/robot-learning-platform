@@ -8,7 +8,7 @@ const fixtureDir = await mkdtemp(path.join(os.tmpdir(), 'rdk-local-worker-'));
 const fixture = path.join(fixtureDir, 'engine.mjs');
 await writeFile(
   fixture,
-  `import { writeFile } from 'node:fs/promises';\nconsole.error('Bearer fake-secret token=should-hide');\nconsole.log('[engine] engine=start task=goal-navigation profile=smoke iters=4 envs=16 device=cuda');\nconsole.log('[engine] iter 1/4 meanReward=-0.004 recentSuccess=0.00 goalRange=[0.80,1.20] elapsed=0.7s');\nconsole.log('[engine] iter 2/4 meanReward=-0.006 recentSuccess=0.01 goalRange=[0.80,1.20] elapsed=1.1s');\nawait new Promise((resolve) => setTimeout(resolve, 30));\n// A partially-flushed duplicate must not create a backward or duplicate point.\nconsole.log('[engine] iter 2/4 meanReward=-0.006 recentSuccess=0.01 goalRange=[0.80,1.20] elapsed=1.1s iter 3/4 meanReward=0.003 recentSuccess=0.04 goalRange=[0.80,1.20] elapsed=1.4s');\nconsole.log('[engine] iter 4/4 meanReward=0.012 recentSuccess=0.06 goalRange=[0.80,1.20] elapsed=1.8s');\nawait new Promise((resolve) => setTimeout(resolve, 90));\nconst result = { checkpoint: { checkpointId: 'cp-1', artifactRef: 'artifact://microduck/cp-1', iteration: 1 }, artifact: { artifactId: 'policy-1', artifactRef: 'artifact://microduck/policy-1', kind: 'source', format: 'onnx', deployable: true }, metrics: { reward: 3.5, platformTokenLeaked: Boolean(process.env.RDK_SIM2REAL_LOCAL_RUNNER_TOKEN) }, deployable: true };\nconst evalReport = { schemaVersion: 1, taskId: 'originbot-goal-navigation', trained: { envelopes: { nominal: { successRate: 0.88, collisionRate: 0, episodes: 50, successRateCiLow: 0.756, collisionRateCiHigh: 0.071 } } }, qualityGate: { criteria: { minSuccessRate: 0.7, maxCollisionRate: 0.15, gateOn: 'ciLowerBound' } } };\nif (process.env.RDK_SIM2REAL_TEST_LARGE_RESULT === '1') result.padding = 'x'.repeat(1_100_000);\nawait writeFile(process.env.RDK_SIM2REAL_JOB_DIR + '/policy.onnx', 'onnx-fixture');\nawait writeFile(process.env.RDK_SIM2REAL_RESULT_FILE, JSON.stringify(result));\nawait writeFile(process.env.RDK_SIM2REAL_JOB_DIR + '/eval-report.json', JSON.stringify(evalReport));\n`,
+  `import { writeFile } from 'node:fs/promises';\nconsole.error('Bearer fake-secret token=should-hide');\nconsole.log('[engine] engine=start task=goal-navigation profile=smoke iters=4 envs=16 device=cuda');\nconsole.log('[engine] iter 1/4 meanReward=-0.004 recentSuccess=0.00 goalRange=[0.80,1.20] elapsed=0.7s');\nconsole.log('[engine] iter 2/4 meanReward=-0.006 recentSuccess=0.01 goalRange=[0.80,1.20] elapsed=1.1s');\nawait new Promise((resolve) => setTimeout(resolve, 30));\n// A partially-flushed duplicate must not create a backward or duplicate point.\nconsole.log('[engine] iter 2/4 meanReward=-0.006 recentSuccess=0.01 goalRange=[0.80,1.20] elapsed=1.1s iter 3/4 meanReward=0.003 recentSuccess=0.04 goalRange=[0.80,1.20] elapsed=1.4s');\nconsole.log('[engine] iter 4/4 meanReward=0.012 recentSuccess=0.06 goalRange=[0.80,1.20] elapsed=1.8s');\nawait new Promise((resolve) => setTimeout(resolve, 90));\nconst result = { checkpoint: { checkpointId: 'cp-1', artifactRef: 'artifact://microduck/cp-1', iteration: 1 }, artifact: { artifactId: 'policy-1', artifactRef: 'artifact://microduck/policy-1', kind: 'source', format: 'onnx', deployable: true }, metrics: { reward: 3.5, platformTokenLeaked: Boolean(process.env.RDK_SIM2REAL_LOCAL_RUNNER_TOKEN) }, deployable: true };\nconst evalReport = { schemaVersion: 1, taskId: 'originbot-goal-navigation', trained: { envelopes: { nominal: { successRate: 0.88, collisionRate: 0, episodes: 50, successRateCiLow: 0.756, collisionRateCiHigh: 0.071 } } }, qualityGate: { criteria: { minSuccessRate: 0.7, maxCollisionRate: 0.15, gateOn: 'ciLowerBound' } } };\nif (process.env.RDK_SIM2REAL_TEST_LARGE_RESULT === '1') result.padding = 'x'.repeat(1_100_000);\nawait writeFile(process.env.RDK_SIM2REAL_JOB_DIR + '/policy.onnx', 'onnx-fixture');\nawait writeFile(process.env.RDK_SIM2REAL_RESULT_FILE, JSON.stringify(result));\nawait writeFile(process.env.RDK_SIM2REAL_JOB_DIR + '/eval-report.json', JSON.stringify(evalReport));\n// The bundle manifest is opt-in so one fixture can exercise the legacy path\n// (no manifest), the verified path, and a tampered bundle.\nconst mode = process.env.RDK_SIM2REAL_TEST_MANIFEST;\nif (mode === 'good' || mode === 'tampered') {\n  const { createHash } = await import('node:crypto');\n  const names = ['policy.onnx', 'eval-report.json'];\n  const lines = [];\n  for (const name of names) {\n    const bytes = await (await import('node:fs/promises')).readFile(process.env.RDK_SIM2REAL_JOB_DIR + '/' + name);\n    lines.push(createHash('sha256').update(bytes).digest('hex') + '  ' + name);\n  }\n  if (mode === 'tampered') {\n    // Record a digest for content that is not what policy.onnx holds.\n    lines[0] = 'f'.repeat(64) + '  policy.onnx';\n  }\n  await writeFile(process.env.RDK_SIM2REAL_JOB_DIR + '/SHA256SUMS', lines.join('\\n') + '\\n');\n}\n`,
   { mode: 0o600 },
 );
 process.env.RDK_SIM2REAL_TRAIN_EXECUTABLE = process.execPath;
@@ -256,6 +256,7 @@ try {
   assert.equal(oversizedStatus.status, 'failed', JSON.stringify(oversizedStatus));
   assert.equal(oversizedStatus.errorCode, 'training_result_missing');
   delete process.env.RDK_SIM2REAL_TEST_LARGE_RESULT;
+  delete process.env.RDK_SIM2REAL_TEST_MANIFEST;
 
   process.env.RDK_SIM2REAL_TRAIN_ARGS_JSON = 'not-json';
   const invalidHealth = await fetch(`${base}/healthz`);
@@ -412,6 +413,59 @@ try {
   );
   assert.equal(recoveredStatus.status, 200);
   assert.equal((await recoveredStatus.json()).status, 'completed');
+  // ---- artifact bundle integrity -----------------------------------------
+  // A verified bundle is published with `verified: true`; a manifest that
+  // disagrees with the files on disk fails the run closed, because publishing it
+  // would hand the staging chain bytes of unknown provenance.
+  const submit = async (modelId, key) => {
+    const response = await fetch(`http://127.0.0.1:${recoveredAddress.port}/train`, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        'x-sim2real-account': 'alice',
+        authorization: 'Bearer worker-test-token',
+        'idempotency-key': key,
+      },
+      body: JSON.stringify({ ...request, model: { modelId, version: 'v1' } }),
+    });
+    assert.equal(response.status, 202);
+    return (await response.json()).runId;
+  };
+  const awaitTerminal = async (runId) => {
+    for (let attempt = 0; attempt < 100; attempt += 1) {
+      const response = await fetch(
+        `http://127.0.0.1:${recoveredAddress.port}/runs/${encodeURIComponent(runId)}`,
+        { headers: { 'x-sim2real-account': 'alice', authorization: 'Bearer worker-test-token' } },
+      );
+      const body = await response.json();
+      if (body.status === 'completed' || body.status === 'failed') return body;
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+    throw new Error(`run ${runId} did not settle`);
+  };
+
+  process.env.RDK_SIM2REAL_TEST_MANIFEST = 'good';
+  const verifiedRun = await awaitTerminal(await submit('manifest-good', 'manifest-good'));
+  assert.equal(verifiedRun.status, 'completed');
+  assert.equal(verifiedRun.artifactVerification.verified, true);
+  assert.equal(verifiedRun.artifactVerification.code, 'artifact_manifest_verified');
+  assert.deepEqual(verifiedRun.artifactVerification.files, ['policy.onnx', 'eval-report.json']);
+
+  process.env.RDK_SIM2REAL_TEST_MANIFEST = 'tampered';
+  const tamperedRun = await awaitTerminal(await submit('manifest-bad', 'manifest-bad'));
+  assert.equal(tamperedRun.status, 'failed');
+  assert.equal(tamperedRun.errorCode, 'artifact_manifest_mismatch');
+  assert.equal(tamperedRun.artifactVerification.verified, false);
+  assert.equal(tamperedRun.artifact, undefined);
+  delete process.env.RDK_SIM2REAL_TEST_MANIFEST;
+  console.log(
+    '[local-training-worker] PASS — SHA256SUMS bundle verified (' +
+      verifiedRun.artifactVerification.files.length +
+      ' files), tampered bundle failed closed (' +
+      tamperedRun.errorCode +
+      ')',
+  );
+
   console.log(
     '[local-training-worker] PASS — external engine result is required; unconfigured mode fails closed',
   );

@@ -628,6 +628,108 @@ async function attachLocalArtifactDigest(job, artifact) {
   }
 }
 
+/**
+ * Verifies the run's `SHA256SUMS` manifest against the files actually on disk.
+ *
+ * A job directory is the unit that travels: the policy, its telemetry and its
+ * evaluation report were produced together, and the fact that `policy.onnx`
+ * hashes to some value says nothing about whether the rest still do. The engine
+ * writes this manifest, so a bundle that was partially copied, truncated or
+ * edited afterwards is detected here — before the run is published as
+ * completed and long before anything is staged to a board.
+ *
+ * Returns `{ ok, code?, detail, verified, entries }`; never throws, so a
+ * malformed manifest becomes an explicit refusal rather than a crash.
+ */
+async function verifyJobManifest(job) {
+  const directory = job.dir;
+  const manifestPath = path.join(directory, 'SHA256SUMS');
+  let raw;
+  try {
+    raw = await readFile(manifestPath, 'utf8');
+  } catch {
+    return {
+      ok: false,
+      code: 'artifact_manifest_missing',
+      detail: '引擎未写出 SHA256SUMS，无法核验本次运行产物的完整性。',
+      verified: 0,
+      entries: [],
+    };
+  }
+  const entries = [];
+  for (const line of raw.split('\n')) {
+    if (!line.trim()) continue;
+    const match = /^([a-f0-9]{64}) {2}([^/\\]{1,120})$/.exec(line.trim());
+    if (!match) {
+      return {
+        ok: false,
+        code: 'artifact_manifest_malformed',
+        detail: `SHA256SUMS 含无法解析的行：${line.trim().slice(0, 80)}`,
+        verified: 0,
+        entries: [],
+      };
+    }
+    entries.push({ sha256: match[1], name: match[2] });
+  }
+  if (!entries.length) {
+    return {
+      ok: false,
+      code: 'artifact_manifest_empty',
+      detail: 'SHA256SUMS 没有记录任何产物。',
+      verified: 0,
+      entries: [],
+    };
+  }
+  const verified = [];
+  for (const entry of entries) {
+    const target = path.join(directory, entry.name);
+    try {
+      const info = await stat(target);
+      if (!info.isFile() || info.size <= 0 || info.size > MAX_ARTIFACT_BYTES) {
+        return {
+          ok: false,
+          code: 'artifact_manifest_file_invalid',
+          detail: `清单中的 ${entry.name} 不是可校验的普通文件。`,
+          verified: verified.length,
+          entries: verified,
+        };
+      }
+      const digest = createHash('sha256');
+      const stream = createReadStream(target);
+      let bytes = 0;
+      for await (const chunk of stream) {
+        bytes += chunk.length;
+        if (bytes > MAX_ARTIFACT_BYTES) break;
+        digest.update(chunk);
+      }
+      if (digest.digest('hex') !== entry.sha256) {
+        return {
+          ok: false,
+          code: 'artifact_manifest_mismatch',
+          detail: `${entry.name} 的内容与 SHA256SUMS 记录不一致：产物在训练后被改动或未完整写入。`,
+          verified: verified.length,
+          entries: verified,
+        };
+      }
+      verified.push({ name: entry.name, sha256: entry.sha256, bytes });
+    } catch {
+      return {
+        ok: false,
+        code: 'artifact_manifest_file_missing',
+        detail: `清单中的 ${entry.name} 不在运行目录里。`,
+        verified: verified.length,
+        entries: verified,
+      };
+    }
+  }
+  return {
+    ok: true,
+    detail: `SHA256SUMS 全部核验通过（${verified.length} 个产物）。`,
+    verified: verified.length,
+    entries: verified,
+  };
+}
+
 function resultArtifact(result) {
   const checkpoint =
     result.checkpoint && typeof result.checkpoint === 'object' ? result.checkpoint : null;
@@ -706,6 +808,31 @@ async function finish(job, code, stdout, stderr) {
     const result = await readResult(job);
     const artifact = code === 0 && result ? resultArtifact(result) : null;
     if (artifact) {
+      // Verify the produced bundle before publishing the run. An artifact whose
+      // job directory does not match its own manifest is not a valid deliverable:
+      // publishing it would hand the staging chain bytes of unknown provenance.
+      const manifest = await verifyJobManifest(job);
+      job.artifactVerification = {
+        verified: manifest.ok,
+        code: manifest.ok ? 'artifact_manifest_verified' : manifest.code,
+        detail: manifest.detail,
+        files: manifest.entries.map((entry) => entry.name),
+      };
+      // A missing manifest marks an engine that predates the bundle contract:
+      // the run still completes (it is not corrupt, just not verifiable), and
+      // `verified: false` travels with it so nothing downstream can read the
+      // artifact as integrity-checked. A manifest that exists but disagrees with
+      // the files on disk is corruption or tampering, and that fails closed.
+      if (!manifest.ok && manifest.code !== 'artifact_manifest_missing') {
+        job.status = 'failed';
+        job.errorCode = manifest.code;
+        job.message = `训练产物完整性核验失败：${manifest.detail}`;
+        job.exitCode = code;
+        if (stdout) job.stdoutTail = scrubLog(stdout);
+        if (stderr) job.stderrTail = scrubLog(stderr);
+        await persist(job).catch(() => undefined);
+        return;
+      }
       const taskEvaluation = await readTaskEvaluation(job, result);
       if (artifact.checkpoint) job.checkpoint = artifact.checkpoint;
       if (artifact.artifact) job.artifact = await attachLocalArtifactDigest(job, artifact.artifact);

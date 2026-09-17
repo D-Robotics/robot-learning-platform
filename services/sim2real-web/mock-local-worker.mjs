@@ -311,6 +311,7 @@ function completedMetadata(job) {
       fallRate: 0.18,
       episodeLength: 320,
       controlLatencyMs: 1.6,
+      measurementStage: 'host-torch',
       iterations: job.training.maxIterations,
     },
   };

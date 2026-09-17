@@ -175,12 +175,14 @@ export type Sim2RealTrainingAlgorithm = 'ppo' | 'sac';
 
 /**
  * Worker-side engine routing. 'starter-ppo' is the CPU-friendly kinematic
- * pipeline; 'mjx-ppo' runs the MuJoCo MJX contact-dynamics engine. Task packs
- * may recommend an engine, an explicit submission always wins, and a worker
- * that has not registered the engine fails closed instead of silently
- * training with a different physics backend.
+ * pipeline; 'mjx-ppo' runs the MuJoCo MJX contact-dynamics engine;
+ * 'microduck-rl' routes to the upstream `pollen-robotics/microduck_rl` stack
+ * (mjlab + MuJoCo Warp + rsl-rl PPO) on a CUDA worker. Task packs may
+ * recommend an engine, an explicit submission always wins, and a worker that
+ * has not registered the engine fails closed instead of silently training
+ * with a different physics backend.
  */
-export type Sim2RealTrainingEngine = 'starter-ppo' | 'mjx-ppo';
+export type Sim2RealTrainingEngine = 'starter-ppo' | 'mjx-ppo' | 'microduck-rl';
 
 export interface Sim2RealTrainingSpec {
   profile: Sim2RealTrainingProfile;
@@ -225,6 +227,51 @@ export type Sim2RealObservationLayoutItem =
       width: number;
     };
 
+/**
+ * ONNX graph tensor names for the logical policy inputs this contract declares.
+ *
+ * Opt-in: when absent, the historical rank-based binding applies. Declaring
+ * names turns "the observation is whichever rank-2 input comes first" into a
+ * statement that can be checked against the exported graph, so a model whose
+ * input order changed is refused by the gate instead of being fed the wrong
+ * tensor. Roles a contract does not use stay undeclared.
+ */
+export interface Sim2RealPolicyInputs {
+  /** Rank-2 `[batch, observationSize]` vector input. */
+  observation?: string;
+  /** Rank-4 vision input, bound by name *and* layout (`channels-last`). */
+  image?: string;
+  /**
+   * Rank-3 recurrent state inputs in feed order, paired 1:1 with `outputs`.
+   * Named `stateInputs`/`stateOutputs` to match the policy contract already used
+   * by the `microduck-eval` harness (`Policy.state_input_names`), so one naming
+   * scheme covers the trainer, the evaluator and the board.
+   */
+  stateInputs?: string[];
+  /** Rank-3 recurrent state outputs, paired 1:1 with `stateInputs`. */
+  stateOutputs?: string[];
+}
+
+/**
+ * Recurrent state contract.
+ *
+ * An undeclared state block means feed-forward, and a graph that exposes state
+ * tensors is then a mismatch: silently running such a policy with zeroed history
+ * on every step produces plausible-looking but wrong actions, which is worse
+ * than refusing to load it.
+ */
+export interface Sim2RealPolicyState {
+  kind: 'lstm' | 'gru';
+  layers: number;
+  hiddenSize: number;
+  /**
+   * When the carried state must be zeroed. `on-activation` mirrors the released
+   * MicroDuck recurrent contract (zero on activation, policy switch and
+   * recovery/reset boundaries; retain across ordinary command changes).
+   */
+  reset: 'on-activation';
+}
+
 export interface Sim2RealContract {
   id: string;
   robotId: Sim2RealRobotId;
@@ -235,6 +282,8 @@ export interface Sim2RealContract {
   physicsTimestepSeconds: number;
   decimation: number;
   observationLayout: Sim2RealObservationLayoutItem[];
+  inputs?: Sim2RealPolicyInputs;
+  state?: Sim2RealPolicyState;
   /** Explicit adapter identities keep simulator, trainer and board wiring aligned. */
   observationAdapterId?: string;
   actionAdapterId?: string;
@@ -708,7 +757,11 @@ const ALLOWED_TRAINING_PROFILES = new Set<Sim2RealTrainingProfile>([
   'standard',
   'high-vram',
 ]);
-const ALLOWED_TRAINING_ENGINES = new Set<Sim2RealTrainingEngine>(['starter-ppo', 'mjx-ppo']);
+const ALLOWED_TRAINING_ENGINES = new Set<Sim2RealTrainingEngine>([
+  'starter-ppo',
+  'mjx-ppo',
+  'microduck-rl',
+]);
 const SAFE_ID = /^[a-z][a-z0-9-]{1,63}$/;
 const SHA256 = /^[a-f0-9]{64}$/i;
 const SENSITIVE_REF = /(?:password|passwd|secret|token|api[_-]?key|private[_-]?key)/i;
@@ -890,7 +943,7 @@ export function normalizeTrainingSpec(value: unknown): {
   // time instead of falling through to whichever engine the worker default.
   const engine = safeText(source.engine, 32);
   if (engine && !ALLOWED_TRAINING_ENGINES.has(engine as Sim2RealTrainingEngine)) {
-    errors.push('training.engine must be starter-ppo or mjx-ppo');
+    errors.push('training.engine must be starter-ppo, mjx-ppo or microduck-rl');
   }
   if (errors.length) return { errors };
   return {
@@ -980,6 +1033,106 @@ function nonNegativeInteger(
   }
   if (parsed > max) errors.push(`${label} must be at most ${max}`);
   return parsed;
+}
+
+/** A tensor name must be a plausible ONNX identifier, not arbitrary text. */
+const POLICY_TENSOR_NAME = /^[A-Za-z_][A-Za-z0-9_.-]{0,63}$/;
+
+function tensorName(value: unknown, label: string, errors: string[]): string | undefined {
+  if (value === undefined || value === null) return undefined;
+  const name = safeText(value, 64);
+  if (!POLICY_TENSOR_NAME.test(name)) {
+    errors.push(`${label} must be a tensor name matching ${POLICY_TENSOR_NAME}`);
+    return undefined;
+  }
+  return name;
+}
+
+function tensorNameList(value: unknown, label: string, errors: string[]): string[] | undefined {
+  if (value === undefined || value === null) return undefined;
+  if (!Array.isArray(value)) {
+    errors.push(`${label} must be an array of tensor names`);
+    return undefined;
+  }
+  if (value.length > 8) {
+    errors.push(`${label} must contain at most 8 names`);
+    return undefined;
+  }
+  const names = value.map((item) => tensorName(item, `${label} entry`, errors));
+  if (names.some((name) => name === undefined)) return undefined;
+  const resolved = names as string[];
+  if (new Set(resolved).size !== resolved.length) {
+    errors.push(`${label} must not repeat a tensor name`);
+    return undefined;
+  }
+  return resolved;
+}
+
+function normalizeContractInputs(
+  value: unknown,
+  errors: string[],
+): Sim2RealPolicyInputs | undefined {
+  if (value === undefined || value === null) return undefined;
+  const source = record(value);
+  const observation = tensorName(source.observation, 'contract.inputs.observation', errors);
+  const image = tensorName(source.image, 'contract.inputs.image', errors);
+  const stateInputs = tensorNameList(source.stateInputs, 'contract.inputs.stateInputs', errors);
+  const stateOutputs = tensorNameList(source.stateOutputs, 'contract.inputs.stateOutputs', errors);
+  if (stateInputs && stateOutputs && stateInputs.length !== stateOutputs.length) {
+    errors.push('contract.inputs.stateInputs and stateOutputs must pair 1:1');
+  }
+  if ((stateInputs && !stateOutputs) || (stateOutputs && !stateInputs)) {
+    errors.push('contract.inputs.stateInputs and stateOutputs must be declared together');
+  }
+  for (const key of Object.keys(source)) {
+    if (!['observation', 'image', 'stateInputs', 'stateOutputs'].includes(key)) {
+      errors.push(`contract.inputs has unknown field ${JSON.stringify(key)}`);
+    }
+  }
+  const normalized: Sim2RealPolicyInputs = {
+    ...(observation === undefined ? {} : { observation }),
+    ...(image === undefined ? {} : { image }),
+    ...(stateInputs === undefined ? {} : { stateInputs }),
+    ...(stateOutputs === undefined ? {} : { stateOutputs }),
+  };
+  return Object.keys(normalized).length ? normalized : undefined;
+}
+
+function normalizeContractState(value: unknown, errors: string[]): Sim2RealPolicyState | undefined {
+  if (value === undefined || value === null) return undefined;
+  const source = record(value);
+  const kind = source.kind;
+  if (kind !== 'lstm' && kind !== 'gru') {
+    errors.push('contract.state.kind must be "lstm" or "gru"');
+    return undefined;
+  }
+  const layers = positiveFinite(source.layers);
+  if (layers === null || Math.floor(layers) !== layers || layers < 1 || layers > 8) {
+    errors.push('contract.state.layers must be an integer between 1 and 8');
+    return undefined;
+  }
+  const hiddenSize = positiveFinite(source.hiddenSize);
+  if (
+    hiddenSize === null ||
+    Math.floor(hiddenSize) !== hiddenSize ||
+    hiddenSize < 1 ||
+    hiddenSize > 4096
+  ) {
+    errors.push('contract.state.hiddenSize must be an integer between 1 and 4096');
+    return undefined;
+  }
+  // Only one reset policy is defined today. Accepting a free-form string would
+  // let a contract promise semantics no runtime implements.
+  if (source.reset !== 'on-activation') {
+    errors.push('contract.state.reset must be "on-activation"');
+    return undefined;
+  }
+  return {
+    kind,
+    layers: Math.floor(layers),
+    hiddenSize: Math.floor(hiddenSize),
+    reset: 'on-activation',
+  };
 }
 
 function normalizeLayout(
@@ -1315,6 +1468,35 @@ export function validateSim2RealManifest(input: unknown): Sim2RealValidationResu
       isFixedMicroDuck ? MICRODUCK_OBSERVATION_LAYOUT : undefined,
     ),
   };
+  // Named inputs and recurrent state are cross-checked against each other: a
+  // state block without named state tensors (or vice versa) leaves the runtime
+  // unable to bind them, which must be a contract error rather than a guess.
+  const policyInputs = normalizeContractInputs(contract.inputs, errors);
+  const policyState = normalizeContractState(contract.state, errors);
+  const namedStateInputs = policyInputs?.stateInputs?.length ?? 0;
+  if (policyState && namedStateInputs === 0) {
+    errors.push(
+      'contract.state declares recurrent state but contract.inputs.stateInputs names no state tensor',
+    );
+  }
+  if (!policyState && namedStateInputs > 0) {
+    errors.push(
+      'contract.inputs.stateInputs names state tensors but contract.state is missing; declare the state contract or remove the names',
+    );
+  }
+  // An LSTM carries two tensors per layer (h and c); a GRU carries one. A
+  // mismatch here is a contract that cannot describe the graph it names.
+  if (policyState && namedStateInputs > 0) {
+    const perLayer = policyState.kind === 'lstm' ? 2 : 1;
+    const expected = perLayer * policyState.layers;
+    if (namedStateInputs !== expected) {
+      errors.push(
+        `contract.inputs.stateInputs names ${namedStateInputs} tensor(s) but ${policyState.kind} with ${policyState.layers} layer(s) needs ${expected}`,
+      );
+    }
+  }
+  if (policyInputs) normalizedContract.inputs = policyInputs;
+  if (policyState) normalizedContract.state = policyState;
   if (isFixedMicroDuck && normalizedContract.id !== MICRODUCK_SIM2REAL_CONTRACT_ID) {
     errors.push(`contract.id must be ${MICRODUCK_SIM2REAL_CONTRACT_ID}`);
   }

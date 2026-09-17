@@ -1,0 +1,13 @@
+{
+  "ok": true,
+  "status": "completed",
+  "target": "x5",
+  "compiler": "engines/microduck-rl-adapter/x5/rdk-bpu-compile-ssh.sh",
+  "format": "bin",
+  "deployable": true,
+  "artifact": {
+    "artifactRef": "artifact://compiled/x5/policy-x5.bin",
+    "sha256": "57ac460ca05a2c1dbbff0f2e424bfe131e54b09fbb09393f1883b621ef43e72c",
+    "sizeBytes": 460879
+  }
+}

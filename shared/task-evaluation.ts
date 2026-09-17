@@ -1,3 +1,4 @@
+import { normalizeLatencyMeasurementStage } from './board-rehearsal.js';
 import type {
   Sim2RealTaskEvaluationEnvelope,
   Sim2RealTaskEvaluationEvidence,
@@ -5,6 +6,24 @@ import type {
 
 const SAFE_ID = /^[a-zA-Z0-9][a-zA-Z0-9._-]{0,79}$/;
 const SAFE_ENVELOPE = /^[a-zA-Z][a-zA-Z0-9_-]{0,31}$/;
+/** Measurement keys are named `somethingM` / `somethingMps` / `somethingRad` … */
+const SAFE_MEASUREMENT = /^[a-zA-Z][a-zA-Z0-9]{0,63}$/;
+
+/** Metrics with dedicated fields, and therefore not repeated under `measurements`. */
+const ENVELOPE_CORE_KEYS = new Set([
+  'successRate',
+  'collisionRate',
+  'successRateCiLow',
+  'successRateCiHigh',
+  'collisionRateCiLow',
+  'collisionRateCiHigh',
+  'fallRate',
+  'fallRateCiLow',
+  'fallRateCiHigh',
+  'meanEpisodeLength',
+  'episodes',
+  'meanReward',
+]);
 
 function record(value: unknown): Record<string, unknown> {
   return value && typeof value === 'object' && !Array.isArray(value)
@@ -40,8 +59,22 @@ function envelope(value: unknown): Sim2RealTaskEvaluationEnvelope | undefined {
   const successRateCiHigh = boundedNumber(source.successRateCiHigh, 0, 1);
   const collisionRateCiLow = boundedNumber(source.collisionRateCiLow, 0, 1);
   const collisionRateCiHigh = boundedNumber(source.collisionRateCiHigh, 0, 1);
+  const fallRate = boundedNumber(source.fallRate, 0, 1);
+  const fallRateCiLow = boundedNumber(source.fallRateCiLow, 0, 1);
+  const fallRateCiHigh = boundedNumber(source.fallRateCiHigh, 0, 1);
+  const meanEpisodeLength = boundedNumber(source.meanEpisodeLength, 0, 86_400);
   const episodes = boundedInteger(source.episodes, 1, 100_000);
   const meanReward = boundedNumber(source.meanReward, -1_000_000, 1_000_000);
+  // Task-specific physical measurements (metres, m/s, radians …). Kept so a
+  // reviewer can see *how* a task was failed or passed, bounded to 24 entries
+  // with finite values; they never enter the release verdict.
+  const measurements: Record<string, number> = {};
+  for (const [key, raw] of Object.entries(source)) {
+    if (Object.keys(measurements).length >= 24) break;
+    if (ENVELOPE_CORE_KEYS.has(key) || !SAFE_MEASUREMENT.test(key)) continue;
+    const bounded = boundedNumber(raw, -1_000_000, 1_000_000);
+    if (bounded !== undefined) measurements[key] = bounded;
+  }
   const normalized: Sim2RealTaskEvaluationEnvelope = {
     ...(successRate === undefined ? {} : { successRate }),
     ...(collisionRate === undefined ? {} : { collisionRate }),
@@ -49,8 +82,13 @@ function envelope(value: unknown): Sim2RealTaskEvaluationEnvelope | undefined {
     ...(successRateCiHigh === undefined ? {} : { successRateCiHigh }),
     ...(collisionRateCiLow === undefined ? {} : { collisionRateCiLow }),
     ...(collisionRateCiHigh === undefined ? {} : { collisionRateCiHigh }),
+    ...(fallRate === undefined ? {} : { fallRate }),
+    ...(fallRateCiLow === undefined ? {} : { fallRateCiLow }),
+    ...(fallRateCiHigh === undefined ? {} : { fallRateCiHigh }),
+    ...(meanEpisodeLength === undefined ? {} : { meanEpisodeLength }),
     ...(episodes === undefined ? {} : { episodes }),
     ...(meanReward === undefined ? {} : { meanReward }),
+    ...(Object.keys(measurements).length ? { measurements } : {}),
   };
   return Object.keys(normalized).length ? normalized : undefined;
 }
@@ -121,6 +159,13 @@ export function normalizeTaskEvaluationEvidence(
     : undefined;
   const schemaVersion = boundedInteger(source.schemaVersion, 1, 100);
   const controlLatencyMs = boundedNumber(source.controlLatencyMs, 0, 60_000);
+  // An undeclared stage becomes "unknown" instead of absent: the UI must be
+  // able to say "this figure has no declared provenance" rather than showing a
+  // bare millisecond value that reads like a control-loop budget.
+  const measurementStage =
+    source.measurementStage === undefined
+      ? undefined
+      : normalizeLatencyMeasurementStage(source.measurementStage);
   const seed = boundedInteger(source.seed, 0, 2_147_483_647);
   const reportSha256 = text(source.reportSha256, 64).toLowerCase();
   return {
@@ -132,6 +177,7 @@ export function normalizeTaskEvaluationEvidence(
     ...(baseline ? { baseline } : {}),
     ...(qualityGate ? { qualityGate } : {}),
     ...(controlLatencyMs === undefined ? {} : { controlLatencyMs }),
+    ...(measurementStage === undefined ? {} : { measurementStage }),
     ...(seed === undefined ? {} : { seed }),
     ...(/^[a-f0-9]{64}$/.test(reportSha256) ? { reportSha256 } : {}),
   };

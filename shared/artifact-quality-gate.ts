@@ -1,4 +1,9 @@
-import type { Sim2RealObservationLayoutItem } from './sim2real.js';
+import { validateBoardRehearsalReceipt } from './board-rehearsal.js';
+import type {
+  Sim2RealObservationLayoutItem,
+  Sim2RealPolicyInputs,
+  Sim2RealPolicyState,
+} from './sim2real.js';
 
 export interface ArtifactCheckInput {
   observationSize: number;
@@ -9,7 +14,29 @@ export interface ArtifactCheckInput {
   deployable?: boolean;
   maxAbsAction?: number;
 }
-export function validateArtifactForDeployment(v: ArtifactCheckInput): {
+
+export interface ArtifactCheckOptions {
+  /**
+   * Board latency rehearsal receipt for the *deployment* artifact. Required
+   * whenever `deployable` is not explicitly false: a policy that claims to be
+   * deployable must show it was timed on the board that will run it, not on
+   * the training host.
+   */
+  boardRehearsal?: unknown;
+  /**
+   * SHA-256 of the bytes being deployed. When present the receipt must describe
+   * the same artifact, so a rehearsal for a superseded export cannot certify a
+   * newer one.
+   */
+  artifactSha256?: string;
+  /** Instant the gate runs, for receipt freshness. Defaults to now. */
+  now?: number;
+}
+
+export function validateArtifactForDeployment(
+  v: ArtifactCheckInput,
+  options: ArtifactCheckOptions = {},
+): {
   passed: boolean;
   errors: string[];
 } {
@@ -19,6 +46,14 @@ export function validateArtifactForDeployment(v: ArtifactCheckInput): {
   if (!v.hasArtifactRef) e.push('missing artifact reference');
   if (v.deployable === false) e.push('artifact is marked non-deployable');
   if (v.maxAbsAction !== undefined && v.maxAbsAction > 1) e.push('action exceeds normalized limit');
+  // Dimension checks cannot see timing. An artifact that is otherwise
+  // release-shaped still needs on-board evidence before it reaches a motor.
+  const rehearsal = validateBoardRehearsalReceipt(options.boardRehearsal, {
+    deployable: v.deployable,
+    artifactSha256: options.artifactSha256,
+    now: options.now,
+  });
+  e.push(...rehearsal.errors);
   return { passed: e.length === 0, errors: e };
 }
 
@@ -29,8 +64,209 @@ export interface ModelInputSignature {
   shape: readonly unknown[];
 }
 
+/** One model output as reported by onnxruntime (`Session.get_outputs()`). */
+export interface ModelOutputSignature {
+  name: string;
+  shape: readonly unknown[];
+}
+
 function positiveInt(value: unknown): number {
   return typeof value === 'number' && Number.isSafeInteger(value) && value > 0 ? value : 0;
+}
+
+function dimOf(shape: readonly unknown[]): number {
+  return shape.length ? positiveInt(shape[shape.length - 1]) : 0;
+}
+
+function describeSignature(items: readonly { name: string; shape: readonly unknown[] }[]): string {
+  return items.map((item) => `${item.name}${JSON.stringify(item.shape)}`).join(', ') || '(none)';
+}
+
+/**
+ * Checks a contract's *named* policy inputs against the exported graph.
+ *
+ * Why this exists: without declared names the only thing a gate can do is match
+ * by rank — "some rank-2 input is the observation". That passes for a model whose
+ * input order changed, for a model that grew a second rank-2 input, and worst of
+ * all for a recurrent export whose state inputs are silently ignored and
+ * defaulted to zero on every step. The policy then runs and produces
+ * plausible-looking but wrong actions.
+ *
+ * This gate refuses instead, on the same fail-closed principle as
+ * `classify_graph` in the `microduck-eval` harness: every ambiguity is an error,
+ * never a guess.
+ *
+ * Rules:
+ * - a declared name must exist in the graph and carry the expected rank;
+ * - the observation must be the declared width, and the image the declared
+ *   channel count — bound by name *and* layout, not by position;
+ * - recurrent state inputs must pair 1:1 with same-shaped outputs, or the
+ *   carried history cannot be closed;
+ * - a state declaration without state tensors, or state tensors without a state
+ *   declaration, is a mismatch;
+ * - the action output is matched by declared width and must be unambiguous.
+ *
+ * A contract that declares no `inputs` at all is checked only for unhandled
+ * rank-3 inputs (see {@link unhandledStateInputs}), so feed-forward exports keep
+ * their historical rank-based behaviour.
+ */
+export function validatePolicyInputBindingsAgainstModelGraph(v: {
+  inputs: readonly ModelInputSignature[];
+  outputs: readonly ModelOutputSignature[];
+  observationSize: number;
+  actionSize: number;
+  /** Channels of the contract's single image slot, when it declares one. */
+  imageChannels?: number;
+  /** The contract's `inputs` block, when it declares one. */
+  declared?: Sim2RealPolicyInputs;
+  /** The contract's `state` block, when it declares one. */
+  state?: Sim2RealPolicyState;
+}): { passed: boolean; errors: string[] } {
+  const errors: string[] = [];
+  const byName = new Map(v.inputs.map((input) => [input.name, input]));
+  const outputsByName = new Map(v.outputs.map((output) => [output.name, output]));
+  const declared = v.declared;
+  const stateInputNames = declared?.stateInputs ?? [];
+  const stateOutputNames = declared?.stateOutputs ?? [];
+
+  if (declared) {
+    if (!declared.observation) {
+      errors.push(
+        'contract.inputs declares names but omits "observation"; the vector input cannot be bound',
+      );
+    } else {
+      const input = byName.get(declared.observation);
+      if (!input) {
+        errors.push(
+          `contract.inputs.observation names "${declared.observation}" but the graph has no such input (graph: ${describeSignature(v.inputs)})`,
+        );
+      } else if (input.shape.length !== 2) {
+        errors.push(
+          `contract.inputs.observation "${declared.observation}" must be rank 2, got shape ${JSON.stringify(input.shape)}`,
+        );
+      } else if (dimOf(input.shape) !== v.observationSize) {
+        errors.push(
+          `contract.inputs.observation "${declared.observation}" has width ${dimOf(input.shape)} but the contract declares observationSize ${v.observationSize}`,
+        );
+      }
+    }
+    if (declared.image) {
+      const input = byName.get(declared.image);
+      if (!input) {
+        errors.push(
+          `contract.inputs.image names "${declared.image}" but the graph has no such input (graph: ${describeSignature(v.inputs)})`,
+        );
+      } else if (input.shape.length !== 4) {
+        errors.push(
+          `contract.inputs.image "${declared.image}" must be rank 4, got shape ${JSON.stringify(input.shape)}`,
+        );
+      } else {
+        const channels = positiveInt(input.shape[3]);
+        if (channels === 0) {
+          errors.push(
+            `contract.inputs.image "${declared.image}" channel axis is dynamic; a vision contract requires a fixed channel count`,
+          );
+        } else if (v.imageChannels !== undefined && channels !== v.imageChannels) {
+          errors.push(
+            `contract.inputs.image "${declared.image}" has ${channels} channels but the contract image slot declares ${v.imageChannels}`,
+          );
+        }
+      }
+    }
+  }
+
+  // Recurrent wiring. Checked when the contract talks about state at all; an
+  // undeclared contract keeps the legacy path and is reported by
+  // `unhandledStateInputs` instead.
+  if (v.state || stateInputNames.length || stateOutputNames.length) {
+    if (!v.state) {
+      errors.push('contract names state tensors without declaring contract.state');
+    }
+    if (v.state && !stateInputNames.length) {
+      errors.push('contract.state declares recurrent state but names no state input tensor');
+    }
+    for (const name of stateInputNames) {
+      const input = byName.get(name);
+      if (!input) {
+        errors.push(
+          `contract.inputs.stateInputs names "${name}" but the graph has no such input (graph: ${describeSignature(v.inputs)})`,
+        );
+        continue;
+      }
+      if (input.shape.length !== 3) {
+        errors.push(
+          `state input "${name}" must be rank 3 (layers, batch, hidden), got shape ${JSON.stringify(input.shape)}`,
+        );
+        continue;
+      }
+      const hidden = dimOf(input.shape);
+      if (hidden === 0) {
+        errors.push(`state input "${name}" hidden axis is dynamic; it cannot be allocated`);
+      } else if (v.state && hidden !== v.state.hiddenSize) {
+        errors.push(
+          `state input "${name}" hidden size ${hidden} does not match contract.state.hiddenSize ${v.state.hiddenSize}`,
+        );
+      }
+    }
+    stateOutputNames.forEach((name, index) => {
+      const output = outputsByName.get(name);
+      if (!output) {
+        errors.push(
+          `contract.inputs.stateOutputs names "${name}" but the graph has no such output (graph: ${describeSignature(v.outputs)})`,
+        );
+        return;
+      }
+      const pairedInput = stateInputNames[index];
+      const input = pairedInput ? byName.get(pairedInput) : undefined;
+      if (input && JSON.stringify(input.shape) !== JSON.stringify(output.shape)) {
+        errors.push(
+          `state output "${name}" shape ${JSON.stringify(output.shape)} does not match its input "${pairedInput}" shape ${JSON.stringify(input.shape)}; the carried history cannot be closed`,
+        );
+      }
+    });
+  }
+
+  // The action width has to be readable from the graph. Vision exports may list
+  // the image after the vector, and recurrent exports add state outputs, so the
+  // action is matched by declared width rather than by output position.
+  const actionCandidates = v.outputs.filter(
+    (output) =>
+      output.shape.length === 2 &&
+      dimOf(output.shape) === v.actionSize &&
+      !stateOutputNames.includes(output.name),
+  );
+  if (actionCandidates.length === 0) {
+    errors.push(
+      `no rank-2 output of width ${v.actionSize} in the graph (outputs: ${describeSignature(v.outputs)})`,
+    );
+  } else if (actionCandidates.length > 1) {
+    errors.push(
+      `ambiguous action output: ${actionCandidates.length} rank-2 outputs of width ${v.actionSize} (${describeSignature(actionCandidates)})`,
+    );
+  }
+  return { passed: errors.length === 0, errors };
+}
+
+/**
+ * Rank-3 inputs nothing binds.
+ *
+ * The board runtime's vector path feeds only the observation, so any other graph
+ * input is defaulted by ONNX Runtime — for a recurrent export that means zeroed
+ * history on every step. Detecting this lets a gate refuse the load instead of
+ * letting a policy run on state it never carried.
+ */
+export function unhandledStateInputs(v: {
+  inputs: readonly ModelInputSignature[];
+  declared?: Sim2RealPolicyInputs;
+}): string[] {
+  const bound = new Set(
+    [v.declared?.observation, v.declared?.image, ...(v.declared?.stateInputs ?? [])].filter(
+      (name): name is string => typeof name === 'string',
+    ),
+  );
+  return v.inputs
+    .filter((input) => input.shape.length === 3 && !bound.has(input.name))
+    .map((input) => input.name);
 }
 
 /**
@@ -109,7 +345,15 @@ export interface TaskPackEvalReport {
   qualityGate?: {
     passed?: unknown;
     errors?: unknown;
-    criteria?: { minSuccessRate?: unknown; maxCollisionRate?: unknown; gateOn?: unknown };
+    criteria?: {
+      minSuccessRate?: unknown;
+      maxCollisionRate?: unknown;
+      gateOn?: unknown;
+      /** Smoothness ceiling, mirrored from the engine gate. */
+      maxActionChangeRms?: unknown;
+      /** Ablation requirement, mirrored from the engine gate. */
+      ablation?: { requireBaseline?: unknown; minSuccessRateDelta?: unknown };
+    };
   };
   trained?: {
     envelopes?: Record<string, EnvelopeMetrics>;
@@ -118,11 +362,18 @@ export interface TaskPackEvalReport {
     /** Confidence used by the engine when it computed CI bounds. */
     confidenceLevel?: unknown;
   };
+  /**
+   * Untrained-baseline evaluation. The ablation criterion compares against it,
+   * so its absence is a reportable gap rather than an implicit pass.
+   */
+  baseline?: { envelopes?: Record<string, EnvelopeMetrics> };
   seed?: number;
 }
 
 export interface EnvelopeMetrics {
   successRate?: unknown;
+  /** RMS of per-step action change; the non-success figure a task can gate on. */
+  actionChangeRms?: unknown;
   collisionRate?: unknown;
   successRateCiLow?: unknown;
   successRateCiHigh?: unknown;
@@ -198,6 +449,11 @@ export function validateTaskPackEvalForRelease(v: TaskPackGateInput): {
     typeof value === 'number' && Number.isFinite(value) && value >= 0 && value <= 1 ? value : null;
   const validEpisodes = (value: unknown): number | null =>
     typeof value === 'number' && Number.isSafeInteger(value) && value >= 1 ? value : null;
+  /** Smoothness figures are bounded below by zero but are not proportions. */
+  const boundedNonNegative = (value: unknown): number | null =>
+    typeof value === 'number' && Number.isFinite(value) && value >= 0 && value <= 1_000_000
+      ? value
+      : null;
   const report = v.report;
   if (!report || typeof report !== 'object') {
     errors.push(
@@ -308,6 +564,51 @@ export function validateTaskPackEvalForRelease(v: TaskPackGateInput): {
       errors.push(
         `collisionRate${gateOn === 'ciLowerBound' ? ' CI high' : ''} ${judge.toFixed(2)} above gate ${maxCollisionRate.toFixed(2)}`,
       );
+  }
+  // Smoothness and ablation are judged here too, for the same reason the rates
+  // are: a declared criterion the release gate ignores is a criterion that only
+  // exists in the engine's own report. Both refuse when their evidence is
+  // absent, so "unmeasured" can never be read as "satisfied".
+  const maxActionChangeRms =
+    typeof criteria.maxActionChangeRms === 'number' && Number.isFinite(criteria.maxActionChangeRms)
+      ? criteria.maxActionChangeRms
+      : null;
+  if (criteria.maxActionChangeRms !== undefined && maxActionChangeRms === null)
+    errors.push('maxActionChangeRms must be a finite number');
+  const actionChangeRms = boundedNonNegative(nominal?.actionChangeRms);
+  if (maxActionChangeRms !== null) {
+    if (actionChangeRms === null) errors.push('nominal actionChangeRms missing from eval report');
+    else if (actionChangeRms > maxActionChangeRms)
+      errors.push(
+        `actionChangeRms ${actionChangeRms.toFixed(4)} above gate ${maxActionChangeRms.toFixed(4)}`,
+      );
+  }
+  const ablation =
+    criteria.ablation && typeof criteria.ablation === 'object' && !Array.isArray(criteria.ablation)
+      ? (criteria.ablation as { requireBaseline?: unknown; minSuccessRateDelta?: unknown })
+      : null;
+  const minDelta =
+    typeof ablation?.minSuccessRateDelta === 'number' &&
+    Number.isFinite(ablation.minSuccessRateDelta)
+      ? ablation.minSuccessRateDelta
+      : null;
+  if (ablation && ablation.minSuccessRateDelta !== undefined && minDelta === null)
+    errors.push('ablation.minSuccessRateDelta must be a finite number');
+  if (ablation) {
+    const baseline = report.baseline?.envelopes?.nominal ?? null;
+    const baselineSuccessRate = boundedRate(baseline?.successRate);
+    if (ablation.requireBaseline === true && !baseline)
+      errors.push('ablation requires a baseline report, but the eval report carries none');
+    else if (minDelta !== null) {
+      if (successRate === null)
+        errors.push('nominal successRate missing for the ablation comparison');
+      else if (baselineSuccessRate === null)
+        errors.push('baseline successRate missing for the ablation comparison');
+      else if (successRate - baselineSuccessRate < minDelta)
+        errors.push(
+          `ablation: trained successRate ${successRate.toFixed(4)} minus baseline ${baselineSuccessRate.toFixed(4)} is below the required delta ${minDelta.toFixed(4)}`,
+        );
+    }
   }
   return {
     passed: errors.length === 0,

@@ -1,0 +1,189 @@
+{
+  "schemaVersion": 1,
+  "taskId": "ball-kick",
+  "adapterId": "microduck-cpu-eval",
+  "observationAdapterId": "microduck-61d-v1",
+  "trained": {
+    "envelopes": {
+      "nominal": {
+        "episodes": 50,
+        "successRate": 0.0,
+        "successRateCiLow": 0.0,
+        "successRateCiHigh": 0.0713,
+        "collisionRate": 1.0,
+        "collisionRateCiLow": 0.9287,
+        "collisionRateCiHigh": 1.0,
+        "fallRate": 1.0,
+        "fallRateCiLow": 0.9287,
+        "fallRateCiHigh": 1.0,
+        "meanReward": 0.0,
+        "meanEpisodeLength": 4.0,
+        "ballForwardM": 0.0,
+        "ballForwardMStd": 0.0,
+        "ballMeanSpeedMps": 0.0,
+        "ballMeanSpeedMpsStd": 0.0,
+        "ballPeakSpeedMps": 0.0,
+        "ballPeakSpeedMpsStd": 0.0,
+        "ballTravelM": 0.0,
+        "ballTravelMStd": 0.0,
+        "maxTiltRad": 3.129,
+        "maxTiltRadStd": 0.0071,
+        "minBaseHeightM": 0.0425,
+        "minBaseHeightMStd": 0.0004
+      },
+      "hard": {
+        "episodes": 50,
+        "successRate": 0.0,
+        "successRateCiLow": 0.0,
+        "successRateCiHigh": 0.0713,
+        "collisionRate": 1.0,
+        "collisionRateCiLow": 0.9287,
+        "collisionRateCiHigh": 1.0,
+        "fallRate": 1.0,
+        "fallRateCiLow": 0.9287,
+        "fallRateCiHigh": 1.0,
+        "meanReward": 0.0,
+        "meanEpisodeLength": 4.0,
+        "ballForwardM": 0.0,
+        "ballForwardMStd": 0.0,
+        "ballMeanSpeedMps": 0.0,
+        "ballMeanSpeedMpsStd": 0.0,
+        "ballPeakSpeedMps": 0.0,
+        "ballPeakSpeedMpsStd": 0.0,
+        "ballTravelM": 0.0,
+        "ballTravelMStd": 0.0,
+        "maxTiltRad": 3.1252,
+        "maxTiltRadStd": 0.0147,
+        "minBaseHeightM": 0.0431,
+        "minBaseHeightMStd": 0.0007
+      }
+    },
+    "meanReward": 0.0,
+    "episodesPerEnvelope": 50,
+    "confidenceLevel": 0.95
+  },
+  "baseline": {
+    "envelopes": {
+      "nominal": {
+        "episodes": 50,
+        "successRate": 0.0,
+        "successRateCiLow": 0.0,
+        "successRateCiHigh": 0.0713,
+        "collisionRate": 0.0,
+        "collisionRateCiLow": 0.0,
+        "collisionRateCiHigh": 0.0713,
+        "fallRate": 1.0,
+        "fallRateCiLow": 0.9287,
+        "fallRateCiHigh": 1.0,
+        "meanReward": 0.0,
+        "meanEpisodeLength": 4.0,
+        "ballForwardM": 0.0667,
+        "ballForwardMStd": 0.0582,
+        "ballMeanSpeedMps": 0.0215,
+        "ballMeanSpeedMpsStd": 0.0108,
+        "ballPeakSpeedMps": 0.3118,
+        "ballPeakSpeedMpsStd": 0.0436,
+        "ballTravelM": 0.0672,
+        "ballTravelMStd": 0.0577,
+        "maxTiltRad": 1.4451,
+        "maxTiltRadStd": 0.0244,
+        "minBaseHeightM": 0.0314,
+        "minBaseHeightMStd": 0.0004
+      },
+      "hard": {
+        "episodes": 50,
+        "successRate": 0.0,
+        "successRateCiLow": 0.0,
+        "successRateCiHigh": 0.0713,
+        "collisionRate": 0.0,
+        "collisionRateCiLow": 0.0,
+        "collisionRateCiHigh": 0.0713,
+        "fallRate": 1.0,
+        "fallRateCiLow": 0.9287,
+        "fallRateCiHigh": 1.0,
+        "meanReward": 0.0,
+        "meanEpisodeLength": 4.0,
+        "ballForwardM": 0.0669,
+        "ballForwardMStd": 0.0571,
+        "ballMeanSpeedMps": 0.0221,
+        "ballMeanSpeedMpsStd": 0.0099,
+        "ballPeakSpeedMps": 0.3452,
+        "ballPeakSpeedMpsStd": 0.0454,
+        "ballTravelM": 0.0679,
+        "ballTravelMStd": 0.0562,
+        "maxTiltRad": 1.4483,
+        "maxTiltRadStd": 0.0224,
+        "minBaseHeightM": 0.0316,
+        "minBaseHeightMStd": 0.0012
+      }
+    },
+    "meanReward": 0.0,
+    "episodesPerEnvelope": 50,
+    "confidenceLevel": 0.95
+  },
+  "qualityGate": {
+    "passed": false,
+    "errors": [
+      "success rate 0.0000 (ciLowerBound) is below the required 0.7000",
+      "collision rate 1.0000 exceeds the allowed 0.1000",
+      "harness unqualified: envelope nominal: the zero-action baseline fell in all 50 episodes (min trunk height 0.0314 m) — the dynamics/actuator path cannot hold the robot up, so rates from this harness are only comparable within the same implementation",
+      "harness unqualified: envelope hard: the zero-action baseline fell in all 50 episodes (min trunk height 0.0316 m) — the dynamics/actuator path cannot hold the robot up, so rates from this harness are only comparable within the same implementation"
+    ],
+    "criteria": {
+      "minSuccessRate": 0.7,
+      "maxCollisionRate": 0.1,
+      "gateOn": "ciLowerBound"
+    }
+  },
+  "seed": 20260916,
+  "controlLatencyMs": 12530.45,
+  "harnessQualification": {
+    "passed": false,
+    "reasons": [
+      "envelope nominal: the zero-action baseline fell in all 50 episodes (min trunk height 0.0314 m) — the dynamics/actuator path cannot hold the robot up, so rates from this harness are only comparable within the same implementation",
+      "envelope hard: the zero-action baseline fell in all 50 episodes (min trunk height 0.0316 m) — the dynamics/actuator path cannot hold the robot up, so rates from this harness are only comparable within the same implementation"
+    ],
+    "envelopes": {
+      "nominal": {
+        "episodes": 50,
+        "baselineFallRate": 1.0,
+        "baselineMeanBaseHeightM": 0.0314
+      },
+      "hard": {
+        "episodes": 50,
+        "baselineFallRate": 1.0,
+        "baselineMeanBaseHeightM": 0.0316
+      }
+    }
+  },
+  "dynamicsFacts": {
+    "dynamics": "cpu-mujoco",
+    "actuator": "mjcf-position",
+    "bamRequested": false,
+    "bamAvailable": false,
+    "simulator": "mujoco-3.13.0",
+    "python": "3.12.13",
+    "scene": "scene_ball.xml",
+    "sceneSha256": "3d59c82db5c3ac5cb35b1f5d4dfa550832be2eddffa9249ba0bfef3b6452e2bd",
+    "policy": "/private/tmp/rdk-preview/local-worker/local-microduck-official-ab6ac569-46be-42e6-931d-7e2842c4fe1c/policy.onnx",
+    "policySha256": "82a3968462515e38644136613fc125d76d17c9288a58a91823efb696d2d972d3",
+    "actionScale": 1.0,
+    "controlHz": 50.0,
+    "jointOrderVerified": true,
+    "taskDefinition": {
+      "taskId": "ball-kick",
+      "ballDiameterM": 0.07,
+      "ballMassKg": 0.015,
+      "ballSpawnOffsetX": 0.09,
+      "ballSpawnOffsetAbsY": 0.042,
+      "upstreamTargetBallSpeedMps": 1.0,
+      "minBallTravelM": 0.35,
+      "minPeakBallSpeedMps": 0.5,
+      "fallHeightM": 0.06,
+      "fallTiltRad": 1.05
+    },
+    "envelopeNames": ["nominal", "hard"],
+    "parallelEnvs": 1,
+    "notes": "CPU single-environment MuJoCo rollout with the MJCF position actuators. The upstream trainer uses mjlab/MuJoCo Warp with the BAM servo model; rates from the two dynamics are not interchangeable."
+  }
+}

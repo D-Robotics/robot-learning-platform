@@ -1,0 +1,32 @@
+{
+  "schemaVersion": 1,
+  "id": "duck-stand",
+  "kind": "hold",
+  "displayName": "站立保持（新任务族，纯声明式）",
+  "parameters": {
+    "maxDriftM": 0.05,
+    "fallHeightM": 0.06,
+    "fallTiltRad": 1.05
+  },
+  "envelopes": {
+    "nominal": {
+      "seed": 20260916,
+      "episodes": 50,
+      "episodeSeconds": 4.0,
+      "basePosJitter": [0.005, 0.005, 0.0],
+      "baseYawJitter": 0.02,
+      "notes": "零命令站立：不倒且漂移 ≤5 cm。运行时的静止行为就是这条判据"
+    },
+    "hard": {
+      "seed": 20260917,
+      "episodes": 50,
+      "episodeSeconds": 4.0,
+      "basePosJitter": [0.02, 0.02, 0.0],
+      "baseYawJitter": 0.12,
+      "commandDropout": 0.02,
+      "gyroNoiseStd": 0.05,
+      "payloadFraction": 0.05,
+      "notes": "同上，加扰动信封"
+    }
+  }
+}

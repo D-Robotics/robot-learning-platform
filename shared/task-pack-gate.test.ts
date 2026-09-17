@@ -242,3 +242,115 @@ describe('task-pack eval release gate', () => {
     expect(fifty.low).toBeGreaterThan(six.low);
   });
 });
+
+describe('task-pack eval release gate: smoothness and ablation', () => {
+  const withCriteria = (criteria: Record<string, unknown>, report: Record<string, unknown>) =>
+    validateTaskPackEvalForRelease({
+      taskId: 'originbot-goal-navigation',
+      report: {
+        taskId: 'originbot-goal-navigation',
+        qualityGate: { criteria },
+        ...report,
+      } as never,
+    });
+
+  it('judges a smoothness ceiling declared by the task', () => {
+    const verdict = withCriteria(
+      { maxActionChangeRms: 0.5 },
+      {
+        trained: {
+          envelopes: { nominal: { successRate: 0.9, collisionRate: 0, actionChangeRms: 0.81 } },
+        },
+      },
+    );
+    expect(verdict.passed).toBe(false);
+    expect(verdict.errors.join(' ')).toMatch(/actionChangeRms 0\.8100 above gate 0\.5000/);
+  });
+
+  it('refuses a declared smoothness ceiling with no measurement behind it', () => {
+    const verdict = withCriteria(
+      { maxActionChangeRms: 0.5 },
+      { trained: { envelopes: { nominal: { successRate: 0.9, collisionRate: 0 } } } },
+    );
+    expect(verdict.passed).toBe(false);
+    expect(verdict.errors.join(' ')).toMatch(/actionChangeRms missing/);
+  });
+
+  it('passes a smoothness ceiling that the measurement satisfies', () => {
+    const verdict = withCriteria(
+      { maxActionChangeRms: 0.5 },
+      {
+        trained: {
+          envelopes: { nominal: { successRate: 0.9, collisionRate: 0, actionChangeRms: 0.04 } },
+        },
+      },
+    );
+    expect(verdict.passed).toBe(true);
+  });
+
+  it('refuses a policy that did not beat the untrained baseline', () => {
+    const verdict = withCriteria(
+      { ablation: { minSuccessRateDelta: 0.3 } },
+      {
+        trained: { envelopes: { nominal: { successRate: 0.2, collisionRate: 0 } } },
+        baseline: { envelopes: { nominal: { successRate: 0.02 } } },
+      },
+    );
+    expect(verdict.passed).toBe(false);
+    expect(verdict.errors.join(' ')).toMatch(
+      /ablation: trained successRate 0\.2000 minus baseline 0\.0200/,
+    );
+  });
+
+  it('accepts a policy that clearly beat the baseline', () => {
+    const verdict = withCriteria(
+      { ablation: { minSuccessRateDelta: 0.3 } },
+      {
+        trained: { envelopes: { nominal: { successRate: 0.95, collisionRate: 0 } } },
+        baseline: { envelopes: { nominal: { successRate: 0.02 } } },
+      },
+    );
+    expect(verdict.passed).toBe(true);
+  });
+
+  it('refuses an ablation whose comparison cannot be made', () => {
+    // "We could not measure the comparison" must not read as "it passed".
+    const verdict = withCriteria(
+      { ablation: { minSuccessRateDelta: 0.3 } },
+      { trained: { envelopes: { nominal: { successRate: 0.95, collisionRate: 0 } } } },
+    );
+    expect(verdict.passed).toBe(false);
+    expect(verdict.errors.join(' ')).toMatch(/baseline successRate missing/);
+  });
+
+  it('refuses a missing baseline when the task demands one outright', () => {
+    const verdict = withCriteria(
+      { ablation: { requireBaseline: true } },
+      { trained: { envelopes: { nominal: { successRate: 0.95, collisionRate: 0 } } } },
+    );
+    expect(verdict.passed).toBe(false);
+    expect(verdict.errors.join(' ')).toMatch(/requires a baseline report/);
+  });
+
+  it('rejects a non-numeric criterion rather than ignoring it', () => {
+    const verdict = withCriteria(
+      { maxActionChangeRms: 'tight' },
+      {
+        trained: {
+          envelopes: { nominal: { successRate: 0.9, collisionRate: 0, actionChangeRms: 0.01 } },
+        },
+      },
+    );
+    expect(verdict.passed).toBe(false);
+    expect(verdict.errors.join(' ')).toMatch(/maxActionChangeRms must be a finite number/);
+  });
+
+  it('leaves a report without the new criteria unchanged', () => {
+    const verdict = withCriteria(
+      { minSuccessRate: 0.7, maxCollisionRate: 0.15, gateOn: 'point' },
+      { trained: { envelopes: { nominal: { successRate: 0.9, collisionRate: 0.01 } } } },
+    );
+    expect(verdict.passed).toBe(true);
+    expect(verdict.errors).toEqual([]);
+  });
+});

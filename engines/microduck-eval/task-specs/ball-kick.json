@@ -1,0 +1,39 @@
+{
+  "schemaVersion": 1,
+  "id": "ball-kick",
+  "kind": "ball-kick",
+  "displayName": "踢球（球位前向可控）",
+  "parameters": {
+    "minBallTravelM": 0.35,
+    "minPeakBallSpeedMps": 0.5,
+    "fallHeightM": 0.06,
+    "fallTiltRad": 1.05
+  },
+  "envelopes": {
+    "nominal": {
+      "seed": 20260916,
+      "episodes": 50,
+      "episodeSeconds": 4.0,
+      "basePosJitter": [0.005, 0.005, 0.0],
+      "baseYawJitter": 0.02,
+      "ballDistance": 0.225,
+      "ballDistanceJitter": 0.02,
+      "ballLateralJitter": 0.01,
+      "notes": "工厂标定、无障碍、无外部扰动；球位前向 ±2cm"
+    },
+    "hard": {
+      "seed": 20260917,
+      "episodes": 50,
+      "episodeSeconds": 4.0,
+      "basePosJitter": [0.02, 0.02, 0.0],
+      "baseYawJitter": 0.12,
+      "ballDistance": 0.225,
+      "ballDistanceJitter": 0.05,
+      "ballLateralJitter": 0.04,
+      "commandDropout": 0.02,
+      "gyroNoiseStd": 0.05,
+      "payloadFraction": 0.05,
+      "notes": "初始位姿偏移、球位前向 ±5cm、2% 指令丢帧、陀螺噪声、+5% 负载"
+    }
+  }
+}
