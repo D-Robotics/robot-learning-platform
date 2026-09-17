@@ -14,6 +14,11 @@ import {
 } from '../sim2real/board-station-proxy.js';
 import type { StationAgentFetchOptions } from '../sim2real/board-station-proxy.js';
 import type { Sim2RealAuthPort } from '../sim2real/sim2real-auth.js';
+import {
+  summarizeBoardRehearsal,
+  validateBoardRehearsalReceipt,
+} from '../../shared/board-rehearsal.js';
+import type { LatencyMeasurementStage } from '../../shared/board-rehearsal.js';
 import type { Sim2RealRunRecord } from '../../shared/sim2real.js';
 import type { Device } from '../../shared/types.js';
 import { principalCan, SIM2REAL_PERMISSIONS } from '../sim2real/sim2real-rbac.js';
@@ -33,6 +38,163 @@ const STATION_COMMANDS: readonly { id: string; label: string; timeoutMs: number 
 
 type OwnedDevice = Device & { bridgeOwnerKey?: string };
 type OwnerResolver = (request: Request, response: Response) => string | undefined | null;
+
+/**
+ * Pre-load rehearsal gate, for boards run with
+ * `RDK_SIM2REAL_STATION_POLICY_REQUIRE_REHEARSAL=1`.
+ *
+ * Three links must agree before a load is forwarded, so no unverified artifact
+ * is ever loaded — not even briefly:
+ *
+ *   1. the caller names the bytes it intends to load (`artifactSha256`);
+ *   2. the board's own staged-file listing reports the same digest for that
+ *      filename, so the claim is about a file that is really on the board;
+ *   3. the board rehearsal receipt measured that digest.
+ *
+ * Anything missing keeps the load unperformed and the refusal explicit.
+ */
+export function policyLoadRehearsalPreflight(v: {
+  fileName: string;
+  artifactSha256: string | null;
+  boardFiles: unknown;
+  receipt: unknown;
+}): { ok: boolean; code?: string; message: string; digest?: string } {
+  if (!v.artifactSha256) {
+    return {
+      ok: false,
+      code: 'SIM2REAL_STATION_POLICY_REHEARSAL_DIGEST_REQUIRED',
+      message:
+        '本次部署要求上板时序证据（RDK_SIM2REAL_STATION_POLICY_REQUIRE_REHEARSAL）：加载请求必须携带 artifactSha256，声明将要加载的字节。',
+    };
+  }
+  const listing =
+    v.boardFiles && typeof v.boardFiles === 'object'
+      ? (v.boardFiles as Record<string, unknown>)
+      : {};
+  const files = Array.isArray(listing.policies) ? listing.policies : [];
+  const entry = files.find(
+    (item) =>
+      item && typeof item === 'object' && (item as Record<string, unknown>).name === v.fileName,
+  ) as Record<string, unknown> | undefined;
+  if (!entry) {
+    return {
+      ok: false,
+      code: 'SIM2REAL_STATION_POLICY_NOT_STAGED',
+      message: `板端 policies 目录里没有 ${v.fileName}：请先 stage 制品再加载。`,
+    };
+  }
+  const boardDigest =
+    typeof entry.sha256 === 'string' && /^[a-f0-9]{64}$/i.test(entry.sha256)
+      ? entry.sha256.toLowerCase()
+      : null;
+  // A board that lists the file but not its digest cannot confirm which bytes
+  // carry that name, so the claim stays unverified.
+  if (!boardDigest) {
+    return {
+      ok: false,
+      code: 'SIM2REAL_STATION_POLICY_DIGEST_UNAVAILABLE',
+      message: `板端未为 ${v.fileName} 上报 sha256，无法确认将要加载的就是本次 rehearsal 测过的字节；请升级板端 agent。`,
+    };
+  }
+  if (boardDigest !== v.artifactSha256) {
+    return {
+      ok: false,
+      code: 'SIM2REAL_STATION_POLICY_DIGEST_MISMATCH',
+      message: `请求声明加载 ${v.artifactSha256}，但板端 ${v.fileName} 的实际摘要为 ${boardDigest}：板上的字节不是本次要加载的版本。`,
+    };
+  }
+  const receipt =
+    v.receipt && typeof v.receipt === 'object' ? (v.receipt as Record<string, unknown>) : {};
+  if (!Object.keys(receipt).length) {
+    return {
+      ok: false,
+      code: 'SIM2REAL_STATION_POLICY_REHEARSAL_REQUIRED',
+      message:
+        '缺少板端延迟 rehearsal 收据：请先在板子上运行 board-latency-rehearsal.py 并把收据随加载请求提交。',
+    };
+  }
+  const verdict = validateBoardRehearsalReceipt(receipt, { artifactSha256: boardDigest });
+  if (!verdict.passed) {
+    return {
+      ok: false,
+      code: 'SIM2REAL_STATION_POLICY_NOT_RELEASABLE',
+      message: `板端 rehearsal 未通过：${verdict.errors.join('；')}`,
+    };
+  }
+  return {
+    ok: true,
+    message: `板端 rehearsal 通过（${verdict.judgedMetric ?? '未标注指标'}，阶段 ${String(verdict.stage)}）`,
+    digest: boardDigest,
+  };
+}
+
+/**
+ * Release verdict for the policy currently loaded on the board.
+ *
+ * The digest matters: a rehearsal certifies *bytes*, so the receipt is matched
+ * against the digest of the artifact the board reports as loaded. If the board
+ * exposes no digest the identity cannot be proven, and the verdict says so
+ * rather than assuming the receipt belongs to this model.
+ */
+export function boardRehearsalVerdict(agent: unknown): {
+  evidence: boolean;
+  releasable: boolean;
+  stage: LatencyMeasurementStage | null;
+  artifactSha256: string | null;
+  summary: string;
+  errors: string[];
+} {
+  const source =
+    agent && typeof agent === 'object'
+      ? (agent as Record<string, unknown>)
+      : ({} as Record<string, unknown>);
+  const policy =
+    source.policy && typeof source.policy === 'object'
+      ? (source.policy as Record<string, unknown>)
+      : {};
+  // The board reports the loaded artifact's digest as `policy.sha256`; accept
+  // the receipt either beside the policy block or inside it.
+  const rawDigest = policy.sha256 ?? source.rehearsalReceiptSha256;
+  const artifactSha256 =
+    typeof rawDigest === 'string' && /^[a-f0-9]{64}$/i.test(rawDigest)
+      ? rawDigest.toLowerCase()
+      : null;
+  const receipt =
+    source.rehearsalReceipt ?? source.boardRehearsalReceipt ?? policy.rehearsalReceipt;
+  if (receipt === undefined || receipt === null) {
+    return {
+      evidence: false,
+      releasable: false,
+      stage: null,
+      artifactSha256,
+      summary: '板端未上报延迟 rehearsal 收据：该制品没有上板时序证据',
+      errors: ['no board latency rehearsal receipt reported by the board'],
+    };
+  }
+  const display = summarizeBoardRehearsal(receipt);
+  if (!artifactSha256) {
+    return {
+      evidence: true,
+      releasable: false,
+      stage: display.stage,
+      artifactSha256: null,
+      summary: display.summary,
+      errors: [
+        ...display.errors,
+        'board did not report the loaded artifact digest; the receipt cannot be bound to these bytes',
+      ],
+    };
+  }
+  const verdict = validateBoardRehearsalReceipt(receipt, { artifactSha256 });
+  return {
+    evidence: true,
+    releasable: verdict.passed,
+    stage: display.stage,
+    artifactSha256,
+    summary: display.summary,
+    errors: [...display.errors, ...verdict.errors],
+  };
+}
 
 export interface Sim2RealBoardStationRouteDeps {
   auth: Sim2RealAuthPort;
@@ -798,6 +960,15 @@ export function registerSim2RealBoardStationRoutes(
 
   const policyPlatformEnabled = () => stationSwitchEnabled('policy');
 
+  /**
+   * Deploy-time opt-in: refuse to load a staged policy unless a passing board
+   * rehearsal for exactly those bytes is supplied. Uses the same truthiness
+   * rule as the station switches (`'1'` today, anything else off) so an
+   * operator cannot half-enable it with `true`/`yes`.
+   */
+  const policyRehearsalRequired = () =>
+    String(process.env.RDK_SIM2REAL_STATION_POLICY_REQUIRE_REHEARSAL ?? '').trim() === '1';
+
   /** GET /board-station/policy — honest policy-runtime state. */
   router.get(
     api('/board-station/policy'),
@@ -824,6 +995,12 @@ export function registerSim2RealBoardStationRoutes(
         platformEnabled: policyPlatformEnabled(),
         drivePlatformEnabled: drivePlatformEnabled(),
         policy: agent.policy ?? null,
+        // Pre-motion timing evidence. The gate needs the *loaded* artifact's
+        // digest, which only the board knows, so the verdict is derived here
+        // rather than taken from the receipt's own boolean. A board that
+        // reports no receipt yields an explicit "no evidence" verdict instead
+        // of a silent pass.
+        rehearsal: boardRehearsalVerdict(agent),
       });
     }),
   );
@@ -862,6 +1039,45 @@ export function registerSim2RealBoardStationRoutes(
           { retryable: false },
         );
         return;
+      }
+      const declaredDigest = String(body.artifactSha256 ?? '')
+        .trim()
+        .toLowerCase();
+      // Opt-in hard gate. With the flag unset the behaviour is exactly what it
+      // was — the load proceeds and the evidence stays advisory on the status
+      // surface — so enabling it on a live board is a deliberate, reversible
+      // deployment choice rather than a silent tightening.
+      if (policyRehearsalRequired()) {
+        const files = await stationAgentFetchWithStatus(
+          '/v1/station/policy/files',
+          stationOptions(request, { method: 'GET', timeoutMs: 5000 }),
+        );
+        if (!files) {
+          sendApiError(
+            response,
+            502,
+            'SIM2REAL_BOARD_AGENT_UNREACHABLE',
+            '板端 agent 不可达，无法核对将要加载的制品摘要；拒绝加载。',
+            { retryable: true },
+          );
+          return;
+        }
+        const preflight = policyLoadRehearsalPreflight({
+          fileName: path,
+          artifactSha256: /^[a-f0-9]{64}$/.test(declaredDigest) ? declaredDigest : null,
+          boardFiles: files.payload,
+          receipt: body.rehearsalReceipt,
+        });
+        if (!preflight.ok) {
+          sendApiError(
+            response,
+            409,
+            preflight.code ?? 'SIM2REAL_STATION_POLICY_NOT_RELEASABLE',
+            preflight.message,
+            { retryable: false },
+          );
+          return;
+        }
       }
       const agent = await stationAgentFetchWithStatus(
         '/v1/station/policy/load',

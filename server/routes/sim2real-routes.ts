@@ -3071,6 +3071,16 @@ export function createSim2RealRouter(
         );
         return;
       }
+      // The browser simulator's wasm move loader is what consumes these bytes
+      // (window.rl.loadCustomPolicy), and upstream only accepts absolute
+      // http(s) URLs for a policy, so a deployment that mounts the simulator
+      // on its own origin cannot use a same-origin path. The response is a
+      // completed run's ONNX actor, already gated on run ownership, status,
+      // non-mock provenance and a digest match; it carries no credential and no
+      // telemetry. `*` is therefore the deliberate scope: any page that can
+      // reach this API can only read bytes the owning account may already read.
+      response.setHeader('Access-Control-Allow-Origin', '*');
+      response.setHeader('Timing-Allow-Origin', '*');
       response.setHeader('Content-Type', 'application/octet-stream');
       response.setHeader('Content-Length', String(artifact.bytes.byteLength));
       response.setHeader('X-Artifact-Sha256', artifact.sha256);

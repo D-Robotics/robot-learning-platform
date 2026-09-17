@@ -150,9 +150,122 @@ GET /runs/:id/artifact   ◄──   ① 校验 run 发布证据（completed、 
 
 显式声明的布局是契约：模型输入必须同时匹配布局要求和 adapter 声明的 `observationSize`，矛盾即 `layout-model-mismatch` 拒绝加载——不做跨布局凑合。未知布局名在 `start` 时 fail-closed（`observation-layout-unknown`），不猜测装配。
 
+### 输入绑定：从"猜"改成"声明并可核"
+
+历史上运行时按 **rank** 认输入（"第一个 rank-2 输入就是观测"）。那是个推断，对三种导出会静默出错：输入顺序变了、多了第二个 rank-2 输入、以及**循环导出**——`h_in`/`c_in` 没人喂，ONNX Runtime 会用零填充，于是跑的是一个"永远没有记忆"的策略，动作看着合理但全错。
+
+现在两端都按"有歧义就报错、绝不猜"处理（与 `engines/microduck-eval` 的 `classify_graph` 同一纪律）：
+
+| 位置 | 行为 |
+| --- | --- |
+| 契约（`contract.inputs` / `contract.state`） | 可选字段，缺省即历史语义。声明后 `observation` / `image` / `stateInputs` / `stateOutputs` 按**名字**绑定，并与 `contract.state`（`kind` / `layers` / `hiddenSize`）交叉校验：LSTM 每层 2 个张量、GRU 每层 1 个，数量不符即契约错误 |
+| 制品门禁（`validatePolicyInputBindingsAgainstModelGraph`） | 按名字在真实图里查：名字不存在、rank 不符、观测宽度不符、图像通道不符、状态输入输出形状不配对、动作输出有歧义——逐条报错 |
+| 板端运行时（`board-policy-runtime.py`） | 加载时若发现**没人喂的输入**就拒绝：rank-3 报 `policy-state-input-unsupported`（detail 列出张量名），其余报 `policy-input-unbound`。**当前板端尚不携带状态**，所以循环导出会被拒——这是有意的诚实行为，而不是每步重放零状态 |
+
+`contract.inputs.stateInputs` / `stateOutputs` 的命名与评测 harness 的 `Policy.state_input_names` / `state_output_names` 保持一致，一套命名覆盖训练、评测与板端。
+
+契约规则由 `shared/policy-input-binding.test.ts`（26 个场景）覆盖；跨语言一致性由 `npm run verify:policy-input-binding` 演练：它**真造三张 ONNX 图**（前馈 / 循环 / 视觉），用真门禁裁决，并调用真板端 runtime 确认循环导出确实被拒。
+
+> 循环策略的**板上携带状态**尚未实现：契约与门禁已就绪，板端一旦支持（按名字绑定 `h_in`/`c_in` 与 `h_out`/`c_out`、激活与重置边界清零），删掉那条拒绝即可。在那之前，把状态交给板端运行时会 fail-closed，而不是静默降级。
+
 `GET /v1/station/policy` 如实上报 `provider`（实际使用的 provider）、`providerRequested`（请求值）、`providersAvailable`（本板 onnxruntime 注册的全部 provider）与 `observationLayout`；上位机页「策略运行时」面板逐项显示，BPU 不可用时操作者能直接看到该装什么。
 
+该端点的响应同时带一个 `rehearsal` 判决块（`GET /api/sim2real/board-station/policy` 原样透传）：
+板端上报收据时，平台用**板端自报的 `policy.sha256`** 去绑定收据里的 `artifactSha256` 再裁决，
+因此"收据是别的导出"会被判为 `releasable: false`；板端没有自报摘要时也不放行，而是明确返回
+"无法绑定字节"。板端完全没上报收据时返回 `evidence: false` 的显式拒绝，而不是静默通过：
+
+```json
+{
+  "evidence": true,
+  "releasable": true,
+  "stage": "board-onnx",
+  "artifactSha256": "…",
+  "summary": "板端 ONNX 前向：control-step p50 2.100 ms / p95 2.800 ms，预算 20.000 ms",
+  "errors": []
+}
+```
+
+判决逻辑是纯函数 `boardRehearsalVerdict()`，5 个场景（无收据 / 一致 / 字节不符 / host 阶段冒充 /
+板端无摘要）由 `server/routes/sim2real-board-station-policy.test.ts` 覆盖。
+
+### 加载前的硬门禁（opt-in）
+
+上面的 `rehearsal` 判决默认是**可见的拒绝**，不阻断加载 —— 现场流程不变。要把"没有时序证据就不能
+上板"变成硬约束，在该板卡的部署环境里显式开启：
+
+```bash
+RDK_SIM2REAL_STATION_POLICY_REQUIRE_REHEARSAL=1   # 只认 '1'，与 station 开关同一套真值规则
+```
+
+开启后 `POST /board-station/policy/load` 需要三跳同时成立，**任何一跳缺失都不会转发加载动作**
+（不存在"先加载再停"的窗口）：
+
+| 跳 | 来源 | 缺失时的错误码 |
+| --- | --- | --- |
+| 1. 调用方声明要加载的字节 | 请求体 `artifactSha256` | `…_REHEARSAL_DIGEST_REQUIRED` |
+| 2. 板端该文件名的真实摘要 | `GET /v1/station/policy/files` 的 `policies[].sha256` | `…_DIGEST_UNAVAILABLE` / `…_DIGEST_MISMATCH` / `…_NOT_STAGED` |
+| 3. 收据测的就是这份字节 | 请求体 `rehearsalReceipt` | `…_REHEARSAL_REQUIRED` / `…_NOT_RELEASABLE` |
+
+```bash
+curl -X POST "$BASE/api/sim2real/board-station/policy/load" \
+  -H 'content-type: application/json' -d @- <<'JSON'
+{ "path": "policy.onnx",
+  "artifactSha256": "<64 位小写 sha256>",
+  "rehearsalReceipt": { ... } }
+JSON
+```
+
+第 2 跳要求板端 agent 在策略列表里上报每个文件的 `sha256`：本机参考 agent 一直都有；X5 agent
+本次补齐（按 `(size, mtime_ns)` 缓存，50 MB 制品不会被每次轮询重复哈希）。错误码与三跳语义由
+8 个测试覆盖（含"旗标未设时行为完全不变、且不多一次列表往返"）。
+
 契约测试：`npm run verify:policy-provider-layout`（真 onnxruntime 会话 + 真导出的 tiny ONNX，5 个断言场景，依赖缺失时 SKIP）。
+
+## 上板前的延迟 rehearsal（环 D：制品 → 电机的时序证据）
+
+**为什么需要它**：训练侧报告的 `controlLatencyMs` 是在**训练主机**上测的单线程 PyTorch 前向
+中位数（`engines/starter-ppo/runner.py` 的 `measure_control_latency_ms`）。它回答不了上板前唯一
+重要的问题——**导出的 ONNX 在真板子上能不能守住控制周期**。制品不同、runtime 不同、CPU 不同，
+主机上的 0.05 ms 与板端 20 ms 预算没有可比性。
+
+**测什么**：在板子上跑 `services/sim2real-web/board-latency-rehearsal.py`。它复用
+`board-policy-runtime.py` 的真实加载路径（同样的 provider 选择、输入绑定、维度与布局校验）
+和**控制循环里同一个 `session.run` 调用**，重复采样并写出收据：
+
+```bash
+# 于板端（不要与正在跑的 agent 抢同一策略文件）
+python3 services/sim2real-web/board-latency-rehearsal.py \
+  --model /root/rdk-board-agent/policies/policy.onnx \
+  --decision-hz 50 --iterations 300
+# → /var/lib/rdk-board-agent/runtime/board-latency-receipt.json
+# 退出码携带判定：0 = 达标，1 = 超预算或无法测量（绝不写"看起来合格"的收据）
+```
+
+`--decision-hz` 必须与 task-pack / adapter 声明的控制率一致；默认取 runtime 的 `DECISION_HZ`。
+
+**收据契约与判定**：由 `shared/board-rehearsal.ts` 校验（单测见
+`shared/board-rehearsal.test.ts`，探针与门禁的一致性演练见 `npm run verify:board-latency`）。
+`validateArtifactForDeployment` 现在要求**声称可部署的制品**附带一份满足下列全部条件的收据，
+否则拒绝确认：
+
+| 规则 | 拒绝理由（示例） |
+| --- | --- |
+| 测量阶段必须是 `board-onnx` | `host-torch` / `host-onnx` / `sim-step` / 未声明一律不能作为上板证据 |
+| 收据必须新鲜（≤ 14 天） | 过期收据不能给新部署背书 |
+| `artifactSha256` 必须等于将部署的字节 | 上一版导出的收据不能认证新导出 |
+| 判据指标中位数必须在预算内 | 只看中位数；偶发尖峰由 `overBudgetRatio` 暴露 |
+| `budgetMet` 必须与自身指标自洽 | 手改成 `true` 会被重算后拒绝 |
+| 样本数 ≥ 100、百分位有序 | `median ≤ p95 ≤ max` |
+
+**保真度边界（别过度解读）**：这是**进程内**测量，含 Python 与 onnxruntime 调度，但**不含**
+相机/遥测线程的 GIL 竞争、DDS 发布、以及负载 CPU 上的内核调度；观测喂的是契约形状的零向量
+（稠密策略的延迟与数据无关），视觉导出喂合成帧。收据里的 `notes` 会原样记录这些限制。
+未绑定 ROS 的 rehearsal 是实际每步开销的**下界**。
+
+测量阶段字段（`measurementStage`）：`host-torch`（starter 引擎）、`host-onnx`、`board-onnx`、
+`sim-step`（`cpu-mujoco` 评测的步进耗时）。评估页与运行详情页的延迟标签会**逐字显示阶段**，
+未声明时显示"测量阶段未声明"，不会伪装成控制预算。
 
 ## 接真机（X5）
 

@@ -148,6 +148,35 @@ function mockAgent(status: number, payload: Record<string, unknown>) {
   );
 }
 
+const DIGEST = 'a'.repeat(64);
+
+/** A board-stage rehearsal receipt for `digest`, matching the shared contract. */
+function boardReceipt(digest: string) {
+  return {
+    schemaVersion: 1,
+    measuredAt: new Date(Date.now() - 60_000).toISOString(),
+    tool: 'board-latency-rehearsal/1',
+    stage: 'board-onnx',
+    device: { host: 'x5-01', machine: 'aarch64', boardModel: 'RDK X5' },
+    artifactSha256: digest,
+    artifactBytes: 90_210,
+    decisionHz: 50,
+    provider: 'CPUExecutionProvider',
+    metrics: [
+      {
+        name: 'control-step',
+        samples: 300,
+        medianMs: 2.1,
+        p95Ms: 2.8,
+        maxMs: 4.4,
+        overBudgetRatio: 0,
+        budgetMs: 20,
+      },
+    ],
+    budgetMet: true,
+  };
+}
+
 describe('board-station policy runtime proxy', () => {
   it('reports the honest policy state (switch off is a readable answer, not an error)', async () => {
     const fetchMock = mockAgent(200, {
@@ -172,6 +201,79 @@ describe('board-station policy runtime proxy', () => {
     expect(fetchMock).toHaveBeenCalledWith(
       'http://127.0.0.1:19100/v1/station/policy',
       expect.objectContaining({ method: 'GET' }),
+    );
+  });
+
+  it('reports no rehearsal evidence when the board uploads no receipt', async () => {
+    mockAgent(200, {
+      ok: true,
+      policy: { enabled: true, runtimeRunning: false, state: 'ready', sha256: 'a'.repeat(64) },
+    });
+    const router = buildRouter();
+    const res = await call(routeHandler(router, 'get', '/api/sim2real/board-station/policy'));
+    expect(res.statusCode).toBe(200);
+    // No receipt is an explicit refusal, not a silent pass.
+    expect(res.body.rehearsal).toMatchObject({ evidence: false, releasable: false, stage: null });
+    expect(String(res.body.rehearsal.summary)).toMatch(/未上报/);
+  });
+
+  it('confirms a loaded artifact whose board rehearsal matches its digest', async () => {
+    mockAgent(200, {
+      ok: true,
+      policy: { enabled: true, runtimeRunning: false, state: 'ready', sha256: DIGEST },
+      rehearsalReceipt: boardReceipt(DIGEST),
+    });
+    const router = buildRouter();
+    const res = await call(routeHandler(router, 'get', '/api/sim2real/board-station/policy'));
+    expect(res.statusCode).toBe(200);
+    expect(res.body.rehearsal).toMatchObject({
+      evidence: true,
+      releasable: true,
+      stage: 'board-onnx',
+      artifactSha256: DIGEST,
+    });
+    expect(res.body.rehearsal.errors).toEqual([]);
+  });
+
+  it('refuses a rehearsal that measured a different artifact than the loaded one', async () => {
+    mockAgent(200, {
+      ok: true,
+      policy: { enabled: true, runtimeRunning: false, state: 'ready', sha256: DIGEST },
+      rehearsalReceipt: boardReceipt('b'.repeat(64)),
+    });
+    const router = buildRouter();
+    const res = await call(routeHandler(router, 'get', '/api/sim2real/board-station/policy'));
+    expect(res.body.rehearsal).toMatchObject({ evidence: true, releasable: false });
+    expect(res.body.rehearsal.errors.join(' ')).toMatch(/describes artifact/);
+  });
+
+  it('refuses host-side timing presented as board evidence', async () => {
+    mockAgent(200, {
+      ok: true,
+      policy: { enabled: true, runtimeRunning: false, state: 'ready', sha256: DIGEST },
+      rehearsalReceipt: { ...boardReceipt(DIGEST), stage: 'host-torch' },
+    });
+    const router = buildRouter();
+    const res = await call(routeHandler(router, 'get', '/api/sim2real/board-station/policy'));
+    expect(res.body.rehearsal).toMatchObject({ evidence: true, releasable: false });
+    expect(res.body.rehearsal.errors.join(' ')).toMatch(/only a board-onnx measurement/);
+  });
+
+  it('cannot bind a receipt when the board reports no digest', async () => {
+    mockAgent(200, {
+      ok: true,
+      policy: { enabled: true, runtimeRunning: false, state: 'ready' },
+      rehearsalReceipt: boardReceipt(DIGEST),
+    });
+    const router = buildRouter();
+    const res = await call(routeHandler(router, 'get', '/api/sim2real/board-station/policy'));
+    expect(res.body.rehearsal).toMatchObject({
+      evidence: true,
+      releasable: false,
+      artifactSha256: null,
+    });
+    expect(res.body.rehearsal.errors.join(' ')).toMatch(
+      /did not report the loaded artifact digest/,
     );
   });
 
@@ -483,6 +585,171 @@ describe('board-station policy runtime proxy', () => {
       expect(fetchMock).toHaveBeenCalledWith(
         'http://127.0.0.1:19100/v1/station/policy/files',
         expect.objectContaining({ method: 'GET' }),
+      );
+    });
+  });
+
+  // The opt-in pre-load gate: with RDK_SIM2REAL_STATION_POLICY_REQUIRE_REHEARSAL=1
+  // a load must not be forwarded unless the caller's declared bytes, the board's
+  // staged file and the rehearsal receipt all agree.
+  describe('pre-load rehearsal gate', () => {
+    /** Agent mock that answers the file listing, then the load itself. */
+    function mockAgentSequence(
+      files: unknown,
+      loadPayload: Record<string, unknown> = { ok: true },
+    ) {
+      return vi
+        .spyOn(globalThis, 'fetch')
+        .mockResolvedValueOnce(
+          new Response(JSON.stringify(files), {
+            status: 200,
+            headers: { 'content-type': 'application/json' },
+          }),
+        )
+        .mockResolvedValueOnce(
+          new Response(JSON.stringify(loadPayload), {
+            status: 200,
+            headers: { 'content-type': 'application/json' },
+          }),
+        );
+    }
+
+    const listing = (overrides: Record<string, unknown> = {}) => ({
+      ok: true,
+      dir: '/root/rdk-board-agent/policies',
+      policies: [{ name: 'policy.onnx', bytes: 90_210, sha256: DIGEST, ...overrides }],
+    });
+
+    const loadBody = (extra: Record<string, unknown> = {}) => ({
+      method: 'POST',
+      body: {
+        path: 'policy.onnx',
+        artifactSha256: DIGEST,
+        rehearsalReceipt: boardReceipt(DIGEST),
+        ...extra,
+      },
+    });
+
+    beforeEach(() => {
+      process.env.RDK_SIM2REAL_STATION_POLICY_ENABLED = '1';
+      process.env.RDK_SIM2REAL_STATION_POLICY_REQUIRE_REHEARSAL = '1';
+    });
+
+    afterEach(() => {
+      delete process.env.RDK_SIM2REAL_STATION_POLICY_REQUIRE_REHEARSAL;
+    });
+
+    it('forwards the load when declared bytes, board file and receipt agree', async () => {
+      const fetchMock = mockAgentSequence(listing());
+      const router = buildRouter();
+      const res = await call(
+        routeHandler(router, 'post', '/api/sim2real/board-station/policy/load'),
+        loadBody(),
+      );
+      expect(res.statusCode).toBe(200);
+      // Second call is the load itself, and it carries only the bare filename.
+      expect(fetchMock).toHaveBeenLastCalledWith(
+        'http://127.0.0.1:19100/v1/station/policy/load',
+        expect.objectContaining({ method: 'POST', body: JSON.stringify({ path: 'policy.onnx' }) }),
+      );
+    });
+
+    it('refuses a load with no declared digest, before any load call', async () => {
+      mockAgentSequence(listing());
+      const router = buildRouter();
+      const res = await call(
+        routeHandler(router, 'post', '/api/sim2real/board-station/policy/load'),
+        { method: 'POST', body: { path: 'policy.onnx', rehearsalReceipt: boardReceipt(DIGEST) } },
+      );
+      expect(res.statusCode).toBe(409);
+      expect(res.body).toMatchObject({
+        error: 'SIM2REAL_STATION_POLICY_REHEARSAL_DIGEST_REQUIRED',
+      });
+      expect(globalThis.fetch).toHaveBeenCalledTimes(1); // listing only
+    });
+
+    it('refuses when the board holds different bytes under the same name', async () => {
+      mockAgentSequence(listing({ sha256: 'b'.repeat(64) }));
+      const router = buildRouter();
+      const res = await call(
+        routeHandler(router, 'post', '/api/sim2real/board-station/policy/load'),
+        loadBody(),
+      );
+      expect(res.statusCode).toBe(409);
+      expect(res.body).toMatchObject({ error: 'SIM2REAL_STATION_POLICY_DIGEST_MISMATCH' });
+      expect(String(res.body.message)).toMatch(/实际摘要/);
+      expect(globalThis.fetch).toHaveBeenCalledTimes(1);
+    });
+
+    it('refuses a board that reports no digest for the staged file', async () => {
+      const entry = { name: 'policy.onnx', bytes: 90_210 };
+      mockAgentSequence({ ok: true, policies: [entry] });
+      const router = buildRouter();
+      const res = await call(
+        routeHandler(router, 'post', '/api/sim2real/board-station/policy/load'),
+        loadBody(),
+      );
+      expect(res.statusCode).toBe(409);
+      expect(res.body).toMatchObject({ error: 'SIM2REAL_STATION_POLICY_DIGEST_UNAVAILABLE' });
+      expect(globalThis.fetch).toHaveBeenCalledTimes(1);
+    });
+
+    it('refuses a load with no rehearsal receipt', async () => {
+      mockAgentSequence(listing());
+      const router = buildRouter();
+      const res = await call(
+        routeHandler(router, 'post', '/api/sim2real/board-station/policy/load'),
+        { method: 'POST', body: { path: 'policy.onnx', artifactSha256: DIGEST } },
+      );
+      expect(res.statusCode).toBe(409);
+      expect(res.body).toMatchObject({ error: 'SIM2REAL_STATION_POLICY_REHEARSAL_REQUIRED' });
+      expect(globalThis.fetch).toHaveBeenCalledTimes(1);
+    });
+
+    it('refuses a host-stage receipt even when the digests match', async () => {
+      mockAgentSequence(listing());
+      const router = buildRouter();
+      const res = await call(
+        routeHandler(router, 'post', '/api/sim2real/board-station/policy/load'),
+        loadBody({ rehearsalReceipt: { ...boardReceipt(DIGEST), stage: 'host-torch' } }),
+      );
+      expect(res.statusCode).toBe(409);
+      expect(res.body).toMatchObject({ error: 'SIM2REAL_STATION_POLICY_NOT_RELEASABLE' });
+      expect(String(res.body.message)).toMatch(/only a board-onnx measurement/);
+      expect(globalThis.fetch).toHaveBeenCalledTimes(1);
+    });
+
+    it('refuses a receipt for another artifact', async () => {
+      mockAgentSequence(listing());
+      const router = buildRouter();
+      const res = await call(
+        routeHandler(router, 'post', '/api/sim2real/board-station/policy/load'),
+        loadBody({ rehearsalReceipt: boardReceipt('c'.repeat(64)) }),
+      );
+      expect(res.statusCode).toBe(409);
+      expect(res.body).toMatchObject({ error: 'SIM2REAL_STATION_POLICY_NOT_RELEASABLE' });
+      expect(String(res.body.message)).toMatch(/describes artifact/);
+    });
+
+    it('is fully off when the flag is unset, so live boards keep loading', async () => {
+      delete process.env.RDK_SIM2REAL_STATION_POLICY_REQUIRE_REHEARSAL;
+      const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+        new Response(JSON.stringify({ ok: true }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        }),
+      );
+      const router = buildRouter();
+      const res = await call(
+        routeHandler(router, 'post', '/api/sim2real/board-station/policy/load'),
+        { method: 'POST', body: { path: 'policy.onnx' } },
+      );
+      expect(res.statusCode).toBe(200);
+      // One call only: the load, with no listing round-trip.
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      expect(fetchMock).toHaveBeenCalledWith(
+        'http://127.0.0.1:19100/v1/station/policy/load',
+        expect.objectContaining({ method: 'POST' }),
       );
     });
   });
