@@ -68,6 +68,15 @@ def resolved_pack():
 class EnvironmentRewardParity(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
+        # The parity environment lives in the real starter runner, whose
+        # import contract also requires torch. CI installs NumPy for the
+        # lightweight vector checks but intentionally omits the heavy training
+        # stack; skip this behavioral probe rather than turning the runner's
+        # explicit dependency guard into a suite failure.
+        try:
+            import torch  # noqa: F401
+        except ImportError:
+            raise unittest.SkipTest("torch unavailable: environment parity skipped")
         cls.runner = load_runner()
         cls.pack = resolved_pack()
         cls.goal_eps = float(cls.pack["termination"]["goalDistance"])
