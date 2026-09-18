@@ -341,8 +341,33 @@ function pendingEntryOf(
   return undefined;
 }
 
-export async function askDsh(ctx: Context, prompt: string, options: { model?: string } = {}) {
-  const id = SessionId(`sim2real-${randomUUID()}`);
+function tokenUsageOf(events: readonly unknown[]) {
+  let inputTokens = 0;
+  let outputTokens = 0;
+  let seen = false;
+  for (const event of events) {
+    if (!event || typeof event !== 'object') continue;
+    const source = event as { type?: unknown; data?: unknown };
+    if (source.type !== 'assistant/message' || !source.data || typeof source.data !== 'object')
+      continue;
+    const usage = (source.data as { usage?: unknown }).usage;
+    if (!usage || typeof usage !== 'object') continue;
+    const input = Number((usage as { inputTokens?: unknown }).inputTokens);
+    const output = Number((usage as { outputTokens?: unknown }).outputTokens);
+    if (!Number.isFinite(input) && !Number.isFinite(output)) continue;
+    if (Number.isFinite(input)) inputTokens += Math.max(0, Math.floor(input));
+    if (Number.isFinite(output)) outputTokens += Math.max(0, Math.floor(output));
+    seen = true;
+  }
+  return seen ? { inputTokens, outputTokens, totalTokens: inputTokens + outputTokens } : undefined;
+}
+
+export async function askDsh(
+  ctx: Context,
+  prompt: string,
+  options: { model?: string; sessionId?: string } = {},
+) {
+  const id = SessionId(options.sessionId || `sim2real-${randomUUID()}`);
   const handle = await ctx.agents.create({
     sessionId: id,
     agentOptions: {
@@ -408,6 +433,7 @@ export async function askDsh(ctx: Context, prompt: string, options: { model?: st
       // push tool events out of any fixed window.
       toolTrail: toolTrailOf(events),
       events: events.slice(-50),
+      ...(tokenUsageOf(events) ? { usage: tokenUsageOf(events) } : {}),
     };
   } finally {
     await handle.dispose();

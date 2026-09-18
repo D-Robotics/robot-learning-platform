@@ -212,7 +212,7 @@ def main():
     # which fails closed without a goal — proving the declared layout picked
     # the 8D assembly (the contract-head assembly has no goal requirement).
     start = rt_obj.start(0.5)
-    assert not start.get("ok") and start.get("error") == "originbot-goal-required", start
+    assert not start.get("ok") and start.get("error") == "goal-required", start
     start = rt_obj.start(0.5, 1.0, 1.0)
     assert start.get("ok") and start.get("state") == "running", start
     rt_obj.stop("test")

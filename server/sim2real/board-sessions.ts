@@ -72,6 +72,10 @@ export function buildBoardSessions(
         }
         if (session.mock == null && event.mock != null) session.mock = event.mock;
         if (!session.model && event.model) session.model = event.model;
+        // The goalnav task target rides the start marker: first observed
+        // wins, same as the origin fields.
+        if (session.goalX == null && event.goalX != null) session.goalX = event.goalX;
+        if (session.goalY == null && event.goalY != null) session.goalY = event.goalY;
       } else if (event.kind === 'session-stopped') {
         // First terminal marker wins for the same reason as the start.
         if (!session.stoppedAt && event.stoppedAt) session.stoppedAt = event.stoppedAt;

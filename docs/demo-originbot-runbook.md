@@ -176,6 +176,10 @@ curl -X POST http://127.0.0.1:18104/api/sim2real/board-station/drive/stop -H 'co
 
 最后再次查询状态，确认 `active=false`、速度归零、里程计有合理变化、急停可用。
 
+8→2 目标导航之外，42D goalnav 契约（`imu-gravity-v1`）的任务级验收（到达
+目标点并停止）有专门流程：[docs/goalnav-task-acceptance-runbook.md](goalnav-task-acceptance-runbook.md)。
+它同样以目标点 X/Y 为必填输入——两个契约都会在无目标时被板端拒绝并保持零输出。
+
 ## 10. 演示收尾
 
 ```bash

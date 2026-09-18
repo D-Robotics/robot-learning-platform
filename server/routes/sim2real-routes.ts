@@ -105,6 +105,7 @@ import {
   requestLocalTrainingStatus,
   fetchLocalRunArtifact,
   fetchLocalRunTelemetry,
+  fetchLocalRunLogs,
   localRunnerTokenFormatValid,
   localRunnerTokenRequired,
   localRunnerTokenUsable,
@@ -3152,6 +3153,87 @@ export function createSim2RealRouter(
         }
       }
       response.json({ ok: true, run: current });
+    }),
+  );
+
+  /**
+   * GET /runs/:id/logs?after=N — incremental engine stdout/stderr lines for a
+   * local-backend run, proxied from the worker's bounded line ring. This is
+   * the operator's live view into training (and the post-mortem when it
+   * fails): line numbers are worker-assigned and `after` is the cursor, so a
+   * poll returns only the new tail. RoboGo runs have no proxied log channel —
+   * the response says so honestly instead of serving an empty success.
+   */
+  router.get(
+    api('/runs/:id/logs'),
+    wrapAsync(async (request, response) => {
+      const owner = requestOwner(request, response, auth);
+      if (owner === null) return;
+      noStore(response);
+      const run = await getSim2RealRun(String(request.params.id || ''), owner);
+      if (!run) {
+        response.status(404).json({
+          ok: false,
+          error: 'SIM2REAL_RUN_NOT_FOUND',
+          message: '运行记录不存在，或不属于当前账号。',
+        });
+        return;
+      }
+      if (run.backend !== 'local' || !run.externalRunId) {
+        sendApiError(
+          response,
+          409,
+          'SIM2REAL_RUN_LOGS_NOT_AVAILABLE',
+          '该运行的引擎日志不可从本平台读取（远端 runner 或 mock 运行没有日志通道）。',
+          { retryable: false, details: { runId: run.id, backend: run.backend } },
+        );
+        return;
+      }
+      if (run.mock === true) {
+        sendApiError(
+          response,
+          409,
+          'SIM2REAL_RUN_LOGS_NOT_AVAILABLE',
+          'mock 运行不产生引擎日志。',
+          { retryable: false, details: { runId: run.id } },
+        );
+        return;
+      }
+      const workerAccount = owner ?? (auth.isMultiUserDeployment() ? '' : 'local-dev');
+      if (!workerAccount) {
+        sendApiError(response, 401, 'SIM2REAL_AUTH_REQUIRED', '当前会话没有可用账号。', {
+          retryable: false,
+        });
+        return;
+      }
+      const afterRaw = Number(request.query.after);
+      const after = Number.isSafeInteger(afterRaw) && afterRaw >= 0 ? afterRaw : 0;
+      const runner = await resolveRunRunner(run.computeResourceId, owner);
+      const logs = await fetchLocalRunLogs({
+        accountId: workerAccount,
+        externalRunId: run.externalRunId,
+        after,
+        ...(runner ? { runnerUrl: runner.runnerUrl, runnerToken: runner.runnerToken } : {}),
+      });
+      if (!logs) {
+        sendApiError(
+          response,
+          503,
+          'SIM2REAL_RUN_LOGS_UNAVAILABLE',
+          '训练 worker 暂时无法返回日志（可能尚未启动或连接中断）；保留已获取的行。',
+          { retryable: true, retryAfterSeconds: 5 },
+        );
+        return;
+      }
+      response.json({
+        ok: true,
+        runId: run.id,
+        status: run.status,
+        total: logs.total,
+        retainedFrom: logs.retainedFrom,
+        ...(logs.truncated ? { truncated: true } : {}),
+        lines: logs.lines,
+      });
     }),
   );
 

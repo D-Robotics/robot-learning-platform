@@ -7,6 +7,7 @@ const eventLog = $('agent-event-log');
 const form = $('agent-chat-form');
 const input = $('agent-chat-input');
 const submitButton = form?.querySelector('button[type="submit"]');
+const stopButton = form?.querySelector('[data-agent-stop]');
 const runtimeStatus = document.querySelector('.agent-chat-runtime');
 const HISTORY_KEY = 'rdk-sim2real-agent-history-v1';
 const SESSIONS_KEY = 'rdk-sim2real-agent-sessions-v1';
@@ -15,6 +16,9 @@ const SESSION_MESSAGES_CAP = 24;
 const SESSION_TITLES = { pending: '待执行', running: '执行中', completed: '已完成', partial: '部分完成', failed: '失败', blocked: '已阻断' };
 const SIMULATOR_ALLOWED_KEYS = new Set(['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'w', 'a', 's', 'd', 'q', 'e', 'f', 'r', 'g', 'c', 'm', 'b', ' ']);
 const simulatorBridge = { frame: null, ready: false, recording: false, events: [], connectedAt: null, startedAt: 0, downloadUrl: '', downloadName: '', videoUrl: '', videoName: '', recorder: null, videoError: '' };
+let activeTaskController = null;
+let activeTypingNode = null;
+let activeDshSessionId = '';
 
 function bridgeStatus() {
   if (!evidence) return;
@@ -59,11 +63,34 @@ function setAgentBusy(busy, label = '') {
     submitButton.dataset.defaultLabel ||= submitButton.textContent.trim();
     submitButton.textContent = busy ? (label || '执行中…') : submitButton.dataset.defaultLabel;
   }
+  if (stopButton) stopButton.hidden = !busy;
   if (input) input.disabled = busy;
   if (runtimeStatus) {
     runtimeStatus.classList.toggle('is-busy', busy);
     runtimeStatus.textContent = busy ? (label || '任务执行中…') : '工具链已连接';
   }
+}
+
+function removeTypingIndicator() {
+  activeTypingNode?.remove();
+  activeTypingNode = null;
+}
+
+function showTypingIndicator(label = '正在思考…') {
+  removeTypingIndicator();
+  if (!messages) return;
+  const node = document.createElement('div');
+  node.className = 'agent-chat-typing';
+  node.setAttribute('role', 'status');
+  const text = document.createElement('span');
+  text.textContent = label;
+  const dots = document.createElement('i');
+  dots.setAttribute('aria-hidden', 'true');
+  dots.textContent = '•••';
+  node.append(text, dots);
+  messages.append(node);
+  messages.scrollTop = messages.scrollHeight;
+  activeTypingNode = node;
 }
 
 function renderAgentError(error, retryable = true, lastMessage = '') {
@@ -498,6 +525,14 @@ function renderDshReasoning(reasoning) {
 
 function renderDshReply(dsh) {
   const node = addMessage('agent', stripDshPreamble(dsh.text));
+  const provenance = document.createElement('small');
+  provenance.className = 'agent-message-provenance';
+  const usage = Number(dsh.usage?.totalTokens);
+  const usageLabel = Number.isFinite(usage) && usage > 0 ? ` · 本轮约 ${usage} tokens` : '';
+  provenance.textContent = dsh.toolTrail?.length
+    ? `Agent 生成 · 依据见工具调用与执行证据${usageLabel}`
+    : `Agent 生成 · 请结合当前工作区证据复核${usageLabel}`;
+  node?.append(provenance);
   const trail = renderDshToolTrail(dsh.toolTrail);
   if (trail) node?.append(trail);
   const reasoning = renderDshReasoning(dsh.reasoning);
@@ -520,20 +555,32 @@ function addMessage(role, text, persist = true) {
     .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
     .replace(/`([^`]+)`/g, '<code>$1</code>')
     .replace(/\n/g, '<br>');
-  messages.appendChild(node);
-  // Granular feedback (Amershi G15): every persisted agent reply can be voted
-  // accurate/inaccurate. Restored (persist=false) history keeps the control
-  // too — the judgement outlives the session. app.js owns the shared control
-  // builder; classic scripts share the global scope by design.
-  if (role === 'agent' && typeof wireFeedbackControl === 'function') {
-    const mount = document.createElement('div');
-    mount.className = 'agent-message-feedback';
-    node.append(mount);
-    wireFeedbackControl(mount, {
-      surface: 'agent-reply',
-      contextLabel: '针对这条 Agent 回复',
+  if (role === 'agent') {
+    const actions = document.createElement('div');
+    actions.className = 'agent-message-actions';
+    const copy = document.createElement('button');
+    copy.type = 'button';
+    copy.className = 'agent-message-copy';
+    copy.textContent = '复制';
+    copy.setAttribute('aria-label', '复制 Agent 回复');
+    copy.addEventListener('click', async () => {
+      try {
+        if (!navigator.clipboard?.writeText) throw new Error('clipboard unavailable');
+        await navigator.clipboard.writeText(source);
+        copy.textContent = '已复制';
+        window.setTimeout(() => { copy.textContent = '复制'; }, 1_500);
+      } catch {
+        copy.textContent = '无法复制';
+        window.setTimeout(() => { copy.textContent = '复制'; }, 1_500);
+      }
     });
+    actions.append(copy);
+    node.append(actions);
   }
+  messages.appendChild(node);
+  // Agent replies stay lightweight. Feedback is available on explicit result
+  // surfaces (evaluation and run details), rather than interrupting every
+  // conversational turn with an accuracy prompt.
   messages.scrollTop = messages.scrollHeight;
   if (persist) saveMessage(role, text);
   return node;
@@ -672,6 +719,7 @@ function renderSessionTranscript(record) {
 
 function startFreshSession(list) {
   activeSessionId = null;
+  activeDshSessionId = '';
   localStorage.removeItem(HISTORY_KEY);
   // Enforce the storage cap on every rail operation, so an over-cap seed
   // (older format or manual editing) is trimmed, not just on next persist.
@@ -683,9 +731,30 @@ function startFreshSession(list) {
 
 function openSession(session, list) {
   activeSessionId = session.id;
+  activeDshSessionId = '';
   localStorage.removeItem(HISTORY_KEY);
   renderSessionTranscript(session);
   renderSessionRail(list);
+}
+
+function exportActiveSession() {
+  const record = readSessions().find((item) => item.id === activeSessionId);
+  if (!record) {
+    addMessage('agent', '当前还没有可导出的对话。');
+    return;
+  }
+  const payload = JSON.stringify({
+    exportedAt: new Date().toISOString(),
+    title: record.title || 'Agent 对话',
+    messages: record.messages,
+    task: record.task,
+  }, null, 2);
+  const url = URL.createObjectURL(new Blob([payload], { type: 'application/json' }));
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = `rdk-agent-${new Date().toISOString().replace(/[:.]/g, '-')}.json`;
+  link.click();
+  window.setTimeout(() => URL.revokeObjectURL(url), 0);
 }
 
 function renderSessionRail(list) {
@@ -748,6 +817,7 @@ function initSessionRail() {
   }
   renderSessionRail(list);
   fresh?.addEventListener('click', () => startFreshSession(list));
+  $('agent-export-session')?.addEventListener('click', exportActiveSession);
 }
 
 class AgentApiError extends Error {
@@ -771,6 +841,20 @@ async function api(path, options = {}) {
     }
     throw error;
   }
+}
+
+function waitWithSignal(ms, signal) {
+  return new Promise((resolve, reject) => {
+    if (signal?.aborted) {
+      reject(new DOMException('The operation was aborted', 'AbortError'));
+      return;
+    }
+    const timer = window.setTimeout(resolve, ms);
+    signal?.addEventListener('abort', () => {
+      window.clearTimeout(timer);
+      reject(new DOMException('The operation was aborted', 'AbortError'));
+    }, { once: true });
+  });
 }
 
 // Plan choice (Bakusevych 2026 #2): the planner returns 2–3 deterministic
@@ -825,6 +909,50 @@ function choosePlanVariant(variants, fallbackPlan) {
     // The pick must not strand the chat if the user navigates away: resolve
     // with no plan so runTask stops before any execute call.
     window.setTimeout(() => { if (!settled) finish(null, true); }, 120_000);
+  });
+}
+
+const APPROVAL_TOOLS = new Set(['training.gpu', 'evaluation.summarize', 'deployment.preflight']);
+
+function chooseExecutionApproval(plan, signal) {
+  const steps = Array.isArray(plan?.steps) ? plan.steps : [];
+  const protectedSteps = steps.filter((step) => step?.requiresApproval || APPROVAL_TOOLS.has(step?.tool));
+  if (!protectedSteps.length) return Promise.resolve(true);
+  return new Promise((resolve) => {
+    const node = document.createElement('div');
+    node.className = 'agent-approval-card';
+    node.setAttribute('role', 'alertdialog');
+    const title = document.createElement('strong');
+    title.textContent = '执行前需要你的明确批准';
+    const detail = document.createElement('p');
+    detail.textContent = `这项计划包含 ${protectedSteps.length} 个会产生资源或证据影响的步骤：${protectedSteps.map((step) => String(step.label || step.tool || '受控操作')).join('、')}。`;
+    const actions = document.createElement('div');
+    actions.className = 'agent-approval-actions';
+    const approve = document.createElement('button');
+    approve.type = 'button';
+    approve.className = 'button button-primary button-small';
+    approve.textContent = '批准并执行';
+    const cancel = document.createElement('button');
+    cancel.type = 'button';
+    cancel.className = 'button button-ghost button-small';
+    cancel.textContent = '暂不执行';
+    let settled = false;
+    const finish = (approved) => {
+      if (settled) return;
+      settled = true;
+      approve.disabled = true;
+      cancel.disabled = true;
+      node.classList.add(approved ? 'is-approved' : 'is-cancelled');
+      if (!approved) detail.textContent = '已取消：没有提交受控执行请求。';
+      resolve(approved);
+    };
+    approve.addEventListener('click', () => finish(true));
+    cancel.addEventListener('click', () => finish(false));
+    signal?.addEventListener('abort', () => finish(false), { once: true });
+    actions.append(approve, cancel);
+    node.append(title, detail, actions);
+    messages?.append(node);
+    if (messages) messages.scrollTop = messages.scrollHeight;
   });
 }
 
@@ -935,7 +1063,7 @@ function renderRun(run) {
   bridgeStatus();
 }
 
-async function runTask(message) {
+async function runTask(message, signal) {
   const modelId = $('model-select')?.value || undefined;
   const deviceId = $('device-select')?.value || undefined;
   const computeResourceId = $('compute-resource-select')?.value || undefined;
@@ -947,13 +1075,24 @@ async function runTask(message) {
     setAgentBusy(true, '模型思考与工具执行中…');
     const dsh = await api('/sim2real/dsh/chat', {
       method: 'POST',
-      body: JSON.stringify({ message, context: { modelId, deviceId, computeResourceId } }),
+      signal,
+      body: JSON.stringify({
+        message,
+        ...(activeDshSessionId ? { sessionId: activeDshSessionId } : {}),
+        context: { modelId, deviceId, computeResourceId },
+      }),
     });
-    if (dsh?.ok && dsh.text) { renderDshReply(dsh); return; }
+    if (dsh?.ok && dsh.text) {
+      if (typeof dsh.sessionId === 'string') activeDshSessionId = dsh.sessionId;
+      removeTypingIndicator();
+      renderDshReply(dsh);
+      return;
+    }
   } catch (error) {
     if (!(error && error.status === 503)) throw error;
   }
-  const response = await api('/sim2real/agent/plan', { method: 'POST', body: JSON.stringify({ message, context: { modelId, deviceId, computeResourceId } }) });
+  const response = await api('/sim2real/agent/plan', { method: 'POST', signal, body: JSON.stringify({ message, context: { modelId, deviceId, computeResourceId } }) });
+  removeTypingIndicator();
   let plan = response?.plan;
   const variants = Array.isArray(response?.variants) ? response.variants : [];
   if (!plan && variants.length) plan = variants.find((item) => item?.key === 'thorough')?.plan;
@@ -973,7 +1112,12 @@ async function runTask(message) {
   }
   renderPlan(plan);
   addMessage('agent', `收到，按 ${plan.steps.length} 步执行：${plan.steps.map((item) => item.label).join(' → ')}。`);
-  const execution = await api('/sim2real/agent/execute', { method: 'POST', body: JSON.stringify({ plan, approved: true }) });
+  const approved = await chooseExecutionApproval(plan, signal);
+  if (!approved) {
+    addMessage('agent', signal?.aborted ? '已停止等待，未提交执行请求。' : '已取消：未提交执行请求，可随时重新发起。');
+    return;
+  }
+  const execution = await api('/sim2real/agent/execute', { method: 'POST', signal, body: JSON.stringify({ plan, approved: true }) });
   const run = execution?.run;
   if (!run?.id || !Array.isArray(run.steps) || run.steps.some((item) => !item || typeof item !== 'object')) throw new Error('服务没有返回有效的运行记录');
   renderRun(run);
@@ -989,10 +1133,10 @@ async function runTask(message) {
   let transientFailures = 0;
   let lastStepLabel = '';
   for (let attempt = 0; attempt < 180; attempt += 1) {
-    await new Promise((resolve) => window.setTimeout(resolve, attempt ? 700 : 250));
+    await waitWithSignal(attempt ? 700 : 250, signal);
     let result;
     try {
-      result = await api(`/sim2real/agent/runs/${encodeURIComponent(run.id)}`);
+      result = await api(`/sim2real/agent/runs/${encodeURIComponent(run.id)}`, { signal });
       transientFailures = 0;
     } catch (error) {
       transientFailures += 1;
@@ -1044,10 +1188,32 @@ form?.addEventListener('submit', (event) => {
   // card exists.
   if (!activeSessionId) ensureSession();
   addMessage('user', message);
+  const controller = new AbortController();
+  activeTaskController = controller;
   setAgentBusy(true, '正在生成计划…');
-  void runTask(message)
-    .catch((error) => renderAgentError(error, true, message))
-    .finally(() => setAgentBusy(false));
+  void runTask(message, controller.signal)
+    .catch((error) => {
+      if (error?.name === 'AbortError') {
+        addMessage('agent', '已停止等待。若任务已经提交到后台，它仍可能继续运行，请到运行记录查看状态。');
+        return;
+      }
+      renderAgentError(error, true, message);
+    })
+    .finally(() => {
+      removeTypingIndicator();
+      if (activeTaskController === controller) {
+        activeTaskController = null;
+        setAgentBusy(false);
+      }
+    });
+  showTypingIndicator();
+});
+
+stopButton?.addEventListener('click', () => {
+  if (!activeTaskController) return;
+  activeTaskController.abort();
+  stopButton.disabled = true;
+  if (runtimeStatus) runtimeStatus.textContent = '正在停止等待…';
 });
 
 // The conversation lives in a drawer so it remains available without taking

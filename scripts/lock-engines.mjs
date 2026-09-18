@@ -20,7 +20,7 @@
  *   node scripts/lock-engines.mjs --check    # fail if a lock is out of date
  */
 import { spawnSync } from 'node:child_process';
-import { existsSync, readFileSync } from 'node:fs';
+import { copyFileSync, existsSync, readFileSync, renameSync } from 'node:fs';
 import { mkdtempSync, rmSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -36,6 +36,11 @@ const ENGINES = [
   'microduck-eval',
   'offline-bc',
   'act',
+  'diffusion-policy',
+  'smolvla',
+  // A CLI format tool, not a training engine — but its pyarrow/numpy pins
+  // deserve the same reproducible-lock treatment as the engines.
+  'lerobot-converter',
 ];
 const check = process.argv.includes('--check');
 
@@ -104,7 +109,11 @@ try {
     const source = path.join('engines', engine, 'requirements.in');
     const target = path.join('engines', engine, 'requirements.txt');
     const targetPath = path.join(ROOT, target);
-    const output = check ? path.join(scratch, `${engine}.txt`) : targetPath;
+    // Always compile into scratch: uv keeps versions from an existing output
+    // file when they still satisfy the constraints, so compiling straight
+    // onto the committed lock would freeze every transitive pin forever and
+    // disagree with --check (which necessarily compiles from scratch).
+    const output = path.join(scratch, `${engine}.txt`);
     const run = compile(source, output);
     if (run.status !== 0) {
       console.error(`[lock-engines] FAIL — ${engine}: ${(run.stderr || '').trim()}`);
@@ -117,6 +126,11 @@ try {
       else
         console.log(`[lock-engines] ${engine}: lock is current (${packageCount(fresh)} packages)`);
     } else {
+      // Stage inside the target directory so the final rename is atomic on
+      // one filesystem (scratch lives in os.tmpdir(), possibly another volume).
+      const staged = `${targetPath}.tmp`;
+      copyFileSync(output, staged);
+      renameSync(staged, targetPath);
       const written = readFileSync(targetPath, 'utf8');
       console.log(`[lock-engines] ${engine}: wrote ${target} (${packageCount(written)} packages)`);
     }

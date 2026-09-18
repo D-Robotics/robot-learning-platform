@@ -72,6 +72,77 @@ assert observation[0:2] == [1.0, -0.5] and observation[4:6] == [1.0, 1.0]
 runtime.EXPECTED_OBS_DIM, runtime.EXPECTED_ACTION_DIM = old_dims
 runtime.ORIGINBOT_GOAL_X, runtime.ORIGINBOT_GOAL_Y = old_goal
 
+# The 42D goalnav contract (imu-gravity-v1, 42 obs / 2 act) must receive the
+# trainer's layout: [gyro(3), gravity(3), last_action(2), goal_delta(2),
+# twist(2), zeros(30)]. Before this was implemented the generic assembly
+# zero-filled slots 8-9, so a goalnav policy ran with no idea where its goal
+# was — the "unexpected direction=0 drive straight" incident. These checks pin
+# the slot semantics: body-frame goal delta from the odom pose + quaternion
+# yaw, believed twist, normalized last command; and fail-closed when the goal
+# or odom is missing instead of zero-filling goal slots.
+old_dims = (runtime.EXPECTED_OBS_DIM, runtime.EXPECTED_ACTION_DIM)
+old_layout = runtime.OBSERVATION_LAYOUT
+old_goal = (runtime.ORIGINBOT_GOAL_X, runtime.ORIGINBOT_GOAL_Y)
+old_telemetry = runtime._read_telemetry
+runtime.EXPECTED_OBS_DIM, runtime.EXPECTED_ACTION_DIM = 42, 2
+runtime.OBSERVATION_LAYOUT = "imu-gravity-v1"
+runtime.ORIGINBOT_GOAL_X, runtime.ORIGINBOT_GOAL_Y = None, None
+# A quaternion encoding yaw=pi/2 rotates world +x onto the chassis -y axis;
+# projected gravity is yaw-invariant so the real head stays (0, 0, -1).
+def goalnav_imu():
+    return fresh_imu(quaternion={"x": 0.0, "y": 0.0, "z": 0.7071067811865476, "w": 0.7071067811865476})
+def goalnav_odom():
+    return {"positionX": 1.0, "positionY": -0.5, "linearX": 0.1, "angularZ": 0.2, "sampleMonotonicNs": time.monotonic_ns()}
+runtime._read_telemetry = lambda: {"imu": goalnav_imu(), "odom": goalnav_odom()}
+goalnav = runtime.PolicyRuntime()
+assert goalnav._build_observation() is None, "42D goalnav must require an explicit goal (fail closed, never zero-fill)"
+goalnav._goal = (2.0, -0.5)
+observation = goalnav._build_observation()
+assert observation is not None and len(observation) == 42, observation
+assert observation[:6] == [0.01, -0.02, 0.03, 0.0, 0.0, -1.0]
+assert observation[6:8] == [0.0, 0.0], "last_action must start at zero command"
+# goal (2, -0.5) from odom (1, -0.5): world delta (1, 0); yaw=pi/2 body delta (0, -1).
+assert abs(observation[8] - 0.0) < 1e-9 and abs(observation[9] + 1.0) < 1e-9, observation[8:10]
+assert observation[10:12] == [0.1, 0.2], "believed twist must ride slots 10-11"
+assert observation[12:] == [0.0] * 30, "trailing 30 slots must stay zero"
+# Dead odom fails closed for the whole observation (bounded zero output),
+# not a goalnav vector with a zeroed pose.
+runtime._read_telemetry = lambda: {"imu": goalnav_imu()}
+assert goalnav._build_observation() is None, "42D goalnav must fail closed without odom"
+# A previous published command normalizes into the last_action slots.
+goalnav._last_cmd = (0.05, -0.04)
+runtime._read_telemetry = lambda: {"imu": goalnav_imu(), "odom": goalnav_odom()}
+observation = goalnav._build_observation()
+assert abs(observation[6] - 0.05 / runtime.MAX_LINEAR) < 1e-9, observation[6]
+assert abs(observation[7] + 0.04 / runtime.MAX_ANGULAR) < 1e-9, observation[7]
+# start() must also refuse the 42D contract without goalX/goalY, and the
+# session-started marker must carry the goal as task evidence (this is the
+# acceptance question: "did the robot reach THIS point and stop").
+with tempfile.TemporaryDirectory() as goalnav_spool_dir:
+    old_spool_file = runtime.TELEMETRY_SPOOL_FILE
+    old_run_id = runtime.TELEMETRY_RUN_ID
+    runtime.TELEMETRY_SPOOL_FILE = str(Path(goalnav_spool_dir) / "policy.jsonl")
+    runtime.TELEMETRY_RUN_ID = "run-verify-goalnav"
+    goalnav_policy = runtime.PolicyRuntime()
+    goalnav_policy._model = object()
+    goalnav_policy._state = "ready"
+    goalnav_policy._loop = lambda: None
+    refused = goalnav_policy.start(1.0)
+    assert not refused.get("ok") and refused.get("error") == "goal-required", refused
+    started = goalnav_policy.start(1.0, 1.5, -0.25)
+    assert started.get("ok"), started
+    goalnav_policy.stop("test-evidence")
+    records = [json.loads(line) for line in Path(runtime.TELEMETRY_SPOOL_FILE).read_text().splitlines() if line.strip()]
+    assert len(records) == 2, records
+    started_event = records[0]["event"]
+    assert started_event.get("goalX") == 1.5 and started_event.get("goalY") == -0.25, started_event
+    runtime.TELEMETRY_SPOOL_FILE = old_spool_file
+    runtime.TELEMETRY_RUN_ID = old_run_id
+runtime._read_telemetry = old_telemetry
+runtime.EXPECTED_OBS_DIM, runtime.EXPECTED_ACTION_DIM = old_dims
+runtime.OBSERVATION_LAYOUT = old_layout
+runtime.ORIGINBOT_GOAL_X, runtime.ORIGINBOT_GOAL_Y = old_goal
+
 # Session evidence must be durable in the state snapshot even when the loop is
 # replaced by a test double.  This protects the board → Run reconciliation
 # contract without requiring ROS or an ONNX provider on CI.

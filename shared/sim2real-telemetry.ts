@@ -68,6 +68,19 @@ export interface Sim2RealRunMetrics {
    * means the backend did not report it (never assume GPU).
    */
   cuda?: boolean;
+  /**
+   * Server-rendered MP4 of the run's camera frames (a rendering of accepted
+   * evidence, not new evidence). Present only after POST /runs/:id/replay-video
+   * rendered successfully; the sha256 is re-verified on every serve.
+   */
+  replayVideo?: {
+    sha256: string;
+    sizeBytes: number;
+    frameCount: number;
+    fps: number;
+    durationSeconds: number;
+    renderedAt: string;
+  };
 }
 
 /**
@@ -211,6 +224,9 @@ export interface Sim2RealTelemetryBoardSessionEvent {
   mock?: boolean;
   adapterId?: string;
   controlHz?: number;
+  /** Session goal in odom absolute coordinates (goalnav contracts). */
+  goalX?: number;
+  goalY?: number;
   /** Model fingerprint of the artifact that was active during the session. */
   model?: {
     sha256?: string;
@@ -288,6 +304,10 @@ export interface Sim2RealBoardSessionSummary {
   mock?: boolean;
   adapterId?: string;
   controlHz?: number;
+  /** Session goal in odom absolute coordinates (goalnav contracts). */
+  goalX?: number;
+  /** Session goal in odom absolute coordinates (goalnav contracts). */
+  goalY?: number;
   model?: Sim2RealTelemetryBoardSessionEvent['model'];
   deviceId?: string;
   /** True only when every contributing chunk was server-attested. */

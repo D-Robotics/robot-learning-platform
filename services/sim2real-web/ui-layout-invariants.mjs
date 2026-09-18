@@ -346,7 +346,10 @@ export function assertStyleInvariants(publicDir) {
   // override pair (.workspace-notice-copy span base + its 720px media rule)
   // that mirrors the existing .workspace-status-copy span pattern in the same
   // maturity-ux layer. No new layer, no new component family.
-  const CROSS_LAYER_BUDGET = 306;
+  // 306 → 312 (2026-09-18): the Agent drawer v2 refinement extends the existing
+  // pro-skin component layer with six intentional responsive overrides for the
+  // conversation-first layout. No new layer or component family was added.
+  const CROSS_LAYER_BUDGET = 312;
   const appCss = sheets.find((sh) => sh.file === 'app.css');
   if (appCss) {
     const bannerRe = /\/\* =+ ([a-z-]+\.css) —/g;

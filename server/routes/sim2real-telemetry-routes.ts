@@ -20,12 +20,19 @@ import { requestOwnsDevice } from '../sim2real/standalone-adapters.js';
 import { adviseRetraining } from '../sim2real/retraining-advisor.js';
 import { buildBoardSessions } from '../sim2real/board-sessions.js';
 import {
+  planReplayVideo,
+  readReplayVideo,
+  renderReplayVideo,
+  replayVideoPath,
+} from '../sim2real/replay-video.js';
+import {
   appendSim2RealTelemetryWithResult,
   createSim2RealEvaluationWithResult,
   evaluateSim2RealRun,
   getSim2RealRun,
   getSim2RealModel,
   listSim2RealTelemetry,
+  updateSim2RealRun,
   SIM2REAL_TELEMETRY_RECORD_CAP,
 } from '../sim2real/sim2real-store.js';
 import type { Sim2RealAuthPort } from '../sim2real/sim2real-auth.js';
@@ -390,6 +397,21 @@ function normalizeTelemetryBoardSessionEvent(
     );
     if (controlHz.error) return { error: controlHz.error };
     event.controlHz = controlHz.value;
+  }
+  // Session goal (odom absolute coordinates) for goalnav contracts: task
+  // evidence for the acceptance question "reach this point and stop", not a
+  // control value, so only finiteness is enforced.
+  for (const field of ['goalX', 'goalY'] as const) {
+    if (source[field] == null) continue;
+    const goal = boundedEventNumber(
+      source[field],
+      `samples[${index}].event.${field}`,
+      -1_000,
+      1_000,
+      false,
+    );
+    if (goal.error) return { error: goal.error };
+    event[field] = goal.value;
   }
   if (source.mock != null) {
     if (typeof source.mock !== 'boolean') {
@@ -1451,6 +1473,148 @@ export function registerSim2RealTelemetryRoutes(
         .flatMap((chunk) => chunk.samples || [])
         .filter((sample) => !sample.event);
       response.json({ ok: true, runId, replay: evaluation.replay, evaluation, frames });
+    }),
+  );
+
+  /**
+   * POST /runs/:id/replay-video — render the run's camera frames into an MP4.
+   *
+   * The video is a rendering of already-accepted evidence, not new evidence:
+   * frames come from the same chunks the replay endpoint serves, and only a
+   * single-source, attested board run qualifies (mixed or imported runs fail
+   * closed with the reason). The result records the digest and frame count in
+   * the run's metrics block; the bytes are re-verified on every serve.
+   */
+  router.post(
+    api('/runs/:id/replay-video'),
+    wrapAsync(async (request, response) => {
+      const owner = deps.requestOwner(request, response);
+      if (owner === null) return;
+      noStore(response);
+      const runId = String(request.params.id || '').trim();
+      const run = await getSim2RealRun(runId, owner);
+      if (!run) {
+        response.status(404).json({
+          ok: false,
+          error: 'SIM2REAL_RUN_NOT_FOUND',
+          message: '运行记录不存在，或不属于当前账号。',
+        });
+        return;
+      }
+      const telemetry = await listSim2RealTelemetry(runId, owner, SIM2REAL_TELEMETRY_RECORD_CAP);
+      const ordered = [...telemetry].sort(
+        (left, right) =>
+          (left.sequence ?? Number.MAX_SAFE_INTEGER) -
+            (right.sequence ?? Number.MAX_SAFE_INTEGER) ||
+          left.receivedAt.localeCompare(right.receivedAt),
+      );
+      const sources = [...new Set(ordered.map((record) => record.source))];
+      const attested = ordered.length > 0 && ordered.every((record) => record.attested === true);
+      if (!(sources.length === 1 && sources[0] === 'board-agent' && attested)) {
+        sendApiError(
+          response,
+          409,
+          'SIM2REAL_REPLAY_VIDEO_NOT_AVAILABLE',
+          '只有单来源且全部 attested 的板端运行才能导出视频；混合来源或导入运行拒绝导出。',
+          { retryable: false, details: { sources, attested } },
+        );
+        return;
+      }
+      const samples = ordered
+        .flatMap((chunk) => chunk.samples || [])
+        .filter((sample) => !sample.event);
+      const plan = planReplayVideo(samples);
+      if (!plan.ok) {
+        sendApiError(response, 409, 'SIM2REAL_REPLAY_VIDEO_NOT_AVAILABLE', plan.message, {
+          retryable: false,
+          details: { code: plan.code },
+        });
+        return;
+      }
+      const target = replayVideoPath(runId);
+      if (!target) {
+        response.status(400).json({ ok: false, error: 'SIM2REAL_RUN_ID_INVALID' });
+        return;
+      }
+      const rendered = await renderReplayVideo(plan, target);
+      if (!rendered.ok) {
+        sendApiError(response, 503, 'SIM2REAL_REPLAY_VIDEO_RENDER_FAILED', rendered.message, {
+          retryable: true,
+          details: { code: rendered.code },
+        });
+        return;
+      }
+      const previous = run.metrics ?? {
+        contractValid: true,
+        observationSize: 0,
+        actionSize: 0,
+      };
+      const metrics: typeof previous = {
+        ...previous,
+        replayVideo: {
+          sha256: rendered.sha256,
+          sizeBytes: rendered.sizeBytes,
+          frameCount: rendered.frameCount,
+          fps: rendered.fps,
+          durationSeconds: rendered.durationSeconds,
+          renderedAt: new Date().toISOString(),
+        },
+      };
+      await updateSim2RealRun(runId, { metrics }, owner);
+      response.json({
+        ok: true,
+        runId,
+        video: {
+          sha256: rendered.sha256,
+          sizeBytes: rendered.sizeBytes,
+          frameCount: rendered.frameCount,
+          fps: rendered.fps,
+          durationSeconds: rendered.durationSeconds,
+          url: `/sim2real/runs/${encodeURIComponent(runId)}/replay-video`,
+        },
+      });
+    }),
+  );
+
+  /**
+   * GET /runs/:id/replay-video — the rendered MP4 bytes, digest-verified.
+   * Served only when the run's metrics carry a replay video record whose
+   * digest matches the bytes on disk; anything else is 404 with the honest
+   * reason (never a substitute placeholder).
+   */
+  router.get(
+    api('/runs/:id/replay-video'),
+    wrapAsync(async (request, response) => {
+      const owner = deps.requestOwner(request, response);
+      if (owner === null) return;
+      noStore(response);
+      const runId = String(request.params.id || '').trim();
+      const run = await getSim2RealRun(runId, owner);
+      if (!run) {
+        response.status(404).json({
+          ok: false,
+          error: 'SIM2REAL_RUN_NOT_FOUND',
+          message: '运行记录不存在，或不属于当前账号。',
+        });
+        return;
+      }
+      const meta = run.metrics?.replayVideo as { sha256?: unknown } | undefined;
+      const sha256 = typeof meta?.sha256 === 'string' ? meta.sha256 : '';
+      const video = sha256 ? await readReplayVideo(runId, sha256) : null;
+      if (!video) {
+        response.status(404).json({
+          ok: false,
+          error: 'SIM2REAL_REPLAY_VIDEO_NOT_RENDERED',
+          message: '该运行尚未导出视频（或视频已失效）；先 POST /runs/:id/replay-video 渲染。',
+        });
+        return;
+      }
+      response.status(200);
+      response.setHeader('content-type', 'video/mp4');
+      response.setHeader('content-length', String(video.sizeBytes));
+      response.setHeader('x-replay-video-sha256', sha256);
+      response.setHeader('accept-ranges', 'none');
+      response.end(video.bytes);
     }),
   );
   router.get(

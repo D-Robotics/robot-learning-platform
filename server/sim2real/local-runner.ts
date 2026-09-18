@@ -363,3 +363,100 @@ export async function fetchLocalRunTelemetry(input: {
     clearTimeout(timer);
   }
 }
+
+/**
+ * Fetch a local-worker run's incremental engine log lines (GET
+ * /runs/:id/logs?after=N). The worker numbers lines in arrival order and
+ * bounds the ring, so this returns only the new tail plus cursor state.
+ * Returns null for any transport failure or non-2xx — the log panel must
+ * fail closed (show nothing new) rather than guessing at a gap.
+ */
+export async function fetchLocalRunLogs(input: {
+  /** The worker gates every /runs/:id route on the owning account. */
+  accountId: string;
+  externalRunId: string;
+  after?: number;
+  fetchImpl?: typeof fetch;
+  runnerUrl?: string;
+  runnerToken?: string;
+  timeoutMs?: number;
+}): Promise<{
+  total: number;
+  retainedFrom: number;
+  truncated: boolean;
+  lines: { n: number; stream: string; text: string }[];
+} | null> {
+  const accountId = safeAccountId(input.accountId);
+  let runnerUrl: string;
+  try {
+    runnerUrl = normalizeRunnerUrl(
+      input.runnerUrl ?? process.env.RDK_SIM2REAL_LOCAL_RUNNER_URL ?? '',
+      { localHttp: true },
+    );
+  } catch {
+    return null;
+  }
+  const controller = new AbortController();
+  const timer = setTimeout(
+    () => controller.abort(),
+    Math.min(Math.max(input.timeoutMs ?? 15_000, 1000), 60_000),
+  );
+  try {
+    const token = String(
+      input.runnerToken ?? process.env.RDK_SIM2REAL_LOCAL_RUNNER_TOKEN ?? '',
+    ).trim();
+    if (localRunnerTokenRequired(runnerUrl) && !localRunnerTokenUsable(token)) return null;
+    // Same /train-suffix convention as the artifact and telemetry fetches:
+    // /runs/:id routes live at the worker root.
+    const parsedRunner = new URL(runnerUrl);
+    const runnerPath = parsedRunner.pathname.replace(/\/+$/, '');
+    if (runnerPath.endsWith('/train')) parsedRunner.pathname = runnerPath.slice(0, -6);
+    const after =
+      Number.isSafeInteger(input.after) && Number(input.after) >= 0 ? Number(input.after) : 0;
+    const response = await (input.fetchImpl ?? fetch)(
+      `${parsedRunner.toString().replace(/\/+$/, '')}/runs/${encodeURIComponent(input.externalRunId)}/logs?after=${after}`,
+      {
+        method: 'GET',
+        headers: {
+          accept: 'application/json',
+          'x-sim2real-account': accountId,
+          ...(token ? { authorization: `Bearer ${token}` } : {}),
+        },
+        redirect: 'error',
+        signal: controller.signal,
+      },
+    );
+    if (!response.ok) return null;
+    const payload: unknown = await response.json();
+    if (!payload || typeof payload !== 'object' || Array.isArray(payload)) return null;
+    const record = payload as Record<string, unknown>;
+    const total = Number(record.total);
+    const retainedFrom = Number(record.retainedFrom);
+    if (!Number.isSafeInteger(total) || total < 0) return null;
+    if (!Number.isSafeInteger(retainedFrom) || retainedFrom < 0) return null;
+    const rawLines = Array.isArray(record.lines) ? record.lines : [];
+    if (rawLines.length > 600) return null;
+    const lines: { n: number; stream: string; text: string }[] = [];
+    for (const raw of rawLines) {
+      if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
+      const line = raw as Record<string, unknown>;
+      const n = Number(line.n);
+      const stream = String(line.stream ?? '');
+      const lineText = String(line.text ?? '');
+      if (!Number.isSafeInteger(n) || n < 1) return null;
+      if (stream !== 'stdout' && stream !== 'stderr') return null;
+      if (!lineText || lineText.length > 2000) return null;
+      lines.push({ n, stream, text: lineText });
+    }
+    return {
+      total,
+      retainedFrom,
+      truncated: record.truncated === true,
+      lines,
+    };
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(timer);
+  }
+}

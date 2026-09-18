@@ -447,10 +447,11 @@ GOAL_NAV_OBS = {
     # 8D: x, y, sin(yaw), cos(yaw), dx, dy, v, w — identical to the board's
     # native OriginBot layout (board-policy-runtime.py, 8==obs/2==act path).
     "originbot-imu-odom-v1": 8,
-    # 42D: [gyro(3), gravity(3), last action(2), goal delta(2), twist(2),
-    # zeros(30)] — the board's generic head ([gyro, projected_gravity] real,
-    # remaining filled left-to-right) with task extras zero-padded away on
-    # hardware exactly as obsSlots reports.
+    # 42D: [gyro(3), gravity(3), last action(2), goal delta(2, body frame),
+    # twist(2), zeros(30)] — the board's goalnav path fills gyro/gravity from
+    # real IMU, goal delta from /odom + goalX/goalY, twist from /odom, and
+    # last_action from the previous published command; a session without an
+    # explicit goal is refused (fail-closed, never zero-filled).
     "imu-gravity-v1": 42,
 }
 GOAL_NAV_ACTION = 2  # diff-drive: [linear, angular] in normalized units

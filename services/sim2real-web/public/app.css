@@ -4332,9 +4332,15 @@ body.is-loading .app-shell {
 .agent-message-actions { display:flex; justify-content:flex-end; margin-top:6px; }
 .agent-message-copy { border:0; padding:2px 6px; border-radius:5px; color:var(--muted); background:transparent; font-size:12px; cursor:pointer; }
 .agent-message-copy:hover { color:var(--accent-text); background:var(--accent-soft); }
+.agent-message-provenance { display:block; margin-top:4px; color:var(--muted); font-size:12px; }
 .agent-chat-typing { display:flex; align-items:center; gap:8px; margin:0 0 10px; padding:8px 10px; color:var(--muted); font-size:12px; }
 .agent-chat-typing i { color:var(--accent-text); font-style:normal; letter-spacing:3px; animation:agent-typing-pulse 1.2s ease-in-out infinite; }
 @keyframes agent-typing-pulse { 0%,100% { opacity:.3; } 50% { opacity:1; } }
+.agent-approval-card { margin:8px 0 10px; padding:10px; border:1px solid var(--amber-text); border-radius:10px; background:var(--panel-soft); }
+.agent-approval-card strong { color:var(--amber-text); }
+.agent-approval-card p { margin:4px 0 8px; font-size:12px; line-height:1.5; }
+.agent-approval-actions { display:flex; gap:8px; flex-wrap:wrap; }
+.agent-approval-card.is-approved, .agent-approval-card.is-cancelled { opacity:.75; }
 .agent-chat-side { display:grid; gap:10px; }
 .agent-export-session { border:1px solid var(--line); border-radius:8px; padding:8px 10px; color:var(--muted-strong); background:transparent; font-size:12px; cursor:pointer; }
 .agent-export-session:hover { color:var(--accent-text); border-color:var(--line-strong); background:var(--accent-soft); }
@@ -5940,6 +5946,18 @@ body.agent-chat-open .agent-chat-composer input { min-height: 44px; border-color
 .replay-player{margin-top:16px;padding:12px 16px;border:1px solid var(--line-strong);border-radius:12px;background:var(--panel)}
 .replay-player-heading,.replay-player-meta{display:flex;justify-content:space-between;align-items:center;gap:12px}.replay-player-heading strong{font-size:14px}.replay-player-heading span,.replay-player-meta{color:var(--muted);font-size:12px}
 .replay-player-controls{display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin:12px 0}.replay-player-controls select{min-height:30px}.replay-speed{display:inline-flex;align-items:center;gap:4px;color:var(--muted);font-size:12px}.replay-player input[type=range]{width:100%;accent-color:var(--accent)}.replay-player-meta{margin-top:4px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace}.replay-player .small-note{margin:8px 0 0}
+.replay-camera{margin:12px 0 0}
+.replay-camera canvas{max-width:100%;height:auto;border-radius:8px;border:1px solid var(--line);display:block;background:var(--panel-soft)}
+
+/* Server-rendered replay MP4: a rendering of accepted camera frames. The
+   video element sizes itself to its intrinsic aspect ratio and stays capped
+   to the panel width. */
+.replay-video-block{margin:12px 0 0;padding-top:10px;border-top:1px dashed var(--line-strong)}
+.replay-video-heading{display:flex;align-items:baseline;justify-content:space-between;gap:8px;margin-bottom:6px}
+.replay-video-heading strong{font-size:12px}
+.replay-video-block video{width:100%;max-height:360px;border-radius:8px;border:1px solid var(--line);display:block;background:var(--panel-soft)}
+.replay-video-controls{display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin-top:8px}
+.replay-video-block .small-note{margin:6px 0 0}
 
 /* Browser ONNX policy trial: microduck-style in-browser inference driving the
    embedded simulator. Same control rhythm as the replay player. */
@@ -7928,4 +7946,172 @@ body.agent-chat-open .agent-chat-composer .button-primary {
   color: var(--muted);
   font-size: 12px;
   line-height: 1.55;
+}
+
+/* ---- Agent drawer v2: conversation first, inspector on demand ----------
+   The previous drawer gave three equal-weight columns to history, chat and
+   empty execution panels. At a laptop width that made the actual conversation
+   feel narrow while the right rail looked like unfinished placeholders. Keep
+   the inspector available, but let the conversation own the visual weight and
+   make empty states compact until a task produces real evidence. */
+body.agent-chat-open .agent-chat-panel {
+  right: 16px;
+  bottom: 72px;
+  width: min(1120px, calc(100vw - 32px));
+  height: min(760px, calc(100vh - 88px));
+  max-height: min(760px, calc(100vh - 88px));
+  border-radius: 20px;
+}
+
+body.agent-chat-open .agent-chat-heading {
+  min-height: 64px;
+  padding: 16px 24px;
+}
+
+body.agent-chat-open .agent-chat-layout {
+  grid-template-columns: 168px minmax(0, 1fr) 272px;
+  min-height: 0;
+}
+
+.agent-chat-sessions {
+  min-width: 0;
+  overflow: auto;
+  padding: 16px 10px;
+}
+
+.agent-export-session {
+  width: 100%;
+  margin-top: 8px;
+  text-align: left;
+}
+
+body.agent-chat-open .agent-chat-messages {
+  padding: 24px 24px;
+  scrollbar-gutter: stable;
+}
+
+body.agent-chat-open .agent-chat-message {
+  max-width: min(680px, 88%);
+  margin-bottom: 16px;
+  padding: 12px 16px;
+  line-height: 1.58;
+}
+
+body.agent-chat-open .agent-chat-message-user {
+  max-width: min(560px, 82%);
+}
+
+body.agent-chat-open .agent-chat-side {
+  grid-template-rows: minmax(0, 1fr) auto auto;
+  min-width: 0;
+  padding: 12px;
+}
+
+body.agent-chat-open .agent-chat-side > * {
+  max-height: none;
+  min-width: 0;
+}
+
+.agent-empty-state {
+  display: grid;
+  gap: 4px;
+  color: var(--muted);
+}
+
+.agent-empty-state strong {
+  color: var(--muted-strong);
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.agent-empty-state small {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+body.agent-chat-open .agent-chat-side > .agent-plan-card:has(> .agent-empty-state),
+body.agent-chat-open .agent-chat-side > .agent-evidence:has(> .agent-empty-state),
+body.agent-chat-open .agent-chat-side > .agent-event-log:has(> .agent-empty-state),
+body.agent-chat-open .agent-chat-side > .agent-evidence:has(> .empty-inline),
+body.agent-chat-open .agent-chat-side > .agent-event-log:has(> .empty-inline) {
+  display: flex;
+  align-items: center;
+  min-height: 58px;
+  max-height: 58px;
+  padding: 10px 12px;
+}
+
+body.agent-chat-open .agent-chat-side:has(> .agent-plan-card > .agent-empty-state) {
+  grid-template-rows: auto auto auto;
+  align-content: start;
+}
+
+body.agent-chat-open .agent-message-feedback {
+  display: none !important;
+}
+
+body.agent-chat-open .agent-prompt-chips {
+  flex-wrap: nowrap;
+  gap: 8px;
+  padding: 10px 16px;
+  overflow-x: auto;
+  border-top: 1px solid var(--line);
+  background: var(--panel);
+  scrollbar-width: thin;
+}
+
+body.agent-chat-open .agent-prompt-chip {
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
+
+body.agent-chat-open .agent-chat-composer {
+  padding: 12px 16px 16px;
+}
+
+@media (max-width: 860px) {
+  body.agent-chat-open .agent-chat-panel {
+    right: 10px;
+    bottom: 62px;
+    width: calc(100vw - 20px);
+    height: calc(100vh - 76px);
+    max-height: calc(100vh - 76px);
+    border-radius: 16px;
+  }
+
+  body.agent-chat-open .agent-chat-layout {
+    grid-template-columns: minmax(0, 1fr) 236px;
+  }
+
+  body.agent-chat-open .agent-chat-sessions {
+    display: none;
+  }
+}
+
+@media (max-width: 640px) {
+  body.agent-chat-open .agent-chat-layout {
+    grid-template-columns: 1fr;
+    grid-template-rows: minmax(0, 1fr) auto;
+  }
+
+  body.agent-chat-open .agent-chat-side {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    grid-template-rows: auto;
+    max-height: 98px;
+    padding: 8px;
+    border-top: 1px solid var(--line);
+    border-left: 0;
+  }
+
+  body.agent-chat-open .agent-chat-side > * {
+    max-height: 82px;
+    padding: 8px;
+  }
+
+  body.agent-chat-open .agent-chat-message,
+  body.agent-chat-open .agent-chat-message-user {
+    max-width: 94%;
+  }
 }

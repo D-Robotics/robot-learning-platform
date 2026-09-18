@@ -40,6 +40,7 @@ def load_agent_module(
     profile_path=None,
     bind_host="127.0.0.1",
     token="test-token",
+    enable_policy=False,
 ):
     """Spec-load the agent with a clean, offline environment.
 
@@ -55,6 +56,7 @@ def load_agent_module(
         "RDK_SIM2REAL_BOARD_AGENT_BIND_HOST": bind_host,
         "RDK_SIM2REAL_BOARD_AGENT_PORT": "19100",
         "RDK_SIM2REAL_ADAPTER_CONFIG": profile_path or "",
+        "RDK_SIM2REAL_BOARD_AGENT_ENABLE_POLICY": "1" if enable_policy else "",
     }
     with mock.patch.dict(os.environ, env, clear=True):
         spec = importlib.util.spec_from_file_location(
@@ -663,6 +665,76 @@ def _optional_onnx_stack():
     except ImportError:
         return None
     return True
+
+
+class PolicyStartGoalGateContract(unittest.TestCase):
+    """The agent's policy-start gate must refuse goal-less goalnav sessions.
+
+    A goalnav policy (8D native or 42D imu-gravity-v1) started without a goal
+    runs blind to its target — the root cause of the 2026-09-14
+    "direction=0 drives straight" incident. The agent reads the loaded
+    model's contract from the runtime state file and refuses BEFORE the
+    file-protocol round trip; with a goal it forwards direction + goalX/goalY
+    so the runtime's session carries the task target as evidence.
+    """
+
+    def _gate_result(self, input_dim, direction, goal_x=None, goal_y=None):
+        agent = load_agent_module(enable_drive=True, enable_policy=True)
+        state = {
+            "ok": True,
+            "state": "ready",
+            "model": {"path": "fixture.onnx", "inputDim": input_dim, "outputDim": 2},
+        }
+        sent = []
+
+        def fake_send(op, **fields):
+            sent.append((op, fields))
+            return {"ok": True, "state": "running"}
+
+        with mock.patch.object(agent, "_policy_read_state", return_value=state), \
+                mock.patch.object(agent, "_stop_drive_publisher"), \
+                mock.patch.object(agent, "_policy_send", side_effect=fake_send):
+            result = agent.policy_start(direction, goal_x, goal_y)
+        return result, sent
+
+    def test_goalnav_42d_refuses_without_goal(self):
+        result, sent = self._gate_result(42, 1.0)
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["error"], "goal-required")
+        self.assertIn("42D goalnav", result["message"])
+        # Refusal happens before any file-protocol round trip.
+        self.assertEqual(sent, [])
+
+    def test_goalnav_42d_forwards_direction_and_goal(self):
+        result, sent = self._gate_result(42, 1.0, 1.5, -0.25)
+        self.assertTrue(result.get("ok"), result)
+        self.assertEqual(len(sent), 1)
+        op, fields = sent[0]
+        self.assertEqual(op, "start")
+        self.assertEqual(fields["direction"], 1.0)
+        self.assertEqual(fields["goalX"], 1.5)
+        self.assertEqual(fields["goalY"], -0.25)
+
+    def test_native_8d_keeps_its_goal_gate(self):
+        result, sent = self._gate_result(8, 1.0)
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["error"], "goal-required")
+        self.assertIn("8D OriginBot", result["message"])
+        self.assertEqual(sent, [])
+
+    def test_non_goal_contract_needs_no_goal(self):
+        result, sent = self._gate_result(61, 0.5)
+        self.assertTrue(result.get("ok"), result)
+        self.assertEqual(sent, [("start", {"direction": 0.5})])
+
+    def test_half_or_non_finite_goal_is_rejected(self):
+        result, sent = self._gate_result(42, 1.0, 1.5)
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["error"], "invalid-goal")
+        result, sent = self._gate_result(42, 1.0, float("nan"), 0.0)
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["error"], "invalid-goal")
+        self.assertEqual(sent, [])
 
 
 class PolicyRuntimeInputBindingContract(unittest.TestCase):

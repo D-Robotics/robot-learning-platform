@@ -37,6 +37,14 @@ const MAX_BODY = 2 * 1024 * 1024;
 const MAX_RESULT = 1 * 1024 * 1024;
 const MAX_ARTIFACT_BYTES = 10_000_000_000;
 const MAX_LOG = 64 * 1024;
+// Line-level engine log capture: the same stdout/stderr streams the tail
+// buffers feed a bounded line ring, so /runs/:id/logs can serve incremental
+// lines with a cursor while training runs (and the final log after it ends).
+// The ring shares the tail's 64 KiB ceiling so a status payload or a restart
+// recovery can never balloon because an engine got chatty.
+const MAX_LOG_LINES = 600;
+const MAX_LOG_LINE_CHARS = 2000;
+const MAX_LOG_RING_BYTES = MAX_LOG;
 // Live progress points are bounded so a status poll can never grow unbounded.
 // Engines print one line every ~iterations/8, so 512 points covers even the
 // 600-iteration high-vram profile with room to spare.
@@ -188,6 +196,44 @@ function scrubLog(value, max = 2000) {
   return text(value, max)
     .replace(/(Bearer\s+)[^\s]+/gi, '$1[redacted]')
     .replace(/((?:token|secret|password|api[_-]?key)\s*[=:]\s*)[^\s,;]+/gi, '$1[redacted]');
+}
+
+/**
+ * Append one engine log line to the job's bounded ring. Sequence numbers are
+ * assigned in worker arrival order (stdout and stderr interleave at event
+ * time, which is the only honest ordering available). Lines are scrubbed at
+ * capture time, not at read time, so a secret printed mid-run is redacted
+ * even if the process is killed before finish().
+ */
+function appendLogLine(job, stream, rawLine) {
+  const lineText = scrubLog(String(rawLine), MAX_LOG_LINE_CHARS);
+  if (!lineText.trim()) return;
+  const ring = (job.logRing ??= []);
+  const line = { n: (job.logSeq ?? 0) + 1, stream, text: lineText };
+  job.logSeq = line.n;
+  job.logBytes = (job.logBytes ?? 0) + Buffer.byteLength(lineText, 'utf8');
+  ring.push(line);
+  while (ring.length > MAX_LOG_LINES || (job.logBytes > MAX_LOG_RING_BYTES && ring.length > 1)) {
+    const evicted = ring.shift();
+    job.logBytes -= Buffer.byteLength(evicted.text, 'utf8');
+  }
+}
+
+/**
+ * Split a stream chunk into complete lines, keeping the trailing partial for
+ * the next chunk. A stream that never emits a newline cannot grow the
+ * partial unbounded: the front of an oversized unfinished line is dropped,
+ * which keeps the ring a bounded representation of a pathological engine.
+ */
+function feedLogStream(job, stream, chunk) {
+  const partials = (job.logPartials ??= {});
+  let buffer = (partials[stream] || '') + String(chunk);
+  let newline;
+  while ((newline = buffer.indexOf('\n')) >= 0) {
+    appendLogLine(job, stream, buffer.slice(0, newline));
+    buffer = buffer.slice(newline + 1);
+  }
+  partials[stream] = buffer.slice(-MAX_LOG_LINE_CHARS);
 }
 
 function json(response, status, payload) {
@@ -469,10 +515,18 @@ function publicJob(job) {
     timeout: _timeout,
     pid: _pid,
     progress: _progress,
+    logRing: _logRing,
+    logSeq: _logSeq,
+    logBytes: _logBytes,
+    logPartials: _logPartials,
     ...visible
   } = job;
   const progress = safeProgress(job);
   if (progress) visible.progress = progress;
+  // Log lines travel on their own cursor endpoint, not on every status poll:
+  // the status payload stays lean and the logs route serves only the delta.
+  visible.logLines = Array.isArray(job.logRing) ? job.logRing.length : 0;
+  visible.logTotal = Number.isSafeInteger(job.logSeq) ? job.logSeq : 0;
   if (visible.status === 'queued') {
     const position = queuedJobs.indexOf(job);
     visible.queuePosition = position >= 0 ? position + 1 : null;
@@ -770,6 +824,7 @@ async function launch(job, config) {
   let stderr = '';
   child.stdout.on('data', (chunk) => {
     stdout = (stdout + String(chunk)).slice(-MAX_LOG);
+    feedLogStream(job, 'stdout', chunk);
     // Live progress is parsed from the same stream the tail captures, so the
     // status route reflects training curve points while the engine runs.
     try {
@@ -780,6 +835,7 @@ async function launch(job, config) {
   });
   child.stderr.on('data', (chunk) => {
     stderr = (stderr + String(chunk)).slice(-MAX_LOG);
+    feedLogStream(job, 'stderr', chunk);
   });
   const timeoutMs = Math.min(
     Math.max(Number(process.env.RDK_SIM2REAL_TRAIN_TIMEOUT_MS || 86_400_000), 1000),
@@ -795,6 +851,13 @@ async function launch(job, config) {
 async function finish(job, code, stdout, stderr) {
   if (job.finishedAt || finalizingJobs.has(job)) return;
   finalizingJobs.add(job);
+  // The process is done, so no chunk can complete a partial line anymore:
+  // flush what remains as the final line of each stream.
+  for (const stream of Object.keys(job.logPartials || {})) {
+    const partial = job.logPartials[stream];
+    if (partial) appendLogLine(job, stream, partial);
+  }
+  job.logPartials = undefined;
   if (job.timeout) clearTimeout(job.timeout);
   const childPid = job.pid;
   for (const child of activeChildren) {
@@ -1210,6 +1273,67 @@ async function handleTelemetry(request, response) {
   stream.pipe(response);
 }
 
+/**
+ * GET /runs/:id/logs?after=N — incremental engine stdout/stderr lines.
+ *
+ * Lines are numbered in worker arrival order; `after` is a cursor so the
+ * platform can poll only the new tail instead of re-reading the whole log.
+ * The ring is bounded (64 KiB / 600 lines), so a cursor from far in the past
+ * is answered from the oldest retained line with `truncated: true` rather
+ * than inventing the gap. Any job status may be queried: queued runs simply
+ * have no lines yet, and terminal runs keep their final log — which is the
+ * engine's own record of why it failed when it did.
+ */
+async function handleLogs(request, response) {
+  await ensureJobsLoaded();
+  let url;
+  try {
+    url = new URL(request.url || '/', 'http://localhost');
+  } catch {
+    json(response, 400, { ok: false, error: 'invalid_log_request' });
+    return;
+  }
+  const runId = decodeURIComponent(url.pathname.slice('/runs/'.length, -'/logs'.length));
+  const job = jobs.get(runId);
+  if (!job) {
+    json(response, 404, { ok: false, error: 'run_not_found' });
+    return;
+  }
+  let owner;
+  try {
+    owner = accountId(request, {});
+  } catch {
+    json(response, 401, { ok: false, error: 'account_required' });
+    return;
+  }
+  if (owner !== job.accountId) {
+    json(response, 404, { ok: false, error: 'run_not_found' });
+    return;
+  }
+  const afterRaw = Number(url.searchParams.get('after'));
+  const after = Number.isSafeInteger(afterRaw) && afterRaw >= 0 ? afterRaw : 0;
+  const ring = Array.isArray(job.logRing) ? job.logRing : [];
+  const total = Number.isSafeInteger(job.logSeq) ? job.logSeq : 0;
+  const retainedFrom = ring.length ? ring[0].n : 0;
+  const lines = ring.filter((line) => line && line.n > after).slice(0, MAX_LOG_LINES);
+  const truncated = after + 1 < retainedFrom;
+  json(response, 200, {
+    ok: true,
+    runId,
+    status: job.status,
+    total,
+    retainedFrom,
+    ...(truncated
+      ? { truncated: true, message: '请求的游标早于保留窗口，仅返回最近保留的日志行。' }
+      : {}),
+    lines: lines.map((line) => ({
+      n: line.n,
+      stream: line.stream === 'stderr' ? 'stderr' : 'stdout',
+      text: line.text,
+    })),
+  });
+}
+
 export function createLocalTrainingWorkerServer() {
   return createServer(async (request, response) => {
     try {
@@ -1274,9 +1398,17 @@ export function createLocalTrainingWorkerServer() {
       if (
         request.method === 'GET' &&
         request.url?.startsWith('/runs/') &&
-        request.url.endsWith('/telemetry')
+        request.url.split('?')[0].endsWith('/telemetry')
       ) {
         await handleTelemetry(request, response);
+        return;
+      }
+      if (
+        request.method === 'GET' &&
+        request.url?.startsWith('/runs/') &&
+        request.url.split('?')[0].endsWith('/logs')
+      ) {
+        await handleLogs(request, response);
         return;
       }
       if (request.method === 'GET' && request.url?.startsWith('/runs/')) {

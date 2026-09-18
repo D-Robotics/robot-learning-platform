@@ -57,7 +57,16 @@ export type Sim2RealErrorCode =
   | 'sim2real_robogo_runner_status_invalid'
   | 'sim2real_robogo_runner_run_id_missing'
   | 'sim2real_robogo_run_id_invalid'
-  | 'sim2real_robogo_status_url_invalid';
+  | 'sim2real_robogo_status_url_invalid'
+  // Browser-relay (local GPU agent) protocol failures. Like the runner codes
+  // above, the run routes catch these and translate them into run outcomes
+  // instead of surfacing them through the storage error table.
+  | 'sim2real_relay_claim_lost'
+  | 'sim2real_relay_run_not_relaid'
+  | 'sim2real_relay_payload_invalid'
+  | 'sim2real_relay_artifact_digest_invalid'
+  | 'sim2real_relay_artifact_too_large'
+  | 'sim2real_relay_resource_forbidden';
 
 export class Sim2RealError extends Error {
   readonly code: Sim2RealErrorCode;
@@ -138,4 +147,10 @@ const SIM2REAL_ERROR_CODE_SET = new Set<string>([
   'sim2real_robogo_runner_run_id_missing',
   'sim2real_robogo_run_id_invalid',
   'sim2real_robogo_status_url_invalid',
+  'sim2real_relay_claim_lost',
+  'sim2real_relay_run_not_relaid',
+  'sim2real_relay_payload_invalid',
+  'sim2real_relay_artifact_digest_invalid',
+  'sim2real_relay_artifact_too_large',
+  'sim2real_relay_resource_forbidden',
 ]);

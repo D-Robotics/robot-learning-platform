@@ -192,11 +192,17 @@ export type Sim2RealTrainingAlgorithm = 'ppo' | 'sac';
  * (mjlab + MuJoCo Warp + rsl-rl PPO) on a CUDA worker. 'visual-ppo' and
  * 'dm-control-ppo' are the pixel-observation and dm_control-ecosystem local
  * engines, 'mjlab-rsl-rl' the reference mjlab + rsl-rl adapter, and 'act'
- * the action-chunking imitation engine — all registered on a worker through
- * RDK_SIM2REAL_TRAIN_ENGINES_JSON. Task packs may recommend an engine, an
- * explicit submission always wins, and a worker that has not registered the
- * engine fails closed instead of silently training with a different physics
- * backend.
+ * the action-chunking imitation engine. 'diffusion-policy' is the CNN
+ * action-chunking DDPM imitation engine (keeps multimodal demonstrations
+ * apart instead of averaging them), and 'smolvla' the SmolVLA reference
+ * adapter (planning/dry-run on CPU stacks, full training on a GPU worker) —
+ * all registered on a worker through RDK_SIM2REAL_TRAIN_ENGINES_JSON. The
+ * LeRobot v3 converter (engines/lerobot-converter) is a CLI format tool,
+ * deliberately NOT a training engine: it never appears here and is invoked
+ * directly when exporting/importing dataset formats. Task packs may
+ * recommend an engine, an explicit submission always wins, and a worker
+ * that has not registered the engine fails closed instead of silently
+ * training with a different physics backend.
  */
 export type Sim2RealTrainingEngine =
   | 'starter-ppo'
@@ -205,7 +211,9 @@ export type Sim2RealTrainingEngine =
   | 'dm-control-ppo'
   | 'mjlab-rsl-rl'
   | 'microduck-rl'
-  | 'act';
+  | 'act'
+  | 'diffusion-policy'
+  | 'smolvla';
 
 export interface Sim2RealTrainingSpec {
   profile: Sim2RealTrainingProfile;
@@ -402,6 +410,14 @@ export interface Sim2RealRunRecord {
   summary: string;
   launchUrl?: string;
   externalRunId?: string;
+  /**
+   * Loopback GPU agent URL driving this run (browser relay). Present when the
+   * run was dispatched through a `local-agent` compute resource: the browser,
+   * not the server, submits to the worker and syncs status/artifacts back.
+   */
+  relayAgentUrl?: string;
+  /** Last successful browser relay heartbeat (ISO timestamp). */
+  relayLastSeenAt?: string;
   /** True when a protocol-only worker, rather than a real trainer, answered. */
   mock?: boolean;
   training?: Sim2RealTrainingSpec;
@@ -663,11 +679,22 @@ export interface Sim2RealLocalWorkerIntegration {
   message: string;
 }
 
+/**
+ * Where a compute resource is driven from. `server-runner` endpoints are
+ * called by the platform server (it holds the runner token and health lease).
+ * `local-agent` endpoints point at the user's loopback GPU agent; the browser
+ * relays jobs to it, the server never connects, and no runner token is stored
+ * on the platform side.
+ */
+export type Sim2RealComputeResourceSource = 'server-runner' | 'local-agent';
+
 /** A user-owned training endpoint registered in the workspace. */
 export interface Sim2RealComputeResource {
   id: string;
   name: string;
   kind: 'local-gpu';
+  /** Defaults to `server-runner` for ledger rows written before this field. */
+  source?: Sim2RealComputeResourceSource;
   runnerUrl: string;
   tokenConfigured: boolean;
   status: 'online' | 'offline' | 'unknown';
@@ -788,6 +815,8 @@ const ALLOWED_TRAINING_ENGINES = new Set<Sim2RealTrainingEngine>([
   'mjlab-rsl-rl',
   'microduck-rl',
   'act',
+  'diffusion-policy',
+  'smolvla',
 ]);
 const SAFE_ID = /^[a-z][a-z0-9-]{1,63}$/;
 const SHA256 = /^[a-f0-9]{64}$/i;
@@ -971,7 +1000,7 @@ export function normalizeTrainingSpec(value: unknown): {
   const engine = safeText(source.engine, 32);
   if (engine && !ALLOWED_TRAINING_ENGINES.has(engine as Sim2RealTrainingEngine)) {
     errors.push(
-      'training.engine must be one of starter-ppo, mjx-ppo, visual-ppo, dm-control-ppo, mjlab-rsl-rl, microduck-rl, act',
+      'training.engine must be one of starter-ppo, mjx-ppo, visual-ppo, dm-control-ppo, mjlab-rsl-rl, microduck-rl, act, diffusion-policy, smolvla',
     );
   }
   if (errors.length) return { errors };

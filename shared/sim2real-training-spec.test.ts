@@ -30,7 +30,14 @@ describe('training spec engine routing', () => {
     // the selector is the public contract, and a 400 on submit would make the
     // option a lie. These are the repo-shipped engines registered per worker
     // via RDK_SIM2REAL_TRAIN_ENGINES_JSON.
-    for (const engine of ['visual-ppo', 'dm-control-ppo', 'mjlab-rsl-rl', 'act']) {
+    for (const engine of [
+      'visual-ppo',
+      'dm-control-ppo',
+      'mjlab-rsl-rl',
+      'act',
+      'diffusion-policy',
+      'smolvla',
+    ]) {
       const submission = normalizeTrainingSpec({ profile: 'smoke', engine });
       expect(submission.errors).toEqual([]);
       expect(submission.spec?.engine).toBe(engine);

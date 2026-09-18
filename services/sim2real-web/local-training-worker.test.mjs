@@ -166,6 +166,56 @@ try {
   assert.equal(status.progress[3].elapsedSeconds, 1.8);
   assert.match(status.progress[0].at, /^\d{4}-\d{2}-\d{2}T/);
 
+  // ---- engine log stream (line ring + cursor endpoint) ----
+  // Ownership and auth mirror the artifact gate: wrong owner 404, no auth 401.
+  const logsWrongOwner = await fetch(`${base}/runs/${encodeURIComponent(launched.runId)}/logs`, {
+    headers: { 'x-sim2real-account': 'bob', authorization: 'Bearer worker-test-token' },
+  });
+  assert.equal(logsWrongOwner.status, 404);
+  const logsNoAuth = await fetch(`${base}/runs/${encodeURIComponent(launched.runId)}/logs`);
+  assert.equal(logsNoAuth.status, 401);
+  const logsMissing = await fetch(`${base}/runs/nonexistent-run/logs`, {
+    headers: { 'x-sim2real-account': 'alice', authorization: 'Bearer worker-test-token' },
+  });
+  assert.equal(logsMissing.status, 404);
+
+  const logsResponse = await fetch(`${base}/runs/${encodeURIComponent(launched.runId)}/logs`, {
+    headers: { 'x-sim2real-account': 'alice', authorization: 'Bearer worker-test-token' },
+  });
+  assert.equal(logsResponse.status, 200);
+  const logs = await logsResponse.json();
+  assert.equal(logs.status, 'completed');
+  // Both streams are captured with worker-assigned sequence numbers, and the
+  // stderr secret line is scrubbed at capture time.
+  const stdoutLines = logs.lines.filter((line) => line.stream === 'stdout');
+  const stderrLines = logs.lines.filter((line) => line.stream === 'stderr');
+  assert.ok(stdoutLines.length >= 5, JSON.stringify(logs.lines.slice(0, 3)));
+  assert.equal(stderrLines.length, 1);
+  assert.match(stderrLines[0].text, /Bearer \[redacted\]/);
+  assert.doesNotMatch(stderrLines[0].text, /should-hide/);
+  assert.ok(
+    logs.lines.every((line, index) => index === 0 || line.n > logs.lines[index - 1].n),
+    'line sequence numbers must be strictly increasing',
+  );
+  assert.equal(logs.total, logs.lines[logs.lines.length - 1].n);
+  // Cursor semantics: after=total returns no lines; a stale cursor reports
+  // truncation instead of silently skipping the evicted prefix.
+  const logsAfterAll = await fetch(
+    `${base}/runs/${encodeURIComponent(launched.runId)}/logs?after=${logs.total}`,
+    { headers: { 'x-sim2real-account': 'alice', authorization: 'Bearer worker-test-token' } },
+  );
+  const afterAll = await logsAfterAll.json();
+  assert.equal(afterAll.lines.length, 0);
+  const logsStale = await fetch(`${base}/runs/${encodeURIComponent(launched.runId)}/logs?after=0`, {
+    headers: { 'x-sim2real-account': 'alice', authorization: 'Bearer worker-test-token' },
+  });
+  const stale = await logsStale.json();
+  assert.equal(stale.lines.length, logs.lines.length);
+  assert.notEqual(stale.truncated, true);
+  // The status payload stays lean: counts only, no embedded log text.
+  assert.equal(status.logTotal, logs.total);
+  assert.equal(status.logLines, logs.lines.length);
+
   // ---- artifact bytes endpoint (staging source for the board) ----
   const artifactWrongOwner = await fetch(
     `${base}/runs/${encodeURIComponent(launched.runId)}/artifact`,

@@ -1,0 +1,26 @@
+# Direct dependencies of the diffusion-policy (CNN action-chunking DDPM) engine.
+#
+# Pinned transitively in requirements.txt (`uv pip compile --generate-hashes`),
+# so a training run is reproducible in both halves of the provenance contract:
+# `sourceCommit` names the code and the lock names the libraries. The engine also
+# records the versions it actually imported in each result's `dependencies`
+# block, which is what `npm run verify:training-provenance` asserts. The same
+# dependency set as the act engine: the two imitation engines train with the
+# same torch/numpy stack and export with the same onnx toolchain, so one
+# interpreter setup serves both.
+#
+# Regenerate after editing this file:
+#     npm run lock:engines
+
+# Torch is pinned as the tested CPU/standard wheel. A GPU deployment installs
+# its own build from the CUDA index; that wheel is a deliberate deployment
+# choice and is recorded per-run in `dependencies.torch`.
+numpy==2.0.2
+torch==2.8.0
+onnx==1.19.1
+
+# Transitive pins. `uv pip compile` resolves these, but nothing constrains them,
+# so a fresh resolve picks up newer releases (filelock went 3.32.7 -> 4.0.0 with
+# no change to this file). Pinning here is what makes the lock a *reproducible*
+# function of this file instead of a snapshot of one resolve.
+filelock==3.32.7

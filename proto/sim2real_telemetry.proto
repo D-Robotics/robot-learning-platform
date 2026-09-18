@@ -1,0 +1,64 @@
+syntax = "proto3";
+
+package drobotics.sim2real.v1;
+
+// Device-to-platform envelope. Control-loop code must only write a fixed-size
+// sample into the board ring buffer; serialization and transport happen in the
+// background agent.
+message TelemetryEnvelope {
+  uint32 schema_version = 1;
+  string product_id = 2;
+  string contract_id = 3;
+  string project_id = 4;
+  string task_id = 5;
+  string model_artifact_id = 6;
+  string deployment_id = 7;
+  string device_id = 8;
+  string boot_id = 9;
+  string run_id = 10;
+  uint64 seq = 11;
+  uint64 source_monotonic_ns = 12;
+  int64 source_wall_time_ms = 13;
+  string frame_id = 14;
+  string units_version = 15;
+  uint32 dropped_count = 16;
+  Trigger trigger = 17;
+  Compression compression = 18;
+  bytes checksum = 19;
+  oneof payload {
+    ControlState control = 20;
+    ImuState imu = 21;
+    JointState joint = 22;
+    CameraMeta camera = 23;
+    Event event = 24;
+  }
+}
+
+enum Trigger {
+  TRIGGER_UNSPECIFIED = 0;
+  TRIGGER_PERIODIC = 1;
+  TRIGGER_FALL = 2;
+  TRIGGER_TILT = 3;
+  TRIGGER_MANUAL = 4;
+  TRIGGER_FULL_CAPTURE = 5;
+}
+
+enum Compression {
+  COMPRESSION_NONE = 0;
+  COMPRESSION_ZSTD = 1;
+}
+
+message ControlState { repeated float observation = 1; repeated float action = 2; float reward = 3; bool done = 4; bool fall = 5; }
+message ImuState { repeated float quaternion = 1; repeated float gyro = 2; repeated float linear_acceleration = 3; }
+message JointState { repeated float position = 1; repeated float velocity = 2; repeated float effort = 3; }
+message CameraMeta { uint32 width = 1; uint32 height = 2; uint32 channels = 3; string encoding = 4; }
+message Event { string name = 1; string detail = 2; }
+
+message TelemetryChunk {
+  string device_id = 1;
+  string boot_id = 2;
+  uint64 first_seq = 3;
+  uint64 last_seq = 4;
+  repeated TelemetryEnvelope samples = 5;
+  bytes sha256 = 6;
+}

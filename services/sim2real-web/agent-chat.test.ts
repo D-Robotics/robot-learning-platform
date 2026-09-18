@@ -25,6 +25,7 @@ function shell() {
       <div id="agent-event-log"></div>
       <form id="agent-chat-form">
         <input id="agent-chat-input" />
+        <button type="button" data-agent-stop hidden>停止等待</button>
         <button type="submit">发送</button>
       </form>
     </section>
@@ -180,6 +181,37 @@ describe('Agent chat browser behavior', () => {
     expect(trail[0]?.textContent).toContain('读取工作区总览');
     expect(trail[1]?.classList.contains('is-failed')).toBe(true);
     expect(trail[1]?.textContent).toContain('提交训练');
+  });
+
+  it('lets the operator stop waiting for a slow request and explains the backend boundary', async () => {
+    const fetchImpl = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (!url.endsWith('/api/sim2real/dsh/chat')) return jsonResponse({ ok: true });
+      return await new Promise<Response>((_resolve, reject) => {
+        init?.signal?.addEventListener(
+          'abort',
+          () => {
+            reject(new DOMException('The operation was aborted', 'AbortError'));
+          },
+          { once: true },
+        );
+      });
+    });
+    const window = boot(fetchImpl);
+    const input = window.document.querySelector<HTMLInputElement>('#agent-chat-input');
+    const form = window.document.querySelector<HTMLFormElement>('#agent-chat-form');
+    const stop = window.document.querySelector<HTMLButtonElement>('[data-agent-stop]');
+    if (!input || !form || !stop) throw new Error('agent chat fixture is incomplete');
+    input.value = '检查设备';
+    form.dispatchEvent(new window.Event('submit', { bubbles: true, cancelable: true }));
+    await wait(10);
+    expect(stop.hidden).toBe(false);
+    stop.click();
+    await wait(20);
+    expect(window.document.querySelector('#agent-chat-messages')?.textContent).toContain(
+      '已停止等待',
+    );
+    expect(stop.hidden).toBe(true);
   });
 
   it('traps keyboard focus in the drawer and restores the opener on close', async () => {
@@ -362,6 +394,59 @@ describe('Agent chat browser behavior', () => {
     expect(messages?.textContent).toContain('已取消');
     const picker = window.document.querySelector('.agent-plan-picker');
     expect(picker?.textContent).toContain('已取消：未执行任何步骤。');
+  });
+
+  it('requires a separate approval before a resource-affecting plan executes', async () => {
+    const executeBodies: Array<Record<string, unknown>> = [];
+    const fetchImpl = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.endsWith('/api/sim2real/dsh/chat')) return jsonResponse({ ok: false }, 503);
+      if (url.endsWith('/api/sim2real/agent/plan')) {
+        const plan = planVariants()[1].plan;
+        return jsonResponse({ ok: true, plan, variants: [planVariants()[1]] });
+      }
+      if (url.endsWith('/api/sim2real/agent/execute')) {
+        executeBodies.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
+        return jsonResponse({
+          run: {
+            id: 'run-approval-1',
+            goal: '完成仿真、GPU训练并检查 X5',
+            status: 'completed',
+            steps: [{ id: 's2', label: 'GPU 训练', status: 'completed' }],
+            evidence: [],
+          },
+        });
+      }
+      if (url.includes('/api/sim2real/agent/runs/')) {
+        return jsonResponse({
+          run: {
+            id: 'run-approval-1',
+            goal: '完成仿真、GPU训练并检查 X5',
+            status: 'completed',
+            steps: [{ id: 's2', label: 'GPU 训练', status: 'completed' }],
+            evidence: [],
+          },
+        });
+      }
+      return jsonResponse({ ok: true });
+    });
+    const window = boot(fetchImpl);
+    const input = window.document.querySelector<HTMLInputElement>('#agent-chat-input');
+    const form = window.document.querySelector<HTMLFormElement>('#agent-chat-form');
+    if (!input || !form) throw new Error('agent chat fixture is incomplete');
+    input.value = '完成 GPU 训练';
+    form.dispatchEvent(new window.Event('submit', { bubbles: true, cancelable: true }));
+    await wait(30);
+    expect(window.document.querySelector('.agent-approval-card')?.textContent).toContain(
+      '明确批准',
+    );
+    expect(executeBodies).toHaveLength(0);
+    window.document
+      .querySelector<HTMLButtonElement>('.agent-approval-card .button-primary')
+      ?.click();
+    await wait(60);
+    expect(executeBodies).toHaveLength(1);
+    expect(executeBodies[0]?.approved).toBe(true);
   });
 });
 

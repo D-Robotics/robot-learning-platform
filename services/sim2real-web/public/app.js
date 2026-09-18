@@ -344,6 +344,9 @@ const state = {
   projectId: readProjectPreference(),
   notifyEnabled: readNotifyPreference(),
   notifiedRunIds: new Set(),
+  // Engine log stream (run progress card): worker line ring cursor + the
+  // lines already rendered. One run at a time — the run the card shows.
+  runLogs: { runId: null, cursor: 0, lines: [], inFlight: false },
   confirmActionResolve: null,
   recordsTab: 'all',
   trainModule: (() => {
@@ -1810,6 +1813,7 @@ async function request(path, options = {}) {
       }),
     );
   } catch (error) {
+    if (error instanceof DOMException && error.name === 'AbortError') throw error;
     throw new ApiError(error instanceof Error ? error.message : '网络连接失败', 0, null);
   }
   const contentType = response.headers.get('content-type') || '';
@@ -2854,7 +2858,7 @@ function renderIntegrations() {
     for (const option of engineSelect.querySelectorAll(
       'option[value="starter-ppo"], option[value="mjx-ppo"], option[value="microduck-rl"], ' +
         'option[value="visual-ppo"], option[value="dm-control-ppo"], option[value="mjlab-rsl-rl"], ' +
-        'option[value="act"]',
+        'option[value="act"], option[value="diffusion-policy"], option[value="smolvla"]',
     )) {
       const known = engineKnown(option.value);
       option.disabled = !known;
@@ -2910,6 +2914,16 @@ const ENGINE_CAPABILITIES = Object.freeze({
     name: 'ACT',
     badges: ['模仿学习', 'k 步动作块', 'CPU 友好'],
     desc: '示教轨迹上的 ACT（Zhao et al. 2023）：Transformer 编解码 + CVAE 隐变量 + 时序集成，导出可验证的集成 ONNX；需要带 episode 边界的录制数据。',
+  },
+  'diffusion-policy': {
+    name: 'Diffusion Policy',
+    badges: ['模仿学习', '扩散动作分块', '多模态示教'],
+    desc: '示教轨迹上的 Diffusion Policy（Chi et al. 2023，CNN 版式）：条件 1D UNet 去噪器 + DDPM 采样，整个反向去噪循环固化为一张 ONNX；两位示教者风格不同时不会被平均成谁都没做过的动作。',
+  },
+  smolvla: {
+    name: 'SmolVLA',
+    badges: ['VLA 参考', 'CPU 规划 / CUDA 全量', 'LeRobot 生态'],
+    desc: 'SmolVLA（LeRobot 社区 VLA，450M）参考适配：CPU 栈上产出诚实标注的训练计划（dry-run），完整训练需注册 CUDA worker；本机缺训练栈时明确拒绝而不是假装训练。',
   },
 });
 
@@ -5363,6 +5377,116 @@ function sendReplayFrame() {
   // Keep the unified telemetry canvases (reward curve / heatmaps) on the same
   // frame as the replay player; they only redraw when local samples exist.
   syncTelemetryVisualsToReplayIndex();
+  syncReplayVideoToFrame();
+}
+
+// ---- replay MP4 video (server-rendered camera frame artifact) --------------
+// The video is a rendering of already-accepted board frames. The block tracks
+// the loaded run: mounting a run checks the run's metrics for a rendered
+// video, the export button POSTs the render (server ffmpeg), and playback
+// syncs to the unified timeline in one direction (scrub → video time). The
+// video's own controls stay usable; scrubbing it does not move the timeline.
+function mountReplayVideo(runId, runMetrics) {
+  const block = $('replay-video-block');
+  const video = $('replay-video-element');
+  const caption = $('replay-video-caption');
+  const renderButton = $('replay-video-render');
+  const download = $('replay-video-download');
+  const note = $('replay-video-note');
+  if (!block || !video || !caption || !renderButton) return;
+  replayVideo.runId = runId;
+  replayVideo.durationSeconds = 0;
+  replayVideo.available = false;
+  download.hidden = true;
+  download.removeAttribute('href');
+  video.removeAttribute('src');
+  const meta = runMetrics?.replayVideo;
+  if (!runId) {
+    block.hidden = true;
+    return;
+  }
+  block.hidden = false;
+  renderButton.disabled = false;
+  renderButton.textContent = '导出视频（ffmpeg）';
+  if (meta && typeof meta.sha256 === 'string' && /^[a-f0-9]{64}$/.test(meta.sha256)) {
+    mountReplayVideoSource(runId, meta);
+  } else {
+    caption.textContent = '尚未导出';
+    if (note) note.textContent = '服务端把已验收的板端相机帧编码为 MP4（单来源且全部 attested 的运行才可导出）；视频是已验收证据的渲染，不是新证据。播放进度与统一时间轴联动。';
+  }
+}
+
+function mountReplayVideoSource(runId, meta) {
+  const video = $('replay-video-element');
+  const caption = $('replay-video-caption');
+  const download = $('replay-video-download');
+  if (!video || !caption) return;
+  const url = apiPath('/sim2real/runs/' + encodeURIComponent(runId) + '/replay-video');
+  video.src = url;
+  replayVideo.runId = runId;
+  replayVideo.available = true;
+  replayVideo.durationSeconds = Number(meta.durationSeconds) || 0;
+  caption.textContent = `${Number(meta.frameCount) || 0} 帧 · ${formatMetricNumber(Number(meta.fps) || 0, 2)} fps · ${formatMetricNumber(replayVideo.durationSeconds, 2)}s`;
+  if (download) {
+    download.hidden = false;
+    download.href = url;
+    download.setAttribute('download', `replay-${String(runId).slice(0, 12)}.mp4`);
+  }
+  // The first playback needs the metadata to map timeline seconds onto the
+  // video; until then the sync just does nothing.
+  video.addEventListener('loadedmetadata', () => {
+    if (!Number.isFinite(replayVideo.durationSeconds) || replayVideo.durationSeconds <= 0) {
+      replayVideo.durationSeconds = Number.isFinite(video.duration) ? video.duration : 0;
+    }
+  }, { once: true });
+}
+
+const replayVideo = { runId: null, available: false, durationSeconds: 0 };
+
+/** Map the replay timeline onto the video's own clock and seek it. */
+function syncReplayVideoToFrame() {
+  if (!replayVideo.available) return;
+  const video = $('replay-video-element');
+  if (!video || !video.src) return;
+  const frames = state.replay.frames;
+  if (!frames.length) return;
+  const span = replayVideo.durationSeconds > 0 ? replayVideo.durationSeconds : Number(video.duration);
+  if (!Number.isFinite(span) || span <= 0) return;
+  const t = replayFrameTime(frames[state.replay.index], state.replay.index);
+  const first = replayFrameTime(frames[0], 0);
+  const relative = Math.max(0, Math.min(span, t - first));
+  // Guard against seek feedback churn: only move when the delta is visible.
+  if (Math.abs(video.currentTime - relative) > 0.05) {
+    try { video.currentTime = relative; } catch { /* not seekable yet */ }
+  }
+}
+
+async function renderReplayVideo() {
+  const runId = state.replay.runId;
+  if (!runId) {
+    showToast('先加载一个带相机帧的运行', 'error');
+    return;
+  }
+  const button = $('replay-video-render');
+  if (button) { button.disabled = true; button.textContent = '编码中…'; }
+  try {
+    const payload = await request(
+      '/sim2real/runs/' + encodeURIComponent(runId) + '/replay-video',
+      { method: 'POST' },
+    );
+    if (payload?.video) {
+      mountReplayVideoSource(runId, payload.video);
+      showToast(`视频已导出：${payload.video.frameCount} 帧 · ${formatMetricNumber(Number(payload.video.fps) || 0, 2)} fps`, 'success');
+    }
+    const caption = $('replay-video-caption');
+    if (caption) caption.textContent = '已导出';
+  } catch (error) {
+    showToast(error instanceof Error ? error.message : '视频导出失败', 'error');
+    const caption = $('replay-video-caption');
+    if (caption) caption.textContent = '导出失败（见提示）';
+  } finally {
+    if (button) { button.disabled = false; button.textContent = '导出视频（ffmpeg）'; }
+  }
 }
 
 function stopReplay() {
@@ -5413,6 +5537,16 @@ async function fetchAndMountReplay(runId, { interactive = false } = {}) {
     state.replay = { ...state.replay, runId, frames, index: 0, loaded: true, timer: null, autoLoadedFor: runId };
     renderReplayPlayer();
     sendReplayFrame();
+    // The replay payload carries frames, not run metrics; fetch the run row
+    // for the replay-video record (a previously rendered MP4 mounts directly).
+    void (async () => {
+      try {
+        const runPayload = await request('/sim2real/runs/' + encodeURIComponent(runId));
+        mountReplayVideo(runId, runPayload?.run?.metrics);
+      } catch {
+        mountReplayVideo(runId, null);
+      }
+    })();
     if (interactive) showToast(`已加载 ${frames.length} 帧，可开始回放`, 'success');
     else showToast(`评测回放已自动挂载：${frames.length} 帧（${runId.slice(0, 8)}）`, 'normal');
     return true;
@@ -6710,6 +6844,115 @@ function renderRunProgress() {
   $('run-progress-warning')?.toggleAttribute('hidden', latest.mock !== true);
   renderRunProgressTrack(latest);
   renderRunProgressLiveChart(latest);
+  renderRunProgressLogsPanel(latest);
+}
+
+// Engine log stream: the worker captures stdout/stderr line by line and the
+// server proxies them with a cursor (GET /runs/:id/logs?after=N). The panel
+// tracks the run shown in the card — switching runs resets the buffer; a
+// transport failure keeps the lines already fetched and retries on the next
+// poll instead of inventing content.
+const RUN_LOG_MAX_RENDERED = 300;
+
+function renderRunProgressLogsPanel(run) {
+  const wrap = $('run-progress-logs');
+  if (!wrap) return;
+  const eligible = run.backend === 'local' && run.mock !== true;
+  wrap.hidden = !eligible;
+  if (!eligible) {
+    state.runLogs.runId = null;
+    return;
+  }
+  if (state.runLogs.runId !== run.id) {
+    state.runLogs.runId = run.id;
+    state.runLogs.cursor = 0;
+    state.runLogs.lines = [];
+    const body = $('run-progress-logs-body');
+    if (body) body.textContent = '';
+    const caption = $('run-progress-logs-caption');
+    if (caption) caption.textContent = '等待引擎日志…';
+  }
+  void pollRunLogs(run);
+}
+
+async function pollRunLogs(run) {
+  if (state.runLogs.runId !== run.id) return;
+  if (state.runLogs.inFlight) return;
+  state.runLogs.inFlight = true;
+  try {
+    const payload = await request(
+      '/sim2real/runs/' + encodeURIComponent(run.id) + '/logs?after=' + state.runLogs.cursor,
+    );
+    if (state.runLogs.runId !== run.id) return;
+    const lines = Array.isArray(payload?.lines) ? payload.lines : [];
+    if (payload?.truncated === true) {
+      // The cursor fell outside the worker's retention window: resync to the
+      // oldest retained line rather than silently skipping the gap.
+      const retainedFrom = Number(payload.retainedFrom);
+      state.runLogs.cursor = Number.isSafeInteger(retainedFrom) && retainedFrom > 1 ? retainedFrom - 1 : 0;
+      state.runLogs.lines = [];
+    }
+    if (lines.length) {
+      const merged = state.runLogs.lines.concat(
+        lines
+          .filter((line) => line && Number.isFinite(Number(line.n)))
+          .map((line) => ({
+            n: Number(line.n),
+            stream: line.stream === 'stderr' ? 'stderr' : 'stdout',
+            text: String(line.text || ''),
+          })),
+      );
+      state.runLogs.lines = merged.slice(-RUN_LOG_MAX_RENDERED);
+      const total = Number(payload.total);
+      state.runLogs.cursor = Number.isSafeInteger(total)
+        ? Math.max(state.runLogs.cursor, total)
+        : state.runLogs.cursor + lines.length;
+      renderRunLogsBody();
+    }
+    const caption = $('run-progress-logs-caption');
+    if (caption) {
+      const total = Number(payload?.total) || state.runLogs.lines.length;
+      const status = String(run.status || '').toLowerCase();
+      const stateLabel =
+        status === 'running'
+          ? '运行中'
+          : status === 'queued'
+            ? '排队中'
+            : status === 'completed'
+              ? '已完成'
+              : status === 'failed'
+                ? '已失败'
+                : status;
+      caption.textContent = `${stateLabel} · 已采集 ${total} 行`;
+    }
+  } catch (error) {
+    // The log panel is a live view, not release evidence: a failed poll keeps
+    // the already-fetched lines and lets the next cycle retry quietly.
+    if (!(error instanceof ApiError && error.status === 401)) {
+      const caption = $('run-progress-logs-caption');
+      if (caption && state.runLogs.lines.length === 0) {
+        caption.textContent = '日志暂不可用（worker 未就绪或连接中断）';
+      }
+    }
+  } finally {
+    state.runLogs.inFlight = false;
+  }
+}
+
+function renderRunLogsBody() {
+  const body = $('run-progress-logs-body');
+  if (!body) return;
+  // textContent (never innerHTML): engine output is arbitrary text and must
+  // not be parsed as markup.
+  body.textContent = state.runLogs.lines
+    .map((line) => {
+      const n = String(line.n).padStart(4, ' ');
+      const stream = line.stream === 'stderr' ? 'err' : 'out';
+      return `[${n}] ${stream} ${line.text}`;
+    })
+    .join('\n');
+  // Keep the tail visible while lines stream in.
+  body.scrollTop = body.scrollHeight;
 }
 
 // Live training curve: worker-parsed stdout progress points, drawn on the
@@ -9716,6 +9959,7 @@ function wireEvents() {
   $('replay-load-button')?.addEventListener('click', () => { void loadRunReplay(); });
   $('replay-play-button')?.addEventListener('click', toggleReplay);
   $('replay-stop-button')?.addEventListener('click', () => { state.replay.index = 0; stopReplay(); sendReplayFrame(); });
+  $('replay-video-render')?.addEventListener('click', () => { void renderReplayVideo(); });
   $('replay-run-select')?.addEventListener('change', (event) => { state.replay.runId = String(event.target.value || ''); state.replay.loaded = false; state.replay.frames = []; state.replay.index = 0; stopReplay(); renderReplayPlayer(); });
   $('replay-speed-select')?.addEventListener('change', (event) => { state.replay.speed = Number(event.target.value || 1); if (state.replay.timer) { stopReplay(); toggleReplay(); } });
   $('replay-seek')?.addEventListener('input', (event) => { state.replay.index = Number(event.target.value || 0); sendReplayFrame(); });

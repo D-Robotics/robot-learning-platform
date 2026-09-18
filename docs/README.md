@@ -33,6 +33,9 @@
 | [`engines/dm-control-adapter.md`](engines/dm-control-adapter.md) | dm_control 生态适配 + Playground 可用性如实结论 |
 | [`engines/offline-bc.md`](engines/offline-bc.md) | 模仿学习路径：示教数据 → MLP 行为克隆 → ONNX（数值等价证明） |
 | [`engines/act.md`](engines/act.md) | ACT 动作分块模仿：Transformer + CVAE + k 步动作块 + 时序集成 → ONNX（数值等价证明） |
+| [`engines/diffusion-policy.md`](engines/diffusion-policy.md) | Diffusion Policy 动作分块模仿：条件 1D UNet + DDPM + EMA，整个反向采样循环固化为一张 ONNX |
+| [`engines/smolvla.md`](engines/smolvla.md) | SmolVLA 参考适配：CPU 训练计划（dry-run）/ CUDA 全量微调，缺栈明确拒绝 |
+| [`engines/lerobot-converter.md`](engines/lerobot-converter.md) | LeRobot v3 数据集双向转换：导出/导入 v3.0 布局，mono8 视频逐字节无损往返 |
 | [`task-pack-training.md`](task-pack-training.md) | 声明式 task-pack 训练与质量门 |
 | [`gpu-runner.md`](gpu-runner.md) | 独立 GPU 机器上的训练 runner 部署 |
 | [`sim2real-plugins.md`](sim2real-plugins.md) | 事件扩展层：实验追踪、对象存储、通知、硬件适配 |

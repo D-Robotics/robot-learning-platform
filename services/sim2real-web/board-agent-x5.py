@@ -1347,10 +1347,11 @@ def policy_start(direction, goal_x=None, goal_y=None):
                 "message": "goalX/goalY 必须是有限数字"}
     snap = _policy_read_state()
     model = snap.get("model") if isinstance(snap, dict) else None
-    if isinstance(model, dict) and model.get("inputDim") == 8:
+    if isinstance(model, dict) and model.get("inputDim") in (8, 42):
         if goal_x is None or goal_y is None:
-            return {"ok": False, "error": "originbot-goal-required",
-                    "message": "8D OriginBot 策略需要同时提供 goalX/goalY（单位：米）"}
+            contract = "8D OriginBot" if model.get("inputDim") == 8 else "42D goalnav (imu-gravity-v1)"
+            return {"ok": False, "error": "goal-required",
+                    "message": "%s 策略需要同时提供 goalX/goalY（odom 绝对坐标，单位：米）" % contract}
     payload = {"direction": float(direction)}
     if goal_x is not None or goal_y is not None:
         payload.update({"goalX": goal_x, "goalY": goal_y})

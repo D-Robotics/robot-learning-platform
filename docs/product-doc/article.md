@@ -310,7 +310,7 @@ npm run verify:task-templates
 
 OriginBot 目标导航使用原生 8D observation / 2D action 契约，观测布局为 `[x, y, sin(yaw), cos(yaw), goal_dx, goal_dy, v, w]`，动作是受限差速底盘的 `[linear, angular]`。`engines/rdk-rl-env/train_originbot.py` 使用 PPO Actor-Critic 训练并导出 ONNX；训练结果默认 `deployable=false`，必须经过真实遥测评测和板端预检后才能进入发布流程。
 
-**怎么使用**：在训练页选择 OriginBot 产品线和 `originbot-policy-v1`，先运行 smoke，再按需提高训练档位；在上位机加载 `originbot-policy.onnx`，填写目标点 X/Y（米），确认四道开关和现场安全条件后再考虑启动策略。未提供目标点时，平台返回 `originbot-goal-required` 并保持零输出。
+**怎么使用**：在训练页选择 OriginBot 产品线和 `originbot-policy-v1`，先运行 smoke，再按需提高训练档位；在上位机加载 `originbot-policy.onnx`，填写目标点 X/Y（米，odom 绝对坐标），确认四道开关和现场安全条件后再考虑启动策略。未提供目标点时，平台返回 `goal-required` 并保持零输出——8D 原生契约与 42D goalnav 契约（`imu-gravity-v1`，观测 `[gyro(3), gravity(3), last_action(2), goal_delta(2, 车体系), twist(2), zeros(30)]`）同样适用：板端会拒绝无目标的会话，绝不把目标槽位零填充后"盲跑"。
 
 **最佳实践**：仿真先使用固定种子生成 JSONL，再导入评测页；真实策略启动前确认 `/imu`、`/odom` 的时间戳新鲜且 `mock=false`；目标点使用现场坐标系并记录在 Run；任何策略发布都保留急停、速度上限、500ms 看门狗和回滚版本。
 

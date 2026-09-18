@@ -7,6 +7,11 @@ export default defineConfig({
   test: {
     include: ['server/**/*.test.ts', 'shared/**/*.test.ts', 'services/**/*.test.ts'],
     exclude: ['node_modules/**'],
+    // A number of ledger and health suites intentionally exercise process-wide
+    // environment switches. Running files in parallel lets one suite restore
+    // another suite's temporary storage path; serial files keep those tests
+    // deterministic while individual tests remain concurrent where safe.
+    fileParallelism: false,
     coverage: {
       provider: 'v8',
       // Coverage is reported over the TypeScript sources the vitest suites

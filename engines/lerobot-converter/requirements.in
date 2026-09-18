@@ -1,0 +1,18 @@
+# Direct dependencies of the lerobot-converter engine (LeRobot v3.0 dataset
+# bidirectional converter — the platform's ecosystem on-ramp).
+#
+# Pinned transitively in requirements.txt (`uv pip compile --generate-hashes`),
+# so a conversion run is reproducible in both halves of the provenance
+# contract: `sourceCommit` names the code and the lock names the libraries.
+#
+# Regenerate after editing this file:
+#     npm run lock:engines
+#
+# pyarrow is the parquet engine for BOTH directions (parquet is the physical
+# format of every LeRobot dataset); ffmpeg is a SYSTEM dependency for video
+# export/import and is probed at runtime with a fail-closed install hint —
+# it is deliberately not a pip pin. numpy is needed for the bgr8 channel
+# flip and is already a platform-wide shared dependency, pinned here so the
+# lock is a complete function of this file.
+numpy==2.0.2
+pyarrow==22.0.0

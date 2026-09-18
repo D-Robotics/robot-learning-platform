@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
@@ -13,6 +14,7 @@ import type { Sim2RealTelemetrySample } from '../../shared/sim2real-telemetry.js
 import { isSim2RealError } from './sim2real-errors.js';
 import {
   appendSim2RealTelemetryWithResult,
+  claimSim2RealRunRelay,
   createSim2RealArtifactWithResult,
   createSim2RealDeployment,
   createSim2RealEvaluationWithResult,
@@ -26,7 +28,9 @@ import {
   listSim2RealTelemetry,
   listSim2RealModels,
   listSim2RealRuns,
+  readSim2RealRelayArtifact,
   reserveSim2RealRun,
+  storeSim2RealRelayArtifact,
   updateSim2RealArtifactStatus,
   updateSim2RealRun,
   SIM2REAL_LEDGER_MAX_BYTES,
@@ -1297,5 +1301,112 @@ describe('Sim2Real cross-process writer lease', () => {
     } finally {
       logged.mockRestore();
     }
+  });
+});
+
+describe('Sim2Real browser relay runs', () => {
+  it('claims a queued relay run once and refuses later claims', async () => {
+    const root = await useTempStorage();
+    const manifest = structuredClone(BUILTIN_MICRODUCK_MODEL.manifest);
+    manifest.modelId = 'relay-claim-policy';
+    manifest.displayName = 'Relay claim policy';
+    manifest.version = '1.0.0';
+    const model = await createSim2RealModel(manifest, 'alice');
+    const run = await createSim2RealRun(
+      {
+        modelId: model.id,
+        backend: 'local',
+        status: 'queued',
+        summary: 'relay dispatch',
+        relayAgentUrl: 'http://127.0.0.1:19190/proxy',
+      },
+      'alice',
+    );
+
+    const claimed = await claimSim2RealRunRelay(run.id, 'local-relay-abc', 'alice');
+    expect(claimed).toMatchObject({
+      id: run.id,
+      externalRunId: 'local-relay-abc',
+      status: 'running',
+      relayAgentUrl: 'http://127.0.0.1:19190/proxy',
+    });
+    expect(claimed?.relayLastSeenAt).toBeDefined();
+
+    // A second tab reporting the same worker run loses the race: the claim is
+    // compare-and-set and the first reporter's external id stays.
+    const second = await claimSim2RealRunRelay(run.id, 'local-relay-zzz', 'alice');
+    expect(second).toBeNull();
+    await expect(getSim2RealRun(run.id, 'alice')).resolves.toMatchObject({
+      externalRunId: 'local-relay-abc',
+    });
+
+    // Owner scoping: bob cannot claim alice's relay run at all.
+    const bobClaim = await claimSim2RealRunRelay(run.id, 'local-relay-bob', 'bob');
+    expect(bobClaim).toBeNull();
+    void root;
+  });
+
+  it('refuses claims on non-relay runs, terminal runs, and malformed ids', async () => {
+    await useTempStorage();
+    const manifest = structuredClone(BUILTIN_MICRODUCK_MODEL.manifest);
+    manifest.modelId = 'relay-guard-policy';
+    manifest.displayName = 'Relay guard policy';
+    manifest.version = '1.0.0';
+    const model = await createSim2RealModel(manifest, 'alice');
+    // A server-dispatched local run has no relayAgentUrl: not claimable.
+    const serverRun = await createSim2RealRun(
+      { modelId: model.id, backend: 'local', status: 'queued', summary: 'server dispatch' },
+      'alice',
+    );
+    expect(await claimSim2RealRunRelay(serverRun.id, 'local-1', 'alice')).toBeNull();
+    // A relay run that already finished is terminal: not claimable.
+    const doneRun = await createSim2RealRun(
+      {
+        modelId: model.id,
+        backend: 'local',
+        status: 'completed',
+        summary: 'done',
+        relayAgentUrl: 'http://127.0.0.1:19190/proxy',
+      },
+      'alice',
+    );
+    expect(await claimSim2RealRunRelay(doneRun.id, 'local-2', 'alice')).toBeNull();
+    // Malformed worker run ids never touch the ledger.
+    const pendingRun = await createSim2RealRun(
+      {
+        modelId: model.id,
+        backend: 'local',
+        status: 'queued',
+        summary: 'pending',
+        relayAgentUrl: 'http://127.0.0.1:19190/proxy',
+      },
+      'alice',
+    );
+    expect(await claimSim2RealRunRelay(pendingRun.id, 'bad id!', 'alice')).toBeNull();
+    const pendingRead = await getSim2RealRun(pendingRun.id, 'alice');
+    expect(pendingRead?.externalRunId).toBeUndefined();
+    expect(pendingRead?.status).toBe('queued');
+  });
+
+  it('stores and re-verifies relay artifact bytes by content digest', async () => {
+    const root = await useTempStorage();
+    const bytes = Buffer.from('fake-onnx-bytes-for-relay-test');
+    const digest = createHash('sha256').update(bytes).digest('hex');
+    await storeSim2RealRelayArtifact(digest, bytes);
+    const artifactPath = path.join(root, 'relay-artifacts', `${digest}.onnx`);
+    expect((await fs.stat(artifactPath)).size).toBe(bytes.length);
+
+    // Verify-before-serve: the read path re-hashes and returns the bytes.
+    await expect(readSim2RealRelayArtifact(digest)).resolves.toEqual(bytes);
+
+    // Tampering on disk fails closed (null, not corrupt bytes).
+    await fs.writeFile(artifactPath, Buffer.from('tampered'));
+    await expect(readSim2RealRelayArtifact(digest)).resolves.toBeNull();
+
+    // Unknown digests and non-64-hex digests never resolve to bytes.
+    await expect(
+      readSim2RealRelayArtifact(createHash('sha256').update('x').digest('hex')),
+    ).resolves.toBeNull();
+    await expect(readSim2RealRelayArtifact('not-hex')).resolves.toBeNull();
   });
 });

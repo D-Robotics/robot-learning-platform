@@ -800,6 +800,19 @@ export function createSim2RealWebApp(): Express {
       });
       return;
     }
+    const rawSessionId = request.body?.sessionId;
+    const sessionId = typeof rawSessionId === 'string' ? rawSessionId.trim() : '';
+    if (
+      rawSessionId !== undefined &&
+      (!sessionId || sessionId.length > 160 || !/^sim2real-[A-Za-z0-9-]+$/.test(sessionId))
+    ) {
+      response.status(400).json({
+        ok: false,
+        error: 'DSH_SESSION_INVALID',
+        message: '对话会话标识无效。',
+      });
+      return;
+    }
     const runtime = app.locals.dshRuntime;
     if (!runtime) {
       response.status(503).json({
@@ -837,9 +850,15 @@ export function createSim2RealWebApp(): Express {
         ReturnType<typeof createDshAuthChannel> | undefined;
       const result = channel
         ? await channel.withAuth(forwarded, () =>
-            askDsh(runtime, turnPrompt, { ...(model ? { model } : {}) }),
+            askDsh(runtime, turnPrompt, {
+              ...(model ? { model } : {}),
+              ...(sessionId ? { sessionId } : {}),
+            }),
           )
-        : await askDsh(runtime, turnPrompt, { ...(model ? { model } : {}) });
+        : await askDsh(runtime, turnPrompt, {
+            ...(model ? { model } : {}),
+            ...(sessionId ? { sessionId } : {}),
+          });
       response.json({
         ok: true,
         sessionId: result.sessionId,
@@ -847,6 +866,7 @@ export function createSim2RealWebApp(): Express {
         reasoning: publicDshReasoning(result.reasoning),
         toolTrail: publicDshToolTrail(result.toolTrail),
         events: publicDshEventTail(result.events),
+        ...(result.usage ? { usage: result.usage } : {}),
       });
     } catch (error) {
       console.error('[sim2real-web] DSH chat failed:', redactInternalError(error));

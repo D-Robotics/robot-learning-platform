@@ -400,6 +400,22 @@ def wheeled_observation_layout(obs_dim, action_dim):
     )
 
 
+def goalnav_tail_slots(obs_dim, action_dim):
+    """Goal-navigation slots after the six sensor slots, or None.
+
+    The starter-ppo and mjx-adapter trainers build the 42D imu-gravity-v1
+    goalnav contract as [gyro(3), gravity(3), last_action(2), goal_delta(2),
+    twist(2), zeros(30)] — body-frame goal delta (slots 8-9) and believed
+    twist (slots 10-11). A runtime that zero-fills those slots runs a policy
+    with no idea where its goal is; it must either source them or refuse.
+    Only the exact 42D/2D goalnav shape qualifies: other widths keep the
+    generic partial-adapter behaviour (zero-fill, reported in obsSlots).
+    """
+    if obs_dim == 42 and action_dim == 2:
+        return {"last_action": 2, "goal_delta": 2, "twist": 2}
+    return None
+
+
 def wheeled_observation_size(obs_dim, action_dim):
     """Total slots `wheeled_observation_layout` fills.
 
@@ -512,7 +528,7 @@ class PolicyRuntime:
                 },
                 "obsSlots": self._obs_slot_report(),
                 "goal": {"x": self._goal[0], "y": self._goal[1]}
-                if EXPECTED_OBS_DIM == 8 and EXPECTED_ACTION_DIM == 2
+                if self._goal[0] is not None and self._goal[1] is not None
                 else None,
                 "telemetry": {
                     "spool": TELEMETRY_SPOOL_FILE,
@@ -541,6 +557,29 @@ class PolicyRuntime:
                 "goal": "explicit RDK_SIM2REAL_GOAL_X/Y required",
                 "slots_real": 8,
                 "slots_adapter": 0,
+            }
+        if (
+            goalnav_tail_slots(EXPECTED_OBS_DIM, EXPECTED_ACTION_DIM) is not None
+            and (OBSERVATION_LAYOUT == "imu-gravity-v1"
+                 or (OBSERVATION_LAYOUT == "auto" and EXPECTED_OBS_DIM == 42))
+        ):
+            return {
+                "contract": "42D obs / 2D act (goalnav imu-gravity-v1)",
+                "layoutDeclared": OBSERVATION_LAYOUT != "auto",
+                "layoutSource": "adapter declaration" if OBSERVATION_LAYOUT != "auto" else "auto (dimension-based)",
+                "layout": "imu-gravity-v1",
+                "source": "real (/imu gyro+gravity, /odom pose+twist)",
+                "goal": "explicit goalX/goalY (odom absolute) required at start",
+                "slots_real": 10,
+                "slots_adapter": 32,
+                "slotPlan": [
+                    {"name": "gyro", "width": 3, "provenance": "real"},
+                    {"name": "projected_gravity", "width": 3, "provenance": "real"},
+                    {"name": "last_action", "width": 2, "provenance": "adapter (normalized last cmd)"},
+                    {"name": "goal_delta", "width": 2, "provenance": "real (/odom + goal)"},
+                    {"name": "twist", "width": 2, "provenance": "real (/odom)"},
+                    {"name": "zeros", "width": EXPECTED_OBS_DIM - 12, "provenance": "adapter"},
+                ],
             }
         # Built from the recorded segments (what _build_observation actually
         # wrote) rather than a hand-written literal: the previous strings said
@@ -870,7 +909,11 @@ class PolicyRuntime:
                 return {"ok": False, "error": "observation-layout-unknown",
                         "detail": "adapter/env declares layout %r which this runtime does not implement" % OBSERVATION_LAYOUT,
                         "known": list(KNOWN_OBSERVATION_LAYOUTS)}
-            if EXPECTED_OBS_DIM == 8 and EXPECTED_ACTION_DIM == 2:
+            goalnav_42d = goalnav_tail_slots(EXPECTED_OBS_DIM, EXPECTED_ACTION_DIM) is not None and (
+                OBSERVATION_LAYOUT == "imu-gravity-v1"
+                or (OBSERVATION_LAYOUT == "auto" and EXPECTED_OBS_DIM == 42)
+            )
+            if (EXPECTED_OBS_DIM == 8 and EXPECTED_ACTION_DIM == 2) or goalnav_42d:
                 if goal_x is not None or goal_y is not None:
                     try:
                         candidate = (float(goal_x), float(goal_y))
@@ -878,9 +921,11 @@ class PolicyRuntime:
                             raise ValueError
                         self._goal = candidate
                     except (TypeError, ValueError):
-                        return {"ok": False, "error": "invalid-originbot-goal"}
+                        return {"ok": False, "error": "invalid-goal", "detail": "goalX/goalY 需为有限数值"}
                 if self._goal[0] is None or self._goal[1] is None:
-                    return {"ok": False, "error": "originbot-goal-required", "message": "8D OriginBot 策略需要 goalX/goalY"}
+                    contract = "8D OriginBot" if EXPECTED_OBS_DIM == 8 else "42D goalnav (imu-gravity-v1)"
+                    return {"ok": False, "error": "goal-required",
+                            "message": "%s 策略需要 goalX/goalY（odom 绝对坐标）" % contract}
             self._command_dir = _clamp(float(direction), -1.0, 1.0)
             if self._state == "running":
                 return {"ok": True, "state": "running"}
@@ -906,6 +951,12 @@ class PolicyRuntime:
                 "mock": False,
                 "model": self._session_model_summary(),
             }
+            if self._goal[0] is not None and self._goal[1] is not None:
+                # The goal is task evidence: the acceptance question is
+                # "did the robot reach THIS point and stop", so the target
+                # rides the lifecycle marker next to the session it framed.
+                started_event["goalX"] = round(self._goal[0], 4)
+                started_event["goalY"] = round(self._goal[1], 4)
         self._append_event_record(started_event)
         threading.Thread(target=self._loop, daemon=True).start()
         return {"ok": True, "state": "running"}
@@ -1049,6 +1100,74 @@ class PolicyRuntime:
         pg_x = 2 * (qw * qy - qx * qz)
         pg_y = 2 * (-qw * qx - qy * qz)
         pg_z = 2 * (qx * qx + qy * qy) - 1
+
+        # The 42D goalnav contract (imu-gravity-v1, 42 obs / 2 act) carries the
+        # goal and believed twist in slots 6-11, exactly as both trainers build
+        # it: [gyro(3), gravity(3), last_action(2), goal_delta(2), twist(2),
+        # zeros(30)]. The goal delta is the odom-pose delta rotated into the
+        # chassis frame via the odom quaternion yaw — the same believed pose
+        # the 8D path uses. Zero-filling these slots would run a policy with no
+        # idea where its goal is, so a missing goal or dead odom fails closed.
+        goalnav_tail = goalnav_tail_slots(EXPECTED_OBS_DIM, EXPECTED_ACTION_DIM)
+        goalnav_layout = (
+            goalnav_tail is not None
+            and (OBSERVATION_LAYOUT == "imu-gravity-v1"
+                 or (OBSERVATION_LAYOUT == "auto" and EXPECTED_OBS_DIM == 42))
+        )
+        if goalnav_layout:
+            if not _sensor_sample_fresh(odom):
+                return None
+            if self._goal[0] is None or self._goal[1] is None:
+                return None
+
+            def _odom_value(*keys):
+                for key in keys:
+                    value = _finite(odom, key)
+                    if value is not None:
+                        return value
+                return None
+
+            odom_x = _odom_value("positionX", "x")
+            odom_y = _odom_value("positionY", "y")
+            v_lag = _odom_value("linearX", "v")
+            w_lag = _odom_value("angularZ", "w")
+            if any(value is None for value in (odom_x, odom_y, v_lag, w_lag)):
+                return None
+            # Chassis-frame goal delta needs a heading: a dedicated odom yaw
+            # field when present, else the IMU quaternion — the same heading
+            # source the 8D native path uses for its sin/cos slots.
+            yaw_value = _finite(odom, "yaw")
+            if yaw_value is None:
+                quat_yaw = [_finite(q, key) for key in ("x", "y", "z", "w")]
+                if any(value is None for value in quat_yaw):
+                    return None
+                rqx, rqy, rqz, rqw = quat_yaw
+                quat_norm = math.sqrt(rqx * rqx + rqy * rqy + rqz * rqz + rqw * rqw)
+                if quat_norm < 1e-6:
+                    return None
+                rqx, rqy, rqz, rqw = (value / quat_norm for value in (rqx, rqy, rqz, rqw))
+                yaw_value = math.atan2(2 * (rqw * rqz + rqx * rqy), 1 - 2 * (rqy * rqy + rqz * rqz))
+            world_dx = self._goal[0] - odom_x
+            world_dy = self._goal[1] - odom_y
+            cos_yaw = math.cos(yaw_value)
+            sin_yaw = math.sin(yaw_value)
+            body_dx = cos_yaw * world_dx + sin_yaw * world_dy
+            body_dy = -sin_yaw * world_dx + cos_yaw * world_dy
+            # last_action: the previous published command, in the trainer's
+            # normalized units (physical command / adapter safety limit).
+            norm_linear = (self._last_cmd[0] / MAX_LINEAR) if MAX_LINEAR else 0.0
+            norm_angular = (self._last_cmd[1] / MAX_ANGULAR) if MAX_ANGULAR else 0.0
+            tail = [norm_linear, norm_angular, body_dx, body_dy, v_lag, w_lag]
+            with self._lock:
+                self._obs_segments = [
+                    ("gyro", 3, "real"),
+                    ("projected_gravity", 3, "real"),
+                    ("last_action", 2, "adapter"),
+                    ("goal_delta", 2, "real (/odom + goal)"),
+                    ("twist", 2, "real (/odom)"),
+                    ("zeros", EXPECTED_OBS_DIM - 12, "adapter"),
+                ]
+            return [gx, gy, gz, pg_x, pg_y, pg_z] + tail + [0.0] * (EXPECTED_OBS_DIM - 12)
 
         segments = wheeled_observation_layout(EXPECTED_OBS_DIM, EXPECTED_ACTION_DIM)
         action_width = segments[2][1]

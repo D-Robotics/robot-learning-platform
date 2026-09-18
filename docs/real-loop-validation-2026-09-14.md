@@ -333,3 +333,47 @@ attestation 面向多用户部署。正向路径由 repo 测试
 已完成的准备：机器人静止于 odom (0.055, -0.077)、yaw 0.044，目标点方案定
 为前方 0.3m（goalX/goalY 传 odom 绝对坐标，平台路由支持透传）。执行前板
 端因电池深放（2S 4.99V）离线——物理电源在用户侧，等板子回来即继续。
+
+> **2026-09-17 等待期发现并根治：42D goalnav 观测契约缺口**。任务级验收
+> 在跑代码里走查时发现一个致命缺口：两个训练器（`engines/starter-ppo/
+> runner.py` 的 `observe_one` 与 `engines/mjx-adapter/adapter.py` 的
+> `_build_obs`）的 42D `imu-gravity-v1` 布局都是 `[gyro(3), gravity(3),
+> last_action(2), goal_delta(2, 车体系), twist(2), zeros(30)]`，而板端
+> runtime 的通用装配路径只填前 6 个传感器位 + last_action + 指令位——
+> **goal_delta/twist 槽位被零填充**，且 `start()` 只在 8D 路径读 goalX/
+> goalY，42D 会话的 goal 被静默丢弃。也就是说：42D 策略上真机时对目标
+> 位置"全盲"，9-14 的 direction=0 直行 76s 事件正是这个根因（当时归因
+> 为双发布器，那只是零位移的一半；另一半是策略根本看不见 goal）。
+>
+> **修复**（`board-policy-runtime.py`，全链 fail-closed）：
+> 1. `_build_observation()` 新增 goalnav 装配分支：goal_delta 用
+>    `/odom` 位姿 + goal 差值旋进车体系（yaw 取 odom yaw 字段，缺失时
+>    回退 IMU 四元数——与 8D 路径同一信源）；twist 直接取 /odom；last_action
+>    取上一条已发布指令按训练器同款归一化（物理值 / MAX_LINEAR /
+>    MAX_ANGULAR）；头 6 位仍是真实 IMU。
+> 2. goal 缺失或 odom 死 → 观测整体 `None`（走有界零输出），**绝不**零填充
+>    goal 槽位。
+> 3. `start()` 对 42D 同样强制 goalX/goalY，缺则 `goal-required` 拒绝
+>    （agent 侧 `policy_start` 读模型 inputDim 同步加门，error 码从
+>    `originbot-goal-required` 统一为 `goal-required`）。
+> 4. session-started 事件携带 `goalX/goalY` 作为任务证据（验收问题就是
+>    "是否到达**这个**点并停住"），平台事件白名单 + `/board-sessions` 聚合
+>    均已透传。
+> 5. obsSlots 诚实上报：42D 报 `slots_real:10`（gyro/gravity/goal_delta/
+>    twist）、`slots_adapter:32`，slotPlan 逐槽标注来源。
+>
+> **回归测试**：`verify-policy-runtime-safety.py` 新增 42D 块（yaw=π/2 旋转
+> 下车体系 goal_delta 断言、twist 槽、归一化 last_action、缺 goal/odom
+> fail-closed、`start` 无 goal 拒绝、事件携带 goal）；`board-agent-drive.test.py`
+> 新增 `PolicyStartGoalGateContract` 5 例（42D/8D 无 goal 拒绝且不发文件
+> 协议、有 goal 透传 direction+goalX+goalY、非 goalnav 契约免 goal、半
+> goal/NaN 拒绝）47/47；TS 侧事件白名单 + 会话聚合 goal 断言 + 越界/非数值
+> goal 拒绝，全量 762/762。tsc 干净。
+>
+> **部署注意**：修复文件尚未上板（板子离线中）。板子回电后必须先 scp 部署
+> `board-policy-runtime.py` + `board-agent-x5.py` 到 `/root/rdk-board-agent/`
+> （或 `/opt/rdk-board-agent/`，以 `systemctl show -p ExecStart` 探测为准）
+> 并重启 `rdk-board-agent`，再跑任务级验收——**旧 runtime 上的任务级验收
+> 无意义**（策略仍对 goal 全盲）。完整机械流程见
+> `docs/goalnav-task-acceptance-runbook.md`（含契约验证的"活体证明"：
+> 无 goal 启动必须被 `goal-required` 拒绝，返回 ok=true 即旧 runtime）。

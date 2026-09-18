@@ -885,6 +885,11 @@ describe('Sim2Real HTTP routes', () => {
               adapterId: 'originbot-differential-drive',
               controlHz: 10,
               mock: false,
+              // Goalnav sessions carry their odom-frame task target as
+              // evidence: the acceptance question is "did the robot reach
+              // THIS point and stop".
+              goalX: 1.5,
+              goalY: -0.25,
               model: {
                 sha256: 'ab'.repeat(32),
                 provider: 'CPUExecutionProvider',
@@ -948,6 +953,8 @@ describe('Sim2Real HTTP routes', () => {
           inferMs: 1.4,
           published: 31,
           deviceId: 'device-1',
+          goalX: 1.5,
+          goalY: -0.25,
           // Cookie-owner uploads are not server-attested: review-only.
           attested: false,
           chunks: 1,
@@ -1034,6 +1041,42 @@ describe('Sim2Real HTTP routes', () => {
       },
     });
     expect(badTimestamp.statusCode).toBe(400);
+
+    // The goalnav goal evidence is bounded like every other numeric event
+    // field: out-of-range or non-numeric goals must not ride the marker.
+    const badGoal = await invoke(router, 'post', '/api/sim2real/runs/:id/telemetry', {
+      params: { id: runId },
+      body: {
+        source: 'board-agent',
+        deviceId: 'device-1',
+        sequence: 104,
+        samples: [
+          {
+            t: 0,
+            event: { kind: 'session-started', sessionId: 'sess-1', goalX: 5_000 },
+          },
+        ],
+      },
+    });
+    expect(badGoal.statusCode).toBe(400);
+    expect(badGoal.body).toMatchObject({ code: 'SIM2REAL_INVALID_TELEMETRY' });
+
+    const nonNumericGoal = await invoke(router, 'post', '/api/sim2real/runs/:id/telemetry', {
+      params: { id: runId },
+      body: {
+        source: 'board-agent',
+        deviceId: 'device-1',
+        sequence: 105,
+        samples: [
+          {
+            t: 0,
+            event: { kind: 'session-started', sessionId: 'sess-1', goalY: 'east' },
+          },
+        ],
+      },
+    });
+    expect(nonNumericGoal.statusCode).toBe(400);
+    expect(nonNumericGoal.body).toMatchObject({ code: 'SIM2REAL_INVALID_TELEMETRY' });
   });
 
   it('preserves the demo-fixture source so synthetic evidence stays gated after refresh', async () => {

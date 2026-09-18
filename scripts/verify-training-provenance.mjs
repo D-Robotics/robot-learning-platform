@@ -86,6 +86,19 @@ async function runEngine(relativePath, label) {
         console.log(`[provenance] SKIP ${label} — dependency unavailable`);
         return null;
       }
+      // An engine that fail-closed on a missing training stack (the mjlab
+      // REFUSED convention, exit 3, no result.json) is being honest, not
+      // broken: the local machine simply cannot host that stack. The gate
+      // skips it the same way as a plain missing dependency, since there is
+      // no result to audit. A CPU-capable planning mode (smolvla engine
+      // mode) exercises the full contract on the same machines where the
+      // stack exists.
+      if (/REFUSED — missing dependency/i.test(stderr)) {
+        console.log(
+          `[provenance] SKIP ${label} — training stack unavailable (engine refused honestly)`,
+        );
+        return null;
+      }
       if (/requires a goal-navigation task pack/i.test(stderr)) {
         console.log(`[provenance] SKIP ${label} — needs a goal-navigation task pack`);
         return null;
@@ -226,6 +239,10 @@ async function main() {
     ['engines/mjlab-rsl-rl-adapter/adapter.py', 'mjlab-adapter', ['numpy']],
     ['engines/offline-bc/train_bc.py', 'offline-bc', ['numpy']],
     ['engines/act/train_act.py', 'act', ['numpy', 'torch']],
+    ['engines/diffusion-policy/train_dp.py', 'diffusion-policy', ['numpy', 'torch', 'onnx']],
+    // SmolVLA runs its CPU planning mode (the full stack REFUSES locally,
+    // which is itself an auditable outcome the engine mode handles).
+    ['engines/smolvla/train_smolvla.py', 'smolvla', ['numpy']],
   ];
   const reported = [];
   let checked = 0;

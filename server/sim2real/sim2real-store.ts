@@ -2791,25 +2791,28 @@ export async function createSim2RealRun(
   });
 }
 
+type RunPatch = Partial<
+  Pick<
+    Sim2RealRunRecord,
+    | 'status'
+    | 'summary'
+    | 'launchUrl'
+    | 'externalRunId'
+    | 'metrics'
+    | 'taskEvaluation'
+    | 'evaluation'
+    | 'checkpoint'
+    | 'progress'
+    | 'finishedAt'
+    | 'mock'
+    | 'artifact'
+    | 'relayLastSeenAt'
+  >
+>;
+
 export async function updateSim2RealRun(
   id: string,
-  patch: Partial<
-    Pick<
-      Sim2RealRunRecord,
-      | 'status'
-      | 'summary'
-      | 'launchUrl'
-      | 'externalRunId'
-      | 'metrics'
-      | 'taskEvaluation'
-      | 'evaluation'
-      | 'checkpoint'
-      | 'progress'
-      | 'finishedAt'
-      | 'mock'
-      | 'artifact'
-    >
-  >,
+  patch: RunPatch,
   owner?: string,
 ): Promise<Sim2RealRunRecord | null> {
   ensureWritable();
@@ -2853,23 +2856,7 @@ export async function updateSim2RealRun(
  */
 export async function updateSim2RealRunForReconcile(
   id: string,
-  patch: Partial<
-    Pick<
-      Sim2RealRunRecord,
-      | 'status'
-      | 'summary'
-      | 'launchUrl'
-      | 'externalRunId'
-      | 'metrics'
-      | 'taskEvaluation'
-      | 'evaluation'
-      | 'checkpoint'
-      | 'progress'
-      | 'finishedAt'
-      | 'mock'
-      | 'artifact'
-    >
-  >,
+  patch: RunPatch,
   owner?: string,
 ): Promise<Sim2RealRunRecord | null> {
   ensureWritable();
@@ -2890,6 +2877,99 @@ export async function updateSim2RealRunForReconcile(
     void emitSim2RealEvent('run.updated', updated.id, withoutRunPrivate(updated), owner);
     return copy(withoutRunPrivate(updated));
   });
+}
+
+/**
+ * Browser-relay claim: attach the worker's runId to a queued relay run.
+ *
+ * The browser submits the job to its loopback agent and then claims the
+ * ledger run with the worker's `runId`. Two tabs can submit the same
+ * idempotent run; only an active relay run (backend `local`, status queued,
+ * relay agent URL set, no external id yet) may be claimed, so the first
+ * reporter wins and later ones see the winner's answer instead of racing.
+ * A null result means the run was already claimed, terminal, or not a relay
+ * run — callers must surface that, not overwrite it.
+ */
+export async function claimSim2RealRunRelay(
+  id: string,
+  externalRunId: string,
+  owner?: string,
+): Promise<Sim2RealRunRecord | null> {
+  const external = String(externalRunId ?? '').trim();
+  if (!/^[a-zA-Z0-9][a-zA-Z0-9._-]{0,119}$/.test(external)) return null;
+  ensureWritable();
+  return serialized(async () => {
+    const ledger = await readLedger();
+    const index = ledger.runs.findIndex((item) => item.id === id && ownerMatches(item, owner));
+    if (index < 0) return null;
+    const current = ledger.runs[index];
+    const hasExternalRunId = String(current.externalRunId ?? '').trim().length > 0;
+    if (
+      current.backend !== 'local' ||
+      !current.relayAgentUrl ||
+      !(current.status === 'queued' || current.status === 'running') ||
+      hasExternalRunId
+    ) {
+      return null;
+    }
+    const updated: StoredRun = {
+      ...current,
+      externalRunId: external,
+      status: 'running',
+      relayLastSeenAt: new Date().toISOString(),
+    };
+    const runs = [...ledger.runs];
+    runs[index] = updated;
+    await writeLedger({ ...ledger, runs });
+    void emitSim2RealEvent('run.updated', updated.id, withoutRunPrivate(updated), owner);
+    return copy(withoutRunPrivate(updated));
+  });
+}
+
+// ---- relay artifact byte store ---------------------------------------------
+// Browser-relayed runs cannot serve policy.onnx lazily from a worker the
+// server cannot reach. The browser uploads the verified bytes once; they are
+// stored on disk keyed by content digest (same verify-before-serve chain the
+// worker itself uses) and every read re-hashes them.
+
+function relayArtifactDir(): string {
+  return path.join(path.dirname(ledgerPath()), 'relay-artifacts');
+}
+
+function relayArtifactPath(sha256: string): string | null {
+  return /^[a-f0-9]{64}$/.test(sha256) ? path.join(relayArtifactDir(), `${sha256}.onnx`) : null;
+}
+
+/**
+ * Persist an uploaded relay artifact. The digest must already be the
+ * server-computed hash of exactly these bytes (callers verify before calling
+ * so a mismatch never reaches disk). Idempotent: a second upload of the same
+ * content is a no-op.
+ */
+export async function storeSim2RealRelayArtifact(sha256: string, bytes: Buffer): Promise<void> {
+  const file = relayArtifactPath(sha256);
+  if (!file) throw new Sim2RealError('sim2real_relay_artifact_digest_invalid');
+  ensureWritable();
+  await fs.mkdir(relayArtifactDir(), { recursive: true });
+  await fs.writeFile(file, bytes, { mode: 0o600 });
+}
+
+/**
+ * Read a stored relay artifact, re-verifying the content digest. A missing
+ * file, an unreadable file, or a tampered file all return null — callers
+ * fail closed rather than serving unverified bytes.
+ */
+export async function readSim2RealRelayArtifact(sha256: string): Promise<Buffer | null> {
+  const file = relayArtifactPath(sha256);
+  if (!file) return null;
+  let bytes: Buffer;
+  try {
+    bytes = await fs.readFile(file);
+  } catch {
+    return null;
+  }
+  if (createHash('sha256').update(bytes).digest('hex') !== sha256) return null;
+  return bytes;
 }
 
 export interface Sim2RealRunEvaluationContext {
@@ -3300,7 +3380,7 @@ export async function appendSim2RealTelemetryWithResult(
       {
         telemetryId: record.id,
         sequence: record.sequence,
-        sampleCount: record.samples.length,
+        sampleCount: Array.isArray(record.samples) ? record.samples.length : 0,
         ...(record.attested === true ? { attested: true } : {}),
       },
       owner,

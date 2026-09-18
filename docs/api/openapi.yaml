@@ -493,6 +493,120 @@ paths:
           description: Replay and evaluation summary.
           content: { application/json: { schema: { $ref: "#/components/schemas/ReplayResponse" } } }
         "404": { $ref: "#/components/responses/NotFound" }
+  /api/v1/duck/runs/{runId}/logs:
+    get:
+      tags: [runs]
+      summary: Read incremental engine stdout/stderr log lines
+      operationId: getRunLogs
+      description: >-
+        Proxies the local training worker's bounded line ring (scrubbed
+        stdout/stderr, newest 600 lines / 64 KiB) for a local-backend run.
+        Lines carry worker-assigned sequence numbers; the `after` query
+        parameter is a cursor so a poll returns only the new tail. Any job
+        status may be read — queued runs have no lines yet and terminal runs
+        keep their final log for post-mortem inspection. RoboGo or mock runs
+        answer 409: there is no log channel to serve, and the platform never
+        fabricates one.
+      parameters:
+        - $ref: "#/components/parameters/RunId"
+        - name: after
+          in: query
+          required: false
+          schema: { type: integer, minimum: 0, default: 0 }
+          description: Only lines with a sequence number greater than this cursor are returned.
+      responses:
+        "200":
+          description: >-
+            Log lines plus cursor state (`total`, `retainedFrom`, and
+            `truncated` when the cursor predates the retention window).
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [ok, runId, status, total, retainedFrom, lines]
+                properties:
+                  ok: { type: boolean }
+                  runId: { type: string }
+                  status: { type: string }
+                  total: { type: integer }
+                  retainedFrom: { type: integer }
+                  truncated: { type: boolean }
+                  lines:
+                    type: array
+                    items:
+                      type: object
+                      required: [n, stream, text]
+                      properties:
+                        n: { type: integer, minimum: 1 }
+                        stream: { type: string, enum: [stdout, stderr] }
+                        text: { type: string, maxLength: 2000 }
+        "401": { $ref: "#/components/responses/AuthRequired" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409":
+          description: No log channel (remote runner, mock run, or no external run id).
+        "503":
+          description: Worker temporarily unreachable; retryable.
+  /api/v1/duck/runs/{runId}/replay-video:
+    parameters:
+      - $ref: "#/components/parameters/RunId"
+    post:
+      tags: [telemetry]
+      summary: Render the run's camera frames into an MP4 artifact
+      operationId: renderReplayVideo
+      description: >-
+        Encodes the aligned camera frames already accepted in the run's
+        telemetry into a shareable MP4 (server-side ffmpeg, raw rgb8/bgr8/
+        mono8 piped in). The video is a rendering of accepted evidence, not
+        new evidence: only a single-source, fully attested board run
+        qualifies — mixed or imported runs fail closed with the reason. The
+        digest and frame count are recorded in the run's metrics; the bytes
+        are digest-re-verified on every serve. A geometry mismatch across
+        frames or a missing ffmpeg is refused, never substituted.
+      responses:
+        "200":
+          description: Video rendered; digest, size, frame count, fps, and duration.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [ok, runId, video]
+                properties:
+                  ok: { type: boolean }
+                  runId: { type: string }
+                  video:
+                    type: object
+                    required: [sha256, sizeBytes, frameCount, fps, durationSeconds, url]
+                    properties:
+                      sha256: { type: string }
+                      sizeBytes: { type: integer }
+                      frameCount: { type: integer }
+                      fps: { type: number }
+                      durationSeconds: { type: number }
+                      url: { type: string }
+        "401": { $ref: "#/components/responses/AuthRequired" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409":
+          description: Not eligible (mixed sources, not attested, no camera frames, or geometry mismatch).
+        "503":
+          description: ffmpeg render failed or is unavailable; retryable.
+    get:
+      tags: [telemetry]
+      summary: Download the rendered replay video bytes
+      operationId: downloadReplayVideo
+      description: >-
+        Streams the MP4 rendered by the POST of the same path. Served only
+        when the run's metrics record a replay video whose sha256 matches the
+        bytes on disk; a stale or tampered file answers 404 instead of
+        unverified content.
+      responses:
+        "200":
+          description: MP4 bytes (digest in X-Replay-Video-Sha256).
+          content:
+            video/mp4:
+              schema: { type: string, format: binary }
+        "401": { $ref: "#/components/responses/AuthRequired" }
+        "404":
+          description: Run not found, or no digest-matching rendered video.
   /api/v1/duck/runs/{runId}/retraining-advice:
     get:
       tags: [telemetry]
@@ -714,6 +828,7 @@ paths:
               required: [message]
               properties:
                 message: { type: string, minLength: 1, maxLength: 12000 }
+                sessionId: { type: string, maxLength: 160, pattern: "^sim2real-[A-Za-z0-9-]+$" }
                 model: { type: string, minLength: 1, maxLength: 160, pattern: "^[A-Za-z0-9][A-Za-z0-9._:/-]{0,159}$" }
       responses:
         "200":
@@ -727,6 +842,13 @@ paths:
                   ok: { const: true }
                   sessionId: { type: string }
                   text: { type: string, maxLength: 20000 }
+                  usage:
+                    type: object
+                    additionalProperties: false
+                    properties:
+                      inputTokens: { type: integer, minimum: 0 }
+                      outputTokens: { type: integer, minimum: 0 }
+                      totalTokens: { type: integer, minimum: 0 }
                   events:
                     type: array
                     maxItems: 50

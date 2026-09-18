@@ -20,7 +20,7 @@
          theme x view screenshots). See services/sim2real-web/ui-layout-invariants.mjs
          for the guards that keep new overrides from re-introducing layering. -->
     <link rel="stylesheet" href="./tokens.css?v=2" />
-    <link rel="stylesheet" href="./app.css?v=35" />
+    <link rel="stylesheet" href="./app.css?v=36" />
   </head>
   <body>
     <a class="skip-link" href="#main-content">跳到主要内容</a>
@@ -508,6 +508,7 @@
             <div class="agent-chat-layout">
               <aside class="agent-chat-sessions" aria-label="对话历史">
                 <button class="agent-new-session" id="agent-new-session" type="button">＋ 新建对话</button>
+                <button class="agent-export-session" id="agent-export-session" type="button">导出当前对话</button>
                 <div class="agent-session-label">最近对话</div>
                 <div id="agent-session-list"><button class="agent-session-item is-active" type="button" data-static-current>当前对话</button></div>
               </aside>
@@ -515,13 +516,14 @@
                 <div class="agent-chat-message agent-chat-message-agent"><strong>Agent</strong><p>告诉我你要完成什么。例如：跑一轮 GPU 训练，检查 X5，再做只读预检。</p></div>
               </div>
               <div class="agent-chat-side">
-                <div class="agent-plan-card" id="agent-plan-card"><span class="empty-inline">等待任务计划…</span></div>
-                <div class="agent-evidence" id="agent-evidence"><span class="empty-inline">执行证据会显示在这里</span></div>
-                <div class="agent-event-log" id="agent-event-log"><span class="empty-inline">工具事件会实时显示在这里</span></div>
+                <div class="agent-plan-card" id="agent-plan-card"><span class="agent-empty-state"><strong>任务计划</strong><small>等待任务计划…</small></span></div>
+                <div class="agent-evidence" id="agent-evidence"><span class="agent-empty-state"><strong>执行证据</strong><small>任务开始后显示可核验结果</small></span></div>
+                <div class="agent-event-log" id="agent-event-log"><span class="agent-empty-state"><strong>工具事件</strong><small>任务开始后显示实时轨迹</small></span></div>
               </div>
             </div>
             <form class="agent-chat-composer" id="agent-chat-form">
-              <input id="agent-chat-input" autocomplete="off" aria-label="描述要执行的任务" placeholder="例如：完成仿真、GPU 训练和 X5 真机预检" />
+              <input id="agent-chat-input" autocomplete="off" maxlength="2000" aria-label="描述要执行的任务" placeholder="例如：完成仿真、GPU 训练和 X5 真机预检" />
+              <button class="button button-ghost" type="button" data-agent-stop hidden>停止等待</button>
               <button class="button button-primary" type="submit">发送任务 ↗</button>
             </form>
           </section>
@@ -825,6 +827,21 @@
                       引擎每个 checkpoint 间隔回报一次均值奖励与近期成功率；数据来自 worker 解析的引擎 stdout。
                     </p>
                   </div>
+                  <div class="run-progress-logs" id="run-progress-logs" hidden>
+                    <div class="run-progress-logs-heading">
+                      <strong>引擎日志流</strong>
+                      <span class="panel-caption" id="run-progress-logs-caption">—</span>
+                    </div>
+                    <pre
+                      id="run-progress-logs-body"
+                      class="run-progress-logs-body"
+                      aria-label="引擎 stdout 与 stderr 逐行日志"
+                      aria-live="off"
+                    ></pre>
+                    <p class="small-note" id="run-progress-logs-note">
+                      worker 逐行采集的引擎 stdout/stderr（脱敏后保留最近 600 行）；任务结束后日志保留供事后排查。
+                    </p>
+                  </div>
                   <div class="run-progress-warning" id="run-progress-warning" hidden>
                     Mock 只验证协议和台账，不会生成可部署模型。
                   </div>
@@ -859,7 +876,9 @@
                       <option value="dm-control-ppo">dm-control-ppo · DeepMind 生态 env API（CPU MuJoCo）</option>
                       <option value="microduck-rl">microduck-rl · mjlab 并行物理（CUDA）</option>
                       <option value="mjlab-rsl-rl">mjlab-rsl-rl · mjlab 物理 + rsl-rl PPO（CUDA）</option>
-                      <option value="act">act · 动作分块模仿（示教轨迹，CPU）</option></select
+                      <option value="act">act · 动作分块模仿（示教轨迹，CPU）</option>
+                      <option value="diffusion-policy">diffusion-policy · 扩散动作分块模仿（示教轨迹，CPU）</option>
+                      <option value="smolvla">smolvla · LeRobot VLA 参考（CPU 规划 / CUDA 全量）</option></select
                     ><label class="field-label" for="compute-resource-select">训练资源</label
                     ><select id="compute-resource-select" aria-label="选择 GPU 训练资源">
                       <option value="">服务端默认本地 Worker</option>
@@ -1147,6 +1166,27 @@
                   <canvas id="replay-camera-canvas" width="1" height="1" role="img" aria-label="该回放帧对应的相机画面"></canvas>
                   <figcaption class="small-note" id="replay-camera-note">该运行没有对齐的相机帧（向量观测回放）。</figcaption>
                 </figure>
+                <div class="replay-video-block" id="replay-video-block" hidden>
+                  <div class="replay-video-heading">
+                    <strong>回放视频（MP4）</strong>
+                    <span class="panel-caption" id="replay-video-caption">—</span>
+                  </div>
+                  <video
+                    id="replay-video-element"
+                    controls
+                    muted
+                    playsinline
+                    preload="none"
+                    aria-label="该运行的相机帧导出视频"
+                  ></video>
+                  <div class="replay-video-controls">
+                    <button class="button button-ghost button-small" id="replay-video-render" type="button">导出视频（ffmpeg）</button>
+                    <a id="replay-video-download" class="button button-ghost button-small" hidden download>下载 MP4</a>
+                  </div>
+                  <p class="small-note" id="replay-video-note">
+                    服务端把已验收的板端相机帧编码为 MP4（单来源且全部 attested 的运行才可导出）；视频是已验收证据的渲染，不是新证据。播放进度与统一时间轴联动。
+                  </p>
+                </div>
                 <div class="replay-player-controls policy-trial" id="policy-trial-controls">
                   <button class="button button-primary button-small" id="policy-trial-button" type="button">🚀 策略试跑（浏览器推理）</button>
                   <button class="button button-ghost button-small" id="policy-trial-stop" type="button" disabled>■ 停止试跑</button>
@@ -2061,8 +2101,8 @@
       blocking the parser at body end.
     -->
     <script defer src="./telemetry-core.js?v=duck-lab-30"></script>
-    <script defer src="./app.js?v=duck-lab-48"></script>
-    <script defer src="./agent-chat.js?v=agent-12"></script>
+    <script defer src="./app.js?v=duck-lab-49"></script>
+    <script defer src="./agent-chat.js?v=agent-13"></script>
     <script defer src="./onboarding.js?v=onboarding-5"></script>
   </body>
 </html>
