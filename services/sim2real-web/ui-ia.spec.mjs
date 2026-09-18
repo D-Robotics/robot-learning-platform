@@ -182,7 +182,7 @@ const navLabels = [
 assert.deepEqual(
   navLabels,
   [
-    '工作台总览',
+    '工作台',
     'Agent 对话',
     '仿真与录制',
     '强化学习训练',
@@ -190,7 +190,7 @@ assert.deepEqual(
     '部署与反馈',
     'GPU 与算力',
     '调试与记录',
-    '设备上位机',
+    '设备控制台',
   ],
   'sidebar nav labels must match the three-group IA',
 );
