@@ -4332,11 +4332,11 @@ body.is-loading .app-shell {
 .agent-message-actions { display:flex; justify-content:flex-end; margin-top:6px; }
 .agent-message-copy { border:0; padding:2px 6px; border-radius:5px; color:var(--muted); background:transparent; font-size:12px; cursor:pointer; }
 .agent-message-copy:hover { color:var(--accent-text); background:var(--accent-soft); }
-.agent-chat-typing { display:flex; align-items:center; gap:8px; margin:0 0 10px; padding:7px 10px; color:var(--muted); font-size:12px; }
+.agent-chat-typing { display:flex; align-items:center; gap:8px; margin:0 0 10px; padding:8px 10px; color:var(--muted); font-size:12px; }
 .agent-chat-typing i { color:var(--accent-text); font-style:normal; letter-spacing:3px; animation:agent-typing-pulse 1.2s ease-in-out infinite; }
 @keyframes agent-typing-pulse { 0%,100% { opacity:.3; } 50% { opacity:1; } }
 .agent-chat-side { display:grid; gap:10px; }
-.agent-export-session { border:1px solid var(--line); border-radius:8px; padding:7px 9px; color:var(--muted-strong); background:transparent; font-size:12px; cursor:pointer; }
+.agent-export-session { border:1px solid var(--line); border-radius:8px; padding:8px 10px; color:var(--muted-strong); background:transparent; font-size:12px; cursor:pointer; }
 .agent-export-session:hover { color:var(--accent-text); border-color:var(--line-strong); background:var(--accent-soft); }
 .agent-plan-card ol { margin:12px 0 0; padding:0; list-style:none; }
 .agent-plan-card li { display:flex; align-items:center; gap:8px; padding:6px 0; font-size:13px; }
