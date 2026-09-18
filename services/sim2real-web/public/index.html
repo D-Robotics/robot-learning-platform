@@ -125,24 +125,24 @@
         <div class="sidebar-backdrop" id="sidebar-backdrop" hidden></div>
         <aside class="sidebar" id="platform-sidebar" aria-label="平台导航">
           <div class="sidebar-project">
-            <span class="sidebar-project-icon" aria-hidden="true">◇</span>
-            <div>
-              <strong id="sidebar-product-name">MicroDuck</strong
-              ><select id="product-select" aria-label="选择产品线">
+            <div class="sidebar-project-heading">
+              <span class="sidebar-project-icon" aria-hidden="true">◇</span>
+              <strong id="sidebar-product-name">MicroDuck</strong>
+            </div>
+            <select id="product-select" aria-label="选择产品线">
                 <option value="microduck">MicroDuck · 官方参考</option>
                 <option value="originbot">OriginBot · X5 真机</option>
                 <option value="rdk-duck">RDK Duck · X5 产品</option>
-              </select>
-              <div class="sidebar-project-context">
+            </select>
+            <div class="sidebar-project-context">
+              <div class="sidebar-project-label-row">
                 <label for="project-select">项目</label>
-                <div class="sidebar-project-context-row">
-                  <select id="project-select" aria-label="选择当前项目">
-                    <option value="">全部项目</option>
-                  </select>
-                  <button class="sidebar-project-add" id="project-create-button" type="button" aria-label="新建项目" title="新建项目">＋</button>
-                </div>
-                <small id="project-context-note">工作区加载中…</small>
+                <button class="sidebar-project-add" id="project-create-button" type="button" aria-label="新建项目" title="新建项目">＋ 新建</button>
               </div>
+              <select id="project-select" aria-label="选择当前项目">
+                <option value="">全部项目</option>
+              </select>
+              <small id="project-context-note">工作区加载中…</small>
             </div>
             <span
               class="sidebar-project-state is-waiting"
@@ -838,8 +838,9 @@
                 </div>
                 <details class="training-controls">
                   <summary>训练参数与续训</summary>
-                  <div class="training-grid">
-                    <label class="field-label" for="training-profile">训练档位<small class="profile-pref-note" data-training-profile-note hidden>已按你上次的选择预选</small></label
+                  <div class="training-grid"><div class="training-field-group" role="group" aria-labelledby="training-group-basic">
+                      <div class="training-group-title" id="training-group-basic">训练设置</div>
+                      <label class="field-label" for="training-profile">训练档位<small class="profile-pref-note" data-training-profile-note hidden>已按你上次的选择预选</small></label
                     ><select id="training-profile" aria-label="选择训练档位">
                       <option value="smoke">冒烟 · 64 环境 / 5 轮</option>
                       <option value="low-vram">低显存 · 64 环境起步</option>
@@ -857,26 +858,33 @@
                       <option value="visual-ppo">visual-ppo · 顶置相机像素观测（CPU MuJoCo）</option>
                       <option value="dm-control-ppo">dm-control-ppo · DeepMind 生态 env API（CPU MuJoCo）</option>
                       <option value="microduck-rl">microduck-rl · mjlab 并行物理（CUDA）</option>
-                      <option value="mjlab-rsl-rl">mjlab-rsl-rl · mjlab 物理 + rsl-rl PPO（CUDA）</option></select
+                      <option value="mjlab-rsl-rl">mjlab-rsl-rl · mjlab 物理 + rsl-rl PPO（CUDA）</option>
+                      <option value="act">act · 动作分块模仿（示教轨迹，CPU）</option></select
                     ><label class="field-label" for="compute-resource-select">训练资源</label
                     ><select id="compute-resource-select" aria-label="选择 GPU 训练资源">
                       <option value="">服务端默认本地 Worker</option>
                     </select
-                    ><label class="field-label" for="resume-checkpoint-id"
-                      >续训 checkpoint（可选）</label
+                    >
+                    </div>
+                    <div class="training-field-group" role="group" aria-labelledby="training-group-resume">
+                      <div class="training-group-title" id="training-group-resume">续训（可选）</div>
+                      <label class="field-label" for="resume-checkpoint-id"
+                      >续训 checkpoint</label
                     ><input
                       id="resume-checkpoint-id"
                       type="text"
                       placeholder="checkpoint-1500"
                       autocomplete="off"
                     /><label class="field-label" for="resume-artifact-ref"
-                      >续训制品引用（可选）</label
+                      >续训制品引用</label
                     ><input
                       id="resume-artifact-ref"
                       type="text"
                       placeholder="artifact://model/checkpoint-1500"
                       autocomplete="off"
-                    /><div class="engine-capability-note" id="engine-capability-note" hidden>
+                    />
+                    </div>
+                    <div class="engine-capability-note" id="engine-capability-note" hidden>
                       <span class="engine-capability-name" id="engine-capability-name"></span>
                       <span class="engine-capability-badges" id="engine-capability-badges"></span>
                       <p class="engine-capability-desc" id="engine-capability-desc"></p>
@@ -951,6 +959,32 @@
                 查看运行记录 →
               </button>
             </div>
+            <div class="evaluation-empty" id="evaluation-empty" hidden>
+              <div class="evaluation-empty-card">
+                <div class="evaluation-empty-head">
+                  <strong>还没有可评测的数据</strong>
+                  <span>页面只展示真实结果，没有数据时不摆空面板占位。</span>
+                </div>
+                <ol class="evaluation-empty-steps">
+                  <li>
+                    <span class="evaluation-empty-step-index">01</span>
+                    <div><strong>发起一次训练或回放</strong><small>训练完成后，指标和运行记录会自动出现在这里</small></div>
+                  </li>
+                  <li>
+                    <span class="evaluation-empty-step-index">02</span>
+                    <div><strong>导入一段遥测证据</strong><small>X5 Agent 或浏览器录制的 JSONL，本地解析不上传</small></div>
+                  </li>
+                  <li>
+                    <span class="evaluation-empty-step-index">03</span>
+                    <div><strong>对比仿真与真机</strong><small>指标卡、效果对比和逐帧回放在有数据后展开</small></div>
+                  </li>
+                </ol>
+                <div class="evaluation-empty-actions">
+                  <button class="button button-primary" id="evaluation-empty-import" type="button">导入遥测 JSONL</button>
+                  <button class="button button-ghost" data-view-target="train" type="button">去发起训练</button>
+                </div>
+              </div>
+            </div>
             <div class="evaluation-grid">
               <article class="panel metrics-panel">
                 <div class="panel-heading panel-heading-lean"><h2>关键指标</h2>
@@ -1007,6 +1041,7 @@
                 </div>
               </article>
             </div>
+            <div class="evaluation-evidence">
             <article class="panel run-comparison-panel" aria-labelledby="run-comparison-title">
               <div class="panel-heading panel-heading-lean">
                 <div><h2 id="run-comparison-title">最近实验对比</h2><p class="panel-subtitle">用同一模型的最近 Run 快速判断趋势</p></div>
@@ -1039,6 +1074,25 @@
                   叠加各次运行的训练曲线（均值奖励，左轴）；图例顺序与下方列表一致。
                 </p>
               </div>
+              <div class="run-comparison-parcoords" id="run-comparison-parcoords" hidden>
+                <canvas role="img"
+                  id="run-parcoords-canvas"
+                  width="720"
+                  height="220"
+                  aria-label="多次运行指标的平行坐标对比"
+                ></canvas>
+                <p class="small-note" id="run-parcoords-note">每条折线是一次运行，各列已归一化；折线越靠右侧列高位的运行整体表现越好。缺指标的运行不参与。</p>
+              </div>
+              <details class="run-comparison-diff" id="run-comparison-diff" hidden>
+                <summary>参数差异（相对最近一次）</summary>
+                <div class="table-scroll">
+                  <table class="record-table" aria-label="各次运行训练参数差异">
+                    <thead><tr id="run-diff-header"><th>参数</th><th id="run-diff-col-0">#1 · 最近</th></tr></thead>
+                    <tbody id="run-diff-body"></tbody>
+                  </table>
+                </div>
+                <p class="small-note" id="run-diff-note">只列出各次运行之间实际不同的训练参数；全部一致时显示一行说明。</p>
+              </details>
               <div class="run-comparison" id="run-comparison" aria-live="polite">
                 <div class="empty-inline">完成一次训练或评测后，这里会显示可比较的指标。</div>
               </div>
@@ -1100,6 +1154,14 @@
                 </div>
               </div>
               <div class="telemetry-visuals" id="telemetry-visuals" hidden>
+                <div class="telemetry-scrub" id="telemetry-scrub" hidden>
+                  <div class="telemetry-scrub-heading">
+                    <strong>统一时间轴</strong>
+                    <span id="telemetry-scrub-position">0.00s · 帧 0 / 0</span>
+                  </div>
+                  <input id="telemetry-scrub-input" type="range" min="0" max="0" value="0" step="1" disabled aria-label="统一回放时间轴：同步奖励曲线、热力图与相机帧" />
+                  <p class="small-note" id="telemetry-scrub-note">拖动后奖励曲线、观测 / 动作热力图与相机帧会同步到同一时刻。</p>
+                </div>
                 <div class="telemetry-chart-block">
                   <div class="telemetry-chart-heading">
                     <span class="telemetry-chart-legend">
@@ -1153,6 +1215,20 @@
                   <span id="telemetry-heatmap-range">—</span>
                   <span class="small-note">按维度均值归一化的逐帧值（蓝 → 白 → 红）</span>
                 </div>
+                <div class="telemetry-chart-block" id="telemetry-episodes-block" hidden>
+                  <div class="telemetry-chart-heading">
+                    <span class="panel-caption" id="telemetry-episodes-caption">episode 长度分布</span>
+                  </div>
+                  <canvas
+                    id="telemetry-episodes-canvas"
+                    class="telemetry-canvas"
+                    width="720"
+                    height="180"
+                    role="img"
+                    aria-label="episode 长度分布直方图与离群标记"
+                  ></canvas>
+                  <p class="telemetry-chart-note small-note" id="telemetry-episodes-note">episode 以 done/fall 事件切分；直方图为长度分布，红点为离群 episode（与中位数相差超过 3×MAD）。</p>
+                </div>
               </div>
               <div class="telemetry-actions">
                 <button
@@ -1176,6 +1252,7 @@
                 >
               </div>
             </article>
+            </div>
             <div class="evaluation-next">
               <span class="next-line" id="evaluation-next-line"></span>
               <strong id="evaluation-next-title">下一步：通过评测后生成 X5 预检计划</strong>
@@ -1984,7 +2061,7 @@
       blocking the parser at body end.
     -->
     <script defer src="./telemetry-core.js?v=duck-lab-30"></script>
-    <script defer src="./app.js?v=duck-lab-45"></script>
+    <script defer src="./app.js?v=duck-lab-48"></script>
     <script defer src="./agent-chat.js?v=agent-12"></script>
     <script defer src="./onboarding.js?v=onboarding-5"></script>
   </body>

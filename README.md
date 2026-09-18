@@ -6,6 +6,14 @@
 
 面向 MicroDuck 与 RDK-X5 的机器人学习工作台：仿真、录制、训练、评测、部署和虚实迭代，都围绕同一份可追溯模型契约组织。
 
+**English (short version)** — A web-based robot learning workbench for MicroDuck and RDK-X5,
+covering simulation, trajectory recording, training, telemetry evaluation, and controlled deployment.
+Local engines include PPO, MLP behavior cloning, and ACT action chunking with numerical ONNX export
+checks. The default Mock workflow needs no GPU; real training requires the selected engine's Python
+dependencies. ACT accepts recorded episodes through its CLI; its worker integration currently runs
+on synthetic smoke data. Board deployment requires hardware integration and release evidence.
+See the quick start below and the [documentation index](docs/README.md).
+
 [![verify](https://github.com/D-Robotics/robot-learning-platform/actions/workflows/verify.yml/badge.svg)](https://github.com/D-Robotics/robot-learning-platform/actions/workflows/verify.yml)
 [![Node.js](https://img.shields.io/badge/Node.js-22.22.2%2B-339933?logo=nodedotjs&logoColor=white)](https://nodejs.org/)
 [![API](https://img.shields.io/badge/API-versioned%20%2Fapi%2Fv1%2Fduck-ff7433)](docs/api/openapi.yaml)
@@ -34,7 +42,14 @@ Node.js 需要 `^22.22.2 || ^24.15.0 || >=26.0.0`（与 `package.json` 的 `engi
 
 产品定位、同类能力对标和当前成熟度判断见 [`docs/product-maturity-plan.md`](docs/product-maturity-plan.md)。一句话概括：这是 **RDK 机器人策略的证据链与安全交付控制面**，重点是把 Run、制品、评测、板型预检和人工审批连成可审计发布链。
 
-### 三条训练路径
+### 工作台更新
+
+- **训练配置**：引擎能力说明、训练设置与续训参数分组；可选引擎需由 worker 显式注册。
+- **遥测回放**：统一时间轴联动奖励曲线、观测/动作热图，支持逐帧检查。
+- **数据体检**：展示 episode 长度分布与离群提示；无数据时提供导入指引。
+- **部署判断**：汇总可用板卡，并按原因折叠展示不兼容项。
+
+### 训练路径与引擎
 
 | 路径 | 适合谁 | 当前仓库能验证什么 | 生产接入点 |
 | --- | --- | --- | --- |
@@ -44,6 +59,7 @@ Node.js 需要 `^22.22.2 || ^24.15.0 || >=26.0.0`（与 `package.json` 的 `engi
 | **本地 / 视觉观测** | 要「顶置相机像素 → 策略」端到端 | 纯 JAX PPO + ONNX 导出 ≡ JAX 前向（`npm run verify:vision-observation`） | `engines/visual-ppo` |
 | **本地 / dm_control** | 要 DeepMind 生态 env API | dm_control `rl.control.Environment` + 同一 MJCF 物理（`npm run verify:dm-control-adapter`） | `engines/dm-control-adapter` |
 | **本地 / 行为克隆** | 有示教/录制数据，想直接克隆策略 | 真 MLP BC + train/val 分离 + ONNX 数值等价证明（`npm run verify:offline-bc`） | `engines/offline-bc` |
+| **本地 / ACT 分块模仿** | 有带 episode 边界的示教轨迹，想训练动作分块策略 | 真 ACT（Zhao et al. 2023）：Transformer 编解码 + CVAE 隐变量 + k 步动作分块 + 时序集成，episode 级 train/val 划分，ONNX 与 torch 前向数值等价（`npm run verify:act`） | `engines/act` |
 | **RoboGo** | 有云端算力和训练账号 | manifest 校验、请求边界、token 不出浏览器、状态 reconcile | `RoboGoRunnerPort` |
 
 Mock 的 `completed` 只表示协议演练完成，不代表真实 PPO 权重或可部署模型；真实训练必须由已配置的 runner 明确返回制品。starter-ppo 返回的是真实训练产物（`mock=false`），但其 numpy 物理不是 MicroDuck 全身动力学；MJX 引擎跑真 MuJoCo 接触动力学（台账标注 `physicsBackend=mjx`）；dm_control 适配器跑同一 MJCF 物理但经 DeepMind 生态 env API（`physicsBackend=dm-control-mujoco`）；视觉训练引擎吃顶置相机像素观测（`physicsBackend=cpu-mujoco-vision`）。所有本地引擎 `deployable` 恒为 `false`。
@@ -57,6 +73,7 @@ Mock 的 `completed` 只表示协议演练完成，不代表真实 PPO 权重或
 | 本地 Mock 闭环 | ✅ | 无 CUDA 可跑通 API 和 UI 流程 |
 | **CPU 真实 PPO 训练（starter-ppo）** | ✅ | `npm run demo:starter`：真训练 + 真 ONNX + 遥测评测，无 GPU 依赖 |
 | **视觉观测训练（顶置相机像素 → 策略）** | ✅ | `engines/visual-ppo`：真 JAX PPO 吃 64×64 顶置相机渲染 + 板载 8D 混合观测，ONNX 导出与 JAX 前向数值等价，`npm run verify:vision-observation` |
+| **ACT 动作分块模仿** | ✅ 本地训练 / 🟡 Worker 冒烟 | Transformer + CVAE 隐变量、episode 级训练/验证划分、动作分块与时序集成；ONNX 导出带数值等价检查。CLI 接受真实轨迹，worker 当前使用合成示教数据；不代表真机动作效果或上板就绪。见 [ACT 使用说明](docs/engines/act.md) |
 | **物理级域随机化（质量/摩擦/执行器）** | ✅ | MJX 引擎任务包契约新增 `physicalDomainRandomization`（轮摩擦、底盘质量、伺服 kv 按 episode 重采样并进入 vmap 轨迹），`npm run verify:mjx-adapter` 实证质量被真实改变 |
 | **dm_control 生态适配** | ✅ | `engines/dm-control-adapter`：dm_control 1.x `rl.control.Environment`/`Task` 钩子 + 与 MJX 同源 MJCF 物理，`npm run verify:dm-control-adapter`；Playground 侧如实结论见 [docs/engines/dm-control-adapter.md](docs/engines/dm-control-adapter.md) |
 | **MJX 引擎（MuJoCo 接触动力学，纯 JAX）** | ✅ | `npm run verify:mjx-adapter`：真 MJX 物理 + 纯 JAX PPO + 质量门证据，本机 CPU 可验证（无 jax 时 SKIP）；GPU 按 profile 放大吞吐。见 [docs/engines/mjx-adapter.md](docs/engines/mjx-adapter.md) |
@@ -99,6 +116,16 @@ python3 -m pip install --user numpy torch onnx
 npm run demo:starter
 ```
 
+有示教数据时，可以单独运行 ACT（Python 环境需安装 `numpy`、`torch`、`onnx`、`onnxruntime`；锁定依赖见 `engines/act/requirements.txt`）：
+
+```bash
+npm run train:act -- recordings.jsonl --out model.json --onnx policy.onnx --chunk 8
+npm run verify:act
+```
+
+轨迹必须包含 episode 边界，并有足够回合用于训练/验证划分。可选的集成 ONNX 与延迟测量参数见
+[ACT 使用说明](docs/engines/act.md)。训练主机的延迟结果不能替代 X5 板端测量。
+
 先跑 `npm run doctor` 可以一键体检环境（Node/Python/ONNX/GPU/端口），每条失败项都带修复命令。
 
 它会用 `engines/starter-ppo`（numpy 向量化物理 + torch PPO，**自动检测 CUDA**：有 GPU 就用 GPU，没有就 CPU 且如实上报 `result.cuda=false`）完成：注册 manifest → `mock=false` 的真实训练 → 导出 `policy.onnx` → 分块上传评测轨迹 → 对未训练基线出 MAE/RMSE 评测。依赖缺失时明确退出，不伪造训练结果；详见 [`docs/engines/starter-ppo.md`](docs/engines/starter-ppo.md)。有独立 GPU 机器时用 `node scripts/gpu-deploy.mjs` 一键部署（见 [`docs/gpu-runner.md`](docs/gpu-runner.md)）。生产级 GPU 训练（mjlab + rsl-rl）的接入参考在 `engines/mjlab-rsl-rl-adapter/`。
@@ -140,7 +167,7 @@ npm run lint
 npm run format:check
 ```
 
-`npm test`（vitest）与 `npm run verify` 是两套互补的门禁：前者是单元/行为测试，后者串起 20+ 个契约与接线断言脚本、构建、API 契约核对和本地 smoke。`npm run verify:escape-audit` 扫描前端模板插值，禁止未转义的值进入 `innerHTML`。
+`npm test`（vitest）与 `npm run verify` 是两套互补的门禁：前者是单元/行为测试，后者串起契约与接线断言脚本、构建、API 契约核对和本地 smoke。`npm run verify:escape-audit` 扫描前端模板插值，禁止未转义的值进入 `innerHTML`。
 
 `npm run verify:local-worker` 会用一个临时外部引擎验证真实 Worker 契约；
 `npm run verify:board-agent` 会验证只读 BoardAgent、模拟标记和 token 闸门；

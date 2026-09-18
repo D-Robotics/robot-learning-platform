@@ -35,6 +35,7 @@ const ENGINES = [
   'mjlab-rsl-rl-adapter',
   'microduck-eval',
   'offline-bc',
+  'act',
 ];
 const check = process.argv.includes('--check');
 

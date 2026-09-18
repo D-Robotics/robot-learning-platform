@@ -1383,13 +1383,62 @@ h2 {
   gap: 4px;
   margin-top: 6px;
 }
-.compatibility-row {
+/* 2026-09-17 层次优化：逐板平铺的 .compatibility-row 收敛为
+   「可上板 chips + 未兼容原因折叠」。旧 row/state 规则同步移除，
+   新选择器全部首次定义（跨层预算 306/306 不动）。 */
+.compatibility-summary {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
-  justify-content: space-between;
-  gap: 8px;
+  gap: 4px 6px;
   border-radius: 7px;
   padding: 6px 8px;
+  background: rgba(28, 28, 26, 0.02);
+}
+.compatibility-summary-label {
+  color: var(--green-text);
+  font-size: 12px;
+  font-weight: 600;
+}
+.compatibility-chip {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 8px;
+  border: 1px solid var(--green-text);
+  border-radius: 999px;
+  color: var(--green-text);
+  font:
+    10.5px ui-monospace,
+    SFMono-Regular,
+    Menlo,
+    monospace;
+}
+.compatibility-note {
+  color: var(--muted);
+  font-size: 12px;
+}
+.compatibility-detail summary {
+  cursor: pointer;
+  padding: 4px 8px;
+  border-radius: 7px;
+  color: var(--muted);
+  font-size: 12px;
+}
+.compatibility-reasons {
+  display: grid;
+  gap: 4px;
+  margin: 4px 0 0;
+  padding: 0;
+  list-style: none;
+}
+.compatibility-reasons li {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 4px 8px;
+  border-radius: 7px;
+  color: var(--muted);
+  font-size: 12px;
   background: rgba(28, 28, 26, 0.02);
 }
 .compatibility-platform {
@@ -1399,18 +1448,6 @@ h2 {
     SFMono-Regular,
     Menlo,
     monospace;
-}
-.compatibility-state {
-  font-size: 12px;
-}
-.compatibility-state-ready {
-  color: var(--green-text);
-}
-.compatibility-state-blocked {
-  color: var(--orange-text);
-}
-.compatibility-state-error {
-  color: var(--red-text);
 }
 .model-actions,
 .board-actions,
@@ -1441,6 +1478,29 @@ h2 {
 }
 .training-grid .field-label {
   margin: 0;
+}
+/* 2026-09-17 层次优化：训练参数展开后的 6 个字段按「训练设置 / 续训」
+   分成两个语义组。组标题给了展开区一个第二层级，展开瞬间的密度
+   陡增被组界打断。全部为新选择器，不与既有层交叉。 */
+.training-field-group {
+  display: grid;
+  grid-template-columns: subgrid;
+  gap: 6px 8px;
+  align-items: center;
+  padding: 8px;
+  border-radius: 10px;
+  border: 1px solid rgba(28, 28, 26, 0.07);
+  background: rgba(28, 28, 26, 0.015);
+}
+.training-field-group + .training-field-group {
+  margin-top: 10px;
+}
+.training-group-title {
+  grid-column: 1 / -1;
+  color: var(--muted-strong);
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
 }
 .training-grid select,
 .training-grid input {
@@ -1757,6 +1817,101 @@ h2 {
 .telemetry-panel {
   margin-top: 16px;
 }
+/* 2026-09-17 层次优化：评测页中段（最近实验对比 + 遥测回放与证据）
+   原是两个全宽面板首尾堆叠，页面 1775px 高、五个同级标题一路排下来，
+   节奏从顶部的双栏"分区"退化成"清单"。现在这两个证据面板并列成
+   双栏（回放播放器全宽内容仍可各自内部滚动自然换行），窄屏回退单列。
+   新选择器；两个面板旧的 margin-top 由 wrapper 统一接管节奏。 */
+.evaluation-evidence {
+  display: grid;
+  /* auto-fit 而非媒体查询：一条声明同时表达宽屏双栏与窄屏单列，
+     避免为同一选择器写第二处定义（跨层选择器预算 306/306 已满）。 */
+  grid-template-columns: repeat(auto-fit, minmax(min(420px, 100%), 1fr));
+  gap: 16px;
+  margin-top: 16px;
+  align-items: start;
+}
+.evaluation-evidence > .panel {
+  margin-top: 0;
+  min-width: 0;
+}
+/* 2026-09-17 空态优先：没有任何 Run 和遥测时，data-empty="true" 收起
+   全部空数据面板（双栏 grid、六个面板的空文案墙），只显示一张
+   三步引导卡。有数据即恢复正常仪表盘。 */
+[data-view-section='evaluate'][data-empty='true'] .evaluation-grid,
+[data-view-section='evaluate'][data-empty='true'] .evaluation-evidence {
+  display: none;
+}
+.evaluation-empty-card {
+  display: grid;
+  gap: 16px;
+  margin-top: 16px;
+  padding: 24px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: var(--panel);
+  max-width: 640px;
+}
+.evaluation-empty-head {
+  display: grid;
+  gap: 4px;
+}
+.evaluation-empty-head strong {
+  font-size: 16px;
+}
+.evaluation-empty-head span {
+  color: var(--muted);
+  font-size: 13px;
+}
+.evaluation-empty-steps {
+  display: grid;
+  gap: 10px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.evaluation-empty-steps li {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 10px;
+  border-radius: 10px;
+  background: var(--panel-soft);
+}
+.evaluation-empty-steps strong {
+  display: block;
+  font-size: 13px;
+}
+.evaluation-empty-steps small {
+  display: block;
+  margin-top: 2px;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.5;
+}
+.evaluation-empty-step-index {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  width: 24px;
+  height: 24px;
+  border-radius: 999px;
+  color: var(--accent-text, var(--muted-strong));
+  font:
+    10.5px ui-monospace,
+    SFMono-Regular,
+    Menlo,
+    monospace;
+  background: var(--panel);
+  border: 1px solid var(--line-strong);
+}
+.evaluation-empty-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
 .telemetry-intro {
   display: flex;
   align-items: flex-start;
@@ -1880,6 +2035,27 @@ h2 {
   border-radius: 9px;
   background: var(--panel-soft);
 }
+.telemetry-scrub {
+  display: grid;
+  gap: 6px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: var(--panel-soft);
+}
+.telemetry-scrub-heading {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+}
+.telemetry-scrub-heading strong { font-size: 12px; }
+.telemetry-scrub-heading span {
+  font-family: var(--mono, ui-monospace, monospace);
+  font-size: 10.5px;
+  color: var(--muted);
+}
+.telemetry-scrub input[type='range'] { width: 100%; }
 .telemetry-heatmap-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -5775,6 +5951,19 @@ body.agent-chat-open .agent-chat-composer input { min-height: 44px; border-color
 .run-comparison-chart{margin-bottom:10px}
 .run-comparison-chart canvas{width:100%;height:auto;display:block;border-radius:8px;background:var(--panel-soft)}
 .run-comparison-chart .small-note{margin:6px 0 0}
+.run-comparison-parcoords{margin-bottom:10px}
+.run-comparison-parcoords canvas{width:100%;height:auto;display:block;border-radius:8px;background:var(--panel-soft)}
+.run-comparison-parcoords .small-note{margin:6px 0 0}
+.run-comparison-diff{margin-bottom:12px;border:1px solid var(--line);border-radius:8px;padding:8px 12px}
+.run-comparison-diff summary{cursor:pointer;font-size:12px;color:var(--muted)}
+.run-comparison-diff .table-scroll{max-height:240px;overflow:auto;margin-top:8px}
+.run-comparison-diff .record-table{width:100%;font-size:12px;border-collapse:collapse}
+.run-comparison-diff .record-table th,.run-comparison-diff .record-table td{padding:4px 10px;border-bottom:1px solid var(--line);text-align:left;white-space:nowrap}
+.run-comparison-diff .record-table td.is-diff{font-weight:700}
+.run-comparison-diff .record-table td.is-empty{color:var(--muted)}
+.run-comparison-diff .record-table col.is-diff{border-left:2px solid var(--cyan)}
+.run-comparison-diff .small-note{margin:6px 0 0}
+.telemetry-episodes-block{margin-top:2px}
 .run-compare-swatch{display:inline-block;width:10px;height:10px;border-radius:3px;margin-right:6px;vertical-align:baseline}
 
 /* ======================== workflow-ux.css — 闭环进度条 ======================== */
@@ -6554,7 +6743,7 @@ html.theme-dark .brand-mark {
 /* shell-layout 原本是 grid；改为全宽 flex 感知更接近预览页的贴边侧栏 */
 .shell-layout {
   display: grid;
-  grid-template-columns: 200px minmax(0, 1fr);
+  grid-template-columns: 224px minmax(0, 1fr);
   gap: 0;
   align-items: stretch;
 }
@@ -7252,17 +7441,54 @@ body[data-active-view]:not([data-active-view='overview']) .workflow-progress-str
   max-width: 320px;
 }
 
-/* ---------- 侧栏项目卡：内容列被状态胶囊挤到 68px ----------
-   .sidebar-project 是 `31px minmax(0,1fr) auto` 三列栅格，第三列的
-   「工作区可用」胶囊横向要 ~80px，于是中间列只剩 68px：产品名截断成
-   「MicroDu…」、产品下拉 66→138 溢出、项目下拉只有 36px、恢复提示被折成
-   3–4 行。状态胶囊改到内容列下方独占一行，内容列拿回 ~139px。 ---------- */
+/* ---------- 侧栏项目卡：完整宽度的工作区切换器 ----------
+   图标只属于标题，不再为整张表单保留一列。产品与项目选择器都占满卡片，
+   新建入口跟随「项目」标签，状态独占末行，避免短标签挤压主要操作。 ---------- */
 .sidebar-project {
-  grid-template-columns: 31px minmax(0, 1fr);
+  grid-template-columns: minmax(0, 1fr);
   align-items: start;
+  gap: 8px;
+}
+.sidebar-project-heading {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+.sidebar-project-heading strong {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.sidebar-project > select,
+.sidebar-project-context > select {
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
+  min-height: 36px;
+  margin-top: 0;
+}
+.sidebar-project .sidebar-project-context {
+  min-width: 0;
+  margin-top: 4px;
+  gap: 6px;
+}
+.sidebar-project-label-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  color: var(--muted);
+  font-size: 12px;
+}
+.sidebar-project-label-row .sidebar-project-add {
+  width: auto;
+  min-height: 28px;
+  padding: 0 6px;
+  font-size: 12px;
+  white-space: nowrap;
 }
 .sidebar-project-state {
-  grid-column: 2;
+  grid-column: 1;
   justify-self: start;
   margin-left: 0;
 }
@@ -7684,4 +7910,3 @@ body.agent-chat-open .agent-chat-composer .button-primary {
   font-size: 12px;
   line-height: 1.55;
 }
-

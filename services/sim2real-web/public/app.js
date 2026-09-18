@@ -2850,7 +2850,8 @@ function renderIntegrations() {
     const engineKnown = (id) => reported == null || reported.includes(id) || reported.includes('default');
     for (const option of engineSelect.querySelectorAll(
       'option[value="starter-ppo"], option[value="mjx-ppo"], option[value="microduck-rl"], ' +
-        'option[value="visual-ppo"], option[value="dm-control-ppo"], option[value="mjlab-rsl-rl"]',
+        'option[value="visual-ppo"], option[value="dm-control-ppo"], option[value="mjlab-rsl-rl"], ' +
+        'option[value="act"]',
     )) {
       const known = engineKnown(option.value);
       option.disabled = !known;
@@ -2901,6 +2902,11 @@ const ENGINE_CAPABILITIES = Object.freeze({
     name: 'mjlab-rsl-rl',
     badges: ['mjlab 物理', 'rsl-rl PPO', 'CUDA'],
     desc: 'mjlab 真物理 + rsl-rl 生产级 PPO；无 mjlab 时诚实回退 starter-kinematic 并如实标注（结果永不混淆）。',
+  },
+  act: {
+    name: 'ACT',
+    badges: ['模仿学习', 'k 步动作块', 'CPU 友好'],
+    desc: '示教轨迹上的 ACT（Zhao et al. 2023）：Transformer 编解码 + CVAE 隐变量 + 时序集成，导出可验证的集成 ONNX；需要带 episode 边界的录制数据。',
   },
 });
 
@@ -3027,26 +3033,52 @@ function renderModel() {
     }
   }
   if (compatibility) {
+    // 板卡兼容只保留两行语义：一行说"哪些板能上"，一行折叠说"其余为什么不能"。
+    // 逐板平铺六行几乎相同的 reason 读起来像占位内容，而不是决策信息。
     compatibility.replaceChildren();
-    for (const item of state.compatibility || []) {
-      const row = document.createElement('div');
-      row.className = 'compatibility-row';
-      const deployable = item.deployable === true;
-      const failed = item.status === 'incompatible';
-      row.innerHTML =
-        '<span class="compatibility-platform">' +
-        escapeHtml(item.platformId) +
-        '</span><span class="compatibility-state ' +
-        (deployable
-          ? 'compatibility-state-ready'
-          : failed
-            ? 'compatibility-state-error'
-            : 'compatibility-state-blocked') +
-        '">' +
-        escapeHtml(deployable ? '可上板' : item.status || '待检查') +
-        '</span>';
-      if (item.reason) row.title = item.reason;
-      compatibility.append(row);
+    const items = state.compatibility || [];
+    const deployableBoards = items.filter((item) => item.deployable === true);
+    const blockedBoards = items.filter((item) => item.deployable !== true);
+    const summary = document.createElement('div');
+    summary.className = 'compatibility-summary';
+    if (deployableBoards.length) {
+      const chips = deployableBoards
+        .map(
+          (item) =>
+            '<span class="compatibility-chip is-ready">' +
+            escapeHtml(item.platformId) +
+            '</span>',
+        )
+        .join('');
+      const blockedNote = blockedBoards.length
+        ? `<span class="compatibility-note">其余 ${escapeHtml(String(blockedBoards.length))} 个板卡未登记兼容目标</span>`
+        : '';
+      summary.innerHTML = `<span class="compatibility-summary-label">可上板</span>${chips}${blockedNote}`; // escape-audit:allow chips/blockedNote are built only from escapeHtml-wrapped values and a fixed label
+    } else {
+      summary.innerHTML =
+        '<span class="compatibility-summary-label">暂无可上板卡</span>' +
+        '<span class="compatibility-note">当前模型未登记任何兼容的板端目标</span>';
+    }
+    compatibility.append(summary);
+
+    const distinctReasons = [...new Set(blockedBoards.map((item) => item.reason || '').filter(Boolean))];
+    if (distinctReasons.length) {
+      const detail = document.createElement('details');
+      detail.className = 'compatibility-detail';
+      const reasonLines = distinctReasons
+        .map((reason) => {
+          const boards = blockedBoards
+            .filter((item) => (item.reason || '') === reason)
+            .map((item) => escapeHtml(item.platformId))
+            .join(' / ');
+          return '<li><span class="compatibility-platform">' + boards + '</span><span>' + escapeHtml(reason) + '</span></li>';
+        })
+        .join('');
+      detail.innerHTML =
+        `<summary>各板卡未兼容原因（${escapeHtml(String(distinctReasons.length))}）</summary><ul class="compatibility-reasons">` +
+        reasonLines +
+        '</ul>'; // escape-audit:allow reasonLines is built only from escapeHtml-wrapped values
+      compatibility.append(detail);
     }
   }
 }
@@ -4605,7 +4637,7 @@ function telemetryDivergingColor(value) {
   return SimTelemetryCore.telemetryDivergingColor(value);
 }
 
-function drawTelemetryRewardTimeline(samples) {
+function drawTelemetryRewardTimeline(samples, playheadIndex) {
   const ctx = clearCanvas(
     $('telemetry-reward-canvas'),
     TELEMETRY_REWARD_CANVAS_W,
@@ -4721,9 +4753,26 @@ function drawTelemetryRewardTimeline(samples) {
   ctx.fillText(formatTelemetrySeconds(tFirst), plotLeft + 16, height - 6);
   ctx.fillText(formatTelemetrySeconds(tLast), plotRight - 16, height - 6);
   ctx.textAlign = 'left';
+  // Playhead from the unified scrub timeline: same x-scale as the curve.
+  if (Number.isInteger(playheadIndex) && playheadIndex >= 0 && playheadIndex < samples.length) {
+    const x = xOf(samples[playheadIndex].t);
+    ctx.strokeStyle = 'rgba(96, 165, 250, 0.95)';
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    ctx.moveTo(x, plotTop);
+    ctx.lineTo(x, plotBottom);
+    ctx.stroke();
+    const reward = Number(samples[playheadIndex].reward);
+    if (Number.isFinite(reward)) {
+      ctx.fillStyle = 'rgba(96, 165, 250, 1)';
+      ctx.beginPath();
+      ctx.arc(x, yOf(reward), 3, 0, Math.PI * 2);
+      ctx.fill();
+    }
+  }
 }
 
-function drawTelemetryHeatmap(samples, key, canvasId, captionId) {
+function drawTelemetryHeatmap(samples, key, canvasId, captionId, playheadIndex) {
   const ctx = clearCanvas(
     $(canvasId),
     TELEMETRY_HEATMAP_CANVAS_W,
@@ -4787,9 +4836,185 @@ function drawTelemetryHeatmap(samples, key, canvasId, captionId) {
   ctx.fillText(formatTelemetrySeconds(tFirst), plotLeft + 18, height - 4);
   ctx.fillText(formatTelemetrySeconds(tLast), plotRight - 18, height - 4);
   ctx.textAlign = 'left';
+  // Playhead from the unified scrub timeline: highlight the column that the
+  // current sample maps to, in the same downsampling grid the cells use.
+  if (Number.isInteger(playheadIndex) && playheadIndex >= 0 && playheadIndex < samples.length) {
+    const column = Math.min(columns - 1, Math.floor((playheadIndex * columns) / samples.length));
+    const x = plotLeft + column * cellWidth;
+    ctx.strokeStyle = 'rgba(96, 165, 250, 0.95)';
+    ctx.lineWidth = 1.5;
+    ctx.strokeRect(x + 0.5, plotTop + 0.5, Math.max(1.5, cellWidth), plotHeight);
+  }
   const dimsLabel = (fullDims > HEATMAP_MAX_ROWS ? '前 ' + HEATMAP_MAX_ROWS + ' 维' : fullDims + ' 维') + ' × ' + samples.length + ' 帧';
   setText(captionId, dimsLabel);
   return { absMax, truncated: fullDims > HEATMAP_MAX_ROWS };
+}
+
+// --- Episode health check ---------------------------------------------------
+// episode 长度分布 + 离群标记（对标 LeRobot visualize_dataset 的数据体检模式）。
+// episode 以 done/fall 事件切分；没有边界标记的样本算作单个未闭合 episode，
+// 如实标注而不是猜边界。离群 = |长度 - 中位数| > 3 × MAD（中位绝对偏差）。
+
+const TELEMETRY_EPISODES_CANVAS_W = 720;
+const TELEMETRY_EPISODES_CANVAS_H = 180;
+
+function telemetryEpisodeLengths(samples) {
+  if (!Array.isArray(samples) || !samples.length) return { episodes: [], closed: false };
+  const episodes = [];
+  let current = 0;
+  let closed = false;
+  for (const sample of samples) {
+    current += 1;
+    if (sample && (sample.done || sample.fall)) {
+      episodes.push(current);
+      current = 0;
+      closed = true;
+    }
+  }
+  if (current > 0) episodes.push(current);
+  return { episodes, closed };
+}
+
+function episodeOutlierThresholds(lengths) {
+  if (lengths.length < 3) return null;
+  const sorted = [...lengths].sort((a, b) => a - b);
+  const median = sorted[Math.floor(sorted.length / 2)];
+  const deviations = sorted.map((value) => Math.abs(value - median)).sort((a, b) => a - b);
+  const mad = deviations[Math.floor(deviations.length / 2)];
+  // A degenerate MAD (identical episodes) means no outlier is detectable.
+  if (!mad) return null;
+  return { median, mad, low: median - 3 * mad, high: median + 3 * mad };
+}
+
+function drawTelemetryEpisodes(samples) {
+  const block = $('telemetry-episodes-block');
+  const canvas = $('telemetry-episodes-canvas');
+  const ctx = block && canvas ? clearCanvas(canvas, TELEMETRY_EPISODES_CANVAS_W, TELEMETRY_EPISODES_CANVAS_H) : null;
+  if (!ctx) return;
+  const { episodes, closed } = telemetryEpisodeLengths(samples);
+  const width = TELEMETRY_EPISODES_CANVAS_W;
+  const height = TELEMETRY_EPISODES_CANVAS_H;
+  if (episodes.length < 2) {
+    block.hidden = true;
+    return;
+  }
+  block.hidden = false;
+  const plotLeft = 38;
+  const plotRight = width - 10;
+  const plotTop = 12;
+  const plotBottom = height - 22;
+  const plotWidth = plotRight - plotLeft;
+  const plotHeight = plotBottom - plotTop;
+  const lengthMax = Math.max(...episodes);
+  const thresholds = episodeOutlierThresholds(episodes);
+  // Histogram: episode lengths bucketed on the x axis, count on the y axis.
+  const bins = Math.min(24, Math.max(6, Math.ceil(Math.sqrt(episodes.length))));
+  const counts = new Array(bins).fill(0);
+  let outliers = 0;
+  for (const length of episodes) {
+    const bin = Math.min(bins - 1, Math.floor((length / (lengthMax || 1)) * bins));
+    counts[bin] += 1;
+    if (thresholds && (length < thresholds.low || length > thresholds.high)) outliers += 1;
+  }
+  const countMax = Math.max(...counts, 1);
+  const binWidth = plotWidth / bins;
+  ctx.font = CANVAS_TEXT_STYLE;
+  ctx.fillStyle = CANVAS_TEXT_COLOR;
+  for (const [value, y] of [
+    [countMax, plotTop],
+    [Math.round(countMax / 2), plotTop + plotHeight / 2],
+  ]) {
+    ctx.fillText(String(value), 4, y + 3);
+  }
+  ctx.strokeStyle = 'rgba(28, 28, 26, 0.12)';
+  ctx.lineWidth = 1;
+  for (let bin = 0; bin < bins; bin += 1) {
+    if (!counts[bin]) continue;
+    const barHeight = (counts[bin] / countMax) * plotHeight;
+    const x = plotLeft + bin * binWidth;
+    ctx.fillStyle = 'rgba(85, 221, 176, 0.55)';
+    ctx.fillRect(x + 1, plotBottom - barHeight, Math.max(1, binWidth - 2), barHeight);
+  }
+  // Outlier markers: each outlying episode plotted at its own length.
+  if (thresholds) {
+    ctx.fillStyle = 'rgba(220, 38, 38, 0.9)';
+    for (const length of episodes) {
+      if (length >= thresholds.low && length <= thresholds.high) continue;
+      const x = plotLeft + (length / (lengthMax || 1)) * plotWidth;
+      ctx.beginPath();
+      ctx.arc(x, plotBottom - 4, 2.5, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    if (thresholds.high < lengthMax) {
+      const x = plotLeft + (thresholds.high / (lengthMax || 1)) * plotWidth;
+      ctx.strokeStyle = 'rgba(220, 38, 38, 0.5)';
+      ctx.setLineDash([4, 3]);
+      ctx.beginPath();
+      ctx.moveTo(x, plotTop);
+      ctx.lineTo(x, plotBottom);
+      ctx.stroke();
+      ctx.setLineDash([]);
+    }
+  }
+  ctx.fillStyle = CANVAS_TEXT_COLOR;
+  ctx.textAlign = 'center';
+  ctx.fillText('短', plotLeft + 8, height - 6);
+  ctx.fillText('长', plotRight - 8, height - 6);
+  ctx.textAlign = 'left';
+  setText(
+    'telemetry-episodes-caption',
+    `episode 长度分布 · ${episodes.length} 段${closed ? '' : ' · 最后一段未闭合'}${outliers ? ` · ${outliers} 段离群` : ''}`,
+  );
+  setText(
+    'telemetry-episodes-note',
+    thresholds
+      ? `episode 以 done/fall 事件切分；红点为离群 episode（与中位数 ${thresholds.median} 帧相差超过 3×MAD=${thresholds.mad} 帧）。`
+      : 'episode 以 done/fall 事件切分；各段长度一致或样本过少，未做离群判定。',
+  );
+}
+
+// --- Unified scrub timeline -------------------------------------------------
+// 一条时间轴同步三个视图（reward 曲线 / 观测与动作热力图 / 相机帧与逐帧回放），
+// 对标 Rerun / LeRobot visualize_dataset 的同步 scrub 模式。位置状态来自
+// state.replay.index（与逐帧回放播放器共用同一位置源），这里只负责把三个
+// 画布和文案同步到同一帧。
+
+function telemetryScrubMax(samples) {
+  return Math.max(0, samples.length - 1);
+}
+
+function renderTelemetryScrub() {
+  const scrub = $('telemetry-scrub');
+  const input = $('telemetry-scrub-input');
+  if (!scrub || !input) return;
+  const evidence = currentTelemetry();
+  const samples = Array.isArray(evidence?.samples) ? evidence.samples : null;
+  if (!samples || !samples.length) {
+    scrub.hidden = true;
+    input.disabled = true;
+    return;
+  }
+  scrub.hidden = false;
+  const max = telemetryScrubMax(samples);
+  input.max = String(max);
+  input.value = String(Math.min(state.replay.index, max));
+  input.disabled = false;
+  const frame = samples[Math.min(state.replay.index, max)];
+  setText(
+    'telemetry-scrub-position',
+    `${formatTelemetrySeconds(frame ? frame.t : 0)} · 帧 ${Math.min(state.replay.index + 1, samples.length)} / ${samples.length}`,
+  );
+}
+
+function syncTelemetryVisualsToReplayIndex() {
+  const evidence = currentTelemetry();
+  const samples = Array.isArray(evidence?.samples) ? evidence.samples : null;
+  if (!samples || !samples.length) return;
+  const playheadIndex = Math.min(state.replay.index, samples.length - 1);
+  drawTelemetryRewardTimeline(samples, playheadIndex);
+  drawTelemetryHeatmap(samples, 'observation', 'telemetry-obs-heatmap', 'telemetry-obs-caption', playheadIndex);
+  drawTelemetryHeatmap(samples, 'action', 'telemetry-action-heatmap', 'telemetry-action-caption', playheadIndex);
+  renderTelemetryScrub();
 }
 
 function renderTelemetryVisuals() {
@@ -4804,23 +5029,28 @@ function renderTelemetryVisuals() {
     return;
   }
   visuals.hidden = false;
-  drawTelemetryRewardTimeline(samples);
+  const playheadIndex = samples.length ? Math.min(state.replay.index, samples.length - 1) : -1;
+  drawTelemetryRewardTimeline(samples, playheadIndex);
   const obsInfo = drawTelemetryHeatmap(
     samples,
     'observation',
     'telemetry-obs-heatmap',
     'telemetry-obs-caption',
+    playheadIndex,
   );
   const actionInfo = drawTelemetryHeatmap(
     samples,
     'action',
     'telemetry-action-heatmap',
     'telemetry-action-caption',
+    playheadIndex,
   );
   const ranges = [];
   if (obsInfo) ranges.push('观测 ±' + obsInfo.absMax.toFixed(2));
   if (actionInfo) ranges.push('动作 ±' + actionInfo.absMax.toFixed(2));
   setText('telemetry-heatmap-range', ranges.length ? ranges.join(' · ') : '—');
+  drawTelemetryEpisodes(samples);
+  renderTelemetryScrub();
 }
 
 function renderTelemetryEvidence() {
@@ -5127,6 +5357,9 @@ function sendReplayFrame() {
   const iframe = $('simulator-frame');
   try { iframe?.contentWindow?.postMessage({ type: 'rdk-replay-frame', frame, index: state.replay.index, runId: state.replay.runId }, '*'); } catch { /* cross-origin iframe may reject; controls still work */ }
   renderReplayPlayer();
+  // Keep the unified telemetry canvases (reward curve / heatmaps) on the same
+  // frame as the replay player; they only redraw when local samples exist.
+  syncTelemetryVisualsToReplayIndex();
 }
 
 function stopReplay() {
@@ -5430,6 +5663,19 @@ function renderEvaluation() {
     String(b.createdAt || '').localeCompare(String(a.createdAt || '')),
   );
   const latest = runs[0] || null;
+  // 空态优先：没有任何 Run、也没有导入遥测时，六个空面板各自用不同的
+  // 措辞说"没数据"（14 处空文案、9 个"—"、5/10 禁用按钮，一面 2000px 的
+  // 空脚手架墙）。收起全部空面板，换一张三步引导卡；一旦有数据立刻
+  // 恢复完整仪表盘。banner 与底部"下一步"条保留——它们是状态提醒不是面板。
+  const evaluateView = document.querySelector('[data-view-section="evaluate"]');
+  const dashboardEmpty = !latest && !evidence;
+  if (evaluateView) evaluateView.dataset.empty = dashboardEmpty ? 'true' : 'false';
+  const emptyGuide = $('evaluation-empty');
+  if (emptyGuide) emptyGuide.hidden = !dashboardEmpty;
+  if (dashboardEmpty) {
+    const qualityBadge = $('eval-run-quality');
+    if (qualityBadge) qualityBadge.hidden = true;
+  }
   renderRunComparison(runs);
   const metrics = latest?.metrics || {};
   const status = String(latest?.status || '').toLowerCase();
@@ -5438,7 +5684,11 @@ function renderEvaluation() {
   const evaluationExists = hasRealEvaluation(evidence, latest);
   const releaseGradeEvidence = hasReleaseGradeEvidence(evidence, latest);
   const unverifiedEvidence = evaluationExists && !releaseGradeEvidence;
-  let statusLabel = '尚未产生评测结果';
+  // 空态文案与引导卡保持一致（"等待第一次…"），不要回落到主分支的
+  // "尚未产生评测结果"——两句话在引导卡旁边各说各的会互相打架。
+  let statusLabel = dashboardEmpty
+    ? '等待第一次训练或遥测'
+    : '尚未产生评测结果';
   if (mockRun && ['completed', 'ready'].includes(status)) statusLabel = '协议演示完成';
   else if (demoEvidence && status === 'completed') statusLabel = '演示评测完成';
   else if (unverifiedEvidence) statusLabel = '评测已保存 · 来源未验证';
@@ -5454,7 +5704,9 @@ function renderEvaluation() {
       ? (latest.summary || latest.modelId || '最新运行') + ' · ' + (latest.backend || 'unknown')
       : evidence
         ? evidence.fileName + ' · 本地聚合，可继续绑定到正式 Run'
-        : '训练完成后，这里会显示最新一次运行的仿真/真机指标。',
+        : dashboardEmpty
+          ? '导入遥测或完成一次训练后，这里会展开完整评测面板。'
+          : '训练完成后，这里会显示最新一次运行的仿真/真机指标。',
   );
   const quality = $('eval-run-quality');
   if (quality) {
@@ -5678,6 +5930,8 @@ function renderRunComparison(runs) {
   const recent = (runs || []).slice(0, count);
   setText('run-comparison-caption', recent.length ? `最近 ${recent.length} 次` : '暂无数据');
   drawRunCompareChart(recent.map((run, index) => ({ ...run, indexLabel: index + 1 })));
+  drawRunParCoords(recent.map((run, index) => ({ ...run, indexLabel: index + 1 })));
+  renderRunParamDiff(recent);
   if (!recent.length) {
     root.innerHTML = '<div class="empty-inline">完成一次训练或评测后，这里会显示可比较的指标。</div>';
     return;
@@ -5707,6 +5961,142 @@ function renderRunComparison(runs) {
     const legendColor = RUN_COMPARE_COLORS[index % RUN_COMPARE_COLORS.length];
     return `<div class="run-compare-row"><div class="run-compare-name"><strong><i class="run-compare-swatch" style="background:${legendColor}"></i>${escapeHtml(title)}</strong><small>${escapeHtml(formatDate(run.createdAt))} · ${escapeHtml(statusLabel(run.status))}${mock ? ' · 演示' : ''}</small></div><div class="run-compare-metrics">${metricsHtml}</div></div>`; // escape-audit:allow metricsHtml is built above from escaped values only; legendColor is a fixed palette constant
   }).join('');
+}
+
+// --- Parallel coordinates + parameter diff ---------------------------------
+// 对标 MLflow/Aim 的 run 对比模式：多指标平行坐标看整体形状，参数 diff 表
+// 看每次改了什么。指标列逐列归一化；缺指标的运行整条不参与（不猜值）。
+
+const RUN_PARCOORDS_CANVAS_W = 720;
+const RUN_PARCOORDS_CANVAS_H = 220;
+const RUN_PARCOORDS_METRICS = [
+  { key: 'reward', label: '平均奖励', higherIsBetter: true },
+  { key: 'successRate', label: '成功率', higherIsBetter: true },
+  { key: 'fallRate', label: '跌倒率', higherIsBetter: false },
+  { key: 'episodeLength', label: '平均步数', higherIsBetter: true },
+];
+
+function drawRunParCoords(runs) {
+  const wrap = $('run-comparison-parcoords');
+  const canvas = $('run-parcoords-canvas');
+  if (!wrap || !canvas) return;
+  // Only runs carrying every plotted metric can be drawn as a full polyline;
+  // a run with a hole would need a guessed value, so it stays out.
+  const series = runs.filter((run) =>
+    RUN_PARCOORDS_METRICS.every((metric) => finiteNumber(run?.metrics?.[metric.key]) !== null),
+  );
+  wrap.hidden = series.length < 2;
+  if (series.length < 2) return;
+  const ctx = clearCanvas(canvas, RUN_PARCOORDS_CANVAS_W, RUN_PARCOORDS_CANVAS_H);
+  if (!ctx) return;
+  const width = RUN_PARCOORDS_CANVAS_W;
+  const height = RUN_PARCOORDS_CANVAS_H;
+  const plotTop = 24;
+  const plotBottom = height - 18;
+  const plotHeight = plotBottom - plotTop;
+  const colCount = RUN_PARCOORDS_METRICS.length;
+  const colWidth = (width - 20) / (colCount - 1);
+  const xOf = (col) => 10 + col * colWidth;
+  // Per-column min/max across the plotted runs; "worse" always maps to the
+  // bottom so a higher line is uniformly better.
+  const scales = RUN_PARCOORDS_METRICS.map((metric) => {
+    const values = series.map((run) => Number(run.metrics[metric.key]));
+    const min = Math.min(...values);
+    const max = Math.max(...values);
+    return { min, max: max === min ? min + 1 : max, invert: !metric.higherIsBetter };
+  });
+  const yOf = (value, scale) => {
+    const normalized = (value - scale.min) / (scale.max - scale.min);
+    return plotBottom - (scale.invert ? 1 - normalized : normalized) * plotHeight;
+  };
+  ctx.font = CANVAS_TEXT_STYLE;
+  ctx.fillStyle = CANVAS_TEXT_COLOR;
+  ctx.textAlign = 'center';
+  RUN_PARCOORDS_METRICS.forEach((metric, col) => {
+    const x = xOf(col);
+    ctx.strokeStyle = 'rgba(28, 28, 26, 0.12)';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(x, plotTop);
+    ctx.lineTo(x, plotBottom);
+    ctx.stroke();
+    ctx.fillText(metric.label, x, 12);
+    const scale = scales[col];
+    ctx.textAlign = x < width / 2 ? 'left' : 'right';
+    ctx.fillText(formatMetricNumber(scale.invert ? scale.min : scale.max, 1), x + (x < width / 2 ? 4 : -4), plotTop + 3);
+    ctx.fillText(formatMetricNumber(scale.invert ? scale.max : scale.min, 1), x + (x < width / 2 ? 4 : -4), plotBottom);
+    ctx.textAlign = 'center';
+  });
+  series.forEach((run, index) => {
+    const color = RUN_COMPARE_COLORS[(run.indexLabel - 1) % RUN_COMPARE_COLORS.length];
+    ctx.strokeStyle = color;
+    ctx.lineWidth = 1.6;
+    ctx.globalAlpha = 0.85;
+    ctx.beginPath();
+    RUN_PARCOORDS_METRICS.forEach((metric, col) => {
+      const x = xOf(col);
+      const y = yOf(Number(run.metrics[metric.key]), scales[col]);
+      if (col === 0) ctx.moveTo(x, y);
+      else ctx.lineTo(x, y);
+    });
+    ctx.stroke();
+    ctx.globalAlpha = 1;
+    ctx.fillStyle = color;
+    ctx.fillText(`#${run.indexLabel}`, xOf(colCount - 1) + 6, yOf(Number(run.metrics[RUN_PARCOORDS_METRICS[colCount - 1].key]), scales[colCount - 1]) + 3);
+  });
+}
+
+// Parameter diff table: one row per training-parameter key that actually
+// differs across the compared runs, one column per run (recent first).
+// Values come from run.training and run.metrics.engine — nothing is invented.
+const RUN_DIFF_PARAMS = [
+  { label: '引擎', pick: (run) => run?.metrics?.engine ?? run?.training?.engine ?? '' },
+  { label: '算法', pick: (run) => run?.training?.algorithm ?? '' },
+  { label: '档位', pick: (run) => run?.training?.profile ?? '' },
+  { label: '环境数', pick: (run) => (run?.training?.numEnvs != null ? String(run.training.numEnvs) : '') },
+  { label: '迭代上限', pick: (run) => (run?.training?.maxIterations != null ? String(run.training.maxIterations) : '') },
+  { label: '后端', pick: (run) => run?.backend ?? '' },
+  { label: '任务', pick: (run) => run?.taskId ?? '' },
+];
+
+function renderRunParamDiff(runs) {
+  const wrap = $('run-comparison-diff');
+  const body = $('run-diff-body');
+  const header = $('run-diff-header');
+  if (!wrap || !body || !header) return;
+  if (!runs || runs.length < 2) {
+    wrap.hidden = true;
+    return;
+  }
+  // One column per run, recent first; #n matches the curve-chart legend and
+  // the run list below, so three views share one numbering.
+  header.innerHTML =
+    '<th>参数</th>' +
+    runs
+      .map((run, index) => `<th>#${escapeHtml(String(index + 1))}${index === 0 ? ' · 最近' : ''}</th>`)
+      .join('');
+  const rows = RUN_DIFF_PARAMS.map((param) => {
+    const values = runs.map((run) => String(param.pick(run) ?? ''));
+    return { param, values };
+  }).filter((row) => {
+    const meaningful = row.values.filter(Boolean);
+    return meaningful.length > 1 && new Set(meaningful).size > 1;
+  });
+  wrap.hidden = rows.length === 0;
+  if (!rows.length) {
+    body.innerHTML = '';
+    setText('run-diff-note', '各次运行的训练参数全部一致，没有可对比的差异。');
+    return;
+  }
+  setText('run-diff-note', '只列出各次运行之间实际不同的训练参数；#n 对应上方曲线图例与运行列表顺序。');
+  body.innerHTML = rows
+    .map((row) => {
+      const cells = row.values
+        .map((value) => `<td${value ? '' : ' class="is-empty"'}>${escapeHtml(value || '—')}</td>`)
+        .join('');
+      return `<tr><th scope="row">${escapeHtml(row.param.label)}</th>${cells}</tr>`; // escape-audit:allow cells is built only from escapeHtml-wrapped values
+    })
+    .join('');
 }
 
 // Comparison controls re-render on change; the chart redraws from the same
@@ -9326,6 +9716,13 @@ function wireEvents() {
   $('replay-run-select')?.addEventListener('change', (event) => { state.replay.runId = String(event.target.value || ''); state.replay.loaded = false; state.replay.frames = []; state.replay.index = 0; stopReplay(); renderReplayPlayer(); });
   $('replay-speed-select')?.addEventListener('change', (event) => { state.replay.speed = Number(event.target.value || 1); if (state.replay.timer) { stopReplay(); toggleReplay(); } });
   $('replay-seek')?.addEventListener('input', (event) => { state.replay.index = Number(event.target.value || 0); sendReplayFrame(); });
+  // 统一时间轴与逐帧回放共用 state.replay.index 作为唯一位置源：从任一控件
+  // 拖动都会同时移动回放帧、三个画布的播放头和相机帧。回放播放器在
+  // sendReplayFrame 里已重绘；这里补齐画布与相机侧。
+  $('telemetry-scrub-input')?.addEventListener('input', (event) => {
+    state.replay.index = Number(event.target.value || 0);
+    sendReplayFrame();
+  });
   $('policy-trial-button')?.addEventListener('click', startPolicyTrial);
   $('policy-trial-stop')?.addEventListener('click', stopPolicyTrial);
   $('evaluation-next-button')?.addEventListener('click', (event) => {
@@ -9333,6 +9730,9 @@ function wireEvents() {
       event.preventDefault();
       $('telemetry-file-input')?.click();
     }
+  });
+  $('evaluation-empty-import')?.addEventListener('click', () => {
+    $('telemetry-file-input')?.click();
   });
   $('run-progress-detail')?.addEventListener('click', () => {
     if (state.selectedRecord) openRecordDetails(state.selectedRecord);

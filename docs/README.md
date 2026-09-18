@@ -32,6 +32,7 @@
 | [`engines/visual-ppo.md`](engines/visual-ppo.md) | 视觉观测训练：顶置相机像素 → CNN PPO → Conv ONNX |
 | [`engines/dm-control-adapter.md`](engines/dm-control-adapter.md) | dm_control 生态适配 + Playground 可用性如实结论 |
 | [`engines/offline-bc.md`](engines/offline-bc.md) | 模仿学习路径：示教数据 → MLP 行为克隆 → ONNX（数值等价证明） |
+| [`engines/act.md`](engines/act.md) | ACT 动作分块模仿：Transformer + CVAE + k 步动作块 + 时序集成 → ONNX（数值等价证明） |
 | [`task-pack-training.md`](task-pack-training.md) | 声明式 task-pack 训练与质量门 |
 | [`gpu-runner.md`](gpu-runner.md) | 独立 GPU 机器上的训练 runner 部署 |
 | [`sim2real-plugins.md`](sim2real-plugins.md) | 事件扩展层：实验追踪、对象存储、通知、硬件适配 |
@@ -48,6 +49,7 @@
 | [`design/sim2real-mvp-guide.md`](design/sim2real-mvp-guide.md) | MVP 流程指南 |
 | [`design/app-js-modularization.md`](design/app-js-modularization.md) | 前端模块化方案：模块模式、加载顺序、迁移顺序与验收标准 |
 | [`roadmap.md`](roadmap.md) | 已落地能力与差距计划 |
+| [`competitive-analysis-2026-09.md`](competitive-analysis-2026-09.md) | 开源同类项目对比与差距分析（生态 / UI/UX / 功能，含优先级路线图） |
 | [`quality-scorecard.md`](quality-scorecard.md) | 9+ 质量门槛的自动门禁与待补现场证据 |
 | [`dataset-lineage.md`](dataset-lineage.md) | 数据集版本、摘要与训练血缘 |
 | [`scalability.md`](scalability.md) | 存储容量边界与扩容路径 |

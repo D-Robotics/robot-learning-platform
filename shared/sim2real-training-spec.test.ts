@@ -24,9 +24,17 @@ describe('training spec engine routing', () => {
 
     const typo = normalizeTrainingSpec({ profile: 'smoke', engine: 'mjx' });
     expect(typo.spec).toBeUndefined();
-    expect(typo.errors[0]).toContain(
-      'training.engine must be starter-ppo, mjx-ppo or microduck-rl',
-    );
+    expect(typo.errors[0]).toContain('training.engine must be one of');
+
+    // Every engine the training page offers must survive platform validation:
+    // the selector is the public contract, and a 400 on submit would make the
+    // option a lie. These are the repo-shipped engines registered per worker
+    // via RDK_SIM2REAL_TRAIN_ENGINES_JSON.
+    for (const engine of ['visual-ppo', 'dm-control-ppo', 'mjlab-rsl-rl', 'act']) {
+      const submission = normalizeTrainingSpec({ profile: 'smoke', engine });
+      expect(submission.errors).toEqual([]);
+      expect(submission.spec?.engine).toBe(engine);
+    }
 
     const omitted = normalizeTrainingSpec({ profile: 'smoke' });
     expect(omitted.spec?.engine).toBeUndefined();

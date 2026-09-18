@@ -225,6 +225,7 @@ async function main() {
     ['engines/mjx-adapter/adapter.py', 'mjx-adapter', ['numpy', 'jax', 'mujoco']],
     ['engines/mjlab-rsl-rl-adapter/adapter.py', 'mjlab-adapter', ['numpy']],
     ['engines/offline-bc/train_bc.py', 'offline-bc', ['numpy']],
+    ['engines/act/train_act.py', 'act', ['numpy', 'torch']],
   ];
   const reported = [];
   let checked = 0;

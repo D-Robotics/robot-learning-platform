@@ -189,12 +189,23 @@ export type Sim2RealTrainingAlgorithm = 'ppo' | 'sac';
  * Worker-side engine routing. 'starter-ppo' is the CPU-friendly kinematic
  * pipeline; 'mjx-ppo' runs the MuJoCo MJX contact-dynamics engine;
  * 'microduck-rl' routes to the upstream `pollen-robotics/microduck_rl` stack
- * (mjlab + MuJoCo Warp + rsl-rl PPO) on a CUDA worker. Task packs may
- * recommend an engine, an explicit submission always wins, and a worker that
- * has not registered the engine fails closed instead of silently training
- * with a different physics backend.
+ * (mjlab + MuJoCo Warp + rsl-rl PPO) on a CUDA worker. 'visual-ppo' and
+ * 'dm-control-ppo' are the pixel-observation and dm_control-ecosystem local
+ * engines, 'mjlab-rsl-rl' the reference mjlab + rsl-rl adapter, and 'act'
+ * the action-chunking imitation engine — all registered on a worker through
+ * RDK_SIM2REAL_TRAIN_ENGINES_JSON. Task packs may recommend an engine, an
+ * explicit submission always wins, and a worker that has not registered the
+ * engine fails closed instead of silently training with a different physics
+ * backend.
  */
-export type Sim2RealTrainingEngine = 'starter-ppo' | 'mjx-ppo' | 'microduck-rl';
+export type Sim2RealTrainingEngine =
+  | 'starter-ppo'
+  | 'mjx-ppo'
+  | 'visual-ppo'
+  | 'dm-control-ppo'
+  | 'mjlab-rsl-rl'
+  | 'microduck-rl'
+  | 'act';
 
 export interface Sim2RealTrainingSpec {
   profile: Sim2RealTrainingProfile;
@@ -772,7 +783,11 @@ const ALLOWED_TRAINING_PROFILES = new Set<Sim2RealTrainingProfile>([
 const ALLOWED_TRAINING_ENGINES = new Set<Sim2RealTrainingEngine>([
   'starter-ppo',
   'mjx-ppo',
+  'visual-ppo',
+  'dm-control-ppo',
+  'mjlab-rsl-rl',
   'microduck-rl',
+  'act',
 ]);
 const SAFE_ID = /^[a-z][a-z0-9-]{1,63}$/;
 const SHA256 = /^[a-f0-9]{64}$/i;
@@ -955,7 +970,9 @@ export function normalizeTrainingSpec(value: unknown): {
   // time instead of falling through to whichever engine the worker default.
   const engine = safeText(source.engine, 32);
   if (engine && !ALLOWED_TRAINING_ENGINES.has(engine as Sim2RealTrainingEngine)) {
-    errors.push('training.engine must be starter-ppo, mjx-ppo or microduck-rl');
+    errors.push(
+      'training.engine must be one of starter-ppo, mjx-ppo, visual-ppo, dm-control-ppo, mjlab-rsl-rl, microduck-rl, act',
+    );
   }
   if (errors.length) return { errors };
   return {

@@ -663,7 +663,7 @@ assert.match(
 );
 assert.match(
   app,
-  /function drawTelemetryRewardTimeline\(samples\)/,
+  /function drawTelemetryRewardTimeline\(samples(, playheadIndex)?\)/,
   'reward timeline must be a dedicated drawing step',
 );
 assert.match(
