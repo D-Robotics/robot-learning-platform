@@ -7282,10 +7282,10 @@ html.theme-dark .onboard-item.is-current .onboard-cta {
   height: 60vh;
 }
 
-/* 网格沟与侧栏：32px 沟 → 24px；232px 侧栏 → 210px；915px 以下降级
+/* 网格沟与侧栏：32px 沟 → 24px；侧栏给工作区切换器留出完整宽度；915px 以下降级
    回单列（原 820 断点提前到 915，避免右栏过窄）。 */
 .shell-layout {
-  grid-template-columns: 210px minmax(0, 1fr);
+  grid-template-columns: 224px minmax(0, 1fr);
   gap: 24px;
 }
 
