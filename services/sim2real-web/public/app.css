@@ -21,6 +21,7 @@ html.theme-dark {
 }
 html {
   min-width: 320px;
+  overflow-x: hidden;
   /* Follow the body theme so overscroll never flashes the opposite scheme. */
   background: var(--bg-deep);
   color-scheme: light;
@@ -4328,7 +4329,15 @@ body.is-loading .app-shell {
 .agent-chat-message-user { background:rgba(115,129,255,.18); }
 .agent-chat-message strong { display:block; font-size:12px; color:#aeb8ff; }
 .agent-chat-message p { margin:4px 0 0; line-height:1.5; }
+.agent-message-actions { display:flex; justify-content:flex-end; margin-top:6px; }
+.agent-message-copy { border:0; padding:2px 6px; border-radius:5px; color:var(--muted); background:transparent; font-size:11px; cursor:pointer; }
+.agent-message-copy:hover { color:var(--accent-text); background:var(--accent-soft); }
+.agent-chat-typing { display:flex; align-items:center; gap:8px; margin:0 0 10px; padding:7px 10px; color:var(--muted); font-size:12px; }
+.agent-chat-typing i { color:var(--accent-text); font-style:normal; letter-spacing:3px; animation:agent-typing-pulse 1.2s ease-in-out infinite; }
+@keyframes agent-typing-pulse { 0%,100% { opacity:.3; } 50% { opacity:1; } }
 .agent-chat-side { display:grid; gap:10px; }
+.agent-export-session { border:1px solid var(--line); border-radius:8px; padding:7px 9px; color:var(--muted-strong); background:transparent; font-size:12px; cursor:pointer; }
+.agent-export-session:hover { color:var(--accent-text); border-color:var(--line-strong); background:var(--accent-soft); }
 .agent-plan-card ol { margin:12px 0 0; padding:0; list-style:none; }
 .agent-plan-card li { display:flex; align-items:center; gap:8px; padding:6px 0; font-size:13px; }
 .agent-plan-card li em { margin-left:auto; color:#8990a6; font-size:12px; font-style:normal; }
@@ -5945,6 +5954,15 @@ body.agent-chat-open .agent-chat-composer input { min-height: 44px; border-color
 .run-progress-live-chart canvas,.run-detail-live-chart canvas{width:100%;height:auto;display:block;border-radius:8px;background:var(--panel-soft)}
 .run-detail-live-chart{margin-top:10px}
 .run-detail-live-chart .small-note{margin:6px 0 0}
+
+/* Engine log stream (run progress card): worker stdout/stderr lines arrive
+   with a cursor; the body is a plain <pre> (textContent only, never markup).
+   Monospace 12px per the floor rule — line-per-row logs must stay scannable. */
+.run-progress-logs{margin-top:10px;padding-top:10px;border-top:1px dashed var(--line-strong)}
+.run-progress-logs-heading{display:flex;align-items:baseline;justify-content:space-between;gap:8px;margin-bottom:6px}
+.run-progress-logs-heading strong{font-size:12px}
+.run-progress-logs-body{margin:0;padding:8px 10px;border:1px solid var(--line);border-radius:8px;background:var(--panel-soft);font-family:var(--mono, ui-monospace, monospace);font-size:12px;line-height:1.5;max-height:220px;overflow:auto;white-space:pre-wrap;word-break:break-all;color:var(--ink)}
+.run-progress-logs .small-note{margin:6px 0 0}
 
 /* Run comparison upgrades: metric/count selectors + overlaid curves. */
 .run-comparison-controls{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:8px}
