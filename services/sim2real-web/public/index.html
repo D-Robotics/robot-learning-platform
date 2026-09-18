@@ -192,17 +192,22 @@
           </nav>
           <div class="sidebar-divider sidebar-divider-compact"></div>
           <div class="nav-label">资源与工具</div>
-          <nav class="workflow-nav" aria-label="记录与设备工具">
-            <button class="nav-item" type="button" data-view-target="resources"><span class="nav-index" aria-hidden="true">▣</span><span><strong>GPU 与算力</strong><small>本机、远程与云端资源</small></span></button>
-            <button class="nav-item" type="button" data-view-target="records">
-              <span class="nav-index" aria-hidden="true">▦</span
-              ><span><strong>调试与记录</strong><small>运行日志、错误与版本</small></span>
-            </button>
-            <button class="nav-item" type="button" data-view-target="station">
-              <span class="nav-index" aria-hidden="true">⌂</span
-              ><span><strong>设备控制台</strong></span>
-            </button>
-          </nav>
+          <details class="sidebar-nav-group" data-sidebar-group="tools">
+            <summary class="nav-label nav-label-toggle">
+              <span>资源与工具</span><span class="nav-group-chevron" aria-hidden="true">⌄</span>
+            </summary>
+            <nav class="workflow-nav" aria-label="记录与设备工具">
+              <button class="nav-item" type="button" data-view-target="resources"><span class="nav-index" aria-hidden="true">▣</span><span><strong>GPU 与算力</strong><small>本机、远程与云端资源</small></span></button>
+              <button class="nav-item" type="button" data-view-target="records">
+                <span class="nav-index" aria-hidden="true">▦</span
+                ><span><strong>调试与记录</strong><small>运行日志、错误与版本</small></span>
+              </button>
+              <button class="nav-item" type="button" data-view-target="station">
+                <span class="nav-index" aria-hidden="true">⌂</span
+                ><span><strong>设备控制台</strong></span>
+              </button>
+            </nav>
+          </details>
           <div class="sidebar-bottom">
             <div class="safety-mini">
               <span aria-hidden="true">✓</span>
@@ -313,18 +318,23 @@
                 <span>目标设备</span>
                 <strong id="context-live-device">未选择</strong>
               </div>
-              <div class="context-live-item">
-                <span>动作任务</span>
-                <strong id="context-live-task">行走</strong>
-              </div>
-              <div class="context-live-item">
-                <span>运行状态</span>
-                <strong id="context-live-runs">空闲</strong>
-              </div>
-              <div class="context-live-item">
-                <span>算力后端</span>
-                <strong id="context-live-backend">检查中</strong>
-              </div>
+              <details class="context-extra-details">
+                <summary>更多状态</summary>
+                <div class="context-extra-items">
+                  <div class="context-live-item">
+                    <span>动作任务</span>
+                    <strong id="context-live-task">行走</strong>
+                  </div>
+                  <div class="context-live-item">
+                    <span>运行状态</span>
+                    <strong id="context-live-runs">空闲</strong>
+                  </div>
+                  <div class="context-live-item">
+                    <span>算力后端</span>
+                    <strong id="context-live-backend">检查中</strong>
+                  </div>
+                </div>
+              </details>
             </div>
             <div class="context-health is-waiting" id="context-health">
               <span class="health-ring" aria-hidden="true">●</span>
@@ -1421,6 +1431,8 @@
                   <span id="compute-resource-count" class="state-badge state-neutral">0 个</span>
                 </div>
                 <div id="compute-resource-list" class="compute-resource-list"><p class="empty-inline">还没有接入 GPU。添加后可在上方训练资源中选择。</p></div>
+                <details class="compute-resource-add">
+                  <summary>添加 GPU 或连接远程资源 <small>首次使用或新增 Runner</small></summary>
                 <form id="compute-resource-form" class="compute-resource-form">
                   <input id="compute-resource-editing-id" type="hidden" />
                   <div class="compute-resource-form-grid">
@@ -1431,6 +1443,7 @@
                   </div>
                   <div class="compute-resource-form-actions"><button class="button button-ghost button-small" type="button" id="compute-resource-autodetect">自动发现本机 Agent</button><button class="button button-primary button-small" type="submit" id="compute-resource-save">添加 GPU</button><button class="button button-ghost button-small" type="button" id="compute-resource-cancel" hidden>取消编辑</button><span id="compute-resource-form-status" class="small-note" role="status"></span></div>
                 </form>
+                </details>
               </article>
             </div>
           </section>

@@ -8666,3 +8666,237 @@ body .panel-heading > :last-child:is(button, a.button, .button) {
     padding: 16px;
   }
 }
+
+/* ======================== information architecture pass ========================
+   Keep the primary learning loop open, and put low-frequency status/tools behind
+   deliberate disclosure points. This reduces the amount of chrome competing with
+   the next action without removing access to the underlying controls. */
+
+.sidebar-nav-group {
+  margin: 0;
+}
+
+.sidebar > .sidebar-divider + .nav-label:has(+ .sidebar-nav-group) {
+  display: none;
+}
+
+.sidebar-nav-group > .nav-label-toggle {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  min-height: 32px;
+  margin: 0 12px 6px;
+  padding: 0 2px;
+  border-radius: 7px;
+  cursor: pointer;
+  list-style: none;
+}
+
+.sidebar-nav-group > .nav-label-toggle::-webkit-details-marker {
+  display: none;
+}
+
+.sidebar-nav-group > .nav-label-toggle:hover,
+.sidebar-nav-group > .nav-label-toggle:focus-visible {
+  color: var(--muted-strong);
+  background: color-mix(in srgb, var(--panel) 80%, var(--accent-soft));
+  outline: none;
+}
+
+.nav-group-chevron {
+  color: var(--muted);
+  font-size: 15px;
+  line-height: 1;
+  transition: transform .16s ease;
+}
+
+.sidebar-nav-group[open] .nav-group-chevron {
+  transform: rotate(180deg);
+}
+
+.sidebar-nav-group > .workflow-nav {
+  margin-top: 2px;
+}
+
+.context-extra-details {
+  position: relative;
+  flex: 0 0 auto;
+  min-width: 86px;
+}
+
+.context-extra-details > summary {
+  display: inline-flex;
+  align-items: center;
+  min-height: 38px;
+  padding: 0 10px;
+  border: 1px solid var(--ui-border-soft);
+  border-radius: 8px;
+  color: var(--muted-strong);
+  background: color-mix(in srgb, var(--panel) 86%, var(--accent-soft));
+  cursor: pointer;
+  font-size: 12px;
+  list-style: none;
+  white-space: nowrap;
+}
+
+.context-extra-details > summary::-webkit-details-marker {
+  display: none;
+}
+
+.context-extra-details > summary::after {
+  margin-left: 8px;
+  color: var(--muted);
+  content: '⌄';
+  transition: transform .16s ease;
+}
+
+.context-extra-details[open] > summary::after {
+  transform: rotate(180deg);
+}
+
+.context-extra-items {
+  position: absolute;
+  z-index: 5;
+  top: calc(100% + 8px);
+  right: 0;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(120px, 1fr));
+  gap: 2px;
+  min-width: min(430px, calc(100vw - 48px));
+  padding: 6px;
+  border: 1px solid var(--ui-border-soft);
+  border-radius: 10px;
+  background: var(--panel);
+  box-shadow: 0 16px 34px color-mix(in srgb, var(--text) 12%, transparent);
+}
+
+.context-extra-items .context-live-item {
+  min-height: 54px;
+  border: 0;
+  border-radius: 7px;
+  background: var(--panel-soft);
+}
+
+.compute-resource-add {
+  margin-top: 16px;
+  border-top: 1px solid var(--ui-border-soft);
+}
+
+.compute-resource-add > summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 16px 2px 4px;
+  color: var(--muted-strong);
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 650;
+  list-style: none;
+}
+
+.compute-resource-add > summary::-webkit-details-marker {
+  display: none;
+}
+
+.compute-resource-add > summary::after {
+  color: var(--accent-text);
+  content: '＋';
+  font-size: 17px;
+  font-weight: 500;
+}
+
+.compute-resource-add[open] > summary::after {
+  content: '−';
+}
+
+.compute-resource-add > summary small {
+  margin-left: auto;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.compute-resource-add[open] > summary {
+  padding-bottom: 16px;
+}
+
+/* At tablet width the hero must stack deliberately; the old three-column grid
+   left the title column narrower than a single Chinese glyph. */
+@media (max-width: 900px) and (min-width: 721px) {
+  html body [data-view-section='overview'] .next-card-main {
+    grid-template-columns: minmax(0, 1fr);
+    align-items: start;
+    gap: 10px;
+  }
+
+  html body [data-view-section='overview'] .next-card-main .next-badge,
+  html body [data-view-section='overview'] .next-card-main h3,
+  html body [data-view-section='overview'] .next-card-main p,
+  html body [data-view-section='overview'] .next-card-main .button {
+    grid-column: 1;
+    margin-left: 0;
+    justify-self: start;
+  }
+}
+
+/* Toasts sit above the Agent launcher instead of occupying the same corner. */
+html body .toast-region {
+  bottom: 84px;
+}
+
+@media (max-width: 720px) {
+  html body .context-strip {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: center;
+    overflow: visible;
+  }
+
+  html body .context-strip .context-live {
+    display: grid;
+    grid-column: 1 / -1;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 0;
+    width: 100%;
+    overflow: visible;
+  }
+
+  html body .context-strip .context-live-item {
+    min-width: 0;
+    min-height: 48px;
+    padding: 8px 12px;
+  }
+
+  html body .context-strip .context-live-item strong {
+    max-width: 100%;
+  }
+
+  html body .context-strip .context-extra-details {
+    grid-column: 2;
+    grid-row: 2;
+    min-width: 0;
+  }
+
+  html body .context-strip .context-extra-details > summary {
+    min-height: 40px;
+  }
+
+  html body .context-strip .context-health {
+    grid-column: 2;
+    justify-self: end;
+  }
+
+  html body .context-extra-items {
+    grid-template-columns: 1fr;
+    min-width: min(260px, calc(100vw - 40px));
+    right: auto;
+    left: 0;
+  }
+
+  html body #toast-region {
+    right: 16px;
+    bottom: 76px;
+    width: min(360px, calc(100% - 32px));
+  }
+}

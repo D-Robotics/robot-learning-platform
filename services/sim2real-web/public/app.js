@@ -1889,6 +1889,11 @@ function setView(view, { updateHash = true, scroll = true, focus = true } = {}) 
       control.removeAttribute('aria-current');
     }
   });
+  // Keep low-frequency tools folded away until one of their views is active.
+  // The group re-opens automatically when navigation lands on resources,
+  // records, or the device console, so the current page is always visible.
+  const toolsGroup = document.querySelector('[data-sidebar-group="tools"]');
+  if (toolsGroup) toolsGroup.open = ['resources', 'records', 'station'].includes(wanted);
   // 只读的顶栏闭环进度：标出"正在看的阶段"。它与 is-current（进度上的
   //「下一步」）是两个概念，用 aria-current="step" 单独表达。
   document.querySelectorAll('.pipeline-stage[data-pipeline-stage]').forEach((stage) => {
@@ -2322,6 +2327,7 @@ function renderComputeResources() {
 
 function resetComputeResourceForm() {
   state.computeResourceEditingId = '';
+  document.querySelector('.compute-resource-add')?.removeAttribute('open');
   $('compute-resource-editing-id').value = '';
   $('compute-resource-name').value = '';
   $('compute-resource-url').value = '';
@@ -2334,6 +2340,7 @@ function resetComputeResourceForm() {
 
 async function handleComputeResourceAction(action, resource) {
   if (action === 'edit') {
+    document.querySelector('.compute-resource-add')?.setAttribute('open', '');
     state.computeResourceEditingId = resource.id;
     $('compute-resource-editing-id').value = resource.id;
     $('compute-resource-name').value = resource.name || '';
