@@ -4330,7 +4330,7 @@ body.is-loading .app-shell {
 .agent-chat-message strong { display:block; font-size:12px; color:#aeb8ff; }
 .agent-chat-message p { margin:4px 0 0; line-height:1.5; }
 .agent-message-actions { display:flex; justify-content:flex-end; margin-top:6px; }
-.agent-message-copy { border:0; padding:2px 6px; border-radius:5px; color:var(--muted); background:transparent; font-size:11px; cursor:pointer; }
+.agent-message-copy { border:0; padding:2px 6px; border-radius:5px; color:var(--muted); background:transparent; font-size:12px; cursor:pointer; }
 .agent-message-copy:hover { color:var(--accent-text); background:var(--accent-soft); }
 .agent-chat-typing { display:flex; align-items:center; gap:8px; margin:0 0 10px; padding:7px 10px; color:var(--muted); font-size:12px; }
 .agent-chat-typing i { color:var(--accent-text); font-style:normal; letter-spacing:3px; animation:agent-typing-pulse 1.2s ease-in-out infinite; }
