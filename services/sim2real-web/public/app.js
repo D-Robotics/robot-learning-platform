@@ -1347,13 +1347,13 @@ function setActionHint(id, stateName, message) {
 
 // View names for the polite screen-reader announcement on view switch.
 const VIEW_ANNOUNCEMENTS = {
-  overview: '工作台总览',
+  overview: '工作台',
   simulate: '仿真与录制',
   train: '强化学习训练',
   evaluate: 'Sim2Real 评测',
   deploy: '部署与反馈',
   records: '调试与记录',
-  station: '设备上位机',
+  station: '设备控制台',
 };
 
 // One polite live region for view-switch announcements: nav buttons keep
@@ -1731,7 +1731,10 @@ function renderWorkspaceNotices(items) {
     close.type = 'button';
     close.className = 'workspace-notice-dismiss';
     close.setAttribute('aria-label', '关闭这条通知');
-    close.textContent = '✕';
+    const closeGlyph = document.createElement('span');
+    closeGlyph.setAttribute('aria-hidden', 'true');
+    closeGlyph.textContent = '✕';
+    close.append(closeGlyph);
     close.addEventListener('click', () => {
       dismissWorkspaceNotice(id);
       row.remove();
@@ -2649,7 +2652,7 @@ function renderIntegrations() {
     : !model
     ? '先在训练页登记模型契约。'
     : !device
-      ? '先到设备上位机登记并选择目标板卡。'
+      ? '先到设备控制台登记并选择目标板卡。'
       : !targetDeployment
         ? '模型和板卡已选择；点击“生成预检计划”开始只读检查。'
         : boardAgent.available !== true
@@ -9954,7 +9957,7 @@ function wireSidebarDrawer() {
   }
 }
 
-// WAI-ARIA tabs 键盘约定。三个 tablist（登录方式 / 训练模块 / 设备上位机模块）
+// WAI-ARIA tabs 键盘约定。三个 tablist（登录方式 / 训练模块 / 设备控制台模块）
 // 以前只支持鼠标点击：方向键无反应，而且 station 的 5 个 tab 全是 Tab 停靠点。
 // 这里的 tab 都是"激活即切换"的本地面板，没有异步成本，所以方向键直接跟随激活。
 function wireTablist(tablist) {

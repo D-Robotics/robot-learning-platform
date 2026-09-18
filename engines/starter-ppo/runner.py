@@ -56,14 +56,6 @@ def _engines_dir_on_path():
 
 
 _engines_dir_on_path()
-from reward_vocabulary import (  # noqa: E402  (import after sys.path setup)
-    VectorRewardTracker,
-    evaluate_formula_vector,
-    historical_reward,
-)
-
-
-
 def write_artifact_manifest(job_dir, names=None):
     """Write SHA256SUMS covering every file this run produced.
 
@@ -230,6 +222,15 @@ try:
 except ImportError:  # pragma: no cover - environment guard
     print("starter-ppo engine requires torch: python3 -m pip install --user torch", file=sys.stderr)
     sys.exit(2)
+
+# Keep shared reward code behind the dependency guards above.  It imports
+# NumPy itself, so importing it before the guards made the runner report a
+# raw ModuleNotFoundError instead of its stable exit-2 dependency contract.
+from reward_vocabulary import (  # noqa: E402  (import after dependency guards)
+    VectorRewardTracker,
+    evaluate_formula_vector,
+    historical_reward,
+)
 
 try:
     import onnx  # noqa: F401 - presence check for export

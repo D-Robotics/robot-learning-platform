@@ -163,7 +163,7 @@
               aria-current="page"
             >
               <span class="nav-index" aria-hidden="true">◇</span
-              ><span><strong>工作台总览</strong><small>配置项目、模型与设备</small></span>
+              ><span><strong>工作台</strong><small>配置项目、模型与设备</small></span>
             </button>
             <button class="nav-item" type="button" data-agent-open>
               <span class="nav-index" aria-hidden="true">✦</span
@@ -183,30 +183,30 @@
             </button>
             <button class="nav-item" type="button" data-view-target="evaluate">
               <span class="nav-index">03</span
-              ><span><strong>Sim2Real 评测</strong><small>仿真与真机效果对比</small></span>
+              ><span><strong>Sim2Real 评测</strong><small>对比仿真与真机效果</small></span>
             </button>
             <button class="nav-item" type="button" data-view-target="deploy">
               <span class="nav-index">04</span
-              ><span><strong>部署与反馈</strong><small>预检、发布和运行状态</small></span>
+              ><span><strong>部署与反馈</strong><small>预检、发布与运行状态</small></span>
             </button>
           </nav>
           <div class="sidebar-divider sidebar-divider-compact"></div>
           <div class="nav-label">资源与工具</div>
           <nav class="workflow-nav" aria-label="记录与设备工具">
-            <button class="nav-item" type="button" data-view-target="resources"><span class="nav-index" aria-hidden="true">▣</span><span><strong>GPU 与算力</strong><small>本机、远端与云端资源</small></span></button>
+            <button class="nav-item" type="button" data-view-target="resources"><span class="nav-index" aria-hidden="true">▣</span><span><strong>GPU 与算力</strong><small>本机、远程与云端资源</small></span></button>
             <button class="nav-item" type="button" data-view-target="records">
               <span class="nav-index" aria-hidden="true">▦</span
-              ><span><strong>调试与记录</strong><small>运行日志、错误和版本</small></span>
+              ><span><strong>调试与记录</strong><small>运行日志、错误与版本</small></span>
             </button>
             <button class="nav-item" type="button" data-view-target="station">
               <span class="nav-index" aria-hidden="true">⌂</span
-              ><span><strong>设备上位机</strong></span>
+              ><span><strong>设备控制台</strong></span>
             </button>
           </nav>
           <div class="sidebar-bottom">
             <div class="safety-mini">
               <span aria-hidden="true">✓</span>
-              <div><strong>安全模式</strong><small>网页不会直接开电机</small></div>
+              <div><strong>安全模式</strong><small>网页端不会直接驱动电机</small></div>
             </div>
             <a href="/rdkstudio/" class="studio-link">在 RDK Studio 中使用 ↗</a>
           </div>
@@ -502,7 +502,7 @@
               <div><span class="workspace-kicker">RDK STUDIO AGENT</span><h2 id="agent-chat-title">对话式任务 Agent</h2></div>
               <div class="agent-chat-heading-actions">
                 <span class="agent-chat-runtime"><i class="status-dot"></i>工具链已连接</span>
-                <button class="agent-chat-close" id="agent-chat-close" type="button" aria-label="关闭 Agent 对话">×</button>
+                <button class="agent-chat-close" id="agent-chat-close" type="button" aria-label="关闭 Agent 对话"><span aria-hidden="true">×</span></button>
               </div>
             </div>
             <div class="agent-chat-layout">
@@ -563,7 +563,7 @@
                     </p>
                     <ol class="simulator-gate-steps">
                       <li><strong>先准备仿真</strong>：导入并校验当前产品线的真实 manifest，或启动本地 headless worker。</li>
-                      <li><strong>需要上真机时</strong>：到“板端上位机”添加并连接设备。</li>
+                      <li><strong>需要上真机时</strong>：到“设备控制台”添加并连接设备。</li>
                       <li><strong>最后选择设备</strong>：回到“部署与上线”选择已连接的目标板卡，再执行预检。</li>
                     </ol>
                     <div class="simulator-gate-actions">
@@ -1473,9 +1473,9 @@
             aria-labelledby="station-title"
           >
             <div class="section-heading section-heading-lean">
-              <h2 id="station-title">板端上位机</h2>
+              <h2 id="station-title">设备控制台</h2>
             </div>
-            <div class="submodule-tabs" role="tablist" aria-label="设备上位机模块">
+            <div class="submodule-tabs" role="tablist" aria-label="设备控制台模块">
               <button id="station-tab-devices" aria-controls="station-device-manager" class="submodule-tab is-active" type="button" role="tab" aria-selected="true" data-station-module-tab="devices">设备连接<small>Bridge、板卡与能力</small></button>
               <button id="station-tab-telemetry" aria-controls="station-module-telemetry-status station-module-telemetry-camera" class="submodule-tab" type="button" role="tab" aria-selected="false" data-station-module-tab="telemetry">遥测概览<small>状态、相机与话题</small></button>
               <button id="station-tab-control" aria-controls="station-switch-panel station-drive-panel" class="submodule-tab" type="button" role="tab" aria-selected="false" data-station-module-tab="control">安全控制<small>开关、急停与低速控制</small></button>
