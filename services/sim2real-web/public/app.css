@@ -8900,3 +8900,24 @@ html body .toast-region {
     width: min(360px, calc(100% - 32px));
   }
 }
+
+/* ---- Train page: model contract details collapse secondary information -- */
+.model-details-fold {
+  margin-top: 12px;
+  border-top: 1px solid var(--line);
+}
+.model-details-fold > summary {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 0;
+  list-style: none;
+  cursor: pointer;
+}
+.model-details-fold > summary::-webkit-details-marker { display: none; }
+.model-details-fold > summary:hover { color: var(--text); }
+.model-details-fold > summary > span:nth-child(2) { flex: 1; min-width: 0; }
+.model-details-fold > summary strong { display: block; color: var(--muted-strong); font-size: 12px; font-weight: 600; }
+.model-details-fold > summary small { display: block; margin-top: 2px; color: var(--muted); font-size: 12px; }
+.model-details-fold[open] .overview-environment-toggle i { transform: rotate(180deg); }
+.model-details-body { padding: 0 0 4px; }

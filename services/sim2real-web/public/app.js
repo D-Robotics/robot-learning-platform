@@ -2971,6 +2971,7 @@ function renderModel() {
   const compatibility = $('compatibility-list');
   if (!model) {
     state.model = null;
+    document.querySelector('#model-details-fold')?.setAttribute('open', '');
     updateTrainProgress(1);
     if (summary) summary.innerHTML = `<div class="model-empty-guide"><strong>还没有 ${escapeHtml(product.displayName)} 模型</strong><span>先展开上方“套件与契约”，载入模板并登记版本。</span><button class="button button-primary button-small" type="button" data-empty-model-action>载入 ${escapeHtml(product.displayName)} 模板 →</button></div>`;
     summary?.querySelector('[data-empty-model-action]')?.addEventListener('click', () => {

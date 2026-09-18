@@ -787,11 +787,22 @@
                     </button>
                   </div>
                 </div>
-                <div class="model-summary" id="model-summary">
-                  <div class="empty-inline">等待模型台账加载</div>
-                </div>
-                <div class="artifact-list" id="artifact-list"></div>
-                <div class="compatibility-list" id="compatibility-list"></div>
+                <details class="model-details-fold" id="model-details-fold">
+                  <summary>
+                    <span class="overview-environment-toggle" aria-hidden="true"><i>⌄</i></span>
+                    <span>
+                      <strong>模型契约与制品</strong>
+                      <small>查看策略说明、制品清单与板卡兼容性</small>
+                    </span>
+                  </summary>
+                  <div class="model-details-body">
+                    <div class="model-summary" id="model-summary">
+                      <div class="empty-inline">等待模型台账加载</div>
+                    </div>
+                    <div class="artifact-list" id="artifact-list"></div>
+                    <div class="compatibility-list" id="compatibility-list"></div>
+                  </div>
+                </details>
                 <div class="model-actions">
                   <button class="button button-primary" id="browser-run-button" type="button">
                     浏览器回放</button
