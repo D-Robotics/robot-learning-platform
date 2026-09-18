@@ -30,6 +30,11 @@ jobs:
           cache: npm
       - name: Install dependencies
         run: npm ci --ignore-scripts --no-fund
+      - name: Install lightweight Python parity dependency
+        # Several reward/environment contract tests execute the NumPy-backed
+        # reference environment. Heavy training stacks remain optional and
+        # keep their explicit SKIP/guard behavior.
+        run: python3 -m pip install --disable-pip-version-check --no-cache-dir numpy
       - name: Lint
         # Warnings are release debt in a mature product; keep CI aligned with
         # the repository's local gate so a new warning cannot quietly merge.
