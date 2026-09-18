@@ -64,7 +64,7 @@ Node.js 需要 `^22.22.2 || ^24.15.0 || >=26.0.0`（与 `package.json` 的 `engi
 
 Mock 的 `completed` 只表示协议演练完成，不代表真实 PPO 权重或可部署模型；真实训练必须由已配置的 runner 明确返回制品。starter-ppo 返回的是真实训练产物（`mock=false`），但其 numpy 物理不是 MicroDuck 全身动力学；MJX 引擎跑真 MuJoCo 接触动力学（台账标注 `physicsBackend=mjx`）；dm_control 适配器跑同一 MJCF 物理但经 DeepMind 生态 env API（`physicsBackend=dm-control-mujoco`）；视觉训练引擎吃顶置相机像素观测（`physicsBackend=cpu-mujoco-vision`）。所有本地引擎 `deployable` 恒为 `false`。
 
-### 当前能力边界（诚实版）
+### 当前能力边界
 
 | 能力 | 状态 | 说明 |
 | --- | --- | --- |
