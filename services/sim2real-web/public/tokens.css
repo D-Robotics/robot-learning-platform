@@ -59,6 +59,10 @@
   --amber-text: #854d0e;
   --shadow: 0 10px 30px rgba(27, 27, 24, 0.08);
   --shadow-strong: 0 10px 30px rgba(27, 27, 24, 0.12);
+  --ui-radius-lg: 18px;
+  --ui-radius-md: 14px;
+  --ui-border-soft: color-mix(in srgb, var(--line) 72%, transparent);
+  --ui-surface-tint: color-mix(in srgb, var(--panel) 88%, var(--accent-soft));
   --z-sticky: 100;
   --z-chat-backdrop: 1090;
   --z-chat-panel: 1100;
