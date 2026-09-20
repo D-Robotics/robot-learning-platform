@@ -2020,7 +2020,9 @@ function setFlowChild(child) {
     if (active) control.setAttribute('aria-current', 'page');
     else control.removeAttribute('aria-current');
   });
-  const active = document.querySelector(`[data-flow-child="${CSS.escape(wanted)}"]`);
+  const active = [...document.querySelectorAll('[data-flow-child]')].find(
+    (control) => control.dataset.flowChild === wanted,
+  );
   active?.closest('.sidebar-nav-group')?.setAttribute('open', '');
 }
 
@@ -10187,8 +10189,8 @@ function wireEvents() {
   };
   document.querySelectorAll('[data-train-step]').forEach((step) => {
     const activate = () => {
-      if (step.dataset.flowChild) setFlowChild(step.dataset.flowChild);
       openTrainStep(Number(step.dataset.trainStep || 1));
+      if (step.dataset.flowChild) setFlowChild(step.dataset.flowChild);
     };
     step.addEventListener('click', activate);
     step.addEventListener('keydown', (event) => {
