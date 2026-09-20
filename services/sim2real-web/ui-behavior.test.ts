@@ -385,7 +385,13 @@ describe('Sim2Real workbench DOM behavior', () => {
     trainButton?.click();
 
     expect(window.document.body.dataset.activeView).toBe('train');
-    expect(trainButton?.getAttribute('aria-current')).toBe('page');
+    // Grouped IA (2026-09): sidebar sub-entries are alternate entry points and
+    // intentionally carry no aria-current; this click switches the view but
+    // does NOT (yet) drive setFlowChild/openTrainStep — the train-step
+    // activation gap is tracked separately for the navigation refactor.
+    expect(
+      window.document.querySelector<HTMLElement>('[data-view-section="overview"]')?.hidden,
+    ).toBe(true);
     expect(window.document.querySelector<HTMLElement>('[data-view-section="train"]')?.hidden).toBe(
       false,
     );

@@ -1624,6 +1624,99 @@ paths:
           content: { application/json: { schema: { $ref: "#/components/schemas/DriveState" } } }
         "401": { $ref: "#/components/responses/AuthRequired" }
         "502": { description: Board agent unreachable; chassis watchdog still enforces rest. }
+  /api/v1/duck/board-station/arm:
+    get:
+      tags: [board-station]
+      summary: Constrained-arm (D6A) state
+      operationId: getBoardStationArm
+      description: >-
+        Honest arm snapshot: platform switch, board agent arm capability and
+        read-only pose preflight. arm_sdk absent or preflight off -> the arm
+        is simply not advertised (never simulated).
+      parameters:
+        - in: query
+          name: deviceId
+          schema: { type: string }
+      responses:
+        "200":
+          description: Arm state and capabilities.
+          content: { application/json: { schema: { $ref: "#/components/schemas/ArmStatusResponse" } } }
+        "401": { $ref: "#/components/responses/AuthRequired" }
+        "502": { description: Board agent unreachable (retryable). }
+  /api/v1/duck/board-station/arm/move:
+    post:
+      tags: [board-station]
+      summary: One clamped Cartesian move (blocking arm_sdk)
+      operationId: postBoardStationArmMove
+      description: >-
+        Double-gated like the drive (RDK_SIM2REAL_STATION_ARM_ENABLED plus the
+        board agent's RDK_SIM2REAL_BOARD_AGENT_ENABLE_ARM). The proxy clamps
+        x/y/z into the declared workspace box and speedMmPerS to <=120, and
+        the board clamps again. arm_sdk move_to is BLOCKING: acceptance (200)
+        is not completion, and an in-flight move cannot be interrupted.
+      parameters:
+        - in: query
+          name: deviceId
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ArmMoveCommand" }
+      responses:
+        "200":
+          description: Move accepted; completion lands in the arm status.
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/AuthRequired" }
+        "409":
+          description: >-
+            Refused: platform switch off (no agent call), or the board agent
+            refused (arm-disabled / move-in-progress / rate-limited /
+            out-of-workspace). Reason passed through verbatim.
+        "502": { description: Board agent unreachable (retryable). }
+  /api/v1/duck/board-station/arm/gripper:
+    post:
+      tags: [board-station]
+      summary: Clamped gripper close/open
+      operationId: postBoardStationArmGripper
+      description: >-
+        Same double gate as arm/move. close value is a force clamped to
+        <=20; open value is a width clamped to <=65mm.
+      parameters:
+        - in: query
+          name: deviceId
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ArmGripperCommand" }
+      responses:
+        "200":
+          description: Gripper command executed (blocking, short).
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/AuthRequired" }
+        "409": { description: Refused (switch off, invalid value, or agent-side refusal). }
+        "502": { description: Board agent unreachable (retryable). }
+  /api/v1/duck/board-station/arm/stop:
+    post:
+      tags: [board-station]
+      summary: Refuse-new + best-effort home (always available)
+      operationId: postBoardStationArmStop
+      description: >-
+        Always forwarded regardless of switches. Refuses NEW arm commands and
+        best-effort returns the arm home; a mid-flight blocking move cannot be
+        interrupted — the arm's physical e-stop is the final safety floor and
+        the response states whether a move was in progress.
+      parameters:
+        - in: query
+          name: deviceId
+          schema: { type: string }
+      responses:
+        "200":
+          description: Stop delivered (homed best-effort; wasMoving reported honestly).
+        "401": { $ref: "#/components/responses/AuthRequired" }
+        "502": { description: Board agent unreachable; use the arm's physical e-stop. }
   /api/v1/duck/board-station/switches:
     get:
       tags: [board-station]
@@ -2671,11 +2764,15 @@ components:
         policy:
           type: boolean
           description: Platform policy-runtime switch (runtime override over RDK_SIM2REAL_STATION_POLICY_ENABLED).
+        arm:
+          type: boolean
+          description: Platform constrained-arm (D6A) switch (runtime override over RDK_SIM2REAL_STATION_ARM_ENABLED).
     StationSwitchPatch:
       type: object
       properties:
         drive: { type: boolean, description: New platform drive switch value. }
         policy: { type: boolean, description: New platform policy switch value. }
+        arm: { type: boolean, description: New platform constrained-arm (D6A) switch value. }
         confirm:
           type: boolean
           description: Required true when turning a switch ON (operator present, area cleared).
@@ -2789,6 +2886,48 @@ components:
             publishHz: { type: integer }
             chassisWatchdogMs: { type: integer }
             emergencyStop: { type: string }
+    ArmStatusResponse:
+      type: object
+      required: [ok, platformEnabled]
+      properties:
+        ok: { type: boolean }
+        platformEnabled:
+          type: boolean
+          description: Platform constrained-arm switch state.
+        arm:
+          type: object
+          description: >-
+            Board arm snapshot. available=false carries a reason; the arm is
+            never simulated.
+          properties:
+            available: { type: boolean }
+            reason: { type: string }
+            mock: { type: boolean }
+            enabled: { type: boolean }
+            moving: { type: boolean }
+            pose: { type: object, description: arm_sdk get_pose() snapshot. }
+            lastPose: { type: object }
+            lastError: { type: string }
+        capabilities:
+          type: array
+          items: { type: string }
+          description: arm-preflight / constrained-arm-drive, as advertised by the board.
+    ArmMoveCommand:
+      type: object
+      required: [x, y, z]
+      properties:
+        x: { type: number, description: Base-frame X, mm; clamped to the workspace box. }
+        y: { type: number, description: Base-frame Y, mm; clamped to the workspace box. }
+        z: { type: number, description: Base-frame Z, mm; clamped to the workspace box. }
+        speedMmPerS: { type: number, description: Move speed, mm/s; default 60, clamped <=120. }
+    ArmGripperCommand:
+      type: object
+      required: [action, value]
+      properties:
+        action: { type: string, enum: [close, open] }
+        value:
+          type: number
+          description: close force (clamped <=20) or open width in mm (clamped <=65).
     Error:
       type: object
       required: [ok, error]

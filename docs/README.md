@@ -17,6 +17,8 @@
 | 文档 | 用途 |
 | --- | --- |
 | [`actuator-drive.md`](actuator-drive.md) | 受限驱动（运动金丝雀）：双开关、钳制、时间盒、急停 |
+| [`arm-drive.md`](arm-drive.md) | D6A 机械臂受限驱动（arm_sdk）：双开关、工作空间盒、急停语义与真机验收清单 |
+| [`engine-evidence-2026-09-20.md`](engine-evidence-2026-09-20.md) | 引擎级证据归档：本机真跑 PASS 的引擎门禁与如实 SKIP 清单 |
 | [`hardware-adapters.md`](hardware-adapters.md) | 机型适配包 schema 与新增机型步骤 |
 | [`host-station.md`](host-station.md) | 上位机视图：心跳、板载相机流、白名单只读命令 |
 | [`standalone-adapters.md`](standalone-adapters.md) | 独立部署的认证与 adapter 边界 |

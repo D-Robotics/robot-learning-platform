@@ -336,8 +336,10 @@ def fit(x, y, hidden_sizes, activation, epochs, lr, batch_size, seed, val_fracti
 
 
 def parse_image_input(spec):
-    """`64x64` -> (width=64, height=64). Both sides must be positive and a
-    multiple of 8 (three stride-2 k=4 convolutions need it to stay integer)."""
+    """`64x64` -> (width=64, height=64). Both sides must survive the fixed
+    three-convolution encoder with a strictly positive feature map — checked
+    by simulating it, not by a looser divisibility rule that 16x16 would
+    pass while producing a 0x0 map."""
     parts = spec.lower().split("x")
     if len(parts) != 2:
         raise ValueError("--image-input must look like 64x64 (WIDTHxHEIGHT)")
@@ -347,12 +349,15 @@ def parse_image_input(spec):
         raise ValueError("--image-input must be integers, got %r" % spec)
     if width <= 0 or height <= 0:
         raise ValueError("--image-input dimensions must be positive")
-    if width % 8 or height % 8:
-        raise ValueError(
-            "--image-input dimensions must be multiples of 8 (three stride-2 "
-            "k=4 convolutions), got %dx%d" % (width, height)
-        )
-    return width, height
+    for _, k, stride in IMAGE_CONV_LAYERS:
+        width = (width - k) // stride + 1
+        height = (height - k) // stride + 1
+        if width <= 0 or height <= 0:
+            raise ValueError(
+                "--image-input %r collapses to a %dx%d feature map in the "
+                "fixed conv encoder; use at least 24x24" % (spec, width, height)
+            )
+    return int(parts[0]), int(parts[1])
 
 
 def load_image_dataset(path, width, height):
@@ -507,17 +512,416 @@ def init_image_net(height, width, vec_size, hidden_sizes, action_size, activatio
     return params
 
 
-def forward_image(params, images, x_vec, activation):
-    """Images [N,H,W] in [0,255] (+ optional vector obs) -> (actions, cache)."""
-    x = (images[:, None, :, :] - _PIXEL_MEAN[0]) / _PIXEL_STD[0]
-    cache = {"conv_inputs": [x]}
-    for weights, biases in params[: len(IMAGE_CONV_LAYERS)]:
-        k = int(round(math.sqrt(weights.shape[1] // weights.shape[1] // weights.shape[0] * weights.shape[1] / weights.shape[1])))  # placeholder
-    return x, cache
+def forward_image(params, images, x_vec, pixel_norm, activation):
+    """Images [N,H,W] in [0,255] (+ optional vector obs) -> (actions, cache).
+
+    The cache holds exactly what the backward pass needs: conv input maps,
+    im2col matrices and dense activations.
+    """
+    n_conv = len(IMAGE_CONV_LAYERS)
+    x = (images[:, None, :, :] - pixel_norm[0]) / pixel_norm[1]
+    cache = {"conv_inputs": [x], "cols": [], "out_hw": [], "dense_inputs": [], "dense_acts": []}
+    if x_vec is not None:
+        cache["vec_size"] = x_vec.shape[1]
+    current = x
+    for index in range(n_conv):
+        weights, biases = params[index]
+        k, stride = IMAGE_CONV_LAYERS[index][1], IMAGE_CONV_LAYERS[index][2]
+        cols, oh, ow = _im2col(current, k, stride)
+        cache["cols"].append(cols)
+        cache["out_hw"].append((oh, ow))
+        n = current.shape[0]
+        out = np.matmul(weights, cols) + biases[None, :, None]
+        current = _activate(out.reshape(n, weights.shape[0], oh, ow), activation)
+        cache["conv_inputs"].append(current)
+    n = current.shape[0]
+    flat = current.reshape(n, -1)
+    if x_vec is not None:
+        flat = np.concatenate([flat, x_vec], axis=1)
+    cache["dense_inputs"].append(flat)
+    dense_count = len(params) - n_conv
+    last = dense_count - 1
+    current = flat
+    for offset in range(dense_count):
+        weights, biases = params[n_conv + offset]
+        current = current @ weights + biases
+        if offset != last:
+            current = _activate(current, activation)
+        cache["dense_acts"].append(current)
+    return current, cache
 
 
-def fit_image(x_img, x_vec, y, hidden_sizes, activation, epochs, lr, batch_size, seed, val_fraction):
-    raise NotImplementedError
+def backward_image(params, cache, activation, grad_out):
+    """Gradients for every parameter plus the (unused) input image gradient.
+
+    The image gradient is computed anyway: it is the only cheap proof that the
+    col2im scatter is correct, and the finite-difference test in
+    test_train_bc.py depends on it.
+    """
+    n_conv = len(IMAGE_CONV_LAYERS)
+    grads = [None] * len(params)
+    dense_count = len(params) - n_conv
+    delta = grad_out
+    for offset in range(dense_count - 1, -1, -1):
+        index = n_conv + offset
+        weights, _ = params[index]
+        input_acts = cache["dense_inputs"][0] if offset == 0 else cache["dense_acts"][offset - 1]
+        grads[index] = [input_acts.T @ delta, delta.sum(axis=0)]
+        delta = delta @ weights.T
+        if offset > 0:
+            delta = delta * _activation_grad(cache["dense_acts"][offset - 1], activation)
+    grad_flat = delta
+    if cache.get("vec_size"):
+        grad_features = grad_flat[:, : -cache["vec_size"]]
+    else:
+        grad_features = grad_flat
+    grad = grad_features.reshape(cache["conv_inputs"][n_conv].shape)
+    for index in range(n_conv - 1, -1, -1):
+        weights, _ = params[index]
+        k, stride = IMAGE_CONV_LAYERS[index][1], IMAGE_CONV_LAYERS[index][2]
+        # da -> dz for this layer: act' of this layer's own activated output
+        # (conv_inputs[index + 1]); col2im below yields the next layer's da.
+        grad = grad * _activation_grad(cache["conv_inputs"][index + 1], activation)
+        dout = grad.reshape(grad.shape[0], weights.shape[0], -1)
+        cols = cache["cols"][index]
+        grad_w = np.matmul(dout, cols.transpose(0, 2, 1)).sum(axis=0)
+        grad_b = dout.sum(axis=(0, 2))
+        dcols = np.matmul(weights.T[None, :, :], dout)
+        grad = _col2im(dcols, cache["conv_inputs"][index].shape, k, stride)
+        grads[index] = [grad_w, grad_b]
+    return grads
+
+
+def train_image(params, images, x_vec, y, pixel_norm, activation, epochs, lr, batch_size, seed):
+    """Minibatch Adam over the mixed conv+dense parameter list. Same seed ->
+    bit-identical weights, mirroring `train_mlp`."""
+    rng = np.random.default_rng(seed + 1)
+    beta1, beta2, eps = 0.9, 0.999, 1e-8
+    adam_m = [[np.zeros_like(w), np.zeros_like(b)] for w, b in params]
+    adam_v = [[np.zeros_like(w), np.zeros_like(b)] for w, b in params]
+    step = 0
+    rows = images.shape[0]
+    batch_size = min(batch_size, rows)
+    for _ in range(epochs):
+        order = rng.permutation(rows)
+        for start in range(0, rows, batch_size):
+            batch = order[start : start + batch_size]
+            xb = images[batch]
+            xv = x_vec[batch] if x_vec is not None else None
+            yb = y[batch]
+            prediction, cache = forward_image(params, xb, xv, pixel_norm, activation)
+            cache["vec_size"] = 0 if xv is None else xv.shape[1]
+            error = prediction - yb
+            delta = (2.0 / error.size) * error
+            grads = backward_image(params, cache, activation, delta)
+            step += 1
+            for index in range(len(params) - 1, -1, -1):
+                for slot, grad in ((0, grads[index][0]), (1, grads[index][1])):
+                    m = adam_m[index][slot]
+                    v = adam_v[index][slot]
+                    m[...] = beta1 * m + (1.0 - beta1) * grad
+                    v[...] = beta2 * v + (1.0 - beta2) * grad * grad
+                    m_hat = m / (1.0 - beta1**step)
+                    v_hat = v / (1.0 - beta2**step)
+                    param = params[index][slot]
+                    param[...] = param - lr * m_hat / (np.sqrt(v_hat) + eps)
+    return params
+
+
+def fit_image(
+    x_img, x_vec, y, hidden_sizes, activation, epochs, lr, batch_size, seed, val_fraction
+):
+    """Split, normalize, train and score the image branch. Same honesty rules
+    as `fit`: train-only statistics, explicit `validation: false`."""
+    rows = x_img.shape[0]
+    if val_fraction > 0:
+        train_idx, val_idx = split_dataset(rows, val_fraction, seed)
+        if len(train_idx) < MIN_TRAIN_ROWS or len(val_idx) < MIN_VAL_ROWS:
+            raise ValueError(
+                "dataset too small for a %.0f%% validation split (%d rows); "
+                "pass --val-fraction 0 to disable validation explicitly"
+                % (val_fraction * 100, rows)
+            )
+        train_idx, val_idx = train_idx, val_idx
+    else:
+        train_idx = np.arange(rows)
+        val_idx = np.array([], dtype=train_idx.dtype)
+    img_train = x_img[train_idx]
+    height, width = x_img.shape[1], x_img.shape[2]
+
+    pixel_mean = float(img_train.mean())
+    pixel_std = float(img_train.std())
+    if pixel_std < 1e-12:
+        pixel_std = 1.0
+    pixel_norm = (pixel_mean, pixel_std)
+
+    vec_norm = None
+    if x_vec is not None:
+        vec_mean, vec_std = standardize(x_vec[train_idx])
+        vec_norm = {"mean": vec_mean.tolist(), "std": vec_std.tolist()}
+        x_vec_n = (x_vec - vec_mean) / vec_std
+    else:
+        x_vec_n = None
+
+    params = init_image_net(
+        height, width, 0 if x_vec is None else x_vec.shape[1],
+        hidden_sizes, y.shape[1], activation, seed,
+    )
+    train_image(
+        params, img_train, x_vec_n[train_idx] if x_vec_n is not None else None,
+        y[train_idx], pixel_norm, activation, epochs, lr, batch_size, seed,
+    )
+
+    def _score(idx):
+        prediction, _ = forward_image(
+            params, x_img[idx], x_vec_n[idx] if x_vec_n is not None else None,
+            pixel_norm, activation,
+        )
+        return float(np.mean((prediction - y[idx]) ** 2))
+
+    train_loss = _score(train_idx)
+    if len(val_idx) > 0:
+        validation = {"enabled": True, "loss": _score(val_idx)}
+    else:
+        validation = {"enabled": False, "loss": None}
+
+    shapes, flat_size = _image_net_shapes(
+        height, width, 0 if x_vec is None else x_vec.shape[1], hidden_sizes, y.shape[1]
+    )
+    n_conv = len(IMAGE_CONV_LAYERS)
+    model = {
+        "format": MODEL_FORMAT_IMAGE,
+        "modality": "image+vector" if x_vec is not None else "image",
+        "image_input": {
+            "width": int(width),
+            "height": int(height),
+            "channels": 1,
+            "encoding": "mono8",
+            "sourceRange": [0, 255],
+        },
+        "observation_size": int(x_vec.shape[1]) if x_vec is not None else 0,
+        "action_size": int(y.shape[1]),
+        "hidden_sizes": [int(h) for h in hidden_sizes],
+        "activation": activation,
+        "pixel_normalization": {"mean": pixel_mean, "std": pixel_std},
+        "normalization": vec_norm,
+        "conv_layers": [
+            {
+                "filters": s["filters"],
+                "kernel": s["kernel"],
+                "stride": s["stride"],
+            }
+            for s in shapes[:n_conv]
+        ],
+        "flatten_size": int(flat_size),
+        "conv": [
+            {"weights": w.tolist(), "biases": b.tolist()} for w, b in params[:n_conv]
+        ],
+        "dense_layers": [
+            {"weights": w.tolist(), "biases": b.tolist()} for w, b in params[n_conv:]
+        ],
+    }
+    report = {
+        "train_loss": train_loss,
+        "validation": validation,
+        "epochs": int(epochs),
+        "learning_rate": float(lr),
+        "batch_size": int(batch_size),
+        "seed": int(seed),
+        "samples": {"train": int(len(train_idx)), "val": int(len(val_idx))},
+    }
+    return model, report
+
+
+def forward_image_float32(model, images32, obs32):
+    """float32 mirror of the ONNX image graph: normalize (scalar Sub/Div),
+    NHWC -> NCHW equivalent channel handling, im2col convs, flatten, Gemm."""
+    mean = np.float32(model["pixel_normalization"]["mean"])
+    std = np.float32(model["pixel_normalization"]["std"])
+    current = (images32 - mean) / std
+    current = current[:, None, :, :]
+    for index, layer in enumerate(model["conv"]):
+        weights = np.asarray(layer["weights"], dtype=np.float32)
+        biases = np.asarray(layer["biases"], dtype=np.float32)
+        k = model["conv_layers"][index]["kernel"]
+        stride = model["conv_layers"][index]["stride"]
+        cols, oh, ow = _im2col(current, k, stride)
+        n = current.shape[0]
+        current = np.matmul(weights, cols) + biases[None, :, None]
+        current = current.reshape(n, weights.shape[0], oh, ow)
+        # Every conv layer carries the activation — including the last one —
+        # exactly like `forward_image` and the exported graph.
+        current = np.tanh(current) if model["activation"] == "tanh" else np.maximum(
+            current, np.float32(0.0)
+        )
+    current = current.reshape(current.shape[0], -1)
+    if model["observation_size"] > 0:
+        v_mean = np.asarray(model["normalization"]["mean"], dtype=np.float32)
+        v_std = np.asarray(model["normalization"]["std"], dtype=np.float32)
+        current = np.concatenate([current, (obs32 - v_mean) / v_std], axis=1)
+    last = len(model["dense_layers"]) - 1
+    for index, layer in enumerate(model["dense_layers"]):
+        weights = np.asarray(layer["weights"], dtype=np.float32)
+        biases = np.asarray(layer["biases"], dtype=np.float32)
+        current = current @ weights + biases
+        if index != last:
+            current = np.tanh(current) if model["activation"] == "tanh" else np.maximum(
+                current, np.float32(0.0)
+            )
+    return current
+
+
+def export_onnx_image(model, path, images_check, obs_check):
+    """Serialize the image network to ONNX (NHWC rank-4 image input, matching
+    the platform vision gate `validateVisionObservationAgainstModelInputs`)
+    and PROVE it against `forward_image_float32` — an unverified export is
+    never written."""
+    try:
+        import onnx  # noqa: F401 - presence check for export
+        from onnx import TensorProto, helper, numpy_helper
+    except ImportError:
+        return {"exported": False, "equivalence": "skipped-no-onnx"}
+
+    height = model["image_input"]["height"]
+    width = model["image_input"]["width"]
+    action_size = model["action_size"]
+    p_mean = np.asarray(model["pixel_normalization"]["mean"], dtype=np.float32)
+    p_std = np.asarray(model["pixel_normalization"]["std"], dtype=np.float32)
+
+    initializers = [
+        numpy_helper.from_array(p_mean, "pixel_mean"),
+        numpy_helper.from_array(p_std, "pixel_std"),
+    ]
+    nodes = [
+        helper.make_node("Sub", ["image", "pixel_mean"], ["img_centered"]),
+        helper.make_node("Div", ["img_centered", "pixel_std"], ["img_normed"]),
+        helper.make_node("Transpose", ["img_normed"], ["img_nchw"], perm=[0, 3, 1, 2]),
+    ]
+    previous = "img_nchw"
+    n_conv = len(model["conv"])
+    for index, layer in enumerate(model["conv"]):
+        weights = np.asarray(layer["weights"], dtype=np.float32)
+        biases = np.asarray(layer["biases"], dtype=np.float32)
+        spec = model["conv_layers"][index]
+        # Stored rows are (kh, kw, c) — im2col order. ONNX Conv wants
+        # (M, C, kh, kw); reshaping straight to that would scramble kernels,
+        # which is exactly what the equivalence check exists to catch.
+        w = weights.reshape(
+            spec["filters"], spec["kernel"], spec["kernel"], _conv_in_channels(model, index)
+        ).transpose(0, 3, 1, 2)
+        initializers.append(numpy_helper.from_array(
+            np.ascontiguousarray(w, dtype=np.float32), "C%d" % index
+        ))
+        initializers.append(numpy_helper.from_array(biases, "cb%d" % index))
+        output = "cflat%d" % index if index == n_conv - 1 else "cz%d" % index
+        nodes.append(
+            helper.make_node(
+                "Conv",
+                [previous, "C%d" % index, "cb%d" % index],
+                ["cy%d" % index],
+                kernel_shape=[spec["kernel"], spec["kernel"]],
+                strides=[spec["stride"], spec["stride"]],
+            )
+        )
+        op = "Tanh" if model["activation"] == "tanh" else "Relu"
+        nodes.append(helper.make_node(op, ["cy%d" % index], [output]))
+        if index != n_conv - 1:
+            previous = output
+    final_conv = "cflat%d" % (n_conv - 1)
+    nodes.append(helper.make_node("Flatten", [final_conv], ["features"], axis=1))
+    dense_in = "features"
+    if model["observation_size"] > 0:
+        v_mean = np.asarray(model["normalization"]["mean"], dtype=np.float32)
+        v_std = np.asarray(model["normalization"]["std"], dtype=np.float32)
+        initializers.append(numpy_helper.from_array(v_mean, "obs_mean"))
+        initializers.append(numpy_helper.from_array(v_std, "obs_std"))
+        nodes.append(
+            helper.make_node("Sub", ["observation", "obs_mean"], ["obs_centered"])
+        )
+        nodes.append(helper.make_node("Div", ["obs_centered", "obs_std"], ["obs_normed"]))
+        nodes.append(
+            helper.make_node("Concat", ["features", "obs_normed"], ["dense_in"], axis=1)
+        )
+        dense_in = "dense_in"
+    last = len(model["dense_layers"]) - 1
+    previous = dense_in
+    for index, layer in enumerate(model["dense_layers"]):
+        weights = np.asarray(layer["weights"], dtype=np.float32)
+        biases = np.asarray(layer["biases"], dtype=np.float32)
+        initializers.append(numpy_helper.from_array(weights, "DW%d" % index))
+        initializers.append(numpy_helper.from_array(biases, "Db%d" % index))
+        output = "action" if index == last else "dz%d" % index
+        nodes.append(
+            helper.make_node(
+                "Gemm", [previous, "DW%d" % index, "Db%d" % index], [output]
+            )
+        )
+        if index != last:
+            op = "Tanh" if model["activation"] == "tanh" else "Relu"
+            nodes.append(helper.make_node(op, ["dz%d" % index], ["da%d" % index]))
+            previous = "da%d" % index
+        else:
+            previous = "action"
+
+    inputs = [
+        helper.make_tensor_value_info(
+            "image", TensorProto.FLOAT, [None, height, width, 1]
+        )
+    ]
+    if model["observation_size"] > 0:
+        inputs.append(
+            helper.make_tensor_value_info(
+                "observation", TensorProto.FLOAT, [None, model["observation_size"]]
+            )
+        )
+    graph = helper.make_graph(
+        nodes,
+        MODEL_FORMAT_IMAGE,
+        inputs,
+        [helper.make_tensor_value_info("action", TensorProto.FLOAT, [None, action_size])],
+        initializers,
+    )
+    onnx_model = helper.make_model(graph, opset_imports=[helper.make_opsetid("", 17)])
+    onnx_model.ir_version = 9
+    onnx.checker.check_model(onnx_model)
+    data = onnx_model.SerializeToString()
+    pathlib.Path(path).write_bytes(data)
+
+    try:
+        import onnxruntime as ort
+    except ImportError:
+        return {"exported": True, "equivalence": "skipped-no-onnxruntime", "sizeBytes": len(data)}
+
+    session = ort.InferenceSession(
+        pathlib.Path(path).as_posix(), providers=["CPUExecutionProvider"]
+    )
+    rows = min(images_check.shape[0], EQUIVALENCE_ROWS)
+    images = images_check[:rows].astype(np.float32)
+    feeds = {"image": images[:, :, :, None] if images.ndim == 3 else images}
+    if model["observation_size"] > 0:
+        feeds["observation"] = obs_check[:rows].astype(np.float32)
+    expected = forward_image_float32(model, images, feeds.get("observation"))
+    actual = session.run(["action"], feeds)[0]
+    worst = float(np.max(np.abs(expected - actual)))
+    if worst >= EQUIVALENCE_ATOL:
+        pathlib.Path(path).unlink()
+        raise ValueError(
+            "ONNX export disagrees with the NumPy forward pass (max |diff| %.3g >= %.3g); "
+            "the unverified file was not kept" % (worst, EQUIVALENCE_ATOL)
+        )
+    return {
+        "exported": True,
+        "equivalence": "verified",
+        "maxAbsDiff": worst,
+        "checkedRows": int(rows),
+        "sizeBytes": len(data),
+    }
+
+
+def _conv_in_channels(model, index):
+    if index == 0:
+        return 1
+    return model["conv_layers"][index - 1]["filters"]
 
 
 def forward_float32(model, x32):
@@ -681,6 +1085,17 @@ def parse_hidden(spec):
     return values
 
 
+def _print_onnx_state(onnx_report):
+    state = onnx_report.get("equivalence")
+    if state == "skipped-no-onnx":
+        print("[offline-bc] ONNX export skipped: onnx not installed (%s)" % ONNX_MISSING_HINT)
+    elif state == "skipped-no-onnxruntime":
+        print(
+            "[offline-bc] ONNX written but equivalence unverified: "
+            "onnxruntime not installed (%s)" % ONNX_MISSING_HINT
+        )
+
+
 def run_engine_mode():
     """File-protocol smoke round for the provenance gate.
 
@@ -760,6 +1175,13 @@ def main():
     parser.add_argument("--activation", choices=ACTIVATIONS, default="tanh")
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument(
+        "--image-input",
+        default=None,
+        help="enable the image branch: WIDTHxHEIGHT (e.g. 64x64) mono8 frames "
+        'in each row\'s "image" field (base64); "observation" is an optional '
+        "vector fused after the conv encoder",
+    )
+    parser.add_argument(
         "--val-fraction",
         type=float,
         default=0.2,
@@ -773,6 +1195,35 @@ def main():
     if not (0.0 <= args.val_fraction < 1.0):
         raise ValueError("val-fraction must be in [0, 1)")
 
+    if args.image_input:
+        width, height = parse_image_input(args.image_input)
+        x_img, x_vec, y = load_image_dataset(args.dataset, width, height)
+        hidden = parse_hidden(args.hidden)
+        model, report = fit_image(
+            x_img, x_vec, y, hidden, args.activation, args.epochs, args.lr,
+            args.batch, args.seed, args.val_fraction,
+        )
+        onnx_report = None
+        if args.onnx:
+            onnx_report = export_onnx_image(model, args.onnx, x_img, x_vec)
+            _print_onnx_state(onnx_report)
+        save_model(model, report, onnx_report, args.out)
+        print(
+            json.dumps(
+                {
+                    "format": MODEL_FORMAT_IMAGE,
+                    "modality": model["modality"],
+                    "image_input": model["image_input"],
+                    "train_loss": report["train_loss"],
+                    "val_loss": report["validation"]["loss"],
+                    "validation": report["validation"]["enabled"],
+                    "epochs": report["epochs"],
+                },
+                ensure_ascii=False,
+            )
+        )
+        return
+
     x, y = load_dataset(args.dataset)
     hidden = parse_hidden(args.hidden)
     model, report = fit(
@@ -783,17 +1234,7 @@ def main():
     onnx_report = None
     if args.onnx:
         onnx_report = export_onnx(model, args.onnx, x)
-        state = onnx_report.get("equivalence")
-        if state == "skipped-no-onnx":
-            print(
-                "[offline-bc] ONNX export skipped: onnx not installed (%s)"
-                % ONNX_MISSING_HINT
-            )
-        elif state == "skipped-no-onnxruntime":
-            print(
-                "[offline-bc] ONNX written but equivalence unverified: "
-                "onnxruntime not installed (%s)" % ONNX_MISSING_HINT
-            )
+        _print_onnx_state(onnx_report)
     save_model(model, report, onnx_report, args.out)
     print(
         json.dumps(

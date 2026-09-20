@@ -27,6 +27,22 @@
 
 2026-09-11 已归档一台真实 RDK X5 + OriginBot 的只读预检和低速 canary（含 watchdog 到期、急停归零），见 [`evidence/x5-originbot-canary-2026-09-11.json`](evidence/x5-originbot-canary-2026-09-11.json)；并用真实 X5 上的 BPU 字节完成摘要校验与本地签名/回滚 rehearsal，见 [`evidence/artifact-registry-rehearsal-2026-09-11.json`](evidence/artifact-registry-rehearsal-2026-09-11.json)。第二种实体机型与生产 registry 回滚仍待补证。
 
+## 2026-09-20 增量
+
+- **策略驱动真机运动已收官**（2026-09-14 20:04 补验 PASS：0.096m 弧线、51 次真实推理、急停生效，见
+  `real-loop-validation-2026-09-14.md`）。剩余硬件项收敛为：任务级到达点验收
+  （42D goal 缺口修复待上板，见 `goalnav-task-acceptance-runbook.md`）、第二机型
+  独立验证、生产 registry 回滚演练。
+- **GPU 线 CPU 级证据归档**：mjx（真 MuJoCo 接触动力学 + JAX PPO）、dm-control、
+  mjlab（真 rsl-rl 迭代，kinematic 后端如实标注）等门禁本机真跑 PASS，证据汇总见
+  [`engine-evidence-2026-09-20.md`](engine-evidence-2026-09-20.md)。GPU 物理栈与
+  robogo 云端仍按约定在仓外。
+- **offline-bc 图像观测分支（v3）**：mono8 像素 → 固定 CNN 编码器 → NHWC ONNX
+  （对齐视觉门禁），有限差分梯度校验 + ONNX 数值等价入 `verify:offline-bc`（25 测试）。
+- **D6A 机械臂软件链路**：机型 profile + 板端 arm 预检/受限笛卡尔运动/夹爪
+  （双开关、双钳制、急停恒可用）+ 平台代理 + agent 工具 + API 契约。真机验收
+  清单见 [`arm-drive.md`](arm-drive.md)——完成前不宣称 D6A 闭环可用。
+
 ## 验收命令
 
 ```bash

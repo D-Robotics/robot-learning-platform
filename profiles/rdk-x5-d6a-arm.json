@@ -1,0 +1,42 @@
+{
+  "schemaVersion": 1,
+  "id": "rdk-x5-d6a-arm",
+  "displayName": "D6A 桌面 6 轴机械臂（arm_sdk · 软件就绪 / 真机验收待做）",
+  "board": { "platform": "rdk-x5", "family": "rdk-custom", "model": "D-Robotics RDK X5 + D6A-550" },
+  "ros": {
+    "setupPaths": ["/opt/tros/humble/setup.bash"],
+    "topics": {}
+  },
+  "actuator": {
+    "kind": "arm",
+    "sdk": { "service": "arm_sdk", "host": "127.0.0.1", "port": 9339 },
+    "commandChannel": "arm-sdk-pose",
+    "messageType": "arm-sdk/cartesian-pose",
+    "maxReachMm": 550,
+    "maxSpeedMmPerS": 120,
+    "gripper": { "maxOpenWidthMm": 65, "maxCloseForce": 20 },
+    "watchdogMs": 1000
+  },
+  "runtime": { "decisionHz": 10, "actionOutput": "arm-pose" },
+  "safety": {
+    "workspaceMm": {
+      "x": [120, 450],
+      "y": [-250, 250],
+      "z": [20, 320]
+    },
+    "speedMmPerS": 120,
+    "sensorStallSec": 1.0
+  },
+  "policy": {
+    "observationAdapterId": "arm-pose-gripper-v1",
+    "actionAdapterId": "arm-cartesian-delta-v1",
+    "observationSize": 7,
+    "actionSize": 4
+  },
+  "capabilities": ["arm-preflight", "camera-eyeinhand", "cpu-onnx"],
+  "provenance": {
+    "kind": "real",
+    "mock": false,
+    "note": "D6A 硬件在位；board agent 的 arm_sdk 驱动/预检为 2026-09-20 新增软件能力，平台侧真机预检与受限运动验收待设备接线后执行。"
+  }
+}

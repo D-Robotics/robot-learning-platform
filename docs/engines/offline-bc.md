@@ -55,8 +55,9 @@ real-loop 验证即用 3281 条 42D→2D 板端数据训练过 v1）。
 python3 engines/offline-bc/train_bc.py dataset.jsonl \
   --out model.json --onnx policy.onnx --hidden 64,64 --epochs 300
 
-# 跑契约测试（14 个：非线性拟合、split 诚实性、确定性、fail-closed、
-# ONNX 等价与删除语义、引擎模式 provenance；无 numpy 时 SKIP 退出 0）
+# 跑契约测试（25 个：非线性拟合、split 诚实性、确定性、fail-closed、
+# ONNX 等价与删除语义、引擎模式 provenance、图像分支（卷积参照、有限差分
+# 梯度校验、像素任务学习、NHWC 导出签名）；无 numpy 时 SKIP 退出 0）
 npm run verify:offline-bc
 ```
 
@@ -65,3 +66,17 @@ npm run verify:offline-bc
 `onnx`（导出与等价状态）、provenance 三块。`observation_size` / `action_size`
 键沿用 v1 命名。依赖：核心只需 numpy；`--onnx` 需要 onnx（等价检查另需
 onnxruntime），缺库时如实 SKIP 不伪造导出。
+
+## 图像观测分支（v3，2026-09-20）
+
+`--image-input WIDTHxHEIGHT` 启用卷积编码器，吃**相机像素**而不只是表观测：
+
+- 数据集行格式：`{"image": "<base64 mono8 原始字节，恰 width*height 字节>",
+  "action": [...], "observation": [...]（可选 proprio 向量，卷积特征后拼接）}`。
+  mono8 原始字节免图像解码依赖；全部行必须一致地带或不带向量。
+- 编码器固定为三层 stride-2 k=4 卷积（8/16/32 通道）+ 激活 + 密集头，
+  纯 NumPy im2col 实现 + 手写反传；有限差分测试证明梯度正确。
+- 诚实边界：训练/验证与 ONNX 等价的纪律与 v2 完全相同；`rdk-offline-bc-v3`
+  产物导出 **NHWC rank-4 图像输入**（`[N,H,W,1]`），对齐平台视觉门禁
+  `validateVisionObservationAgainstModelInputs`。合成像素冒烟 ≠ 真机相机
+  验收；board 端视觉 runtime 装配是独立链路（见 `engines/visual-ppo`）。

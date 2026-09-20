@@ -17,7 +17,7 @@ See the quick start below and the [documentation index](docs/README.md).
 [![verify](https://github.com/D-Robotics/robot-learning-platform/actions/workflows/verify.yml/badge.svg)](https://github.com/D-Robotics/robot-learning-platform/actions/workflows/verify.yml)
 [![Node.js](https://img.shields.io/badge/Node.js-22.22.2%2B-339933?logo=nodedotjs&logoColor=white)](https://nodejs.org/)
 [![API](https://img.shields.io/badge/API-versioned%20%2Fapi%2Fv1%2Fduck-ff7433)](docs/api/openapi.yaml)
-[![状态](https://img.shields.io/badge/Mock%20闭环-可运行-16a085)](#30-秒上手)
+[![状态](https://img.shields.io/badge/CPU%20真训练闭环-可运行-16a085)](#上手先跑真训练mock只是回退)
 
 <img src="docs/assets/rdk-robot-learning-platform-hero.svg" alt="RDK Robot Learning Platform 从仿真到真机的产品闭环" width="100%" />
 
@@ -59,7 +59,7 @@ Node.js 需要 `^22.22.2 || ^24.15.0 || >=26.0.0`（与 `package.json` 的 `engi
 | **本地 / 视觉观测** | 要「顶置相机像素 → 策略」端到端 | 纯 JAX PPO + ONNX 导出 ≡ JAX 前向（`npm run verify:vision-observation`） | `engines/visual-ppo` |
 | **本地 / dm_control** | 要 DeepMind 生态 env API | dm_control `rl.control.Environment` + 同一 MJCF 物理（`npm run verify:dm-control-adapter`） | `engines/dm-control-adapter` |
 | **GPU / MicroDuck 全身强化学习** | 要站立、行走、踢球、恢复等 14 舵机任务 | 四个 61D→14D 任务包、`microduck-rl` 路由、关节 profile 与板端安全运行时 | `engines/microduck-rl-adapter` + `services/sim2real-web/board-joint-policy-runtime.py` |
-| **本地 / 行为克隆** | 有示教/录制数据，想直接克隆策略 | 真 MLP BC + train/val 分离 + ONNX 数值等价证明（`npm run verify:offline-bc`） | `engines/offline-bc` |
+| **本地 / 行为克隆** | 有示教/录制数据，想直接克隆策略 | 真 MLP BC + 图像观测分支（mono8 像素 → CNN，NHWC ONNX）+ train/val 分离 + ONNX 数值等价证明（`npm run verify:offline-bc`） | `engines/offline-bc` |
 | **本地 / ACT 分块模仿** | 有带 episode 边界的示教轨迹，想训练动作分块策略 | 真 ACT（Zhao et al. 2023）：Transformer 编解码 + CVAE 隐变量 + k 步动作分块 + 时序集成，episode 级 train/val 划分，ONNX 与 torch 前向数值等价（`npm run verify:act`） | `engines/act` |
 | **本地 / Diffusion Policy** | 示教多模态（两种风格都要保留），要生成式动作分块 | 真 Diffusion Policy（Chi et al. 2023，CNN 版式）：条件 1D UNet + DDPM + EMA，整个反向去噪循环固化为一张 ONNX（`npm run verify:diffusion-policy`） | `engines/diffusion-policy` |
 | **本地 / SmolVLA 参考** | 对接 LeRobot VLA 生态、规划先行 | CPU 栈产出诚实标注的训练计划（dry-run），CUDA worker 全量微调；缺栈时明确拒绝（`npm run verify:smolvla`） | `engines/smolvla` |
@@ -89,6 +89,7 @@ Mock 的 `completed` 只表示协议演练完成，不代表真实 PPO 权重或
 | mjlab + rsl-rl GPU 训练 | 🔌 | 参考适配器在 `engines/mjlab-rsl-rl-adapter/`：rsl-rl `OnPolicyRunner` 真跑 2 迭代（`npm run verify:mjlab-adapter`，CPU 可验证），mjlab GPU 物理侧需自备 GPU 训练栈；物理级 DR 与 dm_control 生态接入已补齐见上表 |
 | RoboGo 适配接口 | 🔌 | 需要服务端配置真实地址、凭据和网络策略 |
 | RDK-X5 真机采集 / BoardAgent / OTA | 🧩 | 提供端口、预检和部署边界，需接入实际设备 |
+| **D6A 机械臂（arm_sdk）** | 🧩 软件就绪 / 真机验收待做 | 机型 profile + 板端预检/受限笛卡尔运动/夹爪（双开关、工作空间盒与速度双钳制、急停恒可用），见 [docs/arm-drive.md](docs/arm-drive.md) |
 | 真机遥测（IMU/里程计/电池） | 🟡 参考实现 | 常驻只读遥测节点 + 认证代理 + 评估页同屏对比已具备；参考机型 OriginBot 的现场证据需按发布清单归档 |
 | 真机受限驱动（运动金丝雀） | 🧩 代码门禁已具备 | 通用 `/cmd_vel` 通道默认关闭，含双开关 + 双重钳制 + 时间盒 + 急停恒可用；真实运动验收见 [docs/actuator-drive.md](docs/actuator-drive.md) |
 | 板端延迟 rehearsal（上板时序证据） | 🧩 代码门禁已具备 | `services/sim2real-web/board-latency-rehearsal.py` 复用真实 runtime 加载路径在板上采样，产出 `board-onnx` 收据；`validateArtifactForDeployment` 对**声称可部署**的制品强制要求新鲜、同字节、达标且自洽的收据，训练主机的 `host-torch` 数字不再能替代它。探针与门禁一致性见 `npm run verify:board-latency`；**收据自动入库与真实 X5 测量待现场验收**，见 [docs/host-station.md](docs/host-station.md) |
@@ -104,25 +105,21 @@ Mock 的 `completed` 只表示协议演练完成，不代表真实 PPO 权重或
 
 </div>
 
-## 30 秒上手
+## 上手：先跑真训练，Mock 只是回退
+
+**首选路径**——真实训练闭环（真 PPO + ONNX 制品 + 遥测评测，约 2 分钟笔记本 CPU，
+`mock=false`，产物可直接用于预检）：
 
 ```bash
 npm ci
 cp .env.example .env
-
-# 终端 1：无 CUDA 的流程演练 worker
-npm run dev:mock-worker
-
-# 终端 2：独立 Web 工作台
-npm run dev:sim2real
-```
-
-想要**真实训练闭环**（真 PPO + ONNX 制品 + 遥测评测，约 2 分钟笔记本 CPU）：
-
-```bash
 python3 -m pip install --user numpy torch onnx
 npm run demo:starter
 ```
+
+依赖缺失时明确退出，不伪造训练结果；详见 [`docs/engines/starter-ppo.md`](docs/engines/starter-ppo.md)。
+有独立 GPU 机器时用 `node scripts/gpu-deploy.mjs` 一键部署（见 [`docs/gpu-runner.md`](docs/gpu-runner.md)）。
+生产级 GPU 训练（mjlab + rsl-rl）的接入参考在 `engines/mjlab-rsl-rl-adapter/`。
 
 有示教数据时，可以单独运行 ACT（Python 环境需安装 `numpy`、`torch`、`onnx`、`onnxruntime`；锁定依赖见 `engines/act/requirements.txt`）：
 
@@ -136,7 +133,16 @@ npm run verify:act
 
 先跑 `npm run doctor` 可以一键体检环境（Node/Python/ONNX/GPU/端口），每条失败项都带修复命令。
 
-它会用 `engines/starter-ppo`（numpy 向量化物理 + torch PPO，**自动检测 CUDA**：有 GPU 就用 GPU，没有就 CPU 且如实上报 `result.cuda=false`）完成：注册 manifest → `mock=false` 的真实训练 → 导出 `policy.onnx` → 分块上传评测轨迹 → 对未训练基线出 MAE/RMSE 评测。依赖缺失时明确退出，不伪造训练结果；详见 [`docs/engines/starter-ppo.md`](docs/engines/starter-ppo.md)。有独立 GPU 机器时用 `node scripts/gpu-deploy.mjs` 一键部署（见 [`docs/gpu-runner.md`](docs/gpu-runner.md)）。生产级 GPU 训练（mjlab + rsl-rl）的接入参考在 `engines/mjlab-rsl-rl-adapter/`。
+**回退路径**——没有 Python 依赖、只想验证产品和协议时的 Mock worker 流程演练
+（Mock 的 `completed` 只表示协议演练完成，不代表真实 PPO 权重）：
+
+```bash
+# 终端 1：无 CUDA 的流程演练 worker
+npm run dev:mock-worker
+
+# 终端 2：独立 Web 工作台
+npm run dev:sim2real
+```
 
 演示时也可以直接用一条命令启动隔离的 Mock worker、只读 reference BoardAgent 和 Web 工作台：
 

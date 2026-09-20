@@ -41,6 +41,7 @@ def load_agent_module(
     bind_host="127.0.0.1",
     token="test-token",
     enable_policy=False,
+    enable_arm=False,
 ):
     """Spec-load the agent with a clean, offline environment.
 
@@ -57,6 +58,7 @@ def load_agent_module(
         "RDK_SIM2REAL_BOARD_AGENT_PORT": "19100",
         "RDK_SIM2REAL_ADAPTER_CONFIG": profile_path or "",
         "RDK_SIM2REAL_BOARD_AGENT_ENABLE_POLICY": "1" if enable_policy else "",
+        "RDK_SIM2REAL_BOARD_AGENT_ENABLE_ARM": "1" if enable_arm else "",
     }
     with mock.patch.dict(os.environ, env, clear=True):
         spec = importlib.util.spec_from_file_location(
@@ -848,6 +850,183 @@ class PolicyRuntimeInputBindingContract(unittest.TestCase):
         self.assertTrue(result["ok"], result)
         self.assertEqual(result["model"]["inputDim"], 61)
         self.assertEqual(result["model"]["outputDim"], 14)
+
+
+class _FakeArmSdk:
+    """Deterministic arm_sdk stand-in: records calls, returns a fixed pose."""
+
+    def __init__(self, pose=None):
+        self.calls = []
+        self._pose = pose or {"x": 250.0, "y": 0.0, "z": 80.0}
+        self.arm = _FakeArm(self)
+
+    def connect(self, host=None, port=None):
+        self.calls.append(("connect", host, port))
+        return self.arm
+
+    @property
+    def gripper(self):
+        return self.arm.gripper
+
+
+class _FakeArm:
+    def __init__(self, sdk):
+        self._sdk = sdk
+        self.gripper = _FakeGripper(sdk)
+
+    def move_to(self, x, y, z, speed=None):
+        self._sdk.calls.append(("move_to", x, y, z, speed))
+
+    def home(self):
+        self._sdk.calls.append(("home",))
+
+    def get_pose(self):
+        self._sdk.calls.append(("get_pose",))
+        return dict(self._sdk._pose)
+
+    def info(self):
+        return {"model": "fake-d6a"}
+
+
+class _FakeGripper:
+    def __init__(self, sdk):
+        self._sdk = sdk
+
+    def close(self, force=8.0):
+        self._sdk.calls.append(("gripper_close", force))
+        return True
+
+    def open(self, width=65.0):
+        self._sdk.calls.append(("gripper_open", width))
+
+
+def _install_fake_arm_sdk(module, fake):
+    """The agent probes `import arm_sdk` lazily; point it at the fake."""
+    module._arm_sdk_module = fake
+    module._arm_sdk_probed = True
+
+
+class ArmSdkDisabledContract(unittest.TestCase):
+    """Arm motion fails closed exactly like drive; preflight stays read-only."""
+
+    def setUp(self):
+        self.agent = load_agent_module(enable_arm=False)
+        self.fake = _FakeArmSdk()
+        _install_fake_arm_sdk(self.agent, self.fake)
+
+    def test_switch_off_refuses_motion(self):
+        ok, reason = self.agent.arm_move(250.0, 0.0, 80.0, 60.0)
+        self.assertFalse(ok)
+        self.assertEqual(reason, "arm-disabled")
+        ok, reason, _ = self.agent.arm_gripper("close", 8.0)
+        self.assertFalse(ok)
+        self.assertEqual(reason, "arm-disabled")
+        self.assertEqual(self.fake.calls, [], "disabled arm must not touch the SDK")
+
+    def test_preflight_still_advertised_read_only(self):
+        self.assertIn("arm-preflight", self.agent.arm_capability())
+        self.assertNotIn("constrained-arm-drive", self.agent.arm_capability())
+        status = self.agent.arm_status()
+        self.assertTrue(status["available"])
+        self.assertFalse(status["enabled"])
+        self.assertFalse(status["mock"])
+
+    def test_stop_always_succeeds_even_when_disabled(self):
+        result = self.agent.arm_stop()
+        self.assertTrue(result["ok"])
+        self.assertFalse(result["wasMoving"])
+
+
+class ArmSdkMissingContract(unittest.TestCase):
+    def setUp(self):
+        self.agent = load_agent_module(enable_arm=True)
+        self.agent._arm_sdk_module = None
+        self.agent._arm_sdk_probed = True
+
+    def test_no_sdk_is_never_simulated(self):
+        ok, reason = self.agent.arm_move(250.0, 0.0, 80.0, 60.0)
+        self.assertFalse(ok)
+        self.assertEqual(reason, "arm-sdk-unavailable")
+        self.assertEqual(self.agent.arm_capability(), [])
+        status = self.agent.arm_status()
+        self.assertFalse(status["available"])
+        self.assertIn("reason", status)
+
+
+class ArmSdkEnabledContract(unittest.TestCase):
+    def setUp(self):
+        self.agent = load_agent_module(enable_arm=True)
+        self.fake = _FakeArmSdk()
+        _install_fake_arm_sdk(self.agent, self.fake)
+
+    def _drain(self):
+        """Wait out the single in-flight worker thread."""
+        for _ in range(200):
+            if not self.agent._arm_state["moving"]:
+                return
+            time.sleep(0.01)
+
+    def test_capability_advertises_drive_when_enabled(self):
+        self.assertIn("constrained-arm-drive", self.agent.arm_capability())
+
+    def test_move_is_clamped_into_the_workspace_box(self):
+        ok, reason = self.agent.arm_move(2000.0, -900.0, 5.0, 9999.0)
+        self.assertTrue(ok, reason)
+        self._drain()
+        moves = [c for c in self.fake.calls if c[0] == "move_to"]
+        self.assertEqual(len(moves), 1)
+        _, x, y, z, speed = moves[0]
+        self.assertLessEqual(x, self.agent.ARM_WORKSPACE_MM["x"][1])
+        self.assertGreaterEqual(y, self.agent.ARM_WORKSPACE_MM["y"][0])
+        self.assertGreaterEqual(z, self.agent.ARM_WORKSPACE_MM["z"][0])
+        self.assertLessEqual(speed, self.agent.ARM_MAX_SPEED_MM_PER_S)
+
+    def test_non_finite_target_is_refused_not_clamped(self):
+        for bad in (float("nan"), float("inf"), None, True, "250"):
+            ok, reason = self.agent.arm_move(bad, 0.0, 80.0, 60.0)
+            self.assertFalse(ok)
+            self.assertTrue(reason.endswith("-invalid") or reason == "speed-invalid")
+
+    def test_second_move_while_moving_is_refused(self):
+        self.agent._arm_state["lastCmdAt"] = 0.0
+        ok, _ = self.agent.arm_move(250.0, 0.0, 80.0, 60.0)
+        self.assertTrue(ok)
+        ok, reason = self.agent.arm_move(250.0, 0.0, 80.0, 60.0)
+        self.assertFalse(ok)
+        self.assertIn(reason, ("move-in-progress", "rate-limited"))
+        self._drain()
+
+    def test_completion_updates_pose(self):
+        ok, _ = self.agent.arm_move(250.0, 0.0, 80.0, 60.0)
+        self.assertTrue(ok)
+        self._drain()
+        self.assertTrue(self.agent.arm_status()["available"])
+        self.assertEqual(self.agent._arm_state["lastPose"], {"x": 250.0, "y": 0.0, "z": 80.0})
+
+    def test_gripper_clamps_force_and_width(self):
+        ok, reason, detail = self.agent.arm_gripper("close", 999.0)
+        self.assertTrue(ok, reason)
+        self.assertTrue(detail["grasped"])
+        ok, reason, detail = self.agent.arm_gripper("open", 999.0)
+        self.assertTrue(ok, reason)
+        self.assertLessEqual(detail["width"], self.agent.ARM_MAX_GRIPPER_WIDTH_MM)
+        closes = [c for c in self.fake.calls if c[0] == "gripper_close"]
+        self.assertLessEqual(closes[0][1], self.agent.ARM_MAX_CLOSE_FORCE)
+
+    def test_gripper_rejects_bad_action_and_value(self):
+        ok, reason, _ = self.agent.arm_gripper("toggle", 8.0)
+        self.assertFalse(ok)
+        self.assertEqual(reason, "action-invalid")
+        ok, reason, _ = self.agent.arm_gripper("close", -1)
+        self.assertFalse(ok)
+        self.assertEqual(reason, "value-invalid")
+
+    def test_stop_with_no_motion_homes_the_arm(self):
+        result = self.agent.arm_stop()
+        self.assertTrue(result["ok"])
+        self.assertFalse(result["wasMoving"])
+        self.assertTrue(result["homed"])
+        self.assertIn(("home",), self.fake.calls)
 
 
 if __name__ == "__main__":

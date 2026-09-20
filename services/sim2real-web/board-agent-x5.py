@@ -680,6 +680,200 @@ def _finite_number(value):
     )
 
 
+# ---- constrained arm (D6A, arm_sdk) ---------------------------------------
+# Arm motion is DISABLED unless the operator explicitly sets
+# RDK_SIM2REAL_BOARD_AGENT_ENABLE_ARM=1. Read-only arm preflight (pose probe)
+# is separately gated by RDK_SIM2REAL_BOARD_AGENT_ENABLE_ARM_PREFLIGHT
+# (default on: it never actuates). Every move is clamped to the workspace box
+# and speed cap; arm_sdk move_to is BLOCKING, so moves run on a worker thread
+# and an in-flight move cannot be interrupted — `arm/stop` refuses NEW
+# commands and best-effort returns home. The arm's own physical e-stop stays
+# the final safety floor.
+ARM_ENABLED = os.environ.get("RDK_SIM2REAL_BOARD_AGENT_ENABLE_ARM", "").strip() == "1"
+ARM_PREFLIGHT_ENABLED = (
+    os.environ.get("RDK_SIM2REAL_BOARD_AGENT_ENABLE_ARM_PREFLIGHT", "1").strip() != "0"
+)
+ARM_SDK_HOST = "127.0.0.1"
+ARM_SDK_PORT = 9339
+# Hard clamps, mirroring profiles/rdk-x5-d6a-arm.json (the profile declares;
+# these enforce — both must agree).
+ARM_WORKSPACE_MM = {"x": (120.0, 450.0), "y": (-250.0, 250.0), "z": (20.0, 320.0)}
+ARM_MAX_SPEED_MM_PER_S = 120.0
+ARM_MAX_GRIPPER_WIDTH_MM = 65.0
+ARM_MAX_CLOSE_FORCE = 20.0
+ARM_MIN_INTERVAL_MS = 400
+
+_arm_lock = threading.Lock()
+_arm_state = {
+    "lastCmdAt": 0.0,
+    "moving": False,
+    "lastPose": None,
+    "lastError": None,
+}
+_arm_sdk_module = None
+_arm_sdk_probed = False
+
+
+def _arm_log(msg):
+    print(f"[arm] {time.time():.3f} {msg}", flush=True)
+
+
+def _arm_module():
+    """Import arm_sdk once; cache the probe. Absent SDK -> arm capability is
+    simply not advertised (never simulated)."""
+    global _arm_sdk_module, _arm_sdk_probed
+    if not _arm_sdk_probed:
+        try:
+            import arm_sdk as module
+
+            _arm_sdk_module = module
+        except ImportError:
+            _arm_sdk_module = None
+        _arm_sdk_probed = True
+    return _arm_sdk_module
+
+
+def arm_capability():
+    """What THIS board can honestly advertise right now."""
+    capabilities = []
+    if ARM_PREFLIGHT_ENABLED and _arm_module() is not None:
+        capabilities.append("arm-preflight")
+        if ARM_ENABLED:
+            capabilities.append("constrained-arm-drive")
+    return capabilities
+
+
+def arm_status():
+    """Read-only pose snapshot. Never actuates."""
+    module = _arm_module()
+    if module is None or not ARM_PREFLIGHT_ENABLED:
+        return {"available": False, "reason": "arm-sdk-unavailable"}
+    try:
+        arm = module.connect(host=ARM_SDK_HOST, port=ARM_SDK_PORT)
+        pose = arm.get_pose()
+        status = {
+            "available": True,
+            "mock": False,
+            "enabled": ARM_ENABLED,
+            "moving": _arm_state["moving"],
+            "lastPose": _arm_state["lastPose"],
+            "lastError": _arm_state["lastError"],
+        }
+        if isinstance(pose, dict):
+            status["pose"] = pose
+        return status
+    except (OSError, RuntimeError) as error:
+        return {"available": False, "reason": f"arm-sdk-error: {error}"}
+
+
+def _clamp_arm_target(x, y, z, speed):
+    """Clamp to the workspace box / speed cap. Returns (values, reason)."""
+    clamped = {}
+    for axis, value in (("x", x), ("y", y), ("z", z)):
+        low, high = ARM_WORKSPACE_MM[axis]
+        if not _finite_number(value):
+            return None, f"{axis}-invalid"
+        clamped[axis] = min(high, max(low, float(value)))
+    if not _finite_number(speed) or speed <= 0:
+        return None, "speed-invalid"
+    clamped["speed"] = min(ARM_MAX_SPEED_MM_PER_S, float(speed))
+    return clamped, None
+
+
+def arm_move(x, y, z, speed):
+    """One clamped Cartesian move on a worker thread. Returns (ok, reason) —
+    acceptance, NOT completion; completion lands in arm_status()."""
+    module = _arm_module()
+    if module is None:
+        return False, "arm-sdk-unavailable"
+    if not ARM_ENABLED:
+        return False, "arm-disabled"
+    with _arm_lock:
+        if _arm_state["moving"]:
+            return False, "move-in-progress"
+        if time.time() - _arm_state["lastCmdAt"] < ARM_MIN_INTERVAL_MS / 1000.0:
+            return False, "rate-limited"
+        clamped, reason = _clamp_arm_target(x, y, z, speed)
+        if clamped is None:
+            return False, reason
+        _arm_state["lastCmdAt"] = time.time()
+        _arm_state["moving"] = True
+        _arm_state["lastError"] = None
+
+    def _run():
+        try:
+            arm = module.connect(host=ARM_SDK_HOST, port=ARM_SDK_PORT)
+            arm.move_to(
+                clamped["x"], clamped["y"], clamped["z"], speed=clamped["speed"]
+            )
+            pose = arm.get_pose()
+            with _arm_lock:
+                _arm_state["moving"] = False
+                _arm_state["lastPose"] = pose if isinstance(pose, dict) else None
+        except (OSError, RuntimeError) as error:
+            with _arm_lock:
+                _arm_state["moving"] = False
+                _arm_state["lastError"] = str(error)
+            _arm_log(f"move failed: {error}")
+
+    threading.Thread(target=_run, daemon=True, name="arm-move").start()
+    _arm_log(
+        f"move x={clamped['x']} y={clamped['y']} z={clamped['z']} speed={clamped['speed']}"
+    )
+    return True, None
+
+
+def arm_gripper(action, value):
+    """Clamped gripper close(force)/open(width). Short and blocking — runs
+    inline like the tiny station commands."""
+    module = _arm_module()
+    if module is None:
+        return False, "arm-sdk-unavailable", None
+    if not ARM_ENABLED:
+        return False, "arm-disabled", None
+    if action not in ("close", "open"):
+        return False, "action-invalid", None
+    if not _finite_number(value) or value <= 0:
+        return False, "value-invalid", None
+    with _arm_lock:
+        if _arm_state["moving"]:
+            return False, "move-in-progress", None
+    try:
+        arm = module.connect(host=ARM_SDK_HOST, port=ARM_SDK_PORT)
+        if action == "close":
+            force = min(ARM_MAX_CLOSE_FORCE, float(value))
+            grasped = bool(arm.gripper.close(force=force))
+            _arm_log(f"gripper close force={force} grasped={grasped}")
+            return True, None, {"grasped": grasped}
+        width = min(ARM_MAX_GRIPPER_WIDTH_MM, float(value))
+        arm.gripper.open(width=width)
+        _arm_log(f"gripper open width={width}")
+        return True, None, {"width": width}
+    except (OSError, RuntimeError) as error:
+        _arm_log(f"gripper failed: {error}")
+        with _arm_lock:
+            _arm_state["lastError"] = str(error)
+        return False, "gripper-failed", None
+
+
+def arm_stop():
+    """Refuse new commands and best-effort return home. Mid-move interrupts
+    are NOT possible with a blocking arm_sdk — stated, not hidden."""
+    with _arm_lock:
+        was_moving = _arm_state["moving"]
+        _arm_state["moving"] = False
+    module = _arm_module()
+    homed = False
+    if module is not None and not was_moving:
+        try:
+            module.connect(host=ARM_SDK_HOST, port=ARM_SDK_PORT).home()
+            homed = True
+        except (OSError, RuntimeError) as error:
+            _arm_log(f"home failed: {error}")
+    _arm_log(f"stop (wasMoving={was_moving} homed={homed})")
+    return {"ok": True, "wasMoving": was_moving, "homed": homed}
+
+
 def drive_command(linear, angular, duration_sec):
     """Accept (or refuse) one clamped drive command. Returns (ok, reason).
     The active window is always capped at DRIVE_MAX_WINDOW_SEC from NOW,
@@ -1677,6 +1871,7 @@ def build_status():
             "capabilities": _adapter_capabilities,
         },
         "adapterId": _adapter_id,
+        "arm": arm_status(),
         "cpu": {
             "percent": cpu,
             "temperatureC": temp,
@@ -2018,7 +2213,8 @@ class Handler(BaseHTTPRequestHandler):
                 "ok": True,
                 "service": "rdk-x5-board-agent",
                 "capabilities": ["read-only-preflight", "originbot-onboarding", "host-station"]
-                + (["constrained-drive"] if DRIVE_ENABLED else []),
+                + (["constrained-drive"] if DRIVE_ENABLED else [])
+                + arm_capability(),
                 "stationCommands": [{"id": c["id"], "label": c["label"]} for c in STATION_COMMANDS],
                 "actuatorControl": MOTION_SWITCH_ENABLED,
                 "actuatorPolicy": _actuator_policy(),
@@ -2049,6 +2245,10 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/v1/station/drive":
             self._json(200, {"ok": True, "drive": drive_status(),
                              "actuatorPolicy": _actuator_policy()})
+            return
+        if path == "/v1/station/arm/status":
+            self._json(200, {"ok": True, "arm": arm_status(),
+                             "capabilities": arm_capability()})
             return
         if path == "/v1/station/policy":
             self._json(200, {"ok": True, "policy": policy_status()})
@@ -2097,6 +2297,43 @@ class Handler(BaseHTTPRequestHandler):
             return
         if path == "/v1/station/drive":
             self._station_drive()
+            return
+        if path == "/v1/station/arm/move":
+            payload = self._read_json()
+            if not isinstance(payload, dict):
+                self._json(400, {"ok": False, "error": "BOARD_AGENT_INVALID_JSON"})
+                return
+            ok, reason = arm_move(
+                payload.get("x"), payload.get("y"), payload.get("z"),
+                payload.get("speedMmPerS", 60.0),
+            )
+            if not ok:
+                self._json(409, {"ok": False, "error": "BOARD_AGENT_ARM_REFUSED",
+                                 "reason": reason, "arm": arm_status()})
+                return
+            self._json(200, {"ok": True, "arm": arm_status()})
+            return
+        if path == "/v1/station/arm/gripper":
+            payload = self._read_json()
+            if not isinstance(payload, dict):
+                self._json(400, {"ok": False, "error": "BOARD_AGENT_INVALID_JSON"})
+                return
+            ok, reason, detail = arm_gripper(
+                payload.get("action"), payload.get("value")
+            )
+            if not ok:
+                self._json(409, {"ok": False, "error": "BOARD_AGENT_ARM_REFUSED",
+                                 "reason": reason, "arm": arm_status()})
+                return
+            self._json(200, {"ok": True, "detail": detail, "arm": arm_status()})
+            return
+        if path == "/v1/station/arm/stop":
+            if not self._require_empty_body():
+                self._json(400, {"ok": False, "error": "BOARD_AGENT_BODY_NOT_ALLOWED"})
+                return
+            # Like drive stop: always accepted, even when the arm is disabled,
+            # so the stop control never has a failure mode.
+            self._json(200, {**arm_stop(), "arm": arm_status()})
             return
         if path == "/v1/station/drive/stop":
             if not self._require_empty_body():

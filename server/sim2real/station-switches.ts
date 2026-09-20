@@ -30,11 +30,12 @@ import { resolveDataDir } from './standalone-adapters.js';
  * emergency-stop endpoints never consult either.
  */
 
-export type StationSwitch = 'drive' | 'policy';
+export type StationSwitch = 'drive' | 'policy' | 'arm';
 
 const ENV_FLAG: Record<StationSwitch, string> = {
   drive: 'RDK_SIM2REAL_STATION_DRIVE_ENABLED',
   policy: 'RDK_SIM2REAL_STATION_POLICY_ENABLED',
+  arm: 'RDK_SIM2REAL_STATION_ARM_ENABLED',
 };
 
 function switchesFile(): string {
@@ -44,6 +45,7 @@ function switchesFile(): string {
 interface StoredSwitches {
   drive?: boolean;
   policy?: boolean;
+  arm?: boolean;
 }
 
 const MAX_SWITCHES_FILE_BYTES = 16 * 1024;
@@ -87,17 +89,21 @@ function readOverrides(): StoredSwitches {
       throw new Error('station switch registry shape is invalid');
     }
     const source = parsed as Record<string, unknown>;
-    const unknownKeys = Object.keys(source).filter((key) => key !== 'drive' && key !== 'policy');
+    const unknownKeys = Object.keys(source).filter(
+      (key) => key !== 'drive' && key !== 'policy' && key !== 'arm',
+    );
     if (unknownKeys.length) throw new Error('station switch registry contains unknown keys');
     if (
       (source.drive !== undefined && typeof source.drive !== 'boolean') ||
-      (source.policy !== undefined && typeof source.policy !== 'boolean')
+      (source.policy !== undefined && typeof source.policy !== 'boolean') ||
+      (source.arm !== undefined && typeof source.arm !== 'boolean')
     ) {
       throw new Error('station switch registry contains a non-boolean override');
     }
     return {
       drive: typeof source.drive === 'boolean' ? source.drive : undefined,
       policy: typeof source.policy === 'boolean' ? source.policy : undefined,
+      arm: typeof source.arm === 'boolean' ? source.arm : undefined,
     };
   } catch (error) {
     // A missing override file is the documented state in which env defaults

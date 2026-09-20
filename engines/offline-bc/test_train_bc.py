@@ -368,5 +368,262 @@ class EngineModeTest(unittest.TestCase):
                 self.assertEqual(result["dependencyLockSha256"], expected)
 
 
+def mono8_row(image, action, observation=None):
+    import base64
+
+    row = {
+        "image": base64.b64encode(np.asarray(image, dtype=np.uint8).tobytes()).decode(),
+        "action": action,
+    }
+    if observation is not None:
+        row["observation"] = observation
+    return row
+
+
+def quadrant_image_dataset(rows=96, size=32, seed=0, with_vector=True):
+    """Bright quadrant determines the action — a pixel task no vector-only
+    model can see, so a pass proves the conv branch actually runs."""
+    rng = np.random.default_rng(seed)
+    images = []
+    ys = []
+    xs = []
+    actions = (
+        (1.0, 0.0),
+        (-1.0, 0.0),
+        (0.2, 1.0),
+        (0.2, -1.0),
+    )
+    for i in range(rows):
+        img = np.zeros((size, size), dtype=np.uint8)
+        quadrant = i % 4
+        if quadrant == 0:
+            img[: size // 2, :] = 255
+        elif quadrant == 1:
+            img[size // 2 :, :] = 255
+        elif quadrant == 2:
+            img[:, : size // 2] = 255
+        else:
+            img[:, size // 2 :] = 255
+        img = np.clip(
+            img.astype(np.int64) + rng.integers(0, 12, img.shape), 0, 255
+        ).astype(np.uint8)
+        images.append(img)
+        ys.append(list(actions[quadrant]))
+        xs.append([quadrant / 4.0, 0.5] if with_vector else None)
+    return (
+        np.stack(images).astype(np.float64),
+        np.asarray(xs, dtype=np.float64) if with_vector else None,
+        np.asarray(ys, dtype=np.float64),
+    )
+
+
+def naive_conv(x, weights, biases, k, stride):
+    """Textbook loop conv in (c, kh, kw) weight order — the reference the
+    im2col path is proven against."""
+    n, c, h, w = x.shape
+    f = weights.shape[0]
+    oh = (h - k) // stride + 1
+    ow = (w - k) // stride + 1
+    out = np.zeros((n, f, oh, ow))
+    # weights arrive [f, c, k, k]
+    for ni in range(n):
+        for fi in range(f):
+            for yi in range(oh):
+                for xi in range(ow):
+                    patch = x[ni, :, yi * stride : yi * stride + k, xi * stride : xi * stride + k]
+                    out[ni, fi, yi, xi] = np.sum(patch * weights[fi]) + biases[fi]
+    return out
+
+
+class ImageBranchTest(unittest.TestCase):
+    def test_parse_image_input_rejects_collapsing_dims(self):
+        self.assertEqual(train_bc.parse_image_input("64x64"), (64, 64))
+        self.assertEqual(train_bc.parse_image_input("32X24"), (32, 24))
+        for bad in ("16x16", "8x8", "0x32", "abc", "64"):
+            with self.assertRaises(ValueError):
+                train_bc.parse_image_input(bad)
+
+    def test_im2col_conv_matches_a_naive_reference(self):
+        rng = np.random.default_rng(1)
+        x = rng.uniform(-1.0, 1.0, (2, 3, 9, 9))
+        for k, stride in ((3, 1), (3, 2), (4, 2)):
+            f = 5
+            weights = rng.uniform(-1.0, 1.0, (f, k * k * 3))
+            biases = rng.uniform(-1.0, 1.0, f)
+            cols, oh, ow = train_bc._im2col(x, k, stride)
+            out = (np.matmul(weights, cols) + biases[None, :, None]).reshape(2, f, oh, ow)
+            # The engine stores conv rows in (kh, kw, c) order — the same
+            # order the ONNX export un-scrambles with its transpose.
+            reference = naive_conv(
+                x, weights.reshape(f, k, k, 3).transpose(0, 3, 1, 2), biases, k, stride
+            )
+            np.testing.assert_allclose(
+                out, reference, atol=1e-12,
+                err_msg="im2col conv (k=%d s=%d) disagrees with the naive loop" % (k, stride),
+            )
+
+    def test_backward_gradient_matches_finite_differences(self):
+        rng = np.random.default_rng(2)
+        x_img, x_vec, _ = quadrant_image_dataset(rows=4, size=32, with_vector=True)
+        target = rng.uniform(-1.0, 1.0, (4, 2))
+        params = train_bc.init_image_net(32, 32, 2, [16], 2, "tanh", 0)
+        pixel_norm = (float(x_img.mean()), max(float(x_img.std()), 1e-12))
+
+        def loss():
+            prediction, _ = train_bc.forward_image(params, x_img, x_vec, pixel_norm, "tanh")
+            return float(np.sum((prediction - target) ** 2)) / 2.0
+
+        prediction, cache = train_bc.forward_image(params, x_img, x_vec, pixel_norm, "tanh")
+        grads = train_bc.backward_image(params, cache, "tanh", prediction - target)
+        eps = 1e-5
+        checked = 0
+        for layer in (0, 1, 3):  # two conv layers + first dense layer
+            for slot in (0, 1):
+                array = params[layer][slot]
+                flat_grad = grads[layer][slot]
+                self.assertEqual(flat_grad.shape, array.shape)
+                indices = rng.choice(array.size, size=min(12, array.size), replace=False)
+                for index in indices:
+                    multi = np.unravel_index(index, array.shape)
+                    original = array[multi]
+                    array[multi] = original + eps
+                    up = loss()
+                    array[multi] = original - eps
+                    down = loss()
+                    array[multi] = original
+                    numeric = (up - down) / (2 * eps)
+                    analytic = flat_grad[multi]
+                    scale = max(1.0, abs(numeric), abs(analytic))
+                    self.assertLess(
+                        abs(numeric - analytic) / scale,
+                        1e-4,
+                        "gradient mismatch at layer %d slot %d index %s: "
+                        "numeric %.8g vs analytic %.8g" % (layer, slot, multi, numeric, analytic),
+                    )
+                    checked += 1
+        self.assertGreaterEqual(checked, 60)
+
+    def test_image_policy_learns_a_pixel_task(self):
+        x_img, x_vec, y = quadrant_image_dataset()
+        model, report = train_bc.fit_image(
+            x_img, x_vec, y, [32], "tanh", epochs=120, lr=3e-3,
+            batch_size=16, seed=0, val_fraction=0.25,
+        )
+        self.assertEqual(model["format"], train_bc.MODEL_FORMAT_IMAGE)
+        self.assertEqual(model["modality"], "image+vector")
+        self.assertTrue(report["validation"]["enabled"])
+        self.assertLess(
+            report["validation"]["loss"], 0.01,
+            "val loss %.4f on the quadrant task — the conv branch did not learn" % report["validation"]["loss"],
+        )
+
+    def test_image_dataset_rules_fail_closed(self):
+        import base64
+
+        img = np.zeros((32, 32), dtype=np.uint8)
+        good = base64.b64encode(img.tobytes()).decode()
+        base = {"image": good, "action": [0.1, 0.2]}
+        cases = {
+            "not base64": {"image": "!!!", "action": [0.1, 0.2]},
+            "wrong byte count": {"image": base64.b64encode(b"\x00" * 99).decode(), "action": [0.1, 0.2]},
+            "missing action": {"image": good},
+            "non-numeric action": {"image": good, "action": [True, 0.2]},
+            "nan action": {"image": good, "action": [float("nan"), 0.2]},
+        }
+        for label, row in cases.items():
+            with self.assertRaises(ValueError, msg=label):
+                load_image_dataset_path(row)
+
+        rows = [
+            mono8_row(img, [0.1, 0.2], observation=[1.0, 2.0]),
+            mono8_row(img, [0.1, 0.2]),
+        ]
+        with self.assertRaises(ValueError, msg="inconsistent vector presence"):
+            load_rows_path(rows)
+
+    def test_inconsistent_vector_dimensions_fail_closed(self):
+        img = np.zeros((32, 32), dtype=np.uint8)
+        rows = [
+            mono8_row(img, [0.1, 0.2], observation=[1.0, 2.0]),
+            mono8_row(img, [0.1, 0.2], observation=[1.0, 2.0, 3.0]),
+        ]
+        with self.assertRaises(ValueError, msg="inconsistent vector dims"):
+            load_rows_path(rows)
+
+    def test_inconsistent_action_dimensions_fail_closed(self):
+        img = np.zeros((32, 32), dtype=np.uint8)
+        rows = [mono8_row(img, [0.1, 0.2]), mono8_row(img, [0.1, 0.2, 0.3])]
+        with self.assertRaises(ValueError, msg="inconsistent action dims"):
+            load_rows_path(rows)
+
+    def test_image_training_is_deterministic(self):
+        x_img, x_vec, y = quadrant_image_dataset(rows=48)
+        a, _ = train_bc.fit_image(x_img, x_vec, y, [16], "tanh", epochs=5, lr=1e-3, batch_size=8, seed=3, val_fraction=0)
+        b, _ = train_bc.fit_image(x_img, x_vec, y, [16], "tanh", epochs=5, lr=1e-3, batch_size=8, seed=3, val_fraction=0)
+        self.assertEqual(a["conv"], b["conv"])
+        self.assertEqual(a["dense_layers"], b["dense_layers"])
+
+    @unittest.skipUnless(ONNX_AVAILABLE, "onnx/onnxruntime not installed")
+    def test_onnx_export_is_nhwc_and_verified(self):
+        import onnx
+
+        x_img, x_vec, y = quadrant_image_dataset(rows=48)
+        model, _ = train_bc.fit_image(x_img, x_vec, y, [16], "tanh", epochs=3, lr=1e-3, batch_size=8, seed=0, val_fraction=0)
+        out = pathlib.Path(tempfile.gettempdir()) / "bc-image-equivalence.onnx"
+        try:
+            report = train_bc.export_onnx_image(model, out.as_posix(), x_img, x_vec)
+            self.assertEqual(report.get("equivalence"), "verified")
+            graph = onnx.load(out.as_posix()).graph
+            image_input = next(i for i in graph.input if i.name == "image")
+            shape = [d.dim_param or d.dim_value for d in image_input.type.tensor_type.shape.dim]
+            self.assertEqual(len(shape), 4, "image input must be rank-4")
+            self.assertEqual(shape[3], 1, "platform vision gate expects NHWC with fixed channels")
+            self.assertEqual(shape[1], 32)
+            self.assertEqual(shape[2], 32)
+        finally:
+            if out.exists():
+                out.unlink()
+
+    def test_cli_image_mode_writes_v3_model(self):
+        x_img, x_vec, y = quadrant_image_dataset(rows=64)
+        with tempfile.TemporaryDirectory() as tmp:
+            ds = pathlib.Path(tmp) / "ds.jsonl"
+            write_jsonl(
+                ds.as_posix(),
+                [mono8_row(x_img[i], y[i].tolist(), observation=x_vec[i].tolist()) for i in range(64)],
+            )
+            out = pathlib.Path(tmp) / "model.json"
+            result = subprocess.run(
+                [sys.executable, ENGINE, ds.as_posix(), "--image-input", "32x32",
+                 "--out", out.as_posix(), "--epochs", "5", "--hidden", "16",
+                 "--batch", "8", "--val-fraction", "0"],
+                capture_output=True, text=True,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            payload = json.loads(out.read_text())
+            self.assertEqual(payload["format"], train_bc.MODEL_FORMAT_IMAGE)
+            self.assertEqual(payload["image_input"]["width"], 32)
+            self.assertIn("source", payload)
+            self.assertIn("dependencyLockSha256", payload)
+
+
+def load_image_dataset_path(row):
+    """Single-row helper: routes one row dict through the loader rules by
+    writing it to a temp file (the loader is file-based)."""
+    return load_rows_path([row])
+
+
+def load_rows_path(rows):
+    import tempfile as _tempfile
+
+    with _tempfile.NamedTemporaryFile("w", suffix=".jsonl", delete=False) as handle:
+        handle.write("\n".join(json.dumps(row) for row in rows) + "\n")
+        path = handle.name
+    try:
+        return train_bc.load_image_dataset(path, 32, 32)
+    finally:
+        os.unlink(path)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

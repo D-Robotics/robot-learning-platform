@@ -58,6 +58,10 @@ const names: Array<[string, string, boolean]> = [
   ['rdk_board_policy_load', '在板端加载已暂存的 ONNX 策略', false],
   ['rdk_board_policy_start', '在三重安全开关通过后启动板端策略', false],
   ['rdk_board_policy_reset', '在板端策略故障后执行受控复位', false],
+  ['rdk_board_arm_status', '读取 D6A 机械臂位姿预检与能力状态', true],
+  ['rdk_board_arm_move', '在双安全开关与工作空间钳制下移动 D6A 机械臂', false],
+  ['rdk_board_arm_gripper', '在双安全开关与钳制下控制 D6A 夹爪开合', false],
+  ['rdk_board_arm_stop', '停止机械臂新命令并尽力回 home（随时可用）', false],
   ['rdk_board_stop', '停止板端策略与驱动', false],
 ];
 

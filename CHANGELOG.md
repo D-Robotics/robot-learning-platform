@@ -4,6 +4,32 @@
 （`npm run verify`）的提交；门禁含 API 契约、UI IA、escape 审计、训练溯源与
 本地 E2E 冒烟。
 
+## 未发布（2026-09-20）
+
+### 功能缺口收敛
+
+- **GPU 线 CPU 级证据归档**（`docs/engine-evidence-2026-09-20.md`）：mjx
+  （真 MuJoCo MJX 接触动力学 + 纯 JAX PPO）、dm-control（同源物理 + JAX PPO）、
+  mjlab（真 rsl-rl OnPolicyRunner 迭代，kinematic 后端如实标注）等引擎门禁在
+  开发机真跑 PASS；SKIP 项逐条注明原因。
+- **offline-bc 图像观测分支**（`rdk-offline-bc-v3`）：`--image-input WIDTHxHEIGHT`
+  吃 mono8 像素（base64），固定三层 stride-2 CNN 编码器（纯 NumPy im2col +
+  手写反传，有限差分梯度校验）+ 可选 proprio 向量拼接；导出 NHWC rank-4 ONNX
+  对齐平台视觉门禁；`verify:offline-bc` 增至 25 测试。ACT 图像观测仍是后续项。
+- **D6A 机械臂平台接入（软件侧）**：新机型 profile（`arm` actuator kind +
+  工作空间盒/速度/夹爪安全界）+ 校验器 `arm` 分支；板端 agent 新增只读位姿
+  预检、受限笛卡尔移动、夹爪与恒可用停止（双开关、双钳制、频控；arm_sdk
+  阻塞语义如实回报）；平台代理路由 + station switches `arm` 键 + 4 条 API
+  契约 + agent 工具 `rdk_board_arm_*`（`rdk_board_stop` 延伸覆盖机械臂）。
+  真机验收清单见 `docs/arm-drive.md`，完成前不宣称闭环可用。
+- **文档真话修正**：`real-loop-validation-2026-09-14.md` 汇总表与 `roadmap.md`
+  P1-1/P1-3 的陈旧"待复跑"状态改为已归档的 9-14 晚真机 PASS 证据（0.096m
+  弧线、51 次真实推理、spool→上传→run 详情全链验证）；剩余硬件项收敛为
+  任务级到达点验收（runbook 已备）。
+- **Quick start 真实化**：README 主路径改为 `demo:starter`（真 PPO + ONNX +
+  评测，~2 分钟 CPU），Mock worker 流程降为显式回退并保持诚实标注；状态徽章
+  由"Mock 闭环"改为"CPU 真训练闭环"。
+
 ## v0.1.0 — 首个公开评审版
 
 本版本交付平台的核心闭环：契约模型 → 本地训练引擎族 → 板端部署链 →

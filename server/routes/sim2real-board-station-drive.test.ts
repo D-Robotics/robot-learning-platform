@@ -11,6 +11,7 @@ import { registerSim2RealBoardStationRoutes } from './sim2real-board-station-rou
 const originalAgentUrl = process.env.RDK_SIM2REAL_BOARD_AGENT_URL;
 const originalAgentToken = process.env.RDK_SIM2REAL_BOARD_AGENT_TOKEN;
 const originalDriveEnabled = process.env.RDK_SIM2REAL_STATION_DRIVE_ENABLED;
+const originalArmEnabled = process.env.RDK_SIM2REAL_STATION_ARM_ENABLED;
 const originalStorageDir = process.env.RDK_SIM2REAL_STORAGE_DIR;
 
 const tmpdirSync = () => mkdtempSync(join(tmpdir(), 'station-switch-test-'));
@@ -111,6 +112,7 @@ beforeEach(() => {
   process.env.RDK_SIM2REAL_BOARD_AGENT_URL = 'http://127.0.0.1:19100';
   process.env.RDK_SIM2REAL_BOARD_AGENT_TOKEN = 'board-secret';
   delete process.env.RDK_SIM2REAL_STATION_DRIVE_ENABLED;
+  delete process.env.RDK_SIM2REAL_STATION_ARM_ENABLED;
 });
 
 afterEach(() => {
@@ -122,6 +124,8 @@ afterEach(() => {
   else process.env.RDK_SIM2REAL_BOARD_AGENT_TOKEN = originalAgentToken;
   if (originalDriveEnabled === undefined) delete process.env.RDK_SIM2REAL_STATION_DRIVE_ENABLED;
   else process.env.RDK_SIM2REAL_STATION_DRIVE_ENABLED = originalDriveEnabled;
+  if (originalArmEnabled === undefined) delete process.env.RDK_SIM2REAL_STATION_ARM_ENABLED;
+  else process.env.RDK_SIM2REAL_STATION_ARM_ENABLED = originalArmEnabled;
   vi.restoreAllMocks();
 });
 
@@ -256,5 +260,104 @@ describe('board-station constrained drive proxy', () => {
     });
     expect(res.statusCode).toBe(502);
     expect(res.body).toMatchObject({ error: 'SIM2REAL_BOARD_AGENT_UNREACHABLE', retryable: true });
+  });
+});
+
+describe('board-station constrained arm proxy', () => {
+  it('refuses arm motion while the platform switch is off, without calling the agent', async () => {
+    const fetchMock = vi.spyOn(globalThis, 'fetch');
+    const router = buildRouter();
+    const res = await call(routeHandler(router, 'post', '/api/sim2real/board-station/arm/move'), {
+      method: 'POST',
+      body: { x: 250, y: 0, z: 80, speedMmPerS: 60 },
+    });
+    expect(res.statusCode).toBe(409);
+    expect(res.body).toMatchObject({ error: 'SIM2REAL_STATION_ARM_DISABLED' });
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('clamps arm targets into the workspace box before the board ever sees them', async () => {
+    process.env.RDK_SIM2REAL_STATION_ARM_ENABLED = '1';
+    const fetchMock = mockAgent(200, { ok: true, arm: { available: true, moving: true } });
+    const router = buildRouter();
+    const res = await call(routeHandler(router, 'post', '/api/sim2real/board-station/arm/move'), {
+      method: 'POST',
+      body: { x: 5000, y: -900, z: -20, speedMmPerS: 9999 },
+    });
+    expect(res.statusCode).toBe(200);
+    const sent = JSON.parse(String((fetchMock.mock.calls[0] as unknown[])[1]!.body)) as Record<
+      string,
+      number
+    >;
+    expect(sent).toEqual({ x: 450, y: -250, z: 20, speedMmPerS: 120 });
+  });
+
+  it('rejects non-numeric arm payloads with 400 before the agent is called', async () => {
+    process.env.RDK_SIM2REAL_STATION_ARM_ENABLED = '1';
+    const fetchMock = vi.spyOn(globalThis, 'fetch');
+    const router = buildRouter();
+    const res = await call(routeHandler(router, 'post', '/api/sim2real/board-station/arm/move'), {
+      method: 'POST',
+      body: { x: 'far', y: 0, z: 80 },
+    });
+    expect(res.statusCode).toBe(400);
+    expect(res.body).toMatchObject({ error: 'SIM2REAL_STATION_ARM_INVALID' });
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('clamps gripper values and rejects invalid actions', async () => {
+    process.env.RDK_SIM2REAL_STATION_ARM_ENABLED = '1';
+    const router = buildRouter();
+    const bad = await call(
+      routeHandler(router, 'post', '/api/sim2real/board-station/arm/gripper'),
+      { method: 'POST', body: { action: 'toggle', value: 8 } },
+    );
+    expect(bad.statusCode).toBe(400);
+    const fetchMock = mockAgent(200, { ok: true, detail: { grasped: true } });
+    const res = await call(
+      routeHandler(router, 'post', '/api/sim2real/board-station/arm/gripper'),
+      { method: 'POST', body: { action: 'close', value: 999 } },
+    );
+    expect(res.statusCode).toBe(200);
+    const sent = JSON.parse(String((fetchMock.mock.calls[0] as unknown[])[1]!.body)) as Record<
+      string,
+      unknown
+    >;
+    expect(sent).toEqual({ action: 'close', value: 20 });
+  });
+
+  it('always forwards arm stop, even with the switch off', async () => {
+    const fetchMock = mockAgent(200, { ok: true, wasMoving: false, homed: true });
+    const router = buildRouter();
+    const res = await call(routeHandler(router, 'post', '/api/sim2real/board-station/arm/stop'), {
+      method: 'POST',
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.body).toMatchObject({ ok: true });
+    expect(fetchMock).toHaveBeenCalledWith(
+      'http://127.0.0.1:19100/v1/station/arm/stop',
+      expect.objectContaining({ method: 'POST' }),
+    );
+  });
+
+  it('reports arm status with the platform gate state', async () => {
+    const fetchMock = mockAgent(200, {
+      ok: true,
+      arm: { available: true, mock: false, enabled: false },
+      capabilities: ['arm-preflight'],
+    });
+    const router = buildRouter();
+    const res = await call(routeHandler(router, 'get', '/api/sim2real/board-station/arm'));
+    expect(res.statusCode).toBe(200);
+    expect(res.body).toMatchObject({
+      ok: true,
+      platformEnabled: false,
+      arm: { available: true, mock: false },
+      capabilities: ['arm-preflight'],
+    });
+    expect(fetchMock).toHaveBeenCalledWith(
+      'http://127.0.0.1:19100/v1/station/arm/status',
+      expect.objectContaining({ method: 'GET' }),
+    );
   });
 });

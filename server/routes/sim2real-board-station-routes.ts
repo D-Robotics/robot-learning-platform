@@ -791,6 +791,7 @@ export function registerSim2RealBoardStationRoutes(
         ok: true,
         drive: stationSwitchEnabled('drive'),
         policy: stationSwitchEnabled('policy'),
+        arm: stationSwitchEnabled('arm'),
       });
     }),
   );
@@ -812,7 +813,7 @@ export function registerSim2RealBoardStationRoutes(
         request.body && typeof request.body === 'object' && !Array.isArray(request.body)
           ? (request.body as Record<string, unknown>)
           : {};
-      const patch: { drive?: boolean; policy?: boolean } = {};
+      const patch: { drive?: boolean; policy?: boolean; arm?: boolean } = {};
       if (body.drive !== undefined) {
         if (typeof body.drive !== 'boolean') {
           sendApiError(response, 400, 'SIM2REAL_STATION_SWITCH_INVALID', 'drive 需为布尔值。', {
@@ -831,19 +832,31 @@ export function registerSim2RealBoardStationRoutes(
         }
         patch.policy = body.policy;
       }
-      if (patch.drive === undefined && patch.policy === undefined) {
+      if (body.arm !== undefined) {
+        if (typeof body.arm !== 'boolean') {
+          sendApiError(response, 400, 'SIM2REAL_STATION_SWITCH_INVALID', 'arm 需为布尔值。', {
+            retryable: false,
+          });
+          return;
+        }
+        patch.arm = body.arm;
+      }
+      if (patch.drive === undefined && patch.policy === undefined && patch.arm === undefined) {
         sendApiError(
           response,
           400,
           'SIM2REAL_STATION_SWITCH_INVALID',
-          '需要 drive 或 policy 布尔字段。',
+          '需要 drive、policy 或 arm 布尔字段。',
           { retryable: false },
         );
         return;
       }
       // Turning motion ON requires the operator's explicit confirmation flag
       // in the same request, mirroring the drive panel's confirm dialog.
-      if ((patch.drive === true || patch.policy === true) && body.confirm !== true) {
+      if (
+        (patch.drive === true || patch.policy === true || patch.arm === true) &&
+        body.confirm !== true
+      ) {
         sendApiError(
           response,
           400,
@@ -861,10 +874,15 @@ export function registerSim2RealBoardStationRoutes(
         if (body.reset === true) clearStationSwitch('policy');
         else setStationSwitch('policy', patch.policy);
       }
+      if (patch.arm !== undefined) {
+        if (body.reset === true) clearStationSwitch('arm');
+        else setStationSwitch('arm', patch.arm);
+      }
       response.json({
         ok: true,
         drive: stationSwitchEnabled('drive'),
         policy: stationSwitchEnabled('policy'),
+        arm: stationSwitchEnabled('arm'),
       });
     }),
   );
@@ -946,6 +964,210 @@ export function registerSim2RealBoardStationRoutes(
           502,
           'SIM2REAL_BOARD_AGENT_UNREACHABLE',
           '急停命令未送达板端。持续按下急停并检查板端 agent；底盘固件看门狗（500ms 无命令自动停车）兜底。',
+          { retryable: true },
+        );
+        return;
+      }
+      response.json(agent);
+    }),
+  );
+
+  // ---- constrained arm (D6A, arm_sdk) ------------------------------------
+  // Same double-gate philosophy as the drive: the platform switch
+  // (RDK_SIM2REAL_STATION_ARM_ENABLED) AND the board agent's
+  // RDK_SIM2REAL_BOARD_AGENT_ENABLE_ARM must both be on; the proxy clamps
+  // every target into the declared workspace box and speed cap, and the
+  // agent clamps again on the board. arm_sdk move_to is blocking, so an
+  // in-flight move cannot be interrupted — arm/stop refuses NEW commands
+  // and best-effort returns home, and the arm's physical e-stop stays the
+  // final safety floor.
+  const armPlatformEnabled = () => stationSwitchEnabled('arm');
+  const ARM_PROXY_WORKSPACE_MM: Record<'x' | 'y' | 'z', [number, number]> = {
+    x: [120, 450],
+    y: [-250, 250],
+    z: [20, 320],
+  };
+  const ARM_PROXY_MAX_SPEED_MM_PER_S = 120;
+  const ARM_PROXY_MAX_GRIPPER_WIDTH_MM = 65;
+  const ARM_PROXY_MAX_CLOSE_FORCE = 20;
+
+  /** Normalize and clamp one arm move request; null when invalid. */
+  const clampArmMoveRequest = (body: Record<string, unknown>) => {
+    const x = Number(body.x);
+    const y = Number(body.y);
+    const z = Number(body.z);
+    const speed = Number(body.speedMmPerS === undefined ? 60 : body.speedMmPerS);
+    if (![x, y, z, speed].every((value) => Number.isFinite(value))) return null;
+    if (speed <= 0) return null;
+    const clampAxis = (axis: 'x' | 'y' | 'z', value: number) =>
+      Math.min(ARM_PROXY_WORKSPACE_MM[axis][1], Math.max(ARM_PROXY_WORKSPACE_MM[axis][0], value));
+    return {
+      x: clampAxis('x', x),
+      y: clampAxis('y', y),
+      z: clampAxis('z', z),
+      speedMmPerS: Math.min(speed, ARM_PROXY_MAX_SPEED_MM_PER_S),
+    };
+  };
+
+  /** GET /board-station/arm — current arm preflight/drive state. */
+  router.get(
+    api('/board-station/arm'),
+    wrapAsync(async (request, response) => {
+      const resolved = await resolveStation(request, response);
+      if (!resolved) return;
+      noStore(response);
+      const agent = await stationAgentFetch('/v1/station/arm/status', stationOptions(request));
+      if (!agent) {
+        sendStationOffline(response, '实体板卡当前离线，无法读取机械臂状态。', {
+          arm: { available: false, reason: 'board-agent-unreachable' },
+          platformEnabled: armPlatformEnabled(),
+        });
+        return;
+      }
+      response.json({
+        ok: true,
+        platformEnabled: armPlatformEnabled(),
+        arm: agent.arm ?? null,
+        capabilities: agent.capabilities ?? [],
+      });
+    }),
+  );
+
+  /** POST /board-station/arm/move — one clamped Cartesian move. */
+  router.post(
+    api('/board-station/arm/move'),
+    wrapAsync(async (request, response) => {
+      const resolved = await resolveStation(request, response);
+      if (!resolved) return;
+      if (!requirePermission(request, response, SIM2REAL_PERMISSIONS.operate)) return;
+      noStore(response);
+      if (!armPlatformEnabled()) {
+        sendApiError(
+          response,
+          409,
+          'SIM2REAL_STATION_ARM_DISABLED',
+          '平台未开启受限机械臂驱动（RDK_SIM2REAL_STATION_ARM_ENABLED），上位机保持只读。',
+          { retryable: false },
+        );
+        return;
+      }
+      const body =
+        request.body && typeof request.body === 'object' && !Array.isArray(request.body)
+          ? (request.body as Record<string, unknown>)
+          : {};
+      const clamped = clampArmMoveRequest(body);
+      if (!clamped) {
+        sendApiError(
+          response,
+          400,
+          'SIM2REAL_STATION_ARM_INVALID',
+          '机械臂参数无效（需要数值型 x/y/z，可选 speedMmPerS>0）。',
+          { retryable: false },
+        );
+        return;
+      }
+      const agent = await stationAgentFetchWithStatus(
+        '/v1/station/arm/move',
+        stationOptions(request, {
+          method: 'POST',
+          timeoutMs: 12000,
+          body: JSON.stringify(clamped),
+        }),
+      );
+      if (!agent) {
+        sendApiError(
+          response,
+          502,
+          'SIM2REAL_BOARD_AGENT_UNREACHABLE',
+          '板端 agent 不可达，命令未下发。',
+          { retryable: true },
+        );
+        return;
+      }
+      response.status(agent.status).json(agent.payload);
+    }),
+  );
+
+  /** POST /board-station/arm/gripper — clamped gripper close/open. */
+  router.post(
+    api('/board-station/arm/gripper'),
+    wrapAsync(async (request, response) => {
+      const resolved = await resolveStation(request, response);
+      if (!resolved) return;
+      if (!requirePermission(request, response, SIM2REAL_PERMISSIONS.operate)) return;
+      noStore(response);
+      if (!armPlatformEnabled()) {
+        sendApiError(
+          response,
+          409,
+          'SIM2REAL_STATION_ARM_DISABLED',
+          '平台未开启受限机械臂驱动（RDK_SIM2REAL_STATION_ARM_ENABLED）。',
+          { retryable: false },
+        );
+        return;
+      }
+      const body =
+        request.body && typeof request.body === 'object' && !Array.isArray(request.body)
+          ? (request.body as Record<string, unknown>)
+          : {};
+      const action = body.action === 'close' || body.action === 'open' ? body.action : null;
+      const value = Number(body.value);
+      if (!action || !Number.isFinite(value) || value <= 0) {
+        sendApiError(
+          response,
+          400,
+          'SIM2REAL_STATION_ARM_INVALID',
+          '夹爪参数无效（action 需为 close/open，value 需为正数）。',
+          { retryable: false },
+        );
+        return;
+      }
+      const clampedValue =
+        action === 'close'
+          ? Math.min(value, ARM_PROXY_MAX_CLOSE_FORCE)
+          : Math.min(value, ARM_PROXY_MAX_GRIPPER_WIDTH_MM);
+      const agent = await stationAgentFetchWithStatus(
+        '/v1/station/arm/gripper',
+        stationOptions(request, {
+          method: 'POST',
+          timeoutMs: 12000,
+          body: JSON.stringify({ action, value: clampedValue }),
+        }),
+      );
+      if (!agent) {
+        sendApiError(
+          response,
+          502,
+          'SIM2REAL_BOARD_AGENT_UNREACHABLE',
+          '板端 agent 不可达，命令未下发。',
+          { retryable: true },
+        );
+        return;
+      }
+      response.status(agent.status).json(agent.payload);
+    }),
+  );
+
+  /** POST /board-station/arm/stop — refuse-new + best-effort home, always allowed. */
+  router.post(
+    api('/board-station/arm/stop'),
+    wrapAsync(async (request, response) => {
+      const resolved = await resolveStation(request, response);
+      if (!resolved) return;
+      noStore(response);
+      const agent = await stationAgentFetch(
+        '/v1/station/arm/stop',
+        stationOptions(request, {
+          method: 'POST',
+          timeoutMs: 15000,
+        }),
+      );
+      if (!agent || typeof agent !== 'object') {
+        sendApiError(
+          response,
+          502,
+          'SIM2REAL_BOARD_AGENT_UNREACHABLE',
+          '机械臂停止命令未送达板端。持续按住机械臂自身的物理急停。',
           { retryable: true },
         );
         return;

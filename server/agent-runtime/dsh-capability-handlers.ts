@@ -1241,11 +1241,85 @@ export function createDshCapabilityHandlers(
       return { ok: result.body.ok !== false, policy: defined(result.body.policy) };
     },
 
+    async rdk_board_arm_status(args: unknown, exec: ToolRunContext) {
+      const input = argsRecord(args);
+      const result = await run(exec.signal).fetch(
+        stationPath('/api/sim2real/board-station/arm', input),
+        { method: 'GET' },
+      );
+      if (!result.ok) fail(result.status, result.body, '机械臂状态读取失败');
+      return {
+        ok: result.body.ok !== false,
+        platformEnabled: defined(result.body.platformEnabled),
+        arm: defined(result.body.arm),
+        capabilities: defined(result.body.capabilities),
+      };
+    },
+
+    async rdk_board_arm_move(args: unknown, exec: ToolRunContext) {
+      const input = argsRecord(args);
+      const x = argNumber(input, 'x');
+      const y = argNumber(input, 'y');
+      const z = argNumber(input, 'z');
+      if (x === undefined || y === undefined || z === undefined) {
+        throw new CapabilityError('DSH_CAPABILITY_REJECTED', '请提供数值型 x/y/z（mm）。');
+      }
+      const result = await run(exec.signal).fetch(
+        stationPath('/api/sim2real/board-station/arm/move', input),
+        {
+          method: 'POST',
+          json: {
+            x,
+            y,
+            z,
+            ...(argNumber(input, 'speedMmPerS') === undefined
+              ? {}
+              : { speedMmPerS: argNumber(input, 'speedMmPerS') }),
+          },
+        },
+      );
+      if (!result.ok) fail(result.status, result.body, '机械臂移动被拒绝');
+      return { ok: result.body.ok !== false, arm: defined(result.body.arm) };
+    },
+
+    async rdk_board_arm_gripper(args: unknown, exec: ToolRunContext) {
+      const input = argsRecord(args);
+      const action = input.action;
+      const value = argNumber(input, 'value');
+      if (action !== 'close' && action !== 'open') {
+        throw new CapabilityError('DSH_CAPABILITY_REJECTED', "action 需为 'close' 或 'open'。");
+      }
+      if (value === undefined || value <= 0) {
+        throw new CapabilityError('DSH_CAPABILITY_REJECTED', '请提供正数 value（close=力，open=宽度 mm）。');
+      }
+      const result = await run(exec.signal).fetch(
+        stationPath('/api/sim2real/board-station/arm/gripper', input),
+        { method: 'POST', json: { action, value } },
+      );
+      if (!result.ok) fail(result.status, result.body, '夹爪命令被拒绝');
+      return { ok: result.body.ok !== false, detail: defined(result.body.detail) };
+    },
+
+    async rdk_board_arm_stop(args: unknown, exec: ToolRunContext) {
+      const input = argsRecord(args);
+      const result = await run(exec.signal).fetch(
+        stationPath('/api/sim2real/board-station/arm/stop', input),
+        { method: 'POST', json: {} },
+      );
+      if (!result.ok) fail(result.status, result.body, '机械臂停止命令未送达');
+      return {
+        ok: result.body.ok !== false,
+        wasMoving: defined(result.body.wasMoving),
+        homed: defined(result.body.homed),
+      };
+    },
+
     async rdk_board_stop(args: unknown, exec: ToolRunContext) {
       const input = argsRecord(args);
       const context = run(exec.signal);
       let policyStop: LoopbackResult | null = null;
       let driveStop: LoopbackResult | null = null;
+      let armStop: LoopbackResult | null = null;
       try {
         policyStop = await context.fetch(
           stationPath('/api/sim2real/board-station/policy/stop', input),
@@ -1268,6 +1342,14 @@ export function createDshCapabilityHandlers(
       } catch {
         // The failure below records that the safety state is unknown.
       }
+      try {
+        armStop = await context.fetch(
+          stationPath('/api/sim2real/board-station/arm/stop', input),
+          { method: 'POST', json: {} },
+        );
+      } catch {
+        // Recorded in the aggregated failure below.
+      }
       if (
         !policyStop ||
         !driveStop ||
@@ -1278,7 +1360,11 @@ export function createDshCapabilityHandlers(
       ) {
         throw new CapabilityError('DSH_CAPABILITY_FAILED', '停止命令未能同时确认策略与驱动状态。');
       }
-      return { policyStopped: true, driveStopped: true };
+      return {
+        policyStopped: true,
+        driveStopped: true,
+        armStopped: Boolean(armStop?.ok) && armStop?.body.ok !== false,
+      };
     },
   };
 }
