@@ -189,7 +189,7 @@ assert.deepEqual(
     'Sim2Real 评测',
     '部署与反馈',
     'GPU 与算力',
-    '调试与记录',
+    '证据与记录',
     '设备控制台',
   ],
   'sidebar nav labels must match the three-group IA',
@@ -197,7 +197,7 @@ assert.deepEqual(
 const navGroups = [...html.matchAll(/class="nav-label">([^<]+)<\/div>/g)].map((m) => m[1]);
 assert.deepEqual(
   navGroups,
-  ['开始', '学习闭环', '高级工具'],
+  ['开始', '学习闭环', '资源与运维'],
   'sidebar must group nav around the learning loop: start / loop / advanced tools (collapsed by default)',
 );
 

@@ -629,7 +629,7 @@ h1 em {
   padding: 6px 4px;
   background: transparent;
   color: var(--muted);
-  font-size: 12px;
+  font-size: var(--fs-meta);
   cursor: pointer;
 }
 .auth-login-tab.is-active {
@@ -2486,7 +2486,7 @@ h2 {
   padding: 4px 8px;
   color: var(--muted);
   background: transparent;
-  font-size: 12px;
+  font-size: var(--fs-meta);
   cursor: pointer;
 }
 .record-tab:hover,
@@ -2625,7 +2625,7 @@ h2 {
 }
 .run-metrics-raw summary {
   color: var(--muted);
-  font-size: 12px;
+  font-size: var(--fs-meta);
   cursor: pointer;
   user-select: none;
 }
@@ -5578,7 +5578,7 @@ body.onboarding-open { overflow: hidden; }
   color: var(--muted-strong);
   background: transparent;
   font: inherit;
-  font-size: 12px;
+  font-size: var(--fs-meta);
   cursor: pointer;
   transition: border-color 0.15s ease, color 0.15s ease, background 0.15s ease;
 }
@@ -5711,7 +5711,7 @@ body.onboarding-open { overflow: hidden; }
 .agent-event-more summary {
   margin-top: 4px;
   color: var(--muted);
-  font-size: 12px;
+  font-size: var(--fs-meta);
   cursor: pointer;
   user-select: none;
 }
@@ -9911,6 +9911,68 @@ body .train-onboarding-step strong {
 
 body .train-onboarding-step small {
   line-height: 1.45;
+}
+
+/* Make the sidebar express the same hierarchy as the workspace: a workflow
+   domain owns task pages, while cross-cutting resources stay in their own
+   operations group. */
+body .workflow-nav-hierarchical {
+  display: grid;
+  gap: 4px;
+}
+
+body .workflow-nav-hierarchical > .sidebar-nav-group {
+  margin: 0;
+}
+
+body .workflow-nav-hierarchical .nav-item-parent {
+  width: 100%;
+  display: grid;
+  grid-template-columns: 28px minmax(0, 1fr) 16px;
+  align-items: center;
+  gap: 8px;
+  border: 0;
+  text-align: left;
+  cursor: pointer;
+}
+
+body .workflow-nav-hierarchical .nav-item-parent > i {
+  color: var(--muted);
+  font-style: normal;
+  transition: transform .16s ease;
+}
+
+body .workflow-nav-hierarchical .sidebar-nav-group[open] .nav-item-parent > i {
+  transform: rotate(180deg);
+}
+
+body .workflow-nav-hierarchical .nav-subitems {
+  display: grid;
+  gap: 2px;
+  margin: 2px 0 6px 32px;
+  padding-left: 12px;
+  border-left: 1px solid var(--line);
+}
+
+body .workflow-nav-hierarchical .nav-subitem {
+  min-height: 32px;
+  padding: 6px 10px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--muted-strong);
+  text-align: left;
+  font: inherit;
+  font-size: var(--fs-meta);
+  cursor: pointer;
+}
+
+body .workflow-nav-hierarchical .nav-subitem:hover,
+body .workflow-nav-hierarchical .nav-subitem:focus-visible,
+body .workflow-nav-hierarchical .nav-subitem.is-active {
+  background: var(--accent-soft);
+  color: var(--accent-text);
+  outline: none;
 }
 body [data-view-section='deploy'] .promotion-stage {
   min-height: 78px;

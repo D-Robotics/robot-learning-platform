@@ -156,35 +156,51 @@
           </nav>
           <div class="sidebar-divider sidebar-divider-compact"></div>
           <div class="nav-label">学习闭环</div>
-          <nav class="workflow-nav" aria-label="机器人学习流程">
-            <button class="nav-item" type="button" data-view-target="simulate">
-              <span class="nav-index">01</span
-              ><span><strong>仿真与录制</strong></span>
-            </button>
-            <button class="nav-item" type="button" data-view-target="train">
-              <span class="nav-index">02</span
-              ><span><strong>强化学习训练</strong></span>
-            </button>
-            <button class="nav-item" type="button" data-view-target="evaluate">
-              <span class="nav-index">03</span
-              ><span><strong>Sim2Real 评测</strong><small>对比仿真与真机效果</small></span>
-            </button>
-            <button class="nav-item" type="button" data-view-target="deploy">
-              <span class="nav-index">04</span
-              ><span><strong>部署与反馈</strong><small>预检、发布与运行状态</small></span>
-            </button>
+          <nav class="workflow-nav workflow-nav-hierarchical" aria-label="机器人学习流程">
+            <details class="sidebar-nav-group" data-sidebar-group="simulate-flow">
+              <summary class="nav-item nav-item-parent"><span class="nav-index">01</span><span><strong>仿真与录制</strong><small>任务、场景与轨迹</small></span><i aria-hidden="true">⌄</i></summary>
+              <div class="nav-subitems">
+                <button class="nav-subitem" type="button" data-view-target="simulate" data-flow-child="simulate">仿真场</button>
+                <button class="nav-subitem" type="button" data-view-target="simulate" data-flow-child="record">轨迹录制</button>
+                <button class="nav-subitem" type="button" data-view-target="records" data-flow-child="replays">回放证据</button>
+              </div>
+            </details>
+            <details class="sidebar-nav-group" data-sidebar-group="train-flow">
+              <summary class="nav-item nav-item-parent"><span class="nav-index">02</span><span><strong>强化学习训练</strong><small>模型、配置与任务</small></span><i aria-hidden="true">⌄</i></summary>
+              <div class="nav-subitems">
+                <button class="nav-subitem" type="button" data-view-target="train" data-flow-child="prepare" data-train-step="1">准备模型</button>
+                <button class="nav-subitem" type="button" data-view-target="train" data-flow-child="configure" data-train-step="2">配置训练</button>
+                <button class="nav-subitem" type="button" data-view-target="train" data-flow-child="submit" data-train-step="3">提交与进度</button>
+              </div>
+            </details>
+            <details class="sidebar-nav-group" data-sidebar-group="evaluate-flow">
+              <summary class="nav-item nav-item-parent"><span class="nav-index">03</span><span><strong>Sim2Real 评测</strong><small>对比、回放与证据</small></span><i aria-hidden="true">⌄</i></summary>
+              <div class="nav-subitems">
+                <button class="nav-subitem" type="button" data-view-target="evaluate" data-flow-child="evaluation-run">发起评测</button>
+                <button class="nav-subitem" type="button" data-view-target="evaluate" data-flow-child="comparison">结果对比</button>
+                <button class="nav-subitem" type="button" data-view-target="records" data-flow-child="evaluation-evidence">评测证据</button>
+              </div>
+            </details>
+            <details class="sidebar-nav-group" data-sidebar-group="deploy-flow">
+              <summary class="nav-item nav-item-parent"><span class="nav-index">04</span><span><strong>部署与反馈</strong><small>预检、发布与运行状态</small></span><i aria-hidden="true">⌄</i></summary>
+              <div class="nav-subitems">
+                <button class="nav-subitem" type="button" data-view-target="deploy" data-flow-child="preflight">设备预检</button>
+                <button class="nav-subitem" type="button" data-view-target="deploy" data-flow-child="release">发布闸门</button>
+                <button class="nav-subitem" type="button" data-view-target="deploy" data-flow-child="feedback">运行反馈</button>
+              </div>
+            </details>
           </nav>
           <div class="sidebar-divider sidebar-divider-compact"></div>
-          <div class="nav-label">高级工具</div>
+          <div class="nav-label">资源与运维</div>
           <details class="sidebar-nav-group" data-sidebar-group="tools">
             <summary class="nav-label nav-label-toggle">
-              <span>高级工具</span><span class="nav-group-chevron" aria-hidden="true">⌄</span>
+              <span>资源与运维</span><span class="nav-group-chevron" aria-hidden="true">⌄</span>
             </summary>
             <nav class="workflow-nav" aria-label="记录与设备工具">
               <button class="nav-item" type="button" data-view-target="resources"><span class="nav-index" aria-hidden="true">▣</span><span><strong>GPU 与算力</strong><small>本机、远程与云端资源</small></span></button>
               <button class="nav-item" type="button" data-view-target="records">
                 <span class="nav-index" aria-hidden="true">▦</span
-                ><span><strong>调试与记录</strong><small>运行日志、错误与版本</small></span>
+                ><span><strong>证据与记录</strong><small>Runs、制品、评测与遥测</small></span>
               </button>
               <button class="nav-item" type="button" data-view-target="station">
                 <span class="nav-index" aria-hidden="true">⌂</span

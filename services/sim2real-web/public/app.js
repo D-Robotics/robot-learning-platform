@@ -1364,7 +1364,7 @@ const VIEW_ANNOUNCEMENTS = {
   train: '强化学习训练',
   evaluate: 'Sim2Real 评测',
   deploy: '部署与反馈',
-  records: '调试与记录',
+  records: '证据与记录',
   station: '设备控制台',
 };
 
@@ -1916,7 +1916,7 @@ const VIEW_STAGE_LABELS = {
   resources: 'GPU 与算力',
   evaluate: 'Sim2Real 评测',
   deploy: '部署与反馈',
-  records: '调试与记录',
+  records: '证据与记录',
   station: '设备控制台',
 };
 
@@ -2008,6 +2008,18 @@ function setView(view, { updateHash = true, scroll = true, focus = true } = {}) 
   // 视图切换会重排正文，截断情况随之改变（hidden 是属性变化，观察器里
   // 单独过滤了它，这里再主动排一次以免依赖时序）。
   scheduleTruncationTitles();
+}
+
+function setFlowChild(child) {
+  const wanted = String(child || '');
+  document.querySelectorAll('[data-flow-child]').forEach((control) => {
+    const active = control.dataset.flowChild === wanted;
+    control.classList.toggle('is-active', active);
+    if (active) control.setAttribute('aria-current', 'page');
+    else control.removeAttribute('aria-current');
+  });
+  const active = document.querySelector(`[data-flow-child="${CSS.escape(wanted)}"]`);
+  active?.closest('.sidebar-nav-group')?.setAttribute('open', '');
 }
 
 function setTrainModule(module, { persist = true } = {}) {
@@ -10172,9 +10184,27 @@ function wireEvents() {
     }
   };
   document.querySelectorAll('[data-train-step]').forEach((step) => {
-    const activate = () => openTrainStep(Number(step.dataset.trainStep || 1));
+    const activate = () => {
+      if (step.dataset.flowChild) setFlowChild(step.dataset.flowChild);
+      openTrainStep(Number(step.dataset.trainStep || 1));
+    };
     step.addEventListener('click', activate);
     step.addEventListener('keydown', (event) => {
+      if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); activate(); }
+    });
+  });
+  document.querySelectorAll('[data-flow-child]:not([data-train-step])').forEach((child) => {
+    const activate = () => {
+      setFlowChild(child.dataset.flowChild);
+      setView(child.dataset.viewTarget || 'overview');
+      const target = child.dataset.flowChild;
+      const anchor = target === 'replays' || target === 'evaluation-evidence'
+        ? document.querySelector('#history-list')
+        : target === 'record' ? document.querySelector('#simulator-frame') : null;
+      anchor?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    };
+    child.addEventListener('click', activate);
+    child.addEventListener('keydown', (event) => {
       if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); activate(); }
     });
   });
