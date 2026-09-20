@@ -186,6 +186,12 @@ try {
       RDK_SIM2REAL_LOCAL_RUNNER_TOKEN: runnerToken,
       RDK_SIM2REAL_TRAIN_EXECUTABLE: process.execPath,
       RDK_SIM2REAL_TRAIN_ARGS_JSON: JSON.stringify([engineScript]),
+      // 平台会把任务包的 recommendedEngine（'microduck-rl'）注入训练规格；
+      // worker 按命名引擎注册表路由，只注册 default 会以 engine_not_registered
+      // 拒绝任务。这里把同一假引擎同时注册为真实引擎 id。
+      RDK_SIM2REAL_TRAIN_ENGINES_JSON: JSON.stringify({
+        'microduck-rl': { executable: process.execPath, args: [engineScript] },
+      }),
       RDK_SIM2REAL_TRAIN_TIMEOUT_MS: '30000',
       RDK_SIM2REAL_LOCAL_RUNNER_MODE: '',
     },
