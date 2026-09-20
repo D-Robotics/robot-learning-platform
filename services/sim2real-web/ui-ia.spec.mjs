@@ -197,8 +197,8 @@ assert.deepEqual(
 const navGroups = [...html.matchAll(/class="nav-label">([^<]+)<\/div>/g)].map((m) => m[1]);
 assert.deepEqual(
   navGroups,
-  ['开始', '学习闭环', '资源与工具'],
-  'sidebar must group nav around the learning loop: start / loop / resources & tools',
+  ['开始', '学习闭环', '高级工具'],
+  'sidebar must group nav around the learning loop: start / loop / advanced tools (collapsed by default)',
 );
 
 assert.match(html, /app\.css/, 'the merged app.css must be loaded');
@@ -718,5 +718,5 @@ assert.match(
 assert.doesNotMatch(app, /:19100/, 'the browser must never hardcode the board agent port');
 
 console.log(
-  `[sim2real-ui] PASS — ${viewNames.length} views, ${navItems} sidebar entries, grouped IA (start / learning loop / resources & tools), read-only context strip; ${invariantSummary.stylesheets} stylesheets (tokens.css + app.css), ${markupSummary.tabs} tabs / ${markupSummary.panels} tabpanels, ${invariantSummary.pages} pages, ${invariantSummary.layers} style layers (cross-layer selectors ${invariantSummary.crossLayerSelectors}/${invariantSummary.crossLayerBudget}), ${liveGuards.length} guards self-tested`,
+  `[sim2real-ui] PASS — ${viewNames.length} views, ${navItems} sidebar entries, grouped IA (start / learning loop / advanced tools), read-only context strip; ${invariantSummary.stylesheets} stylesheets (tokens.css + app.css), ${markupSummary.tabs} tabs / ${markupSummary.panels} tabpanels, ${invariantSummary.pages} pages, ${invariantSummary.layers} style layers (cross-layer selectors ${invariantSummary.crossLayerSelectors}/${invariantSummary.crossLayerBudget}), ${liveGuards.length} guards self-tested`,
 );

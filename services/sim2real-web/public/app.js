@@ -75,6 +75,9 @@ const ACTION_TASKS = Object.freeze({
   sit: { label: '坐下 / 站起', hint: '动作切换与自恢复' },
   recover: { label: '自恢复', hint: '跌倒检测与起身策略' },
   kick: { label: '踢球', hint: '目标交互与动作衔接' },
+  'football-single-goal-kick': { label: '足球：单鸭射门', hint: 'MuJoCo 单鸭追球并把球踢入球门' },
+  'football-2v2': { label: '足球：2v2', hint: '双鸭协作、对手脚本与共享进球奖励' },
+  'football-3v3': { label: '足球：3v3', hint: '三鸭协作、多智能体比赛与 GPU 并行训练' },
   custom: { label: '自定义动作', hint: '使用自己的策略包' },
   'goal-navigation': { label: '目标导航', hint: '基于 odom/IMU 的目标点导航' },
   'visual-twist': { label: '视觉跟随', hint: '相机观测到线速度/角速度' },
@@ -1398,6 +1401,39 @@ function showToast(message, tone = 'normal') {
   window.setTimeout(() => toast.remove(), 4800);
 }
 
+// 统一错误恢复路径：发生了什么 → 影响 → 下一步动作。原始工程报错进
+// impact 行保留细节，恢复动作收口在按钮上，而不是让用户面对一句日志式文案。
+function showRecoverableError(what, impact, actionLabel, onAction) {
+  const region = $('toast-region');
+  if (!region) return;
+  const toast = document.createElement('div');
+  toast.className = 'toast toast-error toast-recoverable';
+  toast.setAttribute('role', 'alert');
+  const title = document.createElement('strong');
+  title.textContent = String(what || '操作失败');
+  toast.append(title);
+  const impactText = String(impact || '').trim();
+  if (impactText) {
+    const impact = document.createElement('span');
+    impact.className = 'toast-impact';
+    impact.textContent = impactText;
+    toast.append(impact);
+  }
+  if (actionLabel && typeof onAction === 'function') {
+    const action = document.createElement('button');
+    action.type = 'button';
+    action.className = 'button button-small';
+    action.textContent = String(actionLabel);
+    action.addEventListener('click', () => {
+      toast.remove();
+      onAction();
+    });
+    toast.append(action);
+  }
+  region.append(toast);
+  window.setTimeout(() => toast.remove(), 9000);
+}
+
 function safeLoginUrl(value) {
   const raw = String(value || '').trim();
   if (!raw) return '/rdkstudio/';
@@ -1864,6 +1900,31 @@ const WORKFLOW_VIEWS = [
   'station',
 ];
 
+// 对象链（项目→模型/策略→Run→评测证据→发布制品→设备）：把当前视图映射到
+// 链上位置，回答"模型版本 / 策略包 / 运行记录 / 部署制品分别是什么、我现在
+// 在哪一环"。链本身在 overview 标题下，可点击直达对应视图。
+const OBJECT_CHAIN_VIEW_NODE = {
+  overview: 'project',
+  train: 'model',
+  simulate: 'run',
+  records: 'run',
+  evaluate: 'evaluation',
+  deploy: 'artifact',
+  station: 'device',
+};
+
+function renderObjectChain() {
+  const chain = $('object-chain');
+  if (!chain) return;
+  const here = OBJECT_CHAIN_VIEW_NODE[document.body.dataset.activeView || 'overview'];
+  chain.querySelectorAll('[data-chain-node]').forEach((node) => {
+    const active = node.dataset.chainNode === here;
+    node.classList.toggle('is-here', active);
+    if (active) node.setAttribute('aria-current', 'true');
+    else node.removeAttribute('aria-current');
+  });
+}
+
 function setView(view, { updateHash = true, scroll = true, focus = true } = {}) {
   const wanted = WORKFLOW_VIEWS.includes(view) ? view : 'overview';
   const changed = document.body.dataset.activeView !== wanted;
@@ -1877,8 +1938,6 @@ function setView(view, { updateHash = true, scroll = true, focus = true } = {}) 
       control.classList.contains('nav-item') ||
       control.classList.contains('module-item');
     control.classList.toggle('is-active', active && isNavigationControl);
-    // 顶栏管道是只读进度指示器（导航由侧栏独占），所以它只在 [data-view-target]
-    // 序列之外单独更新"你正在看哪个阶段"。
     // Keep one canonical current-page announcement for screen readers. The
     // module cards and workflow strip still receive the visual active class,
     // but they are alternate entry points rather than additional pages.
@@ -1889,19 +1948,12 @@ function setView(view, { updateHash = true, scroll = true, focus = true } = {}) 
       control.removeAttribute('aria-current');
     }
   });
-  // Keep low-frequency tools folded away until one of their views is active.
-  // The group re-opens automatically when navigation lands on resources,
-  // records, or the device console, so the current page is always visible.
+  // Keep the tools group discoverable on the overview while reopening it when
+  // navigation lands on resources, records, or the device console. A user can
+  // still collapse it manually and that choice remains respected elsewhere.
   const toolsGroup = document.querySelector('[data-sidebar-group="tools"]');
-  if (toolsGroup) toolsGroup.open = ['resources', 'records', 'station'].includes(wanted);
-  // 只读的顶栏闭环进度：标出"正在看的阶段"。它与 is-current（进度上的
-  //「下一步」）是两个概念，用 aria-current="step" 单独表达。
-  document.querySelectorAll('.pipeline-stage[data-pipeline-stage]').forEach((stage) => {
-    const viewing = stage.dataset.pipelineStage === wanted;
-    stage.classList.toggle('is-viewing', viewing);
-    if (viewing) stage.setAttribute('aria-current', 'step');
-    else stage.removeAttribute('aria-current');
-  });
+  if (toolsGroup && ['resources', 'records', 'station'].includes(wanted)) toolsGroup.open = true;
+  renderObjectChain();
   if (updateHash && window.location.hash !== '#' + wanted) {
     // Each in-app navigation becomes a real history entry so the browser Back
     // button steps between views instead of leaving the app entirely.
@@ -2363,18 +2415,47 @@ async function handleComputeResourceAction(action, resource) {
       showToast('GPU 资源已删除', 'success');
     } else if (action === 'test') {
       setText('compute-resource-form-status', '正在测试连接…');
-      const payload = await request('/sim2real/compute-resources/' + encodeURIComponent(resource.id) + '/test', { method: 'POST' });
+      let payload;
+      if (resource.source === 'local-agent') {
+        const health = await fetch('http://127.0.0.1:19190/proxy/healthz', { signal: AbortSignal.timeout(3000) });
+        const healthBody = await health.json().catch(() => ({}));
+        if (!health.ok || healthBody.ok !== true) throw new Error('本机 Agent 或 Worker 不可用');
+        const device = healthBody.device || healthBody;
+        const updated = await request('/sim2real/compute-resources/' + encodeURIComponent(resource.id), {
+          method: 'PATCH',
+          body: JSON.stringify({
+            status: 'online',
+            message: '浏览器已直连本机 Agent。',
+            lastCheckedAt: new Date().toISOString(),
+            ...(typeof device.gpuName === 'string' ? { gpuName: device.gpuName } : {}),
+            ...(device.cuda === true || device.cuda === false ? { cuda: device.cuda } : {}),
+            ...(Number.isFinite(Number(device.vramMb)) ? { vramMb: Number(device.vramMb) } : {}),
+          }),
+        });
+        payload = { connected: true, computeResource: updated.computeResource };
+      } else {
+        payload = await request('/sim2real/compute-resources/' + encodeURIComponent(resource.id) + '/test', { method: 'POST' });
+      }
       showToast(payload.connected ? resource.name + ' 已连接' : resource.name + ' 连接失败', payload.connected ? 'success' : 'error');
     }
     await loadOverview({ quiet: true });
-  } catch (error) { showToast(error instanceof Error ? error.message : 'GPU 资源操作失败', 'error'); }
+  } catch (error) {
+    showRecoverableError(
+      'GPU 资源操作失败',
+      error instanceof Error ? error.message : '',
+      '查看 GPU 状态',
+      () => setView('resources'),
+    );
+  }
 }
 
 async function saveComputeResource(event) {
   event.preventDefault();
   const id = $('compute-resource-editing-id').value.trim();
   const token = $('compute-resource-token').value.trim();
-  const body = { name: $('compute-resource-name').value.trim(), runnerUrl: $('compute-resource-url').value.trim(), maxConcurrentJobs: Number($('compute-resource-concurrency').value || 1) };
+  const runnerUrl = $('compute-resource-url').value.trim();
+  const localAgent = /^https?:\/\/127\.0\.0\.1:19190\/proxy(?:$|\/)/.test(runnerUrl) || /^https?:\/\/localhost:19190\/proxy(?:$|\/)/.test(runnerUrl);
+  const body = { name: $('compute-resource-name').value.trim(), runnerUrl, source: localAgent ? 'local-agent' : 'server-runner', maxConcurrentJobs: Number($('compute-resource-concurrency').value || 1) };
   if (!id || token) body.runnerToken = token;
   try {
     setText('compute-resource-form-status', '保存中…');
@@ -2386,15 +2467,99 @@ async function saveComputeResource(event) {
 async function autoDetectLocalGpuAgent() {
   const status = $('compute-resource-form-status');
   setText('compute-resource-form-status', '正在查找本机 GPU Agent…');
-  try {
-    const response = await fetch('http://127.0.0.1:19190/healthz', { signal: AbortSignal.timeout(1500) });
-    if (!response.ok) throw new Error('Agent 未启动');
-    const payload = await response.json();
-    $('compute-resource-name').value = payload.resources?.[0]?.name || '本机 GPU Agent';
-    $('compute-resource-url').value = 'http://127.0.0.1:19190/proxy';
+  const candidates = ['http://127.0.0.1:19190', 'http://localhost:19190'];
+  let agentBase = '';
+  let payload = null;
+  for (const base of candidates) {
+    try {
+      const response = await fetch(`${base}/healthz`, {
+        mode: 'cors',
+        cache: 'no-store',
+        signal: AbortSignal.timeout(2500),
+      });
+      if (!response.ok) continue;
+      const body = await response.json();
+      if (body?.ok !== true || body?.agent !== 'rdk-local-gpu-agent') continue;
+      agentBase = base;
+      payload = body;
+      break;
+    } catch {
+      // Embedded browsers can resolve localhost and 127.0.0.1 differently;
+      // try the other loopback spelling before reporting a missing agent.
+    }
+  }
+  if (!agentBase) {
+    setText('compute-resource-form-status', '未发现 Agent。请确认终端中的 Agent 进程仍在运行，然后重试。');
+    return;
+  }
+  // A freshly installed Agent has no resource card until it is configured.
+  // Register the default local Worker endpoint so discovery works even before
+  // the Worker process is started; the card will accurately remain offline.
+  if (!payload?.resource) {
+    try {
+      const configured = await fetch(`${agentBase}/config`, {
+        method: 'POST',
+        mode: 'cors',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ workerUrl: 'http://127.0.0.1:19091', name: '本机 GPU Agent' }),
+        signal: AbortSignal.timeout(2500),
+      });
+      if (configured.ok) payload = await configured.json();
+    } catch {
+      // The health check is still enough to let the user add the resource.
+    }
+  }
+  const resource = payload?.resource;
+  $('compute-resource-name').value = resource?.name || '本机 GPU Agent';
+  $('compute-resource-url').value = `${agentBase}/proxy/train`;
+  if (resource) {
     setText('compute-resource-form-status', '已发现本机 Agent，点击“添加 GPU”完成接入。');
+  } else {
+    setText('compute-resource-form-status', '已发现 Agent，但本机 Worker 尚未连接；先启动 Local Worker，再点击“添加 GPU”。');
+  }
+}
+
+async function showGpuAgentInstallCommand() {
+  const commandNode = $('compute-resource-install-command');
+  if (!commandNode) return;
+  const scriptUrl = `${window.location.origin}${BASE_PATH}/agent/install.sh`;
+  const command = `curl -fsSLo /tmp/rdk-gpu-agent-install.sh '${scriptUrl}' && sh /tmp/rdk-gpu-agent-install.sh`;
+  commandNode.textContent = command;
+  commandNode.hidden = false;
+  try {
+    await navigator.clipboard.writeText(command);
+    setText('compute-resource-form-status', '安装命令已复制。请在用户电脑终端执行，完成后返回点击“自动发现本机 Agent”。');
   } catch {
-    setText('compute-resource-form-status', '未发现 Agent。请先运行 npm run dev:gpu-agent，再点一次自动发现。');
+    setText('compute-resource-form-status', '请复制下方安装命令，在用户电脑终端执行。');
+  }
+}
+
+async function connectRemoteGpuThroughAgent() {
+  setText('compute-resource-form-status', '正在让本机 Agent 建立 SSH 隧道…');
+  try {
+    const response = await fetch('http://127.0.0.1:19190/connect', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        id: 'remote-ssh-gpu',
+        name: $('compute-resource-ssh-name').value.trim() || '远程 GPU 服务器',
+        host: $('compute-resource-ssh-host').value.trim(),
+        user: $('compute-resource-ssh-user').value.trim() || 'root',
+        sshPort: Number($('compute-resource-ssh-port').value || 22),
+        remotePort: Number($('compute-resource-remote-port').value || 19091),
+        localPort: 19092,
+        workerToken: $('compute-resource-remote-token').value.trim(),
+      }),
+      signal: AbortSignal.timeout(5000),
+    });
+    const payload = await response.json();
+    if (!response.ok || !payload.ok) throw new Error(payload.message || payload.error || 'SSH 连接失败');
+    $('compute-resource-name').value = payload.resource?.name || '远程 GPU 服务器';
+    $('compute-resource-url').value = 'http://127.0.0.1:19190/proxy/train';
+    $('compute-resource-token').value = '';
+    setText('compute-resource-form-status', 'SSH 隧道已建立，点击“添加 GPU”保存该远程资源。');
+  } catch (error) {
+    setText('compute-resource-form-status', error instanceof Error ? error.message : 'SSH 连接失败');
   }
 }
 
@@ -2864,6 +3029,7 @@ function renderIntegrations() {
     const engineKnown = (id) => reported == null || reported.includes(id) || reported.includes('default');
     for (const option of engineSelect.querySelectorAll(
       'option[value="starter-ppo"], option[value="mjx-ppo"], option[value="microduck-rl"], ' +
+        'option[value="microduck-football"], ' +
         'option[value="visual-ppo"], option[value="dm-control-ppo"], option[value="mjlab-rsl-rl"], ' +
         'option[value="act"], option[value="diffusion-policy"], option[value="smolvla"]',
     )) {
@@ -2911,6 +3077,11 @@ const ENGINE_CAPABILITIES = Object.freeze({
     name: 'microduck-rl',
     badges: ['mjlab 并行物理', 'CUDA', '万级环境'],
     desc: 'mjlab GPU 并行物理 + rsl-rl PPO，面向服务器级批量训练（需 CUDA worker 注册）。',
+  },
+  'microduck-football': {
+    name: 'microduck-football',
+    badges: ['MuJoCo 足球', 'MicroDuck 61D→14D', 'CUDA 并行'],
+    desc: '平台原生足球任务：单鸭射门、2v2、3v3 共享训练协议，使用 MuJoCo 批量环境；当前 checkpoint 是 4D 高层控制，真实 MicroDuck 61D→14D 舵机 actor 通过同一平台评测链路接入。',
   },
   'mjlab-rsl-rl': {
     name: 'mjlab-rsl-rl',
@@ -5104,7 +5275,12 @@ function renderTelemetryEvidence() {
       ['采样率', formatTelemetryRate(summary.sampleRateHz)],
       ['完成事件', summary.doneCount],
       ['跌倒事件', summary.fallCount],
-      ['平均奖励', summary.rewardMean == null ? '—' : summary.rewardMean],
+      [
+        '平均奖励',
+        Number.isFinite(Number(summary.rewardMean))
+          ? formatMetricNumber(Number(summary.rewardMean), 3)
+          : '—',
+      ],
       ...(evaluation?.actionMae != null ? [['动作 MAE', evaluation.actionMae.toFixed(4)]] : []),
       ...(evaluation?.observationMae != null
         ? [['观测 MAE', evaluation.observationMae.toFixed(4)]]
@@ -5695,7 +5871,12 @@ async function publishTelemetry() {
   const model = state.overview?.models?.find((item) => item.id === run.modelId);
   const contract = model?.manifest?.contract;
   if (!contract) {
-    showToast('当前 Run 的模型契约不可用，无法安全绑定遥测', 'error');
+    showRecoverableError(
+      '遥测无法绑定到该 Run',
+      '当前 Run 的模型契约不可用，无法安全绑定遥测。',
+      '查看运行详情',
+      () => openRecordDetails(run),
+    );
     return;
   }
   if (evidence.contractId && evidence.contractId !== contract.id) {
@@ -5808,12 +5989,32 @@ function renderEvaluation() {
     String(b.createdAt || '').localeCompare(String(a.createdAt || '')),
   );
   const latest = runs[0] || null;
-  // 空态优先：没有任何 Run、也没有导入遥测时，六个空面板各自用不同的
+  const latestMetrics = latest?.metrics || {};
+  const hasRunEvaluation = Boolean(
+    latest &&
+      latest.mock !== true &&
+      (latest.evaluation ||
+        latest.taskEvaluation ||
+        latestMetrics.successRate != null ||
+        latestMetrics.fallRate != null ||
+        latestMetrics.controlLatencyMs != null ||
+        latestMetrics.latencyMs != null),
+  );
+  const hasTelemetryEvidence = Boolean(
+    evidence &&
+      (evidence.summary ||
+        evidence.samples?.length ||
+        evidence.publishedRunId ||
+        evidence.evaluation),
+  );
+  // 空态优先：没有真实 Run 评测或遥测证据时，六个空面板各自用不同的
   // 措辞说"没数据"（14 处空文案、9 个"—"、5/10 禁用按钮，一面 2000px 的
-  // 空脚手架墙）。收起全部空面板，换一张三步引导卡；一旦有数据立刻
-  // 恢复完整仪表盘。banner 与底部"下一步"条保留——它们是状态提醒不是面板。
+  // 空脚手架墙）。尤其是 Mock Run：它只能证明协议和台账通了，不能让
+  // 页面重新显示一套没有指标的“结果”卡。收起全部空面板，换一张三步
+  // 引导卡；一旦有真实证据立刻恢复完整仪表盘。banner 与底部"下一步"条
+  // 保留——它们是状态提醒，不是空数据面板。
   const evaluateView = document.querySelector('[data-view-section="evaluate"]');
-  const dashboardEmpty = !latest && !evidence;
+  const dashboardEmpty = !hasRunEvaluation && !hasTelemetryEvidence;
   if (evaluateView) evaluateView.dataset.empty = dashboardEmpty ? 'true' : 'false';
   const emptyGuide = $('evaluation-empty');
   if (emptyGuide) emptyGuide.hidden = !dashboardEmpty;
@@ -5822,7 +6023,7 @@ function renderEvaluation() {
     if (qualityBadge) qualityBadge.hidden = true;
   }
   renderRunComparison(runs);
-  const metrics = latest?.metrics || {};
+  const metrics = latestMetrics;
   const status = String(latest?.status || '').toLowerCase();
   const mockRun = latest?.mock === true;
   const demoEvidence = isSyntheticEvidence(evidence, latest);
@@ -5834,7 +6035,9 @@ function renderEvaluation() {
   let statusLabel = dashboardEmpty
     ? '等待第一次训练或遥测'
     : '尚未产生评测结果';
-  if (mockRun && ['completed', 'ready'].includes(status)) statusLabel = '协议演示完成';
+  if (mockRun && ['completed', 'ready'].includes(status)) {
+    statusLabel = dashboardEmpty ? '已有协议演示 · 等待真实评测' : '协议演示完成';
+  }
   else if (demoEvidence && status === 'completed') statusLabel = '演示评测完成';
   else if (unverifiedEvidence) statusLabel = '评测已保存 · 来源未验证';
   else if (status === 'completed') statusLabel = '评测已完成';
@@ -6711,38 +6914,6 @@ function renderWorkflowProgress() {
   });
 }
 
-// 顶栏闭环管道：把 renderWorkflowProgress 的同一份阶段状态镜像到
-// topbar，让任何视图下都能一眼看到闭环走到了哪一步（pro-workbench
-// 专业工作台模式的入口层）。
-function renderTopbarPipeline() {
-  const rail = $('topbar-pipeline');
-  if (!rail) return;
-  // 与 renderWorkflowProgress 共用 deriveLoopStates()：以前这里复制了一份
-  // 推导逻辑，两处容易漂移，而且都会同时点亮多个阶段。
-  const { states } = deriveLoopStates();
-  rail.querySelectorAll('[data-pipeline-stage]').forEach((item) => {
-    const value = states[item.dataset.pipelineStage];
-    item.classList.toggle('is-complete', value === 'complete');
-    item.classList.toggle('is-current', value === 'current');
-    item.classList.toggle('is-ready', value === 'ready');
-    item.classList.toggle('is-blocked', value === 'blocked');
-    const label = item.querySelector('span')?.textContent || '';
-    // 顶栏同时表达两件事，用 title 把它们讲清楚：
-    //   · is-viewing（aria-current="step"）= 你正在看哪个阶段
-    //   · is-current / is-ready / is-blocked = 闭环进度与门禁
-    const viewing = item.classList.contains('is-viewing');
-    const gate =
-      value === 'complete'
-        ? '已完成'
-        : value === 'current'
-          ? '建议的下一步'
-          : value === 'ready'
-            ? '可以进入'
-            : '未满足前置条件';
-    item.title = viewing ? `${label} · 当前页面 · ${gate}` : `${label} · ${gate}`;
-  });
-}
-
 // 概览上手清单：同一份闭环状态落到四步清单上，每步的 meta 区域按状态
 // 渲染“已完成 / 去做 → / 需登录”，游客在后两步看到登录引导而不是死链。
 function renderOnboardChecklist() {
@@ -7444,7 +7615,9 @@ async function agentCheckBoard() {
   } catch (error) {
     const message = error instanceof Error ? error.message : '板端暂不可用';
     state.agent.boardHealth = { ok: false, error: message.slice(0, 80) };
-    if (!(error instanceof ApiError && error.status === 401)) showToast('板端检查失败：' + message, 'error');
+    if (!(error instanceof ApiError && error.status === 401)) {
+      showRecoverableError('板端健康检查失败', message, '重新检查', agentCheckBoard);
+    }
   } finally {
     state.agent.checkingBoard = false;
     renderAgentPanel();
@@ -7467,7 +7640,6 @@ function renderAll() {
   renderEvaluationNext();
   renderReleaseGate();
   renderWorkflowProgress();
-  renderTopbarPipeline();
   renderOnboardChecklist();
   renderProjectWorkspace();
   renderPlatformScorecard();
@@ -7611,15 +7783,12 @@ async function loadOverview({ quiet = false, silent = false } = {}) {
     setText('hero-updated', '更新于 ' + formatDate(new Date().toISOString()));
     if (summaryResult.status === 'rejected' || projectsResult.status === 'rejected' || datasetsResult.status === 'rejected') {
       const failed = [summaryResult, projectsResult, datasetsResult].filter((result) => result.status === 'rejected').length;
-      setWorkspaceStatus('warning', '工作区已连接，但部分数据暂不可用', `${failed} 个辅助数据源未响应；核心模型和运行状态仍可使用。`, { retry: true });
+      setWorkspaceStatus('warning', '工作区已连接，但部分数据暂不可用', `${failed} 个辅助数据源未响应；核心模型和运行状态仍可使用。下一步：点击“重新连接”再次检查。`, { retry: true });
     } else {
       clearWorkspaceStatus();
     }
   } catch (error) {
     state.serviceError = !(error instanceof ApiError && error.status === 401);
-    if (!(error instanceof ApiError && error.status === 401) && !quiet) {
-      showToast(error instanceof Error ? error.message : '工作台加载失败', 'error');
-    }
     setText(
       'service-status',
       error instanceof ApiError && error.status === 401 ? '游客模式' : '服务不可用',
@@ -7630,7 +7799,7 @@ async function loadOverview({ quiet = false, silent = false } = {}) {
       clearWorkspaceStatus();
     } else {
       const detail = friendlyError(error, '无法读取工作区状态').replace(/[。.!！?？\s]+$/u, '');
-      setWorkspaceStatus('error', '工作区连接失败', `${detail}。检查服务后可以重试。`, { retry: true });
+      setWorkspaceStatus('error', '工作区连接失败', `${detail}。下一步：检查服务是否运行，然后点击“重新连接”。`, { retry: true });
     }
   } finally {
     if (silent) {
@@ -7826,6 +7995,55 @@ function confirmRobogoRun() {
   });
 }
 
+async function relayTrainingRun(run, model, requestBody) {
+  const agentUrl = String(run.relayAgentUrl || '').replace(/\/+$/, '');
+  const manifest = model?.manifest;
+  if (!agentUrl || !manifest) throw new Error('缺少本地 Agent 或模型契约，无法中继训练');
+  const accountId = state.overview?.identity?.accountId || 'local-dev';
+  const relayPayload = {
+    accountId,
+    schemaVersion: manifest.schemaVersion,
+    contractId: manifest.contract.id,
+    model: { modelId: manifest.modelId, displayName: manifest.displayName, version: manifest.version },
+    robot: manifest.robot,
+    contract: manifest.contract,
+    simulator: manifest.simulator,
+    artifacts: manifest.artifacts,
+    ...(requestBody.taskId ? { taskId: requestBody.taskId } : {}),
+    ...(requestBody.training ? { training: requestBody.training } : {}),
+    ...(requestBody.resumeFrom ? { resumeFrom: requestBody.resumeFrom } : {}),
+    idempotencyKey: requestBody.idempotencyKey,
+  };
+  const submitted = await fetch(agentUrl, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', 'x-sim2real-account': accountId, 'idempotency-key': requestBody.idempotencyKey },
+    body: JSON.stringify(relayPayload),
+    signal: AbortSignal.timeout(30_000),
+  });
+  const result = await submitted.json().catch(() => ({}));
+  if (!submitted.ok || !result.runId) throw new Error(result.message || result.error || '本机 Agent 未接受训练任务');
+  await request(`/sim2real/runs/${encodeURIComponent(run.id)}/relay/claim`, { method: 'POST', body: JSON.stringify({ externalRunId: result.runId }) });
+  const poll = async () => {
+    try {
+      const statusResponse = await fetch(`${agentUrl}/runs/${encodeURIComponent(result.runId)}`, { headers: { 'x-sim2real-account': accountId }, signal: AbortSignal.timeout(10_000) });
+      const status = await statusResponse.json().catch(() => ({}));
+      if (!statusResponse.ok) throw new Error(status.message || status.error || 'Agent 状态不可用');
+      await request(`/sim2real/runs/${encodeURIComponent(run.id)}/relay/sync`, { method: 'POST', body: JSON.stringify(status) });
+      if (status.status === 'completed' && status.artifact?.sha256) {
+        const artifactResponse = await fetch(`${agentUrl}/runs/${encodeURIComponent(result.runId)}/artifact`, { headers: { 'x-sim2real-account': accountId }, signal: AbortSignal.timeout(60_000) });
+        if (!artifactResponse.ok) throw new Error('训练完成但制品下载失败');
+        const bytes = new Uint8Array(await artifactResponse.arrayBuffer());
+        await fetch(apiPath(`/sim2real/runs/${encodeURIComponent(run.id)}/relay/artifact`), { method: 'POST', headers: { 'content-type': 'application/octet-stream', 'x-artifact-sha256': status.artifact.sha256 }, body: bytes, credentials: 'same-origin' }).then(async (response) => { if (!response.ok) throw new Error('制品回传平台失败'); });
+      }
+      if (!['completed', 'failed'].includes(String(status.status))) window.setTimeout(poll, 5000);
+      else await loadOverview({ quiet: true });
+    } catch (error) {
+      setText('simulator-run-status', error instanceof Error ? `本机 Agent 中继失败：${error.message}` : '本机 Agent 中继失败');
+    }
+  };
+  void poll();
+}
+
 async function runModel(backend) {
   if (state.runSubmitting) return;
   if (backend === 'browser' && !selectedProductProfile().simulatorPath) {
@@ -7880,6 +8098,11 @@ async function runModel(backend) {
       body: JSON.stringify(body),
     });
     const run = payload.run || {};
+    if (backend === 'local' && run.relayAgentUrl) {
+      void relayTrainingRun(run, model, body).catch((error) => {
+        setText('simulator-run-status', error instanceof Error ? `本机 Agent 训练提交失败：${error.message}` : '本机 Agent 训练提交失败');
+      });
+    }
     if (backend === 'browser' && ['completed', 'ready', 'queued', 'running'].includes(String(run.status || ''))) {
       updateTrainProgress(3);
     }
@@ -9900,6 +10123,16 @@ function wireEvents() {
     const next = event.target.value;
     if (!ACTION_TASKS[next]) return;
     state.taskId = next;
+    // Football tasks are owned by the platform football engine. Selecting one
+    // in the workbench should prepare the matching engine automatically while
+    // still allowing an operator to override it afterwards.
+    if (next.startsWith('football-')) {
+      const engine = $('training-engine');
+      if (engine && (!engine.value || engine.value === 'starter-ppo')) {
+        engine.value = 'microduck-football';
+        renderEngineCapability();
+      }
+    }
     saveWorkspaceContext();
     try {
       window.localStorage?.setItem('rdk-duck-lab-task', next);
@@ -10059,7 +10292,9 @@ function wireEvents() {
   });
   $('compute-resource-form')?.addEventListener('submit', saveComputeResource);
   $('compute-resource-cancel')?.addEventListener('click', resetComputeResourceForm);
+  $('compute-resource-install')?.addEventListener('click', () => void showGpuAgentInstallCommand());
   $('compute-resource-autodetect')?.addEventListener('click', () => void autoDetectLocalGpuAgent());
+  $('compute-resource-ssh-connect')?.addEventListener('click', () => void connectRemoteGpuThroughAgent());
   $('template-button')?.addEventListener('click', loadManifestTemplate);
   $('manifest-file-input')?.addEventListener('change', importManifestFile);
   $('validate-button')?.addEventListener('click', validateEditor);

@@ -17,6 +17,12 @@
   --surface-2:var(--panel-raised);
   --font-label: ui-monospace, 'SF Mono', SFMono-Regular, 'JetBrains Mono',
     'Cascadia Code', Menlo, Consolas, 'Liberation Mono', monospace;
+  /* 字阶：正文/日志/表格 13px，辅助元数据（chip、标签、kicker）12px，
+     10.5px 仅限 mono 微标签（ui-layout-invariants 的 12px 地板唯一豁免）。
+     阅读面一律引用 --fs-body，不要再写死 12px。 */
+  --fs-body: 13px;
+  --fs-meta: 12px;
+  --fs-mono-micro: 10.5px;
   --bg: #fbfbf9;
   --bg-deep: #f6f4ee;
   --bg-soft: #f3f1ea;

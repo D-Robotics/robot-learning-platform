@@ -20,7 +20,7 @@
          theme x view screenshots). See services/sim2real-web/ui-layout-invariants.mjs
          for the guards that keep new overrides from re-introducing layering. -->
     <link rel="stylesheet" href="./tokens.css?v=2" />
-    <link rel="stylesheet" href="./app.css?v=37" />
+    <link rel="stylesheet" href="./app.css?v=44" />
   </head>
   <body>
     <a class="skip-link" href="#main-content">跳到主要内容</a>
@@ -29,7 +29,7 @@
          各自是一个 section，只有当前视图不带 hidden，所以任一时刻恰好
          一个大纲根。 -->
     <h1 class="sr-only">RDK Robot Learning Studio · 机器人学习工作台</h1>
-    <div class="app-shell">
+    <div class="app-shell product-clarity-shell depth-led">
       <header class="topbar">
         <button
           class="sidebar-toggle"
@@ -49,21 +49,6 @@
             ><strong>Robot Learning Workbench</strong></span
           >
         </a>
-        <!-- 闭环进度：只读指示器，不是导航。
-             这 4 个阶段以前是 <button data-view-target>，点了去的地方和侧栏
-             「学习闭环」那 4 项完全相同 —— 同一屏上两套入口指向同一批页面，
-             而顶栏表达的其实是"闭环走到哪 + 哪些被门禁挡住"，两种语义挤在一个
-             控件里，于是"当前位置"和"进度"永远对不上。现在导航只由侧栏负责，
-             这里只报告状态；aria-current="step" 表示"你正在看的阶段"。 -->
-        <ol class="topbar-pipeline" id="topbar-pipeline" aria-label="闭环进度">
-          <li class="pipeline-stage" data-pipeline-stage="simulate"><i aria-hidden="true"></i><span>仿真与录制</span></li>
-          <span class="pipeline-sep" aria-hidden="true"></span>
-          <li class="pipeline-stage" data-pipeline-stage="train"><i aria-hidden="true"></i><span>强化学习训练</span></li>
-          <span class="pipeline-sep" aria-hidden="true"></span>
-          <li class="pipeline-stage" data-pipeline-stage="evaluate"><i aria-hidden="true"></i><span>Sim2Real 评测</span></li>
-          <span class="pipeline-sep" aria-hidden="true"></span>
-          <li class="pipeline-stage" data-pipeline-stage="deploy"><i aria-hidden="true"></i><span>部署与反馈</span></li>
-        </ol>
         <div class="topbar-context">
           <span class="context-label">当前项目</span
           ><strong id="current-project-name">MicroDuck · X5 Starter</strong
@@ -191,10 +176,10 @@
             </button>
           </nav>
           <div class="sidebar-divider sidebar-divider-compact"></div>
-          <div class="nav-label">资源与工具</div>
+          <div class="nav-label">高级工具</div>
           <details class="sidebar-nav-group" data-sidebar-group="tools">
             <summary class="nav-label nav-label-toggle">
-              <span>资源与工具</span><span class="nav-group-chevron" aria-hidden="true">⌄</span>
+              <span>高级工具</span><span class="nav-group-chevron" aria-hidden="true">⌄</span>
             </summary>
             <nav class="workflow-nav" aria-label="记录与设备工具">
               <button class="nav-item" type="button" data-view-target="resources"><span class="nav-index" aria-hidden="true">▣</span><span><strong>GPU 与算力</strong><small>本机、远程与云端资源</small></span></button>
@@ -371,7 +356,7 @@
             aria-labelledby="overview-title"
           >
             <div class="section-heading section-heading-lean">
-              <div class="overview-page-title"><h2 id="overview-title">开始机器人学习</h2><p>先创建项目并准备数据，再训练和验证策略；需要真机时再连接设备。</p></div>
+              <div class="overview-page-title"><h2 id="overview-title">开始机器人学习</h2><p>先创建项目并准备数据，再训练和验证策略；需要真机时再连接设备。</p><p class="object-line" aria-label="项目对象链"><button type="button" data-view-target="overview" data-chain-node="project">项目</button><i aria-hidden="true">→</i><button type="button" data-view-target="train" data-chain-node="model">模型 / 策略</button><i aria-hidden="true">→</i><button type="button" data-view-target="records" data-chain-node="run">Run</button><i aria-hidden="true">→</i><button type="button" data-view-target="evaluate" data-chain-node="evaluation">评测证据</button><i aria-hidden="true">→</i><button type="button" data-view-target="deploy" data-chain-node="artifact">发布制品</button><i aria-hidden="true">→</i><button type="button" data-view-target="station" data-chain-node="device">设备</button></p></div>
               <span class="section-caption" id="hero-updated">—</span>
             </div>
             <div class="next-card">
@@ -507,11 +492,11 @@
           </details>
           </section>
 
-          <section class="agent-chat-panel" id="agent-chat-panel" role="dialog" aria-modal="true" aria-hidden="true" aria-labelledby="agent-chat-title">
+          <section class="agent-chat-panel" id="agent-chat-panel" role="dialog" aria-modal="true" aria-hidden="true" aria-labelledby="agent-chat-title" aria-describedby="agent-chat-role">
             <div class="agent-chat-heading">
-              <div><span class="workspace-kicker">RDK STUDIO AGENT</span><h2 id="agent-chat-title">对话式任务 Agent</h2></div>
+              <div><span class="workspace-kicker">RDK STUDIO AGENT</span><h2 id="agent-chat-title">Agent 任务助手</h2><p class="agent-chat-role" id="agent-chat-role">核心动作：解释状态 · 生成计划 · 执行受控操作 · 留存证据。训练、设备和发布操作会在执行前请求确认，不会静默驱动机器人。</p></div>
               <div class="agent-chat-heading-actions">
-                <span class="agent-chat-runtime"><i class="status-dot"></i>工具链已连接</span>
+                <span class="agent-chat-runtime"><i class="status-dot"></i>工具链可用 · 真机需单独连接</span>
                 <button class="agent-chat-close" id="agent-chat-close" type="button" aria-label="关闭 Agent 对话"><span aria-hidden="true">×</span></button>
               </div>
             </div>
@@ -523,7 +508,7 @@
                 <div id="agent-session-list"><button class="agent-session-item is-active" type="button" data-static-current>当前对话</button></div>
               </aside>
               <div class="agent-chat-messages" id="agent-chat-messages" aria-live="polite">
-                <div class="agent-chat-message agent-chat-message-agent"><strong>Agent</strong><p>告诉我你要完成什么。例如：跑一轮 GPU 训练，检查 X5，再做只读预检。</p></div>
+                <div class="agent-chat-message agent-chat-message-agent"><strong>Agent</strong><p>描述一个结果，我会拆成可确认的步骤并回传证据。例如：跑一轮 GPU 训练，检查 X5，再做只读预检。</p></div>
               </div>
               <div class="agent-chat-side">
                 <div class="agent-plan-card" id="agent-plan-card"><span class="agent-empty-state"><strong>任务计划</strong><small>等待任务计划…</small></span></div>
@@ -545,7 +530,7 @@
             aria-labelledby="simulate-title"
           >
             <div class="section-heading section-heading-lean">
-              <h2 id="simulate-title">仿真与录制</h2>
+              <div><span class="stage-kicker">01 · 学习闭环</span><h2 id="simulate-title">仿真与录制</h2><p class="section-lead">先把动作任务跑通并录下可复用轨迹，训练、评测和部署都从这份证据继续。</p></div>
             </div>
             <div class="sim-layout">
               <article class="panel simulator-panel">
@@ -634,18 +619,20 @@
                   <p id="task-context-note" class="small-note">切换任务后请点击“开始录制”生成轨迹；录制完成即可在评测页回放。</p>
                   <a class="side-link" href="#records" data-replay-task-link>查看该任务的最近回放 ↗</a>
                 </div>
-                <div class="sim-action-library" aria-label="当前模型动作库">
-                  <div class="sim-action-library-heading">
+                <details class="sim-action-library" aria-label="当前模型动作库">
+                  <summary class="sim-action-library-heading">
                     <div>
                       <strong>当前模型可用动作</strong>
+                      <small>快捷键与动作映射</small>
                     </div>
-                  </div>
+                    <span aria-hidden="true">展开 <i>⌄</i></span>
+                  </summary>
                   <div id="sim-action-list" class="sim-action-list"></div>
                   <p id="sim-action-empty" class="small-note">
                     选择一个模型后，这里会显示动作和按键。
                   </p>
                   <p id="sim-action-task-status" class="small-note" hidden></p>
-                </div>
+                </details>
                 <a
                   class="side-link"
                   id="microduck-entry-link"
@@ -675,6 +662,7 @@
             <div class="section-heading section-heading-lean">
               <h2 id="train-title">强化学习训练与模型</h2>
             </div>
+            <p class="mobile-desktop-hint" role="note">手机端适合查看训练进度、审批与结果；训练参数配置建议在桌面端完成。</p>
             <div class="submodule-tabs" role="tablist" aria-label="强化学习工作台模块">
               <button class="submodule-tab is-active" type="button" role="tab" id="train-tab-run" aria-controls="train-module-run-model train-module-run-robogo" aria-selected="true" data-train-module-tab="run">训练工作台<small>模型、算法与提交</small></button>
               <button class="submodule-tab" type="button" role="tab" id="train-tab-contract" aria-controls="contract-fold" aria-selected="false" data-train-module-tab="contract">模型契约<small>Manifest 与兼容性</small></button>
@@ -896,6 +884,7 @@
                       <option value="visual-ppo">visual-ppo · 顶置相机像素观测（CPU MuJoCo）</option>
                       <option value="dm-control-ppo">dm-control-ppo · DeepMind 生态 env API（CPU MuJoCo）</option>
                       <option value="microduck-rl">microduck-rl · mjlab 并行物理（CUDA）</option>
+                      <option value="microduck-football">microduck-football · 足球 MuJoCo + 14D MicroDuck（CUDA）</option>
                       <option value="mjlab-rsl-rl">mjlab-rsl-rl · mjlab 物理 + rsl-rl PPO（CUDA）</option>
                       <option value="act">act · 动作分块模仿（示教轨迹，CPU）</option>
                       <option value="diffusion-policy">diffusion-policy · 扩散动作分块模仿（示教轨迹，CPU）</option>
@@ -1391,32 +1380,34 @@
                     <div><strong>Live</strong><small>人工批准后开放</small></div>
                   </div>
                 </div>
-                <div class="deploy-timeline" aria-label="部署状态时间线">
-                  <div class="deploy-timeline-heading"><strong>部署时间线</strong><span id="deploy-timeline-status">等待预检</span></div>
-                  <ol id="deploy-timeline-list"><li class="deploy-timeline-empty">生成预检计划后，这里会显示模型、板卡和证据状态。</li></ol>
-                </div>
-                <div class="promotion-flow" aria-label="模型晋级流">
-                  <div class="promotion-flow-heading">
-                    <strong>模型晋级流</strong><span id="promotion-flow-caption">训练产物 → 候选 → 验证 → 发布</span>
+                <details class="deploy-detail-fold">
+                  <summary><span>部署时间线</span><span id="deploy-timeline-status">等待预检</span></summary>
+                  <div class="deploy-timeline" aria-label="部署状态时间线">
+                    <ol id="deploy-timeline-list"><li class="deploy-timeline-empty">生成预检计划后，这里会显示模型、板卡和证据状态。</li></ol>
                   </div>
-                  <div class="promotion-stages" id="promotion-stages">
-                    <div class="promotion-stage" data-promotion-stage="candidates">
-                      <span class="promotion-stage-index">候选</span>
-                      <div><strong>训练产物</strong><small>训练完成后的 ONNX 制品与评测证据</small></div>
+                </details>
+                <details class="deploy-detail-fold">
+                  <summary><span>模型晋级流</span><span id="promotion-flow-caption">训练产物 → 候选 → 验证 → 发布</span></summary>
+                  <div class="promotion-flow" aria-label="模型晋级流">
+                    <div class="promotion-stages" id="promotion-stages">
+                      <div class="promotion-stage" data-promotion-stage="candidates">
+                        <span class="promotion-stage-index">候选</span>
+                        <div><strong>训练产物</strong><small>训练完成后的 ONNX 制品与评测证据</small></div>
+                      </div>
+                      <div class="promotion-stage" data-promotion-stage="validated">
+                        <span class="promotion-stage-index">验证</span>
+                        <div><strong>候选验证</strong><small>质量门与评测通过，制品标记 validated</small></div>
+                      </div>
+                      <div class="promotion-stage" data-promotion-stage="published">
+                        <span class="promotion-stage-index">发布</span>
+                        <div><strong>发布上线</strong><small>published 制品进入 Canary / Live 计划</small></div>
+                      </div>
                     </div>
-                    <div class="promotion-stage" data-promotion-stage="validated">
-                      <span class="promotion-stage-index">验证</span>
-                      <div><strong>候选验证</strong><small>质量门与评测通过，制品标记 validated</small></div>
-                    </div>
-                    <div class="promotion-stage" data-promotion-stage="published">
-                      <span class="promotion-stage-index">发布</span>
-                      <div><strong>发布上线</strong><small>published 制品进入 Canary / Live 计划</small></div>
-                    </div>
+                    <ol class="promotion-chain" id="promotion-chain" aria-label="晋级链证据">
+                      <li class="promotion-chain-empty">当前模型还没有可展示的晋级链：完成一次真实训练并发布制品后，这里会按 评测证据 → 发布制品 → 设备部署 展示证据。</li>
+                    </ol>
                   </div>
-                  <ol class="promotion-chain" id="promotion-chain" aria-label="晋级链证据">
-                    <li class="promotion-chain-empty">当前模型还没有可展示的晋级链：完成一次真实训练并发布制品后，这里会按 产物 → 评测 → 制品 → 部署 展示证据。</li>
-                  </ol>
-                </div>
+                </details>
                 <div class="deploy-recovery-note" id="deploy-recovery-note" hidden>
                   <span class="deploy-recovery-icon" aria-hidden="true">↶</span><span><strong>可以安全回到上一版本</strong><small>当前只读预检不会修改板端；如需回滚，请从记录中选择上一份已验证制品。</small></span>
                   <button class="button button-ghost button-small" type="button" data-workspace-view="records">查看记录</button>
@@ -1438,7 +1429,7 @@
             <div class="records-layout records-single">
               <article class="panel compute-resources-panel">
                 <div class="panel-heading panel-heading-lean">
-                  <div><h2>我的 GPU 训练资源</h2><p class="panel-caption">在本页直接连接本机或远端 GPU。首次使用请在用户电脑启动 Local Agent：<code>npm run dev:gpu-agent</code>；页面随后通过 127.0.0.1 建立 SSH 隧道，核心服务器不会接触你的 GPU。</p></div>
+                  <div><h2>我的 GPU 训练资源</h2><p class="panel-caption">支持本机 CPU/GPU、SSH 远端服务器和平台 Runner。首次使用可以点击“获取安装命令”，用户只需在自己的终端执行一次；网页随后通过 127.0.0.1 连接 Agent，核心服务器不会接触用户本地 GPU。</p></div>
                   <span id="compute-resource-count" class="state-badge state-neutral">0 个</span>
                 </div>
                 <div id="compute-resource-list" class="compute-resource-list"><p class="empty-inline">还没有接入 GPU。添加后可在上方训练资源中选择。</p></div>
@@ -1452,7 +1443,9 @@
                     <label class="field-label">访问令牌<input id="compute-resource-token" type="password" autocomplete="new-password" placeholder="可选" /></label>
                     <label class="field-label">并发任务<input id="compute-resource-concurrency" type="number" min="1" max="32" value="1" /></label>
                   </div>
-                  <div class="compute-resource-form-actions"><button class="button button-ghost button-small" type="button" id="compute-resource-autodetect">自动发现本机 Agent</button><button class="button button-primary button-small" type="submit" id="compute-resource-save">添加 GPU</button><button class="button button-ghost button-small" type="button" id="compute-resource-cancel" hidden>取消编辑</button><span id="compute-resource-form-status" class="small-note" role="status"></span></div>
+                  <div class="compute-resource-form-actions"><button class="button button-ghost button-small" type="button" id="compute-resource-install">获取安装命令</button><button class="button button-ghost button-small" type="button" id="compute-resource-autodetect">自动发现本机 Agent</button><button class="button button-primary button-small" type="submit" id="compute-resource-save">添加 GPU</button><button class="button button-ghost button-small" type="button" id="compute-resource-cancel" hidden>取消编辑</button><span id="compute-resource-form-status" class="small-note" role="status"></span></div>
+                  <pre id="compute-resource-install-command" class="compute-resource-install-command" hidden></pre>
+                  <details class="compute-resource-remote-connect"><summary>连接远程 GPU 服务器（SSH）</summary><div class="compute-resource-remote-grid"><label class="field-label">服务器地址<input id="compute-resource-ssh-host" placeholder="gpu.example.com 或 192.168.1.20" /></label><label class="field-label">SSH 用户<input id="compute-resource-ssh-user" value="root" /></label><label class="field-label">SSH 端口<input id="compute-resource-ssh-port" type="number" min="1" max="65535" value="22" /></label><label class="field-label">远程 Agent 端口<input id="compute-resource-remote-port" type="number" min="1" max="65535" value="19091" /></label><label class="field-label">Worker Token<input id="compute-resource-remote-token" type="password" autocomplete="new-password" /></label><label class="field-label">资源名称<input id="compute-resource-ssh-name" placeholder="我的远程 GPU" /></label></div><button class="button button-ghost button-small" type="button" id="compute-resource-ssh-connect">通过 Agent 建立 SSH 连接</button><span class="small-note">服务器需要已安装 Worker，SSH 密钥由用户电脑上的 Agent 使用；不保存 SSH 密码。</span></details>
                 </form>
                 </details>
               </article>
@@ -1539,6 +1532,7 @@
             <div class="section-heading section-heading-lean">
               <h2 id="station-title">设备控制台</h2>
             </div>
+            <p class="mobile-desktop-hint" role="note">手机端适合查看设备状态与日志；实时画面和安全控制建议使用桌面端。</p>
             <div class="submodule-tabs" role="tablist" aria-label="设备控制台模块">
               <button id="station-tab-devices" aria-controls="station-device-manager" class="submodule-tab is-active" type="button" role="tab" aria-selected="true" data-station-module-tab="devices">设备连接<small>Bridge、板卡与能力</small></button>
               <button id="station-tab-telemetry" aria-controls="station-module-telemetry-status station-module-telemetry-camera" class="submodule-tab" type="button" role="tab" aria-selected="false" data-station-module-tab="telemetry">遥测概览<small>状态、相机与话题</small></button>
@@ -2120,13 +2114,14 @@
       the same ordering while working from both file:// and the served app.
       telemetry-core.js must stay FIRST: app.js boots synchronously and its
       telemetry delegations resolve SimTelemetryCore at call time.
-      defer keeps that same DOM-ready execution order while letting all four
+      defer keeps that same DOM-ready execution order while letting all five
       downloads start in parallel during HTML parse instead of serially
       blocking the parser at body end.
     -->
     <script defer src="./telemetry-core.js?v=duck-lab-30"></script>
-    <script defer src="./app.js?v=duck-lab-50"></script>
-    <script defer src="./agent-chat.js?v=agent-13"></script>
-    <script defer src="./onboarding.js?v=onboarding-5"></script>
+    <script defer src="./app.js?v=duck-lab-52"></script>
+    <script defer src="./visualization-enhancements.js?v=viz-1"></script>
+    <script defer src="./agent-chat.js?v=agent-17"></script>
+    <script defer src="./onboarding.js?v=onboarding-6"></script>
   </body>
 </html>

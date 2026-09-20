@@ -349,7 +349,15 @@ export function assertStyleInvariants(publicDir) {
   // 306 → 312 (2026-09-18): the Agent drawer v2 refinement extends the existing
   // pro-skin component layer with six intentional responsive overrides for the
   // conversation-first layout. No new layer or component family was added.
-  const CROSS_LAYER_BUDGET = 312;
+  // 312 → 324 (2026-09-20): the workbench visual hierarchy pass adds twelve
+  // reviewed surface/layout selectors for the simulation, training, evidence,
+  // deployment, and mobile views. Keep the ratchet tight; this is not a
+  // blanket allowance for future duplicate overrides.
+  // 324 → 331 (2026-09-20): the complete polish pass adds seven intentional
+  // desktop/mobile component overrides for records and the device console.
+  // These are responsive pairs in the same final polish layer, verified by
+  // the responsive suite below; keep the increase limited to this batch.
+  const CROSS_LAYER_BUDGET = 331;
   const appCss = sheets.find((sh) => sh.file === 'app.css');
   if (appCss) {
     const bannerRe = /\/\* =+ ([a-z-]+\.css) —/g;
@@ -380,6 +388,62 @@ export function assertStyleInvariants(publicDir) {
       crossLayer <= CROSS_LAYER_BUDGET,
       `selectors defined in more than one layer grew to ${crossLayer} (budget ${CROSS_LAYER_BUDGET}). Put new declarations in the layer that already owns the selector.`,
     );
+
+    // ---- 9. raw hex colors may only shrink ----
+    // app.css still carries raw hex literals inherited from the merged layers
+    // while the palette itself lives in tokens.css. New colors must be tokens;
+    // existing literals get converted batch by batch, so only the count going
+    // DOWN keeps this honest. tokens.css is exempt — it IS the palette.
+    const HEX_RATCHET = 188; // measured 2026-09-20 after the state-tier pass
+    const hexCount = [...deComment(appCss.css).matchAll(/#[0-9a-fA-F]{3,8}\b/g)].length;
+    assert.ok(
+      hexCount <= HEX_RATCHET,
+      `raw hex literals in app.css grew to ${hexCount} (ratchet ${HEX_RATCHET}); declare the color in tokens.css and reference the token`,
+    );
+
+    // ---- 10. viewport breakpoints are frozen ----
+    // 18 distinct width values across 90 media blocks is why responsive
+    // behavior became impossible to reason about. The set may shrink
+    // (long-term target: 560/720/1080/1280), never grow.
+    const BREAKPOINT_ALLOWLIST = new Set([
+      560, 600, 640, 720, 721, 760, 780, 820, 860, 900, 901, 980, 981, 1080, 1081, 1100, 1280,
+      1281,
+    ]);
+    const bpOffenders = [
+      ...deComment(appCss.css).matchAll(/\(\s*(?:max|min)-width\s*:\s*([\d.]+)px/g),
+    ]
+      .map((m) => Number(m[1]))
+      .filter((n) => !BREAKPOINT_ALLOWLIST.has(n));
+    assert.equal(
+      bpOffenders.length,
+      0,
+      `new breakpoint value(s) ${[...new Set(bpOffenders)].join(', ')}px; reuse the frozen set (${[...BREAKPOINT_ALLOWLIST].join('/')}) or shrink it deliberately with a note`,
+    );
+
+    // ---- 11. z-index literals below the ladder are frozen too ----
+    // Guard 4 owns >=1000 (the --z-* ladder). These low literals (1/2/4/5/40/60/-1)
+    // are grandfathered stacking-context nudges; the value set may shrink, not grow.
+    const Z_INDEX_ALLOWLIST = new Set(['-1', '1', '2', '4', '5', '40', '60']);
+    const zOffenders = [...deComment(appCss.css).matchAll(/z-index:\s*(-?\d+)/g)]
+      .map((m) => m[1])
+      .filter((v) => !Z_INDEX_ALLOWLIST.has(v));
+    assert.equal(
+      zOffenders.length,
+      0,
+      `new z-index literal(s) ${[...new Set(zOffenders)].join(', ')}; use the --z-* ladder in tokens.css`,
+    );
+
+    // ---- 12. raw font-size:12px literals may only shrink ----
+    // Reading surfaces (logs, tables, explanations) moved to var(--fs-body);
+    // chips and labels should reference var(--fs-meta). A growing literal count
+    // means the type scale is being bypassed again.
+    const FONT_12PX_RATCHET = 318; // measured 2026-09-20 after the fs-body pass
+    const font12Count = [...deComment(appCss.css).matchAll(/font-size:\s*12px/g)].length;
+    assert.ok(
+      font12Count <= FONT_12PX_RATCHET,
+      `font-size:12px literals grew to ${font12Count} (ratchet ${FONT_12PX_RATCHET}); use var(--fs-meta) or var(--fs-body) from tokens.css`,
+    );
+
     return {
       stylesheets: files.length,
       pages: fs.readdirSync(publicDir).filter((f) => f.endsWith('.html')).length,
@@ -481,6 +545,12 @@ export function assertMarkupInvariants(html) {
  * documents and require it to throw. A guard that silently passes everything is
  * worse than no guard, because it looks like coverage.
  */
+const GUARD_MERGED_APP_CSS_SKELETON =
+  ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i', 'j']
+    .map((n) => `/* ============ ${n}.css — fixture layer ============ */`)
+    .join('\n') +
+  '\n/* ============ overview-density.css — density scale ============ */\n';
+
 export function assertGuardsAreLive(publicDir, tmpDir) {
   const fsx = fs;
   const pathx = path;
@@ -524,6 +594,27 @@ export function assertGuardsAreLive(publicDir, tmpDir) {
       name: 'font below the legibility floor',
       files: { 'tokens.css': ':root { --x: 1; }', 'app.css': '.note { font-size: 10px; }' },
       expect: /below the 12px floor/,
+    },
+    {
+      // Guards 6/7 require the merged-file shape (11 layer banners + density
+      // banner) before the late ratchets can fire, so fixtures for guards 9-12
+      // carry that skeleton.
+      name: 'new viewport breakpoint value',
+      files: {
+        'tokens.css': ':root { --x: 1; }',
+        'app.css':
+          GUARD_MERGED_APP_CSS_SKELETON +
+          '@media (max-width: 777px) { .grid { grid-template-columns: minmax(0, 1fr); } }',
+      },
+      expect: /new breakpoint value\(s\) 777px/,
+    },
+    {
+      name: 'z-index literal outside the grandfathered set',
+      files: {
+        'tokens.css': ':root { --x: 1; }',
+        'app.css': GUARD_MERGED_APP_CSS_SKELETON + '.overlay { z-index: 500; }',
+      },
+      expect: /new z-index literal\(s\) 500/,
     },
   ];
   const results = [];

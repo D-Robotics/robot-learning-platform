@@ -9,6 +9,7 @@ const input = $('agent-chat-input');
 const submitButton = form?.querySelector('button[type="submit"]');
 const stopButton = form?.querySelector('[data-agent-stop]');
 const runtimeStatus = document.querySelector('.agent-chat-runtime');
+let runtimeLabel = '可规划 · 真机操作需确认';
 const HISTORY_KEY = 'rdk-sim2real-agent-history-v1';
 const SESSIONS_KEY = 'rdk-sim2real-agent-sessions-v1';
 const SESSIONS_CAP = 12;
@@ -67,7 +68,26 @@ function setAgentBusy(busy, label = '') {
   if (input) input.disabled = busy;
   if (runtimeStatus) {
     runtimeStatus.classList.toggle('is-busy', busy);
-    runtimeStatus.textContent = busy ? (label || '任务执行中…') : '工具链已连接';
+    runtimeStatus.textContent = busy ? (label || '任务执行中…') : runtimeLabel;
+  }
+}
+
+async function refreshRuntimeStatus() {
+  try {
+    const capabilities = await api('/sim2real/agent/capabilities');
+    if (capabilities?.runtime === 'dsh' && capabilities?.dsh?.initialized) {
+      runtimeLabel = '实时 Agent · 真机操作需确认';
+    } else if (capabilities?.runtime === 'dsh-configured') {
+      runtimeLabel = 'Agent 正在初始化 · 真机操作需确认';
+    } else {
+      runtimeLabel = '计划器可用 · 真机操作需确认';
+    }
+    if (runtimeStatus && !runtimeStatus.classList.contains('is-busy')) {
+      runtimeStatus.textContent = runtimeLabel;
+    }
+  } catch {
+    // The status badge is advisory; the submit path still surfaces the
+    // authoritative DSH/legacy result and error message.
   }
 }
 
@@ -93,7 +113,7 @@ function showTypingIndicator(label = '正在思考…') {
   activeTypingNode = node;
 }
 
-function renderAgentError(error, retryable = true, lastMessage = '') {
+function renderAgentError(error, retryable = true, lastMessage = '', turnId = '') {
   const message = error instanceof Error ? error.message : String(error || '未知错误');
   const node = addMessage('agent', `任务未完成：${message}${retryable ? ' 可以重试。' : ''}`);
   // Recovery must be one click: the user's instruction was already consumed
@@ -107,6 +127,7 @@ function renderAgentError(error, retryable = true, lastMessage = '') {
     retry.addEventListener('click', () => {
       retry.remove();
       input.value = lastMessage;
+      if (turnId) input.dataset.agentRetryTurnId = turnId;
       input.focus();
       if (form) form.requestSubmit();
     });
@@ -306,6 +327,7 @@ function ensureSession(summary) {
       messages: [],
       title: '',
       task: null,
+      dshSessionId: '',
     };
     writeSessions([record, ...sessions]);
   }
@@ -316,6 +338,18 @@ function ensureSession(summary) {
     persistSession(record);
   }
   return record;
+}
+
+function persistActiveDshSession(sessionId) {
+  const value = String(sessionId || '').trim().slice(0, 160);
+  activeDshSessionId = value;
+  if (!activeSessionId || !value) return;
+  const sessions = readSessions();
+  const record = sessions.find((item) => item.id === activeSessionId);
+  if (!record) return;
+  record.dshSessionId = value;
+  record.updatedAt = new Date().toISOString();
+  persistSession(record);
 }
 
 function persistSession(record) {
@@ -540,6 +574,73 @@ function renderDshReply(dsh) {
   return node;
 }
 
+const visibleDshApprovals = new Set();
+
+function renderDshApproval(approval) {
+  const id = String(approval?.id || '');
+  if (!id || visibleDshApprovals.has(id) || !messages) return;
+  visibleDshApprovals.add(id);
+  const node = addMessage(
+    'agent',
+    `需要确认：Agent 请求执行「${DSH_TOOL_LABELS[approval.toolName] || approval.toolName || '受控操作'}」。${approval.reason || '该操作可能改变训练、设备或部署状态。'}`,
+  );
+  if (!node) return;
+  node.classList.add('agent-dsh-approval');
+  const actions = document.createElement('div');
+  actions.className = 'agent-approval-actions';
+  const approve = document.createElement('button');
+  approve.type = 'button';
+  approve.className = 'button button-primary button-small';
+  approve.textContent = '批准一次';
+  const reject = document.createElement('button');
+  reject.type = 'button';
+  reject.className = 'button button-ghost button-small';
+  reject.textContent = '拒绝';
+  const finish = async (decision) => {
+    approve.disabled = true;
+    reject.disabled = true;
+    try {
+      await api(`/sim2real/dsh/approvals/${encodeURIComponent(id)}`, {
+        method: 'POST',
+        body: JSON.stringify({ decision }),
+      });
+      const paragraph = node.querySelector('p');
+      if (paragraph) paragraph.textContent = decision === 'approve' ? '已批准，Agent 将继续执行。' : '已拒绝，Agent 将停止该操作。';
+      actions.remove();
+    } catch (error) {
+      approve.disabled = false;
+      reject.disabled = false;
+      renderAgentError(error, true);
+    }
+  };
+  approve.addEventListener('click', () => void finish('approve'));
+  reject.addEventListener('click', () => void finish('reject'));
+  actions.append(approve, reject);
+  node.append(actions);
+}
+
+function startDshApprovalPolling(signal) {
+  let stopped = false;
+  let timer = null;
+  const poll = async () => {
+    if (stopped || signal?.aborted) return;
+    try {
+      const result = await api('/sim2real/dsh/approvals', { signal });
+      for (const approval of Array.isArray(result?.approvals) ? result.approvals : []) {
+        renderDshApproval(approval);
+      }
+    } catch {
+      // The chat request remains authoritative; approval discovery is advisory.
+    }
+    if (!stopped && !signal?.aborted) timer = window.setTimeout(poll, 800);
+  };
+  void poll();
+  return () => {
+    stopped = true;
+    if (timer) window.clearTimeout(timer);
+  };
+}
+
 function addMessage(role, text, persist = true) {
   if (!messages) return null;
   const node = document.createElement('div');
@@ -730,8 +831,9 @@ function startFreshSession(list) {
 }
 
 function openSession(session, list) {
+  if (activeTaskController) return;
   activeSessionId = session.id;
-  activeDshSessionId = '';
+  activeDshSessionId = typeof session.dshSessionId === 'string' ? session.dshSessionId : '';
   localStorage.removeItem(HISTORY_KEY);
   renderSessionTranscript(session);
   renderSessionRail(list);
@@ -791,6 +893,7 @@ function initSessionRail() {
     // task cards); the legacy single-history key is only a pre-multisession
     // fallback, so it is never allowed to duplicate a stored session.
     activeSessionId = sessions[0].id;
+    activeDshSessionId = typeof sessions[0].dshSessionId === 'string' ? sessions[0].dshSessionId : '';
     renderSessionTranscript(sessions[0]);
   } else {
     // Adopt any pre-multisession history (messages only) as a session on
@@ -809,6 +912,7 @@ function initSessionRail() {
         title: legacyHistory.find((entry) => entry.role === 'user')?.text?.slice(0, 20) || '最近一次对话',
         messages: sanitizeSessionMessages(legacyHistory),
         task: null,
+        dshSessionId: '',
       };
       writeSessions([record]);
       activeSessionId = record.id;
@@ -816,7 +920,10 @@ function initSessionRail() {
     }
   }
   renderSessionRail(list);
-  fresh?.addEventListener('click', () => startFreshSession(list));
+  fresh?.addEventListener('click', () => {
+    if (activeTaskController) return;
+    startFreshSession(list);
+  });
   $('agent-export-session')?.addEventListener('click', exportActiveSession);
 }
 
@@ -1063,7 +1170,14 @@ function renderRun(run) {
   bridgeStatus();
 }
 
-async function runTask(message, signal) {
+function createAgentTurnId() {
+  try {
+    if (typeof crypto?.randomUUID === 'function') return crypto.randomUUID().replace(/-/g, '');
+  } catch { /* older browsers or restricted crypto */ }
+  return `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 10)}`;
+}
+
+async function runTask(message, signal, turnId) {
   const modelId = $('model-select')?.value || undefined;
   const deviceId = $('device-select')?.value || undefined;
   const computeResourceId = $('compute-resource-select')?.value || undefined;
@@ -1071,25 +1185,30 @@ async function runTask(message, signal) {
   // model decides when to call the rdk_* tools (training, board, deployment
   // …), and every tool call rides the authenticated domain routes. Only a
   // disabled runtime (503) falls back to the guarded legacy planner.
+  let stopApprovalPolling = () => {};
   try {
     setAgentBusy(true, '模型思考与工具执行中…');
+    stopApprovalPolling = startDshApprovalPolling(signal);
     const dsh = await api('/sim2real/dsh/chat', {
       method: 'POST',
       signal,
       body: JSON.stringify({
         message,
+        turnId,
         ...(activeDshSessionId ? { sessionId: activeDshSessionId } : {}),
         context: { modelId, deviceId, computeResourceId },
       }),
     });
     if (dsh?.ok && dsh.text) {
-      if (typeof dsh.sessionId === 'string') activeDshSessionId = dsh.sessionId;
+      if (typeof dsh.sessionId === 'string') persistActiveDshSession(dsh.sessionId);
       removeTypingIndicator();
       renderDshReply(dsh);
       return;
     }
   } catch (error) {
     if (!(error && error.status === 503)) throw error;
+  } finally {
+    stopApprovalPolling();
   }
   const response = await api('/sim2real/agent/plan', { method: 'POST', signal, body: JSON.stringify({ message, context: { modelId, deviceId, computeResourceId } }) });
   removeTypingIndicator();
@@ -1183,6 +1302,8 @@ form?.addEventListener('submit', (event) => {
   const message = input.value.trim();
   if (!message) return;
   input.value = '';
+  const turnId = input.dataset.agentRetryTurnId || createAgentTurnId();
+  delete input.dataset.agentRetryTurnId;
   // The session record is created with the first user message, so the
   // transcript lands in one place even if planning fails before any task
   // card exists.
@@ -1191,13 +1312,13 @@ form?.addEventListener('submit', (event) => {
   const controller = new AbortController();
   activeTaskController = controller;
   setAgentBusy(true, '正在生成计划…');
-  void runTask(message, controller.signal)
+  void runTask(message, controller.signal, turnId)
     .catch((error) => {
       if (error?.name === 'AbortError') {
         addMessage('agent', '已停止等待。若任务已经提交到后台，它仍可能继续运行，请到运行记录查看状态。');
         return;
       }
-      renderAgentError(error, true, message);
+      renderAgentError(error, true, message, turnId);
     })
     .finally(() => {
       removeTypingIndicator();
@@ -1325,25 +1446,30 @@ window.setAgentDrawerOpen = (open) => {
   if (open) input?.focus();
 };
 
-// Example prompts lower the blank-composer barrier: a first-time user sees
-// what the agent can actually do instead of an empty input.
+// Example prompts lower the blank-composer barrier: each one names the
+// capability it demonstrates (the agent's four core actions) plus a concrete
+// task, so the drawer reads as a controlled operator console — not a chat toy.
 const EXAMPLE_PROMPTS = [
-  '跑一轮 GPU 冒烟训练并跟踪结果',
-  '检查 X5 板卡状态和磁盘用量',
-  '帮我生成只读部署预检计划',
-  '汇总最近一次训练的评测证据',
+  { capability: '解释状态', prompt: '检查 X5 板卡状态和磁盘用量' },
+  { capability: '生成计划', prompt: '帮我生成只读部署预检计划' },
+  { capability: '执行操作', prompt: '跑一轮 GPU 冒烟训练并跟踪结果' },
+  { capability: '留存证据', prompt: '汇总最近一次训练的评测证据' },
 ];
 const composer = $('agent-chat-form');
 if (composer) {
   const chips = document.createElement('div');
   chips.className = 'agent-prompt-chips';
-  chips.setAttribute('aria-label', '示例任务');
-  for (const prompt of EXAMPLE_PROMPTS) {
+  chips.setAttribute('aria-label', 'Agent 能力与示例任务');
+  for (const { capability, prompt } of EXAMPLE_PROMPTS) {
     const chip = document.createElement('button');
     chip.type = 'button';
     chip.className = 'agent-prompt-chip';
-    chip.textContent = prompt;
     chip.title = '点击直接发送';
+    const cap = document.createElement('strong');
+    cap.textContent = capability;
+    const task = document.createElement('span');
+    task.textContent = prompt;
+    chip.append(cap, task);
     chip.addEventListener('click', () => {
       if (!input || input.disabled || !form) return;
       input.value = prompt;
@@ -1397,4 +1523,5 @@ launcher?.addEventListener('pointerdown', (event) => {
 setAgentDrawer(false, false);
 
 initSessionRail();
+void refreshRuntimeStatus();
 })();
