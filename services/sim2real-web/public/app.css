@@ -9884,6 +9884,34 @@ body [data-view-section='deploy'] .release-step.is-blocked {
   background: color-mix(in srgb, var(--accent) 6%, var(--panel));
 }
 body [data-view-section='deploy'] .release-step.is-locked { opacity: .48; }
+
+/* The first-run training path is a sequence of focused screens. Keep one
+   step per row so each module reads as its own page-sized handoff instead of
+   compressing three actions into a horizontal strip. */
+body .train-onboarding-steps {
+  grid-template-columns: 1fr;
+  gap: 10px;
+}
+
+body .train-onboarding-step {
+  min-height: 64px;
+  padding: 16px;
+  align-items: flex-start;
+}
+
+body .train-onboarding-step b {
+  flex: 0 0 28px;
+  width: 28px;
+  height: 28px;
+}
+
+body .train-onboarding-step strong {
+  font-size: 14px;
+}
+
+body .train-onboarding-step small {
+  line-height: 1.45;
+}
 body [data-view-section='deploy'] .promotion-stage {
   min-height: 78px;
   background: color-mix(in srgb, var(--panel-soft) 72%, transparent);
