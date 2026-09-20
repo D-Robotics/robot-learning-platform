@@ -9913,67 +9913,101 @@ body .train-onboarding-step small {
   line-height: 1.45;
 }
 
-/* Make the sidebar express the same hierarchy as the workspace: a workflow
-   domain owns task pages, while cross-cutting resources stay in their own
-   operations group. */
-body .workflow-nav-hierarchical {
-  display: grid;
-  gap: 4px;
+/* Final visual system for the hierarchical workspace navigation. The old
+   global button reset is intentionally overridden here so nested task links
+   never fall back to native browser chrome. */
+body .workflow-nav-hierarchical summary.nav-item-parent {
+  appearance: none;
+  -webkit-appearance: none;
+  list-style: none;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--muted-strong);
+  box-shadow: none;
+  transition: background .18s ease, border-color .18s ease, color .18s ease;
 }
 
-body .workflow-nav-hierarchical > .sidebar-nav-group {
-  margin: 0;
+body .workflow-nav-hierarchical summary.nav-item-parent::-webkit-details-marker {
+  display: none;
 }
 
-body .workflow-nav-hierarchical .nav-item-parent {
-  width: 100%;
-  display: grid;
-  grid-template-columns: 28px minmax(0, 1fr) 16px;
-  align-items: center;
-  gap: 8px;
-  border: 0;
-  text-align: left;
-  cursor: pointer;
-}
-
-body .workflow-nav-hierarchical .nav-item-parent > i {
-  color: var(--muted);
-  font-style: normal;
-  transition: transform .16s ease;
-}
-
-body .workflow-nav-hierarchical .sidebar-nav-group[open] .nav-item-parent > i {
-  transform: rotate(180deg);
+body .workflow-nav-hierarchical summary.nav-item-parent:hover,
+body .workflow-nav-hierarchical summary.nav-item-parent:focus-visible,
+body .workflow-nav-hierarchical .sidebar-nav-group[open] > summary.nav-item-parent {
+  border-color: var(--ui-border-soft);
+  background: var(--ui-surface-tint);
+  color: var(--text);
+  outline: none;
 }
 
 body .workflow-nav-hierarchical .nav-subitems {
-  display: grid;
-  gap: 2px;
-  margin: 2px 0 6px 32px;
-  padding-left: 12px;
-  border-left: 1px solid var(--line);
+  position: relative;
+  gap: 4px;
+  margin: 4px 0 8px 32px;
+  padding: 4px 0 4px 16px;
+  border-left: 1px solid color-mix(in srgb, var(--accent) 28%, var(--line));
+}
+
+body .workflow-nav-hierarchical .nav-subitems::before {
+  content: '';
+  position: absolute;
+  left: -1px;
+  top: 0;
+  bottom: 0;
+  width: 1px;
+  background: linear-gradient(180deg, transparent, var(--accent-ring) 18%, var(--accent-ring) 82%, transparent);
 }
 
 body .workflow-nav-hierarchical .nav-subitem {
+  appearance: none;
+  -webkit-appearance: none;
+  display: block;
+  width: 100%;
   min-height: 32px;
-  padding: 6px 10px;
-  border: 0;
-  border-radius: 8px;
+  padding: 8px 12px;
+  border: 1px solid transparent;
+  border-radius: 10px;
   background: transparent;
   color: var(--muted-strong);
-  text-align: left;
   font: inherit;
   font-size: var(--fs-meta);
-  cursor: pointer;
+  line-height: 1.35;
+  text-align: left;
+  box-shadow: none;
+  transition: background .18s ease, border-color .18s ease, color .18s ease, transform .18s ease;
+}
+
+body .workflow-nav-hierarchical .nav-subitem::before {
+  content: '';
+  display: inline-block;
+  width: 5px;
+  height: 5px;
+  margin: 0 8px 2px 0;
+  border: 1px solid currentColor;
+  border-radius: 50%;
+  opacity: .48;
+  transition: background .18s ease, opacity .18s ease;
 }
 
 body .workflow-nav-hierarchical .nav-subitem:hover,
 body .workflow-nav-hierarchical .nav-subitem:focus-visible,
 body .workflow-nav-hierarchical .nav-subitem.is-active {
-  background: var(--accent-soft);
+  border-color: color-mix(in srgb, var(--accent) 28%, transparent);
+  background: linear-gradient(90deg, var(--accent-soft), color-mix(in srgb, var(--accent-soft) 45%, transparent));
   color: var(--accent-text);
+  box-shadow: 0 4px 12px color-mix(in srgb, var(--accent) 10%, transparent);
   outline: none;
+  transform: translateX(2px);
 }
+
+body .workflow-nav-hierarchical .nav-subitem.is-active::before {
+  border-color: var(--accent);
+  background: var(--accent);
+  opacity: 1;
+}
+
+
+
 body [data-view-section='deploy'] .promotion-stage {
   min-height: 78px;
   background: color-mix(in srgb, var(--panel-soft) 72%, transparent);
