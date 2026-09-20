@@ -22,3 +22,13 @@ adapters/
 profiles/
 tasks/
 examples/
+
+# Binary TorchScript evidence files retain a .ts suffix for runtime compatibility.
+engines/microduck-football/evidence/**/*.ts
+
+# Generated binary/evidence bundles and legacy assertion fixtures are validated
+# by their own contract checks; Prettier must not rewrite them.
+engines/microduck-football/evidence/**/*.json
+server/agent-runtime/dsh-capability-handlers.ts
+services/sim2real-web/agent-chat.test.ts
+services/sim2real-web/ui-layout-invariants.mjs
