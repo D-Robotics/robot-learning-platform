@@ -145,9 +145,8 @@ assert.match(
   'app.js must delegate IMU quaternion parsing',
 );
 
-// ---- IA: one navigation surface, grouped like RDK Studio ----
-// 开始 (overview + agent) / 学习闭环 (01–04 real workflow) / 资源与工具 (compute,
-// records, station). Contract remains a fold on train.
+// ---- IA: one navigation surface, grouped by user intent ----
+// 工作区 / 构建策略 / 交付到设备 / 证据中心. Execution backends remain resources.
 const viewNames = [...app.matchAll(/WORKFLOW_VIEWS\s*=\s*\[([^\]]+)\]/g)][0][1]
   .match(/['"][^'"]+['"]/g)
   .map((value) => value.slice(1, -1));
@@ -171,34 +170,29 @@ assert.deepEqual(
 );
 
 const navItems = [...html.matchAll(/class="nav-item(?:\s[^"]*)?"/g)].length;
-assert.equal(
-  navItems,
-  9,
-  'sidebar nav: overview + agent + steps 01-04 + compute + records + station',
-);
+assert.equal(navItems, 8, 'sidebar nav: workspace + build strategy + delivery + evidence center');
 const navLabels = [
   ...html.matchAll(/class="nav-item(?:\s[^"]*)?"[\s\S]*?<strong>([^<]+)<\/strong>/g),
 ].map((m) => m[1]);
 assert.deepEqual(
   navLabels,
   [
-    '工作台',
-    'Agent 对话',
-    '仿真与录制',
-    '强化学习训练',
-    'Sim2Real 评测',
-    '部署与反馈',
-    'GPU 与算力',
-    '证据与记录',
-    '设备控制台',
+    '项目概况',
+    'Agent 助手',
+    '数据与仿真',
+    '训练与策略',
+    '评测与证据',
+    '设备与发布',
+    '对象与证据',
+    '执行资源',
   ],
   'sidebar nav labels must match the three-group IA',
 );
 const navGroups = [...html.matchAll(/class="nav-label">([^<]+)<\/div>/g)].map((m) => m[1]);
 assert.deepEqual(
   navGroups,
-  ['开始', '学习闭环', '资源与运维'],
-  'sidebar must group nav around the learning loop: start / loop / advanced tools (collapsed by default)',
+  ['工作区', '构建策略', '交付到设备', '证据中心'],
+  'sidebar must group nav by workspace, strategy construction, delivery, and evidence',
 );
 
 assert.match(html, /app\.css/, 'the merged app.css must be loaded');
