@@ -210,6 +210,25 @@ describe('DSH runtime chat composition', () => {
     expect(followup.text).toBe('你好！我是 RDK 工作台智能体。');
   }, 60_000);
 
+  it('recovers when the browser keeps a session id whose server transcript is gone', async () => {
+    const gateway = await startChatGateway((request, response) => {
+      if (!request.url.includes('/chat/completions')) {
+        response.writeHead(404).end();
+        return;
+      }
+      sseReply(response, ['会话已恢复。']);
+    });
+    process.env.RDK_SIM2REAL_DSH_BASE_URL = gateway.baseUrl;
+    process.env.RDK_SIM2REAL_DSH_API_KEY = 'dedicated-dsh-key';
+    const ctx = await composeRuntime();
+
+    const result = await askDsh(ctx, '继续', { sessionId: 'sim2real-stale-browser-session' });
+
+    expect(result.sessionId).toBe('sim2real-stale-browser-session');
+    expect(result.text).toBe('会话已恢复。');
+    expect(gateway.requests).toHaveLength(1);
+  }, 60_000);
+
   it('drops reasoning-block preamble from the reply text of reasoning models', async () => {
     // The managed RDK Studio gateway fronts a reasoning model that streams its
     // thinking through `reasoning_content` deltas before the visible answer.

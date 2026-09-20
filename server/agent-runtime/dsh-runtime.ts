@@ -419,10 +419,23 @@ export async function askDsh(
   // A follow-up must resume the persisted session. Calling create() with an
   // id that already has durable history races the registry's live-session
   // ownership check and surfaces an opaque UNKNOWN/id-collision failure after
-  // the first successful turn.
-  const handle = options.sessionId
-    ? await ctx.agents.resume({ resumeSessionId: id, agentOptions })
-    : await ctx.agents.create({ sessionId: id, agentOptions });
+  // the first successful turn. A browser can still hold a session id after a
+  // release, storage restore, or manual cleanup removed its server-side
+  // transcript, though. In that case the session is recoverable: start a new
+  // session under the same opaque id so the next turn works without requiring
+  // users to clear local storage or create a new conversation manually.
+  let handle;
+  if (options.sessionId) {
+    try {
+      handle = await ctx.agents.resume({ resumeSessionId: id, agentOptions });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error ?? '');
+      if (!/session .*not found/i.test(message)) throw error;
+      handle = await ctx.agents.create({ sessionId: id, agentOptions });
+    }
+  } else {
+    handle = await ctx.agents.create({ sessionId: id, agentOptions });
+  }
   const cancelOnAbort = () => handle.agent.cancel({ kind: 'parent' });
   try {
     if (options.signal?.aborted) {
