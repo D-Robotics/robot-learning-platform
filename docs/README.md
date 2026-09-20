@@ -47,6 +47,8 @@
 | 文档 | 用途 |
 | --- | --- |
 | [`design/sim2real-platform.md`](design/sim2real-platform.md) | 平台总体设计 |
+| [`rdk-engineering-intelligence-foundation-solution.md`](rdk-engineering-intelligence-foundation-solution.md) | RDK 工程智能能力底座、原子能力与 Case 化落地方案 |
+| [`rdk-observability-center-detailed-design.md`](rdk-observability-center-detailed-design.md) | 可观测与证据中心的数据采集、格式、存储、质量门和迁移设计 |
 | [`design/rdk-duck-product-design.md`](design/rdk-duck-product-design.md) | 产品设计 |
 | [`design/sim2real-90-acceptance.md`](design/sim2real-90-acceptance.md) | 90 分验收标准 |
 | [`design/sim2real-mvp-guide.md`](design/sim2real-mvp-guide.md) | MVP 流程指南 |

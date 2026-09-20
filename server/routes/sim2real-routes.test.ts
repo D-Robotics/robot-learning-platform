@@ -1859,6 +1859,37 @@ describe('Sim2Real HTTP routes', () => {
     }
   });
 
+  it('keeps browser-relayed GPU resources out of server-side health probes', async () => {
+    const router = await fixture();
+    const created = await invoke(router, 'post', '/api/sim2real/compute-resources', {
+      body: {
+        name: 'browser-agent-gpu',
+        source: 'local-agent',
+        runnerUrl: 'http://127.0.0.1:19190/proxy',
+      },
+    });
+    expect(created.statusCode).toBe(201);
+    expect(created.body.computeResource).toMatchObject({ source: 'local-agent' });
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (() => {
+      throw new Error('server must not probe a user loopback agent');
+    }) as typeof fetch;
+    try {
+      const resourceId = created.body.computeResource.id;
+      const tested = await invoke(router, 'post', '/api/sim2real/compute-resources/:id/test', {
+        params: { id: resourceId },
+      });
+      expect(tested.statusCode).toBe(200);
+      expect(tested.body).toMatchObject({
+        browserRelay: true,
+        connected: false,
+        computeResource: { source: 'local-agent' },
+      });
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
   it('runs through an account-owned GPU resource when the global runner is absent', async () => {
     delete process.env.RDK_SIM2REAL_LOCAL_RUNNER_URL;
     const originalFetch = globalThis.fetch;

@@ -29,7 +29,8 @@ export interface RobotAdapterManifest {
       imu: RobotAdapterTopic;
       odom: RobotAdapterTopic;
       battery: RobotAdapterTopic;
-      cmdVel: RobotAdapterTopic;
+      cmdVel?: RobotAdapterTopic;
+      jointCommand?: RobotAdapterTopic;
     };
   };
   actuator: {
@@ -103,7 +104,7 @@ export function validateRobotAdapterManifest(input: unknown): {
   }
 
   const topicNames = new Set<string>();
-  for (const key of ['imu', 'odom', 'battery', 'cmdVel']) {
+  for (const key of ['imu', 'odom', 'battery']) {
     const topic = record(topics[key]);
     if (!nonEmpty(topic.name) || !String(topic.name ?? '').startsWith('/')) {
       errors.push(`ros.topics.${key}.name must be absolute`);
@@ -132,12 +133,26 @@ export function validateRobotAdapterManifest(input: unknown): {
   if (!nonEmpty(actuator.messageType) || !String(actuator.messageType ?? '').includes('/')) {
     errors.push('actuator.messageType is required');
   }
-  const cmdVel = record(topics.cmdVel);
-  if (actuator.commandTopic !== cmdVel.name) {
-    errors.push('actuator.commandTopic must match ros.topics.cmdVel.name');
-  }
-  if (actuator.messageType !== cmdVel.type) {
-    errors.push('actuator.messageType must match ros.topics.cmdVel.type');
+  const commandKey = family === 'joint' ? 'jointCommand' : 'cmdVel';
+  const commandTopic = record(topics[commandKey]);
+  if (!nonEmpty(commandTopic.name) || !String(commandTopic.name ?? '').startsWith('/')) {
+    errors.push(`ros.topics.${commandKey} is required for ${family} actuator`);
+  } else {
+    if (!nonEmpty(commandTopic.type) || !String(commandTopic.type ?? '').includes('/')) {
+      errors.push(`ros.topics.${commandKey}.type is required`);
+    }
+    if (typeof commandTopic.required !== 'boolean') {
+      errors.push(`ros.topics.${commandKey}.required must be boolean`);
+    }
+    const commandName = String(commandTopic.name);
+    if (topicNames.has(commandName)) errors.push(`duplicate ROS topic: ${commandName}`);
+    topicNames.add(commandName);
+    if (actuator.commandTopic !== commandTopic.name) {
+      errors.push(`actuator.commandTopic must match ros.topics.${commandKey}.name`);
+    }
+    if (actuator.messageType !== commandTopic.type) {
+      errors.push(`actuator.messageType must match ros.topics.${commandKey}.type`);
+    }
   }
 
   const maxLinear = Number(actuator.maxLinear);

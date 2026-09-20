@@ -214,6 +214,37 @@ assert.throws(
   'legacy pack with an unknown engine id must fail loudly at resolve time',
 );
 
+// Full-body MicroDuck packs must resolve to the external CUDA engine and carry
+// a joint-position contract all the way into the training request. This keeps
+// a 61D/14D leg policy from silently falling back to the wheeled starter path.
+for (const taskId of ['microduck-stand', 'microduck-walk', 'microduck-kick', 'microduck-recover']) {
+  const pack = resolveTaskPack(taskId);
+  const request = trainingRequestFor(pack, { profile: 'smoke' });
+  assert.equal(pack.kind, 'microduck-locomotion', `${taskId}: task kind`);
+  assert.equal(pack.recommendedEngine, 'microduck-rl', `${taskId}: engine recommendation`);
+  assert.equal(pack.adapter.actuator.kind, 'joint', `${taskId}: joint actuator`);
+  assert.equal(pack.adapter.policy.observationSize, 61, `${taskId}: observation size`);
+  assert.equal(pack.adapter.policy.actionSize, 14, `${taskId}: action size`);
+  assert.equal(request.contract.actionOutput, 'joint-position-offset', `${taskId}: action output`);
+  assert.deepEqual(request.contract.actionScale, {
+    joint: 0.35,
+    units: 'rad offset from home position',
+  });
+  assert.ok(pack.microduckTask?.upstreamTaskId, `${taskId}: upstream task id`);
+  assert.equal(pack.qualityGate?.gateOn, 'ciLowerBound', `${taskId}: quality gate`);
+}
+for (const [alias, canonical] of Object.entries({
+  walk: 'microduck-walk',
+  kick: 'microduck-kick',
+  recover: 'microduck-recover',
+  sit: 'microduck-stand',
+})) {
+  const pack = resolveTaskPack(alias);
+  assert.equal(pack.id, canonical, `${alias}: UI alias resolves to canonical pack`);
+  assert.equal(pack.resolvedTaskId, canonical, `${alias}: resolved task id`);
+  assert.equal(pack.recommendedEngine, 'microduck-rl', `${alias}: engine recommendation`);
+}
+
 console.log(
-  '[task-pack] PASS — 2 packs resolved, layouts aligned with board runtime, request shape valid',
+  '[task-pack] PASS — navigation and four MicroDuck packs resolved, layouts aligned with board runtime',
 );

@@ -22,6 +22,7 @@ import type { LatencyMeasurementStage } from '../../shared/board-rehearsal.js';
 import type { Sim2RealRunRecord } from '../../shared/sim2real.js';
 import type { Device } from '../../shared/types.js';
 import { principalCan, SIM2REAL_PERMISSIONS } from '../sim2real/sim2real-rbac.js';
+import { publicDeviceSummary } from '../sim2real/sim2real-service.js';
 
 /**
  * Read-only host-station command whitelist. Kept identical to
@@ -700,14 +701,17 @@ export function registerSim2RealBoardStationRoutes(
       response.json({
         ok: true,
         agentConfigured: isBoardAgentConfigured(),
-        devices: devices.map((device) => ({
-          id: device.id,
-          name: device.name,
-          status: device.status,
-          boardPlatform: device.boardPlatform ?? null,
-          boardModel: device.boardModel ?? null,
-          connectionMode: device.connectionMode ?? null,
-        })),
+        devices: devices.map((device) => {
+          const summary = publicDeviceSummary(device);
+          return {
+            id: summary.id,
+            name: summary.name,
+            status: summary.status,
+            boardPlatform: summary.boardPlatform ?? null,
+            boardModel: summary.boardModel ?? null,
+            connectionMode: summary.connectionMode ?? null,
+          };
+        }),
       });
     }),
   );

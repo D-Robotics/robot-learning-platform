@@ -59,6 +59,37 @@ jobs:
         env:
           RDK_SIM2REAL_BASE_URL: http://127.0.0.1:18102/
         run: node services/sim2real-web/ui-responsive.spec.mjs
+      - name: Run the workbench golden-path sweep
+        env:
+          RDK_SIM2REAL_BASE_URL: http://127.0.0.1:18102/
+        run: node services/sim2real-web/ui-workbench-path.spec.mjs
+      - name: Start the mock worker and a fresh journey service
+        run: |
+          JOURNEY_SCRATCH=$(mktemp -d)
+          RDK_SIM2REAL_MOCK_RUN_DURATION_MS=300 RDK_SIM2REAL_MOCK_QUEUE_DELAY_MS=0 \
+            RDK_SIM2REAL_MOCK_DATA_DIR="$JOURNEY_SCRATCH/worker" \
+            npm run dev:mock-worker > /tmp/journey-worker.log 2>&1 &
+          RDK_SIM2REAL_PORT=18103 RDK_SIM2REAL_STORAGE_DIR="$JOURNEY_SCRATCH/storage" \
+            RDK_SIM2REAL_DEPLOYMENT=local RDK_SIM2REAL_SSO_REQUIRED=0 RDK_SIM2REAL_SSO_ENABLED=0 \
+            RDK_SIM2REAL_REQUIRE_MICRODUCK=0 NO_PROXY=127.0.0.1,localhost no_proxy=127.0.0.1,localhost \
+            RDK_SIM2REAL_LOCAL_RUNNER_URL=http://127.0.0.1:19090/train RDK_SIM2REAL_LOCAL_RUNNER_MODE=mock \
+            npm run dev:sim2real > /tmp/journey-service.log 2>&1 &
+          for i in $(seq 1 60); do
+            if curl -fsS http://127.0.0.1:18103/healthz > /dev/null; then exit 0; fi
+            sleep 1
+          done
+          echo "journey service did not come up; log follows"; cat /tmp/journey-service.log; exit 1
+      - name: Run the training-journey sweep
+        env:
+          RDK_SIM2REAL_BASE_URL: http://127.0.0.1:18103/
+        run: node services/sim2real-web/ui-train-journey.spec.mjs
+      - name: Upload the journey logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: journey-service-logs
+          path: /tmp/journey-*.log
+          if-no-files-found: ignore
       - name: Upload the service log on failure
         if: failure()
         uses: actions/upload-artifact@v4

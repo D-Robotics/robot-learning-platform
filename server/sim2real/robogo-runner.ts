@@ -466,6 +466,12 @@ function safeMetrics(value: unknown): Sim2RealRunMetrics | undefined {
       ? {}
       : { reward: bounded('reward', -1_000_000, 1_000_000) }),
     ...(bounded('successRate', 0, 1) == null ? {} : { successRate: bounded('successRate', 0, 1) }),
+    ...(bounded('evaluationEpisodes', 1, 2_000_000) == null
+      ? {}
+      : { evaluationEpisodes: Math.floor(bounded('evaluationEpisodes', 1, 2_000_000) as number) }),
+    ...(bounded('meanReturn', -1_000_000, 1_000_000) == null
+      ? {}
+      : { meanReturn: bounded('meanReturn', -1_000_000, 1_000_000) }),
     ...(bounded('fallRate', 0, 1) == null ? {} : { fallRate: bounded('fallRate', 0, 1) }),
     ...(bounded('episodeLength', 0, 2_000_000) == null
       ? {}

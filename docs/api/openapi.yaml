@@ -159,6 +159,38 @@ paths:
               schema:
                 $ref: "#/components/schemas/WorkspaceSummaryResponse"
         "401": { $ref: "#/components/responses/AuthRequired" }
+  /api/v1/duck/golden-path:
+    get:
+      tags: [workspace]
+      summary: Read the canonical RDK Golden Path state
+      operationId: getRdkGoldenPath
+      description: >-
+        Returns one account-scoped read model for task selection, dataset
+        readiness, training, evaluation, RDK deployment and board feedback.
+        The response is read-only and safe to poll while a worker is running.
+      parameters:
+        - in: query
+          name: projectId
+          schema: { type: string, maxLength: 160 }
+        - in: query
+          name: modelId
+          schema: { type: string, maxLength: 160 }
+        - in: query
+          name: taskId
+          schema: { type: string, maxLength: 160 }
+      responses:
+        "200":
+          description: Canonical six-stage RDK workflow state.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [ok, goldenPath]
+                properties:
+                  ok: { type: boolean }
+                  goldenPath: { type: object }
+        "401": { $ref: "#/components/responses/AuthRequired" }
+        "404": { $ref: "#/components/responses/NotFound" }
   /api/v1/duck/audit:
     get:
       tags: [workspace]
@@ -393,6 +425,65 @@ paths:
           content: { application/json: { schema: { $ref: "#/components/schemas/RunResponse" } } }
         "400": { $ref: "#/components/responses/BadRequest" }
         "409": { description: Run is not reconcilable or the id does not match. }
+  /api/v1/duck/runs/{runId}/relay/claim:
+    post:
+      tags: [runs]
+      summary: Claim a run submitted by the user's browser Local GPU Agent
+      operationId: claimRelayRun
+      parameters:
+        - $ref: "#/components/parameters/RunId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [externalRunId]
+              properties:
+                externalRunId: { type: string, maxLength: 120 }
+      responses:
+        "200": { description: Relay run claimed. }
+        "409": { description: Another browser already claimed the run. }
+  /api/v1/duck/runs/{runId}/relay/sync:
+    post:
+      tags: [runs]
+      summary: Sync status from a browser Local GPU Agent
+      operationId: syncRelayRun
+      parameters:
+        - $ref: "#/components/parameters/RunId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [status]
+              properties:
+                status: { type: string, enum: [queued, running, completed, failed] }
+                message: { type: string, maxLength: 500 }
+      responses:
+        "200": { description: Relay status accepted. }
+        "400": { $ref: "#/components/responses/BadRequest" }
+  /api/v1/duck/runs/{runId}/relay/artifact:
+    post:
+      tags: [runs]
+      summary: Upload a digest-verified artifact from a browser Local GPU Agent
+      operationId: uploadRelayArtifact
+      parameters:
+        - $ref: "#/components/parameters/RunId"
+        - name: X-Artifact-Sha256
+          in: header
+          required: true
+          schema: { type: string, pattern: "^[a-f0-9]{64}$" }
+      requestBody:
+        required: true
+        content:
+          application/octet-stream:
+            schema: { type: string, format: binary }
+      responses:
+        "200": { description: Artifact stored after SHA-256 verification. }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "413": { description: Artifact exceeds 50 MiB. }
   /api/v1/duck/runs/{runId}/policy.onnx:
     get:
       tags: [runs]
@@ -808,6 +899,49 @@ paths:
                             description: { type: string }
                             readOnly: { type: boolean }
                             bound: { type: boolean }
+  /api/sim2real/dsh/approvals:
+    get:
+      tags: [agent]
+      summary: List pending DSH tool approvals for the current owner
+      operationId: listDshApprovals
+      responses:
+        "200":
+          description: Pending approvals.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [ok, approvals]
+                properties:
+                  ok: { type: boolean }
+                  approvals: { type: array, items: { type: object } }
+        "401": { $ref: "#/components/responses/AuthRequired" }
+        "403": { description: Account lacks the Agent permission. }
+  /api/sim2real/dsh/approvals/{approvalId}:
+    post:
+      tags: [agent]
+      summary: Approve or reject one pending DSH tool request
+      operationId: decideDshApproval
+      parameters:
+        - in: path
+          name: approvalId
+          required: true
+          schema: { type: string, maxLength: 160 }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [decision]
+              properties:
+                decision: { type: string, enum: [approve, reject] }
+      responses:
+        "200": { description: Decision recorded, content: { application/json: { schema: { type: object } } } }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/AuthRequired" }
+        "403": { description: Account lacks the Agent permission. }
+        "404": { $ref: "#/components/responses/NotFound" }
   /api/sim2real/dsh/chat:
     post:
       tags: [agent]

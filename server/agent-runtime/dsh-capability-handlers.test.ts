@@ -5,6 +5,7 @@ import {
   createDshCapabilityHandlers,
   type LoopbackFetch,
 } from './dsh-capability-handlers.js';
+import { listDshCapabilityCatalog } from './dsh-capability-tools.js';
 
 /**
  * Handlers are tested against a fake loopback fetch that records the outgoing
@@ -57,6 +58,124 @@ afterEach(() => {
 });
 
 describe('DSH capability handlers', () => {
+  it('binds every catalog entry to a product route handler', () => {
+    const { fetchImpl } = fakeLoopback([() => ({ status: 200, body: {} })]);
+    const catalog = listDshCapabilityCatalog(createDshCapabilityHandlers({ fetchImpl }));
+    expect(catalog.length).toBeGreaterThan(30);
+    expect(catalog.every((item) => item.bound)).toBe(true);
+  });
+
+  it('covers workspace catalog reads and keeps request filters explicit', async () => {
+    const { fetchImpl, calls } = fakeLoopback([
+      () => ({ status: 200, body: { counts: { projects: 2 }, latest: { run: null } } }),
+      () => ({ status: 200, body: { projects: [{ id: 'p1', name: '导航', slug: 'nav' }] } }),
+      () => ({ status: 200, body: { datasets: [{ id: 'd1', name: '轨迹', status: 'ready' }] } }),
+      () => ({ status: 200, body: { runs: [{ id: 'r1', status: 'completed' }] } }),
+    ]);
+    const handlers = createDshCapabilityHandlers({ fetchImpl });
+    const exec = { signal: new AbortController().signal } as never;
+
+    await expect(handlers.rdk_workspace_summary({}, exec)).resolves.toMatchObject({
+      counts: { projects: 2 },
+    });
+    await expect(handlers.rdk_projects_list({}, exec)).resolves.toEqual({
+      projects: [{ id: 'p1', name: '导航', slug: 'nav', description: null }],
+    });
+    await expect(handlers.rdk_datasets_list({}, exec)).resolves.toMatchObject({
+      datasets: [{ id: 'd1', name: '轨迹', status: 'ready' }],
+    });
+    await expect(
+      handlers.rdk_runs_list({ modelId: 'model-a', status: 'completed', limit: 7 }, exec),
+    ).resolves.toMatchObject({ runs: [{ id: 'r1', status: 'completed' }] });
+    expect(calls.at(-1)?.path).toBe('/api/sim2real/runs?modelId=model-a&status=completed&limit=7');
+  });
+
+  it('routes model validation, artifact promotion and deployment lifecycle actions', async () => {
+    const { fetchImpl, calls } = fakeLoopback([
+      () => ({ status: 200, body: { validation: { valid: true, errors: [], warnings: [] } } }),
+      () => ({ status: 200, body: { artifact: { id: 'a1', status: 'published' } } }),
+      () => ({ status: 200, body: { deployment: { id: 'dep-1', status: 'planned' } } }),
+      () => ({ status: 200, body: { deploymentId: 'dep-1', history: [], verification: null } }),
+      () => ({ status: 200, body: { deployment: { id: 'dep-1', status: 'cancelled' } } }),
+    ]);
+    const handlers = createDshCapabilityHandlers({ fetchImpl });
+    const exec = { signal: new AbortController().signal } as never;
+    await expect(
+      handlers.rdk_model_validate({ manifest: { robot: { id: 'x' } } }, exec),
+    ).resolves.toMatchObject({
+      valid: true,
+    });
+    await expect(
+      handlers.rdk_artifact_promote({ artifactId: 'a1', status: 'published' }, exec),
+    ).resolves.toMatchObject({ artifactId: 'a1', status: 'published' });
+    await expect(
+      handlers.rdk_deployment_status({ deploymentId: 'dep-1' }, exec),
+    ).resolves.toMatchObject({
+      deployment: { status: 'planned' },
+    });
+    await expect(
+      handlers.rdk_deployment_history({ deploymentId: 'dep-1' }, exec),
+    ).resolves.toMatchObject({
+      deploymentId: 'dep-1',
+    });
+    await expect(
+      handlers.rdk_deployment_cancel({ deploymentId: 'dep-1' }, exec),
+    ).resolves.toMatchObject({
+      status: 'cancelled',
+    });
+    expect(calls.map((call) => `${call.method} ${call.path}`)).toEqual([
+      'POST /api/sim2real/models/validate',
+      'PATCH /api/sim2real/artifacts/a1',
+      'GET /api/sim2real/deployments/dep-1',
+      'GET /api/sim2real/deployments/dep-1/history',
+      'POST /api/sim2real/deployments/dep-1/cancel',
+    ]);
+  });
+
+  it('passes the selected device to board station tools and compacts telemetry', async () => {
+    const { fetchImpl, calls } = fakeLoopback([
+      () => ({ status: 200, body: { ok: true, status: { state: 'idle' } } }),
+      () => ({
+        status: 200,
+        body: {
+          ok: true,
+          telemetry: [
+            {
+              id: 'chunk-1',
+              source: 'board-agent',
+              sequence: 3,
+              receivedAt: '2026-01-01T00:00:00Z',
+              samples: [{ t: 1 }, { t: 2 }],
+              attested: true,
+            },
+          ],
+          count: 1,
+        },
+      }),
+    ]);
+    const handlers = createDshCapabilityHandlers({ fetchImpl });
+    const exec = { signal: new AbortController().signal } as never;
+    await expect(
+      handlers.rdk_board_station_status({ deviceId: 'device-x5' }, exec),
+    ).resolves.toMatchObject({ status: { state: 'idle' } });
+    const telemetry = (await handlers.rdk_telemetry_list({ runId: 'run-1' }, exec)) as Record<
+      string,
+      unknown
+    >;
+    expect(telemetry.telemetry).toEqual([
+      {
+        id: 'chunk-1',
+        source: 'board-agent',
+        sequence: 3,
+        receivedAt: '2026-01-01T00:00:00Z',
+        sampleCount: 2,
+        droppedCount: null,
+        attested: true,
+      },
+    ]);
+    expect(calls[0].path).toBe('/api/sim2real/board-station/status?deviceId=device-x5');
+  });
+
   it('forwards the caller session headers to loopback route calls', async () => {
     const { fetchImpl, calls } = fakeLoopback([() => ({ status: 200, body: overviewPayload })]);
     const handlers = createDshCapabilityHandlers({ fetchImpl });
@@ -70,6 +189,49 @@ describe('DSH capability handlers', () => {
     expect(calls[0].path).toBe('/api/sim2real/overview');
     expect(calls[0].headers.cookie).toBe('session=abc');
     expect(calls[0].headers.authorization).toBe('Bearer tok');
+  });
+
+  it('keeps concurrent auth contexts isolated and reuses a turn id for writes', async () => {
+    const { fetchImpl, calls } = fakeLoopback([
+      () => ({ status: 200, body: overviewPayload }),
+      () => ({ status: 200, body: overviewPayload }),
+      () => ({ status: 201, body: { ok: true, run: { id: 'run-a', status: 'queued' } } }),
+      () => ({ status: 201, body: { ok: true, run: { id: 'run-b', status: 'queued' } } }),
+    ]);
+    const handlers = createDshCapabilityHandlers({ fetchImpl });
+    const channel = createDshAuthChannel();
+    const exec = { signal: new AbortController().signal } as never;
+    await Promise.all([
+      channel.withAuth({ cookie: 'alice', 'x-sim2real-turn-id': 'turn-a' }, () =>
+        handlers.rdk_training_submit({}, exec),
+      ),
+      channel.withAuth({ cookie: 'bob', 'x-sim2real-turn-id': 'turn-b' }, () =>
+        handlers.rdk_training_submit({}, exec),
+      ),
+    ]);
+    const submits = calls.filter((call) => call.path === '/api/sim2real/runs');
+    expect(submits).toHaveLength(2);
+    expect(new Set(submits.map((call) => call.headers.cookie))).toEqual(new Set(['alice', 'bob']));
+    expect(submits[0].headers['idempotency-key']).toMatch(/^dsh-training-turn-[ab]-0$/);
+    expect(submits[1].headers['idempotency-key']).toMatch(/^dsh-training-turn-[ab]-0$/);
+  });
+
+  it('separates repeated writes of the same kind within one turn', async () => {
+    const { fetchImpl, calls } = fakeLoopback([
+      () => ({ status: 201, body: { ok: true, run: { id: 'run-1', status: 'queued' } } }),
+      () => ({ status: 201, body: { ok: true, run: { id: 'run-2', status: 'queued' } } }),
+    ]);
+    const handlers = createDshCapabilityHandlers({ fetchImpl });
+    const channel = createDshAuthChannel();
+    const exec = { signal: new AbortController().signal } as never;
+    await channel.withAuth({ 'x-sim2real-turn-id': 'turn-repeat' }, async () => {
+      await handlers.rdk_training_submit({}, exec);
+      await handlers.rdk_training_submit({}, exec);
+    });
+    const keys = calls
+      .filter((call) => call.path === '/api/sim2real/runs')
+      .map((call) => call.headers['idempotency-key']);
+    expect(keys).toEqual(['dsh-training-turn-repeat-0', 'dsh-training-turn-repeat-1']);
   });
 
   it('digests the overview to compact model/run/device facts', async () => {

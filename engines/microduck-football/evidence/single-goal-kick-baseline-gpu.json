@@ -1,0 +1,68 @@
+{
+  "task": "single-goal-kick",
+  "episodes": 10,
+  "goals": 3,
+  "successRate": 0.3,
+  "episodeResults": [
+    {
+      "goal": false,
+      "return": -1.8762007331242785,
+      "steps": 25,
+      "ballX": 3.473193484846103
+    },
+    {
+      "goal": false,
+      "return": -2.1338357538043056,
+      "steps": 27,
+      "ballX": 0.8214313884057611
+    },
+    {
+      "goal": true,
+      "return": 10.244950305170732,
+      "steps": 22,
+      "ballX": 2.9166979237789334
+    },
+    {
+      "goal": false,
+      "return": -3.2841298865314457,
+      "steps": 123,
+      "ballX": -3.789744787261107
+    },
+    {
+      "goal": false,
+      "return": -1.9338528279477032,
+      "steps": 20,
+      "ballX": 2.6071176019848843
+    },
+    {
+      "goal": false,
+      "return": -1.9269802714698017,
+      "steps": 25,
+      "ballX": 2.9930592747100064
+    },
+    {
+      "goal": true,
+      "return": 10.215584180760743,
+      "steps": 21,
+      "ballX": 2.9757792016470304
+    },
+    {
+      "goal": false,
+      "return": -1.9706245136912912,
+      "steps": 25,
+      "ballX": 2.7680562579233503
+    },
+    {
+      "goal": true,
+      "return": 10.215028807986528,
+      "steps": 21,
+      "ballX": 2.9405412058883984
+    },
+    {
+      "goal": false,
+      "return": -1.932421603536568,
+      "steps": 19,
+      "ballX": 2.039563171063533
+    }
+  ]
+}

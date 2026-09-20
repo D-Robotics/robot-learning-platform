@@ -18,6 +18,10 @@ const required = [
     ['"ts": time.time()', 'policy-input-dimension-mismatch', 'RDK_BOARD_TELEMETRY_SPOOL'],
   ],
   [
+    'services/sim2real-web/board-joint-policy-runtime.py',
+    ['trajectory_msgs/msg/JointTrajectory', 'build_joint_observation', 'joint-position-offset'],
+  ],
+  [
     'services/sim2real-web/board-telemetry-uploader.py',
     [
       'RDK_SIM2REAL_TELEMETRY_ATTESTATION_TOKEN',

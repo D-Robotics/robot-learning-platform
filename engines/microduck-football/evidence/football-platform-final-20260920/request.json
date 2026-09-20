@@ -1,0 +1,321 @@
+{
+  "accountId": "local-dev",
+  "schemaVersion": 1,
+  "contractId": "microduck-policy-v1",
+  "model": {
+    "modelId": "microduck-official",
+    "displayName": "MicroDuck 官方步行策略",
+    "version": "upstream-browser"
+  },
+  "robot": {
+    "id": "microduck",
+    "variant": "legs"
+  },
+  "contract": {
+    "id": "microduck-policy-v1",
+    "robotId": "microduck",
+    "jointCount": 14,
+    "observationSize": 61,
+    "actionSize": 14,
+    "controlHz": 50,
+    "physicsTimestepSeconds": 0.005,
+    "decimation": 4,
+    "observationLayout": [
+      {
+        "name": "gyro",
+        "size": 3
+      },
+      {
+        "name": "projected_gravity",
+        "size": 3
+      },
+      {
+        "name": "joint_position_error",
+        "size": 14
+      },
+      {
+        "name": "joint_velocity",
+        "size": 14
+      },
+      {
+        "name": "last_action",
+        "size": 14
+      },
+      {
+        "name": "command",
+        "size": 13
+      }
+    ]
+  },
+  "simulator": {
+    "backends": [
+      "browser",
+      "local"
+    ],
+    "policyArtifactId": "official-walking-policy",
+    "policyBundle": {
+      "defaultPolicyId": "walking",
+      "policies": [
+        {
+          "id": "walking",
+          "label": "行走",
+          "artifactId": "official-walking-policy",
+          "keys": [
+            "W",
+            "A",
+            "S",
+            "D",
+            "ArrowUp",
+            "ArrowDown",
+            "ArrowLeft",
+            "ArrowRight"
+          ],
+          "description": "W/A/S/D 或方向键控制前进、后退和转向。"
+        },
+        {
+          "id": "sit-stand",
+          "label": "坐下 / 站起",
+          "artifactId": "official-sitstand-policy",
+          "keys": [
+            "R"
+          ],
+          "description": "R 在双足模式切换坐下与站立。"
+        },
+        {
+          "id": "kick-left",
+          "label": "左脚踢球",
+          "artifactId": "official-kick-left-policy",
+          "keys": [
+            "Q"
+          ],
+          "description": "Q（部分 AZERTY 键盘显示 A）触发左脚踢球。"
+        },
+        {
+          "id": "kick-right",
+          "label": "右脚踢球",
+          "artifactId": "official-kick-right-policy",
+          "keys": [
+            "E"
+          ],
+          "description": "E 触发右脚踢球。"
+        },
+        {
+          "id": "ground-pick",
+          "label": "拾取",
+          "artifactId": "official-ground-pick-policy",
+          "keys": [
+            "G"
+          ],
+          "description": "G 触发喙朝地面的拾取动作。"
+        },
+        {
+          "id": "stand-recover",
+          "label": "自恢复",
+          "artifactId": "official-stand-policy",
+          "description": "跌倒检测后由运行时自动调用，无固定键位。"
+        },
+        {
+          "id": "roller-drive",
+          "label": "滚轮移动",
+          "artifactId": "official-roller-drive-policy",
+          "keys": [
+            "M"
+          ],
+          "description": "M 切换到滚轮模式后使用滚轮策略。"
+        },
+        {
+          "id": "roller-crouch",
+          "label": "滚轮蹲伏",
+          "artifactId": "official-roller-crouch-policy",
+          "keys": [
+            "R"
+          ],
+          "description": "滚轮模式下 R 触发蹲伏滑行。"
+        }
+      ]
+    },
+    "controls": [
+      {
+        "id": "move",
+        "label": "移动",
+        "keys": [
+          "W",
+          "A",
+          "S",
+          "D",
+          "↑",
+          "↓",
+          "←",
+          "→"
+        ],
+        "description": "W/A/S/D 或方向键：前进、后退、左转、右转。",
+        "source": "keyboard"
+      },
+      {
+        "id": "kick-left",
+        "label": "左脚踢球",
+        "keys": [
+          "Q"
+        ],
+        "description": "触发左脚踢球动作。",
+        "source": "keyboard"
+      },
+      {
+        "id": "kick-right",
+        "label": "右脚踢球",
+        "keys": [
+          "E"
+        ],
+        "description": "触发右脚踢球动作。",
+        "source": "keyboard"
+      },
+      {
+        "id": "alternate-kick",
+        "label": "换脚踢球",
+        "keys": [
+          "F"
+        ],
+        "description": "由仿真引擎自动选择下一只脚。",
+        "source": "keyboard"
+      },
+      {
+        "id": "sit-toggle",
+        "label": "坐下 / 站起",
+        "keys": [
+          "R"
+        ],
+        "description": "切换坐下与站立状态。",
+        "source": "keyboard"
+      },
+      {
+        "id": "ground-pick",
+        "label": "拾取",
+        "keys": [
+          "G"
+        ],
+        "description": "触发喙朝地面的拾取动作。",
+        "source": "keyboard"
+      },
+      {
+        "id": "chase-camera",
+        "label": "跟随视角",
+        "keys": [
+          "C"
+        ],
+        "description": "切换跟随镜头，不是相机硬件控制。",
+        "source": "keyboard"
+      },
+      {
+        "id": "locomotion-mode",
+        "label": "移动模式",
+        "keys": [
+          "M"
+        ],
+        "description": "在双足与滚轮模式之间切换。",
+        "source": "keyboard"
+      },
+      {
+        "id": "quack",
+        "label": "叫一声",
+        "keys": [
+          "B"
+        ],
+        "description": "平台覆盖层快捷键（上游桌面键盘未绑定）；移动端按钮和手柄也可触发。",
+        "source": "ui"
+      },
+      {
+        "id": "reset",
+        "label": "重置仿真",
+        "keys": [
+          "Space"
+        ],
+        "description": "重新开始当前仿真。",
+        "source": "keyboard"
+      },
+      {
+        "id": "spawn-ball",
+        "label": "生成球",
+        "description": "通过移动端完整控制面板或仿真 API 触发。",
+        "source": "ui"
+      }
+    ],
+    "entryUrl": "/mujoco/microduck/"
+  },
+  "artifacts": [
+    {
+      "id": "official-walking-policy",
+      "role": "policy",
+      "name": "BEST_alpha_walking.onnx",
+      "kind": "source",
+      "format": "onnx",
+      "ref": "artifact://builtin/microduck-official/upstream-browser/policy.onnx"
+    },
+    {
+      "id": "official-sitstand-policy",
+      "role": "policy",
+      "name": "BEST_alpha_sitstand.onnx",
+      "kind": "source",
+      "format": "onnx",
+      "ref": "artifact://builtin/microduck-official/upstream-browser/BEST_alpha_sitstand.onnx"
+    },
+    {
+      "id": "official-kick-left-policy",
+      "role": "policy",
+      "name": "ball_kick_left.onnx",
+      "kind": "source",
+      "format": "onnx",
+      "ref": "artifact://builtin/microduck-official/upstream-browser/ball_kick_left.onnx"
+    },
+    {
+      "id": "official-kick-right-policy",
+      "role": "policy",
+      "name": "ball_kick_right.onnx",
+      "kind": "source",
+      "format": "onnx",
+      "ref": "artifact://builtin/microduck-official/upstream-browser/ball_kick_right.onnx"
+    },
+    {
+      "id": "official-ground-pick-policy",
+      "role": "policy",
+      "name": "alpha_ground_pick.onnx",
+      "kind": "source",
+      "format": "onnx",
+      "ref": "artifact://builtin/microduck-official/upstream-browser/alpha_ground_pick.onnx"
+    },
+    {
+      "id": "official-stand-policy",
+      "role": "policy",
+      "name": "BEST_alpha_stand.onnx",
+      "kind": "source",
+      "format": "onnx",
+      "ref": "artifact://builtin/microduck-official/upstream-browser/BEST_alpha_stand.onnx"
+    },
+    {
+      "id": "official-roller-drive-policy",
+      "role": "policy",
+      "name": "BEST_roller.onnx",
+      "kind": "source",
+      "format": "onnx",
+      "ref": "artifact://builtin/microduck-official/upstream-browser/BEST_roller.onnx"
+    },
+    {
+      "id": "official-roller-crouch-policy",
+      "role": "policy",
+      "name": "BEST_roller_crouch.onnx",
+      "kind": "source",
+      "format": "onnx",
+      "ref": "artifact://builtin/microduck-official/upstream-browser/BEST_roller_crouch.onnx"
+    }
+  ],
+  "taskId": "football-single-goal-kick",
+  "training": {
+    "profile": "standard",
+    "numEnvs": 256,
+    "maxIterations": 60,
+    "video": false,
+    "runName": "football-optimized-platform-final-20260920",
+    "algorithm": "ppo",
+    "engine": "microduck-football"
+  },
+  "idempotencyKey": "football-optimized-platform-final-20260920"
+}

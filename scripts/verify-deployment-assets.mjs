@@ -253,6 +253,7 @@ for (const relativePath of [
 const originbotHtml = read('services/sim2real-web/public/originbot-sim/index.html');
 const originbotSim = read('services/sim2real-web/public/originbot-sim/sim.js');
 const boardPolicyRuntime = read('services/sim2real-web/board-policy-runtime.py');
+const boardJointPolicyRuntime = read('services/sim2real-web/board-joint-policy-runtime.py');
 const boardTelemetryNode = read('services/sim2real-web/board-telemetry-node.py');
 const boardAgent = read('services/sim2real-web/board-agent-x5.py');
 const boardDrivePublisher = read('services/sim2real-web/board-drive-publisher.py');
@@ -269,6 +270,8 @@ assert.match(originbotHtml, /<script\s+src="\.\/sim\.js\?v=12"/);
 assert.match(originbotSim, /const API_ROOT = `\$\{mujocoBase\}\/api`/);
 assert.match(originbotSim, /source: 'originbot-sim'/);
 assert.match(originbotSim, /domain_randomization: domainRandomization/);
+assert.match(boardJointPolicyRuntime, /trajectory_msgs\/msg\/JointTrajectory/);
+assert.match(boardJointPolicyRuntime, /build_joint_observation/);
 assert.match(originbotSim, /const FRAME_MS = 100/);
 assert.match(mujocoApp, /CMD_VEL_STEP_SECONDS = 0\.05/);
 assert.match(mujocoApp, /depth\.png/);
@@ -609,6 +612,7 @@ const pythonFiles = [
   'services/sim2real-web/board-drive-publisher.py',
   'services/sim2real-web/board-telemetry-node.py',
   'services/sim2real-web/board-policy-runtime.py',
+  'services/sim2real-web/board-joint-policy-runtime.py',
   'services/sim2real-web/board-telemetry-uploader.py',
 ];
 const pythonProbe = spawnSync(

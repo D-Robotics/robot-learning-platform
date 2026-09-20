@@ -25,6 +25,16 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
 import { resolveRewardFormula } from './reward-vocabulary.mjs';
 
+// The UI keeps the short, human-facing action ids (walk/kick/recover/sit) so
+// existing recordings and run history remain stable. Resolve those ids to the
+// full declarative MicroDuck packs before a request reaches a worker.
+const TASK_ALIASES = Object.freeze({
+  walk: 'microduck-walk',
+  kick: 'microduck-kick',
+  recover: 'microduck-recover',
+  sit: 'microduck-stand',
+});
+
 function readJson(relativePath) {
   return JSON.parse(fs.readFileSync(path.join(root, relativePath), 'utf8'));
 }
@@ -41,7 +51,8 @@ function pair(value, where) {
 }
 
 export function resolveTaskPack(taskId, context = {}) {
-  const task = readJson(path.join('tasks', `${taskId}.json`));
+  const resolvedTaskId = TASK_ALIASES[taskId] || taskId;
+  const task = readJson(path.join('tasks', `${resolvedTaskId}.json`));
   const adapter = readJson(path.join('adapters', `${task.adapterId}.json`));
   assert.equal(task.schemaVersion, 1, 'task schemaVersion must be 1');
   assert.equal(adapter.schemaVersion, 1, 'adapter schemaVersion must be 1');
@@ -68,10 +79,10 @@ export function resolveTaskPack(taskId, context = {}) {
   // will actually run the task.
   if (
     task.recommendedEngine != null &&
-    !['starter-ppo', 'mjx-ppo'].includes(task.recommendedEngine)
+    !['starter-ppo', 'mjx-ppo', 'microduck-rl'].includes(task.recommendedEngine)
   ) {
     throw new Error(
-      `recommendedEngine must be 'starter-ppo' or 'mjx-ppo' (got ${JSON.stringify(task.recommendedEngine)})`,
+      `recommendedEngine must be 'starter-ppo', 'mjx-ppo' or 'microduck-rl' (got ${JSON.stringify(task.recommendedEngine)})`,
     );
   }
   // Packs without a recommendation run on the platform default (the kinematic
@@ -84,7 +95,7 @@ export function resolveTaskPack(taskId, context = {}) {
 
   const pack = {
     schemaVersion: 1,
-    kind: 'goal-navigation',
+    kind: task.kind || 'goal-navigation',
     id: task.id,
     displayName: task.displayName,
     observationAdapterId: task.observationAdapterId,
@@ -102,6 +113,8 @@ export function resolveTaskPack(taskId, context = {}) {
     domainRandomization: task.domainRandomization,
     evaluationConfig: task.evaluationConfig,
     qualityGate: task.qualityGate,
+    microduckTask: task.microduckTask,
+    ...(resolvedTaskId !== taskId ? { requestedTaskId: taskId, resolvedTaskId } : {}),
     controlHz,
     physicsTimestepSeconds,
     decimation,
@@ -161,11 +174,17 @@ export function trainingRequestFor(pack, context = {}) {
       observationAdapterId: pack.observationAdapterId,
       actionAdapterId: pack.actionAdapterId,
       actionOutput: pack.adapter.runtime?.actionOutput,
-      actionScale: {
-        linear: Number(pack.adapter.actuator?.maxLinear ?? 0.3),
-        angular: Number(pack.adapter.actuator?.maxAngular ?? 1),
-        units: 'm/s,rad/s',
-      },
+      actionScale:
+        pack.adapter.actuator?.kind === 'joint'
+          ? {
+              joint: Number(pack.adapter.runtime?.actionScaleRad ?? 0.35),
+              units: 'rad offset from home position',
+            }
+          : {
+              linear: Number(pack.adapter.actuator?.maxLinear ?? 0.3),
+              angular: Number(pack.adapter.actuator?.maxAngular ?? 1),
+              units: 'm/s,rad/s',
+            },
       observationLayout: [{ name: pack.observationAdapterId, size: observationSize }],
     },
     model: {

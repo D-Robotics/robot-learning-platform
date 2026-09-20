@@ -1,0 +1,51 @@
+{
+  "task": "single-goal-kick",
+  "engine": "microduck-football",
+  "physicsBackend": "microduck-football-mujoco",
+  "device": "cuda",
+  "cuda": true,
+  "training": {
+    "iterations": 60,
+    "numEnvs": 256,
+    "stepsPerEnv": 128,
+    "goals": 25720,
+    "completedEpisodes": 32496,
+    "finalMeanReward": 0.3082171678543091,
+    "elapsedSeconds": 184.745
+  },
+  "evaluation": {
+    "episodes": 200,
+    "goals": 199,
+    "successRate": 0.995,
+    "meanReturn": 10.216291816802642
+  },
+  "exports": [
+    {
+      "name": "policy.pt",
+      "sizeBytes": 85690,
+      "sha256": "1c88b2335dbe4e8b316aa4176152191dd6fed6fb47887c7027a57361877a7e37"
+    },
+    {
+      "name": "policy-cpu.ts",
+      "sizeBytes": 94109,
+      "sha256": "d6c1dabb058f9a15e2b0cfaa54c26b4af20999335ca6febcd2ca34265803783a"
+    },
+    {
+      "name": "policy-dynamic.onnx",
+      "sizeBytes": 79940,
+      "sha256": "10bed83ca273cdf71c377d1f4c8310fed90bdf7a476fcb9d23b94c19bb0e7e38"
+    },
+    {
+      "name": "training-summary.json",
+      "sizeBytes": 10543,
+      "sha256": "6b2db186d3c107e19cca870930791cb45ecadaea90afcee614a4c5e2efe3cf42"
+    },
+    {
+      "name": "evaluation.json",
+      "sizeBytes": 24506,
+      "sha256": "741fbd56f5bdb6d827f82fded6da7a11f954a85c09a805c012beffff66517b2e"
+    }
+  ],
+  "deployable": false,
+  "note": "20D->4D high-level football actor; real MicroDuck 61D->14D servo policy remains a separate contract."
+}

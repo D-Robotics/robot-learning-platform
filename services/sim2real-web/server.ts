@@ -8,15 +8,13 @@
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
-  existsSync,
   realpathSync,
-  statSync,
   readFileSync,
   mkdirSync,
   accessSync,
   constants as fsConstants,
 } from 'node:fs';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import type { Server as HttpServer } from 'node:http';
 
 import express, { type Express } from 'express';
@@ -71,6 +69,7 @@ import {
 import {
   createDshAuthChannel,
   createDshCapabilityHandlers,
+  currentDshAuthHeaders,
 } from '../../server/agent-runtime/dsh-capability-handlers.js';
 import {
   listCapabilities,
@@ -86,12 +85,22 @@ import {
   studioSsoAdapterMode,
   studioSsoAuth,
 } from './studio-sso-auth.js';
+import {
+  isProductionEnv,
+  normalizeMicroduckRedirect,
+  normalizePublicBasePath,
+  parseBooleanFlag,
+  parseDirectBoardAgentUrl,
+  parseTrustProxyFlag,
+  resolveMicroduckStaticRoot,
+  resolveSim2RealWebEnv,
+} from './runtime-config.js';
 
 export { redactInternalError } from '../../server/sim2real/http-helpers.js';
+export { normalizeMicroduckRedirect } from './runtime-config.js';
 
 const SERVICE_ROOT = path.dirname(fileURLToPath(import.meta.url));
 const PUBLIC_ROOT = path.join(SERVICE_ROOT, 'public');
-const DEFAULT_PORT = 18_102;
 /** Keep slow clients from holding a production process indefinitely. */
 export const SIM2REAL_HTTP_REQUEST_TIMEOUT_MS = 120_000;
 export const SIM2REAL_HTTP_HEADERS_TIMEOUT_MS = 15_000;
@@ -104,6 +113,86 @@ const SIM2REAL_DSH_MAX_RESPONSE_CHARS = 20_000;
 const SIM2REAL_DSH_MAX_REASONING_CHARS = 8_000;
 const SIM2REAL_DSH_MAX_TOOL_TRAIL = 30;
 const SAFE_DSH_MODEL = /^[A-Za-z0-9][A-Za-z0-9._:/-]{0,159}$/;
+
+const dshSessionTails = new Map<string, Promise<void>>();
+type DshApprovalOutcome = 'allowed-once' | 'rejected' | 'cancelled' | 'unavailable';
+type PendingDshApproval = {
+  id: string;
+  ownerScope: string;
+  toolName: string;
+  reason: string;
+  createdAt: string;
+  settle: (outcome: DshApprovalOutcome) => void;
+};
+const pendingDshApprovals = new Map<string, PendingDshApproval>();
+const DSH_APPROVAL_TTL_MS = 120_000;
+
+/** Serialize turns that target one persisted conversation. */
+async function withDshSessionLock<T>(key: string, work: () => Promise<T>): Promise<T> {
+  const previous = dshSessionTails.get(key) ?? Promise.resolve();
+  let release!: () => void;
+  const current = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const queued = previous.then(() => current);
+  dshSessionTails.set(key, queued);
+  await previous;
+  try {
+    return await work();
+  } finally {
+    release();
+    if (dshSessionTails.get(key) === queued) dshSessionTails.delete(key);
+  }
+}
+
+function dshOwnerScope(principal: { accountId?: string } | null, multiUser: boolean): string {
+  return multiUser
+    ? `sso:${String(principal?.accountId ?? '').trim() || 'unknown'}`
+    : 'single-user';
+}
+
+function scopedDshSessionId(publicSessionId: string, ownerScope: string): string {
+  if (ownerScope === 'single-user') return publicSessionId;
+  const ownerHash = createHash('sha256').update(ownerScope).digest('hex').slice(0, 16);
+  return `sim2real-${ownerHash}-${publicSessionId.replace(/^sim2real-/, '')}`.slice(0, 160);
+}
+
+function createDshApproval(
+  ownerScope: string,
+  request: { toolName: string; reason?: string; signal?: AbortSignal },
+): Promise<DshApprovalOutcome> {
+  const id = `approval-${randomUUID()}`;
+  return new Promise((resolve) => {
+    const settle = (outcome: DshApprovalOutcome) => {
+      const current = pendingDshApprovals.get(id);
+      if (!current) return;
+      pendingDshApprovals.delete(id);
+      if (timer) clearTimeout(timer);
+      request.signal?.removeEventListener('abort', onAbort);
+      resolve(outcome);
+    };
+    const onAbort = () => settle('cancelled');
+    const entry: PendingDshApproval = {
+      id,
+      ownerScope,
+      toolName: request.toolName,
+      reason: String(request.reason ?? '').slice(0, 500),
+      createdAt: new Date().toISOString(),
+      settle,
+    };
+    pendingDshApprovals.set(id, entry);
+    const timer = setTimeout(() => settle('cancelled'), DSH_APPROVAL_TTL_MS);
+    timer.unref?.();
+    request.signal?.addEventListener('abort', onAbort, { once: true });
+  });
+}
+
+function purgeDshApprovals(): void {
+  const cutoff = Date.now() - DSH_APPROVAL_TTL_MS;
+  for (const [, approval] of pendingDshApprovals) {
+    if (Date.parse(approval.createdAt) < cutoff) approval.settle('cancelled');
+  }
+}
 
 /**
  * DSH keeps rich session events internally (tool arguments, provider
@@ -210,20 +299,59 @@ type MicroduckSurface = {
   message: string;
 };
 
-function configuredPort(): number {
-  const value = Number(process.env.RDK_SIM2REAL_PORT ?? DEFAULT_PORT);
-  return Number.isInteger(value) && value >= 1_024 && value <= 65_535 ? value : DEFAULT_PORT;
-}
-
-function configuredHost(): string {
-  return String(process.env.RDK_SIM2REAL_BIND_HOST ?? '').trim() || '127.0.0.1';
-}
-
 function publicPath(pathname: string): string {
-  const rawBase = String(process.env.RDK_SIM2REAL_PUBLIC_BASE_PATH ?? '').trim();
-  const base = rawBase && rawBase !== '/' ? `/${rawBase.replace(/^\/+|\/+$/g, '')}` : '';
+  const base = normalizePublicBasePath(process.env.RDK_SIM2REAL_PUBLIC_BASE_PATH);
   if (!base || !pathname.startsWith('/') || pathname.startsWith(`${base}/`)) return pathname;
   return `${base}${pathname}`;
+}
+
+function shellSingleQuote(value: string): string {
+  return `'${value.replace(/'/g, `'"'"'`)}'`;
+}
+
+function gpuAgentInstallScript(origin: string, agentUrl: string): string {
+  const quotedOrigin = shellSingleQuote(origin);
+  const quotedAgentUrl = shellSingleQuote(agentUrl);
+  return `#!/bin/sh
+set -eu
+
+# RDK Local GPU Agent installer. The agent only listens on 127.0.0.1.
+PLATFORM_ORIGIN=${quotedOrigin}
+AGENT_URL=${quotedAgentUrl}
+AGENT_HOME="\${RDK_GPU_AGENT_HOME:-$HOME/.rdk-lab}"
+AGENT_FILE="$AGENT_HOME/local-gpu-agent.mjs"
+mkdir -p "$AGENT_HOME"
+if ! command -v node >/dev/null 2>&1; then
+  echo "需要 Node.js 22 或更高版本。请先安装 Node.js：https://nodejs.org/" >&2
+  exit 2
+fi
+NODE_MAJOR="$(node -p "process.versions.node.split('.')[0]")"
+if [ "$NODE_MAJOR" -lt 22 ]; then
+  echo "需要 Node.js 22 或更高版本，当前为 $(node --version)。" >&2
+  exit 2
+fi
+if command -v curl >/dev/null 2>&1; then
+  curl --fail --silent --show-error --location "$AGENT_URL" --output "$AGENT_FILE"
+else
+  node -e "fetch(process.argv[1]).then(r=>{if(!r.ok)throw Error('download failed '+r.status);return r.text()}).then(t=>require('fs').writeFileSync(process.argv[2],t))" "$AGENT_URL" "$AGENT_FILE"
+fi
+chmod 600 "$AGENT_FILE"
+if curl --silent --fail --max-time 1 http://127.0.0.1:19190/healthz >/dev/null 2>&1; then
+  echo "RDK Local GPU Agent 已经在运行：http://127.0.0.1:19190"
+  exit 0
+fi
+export RDK_GPU_AGENT_ALLOWED_ORIGINS="$PLATFORM_ORIGIN"
+export RDK_GPU_AGENT_HOME="$AGENT_HOME"
+nohup node "$AGENT_FILE" >"$AGENT_HOME/agent.log" 2>&1 </dev/null &
+sleep 1
+if curl --silent --fail --max-time 2 http://127.0.0.1:19190/healthz >/dev/null 2>&1; then
+  echo "RDK Local GPU Agent 已启动。请回到网页点击“自动发现本机 Agent”。"
+  echo "日志：$AGENT_HOME/agent.log"
+else
+  echo "Agent 启动失败，请查看 $AGENT_HOME/agent.log" >&2
+  exit 1
+fi
+`;
 }
 
 /**
@@ -233,10 +361,7 @@ function publicPath(pathname: string): string {
  * current URL. Invalid values fail closed to the root mount.
  */
 export function configuredPublicBasePath(): string {
-  const raw = String(process.env.RDK_SIM2REAL_PUBLIC_BASE_PATH ?? '').trim();
-  if (!raw || raw === '/') return '';
-  const normalized = `/${raw.replace(/^\/+|\/+$/g, '')}`;
-  return /^\/[A-Za-z0-9._~-]+(?:\/[A-Za-z0-9._~-]+)*$/.test(normalized) ? normalized : '';
+  return normalizePublicBasePath(process.env.RDK_SIM2REAL_PUBLIC_BASE_PATH);
 }
 
 function sendIndexDocument(response: express.Response): void {
@@ -257,11 +382,7 @@ function sendIndexDocument(response: express.Response): void {
 }
 
 function configuredMicroduckRequired(): boolean {
-  return ['1', 'true', 'yes', 'on'].includes(
-    String(process.env.RDK_SIM2REAL_REQUIRE_MICRODUCK ?? '')
-      .trim()
-      .toLowerCase(),
-  );
+  return parseBooleanFlag(process.env.RDK_SIM2REAL_REQUIRE_MICRODUCK);
 }
 
 export function publicUpstreamErrorMessage(kind: 'microduck' | 'dsh'): string {
@@ -337,35 +458,7 @@ function requestCorrelationId(value: unknown): string {
 }
 
 function configuredMicroduckRoot(): string | null {
-  const raw = String(process.env.RDK_SIM2REAL_MICRODUCK_ROOT ?? '').trim();
-  if (!raw || !path.isAbsolute(raw)) return null;
-  try {
-    return existsSync(path.join(raw, 'index.html')) && statSync(raw).isDirectory() ? raw : null;
-  } catch {
-    return null;
-  }
-}
-
-export function normalizeMicroduckRedirect(raw: string | undefined): string | null {
-  const value = String(raw ?? '').trim();
-  if (!value) return null;
-  let parsed: URL;
-  try {
-    parsed = new URL(value);
-  } catch {
-    return null;
-  }
-  const loopback = ['localhost', '127.0.0.1', '::1'].includes(parsed.hostname);
-  if (
-    parsed.username ||
-    parsed.password ||
-    parsed.search ||
-    parsed.hash ||
-    (parsed.protocol !== 'https:' && !(parsed.protocol === 'http:' && loopback))
-  ) {
-    return null;
-  }
-  return parsed.toString();
+  return resolveMicroduckStaticRoot(process.env.RDK_SIM2REAL_MICRODUCK_ROOT);
 }
 
 export function microduckSurface(): MicroduckSurface {
@@ -517,7 +610,7 @@ async function proxyMicroduck(request: express.Request, response: express.Respon
 export function createSim2RealWebApp(): Express {
   const app = express();
   app.disable('x-powered-by');
-  if (String(process.env.EXPRESS_TRUST_PROXY ?? '').trim() === '1') app.set('trust proxy', 1);
+  if (parseTrustProxyFlag(process.env.EXPRESS_TRUST_PROXY)) app.set('trust proxy', 1);
 
   // Keep a stable identifier across gateway, API and server logs. This is
   // deliberately generated before auth/CSRF so rejected requests are
@@ -644,7 +737,7 @@ export function createSim2RealWebApp(): Express {
     const authRequired = studioSsoAuth.isMultiUserDeployment();
     const authAdapterConfigured = studioSsoAdapterConfigured();
     const directBoardAgentConfigured = Boolean(
-      String(process.env.RDK_SIM2REAL_BOARD_AGENT_URL ?? '').trim(),
+      parseDirectBoardAgentUrl(process.env.RDK_SIM2REAL_BOARD_AGENT_URL),
     );
     const boardAgentReady = isBoardAgentConfigured();
     const degraded: string[] = [];
@@ -662,7 +755,7 @@ export function createSim2RealWebApp(): Express {
     // once an append has failed, stop accepting traffic until the operator
     // repairs the audit volume. Local development remains usable while a
     // transient log directory is being created.
-    if (process.env.NODE_ENV === 'production' && !audit.healthy) {
+    if (isProductionEnv() && !audit.healthy) {
       degraded.push('audit-unavailable');
     }
     return {
@@ -750,6 +843,66 @@ export function createSim2RealWebApp(): Express {
   // DSH is an authenticated execution surface.  Keep the capability catalog
   // public for discovery, but require a verified principal and the optional
   // `agent` permission before a prompt can create a session or invoke tools.
+  app.get('/api/sim2real/dsh/approvals', (request, response) => {
+    response.setHeader('Cache-Control', 'no-store');
+    const principal = studioSsoAuth.resolvePrincipal(request);
+    if (studioSsoAuth.isMultiUserDeployment() && !principal) {
+      response.status(401).json({ ok: false, error: 'SIM2REAL_AUTH_REQUIRED' });
+      return;
+    }
+    if (principal && !principalCan(principal, SIM2REAL_PERMISSIONS.agent)) {
+      response.status(403).json({ ok: false, error: 'SIM2REAL_PERMISSION_DENIED' });
+      return;
+    }
+    purgeDshApprovals();
+    const ownerScope = dshOwnerScope(principal, studioSsoAuth.isMultiUserDeployment());
+    response.json({
+      ok: true,
+      approvals: [...pendingDshApprovals.values()]
+        .filter((item) => item.ownerScope === ownerScope)
+        .map(({ id, toolName, reason, createdAt }) => ({ id, toolName, reason, createdAt })),
+    });
+  });
+
+  app.post('/api/sim2real/dsh/approvals/:approvalId', (request, response) => {
+    response.setHeader('Cache-Control', 'no-store');
+    const principal = studioSsoAuth.resolvePrincipal(request);
+    if (studioSsoAuth.isMultiUserDeployment() && !principal) {
+      response.status(401).json({ ok: false, error: 'SIM2REAL_AUTH_REQUIRED' });
+      return;
+    }
+    if (principal && !principalCan(principal, SIM2REAL_PERMISSIONS.agent)) {
+      response.status(403).json({ ok: false, error: 'SIM2REAL_PERMISSION_DENIED' });
+      return;
+    }
+    const approvalId = String(request.params.approvalId || '').trim();
+    const approval = pendingDshApprovals.get(approvalId);
+    const ownerScope = dshOwnerScope(principal, studioSsoAuth.isMultiUserDeployment());
+    if (!approval || approval.ownerScope !== ownerScope) {
+      response.status(404).json({ ok: false, error: 'DSH_APPROVAL_NOT_FOUND' });
+      return;
+    }
+    const decision = String(request.body?.decision || '')
+      .trim()
+      .toLowerCase();
+    const outcome: DshApprovalOutcome =
+      decision === 'allowed-once' || decision === 'approve' || decision === 'approved'
+        ? 'allowed-once'
+        : decision === 'reject' || decision === 'rejected' || decision === 'cancel'
+          ? 'rejected'
+          : 'unavailable';
+    if (outcome === 'unavailable') {
+      response.status(400).json({
+        ok: false,
+        error: 'DSH_APPROVAL_DECISION_INVALID',
+        message: 'decision 必须是 approve 或 reject。',
+      });
+      return;
+    }
+    approval.settle(outcome);
+    response.json({ ok: true, decision: outcome });
+  });
+
   app.post('/api/sim2real/dsh/chat', async (request, response) => {
     response.setHeader('Cache-Control', 'no-store');
     const principal = studioSsoAuth.resolvePrincipal(request);
@@ -813,6 +966,19 @@ export function createSim2RealWebApp(): Express {
       });
       return;
     }
+    const rawTurnId = request.body?.turnId;
+    const turnId = typeof rawTurnId === 'string' ? rawTurnId.trim() : '';
+    if (
+      rawTurnId !== undefined &&
+      (!turnId || turnId.length > 120 || !/^[A-Za-z0-9_-]+$/.test(turnId))
+    ) {
+      response.status(400).json({
+        ok: false,
+        error: 'DSH_TURN_INVALID',
+        message: '对话轮次标识无效。',
+      });
+      return;
+    }
     const runtime = app.locals.dshRuntime;
     if (!runtime) {
       response.status(503).json({
@@ -822,7 +988,17 @@ export function createSim2RealWebApp(): Express {
       });
       return;
     }
+    const requestAbort = new AbortController();
+    const abortRequest = () => requestAbort.abort();
+    request.once('aborted', abortRequest);
     try {
+      // The browser sees an opaque per-conversation id. In shared deployments
+      // the durable DSH id is owner-scoped, so knowing another user's local
+      // storage value cannot open that user's transcript or tool context.
+      const ownerScope = dshOwnerScope(principal, studioSsoAuth.isMultiUserDeployment());
+      const publicSessionId = sessionId || `sim2real-${randomUUID()}`;
+      const backendSessionId = scopedDshSessionId(publicSessionId, ownerScope);
+      const sessionLockKey = `${ownerScope}:${backendSessionId}`;
       // Forward the caller's session to tool executions for this turn. In
       // single-user mode the loopback routes accept the request directly;
       // in shared deployments the forwarded cookie/authorization keeps RBAC
@@ -831,6 +1007,8 @@ export function createSim2RealWebApp(): Express {
       if (request.headers.cookie) forwarded.cookie = String(request.headers.cookie);
       if (request.headers.authorization)
         forwarded.authorization = String(request.headers.authorization);
+      if (turnId) forwarded['x-sim2real-turn-id'] = turnId;
+      forwarded['x-sim2real-owner-scope'] = ownerScope;
       // Surface the UI's current model/device selection to the model without
       // trusting it: the tools re-validate any id against the workspace.
       const rawContext = request.body?.context;
@@ -848,20 +1026,18 @@ export function createSim2RealWebApp(): Express {
       const turnPrompt = contextPart ? `${prompt}\n\n[当前工作区选择] ${contextPart}` : prompt;
       const channel = (app.locals as Record<string, unknown>).dshAuthChannel as
         ReturnType<typeof createDshAuthChannel> | undefined;
-      const result = channel
-        ? await channel.withAuth(forwarded, () =>
-            askDsh(runtime, turnPrompt, {
-              ...(model ? { model } : {}),
-              ...(sessionId ? { sessionId } : {}),
-            }),
-          )
-        : await askDsh(runtime, turnPrompt, {
+      const result = await withDshSessionLock(sessionLockKey, () => {
+        const work = () =>
+          askDsh(runtime, turnPrompt, {
             ...(model ? { model } : {}),
-            ...(sessionId ? { sessionId } : {}),
+            sessionId: backendSessionId,
+            signal: requestAbort.signal,
           });
+        return channel ? channel.withAuth(forwarded, work) : work();
+      });
       response.json({
         ok: true,
-        sessionId: result.sessionId,
+        sessionId: publicSessionId,
         text: publicDshText(result.text),
         reasoning: publicDshReasoning(result.reasoning),
         toolTrail: publicDshToolTrail(result.toolTrail),
@@ -886,6 +1062,8 @@ export function createSim2RealWebApp(): Express {
         return;
       }
       sendPublicUpstreamError(response, 'DSH_CHAT_FAILED', 'dsh');
+    } finally {
+      request.off('aborted', abortRequest);
     }
   });
   // Studio-cookie deployments also expose a credential relay so the workbench
@@ -1110,6 +1288,37 @@ export function createSim2RealWebApp(): Express {
     response.sendFile(path.join(PUBLIC_ROOT, 'originbot-sim', 'index.html'));
   });
 
+  // The browser cannot start a process on the user's computer. These two
+  // endpoints make the one-command Local GPU Agent install flow possible
+  // without asking users to clone the platform repository. The downloaded
+  // agent is the same audited source used by `npm run dev:gpu-agent`.
+  app.get('/agent/local-gpu-agent.mjs', (_request, response) => {
+    response
+      .setHeader('Cache-Control', 'no-cache')
+      .type('application/javascript')
+      .sendFile(path.join(SERVICE_ROOT, '..', '..', 'scripts', 'local-gpu-agent.mjs'));
+  });
+  app.get('/agent/install.sh', (request, response) => {
+    const forwardedProto = String(request.headers['x-forwarded-proto'] ?? '')
+      .split(',')[0]
+      .trim();
+    const protocol = forwardedProto === 'https' || request.protocol === 'https' ? 'https' : 'http';
+    const host = String(request.headers['x-forwarded-host'] ?? request.get('host') ?? '')
+      .split(',')[0]
+      .trim();
+    if (!/^[A-Za-z0-9][A-Za-z0-9.:-]{0,252}$/.test(host)) {
+      response.status(400).type('text/plain').send('invalid host');
+      return;
+    }
+    const origin = `${protocol}://${host}`;
+    const agentUrl = `${origin}${publicPath('/agent/local-gpu-agent.mjs')}`;
+    response
+      .setHeader('Cache-Control', 'no-store')
+      .setHeader('Content-Disposition', 'attachment; filename="rdk-gpu-agent-install.sh"')
+      .type('text/plain')
+      .send(gpuAgentInstallScript(origin, agentUrl));
+  });
+
   app.use(
     express.static(PUBLIC_ROOT, {
       // Serve the HTML entry through the small dynamic handler below so the
@@ -1132,7 +1341,7 @@ export function createSim2RealWebApp(): Express {
           response.setHeader('Cache-Control', 'no-cache');
         }
       },
-      maxAge: process.env.NODE_ENV === 'production' ? '1h' : 0,
+      maxAge: isProductionEnv() ? '1h' : 0,
     }),
   );
   // Express 5 wildcard syntax keeps the SPA fallback compatible with paths
@@ -1302,6 +1511,13 @@ export async function startSim2RealWebServer(): Promise<void> {
         persistenceRoot,
         capabilityHandlers,
       });
+      // Bridge DSH's approval seam to the authenticated web panel. The chat
+      // request remains open while a write-capable tool waits; the browser
+      // polls the pending approval endpoint and resolves it with one click.
+      dsh.on('approval/request', (request) => {
+        const ownerScope = currentDshAuthHeaders()['x-sim2real-owner-scope'] || 'single-user';
+        return createDshApproval(ownerScope, request);
+      });
       app.locals.dshRuntime = dsh;
       app.locals.dshAuthChannel = dshAuthChannel;
       (
@@ -1313,14 +1529,16 @@ export async function startSim2RealWebServer(): Promise<void> {
       throw error;
     }
   }
-  const host = configuredHost();
-  const port = configuredPort();
-  const server = app.listen(port, host, () => {
+  const envConfig = resolveSim2RealWebEnv();
+  for (const warning of envConfig.warnings) {
+    console.warn('[sim2real-web] config warning:', warning);
+  }
+  const server = app.listen(envConfig.port, envConfig.host, () => {
     console.log(
       '[sim2real-web] listening on http://' +
-        host +
+        envConfig.host +
         ':' +
-        port +
+        envConfig.port +
         ' (contract=' +
         MICRODUCK_SIM2REAL_CONTRACT.id +
         ')',

@@ -35,6 +35,8 @@ export type Sim2RealAgentPlan = {
   modelId?: string;
   deviceId?: string;
   computeResourceId?: string;
+  /** Server-generated reply for the legacy planner when DSH is unavailable. */
+  conversationReply?: string;
   createdAt: string;
 };
 
@@ -135,6 +137,29 @@ export function classifySim2RealAgentIntent(message: string): Sim2RealAgentInten
   return hit?.intent ?? 'conversation';
 }
 
+/**
+ * Keep the opt-in legacy planner useful when the hosted DSH provider is not
+ * configured. A single canned sentence made every conversational question
+ * look identical ("你是谁" and "你能做什么" received the same answer).
+ * This is deliberately small and deterministic; the real DSH runtime remains
+ * the source of open-ended conversation whenever it is enabled.
+ */
+export function legacyConversationReply(message: string): string {
+  const text = String(message ?? '')
+    .trim()
+    .toLowerCase();
+  if (/(你是谁|你是?谁|介绍一下自己|身份)/i.test(text)) {
+    return '我是 RDK 机器人学习工作台的 AI Agent，可以通过受控工具查看工作区、仿真、训练、评测、部署和板端状态。';
+  }
+  if (/(能做什么|可以做什么|有哪些能力|你的能力|功能|帮我做什么)/i.test(text)) {
+    return '我可以查看项目、数据集、模型、运行、日志、遥测和评测，提交受控训练，检查或连接 RDK 板卡，执行部署预检，并在安全门控下暂存、加载、启动、复位或停止板端策略。';
+  }
+  if (/^(你好|您好|嗨|hello|hi|在吗|谢谢|感谢|早上好|下午好|晚上好)/i.test(text)) {
+    return '你好！我是 RDK 机器人学习工作台的 AI Agent。你可以直接告诉我想查看、训练、评测、部署或检查什么。';
+  }
+  return '我是 RDK 机器人学习工作台的 AI Agent。请告诉我具体要查看或执行的事项，我会先匹配受控工具并返回结果。';
+}
+
 const step = (
   id: string,
   label: string,
@@ -185,6 +210,7 @@ export function createSim2RealAgentPlan(
       goal: '回复用户并保持 Agent 待命',
       safety: 'read-only',
       steps: [step('reply', '回复用户消息', 'conversation.reply')],
+      conversationReply: legacyConversationReply(message),
     },
     'full-loop': {
       intent,

@@ -107,6 +107,19 @@ set -a && . ./worker.env && set +a
 node services/sim2real-web/local-training-worker.mjs
 ```
 
+要把平台足球能力注册到同一个 GPU worker，把引擎表扩展为：
+
+```bash
+RDK_SIM2REAL_TRAIN_ENGINES_JSON='{"mjx-ppo":{"executable":"/home/<user>/rdk-sim2real/.venv/bin/python","args":["/home/<user>/rdk-sim2real/engines/mjx-adapter/adapter.py"]},"microduck-football":{"executable":"/home/<user>/microduck-football/.venv/bin/python","args":["/home/<user>/rdk-sim2real/engines/microduck-football/platform_adapter.py"]}}'
+```
+
+训练页选择 `microduck-football` 后，任务下拉框中的
+`足球：单鸭射门`、`足球：2v2`、`足球：3v3` 会随请求一起路由；worker 返回
+`result.json`、`SHA256SUMS` 和 `policy.pt`，训练记录可在平台中继续查看。该首版
+足球策略是 4D 高层踢球控制器，结果会同时标出真实 MicroDuck 的 61D→14D actor
+契约，不能把这个 checkpoint 直接当成 14 舵机板端制品；真实 14 舵机评测仍走
+`engines/microduck-eval` 的 ONNX 链路。
+
 注意 `worker.env` 里 `$HOME` 不会被 systemd/手动 `source` 二次展开时统一替换——
 为稳妥可直接写绝对路径（`/home/<user>/rdk-sim2real/...`）。`engines` 注册后
 `healthz` 回报 `["default","mjx-ppo"]`，训练页引擎选择器才放行 MJX 选项；

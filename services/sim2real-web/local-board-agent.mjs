@@ -3,9 +3,9 @@
 /**
  * Loopback BoardAgent reference for local Sim2Real acceptance.
  *
- * It deliberately implements two read-only surfaces and never opens SSH,
- * invokes a shell, uploads an artifact, starts a process, or enables
- * actuators:
+ * It deliberately implements read-only surfaces plus safe no-op stop commands
+ * and never opens SSH, invokes a shell, uploads an artifact, starts a process,
+ * or enables actuators:
  *
  *  1. The board passport probe used by deployment preflight
  *     (POST /v1/devices/:id/commands with the fixed preflight command).
@@ -537,6 +537,23 @@ export function createLocalBoardAgentServer() {
       if (rejectUnexpectedBody(request, response)) return;
       const tick = Math.floor((Date.now() - STATION_STARTED_AT_MS) / STATION_STATUS_INTERVAL_MS);
       json(response, 200, buildStationStatus({ startedAtMs: STATION_STARTED_AT_MS, tick }));
+      return;
+    }
+    // Emergency stop is safe to acknowledge in the reference agent: it never
+    // starts motion or touches hardware, but it keeps the same stop contract
+    // used by the real agent so Agent safety-gate and stop-path tests exercise
+    // a complete request/response cycle.
+    if (
+      request.method === 'POST' &&
+      (request.url === '/v1/station/drive/stop' || request.url === '/v1/station/policy/stop')
+    ) {
+      if (rejectUnexpectedBody(request, response)) return;
+      json(response, 200, {
+        ok: true,
+        stopped: true,
+        mock: true,
+        actuatorControl: false,
+      });
       return;
     }
     if (request.method === 'GET' && request.url === '/v1/station/policy/files') {

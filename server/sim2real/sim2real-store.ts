@@ -2369,6 +2369,7 @@ export async function updateSim2RealComputeResource(
     Pick<
       Sim2RealComputeResource,
       | 'name'
+      | 'source'
       | 'runnerUrl'
       | 'status'
       | 'gpuName'

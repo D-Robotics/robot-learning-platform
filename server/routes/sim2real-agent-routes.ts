@@ -3,6 +3,7 @@ import { Router, type Request } from 'express';
 import { LOCAL_SIM2REAL_AUTH, type Sim2RealAuthPort } from '../sim2real/sim2real-auth.js';
 import {
   createSim2RealAgentPlanVariants,
+  legacyConversationReply,
   type Sim2RealAgentPlan,
   type Sim2RealAgentRun,
   type Sim2RealAgentStep,
@@ -231,6 +232,15 @@ function normalizeAgentPlan(
     ...(modelId.value ? { modelId: modelId.value } : {}),
     ...(deviceId.value ? { deviceId: deviceId.value } : {}),
     ...(computeResourceId.value ? { computeResourceId: computeResourceId.value } : {}),
+    ...(intent === 'conversation'
+      ? {
+          conversationReply: safeAgentText(
+            source.conversationReply,
+            legacyConversationReply(''),
+            1_000,
+          ),
+        }
+      : {}),
     createdAt: new Date().toISOString(),
   };
   return { plan, approvalRequired: steps.some((step) => APPROVAL_TOOLS.has(step.tool)) };
@@ -540,6 +550,19 @@ export function createSim2RealAgentRouter(
       });
       return;
     }
+    const rawPlan = request.body?.plan;
+    const rawSteps =
+      rawPlan && typeof rawPlan === 'object' && !Array.isArray(rawPlan)
+        ? (rawPlan as Record<string, unknown>).steps
+        : null;
+    if (Array.isArray(rawSteps) && rawSteps.length > MAX_AGENT_PLAN_STEPS) {
+      response.status(400).json({
+        ok: false,
+        error: 'SIM2REAL_AGENT_PLAN_TOO_LARGE',
+        message: `Agent 计划最多 ${MAX_AGENT_PLAN_STEPS} 步。`,
+      });
+      return;
+    }
     const normalized = normalizeAgentPlan(request.body?.plan);
     if ('error' in normalized) {
       response.status(400).json({
@@ -698,11 +721,7 @@ async function runAgent(
         );
         addEvidence(run, '仿真入口', entryUrl, entryUrl);
       } else if (item.tool === 'conversation.reply') {
-        addEvidence(
-          run,
-          'Agent',
-          '你好！我可以帮你检查工作区、启动仿真、提交训练，或检查已连接的板端。',
-        );
+        addEvidence(run, 'Agent', run.conversationReply || legacyConversationReply(''));
         completionDetail = '已回复';
       } else if (item.tool === 'training.gpu') {
         const modelId = resolveAgentModelId(run, overview);

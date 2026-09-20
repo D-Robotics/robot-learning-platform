@@ -205,6 +205,9 @@ describe('DSH runtime chat composition', () => {
     expect(
       gateway.requests.every((item) => item.authorization === 'Bearer dedicated-dsh-key'),
     ).toBe(true);
+    const followup = await askDsh(ctx, '请再确认一次', { sessionId: result.sessionId });
+    expect(followup.sessionId).toBe(result.sessionId);
+    expect(followup.text).toBe('你好！我是 RDK 工作台智能体。');
   }, 60_000);
 
   it('drops reasoning-block preamble from the reply text of reasoning models', async () => {

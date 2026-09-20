@@ -1,0 +1,32 @@
+{
+  "task": "single-goal-kick",
+  "device": "cuda",
+  "cuda": true,
+  "observationDim": 20,
+  "actionDim": 4,
+  "numEnvs": 64,
+  "iterations": 3,
+  "curve": [
+    {
+      "iteration": 1,
+      "meanReward": -0.0008125316817313433,
+      "goals": 2,
+      "completedEpisodes": 3
+    },
+    {
+      "iteration": 2,
+      "meanReward": -0.00144138652831316,
+      "goals": 4,
+      "completedEpisodes": 5
+    },
+    {
+      "iteration": 3,
+      "meanReward": -0.011885931715369225,
+      "goals": 4,
+      "completedEpisodes": 6
+    }
+  ],
+  "goals": 4,
+  "completedEpisodes": 6,
+  "elapsedSeconds": 1.632
+}

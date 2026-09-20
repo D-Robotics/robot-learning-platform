@@ -7,7 +7,7 @@
 export type RewardQuantity =
   'action' | 'goal' | 'heading' | 'pose' | 'attitude' | 'contact' | 'body_rate';
 
-export type RewardEngine = 'starter-ppo' | 'mjx-ppo';
+export type RewardEngine = 'starter-ppo' | 'mjx-ppo' | 'microduck-rl';
 
 export type RewardOp = 'potential' | 'shaping' | 'penalty' | 'bonus' | 'rate_limit' | 'smoothness';
 

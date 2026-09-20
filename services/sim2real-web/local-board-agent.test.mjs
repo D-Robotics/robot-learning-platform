@@ -95,6 +95,17 @@ try {
   assert.ok(Number.isFinite(statusPayload.cpu.percent));
   assert.ok(Array.isArray(statusPayload.topics));
 
+  for (const stopPath of ['/v1/station/policy/stop', '/v1/station/drive/stop']) {
+    const stop = await fetch(`${base}${stopPath}`, { method: 'POST' });
+    assert.equal(stop.status, 200);
+    assert.deepEqual(await stop.json(), {
+      ok: true,
+      stopped: true,
+      mock: true,
+      actuatorControl: false,
+    });
+  }
+
   const badStationCommand = await fetch(`${base}/v1/station/commands`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },

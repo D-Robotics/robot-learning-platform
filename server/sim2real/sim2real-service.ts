@@ -29,6 +29,11 @@ import {
   localRunnerTokenUsable,
 } from './local-runner.js';
 
+// A persisted device row is a registration record, not a live heartbeat. Keep
+// the overview honest when a previous probe succeeded but the board has since
+// disappeared or the operator never connected it again.
+const DEVICE_ONLINE_STATUS_TTL_MS = 30_000;
+
 function publicPath(pathname: string): string {
   const rawBase = String(process.env.RDK_SIM2REAL_PUBLIC_BASE_PATH ?? '').trim();
   const base = rawBase && rawBase !== '/' ? `/${rawBase.replace(/^\/+|\/+$/g, '')}` : '';
@@ -208,10 +213,20 @@ export function deploymentStepsFor(
 }
 
 export function publicDeviceSummary(device: Device): Sim2RealDeviceSummary {
+  const now = Date.now();
+  const checkedAt = Date.parse(device.lastCheckedAt);
+  const recentlyChecked =
+    device.status === 'connected' &&
+    Number.isFinite(checkedAt) &&
+    checkedAt <= now + 5_000 &&
+    now - checkedAt <= DEVICE_ONLINE_STATUS_TTL_MS;
   return {
     id: device.id,
     name: String(device.name || `${device.username}@${device.host}`).slice(0, 120),
-    status: String(device.status || 'offline').slice(0, 32),
+    // `connected` is reserved for a fresh probe. A stale persisted row stays
+    // selectable, but must never inflate the live-device count or imply that
+    // the board is reachable right now.
+    status: recentlyChecked ? 'connected' : 'disconnected',
     ...(device.boardPlatform ? { boardPlatform: device.boardPlatform } : { boardPlatform: null }),
     ...(device.boardModel ? { boardModel: device.boardModel } : { boardModel: null }),
     ...(device.connectionMode ? { connectionMode: device.connectionMode } : {}),

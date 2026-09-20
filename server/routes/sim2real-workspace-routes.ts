@@ -42,6 +42,7 @@ import {
   updateSim2RealProject,
 } from '../sim2real/sim2real-store.js';
 import { sendApiError, wrapAsync } from '../sim2real/http-helpers.js';
+import { deriveRdkGoldenPath } from '../../shared/rdk-golden-path.js';
 
 type WorkspaceDeps = {
   requestOwner: (request: Request, response: Response) => string | undefined | null;
@@ -648,6 +649,47 @@ export function registerSim2RealWorkspaceRoutes(
           metrics: run.metrics ?? null,
         })),
       });
+    }),
+  );
+
+  /**
+   * One canonical read model for the RDK Golden Path. The browser workbench,
+   * CLI clients, and future RDK Studio integrations should consume this
+   * endpoint instead of independently guessing which record is the next step.
+   * It is read-only and therefore safe to poll while a worker or BoardAgent is
+   * progressing.
+   */
+  router.get(
+    api('/golden-path'),
+    wrapAsync(async (request, response) => {
+      const owner = deps.requestOwner(request, response);
+      if (owner === null) return;
+      const projectId = cleanText(request.query.projectId, 160);
+      const modelId = cleanText(request.query.modelId, 160);
+      const taskId = cleanText(request.query.taskId, 160);
+      const [projects, datasets, runs, evaluations, deployments] = await Promise.all([
+        listSim2RealProjects(owner),
+        listSim2RealDatasets(owner),
+        listSim2RealRuns(owner),
+        listSim2RealEvaluations(owner),
+        listSim2RealDeployments(owner),
+      ]);
+      const project = projectId ? projects.find((item) => item.id === projectId) : undefined;
+      if (projectId && !project) {
+        response.status(404).json({ ok: false, error: 'SIM2REAL_PROJECT_NOT_FOUND' });
+        return;
+      }
+      const snapshot = deriveRdkGoldenPath({
+        ...(project ? { project } : {}),
+        ...(modelId ? { modelId } : {}),
+        ...(taskId ? { taskId } : {}),
+        datasets,
+        runs,
+        evaluations,
+        deployments,
+      });
+      response.setHeader('Cache-Control', 'no-store');
+      response.json({ ok: true, goldenPath: snapshot });
     }),
   );
 

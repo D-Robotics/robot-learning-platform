@@ -182,6 +182,9 @@ export default tseslint.config(
         request: 'readonly',
         ApiError: 'readonly',
         wireFeedbackControl: 'readonly',
+        currentTelemetry: 'readonly',
+        formatTelemetrySeconds: 'readonly',
+        runsForCurrentModel: 'readonly',
       },
     },
     rules: {
@@ -208,11 +211,15 @@ export default tseslint.config(
     },
   },
   {
-    // ui-responsive.spec.mjs embeds browser-context code inside
-    // page.evaluate() callbacks: document/getComputedStyle/MutationObserver
-    // resolve in the Chromium page, not in this Node process, so no-undef needs
-    // the browser vocabulary on top of the node globals NODE_JS_FILES provides.
-    files: ['services/sim2real-web/ui-responsive.spec.mjs'],
+    // Browser-level sweeps embed browser-context code inside page.evaluate()
+    // callbacks: document/getComputedStyle/MutationObserver resolve in the
+    // Chromium page, not in this Node process, so no-undef needs the browser
+    // vocabulary on top of the node globals NODE_JS_FILES provides.
+    files: [
+      'services/sim2real-web/ui-responsive.spec.mjs',
+      'services/sim2real-web/ui-workbench-path.spec.mjs',
+      'services/sim2real-web/ui-train-journey.spec.mjs',
+    ],
     languageOptions: {
       globals: globals.browser,
     },

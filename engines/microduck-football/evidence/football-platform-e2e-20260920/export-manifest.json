@@ -1,0 +1,53 @@
+{
+  "platformRunId": "477be841-a43c-465a-9eb7-846f851f46d6",
+  "externalRunId": "local-microduck-official-68a9d13d-7cb3-44e8-9cc9-34ca09e6c690",
+  "task": "single-goal-kick",
+  "engine": "microduck-football",
+  "physicsBackend": "microduck-football-mujoco",
+  "cuda": true,
+  "training": {
+    "iterations": 60,
+    "numEnvs": 256,
+    "stepsPerEnv": 128,
+    "algorithm": "ppo",
+    "learningRate": 0.0001,
+    "updateEpochs": 8,
+    "teacherWeight": 0.35
+  },
+  "evaluation": {
+    "episodes": 200,
+    "goals": 199,
+    "successRate": 0.995,
+    "meanReturn": 10.216291816802642
+  },
+  "exports": {
+    "policy.pt": {
+      "sizeBytes": 85690,
+      "sha256": "bd0c6eb2de1ae3566cfda5b1f11108f61da1ddd00494dc09b23bcf1d7742ae71"
+    },
+    "policy.ts": {
+      "sizeBytes": 92991,
+      "sha256": "0608c37a0a322e847c7afeba1afc89b35fc94d41b88d4c56ca56342c75139904"
+    },
+    "policy-cpu.ts": {
+      "sizeBytes": 94109,
+      "sha256": "a3fd0917b809d0d846c673670b9ad9bf6fb74d34228a66713e00db788e3b2e4b"
+    },
+    "policy-dynamic.onnx": {
+      "sizeBytes": 79832,
+      "sha256": "f17fa1ff58cd61f00aa12c8a1cbff532af1887657a0baed9cc3c53a567b78216"
+    },
+    "training-summary.json": {
+      "sizeBytes": 11027,
+      "sha256": "cb0b6cbebd244432b7ea7e1df170c616bcdc314314b2036738293c866105f2af"
+    },
+    "evaluation.json": {
+      "sizeBytes": 24540,
+      "sha256": "3d740170036b8022e855e5742f55f64e89b4b623196de38b0b026ae900fa915c"
+    },
+    "result.json": {
+      "sizeBytes": 1809,
+      "sha256": "93e80d2f9b27601860e698255fcc61cb4a9801b0621738a53112ce9f75a7d61c"
+    }
+  }
+}

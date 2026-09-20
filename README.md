@@ -58,6 +58,7 @@ Node.js 需要 `^22.22.2 || ^24.15.0 || >=26.0.0`（与 `package.json` 的 `engi
 | **本地 / MJX** | 要真 MuJoCo 接触动力学（CPU 即可） | 真 MuJoCo 物理 + 纯 JAX PPO + ONNX/质量门证据（`npm run verify:mjx-adapter`） | `engines/mjx-adapter` |
 | **本地 / 视觉观测** | 要「顶置相机像素 → 策略」端到端 | 纯 JAX PPO + ONNX 导出 ≡ JAX 前向（`npm run verify:vision-observation`） | `engines/visual-ppo` |
 | **本地 / dm_control** | 要 DeepMind 生态 env API | dm_control `rl.control.Environment` + 同一 MJCF 物理（`npm run verify:dm-control-adapter`） | `engines/dm-control-adapter` |
+| **GPU / MicroDuck 全身强化学习** | 要站立、行走、踢球、恢复等 14 舵机任务 | 四个 61D→14D 任务包、`microduck-rl` 路由、关节 profile 与板端安全运行时 | `engines/microduck-rl-adapter` + `services/sim2real-web/board-joint-policy-runtime.py` |
 | **本地 / 行为克隆** | 有示教/录制数据，想直接克隆策略 | 真 MLP BC + train/val 分离 + ONNX 数值等价证明（`npm run verify:offline-bc`） | `engines/offline-bc` |
 | **本地 / ACT 分块模仿** | 有带 episode 边界的示教轨迹，想训练动作分块策略 | 真 ACT（Zhao et al. 2023）：Transformer 编解码 + CVAE 隐变量 + k 步动作分块 + 时序集成，episode 级 train/val 划分，ONNX 与 torch 前向数值等价（`npm run verify:act`） | `engines/act` |
 | **本地 / Diffusion Policy** | 示教多模态（两种风格都要保留），要生成式动作分块 | 真 Diffusion Policy（Chi et al. 2023，CNN 版式）：条件 1D UNet + DDPM + EMA，整个反向去噪循环固化为一张 ONNX（`npm run verify:diffusion-policy`） | `engines/diffusion-policy` |
@@ -83,6 +84,7 @@ Mock 的 `completed` 只表示协议演练完成，不代表真实 PPO 权重或
 | **物理级域随机化（质量/摩擦/执行器）** | ✅ | MJX 引擎任务包契约新增 `physicalDomainRandomization`（轮摩擦、底盘质量、伺服 kv 按 episode 重采样并进入 vmap 轨迹），`npm run verify:mjx-adapter` 实证质量被真实改变 |
 | **dm_control 生态适配** | ✅ | `engines/dm-control-adapter`：dm_control 1.x `rl.control.Environment`/`Task` 钩子 + 与 MJX 同源 MJCF 物理，`npm run verify:dm-control-adapter`；Playground 侧如实结论见 [docs/engines/dm-control-adapter.md](docs/engines/dm-control-adapter.md) |
 | **MJX 引擎（MuJoCo 接触动力学，纯 JAX）** | ✅ | `npm run verify:mjx-adapter`：真 MJX 物理 + 纯 JAX PPO + 质量门证据，本机 CPU 可验证（无 jax 时 SKIP）；GPU 按 profile 放大吞吐。见 [docs/engines/mjx-adapter.md](docs/engines/mjx-adapter.md) |
+| **MicroDuck 腿式板端策略链路** | ✅ 软件契约 / 🧩 真机验收 | `microduck-stand/walk/kick/recover` 固定 61D→14D 关节输出；profile、joint telemetry、轨迹发布器、动作步长/速度限幅和部署脚本已接通。真实关节名、home 位姿、控制器和跌倒保护仍需在装配好的 X5 上验收。见 [MicroDuck 腿式运行链路](docs/microduck-leg-runtime.md) |
 | **mujoco-web 部署方模型注册表** | ✅ | 受审 MJCF 白名单 + 启动时真实编译 fail-closed（`npm run verify:mujoco-models`）；不开放任意上传 |
 | mjlab + rsl-rl GPU 训练 | 🔌 | 参考适配器在 `engines/mjlab-rsl-rl-adapter/`：rsl-rl `OnPolicyRunner` 真跑 2 迭代（`npm run verify:mjlab-adapter`，CPU 可验证），mjlab GPU 物理侧需自备 GPU 训练栈；物理级 DR 与 dm_control 生态接入已补齐见上表 |
 | RoboGo 适配接口 | 🔌 | 需要服务端配置真实地址、凭据和网络策略 |

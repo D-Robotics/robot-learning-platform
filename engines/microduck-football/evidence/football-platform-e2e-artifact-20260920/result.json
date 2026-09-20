@@ -1,0 +1,66 @@
+{
+  "status": "completed",
+  "engine": "microduck-football",
+  "taskId": "football-single-goal-kick",
+  "physicsBackend": "microduck-football-mujoco",
+  "cuda": true,
+  "deployable": false,
+  "metrics": {
+    "contractValid": true,
+    "task": "single-goal-kick",
+    "observationSize": 20,
+    "actionSize": 4,
+    "realActorObservationSize": 61,
+    "realActorActionSize": 14,
+    "reward": 0.3082171678543091,
+    "goals": 25720,
+    "completedEpisodes": 32496,
+    "successRate": 0.995,
+    "iterations": 60,
+    "cuda": true
+  },
+  "checkpoint": {
+    "checkpointId": "microduck-football-football-platform-e2e-artifact-20260920",
+    "artifactRef": "artifact://microduck-football/football-platform-e2e-artifact-20260920/policy.pt",
+    "iteration": 60
+  },
+  "artifact": {
+    "ref": "artifact://microduck-football/football-platform-e2e-artifact-20260920/policy.onnx",
+    "artifactId": "microduck-football-football-platform-e2e-artifact-20260920",
+    "version": "iter-60",
+    "role": "calibration",
+    "name": "policy.onnx",
+    "kind": "source",
+    "format": "onnx",
+    "runtime": "",
+    "workload": "locomotion",
+    "targetPlatforms": [
+      "rdk-x5"
+    ],
+    "sizeBytes": 79880,
+    "sha256": "9ab32a5788b0a4f502221df0945a3e804a79e205d7121f5cf9817ed2bb470010"
+  },
+  "exports": [
+    {
+      "name": "policy.ts",
+      "format": "torchscript",
+      "ref": "artifact://microduck-football/football-platform-e2e-artifact-20260920/policy.ts",
+      "sizeBytes": 92991,
+      "sha256": "9b73c2995c1cceb92ce786b694ec779443ed393ef9e7f6ed8126a1a9ed5a693a"
+    },
+    {
+      "name": "policy.onnx",
+      "format": "onnx",
+      "ref": "artifact://microduck-football/football-platform-e2e-artifact-20260920/policy.onnx",
+      "sizeBytes": 79880,
+      "sha256": "9ab32a5788b0a4f502221df0945a3e804a79e205d7121f5cf9817ed2bb470010"
+    },
+    {
+      "name": "evaluation.json",
+      "format": "unknown",
+      "ref": "artifact://microduck-football/football-platform-e2e-artifact-20260920/evaluation.json",
+      "sizeBytes": 24540,
+      "sha256": "b7f26120c35b5a674bae95bb8bd44b1110ddf375ae3c9f40c3be730a7f491233"
+    }
+  ]
+}

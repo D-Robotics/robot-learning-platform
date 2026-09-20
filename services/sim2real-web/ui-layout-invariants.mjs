@@ -357,7 +357,10 @@ export function assertStyleInvariants(publicDir) {
   // desktop/mobile component overrides for records and the device console.
   // These are responsive pairs in the same final polish layer, verified by
   // the responsive suite below; keep the increase limited to this batch.
-  const CROSS_LAYER_BUDGET = 331;
+  // 331 → 337 (2026-09-20): the Inspector/breadcrumb pass adds six intentional
+  // final-skin selectors for the single-surface workbench treatment. They are
+  // limited to the compact chrome and disclosure surfaces in the final layer.
+  const CROSS_LAYER_BUDGET = 337;
   const appCss = sheets.find((sh) => sh.file === 'app.css');
   if (appCss) {
     const bannerRe = /\/\* =+ ([a-z-]+\.css) —/g;

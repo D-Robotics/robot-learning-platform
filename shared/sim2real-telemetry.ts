@@ -27,6 +27,9 @@ export interface Sim2RealRunMetrics {
   actionSize: number;
   reward?: number;
   successRate?: number;
+  /** MuJoCo post-training evaluation episode count and mean return. */
+  evaluationEpisodes?: number;
+  meanReturn?: number;
   fallRate?: number;
   episodeLength?: number;
   /** Latency figure; interpret only with {@link measurementStage}. */

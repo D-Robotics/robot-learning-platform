@@ -32,7 +32,7 @@ import rclpy
 from nav_msgs.msg import Odometry
 from rclpy.node import Node
 from rclpy.qos import QoSProfile, ReliabilityPolicy
-from sensor_msgs.msg import Imu
+from sensor_msgs.msg import Imu, JointState
 
 from board_camera_frame import declared_shape as declared_camera_shape
 from board_camera_frame import frame_to_nhwc
@@ -83,6 +83,7 @@ def _topic(name, default):
 IMU_TOPIC = os.environ.get("RDK_SIM2REAL_IMU_TOPIC", _topic("imu", "/imu"))
 ODOM_TOPIC = os.environ.get("RDK_SIM2REAL_ODOM_TOPIC", _topic("odom", "/odom"))
 BATTERY_TOPIC = os.environ.get("RDK_SIM2REAL_BATTERY_TOPIC", _topic("battery", "/originbot_status"))
+JOINT_STATE_TOPIC = os.environ.get("RDK_SIM2REAL_JOINT_STATE_TOPIC", _topic("jointStates", "/joint_states"))
 # The camera topic is only subscribed when the adapter declares a frame shape.
 # Without the declaration the sampler stays exactly as it was: a camera block in
 # the snapshot is an input a vision policy will consume, so it must never appear
@@ -102,14 +103,22 @@ class TelemetryNode(Node):
         # this stack, so match it exactly with a RELIABLE subscription.
         sensor_qos = QoSProfile(depth=5, reliability=ReliabilityPolicy.BEST_EFFORT)
         status_qos = QoSProfile(depth=5, reliability=ReliabilityPolicy.RELIABLE)
+        self._sensor_qos = sensor_qos
         self._imu = None
         self._odom = None
         self._battery = None
+        self._joint_states = None
         self._camera = None
         self._camera_dropped = 0
         self._seq = 0
         self.create_subscription(Imu, IMU_TOPIC, self._on_imu, sensor_qos)
         self.create_subscription(Odometry, ODOM_TOPIC, self._on_odom, sensor_qos)
+        # Joint-state telemetry is optional for wheeled adapters and required
+        # by the MicroDuck leg profile. Keeping the subscription here makes
+        # the policy runtime consume one atomic snapshot instead of racing a
+        # second ROS reader against the control loop.
+        if "jointStates" in _TOPICS or str((_ADAPTER.get("actuator") or {}).get("kind")) == "joint":
+            self.create_subscription(JointState, JOINT_STATE_TOPIC, self._on_joint_state, sensor_qos)
         self._status_type = self._load_status_type()
         if self._status_type is not None:
             self.create_subscription(
@@ -139,7 +148,7 @@ class TelemetryNode(Node):
             )
             return
         try:
-            self.create_subscription(Image, CAMERA_TOPIC, self._on_image, sensor_qos)
+            self.create_subscription(Image, CAMERA_TOPIC, self._on_image, self._sensor_qos)
         except Exception as exc:  # noqa: BLE001 - never let this stop the sampler
             print(f"camera subscription failed: {exc!r}", file=sys.stderr, flush=True)
 
@@ -222,6 +231,26 @@ class TelemetryNode(Node):
             "monotonicNs": time.monotonic_ns(),
         }
 
+    def _on_joint_state(self, msg):
+        def finite_list(values):
+            result = []
+            for value in values:
+                try:
+                    number = float(value)
+                except (TypeError, ValueError):
+                    number = float("nan")
+                result.append(number)
+            return result
+
+        self._joint_states = {
+            "names": [str(name) for name in getattr(msg, "name", [])],
+            "position": finite_list(getattr(msg, "position", [])),
+            "velocity": finite_list(getattr(msg, "velocity", [])),
+            "effort": finite_list(getattr(msg, "effort", [])),
+            "ts": time.time(),
+            "monotonicNs": time.monotonic_ns(),
+        }
+
     def _on_status(self, msg):
         voltage = getattr(msg, "battery_voltage", None)
         self._battery = (
@@ -254,6 +283,15 @@ class TelemetryNode(Node):
             data["odom"]["sampleMonotonicNs"] = int(self._odom["monotonicNs"])
         if self._battery and now - self._battery["ts"] <= STALE_SEC:
             data["batteryVoltage"] = self._battery["voltage"]
+        if self._joint_states and now - self._joint_states["ts"] <= STALE_SEC:
+            data["jointStates"] = {
+                "names": list(self._joint_states["names"]),
+                "position": list(self._joint_states["position"]),
+                "velocity": list(self._joint_states["velocity"]),
+                "effort": list(self._joint_states["effort"]),
+                "sampleTs": float(self._joint_states["ts"]),
+                "sampleMonotonicNs": int(self._joint_states["monotonicNs"]),
+            }
         if self._camera and now - self._camera["ts"] <= STALE_SEC:
             # Shape and channel count travel with the frame so the consumer can
             # verify them instead of trusting the producer. frame_to_nhwc
@@ -276,7 +314,12 @@ class TelemetryNode(Node):
             "sourceMonotonicNs": time.monotonic_ns(),
             "seq": self._seq,
             "adapterId": ADAPTER_ID,
-            "topics": {"imu": IMU_TOPIC, "odom": ODOM_TOPIC, "battery": BATTERY_TOPIC},
+            "topics": {
+                "imu": IMU_TOPIC,
+                "odom": ODOM_TOPIC,
+                "battery": BATTERY_TOPIC,
+                "jointStates": JOINT_STATE_TOPIC,
+            },
             "data": data if data else None,
         }
         if CAMERA_SHAPE is not None:

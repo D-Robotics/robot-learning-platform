@@ -34,6 +34,8 @@ historical validation notes keeps reading the dimension fields.
 """
 
 import argparse
+import base64
+import binascii
 import json
 import math
 import os
@@ -43,6 +45,7 @@ import sys
 import numpy as np
 
 MODEL_FORMAT = "rdk-offline-bc-v2"
+MODEL_FORMAT_IMAGE = "rdk-offline-bc-v3"
 ACTIVATIONS = ("tanh", "relu")
 ONNX_MISSING_HINT = "python3 -m pip install --user onnx onnxruntime"
 # Minimum rows per split: a validation MSE computed on one or two rows is
@@ -51,6 +54,11 @@ MIN_TRAIN_ROWS = 8
 MIN_VAL_ROWS = 4
 EQUIVALENCE_ATOL = 1e-4
 EQUIVALENCE_ROWS = 64
+# Fixed image-branch encoder: three stride-2 convolutions (k=4) shrink the
+# input by 8x per side before the dense head. Deliberately NOT configurable:
+# a fixed encoder keeps the ONNX graph, the equivalence proof and the review
+# surface small; capacity knobs live in the dense head (--hidden).
+IMAGE_CONV_LAYERS = ((8, 4, 2), (16, 4, 2), (32, 4, 2))
 
 
 def source_revision():
@@ -325,6 +333,191 @@ def fit(x, y, hidden_sizes, activation, epochs, lr, batch_size, seed, val_fracti
         "samples": {"train": int(len(train_idx)), "val": int(len(val_idx))},
     }
     return model, report
+
+
+def parse_image_input(spec):
+    """`64x64` -> (width=64, height=64). Both sides must be positive and a
+    multiple of 8 (three stride-2 k=4 convolutions need it to stay integer)."""
+    parts = spec.lower().split("x")
+    if len(parts) != 2:
+        raise ValueError("--image-input must look like 64x64 (WIDTHxHEIGHT)")
+    try:
+        width, height = int(parts[0]), int(parts[1])
+    except ValueError:
+        raise ValueError("--image-input must be integers, got %r" % spec)
+    if width <= 0 or height <= 0:
+        raise ValueError("--image-input dimensions must be positive")
+    if width % 8 or height % 8:
+        raise ValueError(
+            "--image-input dimensions must be multiples of 8 (three stride-2 "
+            "k=4 convolutions), got %dx%d" % (width, height)
+        )
+    return width, height
+
+
+def load_image_dataset(path, width, height):
+    """Load a mono8 image JSONL dataset with the same fail-closed rules as the
+    vector loader.
+
+    Row schema: {"image": "<base64 of exactly width*height mono8 bytes>",
+    "action": [...], "observation": [...]}. The vector observation is optional
+    but its presence must be consistent across every row (a model that
+    sometimes sees proprioception and sometimes does not is two different
+    models pretending to be one).
+    """
+    expected_bytes = width * height
+    images = []
+    observations = []
+    actions = []
+    saw_vector = False
+    path = pathlib.Path(path)
+    for line_no, line in enumerate(path.read_text().splitlines(), 1):
+        if not line.strip():
+            continue
+        row = json.loads(line)
+        raw = row.get("image")
+        act = row.get("action")
+        if not isinstance(raw, str) or not isinstance(act, list):
+            raise ValueError(
+                "line %d: image (base64 string) and action (numeric list) required" % line_no
+            )
+        if any(isinstance(v, bool) or not isinstance(v, (int, float)) for v in act):
+            raise ValueError("line %d: action values must be numeric" % line_no)
+        if any(not math.isfinite(v) for v in act):
+            raise ValueError("line %d: action values must be finite" % line_no)
+        try:
+            decoded = base64.b64decode(raw, validate=True)
+        except (binascii.Error, ValueError):
+            raise ValueError("line %d: image is not valid base64" % line_no)
+        if len(decoded) != expected_bytes:
+            raise ValueError(
+                "line %d: image decodes to %d bytes, expected %d (%dx%d mono8)"
+                % (line_no, len(decoded), expected_bytes, width, height)
+            )
+        obs = row.get("observation")
+        if obs is not None:
+            if not isinstance(obs, list) or any(
+                isinstance(v, bool) or not isinstance(v, (int, float)) for v in obs
+            ):
+                raise ValueError("line %d: observation must be a numeric list" % line_no)
+            if any(not math.isfinite(v) for v in obs):
+                raise ValueError("line %d: observation values must be finite" % line_no)
+            saw_vector = True
+        elif observations and any(o is not None for o in observations[-1:]):
+            pass
+        images.append(np.frombuffer(decoded, dtype=np.uint8).astype(np.float64))
+        observations.append(obs)
+        actions.append(act)
+    if not images:
+        raise ValueError("dataset is empty")
+    if saw_vector and any(o is None for o in observations):
+        raise ValueError(
+            "inconsistent rows: some rows carry a vector observation, others do not"
+        )
+    if saw_vector and len({len(o) for o in observations}) != 1:
+        raise ValueError("inconsistent vector observation dimensions")
+    if len({len(y) for y in actions}) != 1:
+        raise ValueError("inconsistent action dimensions")
+    x_img = np.stack(images).reshape((-1, height, width))
+    x_vec = np.asarray(observations, dtype=np.float64) if saw_vector else None
+    y = np.asarray(actions, dtype=np.float64)
+    return x_img, x_vec, y
+
+
+def _im2col(x, k, stride):
+    """[N,C,H,W] -> columns [N, C*k*k, oh*ow] in (c, kh, kw) order."""
+    n, c, h, w = x.shape
+    oh = (h - k) // stride + 1
+    ow = (w - k) // stride + 1
+    cols = np.empty((n, c * k * k, oh * ow), dtype=x.dtype)
+    for i in range(k):
+        for j in range(k):
+            rows = x[:, :, i : i + stride * oh : stride, j : j + stride * ow : stride]
+            cols[:, (i * k + j) * c : (i * k + j + 1) * c, :] = rows.reshape(n, c, oh * ow)
+    return cols, oh, ow
+
+
+def _col2im(dcols, x_shape, k, stride):
+    """Inverse scatter of _im2col: [N, C*k*k, oh*ow] -> [N,C,H,W] (overlapping
+    receptive fields accumulate, which is what the gradient requires)."""
+    n, c, h, w = x_shape
+    oh = (h - k) // stride + 1
+    ow = (w - k) // stride + 1
+    dx = np.zeros(x_shape, dtype=dcols.dtype)
+    for i in range(k):
+        for j in range(k):
+            rows = np.arange(oh) * stride + i
+            cols = np.arange(ow) * stride + j
+            patch = dcols[:, (i * k + j) * c : (i * k + j + 1) * c, :].reshape(
+                n, c, oh, ow
+            )
+            np.add.at(dx, (slice(None), slice(None), rows[:, None], cols[None, :]), patch)
+    return dx
+
+
+def _image_net_shapes(height, width, vec_size, hidden_sizes, action_size):
+    """Layer shape ledger shared by init, forward and ONNX export."""
+    shapes = []
+    h, w, c_in = height, width, 1
+    for filters, k, stride in IMAGE_CONV_LAYERS:
+        shapes.append(
+            {
+                "kind": "conv",
+                "filters": filters,
+                "kernel": k,
+                "stride": stride,
+                "in_channels": c_in,
+                "in_height": h,
+                "in_width": w,
+            }
+        )
+        h = (h - k) // stride + 1
+        w = (w - k) // stride + 1
+        c_in = filters
+    flat = c_in * h * w
+    dense_sizes = [flat + vec_size, *hidden_sizes, action_size]
+    for fan_in, fan_out in zip(dense_sizes[:-1], dense_sizes[1:]):
+        shapes.append({"kind": "dense", "fan_in": fan_in, "fan_out": fan_out})
+    return shapes, flat
+
+
+def init_image_net(height, width, vec_size, hidden_sizes, action_size, activation, seed):
+    """Seeded parameters for the fixed conv encoder + dense head.
+
+    Conv weights are stored [filters, in*k*k] in the same (c, kh, kw) order
+    im2col produces, so training and export never disagree about layout.
+    """
+    rng = np.random.default_rng(seed)
+    shapes, _ = _image_net_shapes(height, width, vec_size, hidden_sizes, action_size)
+    params = []
+    for shape in shapes:
+        if shape["kind"] == "conv":
+            fan_in = shape["in_channels"] * shape["kernel"] ** 2
+            fan_out = shape["filters"] * shape["kernel"] ** 2
+            bound = math.sqrt(6.0 / (fan_in + fan_out))
+            weights = rng.uniform(
+                -bound, bound, (shape["filters"], shape["in_channels"] * shape["kernel"] ** 2)
+            )
+            biases = np.zeros(shape["filters"])
+        else:
+            bound = math.sqrt(6.0 / (shape["fan_in"] + shape["fan_out"]))
+            weights = rng.uniform(-bound, bound, (shape["fan_in"], shape["fan_out"]))
+            biases = np.zeros(shape["fan_out"])
+        params.append([weights, biases])
+    return params
+
+
+def forward_image(params, images, x_vec, activation):
+    """Images [N,H,W] in [0,255] (+ optional vector obs) -> (actions, cache)."""
+    x = (images[:, None, :, :] - _PIXEL_MEAN[0]) / _PIXEL_STD[0]
+    cache = {"conv_inputs": [x]}
+    for weights, biases in params[: len(IMAGE_CONV_LAYERS)]:
+        k = int(round(math.sqrt(weights.shape[1] // weights.shape[1] // weights.shape[0] * weights.shape[1] / weights.shape[1])))  # placeholder
+    return x, cache
+
+
+def fit_image(x_img, x_vec, y, hidden_sizes, activation, epochs, lr, batch_size, seed, val_fraction):
+    raise NotImplementedError
 
 
 def forward_float32(model, x32):

@@ -14,6 +14,7 @@ import {
   classifySim2RealAgentIntent,
   createSim2RealAgentPlan,
   createSim2RealAgentPlanVariants,
+  legacyConversationReply,
 } from '../sim2real/sim2real-agent.js';
 
 describe('Sim2Real Agent planner', () => {
@@ -83,6 +84,15 @@ describe('Sim2Real Agent planner', () => {
     expect(variants).toHaveLength(1);
     expect(variants[0].key).toBe('thorough');
     expect(variants[0].plan.intent).toBe('conversation');
+  });
+
+  it('keeps legacy conversation fallback context-aware', () => {
+    expect(legacyConversationReply('你是谁')).toContain('RDK 机器人学习工作台');
+    expect(legacyConversationReply('你能做什么')).toContain('训练');
+    expect(createSim2RealAgentPlan('你是谁').conversationReply).toContain('AI Agent');
+    expect(createSim2RealAgentPlan('你能做什么').conversationReply).not.toBe(
+      createSim2RealAgentPlan('你是谁').conversationReply,
+    );
   });
 });
 

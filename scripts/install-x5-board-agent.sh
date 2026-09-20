@@ -156,6 +156,7 @@ RDK_SIM2REAL_BOARD_AGENT_TOKEN=
 RDK_SIM2REAL_BOARD_AGENT_ENABLE_DRIVE=0
 RDK_SIM2REAL_BOARD_AGENT_ENABLE_POLICY=0
 RDK_BOARD_RUNTIME_DIR=/var/lib/rdk-board-agent/runtime
+RDK_SIM2REAL_ADAPTER_CONFIG=/opt/rdk-board-agent/profiles/rdk-x5-originbot-real.json
 EOF_AGENT
       ;;
     telemetry)

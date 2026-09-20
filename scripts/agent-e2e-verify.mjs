@@ -122,9 +122,11 @@ async function pollRun(base, runId, { timeoutMs = 45_000 } = {}) {
 const scratchRoot = await mkdtemp(path.join(os.tmpdir(), 'rdk-agent-e2e-'));
 try {
   const storageDir = path.join(scratchRoot, 'storage');
+  const auditDir = path.join(scratchRoot, 'audit');
   const workerDataDir = path.join(scratchRoot, 'worker');
   const engineDir = path.join(scratchRoot, 'engine');
   await mkdir(storageDir, { recursive: true });
+  await mkdir(auditDir, { recursive: true, mode: 0o700 });
   await mkdir(workerDataDir, { recursive: true });
   await mkdir(engineDir, { recursive: true });
 
@@ -216,6 +218,7 @@ try {
       RDK_SIM2REAL_BIND_HOST: '127.0.0.1',
       RDK_SIM2REAL_PORT: String(webPort),
       RDK_SIM2REAL_STORAGE_DIR: storageDir,
+      RDK_SIM2REAL_AUDIT_FILE: path.join(auditDir, 'audit.ndjson'),
       RDK_SIM2REAL_DEPLOYMENT: 'local',
       RDK_SIM2REAL_SSO_REQUIRED: '0',
       RDK_SIM2REAL_SSO_ENABLED: '0',

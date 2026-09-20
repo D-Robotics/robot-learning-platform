@@ -58,6 +58,12 @@ export const REWARD_QUANTITIES = Object.freeze([
 export const REWARD_ENGINE_QUANTITIES = Object.freeze({
   'starter-ppo': Object.freeze(['action', 'goal', 'heading']),
   'mjx-ppo': Object.freeze(['action', 'goal', 'heading', 'attitude', 'contact', 'body_rate']),
+  // The upstream MicroDuck stack exposes the same physical quantities through
+  // mjlab/MuJoCo Warp, while task-specific terms remain owned by the upstream
+  // task registry. Keeping this capability alias lets the platform validate
+  // the shared safety/reward envelope without pretending it reimplements the
+  // full MicroDuck trainer.
+  'microduck-rl': Object.freeze(['action', 'goal', 'heading', 'attitude', 'contact', 'body_rate']),
 });
 
 /**

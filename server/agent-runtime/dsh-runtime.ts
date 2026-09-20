@@ -9,6 +9,7 @@ import AgentLoop from '@deepseek-ai/dsh-agent-loop';
 import LlmRuntime from '@deepseek-ai/dsh-llm';
 import * as DeepSeekLlm from '@deepseek-ai/dsh-llm-deepseek';
 import SessionStore from '@deepseek-ai/dsh-session';
+import SessionProjectionRegistry from '@deepseek-ai/dsh-session-projection';
 import JsonlSessionPersistence from '@deepseek-ai/dsh-session-persistence-jsonl';
 import SystemPrompt from '@deepseek-ai/dsh-system-prompt';
 import ToolRuntime from '@deepseek-ai/dsh-tools';
@@ -86,9 +87,11 @@ export async function createDshRuntime(options: DshRuntimeOptions): Promise<Cont
     await ctx.plugin(JsonlSessionPersistence, {
       root: options.persistenceRoot,
       compression: 'none',
-      packChunks: false,
     });
     await ctx.plugin(SessionCheckpointPolicy);
+    // 0.1.5 的 AgentLoop 在构造时向 projection registry 注册 turn 边界投影，
+    // 该 registry 不再由 SessionStore 隐式提供，必须显式加载。
+    await ctx.plugin(SessionProjectionRegistry);
     await ctx.plugin(DeepSeekLlm, deepseekOptions);
     await ctx.plugin(AgentLoop, { agents: [] });
     installDshCapabilityTools(ctx, options.capabilityHandlers);
@@ -116,6 +119,40 @@ export class DshAgentFailure extends Error {
   ) {
     super(message);
     this.name = 'DshAgentFailure';
+  }
+}
+
+const DEFAULT_DSH_TURN_TIMEOUT_MS = 110_000;
+
+function dshTurnTimeoutMs(): number {
+  const configured = Number(process.env.RDK_SIM2REAL_DSH_TURN_TIMEOUT_MS);
+  if (!Number.isFinite(configured) || configured <= 0) return DEFAULT_DSH_TURN_TIMEOUT_MS;
+  // Keep the agent timeout below the HTTP request timeout so the browser gets
+  // a stable JSON error instead of a socket reset when a provider/tool stalls.
+  return Math.min(Math.max(Math.floor(configured), 1_000), 119_000);
+}
+
+async function waitForDshTurn(agent: { whenIdle: () => Promise<unknown> }): Promise<void> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    await Promise.race([
+      agent.whenIdle(),
+      new Promise<never>((_resolve, reject) => {
+        timer = setTimeout(
+          () =>
+            reject(
+              new DshAgentFailure(
+                'DSH_TURN_TIMEOUT',
+                'DSH 本轮对话等待超时，模型或工具可能仍在处理；请稍后查看运行记录或重试。',
+              ),
+            ),
+          dshTurnTimeoutMs(),
+        );
+        timer.unref?.();
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
   }
 }
 
@@ -365,35 +402,56 @@ function tokenUsageOf(events: readonly unknown[]) {
 export async function askDsh(
   ctx: Context,
   prompt: string,
-  options: { model?: string; sessionId?: string } = {},
+  options: { model?: string; sessionId?: string; signal?: AbortSignal } = {},
 ) {
   const id = SessionId(options.sessionId || `sim2real-${randomUUID()}`);
-  const handle = await ctx.agents.create({
-    sessionId: id,
-    agentOptions: {
-      provider: 'deepseek-official',
-      // Keep the agent model explicit and deployment-owned.  The dedicated
-      // setting wins, while DEEPSEEK_MODEL remains a backwards-compatible
-      // fallback for existing Studio deployments.
-      model:
-        options.model ||
-        process.env.RDK_SIM2REAL_DSH_MODEL ||
-        process.env.DEEPSEEK_MODEL ||
-        'deepseek-chat',
-    },
-  });
+  const agentOptions = {
+    provider: 'deepseek-official',
+    // Keep the agent model explicit and deployment-owned.  The dedicated
+    // setting wins, while DEEPSEEK_MODEL remains a backwards-compatible
+    // fallback for existing Studio deployments.
+    model:
+      options.model ||
+      process.env.RDK_SIM2REAL_DSH_MODEL ||
+      process.env.DEEPSEEK_MODEL ||
+      'deepseek-chat',
+  };
+  // A follow-up must resume the persisted session. Calling create() with an
+  // id that already has durable history races the registry's live-session
+  // ownership check and surfaces an opaque UNKNOWN/id-collision failure after
+  // the first successful turn.
+  const handle = options.sessionId
+    ? await ctx.agents.resume({ resumeSessionId: id, agentOptions })
+    : await ctx.agents.create({ sessionId: id, agentOptions });
+  const cancelOnAbort = () => handle.agent.cancel({ kind: 'parent' });
   try {
+    if (options.signal?.aborted) {
+      cancelOnAbort();
+      throw new DshAgentFailure('DSH_TURN_ABORTED', 'DSH 本轮对话已取消。');
+    }
+    options.signal?.addEventListener('abort', cancelOnAbort, { once: true });
     handle.agent.followup(
       createUserMessage({
         content: [{ type: 'text', text: prompt.slice(0, 12000) }],
         source: { kind: 'user' },
       }),
     );
-    await handle.agent.whenIdle();
-    const events = handle.agent.session.events;
+    await waitForDshTurn(handle.agent);
+    const events = handle.agent.session.snapshotEvents();
     const failure = lastTurnFailure(events);
     if (failure) throw mapTurnFailure(failure);
-    const messages = events
+    // Resumed sessions contain the complete durable conversation. Project only
+    // the current turn back to the browser; returning the full history here
+    // makes every follow-up repeat all previous assistant text in one reply.
+    let latestTurnStart = -1;
+    for (let index = events.length - 1; index >= 0; index -= 1) {
+      if (events[index]?.type === 'turn/start') {
+        latestTurnStart = index;
+        break;
+      }
+    }
+    const turnEvents = latestTurnStart >= 0 ? events.slice(latestTurnStart) : events;
+    const messages = turnEvents
       .filter(
         (item): item is SessionEvent<'assistant/message'> =>
           Boolean(item) &&
@@ -428,14 +486,15 @@ export async function askDsh(
       text:
         stripInlineEnglishPreamble(stripEnglishPreamble(text)) ||
         'DSH 已完成本轮，但没有返回文本。',
-      reasoning: reasoningTextOf(events),
+      reasoning: reasoningTextOf(turnEvents),
       // Walk the complete event list, not the tail below: streaming chunks
       // push tool events out of any fixed window.
-      toolTrail: toolTrailOf(events),
-      events: events.slice(-50),
+      toolTrail: toolTrailOf(turnEvents),
+      events: turnEvents.slice(-50),
       ...(tokenUsageOf(events) ? { usage: tokenUsageOf(events) } : {}),
     };
   } finally {
+    options.signal?.removeEventListener('abort', cancelOnAbort);
     await handle.dispose();
   }
 }

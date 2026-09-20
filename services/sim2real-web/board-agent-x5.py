@@ -345,6 +345,15 @@ def _profile_number(section, key, default, lower, upper):
 
 _profile_actuator = _adapter_profile.get("actuator") or {}
 _profile_topics = ((_adapter_profile.get("ros") or {}).get("topics") or {})
+PROFILE_ACTUATOR_KIND = str(_profile_actuator.get("kind") or "diff-drive").strip().lower()
+JOINT_ACTUATOR = PROFILE_ACTUATOR_KIND == "joint"
+# The existing environment switch is the operator's actuator authorization for
+# both chassis and leg profiles. A joint profile must never start the Twist
+# publisher, though, so keep a separate authorization bit and disable the
+# drive-specific surface after profile selection.
+MOTION_SWITCH_ENABLED = DRIVE_ENABLED
+if JOINT_ACTUATOR:
+    DRIVE_ENABLED = False
 DRIVE_MAX_LINEAR = min(DRIVE_MAX_LINEAR, _profile_number("safety", "maxLinear", DRIVE_MAX_LINEAR, 0.01, 0.3))
 DRIVE_MAX_ANGULAR = min(DRIVE_MAX_ANGULAR, _profile_number("safety", "maxAngular", DRIVE_MAX_ANGULAR, 0.05, 1.0))
 DRIVE_PUBLISH_HZ = min(DRIVE_PUBLISH_HZ, _profile_number("runtime", "decisionHz", DRIVE_PUBLISH_HZ, 1, 50))
@@ -882,7 +891,7 @@ def originbot_telemetry_cached():
         return _ob_state["data"]
 
 
-# ---- policy runtime (trained ONNX → bounded /cmd_vel) ----------------------
+# ---- policy runtime (trained ONNX → bounded adapter command) ----------------
 # A SECOND gate on top of the drive switch: even with the platform's
 # RDK_SIM2REAL_STATION_DRIVE_ENABLED=1 and the agent's
 # RDK_SIM2REAL_BOARD_AGENT_ENABLE_DRIVE=1, policy-driven motion only runs when
@@ -891,7 +900,10 @@ def originbot_telemetry_cached():
 POLICY_ENABLED = os.environ.get("RDK_SIM2REAL_BOARD_AGENT_ENABLE_POLICY", "").strip() == "1"
 POLICY_RUNTIME_SCRIPT = os.environ.get(
     "RDK_BOARD_POLICY_RUNTIME",
-    os.path.join(os.path.dirname(os.path.abspath(__file__)), "board-policy-runtime.py"),
+    os.path.join(
+        os.path.dirname(os.path.abspath(__file__)),
+        "board-joint-policy-runtime.py" if JOINT_ACTUATOR else "board-policy-runtime.py",
+    ),
 )
 POLICY_CMD_FILE = ipc_path("RDK_BOARD_POLICY_CMD", "policy-runtime-cmd.json")
 POLICY_STATE_FILE = ipc_path("RDK_BOARD_POLICY_STATE", "policy-runtime-state.json")
@@ -1053,9 +1065,12 @@ def policy_status():
         "enabled": POLICY_ENABLED,
         "runtimeRunning": runtime_running,
         "driveEnabled": DRIVE_ENABLED,
+        "actuatorEnabled": MOTION_SWITCH_ENABLED,
+        "actuatorKind": PROFILE_ACTUATOR_KIND,
+        "commandTopic": DRIVE_COMMAND_TOPIC,
         # Policy motion requires BOTH switches; report the combined verdict so
         # the UI can render exactly one gate explanation.
-        "motionAuthorized": POLICY_ENABLED and DRIVE_ENABLED,
+        "motionAuthorized": POLICY_ENABLED and MOTION_SWITCH_ENABLED,
         # A historical state file must never make a stopped process look
         # ready/running to the station UI or API consumers.
         "state": snap.get("state") if runtime_running and snap else "stopped" if snap else None,
@@ -1098,8 +1113,8 @@ def policy_status():
             "decisionHz": DRIVE_PUBLISH_HZ,
             "chassisWatchdogMs": DRIVE_WATCHDOG_MS,
         },
-        "note": "trained-policy inference on board; motion requires drive+policy switches, "
-                "output is speed-clamped and watchdog-floored exactly like the drive canary",
+        "note": "trained-policy inference on board; motion requires the board drive/policy switches, "
+                "and the selected adapter runtime publishes only its declared command type",
     }
 
 
@@ -1114,10 +1129,11 @@ def policy_stop(reason="operator-stop"):
             res = {"ok": True, "state": "idle", "stoppedBy": "process-terminated"}
     else:
         res = {"ok": True, "state": None, "stoppedBy": "runtime-not-running"}
-    # Policy motion held exclusive /cmd_vel ownership (the resident drive
-    # publisher was torn down at session start). Restore the publisher so the
-    # next manual drive window is latency-free again.
-    _rewarm_drive_publisher()
+    # A joint runtime owns its trajectory topic and has no resident /cmd_vel
+    # publisher to restore. The drive runtime releases /cmd_vel exclusively
+    # and is re-warmed after the policy session.
+    if not JOINT_ACTUATOR:
+        _rewarm_drive_publisher()
     return res
 
 
@@ -1333,11 +1349,11 @@ def policy_load(path):
 def policy_start(direction, goal_x=None, goal_y=None):
     if not POLICY_ENABLED:
         return {"ok": False, "error": "policy-disabled"}
-    if not DRIVE_ENABLED:
+    if not MOTION_SWITCH_ENABLED:
         # Gate honesty: refuse before touching the runtime, explain both gates.
         return {"ok": False, "error": "drive-disabled",
                 "message": "policy start requires RDK_SIM2REAL_BOARD_AGENT_ENABLE_DRIVE=1 too"}
-    if not _finite_number(direction):
+    if not JOINT_ACTUATOR and not _finite_number(direction):
         return {"ok": False, "error": "invalid-type"}
     if (goal_x is None) != (goal_y is None):
         return {"ok": False, "error": "invalid-goal",
@@ -1347,12 +1363,12 @@ def policy_start(direction, goal_x=None, goal_y=None):
                 "message": "goalX/goalY 必须是有限数字"}
     snap = _policy_read_state()
     model = snap.get("model") if isinstance(snap, dict) else None
-    if isinstance(model, dict) and model.get("inputDim") in (8, 42):
+    if not JOINT_ACTUATOR and isinstance(model, dict) and model.get("inputDim") in (8, 42):
         if goal_x is None or goal_y is None:
             contract = "8D OriginBot" if model.get("inputDim") == 8 else "42D goalnav (imu-gravity-v1)"
             return {"ok": False, "error": "goal-required",
                     "message": "%s 策略需要同时提供 goalX/goalY（odom 绝对坐标，单位：米）" % contract}
-    payload = {"direction": float(direction)}
+    payload = {"direction": float(direction) if _finite_number(direction) else 0.0}
     if goal_x is not None or goal_y is not None:
         payload.update({"goalX": goal_x, "goalY": goal_y})
     # Exclusive /cmd_vel ownership: the resident drive publisher streams idle
@@ -1362,9 +1378,10 @@ def policy_start(direction, goal_x=None, goal_y=None):
     # separate motion authority: tear the publisher down first and re-warm it
     # when the session ends. drive_command re-warms on demand anyway, so the
     # manual canary path is unaffected.
-    _stop_drive_publisher()
+    if not JOINT_ACTUATOR:
+        _stop_drive_publisher()
     res = _policy_send("start", **payload)
-    if not (isinstance(res, dict) and res.get("ok")):
+    if not (isinstance(res, dict) and res.get("ok")) and not JOINT_ACTUATOR:
         _rewarm_drive_publisher()
     return res
 
@@ -1374,7 +1391,7 @@ def _rewarm_drive_publisher():
     releases /cmd_vel. Boot pre-warm exists to keep the first manual drive
     window latency-free; this restores the same steady state. Failures are
     harmless — drive_command starts the publisher on demand."""
-    if DRIVE_ENABLED:
+    if DRIVE_ENABLED and not JOINT_ACTUATOR:
         threading.Thread(target=_start_drive_publisher, daemon=True).start()
 
 
@@ -1418,7 +1435,7 @@ def config_status():
         "unit": AGENT_UNIT_NAME,
         "systemdManaged": os.path.isdir("/run/systemd/system"),
         "switches": {
-            "RDK_SIM2REAL_BOARD_AGENT_ENABLE_DRIVE": DRIVE_ENABLED,
+            "RDK_SIM2REAL_BOARD_AGENT_ENABLE_DRIVE": MOTION_SWITCH_ENABLED,
             "RDK_SIM2REAL_BOARD_AGENT_ENABLE_POLICY": POLICY_ENABLED,
         },
         "restartable": env_present and os.path.isdir("/run/systemd/system"),
@@ -1599,8 +1616,10 @@ def onboarding_preflight():
         },
         "safety": {
             "driveEnabled": DRIVE_ENABLED,
+            "actuatorEnabled": MOTION_SWITCH_ENABLED,
+            "actuatorKind": PROFILE_ACTUATOR_KIND,
             "policyEnabled": POLICY_ENABLED,
-            "motionAuthorized": DRIVE_ENABLED and POLICY_ENABLED,
+            "motionAuthorized": MOTION_SWITCH_ENABLED and POLICY_ENABLED,
             "limits": _actuator_policy(),
             "emergencyStop": "/v1/station/drive/stop",
         },
@@ -1679,7 +1698,7 @@ def build_status():
         "topics": [{"name": name} for name in topics[:24]],
         "uptimeSec": int(time.time() - STARTED_AT),
         "cameraDevices": find_camera_device(),
-        "actuatorControl": DRIVE_ENABLED,
+        "actuatorControl": MOTION_SWITCH_ENABLED,
         "policy": policy_status(),
     }
 
@@ -2001,7 +2020,7 @@ class Handler(BaseHTTPRequestHandler):
                 "capabilities": ["read-only-preflight", "originbot-onboarding", "host-station"]
                 + (["constrained-drive"] if DRIVE_ENABLED else []),
                 "stationCommands": [{"id": c["id"], "label": c["label"]} for c in STATION_COMMANDS],
-                "actuatorControl": DRIVE_ENABLED,
+                "actuatorControl": MOTION_SWITCH_ENABLED,
                 "actuatorPolicy": _actuator_policy(),
                 "mock": False,
                 "board": _identity,
@@ -2444,7 +2463,7 @@ def main():
     print(f"[board-agent] real-data BoardAgent listening on http://{HOST}:{PORT}")
     print(f"[board-agent] board: {_identity['model']} / {_identity['os']} / rdk {_identity['rdkVersion']}")
     print(f"[board-agent] auth: {'token' if TOKEN else 'open (loopback only)'}; "
-          f"actuatorControl={'true' if DRIVE_ENABLED else 'false'}; mock=false; "
+        f"actuatorControl={'true' if MOTION_SWITCH_ENABLED else 'false'}; mock=false; "
           f"policyRuntime={'true' if POLICY_ENABLED else 'false'}")
     sys.stdout.flush()
     try:

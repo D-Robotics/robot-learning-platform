@@ -9,7 +9,15 @@ set -euo pipefail
 repo_root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 target=${RDK_X5_SSH_TARGET:?set RDK_X5_SSH_TARGET to an SSH target such as root@board-host}
 remote_dir=${RDK_X5_AGENT_DIR:-/opt/rdk-board-agent}
-profile="$repo_root/profiles/rdk-x5-originbot-real.json"
+profile_name=${RDK_X5_PROFILE_NAME:-rdk-x5-originbot-real.json}
+case "$profile_name" in
+  rdk-x5-originbot-real.json|rdk-x5-microduck-leg.json) ;;
+  *)
+    echo 'RDK_X5_PROFILE_NAME must be rdk-x5-originbot-real.json or rdk-x5-microduck-leg.json.' >&2
+    exit 2
+    ;;
+esac
+profile="$repo_root/profiles/$profile_name"
 
 # Both values are interpolated into fixed remote shell commands below. Keep
 # the operator-facing SSH/path grammar narrow so a typo cannot become a shell
@@ -58,6 +66,7 @@ for file in \
   "$repo_root/services/sim2real-web/board-drive-publisher.py" \
   "$repo_root/services/sim2real-web/board-telemetry-node.py" \
   "$repo_root/services/sim2real-web/board-policy-runtime.py" \
+  "$repo_root/services/sim2real-web/board-joint-policy-runtime.py" \
   "$repo_root/services/sim2real-web/board-telemetry-uploader.py" \
   "$profile"; do
   test -f "$file" || { echo "missing bundle file: $file" >&2; exit 1; }
@@ -89,18 +98,23 @@ scp \
   "$repo_root/services/sim2real-web/board-policy-runtime.py" \
   "$repo_root/services/sim2real-web/board-telemetry-uploader.py" \
   "$target:$remote_stage/"
-scp "$profile" "$target:$remote_stage/profiles/rdk-x5-originbot-real.json"
+scp "$profile" "$target:$remote_stage/profiles/$profile_name"
 
 # Stop both consumers, swap the reviewed bundle from a private staging
 # directory, and keep a rollback copy until both services report active. This
 # prevents a failed upload from leaving agent and telemetry code mixed while a
 # long-running process continues to serve the old contract.
-ssh "$target" /bin/sh -s -- "$remote_stage" <<'REMOTE'
+ssh "$target" /bin/sh -s -- "$remote_stage" "$profile_name" <<'REMOTE'
 set -eu
 stage=$1
+profile_name=$2
+case "$profile_name" in
+  rdk-x5-originbot-real.json|rdk-x5-microduck-leg.json) ;;
+  *) echo 'unexpected profile name' >&2; exit 1 ;;
+esac
 root=/opt/rdk-board-agent
 backup=$(mktemp -d "$root/.backup.XXXXXX")
-files="board-agent-x5.py board_ipc.py board-drive-publisher.py board-telemetry-node.py board-policy-runtime.py board-telemetry-uploader.py"
+files="board-agent-x5.py board_ipc.py board-drive-publisher.py board-telemetry-node.py board-policy-runtime.py board-joint-policy-runtime.py board-telemetry-uploader.py"
 agent_was_active=0
 uploader_was_active=0
 # This command is update-only for the reviewed systemd installation. Refuse
@@ -117,8 +131,8 @@ mkdir -p "$backup/profiles"
 for file in $files; do
   if [ -f "$root/$file" ]; then cp -p "$root/$file" "$backup/$file"; fi
 done
-if [ -f "$root/profiles/rdk-x5-originbot-real.json" ]; then
-  cp -p "$root/profiles/rdk-x5-originbot-real.json" "$backup/profiles/rdk-x5-originbot-real.json"
+if [ -f "$root/profiles/$profile_name" ]; then
+  cp -p "$root/profiles/$profile_name" "$backup/profiles/$profile_name"
 fi
 restore_on_failure() {
   status=$?
@@ -145,11 +159,11 @@ restore_on_failure() {
         rm -f "$root/$file"
       fi
     done
-    if [ -f "$backup/profiles/rdk-x5-originbot-real.json" ]; then
-      rm -f "$root/profiles/rdk-x5-originbot-real.json"
-      mv -f "$backup/profiles/rdk-x5-originbot-real.json" "$root/profiles/rdk-x5-originbot-real.json"
+    if [ -f "$backup/profiles/$profile_name" ]; then
+      rm -f "$root/profiles/$profile_name"
+      mv -f "$backup/profiles/$profile_name" "$root/profiles/$profile_name"
     else
-      rm -f "$root/profiles/rdk-x5-originbot-real.json"
+      rm -f "$root/profiles/$profile_name"
     fi
     if [ "$agent_was_active" -eq 1 ]; then systemctl start rdk-board-agent.service || true; fi
     if [ "$uploader_was_active" -eq 1 ]; then systemctl start rdk-board-telemetry-uploader.service || true; fi
@@ -165,8 +179,8 @@ for file in $files; do
   chmod 0755 "$stage/$file"
   mv -f "$stage/$file" "$root/$file"
 done
-test -s "$stage/profiles/rdk-x5-originbot-real.json"
-mv -f "$stage/profiles/rdk-x5-originbot-real.json" "$root/profiles/rdk-x5-originbot-real.json"
+test -s "$stage/profiles/$profile_name"
+mv -f "$stage/profiles/$profile_name" "$root/profiles/$profile_name"
 if [ "$agent_was_active" -eq 1 ]; then
   systemctl start rdk-board-agent.service
   systemctl is-active --quiet rdk-board-agent.service

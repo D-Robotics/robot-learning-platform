@@ -1,0 +1,441 @@
+{
+  "task": "single-goal-kick",
+  "device": "cuda",
+  "cuda": true,
+  "observationDim": 20,
+  "actionDim": 4,
+  "numEnvs": 256,
+  "iterations": 60,
+  "curve": [
+    {
+      "iteration": 1,
+      "meanReward": 0.00251598609611392,
+      "goals": 26,
+      "completedEpisodes": 30,
+      "teacherWeight": 0.35
+    },
+    {
+      "iteration": 2,
+      "meanReward": -0.0014911912148818374,
+      "goals": 42,
+      "completedEpisodes": 62,
+      "teacherWeight": 0.3427083333333333
+    },
+    {
+      "iteration": 3,
+      "meanReward": 0.010636674240231514,
+      "goals": 95,
+      "completedEpisodes": 337,
+      "teacherWeight": 0.33541666666666664
+    },
+    {
+      "iteration": 4,
+      "meanReward": 0.008415536023676395,
+      "goals": 143,
+      "completedEpisodes": 439,
+      "teacherWeight": 0.328125
+    },
+    {
+      "iteration": 5,
+      "meanReward": 0.0065135350450873375,
+      "goals": 189,
+      "completedEpisodes": 623,
+      "teacherWeight": 0.3208333333333333
+    },
+    {
+      "iteration": 6,
+      "meanReward": 0.011625787243247032,
+      "goals": 254,
+      "completedEpisodes": 802,
+      "teacherWeight": 0.31354166666666666
+    },
+    {
+      "iteration": 7,
+      "meanReward": 0.007924278266727924,
+      "goals": 306,
+      "completedEpisodes": 955,
+      "teacherWeight": 0.30624999999999997
+    },
+    {
+      "iteration": 8,
+      "meanReward": 0.0122928312048316,
+      "goals": 375,
+      "completedEpisodes": 1166,
+      "teacherWeight": 0.2989583333333333
+    },
+    {
+      "iteration": 9,
+      "meanReward": 0.01377052627503872,
+      "goals": 451,
+      "completedEpisodes": 1368,
+      "teacherWeight": 0.2916666666666667
+    },
+    {
+      "iteration": 10,
+      "meanReward": 0.01810479536652565,
+      "goals": 539,
+      "completedEpisodes": 1575,
+      "teacherWeight": 0.284375
+    },
+    {
+      "iteration": 11,
+      "meanReward": 0.016367314383387566,
+      "goals": 622,
+      "completedEpisodes": 1782,
+      "teacherWeight": 0.2770833333333333
+    },
+    {
+      "iteration": 12,
+      "meanReward": 0.021156419068574905,
+      "goals": 725,
+      "completedEpisodes": 2029,
+      "teacherWeight": 0.26979166666666665
+    },
+    {
+      "iteration": 13,
+      "meanReward": 0.02471567504107952,
+      "goals": 839,
+      "completedEpisodes": 2277,
+      "teacherWeight": 0.26249999999999996
+    },
+    {
+      "iteration": 14,
+      "meanReward": 0.028897717595100403,
+      "goals": 965,
+      "completedEpisodes": 2531,
+      "teacherWeight": 0.25520833333333337
+    },
+    {
+      "iteration": 15,
+      "meanReward": 0.03159788250923157,
+      "goals": 1100,
+      "completedEpisodes": 2794,
+      "teacherWeight": 0.24791666666666662
+    },
+    {
+      "iteration": 16,
+      "meanReward": 0.03415444493293762,
+      "goals": 1244,
+      "completedEpisodes": 3072,
+      "teacherWeight": 0.24062499999999998
+    },
+    {
+      "iteration": 17,
+      "meanReward": 0.03600931912660599,
+      "goals": 1394,
+      "completedEpisodes": 3361,
+      "teacherWeight": 0.23333333333333334
+    },
+    {
+      "iteration": 18,
+      "meanReward": 0.039581574499607086,
+      "goals": 1556,
+      "completedEpisodes": 3659,
+      "teacherWeight": 0.2260416666666666
+    },
+    {
+      "iteration": 19,
+      "meanReward": 0.0365850105881691,
+      "goals": 1711,
+      "completedEpisodes": 3966,
+      "teacherWeight": 0.21875
+    },
+    {
+      "iteration": 20,
+      "meanReward": 0.05073312669992447,
+      "goals": 1904,
+      "completedEpisodes": 4280,
+      "teacherWeight": 0.21145833333333336
+    },
+    {
+      "iteration": 21,
+      "meanReward": 0.04970644414424896,
+      "goals": 2095,
+      "completedEpisodes": 4597,
+      "teacherWeight": 0.20416666666666664
+    },
+    {
+      "iteration": 22,
+      "meanReward": 0.05787116289138794,
+      "goals": 2313,
+      "completedEpisodes": 4950,
+      "teacherWeight": 0.196875
+    },
+    {
+      "iteration": 23,
+      "meanReward": 0.04953989386558533,
+      "goals": 2506,
+      "completedEpisodes": 5268,
+      "teacherWeight": 0.18958333333333335
+    },
+    {
+      "iteration": 24,
+      "meanReward": 0.04394175857305527,
+      "goals": 2682,
+      "completedEpisodes": 5585,
+      "teacherWeight": 0.18229166666666663
+    },
+    {
+      "iteration": 25,
+      "meanReward": 0.0614476315677166,
+      "goals": 2914,
+      "completedEpisodes": 5966,
+      "teacherWeight": 0.175
+    },
+    {
+      "iteration": 26,
+      "meanReward": 0.06671877205371857,
+      "goals": 3161,
+      "completedEpisodes": 6347,
+      "teacherWeight": 0.16770833333333332
+    },
+    {
+      "iteration": 27,
+      "meanReward": 0.07616034895181656,
+      "goals": 3440,
+      "completedEpisodes": 6771,
+      "teacherWeight": 0.16041666666666668
+    },
+    {
+      "iteration": 28,
+      "meanReward": 0.08620873093605042,
+      "goals": 3747,
+      "completedEpisodes": 7201,
+      "teacherWeight": 0.15312499999999998
+    },
+    {
+      "iteration": 29,
+      "meanReward": 0.08179272711277008,
+      "goals": 4042,
+      "completedEpisodes": 7622,
+      "teacherWeight": 0.14583333333333331
+    },
+    {
+      "iteration": 30,
+      "meanReward": 0.09094040840864182,
+      "goals": 4364,
+      "completedEpisodes": 8075,
+      "teacherWeight": 0.13854166666666667
+    },
+    {
+      "iteration": 31,
+      "meanReward": 0.11203707754611969,
+      "goals": 4755,
+      "completedEpisodes": 8607,
+      "teacherWeight": 0.13124999999999998
+    },
+    {
+      "iteration": 32,
+      "meanReward": 0.11256308108568192,
+      "goals": 5147,
+      "completedEpisodes": 9136,
+      "teacherWeight": 0.12395833333333331
+    },
+    {
+      "iteration": 33,
+      "meanReward": 0.12526294589042664,
+      "goals": 5577,
+      "completedEpisodes": 9680,
+      "teacherWeight": 0.11666666666666667
+    },
+    {
+      "iteration": 34,
+      "meanReward": 0.12440670281648636,
+      "goals": 6007,
+      "completedEpisodes": 10243,
+      "teacherWeight": 0.109375
+    },
+    {
+      "iteration": 35,
+      "meanReward": 0.12732145190238953,
+      "goals": 6449,
+      "completedEpisodes": 10828,
+      "teacherWeight": 0.10208333333333332
+    },
+    {
+      "iteration": 36,
+      "meanReward": 0.14022913575172424,
+      "goals": 6932,
+      "completedEpisodes": 11464,
+      "teacherWeight": 0.09479166666666668
+    },
+    {
+      "iteration": 37,
+      "meanReward": 0.13433343172073364,
+      "goals": 7390,
+      "completedEpisodes": 12037,
+      "teacherWeight": 0.0875
+    },
+    {
+      "iteration": 38,
+      "meanReward": 0.15763883292675018,
+      "goals": 7924,
+      "completedEpisodes": 12694,
+      "teacherWeight": 0.08020833333333331
+    },
+    {
+      "iteration": 39,
+      "meanReward": 0.16025738418102264,
+      "goals": 8468,
+      "completedEpisodes": 13373,
+      "teacherWeight": 0.07291666666666667
+    },
+    {
+      "iteration": 40,
+      "meanReward": 0.1792154610157013,
+      "goals": 9072,
+      "completedEpisodes": 14111,
+      "teacherWeight": 0.06562499999999999
+    },
+    {
+      "iteration": 41,
+      "meanReward": 0.18856050074100494,
+      "goals": 9702,
+      "completedEpisodes": 14855,
+      "teacherWeight": 0.05833333333333331
+    },
+    {
+      "iteration": 42,
+      "meanReward": 0.19848790764808655,
+      "goals": 10362,
+      "completedEpisodes": 15619,
+      "teacherWeight": 0.05104166666666668
+    },
+    {
+      "iteration": 43,
+      "meanReward": 0.19692975282669067,
+      "goals": 11015,
+      "completedEpisodes": 16373,
+      "teacherWeight": 0.04375
+    },
+    {
+      "iteration": 44,
+      "meanReward": 0.22022700309753418,
+      "goals": 11743,
+      "completedEpisodes": 17205,
+      "teacherWeight": 0.036458333333333315
+    },
+    {
+      "iteration": 45,
+      "meanReward": 0.218908429145813,
+      "goals": 12465,
+      "completedEpisodes": 18023,
+      "teacherWeight": 0.03
+    },
+    {
+      "iteration": 46,
+      "meanReward": 0.2191888988018036,
+      "goals": 13187,
+      "completedEpisodes": 18835,
+      "teacherWeight": 0.03
+    },
+    {
+      "iteration": 47,
+      "meanReward": 0.2357688546180725,
+      "goals": 13965,
+      "completedEpisodes": 19723,
+      "teacherWeight": 0.03
+    },
+    {
+      "iteration": 48,
+      "meanReward": 0.2454373687505722,
+      "goals": 14768,
+      "completedEpisodes": 20609,
+      "teacherWeight": 0.03
+    },
+    {
+      "iteration": 49,
+      "meanReward": 0.23711609840393066,
+      "goals": 15546,
+      "completedEpisodes": 21470,
+      "teacherWeight": 0.03
+    },
+    {
+      "iteration": 50,
+      "meanReward": 0.24914687871932983,
+      "goals": 16364,
+      "completedEpisodes": 22387,
+      "teacherWeight": 0.03
+    },
+    {
+      "iteration": 51,
+      "meanReward": 0.26599442958831787,
+      "goals": 17232,
+      "completedEpisodes": 23332,
+      "teacherWeight": 0.03
+    },
+    {
+      "iteration": 52,
+      "meanReward": 0.27144140005111694,
+      "goals": 18117,
+      "completedEpisodes": 24293,
+      "teacherWeight": 0.03
+    },
+    {
+      "iteration": 53,
+      "meanReward": 0.2857252061367035,
+      "goals": 19045,
+      "completedEpisodes": 25287,
+      "teacherWeight": 0.03
+    },
+    {
+      "iteration": 54,
+      "meanReward": 0.27606576681137085,
+      "goals": 19946,
+      "completedEpisodes": 26275,
+      "teacherWeight": 0.03
+    },
+    {
+      "iteration": 55,
+      "meanReward": 0.3016946315765381,
+      "goals": 20925,
+      "completedEpisodes": 27321,
+      "teacherWeight": 0.03
+    },
+    {
+      "iteration": 56,
+      "meanReward": 0.2948835790157318,
+      "goals": 21881,
+      "completedEpisodes": 28339,
+      "teacherWeight": 0.03
+    },
+    {
+      "iteration": 57,
+      "meanReward": 0.2890801727771759,
+      "goals": 22821,
+      "completedEpisodes": 29351,
+      "teacherWeight": 0.03
+    },
+    {
+      "iteration": 58,
+      "meanReward": 0.28742238879203796,
+      "goals": 23756,
+      "completedEpisodes": 30362,
+      "teacherWeight": 0.03
+    },
+    {
+      "iteration": 59,
+      "meanReward": 0.29556548595428467,
+      "goals": 24720,
+      "completedEpisodes": 31425,
+      "teacherWeight": 0.03
+    },
+    {
+      "iteration": 60,
+      "meanReward": 0.3082171678543091,
+      "goals": 25720,
+      "completedEpisodes": 32496,
+      "teacherWeight": 0.03
+    }
+  ],
+  "goals": 25720,
+  "completedEpisodes": 32496,
+  "elapsedSeconds": 184.745,
+  "teacherWarmStart": true,
+  "export": {
+    "path": "/root/rdk-football-worker/data/football-optimized-20260920/policy.ts",
+    "format": "torchscript",
+    "observationDim": 20,
+    "actionDim": 4
+  }
+}

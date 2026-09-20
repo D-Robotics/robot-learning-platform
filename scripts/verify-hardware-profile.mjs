@@ -31,10 +31,18 @@ for (const file of files) {
     fail('actuator command is incomplete');
   if (['diff-drive', 'omni-drive'].includes(p.actuator.kind) && !p.ros.topics.cmdVel)
     fail('drive actuator requires ros.topics.cmdVel');
-  if (p.ros?.topics?.cmdVel && p.ros.topics.cmdVel.name !== p.actuator.commandTopic)
-    fail('cmdVel topic must match actuator.commandTopic');
-  if (p.ros?.topics?.cmdVel && p.ros.topics.cmdVel.type !== p.actuator.messageType)
-    fail('cmdVel type must match actuator.messageType');
+  if (p.actuator.kind === 'joint' && !p.ros.topics.jointCommand)
+    fail('joint actuator requires ros.topics.jointCommand');
+  const commandTopic =
+    p.actuator.kind === 'joint' ? p.ros.topics.jointCommand : p.ros.topics.cmdVel;
+  if (commandTopic && commandTopic.name !== p.actuator.commandTopic)
+    fail(
+      `${p.actuator.kind === 'joint' ? 'jointCommand' : 'cmdVel'} topic must match actuator.commandTopic`,
+    );
+  if (commandTopic && commandTopic.type !== p.actuator.messageType)
+    fail(
+      `${p.actuator.kind === 'joint' ? 'jointCommand' : 'cmdVel'} type must match actuator.messageType`,
+    );
   if (!(p.actuator.maxLinear > 0 && p.actuator.maxLinear <= 0.3))
     fail('linear safety bound invalid');
   if (!(p.actuator.maxAngular > 0 && p.actuator.maxAngular <= 1))
@@ -72,9 +80,19 @@ for (const file of files) {
     fail('runtime.decisionHz must be 1..50');
   if (
     p.runtime?.actionOutput !== undefined &&
-    !['physical-twist', 'normalized-twist'].includes(String(p.runtime.actionOutput).trim())
+    ![
+      'physical-twist',
+      'normalized-twist',
+      ...(p.actuator.kind === 'joint' ? ['joint-position-offset'] : []),
+    ].includes(String(p.runtime.actionOutput).trim())
   )
-    fail('runtime.actionOutput must be physical-twist or normalized-twist');
+    fail(
+      p.actuator.kind === 'joint'
+        ? 'runtime.actionOutput must be physical-twist, normalized-twist, or joint-position-offset'
+        : 'runtime.actionOutput must be physical-twist or normalized-twist',
+    );
+  if (p.actuator.kind === 'joint' && p.runtime?.actionOutput !== 'joint-position-offset')
+    fail('joint actuators must declare runtime.actionOutput=joint-position-offset');
   if (
     p.policy?.actionSize === 2 &&
     p.runtime?.actionProjection === 'identity' &&

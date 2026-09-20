@@ -20,7 +20,7 @@ for (const file of files) {
   }
   const topics = profile.ros?.topics;
   if (!topics || typeof topics !== 'object') throw new Error(`${file}: ros.topics required`);
-  for (const sensor of ['imu', 'odom', 'battery', 'cmdVel']) {
+  for (const sensor of ['imu', 'odom', 'battery']) {
     if (!topics[sensor]?.name || !topics[sensor]?.type)
       throw new Error(`${file}: ros.topics.${sensor} is incomplete`);
     if (!String(topics[sensor].name).startsWith('/'))
@@ -30,8 +30,13 @@ for (const file of files) {
   if (!['diff-drive', 'omni-drive', 'joint', 'custom'].includes(actuatorFamily))
     throw new Error(`${file}: actuator.kind must be diff-drive, omni-drive, joint, or custom`);
   if (!profile.actuator.commandTopic) throw new Error(`${file}: actuator.commandTopic is required`);
-  if (actuatorFamily === 'diff-drive' && profile.actuator.commandTopic !== topics.cmdVel.name)
-    throw new Error(`${file}: cmdVel topic must match actuator.commandTopic`);
+  const commandKey = actuatorFamily === 'joint' ? 'jointCommand' : 'cmdVel';
+  if (!topics[commandKey]?.name || !topics[commandKey]?.type)
+    throw new Error(`${file}: ros.topics.${commandKey} is required for ${actuatorFamily}`);
+  if (profile.actuator.commandTopic !== topics[commandKey].name)
+    throw new Error(`${file}: ${commandKey} topic must match actuator.commandTopic`);
+  if (profile.actuator.messageType !== topics[commandKey].type)
+    throw new Error(`${file}: ${commandKey} type must match actuator.messageType`);
   if (!profile.actuator.messageType?.includes('/'))
     throw new Error(`${file}: actuator.messageType required`);
   const safety = profile.safety || {};
@@ -56,6 +61,22 @@ for (const file of files) {
     throw new Error(
       `${file}: 2D identity policies must declare runtime.actionOutput (physical-twist or normalized-twist)`,
     );
+  if (actuatorFamily === 'joint') {
+    if (profile.runtime?.actionOutput !== 'joint-position-offset')
+      throw new Error(
+        `${file}: joint policies must declare runtime.actionOutput=joint-position-offset`,
+      );
+    if (
+      !Array.isArray(profile.runtime?.jointNames) ||
+      profile.runtime.jointNames.length !== profile.policy.actionSize
+    )
+      throw new Error(`${file}: runtime.jointNames must match policy.actionSize`);
+    if (
+      !Array.isArray(profile.runtime?.homePositionRad) ||
+      profile.runtime.homePositionRad.length !== profile.policy.actionSize
+    )
+      throw new Error(`${file}: runtime.homePositionRad must match policy.actionSize`);
+  }
 }
 console.log(
   `[hardware-adapters] PASS — ${files.length} declarative profiles validated (${[...ids].join(', ')})`,

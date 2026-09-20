@@ -8,6 +8,7 @@ import {
 import {
   compatibilityForManifest,
   deploymentStepsFor,
+  publicDeviceSummary,
   probeLocalTrainingWorker,
   probeRobogoIntegration,
   simulatorIntegration,
@@ -18,6 +19,32 @@ function manifestFixture(): Sim2RealModelManifest {
 }
 
 describe('Sim2Real compatibility service', () => {
+  it('does not present a stale persisted device as connected', () => {
+    const stale = publicDeviceSummary({
+      id: 'x5-real-stale',
+      name: 'RDK X5',
+      host: '10.0.0.8',
+      port: 22,
+      username: 'root',
+      status: 'connected',
+      lastCheckedAt: new Date(Date.now() - 31_000).toISOString(),
+    });
+    expect(stale.status).toBe('disconnected');
+  });
+
+  it('keeps a freshly probed device connected for the live status window', () => {
+    const fresh = publicDeviceSummary({
+      id: 'x5-real-fresh',
+      name: 'RDK X5',
+      host: '10.0.0.9',
+      port: 22,
+      username: 'root',
+      status: 'connected',
+      lastCheckedAt: new Date().toISOString(),
+    });
+    expect(fresh.status).toBe('connected');
+  });
+
   it('keeps the published MicroDuck control map aligned with the runtime', () => {
     const manifest = manifestFixture();
     const controls = manifest.simulator.controls || [];

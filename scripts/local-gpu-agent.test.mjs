@@ -25,6 +25,36 @@ const {
 
 // ---------- pure helpers ----------
 assert.equal(validHost('gpu.example.com'), true);
+const authKeyArgs = buildSshArgs(
+  {
+    host: '120.48.90.140',
+    user: 'ssh-authkey-85102bb109ce51f46533cab9',
+    sshPort: 2222,
+    remotePort: 19091,
+  },
+  19092,
+);
+assert.deepEqual(authKeyArgs, [
+  '-N',
+  '-T',
+  '-o',
+  'BatchMode=yes',
+  '-o',
+  'PreferredAuthentications=publickey',
+  '-o',
+  'PasswordAuthentication=no',
+  '-o',
+  'ExitOnForwardFailure=yes',
+  '-o',
+  'ServerAliveInterval=30',
+  '-o',
+  'ServerAliveCountMax=3',
+  '-p',
+  '2222',
+  '-L',
+  '127.0.0.1:19092:127.0.0.1:19091',
+  'ssh-authkey-85102bb109ce51f46533cab9@120.48.90.140',
+]);
 assert.throws(
   () => buildSshArgs({ host: 'bad;host', user: 'u', sshPort: 22, remotePort: 1 }, 19092),
   /invalid/,

@@ -128,7 +128,14 @@ describe('Agent chat browser behavior', () => {
     form.dispatchEvent(new window.Event('submit', { bubbles: true, cancelable: true }));
     await wait(30);
 
-    expect(calls.slice(0, 3)).toEqual([
+    // The chat boot now probes the runtime badge in parallel with the first
+    // request. Keep the fallback assertion focused on the conversation calls.
+    const conversationCalls = calls.filter(
+      (url) =>
+        !url.endsWith('/api/sim2real/agent/capabilities') &&
+        !url.endsWith('/api/sim2real/dsh/approvals'),
+    );
+    expect(conversationCalls.slice(0, 3)).toEqual([
       '/sim2real/api/sim2real/dsh/chat',
       '/sim2real/api/sim2real/agent/plan',
       '/sim2real/api/sim2real/agent/execute',
@@ -577,6 +584,60 @@ describe('Agent session rail (G12: remember recent context)', () => {
     expect(restored?.textContent).toContain('历史任务卡（只读回放，不能续跑）');
     expect(restored?.textContent).toContain('检查 X5 板卡状态');
     expect(restored?.textContent).toContain('读取板卡状态');
+  });
+
+  it('persists the DSH session id so a reload continues the same conversation', async () => {
+    const dshBodies: Array<Record<string, unknown>> = [];
+    const fetchImpl = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.endsWith('/api/sim2real/agent/capabilities')) {
+        return jsonResponse({ runtime: 'dsh', dsh: { initialized: true } });
+      }
+      if (url.endsWith('/api/sim2real/dsh/chat')) {
+        dshBodies.push(JSON.parse(String(init?.body || '{}')));
+        return jsonResponse({ ok: true, text: '我是工作台智能体。', sessionId: 'sim2real-persisted' });
+      }
+      return jsonResponse({ ok: true });
+    });
+    const first = boot(fetchImpl);
+    const input = first.document.querySelector<HTMLInputElement>('#agent-chat-input');
+    const form = first.document.querySelector<HTMLFormElement>('#agent-chat-form');
+    if (!input || !form) throw new Error('agent chat fixture is incomplete');
+    input.value = '你是谁';
+    form.dispatchEvent(new first.Event('submit', { bubbles: true, cancelable: true }));
+    await wait(40);
+
+    const persisted = first.localStorage.getItem(SESSIONS_KEY) || '[]';
+    expect(JSON.parse(persisted)[0].dshSessionId).toBe('sim2real-persisted');
+
+    const second = new JSDOM(shell(), {
+      url: 'http://127.0.0.1:3000/sim2real/',
+      runScripts: 'outside-only',
+      pretendToBeVisual: true,
+    });
+    openWindows.push(second.window);
+    Object.assign(second.window, {
+      fetch: fetchImpl,
+      Headers,
+      Response,
+      ApiError: class extends Error {},
+      request: async (path: string, options: Record<string, unknown> = {}) => {
+        const response = await fetchImpl('/sim2real/api' + path, options as RequestInit);
+        return response.json();
+      },
+    });
+    second.window.localStorage.setItem(SESSIONS_KEY, persisted);
+    second.window.eval(agentSource);
+    await wait(10);
+    const input2 = second.window.document.querySelector<HTMLInputElement>('#agent-chat-input');
+    const form2 = second.window.document.querySelector<HTMLFormElement>('#agent-chat-form');
+    if (!input2 || !form2) throw new Error('reloaded agent chat fixture is incomplete');
+    input2.value = '继续说一句';
+    form2.dispatchEvent(new second.window.Event('submit', { bubbles: true, cancelable: true }));
+    await wait(40);
+
+    expect(dshBodies).toHaveLength(2);
+    expect(dshBodies[1]?.sessionId).toBe('sim2real-persisted');
   });
 
   it('starts a fresh session that clears the transcript without stale cards', async () => {

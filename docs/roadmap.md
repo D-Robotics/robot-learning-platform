@@ -68,8 +68,11 @@ OriginBot 是第一台参考机型；换一台底盘机器人应当只需要换�
    - 进展：task-pack 训练已在仿真侧产出真实训练的 `policy.onnx`（42D 布局
      nominal 90%、CI 下界过 0.70 gate；8D 布局 74% 待更长预算，见
      `docs/research/goalnav-eval-2026-09-10-round2.json`）；制品到板的下发链
-     （环 D）已闭环——station 页填 runId 即可校验+落盘 `policies/`；剩余：
-     上板复跑整条验收（真机在场）。
+     （环 D）已闭环——station 页填 runId 即可校验+落盘 `policies/`；
+     **已闭环（2026-09-14）**：42D clear-arena 策略真机策略驱动运动 0.096m +
+     急停生效，见 `docs/real-loop-validation-2026-09-14.md`。剩余：任务级
+     到达点验收（42D goal 装配缺口 2026-09-17 已修复待上板，流程见
+     `docs/goalnav-task-acceptance-runbook.md`）。
 2. **观测适配的持久化配置**（现在是代码内写死 MicroDuck 契约形状）
    - 验收：机型适配包以声明文件存在（obs 槽位→真传感器/零填充、动作投影、钳制参数），
      平台按机型加载；新增机型不改 Python 运行时代码。
@@ -83,7 +86,9 @@ OriginBot 是第一台参考机型；换一台底盘机器人应当只需要换�
      原因已结构化展示——runtime 把 `session-started`/`session-stopped` 生命周期事件
      写入遥测 spool、随样本同链路上传，`GET /runs/:id/board-sessions` 聚合后渲染进
      run 详情"上板会话"卡（模型指纹、attested 徽章、中断会话如实标注"未见停止
-     事件"）。剩余：真机在场复跑一轮，确认 spool→上传→run 详情全链证据一致。
+     事件"）。**已闭环（2026-09-14 晚）**：1.42MB 真机 spool 全量上传（3296
+     样本 / 15 会话事件）、`board-sessions` 聚合 8 会话（含 51 推理 PASS 会话）、
+     replay 3281 帧全链验证一致，见 `docs/real-loop-validation-2026-09-14.md` §3。
 
 ### P2 — 多机型与规模化
 

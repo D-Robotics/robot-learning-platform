@@ -1,6 +1,7 @@
 import { Router, type Request, type Response } from 'express';
 import { readFileSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
+import { createHash } from 'node:crypto';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -90,6 +91,9 @@ import {
   sim2RealComputeHealthTtlSeconds,
   sim2RealActiveRunLimit,
   updateSim2RealRun,
+  claimSim2RealRunRelay,
+  storeSim2RealRelayArtifact,
+  readSim2RealRelayArtifact,
   updateSim2RealRunForReconcile,
   updateSim2RealDeployment,
   decideSim2RealDeploymentApproval,
@@ -1539,6 +1543,7 @@ interface RunBackendOutcome {
   artifact?: Sim2RealRunArtifactMetadata;
   metrics?: Sim2RealRunMetrics;
   taskEvaluation?: Sim2RealTaskEvaluationEvidence;
+  relayAgentUrl?: string;
 }
 
 /**
@@ -1698,6 +1703,16 @@ async function dispatchRunBackend(input: {
       : null;
     if (computeResourceId && !selectedResource) {
       return { status: 'blocked', summary: '所选 GPU 训练资源不存在，或不属于当前账号。' };
+    }
+    // A local-agent resource is deliberately browser-relayed. The platform
+    // server cannot reach a user's 127.0.0.1, so reserve the run and let the
+    // browser submit the normalized payload to the Agent instead.
+    if (selectedResource?.resource.source === 'local-agent') {
+      return {
+        status: 'queued',
+        summary: '训练记录已建立，等待用户电脑上的 Local GPU Agent 提交任务。',
+        relayAgentUrl: selectedResource.resource.runnerUrl.replace(/\/train\/?$/, ''),
+      };
     }
     const resourceHealthFailure = selectedResource
       ? computeResourceHealthFailure(selectedResource.resource)
@@ -2422,6 +2437,7 @@ export function createSim2RealRouter(
       const name = String(body.name ?? '').trim();
       const runnerUrlRaw = String(body.runnerUrl ?? '').trim();
       const runnerToken = String(body.runnerToken ?? '').trim();
+      const source = body.source === 'local-agent' ? 'local-agent' : 'server-runner';
       if (
         !name ||
         name.length > 120 ||
@@ -2448,7 +2464,17 @@ export function createSim2RealRouter(
         runnerUrl = normalizeRunnerUrl(runnerUrlRaw, { localHttp: true });
         const parsedUrl = new URL(runnerUrl);
         const pathname = parsedUrl.pathname.replace(/\/+$/, '');
-        if (!pathname.endsWith('/train')) throw new Error('runner path must end with /train');
+        if (source === 'local-agent' && pathname === '/proxy') {
+          parsedUrl.pathname = '/proxy/train';
+          runnerUrl = parsedUrl.toString();
+        } else if (!pathname.endsWith('/train'))
+          throw new Error('runner path must end with /train');
+        if (
+          source === 'local-agent' &&
+          !['127.0.0.1', 'localhost', '::1'].includes(parsedUrl.hostname.replace(/^\[|\]$/g, ''))
+        ) {
+          throw new Error('local-agent must use a loopback URL');
+        }
       } catch {
         sendApiError(
           response,
@@ -2482,8 +2508,9 @@ export function createSim2RealRouter(
           {
             name,
             kind: 'local-gpu',
+            source,
             runnerUrl,
-            runnerToken,
+            ...(source === 'server-runner' && runnerToken ? { runnerToken } : {}),
             status: 'unknown',
             maxConcurrentJobs,
             message: '尚未测试连接。',
@@ -2507,6 +2534,15 @@ export function createSim2RealRouter(
           ? (request.body as Record<string, unknown>)
           : {};
       const patch: Record<string, unknown> = {};
+      if (body.source !== undefined) {
+        if (body.source !== 'local-agent' && body.source !== 'server-runner') {
+          sendApiError(response, 400, 'SIM2REAL_INVALID_COMPUTE_RESOURCE', '算力资源来源无效。', {
+            retryable: false,
+          });
+          return;
+        }
+        patch.source = body.source;
+      }
       if (body.name !== undefined) {
         const name = String(body.name).trim();
         if (!name || name.length > 120 || safeComputeHealthText(name, 120) !== name) {
@@ -2582,6 +2618,24 @@ export function createSim2RealRouter(
         }
         patch.maxConcurrentJobs = maxConcurrentJobs;
       }
+      if (
+        body.status !== undefined &&
+        ['online', 'offline', 'unknown'].includes(String(body.status))
+      ) {
+        patch.status = String(body.status);
+      }
+      if (body.message !== undefined) patch.message = safeComputeHealthText(body.message, 240);
+      if (body.gpuName !== undefined) patch.gpuName = safeComputeHealthText(body.gpuName, 160);
+      if (body.cuda === true || body.cuda === false) patch.cuda = body.cuda;
+      if (
+        body.vramMb !== undefined &&
+        Number.isFinite(Number(body.vramMb)) &&
+        Number(body.vramMb) >= 0
+      ) {
+        patch.vramMb = Math.min(Number(body.vramMb), 10_000_000);
+      }
+      if (body.lastCheckedAt !== undefined)
+        patch.lastCheckedAt = String(body.lastCheckedAt).slice(0, 64);
 
       // Resolve the effective URL/token before writing.  Omitting a token on
       // PATCH preserves the existing secret; explicitly sending an empty
@@ -2596,6 +2650,27 @@ export function createSim2RealRouter(
         patch.runnerToken !== undefined
           ? String(patch.runnerToken)
           : String(existing.runnerToken ?? '');
+      const effectiveSource = String(patch.source ?? existing.resource.source ?? 'server-runner');
+      if (effectiveSource === 'local-agent') {
+        try {
+          const parsed = new URL(effectiveUrl);
+          const pathName = parsed.pathname.replace(/\/+$/, '');
+          if (
+            !['127.0.0.1', 'localhost', '::1'].includes(parsed.hostname.replace(/^\[|\]$/g, '')) ||
+            pathName !== '/proxy/train'
+          )
+            throw new Error('invalid local agent');
+        } catch {
+          sendApiError(
+            response,
+            400,
+            'SIM2REAL_INVALID_COMPUTE_RESOURCE_URL',
+            '本地 Agent 必须使用 loopback /proxy/train 地址。',
+            { retryable: false },
+          );
+          return;
+        }
+      }
       const tokenError = computeRunnerTokenError(effectiveUrl, effectiveToken);
       if (tokenError) {
         sendApiError(response, 400, 'SIM2REAL_INVALID_COMPUTE_RESOURCE_TOKEN', tokenError, {
@@ -2648,6 +2723,19 @@ export function createSim2RealRouter(
       };
       const runnerUrl = String(secret.resource.runnerUrl);
       const runnerToken = String(secret.runnerToken ?? '').trim();
+      if (secret.resource.source === 'local-agent') {
+        const updated = await updateSim2RealComputeResource(
+          secret.resource.id,
+          {
+            status: 'unknown',
+            message: '本地 Agent 资源由浏览器直连，请在当前网页重新检查。',
+            lastCheckedAt: checkedAt,
+          },
+          owner,
+        );
+        response.json({ ok: true, computeResource: updated, connected: false, browserRelay: true });
+        return;
+      }
       const tokenError = computeRunnerTokenError(runnerUrl, runnerToken);
       if (tokenError) {
         // Persist the failed state so the UI cannot mistake a configured but
@@ -2775,6 +2863,10 @@ export function createSim2RealRouter(
         // the deployment-wide worker; doing so could stage a different run's
         // artifact under the same external id.
         if (run.computeResourceId && !selectedResource) return null;
+        if (run.relayAgentUrl && run.artifact?.sha256) {
+          const bytes = await readSim2RealRelayArtifact(run.artifact.sha256);
+          return bytes ? { bytes, sha256: run.artifact.sha256 } : null;
+        }
         if (
           run.computeResourceId &&
           selectedResource &&
@@ -2997,7 +3089,8 @@ export function createSim2RealRouter(
       if (
         (run.backend === 'local' || run.backend === 'robogo') &&
         (run.status === 'queued' || run.status === 'running') &&
-        run.externalRunId
+        run.externalRunId &&
+        !run.relayAgentUrl
       ) {
         const requestToken = auth.resolveAccessToken(request);
         if (run.backend === 'robogo' && auth.isMultiUserDeployment() && !requestToken) {
@@ -3153,6 +3246,156 @@ export function createSim2RealRouter(
         }
       }
       response.json({ ok: true, run: current });
+    }),
+  );
+
+  router.post(
+    api('/runs/:id/relay/claim'),
+    wrapAsync(async (request, response) => {
+      const owner = requestOwner(request, response, auth);
+      if (owner === null) return;
+      const externalRunId = String(request.body?.externalRunId ?? request.body?.runId ?? '').trim();
+      const claimed = await claimSim2RealRunRelay(
+        String(request.params.id || ''),
+        externalRunId,
+        owner,
+      );
+      if (!claimed) {
+        sendApiError(
+          response,
+          409,
+          'SIM2REAL_RELAY_CLAIM_CONFLICT',
+          '该浏览器中继运行已被其他页面认领或已结束。',
+          { retryable: false },
+        );
+        return;
+      }
+      response.json({ ok: true, run: claimed });
+    }),
+  );
+
+  router.post(
+    api('/runs/:id/relay/sync'),
+    wrapAsync(async (request, response) => {
+      const owner = requestOwner(request, response, auth);
+      if (owner === null) return;
+      const run = await getSim2RealRun(String(request.params.id || ''), owner);
+      if (!run || !run.relayAgentUrl) {
+        sendApiError(response, 404, 'SIM2REAL_RELAY_RUN_NOT_FOUND', '浏览器中继运行不存在。', {
+          retryable: false,
+        });
+        return;
+      }
+      const status = String(request.body?.status ?? '').trim();
+      if (!['queued', 'running', 'completed', 'failed'].includes(status)) {
+        sendApiError(response, 400, 'SIM2REAL_RELAY_STATUS_INVALID', '中继状态无效。', {
+          retryable: false,
+        });
+        return;
+      }
+      const summary = safeComputeHealthText(
+        request.body?.message ?? request.body?.summary ?? '',
+        500,
+      );
+      const patch: Record<string, unknown> = {
+        status,
+        relayLastSeenAt: new Date().toISOString(),
+        ...(summary ? { summary } : {}),
+        ...(status === 'completed' || status === 'failed'
+          ? { finishedAt: new Date().toISOString() }
+          : {}),
+      };
+      for (const key of [
+        'mock',
+        'metrics',
+        'checkpoint',
+        'artifact',
+        'taskEvaluation',
+        'progress',
+      ] as const) {
+        const value = request.body?.[key];
+        if (value !== undefined && JSON.stringify(value).length <= 100_000) patch[key] = value;
+      }
+      const updated = await updateSim2RealRun(run.id, patch as never, owner);
+      response.json({ ok: true, run: updated });
+    }),
+  );
+
+  router.post(
+    api('/runs/:id/relay/artifact'),
+    wrapAsync(async (request, response) => {
+      const owner = requestOwner(request, response, auth);
+      if (owner === null) return;
+      const run = await getSim2RealRun(String(request.params.id || ''), owner);
+      const binaryUpload = request.is('application/octet-stream');
+      const sha256 = String(
+        (binaryUpload ? request.headers['x-artifact-sha256'] : request.body?.sha256) ?? '',
+      )
+        .trim()
+        .toLowerCase();
+      const encoded = binaryUpload ? '' : String(request.body?.bytesBase64 ?? '');
+      if (
+        !run?.relayAgentUrl ||
+        !/^[a-f0-9]{64}$/.test(sha256) ||
+        (!binaryUpload && (!encoded || encoded.length > 70_000_000))
+      ) {
+        sendApiError(response, 400, 'SIM2REAL_RELAY_ARTIFACT_INVALID', '中继制品数据无效。', {
+          retryable: false,
+        });
+        return;
+      }
+      let bytes: Buffer;
+      if (binaryUpload) {
+        const chunks: Buffer[] = [];
+        let total = 0;
+        for await (const chunk of request) {
+          total += Buffer.byteLength(chunk);
+          if (total > 50 * 1024 * 1024) {
+            sendApiError(
+              response,
+              413,
+              'SIM2REAL_RELAY_ARTIFACT_TOO_LARGE',
+              '中继制品超过 50 MiB 限制。',
+              { retryable: false },
+            );
+            return;
+          }
+          chunks.push(Buffer.from(chunk));
+        }
+        bytes = Buffer.concat(chunks);
+      } else {
+        try {
+          bytes = Buffer.from(encoded, 'base64');
+        } catch {
+          sendApiError(response, 400, 'SIM2REAL_RELAY_ARTIFACT_INVALID', '中继制品编码无效。', {
+            retryable: false,
+          });
+          return;
+        }
+      }
+      if (bytes.length === 0 || bytes.length > 50 * 1024 * 1024) {
+        sendApiError(
+          response,
+          413,
+          'SIM2REAL_RELAY_ARTIFACT_TOO_LARGE',
+          '中继制品超过 50 MiB 限制。',
+          { retryable: false },
+        );
+        return;
+      }
+      const digest = createHash('sha256').update(bytes).digest('hex');
+      if (digest !== sha256) {
+        sendApiError(
+          response,
+          400,
+          'SIM2REAL_RELAY_ARTIFACT_DIGEST_MISMATCH',
+          '中继制品校验失败。',
+          { retryable: false },
+        );
+        return;
+      }
+      await storeSim2RealRelayArtifact(sha256, bytes);
+      response.json({ ok: true, sha256, bytes: bytes.length });
     }),
   );
 
@@ -3837,6 +4080,7 @@ export function createSim2RealRouter(
           ...(outcome.artifact ? { artifact: outcome.artifact } : {}),
           ...(outcome.metrics ? { metrics: outcome.metrics } : {}),
           ...(outcome.taskEvaluation ? { taskEvaluation: outcome.taskEvaluation } : {}),
+          ...(outcome.relayAgentUrl ? { relayAgentUrl: outcome.relayAgentUrl } : {}),
           ...(outcome.status === 'completed' || outcome.status === 'failed'
             ? { finishedAt: now }
             : {}),

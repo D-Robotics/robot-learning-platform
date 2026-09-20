@@ -72,6 +72,12 @@ copyFile(
   path.join('dist-server', 'services', 'sim2real-web', 'local-board-agent.mjs'),
 );
 
+// The web installer serves this dependency-free agent to user machines.
+copyFile(
+  path.join('scripts', 'local-gpu-agent.mjs'),
+  path.join('dist-server', 'scripts', 'local-gpu-agent.mjs'),
+);
+
 // Ship the dependency-free operational CLIs with a compiled release. They are
 // intentionally kept beside the server output so an operator can run a
 // post-deploy probe or a maintenance-window backup without a source checkout.

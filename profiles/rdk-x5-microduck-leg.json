@@ -1,0 +1,122 @@
+{
+  "schemaVersion": 1,
+  "id": "rdk-x5-microduck-leg",
+  "displayName": "RDK X5 MicroDuck 14 舵机腿式底盘",
+  "board": {
+    "platform": "rdk-x5",
+    "family": "microduck-leg",
+    "model": "D-Robotics RDK X5 + MicroDuck reference build"
+  },
+  "ros": {
+    "setupPaths": [
+      "/opt/tros/humble/setup.bash",
+      "/userdata/dev_ws/install/setup.bash"
+    ],
+    "topics": {
+      "imu": {
+        "name": "/imu",
+        "type": "sensor_msgs/msg/Imu",
+        "required": true,
+        "qos": "reliable"
+      },
+      "odom": {
+        "name": "/odom",
+        "type": "nav_msgs/msg/Odometry",
+        "required": false,
+        "qos": "best-effort"
+      },
+      "battery": {
+        "name": "/battery_state",
+        "type": "sensor_msgs/msg/BatteryState",
+        "required": false,
+        "qos": "reliable"
+      },
+      "jointStates": {
+        "name": "/joint_states",
+        "type": "sensor_msgs/msg/JointState",
+        "required": true,
+        "qos": "reliable"
+      },
+      "jointCommand": {
+        "name": "/microduck_controller/joint_trajectory",
+        "type": "trajectory_msgs/msg/JointTrajectory",
+        "required": true,
+        "qos": "reliable"
+      }
+    }
+  },
+  "actuator": {
+    "kind": "joint",
+    "commandTopic": "/microduck_controller/joint_trajectory",
+    "messageType": "trajectory_msgs/msg/JointTrajectory",
+    "maxLinear": 0.05,
+    "maxAngular": 1.0,
+    "watchdogMs": 500
+  },
+  "runtime": {
+    "decisionHz": 50,
+    "actionProjection": "custom",
+    "actionOutput": "joint-position-offset",
+    "observationLayout": "microduck-61d-v1",
+    "jointNames": [
+      "left_hip_pitch",
+      "left_hip_roll",
+      "left_knee",
+      "left_ankle_pitch",
+      "left_ankle_roll",
+      "left_foot",
+      "left_toe",
+      "right_hip_pitch",
+      "right_hip_roll",
+      "right_knee",
+      "right_ankle_pitch",
+      "right_ankle_roll",
+      "right_foot",
+      "right_toe"
+    ],
+    "homePositionRad": [
+      0.0,
+      -0.0873,
+      -0.4579,
+      -0.0049,
+      0.453,
+      0.3491,
+      0.3491,
+      0.0,
+      0.0,
+      0.0873,
+      0.4579,
+      0.0049,
+      -0.453,
+      -0.3491
+    ],
+    "actionScaleRad": 0.35,
+    "commandVectorSize": 13
+  },
+  "safety": {
+    "maxLinear": 0.05,
+    "maxAngular": 1.0,
+    "sensorStallSec": 0.1,
+    "maxJointStepRad": 0.08,
+    "maxJointVelocityRadSec": 2.0
+  },
+  "policy": {
+    "observationAdapterId": "microduck-61d-v1",
+    "actionAdapterId": "microduck-14d-joint-position-v1",
+    "observationSize": 61,
+    "actionSize": 14
+  },
+  "capabilities": [
+    "imu",
+    "joint-states",
+    "joint-trajectory",
+    "cpu-onnx",
+    "50hz-control",
+    "microduck-61d-14d"
+  ],
+  "provenance": {
+    "kind": "template",
+    "mock": true,
+    "note": "No assembled MicroDuck hardware evidence is claimed by this profile. Promote only after board preflight, joint calibration, stand baseline and controlled canary are recorded."
+  }
+}

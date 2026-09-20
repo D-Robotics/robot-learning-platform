@@ -22,6 +22,13 @@ describe('training spec engine routing', () => {
     expect(microduckRl.errors).toEqual([]);
     expect(microduckRl.spec?.engine).toBe('microduck-rl');
 
+    const microduckFootball = normalizeTrainingSpec({
+      profile: 'smoke',
+      engine: 'microduck-football',
+    });
+    expect(microduckFootball.errors).toEqual([]);
+    expect(microduckFootball.spec?.engine).toBe('microduck-football');
+
     const typo = normalizeTrainingSpec({ profile: 'smoke', engine: 'mjx' });
     expect(typo.spec).toBeUndefined();
     expect(typo.errors[0]).toContain('training.engine must be one of');
@@ -37,6 +44,7 @@ describe('training spec engine routing', () => {
       'act',
       'diffusion-policy',
       'smolvla',
+      'microduck-football',
     ]) {
       const submission = normalizeTrainingSpec({ profile: 'smoke', engine });
       expect(submission.errors).toEqual([]);
@@ -61,6 +69,11 @@ describe('training spec engine routing', () => {
   it('injects only the non-default recommendation so single-engine workers stay compatible', () => {
     const kinematic = applyTaskEngineRecommendation(trainingSpecForProfile('smoke'), 'starter-ppo');
     expect(kinematic.engine).toBeUndefined();
+    const microduck = applyTaskEngineRecommendation(
+      trainingSpecForProfile('smoke'),
+      'microduck-rl',
+    );
+    expect(microduck.engine).toBe('microduck-rl');
     const none = applyTaskEngineRecommendation(trainingSpecForProfile('smoke'));
     expect(none.engine).toBeUndefined();
     const junk = applyTaskEngineRecommendation(trainingSpecForProfile('smoke'), 'isaac-lab');

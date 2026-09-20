@@ -76,6 +76,36 @@ describe('hardware profile contract', () => {
     );
   });
 
+  it('accepts a joint profile only with the joint command topic and output unit', () => {
+    const joint = {
+      ...validProfile,
+      id: 'test-joint',
+      ros: {
+        topics: {
+          imu: { name: '/imu', type: 'sensor_msgs/msg/Imu' },
+          jointCommand: {
+            name: '/joints/command',
+            type: 'trajectory_msgs/msg/JointTrajectory',
+          },
+        },
+      },
+      actuator: {
+        ...validProfile.actuator,
+        kind: 'joint',
+        commandTopic: '/joints/command',
+        messageType: 'trajectory_msgs/msg/JointTrajectory',
+      },
+      policy: { ...validProfile.policy, actionSize: 14 },
+      runtime: { actionOutput: 'joint-position-offset' },
+    };
+    expect(validateHardwareProfile(joint)).toMatchObject({ valid: true });
+    const invalid = validateHardwareProfile({ ...joint, runtime: undefined });
+    expect(invalid.valid).toBe(false);
+    expect(invalid.errors).toContain(
+      'joint actuators must declare runtime.actionOutput=joint-position-offset',
+    );
+  });
+
   it('keeps synthetic profile provenance explicit', () => {
     const result = validateHardwareProfile({
       ...validProfile,

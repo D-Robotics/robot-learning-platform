@@ -1,0 +1,50 @@
+{
+  "schemaVersion": 1,
+  "id": "microduck-walk",
+  "displayName": "MicroDuck 平地行走与转向",
+  "kind": "microduck-locomotion",
+  "adapterId": "microduck-leg",
+  "observationAdapterId": "microduck-61d-v1",
+  "actionAdapterId": "microduck-14d-joint-position-v1",
+  "recommendedEngine": "microduck-rl",
+  "microduckTask": {
+    "upstreamTaskId": "Mjlab-Velocity-Flat-MicroDuck",
+    "skill": "walk",
+    "requiresFullBodyActor": true,
+    "controlHz": 50,
+    "qualityMetrics": ["velocityTracking", "fallRate", "headingErrorRad", "actionChangeRms"]
+  },
+  "reward": { "progress": 1.0, "collision": -5, "goal": 10, "actionPenalty": -0.01, "dwell": 0.2 },
+  "termination": { "goalDistance": 0.15, "timeoutSteps": 1000 },
+  "workspace": { "bound": 5.0, "obstacles": { "count": 0, "radius": 0.15 } },
+  "curriculum": {
+    "initialGoalDistance": [0.5, 1.0],
+    "finalGoalDistance": [1.0, 2.0],
+    "expandFactor": 1.08,
+    "successRateThreshold": 0.7,
+    "lookbackEpisodes": 50
+  },
+  "domainRandomization": {
+    "motorGain": [0.8, 1.2],
+    "lagTauSeconds": [0.03, 0.2],
+    "gyroNoiseStdRadSec": [0.0, 0.05],
+    "odomNoiseStdM": [0.0, 0.02],
+    "angularBiasRadSec": [-0.05, 0.05],
+    "actionLatencySteps": [0, 3],
+    "odomDropoutProb": [0.0, 0.05],
+    "slipScale": [0.8, 1.0],
+    "evalEnvelopes": {
+      "nominal": [1.0, 0.1, 0.01, 0.005, 0.0, 0, 0.0, 1.0],
+      "hard": [0.8, 0.2, 0.05, 0.02, 0.05, 3, 0.05, 0.8]
+    }
+  },
+  "evaluationConfig": { "episodesPerEnvelope": 50, "confidenceLevel": 0.95 },
+  "qualityGate": {
+    "minSuccessRate": 0.7,
+    "maxCollisionRate": 0.15,
+    "gateOn": "ciLowerBound",
+    "maxActionChangeRms": 0.35,
+    "ablation": { "requireBaseline": true, "minSuccessRateDelta": 0.1 }
+  },
+  "evaluation": ["successRate", "fallRate", "velocityTracking", "controlLatency"]
+}

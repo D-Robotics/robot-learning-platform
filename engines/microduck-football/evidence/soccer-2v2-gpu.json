@@ -1,0 +1,26 @@
+{
+  "task": "soccer-2v2",
+  "device": "cuda",
+  "cuda": true,
+  "observationDim": 24,
+  "actionDim": 4,
+  "numEnvs": 32,
+  "iterations": 2,
+  "curve": [
+    {
+      "iteration": 1,
+      "meanReward": -0.0693524181842804,
+      "goals": 0,
+      "completedEpisodes": 52
+    },
+    {
+      "iteration": 2,
+      "meanReward": -0.0767890065908432,
+      "goals": 1,
+      "completedEpisodes": 119
+    }
+  ],
+  "goals": 1,
+  "completedEpisodes": 119,
+  "elapsedSeconds": 1.355
+}

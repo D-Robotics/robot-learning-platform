@@ -1,0 +1,343 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://developer.d-robotics.cc/schemas/rdk-observability.v1.json",
+  "title": "RDK Cloud/Edge Observability Contracts v1",
+  "description": "Language-neutral wire contracts shared by the robot-side Edge Observability Agent and the cloud Observability Center.",
+  "oneOf": [
+    { "$ref": "#/$defs/event" },
+    { "$ref": "#/$defs/metric" },
+    { "$ref": "#/$defs/telemetryChunk" },
+    { "$ref": "#/$defs/evidenceManifest" },
+    { "$ref": "#/$defs/commandRequest" },
+    { "$ref": "#/$defs/observationPolicy" }
+  ],
+  "$defs": {
+    "source": {
+      "type": "string",
+      "enum": [
+        "edge-agent",
+        "board-agent",
+        "runner",
+        "cloud",
+        "browser",
+        "import",
+        "demo-fixture",
+        "production-line"
+      ]
+    },
+    "context": {
+      "type": "object",
+      "required": ["schemaVersion"],
+      "properties": {
+        "schemaVersion": { "const": "rdk.observability.context.v1" },
+        "tenantId": { "$ref": "#/$defs/id" },
+        "projectId": { "$ref": "#/$defs/id" },
+        "caseId": { "$ref": "#/$defs/id" },
+        "runId": { "$ref": "#/$defs/id" },
+        "deviceId": { "$ref": "#/$defs/id" },
+        "bootId": { "$ref": "#/$defs/id" },
+        "environmentId": { "$ref": "#/$defs/id" },
+        "assetId": { "$ref": "#/$defs/id" },
+        "artifactId": { "$ref": "#/$defs/id" },
+        "requestId": { "$ref": "#/$defs/id" },
+        "traceId": { "$ref": "#/$defs/id" }
+      },
+      "additionalProperties": false
+    },
+    "id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256,
+      "pattern": "^[^\\u0000-\\u001f\\u007f]+$"
+    },
+    "isoTime": { "type": "string", "format": "date-time" },
+    "sha256": { "type": "string", "pattern": "^[A-Fa-f0-9]{64}$" },
+    "event": {
+      "type": "object",
+      "required": [
+        "schemaVersion",
+        "eventId",
+        "eventType",
+        "eventVersion",
+        "occurredAt",
+        "producer",
+        "source",
+        "context",
+        "payload",
+        "idempotencyKey"
+      ],
+      "properties": {
+        "schemaVersion": { "const": "rdk.observability.event.v1" },
+        "eventId": { "$ref": "#/$defs/id" },
+        "eventType": { "$ref": "#/$defs/id" },
+        "eventVersion": { "$ref": "#/$defs/id" },
+        "occurredAt": { "$ref": "#/$defs/isoTime" },
+        "producer": { "$ref": "#/$defs/id" },
+        "source": { "$ref": "#/$defs/source" },
+        "context": { "$ref": "#/$defs/context" },
+        "status": { "$ref": "#/$defs/id" },
+        "payload": {},
+        "idempotencyKey": { "$ref": "#/$defs/id" }
+      },
+      "additionalProperties": false
+    },
+    "metric": {
+      "type": "object",
+      "required": [
+        "schemaVersion",
+        "metric",
+        "type",
+        "timestamp",
+        "value",
+        "unit",
+        "context",
+        "source"
+      ],
+      "properties": {
+        "schemaVersion": { "const": "rdk.observability.metric.v1" },
+        "metric": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-z][a-z0-9_.-]+$"
+        },
+        "type": { "enum": ["gauge", "counter", "histogram", "summary"] },
+        "timestamp": { "$ref": "#/$defs/isoTime" },
+        "value": { "type": "number" },
+        "unit": { "type": "string", "minLength": 1, "maxLength": 32 },
+        "temporality": { "enum": ["delta", "cumulative"] },
+        "labels": {
+          "type": "object",
+          "additionalProperties": { "type": "string", "maxLength": 128 }
+        },
+        "context": { "$ref": "#/$defs/context" },
+        "source": { "$ref": "#/$defs/source" }
+      },
+      "additionalProperties": false
+    },
+    "signal": {
+      "type": "object",
+      "required": ["value", "unit"],
+      "properties": {
+        "value": { "type": "number" },
+        "unit": { "type": "string", "minLength": 1, "maxLength": 32 }
+      },
+      "additionalProperties": false
+    },
+    "telemetrySample": {
+      "type": "object",
+      "required": [
+        "sequence",
+        "sampleTime",
+        "sampleMonotonicNs",
+        "source",
+        "bootId",
+        "signals",
+        "context"
+      ],
+      "properties": {
+        "sequence": { "type": "integer", "minimum": 0 },
+        "sampleTime": { "$ref": "#/$defs/isoTime" },
+        "sampleMonotonicNs": { "type": "integer", "minimum": 0 },
+        "source": { "$ref": "#/$defs/source" },
+        "bootId": { "$ref": "#/$defs/id" },
+        "signals": {
+          "type": "object",
+          "minProperties": 1,
+          "additionalProperties": { "$ref": "#/$defs/signal" }
+        },
+        "quality": {
+          "type": "object",
+          "properties": {
+            "fresh": { "type": "boolean" },
+            "clockSynced": { "type": "boolean" },
+            "droppedSincePrevious": { "type": "integer", "minimum": 0 }
+          },
+          "additionalProperties": false
+        },
+        "context": { "$ref": "#/$defs/context" }
+      },
+      "additionalProperties": false
+    },
+    "telemetryChunk": {
+      "type": "object",
+      "required": [
+        "schemaVersion",
+        "chunkId",
+        "deviceId",
+        "bootId",
+        "sequenceStart",
+        "sequenceEnd",
+        "samples",
+        "sha256",
+        "createdAt",
+        "context"
+      ],
+      "properties": {
+        "schemaVersion": { "const": "rdk.observability.telemetry.v1" },
+        "chunkId": { "$ref": "#/$defs/id" },
+        "deviceId": { "$ref": "#/$defs/id" },
+        "bootId": { "$ref": "#/$defs/id" },
+        "sequenceStart": { "type": "integer", "minimum": 0 },
+        "sequenceEnd": { "type": "integer", "minimum": 0 },
+        "samples": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "$ref": "#/$defs/telemetrySample" }
+        },
+        "sha256": { "$ref": "#/$defs/sha256" },
+        "compressed": { "type": "boolean" },
+        "createdAt": { "$ref": "#/$defs/isoTime" },
+        "context": { "$ref": "#/$defs/context" }
+      },
+      "additionalProperties": false
+    },
+    "fileRef": {
+      "type": "object",
+      "required": ["role", "uri", "sha256", "bytes"],
+      "properties": {
+        "role": { "$ref": "#/$defs/id" },
+        "uri": { "type": "string", "minLength": 1, "maxLength": 2048 },
+        "sha256": { "$ref": "#/$defs/sha256" },
+        "bytes": { "type": "integer", "minimum": 0 }
+      },
+      "additionalProperties": false
+    },
+    "evidenceManifest": {
+      "type": "object",
+      "required": [
+        "schemaVersion",
+        "evidenceId",
+        "kind",
+        "context",
+        "source",
+        "files",
+        "createdAt",
+        "immutable"
+      ],
+      "properties": {
+        "schemaVersion": { "const": "rdk.observability.evidence.v1" },
+        "evidenceId": { "$ref": "#/$defs/id" },
+        "kind": { "$ref": "#/$defs/id" },
+        "context": { "$ref": "#/$defs/context" },
+        "source": {
+          "type": "object",
+          "required": ["type"],
+          "properties": {
+            "type": { "$ref": "#/$defs/source" },
+            "deviceId": { "$ref": "#/$defs/id" },
+            "bootId": { "$ref": "#/$defs/id" }
+          },
+          "additionalProperties": false
+        },
+        "inputs": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["sha256"],
+            "properties": {
+              "assetId": { "$ref": "#/$defs/id" },
+              "artifactId": { "$ref": "#/$defs/id" },
+              "environmentId": { "$ref": "#/$defs/id" },
+              "sha256": { "$ref": "#/$defs/sha256" }
+            },
+            "additionalProperties": false
+          }
+        },
+        "files": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/fileRef" } },
+        "measurements": {
+          "type": "object",
+          "additionalProperties": { "type": ["number", "string", "boolean"] }
+        },
+        "createdAt": { "$ref": "#/$defs/isoTime" },
+        "immutable": { "const": true }
+      },
+      "additionalProperties": false
+    },
+    "commandRequest": {
+      "type": "object",
+      "required": [
+        "schemaVersion",
+        "commandId",
+        "capabilityId",
+        "deviceId",
+        "projectId",
+        "requestedBy",
+        "issuedAt",
+        "expiresAt",
+        "sideEffect",
+        "parameters"
+      ],
+      "properties": {
+        "schemaVersion": { "const": "rdk.observability.command.v1" },
+        "commandId": { "$ref": "#/$defs/id" },
+        "capabilityId": { "$ref": "#/$defs/id" },
+        "deviceId": { "$ref": "#/$defs/id" },
+        "projectId": { "$ref": "#/$defs/id" },
+        "requestedBy": { "$ref": "#/$defs/id" },
+        "issuedAt": { "$ref": "#/$defs/isoTime" },
+        "expiresAt": { "$ref": "#/$defs/isoTime" },
+        "sideEffect": { "enum": ["read-only", "diagnostic", "controlled-write"] },
+        "approvalRef": { "$ref": "#/$defs/id" },
+        "parameters": { "type": "object" },
+        "signature": { "type": "string", "minLength": 1 }
+      },
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "if": { "properties": { "sideEffect": { "const": "controlled-write" } } },
+          "then": { "required": ["approvalRef", "signature"] }
+        }
+      ]
+    },
+    "observationPolicy": {
+      "type": "object",
+      "required": [
+        "schemaVersion",
+        "policyId",
+        "version",
+        "projectId",
+        "expiresAt",
+        "streams",
+        "signature"
+      ],
+      "properties": {
+        "schemaVersion": { "const": "rdk.observability.policy.v1" },
+        "policyId": { "$ref": "#/$defs/id" },
+        "version": { "type": "integer", "minimum": 1 },
+        "deviceId": { "$ref": "#/$defs/id" },
+        "projectId": { "$ref": "#/$defs/id" },
+        "expiresAt": { "$ref": "#/$defs/isoTime" },
+        "streams": {
+          "type": "object",
+          "minProperties": 1,
+          "additionalProperties": {
+            "type": "object",
+            "properties": {
+              "sampleHz": { "type": "number", "exclusiveMinimum": 0 },
+              "retentionHours": { "type": "number", "minimum": 0 },
+              "mode": { "enum": ["always", "on-demand", "disabled"] }
+            },
+            "additionalProperties": false
+          }
+        },
+        "triggers": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["metric", "operator", "value", "action"],
+            "properties": {
+              "metric": { "$ref": "#/$defs/id" },
+              "operator": { "enum": [">", ">=", "<", "<=", "=="] },
+              "value": { "type": "number" },
+              "action": { "$ref": "#/$defs/id" }
+            },
+            "additionalProperties": false
+          }
+        },
+        "signature": { "type": "string", "minLength": 1 }
+      },
+      "additionalProperties": false
+    }
+  }
+}

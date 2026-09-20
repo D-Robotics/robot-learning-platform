@@ -49,13 +49,8 @@
       first.focus();
     }
   }
-  // 首次访问自动弹出的前提是「用户还没开始操作」。以前固定 900ms 弹出，正好
-  // 撞上用户刚开始滚动或点击的那一刻，会把焦点抢走；现在一旦检测到交互就
-  // 不再自动弹出，顶栏的「新手指引」按钮随时可以手动打开。
-  let userInteracted = false;
-  for (const type of ['pointerdown', 'keydown', 'wheel', 'touchstart']) {
-    window.addEventListener(type, () => { userInteracted = true; }, { once: true, passive: true, capture: true });
-  }
+  // 新手指引是一个完整的全屏交互，不在首次访问时抢占工作台；顶栏按钮或
+  // 显式的 ?tour=1 才会打开它。
   const targetFor = (step) => step.target ? document.querySelector(step.target) : null;
   function build() {
     overlay = document.createElement('div'); overlay.className = 'onboarding-overlay'; overlay.hidden = true;
@@ -92,13 +87,15 @@
   document.getElementById('onboarding-help-button')?.addEventListener('click', start); document.addEventListener('keydown', (event) => { if (!overlay || overlay.hidden) return; if (event.key === 'Escape') { event.preventDefault(); finish(); return; } trapTab(event); }); window.addEventListener('resize', () => window.requestAnimationFrame(place)); window.addEventListener('scroll', () => window.requestAnimationFrame(place), { passive: true });
   // 等 DOM 就绪后再起算延迟：脚本是 defer 加载的，固定计时会从解析期开始
   // 计时，目标元素可能还没渲染出来。
+  // Keep the workbench usable on first load. The guide is a deliberate,
+  // full-screen interaction: open it from the top-bar button or explicitly
+  // request it with ?tour=1. An automatic timeout used to cover the page
+  // before the user had chosen a product or task, which made the dashboard
+  // feel blocked and also interrupted keyboard users.
   const armAutoStart = () => window.setTimeout(() => {
-    if (userInteracted) return;
-    let seen = false;
-    try { seen = window.localStorage?.getItem(STORAGE_KEY) === 'done'; } catch { /* storage may be unavailable (private mode): onboarding still works */ }
     const forced = new URLSearchParams(window.location.search).get('tour') === '1';
-    if ((!seen || forced) && (!document.getElementById('auth-gate') || document.getElementById('auth-gate').hidden)) start();
-  }, 900);
+    if (forced && (!document.getElementById('auth-gate') || document.getElementById('auth-gate').hidden)) start();
+  }, 0);
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', armAutoStart, { once: true });
   else armAutoStart();
 })();

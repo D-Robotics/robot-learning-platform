@@ -38,8 +38,19 @@ export interface HardwareProfile {
     actionProjection?: 'paired' | 'identity' | string;
     /** Units emitted by a 2D twist policy head before safety clamping. */
     actionOutput?: 'physical-twist' | 'normalized-twist' | string;
+    observationLayout?: string;
+    jointNames?: string[];
+    homePositionRad?: number[];
+    actionScaleRad?: number;
+    commandVectorSize?: number;
   };
-  safety?: { maxLinear?: number; maxAngular?: number; sensorStallSec?: number };
+  safety?: {
+    maxLinear?: number;
+    maxAngular?: number;
+    sensorStallSec?: number;
+    maxJointStepRad?: number;
+    maxJointVelocityRadSec?: number;
+  };
   policy: {
     observationAdapterId: string;
     actionAdapterId: string;
@@ -141,10 +152,18 @@ export function validateHardwareProfile(input: unknown): {
   ) {
     errors.push('ros.topics.cmdVel is required for a drive actuator');
   }
-  if (commandTopic && String(commandTopic.name ?? '') !== String(actuator.commandTopic ?? ''))
-    errors.push('actuator.commandTopic must match ros.topics.cmdVel.name');
-  if (commandTopic && String(commandTopic.type ?? '') !== String(actuator.messageType ?? ''))
-    errors.push('actuator.messageType must match ros.topics.cmdVel.type');
+  const jointCommand = asJsonObject(topics.jointCommand);
+  if (actuatorKind === 'joint' && !Object.keys(jointCommand).length)
+    errors.push('ros.topics.jointCommand is required for a joint actuator');
+  const selectedCommand = actuatorKind === 'joint' ? jointCommand : commandTopic;
+  if (selectedCommand && String(selectedCommand.name ?? '') !== String(actuator.commandTopic ?? ''))
+    errors.push(
+      `actuator.commandTopic must match ros.topics.${actuatorKind === 'joint' ? 'jointCommand' : 'cmdVel'}.name`,
+    );
+  if (selectedCommand && String(selectedCommand.type ?? '') !== String(actuator.messageType ?? ''))
+    errors.push(
+      `actuator.messageType must match ros.topics.${actuatorKind === 'joint' ? 'jointCommand' : 'cmdVel'}.type`,
+    );
   const policy = asJsonObject(value.policy);
   if (!String(policy.observationAdapterId ?? '').trim())
     errors.push('policy.observationAdapterId is required');
@@ -186,9 +205,19 @@ export function validateHardwareProfile(input: unknown): {
     errors.push('runtime.actionProjection is invalid');
   if (
     runtime.actionOutput !== undefined &&
-    !['physical-twist', 'normalized-twist'].includes(String(runtime.actionOutput).trim())
+    ![
+      'physical-twist',
+      'normalized-twist',
+      ...(actuatorKind === 'joint' ? ['joint-position-offset'] : []),
+    ].includes(String(runtime.actionOutput).trim())
   )
-    errors.push('runtime.actionOutput must be physical-twist or normalized-twist');
+    errors.push(
+      actuatorKind === 'joint'
+        ? 'runtime.actionOutput must be physical-twist, normalized-twist, or joint-position-offset'
+        : 'runtime.actionOutput must be physical-twist or normalized-twist',
+    );
+  if (actuatorKind === 'joint' && runtime.actionOutput !== 'joint-position-offset')
+    errors.push('joint actuators must declare runtime.actionOutput=joint-position-offset');
   if (
     actionSize === 2 &&
     runtime.actionProjection === 'identity' &&

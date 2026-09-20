@@ -291,6 +291,8 @@ function renderContextLive() {
     'context-live-project',
     project ? projectDisplayName(project) : state.projectsLoaded && state.projects?.length ? '全部项目' : '检查中',
   );
+  const activeView = document.body.dataset.activeView || 'overview';
+  setText('context-live-stage', VIEW_STAGE_LABELS[activeView] || '工作台');
   setText(
     'context-live-model',
     model ? modelLabel(model) : (state.overview?.models?.length ? '未选择' : '暂无模型'),
@@ -324,6 +326,10 @@ const state = {
   // CTA instead of a forced refresh.
   noticeFirstVersion: null,
   workspaceSummary: null,
+  // Server-derived RDK Golden Path read model. The UI may render a fallback
+  // while older gateways are upgrading, but never invents a second persisted
+  // workflow state when this payload is available.
+  goldenPath: null,
   projects: [],
   projectsLoaded: false,
   projectsLoadError: false,
@@ -1900,6 +1906,20 @@ const WORKFLOW_VIEWS = [
   'station',
 ];
 
+// The persistent chrome only names the two decisions needed for orientation:
+// which project is active and which stage is open. Model, device, run and
+// backend details remain available in the environment drawer below it.
+const VIEW_STAGE_LABELS = {
+  overview: '工作台',
+  simulate: '仿真与录制',
+  train: '强化学习训练',
+  resources: 'GPU 与算力',
+  evaluate: 'Sim2Real 评测',
+  deploy: '部署与反馈',
+  records: '调试与记录',
+  station: '设备控制台',
+};
+
 // 对象链（项目→模型/策略→Run→评测证据→发布制品→设备）：把当前视图映射到
 // 链上位置，回答"模型版本 / 策略包 / 运行记录 / 部署制品分别是什么、我现在
 // 在哪一环"。链本身在 overview 标题下，可点击直达对应视图。
@@ -1929,6 +1949,9 @@ function setView(view, { updateHash = true, scroll = true, focus = true } = {}) 
   const wanted = WORKFLOW_VIEWS.includes(view) ? view : 'overview';
   const changed = document.body.dataset.activeView !== wanted;
   document.body.dataset.activeView = wanted;
+  // Keep the compact project / stage breadcrumb in sync even before the next
+  // data refresh; changing views is itself a state change the user needs to see.
+  renderContextLive();
   document.querySelectorAll('[data-view-section]').forEach((section) => {
     section.hidden = section.dataset.viewSection !== wanted;
   });
@@ -3531,7 +3554,9 @@ function controlLatencyLabel(metrics) {
 // function of the whole metrics object when it depends on another field.
 const RUN_METRIC_CARDS = [
   ['contractValid', '契约状态', (value) => (value === true ? '通过' : value === false ? '失败' : '—')],
-  ['successRate', '成功率', (value) => formatMetricPercent(value)],
+  ['successRate', '成功率', (value) => formatRunPercent(value)],
+  ['evaluationEpisodes', '自动评测局数', (value) => formatMetricNumber(value, 0)],
+  ['meanReturn', '评测平均回报', (value) => formatMetricNumber(value, 3)],
   ['fallRate', '跌倒率', (value) => formatMetricPercent(value)],
   ['reward', '平均奖励', (value) => formatMetricNumber(value, 3)],
   ['episodeLength', '平均步数', (value) => formatMetricNumber(value, 1)],
@@ -3566,6 +3591,13 @@ const RUN_METRIC_CARDS = [
 
 function formatMetricPercent(value) {
   return SimTelemetryCore.formatMetricPercent(value);
+}
+
+function formatRunPercent(value) {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return '—';
+  const percent = value >= 0 && value <= 1 ? value * 100 : value;
+  if (percent < 0 || percent > 100) return '—';
+  return Number.isInteger(percent) ? `${percent}%` : `${percent.toFixed(1)}%`;
 }
 
 function formatMetricNumber(value, digits) {
@@ -3739,6 +3771,23 @@ function openRecordDetails(record) {
       ? '<div><strong class="run-detail-block-title">Checkpoint</strong><pre class="run-detail-code">' +
         escapeHtml(JSON.stringify(record.checkpoint, null, 2)) +
         '</pre></div>'
+      : '') +
+    (isRun && record.artifact
+      ? '<div><strong class="run-detail-block-title">平台导出制品</strong>' +
+        '<div class="run-artifact-summary"><span class="artifact-state is-ready">' +
+        escapeHtml(String(record.artifact.format || 'model').toUpperCase()) +
+        '</span><span>' +
+        escapeHtml(record.artifact.artifactRef || 'artifact:// 未提供') +
+        '</span>' +
+        (record.artifact.sizeBytes != null
+          ? '<span>' + escapeHtml(formatBytes(record.artifact.sizeBytes)) + '</span>'
+          : '') +
+        (record.artifact.sha256
+          ? '<span>SHA-256 ' + escapeHtml(shortDigest(record.artifact.sha256)) + '</span>'
+          : '') +
+        '<a class="button button-ghost button-small" href="/api/sim2real/runs/' +
+        encodeURIComponent(record.id) +
+        '/policy.onnx" download="policy.onnx">下载 ONNX</a></div></div>'
       : '') +
     (isArtifact
       ? '<div><strong class="run-detail-block-title">制品元数据</strong><pre class="run-detail-code">' +
@@ -6629,6 +6678,15 @@ function renderNextAction() {
     copy = '运行、预检和发布计划都保存在记录中，可以打开详情或开始下一轮动作。';
     label = '打开记录与版本 →';
   }
+  // Once the server exposes the Golden Path, its next action is authoritative
+  // for the CTA. This keeps the UI aligned with API/CLI/RDK Studio clients.
+  const goldenNext = state.goldenPath?.nextAction;
+  if (goldenNext) {
+    view = ({ task: 'simulate', dataset: 'train', train: 'train', evaluate: 'evaluate', deploy: 'deploy', feedback: 'records' }[goldenNext.stage] || view);
+    title = '下一步：' + goldenNext.label;
+    copy = goldenNext.reason;
+    label = '继续' + goldenNext.label + ' →';
+  }
   setText('next-action-title', title);
   setText('next-action-copy', copy);
   const button = $('next-action-button');
@@ -6883,7 +6941,19 @@ function deriveLoopStates() {
 function renderWorkflowProgress() {
   const rail = $('workflow-progress-strip');
   if (!rail) return;
-  const { states, current } = deriveLoopStates();
+  let { states, current } = deriveLoopStates();
+  const goldenStages = Array.isArray(state.goldenPath?.stages) ? state.goldenPath.stages : [];
+  if (goldenStages.length) {
+    const byKey = new Map(goldenStages.map((item) => [item.key, item]));
+    const mapping = { simulate: 'dataset', train: 'train', evaluate: 'evaluate', deploy: 'deploy' };
+    states = {};
+    for (const [view, stageKey] of Object.entries(mapping)) {
+      const item = byKey.get(stageKey);
+      states[view] = item?.state === 'succeeded' ? 'complete' : item?.state === 'blocked' || item?.state === 'failed' ? 'blocked' : item?.state === 'running' ? 'current' : 'ready';
+    }
+    const next = state.goldenPath.nextAction?.stage;
+    current = next ? ({ task: 'simulate', dataset: 'simulate', train: 'train', evaluate: 'evaluate', deploy: 'deploy', feedback: 'records' }[next] || null) : null;
+  }
   const summary = $('workflow-progress-summary');
   if (summary) summary.textContent = ({ simulate: '回放可选，用于验证策略', train: '模型已就绪，开始配置训练', evaluate: '打开评测查看回放', deploy: '评测完成，可生成预检计划' })[current] || '按步骤完成闭环';
   rail.querySelectorAll('[data-workflow-step]').forEach((item) => {
@@ -7750,18 +7820,26 @@ async function loadOverview({ quiet = false, silent = false } = {}) {
     // Silent polls (background refresh while a run is active) skip the three
     // slow-changing aux lists: they only churn requests and re-render churn,
     // while the operator's live interest is the run status itself.
-    const [summaryResult, projectsResult, datasetsResult] = silent
-      ? [{ status: 'fulfilled', value: undefined }, { status: 'fulfilled', value: undefined }, { status: 'fulfilled', value: undefined }]
+    const [summaryResult, projectsResult, datasetsResult, goldenPathResult] = silent
+      ? [{ status: 'fulfilled', value: undefined }, { status: 'fulfilled', value: undefined }, { status: 'fulfilled', value: undefined }, { status: 'fulfilled', value: undefined }]
       : await Promise.allSettled([
           request('/sim2real/workspace-summary'),
           request('/sim2real/projects'),
           request('/sim2real/datasets'),
+          request('/sim2real/golden-path?' + new URLSearchParams({
+            ...(state.projectId ? { projectId: state.projectId } : {}),
+            ...(state.selectedModelId ? { modelId: state.selectedModelId } : {}),
+            ...(state.taskId ? { taskId: state.taskId } : {}),
+          }).toString()),
         ]);
     state.workspaceSummary = summaryResult.status === 'fulfilled' ? summaryResult.value : state.workspaceSummary;
     const projectsAvailable = projectsResult.status === 'fulfilled' && Array.isArray(projectsResult.value?.projects);
     const datasetsAvailable = datasetsResult.status === 'fulfilled' && Array.isArray(datasetsResult.value?.datasets);
     if (projectsAvailable) state.projects = projectsResult.value.projects;
     if (datasetsAvailable) state.datasets = datasetsResult.value.datasets;
+    if (goldenPathResult.status === 'fulfilled' && goldenPathResult.value?.goldenPath) {
+      state.goldenPath = goldenPathResult.value.goldenPath;
+    }
     state.projectsLoaded = projectsAvailable || state.projectsLoaded;
     state.projectsLoadError = !projectsAvailable;
     state.datasetsLoaded = datasetsAvailable || state.datasetsLoaded;

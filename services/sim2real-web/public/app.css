@@ -10264,3 +10264,195 @@ body .depth-led [data-view-section='deploy'] > .deploy-layout > .deploy-flow-pan
 body .depth-led [data-view-section='deploy'] > .deploy-layout > .deploy-flow-panel .release-step {
   padding: 8px 0 12px;
 }
+
+/* Final information-architecture pass: the persistent chrome names only the
+   project and stage. Everything else is an on-demand environment drawer. */
+body .depth-led > .shell-layout > .main-content > .context-strip {
+  align-items: center;
+}
+
+body .depth-led > .shell-layout > .main-content > .context-strip .context-live {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  margin: 0;
+  overflow: visible;
+}
+
+body .depth-led .context-breadcrumb {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
+  padding: 8px 2px;
+  color: var(--text);
+  white-space: nowrap;
+}
+
+body .depth-led .context-breadcrumb-label {
+  color: var(--muted);
+  font-size: var(--fs-meta);
+  letter-spacing: .08em;
+}
+
+body .depth-led .context-breadcrumb strong {
+  max-width: min(34vw, 260px);
+  overflow: hidden;
+  color: var(--text);
+  font-size: var(--fs-body);
+  font-weight: 680;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+body .depth-led .context-breadcrumb i {
+  color: var(--muted);
+  font-style: normal;
+}
+
+body .depth-led .context-extra-details {
+  min-width: 0;
+}
+
+body .depth-led .context-extra-details > summary {
+  min-height: 30px;
+  padding: 4px 8px;
+  border: 0;
+  background: color-mix(in srgb, var(--panel-soft) 76%, transparent);
+  font-size: var(--fs-meta);
+}
+
+body .depth-led .context-extra-details > summary small {
+  margin-left: 4px;
+  color: var(--muted);
+  font-size: var(--fs-meta);
+}
+
+body .depth-led .context-extra-items {
+  grid-template-columns: repeat(3, minmax(132px, 1fr));
+  gap: 4px;
+}
+
+/* A right rail is an Inspector, not a second permanent canvas. Details keeps
+   the summary visible while returning the main work surface to one column. */
+body .depth-led .workspace-inspector {
+  align-self: start;
+  min-width: 0;
+  padding: 0;
+  overflow: hidden;
+}
+
+body .depth-led .workspace-inspector > summary.workspace-inspector-summary {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-height: 68px;
+  margin: 0;
+  padding: 16px 20px;
+  cursor: pointer;
+  list-style: none;
+}
+
+body .depth-led .workspace-inspector > summary.workspace-inspector-summary::-webkit-details-marker {
+  display: none;
+}
+
+body .depth-led .workspace-inspector > summary.workspace-inspector-summary > span:first-child {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+  flex: 1;
+}
+
+body .depth-led .workspace-inspector > summary.workspace-inspector-summary small {
+  color: var(--accent-text);
+  font-size: var(--fs-meta);
+  font-weight: 680;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+}
+
+body .depth-led .workspace-inspector > summary.workspace-inspector-summary h2 {
+  margin: 0;
+  color: var(--text);
+  font-size: var(--fs-body-lg);
+}
+
+body .depth-led .workspace-inspector-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex: 0 0 auto;
+  color: var(--muted);
+  font-size: var(--fs-meta);
+  white-space: nowrap;
+}
+
+body .depth-led .workspace-inspector-toggle i {
+  display: inline-block;
+  font-style: normal;
+  transition: transform .16s ease;
+}
+
+body .depth-led .workspace-inspector[open] > summary.workspace-inspector-summary {
+  border-bottom: 1px solid var(--ui-border-soft);
+  color: var(--accent-text);
+}
+
+body .depth-led .workspace-inspector[open] .workspace-inspector-toggle i {
+  transform: rotate(180deg);
+}
+
+body .depth-led .workspace-inspector > :not(summary) {
+  margin-inline: 20px;
+}
+
+body .depth-led .workspace-inspector > :not(summary):last-child {
+  margin-bottom: 20px;
+}
+
+body .depth-led [data-view-section='simulate'] > .sim-layout,
+body .depth-led [data-view-section='train'] > .train-layout,
+body .depth-led [data-view-section='deploy'] > .deploy-layout {
+  grid-template-columns: minmax(0, 1fr);
+  align-items: start;
+}
+
+body .depth-led [data-view-section='evaluate'] .evaluation-grid {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+body .depth-led [data-view-section='evaluate'] .evaluation-evidence {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+body .depth-led [data-view-section='overview'] .workflow-progress-strip,
+body .depth-led #workflow-progress-strip {
+  display: none;
+}
+
+@media (max-width: 720px) {
+  body .depth-led .context-breadcrumb strong {
+    max-width: 36vw;
+  }
+
+  body .depth-led .context-extra-details > summary small {
+    display: none;
+  }
+
+  body .depth-led .context-extra-items {
+    right: -8px;
+    grid-template-columns: 1fr;
+    min-width: 210px;
+  }
+
+  body .depth-led .workspace-inspector > summary.workspace-inspector-summary {
+    min-height: 58px;
+    padding: 12px;
+  }
+
+  body .depth-led .workspace-inspector > :not(summary) {
+    margin-inline: 12px;
+  }
+}

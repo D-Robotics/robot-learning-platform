@@ -136,6 +136,15 @@ function mockAgent(status: number, payload: Record<string, unknown>) {
 }
 
 describe('board-station constrained drive proxy', () => {
+  it('does not expose a persisted device as connected without a fresh probe', async () => {
+    const router = buildRouter();
+    const res = await call(routeHandler(router, 'get', '/api/sim2real/board-station/devices'));
+    expect(res.statusCode).toBe(200);
+    expect(res.body).toMatchObject({
+      devices: [{ id: 'x5-real-001', status: 'disconnected' }],
+    });
+  });
+
   it('reports drive state and forwards the honest agent answer', async () => {
     const fetchMock = mockAgent(200, {
       ok: true,

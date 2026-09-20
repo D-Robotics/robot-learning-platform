@@ -48,7 +48,7 @@ Playground / ManiSkill / Isaac Lab 是仿真 + 训练库。**同形态直接可�
 ### 我们已占优的（诚实列出）
 
 全流程浏览器闭环（仿真→录制→训练→评测→部署）、SSE 实时事件、12 步聚光 onboarding、
-205 处 aria 的无障碍投入、⌘K 命令面板、LLM agent-chat（10 个受控工具）。LeRobot 没有自研
+205 处 aria 的无障碍投入、⌘K 命令面板、LLM agent-chat（已接入 40+ 个受控工具）。LeRobot 没有自研
 实验 UI（依赖 wandb/trackio），ManiSkill/Playground 连 notebook 之外的东西都没有。
 
 ### 真正差的（对标 Rerun / Foxglove / MLflow / LeRobot visualizer）

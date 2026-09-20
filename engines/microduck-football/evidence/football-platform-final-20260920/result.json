@@ -1,0 +1,52 @@
+{
+  "status": "completed",
+  "engine": "microduck-football",
+  "taskId": "football-single-goal-kick",
+  "physicsBackend": "microduck-football-mujoco",
+  "cuda": true,
+  "deployable": false,
+  "metrics": {
+    "contractValid": true,
+    "task": "single-goal-kick",
+    "observationSize": 20,
+    "actionSize": 4,
+    "realActorObservationSize": 61,
+    "realActorActionSize": 14,
+    "reward": 0.3082171678543091,
+    "goals": 25720,
+    "completedEpisodes": 32496,
+    "successRate": 0.7914820285573609,
+    "iterations": 60,
+    "cuda": true
+  },
+  "checkpoint": {
+    "checkpointId": "microduck-football-football-optimized-platform-final-20260920",
+    "artifactRef": "artifact://microduck-football/football-optimized-platform-final-20260920/policy.pt",
+    "iteration": 60
+  },
+  "artifact": {
+    "ref": "artifact://microduck-football/football-optimized-platform-final-20260920/policy.pt",
+    "artifactId": "microduck-football-football-optimized-platform-final-20260920",
+    "version": "iter-60",
+    "role": "calibration",
+    "name": "policy.pt",
+    "kind": "source",
+    "format": "pytorch",
+    "runtime": "",
+    "workload": "locomotion",
+    "targetPlatforms": [
+      "rdk-x5"
+    ],
+    "sizeBytes": 85690,
+    "sha256": "e86e789f8f987d27e8c3fb55aaadd676727692cb89787b968d1f29bbc6e4eda4"
+  },
+  "exports": [
+    {
+      "name": "policy.ts",
+      "format": "torchscript",
+      "ref": "artifact://microduck-football/football-optimized-platform-final-20260920/policy.ts",
+      "sizeBytes": 92991,
+      "sha256": "f123edfd39581d145f2627f57314394730a65b6cfdd6ba9bb248315dd6ecee7d"
+    }
+  ]
+}

@@ -189,7 +189,9 @@ export type Sim2RealTrainingAlgorithm = 'ppo' | 'sac';
  * Worker-side engine routing. 'starter-ppo' is the CPU-friendly kinematic
  * pipeline; 'mjx-ppo' runs the MuJoCo MJX contact-dynamics engine;
  * 'microduck-rl' routes to the upstream `pollen-robotics/microduck_rl` stack
- * (mjlab + MuJoCo Warp + rsl-rl PPO) on a CUDA worker. 'visual-ppo' and
+ * (mjlab + MuJoCo Warp + rsl-rl PPO) on a CUDA worker; 'microduck-football'
+ * routes the platform's MuJoCo football tasks through the batched PPO runner
+ * and its real MicroDuck 61D→14D actor adapter. 'visual-ppo' and
  * 'dm-control-ppo' are the pixel-observation and dm_control-ecosystem local
  * engines, 'mjlab-rsl-rl' the reference mjlab + rsl-rl adapter, and 'act'
  * the action-chunking imitation engine. 'diffusion-policy' is the CNN
@@ -211,6 +213,7 @@ export type Sim2RealTrainingEngine =
   | 'dm-control-ppo'
   | 'mjlab-rsl-rl'
   | 'microduck-rl'
+  | 'microduck-football'
   | 'act'
   | 'diffusion-policy'
   | 'smolvla';
@@ -814,6 +817,7 @@ const ALLOWED_TRAINING_ENGINES = new Set<Sim2RealTrainingEngine>([
   'dm-control-ppo',
   'mjlab-rsl-rl',
   'microduck-rl',
+  'microduck-football',
   'act',
   'diffusion-policy',
   'smolvla',
@@ -1000,7 +1004,7 @@ export function normalizeTrainingSpec(value: unknown): {
   const engine = safeText(source.engine, 32);
   if (engine && !ALLOWED_TRAINING_ENGINES.has(engine as Sim2RealTrainingEngine)) {
     errors.push(
-      'training.engine must be one of starter-ppo, mjx-ppo, visual-ppo, dm-control-ppo, mjlab-rsl-rl, microduck-rl, act, diffusion-policy, smolvla',
+      'training.engine must be one of starter-ppo, mjx-ppo, visual-ppo, dm-control-ppo, mjlab-rsl-rl, microduck-rl, microduck-football, act, diffusion-policy, smolvla',
     );
   }
   if (errors.length) return { errors };
@@ -1031,7 +1035,9 @@ export function applyTaskEngineRecommendation(
   recommendedEngine?: string | null,
 ): Sim2RealTrainingSpec {
   if (spec.engine) return spec;
-  if (recommendedEngine === 'mjx-ppo') return { ...spec, engine: 'mjx-ppo' };
+  if (recommendedEngine === 'mjx-ppo' || recommendedEngine === 'microduck-rl') {
+    return { ...spec, engine: recommendedEngine };
+  }
   return spec;
 }
 
