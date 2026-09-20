@@ -10006,6 +10006,77 @@ body .workflow-nav-hierarchical .nav-subitem.is-active::before {
   opacity: 1;
 }
 
+/* Child modules are real focused screens inside their parent view. A click
+   changes the flow state, and the page keeps only the tools needed for that
+   task visible instead of presenting the same long canvas every time. */
+body[data-flow-child='prepare'] [data-view-section='train'] > .submodule-tabs,
+body[data-flow-child='prepare'] [data-view-section='train'] > .train-onboarding,
+body[data-flow-child='prepare'] [data-view-section='train'] > .train-layout,
+body[data-flow-child='configure'] [data-view-section='train'] > .submodule-tabs,
+body[data-flow-child='configure'] [data-view-section='train'] > .train-onboarding,
+body[data-flow-child='submit'] [data-view-section='train'] > .submodule-tabs,
+body[data-flow-child='submit'] [data-view-section='train'] > .train-onboarding {
+  display: none;
+}
+
+body[data-flow-child='prepare'] [data-view-section='train'] > #contract-fold {
+  display: block;
+  border-color: var(--accent-ring);
+  box-shadow: 0 16px 36px color-mix(in srgb, var(--accent) 8%, transparent);
+}
+
+body[data-flow-child='configure'] [data-view-section='train'] > .train-layout,
+body[data-flow-child='submit'] [data-view-section='train'] > .train-layout {
+  display: block;
+}
+
+body[data-flow-child='configure'] [data-view-section='train'] .model-details-fold,
+body[data-flow-child='configure'] [data-view-section='train'] .model-actions,
+body[data-flow-child='submit'] [data-view-section='train'] .model-details-fold,
+body[data-flow-child='submit'] [data-view-section='train'] .training-controls {
+  display: none;
+}
+
+body[data-flow-child='configure'] [data-view-section='train'] .training-controls {
+  display: block;
+  margin-top: 16px;
+  border-color: var(--accent-ring);
+  box-shadow: 0 16px 36px color-mix(in srgb, var(--accent) 8%, transparent);
+}
+
+body[data-flow-child='submit'] [data-view-section='train'] .model-actions {
+  display: flex;
+  margin-top: 16px;
+  padding-top: 16px;
+  border-top: 1px solid var(--ui-border-soft);
+}
+
+body[data-flow-child='submit'] [data-view-section='train'] .action-block-hint {
+  margin-top: 12px;
+}
+
+body[data-flow-child='evaluation-run'] [data-view-section='evaluate'] .evaluation-empty,
+body[data-flow-child='comparison'] [data-view-section='evaluate'] .evaluation-empty {
+  display: none;
+}
+
+body[data-flow-child='comparison'] [data-view-section='evaluate'] .evaluation-banner {
+  border-color: var(--accent-ring);
+}
+
+body[data-flow-child='preflight'] [data-view-section='deploy'] .deploy-flow-panel,
+body[data-flow-child='feedback'] [data-view-section='deploy'] .board-panel {
+  display: none;
+}
+
+body[data-flow-child='release'] [data-view-section='deploy'] .board-panel {
+  display: none;
+}
+
+body[data-flow-child='release'] [data-view-section='deploy'] .deploy-flow-panel {
+  border-color: var(--accent-ring);
+}
+
 
 
 body [data-view-section='deploy'] .promotion-stage {

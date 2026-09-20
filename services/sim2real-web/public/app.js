@@ -1947,6 +1947,7 @@ function renderObjectChain() {
 
 function setView(view, { updateHash = true, scroll = true, focus = true } = {}) {
   const wanted = WORKFLOW_VIEWS.includes(view) ? view : 'overview';
+  document.body.removeAttribute('data-flow-child');
   const changed = document.body.dataset.activeView !== wanted;
   document.body.dataset.activeView = wanted;
   // Keep the compact project / stage breadcrumb in sync even before the next
@@ -2012,6 +2013,7 @@ function setView(view, { updateHash = true, scroll = true, focus = true } = {}) 
 
 function setFlowChild(child) {
   const wanted = String(child || '');
+  document.body.dataset.flowChild = wanted;
   document.querySelectorAll('[data-flow-child]').forEach((control) => {
     const active = control.dataset.flowChild === wanted;
     control.classList.toggle('is-active', active);
