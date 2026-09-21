@@ -195,8 +195,37 @@ type WebSearchHit = { title: string; url: string; snippet: string };
 export type WebSearchFn = (query: string) => Promise<WebSearchHit[]>;
 
 const WEB_SEARCH_TIMEOUT_MS = 12_000;
-const WEB_SEARCH_MIN_INTERVAL_MS = 2_000;
+const WEB_SEARCH_MIN_INTERVAL_MS = 3_000;
 let webSearchLastAt = 0;
+// 免费通道会被高频查询限流降级（返回无关内容）。相同查询在 10 分钟内
+// 直接回缓存，既省配额也避免模型反复重试同一词时把通道打进降级态。
+const WEB_SEARCH_CACHE_TTL_MS = 600_000;
+const webSearchCache = new Map<string, { at: number; hits: WebSearchHit[] }>();
+
+function webSearchCacheKey(query: string): string {
+  return query.trim().replace(/\s+/g, ' ').toLowerCase();
+}
+
+function webSearchCacheGet(key: string): WebSearchHit[] | undefined {
+  const entry = webSearchCache.get(key);
+  if (!entry) return undefined;
+  if (Date.now() - entry.at > WEB_SEARCH_CACHE_TTL_MS) {
+    webSearchCache.delete(key);
+    return undefined;
+  }
+  // 重新插入实现 LRU 语义（Map 迭代按插入序）。
+  webSearchCache.delete(key);
+  webSearchCache.set(key, entry);
+  return entry.hits;
+}
+
+function webSearchCachePut(key: string, hits: WebSearchHit[]): void {
+  if (webSearchCache.size >= 16) {
+    const oldest = webSearchCache.keys().next().value;
+    if (oldest !== undefined) webSearchCache.delete(oldest);
+  }
+  webSearchCache.set(key, { at: Date.now(), hits });
+}
 
 function decodeEntities(text: string): string {
   return text
@@ -1556,6 +1585,17 @@ export function createDshCapabilityHandlers(
     async rdk_web_search(args: unknown, exec: ToolRunContext) {
       const input = argsRecord(args);
       const query = requiredArg(input, 'query', '请提供搜索关键词。');
+      const cacheKey = webSearchCacheKey(query.slice(0, 200));
+      const cached = webSearchCacheGet(cacheKey);
+      if (cached) {
+        return {
+          query,
+          results: cached,
+          cached: true,
+          hint:
+            '这些是全网第三方信息（非官方结论），本次结果来自 10 分钟内的缓存；与 rdk_docs_* 的官方资料冲突时以官方为准，引用时附链接并注明为网络检索结果。',
+        };
+      }
       const webSearch = options.webSearch ?? bingWebSearch;
       const elapsed = Date.now() - webSearchLastAt;
       if (elapsed < WEB_SEARCH_MIN_INTERVAL_MS) {
@@ -1564,6 +1604,7 @@ export function createDshCapabilityHandlers(
       webSearchLastAt = Date.now();
       try {
         const hits = await webSearch(query.slice(0, 200));
+        webSearchCachePut(cacheKey, hits);
         return {
           query,
           results: hits,

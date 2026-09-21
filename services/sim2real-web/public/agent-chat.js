@@ -124,9 +124,15 @@ async function refreshRuntimeStatus() {
   }
 }
 
+let typingElapsedTimer = null;
+
 function removeTypingIndicator() {
   activeTypingNode?.remove();
   activeTypingNode = null;
+  if (typingElapsedTimer) {
+    clearInterval(typingElapsedTimer);
+    typingElapsedTimer = null;
+  }
 }
 
 function showTypingIndicator(label = '正在思考…') {
@@ -144,6 +150,17 @@ function showTypingIndicator(label = '正在思考…') {
   messages.append(node);
   followMessagesBottom();
   activeTypingNode = node;
+  // DSH 回合是非流式的：复杂问题可能连续调用十几次工具、上百秒才返回。
+  // 每秒刷新已用时并提前给出长任务预期，避免用户在静默中等到现在才
+  // 知道要等多久。
+  const startedAt = Date.now();
+  typingElapsedTimer = setInterval(() => {
+    if (!activeTypingNode) return;
+    const seconds = Math.round((Date.now() - startedAt) / 1000);
+    text.textContent =
+      seconds >= 20 ? `${label} ${seconds}s（复杂问题可能需要 1-2 分钟）` : `${label} ${seconds}s`;
+    followMessagesBottom();
+  }, 1000);
 }
 
 function renderAgentError(error, retryable = true, lastMessage = '', turnId = '') {
@@ -729,7 +746,10 @@ function addMessage(role, text, persist = true) {
   node.innerHTML = `<strong>${role === 'user' ? '你' : 'Agent'}</strong><p></p>`;
   const paragraph = node.querySelector('p');
   const source = String(text ?? '');
-  paragraph.innerHTML = renderAgentMarkup(source);  if (role === 'agent') {
+  // renderAgentMarkup 首行先做全量 HTML 转义，再注入受控 Markdown 子集
+  // 标签（strong/code/ul/ol/li/br）；source 永远不进入未转义路径。
+  paragraph.innerHTML = renderAgentMarkup(source); // escape-audit:allow 转义在 renderAgentMarkup 首行完成，此处只附加受控标签
+  if (role === 'agent') {
     const actions = document.createElement('div');
     actions.className = 'agent-message-actions';
     const copy = document.createElement('button');
