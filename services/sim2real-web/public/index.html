@@ -994,6 +994,10 @@
             <div class="section-heading section-heading-lean">
               <h2 id="evaluate-title">Sim2Real 评测</h2><p class="section-lead">把仿真轨迹和真机遥测放在一起，确认策略是否真的有效。</p>
             </div>
+            <div class="submodule-tabs" role="tablist" aria-label="评测模块">
+              <button class="submodule-tab is-active" type="button" role="tab" aria-controls="evaluation-run-panel" data-view-target="evaluate" data-flow-child="evaluation-run">发起评测<small>指标 · 仿真对照</small></button>
+              <button class="submodule-tab" type="button" role="tab" aria-controls="evaluation-comparison-panel" data-view-target="evaluate" data-flow-child="comparison">结果对比<small>最近 Run 趋势</small></button>
+            </div>
             <div class="evaluation-banner">
               <div class="evaluation-status-mark" id="eval-status-mark">○</div>
               <div>
@@ -1352,6 +1356,10 @@
           >
             <div class="section-heading section-heading-lean">
               <h2 id="deploy-title">部署与反馈</h2><p class="section-lead">先只读预检，再看部署反馈；任何执行动作都需要单独批准。</p>
+            </div>
+            <div class="submodule-tabs" role="tablist" aria-label="部署模块">
+              <button class="submodule-tab is-active" type="button" role="tab" aria-controls="preflight-panel" data-view-target="deploy" data-flow-child="preflight">预检与发布<small>只读预检 · NO MOTOR</small></button>
+              <button class="submodule-tab" type="button" role="tab" aria-controls="feedback-panel" data-view-target="deploy" data-flow-child="feedback">运行反馈与回滚<small>上线闸门 · 时间线</small></button>
             </div>
             <div class="deploy-layout">
               <article class="panel board-panel" id="preflight-panel">

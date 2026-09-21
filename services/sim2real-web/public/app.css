@@ -5345,8 +5345,7 @@ html.theme-dark .agent-assistant-health { max-width: 150px; }
 .view-section[data-active-train-module="config"] .train-layout{display:block}
 .view-section[data-active-train-module="config"] .model-panel > :not(#train-module-config){display:none}
 .view-section[data-active-train-module="config"] #train-module-config{display:block;margin:0}
-.station-layout[data-active-station-module] > [data-station-module]{display:none}
-.station-layout[data-active-station-module="telemetry"] > [data-station-module="telemetry"],
+.station-layout[data-active-station-module] > [data-station-module]{display:none}.station-layout[data-active-station-module="telemetry"] > [data-station-module="telemetry"],
 .station-layout[data-active-station-module="control"] > [data-station-module="control"],
 .station-layout[data-active-station-module="policy"] > [data-station-module="policy"],
 .station-layout[data-active-station-module="diagnostics"] > [data-station-module="diagnostics"]{display:block}
@@ -5356,6 +5355,11 @@ html.theme-dark .agent-assistant-health { max-width: 150px; }
 .view-section[data-active-station-module]:not([data-active-station-module="devices"]) .station-device-manager{display:none}
 .view-section[data-active-station-module="devices"] .station-layout{display:none}
 .view-section[data-active-station-module="devices"] .station-device-manager{display:block}
+.view-section[data-active-eval-module="comparison"] .evaluation-grid{display:none}
+.view-section[data-active-eval-module="run"] .evaluation-evidence{display:none}
+.view-section[data-active-deploy-module="feedback"] #preflight-panel{display:none}
+.view-section[data-active-deploy-module="preflight"] #feedback-panel{display:none}
+.view-section[data-active-deploy-module] .deploy-layout{grid-template-columns:minmax(0,1fr)}
 @media (max-width:720px){.submodule-tabs{margin-left:-2px;margin-right:-2px}.submodule-tab{min-width:128px;padding:8px 10px}}
 .flow-context-strip{display:flex;align-items:center;gap:12px;margin:12px 0 16px;padding:12px 16px;border:1px solid color-mix(in srgb,var(--accent) 42%,var(--line));border-radius:12px;background:color-mix(in srgb,var(--accent) 8%,var(--panel));}
 .flow-context-index{display:grid;place-items:center;width:32px;height:32px;border-radius:8px;background:var(--accent);color:var(--accent-contrast,var(--panel));font-weight:800;}

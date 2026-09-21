@@ -709,6 +709,46 @@ describe('Sim2Real workbench DOM behavior', () => {
     expect(errors).toEqual([]);
   });
 
+  it('评测与部署视图按子模块显隐，页签与侧栏子项走同一条 flow-child 通道', async () => {
+    const { window, errors } = await boot({
+      url: 'http://127.0.0.1:3000/sim2real/#deploy/feedback',
+    });
+    const doc = window.document;
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(doc.body.dataset.activeView).toBe('deploy');
+    expect(doc.body.dataset.flowChild).toBe('feedback');
+    const deploySection = doc.querySelector('[data-view-section="deploy"]');
+    expect(deploySection?.getAttribute('data-active-deploy-module')).toBe('feedback');
+    expect(doc.getElementById('flow-context-title')?.textContent).toBe('运行反馈与回滚');
+    expect(doc.getElementById('feedback-panel')?.hasAttribute('open')).toBe(true);
+
+    const preflightTab = doc.querySelector<HTMLButtonElement>(
+      '#view-deploy [data-flow-child="preflight"], [data-view-section="deploy"] [data-flow-child="preflight"]',
+    );
+    preflightTab?.click();
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(window.location.hash).toBe('#deploy/preflight');
+    expect(deploySection?.getAttribute('data-active-deploy-module')).toBe('preflight');
+    expect(preflightTab?.classList.contains('is-active')).toBe(true);
+    expect(
+      doc
+        .querySelector('[data-view-section="deploy"] [data-flow-child="feedback"]')
+        ?.classList.contains('is-active'),
+    ).toBe(false);
+
+    doc.querySelector('[data-flow-child="comparison"]')?.click();
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(window.location.hash).toBe('#evaluate/comparison');
+    const evaluateSection = doc.querySelector('[data-view-section="evaluate"]');
+    expect(evaluateSection?.getAttribute('data-active-eval-module')).toBe('comparison');
+    expect(doc.getElementById('flow-context-title')?.textContent).toBe('结果对比');
+
+    window.location.hash = '#evaluate';
+    await new Promise((resolve) => setTimeout(resolve, 40));
+    expect(evaluateSection?.getAttribute('data-active-eval-module')).toBe('comparison');
+    expect(errors).toEqual([]);
+  });
+
   it('renders the promotion flow chain from first-class artifact and evaluation evidence', async () => {
     const selectedModel = model();
     const run = {
