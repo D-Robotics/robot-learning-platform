@@ -23,6 +23,7 @@
 
 import { spawnSync } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
+import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -162,12 +163,21 @@ if (flags.dir.startsWith('~/') || flags.dir === '~') {
     console.log(`  ✓ 部署目录解析为 ${flags.dir}`);
   }
 }
+const remoteNode = ssh(
+  'if [ -x /opt/node/bin/node ]; then printf /opt/node/bin/node; else command -v node; fi',
+).stdout.trim();
+if (!remoteNode.startsWith('/')) {
+  console.error('远端未找到绝对路径 Node.js 可执行文件');
+  process.exit(1);
+}
+console.log(`  ✓ 远端 Node.js: ${remoteNode}`);
 
 // --- 2. sync runtime files --------------------------------------------------
 step(`同步运行时文件到 ${flags.dir}`);
 const files = [
   'services/sim2real-web/local-training-worker.mjs',
   'engines/starter-ppo/runner.py',
+  'engines/reward_vocabulary.py',
   'examples/starter-ppo-manifest.json',
   'examples/local-engine-reference.mjs',
   'package.json',
@@ -193,23 +203,22 @@ const synced =
     { encoding: 'utf8', timeout: 180_000 },
   ).status === 0;
 if (!synced) {
-  // rsync may be unavailable on either side; scp each file to its subpath.
+  // rsync may be unavailable on either side.  Some managed GPU hosts expose
+  // an SFTP implementation that rejects files larger than 32 KiB, so prefer a
+  // plain SSH stdin stream over scp for the fallback path.
   for (const file of files) {
     ssh(`mkdir -p ${flags.dir}/$(dirname ${file})`);
-    const scp = spawnSync(
-      'scp',
-      [
-        '-P',
-        flags.port,
-        '-o',
-        'BatchMode=yes',
-        path.join(repoRoot, file),
-        `${sshTarget}:${flags.dir}/${file}`,
-      ],
-      { encoding: 'utf8', timeout: 120_000 },
+    const streamed = spawnSync(
+      sshBase[0],
+      [...sshBase.slice(1), sshTarget, `cat > ${flags.dir}/${file}`],
+      {
+        input: fs.readFileSync(path.join(repoRoot, file)),
+        encoding: 'utf8',
+        timeout: 120_000,
+      },
     );
-    if (scp.status !== 0) {
-      console.error(scp.stderr || `scp failed for ${file}`);
+    if (streamed.status !== 0) {
+      console.error(streamed.stderr || `ssh upload failed for ${file}`);
       process.exit(1);
     }
   }
@@ -276,6 +285,7 @@ console.log(`  ✓ ${flags.dir}/worker.env（随机 token 已写入远端 mode-6
 // --- 6. systemd (optional) --------------------------------------------------
 if (flags.service) {
   step('安装并启动 systemd 服务 rdk-sim2real-worker');
+  const nodeCommand = remoteNode;
   const unit = [
     '[Unit]',
     'Description=RDK Sim2Real GPU training worker',
@@ -284,16 +294,23 @@ if (flags.service) {
     'Type=simple',
     `WorkingDirectory=${flags.dir}`,
     `EnvironmentFile=${flags.dir}/worker.env`,
-    `ExecStart=/usr/bin/env node ${flags.dir}/services/sim2real-web/local-training-worker.mjs`,
+    `ExecStart=${nodeCommand} ${flags.dir}/services/sim2real-web/local-training-worker.mjs`,
     'Restart=on-failure',
     'RestartSec=3',
-    '[Install]',
-    'WantedBy=default.target',
   ].join('\n');
   ssh(
-    `mkdir -p ~/.config/systemd/user && cat > ~/.config/systemd/user/rdk-sim2real-worker.service <<'EOF'\n${unit}\nEOF\nsystemctl --user daemon-reload && systemctl --user enable --now rdk-sim2real-worker && systemctl --user is-active rdk-sim2real-worker`,
+    `mkdir -p ~/.config/systemd/user && cat > ~/.config/systemd/user/rdk-sim2real-worker.service <<'EOF'\n${unit}\n[Install]\nWantedBy=default.target\nEOF\n` +
+      'if systemctl --user daemon-reload >/dev/null 2>&1 && systemctl --user enable --now rdk-sim2real-worker >/dev/null 2>&1; then ' +
+      'systemctl --user is-active rdk-sim2real-worker; ' +
+      'elif [ "$(id -u)" = 0 ] && command -v systemctl >/dev/null 2>&1; then ' +
+      `cat > /etc/systemd/system/rdk-sim2real-worker.service <<'EOF'\n${unit}\n[Install]\nWantedBy=multi-user.target\nEOF\n` +
+      'if systemctl daemon-reload >/dev/null 2>&1 && systemctl enable --now rdk-sim2real-worker >/dev/null 2>&1; then ' +
+      'systemctl is-active rdk-sim2real-worker; ' +
+      `else (set -a; . ${flags.dir}/worker.env; set +a; node_bin=$(if [ -x ${nodeCommand} ]; then echo ${nodeCommand}; else command -v node; fi); nohup "$node_bin" ${flags.dir}/services/sim2real-web/local-training-worker.mjs >> ${flags.dir}/worker.log 2>&1 & echo $! > ${flags.dir}/worker.pid); ` +
+      `sleep 1; kill -0 $(cat ${flags.dir}/worker.pid); ` +
+      'fi; fi',
   );
-  console.log('  ✓ 服务已启动: systemctl --user status rdk-sim2real-worker');
+  console.log('  ✓ 服务已启动（systemd user、system service 或无 systemd 的后台 fallback）');
 } else {
   console.log('\n[gpu-deploy] 未指定 --service；手动启动方式：');
   console.log(`  ssh -p ${flags.port} ${sshTarget}`);

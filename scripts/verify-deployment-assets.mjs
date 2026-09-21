@@ -18,6 +18,17 @@ function read(relativePath) {
 }
 
 const packageManifest = JSON.parse(read('package.json'));
+for (const scriptName of ['setup', 'setup:install', 'setup:python', 'start']) {
+  assert.equal(
+    typeof packageManifest.scripts?.[scriptName],
+    'string',
+    `package.json must expose ${scriptName}`,
+  );
+}
+assert.ok(
+  existsSync(path.join(root, 'docs/first-run.md')),
+  'first-run onboarding guide must be shipped',
+);
 assert.equal(
   typeof packageManifest.scripts?.['smoke:sim2real-local'],
   'string',
@@ -176,6 +187,69 @@ assertUnit('services/sim2real-web/sim2real-local-worker.service', {
   ],
 });
 
+const backupScript = read('scripts/sim2real-nightly-backup.sh');
+const assetCopyScript = read('scripts/copy-server-assets.mjs');
+assert.match(
+  assetCopyScript,
+  /dist-server-assets\.lock/,
+  'asset copy must serialize concurrent builds',
+);
+assert.match(assetCopyScript, /acquireBuildLock/, 'asset copy must acquire a build lock');
+assert.equal(
+  spawnSync('bash', ['-n', path.join(root, 'scripts/sim2real-nightly-backup.sh')]).status,
+  0,
+  'nightly backup script must pass bash -n',
+);
+assert.match(backupScript, /RDK_SIM2REAL_RELEASE_ROOT/);
+assert.match(backupScript, /RDK_SIM2REAL_STORAGE_DIR/);
+assert.match(backupScript, /RDK_SIM2REAL_SERVICE_NAME/);
+assert.match(backupScript, /standalone-sim2real\.service/);
+assert.match(backupScript, /studio-integrated-sim2real\.service/);
+assert.match(backupScript, /sim2real-web\.service/);
+assert.match(backupScript, /invalid service name/);
+assert.match(backupScript, /backup_leaf=.*backup_root##\*\//);
+assert.match(backupScript, /backup_leaf.*rdk-sim2real/);
+assert.match(backupScript, /old_name.*\^\[0-9\]\{8\}T\[0-9\]\{6\}Z\$/);
+assert.doesNotMatch(
+  backupScript,
+  /find .* -exec rm -rf -- \{\}/,
+  'nightly retention must not delete arbitrary direct child directories',
+);
+assert.match(backupScript, /\/var\/lib\/rdk-robot-learning-platform\/sim2real/);
+assert.match(backupScript, /\/opt\/sim2real-web\/data/);
+
+const backupUnitPath = 'services/sim2real-web/sim2real-backup.service';
+assertUnit(backupUnitPath, {
+  requiredUnit: [
+    /After=standalone-sim2real\.service studio-integrated-sim2real\.service sim2real-web\.service/,
+  ],
+  requiredService: [
+    /EnvironmentFile=-\/etc\/rdk-robot-learning-platform-sim2real-backup\.env/,
+    /ExecStart=\/bin\/bash -c /,
+    /RDK_SIM2REAL_RELEASE_ROOT/,
+    /opt\/rdk-robot-learning-platform\/current\/dist-server\/scripts\/sim2real-nightly-backup\.sh/,
+    /opt\/sim2real-web\/current\/dist-server\/scripts\/sim2real-nightly-backup\.sh/,
+    /ReadWritePaths=\/var\/lib\/rdk-robot-learning-platform\/sim2real \/opt\/sim2real-web\/data \/var\/backups\/rdk-sim2real/,
+  ],
+});
+assert.doesNotMatch(
+  read(backupUnitPath),
+  /^After=sim2real-web\.service$/m,
+  'backup unit must not depend only on the removed sim2real-web.service name',
+);
+const backupTimer = read('services/sim2real-web/sim2real-backup.timer');
+assert.match(backupTimer, /Unit=sim2real-backup\.service/);
+const backupExec = read(backupUnitPath).match(/^ExecStart=\/bin\/bash -c '([^']*)'$/m)?.[1];
+assert.ok(backupExec, 'backup unit must expose a quoted bash ExecStart');
+const backupExecProbe = spawnSync('bash', ['-n', '-c', backupExec.replaceAll('$$', '$')], {
+  encoding: 'utf8',
+});
+assert.equal(
+  backupExecProbe.status,
+  0,
+  `backup unit ExecStart shell is invalid: ${backupExecProbe.stderr || backupExecProbe.stdout}`,
+);
+
 const integratedUnit = read('services/sim2real-web/studio-integrated-sim2real.service');
 assert.match(integratedUnit, /ConditionPathExists=\/etc\/rdkstudio-sim2real-adapter\.ready/);
 assert.match(integratedUnit, /ExecStartPre=.*RDK_SIM2REAL_ADAPTER_READY=1/);
@@ -243,6 +317,25 @@ for (const file of [
   );
 }
 assert.match(copyScript, /sim2real\.production\.env\.example/);
+assert.ok(
+  existsSync(path.join(root, 'data/failure-cases/goal-navigation-seed.json')),
+  'the failure-case seed must exist in the source tree',
+);
+assert.match(
+  copyScript,
+  /path\.join\('data', 'failure-cases', 'goal-navigation-seed\.json'\)/,
+  'build:assets must ship the failure-case seed into the compiled release',
+);
+assert.match(
+  copyScript,
+  /path\.join\('dist-server', 'data', 'failure-cases', 'goal-navigation-seed\.json'\)/,
+  'build:assets must place the failure-case seed next to compiled route modules',
+);
+assert.match(
+  read('server/routes/sim2real-routes.ts'),
+  /path\.dirname\(fileURLToPath\(import\.meta\.url\)\)[\s\S]*failure-cases[\\/]goal-navigation-seed\.json/,
+  'failure-case route must resolve its asset relative to the compiled module, not cwd',
+);
 assert.ok(existsSync(path.join(root, 'services/sim2real-web/public/microduck-unavailable.html')));
 for (const relativePath of [
   'services/sim2real-web/public/originbot-sim/index.html',
@@ -635,6 +728,7 @@ if (process.env.VERIFY_SYSTEMD === '1') {
   for (const relativePath of [
     'services/sim2real-web/standalone-sim2real.service',
     'services/sim2real-web/studio-integrated-sim2real.service',
+    'services/sim2real-web/sim2real-backup.service',
     'services/sim2real-web/sim2real-mock-worker.service',
     'services/sim2real-web/sim2real-local-worker.service',
     'services/sim2real-web/rdk-board-agent.service',

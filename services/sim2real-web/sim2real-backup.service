@@ -1,14 +1,24 @@
 [Unit]
 Description=Verified Sim2Real ledger backup
-After=sim2real-web.service
+# standalone-sim2real.service is the canonical deployment.  The script also
+# understands studio-integrated-sim2real.service and the legacy sim2real-web
+# unit; both roots remain readable/writable below for a reviewed compatibility
+# deployment selected through the optional EnvironmentFile.
+After=standalone-sim2real.service studio-integrated-sim2real.service sim2real-web.service
 
 [Service]
 Type=oneshot
 User=root
-ExecStart=/opt/sim2real-web/current/dist-server/scripts/sim2real-nightly-backup.sh
+# Keep this file usable during a rolling release: choose the first installed
+# script and let it select the active deployment.  Operators retaining the old
+# Studio layout may set RDK_SIM2REAL_RELEASE_ROOT, RDK_SIM2REAL_STORAGE_DIR,
+# and RDK_SIM2REAL_SERVICE_NAME in the optional root-only override below.
+EnvironmentFile=-/etc/rdk-robot-learning-platform-sim2real-backup.env
+ExecStart=/bin/bash -c 'if [ -n "$${RDK_SIM2REAL_RELEASE_ROOT}" ] && [ -f "$${RDK_SIM2REAL_RELEASE_ROOT}/dist-server/scripts/sim2real-nightly-backup.sh" ]; then exec /bin/bash "$${RDK_SIM2REAL_RELEASE_ROOT}/dist-server/scripts/sim2real-nightly-backup.sh"; elif [ -f /opt/rdk-robot-learning-platform/current/dist-server/scripts/sim2real-nightly-backup.sh ]; then exec /bin/bash /opt/rdk-robot-learning-platform/current/dist-server/scripts/sim2real-nightly-backup.sh; elif [ -f /opt/sim2real-web/current/dist-server/scripts/sim2real-nightly-backup.sh ]; then exec /bin/bash /opt/sim2real-web/current/dist-server/scripts/sim2real-nightly-backup.sh; else echo "[sim2real-backup] no installed release contains sim2real-nightly-backup.sh" >&2; exit 1; fi'
 NoNewPrivileges=true
 PrivateTmp=true
 ProtectHome=true
 ProtectSystem=strict
-ReadWritePaths=/opt/sim2real-web/data /var/backups/rdk-sim2real
-
+# The standalone path is the default; the legacy path is retained only so a
+# reviewed compatibility override can keep working without weakening the unit.
+ReadWritePaths=/var/lib/rdk-robot-learning-platform/sim2real /opt/sim2real-web/data /var/backups/rdk-sim2real

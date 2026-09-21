@@ -1,8 +1,101 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-storage_dir="${RDK_SIM2REAL_STORAGE_DIR:-/opt/sim2real-web/data}"
+# The standalone deployment is the canonical production layout.  Keep every
+# path overridable so the Studio-integrated compatibility deployment (and
+# existing development hosts) can opt into its older release/data roots
+# without carrying a second copy of this maintenance script.
+service_name="${RDK_SIM2REAL_SERVICE_NAME:-}"
+release_root="${RDK_SIM2REAL_RELEASE_ROOT:-}"
+storage_dir="${RDK_SIM2REAL_STORAGE_DIR:-}"
 backup_root="${RDK_SIM2REAL_BACKUP_DIR:-/var/backups/rdk-sim2real}"
+
+# Prefer the service that is actually serving traffic.  The fallback checks
+# unit definitions so a stopped service still selects the right deployment.
+if [[ -z "${service_name}" ]]; then
+  for candidate in \
+    standalone-sim2real.service \
+    studio-integrated-sim2real.service \
+    sim2real-web.service; do
+    if systemctl is-active --quiet "${candidate}" 2>/dev/null; then
+      service_name="${candidate}"
+      break
+    fi
+  done
+fi
+if [[ -z "${service_name}" ]]; then
+  for candidate in \
+    standalone-sim2real.service \
+    studio-integrated-sim2real.service \
+    sim2real-web.service; do
+    if systemctl cat "${candidate}" >/dev/null 2>&1; then
+      service_name="${candidate}"
+      break
+    fi
+  done
+fi
+service_name="${service_name:-standalone-sim2real.service}"
+
+if [[ -z "${release_root}" ]]; then
+  case "${service_name}" in
+    studio-integrated-sim2real.service|sim2real-web.service)
+      release_root=/opt/sim2real-web/current
+      ;;
+    *)
+      release_root=/opt/rdk-robot-learning-platform/current
+      ;;
+  esac
+fi
+
+if [[ -z "${storage_dir}" ]]; then
+  case "${service_name}" in
+    studio-integrated-sim2real.service|sim2real-web.service)
+      storage_dir=/opt/sim2real-web/data
+      ;;
+    *)
+      storage_dir=/var/lib/rdk-robot-learning-platform/sim2real
+      ;;
+  esac
+fi
+
+# These values come from a root-owned systemd environment or an operator's
+# shell, but reject malformed inputs before using them in maintenance commands.
+# In particular, backup_root is intentionally narrower than a generic absolute
+# path: the retention pass below removes old direct children, so accepting `/`,
+# a system-wide directory, or a path containing `..` could destroy unrelated
+# data after an operator typo. Keep custom locations possible while requiring
+# the dedicated leaf used by the production layout.
+backup_root="${backup_root%/}"
+if [[
+  "${release_root}" != /* ||
+  "${storage_dir}" != /* ||
+  "${backup_root}" != /* ||
+  "${release_root}" == *..* ||
+  "${storage_dir}" == *..* ||
+  "${backup_root}" == *..*
+]]; then
+  echo '[sim2real-backup] release, storage, and backup paths must be absolute and cannot contain ..' >&2
+  exit 2
+fi
+backup_leaf="${backup_root##*/}"
+if [[ -z "${backup_leaf}" || "${backup_leaf}" != rdk-sim2real || "${backup_root}" == / ]]; then
+  echo '[sim2real-backup] backup directory must be a dedicated .../rdk-sim2real path' >&2
+  exit 2
+fi
+case "${service_name}" in
+  standalone-sim2real.service|studio-integrated-sim2real.service|sim2real-web.service)
+    ;;
+  *)
+    echo '[sim2real-backup] invalid service name' >&2
+    exit 2
+    ;;
+esac
+
+backup_tool="${release_root}/dist-server/scripts/sim2real-storage-backup.mjs"
+if [[ ! -f "${backup_tool}" ]]; then
+  echo "[sim2real-backup] backup tool not found: ${backup_tool}" >&2
+  exit 1
+fi
 stamp="$(date -u +%Y%m%dT%H%M%SZ)"
 snapshot="${backup_root}/${stamp}"
 mkdir -p "${backup_root}"
@@ -11,23 +104,31 @@ chmod 700 "${backup_root}"
 restart_needed=0
 cleanup() {
   if [[ "${restart_needed}" == 1 ]]; then
-    systemctl start sim2real-web.service || true
+    systemctl start "${service_name}" 2>/dev/null || true
   fi
 }
 trap cleanup EXIT
 
-# The backup tool refuses a live writer by default. Stop only the standalone
-# writer for a short maintenance window, then verify the immutable snapshot
-# before bringing traffic back.
-if systemctl is-active --quiet sim2real-web.service; then
-  systemctl stop sim2real-web.service
+# The backup tool refuses a live writer by default. Stop the selected writer
+# for a short maintenance window, then verify the immutable snapshot before
+# bringing traffic back.
+if systemctl is-active --quiet "${service_name}" 2>/dev/null; then
+  systemctl stop "${service_name}" 2>/dev/null
   restart_needed=1
 fi
-node /opt/sim2real-web/current/dist-server/scripts/sim2real-storage-backup.mjs \
+node "${backup_tool}" \
   backup --storage-dir "${storage_dir}" --output "${snapshot}"
-node /opt/sim2real-web/current/dist-server/scripts/sim2real-storage-backup.mjs \
+node "${backup_tool}" \
   verify --snapshot "${snapshot}"
 
-# Keep two weeks of verified snapshots; never remove the newest one.
-find "${backup_root}" -mindepth 1 -maxdepth 1 -type d -mtime +14 -exec rm -rf -- {} +
+# Keep two weeks of verified snapshots; never remove the newest one. Only
+# directories generated by the UTC stamp below are eligible: an operator may
+# keep notes or other reviewed material beside snapshots without risking that
+# retention treats it as disposable state.
+while IFS= read -r -d '' old_snapshot; do
+  old_name="${old_snapshot##*/}"
+  if [[ "${old_name}" =~ ^[0-9]{8}T[0-9]{6}Z$ ]]; then
+    rm -rf -- "${old_snapshot}"
+  fi
+done < <(find "${backup_root}" -mindepth 1 -maxdepth 1 -type d -mtime +14 -print0)
 echo "[sim2real-backup] verified snapshot=${snapshot}"

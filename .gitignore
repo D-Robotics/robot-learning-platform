@@ -59,6 +59,7 @@ MUJOCO_LOG.TXT
 **:memory:.ses
 /.pytest_cache/
 .pytest_cache/
+.dist-server-assets.lock/
 # sqlite :memory: temp sidecar, wherever a run drops it
 /:memory:.ses
 

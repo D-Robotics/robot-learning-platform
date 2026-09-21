@@ -21,7 +21,11 @@ import BasicCompactionEngine from '@deepseek-ai/dsh-compaction-basic';
 import ToolResultPruner from '@deepseek-ai/dsh-compaction-tool-result-pruner';
 import * as ToolCallTimeoutPolicy from '@deepseek-ai/dsh-tool-call-timeout-policy';
 import * as SessionCheckpointPolicy from '@deepseek-ai/dsh-session-checkpoint-policy';
-import { installDshCapabilityTools, type DshCapabilityHandlers } from './dsh-capability-tools.js';
+import {
+  capabilityBriefing,
+  installDshCapabilityTools,
+  type DshCapabilityHandlers,
+} from './dsh-capability-tools.js';
 
 export type DshRuntimeOptions = {
   persistenceRoot: string;
@@ -95,6 +99,17 @@ export async function createDshRuntime(options: DshRuntimeOptions): Promise<Cont
     await ctx.plugin(DeepSeekLlm, deepseekOptions);
     await ctx.plugin(AgentLoop, { agents: [] });
     installDshCapabilityTools(ctx, options.capabilityHandlers);
+    // Tool schemas make the tools callable but say nothing about how to PRESENT
+    // the capability set; the briefing section closes that gap. Skipped when no
+    // product handler is bound, matching the schema-visible tool set.
+    const briefing = capabilityBriefing(options.capabilityHandlers);
+    if (briefing) {
+      ctx.systemPrompt.section({
+        name: 'rdk:capability-briefing',
+        order: ctx.systemPrompt.getSectionOrder('DEPLOYMENT_PERSONA_SUFFIX'),
+        text: briefing,
+      });
+    }
     return ctx;
   } catch (error) {
     await ctx.fiber.dispose().catch(() => undefined);
@@ -245,6 +260,23 @@ export function stripEnglishPreamble(text: string): string {
   // Treat the English as the content instead of stripping into the body.
   if (index >= limit && limit < lines.length) return source;
   const rest = source.slice(stripChars).replace(/^(?:\r?\n)+/, '');
+  return rest.trim() ? rest : source;
+}
+
+/**
+ * Drop a reasoning model's think block that leaked into the visible content.
+ * OpenAI-compatible gateways do not agree on where thinking belongs: some keep
+ * `reasoning_content` separate, others inline it into `content` delimited by a
+ * literal `</think>` marker (the opening tag may be swallowed). Everything up
+ * to and including the LAST close marker is preamble; what follows is the
+ * user's answer. Text without the marker is returned untouched.
+ */
+export function stripThinkBlock(text: string): string {
+  const source = String(text ?? '');
+  const marker = '</think>';
+  const index = source.lastIndexOf(marker);
+  if (index === -1) return source;
+  const rest = source.slice(index + marker.length);
   return rest.trim() ? rest : source;
 }
 
@@ -494,17 +526,21 @@ export async function askDsh(
       })
       .join('')
       .trim();
+    // The chat UI renders this as "本轮约 N tokens", so the meter must cover
+    // only the projected turn: the session-wide event list would also sum every
+    // earlier turn's messages and the label would grow with each follow-up.
+    const usage = tokenUsageOf(turnEvents);
     return {
       sessionId: id,
       text:
-        stripInlineEnglishPreamble(stripEnglishPreamble(text)) ||
+        stripThinkBlock(stripInlineEnglishPreamble(stripEnglishPreamble(text))) ||
         'DSH 已完成本轮，但没有返回文本。',
       reasoning: reasoningTextOf(turnEvents),
       // Walk the complete event list, not the tail below: streaming chunks
       // push tool events out of any fixed window.
       toolTrail: toolTrailOf(turnEvents),
       events: turnEvents.slice(-50),
-      ...(tokenUsageOf(events) ? { usage: tokenUsageOf(events) } : {}),
+      ...(usage ? { usage } : {}),
     };
   } finally {
     options.signal?.removeEventListener('abort', cancelOnAbort);

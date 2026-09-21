@@ -181,7 +181,8 @@ sudo ln -sfnT "$release" "$current"
 ```
 
    目标机需要可执行的 Node.js 运行时；unit 通过固定的系统 `PATH` 查找 `node`。
-   安装 Node.js 22 LTS（或满足 `^20.19.0 || ^22.12.0 || >=24.0.0` 的版本），并在启用服务前确认：
+   安装 Node.js 22 LTS（或满足 `^22.22.2 || ^24.15.0 || >=26.0.0` 的版本，与仓库
+   `package.json` 的 `engines` 一致），并在启用服务前确认：
 
    ```bash
    node --version
@@ -239,6 +240,10 @@ sudo install -d -o sim2real -g sim2real -m 0700 /var/lib/rdk-robot-learning-plat
      /etc/systemd/system/standalone-sim2real.service
    sudo install -o root -g root -m 0644 services/sim2real-web/sim2real-mock-worker.service \
      /etc/systemd/system/sim2real-mock-worker.service
+   sudo install -o root -g root -m 0644 services/sim2real-web/sim2real-backup.service \
+     /etc/systemd/system/sim2real-backup.service
+   sudo install -o root -g root -m 0644 services/sim2real-web/sim2real-backup.timer \
+     /etc/systemd/system/sim2real-backup.timer
    # 仅在启用 RDK_SIM2REAL_AUDIT_FILE=/var/log/rdk-sim2real/audit.ndjson
    # 时创建；standalone unit 已为该目录保留写权限。
    sudo install -d -o sim2real -g sim2real -m 0700 /var/log/rdk-sim2real
@@ -246,7 +251,14 @@ sudo install -d -o sim2real -g sim2real -m 0700 /var/lib/rdk-robot-learning-plat
    # 并配置 provider credential 后才需要这个会话目录，unit 只开放此目录。
    sudo install -d -o sim2real -g sim2real -m 0700 /var/lib/sim2real/dsh
    sudo systemctl daemon-reload
+   sudo systemctl enable --now sim2real-backup.timer
    ```
+
+   `sim2real-backup.timer` 默认备份 standalone 台账；备份脚本会自动跟随当前 active 的
+   `studio-integrated-sim2real.service`。如果主机同时安装了两个版本，使用 root-only
+   `/etc/rdk-robot-learning-platform-sim2real-backup.env` 显式设置
+   `RDK_SIM2REAL_RELEASE_ROOT`、`RDK_SIM2REAL_STORAGE_DIR` 和
+   `RDK_SIM2REAL_SERVICE_NAME`，再执行 `systemctl daemon-reload`。
 
    若要挂载到已有 Studio 主机并复用安全适配器，先创建
    `/etc/rdkstudio-sim2real-adapter.ready`，再使用 `studio-integrated-sim2real.service`；该 unit

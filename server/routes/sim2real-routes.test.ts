@@ -8,7 +8,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { BUILTIN_MICRODUCK_MODEL, type Sim2RealModelManifest } from '../../shared/sim2real.js';
 import type { Sim2RealAuthPort } from '../sim2real/sim2real-auth.js';
 import { reserveSim2RealRun, updateSim2RealComputeResource } from '../sim2real/sim2real-store.js';
-import { createSim2RealRouter } from './sim2real-routes.js';
+import { createSim2RealRouter, workspacePackageVersion } from './sim2real-routes.js';
 
 const roots: string[] = [];
 const previousStorage = process.env.RDK_SIM2REAL_STORAGE_DIR;
@@ -3101,5 +3101,24 @@ describe('Sim2Real HTTP routes', () => {
     // A writable fixture storage dir must not fabricate a degraded notice.
     expect(payload.notices.find((item) => item.id === 'platform-degraded')).toBeUndefined();
     expect(notices.headers['cache-control']).toContain('no-store');
+  });
+
+  it('serves the reviewed failure-case seed from the module-relative asset path', async () => {
+    const router = await fixture();
+    const response = await invoke(router, 'get', '/api/sim2real/task-packs/:taskId/failure-cases', {
+      params: { taskId: 'goal-navigation-clear-arena' },
+    });
+    expect(response.statusCode).toBe(200);
+    expect(response.body).toMatchObject({ ok: true });
+    expect((response.body as { cases?: unknown[] }).cases?.length).toBeGreaterThan(0);
+  });
+
+  it('resolves the package version from the release root in a compiled layout', async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'rdk-sim2real-release-meta-'));
+    roots.push(root);
+    const moduleDirectory = path.join(root, 'dist-server', 'server', 'routes');
+    await fs.mkdir(moduleDirectory, { recursive: true });
+    await fs.writeFile(path.join(root, 'package.json'), JSON.stringify({ version: '9.9.9-test' }));
+    expect(workspacePackageVersion(moduleDirectory)).toBe('9.9.9-test');
   });
 });

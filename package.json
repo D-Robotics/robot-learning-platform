@@ -28,6 +28,10 @@
     "node": "^22.22.2 || ^24.15.0 || >=26.0.0"
   },
   "scripts": {
+    "setup": "node scripts/setup-local.mjs",
+    "setup:install": "node scripts/setup-local.mjs --install",
+    "setup:python": "node scripts/setup-local.mjs --install-python",
+    "start": "npm run demo:sim2real",
     "dev:sim2real": "node scripts/run-with-env.mjs node --import tsx/esm services/sim2real-web/server.ts",
     "dev:mock-worker": "node scripts/run-with-env.mjs node services/sim2real-web/mock-local-worker.mjs",
     "dev:local-worker": "node scripts/run-with-env.mjs node services/sim2real-web/local-training-worker.mjs",

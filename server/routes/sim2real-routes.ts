@@ -680,15 +680,22 @@ function requestOwnerOptional(
   return /^[^\u0000-\u001f\u007f]{1,160}$/.test(id) && !id.includes('/') ? id : undefined;
 }
 
-const PACKAGE_JSON_CANDIDATES = [
-  // Standalone dev server: services/sim2real-web/server.ts -> repo root.
-  path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../package.json'),
-  // Compiled dist-server: routes/sim2real-routes.js -> dist-server root.
-  path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../package.json'),
-];
+function packageJsonCandidates(moduleDirectory: string): string[] {
+  return [
+    // Standalone dev server: services/sim2real-web/server.ts -> repo root.
+    path.resolve(moduleDirectory, '../../package.json'),
+    // Compiled dist-server when package metadata is copied beside the output.
+    path.resolve(moduleDirectory, '../package.json'),
+    // Release layout used by the systemd units: package.json is beside
+    // dist-server/, not inside it (see services/sim2real-web/README.md).
+    path.resolve(moduleDirectory, '../../../package.json'),
+  ];
+}
 
-function workspacePackageVersion(): string {
-  for (const file of PACKAGE_JSON_CANDIDATES) {
+export function workspacePackageVersion(
+  moduleDirectory = path.dirname(fileURLToPath(import.meta.url)),
+): string {
+  for (const file of packageJsonCandidates(moduleDirectory)) {
     try {
       const value = JSON.parse(readFileSync(file, 'utf8')) as { version?: string };
       if (value.version) return String(value.version);
@@ -2100,10 +2107,16 @@ export function createSim2RealRouter(
         return;
       }
       try {
-        const file = await readFile(
-          path.resolve(process.cwd(), 'data/failure-cases/goal-navigation-seed.json'),
-          'utf8',
+        // Resolve the immutable seed next to this module rather than through
+        // process.cwd().  A compiled release runs from the repository/release
+        // root while this route lives under dist-server/server/routes; the
+        // build copies `data/failure-cases` into dist-server so both source
+        // tests and dist-only deployments resolve the same reviewed asset.
+        const seedFile = path.resolve(
+          path.dirname(fileURLToPath(import.meta.url)),
+          '../../data/failure-cases/goal-navigation-seed.json',
         );
+        const file = await readFile(seedFile, 'utf8');
         response.json({ ok: true, ...JSON.parse(file) });
       } catch {
         response.status(503).json({ ok: false, error: 'TASK_PACK_ASSET_UNAVAILABLE' });

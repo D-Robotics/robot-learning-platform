@@ -133,6 +133,19 @@ node scripts/sim2real-storage-backup.mjs backup \
 
 输出目录是可审计的快照，不依赖 tar 或第三方包，包含 `backup-manifest.json`、完整 `sim2real.json`、遥测分片和存在时的审计段。`consistency=quiesced` 表示复制时没有检测到源文件变化；只有明确传 `--allow-live` 才会生成 `consistency=best-effort` 快照，这种快照不能作为发布或评测证据。建议把快照目录再复制到加密的异地对象存储，并在对象存储侧启用版本保护和生命周期策略。
 
+仓库附带的 `sim2real-backup.service`/`.timer` 默认跟随
+`standalone-sim2real.service`（release `/opt/rdk-robot-learning-platform/current`、台账
+`/var/lib/rdk-robot-learning-platform/sim2real`）。备份脚本会先选择当前 active 的 Web unit，
+因此同一份 unit 也能用于旧的 Studio 集成部署；若主机同时安装了多个 unit，建议在
+root-only `/etc/rdk-robot-learning-platform-sim2real-backup.env` 显式设置
+`RDK_SIM2REAL_RELEASE_ROOT`、`RDK_SIM2REAL_STORAGE_DIR` 和
+`RDK_SIM2REAL_SERVICE_NAME=studio-integrated-sim2real.service`。不要把旧的
+`sim2real-web.service` 名称直接写回 unit；它只作为脚本的迁移兼容值保留。
+如需覆盖 `RDK_SIM2REAL_BACKUP_DIR`，必须使用绝对路径、路径中不能含 `..`，且末级目录名固定为
+`rdk-sim2real`（例如 `/mnt/backups/rdk-sim2real`）；这是为了让保留策略只接触专用快照目录。
+systemd 的 `ProtectSystem=strict` 只为默认的 `/var/backups/rdk-sim2real` 开放写权限，使用其它位置前
+还要在受审阅的 unit drop-in 中加入对应的 `ReadWritePaths`，不要为方便而开放 `/var`、`/opt` 等系统父目录。
+
 如果生产环境设置了 `RDK_SIM2REAL_AUDIT_FILE`，备份和恢复命令都必须显式带上同一个
 `--audit-file`；恢复会拒绝“快照缺少某个外置审计段、目标却仍留有旧段”的混合状态。
 

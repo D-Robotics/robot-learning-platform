@@ -25,7 +25,7 @@ See the quick start below and the [documentation index](docs/README.md).
 
 > **一句话理解：这不是一个只能“遛鸭”的游戏。** 浏览器仿真是低门槛的动作入口；录制结果进入统一契约，随后可以交给本地 worker（默认 Mock）或 RoboGo adapter，最后通过制品、评测和 RDK-X5 预检进入受控的真机迭代。
 
-Node.js 需要 `^22.22.2 || ^24.15.0 || >=26.0.0`（与 `package.json` 的 `engines` 以及 `.nvmrc` 一致）。下界由工具链本身决定：`jsdom@30` 要求 `^22.22.2 || ^24.15.0 || >=26`，高于 `vitest@5` 的 `^22.12.0 || ^24.0.0 || >=26`。Node 20 不提供 DSH 会话持久化依赖的 `node:zlib` zstd API；Node 23、25 等非 LTS 奇数版本也不在支持范围内。
+运营端/源码开发环境的 Node.js 需要 `^22.22.2 || ^24.15.0 || >=26.0.0`（与 `package.json` 的 `engines` 以及 `.nvmrc` 一致）。**网页用户只需要浏览器，不需要安装 Node、Python 或 CUDA。** 正式部署应在服务器镜像或 systemd 环境中固定 Node 版本。下界由工具链本身决定：`jsdom@30` 要求 `^22.22.2 || ^24.15.0 || >=26`，高于 `vitest@5` 的 `^22.12.0 || ^24.0.0 || >=26`。Node 20 不提供 DSH 会话持久化依赖的 `node:zlib` zstd API；Node 23、25 等非 LTS 奇数版本也不在支持范围内。
 
 > 当前版本是可公开审阅的独立产品源代码与参考实现。默认可以用本地 Mock worker 验证“仿真 → 训练请求 → 运行台账 → 遥测评测”流程；真实 RoboGo、RDK-X5 板端 agent、SSO/OIDC 与 OTA 由部署方通过 adapter 注入，仓库不包含任何账号、密钥或设备地址。
 
@@ -106,6 +106,17 @@ Mock 的 `completed` 只表示协议演练完成，不代表真实 PPO 权重或
 </div>
 
 ## 上手：先跑真训练，Mock 只是回退
+
+新用户建议先执行一键初始化（会检查 Node、创建 `.env`，并给出缺失 Python/CUDA/真机依赖的准确安装命令）：
+
+```bash
+nvm install && nvm use
+npm ci
+npm run setup
+npm start
+```
+
+完整的真机、GPU、Linux 和生产存储接入步骤见 [`docs/first-run.md`](docs/first-run.md)。
 
 **首选路径**——真实训练闭环（真 PPO + ONNX 制品 + 遥测评测，约 2 分钟笔记本 CPU，
 `mock=false`，产物可直接用于预检）：

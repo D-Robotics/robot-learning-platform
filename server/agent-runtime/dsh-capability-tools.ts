@@ -84,6 +84,28 @@ export function listDshCapabilityCatalog(
     bound: typeof handlers[id] === 'function',
   }));
 }
+
+/**
+ * System-prompt section that pins how the model answers "你能做什么" questions.
+ * Tool schemas alone made the model improvise capability tours that dropped
+ * tools and mislabeled which ones sit behind the platform safety gates — the
+ * opposite of what a robot-control product must never get wrong. Only bound
+ * handlers are advertised, mirroring the model-facing tool schema.
+ */
+export function capabilityBriefing(handlers: DshCapabilityHandlers = {}): string {
+  const catalog = listDshCapabilityCatalog(handlers).filter((item) => item.bound);
+  if (catalog.length === 0) return '';
+  const gated = catalog.filter((item) => !item.readOnly).map((item) => item.id);
+  const readOnlyCount = catalog.length - gated.length;
+  const lines = [
+    '## RDK 工作台能力口径',
+    `- 只介绍本部署已绑定的 ${catalog.length} 个 rdk_* 工具；不得虚构目录之外的工具或能力。`,
+    '- 完整工具清单及其只读/门控标注已固定展示在聊天面板的"能力目录"卡片中。用户询问你能做什么时，按工作场景概述主线（数据 → 训练 → 评测 → 部署 → 真机运行），每个场景一两句话即可；不要逐条罗列全部工具，也不必复述目录卡片。',
+    `- 其中 ${gated.length} 个工具非只读，实际调用会经过平台安全门控/审批，提及这些能力时必须逐个如实标注：${gated.join('、')}。`,
+    `- 其余 ${readOnlyCount} 个均为只读工具，介绍时不得给它们添加"需审批"或"需门控"之类的标注。`,
+  ];
+  return lines.join('\n');
+}
 const output = {
   schema: { type: 'object', additionalProperties: true } as Record<string, unknown>,
   render: (_args: unknown, value: JsonValue) => [

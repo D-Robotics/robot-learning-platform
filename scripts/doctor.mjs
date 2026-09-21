@@ -41,13 +41,26 @@ function probePython(python) {
 }
 
 // --- Node runtime -----------------------------------------------------------
-const nodeMajor = Number(process.versions.node.split('.')[0]);
+// Keep the doctor aligned with package.json#engines.  A loose "major >= 20"
+// check is misleading here: jsdom/DSH require newer LTS floors and odd-numbered
+// releases such as Node 25 are intentionally unsupported.
+function supportedNodeVersion(version) {
+  const [major, minor, patch] = version.split('.').map((part) => Number(part));
+  if (![major, minor, patch].every(Number.isInteger)) return false;
+  if (major >= 26) return true;
+  if (major === 22) return minor > 22 || (minor === 22 && patch >= 2);
+  if (major === 24) return minor > 15 || (minor === 15 && patch >= 0);
+  return false;
+}
+
+const nodeVersion = process.versions.node;
+const nodeSupported = supportedNodeVersion(nodeVersion);
 record(
   'Node.js',
   REQUIRED,
-  nodeMajor >= 20 ? 'ok' : 'fail',
-  process.version + (nodeMajor >= 20 ? '' : ' (需要 20 或 22)'),
-  '安装 Node 20/22：brew install node@22 或使用 nvm',
+  nodeSupported ? 'ok' : 'fail',
+  process.version + (nodeSupported ? '' : ' (不满足 package.json 的 engines)'),
+  '安装 Node 22.22.2+、24.15.0+ 或 26+：brew install node@22 或使用 nvm',
 );
 
 // --- npm dependencies -------------------------------------------------------

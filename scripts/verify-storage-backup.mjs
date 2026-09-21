@@ -34,6 +34,7 @@ const ledger = {
 
 try {
   await mkdir(path.join(storage, 'telemetry'), { recursive: true, mode: 0o700 });
+  await mkdir(path.join(storage, 'dsh-sessions', '_no-cwd'), { recursive: true, mode: 0o700 });
   await writeFile(path.join(storage, 'sim2real.json'), `${JSON.stringify(ledger)}\n`, {
     mode: 0o600,
   });

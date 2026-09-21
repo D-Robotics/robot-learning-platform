@@ -55,6 +55,10 @@ export const AUDIT_ENV_NAME = 'RDK_SIM2REAL_AUDIT_FILE';
 // them in the same checksum manifest as the ledger so a restore does not
 // resurrect models/runs while silently dropping board ownership metadata.
 const EXTRA_ROOT_FILES = new Set(['devices.json', 'device-connections.json']);
+// DSH keeps resumable conversation fragments in this cache directory. It is
+// intentionally ephemeral and may contain files with an application-owned
+// layout, so the ledger backup must not fail just because the cache exists.
+const EPHEMERAL_ROOT_DIRECTORIES = new Set(['dsh-sessions']);
 const MANIFEST_FILE_NAME = 'backup-manifest.json';
 const DEFAULT_STALE_SECONDS = 300;
 const REQUIRED_LEDGER_ARRAYS = [
@@ -421,7 +425,8 @@ export async function inspectStorage(storageDir, options = {}) {
       entry.name === TELEMETRY_DIR_NAME ||
       entry.name === WRITER_LEASE_FILE_NAME ||
       auditRootNames.has(entry.name) ||
-      EXTRA_ROOT_FILES.has(entry.name)
+      EXTRA_ROOT_FILES.has(entry.name) ||
+      EPHEMERAL_ROOT_DIRECTORIES.has(entry.name)
     )
       continue;
     // Operator-created ledger snapshots are immutable historical inputs, not
@@ -1060,9 +1065,10 @@ async function main() {
 function isDirectInvocation() {
   return (
     process.argv[1] &&
-    // Releases are selected through /opt/sim2real-web/current. Resolve both
-    // sides so the CLI still runs when that symlink points at an immutable
-    // versioned directory (systemd and the nightly backup use this path).
+    // Releases are selected through a deployment-owned `current` symlink.
+    // Resolve both sides so the CLI still runs when that symlink points at an
+    // immutable versioned directory (systemd and the nightly backup use this
+    // path for both standalone and Studio-integrated layouts).
     realpathSync(process.argv[1]) === realpathSync(fileURLToPath(import.meta.url))
   );
 }

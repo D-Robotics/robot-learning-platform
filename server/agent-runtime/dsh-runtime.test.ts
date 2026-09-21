@@ -14,6 +14,7 @@ import {
   resolveDshPersistenceRoot,
   stripEnglishPreamble,
   stripInlineEnglishPreamble,
+  stripThinkBlock,
 } from './dsh-runtime.js';
 
 /**
@@ -112,6 +113,104 @@ async function composeRuntime(): Promise<Context> {
   openRuntimes.push(ctx);
   return ctx;
 }
+
+function composeRuntimeWith(
+  handlers: Parameters<typeof createDshRuntime>[0]['capabilityHandlers'],
+) {
+  return async (): Promise<Context> => {
+    const root = mkdtempSync(path.join(tmpdir(), 'rdk-dsh-runtime-'));
+    temporaryRoots.push(root);
+    const ctx = await createDshRuntime({ persistenceRoot: root, capabilityHandlers: handlers });
+    openRuntimes.push(ctx);
+    return ctx;
+  };
+}
+
+describe('DSH think-block leak stripping', () => {
+  it('drops everything up to the last close marker when thinking leaks into content', () => {
+    // Gateways that inline reasoning usually keep only the closing tag.
+    expect(stripThinkBlock('Let me draft this.</think>我能帮你走完完整闭环。')).toBe(
+      '我能帮你走完完整闭环。',
+    );
+    // Paired markers are covered by the same last-marker rule.
+    expect(stripThinkBlock('<think>按场景概述即可。</think>正式回答。')).toBe('正式回答。');
+    expect(stripThinkBlock('<think>草稿。</think>铺垫<think>终稿。</think>答案。')).toBe('答案。');
+    // Plain replies and a dangling open marker must stay untouched.
+    expect(stripThinkBlock('普通回答。')).toBe('普通回答。');
+    expect(stripThinkBlock('<think>截断的思考')).toBe('<think>截断的思考');
+    // A marker with nothing after it is not worth stripping.
+    expect(stripThinkBlock('思考完毕。</think>')).toBe('思考完毕。</think>');
+  });
+});
+
+describe('DSH runtime capability briefing section', () => {
+  it('pins the briefing to the bound handler set so capability tours stay complete and honest', async () => {
+    const compose = composeRuntimeWith({
+      rdk_workspace_overview: async () => ({ ok: true }),
+      rdk_board_policy_start: async () => ({ ok: true }),
+    });
+    process.env.RDK_SIM2REAL_DSH_API_KEY = 'dedicated-dsh-key';
+    const ctx = await compose();
+
+    const assembly = await ctx.systemPrompt.assemble();
+    const section = assembly.sections.find((item) => item.name === 'rdk:capability-briefing');
+
+    expect(section?.text).toContain('已绑定的 2 个');
+    expect(section?.text).toMatch(/如实标注：rdk_board_policy_start。/);
+    expect(section?.text).toContain('其余 1 个均为只读');
+    expect(section?.text).toContain('能力目录');
+  }, 60_000);
+
+  it('contributes no briefing when the deployment binds no product handler', async () => {
+    const ctx = await composeRuntime();
+
+    const assembly = await ctx.systemPrompt.assemble();
+
+    expect(assembly.sections.some((item) => item.name === 'rdk:capability-briefing')).toBe(false);
+  }, 60_000);
+});
+
+describe('DSH runtime token metering', () => {
+  it('meters each turn by itself instead of accumulating the session history', async () => {
+    // Usage arrives on the trailing usage-only stream chunk, mirroring the
+    // OpenAI-compatible gateways this deployment fronts.
+    const gateway = await startChatGateway((request, response) => {
+      if (!request.url.includes('/chat/completions')) {
+        response.writeHead(404).end();
+        return;
+      }
+      response.writeHead(200, { 'content-type': 'text/event-stream' });
+      response.write(
+        `data: ${JSON.stringify({
+          id: 'chatcmpl-test',
+          object: 'chat.completion.chunk',
+          choices: [{ index: 0, delta: { content: '收到。' } }],
+        })}\n\n`,
+      );
+      response.write(
+        `data: ${JSON.stringify({
+          id: 'chatcmpl-test',
+          object: 'chat.completion.chunk',
+          choices: [],
+          usage: { prompt_tokens: 100, completion_tokens: 7 },
+        })}\n\n`,
+      );
+      response.write('data: [DONE]\n\n');
+      response.end();
+    });
+    process.env.RDK_SIM2REAL_DSH_BASE_URL = gateway.baseUrl;
+    process.env.RDK_SIM2REAL_DSH_API_KEY = 'dedicated-dsh-key';
+    const ctx = await composeRuntime();
+
+    const first = await askDsh(ctx, '你好');
+    expect(first.usage).toMatchObject({ inputTokens: 100, outputTokens: 7, totalTokens: 107 });
+
+    const followup = await askDsh(ctx, '请再确认一次', { sessionId: first.sessionId });
+    // Before the per-turn meter this follow-up reported 200/14: the session-wide
+    // event list double-counted every earlier turn under a "本轮" label.
+    expect(followup.usage).toMatchObject({ inputTokens: 100, outputTokens: 7, totalTokens: 107 });
+  }, 60_000);
+});
 
 describe('DSH persistence root resolution', () => {
   it('defaults into the configured storage root so sandboxed units stay writable', () => {
@@ -256,6 +355,30 @@ describe('DSH runtime chat composition', () => {
     // chat UI can render an optional trace without polluting the reply.
     expect(result.reasoning).toContain('用户让我介绍自己');
     expect(result.reasoning).toContain('组织语言');
+  }, 60_000);
+
+  it('strips a think block that the gateway inlined into the visible content', async () => {
+    // Some OpenAI-compatible gateways stream reasoning as content delimited by
+    // a literal `</think>` instead of a separate reasoning field.
+    const gateway = await startChatGateway((request, response) => {
+      if (!request.url.includes('/chat/completions')) {
+        response.writeHead(404).end();
+        return;
+      }
+      sseReply(response, [
+        '<think>按场景概述即可，不逐条罗列。</think>',
+        '我是 RDK 工作台智能体。',
+      ]);
+    });
+    process.env.RDK_SIM2REAL_DSH_BASE_URL = gateway.baseUrl;
+    process.env.RDK_SIM2REAL_DSH_API_KEY = 'dedicated-dsh-key';
+    const ctx = await composeRuntime();
+
+    const result = await askDsh(ctx, '你能做啥');
+
+    expect(result.text).toBe('我是 RDK 工作台智能体。');
+    expect(result.text).not.toContain('<think>');
+    expect(result.text).not.toContain('按场景概述');
   }, 60_000);
 
   it('binds product capability tools so the model can call them mid-turn', async () => {
