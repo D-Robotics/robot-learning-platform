@@ -995,8 +995,8 @@
               <h2 id="evaluate-title">Sim2Real 评测</h2><p class="section-lead">把仿真轨迹和真机遥测放在一起，确认策略是否真的有效。</p>
             </div>
             <div class="submodule-tabs" role="tablist" aria-label="评测模块">
-              <button class="submodule-tab is-active" type="button" role="tab" aria-controls="evaluation-run-panel" data-view-target="evaluate" data-flow-child="evaluation-run">发起评测<small>指标 · 仿真对照</small></button>
-              <button class="submodule-tab" type="button" role="tab" aria-controls="evaluation-comparison-panel" data-view-target="evaluate" data-flow-child="comparison">结果对比<small>最近 Run 趋势</small></button>
+              <button class="submodule-tab is-active" type="button" role="tab" id="eval-tab-run" aria-controls="evaluation-run-panel" data-view-target="evaluate" data-flow-child="evaluation-run">发起评测<small>指标 · 仿真对照</small></button>
+              <button class="submodule-tab" type="button" role="tab" id="eval-tab-comparison" aria-controls="evaluation-comparison-panel" data-view-target="evaluate" data-flow-child="comparison">结果对比<small>最近 Run 趋势</small></button>
             </div>
             <div class="evaluation-banner">
               <div class="evaluation-status-mark" id="eval-status-mark">○</div>
@@ -1041,7 +1041,7 @@
                 </div>
               </div>
             </div>
-            <div class="evaluation-grid" id="evaluation-run-panel">
+            <div class="evaluation-grid" id="evaluation-run-panel" role="tabpanel" aria-labelledby="eval-tab-run">
               <article class="panel metrics-panel">
                 <div class="panel-heading panel-heading-lean"><h2>关键指标</h2>
                 </div>
@@ -1099,7 +1099,7 @@
               </details>
             </div>
             <div class="evaluation-evidence">
-            <article class="panel run-comparison-panel" id="evaluation-comparison-panel" aria-labelledby="run-comparison-title">
+            <article class="panel run-comparison-panel" id="evaluation-comparison-panel" role="tabpanel" aria-labelledby="eval-tab-comparison">
               <div class="panel-heading panel-heading-lean">
                 <div><h2 id="run-comparison-title">最近实验对比</h2><p class="panel-subtitle">用同一模型的最近 Run 快速判断趋势</p></div>
                 <span class="panel-caption" id="run-comparison-caption">最近 5 次</span>
@@ -1358,11 +1358,11 @@
               <h2 id="deploy-title">部署与反馈</h2><p class="section-lead">先只读预检，再看部署反馈；任何执行动作都需要单独批准。</p>
             </div>
             <div class="submodule-tabs" role="tablist" aria-label="部署模块">
-              <button class="submodule-tab is-active" type="button" role="tab" aria-controls="preflight-panel" data-view-target="deploy" data-flow-child="preflight">预检与发布<small>只读预检 · NO MOTOR</small></button>
+              <button class="submodule-tab is-active" type="button" role="tab" id="deploy-tab-preflight" aria-controls="preflight-panel" data-view-target="deploy" data-flow-child="preflight">预检与发布<small>只读预检 · NO MOTOR</small></button>
               <button class="submodule-tab" type="button" role="tab" aria-controls="feedback-panel" data-view-target="deploy" data-flow-child="feedback">运行反馈与回滚<small>上线闸门 · 时间线</small></button>
             </div>
             <div class="deploy-layout">
-              <article class="panel board-panel" id="preflight-panel">
+              <article class="panel board-panel" id="preflight-panel" role="tabpanel" aria-labelledby="deploy-tab-preflight">
                 <div class="panel-heading panel-heading-lean"><h2>设备预检</h2>
                   <span class="deploy-safe" lang="en" title="No motor: 只读预检，不会驱动电机">NO MOTOR</span>
                 </div>

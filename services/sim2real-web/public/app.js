@@ -2147,8 +2147,15 @@ function setFlowChild(child, { updateHash = true, focus = true } = {}) {
     if (control === document.body) return;
     const active = control.dataset.flowChild === wanted;
     control.classList.toggle('is-active', active);
-    if (active) control.setAttribute('aria-current', 'page');
-    else control.removeAttribute('aria-current');
+    // 视图内页签（role=tab）用 aria-selected 表达选中态；侧栏子项沿用
+    // aria-current=page，两者语义不同，不能混用。
+    if (control.getAttribute('role') === 'tab') {
+      control.setAttribute('aria-selected', active ? 'true' : 'false');
+    } else if (active) {
+      control.setAttribute('aria-current', 'page');
+    } else {
+      control.removeAttribute('aria-current');
+    }
   });
   renderContextLive();
   const active = [...document.querySelectorAll('[data-flow-child]')].find(
