@@ -71,6 +71,7 @@
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "verify:ui": "node services/sim2real-web/ui-ia.spec.mjs",
+    "verify:entry-contract": "node scripts/check-entry-contract.mjs",
     "verify:ui-path": "node services/sim2real-web/ui-workbench-path.spec.mjs",
     "verify:escape-audit": "node services/sim2real-web/escape-audit.spec.mjs",
     "verify:task-pack": "node scripts/verify-task-pack.mjs",

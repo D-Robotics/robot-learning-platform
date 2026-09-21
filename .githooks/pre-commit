@@ -20,4 +20,6 @@ node --check services/sim2real-web/public/telemetry-core.js
 node services/sim2real-web/ui-ia.spec.mjs >/dev/null
 npx tsc -p tsconfig.build.json --noEmit
 npx vitest run --configLoader runner --changed HEAD >/dev/null
+# 入口契约只在导航文档或命令清单本身变化时校验（毫秒级）。
+echo "$STAGED" | grep -qE '^(AGENTS\.md|package\.json|docs/|scripts/)' && node scripts/check-entry-contract.mjs >/dev/null
 echo "[pre-commit] fast gate passed: syntax, wiring, types, affected tests"
