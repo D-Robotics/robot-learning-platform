@@ -77,6 +77,77 @@
   --z-agent-fab: 1190;
   --z-tour: 1200;
   --z-toast: 1300;
+
+  /* ---- app.css literal 收容区（2026-09-21 批量迁移）----------------------
+     以下 token 的值与被替换的字面量逐字节相同，且保持主题无关
+     （原字面量就不随主题变化），计算样式可证不变。--dk-* 是暗色
+     作用域里历史分层留下的近似重复色，先按值保真收容，视觉统一
+     留给专门的设计批次。命名按色系 + 用途，不加新主题语义。 */
+  --muted-cool: #91a4bd;
+  --mint: #74e6b0;
+  --coral: #ff9098;
+  --gold: #ffd36b;
+  --white: #ffffff;
+  --warm-ink: #14100b;
+  --red-bright: #f87171;
+  --navy-deep: #101925;
+  --sky: #38bdf8;
+  --sky-soft: #58c4dd;
+  --red-fill: #ef4444;
+  --accent-pale: #ffb377;
+  --flame: #ff7a2c;
+  --flame-bright: #ff8a2b;
+  --teal-bright: #34d2b5;
+  --stop-red: #d92b2b;
+  --mist: #d8e2f0;
+  --mint-bright: #8df0bf;
+  --periwinkle: #aeb8ff;
+  --sky-text: #9fc5ff;
+  --stone: #887f75;
+  --black: #000000;
+  --ice: #e7edf7;
+  --ice-soft: #f4f7fc;
+  --muted-cool-soft: #9aa9bd;
+  --mist-soft: #c3cfe0;
+  --frame-navy: #0b1219;
+  --frost: #edf4fb;
+  --flame-hot: #ff6f1c;
+  --paper: #f7f7f5;
+  --royal: #2563eb;
+  --paper-warm: #fbfbf9;
+  --pink: #ef8dce;
+  --attest-green: #1e7f4f;
+  --attest-amber: #b3660a;
+  --cream: #fff7ee;
+  --float-orange: #ef5d12;
+  --mint-pale: #9af2c4;
+  --slate: #687993;
+  --gold-fill: #fbbf24;
+  --gold-deep: #f59e0b;
+  --emerald: #10b981;
+  --slider-orange: #f05a1a;
+  --stop-hover: #b81f1f;
+  --accent-blush: #ffb08a;
+  --coral-pale: #ff9a9a;
+  --gold-soft: #ffd27a;
+  --gold-bright: #ffbe3c;
+  --olive-gray: #6e716a;
+  --stop-deep: #b71f1f;
+  --slate-soft: #8990a6;
+  --step-gray: #667085;
+  --lavender-gray: #aeb4c7;
+  --slate-deep: #727b92;
+  --mist-bright: #cbd2e6;
+  --peach: #f29a52;
+  --sand-border: #e8e3dc;
+  --mist-deep: #b9c6d8;
+  --gold-glow: #ffc06d;
+  --teal-ink: #2f8c9d;
+  --gold-pale: #ffd28a;
+  --frost-bright: #f7fbff;
+  --mist-text: #b7c6d6;
+  --peach-bright: #ffbf73;
+
 }
 
 html.theme-dark {
@@ -129,4 +200,31 @@ html.theme-dark {
   --amber-text: #e5b567;
   --shadow: 0 10px 30px rgba(0, 0, 0, 0.45);
   --shadow-strong: 0 14px 36px rgba(0, 0, 0, 0.5);
+
+  /* ---- app.css 暗色作用域字面量收容区（2026-09-21 批量迁移）----------------------
+     以下 token 的值与被替换的字面量逐字节相同，且保持主题无关
+     （原字面量就不随主题变化），计算样式可证不变。--dk-* 是暗色
+     作用域里历史分层留下的近似重复色，先按值保真收容，视觉统一
+     留给专门的设计批次。命名按色系 + 用途，不加新主题语义。 */
+  --navy-panel: #111b25;
+  --ink-dark: #17100b;
+  --ink-deeper: #160b03;
+  --dk-primary-a: #ff9651;
+  --dk-primary-b: #ff741f;
+  --dk-primary-hover-a: #ffab70;
+  --dk-primary-hover-b: #ff8334;
+  --dk-frame: #070d13;
+  --dk-gate: #0d161f;
+  --dk-button: #182638;
+  --dk-primary-c: #ff9b47;
+  --dk-primary-hover-c: #ffad5d;
+  --dk-primary-hover-d: #ff8628;
+  --dk-entry: #142333;
+  --dk-next-a: #131f2d;
+  --dk-next-b: #152437;
+  --dk-next-visual: #0d1825;
+  --dk-highlight: #152333;
+  --dk-palette: #101a27;
+  --dk-error-text: #ff9d9d;
+
 }

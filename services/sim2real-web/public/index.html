@@ -352,6 +352,16 @@
             </ol>
           </nav>
 
+          <section class="flow-context-strip" id="flow-context" aria-live="polite" hidden>
+            <span class="flow-context-index" id="flow-context-index">—</span>
+            <div class="flow-context-copy">
+              <span class="eyebrow" id="flow-context-kicker">当前流程节点</span>
+              <h2 id="flow-context-title">—</h2>
+              <p id="flow-context-description">—</p>
+            </div>
+            <span class="flow-context-target" id="flow-context-target">—</span>
+          </section>
+
           <section
             class="view-section"
             data-view-section="overview"
@@ -516,6 +526,11 @@
                 <div class="agent-plan-card" id="agent-plan-card"><span class="agent-empty-state"><strong>任务计划</strong><small>等待任务计划…</small></span></div>
                 <div class="agent-evidence" id="agent-evidence"><span class="agent-empty-state"><strong>执行证据</strong><small>任务开始后显示可核验结果</small></span></div>
                 <div class="agent-event-log" id="agent-event-log"><span class="agent-empty-state"><strong>工具事件</strong><small>任务开始后显示实时轨迹</small></span></div>
+                <details class="agent-catalog" id="agent-catalog" hidden>
+                  <summary>能力目录<span id="agent-catalog-count"></span></summary>
+                  <p class="agent-catalog-legend">⚠️ 门控：实际执行需平台安全审批；只读：可直接查询。</p>
+                  <ul class="agent-catalog-list" id="agent-catalog-list"></ul>
+                </details>
               </div>
             </div>
             <form class="agent-chat-composer" id="agent-chat-form">
@@ -672,6 +687,7 @@
             <div class="submodule-tabs" role="tablist" aria-label="强化学习工作台模块">
               <button class="submodule-tab is-active" type="button" role="tab" id="train-tab-run" aria-controls="train-module-run-model train-module-run-robogo" aria-selected="true" data-train-module-tab="run">训练工作台<small>模型、算法与提交</small></button>
               <button class="submodule-tab" type="button" role="tab" id="train-tab-contract" aria-controls="contract-fold" aria-selected="false" data-train-module-tab="contract">模型契约<small>Manifest 与兼容性</small></button>
+              <button class="submodule-tab" type="button" role="tab" id="train-tab-config" aria-controls="train-module-config" aria-selected="false" data-train-module-tab="config">训练配置<small>算法、算力与续训</small></button>
               
             </div>
             <div class="train-onboarding" role="note" aria-label="训练流程引导">
@@ -868,7 +884,7 @@
                     查看运行详情 →
                   </button>
                 </div>
-                <details class="training-controls">
+                <details class="training-controls" id="train-module-config" data-train-module="config" role="tabpanel" aria-labelledby="train-tab-config">
                   <summary>训练参数与续训</summary>
                   <div class="training-grid"><div class="training-field-group" role="group" aria-labelledby="training-group-basic">
                       <div class="training-group-title" id="training-group-basic">训练设置</div>
@@ -1021,7 +1037,7 @@
                 </div>
               </div>
             </div>
-            <div class="evaluation-grid">
+            <div class="evaluation-grid" id="evaluation-run-panel">
               <article class="panel metrics-panel">
                 <div class="panel-heading panel-heading-lean"><h2>关键指标</h2>
                 </div>
@@ -1079,7 +1095,7 @@
               </details>
             </div>
             <div class="evaluation-evidence">
-            <article class="panel run-comparison-panel" aria-labelledby="run-comparison-title">
+            <article class="panel run-comparison-panel" id="evaluation-comparison-panel" aria-labelledby="run-comparison-title">
               <div class="panel-heading panel-heading-lean">
                 <div><h2 id="run-comparison-title">最近实验对比</h2><p class="panel-subtitle">用同一模型的最近 Run 快速判断趋势</p></div>
                 <span class="panel-caption" id="run-comparison-caption">最近 5 次</span>
@@ -1338,7 +1354,7 @@
               <h2 id="deploy-title">部署与反馈</h2><p class="section-lead">先只读预检，再看部署反馈；任何执行动作都需要单独批准。</p>
             </div>
             <div class="deploy-layout">
-              <article class="panel board-panel">
+              <article class="panel board-panel" id="preflight-panel">
                 <div class="panel-heading panel-heading-lean"><h2>设备预检</h2>
                   <span class="deploy-safe" lang="en" title="No motor: 只读预检，不会驱动电机">NO MOTOR</span>
                 </div>
@@ -1363,7 +1379,7 @@
                   预检只读取架构、系统目录和磁盘信息；不会下发模型、启动节点或驱动电机。
                 </p>
               </article>
-              <details class="panel deploy-flow-panel workspace-inspector">
+              <details class="panel deploy-flow-panel workspace-inspector" id="feedback-panel">
                 <summary class="panel-heading panel-heading-lean workspace-inspector-summary"><span><small>Inspector</small><h2>上线闸门</h2></span><span class="panel-caption" id="deploy-flow-caption">按证据推进</span><span class="workspace-inspector-toggle">展开 <i aria-hidden="true">⌄</i></span></summary>
                 <div class="release-steps">
                   <div class="release-step is-ready" data-release-step="contract">

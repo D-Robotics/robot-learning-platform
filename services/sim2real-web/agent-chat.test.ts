@@ -23,6 +23,10 @@ function shell() {
       <div id="agent-plan-card"></div>
       <div id="agent-evidence"></div>
       <div id="agent-event-log"></div>
+      <details id="agent-catalog" hidden>
+        <summary>能力目录<span id="agent-catalog-count"></span></summary>
+        <ul id="agent-catalog-list"></ul>
+      </details>
       <form id="agent-chat-form">
         <input id="agent-chat-input" />
         <button type="button" data-agent-stop hidden>停止等待</button>
@@ -188,6 +192,115 @@ describe('Agent chat browser behavior', () => {
     expect(trail[0]?.textContent).toContain('读取工作区总览');
     expect(trail[1]?.classList.contains('is-failed')).toBe(true);
     expect(trail[1]?.textContent).toContain('提交训练');
+    // Tool-backed replies point at the execution evidence.
+    expect(messages.querySelector('.agent-message-provenance')?.textContent).toContain(
+      '依据见工具调用与执行证据',
+    );
+  });
+
+  it('drops the workspace-evidence hint from tool-free replies where there is nothing to verify', async () => {
+    const fetchImpl = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith('/api/sim2real/dsh/chat')) {
+        return jsonResponse({
+          ok: true,
+          text: '我可以整理工作区、提交训练并把策略部署到板子。',
+          reasoning: '',
+          toolTrail: [],
+          events: [],
+        });
+      }
+      return jsonResponse({ ok: true });
+    });
+    const window = boot(fetchImpl);
+    const input = window.document.querySelector<HTMLInputElement>('#agent-chat-input');
+    const form = window.document.querySelector<HTMLFormElement>('#agent-chat-form');
+    if (!input || !form) throw new Error('agent chat fixture is incomplete');
+    input.value = '你能做啥';
+    form.dispatchEvent(new window.Event('submit', { bubbles: true, cancelable: true }));
+    await wait(30);
+
+    const messages = window.document.querySelector('#agent-chat-messages');
+    const provenance = messages?.querySelector('.agent-message-provenance');
+    expect(provenance?.textContent).toContain('Agent 生成');
+    expect(provenance?.textContent).not.toContain('证据复核');
+  });
+
+  it('renders the deterministic capability catalog once the server exposes bound tools', async () => {
+    const fetchImpl = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith('/api/sim2real/agent/capabilities')) {
+        return jsonResponse({
+          ok: true,
+          runtime: 'dsh',
+          dsh: {
+            initialized: true,
+            capabilities: [
+              {
+                id: 'rdk_workspace_overview',
+                description: '读取当前模型、设备、训练资源和运行状态',
+                readOnly: true,
+                bound: true,
+              },
+              {
+                id: 'rdk_board_policy_start',
+                description: '在三重安全开关通过后启动板端策略',
+                readOnly: false,
+                bound: true,
+              },
+              {
+                id: 'rdk_unbound_tool',
+                description: '未绑定的能力',
+                readOnly: true,
+                bound: false,
+              },
+            ],
+          },
+        });
+      }
+      return jsonResponse({ ok: true });
+    });
+    const window = boot(fetchImpl);
+    await wait(20);
+
+    const panel = window.document.querySelector<HTMLDetailsElement>('#agent-catalog');
+    expect(panel?.hidden).toBe(false);
+    expect(panel?.textContent).toContain('能力目录');
+    expect(panel?.querySelector('#agent-catalog-count')?.textContent).toBe('（2）');
+    const rows = window.document.querySelectorAll('#agent-catalog-list .agent-catalog-item');
+    expect(rows.length).toBe(2);
+    // Unbound capabilities stay invisible: the catalog mirrors what is callable.
+    expect(panel?.textContent).not.toContain('rdk_unbound_tool');
+    expect(rows[0]?.textContent).toContain('只读');
+    expect(rows[1]?.classList.contains('is-gated')).toBe(true);
+    expect(rows[1]?.textContent).toContain('⚠️ 门控');
+    expect(rows[1]?.textContent).toContain('rdk_board_policy_start');
+  });
+
+  it('keeps the capability catalog hidden when no bound tools are advertised', async () => {
+    const fetchImpl = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith('/api/sim2real/agent/capabilities')) {
+        return jsonResponse({
+          ok: true,
+          runtime: 'legacy',
+          dsh: {
+            configured: false,
+            initialized: false,
+            capabilities: [
+              { id: 'rdk_workspace_overview', description: '总览', readOnly: true, bound: false },
+            ],
+          },
+        });
+      }
+      return jsonResponse({ ok: true });
+    });
+    const window = boot(fetchImpl);
+    await wait(20);
+
+    const panel = window.document.querySelector<HTMLDetailsElement>('#agent-catalog');
+    expect(panel?.hidden).toBe(true);
+    expect(panel?.querySelector('#agent-catalog-list')?.childElementCount).toBe(0);
   });
 
   it('lets the operator stop waiting for a slow request and explains the backend boundary', async () => {

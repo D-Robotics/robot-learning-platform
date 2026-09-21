@@ -191,10 +191,12 @@ async function boot(
     feedbackSummary?: unknown;
     /** Seeded rdk-duck-lab-workspace-context payload (G13 pre-selection). */
     workspaceContext?: Record<string, unknown>;
+    /** Override the document URL so hash deep links (#train/configure) can be tested. */
+    url?: string;
   } = {},
 ) {
   const dom = new JSDOM(html, {
-    url: 'http://127.0.0.1:3000/sim2real/',
+    url: options.url || 'http://127.0.0.1:3000/sim2real/',
     runScripts: 'outside-only',
     pretendToBeVisual: true,
   });
@@ -632,6 +634,78 @@ describe('Sim2Real workbench DOM behavior', () => {
     const labels = Array.from(cards).map((card) => card.querySelector('span')?.textContent);
     expect(labels).toContain('物理后端');
     expect(labels).toContain('训练引擎');
+    expect(errors).toEqual([]);
+  });
+
+  it('keeps the ONNX download link under the configured /sim2real mount', async () => {
+    const selectedModel = model();
+    const { window, errors } = await boot({
+      runs: [
+        {
+          id: 'real-onnx-run',
+          modelId: selectedModel.id,
+          backend: 'local',
+          status: 'completed',
+          summary: 'real ONNX run',
+          mock: false,
+          artifact: {
+            artifactId: 'policy-onnx',
+            artifactRef: 'artifact://tests/policy.onnx',
+            format: 'onnx',
+            sizeBytes: 12,
+            sha256: 'a'.repeat(64),
+          },
+          createdAt: '2026-09-14T00:00:00.000Z',
+        },
+      ],
+    });
+    window.document
+      .querySelector<HTMLButtonElement>('.sidebar [data-view-target="train"]')
+      ?.click();
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    const row = window.document.querySelector<HTMLButtonElement>('.history-row');
+    expect(row).toBeTruthy();
+    row?.click();
+    const link = window.document.querySelector<HTMLAnchorElement>(
+      '#run-detail-body a[download="policy.onnx"]',
+    );
+    expect(link?.getAttribute('href')).toBe(
+      '/sim2real/api/sim2real/runs/real-onnx-run/policy.onnx',
+    );
+    expect(errors).toEqual([]);
+  });
+
+  it('restores a flow child from a hash deep link and keeps history entries clean', async () => {
+    const { window, errors } = await boot({
+      url: 'http://127.0.0.1:3000/sim2real/#train/configure',
+    });
+    const doc = window.document;
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(doc.body.dataset.activeView).toBe('train');
+    expect(doc.body.dataset.flowChild).toBe('configure');
+    expect(doc.getElementById('flow-context')?.hidden).toBe(false);
+    expect(doc.getElementById('flow-context-title')?.textContent).toBe('训练配置');
+    expect(doc.getElementById('train-module-config')?.hasAttribute('open')).toBe(true);
+
+    doc.querySelector<HTMLButtonElement>('[data-flow-child="submit"]')?.click();
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(window.location.hash).toBe('#train/submit');
+    const trainSection = doc.querySelector('[data-view-section="train"]');
+    expect(trainSection?.getAttribute('data-active-train-module')).toBe('run');
+    expect(doc.getElementById('train-module-config')?.hasAttribute('open')).toBe(false);
+    // Sibling children of one view must rewrite the current entry in place,
+    // not stack extra history entries.
+    expect(window.history.length).toBe(1);
+
+    doc.querySelector<HTMLButtonElement>('[data-flow-child="replays"]')?.click();
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(window.location.hash).toBe('#records/replays');
+    expect(window.history.length).toBe(2);
+    window.history.back();
+    await new Promise((resolve) => setTimeout(resolve, 40));
+    expect(window.location.hash).toBe('#train/submit');
+    expect(doc.body.dataset.activeView).toBe('train');
+    expect(doc.body.dataset.flowChild).toBe('submit');
     expect(errors).toEqual([]);
   });
 

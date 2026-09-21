@@ -397,7 +397,13 @@ export function assertStyleInvariants(publicDir) {
     // while the palette itself lives in tokens.css. New colors must be tokens;
     // existing literals get converted batch by batch, so only the count going
     // DOWN keeps this honest. tokens.css is exempt — it IS the palette.
-    const HEX_RATCHET = 188; // measured 2026-09-20 after the state-tier pass
+    // 188 → 0 (2026-09-21): the batch hex→token migration converted every
+    // remaining literal (189 counted) into constant tokens in tokens.css,
+    // proven value-preserving by a 48-cell computed-style fingerprint
+    // (8 views × 2 themes × 3 viewports, old vs new byte-equal modulo
+    // app-state flakiness). app.css is now 100% token-referenced; any new
+    // literal must be justified by lowering this again.
+    const HEX_RATCHET = 0;
     const hexCount = [...deComment(appCss.css).matchAll(/#[0-9a-fA-F]{3,8}\b/g)].length;
     assert.ok(
       hexCount <= HEX_RATCHET,
@@ -406,12 +412,12 @@ export function assertStyleInvariants(publicDir) {
 
     // ---- 10. viewport breakpoints are frozen ----
     // 18 distinct width values across 90 media blocks is why responsive
-    // behavior became impossible to reason about. The set may shrink
-    // (long-term target: 560/720/1080/1280), never grow.
-    const BREAKPOINT_ALLOWLIST = new Set([
-      560, 600, 640, 720, 721, 760, 780, 820, 860, 900, 901, 980, 981, 1080, 1081, 1100, 1280,
-      1281,
-    ]);
+    // behavior became impossible to reason about. 18 → 7 (2026-09-21): the
+    // set collapsed onto the four canonical tiers 560/720/1080/1280 plus
+    // their min-width complements (721/1081/1281). 980→1080 also aligns the
+    // CSS sidebar-hide point with app.js's SIDEBAR_DRAWER_QUERY (1080), which
+    // it had silently disagreed with. The set may shrink further, never grow.
+    const BREAKPOINT_ALLOWLIST = new Set([560, 720, 721, 1080, 1081, 1280, 1281]);
     const bpOffenders = [
       ...deComment(appCss.css).matchAll(/\(\s*(?:max|min)-width\s*:\s*([\d.]+)px/g),
     ]
@@ -440,7 +446,10 @@ export function assertStyleInvariants(publicDir) {
     // Reading surfaces (logs, tables, explanations) moved to var(--fs-body);
     // chips and labels should reference var(--fs-meta). A growing literal count
     // means the type scale is being bypassed again.
-    const FONT_12PX_RATCHET = 318; // measured 2026-09-20 after the fs-body pass
+    // 318 → 0 (2026-09-21): the same migration batch moved every 12px/13px/
+    // 10.5px literal onto var(--fs-meta) / var(--fs-body) / var(--fs-mono-micro)
+    // (380 replacements), covered by the same computed-style fingerprint.
+    const FONT_12PX_RATCHET = 0;
     const font12Count = [...deComment(appCss.css).matchAll(/font-size:\s*12px/g)].length;
     assert.ok(
       font12Count <= FONT_12PX_RATCHET,

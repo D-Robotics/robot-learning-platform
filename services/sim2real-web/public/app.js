@@ -292,7 +292,11 @@ function renderContextLive() {
     project ? projectDisplayName(project) : state.projectsLoaded && state.projects?.length ? '全部项目' : '检查中',
   );
   const activeView = document.body.dataset.activeView || 'overview';
-  setText('context-live-stage', VIEW_STAGE_LABELS[activeView] || '工作台');
+  const stageLabel = flowStageLabel(activeView);
+  setText('context-live-stage', stageLabel);
+  // 浏览器标签页标题跟随位置：11 个流程子项共用 8 个视图，若标题固定，
+  // 多开标签页时无法分辨各自停在哪个节点。
+  document.title = `${stageLabel} · RDK Robot Learning Platform`;
   setText(
     'context-live-model',
     model ? modelLabel(model) : (state.overview?.models?.length ? '未选择' : '暂无模型'),
@@ -361,7 +365,7 @@ const state = {
   trainModule: (() => {
     try {
       const value = window.localStorage?.getItem('rdk-lab-train-module');
-      return ['run', 'contract', 'resources'].includes(value) ? value : 'run';
+      return ['run', 'contract', 'config', 'resources'].includes(value) ? value : 'run';
     } catch {
       return 'run';
     }
@@ -1920,6 +1924,50 @@ const VIEW_STAGE_LABELS = {
   station: '设备控制台',
 };
 
+// Sidebar child entries are real workflow nodes. A node may share a top-level
+// view with another node, but it always selects a distinct module, filter, or
+// evidence panel so the destination is visible and bookmarkable.
+const FLOW_CHILD_CONTEXTS = {
+  simulate: { index: '01', kicker: '数据与仿真 / 01', title: '仿真与录制', description: '运行 MicroDuck 场景，录制可回放轨迹。', target: '仿真场' },
+  replays: { index: '01', kicker: '数据与仿真 / 02', title: '轨迹与回放', description: '按 Run 筛选轨迹，并打开逐帧回放证据。', target: '记录 · Runs', view: 'records', recordTab: 'run', focus: '#history-list' },
+  prepare: { index: '02', kicker: '训练与策略 / 01', title: '模型与契约', description: '登记 Manifest，校验观测、动作和设备兼容性。', target: '训练 · 模型契约', view: 'train', trainModule: 'contract', focus: '#contract-fold' },
+  configure: { index: '02', kicker: '训练与策略 / 02', title: '训练配置', description: '选择算法、训练档位、GPU 资源和续训 checkpoint。', target: '训练 · 参数配置', view: 'train', trainModule: 'config', focus: '#train-module-config' },
+  submit: { index: '02', kicker: '训练与策略 / 03', title: 'Run 与进度', description: '提交训练任务，查看实时曲线、状态和引擎日志。', target: '训练 · Run 工作台', view: 'train', trainModule: 'run', focus: '#train-module-run-model' },
+  'evaluation-run': { index: '03', kicker: '评测与证据 / 01', title: '发起评测', description: '选择评测来源和目标，生成一份可追溯评测 Run。', target: '评测 · 评测运行', view: 'evaluate', focus: '#evaluation-run-panel' },
+  comparison: { index: '03', kicker: '评测与证据 / 02', title: '结果对比', description: '比较最近 Run 的成功率、奖励和跌倒率趋势。', target: '评测 · 结果对比', view: 'evaluate', focus: '#evaluation-comparison-panel' },
+  'evaluation-evidence': { index: '03', kicker: '评测与证据 / 03', title: '全部证据', description: '查看遥测、评测和部署记录，保留完整证据链。', target: '记录 · 遥测与证据', view: 'records', recordTab: 'telemetry', focus: '#history-list' },
+  devices: { index: '04', kicker: '设备与发布 / 01', title: '设备管理', description: '登记设备、建立受控连接并查看设备能力。', target: '设备 · 设备连接', view: 'station', stationModule: 'devices', focus: '#station-device-manager' },
+  preflight: { index: '04', kicker: '设备与发布 / 02', title: '预检与发布', description: '生成并执行只读预检，确认制品可以进入目标板卡。', target: '部署 · 只读预检', view: 'deploy', focus: '#preflight-panel' },
+  feedback: { index: '04', kicker: '设备与发布 / 03', title: '运行反馈与回滚', description: '查看上线闸门、部署时间线和可回滚版本。', target: '部署 · 运行反馈', view: 'deploy', focus: '#feedback-panel' },
+};
+
+function parseHashLocation() {
+  const raw = decodeURIComponent(window.location.hash.slice(1));
+  const [view, child] = raw.split('/');
+  return {
+    view: WORKFLOW_VIEWS.includes(view) ? view : 'overview',
+    child: child && FLOW_CHILD_CONTEXTS[child] ? child : '',
+  };
+}
+
+function clearFlowChild() {
+  document.body.removeAttribute('data-flow-child');
+  $('flow-context')?.setAttribute('hidden', '');
+  document.querySelectorAll('[data-flow-child]').forEach((control) => {
+    control.classList.remove('is-active');
+    control.removeAttribute('aria-current');
+  });
+}
+
+// 顶栏“阶段”与标签页标题的文案：多个子项共用一个视图时带上子项名，
+// 例如「强化学习训练 · 训练配置」；子项名与阶段名相同（仿真与录制）时不重复。
+function flowStageLabel(view) {
+  const stage = VIEW_STAGE_LABELS[view] || '工作台';
+  const child = FLOW_CHILD_CONTEXTS[document.body.dataset.flowChild || ''];
+  if (!child || (child.view || view) !== view || child.title === stage) return stage;
+  return `${stage} · ${child.title}`;
+}
+
 // 对象链（项目→模型/策略→Run→评测证据→发布制品→设备）：把当前视图映射到
 // 链上位置，回答"模型版本 / 策略包 / 运行记录 / 部署制品分别是什么、我现在
 // 在哪一环"。链本身在 overview 标题下，可点击直达对应视图。
@@ -1947,7 +1995,7 @@ function renderObjectChain() {
 
 function setView(view, { updateHash = true, scroll = true, focus = true } = {}) {
   const wanted = WORKFLOW_VIEWS.includes(view) ? view : 'overview';
-  document.body.removeAttribute('data-flow-child');
+  clearFlowChild();
   const changed = document.body.dataset.activeView !== wanted;
   document.body.dataset.activeView = wanted;
   // Keep the compact project / stage breadcrumb in sync even before the next
@@ -1978,11 +2026,25 @@ function setView(view, { updateHash = true, scroll = true, focus = true } = {}) 
   const toolsGroup = document.querySelector('[data-sidebar-group="tools"]');
   if (toolsGroup && ['resources', 'records', 'station'].includes(wanted)) toolsGroup.open = true;
   renderObjectChain();
-  if (updateHash && window.location.hash !== '#' + wanted) {
+  const locationState = parseHashLocation();
+  const willPush = updateHash && locationState.view !== wanted;
+  if (updateHash && locationState.child && !willPush) {
+    // Same-view navigation keeps the current entry; strip its stale child
+    // anchor (setFlowChild rewrites it right after). When a new entry will be
+    // pushed instead, leave the old entry intact so Back restores its child.
+    window.history.replaceState(
+      { rdkView: wanted },
+      '',
+      window.location.pathname + window.location.search + '#' + wanted,
+    );
+  }
+  if (willPush) {
     // Each in-app navigation becomes a real history entry so the browser Back
     // button steps between views instead of leaving the app entirely.
     // popstate (wired in wireEvents) drives the reverse direction; hashchange
-    // from manual hash edits still re-syncs via updateHash=false.
+    // from manual hash edits still re-syncs via updateHash=false. Sibling flow
+    // children of the same view (configure → submit) replace the anchor via
+    // setFlowChild instead of stacking junk #view entries here.
     window.history.pushState(
       { rdkView: wanted },
       '',
@@ -2011,27 +2073,90 @@ function setView(view, { updateHash = true, scroll = true, focus = true } = {}) 
   scheduleTruncationTitles();
 }
 
-function setFlowChild(child) {
+function setRecordsTab(tab) {
+  const wanted = ['all', 'run', 'deploy', 'artifact', 'telemetry'].includes(tab) ? tab : 'all';
+  state.recordsTab = wanted;
+  document.querySelectorAll('[data-record-tab]').forEach((control) => {
+    const active = control.dataset.recordTab === wanted;
+    control.classList.toggle('is-active', active);
+    control.setAttribute('aria-pressed', active ? 'true' : 'false');
+  });
+  renderHistory();
+}
+
+function focusFlowTarget(selector) {
+  if (!selector) return;
+  const target = document.querySelector(selector);
+  if (!target) return;
+  target.classList.remove('flow-focus-target');
+  void target.offsetWidth;
+  target.classList.add('flow-focus-target');
+  window.setTimeout(() => target.classList.remove('flow-focus-target'), 1400);
+  target.scrollIntoView({ behavior: 'smooth', block: 'start' });
+}
+
+function applyFlowChildDestination(context) {
+  if (!context) return;
+  if (context.recordTab) setRecordsTab(context.recordTab);
+  if (context.trainModule) setTrainModule(context.trainModule);
+  if (context.stationModule) setStationModule(context.stationModule);
+  // A focus target that is a <details> (e.g. the deploy feedback gate) shows
+  // only its summary while collapsed — open it so the destination is panel
+  // content, not a one-line fold. Train folds are handled inside setTrainModule.
+  const target = context.focus ? $(context.focus.slice(1)) : null;
+  if (target && target.tagName === 'DETAILS') target.setAttribute('open', '');
+}
+
+function setFlowChild(child, { updateHash = true, focus = true } = {}) {
   const wanted = String(child || '');
+  const context = FLOW_CHILD_CONTEXTS[wanted];
+  if (!context) {
+    clearFlowChild();
+    return;
+  }
   document.body.dataset.flowChild = wanted;
+  // body 自身也带 data-flow-child（全局状态标记），控制类匹配必须跳过它，
+  // 否则 aria-current 会落到 body 上，父分组也找不到真正的侧边栏入口。
   document.querySelectorAll('[data-flow-child]').forEach((control) => {
+    if (control === document.body) return;
     const active = control.dataset.flowChild === wanted;
     control.classList.toggle('is-active', active);
     if (active) control.setAttribute('aria-current', 'page');
     else control.removeAttribute('aria-current');
   });
+  renderContextLive();
   const active = [...document.querySelectorAll('[data-flow-child]')].find(
-    (control) => control.dataset.flowChild === wanted,
+    (control) => control !== document.body && control.dataset.flowChild === wanted,
   );
   active?.closest('.sidebar-nav-group')?.setAttribute('open', '');
+  const banner = $('flow-context');
+  banner?.removeAttribute('hidden');
+  setText('flow-context-index', context.index);
+  setText('flow-context-kicker', context.kicker);
+  setText('flow-context-title', context.title);
+  setText('flow-context-description', context.description);
+  setText('flow-context-target', context.target);
+  const view = document.body.dataset.activeView || context.view || 'overview';
+  if (updateHash && window.location.hash !== `#${view}/${wanted}`) {
+    window.history.replaceState({ rdkView: view, rdkFlowChild: wanted }, '', `${window.location.pathname}${window.location.search}#${view}/${wanted}`);
+  }
+  if (focus) window.setTimeout(() => focusFlowTarget(context.focus), 0);
 }
 
 function setTrainModule(module, { persist = true } = {}) {
-  const wanted = ['run', 'contract', 'resources'].includes(module) ? module : 'run';
+  const wanted = ['run', 'contract', 'config', 'resources'].includes(module) ? module : 'run';
+  const previous = state.trainModule;
   state.trainModule = wanted;
   const section = document.querySelector('[data-view-section="train"]');
   section?.setAttribute('data-active-train-module', wanted);
   section?.querySelector('.train-layout')?.setAttribute('data-train-active-module', wanted);
+  // The contract and config tab panels are <details> folds shared with the run
+  // view; a tab switch or hash deep link must land on them expanded, or the
+  // tab renders as a single collapsed summary line.
+  if (wanted === 'contract') section?.querySelector('#contract-fold')?.setAttribute('open', '');
+  else if (previous === 'contract') section?.querySelector('#contract-fold')?.removeAttribute('open');
+  if (wanted === 'config') section?.querySelector('#train-module-config')?.setAttribute('open', '');
+  else if (previous === 'config') section?.querySelector('#train-module-config')?.removeAttribute('open');
   section?.querySelectorAll('[data-train-module-tab]').forEach((tab) => {
     const active = tab.dataset.trainModuleTab === wanted;
     tab.classList.toggle('is-active', active);
@@ -2041,6 +2166,22 @@ function setTrainModule(module, { persist = true } = {}) {
   if (persist) {
     try { window.localStorage?.setItem('rdk-lab-train-module', wanted); } catch { /* optional */ }
   }
+}
+
+function setStationModule(module) {
+  const wanted = ['devices', 'telemetry', 'control', 'policy', 'diagnostics'].includes(module)
+    ? module
+    : 'telemetry';
+  const section = document.querySelector('[data-view-section="station"]');
+  section?.setAttribute('data-active-station-module', wanted);
+  section?.querySelector('.station-layout')?.setAttribute('data-active-station-module', wanted);
+  document.querySelectorAll('[data-station-module-tab]').forEach((tab) => {
+    const active = tab.dataset.stationModuleTab === wanted;
+    tab.classList.toggle('is-active', active);
+    tab.setAttribute('aria-selected', active ? 'true' : 'false');
+    // roving tabindex：整组 tab 只占一个 Tab 停靠点，组内用方向键移动。
+    tab.setAttribute('tabindex', active ? '0' : '-1');
+  });
 }
 
 function modelLabel(model) {
@@ -3801,9 +3942,9 @@ function openRecordDetails(record) {
         (record.artifact.sha256
           ? '<span>SHA-256 ' + escapeHtml(shortDigest(record.artifact.sha256)) + '</span>'
           : '') +
-        '<a class="button button-ghost button-small" href="/api/sim2real/runs/' +
-        encodeURIComponent(record.id) +
-        '/policy.onnx" download="policy.onnx">下载 ONNX</a></div></div>'
+        '<a class="button button-ghost button-small" href="' +
+        apiPath('/sim2real/runs/' + encodeURIComponent(record.id) + '/policy.onnx') +
+        '" download="policy.onnx">下载 ONNX</a></div></div>'
       : '') +
     (isArtifact
       ? '<div><strong class="run-detail-block-title">制品元数据</strong><pre class="run-detail-code">' +
@@ -10044,14 +10185,23 @@ function wireEvents() {
       window.setAgentDrawerOpen(true);
     }
   });
-  window.addEventListener('hashchange', () =>
-    setView(window.location.hash.slice(1), { updateHash: false }),
-  );
+  window.addEventListener('hashchange', () => {
+    const locationState = parseHashLocation();
+    setView(locationState.view, { updateHash: false });
+    if (locationState.child) {
+      applyFlowChildDestination(FLOW_CHILD_CONTEXTS[locationState.child]);
+      setFlowChild(locationState.child, { updateHash: false });
+    }
+  });
   // Back/forward now walks the pushed view history instead of leaving the
   // app. updateHash=false keeps popstate from re-pushing an entry.
   window.addEventListener('popstate', () => {
-    const view = window.location.hash.slice(1);
-    setView(WORKFLOW_VIEWS.includes(view) ? view : 'overview', { updateHash: false });
+    const locationState = parseHashLocation();
+    setView(locationState.view, { updateHash: false });
+    if (locationState.child) {
+      applyFlowChildDestination(FLOW_CHILD_CONTEXTS[locationState.child]);
+      setFlowChild(locationState.child, { updateHash: false });
+    }
   });
   window.addEventListener('message', handleMicroduckRecordingReady);
   // Hidden tabs keep their data but stop paying for it: every scoped poll
@@ -10140,17 +10290,7 @@ function wireEvents() {
     if (group === 'train') {
       setTrainModule(module);
     } else if (group === 'station') {
-      const section = document.querySelector('[data-view-section="station"]');
-      const layout = document.querySelector('[data-view-section="station"] .station-layout');
-      section?.setAttribute('data-active-station-module', module);
-      layout?.setAttribute('data-active-station-module', module);
-      document.querySelectorAll('[data-station-module-tab]').forEach((tab) => {
-        const active = tab.dataset.stationModuleTab === module;
-        tab.classList.toggle('is-active', active);
-        tab.setAttribute('aria-selected', active ? 'true' : 'false');
-        // roving tabindex：整组 tab 只占一个 Tab 停靠点，组内用方向键移动。
-        tab.setAttribute('tabindex', active ? '0' : '-1');
-      });
+      setStationModule(module);
     }
   };
   document.querySelectorAll('[data-train-module-tab]').forEach((tab) => {
@@ -10164,17 +10304,19 @@ function wireEvents() {
   const openTrainStep = (step) => {
     if (step === 1) {
       setView('train');
-      document.querySelector('#contract-fold')?.setAttribute('open', '');
+      setSubmodule('train', 'contract');
       document.querySelector('#template-button')?.focus();
     } else if (step === 2) {
       // Replay is optional for RL. Step 2 opens training configuration directly.
       setView('train');
-      setSubmodule('train', 'run');
-      const panel = $('training-profile')?.closest('.train-panel') || $('local-run-button')?.closest('.train-panel');
+      setSubmodule('train', 'config');
+      const controls = $('train-module-config');
+      const panel = controls || $('training-profile') || $('local-run-button');
       panel?.scrollIntoView({ behavior: 'smooth', block: 'center' });
       $('training-profile')?.focus();
     } else {
       setView('train');
+      setSubmodule('train', 'run');
       const button = $('local-run-button');
       const panel = button?.closest('.train-panel') || button;
       panel?.scrollIntoView({ behavior: 'smooth', block: 'center' });
@@ -10199,13 +10341,11 @@ function wireEvents() {
   });
   document.querySelectorAll('[data-flow-child]:not([data-train-step])').forEach((child) => {
     const activate = () => {
-      setFlowChild(child.dataset.flowChild);
       setView(child.dataset.viewTarget || 'overview');
       const target = child.dataset.flowChild;
-      const anchor = target === 'replays' || target === 'evaluation-evidence'
-        ? document.querySelector('#history-list')
-        : target === 'record' ? document.querySelector('#simulator-frame') : null;
-      anchor?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      const context = FLOW_CHILD_CONTEXTS[target];
+      applyFlowChildDestination(context);
+      setFlowChild(target);
     };
     child.addEventListener('click', activate);
     child.addEventListener('keydown', (event) => {
@@ -10261,13 +10401,7 @@ function wireEvents() {
   });
   document.querySelectorAll('[data-record-tab]').forEach((control) => {
     control.addEventListener('click', () => {
-      state.recordsTab = control.dataset.recordTab || 'all';
-      document.querySelectorAll('[data-record-tab]').forEach((tab) => {
-        const active = tab === control;
-        tab.classList.toggle('is-active', active);
-        tab.setAttribute('aria-pressed', active ? 'true' : 'false');
-      });
-      renderHistory();
+      setRecordsTab(control.dataset.recordTab || 'all');
     });
   });
   document.addEventListener('click', (event) => {
@@ -10745,7 +10879,12 @@ syncThemeToggle();
 connectEventStream();
 // Boot view restore: no push, no focus grab, no announcement — it is the
 // first paint, not a navigation.
-setView(window.location.hash.slice(1) || 'overview', { updateHash: false, focus: false });
+const initialLocation = parseHashLocation();
+setView(initialLocation.view, { updateHash: false, focus: false });
+if (initialLocation.child) {
+  applyFlowChildDestination(FLOW_CHILD_CONTEXTS[initialLocation.child]);
+  setFlowChild(initialLocation.child, { updateHash: false, focus: false });
+}
 // Render the product boundary immediately, even while the account-scoped
 // overview request is still loading (important when RDK Duck was selected in
 // a previous session).

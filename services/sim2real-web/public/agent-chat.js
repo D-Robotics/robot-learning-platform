@@ -72,9 +72,42 @@ function setAgentBusy(busy, label = '') {
   }
 }
 
+// The authoritative capability list is rendered once from the server catalog,
+// so the agent's prose never has to enumerate every tool to stay complete.
+let capabilityCatalogRendered = false;
+
+function renderCapabilityCatalog(capabilities) {
+  if (capabilityCatalogRendered) return;
+  const catalog = capabilities?.dsh?.capabilities;
+  if (!Array.isArray(catalog)) return;
+  const panel = document.getElementById('agent-catalog');
+  const list = document.getElementById('agent-catalog-list');
+  if (!panel || !list) return;
+  const bound = catalog.filter((item) => item && item.bound);
+  if (!bound.length) return;
+  list.textContent = '';
+  for (const item of bound) {
+    const row = document.createElement('li');
+    row.className = `agent-catalog-item${item.readOnly ? '' : ' is-gated'}`;
+    const badge = document.createElement('span');
+    badge.className = 'agent-catalog-badge';
+    badge.textContent = item.readOnly ? '只读' : '⚠️ 门控';
+    const desc = document.createElement('span');
+    desc.className = 'agent-catalog-desc';
+    desc.textContent = `${item.description}（${item.id}）`;
+    row.append(badge, desc);
+    list.append(row);
+  }
+  const count = document.getElementById('agent-catalog-count');
+  if (count) count.textContent = `（${bound.length}）`;
+  panel.hidden = false;
+  capabilityCatalogRendered = true;
+}
+
 async function refreshRuntimeStatus() {
   try {
     const capabilities = await api('/sim2real/agent/capabilities');
+    renderCapabilityCatalog(capabilities);
     if (capabilities?.runtime === 'dsh' && capabilities?.dsh?.initialized) {
       runtimeLabel = '实时 Agent · 真机操作需确认';
     } else if (capabilities?.runtime === 'dsh-configured') {
@@ -563,9 +596,12 @@ function renderDshReply(dsh) {
   provenance.className = 'agent-message-provenance';
   const usage = Number(dsh.usage?.totalTokens);
   const usageLabel = Number.isFinite(usage) && usage > 0 ? ` · 本轮约 ${usage} tokens` : '';
+  // The workspace-evidence hint only fits turns where tools actually ran; a
+  // plain prose reply (self-introduction, capability tour) has no evidence to
+  // check and the boilerplate only adds noise.
   provenance.textContent = dsh.toolTrail?.length
     ? `Agent 生成 · 依据见工具调用与执行证据${usageLabel}`
-    : `Agent 生成 · 请结合当前工作区证据复核${usageLabel}`;
+    : `Agent 生成${usageLabel}`;
   node?.append(provenance);
   const trail = renderDshToolTrail(dsh.toolTrail);
   if (trail) node?.append(trail);
