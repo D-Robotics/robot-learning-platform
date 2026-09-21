@@ -9917,6 +9917,12 @@ body .train-onboarding-step small {
    global button reset is intentionally overridden here so nested task links
    never fall back to native browser chrome. */
 body .workflow-nav-hierarchical summary.nav-item-parent {
+  display: grid;
+  grid-template-columns: 28px minmax(0, 1fr) 16px;
+  align-items: start;
+  gap: 8px;
+  min-height: 52px;
+  padding: 8px 10px;
   appearance: none;
   -webkit-appearance: none;
   list-style: none;
@@ -9925,6 +9931,64 @@ body .workflow-nav-hierarchical summary.nav-item-parent {
   color: var(--muted-strong);
   box-shadow: none;
   transition: background .18s ease, border-color .18s ease, color .18s ease;
+}
+
+body .workflow-nav-hierarchical {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+body .workflow-nav-hierarchical .sidebar-nav-group {
+  display: block;
+  margin: 0;
+}
+
+body .workflow-nav-hierarchical summary.nav-item-parent .nav-index {
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  margin-top: 2px;
+  border: 1px solid var(--line-strong);
+  border-radius: 7px;
+  color: var(--muted-strong);
+  background: var(--panel-soft);
+  font-size: 10.5px;
+  font-weight: 700;
+}
+
+body .workflow-nav-hierarchical summary.nav-item-parent > span:nth-child(2) {
+  min-width: 0;
+}
+
+body .workflow-nav-hierarchical summary.nav-item-parent strong {
+  display: block;
+  color: var(--text);
+  font-size: 13px;
+  line-height: 1.25;
+}
+
+body .workflow-nav-hierarchical summary.nav-item-parent small {
+  display: block;
+  margin-top: 4px;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+body .workflow-nav-hierarchical summary.nav-item-parent > i {
+  margin-top: 4px;
+  color: var(--muted);
+  font-size: 13px;
+  font-style: normal;
+  text-align: center;
+  transition: transform .18s ease;
+}
+
+body .workflow-nav-hierarchical .sidebar-nav-group[open] > summary.nav-item-parent > i {
+  transform: rotate(180deg);
+  color: var(--accent-text);
 }
 
 body .workflow-nav-hierarchical summary.nav-item-parent::-webkit-details-marker {
@@ -9942,9 +10006,11 @@ body .workflow-nav-hierarchical .sidebar-nav-group[open] > summary.nav-item-pare
 
 body .workflow-nav-hierarchical .nav-subitems {
   position: relative;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: 4px;
-  margin: 4px 0 8px 32px;
-  padding: 4px 0 4px 16px;
+  margin: 0 0 2px 20px;
+  padding: 8px 0 4px 16px;
   border-left: 1px solid color-mix(in srgb, var(--accent) 28%, var(--line));
 }
 
@@ -9961,17 +10027,18 @@ body .workflow-nav-hierarchical .nav-subitems::before {
 body .workflow-nav-hierarchical .nav-subitem {
   appearance: none;
   -webkit-appearance: none;
-  display: block;
+  display: flex;
+  align-items: center;
   width: 100%;
-  min-height: 32px;
-  padding: 8px 12px;
+  min-height: 36px;
+  padding: 8px 10px;
   border: 1px solid transparent;
-  border-radius: 10px;
+  border-radius: 7px;
   background: transparent;
   color: var(--muted-strong);
   font: inherit;
   font-size: var(--fs-meta);
-  line-height: 1.35;
+  line-height: 1.3;
   text-align: left;
   box-shadow: none;
   transition: background .18s ease, border-color .18s ease, color .18s ease, transform .18s ease;
@@ -9983,6 +10050,7 @@ body .workflow-nav-hierarchical .nav-subitem::before {
   width: 5px;
   height: 5px;
   margin: 0 8px 2px 0;
+  flex: 0 0 auto;
   border: 1px solid currentColor;
   border-radius: 50%;
   opacity: .48;
