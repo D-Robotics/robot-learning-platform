@@ -366,3 +366,100 @@ describe('DSH capability handlers', () => {
     });
   });
 });
+
+describe('DSH docs knowledge tools', () => {
+  const exec = { signal: new AbortController().signal } as never;
+  const docsResponse = (body: unknown, status = 200): Response =>
+    ({
+      ok: status >= 200 && status < 300,
+      status,
+      text: async () => JSON.stringify(body),
+    }) as unknown as Response;
+
+  it('searches the official forum and returns deduplicated topic links', async () => {
+    const calls: string[] = [];
+    const docsFetchImpl = async (path: string) => {
+      calls.push(path);
+      return docsResponse({
+        posts: [
+          { topic_id: 35286, blurb: 'LeRobot ACT 在 S600 上的完整落地步骤' },
+          { topic_id: 35286, blurb: '重复命中应去重' },
+          { topic_id: 35484, blurb: 'InternVL2.5 在 X5 上的 BPU 部署' },
+        ],
+        topics: [
+          { id: 35286, slug: 'lerobot-act-s600', title: 'LeRobot ACT + RDK S600 全流程落地指南' },
+          { id: 35484, slug: 'topic', title: '在RDK X5上部署官方Internvl2_5' },
+        ],
+      });
+    };
+    const handlers = createDshCapabilityHandlers({ docsFetchImpl });
+    const result = (await handlers.rdk_docs_search(
+      { query: 'S600 ACT 部署' },
+      exec,
+    )) as { results: Array<{ title: string; url: string }>; source: string };
+
+    expect(calls).toEqual([`/search.json?q=${encodeURIComponent('S600 ACT 部署')}`]);
+    expect(result.results).toHaveLength(2);
+    expect(result.results[0]).toMatchObject({
+      title: 'LeRobot ACT + RDK S600 全流程落地指南',
+      url: 'https://forum.d-robotics.cc/t/lerobot-act-s600/35286',
+    });
+    expect(result.source).toContain('forum.d-robotics.cc');
+  });
+
+  it('reports a helpful hint when the search has no hits', async () => {
+    const handlers = createDshCapabilityHandlers({
+      docsFetchImpl: async () => docsResponse({ posts: [], topics: [] }),
+    });
+    const result = (await handlers.rdk_docs_search({ query: '不存在的词条' }, exec)) as {
+      results: unknown[];
+      hint: string;
+    };
+    expect(result.results).toHaveLength(0);
+    expect(result.hint).toContain('developer.d-robotics.cc');
+  });
+
+  it('reads a topic and strips HTML from post bodies', async () => {
+    const calls: string[] = [];
+    const handlers = createDshCapabilityHandlers({
+      docsFetchImpl: async (path: string) => {
+        calls.push(path);
+        return docsResponse({
+          title: 'LeRobot ACT + RDK S600 全流程落地指南',
+          slug: 'lerobot-act-s600',
+          post_stream: {
+            posts: [
+              { username: 'official-bot', cooked: '<p>步骤一：<b>烧录</b> OE 映像</p><p>见附件</p>' },
+              { username: 'engineer', cooked: '<p>实测 5 iter 即可收敛&nbsp;质疑帖</p>' },
+            ],
+          },
+        });
+      },
+    });
+    const result = (await handlers.rdk_docs_read({ topicId: 35286 }, exec)) as {
+      title: string;
+      url: string;
+      content: string[];
+      truncated: boolean;
+    };
+
+    expect(calls).toEqual(['/t/35286.json']);
+    expect(result.title).toContain('LeRobot ACT');
+    expect(result.url).toBe('https://forum.d-robotics.cc/t/lerobot-act-s600/35286');
+    expect(result.content[0]).toContain('楼主 official-bot：步骤一： 烧录 OE 映像 见附件');
+    expect(result.content[1]).toContain('1楼 engineer');
+    expect(result.truncated).toBe(false);
+  });
+
+  it('maps upstream failures to a capability failure instead of leaking transport errors', async () => {
+    const handlers = createDshCapabilityHandlers({
+      docsFetchImpl: async () => docsResponse({ error: 'boom' }, 503),
+    });
+    await expect(handlers.rdk_docs_search({ query: 'S600' }, exec)).rejects.toMatchObject({
+      code: 'DSH_CAPABILITY_FAILED',
+    });
+    await expect(handlers.rdk_docs_read({}, exec)).rejects.toMatchObject({
+      code: 'DSH_CAPABILITY_REJECTED',
+    });
+  });
+});

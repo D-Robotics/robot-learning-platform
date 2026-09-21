@@ -63,6 +63,8 @@ const names: Array<[string, string, boolean]> = [
   ['rdk_board_arm_gripper', '在双安全开关与钳制下控制 D6A 夹爪开合', false],
   ['rdk_board_arm_stop', '停止机械臂新命令并尽力回 home（随时可用）', false],
   ['rdk_board_stop', '停止板端策略与驱动', false],
+  ['rdk_docs_search', '检索 D-Robotics 官方资料（文档镜像与工程经验帖）', true],
+  ['rdk_docs_read', '读取一篇 D-Robotics 官方资料帖子的正文', true],
 ];
 
 /**
