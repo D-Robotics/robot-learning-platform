@@ -20,7 +20,7 @@
          theme x view screenshots). See services/sim2real-web/ui-layout-invariants.mjs
          for the guards that keep new overrides from re-introducing layering. -->
     <link rel="stylesheet" href="./tokens.css?v=2" />
-    <link rel="stylesheet" href="./app.css?v=47" />
+    <link rel="stylesheet" href="./app.css?v=48" />
   </head>
   <body>
     <a class="skip-link" href="#main-content">跳到主要内容</a>
@@ -549,6 +549,11 @@
             <div class="section-heading section-heading-lean">
               <div><span class="stage-kicker">01 · 学习闭环</span><h2 id="simulate-title">仿真与录制</h2><p class="section-lead">先把动作任务跑通并录下可复用轨迹，训练、评测和部署都从这份证据继续。</p></div>
             </div>
+            <div class="module-step-strip" aria-label="仿真工作流">
+              <div class="module-step is-current"><span>01</span><div><strong>任务与场景</strong><small>选择动作任务和模型</small></div></div>
+              <div class="module-step"><span>02</span><div><strong>仿真运行</strong><small>观察动作和实时状态</small></div></div>
+              <div class="module-step"><span>03</span><div><strong>录制与回放</strong><small>保存轨迹并进入评测</small></div></div>
+            </div>
             <div class="sim-layout">
               <article class="panel simulator-panel">
                 <div class="panel-heading">
@@ -622,7 +627,7 @@
                   <span class="simulator-evidence-status" id="simulator-evidence-status">录制后自动同步到评测证据</span>
                 </div>
               </article>
-              <details class="panel guide-panel workspace-inspector">
+              <details class="panel guide-panel workspace-inspector" open>
                 <summary class="workspace-inspector-summary">
                   <span><small>Inspector</small><strong>任务与动作设置</strong></span>
                   <span class="workspace-inspector-toggle">展开 <i aria-hidden="true">⌄</i></span>
@@ -1499,6 +1504,7 @@
                 <div class="panel-heading panel-heading-lean"><h2>全部制品与运行</h2>
                   <span class="panel-caption" id="records-count">最近 30 条</span>
                 </div>
+                <p class="records-scope-note">这里汇总轨迹、训练 Run、评测证据、模型制品和部署记录；点击一条记录可继续回放或查看详情。</p>
                 <div class="records-toolbar" role="toolbar" aria-label="记录筛选">
                   <div class="record-tabs" role="group" aria-label="记录类型筛选">
                     <button

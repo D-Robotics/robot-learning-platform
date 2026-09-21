@@ -1937,7 +1937,7 @@ const FLOW_CHILD_CONTEXTS = {
   submit: { index: '02', kicker: '训练与策略 / 03', title: 'Run 与进度', description: '提交训练任务，查看实时曲线、状态和引擎日志。', target: '训练 · Run 工作台', view: 'train', trainModule: 'run', focus: '#train-module-run-model' },
   'evaluation-run': { index: '03', kicker: '评测与证据 / 01', title: '发起评测', description: '选择评测来源和目标，生成一份可追溯评测 Run。', target: '评测 · 评测运行', view: 'evaluate', evalModule: 'run', focus: '#evaluation-run-panel' },
   comparison: { index: '03', kicker: '评测与证据 / 02', title: '结果对比', description: '比较最近 Run 的成功率、奖励和跌倒率趋势。', target: '评测 · 结果对比', view: 'evaluate', evalModule: 'comparison', focus: '#evaluation-comparison-panel' },
-  'evaluation-evidence': { index: '03', kicker: '评测与证据 / 03', title: '全部证据', description: '查看遥测、评测和部署记录，保留完整证据链。', target: '记录 · 遥测与证据', view: 'records', recordTab: 'telemetry', focus: '#history-list' },
+  'evaluation-evidence': { index: '03', kicker: '评测与证据 / 03', title: '全部证据', description: '查看轨迹、训练、评测、制品和部署记录，保留完整证据链。', target: '记录 · 全部证据', view: 'records', recordTab: 'all', focus: '#history-list' },
   devices: { index: '04', kicker: '设备与发布 / 01', title: '设备管理', description: '登记设备、建立受控连接并查看设备能力。', target: '设备 · 设备连接', view: 'station', stationModule: 'devices', focus: '#station-device-manager' },
   preflight: { index: '04', kicker: '设备与发布 / 02', title: '预检与发布', description: '生成并执行只读预检，确认制品可以进入目标板卡。', target: '部署 · 只读预检', view: 'deploy', deployModule: 'preflight', focus: '#preflight-panel' },
   feedback: { index: '04', kicker: '设备与发布 / 03', title: '运行反馈与回滚', description: '查看上线闸门、部署时间线和可回滚版本。', target: '部署 · 运行反馈', view: 'deploy', deployModule: 'feedback', focus: '#feedback-panel' },
