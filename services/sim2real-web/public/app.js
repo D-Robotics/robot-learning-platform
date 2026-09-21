@@ -1229,6 +1229,39 @@ const RUN_STATUS_DEAD_RETRY_MS = 300_000;
 const runStatusDeadUntil = new Map();
 const runStatusDeadNotified = new Set();
 
+// 子界面分割（D-002）：多子项共享视图时，视图内同时只展示当前子项
+// 自己的面板——评测（发起评测/结果对比）与部署（预检/运行反馈）与
+// 训练的模块切换同构。无子项进入时落到默认模块，保证「完全分割」。
+const SUBINTERFACE_PARTITIONS = {
+  evaluate: {
+    attribute: 'data-active-eval-module',
+    modules: { run: 'eval-tab-run', comparison: 'eval-tab-comparison' },
+    defaultModule: 'run',
+  },
+  deploy: {
+    attribute: 'data-active-deploy-module',
+    modules: { preflight: 'deploy-tab-preflight', feedback: 'deploy-tab-feedback' },
+    defaultModule: 'preflight',
+  },
+};
+
+function applySubinterfacePartition(view, child) {
+  const partition = SUBINTERFACE_PARTITIONS[view];
+  if (!partition) return;
+  const section = document.querySelector(`[data-view-section="${view}"]`);
+  if (!section) return;
+  const module = partition.modules[child] ? child : partition.defaultModule;
+  section.setAttribute(partition.attribute, module);
+  for (const [moduleKey, tabId] of Object.entries(partition.modules)) {
+    const tab = document.getElementById(tabId);
+    if (!tab) continue;
+    const active = moduleKey === module;
+    tab.classList.toggle('is-active', active);
+    tab.setAttribute('aria-selected', active ? 'true' : 'false');
+    tab.tabIndex = active ? 0 : -1;
+  }
+}
+
 // The workbench heartbeat: always wanted on every view, faster while a run is
 // active, backed off after run-status failures, silent (no loading chrome),
 // and refreshing once when the tab returns.
@@ -2012,6 +2045,9 @@ function setView(view, { updateHash = true, scroll = true, focus = true } = {}) 
   document.querySelectorAll('[data-view-section]').forEach((section) => {
     section.hidden = section.dataset.viewSection !== wanted;
   });
+  // 子界面分割默认值：进入多模块视图而未指定子项时落到第一个模块，
+  // 保证「一次只看到一个子项的内容」（D-002）。
+  applySubinterfacePartition(wanted, document.body.dataset.flowChild || '');
   document.querySelectorAll('[data-view-target]').forEach((control) => {
     const active = control.dataset.viewTarget === wanted;
     const isNavigationControl =
@@ -2163,6 +2199,8 @@ function setFlowChild(child, { updateHash = true, focus = true } = {}) {
       control.removeAttribute('aria-current');
     }
   });
+  // 子界面分割（D-002）：让视图只展示当前子项自己的面板。
+  applySubinterfacePartition(document.body.dataset.activeView || 'overview', wanted);
   renderContextLive();
   const active = [...document.querySelectorAll('[data-flow-child]')].find(
     (control) => control !== document.body && control.dataset.flowChild === wanted,
@@ -7964,8 +8002,7 @@ async function refreshActiveRuns() {
         runStatusFailures.delete(run.id);
         runStatusDeadUntil.delete(run.id);
         runStatusDeadNotified.delete(run.id);
-        return payload.run || null;
-      } catch (error) {
+        return payload.run || null;      } catch (error) {
         // The API keeps the last known state and returns a retryable 503 when
         // the external runner is unavailable. Back off after repeated errors
         // so a dead runner cannot create a tight polling loop. After the

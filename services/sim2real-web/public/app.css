@@ -5415,7 +5415,12 @@ html.theme-dark .agent-assistant-health { max-width: 150px; }
 .flow-context-index{display:grid;place-items:center;width:32px;height:32px;border-radius:8px;background:var(--accent);color:var(--accent-contrast,var(--panel));font-weight:800;}
 .flow-context-copy{min-width:0;flex:1}.flow-context-kicker{color:var(--accent-text);font-size:var(--fs-meta)}.flow-context-copy h2{margin:2px 0 2px;font-size:16px}.flow-context-copy p{margin:0;color:var(--muted-strong);font-size:var(--fs-meta);line-height:1.4}.flow-context-target{padding:4px 8px;border:1px solid var(--line-strong);border-radius:999px;color:var(--muted-strong);font-size:var(--fs-meta);white-space:nowrap;}
 .flow-focus-target{border-color:var(--accent);box-shadow:0 0 0 4px color-mix(in srgb,var(--accent) 18%,transparent);}
-@media (max-width:720px){.flow-context-strip{align-items:flex-start;padding:10px 12px}#flow-context .flow-context-target{display:none}}
+/* 子界面分割（D-002）：评测与部署的多子项共享视图内，面板互斥显隐——
+   一次只展示当前子项自己的内容，与训练页模块切换同构。 */
+[data-view-section="evaluate"][data-active-eval-module="run"] .evaluation-evidence{display:none}
+[data-view-section="evaluate"][data-active-eval-module="comparison"] #evaluation-run-panel{display:none}
+[data-view-section="deploy"][data-active-deploy-module="preflight"] #feedback-panel{display:none}
+[data-view-section="deploy"][data-active-deploy-module="feedback"] #preflight-panel{display:none}@media (max-width:720px){.flow-context-strip{align-items:flex-start;padding:10px 12px}#flow-context .flow-context-target{display:none}}
 .module-step-strip{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;margin:12px 0 16px;padding:8px;border:1px solid var(--line);border-radius:12px;background:var(--panel-soft)}
 .module-step{display:flex;align-items:center;gap:8px;min-width:0;padding:10px 12px;border:1px solid transparent;border-radius:8px}.module-step>span{display:grid;place-items:center;width:24px;height:24px;border-radius:50%;background:var(--panel-raised);color:var(--muted-strong);font-size:var(--fs-meta);font-weight:700}.module-step strong{display:block;font-size:13px}.module-step small{display:block;margin-top:2px;color:var(--muted);font-size:var(--fs-meta)}.module-step.is-current{border-color:var(--accent);background:color-mix(in srgb,var(--accent) 9%,transparent)}.module-step.is-current>span{background:var(--accent);color:var(--accent-contrast,var(--panel))}
 .records-scope-note{margin:-4px 0 12px;color:var(--muted-strong);font-size:var(--fs-meta);line-height:1.5}
@@ -10078,12 +10083,20 @@ body .workflow-nav-hierarchical summary.nav-item-parent::-webkit-details-marker 
 }
 
 body .workflow-nav-hierarchical summary.nav-item-parent:hover,
-body .workflow-nav-hierarchical summary.nav-item-parent:focus-visible,
-body .workflow-nav-hierarchical .sidebar-nav-group[open] > summary.nav-item-parent {
+body .workflow-nav-hierarchical summary.nav-item-parent:focus-visible {
   border-color: var(--ui-border-soft);
   background: var(--ui-surface-tint);
   color: var(--text);
   outline: none;
+}
+
+/* 展开态只保留浅底色、去掉边框盒：三个分组同时展开时，边框盒会叠成
+   一面「盒子墙」，视觉重心被吸到导航壳上而不是内容上。悬停/聚焦仍
+   保留边框反馈。 */
+body .workflow-nav-hierarchical .sidebar-nav-group[open] > summary.nav-item-parent {
+  border-color: transparent;
+  background: var(--ui-surface-tint);
+  color: var(--text);
 }
 
 body .workflow-nav-hierarchical .nav-subitems {
