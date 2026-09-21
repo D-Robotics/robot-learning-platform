@@ -467,3 +467,48 @@ describe('DSH docs knowledge tools (rdk-docs-mcp backed)', () => {
     expect(briefing).toContain('rdk_docs_');
   });
 });
+
+describe('DSH web search tool (free Bing tier)', () => {
+  const exec = { signal: new AbortController().signal } as never;
+
+  it('passes the query to the injected search and maps hits', async () => {
+    const seen: string[] = [];
+    const handlers = createDshCapabilityHandlers({
+      webSearch: async (query) => {
+        seen.push(query);
+        return [{ title: 'Isaac Lab', url: 'https://github.com/isaac-sim/IsaacLab', snippet: 'release notes' }];
+      },
+    });
+    const result = (await handlers.rdk_web_search({ query: 'Isaac Lab 最新版本' }, exec)) as {
+      query: string;
+      results: Array<{ title: string; url: string }>;
+      hint: string;
+    };
+    expect(seen).toEqual(['Isaac Lab 最新版本']);
+    expect(result.results[0]).toMatchObject({ title: 'Isaac Lab', url: 'https://github.com/isaac-sim/IsaacLab' });
+    expect(result.hint).toContain('非官方');
+  });
+
+  it('requires a query and maps upstream failures to a stable error', async () => {
+    const handlers = createDshCapabilityHandlers({
+      webSearch: async () => {
+        throw new Error('timeout');
+      },
+    });
+    await expect(handlers.rdk_web_search({}, exec)).rejects.toMatchObject({
+      code: 'DSH_CAPABILITY_REJECTED',
+    });
+    await expect(handlers.rdk_web_search({ query: 'x' }, exec)).rejects.toMatchObject({
+      code: 'DSH_CAPABILITY_FAILED',
+    });
+  });
+
+  it('labels web results as third-party in the capability briefing', () => {
+    const handlers = createDshCapabilityHandlers({
+      webSearch: async () => [],
+    });
+    const briefing = capabilityBriefing(handlers);
+    expect(briefing).toContain('rdk_web_search');
+    expect(briefing).toContain('非官方');
+  });
+});

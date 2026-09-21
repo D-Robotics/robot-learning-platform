@@ -67,6 +67,7 @@ const names: Array<[string, string, boolean]> = [
   ['rdk_docs_manuals', '列出 D-Robotics 官方手册目录', true],
   ['rdk_docs_toc', '读取指定官方手册的章节目录', true],
   ['rdk_docs_page', '读取一篇官方文档或社区帖子的正文（Markdown，仅限官方站点）', true],
+  ['rdk_web_search', '全网搜索公开资料（免费通用检索；结果为第三方信息，非官方结论）', true],
 ];
 
 /**
@@ -114,6 +115,11 @@ export function capabilityBriefing(handlers: DshCapabilityHandlers = {}): string
   if (catalog.some((item) => item.id === 'rdk_docs_search')) {
     lines.push(
       '- 使用 rdk_docs_* 工具核对官方资料：检索失败、超时或未命中时，必须明确告知用户「官方资料未核对」，不得把内部记忆当作已查证结论输出；引用资料时附来源链接，官方文档结论优先于社区经验帖。',
+    );
+  }
+  if (catalog.some((item) => item.id === 'rdk_web_search')) {
+    lines.push(
+      '- rdk_web_search 返回的是全网第三方信息：引用时必须注明「来自网络检索、非官方结论」，与官方文档冲突时以官方文档为准。',
     );
   }
   return lines.join('\n');

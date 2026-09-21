@@ -185,6 +185,79 @@ const defaultDocsService: DshDocsService = { searchDocs, listToc, getPage, listM
 const RDK_DOCS_ALLOWED_HOSTS = new Set(['developer.d-robotics.cc', 'forum.d-robotics.cc']);
 
 /**
+ * General web search, free tier: Bing's HTML results (cn.bing.com is
+ * reachable from both mainland deployments and overseas; no API key). The
+ * model never gets a fetch-everything primitive here — only ranked
+ * title/url/snippet triples, so search cannot be turned into an SSRF or
+ * scraping tool. Throttled per process to stay polite to the free endpoint.
+ */
+type WebSearchHit = { title: string; url: string; snippet: string };
+export type WebSearchFn = (query: string) => Promise<WebSearchHit[]>;
+
+const WEB_SEARCH_TIMEOUT_MS = 12_000;
+const WEB_SEARCH_MIN_INTERVAL_MS = 2_000;
+let webSearchLastAt = 0;
+
+function decodeEntities(text: string): string {
+  return text
+    .replace(/&nbsp;/g, ' ')
+    .replace(/&ensp;/g, ' ')
+    .replace(/&#0183;/g, '·')
+    .replace(/&middot;/g, '·')
+    .replace(/&amp;/g, '&')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function unwrapBingRedirect(url: string): string {
+  const marker = '&u=a1';
+  const index = url.indexOf(marker);
+  if (index < 0) return url;
+  try {
+    const encoded = url.slice(index + marker.length).split('&')[0];
+    return Buffer.from(decodeURIComponent(encoded), 'base64url').toString('utf8');
+  } catch {
+    return url;
+  }
+}
+
+async function bingWebSearch(query: string): Promise<WebSearchHit[]> {
+  const response = await fetch(
+    `https://cn.bing.com/search?q=${encodeURIComponent(query)}&count=10`,
+    {
+      headers: {
+        'user-agent':
+          'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36',
+        'accept-language': 'zh-CN,zh;q=0.9',
+      },
+      signal: AbortSignal.timeout(WEB_SEARCH_TIMEOUT_MS),
+    },
+  );
+  if (!response.ok) {
+    fail(502, { status: response.status }, `全网搜索失败（HTTP ${response.status}）。`);
+  }
+  const html = (await response.text()).slice(0, 1_500_000);
+  const blocks = html.split('<li class="b_algo"').slice(1);
+  const hits: WebSearchHit[] = [];
+  for (const block of blocks) {
+    const anchor = block.match(/<h2[^>]*><a[^>]*href="([^"]+)"[^>]*>([\s\S]*?)<\/a>/);
+    if (!anchor) continue;
+    const snippetMatch = block.match(/<p class="b_lineclamp[^"]*"[^>]*>([\s\S]*?)<\/p>/);
+    hits.push({
+      title: decodeEntities(anchor[2].replace(/<[^>]*>/g, '')).slice(0, 200),
+      url: unwrapBingRedirect(anchor[1]),
+      snippet: snippetMatch ? decodeEntities(snippetMatch[1].replace(/<[^>]*>/g, '')).slice(0, 300) : '',
+    });
+    if (hits.length >= 6) break;
+  }
+  return hits;
+}
+
+/**
  * The docs package throws raw transport errors (fetch failed, parse errors).
  * D-008 discipline: upstream failures surface as a stable capability error
  * with an operator-facing message, never as a leaked transport detail — and
@@ -365,7 +438,11 @@ function firstDeviceId(body: Record<string, unknown>): string | null {
  * unchanged; nothing here bypasses a gate.
  */
 export function createDshCapabilityHandlers(
-  options: { fetchImpl?: LoopbackFetch; docsService?: DshDocsService } = {},
+  options: {
+    fetchImpl?: LoopbackFetch;
+    docsService?: DshDocsService;
+    webSearch?: WebSearchFn;
+  } = {},
 ): DshCapabilityHandlers {
   const fetchImpl = options.fetchImpl ?? loopbackFetch();
   const run = (signal: AbortSignal) => ({
@@ -1474,6 +1551,33 @@ export function createDshCapabilityHandlers(
       const url = assertDocsUrl(requiredArg(input, 'url', '请提供页面 URL（来自检索、目录或上一轮结果）。'));
       const docs = options.docsService ?? defaultDocsService;
       return callDocs(() => docs.getPage({ url, maxChars: 6_000 }, fetchText));
+    },
+
+    async rdk_web_search(args: unknown, exec: ToolRunContext) {
+      const input = argsRecord(args);
+      const query = requiredArg(input, 'query', '请提供搜索关键词。');
+      const webSearch = options.webSearch ?? bingWebSearch;
+      const elapsed = Date.now() - webSearchLastAt;
+      if (elapsed < WEB_SEARCH_MIN_INTERVAL_MS) {
+        await new Promise((resolve) => setTimeout(resolve, WEB_SEARCH_MIN_INTERVAL_MS - elapsed));
+      }
+      webSearchLastAt = Date.now();
+      try {
+        const hits = await webSearch(query.slice(0, 200));
+        return {
+          query,
+          results: hits,
+          hint:
+            '这些是全网第三方信息（非官方结论）；与 rdk_docs_* 的官方资料冲突时以官方为准，引用时附链接并注明为网络检索结果。',
+        };
+      } catch (error) {
+        if (error instanceof CapabilityError) throw error;
+        return fail(
+          502,
+          { reason: (error as Error)?.message },
+          '全网搜索失败（免费检索通道不可用或超时）；请告知用户该信息未经网络核对。',
+        );
+      }
     },
   };
 }
