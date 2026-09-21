@@ -63,8 +63,10 @@ const names: Array<[string, string, boolean]> = [
   ['rdk_board_arm_gripper', '在双安全开关与钳制下控制 D6A 夹爪开合', false],
   ['rdk_board_arm_stop', '停止机械臂新命令并尽力回 home（随时可用）', false],
   ['rdk_board_stop', '停止板端策略与驱动', false],
-  ['rdk_docs_search', '检索 D-Robotics 官方资料（文档镜像与工程经验帖）', true],
-  ['rdk_docs_read', '读取一篇 D-Robotics 官方资料帖子的正文', true],
+  ['rdk_docs_search', '检索 D-Robotics 官方文档与社区（结果按官方/相关/论坛补充排序）', true],
+  ['rdk_docs_manuals', '列出 D-Robotics 官方手册目录', true],
+  ['rdk_docs_toc', '读取指定官方手册的章节目录', true],
+  ['rdk_docs_page', '读取一篇官方文档或社区帖子的正文（Markdown，仅限官方站点）', true],
 ];
 
 /**
@@ -106,6 +108,14 @@ export function capabilityBriefing(handlers: DshCapabilityHandlers = {}): string
     `- 其中 ${gated.length} 个工具非只读，实际调用会经过平台安全门控/审批，提及这些能力时必须逐个如实标注：${gated.join('、')}。`,
     `- 其余 ${readOnlyCount} 个均为只读工具，介绍时不得给它们添加"需审批"或"需门控"之类的标注。`,
   ];
+  // D-008 discipline (borrowed from Studio): when the knowledge tools are
+  // bound, an unsuccessful lookup must be surfaced as "unverified" instead of
+  // being silently replaced by the model's internal memory.
+  if (catalog.some((item) => item.id === 'rdk_docs_search')) {
+    lines.push(
+      '- 使用 rdk_docs_* 工具核对官方资料：检索失败、超时或未命中时，必须明确告知用户「官方资料未核对」，不得把内部记忆当作已查证结论输出；引用资料时附来源链接，官方文档结论优先于社区经验帖。',
+    );
+  }
   return lines.join('\n');
 }
 const output = {

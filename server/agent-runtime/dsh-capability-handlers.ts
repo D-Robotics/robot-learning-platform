@@ -19,6 +19,9 @@ import type { ToolRunContext } from '@deepseek-ai/dsh-tools';
 import { readSim2RealAgentResponseText } from '../routes/sim2real-agent-routes.js';
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { randomUUID } from 'node:crypto';
+import { listManuals } from 'rdk-docs-mcp/dist/catalog.js';
+import { fetchText } from 'rdk-docs-mcp/dist/http.js';
+import { getPage, listToc, searchDocs } from 'rdk-docs-mcp/dist/service.js';
 
 export type LoopbackFetch = (
   path: string,
@@ -161,78 +164,55 @@ function defined(value: unknown): unknown {
 }
 
 /**
- * External knowledge source for the agent: the D-Robotics official forum API
- * (Discourse search.json / topic JSON — the same surface the rdk-docs skill
- * uses). The host is a compile-time constant, never derived from tool args,
- * so a model cannot redirect these calls at an arbitrary origin.
+ * External knowledge source for the agent: the lockfile-pinned
+ * `rdk-docs-mcp` package (same owner as Studio's bundled docs MCP, per
+ * that project's ADR D-008). We call its pure retrieval functions directly
+ * instead of going through the MCP protocol — no second transport, no
+ * client SDK, and the same versioned retrieval quality. The package fetches
+ * developer.d-robotics.cc / forum.d-robotics.cc live with its own disk
+ * cache; page reads are host-allowlisted below so a model cannot point
+ * them at an arbitrary origin.
  */
-const RDK_DOCS_FORUM_ORIGIN = 'https://forum.d-robotics.cc';
-const RDK_DOCS_FETCH_TIMEOUT_MS = 12_000;
-const RDK_DOCS_MAX_BYTES = 512_000;
+export type DshDocsService = {
+  searchDocs: typeof searchDocs;
+  listToc: typeof listToc;
+  getPage: typeof getPage;
+  listManuals: typeof listManuals;
+};
 
-export type DshDocsFetch = (
-  path: string,
-  signal: AbortSignal,
-) => Promise<Response>;
+const defaultDocsService: DshDocsService = { searchDocs, listToc, getPage, listManuals };
 
-function stripHtml(html: string): string {
-  return html
-    .replace(/<[^>]*>/g, ' ')
-    .replace(/&nbsp;/g, ' ')
-    .replace(/&amp;/g, '&')
-    .replace(/&lt;/g, '<')
-    .replace(/&gt;/g, '>')
-    .replace(/&quot;/g, '"')
-    .replace(/&#39;/g, "'")
-    .replace(/\s+/g, ' ')
-    .trim();
+const RDK_DOCS_ALLOWED_HOSTS = new Set(['developer.d-robotics.cc', 'forum.d-robotics.cc']);
+
+/**
+ * The docs package throws raw transport errors (fetch failed, parse errors).
+ * D-008 discipline: upstream failures surface as a stable capability error
+ * with an operator-facing message, never as a leaked transport detail — and
+ * the model is expected to tell the user the official material is unverified.
+ */
+async function callDocs<T>(call: () => Promise<T>): Promise<T> {
+  try {
+    return await call();
+  } catch (error) {
+    if (error instanceof CapabilityError) throw error;
+    return fail(
+      502,
+      { reason: (error as Error)?.message },
+      'D-Robotics 官方资料检索失败（网络或上游错误）；请告知用户官方资料未核对。',
+    );
+  }
 }
 
-async function fetchDocsJson(
-  path: string,
-  signal: AbortSignal,
-  docsFetchImpl?: DshDocsFetch,
-): Promise<Record<string, unknown>> {
-  const controller = new AbortController();
-  const timer = setTimeout(
-    () => controller.abort(new Error('docs_timeout')),
-    RDK_DOCS_FETCH_TIMEOUT_MS,
-  );
-  const forwardAbort = () => controller.abort();
-  signal.addEventListener('abort', forwardAbort, { once: true });
+function assertDocsUrl(url: string): string {
   try {
-    const doFetch =
-      docsFetchImpl ??
-      ((docsPath: string, docsSignal: AbortSignal) =>
-        fetch(`${RDK_DOCS_FORUM_ORIGIN}${docsPath}`, {
-          method: 'GET',
-          headers: { accept: 'application/json' },
-          signal: docsSignal,
-        }));
-    const response = await doFetch(path, controller.signal);
-    if (!response.ok) {
-      fail(502, { status: response.status }, `D-Robotics 官方资料检索失败（HTTP ${response.status}）。`);
+    const parsed = new URL(url);
+    if (parsed.protocol !== 'https:' || !RDK_DOCS_ALLOWED_HOSTS.has(parsed.hostname)) {
+      fail(400, { url }, '只允许读取 D-Robotics 官方站点（developer.d-robotics.cc / forum.d-robotics.cc）的页面。');
     }
-    const text = await response.text();
-    if (text.length > RDK_DOCS_MAX_BYTES) {
-      fail(502, { reason: 'docs_payload_too_large' }, 'D-Robotics 官方资料响应超出大小上限。');
-    }
-    try {
-      return JSON.parse(text) as Record<string, unknown>;
-    } catch {
-      return fail(502, { reason: 'docs_bad_json' }, 'D-Robotics 官方资料返回了无法解析的内容。');
-    }
+    return parsed.toString();
   } catch (error) {
-    const reason =
-      (error as Error)?.message === 'docs_timeout'
-        ? '检索超时'
-        : signal.aborted
-          ? '调用方已取消'
-          : '网络不可达';
-    return fail(504, { reason: (error as Error)?.message }, `D-Robotics 官方资料检索失败：${reason}。`);
-  } finally {
-    clearTimeout(timer);
-    signal.removeEventListener('abort', forwardAbort);
+    if (error instanceof CapabilityError) throw error;
+    return fail(400, { url }, '页面 URL 无法解析。');
   }
 }
 
@@ -385,7 +365,7 @@ function firstDeviceId(body: Record<string, unknown>): string | null {
  * unchanged; nothing here bypasses a gate.
  */
 export function createDshCapabilityHandlers(
-  options: { fetchImpl?: LoopbackFetch; docsFetchImpl?: DshDocsFetch } = {},
+  options: { fetchImpl?: LoopbackFetch; docsService?: DshDocsService } = {},
 ): DshCapabilityHandlers {
   const fetchImpl = options.fetchImpl ?? loopbackFetch();
   const run = (signal: AbortSignal) => ({
@@ -1446,65 +1426,54 @@ export function createDshCapabilityHandlers(
     async rdk_docs_search(args: unknown, exec: ToolRunContext) {
       const input = argsRecord(args);
       const query = requiredArg(input, 'query', '请提供检索关键词。');
-      const data = await fetchDocsJson(
-        `/search.json?q=${encodeURIComponent(query)}`,
-        exec.signal,
-        options.docsFetchImpl,
+      const docs = options.docsService ?? defaultDocsService;
+      const manual = argString(input, 'manual');
+      const result = await callDocs(() =>
+        docs.searchDocs({ query, ...(manual ? { manual } : {}), limit: 8 }, fetchText),
       );
-      const posts = Array.isArray(data.posts) ? data.posts : [];
-      const topics = Array.isArray(data.topics) ? data.topics : [];
-      const topicById = new Map<number, Record<string, unknown>>();
-      for (const raw of topics) {
-        const topic = objectValue(raw);
-        const id = Number(topic.id);
-        if (Number.isFinite(id)) topicById.set(id, topic);
-      }
-      const seen = new Set<number>();
-      const results: Array<{ title: string; url: string; excerpt: string }> = [];
-      for (const raw of posts) {
-        const post = objectValue(raw);
-        const topicId = Number(post.topic_id);
-        if (!Number.isFinite(topicId) || seen.has(topicId)) continue;
-        const topic = topicById.get(topicId);
-        if (!topic) continue;
-        seen.add(topicId);
-        results.push({
-          title: str(topic.title),
-          url: `${RDK_DOCS_FORUM_ORIGIN}/t/${str(topic.slug) || 'topic'}/${topicId}`,
-          excerpt: str(post.blurb).slice(0, 200),
-        });
-        if (results.length >= 6) break;
-      }
       return {
         query,
-        source: 'D-Robotics 官方社区 forum.d-robotics.cc（官方文档镜像与工程经验帖）',
-        results,
-        hint: results.length
-          ? '引用时给出来源链接；官方文档结论优先于社区经验帖。'
-          : '没有命中；建议换关键词重试，或提示用户到 developer.d-robotics.cc 浏览文档目录。',
+        hits: result.hits.map((hit) => ({
+          title: hit.title,
+          url: hit.url,
+          manual: hit.manual,
+          snippet: hit.snippet,
+          source: hit.source,
+          role: hit.role ?? null,
+        })),
+        warnings: result.warnings,
+        guidance: result.guidance,
+        hint: 'role=official-start 是官方起始页；引用时附来源链接。',
       };
     },
 
-    async rdk_docs_read(args: unknown, exec: ToolRunContext) {
-      const input = argsRecord(args);
-      const topicId = Number(input.topicId);
-      if (!Number.isFinite(topicId) || topicId <= 0) {
-        fail(400, {}, '请提供有效的 topicId（来自 rdk_docs_search 的结果）。');
-      }
-      const data = await fetchDocsJson(`/t/${topicId}.json`, exec.signal, options.docsFetchImpl);
-      const postStream = objectValue(data.post_stream);
-      const posts = Array.isArray(postStream.posts) ? postStream.posts : [];
-      const content = posts.slice(0, 5).map((raw, index) => {
-        const post = objectValue(raw);
-        const body = stripHtml(str(post.cooked)).slice(0, 1_500);
-        return `${index === 0 ? '楼主' : `${index}楼`} ${str(post.username)}：${body}`;
-      });
+    async rdk_docs_manuals(_args: unknown, _exec: ToolRunContext) {
+      const docs = options.docsService ?? defaultDocsService;
       return {
-        title: str(data.title),
-        url: `${RDK_DOCS_FORUM_ORIGIN}/t/${str(data.slug) || 'topic'}/${topicId}`,
-        content,
-        truncated: posts.length > 5,
+        manuals: docs.listManuals().map((manual) => ({
+          id: manual.id,
+          title: manual.title,
+          category: manual.category,
+          description: manual.description,
+          aliases: manual.aliases,
+          searchable: manual.searchable,
+        })),
       };
+    },
+
+    async rdk_docs_toc(args: unknown, exec: ToolRunContext) {
+      const input = argsRecord(args);
+      const manual = requiredArg(input, 'manual', '请提供手册 id（来自 rdk_docs_manuals 或检索结果的 manual 字段）。');
+      const docs = options.docsService ?? defaultDocsService;
+      const query = argString(input, 'query');
+      return callDocs(() => docs.listToc({ manual, ...(query ? { query } : {}) }, fetchText));
+    },
+
+    async rdk_docs_page(args: unknown, exec: ToolRunContext) {
+      const input = argsRecord(args);
+      const url = assertDocsUrl(requiredArg(input, 'url', '请提供页面 URL（来自检索、目录或上一轮结果）。'));
+      const docs = options.docsService ?? defaultDocsService;
+      return callDocs(() => docs.getPage({ url, maxChars: 6_000 }, fetchText));
     },
   };
 }
