@@ -142,7 +142,7 @@ function showTypingIndicator(label = '正在思考…') {
   dots.textContent = '•••';
   node.append(text, dots);
   messages.append(node);
-  messages.scrollTop = messages.scrollHeight;
+  followMessagesBottom();
   activeTypingNode = node;
 }
 
@@ -677,6 +677,51 @@ function startDshApprovalPolling(signal) {
   };
 }
 
+// 用户往上翻历史时不要把视口强行拽回底部:只有本来就贴着底部才自动跟随。
+function messagesNearBottom() {
+  if (!messages) return true;
+  return messages.scrollHeight - messages.scrollTop - messages.clientHeight < 140;
+}
+
+function followMessagesBottom() {
+  if (messages && messagesNearBottom()) messages.scrollTop = messages.scrollHeight;
+}
+
+// 渲染 Agent 回复使用的 Markdown 子集:##/### 标题、-/* 与 1. 列表、**加粗**、
+// `行内代码`。先整体转义再逐行解析,行内替换只作用于已转义文本,模型无法注入标签。
+function renderAgentMarkup(source) {
+  const escaped = String(source ?? '').replace(/[&<>"']/g, (c) => ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;' }[c]));
+  const inline = (text) => text
+    .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
+    .replace(/`([^`]+)`/g, '<code>$1</code>');
+  let html = '';
+  let listTag = null;
+  const closeList = () => {
+    if (listTag) { html += `</${listTag}>`; listTag = null; }
+  };
+  for (const rawLine of escaped.split('\n')) {
+    const line = rawLine.trim();
+    const heading = line.match(/^#{2,4}\s+(.+)$/);
+    const bullet = line.match(/^[-*]\s+(.+)$/);
+    const ordered = line.match(/^(\d+)[.、)]\s+(.+)$/);
+    if (heading) {
+      closeList();
+      html += `<strong class="agent-msg-heading">${inline(heading[1])}</strong>`;
+    } else if (bullet) {
+      if (listTag !== 'ul') { closeList(); html += '<ul>'; listTag = 'ul'; }
+      html += `<li>${inline(bullet[1])}</li>`;
+    } else if (ordered) {
+      if (listTag !== 'ol') { closeList(); html += '<ol>'; listTag = 'ol'; }
+      html += `<li>${inline(ordered[2])}</li>`;
+    } else if (line) {
+      closeList();
+      html += `${inline(line)}<br>`;
+    }
+  }
+  closeList();
+  return html.replace(/(<br)>$/, '$1>');
+}
+
 function addMessage(role, text, persist = true) {
   if (!messages) return null;
   const node = document.createElement('div');
@@ -684,15 +729,7 @@ function addMessage(role, text, persist = true) {
   node.innerHTML = `<strong>${role === 'user' ? '你' : 'Agent'}</strong><p></p>`;
   const paragraph = node.querySelector('p');
   const source = String(text ?? '');
-  // Render the small Markdown subset used by agent replies while escaping
-  // arbitrary model output first.
-  const escaped = source.replace(/[&<>"']/g, (c) => ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;' }[c]));
-  paragraph.innerHTML = escaped
-    .replace(/^###?\s+(.+)$/gm, '<strong>$1</strong>')
-    .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
-    .replace(/`([^`]+)`/g, '<code>$1</code>')
-    .replace(/\n/g, '<br>');
-  if (role === 'agent') {
+  paragraph.innerHTML = renderAgentMarkup(source);  if (role === 'agent') {
     const actions = document.createElement('div');
     actions.className = 'agent-message-actions';
     const copy = document.createElement('button');
@@ -714,11 +751,12 @@ function addMessage(role, text, persist = true) {
     actions.append(copy);
     node.append(actions);
   }
+  const stick = messagesNearBottom();
   messages.appendChild(node);
   // Agent replies stay lightweight. Feedback is available on explicit result
   // surfaces (evaluation and run details), rather than interrupting every
   // conversational turn with an accuracy prompt.
-  messages.scrollTop = messages.scrollHeight;
+  if (stick || role === 'user') messages.scrollTop = messages.scrollHeight;
   if (persist) saveMessage(role, text);
   return node;
 }
@@ -789,7 +827,7 @@ function renderTaskCard(run) {
   }
 
   messages?.appendChild(card);
-  if (messages) messages.scrollTop = messages.scrollHeight;
+  followMessagesBottom();
   return card;
 }
 
@@ -1048,7 +1086,7 @@ function choosePlanVariant(variants, fallbackPlan) {
     cancel.addEventListener('click', () => finish(null, true));
     node.append(list, cancel);
     messages?.appendChild(node);
-    if (messages) messages.scrollTop = messages.scrollHeight;
+    followMessagesBottom();
     // The pick must not strand the chat if the user navigates away: resolve
     // with no plan so runTask stops before any execute call.
     window.setTimeout(() => { if (!settled) finish(null, true); }, 120_000);
@@ -1095,7 +1133,7 @@ function chooseExecutionApproval(plan, signal) {
     actions.append(approve, cancel);
     node.append(title, detail, actions);
     messages?.append(node);
-    if (messages) messages.scrollTop = messages.scrollHeight;
+    followMessagesBottom();
   });
 }
 

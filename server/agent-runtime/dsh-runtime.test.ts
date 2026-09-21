@@ -161,12 +161,15 @@ describe('DSH runtime capability briefing section', () => {
     expect(section?.text).toContain('能力目录');
   }, 60_000);
 
-  it('contributes no briefing when the deployment binds no product handler', async () => {
+  it('keeps reply-formatting conventions but drops the catalog when no product handler is bound', async () => {
     const ctx = await composeRuntime();
 
     const assembly = await ctx.systemPrompt.assemble();
+    const section = assembly.sections.find((item) => item.name === 'rdk:capability-briefing');
 
-    expect(assembly.sections.some((item) => item.name === 'rdk:capability-briefing')).toBe(false);
+    expect(section).toBeTruthy();
+    expect(section?.text).toContain('回复排版约定');
+    expect(section?.text).not.toContain('RDK 工作台能力口径');
   }, 60_000);
 });
 

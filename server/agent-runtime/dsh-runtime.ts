@@ -100,16 +100,21 @@ export async function createDshRuntime(options: DshRuntimeOptions): Promise<Cont
     await ctx.plugin(AgentLoop, { agents: [] });
     installDshCapabilityTools(ctx, options.capabilityHandlers);
     // Tool schemas make the tools callable but say nothing about how to PRESENT
-    // the capability set; the briefing section closes that gap. Skipped when no
-    // product handler is bound, matching the schema-visible tool set.
+    // the capability set; the briefing section closes that gap. Reply-formatting
+    // conventions ride along so chat rendering stays predictable even in bare
+    // demo runs without bound product handlers.
     const briefing = capabilityBriefing(options.capabilityHandlers);
-    if (briefing) {
-      ctx.systemPrompt.section({
-        name: 'rdk:capability-briefing',
-        order: ctx.systemPrompt.getSectionOrder('DEPLOYMENT_PERSONA_SUFFIX'),
-        text: briefing,
-      });
-    }
+    const replyFormatting = [
+      '## 回复排版约定',
+      '- 聊天面板只渲染 Markdown 子集:##/### 小标题、- 或 1. 列表、**加粗**、`行内代码`。',
+      '- **加粗**只用于完整术语或关键结论,禁止对单个汉字或半句话加粗。',
+      '- 多步骤说明用列表逐条罗列;命令、路径、id、参数名一律放 `行内代码`。',
+    ].join('\n');
+    ctx.systemPrompt.section({
+      name: 'rdk:capability-briefing',
+      order: ctx.systemPrompt.getSectionOrder('DEPLOYMENT_PERSONA_SUFFIX'),
+      text: briefing ? `${briefing}\n\n${replyFormatting}` : replyFormatting,
+    });
     return ctx;
   } catch (error) {
     await ctx.fiber.dispose().catch(() => undefined);
