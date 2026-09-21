@@ -3646,12 +3646,21 @@ function renderHistory() {
   root.replaceChildren();
   if (!records.length) {
     const hasBrowserSimulator = Boolean(selectedProductProfile().simulatorPath);
-    const emptyHint = hasBrowserSimulator
-      ? '还没有运行记录。先校验契约或打开浏览器仿真。'
-      : '还没有运行记录。先登记模型契约，再发起本地或 GPU 训练。';
+    // 项目筛选会把未归属到本项目的账号级运行隐藏（projectIncludesRecord）。
+    // 这种「被筛选造成的空」必须如实说明，否则用户会误以为账号里真的
+    // 没有任何运行记录（D-002 同源的诚实性要求）。
+    const project = selectedProject();
+    const runsHiddenByProject = project
+      ? (state.overview?.runs || []).filter((run) => currentModelIds().has(run.modelId)).length
+      : 0;
+    const emptyHint = runsHiddenByProject
+      ? `当前项目「${projectDisplayName(project)}」下没有可归属的运行记录。该模型在账号内共有 ${runsHiddenByProject} 条运行，尚未关联到本项目；在项目设置里关联该模型后即可在此查看。`
+      : hasBrowserSimulator
+        ? '还没有运行记录。先校验契约或打开浏览器仿真。'
+        : '还没有运行记录。先登记模型契约，再发起本地或 GPU 训练。';
     root.innerHTML = query
       ? '<div class="empty-state records-empty"><strong>没有匹配的记录</strong><span>试试模型名、状态或后端，或清空筛选查看全部。</span><button type="button" class="button button-ghost button-small" data-empty-action="clear-search">清空搜索</button></div>'
-      : `<div class="empty-state records-empty"><strong>${emptyHint}</strong><span>每条记录都会关联当前任务、模型和时间，可从这里打开详情或进入下一步。</span><div class="records-empty-actions"><button type="button" class="button button-primary button-small" data-empty-action="simulate">打开仿真录制</button><button type="button" class="button button-ghost button-small" data-empty-action="train">去强化学习训练</button></div></div>`; // escape-audit:allow emptyHint is a local literal ternary
+      : `<div class="empty-state records-empty"><strong>${escapeHtml(emptyHint)}</strong><span>每条记录都会关联当前任务、模型和时间，可从这里打开详情或进入下一步。</span><div class="records-empty-actions"><button type="button" class="button button-primary button-small" data-empty-action="simulate">打开仿真录制</button><button type="button" class="button button-ghost button-small" data-empty-action="train">去强化学习训练</button></div></div>`; // escape-audit:allow emptyHint has been escaped via escapeHtml above
     root.querySelectorAll('[data-empty-action]').forEach((button) => button.addEventListener('click', () => {
       const action = button.dataset.emptyAction;
       if (action === 'clear-search') { const input = $('record-search'); if (input) input.value = ''; state.recordsQuery = ''; renderHistory(); return; }
