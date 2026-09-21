@@ -1221,7 +1221,13 @@ function resumeScopedPolls() {
 
 const runStatusFailures = new Map();
 let runStatusBackoffUntil = 0;
-let runStatusNoticeAt = 0;
+// 僵尸运行熔断：一个 run 连续拉取详情失败达到阈值后，暂停对该 run 的
+// 单独轮询 5 分钟（期间界面保留最后一次已知状态），并只为它弹一次
+// 降频通知。否则一个卡在 running 的死 run 会让控制台每 30 秒滚一条
+// 503、每 30 秒弹一次 toast，永远不停。
+const RUN_STATUS_DEAD_RETRY_MS = 300_000;
+const runStatusDeadUntil = new Map();
+const runStatusDeadNotified = new Set();
 
 // The workbench heartbeat: always wanted on every view, faster while a run is
 // active, backed off after run-status failures, silent (no loading chrome),
@@ -7939,29 +7945,47 @@ async function loadModelDetails(modelId = state.selectedModelId) {
 async function refreshActiveRuns() {
   const overview = state.overview;
   if (!overview?.runs?.length) return;
+  const now = Date.now();
+  for (const [deadRunId, deadUntil] of runStatusDeadUntil) {
+    if (deadUntil <= now) {
+      // 熔断窗口到期：允许再次探测，runner 可能已经恢复。
+      runStatusDeadUntil.delete(deadRunId);
+      runStatusFailures.delete(deadRunId);
+    }
+  }
   const active = runsForCurrentModel().filter((run) =>
     ['queued', 'running'].includes(String(run.status || '').toLowerCase()),
-  );
+  ).filter((run) => !runStatusDeadUntil.has(run.id));
   if (!active.length) return;
   const updates = await Promise.all(
     active.slice(0, 8).map(async (run) => {
       try {
         const payload = await request('/sim2real/runs/' + encodeURIComponent(run.id));
         runStatusFailures.delete(run.id);
+        runStatusDeadUntil.delete(run.id);
+        runStatusDeadNotified.delete(run.id);
         return payload.run || null;
       } catch (error) {
         // The API keeps the last known state and returns a retryable 503 when
         // the external runner is unavailable. Back off after repeated errors
-        // so a dead runner cannot create a tight polling loop.
+        // so a dead runner cannot create a tight polling loop. After the
+        // third failure the run itself is circuit-broken for five minutes —
+        // a zombie run stuck in "running" for days must not emit a 503 and a
+        // toast every 30 seconds forever.
         if (!(error instanceof ApiError && error.status === 401)) {
           const failures = (runStatusFailures.get(run.id) || 0) + 1;
           runStatusFailures.set(run.id, failures);
           if (failures >= 3) {
-            runStatusBackoffUntil = Math.max(runStatusBackoffUntil, Date.now() + 30_000);
-            if (Date.now() - runStatusNoticeAt > 30_000) {
-              runStatusNoticeAt = Date.now();
-              showToast('训练 runner 暂时无法返回状态，已降低轮询频率；任务未被伪造为完成', 'error');
+            // 连续三次失败：按 run 熔断 5 分钟，通知只弹一次。
+            runStatusDeadUntil.set(run.id, Date.now() + RUN_STATUS_DEAD_RETRY_MS);
+            runStatusFailures.delete(run.id);
+            if (!runStatusDeadNotified.has(run.id)) {
+              runStatusDeadNotified.add(run.id);
+              showToast('训练 runner 暂时无法返回状态，该任务已暂停轮询并保留最后已知状态；任务未被伪造为完成', 'error');
             }
+          } else {
+            // 瞬态失败（1-2 次）：保留原有的全局降频。
+            runStatusBackoffUntil = Math.max(runStatusBackoffUntil, Date.now() + 30_000);
           }
         }
         return null;

@@ -872,11 +872,13 @@ function ownerKey(owner: string | undefined): string | null {
 }
 
 function configuredStudioOrigin(): string | null {
-  return safeStudioOrigin(
-    process.env.RDK_SIM2REAL_STUDIO_ORIGIN ||
-      process.env.RDK_SIM2REAL_STUDIO_EXEC_ORIGIN ||
-      'https://rdkstudio.d-robotics.cc',
-  );
+  // No implicit default: a standalone deployment must never forward user
+  // cookies or bridge pairing payloads (SSH coordinates!) to a hardcoded
+  // production domain just because the operator did not configure anything.
+  // Studio-integrated deployments set the origin explicitly.
+  const configured =
+    process.env.RDK_SIM2REAL_STUDIO_ORIGIN || process.env.RDK_SIM2REAL_STUDIO_EXEC_ORIGIN;
+  return configured ? safeStudioOrigin(configured) : null;
 }
 
 async function visibleDevices(
@@ -2923,7 +2925,12 @@ export function createSim2RealRouter(
       void owner;
       const origin = configuredStudioOrigin();
       if (!origin) {
-        studioBridgeConfigError(response);
+        // Standalone deployments have no Studio Bridge upstream. A feature
+        // that is merely *not deployed* is not an error state: the station
+        // device manager polls this endpoint, so answer with a well-formed
+        // empty catalog instead of a recurring 5xx in the browser console.
+        noStore(response);
+        response.status(200).json({ available: false, bridges: [] });
         return;
       }
       const upstream = await fetchStudioBridgeJson(origin, '/api/local-bridge/status', request);
