@@ -13,7 +13,10 @@
 1. 子流程横幅 `#flow-context`（编号/阶段/标题/描述/目标）；
 2. 浏览器标签页标题 `document.title`（「视图 · 子项」）；
 3. 顶栏 `context-live-stage` 面包屑同步；
-4. 主面板真实切换（train/station 走模块 tab，records 走台账 tab，部署/评测聚焦面板）；
+4. 主面板真实切换且**互斥**：train/evaluate/deploy 走视图级模块切换
+   （`data-active-train-module` / `data-active-eval-module` /
+   `data-active-deploy-module`，无子项时落默认模块），records 走台账
+   tab——同一时刻只展示当前子项自己的内容；
 5. 地址锚点 `#视图/子项`，后退/前进可恢复；同级切换 replaceState 不产生垃圾历史。
 
 核心实现：`public/app.js` 的 `FLOW_CHILD_CONTEXTS` / `setView` / `setFlowChild` /
