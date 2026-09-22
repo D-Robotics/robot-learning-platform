@@ -1,0 +1,12 @@
+# Direct dependencies of the microduck-recurrent engine.
+#
+# Pinned transitively in requirements.txt (`npm run lock:engines`), keeping
+# training runs reproducible in both halves of the provenance contract: the
+# source commit names the code and the lock names the libraries.
+
+numpy==2.0.2
+torch==2.8.0
+onnx==1.19.1
+onnxruntime==1.19.2
+mujoco==3.3.7
+pytest==8.4.2

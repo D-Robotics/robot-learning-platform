@@ -1,0 +1,53 @@
+{
+  "task": "basketball-balance-recurrent",
+  "device": "cpu",
+  "observationSize": 61,
+  "actionSize": 14,
+  "numEnvs": 8,
+  "iterations": 3,
+  "stepsPerEnv": 96,
+  "lstmHidden": 256,
+  "chunkedBptt": {
+    "chunk": 16,
+    "epochs": 4
+  },
+  "curve": [
+    {
+      "iteration": 1,
+      "meanReward": 0.9401760101318359,
+      "resets": 42,
+      "survivedSteps": 726
+    },
+    {
+      "iteration": 2,
+      "meanReward": 0.9369533658027649,
+      "resets": 86,
+      "survivedSteps": 682
+    },
+    {
+      "iteration": 3,
+      "meanReward": 0.9384841918945312,
+      "resets": 131,
+      "survivedSteps": 637
+    }
+  ],
+  "resets": 131,
+  "elapsedSeconds": 0.687,
+  "checkpoint": {
+    "path": "engines/microduck-recurrent/evidence/policy-smoke.pt"
+  },
+  "export": {
+    "path": "engines/microduck-recurrent/evidence/policy-smoke.onnx",
+    "format": "onnx",
+    "opset": 17,
+    "bytes": 1628781,
+    "sha256": "73ee330978a1875709606beec309fafc17716bf3c9b547cd45de700395d37f61",
+    "recurrent": {
+      "hidden": 256,
+      "stateShape": [1, "batch", 256],
+      "stateInputs": ["h_in", "c_in"],
+      "stateOutputs": ["h_out", "c_out"]
+    },
+    "parityMaxAbsError": 1.0058283805847168e-7
+  }
+}
