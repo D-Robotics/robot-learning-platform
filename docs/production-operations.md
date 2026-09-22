@@ -40,6 +40,26 @@ fi
 sudoedit /etc/sim2real-web-runner.env
 ```
 
+## 一键部署（生产服务器）
+
+`scripts/deploy-sim2real-production.sh` 把发布固化为不可跳过的机器步骤：
+构建 → 组包（dist-server 剔除 engines 与 `engines.*.tmp` 残留 + 全新
+`npm ci --omit=dev`）→ 上传 → 服务端解压并从当前 release 拷贝 engines
+（Linux venv 只存在于服务端，绝不能被本地构建覆盖）→ **按 systemd
+ExecStart 逐一预检新 release 的入口文件**（该预检可直接拦截"漏
+mock-local-worker.mjs"这类事故）→ 切 `current` 软链 → 重启
+`sim2real-web` 与 `sim2real-mock-worker` → 健康检查，失败自动回滚到
+上一 release。
+
+```bash
+scripts/deploy-sim2real-production.sh                # 完整部署 HEAD
+scripts/deploy-sim2real-production.sh --skip-build   # 复用已有构建
+```
+
+目标主机可用 `DEPLOY_HOST` 覆盖。回滚：把
+`/opt/sim2real-web/current` 软链切回上一
+`releases/robot-learning-*` 并重启两个服务（脚本失败时已自动执行）。
+
 ## 部署后探针
 
 服务启动后，用独立 Node 进程检查 `/healthz`、`/readyz` 和 `/metrics`：
