@@ -1620,7 +1620,7 @@ function setAuthGate(payload) {
   const loginUrl = withLocalReturnTo(safeLoginUrl(
     payload && typeof payload === 'object' && typeof payload.ssoLoginUrl === 'string'
       ? payload.ssoLoginUrl
-      : '/rdkstudio/',
+      : state.publicHealth?.ssoLoginUrl || '/rdkstudio/',
   ));
   const gate = $('auth-gate');
   const loginButton = $('auth-login-button');
@@ -7793,7 +7793,7 @@ function agentSuggestionSet() {
     return {
       headline: '登录后开始你的 Sim2Real 迭代',
       summary: '助手会在工作区加载后，把模型、训练、评测和板卡状态串起来。',
-      actions: [{ label: '登录工作区', view: null, href: '/rdkstudio/' }],
+      actions: [{ label: '登录工作区', view: null, href: state.publicHealth?.ssoLoginUrl || '/rdkstudio/' }],
     };
   }
   const model = selectedModel();
@@ -10725,7 +10725,7 @@ const COMMANDS = [
   { id: 'records', label: '查看运行记录', hint: '搜索 Run、部署与遥测 · ⌘6', view: 'records' },
   { id: 'station', label: '打开设备工作台', hint: '查看 X5 连接与只读诊断 · ⌘7', view: 'station' },
   { id: 'refresh', label: '刷新工作区', hint: '重新加载项目状态与设备信息', action: () => loadOverview() },
-  { id: 'login', label: '登录工作区', hint: '前往 RDK Studio 登录，解锁训练记录与真机部署', action: () => window.open('/rdkstudio/', '_blank', 'noopener') },
+  { id: 'login', label: '登录工作区', hint: '登录以解锁训练记录与真机部署', action: () => window.open(state.publicHealth?.ssoLoginUrl || '/rdkstudio/', '_blank', 'noopener') },
   { id: 'agent', label: '呼出 Agent 助手', hint: '按当前阻塞项生成下一步计划', action: () => { if (typeof window.setAgentDrawerOpen === 'function') window.setAgentDrawerOpen(true); } },
   { id: 'onboarding', label: '重看新手指引', hint: '12 步走完整个平台', action: () => $('onboarding-help-button')?.click() },
 ];
