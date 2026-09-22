@@ -5386,6 +5386,11 @@ html.theme-dark .agent-assistant-health { max-width: 150px; }
 .view-section[data-active-train-module="resources"] .contract-fold{display:none}
 .view-section[data-active-train-module="resources"] .train-layout{display:grid}
 .view-section[data-active-train-module="resources"] .train-layout > [data-train-module="run"]{display:none}
+/* D-002 forced exclusion: #train-module-config nests inside the run
+   model-panel, so it must be hidden explicitly wherever another module is
+   active — otherwise the config form leaks into the Run/Resources views. */
+.train-layout[data-train-active-module="run"] > [data-train-module="run"] > #train-module-config,
+.train-layout[data-train-active-module="resources"] > [data-train-module="run"] > #train-module-config{display:none}
 .view-section[data-active-train-module="run"] .contract-fold,
 .view-section[data-active-train-module="run"] .compute-resources-panel{display:none}
 .view-section[data-active-train-module="config"] .contract-fold,
