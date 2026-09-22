@@ -645,5 +645,133 @@ class EngineModeTest(unittest.TestCase):
             self.assertIn("val_chunk_mse", summary)
 
 
+def quadrant_image_rows(num_episodes=8, steps=24, size=32, seed=0):
+    """Image-mode step rows: black frames drive one action, white frames the
+    opposite — the maximum-contrast pixel task. Low-contrast spatial tasks
+    (quadrant-only differences) need a pretrained backbone or a much longer
+    schedule; this task exists to prove the conv branch drives the output
+    end to end."""
+    import base64
+
+    rng = np.random.default_rng(seed)
+    rows = [{"type": "header", "format": "microduck-trajectory-v1", "source": "test"}]
+    for i in range(num_episodes):
+        bright = i % 2 == 0
+        img = np.full((size, size), 255 if bright else 0, dtype=np.uint8)
+        img = np.clip(
+            img.astype(np.int64) + rng.integers(0, 8, img.shape), 0, 255
+        ).astype(np.uint8)
+        action = [0.8, 0.3] if bright else [-0.8, -0.3]
+        for t in range(steps):
+            rows.append(
+                {
+                    "type": "step",
+                    "t": 0.02 * t,
+                    "observation": [float(t) / steps, 0.5],
+                    "action": action,
+                    "image": base64.b64encode(img.tobytes()).decode(),
+                    "done": t == steps - 1,
+                }
+            )
+    return rows
+
+
+@unittest.skipUnless(TORCH_AVAILABLE, "torch not installed")
+class ImageActTest(unittest.TestCase):
+    def test_parse_image_input_rejects_collapsing_dims(self):
+        self.assertEqual(train_act.parse_image_input("64x64"), (64, 64))
+        for bad in ("16x16", "8x8", "0x64", "abc", "64"):
+            with self.assertRaises(ValueError):
+                train_act.parse_image_input(bad)
+
+    def _load(self, rows):
+        import tempfile as _tempfile
+
+        handle = _tempfile.NamedTemporaryFile(
+            "w", suffix=".jsonl", delete=False
+        )
+        handle.write("\n".join(json.dumps(r) for r in rows) + "\n")
+        handle.close()
+        try:
+            return train_act.load_dataset(handle.name, (32, 32))
+        finally:
+            os.unlink(handle.name)
+
+    def test_image_dataset_rules_fail_closed(self):
+        import base64
+
+        good = base64.b64encode(np.zeros((32, 32), dtype=np.uint8).tobytes()).decode()
+        cases = {
+            "missing image": {"type": "step", "observation": [0.0], "action": [0.1], "done": True},
+            "not base64": {"type": "step", "observation": [0.0], "action": [0.1], "image": "!!!", "done": True},
+            "wrong bytes": {"type": "step", "observation": [0.0], "action": [0.1], "image": base64.b64encode(b"\x00" * 9).decode(), "done": True},
+        }
+        for label, row in cases.items():
+            with self.assertRaises(ValueError, msg=label):
+                self._load([row])
+
+    def test_image_act_learns_a_pixel_task(self):
+        episodes, obs_size, act_size, image_shape = self._load(
+            quadrant_image_rows(num_episodes=8)
+        )
+        self.assertEqual(image_shape, (32, 32))
+        payload, report, model, _ = tiny_fit(
+            episodes, image_shape=image_shape, epochs=2000
+        )
+        self.assertEqual(payload["format"], train_act.MODEL_FORMAT_IMAGE)
+        self.assertEqual(payload["modality"], "image+vector")
+        self.assertIsNotNone(model.image_encoder)
+        self.assertTrue(report["validation"]["enabled"])
+        self.assertLess(
+            report["validation"]["chunkMse"], 0.05,
+            "val chunk MSE %.4f on the quadrant task - the conv branch did not learn"
+            % report["validation"]["chunkMse"],
+        )
+
+    @unittest.skipUnless(ONNX_AVAILABLE, "onnx/onnxruntime not installed")
+    def test_image_onnx_export_is_nhwc_and_verified(self):
+        import onnx
+
+        episodes, _, _, image_shape = self._load(quadrant_image_rows())
+        payload, _, model, normalization = tiny_fit(
+            episodes, image_shape=image_shape, epochs=3
+        )
+        x_rows = np.concatenate([ep[0] for ep in episodes], axis=0)
+        imgs = np.concatenate([ep[2] for ep in episodes], axis=0)
+        out = pathlib.Path(tempfile.gettempdir()) / "act-image-equivalence.onnx"
+        try:
+            report = train_act.export_onnx(
+                model, normalization, out.as_posix(), x_rows,
+                image_shape=image_shape, images_check=imgs,
+            )
+            self.assertEqual(report.get("equivalence"), "verified")
+            graph = onnx.load(out.as_posix()).graph
+            names = [i.name for i in graph.input]
+            self.assertIn("image", names)
+            image_input = next(i for i in graph.input if i.name == "image")
+            shape = [d.dim_param or d.dim_value for d in image_input.type.tensor_type.shape.dim]
+            self.assertEqual(len(shape), 4, "image input must be rank-4")
+            self.assertEqual(shape[3], 1, "platform vision gate expects NHWC with fixed channels")
+            self.assertEqual(shape[1], 32)
+            self.assertEqual(shape[2], 32)
+        finally:
+            if out.exists():
+                out.unlink()
+
+    def test_image_mode_refuses_the_ensembled_export(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            ds = pathlib.Path(tmp) / "ds.jsonl"
+            write_jsonl(ds.as_posix(), quadrant_image_rows())
+            run = subprocess.run(
+                [sys.executable, ENGINE, ds.as_posix(), "--image-input", "32x32",
+                 "--out", pathlib.Path(tmp).joinpath("m.json").as_posix(),
+                 "--epochs", "2", "--ensembled-onnx",
+                 pathlib.Path(tmp).joinpath("e.onnx").as_posix()],
+                capture_output=True, text=True,
+            )
+            self.assertNotEqual(run.returncode, 0)
+            self.assertIn("ensembled", run.stderr)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

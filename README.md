@@ -77,7 +77,7 @@ Mock 的 `completed` 只表示协议演练完成，不代表真实 PPO 权重或
 | 本地 Mock 闭环 | ✅ | 无 CUDA 可跑通 API 和 UI 流程 |
 | **CPU 真实 PPO 训练（starter-ppo）** | ✅ | `npm run demo:starter`：真训练 + 真 ONNX + 遥测评测，无 GPU 依赖 |
 | **视觉观测训练（顶置相机像素 → 策略）** | ✅ | `engines/visual-ppo`：真 JAX PPO 吃 64×64 顶置相机渲染 + 板载 8D 混合观测，ONNX 导出与 JAX 前向数值等价，`npm run verify:vision-observation` |
-| **ACT 动作分块模仿** | ✅ 本地训练 / 🟡 Worker 冒烟 | Transformer + CVAE 隐变量、episode 级训练/验证划分、动作分块与时序集成；ONNX 导出带数值等价检查。CLI 接受真实轨迹，worker 当前使用合成示教数据；不代表真机动作效果或上板就绪。见 [ACT 使用说明](docs/engines/act.md) |
+| **ACT 动作分块模仿** | ✅ 本地训练 / 🟡 Worker 冒烟 | Transformer + CVAE 隐变量、episode 级训练/验证划分、动作分块与时序集成；图像观测分支（mono8 → CNN，实验性，见 [ACT 使用说明](docs/engines/act.md)）；ONNX 导出带数值等价检查。CLI 接受真实轨迹，worker 当前使用合成示教数据；不代表真机动作效果或上板就绪。 |
 | **Diffusion Policy 动作分块模仿** | ✅ 本地训练 / 🟡 Worker 冒烟 | 条件 1D UNet + DDPM（cosine 调度）+ EMA 权重，多模态示教不被平均；整个反向去噪循环固化为一张 ONNX 且逐元素等价验证。见 [Diffusion Policy 使用说明](docs/engines/diffusion-policy.md) |
 | **SmolVLA 参考适配** | 🟡 CPU 规划 / 🔌 CUDA 全量 | CPU 栈产出诚实标注的训练计划（dry-run，`metrics.dryRun=true`），完整微调需注册带 HuggingFace 栈的 CUDA worker；缺栈时明确拒绝而非假装训练。见 [SmolVLA 说明](docs/engines/smolvla.md) |
 | **LeRobot v3 数据集双向转换** | ✅ | `engines/lerobot-converter`：平台轨迹 ↔ LeRobot v3.0（meta/parquet/视频）布局，mono8 视频逐字节无损往返，v1.0 数据集拒绝并给迁移指引。见 [转换器说明](docs/engines/lerobot-converter.md) |

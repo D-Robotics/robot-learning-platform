@@ -27,6 +27,25 @@ Chunking Transformer，Zhao et al., RSS 2023）**——LeRobot 一类社区项�
 相机图像（观测向量按 1D ViT 方式切成定宽 token）、ReLU 而非 GELU、无
 dropout（确定性是平台保证）、解码 query 是可学习嵌入（与原论文一致）。
 
+## 图像观测分支（2026-09-20，实验性）
+
+`--image-input WIDTHxHEIGHT` 启用 mono8 像素分支（与 offline-bc v3 同一
+数据约定：每行 `"image": base64 mono8，恰 WIDTH×HEIGHT 字节`）：
+
+- 固定 CNN 编码器（三层 stride-2 k=4 卷积 + ReLU + GAP + LayerNorm 投影）
+  的特征**广播注入**每个观测 token——不做独立 image token：随机初始化的
+  单 token 在 attention softmax 下梯度被衰减到学不动（实测 1100 epoch
+  仍停在动作均值平台）；零初始化门控则会锁死 conv 编码器的梯度。
+- `img_head` 直连读出与 transformer 并联：给 conv 编码器一条不穿过
+  attention 的梯度通路。
+- 诚实边界：从零训练的 CNN 收敛远慢于预训练 backbone（原论文用
+  ResNet），学习型断言使用极值对比任务 + 2000 epoch 预算；低对比度
+  空间任务需要更长训练或预训练特征。
+- `--ensembled-onnx` 与 `--image-input` **互斥**（窗口 actor 需要
+  逐步图像窗口，当前未实现——拒绝而非导出半成品）；其余导出与等价
+  证明纪律不变：图像模式导出双输入 ONNX（vector + NHWC rank-4 image），
+  onnxruntime 等价校验后才落盘。
+
 ## 与其他引擎的关系
 
 | 引擎 | 学习信号 | 输出结构 | 需要 |

@@ -12,6 +12,10 @@
   （真 MuJoCo MJX 接触动力学 + 纯 JAX PPO）、dm-control（同源物理 + JAX PPO）、
   mjlab（真 rsl-rl OnPolicyRunner 迭代，kinematic 后端如实标注）等引擎门禁在
   开发机真跑 PASS；SKIP 项逐条注明原因。
+- **ACT 图像观测分支（实验性）**：`--image-input WIDTHxHEIGHT` mono8 帧 →
+  固定 CNN 编码器（GAP + LayerNorm，广播注入观测 token + 直连读出）→
+  NHWC ONNX 等价导出；`--ensembled-onnx` 与图像模式显式互斥。收敛特性
+  与诚实边界见 `docs/engines/act.md`。
 - **offline-bc 图像观测分支**（`rdk-offline-bc-v3`）：`--image-input WIDTHxHEIGHT`
   吃 mono8 像素（base64），固定三层 stride-2 CNN 编码器（纯 NumPy im2col +
   手写反传，有限差分梯度校验）+ 可选 proprio 向量拼接；导出 NHWC rank-4 ONNX

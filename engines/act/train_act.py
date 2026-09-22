@@ -53,6 +53,8 @@ provenance blocks.
 """
 
 import argparse
+import base64
+import binascii
 import json
 import math
 import os
@@ -69,6 +71,12 @@ except ImportError:  # pragma: no cover - exercised on machines without torch
     torch = None
 
 MODEL_FORMAT = "rdk-act-bc-v1"
+MODEL_FORMAT_IMAGE = "rdk-act-bc-v2"
+# Fixed image-branch encoder, mirroring offline-bc's v3 branch: three
+# stride-2 k=4 convolutions (8/16/32 channels) shrink the input 8x per side
+# before the features join the transformer tokens. Not configurable on
+# purpose - a fixed encoder keeps the ONNX graph and its proof reviewable.
+IMAGE_CONV_LAYERS = ((8, 4, 2), (16, 4, 2), (32, 4, 2))
 ENGINE_NAME = "act"
 ONNX_MISSING_HINT = "python3 -m pip install --user onnx onnxruntime"
 # An episode-level split needs enough episodes on both sides for the val
@@ -154,7 +162,32 @@ def provenance_block(used_libraries):
 # Dataset: trajectory JSONL -> episodes -> (obs, chunk) pairs.
 # ---------------------------------------------------------------------------
 
-def load_dataset(path):
+def parse_image_input(spec):
+    """`64x64` -> (width, height). Dimensions must survive the fixed
+    three-convolution encoder with a strictly positive feature map —
+    validated by simulating it, not by a looser divisibility rule that
+    16x16 would pass while producing a 0x0 map."""
+    parts = spec.lower().split("x")
+    if len(parts) != 2:
+        raise ValueError("--image-input must look like 64x64 (WIDTHxHEIGHT)")
+    try:
+        width, height = int(parts[0]), int(parts[1])
+    except ValueError:
+        raise ValueError("--image-input must be integers, got %r" % spec)
+    if width <= 0 or height <= 0:
+        raise ValueError("--image-input dimensions must be positive")
+    for _, k, stride in IMAGE_CONV_LAYERS:
+        width = (width - k) // stride + 1
+        height = (height - k) // stride + 1
+        if width <= 0 or height <= 0:
+            raise ValueError(
+                "--image-input %r collapses to a %dx%d feature map in the "
+                "fixed conv encoder; use at least 24x24" % (spec, width, height)
+            )
+    return int(parts[0]), int(parts[1])
+
+
+def load_dataset(path, image_shape=None):
     """Load a trajectory JSONL file into episodes.
 
     Chunked imitation needs temporal continuity, which the transition-only
@@ -181,6 +214,7 @@ def load_dataset(path):
     episodes = []
     current_obs = []
     current_act = []
+    current_img = []
     obs_size = None
     act_size = None
     path = pathlib.Path(path)
@@ -214,6 +248,28 @@ def load_dataset(path):
             raise ValueError("line %d: values must be numeric" % line_no)
         if any(not math.isfinite(v) for v in obs + act):
             raise ValueError("line %d: values must be finite (no NaN/Inf)" % line_no)
+        img = None
+        if image_shape is not None:
+            img = row.get("image")
+            if not isinstance(img, str):
+                raise ValueError(
+                    "line %d: image mode requires a base64 mono8 'image' on every row" % line_no
+                )
+            try:
+                decoded = base64.b64decode(img, validate=True)
+            except (binascii.Error, ValueError):
+                raise ValueError("line %d: image is not valid base64" % line_no)
+            if len(decoded) != image_shape[0] * image_shape[1]:
+                raise ValueError(
+                    "line %d: image decodes to %d bytes, expected %d (%dx%d mono8)"
+                    % (
+                        line_no,
+                        len(decoded),
+                        image_shape[0] * image_shape[1],
+                        image_shape[0],
+                        image_shape[1],
+                    )
+                )
         if obs_size is None:
             obs_size, act_size = len(obs), len(act)
         if len(obs) != obs_size or len(act) != act_size:
@@ -223,31 +279,54 @@ def load_dataset(path):
             raise ValueError("line %d: done must be a boolean" % line_no)
         current_obs.append(obs)
         current_act.append(act)
+        current_img.append(decoded if image_shape is not None else None)
         if done:
             episodes.append(
-                (np.asarray(current_obs, dtype=np.float64), np.asarray(current_act, dtype=np.float64))
+                (
+                    np.asarray(current_obs, dtype=np.float64),
+                    np.asarray(current_act, dtype=np.float64),
+                    (
+                        np.stack(
+                            [np.frombuffer(b, dtype=np.uint8) for b in current_img]
+                        ).reshape((-1, image_shape[1], image_shape[0]))
+                        if image_shape is not None
+                        else None
+                    ),
+                )
             )
-            current_obs, current_act = [], []
+            current_obs, current_act, current_img = [], [], []
     if current_obs:
         episodes.append(
-            (np.asarray(current_obs, dtype=np.float64), np.asarray(current_act, dtype=np.float64))
+            (
+                np.asarray(current_obs, dtype=np.float64),
+                np.asarray(current_act, dtype=np.float64),
+                (
+                    np.stack(
+                        [np.frombuffer(b, dtype=np.uint8) for b in current_img]
+                    ).reshape((-1, image_shape[1], image_shape[0]))
+                    if image_shape is not None
+                    else None
+                ),
+            )
         )
     if not episodes:
         raise ValueError("dataset is empty")
-    return episodes, obs_size, act_size
+    return episodes, obs_size, act_size, image_shape
 
 
-def build_chunks(episodes, chunk):
-    """Episodes -> (obs, chunk targets, episode index per chunk).
+def build_chunks(episodes, chunk, image_shape=None):
+    """Episodes -> (obs, chunk targets, episode index per chunk[, images]).
 
     Episodes shorter than the chunk length cannot yield a training pair and
     are skipped — counted, not hidden: the report says how many episodes
     were dropped so a dataset of 20 episodes of 3 steps each never looks
     like a working dataset.
     """
-    xs, ys, episode_of = [], [], []
+    xs, ys, episode_of, imgs = [], [], [], []
     skipped = 0
-    for episode_idx, (obs, act) in enumerate(episodes):
+    for episode_idx, ep in enumerate(episodes):
+        obs, act = ep[0], ep[1]
+        ep_imgs = ep[2] if len(ep) > 2 else None
         steps = obs.shape[0]
         if steps < chunk:
             skipped += 1
@@ -256,18 +335,23 @@ def build_chunks(episodes, chunk):
             xs.append(obs[t])
             ys.append(act[t : t + chunk].reshape(-1))
             episode_of.append(episode_idx)
+            if image_shape is not None:
+                imgs.append(ep_imgs[t])
     if not xs:
         raise ValueError(
             "no episode reaches the chunk length (%d): every episode is shorter "
             "than the chunk, so there is not a single (observation -> future "
             "chunk) pair to train on" % chunk
         )
-    return (
+    result = [
         np.asarray(xs, dtype=np.float64),
         np.asarray(ys, dtype=np.float64),
         np.asarray(episode_of, dtype=np.int64),
         skipped,
-    )
+    ]
+    if image_shape is not None:
+        result.append(np.stack(imgs).astype(np.float64))
+    return tuple(result)
 
 
 def split_episodes(num_episodes, val_fraction, seed):
@@ -378,13 +462,54 @@ if torch is not None:
             x = x + self.ffn_down(torch.relu(self.ffn_up(self.norm_ffn(x))))
             return x
 
+    class ImageEncoder(nn.Module):
+        """Fixed mono8 CNN encoder: three stride-2 k=4 convolutions + ReLU,
+        then a linear projection to d_model. Pixel normalization is folded in
+        as buffers (train-split scalars) so the exported graph is the whole
+        preprocessing. Input is NCHW [B,1,H,W]; the NHWC->NCHW transpose for
+        the platform vision gate lives in the export wrapper."""
+
+        def __init__(self, height, width, d_model):
+            super().__init__()
+            channels = 1
+            h, w = height, width
+            convs = []
+            for filters, k, stride in IMAGE_CONV_LAYERS:
+                convs.append(nn.Conv2d(channels, filters, k, stride))
+                channels = filters
+                h = (h - k) // stride + 1
+                w = (w - k) // stride + 1
+            self.convs = nn.ModuleList(convs)
+            # Global average pooling instead of flatten: the fixed encoder
+            # targets global appearance (brightness distribution, colors) —
+            # GAP keeps those linearly separable at 32 features instead of
+            # diluting them across a 1152-dim spatial flatten that trains
+            # orders of magnitude slower from scratch.
+            self.flat = channels
+            self.proj = nn.Linear(self.flat, d_model)
+            # Raw conv features come out an order of magnitude below the obs
+            # tokens (~0.02 vs ~1), so attention learns to ignore the image
+            # token and the branch never trains. Normalizing the projected
+            # features puts them on the token-space scale the transformer
+            # already operates in.
+            self.out_norm = nn.LayerNorm(d_model)
+            self.register_buffer("pix_mean", torch.zeros(1))
+            self.register_buffer("pix_std", torch.ones(1))
+
+        def forward(self, img_nchw):
+            x = (img_nchw - self.pix_mean) / self.pix_std
+            for conv in self.convs:
+                x = torch.relu(conv(x))
+            x = x.mean(dim=(2, 3))
+            return self.out_norm(self.proj(x.reshape(x.shape[0], -1)))
+
     class ActModel(nn.Module):
         """CVAE ACT: obs tokens + style token -> encoder; chunk queries ->
         decoder -> per-horizon actions. Training samples z from the encoder
         posterior; deterministic decode (used for eval/export) uses z=0."""
 
         def __init__(self, obs_size, act_size, chunk, d_model, heads, enc_layers,
-                     dec_layers, z_dim, token_width):
+                     dec_layers, z_dim, token_width, image_encoder=None):
             super().__init__()
             if d_model % heads != 0:
                 raise ValueError("d_model must be divisible by heads")
@@ -397,10 +522,12 @@ if torch is not None:
             self.token_width = token_width
             self.token_count = (obs_size + token_width - 1) // token_width
             padded = self.token_count * token_width
+            self.image_encoder = image_encoder
 
             self.token_embed = nn.Linear(token_width, d_model)
             self.position = nn.Parameter(torch.zeros(self.token_count, d_model))
             self.z_embed = nn.Linear(z_dim, d_model)
+            self.expects_image = image_encoder is not None
             self.encoder = nn.ModuleList(
                 [EncoderLayer(d_model, heads, 4 * d_model) for _ in range(enc_layers)]
             )
@@ -409,46 +536,76 @@ if torch is not None:
                 [DecoderLayer(d_model, heads, 4 * d_model) for _ in range(dec_layers)]
             )
             self.head = nn.Linear(d_model, act_size)
+            # Direct linear readout from the image features to the action
+            # chunk: the transformer route attenuates a weak conv feature by
+            # attention softmax before it reaches the head, so image-only
+            # signals train orders of magnitude slower through it. This
+            # readout gives the conv encoder a gradient path that does not
+            # pass through attention at all (a zero-init here would cut the
+            # conv encoder's gradient to exactly zero and deadlock it).
+            self.img_head = (
+                nn.Linear(d_model, act_size) if image_encoder is not None else None
+            )
             self._padded = padded
             # Posterior encoder: (obs, target chunk) -> (mu, logvar). Only
             # used while training; deterministic decode never calls it.
             self.posterior = nn.Sequential(
-                nn.Linear(obs_size + chunk * act_size, 2 * d_model),
+                nn.Linear(
+                    obs_size + chunk * act_size + (d_model if image_encoder is not None else 0),
+                    2 * d_model,
+                ),
                 nn.ReLU(),
                 nn.Linear(2 * d_model, 2 * z_dim),
             )
 
-        def _tokens(self, obs):
+        def _tokens(self, obs, img_feat=None):
             batch = obs.shape[0]
             pad = torch.zeros(
                 batch, self._padded, dtype=obs.dtype, device=obs.device
             )
             pad[:, : self.obs_size] = obs
             tokens = pad.reshape(batch, self.token_count, self.token_width)
-            return self.token_embed(tokens) + self.position
+            tokens = self.token_embed(tokens) + self.position
+            if img_feat is not None:
+                # Broadcast injection: the frame features add into EVERY obs
+                # token, so the vision gradient reaches the encoder directly
+                # instead of depending on attention learning to route through
+                # one token among many.
+                tokens = tokens + img_feat.unsqueeze(1)
+            return tokens
 
-        def encode_posterior(self, obs, chunk_targets):
-            flat = torch.cat([obs, chunk_targets.reshape(chunk_targets.shape[0], -1)], dim=1)
-            stats = self.posterior(flat)
+        def encode_posterior(self, obs, chunk_targets, img_feat=None):
+            parts = [obs]
+            if img_feat is not None:
+                parts.append(img_feat)
+            parts.append(chunk_targets.reshape(chunk_targets.shape[0], -1))
+            stats = self.posterior(torch.cat(parts, dim=1))
             mu, logvar = stats.chunk(2, dim=-1)
             return mu, logvar
 
-        def decode(self, obs, z):
-            """Deterministic path: obs -> chunk of actions (normalized space)."""
-            memory = torch.cat([self._tokens(obs), self.z_embed(z).unsqueeze(1)], dim=1)
+        def decode(self, obs, z, img_feat=None):
+            """Deterministic path: obs (+image) -> chunk of actions (normalized)."""
+            memory = torch.cat(
+                [self._tokens(obs, img_feat), self.z_embed(z).unsqueeze(1)], dim=1
+            )
             for layer in self.encoder:
                 memory = layer(memory)
             x = self.queries.unsqueeze(0).expand(obs.shape[0], -1, -1)
             for layer in self.decoder:
                 x = layer(x, memory)
-            return self.head(x)
+            out = self.head(x)
+            if img_feat is not None:
+                # Same image contribution at every horizon (the frame is the
+                # one this step was issued with).
+                out = out + self.img_head(img_feat).unsqueeze(1)
+            return out
 
-        def forward(self, obs, chunk_targets=None, z=None, z_noise=None):
+        def forward(self, obs, chunk_targets=None, z=None, z_noise=None, img_feat=None):
             """Training path: sample z from the posterior when a target is
             given (reparameterized with caller-supplied noise so the sample
             stream is reproducible); otherwise decode with the provided z."""
             if chunk_targets is not None:
-                mu, logvar = self.encode_posterior(obs, chunk_targets)
+                mu, logvar = self.encode_posterior(obs, chunk_targets, img_feat)
                 std = torch.exp(0.5 * logvar)
                 eps = (
                     z_noise
@@ -456,14 +613,14 @@ if torch is not None:
                     else torch.randn(mu.shape, dtype=mu.dtype, device=mu.device)
                 )
                 z = mu + std * eps
-                chunk_pred = self.decode(obs, z)
+                chunk_pred = self.decode(obs, z, img_feat)
                 kl = -0.5 * torch.mean(
                     torch.sum(1.0 + logvar - mu * mu - torch.exp(logvar), dim=-1)
                 )
                 return chunk_pred, kl
             return self.decode(obs, z if z is not None else torch.zeros(
                 obs.shape[0], self.z_dim, dtype=obs.dtype, device=obs.device
-            ))
+            ), img_feat)
 
     class DeterministicActor(nn.Module):
         """Export/eval wrapper: normalization folded in at the observation,
@@ -485,6 +642,7 @@ if torch is not None:
         def __init__(self, model, obs_mean, obs_std, act_mean, act_std):
             super().__init__()
             self.model = model
+            self.expects_image = model.image_encoder is not None
             # Chunk normalization statistics are estimated on the flattened
             # (chunk*act) target; the prediction is (batch, chunk, act), so
             # the buffers are reshaped once here to broadcast correctly.
@@ -497,11 +655,23 @@ if torch is not None:
                 "act_std", act_std.reshape(1, model.chunk, model.act_size)
             )
 
-        def forward(self, observation):
+        def forward(self, observation, image=None):
             normalized = (observation - self.obs_mean) / self.obs_std
+            img_feat = None
+            if self.expects_image:
+                if image is None:
+                    raise ValueError("this policy was trained with images; the image input is required")
+                # The platform vision gate expects an NHWC rank-4 image input;
+                # the conv stack itself runs NCHW.
+                img_nchw = image.permute(0, 3, 1, 2).contiguous()
+                img_feat = self.model.image_encoder(img_nchw)
+            elif image is not None:
+                raise ValueError("this policy has no image branch; pass vector observations only")
             chunk = self.model.decode(
-                normalized, torch.zeros(observation.shape[0], self.model.z_dim,
-                                        dtype=observation.dtype, device=observation.device)
+                normalized,
+                torch.zeros(observation.shape[0], self.model.z_dim,
+                            dtype=observation.dtype, device=observation.device),
+                img_feat,
             )
             return (chunk * self.act_std + self.act_mean).clamp(-1.0, 1.0)
 
@@ -563,10 +733,16 @@ if torch is not None:
         parameters of the rebuilt graph via load_state_dict.
         """
         arch = payload["architecture"]
+        image_encoder = None
+        image_block = payload.get("imageInput")
+        if image_block:
+            image_encoder = ImageEncoder(
+                image_block["height"], image_block["width"], arch["dModel"]
+            )
         model = ActModel(
             payload["observation_size"], payload["action_size"], payload["chunk"],
             arch["dModel"], arch["heads"], arch["encLayers"], arch["decLayers"],
-            arch["zDim"], arch["tokenWidth"],
+            arch["zDim"], arch["tokenWidth"], image_encoder,
         )
         state = {
             name: torch.as_tensor(np.asarray(value), dtype=torch.float32)
@@ -665,7 +841,8 @@ class IncrementalEnsembler:
 # ---------------------------------------------------------------------------
 
 def fit(episodes, chunk, d_model, heads, enc_layers, dec_layers, z_dim,
-        token_width, kl_weight, epochs, lr, batch_size, seed, val_fraction):
+        token_width, kl_weight, epochs, lr, batch_size, seed, val_fraction,
+        image_shape=None):
     """Split by episode, standardize on the train side, train, score.
 
     Returns (payload, report, model, normalization). The payload's `state`
@@ -676,7 +853,12 @@ def fit(episodes, chunk, d_model, heads, enc_layers, dec_layers, z_dim,
         raise RuntimeError("torch is not installed")
     obs_size = episodes[0][0].shape[1]
     act_size = episodes[0][1].shape[1]
-    x, y, episode_of, skipped = build_chunks(episodes, chunk)
+    if image_shape is not None:
+        chunks = build_chunks(episodes, chunk, image_shape)
+        x, y, episode_of, skipped, imgs = chunks
+    else:
+        x, y, episode_of, skipped = build_chunks(episodes, chunk)
+        imgs = None
     num_episodes = len(episodes)
 
     if val_fraction > 0:
@@ -700,10 +882,40 @@ def fit(episodes, chunk, d_model, heads, enc_layers, dec_layers, z_dim,
     obs_mean, obs_std = standardize(x_train)
     act_mean, act_std = standardize(y_train)
 
+    img_train_n = None
+    img_val = None
+    img_all = None
+    pixel_norm = None
+    if image_shape is not None:
+        # Pixel statistics on the TRAIN split only - same honesty rule as the
+        # vector standardization above.
+        pix_mean = float(imgs[train_mask].mean())
+        pix_std = float(imgs[train_mask].std())
+        if pix_std < 1e-12:
+            pix_std = 1.0
+        pixel_norm = (pix_mean, pix_std)
+        img_train_n = torch.from_numpy(
+            ((imgs[train_mask] - pix_mean) / pix_std).astype(np.float32)
+        ).unsqueeze(1)  # NCHW for the conv stack
+        img_val = torch.from_numpy(
+            ((imgs[val_mask] - pix_mean) / pix_std).astype(np.float32)
+        ).unsqueeze(1)
+        img_all = torch.from_numpy(
+            ((imgs - pix_mean) / pix_std).astype(np.float32)
+        ).unsqueeze(1)
+
     torch.set_num_threads(1)
     torch.manual_seed(seed)
+    image_encoder = (
+        ImageEncoder(image_shape[1], image_shape[0], d_model)
+        if image_shape is not None
+        else None
+    )
+    if image_encoder is not None:
+        image_encoder.pix_mean.fill_(pixel_norm[0])
+        image_encoder.pix_std.fill_(pixel_norm[1])
     model = ActModel(obs_size, act_size, chunk, d_model, heads, enc_layers,
-                     dec_layers, z_dim, token_width)
+                     dec_layers, z_dim, token_width, image_encoder)
     model.float()
     optimizer = torch.optim.Adam(model.parameters(), lr=lr)
 
@@ -717,22 +929,38 @@ def fit(episodes, chunk, d_model, heads, enc_layers, dec_layers, z_dim,
     rows = x_train_n.shape[0]
     batch_size = min(batch_size, rows)
     kl_last = 0.0
+    decode_only_step = True
     model.train()
     for _ in range(epochs):
         order = torch.randperm(rows, generator=shuffle_rng)
         for start in range(0, rows, batch_size):
             batch = order[start : start + batch_size]
             xb, yb = x_train_n[batch], y_train_n[batch]
+            ib = img_train_n[batch] if img_train_n is not None else None
+            img_feat = model.image_encoder(ib) if ib is not None else None
             # The z-sampling noise is drawn from a dedicated stream so
             # posterior sampling is reproducible independent of shuffling.
             z_noise = torch.randn(xb.shape[0], z_dim, generator=z_rng)
-            chunk_pred, kl = model(xb, chunk_targets=yb, z_noise=z_noise)
+            if img_feat is not None and decode_only_step:
+                # Alternating decode-only steps close the CVAE z-smuggling
+                # loophole: through the posterior, z can copy image (and
+                # target) information into training, so the shared decode
+                # path never has to learn to read the image tokens — while
+                # deterministic z=0 decode is the exact path deployment
+                # runs. Every other step trains the decode path with z=0.
+                chunk_pred = model.decode(xb, torch.zeros_like(z_noise), img_feat)
+                kl = torch.zeros(())
+            else:
+                chunk_pred, kl = model(
+                    xb, chunk_targets=yb, z_noise=z_noise, img_feat=img_feat
+                )
             loss = torch.mean((chunk_pred - yb.reshape(chunk_pred.shape)) ** 2)
             loss = loss + kl_weight * kl
             optimizer.zero_grad()
             loss.backward()
             optimizer.step()
             kl_last = float(kl.detach())
+        decode_only_step = not decode_only_step
 
     # ---- Scoring, in RAW action units (what a robot would execute). ----
     # Chunk statistics live on the flattened (chunk*act) target, so
@@ -741,19 +969,24 @@ def fit(episodes, chunk, d_model, heads, enc_layers, dec_layers, z_dim,
     act_std_cube = act_std.reshape(1, chunk, act_size)
     model.eval()
     with torch.no_grad():
-        def raw_chunk_mse(xs, ys):
+        def raw_chunk_mse(xs, ys, imgs=None):
             """Prediction in (rows, chunk, act) RAW action units plus the
             flat MSE over every element."""
             if xs.shape[0] == 0:
                 return None, None
-            pred = model(torch.from_numpy(((xs - obs_mean) / obs_std).astype(np.float32)))
+            xn = torch.from_numpy(((xs - obs_mean) / obs_std).astype(np.float32))
+            if imgs is not None:
+                img_feat = model.image_encoder(imgs)
+                pred = model.decode(xn, torch.zeros(xn.shape[0], model.z_dim), img_feat)
+            else:
+                pred = model(xn)
             pred = pred.numpy() * act_std_cube + act_mean_cube
             flat = pred.reshape(pred.shape[0], -1)
             return float(np.mean((flat - ys) ** 2)), pred
 
-        train_mse, _ = raw_chunk_mse(x_train, y_train)
+        train_mse, _ = raw_chunk_mse(x_train, y_train, img_train_n)
         if val_mask.any():
-            val_mse, val_pred = raw_chunk_mse(x_val, y_val)
+            val_mse, val_pred = raw_chunk_mse(x_val, y_val, img_val)
             y_val_cube = y_val.reshape(-1, chunk, act_size)
             per_horizon = [
                 float(np.mean((val_pred[:, h, :] - y_val_cube[:, h, :]) ** 2))
@@ -771,11 +1004,20 @@ def fit(episodes, chunk, d_model, heads, enc_layers, dec_layers, z_dim,
         if len(val_episodes):
             sq_ens, sq_first, total = 0.0, 0.0, 0
             for ep in val_episodes:
-                obs_e, act_e = episodes[ep]
+                obs_e, act_e = episodes[ep][0], episodes[ep][1]
+                imgs_e = episodes[ep][2] if len(episodes[ep]) > 2 else None
                 if obs_e.shape[0] < chunk:
                     continue
                 steps = obs_e.shape[0] - chunk + 1
-                pred = model(torch.from_numpy(((obs_e[:steps] - obs_mean) / obs_std).astype(np.float32)))
+                xn = torch.from_numpy(((obs_e[:steps] - obs_mean) / obs_std).astype(np.float32))
+                if imgs_e is not None:
+                    img_n = torch.from_numpy(
+                        ((imgs_e[:steps] - pixel_norm[0]) / pixel_norm[1]).astype(np.float32)
+                    ).unsqueeze(1)
+                    img_feat = model.image_encoder(img_n)
+                    pred = model.decode(xn, torch.zeros(xn.shape[0], model.z_dim), img_feat)
+                else:
+                    pred = model(xn)
                 pred = pred.numpy() * act_std_cube + act_mean_cube  # (steps, k, act)
                 truth = act_e[:steps]  # action at step t is chunk[t, 0]
                 ens = ensemble_predictions(pred)
@@ -787,7 +1029,8 @@ def fit(episodes, chunk, d_model, heads, enc_layers, dec_layers, z_dim,
                 first_action_mse = sq_first / total
 
     payload = {
-        "format": MODEL_FORMAT,
+        "format": MODEL_FORMAT_IMAGE if image_shape is not None else MODEL_FORMAT,
+        "modality": "image+vector" if image_shape is not None else "vector",
         "observation_size": int(obs_size),
         "action_size": int(act_size),
         "chunk": int(chunk),
@@ -803,6 +1046,14 @@ def fit(episodes, chunk, d_model, heads, enc_layers, dec_layers, z_dim,
         },
         "state": _state_to_lists(model),
     }
+    if image_shape is not None:
+        payload["imageInput"] = {
+            "width": int(image_shape[0]),
+            "height": int(image_shape[1]),
+            "channels": 1,
+            "encoding": "mono8",
+            "sourceRange": [0, 255],
+        }
     report = {
         "trainChunkMse": train_mse,
         "validation": {
@@ -835,12 +1086,16 @@ def fit(episodes, chunk, d_model, heads, enc_layers, dec_layers, z_dim,
 # ONNX export with proof.
 # ---------------------------------------------------------------------------
 
-def export_onnx(model, normalization, path, x_check):
+def export_onnx(model, normalization, path, x_check, image_shape=None, images_check=None):
     """Export the deterministic actor and PROVE it against the torch forward.
 
     onnxruntime runs the exported graph on real dataset rows and compares
     against `DeterministicActor` (both float32). A mismatch deletes the
     file and fails the run — an unverified export is never kept.
+
+    Image mode exports a two-input graph: the vector observation plus an
+    NHWC rank-4 image input [N,H,W,1] (the platform vision gate's shape
+    convention); the NHWC->NCHW transpose is part of the traced graph.
     """
     if torch is None:
         raise RuntimeError("torch is not installed")
@@ -859,6 +1114,23 @@ def export_onnx(model, normalization, path, x_check):
     )
     actor.eval()
     dummy = torch.zeros(1, model.obs_size, dtype=torch.float32)
+    width, height = image_shape if image_shape is not None else (0, 0)
+    if image_shape is not None:
+        dummy_image = torch.zeros(1, height, width, 1, dtype=torch.float32)
+        export_inputs = (dummy, dummy_image)
+        input_names = ["observation", "image"]
+        dynamic = {
+            "observation": {0: "batch"},
+            "image": {0: "batch"},
+            "chunk_actions": {0: "batch"},
+        }
+    else:
+        export_inputs = (dummy,)
+        input_names = ["observation"]
+        dynamic = {
+            "observation": {0: "batch"},
+            "chunk_actions": {0: "batch"},
+        }
     import warnings
 
     with warnings.catch_warnings():
@@ -867,14 +1139,11 @@ def export_onnx(model, normalization, path, x_check):
         warnings.filterwarnings("ignore", category=DeprecationWarning)
         torch.onnx.export(
             actor,
-            (dummy,),
+            export_inputs,
             path,
-            input_names=["observation"],
+            input_names=input_names,
             output_names=["chunk_actions"],
-            dynamic_axes={
-                "observation": {0: "batch"},
-                "chunk_actions": {0: "batch"},
-            },
+            dynamic_axes=dynamic,
             opset_version=17,
         )
     data = pathlib.Path(path).read_bytes()
@@ -888,9 +1157,19 @@ def export_onnx(model, normalization, path, x_check):
         pathlib.Path(path).as_posix(), providers=["CPUExecutionProvider"]
     )
     rows = x_check[:EQUIVALENCE_ROWS].astype(np.float32)
+    row_count = rows.shape[0]
     with torch.no_grad():
-        expected = actor(torch.from_numpy(rows)).numpy()
-    actual = session.run(["chunk_actions"], {"observation": rows})[0]
+        if image_shape is not None:
+            img_rows = images_check[:row_count].astype(np.float32)
+            feeds_image = img_rows.reshape(img_rows.shape[0], height, width, 1)
+            expected = actor(
+                torch.from_numpy(rows), torch.from_numpy(feeds_image)
+            ).numpy()
+            feeds = {"observation": rows, "image": feeds_image}
+        else:
+            expected = actor(torch.from_numpy(rows)).numpy()
+            feeds = {"observation": rows}
+    actual = session.run(["chunk_actions"], feeds)[0]
     worst = float(np.max(np.abs(expected - actual)))
     if worst >= EQUIVALENCE_ATOL:
         pathlib.Path(path).unlink()
@@ -1192,7 +1471,7 @@ def run_engine_mode():
         z_dim=4, token_width=8, kl_weight=10.0, epochs=epochs, lr=1e-3,
         batch_size=32, seed=0, val_fraction=0.25,
     )
-    x_rows = np.concatenate([obs for obs, _ in episodes], axis=0)
+    x_rows = np.concatenate([ep[0] for ep in episodes], axis=0)
     model_path = pathlib.Path("model.json")
     onnx_report = export_onnx(model, normalization, "policy.onnx", x_rows)
     # The differentiating artifacts: window-ensembled ONNX + measured edge
@@ -1298,6 +1577,14 @@ def main():
     )
     parser.add_argument("--onnx", default=None, help="optional ONNX export path")
     parser.add_argument(
+        "--image-input",
+        default=None,
+        help="enable the image branch: WIDTHxHEIGHT (e.g. 64x64) mono8 frames "
+        'in every step row\'s "image" field (base64), fused as an extra '
+        "encoder token next to the vector observation. Mutually exclusive "
+        "with --ensembled-onnx",
+    )
+    parser.add_argument(
         "--ensembled-onnx", default=None,
         help="optional window-ensembled ONNX export path (last-k observations "
              "-> blended action; the graph IS the temporal ensembling)",
@@ -1335,19 +1622,34 @@ def main():
     _positive(args.z_dim, "z-dim")
     _positive(args.token_width, "token-width")
 
-    episodes, obs_size, act_size = load_dataset(args.dataset)
+    episodes, obs_size, act_size, image_shape = load_dataset(
+        args.dataset, parse_image_input(args.image_input) if args.image_input else None
+    )
+    if image_shape is not None and args.ensembled_onnx:
+        raise ValueError(
+            "--ensembled-onnx is not available for image policies yet: the "
+            "window actor would need per-step image windows. Refusing rather "
+            "than exporting a partially-specified graph"
+        )
     payload, report, model, normalization = fit(
         episodes, args.chunk, args.d_model, args.heads, args.enc_layers,
         args.dec_layers, args.z_dim, args.token_width, args.kl_weight,
         args.epochs, args.lr, args.batch, args.seed, args.val_fraction,
+        image_shape,
     )
 
     onnx_report = None
     x_rows = None
+    img_rows = None
     if args.onnx or args.ensembled_onnx or args.edge_evidence:
-        x_rows = np.concatenate([obs for obs, _ in episodes], axis=0)
+        x_rows = np.concatenate([ep[0] for ep in episodes], axis=0)
+        if image_shape is not None:
+            img_rows = np.concatenate([ep[2] for ep in episodes], axis=0)
     if args.onnx:
-        onnx_report = export_onnx(model, normalization, args.onnx, x_rows)
+        onnx_report = export_onnx(
+            model, normalization, args.onnx, x_rows,
+            image_shape=image_shape, images_check=img_rows,
+        )
         state = onnx_report.get("equivalence")
         if state == "skipped-no-onnx":
             print("[act] ONNX export skipped: onnx not installed (%s)" % ONNX_MISSING_HINT)
@@ -1403,7 +1705,8 @@ def main():
     print(
         json.dumps(
             {
-                "format": MODEL_FORMAT,
+                "format": payload["format"],
+                "modality": payload["modality"],
                 "train_chunk_mse": report["trainChunkMse"],
                 "val_chunk_mse": report["validation"]["chunkMse"],
                 "validation": report["validation"]["enabled"],
