@@ -46,7 +46,11 @@ describe('user-center session cookie', () => {
   });
 
   it('rejects an expired cookie', () => {
-    const cookie = createUserCenterSessionCookieValue(principal, SESSION_SECRET, Date.now() - 15 * 24 * 60 * 60 * 1000);
+    const cookie = createUserCenterSessionCookieValue(
+      principal,
+      SESSION_SECRET,
+      Date.now() - 15 * 24 * 60 * 60 * 1000,
+    );
     expect(verifyUserCenterSessionCookieValue(cookie, SESSION_SECRET)).toBeNull();
   });
 });
@@ -109,10 +113,24 @@ describe('user-center auth routes', () => {
 
   it('callback exchanges the code, verifies the jwt and issues a session cookie', async () => {
     const { privateKey, publicKey } = crypto.generateKeyPairSync('rsa', { modulusLength: 2048 });
-    const _jwk = { ...(publicKey.export({ format: 'jwk' }) as Record<string, unknown>), kid: 'k1', alg: 'RS256', use: 'sig' };
+    const _jwk = {
+      ...(publicKey.export({ format: 'jwk' }) as Record<string, unknown>),
+      kid: 'k1',
+      alg: 'RS256',
+      use: 'sig',
+    };
     const header = Buffer.from(JSON.stringify({ alg: 'RS256', kid: 'k1' })).toString('base64url');
-    const payload = Buffer.from(JSON.stringify({ iss: 'user-center', sub: 'uc-user-9', name: '张三', exp: Math.floor(Date.now() / 1000) + 600 })).toString('base64url');
-    const signature = crypto.sign('RSA-SHA256', Buffer.from(`${header}.${payload}`), privateKey).toString('base64url');
+    const payload = Buffer.from(
+      JSON.stringify({
+        iss: 'user-center',
+        sub: 'uc-user-9',
+        name: '张三',
+        exp: Math.floor(Date.now() / 1000) + 600,
+      }),
+    ).toString('base64url');
+    const signature = crypto
+      .sign('RSA-SHA256', Buffer.from(`${header}.${payload}`), privateKey)
+      .toString('base64url');
     const token = `${header}.${payload}.${signature}`;
 
     let exchangedUrl = '';
@@ -154,10 +172,10 @@ describe('user-center auth routes', () => {
       .slice(1)
       .join('=');
     void stateCookie;
-    const callback = await fetch(
-      `${base}/api/sim2real/auth/uc/callback?code=abc&state=st`,
-      { redirect: 'manual', headers: { cookie: 'rdk_sim2real_uc_state=st' } },
-    );
+    const callback = await fetch(`${base}/api/sim2real/auth/uc/callback?code=abc&state=st`, {
+      redirect: 'manual',
+      headers: { cookie: 'rdk_sim2real_uc_state=st' },
+    });
     expect(callback.status).toBe(302);
     expect(callback.headers.get('location')).toBe('/');
     const sessionCookie = (callback.headers.get('set-cookie') ?? '')
@@ -174,10 +192,10 @@ describe('user-center auth routes', () => {
   it('does not mint a session when jwt verification fails', async () => {
     const { app } = makeApp(async () => null);
     const base = await listen(app);
-    const callback = await fetch(
-      `${base}/api/sim2real/auth/uc/callback?code=abc&state=st`,
-      { redirect: 'manual', headers: { cookie: 'rdk_sim2real_uc_state=st' } },
-    );
+    const callback = await fetch(`${base}/api/sim2real/auth/uc/callback?code=abc&state=st`, {
+      redirect: 'manual',
+      headers: { cookie: 'rdk_sim2real_uc_state=st' },
+    });
     expect(callback.status).toBe(401);
     expect(callback.headers.get('set-cookie') ?? '').not.toContain('rdk_sim2real_uc_session=');
   });

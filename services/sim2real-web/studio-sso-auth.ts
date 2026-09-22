@@ -59,7 +59,9 @@ const activeAuth: Sim2RealAuthPort =
   authMode === 'trusted-proxy'
     ? trustedProxyAuth
     : authMode === 'user-center'
-      ? (userCenterAuthConfigured() ? userCenterAuth : standaloneAuth)
+      ? userCenterAuthConfigured()
+        ? userCenterAuth
+        : standaloneAuth
       : authMode === 'studio-cookie' && studioCookieAuthConfigured()
         ? studioCookieAuth
         : standaloneAuth;
@@ -71,7 +73,8 @@ export function studioSsoAdapterConfigured(): boolean {
   return false;
 }
 
-export function studioSsoAdapterMode(): 'standalone' | 'trusted-proxy' | 'user-center' | 'studio-cookie' {
+export function studioSsoAdapterMode():
+  'standalone' | 'trusted-proxy' | 'user-center' | 'studio-cookie' {
   if (authMode === 'user-center' && !userCenterAuthConfigured()) return 'standalone';
   return authMode === 'studio-cookie' && !studioCookieAuthConfigured() ? 'standalone' : authMode;
 }

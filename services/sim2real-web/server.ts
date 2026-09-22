@@ -735,7 +735,11 @@ export function createSim2RealWebApp(): Express {
       const error = String(request.query.error ?? '');
       response
         .type('html')
-        .send(renderStudioDirectLoginPage(['missing', 'invalid', 'unavailable'].includes(error) ? error : undefined));
+        .send(
+          renderStudioDirectLoginPage(
+            ['missing', 'invalid', 'unavailable'].includes(error) ? error : undefined,
+          ),
+        );
     });
     void loginUrl;
   }

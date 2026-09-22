@@ -1,9 +1,6 @@
 import express from 'express';
 import { afterEach, describe, expect, it } from 'vitest';
-import {
-  createStudioDirectRelay,
-  renderStudioDirectLoginPage,
-} from './studio-direct-relay.js';
+import { createStudioDirectRelay, renderStudioDirectLoginPage } from './studio-direct-relay.js';
 
 const ENV_KEYS = [
   'RDK_STUDIO_COOKIE_SECRET',

@@ -367,7 +367,6 @@ describe('DSH capability handlers', () => {
   });
 });
 
-
 describe('DSH docs knowledge tools (rdk-docs-mcp backed)', () => {
   const exec = { signal: new AbortController().signal } as never;
   const officialPage = {
@@ -476,7 +475,13 @@ describe('DSH web search tool (free Bing tier)', () => {
     const handlers = createDshCapabilityHandlers({
       webSearch: async (query) => {
         seen.push(query);
-        return [{ title: 'Isaac Lab', url: 'https://github.com/isaac-sim/IsaacLab', snippet: 'release notes' }];
+        return [
+          {
+            title: 'Isaac Lab',
+            url: 'https://github.com/isaac-sim/IsaacLab',
+            snippet: 'release notes',
+          },
+        ];
       },
     });
     const result = (await handlers.rdk_web_search({ query: 'Isaac Lab 最新版本' }, exec)) as {
@@ -485,7 +490,10 @@ describe('DSH web search tool (free Bing tier)', () => {
       hint: string;
     };
     expect(seen).toEqual(['Isaac Lab 最新版本']);
-    expect(result.results[0]).toMatchObject({ title: 'Isaac Lab', url: 'https://github.com/isaac-sim/IsaacLab' });
+    expect(result.results[0]).toMatchObject({
+      title: 'Isaac Lab',
+      url: 'https://github.com/isaac-sim/IsaacLab',
+    });
     expect(result.hint).toContain('非官方');
   });
 

@@ -106,7 +106,11 @@ export function createStudioDirectRelay(deps: StudioDirectRelayDeps = {}) {
       return {
         status: 502,
         setCookies: [],
-        body: { ok: false, error: 'SIM2REAL_STUDIO_RELAY_FAILED', message: '登录服务暂时不可用，请稍后重试。' },
+        body: {
+          ok: false,
+          error: 'SIM2REAL_STUDIO_RELAY_FAILED',
+          message: '登录服务暂时不可用，请稍后重试。',
+        },
         redirect: '/login?error=unavailable',
       };
     }
@@ -117,7 +121,11 @@ export function createStudioDirectRelay(deps: StudioDirectRelayDeps = {}) {
       return {
         status: 502,
         setCookies: [],
-        body: { ok: false, error: 'SIM2REAL_STUDIO_RELAY_FAILED', message: '登录服务未返回会话，请稍后重试。' },
+        body: {
+          ok: false,
+          error: 'SIM2REAL_STUDIO_RELAY_FAILED',
+          message: '登录服务未返回会话，请稍后重试。',
+        },
         redirect: '/login?error=unavailable',
       };
     }
@@ -139,11 +147,16 @@ export function createStudioDirectRelay(deps: StudioDirectRelayDeps = {}) {
     try {
       return await relay(userName, password);
     } catch (error) {
-      const reason = error instanceof Error && error.name === 'TimeoutError' ? '登录服务超时' : '登录服务不可达';
+      const reason =
+        error instanceof Error && error.name === 'TimeoutError' ? '登录服务超时' : '登录服务不可达';
       return {
         status: 502,
         setCookies: [],
-        body: { ok: false, error: 'SIM2REAL_STUDIO_RELAY_FAILED', message: `${reason}，请稍后重试。` },
+        body: {
+          ok: false,
+          error: 'SIM2REAL_STUDIO_RELAY_FAILED',
+          message: `${reason}，请稍后重试。`,
+        },
         redirect: '/login?error=unavailable',
       };
     }
@@ -164,12 +177,16 @@ export function createStudioDirectRelay(deps: StudioDirectRelayDeps = {}) {
         });
         return;
       }
-      const userName = String(request.body?.userName ?? '').trim().slice(0, 160);
+      const userName = String(request.body?.userName ?? '')
+        .trim()
+        .slice(0, 160);
       const password = String(request.body?.password ?? '').slice(0, 256);
       if (!userName || !password) {
-        response
-          .status(400)
-          .json({ ok: false, error: 'SIM2REAL_INVALID_CREDENTIALS', message: '请输入账号与密码。' });
+        response.status(400).json({
+          ok: false,
+          error: 'SIM2REAL_INVALID_CREDENTIALS',
+          message: '请输入账号与密码。',
+        });
         return;
       }
       const outcome = await runWithGuards(request, userName, password);
@@ -183,7 +200,9 @@ export function createStudioDirectRelay(deps: StudioDirectRelayDeps = {}) {
         response.redirect(302, '/login?error=unavailable');
         return;
       }
-      const userName = String(request.body?.userName ?? '').trim().slice(0, 160);
+      const userName = String(request.body?.userName ?? '')
+        .trim()
+        .slice(0, 160);
       const password = String(request.body?.password ?? '').slice(0, 256);
       if (!userName || !password) {
         response.redirect(302, '/login?error=missing');
@@ -192,7 +211,11 @@ export function createStudioDirectRelay(deps: StudioDirectRelayDeps = {}) {
       const outcome = await runWithGuards(request, userName, password);
       applyCookies(response, outcome);
       if (outcome.status === 200) response.redirect(302, '/');
-      else response.redirect(302, `/login?error=${outcome.redirect?.split('error=')[1] ?? 'unavailable'}`);
+      else
+        response.redirect(
+          302,
+          `/login?error=${outcome.redirect?.split('error=')[1] ?? 'unavailable'}`,
+        );
     },
   };
 }

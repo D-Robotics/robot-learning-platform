@@ -66,7 +66,9 @@ export function userCenterAuthConfigured(): boolean {
  * UI 默认的 /rdkstudio/（Studio 同域 SSO）。
  */
 export function ssoLoginUrlForDeployment(): string | null {
-  const mode = String(process.env.RDK_SIM2REAL_AUTH_MODE || '').trim().toLowerCase();
+  const mode = String(process.env.RDK_SIM2REAL_AUTH_MODE || '')
+    .trim()
+    .toLowerCase();
   return mode === 'user-center' ? USER_CENTER_LOGIN_PATH : null;
 }
 
@@ -140,7 +142,10 @@ export type UserCenterAuth = Sim2RealAuthPort & {
 
 export function createUserCenterAuth(options?: {
   docsVerify?: (token: string) => Promise<VerifiedUserCenterJwt | null>;
-  tokenExchange?: (url: string, body: URLSearchParams) => Promise<{ ok: boolean; status: number; json: () => Promise<unknown> }>;
+  tokenExchange?: (
+    url: string,
+    body: URLSearchParams,
+  ) => Promise<{ ok: boolean; status: number; json: () => Promise<unknown> }>;
 }): UserCenterAuth {
   const config = readUserCenterAuthConfig();
   const sessionSecret = config.sessionSecret;
@@ -162,7 +167,9 @@ export function createUserCenterAuth(options?: {
       return { ok: response.ok, status: response.status, json: () => response.json() };
     });
 
-  const principalFromVerified = (verified: { claims: Record<string, unknown> }): Sim2RealPrincipal | null => {
+  const principalFromVerified = (verified: {
+    claims: Record<string, unknown>;
+  }): Sim2RealPrincipal | null => {
     const claims = verified.claims;
     const accountId = String(claims.sub ?? claims.user_id ?? claims.userId ?? '').trim();
     if (!accountId) return null;
@@ -250,20 +257,26 @@ export function createUserCenterAuth(options?: {
           return;
         }
         const redirectUri = new URL(config.callbackPath, `https://${request.hostname}`).toString();
-        void tokenExchange(new URL('/oauth2/token', config.ssoBase).toString(), new URLSearchParams({
-          grant_type: 'authorization_code',
-          code,
-          redirect_uri: redirectUri,
-          client_id: config.clientId,
-          client_secret: config.clientSecret,
-        }))
+        void tokenExchange(
+          new URL('/oauth2/token', config.ssoBase).toString(),
+          new URLSearchParams({
+            grant_type: 'authorization_code',
+            code,
+            redirect_uri: redirectUri,
+            client_id: config.clientId,
+            client_secret: config.clientSecret,
+          }),
+        )
           .then(async (exchange) => {
             if (!exchange.ok) {
               response.status(502).send('登录验证未完成：User Center token 交换失败。');
               return;
             }
-            const payload = (await exchange.json().catch(() => null)) as { access_token?: unknown } | null;
-            const accessToken = typeof payload?.access_token === 'string' ? payload.access_token : '';
+            const payload = (await exchange.json().catch(() => null)) as {
+              access_token?: unknown;
+            } | null;
+            const accessToken =
+              typeof payload?.access_token === 'string' ? payload.access_token : '';
             const verified = accessToken ? await docsVerify(accessToken) : null;
             if (!verified) {
               response.status(401).send('登录验证失败：access token 未通过签名校验。');
@@ -275,15 +288,12 @@ export function createUserCenterAuth(options?: {
               return;
             }
             const cookieValue = createUserCenterSessionCookieValue(principal, sessionSecret);
-            response.setHeader(
-              'set-cookie',
-              [
-                `${USER_CENTER_SESSION_COOKIE}=${cookieValue}; Path=/; Max-Age=${Math.floor(SESSION_TTL_MS / 1000)}; HttpOnly; SameSite=Lax${
-                  request.protocol === 'https' ? '; Secure' : ''
-                }`,
-                'rdk_sim2real_uc_state=; Path=/; Max-Age=0; HttpOnly',
-              ],
-            );
+            response.setHeader('set-cookie', [
+              `${USER_CENTER_SESSION_COOKIE}=${cookieValue}; Path=/; Max-Age=${Math.floor(SESSION_TTL_MS / 1000)}; HttpOnly; SameSite=Lax${
+                request.protocol === 'https' ? '; Secure' : ''
+              }`,
+              'rdk_sim2real_uc_state=; Path=/; Max-Age=0; HttpOnly',
+            ]);
             response.redirect(302, '/');
           })
           .catch(() => {

@@ -58,7 +58,8 @@ export function isWebCloudDeployment(): boolean {
  * cookie secret is present (the default-configurable path); any other value
  * must be set explicitly.
  */
-export function resolveStandaloneAuthMode(): 'studio-cookie' | 'trusted-proxy' | 'user-center' | 'standalone' {
+export function resolveStandaloneAuthMode():
+  'studio-cookie' | 'trusted-proxy' | 'user-center' | 'standalone' {
   const raw = String(process.env.RDK_SIM2REAL_AUTH_MODE ?? '')
     .trim()
     .toLowerCase();
@@ -354,7 +355,9 @@ export function isSSORequired(): boolean {
       '1' ||
     String(process.env.RDK_STUDIO_DEPLOYMENT_PROFILE || '').trim() === 'web-cloud' ||
     ['trusted-proxy', 'user-center'].includes(
-      String(process.env.RDK_SIM2REAL_AUTH_MODE || '').trim().toLowerCase(),
+      String(process.env.RDK_SIM2REAL_AUTH_MODE || '')
+        .trim()
+        .toLowerCase(),
     )
   );
 }

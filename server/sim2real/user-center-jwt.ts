@@ -61,9 +61,7 @@ function configuredJwksUrl(): string {
 }
 
 function configuredIssuer(): string {
-  return (
-    String(process.env.RDK_SIM2REAL_UC_JWT_ISSUER || DEFAULT_ISSUER).trim() || DEFAULT_ISSUER
-  );
+  return String(process.env.RDK_SIM2REAL_UC_JWT_ISSUER || DEFAULT_ISSUER).trim() || DEFAULT_ISSUER;
 }
 
 function decodeJson(segment: string): Record<string, unknown> | null {
@@ -83,7 +81,9 @@ function parseJwt(accessToken: string): {
   signingInput: Buffer;
   signature: Buffer;
 } | null {
-  const parts = String(accessToken || '').trim().split('.');
+  const parts = String(accessToken || '')
+    .trim()
+    .split('.');
   if (parts.length !== 3 || parts.some((part) => !part)) return null;
   const header = decodeJson(parts[0]);
   const claims = decodeJson(parts[1]) as UserCenterClaims | null;
@@ -103,7 +103,12 @@ function parseJwt(accessToken: string): {
   };
 }
 
-let fetchImpl: ((url: string, init?: { headers?: Record<string, string>; signal?: AbortSignal }) => Promise<Response>) | null = null;
+let fetchImpl:
+  | ((
+      url: string,
+      init?: { headers?: Record<string, string>; signal?: AbortSignal },
+    ) => Promise<Response>)
+  | null = null;
 
 /** Test seam: inject a fake JWKS transport; pass null to restore global fetch. */
 export function setUserCenterJwtFetchForTests(
@@ -122,7 +127,9 @@ async function fetchJwks(): Promise<JsonWebKeyLike[]> {
   const contentType = String(response.headers.get('content-type') || '').toLowerCase();
   if (!contentType.includes('application/json')) throw new Error('JWKS response is not JSON');
   const body = (await response.json()) as JwksDocument;
-  const keys = Array.isArray(body?.keys) ? body.keys.filter((key) => key && typeof key === 'object') : [];
+  const keys = Array.isArray(body?.keys)
+    ? body.keys.filter((key) => key && typeof key === 'object')
+    : [];
   if (keys.length === 0) throw new Error('JWKS has no keys');
   return keys;
 }
@@ -162,7 +169,9 @@ function validNumericDate(value: unknown): number | null {
   return Number.isFinite(number) ? number : null;
 }
 
-export async function verifyUserCenterJwt(accessToken: string): Promise<VerifiedUserCenterJwt | null> {
+export async function verifyUserCenterJwt(
+  accessToken: string,
+): Promise<VerifiedUserCenterJwt | null> {
   const parsed = parseJwt(accessToken);
   if (!parsed) return null;
   const alg = String(parsed.header.alg || '').trim();

@@ -31,7 +31,8 @@ const source = readFileSync(ENTRY, 'utf8');
 const linkPattern = /\[[^\]]+\]\((\.[^)]+)\)/g;
 for (const match of source.matchAll(linkPattern)) {
   const target = path.resolve(ROOT, match[1].split('#')[0]);
-  if (!existsSync(target)) problems.push(`dead link: ${match[1]} -> ${path.relative(ROOT, target)} 不存在`);
+  if (!existsSync(target))
+    problems.push(`dead link: ${match[1]} -> ${path.relative(ROOT, target)} 不存在`);
 }
 
 // ---- 2+3. commands in fenced code blocks must be real ----
@@ -40,12 +41,16 @@ const scripts = pkg.scripts ?? {};
 const fenced = [...source.matchAll(/```(?:bash|sh)?\n([\s\S]*?)```/g)].map((m) => m[1]);
 for (const block of fenced) {
   for (const raw of block.split('\n')) {
-    const line = raw.trim().replace(/^#\s*\S.*$/, '').trim();
+    const line = raw
+      .trim()
+      .replace(/^#\s*\S.*$/, '')
+      .trim();
     if (!line || line.startsWith('#')) continue;
     const npmRun = line.match(/^(?:npm run|yarn run)\s+([^\s]+)$/);
     if (npmRun) {
       const script = npmRun[1];
-      if (!(script in scripts)) problems.push(`dead command: npm run ${script} 不在 package.json scripts 中`);
+      if (!(script in scripts))
+        problems.push(`dead command: npm run ${script} 不在 package.json scripts 中`);
       continue;
     }
     const nodeFile = line.match(/^node\s+([^\s]+\.mjs)$/);

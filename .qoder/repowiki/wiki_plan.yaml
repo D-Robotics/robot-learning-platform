@@ -2,76 +2,76 @@ version: 1
 
 repowiki:
   # 工程平台，以架构/代码分析骨架组织
-  template: "architecture"
+  template: 'architecture'
 
   notes:
-    - text: "平台身份：RDK-X5/S600 × MicroDuck 的机器人学习工作台，覆盖仿真录制、多引擎强化学习训练、Sim2Real 评测、制品签发与受控部署。真实主链路：工作台(services/sim2real-web/public) → standalone 服务(server.ts, 默认 127.0.0.1:18102) → server/routes/sim2real-routes.ts → server/sim2real/* 台账 → engines/* 训练引擎 → local-training-worker / mock-local-worker → local-board-agent.mjs(X5 板端)。"
-      author: "d-robotics"
-    - text: "工作台 UI 为无框架原生 JS：8 个视图(data-view-section) + 11 个侧边栏流程子项(data-flow-child)。子项是真实子界面状态：子流程横幅 #flow-context、页签标题 document.title、顶栏 context-live-stage、模块切换与 #视图/子项 地址锚点必须一致联动，核心逻辑在 app.js 的 FLOW_CHILD_CONTEXTS / setView / setFlowChild / clearFlowChild。"
-      author: "d-robotics"
-    - text: "UI IA 由 ui-ia.spec.mjs 锁定（8 视图、侧边栏分组结构）；改动视图/导航结构必须在同一提交更新其断言。改 UI 前先跑 node services/sim2real-web/ui-ia.spec.mjs（毫秒级）。"
-      author: "d-robotics"
-    - text: "tokens.css 是唯一调色板与字阶真源（:root 浅色 / html.theme-dark 暗色双区）。app.css 中 hex 字面量、font-size 字面量、断点值全部清零并由 ui-layout-invariants.mjs 棘轮锁定（只许收紧）；新增颜色必须进 token。引用新 token 名前先全仓 grep 是否为已引用但未定义的历史名（var() 静默回退会骗过所有人，案例：--ink 被占用，实际新增改名 --warm-ink）。"
-      author: "d-robotics"
-    - text: "app.css 是 11 个历史样式层合并而成的单文件，层横幅注释（/* === xxx.css — */）与跨层选择器预算同样被棘轮锁定，不得新增层、不得写坏横幅注释。"
-      author: "d-robotics"
-    - text: "起第二个服务实例必须用独立的 RDK_SIM2REAL_STORAGE_DIR 隔离账本；ui-train-journey.spec.mjs 等浏览器 sweep 每次运行都会注册模型并写入账本，必须逐次重建全新存储目录，并需要 web+worker 两件套（mock worker 默认 19090，经 RDK_SIM2REAL_LOCAL_RUNNER_URL 接线）。"
-      author: "d-robotics"
-    - text: "RDK/地瓜官方事实（X5/S600 规格、TROS、Model Zoo、烧录、量化）不硬编码进本仓库：用 rdk-docs 技能查 developer.d-robotics.cc，或 WebSearch 并附来源链接。文档写查询方式而不是查询结果。"
-      author: "d-robotics"
-    - text: "板端安全边界：预检为 NO MOTOR 只读；策略代码目录 /opt/rdk-board-agent 与策略文件 /root/rdk-board-agent/policies 刻意分离；工作台前端永远不直接驱动电机。"
-      author: "d-robotics"
-    - text: "本仓库常有多个 coding 会话并发工作：他人 WIP 不清理、不覆盖、不混入自己的提交；同文件交错用 git apply --cached 分块提交。结论必须绑定命令输出等证据，不注水。"
-      author: "d-robotics"
+    - text: '平台身份：RDK-X5/S600 × MicroDuck 的机器人学习工作台，覆盖仿真录制、多引擎强化学习训练、Sim2Real 评测、制品签发与受控部署。真实主链路：工作台(services/sim2real-web/public) → standalone 服务(server.ts, 默认 127.0.0.1:18102) → server/routes/sim2real-routes.ts → server/sim2real/* 台账 → engines/* 训练引擎 → local-training-worker / mock-local-worker → local-board-agent.mjs(X5 板端)。'
+      author: 'd-robotics'
+    - text: '工作台 UI 为无框架原生 JS：8 个视图(data-view-section) + 11 个侧边栏流程子项(data-flow-child)。子项是真实子界面状态：子流程横幅 #flow-context、页签标题 document.title、顶栏 context-live-stage、模块切换与 #视图/子项 地址锚点必须一致联动，核心逻辑在 app.js 的 FLOW_CHILD_CONTEXTS / setView / setFlowChild / clearFlowChild。'
+      author: 'd-robotics'
+    - text: 'UI IA 由 ui-ia.spec.mjs 锁定（8 视图、侧边栏分组结构）；改动视图/导航结构必须在同一提交更新其断言。改 UI 前先跑 node services/sim2real-web/ui-ia.spec.mjs（毫秒级）。'
+      author: 'd-robotics'
+    - text: 'tokens.css 是唯一调色板与字阶真源（:root 浅色 / html.theme-dark 暗色双区）。app.css 中 hex 字面量、font-size 字面量、断点值全部清零并由 ui-layout-invariants.mjs 棘轮锁定（只许收紧）；新增颜色必须进 token。引用新 token 名前先全仓 grep 是否为已引用但未定义的历史名（var() 静默回退会骗过所有人，案例：--ink 被占用，实际新增改名 --warm-ink）。'
+      author: 'd-robotics'
+    - text: 'app.css 是 11 个历史样式层合并而成的单文件，层横幅注释（/* === xxx.css — */）与跨层选择器预算同样被棘轮锁定，不得新增层、不得写坏横幅注释。'
+      author: 'd-robotics'
+    - text: '起第二个服务实例必须用独立的 RDK_SIM2REAL_STORAGE_DIR 隔离账本；ui-train-journey.spec.mjs 等浏览器 sweep 每次运行都会注册模型并写入账本，必须逐次重建全新存储目录，并需要 web+worker 两件套（mock worker 默认 19090，经 RDK_SIM2REAL_LOCAL_RUNNER_URL 接线）。'
+      author: 'd-robotics'
+    - text: 'RDK/地瓜官方事实（X5/S600 规格、TROS、Model Zoo、烧录、量化）不硬编码进本仓库：用 rdk-docs 技能查 developer.d-robotics.cc，或 WebSearch 并附来源链接。文档写查询方式而不是查询结果。'
+      author: 'd-robotics'
+    - text: '板端安全边界：预检为 NO MOTOR 只读；策略代码目录 /opt/rdk-board-agent 与策略文件 /root/rdk-board-agent/policies 刻意分离；工作台前端永远不直接驱动电机。'
+      author: 'd-robotics'
+    - text: '本仓库常有多个 coding 会话并发工作：他人 WIP 不清理、不覆盖、不混入自己的提交；同文件交错用 git apply --cached 分块提交。结论必须绑定命令输出等证据，不注水。'
+      author: 'd-robotics'
 
   documents:
     - title: 平台总览与主链路
-      goal: "90 秒讲清产品身份、真实调用链（工作台→服务→台账→引擎→板端）与仓库导航；与根目录 AGENTS.md 保持一致的口径但更完整。"
+      goal: '90 秒讲清产品身份、真实调用链（工作台→服务→台账→引擎→板端）与仓库导航；与根目录 AGENTS.md 保持一致的口径但更完整。'
     - title: 工作台前端（sim2real-web）
-      goal: "无框架前端的结构与约束。"
+      goal: '无框架前端的结构与约束。'
       children:
         - title: 视图与导航体系
-          goal: "8 视图 + 11 流程子项的子界面状态机制：FLOW_CHILD_CONTEXTS、setView/setFlowChild/clearFlowChild、页签标题与面包屑联动、地址锚点与历史记录约定。"
+          goal: '8 视图 + 11 流程子项的子界面状态机制：FLOW_CHILD_CONTEXTS、setView/setFlowChild/clearFlowChild、页签标题与面包屑联动、地址锚点与历史记录约定。'
         - title: 设计系统与 CSS 门禁
-          goal: "tokens.css 双主题结构、字阶 token、11 样式层来源；ui-layout-invariants.mjs 各道棘轮（hex/字号/断点/跨层/z-index）的语义与收紧流程。"
+          goal: 'tokens.css 双主题结构、字阶 token、11 样式层来源；ui-layout-invariants.mjs 各道棘轮（hex/字号/断点/跨层/z-index）的语义与收紧流程。'
         - title: 行为测试与门禁套件
-          goal: "ui-ia / ui-responsive / ui-workbench-path / ui-train-journey 各 spec 验证什么、怎么本地运行（含服务与隔离存储前置条件）；vitest 行为套件清单。"
+          goal: 'ui-ia / ui-responsive / ui-workbench-path / ui-train-journey 各 spec 验证什么、怎么本地运行（含服务与隔离存储前置条件）；vitest 行为套件清单。'
     - title: 服务端与存储
-      goal: "standalone 服务与数据可追溯。"
+      goal: 'standalone 服务与数据可追溯。'
       children:
         - title: 服务与 HTTP 契约
-          goal: "server.ts 装配、sim2real-routes 路由面、/healthz /readyz 探针、鉴权模式与部署形态（standalone vs Studio 集成）。"
+          goal: 'server.ts 装配、sim2real-routes 路由面、/healthz /readyz 探针、鉴权模式与部署形态（standalone vs Studio 集成）。'
         - title: 台账与存储隔离
-          goal: "owner-scoped ledger、writer-lease、RDK_SIM2REAL_STORAGE_DIR 隔离、备份与恢复（docs/production-operations.md 对应）。"
+          goal: 'owner-scoped ledger、writer-lease、RDK_SIM2REAL_STORAGE_DIR 隔离、备份与恢复（docs/production-operations.md 对应）。'
     - title: 训练引擎体系
-      goal: "从任务包到训练执行。"
+      goal: '从任务包到训练执行。'
       children:
         - title: 引擎注册与任务包
-          goal: "engines/ 各引擎（microduck-rl、offline-bc、act、diffusion-policy、smolvla 等）的接入契约、recommendedEngine 注入、scripts/verify-* 验收方式。"
+          goal: 'engines/ 各引擎（microduck-rl、offline-bc、act、diffusion-policy、smolvla 等）的接入契约、recommendedEngine 注入、scripts/verify-* 验收方式。'
         - title: 训练 worker
-          goal: "local-training-worker 与 mock-local-worker 的职责、RDK_SIM2REAL_TRAIN_ENGINES_JSON 命名引擎注册、web↔worker 接线与常见故障（engine_not_registered、worker 挂死表现为 run 卡 queued）。"
+          goal: 'local-training-worker 与 mock-local-worker 的职责、RDK_SIM2REAL_TRAIN_ENGINES_JSON 命名引擎注册、web↔worker 接线与常见故障（engine_not_registered、worker 挂死表现为 run 卡 queued）。'
     - title: 板端与硬件交付
-      goal: "X5 真机链路。"
+      goal: 'X5 真机链路。'
       children:
         - title: board agent 与部署闸门
-          goal: "local-board-agent 能力面、只读预检（NO MOTOR）、上线闸门、代码与策略目录分离、真机证据要求（docs/host-station.md、docs/arm-drive.md）。"
+          goal: 'local-board-agent 能力面、只读预检（NO MOTOR）、上线闸门、代码与策略目录分离、真机证据要求（docs/host-station.md、docs/arm-drive.md）。'
         - title: D6A 机械臂执行器
-          goal: "profiles/rdk-x5-d6a-arm.json、arm kind 校验、rdk_board_arm_* 工具与真机验收清单。"
+          goal: 'profiles/rdk-x5-d6a-arm.json、arm kind 校验、rdk_board_arm_* 工具与真机验收清单。'
     - title: 运维与发布
-      goal: "把平台跑起来、发出去。"
+      goal: '把平台跑起来、发出去。'
       children:
         - title: 部署与运维
-          goal: "standalone systemd 部署、配置门禁 verify-production-config、探针、备份恢复、日志（docs/production-operations.md、docs/operations.md）。"
+          goal: 'standalone systemd 部署、配置门禁 verify-production-config、探针、备份恢复、日志（docs/production-operations.md、docs/operations.md）。'
         - title: 发布清单与质量评分
-          goal: "公开发布阻塞项、软件门槛与现场验收的评分口径（docs/release-checklist.md、docs/quality-scorecard.md、docs/roadmap.md）。"
+          goal: '公开发布阻塞项、软件门槛与现场验收的评分口径（docs/release-checklist.md、docs/quality-scorecard.md、docs/roadmap.md）。'
 
 knowledgecard:
   notes:
-    - text: "四大模块边界（模块划分先验）：① 工作台前端 = services/sim2real-web/public/*（无框架 JS/CSS/HTML）；② 服务端 = services/sim2real-web/server.ts + server/routes/sim2real-routes.ts + server/sim2real/*；③ 训练引擎 = engines/* 与 scripts/verify-*；④ 板端与硬件 = services/sim2real-web/local-board-agent.mjs + profiles/*。跨模块改动需要同时更新对应文档与门禁。"
-      author: "d-robotics"
-    - text: "UI 门禁与测试文件清单（当前事实以文件本身为准）：ui-layout-invariants.mjs（棘轮唯一真源）、ui-ia.spec.mjs（IA 锁）、ui-responsive.spec.mjs（真实浏览器 11 视口）、ui-workbench-path.spec.mjs（21 项挂载检查）、ui-train-journey.spec.mjs（登记模型→训练→完成全旅程，需全新账本+worker）；vitest 行为套件在 services/sim2real-web/*.test.ts。"
-      author: "d-robotics"
-    - text: "外部知识策略：RDK/地瓜官方事实用 rdk-docs 技能（developer.d-robotics.cc）或 WebSearch 查询并附来源；不把易漂移的规格数字硬编码进文档或知识卡。本机网络 403/CONNECT denied 先查 Squid 代理白名单（squid-proxy-403-fix 技能）。"
-      author: "d-robotics"
-    - text: "根目录 AGENTS.md 是研发 Agent 的 90 秒导航入口（产品身份、变更归属、验证命令、不可破坏边界），知识卡与它保持同一口径；两者冲突时以源码、门禁脚本运行输出为准。"
-      author: "d-robotics"
+    - text: '四大模块边界（模块划分先验）：① 工作台前端 = services/sim2real-web/public/*（无框架 JS/CSS/HTML）；② 服务端 = services/sim2real-web/server.ts + server/routes/sim2real-routes.ts + server/sim2real/*；③ 训练引擎 = engines/* 与 scripts/verify-*；④ 板端与硬件 = services/sim2real-web/local-board-agent.mjs + profiles/*。跨模块改动需要同时更新对应文档与门禁。'
+      author: 'd-robotics'
+    - text: 'UI 门禁与测试文件清单（当前事实以文件本身为准）：ui-layout-invariants.mjs（棘轮唯一真源）、ui-ia.spec.mjs（IA 锁）、ui-responsive.spec.mjs（真实浏览器 11 视口）、ui-workbench-path.spec.mjs（21 项挂载检查）、ui-train-journey.spec.mjs（登记模型→训练→完成全旅程，需全新账本+worker）；vitest 行为套件在 services/sim2real-web/*.test.ts。'
+      author: 'd-robotics'
+    - text: '外部知识策略：RDK/地瓜官方事实用 rdk-docs 技能（developer.d-robotics.cc）或 WebSearch 查询并附来源；不把易漂移的规格数字硬编码进文档或知识卡。本机网络 403/CONNECT denied 先查 Squid 代理白名单（squid-proxy-403-fix 技能）。'
+      author: 'd-robotics'
+    - text: '根目录 AGENTS.md 是研发 Agent 的 90 秒导航入口（产品身份、变更归属、验证命令、不可破坏边界），知识卡与它保持同一口径；两者冲突时以源码、门禁脚本运行输出为准。'
+      author: 'd-robotics'
