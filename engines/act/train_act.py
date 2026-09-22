@@ -656,6 +656,10 @@ if torch is not None:
             )
 
         def forward(self, observation, image=None):
+            # Numpy in, tensor out: the onnxruntime equivalence probe and the
+            # edge-feasibility meter both hand the actor raw arrays, and the
+            # required dtype must not depend on the runtime's interop mood.
+            observation = torch.as_tensor(observation)
             normalized = (observation - self.obs_mean) / self.obs_std
             img_feat = None
             if self.expects_image:

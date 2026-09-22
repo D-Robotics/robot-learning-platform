@@ -77,12 +77,16 @@ jobs:
       - name: Install Python training stacks (CPU)
         # Engine gates used to SKIP on CI (numpy only); a real training round
         # per engine is worth the wheel download. CPU wheels keep it small.
+        # Versions are pinned to the combination verified on the dev machine
+        # (torch 2.9's new exporter needs onnxscript; 2.8 + onnx 1.19 uses
+        # the legacy exporter these engines' proofs were validated with).
         run: |
           python3 -m pip install --disable-pip-version-check --no-cache-dir numpy==2.0.2
           python3 -m pip install --disable-pip-version-check --no-cache-dir \
-            --index-url https://download.pytorch.org/whl/cpu torch
+            --index-url https://download.pytorch.org/whl/cpu torch==2.8.0
           python3 -m pip install --disable-pip-version-check --no-cache-dir \
-            onnx onnxruntime "jax[cpu]" dm_control rsl-rl-lib==2.2.3
+            onnx==1.19.1 onnxruntime==1.19.2 "jax[cpu]==0.11.1" \
+            "mujoco==3.13.0" "dm_control==1.0.46" rsl-rl-lib==2.2.3
       - name: Engine gates
         run: npm run verify:ci:engines
 
