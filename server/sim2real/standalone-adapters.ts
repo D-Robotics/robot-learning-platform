@@ -58,12 +58,13 @@ export function isWebCloudDeployment(): boolean {
  * cookie secret is present (the default-configurable path); any other value
  * must be set explicitly.
  */
-export function resolveStandaloneAuthMode(): 'studio-cookie' | 'trusted-proxy' | 'standalone' {
+export function resolveStandaloneAuthMode(): 'studio-cookie' | 'trusted-proxy' | 'user-center' | 'standalone' {
   const raw = String(process.env.RDK_SIM2REAL_AUTH_MODE ?? '')
     .trim()
     .toLowerCase();
   if (raw === 'trusted-proxy') return 'trusted-proxy';
   if (raw === 'standalone') return 'standalone';
+  if (raw === 'user-center') return 'user-center';
   if (raw === 'studio-cookie') return 'studio-cookie';
   return studioCookieAuthConfigured() ? 'studio-cookie' : 'standalone';
 }
@@ -352,9 +353,9 @@ export function isSSORequired(): boolean {
     String(process.env.RDK_SIM2REAL_SSO_REQUIRED || process.env.SSO_REQUIRED || '').trim() ===
       '1' ||
     String(process.env.RDK_STUDIO_DEPLOYMENT_PROFILE || '').trim() === 'web-cloud' ||
-    String(process.env.RDK_SIM2REAL_AUTH_MODE || '')
-      .trim()
-      .toLowerCase() === 'trusted-proxy'
+    ['trusted-proxy', 'user-center'].includes(
+      String(process.env.RDK_SIM2REAL_AUTH_MODE || '').trim().toLowerCase(),
+    )
   );
 }
 

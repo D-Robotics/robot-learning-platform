@@ -22,3 +22,4 @@
 | [D-003](./D-003-agent-knowledge-sources.md) | Agent 外部知识 = rdk-docs-mcp 纯函数直调 + 免费 Bing 全网搜索 + D-008 式未核对纪律 | dsh-capability-handlers.test.ts |
 | [D-004](./D-004-device-connection-server-mediated.md) | 设备连接 = 服务端中介 SSH + 板端 BoardAgent HTTP 契约，浏览器零直连 | server-wiring.spec.mjs / sim2real-routes.test.ts |
 | [D-005](./D-005-service-ops-selfhealing.md) | 常驻服务以 nohup 脱离会话运行 + cron 看门狗自愈 | （仓外守卫：Qoder cron 看门狗任务） |
+| [D-006](./D-006-user-center-direct-auth.md) | 登录支持直连 User Center SSO（user-center 模式，JWKS 验签 + 未核对纪律） | user-center-jwt.test.ts / user-center-auth.test.ts |

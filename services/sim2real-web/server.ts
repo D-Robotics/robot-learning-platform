@@ -83,6 +83,8 @@ import { sim2RealStorageReadiness } from '../../server/sim2real/sim2real-store.j
 import {
   studioSsoAdapterConfigured,
   studioSsoAdapterMode,
+  ssoLoginUrlForDeployment,
+  registerAuthModeRoutes,
   studioSsoAuth,
 } from './studio-sso-auth.js';
 import {
@@ -685,6 +687,9 @@ export function createSim2RealWebApp(): Express {
   });
   app.use(observability.requestMiddleware);
   app.use(createSim2RealAuditMiddleware(studioSsoAuth));
+  // user-center 模式的登录/回调/注销路由必须先于业务路由挂载（回调写入
+  // 的会话 cookie 由同步 resolvePrincipal 消费）。
+  registerAuthModeRoutes(app);
   app.use(
     createRateLimitMiddleware({
       resolveOwner: (request) => {
@@ -765,6 +770,8 @@ export function createSim2RealWebApp(): Express {
       contractId: MICRODUCK_SIM2REAL_CONTRACT.id,
       ssoRequired: isSSORequired(),
       ssoConfigured: isSSOEnabled() || authAdapterConfigured,
+      // user-center 模式下发给登录页/登录按钮的平台自有登录入口。
+      ssoLoginUrl: ssoLoginUrlForDeployment() ?? undefined,
       authRequired,
       authMode: authRequired
         ? authAdapterConfigured
