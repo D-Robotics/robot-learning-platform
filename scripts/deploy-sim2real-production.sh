@@ -44,7 +44,10 @@ for entry in "$STAGING"/dist-server/services/sim2real-web/*.mjs; do
 done
 
 echo "== [3/7] 打包上传 =="
-TARBALL=$(mktemp /tmp/release-$SHA.XXXXXX.tar.gz)
+# 固定名 + 预删除：macOS mktemp 对「尾部含 .tar.gz 后缀」的模板会按字面
+# 文件名创建，第二次运行必然 File exists。
+TARBALL="/tmp/release-$SHA.tar.gz"
+rm -f "$TARBALL"
 tar czf "$TARBALL" -C "$(dirname "$STAGING")" "$RELEASE"
 scp -o BatchMode=yes "$TARBALL" "$HOST:/tmp/$(basename "$TARBALL")"
 
@@ -54,7 +57,8 @@ set -euo pipefail
 BASE=$1; RELEASE=$2; TARBALL=$3; NODE_BIN=$4
 REL=$BASE/releases/$RELEASE
 rm -rf "$REL" && mkdir -p "$REL"
-tar xzf "/tmp/$TARBALL" -C "$REL" 2>/dev/null
+# 包内含顶层 release 目录，strip 掉再解到目标路径。
+tar xzf "/tmp/$TARBALL" -C "$REL" --strip-components=1 2>/dev/null
 # engines 是 Linux venv，只能由服务端历代拷贝，绝不能被上传覆盖。
 cp -r "$BASE/current/dist-server/engines" "$REL/dist-server/engines"
 "$NODE_BIN" --check "$REL/dist-server/services/sim2real-web/server.js"
