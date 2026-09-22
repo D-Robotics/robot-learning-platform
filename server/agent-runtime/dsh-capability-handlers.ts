@@ -1529,7 +1529,7 @@ export function createDshCapabilityHandlers(
       };
     },
 
-    async rdk_docs_search(args: unknown, exec: ToolRunContext) {
+    async rdk_docs_search(args: unknown, _exec: ToolRunContext) {
       const input = argsRecord(args);
       const query = requiredArg(input, 'query', '请提供检索关键词。');
       const docs = options.docsService ?? defaultDocsService;
@@ -1567,7 +1567,7 @@ export function createDshCapabilityHandlers(
       };
     },
 
-    async rdk_docs_toc(args: unknown, exec: ToolRunContext) {
+    async rdk_docs_toc(args: unknown, _exec: ToolRunContext) {
       const input = argsRecord(args);
       const manual = requiredArg(input, 'manual', '请提供手册 id（来自 rdk_docs_manuals 或检索结果的 manual 字段）。');
       const docs = options.docsService ?? defaultDocsService;
@@ -1575,14 +1575,14 @@ export function createDshCapabilityHandlers(
       return callDocs(() => docs.listToc({ manual, ...(query ? { query } : {}) }, fetchText));
     },
 
-    async rdk_docs_page(args: unknown, exec: ToolRunContext) {
+    async rdk_docs_page(args: unknown, _exec: ToolRunContext) {
       const input = argsRecord(args);
       const url = assertDocsUrl(requiredArg(input, 'url', '请提供页面 URL（来自检索、目录或上一轮结果）。'));
       const docs = options.docsService ?? defaultDocsService;
       return callDocs(() => docs.getPage({ url, maxChars: 6_000 }, fetchText));
     },
 
-    async rdk_web_search(args: unknown, exec: ToolRunContext) {
+    async rdk_web_search(args: unknown, _exec: ToolRunContext) {
       const input = argsRecord(args);
       const query = requiredArg(input, 'query', '请提供搜索关键词。');
       const cacheKey = webSearchCacheKey(query.slice(0, 200));

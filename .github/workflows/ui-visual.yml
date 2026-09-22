@@ -34,7 +34,9 @@ jobs:
         run: npm ci --ignore-scripts --no-fund
       - name: Install Playwright, Chromium and stylelint (not added to package.json)
         run: |
-          npm i --no-save --no-package-lock playwright@1.63.0 stylelint@17
+          # --legacy-peer-deps: the dsh rc.2/rc.3 peer set in the registry does
+          # not co-resolve; runtime deps still come from the locked npm ci.
+          npm i --no-save --no-package-lock --legacy-peer-deps playwright@1.63.0 stylelint@17
           npx playwright install --with-deps chromium
       - name: Lint the stylesheets for correctness
         # Catches declarations that are syntactically valid but semantically broken

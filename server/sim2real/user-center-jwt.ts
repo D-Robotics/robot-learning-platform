@@ -114,7 +114,10 @@ export function setUserCenterJwtFetchForTests(
 
 async function fetchJwks(): Promise<JsonWebKeyLike[]> {
   const doFetch = fetchImpl ?? fetch;
-  const response = await doFetch(configuredJwksUrl());
+  // A hung User Center must not stall the auth path: bounded JWKS fetch.
+  const response = await doFetch(configuredJwksUrl(), {
+    signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
+  });
   if (!response.ok) throw new Error(`JWKS HTTP ${response.status}`);
   const contentType = String(response.headers.get('content-type') || '').toLowerCase();
   if (!contentType.includes('application/json')) throw new Error('JWKS response is not JSON');

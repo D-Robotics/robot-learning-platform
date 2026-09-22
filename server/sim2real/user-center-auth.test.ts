@@ -52,7 +52,7 @@ describe('user-center session cookie', () => {
 });
 
 describe('user-center auth routes', () => {
-  const exec = { signal: new AbortController().signal } as never;
+  const _exec = { signal: new AbortController().signal } as never;
   let restoreEnv: () => void;
 
   function makeApp(docsVerify: (token: string) => Promise<unknown>) {
@@ -109,7 +109,7 @@ describe('user-center auth routes', () => {
 
   it('callback exchanges the code, verifies the jwt and issues a session cookie', async () => {
     const { privateKey, publicKey } = crypto.generateKeyPairSync('rsa', { modulusLength: 2048 });
-    const jwk = { ...(publicKey.export({ format: 'jwk' }) as Record<string, unknown>), kid: 'k1', alg: 'RS256', use: 'sig' };
+    const _jwk = { ...(publicKey.export({ format: 'jwk' }) as Record<string, unknown>), kid: 'k1', alg: 'RS256', use: 'sig' };
     const header = Buffer.from(JSON.stringify({ alg: 'RS256', kid: 'k1' })).toString('base64url');
     const payload = Buffer.from(JSON.stringify({ iss: 'user-center', sub: 'uc-user-9', name: '张三', exp: Math.floor(Date.now() / 1000) + 600 })).toString('base64url');
     const signature = crypto.sign('RSA-SHA256', Buffer.from(`${header}.${payload}`), privateKey).toString('base64url');

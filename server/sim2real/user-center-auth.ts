@@ -19,7 +19,6 @@ import crypto from 'node:crypto';
 import type { Request } from 'express';
 import type { Sim2RealAuthPort, Sim2RealPrincipal } from './sim2real-auth.js';
 import type { VerifiedUserCenterJwt } from './user-center-jwt.js';
-import { verifyUserCenterJwt } from './user-center-jwt.js';
 
 export const USER_CENTER_SESSION_COOKIE = 'rdk_sim2real_uc_session';
 export const USER_CENTER_LOGIN_PATH = '/api/sim2real/auth/uc/login';
