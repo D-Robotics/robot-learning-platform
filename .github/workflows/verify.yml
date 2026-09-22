@@ -80,11 +80,16 @@ jobs:
         # Versions are pinned to the combination verified on the dev machine
         # (torch 2.9's new exporter needs onnxscript; 2.8 + onnx 1.19 uses
         # the legacy exporter these engines' proofs were validated with).
+        # dm_control pulls torchvision, which pulls a newer torch unless
+        # torchvision is pinned to its matching 0.23.x release and the
+        # follow-up install re-states the torch constraint.
         run: |
           python3 -m pip install --disable-pip-version-check --no-cache-dir numpy==2.0.2
           python3 -m pip install --disable-pip-version-check --no-cache-dir \
-            --index-url https://download.pytorch.org/whl/cpu torch==2.8.0
+            --index-url https://download.pytorch.org/whl/cpu \
+            torch==2.8.0 torchvision==0.23.0
           python3 -m pip install --disable-pip-version-check --no-cache-dir \
+            "torch==2.8.0" "torchvision==0.23.0" \
             onnx==1.19.1 onnxruntime==1.19.2 "jax[cpu]==0.11.1" \
             "mujoco==3.13.0" "dm_control==1.0.46" rsl-rl-lib==2.2.3
       - name: Engine gates

@@ -1,25 +1,49 @@
 #!/bin/sh
-# Fast local gate before every commit (~5 s): syntax + types + unit tests.
-# The full `npm run verify` chain (18 assertion scripts + build + smoke)
-# stays in CI; do not duplicate it here or commits become slow enough to
-# get bypassed with --no-verify.
+# Fast local gate before every commit (~15 s): formatting, lint, types,
+# UI wiring, affected tests, and the two consistency pairs that have
+# silently drifted before (requirements.in vs lockfile, routes vs spec).
+# Checks run against STAGED files only - untracked scratch files must not
+# block someone else's commit. The full `npm run verify` chain stays in
+# CI; do not duplicate it here or commits become slow enough to get
+# bypassed with --no-verify.
 #
 # Install once per clone: git config core.hooksPath .githooks
 
 set -e
 
-# Only guard files that the fast checks actually read.
 STAGED=$(git diff --cached --name-only --diff-filter=ACMR)
 if [ -z "$STAGED" ]; then
   exit 0
 fi
-echo "$STAGED" | grep -qE '\.(ts|mjs|js|json)$' || exit 0
 
 node --check services/sim2real-web/public/app.js
 node --check services/sim2real-web/public/telemetry-core.js
 node services/sim2real-web/ui-ia.spec.mjs >/dev/null
 npx tsc -p tsconfig.build.json --noEmit
 npx vitest run --configLoader runner --changed HEAD >/dev/null
+
+JS_STAGED=$(echo "$STAGED" | grep -E '\.(ts|mjs|js)$' || true)
+if [ -n "$JS_STAGED" ]; then
+  # shellcheck disable=SC2086
+  npx eslint $JS_STAGED --max-warnings=0
+fi
+FMT_STAGED=$(echo "$STAGED" | grep -E '\.(ts|mjs|js|json|yaml|yml|md)$' || true)
+if [ -n "$FMT_STAGED" ]; then
+  # shellcheck disable=SC2086
+  npx prettier --check $FMT_STAGED
+fi
+
+# Pair-consistency nudges. Both drift pairs have failed silently before:
+# a changed requirements.in without a regenerated lockfile, and a new
+# route without its openapi.yaml entry.
+if echo "$STAGED" | grep -qE '^engines/.*/requirements\.(in|txt)$'; then
+  node scripts/lock-engines.mjs --check >/dev/null
+fi
+if echo "$STAGED" | grep -qE '^server/(routes|sim2real)/' \
+  && ! echo "$STAGED" | grep -q '^docs/api/openapi\.yaml$'; then
+  echo "[pre-commit] note: server routes changed without docs/api/openapi.yaml" \
+    "- run 'npm run verify:api-contract' if a public endpoint moved."
+fi
 # 入口契约只在导航文档或命令清单本身变化时校验（毫秒级）。
 echo "$STAGED" | grep -qE '^(AGENTS\.md|package\.json|docs/|scripts/)' && node scripts/check-entry-contract.mjs >/dev/null
-echo "[pre-commit] fast gate passed: syntax, wiring, types, affected tests"
+echo "[pre-commit] fast gate passed: format, lint, syntax, wiring, types, affected tests, lock parity"
