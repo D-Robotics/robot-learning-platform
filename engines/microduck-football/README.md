@@ -66,8 +66,12 @@ python3 engines/microduck-football/evaluate_football.py \
 | `soccer-2v2` | 4 | blue (2) | 24 / 4 per duck |
 | `soccer-3v3` | 6 | blue (3) | 24 / 4 per duck |
 
-The opponent is scripted for the first milestone. Self-play and centralized
-critic training are the next step after the single-agent reward is stable.
+The opponent is scripted for the first milestone. Asymmetric actor-critic is
+implemented (`train_football.py --asymmetric`): the critic reads world-frame
+ball truth plus every duck's position (`observe_privileged`, 10 + 2·(ducks−1)
+channels), while the actor's observation/action interface is byte-for-byte what
+it was — the deployed policy cannot see anything new. The checkpoint carries
+the critic under `"critic"` only in this mode. Self-play remains the next step.
 
 The first GPU smoke evidence is checked in under `evidence/`: RTX 4090,
 `cuda=true`, 64 parallel single-agent worlds (3 iterations) and 32 parallel

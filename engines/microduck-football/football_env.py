@@ -96,6 +96,17 @@ class MicroDuckFootballEnv:
         return 20 if self.config.task == "single-goal-kick" else 24
 
     @property
+    def privileged_observation_dim(self) -> int:
+        """Critic-only channels: world-frame ball truth + every duck's position.
+
+        The asymmetric actor-critic contract: the actor keeps its local, partially
+        observable channels, while the value function reads the ground truth the
+        sim hands out for free (this is what the upstream-style training stack
+        does with its ball-true-value critic).
+        """
+        return 10 + 2 * (self.config.num_ducks - 1)
+
+    @property
     def action_dim(self) -> int:
         return 4  # forward, strafe, turn, kick
 
@@ -153,6 +164,27 @@ class MicroDuckFootballEnv:
         if obs.size < self.observation_dim:
             obs = np.pad(obs, (0, self.observation_dim - obs.size))
         return obs[: self.observation_dim].astype(np.float32)
+
+    def observe_privileged(self, index: int = 0) -> np.ndarray:
+        """World-frame ground truth for the value function, not the actor."""
+        ball = self._ball_xy()
+        ball_vel = self.data.qvel[self.model.jnt_dofadr[self.ball_joint] : self.model.jnt_dofadr[self.ball_joint] + 2]
+        duck = self._duck_xy(index)
+        duck_vel = self.data.qvel[self.model.jnt_dofadr[self.duck_joints[index]] : self.model.jnt_dofadr[self.duck_joints[index]] + 2]
+        rel_goal = np.array([GOAL_X, 0.0]) - ball
+        others = []
+        for j in range(self.config.num_ducks):
+            if j != index:
+                others.extend(self._duck_xy(j) - duck)
+        privileged = np.concatenate([
+            ball, ball_vel, rel_goal, duck, duck_vel,
+            np.asarray(others, dtype=np.float64),
+        ])
+        if privileged.size != self.privileged_observation_dim:
+            raise RuntimeError(
+                f"privileged observation assembled as {privileged.size}, expected {self.privileged_observation_dim}"
+            )
+        return privileged.astype(np.float32)
 
     def _apply_action(self, index: int, action: np.ndarray) -> bool:
         action = np.asarray(action, dtype=np.float64)
@@ -217,10 +249,18 @@ class FootballBatch:
         self.envs = [MicroDuckFootballEnv(FootballConfig(task=task, seed=seed + i)) for i in range(num_envs)]
         self.observation_dim = self.envs[0].observation_dim
         self.action_dim = self.envs[0].action_dim
+        self.privileged_observation_dim = self.envs[0].privileged_observation_dim
         self.num_agents = self.envs[0].config.blue_count
 
     def reset(self) -> np.ndarray:
         return np.stack([env.reset() for env in self.envs])
+
+    def privileged_obs(self) -> np.ndarray:
+        """Ground-truth observations for the controlled (blue) agents, post-reset/step."""
+        return np.stack([
+            np.stack([env.observe_privileged(i) for i in range(env.config.blue_count)])
+            for env in self.envs
+        ])
 
     def step(self, actions: np.ndarray):
         results = [env.step(actions[i]) for i, env in enumerate(self.envs)]

@@ -1,0 +1,38 @@
+{
+  "task": "single-goal-kick",
+  "device": "cpu",
+  "cuda": false,
+  "observationDim": 20,
+  "actionDim": 4,
+  "asymmetric": true,
+  "privilegedObservationDim": 10,
+  "numEnvs": 8,
+  "iterations": 3,
+  "curve": [
+    {
+      "iteration": 1,
+      "meanReward": 0.03262055292725563,
+      "goals": 3,
+      "completedEpisodes": 4,
+      "teacherWeight": 0.35
+    },
+    {
+      "iteration": 2,
+      "meanReward": -0.007744381669908762,
+      "goals": 3,
+      "completedEpisodes": 5,
+      "teacherWeight": 0.20416666666666666
+    },
+    {
+      "iteration": 3,
+      "meanReward": 0.008699539117515087,
+      "goals": 4,
+      "completedEpisodes": 6,
+      "teacherWeight": 0.058333333333333355
+    }
+  ],
+  "goals": 4,
+  "completedEpisodes": 6,
+  "elapsedSeconds": 0.228,
+  "teacherWarmStart": true
+}

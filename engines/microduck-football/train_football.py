@@ -37,6 +37,24 @@ class ActorCritic(nn.Module):
         return squashed, logp, value
 
 
+class PrivilegedCritic(nn.Module):
+    """Value function over world-frame ground truth (asymmetric actor-critic).
+
+    The actor never sees these channels — its local observation stays exactly
+    what deployment can observe. The critic reads ball truth because the sim
+    hands it out for free during training, which sharpens return estimates
+    without changing the deployed policy interface.
+    """
+
+    def __init__(self, priv_dim: int, hidden: int = 128):
+        super().__init__()
+        self.body = nn.Sequential(nn.Linear(priv_dim, hidden), nn.Tanh(), nn.Linear(hidden, hidden), nn.Tanh())
+        self.value = nn.Linear(hidden, 1)
+
+    def forward(self, privileged):
+        return self.value(self.body(privileged)).squeeze(-1)
+
+
 def teacher_action(observation: np.ndarray) -> np.ndarray:
     """A bounded task teacher used only to warm-start PPO.
 
@@ -66,8 +84,12 @@ def train(args: argparse.Namespace) -> dict:
     batch = FootballBatch(args.task, args.num_envs, args.seed)
     obs = batch.reset()
     obs_dim = batch.observation_dim
+    asymmetric = bool(getattr(args, "asymmetric", False))
     policy = ActorCritic(obs_dim, batch.action_dim).to(device)
-    optimizer = torch.optim.Adam(policy.parameters(), lr=args.learning_rate)
+    critic = PrivilegedCritic(batch.privileged_observation_dim).to(device) if asymmetric else None
+    params = list(policy.parameters()) + (list(critic.parameters()) if critic is not None else [])
+    optimizer = torch.optim.Adam(params, lr=args.learning_rate)
+    priv_obs = batch.privileged_obs() if asymmetric else None
     episode_returns = np.zeros(args.num_envs, dtype=np.float32)
     episode_goals = 0
     completed = 0
@@ -75,18 +97,27 @@ def train(args: argparse.Namespace) -> dict:
     started = time.time()
     for iteration in range(1, args.iterations + 1):
         obs_buf, act_buf, logp_buf, value_buf, reward_buf, done_buf = [], [], [], [], [], []
+        priv_buf = []
         for _ in range(args.steps_per_env):
             obs_tensor = torch.from_numpy(obs.reshape(-1, obs_dim)).to(device)
+            priv_tensor = torch.from_numpy(priv_obs.reshape(-1, batch.privileged_observation_dim)).to(device) if asymmetric else None
             with torch.no_grad():
-                action, logp, value = policy.sample(obs_tensor)
+                if asymmetric:
+                    action, logp, _ = policy.sample(obs_tensor)
+                    value = critic(priv_tensor)
+                else:
+                    action, logp, value = policy.sample(obs_tensor)
             action_np = action.detach().cpu().numpy().reshape(args.num_envs, batch.num_agents, batch.action_dim)
             next_obs, rewards, dones, infos = batch.step(action_np)
             obs_buf.append(obs.copy())
             act_buf.append(action_np.copy())
             logp_buf.append(logp.cpu().numpy())
-            value_buf.append(value.cpu().numpy())
+            value_buf.append(np.asarray(value.cpu().numpy()).copy())
             reward_buf.append(rewards.mean(axis=1))
             done_buf.append(dones)
+            if asymmetric:
+                priv_buf.append(priv_obs.copy())
+                priv_obs = batch.privileged_obs()
             episode_returns += rewards.mean(axis=1)
             for i, info in enumerate(infos):
                 if info["goal"]:
@@ -123,8 +154,13 @@ def train(args: argparse.Namespace) -> dict:
         # Anneal the warm-start signal so the final policy is determined by
         # measured PPO returns rather than a hard-coded controller.
         teacher_weight = max(0.03, args.teacher_weight * (1.0 - (iteration - 1) / max(1.0, args.iterations * 0.8)))
+        priv_arr = torch.from_numpy(np.asarray(priv_buf).reshape(-1, batch.privileged_observation_dim)).to(device) if asymmetric else None
         for _ in range(args.update_epochs):
-            mean, value = policy(obs_arr)
+            mean, symmetric_value = policy(obs_arr)
+            if asymmetric:
+                value = critic(priv_arr)
+            else:
+                value = symmetric_value
             dist = torch.distributions.Normal(mean, policy.log_std.exp().expand_as(mean))
             clipped = torch.clamp(act_arr, -0.999, 0.999)
             raw_action = torch.atanh(clipped)
@@ -153,6 +189,8 @@ def train(args: argparse.Namespace) -> dict:
     payload = {
         "task": args.task, "device": str(device), "cuda": device.type == "cuda",
         "observationDim": obs_dim, "actionDim": batch.action_dim,
+        "asymmetric": asymmetric,
+        "privilegedObservationDim": batch.privileged_observation_dim if asymmetric else None,
         "numEnvs": args.num_envs, "iterations": args.iterations,
         "curve": curve, "goals": episode_goals, "completedEpisodes": completed,
         "elapsedSeconds": round(time.time() - started, 3),
@@ -161,7 +199,10 @@ def train(args: argparse.Namespace) -> dict:
     if args.out:
         Path(args.out).write_text(json.dumps(payload, indent=2) + "\n")
     if args.checkpoint:
-        torch.save({"model": policy.state_dict(), "meta": payload}, args.checkpoint)
+        checkpoint = {"model": policy.state_dict(), "meta": payload}
+        if critic is not None:
+            checkpoint["critic"] = critic.state_dict()
+        torch.save(checkpoint, args.checkpoint)
     if args.export:
         class ExportPolicy(nn.Module):
             def __init__(self, actor):
@@ -197,6 +238,8 @@ def main():
     parser.add_argument("--clip", type=float, default=0.2)
     parser.add_argument("--update-epochs", type=int, default=4)
     parser.add_argument("--teacher-weight", type=float, default=0.35)
+    parser.add_argument("--asymmetric", action="store_true",
+                        help="critic reads world-frame ball truth; the actor interface is unchanged")
     parser.add_argument("--seed", type=int, default=20260920)
     parser.add_argument("--out")
     parser.add_argument("--checkpoint")

@@ -1,0 +1,19 @@
+{
+  "steps": 25,
+  "phasesVisited": [
+    "align",
+    "approach",
+    "recover"
+  ],
+  "kicks": 1,
+  "goals": 1,
+  "finalPhase": "approach",
+  "module": "task_machine.FootballTaskMachine",
+  "env": "single-goal-kick (spherical proxy)",
+  "geometry": {
+    "stageDistanceM": 0.27,
+    "stageExitM": 0.38,
+    "kickWindowM": 0.42
+  },
+  "note": "engine-layer task state machine; UI mount tracked with the browser formation work"
+}

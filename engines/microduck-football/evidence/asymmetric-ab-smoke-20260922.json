@@ -1,0 +1,23 @@
+{
+  "purpose": "A/B smoke: does the privileged critic improve value-driven learning signal on identical budgets?",
+  "budget": "identical seed/budget (6 envs x 12 iters x 96 steps, CPU)",
+  "results": [
+    {
+      "asymmetric": false,
+      "firstHalfMeanReward": 0.0063,
+      "secondHalfMeanReward": 0.0029,
+      "improvement": -0.0034,
+      "finalMeanReward": -0.0047,
+      "privilegedObservationDim": null
+    },
+    {
+      "asymmetric": true,
+      "firstHalfMeanReward": 0.0001,
+      "secondHalfMeanReward": 0.0082,
+      "improvement": 0.0081,
+      "finalMeanReward": -0.0049,
+      "privilegedObservationDim": 10
+    }
+  ],
+  "honestNote": "smoke-scale CPU evidence of the learning-signal direction only; not a competence claim. Quality-scale comparison belongs to the GPU runner."
+}
