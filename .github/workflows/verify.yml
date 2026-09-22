@@ -7,18 +7,41 @@ on:
 permissions:
   contents: read
 
+# The old single job ran the whole 60-step chain serially on both Node
+# versions (~45 minutes per push). These jobs run the same assertions in
+# parallel, grouped by what they need installed; `npm run verify` keeps its
+# local serial semantics unchanged. Every job below must stay green - the
+# `summary` job is the aggregate anchor for branch protection.
+
 jobs:
-  verify:
+  static:
+    name: static (format, lint, types)
     runs-on: ubuntu-latest
-    # The verify chain runs 20+ assertion scripts plus vitest and a release
-    # build; a cold npm ci and python probes add minutes on shared runners.
-    # The Node matrix runs this job three times, so keep healthy headroom.
-    timeout-minutes: 45
+    timeout-minutes: 10
     strategy:
       fail-fast: false
       matrix:
-        # Node 20 is retired: the DSH session-persistence dependency imports
-        # node:zlib zstd helpers statically, which only exist on Node 22+.
+        node-version: [22, 24]
+    steps:
+      - name: Check out
+        uses: actions/checkout@v7
+      - name: Set up Node.js ${{ matrix.node-version }}
+        uses: actions/setup-node@v7
+        with:
+          node-version: ${{ matrix.node-version }}
+          cache: npm
+      - name: Install dependencies
+        run: npm ci --ignore-scripts --no-fund
+      - name: Static gates
+        run: npm run verify:ci:static
+
+  contracts:
+    name: contracts (static gates, both runtimes)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
         node-version: [22, 24]
     steps:
       - name: Check out
@@ -31,38 +54,173 @@ jobs:
       - name: Install dependencies
         run: npm ci --ignore-scripts --no-fund
       - name: Install lightweight Python parity dependency
-        # Several reward/environment contract tests execute the NumPy-backed
-        # reference environment. Heavy training stacks remain optional and
-        # keep their explicit SKIP/guard behavior.
         run: python3 -m pip install --disable-pip-version-check --no-cache-dir numpy==2.0.2
-      - name: Lint
-        # Warnings are release debt in a mature product; keep CI aligned with
-        # the repository's local gate so a new warning cannot quietly merge.
-        run: npm run lint -- --max-warnings=0
-      - name: Format
-        run: npm run format:check
-      - name: Verify contracts, UI wiring, and deployment assets
-        run: npm run verify
+      - name: Contract and UI wiring gates
+        run: npm run verify:ci:contracts
+      - name: Python parity contracts
+        run: npm run verify:ci:python-contracts
+
+  engines:
+    name: engines (real training rounds)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Check out
+        uses: actions/checkout@v7
+      - name: Set up Node.js 22
+        uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+      - name: Install dependencies
+        run: npm ci --ignore-scripts --no-fund
+      - name: Install Python training stacks (CPU)
+        # Engine gates used to SKIP on CI (numpy only); a real training round
+        # per engine is worth the wheel download. CPU wheels keep it small.
+        run: |
+          python3 -m pip install --disable-pip-version-check --no-cache-dir numpy==2.0.2
+          python3 -m pip install --disable-pip-version-check --no-cache-dir \
+            --index-url https://download.pytorch.org/whl/cpu torch
+          python3 -m pip install --disable-pip-version-check --no-cache-dir \
+            onnx onnxruntime "jax[cpu]" dm_control rsl-rl-lib==2.2.3
+      - name: Engine gates
+        run: npm run verify:ci:engines
+
+  agents:
+    name: agents (worker, board, artifacts)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Check out
+        uses: actions/checkout@v7
+      - name: Set up Node.js 22
+        uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+      - name: Install dependencies
+        run: npm ci --ignore-scripts --no-fund
+      - name: Install lightweight Python parity dependency
+        run: python3 -m pip install --disable-pip-version-check --no-cache-dir numpy==2.0.2
+      - name: Agent and artifact gates
+        run: npm run verify:ci:agents
+
+  build-e2e:
+    name: build + api contract + e2e smoke
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Check out
+        uses: actions/checkout@v7
+      - name: Set up Node.js 22
+        uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+      - name: Install dependencies
+        run: npm ci --ignore-scripts --no-fund
+      - name: Build, contract and end-to-end smoke gates
+        run: npm run verify:ci:build-e2e
       - name: Validate systemd units
-        # Ubuntu runners provide systemd-analyze; keep the repository's local
-        # macOS workflow usable while making the Linux deployment syntax a CI
-        # release gate.
         run: VERIFY_SYSTEMD=1 npm run verify:deployment
+
+  unit:
+    name: unit (vitest)
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        node-version: [22, 24]
+    steps:
+      - name: Check out
+        uses: actions/checkout@v7
+      - name: Set up Node.js ${{ matrix.node-version }}
+        uses: actions/setup-node@v7
+        with:
+          node-version: ${{ matrix.node-version }}
+          cache: npm
+      - name: Install dependencies
+        run: npm ci --ignore-scripts --no-fund
+      - name: Unit tests
+        run: npm test
+
+  coverage:
+    name: coverage gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Check out
+        uses: actions/checkout@v7
+      - name: Set up Node.js 22
+        uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+      - name: Install dependencies
+        run: npm ci --ignore-scripts --no-fund
       - name: Coverage gate
-        if: matrix.node-version == 22
+        # Thresholds are the measured baselines recorded in the vitest config;
+        # a coverage drop fails here, not in review.
         run: npm run test:coverage
+
+  audits:
+    name: dependency audits + release security
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out
+        uses: actions/checkout@v7
+      - name: Set up Node.js 22
+        uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+      - name: Install dependencies
+        run: npm ci --ignore-scripts --no-fund
       - name: Production dependency audit
-        if: matrix.node-version == 22
+        # Keep the production gate separate from the tooling graph so its
+        # scope stays obvious.
         run: npm audit --omit=dev --audit-level=high
       - name: Full dependency audit
-        if: matrix.node-version == 22
-        # Keep the test/tooling graph clean as well; this is intentionally
-        # separate from the production gate so its scope remains obvious.
         run: npm audit --audit-level=moderate
       - name: Public release security scan
-        if: matrix.node-version == 22
         run: npm run verify:security
-      # `npm run verify` already ends with `npm run build`; keep a standalone
-      # type-check pass (no emit) as a fast signal without repeating the build.
-      - name: Type-check
-        run: npx tsc -p tsconfig.build.json --noEmit
+
+  summary:
+    name: verify summary
+    needs:
+      - static
+      - contracts
+      - engines
+      - agents
+      - build-e2e
+      - unit
+      - coverage
+      - audits
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Aggregate results
+        run: |
+          if [ "${{ needs.static.result }}" != "success" ] \
+            || [ "${{ needs.contracts.result }}" != "success" ] \
+            || [ "${{ needs.engines.result }}" != "success" ] \
+            || [ "${{ needs.agents.result }}" != "success" ] \
+            || [ "${{ needs.build-e2e.result }}" != "success" ] \
+            || [ "${{ needs.unit.result }}" != "success" ] \
+            || [ "${{ needs.coverage.result }}" != "success" ] \
+            || [ "${{ needs.audits.result }}" != "success" ]; then
+            echo "one or more verify jobs failed:"
+            echo "  static:    ${{ needs.static.result }}"
+            echo "  contracts: ${{ needs.contracts.result }}"
+            echo "  engines:   ${{ needs.engines.result }}"
+            echo "  agents:    ${{ needs.agents.result }}"
+            echo "  build-e2e: ${{ needs.build-e2e.result }}"
+            echo "  unit:      ${{ needs.unit.result }}"
+            echo "  coverage:  ${{ needs.coverage.result }}"
+            echo "  audits:    ${{ needs.audits.result }}"
+            exit 1
+          fi
+          echo "all verify jobs passed"
