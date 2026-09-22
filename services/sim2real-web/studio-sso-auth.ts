@@ -89,6 +89,7 @@ export function registerAuthModeRoutes(router: Router): void {
 /** 401 响应体下发的登录地址；无自有登录入口的模式返回 null。 */
 export function ssoLoginUrlForDeployment(): string | null {
   if (authMode === 'user-center' && userCenterAuthConfigured()) return USER_CENTER_LOGIN_PATH;
+  if (authMode === 'studio-cookie' && studioCookieAuthConfigured()) return '/login';
   return null;
 }
 

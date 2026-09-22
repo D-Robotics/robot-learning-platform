@@ -88,6 +88,10 @@ import {
   studioSsoAuth,
 } from './studio-sso-auth.js';
 import {
+  createStudioDirectRelay,
+  renderStudioDirectLoginPage,
+} from '../../server/sim2real/studio-direct-relay.js';
+import {
   isProductionEnv,
   normalizeMicroduckRedirect,
   normalizePublicBasePath,
@@ -706,6 +710,35 @@ export function createSim2RealWebApp(): Express {
   // Parse only after the protective request layers are attached.  The final
   // error boundary below converts parser failures into stable JSON responses.
   app.use(express.json({ limit: '2mb' }));
+
+  // studio-cookie 模式的独立登录页 + 直连登录中继（D-006 的轻量替代路径）：
+  // 用户在本平台完成登录，凭据经服务端转发 Studio 直连 API，会话 cookie
+  // 原样透传（同域同密钥），凭据不落日志、不落存储。
+  if (studioSsoAdapterMode() === 'studio-cookie' && studioSsoAdapterConfigured()) {
+    const studioRelay = createStudioDirectRelay();
+    const loginUrl = '/login';
+    app.post(
+      '/api/sim2real/auth/studio-direct/login',
+      express.urlencoded({ extended: false }),
+      (request, response) => {
+        void studioRelay.handleForm(request, response);
+      },
+    );
+    app.post(
+      '/api/sim2real/auth/studio-direct/login.json',
+      express.json({ limit: '4kb' }),
+      (request, response) => {
+        void studioRelay.handleJson(request, response);
+      },
+    );
+    app.get('/login', (request, response) => {
+      const error = String(request.query.error ?? '');
+      response
+        .type('html')
+        .send(renderStudioDirectLoginPage(['missing', 'invalid', 'unavailable'].includes(error) ? error : undefined));
+    });
+    void loginUrl;
+  }
 
   // Stable capability catalog for DSH/plugin clients. This is intentionally
   // public metadata; execution still goes through authenticated domain routes.
