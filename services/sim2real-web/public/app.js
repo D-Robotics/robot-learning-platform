@@ -6068,13 +6068,14 @@ window.addEventListener('message', (event) => {
 
 function startPolicyTrial() {
   if (policyTrial.running) return;
+  const boardBackend = $('policy-trial-board')?.checked === true;
   const runId = state.replay.runId || String($('replay-run-select')?.value || '').trim();
-  if (!runId) { showToast('请先加载一个已完成运行的回放，再试跑策略', 'error'); return; }
+  if (!boardBackend && !runId) { showToast('请先加载一个已完成运行的回放，再试跑策略（板端推理模式无需回放）', 'error'); return; }
   const iframe = $('simulator-frame');
   if (!iframe?.contentWindow) { showToast('嵌入仿真器不可用', 'error'); return; }
-  policyTrial.runId = runId;
+  policyTrial.runId = boardBackend ? 'board' : runId;
   policyTrial.running = true;
-  setPolicyTrialStatus('正在启动浏览器推理…');
+  setPolicyTrialStatus(boardBackend ? '正在启动板端推理…' : '正在启动浏览器推理…');
   try {
     iframe.contentWindow.postMessage(
       {
@@ -6082,6 +6083,7 @@ function startPolicyTrial() {
         runId,
         apiRoot: apiPath('/sim2real'),
         maxSteps: 600,
+        backend: boardBackend ? 'board' : 'wasm',
       },
       '*',
     );

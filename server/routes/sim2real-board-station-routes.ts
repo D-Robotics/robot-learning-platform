@@ -1331,6 +1331,72 @@ export function registerSim2RealBoardStationRoutes(
     }),
   );
 
+  /**
+   * POST /board-station/policy-infer — batch inference on the board.
+   *
+   * The hybrid-mode primitive: browser-side MuJoCo WASM keeps computing the
+   * physics while policy inference for N simulated bodies (a nine-duck square
+   * sends [9, obs]) is served by the board's loaded model. Deliberately NOT
+   * gated by the motion switches — nothing here actuates hardware; the board
+   * runtime fail-closes every row and action before anything comes back.
+   */
+  router.post(
+    api('/board-station/policy-infer'),
+    wrapAsync(async (request, response) => {
+      const resolved = await resolveStation(request, response);
+      if (!resolved) return;
+      noStore(response);
+      const body =
+        request.body && typeof request.body === 'object' && !Array.isArray(request.body)
+          ? (request.body as Record<string, unknown>)
+          : {};
+      const observations = body.observations;
+      if (
+        !Array.isArray(observations) ||
+        observations.length === 0 ||
+        !Array.isArray(observations[0])
+      ) {
+        sendApiError(
+          response,
+          400,
+          'SIM2REAL_STATION_POLICY_INFER_INVALID',
+          'observations 必须是非空的二维数值数组（每行一条观测）。',
+          { retryable: false },
+        );
+        return;
+      }
+      if (observations.length > 64) {
+        sendApiError(
+          response,
+          400,
+          'SIM2REAL_STATION_POLICY_INFER_INVALID',
+          '单次批量最多 64 行观测。',
+          { retryable: false, max: 64 },
+        );
+        return;
+      }
+      const agent = await stationAgentFetchWithStatus(
+        '/v1/station/policy-infer',
+        stationOptions(request, {
+          method: 'POST',
+          timeoutMs: 10_000, // N x 50 Hz ticks of headroom; inference only
+          body: JSON.stringify({ observations }),
+        }),
+      );
+      if (!agent) {
+        sendApiError(
+          response,
+          502,
+          'SIM2REAL_BOARD_AGENT_UNREACHABLE',
+          '板端批量推理不可达：agent 离线、模型未加载或观测维度不符。',
+          { retryable: true },
+        );
+        return;
+      }
+      response.status(agent.status).json(agent.payload);
+    }),
+  );
+
   /** GET /board-station/policy/files — list staged board policies. */
   router.get(
     api('/board-station/policy/files'),

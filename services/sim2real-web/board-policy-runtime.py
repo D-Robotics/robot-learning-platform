@@ -654,6 +654,13 @@ class PolicyRuntime:
                 "detail": res.get("detail"),
                 "at": round(time.time(), 3),
             }
+            if op == "infer_batch" and res.get("ok"):
+                # Batch actions ride back inside lastOp: pure compute, no
+                # actuator involvement, overwritten by the next op.
+                self._last_op["actions"] = res.get("actions")
+                self._last_op["count"] = res.get("count")
+                self._last_op["batchPath"] = res.get("path")
+                self._last_op["elapsedMs"] = res.get("elapsedMs")
 
     def reset(self):
         """Clear a sticky fault back to idle/ready (model retained)."""
@@ -984,6 +991,101 @@ class PolicyRuntime:
         if stopped_event is not None:
             self._append_event_record(stopped_event)
         return {"ok": True, "state": self._state, "reason": reason}
+
+    BATCH_MAX_SAMPLES = 64
+
+    def infer_batch(self, observations):
+        """Serve N observations against the loaded model in one request.
+
+        The multi-instance serving pattern: one board, one set of model
+        weights, N independent observation rows (e.g. a nine-duck square sends
+        [9, obs_dim] every control tick). The loaded graph keeps its contract
+        dimensions and weights — only the request shape is batched. A model
+        exported with a fixed batch of 1 is served sample-by-sample; a
+        dynamic-batch export is served in one run. Vision exports are refused:
+        batching them would silently change the frame-observation pairing.
+
+        Fail-closed on purpose: a wrong row length, a non-finite input, or a
+        non-finite action row is a request-level rejection naming the sample
+        index — partial batches are never answered, because a multi-robot
+        formation that receives a short action list would act on stale data.
+        """
+        import numpy as np
+
+        with self._lock:
+            state = self._state
+            model = self._model
+            kind = self._model_kind
+            vector_input_name = self._vector_input_name
+            image_input_name = self._image_input_name
+        if state != "ready" or model is None:
+            return {"ok": False, "error": "model-not-ready", "state": state}
+        if image_input_name:
+            return {
+                "ok": False,
+                "error": "vision-model-batch-unsupported",
+                "detail": "batch serving is defined for vector-observation policies only",
+            }
+        try:
+            rows = np.asarray(observations, dtype=np.float32)
+        except (TypeError, ValueError):
+            return {"ok": False, "error": "observations-not-numeric"}
+        if rows.ndim != 2:
+            return {"ok": False, "error": "observations-not-2d", "shape": list(rows.shape)}
+        count, width = rows.shape
+        if count < 1 or count > self.BATCH_MAX_SAMPLES:
+            return {
+                "ok": False,
+                "error": "observations-count-out-of-range",
+                "count": count,
+                "min": 1,
+                "max": self.BATCH_MAX_SAMPLES,
+            }
+        if width != EXPECTED_OBS_DIM:
+            return {
+                "ok": False,
+                "error": "observation-dimension-mismatch",
+                "expected": EXPECTED_OBS_DIM,
+                "actual": width,
+            }
+        if not np.all(np.isfinite(rows)):
+            row_bad = int(np.argmin(np.isfinite(rows).all(axis=1)))
+            return {"ok": False, "error": "observations-non-finite", "sample": row_bad}
+        started = time.time()
+        outputs = np.zeros((count, EXPECTED_ACTION_DIM), dtype=np.float32)
+        dynamic_batch = False
+        if kind != "bpu":
+            declared_batch = self._model.get_inputs()[0].shape[0]
+            dynamic_batch = not (isinstance(declared_batch, int) and declared_batch == 1)
+        try:
+            if kind == "bpu":
+                for i in range(count):
+                    out = model.forward(rows[i].reshape(1, 8, 1, 1))[0].buffer.reshape(-1)
+                    outputs[i, :] = np.asarray(out, dtype=np.float32)[:EXPECTED_ACTION_DIM]
+            elif dynamic_batch:
+                out = model.run(None, {vector_input_name: rows})[0]
+                outputs[:, :] = np.asarray(out, dtype=np.float32).reshape(count, EXPECTED_ACTION_DIM)
+            else:
+                for i in range(count):
+                    out = model.run(None, {vector_input_name: rows[i : i + 1]})[0][0]
+                    outputs[i, :] = np.asarray(out, dtype=np.float32)[:EXPECTED_ACTION_DIM]
+        except Exception as exc:  # noqa: BLE001 - serving errors are request rejections
+            return {"ok": False, "error": "inference-failed", "detail": str(exc)[:200]}
+        finite_rows = np.isfinite(outputs).all(axis=1)
+        if not bool(finite_rows.all()):
+            return {
+                "ok": False,
+                "error": "action-non-finite",
+                "sample": int(np.argmin(finite_rows)),
+            }
+        elapsed_ms = (time.time() - started) * 1000.0
+        return {
+            "ok": True,
+            "actions": outputs.tolist(),
+            "count": count,
+            "path": "dynamic-batch" if dynamic_batch else "per-sample",
+            "elapsedMs": round(elapsed_ms, 3),
+        }
 
     def _fault(self, message):
         now = time.time()
@@ -1584,6 +1686,8 @@ def _serve_file_protocol(runtime):
             res = runtime.stop(str(req.get("reason", "operator-stop")))
         elif op == "reset":
             res = runtime.reset()
+        elif op == "infer_batch":
+            res = runtime.infer_batch(req.get("observations"))
         elif op == "snapshot":
             res = None
         else:

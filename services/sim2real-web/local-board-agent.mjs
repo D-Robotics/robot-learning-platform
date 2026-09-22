@@ -577,6 +577,43 @@ export function createLocalBoardAgentServer() {
       }
       return;
     }
+    if (request.method === 'POST' && request.url === '/v1/station/policy-infer') {
+      // Same contract as the real agent's endpoint, with a deterministic
+      // per-row action so laptop tests can prove row-order survives the whole
+      // station -> agent -> runtime chain without hardware.
+      try {
+        const body = JSON.parse(await readBodyBounded(request, 1024 * 1024));
+        const rows = body?.observations;
+        if (!Array.isArray(rows) || rows.length === 0 || !Array.isArray(rows[0])) {
+          json(response, 400, { ok: false, error: 'observations-not-2d' });
+          return;
+        }
+        if (rows.length > 64) {
+          json(response, 400, { ok: false, error: 'observations-count-out-of-range', max: 64 });
+          return;
+        }
+        const actions = rows.map((row) => {
+          const sum = row.reduce((acc, value) => acc + Number(value), 0);
+          return row.map((_, index) => Math.round(Math.sin((sum + index + 1) * 1.7) * 1e6) / 1e6);
+        });
+        json(response, 200, {
+          ok: true,
+          actions,
+          count: rows.length,
+          path: 'per-sample',
+          mock: true,
+        });
+      } catch (error) {
+        json(response, Number(error?.statusCode) || 400, {
+          ok: false,
+          error:
+            Number(error?.statusCode) === 413
+              ? 'policy-infer-body-too-large'
+              : 'BOARD_AGENT_INVALID_JSON',
+        });
+      }
+      return;
+    }
     if (request.method === 'GET' && request.url === '/v1/station/status/stream') {
       if (rejectUnexpectedBody(request, response)) return;
       pipeStationStatusStream(request, response, streams);

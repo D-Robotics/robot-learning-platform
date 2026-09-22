@@ -21,6 +21,7 @@ Wire contract (identical to services/sim2real-web/local-board-agent.mjs):
   POST /v1/station/policy/start          begin policy-driven motion (gated)
   POST /v1/station/policy/reset          clear a sticky fault (gated)
   POST /v1/station/policy/stop           zero output + halt (always on)
+  POST /v1/station/policy-infer          batch inference [N,obs]->[N,act] (pure compute, ungated)
   GET  /v1/config                        switch states + env file path (read-only)
   POST /v1/config                        toggle drive/policy switches + restart
 
@@ -2364,6 +2365,30 @@ class Handler(BaseHTTPRequestHandler):
             res = policy_load(str(payload.get("path", "")))
             self._json(200 if res.get("ok") else 409,
                        {**res, "policy": policy_status()})
+            return
+        if path == "/v1/station/policy-infer":
+            # Batch inference for multi-instance clients (e.g. a browser sim
+            # driving N ducks over one board). Pure compute: nothing here
+            # touches actuators, so the motion switches do not gate it — the
+            # runtime must simply have a loaded, ready model, and every
+            # row/action is validated fail-closed by the runtime itself.
+            payload = self._read_json()
+            if not isinstance(payload, dict) or not isinstance(payload.get("observations"), list):
+                self._json(400, {"ok": False, "error": "BOARD_AGENT_INVALID_JSON"})
+                return
+            observations = payload["observations"]
+            if not observations or not isinstance(observations[0], list):
+                self._json(400, {"ok": False, "error": "observations-not-2d"})
+                return
+            res = _policy_send("infer_batch", observations=observations)
+            if not res.get("ok"):
+                self._json(409, {"ok": False, "error": res.get("error") or "policy-infer-failed",
+                                 "detail": res.get("detail"), "state": res.get("state")})
+                return
+            last = res.get("lastOp") or {}
+            self._json(200, {"ok": True, "actions": last.get("actions"),
+                             "count": last.get("count"), "path": last.get("batchPath"),
+                             "elapsedMs": last.get("elapsedMs"), "mock": False})
             return
         if path == "/v1/station/policy/start":
             payload = self._read_json()

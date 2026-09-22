@@ -597,11 +597,19 @@
       setEvent('策略试跑已在进行中。', 'warn');
       return;
     }
+    const backend = options.backend === 'board' ? 'board' : 'wasm';
     const runId = String(options.runId || '').trim();
     const apiRoot = String(options.apiRoot || '').trim();
-    if (!runId || !apiRoot) {
-      setEvent('父页面未提供 runId / apiRoot，无法试跑策略。', 'warn');
-      postPolicyStatus('failed', '缺少 runId 或 apiRoot。');
+    // Board mode serves actions from the board's already-loaded model, so no
+    // run artifact (and no browser ONNX runtime) is needed — only the API root.
+    if (backend !== 'board' && !runId) {
+      setEvent('父页面未提供 runId，无法试跑策略。', 'warn');
+      postPolicyStatus('failed', '缺少 runId。');
+      return;
+    }
+    if (!apiRoot) {
+      setEvent('父页面未提供 apiRoot，无法试跑策略。', 'warn');
+      postPolicyStatus('failed', '缺少 apiRoot。');
       return;
     }
     if (!sessionId) {
@@ -611,11 +619,18 @@
     }
     policySession = {
       runId,
+      apiRoot,
+      backend,
       maxSteps: finite(options.maxSteps, 600),
       steps: 0,
       session: null,
     };
-    setEvent(`策略试跑开始：run ${runId.slice(0, 8)}（最多 ${policySession.maxSteps} 步）。`, 'ok');
+    setEvent(`策略试跑开始：${backend === 'board' ? '板端推理' : `run ${runId.slice(0, 8)}`}（最多 ${policySession.maxSteps} 步）。`, 'ok');
+    if (backend === 'board') {
+      postPolicyStatus('running', '板端推理模式：物理由本仿真器计算，动作逐 tick 请求板端已加载模型。');
+      runPolicyStep();
+      return;
+    }
     postPolicyStatus('loading', '正在加载浏览器 ONNX 运行时…');
     try {
       const ort = await loadOrt();
@@ -642,7 +657,7 @@
   }
 
   async function runPolicyStep() {
-    if (!policySession || !policySession.session) return;
+    if (!policySession || (policySession.backend !== 'board' && !policySession.session)) return;
     if (policySession.steps >= policySession.maxSteps) {
       const reached = latestState && distanceToGoal(latestState) <= GOAL_EPSILON;
       const message = `策略试跑结束：${policySession.steps} 步${reached ? '，到达目标点。' : '，达到步数上限。'}`;
@@ -653,16 +668,35 @@
     }
     try {
       const state = await api(`sessions/${sessionId}/state`);
-      const ort = ortRuntime;
-      const obs = observationOf(state);
-      const session = policySession.session;
-      const inputName = session.inputNames[0] || 'observation';
-      const outputName = session.outputNames[0] || 'action';
-      const results = await session.run({
-        [inputName]: new ort.Tensor('float32', Float32Array.from(obs.map(finite)), [1, obs.length]),
-      });
-      const output = results[outputName]?.data;
-      const action = [finite(output?.[0]), finite(output?.[1])];
+      const obs = observationOf(state).map(finite);
+      let action;
+      if (policySession.backend === 'board') {
+        // Hybrid mode: physics stays in the simulator, the action comes from
+        // the board's loaded model. Sequential awaits are the backpressure —
+        // a slow board simply lowers the effective control rate.
+        const endpoint = `${policySession.apiRoot.replace(/\/+$/, '')}/board-station/policy-infer`;
+        const res = await fetch(endpoint, {
+          method: 'POST',
+          credentials: 'same-origin',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ observations: [obs] }),
+        });
+        const payload = await res.json().catch(() => null);
+        if (!res.ok || !payload?.ok) {
+          throw new Error(payload?.error ? `板端推理被拒绝：${payload.error}` : `板端推理失败（HTTP ${res.status}）`);
+        }
+        action = [finite(payload.actions?.[0]?.[0]), finite(payload.actions?.[0]?.[1])];
+      } else {
+        const ort = ortRuntime;
+        const session = policySession.session;
+        const inputName = session.inputNames[0] || 'observation';
+        const outputName = session.outputNames[0] || 'action';
+        const results = await session.run({
+          [inputName]: new ort.Tensor('float32', Float32Array.from(obs), [1, obs.length]),
+        });
+        const output = results[outputName]?.data;
+        action = [finite(output?.[0]), finite(output?.[1])];
+      }
       const maxLinear = finite(state?.cmd_vel?.maxLinear, 0.3);
       const maxAngular = finite(state?.cmd_vel?.maxAngular, 1.0);
       // The policy head is normalized [-1, 1]; project to the same physical
