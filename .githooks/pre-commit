@@ -24,8 +24,11 @@ npx vitest run --configLoader runner --changed HEAD >/dev/null
 
 JS_STAGED=$(echo "$STAGED" | grep -E '\.(ts|mjs|js)$' || true)
 if [ -n "$JS_STAGED" ]; then
+  # --no-warn-ignored: app.js is on the global eslint ignore list, and
+  # linting an ignored file emits a warning that --max-warnings=0 would
+  # otherwise turn into a false failure for any commit touching it.
   # shellcheck disable=SC2086
-  npx eslint $JS_STAGED --max-warnings=0
+  npx eslint $JS_STAGED --max-warnings=0 --no-warn-ignored
 fi
 FMT_STAGED=$(echo "$STAGED" | grep -E '\.(ts|mjs|js|json|yaml|yml|md)$' || true)
 if [ -n "$FMT_STAGED" ]; then
