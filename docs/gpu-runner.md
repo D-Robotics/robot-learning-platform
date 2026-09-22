@@ -133,6 +133,57 @@ RDK_SIM2REAL_LOCAL_RUNNER_URL=http://127.0.0.1:19091/train   # 走 SSH 隧道时
 RDK_SIM2REAL_LOCAL_RUNNER_TOKEN=<同上 token>
 ```
 
+## microduck-rl（Warp/mjlab）4096×6000 闭环配方
+
+这是把直播同款训练规模（4096 并行环境 × 6000 轮 PPO）在本平台跑成**仓内证据**
+的最短路径。与 starter/mjx 引擎不同，microduck-rl-adapter 需要 GPU 机上另有
+上游 `microduck_rl` checkout（mjlab + MuJoCo Warp + rsl_rl 栈，用 `uv` 管理）。
+
+```bash
+# 1. GPU 机：取得上游 checkout（平台不下发，遵循其许可证）
+git clone <microduck_rl 上游仓库> ~/microduck_rl && cd ~/microduck_rl && uv sync
+
+# 2. GPU 机：worker 注册 adapter 引擎（worker.env 追加一行）
+RDK_SIM2REAL_TRAIN_ENGINES_JSON='{…,"microduck-rl":{"executable":"/home/<user>/rdk-sim2real/.venv/bin/python","args":["/home/<user>/rdk-sim2real/engines/microduck-rl-adapter/adapter.py"]}}'
+
+# 3. 平台训练页：引擎选 microduck-rl，任务选 velocity（行走/速度跟踪），
+#    envs=4096、iterations=6000，backend=local 提交；无上游/CUDA 时 adapter
+#    exit 3 诚实失败，不会回退 CPU 假装训练。
+```
+
+训练完成后 adapter 在 job 目录自动产出：
+
+| 文件 | 含义 |
+| --- | --- |
+| `policy.onnx` | 过导出门禁（61→14、有限性/确定性/敏感性）的制品 |
+| `parity.json` | checkpoint↔ONNX 逐观测对齐报告（`parity_check.py`，pass/failed/skipped） |
+| `SHA256SUMS` | job 目录全部产物的清单，缺件/被改即拒收 |
+
+parity 判级纪律：`failed` 时制品被改名为 `policy.onnx.rejected`（与门禁失败同级）；
+`skipped` 时制品保留但明确标注「未经 checkpoint 对齐证明」——两种情况都不会
+被误读为已验证。将 `policy.onnx` 交回本机 `engines/microduck-eval`
+（walking-velocity 信封）评测，回填存活率/跟踪误差后，直播同款训练闭环即有
+仓内证据。
+
+## SmolVLA（视觉-语言-动作）真训路由配方
+
+`engines/smolvla/train_smolvla.py` 已把 450M VLA 的微调代码路径写全（LeRobot
+数据集装载、LoRA/全量微调、诚实进度行、result 契约），且在无 GPU/无网络机器上
+只能 `--dry-run` 出训练计划。把它跑成**真训**需要的全部准备：
+
+```bash
+# 1. GPU 机（≥1 张 24GB 级 GPU）：安装训练栈与基础权重
+.venv/bin/python -m pip install torch lerobot smolvla  # 以 adapter 依赖门禁提示为准
+# 2. 数据集：用平台 LeRobot 转换器产出/下载的 LeRobot 数据集目录
+# 3. 以 file 协议接入 worker（同 RDK_SIM2REAL_TRAIN_ENGINES_JSON 模式），
+#    引擎名注册 smolvla；训练请求 training.engine="smolvla" 即路由。
+# 4. 适配器在缺依赖/缺 GPU 时 fail-closed 并打印缺失项与安装命令——
+#    它不会用 CPU 假装微调一个 450M 模型。
+```
+
+约束：SmolVLA 训练永不在板上发生；X5/S100 板保持轻客户端，推理走
+openpi-verified 的 GPU 服务器 + 板端薄客户端模式。
+
 ## GPU 机器还在创建时
 
 `scripts/gpu-deploy.mjs` 的第 1 步会失败并给出排查清单——这是预期行为。机器就绪后重跑同一条命令即可；本机其他功能（`npm run demo:starter` CPU 真实训练、可视化、评测、只读板端预检）完全不依赖 GPU 机器。
