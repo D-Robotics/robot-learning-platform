@@ -60,6 +60,41 @@ scripts/deploy-sim2real-production.sh --skip-build   # 复用已有构建
 `/opt/sim2real-web/current` 软链切回上一
 `releases/robot-learning-*` 并重启两个服务（脚本失败时已自动执行）。
 
+## 认证配置（studio-cookie 嫁接 · web-cloud 部署）
+
+`/sim2real` 挂在 `rdkstudio.d-robotics.cc` 同域路径下，认证**嫁接 Studio 的
+登录后端**：工作台解密 Studio 主壳签发的全域 cookie `rdk_sso_web_session`
+（共享 `RDK_STUDIO_COOKIE_SECRET`），用户在 Studio 登录一次即全站认证，
+工作台不维护自己的登录页。
+
+必需配置（root-only env，缺任意一项则认证退回 standalone、全站 401）：
+
+```bash
+RDK_STUDIO_COOKIE_SECRET=<与 Studio 主壳一致的 cookie 密钥>
+# 可省略：存在该密钥时认证模式自动判定为 studio-cookie。
+# 显式指定亦可：RDK_SIM2REAL_AUTH_MODE=studio-cookie
+```
+
+行为语义（判断部署是否正常）：
+
+- **已登录 Studio 的用户**访问 `/sim2real`：无感登录，不应出现登录横幅
+  或跳转。若仍被 401/跳登录页，先核对两处 env 的
+  `RDK_STUDIO_COOKIE_SECRET` 是否逐字符一致，再确认请求确实带上了
+  `rdk_sso_web_session` cookie（同域是前提，跨域子域不共享）。
+- **未登录用户**点登录跳 `/rdkstudio/`（Studio 主壳登录页）是**正确的
+  嫁接行为**——登录页本来就是 Studio 的，登录后回到 `/sim2real` 即
+  自动认证。
+- 独立于 Studio 的直连登录走 `RDK_SIM2REAL_AUTH_MODE=user-center`
+  （OAuth2 + JWKS，见 `docs/decisions/D-006-user-center-direct-auth.md`）；
+  两种模式互斥，凭据不齐时 fail-closed 回退，绝不半配置生效。
+
+验证：
+
+```bash
+curl -s https://rdkstudio.d-robotics.cc/sim2real/api/healthz | grep authMode
+# 期望 "authMode":"studio-cookie"；"standalone" 说明 cookie 密钥未加载。
+```
+
 ## 部署后探针
 
 服务启动后，用独立 Node 进程检查 `/healthz`、`/readyz` 和 `/metrics`：
