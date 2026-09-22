@@ -88,6 +88,13 @@ RDK_STUDIO_COOKIE_SECRET=<与 Studio 主壳一致的 cookie 密钥>
   （OAuth2 + JWKS，见 `docs/decisions/D-006-user-center-direct-auth.md`）；
   两种模式互斥，凭据不齐时 fail-closed 回退，绝不半配置生效。
 
+user-center 模式额外支持**自有品牌账号密码登录页**（复刻 Studio 的
+direct-login 后端，`/login.html`）：需要追加配置
+`RDK_SIM2REAL_UC_DIRECT_AES_KEY`（与门户共享的 16 字节 AES key，
+SSO_DIRECT_AES_KEY 同源）与 `RDK_SIM2REAL_UC_CLIENT_ID` /
+`RDK_SIM2REAL_UC_CLIENT_SECRET` / `RDK_SIM2REAL_UC_SESSION_SECRET`。
+AES key 未配置时表单端点不存在，页面只保留 SSO 授权链接。
+
 验证：
 
 ```bash

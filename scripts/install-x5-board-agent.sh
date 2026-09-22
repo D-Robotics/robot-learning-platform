@@ -19,7 +19,7 @@ usage() {
   cat <<'EOF'
 Usage: RDK_X5_SSH_TARGET=root@board-host ./scripts/install-x5-board-agent.sh [options]
 
-Install the X5 board-agent systemd units, root-only state directories, and
+Install the X5/S100 board-agent systemd units, root-only state directories, and
 non-destructive environment-file skeletons.  The default action never starts
 or restarts a service and never replaces an existing unit or environment file.
 
@@ -27,6 +27,11 @@ Options:
   --force   replace an existing unit file after reviewing the local unit
   --enable  enable and start rdk-board-agent.service (requires deployed code)
   --help    show this help
+
+RDK_X5_PROFILE_NAME selects the default adapter profile written into a freshly
+created agent.env (rdk-x5-originbot-real.json, rdk-x5-microduck-leg.json, or
+rdk-s100-generic-drive.json; default rdk-x5-originbot-real.json).  Existing
+environment files are never modified.
 
 After this script, deploy code with deploy-x5-board-agent.sh.  Configure
 telemetry.env before explicitly enabling the telemetry uploader.

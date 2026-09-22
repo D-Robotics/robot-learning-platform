@@ -60,7 +60,19 @@ rm -rf "$REL" && mkdir -p "$REL"
 # 包内含顶层 release 目录，strip 掉再解到目标路径。
 tar xzf "/tmp/$TARBALL" -C "$REL" --strip-components=1 2>/dev/null
 # engines 是 Linux venv，只能由服务端历代拷贝，绝不能被上传覆盖。
-cp -r "$BASE/current/dist-server/engines" "$REL/dist-server/engines"
+# current 未必含 engines（历史断链/被剔 Release），因此从「最新含
+# dist-server/engines 的 release」拷贝，而不是只盯 current。
+SRC_ENGINES=""
+if [ -d "$BASE/current/dist-server/engines" ]; then
+  SRC_ENGINES="$BASE/current/dist-server/engines"
+else
+  SRC_ENGINES=$(ls -td "$BASE"/releases/*/dist-server/engines 2>/dev/null | head -1)
+fi
+if [ -z "$SRC_ENGINES" ]; then
+  echo "FATAL: no release carries dist-server/engines (venv lineage broken)" >&2
+  exit 1
+fi
+cp -r "$SRC_ENGINES" "$REL/dist-server/engines"
 "$NODE_BIN" --check "$REL/dist-server/services/sim2real-web/server.js"
 rm -f "/tmp/$TARBALL"
 REMOTE

@@ -78,8 +78,8 @@ describe('user-center auth routes', () => {
   });
   afterEach(() => restoreEnv());
 
-  it('exposes the platform login path as the deployment login url', () => {
-    expect(ssoLoginUrlForDeployment()).toBe('/api/sim2real/auth/uc/login');
+  it('exposes the own-brand login page as the deployment login url', () => {
+    expect(ssoLoginUrlForDeployment()).toBe('/login.html');
   });
 
   it('returns null outside user-center mode (studio-cookie keeps its default)', () => {

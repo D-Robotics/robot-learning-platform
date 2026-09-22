@@ -50,6 +50,14 @@ const PRODUCT_PROFILES = Object.freeze({
     contractId: 'rdk-duck-policy-v1',
     simulatorPath: '',
   },
+  custom: {
+    id: 'custom',
+    displayName: '通用 RDK 设备',
+    projectName: '通用 RDK 设备 · 自定义契约',
+    kitName: '任意 RDK 板卡 + 差速底盘/自定义执行器',
+    contractId: 'custom-policy-v1',
+    simulatorPath: '',
+  },
 });
 
 // Keep the MicroDuck template aligned with the upstream physical-key map and

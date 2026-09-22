@@ -990,6 +990,7 @@ function availableContractsFor(models: readonly Sim2RealModelRecord[]): {
     microduck: [],
     'rdk-duck': [],
     originbot: [],
+    custom: [],
   };
   const byKey = new Map<string, Sim2RealAvailableContract>();
   for (const model of models) {

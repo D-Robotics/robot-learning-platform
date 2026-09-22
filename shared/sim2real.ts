@@ -100,7 +100,7 @@ export const SIM2REAL_CONTRACT_LIMITS = Object.freeze({
 });
 
 /** Product lines share a workflow, not a policy contract. */
-export type Sim2RealRobotId = 'microduck' | 'rdk-duck' | 'originbot';
+export type Sim2RealRobotId = 'microduck' | 'rdk-duck' | 'originbot' | 'custom';
 
 export type Sim2RealProductContractMode = 'fixed' | 'manifest-defined';
 
@@ -141,6 +141,14 @@ export const SIM2REAL_PRODUCT_PROFILES: Readonly<Record<Sim2RealRobotId, Sim2Rea
       contractIdPrefix: 'rdk-duck-policy-',
       targetPlatforms: ['rdk-x5'],
       accessories: ['camera', 'imu', 'servo', 'ball'],
+    },
+    custom: {
+      id: 'custom',
+      displayName: '通用 RDK 设备',
+      contractMode: 'manifest-defined',
+      contractIdPrefix: 'custom-policy-',
+      targetPlatforms: ['rdk-x5', 'rdk-s100'],
+      accessories: ['imu', 'odom', 'battery', 'twist'],
     },
   });
 
@@ -803,7 +811,12 @@ const ALLOWED_WORKLOADS = new Set<ModelArtifactWorkload>([
 const ALLOWED_ROLES = new Set<Sim2RealArtifactRole>(['policy', 'compiled-policy', 'calibration']);
 const ALLOWED_BACKENDS = new Set<Sim2RealBackend>(['browser', 'robogo', 'local']);
 const ALLOWED_VARIANTS = new Set<Sim2RealRobotVariant>(['legs', 'rollers', 'both']);
-const ALLOWED_ROBOT_IDS = new Set<Sim2RealRobotId>(['microduck', 'rdk-duck', 'originbot']);
+const ALLOWED_ROBOT_IDS = new Set<Sim2RealRobotId>([
+  'microduck',
+  'rdk-duck',
+  'originbot',
+  'custom',
+]);
 const ALLOWED_TRAINING_PROFILES = new Set<Sim2RealTrainingProfile>([
   'smoke',
   'low-vram',

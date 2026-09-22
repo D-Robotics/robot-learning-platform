@@ -18,6 +18,7 @@
 import crypto from 'node:crypto';
 import type { Request } from 'express';
 import type { Sim2RealAuthPort, Sim2RealPrincipal } from './sim2real-auth.js';
+import { createUserCenterDirectLoginRouter } from './user-center-direct.js';
 import type { VerifiedUserCenterJwt } from './user-center-jwt.js';
 
 export const USER_CENTER_SESSION_COOKIE = 'rdk_sim2real_uc_session';
@@ -69,7 +70,10 @@ export function ssoLoginUrlForDeployment(): string | null {
   const mode = String(process.env.RDK_SIM2REAL_AUTH_MODE || '')
     .trim()
     .toLowerCase();
-  return mode === 'user-center' ? USER_CENTER_LOGIN_PATH : null;
+  // Own-brand login page: the form posts to the direct-login session route,
+  // and the page also links the OAuth authorize endpoint for SSO-hosted
+  // sign-in. Returning the bare API path would skip our own UI entirely.
+  return mode === 'user-center' ? '/login.html' : null;
 }
 
 function hmacSign(payload: string, secret: string): string {
@@ -200,6 +204,18 @@ export function createUserCenterAuth(options?: {
       return verifyUserCenterSessionCookieValue(session, sessionSecret);
     },
     registerRoutes: (router) => {
+      // 账号密码直登（复刻 Studio /api/sso/direct/login）：配置了
+      // RDK_SIM2REAL_UC_DIRECT_AES_KEY 时才注册；未配置时该端点不存在，
+      // 登录页的表单入口隐藏，只保留 OAuth authorize 链接。
+      const direct = createUserCenterDirectLoginRouter({
+        docsVerify: (token) =>
+          docsVerify(token).then((verified) => (verified ? { claims: verified.claims } : null)),
+      });
+      if (direct) {
+        router.post(direct.sessionPath, (request, response) => {
+          void direct.postSession(request, response);
+        });
+      }
       // Bearer → session 预中间件：API 客户端用 User Center access token 时，
       // 验签通过后把等价会话注入本请求的 cookie 头，同步 resolvePrincipal
       // 即可读取。验签失败不注入（fail closed）。
