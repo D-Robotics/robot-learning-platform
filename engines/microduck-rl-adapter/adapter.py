@@ -704,6 +704,43 @@ def main() -> None:
                         onnx_bytes, (onnx_sha256 or "unavailable")[:12]
                     )
                 )
+                # Checkpoint <-> ONNX parity: the gate proved the graph is a
+                # well-formed policy; this proves it computes the checkpoint's
+                # actions. Runs in this process's interpreter (worker venv:
+                # torch + onnxruntime, no upstream code needed). A parity
+                # failure withholds the artifact exactly like a gate failure;
+                # a *skipped* check (unknown layout, missing onnxruntime) keeps
+                # the artifact but the skip is recorded next to it.
+                parity_path = job_dir / "parity.json"
+                parity_cmd = [
+                    sys.executable,
+                    str(Path(__file__).resolve().parent / "parity_check.py"),
+                    "--checkpoint", str(checkpoint),
+                    "--onnx", str(onnx_path),
+                    "--json-out", str(parity_path),
+                ]
+                try:
+                    parity_code = run_streamed(parity_cmd, job_dir, None, "parity")
+                except Exception as error:  # noqa: BLE001
+                    stdout("parity check crashed: {}".format(error))
+                    parity_code = 2
+                if parity_code == 0:
+                    stdout("checkpoint<->ONNX parity: pass")
+                elif parity_code == 1:
+                    rejected = onnx_path.with_name(onnx_path.name + ".rejected")
+                    onnx_path.rename(rejected)
+                    onnx_exported = False
+                    onnx_bytes = 0
+                    onnx_sha256 = None
+                    stdout(
+                        "artifact WITHHELD: exported graph does not match the checkpoint "
+                        "(see parity.json); kept as {}".format(rejected.name)
+                    )
+                else:
+                    stdout(
+                        "checkpoint<->ONNX parity: skipped (details in parity.json); "
+                        "artifact is gated and hashed but unproven against the checkpoint"
+                    )
         else:
             stdout("ONNX export failed (exit {}); continuing without it".format(export_code))
 

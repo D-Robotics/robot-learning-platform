@@ -34,6 +34,7 @@ const ENGINES = [
   'mjx-adapter',
   'mjlab-rsl-rl-adapter',
   'microduck-eval',
+  'microduck-recurrent',
   'offline-bc',
   'act',
   'diffusion-policy',
