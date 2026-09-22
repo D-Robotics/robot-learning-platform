@@ -323,6 +323,37 @@ for (const theme of THEMES) {
       .join(' ') || 'clean',
   );
 
+  // ---- async status changes must land in a live region ----
+  // A live region that is never updated, or an update outside any live region, is
+  // silent for a screen-reader user even though the pixels change. The view
+  // switch below is the deterministic update: setView announces through the
+  // view-announcer live region and the lazy station init writes its status
+  // lines — both must land inside the observed window, so the observers go up
+  // BEFORE the hash assignment (a second assignment of the same hash is a
+  // no-op and would observe nothing).
+  const live = await page.evaluate(async () => {
+    const regions = [...document.querySelectorAll('[aria-live]')];
+    const before = regions.map((r) => r.textContent);
+    const observed = [];
+    const observers = regions.map(
+      (r) => new MutationObserver(() => observed.push((r.id || r.className || 'live').toString())),
+    );
+    regions.forEach((r, i) =>
+      observers[i].observe(r, { childList: true, characterData: true, subtree: true }),
+    );
+    window.location.hash = '#station';
+    // the lazy station init plus one workspace poll cycle
+    await new Promise((resolve) => setTimeout(resolve, 6500));
+    observers.forEach((o) => o.disconnect());
+    const changed = regions.filter((r, i) => r.textContent !== before[i]).length;
+    return { regions: regions.length, changed, observed: [...new Set(observed)].slice(0, 6) };
+  });
+  record(
+    'a11y: live regions exist and receive updates',
+    live.regions >= 5 && live.changed > 0,
+    `${live.regions} live regions, ${live.changed} updated during one poll cycle (${live.observed.join(', ') || 'none'})`,
+  );
+
   await page.evaluate(() => {
     window.location.hash = '#station';
   });
@@ -374,31 +405,6 @@ for (const theme of THEMES) {
     inversions.count
       ? `${inversions.count} inversion(s): ${inversions.bad.join(' | ')}`
       : `no inversions (${inversions.reordered} elements use CSS order)`,
-  );
-
-  // ---- async status changes must land in a live region ----
-  // A live region that is never updated, or an update outside any live region, is
-  // silent for a screen-reader user even though the pixels change.
-  const live = await page.evaluate(async () => {
-    const regions = [...document.querySelectorAll('[aria-live]')];
-    const before = regions.map((r) => r.textContent);
-    const observed = [];
-    const observers = regions.map(
-      (r) => new MutationObserver(() => observed.push((r.id || r.className || 'live').toString())),
-    );
-    regions.forEach((r, i) =>
-      observers[i].observe(r, { childList: true, characterData: true, subtree: true }),
-    );
-    // the workspace polls on a timer; give it one cycle to touch a live region
-    await new Promise((resolve) => setTimeout(resolve, 6500));
-    observers.forEach((o) => o.disconnect());
-    const changed = regions.filter((r, i) => r.textContent !== before[i]).length;
-    return { regions: regions.length, changed, observed: [...new Set(observed)].slice(0, 6) };
-  });
-  record(
-    'a11y: live regions exist and receive updates',
-    live.regions >= 5 && live.changed > 0,
-    `${live.regions} live regions, ${live.changed} updated during one poll cycle (${live.observed.join(', ') || 'none'})`,
   );
 
   await client.detach().catch(() => {});
