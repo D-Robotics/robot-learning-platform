@@ -1624,6 +1624,43 @@ paths:
           content: { application/json: { schema: { $ref: "#/components/schemas/DriveState" } } }
         "401": { $ref: "#/components/responses/AuthRequired" }
         "502": { description: Board agent unreachable; chassis watchdog still enforces rest. }
+  /api/v1/duck/board-station/policy-infer:
+    post:
+      tags: [board-station]
+      summary: Batch inference on the loaded board model
+      operationId: postBoardStationPolicyInfer
+      description: >-
+        Hybrid-mode primitive: the browser keeps computing physics while
+        policy inference for N simulated bodies is served by the board's
+        loaded model. Deliberately NOT gated by the motion switches —
+        nothing here actuates hardware; the board runtime fail-closes every
+        row and action before anything comes back. Batch capped at 64 rows.
+      parameters:
+        - in: query
+          name: deviceId
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [observations]
+              properties:
+                observations:
+                  type: array
+                  minItems: 1
+                  maxItems: 64
+                  description: One observation vector per simulated body.
+                  items:
+                    type: array
+                    items: { type: number }
+      responses:
+        "200":
+          description: Batch of predicted action rows (board contract shape).
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/AuthRequired" }
+        "502": { description: Board agent unreachable or model not loaded (retryable). }
   /api/v1/duck/board-station/arm:
     get:
       tags: [board-station]
