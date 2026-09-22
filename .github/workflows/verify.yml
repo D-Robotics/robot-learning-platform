@@ -91,7 +91,7 @@ jobs:
           python3 -m pip install --disable-pip-version-check --no-cache-dir \
             "torch==2.8.0" "torchvision==0.23.0" \
             onnx==1.19.1 onnxruntime==1.19.2 "jax[cpu]==0.11.1" \
-            "mujoco==3.13.0" "dm_control==1.0.46" rsl-rl-lib==2.2.3
+            "mujoco==3.13.0" "dm_control==1.0.46" rsl-rl-lib==2.2.3 pytest
       - name: Engine gates
         run: npm run verify:ci:engines
 
