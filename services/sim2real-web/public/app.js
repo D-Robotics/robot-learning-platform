@@ -75,6 +75,8 @@ const ACTION_TASKS = Object.freeze({
   sit: { label: '坐下 / 站起', hint: '动作切换与自恢复' },
   recover: { label: '自恢复', hint: '跌倒检测与起身策略' },
   kick: { label: '踢球', hint: '目标交互与动作衔接' },
+  'balance-basketball': { label: '篮球平衡 · 循环策略', hint: '鸭子立于滚球，LSTM 从姿态历史推断球运动' },
+  'balance-stilts': { label: '高跷平衡 · 循环策略', hint: '固定枢轴双杆高跷，质量随高度联动' },
   'football-single-goal-kick': { label: '足球：单鸭射门', hint: 'MuJoCo 单鸭追球并把球踢入球门' },
   'football-2v2': { label: '足球：2v2', hint: '双鸭协作、对手脚本与共享进球奖励' },
   'football-3v3': { label: '足球：3v3', hint: '三鸭协作、多智能体比赛与 GPU 并行训练' },
@@ -3286,6 +3288,7 @@ function renderIntegrations() {
     const engineKnown = (id) => reported == null || reported.includes(id) || reported.includes('default');
     for (const option of engineSelect.querySelectorAll(
       'option[value="starter-ppo"], option[value="mjx-ppo"], option[value="microduck-rl"], ' +
+        'option[value="microduck-recurrent"], ' +
         'option[value="microduck-football"], ' +
         'option[value="visual-ppo"], option[value="dm-control-ppo"], option[value="mjlab-rsl-rl"], ' +
         'option[value="act"], option[value="diffusion-policy"], option[value="smolvla"]',
@@ -3335,10 +3338,15 @@ const ENGINE_CAPABILITIES = Object.freeze({
     badges: ['mjlab 并行物理', 'CUDA', '万级环境'],
     desc: 'mjlab GPU 并行物理 + rsl-rl PPO，面向服务器级批量训练（需 CUDA worker 注册）。',
   },
+  'microduck-recurrent': {
+    name: 'microduck-recurrent',
+    badges: ['循环 LSTM 256', '篮球/高跷平衡代理', 'h/c 状态导出'],
+    desc: '循环网络训练器：存储状态 BPTT 的循环 PPO，导出 obs 61 + h/c -> 14 动作的循环 ONNX，直接通过 microduck-eval 的循环装载验收；评测侧已可给存活率结论，质量级训练走 GPU runner。',
+  },
   'microduck-football': {
     name: 'microduck-football',
-    badges: ['MuJoCo 足球', 'MicroDuck 61D→14D', 'CUDA 并行'],
-    desc: '平台原生足球任务：单鸭射门、2v2、3v3 共享训练协议，使用 MuJoCo 批量环境；当前 checkpoint 是 4D 高层控制，真实 MicroDuck 61D→14D 舵机 actor 通过同一平台评测链路接入。',
+    badges: ['MuJoCo 足球', 'MicroDuck 61D→14D', '非对称 critic', 'CUDA 并行'],
+    desc: '平台原生足球任务：单鸭射门、2v2、3v3 共享训练协议，MuJoCo 批量环境；支持非对称 actor-critic（critic 读取球真值，actor 接口不变，请求 training.asymmetric 开启）；高层任务状态机（搜索→绕球→对准→射门）见 engines/microduck-football/task_machine.py。',
   },
   'mjlab-rsl-rl': {
     name: 'mjlab-rsl-rl',
@@ -10490,6 +10498,15 @@ function wireEvents() {
         renderEngineCapability();
       }
     }
+    // Balance tasks are owned by the recurrent engine the same way: selecting
+    // one prepares the matching engine without locking the operator in.
+    if (next.startsWith('balance-')) {
+      const engine = $('training-engine');
+      if (engine && (!engine.value || engine.value === 'starter-ppo')) {
+        engine.value = 'microduck-recurrent';
+        renderEngineCapability();
+      }
+    }
     saveWorkspaceContext();
     try {
       window.localStorage?.setItem('rdk-duck-lab-task', next);
@@ -10563,6 +10580,33 @@ function wireEvents() {
     sendReplayFrame();
   });
   $('policy-trial-button')?.addEventListener('click', startPolicyTrial);
+  $('policy-trial-board')?.addEventListener('change', (event) => {
+    const status = $('policy-trial-status');
+    if (!status) return;
+    if (event.target.checked !== true) {
+      status.textContent = '在嵌入仿真器中用本机浏览器运行该策略的 ONNX 模型。';
+      return;
+    }
+    status.textContent = '板端推理模式：正在读取板端策略运行时状态…';
+    fetch(apiPath('/sim2real/board-station/policy'), { credentials: 'same-origin' })
+      .then((response) => response.json())
+      .then((payload) => {
+        // Agent payloads historically nest the status under `policy`; accept
+        // the flat shape too so either side may evolve independently.
+        const policy = (payload && (payload.policy || payload)) || {};
+        const model = policy.model || {};
+        if (policy.state === 'ready' || policy.state === 'running') {
+          status.textContent =
+            `板端推理就绪：模型 ${String(model.path || '已加载').split('/').pop()}` +
+            `（provider ${policy.provider || model.provider || 'cpu'}）——试跑动作将逐 tick 来自板端。`;
+        } else {
+          status.textContent = '板端策略运行时未就绪：请先在部署页上传并加载模型，再启用板端推理。';
+        }
+      })
+      .catch(() => {
+        status.textContent = '无法读取板端策略状态（agent 离线或未配置）。';
+      });
+  });
   $('policy-trial-stop')?.addEventListener('click', stopPolicyTrial);
   $('evaluation-next-button')?.addEventListener('click', (event) => {
     if (event.currentTarget?.dataset.action === 'import-telemetry') {
