@@ -90,7 +90,12 @@ import {
 import {
   createStudioDirectRelay,
   renderStudioDirectLoginPage,
+  STUDIO_DIRECT_LOGOUT_PATH,
 } from '../../server/sim2real/studio-direct-relay.js';
+import {
+  USER_CENTER_LOGOUT_PATH,
+  userCenterAuthConfigured,
+} from '../../server/sim2real/user-center-auth.js';
 import {
   isProductionEnv,
   normalizeMicroduckRedirect,
@@ -739,11 +744,34 @@ export function createSim2RealWebApp(): Express {
           renderStudioDirectLoginPage(
             ['missing', 'invalid', 'unavailable'].includes(error) ? error : undefined,
             configuredPublicBasePath(),
+            String(request.query.loggedOut ?? '') === '1' ? '已退出登录。' : undefined,
           ),
         );
     });
     void loginUrl;
   }
+
+  // 当前会话身份（no-store）：顶栏“更多”菜单用它决定是否展示“账号/退出登录”。
+  // 未认证或本地单用户模式返回 authenticated=false，前端保持原样。
+  app.get('/api/sim2real/auth/session', (request, response) => {
+    response.setHeader('Cache-Control', 'no-store');
+    const principal = studioSsoAuth.resolvePrincipal(request);
+    const base = configuredPublicBasePath();
+    const mode = studioSsoAdapterMode();
+    const logoutUrl =
+      mode === 'studio-cookie' && studioSsoAdapterConfigured()
+        ? `${base}${STUDIO_DIRECT_LOGOUT_PATH}`
+        : mode === 'user-center' && userCenterAuthConfigured()
+          ? `${base}${USER_CENTER_LOGOUT_PATH}`
+          : null;
+    response.json({
+      ok: true,
+      authenticated: Boolean(principal),
+      ...(principal?.displayName ? { displayName: principal.displayName } : {}),
+      ...(principal && !principal.displayName ? { accountId: principal.accountId } : {}),
+      ...(logoutUrl ? { logoutUrl } : {}),
+    });
+  });
 
   // Stable capability catalog for DSH/plugin clients. This is intentionally
   // public metadata; execution still goes through authenticated domain routes.

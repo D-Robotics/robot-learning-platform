@@ -1651,6 +1651,7 @@ async function fetchPublicHealth() {
     // Offline or blocked: fall back to the built-in static entry, which the
     // server resolves (mounted/redirect/unavailable) per request anyway.
   }
+  void refreshSessionMenu();
   return state.publicHealth;
 }
 
@@ -1662,6 +1663,30 @@ function syncAuthGateLoginLinks() {
   );
   for (const node of [$('auth-login-button'), $('login-link'), $('auth-gate-banner-login')]) {
     node?.setAttribute('href', loginUrl);
+  }
+}
+
+// 已登录用户在“更多”菜单里看到当前账号与退出登录入口；游客看不到（顶栏
+// 已有登录按钮）。失败静默：会话接口不可达时菜单保持原样，不影响其他功能。
+async function refreshSessionMenu() {
+  const accountItem = $('account-menu-item');
+  const accountName = $('account-name');
+  const logoutLink = $('logout-link');
+  if (!accountItem || !logoutLink) return;
+  try {
+    const session = await request('/sim2real/auth/session', {
+      headers: { accept: 'application/json' },
+    });
+    if (!session?.authenticated || !session.logoutUrl) return;
+    logoutLink.setAttribute('href', session.logoutUrl);
+    if (accountName) {
+      accountName.textContent = session.displayName || session.accountId || '';
+      accountName.title = session.displayName || session.accountId || '';
+    }
+    accountItem.hidden = false;
+    logoutLink.hidden = false;
+  } catch {
+    // 会话探测失败不阻塞工作台；菜单维持游客形态。
   }
 }
 

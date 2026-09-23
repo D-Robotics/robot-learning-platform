@@ -25,6 +25,15 @@ const RELAY_TIMEOUT_MS = 30_000;
 const RELAY_MIN_INTERVAL_MS = 1_500;
 const relayLastAtByIp = new Map<string, number>();
 
+/** 会话 cookie 名单：登录时从 Studio 原样透传，退出时逐一失效。 */
+export const STUDIO_DIRECT_SESSION_COOKIES = [
+  'rdk_sso_web_session',
+  'rdk_sso_session',
+  'token',
+] as const;
+
+export const STUDIO_DIRECT_LOGOUT_PATH = '/api/sim2real/auth/studio-direct/logout';
+
 function relayOrigin(): string | null {
   const origin = String(
     process.env.RDK_SIM2REAL_STUDIO_ORIGIN ||
@@ -233,7 +242,11 @@ export function createStudioDirectRelay(deps: StudioDirectRelayDeps = {}) {
 }
 
 /** 独立登录页（平台自有 UI；无脚本，CSP 免疫）。 */
-export function renderStudioDirectLoginPage(error?: string, basePath?: string): string {
+export function renderStudioDirectLoginPage(
+  error?: string,
+  basePath?: string,
+  notice?: string,
+): string {
   const base = normalizeRelayBasePath(basePath);
   const messages: Record<string, string> = {
     missing: '请输入账号与密码。',
@@ -243,6 +256,8 @@ export function renderStudioDirectLoginPage(error?: string, basePath?: string): 
   const errorHtml = error
     ? `<p class="login-error" role="alert">${messages[error] ?? '登录失败，请重试。'}</p>`
     : '';
+  const noticeHtml =
+    !errorHtml && notice ? `<p class="login-notice" role="status">${notice}</p>` : '';
   return `<!doctype html>
 <html lang="zh-CN">
 <head>
@@ -260,6 +275,7 @@ export function renderStudioDirectLoginPage(error?: string, basePath?: string): 
   button{width:100%;margin-top:18px;padding:11px 12px;border:0;border-radius:8px;background:var(--accent);color:var(--panel);font-size:15px;font-weight:600;cursor:pointer}
   button:hover{filter:brightness(1.05)}
   .login-error{margin:14px 0 0;padding:10px 12px;border-radius:8px;background:var(--red-soft,#fdecec);color:var(--red-text,#a12b2b);font-size:13px}
+  .login-notice{margin:14px 0 0;padding:10px 12px;border-radius:8px;background:var(--green-soft,#e9f7ee);color:var(--green-text,#1f7a44);font-size:13px}
   .login-note{margin-top:16px;color:var(--muted);font-size:12px;line-height:1.5}
 </style>
 </head>
@@ -268,6 +284,7 @@ export function renderStudioDirectLoginPage(error?: string, basePath?: string): 
   <h1>RDK Robot Learning Platform</h1>
   <p class="login-sub">使用工作区账号登录，会话由统一登录服务签发。</p>
   ${errorHtml}
+  ${noticeHtml}
   <form method="post" action="${base}/api/sim2real/auth/studio-direct/login">
     <label for="userName">账号</label>
     <input id="userName" name="userName" autocomplete="username" required/>
