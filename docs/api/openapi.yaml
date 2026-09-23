@@ -998,6 +998,33 @@ paths:
         "403": { description: Account lacks the Agent permission. }
         "502": { description: DSH provider or runtime failure (generic, retryable). }
         "503": { description: DSH runtime is not enabled on this deployment. }
+  /api/sim2real/auth/session:
+    get:
+      tags: [sso]
+      summary: Current workbench session for the top-bar account menu
+      operationId: getSim2RealAuthSession
+      security: []
+      description: >-
+        No-store session probe behind the workbench "更多" menu. Never
+        requires authentication: unauthenticated visitors and single-user
+        standalone deployments get authenticated=false so the UI keeps its
+        guest form. displayName/accountId appear only for a verified
+        principal; logoutUrl only when the active auth adapter owns a logout
+        route (studio-cookie or user-center).
+      responses:
+        "200":
+          description: Session state; authentication is carried in the body, not the status code.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [ok, authenticated]
+                properties:
+                  ok: { const: true }
+                  authenticated: { type: boolean }
+                  displayName: { type: string }
+                  accountId: { type: string }
+                  logoutUrl: { type: string, description: Logout endpoint relative to the deployment's public base path. }
   /api/v1/duck/deployments:
     get:
       tags: [deployments]
