@@ -61,6 +61,7 @@ import math
 import os
 import re
 import shutil
+import signal
 import stat
 import subprocess
 import sys
@@ -1249,7 +1250,19 @@ def _policy_send(op, **fields):
         if _policy_proc is not None and _policy_proc.poll() is not None:
             return {"ok": False, "error": "runtime-died"}
         time.sleep(0.05)
-    return {"ok": False, "error": "policy-op-timeout"}
+    # Surface the runtime's own last state so an operator can tell a wedged
+    # runtime from a slow-but-progressing one without SSHing to the board.
+    snap = _policy_read_state() or {}
+    last_op = snap.get("lastOp") or {}
+    return {
+        "ok": False,
+        "error": "policy-op-timeout",
+        "detail": (
+            f"apply timeout {POLICY_APPLY_TIMEOUT:.0f}s; runtime state={snap.get('state')}, "
+            f"lastError={snap.get('lastError')}, lastOp.seq={last_op.get('seq')}"
+        )[:300],
+        "state": snap.get("state"),
+    }
 
 
 def policy_status():
@@ -2713,6 +2726,26 @@ class Handler(BaseHTTPRequestHandler):
 def main():
     server = ThreadingHTTPServer((HOST, PORT), Handler)
     server.daemon_threads = True
+
+    def _terminate(_sig, _frm):
+        # systemd's stop sends SIGTERM to every process in the cgroup. Do not
+        # wait on children here — the policy runtime zeroes its own outputs on
+        # SIGTERM, and any synchronous wait (policy_stop's ack, DDS teardown)
+        # burns the unit's stop budget before os._exit can run.
+        for child in (_policy_proc, _telemetry_proc, _drive_proc):
+            if child is not None and child.poll() is None:
+                try:
+                    child.terminate()
+                except OSError:
+                    pass
+        try:
+            server.server_close()
+        except OSError:
+            pass
+        os._exit(0)
+
+    signal.signal(signal.SIGTERM, _terminate)
+    signal.signal(signal.SIGINT, _terminate)
     _start_ob_sampler()
     _start_ros_topics_sampler()
     _start_drive_watchdog()

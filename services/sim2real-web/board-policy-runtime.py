@@ -428,7 +428,10 @@ def wheeled_observation_size(obs_dim, action_dim):
 
 class PolicyRuntime:
     def __init__(self):
-        self._lock = threading.Lock()
+        # RLock, not Lock: snapshot() holds this lock while _obs_slot_report()
+        # re-acquires it, so a non-reentrant lock deadlocks the state writer
+        # right after the first successful model load.
+        self._lock = threading.RLock()
         self._model = None            # onnxruntime session or hobot_dnn model
         self._model_kind = None       # onnx | bpu
         self._model_meta = None       # {path, bytes, inputDim, outputDim}
@@ -1710,8 +1713,17 @@ def main():
     threading.Thread(target=_serve_file_protocol, args=(runtime,), daemon=True).start()
 
     def _term(_sig, _frm):
-        runtime.stop("sigterm")
-        sys.exit(0)
+        # Zero the outputs best-effort in a bounded window: a synchronous stop
+        # here can hang in the rclpy/DDS destructor, which used to hold the
+        # whole unit until systemd's SIGKILL (~90 s). The zero command is
+        # durably on disk before this point either way.
+        try:
+            stopper = threading.Thread(target=runtime.stop, args=("sigterm",), daemon=True)
+            stopper.start()
+            stopper.join(0.5)
+        except Exception:  # noqa: BLE001 - nothing left to fail into
+            pass
+        os._exit(0)
 
     signal.signal(signal.SIGTERM, _term)
     signal.signal(signal.SIGINT, _term)
