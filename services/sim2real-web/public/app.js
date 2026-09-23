@@ -1617,12 +1617,27 @@ async function fetchPublicHealth() {
     if (payload && typeof payload === 'object') {
       state.publicHealth = payload;
       renderIntegrations();
+      // The auth gate usually renders before this probe resolves, so its
+      // links initially carry the built-in default. Re-sync once the real
+      // ssoLoginUrl is known.
+      syncAuthGateLoginLinks();
     }
   } catch {
     // Offline or blocked: fall back to the built-in static entry, which the
     // server resolves (mounted/redirect/unavailable) per request anyway.
   }
   return state.publicHealth;
+}
+
+/* 登录入口 href 回填：publicHealth 晚于首个 401 门到达时修正默认跳转。 */
+function syncAuthGateLoginLinks() {
+  if (!state.authRequired) return;
+  const loginUrl = withLocalReturnTo(
+    safeLoginUrl(state.publicHealth?.ssoLoginUrl || '/rdkstudio/'),
+  );
+  for (const node of [$('auth-login-button'), $('login-link'), $('auth-gate-banner-login')]) {
+    node?.setAttribute('href', loginUrl);
+  }
 }
 
 function setAuthGate(payload) {
