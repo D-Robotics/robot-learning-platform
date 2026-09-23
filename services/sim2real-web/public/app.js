@@ -83,11 +83,11 @@ const ACTION_TASKS = Object.freeze({
   sit: { label: '坐下 / 站起', hint: '动作切换与自恢复' },
   recover: { label: '自恢复', hint: '跌倒检测与起身策略' },
   kick: { label: '踢球', hint: '目标交互与动作衔接' },
-  'balance-basketball': { label: '篮球平衡 · 循环策略', hint: '鸭子立于滚球，LSTM 从姿态历史推断球运动' },
-  'balance-stilts': { label: '高跷平衡 · 循环策略', hint: '固定枢轴双杆高跷，质量随高度联动' },
-  'football-single-goal-kick': { label: '足球：单鸭射门', hint: 'MuJoCo 单鸭追球并把球踢入球门' },
-  'football-2v2': { label: '足球：2v2', hint: '双鸭协作、对手脚本与共享进球奖励' },
-  'football-3v3': { label: '足球：3v3', hint: '三鸭协作、多智能体比赛与 GPU 并行训练' },
+  'balance-basketball': { label: '篮球平衡 · 循环策略', hint: '鸭子立于滚球，LSTM 从姿态历史推断球运动', scene: '滚球平衡' },
+  'balance-stilts': { label: '高跷平衡 · 循环策略', hint: '固定枢轴双杆高跷，质量随高度联动', scene: '双杆高跷' },
+  'football-single-goal-kick': { label: '足球：单鸭射门', hint: 'MuJoCo 单鸭追球并把球踢入球门', scene: '1 鸭 · 单球门' },
+  'football-2v2': { label: '足球：2v2', hint: '双鸭协作、对手脚本与共享进球奖励', scene: '4 鸭 · 双方各 2 · 双球门' },
+  'football-3v3': { label: '足球：3v3', hint: '三鸭协作、多智能体比赛与 GPU 并行训练', scene: '6 鸭 · 双方各 3 · 双球门 · GPU 并行' },
   custom: { label: '自定义动作', hint: '使用自己的策略包' },
   'goal-navigation': { label: '目标导航', hint: '基于 odom/IMU 的目标点导航' },
   'visual-twist': { label: '视觉跟随', hint: '相机观测到线速度/角速度' },
@@ -2612,6 +2612,15 @@ function selectedTask() {
   return ACTION_TASKS[state.taskId] || ACTION_TASKS.walk;
 }
 
+// Engine-side scenes (multi-duck football, balance rigs) never appear in the
+// single-duck browser sandbox; state that wherever the task is shown, or the
+// task switch reads as a no-op to the operator.
+function taskContextNote(task) {
+  return task.scene
+    ? `${task.hint}。训练在引擎侧场景（${task.scene}）中进行；浏览器沙盒保持单鸭，画面不随任务切换。`
+    : `${task.hint}。切换后会同步仿真、训练和评测参数。`;
+}
+
 function selectedDevice() {
   return state.overview?.devices?.find((device) => device.id === state.selectedDeviceId) || null;
 }
@@ -3693,7 +3702,7 @@ function renderActionLibrary() {
   const empty = $('sim-action-empty');
   if (!root || !empty) return;
   const task = selectedTask();
-  setText('task-context-note', `${task.hint}。切换后会同步仿真、训练和评测参数。`);
+  setText('task-context-note', taskContextNote(task));
   const heading = root.closest('.sim-action-library')?.querySelector('.sim-action-library-heading strong');
   if (heading) heading.textContent = `当前任务 · ${task.label}`;
   const taskStatus = $('sim-action-task-status');
@@ -3885,6 +3894,10 @@ function renderHistory() {
         ? PHYSICS_BACKEND_SHORT[record.metrics.physicsBackend] ||
           '物理 · ' + record.metrics.physicsBackend
         : '';
+    const sceneChip =
+      record.recordType === 'run' && ENGINE_SCENE_SHORT[record.taskId]
+        ? ENGINE_SCENE_SHORT[record.taskId]
+        : '';
     row.innerHTML =
       '<span class="history-time">' +
       escapeHtml(formatDate(record.createdAt)) +
@@ -3896,6 +3909,9 @@ function renderHistory() {
       escapeHtml(record.summary || record.modelId || '') +
       (physicsChip
         ? '<span class="history-physics">' + escapeHtml(physicsChip) + '</span>'
+        : '') +
+      (sceneChip
+        ? '<span class="history-physics">' + escapeHtml(sceneChip) + '</span>'
         : '') +
       '</span><span class="history-status history-status-' +
       escapeHtml(status) +
@@ -3927,6 +3943,16 @@ const PHYSICS_BACKEND_SHORT = {
   mjx: '物理 · MJX',
   'starter-kinematic': '物理 · 运动学',
   mujoco: '物理 · MuJoCo',
+};
+
+// These tasks train in engine-side scenes the browser sandbox never renders;
+// the row chip keeps that visible at a glance. Absent for tasks whose scene
+// matches the sandbox (walk, kick, single-goal-kick, …).
+const ENGINE_SCENE_SHORT = {
+  'balance-basketball': '引擎场景 · 滚球',
+  'balance-stilts': '引擎场景 · 高跷',
+  'football-2v2': '引擎场景 · 4 鸭',
+  'football-3v3': '引擎场景 · 6 鸭',
 };
 
 // A latency figure only means something with its measurement stage attached: a
@@ -6017,7 +6043,7 @@ function sendReplayFrame() {
 // video, the export button POSTs the render (server ffmpeg), and playback
 // syncs to the unified timeline in one direction (scrub → video time). The
 // video's own controls stay usable; scrubbing it does not move the timeline.
-function mountReplayVideo(runId, runMetrics) {
+function mountReplayVideo(runId, runMetrics, runTaskId) {
   const block = $('replay-video-block');
   const video = $('replay-video-element');
   const caption = $('replay-video-caption');
@@ -6031,6 +6057,9 @@ function mountReplayVideo(runId, runMetrics) {
   download.hidden = true;
   download.removeAttribute('href');
   video.removeAttribute('src');
+  const scenePrefix = ACTION_TASKS[runTaskId]?.scene
+    ? `该任务的训练场景（${ACTION_TASKS[runTaskId].scene}）在训练引擎侧运行；`
+    : '';
   const meta = runMetrics?.replayVideo;
   if (!runId) {
     block.hidden = true;
@@ -6039,11 +6068,19 @@ function mountReplayVideo(runId, runMetrics) {
   block.hidden = false;
   renderButton.disabled = false;
   renderButton.textContent = '导出视频（ffmpeg）';
+  if (note) {
+    note.textContent =
+      scenePrefix +
+      '回放画面来自已验收的板端相机帧，不是新证据；播放进度与统一时间轴联动。';
+  }
   if (meta && typeof meta.sha256 === 'string' && /^[a-f0-9]{64}$/.test(meta.sha256)) {
     mountReplayVideoSource(runId, meta);
   } else {
     caption.textContent = '尚未导出';
-    if (note) note.textContent = '服务端把已验收的板端相机帧编码为 MP4（单来源且全部 attested 的运行才可导出）；视频是已验收证据的渲染，不是新证据。播放进度与统一时间轴联动。';
+    if (note) {
+      note.textContent +=
+        '满足条件后可在此导出 MP4（单来源且全部 attested 的运行）。';
+    }
   }
 }
 
@@ -6173,7 +6210,7 @@ async function fetchAndMountReplay(runId, { interactive = false } = {}) {
     void (async () => {
       try {
         const runPayload = await request('/sim2real/runs/' + encodeURIComponent(runId));
-        mountReplayVideo(runId, runPayload?.run?.metrics);
+        mountReplayVideo(runId, runPayload?.run?.metrics, runPayload?.run?.taskId);
       } catch {
         mountReplayVideo(runId, null);
       }
@@ -10699,8 +10736,7 @@ function wireEvents() {
     // Keep the selector responsive even when another dashboard panel fails to refresh.
     // The task is used by training payloads and the context panel can update independently.
     renderSelects();
-    renderSimulationGuide();
-    setText('task-context-note', `${ACTION_TASKS[next].hint}。该任务会随运行记录进入训练和评测。`);
+    renderActionLibrary();
     showToast('当前动作任务：' + ACTION_TASKS[next].label, 'success');
     try { renderAll(); } catch (error) { console.warn('任务面板刷新失败，已保留当前动作：', error); }
   });
