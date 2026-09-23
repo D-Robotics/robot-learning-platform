@@ -109,15 +109,17 @@ describe('studio direct-login relay', () => {
 
   it('maps wrong credentials to 401 and upstream failures to 502', async () => {
     setTestEnv(configuredEnv());
-    const deniedApp = makeApp(async () => studioResponse({ status: 401, body: {} }));
-    const deniedBase = await listen(deniedApp);
-    const denied = await fetch(`${deniedBase}/api/sim2real/auth/studio-direct/login`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ userName: 'op-1', password: 'wrong' }),
-    });
-    expect(denied.status).toBe(401);
-    expect(((await denied.json()) as { message: string }).message).toContain('不正确');
+    for (const upstreamStatus of [401, 403, 409]) {
+      const deniedApp = makeApp(async () => studioResponse({ status: upstreamStatus, body: {} }));
+      const deniedBase = await listen(deniedApp);
+      const denied = await fetch(`${deniedBase}/api/sim2real/auth/studio-direct/login`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ userName: 'op-1', password: 'wrong' }),
+      });
+      expect(denied.status).toBe(401);
+      expect(((await denied.json()) as { message: string }).message).toContain('不正确');
+    }
 
     const downApp = makeApp(async () => studioResponse({ status: 500, body: {} }));
     const downBase = await listen(downApp);

@@ -109,7 +109,9 @@ export function createStudioDirectRelay(deps: StudioDirectRelayDeps = {}) {
       `${relayOrigin()}/api/sso/direct/login`,
       JSON.stringify({ method: 'account', userName, password }),
     );
-    if (upstream.status === 401 || upstream.status === 403) {
+    // Studio 主壳对无效凭据返回 409（IdP 业务码透传），401/403 见于其内部
+    // 守卫；429 与 5xx 一律按"稍后重试"处理，不冒充密码错误。
+    if (upstream.status === 401 || upstream.status === 403 || upstream.status === 409) {
       return {
         status: 401,
         setCookies: [],
