@@ -1141,6 +1141,16 @@ def export_onnx(model, obs_size, act_size, path, squashed=False):
             dynamic_axes={"observation": {0: "batch"}, "action": {0: "batch"}},
             opset_version=13,
         )
+    # torch>=2.9 emits IR 10 and (even for tiny models) external-data tensors.
+    # Board runtimes ship onnxruntime 1.16.x (IR <= 9) and the platform stages a
+    # single self-contained policy.onnx, so normalize both right after export
+    # instead of relying on every consumer to patch or carry a .data sibling.
+    import onnx
+
+    exported = onnx.load(path)
+    if exported.ir_version > 9:
+        exported.ir_version = 9
+    onnx.save(exported, path)
     return os.path.getsize(path)
 
 
