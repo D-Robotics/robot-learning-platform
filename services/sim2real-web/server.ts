@@ -715,7 +715,7 @@ export function createSim2RealWebApp(): Express {
   // 用户在本平台完成登录，凭据经服务端转发 Studio 直连 API，会话 cookie
   // 原样透传（同域同密钥），凭据不落日志、不落存储。
   if (studioSsoAdapterMode() === 'studio-cookie' && studioSsoAdapterConfigured()) {
-    const studioRelay = createStudioDirectRelay();
+    const studioRelay = createStudioDirectRelay({ basePath: configuredPublicBasePath() });
     const loginUrl = '/login';
     app.post(
       '/api/sim2real/auth/studio-direct/login',
@@ -738,6 +738,7 @@ export function createSim2RealWebApp(): Express {
         .send(
           renderStudioDirectLoginPage(
             ['missing', 'invalid', 'unavailable'].includes(error) ? error : undefined,
+            configuredPublicBasePath(),
           ),
         );
     });
@@ -807,8 +808,12 @@ export function createSim2RealWebApp(): Express {
       contractId: MICRODUCK_SIM2REAL_CONTRACT.id,
       ssoRequired: isSSORequired(),
       ssoConfigured: isSSOEnabled() || authAdapterConfigured,
-      // user-center 模式下发给登录页/登录按钮的平台自有登录入口。
-      ssoLoginUrl: ssoLoginUrlForDeployment() ?? undefined,
+      // user-center 模式下发给登录页/登录按钮的平台自有登录入口。挂在反向
+      // 代理前缀下时（web-cloud）必须带前缀，否则浏览器会落到站点根 404。
+      ssoLoginUrl: (() => {
+        const loginPath = ssoLoginUrlForDeployment();
+        return loginPath ? publicPath(loginPath) : undefined;
+      })(),
       authRequired,
       authMode: authRequired
         ? authAdapterConfigured

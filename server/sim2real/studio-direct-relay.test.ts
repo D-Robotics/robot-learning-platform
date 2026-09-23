@@ -45,8 +45,9 @@ function studioResponse(options: {
 function makeApp(
   post: (url: string, body: string) => Promise<Response>,
   mode: 'json' | 'form' = 'json',
+  basePath?: string,
 ): express.Express {
-  const relay = createStudioDirectRelay({ post });
+  const relay = createStudioDirectRelay({ post, basePath });
   const app = express();
   app.use(express.urlencoded({ extended: false }));
   app.use(express.json());
@@ -60,7 +61,7 @@ function makeApp(
     });
   }
   app.get('/login', (_req, res) => {
-    res.type('html').send(renderStudioDirectLoginPage('invalid'));
+    res.type('html').send(renderStudioDirectLoginPage('invalid', basePath));
   });
   return app;
 }
@@ -169,5 +170,42 @@ describe('studio direct-login relay', () => {
     const html = await page.text();
     expect(html).toContain('账号或密码不正确');
     expect(html).toContain('action="/api/sim2real/auth/studio-direct/login"');
+  });
+
+  it('carries the public mount prefix in redirects, form action and assets', async () => {
+    setTestEnv(configuredEnv());
+    const app = makeApp(
+      async () => studioResponse({ setCookie: ['rdk_sso_web_session=v1.a.b.c; Path=/; HttpOnly'] }),
+      'form',
+      '/robotics-learning',
+    );
+    const base = await listen(app);
+    const success = await fetch(`${base}/api/sim2real/auth/studio-direct/login`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({ userName: 'op-1', password: 'pw' }).toString(),
+      redirect: 'manual',
+    });
+    expect(success.status).toBe(302);
+    expect(success.headers.get('location')).toBe('/robotics-learning/');
+
+    const deniedApp = makeApp(
+      async () => studioResponse({ status: 401, body: {} }),
+      'form',
+      '/robotics-learning',
+    );
+    const deniedBase = await listen(deniedApp);
+    const denied = await fetch(`${deniedBase}/api/sim2real/auth/studio-direct/login`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({ userName: 'op-1', password: 'wrong' }).toString(),
+      redirect: 'manual',
+    });
+    expect(denied.headers.get('location')).toBe('/robotics-learning/login?error=invalid');
+
+    const page = await fetch(`${deniedBase}/login?error=invalid`);
+    const html = await page.text();
+    expect(html).toContain('action="/robotics-learning/api/sim2real/auth/studio-direct/login"');
+    expect(html).toContain('href="/robotics-learning/tokens.css"');
   });
 });

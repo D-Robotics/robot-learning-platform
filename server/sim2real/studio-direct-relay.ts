@@ -58,7 +58,19 @@ function throttled(request: Request): number {
 
 export type StudioDirectRelayDeps = {
   post?: (url: string, body: string) => Promise<UpstreamResponse>;
+  /**
+   * Reverse-proxy mount prefix of this service (e.g. `/robotics-learning`).
+   * Login-page URLs and redirects are browser-facing, so they must carry the
+   * prefix; upstream calls stay origin-scoped and never use it.
+   */
+  basePath?: string;
 };
+
+function normalizeRelayBasePath(value: string | undefined): string {
+  const raw = String(value ?? '').trim();
+  if (!raw || raw === '/') return '';
+  return `/${raw.replace(/^\/+|\/+$/g, '')}`;
+}
 
 /** 结构化最小响应类型：兼容全局 fetch Response，避免解析成 express Response。 */
 type UpstreamResponse = {
@@ -76,6 +88,9 @@ export type RelayOutcome = {
 };
 
 export function createStudioDirectRelay(deps: StudioDirectRelayDeps = {}) {
+  const basePath = normalizeRelayBasePath(deps.basePath);
+  const loginRedirect = (error?: string) =>
+    error ? `${basePath}/login?error=${error}` : `${basePath}/login`;
   const post =
     deps.post ??
     (async (url: string, body: string) =>
@@ -99,7 +114,7 @@ export function createStudioDirectRelay(deps: StudioDirectRelayDeps = {}) {
         status: 401,
         setCookies: [],
         body: { ok: false, error: 'SIM2REAL_LOGIN_FAILED', message: '账号或密码不正确。' },
-        redirect: '/login?error=invalid',
+        redirect: loginRedirect('invalid'),
       };
     }
     if (!upstream.ok) {
@@ -111,7 +126,7 @@ export function createStudioDirectRelay(deps: StudioDirectRelayDeps = {}) {
           error: 'SIM2REAL_STUDIO_RELAY_FAILED',
           message: '登录服务暂时不可用，请稍后重试。',
         },
-        redirect: '/login?error=unavailable',
+        redirect: loginRedirect('unavailable'),
       };
     }
     const setCookies = (upstream.headers.getSetCookie?.() ?? []).filter((cookie) =>
@@ -126,7 +141,7 @@ export function createStudioDirectRelay(deps: StudioDirectRelayDeps = {}) {
           error: 'SIM2REAL_STUDIO_RELAY_FAILED',
           message: '登录服务未返回会话，请稍后重试。',
         },
-        redirect: '/login?error=unavailable',
+        redirect: loginRedirect('unavailable'),
       };
     }
     // 保障安全属性：上游缺省时补齐。
@@ -134,7 +149,7 @@ export function createStudioDirectRelay(deps: StudioDirectRelayDeps = {}) {
       const withHttponly = /httponly/i.test(cookie) ? cookie : `${cookie}; HttpOnly`;
       return /samesite/i.test(withHttponly) ? withHttponly : `${withHttponly}; SameSite=Lax`;
     });
-    return { status: 200, setCookies: hardened, redirect: '/' };
+    return { status: 200, setCookies: hardened, redirect: `${basePath}/` };
   }
 
   async function runWithGuards(
@@ -157,7 +172,7 @@ export function createStudioDirectRelay(deps: StudioDirectRelayDeps = {}) {
           error: 'SIM2REAL_STUDIO_RELAY_FAILED',
           message: `${reason}，请稍后重试。`,
         },
-        redirect: '/login?error=unavailable',
+        redirect: loginRedirect('unavailable'),
       };
     }
   }
@@ -197,7 +212,7 @@ export function createStudioDirectRelay(deps: StudioDirectRelayDeps = {}) {
     /** 表单形态（无 JS 的 HTML 登录页）：成功/失败一律重定向。 */
     async handleForm(request: Request, response: Response): Promise<void> {
       if (!studioDirectRelayAvailable()) {
-        response.redirect(302, '/login?error=unavailable');
+        response.redirect(302, loginRedirect('unavailable'));
         return;
       }
       const userName = String(request.body?.userName ?? '')
@@ -205,23 +220,19 @@ export function createStudioDirectRelay(deps: StudioDirectRelayDeps = {}) {
         .slice(0, 160);
       const password = String(request.body?.password ?? '').slice(0, 256);
       if (!userName || !password) {
-        response.redirect(302, '/login?error=missing');
+        response.redirect(302, loginRedirect('missing'));
         return;
       }
       const outcome = await runWithGuards(request, userName, password);
       applyCookies(response, outcome);
-      if (outcome.status === 200) response.redirect(302, '/');
-      else
-        response.redirect(
-          302,
-          `/login?error=${outcome.redirect?.split('error=')[1] ?? 'unavailable'}`,
-        );
+      response.redirect(302, outcome.redirect ?? `${basePath}/`);
     },
   };
 }
 
 /** 独立登录页（平台自有 UI；无脚本，CSP 免疫）。 */
-export function renderStudioDirectLoginPage(error?: string): string {
+export function renderStudioDirectLoginPage(error?: string, basePath?: string): string {
+  const base = normalizeRelayBasePath(basePath);
   const messages: Record<string, string> = {
     missing: '请输入账号与密码。',
     invalid: '账号或密码不正确。',
@@ -236,7 +247,7 @@ export function renderStudioDirectLoginPage(error?: string): string {
 <meta charset="utf-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1"/>
 <title>登录 · RDK Robot Learning Platform</title>
-<link rel="stylesheet" href="/tokens.css"/>
+<link rel="stylesheet" href="${base}/tokens.css"/>
 <style>
   body{margin:0;min-height:100vh;display:grid;place-items:center;background:var(--bg);color:var(--text);font-family:system-ui,-apple-system,'Segoe UI',Roboto,'PingFang SC','Microsoft YaHei',sans-serif}
   .login-card{width:min(380px,92vw);padding:28px 26px;border:1px solid var(--line);border-radius:14px;background:var(--panel)}
@@ -255,7 +266,7 @@ export function renderStudioDirectLoginPage(error?: string): string {
   <h1>RDK Robot Learning Platform</h1>
   <p class="login-sub">使用工作区账号登录，会话由统一登录服务签发。</p>
   ${errorHtml}
-  <form method="post" action="/api/sim2real/auth/studio-direct/login">
+  <form method="post" action="${base}/api/sim2real/auth/studio-direct/login">
     <label for="userName">账号</label>
     <input id="userName" name="userName" autocomplete="username" required/>
     <label for="password">密码</label>
