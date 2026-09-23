@@ -139,7 +139,7 @@ export const SIM2REAL_PRODUCT_PROFILES: Readonly<Record<Sim2RealRobotId, Sim2Rea
       displayName: 'RDK Duck',
       contractMode: 'manifest-defined',
       contractIdPrefix: 'rdk-duck-policy-',
-      targetPlatforms: ['rdk-x5'],
+      targetPlatforms: ['rdk-x5', 'rdk-s100'],
       accessories: ['camera', 'imu', 'servo', 'ball'],
     },
     custom: {
@@ -651,6 +651,8 @@ export interface Sim2RealDeviceSummary {
   boardModel?: string | null;
   connectionMode?: string;
   sshReachability?: string;
+  lastCheckedAt?: string;
+  boardDetectedAt?: string;
 }
 
 export interface Sim2RealRobogoIntegration {

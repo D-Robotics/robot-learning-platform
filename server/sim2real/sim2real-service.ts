@@ -231,6 +231,12 @@ export function publicDeviceSummary(device: Device): Sim2RealDeviceSummary {
     ...(device.boardModel ? { boardModel: device.boardModel } : { boardModel: null }),
     ...(device.connectionMode ? { connectionMode: device.connectionMode } : {}),
     ...(device.sshReachability ? { sshReachability: device.sshReachability } : {}),
+    // Verification timestamps let the workbench default to the most recently
+    // verified board instead of a stale registration that was never replaced.
+    ...(Number.isFinite(checkedAt) ? { lastCheckedAt: device.lastCheckedAt } : {}),
+    ...(Number.isFinite(Date.parse(device.boardDetectedAt ?? ''))
+      ? { boardDetectedAt: device.boardDetectedAt }
+      : {}),
   };
 }
 

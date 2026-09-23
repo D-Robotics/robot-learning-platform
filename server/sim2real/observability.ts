@@ -49,6 +49,12 @@ export const LOG_FIELD_WHITELIST = [
   'route',
   'status',
   'durationMs',
+  'backend',
+  'code',
+  'detail',
+  'hint',
+  'modelId',
+  'taskId',
 ] as const;
 
 const MAX_STRING_FIELD_LENGTH = 200;

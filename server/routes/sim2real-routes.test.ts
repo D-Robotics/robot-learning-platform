@@ -2335,6 +2335,84 @@ describe('Sim2Real HTTP routes', () => {
     }
   });
 
+  it('retries the auto-attach telemetry fetch when the first transport attempt fails', async () => {
+    process.env.RDK_SIM2REAL_LOCAL_RUNNER_URL = 'http://127.0.0.1:18198/train';
+    const originalFetch = globalThis.fetch;
+    const telemetryJsonl = [
+      JSON.stringify({
+        t: 0,
+        observation: [0, 0, 0, 1, 1, 0, 0, 0],
+        action: [0.1, 0],
+        reward: 0,
+        done: false,
+      }),
+    ].join('\n');
+    let telemetryAttempts = 0;
+    globalThis.fetch = (async (input) => {
+      const url = String(input);
+      if (url.endsWith('/telemetry')) {
+        telemetryAttempts += 1;
+        // First attempt simulates a tunnel blip; the retry must recover.
+        if (telemetryAttempts === 1) return new Response('gateway gone', { status: 502 });
+        const bytes = new TextEncoder().encode(telemetryJsonl);
+        return new Response(bytes, {
+          status: 200,
+          headers: {
+            'content-type': 'application/x-ndjson',
+            'content-length': String(bytes.byteLength),
+          },
+        });
+      }
+      if (url.endsWith('/train')) {
+        return new Response(JSON.stringify({ status: 'queued', runId: 'eval-retry-run' }), {
+          status: 202,
+          headers: { 'content-type': 'application/json' },
+        });
+      }
+      return new Response(
+        JSON.stringify({
+          status: 'completed',
+          runId: 'eval-retry-run',
+          artifact: {
+            artifactRef: 'artifact://starter/eval-retry/0.1/policy.onnx',
+            format: 'onnx',
+            sha256: 'c'.repeat(64),
+            sizeBytes: 1024,
+          },
+        }),
+        { status: 200, headers: { 'content-type': 'application/json' } },
+      );
+    }) as typeof fetch;
+    try {
+      const router = await fixture();
+      const manifest = userManifest();
+      manifest.simulator.backends = ['local'];
+      const registerResponse = await invoke(router, 'post', '/api/sim2real/models', {
+        body: { manifest },
+      });
+      const modelId = (registerResponse.body as { model: { id: string } }).model.id;
+      const started = await invoke(router, 'post', '/api/sim2real/runs', {
+        body: { modelId, backend: 'local', idempotencyKey: 'eval-retry-key' },
+      });
+      expect(started.statusCode).toBe(201);
+      const runId = (started.body as { run: { id: string } }).run.id;
+      const status = await invoke(router, 'get', '/api/sim2real/runs/:id', {
+        params: { id: runId },
+      });
+      expect(status.statusCode).toBe(200);
+      expect((status.body as { run: Record<string, unknown> }).run.status).toBe('completed');
+      expect(telemetryAttempts).toBeGreaterThanOrEqual(2);
+      const replay = await invoke(router, 'get', '/api/sim2real/runs/:id/replay', {
+        params: { id: runId },
+      });
+      expect(replay.statusCode).toBe(200);
+      const frames = (replay.body as { frames: unknown[] }).frames;
+      expect(Array.isArray(frames) && frames.length).toBe(1);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
   it('serves digest-verified policy bytes for the browser trial only after completion', async () => {
     process.env.RDK_SIM2REAL_LOCAL_RUNNER_URL = 'http://127.0.0.1:18198/train';
     const originalFetch = globalThis.fetch;

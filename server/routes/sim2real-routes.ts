@@ -39,6 +39,7 @@ import {
   sendInternalApiError,
   wrapAsync,
 } from '../sim2real/http-helpers.js';
+import { createSim2RealLogger } from '../sim2real/observability.js';
 import {
   Sim2RealError,
   sim2RealErrorCode,
@@ -1556,6 +1557,27 @@ interface RunBackendOutcome {
   relayAgentUrl?: string;
 }
 
+// The run summaries intentionally stay operator-facing; the runner's own error
+// code/detail would otherwise be lost, so terminal launch failures are logged
+// with their full context next to the HTTP access lines.
+const runnerFailureLog = createSim2RealLogger();
+
+function logRunnerLaunchFailure(
+  kind: 'robogo' | 'local',
+  error: unknown,
+  context: { modelId: string; taskId?: string },
+): void {
+  const code = error instanceof Sim2RealError ? error.code : 'unknown_runner_error';
+  runnerFailureLog.log('error', 'run_backend_launch_failed', {
+    backend: kind,
+    code,
+    detail: error instanceof Error ? error.message.slice(0, 300) : String(error).slice(0, 300),
+    hint: error instanceof Sim2RealError ? (error.detail ?? '').slice(0, 300) : '',
+    modelId: context.modelId,
+    taskId: context.taskId ?? '',
+  });
+}
+
 /**
  * Launch one run on its backend. Runner transport failures are translated
  * into run states here (queued when the outcome is unknown so an operator
@@ -1684,6 +1706,7 @@ async function dispatchRunBackend(input: {
       // accepted the job even though its response never reached us. Keep
       // only that class of failure queued so an operator can reconcile the
       // external id instead of making a duplicate retry.
+      logRunnerLaunchFailure('robogo', error, { modelId: model.id, taskId });
       return {
         status: isSim2RealRunnerOutcomeUnknown(error) ? 'queued' : 'failed',
         summary: isSim2RealRunnerOutcomeUnknown(error)
@@ -1776,6 +1799,7 @@ async function dispatchRunBackend(input: {
     } catch (error) {
       // Treat only transport/ambiguous responses as outcome-unknown;
       // deterministic configuration or 4xx rejection can be terminal.
+      logRunnerLaunchFailure('local', error, { modelId: model.id, taskId });
       return {
         status: isSim2RealRunnerOutcomeUnknown(error) ? 'queued' : 'failed',
         summary: isSim2RealRunnerOutcomeUnknown(error)
@@ -2049,16 +2073,31 @@ async function autoAttachEvaluationTelemetry(
     computeResourceId: string | undefined,
   ) => Promise<{ runnerUrl: string; runnerToken: string } | null>,
 ): Promise<void> {
-  if (run.backend !== 'local' || !run.externalRunId) return;
+  const externalRunId = run.externalRunId;
+  if (run.backend !== 'local' || !externalRunId) return;
   try {
     const workerAccount = owner ?? (isMultiUser ? '' : 'local-dev');
     if (!workerAccount) return;
     const runner = await resolveRunner(run.computeResourceId);
-    const telemetry = await fetchLocalRunTelemetry({
-      accountId: workerAccount,
-      externalRunId: run.externalRunId,
-      ...(runner ? { runnerUrl: runner.runnerUrl, runnerToken: runner.runnerToken } : {}),
-    });
+    const fetchTelemetry = () =>
+      fetchLocalRunTelemetry({
+        accountId: workerAccount,
+        externalRunId,
+        ...(runner ? { runnerUrl: runner.runnerUrl, runnerToken: runner.runnerToken } : {}),
+      });
+    // This hook runs once, on the first observed completion, so a single
+    // transport failure (tunnel blip, worker restart) would silently drop the
+    // replay forever. Retry briefly before giving up; the upload idempotency
+    // keys below keep any eventual repeat safe.
+    let telemetry = await fetchTelemetry();
+    for (
+      let attempt = 0;
+      (!telemetry || telemetry.sampleCount === 0) && attempt < 2;
+      attempt += 1
+    ) {
+      await new Promise((resolve) => setTimeout(resolve, 1_000));
+      telemetry = await fetchTelemetry();
+    }
     if (!telemetry || telemetry.sampleCount === 0) return;
     const CHUNK_SIZE = 5_000;
     for (let offset = 0; offset < telemetry.lines.length; offset += CHUNK_SIZE) {
@@ -2069,7 +2108,9 @@ async function autoAttachEvaluationTelemetry(
         {
           runId: run.id,
           modelId: run.modelId,
-          source: 'browser',
+          // Engine rollout attached from the training worker's own export —
+          // not a browser stream, so it must not be labeled as one.
+          source: 'import',
           ...(run.contractId ? { contractId: run.contractId } : {}),
           samples,
           idempotencyKey:

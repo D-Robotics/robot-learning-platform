@@ -56,10 +56,13 @@ if (!input || !output) {
     await fail('source-artifact-invalid', 'source artifact must be a non-empty file');
   } else {
     const compiler = String(process.env.RDK_BPU_COMPILER || '').trim();
-    if (target !== 'x5' || !compiler || !path.isAbsolute(compiler)) {
+    const supportedTargets = new Set(['x5', 's100']);
+    if (!supportedTargets.has(target) || !compiler || !path.isAbsolute(compiler)) {
       await fail(
-        'bpu-toolchain-unavailable',
-        'set an absolute RDK_BPU_COMPILER supplied by the board toolchain; source ONNX remains non-deployable',
+        supportedTargets.has(target) ? 'bpu-toolchain-unavailable' : 'compile-target-unsupported',
+        supportedTargets.has(target)
+          ? 'set an absolute RDK_BPU_COMPILER supplied by the board toolchain; source ONNX remains non-deployable'
+          : `compile target ${target} is not supported (known: x5, s100)`,
         { compiler: compiler || null, source: resolvedInput },
       );
     } else {
