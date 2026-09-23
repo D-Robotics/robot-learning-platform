@@ -1416,6 +1416,16 @@ export function createSim2RealWebApp(): Express {
           normalizedPath.includes(`${path.sep}originbot-sim${path.sep}`)
         ) {
           response.setHeader('Cache-Control', 'no-cache');
+          return;
+        }
+        // The platform's own control-plane scripts and styles live at the
+        // public root. A release that changes app.js must reach every open
+        // workbench on its next reload — a production max-age window is exactly
+        // how a stale control loop survives an upgrade. Large binary assets in
+        // subdirectories keep the production cache window.
+        const inPublicRoot = path.dirname(normalizedPath) === PUBLIC_ROOT;
+        if (inPublicRoot && /\.(js|css|mjs)$/.test(filePath)) {
+          response.setHeader('Cache-Control', 'no-cache');
         }
       },
       maxAge: isProductionEnv() ? '1h' : 0,

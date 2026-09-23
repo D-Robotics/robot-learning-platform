@@ -1995,6 +1995,16 @@ async function request(path, options = {}) {
   const payload = contentType.includes('application/json')
     ? await response.json().catch(() => null)
     : await response.text().catch(() => '');
+  if (
+    typeof payload === 'string' &&
+    payload.includes('登录 · RDK Robot Learning Platform')
+  ) {
+    // An expired session can come back as a 200 that followed a redirect to
+    // the login document. Surface it as a session-expired 401 (gate + toast)
+    // instead of letting callers parse HTML and fail silently.
+    setAuthGate(null);
+    throw new ApiError('登录已过期，请重新登录。', 401, null);
+  }
   if (!response.ok) {
     const message =
       (payload && typeof payload === 'object' && (payload.message || payload.error)) ||
