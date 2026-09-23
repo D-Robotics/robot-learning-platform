@@ -375,7 +375,7 @@ const state = {
   notifiedRunIds: new Set(),
   // Engine log stream (run progress card): worker line ring cursor + the
   // lines already rendered. One run at a time — the run the card shows.
-  runLogs: { runId: null, cursor: 0, lines: [], inFlight: false },
+  runLogs: { runId: null, cursor: 0, lines: [], inFlight: false, terminalDone: null },
   confirmActionResolve: null,
   recordsTab: 'all',
   evalModule: 'run',
@@ -3803,7 +3803,10 @@ function renderHistory() {
         .some((value) => String(value).toLowerCase().includes(query));
     })
     .slice(0, 30);
-  setText('records-count', records.length + ' 条记录');
+  setText(
+    'records-count',
+    records.length + ' 条记录 · 仅当前产品 ' + selectedProductProfile().displayName,
+  );
   root.replaceChildren();
   if (!records.length) {
     const hasBrowserSimulator = Boolean(selectedProductProfile().simulatorPath);
@@ -7478,6 +7481,7 @@ function renderRunProgressLogsPanel(run) {
     state.runLogs.runId = run.id;
     state.runLogs.cursor = 0;
     state.runLogs.lines = [];
+    state.runLogs.terminalDone = null;
     const body = $('run-progress-logs-body');
     if (body) body.textContent = '';
     const caption = $('run-progress-logs-caption');
@@ -7489,12 +7493,19 @@ function renderRunProgressLogsPanel(run) {
 async function pollRunLogs(run) {
   if (state.runLogs.runId !== run.id) return;
   if (state.runLogs.inFlight) return;
+  // A terminal run's log ring is frozen: one fetch is enough, and repeating
+  // it every poll cycle would only re-print the same "unavailable" caption.
+  const terminalStatus = ['completed', 'failed', 'blocked'].includes(
+    String(run.status || '').toLowerCase(),
+  );
+  if (terminalStatus && state.runLogs.terminalDone === run.id) return;
   state.runLogs.inFlight = true;
   try {
     const payload = await request(
       '/sim2real/runs/' + encodeURIComponent(run.id) + '/logs?after=' + state.runLogs.cursor,
     );
     if (state.runLogs.runId !== run.id) return;
+    if (terminalStatus) state.runLogs.terminalDone = run.id;
     const lines = Array.isArray(payload?.lines) ? payload.lines : [];
     if (payload?.truncated === true) {
       // The cursor fell outside the worker's retention window: resync to the
@@ -7538,11 +7549,16 @@ async function pollRunLogs(run) {
     }
   } catch (error) {
     // The log panel is a live view, not release evidence: a failed poll keeps
-    // the already-fetched lines and lets the next cycle retry quietly.
+    // the already-fetched lines and lets the next cycle retry quietly. For a
+    // terminal run the failure is usually "logs already archived with the
+    // finished job", which deserves its own honest caption rather than a
+    // generic worker-offline message.
     if (!(error instanceof ApiError && error.status === 401)) {
       const caption = $('run-progress-logs-caption');
       if (caption && state.runLogs.lines.length === 0) {
-        caption.textContent = '日志暂不可用（worker 未就绪或连接中断）';
+        caption.textContent = terminalStatus
+          ? '该运行已结束；引擎日志仅由 worker 在任务期间保留，结束后不再可回看。'
+          : '日志暂不可用（worker 未就绪或连接中断）';
       }
     }
   } finally {
