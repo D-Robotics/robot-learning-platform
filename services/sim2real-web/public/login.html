@@ -7,75 +7,144 @@
 <title>登录 · RDK Robot Learning Platform</title>
 <link rel="stylesheet" href="/tokens.css?v=2">
 <style>
+  /* 视觉范式对齐 RDK Studio 的 SsoLoginScreen：居中大卡、左右分栏
+     （左品牌引导 + 右表单）、平台橙、完整状态态。独立页不在工作台
+     棘轮扫描范围，但颜色一律引用 tokens.css 变量并保留同值 fallback。 */
   :root { color-scheme: light dark; }
   * { box-sizing: border-box; }
   body {
     margin: 0; min-height: 100vh; display: grid; place-items: center;
-    font-family: "PingFang SC", "Microsoft YaHei", system-ui, sans-serif;
+    font-family: -apple-system, "PingFang SC", "Noto Sans SC", "Microsoft YaHei", system-ui, sans-serif;
     background:
-      radial-gradient(1100px 500px at 20% -10%, color-mix(in srgb, #2f7df6 16%, transparent), transparent),
-      var(--bg, #f5f6f8);
-    color: var(--text, #17202b);
+      radial-gradient(1100px 560px at 18% -12%, color-mix(in srgb, var(--accent, #f97316) 14%, transparent), transparent),
+      radial-gradient(900px 480px at 96% 108%, color-mix(in srgb, var(--accent-strong, #ea580c) 10%, transparent), transparent),
+      var(--bg, #fbfbf9);
+    color: var(--text, #1b1b18);
+    padding: 32px 0;
   }
-  .card {
-    width: min(400px, calc(100vw - 32px));
-    padding: 32px 28px 26px;
-    border: 1px solid var(--line-strong, #d8dde5);
-    border-radius: 16px;
-    background: var(--panel, #fff);
-    box-shadow: 0 12px 40px rgba(15, 25, 40, .08);
+  .backdrop-card {
+    width: min(760px, calc(100vw - 48px));
+    display: grid; grid-template-columns: minmax(220px, 0.92fr) minmax(320px, 1.08fr);
+    border: 1px solid var(--line, rgba(27, 27, 24, 0.11));
+    border-radius: 22px;
+    background: var(--panel, #ffffff);
+    box-shadow: 0 24px 64px rgba(27, 27, 24, 0.14);
+    overflow: hidden;
+    animation: card-in .28s ease-out;
   }
-  .brand { display: flex; align-items: center; gap: 10px; margin-bottom: 6px; }
-  .brand-mark {
-    width: 34px; height: 34px; border-radius: 9px; display: grid; place-items: center;
-    background: var(--accent, #2f7df6); color: #fff; font-weight: 700; font-size: 15px;
+  @keyframes card-in {
+    from { transform: translateY(10px) scale(0.985); opacity: 0; }
+    to { transform: none; opacity: 1; }
   }
-  .brand-name { font-size: 14px; letter-spacing: .08em; color: var(--muted-strong, #5a6673); font-weight: 600; }
-  h1 { font-size: 20px; margin: 14px 0 4px; }
-  .sub { margin: 0 0 20px; color: var(--muted, #71808f); font-size: 13px; }
-  label { display: block; font-size: 12px; color: var(--muted-strong, #5a6673); margin: 14px 0 6px; }
+  .intro {
+    position: relative; display: flex; flex-direction: column; justify-content: center; gap: 18px;
+    padding: 36px 30px;
+    background:
+      radial-gradient(360px 240px at 24% 12%, color-mix(in srgb, var(--accent, #f97316) 22%, transparent), transparent),
+      var(--accent-soft, #fff7ed);
+    border-right: 1px solid var(--line, rgba(27, 27, 24, 0.11));
+  }
+  .intro-logo {
+    width: 72px; height: 72px; border-radius: 20px; display: grid; place-items: center;
+    background: var(--accent, #f97316); color: #fff; font-size: 30px; font-weight: 800;
+    box-shadow: 0 10px 24px color-mix(in srgb, var(--accent, #f97316) 30%, transparent);
+  }
+  .intro-brand { font-size: 15px; font-weight: 700; letter-spacing: .08em; color: var(--accent-text, #9a3412); }
+  .intro-title { margin: 0; font-size: 21px; line-height: 1.35; color: var(--text, #1b1b18); }
+  .intro-copy { margin: 0; font-size: 13px; line-height: 1.8; color: var(--muted-strong, #55514a); }
+  .intro-points { margin: 0; padding: 0; list-style: none; display: grid; gap: 8px; }
+  .intro-points li {
+    font-size: 13px; color: var(--muted-strong, #55514a); line-height: 1.6;
+    padding-left: 18px; position: relative;
+  }
+  .intro-points li::before {
+    content: ""; position: absolute; left: 0; top: 8px; width: 8px; height: 8px;
+    border-radius: 999px; background: var(--accent, #f97316);
+  }
+  .panel { padding: 40px 34px 30px; display: flex; flex-direction: column; }
+  h1 { font-size: 20px; margin: 0 0 6px; }
+  .sub { margin: 0 0 20px; color: var(--muted, #6f6a5f); font-size: 13px; }
+  label { display: block; font-size: 12px; color: var(--muted-strong, #55514a); margin: 14px 0 6px; }
   input {
-    width: 100%; padding: 10px 12px; font: inherit; border-radius: 9px;
-    border: 1px solid var(--line-strong, #d8dde5); background: var(--panel, #fff); color: inherit;
+    width: 100%; height: 46px; padding: 0 14px; font: inherit; border-radius: 12px;
+    border: 1px solid var(--line-strong, rgba(27, 27, 24, 0.22));
+    background: var(--panel, #fff); color: inherit;
+    transition: box-shadow .15s ease, border-color .15s ease;
   }
-  input:focus { outline: 2px solid var(--accent, #2f7df6); outline-offset: 1px; border-color: transparent; }
-  button {
-    width: 100%; margin-top: 20px; padding: 11px 14px; font: inherit; font-weight: 600;
-    border: 0; border-radius: 9px; background: var(--accent, #2f7df6); color: #fff; cursor: pointer;
+  input:focus {
+    outline: none; border-color: var(--accent, #f97316);
+    box-shadow: 0 0 0 3px var(--accent-ring, #fed7aa);
   }
-  button:disabled { opacity: .6; cursor: progress; }
+  button.submit {
+    width: 100%; height: 50px; margin-top: 22px; font: inherit; font-size: 16px; font-weight: 600;
+    border: 0; border-radius: 12px; background: var(--accent, #f97316); color: #fff; cursor: pointer;
+    box-shadow: 0 10px 24px color-mix(in srgb, var(--accent, #f97316) 24%, transparent);
+    transition: background .15s ease, transform .15s ease;
+    display: grid; place-items: center;
+  }
+  button.submit:hover:not(:disabled) {
+    background: var(--accent-hover, #ea8a3a); transform: translateY(-1px);
+  }
+  button.submit:disabled { opacity: .66; cursor: progress; }
+  .spinner {
+    width: 18px; height: 18px; border-radius: 999px;
+    border: 2px solid color-mix(in srgb, #fff 45%, transparent); border-top-color: #fff;
+    animation: spin .7s linear infinite;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
   .error {
-    display: none; margin: 0 0 4px; padding: 9px 12px; border-radius: 9px; font-size: 13px;
-    border: 1px solid color-mix(in srgb, #c0392b 45%, transparent);
-    background: color-mix(in srgb, #c0392b 10%, transparent); color: #a93226;
+    display: none; margin: 14px 0 0; padding: 10px 12px; border-radius: 10px; font-size: 13px;
+    border: 1px solid var(--red-border, #fecaca);
+    background: var(--red-soft, #fef2f2); color: var(--red, #dc2626);
   }
-  .sso { margin-top: 18px; padding-top: 14px; border-top: 1px dashed var(--line, #e3e7ec); text-align: center; }
-  .sso a { color: var(--accent, #2f7df6); font-size: 13px; text-decoration: none; }
+  .sso { margin-top: 18px; padding-top: 16px; border-top: 1px dashed var(--line, rgba(27, 27, 24, 0.11)); text-align: center; }
+  .sso a { color: var(--accent-strong, #ea580c); font-size: 13px; text-decoration: none; font-weight: 600; }
   .sso a:hover { text-decoration: underline; }
-  .foot { margin-top: 18px; text-align: center; font-size: 12px; color: var(--muted, #8a95a1); }
+  .foot { margin-top: 20px; text-align: center; font-size: 12px; color: var(--muted, #6f6a5f); }
+  @media (max-width: 720px) {
+    .backdrop-card { grid-template-columns: 1fr; }
+    .intro { border-right: 0; border-bottom: 1px solid var(--line, rgba(27, 27, 24, 0.11)); padding: 28px 26px 22px; gap: 12px; }
+    .intro-logo { width: 56px; height: 56px; border-radius: 16px; font-size: 24px; }
+    .panel { padding: 28px 26px 24px; }
+  }
   @media (prefers-color-scheme: dark) {
-    body { background: radial-gradient(1100px 500px at 20% -10%, rgba(74, 144, 255, .14), transparent), #10151c; }
+    body {
+      background:
+        radial-gradient(1100px 560px at 18% -12%, color-mix(in srgb, var(--accent, #f97316) 12%, transparent), transparent),
+        #14130f;
+    }
+    .intro { background: radial-gradient(360px 240px at 24% 12%, color-mix(in srgb, var(--accent, #f97316) 16%, transparent), transparent), color-mix(in srgb, var(--accent, #f97316) 7%, var(--panel, #1c1a15)); }
   }
 </style>
 </head>
 <body>
-<main class="card" aria-labelledby="login-title">
-  <div class="brand">
-    <span class="brand-mark" aria-hidden="true">D</span>
-    <span class="brand-name">RDK ROBOT LEARNING PLATFORM</span>
-  </div>
-  <h1 id="login-title">登录工作台</h1>
-  <p class="sub">使用 User Center 账号登录机器人学习工作台。</p>
-  <p class="error" id="error" role="alert"></p>
-  <form id="form" method="post" action="#" autocomplete="on">
-    <label for="userName">账号</label>
-    <input id="userName" name="userName" type="text" required autocomplete="username" spellcheck="false">
-    <label for="password">密码</label>
-    <input id="password" name="password" type="password" required autocomplete="current-password">
-    <button type="submit" id="submit">登录</button>
-  </form>
-  <p class="sso"><a id="sso-link" href="/api/sim2real/auth/uc/login">使用企业 SSO 授权登录 →</a></p>
-  <p class="foot">RDK Robot Learning Platform · Robot Learning Workbench</p>
+<main class="backdrop-card" aria-labelledby="login-title">
+  <section class="intro" aria-label="平台介绍">
+    <div class="intro-logo" aria-hidden="true">D</div>
+    <div>
+      <p class="intro-brand">RDK ROBOT LEARNING PLATFORM</p>
+      <h2 class="intro-title">仿真、训练到真机部署，<br>一次登录全程打通。</h2>
+    </div>
+    <ul class="intro-points">
+      <li>浏览器 MuJoCo 仿真与轨迹录制，训练记录随账号留存</li>
+      <li>多引擎强化学习训练，策略制品签发与受控部署</li>
+      <li>真机评测证据全链路可溯，部署有审批与回滚</li>
+    </ul>
+  </section>
+  <section class="panel">
+    <h1 id="login-title">登录工作台</h1>
+    <p class="sub">使用 User Center 账号继续你的机器人学习工作区。</p>
+    <p class="error" id="error" role="alert"></p>
+    <form id="form" method="post" action="#" autocomplete="on">
+      <label for="userName">账号</label>
+      <input id="userName" name="userName" type="text" required autocomplete="username" spellcheck="false" placeholder="手机号 / 邮箱 / 账号">
+      <label for="password">密码</label>
+      <input id="password" name="password" type="password" required autocomplete="current-password" placeholder="请输入密码">
+      <button type="submit" id="submit" class="submit">登 录</button>
+    </form>
+    <p class="sso"><a id="sso-link" href="/api/sim2real/auth/uc/login">使用企业 SSO 授权登录 →</a></p>
+    <p class="foot">登录视为您已同意平台的使用条款与隐私政策<br>RDK Robot Learning Platform · Robot Learning Workbench</p>
+  </section>
 </main>
 <script>
 (function () {
@@ -85,11 +154,17 @@
   var form = document.getElementById('form');
   var error = document.getElementById('error');
   var button = document.getElementById('submit');
+  function showError(message) {
+    error.textContent = message;
+    error.style.display = 'block';
+    button.disabled = false;
+    button.textContent = '登 录';
+  }
   form.addEventListener('submit', function (event) {
     event.preventDefault();
     error.style.display = 'none';
     button.disabled = true;
-    button.textContent = '登录中…';
+    button.innerHTML = '<span class="spinner" aria-hidden="true"></span>';
     fetch('/api/sim2real/auth/uc/session', {
       method: 'POST',
       credentials: 'same-origin',
@@ -104,19 +179,12 @@
       });
     }).then(function (result) {
       if (result.ok && result.body && result.body.ok !== false) {
-        var target = returnTo;
-        window.location.assign(target);
+        window.location.assign(returnTo);
         return;
       }
-      error.textContent = (result.body && result.body.message) || '账号或密码不正确。';
-      error.style.display = 'block';
-      button.disabled = false;
-      button.textContent = '登录';
+      showError((result.body && result.body.message) || '账号或密码不正确，请检查后重试。');
     }).catch(function () {
-      error.textContent = '登录服务暂时不可用，请稍后重试。';
-      error.style.display = 'block';
-      button.disabled = false;
-      button.textContent = '登录';
+      showError('登录服务暂时不可用，请稍后重试。');
     });
   });
 })();

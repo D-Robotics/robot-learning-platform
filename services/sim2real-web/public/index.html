@@ -52,13 +52,29 @@
         <div class="topbar-context">
           <strong id="current-project-name" class="sr-only">MicroDuck · X5 Starter</strong
           ><span class="account-pill" id="account-status" hidden></span
-          ><button
-            class="button button-ghost button-small"
-            id="account-pill-logout"
-            type="button"
-            title="退出当前 RDK 账号"
-            hidden
-            >退出</button
+          ><div class="account-menu-wrap" id="account-menu-wrap" hidden
+            ><button
+              class="account-avatar"
+              id="account-avatar"
+              type="button"
+              aria-haspopup="menu"
+              aria-expanded="false"
+              title="账号"
+              ><span id="account-avatar-initial" aria-hidden="true"></span
+            ></button
+            ><div class="account-menu" id="account-menu" role="menu" hidden
+              ><p class="account-menu-name" id="account-menu-name"></p
+              ><p class="account-menu-id" id="account-menu-id"></p
+              ><hr class="account-menu-sep"
+              /><button
+                class="account-menu-item"
+                id="account-pill-logout"
+                type="button"
+                role="menuitem"
+                title="退出当前 RDK 账号"
+                >退出登录</button
+              ></div
+            ></div
           ><span class="context-divider" id="account-divider" hidden></span
           ><span class="service-pill" id="service-pill"
             ><i class="status-dot"></i><span id="service-status">连接中</span></span

@@ -10819,3 +10819,77 @@ body .depth-led #workflow-progress-strip {
     margin-inline: 12px;
   }
 }
+
+/* 账号菜单（对齐 RDK Studio 的 sso-avatar-btn / sso-user-menu 范式）：
+   头像按钮 + role=menu 下拉，颜色全部走 token（暗色由 theme-dark 翻转），
+   不新增跨层选择器；追加于既有最后一层之内。 */
+.account-menu-wrap {
+  position: relative;
+  display: inline-flex;
+}
+.account-avatar {
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border: 1px solid var(--line-strong);
+  border-radius: 999px;
+  background: var(--accent-soft);
+  color: var(--accent-text);
+  font-size: var(--fs-meta);
+  font-weight: 700;
+  display: grid;
+  place-items: center;
+  cursor: pointer;
+}
+.account-avatar:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+.account-menu {
+  position: absolute;
+  right: 0;
+  top: calc(100% + 6px);
+  min-width: 190px;
+  margin: 0;
+  padding: 8px;
+  background: var(--panel);
+  border: 1px solid var(--line-strong);
+  border-radius: 10px;
+  box-shadow: 0 10px 24px color-mix(in srgb, var(--text) 16%, transparent);
+  z-index: var(--z-sticky);
+}
+.account-menu[hidden] {
+  display: none;
+}
+.account-menu-name {
+  margin: 0;
+  font-size: var(--fs-body);
+  font-weight: 700;
+  color: var(--text);
+  overflow-wrap: anywhere;
+}
+.account-menu-id {
+  margin: 0 0 6px;
+  font-size: var(--fs-meta);
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+.account-menu-sep {
+  border: 0;
+  border-top: 1px solid var(--line);
+  margin: 6px 0;
+}
+.account-menu-item {
+  width: 100%;
+  padding: 6px 8px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text);
+  font-size: var(--fs-body);
+  text-align: left;
+  cursor: pointer;
+}
+.account-menu-item:hover {
+  background: var(--bg-soft);
+}

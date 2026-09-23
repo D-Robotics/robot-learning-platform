@@ -1652,7 +1652,15 @@ function setAuthGate(payload) {
   renderEvaluationNext();
   if (!state.authNoticeShown) {
     state.authNoticeShown = true;
-    showToast('当前为游客模式：仿真可直接试玩；训练记录与真机部署需要登录。', 'normal');
+    // 区分「从未登录」与「登录已过期」：后者换个口径，提示重新登录即可恢复
+    // 训练与部署，而不是把访客当成第一次来的游客。
+    const hadIdentity = Boolean(state.overview?.identity?.accountId);
+    showToast(
+      hadIdentity
+        ? '登录已过期：仿真可直接试玩；重新登录后可继续训练与真机部署。'
+        : '当前为游客模式：仿真可直接试玩；训练记录与真机部署需要登录。',
+      'normal',
+    );
   }
 }
 
@@ -2892,20 +2900,23 @@ function renderIntegrations() {
           : '检查中',
   );
   syncServicePill();
-  const accountStatus = $('account-status');
+  const accountMenuWrap = $('account-menu-wrap');
   const accountDivider = $('account-divider');
-  if (accountStatus && accountDivider) {
+  if (accountMenuWrap && accountDivider) {
     const accountLabel = identity?.displayName || identity?.accountId || '';
-    accountStatus.hidden = !accountLabel;
+    accountMenuWrap.hidden = !accountLabel;
     accountDivider.hidden = !accountLabel;
-    accountStatus.textContent = accountLabel ? '账号 · ' + accountLabel : '';
-    accountStatus.title = identity?.email || identity?.accountId || '';
-  }
-  const accountLogout = $('account-pill-logout');
-  if (accountLogout) {
-    const accountLabel = identity?.displayName || identity?.accountId || '';
-    accountLogout.hidden = !accountLabel;
-    accountLogout.title = accountLabel ? '退出当前 RDK 账号' : '';
+    if (accountLabel) {
+      setText('account-avatar-initial', accountLabel.trim().charAt(0).toUpperCase() || '·');
+      setText('account-menu-name', accountLabel);
+      setText('account-menu-id', identity?.email || identity?.accountId || '');
+      const avatar = $('account-avatar');
+      if (avatar) avatar.title = accountLabel;
+      const menu = $('account-menu');
+      if (menu) menu.hidden = true;
+      const avatarButton = $('account-avatar');
+      if (avatarButton) avatarButton.setAttribute('aria-expanded', 'false');
+    }
   }
   // The header follows the selected project while retaining the robot profile
   // as a suffix, so operators can always tell which context a run belongs to.
@@ -10362,6 +10373,29 @@ function wireEvents() {
   });
   $('account-pill-logout')?.addEventListener('click', () => {
     void logoutAccount();
+  });
+  $('account-avatar')?.addEventListener('click', () => {
+    const menu = $('account-menu');
+    const avatar = $('account-avatar');
+    if (!menu || !avatar) return;
+    const open = menu.hidden;
+    menu.hidden = !open;
+    avatar.setAttribute('aria-expanded', String(open));
+  });
+  document.addEventListener('click', (event) => {
+    if (!(event.target instanceof Element)) return;
+    if (event.target.closest('#account-menu-wrap')) return;
+    const menu = $('account-menu');
+    if (!menu || menu.hidden) return;
+    menu.hidden = true;
+    $('account-avatar')?.setAttribute('aria-expanded', 'false');
+  });
+  document.addEventListener('keydown', (event) => {
+    if (event.key !== 'Escape') return;
+    const menu = $('account-menu');
+    if (!menu || menu.hidden) return;
+    menu.hidden = true;
+    $('account-avatar')?.setAttribute('aria-expanded', 'false');
   });
   wireRunComparisonControls();
   $('project-create-button')?.addEventListener('click', openProjectDialog);
