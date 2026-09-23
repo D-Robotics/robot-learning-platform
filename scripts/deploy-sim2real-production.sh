@@ -21,6 +21,42 @@ WORKER_UNIT=sim2real-mock-worker.service
 SKIP_BUILD=0
 [[ "${1:-}" == "--skip-build" ]] && SKIP_BUILD=1
 
+# 同一 SHA 的并发部署会互撞：tarball 用固定名 /tmp/release-$SHA.tar.gz，
+# release 目录也是固定名，两跑会互相删对方的解压产物（真实发生过：engines
+# venv 拷贝被打断，current 切换后血脉缺失）。按目标主机串行化整个部署。
+# flock（coreutils）进程退出自动释放；macOS 无 flock 时退化为 mkdir 原子锁
+# + PID 存活探测，避免崩溃残留死锁。
+LOCK_KEY=$(printf '%s' "$HOST" | tr -c 'A-Za-z0-9' '_')
+LOCK_DIR="/tmp/sim2real-deploy.$LOCK_KEY.lock"
+if command -v flock >/dev/null 2>&1; then
+  exec 9>"$LOCK_DIR.flock"
+  if ! flock -n 9; then
+    echo "!! 已有同目标主机（$HOST）的部署在运行；并发部署会互撞同一 release 名与 tarball。" >&2
+    exit 1
+  fi
+else
+  if mkdir "$LOCK_DIR" 2>/dev/null; then
+    echo $$ >"$LOCK_DIR/pid"
+    trap 'rmdir "$LOCK_DIR" 2>/dev/null' EXIT
+  else
+    lock_pid=$(cat "$LOCK_DIR/pid" 2>/dev/null || true)
+    if [ -n "$lock_pid" ] && ! kill -0 "$lock_pid" 2>/dev/null; then
+      echo "清理残留部署锁（持锁 pid $lock_pid 已不存在）" >&2
+      rm -rf "$LOCK_DIR"
+      if mkdir "$LOCK_DIR" 2>/dev/null; then
+        echo $$ >"$LOCK_DIR/pid"
+        trap 'rmdir "$LOCK_DIR" 2>/dev/null' EXIT
+      else
+        echo "!! 部署锁 $LOCK_DIR 清理失败，请人工确认后删除重试。" >&2
+        exit 1
+      fi
+    else
+      echo "!! 已有同目标主机（$HOST）的部署在运行（锁：$LOCK_DIR）；确认无在途部署后清理该目录重试。" >&2
+      exit 1
+    fi
+  fi
+fi
+
 cd "$(dirname "$0")/.."
 SHA=$(git rev-parse --short HEAD)
 RELEASE="robot-learning-$(date +%Y%m%d)-$SHA"
