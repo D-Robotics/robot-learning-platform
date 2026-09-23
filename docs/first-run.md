@@ -26,6 +26,8 @@ RDK_X5_SSH_TARGET=root@<板端地址> ./scripts/install-x5-board-agent.sh --enab
 RDK_X5_SSH_TARGET=root@<板端地址> ./scripts/deploy-x5-board-agent.sh
 ```
 
+S100 板卡使用同一套脚本，只需把机型 profile 换成 `RDK_X5_PROFILE_NAME=rdk-s100-generic-drive.json`（初始化与部署都接受该变量）；接入底盘前后各跑一次只读预检 `RDK_X5_PROFILE_NAME=rdk-s100-generic-drive.json RDK_X5_SSH_TARGET=root@<板端地址> ./scripts/preflight-board.sh`——required 话题未全部出现时 profile 的 `provenance.mock` 必须保持 `true`。
+
 然后设置 `RDK_SIM2REAL_BOARD_AGENT_URL=http://<板端地址>:19100`，执行 `npm run demo:preflight -- --strict` 和 `npm run verify:live-board`。预检中的“隧道未连接”和“策略目录为空”必须在现场恢复隧道并上传经过审核的策略后才会通过；平台默认 fail-closed，不会把 Mock 误报为真机。
 
 ## 4. Linux systemd

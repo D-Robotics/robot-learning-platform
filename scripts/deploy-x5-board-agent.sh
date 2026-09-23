@@ -1,19 +1,21 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Deploy the reviewed X5 agent bundle over the operator's existing SSH path.
+# Deploy the reviewed X5/S100 agent bundle over the operator's existing SSH path.
 # Studio Local Bridge remains the preferred transport for the web platform;
 # this script is only for updating the board-side files and restarting its
-# systemd unit when a shell/SCP path is available.
+# systemd unit when a shell/SCP path is available. The board-side agent is
+# profile-driven: select the family with RDK_X5_PROFILE_NAME (X5 reference
+# profiles or the rdk-s100-generic-drive.json contract profile).
 
 repo_root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 target=${RDK_X5_SSH_TARGET:?set RDK_X5_SSH_TARGET to an SSH target such as root@board-host}
 remote_dir=${RDK_X5_AGENT_DIR:-/opt/rdk-board-agent}
 profile_name=${RDK_X5_PROFILE_NAME:-rdk-x5-originbot-real.json}
 case "$profile_name" in
-  rdk-x5-originbot-real.json|rdk-x5-microduck-leg.json) ;;
+  rdk-x5-originbot-real.json|rdk-x5-microduck-leg.json|rdk-s100-generic-drive.json) ;;
   *)
-    echo 'RDK_X5_PROFILE_NAME must be rdk-x5-originbot-real.json or rdk-x5-microduck-leg.json.' >&2
+    echo 'RDK_X5_PROFILE_NAME must be rdk-x5-originbot-real.json, rdk-x5-microduck-leg.json, or rdk-s100-generic-drive.json.' >&2
     exit 2
     ;;
 esac
@@ -96,6 +98,7 @@ scp \
   "$repo_root/services/sim2real-web/board-drive-publisher.py" \
   "$repo_root/services/sim2real-web/board-telemetry-node.py" \
   "$repo_root/services/sim2real-web/board-policy-runtime.py" \
+  "$repo_root/services/sim2real-web/board-joint-policy-runtime.py" \
   "$repo_root/services/sim2real-web/board-telemetry-uploader.py" \
   "$target:$remote_stage/"
 scp "$profile" "$target:$remote_stage/profiles/$profile_name"
@@ -109,7 +112,7 @@ set -eu
 stage=$1
 profile_name=$2
 case "$profile_name" in
-  rdk-x5-originbot-real.json|rdk-x5-microduck-leg.json) ;;
+  rdk-x5-originbot-real.json|rdk-x5-microduck-leg.json|rdk-s100-generic-drive.json) ;;
   *) echo 'unexpected profile name' >&2; exit 1 ;;
 esac
 root=/opt/rdk-board-agent

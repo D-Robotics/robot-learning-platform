@@ -7,6 +7,13 @@
 `provenance.mock=true`，只证明适配边界和维度可配置，不宣称已经有 S100 真机数据；
 接入设备后先替换实际话题并运行只读预检。
 
+部署与预检链路对两种板卡族统一：`scripts/install-x5-board-agent.sh` /
+`scripts/deploy-x5-board-agent.sh` 用 `RDK_X5_PROFILE_NAME` 选择机型 profile
+（含 `rdk-s100-generic-drive.json`），`scripts/preflight-board.sh` 按 profile
+声明对板卡做只读核查（架构、TROS 路径、onnxruntime、相机、ROS 话题）。
+required 话题未全部出现时预检失败，`provenance.mock` 必须保持 `true`；
+预检输出即为翻转该标记所需的证据记录。
+
 `adapters/*.json` 与 `profiles/*.json` 使用同一个 schema v1。设备身份统一放在
 `board`，ROS 话题统一放在 `ros.topics`，执行器统一使用
 `actuator.commandTopic` / `actuator.messageType`，策略维度统一放在 `policy`。

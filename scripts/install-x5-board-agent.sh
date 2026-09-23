@@ -2,7 +2,7 @@
 set -euo pipefail
 
 # Install the reviewed systemd and root-only state layout for a fresh RDK X5
-# board.  This is intentionally separate from deploy-x5-board-agent.sh:
+# or S100 board.  This is intentionally separate from deploy-x5-board-agent.sh:
 # deploy-x5-board-agent.sh remains an update-only code transaction, while this
 # script is an explicit first-boot initializer.
 #
@@ -61,6 +61,15 @@ if [[ -z "$target" ]]; then
   exit 2
 fi
 
+profile_name=${RDK_X5_PROFILE_NAME:-rdk-x5-originbot-real.json}
+case "$profile_name" in
+  rdk-x5-originbot-real.json|rdk-x5-microduck-leg.json|rdk-s100-generic-drive.json) ;;
+  *)
+    echo 'RDK_X5_PROFILE_NAME must be rdk-x5-originbot-real.json, rdk-x5-microduck-leg.json, or rdk-s100-generic-drive.json.' >&2
+    exit 2
+    ;;
+esac
+
 # The target is interpolated only as an argv passed to ssh/scp.  Keep the
 # operator-facing grammar narrow anyway so a typo cannot become a shell
 # fragment in a remote command or an unexpected scp destination.
@@ -117,11 +126,17 @@ scp "$agent_unit" "$uploader_unit" "$target:$remote_stage/"
 # The remote transaction is deliberately idempotent and non-destructive:
 # directories are tightened, missing env files receive safe loopback-only
 # skeletons, and existing units are left untouched unless --force is set.
-ssh "$target" /bin/sh -s -- "$remote_stage" "$force" "$enable" <<'REMOTE_INSTALL'
+ssh "$target" /bin/sh -s -- "$remote_stage" "$force" "$enable" "$profile_name" <<'REMOTE_INSTALL'
 set -eu
 stage=$1
 force=$2
 enable=$3
+profile=$4
+
+case "$profile" in
+  rdk-x5-originbot-real.json|rdk-x5-microduck-leg.json|rdk-s100-generic-drive.json) ;;
+  *) echo 'unexpected profile name' >&2; exit 1 ;;
+esac
 
 test -d "$stage"
 test -s "$stage/rdk-board-agent.service"
@@ -153,6 +168,9 @@ write_env_if_missing() {
   umask 077
   case "$kind" in
     agent)
+      # The adapter profile line is family-specific and generated from the
+      # whitelist-validated $profile argument; the static skeleton stays a
+      # quoted heredoc so no other expansion can reach the env file.
       cat >"$file" <<'EOF_AGENT'
 # Safe first-boot defaults. Keep the bind host loopback while the token is empty.
 RDK_SIM2REAL_BOARD_AGENT_BIND_HOST=127.0.0.1
@@ -161,8 +179,8 @@ RDK_SIM2REAL_BOARD_AGENT_TOKEN=
 RDK_SIM2REAL_BOARD_AGENT_ENABLE_DRIVE=0
 RDK_SIM2REAL_BOARD_AGENT_ENABLE_POLICY=0
 RDK_BOARD_RUNTIME_DIR=/var/lib/rdk-board-agent/runtime
-RDK_SIM2REAL_ADAPTER_CONFIG=/opt/rdk-board-agent/profiles/rdk-x5-originbot-real.json
 EOF_AGENT
+      echo "RDK_SIM2REAL_ADAPTER_CONFIG=/opt/rdk-board-agent/profiles/$profile" >>"$file"
       ;;
     telemetry)
       cat >"$file" <<'EOF_TELEMETRY'
@@ -220,7 +238,7 @@ if [ "$enable" -eq 1 ]; then
   systemctl enable --now rdk-board-agent.service
 fi
 
-echo 'X5 systemd units and root-only state layout are ready.'
+echo 'X5/S100 systemd units and root-only state layout are ready.'
 if [ "$enable" -ne 1 ]; then
   echo 'No service was started. Deploy code, review agent.env, then explicitly enable the agent.'
 fi

@@ -76,6 +76,6 @@
   "provenance": {
     "kind": "synthetic",
     "mock": true,
-    "note": "Contract-only S100 profile. Real preflight 2026-09-22 (SSH, root@192.168.1.2): aarch64, Ubuntu 22.04.5 LTS, /opt/tros/humble present (setupPaths[0] verified), onnxruntime 1.16.3 installed, UVC cameras /dev/video0+video1 present. Chassis topics (imu/odom/cmd_vel) remain UNVERIFIED - no diff-drive chassis was attached; keep mock:true until a real chassis preflight passes."
+    "note": "Contract-only S100 profile. Real preflight 2026-09-22 (SSH, root@192.168.1.2): aarch64, Ubuntu 22.04.5 LTS, /opt/tros/humble present (setupPaths[0] verified), onnxruntime 1.16.3 installed, UVC cameras /dev/video0+video1 present. Chassis topics (imu/odom/cmd_vel) remain UNVERIFIED - no diff-drive chassis was attached; keep mock:true until a real chassis preflight passes. 2026-09-22 second preflight via scripts/preflight-board.sh (same result, transcript = FAIL on required topics /sensors/imu and /base/cmd_vel): the reviewed board-agent bundle now runs on this S100 (systemd rdk-board-agent, /etc/rdk-board-agent/agent.env points RDK_SIM2REAL_ADAPTER_CONFIG at this profile); /healthz reports platform rdk-s100, model 'D-Robotics RDK S100 V1P0'. Chassis attachment is still required before mock:false."
   }
 }

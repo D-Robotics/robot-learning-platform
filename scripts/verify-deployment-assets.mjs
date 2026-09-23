@@ -605,6 +605,33 @@ assert.match(
 );
 assert.match(
   deployX5Source,
+  /rdk-s100-generic-drive\.json[\s\S]*rdk-s100-generic-drive\.json/,
+  'X5 deployment must accept the S100 contract profile in both the local and remote whitelists',
+);
+assert.match(
+  installX5Source,
+  /rdk-s100-generic-drive\.json/,
+  'X5 onboarding installer must accept the S100 contract profile for the env skeleton',
+);
+const preflightBoard = path.join(root, 'scripts/preflight-board.sh');
+const preflightSyntax = spawnSync('bash', ['-n', preflightBoard], { encoding: 'utf8' });
+assert.equal(preflightSyntax.status, 0, 'board preflight script must pass bash -n');
+const unsafePreflight = spawnSync('bash', [preflightBoard], {
+  encoding: 'utf8',
+  env: { ...process.env, RDK_X5_SSH_TARGET: 'root@board;id' },
+});
+assert.equal(
+  unsafePreflight.status,
+  2,
+  'board preflight must reject shell metacharacters in the SSH target before opening SSH',
+);
+assert.match(
+  read('scripts/preflight-board.sh'),
+  /keep provenance mock:true/,
+  'board preflight must tie a failed run to the profile mock provenance',
+);
+assert.match(
+  deployX5Source,
   /if \[ -f "\$backup\/\$file" \]; then[\s\S]*else[\s\S]*rm -f "\$root\/\$file"/,
   'X5 deployment rollback must remove files that did not exist before the update',
 );

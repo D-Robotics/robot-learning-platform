@@ -116,6 +116,7 @@
     "verify:goalnav": "python3 engines/rdk-rl-env/test_goal_navigation.py",
     "verify:originbot-env": "python3 engines/rdk-rl-env/test_originbot_env.py",
     "verify:demo-preflight": "node scripts/demo-preflight.test.mjs",
+    "verify:preflight-board": "node scripts/preflight-board.test.mjs",
     "verify:originbot-calibration": "python3 engines/rdk-rl-env/test_calibrate_originbot.py",
     "calibrate:originbot": "python3 engines/rdk-rl-env/calibrate_originbot.py",
     "verify:task-templates": "node scripts/verify-task-templates.mjs",

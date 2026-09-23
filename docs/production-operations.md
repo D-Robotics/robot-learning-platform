@@ -179,7 +179,11 @@ X5 agent 的代码部署目录是 `/opt/rdk-board-agent`，策略文件则固定
 `scripts/install-x5-board-agent.sh`，它会显式安装 reviewed systemd unit、环境文件骨架以及
 `rdk-board-agent.service` 所需的 root-only 目录；然后运行 update-only 的
 `scripts/deploy-x5-board-agent.sh` 传代码。初始化脚本默认不会覆盖已有 unit 或启动服务；需要替换
-unit 时必须人工审阅后加 `--force`，启用服务也必须单独执行 `systemctl enable --now`。确认
+unit 时必须人工审阅后加 `--force`，启用服务也必须单独执行 `systemctl enable --now`。同一脚本链
+接受 S100：初始化与部署都支持 `RDK_X5_PROFILE_NAME=rdk-s100-generic-drive.json`（agent.env 骨架
+的 `RDK_SIM2REAL_ADAPTER_CONFIG` 随之指向该 profile）；机型接入证据由只读的
+`scripts/preflight-board.sh` 产生，required 话题未全部出现时 profile 的 `provenance.mock`
+保持 `true`。确认
 `ReadWritePaths` 保留策略目录；遥测 spool 与 ROS 日志位于
 `/var/lib/rdk-board-agent/{telemetry,roslogs}`，板端 command/state/ready/snapshot IPC
 统一位于 `/var/lib/rdk-board-agent/runtime`（目录 0700、文件 0600），也必须在启用
