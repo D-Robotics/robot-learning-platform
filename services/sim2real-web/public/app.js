@@ -299,7 +299,13 @@ function renderContextLive() {
   else if (localRunner.available === true) backendLabel = '本地已配置';
   setText(
     'context-live-project',
-    project ? projectDisplayName(project) : state.projectsLoaded && state.projects?.length ? '全部项目' : '检查中',
+    project
+      ? projectDisplayName(project)
+      : state.authRequired
+        ? '游客模式'
+        : state.projectsLoaded && state.projects?.length
+          ? '全部项目'
+          : '检查中',
   );
   const activeView = document.body.dataset.activeView || 'overview';
   const stageLabel = flowStageLabel(activeView);
@@ -485,6 +491,25 @@ function renderPlatformScorecard() {
   const grid = $('platform-scorecard-grid');
   const total = $('platform-score-total');
   if (!grid || !total) return;
+  // Guests have no account-scoped evidence, so a numeric score would read as
+  // "the platform is broken". Show an explicit sign-in placeholder instead.
+  if (state.authRequired && !state.overview) {
+    total.textContent = '未评估';
+    grid.replaceChildren();
+    const item = document.createElement('article');
+    item.className = 'platform-score-item';
+    item.dataset.state = 'guest';
+    item.style.gridColumn = '1 / -1';
+    const title = document.createElement('strong');
+    title.textContent = '登录后评估';
+    const copy = document.createElement('span');
+    copy.textContent = '评分依据账号内的契约、训练、评测与发布证据；仿真试玩不受影响。';
+    item.append(title, copy);
+    grid.append(item);
+    const guestNote = $('platform-scorecard-note');
+    if (guestNote) guestNote.textContent = '登录后即可开始累计软件门槛评分。';
+    return;
+  }
   const model = selectedModel();
   const telemetry = currentTelemetry();
   const runs = runsForCurrentModel();
@@ -1665,6 +1690,11 @@ function setAuthGate(payload) {
   void fetchPublicHealth();
   renderNextAction();
   renderEvaluationNext();
+  // Auth just flipped: the context strip and the scorecard hold guest-specific
+  // branches, so they must re-render now (loadOverview's 401 path only
+  // refreshes project context + integrations).
+  renderContextLive();
+  renderPlatformScorecard();
   if (!state.authNoticeShown) {
     state.authNoticeShown = true;
     // 区分「从未登录」与「登录已过期」：后者换个口径，提示重新登录即可恢复
@@ -2409,6 +2439,7 @@ function renderProjectContext() {
   const note = $('project-context-note');
   if (note) {
     if (state.projectsLoadError) note.textContent = '项目列表暂不可用 · 点击“重新连接”重试';
+    else if (state.authRequired && !state.overview) note.textContent = '登录后可保存项目与训练记录';
     else if (!state.overview || !state.projectsLoaded) note.textContent = '项目列表加载中…';
     else if (project) {
       const modelCount = projectModelIds(project)?.size || 0;
@@ -2612,10 +2643,29 @@ function renderSelects() {
     );
   }
   if (deviceSelect) {
+    const selectedDevice = devices.find((device) => device.id === state.selectedDeviceId);
+    const newestCheckedAt = devices
+      .map((device) => String(device.lastCheckedAt ?? ''))
+      .sort()
+      .pop();
+    // A persisted selection pointing at a board that is disconnected while a
+    // more recently verified device exists is a stale registration the
+    // operator replaced; it must not keep the default away from the live board.
+    const selectionStale =
+      selectedDevice?.status === 'disconnected' &&
+      Boolean(newestCheckedAt) &&
+      String(selectedDevice.lastCheckedAt ?? '') < String(newestCheckedAt);
     if (!devices.length) {
       state.selectedDeviceId = '';
-    } else if (!devices.some((device) => device.id === state.selectedDeviceId)) {
-      state.selectedDeviceId = devices[0]?.id || '';
+    } else if (!selectedDevice || selectionStale) {
+      // Default to the most recently verified board so a newly attached
+      // device outranks a stale registration that was never reconnected.
+      const byRecency = [...devices].sort((a, b) =>
+        String(b.lastCheckedAt ?? b.boardDetectedAt ?? '').localeCompare(
+          String(a.lastCheckedAt ?? a.boardDetectedAt ?? ''),
+        ),
+      );
+      state.selectedDeviceId = byRecency[0]?.id || '';
     }
     syncSelect(
       deviceSelect,
@@ -2972,7 +3022,14 @@ function renderIntegrations() {
     (localReady || robogoReady) &&
     targetReady &&
     latestRealEvidence;
-  const readiness = fullSoftwareDemoReady
+  const guestWorkspace = state.authRequired && !state.overview;
+  const readiness = guestWorkspace
+    ? {
+        state: 'waiting',
+        label: '登录后可用',
+        title: '游客模式可直接仿真；登录后可保存项目、模型与训练记录。',
+      }
+    : fullSoftwareDemoReady
     ? {
         state: 'ready',
         label: '预检已通过',
@@ -3065,10 +3122,23 @@ function renderIntegrations() {
         ? local.message || local.reason || '本地 worker 状态未知'
       : robogo.message || local.reason || '只读读取训练资源',
   );
-  const storageLabel = !storageKnown ? '检查中' : storage.writable ? '台账可写' : '需要共享存储';
+  const storageLabel = guestWorkspace
+    ? '登录后可用'
+    : !storageKnown
+      ? '检查中'
+      : storage.writable
+        ? '台账可写'
+        : '需要共享存储';
   setText('status-storage', storageLabel);
   setText('status-storage-card', storageLabel);
-  setText('status-storage-detail', storageKnown ? storage.message || '状态按账号隔离' : '正在读取台账状态');
+  setText(
+    'status-storage-detail',
+    guestWorkspace
+      ? '游客模式不读取台账；登录后按账号隔离。'
+      : storageKnown
+        ? storage.message || '状态按账号隔离'
+        : '正在读取台账状态',
+  );
   const contextHealth = $('context-health');
   const contextState = !overviewReady || !storageKnown ? 'waiting' : storageReady ? 'ready' : 'blocked';
   contextHealth?.classList.toggle('is-ready', contextState === 'ready');
