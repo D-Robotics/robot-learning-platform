@@ -2628,7 +2628,12 @@ function renderSelects() {
   }
   if (modelSelect) {
     if (!models.some((model) => model.id === state.selectedModelId)) {
-      state.selectedModelId = models[0]?.id || '';
+      // Default to the newest user-registered model: a builtin reference
+      // policy must not outrank the artifact the operator just trained.
+      const byRecency = [...models].sort((a, b) =>
+        String(b.createdAt ?? '').localeCompare(String(a.createdAt ?? '')),
+      );
+      state.selectedModelId = (byRecency.find((model) => !model.builtin) || byRecency[0])?.id || '';
     }
     syncSelect(
       modelSelect,
