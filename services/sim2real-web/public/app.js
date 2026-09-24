@@ -1677,7 +1677,14 @@ async function refreshSessionMenu() {
     const session = await request('/sim2real/auth/session', {
       headers: { accept: 'application/json' },
     });
-    if (!session?.authenticated || !session.logoutUrl) return;
+    // Unauthenticated visitors and deployments without a logout route must
+    // hide the rows explicitly, or a stale account row survives logout and
+    // account switches.
+    if (!session?.authenticated || !session.logoutUrl) {
+      accountItem.hidden = true;
+      logoutLink.hidden = true;
+      return;
+    }
     logoutLink.setAttribute('href', session.logoutUrl);
     if (accountName) {
       accountName.textContent = session.displayName || session.accountId || '';
@@ -8361,6 +8368,9 @@ async function loadOverview({ quiet = false, silent = false } = {}) {
       // project creator and run actions visually enabled but functionally inert.
       renderProjectContext();
       renderIntegrations();
+      // The account/logout rows only appear for a verified session; the boot
+      // load (success or 401) is where the top menu learns the session state.
+      void refreshSessionMenu();
     }
     scheduleOverviewPolling();
   }
