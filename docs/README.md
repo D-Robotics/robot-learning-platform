@@ -6,6 +6,7 @@
 
 | 文档 | 用途 |
 | --- | --- |
+| [`product-guide.md`](product-guide.md) | 图文版产品手册：8 视图截图导览 + 第一次闭环手把手（新读者从这里开始） |
 | [`user-guide.md`](user-guide.md) | 使用手册与最佳实践（核心、流程、数据与工具） |
 | [`demo-runbook.md`](demo-runbook.md) | 演示前的检查与操作顺序 |
 | [`demo-guide.md`](demo-guide.md) | 演示脚本与讲解要点 |

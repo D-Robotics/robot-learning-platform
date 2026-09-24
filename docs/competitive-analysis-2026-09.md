@@ -77,6 +77,8 @@ Playground / ManiSkill / Isaac Lab 是仿真 + 训练库。**同形态直接可�
 3. **数据格式孤岛**：LeRobot v3（Parquet+MP4、Hub 原生流式）是事实标准——AgiBot World、
    GR00T 微调管线、转换器 any4lerobot（1.2k stars）都围着它转。我们私有 JSONL 无导入导出，
    等于拒收生态数据。**最小解法是双向 converter，不是迁格式**。
+   （2026-09-23 更新：已解——`engines/lerobot-converter` 双向 converter 入库，真实 Hub
+   数据集导入 → ACT 训练 → ONNX 已实证。）
 4. **仿真/机器人覆盖**：1–3 个机型 vs Playground 15+、ManiSkill ~40 机型 9 类任务、
    Isaac Lab 16+ 机型 30+ 环境。这不是要追平的差距（见下「我们不追的」）。
 5. **GPU 训练规模**：mjlab-rsl-rl 是参考适配器（需自备 GPU 栈）；Isaac Lab multi-node、
@@ -118,31 +120,31 @@ Playground / ManiSkill / Isaac Lab 是仿真 + 训练库。**同形态直接可�
 | 项 | 内容 | 状态 |
 | --- | --- | --- |
 | ACT 引擎入库 | `engines/act`（本仓库旗舰模仿算法对齐 LeRobot） | ✅ 本轮：28 测试 + 引擎白名单 + 训练页接线 |
-| LeRobot v3 格式双向 converter | 导入 Hub 数据集做 BC/ACT 训练源；导出录制轨迹为 LeRobot 数据集 | 📋 设计见下节 |
-| 英文 README + 界面 i18n | README-en + UI 语言切换（先英文） | 📋 本轮：README 英文速览段落；全量 i18n 待做 |
-| 首个 release tag | v0.1.0 + CHANGELOG + 发布清单走查 | 📋 本轮打 tag |
+| LeRobot v3 格式双向 converter | 导入 Hub 数据集做 BC/ACT 训练源；导出录制轨迹为 LeRobot 数据集 | ✅ 已入库 `engines/lerobot-converter`（54 项契约测试进 verify 链；多相机 `--video-key`/`--tabular` 显式模式；真实 Hub aloha 数据集导入 → ACT 训练 → ONNX 实证 2026-09-23，见 docs/engines/lerobot-converter.md） |
+| 英文 README + 界面 i18n | README-en + UI 语言切换（先英文） | 🟡 README 英文速览已入库（README.md 顶部）；全量 i18n 待做 |
+| 首个 release tag | v0.1.0 + CHANGELOG + 发布清单走查 | ✅ v0.1.0 已打 |
 
 ### P1 UI/UX 拉齐（成熟模式，可直接抄）
 
 | 项 | 内容 | 状态 |
 | --- | --- | --- |
-| 统一 scrub 时间轴 | 相机/热力图/曲线随时间轴拖动同步 | 🔨 本轮做 |
-| run 对比升级 | parallel coordinates + 参数 diff 表 | 🔨 本轮做 |
-| episode 数据体检 | 长度分布直方图 + 离群标记 | 🔨 本轮做 |
-| 训练日志流 | stdout 逐行流式视图 | 📋 |
-| MP4 视频管线 | 录制→MP4、回放视频与图表同步 | 📋 需媒体管线引入 |
-| 手机遥操 | 虚拟摇杆 + 触屏控制层 | 📋 |
+| 统一 scrub 时间轴 | 相机/热力图/曲线随时间轴拖动同步 | ✅ 已落地（app.js；verify:ui 绿） |
+| run 对比升级 | parallel coordinates + 参数 diff 表 | ✅ 已落地（app.js；verify:ui 绿） |
+| episode 数据体检 | 长度分布直方图 + 离群标记 | ✅ 已落地（app.js；verify:ui 绿） |
+| 训练日志流 | stdout 逐行流式视图 | ✅ 已落地（`/runs/:id/logs?after=N` 增量游标 + `renderRunProgressLogsPanel`；2026-09-23 复核） |
+| MP4 视频管线 | 录制→MP4、回放视频与图表同步 | ✅ 已落地（server/sim2real/replay-video.ts ffmpeg 渲染 + app.js 40 处接线；2026-09-23 复核） |
+| 手机遥操 | 虚拟摇杆 + 触屏控制层 | 📋 唯一未落地 P1 项 |
 
 ### P2 战略项（单项都是大活）
 
 | 项 | 内容 |
 | --- | --- |
-| SmolVLA 微调入口 | 450M 档位，与 X5 + 服务器形态匹配；需 GPU runner + LeRobot 数据格式先行 |
-| LeRobot Hub 发布 | 平台模型/数据集一键发 HF Hub（org 账号 + token 服务端持有） |
-| Diffusion Policy 引擎 | 补齐 LeRobot 旗舰算法第二件 |
-| DAgger/HIL 后训练 | 真机纠错数据回流训练 |
-| 仿真-真机相关性 | SimplerEnv MMRV/Pearson 方法论吸收进 sim2real 证据链 |
-| 多线程 wasm 仿真 | COOP/COEP + SharedArrayBuffer 提速浏览器物理 |
+| SmolVLA 微调入口 | 450M 档位，与 X5 + 服务器形态匹配；需 GPU runner + LeRobot 数据格式先行。✅ 已落地（2026-09-23 GPU 5090 真微调实证：aloha 数据集 375 步全参微调 finalLoss 0.053，委托 lerobot 0.4.4 原生训练器，见 `docs/engines/smolvla.md` 与 roadmap） |
+| LeRobot Hub 发布 | 平台模型/数据集一键发 HF Hub（org 账号 + token 服务端持有）。🟡 适配器委托路径已支持 `--policy.repo_id`；一键发布待 org token |
+| Diffusion Policy 引擎 | 补齐 LeRobot 旗舰算法第二件。✅ 已入库（`engines/diffusion-policy`，verify 链在列） |
+| DAgger/HIL 后训练 | 真机纠错数据回流训练。📋 |
+| 仿真-真机相关性 | SimplerEnv MMRV/Pearson 方法论吸收进 sim2real 证据链。✅ 已落地（`shared/sim-real-correlation.ts` + `GET /runs-correlation`，13 vitest） |
+| 多线程 wasm 仿真 | COOP/COEP + SharedArrayBuffer 提速浏览器物理。📋 |
 
 ### 我们不追的（明确说不）
 
