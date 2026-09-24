@@ -1100,6 +1100,22 @@ paths:
                   displayName: { type: string }
                   accountId: { type: string }
                   logoutUrl: { type: string, description: Logout endpoint relative to the deployment's public base path. }
+  /api/sim2real/auth/studio-direct/logout:
+    get:
+      tags: [sso]
+      summary: Invalidate the direct-login session cookies and return to the login page
+      operationId: logoutStudioDirectSession
+      security: []
+      description: >-
+        GET-redirect logout for the studio-cookie direct login surface (the
+        endpoint advertised by /api/sim2real/auth/session as logoutUrl). Each
+        session cookie passed through at login is expired, then the browser is
+        redirected to the deployment login page with a logged-out notice.
+      responses:
+        "302":
+          description: Redirect to the deployment login page after clearing session cookies.
+        "404":
+          description: Deployment is not running the studio-cookie direct login surface.
   /api/v1/duck/deployments:
     get:
       tags: [deployments]

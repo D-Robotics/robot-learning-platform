@@ -1776,6 +1776,20 @@ async function submitAuthLogin() {
 }
 
 async function logoutAccount() {
+  // Prefer the deployment-provided logout endpoint: it is mode-aware and
+  // clears the actual session cookie server-side. The legacy /sso/logout
+  // only covered the relay cookie and left direct-login sessions alive.
+  try {
+    const session = await request('/sim2real/auth/session', {
+      headers: { accept: 'application/json' },
+    });
+    if (session?.logoutUrl) {
+      window.location.assign(session.logoutUrl);
+      return;
+    }
+  } catch {
+    // Session probe failed; fall through to the legacy in-place logout.
+  }
   try {
     await request('/sso/logout', { method: 'POST', body: '{}' });
   } catch {
