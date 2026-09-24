@@ -9,10 +9,14 @@ capability is real, the production compute belongs to the deployment. The
 development machine (macOS, no GPU) can never fine-tune a 450M VLA, so this
 file's value contract is:
 
-  * the real fine-tuning code path is written out in full — dependency
-    gates, model/processor loading, LeRobot parquet episode loading, LoRA vs
-    full fine-tune, a training loop with honest per-iteration progress
-    lines, artifacts and the result contract — not a stub;
+  * the real fine-tuning code path delegates to lerobot's own trainer
+    (`python -m lerobot.scripts.lerobot_train`) with this engine providing
+    the gates (dependency, CUDA, dataset inspection), the dataset wiring
+    (`--dataset.root` = the converted LeRobot directory), the pretrained
+    policy (`--policy.path`, default `lerobot/smolvla_base`), honest
+    pass-through of the trainer's progress lines, and the platform's
+    result.json/artifact contract — not a hand-rolled loop against
+    guessed APIs;
   * `--dry-run` validates the complete training plan on a machine with no
     network, no GPU and no weights: LeRobot dataset structure
     (codebase_version, episodes, frames, observation.state/action
@@ -47,13 +51,14 @@ Two modes, like engines/act/train_act.py:
 
 What was executed where (honesty note): the dry-run/plan path, the dataset
 inspection, the fail-closed gates and the file-protocol round run and are
-tested on the development machine. The model/processor call shape inside
-`run_real_training` was written against the published SmolVLA modeling and
-processor interfaces (transformers AutoModel/AutoProcessor with
-trust_remote_code for the lerobot VLA checkpoints) and has NOT been executed
-in this repository's environment — it runs on the GPU runner; the failure
-messages at each integration seam name the seam so an operator can adjust a
-signature without reading the whole loop.
+tested on the development machine. The delegate path ran into two real
+ecosystem facts while being executed on the GPU runner (2026-09-23): the
+`lerobot/smolvla_base` checkpoint is a lerobot policy artifact that
+`transformers.AutoModel` cannot load (no native `smolvla` in transformers'
+CONFIG_MAPPING, no remote code in the repo), and lerobot's own trainer is
+the maintained fine-tuning entry — so the real path delegates to it. The
+delegate's CLI flags are `lerobot` 0.4.4's documented train pipeline
+arguments.
 
 Register with the local worker:
 
@@ -65,6 +70,9 @@ import json
 import math
 import os
 import pathlib
+import re
+import shutil
+import subprocess
 import sys
 import time
 
@@ -86,17 +94,22 @@ DEFAULT_ACTION_CHUNK = 50
 
 # The training stack this engine requires for real fine-tuning, in gate
 # order, each with the exact install command the failure message prints.
+#
+# Evidence note (2026-09-23, executed on the GPU runner): the checkpoint
+# `lerobot/smolvla_base` is a lerobot POLICY artifact (config.json +
+# safetensors + lerobot pre/post-processor). `transformers` cannot load it —
+# transformers 5.17 has no `smolvla` in CONFIG_MAPPING and the repo ships no
+# remote code — so the real path delegates to lerobot's own trainer instead
+# of an AutoModel/AutoProcessor loop.
 TRAINING_STACK = (
     ("torch", "python3 -m pip install torch (on the GPU runner, prefer the CUDA index build)"),
-    ("transformers", "python3 -m pip install transformers accelerate peft"),
-    ("accelerate", "python3 -m pip install transformers accelerate peft"),
-    ("peft", "python3 -m pip install transformers accelerate peft"),
+    ("lerobot", "python3 -m pip install lerobot"),
 )
 LOADER_PACKAGES = (
     ("numpy", "python3 -m pip install numpy"),
     ("pyarrow", "python3 -m pip install pyarrow"),
 )
-PROVENANCE_PACKAGES = ("numpy", "torch", "transformers", "accelerate", "peft", "pyarrow")
+PROVENANCE_PACKAGES = ("numpy", "torch", "lerobot", "pyarrow")
 
 
 class MissingDependencyError(RuntimeError):
@@ -715,25 +728,6 @@ def run_dry_run(args):
 # CLI: real fine-tuning (GPU runner path).
 # ---------------------------------------------------------------------------
 
-def _config_dimension(model, attr):
-    """Integer dimension from the model config, or None when the attribute
-    is absent or not a plain int (configs vary across SmolVLA versions)."""
-    value = getattr(getattr(model, "config", None), attr, None)
-    if isinstance(value, bool) or not isinstance(value, int):
-        return None
-    return value
-
-
-def _model_chunk_size(model):
-    """Action-chunk length from the loaded model's config when it exposes
-    one; otherwise SmolVLA's published default of 50."""
-    for attr in ("chunk_size", "action_chunk_size", "chunk"):
-        value = _config_dimension(model, attr)
-        if value is not None and value > 0:
-            return value
-    return DEFAULT_ACTION_CHUNK
-
-
 def _episode_tasks_or_empty(root):
     try:
         return _episode_tasks(root)
@@ -810,94 +804,87 @@ def load_lerobot_episodes(dataset_dir):
     return episodes, int(state_dim), int(action_dim)
 
 
-def _processor_batch(processor, states, languages):
-    """Map (state, language) samples to model inputs via the processor.
+def _steps_from_epochs(frames, batch, epochs):
+    """Optimizer steps the delegate trainer runs for the epoch budget."""
+    return max(1, int(math.ceil(frames / float(batch))) * int(epochs))
 
-    Written against the published SmolVLA processor interface — the lerobot
-    checkpoints accept a batch dict of `observation.state` and task strings.
-    This seam was not executed in the repository environment (no GPU, no
-    weights); if your runner's processor signature differs, this is the one
-    function to adjust — the loop after it is version-agnostic.
+
+def _dataset_repo_id(dataset_dir):
+    """Synthetic local repo_id for the trainer; the data comes from --root."""
+    slug = safe_slug(pathlib.Path(dataset_dir).resolve().name, "local-dataset")
+    return "local/%s" % slug
+
+
+_LOSS_RE = re.compile(r"loss[:=]\s*([0-9.]+(?:[eE][+-]?[0-9]+)?)")
+
+
+def _run_lerobot_trainer(cmd):
+    """Run the lerobot trainer subprocess, streaming its lines verbatim.
+
+    Every trainer line is forwarded with a `[smolvla][trainer]` prefix — the
+    trainer's own progress is the honest progress, not a re-derivation. The
+    last `loss:`-shaped number is returned when the trainer logs one, else
+    None (a missing loss is reported as unknown, never zero).
     """
-    return processor({"observation.state": states, "task": languages})
-
-
-def _action_chunk_from_outputs(outputs):
-    """Locate the predicted action chunk in the model outputs.
-
-    Candidate keys are ordered by the published SmolVLA modeling code
-    (`output_action`) with common alternates; a model whose outputs use
-    none of them fails with the key list so the operator knows exactly
-    what to adjust on their version.
-    """
-    candidates = ("output_action", "action", "action_pred", "action_logits", "logits")
-    for key in candidates:
-        if hasattr(outputs, key):
-            return getattr(outputs, key)
-    if isinstance(outputs, dict):
-        for key in candidates:
-            if key in outputs:
-                return outputs[key]
-    raise RuntimeError(
-        "could not locate the action chunk in the model outputs (looked "
-        "for %s); adjust _action_chunk_from_outputs for your SmolVLA "
-        "version" % ", ".join(candidates)
+    process = subprocess.Popen(
+        cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+        text=True, bufsize=1,
     )
-
-
-def _chunk_loss(outputs, targets):
-    """MSE between the predicted action chunk and the ground-truth window.
-
-    A horizon mismatch compares the overlapping prefix (counted in the
-    honest progress line, not hidden): chunk length comes from the model
-    config, targets from the dataset construction."""
-    prediction = _action_chunk_from_outputs(outputs)
-    prediction = prediction.float()
-    if prediction.dim() == 2 and targets.dim() == 3:
-        prediction = prediction.view(targets.shape[0], targets.shape[1], targets.shape[2])
-    if prediction.dim() != 3:
+    final_loss = None
+    try:
+        for line in process.stdout:
+            line = line.rstrip("\n")
+            if line:
+                print("[smolvla][trainer] %s" % line, flush=True)
+            match = _LOSS_RE.search(line)
+            if match:
+                final_loss = float(match.group(1))
+    finally:
+        process.stdout.close()
+        returncode = process.wait()
+    if returncode != 0:
         raise RuntimeError(
-            "expected a (batch, chunk, action) prediction, got shape %r"
-            % (tuple(prediction.shape),)
+            "the lerobot trainer exited with %d — its lines above are the "
+            "authoritative failure record" % returncode
         )
-    horizon = min(prediction.shape[1], targets.shape[1])
-    return (prediction[:, :horizon, :] - targets[:, :horizon, :]).pow(2).mean()
+    return final_loss
 
 
-class _ChunkedVlaDataset:
-    """(state, language, future action chunk) pairs over LeRobot episodes.
+def _latest_checkpoint(train_dir):
+    """The trainer's most recent checkpoint directory, or None.
 
-    Episode-end windows are padded by repeating the final action; the
-    published SmolVLA recipe masks those tail positions instead — the
-    difference is deliberate (masking logic lives with the model's loss
-    head on the runner) and is documented in docs/engines/smolvla.md."""
+    lerobot writes output_dir/checkpoints/<step-ident>/pretrained_model; the
+    step directories order by their numeric identifier when it parses, else
+    by name — the layout is the trainer's, not ours.
+    """
+    checkpoints = pathlib.Path(train_dir) / "checkpoints"
+    if not checkpoints.is_dir():
+        return None
+    entries = [entry for entry in checkpoints.iterdir() if entry.is_dir()]
+    if not entries:
+        return None
 
-    def __init__(self, episodes, chunk):
-        import torch  # noqa: PLC0415 - real path only
+    def sort_key(entry):
+        digits = "".join(char for char in entry.name if char.isdigit())
+        return (int(digits) if digits else -1, entry.name)
 
-        self._torch = torch
-        self._episodes = episodes
-        self._chunk = int(chunk)
-        self._pairs = []
-        for episode_index, episode in enumerate(episodes):
-            for t in range(len(episode["states"])):
-                self._pairs.append((episode_index, t))
-        if not self._pairs:
-            raise ValueError("dataset is empty")
+    latest = max(entries, key=sort_key)
+    pretrained = latest / "pretrained_model"
+    return pretrained if pretrained.is_dir() else latest
 
-    def __len__(self):
-        return len(self._pairs)
 
-    def __getitem__(self, position):
-        episode_index, t = self._pairs[position]
-        episode = self._episodes[episode_index]
-        states, actions = episode["states"], episode["actions"]
-        window = actions[t : t + self._chunk]
-        if len(window) < self._chunk:
-            window = np.concatenate(
-                [window, np.repeat(actions[-1:], self._chunk - len(window), axis=0)]
-            )
-        return states[t], episode["task"] or "", window
+def _policy_chunk(weights_dir):
+    """Action-chunk length from the checkpoint's policy config, best effort."""
+    try:
+        config = json.loads(
+            (pathlib.Path(weights_dir) / "config.json").read_text(encoding="utf-8")
+        )
+    except (OSError, ValueError):
+        return None
+    value = config.get("chunk_size")
+    if isinstance(value, bool) or not isinstance(value, int):
+        return None
+    return value
 
 
 def run_real_training(args):
@@ -917,8 +904,6 @@ def run_real_training(args):
                 "missing dependency: {}. Install with: {}".format(package, hint)
             )
     import torch
-    from accelerate import Accelerator
-    from transformers import AutoModel, AutoProcessor
 
     if not torch.cuda.is_available():
         raise GpuUnavailableError(
@@ -927,6 +912,12 @@ def run_real_training(args):
             "not on this host. Validate the plan here with --dry-run, then "
             "run this command on the GPU machine with the base weights "
             "reachable."
+        )
+    if args.lora_r > 0:
+        raise ValueError(
+            "the delegate path runs the trainer's full fine-tune; LoRA "
+            "(--lora-r > 0) is refused rather than silently downgraded to "
+            "full fine-tuning"
         )
 
     ensure_output_writable(args.out)
@@ -944,125 +935,54 @@ def run_real_training(args):
         flush=True,
     )
 
-    # trust_remote_code: the lerobot VLA checkpoints ship their modeling and
-    # processor code inside the repo, like the rest of the SmolVLA ecosystem
-    # (lerobot's own finetune scripts load them the same way). The operator
-    # vouches for the checkpoint source — same trust decision as running any
-    # third-party model.
-    print("[smolvla] loading %s (trust_remote_code for the lerobot checkpoints)" % args.model_id, flush=True)
-    processor = AutoProcessor.from_pretrained(args.model_id, trust_remote_code=True)
-    model = AutoModel.from_pretrained(args.model_id, trust_remote_code=True)
-
-    # Contract dimensions from the model config, when the loaded version
-    # exposes them: a mismatch is refused, never tuned away.
-    config_state = _config_dimension(model, "state_dim")
-    config_action = _config_dimension(model, "action_dim")
-    if config_state is not None and config_state != state_dim:
-        raise ValueError(
-            "model config state_dim=%d but dataset observation.state has %d"
-            % (config_state, state_dim)
-        )
-    if config_action is not None and config_action != action_dim:
-        raise ValueError(
-            "model config action_dim=%d but dataset action has %d"
-            % (config_action, action_dim)
-        )
-
-    chunk = _model_chunk_size(model)
-
-    if args.lora_r > 0:
-        from peft import LoraConfig, get_peft_model
-
-        lora_config = LoraConfig(
-            r=int(args.lora_r),
-            # SmolVLA fine-tuning defaults from the lerobot recipe: alpha 16,
-            # no dropout (determinism is a platform guarantee), injected into
-            # the attention projections of the SmolLM2 backbone and the
-            # action expert.
-            lora_alpha=16,
-            lora_dropout=0.0,
-            bias="none",
-            target_modules=["q_proj", "k_proj", "v_proj", "o_proj"],
-        )
-        model = get_peft_model(model, lora_config)
-        trainable = sum(p.numel() for p in model.parameters() if p.requires_grad)
-        total = sum(p.numel() for p in model.parameters())
-        print(
-            "[smolvla] LoRA r=%d: %d trainable / %d total parameters (%.2f%%)"
-            % (args.lora_r, trainable, total, 100.0 * trainable / max(1, total)),
-            flush=True,
-        )
-
-    torch.manual_seed(args.seed)
-    np.random.seed(args.seed % (2 ** 31))
-
-    dataset_torch = _ChunkedVlaDataset(episodes, chunk)
-
-    def collate(samples):
-        states = torch.as_tensor(np.stack([s[0] for s in samples]), dtype=torch.float32)
-        languages = [s[1] for s in samples]
-        targets = torch.as_tensor(np.stack([s[2] for s in samples]), dtype=torch.float32)
-        inputs = _processor_batch(processor, states, languages)
-        try:
-            inputs = dict(inputs)
-        except (TypeError, ValueError):
-            # BatchFeature-like objects that refuse dict() keep their own
-            # mapping interface; model(**inputs) still works below.
-            pass
-        inputs["action_targets"] = targets
-        return inputs
-
-    loader = torch.utils.data.DataLoader(
-        dataset_torch,
-        batch_size=int(args.batch),
-        shuffle=True,
-        collate_fn=collate,
-        num_workers=0,
-        generator=torch.Generator().manual_seed(args.seed + 2),
-    )
-    optimizer = torch.optim.AdamW(
-        (p for p in model.parameters() if p.requires_grad), lr=float(args.lr)
-    )
-
-    accelerator = Accelerator()
-    model, optimizer, loader = accelerator.prepare(model, optimizer, loader)
-
-    steps_per_epoch = int(math.ceil(len(dataset_torch) / float(args.batch)))
-    total_steps = steps_per_epoch * int(args.epochs)
-    log_every = max(1, total_steps // 200)
-    step = 0
-    recent_losses = []
+    steps = _steps_from_epochs(frames, args.batch, args.epochs)
     started = time.time()
-    for epoch in range(int(args.epochs)):
-        model.train()
-        for batch in loader:
-            targets = batch["action_targets"]
-            model_inputs = {k: v for k, v in batch.items() if k != "action_targets"}
-            loss = _chunk_loss(model(**model_inputs), targets)
-            accelerator.backward(loss)
-            optimizer.step()
-            optimizer.zero_grad()
-            step += 1
-            recent_losses.append(float(loss.detach()))
-            recent_losses = recent_losses[-10:]
-            if step % log_every == 0 or step == total_steps:
-                print(
-                    "[smolvla] iter {}/{} loss={:.6f} epoch={}/{}".format(
-                        step, total_steps, sum(recent_losses) / len(recent_losses),
-                        epoch + 1, int(args.epochs),
-                    ),
-                    flush=True,
-                )
+    cmd = [
+        sys.executable, "-m", "lerobot.scripts.lerobot_train",
+        "--dataset.repo_id=%s" % _dataset_repo_id(args.dataset),
+        "--dataset.root=%s" % str(pathlib.Path(args.dataset).resolve()),
+        "--dataset.video_backend=pyav",
+        "--dataset.use_imagenet_stats=false",
+        "--policy.push_to_hub=false",
+        *(["--rename_map=%s" % args.rename_map] if args.rename_map else []),
+        "--policy.path=%s" % args.model_id,
+        "--policy.repo_id=%s" % _dataset_repo_id(args.dataset),
+        "--output_dir=%s" % (pathlib.Path(args.out) / "train"),
+        "--steps=%d" % steps,
+        "--batch_size=%d" % int(args.batch),
+        "--save_freq=%d" % steps,
+        "--num_workers=2",
+        "--seed=%d" % int(args.seed),
+    ]
+    print(
+        "[smolvla] delegating to lerobot's trainer: %d optimizer steps "
+        "(%d epochs x %d frames / batch %d)" % (steps, args.epochs, frames, args.batch),
+        flush=True,
+    )
+    final_loss = _run_lerobot_trainer(cmd)
     training_seconds = round(time.time() - started, 1)
-    final_loss = round(sum(recent_losses) / len(recent_losses), 6) if recent_losses else None
+
+    train_dir = pathlib.Path(args.out) / "train"
+    checkpoint_dir = _latest_checkpoint(train_dir)
+    if checkpoint_dir is None:
+        raise RuntimeError(
+            "the lerobot trainer wrote no checkpoint under %s — refusing to "
+            "fabricate a completed run" % (train_dir / "checkpoints")
+        )
 
     out_dir = pathlib.Path(args.out)
     weights_dir = out_dir / "weights"
     weights_dir.mkdir(parents=True, exist_ok=True)
-    unwrapped = accelerator.unwrap_model(model)
-    unwrapped.save_pretrained(weights_dir.as_posix())
-    processor.save_pretrained(weights_dir.as_posix())
+    for item in sorted(checkpoint_dir.iterdir()):
+        target = weights_dir / item.name
+        if item.is_dir():
+            shutil.copytree(item, target)
+        else:
+            shutil.copy2(item, target)
     write_artifact_manifest(weights_dir.as_posix())
+    chunk = _policy_chunk(weights_dir)
+    step = steps
+
     weight_files = sorted(
         name for name in os.listdir(weights_dir)
         if os.path.isfile(weights_dir / name) and name not in ("SHA256SUMS",)
@@ -1073,15 +993,11 @@ def run_real_training(args):
     pushed = False
     push_note = None
     if args.push_to_hub:
-        repo_id = "{}-finetuned".format(str(args.model_id).split("/")[-1])
-        try:
-            unwrapped.push_to_hub(repo_id=repo_id)
-            processor.push_to_hub(repo_id=repo_id)
-            pushed = True
-            print("[smolvla] pushed %s to the Hub" % repo_id, flush=True)
-        except Exception as error:  # noqa: BLE001 - push failure must not lose the run
-            push_note = "push_to_hub failed (%s); trained weights remain on disk" % error
-            print("[smolvla] %s" % push_note, file=sys.stderr, flush=True)
+        push_note = (
+            "push_to_hub is not supported by the delegate path; upload %s "
+            "with `huggingface-cli upload`" % weights_dir
+        )
+        print("[smolvla] %s" % push_note, file=sys.stderr, flush=True)
 
     slug_model = safe_slug(args.model_id, ENGINE_NAME)
     slug_version = safe_slug("0.1.0", "0-1-0")
@@ -1393,6 +1309,13 @@ def _parse_args(argv=None):
     parser.add_argument("--lr", type=float, default=1e-4)
     parser.add_argument("--batch", type=int, default=16)
     parser.add_argument("--seed", type=int, default=0)
+    parser.add_argument(
+        "--rename-map", default=None,
+        help="JSON dict passed to the trainer's --policy.rename_map when the "
+             "dataset camera names differ from the policy's expected "
+             "observation.images.* keys, e.g. '{\"observation.images.cam_high\": "
+             "\"observation.images.camera1\"}'",
+    )
     parser.add_argument(
         "--model-id", default=DEFAULT_MODEL_ID,
         help="base model: an HF id (default %s) or a local path" % DEFAULT_MODEL_ID,

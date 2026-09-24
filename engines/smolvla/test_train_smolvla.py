@@ -585,19 +585,19 @@ class UnitContractTest(unittest.TestCase):
         train_smolvla.validate_hyperparameters(1, 1.0, 1, 64)
 
     def test_missing_dependency_message_matches_platform_contract(self):
-        message = train_smolvla._missing_dependency_message(["transformers"])
+        message = train_smolvla._missing_dependency_message(["lerobot"])
         self.assertEqual(
             message,
-            "missing dependency: transformers. Install with: "
-            "python3 -m pip install transformers accelerate peft",
+            "missing dependency: lerobot. Install with: "
+            "python3 -m pip install lerobot",
         )
 
     def test_missing_probe_reports_the_gap(self):
-        # Simulate a machine where only transformers is missing.
+        # Simulate a machine where only lerobot is missing.
         missing = train_smolvla.missing_training_dependencies(
-            probe=lambda name: name != "transformers"
+            probe=lambda name: name != "lerobot"
         )
-        self.assertEqual(missing, ["transformers"])
+        self.assertEqual(missing, ["lerobot"])
         # And one where the whole family is absent: first gap in gate order.
         missing = train_smolvla.missing_training_dependencies(probe=lambda name: False)
         self.assertEqual(missing, [name for name, _ in train_smolvla.TRAINING_STACK])
