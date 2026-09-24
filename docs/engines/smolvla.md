@@ -11,11 +11,12 @@ GPU、无 accelerate/peft/pyarrow）不可能真微调一个 450M 模型，平�
 
 **是**：
 
-- 一条**真实写全**的微调代码路径：依赖门禁（缺哪个包、哪条安装命令）、
-  `AutoModel`/`AutoProcessor` 加载、LeRobot parquet 逐 episode 加载（
-  `observation.state`/`action` 列映射）、LoRA（peft `LoraConfig`，`--lora-r 0`
-  切全参）、带诚实逐迭代进度行（`iter N/M loss=...`）的训练循环、权重产物 +
-  result 契约；
+- 一条**真实写全并在 GPU 上执行过**的微调代码路径（2026-09-23，RTX 5090）：
+  依赖门禁（缺哪个包、哪条安装命令）、CUDA 探测、LeRobot parquet 逐 episode
+  加载（`observation.state`/`action` 列映射）、真实训练**委托 lerobot 0.4.4
+  原生训练器**（`python -m lerobot.scripts.lerobot_train`，本引擎提供门禁、
+  数据集接线、`--policy.path` 基座、训练器 stdout 逐行透传与 result 契约）、
+  权重产物 + `SHA256SUMS` + result 契约；
 - 一个**零依赖可跑**的 `--dry-run` 计划校验器：不联网、不加载权重、不需要
   GPU，完整验证训练计划（数据集结构、episode/frame 数、维度契约、超参合法
   性、输出目录可写），stdout 输出一行 JSON 计划摘要并退出 0；
@@ -26,9 +27,8 @@ GPU、无 accelerate/peft/pyarrow）不可能真微调一个 450M 模型，平�
 
 - 本机可完成的训练引擎——真微调在**自备 GPU runner** 上跑（加载
   `lerobot/smolvla_base` 或本地权重目录）；
-- 玩具 demo 或空壳——代码路径全量落地，本机测不到的部分（模型前向的调用
-  形状）在 docstring 与代码内明确标注「对照公开 SmolVLA 接口编写、未在本仓
-  库环境执行过」，失败消息指明调整点；
+- 玩具 demo 或空壳——真实路径已于 2026-09-23 在 GPU 5090 上端到端执行（见
+  下文实证节），早期版本遗留的「未执行接缝」标注已按实证结论修正；
 - 板端引擎——见下文 X5 定位。
 
 ## 依赖链（先行条件）
@@ -36,8 +36,8 @@ GPU、无 accelerate/peft/pyarrow）不可能真微调一个 450M 模型，平�
 ```
 engines/lerobot-converter（import/export）────► LeRobot 数据集目录 ────► 本引擎
                                                       │
-                                        GPU runner（torch/transformers/
-                                        accelerate/peft/pyarrow + 基座权重）
+                                        GPU runner（torch 2.10/lerobot 0.4.4/
+                                        pyarrow + 基座权重 + num2words）
 ```
 
 训练输入 = **LeRobot 数据集目录**（`meta/info.json` + episodes 元数据 +
@@ -80,34 +80,59 @@ CUDA 有没有）+ `<out>/result.json`（`status:"completed"`、
 ## 真实训练（GPU runner 上）
 
 ```bash
-# 1. 安装（GPU 机器上；torch 建议 CUDA index 构建）
-python3 -m pip install torch transformers accelerate peft pyarrow numpy
+# 1. 安装（GPU 机器上；torch 2.10 是 lerobot 0.4.4/torchcodec 的钦配线，
+#    5090/Blackwell 须 +cu128 构建；SmolVLM processor 另需 num2words）
+python3 -m pip install torch==2.10.0 lerobot==0.4.4 num2words==0.5.14 pyarrow numpy
 
-# 2. 基座权重：HF id（lerobot/smolvla_base）或本地路径
+# 2. 基座权重：HF id（lerobot/smolvla_base）或本地快照路径
 python3 engines/smolvla/train_smolvla.py /path/to/lerobot-dataset \
-  --out ./run --lora-r 32 --epochs 50 --lr 1e-4 --batch 16 --seed 0 \
-  [--model-id lerobot/smolvla_base] [--push-to-hub]
+  --out ./run --epochs 1 --batch 8 --lora-r 0 --seed 0 \
+  [--model-id lerobot/smolvla_base] \
+  [--rename-map '{"observation.images.cam_high": "observation.images.camera1"}'] \
+  [--push-to-hub]
 ```
 
-门禁顺序即诚实契约：依赖导入（缺 `torch/transformers/accelerate/peft` 任一
-→ `[smolvla] FAIL — missing dependency: transformers. Install with:
-python3 -m pip install transformers accelerate peft`，退出 2）→ CUDA 探测
-（`torch.cuda.is_available()` 为 false → FAIL 并说明需要 GPU runner，退出
-2）→ 输出目录 → 数据集 → 训练。
+门禁顺序即诚实契约：依赖导入（缺 `torch/lerobot` 任一 → `[smolvla] FAIL —
+missing dependency: lerobot. Install with: python3 -m pip install lerobot`，
+退出 2）→ CUDA 探测（`torch.cuda.is_available()` 为 false → FAIL 并说明需要
+GPU runner，退出 2）→ LoRA 拒绝（委托路径只跑全参，`--lora-r > 0` 显式拒绝
+而非静默降级）→ 输出目录 → 数据集 → 委托训练。
 
-训练循环（accelerate `Accelerator` + 手写循环）：语言条件来自 episodes 元
-数据的 `tasks` 字段，`(state, lang)` 经 SmolVLA processor 进模型，MSE 对齐
-预测动作块与数据集未来窗口（块长取模型 config 的 `chunk_size`，未暴露时用
-SmolVLA 公开的默认 50；episode 末端窗口用末动作补齐——与官方 recipe 的
-mask 处理差异已在代码注明）。模型/processor 的调用形状对照公开 SmolVLA
-接口编写（`trust_remote_code=True` 加载 lerobot 检查点，与 lerobot 官方
-finetune 脚本同一信任决策），**未在本仓库环境执行过**——这是参考适配器唯
-一留给 GPU runner 校准的接缝，失败消息会点名接缝位置。
+委托语义：本引擎以子进程运行 `python -m lerobot.scripts.lerobot_train`，
+传入 `--dataset.repo_id/--dataset.root`（本地数据集目录）、`--policy.path`
+（基座）、`--steps`（epochs×frames/batch）、`--batch_size/--seed/
+--save_freq`，并显式关闭 `--policy.push_to_hub`（其默认值会要求 Hub 认证）。
+训练器 stdout 逐行以 `[smolvla][trainer]` 前缀透传——训练器的进度就是诚实
+进度；最后一个 `loss:` 数值进入 result 的 `finalLoss`。数据集相机名与策略
+期望键不一致时经 `--rename_map`（顶层旗标）显式映射，绝不静默改名。
+
+### 真实执行实证（2026-09-23，RTX 5090 32GB）
+
+- 数据：Hub 真实数据集 `macrodata/aloha_static_battery_ep005_009`（lerobot
+  当前 main 工具链写出，5 episodes / 3000 帧 / 4 相机 / 50Hz）；
+- 运行：`--epochs 1 --batch 8 --lora-r 0` → 375 优化步，4m21s，
+  **finalLoss 0.053**；产物 `weights/` 7 文件 906,726,076 字节 +
+  `SHA256SUMS`；`result.json`：`status:"completed"`、`mock:false`、
+  `cuda:true`、依赖实测（torch 2.10.0+cu128 / lerobot 0.4.4 / numpy /
+  pyarrow）；
+- 实证驱动的 seam 修正（此前版本基于错误假设，已被真实运行推翻并改写）：
+  1. `lerobot/smolvla_base` 是 **lerobot policy 制品**（config.json +
+     safetensors + lerobot 预/后处理器）——transformers 无原生 smolvla、
+     仓库无 remote code，`AutoModel/AutoProcessor` 路线不成立 → 委托原生
+     训练器；
+  2. 训练器要求 `--policy.repo_id`（即使不推 Hub）且 `policy.push_to_hub`
+     默认开启需显式关闭；
+  3. 相机键不匹配（aloha 命名 vs 策略的 camera1/2/3）经顶层 `--rename_map`
+     显式映射；
+  4. `num2words` 是 SmolVLM processor 的硬依赖（策略装载时即需要）；
+  5. 非零起 episode_index 的 Hub 分片数据会被「本地缓存校验」误判不全而
+     回退 Hub——本地数据集应保证 episode_index 为 0..N-1 连续编号。
 
 产物（`--out`）：
 
-- `weights/`：微调后权重目录（LoRA 时为 adapter + 基座引用，全参时为完整
-  模型）+ processor 配置，附 `weights/SHA256SUMS` 完整性清单；
+- `weights/`：微调后权重目录（委托路径为 trainer checkpoint 的
+  `pretrained_model` 全量策略制品：config + safetensors + 预/后处理器 +
+  train_config），附 `weights/SHA256SUMS` 完整性清单；
 - `result.json`：`checkpoint.artifactRef` / `artifact.artifactRef` 指向
   `artifact://smolvla/<model>/<version>/...`（不透明引用，真实权重由你的
   制品库管理，平台只追踪元数据）、`metrics`（finalLoss、steps、episodes/
@@ -123,7 +148,7 @@ RDK_SIM2REAL_TRAIN_ENGINES_JSON='{"smolvla":{"executable":"/usr/bin/python3","ar
 引擎模式（`RDK_SIM2REAL_REQUEST_FILE` + `RDK_SIM2REAL_RESULT_FILE`）照抄
 `engines/mjlab-rsl-rl-adapter` 对依赖缺失的处理先例：
 
-- **训练栈缺失**（torch/transformers/accelerate/peft 任一不可导入）→ stderr
+- **训练栈缺失**（torch/lerobot 任一不可导入）→ stderr
   输出 `[smolvla] REFUSED — missing dependency: ...（安装命令）. This engine
   never fabricates a completed training run.`，**退出码 3，不写 result.json**
   ——worker 把任务标为 failed，任何下游都不可能把一个计划读成一次完成的
