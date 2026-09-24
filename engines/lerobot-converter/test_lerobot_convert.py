@@ -1006,6 +1006,166 @@ class VideoRoundTripTest(unittest.TestCase):
 
 
 # ---------------------------------------------------------------------------
+# Multi-camera selection (--video-key): explicit choice, never silent.
+# ---------------------------------------------------------------------------
+
+@unittest.skipUnless(PYARROW_AVAILABLE and FFMPEG_AVAILABLE,
+                     "pyarrow and ffmpeg not installed")
+class MultiCameraSelectionTest(unittest.TestCase):
+    """The platform trajectory format carries one cameraFrame per step, so a
+    multi-camera Hub dataset must name the camera to decode. Selection
+    contract: refuse to pick silently, honor the named key, refuse unknown
+    keys, and never pretend a tabular dataset has a camera."""
+
+    def _export_mono_dataset(self, workdir):
+        """One-episode mono8 camera dataset plus a FAKE second video feature
+        injected into info.json (a second mp4 is never needed: every refusal
+        fires before any decoding, and the success path decodes only the
+        selected camera)."""
+        width, height = 8, 6
+        frames = [mono_frame(width, height, 0), mono_frame(width, height, 128)]
+        rows = [
+            {"type": "header", "format": "microduck-trajectory-v1",
+             "source": "test", "sampleHz": 10},
+            {"type": "step", "t": 0.0, "observation": [0.25, 0.5],
+             "action": [0.1, 0.2],
+             "cameraFrame": camera_field("mono8", width, height, frames[0])},
+            {"type": "step", "t": 0.1, "observation": [0.75, 1.0],
+             "action": [0.3, 0.4], "done": True,
+             "cameraFrame": camera_field("mono8", width, height, frames[1])},
+        ]
+        source = os.path.join(workdir, "traj.jsonl")
+        dataset_dir = os.path.join(workdir, "ds")
+        write_jsonl(source, rows)
+        lerobot_convert.run_export([source], dataset_dir)
+        info_path = pathlib.Path(dataset_dir, "meta/info.json")
+        info = json.loads(info_path.read_text())
+        info["features"]["observation.images.wrist"] = {
+            "dtype": "video", "shape": [1, height, width], "names": None,
+        }
+        info["total_videos"] = 2
+        info_path.write_text(json.dumps(info))
+        return dataset_dir, frames
+
+    def test_multi_camera_without_explicit_key_is_refused(self):
+        with tempfile.TemporaryDirectory(prefix="lc-multicam-") as workdir:
+            dataset_dir, _ = self._export_mono_dataset(workdir)
+            out = os.path.join(workdir, "back.jsonl")
+            with self.assertRaises(ValueError) as ctx:
+                lerobot_convert.run_import(dataset_dir, out, with_video=True)
+            message = str(ctx.exception)
+            self.assertIn("--video-key", message)
+            for key in ("observation.images.camera_frame",
+                        "observation.images.wrist"):
+                self.assertIn(key, message)
+            # Tabular mode must also point at --video-key as the way out.
+            with self.assertRaises(ValueError) as ctx:
+                lerobot_convert.run_import(dataset_dir, out)
+            self.assertIn("--video-key", str(ctx.exception))
+            self.assertFalse(os.path.exists(out))
+
+    def test_video_key_selects_one_camera(self):
+        with tempfile.TemporaryDirectory(prefix="lc-multisel-") as workdir:
+            dataset_dir, frames = self._export_mono_dataset(workdir)
+            back = os.path.join(workdir, "back.jsonl")
+            summary = lerobot_convert.run_import(
+                dataset_dir, back,
+                video_key="observation.images.camera_frame",
+            )
+            self.assertEqual(summary["videos"], 1)
+            self.assertEqual(summary["videoKey"],
+                             "observation.images.camera_frame")
+            lines = pathlib.Path(back).read_text().splitlines()
+            header = json.loads(lines[0])
+            self.assertIn(
+                "camera observation.images.camera_frame selected", header["note"]
+            )
+            self.assertIn("observation.images.wrist", header["note"])
+            steps = [json.loads(line) for line in lines[1:]]
+            for step, original in zip(steps, frames):
+                self.assertEqual(
+                    base64.b64decode(step["cameraFrame"]["data"]), original,
+                    "the selected camera's frames must decode byte-exactly",
+                )
+
+    def test_unknown_video_key_is_refused(self):
+        with tempfile.TemporaryDirectory(prefix="lc-multibad-") as workdir:
+            dataset_dir, _ = self._export_mono_dataset(workdir)
+            with self.assertRaises(ValueError) as ctx:
+                lerobot_convert.run_import(
+                    dataset_dir, os.path.join(workdir, "back.jsonl"),
+                    video_key="observation.images.nonexistent",
+                )
+            message = str(ctx.exception)
+            self.assertIn("observation.images.nonexistent", message)
+            self.assertIn("observation.images.camera_frame", message)
+            self.assertFalse(os.path.exists(os.path.join(workdir, "back.jsonl")))
+
+    def test_video_key_on_tabular_dataset_is_refused(self):
+        rows = [
+            {"type": "step", "observation": [0.25, 0.5], "action": [0.1, 0.2]},
+            {"type": "step", "observation": [0.75, 1.0], "action": [0.3, 0.4],
+             "done": True},
+        ]
+        with tempfile.TemporaryDirectory(prefix="lc-multitab-") as workdir:
+            source = os.path.join(workdir, "traj.jsonl")
+            dataset_dir = os.path.join(workdir, "ds")
+            write_jsonl(source, rows)
+            lerobot_convert.run_export([source], dataset_dir)
+            with self.assertRaises(ValueError) as ctx:
+                lerobot_convert.run_import(
+                    dataset_dir, os.path.join(workdir, "back.jsonl"),
+                    video_key="observation.images.camera_frame",
+                )
+            self.assertIn("tabular-only", str(ctx.exception))
+            self.assertFalse(os.path.exists(os.path.join(workdir, "back.jsonl")))
+
+
+    def test_tabular_import_of_video_dataset_records_ignored_cameras(self):
+        with tempfile.TemporaryDirectory(prefix="lc-tabvid-") as workdir:
+            dataset_dir, _ = self._export_mono_dataset(workdir)
+            back = os.path.join(workdir, "back.jsonl")
+            summary = lerobot_convert.run_import(dataset_dir, back, tabular=True)
+            self.assertEqual(summary["videos"], 0)
+            self.assertIsNone(summary["videoKey"])
+            lines = pathlib.Path(back).read_text().splitlines()
+            header = json.loads(lines[0])
+            self.assertIn("explicit tabular import", header["note"])
+            self.assertIn("observation.images.camera_frame", header["note"])
+            self.assertIn("observation.images.wrist", header["note"])
+            steps = [json.loads(line) for line in lines[1:]]
+            self.assertTrue(steps)
+            for step in steps:
+                self.assertNotIn(
+                    "cameraFrame", step,
+                    "tabular import must carry no camera rows at all",
+                )
+            episodes, _, _ = act_load_dataset_equivalent(back)
+
+    def test_tabular_mode_is_mutually_exclusive(self):
+        rows = [
+            {"type": "step", "observation": [0.25], "action": [0.1]},
+            {"type": "step", "observation": [0.75], "action": [0.3], "done": True},
+        ]
+        with tempfile.TemporaryDirectory(prefix="lc-tabmut-") as workdir:
+            source = os.path.join(workdir, "traj.jsonl")
+            dataset_dir = os.path.join(workdir, "ds")
+            write_jsonl(source, rows)
+            lerobot_convert.run_export([source], dataset_dir)
+            out = os.path.join(workdir, "back.jsonl")
+            with self.assertRaises(ValueError):
+                lerobot_convert.run_import(
+                    dataset_dir, out, with_video=True, tabular=True
+                )
+            with self.assertRaises(ValueError):
+                lerobot_convert.run_import(
+                    dataset_dir, out,
+                    video_key="observation.images.camera_frame", tabular=True,
+                )
+            self.assertFalse(os.path.exists(out))
+
+
+# ---------------------------------------------------------------------------
 # Import layouts: v2.1 Hub datasets and file-sharded v3.0 (need pyarrow).
 # ---------------------------------------------------------------------------
 
@@ -1164,6 +1324,63 @@ class ImportLayoutsTest(unittest.TestCase):
             steps = [json.loads(line) for line in lines[1:]]
             self.assertEqual([step["done"] for step in steps], [False, True, False, True])
             np.testing.assert_allclose(steps[0]["observation"], episodes[0][0][0], rtol=1e-6)
+
+    def test_tasks_parquet_with_pandas_index_column(self):
+        """Real Hub datasets write tasks.parquet through pandas: the task
+        string sits in the saved index column __index_level_0__, not a
+        'task' column. Regression: importing such a dataset must read the
+        task strings instead of refusing."""
+        import pyarrow
+        import pyarrow.parquet as pq
+
+        episodes = [make_episode(2), make_episode(2, offset=1.0)]
+        with tempfile.TemporaryDirectory(prefix="lc-taskidx-") as workdir:
+            root = pathlib.Path(workdir) / "hub"
+            offset = 0
+            for index, (observations, actions, _) in enumerate(episodes):
+                write_episode_parquet(
+                    root / ("data/chunk-000/episode_%06d.parquet" % index),
+                    observations, actions, index, offset,
+                    [t / 10.0 for t in range(len(observations))],
+                )
+                offset += len(observations)
+            (root / "meta").mkdir(parents=True, exist_ok=True)
+            pq.write_table(
+                pyarrow.table(
+                    {
+                        "task_index": pyarrow.array([0], type=pyarrow.int64()),
+                        "__index_level_0__": pyarrow.array(
+                            ["Place the battery into the slot."],
+                            type=pyarrow.string(),
+                        ),
+                    }
+                ),
+                root / "meta" / "tasks.parquet",
+            )
+            (root / "meta" / "info.json").write_text(
+                json.dumps(
+                    {
+                        "codebase_version": "v3.0",
+                        "fps": 10,
+                        "total_episodes": 2,
+                        "total_frames": 4,
+                        "total_tasks": 1,
+                        "chunks_size": 1000,
+                        "data_path": "data/chunk-{chunk_index:03d}/episode_{episode_index:06d}.parquet",
+                        "video_path": None,
+                        "splits": {"train": "0:2"},
+                        "features": {
+                            "observation.state": {"dtype": "float32", "shape": [3], "names": None},
+                            "action": {"dtype": "float32", "shape": [2], "names": None},
+                        },
+                    }
+                )
+            )
+            out = os.path.join(workdir, "back.jsonl")
+            summary = lerobot_convert.run_import(root, out)
+            self.assertEqual(summary["episodes"], 2)
+            header = json.loads(pathlib.Path(out).read_text().splitlines()[0])
+            self.assertIn("Place the battery into the slot.", header["note"])
 
     def test_timestamp_missing_synthesizes_from_fps(self):
         import pyarrow

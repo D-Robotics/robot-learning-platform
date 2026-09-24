@@ -771,8 +771,10 @@ def _read_tasks(root):
 
     tasks.jsonl carries either {"task_index", "task"} objects (v3.0) or one
     plain task string per line (v2.1, index = line order); tasks.parquet is
-    the current-main layout with a ``task`` column (and ``task_index`` when
-    the writer stored it).
+    the current-main layout. Real Hub tasks.parquet files are pandas-written:
+    the task string may sit in a ``task`` column or in the saved DataFrame
+    index column ``__index_level_0__`` — both are read, and a parquet with
+    neither is refused.
     """
     tasks = {}
     jsonl = root / "meta" / "tasks.jsonl"
@@ -800,16 +802,26 @@ def _read_tasks(root):
     parquet = root / "meta" / "tasks.parquet"
     if parquet.is_file():
         table = pq.read_table(parquet)
-        if "task" not in table.column_names:
-            raise ValueError("meta/tasks.parquet has no 'task' column")
-        names = table.column("task").to_pylist()
+        if "task" in table.column_names:
+            names = table.column("task").to_pylist()
+        elif "__index_level_0__" in table.column_names:
+            names = table.column("__index_level_0__").to_pylist()
+        else:
+            raise ValueError(
+                "meta/tasks.parquet has no 'task' column and no "
+                "'__index_level_0__' index column (columns: %s)"
+                % table.column_names
+            )
         if "task_index" in table.column_names:
             indices = table.column("task_index").to_pylist()
         else:
             indices = list(range(len(names)))
         for index, name in zip(indices, names):
             if not isinstance(name, str):
-                raise ValueError("meta/tasks.parquet 'task' column must be strings")
+                raise ValueError(
+                    "meta/tasks.parquet task strings (in 'task' or "
+                    "'__index_level_0__') must be strings"
+                )
             tasks[int(index)] = name
     return tasks
 
@@ -1018,7 +1030,8 @@ def _video_frames_for_episodes(root, video_key, spec, lengths):
     return per_episode
 
 
-def run_import(dataset_dir, out_path, with_video=False):
+def run_import(dataset_dir, out_path, with_video=False, video_key=None,
+               tabular=False):
     """Import a LeRobot v2.1/v3.0 dataset as a platform trajectory JSONL.
 
     The output is what `engines/act/train_act.py` trains on: a
@@ -1031,8 +1044,14 @@ def run_import(dataset_dir, out_path, with_video=False):
     Video columns are tabular-refused unless --with-video is passed AND
     ffmpeg exists; then frames are decoded to cameraFrame base64 raw
     pixels with a per-episode frame-count check against the parquet rows.
-    The file is written only after every episode validates (no partial
-    output). Returns the CLI summary dict.
+    The platform trajectory format carries ONE cameraFrame per step, so a
+    dataset with several video features must name the camera to decode via
+    ``video_key`` (an explicit operator choice — the converter never picks
+    one silently); naming a key implies video import. ``tabular=True`` is
+    the opposite explicit choice: state/action-only import of a dataset
+    that declares video features, with every ignored camera recorded in
+    the header note. The file is written only after every episode
+    validates (no partial output). Returns the CLI summary dict.
     """
     root = pathlib.Path(dataset_dir)
     info = _read_info(root)
@@ -1056,11 +1075,26 @@ def run_import(dataset_dir, out_path, with_video=False):
             "image feature(s) %s store frame files outside parquet — this "
             "converter only handles video features (via --with-video)" % image_keys
         )
-    if video_keys and not with_video:
+    if tabular and (with_video or video_key is not None):
+        raise ValueError(
+            "--tabular excludes --with-video / --video-key: name one import "
+            "mode (tabular state/action-only, or camera decode)"
+        )
+    if video_key is not None:
+        if video_key not in video_keys:
+            raise ValueError(
+                "--video-key %r is not a declared video feature of this "
+                "dataset (declared video features: %s)"
+                % (video_key, video_keys if video_keys else "none — the dataset is tabular-only")
+            )
+        with_video = True
+    if video_keys and not with_video and not tabular:
         raise ValueError(
             "video feature(s) %s exist but import runs in tabular mode — "
-            "video decoding import requires --with-video (and ffmpeg); "
-            "re-run with --with-video to decode them" % video_keys
+            "pass --with-video to decode (and ffmpeg), name one camera of a "
+            "multi-camera dataset with --video-key, or pass --tabular to "
+            "import state/action only while recording the ignored cameras "
+            "in the header note" % video_keys
         )
     _require_pyarrow()
 
@@ -1128,22 +1162,27 @@ def run_import(dataset_dir, out_path, with_video=False):
                 % (group["index"], record["length"], len(group["rows"]))
             )
 
-    # Videos: decode once per key, split per episode, attach cameraFrame.
+    # Videos: decode once for the selected key, split per episode, attach
+    # cameraFrame. A multi-camera dataset without an explicit --video-key
+    # choice is refused — the converter never picks a camera silently.
     per_episode_frames = {}
+    decoded_key = None
     if with_video:
         if not video_keys:
             raise ValueError(
                 "--with-video was passed but the dataset declares no video "
                 "features; run without it"
             )
-        if len(video_keys) > 1:
+        if video_key is None and len(video_keys) > 1:
             raise ValueError(
-                "the platform trajectory format carries a single cameraFrame "
-                "per step; dataset has %d video features %s" % (len(video_keys), video_keys)
+                "dataset has %d video features %s — the platform trajectory "
+                "format carries a single cameraFrame per step; name the "
+                "camera to decode with --video-key" % (len(video_keys), video_keys)
             )
-        spec = _video_spec(features[video_keys[0]], video_keys[0])
-        per_episode_frames[video_keys[0]] = _video_frames_for_episodes(
-            root, video_keys[0], spec, lengths
+        decoded_key = video_key if video_key is not None else video_keys[0]
+        spec = _video_spec(features[decoded_key], decoded_key)
+        per_episode_frames[decoded_key] = _video_frames_for_episodes(
+            root, decoded_key, spec, lengths
         )
 
     obs_dim = act_dim = None
@@ -1173,7 +1212,7 @@ def run_import(dataset_dir, out_path, with_video=False):
                     reward_cells[row_index], "%s reward" % context
                 )
             if with_video:
-                key = video_keys[0]
+                key = decoded_key
                 frame = per_episode_frames[key][len(steps_per_episode)][position]
                 step["cameraFrame"] = {
                     "encoding": spec["encoding"],
@@ -1190,6 +1229,16 @@ def run_import(dataset_dir, out_path, with_video=False):
         info.get("codebase_version"),
         "; ".join(task_names) if task_names else "(none declared)",
     )
+    if decoded_key is not None:
+        ignored = [key for key in video_keys if key != decoded_key]
+        note += "; camera %s selected%s" % (
+            decoded_key,
+            ", ignored: %s" % ", ".join(ignored) if ignored else "",
+        )
+    elif tabular and video_keys:
+        note += "; explicit tabular import, video features ignored: %s" % ", ".join(
+            video_keys
+        )
     header = {
         "type": "header",
         "format": TRAJECTORY_FORMAT,
@@ -1212,7 +1261,8 @@ def run_import(dataset_dir, out_path, with_video=False):
         "obsDim": obs_dim,
         "actDim": act_dim,
         "fps": fps,
-        "videos": len(video_keys) if with_video else 0,
+        "videos": 1 if decoded_key is not None else 0,
+        "videoKey": decoded_key,
         "output": str(out),
     }
 
@@ -1260,12 +1310,28 @@ def main():
              "(requires ffmpeg; default off = tabular import, video "
              "datasets are refused)",
     )
+    importer.add_argument(
+        "--video-key", default=None,
+        help="decode THIS video feature into cameraFrame rows (implies "
+             "--with-video); required for multi-camera datasets — the "
+             "converter never picks a camera silently; other cameras are "
+             "recorded as ignored in the header note",
+    )
+    importer.add_argument(
+        "--tabular", action="store_true",
+        help="import state/action only from a dataset that declares video "
+             "features (excludes --with-video / --video-key); every ignored "
+             "camera is recorded in the header note",
+    )
     args = parser.parse_args()
 
     if args.command == "export":
         summary = run_export(args.inputs, args.out, fps=args.fps, task=args.task)
     else:
-        summary = run_import(args.dataset, args.out, with_video=args.with_video)
+        summary = run_import(
+            args.dataset, args.out, with_video=args.with_video,
+            video_key=args.video_key, tabular=args.tabular,
+        )
     print(json.dumps(summary, ensure_ascii=False))
 
 

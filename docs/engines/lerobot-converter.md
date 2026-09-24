@@ -29,6 +29,15 @@ python3 engines/act/train_act.py train.jsonl --out model.json   # 直接可训�
 # 导入带视频的数据集（解码 mp4 为 cameraFrame 原始像素）
 python3 engines/lerobot-converter/lerobot_convert.py import \
   ~/datasets/lerobot/pusht --out train.jsonl --with-video
+
+# 多相机数据集：显式点名要哪个相机（绝不静默选第一个）
+python3 engines/lerobot-converter/lerobot_convert.py import \
+  ~/datasets/lerobot/aloha_static --out train.jsonl \
+  --with-video --video-key observation.images.cam_high
+
+# 只要状态/动作（跳过全部相机，被忽略的相机记进 header note）
+python3 engines/lerobot-converter/lerobot_convert.py import \
+  ~/datasets/lerobot/aloha_static --out train.jsonl --tabular
 ```
 
 两个方向结束时 stdout 各打印一行 JSON 摘要（episodes/frames/obsDim/actDim/
@@ -109,7 +118,7 @@ parquet 行数一致**（每 episode 对齐 + 总数对齐，不一致 fail-clos
 | --- | --- | --- |
 | v3.0（本工具导出 / 早期 v3 发布） | `episode_XXXXXX` per-file 分片 + `episodes.jsonl`/`tasks.jsonl` | 完全支持 |
 | v2.1（Hub 存量主力） | 同上，`tasks.jsonl` 可能是纯字符串行 | 完全支持 |
-| v3.0（lerobot 当前 main） | `file-XXX` 多 episode 分片 + `meta/episodes/`、`meta/tasks.parquet` | 完全支持（按 `index` 列排序、按 `episode_index` 列切分） |
+| v3.0（lerobot 当前 main） | `file-XXX` 多 episode 分片 + `meta/episodes/`、`meta/tasks.parquet` | 完全支持（按 `index` 列排序、按 `episode_index` 列切分）；真实 Hub 数据的 `tasks.parquet` 由 pandas 写出，任务字符串在 `__index_level_0__` 索引列——该变体已支持（`task` 列优先，`__index_level_0__` 兜底，两者皆无才拒绝） |
 | v1.0 | `meta/meta.json`，无 chunk 目录结构 | **fail-closed 拒绝**并给迁移命令（`python -m lerobot.scripts.convert_dataset_v1_to_v2`） |
 
 数值统一转 python float；parquet 里的 NaN/Inf/null 一律 fail-closed。
@@ -118,8 +127,10 @@ parquet 行数一致**（每 episode 对齐 + 总数对齐，不一致 fail-clos
 
 - **fail-closed 全家**：维度不一致、非数值（布尔不是数）、NaN/Inf、空数据集、
   未知行类型、非布尔 done、可选字段半缺、cameraFrame 畸形/混用、输出目录
-  非空、v1.0 数据集、视频数据集无 `--with-video`、视频帧数与 parquet 行数
-  不一致——全部 `ValueError`，消息带 `line %d` 定位；
+  非空、v1.0 数据集、视频数据集未声明导入模式（`--with-video` / 多相机未
+  `--video-key` / `--tabular` 三选一）、`--tabular` 与视频旗标互斥、未知
+  `--video-key`、视频帧数与 parquet 行数不一致——全部 `ValueError`，消息带
+  `line %d` 定位；
 - **失败零残留**：export 全量校验通过才开始写盘，中途失败删除半成品目录；
   import 在每个 episode 校验通过后才写文件；CLI 失败 exit 2 + stderr 一行
   `FAIL`，绝无 Traceback 泄漏（测试断言）；
@@ -138,12 +149,14 @@ parquet 行数一致**（每 episode 对齐 + 总数对齐，不一致 fail-clos
   视频帧在 mp4 编码下本来也只能均匀化，这是格式级取舍；
 - **RGB 视频有损**：yuv420p 色度下采样，往返不逐字节相等（mono8 无损往返）；
 - **v1.0 不支持**：必须先用官方脚本迁移到 v2.1；
-- **tabular-only 契约**：不带 `--with-video` 的 import 是纯表格转换；数据集
-  有 video feature 而未开启该旗标时**拒绝**而非静默丢帧；image feature
-  （帧文件存储在 parquet 外）同样拒绝并说明原因；
-- **单相机**：平台轨迹格式每步一个 `cameraFrame`，多 video feature 的数据集
-  fail-closed 说明；导出侧 cameraFrame 固定映射为
-  `observation.images.camera_frame`；
+- **tabular-only 契约**：声明了 video feature 的数据集必须三选一显式声明
+  导入模式——`--with-video` 解码（多相机必须 `--video-key` 点名，转换器绝不
+  静默选第一个）、`--tabular` 只要状态/动作（每个被忽略的相机如实记进
+  header note）；未声明即拒绝，绝不静默丢帧；image feature（帧文件存储在
+  parquet 外）同样拒绝并说明原因；
+- **每步单相机**：平台轨迹格式每步只携带一个 `cameraFrame`，因此视频导入
+  一次只解码一个相机（多相机用 `--video-key` 显式选择，其余相机记入 note）；
+  导出侧 cameraFrame 固定映射为 `observation.images.camera_frame`；
 - **fps 整数化**：LeRobot `fps` 字段是整数，分数 sampleHz 的 header 需
   `--fps` 显式裁定。
 
@@ -165,11 +178,25 @@ dtypes/shapes、`DEFAULT_CHUNK_SIZE = 1000`、path 模板、`splits` 的
   统计，官方由 encoder 回填）：读侧不依赖它，待需要与官方 stats 工具链对接
   时补。
 
+## 真实 Hub 数据实证（2026-09-23）
+
+`macrodata/aloha_static_battery_ep005_009`（lerobot 当前 main 写出的 v3.0
+file-sharded 布局，5 episodes / 3000 帧 / 4 相机 / 50Hz）端到端验证：
+
+- 首次导入被 fail-closed 正确拦截——真实 `tasks.parquet` 的任务字符串在
+  pandas 索引列 `__index_level_0__` 里，转换器当时只认 `task` 列；该生态
+  变体补齐后有回归测试守护（`test_tasks_parquet_with_pandas_index_column`）；
+- `--tabular` 导入：5 episodes / 3000 帧 / obs 14D / act 14D @ 50Hz，
+  header note 如实记录被忽略的 4 个相机；
+- 导入产物直接喂 `engines/act/train_act.py`（真实 torch 训练 + ONNX 导出），
+  完成「Hub 数据集 → 平台训练」闭环。
+
 ## 跑契约测试
 
 ```bash
-# 47 个用例：行解析三形态、fail-closed 家族、meta 结构、往返（rtol 1e-6）、
-# 确定性逐字节、mono8 视频逐字节往返、v2.1/current-main 布局导入、CLI 端到端；
+# 54 个用例：行解析三形态、fail-closed 家族、meta 结构、往返（rtol 1e-6）、
+# 确定性逐字节、mono8 视频逐字节往返、多相机 --video-key 选择契约、
+# --tabular 互斥契约、v2.1/current-main 布局导入、CLI 端到端；
 # pyarrow/ffmpeg 缺失时相关用例 SKIP（退出码仍为 0），纯逻辑用例照跑
 python3 engines/lerobot-converter/test_lerobot_convert.py
 ```
