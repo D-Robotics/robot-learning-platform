@@ -10105,6 +10105,36 @@ function stationBridgePollResume() {
   stationBridgePoll.rearm();
 }
 
+function devicePairingHint(message) {
+  const text = String(message || '');
+  if (/ECONNREFUSED|连接被拒绝|refused/i.test(text)) {
+    return '板卡端口不通：确认板卡已开机联网，且 IP 与 SSH 端口填写正确。';
+  }
+  if (/ETIMEDOUT|timed? ?out|超时/i.test(text)) {
+    return '连接超时：确认板卡与本机在同一网络，且防火墙已放行该 SSH 端口。';
+  }
+  if (/ENOTFOUND|getaddrinfo|not known|无法解析/i.test(text)) {
+    return '主机名无法解析：改用板卡的 IP 地址再试一次。';
+  }
+  if (/authentication|password|Permission denied|密码|认证/i.test(text)) {
+    return 'SSH 认证失败：确认用户名与密码；只允许密钥登录的板卡请改用路径 B 一键脚本。';
+  }
+  if (/agent/i.test(text)) {
+    return '板端 agent 未就绪：先在板卡上运行一键配对脚本安装 agent，再回来添加。';
+  }
+  if (/studio|bridge|桥/i.test(text)) {
+    return '本地部署未配置 RDK Studio 桥，路径 B 暂不可用：请用路径 A 表单直接配对。';
+  }
+  return `${text || '未知错误'}（可重试一次；仍失败请查看服务端日志定位。）`;
+}
+
+function showPairingHint(text) {
+  const hint = $('station-device-pairing-hint');
+  if (!hint) return;
+  hint.textContent = text;
+  hint.removeAttribute('hidden');
+}
+
 function wireDeviceManagerEvents() {
   if (state.station.deviceManagerWired) return;
   state.station.deviceManagerWired = true;
@@ -10126,11 +10156,14 @@ function wireDeviceManagerEvents() {
         body: JSON.stringify({ host, username, port, label, profile, transport }),
       });
       stationLog(`已添加 SSH 备用设备 ${created?.connection?.label || host}，仅在服务器可达板卡时使用`, 'ok');
+      showPairingHint('路径 A 完成：设备已建档。下一步：点设备卡片上的「连接」建立受控隧道并做能力检查。');
       try { localStorage.setItem(`rdk-device-profile:${created?.connection?.id || host}`, JSON.stringify({ profile, transport })); } catch {}
       $('station-device-host').value = '';
       await stationDeviceManagerLoad();
     } catch (error) {
-      stationLog(`添加失败：${error instanceof Error ? error.message : '未知错误'}`, 'error');
+      const hint = devicePairingHint(error instanceof Error ? error.message : '未知错误');
+      showPairingHint(`路径 A 配对失败：${hint}`);
+      stationLog(`添加失败：${hint}`, 'error');
     }
   });
   $('station-device-script-btn')?.addEventListener('click', async () => {
@@ -10147,13 +10180,16 @@ function wireDeviceManagerEvents() {
       if (!pairing.command) throw new Error(pairing.message || '无法生成连接命令，请先登录。');
       script = pairing.oneliner || pairing.command;
     } catch (error) {
-      showToast(error instanceof Error ? error.message : '无法生成连接命令，请先登录。', 'error');
+      const raw = error instanceof Error ? error.message : '无法生成连接命令，请先登录。';
+      showPairingHint(`路径 B 生成失败：${devicePairingHint(raw)}`);
+      showToast(raw, 'error');
       return;
     }
     const output = $('station-connect-script');
     const text = $('station-connect-script-text');
     if (text) text.value = script;
     output?.removeAttribute('hidden');
+    showPairingHint('路径 B：脚本已含平台地址与一次性配对凭据——在板卡终端粘贴运行即可，设备会自动出现在下方列表（无需再填 SSH）。');
     try { await navigator.clipboard?.writeText(script); showToast('连接脚本已生成并复制。', 'success'); } catch { showToast('连接脚本已生成，请手动复制。', 'normal'); }
   });
   $('station-connect-script-copy')?.addEventListener('click', async () => {

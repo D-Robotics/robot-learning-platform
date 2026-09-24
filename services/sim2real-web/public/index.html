@@ -1616,6 +1616,7 @@
               <div class="station-studio-connect">
                 <div><strong>原生连接设备</strong><small>填写板卡地址并添加，Sim2Real 会建立受控隧道并读取设备状态。</small></div>
               </div>
+              <p class="station-device-ssh-hint"><strong>路径 A · 网页内配对</strong>：SSH 可密码登录的板卡，填下表一次完成设备档案与受控隧道。</p>
               <div class="station-device-add" id="station-device-add">
                 <label for="station-device-host">板卡 IP / 主机名
                   <input type="text" id="station-device-host" placeholder="例如 board-host.example.internal" spellcheck="false" autocomplete="off" />
@@ -1641,13 +1642,14 @@
                 <button class="button station-device-add-btn" type="button" id="station-device-add-btn">
                   添加设备与能力档案
                 </button>
-                <button class="button button-primary station-device-script-btn" type="button" id="station-device-script-btn">接入向导（首次使用）</button>
+                <button class="button button-primary station-device-script-btn" type="button" id="station-device-script-btn">生成一键配对脚本（路径 B）</button>
               </div>
               <div class="station-connect-script" id="station-connect-script" hidden>
-                <div><strong>首次配对脚本</strong><small>首次配对需要在可访问板卡的终端运行一次；配对完成后，连接、检测和预检均在平台内完成。</small></div>
+                <div><strong>首次配对脚本（路径 B）</strong><small>在可访问板卡的终端粘贴运行一次；运行后设备会自动出现在下方列表（本页约每 3 秒刷新），配对完成后的连接、检测和预检均在平台内完成。脚本含一次性配对凭据，请勿转发。</small></div>
                 <textarea id="station-connect-script-text" readonly aria-label="设备连接脚本"></textarea>
                 <button class="button button-ghost button-small" type="button" id="station-connect-script-copy">复制脚本</button>
               </div>
+              <p class="station-device-ssh-hint" id="station-device-pairing-hint" hidden></p>
               <div class="station-device-list" id="station-device-list">
                 <span class="station-topic-empty" id="station-device-list-empty">尚未添加设备。</span>
               </div>
