@@ -31,10 +31,15 @@ import {
   evaluateSim2RealRun,
   getSim2RealRun,
   getSim2RealModel,
+  listSim2RealRuns,
   listSim2RealTelemetry,
   updateSim2RealRun,
   SIM2REAL_TELEMETRY_RECORD_CAP,
 } from '../sim2real/sim2real-store.js';
+import {
+  summarizeSimRealCorrelation,
+  type SimRealPair,
+} from '../../shared/sim-real-correlation.js';
 import type { Sim2RealAuthPort } from '../sim2real/sim2real-auth.js';
 import {
   readSim2RealBearerToken,
@@ -1660,6 +1665,65 @@ export function registerSim2RealTelemetryRoutes(
       const telemetry = await listSim2RealTelemetry(runId, owner, SIM2REAL_TELEMETRY_RECORD_CAP);
       const sessions = buildBoardSessions(telemetry);
       response.json({ ok: true, runId, sessions, count: sessions.length });
+    }),
+  );
+
+  // SimplerEnv-style sim–real correlation across runs: does the simulation
+  // metric preserve the real-robot ranking? Evidence about the evidence
+  // chain — deliberately NOT a release gate. Skipped runs are counted by
+  // reason; the correlation module refuses coefficients on degenerate input
+  // instead of fabricating one.
+  router.get(
+    api('/runs-correlation'),
+    wrapAsync(async (request, response) => {
+      const owner = deps.requestOwner(request, response);
+      if (owner === null) return;
+      noStore(response);
+      const runs = await listSim2RealRuns(owner);
+      const pairs: SimRealPair[] = [];
+      const skipped: Record<string, number> = {};
+      const skip = (reason: string) => {
+        skipped[reason] = (skipped[reason] ?? 0) + 1;
+      };
+      for (const run of runs) {
+        if (run.mock === true) {
+          skip('mock-run');
+          continue;
+        }
+        const realValue = run.evaluation?.actionMae;
+        const simValue =
+          run.taskEvaluation?.trained?.envelopes?.nominal?.successRate ??
+          run.progress?.[run.progress.length - 1]?.recentSuccess;
+        if (
+          typeof realValue !== 'number' ||
+          !Number.isFinite(realValue) ||
+          typeof simValue !== 'number' ||
+          !Number.isFinite(simValue)
+        ) {
+          skip('missing-channel');
+          continue;
+        }
+        pairs.push({
+          runId: run.id,
+          simValue,
+          realValue,
+        });
+      }
+      const report = summarizeSimRealCorrelation(pairs);
+      response.json({
+        ok: true,
+        methodology: 'simplerenv-style-sim-real-correlation',
+        channels: {
+          sim: 'task-pack nominal envelope successRate, falling back to the final training progress recentSuccess',
+          real: 'telemetry evaluation actionMae',
+        },
+        directionNote:
+          'the sim channel is higher-is-better while the real channel is lower-is-better: a NEGATIVE coefficient means the sim metric preserves the real ranking',
+        runCount: runs.length,
+        skipped,
+        pairs,
+        report,
+      });
     }),
   );
   router.post(

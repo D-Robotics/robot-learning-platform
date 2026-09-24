@@ -784,6 +784,81 @@ paths:
                     type: array
                     items: { $ref: "#/components/schemas/BoardSessionSummary" }
         "404": { $ref: "#/components/responses/NotFound" }
+  /api/v1/duck/runs-correlation:
+    get:
+      tags: [telemetry]
+      summary: SimplerEnv-style sim-real correlation across runs
+      description: >-
+        Pairs each non-mock run's simulation-side metric (task-pack nominal
+        envelope successRate, falling back to the final training progress
+        recentSuccess) with its real-side telemetry evaluation actionMae, then
+        reports Pearson r, Spearman rho and the MMRV summary of the signed
+        relative error. Degenerate inputs (too few pairs, zero variance, no
+        relative-error pairs) are reported as null with a reason — never as a
+        fabricated coefficient. Evidence about the evidence chain, not a
+        release gate. Direction: the sim channel is higher-is-better while the
+        real channel is lower-is-better, so a NEGATIVE coefficient means the
+        sim metric preserves the real ranking.
+      operationId: getRunsCorrelation
+      responses:
+        "200":
+          description: >-
+            Pair list plus the correlation report; skipped runs are counted by
+            reason (mock-run, missing-channel).
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [ok, methodology, channels, pairs, report]
+                properties:
+                  ok: { const: true }
+                  methodology: { type: string }
+                  channels:
+                    type: object
+                    properties:
+                      sim: { type: string }
+                      real: { type: string }
+                  directionNote: { type: string }
+                  runCount: { type: integer, minimum: 0 }
+                  skipped:
+                    type: object
+                    additionalProperties: { type: integer, minimum: 0 }
+                  pairs:
+                    type: array
+                    items:
+                      type: object
+                      required: [runId, simValue, realValue]
+                      properties:
+                        runId: { type: string }
+                        simValue: { type: number }
+                        realValue: { type: number }
+                  report:
+                    type: object
+                    required: [pairCount, excludedPairCount, exclusionReasons, minPairs, pearson, spearman, mmrv]
+                    properties:
+                      pairCount: { type: integer, minimum: 0 }
+                      excludedPairCount: { type: integer, minimum: 0 }
+                      exclusionReasons:
+                        type: object
+                        additionalProperties: { type: integer, minimum: 0 }
+                      minPairs: { type: integer, minimum: 2 }
+                      pearson: { $ref: "#/components/schemas/CorrelationStatistic" }
+                      spearman: { $ref: "#/components/schemas/CorrelationStatistic" }
+                      mmrv:
+                        oneOf:
+                          - type: object
+                            required: [mean, median, rms, variance, count]
+                            properties:
+                              mean: { type: number }
+                              median: { type: number }
+                              rms: { type: number }
+                              variance: { type: number }
+                              count: { type: integer, minimum: 1 }
+                          - type: object
+                            required: [value, reason]
+                            properties:
+                              value: { const: null }
+                              reason: { type: string }
   /api/v1/duck/runs/{runId}/evaluate:
     post:
       tags: [telemetry]
@@ -3324,6 +3399,17 @@ components:
                 inputDim: { type: integer, minimum: 1 }
                 outputDim: { type: integer, minimum: 1 }
                 bytes: { type: integer, minimum: 0 }
+    CorrelationStatistic:
+      oneOf:
+        - type: object
+          required: [value]
+          properties:
+            value: { type: number }
+        - type: object
+          required: [value, reason]
+          properties:
+            value: { const: null }
+            reason: { type: string }
     BoardSessionSummary:
       type: object
       required: [sessionId, attested, chunks, events]
