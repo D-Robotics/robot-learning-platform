@@ -7454,7 +7454,12 @@ function renderOnboardChecklist() {
   const replayReady = Boolean(telemetry?.summary || latest?.evaluation?.replay || latest?.taskEvaluation?.replay);
   const trainingReady = Boolean(latest && ['completed', 'ready'].includes(String(latest.status || '').toLowerCase()));
   const evaluationReady = Boolean(telemetry?.summary || latest?.evaluation || latest?.taskEvaluation);
-  const deployReady = Boolean(deploymentsForCurrentModel().length);
+  // A deployment row can exist while it is still planned, blocked or failed.
+  // Only a passed preflight is a completed onboarding step; presence alone
+  // made the checklist claim “已完成” for models that could not ship.
+  const deployReady = deploymentsForCurrentModel().some((deployment) =>
+    ['ready', 'completed'].includes(String(deployment?.status || '').toLowerCase()),
+  );
   const guest = state.authRequired === true;
   const steps = [
     { key: 'simulate', done: replayReady, view: 'simulate', cta: '打开仿真 →', locked: false },

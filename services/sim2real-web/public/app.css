@@ -5474,29 +5474,33 @@ html.theme-dark .agent-assistant-health { max-width: 150px; }
    inheriting var(--text)/var(--muted). Previously the surface was hardcoded
    dark while the text followed the theme, so light theme rendered #1b1b18 on
    the dark gradient — the title and footer were unreadable. */
-.onboarding-card { color: var(--ice); }
-.onboarding-kicker { color: var(--accent-pale); font: 12px ui-monospace, SFMono-Regular, Menlo, monospace; letter-spacing: .13em; }
-.onboarding-close { width: 28px; height: 28px; border: 1px solid rgba(214, 224, 255, .3); border-radius: 7px; color: var(--mist-deep); background: transparent; font-size: 19px; line-height: 1; cursor: pointer; }
-.onboarding-close:hover { color: var(--ice-soft); border-color: var(--accent); }
-.onboarding-progress { gap: 10px; margin-top: 16px; color: var(--muted-cool-soft); font-size:var(--fs-meta); }
+.onboarding-card { color: var(--ice, var(--orange-200)); }
+.onboarding-kicker { color: var(--accent-pale, var(--orange-200)); font: 12px ui-monospace, SFMono-Regular, Menlo, monospace; letter-spacing: .13em; }
+.onboarding-close { width: 28px; height: 28px; border: 1px solid rgba(214, 224, 255, .3); border-radius: 7px; color: var(--mist-deep, var(--orange-200)); background: transparent; font-size: 19px; line-height: 1; cursor: pointer; }
+.onboarding-close:hover { color: var(--ice-soft, var(--orange-200)); border-color: var(--accent); }
+.onboarding-progress { gap: 10px; margin-top: 16px; color: var(--muted-cool-soft, var(--orange-200)); font-size:var(--fs-meta); }
 .onboarding-progress-label { white-space: nowrap; }
 .onboarding-progress-track { flex: 1; height: 4px; overflow: hidden; border-radius: 99px; background: rgba(255,255,255,.14); }
 .onboarding-progress-track i { display: block; height: 100%; border-radius: inherit; background: linear-gradient(90deg, var(--accent), var(--gold-glow)); transition: width .25s ease; }
-.onboarding-card h2 { margin: 16px 0 8px; color: var(--ice-soft); font-size: 20px; letter-spacing: -.025em; }
-.onboarding-body { margin: 0; color: var(--mist-soft); font-size:var(--fs-body); line-height: 1.7; }
+.onboarding-card h2 { margin: 16px 0 8px; color: var(--ice-soft, var(--orange-200)); font-size: 20px; letter-spacing: -.025em; }
+.onboarding-body { margin: 0; color: var(--mist-soft, var(--orange-200)); font-size:var(--fs-body); line-height: 1.7; }
 .onboarding-best { display: grid; grid-template-columns: auto 1fr; gap: 8px; margin-top: 12px; padding: 10px 10px; border: 1px solid rgba(255, 121, 24, .3); border-radius: 8px; background: rgba(255, 121, 24, .12); }
-.onboarding-best span { color: var(--accent-pale); font-size:var(--fs-meta); font-weight: 650; white-space: nowrap; }
-.onboarding-best p { margin: 0; color: var(--mist-soft); font-size: var(--fs-body); line-height: 1.55; }
+.onboarding-best span { color: var(--accent-pale, var(--orange-200)); font-size:var(--fs-meta); font-weight: 650; white-space: nowrap; }
+.onboarding-best p { margin: 0; color: var(--mist-soft, var(--orange-200)); font-size: var(--fs-body); line-height: 1.55; }
 .onboarding-card-foot { justify-content: space-between; gap: 12px; margin-top: 16px; }
-.onboarding-time { color: var(--muted-cool-soft); font-size:var(--fs-meta); }
+.onboarding-time { color: var(--muted-cool-soft, var(--orange-200)); font-size:var(--fs-meta); }
 .onboarding-actions { gap: 6px; }
 .onboarding-actions .button { min-height: 31px; }
 /* Secondary tour buttons must read as light chips on the dark card in both
    themes, instead of following the light/dark .button surface. */
-.onboarding-actions .button:not(.button-primary) { color: var(--ice); border-color: rgba(214, 224, 255, .3); background: rgba(255, 255, 255, .08); }
+.onboarding-actions .button:not(.button-primary) { color: var(--ice, var(--orange-200)); border-color: rgba(214, 224, 255, .3); background: rgba(255, 255, 255, .08); }
 .onboarding-actions .button:not(.button-primary):hover { color: var(--white); background: rgba(255, 255, 255, .16); }
 .onboarding-actions .button-primary { min-width: 88px; }
 body.onboarding-open { overflow: hidden; }
+
+/* Keep the tour readable when a browser still serves an older token sheet
+   without the cool-palette aliases. The current tokens win; the orange
+   accent is the compatibility fallback for the intentionally dark card. */
 @keyframes onboarding-pulse { 0%, 100% { opacity: .78; } 50% { opacity: 1; } }
 @keyframes onboarding-card-in { from { opacity: 0; } to { opacity: 1; } }
 @media (max-width: 560px) { .onboarding-card { padding: 16px; } .onboarding-card h2 { font-size: 18px; } .onboarding-body { font-size: var(--fs-body); } .onboarding-card-foot { align-items: flex-end; } .onboarding-time { max-width: 65px; line-height: 1.35; } .onboarding-actions .button { padding-inline: 8px; font-size:var(--fs-meta); } }
