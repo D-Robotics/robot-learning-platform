@@ -35,19 +35,29 @@ if command -v flock >/dev/null 2>&1; then
     exit 1
   fi
 else
-  if mkdir "$LOCK_DIR" 2>/dev/null; then
-    echo $$ >"$LOCK_DIR/pid"
-    trap 'rmdir "$LOCK_DIR" 2>/dev/null' EXIT
+  take_lock() {
+    if mkdir "$LOCK_DIR" 2>/dev/null; then
+      echo $$ >"$LOCK_DIR/pid"
+      trap 'rmdir "$LOCK_DIR" 2>/dev/null' EXIT
+      return 0
+    fi
+    return 1
+  }
+  if take_lock; then
+    : # 持锁成功
   else
     lock_pid=$(cat "$LOCK_DIR/pid" 2>/dev/null || true)
-    if [ -n "$lock_pid" ] && ! kill -0 "$lock_pid" 2>/dev/null; then
+    # ps -p 对其他用户的活进程也能看到；kill -0 会因 EPERM 把活锁误判为死锁。
+    if [ -n "$lock_pid" ] && ! ps -p "$lock_pid" >/dev/null 2>&1; then
       echo "清理残留部署锁（持锁 pid $lock_pid 已不存在）" >&2
-      rm -rf "$LOCK_DIR"
-      if mkdir "$LOCK_DIR" 2>/dev/null; then
-        echo $$ >"$LOCK_DIR/pid"
-        trap 'rmdir "$LOCK_DIR" 2>/dev/null' EXIT
+      # 原子改名接管：两个等待者同时到达时 rename 只有一方成功，另一方
+      # 回到 mkdir 竞争，任何时刻都不可能出现双持锁（rm -rf+mkdir 会删掉
+      # 对方刚建好的新锁，正是要避免的 TOCTOU 双跑）。
+      STALE="$LOCK_DIR.stale.$$.$RANDOM"
+      if mv "$LOCK_DIR" "$STALE" 2>/dev/null && take_lock; then
+        echo "已接管残留锁（旧锁留存于 $STALE），继续部署。" >&2
       else
-        echo "!! 部署锁 $LOCK_DIR 清理失败，请人工确认后删除重试。" >&2
+        echo "!! 残留锁接管竞争失败：其他进程已先行持锁（$LOCK_DIR）。" >&2
         exit 1
       fi
     else
