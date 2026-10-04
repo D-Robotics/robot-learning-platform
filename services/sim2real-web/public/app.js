@@ -1777,8 +1777,8 @@ async function submitAuthLogin() {
 
 async function logoutAccount() {
   // Prefer the deployment-provided logout endpoint: it is mode-aware and
-  // clears the actual session cookie server-side. The legacy /sso/logout
-  // only covered the relay cookie and left direct-login sessions alive.
+  // clears every session cookie server-side. The in-place /sso/logout posts
+  // the same clear-all Set-Cookie set and covers direct-login sessions too.
   try {
     const session = await request('/sim2real/auth/session', {
       headers: { accept: 'application/json' },
@@ -2016,13 +2016,12 @@ async function request(path, options = {}) {
   const payload = contentType.includes('application/json')
     ? await response.json().catch(() => null)
     : await response.text().catch(() => '');
-  if (
-    typeof payload === 'string' &&
-    payload.includes('登录 · RDK Robot Learning Platform')
-  ) {
-    // An expired session can come back as a 200 that followed a redirect to
-    // the login document. Surface it as a session-expired 401 (gate + toast)
-    // instead of letting callers parse HTML and fail silently.
+  if (contentType.includes('text/html')) {
+    // An expired session surfaces as a redirected HTML login document — this
+    // platform's own login page or the Studio gateway's — never as JSON. Any
+    // HTML answer to an API call therefore means the session is gone; surface
+    // it as a session-expired 401 (gate + toast) instead of letting callers
+    // parse HTML and fail silently.
     setAuthGate(null);
     throw new ApiError('登录已过期，请重新登录。', 401, null);
   }

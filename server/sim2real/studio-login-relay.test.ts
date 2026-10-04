@@ -5,6 +5,7 @@ import {
   encodeStudioWebCloudCookie,
   STUDIO_WEB_CLOUD_SESSION_COOKIE,
 } from './studio-cookie-auth.js';
+import { STUDIO_DIRECT_SESSION_COOKIES } from './studio-direct-relay.js';
 import { createStudioLoginRelayRouter } from './studio-login-relay.js';
 
 const SECRET = 'k'.repeat(48);
@@ -275,12 +276,18 @@ describe('studio login relay routes', () => {
     delete process.env.RDK_SIM2REAL_STUDIO_SHELL_URL;
   });
 
-  it('POST /api/sso/logout clears the session cookie', async () => {
+  it('POST /api/sso/logout clears every direct-login session cookie', async () => {
     const router = createStudioLoginRelayRouter({ fetchImpl: fakeFetchSequence([]) });
     const result = await callRelay(router, { path: '/api/sso/logout', method: 'POST' });
     expect(result.status).toBe(200);
-    expect((result.headers['set-cookie'] ?? [])[0]).toContain(
-      `${STUDIO_WEB_CLOUD_SESSION_COOKIE}=;`,
-    );
+    const cookies: string[] = result.headers['set-cookie'] ?? [];
+    const joined = cookies.join('\n');
+    // 三个名字 × （/ 与 studio-direct 两条路径）都必须被逐一失效，
+    // 否则 direct-login 会话在“已登出”提示后仍然存活。
+    for (const name of STUDIO_DIRECT_SESSION_COOKIES) {
+      expect(joined).toContain(`${name}=;`);
+    }
+    expect(cookies.filter((cookie) => cookie.startsWith('rdk_sso_web_session=;')).length).toBe(2);
+    expect(joined).toContain('Max-Age=0');
   });
 });

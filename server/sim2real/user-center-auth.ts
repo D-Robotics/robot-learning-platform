@@ -328,3 +328,24 @@ export function createUserCenterAuth(options?: {
   };
   return auth;
 }
+
+/**
+ * user-center OAuth 面未启用的部署同样把三条 GET 路由挂成 404：路径进入
+ * Express 路由表后，verify:api-contract 的运行时枚举才能与 openapi 契约
+ * 对照（此前条件挂载端点对门禁不可见，契约漂移无法被发现）。
+ * direct 会话 POST（RDK_SIM2REAL_UC_DIRECT_AES_KEY 可选且路径可配）与
+ * Bearer 预中间件仍只在配置齐备时注册，不做契约声明。
+ */
+export function registerUserCenterUnavailableRoutes(router: import('express').Router): void {
+  const unavailable = (_request: Request, response: import('express').Response): void => {
+    response.status(404).json({ ok: false, error: 'SIM2REAL_USER_CENTER_AUTH_UNAVAILABLE' });
+  };
+  router.get(USER_CENTER_LOGIN_PATH, unavailable);
+  router.get(
+    String(process.env.RDK_SIM2REAL_UC_CALLBACK_PATH || '/api/sim2real/auth/uc/callback')
+      .trim()
+      .replace(/\/+$/, '') || '/api/sim2real/auth/uc/callback',
+    unavailable,
+  );
+  router.get(USER_CENTER_LOGOUT_PATH, unavailable);
+}

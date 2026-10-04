@@ -34,6 +34,39 @@ export const STUDIO_DIRECT_SESSION_COOKIES = [
 
 export const STUDIO_DIRECT_LOGOUT_PATH = '/api/sim2real/auth/studio-direct/logout';
 
+/** 请求经 HTTPS 到达（直连或可信代理头）。登录/登出 cookie 的 Secure 属性以此为准。 */
+export function requestIsSecure(request: Request): boolean {
+  return (
+    request.secure ||
+    String(request.headers['x-forwarded-proto'] ?? '')
+      .split(',')[0]
+      .trim() === 'https'
+  );
+}
+
+/**
+ * 会话 cookie 的统一失效头：三个名字 × 部署可能携带的全部 Path 属性逐一
+ * 过期。GET 登出路由与 POST /api/sso/logout 共用这一份，避免两条路径各自
+ * 清理造成直登会话残留。secure 按请求协议对齐登录时的 Secure 属性。
+ */
+export function studioSessionClearCookieHeaders(secure: boolean): string[] {
+  const rawBase = String(process.env.RDK_SIM2REAL_PUBLIC_BASE_PATH ?? '')
+    .trim()
+    .replace(/\/+$/g, '');
+  const base = rawBase && rawBase !== '/' ? `/${rawBase.replace(/^\/+/g, '')}` : '';
+  const cookiePaths = [
+    '/',
+    '/api/sim2real/auth/studio-direct',
+    ...(base ? [`${base}/api/sim2real/auth/studio-direct`] : []),
+  ];
+  return STUDIO_DIRECT_SESSION_COOKIES.flatMap((name) =>
+    cookiePaths.map(
+      (path) =>
+        `${name}=; Path=${path}; Max-Age=0; Expires=Thu, 01 Jan 1970 00:00:00 GMT; HttpOnly; SameSite=Lax${secure ? '; Secure' : ''}`,
+    ),
+  );
+}
+
 function relayOrigin(): string | null {
   const origin = String(
     process.env.RDK_SIM2REAL_STUDIO_ORIGIN ||
@@ -113,7 +146,7 @@ export function createStudioDirectRelay(deps: StudioDirectRelayDeps = {}) {
         signal: AbortSignal.timeout(RELAY_TIMEOUT_MS),
       }));
 
-  async function relay(userName: string, password: string): Promise<RelayOutcome> {
+  async function relay(userName: string, password: string, secure: boolean): Promise<RelayOutcome> {
     const upstream = await post(
       `${relayOrigin()}/api/sso/direct/login`,
       JSON.stringify({ method: 'account', userName, password }),
@@ -155,10 +188,14 @@ export function createStudioDirectRelay(deps: StudioDirectRelayDeps = {}) {
         redirect: loginRedirect('unavailable'),
       };
     }
-    // 保障安全属性：上游缺省时补齐。
+    // 保障安全属性：上游缺省时补齐；Secure 按本服务到达协议对齐，
+    // 避免登录时缺 Secure 而登出时带 Secure 的不对称。
     const hardened = setCookies.map((cookie) => {
       const withHttponly = /httponly/i.test(cookie) ? cookie : `${cookie}; HttpOnly`;
-      return /samesite/i.test(withHttponly) ? withHttponly : `${withHttponly}; SameSite=Lax`;
+      const withSameSite = /samesite/i.test(withHttponly)
+        ? withHttponly
+        : `${withHttponly}; SameSite=Lax`;
+      return secure && !/;\s*secure/i.test(withSameSite) ? `${withSameSite}; Secure` : withSameSite;
     });
     return { status: 200, setCookies: hardened, redirect: `${basePath}/` };
   }
@@ -171,7 +208,7 @@ export function createStudioDirectRelay(deps: StudioDirectRelayDeps = {}) {
     const wait = throttled(request);
     if (wait > 0) await new Promise((resolve) => setTimeout(resolve, wait));
     try {
-      return await relay(userName, password);
+      return await relay(userName, password, requestIsSecure(request));
     } catch (error) {
       const reason =
         error instanceof Error && error.name === 'TimeoutError' ? '登录服务超时' : '登录服务不可达';

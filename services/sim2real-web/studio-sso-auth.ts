@@ -8,15 +8,12 @@ import {
   studioCookieAuthConfigured,
 } from '../../server/sim2real/studio-cookie-auth.js';
 import {
-  STUDIO_DIRECT_LOGOUT_PATH,
-  STUDIO_DIRECT_SESSION_COOKIES,
-} from '../../server/sim2real/studio-direct-relay.js';
-import {
   createTrustedProxyAuth,
   trustedProxyAuthConfigured,
 } from '../../server/sim2real/trusted-proxy-auth.js';
 import {
   createUserCenterAuth,
+  registerUserCenterUnavailableRoutes,
   userCenterAuthConfigured,
   USER_CENTER_LOGIN_PATH,
 } from '../../server/sim2real/user-center-auth.js';
@@ -85,37 +82,19 @@ export function studioSsoAdapterMode():
 
 /**
  * user-center 模式的登录/回调/注销路由。必须在业务路由之前挂载：
- * login 回调设置的会话 cookie 由同步 resolvePrincipal 消费。
+ * login 回调设置的会话 cookie 由同步 resolvePrincipal 消费。未启用的部署
+ * 把同一组路径挂成 404，让契约门禁的运行时枚举始终能看见该表面。
+ *
+ * studio-cookie 模式的登出不在这里注册：组合根（server.ts）以无条件路由
+ * 挂载同一 STUDIO_DIRECT_LOGOUT_PATH 并在请求时按模式应答——双注册会让
+ * 后挂载者永远收不到请求，契约门禁只能看到死路径。
  */
 export function registerAuthModeRoutes(router: Router): void {
   if (authMode === 'user-center' && userCenterAuthConfigured()) {
     userCenterAuth.registerRoutes(router);
+    return;
   }
-  if (authMode === 'studio-cookie' && studioCookieAuthConfigured()) {
-    // Studio 会话 cookie 是本模式唯一的身份凭据，而 Studio 主壳没有服务端
-    // 注销端点（会话本身无吊销机制）：退出 = 让浏览器不再携带这些 cookie，
-    // 下一次请求即按未认证处理。三个名字 × 三条路径逐一失效，覆盖 Studio
-    // 透传时可能携带的任意 Path 属性。
-    const rawBase = String(process.env.RDK_SIM2REAL_PUBLIC_BASE_PATH ?? '')
-      .trim()
-      .replace(/\/+$/g, '');
-    const base = rawBase && rawBase !== '/' ? `/${rawBase.replace(/^\/+/g, '')}` : '';
-    const cookiePaths = [
-      '/',
-      '/api/sim2real/auth/studio-direct',
-      ...(base ? [`${base}/api/sim2real/auth/studio-direct`] : []),
-    ];
-    const expired = STUDIO_DIRECT_SESSION_COOKIES.flatMap((name) =>
-      cookiePaths.map(
-        (path) =>
-          `${name}=; Path=${path}; Max-Age=0; Expires=Thu, 01 Jan 1970 00:00:00 GMT; HttpOnly; SameSite=Lax`,
-      ),
-    );
-    router.get(STUDIO_DIRECT_LOGOUT_PATH, (_request, response) => {
-      response.setHeader('set-cookie', expired);
-      response.redirect(302, `${base}/login?loggedOut=1`);
-    });
-  }
+  registerUserCenterUnavailableRoutes(router);
 }
 
 /** 401 响应体下发的登录地址；无自有登录入口的模式返回 null。 */

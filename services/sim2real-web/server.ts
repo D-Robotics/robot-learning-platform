@@ -90,8 +90,9 @@ import {
 import {
   createStudioDirectRelay,
   renderStudioDirectLoginPage,
+  requestIsSecure,
   STUDIO_DIRECT_LOGOUT_PATH,
-  STUDIO_DIRECT_SESSION_COOKIES,
+  studioSessionClearCookieHeaders,
 } from '../../server/sim2real/studio-direct-relay.js';
 import {
   USER_CENTER_LOGOUT_PATH,
@@ -774,23 +775,20 @@ export function createSim2RealWebApp(): Express {
     });
   });
 
-  // auth/session 广告的登出端点：逐一失效登录时透传的会话 cookie，再回到
-  // 带提示的登录页。挂载为无条件路由（契约自检不配置认证环境也能看到），
-  // 未启用直登面的部署按 404 应答。
+  // auth/session 广告的登出端点（唯一注册点，契约自检在未配置认证的环境也
+  // 能看到）：逐一失效登录时透传的全部会话 cookie（三个名字 × 全部 Path），
+  // Secure 按请求协议对齐，再回到带提示的登录页。未启用直登面的部署按 404
+  // 应答。POST /api/sso/logout 复用同一份失效头。
   app.get('/api/sim2real/auth/studio-direct/logout', (request, response) => {
     if (!(studioSsoAdapterMode() === 'studio-cookie' && studioSsoAdapterConfigured())) {
       response.status(404).json({ ok: false, error: 'SIM2REAL_STUDIO_DIRECT_LOGOUT_UNAVAILABLE' });
       return;
     }
-    for (const cookieName of STUDIO_DIRECT_SESSION_COOKIES) {
-      response.clearCookie(cookieName, {
-        path: '/',
-        httpOnly: true,
-        sameSite: 'lax',
-        secure: true,
-      });
-    }
-    response.redirect(`${configuredPublicBasePath()}/login?loggedOut=1`);
+    response
+      .status(302)
+      .setHeader('Cache-Control', 'no-store')
+      .setHeader('set-cookie', studioSessionClearCookieHeaders(requestIsSecure(request)))
+      .redirect(`${configuredPublicBasePath()}/login?loggedOut=1`);
   });
 
   // Stable capability catalog for DSH/plugin clients. This is intentionally

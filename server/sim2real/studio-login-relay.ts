@@ -1,5 +1,6 @@
-import { Router, type Response } from 'express';
+import { Router, type Request, type Response } from 'express';
 
+import { requestIsSecure, studioSessionClearCookieHeaders } from './studio-direct-relay.js';
 import {
   STUDIO_WEB_CLOUD_SESSION_COOKIE,
   decodeStudioWebCloudCookie,
@@ -28,8 +29,6 @@ const MAX_RELAY_RESPONSE_BYTES = MAX_RELAY_BODY_BYTES * 8;
 const MAX_RELAY_SET_COOKIE_COUNT = 8;
 const MAX_RELAY_SET_COOKIE_CHARS = 8_192;
 const DEFAULT_SHELL_URL = 'https://rdkstudio.d-robotics.cc';
-
-const RESET_COOKIE = `${STUDIO_WEB_CLOUD_SESSION_COOKIE}=; Path=/; HttpOnly; SameSite=Lax; Secure; Max-Age=0`;
 
 function studioShellLoginUrl(): string | null {
   const raw = String(process.env.RDK_SIM2REAL_STUDIO_SHELL_URL ?? '')
@@ -426,12 +425,12 @@ export function createStudioLoginRelayRouter(
     })().catch(next);
   });
 
-  /** POST /api/sso/logout — clear the shared session cookie. */
-  router.post('/api/sso/logout', (_request, response) => {
+  /** POST /api/sso/logout — 失效全部会话 cookie（与 GET 登出路由同一份头）。 */
+  router.post('/api/sso/logout', (request: Request, response: Response) => {
     response
       .status(200)
       .setHeader('Cache-Control', 'no-store')
-      .setHeader('Set-Cookie', RESET_COOKIE)
+      .setHeader('Set-Cookie', studioSessionClearCookieHeaders(requestIsSecure(request)))
       .json({ ok: true });
   });
 
