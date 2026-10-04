@@ -7,12 +7,13 @@
 面向 MicroDuck 与 RDK-X5 的机器人学习工作台：仿真、录制、训练、评测、部署和虚实迭代，都围绕同一份可追溯模型契约组织。
 
 **English (short version)** — A web-based robot learning workbench for MicroDuck and RDK-X5,
-covering simulation, trajectory recording, training, telemetry evaluation, and controlled deployment.
-Local engines include PPO, MLP behavior cloning, and ACT action chunking with numerical ONNX export
-checks. The default Mock workflow needs no GPU; real training requires the selected engine's Python
-dependencies. ACT accepts recorded episodes through its CLI; its worker integration currently runs
-on synthetic smoke data. Board deployment requires hardware integration and release evidence.
-See the quick start below and the [documentation index](docs/README.md).
+covering simulation, trajectory recording, training, telemetry evaluation, controlled deployment,
+and an MCP adapter for external agents. Local engines include PPO, MLP behavior cloning, and ACT
+action chunking with numerical ONNX export checks. The default Mock workflow needs no GPU; real
+training requires the selected engine's Python dependencies. ACT accepts recorded episodes through
+its CLI; its worker integration currently runs on synthetic smoke data. Board deployment requires
+hardware integration and release evidence. See the quick start below and the [documentation
+index](docs/README.md).
 
 [![verify](https://github.com/D-Robotics/robot-learning-platform/actions/workflows/verify.yml/badge.svg)](https://github.com/D-Robotics/robot-learning-platform/actions/workflows/verify.yml)
 [![Node.js](https://img.shields.io/badge/Node.js-22.22.2%2B-339933?logo=nodedotjs&logoColor=white)](https://nodejs.org/)
@@ -40,14 +41,57 @@ See the quick start below and the [documentation index](docs/README.md).
 
 平台把“可视化入口”和“受控执行”分开：浏览器负责观察和录制，服务端负责权限、制品、幂等和审计，板端/云端 adapter 负责真正的训练或部署。
 
+<div align="center">
+
+<img src="docs/assets/product-guide/02-workbench-overview.png" alt="工作台首页：上手四步闭环、研发闭环评分与下一步引导" width="92%" />
+
+<sub>工作台首页（运行界面截图，非示意图）：上手四步闭环、研发闭环评分与下一步引导。完整 8 视图图文导览见 <a href="docs/product-guide.md">产品指南</a>。</sub>
+
+</div>
+
+### 工作台内的 Agent 助手
+
+工作台内置 **Agent 任务助手**：用自然语言解释平台状态、生成任务计划、执行受控操作并留存证据；训练、设备与发布操作在执行前请求确认，不会静默驱动机器人。
+
+<div align="center">
+
+<img src="docs/assets/product-guide/10-agent-panel.png" alt="Agent 任务助手面板：解释状态、生成计划、执行操作、留存证据与能力目录" width="80%" />
+
+<sub>Agent 任务助手（运行界面截图）：右侧为任务计划、执行证据与能力目录。</sub>
+
+</div>
+
+### 外部 Agent 接入（MCP）
+
+仓库内置 `services/duck-lab-mcp/`，通过 stdio 提供 MCP（Model Context Protocol）适配层，
+让 Claude Code、Qoder 等外部 Agent 可以调用同一套仿真、训练、评测、制品、部署和板端工具。
+MCP 层只负责协议适配和证据投影，所有幂等、配额、权限、审批和运动安全门禁仍由版本化
+`/api/v1/duck` 平台 API 执行。
+
+分别在两个终端启动平台和 MCP 服务：
+
+```bash
+# 终端 1
+npm run dev:sim2real
+
+# 终端 2
+npm run dev:mcp
+```
+
+默认连接 `http://127.0.0.1:18102`。多用户部署可通过环境变量配置静态 Cookie 或账号密码；
+客户端注册示例、工具目录、认证边界和幂等重试语义见 [`docs/duck-lab-mcp.md`](docs/duck-lab-mcp.md)。
+
 产品定位、同类能力对标和当前成熟度判断见 [`docs/product-maturity-plan.md`](docs/product-maturity-plan.md)。一句话概括：这是 **RDK 机器人策略的证据链与安全交付控制面**，重点是把 Run、制品、评测、板型预检和人工审批连成可审计发布链。
 
-### 工作台更新
+### 工作台一览
 
-- **训练配置**：引擎能力说明、训练设置与续训参数分组；可选引擎需由 worker 显式注册。
-- **遥测回放**：统一时间轴联动奖励曲线、观测/动作热图，支持逐帧检查。
-- **数据体检**：展示 episode 长度分布与离群提示；无数据时提供导入指引。
-- **部署判断**：汇总可用板卡，并按原因折叠展示不兼容项。
+| 轨迹与回放 / 制品库 | 训练配置 |
+| --- | --- |
+| ![轨迹与回放、制品库视图](docs/assets/product-guide/03-replays.png) | ![训练配置视图](docs/assets/product-guide/04-train-configure.png) |
+| **Sim2Real 评测** | **部署预检（NO MOTOR 只读）** |
+| ![Sim2Real 评测视图](docs/assets/product-guide/06-evaluate.png) | ![部署预检视图](docs/assets/product-guide/07-deploy-preflight.png) |
+
+轨迹与回放按 Run 筛选轨迹，制品库统一管理仿真录制、训练 Run、评测证据与部署记录；训练配置覆盖训练档位、算法、引擎与续训 checkpoint（可选引擎需由 worker 显式注册）。评测页绑定遥测或轨迹来源，生成可追溯评测 Run；部署预检只读检查架构、系统目录与磁盘信息，不下发模型、不启动节点、不驱动电机。遥测回放时间轴（奖励曲线与观测/动作热图联动、逐帧检查）与数据体检（episode 长度分布与离群提示）等视图见[产品指南](docs/product-guide.md)。
 
 ### 训练路径与引擎
 
@@ -196,6 +240,7 @@ npm run format:check
 
 `npm run verify:local-worker` 会用一个临时外部引擎验证真实 Worker 契约；
 `npm run verify:board-agent` 会验证只读 BoardAgent、模拟标记和 token 闸门；
+`npm run verify:mcp` 会验证 MCP 协议、版本化 API 适配、工具目录和 stdio 端到端往返；
 `npm run verify:api-contract` 会实例化真实路由工厂，双向核对 OpenAPI 契约与挂载端点
 （spec 漂移或死契约都会失败），并验证 `/api/sim2real` 与 `/api/v1/duck` 别名路由集完全一致。
 `npm run smoke:sim2real-local` 会临时启动 Web、local worker 和 reference BoardAgent，
@@ -210,9 +255,10 @@ npm run format:check
 | `shared` | MicroDuck 61D observation / 14D action / 50 Hz 契约、模型制品和遥测类型 |
 | `server/routes` | Sim2Real HTTP API（模型、运行、部署、遥测） |
 | `server/sim2real` | 本地/RoboGo runner、JSON ledger、兼容性策略和可替换 adapter |
+| `services/duck-lab-mcp` | 面向外部 Agent 的 stdio MCP 适配层，调用版本化平台 API |
 | `docs/api` | 版本化 OpenAPI 契约与外部集成调用顺序 |
 | `docs/sim2real-plugins.md` | 事件驱动扩展层：实验追踪、对象存储、通知和硬件适配器 |
-| `docs/assets` | README 首屏与工作台示意图（自绘 SVG，无运行时依赖） |
+| `docs/assets` | README 首屏与工作台示意图（自绘 SVG）及产品指南运行界面截图（`product-guide/`），无运行时依赖 |
 | `docs/design` | 产品设计、MVP/90 分验收、Sim2Real 方案和端到端流程 |
 
 总览页还提供动态“研发闭环评分”，按契约、训练、评测、发布和项目血缘五项软件证据给出下一步建议；数据集可记录版本、SHA-256、契约和来源运行，详见 [`docs/dataset-lineage.md`](docs/dataset-lineage.md)。
@@ -253,6 +299,7 @@ MicroDuck 浏览器资源的上游 commit、仓库和许可证边界记录在 [`
 - [`docs/README.md`](docs/README.md)（文档索引）
 - [`docs/user-guide.md`](docs/user-guide.md)（使用手册与最佳实践）
 - [`docs/operations.md`](docs/operations.md)（生产环境变量、限流、CSP、日志与指标）
+- [`docs/duck-lab-mcp.md`](docs/duck-lab-mcp.md)（外部 Agent 的 MCP 接入、工具目录与认证）
 - [`docs/scalability.md`](docs/scalability.md)（存储容量边界与扩容路径）
 - [`docs/release-checklist.md`](docs/release-checklist.md)（公开发布阻塞项）
 - [`docs/demo-runbook.md`](docs/demo-runbook.md)

@@ -38,6 +38,7 @@ D-Robotics RDK 设备（X5 / S600 等）× MicroDuck 机器人的学习工作台
 | 路线与研究 | [`docs/roadmap.md`](./docs/roadmap.md)、[`docs/research/`](./docs/research) |
 | 必须继承的设计决策 | [`docs/decisions/`](./docs/decisions/README.md)（ADR：棘轮/子界面/知识源/设备连接/运维自愈） |
 | 给 Agent 加新工具 | [`docs/agent-tool-templates.md`](./docs/agent-tool-templates.md) |
+| 外部 Agent 接入（MCP） | [`docs/duck-lab-mcp.md`](./docs/duck-lab-mcp.md)、`services/duck-lab-mcp/`（平台业务校验须在适配层复制） |
 
 冲突处理：源码/测试/门禁脚本决定当前事实，`docs/` 提供背景与运维路径；本文件
 只负责导航，不承载会过期的细节。

@@ -10,6 +10,11 @@
     "noEmit": true,
     "types": ["node"]
   },
-  "include": ["server/**/*.ts", "shared/**/*.ts", "services/sim2real-web/*.ts"],
+  "include": [
+    "server/**/*.ts",
+    "shared/**/*.ts",
+    "services/sim2real-web/*.ts",
+    "services/duck-lab-mcp/**/*.ts"
+  ],
   "exclude": ["**/*.test.ts", "**/*.spec.ts"]
 }

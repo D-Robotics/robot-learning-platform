@@ -8,6 +8,10 @@ dist-server
 # monoliths that Prettier would rewrite wholesale.
 services/sim2real-web/public/
 
+# Hand-authored UI preview mockups: static experience drafts reviewed as
+# design artifacts, not formatted source.
+preview/
+
 # Docs and vendored upstream artifacts stay untouched.
 docs/
 *.md
