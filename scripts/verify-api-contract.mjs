@@ -33,6 +33,7 @@ const openapiText = readFileSync(path.join(root, 'docs/api/openapi.yaml'), 'utf8
 const runtimeModules = [
   ['server/routes/sim2real-routes.ts', 'dist-server/server/routes/sim2real-routes.js'],
   ['server/routes/sim2real-agent-routes.ts', 'dist-server/server/routes/sim2real-agent-routes.js'],
+  ['server/routes/sim2real-events-sse.ts', 'dist-server/server/routes/sim2real-events-sse.js'],
   ['server/sim2real/studio-login-relay.ts', 'dist-server/server/sim2real/studio-login-relay.js'],
   ['server/sim2real/standalone-adapters.ts', 'dist-server/server/sim2real/standalone-adapters.js'],
   // The standalone composition root owns a small set of API routes that are
@@ -146,6 +147,9 @@ const { createDeviceBoardDetectRouter } = await import(
 const { createSim2RealAgentRouter } = await import(
   path.join(root, 'dist-server/server/routes/sim2real-agent-routes.js')
 );
+const { createSim2RealEventsSseRouter } = await import(
+  path.join(root, 'dist-server/server/routes/sim2real-events-sse.js')
+);
 const { createSim2RealWebApp } = await import(
   path.join(root, 'dist-server/services/sim2real-web/server.js')
 );
@@ -155,7 +159,27 @@ const versionedRouter = createSim2RealRouter({}, { prefix: SIM2REAL_VERSIONED_AP
 const relayRouter = createStudioLoginRelayRouter();
 const boardDetectRouter = createDeviceBoardDetectRouter(undefined, {});
 const agentRouter = createSim2RealAgentRouter();
+const eventsLegacyRouter = createSim2RealEventsSseRouter({});
+const eventsVersionedRouter = createSim2RealEventsSseRouter({
+  prefix: SIM2REAL_VERSIONED_API_PREFIX,
+});
 const webApp = createSim2RealWebApp();
+
+// SSE 事件流同厂双挂（legacy 别名 + 版本化前缀）：剥掉各自前缀后路由集合
+// 必须一致，版本化形状进入运行时面与 openapi 对照。
+const sseVersionedShapes = collectRoutes(eventsVersionedRouter).map(([m, p]) => [
+  m,
+  normalizeRoutePath(p),
+]);
+const sseAliasLegacy = collectRoutes(eventsLegacyRouter).map(([m, p]) => `${m} ${p}`);
+const sseAliasVersioned = sseVersionedShapes.map(
+  ([m, p]) => `${m} ${p.slice(SIM2REAL_VERSIONED_API_PREFIX.length)}`,
+);
+assert.deepEqual(
+  sseAliasLegacy.sort(),
+  sseAliasVersioned.sort(),
+  'legacy /api/sim2real and /api/v1/duck SSE route sets must be identical (alias drift)',
+);
 
 const legacyRoutes = collectRoutes(legacyRouter).map(([method, p]) => [
   method,
@@ -186,12 +210,14 @@ assert.deepEqual(
   'legacy /api/sim2real and /api/v1/duck route sets must be identical (alias drift)',
 );
 
-// Runtime surface: versioned duck routes + SSO relay + board detect.
+// Runtime surface: versioned duck routes + SSO relay + board detect + agent
+// + versioned SSE events.
 const runtimeRoutes = new Set([
   ...versionedRoutes.map(([m, p]) => `${m} ${p}`),
   ...collectRoutes(relayRouter).map(([m, p]) => `${m} ${normalizeRoutePath(p)}`),
   ...collectRoutes(boardDetectRouter).map(([m, p]) => `${m} ${normalizeRoutePath(p)}`),
   ...collectRoutes(agentRouter).map(([m, p]) => `${m} ${normalizeRoutePath(p)}`),
+  ...sseVersionedShapes.map(([m, p]) => `${m} ${p}`),
   // Do not recurse into mounted routers here: their legacy/versioned aliases
   // are already represented above. These are only the direct API layers
   // registered by the standalone composition root itself.

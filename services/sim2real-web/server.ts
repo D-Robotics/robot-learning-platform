@@ -720,10 +720,11 @@ export function createSim2RealWebApp(): Express {
 
   // studio-cookie 模式的独立登录页 + 直连登录中继（D-006 的轻量替代路径）：
   // 用户在本平台完成登录，凭据经服务端转发 Studio 直连 API，会话 cookie
-  // 原样透传（同域同密钥），凭据不落日志、不落存储。
+  // 原样透传（同域同密钥），凭据不落日志、不落存储。登录端点无条件挂载
+  // （契约自检在未配置认证的环境也能看到），未启用直登面的部署按 404 应答，
+  // 与登出端点同一模式——双注册会让后挂载者永远收不到请求。
   if (studioSsoAdapterMode() === 'studio-cookie' && studioSsoAdapterConfigured()) {
     const studioRelay = createStudioDirectRelay({ basePath: configuredPublicBasePath() });
-    const loginUrl = '/login';
     app.post(
       '/api/sim2real/auth/studio-direct/login',
       express.urlencoded({ extended: false }),
@@ -750,7 +751,12 @@ export function createSim2RealWebApp(): Express {
           ),
         );
     });
-    void loginUrl;
+  } else {
+    const unavailable = (_request: express.Request, response: express.Response): void => {
+      response.status(404).json({ ok: false, error: 'SIM2REAL_STUDIO_DIRECT_LOGIN_UNAVAILABLE' });
+    };
+    app.post('/api/sim2real/auth/studio-direct/login', unavailable);
+    app.post('/api/sim2real/auth/studio-direct/login.json', unavailable);
   }
 
   // 当前会话身份（no-store）：顶栏“更多”菜单用它决定是否展示“账号/退出登录”。
@@ -1436,13 +1442,14 @@ export function createSim2RealWebApp(): Express {
           response.setHeader('Cache-Control', 'no-cache');
           return;
         }
-        // The platform's own control-plane scripts and styles live at the
-        // public root. A release that changes app.js must reach every open
-        // workbench on its next reload — a production max-age window is exactly
-        // how a stale control loop survives an upgrade. Large binary assets in
-        // subdirectories keep the production cache window.
-        const inPublicRoot = path.dirname(normalizedPath) === PUBLIC_ROOT;
-        if (inPublicRoot && /\.(js|css|mjs)$/.test(filePath)) {
+        // Every JS/CSS the workbench loads — control-plane root files and
+        // vendor/ runtime bundles alike — must revalidate on each load: a
+        // release that swaps any unhashed script or stylesheet has to reach
+        // every open workbench immediately, or a stale control loop (or a
+        // mixed vendor loader/runtime pair) survives the upgrade inside the
+        // production max-age window. Binary assets (.wasm/.bin/fonts) keep
+        // the production cache window.
+        if (normalizedPath.startsWith(PUBLIC_ROOT) && /\.(js|css|mjs)$/.test(filePath)) {
           response.setHeader('Cache-Control', 'no-cache');
         }
       },

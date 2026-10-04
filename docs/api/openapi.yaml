@@ -1116,6 +1116,135 @@ paths:
           description: Redirect to the deployment login page after clearing session cookies.
         "404":
           description: Deployment is not running the studio-cookie direct login surface.
+  /api/sim2real/auth/studio-direct/login:
+    post:
+      tags: [sso]
+      summary: Direct-login form relay for the studio-cookie surface
+      operationId: loginStudioDirectForm
+      security: []
+      description: >-
+        Browser-form endpoint of the studio-cookie direct login relay
+        (application/x-www-form-urlencoded). Credentials are relayed
+        server-to-server to the configured Studio origin and never stored;
+        success sets the passed-through session cookies. Mounted on every
+        deployment so the contract is introspectable; deployments without the
+        studio-cookie surface answer 404.
+      responses:
+        "302":
+          description: Redirect to the workbench (success) or the login page with an error flag.
+        "401":
+          description: Credentials rejected by the upstream login service.
+        "404":
+          description: Deployment is not running the studio-cookie direct login surface.
+  /api/sim2real/auth/studio-direct/login.json:
+    post:
+      tags: [sso]
+      summary: Direct-login JSON relay for the studio-cookie surface
+      operationId: loginStudioDirectJson
+      security: []
+      description: >-
+        JSON twin of the form relay ({userName, password}). Success sets the
+        passed-through session cookies and answers JSON; deployments without
+        the studio-cookie surface answer 404.
+      responses:
+        "200":
+          description: Session established; session cookies ride the Set-Cookie headers.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [ok]
+                properties:
+                  ok: { const: true }
+        "401":
+          description: Credentials rejected by the upstream login service.
+        "404":
+          description: Deployment is not running the studio-cookie direct login surface.
+  /api/sim2real/auth/uc/login:
+    get:
+      tags: [sso]
+      summary: User Center OAuth2 authorization-code entry
+      operationId: loginUserCenter
+      security: []
+      description: >-
+        Redirects to the User Center authorize endpoint. Mounted on every
+        deployment so the contract is introspectable; deployments without
+        user-center SSO configured answer 404.
+      responses:
+        "302":
+          description: Redirect to the User Center authorize URL.
+        "404":
+          description: Deployment is not running the user-center auth surface.
+  /api/sim2real/auth/uc/callback:
+    get:
+      tags: [sso]
+      summary: User Center OAuth2 code callback
+      operationId: callbackUserCenter
+      security: []
+      description: >-
+        Exchanges the authorization code for tokens, verifies the RS256/JWKS
+        signature and mints the local session cookie. Path is configurable via
+        RDK_SIM2REAL_UC_CALLBACK_PATH; the default is declared here.
+        Deployments without user-center SSO configured answer 404.
+      responses:
+        "302":
+          description: Redirect into the workbench on success, or to the login entry with a failure flag.
+        "404":
+          description: Deployment is not running the user-center auth surface.
+  /api/sim2real/auth/uc/logout:
+    get:
+      tags: [sso]
+      summary: Clear the user-center session cookie
+      operationId: logoutUserCenter
+      security: []
+      description: >-
+        Expires the user-center session cookie and returns to the workbench
+        root. This is the logoutUrl advertised by /api/sim2real/auth/session
+        in user-center mode. Deployments without user-center SSO configured
+        answer 404.
+      responses:
+        "302":
+          description: Redirect to the workbench root after clearing the session cookie.
+        "404":
+          description: Deployment is not running the user-center auth surface.
+  /api/v1/duck/events:
+    get:
+      tags: [events]
+      summary: Server-sent events stream for workbench domain events
+      operationId: streamDuckEvents
+      security: []
+      description: >-
+        EventSource stream bridging store domain events (run/deployment/model/
+        project lifecycle) to the browser. Requires Accept: text/event-stream;
+        shared deployments scope events to the authenticated account. The
+        legacy /api/sim2real alias mounts the identical surface.
+      responses:
+        "200":
+          description: text/event-stream; heartbeats keep intermediaries from closing idle streams.
+        "401":
+          description: Multi-user deployment and no verified principal on the request.
+        "406":
+          description: Accept header does not include text/event-stream.
+        "503":
+          description: Stream capacity exhausted.
+  /api/v1/duck/events/stream:
+    get:
+      tags: [events]
+      summary: Alias of the SSE events stream
+      operationId: streamDuckEventsAlias
+      security: []
+      description: >-
+        Alias route of /api/v1/duck/events kept for earlier clients; behavior
+        and status codes are identical.
+      responses:
+        "200":
+          description: text/event-stream.
+        "401":
+          description: Multi-user deployment and no verified principal on the request.
+        "406":
+          description: Accept header does not include text/event-stream.
+        "503":
+          description: Stream capacity exhausted.
   /api/v1/duck/deployments:
     get:
       tags: [deployments]
