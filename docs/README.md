@@ -7,6 +7,7 @@
 | 文档 | 用途 |
 | --- | --- |
 | [`product-guide.md`](product-guide.md) | 图文版产品手册：8 视图截图导览 + 第一次闭环手把手（新读者从这里开始） |
+| [`product-doc/full-product-manual.md`](product-doc/full-product-manual.md) | 全功能产品手册与最佳实践：产品线、引擎、证据、Agent、MCP、设备、发布与运维；同时提供可直接打开的 [HTML 版](product-doc/full-product-manual.html) |
 | [`user-guide.md`](user-guide.md) | 使用手册与最佳实践（核心、流程、数据与工具） |
 | [`demo-runbook.md`](demo-runbook.md) | 演示前的检查与操作顺序 |
 | [`demo-guide.md`](demo-guide.md) | 演示脚本与讲解要点 |
