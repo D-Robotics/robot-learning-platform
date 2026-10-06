@@ -498,6 +498,20 @@ export function createDshCapabilityHandlers(
       };
     },
 
+    async rdk_golden_path(args: unknown, exec: ToolRunContext) {
+      const input = argsRecord(args);
+      const result = await run(exec.signal).fetch(
+        queryPath('/api/sim2real/golden-path', {
+          projectId: argString(input, 'projectId'),
+          modelId: argString(input, 'modelId'),
+          taskId: argString(input, 'taskId'),
+        }),
+        { method: 'GET' },
+      );
+      if (!result.ok) fail(result.status, result.body, 'RDK 主链路进度读取失败');
+      return { goldenPath: defined(result.body.goldenPath) };
+    },
+
     async rdk_projects_list(_args: unknown, exec: ToolRunContext) {
       const result = await run(exec.signal).fetch('/api/sim2real/projects', { method: 'GET' });
       if (!result.ok) fail(result.status, result.body, '项目列表读取失败');

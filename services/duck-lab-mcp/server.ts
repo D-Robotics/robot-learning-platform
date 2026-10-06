@@ -100,6 +100,14 @@ export const MANUAL_PARAM_HINT_OVERRIDES: Record<string, ToolParamHint> = {
 export const TOOL_PARAM_HINTS: Record<string, ToolParamHint> = {
   rdk_workspace_overview: { required: [], properties: {} },
   rdk_workspace_summary: { required: [], properties: {} },
+  rdk_golden_path: {
+    required: [],
+    properties: {
+      projectId: { type: 'string' },
+      modelId: { type: 'string' },
+      taskId: { type: 'string' },
+    },
+  },
   rdk_projects_list: { required: [], properties: {} },
   rdk_project_create: {
     required: ['name'],

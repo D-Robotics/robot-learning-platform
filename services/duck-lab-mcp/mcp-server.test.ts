@@ -501,8 +501,8 @@ describe('duck-lab-mcp protocol surface', () => {
       result?: { tools?: Array<Record<string, unknown>> };
     };
     const tools = response.result?.tools ?? [];
-    // The embedded catalog (55 rdk_* tools) plus rdk_platform_status.
-    expect(tools).toHaveLength(56);
+    // The embedded catalog (56 rdk_* tools) plus rdk_platform_status.
+    expect(tools).toHaveLength(57);
     const byName = new Map(tools.map((tool) => [tool.name as string, tool]));
     expect(byName.get('rdk_workspace_overview')).toMatchObject({
       annotations: { readOnlyHint: true, destructiveHint: false },

@@ -15,6 +15,7 @@ export type DshCapabilityDescriptor = {
 const names: Array<[string, string, boolean]> = [
   ['rdk_workspace_overview', '读取当前模型、设备、训练资源和运行状态', true],
   ['rdk_workspace_summary', '读取项目、数据集、运行和部署的工作区摘要', true],
+  ['rdk_golden_path', '读取从任务、数据、训练到 RDK 反馈的唯一主链路进度', true],
   ['rdk_projects_list', '列出当前账号的机器人学习项目', true],
   ['rdk_project_create', '创建机器人学习项目并绑定模型或数据集', false],
   ['rdk_datasets_list', '列出当前账号的数据集和来源运行', true],

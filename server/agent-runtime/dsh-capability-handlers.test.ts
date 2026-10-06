@@ -90,6 +90,33 @@ describe('DSH capability handlers', () => {
     expect(calls.at(-1)?.path).toBe('/api/sim2real/runs?modelId=model-a&status=completed&limit=7');
   });
 
+  it('reads the canonical golden path with owner-scoped filters', async () => {
+    const { fetchImpl, calls } = fakeLoopback([
+      () => ({
+        status: 200,
+        body: {
+          goldenPath: {
+            schemaVersion: 1,
+            scope: { projectId: 'project-1', modelId: 'model-a', taskId: 'walk' },
+            progress: { completed: 2, total: 6, percent: 33 },
+            nextAction: { stage: 'train', label: '训练或接入模型', reason: '启动训练' },
+            readyForRdkPreflight: false,
+            stages: [],
+          },
+        },
+      }),
+    ]);
+    const handlers = createDshCapabilityHandlers({ fetchImpl });
+    const result = await handlers.rdk_golden_path(
+      { projectId: 'project-1', modelId: 'model-a', taskId: 'walk' },
+      { signal: new AbortController().signal } as never,
+    );
+    expect(result).toMatchObject({ goldenPath: { progress: { percent: 33 } } });
+    expect(calls[0].path).toBe(
+      '/api/sim2real/golden-path?projectId=project-1&modelId=model-a&taskId=walk',
+    );
+  });
+
   it('routes model validation, artifact promotion and deployment lifecycle actions', async () => {
     const { fetchImpl, calls } = fakeLoopback([
       () => ({ status: 200, body: { validation: { valid: true, errors: [], warnings: [] } } }),
