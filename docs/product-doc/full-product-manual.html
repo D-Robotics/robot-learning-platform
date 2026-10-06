@@ -1,11 +1,11 @@
-<!doctype html><html lang='zh-CN'><head><meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1'><title>RDK Robot Learning Platform · 全功能产品手册</title><style>:root{--ink:#18212b;--muted:#5b6978;--orange:#df6c36;--line:#e5ebf0;--paper:#fff;--bg:#f2f5f8;--code:#13202a}*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.85 -apple-system,BlinkMacSystemFont,"PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif}.wrap,main{max-width:1080px;margin:auto}.hero{padding:70px 22px 64px;background:linear-gradient(135deg,#122333,#1b3b4b 55%,#df6c36);color:#fff}.eyebrow{letter-spacing:.16em;color:#ffd8c5;font-size:12px;font-weight:700}.hero h1{font-size:clamp(35px,6vw,66px);line-height:1.1;margin:16px 0}.hero p{max-width:760px;color:#e4edf3;font-size:19px}.hero img{display:block;width:100%;margin-top:30px;border-radius:15px;background:#fff;box-shadow:0 22px 60px #06121d80}main{background:var(--paper);padding:44px 64px 90px;box-shadow:0 8px 30px #1523310c}h1{font-size:36px}h2{font-size:29px;line-height:1.25;margin:60px 0 18px;padding-left:15px;border-left:5px solid var(--orange)}h3{font-size:21px;color:#29445a;margin:36px 0 10px}p{margin:12px 0}a{color:#185eae}blockquote{border-left:4px solid #efad8b;background:#fff7f1;padding:14px 18px;margin:20px 0;color:#52606c}figure{margin:28px 0 38px}figure img,img{max-width:100%}figure img{width:100%;border:1px solid var(--line);border-radius:10px;box-shadow:0 9px 25px #15233114}figcaption{font-size:13px;color:var(--muted);margin-top:8px}table{width:100%;border-collapse:collapse;margin:18px 0;font-size:14px}th,td{padding:11px 12px;border-bottom:1px solid var(--line);vertical-align:top;text-align:left}th{background:#fff4ec;color:#7d3f26}code{background:#edf2f6;color:#9b3e1c;padding:2px 6px;border-radius:4px}pre{background:var(--code);color:#eaf2f6;padding:18px;border-radius:10px;overflow:auto;font-size:14px;line-height:1.6}.footer{border-top:1px solid var(--line);margin-top:50px;padding-top:18px;color:var(--muted);font-size:13px}@media(max-width:720px){main{padding:28px 19px 60px}.hero{padding:48px 18px}.hero p{font-size:17px}h2{font-size:25px;margin-top:45px}table{display:block;overflow:auto}th,td{min-width:150px}}.flow{border:1px solid #f1c3aa;background:#fffaf7;border-radius:12px;padding:18px;margin:24px 0}.flow-title{font-weight:700;color:#8a4429;margin-bottom:12px}.flow-row{display:flex;flex-wrap:wrap;align-items:center;gap:8px}.flow-row span{background:#fff;border:1px solid #f1c3aa;border-radius:7px;padding:5px 8px;font-size:13px}.flow-row b{color:var(--orange)}.flow-note{color:var(--muted);font-size:13px;margin-top:12px}</style></head><body><header class='hero'><div class='wrap'><div class='eyebrow'>RDK ROBOT LEARNING PLATFORM · PRODUCT MANUAL</div><h1>从浏览器里的第一步，到 RDK-X5 上的下一步</h1><p>全功能产品手册与最佳实践：仿真、录制、训练、评测、制品、设备、Agent、MCP、受控发布和证据回流。</p><img src='../assets/rdk-platform-workbench.svg' alt='平台工作台架构图'></div></header><main><h1>RDK Robot Learning Platform 全功能产品手册与最佳实践</h1>
+<!doctype html><html lang='zh-CN'><head><meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1'><title>RDK Robot Learning Platform · 全功能产品手册</title><style>:root{--ink:#18212b;--muted:#5b6978;--orange:#df6c36;--line:#e5ebf0;--paper:#fff;--bg:#f2f5f8;--code:#13202a}*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.85 -apple-system,BlinkMacSystemFont,"PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif}.wrap,main{max-width:1080px;margin:auto}.hero{padding:70px 22px 64px;background:linear-gradient(135deg,#122333,#1b3b4b 55%,#df6c36);color:#fff}.eyebrow{letter-spacing:.16em;color:#ffd8c5;font-size:12px;font-weight:700}.hero h1{font-size:clamp(35px,6vw,66px);line-height:1.1;margin:16px 0}.hero p{max-width:760px;color:#e4edf3;font-size:19px}.hero img{display:block;width:100%;margin-top:30px;border-radius:15px;background:#fff;box-shadow:0 22px 60px #06121d80}main{background:var(--paper);padding:44px 64px 90px;box-shadow:0 8px 30px #1523310c}h1{font-size:36px}h2{font-size:29px;line-height:1.25;margin:60px 0 18px;padding-left:15px;border-left:5px solid var(--orange)}h3{font-size:21px;color:#29445a;margin:36px 0 10px}p{margin:12px 0}a{color:#185eae}blockquote{border-left:4px solid #efad8b;background:#fff7f1;padding:14px 18px;margin:20px 0;color:#52606c}figure{margin:28px 0 38px}figure img,img{max-width:100%}figure img{width:100%;border:1px solid var(--line);border-radius:10px;box-shadow:0 9px 25px #15233114}figcaption{font-size:13px;color:var(--muted);margin-top:8px}table{width:100%;border-collapse:collapse;margin:18px 0;font-size:14px}th,td{padding:11px 12px;border-bottom:1px solid var(--line);vertical-align:top;text-align:left}th{background:#fff4ec;color:#7d3f26}code{background:#edf2f6;color:#9b3e1c;padding:2px 6px;border-radius:4px}pre{background:var(--code);color:#eaf2f6;padding:18px;border-radius:10px;overflow:auto;font-size:14px;line-height:1.6}.footer{border-top:1px solid var(--line);margin-top:50px;padding-top:18px;color:var(--muted);font-size:13px}@media(max-width:720px){main{padding:28px 19px 60px}.hero{padding:48px 18px}.hero p{font-size:17px}h2{font-size:25px;margin-top:45px}table{display:block;overflow:auto}th,td{min-width:150px}}.flow{border:1px solid #f1c3aa;background:#fffaf7;border-radius:12px;padding:18px;margin:24px 0}.flow-title{font-weight:700;color:#8a4429;margin-bottom:12px}.flow-row{display:flex;flex-wrap:wrap;align-items:center;gap:8px}.flow-row span{background:#fff;border:1px solid #f1c3aa;border-radius:7px;padding:5px 8px;font-size:13px}.flow-row b{color:var(--orange)}.flow-note{color:var(--muted);font-size:13px;margin-top:12px}html{scroll-behavior:smooth;scroll-padding-top:20px}.doc-shell{display:grid;grid-template-columns:188px minmax(0,1fr);gap:40px;align-items:start}.doc-toc{position:sticky;top:18px;max-height:calc(100vh - 36px);overflow:auto;border:1px solid var(--line);border-radius:12px;background:#fbfcfd;padding:15px 13px;box-shadow:0 5px 16px #1523310b}.doc-toc-title{display:block;color:#29445a;font-size:13px;font-weight:700;letter-spacing:.04em;margin-bottom:8px}.doc-toc ol{list-style:none;padding:0;margin:0}.doc-toc li{margin:2px 0}.doc-toc a{display:block;border-radius:6px;padding:4px 7px;color:var(--muted);font-size:12px;line-height:1.45;text-decoration:none}.doc-toc a:hover,.doc-toc a:focus-visible{background:#fff4ec;color:#8a4429;outline:2px solid #efad8b;outline-offset:1px}.doc-toc .back-top{display:block;border-top:1px solid var(--line);margin-top:10px;padding:10px 7px 2px;color:#185eae;font-size:12px;text-decoration:none}.doc-content h2{scroll-margin-top:20px}.doc-content h2:target{background:#fffaf7;border-radius:8px;padding-top:8px;padding-bottom:8px;transition:background .2s}.doc-content .footer{margin-top:50px}.sr-only{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}@media(max-width:860px){.doc-shell{display:block}.doc-toc{position:relative;top:auto;max-height:none;margin:0 0 28px}.doc-toc ol{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:2px 8px}.doc-toc a{font-size:13px}}@media print{body{background:#fff;font-size:11pt}.hero{padding:26px 0;color:#000;background:#fff}.hero img{display:none}.doc-toc{display:none}main{max-width:none;padding:18px 0;box-shadow:none}.doc-shell{display:block}.doc-content h2{break-before:page}.doc-content h2:first-of-type{break-before:auto}a{color:inherit;text-decoration:underline}}</style></head><body><header class='hero' id='top'><div class='wrap'><div class='eyebrow'>RDK ROBOT LEARNING PLATFORM · PRODUCT MANUAL</div><h1>从浏览器里的第一步，到 RDK-X5 上的下一步</h1><p>全功能产品手册与最佳实践：仿真、录制、训练、评测、制品、设备、Agent、MCP、受控发布和证据回流。</p><img src='../assets/rdk-platform-workbench.svg' alt='平台工作台架构图'></div></header><main><div class='doc-shell'><aside class='doc-toc' aria-label='章节导航'><span class='doc-toc-title'>快速导航</span><ol><li><a href='#section-1'>1. 先理解产品</a></li><li><a href='#section-2'>2. 安装、启动和健康检查</a></li><li><a href='#section-3'>3. 工作台信息架构</a></li><li><a href='#section-4'>4. 三条产品线与契约</a></li><li><a href='#section-5'>5. 数据与仿真：从动作到轨迹</a></li><li><a href='#section-6'>6. 训练与执行资源</a></li><li><a href='#section-7'>7. Sim2Real 评测与证据中心</a></li><li><a href='#section-8'>8. 制品、发布与 X5 预检</a></li><li><a href='#section-9'>9. 设备上位机、遥测和策略运行时</a></li><li><a href='#section-10'>10. Agent 助手与 MCP</a></li><li><a href='#section-11'>11. 对象、证据和审计</a></li><li><a href='#section-12'>12. 运维、容量和故障排查</a></li><li><a href='#section-13'>13. 一次完整交付的验收清单</a></li><li><a href='#section-14'>14. 相关资料</a></li></ol><a class='back-top' href='#top'>↑ 返回顶部</a></aside><div class='doc-content'><h1>RDK Robot Learning Platform 全功能产品手册与最佳实践</h1>
 <blockquote>
 <p>面向开发者、算法工程师、机器人工程师、评估人员和项目评审者的完整使用手册。<br />
 本手册以仓库当前代码和可见界面为准，覆盖浏览器工作台、训练执行、评测证据、X5 设备、Agent、MCP 和运维边界。</p>
 </blockquote>
 <p><img alt="平台首页" src="../assets/product-guide/02-workbench-overview.png" /></p>
 <p><em>图 1：工作台首页把“仿真 → 训练 → 评测 → 部署”串成一条可追溯工作流。截图来自当前运行界面。</em></p>
-<h2>1. 先理解产品</h2>
+<h2 id='section-1'>1. 先理解产品</h2>
 <p>RDK Robot Learning Platform 是一个面向 RDK X5 / S600 / S100 与 MicroDuck、OriginBot、RDK Duck 产品线的机器人学习控制面。它把策略开发拆成可观察、可复现、可审计的阶段：</p>
 <div class="flow"><div class="flow-title">平台交付闭环</div><div class="flow-row"><span>项目与模型契约</span><b>→</b><span>仿真与录制</span><b>→</b><span>训练 Run</span><b>→</b><span>遥测与 Sim2Real 评测</span><b>→</b><span>制品签发</span><b>→</b><span>板端只读预检</span><b>→</b><span>无电机 Canary</span><b>→</b><span>人工批准 Live</span><b>→</b><span>遥测回流与重训建议</span></div><div class="flow-note">每一步都有状态、证据和失败原因；发布动作保持 fail-closed。</div></div>
 <p>平台的职责边界很清楚：浏览器负责交互、仿真、录制和回放；服务端负责身份、契约、幂等、配额和证据台账；训练 Worker 或 GPU Runner 执行训练；BoardAgent 负责设备探测、预检、遥测和经过批准的受限执行。网页不会直接连接电机，也不会把 Mock 结果冒充真实训练。</p>
@@ -43,7 +43,7 @@
 <li><strong>GPU 训练</strong>：通过本机 Agent、远程 SSH Agent 或平台 Runner 接入；网页只持有连接信息和状态，不保存用户 SSH 密码。</li>
 <li><strong>真机能力</strong>：X5 BoardAgent、真实遥测、BPU/ONNX 制品和受限运动需要部署方设备与现场验收。</li>
 </ul>
-<h2>2. 安装、启动和健康检查</h2>
+<h2 id='section-2'>2. 安装、启动和健康检查</h2>
 <h3>2.1 本地开发与演示</h3>
 <pre><code class="language-bash">nvm install &amp;&amp; nvm use
 npm ci
@@ -64,7 +64,7 @@ npm run demo:preflight
 <p><code>healthz</code> 关注进程、台账和依赖是否可读写；<code>readyz</code> 关注模型资源、认证和设备 adapter 是否达到当前部署要求。演示阶段允许 reference agent 降级；正式演示或发布使用 <code>--strict</code>，Mock 会以非零状态阻断。</p>
 <h3>2.3 线上环境</h3>
 <p>线上站点使用 RDK Studio SSO。登录后确认顶栏账号、工作区和服务连接均为就绪；如果页面提示“需要登录”，使用 SSO 卡片重新登录，再回到 <code>/sim2real/</code>。服务端应由 systemd 管理，台账目录使用绝对路径，反向代理只发布工作台和健康探针。</p>
-<h2>3. 工作台信息架构</h2>
+<h2 id='section-3'>3. 工作台信息架构</h2>
 <p><img alt="Agent 面板" src="../assets/product-guide/10-agent-panel.png" /></p>
 <p><em>图 2：Agent 面板把自然语言请求拆成计划、工具事件和执行证据。训练、设备和发布动作在执行前会请求确认。</em></p>
 <p>左侧导航按用户意图分成四组，共 8 个视图：</p>
@@ -129,7 +129,7 @@ npm run demo:preflight
 </tbody>
 </table>
 <p>顶栏和状态条显示产品线、项目、模型、任务、目标设备、训练后端和台账健康。页面之间共享这些上下文，减少“在错误产品线或错误板型上操作”的风险。</p>
-<h2>4. 三条产品线与契约</h2>
+<h2 id='section-4'>4. 三条产品线与契约</h2>
 <p>工作台支持三种产品选择，选择器位于侧栏项目卡：</p>
 <table>
 <thead>
@@ -170,7 +170,7 @@ npm run demo:preflight
 <li>目标板型、采样率和动作范围写进 manifest，不依赖口头约定。</li>
 <li>普通 ONNX 只代表仿真或本地路径；声称可部署必须附带目标板编译制品、runtime 元数据和板端延迟收据。</li>
 </ol>
-<h2>5. 数据与仿真：从动作到轨迹</h2>
+<h2 id='section-5'>5. 数据与仿真：从动作到轨迹</h2>
 <p><img alt="轨迹回放" src="../assets/product-guide/03-replays.png" /></p>
 <p><em>图 3：轨迹按 Run 筛选，支持逐帧回放，后续评测引用同一份证据。</em></p>
 <h3>5.1 仿真操作</h3>
@@ -190,7 +190,7 @@ npm run demo:preflight
 <li>训练集、验证集按 episode 划分，避免同一段连续轨迹泄漏到两侧。</li>
 <li>真实遥测在绑定 Run 前先本地解析和回放，确认 <code>source</code>、时间、板型和 <code>mock=false</code>。</li>
 </ul>
-<h2>6. 训练与执行资源</h2>
+<h2 id='section-6'>6. 训练与执行资源</h2>
 <p><img alt="训练配置" src="../assets/product-guide/04-train-configure.png" /></p>
 <p><em>图 4：训练配置页把模型契约、后端、档位和续训 checkpoint 放在同一张表单中。</em></p>
 <h3>6.1 训练后端</h3>
@@ -308,7 +308,7 @@ npm run demo:preflight
 <li>资源离线时停止提交新 Run，保留已有 Run 的状态，恢复后用 reconcile 补齐。</li>
 <li>训练文件和 checkpoint 放对象存储或独立目录，不把大文件塞进 JSON ledger。</li>
 </ul>
-<h2>7. Sim2Real 评测与证据中心</h2>
+<h2 id='section-7'>7. Sim2Real 评测与证据中心</h2>
 <p><img alt="Sim2Real 评测" src="../assets/product-guide/06-evaluate.png" /></p>
 <p><em>图 5：评测页同时展示契约状态、遥测来源、回放时间线和仿真/真机对比。</em></p>
 <h3>7.1 评测流程</h3>
@@ -329,7 +329,7 @@ npm run demo:preflight
 <li>评测失败先检查数据质量和契约，不要先改质量门阈值。</li>
 <li>使用对象与证据页保存原始 JSON，图表只是摘要，不能替代原始证据。</li>
 </ul>
-<h2>8. 制品、发布与 X5 预检</h2>
+<h2 id='section-8'>8. 制品、发布与 X5 预检</h2>
 <p><img alt="部署预检" src="../assets/product-guide/07-deploy-preflight.png" /></p>
 <p><em>图 6：部署页把板型、制品、评测和预检结果放在发布闸门前。</em></p>
 <h3>8.1 四道闸门</h3>
@@ -354,12 +354,12 @@ npm run demo:preflight -- --strict
 <li>运动金丝雀使用时间盒，单次命令短、低速、可回退。</li>
 <li>任何急停、看门狗、传感器陈旧或维度不匹配都 fail-closed。</li>
 </ul>
-<h2>9. 设备上位机、遥测和策略运行时</h2>
+<h2 id='section-9'>9. 设备上位机、遥测和策略运行时</h2>
 <p><img alt="设备上位机" src="../assets/product-guide/09-station.png" /></p>
 <p><em>图 7：上位机视图展示板卡心跳、电源、IMU、里程计、相机和受限运行时状态。</em></p>
 <p>设备上位机通过服务端认证代理读取 BoardAgent，浏览器不直连板端。常见只读能力包括：CPU/内存/磁盘、网络速率、运行时长、ROS/TROS 话题、MJPEG 相机和串流日志。</p>
 <p>策略运行时路径是“训练 → 导出 → 上传 <code>policies/</code> → 维度校验 → 加载 ONNX → 观测槽位检查 → 人工确认 → 受限启动 → 推理统计 → 停止”。观测槽位要标明真实传感器、适配数据和零填充；部分真实输入不能描述成完整 sim2real 对齐。</p>
-<h2>10. Agent 助手与 MCP</h2>
+<h2 id='section-10'>10. Agent 助手与 MCP</h2>
 <h3>10.1 内置 Agent</h3>
 <p>Agent 能解释当前状态、生成训练/评测/预检计划、调用受控工具、显示执行证据。执行方式包括完整、最快和只读；训练、设备、发布相关动作会在执行前等待确认。适合用自然语言询问“为什么这次不能上板”，不适合绕过页面闸门。</p>
 <h3>10.2 外部 Agent（MCP）</h3>
@@ -368,9 +368,9 @@ npm run dev:sim2real
 # 终端 2
 npm run dev:mcp
 </code></pre>
-<p>MCP 通过 stdio 暴露仿真、训练、评测、制品、设备和部署工具；幂等、配额、权限、审批和运动安全仍由 <code>/api/v1/duck</code> 服务端执行。客户端配置、认证边界和工具目录见 <a href="../duck-lab-mcp.md">MCP 适配层</a>。 <p>主链路读取建议优先使用 <code>rdk_golden_path</code>：它按项目、模型和任务过滤，返回从数据/任务、训练 Run、制品、评测到 RDK 反馈的当前进度，适合作为外部 Agent 的第一步盘点工具。它是只读能力，不会创建 Run、修改台账或触发设备动作。</p></p>
+<p>MCP 通过 stdio 暴露仿真、训练、评测、制品、设备和部署工具；幂等、配额、权限、审批和运动安全仍由 <code>/api/v1/duck</code> 服务端执行。客户端配置、认证边界和工具目录见 <a href="../duck-lab-mcp.md">MCP 适配层</a>。主链路读取建议优先使用 <code>rdk_golden_path</code>：它按项目、模型和任务过滤，返回从数据/任务、训练 Run、制品、评测到 RDK 反馈的当前进度，适合作为外部 Agent 的第一步盘点工具。它是只读能力，不会创建 Run、修改台账或触发设备动作。</p>
 <p>外部 Agent 最佳实践：先调用读取工具获取上下文，再生成计划，最后一次性提交经过确认的写操作；保存返回的 Run ID 和幂等键；遇到超时查询状态，不重复创建任务。</p>
-<h2>11. 对象、证据和审计</h2>
+<h2 id='section-11'>11. 对象、证据和审计</h2>
 <p><img alt="对象与证据" src="../assets/product-guide/08-records.png" /></p>
 <p><em>图 8：证据中心把 Dataset、Run、Artifact、Evaluation、Deployment 和 Telemetry 放在同一条查询路径。</em></p>
 <p>推荐的血缘关系：</p>
@@ -378,7 +378,7 @@ npm run dev:mcp
    └────────────── Telemetry / Replay ──────────────┘
 </code></pre>
 <p>每次发布至少能回答：用了哪份数据、哪个 manifest、哪次 Run、什么摘要、在哪块板、谁批准、预检为何通过、如何回滚。失败记录和 outcome unknown 必须保留，不能用删除来“清理”历史。</p>
-<h2>12. 运维、容量和故障排查</h2>
+<h2 id='section-12'>12. 运维、容量和故障排查</h2>
 <h3>12.1 单实例边界</h3>
 <p>默认 JSON ledger 适合本机、单写实例和演示。启动第二个服务实例必须设置独立 <code>RDK_SIM2REAL_STORAGE_DIR</code>；生产多副本需要 PostgreSQL、对象存储、分布式锁和独立配额服务，不能只安装数据库就宣称完成迁移。</p>
 <h3>12.2 故障排查顺序</h3>
@@ -398,7 +398,7 @@ npm run smoke:sim2real-local
 npm test
 </code></pre>
 <p>发布前再运行完整 <code>npm run verify</code>，并附上真实板端、遥测和回滚证据。命令退出码和实际输出比“启动过”更重要。</p>
-<h2>13. 一次完整交付的验收清单</h2>
+<h2 id='section-13'>13. 一次完整交付的验收清单</h2>
 <ul>
 <li>[ ] 项目、产品线、任务、模型和目标设备上下文正确。</li>
 <li>[ ] Manifest 校验通过并登记版本。</li>
@@ -411,7 +411,7 @@ npm test
 <li>[ ] Live 有人工批准、时间盒、现场人员和回滚版本。</li>
 <li>[ ] 运行后遥测回流到 Run，记录页能够复原全过程。</li>
 </ul>
-<h2>14. 相关资料</h2>
+<h2 id='section-14'>14. 相关资料</h2>
 <ul>
 <li><a href="../product-guide.md">产品指南</a>：8 个视图的截图导览。</li>
 <li><a href="../user-guide.md">使用手册与最佳实践</a>：面向日常操作的快速版本。</li>
@@ -419,4 +419,4 @@ npm test
 <li><a href="../demo-runbook.md">演示脚本</a>：90 秒演示和真实训练边界。</li>
 <li><a href="../duck-lab-mcp.md">MCP 适配层</a>：外部 Agent 接入。</li>
 <li><a href="../host-station.md">上位机</a> 与 <a href="../actuator-drive.md">受限驱动</a>：设备和运动安全。</li>
-</ul><div class='footer'>本手册依据仓库当前源码、测试、运行手册和真实界面截图编写。延伸阅读：<a href='../product-guide.md'>产品指南</a>、<a href='../user-guide.md'>使用手册</a>、<a href='../first-run.md'>首次启动</a>、<a href='../demo-runbook.md'>演示脚本</a>。</div></main></body></html>
+</ul></div></div><div class='footer'>本手册依据仓库当前源码、测试、运行手册和真实界面截图编写。延伸阅读：<a href='../product-guide.md'>产品指南</a>、<a href='../user-guide.md'>使用手册</a>、<a href='../first-run.md'>首次启动</a>、<a href='../demo-runbook.md'>演示脚本</a>。</div></main></body></html>
