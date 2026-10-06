@@ -32,7 +32,7 @@ flowchart LR
 | 承诺 | 具体行为 | 验证方法 |
 | --- | --- | --- |
 | 学得起来 | 浏览器仿真、轨迹录制、Local / Mock / GPU 训练 | 运行 `npm run demo:sim2real` 或 `npm run demo:starter` |
-| 信得过 | Run、Artifact、Evaluation、Deployment 形成 lineage，指标缺失保持为空 | 在“对象与证据”查看原始 JSON 与来源 |
+| 信得过 | Run、Artifact、Evaluation、Deployment 形成 lineage，指标缺失保持为空 | 在“证据与记录”查看原始 JSON 与来源 |
 | 上得去 | 契约检查、板型预检、Canary、人工批准、急停和看门狗 | `npm run demo:preflight -- --strict` 与现场清单 |
 
 ### 1.2 能力状态的正确读法
@@ -93,7 +93,7 @@ npm run demo:preflight
 | 构建策略 | 训练与策略 | Manifest、契约、引擎、超参、Run | Checkpoint / ONNX / Run |
 | 交付到设备 | 评测与证据 | 遥测导入、回放、指标、仿真/真机对比 | Evaluation |
 | 交付到设备 | 设备与发布 | 设备发现、预检、签发、Canary、Live | Deployment / Preflight |
-| 证据中心 | 对象与证据 | Runs、制品、发布、遥测筛选与详情 | 可追溯台账 |
+| 证据中心 | 证据与记录 | Runs、制品、发布、遥测筛选与详情 | 可追溯台账 |
 | 证据中心 | 执行资源 | 本机 Agent、远程 GPU、云端 Runner | 资源状态与配额 |
 
 顶栏和状态条显示产品线、项目、模型、任务、目标设备、训练后端和台账健康。页面之间共享这些上下文，减少“在错误产品线或错误板型上操作”的风险。
@@ -213,7 +213,7 @@ npm run demo:preflight
 - 报告记录模型摘要、manifest 版本、固件、板型、采样时间和环境变量。
 - 对外报告只引用真实 worker 或 attested replay；不要用默认值填充空指标。
 - 评测失败先检查数据质量和契约，不要先改质量门阈值。
-- 使用对象与证据页保存原始 JSON，图表只是摘要，不能替代原始证据。
+- 使用证据与记录页保存原始 JSON，图表只是摘要，不能替代原始证据。
 
 ## 8. 制品、发布与 X5 预检
 
