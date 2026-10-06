@@ -22,7 +22,11 @@ RDK Robot Learning Platform 是面向 RDK 机器人产品的策略研发与安�
 
 官方能力入口： [W&B Registry（版本、血缘与治理）](https://docs.wandb.ai/guides/core/registry/model_registry/link-model-version/)、[MLflow Tracking](https://mlflow.org/docs/latest/ml/tracking)、[NVIDIA Isaac Lab](https://developer.nvidia.com/isaac/lab)、[Hugging Face LeRobot](https://huggingface.co/docs/lerobot/main/index)、[AWS IoT Greengrass 部署](https://docs.aws.amazon.com/greengrass/v2/developerguide/manage-deployments.html)。
 
-### 2026-09-13 内部成熟度判断
+### 2026-09-13 内部成熟度判断（历史快照）
+
+以下 5 分制是 2026-09-13 的排期快照，不是本轮综合评分。当前评分与证据边界以
+[`product-scorecard-2026-10.md`](product-scorecard-2026-10.md) 和
+[`quality-scorecard.md`](quality-scorecard.md) 为准；两者都保留“软件门槛 9+、整体待现场验收”的边界，避免把真机运动、任务成功和生产回滚混成一个指标。
 
 分数是团队用于排优先级的 5 分制工程判断，不是市场评分：
 
