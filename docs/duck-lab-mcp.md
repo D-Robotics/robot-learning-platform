@@ -70,15 +70,15 @@ MCP 客户端自行 spawn 本服务，进程环境即配置：
 `tools/list`、`tools/call`、`ping`；传输为按行分隔的 JSON-RPC 2.0（MCP stdio
 约定），stdout 仅承载协议流量，运行日志走 stderr。
 
-## 工具目录（55 + 1）
+## 工具目录（56 + 1）
 
-`tools/list` 返回 55 个 `rdk_*` 业务工具加 1 个连接诊断工具，全部带
+`tools/list` 返回 56 个 `rdk_*` 业务工具加 1 个连接诊断工具，全部带
 `readOnlyHint` 标注（与内嵌 Agent 目录一致），危险生命周期操作额外带
 `destructiveHint`：
 
 | 分组 | 工具 | 只读 |
 | --- | --- | --- |
-| 工作区与台账 | `rdk_workspace_overview` `rdk_workspace_summary` `rdk_projects_list` `rdk_project_create` `rdk_datasets_list` `rdk_dataset_register` `rdk_models_list` `rdk_model_validate` `rdk_model_register` `rdk_runs_list` `rdk_artifacts_list` `rdk_evaluations_list` `rdk_lineage_get` `rdk_compute_resources_list` `rdk_compute_resource_test` | 除 create/register 外 |
+| 工作区与台账 | `rdk_workspace_overview` `rdk_workspace_summary` `rdk_golden_path` `rdk_projects_list` `rdk_project_create` `rdk_datasets_list` `rdk_dataset_register` `rdk_models_list` `rdk_model_validate` `rdk_model_register` `rdk_runs_list` `rdk_artifacts_list` `rdk_evaluations_list` `rdk_lineage_get` `rdk_compute_resources_list` `rdk_compute_resource_test` | 除 create/register 外 |
 | 训练与评测 | `rdk_training_submit` `rdk_training_status` `rdk_run_logs` `rdk_runs_replay` `rdk_telemetry_list` `rdk_board_sessions` `rdk_retraining_advice` `rdk_replay_video` `rdk_simulator_open` `rdk_evaluation_summarize` `rdk_feedback_summary` | 除 submit / replay_video 外 |
 | 制品与部署 | `rdk_artifact_promote` `rdk_deployment_preflight` `rdk_deployment_status` `rdk_deployment_history` `rdk_deployment_version_switch` `rdk_deployment_cancel` | preflight/status/history 只读 |
 | 设备连接 | `rdk_device_discover` `rdk_device_connect` `rdk_device_disconnect` | discover 只读 |
