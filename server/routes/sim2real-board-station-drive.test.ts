@@ -37,7 +37,7 @@ function routeHandler(router: Router, method: 'get' | 'post', path: string): Han
   return handler;
 }
 
-function buildRouter() {
+function buildRouter(devices: readonly unknown[] = [device]) {
   const router = {} as Router;
   router.stack = [];
   router.get = (path: string, ...handlers: Handler[]) => {
@@ -61,7 +61,7 @@ function buildRouter() {
   registerSim2RealBoardStationRoutes(router, {
     auth: { isMultiUserDeployment: () => false } as never,
     requestOwner: () => 'local-dev',
-    visibleDevices: async () => [device],
+    visibleDevices: async () => devices,
   });
   return router;
 }
@@ -140,6 +140,28 @@ function mockAgent(status: number, payload: Record<string, unknown>) {
 }
 
 describe('board-station constrained drive proxy', () => {
+  it('defaults to a connected device when an older disconnected row comes first', async () => {
+    const stale = { ...device, id: 'x5-stale', status: 'disconnected' };
+    const connected = { ...device, id: 's100-live', name: 'RDK S100 实机', status: 'connected' };
+    const fetchMock = mockAgent(200, {
+      ok: true,
+      capabilities: ['host-station'],
+      stationCommands: [],
+      actuatorControl: false,
+      mock: false,
+    });
+    const router = buildRouter([stale, connected]);
+    const res = await call(routeHandler(router, 'get', '/api/sim2real/board-station/health'));
+    expect(res.statusCode).toBe(200);
+    expect(res.body).toMatchObject({
+      device: { id: 's100-live', name: 'RDK S100 实机' },
+    });
+    expect(fetchMock).toHaveBeenCalledWith(
+      'http://127.0.0.1:19100/healthz',
+      expect.objectContaining({ method: 'GET' }),
+    );
+  });
+
   it('does not expose a persisted device as connected without a fresh probe', async () => {
     const router = buildRouter();
     const res = await call(routeHandler(router, 'get', '/api/sim2real/board-station/devices'));

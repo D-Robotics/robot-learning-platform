@@ -13,6 +13,7 @@
  *   mock-agent  — reference agent (mock=true, station endpoints missing) →
  *                 exit 0 (degraded is demo-rehearsal-able), mock is labelled
  *   board-down  — agent unreachable → exit 3 (blocked)
+ *   direct-agent-stale — healthy direct agent + stale web tunnel records → exit 0
  *
  * Also asserts the safety invariant: only GETs are issued (the preflight
  * never commands motion, flips switches, or stages files).
@@ -106,7 +107,14 @@ const server = http.createServer((req, res) => {
     return send(200, {
       ok: true,
       connections: scenario === 'mock-agent' ? [] : [
-        { id: 'conn-1', label: 'X5 台架', host: '192.168.1.42', agentPort: 19100, tunnelActive: true, lastCheckOk: true },
+        {
+          id: 'conn-1',
+          label: 'X5 台架',
+          host: '192.168.1.42',
+          agentPort: 19100,
+          tunnelActive: scenario !== 'direct-agent-stale',
+          lastCheckOk: scenario !== 'direct-agent-stale',
+        },
       ],
     });
   }
@@ -194,6 +202,21 @@ async function runScenario(scenario) {
   );
   await server.close();
   assert.equal(result.status, 2, `--strict mock → exit 2, got ${result.status}`);
+}
+
+// ---- 2c. direct agent with stale web records ------------------------------
+{
+  const { result } = await runScenario('direct-agent-stale');
+  assert.equal(
+    result.status,
+    0,
+    `direct agent must override stale tunnel records, got ${result.status}`,
+  );
+  assert.ok(
+    result.stdout.includes('直连板端 agent 已健康'),
+    'explains why stale tunnel records are non-blocking',
+  );
+  assert.ok(!/有阻断项/.test(result.stdout), `direct agent should be ready:\n${result.stdout}`);
 }
 
 // ---- 3. board-down -----------------------------------------------------------

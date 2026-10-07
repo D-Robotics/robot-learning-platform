@@ -439,7 +439,14 @@ export function registerSim2RealBoardStationRoutes(
     if (owner === null) return null;
     const deviceId = String(request.query.deviceId ?? '').trim();
     const devices = (await visibleDevicesForAuth(owner)) as readonly OwnedDevice[];
-    const device = deviceId ? devices.find((item) => item.id === deviceId) : devices[0];
+    // When the browser omits deviceId, prefer a currently connected device.
+    // The registry may retain older disconnected rows, and choosing the first
+    // historical row can silently probe the wrong board after a real device is
+    // attached. An explicit deviceId always wins; the first row remains the
+    // deterministic fallback for offline/local setups.
+    const device = deviceId
+      ? devices.find((item) => item.id === deviceId)
+      : (devices.find((item) => item.status === 'connected') ?? devices[0]);
     if (!device) {
       noStore(response);
       sendApiError(

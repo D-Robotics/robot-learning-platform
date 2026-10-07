@@ -153,6 +153,16 @@ try {
           .map((item) => `${item.label || item.host}:${item.agentPort ?? 19100}`)
           .join(' · ')}`,
       });
+    } else if (health.status === 200 && healthBody?.ok === true && !agentMock) {
+      // A direct BoardAgent endpoint (including a manually established SSH
+      // loopback tunnel) is already proven healthy by the preceding probe.
+      // Old web-managed connection records must not turn a working direct
+      // link into a false blocked verdict.
+      record('tunnel', '设备隧道', {
+        ok: true,
+        note: `${list.length} 条 web 管理记录当前未连接，但直连板端 agent 已健康；本次使用直连/本地隧道`,
+        hint: '如需在 station 页管理该设备，再清理旧记录或重新连接对应设备',
+      });
     } else {
       record('tunnel', '设备隧道', {
         ok: false,
