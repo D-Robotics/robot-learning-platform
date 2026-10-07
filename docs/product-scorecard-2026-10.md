@@ -30,6 +30,12 @@
 
 完整行为套件的基线记录为 81 个文件、933 个测试通过；发布前仍应在目标 Node 版本和干净依赖环境重新执行 npm test 与 npm run verify。API contract 必须先 build；直接运行会因为 dist-server 旧于源码而失败。
 
+2026-10-07 已在当前工作树完成一次完整发布门禁：
+
+- npm run verify 全链路通过，包含 UI、任务包、奖励/布局契约、OriginBot、离线 BC、ACT、Diffusion Policy、SmolVLA、录制、部署、安全、生产配置、备份、MCP、板端安全、制品 registry、视觉输入、MJX/dm-control/mjlab、MicroDuck 评测、API contract、standalone smoke 和 npm test。
+- engine lock 已由 npm run lock:engines 刷新，npm run verify:engine-locks 和 npm run verify:preflight 均通过。
+- MicroDuck live rollout、部分训练 provenance 和 GPU/板端项目仍按脚本输出标为 SKIP；这些状态是环境事实，不计入软件 PASS。
+
 ## 最值得做的优化
 
 这些动作按“对综合评分的提升 / 对现有代码的扰动”排序。验收证据要进入 docs/evidence/，并在发布清单勾选，不能只写“已测试”。
