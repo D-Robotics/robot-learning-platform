@@ -61,6 +61,8 @@
 | [`competitive-analysis-2026-09.md`](competitive-analysis-2026-09.md) | 开源同类项目对比与差距分析（生态 / UI/UX / 功能，含优先级路线图） |
 | [`quality-scorecard.md`](quality-scorecard.md) | 9+ 质量门槛的自动门禁与待补现场证据 |
 | [`product-scorecard-2026-10.md`](product-scorecard-2026-10.md) | 当前综合评分、证据边界与 P0/P1/P2 优化验收矩阵 |
+| [`duck-lab-mcp.md`](duck-lab-mcp.md) | 外部 Agent 的 MCP stdio 适配层、工具目录与安全门禁 |
+| [`rdk-golden-path.md`](rdk-golden-path.md) | 从任务、数据、训练到 RDK 反馈的唯一主线状态读模型 |
 | [`dataset-lineage.md`](dataset-lineage.md) | 数据集版本、摘要与训练血缘 |
 | [`scalability.md`](scalability.md) | 存储容量边界与扩容路径 |
 | [`release-checklist.md`](release-checklist.md) | 公开发布阻塞项清单 |
