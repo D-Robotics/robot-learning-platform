@@ -4333,7 +4333,10 @@ export function createSim2RealRouter(
           .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))[0];
         if (candidate) artifactId = candidate.id;
       }
-      if (releaseRun && !evaluationId && releaseRun.evaluationId) {
+      // Preflight stays evidence-free per the published contract: training
+      // evaluations are import-sourced (never board-attested), so auto-binding
+      // one here would fail-closed a read-only rehearsal with a misleading 422.
+      if (mode !== 'preflight' && releaseRun && !evaluationId && releaseRun.evaluationId) {
         const evaluation = await getSim2RealEvaluation(releaseRun.evaluationId, owner);
         if (evaluation) evaluationId = evaluation.id;
       }

@@ -115,7 +115,7 @@ function taskEvaluation(successRate = 0.88): NonNullable<Sim2RealRunRecord['task
   };
 }
 
-async function completedRun(successRate = 0.88) {
+async function completedRun(successRate = 0.88, evaluationAttested = true) {
   const run = await createSim2RealRun({
     modelId: BUILTIN_MICRODUCK_MODEL.id,
     taskId: 'originbot-goal-navigation',
@@ -145,8 +145,8 @@ async function completedRun(successRate = 0.88) {
       replay: {
         sampleCount: 120,
         durationSeconds: 12,
-        source: 'board-agent',
-        attested: true,
+        source: evaluationAttested ? 'board-agent' : 'import',
+        attested: evaluationAttested,
         deviceId: 'board-1',
         chunkCount: 1,
         droppedCount: 0,
@@ -167,9 +167,11 @@ async function completedRun(successRate = 0.88) {
       modelId: run.modelId,
       datasetIds: [],
       status: 'passed',
-      summary: 'attested board replay evaluation',
+      summary: evaluationAttested
+        ? 'attested board replay evaluation'
+        : 'import-source training telemetry evaluation',
       source: 'platform',
-      attested: true,
+      attested: evaluationAttested,
       report: run.evaluation,
       taskEvaluation: run.taskEvaluation,
       contractId: BUILTIN_MICRODUCK_MODEL.manifest.contract.id,
@@ -192,7 +194,7 @@ async function completedRun(successRate = 0.88) {
       modelId: run.modelId,
       runId: run.id,
       datasetIds: [],
-      evaluationIds: [evaluation.evaluation.id],
+      evaluationIds: evaluationAttested ? [evaluation.evaluation.id] : [],
       contractId: BUILTIN_MICRODUCK_MODEL.manifest.contract.id,
       status: 'draft',
     },
@@ -222,6 +224,58 @@ describe('deployment route release evidence gate', () => {
     });
     expect(canary.statusCode).toBe(400);
     expect(canary.body).toMatchObject({ code: 'SIM2REAL_RELEASE_RUN_REQUIRED' });
+  });
+
+  it('keeps preflight evidence-free when its run only has an unattested first-class evaluation', async () => {
+    const router = await fixture();
+    const run = await completedRun(0.88, false);
+    const preflight = await invoke(router, 'post', '/api/sim2real/deployments', {
+      headers: { 'idempotency-key': 'preflight-unattested-auto-bind' },
+      body: {
+        modelId: BUILTIN_MICRODUCK_MODEL.id,
+        deviceId: 'board-1',
+        mode: 'preflight',
+        runId: run.id,
+      },
+    });
+    expect(preflight.statusCode).toBe(201);
+    expect(preflight.body.deployment).toMatchObject({ mode: 'preflight' });
+    expect(preflight.body.deployment.status).not.toBe('failed');
+  });
+
+  it('lets preflight carry explicitly bound unattested evidence as informational input', async () => {
+    const router = await fixture();
+    const run = await completedRun(0.88, false);
+    const evaluationId = run.evaluationId;
+    expect(typeof evaluationId).toBe('string');
+    const preflight = await invoke(router, 'post', '/api/sim2real/deployments', {
+      headers: { 'idempotency-key': 'preflight-unattested-explicit' },
+      body: {
+        modelId: BUILTIN_MICRODUCK_MODEL.id,
+        deviceId: 'board-1',
+        mode: 'preflight',
+        runId: run.id,
+        evaluationId,
+      },
+    });
+    expect(preflight.statusCode).toBe(201);
+    expect(preflight.body.deployment).toMatchObject({ mode: 'preflight' });
+  });
+
+  it('still rejects canary when the bound first-class evaluation is not attested', async () => {
+    const router = await fixture();
+    const run = await completedRun(0.88, false);
+    const canary = await invoke(router, 'post', '/api/sim2real/deployments', {
+      headers: { 'idempotency-key': 'canary-unattested-evaluation' },
+      body: {
+        modelId: BUILTIN_MICRODUCK_MODEL.id,
+        deviceId: 'board-1',
+        mode: 'canary',
+        runId: run.id,
+      },
+    });
+    expect(canary.statusCode).toBe(409);
+    expect(canary.body).toMatchObject({ code: 'SIM2REAL_EVALUATION_LINEAGE_INVALID' });
   });
 
   it('rejects a forged engine PASS when the confidence floor is below the task gate', async () => {

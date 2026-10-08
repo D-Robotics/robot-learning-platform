@@ -3490,9 +3490,11 @@ export async function createSim2RealDeploymentWithResult(
       if (
         !evaluation ||
         evaluation.status !== 'passed' ||
-        evaluation.attested !== true ||
-        evaluation.report?.replay?.attested !== true
+        (input.mode !== 'preflight' &&
+          (evaluation.attested !== true || evaluation.report?.replay?.attested !== true))
       ) {
+        // Canary/live are release records: their evaluation must be board-attested.
+        // Preflight enables no actuators, so unattested evidence stays informational.
         throw new Sim2RealError('sim2real_evaluation_lineage_invalid');
       }
       if (evaluation.modelId !== input.modelId || evaluation.runId !== input.runId) {
