@@ -17,6 +17,34 @@ describe('RDK Golden Path', () => {
     expect(result.readyForRdkPreflight).toBe(false);
   });
 
+  it('treats a missing dataset as optional for the simulation loop, not as a blocker', () => {
+    // 空数据集曾经被标成 blocked，使"准备数据"抢占了全局下一步，与上手
+    // 清单（先在仿真中验证，不需要数据集）互相矛盾。
+    const result = deriveRdkGoldenPath({ ...base, taskId: 'balance', modelId: 'model-1' });
+    expect(result.stages.find((item) => item.key === 'dataset')?.state).toBe('pending');
+    expect(result.nextAction).toMatchObject({ stage: 'train' });
+    expect(result.nextAction?.label).not.toBe('准备数据');
+  });
+
+  it('still routes the next action to a genuinely actionable dataset stage', () => {
+    const result = deriveRdkGoldenPath({
+      ...base,
+      taskId: 'balance',
+      modelId: 'model-1',
+      datasets: [
+        {
+          id: 'dataset-1',
+          name: '示教数据',
+          status: 'registered',
+          createdAt: '2026-01-01T00:00:00.000Z',
+          updatedAt: '2026-01-01T00:00:00.000Z',
+        },
+      ],
+    });
+    expect(result.stages.find((item) => item.key === 'dataset')?.state).toBe('ready');
+    expect(result.nextAction?.stage).toBe('dataset');
+  });
+
   it('does not treat a registered dataset or a failed run as release-ready', () => {
     const result = deriveRdkGoldenPath({
       ...base,

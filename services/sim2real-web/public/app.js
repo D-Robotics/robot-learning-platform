@@ -3806,6 +3806,9 @@ function renderBoard() {
     const status = String(deployment.status || '').toLowerCase();
     if (['ready', 'completed'].includes(status)) return { key: 'passed', label: '预检通过', stateClass: 'is-ready' };
     if (status === 'failed') return { key: 'failed', label: '预检失败', stateClass: 'is-failed' };
+    // blocked 是门禁的诚实阻断（如 requires-conversion），不是执行出错；
+    // 与 failed 分开呈现，避免把预期行为渲染成故障。
+    if (status === 'blocked') return { key: 'blocked', label: '预检阻断', stateClass: 'is-waiting' };
     if (status === 'running') return { key: 'running', label: '预检中', stateClass: 'is-detected' };
     if (['planned', 'pending', 'queued'].includes(status)) return { key: 'planned', label: '待执行预检', stateClass: 'is-detected' };
     return { key: 'other', label: statusLabel(deployment.status), stateClass: 'is-detected' };
@@ -3814,15 +3817,32 @@ function renderBoard() {
   const boardStateClass = preflightState.stateClass;
   const deviceStatus = statusLabel(device.status || 'unknown');
   const preflightLabel = preflightState.label;
+  // 预检卡上最具体的阻断原因：优先后端错误字段，其次被门禁挡住的步骤
+  // 详情（artifact/checksum 等），再退到兼容性结论。没有它，"未通过兼容性
+  // 检查"就是一句死胡同——用户不知道挂在哪一步、要去补什么。
+  const preflightDetail = (() => {
+    const steps = Array.isArray(deployment?.steps) ? deployment.steps : [];
+    const blocker = steps.find((item) => item && item.status === 'blocked');
+    return (
+      deployment?.lastError ||
+      deployment?.reason ||
+      blocker?.detail ||
+      (String(deployment?.compatibility?.status || '') === 'requires-conversion'
+        ? '源策略是 ONNX 中间表示，目标板卡需要编译后的运行时制品'
+        : '')
+    );
+  })();
   const blockedReason = preflightReady
     ? '只读预检已通过；执行动作仍由受控 BoardAgent 和人工批准保护。'
     : preflightState.key === 'undetected'
       ? '先点击“探测板型”，确认目标设备与契约匹配。'
       : preflightState.key === 'unplanned'
         ? '先生成预检计划，再执行只读检查。'
-        : preflightState.key === 'failed'
-          ? `预检失败：${deployment?.lastError || deployment?.reason || '未通过兼容性检查'}。修正后重新执行只读预检。`
-          : `当前预检状态：${preflightLabel}。`;
+        : preflightState.key === 'blocked'
+          ? `预检被门禁阻断（${preflightDetail || '发布门禁未放行'}）。补齐对应制品或证据后重新执行只读预检；平台不会伪造通过。`
+          : preflightState.key === 'failed'
+            ? `预检失败：${String(preflightDetail || '未通过兼容性检查').replace(/。+$/, '')}。修正后重新执行只读预检。`
+            : `当前预检状态：${preflightLabel}。`;
   summary.innerHTML =
     '<div class="board-summary-row"><strong>' +
     escapeHtml(device.name || device.id) +
