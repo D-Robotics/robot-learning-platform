@@ -183,7 +183,7 @@ assert.deepEqual(
     '训练与策略',
     '评测与证据',
     '设备与发布',
-    '对象与证据',
+    '证据与记录',
     '执行资源',
   ],
   'sidebar nav labels must match the three-group IA',

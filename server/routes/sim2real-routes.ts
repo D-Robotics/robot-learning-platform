@@ -40,6 +40,8 @@ import {
   wrapAsync,
 } from '../sim2real/http-helpers.js';
 import { createSim2RealLogger } from '../sim2real/observability.js';
+import { computeResearchLoopMetrics } from '../sim2real/research-loop-metrics.js';
+import { listSim2RealAgentRunSnapshots } from './sim2real-agent-routes.js';
 import {
   Sim2RealError,
   sim2RealErrorCode,
@@ -791,6 +793,7 @@ function runRequestFingerprint(input: {
   label?: string;
   computeResourceId?: string;
   datasetIds?: string[];
+  requestedVia?: 'workbench' | 'agent';
 }): string {
   return JSON.stringify({
     modelId: input.modelId,
@@ -803,6 +806,7 @@ function runRequestFingerprint(input: {
     label: input.label || null,
     computeResourceId: input.computeResourceId || null,
     datasetIds: input.datasetIds || [],
+    requestedVia: input.requestedVia || null,
   });
 }
 
@@ -1367,6 +1371,7 @@ interface ParsedRunRequest {
   label?: string;
   computeResourceId?: string;
   datasetIds?: string[];
+  requestedVia?: 'workbench' | 'agent';
 }
 
 /** Validate and normalize the POST /runs body; failures are API-shaped. */
@@ -1512,6 +1517,22 @@ function parseRunRequest(
         message: '自有 GPU 资源目前只支持 local 训练后端。',
       },
     };
+  // Run provenance, declared by the submitting surface.  The workbench never
+  // needs to send it (absent means workbench); agents must declare
+  // themselves so autonomy metrics never have to guess after the fact.
+  let requestedVia: 'workbench' | 'agent' | undefined;
+  if (body.requestedVia !== undefined) {
+    if (body.requestedVia !== 'workbench' && body.requestedVia !== 'agent') {
+      return {
+        apiError: {
+          status: 400,
+          code: 'SIM2REAL_INVALID_REQUESTED_VIA',
+          message: 'requestedVia 只接受 workbench 或 agent。',
+        },
+      };
+    }
+    requestedVia = body.requestedVia;
+  }
   return {
     parsed: {
       idempotencyKey,
@@ -1525,6 +1546,7 @@ function parseRunRequest(
       ...(label ? { label } : {}),
       ...(computeResourceId ? { computeResourceId } : {}),
       ...(datasetIds ? { datasetIds } : {}),
+      ...(requestedVia ? { requestedVia } : {}),
     },
   };
 }
@@ -2441,6 +2463,42 @@ export function createSim2RealRouter(
         response.json({ ok: true, summary });
       } catch (error) {
         storageError(request, response, error, 'sim2real-feedback-summary');
+      }
+    }),
+  );
+
+  // Research feedback-loop metrics: aggregates only, same owner scoping as
+  // the raw lists.  Answers four operational questions about the automated
+  // R&D loop — cycle latency, agent-attributed share and approval-free chain
+  // length, per-experiment marginal returns, and where the queue is blocked.
+  // Never a release input; read-only over the ledger and live agent runs.
+  router.get(
+    api('/research-loop/summary'),
+    wrapAsync(async (request, response) => {
+      const owner = requestOwner(request, response, auth);
+      if (owner === null) return;
+      noStore(response);
+      const rawDays = Number(request.query.days ?? 30);
+      const windowDays =
+        Number.isFinite(rawDays) && rawDays > 0 ? Math.min(365, Math.floor(rawDays)) : 30;
+      try {
+        const [runs, resources] = await Promise.all([
+          listSim2RealRuns(owner),
+          listSim2RealComputeResources(owner),
+        ]);
+        const summary = computeResearchLoopMetrics({
+          runs,
+          agentRuns: listSim2RealAgentRunSnapshots(owner),
+          resources: resources.map((resource) => ({
+            status: resource.status,
+            healthFresh: isSim2RealComputeResourceHealthFresh(resource),
+          })),
+          nowMs: Date.now(),
+          windowDays,
+        });
+        response.json({ ok: true, summary });
+      } catch (error) {
+        storageError(request, response, error, 'sim2real-research-loop-summary');
       }
     }),
   );
@@ -4002,6 +4060,7 @@ export function createSim2RealRouter(
         label,
         computeResourceId,
         datasetIds: requestedDatasetIds,
+        requestedVia,
       } = parsed;
       const model = await getSim2RealModel(modelId, owner);
       if (!model) {
@@ -4065,6 +4124,7 @@ export function createSim2RealRouter(
         label,
         computeResourceId,
         datasetIds,
+        requestedVia,
       });
       const replay = await findIdempotentRunReplay(idempotencyKey, requestFingerprint, owner);
       if (replay === 'fingerprint-conflict') {
@@ -4106,6 +4166,7 @@ export function createSim2RealRouter(
               ...(label ? { label } : {}),
               ...(taskId ? { taskId } : {}),
               backend,
+              ...(requestedVia ? { requestedVia } : {}),
               ...(computeResourceId ? { computeResourceId } : {}),
               ...(datasetIds.length ? { datasetIds } : {}),
               status: 'queued',
@@ -4169,6 +4230,7 @@ export function createSim2RealRouter(
                 ...(label ? { label } : {}),
                 ...(taskId ? { taskId } : {}),
                 backend,
+                ...(requestedVia ? { requestedVia } : {}),
                 ...(computeResourceId ? { computeResourceId } : {}),
                 ...(datasetIds.length ? { datasetIds } : {}),
                 ...finalRunInput,

@@ -19,8 +19,8 @@
          is preserved exactly (verified by a full pixel diff of 62 viewport x
          theme x view screenshots). See services/sim2real-web/ui-layout-invariants.mjs
          for the guards that keep new overrides from re-introducing layering. -->
-    <link rel="stylesheet" href="./tokens.css?v=2" />
-    <link rel="stylesheet" href="./app.css?v=48" />
+    <link rel="stylesheet" href="./tokens.css?v=3" />
+    <link rel="stylesheet" href="./app.css?v=51" />
   </head>
   <body>
     <a class="skip-link" href="#main-content">跳到主要内容</a>
@@ -208,7 +208,7 @@
           <div class="sidebar-divider sidebar-divider-compact"></div>
           <div class="nav-label">证据中心</div>
           <nav class="workflow-nav" aria-label="证据与资源">
-            <button class="nav-item" type="button" data-view-target="records"><span class="nav-index" aria-hidden="true">▦</span><span><strong>对象与证据</strong><small>Dataset、Run、Artifact、评测与遥测</small></span></button>
+            <button class="nav-item" type="button" data-view-target="records"><span class="nav-index" aria-hidden="true">▦</span><span><strong>证据与记录</strong><small>Dataset、Run、Artifact、评测与遥测</small></span></button>
             <button class="nav-item" type="button" data-view-target="resources"><span class="nav-index" aria-hidden="true">▣</span><span><strong>执行资源</strong><small>本机、远程与云端算力</small></span></button>
           </nav>
           <div class="sidebar-bottom">
@@ -387,7 +387,7 @@
             aria-labelledby="overview-title"
           >
             <div class="section-heading section-heading-lean">
-              <div class="overview-page-title"><h2 id="overview-title">开始机器人学习</h2><p>先创建项目并准备数据，再训练和验证策略；需要真机时再连接设备。</p><p class="object-line" aria-label="项目对象链"><button type="button" data-view-target="overview" data-chain-node="project">项目</button><i aria-hidden="true">→</i><button type="button" data-view-target="train" data-chain-node="model">模型 / 策略</button><i aria-hidden="true">→</i><button type="button" data-view-target="records" data-chain-node="run">Run</button><i aria-hidden="true">→</i><button type="button" data-view-target="evaluate" data-chain-node="evaluation">评测证据</button><i aria-hidden="true">→</i><button type="button" data-view-target="deploy" data-chain-node="artifact">发布制品</button><i aria-hidden="true">→</i><button type="button" data-view-target="station" data-chain-node="device">设备</button></p></div>
+              <div class="overview-page-title"><h2 id="overview-title">开始机器人学习</h2><p>先创建项目并准备数据，再训练和验证策略；需要真机时再连接设备。</p><p class="object-line" id="object-chain" aria-label="项目对象链"><button type="button" data-view-target="overview" data-chain-node="project">项目</button><i aria-hidden="true">→</i><button type="button" data-view-target="train" data-chain-node="model">模型 / 策略</button><i aria-hidden="true">→</i><button type="button" data-view-target="records" data-chain-node="run">Run</button><i aria-hidden="true">→</i><button type="button" data-view-target="evaluate" data-chain-node="evaluation">评测证据</button><i aria-hidden="true">→</i><button type="button" data-view-target="deploy" data-chain-node="artifact">发布制品</button><i aria-hidden="true">→</i><button type="button" data-view-target="station" data-chain-node="device">设备</button></p></div>
               <span class="section-caption" id="hero-updated">—</span>
             </div>
             <div class="next-card">
@@ -1517,11 +1517,11 @@
             aria-labelledby="records-title"
           >
             <div class="section-heading section-heading-lean">
-              <h2 id="records-title">制品库</h2><p class="section-lead">仿真录制、强化学习模型、评测证据和部署制品统一管理，可按任务追踪和回放。</p>
+              <h2 id="records-title">证据与记录</h2><p class="section-lead">仿真录制、强化学习模型、评测证据和部署制品统一管理，可按任务追踪和回放。</p>
             </div>
             <div class="records-layout records-single">
               <article class="panel history-panel">
-                <div class="panel-heading panel-heading-lean"><h2>全部制品与运行</h2>
+                <div class="panel-heading panel-heading-lean"><h2>全部证据与记录</h2>
                   <span class="panel-caption" id="records-count">最近 30 条</span>
                 </div>
                 <p class="records-scope-note">这里汇总轨迹、训练 Run、评测证据、模型制品和部署记录；点击一条记录可继续回放或查看详情。</p>
@@ -1541,7 +1541,7 @@
                       data-record-tab="run"
                       aria-pressed="false"
                     >
-                    Runs
+                    运行
                     </button>
                     <button
                       class="record-tab"
@@ -1571,7 +1571,7 @@
                   <input
                     id="record-search"
                     type="search"
-                    placeholder="搜索模型、状态或后端"
+                    placeholder="搜索任务、Run、模型、状态或设备"
                     aria-label="搜索记录"
                   />
                 </div>
@@ -1613,28 +1613,30 @@
               <div class="station-studio-connect">
                 <div><strong>原生连接设备</strong><small>填写板卡地址并添加，Sim2Real 会建立受控隧道并读取设备状态。</small></div>
               </div>
-              <p class="station-device-ssh-hint"><strong>路径 A · 网页内配对</strong>：SSH 可密码登录的板卡，填下表一次完成设备档案与受控隧道。</p>
+              <p class="station-device-ssh-hint" id="station-device-ssh-path"><strong>路径 A · 网页内配对</strong>：SSH 可密码登录的板卡，填下表一次完成设备档案与受控隧道。</p>
               <div class="station-device-add" id="station-device-add">
                 <label for="station-device-host">板卡 IP / 主机名
                   <input type="text" id="station-device-host" placeholder="例如 board-host.example.internal" spellcheck="false" autocomplete="off" />
                 </label>
-                <label for="station-device-user">SSH 用户
+                <label for="station-device-user" data-station-ssh-field>SSH 用户
                   <input type="text" id="station-device-user" value="root" spellcheck="false" autocomplete="off" />
                 </label>
-                <label for="station-device-password">SSH 密码（仅本次配对）
+                <label for="station-device-password" data-station-ssh-field>SSH 密码（仅本次配对）
                   <input type="password" id="station-device-password" placeholder="不会保存" autocomplete="new-password" />
                 </label>
-                <label for="station-device-port">SSH 端口
+                <label for="station-device-port" data-station-ssh-field>SSH 端口
                   <input type="number" id="station-device-port" value="22" min="1" max="65535" />
                 </label>
                 <label for="station-device-label">备注（可选）
                   <input type="text" id="station-device-label" placeholder="OriginBot 演示机" maxlength="120" />
                 </label>
                 <label for="station-device-profile">设备档案
-                  <select id="station-device-profile"><option value="originbot-x5">OriginBot · X5</option><option value="microduck-x5">MicroDuck · X5</option><option value="custom">自定义设备</option></select>
+                  <select id="station-device-profile"><option value="microduck-x5">MicroDuck · X5</option><option value="originbot-x5">OriginBot · X5</option><option value="custom">通用 RDK / 自定义设备</option></select>
+                  <small class="station-device-profile-note" id="station-device-profile-note">按当前产品线自动推荐，可手动改成板端实际档案。</small>
                 </label>
                 <label for="station-device-transport">连接方式
-                  <select id="station-device-transport"><option value="ssh">SSH 隧道</option><option value="bridge">Local Bridge</option></select>
+                  <select id="station-device-transport"><option value="ssh">SSH 隧道</option><option value="bridge">Local Bridge（已配对设备）</option></select>
+                  <small class="station-device-transport-note" id="station-device-transport-note">服务器直连板卡时使用；密码只用于本次建档。</small>
                 </label>
                 <button class="button station-device-add-btn" type="button" id="station-device-add-btn">
                   添加设备与能力档案
@@ -2181,7 +2183,7 @@
       blocking the parser at body end.
     -->
     <script defer src="./telemetry-core.js?v=duck-lab-30"></script>
-    <script defer src="./app.js?v=duck-lab-52"></script>
+    <script defer src="./app.js?v=duck-lab-56"></script>
     <script defer src="./visualization-enhancements.js?v=viz-1"></script>
     <script defer src="./agent-chat.js?v=agent-17"></script>
     <script defer src="./onboarding.js?v=onboarding-6"></script>

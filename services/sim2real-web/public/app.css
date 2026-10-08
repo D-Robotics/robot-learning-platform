@@ -5415,7 +5415,7 @@ html.theme-dark .agent-assistant-health { max-width: 150px; }
 .view-section[data-active-deploy-module="feedback"] #preflight-panel{display:none}
 .view-section[data-active-deploy-module="preflight"] #feedback-panel{display:none}
 .view-section[data-active-deploy-module] .deploy-layout{grid-template-columns:minmax(0,1fr)}
-@media (max-width:720px){.submodule-tabs{margin-left:-2px;margin-right:-2px}.submodule-tab{min-width:128px;padding:8px 10px}}
+@media (max-width:720px){.submodule-tabs{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));margin-left:-2px;margin-right:-2px;overflow:visible}.submodule-tab{min-width:0;width:100%;padding:8px 10px}}
 .flow-context-strip{display:flex;align-items:center;gap:12px;margin:12px 0 16px;padding:12px 16px;border:1px solid color-mix(in srgb,var(--accent) 42%,var(--line));border-radius:12px;background:color-mix(in srgb,var(--accent) 8%,var(--panel));}
 .flow-context-index{display:grid;place-items:center;width:32px;height:32px;border-radius:8px;background:var(--accent);color:var(--accent-contrast,var(--panel));font-weight:800;}
 .flow-context-copy{min-width:0;flex:1}.flow-context-kicker{color:var(--accent-text);font-size:var(--fs-meta)}.flow-context-copy h2{margin:2px 0 2px;font-size:16px}.flow-context-copy p{margin:0;color:var(--muted-strong);font-size:var(--fs-meta);line-height:1.4}.flow-context-target{padding:4px 8px;border:1px solid var(--line-strong);border-radius:999px;color:var(--muted-strong);font-size:var(--fs-meta);white-space:nowrap;}
@@ -5451,7 +5451,7 @@ html.theme-dark .agent-assistant-health { max-width: 150px; }
 .panel+.panel{margin-top:16px}
 .submodule-tabs{margin:0 0 16px;border:0;background:var(--surface-1);padding:4px;border-radius:10px}
 .submodule-tab{min-height:54px;padding:10px 16px}
-.submodule-tab.is-active{background:var(--surface-2);border-color:var(--accent)}
+.submodule-tab.is-active{background:color-mix(in srgb,var(--accent) 16%,var(--surface-2));border-color:var(--accent);box-shadow:inset 0 -2px 0 var(--accent);color:var(--text)}
 .train-onboarding{margin:0 0 16px;padding:16px 20px;border-color:var(--line);background:var(--surface-1);box-shadow:none}
 .train-onboarding h3{font-size:18px}
 .train-onboarding-steps{gap:8px;margin-top:12px}
@@ -7354,7 +7354,11 @@ html.theme-dark .onboard-item.is-current .onboard-cta {
 
 @media (max-width: 1080px) {
   .app-shell {
-    width: min(100% - 24px, 740px);
+    /* The sidebar is a fixed drawer in this range, so the workbench owns the
+       whole available rail.  A 740px cap left a third of laptop viewports
+       empty and squeezed the overview cards for no interaction benefit. */
+    width: calc(100% - 24px);
+    max-width: none;
   }
   /* ④ 的桌面双列规则在源顺序上晚于 ③ 段的窄屏回退，会把它压掉——
      这里必须重申单列，窄屏才回到侧栏上收的原生布局。 */
@@ -7503,6 +7507,7 @@ body[data-active-view]:not([data-active-view='overview']) .workflow-progress-str
   display: flex;
   align-items: center;
   gap: 8px;
+  width: 100%;
   min-width: 0;
 }
 .sidebar-project-heading strong {
@@ -7560,13 +7565,13 @@ body[data-active-view]:not([data-active-view='overview']) .workflow-progress-str
   }
 }
 
-/* 暗色主题的 .app-shell 宽度规则是 `html.theme-dark .app-shell`（0,2,1），
-   会压掉皮肤层窄屏的 `width: min(100% - 24px, 740px)`（0,1,0），于是同一个
-   窗口宽度下暗色正文比浅色宽（900px 视口下 900 vs 740）。这里在窄屏补一条
-   同优先级的暗色规则，让两套主题的正文宽度一致。 */
+/* Keep the theme-specific shell rule aligned with the drawer range above.  The
+   drawer no longer consumes a grid column, so both themes should use the same
+   full-width work rail on laptop viewports. */
 @media (max-width: 1080px) {
   html.theme-dark .app-shell {
-    width: min(100% - 24px, 740px);
+    width: calc(100% - 24px);
+    max-width: none;
   }
 }
 
@@ -8364,6 +8369,7 @@ body [data-view-section='overview'] .next-card {
   border-radius: 50%;
   content: '';
   box-shadow: 0 0 0 22px color-mix(in srgb, var(--accent) 5%, transparent), 0 0 0 44px color-mix(in srgb, var(--accent) 3%, transparent);
+  opacity: .12;
   pointer-events: none;
 }
 
@@ -9365,17 +9371,18 @@ body .telemetry-summary {
   }
 }
 
-/* At laptop width the fixed Agent launcher otherwise sits on top of the
-   rightmost decision card. Keep the affordance discoverable through its
-   accessible label while reducing its footprint to the icon-sized control. */
-@media (min-width: 1081px) and (max-width: 1280px) {
+/* At drawer and laptop widths the fixed Agent launcher otherwise sits on top
+   of decision cards. Keep it discoverable through its accessible label while
+   reducing the visible control to an icon-sized affordance. */
+@media (max-width: 1280px) {
   html body .agent-floating-toggle {
     width: 48px;
     min-height: 48px;
     justify-content: center;
     padding: 8px;
   }
-  html body .agent-floating-toggle .agent-floating-label {
+  html body .agent-floating-toggle .agent-floating-label,
+  html body .agent-floating-toggle .agent-floating-pulse {
     display: none;
   }
 }
@@ -9952,7 +9959,10 @@ body [data-view-section='station'] .station-device-add {
   border-radius: 12px;
   background: color-mix(in srgb, var(--panel-soft) 82%, transparent);
 }
-body [data-view-section='station'] .station-device-add label { min-width: 0; }
+body [data-view-section='station'] .station-device-add label {
+  min-width: 0;
+  align-self: start;
+}
 body [data-view-section='station'] .station-device-add input,
 body [data-view-section='station'] .station-device-add select { width: 100%; min-width: 0; min-height: 38px; }
 body [data-view-section='station'] .station-device-add-btn,
@@ -10190,12 +10200,9 @@ body .workflow-nav-hierarchical .nav-subitem.is-active::before {
 /* Child modules are real focused screens inside their parent view. A click
    changes the flow state, and the page keeps only the tools needed for that
    task visible instead of presenting the same long canvas every time. */
-body[data-flow-child='prepare'] [data-view-section='train'] > .submodule-tabs,
 body[data-flow-child='prepare'] [data-view-section='train'] > .train-onboarding,
 body[data-flow-child='prepare'] [data-view-section='train'] > .train-layout,
-body[data-flow-child='configure'] [data-view-section='train'] > .submodule-tabs,
 body[data-flow-child='configure'] [data-view-section='train'] > .train-onboarding,
-body[data-flow-child='submit'] [data-view-section='train'] > .submodule-tabs,
 body[data-flow-child='submit'] [data-view-section='train'] > .train-onboarding {
   display: none;
 }

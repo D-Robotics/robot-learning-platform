@@ -240,6 +240,54 @@ describe('Sim2Real HTTP routes', () => {
     });
   });
 
+  it('records run provenance and summarizes the research feedback loop', async () => {
+    const router = await fixture();
+    const agentRun = await invoke(router, 'post', '/api/sim2real/runs', {
+      body: {
+        modelId: BUILTIN_MICRODUCK_MODEL.id,
+        backend: 'contract',
+        experimentId: 'rsi-baseline',
+        requestedVia: 'agent',
+      },
+    });
+    expect(agentRun.statusCode).toBe(201);
+    expect(agentRun.body).toMatchObject({ run: { requestedVia: 'agent' } });
+
+    const workbenchRun = await invoke(router, 'post', '/api/sim2real/runs', {
+      body: { modelId: BUILTIN_MICRODUCK_MODEL.id, backend: 'contract' },
+    });
+    expect(workbenchRun.statusCode).toBe(201);
+    expect(workbenchRun.body.run.requestedVia).toBeUndefined();
+
+    const invalid = await invoke(router, 'post', '/api/sim2real/runs', {
+      body: {
+        modelId: BUILTIN_MICRODUCK_MODEL.id,
+        backend: 'contract',
+        requestedVia: 'cron',
+      },
+    });
+    expect(invalid.statusCode).toBe(400);
+    expect(invalid.body).toMatchObject({ error: 'SIM2REAL_INVALID_REQUESTED_VIA' });
+
+    const summary = await invoke(router, 'get', '/api/sim2real/research-loop/summary');
+    expect(summary.statusCode).toBe(200);
+    expect(summary.body).toMatchObject({
+      ok: true,
+      summary: {
+        runs: {
+          total: 2,
+          completed: 2,
+          byRequestedVia: { agent: 1, workbench: 0, unattributed: 1 },
+          agentShareOfAttributedPct: 100,
+        },
+        // Contract runs are instant validation, never a training cycle.
+        loopLatency: { training: { sampleCount: 0 } },
+        walls: { queued: 0, running: 0 },
+      },
+    });
+    expect(summary.body.summary.generatedAt).toEqual(expect.any(String));
+  });
+
   it('does not allow a run to reference another owner project', async () => {
     const router = await fixture();
     const project = await invoke(router, 'post', '/api/sim2real/projects', {

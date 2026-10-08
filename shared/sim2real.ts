@@ -417,6 +417,14 @@ export interface Sim2RealRunRecord {
   /** Stable action-task id (walk/turn/sit/recover/kick/custom). */
   taskId?: string;
   backend: Sim2RealRunBackend;
+  /**
+   * Which client surface submitted the run: `agent` when a platform agent
+   * (DSH tool call or legacy planner executor) created it, `workbench` when
+   * the operator UI did.  Optional because ledger rows written before the
+   * field existed carry no marker; aggregate metrics must report those as
+   * unattributed instead of inferring an origin after the fact.
+   */
+  requestedVia?: 'workbench' | 'agent';
   status: Sim2RealRunStatus;
   summary: string;
   launchUrl?: string;

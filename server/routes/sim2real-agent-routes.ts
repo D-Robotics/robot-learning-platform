@@ -4,6 +4,7 @@ import { LOCAL_SIM2REAL_AUTH, type Sim2RealAuthPort } from '../sim2real/sim2real
 import {
   createSim2RealAgentPlanVariants,
   legacyConversationReply,
+  type Sim2RealAgentIntent,
   type Sim2RealAgentPlan,
   type Sim2RealAgentRun,
   type Sim2RealAgentStep,
@@ -341,6 +342,37 @@ function activeAgentRuns(owner: string | undefined): { total: number; owner: num
     if (entry.owner === owner) scoped += 1;
   }
   return { total, owner: scoped };
+}
+
+export type Sim2RealAgentRunAutonomySnapshot = {
+  intent: Sim2RealAgentIntent;
+  status: Sim2RealAgentRun['status'];
+  createdAt: string;
+  steps: Array<{ status: Sim2RealAgentStep['status']; requiresApproval?: boolean }>;
+};
+
+/**
+ * Structural snapshots of in-process agent runs for aggregate autonomy
+ * metrics.  Copies only step outcomes and plan metadata — never goal text,
+ * events, evidence, or targets — and scopes to the owner when one is given.
+ * The underlying map is process-local, so these statistics describe the
+ * live session, not durable history.
+ */
+export function listSim2RealAgentRunSnapshots(owner?: string): Sim2RealAgentRunAutonomySnapshot[] {
+  const snapshots: Sim2RealAgentRunAutonomySnapshot[] = [];
+  for (const entry of runs.values()) {
+    if (owner !== undefined && entry.owner !== owner) continue;
+    snapshots.push({
+      intent: entry.run.intent,
+      status: entry.run.status,
+      createdAt: entry.run.createdAt,
+      steps: entry.run.steps.map((step) => ({
+        status: step.status,
+        ...(step.requiresApproval ? { requiresApproval: true } : {}),
+      })),
+    });
+  }
+  return snapshots;
 }
 
 async function executeWithRetry(
@@ -733,6 +765,9 @@ async function runAgent(
             backend: 'local',
             taskId: 'walk',
             training: { profile: 'smoke' },
+            // Provenance marker: lets research-loop metrics attribute this run
+            // to agent automation instead of a workbench submission.
+            requestedVia: 'agent',
             ...(run.computeResourceId ? { computeResourceId: run.computeResourceId } : {}),
           }),
         });

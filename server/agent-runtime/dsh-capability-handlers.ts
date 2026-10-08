@@ -965,6 +965,9 @@ export function createDshCapabilityHandlers(
           backend,
           ...(argString(input, 'taskId') ? { taskId: argString(input, 'taskId') } : {}),
           training,
+          // Provenance marker: lets research-loop metrics attribute this run
+          // to agent automation instead of a workbench submission.
+          requestedVia: 'agent',
           ...(argString(input, 'projectId') ? { projectId: argString(input, 'projectId') } : {}),
           ...(argString(input, 'experimentId')
             ? { experimentId: argString(input, 'experimentId') }

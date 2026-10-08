@@ -1442,6 +1442,7 @@ const VIEW_ANNOUNCEMENTS = {
   overview: '工作台',
   simulate: '仿真与录制',
   train: '强化学习训练',
+  resources: 'GPU 与算力资源',
   evaluate: 'Sim2Real 评测',
   deploy: '部署与反馈',
   records: '证据与记录',
@@ -2088,7 +2089,7 @@ const VIEW_STAGE_LABELS = {
 // evidence panel so the destination is visible and bookmarkable.
 const FLOW_CHILD_CONTEXTS = {
   simulate: { index: '01', kicker: '数据与仿真 / 01', title: '仿真与录制', description: '运行 MicroDuck 场景，录制可回放轨迹。', target: '仿真场' },
-  replays: { index: '01', kicker: '数据与仿真 / 02', title: '轨迹与回放', description: '按 Run 筛选轨迹，并打开逐帧回放证据。', target: '记录 · Runs', view: 'records', recordTab: 'run', focus: '#history-list' },
+  replays: { index: '01', kicker: '数据与仿真 / 02', title: '轨迹与回放', description: '按运行筛选轨迹，并打开逐帧回放证据。', target: '记录 · 运行', view: 'records', recordTab: 'run', focus: '#history-list' },
   prepare: { index: '02', kicker: '训练与策略 / 01', title: '模型与契约', description: '登记 Manifest，校验观测、动作和设备兼容性。', target: '训练 · 模型契约', view: 'train', trainModule: 'contract', focus: '#contract-fold' },
   configure: { index: '02', kicker: '训练与策略 / 02', title: '训练配置', description: '选择算法、训练档位、GPU 资源和续训 checkpoint。', target: '训练 · 参数配置', view: 'train', trainModule: 'config', focus: '#train-module-config' },
   submit: { index: '02', kicker: '训练与策略 / 03', title: 'Run 与进度', description: '提交训练任务，查看实时曲线、状态和引擎日志。', target: '训练 · Run 工作台', view: 'train', trainModule: 'run', focus: '#train-module-run-model' },
@@ -2340,6 +2341,16 @@ function setFlowChild(child, { updateHash = true, focus = true } = {}) {
 
 function setTrainModule(module, { persist = true } = {}) {
   const wanted = ['run', 'contract', 'config', 'resources'].includes(module) ? module : 'run';
+  const activeFlowChild = FLOW_CHILD_CONTEXTS[document.body.dataset.flowChild || ''];
+  // A direct in-view tab click intentionally exits a focused sidebar flow
+  // child when it selects a different training module. Keeping the old child
+  // marker would reapply its copy and narrow layout during the next refresh.
+  if (activeFlowChild?.trainModule && activeFlowChild.trainModule !== wanted) {
+    clearFlowChild();
+    if (window.location.hash.includes('/')) {
+      window.history.replaceState({ rdkView: 'train' }, '', `${window.location.pathname}${window.location.search}#train`);
+    }
+  }
   const previous = state.trainModule;
   state.trainModule = wanted;
   const section = document.querySelector('[data-view-section="train"]');
@@ -2405,6 +2416,64 @@ function selectedProductProfile() {
   const fallback = PRODUCT_PROFILES[state.productId] || PRODUCT_PROFILES.microduck;
   const remote = state.productProfiles?.find((profile) => profile.id === state.productId);
   return remote ? Object.assign({}, fallback, remote) : fallback;
+}
+
+// Device onboarding starts from the active product contract. Keep the form's
+// suggested board profile aligned with that contract, while leaving a manual
+// operator choice untouched until the product line changes again.
+const STATION_PROFILE_BY_PRODUCT = Object.freeze({
+  microduck: 'microduck-x5',
+  originbot: 'originbot-x5',
+  'rdk-duck': 'custom',
+  custom: 'custom',
+});
+let stationProfileProductId = '';
+
+function syncStationDeviceForm() {
+  const productId = state.productId || 'microduck';
+  const profileSelect = $('station-device-profile');
+  if (profileSelect && stationProfileProductId !== productId) {
+    profileSelect.value = STATION_PROFILE_BY_PRODUCT[productId] || 'custom';
+    stationProfileProductId = productId;
+  }
+  const product = selectedProductProfile();
+  setText(
+    'station-device-profile-note',
+    `当前产品：${product.displayName} · 默认档案已按产品线推荐，可按板端实际能力改选。`,
+  );
+
+  const transportSelect = $('station-device-transport');
+  const bridge = transportSelect?.value === 'bridge';
+  const hostInput = $('station-device-host');
+  if (hostInput) {
+    hostInput.placeholder = bridge
+      ? 'Bridge 中的板卡 IP 或主机名'
+      : '例如 board-host.example.internal';
+  }
+  const add = $('station-device-add');
+  if (add) add.dataset.transportMode = bridge ? 'bridge' : 'ssh';
+  const hostField = $('station-device-host')?.closest('label');
+  if (hostField) hostField.hidden = bridge;
+  $('station-device-host')?.toggleAttribute('disabled', bridge);
+  document.querySelectorAll('[data-station-ssh-field]').forEach((field) => {
+    field.hidden = bridge;
+    field.querySelector('input')?.toggleAttribute('disabled', bridge);
+  });
+  const sshPath = $('station-device-ssh-path');
+  if (sshPath) sshPath.hidden = bridge;
+  const scriptButton = $('station-device-script-btn');
+  if (scriptButton) scriptButton.hidden = bridge;
+  const addButton = $('station-device-add-btn');
+  if (addButton) {
+    addButton.disabled = bridge;
+    addButton.textContent = bridge ? '请从下方已配对设备连接' : '添加设备与能力档案';
+  }
+  setText(
+    'station-device-transport-note',
+    bridge
+      ? 'Local Bridge 设备会出现在下方列表；无需填写地址或 SSH，直接点击设备卡片上的“连接”。'
+      : '服务器直连板卡时使用；密码只用于本次建档。',
+  );
 }
 
 function selectedProject() {
@@ -3843,6 +3912,40 @@ function renderBoard() {
     '</p>';
 }
 
+const RECORD_TYPE_LABELS = Object.freeze({
+  run: '训练运行',
+  deploy: '部署记录',
+  artifact: '模型制品',
+  telemetry: '遥测证据',
+});
+const RECORD_MODE_LABELS = Object.freeze({
+  local: '本地',
+  robogo: '云端',
+  preflight: '只读预检',
+  canary: '灰度发布',
+  live: '正式发布',
+  rollback: '回滚',
+  policy: '策略',
+  'compiled-policy': '编译制品',
+  source: '源制品',
+  checkpoint: '检查点',
+  import: '导入',
+  'saved replay': '保存回放',
+  'demo fixture': '演示样例',
+});
+
+// `record.kind` is a stable internal discriminator (for example
+// `deploy · preflight`), not suitable as the primary label for a Chinese
+// operator. Keep the discriminator searchable and in detail views, but use a
+// short translated label in the history list.
+function recordKindLabel(record) {
+  const type = RECORD_TYPE_LABELS[record?.recordType] || '记录';
+  const rawKind = String(record?.kind || '').trim();
+  const rawMode = rawKind.includes(' · ') ? rawKind.split(' · ').slice(1).join(' · ') : '';
+  const mode = RECORD_MODE_LABELS[rawMode] || rawMode;
+  return mode ? `${type} · ${mode}` : type;
+}
+
 function renderHistory() {
   const root = $('history-list');
   if (!root) return;
@@ -3853,6 +3956,7 @@ function renderHistory() {
       if (!query) return true;
       return [
         record.kind,
+        recordKindLabel(record),
         record.status,
         record.summary,
         record.modelId,
@@ -3923,7 +4027,7 @@ function renderHistory() {
       escapeHtml(formatDate(record.createdAt)) +
       '</span><span class="history-kind">' +
       escapeHtml(
-        demoTelemetry ? 'telemetry · demo fixture' : record.kind,
+        recordKindLabel(record),
       ) +
       '</span><span class="history-summary">' +
       escapeHtml(record.summary || record.modelId || '') +
@@ -7374,7 +7478,7 @@ function deriveLoopStates() {
     simulate: Boolean(telemetry?.summary || latest?.evaluation?.replay || latest?.taskEvaluation?.replay),
     train: Boolean(latest && ['completed', 'ready'].includes(String(latest.status || '').toLowerCase())),
     evaluate: Boolean(telemetry?.summary || latest?.evaluation || latest?.taskEvaluation),
-    deploy: Boolean(deployment && ['ready', 'completed', 'planned', 'running'].includes(String(deployment.status || '').toLowerCase())),
+    deploy: Boolean(deployment && ['ready', 'completed'].includes(String(deployment.status || '').toLowerCase())),
   };
   const contractReady = Boolean(model?.manifest?.contract?.id && model?.manifest?.artifacts?.length);
   const unlocked = {
@@ -8171,6 +8275,7 @@ async function agentCheckBoard() {
 
 function renderAll() {
   renderSelects();
+  syncStationDeviceForm();
   renderComputeResources();
   renderIntegrations();
   renderContextLive();
@@ -8190,6 +8295,18 @@ function renderAll() {
   renderPlatformScorecard();
   renderAgentPanel();
   renderPromotionFlow();
+  // Data refreshes can replace or hide panels after a tab click. Re-assert the
+  // active sub-interface at the end of every render so async ledger updates
+  // never reopen a sibling panel or desynchronise aria-selected.
+  const activeView = document.body.dataset.activeView || 'overview';
+  if (activeView === 'train') setTrainModule(state.trainModule, { persist: false });
+  if (activeView === 'evaluate') applySubinterfacePartition('evaluate', state.evalModule || 'run');
+  if (activeView === 'deploy') applySubinterfacePartition('deploy', state.deployModule || 'preflight');
+  // Rendering the overview can happen after the initial view selection (for
+  // example when the account-scoped ledger finishes loading). Re-apply the
+  // object-chain position after every render so the current stage never loses
+  // its visual and screen-reader marker.
+  renderObjectChain();
 }
 
 async function loadModelDetails(modelId = state.selectedModelId) {
@@ -10174,6 +10291,11 @@ function wireDeviceManagerEvents() {
     const label = String($('station-device-label')?.value || '').trim();
     const profile = String($('station-device-profile')?.value || 'custom');
     const transport = String($('station-device-transport')?.value || 'ssh');
+    if (transport === 'bridge') {
+      showPairingHint('Local Bridge 不通过此表单建档；请在下方已配对设备列表中点击“连接”。');
+      stationLog('当前选择 Local Bridge，请从已配对设备列表连接。', 'normal');
+      return;
+    }
     if (!host) {
       stationLog('请填写板卡 IP 或主机名（不带 http://）', 'error');
       return;
@@ -10460,6 +10582,8 @@ function stationTeardown() {
 }
 
 function wireStationEvents() {
+  $('station-device-transport')?.addEventListener('change', syncStationDeviceForm);
+  syncStationDeviceForm();
   wireStationCameraError();
   document.querySelectorAll('[data-station-command]').forEach((button) => {
     button.addEventListener('click', () => stationRunCommand(button.dataset.stationCommand));
@@ -10691,7 +10815,16 @@ function wireEvents() {
     }
   };
   document.querySelectorAll('[data-train-module-tab]').forEach((tab) => {
-    tab.addEventListener('click', () => setSubmodule('train', tab.dataset.trainModuleTab || 'run'));
+    tab.addEventListener('click', () => {
+      // A sidebar flow child is a focused deep link. Clicking an in-view tab
+      // is an explicit request to return to the full training workbench, so
+      // clear that deep-link filter before switching modules.
+      if (document.body.dataset.flowChild) {
+        clearFlowChild();
+        window.history.replaceState({ rdkView: 'train' }, '', `${window.location.pathname}${window.location.search}#train`);
+      }
+      setSubmodule('train', tab.dataset.trainModuleTab || 'run');
+    });
   });
   document.querySelectorAll('[data-station-module-tab]').forEach((tab) => {
     tab.addEventListener('click', () => setSubmodule('station', tab.dataset.stationModuleTab || 'telemetry'));
@@ -11045,14 +11178,21 @@ function wireEvents() {
   wireStationEvents();
 }
 
+const SHORTCUT_MODIFIER =
+  typeof navigator !== 'undefined' && /Mac|iPhone|iPad|iPod/i.test(navigator.platform || '')
+    ? '⌘'
+    : 'Ctrl+';
+const shortcutHint = (key) => `${SHORTCUT_MODIFIER}${key}`;
+
 const COMMANDS = [
-  { id: 'overview', label: '打开总览', hint: '查看项目进度与工作区状态 · ⌘1', view: 'overview' },
-  { id: 'simulate', label: '开始仿真与录制', hint: '打开浏览器仿真 · ⌘2', view: 'simulate' },
-  { id: 'train', label: '查看训练', hint: '选择模型与训练后端 · ⌘3', view: 'train' },
-  { id: 'evaluate', label: '打开评测中心', hint: '查看指标与遥测证据 · ⌘4', view: 'evaluate' },
-  { id: 'deploy', label: '准备部署', hint: '检查板卡与模型契约 · ⌘5', view: 'deploy' },
-  { id: 'records', label: '查看运行记录', hint: '搜索 Run、部署与遥测 · ⌘6', view: 'records' },
-  { id: 'station', label: '打开设备工作台', hint: '查看 X5 连接与只读诊断 · ⌘7', view: 'station' },
+  { id: 'overview', label: '打开总览', hint: `查看项目进度与工作区状态 · ${shortcutHint(1)}`, view: 'overview' },
+  { id: 'simulate', label: '开始仿真与录制', hint: `打开浏览器仿真 · ${shortcutHint(2)}`, view: 'simulate' },
+  { id: 'train', label: '查看训练', hint: `选择模型与训练后端 · ${shortcutHint(3)}`, view: 'train' },
+  { id: 'resources', label: '管理 GPU 与算力', hint: `登记本机、远程与云端资源 · ${shortcutHint(4)}`, view: 'resources' },
+  { id: 'evaluate', label: '打开评测中心', hint: `查看指标与遥测证据 · ${shortcutHint(5)}`, view: 'evaluate' },
+  { id: 'deploy', label: '准备部署', hint: `检查板卡与模型契约 · ${shortcutHint(6)}`, view: 'deploy' },
+  { id: 'records', label: '查看证据与记录', hint: `搜索 Run、部署与遥测 · ${shortcutHint(7)}`, view: 'records' },
+  { id: 'station', label: '打开设备工作台', hint: `查看 X5 连接与只读诊断 · ${shortcutHint(8)}`, view: 'station' },
   { id: 'refresh', label: '刷新工作区', hint: '重新加载项目状态与设备信息', action: () => loadOverview() },
   { id: 'login', label: '登录工作区', hint: '登录以解锁训练记录与真机部署', action: () => window.open(state.publicHealth?.ssoLoginUrl || '/rdkstudio/', '_blank', 'noopener') },
   { id: 'agent', label: '呼出 Agent 助手', hint: '按当前阻塞项生成下一步计划', action: () => { if (typeof window.setAgentDrawerOpen === 'function') window.setAgentDrawerOpen(true); } },
@@ -11291,7 +11431,16 @@ function wireCommandPalette() {
   $('command-palette-trigger')?.addEventListener('click', () => open());
 }
 
-// ⌘1–⌘7 直接切视图（与命令面板 hint 里的编号一致）。
+function syncShortcutChrome() {
+  const trigger = $('command-palette-trigger');
+  const kbd = trigger?.querySelector('kbd');
+  if (kbd) kbd.textContent = shortcutHint('K');
+  if (trigger) trigger.title = `命令面板（${shortcutHint('K')}）`;
+  const paletteKbd = document.querySelector('.command-palette-search kbd');
+  if (paletteKbd) paletteKbd.textContent = shortcutHint('K');
+}
+
+// Ctrl/⌘1–8 直接切视图（与命令面板 hint 里的编号一致）。
 function wireViewShortcuts() {
   document.addEventListener('keydown', (event) => {
     if (!(event.metaKey || event.ctrlKey) || event.altKey) return;
@@ -11306,6 +11455,7 @@ function wireViewShortcuts() {
 
 wireEvents();
 wireViewShortcuts();
+syncShortcutChrome();
 syncNotifyToggle();
 syncThemeToggle();
 connectEventStream();

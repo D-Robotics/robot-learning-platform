@@ -49,8 +49,10 @@
   --accent-soft: #fff7ed;
   --accent-ring: #fed7aa;
   --accent-glow: #ffedd5;
-  --cyan: #9a3412;
-  --violet: #9a3412;
+  /* Cyan and violet carry different evidence tiers. Keeping both mapped to
+     accent-text made every status read as the same warning color. */
+  --cyan: #0f766e;
+  --violet: #6d28d9;
   --green: #16a34a;
   --green-soft: #f0fdf4;
   --green-border: #bbf7d0;
@@ -184,8 +186,8 @@ html.theme-dark {
   --accent-soft: rgba(249, 115, 22, 0.11);
   --accent-ring: rgba(253, 186, 116, 0.4);
   --accent-glow: rgba(249, 115, 22, 0.16);
-  --cyan: #ffb377;
-  --violet: #ffb377;
+  --cyan: #67e8f9;
+  --violet: #c4b5fd;
   --green: #5ec57f;
   --green-soft: rgba(22, 163, 74, 0.13);
   --green-border: rgba(22, 163, 74, 0.35);
