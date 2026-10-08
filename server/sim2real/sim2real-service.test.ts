@@ -11,6 +11,7 @@ import {
   publicDeviceSummary,
   probeLocalTrainingWorker,
   probeRobogoIntegration,
+  probeRobogoIntegrationCached,
   simulatorIntegration,
 } from './sim2real-service.js';
 
@@ -457,6 +458,42 @@ describe('Sim2Real compatibility service', () => {
         devMachineQueried: true,
       });
       expect(authorizations).toEqual(['Bearer web-cloud-token', 'Bearer web-cloud-token']);
+    } finally {
+      globalThis.fetch = originalFetch;
+      if (originalBase === undefined) delete process.env.RDK_SIM2REAL_ROBOGO_API_URL;
+      else process.env.RDK_SIM2REAL_ROBOGO_API_URL = originalBase;
+    }
+  });
+
+  it('coalesces repeated RoboGo probes into one upstream pair within the cache window', async () => {
+    const originalFetch = globalThis.fetch;
+    const originalBase = process.env.RDK_SIM2REAL_ROBOGO_API_URL;
+    let calls = 0;
+    process.env.RDK_SIM2REAL_ROBOGO_API_URL = 'https://robogo.example.test';
+    globalThis.fetch = (async () => {
+      calls += 1;
+      return new Response(JSON.stringify({ items: [] }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      });
+    }) as typeof fetch;
+    try {
+      // 同一身份的并发与顺序请求合并为一次上游探测（cluster + instances）。
+      const [first, second, merged] = await Promise.all([
+        probeRobogoIntegrationCached('alice', 'token-a'),
+        probeRobogoIntegrationCached('alice', 'token-a'),
+        probeRobogoIntegrationCached('alice', 'token-a'),
+      ]);
+      expect(calls).toBe(2);
+      expect(first).toMatchObject({ state: 'ready', clusterQueried: true });
+      expect(second).toEqual(first);
+      expect(merged).toEqual(first);
+      // 令牌变化即身份变化：重新探测，且单槽缓存被新键占用。
+      await probeRobogoIntegrationCached('alice', 'token-b');
+      expect(calls).toBe(4);
+      // TTL 内同键复用缓存：不再产生上游请求。
+      await probeRobogoIntegrationCached('alice', 'token-b');
+      expect(calls).toBe(4);
     } finally {
       globalThis.fetch = originalFetch;
       if (originalBase === undefined) delete process.env.RDK_SIM2REAL_ROBOGO_API_URL;

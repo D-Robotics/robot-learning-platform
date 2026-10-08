@@ -58,7 +58,7 @@ import {
   compatibilityForPlatforms,
   deploymentStepsFor,
   probeLocalTrainingWorker,
-  probeRobogoIntegration,
+  probeRobogoIntegrationCached,
   publicDeviceSummary,
   simulatorIntegration,
   storageIntegration,
@@ -183,6 +183,9 @@ function queryText(value: unknown, max = 160): string {
 }
 
 const COMPUTE_HEALTH_RESPONSE_MAX_BYTES = 32 * 1024;
+
+// task-pack 种子资产内容不可变（构建期随产物拷贝），进程内缓存首次读取。
+let goalNavigationFailureSeed: Record<string, unknown> | undefined;
 
 /** Keep operator-visible worker fields bounded and free of terminal controls. */
 function safeComputeHealthText(value: unknown, max = 160): string {
@@ -2156,12 +2159,18 @@ export function createSim2RealRouter(
         // root while this route lives under dist-server/server/routes; the
         // build copies `data/failure-cases` into dist-server so both source
         // tests and dist-only deployments resolve the same reviewed asset.
-        const seedFile = path.resolve(
-          path.dirname(fileURLToPath(import.meta.url)),
-          '../../data/failure-cases/goal-navigation-seed.json',
-        );
-        const file = await readFile(seedFile, 'utf8');
-        response.json({ ok: true, ...JSON.parse(file) });
+        // 内容不可变：进程内缓存首次读取结果，失败不缓存以便挂载恢复后重试。
+        if (!goalNavigationFailureSeed) {
+          const seedFile = path.resolve(
+            path.dirname(fileURLToPath(import.meta.url)),
+            '../../data/failure-cases/goal-navigation-seed.json',
+          );
+          goalNavigationFailureSeed = JSON.parse(await readFile(seedFile, 'utf8')) as Record<
+            string,
+            unknown
+          >;
+        }
+        response.json({ ok: true, ...goalNavigationFailureSeed });
       } catch {
         response.status(503).json({ ok: false, error: 'TASK_PACK_ASSET_UNAVAILABLE' });
       }
@@ -2230,7 +2239,7 @@ export function createSim2RealRouter(
         listSim2RealRuns(owner),
         listSim2RealDeployments(owner),
         visibleDevicesForAuth(owner),
-        probeRobogoIntegration(
+        probeRobogoIntegrationCached(
           String(auth.resolvePrincipal(request)?.accountId ?? owner ?? ''),
           auth.resolveAccessToken(request),
           { multiUser: auth.isMultiUserDeployment() },
@@ -3396,10 +3405,13 @@ export function createSim2RealRouter(
         .trim()
         .toLowerCase();
       const encoded = binaryUpload ? '' : String(request.body?.bytesBase64 ?? '');
+      // JSON base64 分支是 legacy 回退：express.json 的全局 2MiB 预算先于
+      // 本路由生效，超限请求体到不了这里；更大的制品必须走 octet-stream
+      // 流式分支（50 MiB）。上限对齐解析器预算，避免虚高的数字误导客户端。
       if (
         !run?.relayAgentUrl ||
         !/^[a-f0-9]{64}$/.test(sha256) ||
-        (!binaryUpload && (!encoded || encoded.length > 70_000_000))
+        (!binaryUpload && (!encoded || encoded.length > 2_097_152))
       ) {
         sendApiError(response, 400, 'SIM2REAL_RELAY_ARTIFACT_INVALID', '中继制品数据无效。', {
           retryable: false,

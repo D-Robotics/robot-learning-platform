@@ -824,10 +824,21 @@ async function writeLedger(value: Sim2RealLedger): Promise<void> {
   try {
     const stat = await fs.stat(file);
     cache = { file, value, size: stat.size, mtimeMs: stat.mtimeMs };
+    // 刚落盘的台账必然有效（内存态来自已过 validLedgerShape 的读、由保持
+    // 不变量的领域写演进），直接把 readiness 缓存刷新到新文件。若在这里置
+    // 空，写流量下每次 /healthz、/notices 都会为一次 stat 就能命中的检查
+    // 全量 readFile+parse+validLedgerShape 最多 768MB 的台账。
+    readinessCache = {
+      file,
+      size: stat.size,
+      mtimeMs: stat.mtimeMs,
+      checkedAt: Date.now(),
+      info: sim2RealStorageInfo(),
+    };
   } catch {
     cache = null;
+    readinessCache = null;
   }
-  readinessCache = null;
 }
 
 function serialized<T>(task: () => Promise<T>): Promise<T> {

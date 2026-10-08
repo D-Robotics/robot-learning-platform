@@ -123,11 +123,9 @@ async function serveCompressedStatic(
         if (oldest) staticCache.delete(oldest);
       }
     }
-    response.setHeader('Content-Type', MIME_BY_EXT[ext] ?? 'application/octet-stream');
-    response.setHeader('Content-Encoding', 'gzip');
-    response.setHeader('Content-Length', String(data.length));
     response.setHeader('Vary', 'Accept-Encoding');
-    response.setHeader('ETag', buildGzipEtag(data));
+    const etag = buildGzipEtag(data);
+    response.setHeader('ETag', etag);
     // 与 express.static 的 setHeaders 策略对齐：HTML 入口必须可再验证，
     // 才能及时拿到 cache-busted 资源（app.js?v=…）的新引用。
     if (ext === '.html' || request.path.includes('/originbot-sim/')) {
@@ -137,6 +135,25 @@ async function serveCompressedStatic(
     } else {
       response.setHeader('Cache-Control', 'public, max-age=0');
     }
+    // no-cache 契约的"每次使用前再验证"必须真的省流量：If-None-Match 命中
+    // 时回 304（缓存控制头保持一致，不发实体头与 body）。
+    const ifNoneMatch = request.headers['if-none-match'];
+    if (
+      ifNoneMatch !== undefined &&
+      String(ifNoneMatch)
+        .split(',')
+        .some((candidate) => {
+          const trimmed = candidate.trim();
+          return trimmed === etag || trimmed === 'W/' + etag || trimmed === '*';
+        })
+    ) {
+      response.statusCode = 304;
+      response.end();
+      return;
+    }
+    response.setHeader('Content-Type', MIME_BY_EXT[ext] ?? 'application/octet-stream');
+    response.setHeader('Content-Encoding', 'gzip');
+    response.setHeader('Content-Length', String(data.length));
     // sendFile 分支不再进入；直接把压缩字节发出去。
     // Express Response#end 透传底层 http 签名：`as never` keeps the call
     // compiling without pretending the Express overloads accept this shape.

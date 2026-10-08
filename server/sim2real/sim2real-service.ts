@@ -330,6 +330,54 @@ export async function probeRobogoIntegration(
   };
 }
 
+const ROBOGO_PROBE_CACHE_TTL_MS = 3_000;
+let robogoProbeCache:
+  { key: string; expiresAt: number; result: Sim2RealRobogoIntegration } | undefined;
+let robogoProbeInFlight: { key: string; promise: Promise<Sim2RealRobogoIntegration> } | undefined;
+
+/**
+ * Coalesce the overview poll's RoboGo probe (2 upstream requests, 12s timeout
+ * each) behind a short TTL shared across accounts of the same identity and
+ * merged while in flight, so an unreachable RoboGo does not add a full
+ * timeout to every overview refresh. Identity changes (account, token,
+ * tenant mode) form distinct cache keys; call probeRobogoIntegration
+ * directly when a fresh probe is required (tests, diagnostics).
+ */
+export async function probeRobogoIntegrationCached(
+  accountId: string,
+  requestToken?: string | null,
+  options: { multiUser?: boolean } = {},
+): Promise<Sim2RealRobogoIntegration> {
+  const key = JSON.stringify({
+    accountId,
+    multiUser: options.multiUser ?? isStandaloneMultiUserMode(),
+    token: requestToken ?? '',
+  });
+  const now = Date.now();
+  if (robogoProbeCache && robogoProbeCache.key === key && robogoProbeCache.expiresAt > now) {
+    return { ...robogoProbeCache.result };
+  }
+  if (robogoProbeInFlight?.key === key) {
+    const result = await robogoProbeInFlight.promise;
+    return { ...result };
+  }
+  const promise = probeRobogoIntegration(accountId, requestToken, options).then((result) => {
+    robogoProbeCache = {
+      key,
+      expiresAt: Date.now() + ROBOGO_PROBE_CACHE_TTL_MS,
+      result: { ...result },
+    };
+    return result;
+  });
+  robogoProbeInFlight = { key, promise };
+  try {
+    const result = await promise;
+    return { ...result };
+  } finally {
+    if (robogoProbeInFlight?.promise === promise) robogoProbeInFlight = undefined;
+  }
+}
+
 function microduckBrowserSurface(): {
   available: boolean;
   entryUrl: string;

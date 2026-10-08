@@ -21,11 +21,20 @@ interface RawResponse {
   body: Buffer;
 }
 
-function httpGet(url: string, acceptEncoding?: string): Promise<RawResponse> {
+function httpGet(
+  url: string,
+  acceptEncoding?: string,
+  extraHeaders?: Record<string, string>,
+): Promise<RawResponse> {
   return new Promise((resolve, reject) => {
     const request = http.get(
       url,
-      { headers: acceptEncoding ? { 'accept-encoding': acceptEncoding } : undefined },
+      {
+        headers: {
+          ...(acceptEncoding ? { 'accept-encoding': acceptEncoding } : {}),
+          ...extraHeaders,
+        },
+      },
       (message) => {
         const chunks: Buffer[] = [];
         message.on('data', (chunk: Buffer) => chunks.push(chunk));
@@ -96,6 +105,41 @@ describe('response compression middleware', () => {
     expect(res.headers['content-type']).toBe('text/javascript; charset=utf-8');
     expect(res.headers['content-encoding']).toBe('gzip');
     expect(zlib.gunzipSync(res.body).length).toBeGreaterThan(0);
+  });
+
+  it('answers 304 with preserved cache headers when If-None-Match matches the static ETag', async () => {
+    // no-cache 契约要求"每次使用前再验证"，但再验证必须真的省流量：
+    // ETag 命中回 304（空 body、无实体头），未命中照常全量 200。
+    const file = await stat(path.join(PUBLIC_ROOT, 'theme-boot.js')).then(
+      () => 'theme-boot.js',
+      () => null,
+    );
+    expect(file).not.toBeNull();
+    const app = express();
+    app.use(createResponseCompressionMiddleware());
+    const base = await new Promise<string>((resolve) => {
+      server = app.listen(0, '127.0.0.1', () => {
+        resolve(`http://127.0.0.1:${(server!.address() as AddressInfo).port}`);
+      });
+    });
+    const first = await httpGet(base + '/theme-boot.js', 'gzip');
+    expect(first.status).toBe(200);
+    const etag = String(first.headers.etag);
+    expect(etag).toMatch(/^"gz-/);
+    const revalidated = await httpGet(base + '/theme-boot.js', 'gzip', {
+      'if-none-match': etag,
+    });
+    expect(revalidated.status).toBe(304);
+    expect(revalidated.body.length).toBe(0);
+    expect(revalidated.headers['content-encoding']).toBeUndefined();
+    expect(revalidated.headers['content-length']).toBeUndefined();
+    expect(revalidated.headers['cache-control']).toBe('public, max-age=0');
+    expect(String(revalidated.headers.vary)).toMatch(/accept-encoding/i);
+    const stale = await httpGet(base + '/theme-boot.js', 'gzip', {
+      'if-none-match': '"stale-etag"',
+    });
+    expect(stale.status).toBe(200);
+    expect(stale.headers['content-encoding']).toBe('gzip');
   });
 
   it('compresses a JSON response for gzip-capable clients', async () => {

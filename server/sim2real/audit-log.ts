@@ -412,6 +412,24 @@ export async function listSim2RealAuditEvents(
     .slice(0, limit);
 }
 
+const AUDIT_HEALTH_CACHE_TTL_MS = 3_000;
+let auditHealthEventsCache:
+  { file: string; key: string; expiresAt: number; events: Sim2RealAuditEvent[] } | undefined;
+
+/** Size+mtime stamp of both audit segments; ENOENT counts as "absent". */
+async function auditSegmentStamp(file: string): Promise<string> {
+  const stamp = async (segment: string): Promise<string> => {
+    try {
+      const info = await fs.lstat(segment);
+      return `${info.size}:${info.mtimeMs}`;
+    } catch (error) {
+      if (isNoEntry(error)) return 'absent';
+      throw error;
+    }
+  };
+  return `${await stamp(file)}|${await stamp(`${file}.1`)}`;
+}
+
 export async function sim2RealAuditHealth(): Promise<{
   configured: boolean;
   readable: boolean;
@@ -439,7 +457,24 @@ export async function sim2RealAuditHealth(): Promise<{
       await probe.close();
     }
     await fs.access(path.dirname(file), fsSync.constants.R_OK | fsSync.constants.W_OK);
-    const events = await listSim2RealAuditEvents(undefined, { limit: MAX_READ_EVENTS });
+    // 健康端点会被 systemd 周期探活，而 eventCount 只是信息性字段。段未
+    // 变化（size+mtime 一致）且在 TTL 内时复用上次的事件读取；任何追加或
+    // 轮转都会改变段元数据，下一次检查即读到新事件。可写探针保持每次执行。
+    const stamp = await auditSegmentStamp(file);
+    const cached =
+      auditHealthEventsCache &&
+      auditHealthEventsCache.file === file &&
+      auditHealthEventsCache.key === stamp &&
+      Date.now() < auditHealthEventsCache.expiresAt
+        ? auditHealthEventsCache.events
+        : undefined;
+    const events = cached ?? (await listSim2RealAuditEvents(undefined, { limit: MAX_READ_EVENTS }));
+    auditHealthEventsCache = {
+      file,
+      key: stamp,
+      expiresAt: Date.now() + AUDIT_HEALTH_CACHE_TTL_MS,
+      events,
+    };
     return {
       configured: true,
       readable: true,
