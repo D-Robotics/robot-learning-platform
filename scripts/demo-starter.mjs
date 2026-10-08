@@ -49,6 +49,16 @@ function freePort() {
   });
 }
 
+function tryPort(port) {
+  return new Promise((resolve) => {
+    const server = net.createServer();
+    server.once('error', () => resolve(null));
+    server.listen(port, '127.0.0.1', () => {
+      server.close((error) => resolve(error ? null : port));
+    });
+  });
+}
+
 function pythonInterpreter() {
   for (const candidate of [
     process.env.RDK_STARTER_ENGINE_PYTHON,
@@ -93,6 +103,10 @@ function spawnService(label, command, args, env) {
   const child = spawn(command, args, {
     cwd: repoRoot,
     env: buildEnv(env),
+    // run-with-env.mjs starts the actual server as a child. Put the wrapper
+    // and its child in one process group so the demo cannot leave a server
+    // behind after RDK_STARTER_DEMO_KEEP=0 or a failed assertion.
+    detached: process.platform !== 'win32',
     stdio: ['ignore', 'pipe', 'pipe'],
   });
   child.stdout.on('data', (chunk) => {
@@ -161,11 +175,22 @@ async function waitForJson(
 async function terminate(child) {
   if (!child || child.exitCode != null || child.signalCode != null) return;
   const exited = new Promise((resolve) => child.once('exit', resolve));
-  child.kill('SIGTERM');
+  const signalGroup = (signal) => {
+    if (process.platform !== 'win32' && child.pid) {
+      try {
+        process.kill(-child.pid, signal);
+        return;
+      } catch {
+        // Fall back to the wrapper when the group exited between checks.
+      }
+    }
+    child.kill(signal);
+  };
+  signalGroup('SIGTERM');
   const timeout = sleep(5_000).then(() => 'timeout');
   const result = await Promise.race([exited, timeout]);
   if (result === 'timeout' && child.exitCode == null && child.signalCode == null) {
-    child.kill('SIGKILL');
+    signalGroup('SIGKILL');
     await exited.catch(() => undefined);
   }
 }
@@ -196,15 +221,28 @@ async function main() {
   const scratchRoot = await mkdtemp(path.join(os.tmpdir(), 'rdk-demo-starter-'));
   const storageDir = path.join(scratchRoot, 'storage');
   const workerDataDir = path.join(scratchRoot, 'worker');
-  await mkdir(storageDir, { recursive: true });
-  await mkdir(workerDataDir, { recursive: true });
+  // The audit stream requires a private 0700 parent. `mkdtemp` itself is
+  // private, but recursive mkdir otherwise creates the child with the
+  // process umask and can make the demo fail its own audit hardening check.
+  await mkdir(storageDir, { recursive: true, mode: 0o700 });
+  await mkdir(workerDataDir, { recursive: true, mode: 0o700 });
 
   const manifest = JSON.parse(await readFile(manifestPath, 'utf8'));
   manifest.modelId = 'starter-ppo-demo';
   manifest.version = '0.1.0-demo';
 
   const workerPort = await freePort();
-  const webPort = 18102;
+  const requestedWebPort = Number(process.env.RDK_STARTER_DEMO_PORT || 18102);
+  const preferredWebPort =
+    Number.isInteger(requestedWebPort) && requestedWebPort >= 1024 && requestedWebPort <= 65_535
+      ? requestedWebPort
+      : 18102;
+  const webPort = (await tryPort(preferredWebPort)) ?? (await freePort());
+  if (webPort !== preferredWebPort) {
+    console.log(
+      `[demo:starter] 端口 ${preferredWebPort} 已占用，使用临时端口 ${webPort}；可通过 RDK_STARTER_DEMO_PORT 固定端口`,
+    );
+  }
   const worker = spawnService(
     'local-worker',
     process.execPath,
@@ -316,30 +354,45 @@ async function main() {
     const baselineRows = readJsonl(
       await readFile(path.join(jobDir, 'baseline-telemetry.jsonl'), 'utf8'),
     );
-    console.log(`[demo:starter] uploading ${telemetryRows.length} telemetry samples in chunks`);
-    const chunkSize = 250;
-    for (let offset = 0; offset < telemetryRows.length; offset += chunkSize) {
-      const chunk = telemetryRows.slice(offset, offset + chunkSize);
-      const uploaded = await fetchJson(
-        `${base}/api/v1/duck/runs/${encodeURIComponent(runId)}/telemetry`,
-        {
-          method: 'POST',
-          headers: {
-            'content-type': 'application/json',
-            accept: 'application/json',
-            'idempotency-key': `starter-demo-telemetry-${offset}`,
+    // The status poll auto-attaches the worker's evaluation telemetry when the
+    // run first becomes completed. Reusing that evidence keeps this demo
+    // idempotent; posting the same clock timeline a second time would be
+    // rejected by the store's timestamp-order guard. A manual upload remains
+    // the fallback for workers that do not expose the optional auto-attach
+    // endpoint.
+    const attached = await fetchJson(
+      `${base}/api/v1/duck/runs/${encodeURIComponent(runId)}/telemetry?limit=1`,
+      { headers: { accept: 'application/json' } },
+    );
+    const attachedCount = Number(attached.body?.count || 0);
+    if (attached.response.status === 200 && Number.isFinite(attachedCount) && attachedCount > 0) {
+      console.log(`[demo:starter] reusing ${attachedCount} auto-attached telemetry chunk(s)`);
+    } else {
+      console.log(`[demo:starter] uploading ${telemetryRows.length} telemetry samples in chunks`);
+      const chunkSize = 250;
+      for (let offset = 0; offset < telemetryRows.length; offset += chunkSize) {
+        const chunk = telemetryRows.slice(offset, offset + chunkSize);
+        const uploaded = await fetchJson(
+          `${base}/api/v1/duck/runs/${encodeURIComponent(runId)}/telemetry`,
+          {
+            method: 'POST',
+            headers: {
+              'content-type': 'application/json',
+              accept: 'application/json',
+              'idempotency-key': `starter-demo-telemetry-${offset}`,
+            },
+            body: JSON.stringify({
+              // `import` is the honest source label: an engine-side rollout file
+              // uploaded through the public API, not a board or browser stream.
+              source: 'import',
+              samples: chunk,
+              sequence: offset / chunkSize,
+            }),
           },
-          body: JSON.stringify({
-            // `import` is the honest source label: an engine-side rollout file
-            // uploaded through the public API, not a board or browser stream.
-            source: 'import',
-            samples: chunk,
-            sequence: offset / chunkSize,
-          }),
-        },
-      );
-      if (uploaded.response.status !== 201 && uploaded.response.status !== 200) {
-        throw new Error(`telemetry upload failed: ${JSON.stringify(uploaded.body)}`);
+        );
+        if (uploaded.response.status !== 201 && uploaded.response.status !== 200) {
+          throw new Error(`telemetry upload failed: ${JSON.stringify(uploaded.body)}`);
+        }
       }
     }
 
@@ -362,7 +415,7 @@ async function main() {
     );
 
     console.log(
-      '\n[demo:starter] PASS — 真实闭环完成：注册 → PPO 训练(mock=false) → ONNX 制品 → 遥测上传 → 评测。\n' +
+      '\n[demo:starter] PASS — 真实闭环完成：注册 → PPO 训练(mock=false) → ONNX 制品 → 遥测证据 → 评测。\n' +
         `  工作台: http://127.0.0.1:${webPort}/?demo=1  (在“训练与模型/记录中心”里查看 run ${runId})\n` +
         `  引擎产物: ${jobDir} (policy.onnx / telemetry.jsonl / training-summary.json)\n` +
         '  日常使用: npm run dev:mock-worker 换成配置 RDK_SIM2REAL_TRAIN_EXECUTABLE 的 local worker 即可复用同一平台。\n',
