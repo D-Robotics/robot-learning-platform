@@ -800,7 +800,10 @@ async function writeLedger(value: Sim2RealLedger): Promise<void> {
   // dead one. A conflict throws before the first durable change is made.
   await acquireStorageLease(path.dirname(file));
   const temporary = `${file}.${process.pid}.${Date.now()}.tmp`;
-  const serializedValue = JSON.stringify(value, null, 2);
+  // Compact JSON: the ledger is machine-owned and fully rewritten on every
+  // write, so indentation bytes are pure I/O cost that scales with the whole
+  // ledger on the hottest write path. Parsing is format-agnostic.
+  const serializedValue = JSON.stringify(value);
   if (Buffer.byteLength(serializedValue, 'utf8') > SIM2REAL_LEDGER_MAX_BYTES) {
     throw new Sim2RealError('sim2real_storage_quota_exceeded');
   }
@@ -913,6 +916,61 @@ async function readTelemetryShard(
     if (record && (!indexedIds || indexedIds.has(record.id))) records.push(record);
   }
   return records;
+}
+
+/**
+ * Per-run telemetry usage cache for the owner-quota check in
+ * appendSim2RealTelemetryWithResult: appending one chunk re-evaluates the
+ * quota over EVERY run of the owner, which without this cache re-reads and
+ * re-stringifies every shard on every append (O(runs × shardBytes) per
+ * chunk). Shards are append-only NDJSON under the single-writer lease, so
+ * (file stat, committed-index count) pins the exact visible row set: an
+ * append, a retention prune or any index change moves at least one key part.
+ * Retention-expired rows vary with wall-clock time rather than a write, so
+ * the cache is only consulted while retention is disabled; the retention
+ * path keeps the exact per-append recomputation.
+ */
+interface TelemetryShardUsage {
+  shardSize: number;
+  shardMtimeMs: number;
+  committedCount: number;
+  samples: number;
+  bytes: number;
+}
+const telemetryShardUsageCache = new Map<string, TelemetryShardUsage>();
+
+async function telemetryShardUsage(
+  runId: string,
+  owner: string | undefined,
+  committed: ReadonlySet<string>,
+): Promise<{ samples: number; bytes: number }> {
+  const shard = telemetryShardPath(runId);
+  const shardStat = shard ? await fs.stat(shard).catch(() => null) : null;
+  const key = `${owner ?? ''}\u0000${runId}`;
+  const cached = shardStat ? telemetryShardUsageCache.get(key) : undefined;
+  if (
+    cached &&
+    shardStat &&
+    cached.shardSize === shardStat.size &&
+    cached.shardMtimeMs === shardStat.mtimeMs &&
+    cached.committedCount === committed.size
+  ) {
+    return { samples: cached.samples, bytes: cached.bytes };
+  }
+  const usage = telemetryUsage(await readTelemetryShard(runId, owner, committed));
+  if (shardStat) {
+    if (telemetryShardUsageCache.size > 10_000) telemetryShardUsageCache.clear();
+    telemetryShardUsageCache.set(key, {
+      shardSize: shardStat.size,
+      shardMtimeMs: shardStat.mtimeMs,
+      committedCount: committed.size,
+      samples: usage.samples,
+      bytes: usage.bytes,
+    });
+  } else {
+    telemetryShardUsageCache.delete(key);
+  }
+  return usage;
 }
 
 /**
@@ -3284,11 +3342,14 @@ export async function appendSim2RealTelemetryWithResult(
 
     // Quota and timeline checks run over the full chunk history (shard plus
     // legacy inline rows), not the sample-stripped index rows. Rows selected
-    // for this append's retention prune are excluded from both checks.
+    // for this append's retention prune are excluded from both checks. The
+    // owner-wide pass only feeds the sample/byte quota, so while retention is
+    // disabled the shard-backed share goes through the per-run usage cache
+    // instead of re-reading every shard of every run on each append.
     const runHistory = (await loadRunTelemetry(input.runId, owner)).filter(
       (item) => !expiredIndexIds.has(item.id),
     );
-    const ownerHistory: TelemetryShardRecord[] = [];
+    const ownerUsageAccumulated = { samples: 0, bytes: 0 };
     const loadedShardRuns = new Set<string>();
     for (const item of ledger.telemetry) {
       if (!ownerMatches(item, owner)) continue;
@@ -3296,21 +3357,24 @@ export async function appendSim2RealTelemetryWithResult(
       // upgrade/import. Count each inline row, while loading that run's shard
       // exactly once even when the first index row still carries samples.
       if (Array.isArray(item.samples) && item.samples.length && !expiredIndexIds.has(item.id)) {
-        ownerHistory.push(item as unknown as TelemetryShardRecord);
+        const inlineUsage = telemetryUsage([item as unknown as StoredTelemetry]);
+        ownerUsageAccumulated.samples += inlineUsage.samples;
+        ownerUsageAccumulated.bytes += inlineUsage.bytes;
       }
       if (!loadedShardRuns.has(item.runId)) {
         loadedShardRuns.add(item.runId);
-        ownerHistory.push(
-          ...(
-            await readTelemetryShard(
-              item.runId,
-              owner,
-              committedTelemetryIds(ledger, item.runId, owner),
-            )
-          ).filter(
-            (shardItem) => ownerMatches(shardItem, owner) && !expiredIndexIds.has(shardItem.id),
-          ),
-        );
+        const committed = committedTelemetryIds(ledger, item.runId, owner);
+        const usage =
+          retentionDays === 0
+            ? await telemetryShardUsage(item.runId, owner, committed)
+            : telemetryUsage(
+                (await readTelemetryShard(item.runId, owner, committed)).filter(
+                  (shardItem) =>
+                    ownerMatches(shardItem, owner) && !expiredIndexIds.has(shardItem.id),
+                ),
+              );
+        ownerUsageAccumulated.samples += usage.samples;
+        ownerUsageAccumulated.bytes += usage.bytes;
       }
     }
     assertTelemetryTimeline(runHistory as unknown as StoredTelemetry[], record, owner);
@@ -3322,7 +3386,7 @@ export async function appendSim2RealTelemetryWithResult(
     ) {
       throw new Sim2RealError('sim2real_telemetry_quota_exceeded');
     }
-    const ownerUsage = telemetryUsage(ownerHistory as unknown as StoredTelemetry[]);
+    const ownerUsage = ownerUsageAccumulated;
     if (
       ownerUsage.samples + incomingUsage.samples > SIM2REAL_TELEMETRY_LIMITS.ownerSamples ||
       ownerUsage.bytes + incomingUsage.bytes > SIM2REAL_TELEMETRY_LIMITS.ownerBytes
@@ -3845,4 +3909,5 @@ export { isSim2RealFeedbackRecord };
 export function invalidateSim2RealStoreCacheForTest(): void {
   cache = null;
   readinessCache = null;
+  telemetryShardUsageCache.clear();
 }
