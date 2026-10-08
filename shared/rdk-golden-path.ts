@@ -111,8 +111,12 @@ export function deriveRdkGoldenPath(input: Inputs): RdkGoldenPathSnapshot {
     : stage('task', 'ready', '选择一个 RDK 任务包（建议先从目标点导航开始）');
 
   let datasetStage: RdkGoldenPathStage;
-  if (!datasets.length) datasetStage = stage('dataset', 'blocked', '需要导入或登记一个数据集');
-  else if (datasets.some((item) => item.status === 'revoked')) {
+  // 没有数据集不等于被阻塞：starter 仿真闭环（录制→训练→评测→预检）不消费
+  // 数据集，把空台账标成 blocked 会让"准备数据"抢占全局下一步，与上手
+  // 清单的第一步（在仿真中验证）互相矛盾。数据集是模仿学习路径的可选前置。
+  if (!datasets.length) {
+    datasetStage = stage('dataset', 'pending', '仿真闭环不需要数据集；接入模仿学习数据时再导入');
+  } else if (datasets.some((item) => item.status === 'revoked')) {
     datasetStage = stage('dataset', 'blocked', '数据集已撤销，请选择仍有效的版本', datasetRefs);
   } else if (datasets.every((item) => item.status === 'ready' || !item.status)) {
     datasetStage = stage('dataset', 'succeeded', `${datasets.length} 个数据集已就绪`, datasetRefs);
@@ -187,7 +191,17 @@ export function deriveRdkGoldenPath(input: Inputs): RdkGoldenPathSnapshot {
 
   const stages = [taskStage, datasetStage, trainStage, evaluateStage, deployStage, feedbackStage];
   const completed = stages.filter((item) => item.state === 'succeeded').length;
-  const next = stages.find((item) => item.state !== 'succeeded');
+  // nextAction 指向第一个可行动阶段（ready/running/blocked/failed），只有当
+  // 所有阶段都处于 succeeded/pending 时才退回第一个 pending——pending 表示
+  // "还没轮到它"，不该在更早的阶段可行动时抢占下一步指引。
+  const next =
+    stages.find(
+      (item) =>
+        item.state === 'ready' ||
+        item.state === 'running' ||
+        item.state === 'blocked' ||
+        item.state === 'failed',
+    ) ?? stages.find((item) => item.state !== 'succeeded');
   return {
     schemaVersion: RDK_GOLDEN_PATH_SCHEMA_VERSION,
     scope: {

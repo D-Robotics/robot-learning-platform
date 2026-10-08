@@ -3252,29 +3252,11 @@ export function createSim2RealRouter(
               );
               return;
             }
-            if (run.backend === 'local' && run.computeResourceId && selectedResource) {
-              const healthFailure = computeResourceHealthFailure(selectedResource.resource);
-              if (healthFailure === 'stale') {
-                sendApiError(
-                  response,
-                  503,
-                  'SIM2REAL_COMPUTE_RESOURCE_HEALTH_STALE',
-                  `所选 GPU 资源健康检查已超过 ${sim2RealComputeHealthTtlSeconds()} 秒；状态暂时未知，请先测试连接。`,
-                  { retryable: true, retryAfterSeconds: 15 },
-                );
-                return;
-              }
-              if (healthFailure === 'not-ready') {
-                sendApiError(
-                  response,
-                  503,
-                  'SIM2REAL_COMPUTE_RESOURCE_NOT_READY',
-                  '所选 GPU 资源尚未通过健康检查，状态暂时未知，请先测试连接。',
-                  { retryable: true, retryAfterSeconds: 15 },
-                );
-                return;
-              }
-            }
+            // 健康检查过期不再拦截状态刷新：终态对账是幂等读——runner 可达就
+            // 采用真实状态，不可达则按普通失败返回可重试 503、保留最后已知
+            // 状态。用 stale 门否决读取会把一次性的"健康元数据过期"变成运行
+            // 记录的永久僵尸（永远 running、永远 503）。launch 门（提交前）
+            // 保持不变。
             const selectedRunner =
               run.backend === 'local' && run.computeResourceId
                 ? {
@@ -3819,29 +3801,8 @@ export function createSim2RealRouter(
           );
           return;
         }
-        if (run.backend === 'local' && run.computeResourceId && selectedResource) {
-          const healthFailure = computeResourceHealthFailure(selectedResource.resource);
-          if (healthFailure === 'stale') {
-            sendApiError(
-              response,
-              503,
-              'SIM2REAL_COMPUTE_RESOURCE_HEALTH_STALE',
-              `所选 GPU 资源健康检查已超过 ${sim2RealComputeHealthTtlSeconds()} 秒；对账状态暂时未知，请先测试连接。`,
-              { retryable: true, retryAfterSeconds: 15 },
-            );
-            return;
-          }
-          if (healthFailure === 'not-ready') {
-            sendApiError(
-              response,
-              503,
-              'SIM2REAL_COMPUTE_RESOURCE_NOT_READY',
-              '所选 GPU 资源尚未通过健康检查，对账状态暂时未知，请先测试连接。',
-              { retryable: true, retryAfterSeconds: 15 },
-            );
-            return;
-          }
-        }
+        // 与状态刷新同理由：健康元数据过期不否决对账读取，runner 不可达
+        // 时的失败在下方 catch 里按可重试 503 返回。
         const selectedRunner =
           run.backend === 'local' && run.computeResourceId
             ? {

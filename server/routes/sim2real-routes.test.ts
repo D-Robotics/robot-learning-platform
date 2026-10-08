@@ -2149,7 +2149,7 @@ describe('Sim2Real HTTP routes', () => {
     }
   });
 
-  it('expires online GPU health evidence before launch and reconciliation', async () => {
+  it('expires online GPU health evidence before launch but not before status reads', async () => {
     process.env.RDK_SIM2REAL_COMPUTE_HEALTH_TTL_SECONDS = '30';
     const router = await fixture();
     const created = await invoke(router, 'post', '/api/sim2real/compute-resources', {
@@ -2212,16 +2212,86 @@ describe('Sim2Real HTTP routes', () => {
         undefined,
         { idempotencyKey: 'stale-resource-reconcile' },
       );
+      // Stale health metadata must not veto terminal-state reads: the runner
+      // probe itself is the honest answer, and an unreachable runner still
+      // yields a retryable 503 without touching the ledger.
       const reconcile = await invoke(router, 'post', '/api/sim2real/runs/:id/reconcile', {
         params: { id: reserved.run.id },
         body: { externalRunId: 'stale-run-1', confirm: true },
       });
       expect(reconcile.statusCode).toBe(503);
       expect(reconcile.body).toMatchObject({
-        code: 'SIM2REAL_COMPUTE_RESOURCE_HEALTH_STALE',
+        code: 'SIM2REAL_RUN_RECONCILE_UNAVAILABLE',
         retryable: true,
       });
-      expect(calls).toBe(0);
+      expect(calls).toBe(1);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it('adopts the worker terminal status even when the resource health evidence is stale', async () => {
+    process.env.RDK_SIM2REAL_COMPUTE_HEALTH_TTL_SECONDS = '30';
+    const router = await fixture();
+    const created = await invoke(router, 'post', '/api/sim2real/compute-resources', {
+      body: { name: 'stale-gpu', runnerUrl: 'http://127.0.0.1:19091/train' },
+    });
+    const resourceId = (created.body as { computeResource: { id: string } }).computeResource.id;
+    await invoke(router, 'post', '/api/sim2real/compute-resources/:id/test', {
+      params: { id: resourceId },
+    });
+    await updateSim2RealComputeResource(
+      resourceId,
+      {
+        status: 'online',
+        lastCheckedAt: new Date(Date.now() - 31_000).toISOString(),
+      } as never,
+      undefined,
+    );
+    const manifest = userManifest();
+    manifest.simulator.backends = ['local'];
+    const registered = await invoke(router, 'post', '/api/sim2real/models', {
+      body: { manifest },
+    });
+    const modelId = (registered.body as { model: { id: string } }).model.id;
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async (input) => {
+      const url = String(input);
+      if (url.endsWith('/healthz')) {
+        return new Response(JSON.stringify({ ok: true }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        });
+      }
+      return new Response(JSON.stringify({ status: 'completed', runId: 'stale-terminal-1' }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      });
+    }) as typeof fetch;
+    try {
+      const reserved = await reserveSim2RealRun(
+        {
+          modelId,
+          backend: 'local',
+          computeResourceId: resourceId,
+          status: 'queued',
+          summary: 'worker finished long ago, health metadata went stale',
+        },
+        undefined,
+        { idempotencyKey: 'stale-terminal-key' },
+      );
+      // Reconciliation is the operator story for this case: the worker kept
+      // the finished job, the operator confirms its external id, and the
+      // terminal state is adopted even though health metadata is stale.
+      const reconcile = await invoke(router, 'post', '/api/sim2real/runs/:id/reconcile', {
+        params: { id: reserved.run.id },
+        body: { externalRunId: 'stale-terminal-1', confirm: true },
+      });
+      expect(reconcile.statusCode).toBe(200);
+      expect(reconcile.body).toMatchObject({
+        reconciled: true,
+        run: { status: 'completed' },
+      });
     } finally {
       globalThis.fetch = originalFetch;
     }
