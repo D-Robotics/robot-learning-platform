@@ -1,0 +1,49 @@
+{
+  "schemaVersion": 1,
+  "id": "isaac-origin-rpo",
+  "displayName": "ORIGIN (Nexus 01) RPO 运动策略契约",
+  "board": {
+    "platform": "external-gpu",
+    "family": "origin-nexus01",
+    "model": "ORIGIN general robot (RoboParty)"
+  },
+  "actuator": {
+    "kind": "joint",
+    "maxLinear": 1.5,
+    "maxAngular": 3.0,
+    "watchdogMs": 500
+  },
+  "runtime": {
+    "decisionHz": 50,
+    "actionProjection": "custom",
+    "actionOutput": "joint-position-offset",
+    "observationLayout": "origin-rpo-78d-v1",
+    "actionScaleRad": 0.5
+  },
+  "safety": {
+    "maxLinear": 1.5,
+    "maxAngular": 3.0,
+    "sensorStallSec": 0.1
+  },
+  "policy": {
+    "observationAdapterId": "origin-rpo-78d-v1",
+    "actionAdapterId": "origin-rpo-23d-joint-position-v1",
+    "observationSize": 78,
+    "actionSize": 23,
+    "observationHistory": {
+      "frames": 10,
+      "order": "oldest-first"
+    }
+  },
+  "capabilities": [
+    "imu",
+    "joint-states",
+    "isaac-lab-training",
+    "sim2sim-mujoco"
+  ],
+  "provenance": {
+    "kind": "template",
+    "mock": true,
+    "note": "Contract declared from the public RPO tutorial (forum.d-robotics.cc/t/topic/35763, 2026-09-28): single-frame observation 78D = gyro(3) + projected_gravity(3) + command(3) + joint-position offset(23) + joint-velocity(23) + last action(23), stacked 10 frames oldest-first into a 780D policy input, 23D joint-position-offset actions. Safety numbers are template values pending validation against real hardware; this robot has no board runtime on this platform, so artifacts stay training/sim2sim evidence and never deployable."
+  }
+}

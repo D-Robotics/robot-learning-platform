@@ -64,6 +64,11 @@ export const REWARD_ENGINE_QUANTITIES = Object.freeze({
   // the shared safety/reward envelope without pretending it reimplements the
   // full MicroDuck trainer.
   'microduck-rl': Object.freeze(['action', 'goal', 'heading', 'attitude', 'contact', 'body_rate']),
+  // Same rationale as 'microduck-rl': the Isaac Lab adapter drives the
+  // upstream trainer verbatim, so the upstream task registry owns the real
+  // reward. This alias validates the shared safety/reward envelope against
+  // the physical quantities an Isaac Lab locomotion task measurably exposes.
+  'isaac-lab': Object.freeze(['action', 'goal', 'heading', 'attitude', 'contact', 'body_rate']),
 });
 
 /**

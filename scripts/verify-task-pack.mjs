@@ -260,6 +260,18 @@ assert.deepEqual(
   'contract carries the stacking declaration',
 );
 
+// The isaac-lab upstream pack rides the same stacking arithmetic at a larger
+// depth (the RPO tutorial contract) and must keep its honest engine pin.
+const rpo = resolveTaskPack('isaac-origin-rpo-flat');
+assert.equal(rpo.recommendedEngine, 'isaac-lab', 'upstream pack pins the isaac-lab engine');
+assert.equal(rpo.adapter.policy.observationSize, 78, 'RPO frame width');
+assert.equal(rpo.adapter.policy.observationHistory.frames, 10, 'RPO stack depth');
+assert.equal(
+  trainingRequestFor(rpo, { profile: 'smoke' }).contract.observationSize,
+  780,
+  'RPO flat input = 78 x 10',
+);
+
 for (const [alias, canonical] of Object.entries({
   walk: 'microduck-walk',
   kick: 'microduck-kick',
@@ -273,5 +285,5 @@ for (const [alias, canonical] of Object.entries({
 }
 
 console.log(
-  '[task-pack] PASS — navigation and four MicroDuck packs resolved, layouts aligned with board runtime',
+  '[task-pack] PASS — navigation, MicroDuck, observation-history and Isaac Lab packs resolved, layouts aligned with board runtime',
 );

@@ -184,6 +184,31 @@ parity 判级纪律：`failed` 时制品被改名为 `policy.onnx.rejected`（�
 约束：SmolVLA 训练永不在板上发生；X5/S100 板保持轻客户端，推理走
 openpi-verified 的 GPU 服务器 + 板端薄客户端模式。
 
+## isaac-lab（Isaac Lab 上游，RPO 教程流水线）
+
+`engines/isaac-lab-adapter/adapter.py` 逐字驱动上游 Isaac Lab 工作区的
+训练 → 引擎内回放（`play.py`）→ MuJoCo sim2sim 交叉验证三步（对应论坛帖
+35763 的 RPO 运动策略教程）。任务包 `tasks/isaac-origin-rpo-flat.json` 声明
+上游任务 id、脚本路径与教程关节顺序映射；契约 78 维单帧 × 10 帧历史 = 780 维
+输入、23 维关节动作，由 `verify:isaac-lab-adapter` 钉死。
+
+```bash
+# 1. GPU 机：Isaac Lab 工作区（需 Isaac Sim + CUDA）与上游 robolab 工程按其自身文档安装
+export RDK_ISAAC_LAB_ROOT=$HOME/IsaacLab
+
+# 2. worker 注册（worker.env 追加）
+RDK_SIM2REAL_TRAIN_ENGINES_JSON='{…,"isaac-lab":{"executable":"/usr/bin/python3","args":["/home/<user>/rdk-sim2real/engines/isaac-lab-adapter/adapter.py"]}}'
+
+# 3. 平台训练页：任务选 isaac-origin-rpo-flat（引擎自动注入 isaac-lab）。
+#    无工作区 / 无 CUDA / 上游脚本缺失时 adapter 诚实失败（exit 2/3/4），
+#    不回退其他物理后端；replay 与 sim2sim 的 exit code 进入 run 指标
+#    （replayExitCode / sim2simExitCode / sim2simPassed）。
+```
+
+边界：该机器人没有平台板端运行时，制品 `deployable` 恒为 false——
+训练与 sim2sim 证据保留在台账，不会进入发布闸门。
+
+
 ## GPU 机器还在创建时
 
 `scripts/gpu-deploy.mjs` 的第 1 步会失败并给出排查清单——这是预期行为。机器就绪后重跑同一条命令即可；本机其他功能（`npm run demo:starter` CPU 真实训练、可视化、评测、只读板端预检）完全不依赖 GPU 机器。

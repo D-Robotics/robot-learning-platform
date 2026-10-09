@@ -106,10 +106,10 @@ export function resolveTaskPack(taskId, context = {}) {
   // will actually run the task.
   if (
     task.recommendedEngine != null &&
-    !['starter-ppo', 'mjx-ppo', 'microduck-rl'].includes(task.recommendedEngine)
+    !['starter-ppo', 'mjx-ppo', 'microduck-rl', 'isaac-lab'].includes(task.recommendedEngine)
   ) {
     throw new Error(
-      `recommendedEngine must be 'starter-ppo', 'mjx-ppo' or 'microduck-rl' (got ${JSON.stringify(task.recommendedEngine)})`,
+      `recommendedEngine must be 'starter-ppo', 'mjx-ppo', 'microduck-rl' or 'isaac-lab' (got ${JSON.stringify(task.recommendedEngine)})`,
     );
   }
   // Packs without a recommendation run on the platform default (the kinematic
@@ -141,6 +141,7 @@ export function resolveTaskPack(taskId, context = {}) {
     evaluationConfig: task.evaluationConfig,
     qualityGate: task.qualityGate,
     microduckTask: task.microduckTask,
+    isaacTask: task.isaacTask,
     ...(resolvedTaskId !== taskId ? { requestedTaskId: taskId, resolvedTaskId } : {}),
     controlHz,
     physicsTimestepSeconds,

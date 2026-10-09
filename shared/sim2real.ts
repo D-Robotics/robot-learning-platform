@@ -206,7 +206,10 @@ export type Sim2RealTrainingAlgorithm = 'ppo' | 'sac';
  * action-chunking DDPM imitation engine (keeps multimodal demonstrations
  * apart instead of averaging them), and 'smolvla' the SmolVLA reference
  * adapter (planning/dry-run on CPU stacks, full training on a GPU worker) —
- * all registered on a worker through RDK_SIM2REAL_TRAIN_ENGINES_JSON. The
+ * all registered on a worker through RDK_SIM2REAL_TRAIN_ENGINES_JSON.
+ * 'isaac-lab' drives an upstream Isaac Lab workspace verbatim (train →
+ * in-engine replay → MuJoCo sim2sim, the RPO tutorial pipeline) on a host
+ * with RDK_ISAAC_LAB_ROOT set, and refuses honestly elsewhere. The
  * LeRobot v3 converter (engines/lerobot-converter) is a CLI format tool,
  * deliberately NOT a training engine: it never appears here and is invoked
  * directly when exporting/importing dataset formats. Task packs may
@@ -224,7 +227,8 @@ export type Sim2RealTrainingEngine =
   | 'microduck-football'
   | 'act'
   | 'diffusion-policy'
-  | 'smolvla';
+  | 'smolvla'
+  | 'isaac-lab';
 
 export interface Sim2RealTrainingSpec {
   profile: Sim2RealTrainingProfile;
@@ -844,6 +848,7 @@ const ALLOWED_TRAINING_ENGINES = new Set<Sim2RealTrainingEngine>([
   'act',
   'diffusion-policy',
   'smolvla',
+  'isaac-lab',
 ]);
 const SAFE_ID = /^[a-z][a-z0-9-]{1,63}$/;
 const SHA256 = /^[a-f0-9]{64}$/i;
@@ -1027,7 +1032,7 @@ export function normalizeTrainingSpec(value: unknown): {
   const engine = safeText(source.engine, 32);
   if (engine && !ALLOWED_TRAINING_ENGINES.has(engine as Sim2RealTrainingEngine)) {
     errors.push(
-      'training.engine must be one of starter-ppo, mjx-ppo, visual-ppo, dm-control-ppo, mjlab-rsl-rl, microduck-rl, microduck-football, act, diffusion-policy, smolvla',
+      'training.engine must be one of starter-ppo, mjx-ppo, visual-ppo, dm-control-ppo, mjlab-rsl-rl, microduck-rl, microduck-football, act, diffusion-policy, smolvla, isaac-lab',
     );
   }
   if (errors.length) return { errors };
@@ -1058,7 +1063,11 @@ export function applyTaskEngineRecommendation(
   recommendedEngine?: string | null,
 ): Sim2RealTrainingSpec {
   if (spec.engine) return spec;
-  if (recommendedEngine === 'mjx-ppo' || recommendedEngine === 'microduck-rl') {
+  if (
+    recommendedEngine === 'mjx-ppo' ||
+    recommendedEngine === 'microduck-rl' ||
+    recommendedEngine === 'isaac-lab'
+  ) {
     return { ...spec, engine: recommendedEngine };
   }
   return spec;

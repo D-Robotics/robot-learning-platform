@@ -45,6 +45,7 @@ describe('training spec engine routing', () => {
       'diffusion-policy',
       'smolvla',
       'microduck-football',
+      'isaac-lab',
     ]) {
       const submission = normalizeTrainingSpec({ profile: 'smoke', engine });
       expect(submission.errors).toEqual([]);
@@ -74,9 +75,14 @@ describe('training spec engine routing', () => {
       'microduck-rl',
     );
     expect(microduck.engine).toBe('microduck-rl');
+    // The Isaac Lab upstream pack carries a real recommendation: a submission
+    // that picks it must be routed to a worker that registered the engine
+    // (a worker without it fails closed, never falls back).
+    const isaac = applyTaskEngineRecommendation(trainingSpecForProfile('smoke'), 'isaac-lab');
+    expect(isaac.engine).toBe('isaac-lab');
     const none = applyTaskEngineRecommendation(trainingSpecForProfile('smoke'));
     expect(none.engine).toBeUndefined();
-    const junk = applyTaskEngineRecommendation(trainingSpecForProfile('smoke'), 'isaac-lab');
+    const junk = applyTaskEngineRecommendation(trainingSpecForProfile('smoke'), 'isaac-sim');
     expect(junk.engine).toBeUndefined();
   });
 });

@@ -3575,7 +3575,8 @@ function renderIntegrations() {
         'option[value="microduck-recurrent"], ' +
         'option[value="microduck-football"], ' +
         'option[value="visual-ppo"], option[value="dm-control-ppo"], option[value="mjlab-rsl-rl"], ' +
-        'option[value="act"], option[value="diffusion-policy"], option[value="smolvla"]',
+        'option[value="act"], option[value="diffusion-policy"], option[value="smolvla"], ' +
+        'option[value="isaac-lab"]',
     )) {
       const known = engineKnown(option.value);
       option.disabled = !known;
@@ -3651,6 +3652,11 @@ const ENGINE_CAPABILITIES = Object.freeze({
     name: 'SmolVLA',
     badges: ['VLA 参考', 'CPU 规划 / CUDA 全量', 'LeRobot 生态'],
     desc: 'SmolVLA（LeRobot 社区 VLA，450M）参考适配：CPU 栈上产出诚实标注的训练计划（dry-run），完整训练需注册 CUDA worker；本机缺训练栈时明确拒绝而不是假装训练。',
+  },
+  'isaac-lab': {
+    name: 'isaac-lab',
+    badges: ['Isaac Lab 上游', 'CUDA 主机', '回放 + MuJoCo sim2sim'],
+    desc: '逐字驱动上游 Isaac Lab 工作区（训练 → 引擎内回放 play.py → MuJoCo sim2sim 交叉验证，RPO 教程流水线）；需 RDK_ISAAC_LAB_ROOT 的 CUDA 主机注册，缺失时诚实拒绝不回退（physicsBackend=isaac-lab）。',
   },
 });
 
