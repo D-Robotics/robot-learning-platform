@@ -85,6 +85,9 @@ const ACTION_TASKS = Object.freeze({
   kick: { label: '踢球', hint: '目标交互与动作衔接' },
   'balance-basketball': { label: '篮球平衡 · 循环策略', hint: '鸭子立于滚球，LSTM 从姿态历史推断球运动', scene: '滚球平衡' },
   'balance-stilts': { label: '高跷平衡 · 循环策略', hint: '固定枢轴双杆高跷，质量随高度联动', scene: '双杆高跷' },
+  'balance-ball': { label: '球面平衡 · 循环策略', hint: '鸭子立于大号稳定球，惯性更大，隐藏球态的时间窗更长', scene: '大稳定球' },
+  'balance-ladder': { label: '梯面攀爬 · 循环策略', hint: '攀爬段代理：爬升率跟踪，梯档相位不可观测，节奏靠动作历史推断', scene: '垂直梯杆' },
+  'swing-pump': { label: '摆动旋转 · 循环策略', hint: '荡秋千：按指令方向泵动摆幅，泵动相位需从姿态历史推断', scene: '悬挂秋千' },
   'football-single-goal-kick': { label: '足球：单鸭射门', hint: 'MuJoCo 单鸭追球并把球踢入球门', scene: '1 鸭 · 单球门' },
   'football-2v2': { label: '足球：2v2', hint: '双鸭协作、对手脚本与共享进球奖励', scene: '4 鸭 · 双方各 2 · 双球门' },
   'football-3v3': { label: '足球：3v3', hint: '三鸭协作、多智能体比赛与 GPU 并行训练', scene: '6 鸭 · 双方各 3 · 双球门 · GPU 并行' },
@@ -3582,8 +3585,8 @@ const ENGINE_CAPABILITIES = Object.freeze({
   },
   'microduck-recurrent': {
     name: 'microduck-recurrent',
-    badges: ['循环 LSTM 256', '篮球/高跷平衡代理', 'h/c 状态导出'],
-    desc: '循环网络训练器：存储状态 BPTT 的循环 PPO，导出 obs 61 + h/c -> 14 动作的循环 ONNX，直接通过 microduck-eval 的循环装载验收；评测侧已可给存活率结论，质量级训练走 GPU runner。',
+    badges: ['循环 LSTM 256', '五类代理任务', 'h/c 状态导出'],
+    desc: '循环网络训练器：存储状态 BPTT 的循环 PPO，覆盖篮球/高跷/球面平衡、秋千泵动与梯杆攀爬五类代理任务，导出 obs 61 + h/c -> 14 动作的循环 ONNX，直接通过 microduck-eval 的循环装载验收；评测侧已可给存活率结论，质量级训练走 GPU runner。',
   },
   'microduck-football': {
     name: 'microduck-football',
@@ -4095,6 +4098,9 @@ const PHYSICS_BACKEND_SHORT = {
 const ENGINE_SCENE_SHORT = {
   'balance-basketball': '引擎场景 · 滚球',
   'balance-stilts': '引擎场景 · 高跷',
+  'balance-ball': '引擎场景 · 球面',
+  'balance-ladder': '引擎场景 · 梯杆',
+  'swing-pump': '引擎场景 · 秋千',
   'football-2v2': '引擎场景 · 4 鸭',
   'football-3v3': '引擎场景 · 6 鸭',
 };
@@ -10935,9 +10941,10 @@ function wireEvents() {
         renderEngineCapability();
       }
     }
-    // Balance tasks are owned by the recurrent engine the same way: selecting
-    // one prepares the matching engine without locking the operator in.
-    if (next.startsWith('balance-')) {
+    // Recurrent-engine tasks (balance/swing proxies) are owned by the
+    // recurrent engine the same way: selecting one prepares the matching
+    // engine without locking the operator in.
+    if (next.startsWith('balance-') || next.startsWith('swing-')) {
       const engine = $('training-engine');
       if (engine && (!engine.value || engine.value === 'starter-ppo')) {
         engine.value = 'microduck-recurrent';

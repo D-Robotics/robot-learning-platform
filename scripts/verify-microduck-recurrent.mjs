@@ -5,9 +5,10 @@
  * (LSTM) policy graphs that microduck-eval's loader already accepts.
  *
  * With numpy + torch + mujoco + onnx + onnxruntime available this runs the
- * behavioural suite and one short real training (3 envs x 2 iterations), then
- * asserts the exported graph loads as recurrent through the evaluation
- * engine's own loader with state carry, reset semantics, and dynamic batch.
+ * behavioural suite and one short real training per proxy task (3 envs x 2
+ * iterations each), then asserts the exported graph loads as recurrent
+ * through the evaluation engine's own loader with state carry, reset
+ * semantics, and dynamic batch.
  * Without the Python stack it prints SKIP and exits 0 so `npm run verify`
  * stays green on CI runners.
  */
@@ -63,52 +64,68 @@ if (pytest.status !== 0) {
 const passed = /(\d+) passed/.exec(pytest.stdout);
 console.log(`[microduck-recurrent] behavioural suite: ${passed ? `${passed[1]} passed` : 'ok'}`);
 
-// ---- 2. one short real training with export ------------------------------
+// ---- 2. one short real training per proxy task, with export ---------------
 const scratch = await mkdtemp(path.join(os.tmpdir(), 'rdk-microduck-recurrent-'));
 try {
-  const exportPath = path.join(scratch, 'policy.onnx');
-  const summaryPath = path.join(scratch, 'training-summary.json');
-  const run = spawnSync(
-    python,
-    [
-      path.join(engineDir, 'train_recurrent.py'),
-      '--num-envs',
-      '3',
-      '--iterations',
-      '2',
-      '--steps-per-env',
-      '48',
-      '--episode-seconds',
-      '4',
-      '--lstm-hidden',
-      '32',
-      '--hidden',
-      '64',
-      '--seed',
-      '20260922',
-      '--export',
-      exportPath,
-      '--checkpoint',
-      path.join(scratch, 'policy.pt'),
-      '--out',
-      summaryPath,
-    ],
-    { encoding: 'utf8', maxBuffer: 4 * 1024 * 1024 },
-  );
-  if (run.status !== 0) {
-    console.error(run.stdout || '');
-    console.error(run.stderr || '');
-    throw new Error(`microduck-recurrent training exited with ${run.status}`);
+  const envTaskPairs = [
+    ['basketball', 'basketball-balance-recurrent'],
+    ['stilts', 'stilt-balance-recurrent'],
+    ['swing', 'swing-pump-recurrent'],
+    ['ball', 'ball-balance-recurrent'],
+    ['ladder', 'ladder-climb-recurrent'],
+  ];
+  let summary = null;
+  for (const [env, task] of envTaskPairs) {
+    const exportPath = path.join(scratch, `policy-${env}.onnx`);
+    const summaryPath = path.join(scratch, `training-summary-${env}.json`);
+    const run = spawnSync(
+      python,
+      [
+        path.join(engineDir, 'train_recurrent.py'),
+        '--env',
+        env,
+        '--num-envs',
+        '3',
+        '--iterations',
+        '2',
+        '--steps-per-env',
+        '48',
+        '--episode-seconds',
+        '4',
+        '--lstm-hidden',
+        '32',
+        '--hidden',
+        '64',
+        '--seed',
+        '20260922',
+        '--export',
+        exportPath,
+        '--checkpoint',
+        path.join(scratch, `policy-${env}.pt`),
+        '--out',
+        summaryPath,
+      ],
+      { encoding: 'utf8', maxBuffer: 4 * 1024 * 1024 },
+    );
+    if (run.status !== 0) {
+      console.error(run.stdout || '');
+      console.error(run.stderr || '');
+      throw new Error(`microduck-recurrent training (${env}) exited with ${run.status}`);
+    }
+    summary = JSON.parse(await readFile(summaryPath, 'utf8'));
+    assert.equal(summary.observationSize, 61);
+    assert.equal(summary.actionSize, 14);
+    assert.equal(summary.task, task);
+    assert.ok(summary.export.bytes > 1024, `exported ONNX (${env}) must be non-trivial`);
+    assert.equal(summary.export.recurrent.stateInputs.join(','), 'h_in,c_in');
+    assert.ok(
+      summary.export.parityMaxAbsError < 1e-4,
+      `torch<->onnxruntime parity with state carry (${env})`,
+    );
   }
-  const summary = JSON.parse(await readFile(summaryPath, 'utf8'));
-  assert.equal(summary.observationSize, 61);
-  assert.equal(summary.actionSize, 14);
-  assert.equal(summary.task, 'basketball-balance-recurrent');
-  assert.ok(summary.export.bytes > 1024, 'exported ONNX must be non-trivial');
-  assert.equal(summary.export.recurrent.stateInputs.join(','), 'h_in,c_in');
-  assert.ok(summary.export.parityMaxAbsError < 1e-4, 'torch<->onnxruntime parity with state carry');
 
   // ---- 3. the artifact must load through the evaluation engine's loader ----
+  const exportPath = path.join(scratch, 'policy-basketball.onnx');
   const loaderProbe = spawnSync(
     python,
     [
@@ -136,10 +153,10 @@ try {
   }
 
   console.log(
-    `[microduck-recurrent] PASS — recurrent PPO trained ${summary.iterations} iterations ` +
-      `(resets ${summary.resets}, LSTM ${summary.lstmHidden}) and its export loads as a ` +
-      `recurrent 61->14 policy (parity ${summary.export.parityMaxAbsError.toExponential(2)}, ` +
-      `${summary.export.bytes} bytes) via ${python}`,
+    `[microduck-recurrent] PASS — recurrent PPO trained a short real run on all ` +
+      `${envTaskPairs.length} proxy tasks (${envTaskPairs.map(([env]) => env).join(', ')}); ` +
+      `the basketball export loads as a recurrent 61->14 policy ` +
+      `(parity ${summary.export.parityMaxAbsError.toExponential(2)}) via ${python}`,
   );
 } finally {
   await rm(scratch, { recursive: true, force: true });

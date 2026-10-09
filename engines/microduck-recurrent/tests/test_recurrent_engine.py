@@ -90,6 +90,115 @@ def test_stilts_variant_contract_and_mass_formula():
     assert batch_obs.shape == (2, OBSERVATION_SIZE) and len(dones) == 2
 
 
+def test_swing_env_contract_and_commanded_direction():
+    from swing_env import SwingBatch, SwingConfig, SwingPumpEnv
+
+    env = SwingPumpEnv(SwingConfig(episode_seconds=4.0))
+    obs = env.reset(seed=29)
+    assert obs.shape == (OBSERVATION_SIZE,) and np.all(np.isfinite(obs))
+    assert env.command[0] in (-1.0, 1.0), "pump direction must be a ±1 command"
+    step_obs, reward, done, info = env.step(np.zeros(ACTION_SIZE))
+    assert step_obs.shape == (OBSERVATION_SIZE,)
+    assert {"tilt", "fallen", "swingAngle", "wrapped"} <= set(info)
+    assert np.isfinite(float(reward))
+    batch = SwingBatch(2, seed=31, episode_seconds=2.0)
+    batch_obs = batch.reset()
+    batch_obs, rewards, dones, _ = batch.step(np.zeros((2, ACTION_SIZE)))
+    assert batch_obs.shape == (2, OBSERVATION_SIZE) and rewards.shape == (2,) and len(dones) == 2
+
+
+def test_swing_wrap_terminates():
+    from swing_env import SwingConfig, SwingPumpEnv
+
+    env = SwingPumpEnv(SwingConfig(episode_seconds=30.0))
+    env.reset(seed=37)
+    hinge_qpos = int(env.model.jnt_qposadr[env.hinge_joint])
+    # Wrap the swing past the bar directly in joint state.
+    env.data.qpos[hinge_qpos] = 2.4
+    mujoco.mj_forward(env.model, env.data)
+    _, _, done, info = env.step(np.zeros(ACTION_SIZE))
+    assert done and info["wrapped"]
+
+
+def test_ballbalance_env_contract_and_hidden_ball():
+    from ballbalance_env import (
+        BALL_ROLLAWAY_RADIUS,
+        BallBalanceBatch,
+        BallBalanceConfig,
+        BallBalanceEnv,
+    )
+
+    assert BALL_ROLLAWAY_RADIUS == 0.8
+    env = BallBalanceEnv(BallBalanceConfig(episode_seconds=4.0))
+    obs = env.reset(seed=41)
+    assert obs.shape == (OBSERVATION_SIZE,) and np.all(np.isfinite(obs))
+    assert env.ball_qpos is not None, "stability-ball scene keeps the rolling pivot"
+    step_obs, reward, done, info = env.step(np.zeros(ACTION_SIZE))
+    assert step_obs.shape == (OBSERVATION_SIZE,)
+    assert {"tilt", "fallen", "rolledAway"} <= set(info)
+    assert np.isfinite(float(reward))
+    batch = BallBalanceBatch(2, seed=43, episode_seconds=2.0)
+    batch_obs = batch.reset()
+    batch_obs, rewards, dones, _ = batch.step(np.zeros((2, ACTION_SIZE)))
+    assert batch_obs.shape == (2, OBSERVATION_SIZE) and rewards.shape == (2,) and len(dones) == 2
+
+
+def test_ladder_env_contract_and_rung_phase_gain():
+    from ladder_env import GRIP_FORCE, RUNG_PITCH, LadderBatch, LadderClimbEnv, LadderConfig
+
+    env = LadderClimbEnv(LadderConfig(episode_seconds=4.0))
+    obs = env.reset(seed=47)
+    assert obs.shape == (OBSERVATION_SIZE,) and np.all(np.isfinite(obs))
+    step_obs, reward, done, info = env.step(np.zeros(ACTION_SIZE))
+    assert step_obs.shape == (OBSERVATION_SIZE,)
+    assert {"tilt", "fallen", "height", "slipped"} <= set(info)
+    assert np.isfinite(float(reward))
+    # The same posture transfers more climb force at a rung (phase peak) than
+    # between rungs (phase trough): that phase is the hidden state.
+    forces = {}
+    for name, z in (("peak", 4 * RUNG_PITCH), ("mid", 4 * RUNG_PITCH + RUNG_PITCH / 2)):
+        env.reset(seed=53)
+        env.posture = np.full(ACTION_SIZE, 0.5)
+        env.data.qpos[env.slide_qpos] = z
+        mujoco.mj_forward(env.model, env.data)
+        env._apply_action()
+        forces[name] = abs(float(env.data.qfrc_applied[env.slide_dof]) - GRIP_FORCE)
+    assert forces["peak"] > forces["mid"]
+    batch = LadderBatch(2, seed=55, episode_seconds=2.0)
+    batch_obs = batch.reset()
+    batch_obs, rewards, dones, _ = batch.step(np.zeros((2, ACTION_SIZE)))
+    assert batch_obs.shape == (2, OBSERVATION_SIZE) and rewards.shape == (2,) and len(dones) == 2
+
+
+def test_ladder_slip_terminates():
+    from ladder_env import LadderConfig, LadderClimbEnv
+
+    env = LadderClimbEnv(LadderConfig(episode_seconds=30.0))
+    env.reset(seed=59)
+    env.data.qpos[env.slide_qpos] = 0.5 - 0.3
+    mujoco.mj_forward(env.model, env.data)
+    _, _, done, info = env.step(np.zeros(ACTION_SIZE))
+    assert done and info["slipped"]
+
+
+def test_task_id_map_covers_all_envs():
+    import argparse as _argparse
+
+    from train_recurrent import TASK_IDS, build_batch
+
+    assert set(TASK_IDS) == {"basketball", "stilts", "swing", "ball", "ladder"}
+    for env_id in TASK_IDS:
+        args = _argparse.Namespace(
+            env=env_id,
+            num_envs=1,
+            seed=1,
+            episode_seconds=0.5,
+            stilts_height_cm=25.0,
+        )
+        batch = build_batch(args)
+        assert batch.observation_dim == 61 and batch.action_dim == 14
+
+
 @pytest.fixture(scope="module")
 def trained(tmp_path_factory):
     """One tiny real training run; its summary and export feed several tests."""

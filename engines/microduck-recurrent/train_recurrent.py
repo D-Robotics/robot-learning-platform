@@ -30,6 +30,39 @@ import torch
 from torch import nn
 
 from balance_env import ACTION_SIZE, OBSERVATION_SIZE, BalanceBatch
+from ballbalance_env import BallBalanceBatch
+from ladder_env import LadderBatch
+from swing_env import SwingBatch
+
+#: env name -> task id recorded in the training summary and run ledger.
+TASK_IDS = {
+    "basketball": "basketball-balance-recurrent",
+    "stilts": "stilt-balance-recurrent",
+    "swing": "swing-pump-recurrent",
+    "ball": "ball-balance-recurrent",
+    "ladder": "ladder-climb-recurrent",
+}
+
+
+def build_batch(args: argparse.Namespace):
+    """Batch factory: one proxy world family per ``--env`` choice."""
+    if args.env == "basketball":
+        return BalanceBatch(args.num_envs, seed=args.seed, episode_seconds=args.episode_seconds)
+    if args.env == "stilts":
+        return BalanceBatch(
+            args.num_envs,
+            seed=args.seed,
+            episode_seconds=args.episode_seconds,
+            stilts=True,
+            stilts_height_cm=args.stilts_height_cm,
+        )
+    if args.env == "swing":
+        return SwingBatch(args.num_envs, seed=args.seed, episode_seconds=args.episode_seconds)
+    if args.env == "ball":
+        return BallBalanceBatch(args.num_envs, seed=args.seed, episode_seconds=args.episode_seconds)
+    if args.env == "ladder":
+        return LadderBatch(args.num_envs, seed=args.seed, episode_seconds=args.episode_seconds)
+    raise ValueError(f"unknown env {args.env!r}")
 
 
 class RecurrentActorCritic(nn.Module):
@@ -72,18 +105,37 @@ def _squashed_logp(mean: torch.Tensor, log_std: torch.Tensor, raw_action: torch.
 def train(args: argparse.Namespace) -> dict:
     torch.manual_seed(args.seed)
     np.random.seed(args.seed)
-    batch = BalanceBatch(
-        args.num_envs,
-        seed=args.seed,
-        episode_seconds=args.episode_seconds,
-        stilts=args.env == "stilts",
-        stilts_height_cm=args.stilts_height_cm,
-    )
-    policy = RecurrentActorCritic(hidden=args.hidden, lstm_hidden=args.lstm_hidden)
+    # Programmatic callers (tests) may build the Namespace by hand without the
+    # CLI flag; the flag default is 1 and anything else must still be in range.
+    args.obs_history_frames = int(getattr(args, "obs_history_frames", 1) or 1)
+    if not 1 <= args.obs_history_frames <= 64:
+        raise ValueError(f"--obs-history-frames must be in [1, 64], got {args.obs_history_frames}")
+    if args.obs_history_frames > 1 and args.env not in TASK_IDS:  # pragma: no cover - argparse guards env
+        raise ValueError(f"unknown env {args.env!r}")
+    batch = build_batch(args)
+    # Stacked-observation history (the RPO-style policy input): the env frame
+    # stays 61D; the network consumes the last N frames flattened oldest-first.
+    # Zero-initialized at episode start — the eval harness and the board joint
+    # runtime zero their histories identically.
+    history_frames = args.obs_history_frames
+    model_obs_size = OBSERVATION_SIZE * history_frames
+    policy = RecurrentActorCritic(obs_size=model_obs_size, hidden=args.hidden, lstm_hidden=args.lstm_hidden)
     optimizer = torch.optim.Adam(policy.parameters(), lr=args.learning_rate)
     num_envs = args.num_envs
     state = (torch.zeros(1, num_envs, args.lstm_hidden), torch.zeros(1, num_envs, args.lstm_hidden))
-    obs = batch.reset()
+    obs_history = np.zeros((num_envs, history_frames, OBSERVATION_SIZE), dtype=np.float32)
+
+    def stack(frames: np.ndarray) -> np.ndarray:
+        """Shift-and-append one frame batch; return the flat model input."""
+        obs_history[:, :-1, :] = obs_history[:, 1:, :]
+        obs_history[:, -1, :] = frames
+        return obs_history.reshape(num_envs, -1)
+
+    def clear_history(env_indices) -> None:
+        for index in env_indices:
+            obs_history[index] = 0.0
+
+    obs = stack(batch.reset())
     episode_reward = np.zeros(num_envs, dtype=np.float64)
     resets = 0
     curve = []
@@ -105,7 +157,14 @@ def train(args: argparse.Namespace) -> dict:
             value_buf.append(np.float64(value.numpy()))
             h_buf.append(state[0].numpy().copy())
             c_buf.append(state[1].numpy().copy())
-            obs, rewards, dones, _ = batch.step(action_np)
+            frames, rewards, dones, _ = batch.step(action_np)
+            # A reset env's continuation is a fresh episode: zero its frame
+            # history before appending the new frame, exactly like the board
+            # runtime's session start and the eval harness's reset().
+            done_indices = [index for index, flag in enumerate(dones) if flag]
+            if done_indices:
+                clear_history(done_indices)
+            obs = stack(frames)
             reward_buf.append(rewards.copy())
             done_buf.append(np.asarray(dones, dtype=np.float32))
             episode_reward += rewards
@@ -175,12 +234,25 @@ def train(args: argparse.Namespace) -> dict:
             flush=True,
         )
     payload = {
-        "task": "stilt-balance-recurrent" if args.env == "stilts" else "basketball-balance-recurrent",
+        "task": TASK_IDS[args.env],
         "env": args.env,
         "stiltsHeightCm": args.stilts_height_cm if args.env == "stilts" else None,
         "device": "cpu",
+        # Frame width of the proxy env; the model input width is the stacked
+        # observationHistory below (identical to 61 here when frames == 1).
         "observationSize": OBSERVATION_SIZE,
         "actionSize": ACTION_SIZE,
+        **(
+            {
+                "observationHistory": {
+                    "frames": history_frames,
+                    "order": "oldest-first",
+                    "modelObservationSize": model_obs_size,
+                }
+            }
+            if history_frames > 1
+            else {}
+        ),
         "numEnvs": num_envs,
         "iterations": args.iterations,
         "stepsPerEnv": args.steps_per_env,
@@ -216,12 +288,21 @@ class RecurrentPolicyExport(nn.Module):
         return actions, h_out, c_out
 
 
+def model_obs_size(policy: RecurrentActorCritic) -> int:
+    """The width the exported graph consumes, read from the trained encoder.
+
+    Derived from the module itself so every caller (and the monkeypatched
+    verify_export in tests) keeps the two-argument signature.
+    """
+    return int(policy.encoder[0].in_features)
+
+
 def export_onnx(policy: RecurrentActorCritic, path: str) -> dict:
     export_model = RecurrentPolicyExport(policy).eval()
     state_example = torch.zeros((1, 1, policy.lstm_hidden))
     torch.onnx.export(
         export_model,
-        (torch.zeros((1, OBSERVATION_SIZE)), state_example, state_example.clone()),
+        (torch.zeros((1, model_obs_size(policy))), state_example, state_example.clone()),
         path,
         input_names=["obs", "h_in", "c_in"],
         output_names=["actions", "h_out", "c_out"],
@@ -264,6 +345,7 @@ def verify_export(policy: RecurrentActorCritic, path: str) -> dict:
     import onnx
     import onnxruntime as ort
 
+    obs_size = model_obs_size(policy)
     model = onnx.load(path)
     onnx.checker.check_model(model)
     session = ort.InferenceSession(path, providers=["CPUExecutionProvider"])
@@ -277,7 +359,7 @@ def verify_export(policy: RecurrentActorCritic, path: str) -> dict:
     worst = 0.0
     with torch.no_grad():
         for _ in range(6):
-            obs = rng.normal(0, 0.4, (1, OBSERVATION_SIZE)).astype(np.float32)
+            obs = rng.normal(0, 0.4, (1, obs_size)).astype(np.float32)
             torch_actions, th, tc = export_model(torch.from_numpy(obs), th, tc)
             ort_actions, h, c = session.run(
                 ["actions", "h_out", "c_out"],
@@ -291,8 +373,9 @@ def verify_export(policy: RecurrentActorCritic, path: str) -> dict:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--env", choices=["basketball", "stilts"], default="basketball",
-                        help="balance proxy: rolling basketball (drifting pivot) or rigid stilts (fixed pivot)")
+    parser.add_argument("--env", choices=sorted(TASK_IDS), default="basketball",
+                        help="proxy task: rolling-ball/stilt balance, swing pumping, "
+                             "stability-ball balance or pole-climb rhythm")
     parser.add_argument("--stilts-height-cm", type=float, default=25.0)
     parser.add_argument("--num-envs", type=int, default=8)
     parser.add_argument("--iterations", type=int, default=3)
@@ -306,6 +389,9 @@ def main() -> None:
     parser.add_argument("--entropy-weight", type=float, default=0.005)
     parser.add_argument("--hidden", type=int, default=128)
     parser.add_argument("--lstm-hidden", type=int, default=256)
+    parser.add_argument("--obs-history-frames", type=int, default=1,
+                        help="stack the last N 61D frames into the policy input "
+                             "(oldest-first, zero-initialized per episode); default 1")
     parser.add_argument("--episode-seconds", type=float, default=12.0)
     parser.add_argument("--seed", type=int, default=20260922)
     parser.add_argument("--out")
