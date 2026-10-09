@@ -1739,6 +1739,7 @@ function setAuthGate(payload) {
   // refreshes project context + integrations).
   renderContextLive();
   renderPlatformScorecard();
+  renderResearchLoop();
   if (!state.authNoticeShown) {
     state.authNoticeShown = true;
     // 区分「从未登录」与「登录已过期」：后者换个口径，提示重新登录即可恢复
@@ -8390,6 +8391,7 @@ function renderAll() {
   renderOnboardChecklist();
   renderProjectWorkspace();
   renderPlatformScorecard();
+  renderResearchLoop();
   renderAgentPanel();
   renderPromotionFlow();
   // Data refreshes can replace or hide panels after a tab click. Re-assert the
@@ -8499,6 +8501,107 @@ async function refreshActiveRuns() {
       }
     }
   }
+}
+
+const RESEARCH_LOOP_TREND_LABELS = {
+  improving: '仍在改善',
+  diminishing: '边际递减',
+  flat: '持平',
+  undetermined: '样本不足',
+};
+
+const RESEARCH_LOOP_METRIC_LABELS = {
+  'metrics.meanReturn': '平均回报',
+  'metrics.successRate': '成功率',
+  'evaluation.actionMae': '动作 MAE',
+};
+
+function formatResearchLoopDuration(ms) {
+  if (!Number.isFinite(ms) || ms <= 0) return '—';
+  if (ms < 90 * 1000) return `${Math.round(ms / 1000)} 秒`;
+  if (ms < 90 * 60 * 1000) return `${Math.round(ms / 60000)} 分钟`;
+  return `${(ms / 3600000).toFixed(1)} 小时`;
+}
+
+function researchLoopItem(title, copy) {
+  const item = document.createElement('article');
+  item.className = 'platform-score-item';
+  const heading = document.createElement('strong');
+  heading.textContent = title;
+  const note = document.createElement('span');
+  note.textContent = copy;
+  item.append(heading, note);
+  return item;
+}
+
+function renderResearchLoop() {
+  const grid = $('research-loop-grid');
+  if (!grid) return;
+  // Same guest rule as the scorecard: account-scoped metrics would read as
+  // "the platform is broken" for a logged-out visitor.
+  if (state.authRequired && !state.overview) {
+    grid.replaceChildren();
+    const item = researchLoopItem('登录后可见', '闭环指标按账号内的训练、评测与部署记录计算；仿真试玩不受影响。');
+    item.style.gridColumn = '1 / -1';
+    grid.append(item);
+    return;
+  }
+  if (state.researchLoopError && !state.researchLoop) {
+    grid.replaceChildren();
+    const item = researchLoopItem('指标暂不可用', '闭环指标读取失败，工作台主流程不受影响。');
+    const retry = document.createElement('button');
+    retry.type = 'button';
+    retry.className = 'button button-ghost button-small';
+    retry.textContent = '重试';
+    retry.addEventListener('click', () => {
+      retry.disabled = true;
+      void loadOverview({ quiet: true });
+    });
+    item.append(retry);
+    grid.append(item);
+    return;
+  }
+  const summary = state.researchLoop;
+  if (!summary) return; // keep the "正在汇总…" placeholder from initial HTML
+  const attributed = summary.runs?.agentShareOfAttributedPct;
+  const shareText = attributed === null || attributed === undefined
+    ? '发起方尚未标记'
+    : `Agent 发起占比 ${Math.round(attributed)}%`;
+  const training = summary.loopLatency?.training;
+  const toEvaluation = summary.loopLatency?.toEvaluation;
+  const latencyCopy = Number(training?.sampleCount) > 0
+    ? `到评测 P50 ${formatResearchLoopDuration(toEvaluation?.p50Ms)} · 样本 ${toEvaluation?.sampleCount ?? 0}`
+    : '暂无已完成的真实训练';
+  const autonomy = summary.autonomy || {};
+  const returns = Array.isArray(summary.marginalReturns) ? summary.marginalReturns : [];
+  const latest = returns[returns.length - 1];
+  const returnsCopy = latest
+    ? `${RESEARCH_LOOP_METRIC_LABELS[latest.metric] || latest.metric} · ${latest.trend === 'improving' ? '近期优于前半段' : RESEARCH_LOOP_TREND_LABELS[latest.trend] || latest.trend}`
+    : '暂无实验序列';
+  const walls = summary.walls || {};
+  const compute = walls.computeResources || {};
+  grid.replaceChildren(
+    researchLoopItem(
+      `${summary.runs?.completed ?? 0}/${summary.runs?.total ?? 0} 次训练完成`,
+      shareText,
+    ),
+    researchLoopItem(
+      `训练 P50 ${formatResearchLoopDuration(training?.p50Ms)}`,
+      latencyCopy,
+    ),
+    researchLoopItem(
+      `${autonomy.stepTotal ?? 0} 个已执行步`,
+      `最长免审批连跑 ${autonomy.longestApprovalFreeChainSteps ?? 0} 步 · 审批门控 ${autonomy.approvalGatedSteps ?? 0}`,
+    ),
+    researchLoopItem(
+      RESEARCH_LOOP_TREND_LABELS[latest?.trend] || '暂无序列',
+      returnsCopy,
+    ),
+    researchLoopItem(
+      `${walls.queued ?? 0} 排队 · ${walls.running ?? 0} 运行`,
+      `阻塞 ${walls.blocked ?? 0} · 失败 ${walls.failed ?? 0} · 算力在线 ${compute.onlineFresh ?? 0}/${compute.total ?? 0}`,
+    ),
+  );
 }
 
 async function loadOverview({ quiet = false, silent = false } = {}) {

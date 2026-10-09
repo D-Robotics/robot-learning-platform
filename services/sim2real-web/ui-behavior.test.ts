@@ -377,7 +377,11 @@ async function boot(
 describe('Sim2Real workbench DOM behavior', () => {
   it('boots the real app bundle and changes one visible workspace view at a time', async () => {
     const { window, errors } = await boot();
-    expect(window.document.querySelectorAll('.platform-score-item')).toHaveLength(5);
+    // Scoped to the scorecard grid: the research-loop panel reuses the same
+    // item class and renders its own (asynchronous) card count.
+    expect(
+      window.document.querySelectorAll('#platform-scorecard-grid .platform-score-item'),
+    ).toHaveLength(5);
     expect(window.document.querySelector('#platform-score-total')?.textContent).toMatch(
       /^\d+\.\d$/,
     );
