@@ -364,21 +364,19 @@
           <nav class="workflow-progress-strip" id="workflow-progress-strip" aria-label="闭环进度">
             <div class="workflow-progress-intro"><span class="eyebrow">学习进度</span><strong id="workflow-progress-summary">从准备数据开始</strong></div>
             <ol class="workflow-progress-steps">
-              <li data-workflow-step="simulate"><button type="button" data-view-target="simulate"><b>1</b><span><strong>仿真与录制</strong><small>生成可回放轨迹</small></span></button></li>
-              <li data-workflow-step="train"><button type="button" data-view-target="train"><b>2</b><span><strong>强化学习训练</strong><small>训练策略模型</small></span></button></li>
-              <li data-workflow-step="evaluate"><button type="button" data-view-target="evaluate"><b>3</b><span><strong>Sim2Real 评测</strong><small>对比仿真与真机</small></span></button></li>
-              <li data-workflow-step="deploy"><button type="button" data-view-target="deploy"><b>4</b><span><strong>部署与反馈</strong><small>预检后受控上线</small></span></button></li>
+              <li data-workflow-step="simulate"><button type="button" data-view-target="simulate"><b>1</b><span><strong>数据与仿真</strong><small>生成可回放轨迹</small></span></button></li>
+              <li data-workflow-step="train"><button type="button" data-view-target="train"><b>2</b><span><strong>训练与策略</strong><small>训练策略模型</small></span></button></li>
+              <li data-workflow-step="evaluate"><button type="button" data-view-target="evaluate"><b>3</b><span><strong>评测与证据</strong><small>对比仿真与真机</small></span></button></li>
+              <li data-workflow-step="deploy"><button type="button" data-view-target="deploy"><b>4</b><span><strong>设备与发布</strong><small>预检后受控上线</small></span></button></li>
             </ol>
           </nav>
 
           <section class="flow-context-strip" id="flow-context" aria-live="polite" hidden>
-            <span class="flow-context-index" id="flow-context-index">—</span>
             <div class="flow-context-copy">
               <span class="eyebrow" id="flow-context-kicker">当前流程节点</span>
               <h2 id="flow-context-title">—</h2>
               <p id="flow-context-description">—</p>
             </div>
-            <span class="flow-context-target" id="flow-context-target">—</span>
           </section>
 
           <section
@@ -387,7 +385,7 @@
             aria-labelledby="overview-title"
           >
             <div class="section-heading section-heading-lean">
-              <div class="overview-page-title"><h2 id="overview-title">开始机器人学习</h2><p>先创建项目并准备数据，再训练和验证策略；需要真机时再连接设备。</p><p class="object-line" id="object-chain" aria-label="项目对象链"><button type="button" data-view-target="overview" data-chain-node="project">项目</button><i aria-hidden="true">→</i><button type="button" data-view-target="train" data-chain-node="model">模型 / 策略</button><i aria-hidden="true">→</i><button type="button" data-view-target="records" data-chain-node="run">Run</button><i aria-hidden="true">→</i><button type="button" data-view-target="evaluate" data-chain-node="evaluation">评测证据</button><i aria-hidden="true">→</i><button type="button" data-view-target="deploy" data-chain-node="artifact">发布制品</button><i aria-hidden="true">→</i><button type="button" data-view-target="station" data-chain-node="device">设备</button></p></div>
+              <div class="overview-page-title"><h2 id="overview-title">开始机器人学习</h2><p>先创建项目并准备数据，再训练和验证策略；需要真机时再连接设备。</p></div>
               <span class="section-caption" id="hero-updated">—</span>
             </div>
             <div class="next-card">
@@ -441,6 +439,13 @@
               </div>
               <div class="platform-scorecard-grid" id="platform-scorecard-grid" aria-live="polite"><span class="empty-inline">正在检查契约、训练、评测和设备证据…</span></div>
               <div class="platform-scorecard-foot"><span id="platform-scorecard-note">真实 X5 运动证据和签名制品会单独计入现场验收。</span><button type="button" class="button button-ghost button-small" data-view-target="records">查看证据记录 →</button></div>
+            </section>
+            <section class="platform-scorecard panel" aria-labelledby="research-loop-title">
+              <div class="platform-scorecard-heading">
+                <div><span class="eyebrow">研究反馈回路</span><h2 id="research-loop-title">闭环指标</h2><p>发起、时延、自主度与边际收益——检验研究回路是否越转越快。</p></div>
+              </div>
+              <div class="platform-scorecard-grid" id="research-loop-grid" aria-live="polite"><span class="empty-inline">正在汇总近 30 天的闭环指标…</span></div>
+              <div class="platform-scorecard-foot"><span id="research-loop-note">口径：近 30 天；发起方未标记的记录不计入占比分母；免审批链长为会话内内存口径。</span></div>
             </section>
             <section class="project-workspace panel" id="project-workspace" aria-labelledby="project-workspace-title">
               <div class="panel-heading panel-heading-lean project-workspace-heading">
@@ -563,11 +568,8 @@
             class="view-section"
             data-view-section="simulate"
             hidden
-            aria-labelledby="simulate-title"
+            aria-labelledby="flow-context-title"
           >
-            <div class="section-heading section-heading-lean">
-              <div><span class="stage-kicker">01 · 学习闭环</span><h2 id="simulate-title">仿真与录制</h2><p class="section-lead">先把动作任务跑通并录下可复用轨迹，训练、评测和部署都从这份证据继续。</p></div>
-            </div>
             <div class="module-step-strip" aria-label="仿真工作流">
               <div class="module-step is-current"><span>01</span><div><strong>任务与场景</strong><small>选择动作任务和模型</small></div></div>
               <div class="module-step"><span>02</span><div><strong>仿真运行</strong><small>观察动作和实时状态</small></div></div>
@@ -701,17 +703,14 @@
             data-view-section="train"
             data-active-train-module="run"
             hidden
-            aria-labelledby="train-title"
+            aria-labelledby="flow-context-title"
           >
-            <div class="section-heading section-heading-lean">
-              <h2 id="train-title">强化学习训练与模型</h2>
-            </div>
             <p class="mobile-desktop-hint" role="note">手机端适合查看训练进度、审批与结果；训练参数配置建议在桌面端完成。</p>
-            <div class="submodule-tabs" role="tablist" aria-label="强化学习工作台模块">
-              <button class="submodule-tab is-active" type="button" role="tab" id="train-tab-run" aria-controls="train-module-run-model train-module-run-robogo" aria-selected="true" data-train-module-tab="run">训练工作台<small>模型、算法与提交</small></button>
-              <button class="submodule-tab" type="button" role="tab" id="train-tab-contract" aria-controls="contract-fold" aria-selected="false" data-train-module-tab="contract">模型契约<small>Manifest 与兼容性</small></button>
+            <div class="submodule-tabs" role="tablist" aria-label="训练与策略模块">
+              <button class="submodule-tab" type="button" role="tab" id="train-tab-contract" aria-controls="contract-fold" aria-selected="false" data-train-module-tab="contract">模型与契约<small>Manifest 与兼容性</small></button>
               <button class="submodule-tab" type="button" role="tab" id="train-tab-config" aria-controls="train-module-config" aria-selected="false" data-train-module-tab="config">训练配置<small>算法、算力与续训</small></button>
-              
+              <button class="submodule-tab is-active" type="button" role="tab" id="train-tab-run" aria-controls="train-module-run-model train-module-run-robogo" aria-selected="true" data-train-module-tab="run">Run 与进度<small>提交任务与实时曲线</small></button>
+
             </div>
             <div class="train-onboarding" role="note" aria-label="训练流程引导">
               <div class="train-onboarding-heading">
@@ -1013,12 +1012,9 @@
             class="view-section"
             data-view-section="evaluate"
             hidden
-            aria-labelledby="evaluate-title"
+            aria-labelledby="flow-context-title"
           >
-            <div class="section-heading section-heading-lean">
-              <h2 id="evaluate-title">Sim2Real 评测</h2><p class="section-lead">把仿真轨迹和真机遥测放在一起，确认策略是否真的有效。</p>
-            </div>
-            <div class="submodule-tabs" role="tablist" aria-label="评测模块">
+            <div class="submodule-tabs" role="tablist" aria-label="评测与证据模块">
               <button class="submodule-tab is-active" type="button" role="tab" id="eval-tab-run" aria-controls="evaluation-run-panel" data-view-target="evaluate" data-flow-child="evaluation-run">发起评测<small>指标 · 仿真对照</small></button>
               <button class="submodule-tab" type="button" role="tab" id="eval-tab-comparison" aria-controls="evaluation-comparison-panel" data-view-target="evaluate" data-flow-child="comparison">结果对比<small>最近 Run 趋势</small></button>
             </div>
@@ -1377,12 +1373,9 @@
             class="view-section"
             data-view-section="deploy"
             hidden
-            aria-labelledby="deploy-title"
+            aria-labelledby="flow-context-title"
           >
-            <div class="section-heading section-heading-lean">
-              <h2 id="deploy-title">部署与反馈</h2><p class="section-lead">先只读预检，再看部署反馈；任何执行动作都需要单独批准。</p>
-            </div>
-            <div class="submodule-tabs" role="tablist" aria-label="部署模块">
+            <div class="submodule-tabs" role="tablist" aria-label="设备与发布模块">
               <button class="submodule-tab is-active" type="button" role="tab" id="deploy-tab-preflight" aria-controls="preflight-panel" data-view-target="deploy" data-flow-child="preflight">预检与发布<small>只读预检 · NO MOTOR</small></button>
               <button class="submodule-tab" type="button" role="tab" aria-controls="feedback-panel" data-view-target="deploy" data-flow-child="feedback">运行反馈与回滚<small>上线闸门 · 时间线</small></button>
             </div>
@@ -1478,12 +1471,8 @@
             class="view-section"
             data-view-section="resources"
             hidden
-            aria-labelledby="resources-title"
+            aria-labelledby="flow-context-title"
           >
-            <div class="section-heading section-heading-lean">
-              <h2 id="resources-title">GPU 与算力资源</h2>
-              <p class="section-lead">管理本机 Agent、远端 GPU 和云端算力。训练页面只选择资源，不在这里混入训练配置。</p>
-            </div>
             <div class="records-layout records-single">
               <article class="panel compute-resources-panel">
                 <div class="panel-heading panel-heading-lean">
@@ -1514,17 +1503,13 @@
             class="view-section"
             data-view-section="records"
             hidden
-            aria-labelledby="records-title"
+            aria-labelledby="flow-context-title"
           >
-            <div class="section-heading section-heading-lean">
-              <h2 id="records-title">证据与记录</h2><p class="section-lead">仿真录制、强化学习模型、评测证据和部署制品统一管理，可按任务追踪和回放。</p>
-            </div>
             <div class="records-layout records-single">
               <article class="panel history-panel">
                 <div class="panel-heading panel-heading-lean"><h2>全部证据与记录</h2>
                   <span class="panel-caption" id="records-count">最近 30 条</span>
                 </div>
-                <p class="records-scope-note">这里汇总轨迹、训练 Run、评测证据、模型制品和部署记录；点击一条记录可继续回放或查看详情。</p>
                 <div class="records-toolbar" role="toolbar" aria-label="记录筛选">
                   <div class="record-tabs" role="group" aria-label="记录类型筛选">
                     <button
@@ -1586,11 +1571,8 @@
             class="view-section"
             data-view-section="station"
             hidden
-            aria-labelledby="station-title"
+            aria-labelledby="flow-context-title"
           >
-            <div class="section-heading section-heading-lean">
-              <h2 id="station-title">设备控制台</h2>
-            </div>
             <p class="mobile-desktop-hint" role="note">手机端适合查看设备状态与日志；实时画面和安全控制建议使用桌面端。</p>
             <div class="submodule-tabs" role="tablist" aria-label="设备控制台模块">
               <button id="station-tab-devices" aria-controls="station-device-manager" class="submodule-tab is-active" type="button" role="tab" aria-selected="true" data-station-module-tab="devices">设备连接<small>Bridge、板卡与能力</small></button>
@@ -1607,11 +1589,11 @@
                 <span class="panel-caption">平台内添加 · 受控连接 · 状态可追踪</span>
               </div>
               <p class="station-drive-note" id="station-device-manager-note">
-                Sim2Real 原生管理设备连接：填写板卡地址后由平台建立受控连接，
-                设备档案、连接状态、心跳、能力检查和后续预检都在本工作台内完成。
+                在平台内登记板卡并建立受控连接：设备档案、连接状态、心跳、
+                能力检查和后续预检都在本页完成。
               </p>
               <div class="station-studio-connect">
-                <div><strong>原生连接设备</strong><small>填写板卡地址并添加，Sim2Real 会建立受控隧道并读取设备状态。</small></div>
+                <div><strong>原生连接设备</strong><small>填写板卡地址并添加，平台会建立受控隧道并读取设备状态。</small></div>
               </div>
               <p class="station-device-ssh-hint" id="station-device-ssh-path"><strong>路径 A · 网页内配对</strong>：SSH 可密码登录的板卡，填下表一次完成设备档案与受控隧道。</p>
               <div class="station-device-add" id="station-device-add">

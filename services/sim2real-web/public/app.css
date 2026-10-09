@@ -5297,7 +5297,6 @@ html.theme-dark .agent-assistant-health { max-width: 150px; }
 }
 .first-run-path-step:hover, .first-run-path-step:focus-visible, .first-run-path-step.is-current { border-color:var(--accent); background:color-mix(in srgb, var(--accent) 8%, var(--panel)); }
 .first-run-path-step.is-current b { background:var(--accent-soft); color:var(--accent-text); }
-.section-lead { margin: 4px 0 0; color: var(--muted); font-size:var(--fs-body); }
 .simulator-gate-steps {
   width: min(620px, 100%);
   margin: 16px auto 20px;
@@ -5417,18 +5416,16 @@ html.theme-dark .agent-assistant-health { max-width: 150px; }
 .view-section[data-active-deploy-module] .deploy-layout{grid-template-columns:minmax(0,1fr)}
 @media (max-width:720px){.submodule-tabs{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));margin-left:-2px;margin-right:-2px;overflow:visible}.submodule-tab{min-width:0;width:100%;padding:8px 10px}}
 .flow-context-strip{display:flex;align-items:center;gap:12px;margin:12px 0 16px;padding:12px 16px;border:1px solid color-mix(in srgb,var(--accent) 42%,var(--line));border-radius:12px;background:color-mix(in srgb,var(--accent) 8%,var(--panel));}
-.flow-context-index{display:grid;place-items:center;width:32px;height:32px;border-radius:8px;background:var(--accent);color:var(--accent-contrast,var(--panel));font-weight:800;}
-.flow-context-copy{min-width:0;flex:1}.flow-context-kicker{color:var(--accent-text);font-size:var(--fs-meta)}.flow-context-copy h2{margin:2px 0 2px;font-size:16px}.flow-context-copy p{margin:0;color:var(--muted-strong);font-size:var(--fs-meta);line-height:1.4}.flow-context-target{padding:4px 8px;border:1px solid var(--line-strong);border-radius:999px;color:var(--muted-strong);font-size:var(--fs-meta);white-space:nowrap;}
+.flow-context-copy{min-width:0;flex:1}.flow-context-kicker{color:var(--accent-text);font-size:var(--fs-meta)}.flow-context-copy h2{margin:2px 0 2px;font-size:29px;font-weight:680;letter-spacing:-.055em}.flow-context-copy p{margin:0;color:var(--muted-strong);font-size:var(--fs-meta);line-height:1.4}
 .flow-focus-target{border-color:var(--accent);box-shadow:0 0 0 4px color-mix(in srgb,var(--accent) 18%,transparent);}
 /* 子界面分割（D-002）：评测与部署的多子项共享视图内，面板互斥显隐——
    一次只展示当前子项自己的内容，与训练页模块切换同构。 */
 [data-view-section="evaluate"][data-active-eval-module="run"] .evaluation-evidence{display:none}
 [data-view-section="evaluate"][data-active-eval-module="comparison"] #evaluation-run-panel{display:none}
 [data-view-section="deploy"][data-active-deploy-module="preflight"] #feedback-panel{display:none}
-[data-view-section="deploy"][data-active-deploy-module="feedback"] #preflight-panel{display:none}@media (max-width:720px){.flow-context-strip{align-items:flex-start;padding:10px 12px}#flow-context .flow-context-target{display:none}}
+[data-view-section="deploy"][data-active-deploy-module="feedback"] #preflight-panel{display:none}@media (max-width:720px){.flow-context-strip{align-items:flex-start;padding:10px 12px}#flow-context .flow-context-copy h2{font-size:26px}}
 .module-step-strip{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;margin:12px 0 16px;padding:8px;border:1px solid var(--line);border-radius:12px;background:var(--panel-soft)}
 .module-step{display:flex;align-items:center;gap:8px;min-width:0;padding:10px 12px;border:1px solid transparent;border-radius:8px}.module-step>span{display:grid;place-items:center;width:24px;height:24px;border-radius:50%;background:var(--panel-raised);color:var(--muted-strong);font-size:var(--fs-meta);font-weight:700}.module-step strong{display:block;font-size:13px}.module-step small{display:block;margin-top:2px;color:var(--muted);font-size:var(--fs-meta)}.module-step.is-current{border-color:var(--accent);background:color-mix(in srgb,var(--accent) 9%,transparent)}.module-step.is-current>span{background:var(--accent);color:var(--accent-contrast,var(--panel))}
-.records-scope-note{margin:-4px 0 12px;color:var(--muted-strong);font-size:var(--fs-meta);line-height:1.5}
 .view-section[data-active-train-module="config"] .model-panel>.panel-heading{display:flex}
 @media (max-width:720px){.module-step-strip{grid-template-columns:1fr}}
 .model-empty-guide{display:flex;flex-direction:column;align-items:flex-start;gap:8px;padding:16px}.model-empty-guide strong{font-size:17px}.model-empty-guide span{color:var(--muted);font-size:var(--fs-meta)}.model-empty-guide .button{margin-top:4px}
@@ -9160,7 +9157,6 @@ body .section-heading-lean h2,
 body .section-heading h2 {
   letter-spacing: -0.045em;
 }
-body .section-heading-lean .section-lead,
 body .section-heading-lean > p {
   max-width: 620px;
   margin: 8px 0 0;
@@ -9497,59 +9493,10 @@ body .app-shell [data-view-section='evaluate'] .evaluation-grid .originbot-compa
   display: none;
 }
 
-.object-line {
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 6px;
-  margin: 10px 0 0;
-  color: var(--muted);
-  font-size:var(--fs-meta);
-  line-height: 1.45;
-}
-
-.object-line button {
-  display: inline-flex;
-  align-items: center;
-  min-height: 24px;
-  border: 1px solid var(--line);
-  border-radius: 999px;
-  padding: 2px 8px;
-  color: var(--muted-strong);
-  background: var(--panel-soft);
-  font: inherit;
-  cursor: pointer;
-}
-
-.object-line button:hover {
-  border-color: var(--line-strong);
-  color: var(--text);
-}
-
-.object-line button[data-chain-node='project'] {
-  border-color: var(--accent-ring);
-  color: var(--accent-text);
-  background: var(--accent-soft);
-}
-
-/* 当前视图在链上的位置：与"项目"起点同样式，指向你现在的工作对象。 */
-.object-line button.is-here {
-  border-color: var(--accent);
-  color: var(--accent-text);
-  background: var(--accent-soft);
-  font-weight: 600;
-}
-
-.object-line i {
-  color: var(--muted);
-  font-style: normal;
-}
-
 /* Use readable body sizing for explanations while keeping compact badges and
    timestamps compact. This gives Chinese copy enough breathing room without
    turning the data dense surfaces into oversized cards. */
-.product-clarity-shell .section-lead,
-.product-clarity-shell .overview-page-title > p:not(.object-line),
+.product-clarity-shell .overview-page-title > p,
 .product-clarity-shell .small-note,
 .product-clarity-shell .panel-caption,
 .product-clarity-shell .workspace-summary-card em,
@@ -9636,10 +9583,6 @@ body.agent-chat-open .product-clarity-shell .agent-chat-heading .workspace-kicke
     padding-bottom: 104px;
   }
 
-  body .product-clarity-shell .object-line i {
-    display: none;
-  }
-
 body .product-clarity-shell .agent-chat-role {
     max-width: 48ch;
   }
@@ -9696,28 +9639,6 @@ body .product-clarity-shell .workspace-status-banner.is-error {
   background: color-mix(in srgb, var(--red-soft) 72%, var(--panel));
 }
 
-body .product-clarity-shell .stage-kicker {
-  display: block;
-  margin-bottom: 8px;
-  color: var(--accent-text);
-  font-family: var(--font-label);
-  font-size:var(--fs-meta);
-  font-weight: 650;
-  letter-spacing: 0.14em;
-}
-
-body .product-clarity-shell [data-view-section='simulate'] .section-heading {
-  margin-bottom: 24px;
-}
-
-body .product-clarity-shell [data-view-section='simulate'] .section-lead {
-  max-width: 620px;
-  margin: 8px 0 0;
-  color: var(--muted);
-  font-size: 14px;
-  line-height: 1.55;
-}
-
 body .product-clarity-shell [data-view-section='simulate'] .simulator-panel {
   border-color: transparent;
   background: var(--panel);
@@ -9760,10 +9681,6 @@ body .product-clarity-shell [data-view-section='simulate'] .sim-action-library {
 }
 
 @media (max-width: 720px) {
-  body .product-clarity-shell [data-view-section='simulate'] .section-lead {
-    font-size:var(--fs-body);
-  }
-
   body .product-clarity-shell [data-view-section='simulate'] > .sim-layout > .guide-panel {
     box-shadow: inset 0 0 0 1px var(--ui-border-soft), 0 10px 24px color-mix(in srgb, var(--text) 5%, transparent);
   }
@@ -10352,27 +10269,6 @@ body .depth-led .workspace-status-banner.is-error {
   background: color-mix(in srgb, var(--red-soft) 72%, var(--panel));
 }
 
-body .depth-led [data-view-section='simulate'] .section-heading {
-  margin-bottom: 32px;
-}
-
-body .depth-led [data-view-section='simulate'] .stage-kicker {
-  margin-bottom: 8px;
-  color: var(--accent-text);
-  font-family: var(--font-label);
-  font-size:var(--fs-meta);
-  font-weight: 650;
-  letter-spacing: 0.14em;
-}
-
-body .depth-led [data-view-section='simulate'] .section-lead {
-  max-width: 660px;
-  margin: 8px 0 0;
-  color: var(--muted);
-  font-size: 14px;
-  line-height: 1.55;
-}
-
 body .depth-led [data-view-section='simulate'] .simulator-panel {
   border: 0;
   background: var(--panel);
@@ -10418,10 +10314,6 @@ body .depth-led [data-view-section='simulate'] .sim-action-item:hover {
 }
 
 @media (max-width: 720px) {
-  body .depth-led [data-view-section='simulate'] .section-lead {
-    font-size:var(--fs-body);
-  }
-
   body .depth-led [data-view-section='simulate'] > .sim-layout > .guide-panel {
     box-shadow: inset 0 0 0 1px var(--ui-border-soft), 0 12px 28px color-mix(in srgb, var(--text) 7%, transparent);
   }

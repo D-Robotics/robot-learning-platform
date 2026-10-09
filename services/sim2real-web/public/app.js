@@ -313,6 +313,7 @@ function renderContextLive() {
   const activeView = document.body.dataset.activeView || 'overview';
   const stageLabel = flowStageLabel(activeView);
   setText('context-live-stage', stageLabel);
+  renderFlowBanner();
   // 浏览器标签页标题跟随位置：11 个流程子项共用 8 个视图，若标题固定，
   // 多开标签页时无法分辨各自停在哪个节点。
   document.title = `${stageLabel} · RDK Robot Learning Platform`;
@@ -353,6 +354,10 @@ const state = {
   // while older gateways are upgrading, but never invents a second persisted
   // workflow state when this payload is available.
   goldenPath: null,
+  // Research-loop summary (server-computed): projection only, never a second
+  // metric definition. Null until the first non-silent overview cycle lands.
+  researchLoop: null,
+  researchLoopError: false,
   projects: [],
   projectsLoaded: false,
   projectsLoadError: false,
@@ -542,7 +547,10 @@ function renderPlatformScorecard() {
   const deploymentVerified = Boolean(
     latestDeployment?.verification || latestDeployment?.releaseGate,
   );
-  const deploymentState = deploymentVerified
+  // 「有发布证据」不等于「发布成功」：最新一次发布失败时按 partial 呈现，
+  // 不能让失败状态旁边出现打满的绿色进度条。
+  const deploymentFailed = String(latestDeployment?.status || '').toLowerCase() === 'failed';
+  const deploymentState = deploymentVerified && !deploymentFailed
     ? 'ready'
     : latestDeployment
       ? 'partial'
@@ -559,7 +567,7 @@ function renderPlatformScorecard() {
     ['契约与制品', contractState, contractState === 'ready' ? '输入输出和受管引用已登记' : model ? '契约或制品引用还不完整' : '先登记 manifest'],
     ['训练执行', trainingState, trainingComplete ? statusLabel(latestRun.status) : trainingConfigured ? '后端已配置，等待完成 Run' : '等待 runner'],
     ['Sim2Real 评测', evaluationState, evaluationState === 'ready' ? '受信证据可用于发布' : evaluationExists ? '证据已保存 · 来源未验证' : '导入遥测或轨迹'],
-    ['设备发布', deploymentState, deploymentState === 'ready' ? statusLabel(latestDeployment.status) : latestDeployment ? '预检计划已生成，等待结果' : '先做只读预检'],
+    ['设备发布', deploymentState, deploymentState === 'ready' ? statusLabel(latestDeployment.status) : deploymentFailed ? '最新一次发布未通过，修正后重新执行只读预检' : latestDeployment ? '预检计划已生成，等待结果' : '先做只读预检'],
     ['项目可追溯', traceabilityState, traceabilityState === 'ready' ? '项目与数据已关联' : project ? '项目已创建，等待绑定资源' : '建立项目或数据集'],
   ];
   const points = checks.reduce((sum, item) => sum + (item[1] === 'ready' ? 2 : item[1] === 'partial' ? 1 : 0), 0);
@@ -2078,30 +2086,48 @@ const WORKFLOW_VIEWS = [
 // backend details remain available in the environment drawer below it.
 const VIEW_STAGE_LABELS = {
   overview: '工作台',
-  simulate: '仿真与录制',
-  train: '强化学习训练',
-  resources: 'GPU 与算力',
-  evaluate: 'Sim2Real 评测',
-  deploy: '部署与反馈',
+  simulate: '数据与仿真',
+  train: '训练与策略',
+  resources: '执行资源',
+  evaluate: '评测与证据',
+  deploy: '设备与发布',
   records: '证据与记录',
-  station: '设备控制台',
+  station: '设备与发布',
 };
 
 // Sidebar child entries are real workflow nodes. A node may share a top-level
 // view with another node, but it always selects a distinct module, filter, or
 // evidence panel so the destination is visible and bookmarkable.
 const FLOW_CHILD_CONTEXTS = {
-  simulate: { index: '01', kicker: '数据与仿真 / 01', title: '仿真与录制', description: '运行 MicroDuck 场景，录制可回放轨迹。', target: '仿真场' },
-  replays: { index: '01', kicker: '数据与仿真 / 02', title: '轨迹与回放', description: '按运行筛选轨迹，并打开逐帧回放证据。', target: '记录 · 运行', view: 'records', recordTab: 'run', focus: '#history-list' },
-  prepare: { index: '02', kicker: '训练与策略 / 01', title: '模型与契约', description: '登记 Manifest，校验观测、动作和设备兼容性。', target: '训练 · 模型契约', view: 'train', trainModule: 'contract', focus: '#contract-fold' },
-  configure: { index: '02', kicker: '训练与策略 / 02', title: '训练配置', description: '选择算法、训练档位、GPU 资源和续训 checkpoint。', target: '训练 · 参数配置', view: 'train', trainModule: 'config', focus: '#train-module-config' },
-  submit: { index: '02', kicker: '训练与策略 / 03', title: 'Run 与进度', description: '提交训练任务，查看实时曲线、状态和引擎日志。', target: '训练 · Run 工作台', view: 'train', trainModule: 'run', focus: '#train-module-run-model' },
-  'evaluation-run': { index: '03', kicker: '评测与证据 / 01', title: '发起评测', description: '选择评测来源和目标，生成一份可追溯评测 Run。', target: '评测 · 评测运行', view: 'evaluate', evalModule: 'run', focus: '#evaluation-run-panel' },
-  comparison: { index: '03', kicker: '评测与证据 / 02', title: '结果对比', description: '比较最近 Run 的成功率、奖励和跌倒率趋势。', target: '评测 · 结果对比', view: 'evaluate', evalModule: 'comparison', focus: '#evaluation-comparison-panel' },
-  'evaluation-evidence': { index: '03', kicker: '评测与证据 / 03', title: '全部证据', description: '查看轨迹、训练、评测、制品和部署记录，保留完整证据链。', target: '记录 · 全部证据', view: 'records', recordTab: 'all', focus: '#history-list' },
-  devices: { index: '04', kicker: '设备与发布 / 01', title: '设备管理', description: '登记设备、建立受控连接并查看设备能力。', target: '设备 · 设备连接', view: 'station', stationModule: 'devices', focus: '#station-device-manager' },
-  preflight: { index: '04', kicker: '设备与发布 / 02', title: '预检与发布', description: '生成并执行只读预检，确认制品可以进入目标板卡。', target: '部署 · 只读预检', view: 'deploy', deployModule: 'preflight', focus: '#preflight-panel' },
-  feedback: { index: '04', kicker: '设备与发布 / 03', title: '运行反馈与回滚', description: '查看上线闸门、部署时间线和可回滚版本。', target: '部署 · 运行反馈', view: 'deploy', deployModule: 'feedback', focus: '#feedback-panel' },
+  simulate: { kicker: '01 · 数据与仿真', title: '仿真与录制', description: '运行 MicroDuck 场景，录制可回放轨迹。' },
+  replays: { kicker: '01 · 数据与仿真', title: '轨迹与回放', description: '按运行筛选轨迹，并打开逐帧回放证据。', view: 'records', recordTab: 'run', focus: '#history-list' },
+  prepare: { kicker: '02 · 训练与策略', title: '模型与契约', description: '登记 Manifest，校验观测、动作和设备兼容性。', view: 'train', trainModule: 'contract', focus: '#contract-fold' },
+  configure: { kicker: '02 · 训练与策略', title: '训练配置', description: '选择算法、训练档位、GPU 资源和续训 checkpoint。', view: 'train', trainModule: 'config', focus: '#train-module-config' },
+  submit: { kicker: '02 · 训练与策略', title: 'Run 与进度', description: '提交训练任务，查看实时曲线、状态和引擎日志。', view: 'train', trainModule: 'run', focus: '#train-module-run-model' },
+  'evaluation-run': { kicker: '03 · 评测与证据', title: '发起评测', description: '选择评测来源和目标，生成一份可追溯评测 Run。', view: 'evaluate', evalModule: 'run', focus: '#evaluation-run-panel' },
+  comparison: { kicker: '03 · 评测与证据', title: '结果对比', description: '比较最近 Run 的成功率、奖励和跌倒率趋势。', view: 'evaluate', evalModule: 'comparison', focus: '#evaluation-comparison-panel' },
+  'evaluation-evidence': { kicker: '03 · 评测与证据', title: '全部证据', description: '查看轨迹、训练、评测、制品和部署记录，保留完整证据链。', view: 'records', recordTab: 'all', focus: '#history-list' },
+  devices: { kicker: '04 · 设备与发布', title: '设备管理', description: '登记设备、建立受控连接并查看设备能力。', view: 'station', stationModule: 'devices', focus: '#station-device-manager' },
+  preflight: { kicker: '04 · 设备与发布', title: '预检与发布', description: '生成并执行只读预检，确认制品可以进入目标板卡。', view: 'deploy', deployModule: 'preflight', focus: '#preflight-panel' },
+  feedback: { kicker: '04 · 设备与发布', title: '运行反馈与回滚', description: '查看上线闸门、部署时间线和可回滚版本。', view: 'deploy', deployModule: 'feedback', focus: '#feedback-panel' },
+};
+
+// 无侧栏子项的落地位置（从进度条、对象链或深链直接进入视图）复用的横幅文案。
+// 名称与侧边栏入口保持一致，避免同一视图出现多套叫法。
+const VIEW_BANNERS = {
+  simulate: { kicker: '01 · 数据与仿真', title: '仿真与录制', description: '先把动作任务跑通并录下可复用轨迹，训练、评测和部署都从这份证据继续。' },
+  records: { kicker: '证据中心', title: '证据与记录', description: '轨迹、训练 Run、评测证据、模型制品和部署记录统一管理；点击一条记录可继续回放或查看详情。' },
+  resources: { kicker: '证据中心', title: '执行资源', description: '管理本机 Agent、远程 GPU 和云端算力；训练页只选资源，不混入训练配置。' },
+  station: { kicker: '04 · 设备与发布', title: '设备控制台', description: '设备档案、实时遥测、安全控制、策略运行时与诊断集中在此。' },
+};
+
+// 模块型视图的子页签与侧栏子项共用同一套名称；裸落地时按当前激活模块
+// 推导横幅，保证标题和用户看到的面板一致。
+const MODULE_FLOW_CHILD = {
+  train: { run: 'submit', contract: 'prepare', config: 'configure' },
+  evaluate: { run: 'evaluation-run', comparison: 'comparison' },
+  deploy: { preflight: 'preflight', feedback: 'feedback' },
+  station: { devices: 'devices' },
 };
 
 function parseHashLocation() {
@@ -2131,29 +2157,42 @@ function flowStageLabel(view) {
   return `${stage} · ${child.title}`;
 }
 
-// 对象链（项目→模型/策略→Run→评测证据→发布制品→设备）：把当前视图映射到
-// 链上位置，回答"模型版本 / 策略包 / 运行记录 / 部署制品分别是什么、我现在
-// 在哪一环"。链本身在 overview 标题下，可点击直达对应视图。
-const OBJECT_CHAIN_VIEW_NODE = {
-  overview: 'project',
-  train: 'model',
-  simulate: 'run',
-  records: 'run',
-  evaluate: 'evaluation',
-  deploy: 'artifact',
-  station: 'device',
-};
+function activeModuleOf(view) {
+  const attr = { train: 'data-active-train-module', evaluate: 'data-active-eval-module', deploy: 'data-active-deploy-module', station: 'data-active-station-module' }[view];
+  if (!attr) return '';
+  const section = document.querySelector(`[data-view-section="${view}"]`);
+  return (
+    section?.getAttribute(attr) ||
+    { train: 'run', evaluate: 'run', deploy: 'preflight', station: 'devices' }[view] ||
+    ''
+  );
+}
 
-function renderObjectChain() {
-  const chain = $('object-chain');
-  if (!chain) return;
-  const here = OBJECT_CHAIN_VIEW_NODE[document.body.dataset.activeView || 'overview'];
-  chain.querySelectorAll('[data-chain-node]').forEach((node) => {
-    const active = node.dataset.chainNode === here;
-    node.classList.toggle('is-here', active);
-    if (active) node.setAttribute('aria-current', 'true');
-    else node.removeAttribute('aria-current');
-  });
+// 流程横幅是每个视图唯一的标题来源：侧栏子项有专属文案时跟随子项，
+// 否则按当前激活模块推导（模块页签与子项同名），最后落到视图级文案。
+// 概览保持自己的英雄区，不出横幅。
+function renderFlowBanner() {
+  const banner = $('flow-context');
+  if (!banner) return;
+  const view = document.body.dataset.activeView || 'overview';
+  if (view === 'overview') {
+    banner.hidden = true;
+    return;
+  }
+  let ctx = FLOW_CHILD_CONTEXTS[document.body.dataset.flowChild || ''];
+  if (ctx && (ctx.view || view) !== view) ctx = null;
+  if (!ctx) {
+    const moduleChild = MODULE_FLOW_CHILD[view]?.[activeModuleOf(view)];
+    ctx = (moduleChild && FLOW_CHILD_CONTEXTS[moduleChild]) || VIEW_BANNERS[view] || null;
+  }
+  if (!ctx) {
+    banner.hidden = true;
+    return;
+  }
+  banner.hidden = false;
+  setText('flow-context-kicker', ctx.kicker);
+  setText('flow-context-title', ctx.title);
+  setText('flow-context-description', ctx.description);
 }
 
 function setView(view, { updateHash = true, scroll = true, focus = true } = {}) {
@@ -2203,7 +2242,6 @@ function setView(view, { updateHash = true, scroll = true, focus = true } = {}) 
       .querySelector('[data-view-section="deploy"]')
       ?.setAttribute('data-active-deploy-module', state.deployModule || 'preflight');
   }
-  renderObjectChain();
   const locationState = parseHashLocation();
   const willPush = updateHash && locationState.view !== wanted;
   if (updateHash && locationState.child && !willPush) {
@@ -2321,6 +2359,14 @@ function setFlowChild(child, { updateHash = true, focus = true } = {}) {
       control.removeAttribute('aria-current');
     }
   });
+  // 「轨迹与回放 / 全部证据」从侧栏分组深链进 records 视图时，顶栏
+  // 「证据与记录」入口不再同时高亮，避免两个分组各亮一个条目。
+  if (wanted === 'replays' || wanted === 'evaluation-evidence') {
+    document.querySelectorAll('.sidebar .nav-item[data-view-target="records"]').forEach((entry) => {
+      entry.classList.remove('is-active');
+      entry.removeAttribute('aria-current');
+    });
+  }
   // 子界面分割（D-002）：让视图只展示当前子项自己的面板。
   applySubinterfacePartition(document.body.dataset.activeView || 'overview', wanted);
   renderContextLive();
@@ -2328,13 +2374,6 @@ function setFlowChild(child, { updateHash = true, focus = true } = {}) {
     (control) => control !== document.body && control.dataset.flowChild === wanted,
   );
   active?.closest('.sidebar-nav-group')?.setAttribute('open', '');
-  const banner = $('flow-context');
-  banner?.removeAttribute('hidden');
-  setText('flow-context-index', context.index);
-  setText('flow-context-kicker', context.kicker);
-  setText('flow-context-title', context.title);
-  setText('flow-context-description', context.description);
-  setText('flow-context-target', context.target);
   const view = document.body.dataset.activeView || context.view || 'overview';
   if (updateHash && window.location.hash !== `#${view}/${wanted}`) {
     window.history.replaceState({ rdkView: view, rdkFlowChild: wanted }, '', `${window.location.pathname}${window.location.search}#${view}/${wanted}`);
@@ -3131,7 +3170,6 @@ function renderIntegrations() {
   // Keep device-facing screens aligned with the global target selector. A
   // fixed “RDK X5” title becomes misleading as soon as another board profile
   // is selected, which makes the deployment step look like a separate flow.
-  setText('deploy-title', device?.name ? `部署到 ${device.name}` : '部署到目标设备');
   setText('sidebar-kit-name', profile.kitName);
   setText('kit-card-title', profile.displayName + ' 套件');
   const microduckProduct = profile.id === 'microduck';
@@ -4015,7 +4053,7 @@ function renderHistory() {
         : '还没有运行记录。先登记模型契约，再发起本地或 GPU 训练。';
     root.innerHTML = query
       ? '<div class="empty-state records-empty"><strong>没有匹配的记录</strong><span>试试模型名、状态或后端，或清空筛选查看全部。</span><button type="button" class="button button-ghost button-small" data-empty-action="clear-search">清空搜索</button></div>'
-      : `<div class="empty-state records-empty"><strong>${escapeHtml(emptyHint)}</strong><span>每条记录都会关联当前任务、模型和时间，可从这里打开详情或进入下一步。</span><div class="records-empty-actions"><button type="button" class="button button-primary button-small" data-empty-action="simulate">打开仿真录制</button><button type="button" class="button button-ghost button-small" data-empty-action="train">去强化学习训练</button></div></div>`; // escape-audit:allow emptyHint has been escaped via escapeHtml above
+      : `<div class="empty-state records-empty"><strong>${escapeHtml(emptyHint)}</strong><span>每条记录都会关联当前任务、模型和时间，可从这里打开详情或进入下一步。</span><div class="records-empty-actions"><button type="button" class="button button-primary button-small" data-empty-action="simulate">打开仿真录制</button><button type="button" class="button button-ghost button-small" data-empty-action="train">去发起训练</button></div></div>`; // escape-audit:allow emptyHint has been escaped via escapeHtml above
     root.querySelectorAll('[data-empty-action]').forEach((button) => button.addEventListener('click', () => {
       const action = button.dataset.emptyAction;
       if (action === 'clear-search') { const input = $('record-search'); if (input) input.value = ''; state.recordsQuery = ''; renderHistory(); return; }
@@ -7266,13 +7304,31 @@ function renderNextAction() {
     label = '打开记录与版本 →';
   }
   // Once the server exposes the Golden Path, its next action is authoritative
-  // for the CTA. This keeps the UI aligned with API/CLI/RDK Studio clients.
+  // for the CTA. This keeps the UI aligned with API/CLI/RDK Studio clients —
+  // 但不能越过上手清单的当前步：清单还没走到 deploy 时，卡片区不能同时
+  // 出现「先做仿真」和「部署到 RDK」两套矛盾指引。
   const goldenNext = state.goldenPath?.nextAction;
   if (goldenNext) {
-    view = ({ task: 'simulate', dataset: 'train', train: 'train', evaluate: 'evaluate', deploy: 'deploy', feedback: 'records' }[goldenNext.stage] || view);
-    title = '下一步：' + goldenNext.label;
-    copy = goldenNext.reason;
-    label = '继续' + goldenNext.label + ' →';
+    const stageOrder = { simulate: 0, train: 1, evaluate: 2, deploy: 3 };
+    const currentKey = onboardingProgress().currentKey;
+    const goldenStage = stageOrder[goldenNext.stage] === undefined ? 'deploy' : goldenNext.stage;
+    const skippedAhead = currentKey && stageOrder[goldenStage] > stageOrder[currentKey];
+    if (skippedAhead) {
+      const onboardCopy = {
+        simulate: { view: 'simulate', title: '第 1 步 · 在仿真中验证', copy: '运行 MicroDuck 仿真，录制一段可回放轨迹；训练、评测和部署都从这份证据继续。', label: '打开仿真 →' },
+        train: { view: 'train', title: '第 2 步 · 发起第一次训练', copy: '用 starter 模板提交训练任务，跟踪奖励曲线。', label: '去发起训练 →' },
+        evaluate: { view: 'evaluate', title: '第 3 步 · 查看评测证据', copy: '检查成功率、跌倒率与控制延迟，确认仿真与真机表现一致。', label: '查看评测 →' },
+      }[currentKey];
+      view = onboardCopy.view;
+      title = onboardCopy.title;
+      copy = onboardCopy.copy;
+      label = onboardCopy.label;
+    } else {
+      view = ({ task: 'simulate', dataset: 'train', train: 'train', evaluate: 'evaluate', deploy: 'deploy', feedback: 'records' }[goldenStage] || view);
+      title = '下一步：' + goldenNext.label;
+      copy = goldenNext.reason;
+      label = '继续' + goldenNext.label + ' →';
+    }
   }
   setText('next-action-title', title);
   setText('next-action-copy', copy);
@@ -7571,11 +7627,10 @@ function renderWorkflowProgress() {
   });
 }
 
-// 概览上手清单：同一份闭环状态落到四步清单上，每步的 meta 区域按状态
-// 渲染“已完成 / 去做 → / 需登录”，游客在后两步看到登录引导而不是死链。
-function renderOnboardChecklist() {
-  const list = $('onboard-list');
-  if (!list) return;
+// 概览上手闭环的单一状态源：清单渲染与「下一步」卡都从这里取当前步，
+// 保证两处指引永远一致。Only a passed preflight is a completed deploy step;
+// presence alone made the checklist claim “已完成” for models that could not ship.
+function onboardingProgress() {
   const model = selectedModel();
   const latest = latestRun();
   const telemetry = currentTelemetry();
@@ -7583,25 +7638,41 @@ function renderOnboardChecklist() {
   const replayReady = Boolean(telemetry?.summary || latest?.evaluation?.replay || latest?.taskEvaluation?.replay);
   const trainingReady = Boolean(latest && ['completed', 'ready'].includes(String(latest.status || '').toLowerCase()));
   const evaluationReady = Boolean(telemetry?.summary || latest?.evaluation || latest?.taskEvaluation);
-  // A deployment row can exist while it is still planned, blocked or failed.
-  // Only a passed preflight is a completed onboarding step; presence alone
-  // made the checklist claim “已完成” for models that could not ship.
   const deployReady = deploymentsForCurrentModel().some((deployment) =>
     ['ready', 'completed'].includes(String(deployment?.status || '').toLowerCase()),
   );
   const guest = state.authRequired === true;
   const steps = [
-    { key: 'simulate', done: replayReady, view: 'simulate', cta: '打开仿真 →', locked: false },
-    { key: 'train', done: trainingReady, view: 'train', cta: '去发起训练 →', locked: guest && !contractReady },
-    { key: 'evaluate', done: evaluationReady, view: 'evaluate', cta: '查看评测 →', locked: guest },
-    { key: 'deploy', done: deployReady, view: 'deploy', cta: '生成预检 →', locked: guest },
+    { key: 'simulate', done: replayReady, locked: false },
+    { key: 'train', done: trainingReady, locked: guest && !contractReady },
+    { key: 'evaluate', done: evaluationReady, locked: guest },
+    { key: 'deploy', done: deployReady, locked: guest },
   ];
-  // 第一个未完成且未锁定的步骤是“当前步”。
-  const currentKey = steps.find((step) => !step.done && !step.locked)?.key || null;
-  const doneCount = steps.filter((step) => step.done).length;
+  return {
+    steps,
+    currentKey: steps.find((step) => !step.done && !step.locked)?.key || null,
+    doneCount: steps.filter((step) => step.done).length,
+  };
+}
+
+// 概览上手清单：同一份闭环状态落到四步清单上，每步的 meta 区域按状态
+// 渲染“已完成 / 去做 → / 需登录”，游客在后两步看到登录引导而不是死链。
+function renderOnboardChecklist() {
+  const list = $('onboard-list');
+  if (!list) return;
+  const guest = state.authRequired === true;
+  const progress = onboardingProgress();
+  const currentKey = progress.currentKey;
+  const doneCount = progress.doneCount;
+  const stepMeta = {
+    simulate: { view: 'simulate', cta: '打开仿真 →' },
+    train: { view: 'train', cta: '去发起训练 →' },
+    evaluate: { view: 'evaluate', cta: '查看评测 →' },
+    deploy: { view: 'deploy', cta: '生成预检 →' },
+  };
   let foundCurrent = false;
   list.querySelectorAll('.onboard-item').forEach((item) => {
-    const step = steps.find((entry) => entry.key === item.dataset.onboardStep);
+    const step = progress.steps.find((entry) => entry.key === item.dataset.onboardStep);
     if (!step) return;
     const isCurrent = step.key === currentKey && !foundCurrent;
     if (isCurrent) foundCurrent = true;
@@ -7625,15 +7696,15 @@ function renderOnboardChecklist() {
         const button = document.createElement('button');
         button.type = 'button';
         button.className = 'onboard-cta';
-        button.textContent = step.cta;
-        button.dataset.viewTarget = step.view;
+        button.textContent = stepMeta[step.key].cta;
+        button.dataset.viewTarget = stepMeta[step.key].view;
         meta.append(button);
       }
     }
   });
   const fill = $('onboard-fill');
-  if (fill) fill.style.width = `${Math.round((doneCount / steps.length) * 100)}%`;
-  setText('onboard-count', `${doneCount} / ${steps.length}`);
+  if (fill) fill.style.width = `${Math.round((doneCount / progress.steps.length) * 100)}%`;
+  setText('onboard-count', `${doneCount} / ${progress.steps.length}`);
 }
 
 function renderRunProgress() {
@@ -8328,11 +8399,6 @@ function renderAll() {
   if (activeView === 'train') setTrainModule(state.trainModule, { persist: false });
   if (activeView === 'evaluate') applySubinterfacePartition('evaluate', state.evalModule || 'run');
   if (activeView === 'deploy') applySubinterfacePartition('deploy', state.deployModule || 'preflight');
-  // Rendering the overview can happen after the initial view selection (for
-  // example when the account-scoped ledger finishes loading). Re-apply the
-  // object-chain position after every render so the current stage never loses
-  // its visual and screen-reader marker.
-  renderObjectChain();
 }
 
 async function loadModelDetails(modelId = state.selectedModelId) {
@@ -8455,8 +8521,8 @@ async function loadOverview({ quiet = false, silent = false } = {}) {
     // Silent polls (background refresh while a run is active) skip the three
     // slow-changing aux lists: they only churn requests and re-render churn,
     // while the operator's live interest is the run status itself.
-    const [summaryResult, projectsResult, datasetsResult, goldenPathResult] = silent
-      ? [{ status: 'fulfilled', value: undefined }, { status: 'fulfilled', value: undefined }, { status: 'fulfilled', value: undefined }, { status: 'fulfilled', value: undefined }]
+    const [summaryResult, projectsResult, datasetsResult, goldenPathResult, researchLoopResult] = silent
+      ? [{ status: 'fulfilled', value: undefined }, { status: 'fulfilled', value: undefined }, { status: 'fulfilled', value: undefined }, { status: 'fulfilled', value: undefined }, { status: 'fulfilled', value: undefined }]
       : await Promise.allSettled([
           request('/sim2real/workspace-summary'),
           request('/sim2real/projects'),
@@ -8466,8 +8532,15 @@ async function loadOverview({ quiet = false, silent = false } = {}) {
             ...(state.selectedModelId ? { modelId: state.selectedModelId } : {}),
             ...(state.taskId ? { taskId: state.taskId } : {}),
           }).toString()),
+          request('/sim2real/research-loop/summary?days=30'),
         ]);
     state.workspaceSummary = summaryResult.status === 'fulfilled' ? summaryResult.value : state.workspaceSummary;
+    if (researchLoopResult.status === 'fulfilled' && researchLoopResult.value?.ok && researchLoopResult.value?.summary) {
+      state.researchLoop = researchLoopResult.value.summary;
+      state.researchLoopError = false;
+    } else if (!silent) {
+      state.researchLoopError = true;
+    }
     const projectsAvailable = projectsResult.status === 'fulfilled' && Array.isArray(projectsResult.value?.projects);
     const datasetsAvailable = datasetsResult.status === 'fulfilled' && Array.isArray(datasetsResult.value?.datasets);
     if (projectsAvailable) state.projects = projectsResult.value.projects;

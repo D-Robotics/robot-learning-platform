@@ -352,7 +352,7 @@ describe('standalone Sim2Real health and optional simulator surface', () => {
     ]);
     expect(root.status).toBe(200);
     expect(root.headers.get('cache-control')).toBe('no-cache');
-    expect(await root.text()).toContain('Sim2Real');
+    expect(await root.text()).toContain('Robot Learning Workbench');
     expect(simulator.status).toBe(200);
     expect(simulator.headers.get('cache-control')).toBe('no-cache');
     expect(await simulator.text()).toContain('MuJoCo');
