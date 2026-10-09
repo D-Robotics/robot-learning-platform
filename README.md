@@ -108,6 +108,7 @@ npm run dev:mcp
 | **本地 / Diffusion Policy** | 示教多模态（两种风格都要保留），要生成式动作分块 | 真 Diffusion Policy（Chi et al. 2023，CNN 版式）：条件 1D UNet + DDPM + EMA，整个反向去噪循环固化为一张 ONNX（`npm run verify:diffusion-policy`） | `engines/diffusion-policy` |
 | **本地 / SmolVLA 参考** | 对接 LeRobot VLA 生态、规划先行 | CPU 栈产出诚实标注的训练计划（dry-run），CUDA worker 全量微调；缺栈时明确拒绝（`npm run verify:smolvla`） | `engines/smolvla` |
 | **LeRobot v3 数据集转换** | 与 HF LeRobot 社区交换数据集 | 双向转换（导出/导入 v3.0 布局，含 mono8 逐字节无损视频往返），`npm run convert:lerobot`（`npm run verify:lerobot-converter`） | `engines/lerobot-converter` |
+| **GPU / Isaac Lab 上游（RPO 流水线）** | 要在 Isaac Lab 里训练上游运动策略并做 sim2sim 交叉验证 | 逐字驱动上游 train → 引擎内回放 → MuJoCo sim2sim 三步，缺工作区诚实拒绝（`npm run verify:isaac-lab-adapter`） | `engines/isaac-lab-adapter` + `RDK_ISAAC_LAB_ROOT` |
 | **RoboGo** | 有云端算力和训练账号 | manifest 校验、请求边界、token 不出浏览器、状态 reconcile | `RoboGoRunnerPort` |
 
 Mock 的 `completed` 只表示协议演练完成，不代表真实 PPO 权重或可部署模型；真实训练必须由已配置的 runner 明确返回制品。starter-ppo 返回的是真实训练产物（`mock=false`），但其 numpy 物理不是 MicroDuck 全身动力学；MJX 引擎跑真 MuJoCo 接触动力学（台账标注 `physicsBackend=mjx`）；dm_control 适配器跑同一 MJCF 物理但经 DeepMind 生态 env API（`physicsBackend=dm-control-mujoco`）；视觉训练引擎吃顶置相机像素观测（`physicsBackend=cpu-mujoco-vision`）。所有本地引擎 `deployable` 恒为 `false`。
@@ -126,11 +127,13 @@ Mock 的 `completed` 只表示协议演练完成，不代表真实 PPO 权重或
 | **SmolVLA 参考适配** | 🟡 CPU 规划 / 🔌 CUDA 全量 | CPU 栈产出诚实标注的训练计划（dry-run，`metrics.dryRun=true`），完整微调需注册带 HuggingFace 栈的 CUDA worker；缺栈时明确拒绝而非假装训练。见 [SmolVLA 说明](docs/engines/smolvla.md) |
 | **LeRobot v3 数据集双向转换** | ✅ | `engines/lerobot-converter`：平台轨迹 ↔ LeRobot v3.0（meta/parquet/视频）布局，mono8 视频逐字节无损往返，v1.0 数据集拒绝并给迁移指引。见 [转换器说明](docs/engines/lerobot-converter.md) |
 | **物理级域随机化（质量/摩擦/执行器）** | ✅ | MJX 引擎任务包契约新增 `physicalDomainRandomization`（轮摩擦、底盘质量、伺服 kv 按 episode 重采样并进入 vmap 轨迹），`npm run verify:mjx-adapter` 实证质量被真实改变 |
+| **观测历史堆叠（RPO 式策略输入）** | ✅ | 适配器声明 `observationHistory {frames, order}`，策略输入 = 帧宽 × 帧数（最旧在前，episode/会话起点零初始化）；starter-ppo、mjx-ppo、microduck-recurrent 三引擎与两侧板端运行时、microduck-eval 评测同语义贯通，`npm run verify:observation-history` 全链断言 |
 | **dm_control 生态适配** | ✅ | `engines/dm-control-adapter`：dm_control 1.x `rl.control.Environment`/`Task` 钩子 + 与 MJX 同源 MJCF 物理，`npm run verify:dm-control-adapter`；Playground 侧如实结论见 [docs/engines/dm-control-adapter.md](docs/engines/dm-control-adapter.md) |
 | **MJX 引擎（MuJoCo 接触动力学，纯 JAX）** | ✅ | `npm run verify:mjx-adapter`：真 MJX 物理 + 纯 JAX PPO + 质量门证据，本机 CPU 可验证（无 jax 时 SKIP）；GPU 按 profile 放大吞吐。见 [docs/engines/mjx-adapter.md](docs/engines/mjx-adapter.md) |
 | **MicroDuck 腿式板端策略链路** | ✅ 软件契约 / 🧩 真机验收 | `microduck-stand/walk/kick/recover` 固定 61D→14D 关节输出；profile、joint telemetry、轨迹发布器、动作步长/速度限幅和部署脚本已接通。真实关节名、home 位姿、控制器和跌倒保护仍需在装配好的 X5 上验收。见 [MicroDuck 腿式运行链路](docs/microduck-leg-runtime.md) |
 | **mujoco-web 部署方模型注册表** | ✅ | 受审 MJCF 白名单 + 启动时真实编译 fail-closed（`npm run verify:mujoco-models`）；不开放任意上传 |
 | mjlab + rsl-rl GPU 训练 | 🔌 | 参考适配器在 `engines/mjlab-rsl-rl-adapter/`：rsl-rl `OnPolicyRunner` 真跑 2 迭代（`npm run verify:mjlab-adapter`，CPU 可验证），mjlab GPU 物理侧需自备 GPU 训练栈；物理级 DR 与 dm_control 生态接入已补齐见上表 |
+| Isaac Lab 上游训练（RPO 流水线） | 🔌 CUDA 主机 / 🧩 真链待验收 | `engines/isaac-lab-adapter` 逐字驱动上游工作区 train → play 回放 → MuJoCo sim2sim 三步；RPO 教程契约（78D 单帧 × 10 帧历史 = 780D 输入、23D 关节动作）已入任务包；缺 `RDK_ISAAC_LAB_ROOT` 时 exit 3 诚实拒绝、制品永不标记可部署（`npm run verify:isaac-lab-adapter`）。见 [engines/isaac-lab-adapter/README.md](engines/isaac-lab-adapter/README.md) |
 | RoboGo 适配接口 | 🔌 | 需要服务端配置真实地址、凭据和网络策略 |
 | RDK-X5 真机采集 / BoardAgent / OTA | 🧩 | 提供端口、预检和部署边界，需接入实际设备 |
 | **D6A 机械臂（arm_sdk）** | 🧩 软件就绪 / 真机验收待做 | 机型 profile + 板端预检/受限笛卡尔运动/夹爪（双开关、工作空间盒与速度双钳制、急停恒可用），见 [docs/arm-drive.md](docs/arm-drive.md) |
