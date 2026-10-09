@@ -18,6 +18,28 @@ for (const file of files) {
   if (!profile.board?.platform || !profile.board?.family || !profile.board?.model) {
     throw new Error(`${file}: board identity is incomplete`);
   }
+  // Training-only contracts for robots this platform does not drive (e.g. an
+  // upstream Isaac Lab locomotion task): they carry no ROS interface and the
+  // chassis safety clamps below describe OUR boards, not theirs. Declaring
+  // board.platform "external-gpu" opts into this narrower check set — and
+  // provenance.mock must stay true, because nothing here ever touched that
+  // hardware.
+  if (profile.board?.platform === 'external-gpu') {
+    if (profile.ros) throw new Error(`${file}: external contracts must not declare a ros block`);
+    if (!['diff-drive', 'omni-drive', 'joint', 'custom'].includes(profile.actuator?.kind))
+      throw new Error(`${file}: actuator.kind must be diff-drive, omni-drive, joint, or custom`);
+    if (!(profile.policy?.observationSize > 0 && profile.policy?.actionSize > 0))
+      throw new Error(`${file}: policy dimensions required`);
+    if (!Array.isArray(profile.capabilities) || !profile.capabilities.length)
+      throw new Error(`${file}: capabilities must be a non-empty string array`);
+    if (profile.provenance?.mock !== true)
+      throw new Error(`${file}: external contracts keep provenance.mock true`);
+    if (profile.runtime?.actionOutput === 'joint-position-offset') {
+      if (profile.actuator?.kind !== 'joint')
+        throw new Error(`${file}: joint-position-offset requires actuator.kind joint`);
+    }
+    continue;
+  }
   const topics = profile.ros?.topics;
   if (!topics || typeof topics !== 'object') throw new Error(`${file}: ros.topics required`);
   for (const sensor of ['imu', 'odom', 'battery']) {
