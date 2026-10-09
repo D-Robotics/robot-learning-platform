@@ -589,15 +589,37 @@ class GoalNavEnv:
     def __init__(self, pack, num_envs, seed):
         self.pack = pack
         self.num_envs = num_envs
-        self.observation_size = GOAL_NAV_OBS[pack["adapter"]["policy"]["observationAdapterId"]]
+        self.frame_size = GOAL_NAV_OBS[pack["adapter"]["policy"]["observationAdapterId"]]
+        # Observation history stacking (the RPO-style policy input): the frame
+        # layout is the adapter's observationSize; the policy consumes the last
+        # N frames flattened oldest-first. Zero-initialized at episode start —
+        # the board runtime initializes its history identically at session
+        # start, so sim and real feed the network the same pre-history.
+        history = pack["adapter"]["policy"].get("observationHistory") or {}
+        self.history_frames = int(history.get("frames", 1) or 1)
+        if not 1 <= self.history_frames <= 64:
+            raise ValueError(
+                "observationHistory.frames must be an integer in [1, 64] (got {})".format(
+                    self.history_frames
+                )
+            )
+        history_order = history.get("order") or "oldest-first"
+        if history_order != "oldest-first":
+            raise ValueError(
+                "observationHistory.order must be 'oldest-first' (got {!r}); the board "
+                "runtime implements no other concat order".format(history_order)
+            )
+        # Model-facing width: the flat stacked vector. All policy I/O and the
+        # ONNX export derive from this; frame-level buffers use frame_size.
+        self.observation_size = self.frame_size * self.history_frames
         self.action_size = GOAL_NAV_ACTION
         self.control_dt = 1.0 / float(pack.get("controlHz", 10))
         policy = pack["adapter"]["policy"]
-        if int(policy["observationSize"]) != self.observation_size or int(policy["actionSize"]) != self.action_size:
+        if int(policy["observationSize"]) != self.frame_size or int(policy["actionSize"]) != self.action_size:
             raise ValueError(
                 "adapter policy dimensions {}x{} do not match the goal-navigation layout {}x{}".format(
                     policy["observationSize"], policy["actionSize"],
-                    self.observation_size, self.action_size,
+                    self.frame_size, self.action_size,
                 )
             )
         self.max_linear = float(pack["adapter"]["safety"]["maxLinear"])
@@ -615,7 +637,12 @@ class GoalNavEnv:
         # arrived does not pass.
         self.state = np.zeros((num_envs, 8), dtype=np.float32)
         self.odom = np.zeros((num_envs, 3), dtype=np.float32)
-        self.last_obs = np.zeros((num_envs, self.observation_size), dtype=np.float32)
+        self.last_obs = np.zeros((num_envs, self.frame_size), dtype=np.float32)
+        # Stacked history, oldest slot first: index 0 is t-(N-1), the last row
+        # is the frame about to be observed. Flattened for the policy input.
+        self._obs_history = np.zeros(
+            (num_envs, self.history_frames, self.frame_size), dtype=np.float32
+        )
         self._obs_initialized = np.zeros(num_envs, dtype=bool)
         self.steps = np.zeros(num_envs, dtype=np.int64)
         self.domain = [DomainParams() for _ in range(num_envs)]
@@ -670,6 +697,11 @@ class GoalNavEnv:
         self.state[:, 5:] = 0.0
         self.odom[:, :] = 0.0
         self.odom[:, 2] = self.state[:, 2]
+        # A new episode must not inherit the previous one's frames: the board
+        # zeroes its history at session start, so training must see the same
+        # zero pre-history or the exported policy reads a different input
+        # distribution than it was trained on.
+        self._obs_history[:] = 0.0
         self._obs_initialized[:] = False
         self.steps[:] = 0
         self._collision_flags[:] = False
@@ -843,7 +875,14 @@ class GoalNavEnv:
             self.action_fifo[env_idx].extend([(0.0, 0.0)] * latency)
             self._queue_latency[env_idx] = latency
             self.obstacles[env_idx] = self._sample_obstacles()
-            obs[env_idx] = self.observe_one(env_idx)
+            # A mid-rollout reset rebuilds the episode-start input exactly like
+            # reset() does: zero history, then the fresh frame appended —
+            # never the terminal episode's frames.
+            if self.history_frames > 1:
+                self._obs_history[env_idx] = 0.0
+                obs[env_idx] = self._stack_frame(env_idx, self.observe_one(env_idx))
+            else:
+                obs[env_idx] = self.observe_one(env_idx)
         self._maybe_expand_curriculum()
         return obs, rewards, done, success
 
@@ -860,10 +899,22 @@ class GoalNavEnv:
             self.goal_distance = [min(expanded[0], final[1]), min(expanded[1], final[1])]
             self.success_history.clear()
 
+    def _stack_frame(self, env_idx, frame):
+        """Append one env's fresh frame to its rolling history and return the
+        flat stacked model input, oldest frame first. Single-frame policies
+        get the frame itself back. NumPy buffers the overlapping slice
+        assignment, so no explicit copy is needed."""
+        if self.history_frames == 1:
+            return frame
+        history = self._obs_history[env_idx]
+        history[:-1] = history[1:]
+        history[-1] = frame
+        return history.reshape(-1)
+
     def observe(self):
-        out = np.zeros((self.num_envs, self.observation_size), dtype=np.float32)
+        frames = np.zeros((self.num_envs, self.frame_size), dtype=np.float32)
         for env_idx in range(self.num_envs):
-            out[env_idx] = self.observe_one(env_idx)
+            frames[env_idx] = self.observe_one(env_idx)
         # Frame dropout: with per-episode probability the whole observation
         # repeats the previous frame — exactly what the board runtime does
         # when a sensor publish is missed (last good frame). All fresh-noise
@@ -871,11 +922,15 @@ class GoalNavEnv:
         for env_idx in range(self.num_envs):
             if (self._obs_initialized[env_idx]
                     and self.rng.random() < self.domain[env_idx].odom_dropout):
-                out[env_idx] = self.last_obs[env_idx]
+                frames[env_idx] = self.last_obs[env_idx]
             else:
                 self._obs_initialized[env_idx] = True
-            self.last_obs[env_idx] = out[env_idx]
-        return out
+            self.last_obs[env_idx] = frames[env_idx]
+        if self.history_frames == 1:
+            return frames
+        return np.stack(
+            [self._stack_frame(env_idx, frames[env_idx]) for env_idx in range(self.num_envs)]
+        )
 
     def observe_one(self, env_idx):
         domain = self.domain[env_idx]
@@ -883,7 +938,7 @@ class GoalNavEnv:
         odom_x, odom_y, odom_yaw = self.odom[env_idx]
         v_lag = float(self.state[env_idx, 6])
         w_lag = float(self.state[env_idx, 7])
-        if self.observation_size == 8:
+        if self.frame_size == 8:
             # Native board layout: x, y, sin, cos, dx, dy, v, w — pose from
             # odometry (the robot's own belief), goal delta derived from the
             # same noisy pose so frame internals stay self-consistent.
@@ -904,7 +959,7 @@ class GoalNavEnv:
         # without an explicit yaw slot. Without this rotation the
         # world-frame delta is unlearnable — no heading information exists
         # anywhere else in the layout.
-        out = np.zeros(self.observation_size, dtype=np.float32)
+        out = np.zeros(self.frame_size, dtype=np.float32)
         out[0:3] = self.rng.normal(0.0, domain.gyro_noise, size=3)
         out[2] += w_lag + domain.angular_bias
         out[3:6] = (0.0, 0.0, -1.0)  # projected gravity, upright chassis
@@ -955,7 +1010,9 @@ class GoalNavEnv:
                     final_distance = term["finalDistance"]
                 rows.append({
                     "t": round(steps * self.control_dt, 4),
-                    "observation": [round(float(v), 6) for v in obs[0]],
+                    # Telemetry rows carry the newest single frame (the board
+                    # telemetry convention), not the stacked model input.
+                    "observation": [round(float(v), 6) for v in obs[0][-self.frame_size:]],
                     "action": [round(float(v), 6) for v in action_np[0]],
                     "reward": round(float(reward[0]), 6),
                     "done": bool(done[0]),
@@ -1503,6 +1560,13 @@ def train_goal_navigation(request, pack):
     )
 
     env = GoalNavEnv(pack, num_envs, seed=seed)
+    if env.observation_size != obs_size:
+        raise ValueError(
+            "contract observationSize {} does not match the task environment's stacked "
+            "input width {} (adapter observationSize {} x observationHistory.frames {})".format(
+                obs_size, env.observation_size, env.frame_size, env.history_frames
+            )
+        )
     device = requested_device
     model = ActorCritic(obs_size, act_size).to(device)
     to_tensor = lambda array: torch.from_numpy(array).to(device)  # noqa: E731 - local shim
@@ -1745,6 +1809,18 @@ def train_goal_navigation(request, pack):
                     "reachedGoalDistance": [round(env.goal_distance[0], 3), round(env.goal_distance[1], 3)],
                 },
                 "controlHz": control_hz,
+                **(
+                    {
+                        "observationHistory": {
+                            "frames": env.history_frames,
+                            "order": "oldest-first",
+                            "frameSize": env.frame_size,
+                            "modelObservationSize": env.observation_size,
+                        }
+                    }
+                    if env.history_frames > 1
+                    else {}
+                ),
                 "actionOutput": "normalized-twist" if act_size == 2 else "physical-joint",
                 "rewardCurve": reward_curve,
                 "successCurve": success_curve,
@@ -1773,6 +1849,18 @@ def train_goal_navigation(request, pack):
                 "taskId": pack["id"],
                 "adapterId": pack["adapter"]["id"],
                 "observationAdapterId": pack["adapter"]["policy"]["observationAdapterId"],
+                **(
+                    {
+                        "observationHistory": {
+                            "frames": env.history_frames,
+                            "order": "oldest-first",
+                            "frameSize": env.frame_size,
+                            "modelObservationSize": env.observation_size,
+                        }
+                    }
+                    if env.history_frames > 1
+                    else {}
+                ),
                 "trained": {k: v for k, v in trained_report.items() if k != "jsonl"},
                 "baseline": {k: v for k, v in baseline_report.items() if k != "jsonl"},
                 "qualityGate": gate,
@@ -1812,6 +1900,18 @@ def train_goal_navigation(request, pack):
             "taskId": pack["id"],
             "taskKind": "goal-navigation",
             "observationSize": obs_size,
+            **(
+                {
+                    "observationHistory": {
+                        "frames": env.history_frames,
+                        "order": "oldest-first",
+                        "frameSize": env.frame_size,
+                        "modelObservationSize": env.observation_size,
+                    }
+                }
+                if env.history_frames > 1
+                else {}
+            ),
             "actionSize": act_size,
             "actionOutput": "normalized-twist" if act_size == 2 else "physical-joint",
             "reward": round(trained_report.get("meanReward", 0.0), 4),

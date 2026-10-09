@@ -185,6 +185,50 @@ OBSERVATION_LAYOUT = str(
 VISION_LAYOUT = OBSERVATION_LAYOUT == "imu-gravity-camera-v1"
 
 
+# ---- observation history stacking -----------------------------------------
+# The adapter's policy.observationHistory declares how many consecutive frames
+# the policy consumes as one flat input: model input width = frames x
+# observationSize, concatenated oldest-first. The trainer (starter-ppo) and
+# this runtime must agree on both the arithmetic and the order, so an order
+# this runtime does not implement — or a malformed declaration — fails closed
+# at load instead of feeding a stacked policy single frames.
+def _observation_history_declaration():
+    raw = os.environ.get("RDK_SIM2REAL_OBS_HISTORY_FRAMES", "").strip()
+    if raw:
+        try:
+            frames = int(raw)
+        except ValueError:
+            return {"error": "RDK_SIM2REAL_OBS_HISTORY_FRAMES must be an integer"}
+        return {"frames": frames, "order": "oldest-first"}
+    declaration = (_ADAPTER.get("policy") or {}).get("observationHistory")
+    if not declaration:
+        return {"frames": 1, "order": "oldest-first"}
+    if not isinstance(declaration, dict):
+        return {"error": "adapter policy.observationHistory must be an object"}
+    try:
+        frames = int(declaration.get("frames", 1))
+    except (TypeError, ValueError):
+        return {"error": "adapter policy.observationHistory.frames must be an integer"}
+    order = declaration.get("order") or "oldest-first"
+    if order != "oldest-first":
+        return {"error": "adapter policy.observationHistory.order must be 'oldest-first'"}
+    return {"frames": frames, "order": order}
+
+
+OBSERVATION_HISTORY = _observation_history_declaration()
+OBS_HISTORY_FRAMES = OBSERVATION_HISTORY.get("frames", 1)
+OBS_HISTORY_CONFIG_ERROR = OBSERVATION_HISTORY.get("error")
+
+
+def observation_history_error():
+    """Load-time verdict on the stacking declaration, or None when usable."""
+    if OBS_HISTORY_CONFIG_ERROR:
+        return OBS_HISTORY_CONFIG_ERROR
+    if not 1 <= OBS_HISTORY_FRAMES <= 64:
+        return "observation history frames must be an integer in [1, 64] (got %d)" % OBS_HISTORY_FRAMES
+    return None
+
+
 def _visual_image_shape():
     """``(channels, height, width)`` declared by the adapter, or ``None``.
 
@@ -448,6 +492,11 @@ class PolicyRuntime:
         self._command_dir = 0.0       # operator direction command (-1..1)
         self._last_obs = None
         self._last_action = None
+        # Rolling frame history for stacked-observation policies: shape
+        # (OBS_HISTORY_FRAMES, frame width), oldest slot first. Allocated at
+        # session start and zero-filled there, matching the trainer's episode
+        # reset. None for single-frame policies (frames == 1).
+        self._obs_history = None
         # Named observation segments the wheeled adapter actually wrote, as
         # (name, width, provenance). Populated by _build_observation so the slot
         # report describes the real assembly instead of a hand-written literal.
@@ -497,6 +546,7 @@ class PolicyRuntime:
                 },
                 "commandTopic": COMMAND_TOPIC,
                 "observationLayout": OBSERVATION_LAYOUT,
+                "observationHistoryFrames": OBS_HISTORY_FRAMES,
                 "providerRequested": PROVIDER_REQUESTED,
                 "model": self._model_meta,
                 "command": self._command_dir,
@@ -550,8 +600,23 @@ class PolicyRuntime:
         # _ACTION_DIM), so the report describes THIS model's shape honestly.
         if not self._model_meta:
             return None
+        # Slot widths below describe ONE frame; a stacked policy's model input
+        # is frames × frame width, so the stacking arithmetic is reported
+        # alongside rather than hidden inside the numbers.
+        history_fields = (
+            {
+                "observationHistory": {
+                    "frames": OBS_HISTORY_FRAMES,
+                    "order": "oldest-first",
+                    "modelInputWidth": EXPECTED_OBS_DIM * OBS_HISTORY_FRAMES,
+                }
+            }
+            if OBS_HISTORY_FRAMES > 1
+            else {}
+        )
         if EXPECTED_OBS_DIM == 8 and EXPECTED_ACTION_DIM == 2:
             return {
+                **history_fields,
                 "contract": "8D obs / 2D act (native OriginBot twist)",
                 "layoutDeclared": OBSERVATION_LAYOUT != "auto",
                 "layoutSource": "adapter declaration" if OBSERVATION_LAYOUT != "auto" else "auto (dimension-based)",
@@ -567,6 +632,7 @@ class PolicyRuntime:
                  or (OBSERVATION_LAYOUT == "auto" and EXPECTED_OBS_DIM == 42))
         ):
             return {
+                **history_fields,
                 "contract": "42D obs / 2D act (goalnav imu-gravity-v1)",
                 "layoutDeclared": OBSERVATION_LAYOUT != "auto",
                 "layoutSource": "adapter declaration" if OBSERVATION_LAYOUT != "auto" else "auto (dimension-based)",
@@ -594,6 +660,7 @@ class PolicyRuntime:
             segments = self._obs_segments
         if not segments:
             return {
+                **history_fields,
                 "contract": f"{EXPECTED_OBS_DIM}D obs / {EXPECTED_ACTION_DIM}D act (or 2D vw)",
                 "source": "no observation assembled yet in this session",
                 "slots_real": 0,
@@ -620,6 +687,7 @@ class PolicyRuntime:
         real = sum(width for _, width, provenance in segments if provenance == "real")
         adapter = sum(width for _, width, provenance in segments if provenance == "adapter")
         report = {
+            **history_fields,
             "contract": f"{EXPECTED_OBS_DIM}D obs / {EXPECTED_ACTION_DIM}D act (or 2D vw)",
             "source": "real sensors where marked real; other slots are honest adapter values",
             "slots_real": real,
@@ -685,6 +753,9 @@ class PolicyRuntime:
                     "detail": "runtime.actionOutput must be physical-twist or normalized-twist",
                     "actual": ACTION_OUTPUT_CONFIG_ERROR,
                 }
+            history_error = observation_history_error()
+            if history_error is not None:
+                return {"ok": False, "error": "observation-history-invalid", "detail": history_error}
             # Loading is transactional from the actuator's point of view. A
             # failed replacement must not leave the previous model object
             # paired with the newly reset contract dimensions. Clear the old
@@ -717,6 +788,16 @@ class PolicyRuntime:
                 out_shape = tuple(int(v) for v in model.outputs[0].buffer.shape)
                 if in_shape != (1, 8, 1, 1) or out_shape != (1, 2, 1, 1):
                     return {"ok": False, "error": "policy-shape-mismatch", "expectedInput": [1, 8, 1, 1], "actualInput": list(in_shape), "expectedOutput": [1, 2, 1, 1], "actualOutput": list(out_shape)}
+                # The native BPU path is hard-wired to the 8D single-frame
+                # contract: a stacked policy on this path would silently run
+                # without its history, so it is refused instead.
+                if OBS_HISTORY_FRAMES > 1:
+                    return {
+                        "ok": False,
+                        "error": "bpu-history-unsupported",
+                        "detail": "the native BPU path consumes single 8D frames only; "
+                                  "declared observationHistory.frames=%d" % OBS_HISTORY_FRAMES,
+                    }
                 EXPECTED_OBS_DIM = 8
                 EXPECTED_ACTION_DIM = 2
                 meta = {"path": model_path, "bytes": size, "inputDim": 8, "outputDim": 2, "provider": "hobot_dnn", "providerRequested": PROVIDER_REQUESTED, "format": "bpu-bin", "inputShape": list(in_shape), "outputShape": list(out_shape), "sha256": _sha256_file(model_path)}
@@ -773,7 +854,21 @@ class PolicyRuntime:
             out = sess.get_outputs()[0]
             input_dim = int(inp.shape[-1]) if inp.shape and isinstance(inp.shape[-1], (int, float)) else 0
             output_dim = int(out.shape[-1]) if out.shape and isinstance(out.shape[-1], (int, float)) else 0
-            if input_dim not in (EXPECTED_OBS_DIM, 8):
+            # A stacked policy's model input is exactly frames x observationSize;
+            # unlike the single-frame legacy `8` alternative there is no second
+            # shape it could honestly be, so the exact width is required.
+            expected_model_input = EXPECTED_OBS_DIM * OBS_HISTORY_FRAMES
+            if OBS_HISTORY_FRAMES > 1:
+                if input_dim != expected_model_input:
+                    return {
+                        "ok": False,
+                        "error": "policy-input-dimension-mismatch",
+                        "expected": expected_model_input,
+                        "actual": input_dim,
+                        "detail": "adapter declares observationHistory.frames=%d, so the model input "
+                                  "must be %d x %d = %d" % (OBS_HISTORY_FRAMES, OBS_HISTORY_FRAMES, EXPECTED_OBS_DIM, expected_model_input),
+                    }
+            elif input_dim not in (EXPECTED_OBS_DIM, 8):
                 return {"ok": False, "error": "policy-input-dimension-mismatch", "expected": [EXPECTED_OBS_DIM, 8], "actual": input_dim}
             if output_dim not in (EXPECTED_ACTION_DIM, 2):
                 return {"ok": False, "error": "policy-output-dimension-mismatch", "expected": [EXPECTED_ACTION_DIM, 2], "actual": output_dim}
@@ -787,14 +882,17 @@ class PolicyRuntime:
             # Declared layout and loaded model must agree. "auto" keeps the
             # legacy dimension pick (the 8 in the allowlists above); an
             # explicitly declared layout pins the contract: the model input
-            # must match both the declared layout and the adapter's declared
-            # observationSize exactly — no cross-layout papering over.
-            if OBSERVATION_LAYOUT == "originbot-imu-odom-v1" and (input_dim != 8 or EXPECTED_OBS_DIM != 8):
+            # must match the declared layout and the adapter's declared
+            # observationSize (times the declared history frames) exactly —
+            # no cross-layout papering over.
+            if OBSERVATION_LAYOUT == "originbot-imu-odom-v1" and (
+                input_dim != EXPECTED_OBS_DIM * OBS_HISTORY_FRAMES or EXPECTED_OBS_DIM != 8
+            ):
                 return {"ok": False, "error": "layout-model-mismatch",
-                        "detail": "adapter declares originbot-imu-odom-v1 (observationSize=%d) but model input is %dD" % (EXPECTED_OBS_DIM, input_dim)}
-            if OBSERVATION_LAYOUT == "imu-gravity-v1" and input_dim != EXPECTED_OBS_DIM:
+                        "detail": "adapter declares originbot-imu-odom-v1 (observationSize=%d x %d history frames) but model input is %dD" % (EXPECTED_OBS_DIM, OBS_HISTORY_FRAMES, input_dim)}
+            if OBSERVATION_LAYOUT == "imu-gravity-v1" and input_dim != EXPECTED_OBS_DIM * OBS_HISTORY_FRAMES:
                 return {"ok": False, "error": "layout-model-mismatch",
-                        "detail": "adapter declares imu-gravity-v1 (contract head %dD) but model input is %dD" % (EXPECTED_OBS_DIM, input_dim)}
+                        "detail": "adapter declares imu-gravity-v1 (contract head %dD x %d history frames) but model input is %dD" % (EXPECTED_OBS_DIM, OBS_HISTORY_FRAMES, input_dim)}
             # ---- vision branch ---------------------------------------------
             # A declared vision layout is a claim that this model consumes a
             # camera frame. Check it against the real session inputs now, the
@@ -874,8 +972,9 @@ class PolicyRuntime:
                 }
             # Select the adapter contract from the inspected model. This lets
             # OriginBot 8D->2D policies share the same runtime as 61D->14D
-            # policies without a second board service.
-            if input_dim == 8 and not VISION_LAYOUT:
+            # policies without a second board service. A stacked policy never
+            # takes this path: its exact width was enforced above.
+            if input_dim == 8 and OBS_HISTORY_FRAMES == 1 and not VISION_LAYOUT:
                 EXPECTED_OBS_DIM = 8
                 EXPECTED_ACTION_DIM = 2
             meta = {
@@ -890,6 +989,17 @@ class PolicyRuntime:
                 "actionOutput": ACTION_OUTPUT,
                 "actionScale": {"linear": float(MAX_LINEAR), "angular": float(MAX_ANGULAR), "units": "m/s,rad/s"},
                 "observationLayout": OBSERVATION_LAYOUT,
+                **(
+                    {
+                        "observationHistory": {
+                            "frames": OBS_HISTORY_FRAMES,
+                            "order": "oldest-first",
+                            "frameWidth": EXPECTED_OBS_DIM,
+                        }
+                    }
+                    if OBS_HISTORY_FRAMES > 1
+                    else {}
+                ),
                 "imageInput": image_input_name or None,
                 "imageShape": list(VISUAL_IMAGE_SHAPE) if (VISION_LAYOUT and VISUAL_IMAGE_SHAPE) else None,
             }
@@ -949,6 +1059,17 @@ class PolicyRuntime:
             self._session_stop_event_emitted = False
             self._inference_count = 0
             self._last_inference_at = None
+            # A fresh session starts with a zero-filled frame history — the
+            # exact pre-history the trainer zero-initialized at every episode
+            # reset, so the policy never reads a distribution it did not train
+            # on. EXPECTED_OBS_DIM is the frame width (may have been re-selected
+            # by the last load).
+            if OBS_HISTORY_FRAMES > 1:
+                import numpy as np
+
+                self._obs_history = np.zeros((OBS_HISTORY_FRAMES, EXPECTED_OBS_DIM), dtype=np.float32)
+            else:
+                self._obs_history = None
             self._stop_flag.clear()
             # Snapshot the session facts under the lock; the event append
             # below does file I/O and must not hold the control lock.
@@ -1044,12 +1165,23 @@ class PolicyRuntime:
                 "min": 1,
                 "max": self.BATCH_MAX_SAMPLES,
             }
-        if width != EXPECTED_OBS_DIM:
+        # Batch serving applies the model to the rows verbatim — it owns no
+        # rolling history. A stacked policy therefore expects pre-stacked rows
+        # of exactly frames x observationSize (caller-composed history); a
+        # single-frame policy expects frame-width rows.
+        expected_width = EXPECTED_OBS_DIM * max(1, OBS_HISTORY_FRAMES)
+        if width != expected_width:
             return {
                 "ok": False,
                 "error": "observation-dimension-mismatch",
-                "expected": EXPECTED_OBS_DIM,
+                "expected": expected_width,
                 "actual": width,
+                **(
+                    {"detail": "policy declares observationHistory.frames=%d; batch rows are the "
+                               "caller-composed stacked input (oldest-first)" % OBS_HISTORY_FRAMES}
+                    if OBS_HISTORY_FRAMES > 1
+                    else {}
+                ),
             }
         if not np.all(np.isfinite(rows)):
             row_bad = int(np.argmin(np.isfinite(rows).all(axis=1)))
@@ -1106,6 +1238,17 @@ class PolicyRuntime:
             self._append_event_record(stopped_event)
 
     # ---- observation building -------------------------------------------
+    def _push_history(self, frame):
+        """Append the newest frame to the rolling history and return the flat
+        stacked model input, oldest frame first — the same shift-and-append
+        the trainer's env performs at every observe(). Single-frame policies
+        (no session history allocated) get the frame back unchanged."""
+        if self._obs_history is None:
+            return frame
+        self._obs_history[:-1] = self._obs_history[1:]
+        self._obs_history[-1] = frame
+        return self._obs_history.reshape(-1)
+
     def _build_observation(self):
         """Contract-shaped EXPECTED_OBS_DIM observation from real sensors.
 
@@ -1386,6 +1529,11 @@ class PolicyRuntime:
                 obs, frame = step
                 import numpy as np
 
+                # Stacked policies consume the rolling frame history flattened
+                # oldest-first; telemetry and _last_obs stay at frame level so
+                # board telemetry semantics do not change with the stack depth.
+                model_input = self._push_history(obs)
+
                 t_infer = time.time()
                 if self._model_kind == "bpu":
                     result = self._model.forward(np.array(obs, dtype=np.float32).reshape(1, 8, 1, 1))[0].buffer.reshape(-1)
@@ -1398,13 +1546,13 @@ class PolicyRuntime:
                     result = self._model.run(
                         None,
                         {
-                            self._vector_input_name: np.array([obs], dtype=np.float32),
+                            self._vector_input_name: np.array([model_input], dtype=np.float32),
                             self._image_input_name: image,
                         },
                     )[0][0]
                 else:
                     result = self._model.run(
-                        None, {self._vector_input_name: np.array([obs], dtype=np.float32)}
+                        None, {self._vector_input_name: np.array([model_input], dtype=np.float32)}
                     )[0][0]
                 infer_ms = (time.time() - t_infer) * 1000
                 action = [float(v) for v in result]

@@ -64,6 +64,48 @@ STALL_LIMIT_SEC = max(0.1, min(2.0, float(SAFETY.get("sensorStallSec", 0.1))))
 MAX_JOINT_STEP = max(0.001, min(1.0, float(SAFETY.get("maxJointStepRad", 0.08))))
 MAX_JOINT_VELOCITY = max(0.01, min(20.0, float(SAFETY.get("maxJointVelocityRadSec", 2.0))))
 COMMAND_VECTOR_SIZE = int(RUNTIME.get("commandVectorSize", 13))
+
+# ---- observation history stacking -----------------------------------------
+# The adapter's policy.observationHistory declares how many consecutive 61D
+# frames the policy consumes as one flat input (frames x 61, oldest first).
+# The trainer and the eval harness maintain the identical rolling buffer, so
+# the arithmetic and the order are contract, not convention: a declaration
+# this runtime cannot honor fails the load instead of feeding the policy
+# single frames.
+def _observation_history():
+    raw = os.environ.get("RDK_SIM2REAL_OBS_HISTORY_FRAMES", "").strip()
+    if raw:
+        try:
+            return {"frames": int(raw), "order": "oldest-first"}
+        except ValueError:
+            return {"error": "RDK_SIM2REAL_OBS_HISTORY_FRAMES must be an integer"}
+    declaration = POLICY.get("observationHistory")
+    if not declaration:
+        return {"frames": 1, "order": "oldest-first"}
+    if not isinstance(declaration, dict):
+        return {"error": "adapter policy.observationHistory must be an object"}
+    try:
+        frames = int(declaration.get("frames", 1))
+    except (TypeError, ValueError):
+        return {"error": "adapter policy.observationHistory.frames must be an integer"}
+    order = declaration.get("order") or "oldest-first"
+    if order != "oldest-first":
+        return {"error": "adapter policy.observationHistory.order must be 'oldest-first'"}
+    return {"frames": frames, "order": order}
+
+
+OBSERVATION_HISTORY = _observation_history()
+OBS_HISTORY_FRAMES = OBSERVATION_HISTORY.get("frames", 1)
+OBS_HISTORY_CONFIG_ERROR = OBSERVATION_HISTORY.get("error")
+
+
+def observation_history_error():
+    """Load-time verdict on the stacking declaration, or None when usable."""
+    if OBS_HISTORY_CONFIG_ERROR:
+        return OBS_HISTORY_CONFIG_ERROR
+    if not 1 <= OBS_HISTORY_FRAMES <= 64:
+        return "observation history frames must be an integer in [1, 64] (got %d)" % OBS_HISTORY_FRAMES
+    return None
 COMMAND_TOPIC = str(
     os.environ.get("RDK_SIM2REAL_COMMAND_TOPIC")
     or ACTUATOR.get("commandTopic")
@@ -224,6 +266,11 @@ class JointPolicyRuntime:
         self._last_action = [0.0] * 14
         self._published = 0
         self._infer_ms = 0.0
+        # Rolling frame history for stacked-observation policies: shape
+        # (OBS_HISTORY_FRAMES, 61), oldest slot first. Allocated zero-filled
+        # at session start — the same pre-history the trainers' episode reset
+        # and the eval harness's reset() initialize.
+        self._obs_history = None
         self._session_id = None
         self._started_at = None
         self._stopped_at = None
@@ -240,6 +287,7 @@ class JointPolicyRuntime:
                 "commandTopic": COMMAND_TOPIC,
                 "commandMessageType": COMMAND_MESSAGE_TYPE,
                 "observationLayout": "microduck-61d-v1",
+                "observationHistoryFrames": OBS_HISTORY_FRAMES,
                 "actionProjection": "custom",
                 "actionOutput": "joint-position-offset",
                 "actionScale": {"joint": ACTION_SCALE, "units": "rad offset from home position"},
@@ -294,6 +342,9 @@ class JointPolicyRuntime:
     def load(self, model_path):
         if len(JOINT_NAMES) != 14 or len(HOME_POSITION) != 14 or EXPECTED_OBS_DIM != 61 or EXPECTED_ACTION_DIM != 14:
             return {"ok": False, "error": "joint-profile-contract-invalid"}
+        history_error = observation_history_error()
+        if history_error is not None:
+            return {"ok": False, "error": "observation-history-invalid", "detail": history_error}
         try:
             if not os.path.isfile(model_path) or os.path.islink(model_path) or secure_size(model_path) <= 0:
                 return {"ok": False, "error": "model-file-invalid"}
@@ -308,13 +359,28 @@ class JointPolicyRuntime:
                 return {"ok": False, "error": "model-io-count-invalid"}
             input_shape = inputs[0].shape
             output_shape = outputs[0].shape
-            if input_shape and isinstance(input_shape[-1], int) and input_shape[-1] != EXPECTED_OBS_DIM:
-                return {"ok": False, "error": "model-input-dim-mismatch"}
+            # A stacked policy's single input is exactly frames x 61; unlike
+            # the single-frame contract there is no second shape it could
+            # honestly be.
+            expected_model_input = EXPECTED_OBS_DIM * OBS_HISTORY_FRAMES
+            if input_shape and isinstance(input_shape[-1], int) and input_shape[-1] != expected_model_input:
+                return {
+                    "ok": False,
+                    "error": "model-input-dim-mismatch",
+                    "expected": expected_model_input,
+                    "actual": input_shape[-1],
+                    **(
+                        {"detail": "adapter declares observationHistory.frames=%d, so the model "
+                                   "input must be %d x %d = %d" % (OBS_HISTORY_FRAMES, OBS_HISTORY_FRAMES, EXPECTED_OBS_DIM, expected_model_input)}
+                        if OBS_HISTORY_FRAMES > 1
+                        else {}
+                    ),
+                }
             if output_shape and isinstance(output_shape[-1], int) and output_shape[-1] != EXPECTED_ACTION_DIM:
                 return {"ok": False, "error": "model-output-dim-mismatch"}
             # A dry-run catches malformed graph dtypes/shapes before start.
             probe = session.run(
-                None, {inputs[0].name: np.zeros((1, EXPECTED_OBS_DIM), dtype=np.float32)}
+                None, {inputs[0].name: np.zeros((1, expected_model_input), dtype=np.float32)}
             )[0]
             if int(np.asarray(probe).reshape(-1).size) != EXPECTED_ACTION_DIM:
                 return {"ok": False, "error": "model-output-dim-mismatch"}
@@ -322,10 +388,21 @@ class JointPolicyRuntime:
                 "path": model_path,
                 "bytes": secure_size(model_path),
                 "sha256": _sha256(model_path),
-                "inputDim": EXPECTED_OBS_DIM,
+                "inputDim": expected_model_input,
                 "outputDim": EXPECTED_ACTION_DIM,
                 "provider": "cpu",
                 "providersAvailable": list(ort.get_available_providers()),
+                **(
+                    {
+                        "observationHistory": {
+                            "frames": OBS_HISTORY_FRAMES,
+                            "order": "oldest-first",
+                            "frameWidth": EXPECTED_OBS_DIM,
+                        }
+                    }
+                    if OBS_HISTORY_FRAMES > 1
+                    else {}
+                ),
             }
             with self._lock:
                 if self._state == "running":
@@ -359,6 +436,12 @@ class JointPolicyRuntime:
             self._infer_ms = 0.0
             self._last_action = [0.0] * 14
             self._last_target = None
+            if OBS_HISTORY_FRAMES > 1:
+                import numpy as np
+
+                self._obs_history = np.zeros((OBS_HISTORY_FRAMES, EXPECTED_OBS_DIM), dtype=np.float32)
+            else:
+                self._obs_history = None
             self._session_id = str(uuid.uuid4())
             self._started_at = time.time()
             self._stopped_at = None
@@ -417,6 +500,18 @@ class JointPolicyRuntime:
         except Exception:
             pass
 
+    def _push_history(self, frame):
+        """Append the newest frame to the rolling history and return the flat
+        stacked model input, oldest frame first. Single-frame policies get the
+        frame back unchanged."""
+        if self._obs_history is None:
+            return frame
+        import numpy as np
+
+        self._obs_history[:-1] = self._obs_history[1:]
+        self._obs_history[-1] = frame
+        return self._obs_history.reshape(-1)
+
     def _loop(self):
         import numpy as np
         period = 1.0 / DECISION_HZ
@@ -436,7 +531,8 @@ class JointPolicyRuntime:
                     time.sleep(period)
                     continue
                 t0 = time.time()
-                result = self._model.run(None, {self._input_name: np.asarray([observation], dtype=np.float32)})[0][0]
+                model_input = self._push_history(observation)
+                result = self._model.run(None, {self._input_name: np.asarray([model_input], dtype=np.float32)})[0][0]
                 action = [float(value) for value in result]
                 target = project_joint_action(
                     action, HOME_POSITION, ACTION_SCALE, self._last_target,

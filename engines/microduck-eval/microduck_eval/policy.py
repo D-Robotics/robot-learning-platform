@@ -1,10 +1,16 @@
 """ONNX policy loading and the observation contract it expects.
 
-Two graph shapes are accepted, and nothing else:
+Three graph shapes are accepted, and nothing else:
 
 * **feed-forward** — exactly one input (``[*, 61]``) and one output
   (``[*, 14]``). The upstream exporter (``export.py``) bakes the observation
   normalizer into the graph, so the 14 joint offsets are final.
+* **feed-forward with stacked observation history** — one input of
+  ``[*, 61 x frames]`` (RPO-style frame stacking, oldest frame first). The
+  caller declares the depth via ``load_policy(..., history_frames=N)``; the
+  ``Policy`` keeps the rolling frame buffer itself, zero-fills it at
+  ``reset()`` (episode start — the same pre-history the trainers and board
+  runtimes initialize), and feeds the flattened stack to the graph.
 * **recurrent** (e.g. an LSTM actor) — one observation input plus one or more
   *state inputs*, and one action output plus matching *state outputs*. State
   is carried between ``act`` calls within an episode and zeroed by ``reset()``
@@ -25,6 +31,7 @@ import numpy as np
 
 OBSERVATION_SIZE = 61
 ACTION_SIZE = 14
+MAX_HISTORY_FRAMES = 64
 
 
 class PolicyContractError(RuntimeError):
@@ -96,11 +103,36 @@ class Policy:
     #: One zero-filled array per state input; reused across ``act`` calls.
     state: list[np.ndarray] = field(default_factory=list, repr=False)
     recurrent: bool = False
+    #: Stacked-observation depth. 1 = plain single-frame policy; N > 1 means
+    #: the graph consumes the last N frames flattened oldest-first, and the
+    #: rolling buffer below is maintained by ``act``/``reset``.
+    history_frames: int = 1
+    history: list[np.ndarray] = field(default_factory=list, repr=False)
 
     # ---- episode-scoped state -------------------------------------------
     def reset(self) -> None:
-        """Zero the recurrent state. Called once per episode by ``rollout``."""
+        """Zero the recurrent state and the frame history.
+
+        Called once per episode by ``rollout``. The zero frame history matches
+        the trainers' episode reset and the board runtimes' session start, so
+        the policy never reads a pre-history it was not trained with.
+        """
         self.state = [np.zeros_like(value) for value in self.state]
+        self.history = [
+            np.zeros(self.observation_size, dtype=np.float32) for _ in range(self.history_frames)
+        ]
+
+    def _push_history(self, observation: np.ndarray) -> np.ndarray:
+        """Append the newest frame and return the flat stacked model input.
+
+        Single-frame policies get the observation back unchanged (identical
+        to the pre-stacking behaviour, bit for bit).
+        """
+        if self.history_frames <= 1:
+            return observation
+        self.history[:-1] = self.history[1:]
+        self.history[-1] = observation
+        return np.concatenate(self.history).astype(np.float32)
 
     # ---- inference -------------------------------------------------------
     def act(self, observation: np.ndarray) -> np.ndarray:
@@ -108,7 +140,7 @@ class Policy:
             raise PolicyContractError(
                 f"observation must be ({self.observation_size},), got {observation.shape}"
             )
-        batch = observation.reshape(1, -1).astype(np.float32)
+        batch = self._push_history(observation).reshape(1, -1).astype(np.float32)
         feeds: dict[str, np.ndarray] = {self.input_name: batch}
         for name, value in zip(self.state_input_names, self.state):
             feeds[name] = np.asarray(value, dtype=np.float32)
@@ -144,11 +176,19 @@ class Policy:
 
     def facts(self) -> dict[str, object]:
         """What the report must state for the policy to be reproducible."""
-        return {
+        facts: dict[str, object] = {
             "recurrent": self.recurrent,
             "stateInputs": list(self.state_input_names),
             "stateOutputs": list(self.state_output_names),
         }
+        if self.history_frames > 1:
+            facts["observationHistory"] = {
+                "frames": self.history_frames,
+                "order": "oldest-first",
+                "frameSize": self.observation_size,
+                "modelInputWidth": self.observation_size * self.history_frames,
+            }
+        return facts
 
 
 def _sha256(path: Path) -> str:
@@ -210,23 +250,24 @@ def _pair_state_inputs(inputs: list, outputs: list) -> list[tuple[str, str]]:
     return pairs
 
 
-def classify_graph(inputs: list, outputs: list) -> dict[str, object]:
+def classify_graph(inputs: list, outputs: list, expected_obs_size: int = OBSERVATION_SIZE) -> dict[str, object]:
     """Split a graph's inputs/outputs into obs/action/state. Pure and testable.
 
     Returns the fields ``Policy`` needs; raises on anything ambiguous. The
     rule for which input is the observation: the one whose non-batch size is
-    61. The action output is the one whose non-batch size is 14. Everything
-    else must pair up as state.
+    ``expected_obs_size`` (the frame width for single-frame policies, or
+    frame width x history frames for a stacked one). The action output is the
+    one whose non-batch size is 14. Everything else must pair up as state.
     """
     if not inputs or not outputs:
         raise PolicyContractError(
             f"graph has no inputs or no outputs (inputs={_describe(inputs)}, "
             f"outputs={_describe(outputs)})"
         )
-    obs_inputs = [item for item in inputs if _dim_of(item.shape) == OBSERVATION_SIZE]
+    obs_inputs = [item for item in inputs if _dim_of(item.shape) == expected_obs_size]
     if len(obs_inputs) != 1:
         raise PolicyContractError(
-            f"expected exactly one input of size {OBSERVATION_SIZE}, got "
+            f"expected exactly one input of size {expected_obs_size}, got "
             f"{len(obs_inputs)}: {_describe(inputs)}"
         )
     action_outputs = [item for item in outputs if _dim_of(item.shape) == ACTION_SIZE]
@@ -261,16 +302,21 @@ def _initial_state(shapes: list[tuple[int, ...]]) -> list[np.ndarray]:
     return [np.zeros(shape, dtype=np.float32) for shape in shapes]
 
 
-def load_policy(path: str | Path) -> Policy:
+def load_policy(path: str | Path, history_frames: int = 1) -> Policy:
     import onnxruntime as ort
 
+    if not isinstance(history_frames, int) or not 1 <= history_frames <= MAX_HISTORY_FRAMES:
+        raise PolicyContractError(
+            f"history_frames must be an integer in [1, {MAX_HISTORY_FRAMES}], got {history_frames!r}"
+        )
     file_path = Path(path)
     if not file_path.is_file():
         raise FileNotFoundError(f"policy not found: {file_path}")
     session = ort.InferenceSession(str(file_path), providers=["CPUExecutionProvider"])
-    fields = classify_graph(session.get_inputs(), session.get_outputs())
+    fields = classify_graph(session.get_inputs(), session.get_outputs(),
+                            expected_obs_size=OBSERVATION_SIZE * history_frames)
     shapes = fields["state_shapes"]  # type: ignore[assignment]
-    return Policy(
+    policy = Policy(
         session=session,
         input_name=fields["input_name"],  # type: ignore[arg-type]
         output_name=fields["output_name"],  # type: ignore[arg-type]
@@ -282,4 +328,7 @@ def load_policy(path: str | Path) -> Policy:
         state_output_names=fields["state_output_names"],  # type: ignore[arg-type]
         state=_initial_state(shapes),  # type: ignore[arg-type]
         recurrent=fields["recurrent"],  # type: ignore[arg-type]
+        history_frames=history_frames,
     )
+    policy.reset()
+    return policy

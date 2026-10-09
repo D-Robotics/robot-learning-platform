@@ -72,6 +72,33 @@ export function resolveTaskPack(taskId, context = {}) {
   const physicsTimestepSeconds = Number(context.physicsTimestepSeconds) || 0.02;
   const decimation = Math.max(1, Math.round(controlHz * physicsTimestepSeconds));
 
+  // Observation history stacking (the RPO-style "stack N past frames" policy
+  // input). The frame layout stays the adapter's observationSize; the history
+  // multiplies the policy's flat input width. Only the concat order this
+  // platform implements is accepted — an unimplemented order must fail at
+  // resolve time, not become a silently reordered policy input on the board.
+  const historyDeclaration = adapter.policy.observationHistory;
+  if (historyDeclaration != null) {
+    assert.ok(
+      historyDeclaration &&
+        typeof historyDeclaration === 'object' &&
+        !Array.isArray(historyDeclaration),
+      'adapter policy.observationHistory must be an object like {"frames": 3, "order": "oldest-first"}',
+    );
+    assert.ok(
+      Number.isInteger(historyDeclaration.frames) &&
+        historyDeclaration.frames >= 1 &&
+        historyDeclaration.frames <= 64,
+      `adapter policy.observationHistory.frames must be an integer in [1, 64] (got ${JSON.stringify(historyDeclaration.frames)})`,
+    );
+    const order = historyDeclaration.order || 'oldest-first';
+    assert.equal(
+      order,
+      'oldest-first',
+      `adapter policy.observationHistory.order must be 'oldest-first' (got ${JSON.stringify(order)})`,
+    );
+  }
+
   // Engine routing is platform policy, so the recommendation is validated here:
   // an unknown id fails loudly instead of being silently dropped (and later
   // defaulting the task to the kinematic engine). It is resolved before the
@@ -160,13 +187,28 @@ export function resolveTaskPack(taskId, context = {}) {
 export function trainingRequestFor(pack, context = {}) {
   const observationSize = pack.adapter.policy.observationSize;
   const actionSize = pack.adapter.policy.actionSize;
+  // Contract observationSize is the policy's flat VECTOR input width (the same
+  // convention the manifest validator enforces), so a history-stacked policy
+  // carries frames × frameWidth here, with one layout entry per stacked frame
+  // ordered oldest-first — the exact concat order the engine and the board
+  // runtime implement.
+  const history = pack.adapter.policy.observationHistory || null;
+  const historyFrames = Math.max(1, Math.min(64, Number(history?.frames) || 1));
+  const modelObservationSize = observationSize * historyFrames;
+  const observationLayout =
+    historyFrames > 1
+      ? Array.from({ length: historyFrames }, (_, index) => ({
+          name: `${pack.observationAdapterId}@t-${historyFrames - 1 - index}`,
+          size: observationSize,
+        }))
+      : [{ name: pack.observationAdapterId, size: observationSize }];
   return {
     schemaVersion: 1,
     contractId: `${pack.id}-policy-v1`,
     contract: {
       id: `${pack.id}-policy-v1`,
       robotId: pack.adapter.id,
-      observationSize,
+      observationSize: modelObservationSize,
       actionSize,
       controlHz: pack.controlHz,
       physicsTimestepSeconds: pack.physicsTimestepSeconds,
@@ -185,7 +227,10 @@ export function trainingRequestFor(pack, context = {}) {
               angular: Number(pack.adapter.actuator?.maxAngular ?? 1),
               units: 'm/s,rad/s',
             },
-      observationLayout: [{ name: pack.observationAdapterId, size: observationSize }],
+      observationLayout,
+      ...(historyFrames > 1
+        ? { observationHistory: { frames: historyFrames, order: 'oldest-first' } }
+        : {}),
     },
     model: {
       modelId: context.modelId || `${pack.id}-ppo`,

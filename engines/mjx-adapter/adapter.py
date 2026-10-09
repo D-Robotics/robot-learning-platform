@@ -955,7 +955,28 @@ class MjxGoalNavEnv:
     def __init__(self, pack, num_envs, seed, physics_dt, obs_layout):
         self.pack = pack
         self.num_envs = num_envs
-        self.observation_size = 8 if obs_layout == "originbot-imu-odom-v1" else 42
+        self.frame_width = 8 if obs_layout == "originbot-imu-odom-v1" else 42
+        # Observation history stacking (the RPO-style policy input): the MJX
+        # frame stays 8D/42D; the policy consumes the last N frames flattened
+        # oldest-first. The rolling buffer lives on the HOST boundary (the
+        # jitted core keeps producing single frames) and zero-initializes at
+        # every episode start — the same pre-history the trainers, the eval
+        # harness and the board runtimes initialize.
+        history = ((pack.get("adapter") or {}).get("policy") or {}).get("observationHistory") or {}
+        self.history_frames = int(history.get("frames", 1) or 1)
+        if not 1 <= self.history_frames <= 64:
+            raise ValueError(
+                "observationHistory.frames must be an integer in [1, 64] (got {})".format(
+                    self.history_frames
+                )
+            )
+        if (history.get("order") or "oldest-first") != "oldest-first":
+            raise ValueError(
+                "observationHistory.order must be 'oldest-first' (got {!r})".format(
+                    history.get("order")
+                )
+            )
+        self.observation_size = self.frame_width * self.history_frames
         self.action_size = 2
         self.obs_layout = obs_layout
         self.control_dt = 1.0 / float(pack.get("controlHz", 10))
@@ -1106,7 +1127,21 @@ class MjxGoalNavEnv:
         self.rng = jax.random.PRNGKey(seed)
         self._rng_train, self._rng_eval = jax.random.split(self.rng)
         self.state = self._reset_state_batch(self._rng_train)
-        self.current_obs = np.asarray(self.state["last_obs"])
+        self._host_history = np.zeros(
+            (num_envs, self.history_frames, self.frame_width), dtype=np.float32
+        )
+        self.current_obs = self._stack_history(np.asarray(self.state["last_obs"], dtype=np.float32))
+
+    def _stack_history_into(self, history, frames):
+        """Shift-and-append one frame batch into a rolling history and return
+        the flat stacked model input (oldest frame first). NumPy buffers the
+        overlapping slice assignment, so no explicit copy."""
+        history[:, :-1, :] = history[:, 1:, :]
+        history[:, -1, :] = frames
+        return history.reshape(history.shape[0], -1)
+
+    def _stack_history(self, frames):
+        return self._stack_history_into(self._host_history, frames)
 
     # -- state construction --------------------------------------------------
     def _reset_state_batch(self, rng, goal_range=None):
@@ -1314,7 +1349,7 @@ class MjxGoalNavEnv:
         """
         odom_x, odom_y, odom_yaw = odom[0], odom[1], odom[2]
         kx, ky, kw, k_gyro, k_drop = jax.random.split(k_noise, 5)
-        if self.observation_size == 8:
+        if self.frame_width == 8:
             noisy_x = odom_x + jax.random.normal(kx, (), dtype=jnp.float32) * domain[3]
             noisy_y = odom_y + jax.random.normal(ky, (), dtype=jnp.float32) * domain[3]
             noisy_w = w_lag + jax.random.normal(kw, (), dtype=jnp.float32) * domain[2]
@@ -1447,7 +1482,11 @@ class MjxGoalNavEnv:
     def reset(self):
         self._rng_train, split = jax.random.split(self._rng_train)
         self.state = self._reset_state_batch(split)
-        self.current_obs = np.asarray(self.state["last_obs"])
+        # A fresh batch of episodes starts from the zero pre-history — the
+        # same initialization the starter env, the eval harness and the board
+        # runtimes perform at episode/session start.
+        self._host_history[:] = 0.0
+        self.current_obs = self._stack_history(np.asarray(self.state["last_obs"], dtype=np.float32))
         return self.current_obs
 
     def step(self, actions_np):
@@ -1458,8 +1497,14 @@ class MjxGoalNavEnv:
             self.state, actions, goal_lo, goal_hi
         )
         self.state = state
-        self.current_obs = np.asarray(obs)
+        obs_np = np.asarray(obs, dtype=np.float32)
         done_np = np.asarray(done)
+        # The train step auto-resets finished episodes and returns each one's
+        # fresh first frame: clear that env's history before appending so the
+        # terminal episode's frames never leak into the next one.
+        if done_np.any():
+            self._host_history[done_np] = 0.0
+        self.current_obs = self._stack_history(obs_np)
         for flag in np.asarray(success)[done_np]:
             self.success_history.append(bool(flag))
         self._maybe_expand_curriculum()
@@ -1507,7 +1552,8 @@ class MjxGoalNavEnv:
         state["latency"] = jnp.full((episodes,), int(latency), dtype=jnp.int32)
         state["phys_domain"] = jnp.ones((episodes, 3))
 
-        obs = np.asarray(state["last_obs"])
+        history = np.zeros((episodes, self.history_frames, self.frame_width), dtype=np.float32)
+        obs = self._stack_history_into(history, np.asarray(state["last_obs"], dtype=np.float32))
         rewards_sum = np.zeros(episodes, dtype=np.float64)
         steps_count = np.zeros(episodes, dtype=np.int64)
         reached = np.zeros(episodes, dtype=bool)
@@ -1522,18 +1568,22 @@ class MjxGoalNavEnv:
             steps_count += was_live
             reached |= np.asarray(success) & was_live
             # Telemetry rows mirror the starter evaluator: the observation
-            # the policy SAW when it chose the action, and the cumulative
+            # frame the policy SAW when it chose the action (single frame —
+            # the stacked vector is a model-input detail), and the cumulative
             # episode collision flag (starter's _collision_flags).
             if was_live[0]:
                 rows.append({
                     "t": round(step_idx * self.control_dt, 4),
-                    "observation": [round(float(v), 6) for v in obs[0]],
+                    "observation": [round(float(v), 6) for v in obs[0][-self.frame_width:]],
                     "action": [round(float(v), 6) for v in actions[0]],
                     "reward": round(float(np.asarray(reward)[0]), 6),
                     "done": bool(np.asarray(done)[0]),
                     "fall": bool(np.asarray(collision)[0]),
                 })
-            obs = np.asarray(obs_out)
+            # Frozen episodes repeat their terminal frame; feeding it to the
+            # rolling buffer keeps every row's arithmetic identical and their
+            # (discarded) actions have no effect on the measured outcomes.
+            obs = self._stack_history_into(history, np.asarray(obs_out, dtype=np.float32))
         outcomes = []
         final_dist = np.asarray(state["final_dist"])
         final_collision = np.asarray(state["final_collision"])
@@ -1755,13 +1805,38 @@ def main():
         obs_layout = raw_layout
     else:
         obs_layout = "originbot-imu-odom-v1"
-    if obs_layout == "originbot-imu-odom-v1" and observation_size != 8:
+    # Stacked-observation depth (the RPO-style policy input): the contract's
+    # flat observationSize must be exactly frame width x frames — a policy
+    # consuming history that the pack does not declare (or vice versa) is a
+    # contract bug, refused before any physics is built.
+    adapter_policy = (task.get("adapter") or {}).get("policy") or {}
+    history_declaration = adapter_policy.get("observationHistory") or {}
+    history_frames = int(history_declaration.get("frames", 1) or 1)
+    if not 1 <= history_frames <= 64:
         raise ValueError(
-            "contract.observationSize {} violates the originbot-imu-odom-v1 layout (8)".format(observation_size)
+            "adapter policy.observationHistory.frames must be an integer in [1, 64] (got {})".format(
+                history_frames
+            )
         )
-    if obs_layout == "imu-gravity-v1" and observation_size != 42:
+    if (history_declaration.get("order") or "oldest-first") != "oldest-first":
         raise ValueError(
-            "contract.observationSize {} violates the imu-gravity-v1 layout (42)".format(observation_size)
+            "adapter policy.observationHistory.order must be 'oldest-first' (got {!r})".format(
+                history_declaration.get("order")
+            )
+        )
+    if obs_layout == "originbot-imu-odom-v1" and observation_size != 8 * history_frames:
+        raise ValueError(
+            "contract.observationSize {} violates the originbot-imu-odom-v1 layout "
+            "(8 x {} history frames = {})".format(
+                observation_size, history_frames, 8 * history_frames
+            )
+        )
+    if obs_layout == "imu-gravity-v1" and observation_size != 42 * history_frames:
+        raise ValueError(
+            "contract.observationSize {} violates the imu-gravity-v1 layout "
+            "(42 x {} history frames = {})".format(
+                observation_size, history_frames, 42 * history_frames
+            )
         )
 
     if pack is None:
@@ -1878,6 +1953,18 @@ def main():
                 "hyperparams": PPO_HYPERPARAMS,
                 "device": device_names,
                 "controlHz": control_hz,
+                **(
+                    {
+                        "observationHistory": {
+                            "frames": history_frames,
+                            "order": "oldest-first",
+                            "frameSize": 8 if obs_layout == "originbot-imu-odom-v1" else 42,
+                            "modelObservationSize": observation_size,
+                        }
+                    }
+                    if history_frames > 1
+                    else {}
+                ),
                 "physicsTimestepSeconds": physics_dt,
                 "decimation": decimation,
                 "sceneFidelity": {
@@ -1902,6 +1989,18 @@ def main():
                 "taskId": pack["id"],
                 "adapterId": pack["adapter"]["id"],
                 "observationAdapterId": pack["adapter"]["policy"]["observationAdapterId"],
+                **(
+                    {
+                        "observationHistory": {
+                            "frames": history_frames,
+                            "order": "oldest-first",
+                            "frameSize": 8 if obs_layout == "originbot-imu-odom-v1" else 42,
+                            "modelObservationSize": observation_size,
+                        }
+                    }
+                    if history_frames > 1
+                    else {}
+                ),
                 "engine": ADAPTER_ID,
                 "physicsBackend": physics_backend,
                 "trained": {k: v for k, v in trained_report.items() if k != "jsonl"},
@@ -1948,6 +2047,18 @@ def main():
             "taskId": pack["id"],
             "taskKind": "goal-navigation",
             "observationSize": obs_size,
+            **(
+                {
+                    "observationHistory": {
+                        "frames": history_frames,
+                        "order": "oldest-first",
+                        "frameSize": 8 if obs_layout == "originbot-imu-odom-v1" else 42,
+                        "modelObservationSize": obs_size,
+                    }
+                }
+                if history_frames > 1
+                else {}
+            ),
             "actionSize": act_size,
             "iterations": max_iterations,
             "numEnvs": num_envs,

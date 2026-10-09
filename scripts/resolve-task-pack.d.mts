@@ -16,6 +16,8 @@ export interface TaskPack {
       actionAdapterId: string;
       observationSize: number;
       actionSize: number;
+      /** Opt-in frame stacking: policy input = frames × observationSize. */
+      observationHistory?: { frames: number; order: 'oldest-first' };
     };
     safety: { maxLinear: number; maxAngular: number };
     runtime?: { decisionHz?: number };

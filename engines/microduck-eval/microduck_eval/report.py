@@ -114,7 +114,7 @@ def build_report(args: argparse.Namespace) -> dict[str, Any]:
     if args.policy:
         from .policy import load_policy
 
-        policy = load_policy(args.policy)
+        policy = load_policy(args.policy, history_frames=args.obs_history_frames)
         policy_path, policy_sha = policy.path, policy.sha256
     else:
         policy = ZeroPolicy()
@@ -127,7 +127,7 @@ def build_report(args: argparse.Namespace) -> dict[str, Any]:
     if args.baseline_policy:
         from .policy import load_policy
 
-        baseline_policy = load_policy(args.baseline_policy)
+        baseline_policy = load_policy(args.baseline_policy, history_frames=args.obs_history_frames)
         baseline_policy_facts = {
             "path": baseline_policy.path,
             "sha256": baseline_policy.sha256,
@@ -313,6 +313,13 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="JSON task spec (see docs/task-specs.md); overrides --task and its envelopes",
     )
     parser.add_argument("--policy", default=None, help="exported ONNX policy; omit for the zero-action baseline")
+    parser.add_argument(
+        "--obs-history-frames",
+        type=int,
+        default=1,
+        help="declared observation-history depth of the policy graph "
+        "(model input = 61 x frames, oldest-first rolling frames); default 1",
+    )
     parser.add_argument(
         "--baseline-policy",
         dest="baseline_policy",

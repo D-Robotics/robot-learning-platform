@@ -46,6 +46,48 @@ MJX 引擎的物理差异与诚实边界见 [`docs/engines/mjx-adapter.md`](engi
 
 引擎侧布局与上述完全一致——训练时看到的每个槽位语义，就是上板后同一槽位的语义。
 
+## 观测历史堆叠（observationHistory）
+
+RPO 类运动策略（如论坛帖 35763 的 78 维单帧 × 10 帧历史）依赖把最近 N 帧观测
+拼成策略输入。平台以适配器声明承载这一维度：
+
+```json
+"policy": {
+  "observationSize": 8,
+  "observationHistory": { "frames": 3, "order": "oldest-first" }
+}
+```
+
+语义（两侧一致，`verify:observation-history` 全程钉死）：
+
+- 单帧布局不变（`observationSize` 仍是帧宽）；策略的扁平输入宽度 = 帧宽 × 帧数，
+  契约 `observationSize` 承载该扁平宽度，`observationLayout` 每帧一个条目
+  （`<布局id>@t-(N-1)` … `@t-0`），加总必须等于扁平宽度（与 manifest 校验同一约定）。
+- 拼接顺序只实现 `oldest-first`（最旧在前）；其他取值在 resolver、引擎、板端
+  运行时三处一致拒绝。
+- 历史 buffer 在 episode/会话起点**零填充**：训练 env 的 reset 与板端运行时的
+  session start 行为相同，策略不会读到训练时没见过的输入分布。
+- episode 中途 auto-reset 时该 env 的历史清零后重建，终局帧不进入下一 episode。
+- 遥测行保持单帧宽度（最新帧）——堆叠只改变模型输入，不改变遥测语义。
+- 端到端落点（底盘 8D/42D 路径）：resolver 校验（`scripts/resolve-task-pack.mjs`）→
+  starter-ppo 滚动堆叠（`GoalNavEnv._stack_frame`）与 mjx-ppo 滚动堆叠
+  （`MjxGoalNavEnv` 宿主侧 `_stack_history`，jitted 核心仍产单帧）→ 板端滚动堆叠
+  （`board-policy-runtime.py:_push_history`）→ 原生 BPU 8D 路径对堆叠声明
+  fail-closed 拒绝。
+- 腿式 61D 链路同样贯通：`microduck-recurrent --obs-history-frames N` 训练出
+  61×N 输入的循环 ONNX（导出前带状态保持的 parity 验证）→
+  `microduck-eval --obs-history-frames N` 装载评测（`Policy` 内部维护滚动历史，
+  `reset()` 按 episode 清零，`facts()` 记录堆叠契约）→ 板端
+  `board-joint-policy-runtime.py` 支持前馈堆叠图（`_push_history` 同规则，
+  load 校验输入宽 = 帧数 × 61；循环图仍归 microduck-eval 链路，板端只收
+  单输入前馈图）。
+- 底盘堆叠任务包须 `recommendedEngine: "starter-ppo"` 或显式提交
+  `training.engine="mjx-ppo"`（两个底盘引擎都实现滚动堆叠；物理密集任务可走
+  mjx 的真实接触动力学）；误提交到未实现堆叠的引擎会在该引擎的布局校验处
+  响亮失败。
+- 示例任务包：`tasks/originbot-goal-navigation-history.json`（8D × 3 帧 = 24 维）；
+  腿式适配器变体：`adapters/microduck-leg-history3.json`（61D × 3 帧 = 183 维）。
+
 ## 域随机化（sim2real 转移的核心）
 
 每 episode 按 `domainRandomization` 的范围采样一次（机器人不会中途换电机）：

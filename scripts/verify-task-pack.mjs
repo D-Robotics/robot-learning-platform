@@ -233,6 +233,33 @@ for (const taskId of ['microduck-stand', 'microduck-walk', 'microduck-kick', 'mi
   assert.ok(pack.microduckTask?.upstreamTaskId, `${taskId}: upstream task id`);
   assert.equal(pack.qualityGate?.gateOn, 'ciLowerBound', `${taskId}: quality gate`);
 }
+// Observation-history stacking: the RPO-style pack must resolve into a
+// stacked contract (frames x frameWidth) with one layout entry per stacked
+// frame, pinned to the engine that implements the rolling-frame input. The
+// adapter's frame width stays the single-frame layout — the history lives in
+// its own declaration, never by inflating observationSize.
+const stacked = resolveTaskPack('originbot-goal-navigation-history');
+assert.equal(stacked.adapter.id, 'rdk-originbot-history3', 'stacked pack uses its own adapter');
+assert.equal(stacked.adapter.policy.observationSize, 8, 'frame width stays the 8D layout');
+assert.equal(stacked.adapter.policy.observationHistory.frames, 3, 'declared stack depth');
+assert.equal(
+  stacked.recommendedEngine,
+  'starter-ppo',
+  'stacked pack pins the engine that implements the rolling-frame input',
+);
+const stackedRequest = trainingRequestFor(stacked, { profile: 'smoke' });
+assert.equal(stackedRequest.contract.observationSize, 24, 'flat input = 3 x 8');
+assert.deepEqual(stackedRequest.contract.observationLayout, [
+  { name: 'originbot-imu-odom-v1@t-2', size: 8 },
+  { name: 'originbot-imu-odom-v1@t-1', size: 8 },
+  { name: 'originbot-imu-odom-v1@t-0', size: 8 },
+]);
+assert.deepEqual(
+  stackedRequest.contract.observationHistory,
+  { frames: 3, order: 'oldest-first' },
+  'contract carries the stacking declaration',
+);
+
 for (const [alias, canonical] of Object.entries({
   walk: 'microduck-walk',
   kick: 'microduck-kick',
