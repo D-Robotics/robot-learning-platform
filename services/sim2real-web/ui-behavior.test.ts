@@ -1483,6 +1483,67 @@ describe('station device manager before board readiness', () => {
       (request) => request.method === 'POST' && request.url.includes('/local-bridge/pairing-code'),
     );
 
+  it('reconnects a registered Bridge row using its raw discovery id without motion', async () => {
+    const rawId = 'ssh:robot@camera-board:22';
+    const { window, requests, errors } = await boot({
+      url: stationUrl,
+      stationHealth: { available: false, agent: { mock: false } },
+      devices: [{ id: 'platform-board', name: 'Registered board', bridgeDeviceId: rawId }],
+      localBridgeStatus: {
+        bridges: [
+          { bridgeId: 'bridge-fixture', online: true, devices: [{ bridgeDeviceId: rawId }] },
+        ],
+      },
+    });
+    const select = window.document.querySelector<HTMLButtonElement>(
+      '#station-device-list [data-action="bridge-select"]',
+    );
+    expect(select?.textContent).toBe('已接入 · 设为目标');
+    expect(select?.dataset.deviceId).toBe('platform-board');
+    const reconnect = window.document.querySelector<HTMLButtonElement>(
+      '#station-device-list [data-action="bridge-connect"]',
+    );
+    expect(reconnect?.textContent).toBe('重新接入');
+    expect(reconnect?.classList.contains('button-quiet')).toBe(true);
+    const overviewReads = requests.filter((request) => request.url.includes('/overview')).length;
+    const bridgeReads = requests.filter((request) =>
+      request.url.includes('/local-bridge/status'),
+    ).length;
+    reconnect!.click();
+    await vi.waitFor(() => {
+      expect(
+        requests.filter(
+          (request) => request.method === 'POST' && request.url.includes('/local-bridge/devices/'),
+        ),
+      ).toEqual([
+        expect.objectContaining({
+          url: expect.stringContaining(
+            `/local-bridge/devices/${encodeURIComponent(rawId)}/connect`,
+          ),
+          body: { bridgeId: 'bridge-fixture' },
+        }),
+      ]);
+      expect(
+        requests.filter((request) => request.url.includes('/overview')).length,
+      ).toBeGreaterThan(overviewReads);
+      expect(
+        requests.filter((request) => request.url.includes('/local-bridge/status')).length,
+      ).toBeGreaterThan(bridgeReads);
+    });
+    expect(
+      window.document.querySelector('#station-device-list [data-action="bridge-select"]')
+        ?.textContent,
+    ).toBe('已接入 · 设为目标');
+    expect(
+      requests.some(
+        (request) =>
+          request.method === 'POST' &&
+          /\/board-station\/(?:drive|policy)(?:\/|$|\?)/.test(request.url),
+      ),
+    ).toBe(false);
+    expect(errors).toEqual([]);
+  });
+
   it.each([
     { available: false, agent: { mock: false } },
     { state: 'offline', agent: { mock: false } },

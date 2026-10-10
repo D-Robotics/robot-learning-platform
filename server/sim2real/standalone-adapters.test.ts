@@ -4,7 +4,7 @@ import path from 'node:path';
 import type { AddressInfo } from 'node:net';
 
 import express, { type Express } from 'express';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
   buildBoardPreflightCommand,
@@ -16,6 +16,7 @@ import {
   persistDeviceBoardDetection,
   readDevices,
   requestOwnsDevice,
+  runOnDevice,
   safeStudioOrigin,
   studioBridgeConfiguration,
   studioSecurityHeadersMiddleware,
@@ -36,6 +37,7 @@ const previousDeployment = process.env.RDK_SIM2REAL_DEPLOYMENT;
 const temporaryRoots: string[] = [];
 
 afterEach(async () => {
+  vi.restoreAllMocks();
   await Promise.all(
     temporaryRoots.splice(0).map((root) => fs.rm(root, { recursive: true, force: true })),
   );
@@ -176,6 +178,186 @@ describe('standalone device ownership boundary', () => {
     });
     expect(reconnected.id).toBe(first.id);
     expect(await readDevices()).toHaveLength(2);
+  });
+
+  it('uses the registered Studio native id for owner-bound Bridge execution', async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'rdk-sim2real-native-target-'));
+    temporaryRoots.push(root);
+    process.env.RDK_SIM2REAL_STORAGE_DIR = root;
+    process.env.RDK_SIM2REAL_STUDIO_EXEC_ORIGIN = 'https://studio.example.test';
+    const rawId = 'ssh:robot@camera-board:22';
+    const nativeId = '123e4567-e89b-42d3-a456-426614174000';
+    const alice = await upsertBridgeDevice({
+      ownerKey: 'sso:alice:web',
+      bridgeId: 'bridge-a',
+      bridgeDeviceId: rawId,
+      studioDeviceId: nativeId,
+      host: 'camera-board',
+    });
+    const bob = await upsertBridgeDevice({
+      ownerKey: 'sso:bob:web',
+      bridgeId: 'bridge-b',
+      bridgeDeviceId: rawId,
+      studioDeviceId: '223e4567-e89b-42d3-a456-426614174000',
+      host: 'camera-board',
+    });
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(
+      async () =>
+        new Response(JSON.stringify({ output: 'readonly-proof', device: { id: nativeId } }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        }),
+    );
+    const request = { headers: { cookie: 'studio_session=alice' } } as never;
+    const result = await runOnDevice(request, {} as never, alice.id, ['probe'], {
+      bridgeDeviceId: rawId,
+      bridgeOwnerKey: 'sso:alice:web',
+    });
+    expect(result).toMatchObject({ output: 'readonly-proof', device: { id: alice.id } });
+    expect(String(fetchMock.mock.calls[0]?.[0])).toBe(
+      `https://studio.example.test/api/devices/${nativeId}/exec`,
+    );
+    expect(fetchMock.mock.calls[0]?.[1]?.headers).toMatchObject({ cookie: 'studio_session=alice' });
+    expect(result?.device).not.toHaveProperty('studioDeviceId');
+    expect((await readDevices()).find((row) => row.id === alice.id)).toMatchObject({
+      bridgeDeviceId: rawId,
+      studioDeviceId: nativeId,
+    });
+    const reconnected = await upsertBridgeDevice({
+      ownerKey: 'sso:alice:web',
+      bridgeId: 'bridge-a',
+      bridgeDeviceId: rawId,
+      host: 'reconnected-board',
+    });
+    expect(reconnected).toMatchObject({ id: alice.id, studioDeviceId: nativeId });
+
+    fetchMock.mockClear();
+    expect(
+      await runOnDevice(request, {} as never, bob.id, ['probe'], {
+        bridgeDeviceId: rawId,
+        bridgeOwnerKey: 'sso:alice:web',
+      }),
+    ).toBeNull();
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    'missing-cookie',
+    'http-error',
+    'transport-error',
+    'invalid-json',
+    'missing-output',
+    'invalid-output',
+  ])('never falls back from a selected Bridge to a global agent: %s', async (failure) => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'rdk-sim2real-bridge-fail-closed-'));
+    temporaryRoots.push(root);
+    process.env.RDK_SIM2REAL_STORAGE_DIR = root;
+    process.env.NODE_ENV = 'production';
+    process.env.RDK_SIM2REAL_DEPLOYMENT = 'web-cloud';
+    process.env.RDK_SIM2REAL_STUDIO_EXEC_ORIGIN = 'https://studio.example.test';
+    process.env.RDK_SIM2REAL_BOARD_AGENT_URL = 'https://global-agent.example.test';
+    process.env.RDK_SIM2REAL_BOARD_AGENT_TOKEN = 'fixture-global-agent-token-0123456789';
+    const rawId = 'ssh:robot@camera-board:22';
+    const nativeId = '123e4567-e89b-42d3-a456-426614174000';
+    const device = await upsertBridgeDevice({
+      ownerKey: 'sso:alice:web',
+      bridgeId: 'bridge-a',
+      bridgeDeviceId: rawId,
+      studioDeviceId: nativeId,
+      host: 'camera-board',
+    });
+    const nativeUrl = `https://studio.example.test/api/devices/${nativeId}/exec`;
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async (url) => {
+      if (String(url) !== nativeUrl) {
+        return new Response(JSON.stringify({ output: 'wrong-global-target' }));
+      }
+      if (failure === 'transport-error') throw new Error('Bridge transport unavailable');
+      if (failure === 'http-error') return new Response('{}', { status: 403 });
+      if (failure === 'invalid-json') return new Response('not-json');
+      return new Response(JSON.stringify(failure === 'missing-output' ? {} : { output: 42 }));
+    });
+    const headers = failure === 'missing-cookie' ? {} : { cookie: 'studio_session=alice-fixture' };
+    const result = await runOnDevice({ headers } as never, {} as never, device.id, ['probe'], {
+      bridgeDeviceId: rawId,
+      bridgeOwnerKey: 'sso:alice:web',
+    });
+    expect(result).toBeNull();
+    if (failure === 'missing-cookie') expect(fetchMock).not.toHaveBeenCalled();
+    else {
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      expect(String(fetchMock.mock.calls[0]?.[0])).toBe(nativeUrl);
+    }
+  });
+
+  it('keeps the configured global agent available for non-Bridge targets', async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'rdk-sim2real-direct-target-'));
+    temporaryRoots.push(root);
+    process.env.RDK_SIM2REAL_STORAGE_DIR = root;
+    process.env.NODE_ENV = 'production';
+    process.env.RDK_SIM2REAL_DEPLOYMENT = 'web-cloud';
+    process.env.RDK_SIM2REAL_BOARD_AGENT_URL = 'https://global-agent.example.test';
+    process.env.RDK_SIM2REAL_BOARD_AGENT_TOKEN = 'fixture-global-agent-token-0123456789';
+    const fetchMock = vi
+      .spyOn(globalThis, 'fetch')
+      .mockResolvedValue(new Response(JSON.stringify({ output: 'direct-target-proof' })));
+    const result = await runOnDevice({ headers: {} } as never, {} as never, 'direct-device', [
+      'probe',
+    ]);
+    expect(result).toMatchObject({
+      device: { id: 'direct-device' },
+      output: 'direct-target-proof',
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(String(fetchMock.mock.calls[0]?.[0])).toBe(
+      'https://global-agent.example.test/v1/devices/direct-device/commands',
+    );
+  });
+
+  it.each([
+    '',
+    'invalid@native',
+    'native/path',
+    'native%2Fpath',
+    ' native-id',
+    'native-id\n',
+    'x'.repeat(161),
+  ])('rejects an unsafe Studio native id before persisting: %j', async (studioDeviceId) => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'rdk-sim2real-native-invalid-'));
+    temporaryRoots.push(root);
+    process.env.RDK_SIM2REAL_STORAGE_DIR = root;
+    await expect(
+      upsertBridgeDevice({
+        ownerKey: 'sso:alice:web',
+        bridgeId: 'bridge-a',
+        bridgeDeviceId: 'ssh:robot@camera-board:22',
+        studioDeviceId,
+        host: 'camera-board',
+      }),
+    ).rejects.toThrow('invalid_bridge_device');
+    expect(await readDevices()).toEqual([]);
+  });
+
+  it('does not treat an invalid stored Studio native id as a legacy Bridge target', async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'rdk-sim2real-native-corrupt-'));
+    temporaryRoots.push(root);
+    process.env.RDK_SIM2REAL_STORAGE_DIR = root;
+    await fs.writeFile(
+      path.join(root, 'devices.json'),
+      JSON.stringify([
+        {
+          id: 'bridge-a',
+          host: 'camera-board',
+          username: 'robot',
+          status: 'connected',
+          lastCheckedAt: new Date().toISOString(),
+          connectionMode: 'bridge',
+          bridgeOwnerKey: 'sso:alice:web',
+          bridgeDeviceId: 'legacy-device',
+          studioDeviceId: 'invalid/native',
+        },
+      ]),
+    );
+    expect(await readDevices()).toEqual([]);
   });
 
   it.each([

@@ -458,10 +458,10 @@ export function registerSim2RealBoardStationRoutes(
       );
       return null;
     }
-    // A registry row may carry the Studio bridge's remote identifier when it
-    // differs from the platform's device key. Fall back to the legacy key.
+    // Studio exec uses its native registration ID, while the raw Bridge ID
+    // identifies the discovered connection. Preserve older registry fallbacks.
     (request as Request & { __stationDeviceId?: string }).__stationDeviceId = String(
-      device.bridgeDeviceId ?? device.id,
+      device.studioDeviceId ?? device.bridgeDeviceId ?? device.id,
     ).trim();
     // Device connections own a loopback-only SSH tunnel. Carry its URL on the
     // request so JSON and streaming station calls select the same device;

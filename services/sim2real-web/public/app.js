@@ -10671,6 +10671,12 @@ function stationBridgeRow(bridge, device) {
     button.textContent = '已接入 · 设为目标';
     button.dataset.action = 'bridge-select';
     button.dataset.deviceId = registered.id;
+    const reconnect = document.createElement('button');
+    reconnect.className = 'button button-quiet';
+    reconnect.type = 'button';
+    reconnect.dataset.action = 'bridge-connect';
+    reconnect.textContent = '重新接入';
+    item.querySelector('.station-device-item-actions').append(reconnect);
   } else {
     button.textContent = '接入平台';
   }

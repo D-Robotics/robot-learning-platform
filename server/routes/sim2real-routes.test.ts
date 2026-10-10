@@ -7,6 +7,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 
 import { BUILTIN_MICRODUCK_MODEL, type Sim2RealModelManifest } from '../../shared/sim2real.js';
 import type { Sim2RealAuthPort } from '../sim2real/sim2real-auth.js';
+import { readDevices } from '../sim2real/standalone-adapters.js';
 import {
   reserveSim2RealRun,
   updateSim2RealComputeResource,
@@ -3104,6 +3105,7 @@ describe('Sim2Real HTTP routes', () => {
 
   it('whitelists Local Bridge pairing and connect payloads', async () => {
     process.env.RDK_SIM2REAL_STUDIO_ORIGIN = 'https://studio.example.test';
+    const studioDeviceId = '8e6c8fe9-4b7f-4731-bd4e-5dc0e4e1fb02';
     const originalFetch = globalThis.fetch;
     const calls: Array<{ url: string; init?: RequestInit }> = [];
     globalThis.fetch = (async (input, init) => {
@@ -3126,7 +3128,7 @@ describe('Sim2Real HTTP routes', () => {
           device: {
             bridgeId: 'bridge-a',
             bridgeDeviceId: 'ssh:root@192.0.2.42:22',
-            id: 'device-a',
+            id: studioDeviceId,
             name: 'OriginBot',
             host: '10.0.0.2',
             port: 22,
@@ -3186,7 +3188,11 @@ describe('Sim2Real HTTP routes', () => {
         {
           params: { bridgeDeviceId: 'ssh:root@192.0.2.42:22' },
           headers: browserHeaders,
-          body: { bridgeId: 'bridge-a', secret: 'drop-me' },
+          body: {
+            bridgeId: 'bridge-a',
+            studioDeviceId: 'untrusted-client-id',
+            secret: 'drop-me',
+          },
         },
       );
       expect(connected.statusCode).toBe(200);
@@ -3201,6 +3207,15 @@ describe('Sim2Real HTTP routes', () => {
         },
       });
       expect(JSON.stringify(connected.body)).not.toContain('do-not-forward');
+      expect(connected.body.device.id).not.toBe(studioDeviceId);
+      expect(connected.body.device).not.toHaveProperty('studioDeviceId');
+      const registered = await readDevices();
+      expect(registered).toHaveLength(1);
+      expect(registered[0]).toMatchObject({
+        id: connected.body.device.id,
+        bridgeDeviceId: 'ssh:root@192.0.2.42:22',
+        studioDeviceId,
+      });
       expect(calls[1]?.url).toBe(
         'https://studio.example.test/api/local-bridge/devices/ssh%3Aroot%40192.0.2.42%3A22/connect',
       );
@@ -3219,8 +3234,10 @@ describe('Sim2Real HTTP routes', () => {
           }),
         ]),
       );
+      expect(overview.body.devices[0].id).toBe(connected.body.device.id);
       expect(JSON.stringify(overview.body.devices)).not.toContain('do-not-forward');
       expect(overview.body.devices[0]).not.toHaveProperty('bridgeOwnerKey');
+      expect(overview.body.devices[0]).not.toHaveProperty('studioDeviceId');
       expect(overview.body.devices[0]).not.toHaveProperty('host');
       expect(overview.body.devices[0]).not.toHaveProperty('username');
       const otherOwner = await invoke(router, 'get', '/api/sim2real/overview', {
@@ -3228,10 +3245,71 @@ describe('Sim2Real HTTP routes', () => {
       });
       expect(otherOwner.statusCode).toBe(200);
       expect(otherOwner.body.devices).toEqual([]);
+      const reconnected = await invoke(
+        router,
+        'post',
+        '/api/sim2real/local-bridge/devices/:bridgeDeviceId/connect',
+        {
+          params: { bridgeDeviceId: 'ssh:root@192.0.2.42:22' },
+          headers: browserHeaders,
+          body: { bridgeId: 'bridge-a' },
+        },
+      );
+      expect(reconnected.statusCode).toBe(200);
+      expect(reconnected.body.device.id).toBe(connected.body.device.id);
+      expect(reconnected.body.device).not.toHaveProperty('studioDeviceId');
+      const afterReconnect = await readDevices();
+      expect(afterReconnect).toHaveLength(1);
+      expect(afterReconnect[0]).toMatchObject({
+        id: connected.body.device.id,
+        bridgeDeviceId: 'ssh:root@192.0.2.42:22',
+        studioDeviceId,
+      });
     } finally {
       globalThis.fetch = originalFetch;
     }
   });
+
+  it.each([undefined, '../native-device', 'native@invalid', ' native-device', 'native-device\n'])(
+    'rejects a Local Bridge connect response without a canonical native id: %j',
+    async (studioDeviceId) => {
+      process.env.RDK_SIM2REAL_STUDIO_ORIGIN = 'https://studio.example.test';
+      const originalFetch = globalThis.fetch;
+      globalThis.fetch = (async () =>
+        new Response(
+          JSON.stringify({
+            ok: true,
+            device: {
+              id: studioDeviceId,
+              bridgeId: 'bridge-a',
+              bridgeDeviceId: 'ssh:root@192.0.2.42:22',
+              host: '192.0.2.42',
+              port: 22,
+              username: 'root',
+              transport: 'ssh',
+            },
+          }),
+          { status: 200, headers: { 'content-type': 'application/json' } },
+        )) as typeof fetch;
+      try {
+        const router = await fixture();
+        const response = await invoke(
+          router,
+          'post',
+          '/api/sim2real/local-bridge/devices/:bridgeDeviceId/connect',
+          {
+            params: { bridgeDeviceId: 'ssh:root@192.0.2.42:22' },
+            body: { bridgeId: 'bridge-a' },
+          },
+        );
+        expect(response.statusCode).toBe(502);
+        expect(response.body).toMatchObject({ code: 'SIM2REAL_STUDIO_BRIDGE_UNAVAILABLE' });
+        expect(await readDevices()).toEqual([]);
+      } finally {
+        globalThis.fetch = originalFetch;
+      }
+    },
+  );
 
   it.each([
     { bridgeDeviceId: 'ssh:root@192.0.2.42:22/path', bridgeId: 'bridge-a' },

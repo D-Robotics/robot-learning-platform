@@ -443,9 +443,19 @@ export const standaloneAuth = {
   resolveAccessToken: (_request: Request) => null,
 };
 
+function safeStudioDeviceId(value: unknown): string | undefined {
+  return typeof value === 'string' && /^[A-Za-z0-9][A-Za-z0-9._:-]{0,159}$/.test(value)
+    ? value
+    : undefined;
+}
+
 function normalizedDevice(value: unknown): (Device & { bridgeOwnerKey?: string }) | null {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
   const source = value as Record<string, unknown>;
+  const studioDeviceId = safeStudioDeviceId(source.studioDeviceId);
+  // A malformed native target is not a legacy row: do not silently execute
+  // against its discovery id instead.
+  if (source.studioDeviceId !== undefined && !studioDeviceId) return null;
   // Device records are read from a shared JSON file that may also be written
   // by another product (or by an older Studio version). Never spread that
   // object into the adapter result: legacy records can contain credentials or
@@ -541,6 +551,7 @@ function normalizedDevice(value: unknown): (Device & { bridgeOwnerKey?: string }
   if (bridgeId) normalized.bridgeId = bridgeId;
   const bridgeDeviceId = optionalText('bridgeDeviceId', 160);
   if (bridgeDeviceId) normalized.bridgeDeviceId = bridgeDeviceId;
+  if (studioDeviceId) normalized.studioDeviceId = studioDeviceId;
   const bridgeTransport = optionalText('bridgeTransport', 24);
   if (
     bridgeTransport === 'ssh' ||
@@ -577,6 +588,8 @@ export async function upsertBridgeDevice(input: {
   ownerKey: string;
   bridgeId: string;
   bridgeDeviceId: string;
+  /** Native id from the owner-authenticated Studio connect response. */
+  studioDeviceId?: string;
   name?: string;
   host: string;
   port?: number;
@@ -592,6 +605,9 @@ export async function upsertBridgeDevice(input: {
   };
   const bridgeId = clean(input.bridgeId, 160);
   const bridgeDeviceId = clean(input.bridgeDeviceId, 160);
+  const studioDeviceId = safeStudioDeviceId(input.studioDeviceId);
+  if (input.studioDeviceId !== undefined && !studioDeviceId)
+    throw new Error('invalid_bridge_device');
   const ownerKey = clean(input.ownerKey, 200);
   const host = clean(input.host, 255);
   if (!bridgeId || !bridgeDeviceId || !ownerKey || !host) throw new Error('invalid_bridge_device');
@@ -617,6 +633,13 @@ export async function upsertBridgeDevice(input: {
       item.bridgeDeviceId === bridgeDeviceId &&
       item.bridgeOwnerKey === ownerKey;
     const existing: Record<string, unknown> = devices.find(same) ?? {};
+    if (
+      input.studioDeviceId === undefined &&
+      existing.studioDeviceId !== undefined &&
+      !safeStudioDeviceId(existing.studioDeviceId)
+    ) {
+      throw new Error('invalid_bridge_device');
+    }
     const baseGeneratedId = `bridge-${bridgeDeviceId.replace(/[^A-Za-z0-9._:-]/g, '-').slice(0, 120)}`;
     const existingId =
       typeof existing.id === 'string' && /^[a-zA-Z0-9][a-zA-Z0-9._:-]{0,159}$/.test(existing.id)
@@ -652,6 +675,7 @@ export async function upsertBridgeDevice(input: {
       connectionMode: 'bridge',
       bridgeId,
       bridgeDeviceId,
+      ...(studioDeviceId ? { studioDeviceId } : {}),
       bridgeTransport: input.transport || 'ssh',
       bridgeOwnerKey: ownerKey,
       ...(clean(input.boardPlatform, 80) ? { boardPlatform: clean(input.boardPlatform, 80) } : {}),
@@ -1119,7 +1143,12 @@ export const runOnDevice = async (
   // selecting another tenant's colliding id or silently falling back to a
   // process-wide agent.
   if (bridgeHintProvided && !bridgeTarget) return null;
-  const bridgeDeviceId = String(bridgeTarget?.bridgeDeviceId || '').trim();
+  // Studio's exec endpoint looks up the native registered id, while the raw
+  // discovery id remains the owner-bound reconnect key. Legacy rows retain
+  // their historical target when no native id was stored.
+  const studioTargetId = String(
+    bridgeTarget?.studioDeviceId ?? bridgeTarget?.bridgeDeviceId ?? '',
+  ).trim();
   const cookie = String(request?.headers?.cookie || '').trim();
   const studioOrigin = safeStudioOrigin(
     process.env.RDK_SIM2REAL_STUDIO_EXEC_ORIGIN ||
@@ -1131,13 +1160,13 @@ export const runOnDevice = async (
     cookie.length <= MAX_BOARD_AGENT_COOKIE_CHARS && !/[\u0000-\u001f\u007f]/.test(cookie)
       ? cookie
       : '';
-  if (bridgeDeviceId && safeCookie && studioOrigin) {
+  if (studioTargetId && safeCookie && studioOrigin) {
     const timeoutMs = adapterTimeout(options.timeoutMs);
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), timeoutMs);
     try {
       const response = await fetch(
-        `${studioOrigin}/api/devices/${encodeURIComponent(bridgeDeviceId)}/exec`,
+        `${studioOrigin}/api/devices/${encodeURIComponent(studioTargetId)}/exec`,
         {
           method: 'POST',
           headers: {
@@ -1184,13 +1213,14 @@ export const runOnDevice = async (
         }
       }
     } catch {
-      // Fall through to the configured static/tunnel agent. A transient
-      // Bridge failure should produce the normal unavailable result.
+      // An unavailable Bridge must not replace the selected device with a
+      // configured static/tunnel target.
     } finally {
       clearTimeout(timer);
     }
   }
 
+  if (bridgeTarget) return null;
   const baseUrl = boardAgentUrl();
   if (!baseUrl) return null;
   if (boardAgentTokenRequired(Boolean(baseUrl)) && !boardAgentTokenConfigured()) return null;

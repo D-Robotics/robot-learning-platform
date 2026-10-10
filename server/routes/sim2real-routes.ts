@@ -555,14 +555,21 @@ function projectStudioPairing(payload: Record<string, unknown>): Record<string, 
   };
 }
 
-function projectStudioConnect(
-  payload: Record<string, unknown>,
-): { response: Record<string, unknown>; device: Record<string, unknown> } | null {
-  const device = studioBridgeDeviceProjection(payload.device, { requireHost: true });
-  if (!device) return null;
+function projectStudioConnect(payload: Record<string, unknown>): {
+  response: Record<string, unknown>;
+  device: Record<string, unknown>;
+  studioDeviceId: string;
+} | null {
+  const source = studioObject(payload.device);
+  const device = studioBridgeDeviceProjection(source, { requireHost: true });
+  // Native Studio exec resolves the registered UUID, not the discovery id.
+  // A modern connect response must supply it canonically before registration.
+  const studioDeviceId = studioSafeId(source?.id);
+  if (!device || !studioDeviceId || source?.id !== studioDeviceId) return null;
   const message = studioSafeText(payload.message, 400);
   return {
     device,
+    studioDeviceId,
     response: {
       ok: true,
       device,
@@ -3164,6 +3171,7 @@ export function createSim2RealRouter(
           ownerKey: owner ? `sso:${owner}:web` : 'local:default',
           bridgeId,
           bridgeDeviceId,
+          studioDeviceId: projected.studioDeviceId,
           name:
             typeof device.name === 'string'
               ? device.name
