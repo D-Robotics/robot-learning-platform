@@ -993,6 +993,16 @@ paths:
                     properties:
                       configured: { type: boolean }
                       initialized: { type: boolean }
+                      imageInput:
+                        type: object
+                        required: [enabled, models, maxImageBytes, maxImageDimension, maxImagePixels, mediaTypes]
+                        properties:
+                          enabled: { type: boolean }
+                          models: { type: array, maxItems: 16, items: { type: string } }
+                          maxImageBytes: { type: integer, const: 4194304 }
+                          maxImageDimension: { type: integer, const: 4096 }
+                          maxImagePixels: { type: integer, const: 8000000 }
+                          mediaTypes: { type: array, items: { type: string, enum: [image/png, image/jpeg] } }
                       capabilities:
                         type: array
                         items:
@@ -1056,7 +1066,11 @@ paths:
         `RDK_SIM2REAL_DSH_RUNTIME` is enabled and its provider is configured;
         product capability handlers remain deployment-owned. The service
         returns a bounded session event tail for diagnostics and never exposes
-        provider transport errors verbatim.
+        provider transport errors verbatim. One user-uploaded PNG/JPEG is accepted
+        only for a model explicitly declared in RDK_SIM2REAL_DSH_VISION_MODELS.
+        Bytes are fully decoded and stored under the owner-scoped session boundary;
+        uploads never certify real hardware or bypass tool approvals. JSON is bounded
+        to 6 MiB; image bytes to 4 MiB, each side to 4096 pixels and area to 8000000.
       requestBody:
         required: true
         content:
@@ -1068,6 +1082,24 @@ paths:
                 message: { type: string, minLength: 1, maxLength: 12000 }
                 sessionId: { type: string, maxLength: 160, pattern: "^sim2real-[A-Za-z0-9-]+$" }
                 model: { type: string, minLength: 1, maxLength: 160, pattern: "^[A-Za-z0-9][A-Za-z0-9._:/-]{0,159}$" }
+                turnId: { type: string, maxLength: 120, pattern: "^[A-Za-z0-9_-]+$" }
+                context:
+                  type: object
+                  properties:
+                    modelId: { type: string, maxLength: 128 }
+                    deviceId: { type: string, maxLength: 128 }
+                    computeResourceId: { type: string, maxLength: 128 }
+                image:
+                  type: object
+                  additionalProperties: false
+                  required: [mediaType, base64]
+                  properties:
+                    mediaType: { type: string, enum: [image/png, image/jpeg] }
+                    base64:
+                      type: string
+                      minLength: 4
+                      maxLength: 5592408
+                      description: Canonical base64 bytes, without a data URL prefix. URLs and attachment references are refused.
       responses:
         "200":
           description: DSH response and session evidence.
@@ -1080,6 +1112,15 @@ paths:
                   ok: { const: true }
                   sessionId: { type: string }
                   text: { type: string, maxLength: 20000 }
+                  imageAccepted:
+                    type: object
+                    additionalProperties: false
+                    required: [mediaType, width, height, bytes]
+                    properties:
+                      mediaType: { type: string, enum: [image/png, image/jpeg] }
+                      width: { type: integer, minimum: 1, maximum: 4096 }
+                      height: { type: integer, minimum: 1, maximum: 4096 }
+                      bytes: { type: integer, minimum: 1, maximum: 4194304 }
                   usage:
                     type: object
                     additionalProperties: false
@@ -1100,6 +1141,8 @@ paths:
         "400": { $ref: "#/components/responses/BadRequest" }
         "401": { $ref: "#/components/responses/AuthRequired" }
         "403": { description: Account lacks the Agent permission. }
+        "413": { description: Image bytes or JSON body exceed the upload limit. }
+        "422": { description: Image cannot be fully decoded, geometry exceeds the limit, or selected model lacks an explicit image declaration. }
         "502": { description: DSH provider or runtime failure (generic, retryable). }
         "503": { description: DSH runtime is not enabled on this deployment. }
   /api/sim2real/auth/session:

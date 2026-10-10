@@ -20,7 +20,7 @@
          theme x view screenshots). See services/sim2real-web/ui-layout-invariants.mjs
          for the guards that keep new overrides from re-introducing layering. -->
     <link rel="stylesheet" href="./tokens.css?v=3" />
-    <link rel="stylesheet" href="./app.css?v=52" />
+    <link rel="stylesheet" href="./app.css?v=53" />
   </head>
   <body>
     <a class="skip-link" href="#main-content">跳到主要内容</a>
@@ -558,9 +558,20 @@
               </div>
             </div>
             <form class="agent-chat-composer" id="agent-chat-form">
+              <div class="agent-image-controls">
+                <label class="agent-image-picker"><span>选择图片</span><input id="agent-chat-image" type="file" accept="image/png,image/jpeg" aria-label="选择一张 PNG 或 JPEG 图片" aria-describedby="agent-image-status" disabled /></label>
+                <label class="agent-image-model-label" for="agent-image-model">看图模型<select id="agent-image-model" disabled></select></label>
+                <span class="agent-image-status" id="agent-image-status" role="status">正在确认看图配置…</span>
+              </div>
+              <div class="agent-image-preview" id="agent-image-preview" hidden>
+                <img id="agent-image-thumbnail" alt="当前选择的图片预览" width="64" height="64" />
+                <div><strong id="agent-image-name"></strong><span class="agent-image-source">上传图片</span></div>
+                <button class="button button-ghost" id="agent-image-remove" type="button">移除图片</button>
+              </div>
               <input id="agent-chat-input" autocomplete="off" maxlength="2000" aria-label="描述要执行的任务" placeholder="例如：完成仿真、GPU 训练和 X5 真机预检" />
               <button class="button button-ghost" type="button" data-agent-stop hidden>停止等待</button>
               <button class="button button-primary" type="submit">发送任务 ↗</button>
+              <p class="agent-image-disclosure" id="agent-image-disclosure" hidden></p>
             </form>
           </section>
 
@@ -2183,7 +2194,7 @@
     <script defer src="./app.js?v=duck-lab-64"></script>
     <script defer src="./visualization-enhancements.js?v=viz-1"></script>
     <script defer src="./capability-workbench.js?v=1"></script>
-    <script defer src="./agent-chat.js?v=agent-18"></script>
+    <script defer src="./agent-chat.js?v=agent-19"></script>
     <script defer src="./onboarding.js?v=onboarding-7"></script>
   </body>
 </html>

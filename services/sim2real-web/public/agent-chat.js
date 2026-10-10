@@ -9,6 +9,22 @@ const input = $('agent-chat-input');
 const submitButton = form?.querySelector('button[type="submit"]');
 const stopButton = form?.querySelector('[data-agent-stop]');
 const runtimeStatus = document.querySelector('.agent-chat-runtime');
+const imagePicker = $('agent-chat-image');
+const imageModel = $('agent-image-model');
+const imageStatus = $('agent-image-status');
+const imagePreview = $('agent-image-preview');
+const imageThumbnail = $('agent-image-thumbnail');
+const imageName = $('agent-image-name');
+const imageRemove = $('agent-image-remove');
+const imageDisclosure = $('agent-image-disclosure');
+const submitDefaultLabel = submitButton?.textContent.trim() || '发送任务 ↗';
+const IMAGE_LIMITS = { bytes: 4_194_304, dimension: 4096, pixels: 8_000_000 };
+let imageConfig = null;
+let imageConfigNote = '正在确认看图配置…';
+let imageDraft = null;
+let imageReading = false;
+let imageGeneration = 0;
+let imageSelectionController = null;
 let runtimeLabel = '可规划 · 真机操作需确认';
 const HISTORY_KEY = 'rdk-sim2real-agent-history-v1';
 const SESSIONS_KEY = 'rdk-sim2real-agent-sessions-v1';
@@ -20,6 +36,148 @@ const simulatorBridge = { frame: null, ready: false, recording: false, events: [
 let activeTaskController = null;
 let activeTypingNode = null;
 let activeDshSessionId = '';
+
+function imageNotice(text, error = false) {
+  if (!imageStatus) return;
+  imageStatus.textContent = text;
+  imageStatus.classList.toggle('is-error', error);
+}
+
+function updateImageControls() {
+  const busy = Boolean(activeTaskController);
+  if (imagePicker) imagePicker.disabled = busy || !imageConfig;
+  if (imageModel) imageModel.disabled = busy || imageReading || !imageConfig;
+  if (imageRemove) imageRemove.disabled = busy;
+  if (submitButton && !busy) {
+    submitButton.disabled = imageReading;
+    submitButton.textContent = imageDraft ? '发送文字＋图片 ↗' : submitDefaultLabel;
+  }
+  if (imagePreview) imagePreview.hidden = !imageDraft;
+  if (imageThumbnail) {
+    if (imageDraft) imageThumbnail.src = imageDraft.preview;
+    else imageThumbnail.removeAttribute('src');
+  }
+  if (imageName) imageName.textContent = imageDraft?.name || '';
+  if (imageDisclosure) {
+    imageDisclosure.hidden = !imageDraft;
+    imageDisclosure.textContent = imageDraft
+      ? `点击发送后，图片与文字会交给 ${imageModel?.value || '所选看图模型'}。`
+      : '';
+  }
+}
+
+function clearPendingImage() {
+  imageGeneration += 1;
+  imageSelectionController?.abort();
+  imageSelectionController = null;
+  imageDraft = null;
+  imageReading = false;
+  if (imagePicker) imagePicker.value = '';
+  imageNotice(imageConfigNote);
+  updateImageControls();
+}
+
+function configureImageInput(capabilities) {
+  const candidate = capabilities?.dsh?.imageInput;
+  const models = (Array.isArray(candidate?.models) ? candidate.models : [])
+    .filter((item) => typeof item === 'string' && /^[A-Za-z0-9][A-Za-z0-9._:/-]{0,159}$/.test(item));
+  const mediaTypes = (Array.isArray(candidate?.mediaTypes) ? candidate.mediaTypes : [])
+    .filter((item) => item === 'image/png' || item === 'image/jpeg');
+  const limit = (value, max) => Number.isSafeInteger(value) && value > 0 ? Math.min(value, max) : max;
+  imageConfig = candidate?.enabled === true && models.length && mediaTypes.length
+    ? { models, mediaTypes, bytes: limit(candidate.maxImageBytes, IMAGE_LIMITS.bytes), dimension: limit(candidate.maxImageDimension, IMAGE_LIMITS.dimension), pixels: limit(candidate.maxImagePixels, IMAGE_LIMITS.pixels) }
+    : null;
+  const selected = imageModel?.value;
+  imageModel?.replaceChildren();
+  for (const model of imageConfig?.models || []) {
+    const option = document.createElement('option');
+    option.value = model;
+    option.textContent = model;
+    imageModel?.append(option);
+  }
+  if (imageModel && imageConfig?.models.includes(selected)) imageModel.value = selected;
+  imageConfigNote = imageConfig
+    ? `单张 PNG/JPEG · 最多 ${Number((imageConfig.bytes / 1_048_576).toFixed(2))} MiB · 选择后预览，点击发送才交给模型`
+    : '未配置可用的看图模型。仍可发送文字任务。';
+  if (!imageConfig) clearPendingImage();
+  else { imageNotice(imageConfigNote); updateImageControls(); }
+}
+
+function readImageFile(file, signal) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    const cleanup = () => { signal.removeEventListener('abort', abort); reader.onload = reader.onerror = null; };
+    const abort = () => {
+      cleanup();
+      reader.abort();
+      reject(new DOMException('The operation was aborted', 'AbortError'));
+    };
+    reader.onload = () => { cleanup(); resolve(String(reader.result || '')); };
+    reader.onerror = () => { cleanup(); reject(new Error('图片读取失败，请重新选择。')); };
+    signal.addEventListener('abort', abort, { once: true });
+    reader.readAsDataURL(file);
+  });
+}
+
+function decodeImageDimensions(preview, signal) {
+  return new Promise((resolve, reject) => {
+    const decoder = new Image();
+    const cleanup = () => { signal.removeEventListener('abort', abort); decoder.onload = decoder.onerror = null; };
+    const abort = () => {
+      cleanup();
+      decoder.src = '';
+      reject(new DOMException('The operation was aborted', 'AbortError'));
+    };
+    decoder.onload = () => { cleanup(); resolve({ width: decoder.naturalWidth, height: decoder.naturalHeight }); };
+    decoder.onerror = () => { cleanup(); reject(new Error('无法解码这张图片，请选择有效的 PNG 或 JPEG。')); };
+    signal.addEventListener('abort', abort, { once: true });
+    decoder.src = preview;
+  });
+}
+
+imagePicker?.addEventListener('change', () => {
+  if (activeTaskController || !imageConfig) return;
+  const files = Array.from(imagePicker.files || []);
+  const file = files[0];
+  clearPendingImage();
+  if (!file) return;
+  const config = imageConfig;
+  const generation = imageGeneration;
+  const controller = new AbortController();
+  imageSelectionController = controller;
+  imageReading = true;
+  imageNotice('正在读取图片…');
+  updateImageControls();
+  void (async () => {
+    if (files.length !== 1) throw new Error('每条消息只支持一张图片。');
+    if (!config.mediaTypes.includes(file.type)) throw new Error('只支持 PNG 和 JPEG 图片。');
+    if (!Number.isSafeInteger(file.size) || file.size < 1 || file.size > config.bytes) throw new Error('图片超过大小限制，请缩小后重新选择。');
+    const preview = await readImageFile(file, controller.signal);
+    const prefix = `data:${file.type};base64,`;
+    if (!preview.startsWith(prefix)) throw new Error('图片编码无效，请重新选择。');
+    const base64 = preview.slice(prefix.length);
+    if (!base64 || base64.length % 4 !== 0 || !/^[A-Za-z0-9+/]*={0,2}$/.test(base64)) throw new Error('图片编码无效，请重新选择。');
+    const bytes = atob(base64);
+    if (btoa(bytes) !== base64) throw new Error('图片编码无效，请重新选择。');
+    const png = bytes.startsWith('\x89PNG\r\n\x1a\n');
+    const jpeg = bytes.startsWith('\xff\xd8\xff');
+    if (bytes.length !== file.size || bytes.length > config.bytes || (file.type === 'image/png' ? !png : !jpeg)) throw new Error('图片内容与格式不匹配，请重新选择。');
+    const { width, height } = await decodeImageDimensions(preview, controller.signal);
+    if (!Number.isSafeInteger(width) || !Number.isSafeInteger(height) || width < 1 || height < 1 || width > config.dimension || height > config.dimension || width * height > config.pixels) throw new Error(`图片尺寸过大，请缩小至每边 ${config.dimension} 像素以内，且不超过 ${config.pixels / 1_000_000} 百万像素。`);
+    if (generation !== imageGeneration || controller.signal.aborted) return;
+    imageDraft = { generation, mediaType: file.type, base64, preview, bytes: bytes.length, name: String(file.name || '图片').slice(0, 120).replace(/\p{Cc}/gu, ''), width, height };
+    imageNotice(`已选择 ${width} × ${height} 图片。`);
+  })().catch((error) => {
+    if (generation === imageGeneration && !controller.signal.aborted) imageNotice(error.message || '图片无法使用，请重新选择。', true);
+  }).finally(() => {
+    if (generation !== imageGeneration) return;
+    imageReading = false;
+    imageSelectionController = null;
+    updateImageControls();
+  });
+});
+imageRemove?.addEventListener('click', () => { if (!activeTaskController) clearPendingImage(); });
+imageModel?.addEventListener('change', updateImageControls);
 
 function bridgeStatus() {
   if (!evidence) return;
@@ -61,15 +219,16 @@ function setAgentBusy(busy, label = '') {
   if (submitButton) {
     submitButton.disabled = busy;
     submitButton.setAttribute('aria-busy', busy ? 'true' : 'false');
-    submitButton.dataset.defaultLabel ||= submitButton.textContent.trim();
+    submitButton.dataset.defaultLabel ||= submitDefaultLabel;
     submitButton.textContent = busy ? (label || '执行中…') : submitButton.dataset.defaultLabel;
   }
-  if (stopButton) stopButton.hidden = !busy;
+  if (stopButton) { stopButton.hidden = !busy; stopButton.disabled = false; }
   if (input) input.disabled = busy;
   if (runtimeStatus) {
     runtimeStatus.classList.toggle('is-busy', busy);
     runtimeStatus.textContent = busy ? (label || '任务执行中…') : runtimeLabel;
   }
+  updateImageControls();
 }
 
 // Catalog metadata is authoritative; the workbench supplies only explicit
@@ -102,6 +261,7 @@ function renderCapabilityCatalog(capabilities) {
 async function refreshRuntimeStatus() {
   try {
     const capabilities = await api('/sim2real/agent/capabilities');
+    configureImageInput(capabilities);
     renderCapabilityCatalog(capabilities);
     if (capabilities?.runtime === 'dsh' && capabilities?.dsh?.initialized) {
       runtimeLabel = '实时 Agent · 真机操作需确认';
@@ -114,6 +274,9 @@ async function refreshRuntimeStatus() {
       runtimeStatus.textContent = runtimeLabel;
     }
   } catch {
+    imageConfig = null;
+    imageConfigNote = '看图配置暂时无法读取。仍可发送文字任务。';
+    clearPendingImage();
     // The status badge is advisory; the submit path still surfaces the
     // authoritative DSH/legacy result and error message.
   }
@@ -158,7 +321,7 @@ function showTypingIndicator(label = '正在思考…') {
   }, 1000);
 }
 
-function renderAgentError(error, retryable = true, lastMessage = '', turnId = '') {
+function renderAgentError(error, retryable = true, lastMessage = '', turnId = '', retrySnapshot = null) {
   const message = error instanceof Error ? error.message : String(error || '未知错误');
   const node = addMessage('agent', `任务未完成：${message}${retryable ? ' 可以重试。' : ''}`);
   // Recovery must be one click: the user's instruction was already consumed
@@ -170,6 +333,24 @@ function renderAgentError(error, retryable = true, lastMessage = '', turnId = ''
     retry.className = 'button button-ghost button-small agent-retry';
     retry.textContent = '重试这条指令';
     retry.addEventListener('click', () => {
+      if (activeTaskController || imageReading) return;
+      if (retrySnapshot && activeSessionId !== retrySnapshot.sessionId) return;
+      if (retrySnapshot) {
+        if (imageDraft && imageDraft !== retrySnapshot.image) {
+          imageNotice('当前已选择另一张图片，请先移除它，再重试原指令。', true);
+          return;
+        }
+        if (retrySnapshot.image) {
+          if (!imageConfig?.models.includes(retrySnapshot.model)) {
+            imageNotice('原看图模型当前不可用，请重新选择模型并发送。', true);
+            return;
+          }
+          imageDraft = retrySnapshot.image;
+          if (imageModel) imageModel.value = retrySnapshot.model;
+          imageNotice('已恢复原图片，正在重试原指令。');
+          updateImageControls();
+        }
+      }
       retry.remove();
       input.value = lastMessage;
       if (turnId) input.dataset.agentRetryTurnId = turnId;
@@ -908,6 +1089,8 @@ function renderSessionTranscript(record) {
 }
 
 function startFreshSession(list) {
+  clearPendingImage();
+  if (input) { input.value = ''; delete input.dataset.agentRetryTurnId; delete input.dataset.agentCapabilityId; }
   activeSessionId = null;
   activeDshSessionId = '';
   localStorage.removeItem(HISTORY_KEY);
@@ -921,6 +1104,8 @@ function startFreshSession(list) {
 
 function openSession(session, list) {
   if (activeTaskController) return;
+  clearPendingImage();
+  if (input) { input.value = ''; delete input.dataset.agentRetryTurnId; delete input.dataset.agentCapabilityId; }
   activeSessionId = session.id;
   activeDshSessionId = typeof session.dshSessionId === 'string' ? session.dshSessionId : '';
   localStorage.removeItem(HISTORY_KEY);
@@ -1266,7 +1451,7 @@ function createAgentTurnId() {
   return `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 10)}`;
 }
 
-async function runTask(message, signal, turnId) {
+async function runTask(message, signal, turnId, imageSnapshot = null) {
   const modelId = $('model-select')?.value || undefined;
   const deviceId = $('device-select')?.value || undefined;
   const computeResourceId = $('compute-resource-select')?.value || undefined;
@@ -1285,17 +1470,24 @@ async function runTask(message, signal, turnId) {
         message,
         turnId,
         ...(activeDshSessionId ? { sessionId: activeDshSessionId } : {}),
+        ...(imageSnapshot ? { image: { mediaType: imageSnapshot.image.mediaType, base64: imageSnapshot.image.base64 }, model: imageSnapshot.model } : {}),
         context: { modelId, deviceId, computeResourceId },
       }),
     });
+    if (signal?.aborted) throw new DOMException('The operation was aborted', 'AbortError');
     if (dsh?.ok && dsh.text) {
+      if (imageSnapshot) {
+        const accepted = dsh.imageAccepted;
+        if (!accepted || accepted.mediaType !== imageSnapshot.image.mediaType || accepted.bytes !== imageSnapshot.image.bytes || !Number.isSafeInteger(accepted.width) || !Number.isSafeInteger(accepted.height) || accepted.width < 1 || accepted.height < 1 || accepted.width > IMAGE_LIMITS.dimension || accepted.height > IMAGE_LIMITS.dimension || accepted.width * accepted.height > IMAGE_LIMITS.pixels) throw new Error('服务没有确认图片已送入模型，请重试。');
+      }
       if (typeof dsh.sessionId === 'string') persistActiveDshSession(dsh.sessionId);
       removeTypingIndicator();
       renderDshReply(dsh);
       return { text: stripDshPreamble(dsh.text), toolTrail: dsh.toolTrail };
     }
+    if (imageSnapshot) throw new Error('看图请求没有返回有效答复，请重试。');
   } catch (error) {
-    if (!(error && error.status === 503)) throw error;
+    if (imageSnapshot || !(error && error.status === 503)) throw error;
   } finally {
     stopApprovalPolling();
   }
@@ -1389,8 +1581,13 @@ async function runTask(message, signal, turnId) {
 form?.addEventListener('submit', (event) => {
   event.preventDefault();
   if (activeTaskController) return;
+  if (imageReading) { imageNotice('图片仍在读取，请稍后发送。', true); return; }
   const message = input.value.trim();
-  if (!message) return;
+  if (!message) { if (imageDraft) imageNotice('请补充要询问这张图片的问题，再发送。', true); return; }
+  if (imageDraft && (!imageConfig || !imageConfig.models.includes(imageModel?.value))) {
+    imageNotice('看图模型暂不可用，请配置后重试。', true);
+    return;
+  }
   const capabilityId = input.dataset.agentCapabilityId || '';
   delete input.dataset.agentCapabilityId;
   input.value = '';
@@ -1400,29 +1597,40 @@ form?.addEventListener('submit', (event) => {
   // transcript lands in one place even if planning fails before any task
   // card exists.
   if (!activeSessionId) ensureSession();
-  addMessage('user', message);
+  const snapshot = { image: imageDraft, model: imageModel?.value || '', sessionId: activeSessionId };
+  const userMessage = addMessage('user', message);
+  if (snapshot.image && userMessage) {
+    const note = document.createElement('span');
+    note.className = 'agent-image-message';
+    note.textContent = `上传图片：${snapshot.image.name} · 看图模型：${snapshot.model}`;
+    userMessage.append(note);
+  }
   const controller = new AbortController();
   activeTaskController = controller;
+  const isCurrentTurn = () => activeTaskController === controller && activeSessionId === snapshot.sessionId;
   setAgentBusy(true, '正在生成计划…');
   if (capabilityId) capabilityWorkbench?.started(capabilityId);
-  void runTask(message, controller.signal, turnId)
+  void runTask(message, controller.signal, turnId, snapshot.image ? snapshot : null)
     .then((outcome) => {
+      if (!isCurrentTurn()) return;
+      if (snapshot.image && imageDraft === snapshot.image && !controller.signal.aborted) clearPendingImage();
       if (capabilityId) capabilityWorkbench?.finished(capabilityId, outcome);
     })
     .catch((error) => {
+      if (!isCurrentTurn()) return;
       if (capabilityId) capabilityWorkbench?.failed(capabilityId, error);
       if (error?.name === 'AbortError') {
+        if (snapshot.image && activeSessionId === snapshot.sessionId && !input.value) input.value = message;
         addMessage('agent', '已停止等待。若任务已经提交到后台，它仍可能继续运行，请到运行记录查看状态。');
         return;
       }
-      renderAgentError(error, true, message, turnId);
+      renderAgentError(error, true, message, turnId, snapshot);
     })
     .finally(() => {
+      if (!isCurrentTurn()) return;
       removeTypingIndicator();
-      if (activeTaskController === controller) {
-        activeTaskController = null;
-        setAgentBusy(false);
-      }
+      activeTaskController = null;
+      setAgentBusy(false);
     });
   showTypingIndicator();
 });
