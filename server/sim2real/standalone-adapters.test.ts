@@ -178,6 +178,64 @@ describe('standalone device ownership boundary', () => {
     expect(await readDevices()).toHaveLength(2);
   });
 
+  it.each([
+    ['transport separators', 'ssh:root@board-a:22', 'ssh:root-board@a:22'],
+    [
+      'truncated host names',
+      `ssh:root@${'a'.repeat(120)}-one:22`,
+      `ssh:root@${'a'.repeat(120)}-two:22`,
+    ],
+  ])(
+    'keeps distinct bridge targets for one owner after %s collide',
+    async (_case, firstRaw, secondRaw) => {
+      const root = await fs.mkdtemp(path.join(os.tmpdir(), 'rdk-sim2real-bridge-collision-'));
+      temporaryRoots.push(root);
+      process.env.RDK_SIM2REAL_STORAGE_DIR = root;
+      const shared = { ownerKey: 'sso:alice:web', bridgeId: 'bridge-a' };
+      const first = await upsertBridgeDevice({
+        ...shared,
+        bridgeDeviceId: firstRaw,
+        host: 'board-a',
+      });
+      const file = path.join(root, 'devices.json');
+      const original = JSON.parse(await fs.readFile(file, 'utf8'));
+      original[0].calibrationRef = 'retained-calibration';
+      await fs.writeFile(file, JSON.stringify(original), 'utf8');
+
+      const second = await upsertBridgeDevice({
+        ...shared,
+        bridgeDeviceId: secondRaw,
+        host: 'board-b',
+      });
+      expect(second.id).not.toBe(first.id);
+      expect(second.id).toMatch(/^[a-zA-Z0-9][a-zA-Z0-9._:-]{0,159}$/);
+      expect(await readDevices()).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ id: first.id, bridgeDeviceId: firstRaw }),
+          expect.objectContaining({ id: second.id, bridgeDeviceId: secondRaw }),
+        ]),
+      );
+      expect(await readDevices()).toHaveLength(2);
+
+      for (const [rawId, expectedId] of [
+        [firstRaw, first.id],
+        [secondRaw, second.id],
+      ]) {
+        const reconnected = await upsertBridgeDevice({
+          ...shared,
+          bridgeDeviceId: rawId,
+          host: 'reconnected-board',
+        });
+        expect(reconnected.id).toBe(expectedId);
+      }
+      const persisted = JSON.parse(await fs.readFile(file, 'utf8'));
+      expect(persisted).toHaveLength(2);
+      expect(
+        persisted.find((row: { bridgeDeviceId: string }) => row.bridgeDeviceId === firstRaw),
+      ).toMatchObject({ id: first.id, calibrationRef: 'retained-calibration' });
+    },
+  );
+
   it('persists board passport fields only on the selected owner row', async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), 'rdk-sim2real-detect-owners-'));
     temporaryRoots.push(root);

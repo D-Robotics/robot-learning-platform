@@ -618,27 +618,31 @@ export async function upsertBridgeDevice(input: {
       item.bridgeOwnerKey === ownerKey;
     const existing: Record<string, unknown> = devices.find(same) ?? {};
     const baseGeneratedId = `bridge-${bridgeDeviceId.replace(/[^A-Za-z0-9._:-]/g, '-').slice(0, 120)}`;
-    // A bridge device id is scoped by the authenticated bridge owner.  The
-    // historical id format was derived from the device id alone, so two
-    // tenants connecting devices with the same bridge id could accidentally
-    // overwrite one another during the atomic registry rewrite.  Keep the
-    // short legacy id when it is free, but add a deterministic owner suffix
-    // on collision; this preserves reconnect stability without exposing the
-    // account id in the device identifier.
-    const ownerSuffix = createHash('sha256').update(ownerKey).digest('hex').slice(0, 12);
-    const generatedId =
-      devices.some((item) => item?.id === baseGeneratedId && item?.bridgeOwnerKey !== ownerKey) &&
-      !existing.id
-        ? `${baseGeneratedId}-${ownerSuffix}`.slice(0, 160)
-        : baseGeneratedId;
+    const existingId =
+      typeof existing.id === 'string' && /^[a-zA-Z0-9][a-zA-Z0-9._:-]{0,159}$/.test(existing.id)
+        ? existing.id
+        : undefined;
+    // Sanitizing transport separators or truncating a host can make distinct
+    // raw ids collide even for one owner. Keep a reconnect's existing id, and
+    // reserve every other row's id before choosing a new platform key.
+    let generatedId = existingId ?? baseGeneratedId;
+    if (!existingId && devices.some((item) => item?.id === generatedId)) {
+      const deviceSuffix = createHash('sha256')
+        .update(JSON.stringify([ownerKey, bridgeDeviceId]))
+        .digest('hex')
+        .slice(0, 12);
+      const stem = `${baseGeneratedId}-${deviceSuffix}`;
+      generatedId = stem;
+      let collision = 1;
+      while (devices.some((item) => item?.id === generatedId)) {
+        generatedId = `${stem}-${++collision}`;
+      }
+    }
     const device = {
       ...existing,
       // Bridge device ids may contain transport/user separators such as @.
       // Keep the persisted platform id URL-safe and stable across reconnects.
-      id:
-        typeof existing.id === 'string' && /^[a-zA-Z0-9][a-zA-Z0-9._:-]{0,159}$/.test(existing.id)
-          ? existing.id
-          : generatedId,
+      id: generatedId,
       name: clean(input.name, 120) || existing.name || `${username}@${host}`,
       host,
       port,
@@ -653,12 +657,7 @@ export async function upsertBridgeDevice(input: {
       ...(clean(input.boardPlatform, 80) ? { boardPlatform: clean(input.boardPlatform, 80) } : {}),
       ...(clean(input.boardModel, 120) ? { boardModel: clean(input.boardModel, 120) } : {}),
     } as Device & { bridgeOwnerKey: string };
-    const next = [
-      device,
-      ...devices.filter(
-        (item) => !same(item) && !(item?.id === device.id && item?.bridgeOwnerKey === ownerKey),
-      ),
-    ].slice(0, 500);
+    const next = [device, ...devices.filter((item) => !same(item))].slice(0, 500);
     const temporary = `${file}.${randomUUID()}.tmp`;
     await fs.writeFile(temporary, JSON.stringify(next, null, 2), { mode: 0o600 });
     await fs.rename(temporary, file);

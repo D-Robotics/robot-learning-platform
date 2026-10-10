@@ -3033,6 +3033,17 @@ describe('Sim2Real HTTP routes', () => {
                   probeOk: true,
                   token: 'must-not-leak',
                 },
+                {
+                  bridgeDeviceId: 'ssh:root@192.0.2.42:22',
+                  host: '192.0.2.42',
+                  port: 22,
+                  username: 'root',
+                  transport: 'ssh',
+                },
+                {
+                  id: 'ssh:robot@192.0.2.43:22',
+                  host: '192.0.2.43',
+                },
               ],
             },
           ],
@@ -3061,6 +3072,17 @@ describe('Sim2Real HTTP routes', () => {
                 username: 'root',
                 transport: 'ssh',
                 probeOk: true,
+              },
+              {
+                bridgeDeviceId: 'ssh:root@192.0.2.42:22',
+                host: '192.0.2.42',
+                port: 22,
+                username: 'root',
+                transport: 'ssh',
+              },
+              {
+                bridgeDeviceId: 'ssh:robot@192.0.2.43:22',
+                host: '192.0.2.43',
               },
             ],
           },
@@ -3103,7 +3125,7 @@ describe('Sim2Real HTTP routes', () => {
           ok: true,
           device: {
             bridgeId: 'bridge-a',
-            bridgeDeviceId: 'device-a',
+            bridgeDeviceId: 'ssh:root@192.0.2.42:22',
             id: 'device-a',
             name: 'OriginBot',
             host: '10.0.0.2',
@@ -3120,9 +3142,19 @@ describe('Sim2Real HTTP routes', () => {
       );
     }) as typeof fetch;
     try {
-      const router = await fixture();
+      await fixture();
+      const auth: Sim2RealAuthPort = {
+        isMultiUserDeployment: () => true,
+        resolvePrincipal: (request) => {
+          const accountId = String(request.headers['x-test-account'] || '').trim();
+          return accountId ? { accountId } : null;
+        },
+        resolveAccessToken: () => null,
+      };
+      const router = createSim2RealRouter({ auth });
+      const browserHeaders = { cookie: 'studio_session=abc123', 'x-test-account': 'bridge-owner' };
       const pairing = await invoke(router, 'post', '/api/sim2real/local-bridge/pairing-code', {
-        headers: { cookie: 'studio_session=abc123' },
+        headers: browserHeaders,
         body: {
           host: '10.0.0.2',
           sshUser: 'root',
@@ -3152,8 +3184,8 @@ describe('Sim2Real HTTP routes', () => {
         'post',
         '/api/sim2real/local-bridge/devices/:bridgeDeviceId/connect',
         {
-          params: { bridgeDeviceId: 'device-a' },
-          headers: { cookie: 'studio_session=abc123' },
+          params: { bridgeDeviceId: 'ssh:root@192.0.2.42:22' },
+          headers: browserHeaders,
           body: { bridgeId: 'bridge-a', secret: 'drop-me' },
         },
       );
@@ -3162,16 +3194,72 @@ describe('Sim2Real HTTP routes', () => {
         ok: true,
         device: {
           bridgeId: 'bridge-a',
-          bridgeDeviceId: 'device-a',
+          bridgeDeviceId: 'ssh:root@192.0.2.42:22',
           host: '10.0.0.2',
           boardPlatform: 'x5',
           boardModel: 'originbot',
         },
       });
       expect(JSON.stringify(connected.body)).not.toContain('do-not-forward');
+      expect(calls[1]?.url).toBe(
+        'https://studio.example.test/api/local-bridge/devices/ssh%3Aroot%40192.0.2.42%3A22/connect',
+      );
       expect(JSON.parse(String(calls[1]?.init?.body))).toEqual({ bridgeId: 'bridge-a' });
       expect(calls[1]?.init?.redirect).toBe('error');
       expect(calls[1]?.init?.headers).toMatchObject({ cookie: 'studio_session=abc123' });
+      const overview = await invoke(router, 'get', '/api/sim2real/overview', {
+        headers: browserHeaders,
+      });
+      expect(overview.statusCode).toBe(200);
+      expect(overview.body.devices).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            id: expect.stringMatching(/^[A-Za-z0-9][A-Za-z0-9._:-]{0,159}$/),
+            bridgeDeviceId: 'ssh:root@192.0.2.42:22',
+          }),
+        ]),
+      );
+      expect(JSON.stringify(overview.body.devices)).not.toContain('do-not-forward');
+      expect(overview.body.devices[0]).not.toHaveProperty('bridgeOwnerKey');
+      expect(overview.body.devices[0]).not.toHaveProperty('host');
+      expect(overview.body.devices[0]).not.toHaveProperty('username');
+      const otherOwner = await invoke(router, 'get', '/api/sim2real/overview', {
+        headers: { 'x-test-account': 'other-owner' },
+      });
+      expect(otherOwner.statusCode).toBe(200);
+      expect(otherOwner.body.devices).toEqual([]);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it.each([
+    { bridgeDeviceId: 'ssh:root@192.0.2.42:22/path', bridgeId: 'bridge-a' },
+    { bridgeDeviceId: 'ssh:root@192.0.2.42:22%2fpath', bridgeId: 'bridge-a' },
+    { bridgeDeviceId: 'ssh:root @192.0.2.42:22', bridgeId: 'bridge-a' },
+    { bridgeDeviceId: ' ssh:root@192.0.2.42:22', bridgeId: 'bridge-a' },
+    { bridgeDeviceId: 'ssh:root@192.0.2.42:22\n', bridgeId: 'bridge-a' },
+    { bridgeDeviceId: 'x'.repeat(161), bridgeId: 'bridge-a' },
+    { bridgeDeviceId: 'ssh:root@192.0.2.42:22', bridgeId: 'bridge@invalid' },
+  ])('rejects unsafe Local Bridge connect ids before fetching upstream: %j', async (ids) => {
+    process.env.RDK_SIM2REAL_STUDIO_ORIGIN = 'https://studio.example.test';
+    const originalFetch = globalThis.fetch;
+    let calls = 0;
+    globalThis.fetch = (async () => {
+      calls += 1;
+      throw new Error('invalid bridge ids must not reach Studio');
+    }) as typeof fetch;
+    try {
+      const router = await fixture();
+      const response = await invoke(
+        router,
+        'post',
+        '/api/sim2real/local-bridge/devices/:bridgeDeviceId/connect',
+        { params: { bridgeDeviceId: ids.bridgeDeviceId }, body: { bridgeId: ids.bridgeId } },
+      );
+      expect(response.statusCode).toBe(400);
+      expect(response.body).toMatchObject({ code: 'SIM2REAL_INVALID_BRIDGE_REQUEST' });
+      expect(calls).toBe(0);
     } finally {
       globalThis.fetch = originalFetch;
     }
