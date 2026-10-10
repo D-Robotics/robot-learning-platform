@@ -10533,6 +10533,12 @@ async function stationInit() {
   state.station.mock = false;
   stationSetCamera(false, { silent: true });
   if (honestyNote) honestyNote.hidden = true;
+  // First connection must stay usable before a board exists or its health
+  // request finishes. These handlers are idempotent; probes only read state.
+  wireDeviceManagerEvents();
+  wireStationSwitchEvents();
+  stationDeviceManagerLoad();
+  stationSwitchProbe();
   try {
     const health = await request('/sim2real/board-station/health' + (deviceId ? '?deviceId=' + encodeURIComponent(deviceId) : ''));
     if (!current()) return;
@@ -10611,11 +10617,6 @@ async function stationInit() {
     }
     stationLog('上位机初始化失败', 'error');
   }
-  // 设备管理（网页添加真机）与运动开关面板：只读拉取，无需板端就绪。
-  stationDeviceManagerLoad();
-  stationSwitchProbe();
-  wireDeviceManagerEvents();
-  wireStationSwitchEvents();
 }
 
 // ---- 设备管理（RDK Studio Local Bridge 优先，SSH 仅作独立部署备用） -------

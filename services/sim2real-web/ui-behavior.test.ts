@@ -203,6 +203,7 @@ async function boot(
     stationStream?: () => Response | Promise<Response>;
     devices?: unknown[];
     localBridgeStatus?: unknown;
+    pairingCommand?: string;
     /** Frames the replay endpoint returns; drives the aligned camera frame tests. */
     replayFrames?: unknown[];
     /** Notices payload served by GET /sim2real/notices. */
@@ -332,6 +333,8 @@ async function boot(
         return options.stationStream();
       } else if (url.includes('/local-bridge/status') && options.localBridgeStatus) {
         payload = options.localBridgeStatus;
+      } else if (url.includes('/local-bridge/pairing-code') && options.pairingCommand) {
+        payload = { ok: true, command: options.pairingCommand };
       } else if (url.includes('/workspace-summary')) {
         payload = {
           ok: true,
@@ -1460,6 +1463,100 @@ describe('Sim2Real workbench DOM behavior', () => {
     const select = window.document.querySelector<HTMLSelectElement>('#training-profile');
     expect(select?.value).toBe('standard');
     expect(window.document.querySelector('[data-training-profile-note]')?.hidden).toBe(true);
+    expect(errors).toEqual([]);
+  });
+});
+
+describe('station device manager before board readiness', () => {
+  const bridgeStatus = {
+    bridges: [
+      {
+        bridgeId: 'bridge-fixture',
+        online: true,
+        devices: [{ bridgeDeviceId: 'board-fixture', name: 'Fixture board' }],
+      },
+    ],
+  };
+  const stationUrl = 'http://127.0.0.1:3000/sim2real/#station/devices';
+  const pairingPosts = (requests: Array<{ url: string; method: string }>) =>
+    requests.filter(
+      (request) => request.method === 'POST' && request.url.includes('/local-bridge/pairing-code'),
+    );
+
+  it.each([
+    { available: false, agent: { mock: false } },
+    { state: 'offline', agent: { mock: false } },
+  ])('pairs and connects a Bridge card from an initial unavailable board (%j)', async (health) => {
+    const { window, requests, errors } = await boot({
+      url: stationUrl,
+      stationHealth: health,
+      localBridgeStatus: bridgeStatus,
+      pairingCommand: 'fixture-pair-command',
+    });
+    const host = window.document.querySelector<HTMLInputElement>('#station-device-host')!;
+    host.value = 'fixture.invalid';
+    window.document.querySelector<HTMLButtonElement>('#station-device-script-btn')!.click();
+    await vi.waitFor(() => expect(pairingPosts(requests)).toHaveLength(1));
+    expect(pairingPosts(requests)[0]).toMatchObject({
+      body: { host: 'fixture.invalid', sshUser: 'root', sshPort: 22 },
+    });
+    await vi.waitFor(() =>
+      expect(
+        window.document.querySelector<HTMLTextAreaElement>('#station-connect-script-text')?.value,
+      ).toBe('fixture-pair-command'),
+    );
+    const card = window.document.querySelector<HTMLButtonElement>(
+      '#station-device-list [data-action="bridge-connect"]',
+    );
+    expect(card).not.toBeNull();
+    card!.click();
+    await vi.waitFor(() =>
+      expect(
+        requests.filter(
+          (request) =>
+            request.method === 'POST' &&
+            request.url.includes('/local-bridge/devices/board-fixture/connect'),
+        ),
+      ).toHaveLength(1),
+    );
+    expect(
+      requests.some(
+        (request) => request.method === 'POST' && /\/(drive|policy)\//.test(request.url),
+      ),
+    ).toBe(false);
+    expect(errors).toEqual([]);
+  });
+
+  it('binds pairing while the initial health is pending and keeps repeated initialization idempotent', async () => {
+    let releaseHealth: ((health: unknown) => void) | undefined;
+    const pendingHealth = new Promise((resolve) => {
+      releaseHealth = resolve;
+    });
+    const { window, requests, errors } = await boot({
+      url: stationUrl,
+      stationHealth: () => pendingHealth,
+      localBridgeStatus: bridgeStatus,
+      pairingCommand: 'fixture-pair-command',
+    });
+    window.document.querySelector<HTMLInputElement>('#station-device-host')!.value =
+      'fixture.invalid';
+    const pair = window.document.querySelector<HTMLButtonElement>('#station-device-script-btn')!;
+    pair.click();
+    await vi.waitFor(() => expect(pairingPosts(requests)).toHaveLength(1));
+    const card = window.document.querySelector<HTMLButtonElement>(
+      '#station-device-list [data-action="bridge-connect"]',
+    );
+    expect(card).not.toBeNull();
+    card!.click();
+    await vi.waitFor(() =>
+      expect(
+        requests.filter((request) => request.url.includes('/board-station/health')),
+      ).toHaveLength(2),
+    );
+    releaseHealth?.({ available: false, state: 'offline' });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    pair.click();
+    await vi.waitFor(() => expect(pairingPosts(requests)).toHaveLength(2));
     expect(errors).toEqual([]);
   });
 });
