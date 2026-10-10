@@ -1,9 +1,82 @@
 import assert from 'node:assert/strict';
+import { spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { mkdtemp, readdir, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, readdir, rm, symlink, writeFile } from 'node:fs/promises';
+import { createServer } from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
 import process from 'node:process';
+import { fileURLToPath } from 'node:url';
+
+async function verifySymlinkEntrypoint() {
+  // Production starts the worker through a current -> release directory link.
+  // Import-based tests do not exercise Node's direct-entry path resolution.
+  const linkedDirectory = path.join(fixtureDir, 'current');
+  await symlink(path.dirname(fileURLToPath(import.meta.url)), linkedDirectory, 'dir');
+  const portProbe = createServer();
+  await new Promise((resolve) => portProbe.listen(0, '127.0.0.1', resolve));
+  const port = portProbe.address().port;
+  await new Promise((resolve) => portProbe.close(resolve));
+  const child = spawn(process.execPath, [path.join(linkedDirectory, 'local-training-worker.mjs')], {
+    env: {
+      ...process.env,
+      NODE_ENV: 'production',
+      RDK_SIM2REAL_LOCAL_WORKER_HOST: '127.0.0.1',
+      RDK_SIM2REAL_LOCAL_WORKER_PORT: String(port),
+      RDK_SIM2REAL_LOCAL_WORKER_DATA_DIR: path.join(fixtureDir, 'entry-jobs'),
+      RDK_SIM2REAL_LOCAL_RUNNER_TOKEN: 'ab'.repeat(16),
+    },
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+  let output = '';
+  child.stdout.on('data', (chunk) => (output = (output + chunk).slice(-4096)));
+  child.stderr.on('data', (chunk) => (output = (output + chunk).slice(-4096)));
+  const exited = new Promise((resolve, reject) => {
+    child.once('error', reject);
+    child.once('exit', (code, signal) => resolve({ code, signal }));
+  });
+  const base = `http://127.0.0.1:${port}`;
+  let stopDeadline;
+  try {
+    let healthy = false;
+    for (let attempt = 0; attempt < 100; attempt += 1) {
+      assert.equal(child.exitCode, null, `symlink worker exited before listening: ${output}`);
+      assert.equal(child.signalCode, null, `symlink worker was terminated: ${output}`);
+      try {
+        const response = await fetch(`${base}/healthz`, { signal: AbortSignal.timeout(200) });
+        assert.equal(response.status, 200);
+        const health = await response.json();
+        assert.equal(health.authTokenUsable, true);
+        assert.equal(health.activeJobs, 0);
+        healthy = true;
+        break;
+      } catch (error) {
+        if (error instanceof assert.AssertionError) throw error;
+        await new Promise((resolve) => setTimeout(resolve, 25));
+      }
+    }
+    assert.equal(healthy, true, `symlink worker did not listen: ${output}`);
+    child.kill('SIGTERM');
+    const stopped = await Promise.race([
+      exited,
+      new Promise((_, reject) => {
+        stopDeadline = setTimeout(() => reject(new Error('worker did not stop')), 6000);
+        stopDeadline.unref();
+      }),
+    ]);
+    assert.deepEqual(stopped, { code: 0, signal: null });
+    await assert.rejects(fetch(`${base}/healthz`, { signal: AbortSignal.timeout(200) }));
+    console.log(
+      '[local-training-worker] PASS — release directory symlink starts HTTP worker and stops cleanly',
+    );
+  } finally {
+    clearTimeout(stopDeadline);
+    if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL');
+    await exited;
+    await rm(linkedDirectory, { force: true });
+    await rm(path.join(fixtureDir, 'entry-jobs'), { recursive: true, force: true });
+  }
+}
 
 const fixtureDir = await mkdtemp(path.join(os.tmpdir(), 'rdk-local-worker-'));
 const fixture = path.join(fixtureDir, 'engine.mjs');
@@ -103,6 +176,7 @@ assert.throws(
   /sample counts/,
 );
 try {
+  await verifySymlinkEntrypoint();
   const health = await fetch(`${base}/healthz`);
   assert.equal(health.status, 200);
   const healthBody = await health.json();
