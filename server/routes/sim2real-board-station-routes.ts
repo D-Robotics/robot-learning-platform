@@ -302,46 +302,80 @@ function pipeStationStream(
     'cache-control': 'no-store',
     'x-board-station': 'proxy',
   });
-  const lifetime = setTimeout(() => {
+  const reader = upstream.getReader();
+  let closed = false;
+  let disposed = false;
+  const disposeUpstream = () => {
+    if (disposed) return;
+    disposed = true;
     try {
-      response.destroy();
+      void reader.cancel().catch(() => undefined);
+      reader.releaseLock();
     } catch {
-      /* downstream already gone */
+      /* reader already released */
     }
-  }, lifetimeMs);
-  const cleanup = () => {
-    clearTimeout(lifetime);
     try {
+      // Direct HTTP streams also wrap cancel() to clear their fetch lifetime.
+      // Release the reader first; cancel() on a locked stream would be rejected.
       void upstream.cancel().catch(() => undefined);
     } catch {
       /* upstream already closed */
     }
+  };
+  const lifetime = setTimeout(() => cleanup(), lifetimeMs);
+  const cleanup = () => {
+    if (closed) return;
+    closed = true;
+    clearTimeout(lifetime);
+    disposeUpstream();
     try {
       response.destroy();
     } catch {
       /* downstream already closed */
     }
   };
-  request.on('close', cleanup);
+  // IncomingMessage.close also fires after a normally completed request body;
+  // the response owns this long-lived stream, not the request's read lifetime.
+  request.on('aborted', cleanup);
+  response.on('close', cleanup);
   response.on('error', cleanup);
-  const reader = upstream.getReader();
+  const waitForDrain = () =>
+    new Promise<void>((resolve) => {
+      const finish = () => {
+        response.removeListener('drain', finish);
+        response.removeListener('close', finish);
+        response.removeListener('error', finish);
+        resolve();
+      };
+      response.once('drain', finish);
+      response.once('close', finish);
+      response.once('error', finish);
+      if (closed || response.destroyed) finish();
+    });
   const pump = async (): Promise<void> => {
     try {
-      for (;;) {
+      while (!closed) {
         const { done, value } = await reader.read();
-        if (done) break;
+        if (done || closed) break;
         if (value && !response.write(value)) {
-          await new Promise<void>((resolve) => response.once('drain', resolve));
+          await waitForDrain();
         }
       }
     } catch {
       /* upstream closed mid-stream */
-    } finally {
       cleanup();
-      try {
-        response.end();
-      } catch {
-        /* response already destroyed */
+    } finally {
+      clearTimeout(lifetime);
+      request.removeListener?.('aborted', cleanup);
+      response.removeListener?.('close', cleanup);
+      response.removeListener?.('error', cleanup);
+      disposeUpstream();
+      if (!closed) {
+        try {
+          response.end();
+        } catch {
+          /* response already destroyed */
+        }
       }
     }
   };
@@ -458,10 +492,10 @@ export function registerSim2RealBoardStationRoutes(
       );
       return null;
     }
-    // A registry row may carry the Studio bridge's remote identifier when it
-    // differs from the platform's device key. Fall back to the legacy key.
+    // Studio exec uses its native registration ID, while the raw Bridge ID
+    // identifies the discovered connection. Preserve older registry fallbacks.
     (request as Request & { __stationDeviceId?: string }).__stationDeviceId = String(
-      device.bridgeDeviceId ?? device.id,
+      device.studioDeviceId ?? device.bridgeDeviceId ?? device.id,
     ).trim();
     // Device connections own a loopback-only SSH tunnel. Carry its URL on the
     // request so JSON and streaming station calls select the same device;

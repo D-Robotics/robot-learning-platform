@@ -280,6 +280,7 @@ const SIM2REAL_STUDIO_BRIDGE_MAX_COUNT = 32;
 const SIM2REAL_STUDIO_DEVICE_MAX_COUNT = 128;
 const SIM2REAL_STUDIO_TIMEOUT_ENV = 'RDK_SIM2REAL_STUDIO_UPSTREAM_TIMEOUT_MS';
 const STUDIO_BRIDGE_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,159}$/;
+const STUDIO_BRIDGE_DEVICE_ID = /^[A-Za-z0-9][A-Za-z0-9._:@-]{0,159}$/;
 const STUDIO_TEXT_CONTROL = /[\u0000-\u001f\u007f]/;
 const STUDIO_CONTROL = /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/;
 
@@ -322,6 +323,12 @@ function studioSafeCommand(value: unknown): string | undefined {
 function studioSafeId(value: unknown): string | undefined {
   const text = studioSafeText(value, 160);
   return text && STUDIO_BRIDGE_ID.test(text) ? text : undefined;
+}
+
+/** Studio SSH discovery ids include the user/host separator, e.g. ssh:root@host:22. */
+function studioSafeBridgeDeviceId(value: unknown): string | undefined {
+  const text = studioSafeText(value, 160);
+  return text && value === text && STUDIO_BRIDGE_DEVICE_ID.test(text) ? text : undefined;
 }
 
 function studioSafePort(value: unknown): number | undefined {
@@ -475,7 +482,7 @@ function studioBridgeDeviceProjection(
   const source = studioObject(value);
   if (!source) return null;
   const id = studioSafeId(source.id);
-  const bridgeDeviceId = studioSafeId(source.bridgeDeviceId) || id;
+  const bridgeDeviceId = studioSafeBridgeDeviceId(source.bridgeDeviceId ?? source.id);
   if (!bridgeDeviceId) return null;
   const host = studioSafeText(source.host, 255);
   if (options.requireHost && !host) return null;
@@ -548,14 +555,21 @@ function projectStudioPairing(payload: Record<string, unknown>): Record<string, 
   };
 }
 
-function projectStudioConnect(
-  payload: Record<string, unknown>,
-): { response: Record<string, unknown>; device: Record<string, unknown> } | null {
-  const device = studioBridgeDeviceProjection(payload.device, { requireHost: true });
-  if (!device) return null;
+function projectStudioConnect(payload: Record<string, unknown>): {
+  response: Record<string, unknown>;
+  device: Record<string, unknown>;
+  studioDeviceId: string;
+} | null {
+  const source = studioObject(payload.device);
+  const device = studioBridgeDeviceProjection(source, { requireHost: true });
+  // Native Studio exec resolves the registered UUID, not the discovery id.
+  // A modern connect response must supply it canonically before registration.
+  const studioDeviceId = studioSafeId(source?.id);
+  if (!device || !studioDeviceId || source?.id !== studioDeviceId) return null;
   const message = studioSafeText(payload.message, 400);
   return {
     device,
+    studioDeviceId,
     response: {
       ok: true,
       device,
@@ -2320,7 +2334,16 @@ export function createSim2RealRouter(
         artifacts: artifacts.slice(0, 100),
         evaluations: evaluations.slice(0, 100),
         computeResources,
-        devices: devices.map(publicDeviceSummary),
+        devices: devices.map((device) => {
+          const bridgeDeviceId =
+            device.connectionMode === 'bridge'
+              ? studioSafeBridgeDeviceId(device.bridgeDeviceId)
+              : undefined;
+          return {
+            ...publicDeviceSummary(device),
+            ...(bridgeDeviceId ? { bridgeDeviceId } : {}),
+          };
+        }),
         integrations: {
           simulator: { ...simulator, local: localWorker },
           robogo,
@@ -3113,7 +3136,7 @@ export function createSim2RealRouter(
         studioBridgeConfigError(response);
         return;
       }
-      const bridgeDeviceId = studioSafeId(request.params?.bridgeDeviceId);
+      const bridgeDeviceId = studioSafeBridgeDeviceId(request.params?.bridgeDeviceId);
       const body = studioConnectRequestBody(request.body);
       if (!bridgeDeviceId || !body) {
         noStore(response);
@@ -3148,6 +3171,7 @@ export function createSim2RealRouter(
           ownerKey: owner ? `sso:${owner}:web` : 'local:default',
           bridgeId,
           bridgeDeviceId,
+          studioDeviceId: projected.studioDeviceId,
           name:
             typeof device.name === 'string'
               ? device.name

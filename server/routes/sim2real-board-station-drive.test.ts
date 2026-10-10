@@ -13,6 +13,9 @@ const originalAgentToken = process.env.RDK_SIM2REAL_BOARD_AGENT_TOKEN;
 const originalDriveEnabled = process.env.RDK_SIM2REAL_STATION_DRIVE_ENABLED;
 const originalArmEnabled = process.env.RDK_SIM2REAL_STATION_ARM_ENABLED;
 const originalStorageDir = process.env.RDK_SIM2REAL_STORAGE_DIR;
+const originalStudioExecOrigin = process.env.RDK_SIM2REAL_STUDIO_EXEC_ORIGIN;
+const originalStudioDeviceId = process.env.RDK_SIM2REAL_STUDIO_DEVICE_ID;
+const originalPublicOrigin = process.env.RDK_SIM2REAL_PUBLIC_ORIGIN;
 
 const tmpdirSync = () => mkdtempSync(join(tmpdir(), 'station-switch-test-'));
 
@@ -37,7 +40,14 @@ function routeHandler(router: Router, method: 'get' | 'post', path: string): Han
   return handler;
 }
 
-function buildRouter(devices: readonly unknown[] = [device]) {
+function buildRouter(
+  devices: readonly unknown[] = [device],
+  options: {
+    multiUser?: boolean;
+    owner?: string;
+    onVisibleDevices?: (owner?: string) => void;
+  } = {},
+) {
   const router = {} as Router;
   router.stack = [];
   router.get = (path: string, ...handlers: Handler[]) => {
@@ -59,18 +69,34 @@ function buildRouter(devices: readonly unknown[] = [device]) {
     return router;
   };
   registerSim2RealBoardStationRoutes(router, {
-    auth: { isMultiUserDeployment: () => false } as never,
-    requestOwner: () => 'local-dev',
-    visibleDevices: async () => devices,
+    auth: { isMultiUserDeployment: () => options.multiUser === true } as never,
+    requestOwner: () => options.owner ?? 'local-dev',
+    visibleDevices: async (owner) => {
+      options.onVisibleDevices?.(owner);
+      return devices;
+    },
   });
   return router;
 }
 
 function call(
   handler: Handler,
-  init: { method?: string; body?: unknown; query?: Record<string, string> } = {},
+  init: {
+    method?: string;
+    body?: unknown;
+    query?: Record<string, string>;
+    headers?: Record<string, string>;
+  } = {},
 ) {
-  return new Promise<{ statusCode: number; body?: unknown; ended: boolean }>((resolve, reject) => {
+  return new Promise<{
+    statusCode: number;
+    body?: unknown;
+    ended: boolean;
+    chunks: Uint8Array[];
+    headers: Record<string, string>;
+  }>((resolve, reject) => {
+    const chunks: Uint8Array[] = [];
+    const headers: Record<string, string> = {};
     const response = {
       statusCode: 200,
       ended: false,
@@ -78,16 +104,23 @@ function call(
         response.statusCode = code;
         return response;
       },
-      setHeader() {},
-      writeHead() {},
-      write() {
+      setHeader(name: string, value: string) {
+        headers[name] = value;
+      },
+      writeHead(code: number, values: Record<string, string>) {
+        response.statusCode = code;
+        Object.assign(headers, values);
+      },
+      write(chunk: Uint8Array) {
+        chunks.push(chunk);
         return true;
       },
       end() {
         response.ended = true;
+        resolve({ statusCode: response.statusCode, ended: true, chunks, headers });
       },
       json(body: unknown) {
-        resolve({ statusCode: response.statusCode, body });
+        resolve({ statusCode: response.statusCode, body, ended: false, chunks, headers });
         return response;
       },
       on() {},
@@ -96,13 +129,13 @@ function call(
     const request = {
       method: init.method ?? 'GET',
       query: init.query ?? {},
-      headers: {},
+      headers: init.headers ?? {},
       body: init.body ?? {},
       on() {},
     } as unknown as Request;
     handler(request, response, (error?: unknown) => {
       if (error) reject(error);
-      else resolve({ statusCode: response.statusCode, ended: response.ended });
+      else resolve({ statusCode: response.statusCode, ended: response.ended, chunks, headers });
     });
   });
 }
@@ -126,6 +159,12 @@ afterEach(() => {
   else process.env.RDK_SIM2REAL_STATION_DRIVE_ENABLED = originalDriveEnabled;
   if (originalArmEnabled === undefined) delete process.env.RDK_SIM2REAL_STATION_ARM_ENABLED;
   else process.env.RDK_SIM2REAL_STATION_ARM_ENABLED = originalArmEnabled;
+  if (originalStudioExecOrigin === undefined) delete process.env.RDK_SIM2REAL_STUDIO_EXEC_ORIGIN;
+  else process.env.RDK_SIM2REAL_STUDIO_EXEC_ORIGIN = originalStudioExecOrigin;
+  if (originalStudioDeviceId === undefined) delete process.env.RDK_SIM2REAL_STUDIO_DEVICE_ID;
+  else process.env.RDK_SIM2REAL_STUDIO_DEVICE_ID = originalStudioDeviceId;
+  if (originalPublicOrigin === undefined) delete process.env.RDK_SIM2REAL_PUBLIC_ORIGIN;
+  else process.env.RDK_SIM2REAL_PUBLIC_ORIGIN = originalPublicOrigin;
   vi.restoreAllMocks();
 });
 
@@ -138,6 +177,154 @@ function mockAgent(status: number, payload: Record<string, unknown>) {
     }),
   );
 }
+
+describe('board-station Studio native device identity', () => {
+  const studioOrigin = 'http://127.0.0.1:18090';
+  const nativeId = '3b0cd56b-84e4-4e84-8c56-e722e41fd3e8';
+  const nativeDevice = {
+    ...device,
+    id: 'platform-s100-alice',
+    bridgeDeviceId: 'ssh:rdk@board.example.test:22',
+    studioDeviceId: nativeId,
+    bridgeOwnerKey: 'owner-alice',
+  };
+  const readRoutes = [
+    ['health', '/healthz'],
+    ['status', '/v1/station/status'],
+    ['camera.mjpeg', '/v1/station/camera.snapshot'],
+  ] as const;
+
+  beforeEach(() => {
+    delete process.env.RDK_SIM2REAL_BOARD_AGENT_URL;
+    process.env.RDK_SIM2REAL_STUDIO_EXEC_ORIGIN = studioOrigin;
+    process.env.RDK_SIM2REAL_PUBLIC_ORIGIN = 'https://studio.example.test';
+    // A request's owned registry choice must always win over a legacy default.
+    process.env.RDK_SIM2REAL_STUDIO_DEVICE_ID = 'unused-global-device';
+  });
+
+  it.each(readRoutes)(
+    'executes %s through the selected native UUID, with the caller cookie and no motion',
+    async (route, agentPath) => {
+      const expectedUrl = `${studioOrigin}/api/devices/${nativeId}/exec`;
+      const jpeg = Buffer.from([0xff, 0xd8, 1, 2, 0xff, 0xd9]);
+      let snapshots = 0;
+      const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async (url, init) => {
+        if (String(url) !== expectedUrl) {
+          return new Response(JSON.stringify({ error: 'DEVICE_NOT_FOUND' }), { status: 404 });
+        }
+        const command = JSON.parse(String(init?.body)).command as string;
+        let output: string;
+        if (command.includes('/v1/station/camera.snapshot')) {
+          output = snapshots++ === 0 ? jpeg.toString('base64') : '';
+        } else if (command.includes('/healthz')) {
+          output = JSON.stringify({ ok: true, capabilities: ['host-station'], mock: false });
+        } else {
+          output = JSON.stringify({ available: true, state: 'connected', mock: false });
+        }
+        return new Response(JSON.stringify({ output }), { status: 200 });
+      });
+      const visibleDevices = vi.fn();
+      const router = buildRouter([nativeDevice], {
+        multiUser: true,
+        owner: 'owner-alice',
+        onVisibleDevices: visibleDevices,
+      });
+      const res = await call(routeHandler(router, 'get', `/api/sim2real/board-station/${route}`), {
+        query: { deviceId: nativeDevice.id },
+        headers: { cookie: 'studio_session=alice-fixture' },
+      });
+      expect(visibleDevices).toHaveBeenCalledWith('owner-alice');
+      expect(res.statusCode).toBe(200);
+      expect(fetchMock).toHaveBeenCalled();
+      for (const [url, init] of fetchMock.mock.calls) {
+        expect(url).toBe(expectedUrl);
+        expect(init).toMatchObject({
+          method: 'POST',
+          redirect: 'error',
+          headers: {
+            cookie: 'studio_session=alice-fixture',
+            origin: 'https://studio.example.test',
+          },
+        });
+        const command = JSON.parse(String(init?.body)).command as string;
+        expect(command).toContain(`http://127.0.0.1:19100${agentPath}`);
+        expect(command).not.toMatch(/--data|station\/(?:drive|policy|arm|commands)/);
+      }
+      if (route === 'health') {
+        expect(res.body).toMatchObject({
+          ok: true,
+          device: { id: nativeDevice.id },
+          cameraSupported: true,
+        });
+        expect(JSON.stringify(res.body)).not.toContain(nativeId);
+        expect(JSON.stringify(res.body)).not.toContain(nativeDevice.bridgeDeviceId);
+      } else if (route === 'status') {
+        expect(res.body).toMatchObject({ ok: true, status: { available: true, mock: false } });
+      } else {
+        expect(res.ended).toBe(true);
+        expect(res.headers['content-type']).toContain('multipart/x-mixed-replace');
+        expect(Buffer.concat(res.chunks).includes(jpeg)).toBe(true);
+      }
+    },
+  );
+
+  it.each(readRoutes)("rejects another owner's device on %s before any exec", async (route) => {
+    const fetchMock = vi.spyOn(globalThis, 'fetch');
+    const visibleDevices = vi.fn();
+    // The registry port exposes only Alice's rows after its account filter.
+    const router = buildRouter([nativeDevice], {
+      multiUser: true,
+      owner: 'owner-alice',
+      onVisibleDevices: visibleDevices,
+    });
+    for (const foreignId of [
+      'platform-s100-bob',
+      'ssh:rdk@other-board.example.test:22',
+      'd0c086ff-d911-42c4-80db-aadbe77c5e73',
+    ]) {
+      const res = await call(routeHandler(router, 'get', `/api/sim2real/board-station/${route}`), {
+        query: { deviceId: foreignId },
+        headers: { cookie: 'studio_session=alice-fixture' },
+      });
+      expect(res.statusCode).toBe(404);
+      expect(res.body).toMatchObject({ error: 'SIM2REAL_DEVICE_NOT_FOUND' });
+    }
+    expect(visibleDevices).toHaveBeenCalledWith('owner-alice');
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['legacy Bridge ID', { ...device, bridgeDeviceId: 'legacy-bridge-1' }, 'legacy-bridge-1'],
+    ['legacy platform ID', device, 'x5-real-001'],
+  ])('keeps %s fallback when no native ID is stored', async (_label, row, expectedId) => {
+    const fetchMock = vi
+      .spyOn(globalThis, 'fetch')
+      .mockResolvedValue(
+        new Response(
+          JSON.stringify({ output: JSON.stringify({ capabilities: ['host-station'] }) }),
+        ),
+      );
+    const router = buildRouter([row]);
+    const res = await call(routeHandler(router, 'get', '/api/sim2real/board-station/health'), {
+      headers: { cookie: 'studio_session=legacy-fixture' },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(fetchMock).toHaveBeenCalledWith(
+      `${studioOrigin}/api/devices/${expectedId}/exec`,
+      expect.objectContaining({ method: 'POST' }),
+    );
+    expect(res.body).toMatchObject({ ok: true, cameraSupported: true });
+  });
+
+  it('does not execute a native device without the current caller cookie', async () => {
+    const fetchMock = vi.spyOn(globalThis, 'fetch');
+    const router = buildRouter([nativeDevice]);
+    const res = await call(routeHandler(router, 'get', '/api/sim2real/board-station/health'));
+    expect(res.statusCode).toBe(200);
+    expect(res.body).toMatchObject({ available: false, state: 'offline' });
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+});
 
 describe('board-station constrained drive proxy', () => {
   it('defaults to a connected device when an older disconnected row comes first', async () => {

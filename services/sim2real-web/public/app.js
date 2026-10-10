@@ -10458,7 +10458,6 @@ function stationSetCamera(enabled, { silent = false } = {}) {
     if (!current() || session.confirmed || img.naturalWidth <= 0 || img.naturalHeight <= 0) return false;
     session.confirmed = true;
     clearTimeout(session.timeout);
-    clearTimeout(session.poll);
     img.hidden = false;
     if (placeholder) placeholder.hidden = true;
     if (cameraState) cameraState.textContent = session.mock
@@ -10473,9 +10472,21 @@ function stationSetCamera(enabled, { silent = false } = {}) {
       if (state.station.cameraSession === session) stationSetCamera(false, { silent: true });
       return;
     }
-    if (!firstFrame() && !session.confirmed) session.poll = setTimeout(poll, 250);
+    if (session.confirmed && img.complete && (img.naturalWidth <= 0 || img.naturalHeight <= 0)) {
+      failed('相机流已中断；请重新开启相机流。');
+      return;
+    }
+    firstFrame();
+    session.poll = setTimeout(poll, 250);
   };
-  session.onLoad = firstFrame;
+  session.onLoad = () => {
+    if (!current()) return;
+    if (session.confirmed && (img.naturalWidth <= 0 || img.naturalHeight <= 0)) {
+      failed('相机流已中断；请重新开启相机流。');
+      return;
+    }
+    firstFrame();
+  };
   session.onError = () => failed('相机流不可用或已中断；请检查设备、权限和相机。');
   img.addEventListener('load', session.onLoad);
   img.addEventListener('error', session.onError);
@@ -10486,7 +10497,8 @@ function stationSetCamera(enabled, { silent = false } = {}) {
   session.timeout = setTimeout(() => failed('相机首帧等待超时（10 秒），未确认连接。'), 10000);
   // Continuous MJPEG does not dispatch load consistently across browsers.
   // Intrinsic dimensions become available after a JPEG frame is decoded;
-  // the bounded poll confirms that evidence without trusting HTTP status.
+  // Poll decoded dimensions throughout the session: a cleanly ended MJPEG
+  // response may reset them to zero without dispatching an error event.
   session.poll = setTimeout(poll, 250);
   const source = apiPath('/sim2real/board-station/camera.mjpeg');
   img.src = source + (session.deviceId ? '?deviceId=' + encodeURIComponent(session.deviceId) : '');
@@ -10533,6 +10545,12 @@ async function stationInit() {
   state.station.mock = false;
   stationSetCamera(false, { silent: true });
   if (honestyNote) honestyNote.hidden = true;
+  // First connection must stay usable before a board exists or its health
+  // request finishes. These handlers are idempotent; probes only read state.
+  wireDeviceManagerEvents();
+  wireStationSwitchEvents();
+  stationDeviceManagerLoad();
+  stationSwitchProbe();
   try {
     const health = await request('/sim2real/board-station/health' + (deviceId ? '?deviceId=' + encodeURIComponent(deviceId) : ''));
     if (!current()) return;
@@ -10611,11 +10629,6 @@ async function stationInit() {
     }
     stationLog('上位机初始化失败', 'error');
   }
-  // 设备管理（网页添加真机）与运动开关面板：只读拉取，无需板端就绪。
-  stationDeviceManagerLoad();
-  stationSwitchProbe();
-  wireDeviceManagerEvents();
-  wireStationSwitchEvents();
 }
 
 // ---- 设备管理（RDK Studio Local Bridge 优先，SSH 仅作独立部署备用） -------
@@ -10670,6 +10683,12 @@ function stationBridgeRow(bridge, device) {
     button.textContent = '已接入 · 设为目标';
     button.dataset.action = 'bridge-select';
     button.dataset.deviceId = registered.id;
+    const reconnect = document.createElement('button');
+    reconnect.className = 'button button-quiet';
+    reconnect.type = 'button';
+    reconnect.dataset.action = 'bridge-connect';
+    reconnect.textContent = '重新接入';
+    item.querySelector('.station-device-item-actions').append(reconnect);
   } else {
     button.textContent = '接入平台';
   }

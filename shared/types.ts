@@ -45,6 +45,8 @@ export interface Device {
   bridgeId?: string;
   /** Bridge 上报的本地设备 id（connectionMode=bridge）。 */
   bridgeDeviceId?: string;
+  /** Studio 注册返回的原生执行目标 id；仅服务端 owner 记录使用，不公开给 UI。 */
+  studioDeviceId?: string;
   /** Bridge 发现该设备的本地传输方式。 */
   bridgeTransport?: 'ssh' | 'usb-ethernet' | 'serial';
 }
