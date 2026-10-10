@@ -3331,13 +3331,18 @@ components:
             platforms: { type: array, items: { type: string } }
     Training:
       type: object
-      description: All fields are optional; the selected profile supplies safe defaults.
+      description: The profile supplies safe defaults. ACT and Diffusion Policy require an owner/project/contract-matched demonstration Run, or explicit syntheticSmoke with the smoke profile.
       properties:
         profile: { type: string, enum: [smoke, low-vram, standard, high-vram] }
         numEnvs: { type: integer, minimum: 1, maximum: 16384 }
         maxIterations: { type: integer, minimum: 1, maximum: 2000000 }
         video: { type: boolean }
         runName: { type: string, maxLength: 80 }
+        algorithm: { type: string, enum: [ppo, sac] }
+        engine: { type: string, enum: [starter-ppo, mjx-ppo, visual-ppo, dm-control-ppo, mjlab-rsl-rl, microduck-rl, microduck-recurrent, microduck-football, act, diffusion-policy, smolvla, isaac-lab] }
+        demonstrationRunId: { type: string, maxLength: 200, description: Recorded telemetry Run with at least eight complete episodes of four or more steps. Requires matching owner, project, and vector contract; Mock and demo-fixture data are rejected. }
+        demonstrationSha256: { type: string, pattern: "^[a-f0-9]{64}$", readOnly: true, description: Server-pinned digest of the accepted demonstration JSONL. }
+        syntheticSmoke: { type: boolean, description: Explicit synthetic imitation smoke only; mutually exclusive with demonstrationRunId and requires profile=smoke. }
     RunRequest:
       type: object
       required: [modelId, backend]

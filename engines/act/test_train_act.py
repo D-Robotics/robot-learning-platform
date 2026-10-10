@@ -567,7 +567,7 @@ class EngineModeTest(unittest.TestCase):
                     "actionSize": 3,
                 },
                 "model": {"modelId": "act-smoke", "version": "0.1.0"},
-                "training": {"profile": "smoke", "maxIterations": 3},
+                "training": {"profile": "smoke", "maxIterations": 3, "syntheticSmoke": True},
             }
             request_path = os.path.join(workdir, "request.json")
             result_path = os.path.join(workdir, "result.json")

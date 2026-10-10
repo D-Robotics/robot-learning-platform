@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
 import { mkdtemp, readdir, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
@@ -17,8 +18,12 @@ process.env.RDK_SIM2REAL_LOCAL_WORKER_DATA_DIR = fixtureDir;
 process.env.RDK_SIM2REAL_LOCAL_RUNNER_TOKEN = 'worker-test-token';
 process.env.RDK_SIM2REAL_MAX_CONCURRENT_JOBS = '1';
 
-const { createLocalTrainingWorkerServer, runnerTokenRequired, runnerTokenUsable } =
-  await import('./local-training-worker.mjs');
+const {
+  createLocalTrainingWorkerServer,
+  runnerTokenRequired,
+  runnerTokenUsable,
+  validateDemonstrationInput,
+} = await import('./local-training-worker.mjs');
 const previousNodeEnv = process.env.NODE_ENV;
 const previousDeployment = process.env.RDK_SIM2REAL_DEPLOYMENT;
 process.env.NODE_ENV = 'development';
@@ -41,6 +46,62 @@ const request = {
   contract: { id: 'microduck-policy-v1', observationSize: 61, actionSize: 14 },
   training: { profile: 'smoke', maxIterations: 10 },
 };
+// A real engine selector must never silently turn missing recordings into
+// synthetic demonstrations, including when this worker is called directly.
+const imitationRequest = {
+  ...request,
+  training: { profile: 'smoke', engine: 'act', demonstrationRunId: 'recording-1' },
+};
+assert.throws(() => validateDemonstrationInput(imitationRequest), /recorded demonstrations/);
+assert.doesNotThrow(() =>
+  validateDemonstrationInput({
+    ...request,
+    training: { profile: 'smoke', engine: 'act', syntheticSmoke: true },
+  }),
+);
+assert.throws(
+  () =>
+    validateDemonstrationInput({
+      ...request,
+      training: { profile: 'standard', engine: 'act', syntheticSmoke: true },
+    }),
+  /syntheticSmoke/,
+);
+const demonstrationJsonl =
+  Array.from({ length: 32 }, (_, index) =>
+    JSON.stringify({
+      type: 'step',
+      observation: Array(61).fill(0),
+      action: Array(14).fill(0.25),
+      done: index % 4 === 3,
+    }),
+  ).join('\n') + '\n';
+const demonstration = {
+  sourceRunId: 'recording-1',
+  sha256: createHash('sha256').update(demonstrationJsonl).digest('hex'),
+  jsonl: demonstrationJsonl,
+  sampleCount: 32,
+  episodeCount: 8,
+};
+assert.doesNotThrow(() =>
+  validateDemonstrationInput({ ...imitationRequest, demonstrations: demonstration }),
+);
+assert.throws(
+  () =>
+    validateDemonstrationInput({
+      ...imitationRequest,
+      demonstrations: { ...demonstration, jsonl: demonstrationJsonl.replace('0.25', '0.75') },
+    }),
+  /SHA-256/,
+);
+assert.throws(
+  () =>
+    validateDemonstrationInput({
+      ...imitationRequest,
+      demonstrations: { ...demonstration, sampleCount: 31 },
+    }),
+  /sample counts/,
+);
 try {
   const health = await fetch(`${base}/healthz`);
   assert.equal(health.status, 200);
@@ -440,6 +501,54 @@ try {
   }
   assert.equal(defaultStatus.status, 'completed', JSON.stringify(defaultStatus));
   assert.equal(defaultStatus.checkpoint.artifactRef, 'artifact://microduck/cp-1');
+
+  // Verify the payload crosses the process boundary as a fixed job-local
+  // file, with the accepted bytes unchanged (algorithm training is tested
+  // separately by the Python engines against recorded episodes).
+  const recordedFixture = path.join(fixtureDir, 'recorded-engine.mjs');
+  await writeFile(
+    recordedFixture,
+    `import { readFile, writeFile } from 'node:fs/promises';
+import { createHash } from 'node:crypto';
+const request = JSON.parse(await readFile(process.env.RDK_SIM2REAL_REQUEST_FILE, 'utf8'));
+const jsonl = await readFile('demonstrations.jsonl', 'utf8');
+if (jsonl !== request.demonstrations.jsonl || createHash('sha256').update(jsonl).digest('hex') !== request.demonstrations.sha256) throw new Error('recorded input changed');
+const first = JSON.parse(jsonl.split('\\n')[0]);
+await writeFile('policy.onnx', 'recorded-fixture');
+await writeFile(process.env.RDK_SIM2REAL_RESULT_FILE, JSON.stringify({ artifact: { artifactId: 'recorded-act', artifactRef: 'artifact://policy.onnx', kind: 'source', format: 'onnx' }, metrics: { firstRecordedAction: first.action[0], demonstrationSha256: request.demonstrations.sha256 }, deployable: false }));
+`,
+  );
+  process.env.RDK_SIM2REAL_TRAIN_ENGINES_JSON = JSON.stringify({
+    act: { executable: process.execPath, args: [recordedFixture] },
+  });
+  const recordedLaunch = await fetch(`${base}/train`, {
+    method: 'POST',
+    headers: {
+      'content-type': 'application/json',
+      'x-sim2real-account': 'alice',
+      authorization: 'Bearer worker-test-token',
+      'idempotency-key': 'recorded-input-job',
+    },
+    body: JSON.stringify({ ...imitationRequest, demonstrations: demonstration }),
+  });
+  assert.equal(recordedLaunch.status, 202);
+  let recordedStatus = await recordedLaunch.json();
+  for (
+    let index = 0;
+    index < 100 && ['queued', 'running'].includes(recordedStatus.status);
+    index += 1
+  ) {
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    recordedStatus = await (
+      await fetch(`${base}/runs/${encodeURIComponent(recordedStatus.runId)}`, {
+        headers: { 'x-sim2real-account': 'alice', authorization: 'Bearer worker-test-token' },
+      })
+    ).json();
+  }
+  assert.equal(recordedStatus.status, 'completed', JSON.stringify(recordedStatus));
+  assert.equal(recordedStatus.metrics.firstRecordedAction, 0.25);
+  assert.equal(recordedStatus.metrics.demonstrationSha256, demonstration.sha256);
+  assert.equal(recordedStatus.deployable, false);
 
   process.env.RDK_SIM2REAL_TRAIN_ENGINES_JSON = 'not-json';
   const invalidEnginesHealth = await fetch(`${base}/healthz`);

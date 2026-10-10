@@ -47,7 +47,7 @@ const ENGINE_REQUEST = {
     decimation: 10,
   },
   model: { modelId: 'provenance-gate', version: '0.1.0' },
-  training: { profile: 'smoke', numEnvs: 8, maxIterations: 2, video: false },
+  training: { profile: 'smoke', numEnvs: 8, maxIterations: 2, video: false, syntheticSmoke: true },
 };
 
 function pythonCanImport(...modules) {

@@ -3,7 +3,7 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import type { Sim2RealTelemetrySample } from '../../shared/sim2real-telemetry.js';
 import {
@@ -15,11 +15,15 @@ import {
 
 const roots: string[] = [];
 const previousStorage = process.env.RDK_SIM2REAL_STORAGE_DIR;
+const previousFfmpeg = process.env.RDK_SIM2REAL_FFMPEG_PATH;
 
 afterEach(async () => {
   await Promise.all(roots.splice(0).map((root) => fs.rm(root, { recursive: true, force: true })));
   if (previousStorage === undefined) delete process.env.RDK_SIM2REAL_STORAGE_DIR;
   else process.env.RDK_SIM2REAL_STORAGE_DIR = previousStorage;
+  if (previousFfmpeg === undefined) delete process.env.RDK_SIM2REAL_FFMPEG_PATH;
+  else process.env.RDK_SIM2REAL_FFMPEG_PATH = previousFfmpeg;
+  vi.useRealTimers();
 });
 
 async function useTempStorage(): Promise<string> {
@@ -86,9 +90,153 @@ describe('planReplayVideo', () => {
     expect(plan.durationSeconds).toBe(3);
     expect(plan.fps).toBeCloseTo(4 / 3, 5);
   });
+
+  it('refuses nonfinite, repeated and decreasing camera timestamps', () => {
+    for (const times of [
+      [0, NaN],
+      [1, 1],
+      [2, 1],
+    ]) {
+      expect(planReplayVideo(times.map((t) => flatFrame(10, t)))).toMatchObject({
+        ok: false,
+        code: 'replay_video_frame_time',
+      });
+    }
+  });
+
+  it('rejects malformed channel counts and declared frame bytes', () => {
+    const frame = flatFrame(10, 0);
+    frame.cameraFrame!.channels = 1;
+    expect(planReplayVideo([frame])).toMatchObject({
+      ok: false,
+      code: 'replay_video_frame_geometry',
+    });
+    frame.cameraFrame!.channels = 3;
+    frame.cameraFrame!.data = Buffer.alloc(3).toString('base64');
+    expect(planReplayVideo([frame])).toMatchObject({ ok: false, code: 'replay_video_frame_bytes' });
+  });
+
+  it('bounds frame count, frame size and recorded duration', () => {
+    expect(planReplayVideo(Array.from({ length: 6001 }, (_, t) => flatFrame(10, t)))).toMatchObject(
+      { ok: false, code: 'replay_video_too_many_frames' },
+    );
+    expect(planReplayVideo([flatFrame(10, 0), flatFrame(10, 21601)])).toMatchObject({
+      ok: false,
+      code: 'replay_video_duration_limit',
+    });
+    const frame = flatFrame(10, 0);
+    frame.cameraFrame!.width = 10000000;
+    expect(planReplayVideo([frame])).toMatchObject({
+      ok: false,
+      code: 'replay_video_frame_geometry',
+    });
+  });
 });
 
 describe('renderReplayVideo + readReplayVideo round trip', () => {
+  it('cleans private frames after encoder failure and retains a previous valid output', async () => {
+    const root = await useTempStorage();
+    const binary = path.join(root, 'fake-ffmpeg');
+    await fs.writeFile(binary, '#!/bin/sh\nprintf encoder-failed >&2\nexit 2\n', { mode: 0o700 });
+    process.env.RDK_SIM2REAL_FFMPEG_PATH = binary;
+    const plan = planReplayVideo([flatFrame(10, 0)]);
+    if (!plan.ok) throw new Error(plan.message);
+    const target = replayVideoPath('retain-output')!;
+    await fs.mkdir(path.dirname(target));
+    await fs.writeFile(target, 'previous-output');
+    expect(await renderReplayVideo(plan, target)).toMatchObject({
+      ok: false,
+      code: 'replay_video_encode_failed',
+    });
+    expect(await fs.readFile(target, 'utf8')).toBe('previous-output');
+    expect(await fs.readdir(path.dirname(target))).toEqual(['retain-output.mp4']);
+    process.env.RDK_SIM2REAL_FFMPEG_PATH = path.join(root, 'absent-binary');
+    expect(await renderReplayVideo(plan, target)).toMatchObject({
+      ok: false,
+      code: 'replay_video_encode_failed',
+    });
+    expect(await fs.readdir(path.dirname(target))).toEqual(['retain-output.mp4']);
+  });
+
+  it('terminates a timed-out encoder and cleans its scratch directory', async () => {
+    const root = await useTempStorage();
+    const binary = path.join(root, 'slow-ffmpeg');
+    await fs.writeFile(binary, '#!/bin/sh\nprintf started > started\nexec /bin/sleep 60\n', {
+      mode: 0o700,
+    });
+    process.env.RDK_SIM2REAL_FFMPEG_PATH = binary;
+    const plan = planReplayVideo([flatFrame(10, 0)]);
+    if (!plan.ok) throw new Error(plan.message);
+    const physicalDelay = setTimeout;
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    const target = replayVideoPath('timeout')!;
+    const rendered = renderReplayVideo(plan, target);
+    let started = false;
+    for (let attempt = 0; attempt < 100 && !started; attempt += 1) {
+      await new Promise<void>((resolve) => physicalDelay(resolve, 5));
+      const files = await fs.readdir(path.dirname(target)).catch(() => [] as string[]);
+      const scratch = files.find((name) => name.startsWith('.replay-frames-'));
+      if (scratch)
+        started = await fs.stat(path.join(path.dirname(target), scratch, 'started')).then(
+          () => true,
+          () => false,
+        );
+    }
+    await vi.advanceTimersByTimeAsync(180000);
+    expect(await rendered).toMatchObject({ ok: false, code: 'replay_video_timeout' });
+    expect(started).toBe(true);
+    expect(await fs.readdir(path.dirname(target))).toEqual([]);
+  });
+
+  it('rejects tampered plans before starting an encoder', async () => {
+    await useTempStorage();
+    const plan = planReplayVideo([flatFrame(10, 0)]);
+    if (!plan.ok) throw new Error(plan.message);
+    plan.frames[0].bytes = 3;
+    expect(await renderReplayVideo(plan, replayVideoPath('bad-plan')!)).toMatchObject({
+      ok: false,
+      code: 'replay_video_frame_bytes',
+    });
+  });
+  it.skipIf(!ffmpegAvailable() || spawnSync('ffprobe', ['-version']).status !== 0)(
+    'preserves irregular recorded presentation times in the actual MP4',
+    async () => {
+      await useTempStorage();
+      const plan = planReplayVideo([
+        flatFrame(40, 100),
+        flatFrame(120, 100.125),
+        flatFrame(200, 103.75),
+      ]);
+      if (!plan.ok) throw new Error(plan.message);
+      const target = replayVideoPath('irregular-time')!;
+      const rendered = await renderReplayVideo(plan, target);
+      expect(rendered.ok).toBe(true);
+      const probe = spawnSync(
+        'ffprobe',
+        [
+          '-v',
+          'error',
+          '-select_streams',
+          'v:0',
+          '-show_entries',
+          'frame=best_effort_timestamp_time',
+          '-of',
+          'json',
+          target,
+        ],
+        { encoding: 'utf8' },
+      );
+      expect(probe.status).toBe(0);
+      const times = JSON.parse(probe.stdout).frames.map(
+        (frame: { best_effort_timestamp_time: string }) => Number(frame.best_effort_timestamp_time),
+      );
+      expect(times).toHaveLength(3);
+      expect(times[0]).toBeCloseTo(0, 3);
+      expect(times[1]).toBeCloseTo(0.125, 3);
+      expect(times[2]).toBeCloseTo(3.75, 3);
+      expect(await fs.readdir(path.dirname(target))).toEqual(['irregular-time.mp4']);
+    },
+  );
   it.skipIf(!ffmpegAvailable())(
     'renders frames to an MP4 and serves them back with digest verification',
     async () => {

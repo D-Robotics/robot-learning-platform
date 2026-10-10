@@ -4,6 +4,7 @@ import type {
   Sim2RealCheckpointRef,
   Sim2RealModelManifest,
   Sim2RealTrainingSpec,
+  Sim2RealDemonstrations,
 } from '../../shared/sim2real.js';
 import {
   isLocalRunnerConfigured as isRunnerConfigured,
@@ -114,6 +115,7 @@ export async function requestLocalTraining(input: {
   requestToken?: string | null;
   manifest: Sim2RealModelManifest;
   training?: Sim2RealTrainingSpec;
+  demonstrations?: Sim2RealDemonstrations;
   resumeFrom?: Sim2RealCheckpointRef;
   taskId?: string;
   idempotencyKey?: string;

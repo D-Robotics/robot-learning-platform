@@ -343,12 +343,87 @@ function validate(source) {
   const training = source.training && typeof source.training === 'object' ? source.training : {};
   const profile = text(training.profile, 32) || 'standard';
   if (!profiles.has(profile)) throw fail('training.profile is not allowed');
+  validateDemonstrationInput(source);
   return {
     contractId,
     modelId: text(model.modelId, 64),
     version: text(model.version, 64),
     profile,
   };
+}
+
+/** Fixed inline data contract; arbitrary client filesystem paths are never used. */
+export function validateDemonstrationInput(source) {
+  const training = source.training || {};
+  const imitation = training.engine === 'act' || training.engine === 'diffusion-policy';
+  const data = source.demonstrations;
+  if (!imitation && !data) return;
+  if (training.syntheticSmoke === true) {
+    if (training.profile !== 'smoke' || data || training.demonstrationRunId)
+      throw fail('syntheticSmoke requires smoke and cannot replace demonstrations');
+    return;
+  }
+  if (source.contract?.observationLayout?.some((slot) => slot.modality === 'image'))
+    throw fail(
+      'recorded worker training currently supports vector observations; use the image CLI explicitly',
+    );
+  if (
+    !data ||
+    typeof data !== 'object' ||
+    Array.isArray(data) ||
+    typeof data.sourceRunId !== 'string' ||
+    !SAFE_RUN_ID.test(data.sourceRunId) ||
+    data.sourceRunId !== training.demonstrationRunId ||
+    typeof data.jsonl !== 'string' ||
+    Buffer.byteLength(data.jsonl, 'utf8') > 512 * 1024 ||
+    !/^[a-f0-9]{64}$/.test(data.sha256 || '') ||
+    createHash('sha256').update(data.jsonl).digest('hex') !== data.sha256 ||
+    (training.demonstrationSha256 && training.demonstrationSha256 !== data.sha256)
+  )
+    throw fail(
+      'recorded demonstrations are required and must match their source and SHA-256',
+      400,
+      'demonstration_invalid',
+    );
+  let count = 0,
+    episodes = 0,
+    steps = 0;
+  for (const line of data.jsonl.split('\n')) {
+    if (!line.trim()) continue;
+    let row;
+    try {
+      row = JSON.parse(line);
+    } catch {
+      throw fail('demonstration JSONL is invalid');
+    }
+    if (
+      row?.type !== 'step' ||
+      typeof row.done !== 'boolean' ||
+      !Array.isArray(row.observation) ||
+      row.observation.length !== Number(source.contract?.observationSize) ||
+      !Array.isArray(row.action) ||
+      row.action.length !== Number(source.contract?.actionSize) ||
+      [...row.observation, ...row.action].some(
+        (value) => typeof value !== 'number' || !Number.isFinite(value),
+      )
+    )
+      throw fail('demonstration rows must match the observation/action contract');
+    count += 1;
+    steps += 1;
+    if (row.done) {
+      if (steps < 4) throw fail('demonstration episodes need at least 4 steps');
+      episodes += 1;
+      steps = 0;
+    }
+  }
+  if (
+    count > 20_000 ||
+    episodes < 8 ||
+    steps ||
+    count !== data.sampleCount ||
+    episodes !== data.episodeCount
+  )
+    throw fail('demonstrations need at least 8 complete episodes and matching sample counts');
 }
 
 function executableConfig() {
@@ -807,6 +882,12 @@ function resultArtifact(result) {
 }
 
 async function launch(job, config) {
+  validateDemonstrationInput(job.request);
+  if (job.request.demonstrations) {
+    await writeFile(path.join(job.dir, 'demonstrations.jsonl'), job.request.demonstrations.jsonl, {
+      mode: 0o600,
+    });
+  }
   await writeFile(path.join(job.dir, 'request.json'), JSON.stringify(job.request, null, 2), {
     mode: 0o600,
   });

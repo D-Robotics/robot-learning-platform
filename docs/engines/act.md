@@ -130,9 +130,15 @@ python3 engines/act/train_act.py recordings.jsonl \
   --kl-weight 10 --epochs 200
 ```
 
-接到平台 worker（训练页「训练引擎」选 `act`）时，目前仅运行文件协议的
-**合成数据冒烟训练**，结果标记 `dataset.source=synthetic-smoke`、`synthetic=true`。
-这条路径尚未读取用户上传的示教数据；真实轨迹训练请使用上面的 CLI。
+平台 worker 支持真实向量示教：提交 `training.engine=act` 和
+`training.demonstrationRunId`，从当前账号、项目及模型契约一致的 Run 读取原始
+轨迹。至少需要 8 个完整回合，每回合不少于 4 帧，并显式使用 `done` / `fall`
+闭合；总输入限制为 512 KiB、20000 帧和 16 个遥测分片，超限明确拒绝，不截断。
+worker 固定物化 `demonstrations.jsonl`，引擎校验其 SHA-256 后训练，结果保留来源
+Run、摘要与训练/验证分块 MSE；ONNX 必须通过数值等价校验并带制品摘要。
+图像示教仍使用上面的 CLI 明确指定图像参数；浏览器中继资源暂不支持示教传输。
+**合成数据冒烟**仅在显式 `training.syntheticSmoke=true` 且 `profile=smoke` 时运行，
+并标记 `dataset.source=synthetic-smoke`、`synthetic=true`；缺数据不会自动切换合成数据。
 注册方式如下（解释器须安装本引擎依赖）：
 
 ```bash

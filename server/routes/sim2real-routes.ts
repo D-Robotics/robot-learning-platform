@@ -20,6 +20,7 @@ import type {
   Sim2RealRunStatus,
   Sim2RealComputeResource,
   Sim2RealTelemetrySample,
+  Sim2RealDemonstrations,
 } from '../../shared/sim2real.js';
 import {
   MICRODUCK_SIM2REAL_CONTRACT,
@@ -41,6 +42,10 @@ import {
 } from '../sim2real/http-helpers.js';
 import { createSim2RealLogger } from '../sim2real/observability.js';
 import { computeResearchLoopMetrics } from '../sim2real/research-loop-metrics.js';
+import {
+  DemonstrationInputError,
+  resolveRecordedDemonstrations,
+} from '../sim2real/demonstrations.js';
 import { listSim2RealAgentRunSnapshots } from './sim2real-agent-routes.js';
 import {
   Sim2RealError,
@@ -1372,6 +1377,8 @@ interface ParsedRunRequest {
   computeResourceId?: string;
   datasetIds?: string[];
   requestedVia?: 'workbench' | 'agent';
+  /** Internal resolved data; clients may only name a source Run. */
+  demonstrations?: Sim2RealDemonstrations;
 }
 
 /** Validate and normalize the POST /runs body; failures are API-shaped. */
@@ -1703,6 +1710,7 @@ async function dispatchRunBackend(input: {
         allowEnvironmentToken: !auth.isMultiUserDeployment(),
         manifest: model.manifest,
         training,
+        demonstrations: parsed.demonstrations,
         resumeFrom,
         taskId: taskId || undefined,
         idempotencyKey,
@@ -1797,6 +1805,7 @@ async function dispatchRunBackend(input: {
         accountId,
         manifest: model.manifest,
         training,
+        demonstrations: parsed.demonstrations,
         resumeFrom,
         taskId: taskId || undefined,
         idempotencyKey,
@@ -4045,6 +4054,36 @@ export function createSim2RealRouter(
       // to the current account and match the model contract when declared.
       const project = projectId ? await getSim2RealProject(projectId, owner) : null;
       const datasetIds = requestedDatasetIds ?? project?.datasetIds ?? [];
+      if (backend === 'local' || backend === 'robogo') {
+        try {
+          parsed.demonstrations = await resolveRecordedDemonstrations({
+            training,
+            model,
+            owner,
+            projectId,
+          });
+          if (parsed.demonstrations) {
+            training!.demonstrationSha256 = parsed.demonstrations.sha256;
+            const resource = computeResourceId
+              ? await getSim2RealComputeResourceSecret(computeResourceId, owner)
+              : null;
+            if (resource?.resource.source === 'local-agent') {
+              sendApiError(
+                response,
+                422,
+                'SIM2REAL_DEMONSTRATION_RELAY_UNSUPPORTED',
+                '示教训练请使用服务端或远程训练 Worker；浏览器中继资源尚不支持传输示教输入。',
+                { retryable: false },
+              );
+              return;
+            }
+          }
+        } catch (error) {
+          if (!(error instanceof DemonstrationInputError)) throw error;
+          sendApiError(response, 422, error.code, error.message, { retryable: false });
+          return;
+        }
+      }
       if (datasetIds.length) {
         const datasets = await listSim2RealDatasets(owner);
         const byId = new Map(datasets.map((dataset) => [dataset.id, dataset]));

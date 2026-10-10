@@ -72,36 +72,31 @@ function setAgentBusy(busy, label = '') {
   }
 }
 
-// The authoritative capability list is rendered once from the server catalog,
-// so the agent's prose never has to enumerate every tool to stay complete.
-let capabilityCatalogRendered = false;
+// Catalog metadata is authoritative; the workbench supplies only explicit
+// existing read routes and drafts for the same guarded conversation path.
+let capabilityWorkbench = null;
 
 function renderCapabilityCatalog(capabilities) {
-  if (capabilityCatalogRendered) return;
-  const catalog = capabilities?.dsh?.capabilities;
-  if (!Array.isArray(catalog)) return;
-  const panel = document.getElementById('agent-catalog');
-  const list = document.getElementById('agent-catalog-list');
-  if (!panel || !list) return;
-  const bound = catalog.filter((item) => item && item.bound);
-  if (!bound.length) return;
-  list.textContent = '';
-  for (const item of bound) {
-    const row = document.createElement('li');
-    row.className = `agent-catalog-item${item.readOnly ? '' : ' is-gated'}`;
-    const badge = document.createElement('span');
-    badge.className = 'agent-catalog-badge';
-    badge.textContent = item.readOnly ? '只读' : '⚠️ 门控';
-    const desc = document.createElement('span');
-    desc.className = 'agent-catalog-desc';
-    desc.textContent = `${item.description}（${item.id}）`;
-    row.append(badge, desc);
-    list.append(row);
-  }
-  const count = document.getElementById('agent-catalog-count');
-  if (count) count.textContent = `（${bound.length}）`;
-  panel.hidden = false;
-  capabilityCatalogRendered = true;
+  capabilityWorkbench = window.RdkCapabilityWorkbench?.mount({
+    panel: $('agent-catalog'),
+    list: $('agent-catalog-list'),
+    count: $('agent-catalog-count'),
+    capabilities,
+    request: api,
+    onUsePrompt(prompt, item) {
+      if (!input || input.disabled || activeTaskController) return false;
+      input.value = prompt;
+      input.dataset.agentCapabilityId = item.id;
+      input.focus();
+      return true;
+    },
+    onNavigate(view) {
+      const target = document.querySelector(`[data-view-target="${view}"]`);
+      if (!target) return;
+      setAgentDrawer(false, false);
+      target.click();
+    },
+  }) || null;
 }
 
 async function refreshRuntimeStatus() {
@@ -1297,7 +1292,7 @@ async function runTask(message, signal, turnId) {
       if (typeof dsh.sessionId === 'string') persistActiveDshSession(dsh.sessionId);
       removeTypingIndicator();
       renderDshReply(dsh);
-      return;
+      return { text: stripDshPreamble(dsh.text), toolTrail: dsh.toolTrail };
     }
   } catch (error) {
     if (!(error && error.status === 503)) throw error;
@@ -1393,8 +1388,11 @@ async function runTask(message, signal, turnId) {
 
 form?.addEventListener('submit', (event) => {
   event.preventDefault();
+  if (activeTaskController) return;
   const message = input.value.trim();
   if (!message) return;
+  const capabilityId = input.dataset.agentCapabilityId || '';
+  delete input.dataset.agentCapabilityId;
   input.value = '';
   const turnId = input.dataset.agentRetryTurnId || createAgentTurnId();
   delete input.dataset.agentRetryTurnId;
@@ -1406,8 +1404,13 @@ form?.addEventListener('submit', (event) => {
   const controller = new AbortController();
   activeTaskController = controller;
   setAgentBusy(true, '正在生成计划…');
+  if (capabilityId) capabilityWorkbench?.started(capabilityId);
   void runTask(message, controller.signal, turnId)
+    .then((outcome) => {
+      if (capabilityId) capabilityWorkbench?.finished(capabilityId, outcome);
+    })
     .catch((error) => {
+      if (capabilityId) capabilityWorkbench?.failed(capabilityId, error);
       if (error?.name === 'AbortError') {
         addMessage('agent', '已停止等待。若任务已经提交到后台，它仍可能继续运行，请到运行记录查看状态。');
         return;

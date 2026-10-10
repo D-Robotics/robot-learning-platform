@@ -365,6 +365,34 @@ describe('standalone Sim2Real health and optional simulator surface', () => {
     expect(response.headers.get('location')).toBe('/originbot-sim/');
   });
 
+  it('serves the audited GPU agent download when the checkout has a hidden parent directory', async () => {
+    const { baseUrl } = await fixture();
+    const response = await fetch(`${baseUrl}/agent/local-gpu-agent.mjs`);
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get('content-type')).toMatch(/javascript/);
+    expect(response.headers.get('cache-control')).toBe('no-cache');
+    expect(await response.text()).toBe(
+      await fs.readFile(new URL('../../scripts/local-gpu-agent.mjs', import.meta.url), 'utf8'),
+    );
+  });
+
+  it('serves a hidden release root while keeping dotfiles within the release private', async () => {
+    const { baseUrl, microduckRoot } = await fixture();
+    const hiddenRoot = path.join(microduckRoot, '.release');
+    await fs.mkdir(hiddenRoot, { recursive: true });
+    await fs.writeFile(path.join(hiddenRoot, 'index.html'), '<!doctype html><p>hidden release</p>');
+    await fs.writeFile(path.join(hiddenRoot, '.private.json'), '{"private":"release-secret"}');
+    process.env.RDK_SIM2REAL_MICRODUCK_ROOT = hiddenRoot;
+
+    const entry = await fetch(`${baseUrl}/mujoco/microduck/`);
+    expect(entry.status).toBe(200);
+    expect(await entry.text()).toContain('hidden release');
+    const dotfile = await fetch(`${baseUrl}/mujoco/microduck/.private.json`);
+    expect(dotfile.status).toBe(404);
+    expect(await dotfile.text()).not.toContain('release-secret');
+  });
+
   it('keeps unknown API paths machine-readable and does not masquerade as the SPA', async () => {
     const { baseUrl } = await fixture();
     const response = await fetch(`${baseUrl}/api/does-not-exist`);

@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const agentSource = await readFile(path.join(here, 'public', 'agent-chat.js'), 'utf8');
+const capabilitySource = await readFile(path.join(here, 'public', 'capability-workbench.js'), 'utf8');
 const openWindows: Array<InstanceType<typeof JSDOM>['window']> = [];
 
 function shell() {
@@ -90,6 +91,7 @@ function boot(fetchImpl: typeof fetch) {
       return payload;
     },
   });
+  dom.window.eval(capabilitySource);
   dom.window.eval(agentSource);
   return dom.window;
 }
@@ -226,7 +228,7 @@ describe('Agent chat browser behavior', () => {
     expect(provenance?.textContent).not.toContain('证据复核');
   });
 
-  it('renders the deterministic capability catalog once the server exposes bound tools', async () => {
+  it('shows bound and unavailable capabilities with safe trial actions', async () => {
     const fetchImpl = vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input);
       if (url.endsWith('/api/sim2real/agent/capabilities')) {
@@ -266,18 +268,18 @@ describe('Agent chat browser behavior', () => {
     const panel = window.document.querySelector<HTMLDetailsElement>('#agent-catalog');
     expect(panel?.hidden).toBe(false);
     expect(panel?.textContent).toContain('能力目录');
-    expect(panel?.querySelector('#agent-catalog-count')?.textContent).toBe('（2）');
+    expect(panel?.querySelector('#agent-catalog-count')?.textContent).toBe('（3）');
     const rows = window.document.querySelectorAll('#agent-catalog-list .agent-catalog-item');
-    expect(rows.length).toBe(2);
-    // Unbound capabilities stay invisible: the catalog mirrors what is callable.
-    expect(panel?.textContent).not.toContain('rdk_unbound_tool');
+    expect(rows.length).toBe(3);
+    expect(rows[2]?.textContent).toContain('Agent 未绑定');
+    expect(rows[2]?.querySelector('button')?.disabled).toBe(true);
     expect(rows[0]?.textContent).toContain('只读');
     expect(rows[1]?.classList.contains('is-gated')).toBe(true);
-    expect(rows[1]?.textContent).toContain('⚠️ 门控');
+    expect(rows[1]?.textContent).toContain('⚠️ 需确认');
     expect(rows[1]?.textContent).toContain('rdk_board_policy_start');
   });
 
-  it('keeps the capability catalog hidden when no bound tools are advertised', async () => {
+  it('keeps existing authenticated page queries usable when the Agent runtime is disabled', async () => {
     const fetchImpl = vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input);
       if (url.endsWith('/api/sim2real/agent/capabilities')) {
@@ -299,8 +301,54 @@ describe('Agent chat browser behavior', () => {
     await wait(20);
 
     const panel = window.document.querySelector<HTMLDetailsElement>('#agent-catalog');
-    expect(panel?.hidden).toBe(true);
-    expect(panel?.querySelector('#agent-catalog-list')?.childElementCount).toBe(0);
+    expect(panel?.hidden).toBe(false);
+    expect(panel?.textContent).toContain('Agent 尚未就绪');
+    expect(panel?.querySelector('#agent-catalog-list')?.childElementCount).toBe(1);
+    expect(panel?.querySelector('button')?.textContent).toBe('只读试用');
+  });
+
+  it('keeps write trials as drafts and requires actual matching tool evidence before reporting completion', async () => {
+    const calls: string[] = [];
+    const fetchImpl = vi.fn(async (request: RequestInfo | URL) => {
+      const url = String(request);
+      calls.push(url);
+      if (url.endsWith('/api/sim2real/agent/capabilities')) {
+        return jsonResponse({
+          runtime: 'dsh',
+          dsh: {
+            initialized: true,
+            capabilities: [
+              {
+                id: 'rdk_training_submit',
+                description: '提交受控训练任务',
+                readOnly: false,
+                bound: true,
+              },
+            ],
+          },
+        });
+      }
+      if (url.endsWith('/api/sim2real/dsh/chat')) {
+        return jsonResponse({ ok: true, text: '训练计划准备好了。', toolTrail: [] });
+      }
+      return jsonResponse({ ok: true });
+    });
+    const window = boot(fetchImpl);
+    await wait(20);
+    const row = window.document.querySelector('[data-capability-id="rdk_training_submit"]');
+    row?.querySelector<HTMLButtonElement>('button')?.click();
+    expect(calls.some((url) => url.endsWith('/api/sim2real/dsh/chat'))).toBe(false);
+    expect(calls.some((url) => url.includes('/agent/execute'))).toBe(false);
+    expect(window.document.querySelector<HTMLInputElement>('#agent-chat-input')?.value).toContain(
+      '本次只准备计划',
+    );
+    expect(row?.querySelector('.capability-result')?.getAttribute('data-state')).toBe('prepared');
+    window.document
+      .querySelector<HTMLFormElement>('#agent-chat-form')
+      ?.dispatchEvent(new window.Event('submit', { bubbles: true, cancelable: true }));
+    await wait(20);
+    expect(row?.querySelector('.capability-result')?.getAttribute('data-state')).toBe('unverified');
+    expect(row?.textContent).toContain('尚无该工具成功执行的证据');
   });
 
   it('lets the operator stop waiting for a slow request and explains the backend boundary', async () => {

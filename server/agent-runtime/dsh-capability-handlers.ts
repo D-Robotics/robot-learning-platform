@@ -936,6 +936,17 @@ export function createDshCapabilityHandlers(
 
     async rdk_training_submit(args: unknown, exec: ToolRunContext) {
       const input = argsRecord(args);
+      if (
+        input.demonstrationRunId !== undefined &&
+        (typeof input.demonstrationRunId !== 'string' ||
+          input.demonstrationRunId.trim().length > 200 ||
+          !/^[a-zA-Z0-9][a-zA-Z0-9._-]{0,199}$/.test(input.demonstrationRunId.trim()))
+      ) {
+        throw new CapabilityError('DSH_CAPABILITY_REJECTED', 'demonstrationRunId 必须是有效的示教 Run ID（最多 200 字符）。');
+      }
+      if (input.syntheticSmoke !== undefined && !(typeof input.syntheticSmoke === 'boolean')) {
+        throw new CapabilityError('DSH_CAPABILITY_REJECTED', 'syntheticSmoke 必须是布尔值。');
+      }
       const overview = await run(exec.signal).fetch('/api/sim2real/overview', { method: 'GET' });
       if (!overview.ok) fail(overview.status, overview.body, '工作区读取失败');
       const modelId = argString(input, 'modelId') || firstModelId(overview.body);
@@ -955,6 +966,10 @@ export function createDshCapabilityHandlers(
           : { maxIterations: argNumber(input, 'maxIterations') }),
         ...(typeof input.video === 'boolean' ? { video: input.video } : {}),
         ...(argText(input, 'runName', 80) ? { runName: argText(input, 'runName', 80) } : {}),
+        ...(argText(input, 'demonstrationRunId', 200)
+          ? { demonstrationRunId: argText(input, 'demonstrationRunId', 200) }
+          : {}),
+        ...(typeof input.syntheticSmoke === 'boolean' ? { syntheticSmoke: input.syntheticSmoke } : {}),
       };
       const idempotencyKey = dshIdempotencyKey('training');
       const result = await run(exec.signal).fetch('/api/sim2real/runs', {

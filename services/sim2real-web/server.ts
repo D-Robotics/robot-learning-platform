@@ -502,7 +502,7 @@ function microduckUnavailablePage(response: express.Response): void {
   response
     .status(503)
     .setHeader('Cache-Control', 'no-store')
-    .sendFile(path.join(PUBLIC_ROOT, 'microduck-unavailable.html'));
+    .sendFile('microduck-unavailable.html', { root: PUBLIC_ROOT });
 }
 
 async function proxyMicroduck(request: express.Request, response: express.Response): Promise<void> {
@@ -1332,7 +1332,7 @@ export function createSim2RealWebApp(): Express {
     if (surface.state === 'mounted') {
       const root = configuredMicroduckRoot();
       if (root) {
-        response.sendFile(path.join(root, 'index.html'));
+        response.sendFile('index.html', { root });
         return;
       }
       microduckUnavailablePage(response);
@@ -1386,7 +1386,9 @@ export function createSim2RealWebApp(): Express {
   });
   app.get('/originbot-sim/', (_request, response) => {
     response.setHeader('Cache-Control', 'no-cache');
-    response.sendFile(path.join(PUBLIC_ROOT, 'originbot-sim', 'index.html'));
+    // Scope dotfile checks to the public file, not hidden checkout ancestors
+    // such as `.codex/worktrees`. Keep the default denial for actual dotfiles.
+    response.sendFile('originbot-sim/index.html', { root: PUBLIC_ROOT });
   });
 
   // The browser cannot start a process on the user's computer. These two
@@ -1397,7 +1399,7 @@ export function createSim2RealWebApp(): Express {
     response
       .setHeader('Cache-Control', 'no-cache')
       .type('application/javascript')
-      .sendFile(path.join(SERVICE_ROOT, '..', '..', 'scripts', 'local-gpu-agent.mjs'));
+      .sendFile('local-gpu-agent.mjs', { root: path.join(SERVICE_ROOT, '..', '..', 'scripts') });
   });
   app.get('/agent/install.sh', (request, response) => {
     const forwardedProto = String(request.headers['x-forwarded-proto'] ?? '')

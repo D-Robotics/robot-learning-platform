@@ -21,6 +21,7 @@ import { resolveDataDir } from './standalone-adapters.js';
 export const REPLAY_VIDEO_MAX_FRAMES = 6000;
 const REPLAY_VIDEO_MAX_FRAMES_BYTES = 12 * 1024 * 1024;
 const REPLAY_VIDEO_MAX_INPUT_BYTES = 2 * 1024 * 1024 * 1024;
+const REPLAY_VIDEO_MAX_DURATION_SECONDS = 6 * 60 * 60;
 const FFMPEG_TIMEOUT_MS = 180_000;
 
 export type ReplayVideoPlan =
@@ -62,8 +63,9 @@ function ffmpegBinary(): string | null {
  * Extract the camera frames from replay samples and verify the whole run can
  * be rendered as one video: uniform geometry, uniform encoding, bounded frame
  * count. The board spools frames sparsely (one every stride), which the video
- * preserves by generating a constant frame-rate stream with `-vsync vfr`-style
- * timestamps taken from each frame's own `t`.
+ * preserves using a variable-frame-rate stream with recorded presentation
+ * timestamps. Times must be finite and strictly increasing; no frame is
+ * duplicated to fill an unobserved interval.
  */
 export function planReplayVideo(samples: readonly Sim2RealTelemetrySample[]): ReplayVideoPlan {
   const frames: {
@@ -83,6 +85,43 @@ export function planReplayVideo(samples: readonly Sim2RealTelemetrySample[]): Re
         ok: false,
         code: 'replay_video_frame_encoding',
         message: `相机帧编码 ${camera.encoding} 不支持视频导出。`,
+      };
+    }
+    if (
+      !Number.isFinite(sample.t) ||
+      sample.t < 0 ||
+      (frames.length && sample.t <= frames[frames.length - 1].t)
+    ) {
+      return {
+        ok: false,
+        code: 'replay_video_frame_time',
+        message: '相机帧时间必须有限且严格递增，拒绝伪造播放时间。',
+      };
+    }
+    const bytes = camera.width * camera.height * camera.channels;
+    if (
+      !Number.isSafeInteger(camera.width) ||
+      !Number.isSafeInteger(camera.height) ||
+      camera.width < 1 ||
+      camera.height < 1 ||
+      camera.channels !== (camera.encoding === 'mono8' ? 1 : 3) ||
+      bytes > REPLAY_VIDEO_MAX_FRAMES_BYTES
+    ) {
+      return {
+        ok: false,
+        code: 'replay_video_frame_geometry',
+        message: '相机帧几何或通道声明不合法，拒绝导出。',
+      };
+    }
+    if (
+      typeof camera.data !== 'string' ||
+      Buffer.byteLength(camera.data, 'base64') !== bytes ||
+      !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(camera.data)
+    ) {
+      return {
+        ok: false,
+        code: 'replay_video_frame_bytes',
+        message: '相机帧字节与声明几何不一致，拒绝导出。',
       };
     }
     const shape = { width: camera.width, height: camera.height, encoding: camera.encoding };
@@ -136,6 +175,13 @@ export function planReplayVideo(samples: readonly Sim2RealTelemetrySample[]): Re
   const first = frames[0].t;
   const last = frames[frames.length - 1].t;
   const duration = Math.max(0, last - first);
+  if (duration > REPLAY_VIDEO_MAX_DURATION_SECONDS) {
+    return {
+      ok: false,
+      code: 'replay_video_duration_limit',
+      message: '相机帧时间跨度超过视频导出上限。',
+    };
+  }
   const fps = Number.isFinite(duration) && duration > 0 ? frames.length / duration : 0;
   return {
     ok: true,
@@ -158,23 +204,40 @@ export type ReplayVideoResult =
     }
   | { ok: false; code: string; message: string };
 
-/** pixel format string for the declared encoding */
-function pixelFormat(encoding: string): string {
-  if (encoding === 'mono8') return 'gray';
-  return 'rgb24';
-}
-
 /**
- * Encode the plan's frames into an MP4 at `targetFile` by piping raw frames
- * into ffmpeg. bgr8 is converted by swapping channels in Node (ffmpeg only
- * takes rgb24), keeping the pipe protocol uniform. yuv420p requires even
- * dimensions, so an odd-width/height frame is padded on the right/bottom with
- * a 1-pixel black edge and the video keeps the frame's own aspect otherwise.
+ * A private ffconcat manifest gives each PPM/PGM frame its recorded duration.
+ * A microsecond image-demuxer timebase preserves irregular sampling, instead
+ * of rawvideo's implicit 25 fps. All names are generated here; no user path is
+ * interpreted by concat. Files and partial output are removed on every exit.
  */
 export async function renderReplayVideo(
   plan: Extract<ReplayVideoPlan, { ok: true }>,
   targetFile: string,
 ): Promise<ReplayVideoResult> {
+  const checked = planReplayVideo(
+    plan.frames.map(
+      (frame) =>
+        ({
+          t: frame.t,
+          cameraFrame: {
+            width: frame.width,
+            height: frame.height,
+            channels: frame.encoding === 'mono8' ? 1 : 3,
+            encoding: frame.encoding,
+            data: frame.data,
+          },
+        }) as Sim2RealTelemetrySample,
+    ),
+  );
+  if (!checked.ok) return checked;
+  if (checked.frames.some((frame, index) => frame.bytes !== plan.frames[index].bytes)) {
+    return {
+      ok: false,
+      code: 'replay_video_frame_bytes',
+      message: '相机帧字节与声明几何不一致，拒绝导出。',
+    };
+  }
+  plan = checked;
   const binary = ffmpegBinary();
   if (!binary) {
     return {
@@ -183,91 +246,119 @@ export async function renderReplayVideo(
       message: 'ffmpeg 不在 PATH 上（可设置 RDK_SIM2REAL_FFMPEG_PATH）；无视频可导出。',
     };
   }
-  // The first render for a storage root must create replay-video/ itself; the
-  // route hands us replayVideoPath() output without pre-creating the dir.
   await fs.mkdir(path.dirname(targetFile), { recursive: true });
-  const { width, height, encoding } = plan.geometry;
-  const videoWidth = width + (width % 2);
-  const videoHeight = height + (height % 2);
-  const args = [
-    '-f',
-    'rawvideo',
-    '-pixel_format',
-    pixelFormat(encoding),
-    '-video_size',
-    `${width}x${height}`,
-    '-i',
-    'pipe:0',
-    '-vf',
-    `pad=${videoWidth}:${videoHeight}:0:0:black`,
-    '-c:v',
-    'libx264',
-    '-preset',
-    'veryfast',
-    '-pix_fmt',
-    'yuv420p',
-    '-movflags',
-    '+faststart',
-    '-y',
-    targetFile,
-  ];
-  const child = spawn(binary, args, { stdio: ['pipe', 'ignore', 'pipe'] });
-  const stderrChunks: Buffer[] = [];
-  let stderrBytes = 0;
-  child.stderr.on('data', (chunk: Buffer) => {
-    if (stderrBytes < 64 * 1024) {
-      stderrChunks.push(chunk);
-      stderrBytes += chunk.length;
-    }
-  });
-  const timer = setTimeout(() => child.kill('SIGTERM'), FFMPEG_TIMEOUT_MS);
-  const closed = new Promise<{ code: number | null; signal: string | null }>((resolve) => {
-    child.once('exit', (code, signal) => resolve({ code, signal }));
-  });
+  const scratch = await fs.mkdtemp(
+    path.join(path.dirname(path.resolve(targetFile)), '.replay-frames-'),
+  );
   try {
-    for (const frame of plan.frames) {
+    const { width, height, encoding } = plan.geometry;
+    const videoWidth = width + (width % 2);
+    const videoHeight = height + (height % 2);
+    const manifest = ['ffconcat version 1.0'];
+    for (const [index, frame] of plan.frames.entries()) {
+      const name = `frame-${String(index).padStart(6, '0')}.${encoding === 'mono8' ? 'pgm' : 'ppm'}`;
       const raw = Buffer.from(frame.data, 'base64');
-      if (raw.length !== frame.bytes) {
-        return {
-          ok: false,
-          code: 'replay_video_frame_bytes',
-          message: '相机帧字节与声明几何不一致，拒绝导出。',
-        };
-      }
-      const pixels = encoding === 'bgr8' ? swapBgr(raw) : raw;
-      if (!child.stdin.write(pixels)) {
-        await new Promise<void>((resolve) => child.stdin.once('drain', resolve));
-      }
+      const header = Buffer.from(
+        `${encoding === 'mono8' ? 'P5' : 'P6'}\n${width} ${height}\n255\n`,
+      );
+      await fs.writeFile(
+        path.join(scratch, name),
+        Buffer.concat([header, encoding === 'bgr8' ? swapBgr(raw) : raw]),
+      );
+      manifest.push(`file '${name}'`, 'option framerate 1000000');
+      if (index + 1 < plan.frames.length)
+        manifest.push(`duration ${(plan.frames[index + 1].t - frame.t).toFixed(6)}`);
     }
-    child.stdin.end();
-  } catch {
-    child.kill('SIGTERM');
-    return { ok: false, code: 'replay_video_pipe_failed', message: '向 ffmpeg 写入原始帧失败。' };
-  }
-  const { code, signal } = await closed;
-  clearTimeout(timer);
-  if (code !== 0 || signal) {
-    await fs.rm(targetFile, { force: true }).catch(() => undefined);
-    const tail = Buffer.concat(stderrChunks).toString('utf8').split('\n').slice(-8).join('\n');
+    await fs.writeFile(path.join(scratch, 'frames.ffconcat'), manifest.join('\n') + '\n');
+    const output = path.join(scratch, 'output.mp4');
+    const args = [
+      '-f',
+      'concat',
+      '-safe',
+      '0',
+      '-i',
+      'frames.ffconcat',
+      '-vf',
+      `pad=${videoWidth}:${videoHeight}:0:0:black`,
+      '-c:v',
+      'libx264',
+      '-fps_mode',
+      'vfr',
+      '-enc_time_base',
+      '1:1000000',
+      '-video_track_timescale',
+      '1000000',
+      '-preset',
+      'veryfast',
+      '-pix_fmt',
+      'yuv420p',
+      '-movflags',
+      '+faststart',
+      '-y',
+      output,
+    ];
+    const child = spawn(binary, args, { cwd: scratch, stdio: ['ignore', 'ignore', 'pipe'] });
+    const stderrChunks: Buffer[] = [];
+    let stderrBytes = 0;
+    child.stderr.on('data', (chunk: Buffer) => {
+      if (stderrBytes < 64 * 1024) {
+        stderrChunks.push(chunk);
+        stderrBytes += chunk.length;
+      }
+    });
+    let timedOut = false;
+    let forcedKill: ReturnType<typeof setTimeout> | undefined;
+    const timer = setTimeout(() => {
+      timedOut = true;
+      child.kill('SIGTERM');
+      forcedKill = setTimeout(() => child.kill('SIGKILL'), 1000);
+    }, FFMPEG_TIMEOUT_MS);
+    const closed = new Promise<{ code: number | null; signal: string | null; error?: string }>(
+      (resolve) => {
+        child.once('close', (code, signal) => resolve({ code, signal }));
+        child.once('error', (error) => resolve({ code: null, signal: null, error: error.message }));
+      },
+    );
+    const { code, signal, error } = await closed;
+    clearTimeout(timer);
+    clearTimeout(forcedKill);
+    if (timedOut)
+      return {
+        ok: false,
+        code: 'replay_video_timeout',
+        message: 'ffmpeg 视频导出超时，已终止编码。',
+      };
+    if (code !== 0 || signal) {
+      const tail = Buffer.concat(stderrChunks).toString('utf8').split('\n').slice(-8).join('\n');
+      return {
+        ok: false,
+        code: 'replay_video_encode_failed',
+        message: `ffmpeg 编码失败${signal ? `（${signal}）` : ''}。${error || tail}`,
+      };
+    }
+    const bytes = await fs.readFile(output);
+    if (!bytes.length) {
+      return { ok: false, code: 'replay_video_empty', message: 'ffmpeg 产生了空视频文件。' };
+    }
+    if (bytes.length > REPLAY_VIDEO_MAX_FRAMES_BYTES)
+      return {
+        ok: false,
+        code: 'replay_video_too_large',
+        message: '视频超过可提供下载的字节上限。',
+      };
+    await fs.rename(output, targetFile);
     return {
-      ok: false,
-      code: 'replay_video_encode_failed',
-      message: `ffmpeg 编码失败${signal ? `（${signal}）` : ''}。${tail}`,
+      ok: true,
+      file: targetFile,
+      sha256: createHash('sha256').update(bytes).digest('hex'),
+      sizeBytes: bytes.length,
+      frameCount: plan.frames.length,
+      fps: plan.fps,
+      durationSeconds: plan.durationSeconds,
     };
+  } finally {
+    await fs.rm(scratch, { recursive: true, force: true });
   }
-  const bytes = await fs.readFile(targetFile);
-  if (!bytes.length) {
-    return { ok: false, code: 'replay_video_empty', message: 'ffmpeg 产生了空视频文件。' };
-  }
-  return {
-    ok: true,
-    file: targetFile,
-    sha256: createHash('sha256').update(bytes).digest('hex'),
-    sizeBytes: bytes.length,
-    frameCount: plan.frames.length,
-    fps: plan.fps,
-    durationSeconds: plan.durationSeconds,
-  };
 }
 
 /** rgb24 from bgr24 raw bytes (channel swap in triples). */

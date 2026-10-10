@@ -42,9 +42,10 @@ revision, imported versions, lock digest) asserted by
 `npm run verify:training-provenance`.
 
 File protocol (engine mode): with RDK_SIM2REAL_REQUEST_FILE and
-RDK_SIM2REAL_RESULT_FILE set, runs a smoke round on a deterministic
-SYNTHETIC episode dataset sized by the request's contract. The synthetic
-source is labeled in the result — the training is real, the data is not.
+RDK_SIM2REAL_RESULT_FILE set, consumes the worker's digest-pinned
+demonstrations.jsonl and emits model.json, verified policy.onnx and
+SHA256SUMS. A deterministic synthetic dataset is available only when
+training.syntheticSmoke=true with profile=smoke, and is labeled in the result.
 
 Output model format `rdk-act-bc-v1` (JSON): architecture, normalization
 constants, every weight as lists (the JSON IS the model — `rebuild_model`
@@ -55,6 +56,7 @@ provenance blocks.
 import argparse
 import base64
 import binascii
+import hashlib
 import json
 import math
 import os
@@ -63,6 +65,9 @@ import sys
 import time
 
 import numpy as np
+
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
+from imitation_input import load_engine_demonstrations
 
 try:
     import torch
@@ -1457,7 +1462,7 @@ def synthetic_episodes(obs_size, act_size, episodes, steps, seed=0):
 
 
 def run_engine_mode():
-    """File-protocol smoke round for the provenance gate."""
+    """File-protocol training on pinned recordings or explicit smoke data."""
     request = json.loads(pathlib.Path(os.environ["RDK_SIM2REAL_REQUEST_FILE"]).read_text())
     if request.get("schemaVersion") != 1:
         raise ValueError("unsupported request schemaVersion %r" % request.get("schemaVersion"))
@@ -1469,7 +1474,9 @@ def run_engine_mode():
     training = request.get("training") or {}
     epochs = max(1, int(training.get("maxIterations", 3)))
 
-    episodes = synthetic_episodes(obs_size, act_size, episodes=8, steps=48, seed=0)
+    episodes, dataset_source = load_engine_demonstrations(
+        request, load_dataset, synthetic_episodes, obs_size, act_size
+    )
     payload, report, model, normalization = fit(
         episodes, chunk=4, d_model=32, heads=4, enc_layers=2, dec_layers=2,
         z_dim=4, token_width=8, kl_weight=10.0, epochs=epochs, lr=1e-3,
@@ -1478,6 +1485,8 @@ def run_engine_mode():
     x_rows = np.concatenate([ep[0] for ep in episodes], axis=0)
     model_path = pathlib.Path("model.json")
     onnx_report = export_onnx(model, normalization, "policy.onnx", x_rows)
+    if not onnx_report.get("exported") or onnx_report.get("equivalence") != "verified":
+        raise RuntimeError("engine mode requires a VERIFIED onnx export; install onnx and onnxruntime")
     # The differentiating artifacts: window-ensembled ONNX + measured edge
     # evidence. Both are labeled honestly when their toolchain is absent.
     window_rows = int(max(1, EQUIVALENCE_ROWS // model.chunk))
@@ -1507,22 +1516,41 @@ def run_engine_mode():
             "actionSize": act_size,
         },
         "dataset": {
-            "source": "synthetic-smoke",
-            "synthetic": True,
+            **dataset_source,
             "episodes": len(episodes),
             "rows": int(x_rows.shape[0]),
         },
         "metrics": report,
         "artifact": {
-            "format": MODEL_FORMAT,
-            "path": model_path.name,
-            "sizeBytes": model_path.stat().st_size,
+            "artifactId": "act-" + hashlib.sha256(pathlib.Path("policy.onnx").read_bytes()).hexdigest()[:16],
+            "kind": "source",
+            "artifactRef": "artifact://policy.onnx",
+            "format": "onnx",
+            "path": "policy.onnx",
+            "sha256": hashlib.sha256(pathlib.Path("policy.onnx").read_bytes()).hexdigest(),
+            "sizeBytes": pathlib.Path("policy.onnx").stat().st_size,
             "onnxExported": bool(onnx_report and onnx_report.get("exported")),
             "ensembledOnnxExported": bool(
                 ensembled_report and ensembled_report.get("exported")
             ),
         },
+        "artifactRef": "artifact://policy.onnx",
+        "cuda": False,
+        "deployable": False,
     }
+    result["metrics"].update({"contractValid": True, "observationSize": obs_size, "actionSize": act_size,
+                              "engine": ENGINE_NAME, "iterations": epochs,
+                              "validationChunkMse": report["validation"]["chunkMse"],
+                              "demonstrationSourceRunId": dataset_source.get("sourceRunId"),
+                              "demonstrationSha256": dataset_source.get("sha256"),
+                              "syntheticData": dataset_source["synthetic"]})
+    artifact_files = [model_path, pathlib.Path("policy.onnx")]
+    if pathlib.Path("policy-ensembled.onnx").is_file():
+        artifact_files.append(pathlib.Path("policy-ensembled.onnx"))
+    pathlib.Path("SHA256SUMS").write_text("".join(
+        hashlib.sha256(file.read_bytes()).hexdigest() + "  " + file.name + "\n"
+        for file in artifact_files
+    ))
     used = {"numpy", "torch"}
     if onnx_report is not None:
         if onnx_report.get("equivalence") == "verified":

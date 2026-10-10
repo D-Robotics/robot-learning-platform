@@ -20,7 +20,7 @@
          theme x view screenshots). See services/sim2real-web/ui-layout-invariants.mjs
          for the guards that keep new overrides from re-introducing layering. -->
     <link rel="stylesheet" href="./tokens.css?v=3" />
-    <link rel="stylesheet" href="./app.css?v=51" />
+    <link rel="stylesheet" href="./app.css?v=52" />
   </head>
   <body>
     <a class="skip-link" href="#main-content">跳到主要内容</a>
@@ -941,6 +941,14 @@
                     </select
                     >
                     </div>
+                    <div class="training-field-group" id="training-demonstrations" hidden role="group" aria-labelledby="training-group-demonstrations">
+                      <div class="training-group-title" id="training-group-demonstrations">示教轨迹</div>
+                      <label class="field-label" for="training-demonstration-run">原始示教 Run</label>
+                      <select id="training-demonstration-run" aria-describedby="training-demonstration-help"><option value="">请选择已保存的示教 Run</option></select>
+                      <p class="small-note" id="training-demonstration-help">录制或导入遥测后，在评测页保存为独立示教 Run。至少 8 个完整回合，每回合 ≥4 帧且包含 observation、action 和 done；最多 512 KiB / 20000 帧。模型契约与项目必须一致；工作台暂支持向量示教，需要服务端训练 worker，本机浏览器 relay 暂不支持。</p>
+                      <label class="field-label"><input id="training-synthetic-smoke" type="checkbox">仅合成冒烟（只允许冒烟档位，不使用示教数据）</label>
+                      <button class="button button-ghost button-small" type="button" data-view-target="evaluate" data-flow-child="evaluation-run">去录制或导入示教 →</button>
+                    </div>
                     <div class="training-field-group" role="group" aria-labelledby="training-group-resume">
                       <div class="training-group-title" id="training-group-resume">续训（可选）</div>
                       <label class="field-label" for="resume-checkpoint-id"
@@ -1096,6 +1104,7 @@
                     <b id="eval-real-label">—</b>
                   </div>
                 </div>
+                <p class="small-note" id="eval-comparison-note">需要同一策略与任务的仿真和受信板端 Run。</p>
                 <div class="compare-note">
                   <span class="compare-dot compare-dot-sim" aria-hidden="true"></span> 浏览器 / 离线 MuJoCo
                   <span class="compare-dot compare-dot-real" aria-hidden="true"></span> 板端 Agent
@@ -1175,7 +1184,12 @@
                 <div class="empty-inline">完成一次训练或评测后，这里会显示可比较的指标。</div>
               </div>
             </article>
-            <details class="panel telemetry-panel workspace-inspector" aria-labelledby="telemetry-title">
+
+            </div>
+            <section class="panel run-inspector-panel" aria-label="逐帧诊断与同步对照">
+              <rdk-run-inspector id="run-inspector"></rdk-run-inspector>
+            </section>
+            <details class="panel telemetry-panel workspace-inspector" aria-labelledby="telemetry-title" open>
               <summary class="panel-heading panel-heading-lean workspace-inspector-summary"><span><small>Inspector</small><h2 id="telemetry-title">遥测回放与证据</h2></span>
                 <span class="state-badge state-neutral" id="telemetry-state">尚未导入</span>
                 <span class="workspace-inspector-toggle">展开 <i aria-hidden="true">⌄</i></span>
@@ -1314,7 +1328,7 @@
                 <div class="telemetry-heatmap-legend">
                   <i class="heatmap-scale"></i>
                   <span id="telemetry-heatmap-range">—</span>
-                  <span class="small-note">按维度均值归一化的逐帧值（蓝 → 白 → 红）</span>
+                  <span class="small-note">按全图最大绝对值缩放（蓝 → 白 → 红）；语义曲线见上方诊断</span>
                 </div>
                 <div class="telemetry-chart-block" id="telemetry-episodes-block" hidden>
                   <div class="telemetry-chart-heading">
@@ -1338,7 +1352,7 @@
                   id="telemetry-publish-button"
                   disabled
                 >
-                  上传到当前 Run 并评测
+                  保存为独立示教 Run 并评测
                 </button>
                 <button
                   class="button button-ghost button-small"
@@ -1353,7 +1367,6 @@
                 >
               </div>
             </details>
-            </div>
             <div class="evaluation-next">
               <span class="next-line" id="evaluation-next-line"></span>
               <strong id="evaluation-next-title">下一步：通过评测后生成 X5 预检计划</strong>
@@ -2165,10 +2178,13 @@
       downloads start in parallel during HTML parse instead of serially
       blocking the parser at body end.
     -->
-    <script defer src="./telemetry-core.js?v=duck-lab-30"></script>
-    <script defer src="./app.js?v=duck-lab-57"></script>
+    <script defer src="./telemetry-core.js?v=duck-lab-32"></script>
+    <script defer src="./run-inspector-core.js?v=2"></script>
+    <script defer src="./run-inspector.js?v=3"></script>
+    <script defer src="./app.js?v=duck-lab-63"></script>
     <script defer src="./visualization-enhancements.js?v=viz-1"></script>
-    <script defer src="./agent-chat.js?v=agent-17"></script>
-    <script defer src="./onboarding.js?v=onboarding-6"></script>
+    <script defer src="./capability-workbench.js?v=1"></script>
+    <script defer src="./agent-chat.js?v=agent-18"></script>
+    <script defer src="./onboarding.js?v=onboarding-7"></script>
   </body>
 </html>

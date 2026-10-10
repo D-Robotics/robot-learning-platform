@@ -625,7 +625,7 @@ class EngineModeTest(unittest.TestCase):
                     "actionSize": 3,
                 },
                 "model": {"modelId": "dp-smoke", "version": "0.1.0"},
-                "training": {"profile": "smoke", "maxIterations": 3},
+                "training": {"profile": "smoke", "maxIterations": 3, "syntheticSmoke": True},
             }
             request_path = os.path.join(workdir, "request.json")
             result_path = os.path.join(workdir, "result.json")
@@ -711,7 +711,7 @@ class EngineModeTest(unittest.TestCase):
             request = {
                 "schemaVersion": 1,
                 "contract": {"id": "dp-x", "observationSize": 4, "actionSize": 2},
-                "training": {"profile": "smoke", "maxIterations": 1},
+                "training": {"profile": "smoke", "maxIterations": 1, "syntheticSmoke": True},
             }
             request_path = os.path.join(workdir, "request.json")
             result_path = os.path.join(workdir, "result.json")
