@@ -1713,6 +1713,59 @@ describe('station camera evidence and cancellation', () => {
     expect(image.alt).toContain('不是真机');
   });
 
+  it.each(['load', 'poll'] as const)(
+    'clears a confirmed stream that subsequently ends without decoded pixels (%s)',
+    async (signal) => {
+      const { window } = await boot({ stationHealth: health(), devices });
+      await openStation(window);
+      window.document.querySelector<HTMLButtonElement>('#station-camera-toggle')!.click();
+      const image = window.document.querySelector<HTMLImageElement>('#station-camera-img')!;
+      decoded(image);
+      image.dispatchEvent(new window.Event('load'));
+      expect(window.document.querySelector('#station-camera-state')?.textContent).toContain(
+        '已连接',
+      );
+      Object.defineProperties(image, {
+        naturalWidth: { configurable: true, value: 0 },
+        naturalHeight: { configurable: true, value: 0 },
+        complete: { configurable: true, value: true },
+      });
+      if (signal === 'load') image.dispatchEvent(new window.Event('load'));
+      else await new Promise((resolve) => setTimeout(resolve, 280));
+      expect(window.document.querySelector('#station-camera-state')?.textContent).toContain('中断');
+      expect(image.hidden).toBe(true);
+      expect(image.hasAttribute('src')).toBe(false);
+      expect(window.document.querySelector('#station-camera-toggle')?.textContent).toBe(
+        '开启相机流',
+      );
+    },
+  );
+
+  it('keeps a confirmed stream during an unfinished decode and ignores an old ended stream', async () => {
+    const { window } = await boot({ stationHealth: health(), devices });
+    await openStation(window);
+    const toggle = window.document.querySelector<HTMLButtonElement>('#station-camera-toggle')!;
+    toggle.click();
+    const image = window.document.querySelector<HTMLImageElement>('#station-camera-img')!;
+    decoded(image);
+    image.dispatchEvent(new window.Event('load'));
+    Object.defineProperties(image, {
+      naturalWidth: { configurable: true, value: 0 },
+      naturalHeight: { configurable: true, value: 0 },
+      complete: { configurable: true, value: false },
+    });
+    await new Promise((resolve) => setTimeout(resolve, 280));
+    expect(window.document.querySelector('#station-camera-state')?.textContent).toContain('已连接');
+    toggle.click();
+    toggle.click();
+    Object.defineProperty(image, 'complete', { configurable: true, value: true });
+    image.dispatchEvent(new window.Event('load'));
+    expect(window.document.querySelector('#station-camera-state')?.textContent).toContain(
+      '等待首帧',
+    );
+    expect(window.document.querySelector('#station-camera-img')).not.toBe(image);
+  });
+
   it('times out an unconfirmed frame and makes a late decode harmless', async () => {
     const { window, cameraTimeout } = await boot({
       stationHealth: health(),

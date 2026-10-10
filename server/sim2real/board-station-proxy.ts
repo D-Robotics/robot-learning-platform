@@ -75,6 +75,8 @@ export interface StationAgentFetchOptions {
    * the SSRF boundary cannot move through this option.
    */
   baseUrl?: string;
+  /** Cancellation of the owning Studio bridge stream. */
+  signal?: AbortSignal;
 }
 
 /**
@@ -395,7 +397,9 @@ async function studioBridgeAgentJson(
           origin: requestOrigin,
         },
         body: JSON.stringify({ command }),
-        signal: controller.signal,
+        signal: options.signal
+          ? AbortSignal.any([controller.signal, options.signal])
+          : controller.signal,
         redirect: 'error',
       },
     );
@@ -425,7 +429,7 @@ async function studioBridgeAgentJson(
 }
 
 async function studioBridgeAgentSnapshot(
-  options: { cookieHeader?: string; deviceId?: string },
+  options: { cookieHeader?: string; deviceId?: string; signal?: AbortSignal },
   token: string,
   timeoutMs: number,
 ): Promise<Uint8Array | null> {
@@ -448,7 +452,9 @@ async function studioBridgeAgentSnapshot(
           origin: requestOrigin,
         },
         body: JSON.stringify({ command: studioBridgeSnapshotCommand(token, config.agentPort) }),
-        signal: controller.signal,
+        signal: options.signal
+          ? AbortSignal.any([controller.signal, options.signal])
+          : controller.signal,
         redirect: 'error',
       },
     );
@@ -543,6 +549,17 @@ export async function stationAgentFetchStream(
   ) {
     let closed = false;
     let timer: ReturnType<typeof setTimeout> | undefined;
+    let resumeDelay: (() => void) | undefined;
+    const fetchController = new AbortController();
+    const stop = () => {
+      closed = true;
+      fetchController.abort();
+      if (timer) clearTimeout(timer);
+      timer = undefined;
+      const resume = resumeDelay;
+      resumeDelay = undefined;
+      resume?.();
+    };
     const encoder = new TextEncoder();
     const stream = new ReadableStream<Uint8Array>({
       async start(controller) {
@@ -553,24 +570,25 @@ export async function stationAgentFetchStream(
               timeoutMs,
               cookieHeader: bridgeCookie,
               deviceId: options.deviceId,
+              signal: fetchController.signal,
             });
-            if (!payload) break;
+            if (!payload || closed) break;
             controller.enqueue(encoder.encode(`${JSON.stringify(payload)}\n`));
             await new Promise<void>((resolve) => {
+              resumeDelay = resolve;
               timer = setTimeout(resolve, 1000);
             });
+            resumeDelay = undefined;
+            timer = undefined;
           }
           if (!closed) controller.close();
         } catch (error) {
           if (!closed) controller.error(error);
         } finally {
-          if (timer) clearTimeout(timer);
+          stop();
         }
       },
-      cancel() {
-        closed = true;
-        if (timer) clearTimeout(timer);
-      },
+      cancel: stop,
     });
     return stream;
   }
@@ -583,6 +601,17 @@ export async function stationAgentFetchStream(
   ) {
     let closed = false;
     let timer: ReturnType<typeof setTimeout> | undefined;
+    let resumeDelay: (() => void) | undefined;
+    const fetchController = new AbortController();
+    const stop = () => {
+      closed = true;
+      fetchController.abort();
+      if (timer) clearTimeout(timer);
+      timer = undefined;
+      const resume = resumeDelay;
+      resumeDelay = undefined;
+      resume?.();
+    };
     const boundary = 'rdk-board-station-frame';
     const encoder = new TextEncoder();
     const stream = new ReadableStream<Uint8Array>({
@@ -591,11 +620,11 @@ export async function stationAgentFetchStream(
         try {
           while (!closed && Date.now() < deadline) {
             const frame = await studioBridgeAgentSnapshot(
-              { ...options, cookieHeader: bridgeCookie },
+              { ...options, cookieHeader: bridgeCookie, signal: fetchController.signal },
               token,
               timeoutMs,
             );
-            if (!frame) break;
+            if (!frame || closed) break;
             const header = encoder.encode(
               `--${boundary}\r\ncontent-type: image/jpeg\r\ncontent-length: ${frame.byteLength}\r\n\r\n`,
             );
@@ -603,20 +632,20 @@ export async function stationAgentFetchStream(
             controller.enqueue(frame);
             controller.enqueue(encoder.encode('\r\n'));
             await new Promise<void>((resolve) => {
+              resumeDelay = resolve;
               timer = setTimeout(resolve, 500);
             });
+            resumeDelay = undefined;
+            timer = undefined;
           }
           if (!closed) controller.close();
         } catch (error) {
           if (!closed) controller.error(error);
         } finally {
-          if (timer) clearTimeout(timer);
+          stop();
         }
       },
-      cancel() {
-        closed = true;
-        if (timer) clearTimeout(timer);
-      },
+      cancel: stop,
     });
     return stream;
   }

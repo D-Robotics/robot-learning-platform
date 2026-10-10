@@ -10458,7 +10458,6 @@ function stationSetCamera(enabled, { silent = false } = {}) {
     if (!current() || session.confirmed || img.naturalWidth <= 0 || img.naturalHeight <= 0) return false;
     session.confirmed = true;
     clearTimeout(session.timeout);
-    clearTimeout(session.poll);
     img.hidden = false;
     if (placeholder) placeholder.hidden = true;
     if (cameraState) cameraState.textContent = session.mock
@@ -10473,9 +10472,21 @@ function stationSetCamera(enabled, { silent = false } = {}) {
       if (state.station.cameraSession === session) stationSetCamera(false, { silent: true });
       return;
     }
-    if (!firstFrame() && !session.confirmed) session.poll = setTimeout(poll, 250);
+    if (session.confirmed && img.complete && (img.naturalWidth <= 0 || img.naturalHeight <= 0)) {
+      failed('相机流已中断；请重新开启相机流。');
+      return;
+    }
+    firstFrame();
+    session.poll = setTimeout(poll, 250);
   };
-  session.onLoad = firstFrame;
+  session.onLoad = () => {
+    if (!current()) return;
+    if (session.confirmed && (img.naturalWidth <= 0 || img.naturalHeight <= 0)) {
+      failed('相机流已中断；请重新开启相机流。');
+      return;
+    }
+    firstFrame();
+  };
   session.onError = () => failed('相机流不可用或已中断；请检查设备、权限和相机。');
   img.addEventListener('load', session.onLoad);
   img.addEventListener('error', session.onError);
@@ -10486,7 +10497,8 @@ function stationSetCamera(enabled, { silent = false } = {}) {
   session.timeout = setTimeout(() => failed('相机首帧等待超时（10 秒），未确认连接。'), 10000);
   // Continuous MJPEG does not dispatch load consistently across browsers.
   // Intrinsic dimensions become available after a JPEG frame is decoded;
-  // the bounded poll confirms that evidence without trusting HTTP status.
+  // Poll decoded dimensions throughout the session: a cleanly ended MJPEG
+  // response may reset them to zero without dispatching an error event.
   session.poll = setTimeout(poll, 250);
   const source = apiPath('/sim2real/board-station/camera.mjpeg');
   img.src = source + (session.deviceId ? '?deviceId=' + encodeURIComponent(session.deviceId) : '');
