@@ -268,6 +268,61 @@ function studioBridgeConfig(): { origin: string; deviceId: string; agentPort: nu
   return { origin, deviceId, agentPort };
 }
 
+// Minimal boards may have Python but no curl. Read the whole bounded response
+// before writing stdout so a transport error cannot become a partial frame.
+const STUDIO_BRIDGE_PYTHON_REQUEST = `import base64,json,signal,sys,urllib.error,urllib.request
+class NoRedirect(urllib.request.HTTPRedirectHandler):
+ def redirect_request(self,req,fp,code,msg,headers,newurl):
+  raise ValueError("redirect refused")
+try:
+ config=json.loads(sys.argv[1])
+ signal.alarm(12)
+ headers={"Accept":"image/jpeg" if config["snapshot"] else "application/json"}
+ if config["token"]: headers["Authorization"]="Bearer "+config["token"]
+ data=config["body"].encode("utf-8") if config["body"] is not None else None
+ if data is not None: headers["Content-Type"]="application/json"
+ request=urllib.request.Request(config["url"],data=data,headers=headers,method=config["method"])
+ opener=urllib.request.build_opener(urllib.request.ProxyHandler({}),NoRedirect())
+ try:
+  response=opener.open(request,timeout=12)
+ except urllib.error.HTTPError as error:
+  if config["snapshot"]: raise
+  response=error
+ with response:
+  length=response.headers.get("Content-Length")
+  if length is not None and (int(length)<0 or int(length)>config["maxBytes"]): raise ValueError("response size")
+  payload=response.read(config["maxBytes"]+1)
+ if not payload or len(payload)>config["maxBytes"]: raise ValueError("response size")
+ if config["snapshot"]:
+  if len(payload)<4 or payload[:2]!=bytes([255,216]) or payload[-2:]!=bytes([255,217]): raise ValueError("invalid JPEG")
+  sys.stdout.buffer.write(base64.b64encode(payload))
+ else:
+  if not isinstance(json.loads(payload),dict): raise ValueError("invalid JSON")
+  sys.stdout.buffer.write(payload)
+except Exception:
+ sys.stderr.write("board agent request failed\\n")
+ sys.exit(1)
+finally:
+ signal.alarm(0)`;
+
+function studioBridgePythonCommand(
+  pathname: string,
+  options: StationAgentFetchOptions,
+  token: string,
+  agentPort: number,
+  snapshot = false,
+): string {
+  const config = JSON.stringify({
+    url: `http://127.0.0.1:${agentPort}${pathname}`,
+    method: options.method ?? 'GET',
+    body: options.body ?? null,
+    token,
+    snapshot,
+    maxBytes: snapshot ? MAX_STATION_SNAPSHOT_BYTES : MAX_STATION_JSON_BYTES,
+  });
+  return `python3 -c ${shellQuote(STUDIO_BRIDGE_PYTHON_REQUEST)} ${shellQuote(config)}`;
+}
+
 function studioBridgeCommand(
   pathname: string,
   options: StationAgentFetchOptions,
@@ -293,14 +348,24 @@ function studioBridgeCommand(
   // Do not use curl --fail: a 409 from BoardAgent is a deliberate safety
   // refusal (for example, drive/policy switches are off) and its JSON body
   // must reach the browser intact.
-  return `curl --silent --show-error --max-time 12 -X ${shellQuote(method)}${auth} -H ${shellQuote('Accept: application/json')}${body} ${shellQuote(`http://127.0.0.1:${agentPort}${pathname}`)}`;
+  const curl = `curl --silent --show-error --max-time 12 -X ${shellQuote(method)}${auth} -H ${shellQuote('Accept: application/json')}${body} ${shellQuote(`http://127.0.0.1:${agentPort}${pathname}`)}`;
+  const python = studioBridgePythonCommand(pathname, options, token, agentPort);
+  return `if command -v curl >/dev/null 2>&1; then ${curl}; else ${python}; fi`;
 }
 
 function studioBridgeSnapshotCommand(token: string, agentPort: number): string {
   const auth = token ? ` -H ${shellQuote(`Authorization: Bearer ${token}`)}` : '';
   // Exec is JSON, so carry one bounded JPEG as base64. The bridge stream
   // adapter below turns successive snapshots back into multipart MJPEG.
-  return `curl --silent --show-error --max-time 12${auth} ${shellQuote(`http://127.0.0.1:${agentPort}/v1/station/camera.snapshot`)} | base64 | tr -d '\\n'`;
+  const curl = `curl --silent --show-error --max-time 12${auth} ${shellQuote(`http://127.0.0.1:${agentPort}/v1/station/camera.snapshot`)} | base64 | tr -d '\\n'`;
+  const python = studioBridgePythonCommand(
+    '/v1/station/camera.snapshot',
+    {},
+    token,
+    agentPort,
+    true,
+  );
+  return `if command -v curl >/dev/null 2>&1; then ${curl}; else ${python}; fi`;
 }
 
 async function studioBridgeAgentJson(
