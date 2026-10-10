@@ -111,6 +111,8 @@
 
   function releaseSession() {
     pageUnloading = true;
+    policySession?.controller.abort();
+    policySession = null;
     const id = sessionId;
     if (!id) return;
     sessionId = null;
@@ -495,7 +497,7 @@
     loopBusy = true;
     try {
       let state = await api(`sessions/${sessionId}/state`);
-      if (running) {
+      if (running && !policySession) {
         const previousState = state;
         const command = computeCommand(state);
         state = await api(`sessions/${sessionId}/cmd_vel`, {
@@ -617,38 +619,46 @@
       postPolicyStatus('failed', 'MuJoCo 会话不可用。');
       return;
     }
-    policySession = {
+    const trial = policySession = {
       runId,
       apiRoot,
       backend,
       maxSteps: finite(options.maxSteps, 600),
       steps: 0,
       session: null,
+      simulationId: sessionId,
+      controller: new AbortController(),
     };
     setEvent(`策略试跑开始：${backend === 'board' ? '板端推理' : `run ${runId.slice(0, 8)}`}（最多 ${policySession.maxSteps} 步）。`, 'ok');
     if (backend === 'board') {
       postPolicyStatus('running', '板端推理模式：物理由本仿真器计算，动作逐 tick 请求板端已加载模型。');
-      runPolicyStep();
+      runPolicyStep(trial);
       return;
     }
     postPolicyStatus('loading', '正在加载浏览器 ONNX 运行时…');
     try {
       const ort = await loadOrt();
+      if (!currentPolicyTrial(trial)) return;
       const response = await fetch(
         `${apiRoot.replace(/\/+$/, '')}/runs/${encodeURIComponent(runId)}/policy.onnx`,
-        { credentials: 'same-origin', cache: 'no-store', headers: { accept: 'application/octet-stream' } },
+        { credentials: 'same-origin', cache: 'no-store', signal: trial.controller.signal, headers: { accept: 'application/octet-stream' } },
       );
+      if (!currentPolicyTrial(trial)) return;
       if (!response.ok) throw new Error(`策略字节获取失败（HTTP ${response.status}）`);
       const bytes = await response.arrayBuffer();
+      if (!currentPolicyTrial(trial)) return;
       if (!bytes.byteLength) throw new Error('策略字节为空');
       postPolicyStatus('loading', '正在编译 ONNX 模型（首次约数秒）…');
-      policySession.session = await ort.InferenceSession.create(bytes, {
+      const compiled = await ort.InferenceSession.create(bytes, {
         executionProviders: ['wasm'],
         graphOptimizationLevel: 'all',
       });
-      postPolicyStatus('running', `模型已编译，开始推理（${policySession.maxSteps} 步上限）。`);
-      runPolicyStep();
+      if (!currentPolicyTrial(trial)) { await compiled.release?.(); return; }
+      trial.session = compiled;
+      postPolicyStatus('running', `模型已编译，开始推理（${trial.maxSteps} 步上限）。`);
+      runPolicyStep(trial);
     } catch (error) {
+      if (!currentPolicyTrial(trial)) return;
       const message = error instanceof Error ? error.message : String(error);
       setEvent(`策略试跑启动失败：${message}`, 'warn');
       postPolicyStatus('failed', message);
@@ -656,44 +666,53 @@
     }
   }
 
-  async function runPolicyStep() {
-    if (!policySession || (policySession.backend !== 'board' && !policySession.session)) return;
-    if (policySession.steps >= policySession.maxSteps) {
+  function currentPolicyTrial(trial) {
+    return policySession === trial && sessionId === trial.simulationId && !pageUnloading;
+  }
+
+  async function runPolicyStep(trial) {
+    if (!currentPolicyTrial(trial) || (trial.backend !== 'board' && !trial.session)) return;
+    if (trial.steps >= trial.maxSteps) {
       const reached = latestState && distanceToGoal(latestState) <= GOAL_EPSILON;
-      const message = `策略试跑结束：${policySession.steps} 步${reached ? '，到达目标点。' : '，达到步数上限。'}`;
+      const message = `策略试跑结束：${trial.steps} 步${reached ? '，到达目标点。' : '，达到步数上限。'}`;
       setEvent(message, reached ? 'ok' : 'warn');
       postPolicyStatus('finished', message);
       policySession = null;
       return;
     }
     try {
-      const state = await api(`sessions/${sessionId}/state`);
+      const state = await api(`sessions/${trial.simulationId}/state`, { signal: trial.controller.signal });
+      if (!currentPolicyTrial(trial)) return;
       const obs = observationOf(state).map(finite);
       let action;
-      if (policySession.backend === 'board') {
+      if (trial.backend === 'board') {
         // Hybrid mode: physics stays in the simulator, the action comes from
         // the board's loaded model. Sequential awaits are the backpressure —
         // a slow board simply lowers the effective control rate.
-        const endpoint = `${policySession.apiRoot.replace(/\/+$/, '')}/board-station/policy-infer`;
+        const endpoint = `${trial.apiRoot.replace(/\/+$/, '')}/board-station/policy-infer`;
         const res = await fetch(endpoint, {
           method: 'POST',
           credentials: 'same-origin',
+          signal: trial.controller.signal,
           headers: { 'content-type': 'application/json' },
           body: JSON.stringify({ observations: [obs] }),
         });
+        if (!currentPolicyTrial(trial)) return;
         const payload = await res.json().catch(() => null);
+        if (!currentPolicyTrial(trial)) return;
         if (!res.ok || !payload?.ok) {
           throw new Error(payload?.error ? `板端推理被拒绝：${payload.error}` : `板端推理失败（HTTP ${res.status}）`);
         }
         action = [finite(payload.actions?.[0]?.[0]), finite(payload.actions?.[0]?.[1])];
       } else {
         const ort = ortRuntime;
-        const session = policySession.session;
+        const session = trial.session;
         const inputName = session.inputNames[0] || 'observation';
         const outputName = session.outputNames[0] || 'action';
         const results = await session.run({
           [inputName]: new ort.Tensor('float32', Float32Array.from(obs), [1, obs.length]),
         });
+        if (!currentPolicyTrial(trial)) return;
         const output = results[outputName]?.data;
         action = [finite(output?.[0]), finite(output?.[1])];
       }
@@ -705,29 +724,33 @@
         linear: clamp(action[0], -1, 1) * maxLinear,
         angular: clamp(action[1], -1, 1) * maxAngular,
       };
-      const next = await api(`sessions/${sessionId}/cmd_vel`, {
+      const next = await api(`sessions/${trial.simulationId}/cmd_vel`, {
         method: 'POST',
+        signal: trial.controller.signal,
         body: JSON.stringify(command),
       });
-      policySession.steps += 1;
+      if (!currentPolicyTrial(trial)) return;
+      trial.steps += 1;
       await render(next);
+      if (!currentPolicyTrial(trial)) return;
       if (distanceToGoal(next) <= GOAL_EPSILON || next?.collision) {
         const collided = Boolean(next?.collision);
-        const message = `策略试跑结束：${policySession.steps} 步，${collided ? '发生碰撞。' : '到达目标点。'}`;
+        const message = `策略试跑结束：${trial.steps} 步，${collided ? '发生碰撞。' : '到达目标点。'}`;
         setEvent(message, collided ? 'warn' : 'ok');
         postPolicyStatus('finished', message);
         policySession = null;
         return;
       }
     } catch (error) {
+      if (!currentPolicyTrial(trial)) return;
       const message = error instanceof Error ? error.message : String(error);
       setEvent(`策略试跑失败：${message}`, 'warn');
       postPolicyStatus('failed', message);
       policySession = null;
       return;
     }
-    if (policySession) {
-      window.setTimeout(runPolicyStep, LOOP_MS);
+    if (currentPolicyTrial(trial)) {
+      window.setTimeout(() => runPolicyStep(trial), LOOP_MS);
     }
   }
 
@@ -744,6 +767,7 @@
     }
     if (data.type === 'rdk-policy-stop') {
       if (policySession) {
+        policySession.controller.abort();
         policySession = null;
         setEvent('策略试跑已手动停止。', 'warn');
         postPolicyStatus('stopped', '策略试跑已手动停止。');

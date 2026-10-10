@@ -22,6 +22,11 @@ export interface Sim2RealRunArtifactMetadata {
 }
 
 export interface Sim2RealRunMetrics {
+  trainChunkMse?: number;
+  validationChunkMse?: number;
+  demonstrationSourceRunId?: string;
+  demonstrationSha256?: string;
+  syntheticData?: boolean;
   contractValid: boolean;
   observationSize: number;
   actionSize: number;

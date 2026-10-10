@@ -98,6 +98,13 @@
   const TELEMETRY_ACTION_SCALE_LIMITS = Object.freeze({ linear: 0.3, angular: 1 });
   const TELEMETRY_CONTROL_HZ_LIMITS = Object.freeze({ min: 1, max: 50 });
   const TELEMETRY_CONTROL_PERIOD_LIMITS = Object.freeze({ min: 0.02, max: 1 });
+  // Match the server camera geometry/byte bounds. Imported frames remain local
+  // previews: retaining pixels never grants the board-agent attestation needed
+  // by the telemetry ingest endpoint.
+  const TELEMETRY_FRAME_MAX_WIDTH = 1920;
+  const TELEMETRY_FRAME_MAX_HEIGHT = 1080;
+  const TELEMETRY_FRAME_MAX_BYTES = 4 * 1080 * 1920;
+  const BASE64_ALPHABET = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
 
   function boundedTelemetryNumber(value, minimum, maximum, integer) {
     // Imported metadata is normalized to numbers before upload. Reject
@@ -156,11 +163,94 @@
     };
   }
 
+  function normalizeTelemetryCameraFrame(value) {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+    const { encoding, width, height, channels, data } = value;
+    if (!['rgb8', 'bgr8', 'mono8'].includes(encoding)) return null;
+    if (!Number.isSafeInteger(width) || width < 1 || width > TELEMETRY_FRAME_MAX_WIDTH) return null;
+    if (!Number.isSafeInteger(height) || height < 1 || height > TELEMETRY_FRAME_MAX_HEIGHT) return null;
+    if (channels !== (encoding === 'mono8' ? 1 : 3)) return null;
+    const expectedBytes = width * height * channels;
+    if (expectedBytes > TELEMETRY_FRAME_MAX_BYTES || typeof data !== 'string') return null;
+    // Bound before scanning and verify decoded size without allocating another
+    // full-sized pixel array. Browser rendering decodes only the selected frame.
+    if (!data.length || data.length > Math.ceil(expectedBytes / 3) * 4 || !/^[A-Za-z0-9+/]+={0,2}$/.test(data)) return null;
+    const paddingAt = data.indexOf('=');
+    const encodedLength = paddingAt < 0 ? data.length : paddingAt;
+    const padding = data.length - encodedLength;
+    const remainder = encodedLength % 4;
+    if (remainder === 1 || (padding && (data.length % 4 !== 0 || padding !== (4 - remainder) % 4))) return null;
+    if (Math.floor(encodedLength * 6 / 8) !== expectedBytes) return null;
+    // Reject non-zero unused bits as well as illegal padding; atob() otherwise
+    // accepts multiple different strings for the same bytes.
+    const tail = BASE64_ALPHABET.indexOf(data[encodedLength - 1]);
+    if ((remainder === 2 && (tail & 15) !== 0) || (remainder === 3 && (tail & 3) !== 0)) return null;
+    return { encoding, width, height, channels, data };
+  }
+
+  function normalizeTelemetryEvent(value) {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+    if (!['session-started', 'session-stopped'].includes(value.kind)) return null;
+    const event = { kind: value.kind };
+    for (const [key, limit, pattern] of [
+      ['sessionId', 64, /^[a-zA-Z0-9][a-zA-Z0-9-]{0,63}$/],
+      ['stopReason', 120, null],
+      ['adapterId', 80, null],
+      ['startedAt', 32, /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{1,3})?Z$/],
+      ['stoppedAt', 32, /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{1,3})?Z$/],
+      ['lastInferenceAt', 32, /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{1,3})?Z$/],
+    ]) {
+      if (value[key] == null) continue;
+      if (typeof value[key] !== 'string') return null;
+      const text = value[key].trim();
+      if (text.length > limit || (pattern && !pattern.test(text))) return null;
+      if (text) event[key] = text;
+    }
+    for (const [key, min, max, integer] of [
+      ['inferenceCount', 0, 2000000000, true], ['published', 0, 2000000000, true],
+      ['durationSec', 0, 86400, false], ['inferMs', 0, 10000, false],
+      ['controlHz', 1, 50, true], ['goalX', -1000, 1000, false], ['goalY', -1000, 1000, false],
+    ]) {
+      if (value[key] == null) continue;
+      const number = boundedTelemetryNumber(value[key], min, max, integer);
+      if (number === null) return null;
+      event[key] = number;
+    }
+    if (value.mock != null) {
+      if (typeof value.mock !== 'boolean') return null;
+      event.mock = value.mock;
+    }
+    if (value.model != null) {
+      if (!value.model || typeof value.model !== 'object' || Array.isArray(value.model)) return null;
+      const model = {};
+      for (const key of ['sha256', 'provider']) {
+        if (value.model[key] == null) continue;
+        if (typeof value.model[key] !== 'string' || value.model[key].length > 64) return null;
+        if (key === 'sha256' && !/^[a-fA-F0-9]{64}$/.test(value.model[key])) return null;
+        model[key] = value.model[key];
+      }
+      for (const [key, min, max] of [['inputDim', 1, 4096], ['outputDim', 1, 4096], ['bytes', 0, 2000000000]]) {
+        if (value.model[key] == null) continue;
+        const number = boundedTelemetryNumber(value.model[key], min, max, true);
+        if (number === null) return null;
+        model[key] = number;
+      }
+      if (Object.keys(model).length) event.model = model;
+    }
+    return event.sessionId ? event : null;
+  }
+
   function normalizeTelemetrySample(value) {
     if (!value || typeof value !== 'object') return null;
     const raw = value;
     const timestamp = finiteNumber(raw.t ?? raw.time ?? raw.timestamp);
     if (timestamp === null) return null;
+    if (raw.event != null) {
+      const event = normalizeTelemetryEvent(raw.event);
+      // Lifecycle markers carry no camera/control values in the shared
+      // contract. Keep the marker for the inspector without inventing a frame.
+      return event ? { t: timestamp, event } : null;
+    }
     return {
       t: timestamp,
       ...(Array.isArray(raw.observation)
@@ -172,6 +262,10 @@
       ...(finiteNumber(raw.reward) !== null ? { reward: finiteNumber(raw.reward) } : {}),
       ...(raw.done != null ? { done: booleanValue(raw.done) } : {}),
       ...(raw.fall != null ? { fall: booleanValue(raw.fall) } : {}),
+      ...(() => {
+        const cameraFrame = normalizeTelemetryCameraFrame(raw.cameraFrame);
+        return cameraFrame ? { cameraFrame } : {};
+      })(),
       ...(() => {
         const cmdVel = normalizeTelemetryTwist(raw.cmd_vel ?? raw.cmdVel);
         return cmdVel ? { cmd_vel: cmdVel } : {};
@@ -289,10 +383,12 @@
     }
     const samples = values.map(normalizeTelemetrySample).filter(Boolean);
     if (!samples.length) throw new Error('没有找到带 t/time 时间戳的有效遥测样本');
-    const firstTimestamp = samples[0].t;
-    const lastTimestamp = samples[samples.length - 1].t;
+    const controlSamples = samples.filter((sample) => !sample.event);
+    const timelineSamples = controlSamples.length ? controlSamples : samples;
+    const firstTimestamp = timelineSamples[0].t;
+    const lastTimestamp = timelineSamples[timelineSamples.length - 1].t;
     const durationSeconds = Math.max(0, lastTimestamp - firstTimestamp);
-    const rewardValues = samples.map((sample) => sample.reward).filter((value) => value != null);
+    const rewardValues = controlSamples.map((sample) => sample.reward).filter((value) => value != null);
     return {
       fileName: '',
       source: header?.source || 'import',
@@ -300,10 +396,11 @@
       samples,
       skipped,
       summary: {
-        sampleCount: samples.length,
+        sampleCount: controlSamples.length,
+        eventCount: samples.length - controlSamples.length,
         durationSeconds,
         sampleRateHz:
-          durationSeconds > 0 ? Math.round(((samples.length - 1) / durationSeconds) * 10) / 10 : null,
+          durationSeconds > 0 && controlSamples.length > 1 ? Math.round(((controlSamples.length - 1) / durationSeconds) * 10) / 10 : null,
         firstTimestamp,
         lastTimestamp,
         rewardMean: rewardValues.length
@@ -311,8 +408,8 @@
               (rewardValues.reduce((sum, value) => sum + value, 0) / rewardValues.length) * 1000,
             ) / 1000
           : null,
-        doneCount: samples.filter((sample) => sample.done).length,
-        fallCount: samples.filter((sample) => sample.fall).length,
+        doneCount: controlSamples.filter((sample) => sample.done).length,
+        fallCount: controlSamples.filter((sample) => sample.fall).length,
       },
     };
   }
@@ -596,6 +693,9 @@
     MAX_TELEMETRY_VECTOR_VALUES,
     MAX_TELEMETRY_IMPORT_BYTES,
     MAX_TELEMETRY_IMPORT_SAMPLES,
+    TELEMETRY_FRAME_MAX_WIDTH,
+    TELEMETRY_FRAME_MAX_HEIGHT,
+    TELEMETRY_FRAME_MAX_BYTES,
     exceedsUtf8ByteLimit,
     finiteNumber,
     booleanValue,
@@ -605,6 +705,7 @@
     formatRetrainingMeasure,
     retrainingRequest,
     normalizeTelemetrySample,
+    normalizeTelemetryCameraFrame,
     parseTelemetryText,
     stationImuQuaternion,
     stationTelemetrySnapshot,

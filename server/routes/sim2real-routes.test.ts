@@ -7,7 +7,11 @@ import { afterEach, describe, expect, it } from 'vitest';
 
 import { BUILTIN_MICRODUCK_MODEL, type Sim2RealModelManifest } from '../../shared/sim2real.js';
 import type { Sim2RealAuthPort } from '../sim2real/sim2real-auth.js';
-import { reserveSim2RealRun, updateSim2RealComputeResource } from '../sim2real/sim2real-store.js';
+import {
+  reserveSim2RealRun,
+  updateSim2RealComputeResource,
+  appendSim2RealTelemetry,
+} from '../sim2real/sim2real-store.js';
 import { createSim2RealRouter, workspacePackageVersion } from './sim2real-routes.js';
 
 const roots: string[] = [];
@@ -62,6 +66,114 @@ async function fixture() {
   process.env.RDK_SIM2REAL_DEPLOYMENT = 'local';
   return createSim2RealRouter();
 }
+
+describe('imitation training input', () => {
+  it.each(['act', 'diffusion-policy'])(
+    'rejects %s without recorded data before reserving a run',
+    async (engine) => {
+      const router = await fixture();
+      const response = await invoke(router, 'post', '/api/sim2real/runs', {
+        body: {
+          modelId: BUILTIN_MICRODUCK_MODEL.id,
+          backend: 'local',
+          idempotencyKey: `missing-demonstration-${engine}`,
+          training: { profile: 'smoke', engine },
+        },
+      });
+      expect(response.statusCode).toBe(422);
+      expect(response.body).toMatchObject({ error: 'SIM2REAL_DEMONSTRATION_REQUIRED' });
+      const runs = await invoke(router, 'get', '/api/sim2real/runs');
+      expect((runs.body as { runs: unknown[] }).runs).toHaveLength(0);
+    },
+  );
+  it('forwards imported episodes and a digest to a real runner, and pins request retries', async () => {
+    const router = await fixture();
+    const sourceResponse = await invoke(router, 'post', '/api/sim2real/runs', {
+      body: { modelId: BUILTIN_MICRODUCK_MODEL.id, backend: 'contract' },
+    });
+    const sourceRun = sourceResponse.body.run;
+    const samples = Array.from({ length: 32 }, (_, i) => ({
+      t: i / 50,
+      observation: Array(61).fill(0),
+      action: Array(14).fill(0.25),
+      done: i % 4 === 3,
+    }));
+    await appendSim2RealTelemetry({
+      runId: sourceRun.id,
+      modelId: sourceRun.modelId,
+      source: 'import',
+      sequence: 0,
+      samples,
+    });
+    process.env.RDK_SIM2REAL_LOCAL_RUNNER_URL = 'http://127.0.0.1:18120/train';
+    const originalFetch = globalThis.fetch;
+    let payload: Record<string, any> = {};
+    let launches = 0;
+    globalThis.fetch = (async (_url, init) => {
+      launches += 1;
+      payload = JSON.parse(String(init?.body || '{}'));
+      return new Response(JSON.stringify({ status: 'running', runId: 'recorded-act-1' }), {
+        status: 202,
+      });
+    }) as typeof fetch;
+    try {
+      const body = {
+        modelId: sourceRun.modelId,
+        backend: 'local',
+        idempotencyKey: 'recorded-act-request',
+        training: { profile: 'smoke', engine: 'act', demonstrationRunId: sourceRun.id },
+      };
+      const trained = await invoke(router, 'post', '/api/sim2real/runs', { body });
+      expect(trained.statusCode).toBe(201);
+      expect(payload.demonstrations).toMatchObject({
+        sourceRunId: sourceRun.id,
+        sampleCount: 32,
+        episodeCount: 8,
+      });
+      expect(payload.training.demonstrationSha256).toBe(payload.demonstrations.sha256);
+      expect(JSON.parse(payload.demonstrations.jsonl.split('\n')[0]).action).toEqual(
+        Array(14).fill(0.25),
+      );
+      const retry = await invoke(router, 'post', '/api/sim2real/runs', { body });
+      expect(retry.statusCode).toBe(200);
+      expect(retry.body.idempotentReplay).toBe(true);
+      expect(launches).toBe(1);
+      await appendSim2RealTelemetry({
+        runId: sourceRun.id,
+        modelId: sourceRun.modelId,
+        source: 'import',
+        sequence: 1,
+        samples: samples.map((sample) => ({ ...sample, t: sample.t + 1 })),
+      });
+      const changed = await invoke(router, 'post', '/api/sim2real/runs', { body });
+      expect(changed.statusCode).toBe(409);
+      expect(launches).toBe(1);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+  it('keeps synthetic smoke explicit and refuses it for standard training', async () => {
+    const router = await fixture();
+    const base = {
+      modelId: BUILTIN_MICRODUCK_MODEL.id,
+      backend: 'local',
+      idempotencyKey: 'explicit-imitation-smoke',
+    };
+    const smoke = await invoke(router, 'post', '/api/sim2real/runs', {
+      body: { ...base, training: { profile: 'smoke', engine: 'act', syntheticSmoke: true } },
+    });
+    expect(smoke.statusCode).toBe(201);
+    expect(smoke.body.run.training.syntheticSmoke).toBe(true);
+    const unsafe = await invoke(router, 'post', '/api/sim2real/runs', {
+      body: {
+        ...base,
+        idempotencyKey: 'unsafe-imitation-smoke',
+        training: { profile: 'standard', engine: 'act', syntheticSmoke: true },
+      },
+    });
+    expect(unsafe.statusCode).toBe(400);
+  });
+});
 
 /**
  * Board-agent telemetry is only accepted for a visible device, so tests that

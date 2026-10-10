@@ -1,8 +1,82 @@
 import assert from 'node:assert/strict';
-import { mkdtemp, readdir, rm, writeFile } from 'node:fs/promises';
+import { spawn } from 'node:child_process';
+import { createHash } from 'node:crypto';
+import { mkdtemp, readdir, rm, symlink, writeFile } from 'node:fs/promises';
+import { createServer } from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
 import process from 'node:process';
+import { fileURLToPath } from 'node:url';
+
+async function verifySymlinkEntrypoint() {
+  // Production starts the worker through a current -> release directory link.
+  // Import-based tests do not exercise Node's direct-entry path resolution.
+  const linkedDirectory = path.join(fixtureDir, 'current');
+  await symlink(path.dirname(fileURLToPath(import.meta.url)), linkedDirectory, 'dir');
+  const portProbe = createServer();
+  await new Promise((resolve) => portProbe.listen(0, '127.0.0.1', resolve));
+  const port = portProbe.address().port;
+  await new Promise((resolve) => portProbe.close(resolve));
+  const child = spawn(process.execPath, [path.join(linkedDirectory, 'local-training-worker.mjs')], {
+    env: {
+      ...process.env,
+      NODE_ENV: 'production',
+      RDK_SIM2REAL_LOCAL_WORKER_HOST: '127.0.0.1',
+      RDK_SIM2REAL_LOCAL_WORKER_PORT: String(port),
+      RDK_SIM2REAL_LOCAL_WORKER_DATA_DIR: path.join(fixtureDir, 'entry-jobs'),
+      RDK_SIM2REAL_LOCAL_RUNNER_TOKEN: 'ab'.repeat(16),
+    },
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+  let output = '';
+  child.stdout.on('data', (chunk) => (output = (output + chunk).slice(-4096)));
+  child.stderr.on('data', (chunk) => (output = (output + chunk).slice(-4096)));
+  const exited = new Promise((resolve, reject) => {
+    child.once('error', reject);
+    child.once('exit', (code, signal) => resolve({ code, signal }));
+  });
+  const base = `http://127.0.0.1:${port}`;
+  let stopDeadline;
+  try {
+    let healthy = false;
+    for (let attempt = 0; attempt < 100; attempt += 1) {
+      assert.equal(child.exitCode, null, `symlink worker exited before listening: ${output}`);
+      assert.equal(child.signalCode, null, `symlink worker was terminated: ${output}`);
+      try {
+        const response = await fetch(`${base}/healthz`, { signal: AbortSignal.timeout(200) });
+        assert.equal(response.status, 200);
+        const health = await response.json();
+        assert.equal(health.authTokenUsable, true);
+        assert.equal(health.activeJobs, 0);
+        healthy = true;
+        break;
+      } catch (error) {
+        if (error instanceof assert.AssertionError) throw error;
+        await new Promise((resolve) => setTimeout(resolve, 25));
+      }
+    }
+    assert.equal(healthy, true, `symlink worker did not listen: ${output}`);
+    child.kill('SIGTERM');
+    const stopped = await Promise.race([
+      exited,
+      new Promise((_, reject) => {
+        stopDeadline = setTimeout(() => reject(new Error('worker did not stop')), 6000);
+        stopDeadline.unref();
+      }),
+    ]);
+    assert.deepEqual(stopped, { code: 0, signal: null });
+    await assert.rejects(fetch(`${base}/healthz`, { signal: AbortSignal.timeout(200) }));
+    console.log(
+      '[local-training-worker] PASS — release directory symlink starts HTTP worker and stops cleanly',
+    );
+  } finally {
+    clearTimeout(stopDeadline);
+    if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL');
+    await exited;
+    await rm(linkedDirectory, { force: true });
+    await rm(path.join(fixtureDir, 'entry-jobs'), { recursive: true, force: true });
+  }
+}
 
 const fixtureDir = await mkdtemp(path.join(os.tmpdir(), 'rdk-local-worker-'));
 const fixture = path.join(fixtureDir, 'engine.mjs');
@@ -17,8 +91,12 @@ process.env.RDK_SIM2REAL_LOCAL_WORKER_DATA_DIR = fixtureDir;
 process.env.RDK_SIM2REAL_LOCAL_RUNNER_TOKEN = 'worker-test-token';
 process.env.RDK_SIM2REAL_MAX_CONCURRENT_JOBS = '1';
 
-const { createLocalTrainingWorkerServer, runnerTokenRequired, runnerTokenUsable } =
-  await import('./local-training-worker.mjs');
+const {
+  createLocalTrainingWorkerServer,
+  runnerTokenRequired,
+  runnerTokenUsable,
+  validateDemonstrationInput,
+} = await import('./local-training-worker.mjs');
 const previousNodeEnv = process.env.NODE_ENV;
 const previousDeployment = process.env.RDK_SIM2REAL_DEPLOYMENT;
 process.env.NODE_ENV = 'development';
@@ -41,7 +119,64 @@ const request = {
   contract: { id: 'microduck-policy-v1', observationSize: 61, actionSize: 14 },
   training: { profile: 'smoke', maxIterations: 10 },
 };
+// A real engine selector must never silently turn missing recordings into
+// synthetic demonstrations, including when this worker is called directly.
+const imitationRequest = {
+  ...request,
+  training: { profile: 'smoke', engine: 'act', demonstrationRunId: 'recording-1' },
+};
+assert.throws(() => validateDemonstrationInput(imitationRequest), /recorded demonstrations/);
+assert.doesNotThrow(() =>
+  validateDemonstrationInput({
+    ...request,
+    training: { profile: 'smoke', engine: 'act', syntheticSmoke: true },
+  }),
+);
+assert.throws(
+  () =>
+    validateDemonstrationInput({
+      ...request,
+      training: { profile: 'standard', engine: 'act', syntheticSmoke: true },
+    }),
+  /syntheticSmoke/,
+);
+const demonstrationJsonl =
+  Array.from({ length: 32 }, (_, index) =>
+    JSON.stringify({
+      type: 'step',
+      observation: Array(61).fill(0),
+      action: Array(14).fill(0.25),
+      done: index % 4 === 3,
+    }),
+  ).join('\n') + '\n';
+const demonstration = {
+  sourceRunId: 'recording-1',
+  sha256: createHash('sha256').update(demonstrationJsonl).digest('hex'),
+  jsonl: demonstrationJsonl,
+  sampleCount: 32,
+  episodeCount: 8,
+};
+assert.doesNotThrow(() =>
+  validateDemonstrationInput({ ...imitationRequest, demonstrations: demonstration }),
+);
+assert.throws(
+  () =>
+    validateDemonstrationInput({
+      ...imitationRequest,
+      demonstrations: { ...demonstration, jsonl: demonstrationJsonl.replace('0.25', '0.75') },
+    }),
+  /SHA-256/,
+);
+assert.throws(
+  () =>
+    validateDemonstrationInput({
+      ...imitationRequest,
+      demonstrations: { ...demonstration, sampleCount: 31 },
+    }),
+  /sample counts/,
+);
 try {
+  await verifySymlinkEntrypoint();
   const health = await fetch(`${base}/healthz`);
   assert.equal(health.status, 200);
   const healthBody = await health.json();
@@ -440,6 +575,54 @@ try {
   }
   assert.equal(defaultStatus.status, 'completed', JSON.stringify(defaultStatus));
   assert.equal(defaultStatus.checkpoint.artifactRef, 'artifact://microduck/cp-1');
+
+  // Verify the payload crosses the process boundary as a fixed job-local
+  // file, with the accepted bytes unchanged (algorithm training is tested
+  // separately by the Python engines against recorded episodes).
+  const recordedFixture = path.join(fixtureDir, 'recorded-engine.mjs');
+  await writeFile(
+    recordedFixture,
+    `import { readFile, writeFile } from 'node:fs/promises';
+import { createHash } from 'node:crypto';
+const request = JSON.parse(await readFile(process.env.RDK_SIM2REAL_REQUEST_FILE, 'utf8'));
+const jsonl = await readFile('demonstrations.jsonl', 'utf8');
+if (jsonl !== request.demonstrations.jsonl || createHash('sha256').update(jsonl).digest('hex') !== request.demonstrations.sha256) throw new Error('recorded input changed');
+const first = JSON.parse(jsonl.split('\\n')[0]);
+await writeFile('policy.onnx', 'recorded-fixture');
+await writeFile(process.env.RDK_SIM2REAL_RESULT_FILE, JSON.stringify({ artifact: { artifactId: 'recorded-act', artifactRef: 'artifact://policy.onnx', kind: 'source', format: 'onnx' }, metrics: { firstRecordedAction: first.action[0], demonstrationSha256: request.demonstrations.sha256 }, deployable: false }));
+`,
+  );
+  process.env.RDK_SIM2REAL_TRAIN_ENGINES_JSON = JSON.stringify({
+    act: { executable: process.execPath, args: [recordedFixture] },
+  });
+  const recordedLaunch = await fetch(`${base}/train`, {
+    method: 'POST',
+    headers: {
+      'content-type': 'application/json',
+      'x-sim2real-account': 'alice',
+      authorization: 'Bearer worker-test-token',
+      'idempotency-key': 'recorded-input-job',
+    },
+    body: JSON.stringify({ ...imitationRequest, demonstrations: demonstration }),
+  });
+  assert.equal(recordedLaunch.status, 202);
+  let recordedStatus = await recordedLaunch.json();
+  for (
+    let index = 0;
+    index < 100 && ['queued', 'running'].includes(recordedStatus.status);
+    index += 1
+  ) {
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    recordedStatus = await (
+      await fetch(`${base}/runs/${encodeURIComponent(recordedStatus.runId)}`, {
+        headers: { 'x-sim2real-account': 'alice', authorization: 'Bearer worker-test-token' },
+      })
+    ).json();
+  }
+  assert.equal(recordedStatus.status, 'completed', JSON.stringify(recordedStatus));
+  assert.equal(recordedStatus.metrics.firstRecordedAction, 0.25);
+  assert.equal(recordedStatus.metrics.demonstrationSha256, demonstration.sha256);
+  assert.equal(recordedStatus.deployable, false);
 
   process.env.RDK_SIM2REAL_TRAIN_ENGINES_JSON = 'not-json';
   const invalidEnginesHealth = await fetch(`${base}/healthz`);

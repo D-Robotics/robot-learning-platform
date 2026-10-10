@@ -6,6 +6,7 @@ import type { AddressInfo } from 'node:net';
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { Context } from '@deepseek-ai/cordis';
+import { syntheticJpeg, syntheticPng } from '../../tests/fixtures/dsh-images.js';
 
 import {
   askDsh,
@@ -35,8 +36,103 @@ beforeEach(() => {
   delete process.env.RDK_SIM2REAL_DSH_API_KEY;
   delete process.env.RDK_SIM2REAL_DSH_BASE_URL;
   delete process.env.RDK_SIM2REAL_DSH_MODEL;
+  delete process.env.RDK_SIM2REAL_DSH_VISION_MODELS;
   delete process.env.RDK_STUDIO_LLM_BASE_URL;
   delete process.env.DEEPSEEK_MODEL;
+});
+
+describe('DSH user image admission through the real SDK', () => {
+  it('refuses an image when the selected model has no deployment vision declaration', async () => {
+    const gateway = await startChatGateway((_request, response) => sseReply(response, ['收到。']));
+    process.env.RDK_SIM2REAL_DSH_BASE_URL = gateway.baseUrl;
+    process.env.RDK_SIM2REAL_DSH_API_KEY = 'test-only-image-key';
+    const ctx = await composeRuntime();
+    await expect(
+      askDsh(ctx, '描述图片', {
+        ...{ image: { mediaType: 'image/png', base64: syntheticPng() } },
+      }),
+    ).rejects.toMatchObject({ code: 'DSH_VISION_MODEL_REQUIRED' });
+    expect(gateway.requests).toHaveLength(0);
+  }, 60_000);
+
+  it('persists one verified image as user content and sends pixels through the SDK inline fallback', async () => {
+    const gateway = await startChatGateway((request, response) => {
+      if (request.url.includes('/chat/completions')) sseReply(response, ['左红右蓝。']);
+      else response.writeHead(404).end();
+    });
+    process.env.RDK_SIM2REAL_DSH_BASE_URL = gateway.baseUrl;
+    process.env.RDK_SIM2REAL_DSH_API_KEY = 'test-only-image-key';
+    process.env.RDK_SIM2REAL_DSH_MODEL = 'configured-vision-model';
+    process.env.RDK_SIM2REAL_DSH_VISION_MODELS = 'configured-vision-model';
+    const ctx = await composeRuntime();
+    const result = await askDsh(ctx, '描述图片', {
+      ...{ image: { mediaType: 'image/png', base64: syntheticPng() } },
+    });
+    const chat = gateway.requests.find((request) => request.url.includes('/chat/completions'));
+    expect(chat).toBeDefined();
+    const wire = JSON.parse(chat!.body);
+    const images = wire.messages.flatMap((message: { content: unknown }) =>
+      Array.isArray(message.content)
+        ? message.content.filter((part: { type: string }) => part.type === 'image_url')
+        : [],
+    );
+    expect(images).toHaveLength(1);
+    expect(images[0].image_url.url).toMatch(/^data:image\/png;base64,/);
+    expect(result).toMatchObject({
+      text: '左红右蓝。',
+      imageAccepted: { mediaType: 'image/png', width: 8, height: 4 },
+    });
+    expect(ctx.get('attachments')).toBeDefined();
+    const followup = await askDsh(ctx, '继续描述刚才那张图', { sessionId: result.sessionId });
+    expect(followup.text).toBe('左红右蓝。');
+    const requests = gateway.requests.filter((request) =>
+      request.url.includes('/chat/completions'),
+    );
+    expect(requests).toHaveLength(2);
+    expect(requests[1].body).toContain('image_url');
+  }, 60_000);
+
+  it('fully admits JPEG pixels and reports only bounded decoded metadata', async () => {
+    const gateway = await startChatGateway((request, response) => {
+      if (request.url.includes('/chat/completions')) sseReply(response, ['蓝色色块。']);
+      else response.writeHead(404).end();
+    });
+    process.env.RDK_SIM2REAL_DSH_BASE_URL = gateway.baseUrl;
+    process.env.RDK_SIM2REAL_DSH_API_KEY = 'test-only-image-key';
+    process.env.RDK_SIM2REAL_DSH_MODEL = 'configured-vision-model';
+    process.env.RDK_SIM2REAL_DSH_VISION_MODELS = 'configured-vision-model';
+    const ctx = await composeRuntime();
+    const result = await askDsh(ctx, '描述图片', {
+      image: { mediaType: 'image/jpeg', base64: syntheticJpeg },
+    });
+    expect(result.imageAccepted).toMatchObject({ mediaType: 'image/jpeg', width: 8, height: 4 });
+    expect(Object.keys(result.imageAccepted!)).toEqual(['mediaType', 'width', 'height', 'bytes']);
+    expect(
+      gateway.requests.find((request) => request.url.includes('/chat/completions'))?.body,
+    ).toContain('data:image/jpeg;base64,');
+  }, 60_000);
+
+  it('fully decodes image bytes and rejects type mismatches, malformed pixels and excessive geometry', async () => {
+    const gateway = await startChatGateway((_request, response) =>
+      sseReply(response, ['不应请求。']),
+    );
+    process.env.RDK_SIM2REAL_DSH_BASE_URL = gateway.baseUrl;
+    process.env.RDK_SIM2REAL_DSH_API_KEY = 'test-only-image-key';
+    process.env.RDK_SIM2REAL_DSH_MODEL = 'configured-vision-model';
+    process.env.RDK_SIM2REAL_DSH_VISION_MODELS = 'configured-vision-model';
+    const ctx = await composeRuntime();
+    for (const image of [
+      { mediaType: 'image/jpeg', base64: syntheticPng() },
+      { mediaType: 'image/png', base64: Buffer.from('89504e470d0a1a0a', 'hex').toString('base64') },
+      { mediaType: 'image/png', base64: syntheticPng(4097, 1) },
+      { mediaType: 'image/png', base64: syntheticPng(3000, 3000) },
+    ]) {
+      await expect(askDsh(ctx, '描述图片', { ...{ image } })).rejects.toMatchObject({
+        code: 'DSH_IMAGE_INVALID',
+      });
+    }
+    expect(gateway.requests).toHaveLength(0);
+  }, 60_000);
 });
 
 afterEach(async () => {

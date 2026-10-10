@@ -2,12 +2,12 @@
   const STORAGE_KEY = 'rdk-duck-lab-onboarding-v1';
   const steps = [
     { target: '#product-select', view: 'overview', kicker: '01 / 12 · 项目', title: '先选择产品线', body: '在左侧产品选择器选择要使用的机器人、仿真器或硬件适配器。选择后，仿真、模型契约、设备和发布状态都会切换到对应产品线。', best: '不同产品线可以有不同观测和动作契约；平台会按适配器显示可用能力。', time: '约 10 秒' },
-    { target: '[data-view-target="station"]', view: 'station', kicker: '02 / 12 · 服务器与设备', title: '先连接算力和目标设备', body: '在设备控制台登记 GPU 服务器和目标设备，完成 SSH、Bridge、BoardAgent 和遥测预检。实时遥测在线不等于 SSH 隧道已验证，两条状态会分别显示。', best: '先看到连接来源、心跳和传感器状态均明确，再进入仿真和训练。', time: '约 1 分钟' },
+    { target: '[data-view-target="station"]', view: 'station', kicker: '02 / 12 · 服务器与设备', title: '按需要连接算力和设备', body: '浏览器仿真和本地回放可以直接开始。需要训练或上板时，再在设备控制台登记算力和目标设备，完成连接预检；每项依赖会单独显示状态。', best: '先体验最小任务；真实训练和设备部署再补齐对应依赖。', time: '约 1 分钟' },
     { target: '#task-select', view: 'simulate', kicker: '03 / 12 · 仿真', title: '选择适配器支持的任务', body: '在仿真页选择当前产品线支持的任务。轨迹会进入统一数据契约，后续可回放、评测和对照真实设备。', best: '先用一个最小任务跑通，再扩展视觉和复杂场景。', time: '约 20 秒' },
     { target: '[data-view-target="simulate"]', view: 'simulate', kicker: '04 / 12 · 录制', title: '录制一段可复现轨迹', body: '运行仿真并录制轨迹。录制结果必须显示来源、版本和 synthetic/mock 标记，不能把仿真证据当成真实设备证据。', best: '建议先录制 30–60 秒稳定轨迹，并立即回放确认。', time: '约 1 分钟' },
     { target: '#model-select', view: 'train', kicker: '05 / 12 · 模型', title: '确认模型与契约', body: '训练页选择当前产品线的模型，确认 observation/action shape、目标平台和数据来源。契约不匹配时，后续加载会被阻断。', best: '模型版本、manifest 和数据集版本必须一起保存。', time: '约 30 秒' },
-    { target: '[data-view-target="train"]', view: 'train', kicker: '06 / 12 · GPU 训练', title: '提交 GPU 训练', body: '选择真实 GPU worker，先执行冒烟训练，再提交正式任务。运行状态、GPU 型号、指标和 ONNX artifact 会自动记录。', best: 'mock=true 的结果只能验证协议，不能进入发布。', time: '约 1–5 分钟' },
-    { target: '[data-view-target="evaluate"]', view: 'evaluate', kicker: '07 / 12 · 评测', title: '检查数据和评测', body: '评测页汇总仿真、真实传感器和板端遥测。真实视觉策略必须有真实图像与动作标签；缺少证据会明确显示 blocked。', best: '不要跳过评测直接部署。', time: '约 1 分钟' },
+    { target: '[data-view-target="train"]', view: 'train', kicker: '06 / 12 · GPU 训练', title: '选择引擎与数据后训练', body: '按任务选择 CPU 或 GPU worker，先执行冒烟再正式训练。ACT / Diffusion Policy 需选择已保存的完整示教 Run；合成数据只能明确用于冒烟。训练指标与制品会记录来源。', best: 'mock=true 的结果只能验证协议，不能进入发布。', time: '约 1–5 分钟' },
+    { target: '[data-view-target="evaluate"]', view: 'evaluate', kicker: '07 / 12 · 评测', title: '回放并对照原始证据', body: '在评测页导入或选择 Run，相机、奖励、观测、动作和事件共用时间轴。结果对比支持加载两条轨迹；缺图像、单位或奖励分项会直接说明。', best: '不要跳过评测直接部署。', time: '约 1 分钟' },
     { target: '[data-view-target="deploy"]', view: 'deploy', kicker: '08 / 12 · 编译', title: '编译目标运行时制品', body: '部署页根据当前设备 profile 检查 ONNX、编译器版本、目标架构、校准集和 SHA-256。工具链缺失或制品不匹配时，平台不会伪造成功。', best: '保留编译日志和 artifact digest。', time: '约 1–3 分钟' },
     { target: '#device-select', view: 'deploy', kicker: '09 / 12 · 加载', title: '加载到目标设备', body: '选择已登记的目标设备，上传并校验制品，然后由对应运行时加载和 forward。只读加载不会启动执行器。', best: '确认设备 profile、provider、shape 和 lastError 均符合当前适配器契约。', time: '约 30 秒' },
     { target: '[data-view-target="deploy"]', view: 'deploy', kicker: '10 / 12 · 低速验收', title: '执行低速策略验收', body: '现场确认安全区域、急停和速度上限后，才进入低速 canary。运行时间、速度、推理延迟和自动 stop 都会记录。', best: '第一轮建议不超过 0.05 m/s、1–2 秒。', time: '约 1 分钟' },

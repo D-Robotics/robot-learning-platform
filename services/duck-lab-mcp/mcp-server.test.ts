@@ -613,6 +613,8 @@ describe('duck-lab-mcp protocol surface', () => {
         numEnvs: { type: 'number' },
         datasetIds: { type: 'array' },
         video: { type: 'boolean' },
+        demonstrationRunId: { type: 'string' },
+        syntheticSmoke: { type: 'boolean' },
       },
     });
     expect(byName.get('rdk_platform_status')?.inputSchema).toMatchObject({

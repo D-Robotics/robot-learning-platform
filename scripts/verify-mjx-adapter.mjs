@@ -11,8 +11,8 @@
  * taskEvaluation evidence. A second forced-fallback run
  * (RDK_MJX_ADAPTER_FORCE_MJX=0) asserts the kinematic fallback is
  * labeled "starter-kinematic" — skipped honestly when torch is absent.
- * On machines without the Python stack (CI runners) it prints SKIP and
- * exits 0 so `npm run verify` stays green.
+ * On lean machines without the Python stack it prints SKIP and exits 0.
+ * RDK_MJX_ENGINE_REQUIRED=1 (CI) makes a missing stack a failure instead.
  */
 
 import assert from 'node:assert/strict';
@@ -55,11 +55,12 @@ function pythonInterpreter() {
 
 const python = pythonInterpreter();
 if (!python) {
-  console.log(
-    '[mjx-adapter] SKIP — python with jax+mujoco+mujoco-mjx+optax+onnx not found. ' +
+  const required = process.env.RDK_MJX_ENGINE_REQUIRED === '1';
+  console[required ? 'error' : 'log'](
+    `[mjx-adapter] ${required ? 'FAIL' : 'SKIP'} — python with jax+mujoco+mujoco-mjx+optax+onnx not found. ` +
       'Install with: python3 -m pip install --user jax mujoco mujoco-mjx optax onnx',
   );
-  process.exit(0);
+  process.exit(required ? 1 : 0);
 }
 
 const { resolveTaskPack, trainingRequestFor } = await import(

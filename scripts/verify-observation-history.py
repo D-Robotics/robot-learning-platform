@@ -112,6 +112,32 @@ def onnxruntime_available():
         return False
 
 
+def mjx_python_interpreter():
+    # Match verify-mjx-adapter.mjs: jax+mujoco alone cannot train or prove
+    # contact dynamics. Try every candidate so a partial local venv does not
+    # hide a complete stack in an explicitly configured or system interpreter.
+    candidates = (
+        os.environ.get("RDK_MJX_ENGINE_PYTHON"),
+        os.path.join(REPO, "engines", "mjx-adapter", ".venv", "bin", "python"),
+        os.environ.get("RDK_STARTER_ENGINE_PYTHON"),
+        sys.executable,
+        shutil.which("python3"),
+        "/usr/bin/python3",
+        "/opt/homebrew/bin/python3.12",
+        "/opt/homebrew/bin/python3.11",
+    )
+    for candidate in dict.fromkeys(candidates):
+        if not candidate:
+            continue
+        try:
+            ready = run([candidate, "-c", "import jax, mujoco, mujoco.mjx, optax, onnx"])
+        except OSError:
+            continue
+        if ready.returncode == 0:
+            return candidate
+    return None
+
+
 def train_smoke(request, job_dir):
     request_path = os.path.join(job_dir, "request.json")
     with open(request_path, "w") as handle:
@@ -468,11 +494,9 @@ def _main(scratch):
     else:
         print("SKIP joint 61D chain — numpy/torch/onnx/onnxruntime not available")
 
-    # ---- 6. mjx physics engine (real MJX smoke when the venv exists) --------
-    mjx_python = os.path.join(REPO, "engines", "mjx-adapter", ".venv", "bin", "python")
-    if not os.path.isfile(mjx_python):
-        mjx_python = shutil.which("python3") or "python3"
-    if run([mjx_python, "-c", "import jax, mujoco"]).returncode == 0:
+    # ---- 6. mjx physics engine (real MJX smoke with the complete stack) ----
+    mjx_python = mjx_python_interpreter()
+    if mjx_python:
         mjx_dir = os.path.join(scratch, "mjx")
         os.makedirs(mjx_dir, exist_ok=True)
         request_path = os.path.join(mjx_dir, "request.json")
@@ -486,6 +510,7 @@ def _main(scratch):
                 "RDK_MJX_ENGINE_ITERATIONS": "2",
                 "RDK_MJX_ENGINE_ENVS": "4",
                 "RDK_MJX_ENGINE_STEPS": "16",
+                "RDK_STARTER_ENGINE_DEVICE": "cpu",
             }
         )
         result = run([mjx_python, os.path.join(REPO, "engines", "mjx-adapter", "adapter.py")],
@@ -510,8 +535,11 @@ def _main(scratch):
                 metrics.get("physicsBackend") == "mjx",
                 metrics.get("physicsBackend"),
             )
+    elif os.environ.get("RDK_MJX_ENGINE_REQUIRED") == "1":
+        check("mjx complete training stack required", False,
+              "python with jax+mujoco+mujoco-mjx+optax+onnx not available")
     else:
-        print("SKIP mjx smoke — engines/mjx-adapter venv with jax+mujoco not available")
+        print("SKIP mjx smoke — python with jax+mujoco+mujoco-mjx+optax+onnx not available")
 
     print()
     if FAILURES:

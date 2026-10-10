@@ -20,6 +20,7 @@ import type { Server as HttpServer } from 'node:http';
 import express, { type Express } from 'express';
 
 import { MICRODUCK_SIM2REAL_CONTRACT, SIM2REAL_SCHEMA_VERSION } from '../../shared/sim2real.js';
+import type { DshImageUpload } from '../../shared/dsh-chat.js';
 import {
   createDeviceBoardDetectRouter,
   isSSOEnabled,
@@ -63,7 +64,12 @@ import {
   askDsh,
   createDshRuntime,
   DshAgentFailure,
+  DshImageFailure,
+  dshImageInputCapability,
   dshRuntimeEnabled,
+  dshVisionModels,
+  parseDshImageUpload,
+  resolveDshModel,
   resolveDshPersistenceRoot,
 } from '../../server/agent-runtime/dsh-runtime.js';
 import {
@@ -502,7 +508,7 @@ function microduckUnavailablePage(response: express.Response): void {
   response
     .status(503)
     .setHeader('Cache-Control', 'no-store')
-    .sendFile(path.join(PUBLIC_ROOT, 'microduck-unavailable.html'));
+    .sendFile('microduck-unavailable.html', { root: PUBLIC_ROOT });
 }
 
 async function proxyMicroduck(request: express.Request, response: express.Response): Promise<void> {
@@ -716,7 +722,15 @@ export function createSim2RealWebApp(): Express {
   );
   // Parse only after the protective request layers are attached.  The final
   // error boundary below converts parser failures into stable JSON responses.
-  app.use(express.json({ limit: '2mb' }));
+  const normalJson = express.json({ limit: '2mb' });
+  const imageChatJson = express.json({ limit: '6mb' });
+  app.use((request, response, next) => {
+    const parser =
+      request.method === 'POST' && /^\/api\/sim2real\/dsh\/chat\/?$/.test(request.path)
+        ? imageChatJson
+        : normalJson;
+    parser(request, response, next);
+  });
 
   // studio-cookie 模式的独立登录页 + 直连登录中继（D-006 的轻量替代路径）：
   // 用户在本平台完成登录，凭据经服务端转发 Studio 直连 API，会话 cookie
@@ -809,6 +823,7 @@ export function createSim2RealWebApp(): Express {
       dsh: {
         configured: dshRuntimeEnabled(),
         initialized: dsh,
+        imageInput: dshImageInputCapability(dsh),
         // Handlers are bound at startup in startSim2RealWebServer; this app
         // factory is also used by tests without a DSH composition, so the
         // catalog reflects whatever handlers the runtime received.
@@ -1089,9 +1104,34 @@ export function createSim2RealWebApp(): Express {
       });
       return;
     }
+    let image: DshImageUpload | undefined;
+    if (request.body?.image !== undefined) {
+      try {
+        image = parseDshImageUpload(request.body.image);
+        if (!dshVisionModels().includes(resolveDshModel(model))) {
+          throw new DshImageFailure(
+            'DSH_VISION_MODEL_REQUIRED',
+            '当前模型未配置图像输入，请选择服务端已配置的视觉模型。',
+            422,
+          );
+        }
+      } catch (error) {
+        if (error instanceof DshImageFailure) {
+          response
+            .status(error.httpStatus)
+            .json({ ok: false, error: error.code, message: error.message });
+          return;
+        }
+        throw error;
+      }
+    }
     const requestAbort = new AbortController();
     const abortRequest = () => requestAbort.abort();
+    const abortResponse = () => {
+      if (!response.writableEnded) requestAbort.abort();
+    };
     request.once('aborted', abortRequest);
+    response.once('close', abortResponse);
     try {
       // The browser sees an opaque per-conversation id. In shared deployments
       // the durable DSH id is owner-scoped, so knowing another user's local
@@ -1133,6 +1173,7 @@ export function createSim2RealWebApp(): Express {
             ...(model ? { model } : {}),
             sessionId: backendSessionId,
             signal: requestAbort.signal,
+            ...(image ? { image } : {}),
           });
         return channel ? channel.withAuth(forwarded, work) : work();
       });
@@ -1144,9 +1185,23 @@ export function createSim2RealWebApp(): Express {
         toolTrail: publicDshToolTrail(result.toolTrail),
         events: publicDshEventTail(result.events),
         ...(result.usage ? { usage: result.usage } : {}),
+        ...(result.imageAccepted ? { imageAccepted: result.imageAccepted } : {}),
       });
     } catch (error) {
-      console.error('[sim2real-web] DSH chat failed:', redactInternalError(error));
+      if (error instanceof DshImageFailure) {
+        response
+          .status(error.httpStatus)
+          .json({ ok: false, error: error.code, message: error.message });
+        return;
+      }
+      console.error(
+        '[sim2real-web] DSH chat failed:',
+        image
+          ? error instanceof DshAgentFailure
+            ? error.code
+            : 'DSH_CHAT_FAILED'
+          : redactInternalError(error),
+      );
       // A turn failure with a reviewed code carries its own user-facing
       // message (for example the missing-credential hint). Everything else
       // keeps the generic upstream response so provider internals never cross
@@ -1165,6 +1220,7 @@ export function createSim2RealWebApp(): Express {
       sendPublicUpstreamError(response, 'DSH_CHAT_FAILED', 'dsh');
     } finally {
       request.off('aborted', abortRequest);
+      response.off('close', abortResponse);
     }
   });
   // Studio-cookie deployments also expose a credential relay so the workbench
@@ -1332,7 +1388,7 @@ export function createSim2RealWebApp(): Express {
     if (surface.state === 'mounted') {
       const root = configuredMicroduckRoot();
       if (root) {
-        response.sendFile(path.join(root, 'index.html'));
+        response.sendFile('index.html', { root });
         return;
       }
       microduckUnavailablePage(response);
@@ -1386,7 +1442,9 @@ export function createSim2RealWebApp(): Express {
   });
   app.get('/originbot-sim/', (_request, response) => {
     response.setHeader('Cache-Control', 'no-cache');
-    response.sendFile(path.join(PUBLIC_ROOT, 'originbot-sim', 'index.html'));
+    // Scope dotfile checks to the public file, not hidden checkout ancestors
+    // such as `.codex/worktrees`. Keep the default denial for actual dotfiles.
+    response.sendFile('originbot-sim/index.html', { root: PUBLIC_ROOT });
   });
 
   // The browser cannot start a process on the user's computer. These two
@@ -1397,7 +1455,7 @@ export function createSim2RealWebApp(): Express {
     response
       .setHeader('Cache-Control', 'no-cache')
       .type('application/javascript')
-      .sendFile(path.join(SERVICE_ROOT, '..', '..', 'scripts', 'local-gpu-agent.mjs'));
+      .sendFile('local-gpu-agent.mjs', { root: path.join(SERVICE_ROOT, '..', '..', 'scripts') });
   });
   app.get('/agent/install.sh', (request, response) => {
     const forwardedProto = String(request.headers['x-forwarded-proto'] ?? '')
@@ -1517,14 +1575,18 @@ export function createSim2RealWebApp(): Express {
         '[sim2real-web] request failed',
         request.method,
         request.path,
-        redactInternalError(error),
+        /^\/api\/sim2real\/dsh\/chat\/?$/.test(request.path)
+          ? 'DSH_CHAT_REQUEST_FAILED'
+          : redactInternalError(error),
       );
       if (response.headersSent) return;
       if ((error as { type?: string })?.type === 'entity.too.large') {
         response.status(413).json({
           ok: false,
           error: 'SIM2REAL_REQUEST_TOO_LARGE',
-          message: '请求体过大；请将遥测按更小的 JSON 分片上传。',
+          message: /^\/api\/sim2real\/dsh\/chat\/?$/.test(request.path)
+            ? '看图请求体不能超过 6 MiB；图片不能超过 4 MiB。'
+            : '请求体过大；请将遥测按更小的 JSON 分片上传。',
           retryable: false,
         });
         return;

@@ -240,6 +240,21 @@ export interface Sim2RealTrainingSpec {
   algorithm?: Sim2RealTrainingAlgorithm;
   /** Engine the worker must route to; omitted keeps the platform default. */
   engine?: Sim2RealTrainingEngine;
+  /** Owner/project-scoped Run whose recorded episodes are used for imitation. */
+  demonstrationRunId?: string;
+  /** Set by the platform from the accepted source bytes, never from client paths. */
+  demonstrationSha256?: string;
+  /** Explicit protocol smoke only; never a substitute for recorded data. */
+  syntheticSmoke?: boolean;
+}
+
+/** Server-resolved, digest-pinned imitation input; never a client file path. */
+export interface Sim2RealDemonstrations {
+  sourceRunId: string;
+  sha256: string;
+  jsonl: string;
+  sampleCount: number;
+  episodeCount: number;
 }
 
 export interface Sim2RealCheckpointRef {
@@ -1035,6 +1050,20 @@ export function normalizeTrainingSpec(value: unknown): {
       'training.engine must be one of starter-ppo, mjx-ppo, visual-ppo, dm-control-ppo, mjlab-rsl-rl, microduck-rl, microduck-football, act, diffusion-policy, smolvla, isaac-lab',
     );
   }
+  const demonstrationRunId = safeText(source.demonstrationRunId, 200);
+  if (
+    source.demonstrationRunId !== undefined &&
+    (typeof source.demonstrationRunId !== 'string' ||
+      source.demonstrationRunId.trim().length > 200 ||
+      !/^[a-zA-Z0-9][a-zA-Z0-9._-]{0,199}$/.test(demonstrationRunId))
+  )
+    errors.push('training.demonstrationRunId must be a valid recorded Run id');
+  if (source.syntheticSmoke !== undefined && typeof source.syntheticSmoke !== 'boolean')
+    errors.push('training.syntheticSmoke must be boolean');
+  if (source.syntheticSmoke === true && (selected !== 'smoke' || demonstrationRunId))
+    errors.push(
+      'syntheticSmoke requires the smoke profile and cannot replace recorded demonstrations',
+    );
   if (errors.length) return { errors };
   return {
     errors,
@@ -1046,6 +1075,8 @@ export function normalizeTrainingSpec(value: unknown): {
       ...(runName ? { runName } : {}),
       ...(algorithm ? { algorithm: algorithm as Sim2RealTrainingAlgorithm } : {}),
       ...(engine ? { engine: engine as Sim2RealTrainingEngine } : {}),
+      ...(demonstrationRunId ? { demonstrationRunId } : {}),
+      ...(source.syntheticSmoke === true ? { syntheticSmoke: true } : {}),
     },
   };
 }

@@ -220,6 +220,8 @@ export const TOOL_PARAM_HINTS: Record<string, ToolParamHint> = {
       backend: { type: 'string' },
       profile: { type: 'string' },
       engine: { type: 'string' },
+      demonstrationRunId: { type: 'string' },
+      syntheticSmoke: { type: 'boolean' },
       algorithm: { type: 'string' },
       numEnvs: { type: 'number' },
       maxIterations: { type: 'number' },

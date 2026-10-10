@@ -10,6 +10,10 @@ const [html, telemetrySource, appSource] = await Promise.all([
   readFile(path.join(root, 'telemetry-core.js'), 'utf8'),
   readFile(path.join(root, 'app.js'), 'utf8'),
 ]);
+const [inspectorCoreSource, inspectorSource] = await Promise.all([
+  readFile(path.join(root, 'run-inspector-core.js'), 'utf8'),
+  readFile(path.join(root, 'run-inspector.js'), 'utf8'),
+]);
 
 const openWindows: Array<InstanceType<typeof JSDOM>['window']> = [];
 
@@ -64,7 +68,12 @@ function model() {
 
 function overview(
   runs?: unknown[],
-  extras: { artifacts?: unknown[]; evaluations?: unknown[]; deployments?: unknown[] } = {},
+  extras: {
+    artifacts?: unknown[];
+    evaluations?: unknown[];
+    deployments?: unknown[];
+    localWorker?: { mock?: boolean; engines?: string[] | null };
+  } = {},
 ) {
   const selectedModel = model();
   const contract = selectedModel.manifest.contract;
@@ -122,6 +131,7 @@ function overview(
           healthy: true,
           mock: true,
           message: 'mock protocol worker',
+          ...extras.localWorker,
         },
       },
       robogo: {
@@ -175,12 +185,24 @@ function canvasContext() {
 async function boot(
   options: {
     projects?: unknown[];
+    projectsStatus?: number;
+    datasets?: unknown[];
+    datasetsStatus?: number;
+    summaryGeneratedAt?: string;
+    captureHeartbeat?: boolean;
+    captureCameraTimeout?: boolean;
     failOverview?: boolean;
     createdProject?: unknown;
     runs?: unknown[];
     artifacts?: unknown[];
     evaluations?: unknown[];
     overviewDeployments?: unknown[];
+    localWorker?: { mock?: boolean; engines?: string[] | null };
+    stationHealth?: unknown;
+    stationHealthStatus?: number;
+    stationStream?: () => Response | Promise<Response>;
+    devices?: unknown[];
+    localBridgeStatus?: unknown;
     /** Frames the replay endpoint returns; drives the aligned camera frame tests. */
     replayFrames?: unknown[];
     /** Notices payload served by GET /sim2real/notices. */
@@ -202,6 +224,31 @@ async function boot(
   });
   openWindows.push(dom.window);
   const { window } = dom;
+  const heartbeatTimers = new Map<number, () => void>();
+  const cameraTimers = new Map<number, () => void>();
+  if (options.captureHeartbeat || options.captureCameraTimeout) {
+    const nativeSetTimeout = window.setTimeout.bind(window);
+    const nativeClearTimeout = window.clearTimeout.bind(window);
+    let nextHeartbeatId = 1000000;
+    window.setTimeout = ((callback, delay, ...args) => {
+      const timers =
+        options.captureHeartbeat && delay === 30000
+          ? heartbeatTimers
+          : options.captureCameraTimeout && delay === 10000
+            ? cameraTimers
+            : null;
+      if (timers && typeof callback === 'function') {
+        const id = nextHeartbeatId++;
+        timers.set(id, () => callback(...args));
+        return id;
+      }
+      return nativeSetTimeout(callback, delay, ...args);
+    }) as typeof window.setTimeout;
+    window.clearTimeout = (id) => {
+      if (!heartbeatTimers.delete(Number(id)) && !cameraTimers.delete(Number(id)))
+        nativeClearTimeout(id);
+    };
+  }
   if (options.workspaceContext) {
     window.localStorage.setItem(
       'rdk-duck-lab-workspace-context',
@@ -264,14 +311,33 @@ async function boot(
           },
         );
       }
-      if (url.includes('/overview'))
+      if (url.includes('/overview')) {
         payload = overview(options.runs, {
           artifacts: options.artifacts,
           evaluations: options.evaluations,
           deployments: options.overviewDeployments,
+          localWorker: options.localWorker,
         });
-      else if (url.includes('/workspace-summary')) {
-        payload = { ok: true, counts: { models: 1, runs: 1, deployments: 0, devices: 0 } };
+        if (options.devices) (payload as { devices: unknown[] }).devices = options.devices;
+      } else if (url.includes('/board-station/health') && options.stationHealth !== undefined) {
+        const health =
+          typeof options.stationHealth === 'function'
+            ? await options.stationHealth(url)
+            : options.stationHealth;
+        return new Response(JSON.stringify(health), {
+          status: options.stationHealthStatus || 200,
+          headers: { 'content-type': 'application/json' },
+        });
+      } else if (url.includes('/board-station/status/stream') && options.stationStream) {
+        return options.stationStream();
+      } else if (url.includes('/local-bridge/status') && options.localBridgeStatus) {
+        payload = options.localBridgeStatus;
+      } else if (url.includes('/workspace-summary')) {
+        payload = {
+          ok: true,
+          generatedAt: options.summaryGeneratedAt,
+          counts: { models: 1, runs: 1, deployments: 0, devices: 0 },
+        };
       } else if (url.includes('/lineage?')) {
         payload = {
           ok: true,
@@ -294,8 +360,17 @@ async function boot(
         };
       } else if (url.endsWith('/projects') && method === 'POST')
         payload = { ok: true, project: options.createdProject || project() };
-      else if (url.endsWith('/projects')) payload = { ok: true, projects: options.projects || [] };
-      else if (url.endsWith('/datasets')) payload = { ok: true, datasets: [] };
+      else if (
+        (url.endsWith('/projects') && (options.projectsStatus || 200) >= 400) ||
+        (url.endsWith('/datasets') && (options.datasetsStatus || 200) >= 400)
+      ) {
+        return new Response(JSON.stringify({ ok: false, message: '辅助列表暂不可用' }), {
+          status: url.endsWith('/projects') ? options.projectsStatus : options.datasetsStatus,
+          headers: { 'content-type': 'application/json' },
+        });
+      } else if (url.endsWith('/projects'))
+        payload = { ok: true, projects: options.projects || [] };
+      else if (url.endsWith('/datasets')) payload = { ok: true, datasets: options.datasets || [] };
       else if (url.includes('/models/model-1')) {
         payload = { ok: true, model: model(), compatibility: [] };
       } else if (url.includes('/replay') && options.replayFrames) {
@@ -357,6 +432,7 @@ async function boot(
     open: vi.fn(),
     scrollTo: vi.fn(),
     structuredClone: globalThis.structuredClone,
+    TextDecoder: globalThis.TextDecoder,
   });
   window.requestAnimationFrame = (callback) => {
     callback(Date.now());
@@ -371,10 +447,112 @@ async function boot(
       break;
     await new Promise((resolve) => setTimeout(resolve, 10));
   }
-  return { window, errors, requests };
+  return {
+    window,
+    errors,
+    requests,
+    cameraTimeout() {
+      for (const [id, callback] of cameraTimers) {
+        cameraTimers.delete(id);
+        callback();
+      }
+    },
+    async heartbeat() {
+      const pending = [...heartbeatTimers.entries()].at(-1);
+      if (!pending) throw new Error('overview heartbeat was not scheduled');
+      heartbeatTimers.delete(pending[0]);
+      pending[1]();
+      await new Promise((resolve) => setTimeout(resolve, 30));
+    },
+  };
 }
 
 describe('Sim2Real workbench DOM behavior', () => {
+  it('enables only explicitly registered engines when the CPU worker also reports default', async () => {
+    const { window, errors } = await boot({
+      localWorker: { mock: false, engines: ['default', 'starter-ppo', 'act', 'diffusion-policy'] },
+    });
+    const options = Array.from(
+      window.document.querySelectorAll<HTMLOptionElement>('#training-engine option'),
+    );
+    const registered = new Set(['', 'starter-ppo', 'act', 'diffusion-policy']);
+    for (const option of options) {
+      expect(option.disabled, option.value || 'default').toBe(!registered.has(option.value));
+      expect(option.textContent?.includes('worker 未注册'), option.value || 'default').toBe(
+        !registered.has(option.value),
+      );
+    }
+    expect(errors).toEqual([]);
+  });
+
+  it.each([null, undefined])(
+    'preserves engine compatibility when the real worker does not report engines (%s)',
+    async (engines) => {
+      const { window, errors } = await boot({ localWorker: { mock: false, engines } });
+      const options = Array.from(
+        window.document.querySelectorAll<HTMLOptionElement>('#training-engine option'),
+      );
+      expect(options.every((option) => !option.disabled)).toBe(true);
+      expect(options.every((option) => !option.textContent?.includes('worker 未注册'))).toBe(true);
+      expect(errors).toEqual([]);
+    },
+  );
+
+  it('preserves loaded project and dataset data during heartbeat polls that skip auxiliary reads', async () => {
+    const { window, errors, requests, heartbeat } = await boot({
+      captureHeartbeat: true,
+      projects: [project()],
+      datasets: [{ id: 'dataset-1', name: '真实示教', modelId: 'model-1' }],
+      summaryGeneratedAt: '2026-09-10T00:00:00.000Z',
+    });
+    const note = window.document.querySelector('#project-context-note');
+    const saved = window.document.querySelector('#workspace-last-saved');
+    const dataset = window.document.querySelector('#workspace-dataset-count');
+    const originalNote = note?.textContent;
+    const originalSaved = saved?.textContent;
+    const originalDataset = dataset?.textContent;
+    expect(originalNote).toContain('1 个项目');
+    expect(originalDataset).toBe('1 个数据集');
+    expect(requests.filter((request) => request.url.endsWith('/projects'))).toHaveLength(1);
+    await heartbeat();
+    await heartbeat();
+    expect(note?.textContent).toBe(originalNote);
+    expect(saved?.textContent).toBe(originalSaved);
+    expect(dataset?.textContent).toBe(originalDataset);
+    expect(window.document.querySelectorAll('#project-select option')).toHaveLength(2);
+    expect(requests.filter((request) => request.url.endsWith('/projects'))).toHaveLength(1);
+    expect(requests.filter((request) => request.url.endsWith('/datasets'))).toHaveLength(1);
+    expect(requests.filter((request) => request.url.includes('/overview?'))).toHaveLength(3);
+    expect(errors).toEqual([]);
+  });
+
+  it('retains known auxiliary failures until a foreground retry actually checks them again', async () => {
+    const options = {
+      captureHeartbeat: true,
+      projects: [project()],
+      projectsStatus: 503,
+      datasetsStatus: 503,
+    };
+    const { window, requests, heartbeat } = await boot(options);
+    const note = window.document.querySelector('#project-context-note');
+    const banner = window.document.querySelector<HTMLElement>('#workspace-status-banner');
+    expect(note?.textContent).toContain('项目列表暂不可用');
+    expect(banner?.hidden).toBe(false);
+    expect(banner?.dataset.state).toBe('warning');
+    await heartbeat();
+    expect(note?.textContent).toContain('项目列表暂不可用');
+    expect(banner?.hidden).toBe(false);
+    expect(banner?.dataset.state).toBe('warning');
+    expect(requests.filter((request) => request.url.endsWith('/projects'))).toHaveLength(1);
+    options.projectsStatus = 200;
+    options.datasetsStatus = 200;
+    window.document.querySelector<HTMLButtonElement>('#refresh-button')?.click();
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    expect(note?.textContent).toContain('1 个项目');
+    expect(banner?.hidden).toBe(true);
+    expect(requests.filter((request) => request.url.endsWith('/projects'))).toHaveLength(2);
+  });
+
   it('boots the real app bundle and changes one visible workspace view at a time', async () => {
     const { window, errors } = await boot();
     // Scoped to the scorecard grid: the research-loop panel reuses the same
@@ -434,15 +612,21 @@ describe('Sim2Real workbench DOM behavior', () => {
     Object.defineProperty(window.HTMLCanvasElement.prototype, 'getContext', {
       configurable: true,
       value() {
-        return {
-          createImageData: (width: number, height: number) => ({
-            width,
-            height,
-            data: new Uint8ClampedArray(width * height * 4),
-          }),
-          putImageData: (image: { data: Uint8ClampedArray }) => drawn.push(image.data),
-          clearRect: () => undefined,
-        };
+        return new Proxy(
+          {
+            createImageData: (width: number, height: number) => ({
+              width,
+              height,
+              data: new Uint8ClampedArray(width * height * 4),
+            }),
+            putImageData: (image: { data: Uint8ClampedArray }) => drawn.push(image.data),
+            clearRect: () => undefined,
+          },
+          {
+            get: (target, property) =>
+              Reflect.get(target, property) ?? Reflect.get(canvasContext(), property),
+          },
+        );
       },
     });
 
@@ -461,8 +645,8 @@ describe('Sim2Real workbench DOM behavior', () => {
     expect(Array.from(firstDraw.slice(0, 4))).toEqual([1, 2, 3, 255]);
     expect(Array.from(firstDraw.slice(4, 8))).toEqual([4, 5, 6, 255]);
 
-    // Index 2 has no frame; index 0 is nearer (2 back) than index 3 (1 forward),
-    // so the forward one wins and the note must not claim it is the sample.
+    // Index 2 has no frame. Even though the future frame is one index away,
+    // it must never be shown as an observation available at this time.
     const seek = window.document.querySelector<HTMLInputElement>('#replay-seek');
     if (seek) {
       seek.value = '2';
@@ -470,8 +654,8 @@ describe('Sim2Real workbench DOM behavior', () => {
     }
     expect(note?.textContent).toContain('最近帧');
     expect(note?.textContent).toContain('非本采样点');
-    expect(note?.textContent).toContain('t=0.80s');
-    expect(note?.textContent).toContain('0.50s');
+    expect(note?.textContent).toContain('t=0.10s');
+    expect(note?.textContent).toContain('0.20s');
     expect(errors).toEqual([]);
 
     // Index 1 is one step from either side, and the at-or-before frame wins the
@@ -1277,5 +1461,576 @@ describe('Sim2Real workbench DOM behavior', () => {
     expect(select?.value).toBe('standard');
     expect(window.document.querySelector('[data-training-profile-note]')?.hidden).toBe(true);
     expect(errors).toEqual([]);
+  });
+});
+
+describe('station camera evidence and cancellation', () => {
+  const devices = [
+    { id: 'board-a', name: 'Board A', status: 'connected' },
+    { id: 'board-b', name: 'Board B', status: 'connected' },
+  ];
+  const health = (mock = false, id = 'board-a') => ({
+    ok: true,
+    agent: { mock },
+    device: { id },
+    cameraSupported: true,
+  });
+  async function openStation(window: InstanceType<typeof JSDOM>['window']) {
+    window.document
+      .querySelector<HTMLButtonElement>('.sidebar [data-view-target="station"]')
+      ?.click();
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    window.document.querySelector<HTMLButtonElement>('#station-tab-telemetry')?.click();
+  }
+  function decoded(image: HTMLImageElement) {
+    Object.defineProperties(image, {
+      naturalWidth: { configurable: true, value: 16 },
+      naturalHeight: { configurable: true, value: 12 },
+    });
+  }
+
+  it.each([
+    {
+      payload: { ok: true, available: false, state: 'offline', agent: { mock: false } },
+      status: 200,
+    },
+    { payload: { ok: false, message: 'not configured' }, status: 503 },
+  ])(
+    'does not claim a connected mock agent for unavailable health ($status)',
+    async ({ payload, status }) => {
+      const { window } = await boot({ stationHealth: payload, stationHealthStatus: status });
+      await openStation(window);
+      expect(window.document.querySelector<HTMLElement>('#station-honesty-note')?.hidden).toBe(
+        true,
+      );
+      window.document.querySelector<HTMLButtonElement>('#station-camera-toggle')?.click();
+      expect(window.document.querySelector('#station-camera-state')?.textContent).not.toContain(
+        '已连接',
+      );
+      expect(window.document.querySelector('#station-camera-img')?.hasAttribute('src')).toBe(false);
+    },
+  );
+
+  it('waits for a decoded first frame and rejects callbacks after stopping', async () => {
+    const { window } = await boot({ stationHealth: health(), devices });
+    await openStation(window);
+    const toggle = window.document.querySelector<HTMLButtonElement>('#station-camera-toggle')!;
+    toggle.click();
+    const image = window.document.querySelector<HTMLImageElement>('#station-camera-img')!;
+    expect(window.document.querySelector('#station-camera-state')?.textContent).toContain(
+      '等待首帧',
+    );
+    expect(image.hidden).toBe(true);
+    image.dispatchEvent(new window.Event('load'));
+    expect(window.document.querySelector('#station-camera-state')?.textContent).toContain(
+      '等待首帧',
+    );
+    decoded(image);
+    image.dispatchEvent(new window.Event('load'));
+    expect(window.document.querySelector('#station-camera-state')?.textContent).toContain(
+      '首帧已确认',
+    );
+    expect(image.hidden).toBe(false);
+    toggle.click();
+    image.dispatchEvent(new window.Event('load'));
+    image.dispatchEvent(new window.Event('error'));
+    expect(window.document.querySelector('#station-camera-state')?.textContent).toBe('未连接');
+    expect(image.hasAttribute('src')).toBe(false);
+  });
+
+  it('recognizes a continuous MJPEG first frame without a load event and labels the mock source', async () => {
+    const { window } = await boot({ stationHealth: health(true), devices });
+    await openStation(window);
+    expect(window.document.querySelector<HTMLElement>('#station-honesty-note')?.hidden).toBe(false);
+    window.document.querySelector<HTMLButtonElement>('#station-camera-toggle')?.click();
+    const image = window.document.querySelector<HTMLImageElement>('#station-camera-img')!;
+    decoded(image);
+    await new Promise((resolve) => setTimeout(resolve, 280));
+    expect(window.document.querySelector('#station-camera-state')?.textContent).toContain(
+      '合成演示',
+    );
+    expect(window.document.querySelector('#station-camera-state')?.textContent).toContain(
+      '首帧已确认',
+    );
+    expect(image.alt).toContain('不是真机');
+  });
+
+  it('times out an unconfirmed frame and makes a late decode harmless', async () => {
+    const { window, cameraTimeout } = await boot({
+      stationHealth: health(),
+      captureCameraTimeout: true,
+    });
+    await openStation(window);
+    window.document.querySelector<HTMLButtonElement>('#station-camera-toggle')?.click();
+    const image = window.document.querySelector<HTMLImageElement>('#station-camera-img')!;
+    cameraTimeout();
+    expect(window.document.querySelector('#station-camera-state')?.textContent).toContain('超时');
+    expect(image.hasAttribute('src')).toBe(false);
+    decoded(image);
+    image.dispatchEvent(new window.Event('load'));
+    expect(window.document.querySelector('#station-camera-state')?.textContent).toContain('超时');
+  });
+
+  it('keeps an old image from overwriting the replacement board stream or its error', async () => {
+    const { window } = await boot({
+      devices,
+      stationHealth: (url: string) =>
+        health(false, new URL(url, 'http://localhost').searchParams.get('deviceId') || 'board-a'),
+    });
+    await openStation(window);
+    const toggle = window.document.querySelector<HTMLButtonElement>('#station-camera-toggle')!;
+    toggle.click();
+    const oldImage = window.document.querySelector<HTMLImageElement>('#station-camera-img')!;
+    const select = window.document.querySelector<HTMLSelectElement>('#device-select')!;
+    select.value = 'board-b';
+    select.dispatchEvent(new window.Event('change', { bubbles: true }));
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    expect(oldImage.hasAttribute('src')).toBe(false);
+    toggle.click();
+    const replacement = window.document.querySelector<HTMLImageElement>('#station-camera-img')!;
+    expect(replacement).not.toBe(oldImage);
+    expect(replacement.src).toContain('deviceId=board-b');
+    decoded(oldImage);
+    oldImage.dispatchEvent(new window.Event('load'));
+    oldImage.dispatchEvent(new window.Event('error'));
+    expect(window.document.querySelector('#station-camera-state')?.textContent).toContain(
+      '等待首帧',
+    );
+    replacement.dispatchEvent(new window.Event('error'));
+    expect(window.document.querySelector('#station-camera-state')?.textContent).toContain('不可用');
+    oldImage.dispatchEvent(new window.Event('load'));
+    expect(window.document.querySelector('#station-camera-state')?.textContent).toContain('不可用');
+  });
+
+  it('ignores a late health response from the previous board', async () => {
+    let releaseHealth!: (value: unknown) => void;
+    let calls = 0;
+    const { window } = await boot({
+      devices,
+      stationHealth: () =>
+        ++calls === 1
+          ? new Promise((resolve) => {
+              releaseHealth = resolve;
+            })
+          : health(false, 'board-b'),
+    });
+    await openStation(window);
+    const select = window.document.querySelector<HTMLSelectElement>('#device-select')!;
+    select.value = 'board-b';
+    select.dispatchEvent(new window.Event('change', { bubbles: true }));
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    releaseHealth(health(true, 'board-a'));
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    expect(window.document.querySelector('#station-device-name')?.textContent).toBe('Board B');
+    expect(window.document.querySelector<HTMLElement>('#station-honesty-note')?.hidden).toBe(true);
+    window.document.querySelector<HTMLButtonElement>('#station-camera-toggle')?.click();
+    expect(window.document.querySelector<HTMLImageElement>('#station-camera-img')?.src).toContain(
+      'deviceId=board-b',
+    );
+    expect(window.document.querySelector('#station-camera-state')?.textContent).not.toContain(
+      '合成演示',
+    );
+  });
+
+  it('ignores a late offline status stream that could cancel the replacement camera', async () => {
+    let releaseStream!: (response: Response) => void;
+    let calls = 0;
+    const { window } = await boot({
+      devices,
+      stationHealth: (url: string) =>
+        health(false, new URL(url, 'http://localhost').searchParams.get('deviceId') || 'board-a'),
+      stationStream: () =>
+        ++calls === 1
+          ? new Promise((resolve) => {
+              releaseStream = resolve;
+            })
+          : new Response(
+              new ReadableStream({
+                start(controller) {
+                  controller.close();
+                },
+              }),
+            ),
+    });
+    await openStation(window);
+    const select = window.document.querySelector<HTMLSelectElement>('#device-select')!;
+    select.value = 'board-b';
+    select.dispatchEvent(new window.Event('change', { bubbles: true }));
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    window.document.querySelector<HTMLButtonElement>('#station-camera-toggle')?.click();
+    const image = window.document.querySelector<HTMLImageElement>('#station-camera-img')!;
+    releaseStream(
+      new Response(
+        new ReadableStream({
+          start(controller) {
+            controller.enqueue(
+              new TextEncoder().encode(
+                '{"available":false,"state":"offline","message":"old board offline"}\n',
+              ),
+            );
+            controller.close();
+          },
+        }),
+      ),
+    );
+    await new Promise((resolve) => setTimeout(resolve, 280));
+    expect(image.hasAttribute('src')).toBe(true);
+    expect(window.document.querySelector('#station-camera-state')?.textContent).toContain(
+      '等待首帧',
+    );
+  });
+
+  it.each(['replace', 'empty'])(
+    'cancels a confirmed camera when a refreshed registry must %s the selected board',
+    async (change) => {
+      const options = {
+        devices: [devices[0]],
+        stationHealth: (url: string) => {
+          const id = new URL(url, 'http://localhost').searchParams.get('deviceId');
+          return id ? health(false, id) : { ok: true, available: false, state: 'offline' };
+        },
+      };
+      const { window, requests } = await boot(options);
+      await openStation(window);
+      window.document.querySelector<HTMLButtonElement>('#station-camera-toggle')?.click();
+      const oldImage = window.document.querySelector<HTMLImageElement>('#station-camera-img')!;
+      decoded(oldImage);
+      oldImage.dispatchEvent(new window.Event('load'));
+      expect(window.document.querySelector('#station-camera-state')?.textContent).toContain(
+        '首帧已确认',
+      );
+      options.devices = change === 'replace' ? [devices[1]] : [];
+      window.document.querySelector<HTMLButtonElement>('#refresh-button')?.click();
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      expect(oldImage.hasAttribute('src')).toBe(false);
+      oldImage.dispatchEvent(new window.Event('load'));
+      expect(window.document.querySelector('#station-camera-state')?.textContent).toBe('未连接');
+      if (change === 'replace') {
+        expect(
+          requests.some((request) =>
+            request.url.includes('/board-station/health?deviceId=board-b'),
+          ),
+        ).toBe(true);
+        window.document.querySelector<HTMLButtonElement>('#station-camera-toggle')?.click();
+        expect(
+          window.document.querySelector<HTMLImageElement>('#station-camera-img')?.src,
+        ).toContain('deviceId=board-b');
+      } else {
+        expect(window.document.querySelector<HTMLElement>('#station-honesty-note')?.hidden).toBe(
+          true,
+        );
+        window.document.querySelector<HTMLButtonElement>('#station-camera-toggle')?.click();
+        expect(window.document.querySelector('#station-camera-img')?.hasAttribute('src')).toBe(
+          false,
+        );
+      }
+    },
+  );
+
+  it('cancels a confirmed camera when selecting a registered Local Bridge board', async () => {
+    const { window, requests } = await boot({
+      devices: [devices[0], { ...devices[1], bridgeDeviceId: 'bridge-b' }],
+      stationHealth: (url: string) =>
+        health(false, new URL(url, 'http://localhost').searchParams.get('deviceId') || 'board-a'),
+      localBridgeStatus: {
+        bridges: [
+          {
+            bridgeId: 'bridge-1',
+            online: true,
+            devices: [{ bridgeDeviceId: 'bridge-b', name: 'Board B' }],
+          },
+        ],
+      },
+    });
+    await openStation(window);
+    window.document.querySelector<HTMLButtonElement>('#station-camera-toggle')?.click();
+    const oldImage = window.document.querySelector<HTMLImageElement>('#station-camera-img')!;
+    decoded(oldImage);
+    oldImage.dispatchEvent(new window.Event('load'));
+    const select = window.document.querySelector<HTMLButtonElement>(
+      '#station-device-list [data-action="bridge-select"]',
+    )!;
+    expect(select).not.toBeNull();
+    select.click();
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    expect(oldImage.hasAttribute('src')).toBe(false);
+    oldImage.dispatchEvent(new window.Event('load'));
+    expect(window.document.querySelector('#station-camera-state')?.textContent).toBe('未连接');
+    expect(
+      requests.some((request) => request.url.includes('/board-station/health?deviceId=board-b')),
+    ).toBe(true);
+  });
+
+  it.each(['pagehide', 'navigate'])(
+    'cancels an image and rejects late decode on %s',
+    async (action) => {
+      const { window } = await boot({ stationHealth: health(), devices });
+      await openStation(window);
+      window.document.querySelector<HTMLButtonElement>('#station-camera-toggle')?.click();
+      const image = window.document.querySelector<HTMLImageElement>('#station-camera-img')!;
+      if (action === 'pagehide') window.dispatchEvent(new window.Event('pagehide'));
+      else
+        window.document
+          .querySelector<HTMLButtonElement>('.sidebar [data-view-target="overview"]')
+          ?.click();
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      decoded(image);
+      image.dispatchEvent(new window.Event('load'));
+      expect(image.hasAttribute('src')).toBe(false);
+      expect(window.document.querySelector('#station-camera-state')?.textContent).toBe('未连接');
+    },
+  );
+});
+
+describe('atomic capability evidence workflows', () => {
+  it('keeps telemetry import outside the mutually hidden comparison wrapper', async () => {
+    const { window } = await boot({ runs: [] });
+    const panel = window.document.querySelector('.telemetry-panel');
+    expect(panel?.closest('.evaluation-evidence')).toBeNull();
+    expect(panel?.hasAttribute('open')).toBe(true);
+    expect(window.document.querySelector('#run-inspector')).not.toBeNull();
+  });
+
+  it('uses the loaded Run frames for all telemetry charts and the shared scrubber', async () => {
+    const frames = [
+      { t: 1, observation: [1], action: [0], reward: 2 },
+      { t: 1.1, observation: [2], action: [1], reward: 3, done: true },
+      { t: 1.8, observation: [3], action: [2], reward: 4 },
+    ];
+    const { window, errors } = await boot({ replayFrames: frames });
+    window.document.querySelector<HTMLButtonElement>('#replay-load-button')?.click();
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    expect(window.document.querySelector<HTMLElement>('#telemetry-visuals')?.hidden).toBe(false);
+    expect(window.document.querySelector<HTMLInputElement>('#telemetry-scrub-input')?.max).toBe(
+      '2',
+    );
+    expect(window.document.querySelector('#telemetry-summary')?.textContent).toContain('3');
+    expect(errors).toEqual([]);
+  });
+
+  it('takes the operator to the simulator when starting a policy trial', async () => {
+    const { window, errors } = await boot({ replayFrames: [{ t: 0, observation: [1] }] });
+    window.document.querySelector<HTMLButtonElement>('#replay-load-button')?.click();
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    window.document.querySelector<HTMLButtonElement>('#eval-tab-run')?.click();
+    window.document.querySelector<HTMLButtonElement>('#policy-trial-button')?.click();
+    expect(window.document.body.dataset.activeView).toBe('simulate');
+    expect(errors).toEqual([]);
+  });
+});
+
+describe('replay cancellation and provenance', () => {
+  it('does not mount an old video export or reset the replacement export button', async () => {
+    const frames = [
+      { t: 0, cameraFrame: { width: 1, height: 1, channels: 3, encoding: 'rgb8', data: 'AAAA' } },
+    ];
+    const runs = ['a', 'b'].map((id) => ({
+      id,
+      modelId: 'model-1',
+      backend: 'contract',
+      status: 'completed',
+      createdAt: '2026-10-10',
+      metrics: { contractValid: true },
+    }));
+    const { window, errors } = await boot({ runs, replayFrames: frames });
+    const originalFetch = window.fetch;
+    const exports = new Map<string, (response: Response) => void>();
+    window.fetch = (input, options) =>
+      String(input).endsWith('/replay-video') && options?.method === 'POST'
+        ? new Promise<Response>((resolve) => {
+            exports.set(String(input), resolve);
+          })
+        : originalFetch(input, options);
+    const select = window.document.querySelector<HTMLSelectElement>('#replay-run-select')!;
+    const button = window.document.querySelector<HTMLButtonElement>('#replay-video-render')!;
+    const load = async (id: string) => {
+      select.value = id;
+      select.dispatchEvent(new window.Event('change'));
+      window.document.querySelector<HTMLButtonElement>('#replay-load-button')?.click();
+      await new Promise((resolve) => setTimeout(resolve, 30));
+    };
+    await load('a');
+    button.click();
+    await load('b');
+    button.click();
+    const exported = (id: string) =>
+      new Response(
+        JSON.stringify({
+          ok: true,
+          runId: id,
+          video: { sha256: 'a'.repeat(64), frameCount: 1, fps: 1, durationSeconds: 1 },
+        }),
+        { headers: { 'content-type': 'application/json' } },
+      );
+    exports.get([...exports.keys()].find((url) => url.includes('/runs/a/'))!)?.(exported('a'));
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    expect(
+      window.document.querySelector<HTMLVideoElement>('#replay-video-element')?.getAttribute('src'),
+    ).toBeNull();
+    expect(button.disabled).toBe(true);
+    expect(button.textContent).toBe('编码中…');
+    exports.get([...exports.keys()].find((url) => url.includes('/runs/b/'))!)?.(exported('b'));
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    expect(
+      window.document.querySelector<HTMLVideoElement>('#replay-video-element')?.getAttribute('src'),
+    ).toContain('/runs/b/replay-video');
+    expect(button.disabled).toBe(false);
+    expect(errors).toEqual([]);
+  });
+
+  it('ignores a late video export failure after clearing its evidence', async () => {
+    const { window, errors } = await boot({
+      replayFrames: [
+        { t: 0, cameraFrame: { width: 1, height: 1, channels: 3, encoding: 'rgb8', data: 'AAAA' } },
+      ],
+    });
+    window.document.querySelector<HTMLButtonElement>('#replay-load-button')?.click();
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    const originalFetch = window.fetch;
+    let fail!: (error: Error) => void;
+    window.fetch = (input, options) =>
+      String(input).endsWith('/replay-video') && options?.method === 'POST'
+        ? new Promise<Response>((_resolve, reject) => {
+            fail = reject;
+          })
+        : originalFetch(input, options);
+    window.document.querySelector<HTMLButtonElement>('#replay-video-render')?.click();
+    window.document.querySelector<HTMLButtonElement>('#telemetry-clear-button')?.click();
+    const caption = window.document.querySelector('#replay-video-caption')?.textContent;
+    const button = window.document.querySelector<HTMLButtonElement>('#replay-video-render')!;
+    const buttonState = { disabled: button.disabled, label: button.textContent };
+    fail(new Error('cancelled old export failed'));
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    expect(window.document.querySelector('#replay-video-caption')?.textContent).toBe(caption);
+    expect({ disabled: button.disabled, label: button.textContent }).toEqual(buttonState);
+    expect(window.document.querySelector<HTMLElement>('#replay-video-block')?.hidden).toBe(true);
+    expect(errors).toEqual([]);
+  });
+
+  it('keeps the Inspector elapsed clock between irregular samples while synchronizing legacy frames', async () => {
+    const frames = [
+      { t: 4, reward: 1 },
+      { t: 4.5, reward: 2 },
+      { t: 6, reward: 3 },
+    ];
+    const { window, errors } = await boot({ replayFrames: frames });
+    window.eval(inspectorCoreSource);
+    window.eval(inspectorSource);
+    const inspector = window.document.querySelector('rdk-run-inspector') as any;
+    inspector.configure({
+      runs: [{ id: 'mock-run-1' }],
+      requestJson: async (url: string) =>
+        url.endsWith('/replay') ? { frames } : { run: { id: 'mock-run-1', modelId: 'model-1' } },
+    });
+    await inspector.load('mock-run-1');
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    inspector.seek(0.75);
+    expect(window.document.querySelector('#replay-frame-label')?.textContent).toBe('2 / 3 帧');
+    expect(inspector.position.textContent).toBe('0.750s / 2.000s');
+    expect(errors).toEqual([]);
+  });
+
+  it('ignores an in-flight historical replay after clear', async () => {
+    const { window, errors } = await boot({
+      replayFrames: [{ t: 0, observation: [1], reward: 1 }],
+    });
+    window.document.querySelector<HTMLButtonElement>('#replay-load-button')?.click();
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    const originalFetch = window.fetch;
+    window.fetch = async (...args) => {
+      if (String(args[0]).includes('/replay'))
+        await new Promise((resolve) => setTimeout(resolve, 50));
+      return originalFetch(...args);
+    };
+    window.document.querySelector<HTMLButtonElement>('#replay-load-button')?.click();
+    window.document.querySelector<HTMLButtonElement>('#telemetry-clear-button')?.click();
+    await new Promise((resolve) => setTimeout(resolve, 90));
+    expect(window.document.querySelector('#replay-frame-label')?.textContent).toBe('0 / 0 帧');
+    expect(window.document.querySelector<HTMLElement>('#telemetry-visuals')?.hidden).toBe(true);
+    expect(errors).toEqual([]);
+  });
+
+  it('plays historical samples at their recorded interval', async () => {
+    const { window } = await boot({
+      replayFrames: [
+        { t: 4, observation: [1] },
+        { t: 4.5, observation: [2] },
+      ],
+    });
+    window.document.querySelector<HTMLButtonElement>('#replay-load-button')?.click();
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    window.document.querySelector<HTMLButtonElement>('#replay-play-button')?.click();
+    await new Promise((resolve) => setTimeout(resolve, 60));
+    expect(window.document.querySelector('#replay-frame-label')?.textContent).toBe('1 / 2 帧');
+    window.document.querySelector<HTMLButtonElement>('#replay-stop-button')?.click();
+  });
+
+  it('keeps real success unmeasured when an attested replay only accompanies training metrics', async () => {
+    const common = {
+      modelId: 'model-1',
+      taskId: 'walk',
+      status: 'completed',
+      mock: false,
+      artifact: { sha256: 'a'.repeat(64) },
+    };
+    const runs = [
+      {
+        ...common,
+        id: 'sim',
+        backend: 'local',
+        createdAt: '2026-10-09',
+        metrics: { contractValid: true, successRate: 0.8, physicsBackend: 'mujoco' },
+      },
+      {
+        ...common,
+        id: 'board',
+        backend: 'contract',
+        createdAt: '2026-10-10',
+        metrics: { contractValid: true, successRate: 0.6 },
+        evaluation: { replay: { source: 'board-agent', attested: true, sampleCount: 4 } },
+      },
+    ];
+    const { window, errors } = await boot({ runs });
+    expect(window.document.querySelector('#eval-sim-label')?.textContent).toBe('80%');
+    expect(window.document.querySelector('#eval-real-label')?.textContent).toBe('—');
+    expect(window.document.querySelector('#eval-comparison-note')?.textContent).toContain(
+      '缺少明确真机成功率测量',
+    );
+    expect(errors).toEqual([]);
+    const other = await boot({
+      runs: [{ ...runs[1], artifact: { sha256: 'b'.repeat(64) } }, runs[0]],
+    });
+    expect(other.window.document.querySelector('#eval-real-label')?.textContent).toBe('—');
+  });
+
+  it('does not select a board replay Run as simulation because it retained a training physics backend', async () => {
+    const common = {
+      modelId: 'model-1',
+      taskId: 'walk',
+      status: 'completed',
+      mock: false,
+      artifact: { sha256: 'a'.repeat(64) },
+    };
+    const { window } = await boot({
+      runs: [
+        {
+          ...common,
+          id: 'sim',
+          createdAt: '2026-10-09',
+          backend: 'local',
+          metrics: { contractValid: true, physicsBackend: 'mujoco', successRate: 0.8 },
+        },
+        {
+          ...common,
+          id: 'board',
+          createdAt: '2026-10-10',
+          backend: 'local',
+          metrics: { contractValid: true, physicsBackend: 'mujoco', successRate: 0.99 },
+          evaluation: { replay: { source: 'board-agent', attested: true, sampleCount: 4 } },
+        },
+      ],
+    });
+    expect(window.document.querySelector('#eval-sim-label')?.textContent).toBe('80%');
+    expect(window.document.querySelector('#eval-real-label')?.textContent).toBe('—');
   });
 });

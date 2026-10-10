@@ -574,8 +574,13 @@ assert.match(
 );
 assert.match(
   app,
-  /const realPercent =\s*latest && releaseGradeEvidence/,
-  'unverified metrics must not appear as real-device results',
+  /const realPercent =\s*null;/,
+  'real-device task success must remain unmeasured until a dedicated measured source exists',
+);
+assert.doesNotMatch(
+  app,
+  /metricPercent\(boardRun\.metrics\.successRate\)/,
+  'board replay attestation must not relabel training success as real-device success',
 );
 assert.match(
   app,
@@ -713,4 +718,27 @@ assert.doesNotMatch(app, /:19100/, 'the browser must never hardcode the board ag
 
 console.log(
   `[sim2real-ui] PASS — ${viewNames.length} views, ${navItems} sidebar entries, grouped IA (start / learning loop / advanced tools), read-only context strip; ${invariantSummary.stylesheets} stylesheets (tokens.css + app.css), ${markupSummary.tabs} tabs / ${markupSummary.panels} tabpanels, ${invariantSummary.pages} pages, ${invariantSummary.layers} style layers (cross-layer selectors ${invariantSummary.crossLayerSelectors}/${invariantSummary.crossLayerBudget}), ${liveGuards.length} guards self-tested`,
+);
+
+// Replay import must remain reachable in the run subflow, including its empty state.
+const evidenceStart = html.indexOf('<div class="evaluation-evidence">');
+const inspectorStart = html.indexOf('id="run-inspector"');
+const telemetryStart = html.indexOf('class="panel telemetry-panel');
+assert.ok(
+  evidenceStart < inspectorStart && inspectorStart < telemetryStart,
+  'Run inspector and import must follow the comparison wrapper as independent surfaces',
+);
+assert.match(
+  html.slice(telemetryStart, telemetryStart + 160),
+  / open>/,
+  'telemetry import starts expanded',
+);
+assert.ok(
+  html.indexOf('run-inspector-core.js') < html.indexOf('run-inspector.js'),
+  'inspector core loads before component',
+);
+assert.ok(html.indexOf('run-inspector.js') < appTag, 'inspector component loads before app wiring');
+assert.ok(
+  html.indexOf('capability-workbench.js') < html.indexOf('agent-chat.js'),
+  'capability workbench loads before Agent integration',
 );

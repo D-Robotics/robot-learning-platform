@@ -317,6 +317,42 @@ describe('DSH capability handlers', () => {
     expect(parsed.training).toEqual({ profile: 'smoke' });
   });
 
+  it('forwards recorded demonstration provenance and explicit smoke selection', async () => {
+    for (const options of [
+      { engine: 'act', demonstrationRunId: 'recording-42', syntheticSmoke: false },
+      { engine: 'diffusion-policy', syntheticSmoke: true },
+    ]) {
+      const { fetchImpl, calls } = fakeLoopback([
+        () => ({ status: 200, body: overviewPayload }),
+        () => ({ status: 201, body: { ok: true, run: { id: 'run-42', status: 'queued' } } }),
+      ]);
+      const handlers = createDshCapabilityHandlers({ fetchImpl });
+      await handlers.rdk_training_submit(options, {
+        signal: new AbortController().signal,
+      } as never);
+      const submit = calls.find((call) => call.method === 'POST');
+      expect(JSON.parse(submit!.body!).training).toEqual({ profile: 'smoke', ...options });
+    }
+  });
+
+  it('rejects malformed demonstration fields without silently truncating or dropping them', async () => {
+    for (const options of [
+      { demonstrationRunId: 'r'.repeat(201) },
+      { demonstrationRunId: '../other-run' },
+      { demonstrationRunId: 42 },
+      { syntheticSmoke: 'true' },
+    ]) {
+      const { fetchImpl, calls } = fakeLoopback([]);
+      const handlers = createDshCapabilityHandlers({ fetchImpl });
+      await expect(
+        handlers.rdk_training_submit(options, {
+          signal: new AbortController().signal,
+        } as never),
+      ).rejects.toMatchObject({ code: 'DSH_CAPABILITY_REJECTED' });
+      expect(calls).toHaveLength(0);
+    }
+  });
+
   it('summarizes evaluation metrics and replay evidence', async () => {
     const { fetchImpl, calls } = fakeLoopback([
       () => ({ status: 200, body: overviewPayload }),

@@ -7,6 +7,26 @@ import {
 } from './sim2real.js';
 
 describe('training spec engine routing', () => {
+  it('preserves recorded input and only permits explicit synthetic smoke', () => {
+    expect(
+      normalizeTrainingSpec({
+        profile: 'smoke',
+        engine: 'act',
+        demonstrationRunId: 'recorded-run-1',
+      }).spec,
+    ).toMatchObject({ demonstrationRunId: 'recorded-run-1' });
+    expect(
+      normalizeTrainingSpec({ profile: 'smoke', engine: 'act', syntheticSmoke: true }).spec,
+    ).toMatchObject({ syntheticSmoke: true });
+    for (const input of [
+      { profile: 'standard', syntheticSmoke: true },
+      { profile: 'smoke', syntheticSmoke: true, demonstrationRunId: 'recorded-run-1' },
+      { demonstrationRunId: '../other-run' },
+      { demonstrationRunId: 'r'.repeat(201) },
+      { syntheticSmoke: 'true' },
+    ])
+      expect(normalizeTrainingSpec(input).errors.length).toBeGreaterThan(0);
+  });
   it('accepts the engine allowlist and rejects unknown ids at submission time', () => {
     const mjx = normalizeTrainingSpec({ profile: 'smoke', engine: 'mjx-ppo' });
     expect(mjx.errors).toEqual([]);

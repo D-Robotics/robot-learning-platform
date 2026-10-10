@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const agentSource = await readFile(path.join(here, 'public', 'agent-chat.js'), 'utf8');
+const capabilitySource = await readFile(path.join(here, 'public', 'capability-workbench.js'), 'utf8');
 const openWindows: Array<InstanceType<typeof JSDOM>['window']> = [];
 
 function shell() {
@@ -28,6 +29,15 @@ function shell() {
         <ul id="agent-catalog-list"></ul>
       </details>
       <form id="agent-chat-form">
+        <input id="agent-chat-image" type="file" accept="image/png,image/jpeg" disabled />
+        <select id="agent-image-model" disabled></select>
+        <span id="agent-image-status" role="status"></span>
+        <div id="agent-image-preview" hidden>
+          <img id="agent-image-thumbnail" alt="当前选择的图片预览" />
+          <strong id="agent-image-name"></strong>
+          <button id="agent-image-remove" type="button">移除图片</button>
+        </div>
+        <p id="agent-image-disclosure" hidden></p>
         <input id="agent-chat-input" />
         <button type="button" data-agent-stop hidden>停止等待</button>
         <button type="submit">发送</button>
@@ -43,7 +53,7 @@ function jsonResponse(payload: unknown, status = 200) {
   });
 }
 
-function boot(fetchImpl: typeof fetch) {
+function boot(fetchImpl: typeof fetch, imageDecode = { width: 1, height: 1, delay: 0 }) {
   const dom = new JSDOM(shell(), {
     url: 'http://127.0.0.1:3000/sim2real/',
     runScripts: 'outside-only',
@@ -69,6 +79,15 @@ function boot(fetchImpl: typeof fetch) {
     Headers,
     Response,
     ApiError: ApiErrorShim,
+    Image: class {
+      onload: (() => void) | null = null;
+      onerror: (() => void) | null = null;
+      naturalWidth = imageDecode.width;
+      naturalHeight = imageDecode.height;
+      set src(value: string) {
+        if (value) setTimeout(() => this.onload?.(), imageDecode.delay);
+      }
+    },
     request: async (path: string, options: Record<string, unknown> = {}) => {
       const headers = Object.assign(
         options.body ? { 'content-type': 'application/json' } : {},
@@ -90,6 +109,7 @@ function boot(fetchImpl: typeof fetch) {
       return payload;
     },
   });
+  dom.window.eval(capabilitySource);
   dom.window.eval(agentSource);
   return dom.window;
 }
@@ -97,6 +117,263 @@ function boot(fetchImpl: typeof fetch) {
 function wait(milliseconds = 10) {
   return new Promise((resolve) => setTimeout(resolve, milliseconds));
 }
+
+const imageBase64 = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Y9ZlNwAAAAASUVORK5CYII=';
+const imageBytes = Buffer.from(imageBase64, 'base64');
+const visionCapabilities = {
+  ok: true,
+  runtime: 'dsh',
+  dsh: {
+    initialized: true,
+    imageInput: {
+      enabled: true,
+      models: ['vision-model'],
+      mediaTypes: ['image/png', 'image/jpeg'],
+      maxImageBytes: 4_194_304,
+      maxImageDimension: 4096,
+      maxImagePixels: 8_000_000,
+    },
+  },
+};
+
+function selectImage(window: ReturnType<typeof boot>, name = 'image.png', bytes = imageBytes, type = 'image/png') {
+  const picker = window.document.querySelector<HTMLInputElement>('#agent-chat-image');
+  if (!picker) throw new Error('missing image picker');
+  const file = new window.File([Uint8Array.from(bytes)], name, { type });
+  Object.defineProperty(picker, 'files', { configurable: true, value: [file] });
+  picker.dispatchEvent(new window.Event('change', { bubbles: true }));
+}
+
+function submitMessage(window: ReturnType<typeof boot>, message = '描述图中的物体，不调用工具') {
+  const input = window.document.querySelector<HTMLInputElement>('#agent-chat-input');
+  const form = window.document.querySelector<HTMLFormElement>('#agent-chat-form');
+  if (!input || !form) throw new Error('missing composer');
+  input.value = message;
+  form.dispatchEvent(new window.Event('submit', { bubbles: true, cancelable: true }));
+}
+
+describe('Agent single image input', () => {
+  it('keeps image input disabled until an explicitly configured vision model is available', async () => {
+    const window = boot(vi.fn(async () => jsonResponse({ ok: true, runtime: 'dsh', dsh: { initialized: true } })));
+    await wait(20);
+    expect(window.document.querySelector<HTMLInputElement>('#agent-chat-image')?.disabled).toBe(true);
+    expect(window.document.querySelector('#agent-image-status')?.textContent).toContain('未配置');
+  });
+
+  it('previews a local image without uploading and sends only the selected model and canonical image bytes', async () => {
+    const bodies: Array<Record<string, unknown>> = [];
+    const window = boot(vi.fn(async (url, options) => {
+      if (String(url).endsWith('/agent/capabilities')) return jsonResponse(visionCapabilities);
+      if (String(url).endsWith('/dsh/chat')) {
+        bodies.push(JSON.parse(String(options?.body)));
+        return jsonResponse({ ok: true, text: '图中有物体。', imageAccepted: { mediaType: 'image/png', width: 1, height: 1, bytes: imageBytes.length } });
+      }
+      return jsonResponse({ ok: true });
+    }));
+    await wait(20);
+    expect(window.document.querySelector<HTMLInputElement>('#agent-chat-image')?.disabled).toBe(false);
+    selectImage(window, 'user-picture.png');
+    await vi.waitFor(() => expect(window.document.querySelector<HTMLElement>('#agent-image-preview')?.hidden).toBe(false));
+    expect(bodies).toHaveLength(0);
+    expect(window.document.querySelector('#agent-image-name')?.textContent).toBe('user-picture.png');
+    expect(window.document.querySelector('#agent-image-disclosure')?.textContent).toContain('vision-model');
+    expect(window.document.querySelector('#agent-image-disclosure')?.textContent).toContain('发送');
+    submitMessage(window);
+    await wait(30);
+    expect(bodies).toHaveLength(1);
+    expect(bodies[0]).toMatchObject({ model: 'vision-model', image: { mediaType: 'image/png', base64: imageBase64 } });
+    expect(window.document.querySelector<HTMLElement>('#agent-image-preview')?.hidden).toBe(true);
+    expect(window.localStorage.getItem('rdk-sim2real-agent-sessions-v1')).not.toContain(imageBase64);
+  });
+
+  it.each([
+    ['wrong MIME', Buffer.from('not-an-image'), 'image/svg+xml'],
+    ['spoofed PNG', Buffer.from('<svg></svg>'), 'image/png'],
+    ['over budget', Buffer.alloc(4_194_305), 'image/png'],
+  ])('rejects %s before any image request', async (_label, bytes, type) => {
+    const bodies: unknown[] = [];
+    const window = boot(vi.fn(async (url, options) => {
+      if (String(url).endsWith('/agent/capabilities')) return jsonResponse(visionCapabilities);
+      if (String(url).endsWith('/dsh/chat')) bodies.push(JSON.parse(String(options?.body)));
+      return jsonResponse({ ok: true, text: '文字回复' });
+    }));
+    await wait(20);
+    selectImage(window, 'invalid.png', bytes, type);
+    await wait(30);
+    expect(window.document.querySelector<HTMLElement>('#agent-image-preview')?.hidden).toBe(true);
+    expect(window.document.querySelector('#agent-image-status')?.classList.contains('is-error')).toBe(true);
+    expect(bodies).toHaveLength(0);
+  });
+
+  it('never downgrades a failed image request to the text planner and retries the same image', async () => {
+    const paths: string[] = [];
+    const bodies: Array<Record<string, unknown>> = [];
+    const window = boot(vi.fn(async (url, options) => {
+      const pathname = String(url);
+      paths.push(pathname);
+      if (pathname.endsWith('/agent/capabilities')) return jsonResponse(visionCapabilities);
+      if (pathname.endsWith('/dsh/chat')) {
+        bodies.push(JSON.parse(String(options?.body)));
+        if (bodies.length === 1) return jsonResponse({ error: 'DSH_VISION_DISABLED', message: '看图暂不可用' }, 503);
+        return jsonResponse({ ok: true, text: '看图完成。', imageAccepted: { mediaType: 'image/png', width: 1, height: 1, bytes: imageBytes.length } });
+      }
+      return jsonResponse({ ok: true });
+    }));
+    await wait(20);
+    selectImage(window, 'original.png');
+    await vi.waitFor(() => expect(window.document.querySelector<HTMLElement>('#agent-image-preview')?.hidden).toBe(false));
+    submitMessage(window);
+    await wait(30);
+    expect(paths.some((pathname) => pathname.endsWith('/agent/plan'))).toBe(false);
+    const retry = window.document.querySelector<HTMLButtonElement>('.agent-retry');
+    expect(retry).not.toBeNull();
+    selectImage(window, 'other.png');
+    await wait(30);
+    retry?.click();
+    await wait(20);
+    expect(bodies).toHaveLength(1);
+    window.document.querySelector<HTMLButtonElement>('#agent-image-remove')?.click();
+    retry?.click();
+    await wait(30);
+    expect(bodies).toHaveLength(2);
+    expect(bodies[1]?.image).toEqual(bodies[0]?.image);
+    expect(bodies[1]?.turnId).toEqual(bodies[0]?.turnId);
+  });
+
+  it.each([[5000, 1], [4096, 4096], [0, 1]])('rejects decoded dimensions %s × %s', async (width, height) => {
+    const window = boot(vi.fn(async () => jsonResponse(visionCapabilities)), { width, height, delay: 0 });
+    await wait(20);
+    selectImage(window);
+    await wait(30);
+    expect(window.document.querySelector<HTMLElement>('#agent-image-preview')?.hidden).toBe(true);
+    expect(window.document.querySelector('#agent-image-status')?.classList.contains('is-error')).toBe(true);
+  });
+
+  it('invalidates an image still decoding when the operator starts another conversation', async () => {
+    const bodies: Array<Record<string, unknown>> = [];
+    const window = boot(vi.fn(async (url, options) => {
+      if (String(url).endsWith('/agent/capabilities')) return jsonResponse(visionCapabilities);
+      if (String(url).endsWith('/dsh/chat')) bodies.push(JSON.parse(String(options?.body)));
+      return jsonResponse({ ok: true, text: '新的文字回复' });
+    }), { width: 1, height: 1, delay: 150 });
+    await wait(20);
+    selectImage(window);
+    await wait(20);
+    window.document.querySelector<HTMLButtonElement>('#agent-new-session')?.click();
+    await wait(180);
+    expect(window.document.querySelector<HTMLElement>('#agent-image-preview')?.hidden).toBe(true);
+    submitMessage(window, '只回复连接正常');
+    await wait(30);
+    expect(bodies[0]).not.toHaveProperty('image');
+  });
+
+  it('requires a text question and server image acceptance before claiming a successful image reply', async () => {
+    const bodies: unknown[] = [];
+    const window = boot(vi.fn(async (url, options) => {
+      if (String(url).endsWith('/agent/capabilities')) return jsonResponse(visionCapabilities);
+      if (String(url).endsWith('/dsh/chat')) { bodies.push(JSON.parse(String(options?.body))); return jsonResponse({ ok: true, text: '未经确认的图片回答' }); }
+      return jsonResponse({ ok: true });
+    }));
+    await wait(20);
+    selectImage(window);
+    await vi.waitFor(() => expect(window.document.querySelector<HTMLElement>('#agent-image-preview')?.hidden).toBe(false));
+    submitMessage(window, '');
+    expect(bodies).toHaveLength(0);
+    expect(window.document.querySelector('#agent-image-status')?.textContent).toContain('问题');
+    submitMessage(window);
+    await wait(30);
+    expect(window.document.querySelector('#agent-chat-messages')?.textContent).not.toContain('未经确认的图片回答');
+    expect(window.document.querySelector('#agent-chat-messages')?.textContent).toContain('没有确认');
+    expect(window.document.querySelector<HTMLElement>('#agent-image-preview')?.hidden).toBe(false);
+  });
+
+  it('drops a pending image when creating a new conversation and refuses a detached old retry', async () => {
+    const bodies: Array<Record<string, unknown>> = [];
+    const window = boot(vi.fn(async (url, options) => {
+      if (String(url).endsWith('/agent/capabilities')) return jsonResponse(visionCapabilities);
+      if (String(url).endsWith('/dsh/chat')) {
+        bodies.push(JSON.parse(String(options?.body)));
+        if (bodies.length === 1) return jsonResponse({ message: '暂时失败' }, 500);
+        return jsonResponse({ ok: true, text: '新会话文字回复' });
+      }
+      return jsonResponse({ ok: true });
+    }));
+    await wait(20);
+    selectImage(window);
+    await vi.waitFor(() => expect(window.document.querySelector<HTMLElement>('#agent-image-preview')?.hidden).toBe(false));
+    submitMessage(window);
+    await wait(30);
+    const oldRetry = window.document.querySelector<HTMLButtonElement>('.agent-retry');
+    window.document.querySelector<HTMLButtonElement>('#agent-new-session')?.click();
+    expect(window.document.querySelector<HTMLElement>('#agent-image-preview')?.hidden).toBe(true);
+    oldRetry?.click();
+    await wait(20);
+    expect(bodies).toHaveLength(1);
+    submitMessage(window, '只回复连接正常');
+    await wait(30);
+    expect(bodies[1]).not.toHaveProperty('image');
+    expect(bodies[1]).not.toHaveProperty('sessionId');
+  });
+
+  it('ignores a late response after cancellation, retains the image, and resets the stop control', async () => {
+    let resolveChat: ((response: Response) => void) | undefined;
+    const window = boot(vi.fn(async (url) => {
+      if (String(url).endsWith('/agent/capabilities')) return jsonResponse(visionCapabilities);
+      if (String(url).endsWith('/dsh/chat')) return await new Promise<Response>((resolve) => { resolveChat = resolve; });
+      return jsonResponse({ ok: true });
+    }));
+    await wait(20);
+    selectImage(window);
+    await vi.waitFor(() => expect(window.document.querySelector<HTMLElement>('#agent-image-preview')?.hidden).toBe(false));
+    submitMessage(window);
+    await wait(10);
+    window.document.querySelector<HTMLButtonElement>('[data-agent-stop]')?.click();
+    resolveChat?.(jsonResponse({ ok: true, text: '迟到的答复不应显示', sessionId: 'wrong-late-session', imageAccepted: { mediaType: 'image/png', width: 1, height: 1, bytes: imageBytes.length } }));
+    await wait(30);
+    expect(window.document.querySelector('#agent-chat-messages')?.textContent).not.toContain('迟到的答复');
+    expect(window.document.querySelector<HTMLElement>('#agent-image-preview')?.hidden).toBe(false);
+    expect(window.document.querySelector<HTMLButtonElement>('[data-agent-stop]')?.disabled).toBe(false);
+    expect(window.localStorage.getItem('rdk-sim2real-agent-sessions-v1')).not.toContain('wrong-late-session');
+  });
+
+  it('keeps the in-flight session pinned and leaves a subsequent conversation waiting for its own reply', async () => {
+    const pending: Array<(response: Response) => void> = [];
+    const bodies: Array<Record<string, unknown>> = [];
+    const window = boot(vi.fn(async (url, options) => {
+      if (String(url).endsWith('/agent/capabilities')) return jsonResponse(visionCapabilities);
+      if (String(url).endsWith('/dsh/chat')) {
+        bodies.push(JSON.parse(String(options?.body)));
+        return await new Promise<Response>((resolve) => { pending.push(resolve); });
+      }
+      return jsonResponse({ ok: true });
+    }));
+    await wait(20);
+    selectImage(window);
+    await vi.waitFor(() => expect(window.document.querySelector<HTMLElement>('#agent-image-preview')?.hidden).toBe(false));
+    submitMessage(window, '原会话图片问题');
+    await wait(10);
+    const fresh = window.document.querySelector<HTMLButtonElement>('#agent-new-session');
+    fresh?.click();
+    expect(window.document.querySelector('#agent-chat-messages')?.textContent).toContain('原会话图片问题');
+    expect(window.document.querySelector('#agent-chat-messages')?.textContent).not.toContain('新的对话已开始');
+    window.document.querySelector<HTMLButtonElement>('[data-agent-stop]')?.click();
+    pending[0]!(jsonResponse({ ok: true, text: '旧回答', sessionId: 'old-dsh-session', imageAccepted: { mediaType: 'image/png', width: 1, height: 1, bytes: imageBytes.length } }));
+    await wait(20);
+    fresh?.click();
+    submitMessage(window, '新会话文字问题');
+    await wait(20);
+    expect(bodies[1]).not.toHaveProperty('image');
+    expect(bodies[1]).not.toHaveProperty('sessionId');
+    expect(window.document.querySelector('#agent-chat-messages')?.textContent).not.toContain('已停止等待');
+    expect(window.document.querySelector('.agent-chat-typing')).not.toBeNull();
+    expect(window.document.querySelector<HTMLButtonElement>('button[type="submit"]')?.disabled).toBe(true);
+    pending[1]!(jsonResponse({ ok: true, text: '新回答', sessionId: 'new-dsh-session' }));
+    await wait(20);
+    expect(window.document.querySelector('#agent-chat-messages')?.textContent).toContain('新回答');
+    expect(window.document.querySelector('#agent-chat-messages')?.textContent).not.toContain('旧回答');
+    expect(window.document.querySelector('.agent-chat-typing')).toBeNull();
+  });
+});
 
 afterEach(() => {
   for (const window of openWindows.splice(0)) window.close();
@@ -226,7 +503,7 @@ describe('Agent chat browser behavior', () => {
     expect(provenance?.textContent).not.toContain('证据复核');
   });
 
-  it('renders the deterministic capability catalog once the server exposes bound tools', async () => {
+  it('shows bound and unavailable capabilities with safe trial actions', async () => {
     const fetchImpl = vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input);
       if (url.endsWith('/api/sim2real/agent/capabilities')) {
@@ -266,18 +543,18 @@ describe('Agent chat browser behavior', () => {
     const panel = window.document.querySelector<HTMLDetailsElement>('#agent-catalog');
     expect(panel?.hidden).toBe(false);
     expect(panel?.textContent).toContain('能力目录');
-    expect(panel?.querySelector('#agent-catalog-count')?.textContent).toBe('（2）');
+    expect(panel?.querySelector('#agent-catalog-count')?.textContent).toBe('（3）');
     const rows = window.document.querySelectorAll('#agent-catalog-list .agent-catalog-item');
-    expect(rows.length).toBe(2);
-    // Unbound capabilities stay invisible: the catalog mirrors what is callable.
-    expect(panel?.textContent).not.toContain('rdk_unbound_tool');
+    expect(rows.length).toBe(3);
+    expect(rows[2]?.textContent).toContain('Agent 未绑定');
+    expect(rows[2]?.querySelector('button')?.disabled).toBe(true);
     expect(rows[0]?.textContent).toContain('只读');
     expect(rows[1]?.classList.contains('is-gated')).toBe(true);
-    expect(rows[1]?.textContent).toContain('⚠️ 门控');
+    expect(rows[1]?.textContent).toContain('⚠️ 需确认');
     expect(rows[1]?.textContent).toContain('rdk_board_policy_start');
   });
 
-  it('keeps the capability catalog hidden when no bound tools are advertised', async () => {
+  it('keeps existing authenticated page queries usable when the Agent runtime is disabled', async () => {
     const fetchImpl = vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input);
       if (url.endsWith('/api/sim2real/agent/capabilities')) {
@@ -299,8 +576,54 @@ describe('Agent chat browser behavior', () => {
     await wait(20);
 
     const panel = window.document.querySelector<HTMLDetailsElement>('#agent-catalog');
-    expect(panel?.hidden).toBe(true);
-    expect(panel?.querySelector('#agent-catalog-list')?.childElementCount).toBe(0);
+    expect(panel?.hidden).toBe(false);
+    expect(panel?.textContent).toContain('Agent 尚未就绪');
+    expect(panel?.querySelector('#agent-catalog-list')?.childElementCount).toBe(1);
+    expect(panel?.querySelector('button')?.textContent).toBe('只读试用');
+  });
+
+  it('keeps write trials as drafts and requires actual matching tool evidence before reporting completion', async () => {
+    const calls: string[] = [];
+    const fetchImpl = vi.fn(async (request: RequestInfo | URL) => {
+      const url = String(request);
+      calls.push(url);
+      if (url.endsWith('/api/sim2real/agent/capabilities')) {
+        return jsonResponse({
+          runtime: 'dsh',
+          dsh: {
+            initialized: true,
+            capabilities: [
+              {
+                id: 'rdk_training_submit',
+                description: '提交受控训练任务',
+                readOnly: false,
+                bound: true,
+              },
+            ],
+          },
+        });
+      }
+      if (url.endsWith('/api/sim2real/dsh/chat')) {
+        return jsonResponse({ ok: true, text: '训练计划准备好了。', toolTrail: [] });
+      }
+      return jsonResponse({ ok: true });
+    });
+    const window = boot(fetchImpl);
+    await wait(20);
+    const row = window.document.querySelector('[data-capability-id="rdk_training_submit"]');
+    row?.querySelector<HTMLButtonElement>('button')?.click();
+    expect(calls.some((url) => url.endsWith('/api/sim2real/dsh/chat'))).toBe(false);
+    expect(calls.some((url) => url.includes('/agent/execute'))).toBe(false);
+    expect(window.document.querySelector<HTMLInputElement>('#agent-chat-input')?.value).toContain(
+      '本次只准备计划',
+    );
+    expect(row?.querySelector('.capability-result')?.getAttribute('data-state')).toBe('prepared');
+    window.document
+      .querySelector<HTMLFormElement>('#agent-chat-form')
+      ?.dispatchEvent(new window.Event('submit', { bubbles: true, cancelable: true }));
+    await wait(20);
+    expect(row?.querySelector('.capability-result')?.getAttribute('data-state')).toBe('unverified');
+    expect(row?.textContent).toContain('尚无该工具成功执行的证据');
   });
 
   it('lets the operator stop waiting for a slow request and explains the backend boundary', async () => {

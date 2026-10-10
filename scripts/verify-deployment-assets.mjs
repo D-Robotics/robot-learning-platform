@@ -359,7 +359,7 @@ const mujocoStaticApp = read('services/mujoco-web/static/app.js');
 const mujocoModels = read('services/mujoco-web/models.py');
 const mujocoUnit = read('services/mujoco-web/mujoco-web.service');
 assert.match(originbotHtml, /MuJoCo 3D/);
-assert.match(originbotHtml, /<script\s+src="\.\/sim\.js\?v=12"/);
+assert.match(originbotHtml, /<script\s+src="\.\/sim\.js\?v=13"/);
 assert.match(originbotSim, /const API_ROOT = `\$\{mujocoBase\}\/api`/);
 assert.match(originbotSim, /source: 'originbot-sim'/);
 assert.match(originbotSim, /domain_randomization: domainRandomization/);

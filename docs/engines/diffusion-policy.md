@@ -110,10 +110,16 @@ python3 engines/diffusion-policy/train_dp.py recordings.jsonl \
   --channels 32 --d-model 64 --ema-decay 0.995 --epochs 200
 ```
 
-接到平台 worker（训练页「训练引擎」选 `diffusion-policy`）时，目前仅
-运行文件协议的**合成数据冒烟训练**（T=16、channels 16/d_model 32 的小
-参数档），结果标记 `dataset.source=synthetic-smoke`、`synthetic=true`。
-这条路径尚未读取用户上传的示教数据；真实轨迹训练请使用上面的 CLI。
+平台 worker 通过 `training.engine=diffusion-policy` 和
+`training.demonstrationRunId` 接受真实向量示教 Run，要求当前账号、项目、模型
+契约一致，至少 8 个完整回合、每回合不少于 4 帧（`done` / `fall` 闭合）。
+输入限制为 512 KiB、20000 帧和 16 个遥测分片；超限、Mock、演示夹具、缺数据
+或维度不一致均明确拒绝，不截断或制造回合。worker 固定物化示教文件并传递摘要，
+引擎逐字校验后训练；结果保留来源 Run、摘要和训练/验证分块 MSE。
+浏览器中继资源暂不支持示教传输，请使用服务端或远程注册 worker。
+**合成数据冒烟**（T=16、channels 16/d_model 32）需要明确传
+`training.syntheticSmoke=true` 且 `profile=smoke`，并标记
+`dataset.source=synthetic-smoke`、`synthetic=true`；缺数据不会静默回退。
 注册方式如下（解释器须安装本引擎依赖）：
 
 ```bash

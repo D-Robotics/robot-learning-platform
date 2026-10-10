@@ -60,11 +60,11 @@ full provenance block (source revision, imported versions, lock digest)
 asserted by `npm run verify:training-provenance`.
 
 File protocol (engine mode): with RDK_SIM2REAL_REQUEST_FILE and
-RDK_SIM2REAL_RESULT_FILE set, runs a smoke round on a deterministic
-SYNTHETIC episode dataset sized by the request's contract, writes
-model.json + policy.onnx + SHA256SUMS into the job directory, and a
-result.json whose artifactRef is "artifact://policy.onnx". The synthetic
-source is labeled in the result — the training is real, the data is not.
+RDK_SIM2REAL_RESULT_FILE set, consumes the worker's digest-pinned
+demonstrations.jsonl, writes model.json + verified policy.onnx + SHA256SUMS,
+and a result.json whose artifactRef is "artifact://policy.onnx". A deterministic
+synthetic dataset is available only when training.syntheticSmoke=true with
+profile=smoke, and is labeled in the result.
 
 Output model format `rdk-dp-bc-v1` (JSON): architecture, diffusion schedule,
 normalization constants, every weight as lists (the JSON IS the model —
@@ -81,6 +81,9 @@ import sys
 import time
 
 import numpy as np
+
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
+from imitation_input import load_engine_demonstrations
 
 try:
     import torch
@@ -1518,7 +1521,9 @@ def run_engine_mode():
     training = request.get("training") or {}
     epochs = max(1, int(training.get("maxIterations", 3)))
 
-    episodes = synthetic_episodes(obs_size, act_size, episodes=8, steps=48, seed=0)
+    episodes, dataset_source = load_engine_demonstrations(
+        request, load_dataset, synthetic_episodes, obs_size, act_size
+    )
     payload, report, model, normalization, schedule = fit(
         episodes, chunk=4, diffusion_steps=16, schedule="cosine", channels=16,
         d_model=32, epochs=epochs, lr=1e-3, batch_size=32, seed=0,
@@ -1552,8 +1557,7 @@ def run_engine_mode():
             "actionSize": act_size,
         },
         "dataset": {
-            "source": "synthetic-smoke",
-            "synthetic": True,
+            **dataset_source,
             "episodes": len(episodes),
             "rows": int(x_rows.shape[0]),
         },
@@ -1563,6 +1567,8 @@ def run_engine_mode():
         },
         "artifactRef": "artifact://policy.onnx",
         "artifact": {
+            "artifactId": "diffusion-policy-" + onnx_sha256[:16],
+            "kind": "source",
             "artifactRef": "artifact://policy.onnx",
             "format": "onnx",
             "path": onnx_path.name,
@@ -1578,6 +1584,12 @@ def run_engine_mode():
         "deployable": False,
     }
     used = {"numpy", "torch", "onnx", "onnxruntime"}
+    result["metrics"].update({"contractValid": True, "observationSize": obs_size, "actionSize": act_size,
+                              "engine": ENGINE_NAME, "iterations": epochs,
+                              "validationChunkMse": report["validation"]["chunkMse"],
+                              "demonstrationSourceRunId": dataset_source.get("sourceRunId"),
+                              "demonstrationSha256": dataset_source.get("sha256"),
+                              "syntheticData": dataset_source["synthetic"]})
     result.update(provenance_block(used))
     pathlib.Path(os.environ["RDK_SIM2REAL_RESULT_FILE"]).write_text(
         json.dumps(result, ensure_ascii=False), encoding="utf-8"

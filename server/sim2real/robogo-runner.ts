@@ -497,6 +497,21 @@ function safeMetrics(value: unknown): Sim2RealRunMetrics | undefined {
       : { iterations: bounded('iterations', 0, 2_000_000) }),
     ...(physicsBackend == null ? {} : { physicsBackend }),
     ...(engine == null ? {} : { engine }),
+    ...(bounded('trainChunkMse', 0, 1_000_000) == null
+      ? {}
+      : { trainChunkMse: bounded('trainChunkMse', 0, 1_000_000) }),
+    ...(bounded('validationChunkMse', 0, 1_000_000) == null
+      ? {}
+      : { validationChunkMse: bounded('validationChunkMse', 0, 1_000_000) }),
+    ...(typeof source.demonstrationSourceRunId === 'string' &&
+    /^[a-zA-Z0-9][a-zA-Z0-9._-]{0,199}$/.test(source.demonstrationSourceRunId)
+      ? { demonstrationSourceRunId: source.demonstrationSourceRunId }
+      : {}),
+    ...(typeof source.demonstrationSha256 === 'string' &&
+    /^[a-f0-9]{64}$/.test(source.demonstrationSha256)
+      ? { demonstrationSha256: source.demonstrationSha256 }
+      : {}),
+    ...(typeof source.syntheticData === 'boolean' ? { syntheticData: source.syntheticData } : {}),
     ...(source.cuda === true ? { cuda: true } : source.cuda === false ? { cuda: false } : {}),
   };
 }
@@ -613,6 +628,7 @@ function runnerPayload(
   resumeFrom?: Sim2RealCheckpointRef,
   taskId?: string,
   idempotencyKey?: string,
+  demonstrations?: import('../../shared/sim2real.js').Sim2RealDemonstrations,
 ): Record<string, unknown> {
   return {
     accountId,
@@ -630,6 +646,7 @@ function runnerPayload(
     ...(taskId ? { taskId } : {}),
     ...(resolvedTaskPack(taskId) ? { task: resolvedTaskPack(taskId) } : {}),
     ...(training ? { training } : {}),
+    ...(demonstrations ? { demonstrations } : {}),
     ...(resumeFrom ? { resumeFrom } : {}),
     ...(idempotencyKey ? { idempotencyKey } : {}),
   };
@@ -648,6 +665,7 @@ export async function requestRobogoTraining(input: {
   requestToken?: string | null;
   manifest: Sim2RealModelManifest;
   training?: Sim2RealTrainingSpec;
+  demonstrations?: import('../../shared/sim2real.js').Sim2RealDemonstrations;
   resumeFrom?: Sim2RealCheckpointRef;
   taskId?: string;
   idempotencyKey?: string;
@@ -694,6 +712,7 @@ export async function requestRobogoTraining(input: {
             input.resumeFrom,
             input.taskId,
             idempotencyKey,
+            input.demonstrations,
           ),
         ),
       });

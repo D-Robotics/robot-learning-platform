@@ -207,6 +207,150 @@ describe('simulatorStatusLabels (31c5150)', () => {
 });
 
 describe('normalizeTelemetrySample', () => {
+  it('keeps an aligned camera frame through JSONL import without promoting imported evidence', () => {
+    const cameraFrame = { encoding: 'rgb8', width: 2, height: 1, channels: 3, data: 'AQIDBAUG' };
+    const parsed = core.parseTelemetryText(
+      JSON.stringify({ t: 0, cameraFrame, done: false, fall: false, attested: true }),
+    );
+    expect(parsed.samples[0].cameraFrame).toEqual(cameraFrame);
+    expect(parsed.source).toBe('import');
+    expect(parsed.samples[0]).not.toHaveProperty('attested');
+    expect(parsed.samples[0].done).toBe(false);
+    expect(parsed.samples[0].fall).toBe(false);
+  });
+
+  it.each([
+    ['rgb8', 3, 'AQID'],
+    ['bgr8', 3, 'AQID'],
+    ['mono8', 1, '/w=='],
+    ['mono8', 1, '/w'],
+  ])(
+    'preserves exact valid %s pixels, including standard unpadded base64',
+    (encoding, channels, data) => {
+      const cameraFrame = {
+        encoding,
+        width: 1,
+        height: 1,
+        channels,
+        data,
+        attested: true,
+        extra: 'untrusted',
+      };
+      expect(core.normalizeTelemetrySample({ t: 0, cameraFrame })?.cameraFrame).toEqual({
+        encoding,
+        width: 1,
+        height: 1,
+        channels,
+        data,
+      });
+    },
+  );
+
+  it.each([
+    { encoding: 'jpeg' },
+    { encoding: 'mono8', channels: 3 },
+    { encoding: 'rgb8', channels: 1 },
+    { width: 0 },
+    { width: 1921 },
+    { height: 1081 },
+    { width: 1.5 },
+    { height: NaN },
+    { width: '1' },
+    { channels: '3' },
+    { width: true },
+    { data: '' },
+    { data: 'AQIDBAUG' },
+    { data: 'AQI=' },
+    { data: '%%%=' },
+    { data: 'AQ-ID' },
+    { data: 'AQID\n' },
+    { data: 'AQID=' },
+    { data: 'AQID==' },
+    { data: 'A' },
+    { data: 'A===' },
+    { data: 'data:image/png;base64,AQID' },
+  ])(
+    'drops malformed camera geometry/encoding/base64 without losing valid control flags: %j',
+    (override) => {
+      const sample = core.normalizeTelemetrySample({
+        t: 0,
+        done: true,
+        fall: false,
+        cameraFrame: {
+          encoding: 'rgb8',
+          width: 1,
+          height: 1,
+          channels: 3,
+          data: 'AQID',
+          ...override,
+        },
+      });
+      expect(sample).toEqual({ t: 0, done: true, fall: false });
+    },
+  );
+
+  it('rejects noncanonical base64 padding bits and oversized frame data before decoding', () => {
+    expect(
+      core.normalizeTelemetryCameraFrame({
+        encoding: 'mono8',
+        width: 1,
+        height: 1,
+        channels: 1,
+        data: '/x==',
+      }),
+    ).toBeNull();
+    expect(
+      core.normalizeTelemetryCameraFrame({
+        encoding: 'mono8',
+        width: 1,
+        height: 1,
+        channels: 1,
+        data: '/x',
+      }),
+    ).toBeNull();
+    expect(
+      core.normalizeTelemetryCameraFrame({
+        encoding: 'rgb8',
+        width: 1,
+        height: 1,
+        channels: 3,
+        data: 'A'.repeat(1024),
+      }),
+    ).toBeNull();
+    expect(core.normalizeTelemetryCameraFrame([])).toBeNull();
+  });
+
+  it('retains bounded lifecycle markers without treating them as camera or control samples', () => {
+    const event = {
+      kind: 'session-stopped',
+      sessionId: 'session-1',
+      stopReason: 'operator-stop',
+      inferenceCount: 10,
+      durationSec: 1,
+      model: { sha256: 'a'.repeat(64), provider: 'onnx', bytes: 0 },
+    };
+    expect(
+      core.normalizeTelemetrySample({
+        t: 3,
+        event,
+        observation: [1],
+        action: [1],
+        done: true,
+        cameraFrame: { encoding: 'mono8', width: 1, height: 1, channels: 1, data: '/w==' },
+      }),
+    ).toEqual({ t: 3, event });
+    expect(
+      core.normalizeTelemetrySample({ t: 1, event: { kind: 'unknown', sessionId: 'session-1' } }),
+    ).toBeNull();
+    expect(core.normalizeTelemetrySample({ t: 1, event: { kind: 'session-started' } })).toBeNull();
+    expect(
+      core.normalizeTelemetrySample({
+        t: 1,
+        event: { kind: 'session-stopped', sessionId: 'session-1', stopReason: 'x'.repeat(121) },
+      }),
+    ).toBeNull();
+  });
+
   it('accepts t, time, and timestamp keys and drops non-objects', () => {
     expect(core.normalizeTelemetrySample({ t: 1.5, reward: 0.25 })).toEqual({
       t: 1.5,
@@ -318,6 +462,39 @@ describe('normalizeTelemetrySample', () => {
 });
 
 describe('parseTelemetryText', () => {
+  it('keeps local camera imports under the same 32 MiB whole-file bound', () => {
+    const sample = JSON.stringify({
+      t: 0,
+      cameraFrame: { encoding: 'mono8', width: 1, height: 1, channels: 1, data: '/w==' },
+    });
+    const tooLarge = sample + ' '.repeat(core.MAX_TELEMETRY_IMPORT_BYTES - sample.length + 1);
+    expect(() => core.parseTelemetryText(tooLarge)).toThrow('遥测文件超过');
+  });
+
+  it('keeps lifecycle events visible while excluding them from control counts and reward statistics', () => {
+    const parsed = core.parseTelemetryText(
+      [
+        { t: 0, event: { kind: 'session-started', sessionId: 'session-1' } },
+        { t: 1, reward: 1 },
+        { t: 2, reward: 3, done: true },
+        {
+          t: 4,
+          event: { kind: 'session-stopped', sessionId: 'session-1', stopReason: 'operator-stop' },
+        },
+      ]
+        .map((sample) => JSON.stringify(sample))
+        .join('\n'),
+    );
+    expect(parsed.samples).toHaveLength(4);
+    expect(parsed.samples[0].event.kind).toBe('session-started');
+    expect(parsed.summary.sampleCount).toBe(2);
+    expect(parsed.summary.eventCount).toBe(2);
+    expect(parsed.summary.firstTimestamp).toBe(1);
+    expect(parsed.summary.lastTimestamp).toBe(2);
+    expect(parsed.summary.sampleRateHz).toBe(1);
+    expect(parsed.summary.rewardMean).toBe(2);
+    expect(parsed.summary.doneCount).toBe(1);
+  });
   it('counts UTF-8 bytes without treating UTF-16 code units as bytes', () => {
     expect(core.exceedsUtf8ByteLimit('abc', 3)).toBe(false);
     expect(core.exceedsUtf8ByteLimit('abc', 2)).toBe(true);

@@ -63,6 +63,18 @@ try:
 except ImportError:
     HAVE_JAX = False
 
+# Decorators and the optimizer below need the whole learner stack at import
+# time. Refuse here, before a partial installation can raise NameError instead
+# of the documented dependency exit code.
+if not HAVE_JAX:
+    print(
+        "[mjx-adapter] REFUSED — jax/optax is not installed "
+        "(python3 -m pip install --user jax optax). This adapter "
+        "never fabricates a completed training run.",
+        file=sys.stderr,
+    )
+    sys.exit(3)
+
 try:
     import mujoco
     from mujoco import mjx
@@ -1757,15 +1769,6 @@ def main():
 
     if _REQUESTED_DEVICE not in ("auto", "cpu", "cuda"):
         raise ValueError("RDK_STARTER_ENGINE_DEVICE must be 'auto', 'cuda', or 'cpu'")
-
-    if not HAVE_JAX:
-        print(
-            "[mjx-adapter] REFUSED — jax/optax is not installed "
-            "(python3 -m pip install --user jax optax). This adapter "
-            "never fabricates a completed training run.",
-            file=sys.stderr,
-        )
-        sys.exit(3)
 
     with open(request_path) as handle:
         request = json.load(handle)

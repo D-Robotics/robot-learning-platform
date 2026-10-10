@@ -429,6 +429,8 @@ const state = {
     streamReconnectAttempts: 0,
     streamReconnectTimer: null,
     cameraOn: false,
+    cameraSession: null,
+    healthGeneration: 0,
     log: [],
     deviceManagerWired: false,
     switchWired: false,
@@ -1298,6 +1300,7 @@ function applySubinterfacePartition(view, child) {
   if (!section) return;
   const module = partition.modules[child] ? child : partition.defaultModule;
   section.setAttribute(partition.attribute, module);
+  if (view === 'evaluate') renderRunInspector(module);
   for (const [moduleKey, tabId] of Object.entries(partition.modules)) {
     const tab = document.getElementById(tabId);
     if (!tab) continue;
@@ -2757,6 +2760,23 @@ function selectedDevice() {
   return state.overview?.devices?.find((device) => device.id === state.selectedDeviceId) || null;
 }
 
+function selectStationDevice(value) {
+  const id = String(value || '');
+  if (id === state.selectedDeviceId) return;
+  stationTeardown();
+  state.selectedDeviceId = id;
+  state.station.ready = false;
+  state.station.offline = false;
+  state.station.mock = false;
+  state.station.device = null;
+  state.station.initialized = false;
+  state.activeDeployment = null;
+  if ($('station-honesty-note')) $('station-honesty-note').hidden = true;
+  // Registry-driven selection also runs while rendering the native select.
+  // Probe after that render completes; never recurse into renderAll here.
+  queueMicrotask(stationMaybeInit);
+}
+
 function stateClass(status) {
   return SimTelemetryCore.stateClass(status);
 }
@@ -2837,7 +2857,7 @@ function renderSelects() {
       Boolean(newestCheckedAt) &&
       String(selectedDevice.lastCheckedAt ?? '') < String(newestCheckedAt);
     if (!devices.length) {
-      state.selectedDeviceId = '';
+      selectStationDevice('');
     } else if (!selectedDevice || selectionStale) {
       // Default to the most recently verified board so a newly attached
       // device outranks a stale registration that was never reconnected.
@@ -2846,7 +2866,7 @@ function renderSelects() {
           String(a.lastCheckedAt ?? a.boardDetectedAt ?? ''),
         ),
       );
-      state.selectedDeviceId = byRecency[0]?.id || '';
+      selectStationDevice(byRecency[0]?.id || '');
     }
     syncSelect(
       deviceSelect,
@@ -3569,7 +3589,8 @@ function renderIntegrations() {
   const engineSelect = $('training-engine');
   if (engineSelect) {
     const reported = Array.isArray(local.engines) ? local.engines : null;
-    const engineKnown = (id) => reported == null || reported.includes(id) || reported.includes('default');
+    const selectedResource = (state.overview?.computeResources || []).find((resource) => resource.id === state.selectedComputeResourceId);
+    const engineKnown = (id) => selectedResource?.source === 'server-runner' && selectedResource.status === 'online' ? true : ['act', 'diffusion-policy'].includes(id) && local.mock === true ? false : reported == null || reported.includes(id);
     for (const option of engineSelect.querySelectorAll(
       'option[value="starter-ppo"], option[value="mjx-ppo"], option[value="microduck-rl"], ' +
         'option[value="microduck-recurrent"], ' +
@@ -4204,6 +4225,11 @@ const RUN_METRIC_CARDS = [
     '训练设备',
     (value) => (value === true ? 'GPU (CUDA)' : value === false ? 'CPU' : '—'),
   ],
+  ['trainChunkMse', '示教训练动作 MSE', (value) => formatMetricNumber(value, 6)],
+  ['validationChunkMse', '示教验证动作 MSE', (value) => formatMetricNumber(value, 6)],
+  ['demonstrationSourceRunId', '原始示教 Run', (value) => String(value)],
+  ['demonstrationSha256', '示教数据 SHA-256', (value) => shortDigest(value)],
+  ['syntheticData', '输入来源', (value) => value === true ? '合成冒烟' : value === false ? '记录示教' : '—'],
   ['observationSize', '观测维度', (value) => formatMetricNumber(value, 0)],
   ['actionSize', '动作维度', (value) => formatMetricNumber(value, 0)],
 ];
@@ -4480,6 +4506,13 @@ function openRecordDetails(record) {
         '<div class="run-retrain-body" id="run-retrain-body" role="status" aria-live="polite">' +
         '尚未分析。点击「查看重训建议」读取板端遥测漂移信号。</div></div>'
       : '');
+  const replayId = isRun ? record.id : (isTelemetry || isEvaluation) ? record.runId : '';
+  if (replayId) {
+    const inspect = document.createElement('button');
+    inspect.type = 'button'; inspect.className = 'button button-primary button-small'; inspect.textContent = '可视化回放 →';
+    inspect.addEventListener('click', () => { dialog.close(); setView('evaluate'); applyFlowChildDestination(FLOW_CHILD_CONTEXTS['evaluation-run']); setFlowChild('evaluation-run'); void fetchAndMountReplay(replayId, { interactive: true }); });
+    body.prepend(inspect);
+  }
   if (typeof dialog.showModal === 'function') dialog.showModal();
   else dialog.setAttribute('open', '');
   const detailCanvas = $('run-detail-progress-canvas');
@@ -5385,12 +5418,14 @@ function handleMicroduckRecordingReady(event) {
       sampleCount: Number(data.sampleCount) || evidence.summary.sampleCount,
       durationSeconds: Number(data.durationSeconds) || evidence.summary.durationSeconds,
     };
+    invalidateReplayEvidence();
     state.telemetry = stampTelemetryContext(evidence);
     renderAll();
+    inspectLocalTelemetry(state.telemetry);
     const status = $('simulator-evidence-status');
     status?.classList.add('is-ready');
     if (status) status.textContent = `已同步 ${evidence.summary.sampleCount} 帧到评测证据`;
-    showToast(`MicroDuck 动作录制已同步：${evidence.summary.sampleCount} 帧，可到“评测与效果”上传到当前 Run`, 'success');
+    showToast(`MicroDuck 动作录制已同步：${evidence.summary.sampleCount} 帧，可到“评测与证据”保存为独立示教 Run`, 'success');
   } catch (error) {
     showToast(error instanceof Error ? `录制解析失败：${error.message}` : '录制解析失败，请导出 JSONL 后重试', 'error');
   }
@@ -5927,7 +5962,7 @@ function renderTelemetryEvidence() {
   if (demoButton) demoButton.hidden = state.productId !== 'microduck';
   if (!root || !stateBadge || !timeline || !clear) return;
   const evidence = currentTelemetry();
-  const latest = latestRun();
+  const latest = evidence?.runId ? runsForCurrentModel().find((run) => run.id === evidence.runId) : latestRun();
   // Raw chunks intentionally stay in the server ledger and are not restored
   // into browser memory on a refresh. Keep a persisted replay summary visible
   // so the evidence card, CTA, and release gate tell the same story without
@@ -6018,7 +6053,7 @@ function renderTelemetryEvidence() {
     clear.disabled = true;
     if (publish) {
       publish.disabled = true;
-      publish.textContent = '上传到当前 Run 并评测';
+      publish.textContent = '保存为独立示教 Run 并评测';
       publish.title = '先导入遥测证据';
     }
     clear.title = '当前没有本地遥测证据';
@@ -6065,17 +6100,17 @@ function renderTelemetryEvidence() {
   clear.disabled = false;
   clear.title = '清除当前页面的本地遥测证据';
   if (publish) {
-    publish.disabled = state.publishingTelemetry || !latestRun();
+    publish.disabled = state.publishingTelemetry || !selectedModel() || Boolean(evidence.runId);
     publish.textContent = state.publishingTelemetry
       ? '上传中…'
       : demoEvidence
         ? '上传演示样例并评测（不解锁发布）'
-        : '上传到当前 Run 并评测';
+        : evidence.runId ? '已加载历史 Run · 可直接回放' : '保存为独立示教 Run 并评测';
     publish.title = demoEvidence
       ? '演示样例可以写入回放，但始终不会解锁真实评测或发布'
       : unverifiedEvidence
-        ? '将当前遥测分块写入最新 Run，并生成可回放摘要；来源仍需受信适配器验证'
-        : '将当前遥测分块写入最新 Run，并生成回放评测摘要';
+        ? '将当前遥测分块写入独立示教 Run，并生成可回放摘要；来源仍需受信适配器验证'
+        : '将当前遥测分块写入独立示教 Run，并生成回放评测摘要';
   }
 }
 
@@ -6144,16 +6179,11 @@ function replayFrameTime(frame, index) {
   return Number.isFinite(value) ? value : index;
 }
 
-/** Nearest frame carrying a camera frame: at-or-before, else the first after. */
+/** Display only an image recorded at or before the current sample. */
 function nearestCameraFrameIndex(frames, index) {
   const indices = replayFrameIndices(frames);
-  if (!indices.length) return -1;
-  const after = indices.findIndex((candidate) => candidate > index);
-  if (after === -1) return indices[indices.length - 1];
-  if (after === 0) return indices[0];
-  const before = indices[after - 1];
-  const next = indices[after];
-  return index - before <= next - index ? before : next;
+  for (let cursor = indices.length - 1; cursor >= 0; cursor -= 1) if (indices[cursor] <= index) return indices[cursor];
+  return -1;
 }
 
 // Aligned camera frame for the current replay position.
@@ -6174,7 +6204,7 @@ function renderReplayCameraFrame(frame) {
   const camera = sourceIndex >= 0 ? frames[sourceIndex]?.cameraFrame : null;
   if (!camera) {
     figure.hidden = true;
-    note.textContent = '该运行没有对齐的相机帧（向量观测回放）。';
+    note.textContent = frames.some((sample) => sample.cameraFrame) ? '此时尚未记录相机帧；不会提前显示未来画面。' : '该运行没有对齐的相机帧（向量观测回放）。';
     return;
   }
   figure.hidden = false;
@@ -6197,9 +6227,9 @@ function renderReplayCameraFrame(frame) {
       const red = binary.charCodeAt(source);
       const green = channels === 1 ? red : binary.charCodeAt(source + 1);
       const blue = channels === 1 ? red : binary.charCodeAt(source + 2);
-      image.data[target] = red;
+      image.data[target] = camera.encoding === 'bgr8' ? blue : red;
       image.data[target + 1] = green;
-      image.data[target + 2] = blue;
+      image.data[target + 2] = camera.encoding === 'bgr8' ? red : blue;
       image.data[target + 3] = 255;
     }
     context.putImageData(image, 0, 0);
@@ -6216,6 +6246,7 @@ function renderReplayCameraFrame(frame) {
     // A frame that fails to decode is reported as unusable instead of leaving
     // the previous frame on screen as if it belonged to this sample.
     context.clearRect(0, 0, width, height);
+    figure.hidden = true;
     note.textContent = '相机帧数据无法解码，已隐藏以免误读。';
   }
 }
@@ -6230,6 +6261,11 @@ function sendReplayFrame() {
   // frame as the replay player; they only redraw when local samples exist.
   syncTelemetryVisualsToReplayIndex();
   syncReplayVideoToFrame();
+  const inspector = $('run-inspector');
+  if (!inspectorSyncing && inspector?.seekRecordedFrame) {
+    inspectorSyncing = true;
+    try { inspector.seekRecordedFrame(state.replay.runId, frame.t); } finally { inspectorSyncing = false; }
+  }
 }
 
 // ---- replay MP4 video (server-rendered camera frame artifact) --------------
@@ -6256,7 +6292,7 @@ function mountReplayVideo(runId, runMetrics, runTaskId) {
     ? `该任务的训练场景（${ACTION_TASKS[runTaskId].scene}）在训练引擎侧运行；`
     : '';
   const meta = runMetrics?.replayVideo;
-  if (!runId) {
+  if (!runId || !state.replay.frames.some((frame) => frame.cameraFrame)) {
     block.hidden = true;
     return;
   }
@@ -6316,7 +6352,11 @@ function syncReplayVideoToFrame() {
   const span = replayVideo.durationSeconds > 0 ? replayVideo.durationSeconds : Number(video.duration);
   if (!Number.isFinite(span) || span <= 0) return;
   const t = replayFrameTime(frames[state.replay.index], state.replay.index);
-  const first = replayFrameTime(frames[0], 0);
+  const firstCamera = frames.findIndex((frame) => frame.cameraFrame);
+  if (firstCamera < 0) return;
+  const first = replayFrameTime(frames[firstCamera], firstCamera);
+  video.hidden = t < first;
+  if (video.hidden) { video.pause(); return; }
   const relative = Math.max(0, Math.min(span, t - first));
   // Guard against seek feedback churn: only move when the delta is visible.
   if (Math.abs(video.currentTime - relative) > 0.05) {
@@ -6326,10 +6366,13 @@ function syncReplayVideoToFrame() {
 
 async function renderReplayVideo() {
   const runId = state.replay.runId;
-  if (!runId) {
+  if (!runId || !state.replay.loaded || !state.replay.frames.some((frame) => frame.cameraFrame)) {
     showToast('先加载一个带相机帧的运行', 'error');
     return;
   }
+  const generation = replayLoadGeneration;
+  const scope = replayContextKey();
+  const current = () => generation === replayLoadGeneration && scope === replayContextKey() && state.replay.runId === runId && state.replay.loaded && runsForCurrentModel().some((run) => run.id === runId);
   const button = $('replay-video-render');
   if (button) { button.disabled = true; button.textContent = '编码中…'; }
   try {
@@ -6337,23 +6380,46 @@ async function renderReplayVideo() {
       '/sim2real/runs/' + encodeURIComponent(runId) + '/replay-video',
       { method: 'POST' },
     );
+    if (!current()) return;
     if (payload?.video) {
       mountReplayVideoSource(runId, payload.video);
+      syncReplayVideoToFrame();
       showToast(`视频已导出：${payload.video.frameCount} 帧 · ${formatMetricNumber(Number(payload.video.fps) || 0, 2)} fps`, 'success');
     }
     const caption = $('replay-video-caption');
     if (caption) caption.textContent = '已导出';
   } catch (error) {
+    if (!current()) return;
     showToast(error instanceof Error ? error.message : '视频导出失败', 'error');
     const caption = $('replay-video-caption');
     if (caption) caption.textContent = '导出失败（见提示）';
   } finally {
-    if (button) { button.disabled = false; button.textContent = '导出视频（ffmpeg）'; }
+    if (current() && button) { button.disabled = false; button.textContent = '导出视频（ffmpeg）'; }
   }
 }
 
+let replayLoadGeneration = 0;
+let inspectorSyncing = false;
+let replayScope = '';
+function replayContextKey() { return [state.productId, state.projectId, state.selectedModelId].join('|'); }
+function invalidateReplayEvidence() {
+  replayLoadGeneration += 1;
+  stopPolicyTrial();
+  stopReplay();
+  state.telemetry = null;
+  state.replay = { ...state.replay, runId: '', frames: [], loaded: false, index: 0, autoLoadedFor: '' };
+  mountReplayVideo('', null);
+  $('run-inspector')?.clear?.();
+  try { $('simulator-frame')?.contentWindow?.postMessage({ type: 'rdk-replay-clear' }, window.location.origin); } catch { /* frame may be unavailable */ }
+}
+function ensureReplayScope() {
+  const scope = replayContextKey();
+  if (replayScope && replayScope !== scope) invalidateReplayEvidence();
+  replayScope = scope;
+}
+
 function stopReplay() {
-  if (state.replay.timer) clearInterval(state.replay.timer);
+  if (state.replay.timer) clearTimeout(state.replay.timer);
   state.replay.timer = null;
   renderReplayPlayer();
 }
@@ -6361,10 +6427,16 @@ function stopReplay() {
 function toggleReplay() {
   if (!state.replay.frames.length) return;
   if (state.replay.timer) { stopReplay(); return; }
-  state.replay.timer = setInterval(() => {
+  if (state.replay.index >= state.replay.frames.length - 1) state.replay.index = 0;
+  const advance = () => {
     if (state.replay.index >= state.replay.frames.length - 1) { stopReplay(); return; }
-    state.replay.index += 1; sendReplayFrame();
-  }, Math.max(10, 20 / Number(state.replay.speed || 1)));
+    const current = state.replay.frames[state.replay.index];
+    const next = state.replay.frames[state.replay.index + 1];
+    const delay = Math.max(1, (next.t - current.t) * 1000 / Number(state.replay.speed || 1));
+    state.replay.timer = setTimeout(() => { state.replay.index += 1; sendReplayFrame(); advance(); }, delay);
+    renderReplayPlayer();
+  };
+  advance();
   sendReplayFrame();
 }
 
@@ -6381,16 +6453,26 @@ async function loadRunReplay() {
 // with backoff, not surfaced as an error.
 async function autoLoadRunReplay(runId, { interactive = false } = {}) {
   if (state.replay.autoLoadedFor === runId) return;
+  const scope = replayContextKey();
   for (let attempt = 0; attempt < 3; attempt += 1) {
+    const expectedGeneration = replayLoadGeneration + 1;
     const loaded = await fetchAndMountReplay(runId, { interactive });
+    if (expectedGeneration !== replayLoadGeneration || scope !== replayContextKey()) return;
     if (loaded) { state.replay.autoLoadedFor = runId; return; }
     await new Promise((resolve) => setTimeout(resolve, 1500 * (attempt + 1)));
+    if (expectedGeneration !== replayLoadGeneration || scope !== replayContextKey()) return;
   }
 }
 
-async function fetchAndMountReplay(runId, { interactive = false } = {}) {
+async function fetchAndMountReplay(runId, { interactive = false, mountInspector = true } = {}) {
+  const run = runsForCurrentModel().find((item) => item.id === runId);
+  if (!run) return false;
+  const generation = ++replayLoadGeneration;
+  const scope = replayContextKey();
+  const current = () => generation === replayLoadGeneration && scope === replayContextKey() && runsForCurrentModel().some((item) => item.id === runId);
   try {
     const payload = await request('/sim2real/runs/' + encodeURIComponent(runId) + '/replay');
+    if (!current()) return false;
     const frames = (Array.isArray(payload?.frames) ? payload.frames : []).map((sample) => ({ ...sample, t: Number(sample.t ?? sample.time ?? 0) })).sort((a, b) => a.t - b.t);
     if (!frames.length) {
       if (interactive) showToast('该运行没有原始遥测帧', 'normal');
@@ -6398,23 +6480,34 @@ async function fetchAndMountReplay(runId, { interactive = false } = {}) {
     }
     stopReplay();
     state.replay = { ...state.replay, runId, frames, index: 0, loaded: true, timer: null, autoLoadedFor: runId };
+    const evidence = parseTelemetryText(frames.map((frame) => JSON.stringify(frame)).join('\n'));
+    // The same accepted raw frames drive camera, scalar plots and the heatmaps.
+    evidence.samples = frames;
+    evidence.runId = runId;
+    evidence.modelId = run.modelId;
+    evidence.projectId = run.projectId;
+    evidence.source = payload?.replay?.source || payload?.source || run?.evaluation?.replay?.source || 'import';
+    evidence.fileName = `Run ${runId}`;
+    state.telemetry = evidence;
+    renderTelemetryEvidence();
     renderReplayPlayer();
     sendReplayFrame();
+    if (mountInspector) { renderRunInspector(); void $('run-inspector')?.load?.(runId); }
     // The replay payload carries frames, not run metrics; fetch the run row
     // for the replay-video record (a previously rendered MP4 mounts directly).
     void (async () => {
       try {
         const runPayload = await request('/sim2real/runs/' + encodeURIComponent(runId));
-        mountReplayVideo(runId, runPayload?.run?.metrics, runPayload?.run?.taskId);
+        if (current()) { mountReplayVideo(runId, runPayload?.run?.metrics, runPayload?.run?.taskId); syncReplayVideoToFrame(); }
       } catch {
-        mountReplayVideo(runId, null);
+        if (current()) mountReplayVideo(runId, null);
       }
     })();
     if (interactive) showToast(`已加载 ${frames.length} 帧，可开始回放`, 'success');
-    else showToast(`评测回放已自动挂载：${frames.length} 帧（${runId.slice(0, 8)}）`, 'normal');
+    else if (mountInspector) showToast(`评测回放已自动挂载：${frames.length} 帧（${runId.slice(0, 8)}）`, 'normal');
     return true;
   } catch (error) {
-    if (interactive) showToast(error instanceof Error ? error.message : '回放加载失败', 'error');
+    if (current() && interactive) showToast(error instanceof Error ? error.message : '回放加载失败', 'error');
     return false;
   }
 }
@@ -6425,7 +6518,7 @@ async function fetchAndMountReplay(runId, { interactive = false } = {}) {
 // postMessage cannot carry functions, so the iframe performs the inference
 // itself; this side only sends the clonable runId/apiRoot and relays the
 // status messages the simulator posts back.
-const policyTrial = { runId: '', running: false };
+const policyTrial = { runId: '', running: false, timer: null };
 
 function setPolicyTrialStatus(text) {
   const status = $('policy-trial-status');
@@ -6439,7 +6532,11 @@ function setPolicyTrialStatus(text) {
 window.addEventListener('message', (event) => {
   const data = event.data;
   if (!data || typeof data !== 'object' || data.type !== 'rdk-policy-status') return;
+  const frame = $('simulator-frame');
+  if (event.source !== frame?.contentWindow || event.origin !== window.location.origin) return;
+  if (['running', 'finished', 'failed', 'stopped'].includes(data.phase) && policyTrial.timer) { clearTimeout(policyTrial.timer); policyTrial.timer = null; }
   const message = String(data.message || '');
+  if (!policyTrial.running && ['loading', 'running'].includes(data.phase)) return;
   if (data.phase === 'running') {
     policyTrial.running = true;
     setPolicyTrialStatus(message || '策略试跑进行中：浏览器 wasm 推理驱动仿真器。');
@@ -6460,9 +6557,15 @@ function startPolicyTrial() {
   if (!boardBackend && !runId) { showToast('请先加载一个已完成运行的回放，再试跑策略（板端推理模式无需回放）', 'error'); return; }
   const iframe = $('simulator-frame');
   if (!iframe?.contentWindow) { showToast('嵌入仿真器不可用', 'error'); return; }
+  setView('simulate');
   policyTrial.runId = boardBackend ? 'board' : runId;
   policyTrial.running = true;
   setPolicyTrialStatus(boardBackend ? '正在启动板端推理…' : '正在启动浏览器推理…');
+  policyTrial.timer = setTimeout(() => {
+    policyTrial.timer = null; policyTrial.running = false;
+    setPolicyTrialStatus('仿真器未确认启动，请等待仿真器加载后重试。');
+    showToast('策略试跑启动超时：请在仿真页等待加载后重试', 'error');
+  }, 15_000);
   try {
     iframe.contentWindow.postMessage(
       {
@@ -6475,6 +6578,8 @@ function startPolicyTrial() {
       '*',
     );
   } catch (error) {
+    if (policyTrial.timer) clearTimeout(policyTrial.timer);
+    policyTrial.timer = null;
     policyTrial.running = false;
     const message = error instanceof Error ? error.message : '策略试跑启动失败';
     setPolicyTrialStatus('试跑失败：' + message);
@@ -6486,13 +6591,17 @@ function stopPolicyTrial() {
   if (!policyTrial.running) return;
   const iframe = $('simulator-frame');
   try { iframe?.contentWindow?.postMessage({ type: 'rdk-policy-stop' }, '*'); } catch { /* cross-origin iframe may reject */ }
-  setPolicyTrialStatus('正在停止策略试跑…');
+  if (policyTrial.timer) clearTimeout(policyTrial.timer);
+  policyTrial.timer = null; policyTrial.running = false;
+  setPolicyTrialStatus('已请求停止策略试跑。');
 }
 
 async function importTelemetryFile(event) {
   const input = event.target;
   const file = input?.files?.[0];
   if (!file) return;
+  const generation = ++replayLoadGeneration;
+  const scope = replayContextKey();
   try {
     const evidence = parseTelemetryText(
       await readImportTextWithinLimit(
@@ -6501,9 +6610,12 @@ async function importTelemetryFile(event) {
         '遥测文件',
       ),
     );
+    if (generation !== replayLoadGeneration || scope !== replayContextKey()) return;
     evidence.fileName = file.name;
+    invalidateReplayEvidence();
     state.telemetry = stampTelemetryContext(evidence);
     renderAll();
+    inspectLocalTelemetry(state.telemetry);
     const skippedHint = evidence.skipped ? `，跳过 ${evidence.skipped} 条无效行` : '';
     showToast(
       '已导入 ' + evidence.summary.sampleCount + ' 帧遥测' + skippedHint + '，可用于本地回放检查',
@@ -6517,6 +6629,8 @@ async function importTelemetryFile(event) {
 }
 
 async function loadDemoTelemetry() {
+  const generation = ++replayLoadGeneration;
+  const scope = replayContextKey();
   if (state.productId !== 'microduck') {
     showToast('合成演示证据对应 MicroDuck，请先切换产品线', 'error');
     return;
@@ -6528,10 +6642,13 @@ async function loadDemoTelemetry() {
     });
     if (!response.ok) throw new Error('演示证据文件不可用（HTTP ' + response.status + '）');
     const evidence = parseTelemetryText(await response.text());
+    if (generation !== replayLoadGeneration || scope !== replayContextKey()) return;
     evidence.fileName = 'microduck-telemetry-sample.jsonl';
     evidence.source = 'demo-fixture';
+    invalidateReplayEvidence();
     state.telemetry = stampTelemetryContext(evidence);
     renderAll();
+    inspectLocalTelemetry(state.telemetry);
     showToast('已载入合成演示证据；它不会代表真实 X5 遥测', 'normal');
   } catch (error) {
     showToast(error instanceof Error ? error.message : '演示证据加载失败', 'error');
@@ -6544,19 +6661,20 @@ async function publishTelemetry() {
     showToast('请先导入一段遥测 JSONL', 'error');
     return;
   }
-  const run = latestRun();
-  if (!run) {
-    showToast('请先发起一次训练或仿真运行，再绑定遥测', 'error');
+  const model = selectedModel();
+  if (!model) { showToast('请先选择模型', 'error'); return; }
+  if (evidence.samples?.some((sample) => sample.cameraFrame)) {
+    showToast('导入相机帧可在本地预览；保存相机证据需要板端受信上传，请改用板端采集链路。', 'error');
     return;
   }
-  const model = state.overview?.models?.find((item) => item.id === run.modelId);
+  let run = evidence.uploadRunId ? runsForCurrentModel().find((item) => item.id === evidence.uploadRunId) : null;
   const contract = model?.manifest?.contract;
   if (!contract) {
     showRecoverableError(
       '遥测无法绑定到该 Run',
       '当前 Run 的模型契约不可用，无法安全绑定遥测。',
       '查看运行详情',
-      () => openRecordDetails(run),
+      () => setView('train'),
     );
     return;
   }
@@ -6578,6 +6696,12 @@ async function publishTelemetry() {
   renderTelemetryEvidence();
   renderReplayPlayer();
   try {
+    if (!run) {
+      const saved = await request('/sim2real/runs', { method: 'POST', body: JSON.stringify({ modelId: model.id, backend: 'contract', taskId: state.taskId, ...(state.projectId ? { projectId: state.projectId } : {}), label: `示教来源 · ${evidence.fileName || evidence.source}`, idempotencyKey: evidence.uploadKey || (evidence.uploadKey = globalThis.crypto?.randomUUID?.() || `demonstration-${Date.now()}`) }) });
+      run = saved.run;
+      if (!run?.id) throw new Error('未能创建独立示教 Run');
+      evidence.uploadRunId = run.id;
+    }
     const samples = evidence.samples || [];
     // Keep a generous margin below Express/nginx's 2 MiB limit. A legal
     // MicroDuck frame is large (61D observation + 14D action), so a fixed
@@ -6658,7 +6782,7 @@ async function publishTelemetry() {
 }
 
 function clearTelemetry() {
-  state.telemetry = null;
+  invalidateReplayEvidence();
   renderAll();
   showToast('已清除本地遥测证据');
 }
@@ -6669,7 +6793,7 @@ function renderEvaluation() {
   const runs = [...runsForCurrentModel()].sort((a, b) =>
     String(b.createdAt || '').localeCompare(String(a.createdAt || '')),
   );
-  const latest = runs[0] || null;
+  const latest = evidence?.runId ? runs.find((run) => run.id === evidence.runId) || null : runs[0] || null;
   const latestMetrics = latest?.metrics || {};
   const hasRunEvaluation = Boolean(
     latest &&
@@ -6818,13 +6942,17 @@ function renderEvaluation() {
       : '控制延迟',
   );
 
-  // A local Mock run is a protocol receipt, not a simulator or X5 sample.
-  // Keep it out of the two-column Sim → Real comparison so a fixed 72% cannot
-  // be mistaken for a physical-device result.
-  const simPercent =
-    latest && !mockRun && !demoEvidence && latest.backend === 'browser' ? success : null;
-  const realPercent =
-    latest && releaseGradeEvidence && latest.backend !== 'browser' ? success : null;
+  // Pair only the same policy bytes and task; a host trainer is not a real board.
+  const digest = (run) => /^[a-f0-9]{64}$/.test(run?.artifact?.sha256 || '') ? run.artifact.sha256 : null;
+  const eligible = runs.filter((run) => !run.mock && !isSyntheticEvidence(null, run));
+  const simulatorRun = eligible.find((run) => digest(run) && run.evaluation?.replay?.source !== 'board-agent' && metricPercent(run.metrics?.successRate) !== null && (run.backend === 'browser' || /mujoco|mjx|dm-control|mjlab|isaac/.test(String(run.metrics?.physicsBackend || ''))));
+  const boardRun = simulatorRun ? eligible.find((run) => run.id !== simulatorRun.id && run.modelId === simulatorRun.modelId && run.taskId === simulatorRun.taskId && digest(run) === digest(simulatorRun) && run.evaluation?.replay?.source === 'board-agent' && run.evaluation?.replay?.attested === true) : null;
+  const simPercent = simulatorRun ? metricPercent(simulatorRun.metrics.successRate) : null;
+  // Board replay attestation validates its source, not task success. The
+  // current telemetry evaluation reports sample/error aggregates only;
+  // Run.metrics.successRate still belongs to the training evaluation.
+  const realPercent = null;
+  setText('eval-comparison-note', boardRun ? `同一策略 SHA-256 ${digest(boardRun).slice(0, 12)} · ${simulatorRun.id} ↔ ${boardRun.id}；板端回放受信，但缺少明确真机成功率测量，真机指标留空。` : simulatorRun ? `仿真 Run ${simulatorRun.id}；缺少同一策略 SHA-256、模型与任务的受信板端 Run，以及明确真机成功率测量。` : '需要同一策略 SHA-256、模型与任务的仿真和受信板端 Run，以及明确真机成功率测量。可在结果对比中选择两条轨迹逐帧检查。');
   for (const [barId, labelId, value] of [
     ['eval-sim-bar', 'eval-sim-label', simPercent],
     ['eval-real-bar', 'eval-real-label', realPercent],
@@ -8377,8 +8505,44 @@ async function agentCheckBoard() {
   }
 }
 
+// Keep every visual tied to one source Run and the currently scoped project.
+function renderRunInspector(mode = state.evalModule || 'run') {
+  const inspector = $('run-inspector');
+  if (!inspector?.configure) return;
+  const runs = runsForCurrentModel();
+  const manifests = Object.fromEntries((state.overview?.models || []).filter((model) => currentModelIds().has(model.id)).map((model) => [model.id, model.manifest]));
+  inspector.configure({ apiRoot: apiPath('/sim2real'), requestJson: (path, options) => request('/sim2real' + path, options), runs, manifests, mode: mode === 'comparison' ? 'compare' : 'single' });
+}
+
+function inspectLocalTelemetry(evidence) {
+  renderRunInspector();
+  $('run-inspector')?.loadLocal?.(evidence);
+}
+
+function renderDemonstrations() {
+  const panel = $('training-demonstrations');
+  const engine = $('training-engine')?.value;
+  const imitation = engine === 'act' || engine === 'diffusion-policy';
+  if (panel) panel.hidden = !imitation;
+  const select = $('training-demonstration-run');
+  if (!select) return;
+  const previous = select.value;
+  select.replaceChildren(new Option('请选择已保存的示教 Run', ''));
+  for (const run of runsForCurrentModel().filter((run) => run.mock !== true && run.evaluation?.replay?.source !== 'demo-fixture' && (Number(run.evaluation?.replay?.sampleCount) > 0 || Number(run.metrics?.replay?.sampleCount) > 0))) {
+    select.add(new Option(`${run.label || run.summary || run.id} · ${run.id.slice(0, 8)} · ${run.evaluation?.replay?.sampleCount || run.metrics?.replay?.sampleCount} 帧`, run.id));
+  }
+  if ([...select.options].some((option) => option.value === previous)) select.value = previous;
+  const smoke = $('training-synthetic-smoke');
+  if (smoke) {
+    smoke.disabled = $('training-profile')?.value !== 'smoke';
+    if (smoke.disabled) smoke.checked = false;
+    select.disabled = smoke.checked;
+  }
+}
+
 function renderAll() {
   renderSelects();
+  ensureReplayScope();
   syncStationDeviceForm();
   renderComputeResources();
   renderIntegrations();
@@ -8388,6 +8552,8 @@ function renderAll() {
   renderBoard();
   renderEvaluation();
   renderReplayPlayer();
+  renderRunInspector();
+  renderDemonstrations();
   renderHistory();
   renderRunProgress();
   renderNextAction();
@@ -8643,26 +8809,30 @@ async function loadOverview({ quiet = false, silent = false } = {}) {
           }).toString()),
           request('/sim2real/research-loop/summary?days=30'),
         ]);
-    state.workspaceSummary = summaryResult.status === 'fulfilled' ? summaryResult.value : state.workspaceSummary;
-    if (researchLoopResult.status === 'fulfilled' && researchLoopResult.value?.ok && researchLoopResult.value?.summary) {
-      state.researchLoop = researchLoopResult.value.summary;
-      state.researchLoopError = false;
-    } else if (!silent) {
-      state.researchLoopError = true;
-    }
-    const projectsAvailable = projectsResult.status === 'fulfilled' && Array.isArray(projectsResult.value?.projects);
-    const datasetsAvailable = datasetsResult.status === 'fulfilled' && Array.isArray(datasetsResult.value?.datasets);
-    if (projectsAvailable) state.projects = projectsResult.value.projects;
-    if (datasetsAvailable) state.datasets = datasetsResult.value.datasets;
-    if (goldenPathResult.status === 'fulfilled' && goldenPathResult.value?.goldenPath) {
-      state.goldenPath = goldenPathResult.value.goldenPath;
-    }
-    state.projectsLoaded = projectsAvailable || state.projectsLoaded;
-    state.projectsLoadError = !projectsAvailable;
-    state.datasetsLoaded = datasetsAvailable || state.datasetsLoaded;
-    if (projectsAvailable && state.projectId && !state.projects.some((project) => String(project.id) === String(state.projectId))) {
-      state.projectId = '';
-      saveWorkspaceContext();
+    // Skipped auxiliary reads have no new success/failure evidence. Preserve
+    // their last data and status until a foreground refresh checks them again.
+    if (!silent) {
+      state.workspaceSummary = summaryResult.status === 'fulfilled' ? summaryResult.value : state.workspaceSummary;
+      if (researchLoopResult.status === 'fulfilled' && researchLoopResult.value?.ok && researchLoopResult.value?.summary) {
+        state.researchLoop = researchLoopResult.value.summary;
+        state.researchLoopError = false;
+      } else {
+        state.researchLoopError = true;
+      }
+      const projectsAvailable = projectsResult.status === 'fulfilled' && Array.isArray(projectsResult.value?.projects);
+      const datasetsAvailable = datasetsResult.status === 'fulfilled' && Array.isArray(datasetsResult.value?.datasets);
+      if (projectsAvailable) state.projects = projectsResult.value.projects;
+      if (datasetsAvailable) state.datasets = datasetsResult.value.datasets;
+      if (goldenPathResult.status === 'fulfilled' && goldenPathResult.value?.goldenPath) {
+        state.goldenPath = goldenPathResult.value.goldenPath;
+      }
+      state.projectsLoaded = projectsAvailable || state.projectsLoaded;
+      state.projectsLoadError = !projectsAvailable;
+      state.datasetsLoaded = datasetsAvailable || state.datasetsLoaded;
+      if (projectsAvailable && state.projectId && !state.projects.some((project) => String(project.id) === String(state.projectId))) {
+        state.projectId = '';
+        saveWorkspaceContext();
+      }
     }
     state.serviceError = false;
     state.productProfiles = Array.isArray(payload.productProfiles) ? payload.productProfiles : null;
@@ -8679,7 +8849,7 @@ async function loadOverview({ quiet = false, silent = false } = {}) {
     if (summaryResult.status === 'rejected' || projectsResult.status === 'rejected' || datasetsResult.status === 'rejected') {
       const failed = [summaryResult, projectsResult, datasetsResult].filter((result) => result.status === 'rejected').length;
       setWorkspaceStatus('warning', '工作区已连接，但部分数据暂不可用', `${failed} 个辅助数据源未响应；核心模型和运行状态仍可使用。下一步：点击“重新连接”再次检查。`, { retry: true });
-    } else {
+    } else if (!silent || $('workspace-status-banner')?.dataset.state !== 'warning') {
       clearWorkspaceStatus();
     }
   } catch (error) {
@@ -8981,6 +9151,13 @@ async function runModel(backend) {
     const engine = $('training-engine')?.value;
     if ((backend === 'robogo' || backend === 'local') && profile) {
       body.training = { profile, ...(algorithm ? { algorithm } : {}), ...(engine ? { engine } : {}) };
+      if (engine === 'act' || engine === 'diffusion-policy') {
+        const syntheticSmoke = $('training-synthetic-smoke')?.checked === true;
+        const demonstrationRunId = $('training-demonstration-run')?.value || '';
+        if (!syntheticSmoke && !demonstrationRunId) { showToast('请先保存并选择原始示教 Run', 'error'); return; }
+        if (syntheticSmoke && profile !== 'smoke') { showToast('合成示教仅允许冒烟档位', 'error'); return; }
+        body.training = { ...body.training, ...(syntheticSmoke ? { syntheticSmoke: true } : { demonstrationRunId }) };
+      }
     }
     const checkpointId = $('resume-checkpoint-id')?.value.trim() || '';
     const artifactRef = $('resume-artifact-ref')?.value.trim() || '';
@@ -9309,6 +9486,10 @@ function stationLog(message, kind = 'info') {
 }
 
 function stationStopStatusStream() {
+  if ($('station-live-badge')) $('station-live-badge').hidden = true;
+  const pending = state.station.streamAbort;
+  state.station.streamAbort = null;
+  pending?.abort();
   if (state.station.statusReader) {
     try {
       state.station.statusReader.cancel().catch(() => undefined);
@@ -9679,14 +9860,25 @@ function stationScheduleStreamReconnect() {
 }
 
 function stationStartStatusStream() {
-  if (state.station.statusReader) return;
+  if (state.station.statusReader || state.station.streamAbort) return;
   stationClearStreamReconnect();
   const badge = $('station-live-badge');
-  fetch(apiPath('/sim2real/board-station/status/stream'), {
+  const controller = new AbortController();
+  const deviceId = String(state.selectedDeviceId || '');
+  state.station.streamAbort = controller;
+  const current = () => state.station.streamAbort === controller && !controller.signal.aborted
+    && deviceId === String(state.selectedDeviceId || '');
+  const source = apiPath('/sim2real/board-station/status/stream');
+  fetch(source + (deviceId ? '?deviceId=' + encodeURIComponent(deviceId) : ''), {
     credentials: 'same-origin',
     headers: { accept: 'application/x-ndjson' },
+    signal: controller.signal,
   })
     .then(async (response) => {
+      if (!current()) {
+        await response.body?.cancel().catch(() => undefined);
+        return;
+      }
       if (!response.ok || !response.body) throw new Error('HTTP ' + response.status);
       if (badge) badge.hidden = false;
       // 流真正建立后重置退避计数，短暂中断不会累积到长间隔。
@@ -9697,6 +9889,7 @@ function stationStartStatusStream() {
       let buffer = '';
       for (;;) {
         const { done, value } = await reader.read();
+        if (!current()) return;
         if (done) break;
         buffer += decoder.decode(value, { stream: true });
         for (;;) {
@@ -9719,6 +9912,7 @@ function stationStartStatusStream() {
       }
     })
     .catch(() => {
+      if (!current()) return;
       if (badge) badge.hidden = true;
       const freshness = $('station-freshness');
       if (freshness) {
@@ -9728,6 +9922,8 @@ function stationStartStatusStream() {
       stationLog('状态流已断开或不可用', 'error');
     })
     .finally(() => {
+      if (!current()) return;
+      state.station.streamAbort = null;
       state.station.statusReader = null;
       if (badge) badge.hidden = true;
       // 流结束（正常关闭或错误）后自动重连；页面隐藏/视图切走时由
@@ -10198,45 +10394,102 @@ async function stationPolicyReset() {
   }
 }
 
-function stationSetCamera(enabled) {
-  const img = $('station-camera-img');
+function stationSetCamera(enabled, { silent = false } = {}) {
+  let img = $('station-camera-img');
   const placeholder = $('station-camera-placeholder');
   const cameraState = $('station-camera-state');
   const toggle = $('station-camera-toggle');
   if (!img) return;
-  state.station.cameraOn = Boolean(enabled);
-  if (state.station.cameraOn) {
-    img.src = apiPath('/sim2real/board-station/camera.mjpeg');
+  const previous = state.station.cameraSession;
+  state.station.cameraSession = null;
+  state.station.cameraOn = false;
+  if (previous) {
+    clearTimeout(previous.timeout);
+    clearTimeout(previous.poll);
+    previous.image.removeEventListener('load', previous.onLoad);
+    previous.image.removeEventListener('error', previous.onError);
+    previous.image.removeAttribute('src');
+  }
+  img.removeAttribute('src');
+  img.hidden = true;
+  if (placeholder) {
+    placeholder.hidden = false;
+    placeholder.textContent = '相机流未启动';
+  }
+  if (cameraState) cameraState.textContent = '未连接';
+  if (toggle) toggle.textContent = '开启相机流';
+  if (!enabled) {
+    if (!silent) stationLog('相机流已关闭');
+    return;
+  }
+  if (!state.station.ready || state.station.offline) {
+    if (cameraState) cameraState.textContent = '板端未就绪，未连接相机';
+    if (placeholder) placeholder.textContent = '先连接板端 agent，再开启相机流。';
+    return;
+  }
+  // Every connection owns its own image. A queued load/error from an old
+  // stream cannot be mistaken for the replacement stream's first frame.
+  const replacement = img.cloneNode(false);
+  img.replaceWith(replacement);
+  img = replacement;
+  const session = {
+    image: img,
+    deviceId: String(state.selectedDeviceId || ''),
+    mock: state.station.mock === true,
+    timeout: null,
+    poll: null,
+    confirmed: false,
+    onLoad: null,
+    onError: null,
+  };
+  state.station.cameraSession = session;
+  state.station.cameraOn = true;
+  const current = () => state.station.cameraSession === session
+    && String(state.selectedDeviceId || '') === session.deviceId
+    && state.station.ready && !state.station.offline;
+  const failed = (message) => {
+    if (!current()) return;
+    stationSetCamera(false, { silent: true });
+    if (cameraState) cameraState.textContent = message;
+    if (placeholder) placeholder.textContent = message;
+    stationLog(message, 'error');
+  };
+  const firstFrame = () => {
+    if (!current() || session.confirmed || img.naturalWidth <= 0 || img.naturalHeight <= 0) return false;
+    session.confirmed = true;
+    clearTimeout(session.timeout);
+    clearTimeout(session.poll);
     img.hidden = false;
     if (placeholder) placeholder.hidden = true;
-    if (cameraState) cameraState.textContent = '已连接（MJPEG）';
+    if (cameraState) cameraState.textContent = session.mock
+      ? '合成演示流（mock） · 首帧已确认'
+      : '已连接（MJPEG） · 首帧已确认';
     if (toggle) toggle.textContent = '关闭相机流';
-    stationLog('相机流已开启', 'ok');
-  } else {
-    img.removeAttribute('src');
-    img.hidden = true;
-    if (placeholder) {
-      placeholder.hidden = false;
-      placeholder.textContent = '相机流未启动';
+    stationLog(session.mock ? '参考相机首帧已确认（合成演示，不是真机画面）' : '板载相机首帧已确认', 'ok');
+    return true;
+  };
+  const poll = () => {
+    if (!current()) {
+      if (state.station.cameraSession === session) stationSetCamera(false, { silent: true });
+      return;
     }
-    if (cameraState) cameraState.textContent = '未连接';
-    if (toggle) toggle.textContent = '开启相机流';
-    stationLog('相机流已关闭');
-  }
-}
-
-// A real board may answer 503 CAMERA_UNAVAILABLE (no camera connected). The
-// <img> element only surfaces that through onerror, so fall back to the
-// honest placeholder instead of leaving a blank frame.
-function wireStationCameraError() {
-  const img = $('station-camera-img');
-  if (!img || img.dataset.cameraErrorWired === '1') return;
-  img.dataset.cameraErrorWired = '1';
-  img.addEventListener('error', () => {
-    if (!state.station.cameraOn) return;
-    stationSetCamera(false);
-    stationLog('板端没有可用相机（agent 如实返回不可用），不会伪造画面', 'error');
-  });
+    if (!firstFrame() && !session.confirmed) session.poll = setTimeout(poll, 250);
+  };
+  session.onLoad = firstFrame;
+  session.onError = () => failed('相机流不可用或已中断；请检查设备、权限和相机。');
+  img.addEventListener('load', session.onLoad);
+  img.addEventListener('error', session.onError);
+  img.alt = session.mock ? '合成演示相机画面（不是真机）' : '板载相机实时画面';
+  if (cameraState) cameraState.textContent = session.mock ? '参考相机连接中 · 等待首帧（合成演示）' : '相机连接中 · 等待首帧';
+  if (placeholder) placeholder.textContent = session.mock ? '等待合成演示首帧，不是真机画面…' : '等待板载相机首帧…';
+  if (toggle) toggle.textContent = '取消相机连接';
+  session.timeout = setTimeout(() => failed('相机首帧等待超时（10 秒），未确认连接。'), 10000);
+  // Continuous MJPEG does not dispatch load consistently across browsers.
+  // Intrinsic dimensions become available after a JPEG frame is decoded;
+  // the bounded poll confirms that evidence without trusting HTTP status.
+  session.poll = setTimeout(poll, 250);
+  const source = apiPath('/sim2real/board-station/camera.mjpeg');
+  img.src = source + (session.deviceId ? '?deviceId=' + encodeURIComponent(session.deviceId) : '');
 }
 
 async function stationRunCommand(id) {
@@ -10272,8 +10525,17 @@ async function stationRunCommand(id) {
 async function stationInit() {
   const notice = $('station-notice');
   const honestyNote = $('station-honesty-note');
+  const generation = ++state.station.healthGeneration;
+  const deviceId = String(state.selectedDeviceId || '');
+  const current = () => generation === state.station.healthGeneration
+    && deviceId === String(state.selectedDeviceId || '');
+  state.station.ready = false;
+  state.station.mock = false;
+  stationSetCamera(false, { silent: true });
+  if (honestyNote) honestyNote.hidden = true;
   try {
-    const health = await request('/sim2real/board-station/health');
+    const health = await request('/sim2real/board-station/health' + (deviceId ? '?deviceId=' + encodeURIComponent(deviceId) : ''));
+    if (!current()) return;
     if (health?.available === false || health?.state === 'offline') {
       state.station.ready = false;
       state.station.offline = true;
@@ -10297,10 +10559,11 @@ async function stationInit() {
           offlineReason.includes('仍可使用') ? '' : ' 仿真、训练与数据分析仍可使用。'
         }`;
       }
-      if (honestyNote) honestyNote.hidden = false;
+      if (honestyNote) honestyNote.hidden = true;
       stationLog(`上位机离线：${state.station.offlineReason}`, 'info');
       return;
     }
+    if (health?.ok !== true || !health.agent) throw new Error('板端健康响应缺少有效 agent 状态');
     state.station.ready = true;
     state.station.offline = false;
     state.station.offlineReason = '';
@@ -10327,7 +10590,10 @@ async function stationInit() {
     // 同样探测策略运行时开关（独立的面板、独立的第三重开关）。
     stationProbePolicy();
   } catch (error) {
+    if (!current()) return;
     state.station.ready = false;
+    state.station.mock = false;
+    if (honestyNote) honestyNote.hidden = true;
     const fallbackDevice = selectedDevice();
     const deviceName = $('station-device-name');
     const selectedOption = $('device-select')?.selectedOptions?.[0];
@@ -10581,7 +10847,7 @@ function wireDeviceManagerEvents() {
       return;
     }
     if (action === 'bridge-select') {
-      state.selectedDeviceId = button.dataset.deviceId || '';
+      selectStationDevice(button.dataset.deviceId || '');
       saveWorkspaceContext();
       renderAll();
       showToast('已选择目标设备；现在可继续做预检或部署。', 'success');
@@ -10783,6 +11049,7 @@ function wireStationSwitchEvents() {
 }
 
 function stationTeardown() {
+  state.station.healthGeneration += 1;
   stationStopStatusStream();
   stationClearStreamReconnect();
   state.station.streamReconnectAttempts = 0;
@@ -10792,7 +11059,6 @@ function stationTeardown() {
 function wireStationEvents() {
   $('station-device-transport')?.addEventListener('change', syncStationDeviceForm);
   syncStationDeviceForm();
-  wireStationCameraError();
   document.querySelectorAll('[data-station-command]').forEach((button) => {
     button.addEventListener('click', () => stationRunCommand(button.dataset.stationCommand));
   });
@@ -11092,6 +11358,7 @@ function wireEvents() {
   });
   $('training-engine')?.addEventListener('change', () => {
     renderEngineCapability();
+    renderDemonstrations();
   });
   renderEngineCapability();
   // G13 explicit preference: restore the last-used training profile and label
@@ -11106,6 +11373,7 @@ function wireEvents() {
     }
     trainingProfileSelect.addEventListener('change', () => {
       state.trainingProfile = trainingProfileSelect.value || '';
+      renderDemonstrations();
       saveWorkspaceContext();
     });
   }
@@ -11190,6 +11458,14 @@ function wireEvents() {
   $('telemetry-demo-button')?.addEventListener('click', () => loadDemoTelemetry());
   $('telemetry-clear-button')?.addEventListener('click', clearTelemetry);
   $('telemetry-publish-button')?.addEventListener('click', () => publishTelemetry());
+  $('training-synthetic-smoke')?.addEventListener('change', renderDemonstrations);
+  $('run-inspector')?.addEventListener('run-inspector-load', (event) => { if (!event.detail.local) void fetchAndMountReplay(event.detail.runId, { mountInspector: false }); });
+  $('run-inspector')?.addEventListener('run-inspector-seek', (event) => {
+    const { runId, index } = event.detail;
+    if (inspectorSyncing || !runId || state.replay.runId !== runId || !Number.isInteger(index) || index < 0 || index >= state.replay.frames.length || state.replay.index === index) return;
+    inspectorSyncing = true;
+    try { stopReplay(); state.replay.index = index; sendReplayFrame(); } finally { inspectorSyncing = false; }
+  });
   $('replay-load-button')?.addEventListener('click', () => { void loadRunReplay(); });
   $('replay-play-button')?.addEventListener('click', toggleReplay);
   $('replay-stop-button')?.addEventListener('click', () => { state.replay.index = 0; stopReplay(); sendReplayFrame(); });
@@ -11301,7 +11577,7 @@ function wireEvents() {
     await loadModelDetails();
   });
   $('device-select')?.addEventListener('change', (event) => {
-    state.selectedDeviceId = event.target.value;
+    selectStationDevice(event.target.value);
     state.activeDeployment = null;
     saveWorkspaceContext();
     renderAll();
@@ -11694,6 +11970,7 @@ window.addEventListener('sim2real-refetch-notices', () => {
 // 上位机视图懒初始化：首次切到 station 视图时再探测板端 agent，
 // 避免无板卡环境下的多余请求与误导性错误横幅。
 const stationViewObserver = new MutationObserver(() => {
+  if (document.body.dataset.activeView !== 'station' && state.station.cameraOn) stationSetCamera(false);
   stationMaybeInit();
 });
 stationViewObserver.observe(document.body, {
