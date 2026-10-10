@@ -13,11 +13,13 @@
 #   scripts/deploy-sim2real-production.sh --skip-build   # 复用已有 dist-server
 #   DEPLOY_HOST=user@other-host scripts/...              # 覆盖目标主机
 #   DEPLOY_NODE_BIN=/opt/node-v24/bin/node scripts/...   # 服务端 Node 运行时
+#   DEPLOY_NPM_CLI=/opt/node-v24/lib/node_modules/npm/bin/npm-cli.js scripts/...
 set -euo pipefail
 
 HOST="${DEPLOY_HOST:-root@47.110.142.255}"
 BASE=/opt/sim2real-web
 NODE_BIN="${DEPLOY_NODE_BIN:-/opt/node-v22.16.0-linux-x64/bin/node}"
+NPM_CLI="${DEPLOY_NPM_CLI:-}"
 WEB_UNIT=sim2real-web.service
 WORKER_UNIT=sim2real-mock-worker.service
 CPU_WORKER_UNIT=sim2real-cpu-worker.service
@@ -122,7 +124,8 @@ pack_engine_sources "$STAGING/dist-server/engines" "$STAGING/engine-source.tar.g
 # 本地 engines 不作为依赖环境上传（含历史中断构建的 engines.*.tmp 残留）。
 rm -rf "$STAGING/dist-server/engines" "$STAGING"/dist-server/engines.*.tmp
 cp package.json package-lock.json "$STAGING/"
-npm ci --omit=dev --no-audit --no-fund --prefix "$STAGING" >/dev/null 2>&1
+# node_modules 必须在目标 Linux 主机安装；Mac npm ci 会只安装 Darwin
+# optional 原生依赖，Agent 首次持久化会话时才触发缺 Linux flock 的故障。
 # 服务单元的入口文件（如 worker 的根级 mock-local-worker.mjs）来自构建
 # 产物的 services/sim2real-web/，必须提升到 release 根目录。
 for entry in "$STAGING"/dist-server/services/sim2real-web/*.mjs; do
@@ -134,13 +137,14 @@ echo "== [3/7] 打包上传 =="
 # 文件名创建，第二次运行必然 File exists。
 TARBALL="/tmp/release-$SHA.tar.gz"
 rm -f "$TARBALL"
-tar czf "$TARBALL" -C "$(dirname "$STAGING")" "$RELEASE"
+COPYFILE_DISABLE=1 tar czf "$TARBALL" --exclude='node_modules' -C "$(dirname "$STAGING")" "$RELEASE"
 scp -o BatchMode=yes "$TARBALL" "$HOST:/tmp/$(basename "$TARBALL")"
 
-echo "== [4/7] 服务端解压 + Linux 依赖继承 + 新源码覆盖 + 语法自检 =="
-remote_bash "$BASE" "$RELEASE" "$(basename "$TARBALL")" "$NODE_BIN" <<'REMOTE'
+echo "== [4/7] 服务端解压 + Linux 依赖安装/继承 + 新源码覆盖 + 原生模块自检 =="
+remote_bash "$BASE" "$RELEASE" "$(basename "$TARBALL")" "$NODE_BIN" "$NPM_CLI" <<'REMOTE'
 set -euo pipefail
 BASE=$1; RELEASE=$2; TARBALL=$3; NODE_BIN=$4
+NPM_CLI=${5:-"$(dirname "$NODE_BIN")/../lib/node_modules/npm/bin/npm-cli.js"}
 REL=$BASE/releases/$RELEASE
 if [ -d "$REL" ] && [ "$(readlink -f "$BASE/current" 2>/dev/null || true)" = "$(readlink -f "$REL" 2>/dev/null || true)" ]; then
   echo "FATAL: release is already current; refusing to replace the rollback target" >&2
@@ -166,6 +170,43 @@ cp -a "$SRC_ENGINES" "$REL/dist-server/engines"
 [ -f "$REL/engine-source.tar.gz" ] || { echo "FATAL: engine source package is missing" >&2; exit 1; }
 tar xzf "$REL/engine-source.tar.gz" -C "$REL/dist-server/engines" --no-same-owner
 rm -f "$REL/engine-source.tar.gz"
+[ -x "$NODE_BIN" ] && [ -f "$NPM_CLI" ] || { echo "FATAL: release Node/npm runtime is missing" >&2; exit 1; }
+# 只重建待发布 release 的依赖，保留 current 的可回滚环境与原 lockfile。
+# 使用该 Node 发行版的 npm CLI，child lifecycle scripts 也使用同一 Node。
+rm -rf "$REL/node_modules"
+INSTALL_LOG="$REL/.release-install.log"
+(umask 077; : >"$INSTALL_LOG")
+if ! PATH="$(dirname "$NODE_BIN"):$PATH" "$NODE_BIN" "$NPM_CLI" ci --omit=dev --include=optional --no-audit --no-fund --prefix "$REL" >"$INSTALL_LOG" 2>&1; then
+  echo "FATAL: Linux production dependency installation failed (private release log retained)" >&2
+  exit 1
+fi
+# import 不能验证按需加载的 native binding；实际持锁才会触发缺平台包/ABI
+# 错误。探针只创建独立临时文件，不创建 Agent 会话或访问平台业务数据。
+if ! (
+  cd "$REL"
+  "$NODE_BIN" --input-type=module <<'NATIVE'
+import { mkdtempSync, openSync, closeSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { createRequire } from 'node:module';
+import { pathToFileURL } from 'node:url';
+const require = createRequire(join(process.cwd(), 'package.json'));
+const { tryLockExclusive } = await import(pathToFileURL(require.resolve('@deepseek-ai/node-addon-system/flock')).href);
+const probeDir = mkdtempSync(join(tmpdir(), 'sim2real-dsh-lock-'));
+let fd;
+try {
+  fd = openSync(join(probeDir, 'probe.lock'), 'wx', 0o600);
+  await tryLockExclusive(fd);
+} finally {
+  try { if (fd !== undefined) closeSync(fd); }
+  finally { rmSync(probeDir, { recursive: true, force: true }); }
+}
+NATIVE
+) >>"$INSTALL_LOG" 2>&1; then
+  echo "FATAL: DSH native lock validation failed (private release log retained)" >&2
+  exit 1
+fi
+rm -f "$INSTALL_LOG"
 "$NODE_BIN" --check "$REL/dist-server/services/sim2real-web/server.js"
 rm -f "/tmp/$TARBALL"
 REMOTE

@@ -190,6 +190,7 @@ async function boot(
     datasetsStatus?: number;
     summaryGeneratedAt?: string;
     captureHeartbeat?: boolean;
+    captureCameraTimeout?: boolean;
     failOverview?: boolean;
     createdProject?: unknown;
     runs?: unknown[];
@@ -197,6 +198,11 @@ async function boot(
     evaluations?: unknown[];
     overviewDeployments?: unknown[];
     localWorker?: { mock?: boolean; engines?: string[] | null };
+    stationHealth?: unknown;
+    stationHealthStatus?: number;
+    stationStream?: () => Response | Promise<Response>;
+    devices?: unknown[];
+    localBridgeStatus?: unknown;
     /** Frames the replay endpoint returns; drives the aligned camera frame tests. */
     replayFrames?: unknown[];
     /** Notices payload served by GET /sim2real/notices. */
@@ -219,20 +225,28 @@ async function boot(
   openWindows.push(dom.window);
   const { window } = dom;
   const heartbeatTimers = new Map<number, () => void>();
-  if (options.captureHeartbeat) {
+  const cameraTimers = new Map<number, () => void>();
+  if (options.captureHeartbeat || options.captureCameraTimeout) {
     const nativeSetTimeout = window.setTimeout.bind(window);
     const nativeClearTimeout = window.clearTimeout.bind(window);
     let nextHeartbeatId = 1000000;
     window.setTimeout = ((callback, delay, ...args) => {
-      if (delay === 30000 && typeof callback === 'function') {
+      const timers =
+        options.captureHeartbeat && delay === 30000
+          ? heartbeatTimers
+          : options.captureCameraTimeout && delay === 10000
+            ? cameraTimers
+            : null;
+      if (timers && typeof callback === 'function') {
         const id = nextHeartbeatId++;
-        heartbeatTimers.set(id, () => callback(...args));
+        timers.set(id, () => callback(...args));
         return id;
       }
       return nativeSetTimeout(callback, delay, ...args);
     }) as typeof window.setTimeout;
     window.clearTimeout = (id) => {
-      if (!heartbeatTimers.delete(Number(id))) nativeClearTimeout(id);
+      if (!heartbeatTimers.delete(Number(id)) && !cameraTimers.delete(Number(id)))
+        nativeClearTimeout(id);
     };
   }
   if (options.workspaceContext) {
@@ -297,14 +311,28 @@ async function boot(
           },
         );
       }
-      if (url.includes('/overview'))
+      if (url.includes('/overview')) {
         payload = overview(options.runs, {
           artifacts: options.artifacts,
           evaluations: options.evaluations,
           deployments: options.overviewDeployments,
           localWorker: options.localWorker,
         });
-      else if (url.includes('/workspace-summary')) {
+        if (options.devices) (payload as { devices: unknown[] }).devices = options.devices;
+      } else if (url.includes('/board-station/health') && options.stationHealth !== undefined) {
+        const health =
+          typeof options.stationHealth === 'function'
+            ? await options.stationHealth(url)
+            : options.stationHealth;
+        return new Response(JSON.stringify(health), {
+          status: options.stationHealthStatus || 200,
+          headers: { 'content-type': 'application/json' },
+        });
+      } else if (url.includes('/board-station/status/stream') && options.stationStream) {
+        return options.stationStream();
+      } else if (url.includes('/local-bridge/status') && options.localBridgeStatus) {
+        payload = options.localBridgeStatus;
+      } else if (url.includes('/workspace-summary')) {
         payload = {
           ok: true,
           generatedAt: options.summaryGeneratedAt,
@@ -404,6 +432,7 @@ async function boot(
     open: vi.fn(),
     scrollTo: vi.fn(),
     structuredClone: globalThis.structuredClone,
+    TextDecoder: globalThis.TextDecoder,
   });
   window.requestAnimationFrame = (callback) => {
     callback(Date.now());
@@ -422,6 +451,12 @@ async function boot(
     window,
     errors,
     requests,
+    cameraTimeout() {
+      for (const [id, callback] of cameraTimers) {
+        cameraTimers.delete(id);
+        callback();
+      }
+    },
     async heartbeat() {
       const pending = [...heartbeatTimers.entries()].at(-1);
       if (!pending) throw new Error('overview heartbeat was not scheduled');
@@ -1427,6 +1462,324 @@ describe('Sim2Real workbench DOM behavior', () => {
     expect(window.document.querySelector('[data-training-profile-note]')?.hidden).toBe(true);
     expect(errors).toEqual([]);
   });
+});
+
+describe('station camera evidence and cancellation', () => {
+  const devices = [
+    { id: 'board-a', name: 'Board A', status: 'connected' },
+    { id: 'board-b', name: 'Board B', status: 'connected' },
+  ];
+  const health = (mock = false, id = 'board-a') => ({
+    ok: true,
+    agent: { mock },
+    device: { id },
+    cameraSupported: true,
+  });
+  async function openStation(window: InstanceType<typeof JSDOM>['window']) {
+    window.document
+      .querySelector<HTMLButtonElement>('.sidebar [data-view-target="station"]')
+      ?.click();
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    window.document.querySelector<HTMLButtonElement>('#station-tab-telemetry')?.click();
+  }
+  function decoded(image: HTMLImageElement) {
+    Object.defineProperties(image, {
+      naturalWidth: { configurable: true, value: 16 },
+      naturalHeight: { configurable: true, value: 12 },
+    });
+  }
+
+  it.each([
+    {
+      payload: { ok: true, available: false, state: 'offline', agent: { mock: false } },
+      status: 200,
+    },
+    { payload: { ok: false, message: 'not configured' }, status: 503 },
+  ])(
+    'does not claim a connected mock agent for unavailable health ($status)',
+    async ({ payload, status }) => {
+      const { window } = await boot({ stationHealth: payload, stationHealthStatus: status });
+      await openStation(window);
+      expect(window.document.querySelector<HTMLElement>('#station-honesty-note')?.hidden).toBe(
+        true,
+      );
+      window.document.querySelector<HTMLButtonElement>('#station-camera-toggle')?.click();
+      expect(window.document.querySelector('#station-camera-state')?.textContent).not.toContain(
+        '已连接',
+      );
+      expect(window.document.querySelector('#station-camera-img')?.hasAttribute('src')).toBe(false);
+    },
+  );
+
+  it('waits for a decoded first frame and rejects callbacks after stopping', async () => {
+    const { window } = await boot({ stationHealth: health(), devices });
+    await openStation(window);
+    const toggle = window.document.querySelector<HTMLButtonElement>('#station-camera-toggle')!;
+    toggle.click();
+    const image = window.document.querySelector<HTMLImageElement>('#station-camera-img')!;
+    expect(window.document.querySelector('#station-camera-state')?.textContent).toContain(
+      '等待首帧',
+    );
+    expect(image.hidden).toBe(true);
+    image.dispatchEvent(new window.Event('load'));
+    expect(window.document.querySelector('#station-camera-state')?.textContent).toContain(
+      '等待首帧',
+    );
+    decoded(image);
+    image.dispatchEvent(new window.Event('load'));
+    expect(window.document.querySelector('#station-camera-state')?.textContent).toContain(
+      '首帧已确认',
+    );
+    expect(image.hidden).toBe(false);
+    toggle.click();
+    image.dispatchEvent(new window.Event('load'));
+    image.dispatchEvent(new window.Event('error'));
+    expect(window.document.querySelector('#station-camera-state')?.textContent).toBe('未连接');
+    expect(image.hasAttribute('src')).toBe(false);
+  });
+
+  it('recognizes a continuous MJPEG first frame without a load event and labels the mock source', async () => {
+    const { window } = await boot({ stationHealth: health(true), devices });
+    await openStation(window);
+    expect(window.document.querySelector<HTMLElement>('#station-honesty-note')?.hidden).toBe(false);
+    window.document.querySelector<HTMLButtonElement>('#station-camera-toggle')?.click();
+    const image = window.document.querySelector<HTMLImageElement>('#station-camera-img')!;
+    decoded(image);
+    await new Promise((resolve) => setTimeout(resolve, 280));
+    expect(window.document.querySelector('#station-camera-state')?.textContent).toContain(
+      '合成演示',
+    );
+    expect(window.document.querySelector('#station-camera-state')?.textContent).toContain(
+      '首帧已确认',
+    );
+    expect(image.alt).toContain('不是真机');
+  });
+
+  it('times out an unconfirmed frame and makes a late decode harmless', async () => {
+    const { window, cameraTimeout } = await boot({
+      stationHealth: health(),
+      captureCameraTimeout: true,
+    });
+    await openStation(window);
+    window.document.querySelector<HTMLButtonElement>('#station-camera-toggle')?.click();
+    const image = window.document.querySelector<HTMLImageElement>('#station-camera-img')!;
+    cameraTimeout();
+    expect(window.document.querySelector('#station-camera-state')?.textContent).toContain('超时');
+    expect(image.hasAttribute('src')).toBe(false);
+    decoded(image);
+    image.dispatchEvent(new window.Event('load'));
+    expect(window.document.querySelector('#station-camera-state')?.textContent).toContain('超时');
+  });
+
+  it('keeps an old image from overwriting the replacement board stream or its error', async () => {
+    const { window } = await boot({
+      devices,
+      stationHealth: (url: string) =>
+        health(false, new URL(url, 'http://localhost').searchParams.get('deviceId') || 'board-a'),
+    });
+    await openStation(window);
+    const toggle = window.document.querySelector<HTMLButtonElement>('#station-camera-toggle')!;
+    toggle.click();
+    const oldImage = window.document.querySelector<HTMLImageElement>('#station-camera-img')!;
+    const select = window.document.querySelector<HTMLSelectElement>('#device-select')!;
+    select.value = 'board-b';
+    select.dispatchEvent(new window.Event('change', { bubbles: true }));
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    expect(oldImage.hasAttribute('src')).toBe(false);
+    toggle.click();
+    const replacement = window.document.querySelector<HTMLImageElement>('#station-camera-img')!;
+    expect(replacement).not.toBe(oldImage);
+    expect(replacement.src).toContain('deviceId=board-b');
+    decoded(oldImage);
+    oldImage.dispatchEvent(new window.Event('load'));
+    oldImage.dispatchEvent(new window.Event('error'));
+    expect(window.document.querySelector('#station-camera-state')?.textContent).toContain(
+      '等待首帧',
+    );
+    replacement.dispatchEvent(new window.Event('error'));
+    expect(window.document.querySelector('#station-camera-state')?.textContent).toContain('不可用');
+    oldImage.dispatchEvent(new window.Event('load'));
+    expect(window.document.querySelector('#station-camera-state')?.textContent).toContain('不可用');
+  });
+
+  it('ignores a late health response from the previous board', async () => {
+    let releaseHealth!: (value: unknown) => void;
+    let calls = 0;
+    const { window } = await boot({
+      devices,
+      stationHealth: () =>
+        ++calls === 1
+          ? new Promise((resolve) => {
+              releaseHealth = resolve;
+            })
+          : health(false, 'board-b'),
+    });
+    await openStation(window);
+    const select = window.document.querySelector<HTMLSelectElement>('#device-select')!;
+    select.value = 'board-b';
+    select.dispatchEvent(new window.Event('change', { bubbles: true }));
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    releaseHealth(health(true, 'board-a'));
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    expect(window.document.querySelector('#station-device-name')?.textContent).toBe('Board B');
+    expect(window.document.querySelector<HTMLElement>('#station-honesty-note')?.hidden).toBe(true);
+    window.document.querySelector<HTMLButtonElement>('#station-camera-toggle')?.click();
+    expect(window.document.querySelector<HTMLImageElement>('#station-camera-img')?.src).toContain(
+      'deviceId=board-b',
+    );
+    expect(window.document.querySelector('#station-camera-state')?.textContent).not.toContain(
+      '合成演示',
+    );
+  });
+
+  it('ignores a late offline status stream that could cancel the replacement camera', async () => {
+    let releaseStream!: (response: Response) => void;
+    let calls = 0;
+    const { window } = await boot({
+      devices,
+      stationHealth: (url: string) =>
+        health(false, new URL(url, 'http://localhost').searchParams.get('deviceId') || 'board-a'),
+      stationStream: () =>
+        ++calls === 1
+          ? new Promise((resolve) => {
+              releaseStream = resolve;
+            })
+          : new Response(
+              new ReadableStream({
+                start(controller) {
+                  controller.close();
+                },
+              }),
+            ),
+    });
+    await openStation(window);
+    const select = window.document.querySelector<HTMLSelectElement>('#device-select')!;
+    select.value = 'board-b';
+    select.dispatchEvent(new window.Event('change', { bubbles: true }));
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    window.document.querySelector<HTMLButtonElement>('#station-camera-toggle')?.click();
+    const image = window.document.querySelector<HTMLImageElement>('#station-camera-img')!;
+    releaseStream(
+      new Response(
+        new ReadableStream({
+          start(controller) {
+            controller.enqueue(
+              new TextEncoder().encode(
+                '{"available":false,"state":"offline","message":"old board offline"}\n',
+              ),
+            );
+            controller.close();
+          },
+        }),
+      ),
+    );
+    await new Promise((resolve) => setTimeout(resolve, 280));
+    expect(image.hasAttribute('src')).toBe(true);
+    expect(window.document.querySelector('#station-camera-state')?.textContent).toContain(
+      '等待首帧',
+    );
+  });
+
+  it.each(['replace', 'empty'])(
+    'cancels a confirmed camera when a refreshed registry must %s the selected board',
+    async (change) => {
+      const options = {
+        devices: [devices[0]],
+        stationHealth: (url: string) => {
+          const id = new URL(url, 'http://localhost').searchParams.get('deviceId');
+          return id ? health(false, id) : { ok: true, available: false, state: 'offline' };
+        },
+      };
+      const { window, requests } = await boot(options);
+      await openStation(window);
+      window.document.querySelector<HTMLButtonElement>('#station-camera-toggle')?.click();
+      const oldImage = window.document.querySelector<HTMLImageElement>('#station-camera-img')!;
+      decoded(oldImage);
+      oldImage.dispatchEvent(new window.Event('load'));
+      expect(window.document.querySelector('#station-camera-state')?.textContent).toContain(
+        '首帧已确认',
+      );
+      options.devices = change === 'replace' ? [devices[1]] : [];
+      window.document.querySelector<HTMLButtonElement>('#refresh-button')?.click();
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      expect(oldImage.hasAttribute('src')).toBe(false);
+      oldImage.dispatchEvent(new window.Event('load'));
+      expect(window.document.querySelector('#station-camera-state')?.textContent).toBe('未连接');
+      if (change === 'replace') {
+        expect(
+          requests.some((request) =>
+            request.url.includes('/board-station/health?deviceId=board-b'),
+          ),
+        ).toBe(true);
+        window.document.querySelector<HTMLButtonElement>('#station-camera-toggle')?.click();
+        expect(
+          window.document.querySelector<HTMLImageElement>('#station-camera-img')?.src,
+        ).toContain('deviceId=board-b');
+      } else {
+        expect(window.document.querySelector<HTMLElement>('#station-honesty-note')?.hidden).toBe(
+          true,
+        );
+        window.document.querySelector<HTMLButtonElement>('#station-camera-toggle')?.click();
+        expect(window.document.querySelector('#station-camera-img')?.hasAttribute('src')).toBe(
+          false,
+        );
+      }
+    },
+  );
+
+  it('cancels a confirmed camera when selecting a registered Local Bridge board', async () => {
+    const { window, requests } = await boot({
+      devices: [devices[0], { ...devices[1], bridgeDeviceId: 'bridge-b' }],
+      stationHealth: (url: string) =>
+        health(false, new URL(url, 'http://localhost').searchParams.get('deviceId') || 'board-a'),
+      localBridgeStatus: {
+        bridges: [
+          {
+            bridgeId: 'bridge-1',
+            online: true,
+            devices: [{ bridgeDeviceId: 'bridge-b', name: 'Board B' }],
+          },
+        ],
+      },
+    });
+    await openStation(window);
+    window.document.querySelector<HTMLButtonElement>('#station-camera-toggle')?.click();
+    const oldImage = window.document.querySelector<HTMLImageElement>('#station-camera-img')!;
+    decoded(oldImage);
+    oldImage.dispatchEvent(new window.Event('load'));
+    const select = window.document.querySelector<HTMLButtonElement>(
+      '#station-device-list [data-action="bridge-select"]',
+    )!;
+    expect(select).not.toBeNull();
+    select.click();
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    expect(oldImage.hasAttribute('src')).toBe(false);
+    oldImage.dispatchEvent(new window.Event('load'));
+    expect(window.document.querySelector('#station-camera-state')?.textContent).toBe('未连接');
+    expect(
+      requests.some((request) => request.url.includes('/board-station/health?deviceId=board-b')),
+    ).toBe(true);
+  });
+
+  it.each(['pagehide', 'navigate'])(
+    'cancels an image and rejects late decode on %s',
+    async (action) => {
+      const { window } = await boot({ stationHealth: health(), devices });
+      await openStation(window);
+      window.document.querySelector<HTMLButtonElement>('#station-camera-toggle')?.click();
+      const image = window.document.querySelector<HTMLImageElement>('#station-camera-img')!;
+      if (action === 'pagehide') window.dispatchEvent(new window.Event('pagehide'));
+      else
+        window.document
+          .querySelector<HTMLButtonElement>('.sidebar [data-view-target="overview"]')
+          ?.click();
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      decoded(image);
+      image.dispatchEvent(new window.Event('load'));
+      expect(image.hasAttribute('src')).toBe(false);
+      expect(window.document.querySelector('#station-camera-state')?.textContent).toBe('未连接');
+    },
+  );
 });
 
 describe('atomic capability evidence workflows', () => {

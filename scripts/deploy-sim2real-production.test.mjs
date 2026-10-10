@@ -14,6 +14,12 @@ const remoteBlocks = [...source.matchAll(/<<'REMOTE'\n([\s\S]*?)\nREMOTE/g)].map
   (match) => match[1],
 );
 assert.equal(remoteBlocks.length, 5, 'release preparation, entry checks, rollback, switch, probes');
+assert.doesNotMatch(
+  source,
+  /^npm ci\b/m,
+  'production node_modules must not be installed on the build host',
+);
+assert.match(source, /tar czf "\$TARBALL" --exclude='node_modules'/);
 const scratch = fs.mkdtempSync(path.join(os.tmpdir(), 'sim2real-release-contract-'));
 
 function bash(body, args = [], env = {}) {
@@ -115,9 +121,50 @@ read_cpu_activation_state`;
   const previous = path.join(base, 'releases', 'previous');
   write('server/releases/previous/dist-server/engines/.venv/bin/python', 'linux-python');
   write('server/releases/previous/dist-server/engines/act/train_act.py', 'old-source');
+  write('server/releases/previous/node_modules/rollback/sentinel', 'old-dependencies');
   fs.symlinkSync('releases/previous', path.join(base, 'current'));
   const packageRoot = path.join(scratch, 'package', 'next');
   write('package/next/dist-server/services/sim2real-web/server.js', 'void 0;');
+  write('package/next/package.json', '{"name":"release-fixture","private":true}');
+  const fixtureLock = '{"name":"release-fixture","lockfileVersion":3,"packages":{}}';
+  write('package/next/package-lock.json', fixtureLock);
+  // A legacy Mac dependency tree must never survive Linux release preparation.
+  write('package/next/node_modules/mac-only-native/sentinel', 'must-not-survive');
+  const npmCli = write(
+    'fixture-npm-cli.cjs',
+    `const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const path = require('node:path');
+const args = process.argv.slice(2);
+assert.deepEqual(args.slice(0, -1), ['ci', '--omit=dev', '--include=optional', '--no-audit', '--no-fund', '--prefix']);
+const root = args.at(-1);
+assert.equal(process.env.PATH.split(path.delimiter)[0], path.dirname(process.execPath));
+assert.equal(fs.existsSync(path.join(root, 'node_modules')), false);
+if (process.env.INSTALL_MODE === 'install-failure') {
+  console.error('registry credential must not reach deploy stdout');
+  process.exit(42);
+}
+const moduleRoot = path.join(root, 'node_modules/@deepseek-ai/node-addon-system');
+fs.mkdirSync(moduleRoot, { recursive: true });
+fs.writeFileSync(path.join(moduleRoot, 'package.json'), JSON.stringify({
+  name: '@deepseek-ai/node-addon-system', type: 'module', exports: { './flock': './flock.js' }
+}));
+fs.writeFileSync(path.join(moduleRoot, 'flock.js'), \`import fs from 'node:fs';
+import { createRequire } from 'node:module';
+export async function tryLockExclusive(fd) {
+  fs.fstatSync(fd);
+  fs.writeFileSync(process.env.NATIVE_TRACE, 'lock-called');
+  if (process.env.INSTALL_MODE === 'missing-native') {
+    createRequire(import.meta.url)('@deepseek-ai/node-addon-system-' + process.platform + '-' + process.arch + '/package.json');
+  }
+  if (process.env.INSTALL_MODE === 'native-failure') throw new Error('native lock failure');
+}
+\`);
+`,
+  );
+  const nativeTrace = path.join(scratch, 'native-trace');
+  const probeTmp = path.join(scratch, 'probe-tmp');
+  fs.mkdirSync(probeTmp);
   fs.copyFileSync(engineArchive, path.join(packageRoot, 'engine-source.tar.gz'));
   const remoteArchive = path.join('/tmp', `sim2real-contract-${process.pid}-${Date.now()}.tar.gz`);
   const releaseTar = spawnSync(
@@ -127,15 +174,61 @@ read_cpu_activation_state`;
   );
   assert.equal(releaseTar.status, 0, releaseTar.stderr);
   try {
+    const preparationArgs = [base, 'next', path.basename(remoteArchive), process.execPath, npmCli];
+    const preparationEnv = { NATIVE_TRACE: nativeTrace, TMPDIR: probeTmp };
+    // npm failure must stop before switching current, without printing a
+    // registry credential. Merely importing flock must not pass a missing
+    // platform binding: the probe must call its lazy native operation.
+    for (const mode of ['install-failure', 'missing-native', 'native-failure']) {
+      fs.rmSync(nativeTrace, { force: true });
+      const failed = bash(remoteBlocks[0], preparationArgs, {
+        ...preparationEnv,
+        INSTALL_MODE: mode,
+      });
+      assert.notEqual(failed.status, 0, `${mode} must fail before activating the release`);
+      assert.doesNotMatch(failed.stdout + failed.stderr, /registry credential/);
+      assert.equal(fs.readlinkSync(path.join(base, 'current')), 'releases/previous');
+      assert.equal(
+        fs.statSync(path.join(base, 'releases/next/.release-install.log')).mode & 0o777,
+        0o600,
+        'failed install logs must be private',
+      );
+      assert.deepEqual(fs.readdirSync(probeTmp), [], 'probe files must be removed after failure');
+      if (mode !== 'install-failure')
+        assert.equal(fs.readFileSync(nativeTrace, 'utf8'), 'lock-called');
+    }
     // Execute only the extracted filesystem-preparation heredoc locally. It
     // makes no SSH, HTTP, training, or systemd request.
-    const prepared = bash(remoteBlocks[0], [
-      base,
-      'next',
-      path.basename(remoteArchive),
-      process.execPath,
-    ]);
+    const prepared = bash(`umask 022\n${remoteBlocks[0]}`, preparationArgs, {
+      ...preparationEnv,
+      INSTALL_MODE: 'success',
+    });
     assert.equal(prepared.status, 0, prepared.stderr);
+    const installedModule = path.join(
+      base,
+      'releases/next/node_modules/@deepseek-ai/node-addon-system',
+    );
+    assert.equal(
+      fs.statSync(installedModule).mode & 0o777,
+      0o755,
+      'service users must be able to traverse dependencies',
+    );
+    assert.equal(
+      fs.statSync(path.join(installedModule, 'flock.js')).mode & 0o777,
+      0o644,
+      'service users must be able to read dependencies',
+    );
+    assert.equal(fs.readFileSync(nativeTrace, 'utf8'), 'lock-called');
+    assert.deepEqual(fs.readdirSync(probeTmp), []);
+    assert.equal(fs.existsSync(path.join(base, 'releases/next/.release-install.log')), false);
+    assert.equal(
+      fs.existsSync(path.join(base, 'releases/next/node_modules/mac-only-native')),
+      false,
+    );
+    assert.equal(
+      fs.readFileSync(path.join(base, 'releases/next/package-lock.json'), 'utf8'),
+      fixtureLock,
+    );
     assert.equal(
       fs.readFileSync(
         path.join(base, 'releases/next/dist-server/engines/act/train_act.py'),
@@ -160,6 +253,10 @@ read_cpu_activation_state`;
     assert.equal(
       fs.readFileSync(path.join(previous, 'dist-server/engines/act/train_act.py'), 'utf8'),
       'old-source',
+    );
+    assert.equal(
+      fs.readFileSync(path.join(previous, 'node_modules/rollback/sentinel'), 'utf8'),
+      'old-dependencies',
     );
     assert.equal(fs.readlinkSync(path.join(base, 'current')), 'releases/previous');
     assert.equal(fs.existsSync(path.join(base, 'releases/next/engine-source.tar.gz')), false);
@@ -268,6 +365,7 @@ ${remoteBlocks[2]}`,
   // Unit arguments and a runtime path containing shell syntax stay literal.
   const injectionMarker = path.join(scratch, 'argument-injection-must-not-run');
   const runtimeArgument = `/fixture/node with space $(touch '${injectionMarker}')`;
+  const npmArgument = `/fixture/npm cli $(touch '${injectionMarker}').js`;
   const reparsedArguments = bash(
     `ssh() { shift 3; bash -c "$*"; }
 ${remoteBash}
@@ -275,12 +373,12 @@ HOST=fixture
 remote_bash "$@" <<'ARGUMENTS'
 printf '<%s>\\n' "$@"
 ARGUMENTS`,
-    [runtimeArgument, ...threeUnits.split(' ')],
+    [runtimeArgument, npmArgument, ...threeUnits.split(' ')],
   );
   assert.equal(reparsedArguments.status, 0, reparsedArguments.stderr);
   assert.deepEqual(
     reparsedArguments.stdout.trim().split('\n'),
-    [runtimeArgument, ...threeUnits.split(' ')].map((argument) => `<${argument}>`),
+    [runtimeArgument, npmArgument, ...threeUnits.split(' ')].map((argument) => `<${argument}>`),
   );
   assert.equal(fs.existsSync(injectionMarker), false, 'SSH arguments must not execute shell code');
 
@@ -423,8 +521,15 @@ ${section}`,
       .stdout,
     '/fixture/node24',
   );
+  const npmSetting = source.match(/^NPM_CLI=.*$/m)?.[0];
+  assert.ok(npmSetting);
+  assert.equal(
+    bash(`${npmSetting}\nprintf '%s' "$NPM_CLI"`, [], { DEPLOY_NPM_CLI: '/fixture/npm-cli.js' })
+      .stdout,
+    '/fixture/npm-cli.js',
+  );
   console.log(
-    '[deploy-sim2real-production] PASS — source overlay preserves Linux dependencies; failed switch/probes roll back; locks release; offline probe contract enforced',
+    '[deploy-sim2real-production] PASS — Linux npm and native lazy-load gates; source overlay preserves venv; failed switch/probes roll back; locks release',
   );
 } finally {
   fs.rmSync(scratch, { recursive: true, force: true });

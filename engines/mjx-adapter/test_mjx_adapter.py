@@ -2,8 +2,8 @@
 """Tests for the mjx-adapter engine (pure-JAX PPO over MJX physics).
 
 Run: engines/mjx-adapter/.venv/bin/python engines/mjx-adapter/test_mjx_adapter.py
-     (or any python3 with jax+mujoco; without jax every test SKIPs so CI
-     stays green — MJX is not a platform hard dependency)
+     (or any python3 with jax+optax+mujoco; learner tests SKIP without that
+     stack — dependency refusal tests always run)
 
 Covers the properties the adapter's honesty claims rest on:
   * ONNX export numerically equals the JAX forward pass (<1e-5) and
@@ -28,6 +28,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
 HERE = pathlib.Path(__file__).resolve().parent
 REPO_ROOT = HERE.parent.parent
@@ -37,6 +38,7 @@ ADAPTERS_DIR = REPO_ROOT / "adapters"
 
 try:
     import jax  # noqa: F401
+    import optax  # noqa: F401
     HAVE_JAX = True
 except ImportError:
     HAVE_JAX = False
@@ -95,6 +97,77 @@ def training_request(pack, obs_size, act_size):
         "training": {"profile": "smoke", "numEnvs": 4, "maxIterations": 2},
         "task": pack,
     }
+
+
+class DependencyRefusalTests(unittest.TestCase):
+    def test_stacked_gate_selects_only_a_complete_mjx_stack(self):
+        spec = importlib.util.spec_from_file_location(
+            "verify_observation_history", REPO_ROOT / "scripts" / "verify-observation-history.py"
+        )
+        gate = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(gate)
+        for absent in ("optax", "mujoco.mjx", "onnx"):
+            with self.subTest(absent=absent):
+                def probe(command):
+                    imports = command[-1]
+                    partial_ready = command[0] == "partial-python" and absent not in imports
+                    complete_ready = command[0] == "complete-python"
+                    return subprocess.CompletedProcess(command, 0 if partial_ready or complete_ready else 1)
+
+                with mock.patch.dict(os.environ, {
+                    "RDK_MJX_ENGINE_PYTHON": "partial-python",
+                    "RDK_STARTER_ENGINE_PYTHON": "complete-python",
+                }), mock.patch.object(gate, "run", side_effect=probe):
+                    self.assertEqual(gate.mjx_python_interpreter(), "complete-python")
+
+    def test_missing_learner_dependency_refuses_before_module_initialization(self):
+        # A partially installed stack (jax present, optax absent) used to reach
+        # the module-level optimizer and crash with NameError before main()'s
+        # refusal guard. Import stubs isolate that case without installing JAX.
+        for missing in ("jax", "optax"):
+            with self.subTest(missing=missing), tempfile.TemporaryDirectory() as tmp:
+                code = """
+import importlib.abc
+import runpy
+import sys
+import types
+
+missing, adapter = sys.argv[1:]
+sys.modules['numpy'] = types.ModuleType('numpy')
+if missing != 'jax':
+    jax = types.ModuleType('jax')
+    jax.jit = lambda fn: fn
+    jnp = types.ModuleType('jax.numpy')
+    jax.numpy = jnp
+    sys.modules['jax'] = jax
+    sys.modules['jax.numpy'] = jnp
+
+class AbsentDependency(importlib.abc.MetaPathFinder):
+    def find_spec(self, fullname, path=None, target=None):
+        if fullname.split('.')[0] in {missing, 'mujoco', 'torch'}:
+            raise ModuleNotFoundError('test dependency absent: ' + fullname)
+
+sys.meta_path.insert(0, AbsentDependency())
+runpy.run_path(adapter, run_name='__main__')
+"""
+                result_path = os.path.join(tmp, "result.json")
+                result = subprocess.run(
+                    [sys.executable, "-c", code, missing, str(ADAPTER_PATH)],
+                    cwd=tmp,
+                    capture_output=True,
+                    text=True,
+                    env={
+                        **os.environ,
+                        "RDK_SIM2REAL_REQUEST_FILE": os.path.join(tmp, "request.json"),
+                        "RDK_SIM2REAL_RESULT_FILE": result_path,
+                    },
+                    timeout=30,
+                )
+                self.assertEqual(result.returncode, 3, result.stderr)
+                self.assertIn("REFUSED", result.stderr)
+                self.assertIn("jax/optax", result.stderr)
+                self.assertNotIn("NameError", result.stderr)
+                self.assertFalse(os.path.exists(result_path))
 
 
 @unittest.skipUnless(HAVE_JAX, "jax not installed (MJX is not a hard dependency)")

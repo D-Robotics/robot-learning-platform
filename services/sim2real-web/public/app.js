@@ -429,6 +429,8 @@ const state = {
     streamReconnectAttempts: 0,
     streamReconnectTimer: null,
     cameraOn: false,
+    cameraSession: null,
+    healthGeneration: 0,
     log: [],
     deviceManagerWired: false,
     switchWired: false,
@@ -2758,6 +2760,23 @@ function selectedDevice() {
   return state.overview?.devices?.find((device) => device.id === state.selectedDeviceId) || null;
 }
 
+function selectStationDevice(value) {
+  const id = String(value || '');
+  if (id === state.selectedDeviceId) return;
+  stationTeardown();
+  state.selectedDeviceId = id;
+  state.station.ready = false;
+  state.station.offline = false;
+  state.station.mock = false;
+  state.station.device = null;
+  state.station.initialized = false;
+  state.activeDeployment = null;
+  if ($('station-honesty-note')) $('station-honesty-note').hidden = true;
+  // Registry-driven selection also runs while rendering the native select.
+  // Probe after that render completes; never recurse into renderAll here.
+  queueMicrotask(stationMaybeInit);
+}
+
 function stateClass(status) {
   return SimTelemetryCore.stateClass(status);
 }
@@ -2838,7 +2857,7 @@ function renderSelects() {
       Boolean(newestCheckedAt) &&
       String(selectedDevice.lastCheckedAt ?? '') < String(newestCheckedAt);
     if (!devices.length) {
-      state.selectedDeviceId = '';
+      selectStationDevice('');
     } else if (!selectedDevice || selectionStale) {
       // Default to the most recently verified board so a newly attached
       // device outranks a stale registration that was never reconnected.
@@ -2847,7 +2866,7 @@ function renderSelects() {
           String(a.lastCheckedAt ?? a.boardDetectedAt ?? ''),
         ),
       );
-      state.selectedDeviceId = byRecency[0]?.id || '';
+      selectStationDevice(byRecency[0]?.id || '');
     }
     syncSelect(
       deviceSelect,
@@ -9467,6 +9486,10 @@ function stationLog(message, kind = 'info') {
 }
 
 function stationStopStatusStream() {
+  if ($('station-live-badge')) $('station-live-badge').hidden = true;
+  const pending = state.station.streamAbort;
+  state.station.streamAbort = null;
+  pending?.abort();
   if (state.station.statusReader) {
     try {
       state.station.statusReader.cancel().catch(() => undefined);
@@ -9837,14 +9860,25 @@ function stationScheduleStreamReconnect() {
 }
 
 function stationStartStatusStream() {
-  if (state.station.statusReader) return;
+  if (state.station.statusReader || state.station.streamAbort) return;
   stationClearStreamReconnect();
   const badge = $('station-live-badge');
-  fetch(apiPath('/sim2real/board-station/status/stream'), {
+  const controller = new AbortController();
+  const deviceId = String(state.selectedDeviceId || '');
+  state.station.streamAbort = controller;
+  const current = () => state.station.streamAbort === controller && !controller.signal.aborted
+    && deviceId === String(state.selectedDeviceId || '');
+  const source = apiPath('/sim2real/board-station/status/stream');
+  fetch(source + (deviceId ? '?deviceId=' + encodeURIComponent(deviceId) : ''), {
     credentials: 'same-origin',
     headers: { accept: 'application/x-ndjson' },
+    signal: controller.signal,
   })
     .then(async (response) => {
+      if (!current()) {
+        await response.body?.cancel().catch(() => undefined);
+        return;
+      }
       if (!response.ok || !response.body) throw new Error('HTTP ' + response.status);
       if (badge) badge.hidden = false;
       // 流真正建立后重置退避计数，短暂中断不会累积到长间隔。
@@ -9855,6 +9889,7 @@ function stationStartStatusStream() {
       let buffer = '';
       for (;;) {
         const { done, value } = await reader.read();
+        if (!current()) return;
         if (done) break;
         buffer += decoder.decode(value, { stream: true });
         for (;;) {
@@ -9877,6 +9912,7 @@ function stationStartStatusStream() {
       }
     })
     .catch(() => {
+      if (!current()) return;
       if (badge) badge.hidden = true;
       const freshness = $('station-freshness');
       if (freshness) {
@@ -9886,6 +9922,8 @@ function stationStartStatusStream() {
       stationLog('状态流已断开或不可用', 'error');
     })
     .finally(() => {
+      if (!current()) return;
+      state.station.streamAbort = null;
       state.station.statusReader = null;
       if (badge) badge.hidden = true;
       // 流结束（正常关闭或错误）后自动重连；页面隐藏/视图切走时由
@@ -10356,45 +10394,102 @@ async function stationPolicyReset() {
   }
 }
 
-function stationSetCamera(enabled) {
-  const img = $('station-camera-img');
+function stationSetCamera(enabled, { silent = false } = {}) {
+  let img = $('station-camera-img');
   const placeholder = $('station-camera-placeholder');
   const cameraState = $('station-camera-state');
   const toggle = $('station-camera-toggle');
   if (!img) return;
-  state.station.cameraOn = Boolean(enabled);
-  if (state.station.cameraOn) {
-    img.src = apiPath('/sim2real/board-station/camera.mjpeg');
+  const previous = state.station.cameraSession;
+  state.station.cameraSession = null;
+  state.station.cameraOn = false;
+  if (previous) {
+    clearTimeout(previous.timeout);
+    clearTimeout(previous.poll);
+    previous.image.removeEventListener('load', previous.onLoad);
+    previous.image.removeEventListener('error', previous.onError);
+    previous.image.removeAttribute('src');
+  }
+  img.removeAttribute('src');
+  img.hidden = true;
+  if (placeholder) {
+    placeholder.hidden = false;
+    placeholder.textContent = '相机流未启动';
+  }
+  if (cameraState) cameraState.textContent = '未连接';
+  if (toggle) toggle.textContent = '开启相机流';
+  if (!enabled) {
+    if (!silent) stationLog('相机流已关闭');
+    return;
+  }
+  if (!state.station.ready || state.station.offline) {
+    if (cameraState) cameraState.textContent = '板端未就绪，未连接相机';
+    if (placeholder) placeholder.textContent = '先连接板端 agent，再开启相机流。';
+    return;
+  }
+  // Every connection owns its own image. A queued load/error from an old
+  // stream cannot be mistaken for the replacement stream's first frame.
+  const replacement = img.cloneNode(false);
+  img.replaceWith(replacement);
+  img = replacement;
+  const session = {
+    image: img,
+    deviceId: String(state.selectedDeviceId || ''),
+    mock: state.station.mock === true,
+    timeout: null,
+    poll: null,
+    confirmed: false,
+    onLoad: null,
+    onError: null,
+  };
+  state.station.cameraSession = session;
+  state.station.cameraOn = true;
+  const current = () => state.station.cameraSession === session
+    && String(state.selectedDeviceId || '') === session.deviceId
+    && state.station.ready && !state.station.offline;
+  const failed = (message) => {
+    if (!current()) return;
+    stationSetCamera(false, { silent: true });
+    if (cameraState) cameraState.textContent = message;
+    if (placeholder) placeholder.textContent = message;
+    stationLog(message, 'error');
+  };
+  const firstFrame = () => {
+    if (!current() || session.confirmed || img.naturalWidth <= 0 || img.naturalHeight <= 0) return false;
+    session.confirmed = true;
+    clearTimeout(session.timeout);
+    clearTimeout(session.poll);
     img.hidden = false;
     if (placeholder) placeholder.hidden = true;
-    if (cameraState) cameraState.textContent = '已连接（MJPEG）';
+    if (cameraState) cameraState.textContent = session.mock
+      ? '合成演示流（mock） · 首帧已确认'
+      : '已连接（MJPEG） · 首帧已确认';
     if (toggle) toggle.textContent = '关闭相机流';
-    stationLog('相机流已开启', 'ok');
-  } else {
-    img.removeAttribute('src');
-    img.hidden = true;
-    if (placeholder) {
-      placeholder.hidden = false;
-      placeholder.textContent = '相机流未启动';
+    stationLog(session.mock ? '参考相机首帧已确认（合成演示，不是真机画面）' : '板载相机首帧已确认', 'ok');
+    return true;
+  };
+  const poll = () => {
+    if (!current()) {
+      if (state.station.cameraSession === session) stationSetCamera(false, { silent: true });
+      return;
     }
-    if (cameraState) cameraState.textContent = '未连接';
-    if (toggle) toggle.textContent = '开启相机流';
-    stationLog('相机流已关闭');
-  }
-}
-
-// A real board may answer 503 CAMERA_UNAVAILABLE (no camera connected). The
-// <img> element only surfaces that through onerror, so fall back to the
-// honest placeholder instead of leaving a blank frame.
-function wireStationCameraError() {
-  const img = $('station-camera-img');
-  if (!img || img.dataset.cameraErrorWired === '1') return;
-  img.dataset.cameraErrorWired = '1';
-  img.addEventListener('error', () => {
-    if (!state.station.cameraOn) return;
-    stationSetCamera(false);
-    stationLog('板端没有可用相机（agent 如实返回不可用），不会伪造画面', 'error');
-  });
+    if (!firstFrame() && !session.confirmed) session.poll = setTimeout(poll, 250);
+  };
+  session.onLoad = firstFrame;
+  session.onError = () => failed('相机流不可用或已中断；请检查设备、权限和相机。');
+  img.addEventListener('load', session.onLoad);
+  img.addEventListener('error', session.onError);
+  img.alt = session.mock ? '合成演示相机画面（不是真机）' : '板载相机实时画面';
+  if (cameraState) cameraState.textContent = session.mock ? '参考相机连接中 · 等待首帧（合成演示）' : '相机连接中 · 等待首帧';
+  if (placeholder) placeholder.textContent = session.mock ? '等待合成演示首帧，不是真机画面…' : '等待板载相机首帧…';
+  if (toggle) toggle.textContent = '取消相机连接';
+  session.timeout = setTimeout(() => failed('相机首帧等待超时（10 秒），未确认连接。'), 10000);
+  // Continuous MJPEG does not dispatch load consistently across browsers.
+  // Intrinsic dimensions become available after a JPEG frame is decoded;
+  // the bounded poll confirms that evidence without trusting HTTP status.
+  session.poll = setTimeout(poll, 250);
+  const source = apiPath('/sim2real/board-station/camera.mjpeg');
+  img.src = source + (session.deviceId ? '?deviceId=' + encodeURIComponent(session.deviceId) : '');
 }
 
 async function stationRunCommand(id) {
@@ -10430,8 +10525,17 @@ async function stationRunCommand(id) {
 async function stationInit() {
   const notice = $('station-notice');
   const honestyNote = $('station-honesty-note');
+  const generation = ++state.station.healthGeneration;
+  const deviceId = String(state.selectedDeviceId || '');
+  const current = () => generation === state.station.healthGeneration
+    && deviceId === String(state.selectedDeviceId || '');
+  state.station.ready = false;
+  state.station.mock = false;
+  stationSetCamera(false, { silent: true });
+  if (honestyNote) honestyNote.hidden = true;
   try {
-    const health = await request('/sim2real/board-station/health');
+    const health = await request('/sim2real/board-station/health' + (deviceId ? '?deviceId=' + encodeURIComponent(deviceId) : ''));
+    if (!current()) return;
     if (health?.available === false || health?.state === 'offline') {
       state.station.ready = false;
       state.station.offline = true;
@@ -10455,10 +10559,11 @@ async function stationInit() {
           offlineReason.includes('仍可使用') ? '' : ' 仿真、训练与数据分析仍可使用。'
         }`;
       }
-      if (honestyNote) honestyNote.hidden = false;
+      if (honestyNote) honestyNote.hidden = true;
       stationLog(`上位机离线：${state.station.offlineReason}`, 'info');
       return;
     }
+    if (health?.ok !== true || !health.agent) throw new Error('板端健康响应缺少有效 agent 状态');
     state.station.ready = true;
     state.station.offline = false;
     state.station.offlineReason = '';
@@ -10485,7 +10590,10 @@ async function stationInit() {
     // 同样探测策略运行时开关（独立的面板、独立的第三重开关）。
     stationProbePolicy();
   } catch (error) {
+    if (!current()) return;
     state.station.ready = false;
+    state.station.mock = false;
+    if (honestyNote) honestyNote.hidden = true;
     const fallbackDevice = selectedDevice();
     const deviceName = $('station-device-name');
     const selectedOption = $('device-select')?.selectedOptions?.[0];
@@ -10739,7 +10847,7 @@ function wireDeviceManagerEvents() {
       return;
     }
     if (action === 'bridge-select') {
-      state.selectedDeviceId = button.dataset.deviceId || '';
+      selectStationDevice(button.dataset.deviceId || '');
       saveWorkspaceContext();
       renderAll();
       showToast('已选择目标设备；现在可继续做预检或部署。', 'success');
@@ -10941,6 +11049,7 @@ function wireStationSwitchEvents() {
 }
 
 function stationTeardown() {
+  state.station.healthGeneration += 1;
   stationStopStatusStream();
   stationClearStreamReconnect();
   state.station.streamReconnectAttempts = 0;
@@ -10950,7 +11059,6 @@ function stationTeardown() {
 function wireStationEvents() {
   $('station-device-transport')?.addEventListener('change', syncStationDeviceForm);
   syncStationDeviceForm();
-  wireStationCameraError();
   document.querySelectorAll('[data-station-command]').forEach((button) => {
     button.addEventListener('click', () => stationRunCommand(button.dataset.stationCommand));
   });
@@ -11469,7 +11577,7 @@ function wireEvents() {
     await loadModelDetails();
   });
   $('device-select')?.addEventListener('change', (event) => {
-    state.selectedDeviceId = event.target.value;
+    selectStationDevice(event.target.value);
     state.activeDeployment = null;
     saveWorkspaceContext();
     renderAll();
@@ -11862,6 +11970,7 @@ window.addEventListener('sim2real-refetch-notices', () => {
 // 上位机视图懒初始化：首次切到 station 视图时再探测板端 agent，
 // 避免无板卡环境下的多余请求与误导性错误横幅。
 const stationViewObserver = new MutationObserver(() => {
+  if (document.body.dataset.activeView !== 'station' && state.station.cameraOn) stationSetCamera(false);
   stationMaybeInit();
 });
 stationViewObserver.observe(document.body, {
