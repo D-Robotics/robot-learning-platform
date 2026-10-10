@@ -3,10 +3,11 @@
 #
 # 背景：2026-09-22 前的手工部署曾漏掉 release 根级的 mock-local-worker.mjs
 # 且未重启 worker 服务——问题潜伏到下一次重启才爆发。本脚本把部署固化为
-# 不可跳过的机器步骤：构建 → 组包 → 上传 → 服务端解压（继承 Linux engines
-# 依赖环境，再覆盖本次干净引擎源码）→ **按 systemd ExecStart 逐一校验新
-# release 的入口文件** → 切软链 → 重启服务 → 健康检查，失败自动回滚。
-# 已安装的真实 CPU worker 自动纳入同一预检、重启与回滚事务。
+# 不可跳过的机器步骤：构建 → 组包（含补齐 linux/x64 原生可选依赖）→ 上传
+# → 服务端解压（继承 Linux engines 依赖环境，再覆盖本次干净引擎源码）→
+# **按 systemd ExecStart 逐一校验新 release 的入口文件** → 切软链 → 重启服务
+# → 健康检查，失败自动回滚。已安装的真实 CPU worker 自动纳入同一预检、
+# 重启与回滚事务。
 #
 # 用法：
 #   scripts/deploy-sim2real-production.sh                # 完整部署
@@ -124,8 +125,10 @@ pack_engine_sources "$STAGING/dist-server/engines" "$STAGING/engine-source.tar.g
 # 本地 engines 不作为依赖环境上传（含历史中断构建的 engines.*.tmp 残留）。
 rm -rf "$STAGING/dist-server/engines" "$STAGING"/dist-server/engines.*.tmp
 cp package.json package-lock.json "$STAGING/"
-# node_modules 必须在目标 Linux 主机安装；Mac npm ci 会只安装 Darwin
-# optional 原生依赖，Agent 首次持久化会话时才触发缺 Linux flock 的故障。
+npm ci --omit=dev --no-audit --no-fund --prefix "$STAGING" >/dev/null 2>&1
+# mac 上的 npm ci 只装 darwin 平台变体；linux 运行时原生依赖（DSH flock、
+# ripgrep、sharp）不补齐则生产端 require 直接失败（2026-10-10 事故）。
+node scripts/reify-deployment-optional-deps.mjs --target "$STAGING"
 # 服务单元的入口文件（如 worker 的根级 mock-local-worker.mjs）来自构建
 # 产物的 services/sim2real-web/，必须提升到 release 根目录。
 for entry in "$STAGING"/dist-server/services/sim2real-web/*.mjs; do

@@ -50,10 +50,12 @@ sudoedit /etc/sim2real-web-runner.env
 
 `scripts/deploy-sim2real-production.sh` 把发布固化为不可跳过的机器步骤：
 构建 → 组包（dist-server 剔除 engines 与 `engines.*.tmp` 残留 + 全新
-`npm ci --omit=dev`）→ 上传 → 服务端解压并从当前 release 拷贝 engines
-（Linux venv 只存在于服务端，绝不能被本地构建覆盖）→ **按 systemd
-ExecStart 逐一预检新 release 的入口文件**（该预检可直接拦截"漏
-mock-local-worker.mjs"这类事故）→ 切 `current` 软链 → 重启
+`npm ci --omit=dev` + `reify-deployment-optional-deps.mjs` 补齐 linux/x64
+原生可选依赖——mac 的 npm ci 只装 darwin 变体，缺失会导致 DSH 聊天等
+运行时 require 直接失败，2026-10-10 事故）→ 上传 → 服务端解压并从当前
+release 拷贝 engines（Linux venv 只存在于服务端，绝不能被本地构建覆盖）
+→ **按 systemd ExecStart 逐一预检新 release 的入口文件**（该预检可直接
+拦截"漏 mock-local-worker.mjs"这类事故）→ 切 `current` 软链 → 重启
 `sim2real-web` 与 `sim2real-mock-worker` → 健康检查，失败自动回滚到
 上一 release。
 
