@@ -16,26 +16,16 @@ import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { COMMON_PYTHON_CANDIDATES, resolvePythonInterpreter } from './lib/python-interpreter.mjs';
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const enginePath = path.join(repoRoot, 'engines/starter-ppo/runner.py');
 
 function pythonInterpreter() {
-  for (const candidate of [
-    process.env.RDK_STARTER_ENGINE_PYTHON,
-    'python3',
-    '/usr/bin/python3',
-    '/opt/homebrew/bin/python3.12',
-    '/opt/homebrew/bin/python3.11',
-  ]) {
-    if (!candidate) continue;
-    const probe = spawnSync(candidate, ['-c', 'import numpy, torch'], {
-      encoding: 'utf8',
-      stdio: ['ignore', 'pipe', 'pipe'],
-    });
-    if (probe.status === 0) return candidate;
-  }
-  return null;
+  return resolvePythonInterpreter(
+    [process.env.RDK_STARTER_ENGINE_PYTHON, ...COMMON_PYTHON_CANDIDATES],
+    'import numpy, torch',
+  );
 }
 
 const python = pythonInterpreter();
