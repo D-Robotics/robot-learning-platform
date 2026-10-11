@@ -29,6 +29,7 @@ D-Robotics RDK 设备（X5 / S600 等）× MicroDuck 机器人的学习工作台
 | 你要回答的问题 | 先读什么 |
 | --- | --- |
 | 怎么安装、启动、体验 | [`README.md`](./README.md)、[`docs/first-run.md`](./docs/first-run.md)、[`docs/demo-runbook.md`](./docs/demo-runbook.md) |
+| 初学者全流程（模型→仿真器→本体） | [`docs/hello-world.md`](./docs/hello-world.md) |
 | 生产部署、探针、备份、恢复 | [`docs/production-operations.md`](./docs/production-operations.md)、[`docs/operations.md`](./docs/operations.md) |
 | 公开发布还差什么 | [`docs/release-checklist.md`](./docs/release-checklist.md)、[`docs/quality-scorecard.md`](./docs/quality-scorecard.md) |
 | 工作台 UI 规则与门禁 | `services/sim2real-web/ui-layout-invariants.mjs`（唯一真源）、`ui-ia.spec.mjs`、[`docs/ui-screen-reader-checklist.md`](./docs/ui-screen-reader-checklist.md) |

@@ -154,6 +154,9 @@ Mock 的 `completed` 只表示协议演练完成，不代表真实 PPO 权重或
 
 ## 上手：先跑真训练，Mock 只是回退
 
+第一次接触、想沿「模型 → 下发仿真器 → 下发本体」完整走一遍的，从
+[`docs/hello-world.md`](docs/hello-world.md) 的四级阶梯开始；本文其余部分是各环节的展开。
+
 新用户建议先执行一键初始化（会检查 Node、创建 `.env`，并给出缺失 Python/CUDA/真机依赖的准确安装命令）：
 
 ```bash
