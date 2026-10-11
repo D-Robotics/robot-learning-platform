@@ -3515,6 +3515,11 @@ function renderIntegrations() {
       ? `已同步 ${state.telemetry.summary.sampleCount} 帧到评测证据`
       : '录制后自动同步到评测证据';
   }
+  // Engine-side scenes (multi-duck football, balance rigs) never appear in the
+  // single-duck browser sandbox. Repeat that next to the canvas, not only in
+  // the task selector note, or the task switch reads as a no-op.
+  const sceneNote = $('simulator-scene-note');
+  if (sceneNote) sceneNote.hidden = !selectedTask().scene;
   setText('status-board', device ? device.boardPlatform || '待探测板型' : '尚未选择板卡');
   setText('status-board-detail', device ? device.status || '设备状态未知' : '真机流程需要先连接设备');
   setText('status-board-action', device ? '打开设备管理 →' : '去连接设备 →');
@@ -11143,7 +11148,11 @@ function wireEvents() {
     // The task is used by training payloads and the context panel can update independently.
     renderSelects();
     renderActionLibrary();
-    showToast('当前动作任务：' + ACTION_TASKS[next].label, 'success');
+    const task = ACTION_TASKS[next];
+    showToast(
+      '当前动作任务：' + task.label + (task.scene ? ' · 训练场景在引擎侧运行，画面不随任务切换' : ''),
+      'success',
+    );
     try { renderAll(); } catch (error) { console.warn('任务面板刷新失败，已保留当前动作：', error); }
   });
   document.querySelectorAll('[data-record-tab]').forEach((control) => {
