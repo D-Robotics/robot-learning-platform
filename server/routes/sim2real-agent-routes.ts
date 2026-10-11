@@ -1,6 +1,7 @@
 import { Router, type Request } from 'express';
 
 import { LOCAL_SIM2REAL_AUTH, type Sim2RealAuthPort } from '../sim2real/sim2real-auth.js';
+import { sendApiError } from '../sim2real/http-helpers.js';
 import {
   createSim2RealAgentPlanVariants,
   legacyConversationReply,
@@ -547,11 +548,7 @@ export function createSim2RealAgentRouter(
   router.post('/api/sim2real/agent/plan', (request, response) => {
     const message = messageOf(request.body);
     if (!message) {
-      response.status(400).json({
-        ok: false,
-        error: 'SIM2REAL_AGENT_MESSAGE_REQUIRED',
-        message: '请输入要完成的任务。',
-      });
+      sendApiError(response, 400, 'SIM2REAL_AGENT_MESSAGE_REQUIRED', '请输入要完成的任务。');
       return;
     }
     const variants = createSim2RealAgentPlanVariants(message, request.body?.context);
@@ -564,22 +561,18 @@ export function createSim2RealAgentRouter(
   router.post('/api/sim2real/agent/execute', (request, response) => {
     const owner = agentOwnerKey(request, auth);
     if (owner === null) {
-      response.status(401).json({
-        ok: false,
-        error: 'SIM2REAL_AUTH_REQUIRED',
-        message: '共享部署需要已验证的账号会话。',
-      });
+      sendApiError(response, 401, 'SIM2REAL_AUTH_REQUIRED', '共享部署需要已验证的账号会话。');
       return;
     }
     const principal = auth.resolvePrincipal(request);
     if (auth.isMultiUserDeployment() && !principalCan(principal, SIM2REAL_PERMISSIONS.agent)) {
-      response.status(403).json({
-        ok: false,
-        error: 'SIM2REAL_PERMISSION_DENIED',
-        code: 'SIM2REAL_PERMISSION_DENIED',
-        message: '当前账号没有执行 Agent 操作的权限。',
-        retryable: false,
-      });
+      sendApiError(
+        response,
+        403,
+        'SIM2REAL_PERMISSION_DENIED',
+        '当前账号没有执行 Agent 操作的权限。',
+        { retryable: false },
+      );
       return;
     }
     const rawPlan = request.body?.plan;
@@ -588,29 +581,28 @@ export function createSim2RealAgentRouter(
         ? (rawPlan as Record<string, unknown>).steps
         : null;
     if (Array.isArray(rawSteps) && rawSteps.length > MAX_AGENT_PLAN_STEPS) {
-      response.status(400).json({
-        ok: false,
-        error: 'SIM2REAL_AGENT_PLAN_TOO_LARGE',
-        message: `Agent 计划最多 ${MAX_AGENT_PLAN_STEPS} 步。`,
-      });
+      sendApiError(
+        response,
+        400,
+        'SIM2REAL_AGENT_PLAN_TOO_LARGE',
+        `Agent 计划最多 ${MAX_AGENT_PLAN_STEPS} 步。`,
+        { maxSteps: MAX_AGENT_PLAN_STEPS },
+      );
       return;
     }
     const normalized = normalizeAgentPlan(request.body?.plan);
     if ('error' in normalized) {
-      response.status(400).json({
-        ok: false,
-        error: 'SIM2REAL_AGENT_PLAN_INVALID',
-        message: normalized.error,
-      });
+      sendApiError(response, 400, 'SIM2REAL_AGENT_PLAN_INVALID', normalized.error);
       return;
     }
     const { plan, approvalRequired } = normalized;
     if (approvalRequired && request.body?.approved !== true) {
-      response.status(409).json({
-        ok: false,
-        error: 'SIM2REAL_AGENT_APPROVAL_REQUIRED',
-        message: '该计划包含需要显式批准的动作。',
-      });
+      sendApiError(
+        response,
+        409,
+        'SIM2REAL_AGENT_APPROVAL_REQUIRED',
+        '该计划包含需要显式批准的动作。',
+      );
       return;
     }
     // A plan id is the agent's durable client-side idempotency key. Retries
@@ -621,7 +613,12 @@ export function createSim2RealAgentRouter(
     const existing = runs.get(plan.id);
     if (existing) {
       if (existing.owner !== owner) {
-        response.status(404).json({ ok: false, error: 'SIM2REAL_AGENT_RUN_NOT_FOUND' });
+        sendApiError(
+          response,
+          404,
+          'SIM2REAL_AGENT_RUN_NOT_FOUND',
+          'Agent 任务不存在或不在当前工作区。',
+        );
         return;
       }
       response.setHeader('Cache-Control', 'no-store');
@@ -635,14 +632,13 @@ export function createSim2RealAgentRouter(
     ) {
       response.setHeader('Cache-Control', 'no-store');
       response.setHeader('Retry-After', '30');
-      response.status(429).json({
-        ok: false,
-        error: 'SIM2REAL_AGENT_ACTIVE_QUOTA',
-        code: 'SIM2REAL_AGENT_ACTIVE_QUOTA',
-        message: '当前 Agent 已有过多排队或运行中的任务，请等待完成后再试。',
-        retryable: true,
-        retryAfterSeconds: 30,
-      });
+      sendApiError(
+        response,
+        429,
+        'SIM2REAL_AGENT_ACTIVE_QUOTA',
+        '当前 Agent 已有过多排队或运行中的任务，请等待完成后再试。',
+        { retryable: true, retryAfterSeconds: 30 },
+      );
       return;
     }
     const run: Sim2RealAgentRun = {
@@ -661,18 +657,19 @@ export function createSim2RealAgentRouter(
   router.get('/api/sim2real/agent/runs/:id', (request, response) => {
     const owner = agentOwnerKey(request, auth);
     if (owner === null) {
-      response.status(401).json({
-        ok: false,
-        error: 'SIM2REAL_AUTH_REQUIRED',
-        message: '共享部署需要已验证的账号会话。',
-      });
+      sendApiError(response, 401, 'SIM2REAL_AUTH_REQUIRED', '共享部署需要已验证的账号会话。');
       return;
     }
     const entry = runs.get(String(request.params.id));
     // Same 404 for "missing" and "not yours": the id must not become an
     // oracle for which conversations exist.
     if (!entry || (owner !== undefined && entry.owner !== owner)) {
-      response.status(404).json({ ok: false, error: 'SIM2REAL_AGENT_RUN_NOT_FOUND' });
+      sendApiError(
+        response,
+        404,
+        'SIM2REAL_AGENT_RUN_NOT_FOUND',
+        'Agent 任务不存在或不在当前工作区。',
+      );
       return;
     }
     response.setHeader('Cache-Control', 'no-store');
