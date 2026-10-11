@@ -93,6 +93,7 @@ import {
   registerAuthModeRoutes,
   studioSsoAuth,
 } from './studio-sso-auth.js';
+import type { Sim2RealPrincipal } from '../../server/sim2real/sim2real-auth.js';
 import {
   createStudioDirectRelay,
   renderStudioDirectLoginPage,
@@ -168,6 +169,137 @@ function dshOwnerScope(principal: { accountId?: string } | null, multiUser: bool
   return multiUser
     ? `sso:${String(principal?.accountId ?? '').trim() || 'unknown'}`
     : 'single-user';
+}
+
+/**
+ * Terminal DSH turns are kept briefly so a page refreshed mid-interpretation
+ * can re-attach and still receive the answer instead of losing it. Entries
+ * are owner-scoped at the askDsh layer; the registry only remembers which
+ * owner scope may poll each turn.
+ */
+type DshTurnRecord = {
+  ownerScope: string;
+  publicSessionId: string;
+  status: 'running' | 'complete' | 'failed';
+  controller: AbortController;
+  startedAt: number;
+  completedAt?: number;
+  reply?: Record<string, unknown>;
+  failure?: { status: number; body: Record<string, unknown> };
+};
+
+const DSH_TURN_RETENTION_MS = 15 * 60_000;
+const DSH_TURN_REGISTRY_CAP = 64;
+const dshTurns = new Map<string, DshTurnRecord>();
+
+// A cancel can outrun the POST that registers the turn (both race through
+// validation); remember it briefly so the stop button never turns into a
+// no-op for a turn that starts microseconds later.
+const DSH_EARLY_CANCEL_TTL_MS = 30_000;
+const dshEarlyCancels = new Map<string, { ownerScope: string; at: number }>();
+
+function rememberEarlyCancel(turnId: string, ownerScope: string): void {
+  const now = Date.now();
+  for (const [key, entry] of dshEarlyCancels) {
+    if (now - entry.at > DSH_EARLY_CANCEL_TTL_MS) dshEarlyCancels.delete(key);
+  }
+  dshEarlyCancels.set(turnId, { ownerScope, at: now });
+}
+
+function consumeEarlyCancel(turnId: string, ownerScope: string): boolean {
+  const entry = dshEarlyCancels.get(turnId);
+  if (!entry || entry.ownerScope !== ownerScope) return false;
+  if (Date.now() - entry.at > DSH_EARLY_CANCEL_TTL_MS) {
+    dshEarlyCancels.delete(turnId);
+    return false;
+  }
+  dshEarlyCancels.delete(turnId);
+  return true;
+}
+
+function sweepDshTurns(now = Date.now()): void {
+  for (const [key, record] of dshTurns) {
+    if (record.status !== 'running' && now - (record.completedAt ?? now) > DSH_TURN_RETENTION_MS) {
+      dshTurns.delete(key);
+    }
+  }
+  while (dshTurns.size >= DSH_TURN_REGISTRY_CAP) {
+    const oldest = dshTurns.keys().next().value as string | undefined;
+    if (oldest === undefined) break;
+    const record = dshTurns.get(oldest);
+    if (record?.status === 'running') break;
+    dshTurns.delete(oldest);
+  }
+}
+
+function registerDshTurn(
+  turnId: string,
+  init: { ownerScope: string; publicSessionId: string; controller: AbortController },
+): DshTurnRecord {
+  sweepDshTurns();
+  const record: DshTurnRecord = { ...init, status: 'running', startedAt: Date.now() };
+  dshTurns.set(turnId, record);
+  if (consumeEarlyCancel(turnId, init.ownerScope)) {
+    failRunningDshTurn(record, {
+      ok: false,
+      error: 'DSH_TURN_CANCELLED',
+      message: '本轮已按要求停止。',
+    });
+    init.controller.abort();
+  }
+  return record;
+}
+
+function completeDshTurn(record: DshTurnRecord, reply: Record<string, unknown>): void {
+  record.status = 'complete';
+  record.completedAt = Date.now();
+  record.reply = reply;
+}
+
+function failRunningDshTurn(
+  record: DshTurnRecord,
+  body: Record<string, unknown>,
+  status = 502,
+): void {
+  if (record.status !== 'running') return;
+  record.status = 'failed';
+  record.completedAt = Date.now();
+  record.failure = { status, body };
+}
+
+function failDshTurnById(turnId: string, status: number, body: Record<string, unknown>): void {
+  const record = dshTurns.get(turnId);
+  if (record) failRunningDshTurn(record, body, status);
+}
+
+function dshTurnPrincipal(request: express.Request) {
+  const principal = studioSsoAuth.resolvePrincipal(request);
+  if (studioSsoAuth.isMultiUserDeployment() && !principal) return null;
+  return principal;
+}
+
+function denyDshTurnAccess(
+  response: express.Response,
+  principal: Sim2RealPrincipal | null,
+): boolean {
+  // Same boundary as POST /dsh/chat: shared deployments require a verified
+  // session plus the Agent permission; single-user deployments run open.
+  if (!studioSsoAuth.isMultiUserDeployment()) return false;
+  if (!principal) {
+    response
+      .status(401)
+      .json({ ok: false, error: 'SIM2REAL_AUTH_REQUIRED', message: '请先登录后使用智能体。' });
+    return true;
+  }
+  if (!principalCan(principal, SIM2REAL_PERMISSIONS.agent)) {
+    response.status(403).json({
+      ok: false,
+      error: 'SIM2REAL_PERMISSION_DENIED',
+      message: '当前账号没有智能体执行权限。',
+    });
+    return true;
+  }
+  return false;
 }
 
 function scopedDshSessionId(publicSessionId: string, ownerScope: string): string {
@@ -1127,11 +1259,15 @@ export function createSim2RealWebApp(): Express {
     }
     const requestAbort = new AbortController();
     const abortRequest = () => requestAbort.abort();
-    const abortResponse = () => {
-      if (!response.writableEnded) requestAbort.abort();
-    };
-    request.once('aborted', abortRequest);
-    response.once('close', abortResponse);
+    if (!turnId) {
+      // Without a turn id there is nothing to re-attach to after a reload, so
+      // keep the legacy contract: a client disconnect cancels the work.
+      const abortResponse = () => {
+        if (!response.writableEnded) requestAbort.abort();
+      };
+      request.once('aborted', abortRequest);
+      response.once('close', abortResponse);
+    }
     try {
       // The browser sees an opaque per-conversation id. In shared deployments
       // the durable DSH id is owner-scoped, so knowing another user's local
@@ -1167,6 +1303,20 @@ export function createSim2RealWebApp(): Express {
       const turnPrompt = contextPart ? `${prompt}\n\n[当前工作区选择] ${contextPart}` : prompt;
       const channel = (app.locals as Record<string, unknown>).dshAuthChannel as
         ReturnType<typeof createDshAuthChannel> | undefined;
+      const turnRecord = turnId
+        ? registerDshTurn(turnId, {
+            ownerScope,
+            publicSessionId,
+            controller: requestAbort,
+          })
+        : null;
+      if (turnRecord) {
+        // With a turn id the interpretation outlives the connection: a page
+        // refresh must not kill it, so the disconnect is deliberately ignored
+        // and the outcome lands in the registry for the re-attaching client.
+        // Writes to the dead socket are discarded instead of crashing.
+        response.on('error', () => {});
+      }
       const result = await withDshSessionLock(sessionLockKey, () => {
         const work = () =>
           askDsh(runtime, turnPrompt, {
@@ -1177,7 +1327,7 @@ export function createSim2RealWebApp(): Express {
           });
         return channel ? channel.withAuth(forwarded, work) : work();
       });
-      response.json({
+      const replyPayload = {
         ok: true,
         sessionId: publicSessionId,
         text: publicDshText(result.text),
@@ -1186,9 +1336,18 @@ export function createSim2RealWebApp(): Express {
         events: publicDshEventTail(result.events),
         ...(result.usage ? { usage: result.usage } : {}),
         ...(result.imageAccepted ? { imageAccepted: result.imageAccepted } : {}),
-      });
+      };
+      if (turnRecord) completeDshTurn(turnRecord, replyPayload);
+      response.json(replyPayload);
     } catch (error) {
       if (error instanceof DshImageFailure) {
+        if (turnId) {
+          failDshTurnById(turnId, error.httpStatus, {
+            ok: false,
+            error: error.code,
+            message: error.message,
+          });
+        }
         response
           .status(error.httpStatus)
           .json({ ok: false, error: error.code, message: error.message });
@@ -1208,20 +1367,142 @@ export function createSim2RealWebApp(): Express {
       // the browser boundary. This is deliberately not a 503: the runtime is
       // enabled but misconfigured, and silently falling back to the legacy
       // canned-reply planner would hide the real problem.
-      if (error instanceof DshAgentFailure) {
-        response.status(502).json({
-          ok: false,
-          error: error.code,
-          message: error.message,
-          ...(responseRequestId(response) ? { requestId: responseRequestId(response) } : {}),
-        });
-        return;
+      // A detached client (page refreshed mid-turn) can no longer receive the
+      // failure, so the terminal state lands in the registry either way and
+      // the HTTP body is only written while a socket remains.
+      const failure =
+        error instanceof DshAgentFailure
+          ? {
+              status: 502,
+              body: {
+                ok: false as const,
+                error: error.code,
+                message: error.message,
+                ...(responseRequestId(response) ? { requestId: responseRequestId(response) } : {}),
+              },
+            }
+          : {
+              status: 502,
+              body: {
+                ok: false as const,
+                error: 'DSH_CHAT_FAILED',
+                message: publicUpstreamErrorMessage('dsh'),
+                ...(responseRequestId(response) ? { requestId: responseRequestId(response) } : {}),
+              },
+            };
+      if (turnId) {
+        failDshTurnById(turnId, failure.status, failure.body);
+        if (response.writable && !response.writableEnded) {
+          response.status(failure.status).json(failure.body);
+        }
+      } else if (error instanceof DshAgentFailure) {
+        response.status(failure.status).json(failure.body);
+      } else {
+        sendPublicUpstreamError(response, 'DSH_CHAT_FAILED', 'dsh');
       }
-      sendPublicUpstreamError(response, 'DSH_CHAT_FAILED', 'dsh');
     } finally {
       request.off('aborted', abortRequest);
       response.off('close', abortResponse);
     }
+  });
+  // Re-attach surface for a turn whose browser went away mid-interpretation
+  // (page refresh, flaky link). The turn keeps running server-side; this
+  // endpoint is how the reloaded page collects the outcome. 404 covers
+  // missing, expired and foreign turns alike — the id must not become an
+  // oracle for other conversations.
+  app.get('/api/sim2real/dsh/chat/turns/:turnId', (request, response) => {
+    response.setHeader('Cache-Control', 'no-store');
+    const principal = dshTurnPrincipal(request);
+    if (denyDshTurnAccess(response, principal)) return;
+    const turnId = String(request.params.turnId || '');
+    if (!turnId || turnId.length > 120 || !/^[A-Za-z0-9_-]+$/.test(turnId)) {
+      response
+        .status(400)
+        .json({ ok: false, error: 'DSH_TURN_INVALID', message: '对话轮次标识无效。' });
+      return;
+    }
+    const record = dshTurns.get(turnId);
+    const ownerScope = dshOwnerScope(principal, studioSsoAuth.isMultiUserDeployment());
+    if (!record || record.ownerScope !== ownerScope) {
+      response.status(404).json({
+        ok: false,
+        error: 'DSH_TURN_NOT_FOUND',
+        message: '该轮次不存在、已过期或不在当前工作区。',
+      });
+      return;
+    }
+    if (record.status === 'running' && Date.now() - record.startedAt > DSH_TURN_RETENTION_MS) {
+      failRunningDshTurn(record, {
+        ok: false,
+        error: 'DSH_TURN_TIMEOUT',
+        message: '本轮等待超时，请重试。',
+      });
+    }
+    const base = { ok: true, turnId, sessionId: record.publicSessionId, status: record.status };
+    if (record.status === 'complete' && record.reply) {
+      response.json({
+        ...base,
+        status: 'complete',
+        text: record.reply.text,
+        reasoning: record.reply.reasoning,
+        toolTrail: record.reply.toolTrail,
+        events: record.reply.events,
+        ...(record.reply.usage ? { usage: record.reply.usage } : {}),
+      });
+      return;
+    }
+    if (record.status === 'failed' && record.failure) {
+      response.json({
+        ...base,
+        error: record.failure.body.error,
+        message: record.failure.body.message,
+      });
+      return;
+    }
+    response.json(base);
+  });
+  // Explicit cancel for a detached turn: without it, closing the drawer could
+  // no longer stop a running interpretation once the disconnect stopped being
+  // lethal to the turn.
+  app.post('/api/sim2real/dsh/chat/turns/:turnId/cancel', (request, response) => {
+    response.setHeader('Cache-Control', 'no-store');
+    const principal = dshTurnPrincipal(request);
+    if (denyDshTurnAccess(response, principal)) return;
+    const turnId = String(request.params.turnId || '');
+    if (!turnId || turnId.length > 120 || !/^[A-Za-z0-9_-]+$/.test(turnId)) {
+      response
+        .status(400)
+        .json({ ok: false, error: 'DSH_TURN_INVALID', message: '对话轮次标识无效。' });
+      return;
+    }
+    const record = dshTurns.get(turnId);
+    const ownerScope = dshOwnerScope(principal, studioSsoAuth.isMultiUserDeployment());
+    if (!record) {
+      // The POST may still be in flight; remember the intent so the turn, if
+      // it starts, begins already cancelled instead of ignoring the stop.
+      rememberEarlyCancel(turnId, ownerScope);
+      response.json({ ok: true, turnId, status: 'cancelled' });
+      return;
+    }
+    if (record.ownerScope !== ownerScope) {
+      response.status(404).json({
+        ok: false,
+        error: 'DSH_TURN_NOT_FOUND',
+        message: '该轮次不存在、已过期或不在当前工作区。',
+      });
+      return;
+    }
+    if (record.status === 'running') {
+      failRunningDshTurn(record, {
+        ok: false,
+        error: 'DSH_TURN_CANCELLED',
+        message: '本轮已按要求停止。',
+      });
+      record.controller.abort();
+      response.json({ ok: true, turnId, status: 'cancelled' });
+      return;
+    }
+    response.json({ ok: true, turnId, status: record.status });
   });
   // Studio-cookie deployments also expose a credential relay so the workbench
   // can log in directly (POST /api/sso/login) instead of bouncing users to

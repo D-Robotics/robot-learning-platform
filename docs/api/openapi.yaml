@@ -1082,7 +1082,15 @@ paths:
                 message: { type: string, minLength: 1, maxLength: 12000 }
                 sessionId: { type: string, maxLength: 160, pattern: "^sim2real-[A-Za-z0-9-]+$" }
                 model: { type: string, minLength: 1, maxLength: 160, pattern: "^[A-Za-z0-9][A-Za-z0-9._:/-]{0,159}$" }
-                turnId: { type: string, maxLength: 120, pattern: "^[A-Za-z0-9_-]+$" }
+                turnId:
+                  type: string
+                  maxLength: 120
+                  pattern: "^[A-Za-z0-9_-]+$"
+                  description: >-
+                    Client-generated turn key. When present, the turn survives a
+                    client disconnect and its outcome stays pollable at
+                    `/dsh/chat/turns/{turnId}` until expiry; without it a client
+                    disconnect cancels the turn (legacy behaviour).
                 context:
                   type: object
                   properties:
@@ -1145,6 +1153,74 @@ paths:
         "422": { description: Image cannot be fully decoded, geometry exceeds the limit, or selected model lacks an explicit image declaration. }
         "502": { description: DSH provider or runtime failure (generic, retryable). }
         "503": { description: DSH runtime is not enabled on this deployment. }
+  /api/sim2real/dsh/chat/turns/{turnId}:
+    get:
+      tags: [agent]
+      summary: Poll the outcome of a detached DSH chat turn
+      operationId: getSim2RealDshTurn
+      description: >-
+        Re-attach surface for a turn sent with a `turnId`: the turn keeps
+        running after its browser connection dies, and a reloaded page polls
+        here until the terminal state. 404 covers missing, expired (15 min
+        retention) and foreign turns alike; running turns past the retention
+        window report `status: failed` with `DSH_TURN_TIMEOUT`.
+      parameters:
+        - name: turnId
+          in: path
+          required: true
+          schema: { type: string, minLength: 1, maxLength: 120, pattern: "^[A-Za-z0-9_-]+$" }
+      responses:
+        "200":
+          description: Turn state; the terminal outcome rides in `status`.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [ok, turnId, sessionId, status]
+                properties:
+                  ok: { const: true }
+                  turnId: { type: string }
+                  sessionId: { type: string }
+                  status: { type: string, enum: [running, complete, failed] }
+                  text: { type: string, maxLength: 20000 }
+                  reasoning: { type: string }
+                  toolTrail: { type: array, items: { type: object } }
+                  events: { type: array, items: { type: object } }
+                  error: { type: string }
+                  message: { type: string }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/AuthRequired" }
+        "403": { description: Account lacks the Agent permission. }
+        "404": { description: Unknown, expired or foreign turn. }
+  /api/sim2real/dsh/chat/turns/{turnId}/cancel:
+    post:
+      tags: [agent]
+      summary: Cancel a detached DSH chat turn
+      operationId: cancelSim2RealDshTurn
+      description: >-
+        Owner-scoped cancellation of a still-running turn. Idempotent: an
+        already-terminal turn reports its current status unchanged.
+      parameters:
+        - name: turnId
+          in: path
+          required: true
+          schema: { type: string, minLength: 1, maxLength: 120, pattern: "^[A-Za-z0-9_-]+$" }
+      responses:
+        "200":
+          description: Cancellation accepted (or the turn had already finished).
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [ok, turnId, status]
+                properties:
+                  ok: { const: true }
+                  turnId: { type: string }
+                  status: { type: string, enum: [cancelled, complete, failed] }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/AuthRequired" }
+        "403": { description: Account lacks the Agent permission. }
+        "404": { description: Unknown, expired or foreign turn. }
   /api/sim2real/auth/session:
     get:
       tags: [sso]
