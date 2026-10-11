@@ -27,15 +27,15 @@ stepping faster to catch up.
 from __future__ import annotations
 
 import argparse
+import http.client
 import json
 import os
 import sys
 import threading
 import time
-import urllib.error
-import urllib.request
 from pathlib import Path
 from typing import Any, Callable
+from urllib.parse import urlsplit
 
 import numpy as np
 
@@ -112,6 +112,10 @@ class BoardPolicy:
 
     Response rows are the loaded model's actions; the board runtime owns any
     recurrent/stacked state, so this side stays stateless on purpose.
+
+    The connection is reused across ticks: at 50 Hz a fresh TCP handshake per
+    inference consumes most of the 20 ms budget, so one keep-alive connection
+    is held open and re-opened (once per call) if the agent dropped it.
     """
 
     def __init__(self, base_url: str, *, token: str = "", timeout_s: float = 2.0) -> None:
@@ -120,42 +124,72 @@ class BoardPolicy:
             url += BOARD_INFER_PATH
         self.url = url
         self.status_url = url[: -len(BOARD_INFER_PATH)] + BOARD_STATUS_PATH
+        parsed = urlsplit(self.url)
+        self._scheme = parsed.scheme or "http"
+        self._host = parsed.hostname or "127.0.0.1"
+        self._port = parsed.port or (443 if self._scheme == "https" else 80)
+        self._infer_path = parsed.path or BOARD_INFER_PATH
+        self._status_path = self._infer_path[: -len(BOARD_INFER_PATH)] + BOARD_STATUS_PATH
         self.token = token or ""
         self.timeout_s = timeout_s
         self.calls = 0
+        self._connection: http.client.HTTPConnection | None = None
 
     def _headers(self) -> dict[str, str]:
-        headers = {"Content-Type": "application/json"}
+        headers = {"Content-Type": "application/json", "Connection": "keep-alive"}
         if self.token:
             headers["Authorization"] = f"Bearer {self.token}"
         return headers
 
-    def check_reachable(self) -> dict[str, Any]:
-        request = urllib.request.Request(self.status_url, headers=self._headers())
-        try:
-            with urllib.request.urlopen(request, timeout=self.timeout_s) as response:
+    def _open_connection(self) -> http.client.HTTPConnection:
+        if self._scheme == "https":
+            return http.client.HTTPSConnection(self._host, self._port, timeout=self.timeout_s)
+        return http.client.HTTPConnection(self._host, self._port, timeout=self.timeout_s)
+
+    def _request(self, method: str, path: str, body: bytes | None) -> tuple[int, dict[str, Any]]:
+        """One JSON round trip on the reused connection; one reconnect retry.
+
+        The retry exists for the keep-alive race: an agent-side idle timeout
+        closes the socket between our ticks, which surfaces as a broken request
+        on the first attempt, not a server refusal.
+        """
+        last_error: Exception | None = None
+        for attempt in (0, 1):
+            connection = self._connection
+            if connection is None:
+                connection = self._open_connection()
+            try:
+                connection.request(method, path, body=body, headers=self._headers())
+                response = connection.getresponse()
                 payload = json.loads(response.read().decode("utf-8"))
-        except (urllib.error.URLError, TimeoutError, json.JSONDecodeError) as error:
+                self._connection = None if response.will_close else connection
+                return response.status, payload
+            except (http.client.HTTPException, OSError, TimeoutError, json.JSONDecodeError) as error:
+                try:
+                    connection.close()
+                except OSError:
+                    pass
+                self._connection = None
+                last_error = error
+        raise BoardInferError(f"board request failed at {self.url}: {last_error}") from last_error
+
+    def check_reachable(self) -> dict[str, Any]:
+        status, payload = self._request("GET", self._status_path, None)
+        if status >= 400 or not payload.get("ok", True):
             raise BoardInferError(
-                f"board station not reachable at {self.status_url}: {error}"
-            ) from error
-        if not payload.get("ok", True):
-            raise BoardInferError(f"board station reported not ok: {json.dumps(payload)[:200]}")
+                f"board station not reachable at {self.status_url} "
+                f"(HTTP {status}): {json.dumps(payload)[:200]}"
+            )
         return payload
 
     def act(self, observation: np.ndarray) -> np.ndarray:
         body = json.dumps({"observations": [observation.astype(np.float32).tolist()]}).encode("utf-8")
-        request = urllib.request.Request(
-            self.url, data=body, headers=self._headers(), method="POST"
-        )
-        try:
-            with urllib.request.urlopen(request, timeout=self.timeout_s) as response:
-                payload = json.loads(response.read().decode("utf-8"))
-        except (urllib.error.URLError, TimeoutError, json.JSONDecodeError) as error:
-            raise BoardInferError(f"board inference failed at {self.url}: {error}") from error
+        status, payload = self._request("POST", self._infer_path, body)
         actions = payload.get("actions") if isinstance(payload, dict) else None
-        if not payload.get("ok") or not isinstance(actions, list) or not actions:
-            raise BoardInferError(f"board inference returned no actions: {json.dumps(payload)[:200]}")
+        if status >= 400 or not payload.get("ok") or not isinstance(actions, list) or not actions:
+            raise BoardInferError(
+                f"board inference returned no actions (HTTP {status}): {json.dumps(payload)[:200]}"
+            )
         row = np.asarray(actions[0], dtype=np.float32)
         if row.shape != (14,):
             hint = (
