@@ -83,10 +83,18 @@ def _write_synthetic_scene(model_root: Path) -> Path:
 
 
 class StubStationHandler(BaseHTTPRequestHandler):
-    """The board-agent wire contract: status GET + batch inference POST."""
+    """The board-agent wire contract: status GET + batch inference POST.
 
+    HTTP/1.1 with accurate Content-Length so keep-alive engages and the
+    connection-reuse behaviour of BoardPolicy is exercised, not just its
+    request/response shapes. client_ports records one entry per TCP
+    connection (the ephemeral client port), so reuse is provable.
+    """
+
+    protocol_version = "HTTP/1.1"
     token = ""
     last_body: dict | None = None
+    client_ports: set[int] = set()
 
     def log_message(self, *args) -> None:  # keep pytest output clean
         pass
@@ -96,6 +104,7 @@ class StubStationHandler(BaseHTTPRequestHandler):
         return not expected or self.headers.get("Authorization") == f"Bearer {expected}"
 
     def _json(self, code: int, payload: dict) -> None:
+        type(self).client_ports.add(self.client_address[1])
         data = json.dumps(payload).encode("utf-8")
         self.send_response(code)
         self.send_header("Content-Type", "application/json")
@@ -126,6 +135,7 @@ class StubStationHandler(BaseHTTPRequestHandler):
 def stub_station():
     StubStationHandler.token = ""
     StubStationHandler.last_body = None
+    StubStationHandler.client_ports = set()
     server = ThreadingHTTPServer(("127.0.0.1", 0), StubStationHandler)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
@@ -169,6 +179,18 @@ def test_board_policy_roundtrip_hits_station_contract(stub_station):
     sent = StubStationHandler.last_body
     assert len(sent["observations"]) == 1
     assert len(sent["observations"][0]) == OBSERVATION_SIZE
+
+
+def test_board_policy_reuses_one_tcp_connection_across_calls(stub_station):
+    board = BoardPolicy(stub_station)
+    observation = np.zeros(OBSERVATION_SIZE, dtype=np.float32)
+    for _ in range(5):
+        board.act(observation)
+
+    # Five inferences, one TCP connection: the 50 Hz budget must not be spent
+    # on per-call handshakes.
+    assert len(StubStationHandler.client_ports) == 1
+    assert board.calls == 5
 
 
 def test_board_policy_requires_matching_token(stub_station):
