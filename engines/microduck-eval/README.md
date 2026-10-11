@@ -41,11 +41,13 @@ engines/microduck-eval/
 │   ├── sim.py                        # 无头 CPU MuJoCo 回放（上游 MJCF）
 │   ├── policy.py                     # ONNX 策略装载（obs 61 → act 14；前馈与 LSTM 循环图）
 │   ├── tasks.py                      # 任务级成功判据（走路 / 踢球 / 平衡）
-│   └── report.py                     # 产出 eval-report.json
+│   ├── report.py                     # 产出 eval-report.json
+│   └── live_loop.py                  # 交互式实时闭环（本地 ONNX / 板端推理，--demo 编排）
 └── tests/
     ├── test_eval_contract.py         # 纯逻辑：Wilson 语义、任务判据、信封钉死
     ├── test_policy_contract.py       # 纯逻辑：图分类/状态配对/回合内状态语义（fake session）
-    └── test_policy_onnx_e2e.py       # 真 ONNX 图：手工构造 LSTM，对照手喂 ORT 参考序列
+    ├── test_policy_onnx_e2e.py       # 真 ONNX 图：手工构造 LSTM，对照手喂 ORT 参考序列
+    └── test_live_loop.py             # 实时闭环：合成场景 + 合成图 + 桩板端服务的 E2E
 ```
 
 ## 支持的策略图
@@ -113,6 +115,31 @@ cd engines/microduck-eval
 
 上游 MJCF/资产来自 `pollen-robotics/microduck_rl`（Apache-2.0）。本仓库**不分发**上游资产，
 只读取调用方提供的 `--model-root`。
+
+## 实时闭环（交互）
+
+`report.py` 产出的是**固定指令下**的评测结论；要看"边跑边改指令"的实时行为，
+用 `live_loop.py`——PC 无头 MuJoCo 保持 50 Hz 物理闭环，指令 twist
+`[vx, vy, ωz]`（指令块 = twist 3 + 头部姿态 4 + 身体姿态 6 中的前三维）每个控制步
+都能改，两种推理后端：
+
+```bash
+# 本地 ONNX 推理
+../../.eval-venv/bin/python -m microduck_eval.live_loop \
+  --backend local --policy /path/policy.onnx \
+  --model-root /path/to/microduck_rl --command 0.3,0,0
+
+# 板端推理（PC 跑仿真、板子跑策略，与工作台"策略试跑·板端推理"同一 wire 契约）
+RDK_SIM2REAL_BOARD_AGENT_TOKEN=<token> ../../.eval-venv/bin/python -m microduck_eval.live_loop \
+  --backend board --board-url http://<board>:19100 \
+  --model-root /path/to/microduck_rl --command 0.2,0,0
+```
+
+交互键（stdin）：`w`/`s` 前后 ±0.1 m/s，`a`/`d` 转向 ±0.5 rad/s，`0` 站立，
+`v vx,vy,wz` 直接设速度，`status` 查看，`q` 退出。twist 被钳制在训练指令分布附近
+（线速度 ±0.5 m/s、角速度 ±1.5 rad/s），越界指令属于分布外输入，脚本不投喂。
+`--duration N` 为非交互限时模式。注意：本脚本验证**机制**（观测注入、后端派发、
+节奏统计），不产出可引用的成功率——那仍然是 `report.py` 固定信封的事。
 
 ## 第一次跑出来的结论（2026-09-16）
 
