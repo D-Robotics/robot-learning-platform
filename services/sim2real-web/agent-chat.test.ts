@@ -43,7 +43,7 @@ function jsonResponse(payload: unknown, status = 200) {
   });
 }
 
-function boot(fetchImpl: typeof fetch) {
+function boot(fetchImpl: typeof fetch, prepare?: (window: JSDOM['window']) => void) {
   const dom = new JSDOM(shell(), {
     url: 'http://127.0.0.1:3000/sim2real/',
     runScripts: 'outside-only',
@@ -90,6 +90,7 @@ function boot(fetchImpl: typeof fetch) {
       return payload;
     },
   });
+  if (prepare) prepare(dom.window);
   dom.window.eval(agentSource);
   return dom.window;
 }
@@ -813,5 +814,63 @@ describe('Agent session rail (G12: remember recent context)', () => {
     expect(dom.window.document.querySelector('#agent-chat-messages')?.textContent).toContain(
       '跑一轮 GPU 训练',
     );
+  });
+
+  it('re-attaches to a detached turn after a refresh and renders the recovered answer', async () => {
+    const fetchImpl = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith('/api/sim2real/dsh/chat/turns/turn-refresh-9')) {
+        return jsonResponse({
+          ok: true,
+          turnId: 'turn-refresh-9',
+          sessionId: 'sim2real-abc',
+          status: 'complete',
+          text: '这是刷新后恢复的解读结论',
+          toolTrail: [],
+        });
+      }
+      return jsonResponse({ ok: true });
+    });
+    const window = boot(fetchImpl, (win) => {
+      win.sessionStorage.setItem(
+        'rdk-sim2real-agent-pending-turn-v1',
+        JSON.stringify({ turnId: 'turn-refresh-9' }),
+      );
+    });
+    await wait(30);
+
+    const transcript = window.document.querySelector('#agent-chat-messages')?.textContent || '';
+    expect(transcript).toContain('正在恢复刷新前的回答');
+    expect(transcript).toContain('这是刷新后恢复的解读结论');
+    expect(window.sessionStorage.getItem('rdk-sim2real-agent-pending-turn-v1')).toBeNull();
+  });
+
+  it('reports a failed detached turn honestly and stops tracking it', async () => {
+    const fetchImpl = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith('/api/sim2real/dsh/chat/turns/turn-dead-3')) {
+        return jsonResponse({
+          ok: true,
+          turnId: 'turn-dead-3',
+          sessionId: 'sim2real-abc',
+          status: 'failed',
+          error: 'DSH_TURN_TIMEOUT',
+          message: '本轮等待超时，请重试。',
+        });
+      }
+      return jsonResponse({ ok: true });
+    });
+    const window = boot(fetchImpl, (win) => {
+      win.sessionStorage.setItem(
+        'rdk-sim2real-agent-pending-turn-v1',
+        JSON.stringify({ turnId: 'turn-dead-3' }),
+      );
+    });
+    await wait(30);
+
+    const transcript = window.document.querySelector('#agent-chat-messages')?.textContent || '';
+    expect(transcript).toContain('刷新前的那轮没有完成');
+    expect(transcript).toContain('本轮等待超时，请重试。');
+    expect(window.sessionStorage.getItem('rdk-sim2real-agent-pending-turn-v1')).toBeNull();
   });
 });

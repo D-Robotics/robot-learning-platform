@@ -12,12 +12,18 @@ const runtimeStatus = document.querySelector('.agent-chat-runtime');
 let runtimeLabel = '可规划 · 真机操作需确认';
 const HISTORY_KEY = 'rdk-sim2real-agent-history-v1';
 const SESSIONS_KEY = 'rdk-sim2real-agent-sessions-v1';
+// A turn the server is still running outlives the page (refresh keeps the
+// answer alive); this key is how the reloaded page finds that turn again.
+const PENDING_TURN_KEY = 'rdk-sim2real-agent-pending-turn-v1';
+const PENDING_TURN_POLL_MS = 1500;
+const PENDING_TURN_MAX_WAIT_MS = 10 * 60_000;
 const SESSIONS_CAP = 12;
 const SESSION_MESSAGES_CAP = 24;
 const SESSION_TITLES = { pending: '待执行', running: '执行中', completed: '已完成', partial: '部分完成', failed: '失败', blocked: '已阻断' };
 const SIMULATOR_ALLOWED_KEYS = new Set(['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'w', 'a', 's', 'd', 'q', 'e', 'f', 'r', 'g', 'c', 'm', 'b', ' ']);
 const simulatorBridge = { frame: null, ready: false, recording: false, events: [], connectedAt: null, startedAt: 0, downloadUrl: '', downloadName: '', videoUrl: '', videoName: '', recorder: null, videoError: '' };
 let activeTaskController = null;
+let activeTaskTurnId = '';
 let activeTypingNode = null;
 let activeDshSessionId = '';
 
@@ -900,6 +906,75 @@ function restoreMessages() {
   } catch { /* ignore corrupt browser-only history */ }
 }
 
+function savePendingTurn(turnId) {
+  try { sessionStorage.setItem(PENDING_TURN_KEY, JSON.stringify({ turnId })); } catch { /* best effort */ }
+}
+
+function clearPendingTurn() {
+  try { sessionStorage.removeItem(PENDING_TURN_KEY); } catch { /* best effort */ }
+}
+
+function readPendingTurnId() {
+  try {
+    const parsed = JSON.parse(sessionStorage.getItem(PENDING_TURN_KEY) || '');
+    return typeof parsed?.turnId === 'string' ? parsed.turnId : '';
+  } catch { return ''; }
+}
+
+function cancelDetachedTurn(turnId) {
+  if (!turnId) return;
+  void api(`/sim2real/dsh/chat/turns/${encodeURIComponent(turnId)}/cancel`, { method: 'POST' })
+    .catch(() => { /* best effort: the server-side TTL is the backstop */ });
+}
+
+// Collects a turn whose browser connection died (refresh, flaky link). The
+// server keeps running it; terminal states render here exactly like a live
+// reply would have.
+function pollPendingTurn(turnId, waitedMs, options = {}) {
+  const { indicator = false } = options;
+  if (indicator) showTypingIndicator();
+  const poll = () => {
+    api(`/sim2real/dsh/chat/turns/${encodeURIComponent(turnId)}`)
+      .then((payload) => {
+        if (payload?.status === 'running') {
+          const next = waitedMs + PENDING_TURN_POLL_MS;
+          if (next > PENDING_TURN_MAX_WAIT_MS) {
+            clearPendingTurn();
+            if (indicator) removeTypingIndicator();
+            addMessage('agent', '恢复等待超时；本轮可能仍在后台完成，稍后可在会话里重试提问。');
+            return;
+          }
+          setTimeout(() => pollPendingTurn(turnId, next, options), PENDING_TURN_POLL_MS);
+          return;
+        }
+        clearPendingTurn();
+        if (indicator) removeTypingIndicator();
+        if (payload?.status === 'complete' && payload.text) {
+          renderDshReply(payload);
+          return;
+        }
+        addMessage(
+          'agent',
+          `刷新前的那轮没有完成：${payload?.message || payload?.error || '未知原因'}`,
+        );
+      })
+      .catch(() => {
+        // 404 means server restart or expiry: the answer is genuinely gone.
+        clearPendingTurn();
+        if (indicator) removeTypingIndicator();
+        addMessage('agent', '刷新前的回答未能保留（服务已重启或轮次过期），请重新提问。');
+      });
+  };
+  setTimeout(poll, 0);
+}
+
+function reattachPendingTurn() {
+  const turnId = readPendingTurnId();
+  if (!turnId || !messages) return;
+  addMessage('agent', '正在恢复刷新前的回答…', false);
+  pollPendingTurn(turnId, 0, { indicator: true });
+}
+
 function renderSessionTranscript(record) {
   messages?.replaceChildren();
   if (record.messages?.length) {
@@ -1014,6 +1089,7 @@ function initSessionRail() {
     }
   }
   renderSessionRail(list);
+  reattachPendingTurn();
   fresh?.addEventListener('click', () => {
     if (activeTaskController) return;
     startFreshSession(list);
@@ -1283,6 +1359,9 @@ async function runTask(message, signal, turnId) {
   try {
     setAgentBusy(true, '模型思考与工具执行中…');
     stopApprovalPolling = startDshApprovalPolling(signal);
+    // The server keeps this turn running even if the page refreshes; the key
+    // below is how the reloaded drawer finds and renders the answer.
+    savePendingTurn(turnId);
     const dsh = await api('/sim2real/dsh/chat', {
       method: 'POST',
       signal,
@@ -1295,11 +1374,23 @@ async function runTask(message, signal, turnId) {
     });
     if (dsh?.ok && dsh.text) {
       if (typeof dsh.sessionId === 'string') persistActiveDshSession(dsh.sessionId);
+      clearPendingTurn();
       removeTypingIndicator();
       renderDshReply(dsh);
       return;
     }
   } catch (error) {
+    if (error?.name === 'AbortError') {
+      cancelDetachedTurn(turnId);
+      clearPendingTurn();
+    } else if (error && error.status === 503) {
+      // Runtime disabled: the server rejected before any turn existed.
+      clearPendingTurn();
+    } else {
+      // The connection broke but the turn keeps running server-side; collect
+      // it in the background instead of losing the answer.
+      void pollPendingTurn(turnId, 0);
+    }
     if (!(error && error.status === 503)) throw error;
   } finally {
     stopApprovalPolling();
@@ -1405,6 +1496,7 @@ form?.addEventListener('submit', (event) => {
   addMessage('user', message);
   const controller = new AbortController();
   activeTaskController = controller;
+  activeTaskTurnId = turnId;
   setAgentBusy(true, '正在生成计划…');
   void runTask(message, controller.signal, turnId)
     .catch((error) => {
@@ -1418,6 +1510,7 @@ form?.addEventListener('submit', (event) => {
       removeTypingIndicator();
       if (activeTaskController === controller) {
         activeTaskController = null;
+        activeTaskTurnId = '';
         setAgentBusy(false);
       }
     });
@@ -1426,6 +1519,7 @@ form?.addEventListener('submit', (event) => {
 
 stopButton?.addEventListener('click', () => {
   if (!activeTaskController) return;
+  cancelDetachedTurn(activeTaskTurnId);
   activeTaskController.abort();
   stopButton.disabled = true;
   if (runtimeStatus) runtimeStatus.textContent = '正在停止等待…';

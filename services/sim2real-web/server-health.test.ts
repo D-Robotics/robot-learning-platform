@@ -210,6 +210,114 @@ describe('standalone Sim2Real health and optional simulator surface', () => {
     expect(mockedAskDsh).toHaveBeenCalledOnce();
   });
 
+  it('keeps a turn with an id alive across a client disconnect and serves it to a re-attaching poll', async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'rdk-sim2real-dsh-detach-'));
+    temporaryRoots.push(root);
+    process.env.RDK_SIM2REAL_DEPLOYMENT = 'local';
+    process.env.RDK_SIM2REAL_STORAGE_DIR = path.join(root, 'ledger');
+    process.env.RDK_SIM2REAL_REQUIRE_MICRODUCK = '0';
+    delete process.env.RDK_SIM2REAL_MICRODUCK_ROOT;
+    delete process.env.RDK_SIM2REAL_MICRODUCK_URL;
+    const app = createSim2RealWebApp();
+    (app.locals as Record<string, unknown>).dshRuntime = { __stub: 'dsh-detach-fixture' };
+    const server = app.listen(0, '127.0.0.1');
+    openServers.push(server);
+    await new Promise<void>((resolve, reject) => {
+      server.once('listening', () => resolve());
+      server.once('error', reject);
+    });
+    const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+
+    mockedAskDsh.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          setTimeout(() => resolve({ text: '解读完成：指标正常', toolTrail: [], events: [] }), 400);
+        }),
+    );
+    // The "refresh": the browser kills the connection long before the answer.
+    const controller = new AbortController();
+    const posting = fetch(`${base}/api/sim2real/dsh/chat`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ message: '帮我解读这次训练', turnId: 'turn-refresh-1' }),
+      signal: controller.signal,
+    });
+    setTimeout(() => controller.abort(), 30);
+    await expect(posting).rejects.toThrow();
+
+    // The reloaded drawer polls while the server is still working on it; the
+    // disconnect must not have cancelled anything.
+    const running = await json(`${base}/api/sim2real/dsh/chat/turns/turn-refresh-1`);
+    expect(running.response.status).toBe(200);
+    expect(['running', 'complete']).toContain(running.payload.status);
+
+    await vi.waitFor(
+      async () => {
+        const done = await json(`${base}/api/sim2real/dsh/chat/turns/turn-refresh-1`);
+        expect(done.payload).toMatchObject({
+          ok: true,
+          status: 'complete',
+          text: '解读完成：指标正常',
+        });
+      },
+      { timeout: 4000, interval: 100 },
+    );
+  });
+
+  it('cancels a detached turn on explicit request and keeps the cancelled state pollable', async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'rdk-sim2real-dsh-cancel-'));
+    temporaryRoots.push(root);
+    process.env.RDK_SIM2REAL_DEPLOYMENT = 'local';
+    process.env.RDK_SIM2REAL_STORAGE_DIR = path.join(root, 'ledger');
+    process.env.RDK_SIM2REAL_REQUIRE_MICRODUCK = '0';
+    delete process.env.RDK_SIM2REAL_MICRODUCK_ROOT;
+    delete process.env.RDK_SIM2REAL_MICRODUCK_URL;
+    const app = createSim2RealWebApp();
+    (app.locals as Record<string, unknown>).dshRuntime = { __stub: 'dsh-cancel-fixture' };
+    const server = app.listen(0, '127.0.0.1');
+    openServers.push(server);
+    await new Promise<void>((resolve, reject) => {
+      server.once('listening', () => resolve());
+      server.once('error', reject);
+    });
+    const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+
+    mockedAskDsh.mockImplementationOnce(
+      (_runtime: unknown, _prompt: unknown, options: { signal: AbortSignal }) =>
+        new Promise((_, reject) => {
+          // Faithful to fetch: an already-aborted signal rejects immediately.
+          if (options.signal.aborted) {
+            reject(new Error('aborted'));
+            return;
+          }
+          options.signal.addEventListener('abort', () => reject(new Error('aborted')));
+        }),
+    );
+    const posting = fetch(`${base}/api/sim2real/dsh/chat`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ message: '长任务', turnId: 'turn-cancel-1' }),
+    });
+    const cancel = await fetch(`${base}/api/sim2real/dsh/chat/turns/turn-cancel-1/cancel`, {
+      method: 'POST',
+    });
+    expect(cancel.status).toBe(200);
+    expect(await cancel.json()).toMatchObject({ ok: true, status: 'cancelled' });
+
+    // The original poster's socket was still open, so it receives the generic
+    // upstream failure — the registry keeps the accurate cancelled reason.
+    await posting;
+    const poll = await json(`${base}/api/sim2real/dsh/chat/turns/turn-cancel-1`);
+    expect(poll.response.status).toBe(200);
+    expect(poll.payload).toMatchObject({ ok: true, status: 'failed', error: 'DSH_TURN_CANCELLED' });
+
+    // Unknown and malformed ids must not leak turn existence.
+    const missing = await json(`${base}/api/sim2real/dsh/chat/turns/turn-never-1`);
+    expect(missing.response.status).toBe(404);
+    const malformed = await json(`${base}/api/sim2real/dsh/chat/turns/bad.id!`);
+    expect(malformed.response.status).toBe(400);
+  });
+
   it('projects DSH events to non-sensitive metadata before returning them', () => {
     expect(
       publicDshEventTail([
