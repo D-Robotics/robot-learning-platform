@@ -39,7 +39,10 @@ else
   take_lock() {
     if mkdir "$LOCK_DIR" 2>/dev/null; then
       echo $$ >"$LOCK_DIR/pid"
-      trap 'rmdir "$LOCK_DIR" 2>/dev/null' EXIT
+      # The lock dir holds pid, so a bare rmdir would fail and a failing EXIT
+      # trap overrides the script's exit status — a finished deploy would
+      # report failure to whatever automation invoked it.
+      trap 'rm -f "$LOCK_DIR/pid" 2>/dev/null; rmdir "$LOCK_DIR" 2>/dev/null || true' EXIT
       return 0
     fi
     return 1
