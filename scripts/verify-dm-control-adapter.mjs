@@ -19,36 +19,22 @@ import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { COMMON_PYTHON_CANDIDATES, resolvePythonInterpreter } from './lib/python-interpreter.mjs';
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const adapterPath = path.join(repoRoot, 'engines/dm-control-adapter/adapter.py');
 
-function probe(python, code) {
-  const out = spawnSync(python, ['-c', code], {
-    encoding: 'utf8',
-    stdio: ['ignore', 'pipe', 'pipe'],
-  });
-  return out.status === 0;
-}
-
 function pythonInterpreter() {
-  const candidates = [
-    process.env.RDK_DMC_ENGINE_PYTHON,
-    // The shared engine venv (jax/mujoco/dm_control installed there)
-    path.join(repoRoot, 'engines/mjx-adapter/.venv/bin/python'),
-    process.env.RDK_STARTER_ENGINE_PYTHON,
-    'python3',
-    '/usr/bin/python3',
-    '/opt/homebrew/bin/python3.12',
-    '/opt/homebrew/bin/python3.11',
-  ];
-  for (const candidate of candidates) {
-    if (!candidate) continue;
-    if (probe(candidate, 'import dm_control, mujoco, jax, optax, onnx')) {
-      return candidate;
-    }
-  }
-  return null;
+  return resolvePythonInterpreter(
+    [
+      process.env.RDK_DMC_ENGINE_PYTHON,
+      // The shared engine venv (jax/mujoco/dm_control installed there)
+      path.join(repoRoot, 'engines/mjx-adapter/.venv/bin/python'),
+      process.env.RDK_STARTER_ENGINE_PYTHON,
+      ...COMMON_PYTHON_CANDIDATES,
+    ],
+    'import dm_control, mujoco, jax, optax, onnx',
+  );
 }
 
 const python = pythonInterpreter();

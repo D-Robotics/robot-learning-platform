@@ -21,6 +21,7 @@ import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { COMMON_PYTHON_CANDIDATES, resolvePythonInterpreter } from './lib/python-interpreter.mjs';
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const adapterPath = path.join(repoRoot, 'engines/mjx-adapter/adapter.py');
@@ -34,23 +35,16 @@ function probe(python, code) {
 }
 
 function pythonInterpreter() {
-  const candidates = [
-    process.env.RDK_MJX_ENGINE_PYTHON,
-    // The adapter's checked-in local venv (jax/mujoco-mjx installed there)
-    path.join(repoRoot, 'engines/mjx-adapter/.venv/bin/python'),
-    process.env.RDK_STARTER_ENGINE_PYTHON,
-    'python3',
-    '/usr/bin/python3',
-    '/opt/homebrew/bin/python3.12',
-    '/opt/homebrew/bin/python3.11',
-  ];
-  for (const candidate of candidates) {
-    if (!candidate) continue;
-    if (probe(candidate, 'import jax, mujoco, mujoco.mjx, optax, onnx')) {
-      return candidate;
-    }
-  }
-  return null;
+  return resolvePythonInterpreter(
+    [
+      process.env.RDK_MJX_ENGINE_PYTHON,
+      // The adapter's checked-in local venv (jax/mujoco-mjx installed there)
+      path.join(repoRoot, 'engines/mjx-adapter/.venv/bin/python'),
+      process.env.RDK_STARTER_ENGINE_PYTHON,
+      ...COMMON_PYTHON_CANDIDATES,
+    ],
+    'import jax, mujoco, mujoco.mjx, optax, onnx',
+  );
 }
 
 const python = pythonInterpreter();

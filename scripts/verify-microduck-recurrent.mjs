@@ -19,26 +19,16 @@ import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { COMMON_PYTHON_CANDIDATES, resolvePythonInterpreter } from './lib/python-interpreter.mjs';
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const engineDir = path.join(repoRoot, 'engines/microduck-recurrent');
 
 function pythonInterpreter() {
-  for (const candidate of [
-    process.env.RDK_MICRODUCK_RECURRENT_PYTHON,
-    'python3',
-    '/usr/bin/python3',
-    '/opt/homebrew/bin/python3.12',
-    '/opt/homebrew/bin/python3.11',
-  ]) {
-    if (!candidate) continue;
-    const probe = spawnSync(candidate, ['-c', 'import numpy, torch, mujoco, onnx, onnxruntime'], {
-      encoding: 'utf8',
-      stdio: ['ignore', 'pipe', 'pipe'],
-    });
-    if (probe.status === 0) return candidate;
-  }
-  return null;
+  return resolvePythonInterpreter(
+    [process.env.RDK_MICRODUCK_RECURRENT_PYTHON, ...COMMON_PYTHON_CANDIDATES],
+    'import numpy, torch, mujoco, onnx, onnxruntime',
+  );
 }
 
 const python = pythonInterpreter();
