@@ -28,10 +28,10 @@ afterEach(async () => {
   vi.restoreAllMocks();
 });
 
-function model(visualAssetBase?: unknown) {
+function model(visualAssetBase?: unknown, builtin = true) {
   return {
     id: 'model-1',
-    builtin: true,
+    builtin,
     createdAt: '2026-09-10T00:00:00.000Z',
     updatedAt: '2026-09-10T00:00:00.000Z',
     manifest: {
@@ -77,9 +77,10 @@ function overview(
     evaluations?: unknown[];
     deployments?: unknown[];
     visualAssetBase?: unknown;
+    modelBuiltin?: boolean;
   } = {},
 ) {
-  const selectedModel = model(extras.visualAssetBase);
+  const selectedModel = model(extras.visualAssetBase, extras.modelBuiltin);
   const contract = selectedModel.manifest.contract;
   return {
     ok: true,
@@ -212,6 +213,7 @@ async function boot(
     replayGate?: Promise<void>;
     overviewUnauthorized?: boolean;
     visualAssetBase?: unknown;
+    modelBuiltin?: boolean;
     transport?: (
       url: string,
       init: RequestInit | undefined,
@@ -308,6 +310,7 @@ async function boot(
             evaluations: options.evaluations,
             deployments: options.overviewDeployments,
             visualAssetBase: options.visualAssetBase,
+            modelBuiltin: options.modelBuiltin,
           }),
           identity: options.accountId
             ? { accountId: options.accountId, displayName: options.accountId }
@@ -354,7 +357,11 @@ async function boot(
       else if (url.endsWith('/projects')) payload = { ok: true, projects: options.projects || [] };
       else if (url.endsWith('/datasets')) payload = { ok: true, datasets: [] };
       else if (url.includes('/models/model-1')) {
-        payload = { ok: true, model: model(options.visualAssetBase), compatibility: [] };
+        payload = {
+          ok: true,
+          model: model(options.visualAssetBase, options.modelBuiltin),
+          compatibility: [],
+        };
       } else if (url.includes('/replay') && options.replayFrames) {
         const frames = options.replayFrames;
         if (options.replayGate) await options.replayGate;
@@ -1280,6 +1287,116 @@ describe('Sim2Real workbench DOM behavior', () => {
     expect(window.eval('__workbenchState.reviewedRecording')).toBeNull();
     expect(window.eval('currentTelemetry()')).toBeNull();
     expect(window.eval('__workbenchState.replay.frames.length')).toBe(0);
+    expect(errors).toEqual([]);
+  });
+
+  it('opens the canonical compatibility controls visibly from the existing-model homepage action', async () => {
+    const { window, requests, errors } = await boot({ modelBuiltin: false });
+    const doc = window.document;
+    const selector = doc.querySelector<HTMLSelectElement>('#model-select')!;
+    const button = doc.querySelector<HTMLButtonElement>('#contract-run-button')!;
+    const controls = selector.closest('.model-panel-select');
+    const details = doc.querySelector<HTMLDetailsElement>('#model-details-fold')!;
+    doc.querySelector<HTMLButtonElement>('#start-intent-model')?.click();
+    expect(doc.querySelector('#next-action-button')?.getAttribute('data-start-action')).toBe(
+      'model-check',
+    );
+    doc.querySelector<HTMLButtonElement>('#next-action-button')?.click();
+    await vi.waitFor(() => expect(doc.body.dataset.flowChild).toBe('prepare'));
+    expect(button.closest('[hidden]')).toBeNull();
+    expect(selector.closest('[hidden]')).toBeNull();
+    expect(button.closest('#contract-fold')).not.toBeNull();
+    expect(details.closest('#contract-fold')).not.toBeNull();
+    expect(doc.activeElement).toBe(button);
+    expect(doc.querySelector('#model-select')).toBe(selector);
+    expect(selector.closest('.model-panel-select')).toBe(controls);
+    expect(doc.querySelector('#model-details-fold')).toBe(details);
+    expect(details.open).toBe(false);
+    expect(doc.querySelector<HTMLDetailsElement>('.manifest-source-fold')?.open).toBe(false);
+    expect(doc.querySelector<HTMLDetailsElement>('.contract-guide-panel')?.open).toBe(false);
+    expect(doc.querySelectorAll('#model-select')).toHaveLength(1);
+    expect(doc.querySelectorAll('#contract-run-button')).toHaveLength(1);
+    expect(requests.filter((entry) => entry.method === 'POST')).toHaveLength(0);
+    expect(errors).toEqual([]);
+  });
+
+  it('returns the same compatibility controls across training modules without losing an in-flight check', async () => {
+    const { window, requests, errors } = await boot({ modelBuiltin: false });
+    const doc = window.document;
+    const selector = doc.querySelector<HTMLSelectElement>('#model-select')!;
+    const button = doc.querySelector<HTMLButtonElement>('#contract-run-button')!;
+    const controls = selector.closest('.model-panel-select')!;
+    const details = doc.querySelector<HTMLDetailsElement>('#model-details-fold')!;
+    const originalControlsParent = controls.parentNode;
+    const originalDetailsParent = details.parentNode;
+    const originalFetch = window.fetch;
+    let release!: (response: Response) => void;
+    window.fetch = vi.fn((input, init) => {
+      if (String(input).endsWith('/sim2real/runs') && init?.method === 'POST') {
+        requests.push({
+          url: String(input),
+          method: 'POST',
+          body: JSON.parse(String(init.body)),
+        });
+        return new Promise<Response>((resolve) => {
+          release = resolve;
+        });
+      }
+      return originalFetch(input, init);
+    });
+    doc.querySelector<HTMLButtonElement>('.sidebar [data-flow-child="prepare"]')?.click();
+    await vi.waitFor(() => expect(doc.body.dataset.flowChild).toBe('prepare'));
+    expect(button.closest('[hidden]')).toBeNull();
+    expect(details.open).toBe(false);
+    button.click();
+    expect(button.disabled).toBe(true);
+    expect(window.eval('__workbenchState.runSubmitting')).toBe(true);
+    doc.querySelector<HTMLButtonElement>('#train-tab-run')?.click();
+    expect(controls.parentNode).toBe(originalControlsParent);
+    expect(details.parentNode).toBe(originalDetailsParent);
+    expect(button.closest('[hidden]')).toBeNull();
+    expect(button.disabled).toBe(true);
+    doc.querySelector<HTMLButtonElement>('#train-tab-config')?.click();
+    doc.querySelector<HTMLButtonElement>('#train-tab-contract')?.click();
+    expect(button.closest('#contract-fold')).not.toBeNull();
+    expect(button.closest('[hidden]')).toBeNull();
+    expect(button.disabled).toBe(true);
+    button.click();
+    expect(requests.filter((entry) => entry.method === 'POST')).toHaveLength(1);
+    expect(doc.querySelectorAll('#model-select')).toHaveLength(1);
+    expect(doc.querySelectorAll('#contract-run-button')).toHaveLength(1);
+    expect(doc.querySelector('#model-select')).toBe(selector);
+    expect(doc.querySelector('#model-details-fold')).toBe(details);
+    release(
+      Response.json({
+        ok: true,
+        run: { id: 'contract-check', modelId: 'model-1', backend: 'contract', status: 'completed' },
+      }),
+    );
+    await vi.waitFor(() => expect(button.disabled).toBe(false));
+    expect(window.eval('__workbenchState.runSubmitting')).toBe(false);
+    expect(details.open).toBe(true);
+    expect(doc.querySelector<HTMLDetailsElement>('.manifest-source-fold')?.open).toBe(false);
+    expect(doc.querySelector<HTMLDetailsElement>('.contract-guide-panel')?.open).toBe(false);
+    expect(errors).toEqual([]);
+  });
+
+  it.each([
+    { name: 'empty model context', options: { productId: 'custom' } },
+    { name: 'guest session', options: { authRequired: true } },
+  ])('keeps compatibility checks disabled in prepare for $name', async ({ options }) => {
+    const { window, requests, errors } = await boot(options);
+    const doc = window.document;
+    doc.querySelector<HTMLButtonElement>('.sidebar [data-flow-child="prepare"]')?.click();
+    await vi.waitFor(() => expect(doc.body.dataset.flowChild).toBe('prepare'));
+    const button = doc.querySelector<HTMLButtonElement>('#contract-run-button')!;
+    expect(button.closest('#contract-fold')).not.toBeNull();
+    expect(button.closest('[hidden]')).toBeNull();
+    expect(button.disabled).toBe(true);
+    button.click();
+    expect(requests.filter((entry) => entry.method === 'POST')).toHaveLength(0);
+    expect(doc.querySelector<HTMLDetailsElement>('.manifest-source-fold')?.open).toBe(false);
+    expect(doc.querySelector<HTMLDetailsElement>('.contract-guide-panel')?.open).toBe(false);
     expect(errors).toEqual([]);
   });
 

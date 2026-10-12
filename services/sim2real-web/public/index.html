@@ -739,6 +739,12 @@
                 <span><strong>登记模型说明</strong><small>说明输入、输出和设备要求，再检查是否适用</small></span>
                 <span class="overview-environment-toggle" aria-hidden="true">展开 <i>⌄</i></span>
               </summary>
+              <div class="records-layout records-single">
+                <article class="panel model-panel" id="contract-model-check-panel" hidden>
+                  <div class="panel-heading panel-heading-lean" id="contract-model-check-select"><h2>检查已登记模型</h2></div>
+                  <p class="small-note" id="contract-model-check-hint" role="status">正在读取已登记模型…</p>
+                </article>
+              </div>
               <div class="records-layout">
                 <article class="panel manifest-panel">
                   <div class="panel-heading panel-heading-lean"><h2>登记模型说明</h2>
@@ -822,13 +828,14 @@
               <article class="panel model-panel" id="train-module-run-model" data-train-module="run" role="tabpanel" aria-labelledby="train-tab-run">
                 <div class="panel-heading panel-heading-lean"><h2>模型版本</h2>
                   <div class="model-panel-select">
-                    <select id="model-select" aria-label="选择模型"></select>
+                    <select id="model-select" aria-label="选择模型" disabled></select>
                     <button
                       class="button button-ghost button-small"
                       id="contract-run-button"
                       type="button"
+                      disabled
                     >
-                      校验契约
+                      检查模型兼容性
                     </button>
                   </div>
                 </div>
@@ -841,6 +848,7 @@
                     </span>
                   </summary>
                   <div class="model-details-body">
+                    <p class="small-note" id="model-contract-check-result" role="status" hidden></p>
                     <div class="model-summary" id="model-summary">
                       <div class="empty-inline">等待模型台账加载</div>
                     </div>

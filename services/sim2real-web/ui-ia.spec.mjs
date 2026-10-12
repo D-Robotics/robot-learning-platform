@@ -412,6 +412,26 @@ assert.match(html, /id="contract-fold"/, 'train page must expose the contract fo
 assert.match(html, /id="manifest-editor"/, 'manifest editor stays reachable inside the fold');
 assert.match(html, /id="contract-run-button"/, 'train page keeps the contract validation action');
 assert.match(
+  html,
+  /id="contract-fold"[\s\S]{0,1400}id="contract-model-check-panel"/,
+  'model preparation exposes registered-model compatibility controls',
+);
+assert.match(
+  html,
+  /id="contract-model-check-select"/,
+  'compatibility controls have a preparation slot',
+);
+assert.equal(
+  (html.match(/id="model-select"/g) || []).length,
+  1,
+  'model selection has one canonical control',
+);
+assert.equal(
+  (html.match(/id="contract-run-button"/g) || []).length,
+  1,
+  'compatibility checks have one canonical action',
+);
+assert.match(
   app,
   /querySelector\('\.next-card'\)\)\?\.after\(panel\)/,
   'agent suggestion panel anchors after the project workspace',
