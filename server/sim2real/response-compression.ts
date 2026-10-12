@@ -4,8 +4,8 @@
 // 两条路径：
 // 1. 静态文本资源（js/css/html/json/svg/geojson）：整文件 gzip，结果按
 //    (path, mtime) 缓存在内存。启动后每个文件只压缩一次，比逐请求流式
-//    压缩更快且行为可预测。仅当 URL 带 ?v= 版本参数或生产模式时缓存
-//    头允许长缓存。
+//    压缩更快且行为可预测。JS/CSS 与未压缩资源一样每次再验证；查询
+//    参数不是内容哈希，不能据此升级为 immutable。
 // 2. API JSON：请求级流式 gzip（res.end 拦截），healthz 这类小响应
 //    (<1KB) 自动跳过。
 //
@@ -126,14 +126,18 @@ async function serveCompressedStatic(
     response.setHeader('Vary', 'Accept-Encoding');
     const etag = buildGzipEtag(data);
     response.setHeader('ETag', etag);
-    // 与 express.static 的 setHeaders 策略对齐：HTML 入口必须可再验证，
-    // 才能及时拿到 cache-busted 资源（app.js?v=…）的新引用。
-    if (ext === '.html' || request.path.includes('/originbot-sim/')) {
-      response.setHeader('Cache-Control', 'no-cache');
-    } else if (request.query.v !== undefined) {
-      response.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
-    } else {
-      response.setHeader('Cache-Control', 'public, max-age=0');
+    // 压缩分支绕过 express.static，必须继承其 JS/CSS 再验证策略。
+    // 回滚/重发可能复用 ?v=，所以版本参数不能证明内容永久不变；已有
+    // Cache-Control 也不能被压缩层升级（例如上游设置的 no-store）。
+    if (!response.hasHeader('Cache-Control')) {
+      if (
+        ['.html', '.js', '.mjs', '.css'].includes(ext) ||
+        request.path.includes('/originbot-sim/')
+      ) {
+        response.setHeader('Cache-Control', 'no-cache');
+      } else {
+        response.setHeader('Cache-Control', 'public, max-age=0');
+      }
     }
     // no-cache 契约的"每次使用前再验证"必须真的省流量：If-None-Match 命中
     // 时回 304（缓存控制头保持一致，不发实体头与 body）。

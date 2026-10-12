@@ -10,8 +10,7 @@ import type { AddressInfo } from 'node:net';
 
 import { createResponseCompressionMiddleware } from './response-compression.js';
 
-// 只测中间件本身（JSON 压缩路径 + SSE 直通 + 小响应跳过）；静态文件路径
-// 依赖磁盘布局，由浏览器端到端验证覆盖。
+// 静态分支使用真实工作台资源，比较 identity/gzip 与 304 的缓存契约。
 // 注意：不能用裸 fetch 验证线上字节——undici 会自动补发 Accept-Encoding 并
 // 透明解压 gzip，这里用 http.get 控制真实的 wire 格式。
 
@@ -107,6 +106,68 @@ describe('response compression middleware', () => {
     expect(zlib.gunzipSync(res.body).length).toBeGreaterThan(0);
   });
 
+  it.each(['/app.js?v=65', '/app.css?v=53'])(
+    'revalidates %s in both encodings, including conditional 304 responses',
+    async (resource) => {
+      const base = await startApp(
+        express.static(PUBLIC_ROOT, {
+          setHeaders: (response, filePath) => {
+            if (/\.(js|css|mjs)$/.test(filePath)) {
+              response.setHeader('Cache-Control', 'no-cache');
+            }
+          },
+        }),
+      );
+      const identity = await httpGet(base + resource, 'identity');
+      const compressed = await httpGet(base + resource, 'gzip');
+      expect(identity.status).toBe(200);
+      expect(compressed.status).toBe(200);
+      expect(identity.headers['cache-control']).toBe('no-cache');
+      expect(compressed.headers['cache-control']).toBe(identity.headers['cache-control']);
+      expect(compressed.headers['content-encoding']).toBe('gzip');
+      expect(zlib.gunzipSync(compressed.body)).toEqual(identity.body);
+      for (const [encoding, response] of [
+        ['identity', identity],
+        ['gzip', compressed],
+      ] as const) {
+        const revalidated = await httpGet(base + resource, encoding, {
+          'if-none-match': String(response.headers.etag),
+        });
+        expect(revalidated.status).toBe(304);
+        expect(revalidated.headers['cache-control']).toBe('no-cache');
+        expect(revalidated.body.length).toBe(0);
+      }
+    },
+  );
+
+  it.each(['no-cache', 'no-store', 'private, max-age=0'])(
+    'preserves an existing %s cache policy when compressing a versioned resource',
+    async (cacheControl) => {
+      const app = express();
+      app.use((_request, response, next) => {
+        response.setHeader('Cache-Control', cacheControl);
+        next();
+      });
+      app.use(createResponseCompressionMiddleware());
+      app.use(express.static(PUBLIC_ROOT));
+      const base = await new Promise<string>((resolve) => {
+        server = app.listen(0, '127.0.0.1', () => {
+          resolve(`http://127.0.0.1:${(server!.address() as AddressInfo).port}`);
+        });
+      });
+      for (const encoding of ['identity', 'gzip']) {
+        const first = await httpGet(base + '/app.js?v=65', encoding);
+        expect(first.status).toBe(200);
+        expect(first.headers['cache-control']).toBe(cacheControl);
+        const revalidated = await httpGet(base + '/app.js?v=65', encoding, {
+          'if-none-match': String(first.headers.etag),
+        });
+        expect(revalidated.status).toBe(304);
+        expect(revalidated.headers['cache-control']).toBe(cacheControl);
+      }
+    },
+  );
+
   it('answers 304 with preserved cache headers when If-None-Match matches the static ETag', async () => {
     // no-cache 契约要求"每次使用前再验证"，但再验证必须真的省流量：
     // ETag 命中回 304（空 body、无实体头），未命中照常全量 200。
@@ -133,7 +194,7 @@ describe('response compression middleware', () => {
     expect(revalidated.body.length).toBe(0);
     expect(revalidated.headers['content-encoding']).toBeUndefined();
     expect(revalidated.headers['content-length']).toBeUndefined();
-    expect(revalidated.headers['cache-control']).toBe('public, max-age=0');
+    expect(revalidated.headers['cache-control']).toBe('no-cache');
     expect(String(revalidated.headers.vary)).toMatch(/accept-encoding/i);
     const stale = await httpGet(base + '/theme-boot.js', 'gzip', {
       'if-none-match': '"stale-etag"',
