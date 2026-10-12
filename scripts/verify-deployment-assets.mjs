@@ -717,6 +717,8 @@ const mujocoNginx = read('services/mujoco-web/install-nginx-route.py');
 assert.match(mujocoNginx, /location \/mujoco\//);
 assert.match(mujocoNginx, /proxy_pass http:\/\/127\.0\.0\.1:18100\//);
 assert.match(mujocoNginx, /location \^~ \/mujoco\/api\//);
+assert.match(mujocoNginx, /location = \/mujoco\/lab\/api \{/);
+assert.match(mujocoNginx, /location \^~ \/mujoco\/lab\/api\//);
 assert.match(mujocoNginx, /location \^~ \/sim2real\/mujoco\/api\//);
 assert.match(mujocoNginx, /proxy_pass http:\/\/127\.0\.0\.1:18102;/);
 assert.match(mujocoNginx, /proxy_pass http:\/\/127\.0\.0\.1:18102\/mujoco\/api\//);

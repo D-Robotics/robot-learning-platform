@@ -26,8 +26,9 @@ ROUTE = """
 """
 
 # Specific API locations take precedence over the existing /mujoco/ lab
-# location. Root paths retain /mujoco/api; legacy /sim2real paths strip only
-# their UI prefix. The Node bridge authenticates and signs the Python hop.
+# location. Root paths retain /mujoco/api; the lab's relative ./api and legacy
+# /sim2real paths strip their UI prefix. The Node bridge authenticates and
+# signs the Python hop, while lab pages and other static routes stay intact.
 API_ROUTE = """
     # BEGIN RDK_MUJOCO_AUTHENTICATED_API
     location = /mujoco/api {
@@ -43,6 +44,28 @@ API_ROUTE = """
     }
     location ^~ /mujoco/api/ {
         proxy_pass http://127.0.0.1:18102;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_buffering off;
+        proxy_read_timeout 20s;
+        client_max_body_size 2m;
+    }
+    location = /mujoco/lab/api {
+        proxy_pass http://127.0.0.1:18102/mujoco/api;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_buffering off;
+        proxy_read_timeout 20s;
+        client_max_body_size 2m;
+    }
+    location ^~ /mujoco/lab/api/ {
+        proxy_pass http://127.0.0.1:18102/mujoco/api/;
         proxy_http_version 1.1;
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
@@ -154,10 +177,12 @@ def api_routes_match(content: str) -> bool:
     expected = {
         ("=", "/mujoco/api"): "proxy_pass http://127.0.0.1:18102;",
         ("^~", "/mujoco/api/"): "proxy_pass http://127.0.0.1:18102;",
+        ("=", "/mujoco/lab/api"): "proxy_pass http://127.0.0.1:18102/mujoco/api;",
+        ("^~", "/mujoco/lab/api/"): "proxy_pass http://127.0.0.1:18102/mujoco/api/;",
         ("=", "/sim2real/mujoco/api"): "proxy_pass http://127.0.0.1:18102/mujoco/api;",
         ("^~", "/sim2real/mujoco/api/"): "proxy_pass http://127.0.0.1:18102/mujoco/api/;",
     }
-    scoped = [entry for entry in location_blocks(content) if entry[1].startswith(("/mujoco/api", "/sim2real/mujoco/api"))]
+    scoped = [entry for entry in location_blocks(content) if entry[1].startswith(("/mujoco/api", "/mujoco/lab/api", "/sim2real/mujoco/api"))]
     if len(scoped) != len(expected):
         return False
     for key, upstream in expected.items():
@@ -178,7 +203,7 @@ def main() -> None:
     if not block:
         raise SystemExit("expected rdkstudio HTTPS server block was not found or is unbalanced")
     locations = location_blocks(block)
-    existing_api = any(path.startswith(("/mujoco/api", "/sim2real/mujoco/api")) for _, path, _ in locations)
+    existing_api = any(path.startswith(("/mujoco/api", "/mujoco/lab/api", "/sim2real/mujoco/api")) for _, path, _ in locations)
     if existing_api and not api_routes_match(block):
         raise SystemExit(
             "an existing simulation API route does not match the managed block; "
