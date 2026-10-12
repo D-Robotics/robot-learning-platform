@@ -150,6 +150,31 @@ describe('board-station proxy bounded body handling', () => {
     expect((init.headers as Record<string, string>).origin).toBe('https://rdkstudio.d-robotics.cc');
   });
 
+  it.each(['status', 'move', 'gripper', 'stop', 'reset'])(
+    'allows the bounded arm %s endpoint through the Studio bridge',
+    async (operation) => {
+      delete process.env.RDK_SIM2REAL_BOARD_AGENT_URL;
+      process.env.RDK_SIM2REAL_STUDIO_EXEC_ORIGIN = 'http://127.0.0.1:18090';
+      const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+        new Response(
+          JSON.stringify({ output: JSON.stringify({ ok: true, stopRequested: false }) }),
+          {
+            status: 200,
+          },
+        ),
+      );
+      await expect(
+        stationAgentFetchWithStatus(`/v1/station/arm/${operation}`, {
+          method: operation === 'status' ? 'GET' : 'POST',
+          cookieHeader: 'studio_session=test',
+          deviceId: 'studio-device-2',
+        }),
+      ).resolves.toEqual({ status: 200, payload: { ok: true, stopRequested: false } });
+      const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+      expect(String(init.body)).toContain(`/v1/station/arm/${operation}`);
+    },
+  );
+
   it('rejects oversized or control-character cookies before the Studio bridge', async () => {
     delete process.env.RDK_SIM2REAL_BOARD_AGENT_URL;
     process.env.RDK_SIM2REAL_STUDIO_EXEC_ORIGIN = 'http://127.0.0.1:18090';

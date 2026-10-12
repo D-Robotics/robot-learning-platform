@@ -127,6 +127,10 @@ try {
     path.join('services', 'sim2real-web', 'local-training-worker.mjs'),
     path.join('dist-server', 'services', 'sim2real-web', 'local-training-worker.mjs'),
   );
+  copyFile(
+    path.join('services', 'sim2real-web', 'local-worker-runtime.mjs'),
+    path.join('dist-server', 'services', 'sim2real-web', 'local-worker-runtime.mjs'),
+  );
 
   copyFile(
     path.join('services', 'sim2real-web', 'local-board-agent.mjs'),

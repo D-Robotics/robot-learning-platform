@@ -40,6 +40,21 @@ const log=event=>fs.appendFileSync(process.env.MOCK_LOG,event+'\\n');
 const current=()=>fs.realpathSync(base+'/current');
 const candidate=()=>!current().endsWith('/previous');
 log(name+' '+args.join(' '));
+if(name==='mktemp') {
+  const directory=fs.mkdtempSync(path.join(fs.realpathSync(process.env.MOCK_STAGE_LINK),'release-'));
+  console.log(path.join(process.env.MOCK_STAGE_LINK,path.basename(directory)));
+  process.exit(0);
+}
+if(name==='npm'&&args[0]==='ci') {
+  if(args.includes('--prefix')||process.cwd()!==fs.realpathSync(process.cwd())||!fs.existsSync(path.join(process.cwd(),'dist-server'))) {
+    console.error('Production install must run from the staged release directory');
+    process.exit(1);
+  }
+  if(process.env.MOCK_FAIL==='npm') {
+    console.error('Production dependency installation failed');
+    process.exit(1);
+  }
+}
 if(name==='npm'||name==='node'||name==='scp'||name==='sleep') process.exit(0);
 if(name==='readlink') {
   console.log(args.at(-1).startsWith('/proc/')?process.env.MOCK_NODE:fs.realpathSync(args.at(-1)));
@@ -96,8 +111,12 @@ function scenario(name, options = {}) {
   const repo = path.join(home, 'repo');
   const remote = path.join(home, 'remote');
   const bin = path.join(home, 'bin');
+  const stageReal = path.join(home, 'staging-real');
+  const stageLink = path.join(home, 'staging-link');
   mkdirSync(path.join(repo, 'scripts'), { recursive: true });
   mkdirSync(bin, { recursive: true });
+  mkdirSync(stageReal);
+  invoke('ln', ['-s', stageReal, stageLink], repo);
   copyFileSync(source, path.join(repo, 'scripts/deploy-sim2real-production.sh'));
   writeFileSync(path.join(repo, '.gitignore'), 'dist-server/\n');
   writeFileSync(path.join(repo, 'package.json'), '{}\n');
@@ -129,7 +148,17 @@ function scenario(name, options = {}) {
   mkdirSync(path.join(remote, 'releases/previous/dist-server/engines'), { recursive: true });
   writeFileSync(path.join(remote, 'releases/previous/dist-server/engines/venv-lineage'), 'keep\n');
   invoke('ln', ['-s', 'releases/previous', path.join(remote, 'current')], repo);
-  for (const command of ['ssh', 'scp', 'npm', 'node', 'systemctl', 'curl', 'readlink', 'sleep']) {
+  for (const command of [
+    'ssh',
+    'scp',
+    'npm',
+    'node',
+    'systemctl',
+    'curl',
+    'readlink',
+    'sleep',
+    'mktemp',
+  ]) {
     executable(path.join(bin, command), commandDouble);
   }
   if (options.existing) {
@@ -146,6 +175,7 @@ function scenario(name, options = {}) {
     PATH: `${bin}${path.delimiter}${process.env.PATH}`,
     DEPLOY_HOST: `deployment-${name}@example.test`,
     MOCK_REMOTE: remote,
+    MOCK_STAGE_LINK: stageLink,
     MOCK_NODE: path.join(bin, 'node'),
     MOCK_LOG: logFile,
     MOCK_FAILED: path.join(home, 'failed-once'),
@@ -207,6 +237,14 @@ try {
       assert.match(check.commands, new RegExp(`systemctl restart ${unit}`));
     }
   }
+  const installFailure = scenario('failure-npm', { fail: 'npm' });
+  assert.notEqual(installFailure.result.status, 0);
+  assert.match(installFailure.result.stderr, /Production dependency installation failed/);
+  assert.equal(
+    realpathSync(path.join(installFailure.remote, 'current')),
+    path.join(installFailure.remote, 'releases/previous'),
+  );
+  assert.doesNotMatch(installFailure.commands, /scp |systemctl restart /);
   for (const cpu of [true, false]) {
     const check = scenario(cpu ? 'success-with-cpu' : 'success-without-cpu', {
       cpu,
@@ -247,7 +285,7 @@ try {
     }
   }
   console.log(
-    'Deployment safety: 11 isolated scenarios passed (dirty sources, immutable releases, rollback, Node, CPU compatibility).',
+    'Deployment safety: 12 isolated scenarios passed (dirty sources, immutable releases, dependency installation, rollback, Node, CPU compatibility).',
   );
 } finally {
   rmSync(root, { recursive: true, force: true });

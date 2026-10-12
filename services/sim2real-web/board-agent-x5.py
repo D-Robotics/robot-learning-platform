@@ -689,7 +689,8 @@ def _finite_number(value):
 # (default on: it never actuates). Every move is clamped to the workspace box
 # and speed cap; arm_sdk move_to is BLOCKING, so moves run on a worker thread
 # and an in-flight move cannot be interrupted — `arm/stop` refuses NEW
-# commands and best-effort returns home. The arm's own physical e-stop stays
+# commands until an explicit idle reset; it never starts a home move. The
+# arm's own physical e-stop stays
 # the final safety floor.
 ARM_ENABLED = os.environ.get("RDK_SIM2REAL_BOARD_AGENT_ENABLE_ARM", "").strip() == "1"
 ARM_PREFLIGHT_ENABLED = (
@@ -709,6 +710,10 @@ _arm_lock = threading.Lock()
 _arm_state = {
     "lastCmdAt": 0.0,
     "moving": False,
+    # Startup is also a safety boundary: restart must not silently reopen
+    # motion after a latched stop. Only an explicit idle reset arms commands.
+    "stopRequested": True,
+    "activeOperation": None,
     "lastPose": None,
     "lastError": None,
 }
@@ -745,27 +750,34 @@ def arm_capability():
     return capabilities
 
 
-def arm_status():
+def arm_status(read_pose=True):
     """Read-only pose snapshot. Never actuates."""
-    module = _arm_module()
-    if module is None or not ARM_PREFLIGHT_ENABLED:
-        return {"available": False, "reason": "arm-sdk-unavailable"}
-    try:
-        arm = module.connect(host=ARM_SDK_HOST, port=ARM_SDK_PORT)
-        pose = arm.get_pose()
+    with _arm_lock:
         status = {
-            "available": True,
             "mock": False,
             "enabled": ARM_ENABLED,
             "moving": _arm_state["moving"],
+            "stopRequested": _arm_state["stopRequested"],
+            "activeOperation": _arm_state["activeOperation"],
             "lastPose": _arm_state["lastPose"],
             "lastError": _arm_state["lastError"],
         }
+    module = _arm_module()
+    if module is None or not ARM_PREFLIGHT_ENABLED:
+        return {**status, "available": False, "reason": "arm-sdk-unavailable"}
+    # A stop response must not wait on another SDK call while move_to/close
+    # is blocking. Report the cached pose and the actual in-flight state.
+    if status["moving"] or not read_pose:
+        return {**status, "available": True}
+    try:
+        arm = module.connect(host=ARM_SDK_HOST, port=ARM_SDK_PORT)
+        pose = arm.get_pose()
+        status["available"] = True
         if isinstance(pose, dict):
             status["pose"] = pose
         return status
     except (OSError, RuntimeError) as error:
-        return {"available": False, "reason": f"arm-sdk-error: {error}"}
+        return {**status, "available": False, "reason": f"arm-sdk-error: {error}"}
 
 
 def _clamp_arm_target(x, y, z, speed):
@@ -791,6 +803,8 @@ def arm_move(x, y, z, speed):
     if not ARM_ENABLED:
         return False, "arm-disabled"
     with _arm_lock:
+        if _arm_state["stopRequested"]:
+            return False, "arm-stopped"
         if _arm_state["moving"]:
             return False, "move-in-progress"
         if time.time() - _arm_state["lastCmdAt"] < ARM_MIN_INTERVAL_MS / 1000.0:
@@ -800,6 +814,7 @@ def arm_move(x, y, z, speed):
             return False, reason
         _arm_state["lastCmdAt"] = time.time()
         _arm_state["moving"] = True
+        _arm_state["activeOperation"] = "move"
         _arm_state["lastError"] = None
 
     def _run():
@@ -810,13 +825,18 @@ def arm_move(x, y, z, speed):
             )
             pose = arm.get_pose()
             with _arm_lock:
-                _arm_state["moving"] = False
                 _arm_state["lastPose"] = pose if isinstance(pose, dict) else None
-        except (OSError, RuntimeError) as error:
+        except Exception as error:
+            with _arm_lock:
+                _arm_state["lastError"] = str(error)
+                _arm_state["stopRequested"] = True
+            _arm_log(f"move failed: {error}")
+        finally:
+            # Only the worker knows when the blocking SDK call has ended.
+            # Preserve a concurrent stop latch after successful completion.
             with _arm_lock:
                 _arm_state["moving"] = False
-                _arm_state["lastError"] = str(error)
-            _arm_log(f"move failed: {error}")
+                _arm_state["activeOperation"] = None
 
     threading.Thread(target=_run, daemon=True, name="arm-move").start()
     _arm_log(
@@ -838,8 +858,12 @@ def arm_gripper(action, value):
     if not _finite_number(value) or value <= 0:
         return False, "value-invalid", None
     with _arm_lock:
+        if _arm_state["stopRequested"]:
+            return False, "arm-stopped", None
         if _arm_state["moving"]:
             return False, "move-in-progress", None
+        _arm_state["moving"] = True
+        _arm_state["activeOperation"] = "gripper"
     try:
         arm = module.connect(host=ARM_SDK_HOST, port=ARM_SDK_PORT)
         if action == "close":
@@ -851,29 +875,44 @@ def arm_gripper(action, value):
         arm.gripper.open(width=width)
         _arm_log(f"gripper open width={width}")
         return True, None, {"width": width}
-    except (OSError, RuntimeError) as error:
+    except Exception as error:
         _arm_log(f"gripper failed: {error}")
         with _arm_lock:
             _arm_state["lastError"] = str(error)
+            _arm_state["stopRequested"] = True
         return False, "gripper-failed", None
+    finally:
+        with _arm_lock:
+            _arm_state["moving"] = False
+            _arm_state["activeOperation"] = None
 
 
 def arm_stop():
-    """Refuse new commands and best-effort return home. Mid-move interrupts
-    are NOT possible with a blocking arm_sdk — stated, not hidden."""
+    """Latch refusal of new commands without issuing any SDK motion.
+
+    Blocking SDK calls cannot be interrupted. Keep their in-flight state
+    honest until the executing worker returns; only arm_reset clears this
+    latch after that point. Physical e-stop is required for immediate halt.
+    """
     with _arm_lock:
         was_moving = _arm_state["moving"]
-        _arm_state["moving"] = False
-    module = _arm_module()
-    homed = False
-    if module is not None and not was_moving:
-        try:
-            module.connect(host=ARM_SDK_HOST, port=ARM_SDK_PORT).home()
-            homed = True
-        except (OSError, RuntimeError) as error:
-            _arm_log(f"home failed: {error}")
-    _arm_log(f"stop (wasMoving={was_moving} homed={homed})")
-    return {"ok": True, "wasMoving": was_moving, "homed": homed}
+        _arm_state["stopRequested"] = True
+    _arm_log(f"stop latched (wasMoving={was_moving})")
+    return {"ok": True, "wasMoving": was_moving, "moving": was_moving,
+            "stopRequested": True, "interrupted": False, "homed": False}
+
+
+def arm_reset():
+    """Clear the stop latch while idle and enabled; never calls the SDK."""
+    if not ARM_ENABLED:
+        return {"ok": False, "error": "arm-disabled"}
+    with _arm_lock:
+        if _arm_state["moving"]:
+            return {"ok": False, "error": "move-in-progress", "stopRequested": _arm_state["stopRequested"]}
+        _arm_state["stopRequested"] = False
+        _arm_state["lastError"] = None
+    _arm_log("stop latch reset")
+    return {"ok": True, "stopRequested": False, "moving": False}
 
 
 def drive_command(linear, angular, duration_sec):
@@ -2347,7 +2386,14 @@ class Handler(BaseHTTPRequestHandler):
                 return
             # Like drive stop: always accepted, even when the arm is disabled,
             # so the stop control never has a failure mode.
-            self._json(200, {**arm_stop(), "arm": arm_status()})
+            self._json(200, {**arm_stop(), "arm": arm_status(read_pose=False)})
+            return
+        if path == "/v1/station/arm/reset":
+            if not self._require_empty_body():
+                self._json(400, {"ok": False, "error": "BOARD_AGENT_BODY_NOT_ALLOWED"})
+                return
+            result = arm_reset()
+            self._json(200 if result["ok"] else 409, result)
             return
         if path == "/v1/station/drive/stop":
             if not self._require_empty_body():

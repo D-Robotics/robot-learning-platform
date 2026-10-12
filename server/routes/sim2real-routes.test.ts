@@ -1,13 +1,18 @@
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
+import { createHash } from 'node:crypto';
 import type { NextFunction, Request, Response } from 'express';
 
 import { afterEach, describe, expect, it } from 'vitest';
 
 import { BUILTIN_MICRODUCK_MODEL, type Sim2RealModelManifest } from '../../shared/sim2real.js';
 import type { Sim2RealAuthPort } from '../sim2real/sim2real-auth.js';
-import { reserveSim2RealRun, updateSim2RealComputeResource } from '../sim2real/sim2real-store.js';
+import {
+  createSim2RealRun,
+  reserveSim2RealRun,
+  updateSim2RealComputeResource,
+} from '../sim2real/sim2real-store.js';
 import { createSim2RealRouter, workspacePackageVersion } from './sim2real-routes.js';
 
 const roots: string[] = [];
@@ -175,6 +180,60 @@ function vector(size: number, value: number): number[] {
 }
 
 describe('Sim2Real HTTP routes', () => {
+  it('requires verified relay artifact bytes before accepting real completion', async () => {
+    const router = await fixture();
+    const run = await createSim2RealRun({
+      modelId: BUILTIN_MICRODUCK_MODEL.id,
+      backend: 'local',
+      status: 'running',
+      summary: 'relay fixture',
+      relayAgentUrl: 'http://127.0.0.1:19190/proxy',
+      externalRunId: 'worker-relay',
+    });
+    const bytes = Buffer.from('relay artifact bytes');
+    const sha256 = createHash('sha256').update(bytes).digest('hex');
+    const status = {
+      status: 'completed',
+      mock: false,
+      artifact: { artifactRef: 'artifact://relay/v1', sha256, deployable: false },
+    };
+    const pending = await invoke(router, 'post', '/api/sim2real/runs/:id/relay/sync', {
+      params: { id: run.id },
+      body: status,
+    });
+    expect(pending.statusCode).toBe(409);
+    expect(pending.body).toMatchObject({ error: 'SIM2REAL_RELAY_ARTIFACT_PENDING' });
+    const current = await invoke(router, 'get', '/api/sim2real/runs/:id', {
+      params: { id: run.id },
+    });
+    expect(current.body).toMatchObject({ run: { status: 'running' } });
+    const upload = await invoke(router, 'post', '/api/sim2real/runs/:id/relay/artifact', {
+      params: { id: run.id },
+      body: { sha256, bytesBase64: bytes.toString('base64') },
+      is: (() => false) as Request['is'],
+    });
+    expect(upload.statusCode).toBe(200);
+    const completed = await invoke(router, 'post', '/api/sim2real/runs/:id/relay/sync', {
+      params: { id: run.id },
+      body: status,
+    });
+    expect(completed.body).toMatchObject({
+      run: { status: 'completed', mock: false, artifact: { sha256 } },
+    });
+    const mockRun = await createSim2RealRun({
+      modelId: BUILTIN_MICRODUCK_MODEL.id,
+      backend: 'local',
+      status: 'running',
+      summary: 'mock relay fixture',
+      relayAgentUrl: 'http://127.0.0.1:19190/proxy',
+      externalRunId: 'worker-mock',
+    });
+    const mock = await invoke(router, 'post', '/api/sim2real/runs/:id/relay/sync', {
+      params: { id: mockRun.id },
+      body: { status: 'completed', mock: true },
+    });
+    expect(mock.body).toMatchObject({ run: { status: 'completed', mock: true } });
+  });
   it('persists dataset version, digest and validated run lineage', async () => {
     const router = await fixture();
     const run = await invoke(router, 'post', '/api/sim2real/runs', {

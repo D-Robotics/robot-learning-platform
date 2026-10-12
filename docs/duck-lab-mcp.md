@@ -84,7 +84,7 @@ MCP 客户端自行 spawn 本服务，进程环境即配置：
 | 设备连接 | `rdk_device_discover` `rdk_device_connect` `rdk_device_disconnect` | discover 只读 |
 | 板端状态 | `rdk_board_health` `rdk_board_onboarding_preflight` `rdk_board_station_status` `rdk_board_station_command` `rdk_board_policy_status` `rdk_board_policy_files` | 全部只读 |
 | 板端策略执行 | `rdk_board_policy_stage` `rdk_board_policy_load` `rdk_board_policy_start` `rdk_board_policy_reset` `rdk_board_stop` | 全部门控 |
-| D6A 机械臂 | `rdk_board_arm_status` `rdk_board_arm_move` `rdk_board_arm_gripper` `rdk_board_arm_stop` | status 只读，其余门控 |
+| D6A 机械臂 | `rdk_board_arm_status` `rdk_board_arm_move` `rdk_board_arm_gripper` `rdk_board_arm_stop` `rdk_board_arm_reset` | status 只读，其余门控；stop 锁存拒新，reset 仅空闲时复位、不致动 |
 | 官方知识 | `rdk_docs_search` `rdk_docs_manuals` `rdk_docs_toc` `rdk_docs_page` `rdk_web_search` | 全部只读 |
 | 连接诊断 | `rdk_platform_status`（健康、就绪、会话身份） | 只读 |
 

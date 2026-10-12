@@ -2189,13 +2189,14 @@
       telemetry-core.js must stay FIRST: app.js boots synchronously and its
       telemetry delegations resolve SimTelemetryCore at call time.
       ui-components.js publishes the shared SimUI primitives before app.js.
-      defer keeps that same DOM-ready execution order while letting all seven
+      defer keeps that same DOM-ready execution order while letting all eight
       downloads start in parallel during HTML parse instead of serially
       blocking the parser at body end.
     -->
     <script defer src="./telemetry-core.js?v=duck-lab-32"></script>
     <script defer src="./ui-components.js?v=ui-1"></script>
     <script defer src="./first-use-core.js?v=start-5"></script>
+    <script defer src="./relay-training.js?v=relay-1"></script>
     <script defer src="./app.js?v=duck-lab-67"></script>
     <script defer src="./visualization-enhancements.js?v=viz-1"></script>
     <script defer src="./agent-chat.js?v=agent-17"></script>

@@ -5,13 +5,15 @@ import { JSDOM } from 'jsdom';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), 'public');
-const [html, telemetrySource, componentSource, firstUseSource, appSource] = await Promise.all([
-  readFile(path.join(root, 'index.html'), 'utf8'),
-  readFile(path.join(root, 'telemetry-core.js'), 'utf8'),
-  readFile(path.join(root, 'ui-components.js'), 'utf8'),
-  readFile(path.join(root, 'first-use-core.js'), 'utf8'),
-  readFile(path.join(root, 'app.js'), 'utf8'),
-]);
+const [html, telemetrySource, componentSource, firstUseSource, relaySource, appSource] =
+  await Promise.all([
+    readFile(path.join(root, 'index.html'), 'utf8'),
+    readFile(path.join(root, 'telemetry-core.js'), 'utf8'),
+    readFile(path.join(root, 'ui-components.js'), 'utf8'),
+    readFile(path.join(root, 'first-use-core.js'), 'utf8'),
+    readFile(path.join(root, 'relay-training.js'), 'utf8'),
+    readFile(path.join(root, 'app.js'), 'utf8'),
+  ]);
 
 const openWindows: Array<InstanceType<typeof JSDOM>['window']> = [];
 
@@ -210,6 +212,12 @@ async function boot(
     replayGate?: Promise<void>;
     overviewUnauthorized?: boolean;
     visualAssetBase?: unknown;
+    transport?: (
+      url: string,
+      init: RequestInit | undefined,
+      body: unknown,
+    ) => Promise<Response | null>;
+
     productId?: string;
     authRequired?: boolean;
   } = {},
@@ -270,6 +278,8 @@ async function boot(
         }
       }
       requests.push({ url, method, body });
+      const intercepted = await options.transport?.(url, init, body);
+      if (intercepted) return intercepted;
       let payload: unknown;
       if (url.includes('/overview') && (options.overviewUnauthorized || options.authRequired))
         return new Response(
@@ -413,6 +423,7 @@ async function boot(
   window.eval(telemetrySource);
   window.eval(componentSource);
   window.eval(firstUseSource);
+  window.eval(relaySource);
   window.eval(appSource + '\nwindow.__workbenchState = state;');
 
   for (let attempt = 0; attempt < 50; attempt += 1) {
@@ -630,6 +641,176 @@ describe('Sim2Real workbench DOM behavior', () => {
       expect(errors).toEqual([]);
     },
   );
+  it('loads the relay transport before the app that resumes durable training runs', () => {
+    const relayTag = html.indexOf('src="./relay-training.js');
+    const appTag = html.indexOf('src="./app.js');
+    expect(relayTag).toBeGreaterThanOrEqual(0);
+    expect(relayTag).toBeLessThan(appTag);
+  });
+  it('recovers a claimed local-agent run after reopening and uploads before platform completion', async () => {
+    const relayRun = {
+      id: 'relay-reopen',
+      modelId: 'model-1',
+      backend: 'local',
+      status: 'running',
+      relayAgentUrl: 'http://127.0.0.1:19190/proxy',
+      externalRunId: 'worker-existing',
+      createdAt: '2026-09-10T00:00:00.000Z',
+    };
+    const { window, requests, errors } = await boot({
+      accountId: 'owner-one',
+      runs: [relayRun],
+      transport: async (url) => {
+        if (url === 'http://127.0.0.1:19190/proxy/runs/worker-existing') {
+          return Response.json({
+            status: 'completed',
+            artifact: { sha256: 'a'.repeat(64) },
+            mock: false,
+          });
+        }
+        if (url === 'http://127.0.0.1:19190/proxy/runs/worker-existing/artifact') {
+          return new Response(new Uint8Array([1, 2, 3]));
+        }
+        return null;
+      },
+    });
+    await vi.waitFor(() =>
+      expect(requests.some((call) => call.url.endsWith('/relay/artifact'))).toBe(true),
+    );
+    const uploadIndex = requests.findIndex((call) => call.url.endsWith('/relay/artifact'));
+    const completionIndex = requests.findIndex(
+      (call) =>
+        call.url.endsWith('/relay/sync') &&
+        (call.body as { status?: string })?.status === 'completed',
+    );
+    expect(completionIndex).toBeGreaterThan(uploadIndex);
+    expect(
+      requests.filter((call) => call.url === relayRun.relayAgentUrl && call.method === 'POST'),
+    ).toHaveLength(0);
+    expect(errors).toEqual([]);
+    window.dispatchEvent(new window.PageTransitionEvent('pagehide'));
+  });
+
+  it('recovers an unclaimed local-agent reservation with one stable worker submission', async () => {
+    const relayRun = {
+      id: 'relay-reserved',
+      modelId: 'model-1',
+      backend: 'local',
+      status: 'queued',
+      relayAgentUrl: 'http://127.0.0.1:19190/proxy',
+      taskId: 'walk',
+      training: { profile: 'smoke', numEnvs: 8, maxIterations: 2, video: false },
+      createdAt: '2026-09-10T00:00:00.000Z',
+    };
+    const { window, requests } = await boot({
+      accountId: 'owner-one',
+      runs: [relayRun],
+      transport: async (url, init) => {
+        if (url === `${relayRun.relayAgentUrl}/train` && init?.method === 'POST')
+          return Response.json({ runId: 'worker-recovered' });
+        if (url === `${relayRun.relayAgentUrl}/runs/worker-recovered`)
+          return Response.json({ status: 'running' });
+        return null;
+      },
+    });
+    await vi.waitFor(() =>
+      expect(requests.some((call) => call.url.endsWith('/relay/claim'))).toBe(true),
+    );
+    await window.eval('loadOverview({ quiet: true })');
+    const submissions = requests.filter(
+      (call) => call.url === `${relayRun.relayAgentUrl}/train` && call.method === 'POST',
+    );
+    expect(submissions).toHaveLength(1);
+    expect((submissions[0].body as { idempotencyKey?: string }).idempotencyKey).toBe(
+      'relay-relay-reserved',
+    );
+    window.dispatchEvent(new window.PageTransitionEvent('pagehide'));
+  });
+
+  it('stops browser relay on pagehide without cancelling worker training', async () => {
+    let resolveWorker!: (response: Response) => void;
+    let workerSignal: AbortSignal | null | undefined;
+    const { window, requests } = await boot({
+      accountId: 'owner-one',
+      runs: [
+        {
+          id: 'relay-closing',
+          modelId: 'model-1',
+          backend: 'local',
+          status: 'running',
+          relayAgentUrl: 'http://127.0.0.1:19190/proxy',
+          externalRunId: 'worker-still-running',
+        },
+      ],
+      transport: async (url, init) => {
+        if (url === 'http://127.0.0.1:19190/proxy/runs/worker-still-running') {
+          workerSignal = init?.signal;
+          return new Promise<Response>((resolve) => {
+            resolveWorker = resolve;
+          });
+        }
+        return null;
+      },
+    });
+    expect(workerSignal?.aborted).toBe(false);
+    window.dispatchEvent(new window.PageTransitionEvent('pagehide'));
+    expect(workerSignal?.aborted).toBe(true);
+    resolveWorker(
+      Response.json({ status: 'completed', artifact: { sha256: 'a'.repeat(64) }, mock: false }),
+    );
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(
+      requests.some(
+        (call) =>
+          call.url.includes('/relay/sync') ||
+          call.url.includes('/relay/artifact') ||
+          call.url.includes('/cancel'),
+      ),
+    ).toBe(false);
+  });
+
+  it('stops the former owner relay immediately when the session identity changes', async () => {
+    let resolveWorker!: (response: Response) => void;
+    let workerSignal: AbortSignal | null | undefined;
+    const fixture = {
+      accountId: 'owner-one',
+      runs: [
+        {
+          id: 'relay-owner-switch',
+          modelId: 'model-1',
+          backend: 'local',
+          status: 'running',
+          relayAgentUrl: 'http://127.0.0.1:19190/proxy',
+          externalRunId: 'worker-private',
+        },
+      ],
+      transport: async (url: string, init: RequestInit | undefined) => {
+        if (url === 'http://127.0.0.1:19190/proxy/runs/worker-private') {
+          workerSignal = init?.signal;
+          return new Promise<Response>((resolve) => {
+            resolveWorker = resolve;
+          });
+        }
+        return null;
+      },
+    };
+    const { window, requests, errors } = await boot(fixture);
+    expect(workerSignal?.aborted).toBe(false);
+    fixture.accountId = 'owner-two';
+    await window.eval('refreshSessionMenu()');
+    expect(workerSignal?.aborted).toBe(true);
+    resolveWorker(
+      Response.json({ status: 'completed', artifact: { sha256: 'a'.repeat(64) }, mock: false }),
+    );
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(
+      requests.some(
+        (call) => call.url.includes('/relay/sync') || call.url.includes('/relay/artifact'),
+      ),
+    ).toBe(false);
+    expect(errors).toEqual([]);
+  });
+
   it('shows the actual MicroDuck installation path when public guest health reports missing resources', async () => {
     const { window } = await boot({ authRequired: true });
     window.eval(

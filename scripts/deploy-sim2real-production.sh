@@ -128,7 +128,10 @@ cp -R dist-server "$STAGING/dist-server"
 # （含历史中断构建留下的 engines.*.tmp 残留）。
 rm -rf "$STAGING/dist-server/engines" "$STAGING"/dist-server/engines.*.tmp
 cp package.json package-lock.json "$STAGING/"
-npm ci --omit=dev --no-audit --no-fund --prefix "$STAGING" >/dev/null 2>&1
+# macOS /var aliases /private/var: npm 11 treats a --prefix alias as a linked
+# package absent from the lock. Install from the release's physical cwd instead;
+# retain errors in deployment output when installation fails before publication.
+(cd "$STAGING" && npm ci --omit=dev --no-audit --no-fund)
 # mac 上的 npm ci 只装 darwin 平台变体；linux 运行时原生依赖（DSH flock、
 # ripgrep、sharp）不补齐则生产端 require 直接失败（2026-10-10 事故）。
 node scripts/reify-deployment-optional-deps.mjs --target "$STAGING"
