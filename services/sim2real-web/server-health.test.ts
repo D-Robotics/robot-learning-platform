@@ -7,6 +7,8 @@ import { fileURLToPath } from 'node:url';
 import { gunzipSync } from 'node:zlib';
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { JSDOM } from 'jsdom';
+import express from 'express';
 
 import {
   createSim2RealWebApp,
@@ -22,6 +24,10 @@ import {
   SIM2REAL_HTTP_REQUEST_TIMEOUT_MS,
 } from './server.js';
 import { flushSim2RealAudit } from '../../server/sim2real/audit-log.js';
+import { createSim2RealRun } from '../../server/sim2real/sim2real-store.js';
+import { BUILTIN_MICRODUCK_MODEL } from '../../shared/sim2real.js';
+import { createSim2RealRouter } from '../../server/routes/sim2real-routes.js';
+import { studioSsoAuth } from './studio-sso-auth.js';
 import { askDsh as mockedAskDsh, DshAgentFailure } from '../../server/agent-runtime/dsh-runtime.js';
 
 // The route test below swaps the agent loop entry for a rejecting stub, so
@@ -43,12 +49,15 @@ vi.mock('../../server/agent-runtime/dsh-runtime.js', async (importOriginal) => {
 
 // A verified-principal seam for identity response tests. This exists only in
 // this private HTTP fixture; it does not infer production identity from headers.
+const identityFixture = vi.hoisted(() => ({ multiUser: false }));
 vi.mock('./studio-sso-auth.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('./studio-sso-auth.js')>();
   return {
     ...actual,
     studioSsoAuth: {
       ...actual.studioSsoAuth,
+      isMultiUserDeployment: () =>
+        identityFixture.multiUser || actual.studioSsoAuth.isMultiUserDeployment(),
       resolvePrincipal: (request: import('express').Request) => {
         const session = request.headers['x-verified-session-fixture'];
         if (session === 'alice-session' || session === 'bob-session') {
@@ -70,6 +79,7 @@ const openServers: Array<ReturnType<ReturnType<typeof createSim2RealWebApp>['lis
 const upstreamServers: http.Server[] = [];
 
 afterEach(async () => {
+  identityFixture.multiUser = false;
   for (const key of Object.keys(process.env)) {
     if (!(key in originalEnv)) delete process.env[key];
   }
@@ -146,6 +156,109 @@ async function rawScript(
 }
 
 describe('standalone Sim2Real health and optional simulator surface', () => {
+  it.each(['', '/robotics-learning', '/sim2real'])(
+    'refreshes the real overlay policy list through its owner-scoped mounted HTTP API (%s)',
+    async (mount) => {
+      identityFixture.multiUser = true;
+      let { baseUrl } = await fixture();
+      {
+        // A real platform mount, with no root API when the workbench has a prefix.
+        // Wrong namespace requests get Express's real 404, without a URL stub.
+        const app = express();
+        app.use(mount || '/', createSim2RealRouter({ auth: studioSsoAuth }));
+        const server = app.listen(0, '127.0.0.1');
+        openServers.push(server);
+        await new Promise<void>((resolve, reject) => {
+          server.once('listening', () => resolve());
+          server.once('error', reject);
+        });
+        baseUrl = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+      }
+      const overlay = await fs.readFile(
+        fileURLToPath(new URL('../mujoco-web/microduck-community-overlay.js', import.meta.url)),
+        'utf8',
+      );
+      const seed = (owner: string) =>
+        createSim2RealRun(
+          {
+            modelId: BUILTIN_MICRODUCK_MODEL.id,
+            taskId: 'walk',
+            backend: 'local',
+            status: 'completed',
+            mock: false,
+            summary: 'owned policy fixture',
+            artifact: {
+              artifactId: `${owner}-policy`,
+              artifactRef: `artifact://fixture/${owner}`,
+              kind: 'compiled',
+              format: 'onnx',
+              sha256: 'a'.repeat(64),
+              deployable: false,
+            },
+          },
+          owner,
+        );
+      const alice = await seed('account-alice');
+      const refresh = async (session?: string) => {
+        const dom = new JSDOM('<!doctype html><html><head></head><body>Simulation</body></html>', {
+          url: `${baseUrl}${mount}/mujoco/microduck/`,
+          runScripts: 'dangerously',
+          pretendToBeVisual: true,
+        });
+        const requests: Array<{ path: string; status: number }> = [];
+        Object.assign(dom.window, {
+          matchMedia: () => ({ matches: false }),
+          rl: { loadCustomPolicy: async () => {} },
+          fetch: async (url: string, options: RequestInit) => {
+            const headers = new Headers(options.headers);
+            if (session) headers.set('x-verified-session-fixture', session);
+            const target = new URL(String(url), baseUrl);
+            const response = await fetch(target, { ...options, headers });
+            requests.push({ path: target.pathname, status: response.status });
+            return response;
+          },
+        });
+        try {
+          dom.window.eval(overlay);
+          await vi.waitFor(() => expect(Reflect.get(dom.window, '__microduckPolicy')).toBeTruthy());
+          const panel = Reflect.get(dom.window, '__microduckPolicy') as {
+            refresh(): Promise<void>;
+            runs: Array<{ id: string }>;
+          };
+          await panel.refresh();
+          return {
+            requests,
+            ids: Array.from(panel.runs, (run) => run.id),
+            status: dom.window.document.querySelector('[data-policy-status]')?.textContent,
+            failed: dom.window.document
+              .querySelector('#rdk-microduck-policy')
+              ?.classList.contains('is-error'),
+          };
+        } finally {
+          dom.window.close();
+        }
+      };
+      const empty = await refresh('bob-session');
+      expect(empty.requests).toEqual([{ path: `${mount}/api/sim2real/runs`, status: 200 }]);
+      expect(empty.ids).toEqual([]);
+      expect(empty.status).toBe('暂无可用策略');
+      expect(empty.failed).toBe(false);
+      const bob = await seed('account-bob');
+      const aliceList = await refresh('alice-session');
+      const bobList = await refresh('bob-session');
+      expect(aliceList.requests).toEqual([{ path: `${mount}/api/sim2real/runs`, status: 200 }]);
+      expect(bobList.requests).toEqual([{ path: `${mount}/api/sim2real/runs`, status: 200 }]);
+      expect(aliceList.ids).toEqual([alice.id]);
+      expect(bobList.ids).toEqual([bob.id]);
+      const anonymous = await refresh();
+      expect(anonymous.requests).toEqual([{ path: `${mount}/api/sim2real/runs`, status: 401 }]);
+      expect(anonymous.ids).toEqual([]);
+      expect(anonymous.status).toContain('401');
+      expect(anonymous.failed).toBe(true);
+      await flushSim2RealAudit();
+    },
+  );
+
   it('returns stable account IDs for authenticated users with the same display name', async () => {
     const { baseUrl } = await fixture();
     const session = async (id: string) => {

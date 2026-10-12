@@ -128,7 +128,9 @@ async function advance() {
     // A step already accepted by the backend remains a real recorded transition
     // even if the workbench was hidden while its response was in flight.
     if (transition.recorded && transition.rows === rows) {
-      const sample = recordingSample(before, next, action), budget = recordingAppendBudget(sample, recordingBytes);
+      const sample = recordingSample(before, next, action);
+      if (typeof next.metrics?.fallen === 'boolean') sample.fall = next.metrics.fallen;
+      const budget = recordingAppendBudget(sample, recordingBytes);
       if (budget.accepted) { rows.push(sample); recordingBytes = budget.bytes; }
       if (!budget.accepted || rows.length >= 30000) stopRecording(!budget.accepted ? '已达到 30 MiB 录制上限，已保存此前完整帧。' : '已达到 30,000 帧录制上限，轨迹已保存。');
     }

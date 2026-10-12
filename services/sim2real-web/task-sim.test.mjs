@@ -326,9 +326,9 @@ async function taskRuntime(runtimeOptions = {}) {
     sessionId: 'task-1',
     time: count * 0.02,
     stepCount: count,
-    done: false,
+    done: count >= (runtimeOptions.terminalStep ?? Infinity),
     reward: 1,
-    metrics: { fallen: false },
+    metrics: runtimeOptions.metricsAtStep?.(count) ?? { fallen: false },
     observation: Array(61).fill(count),
     qpos: [count],
     qvel: [0],
@@ -392,6 +392,63 @@ async function taskRuntime(runtimeOptions = {}) {
     },
   };
 }
+
+test('a recorded fall reaches the workbench telemetry summary on the actual terminal frame', async () => {
+  const h = await taskRuntime({
+    terminalStep: 20,
+    metricsAtStep: (step) => ({ tilt: step >= 20 ? 1.026 : 0.1, fallen: step >= 20 }),
+  });
+  try {
+    h.window.document.getElementById('record').click();
+    for (let step = 0; step < 20; step++) await h.tick();
+    const text = h.window.__rdkTaskRecorder.getText();
+    const [header, ...samples] = text.trim().split('\n').map(JSON.parse);
+    assert.equal(header.source, 'engine-task-simulation');
+    assert.equal(samples.length, 20);
+    assert.ok(samples.slice(0, -1).every((sample) => sample.fall === false));
+    assert.equal(samples.at(-1).t, 0.4);
+    assert.equal(samples.at(-1).metrics.fallen, true);
+    assert.equal(samples.at(-1).fall, true);
+    assert.equal(samples.at(-1).done, true);
+    h.window.eval(await readFile(new URL('./public/telemetry-core.js', import.meta.url), 'utf8'));
+    const parsed = h.window.SimTelemetryCore.parseTelemetryText(text);
+    assert.equal(parsed.summary.fallCount, 1);
+    assert.equal(parsed.summary.doneCount, 1);
+    assert.equal(parsed.source, 'engine-task-simulation');
+  } finally {
+    h.close();
+  }
+});
+
+test('an episode ending without a fall keeps its recorded fall flag false', async () => {
+  const h = await taskRuntime({ terminalStep: 2 });
+  try {
+    h.window.document.getElementById('record').click();
+    await h.tick();
+    await h.tick();
+    const [, ...samples] = h.window.__rdkTaskRecorder.getText().trim().split('\n').map(JSON.parse);
+    assert.equal(samples.at(-1).done, true);
+    assert.equal(samples.at(-1).fall, false);
+    assert.ok(samples.every((sample) => sample.fall === false));
+  } finally {
+    h.close();
+  }
+});
+
+test('recording does not invent a fall flag from missing or non-boolean engine metrics', async () => {
+  for (const metrics of [{}, { fallen: 'true' }, { fallen: 1 }]) {
+    const h = await taskRuntime({ terminalStep: 1, metricsAtStep: () => metrics });
+    try {
+      h.window.document.getElementById('record').click();
+      await h.tick();
+      const [, sample] = h.window.__rdkTaskRecorder.getText().trim().split('\n').map(JSON.parse);
+      assert.equal(sample.done, true);
+      assert.equal(Object.hasOwn(sample, 'fall'), false);
+    } finally {
+      h.close();
+    }
+  }
+});
 
 test('hiding a task scene preserves its accepted recorded step while suppressing stale rendering', async () => {
   const h = await taskRuntime();

@@ -2268,6 +2268,163 @@ describe('Sim2Real workbench DOM behavior', () => {
     expect(errors).toEqual([]);
   });
 
+  it('waits for the new scene document before sending advanced task context or accepting old-scene failure', async () => {
+    const { window, errors } = await boot();
+    const doc = window.document;
+    const select = doc.querySelector<HTMLSelectElement>('#task-select')!;
+    const frame = doc.querySelector<HTMLIFrameElement>('#simulator-frame')!;
+    const oldDocument = frame.contentDocument;
+    const oldSource = frame.contentWindow!;
+    // A browser preserves its WindowProxy and old Document until navigation
+    // commits; jsdom swaps them immediately when src changes. Model that gap.
+    const documentGetter = vi.spyOn(frame, 'contentDocument', 'get').mockReturnValue(oldDocument);
+    const sourceGetter = vi.spyOn(frame, 'contentWindow', 'get').mockReturnValue(oldSource);
+    const oldMessages = vi.spyOn(oldSource, 'postMessage');
+    select.value = 'balance-stilts';
+    select.dispatchEvent(new window.Event('change', { bubbles: true }));
+    expect(new URL(frame.src).pathname).toBe('/sim2real/task-sim/');
+    // A queued load event for the old document must not release this gate.
+    frame.dispatchEvent(new window.Event('load'));
+    window.dispatchEvent(
+      new window.MessageEvent('message', {
+        origin: window.location.origin,
+        source: oldSource as never,
+        data: {
+          type: 'rdk-simulator-task-state',
+          taskId: 'balance-stilts',
+          sceneId: 'microduck-single-duck-v1',
+          phase: 'failed',
+          message: '当前单鸭仿真未装载该任务场景',
+        },
+      }),
+    );
+    expect(doc.querySelector('#simulator-live-text')?.textContent).toBe('正在连接任务场景');
+    expect(doc.querySelector('#simulator-live-label')?.classList.contains('is-ready')).toBe(false);
+    expect(
+      oldMessages.mock.calls.some(
+        ([message]) => message.type === 'rdk-simulator-task' && message.taskId === 'balance-stilts',
+      ),
+    ).toBe(false);
+    documentGetter.mockRestore();
+    sourceGetter.mockRestore();
+    const nextSource = frame.contentWindow!;
+    const nextMessages = vi.spyOn(nextSource, 'postMessage');
+    // A fast engine can report readiness before the parent iframe load event.
+    // That report belongs to the new document and must not be swallowed.
+    const report = (phase: string) =>
+      window.dispatchEvent(
+        new window.MessageEvent('message', {
+          origin: window.location.origin,
+          source: nextSource as never,
+          data: {
+            type: 'rdk-simulator-task-state',
+            taskId: 'balance-stilts',
+            phase,
+            controlHz: 50,
+          },
+        }),
+      );
+    report('ready');
+    expect(doc.querySelector('#simulator-live-text')?.textContent).toBe('任务场景已就绪');
+    frame.dispatchEvent(new window.Event('load'));
+    expect(
+      nextMessages.mock.calls.some(
+        ([message]) => message.type === 'rdk-simulator-task' && message.taskId === 'balance-stilts',
+      ),
+    ).toBe(true);
+    report('failed');
+    expect(doc.querySelector('#simulator-live-text')?.textContent).toBe('场景连接失败');
+    expect(errors).toEqual([]);
+  });
+
+  it('sends supported task changes immediately when the basic scene document stays loaded', async () => {
+    const { window, errors } = await boot();
+    const doc = window.document;
+    const frame = doc.querySelector<HTMLIFrameElement>('#simulator-frame')!;
+    frame.dispatchEvent(new window.Event('load'));
+    const source = frame.contentWindow!;
+    const messages = vi.spyOn(source, 'postMessage');
+    const previousSrc = frame.src;
+    const select = doc.querySelector<HTMLSelectElement>('#task-select')!;
+    select.value = 'turn';
+    select.dispatchEvent(new window.Event('change', { bubbles: true }));
+    expect(frame.src).toBe(previousSrc);
+    expect(
+      messages.mock.calls.some(
+        ([message]) => message.type === 'rdk-simulator-task' && message.taskId === 'turn',
+      ),
+    ).toBe(true);
+    expect(errors).toEqual([]);
+  });
+
+  it('releases cross-origin scene navigation on load without accepting a foreign-origin readiness message', async () => {
+    const { window, errors } = await boot({
+      transport: async (url) => {
+        if (!url.includes('/overview')) return null;
+        const snapshot = overview();
+        snapshot.integrations.simulator.browser = {
+          ...snapshot.integrations.simulator.browser,
+          state: 'redirect',
+          entryUrl: 'https://robot-view.example/microduck/',
+        };
+        return Response.json(snapshot);
+      },
+    });
+    const doc = window.document;
+    const frame = doc.querySelector<HTMLIFrameElement>('#simulator-frame')!;
+    const postMessage = vi.fn();
+    const foreignSource = {
+      postMessage,
+      get location(): never {
+        throw new window.DOMException('Cross-origin document', 'SecurityError');
+      },
+    };
+    vi.spyOn(frame, 'contentDocument', 'get').mockReturnValue(null);
+    vi.spyOn(frame, 'contentWindow', 'get').mockReturnValue(foreignSource as never);
+    window.eval('syncSimulatorTask()');
+    expect(postMessage).not.toHaveBeenCalled();
+    frame.dispatchEvent(new window.Event('load'));
+    expect(postMessage).toHaveBeenCalledWith(
+      { type: 'rdk-simulator-task', taskId: 'walk' },
+      'https://robot-view.example',
+    );
+    window.dispatchEvent(
+      new window.MessageEvent('message', {
+        origin: 'https://robot-view.example',
+        source: foreignSource as never,
+        data: { type: 'rdk-simulator-task-state', taskId: 'walk', phase: 'ready' },
+      }),
+    );
+    expect(doc.querySelector('#simulator-live-label')?.classList.contains('is-ready')).toBe(false);
+    expect(errors).toEqual([]);
+  });
+
+  it('keeps a same-origin navigation pending when a load still exposes no document and the old URL', async () => {
+    const { window, errors } = await boot();
+    const doc = window.document;
+    const frame = doc.querySelector<HTMLIFrameElement>('#simulator-frame')!;
+    const oldSource = frame.contentWindow!;
+    vi.spyOn(frame, 'contentDocument', 'get').mockReturnValue(null);
+    vi.spyOn(frame, 'contentWindow', 'get').mockReturnValue(oldSource);
+    const messages = vi.spyOn(oldSource, 'postMessage');
+    const select = doc.querySelector<HTMLSelectElement>('#task-select')!;
+    select.value = 'balance-stilts';
+    select.dispatchEvent(new window.Event('change', { bubbles: true }));
+    frame.dispatchEvent(new window.Event('load'));
+    window.dispatchEvent(
+      new window.MessageEvent('message', {
+        origin: window.location.origin,
+        source: oldSource as never,
+        data: { type: 'rdk-simulator-task-state', taskId: 'balance-stilts', phase: 'failed' },
+      }),
+    );
+    expect(doc.querySelector('#simulator-live-text')?.textContent).toBe('正在连接任务场景');
+    expect(messages.mock.calls.some(([message]) => message.type === 'rdk-simulator-task')).toBe(
+      false,
+    );
+    expect(errors).toEqual([]);
+  });
+
   it('passes the selected model visual directory to the engine scene while preserving its task API', async () => {
     const { window, errors } = await boot({ visualAssetBase: '/sim2real/visual-models/my-duck/' });
     const select = window.document.querySelector<HTMLSelectElement>('#task-select')!;

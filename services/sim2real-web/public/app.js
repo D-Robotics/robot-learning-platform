@@ -458,6 +458,8 @@ function wireSimulatorFrameLifecycle(frame) {
   if (!frame) return;
   frame.addEventListener('load', () => {
     if ($(frame.id) !== frame || !frame.getAttribute('src') || frame.getAttribute('src') === 'about:blank') return;
+    if (!simulatorFrameLoadCommitted(frame)) return;
+    simulatorFrameNavigations.delete(frame);
     syncSimulatorTask(frame);
     simulatorMessage({ type: 'rdk-simulator-active', active: document.body.dataset.activeView === (frame.id === 'replay-scene-frame' ? 'evaluate' : 'simulate') }, frame);
   });
@@ -2901,6 +2903,33 @@ function taskContextNote(task) {
 }
 
 const simulatorTaskState = { taskId: '', phase: 'loading', message: '', controlHz: null };
+const simulatorFrameNavigations = new WeakMap();
+
+function setSimulatorFrameSource(frame, source) {
+  // src changes before navigation commits. Its WindowProxy can still address
+  // the old scene, which must not receive the new scene's task command.
+  simulatorFrameNavigations.set(frame, frame.contentDocument);
+  frame.setAttribute('src', source);
+}
+
+function simulatorFrameIsNavigating(frame) {
+  if (!frame || !simulatorFrameNavigations.has(frame)) return false;
+  const current = frame.contentDocument;
+  return !current || current === simulatorFrameNavigations.get(frame);
+}
+
+function simulatorFrameLoadCommitted(frame) {
+  if (!simulatorFrameNavigations.has(frame)) return true;
+  const current = frame.contentDocument;
+  if (current) return current !== simulatorFrameNavigations.get(frame);
+  try {
+    return frame.contentWindow?.location.href === frame.src;
+  } catch (error) {
+    // Cross-origin documents keep contentDocument null; their successful load
+    // is the commit signal. Origin checks on incoming messages stay unchanged.
+    return error?.name === 'SecurityError';
+  }
+}
 
 function taskSimulatorUrl(taskId) {
   const entry = safeLaunchUrl(state.overview?.integrations?.simulator?.browser?.entryUrl) || SIMULATOR_PATH;
@@ -2933,6 +2962,7 @@ function simulatorMessage(payload, frame = activeSimulatorFrame()) {
 
 function syncSimulatorTask(frame = activeSimulatorFrame()) {
   if (!['microduck', 'originbot'].includes(state.productId)) return;
+  if (simulatorFrameIsNavigating(frame)) return;
   simulatorMessage({ type: 'rdk-simulator-task', taskId: state.taskId }, frame);
 }
 
@@ -2958,7 +2988,7 @@ function isSimulatorMessage(event) {
 }
 
 function handleSimulatorTaskState(event) {
-  if (!isSimulatorMessage(event)) return;
+  if (!isSimulatorMessage(event) || simulatorFrameIsNavigating(activeSimulatorFrame())) return;
   const data = event.data;
   if (data?.type !== 'rdk-simulator-task-state' || data.taskId !== state.taskId) return;
   if (!['loading', 'ready', 'failed'].includes(data.phase)) return;
@@ -3771,7 +3801,7 @@ function renderIntegrations() {
         : appRelativePath(SIMULATOR_PATH);
   const microduckMissing = !engineTaskScene && microduckProduct && browserSurface?.state === 'missing';
   if (simulatorFrame && simulatorFrame.getAttribute('src') !== browserEntry) {
-    simulatorFrame.setAttribute('src', browserEntry);
+    setSimulatorFrameSource(simulatorFrame, browserEntry);
   }
   if (simulatorFrame && simulatorFrame.dataset.taskId !== state.taskId) {
     simulatorFrame.dataset.taskId = state.taskId;
@@ -6580,7 +6610,7 @@ function renderReplayScene(loaded) {
     simulatorTaskState.taskId = taskId;
     simulatorTaskState.phase = 'loading';
     state.replay.pendingFrame = true;
-    frame.setAttribute('src', src);
+    setSimulatorFrameSource(frame, src);
   }
 }
 
