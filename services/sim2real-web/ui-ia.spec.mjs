@@ -74,6 +74,36 @@ assert.match(
 const telemetryCore = fs.readFileSync(path.join(here, 'public', 'telemetry-core.js'), 'utf8');
 const coreTag = html.indexOf('telemetry-core.js');
 const appTag = html.indexOf('./app.js');
+const componentTag = html.indexOf('./ui-components.js');
+const firstUseTag = html.indexOf('./first-use-core.js');
+assert.ok(firstUseTag >= 0 && firstUseTag < appTag, 'first-use guidance must load before app.js');
+for (const intent of ['experience', 'device', 'model']) {
+  assert.match(
+    html,
+    new RegExp(`data-start-intent="${intent}"`),
+    `homepage must expose the ${intent} goal`,
+  );
+}
+assert.match(
+  html,
+  /<details[^>]*id="overview-advanced-evidence"/,
+  'advanced evidence stays in an opt-in disclosure',
+);
+assert.doesNotMatch(html, /平台健康度/, 'project evidence must not masquerade as platform health');
+assert.ok(
+  componentTag >= 0 && componentTag < appTag,
+  'shared UI primitives must load before app.js',
+);
+assert.match(
+  html,
+  /<script defer src="\.\/ui-components\.js\?/,
+  'UI primitives must preserve ordered classic-script loading',
+);
+assert.doesNotMatch(
+  html,
+  /id="toast-region"[^>]*aria-live/,
+  'individual toast roles own announcements; the container must not repeat the whole stack',
+);
 assert.ok(coreTag >= 0, 'index.html must load telemetry-core.js');
 assert.ok(
   appTag < 0 || coreTag < appTag,
@@ -366,26 +396,24 @@ assert.match(html, /onboarding\.js/, 'workspace must load the guided onboarding 
 assert.match(onboarding, /const steps = \[/, 'onboarding must define guided steps');
 assert.match(onboarding, /最佳实践/, 'onboarding must include practical guidance');
 assert.match(onboarding, /localStorage/, 'onboarding completion must persist locally');
+assert.match(onboarding, /先选你想做的事/, 'onboarding begins with the user goal');
 assert.match(
   onboarding,
-  /在左侧产品选择器选择要使用的机器人、仿真器或硬件适配器/,
-  'onboarding step 01 must explain generic product selection',
+  /体验：录下动作，再回看记录/,
+  'experience must not require setting up a server or device',
 );
 assert.match(
   onboarding,
-  /view: 'station', kicker: '02/,
-  'onboarding step 02 must open the station page for server and device setup',
+  /使用自己的设备或模型/,
+  'device and model goals have their own preparation guidance',
 );
-assert.match(
-  onboarding,
-  /view: 'simulate', kicker: '03/,
-  'onboarding step 03 must open the simulate page for the OriginBot task',
+assert.match(onboarding, /准备训练或真机时再继续/, 'advanced tasks follow the first goal');
+assert.equal(
+  (onboarding.match(/kicker: '\d{2} \/ 04/g) || []).length,
+  4,
+  'help stays a four-step explanation',
 );
-assert.match(
-  onboarding,
-  /view: 'simulate', kicker: '04/,
-  'onboarding step 04 must open the simulate page for recording',
-);
+assert.match(onboarding, /回到任务/, 'reading help must return to the task without completing it');
 
 // ---- a11y baseline ----
 assert.match(html, /class="skip-link"/, 'workspace must expose a keyboard skip link');
@@ -461,7 +489,7 @@ assert.match(
 );
 assert.match(
   app,
-  /configuredBrowserEntry = safeLaunchUrl\(simulator\.browser\?\.entryUrl/,
+  /configuredBrowserEntry = safeLaunchUrl\(browserSurface\?\.entryUrl/,
   'configured simulator entry must drive the iframe',
 );
 assert.match(html, /id="microduck-entry-link"/);
@@ -564,8 +592,8 @@ assert.match(
 assert.match(app, /Mock 不可部署/, 'mock runs must stay blocked at the deployment gate');
 assert.match(
   app,
-  /协议演示完成，继续查看安全闸门/,
-  'mock completion must route to the safety gate',
+  /latest\.mock !== true/,
+  'mock runs must not complete the first-use training goal',
 );
 assert.match(
   app,

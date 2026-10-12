@@ -6,6 +6,7 @@
 
 | 文档 | 用途 |
 | --- | --- |
+| [`first-use-guide.md`](first-use-guide.md) | 三种新手入口：先体验、连接 RDK、使用已有模型，以及实际完成条件 |
 | [`product-guide.md`](product-guide.md) | 图文版产品手册：8 视图截图导览 + 第一次闭环手把手（新读者从这里开始） |
 | [`product-doc/full-product-manual.md`](product-doc/full-product-manual.md) | 全功能产品手册与最佳实践：产品线、引擎、证据、Agent、MCP、设备、发布与运维；同时提供可直接打开的 [HTML 版](product-doc/full-product-manual.html) |
 | [`user-guide.md`](user-guide.md) | 使用手册与最佳实践（核心、流程、数据与工具） |
@@ -57,6 +58,7 @@
 | [`design/sim2real-90-acceptance.md`](design/sim2real-90-acceptance.md) | 90 分验收标准 |
 | [`design/sim2real-mvp-guide.md`](design/sim2real-mvp-guide.md) | MVP 流程指南 |
 | [`design/app-js-modularization.md`](design/app-js-modularization.md) | 前端模块化方案：模块模式、加载顺序、迁移顺序与验收标准 |
+| [`ui-components.md`](ui-components.md) | 可复用 UI 组件架构、Props、实现入口、使用示例与状态/可访问性验收 |
 | [`roadmap.md`](roadmap.md) | 已落地能力与差距计划 |
 | [`competitive-analysis-2026-09.md`](competitive-analysis-2026-09.md) | 开源同类项目对比与差距分析（生态 / UI/UX / 功能，含优先级路线图） |
 | [`quality-scorecard.md`](quality-scorecard.md) | 9+ 质量门槛的自动门禁与待补现场证据 |

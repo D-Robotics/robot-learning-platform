@@ -634,7 +634,7 @@ function microduckUnavailablePage(response: express.Response): void {
   response
     .status(503)
     .setHeader('Cache-Control', 'no-store')
-    .sendFile(path.join(PUBLIC_ROOT, 'microduck-unavailable.html'));
+    .sendFile('microduck-unavailable.html', { root: PUBLIC_ROOT });
 }
 
 async function proxyMicroduck(request: express.Request, response: express.Response): Promise<void> {
@@ -1660,7 +1660,7 @@ export function createSim2RealWebApp(): Express {
   });
   app.get('/originbot-sim/', (_request, response) => {
     response.setHeader('Cache-Control', 'no-cache');
-    response.sendFile(path.join(PUBLIC_ROOT, 'originbot-sim', 'index.html'));
+    response.sendFile('originbot-sim/index.html', { root: PUBLIC_ROOT });
   });
 
   // The browser cannot start a process on the user's computer. These two
