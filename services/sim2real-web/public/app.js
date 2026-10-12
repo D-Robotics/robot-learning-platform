@@ -495,7 +495,7 @@ function clearPrivateWorkspaceState({ keepOverviewLoading = false } = {}) {
   Object.assign(simulatorTaskState, { taskId: '', phase: 'loading', message: '', controlHz: null });
   replayFrameIndex = { source: null, runId: '', indices: [] };
   mountReplayVideo('', null);
-  Object.assign(state, { overview: null, workspaceSummary: null, projects: [], projectsLoaded: false, projectsLoadError: false, datasets: [], datasetsLoaded: false, model: null, compatibility: [], validation: null, goldenPath: null, researchLoop: null, selectedModelId: '', selectedDeviceId: '', selectedComputeResourceId: '', computeResourceEditingId: '', projectId: '', activeDeployment: null, selectedRecord: null, recordsQuery: '', publishingTelemetry: false });
+  Object.assign(state, { overview: null, workspaceSummary: null, projects: [], projectsLoaded: false, projectsLoadError: false, datasets: [], datasetsLoaded: false, model: null, compatibility: [], validation: null, goldenPath: null, researchLoop: null, selectedModelId: '', selectedDeviceId: '', selectedComputeResourceId: '', computeResourceEditingId: '', projectId: '', activeDeployment: null, selectedRecord: null, recordsQuery: '', publishingTelemetry: false, runSubmitting: false });
   state.notifiedRunIds.clear(); state.runLogs = { runId: null, cursor: 0, lines: [], inFlight: false, terminalDone: null };
   state.agent.boardHealth = null;
   stationStopStatusStream(); state.station.streamAbort?.abort(); clearTimeout(state.station.streamReconnectTimer);
@@ -2152,6 +2152,7 @@ function setLoading(value) {
   const retry = $('workspace-status-retry');
   SimUI.setButtonPending(retry, value, { label: '连接中…' });
   renderComputeResources();
+  renderContractModelCheckAvailability();
   if (!state.overview) { renderBoard(); renderHistory(); }
   renderNextAction(); renderOnboardChecklist();
   syncServicePill();
@@ -2484,6 +2485,52 @@ function setFlowChild(child, { updateHash = true, focus = true } = {}) {
   if (focus) window.setTimeout(() => focusFlowTarget(context.focus), 0);
 }
 
+let contractModelControlsMount = null;
+
+function syncContractModelControls(module) {
+  const panel = $('contract-model-check-panel');
+  const selectSlot = $('contract-model-check-select');
+  const selection = $('model-select')?.closest('.model-panel-select');
+  const details = $('model-details-fold');
+  if (!panel || !selectSlot || !selection || !details) return;
+  // Reuse the same controls and result nodes in both modules. Mark their
+  // original positions once, so polling cannot remount them or lose focus.
+  if (module === 'contract' && !contractModelControlsMount) {
+    const selectMarker = document.createComment('contract-model-select-origin');
+    const detailsMarker = document.createComment('contract-model-details-origin');
+    selection.before(selectMarker);
+    details.before(detailsMarker);
+    contractModelControlsMount = { selection, details, selectMarker, detailsMarker };
+    selectSlot.append(selection);
+    panel.append(details);
+  } else if (module !== 'contract' && contractModelControlsMount) {
+    const mount = contractModelControlsMount;
+    mount.selectMarker.replaceWith(mount.selection);
+    mount.detailsMarker.replaceWith(mount.details);
+    contractModelControlsMount = null;
+  }
+  panel.hidden = module !== 'contract';
+}
+
+function renderContractModelCheckAvailability() {
+  const unavailable = state.loading || state.authRequired || state.serviceError || !state.overview;
+  const model = selectedModel();
+  const hint = state.authRequired
+    ? '登录工作区后可检查已登记模型。'
+    : state.serviceError
+      ? '模型列表暂不可用，请重新连接工作区。'
+      : state.loading || !state.overview
+        ? '正在读取已登记模型…'
+        : !model
+          ? '还没有当前机器人的模型说明；先导入或载入模板，再登记版本。'
+          : '选择已登记模型，检查输入、输出和设备要求是否匹配；不会启动模型。';
+  setText('contract-model-check-hint', hint);
+  const select = $('model-select');
+  if (select) select.disabled = unavailable || !model;
+  const button = $('contract-run-button');
+  if (button) button.disabled = unavailable || state.runSubmitting || !model;
+}
+
 function setTrainModule(module, { persist = true } = {}) {
   const wanted = ['run', 'contract', 'config', 'resources'].includes(module) ? module : 'run';
   const activeFlowChild = FLOW_CHILD_CONTEXTS[document.body.dataset.flowChild || ''];
@@ -2501,6 +2548,7 @@ function setTrainModule(module, { persist = true } = {}) {
   const section = document.querySelector('[data-view-section="train"]');
   section?.setAttribute('data-active-train-module', wanted);
   section?.querySelector('.train-layout')?.setAttribute('data-train-active-module', wanted);
+  syncContractModelControls(wanted);
   // The contract and config tab panels are <details> folds shared with the run
   // view; a tab switch or hash deep link must land on them expanded, or the
   // tab renders as a single collapsed summary line.
@@ -3675,7 +3723,8 @@ function renderIntegrations() {
     preflightButton.title =
       boardAgent.reason || '先生成预检计划，并在部署环境接入 BoardAgent';
   }
-  for (const id of ['contract-run-button', 'local-run-button', 'robogo-run-button']) {
+  renderContractModelCheckAvailability();
+  for (const id of ['local-run-button', 'robogo-run-button']) {
     $(id)?.toggleAttribute('disabled', state.runSubmitting || !model);
   }
   const simulatorFrame = $('simulator-frame');
@@ -3978,11 +4027,18 @@ function renderModel() {
   const summary = $('model-summary');
   const artifacts = $('artifact-list');
   const compatibility = $('compatibility-list');
+  const checkResult = $('model-contract-check-result');
+  if (checkResult?.dataset.modelId && checkResult.dataset.modelId !== model?.id) {
+    checkResult.textContent = '';
+    checkResult.hidden = true;
+    delete checkResult.dataset.modelId;
+    $('model-details-fold')?.removeAttribute('open');
+  }
   if (!model) {
     state.model = null;
-    document.querySelector('#model-details-fold')?.setAttribute('open', '');
+    document.querySelector('#model-details-fold')?.removeAttribute('open');
     updateTrainProgress(1);
-    if (summary) summary.innerHTML = `<div class="model-empty-guide"><strong>还没有 ${escapeHtml(product.displayName)} 模型</strong><span>先展开上方“套件与契约”，载入模板并登记版本。</span><button class="button button-primary button-small" type="button" data-empty-model-action>载入 ${escapeHtml(product.displayName)} 模板 →</button></div>`;
+    if (summary) summary.innerHTML = `<div class="model-empty-guide"><strong>还没有 ${escapeHtml(product.displayName)} 模型</strong><span>先导入模型说明，或载入模板并登记版本。</span><button class="button button-primary button-small" type="button" data-empty-model-action>载入 ${escapeHtml(product.displayName)} 模板 →</button></div>`;
     summary?.querySelector('[data-empty-model-action]')?.addEventListener('click', () => {
       document.querySelector('#contract-fold')?.setAttribute('open', '');
       document.querySelector('#template-button')?.click();
@@ -9426,6 +9482,7 @@ async function relayTrainingRun(run, model) {
 
 async function runModel(backend) {
   if (state.runSubmitting) return;
+  const ownerEpoch = workspaceOwnerEpoch;
   if (backend === 'browser' && !selectedProductProfile().simulatorPath) {
     showToast('RDK Duck 尚未配置浏览器仿真适配器，请使用本地仿真或先登记 manifest', 'error');
     return;
@@ -9437,6 +9494,14 @@ async function runModel(backend) {
   }
   state.runSubmitting = true;
   renderIntegrations();
+  const setContractCheckResult = (text) => {
+    if (ownerEpoch !== workspaceOwnerEpoch || backend !== 'contract' || selectedModel()?.id !== model.id) return;
+    const result = $('model-contract-check-result');
+    if (!result) return;
+    result.dataset.modelId = model.id;
+    result.textContent = text;
+    result.hidden = false;
+  };
   try {
     const requestKey =
       globalThis.crypto?.randomUUID?.() ||
@@ -9473,13 +9538,22 @@ async function runModel(backend) {
       }
       body.resumeFrom = { checkpointId, artifactRef };
     }
+    if (backend === 'contract') {
+      $('model-details-fold')?.setAttribute('open', '');
+      setContractCheckResult('正在检查模型兼容性…');
+    }
     const payload = await request('/sim2real/runs', {
       method: 'POST',
       body: JSON.stringify(body),
     });
+    if (ownerEpoch !== workspaceOwnerEpoch) return;
     const run = payload.run || {};
+    setContractCheckResult(run.summary || (['completed', 'ready'].includes(String(run.status || ''))
+      ? '兼容性检查已完成。请查看下方设备匹配结果。'
+      : '检查请求已记录，请到运行记录查看状态。'));
     if (backend === 'local' && run.relayAgentUrl) {
       void relayTrainingRun(run, model).catch((error) => {
+        if (ownerEpoch !== workspaceOwnerEpoch) return;
         setText('simulator-run-status', error instanceof Error ? `本机 Agent 训练提交失败：${error.message}` : '本机 Agent 训练提交失败');
       });
     }
@@ -9496,11 +9570,15 @@ async function runModel(backend) {
     }
     await loadOverview({ quiet: true });
   } catch (error) {
+    if (ownerEpoch !== workspaceOwnerEpoch) return;
+    setContractCheckResult(friendlyError(error, '模型兼容性检查失败'));
     if (!(error instanceof ApiError && error.status === 401))
       showToast(error instanceof Error ? error.message : '运行请求失败', 'error');
   } finally {
-    state.runSubmitting = false;
-    renderIntegrations();
+    if (ownerEpoch === workspaceOwnerEpoch) {
+      state.runSubmitting = false;
+      renderIntegrations();
+    }
   }
 }
 

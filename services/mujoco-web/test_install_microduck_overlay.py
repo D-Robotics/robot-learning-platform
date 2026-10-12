@@ -28,9 +28,10 @@ class OverlayInstallerTests(unittest.TestCase):
             overlay = source / installer.ASSETS[0]
             overlay.write_text("console.log('version one');", encoding="utf-8")
             (source / installer.ASSETS[1]).write_bytes(b"test-image")
+            (source / installer.NETWORK_MARKER).write_text("blockPeer();", encoding="utf-8")
             upstream_tag = '<script type="module" src="./assets/upstream.js"></script>'
             index = target / "index.html"
-            index.write_text(f"<html><body>{upstream_tag}</body></html>", encoding="utf-8")
+            index.write_text(f"<html><head></head><body>{upstream_tag}</body></html>", encoding="utf-8")
             index.chmod(0o640)
             with patch.object(installer, "SOURCE_ROOT", source), patch.object(
                 installer, "target_root", return_value=target
@@ -52,6 +53,40 @@ class OverlayInstallerTests(unittest.TestCase):
                 installer.main()
                 self.assertEqual(index.read_text(), content)
                 self.assertEqual(index.stat().st_mtime_ns, modified)
+
+    def test_network_boundary_is_synchronous_and_precedes_every_upstream_script(self):
+        source = Path(__file__).with_name(installer.NETWORK_MARKER)
+        module = '<script type="module" src="/bundle/upstream.js"></script>'
+        content = f'<html><head>{module}</head><body></body></html>'
+        updated = installer.install_network_boundary(content, source)
+        guard = installer.network_script_tag(source)
+        self.assertLess(updated.index(installer.NETWORK_POLICY), updated.index(guard))
+        self.assertLess(updated.index(guard), updated.index(module))
+        self.assertEqual(updated.index(guard), updated.index("<script"))
+        self.assertNotIn("defer", guard)
+        self.assertNotIn("async", guard)
+        self.assertNotIn("module", guard)
+        self.assertEqual(updated, installer.install_network_boundary(updated, source))
+
+    def test_network_boundary_refresh_changes_only_its_cached_additions(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            source = Path(temporary) / installer.NETWORK_MARKER
+            source.write_text("versionOne();", encoding="utf-8")
+            module = '<script type="module" src="/bundle/upstream.js"></script>'
+            installed = installer.install_network_boundary(f'<head>{module}</head>', source)
+            previous_digest = hashlib.sha256(source.read_bytes()).hexdigest()[:12]
+            source.write_text("versionTwo();", encoding="utf-8")
+            updated = installer.install_network_boundary(installed, source)
+            self.assertNotIn(previous_digest, updated)
+            self.assertEqual(updated.count(installer.NETWORK_MARKER), 1)
+            self.assertEqual(updated.count(installer.NETWORK_POLICY_ID), 1)
+            self.assertIn(module, updated)
+            self.assertEqual(updated, installer.install_network_boundary(updated, source))
+
+    def test_missing_head_refuses_a_late_network_boundary(self):
+        source = Path(__file__).with_name(installer.NETWORK_MARKER)
+        with self.assertRaisesRegex(SystemExit, "no <head>"):
+            installer.install_network_boundary('<body><script src="x.js"></script></body>', source)
 
     def test_refresh_preserves_attributes_queries_and_fragment(self):
         source = Path(__file__).with_name(installer.ASSETS[0])
