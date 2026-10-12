@@ -313,7 +313,7 @@ function renderContextLive() {
       ? projectDisplayName(project)
       : state.authRequired
         ? '游客模式'
-        : state.projectsLoaded && state.projects?.length
+        : state.projectsLoaded
           ? '全部项目'
           : '检查中',
   );
@@ -1864,6 +1864,7 @@ function clearWorkspaceStatus() {
 const WORKSPACE_NOTICES_DISMISS_KEY = 'sim2real.notice-dismissed.v1';
 const WORKSPACE_NOTICES_REFETCH_MS = 60000;
 let workspaceNoticesLastFetchMs = 0;
+let workspaceNoticeItems = [];
 
 function readDismissedWorkspaceNotices() {
   try {
@@ -1892,12 +1893,16 @@ function workspaceNoticeVersion(id) {
 function renderWorkspaceNotices(items) {
   const strip = $('workspace-notices');
   if (!strip) return;
+  workspaceNoticeItems = items;
   const dismissed = new Set(readDismissedWorkspaceNotices());
   const fragment = document.createDocumentFragment();
   for (const item of items) {
     if (!item || typeof item !== 'object') continue;
     const id = String(item.id || '');
     if (!id || dismissed.has(id)) continue;
+    // The version-only notice belongs to workbench metadata; keep errors and
+    // operational notices visible on the starting page.
+    if (workspaceNoticeVersion(id) === state.noticeFirstVersion && workspaceNoticeVersion(id) && document.body.dataset.activeView === 'overview') continue;
     const kind = item.kind === 'degraded' ? 'degraded' : 'info';
     const row = document.createElement('div');
     row.className = 'workspace-notice kind-' + kind;
@@ -2192,6 +2197,11 @@ function setView(view, { updateHash = true, scroll = true, focus = true } = {}) 
   clearFlowChild();
   const changed = document.body.dataset.activeView !== wanted;
   document.body.dataset.activeView = wanted;
+  renderWorkspaceNotices(workspaceNoticeItems);
+  const contextStrip = $('workspace-context-strip');
+  if (contextStrip) contextStrip.hidden = wanted === 'overview';
+  const workbench = $('sidebar-workbench');
+  if (workbench) workbench.open = wanted !== 'overview';
   // Keep the compact project / stage breadcrumb in sync even before the next
   // data refresh; changing views is itself a state change the user needs to see.
   renderContextLive();
@@ -2788,7 +2798,7 @@ function renderSelects() {
     const taskNote = taskSelect.closest('.sim-context-panel')?.querySelector('.small-note');
     if (taskNote) {
       const task = selectedTask();
-      taskNote.textContent = `${task.hint}。点击仿真器“开始录制”生成轨迹，录制后可在评测页回放。`;
+      taskNote.textContent = `${task.hint}。点击仿真器“开始录制”采集动作数据，停止后可在画面下方查看记录。`;
     }
     document.querySelectorAll('[data-replay-task-link]').forEach((link) => {
       link.textContent = `查看「${selectedTask().label}」最近回放 ↗`;
@@ -3488,7 +3498,7 @@ function renderIntegrations() {
   if (simulatorFrame) simulatorFrame.title = microduckProduct ? 'MicroDuck 浏览器仿真' : originbotProduct ? 'OriginBot 仿真适配器状态' : 'RDK Duck 仿真适配器状态';
   if (simulatorLiveText) {
     simulatorLiveText.textContent = browserAvailable
-      ? '参考策略可用'
+      ? microduckProduct ? '示例可打开' : '仿真入口可打开'
       : microduckProduct
         ? '资源待挂载'
         : originbotProduct ? '使用本地或外部 OriginBot 适配器' : '适配器待配置';
@@ -3502,7 +3512,7 @@ function renderIntegrations() {
         ? '资源状态 · 需挂载'
         : '无浏览器适配器';
   }
-  const simulatorFallback = document.querySelector('.simulator-fallback');
+  const simulatorStartHint = $('simulator-start-hint');
   const simulatorProductGate = $('simulator-product-gate');
   const simulatorGateTitle = $('simulator-gate-title');
   const simulatorGateCopy = $('simulator-gate-copy');
@@ -3520,10 +3530,6 @@ function renderIntegrations() {
   const microduckMissing = microduckProduct && browserSurface?.state === 'missing';
   if (simulatorFrame && simulatorFrame.getAttribute('src') !== browserEntry) {
     simulatorFrame.setAttribute('src', browserEntry);
-  }
-  const browserEntryLink = document.querySelector('.simulator-fallback a');
-  if (browserEntryLink && browserEntryLink.getAttribute('href') !== browserEntry) {
-    browserEntryLink.setAttribute('href', browserEntry);
   }
   for (const id of ['microduck-entry-link', 'microduck-footer-link']) {
     const link = $(id);
@@ -3565,12 +3571,12 @@ function renderIntegrations() {
     simulatorGateInstall.setAttribute('href', browserEntry);
   }
   if (simulatorFrame) simulatorFrame.hidden = !browserAvailable;
-  if (simulatorFallback) simulatorFallback.hidden = !browserAvailable || microduckMissing;
+  if (simulatorStartHint) simulatorStartHint.hidden = !microduckProduct || !browserAvailable;
   if (simulatorProductGate) simulatorProductGate.hidden = browserAvailable;
   setText(
     'simulator-run-status',
     browserAvailable
-      ? '参考策略可用'
+      ? microduckProduct ? '示例可打开' : '仿真入口可打开'
       : microduckProduct
         ? '资源待挂载'
         : originbotProduct
@@ -3578,13 +3584,15 @@ function renderIntegrations() {
         : '适配器待配置',
   );
   const evidenceStatus = $('simulator-evidence-status');
-  const browserEvidence = state.telemetry?.source === 'browser-microduck';
+  const evidence = currentTelemetry();
+  const browserEvidence = microduckProduct && evidence?.source === 'browser-microduck' && evidence.samples?.length > 1;
   evidenceStatus?.classList.toggle('is-ready', browserEvidence);
   if (evidenceStatus) {
     evidenceStatus.textContent = browserEvidence
-      ? `已同步 ${state.telemetry.summary.sampleCount} 帧到评测证据`
-      : '录制后自动同步到评测证据';
+      ? `记录可查看 · ${evidence.samples.length} 帧`
+      : '停止录制后，可在这里查看记录';
   }
+  renderBrowserRecordingReview();
   // Engine-side scenes (multi-duck football, balance rigs) never appear in the
   // single-duck browser sandbox. Repeat that next to the canvas, not only in
   // the task selector note, or the task switch reads as a no-op.
@@ -5476,10 +5484,7 @@ function handleMicroduckRecordingReady(event) {
     state.telemetry = stampTelemetryContext(evidence);
     state.reviewedRecording = null;
     renderAll();
-    const status = $('simulator-evidence-status');
-    status?.classList.add('is-ready');
-    if (status) status.textContent = `已同步 ${evidence.summary.sampleCount} 帧到评测证据`;
-    showToast(`已录下 ${evidence.summary.sampleCount} 帧动作。回到首页点击“回放这段动作”；录制只保留在当前页面。`, 'success');
+    showToast(`已录下 ${evidence.summary.sampleCount} 帧动作数据。点击画面下方“查看这段记录”检查采样时间轴；记录只保留在当前页面。`, 'success');
   } catch (error) {
     showToast(error instanceof Error ? `录制解析失败：${error.message}` : '录制解析失败，请导出 JSONL 后重试', 'error');
   }
@@ -7360,6 +7365,9 @@ function firstUsePlan() {
 
 function renderNextAction() {
   const plan = firstUsePlan();
+  setText('user-start-title', state.startIntent === 'experience' ? '我已有设备或模型' : '换一种开始方式');
+  const outcome = document.querySelector('.home-start-outcome');
+  if (outcome) outcome.hidden = state.startIntent !== 'experience';
   document.querySelectorAll('[data-start-intent]').forEach((button) => {
     button.setAttribute('aria-pressed', String(button.dataset.startIntent === state.startIntent));
   });
@@ -7376,9 +7384,21 @@ function renderNextAction() {
   }
 }
 
+function renderBrowserRecordingReview() {
+  const panel = $('experience-recording-review');
+  const recording = currentTelemetry();
+  const ready = state.productId === 'microduck' && recording?.source === 'browser-microduck' && recording.samples?.length > 1;
+  if (panel) panel.hidden = !ready;
+  const button = $('simulator-review-button');
+  if (button) button.disabled = state.loading || !ready;
+  setText('experience-recording-summary', ready
+    ? `已记录 ${recording.samples.length} 帧 · ${formatTelemetrySeconds(recording.summary.durationSeconds)}`
+    : '停止录制后，记录会显示在这里。');
+}
+
 function mountBrowserRecordingReplay() {
   const recording = currentTelemetry();
-  if (recording?.source !== 'browser-microduck' || recording.samples?.length < 2) {
+  if (state.productId !== 'microduck' || recording?.source !== 'browser-microduck' || !(recording.samples?.length > 1)) {
     showToast('先在示例机器人中录下一段动作，再检查记录。'); return false;
   }
   stopReplay();
@@ -7407,7 +7427,7 @@ function closeExperienceReview() {
   restoreExperienceReviewPlayer();
 }
 
-function openExperienceReview() {
+function openExperienceReview(returnFocus = $('next-action-button')) {
   const dialog = $('experience-review-dialog');
   const slot = $('experience-review-slot');
   const player = $('replay-player');
@@ -7417,7 +7437,7 @@ function openExperienceReview() {
   player.before(marker);
   const controls = ['replay-run-select', 'replay-load-button', 'policy-trial-controls']
     .map((id) => $(id)).filter(Boolean).map((node) => ({ node, hidden: node.hidden }));
-  experienceReviewMount = { player, marker, controls, returnFocus: $('next-action-button') };
+  experienceReviewMount = { player, marker, controls, returnFocus };
   controls.forEach(({ node }) => { node.hidden = true; });
   slot.append(player);
   if (typeof dialog.showModal === 'function') dialog.showModal();
@@ -7427,7 +7447,7 @@ function openExperienceReview() {
   });
 }
 
-async function performStartAction(action) {
+async function performStartAction(action, trigger) {
   if (state.loading) return;
   if (action === 'refresh') return loadOverview();
   if (action === 'login') {
@@ -7444,7 +7464,7 @@ async function performStartAction(action) {
   }
   if (action === 'replay-experience') {
     if (!mountBrowserRecordingReplay()) return;
-    openExperienceReview();
+    openExperienceReview(trigger);
     return;
   }
   if (action === 'device-setup') { setView('station'); setFlowChild('devices'); return; }
@@ -7762,7 +7782,7 @@ function renderOnboardChecklist() {
   const planKey = JSON.stringify([state.startIntent, plan.steps, state.loading]);
   if (list.dataset.planKey === planKey) return;
   list.dataset.planKey = planKey;
-  setText('first-run-path-title', ({ experience: '完成第一次体验', device: '准备我的设备', model: '准备我的模型' })[state.startIntent]);
+  setText('first-run-path-title', ({ experience: '体验步骤', device: '设备准备步骤', model: '模型准备步骤' })[state.startIntent]);
   list.querySelectorAll('.onboard-item').forEach((item) => {
     const step = plan.steps.find((entry) => entry.key === item.dataset.onboardStep);
     if (!step) return;
@@ -7774,13 +7794,10 @@ function renderOnboardChecklist() {
     const meta = item.querySelector('[data-onboard-meta]');
     if (!meta) return;
     meta.replaceChildren();
-    if (step.done) {
-      const done = document.createElement('span'); done.className = 'onboard-done'; done.textContent = '已完成 ✓'; meta.append(done);
-    } else {
-      const button = document.createElement('button'); button.type = 'button'; button.className = 'onboard-cta';
-      button.dataset.startAction = step.action.key; button.textContent = step.action.label;
-      button.disabled = state.loading; meta.append(button);
-    }
+    const status = document.createElement('span');
+    status.className = step.done ? 'onboard-done' : 'onboard-locked';
+    status.textContent = step.done ? '已完成 ✓' : step.key === progress.currentKey ? '当前步骤' : '接下来';
+    meta.append(status);
   });
   const fill = $('onboard-fill');
   if (fill) fill.style.width = `${Math.round(progress.doneCount / progress.steps.length * 100)}%`;
@@ -11010,7 +11027,7 @@ function wireEvents() {
   document.addEventListener('click', (event) => {
     const button = event.target instanceof Element ? event.target.closest('button[data-start-action]') : null;
     if (!button || button.disabled) return;
-    void SimUI.withButtonPending(button, () => performStartAction(button.dataset.startAction))
+    void SimUI.withButtonPending(button, () => performStartAction(button.dataset.startAction, button))
       .catch((error) => showToast(friendlyError(error, '暂时无法打开，请重试'), 'error'))
       .finally(() => { renderNextAction(); renderOnboardChecklist(); });
   });

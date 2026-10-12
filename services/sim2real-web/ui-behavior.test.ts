@@ -388,6 +388,59 @@ async function boot(
 }
 
 describe('Sim2Real workbench DOM behavior', () => {
+  it('starts with one task action while goals, progress, project details, and tools stay disclosed on demand', async () => {
+    const { window, errors } = await boot();
+    const doc = window.document;
+    const overview = doc.querySelector('[data-view-section="overview"]')!;
+    expect(doc.body.dataset.activeView).toBe('overview');
+    expect(overview.querySelectorAll('button[data-start-action]')).toHaveLength(1);
+    expect(overview.querySelector('button[data-start-action]')?.id).toBe('next-action-button');
+    expect(doc.querySelectorAll('#user-start-panel [data-start-intent]')).toHaveLength(3);
+    expect(
+      [...doc.querySelectorAll('[data-start-intent][aria-pressed="true"]')].map(
+        (button) => button.id,
+      ),
+    ).toEqual(['start-intent-experience']);
+    expect(
+      doc.querySelectorAll(
+        '#onboard-list button, #onboard-list a[href], #onboard-list [tabindex="0"], #onboard-list [role="button"]',
+      ),
+    ).toHaveLength(0);
+    for (const id of [
+      'user-start-panel',
+      'onboard-card',
+      'overview-advanced-evidence',
+      'sidebar-workbench',
+      'sidebar-settings',
+    ]) {
+      const disclosure = doc.querySelector<HTMLDetailsElement>(`details#${id}`);
+      expect(disclosure, `${id} must be a native disclosure`).not.toBeNull();
+      expect(disclosure?.open, `${id} stays closed on first use`).toBe(false);
+    }
+    const advanced = doc.querySelector('#overview-advanced-evidence')!;
+    expect(advanced.contains(doc.querySelector('#project-workspace'))).toBe(true);
+    expect(advanced.contains(doc.querySelector('#agent-assistant'))).toBe(true);
+    expect(doc.querySelector<HTMLElement>('#workspace-context-strip')?.hidden).toBe(true);
+    expect(doc.querySelector('#context-live-project')?.textContent).toBe('全部项目');
+    const workbench = doc.querySelector('#sidebar-workbench')!;
+    expect(workbench.querySelector('[data-view-target="overview"]')).toBeNull();
+    expect(workbench.querySelector('[data-agent-open]')).not.toBeNull();
+    for (const view of [
+      'simulate',
+      'train',
+      'resources',
+      'evaluate',
+      'deploy',
+      'records',
+      'station',
+    ]) {
+      expect(workbench.querySelector(`[data-view-target="${view}"]`)).not.toBeNull();
+    }
+    expect(doc.querySelector('#sidebar-settings #product-select')).not.toBeNull();
+    expect(doc.querySelector('#sidebar-settings #project-select')).not.toBeNull();
+    expect(errors).toEqual([]);
+  });
+
   it('shows the actual MicroDuck installation path when public guest health reports missing resources', async () => {
     const { window } = await boot({ authRequired: true });
     window.eval(
@@ -424,7 +477,7 @@ describe('Sim2Real workbench DOM behavior', () => {
   });
   it('explains the example switch for a custom robot and keeps advanced evidence folded', async () => {
     const { window, requests, errors } = await boot({ productId: 'custom' });
-    expect(window.document.querySelector('#next-action-copy')?.textContent).toContain(
+    expect(window.document.querySelector('#start-goal-note')?.textContent).toContain(
       '切换到 MicroDuck',
     );
     expect(
@@ -442,15 +495,39 @@ describe('Sim2Real workbench DOM behavior', () => {
   });
 
   it('changes the goal without changing the selected robot or executing device/model actions', async () => {
-    const { window, requests } = await boot({ productId: 'custom' });
-    window.document.querySelector<HTMLButtonElement>('#start-intent-device')?.click();
+    const { window, requests, errors } = await boot({ productId: 'custom' });
+    const goalDisclosure = window.document.querySelector<HTMLDetailsElement>('#user-start-panel')!;
+    goalDisclosure.open = true;
+    const deviceIntent = window.document.querySelector<HTMLButtonElement>('#start-intent-device')!;
+    deviceIntent.focus();
+    deviceIntent.click();
+    expect(window.document.activeElement).toBe(deviceIntent);
     expect(
       window.document.querySelector('#start-intent-device')?.getAttribute('aria-pressed'),
     ).toBe('true');
+    expect(
+      [...window.document.querySelectorAll('[data-start-intent][aria-pressed="true"]')].map(
+        (button) => button.id,
+      ),
+    ).toEqual(['start-intent-device']);
+    expect(window.localStorage.getItem('rdk-lab-start-intent')).toBe('device');
     expect(window.document.querySelector('#onboard-list')?.textContent).not.toContain('MicroDuck');
     window.document.querySelector<HTMLButtonElement>('#next-action-button')?.click();
     await vi.waitFor(() => expect(window.document.body.dataset.activeView).toBe('station'));
-    window.document.querySelector<HTMLButtonElement>('#start-intent-model')?.click();
+    window.document
+      .querySelector<HTMLButtonElement>('.sidebar [data-view-target="overview"]')
+      ?.click();
+    goalDisclosure.open = true;
+    const modelIntent = window.document.querySelector<HTMLButtonElement>('#start-intent-model')!;
+    modelIntent.focus();
+    modelIntent.click();
+    expect(window.document.activeElement).toBe(modelIntent);
+    expect(
+      [...window.document.querySelectorAll('[data-start-intent][aria-pressed="true"]')].map(
+        (button) => button.id,
+      ),
+    ).toEqual(['start-intent-model']);
+    expect(window.localStorage.getItem('rdk-lab-start-intent')).toBe('model');
     window.document.querySelector<HTMLButtonElement>('#next-action-button')?.click();
     await vi.waitFor(() => expect(window.document.body.dataset.flowChild).toBe('prepare'));
     expect(window.document.querySelector<HTMLSelectElement>('#product-select')?.value).toBe(
@@ -458,6 +535,7 @@ describe('Sim2Real workbench DOM behavior', () => {
     );
     expect(window.document.querySelector<HTMLDetailsElement>('#contract-fold')?.open).toBe(true);
     expect(requests.filter((entry) => entry.method === 'POST')).toHaveLength(0);
+    expect(errors).toEqual([]);
   });
 
   it('allows guest experience while sign-in remains the next step for private device data', async () => {
@@ -474,6 +552,125 @@ describe('Sim2Real workbench DOM behavior', () => {
       expect(window.document.querySelector<HTMLElement>('#auth-gate-panel')?.hidden).toBe(false),
     );
     expect(requests.filter((entry) => entry.method === 'POST')).toHaveLength(0);
+  });
+
+  it('reviews a stopped recording directly in the simulator and returns focus to its trigger without uploading', async () => {
+    const { window, requests, errors } = await boot({
+      url: 'http://127.0.0.1:3000/sim2real/#simulate/simulate',
+    });
+    const doc = window.document;
+    const panel = doc.querySelector<HTMLElement>('#experience-recording-review')!;
+    const button = doc.querySelector<HTMLButtonElement>('#simulator-review-button')!;
+    const dialog = doc.querySelector<HTMLDialogElement>('#experience-review-dialog')!;
+    const player = doc.querySelector('#replay-player')!;
+    const originalParent = player.parentNode;
+    expect(doc.querySelector<HTMLDetailsElement>('.guide-panel.workspace-inspector')?.open).toBe(
+      false,
+    );
+    expect(doc.querySelector('.simulator-frame-wrap .simulator-fallback')).toBeNull();
+    expect(doc.querySelector('#microduck-entry-link')?.closest('.simulator-frame-wrap')).toBeNull();
+    expect(doc.querySelector('#microduck-entry-link')?.textContent).toContain('画面打不开');
+    expect(doc.querySelector('#simulator-live-text')?.textContent).toBe('示例可打开');
+    expect(doc.querySelector('#simulator-run-status')?.textContent).toBe('示例可打开');
+    const trainingLink = doc.querySelector('.guide-panel [data-view-target="train"]');
+    expect(trainingLink?.classList.contains('button-ghost')).toBe(true);
+    expect(trainingLink?.textContent).toContain('了解模型训练');
+    const recordMessage = () =>
+      window.dispatchEvent(
+        new window.MessageEvent('message', {
+          origin: window.location.origin,
+          data: {
+            type: 'rdk-microduck-recording-ready',
+            format: 'microduck-trajectory-v1',
+            text: [0, 0.02, 0.04]
+              .map((time) =>
+                JSON.stringify({ time, observation: [time], action: [time], reward: 0 }),
+              )
+              .join('\n'),
+            sampleCount: 3,
+          },
+        }),
+      );
+    expect(panel.hidden).toBe(true);
+    expect(button.disabled).toBe(true);
+    recordMessage();
+    expect(panel.hidden).toBe(false);
+    expect(button.disabled).toBe(false);
+    expect(doc.querySelector('#experience-recording-summary')?.textContent).toContain('3 帧');
+    expect(doc.querySelector('#experience-recording-summary')?.textContent).toContain('0.04s');
+    expect(dialog.open).toBe(false);
+    expect(doc.body.dataset.activeView).toBe('simulate');
+    expect(window.location.hash).toBe('#simulate/simulate');
+    button.focus();
+    button.click();
+    await vi.waitFor(() => expect(dialog.open).toBe(true));
+    expect(dialog.querySelector('#replay-player')).toBe(player);
+    expect(doc.body.dataset.activeView).toBe('simulate');
+    expect(window.location.hash).toBe('#simulate/simulate');
+    const seek = doc.querySelector<HTMLInputElement>('#replay-seek')!;
+    seek.value = seek.max;
+    seek.dispatchEvent(new window.Event('input', { bubbles: true }));
+    expect(doc.querySelector('#onboard-count')?.textContent).toBe('2 / 4');
+    doc.querySelector<HTMLButtonElement>('#replay-play-button')?.click();
+    await vi.waitFor(() => expect(doc.querySelector('#onboard-count')?.textContent).toBe('4 / 4'));
+    doc.querySelector<HTMLButtonElement>('#experience-review-close')?.click();
+    expect(dialog.open).toBe(false);
+    expect(player.parentNode).toBe(originalParent);
+    expect(doc.activeElement).toBe(button);
+    recordMessage();
+    expect(doc.querySelector('#onboard-count')?.textContent).toBe('2 / 4');
+    button.click();
+    await vi.waitFor(() => expect(dialog.open).toBe(true));
+    dialog.dispatchEvent(new window.Event('cancel', { cancelable: true }));
+    expect(dialog.open).toBe(false);
+    expect(doc.activeElement).toBe(button);
+    expect(doc.querySelector('#onboard-count')?.textContent).toBe('2 / 4');
+    expect(requests.filter((entry) => entry.method === 'POST')).toHaveLength(0);
+    expect(errors).toEqual([]);
+  });
+
+  it('hides simulator review for insufficient, replaced, and another robot recording context', async () => {
+    const { window, requests, errors } = await boot({
+      url: 'http://127.0.0.1:3000/sim2real/#simulate/simulate',
+    });
+    const doc = window.document;
+    const panel = doc.querySelector<HTMLElement>('#experience-recording-review')!;
+    const button = doc.querySelector<HTMLButtonElement>('#simulator-review-button')!;
+    const recordMessage = (count: number) =>
+      window.dispatchEvent(
+        new window.MessageEvent('message', {
+          origin: window.location.origin,
+          data: {
+            type: 'rdk-microduck-recording-ready',
+            format: 'microduck-trajectory-v1',
+            text: Array.from({ length: count }, (_, index) =>
+              JSON.stringify({ time: index * 0.02, observation: [index], action: [index] }),
+            ).join('\n'),
+            sampleCount: count,
+          },
+        }),
+      );
+    recordMessage(1);
+    expect(panel.hidden).toBe(true);
+    expect(button.disabled).toBe(true);
+    recordMessage(3);
+    expect(panel.hidden).toBe(false);
+    window.eval('__workbenchState.telemetry.modelId="another-model"; renderAll();');
+    expect(panel.hidden).toBe(true);
+    expect(button.disabled).toBe(true);
+    expect(doc.querySelector('#experience-recording-summary')?.textContent).not.toContain('3 帧');
+    recordMessage(3);
+    expect(panel.hidden).toBe(false);
+    const product = doc.querySelector<HTMLSelectElement>('#product-select')!;
+    product.value = 'custom';
+    product.dispatchEvent(new window.Event('change', { bubbles: true }));
+    await vi.waitFor(() => expect(product.value).toBe('custom'));
+    expect(panel.hidden).toBe(true);
+    expect(button.disabled).toBe(true);
+    button.click();
+    expect(doc.querySelector<HTMLDialogElement>('#experience-review-dialog')?.open).toBe(false);
+    expect(requests.filter((entry) => entry.method === 'POST')).toHaveLength(0);
+    expect(errors).toEqual([]);
   });
 
   it('completes experience only after the actual browser recording is played through, with no upload', async () => {
@@ -1091,6 +1288,8 @@ describe('Sim2Real workbench DOM behavior', () => {
     await new Promise((resolve) => setTimeout(resolve, 20));
     expect(doc.body.dataset.activeView).toBe('train');
     expect(doc.body.dataset.flowChild).toBe('configure');
+    expect(doc.querySelector<HTMLDetailsElement>('#sidebar-workbench')?.open).toBe(true);
+    expect(doc.querySelector<HTMLElement>('#workspace-context-strip')?.hidden).toBe(false);
     expect(doc.getElementById('flow-context')?.hidden).toBe(false);
     expect(doc.getElementById('flow-context-title')?.textContent).toBe('训练配置');
     expect(doc.getElementById('train-module-config')?.hasAttribute('open')).toBe(true);
@@ -1114,6 +1313,11 @@ describe('Sim2Real workbench DOM behavior', () => {
     expect(window.location.hash).toBe('#train/submit');
     expect(doc.body.dataset.activeView).toBe('train');
     expect(doc.body.dataset.flowChild).toBe('submit');
+    expect(doc.querySelector<HTMLDetailsElement>('#sidebar-workbench')?.open).toBe(true);
+    doc.querySelector<HTMLButtonElement>('.sidebar [data-view-target="overview"]')?.click();
+    expect(doc.body.dataset.activeView).toBe('overview');
+    expect(doc.querySelector<HTMLDetailsElement>('#sidebar-workbench')?.open).toBe(false);
+    expect(doc.querySelector<HTMLElement>('#workspace-context-strip')?.hidden).toBe(true);
     expect(errors).toEqual([]);
   });
 
@@ -1428,7 +1632,7 @@ describe('Sim2Real workbench DOM behavior', () => {
     expect(errors).toEqual([]);
   });
 
-  it('renders the workspace notices strip with version and degraded rows, dismissible per notice', async () => {
+  it('keeps passive version metadata off the overview while degraded notices remain visible and dismissible', async () => {
     const { window, errors } = await boot({
       notices: [
         {
@@ -1448,6 +1652,13 @@ describe('Sim2Real workbench DOM behavior', () => {
     });
     const strip = window.document.querySelector('#workspace-notices');
     expect(strip?.getAttribute('hidden')).toBe(null);
+    const initialRows = [...(strip?.querySelectorAll('.workspace-notice') || [])];
+    expect(initialRows).toHaveLength(1);
+    expect(initialRows[0]?.className).toContain('kind-degraded');
+    expect(initialRows[0]?.textContent).toContain('storage-not-configured');
+    window.document
+      .querySelector<HTMLButtonElement>('.sidebar [data-view-target="train"]')
+      ?.click();
     const rows = [...(strip?.querySelectorAll('.workspace-notice') || [])];
     expect(rows).toHaveLength(2);
     expect(rows[0]?.className).toContain('kind-info');
@@ -1463,6 +1674,10 @@ describe('Sim2Real workbench DOM behavior', () => {
     const remaining = [...(strip?.querySelectorAll('.workspace-notice') || [])];
     expect(remaining).toHaveLength(1);
     expect(remaining[0]?.textContent).toContain('当前平台版本');
+    window.document
+      .querySelector<HTMLButtonElement>('.sidebar [data-view-target="overview"]')
+      ?.click();
+    expect(window.document.querySelector<HTMLElement>('#workspace-notices')?.hidden).toBe(true);
     expect(errors).toEqual([]);
   });
 

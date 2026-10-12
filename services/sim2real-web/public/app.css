@@ -868,6 +868,7 @@ h2 {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(min(100%, 210px), 1fr));
   gap: 12px;
+  padding-top: 12px;
 }
 .user-start-option {
   position: relative;
@@ -875,8 +876,8 @@ h2 {
   align-content: center;
   gap: 8px;
   min-width: 0;
-  min-height: 108px;
-  padding: 20px 40px 20px 20px;
+  min-height: 76px;
+  padding: 12px 32px 12px 16px;
   border: 1px solid var(--line-strong);
   border-radius: var(--ui-radius-md);
   color: var(--text);
@@ -8605,7 +8606,7 @@ body .section-heading-lean h2,
    decision surfaces, then the detailed project stream. */
 [data-view-section='overview'] {
   display: grid;
-  grid-template-columns: minmax(0, 1.35fr) minmax(300px, 0.85fr);
+  grid-template-columns: minmax(0, 1fr);
   gap: 24px;
   align-items: start;
 }
@@ -8617,9 +8618,13 @@ body .section-heading-lean h2,
   margin-bottom: 0;
 }
 
-[data-view-section='overview'] .overview-page-title h2 {
+body .depth-led [data-view-section='overview'] .overview-page-title h2 {
   font-size: clamp(30px, 3vw, 40px);
   line-height: 1.12;
+  white-space: normal;
+  overflow: visible;
+  text-overflow: clip;
+  text-wrap: balance;
 }
 
 [data-view-section='overview'] .overview-page-title p {
@@ -8901,7 +8906,7 @@ body .panel-heading > :last-child:is(button, a.button, .button) {
   }
 
   html body [data-view-section='overview'] {
-    grid-template-columns: 1fr;
+    grid-template-columns: minmax(0, 1fr);
   }
 
   html body [data-view-section='overview'] > .first-run-path,
@@ -11092,4 +11097,145 @@ body .depth-led #workflow-progress-strip {
 }
 .account-menu-item:hover {
   background: var(--bg-soft);
+}
+
+/* A starting page offers one action. Workbench navigation and evidence remain
+   available through native disclosures, with no separate beginner state. */
+.home-start {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 300px), 1fr));
+  gap: clamp(20px, 3vw, 32px);
+  padding: clamp(20px, 3vw, 32px);
+  border: 1px solid var(--accent-ring);
+  border-radius: var(--ui-radius-lg);
+  background: var(--panel);
+  box-shadow: var(--shadow);
+  min-width: 0;
+}
+.home-start-content {
+  display: grid;
+  justify-items: start;
+  align-content: start;
+  gap: 16px;
+  min-width: 0;
+}
+.home-start-content h3 {
+  margin: 0;
+  font-size: var(--fs-start-heading);
+  line-height: 1.35;
+  letter-spacing: -0.03em;
+  overflow-wrap: anywhere;
+  text-wrap: balance;
+}
+.home-start-content p {
+  margin: 0;
+  font-size: var(--fs-body);
+  line-height: 1.7;
+  color: var(--muted-strong);
+}
+.home-start-content .button {
+  min-height: 48px;
+  padding-inline: 24px;
+}
+.home-start-badge {
+  color: var(--accent-text);
+  font-size: var(--fs-meta);
+  font-weight: 700;
+}
+.home-start-note {
+  max-width: 42em;
+}
+.home-start-outcome {
+  display: grid;
+  align-content: center;
+  gap: 24px;
+  padding: 24px;
+  border-radius: var(--ui-radius-md);
+  background: var(--panel-soft);
+}
+.home-start-outcome div {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+.home-start-outcome div > span {
+  color: var(--accent-text);
+  font-size: var(--fs-meta);
+  font-family: var(--font-label);
+}
+.home-start-outcome p {
+  display: grid;
+  gap: 6px;
+  margin: 0;
+}
+.home-start-outcome strong {
+  font-size: var(--fs-body);
+}
+.home-start-outcome small {
+  color: var(--muted-strong);
+  font-size: var(--fs-meta);
+  line-height: 1.6;
+}
+.home-progress-heading .onboard-count {
+  float: right;
+  margin: 0;
+}
+.sidebar-disclosure {
+  padding: 16px 12px;
+  font-size: var(--fs-body);
+  color: var(--muted-strong);
+  font-weight: 650;
+  cursor: pointer;
+  line-height: 1.5;
+}
+.sidebar-disclosure:focus-visible {
+  outline: 2px solid var(--accent-text);
+  outline-offset: 2px;
+}
+.sidebar-settings-body {
+  padding-top: 12px;
+}
+.sidebar-settings {
+  padding: 0;
+}
+.sidebar-workbench {
+  margin-top: 12px;
+}
+@media (max-width: 720px) {
+  .home-start-outcome { display: none; }
+}
+.experience-recording-review {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin: 16px;
+  padding: 20px;
+  border: 1px solid var(--accent-ring);
+  border-radius: var(--ui-radius-md);
+  background: var(--accent-soft);
+}
+.experience-recording-review p {
+  margin: 6px 0 0;
+  color: var(--muted-strong);
+  font-size: var(--fs-body);
+  line-height: 1.6;
+}
+.manifest-source-fold {
+  margin-bottom: 16px;
+  min-width: 0;
+}
+.manifest-source-fold summary {
+  min-height: 44px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--ui-radius-md);
+  color: var(--muted-strong);
+  font-size: var(--fs-body);
+  cursor: pointer;
+}
+.manifest-source-fold summary:focus-visible {
+  outline: 2px solid var(--accent-text);
+  outline-offset: 2px;
 }
