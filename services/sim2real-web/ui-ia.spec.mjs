@@ -89,6 +89,61 @@ for (const intent of ['experience', 'device', 'model']) {
     `homepage must expose the ${intent} goal`,
   );
 }
+// Closed native disclosures keep the first screen focused on one task while
+// preserving the full workbench and project context for experienced users.
+function detailsAncestorsOf(id) {
+  const ancestors = [];
+  for (const match of html.matchAll(/<!--[\s\S]*?-->|<\/?[a-z][^>]*>/gi)) {
+    const tag = match[0];
+    if (tag.startsWith('<!--')) continue;
+    if (/^<\/details\s*>/i.test(tag)) {
+      ancestors.pop();
+      continue;
+    }
+    if (tag.match(/\sid="([^"]+)"/)?.[1] === id) return [...ancestors];
+    if (/^<details\b/i.test(tag)) ancestors.push(tag.match(/\sid="([^"]+)"/)?.[1] || null);
+  }
+  assert.fail(`markup id must exist: ${id}`);
+}
+for (const id of [
+  'user-start-panel',
+  'onboard-card',
+  'overview-advanced-evidence',
+  'sidebar-workbench',
+  'sidebar-settings',
+]) {
+  const tag = html.match(new RegExp(`<details\\b[^>]*\\sid="${id}"[^>]*>`))?.[0];
+  assert.ok(tag, `${id} must use native details`);
+  assert.doesNotMatch(tag, /\sopen(?:\s|=|>)/, `${id} must start closed`);
+}
+for (const id of ['project-workspace', 'platform-scorecard-title', 'research-loop-title']) {
+  assert.ok(
+    detailsAncestorsOf(id).includes('overview-advanced-evidence'),
+    `${id} belongs inside optional advanced project details`,
+  );
+}
+for (const id of ['product-select', 'project-select']) {
+  assert.ok(detailsAncestorsOf(id).includes('sidebar-settings'), `${id} stays inside settings`);
+}
+for (const intent of ['experience', 'device', 'model']) {
+  assert.ok(
+    detailsAncestorsOf(`start-intent-${intent}`).includes('user-start-panel'),
+    'alternative goals must be available through the secondary disclosure',
+  );
+}
+const checklistStart = html.indexOf('id="onboard-list"');
+assert.ok(checklistStart >= 0, 'first-use progress list must exist');
+const checklistHtml = html.slice(checklistStart, html.indexOf('</ol>', checklistStart));
+assert.doesNotMatch(
+  checklistHtml,
+  /<button\b|<a\b[^>]*href=|tabindex="0"/,
+  'first-use progress must not expose parallel task actions',
+);
+assert.match(
+  html,
+  /<section[^>]*id="workspace-context-strip"[^>]*hidden/,
+  'technical workspace context stays hidden on the initial overview',
+);
 assert.match(
   html,
   /<dialog[^>]*id="experience-review-dialog"[^>]*aria-labelledby="experience-review-title"/,
@@ -157,7 +212,7 @@ assert.match(
 );
 assert.match(
   html,
-  /导入 manifest JSON（≤2 MiB）/,
+  /导入模型说明（JSON，≤2 MiB）/,
   'manifest import limit must be visible before selection',
 );
 assert.match(
@@ -218,7 +273,7 @@ const navLabels = [
 assert.deepEqual(
   navLabels,
   [
-    '项目概况',
+    '开始使用',
     'Agent 助手',
     '数据与仿真',
     '训练与策略',
@@ -232,7 +287,7 @@ assert.deepEqual(
 const navGroups = [...html.matchAll(/class="nav-label">([^<]+)<\/div>/g)].map((m) => m[1]);
 assert.deepEqual(
   navGroups,
-  ['工作区', '构建策略', '交付到设备', '证据中心'],
+  ['开始', '构建策略', '交付到设备', '证据中心'],
   'sidebar must group nav by workspace, strategy construction, delivery, and evidence',
 );
 

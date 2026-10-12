@@ -31,29 +31,28 @@
     const exampleReady = microduck && input.browserAvailable === true;
     const recorded = input.recordingReady === true;
     const reviewed = recorded && input.recordingReviewed === true;
-    const productName =
-      typeof input.productName === 'string' && input.productName.trim()
-        ? input.productName.trim()
-        : '当前机器人';
-    const begin = action(
-      'begin-experience',
-      microduck ? '打开示例并录制动作' : '切换示例并开始体验',
-    );
+    const begin = action('begin-experience', '打开示例机器人');
     const replay = action('replay-experience', reviewed ? '再次查看记录' : '回看这段记录');
     const install = action('simulator-help', '查看示例安装指引');
     const unavailable = microduck && input.browserAvailable === false;
     const nextAction = unavailable ? install : !exampleReady ? begin : recorded ? replay : begin;
 
     return {
-      title: reviewed ? '已完成动作录制与记录检查' : '先体验：录下动作，再回看记录',
+      title: reviewed
+        ? '已完成动作录制与记录检查'
+        : recorded
+          ? '动作已录下，查看你的记录'
+          : '在浏览器里体验机器人',
       description: unavailable
         ? 'MicroDuck 浏览器示例暂时不可用。先按安装指引准备示例，再录制动作。'
-        : !microduck
-          ? '当前选择的是' + productName + '。首次体验会切换到 MicroDuck 示例机器人。'
-          : reviewed
-            ? '你已经录下动作并检查了采样记录，可以再次查看记录或继续了解模型训练。'
-            : '打开 MicroDuck 示例，操作机器人、录下动作，然后查看这段动作的采样时间轴。',
-      note: '这段体验无需连接设备或准备训练服务器。记录暂存在当前页面，刷新前可在示例中导出。',
+        : reviewed
+          ? '你已经录下动作并检查了采样记录，可以再次查看记录或继续了解模型训练。'
+          : recorded
+            ? '这段动作数据已录下。打开记录，查看采样时间轴。'
+            : '用方向键操作示例机器人，录下一段动作数据，再查看记录。',
+      note: microduck
+        ? '无需设备或训练服务器。记录暂存在当前页面，刷新前可在示例中导出。'
+        : '开始时会切换到 MicroDuck 示例。无需设备或训练服务器。',
       action: nextAction,
       steps: [
         step(
