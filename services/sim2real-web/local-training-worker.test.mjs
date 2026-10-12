@@ -1,8 +1,11 @@
 import assert from 'node:assert/strict';
-import { mkdtemp, readdir, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, readdir, rm, symlink, writeFile } from 'node:fs/promises';
+import { spawn, spawnSync } from 'node:child_process';
+import { createServer } from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
 import process from 'node:process';
+import { fileURLToPath } from 'node:url';
 
 const fixtureDir = await mkdtemp(path.join(os.tmpdir(), 'rdk-local-worker-'));
 const fixture = path.join(fixtureDir, 'engine.mjs');
@@ -42,6 +45,78 @@ const request = {
   training: { profile: 'smoke', maxIterations: 10 },
 };
 try {
+  // Production starts through a `current` directory symlink. Node resolves
+  // import.meta.url to the release file while argv retains the symlink path.
+  const currentDir = path.join(fixtureDir, 'current');
+  await symlink(path.dirname(fileURLToPath(import.meta.url)), currentDir, 'dir');
+  const portProbe = createServer();
+  await new Promise((resolve) => portProbe.listen(0, '127.0.0.1', resolve));
+  const startupPort = portProbe.address().port;
+  await new Promise((resolve) => portProbe.close(resolve));
+  const startupChild = spawn(
+    process.execPath,
+    [path.join(currentDir, 'local-training-worker.mjs')],
+    {
+      env: {
+        ...process.env,
+        NODE_ENV: 'development',
+        RDK_SIM2REAL_DEPLOYMENT: '',
+        RDK_SIM2REAL_LOCAL_WORKER_HOST: '127.0.0.1',
+        RDK_SIM2REAL_LOCAL_WORKER_PORT: String(startupPort),
+        RDK_SIM2REAL_LOCAL_WORKER_DATA_DIR: path.join(fixtureDir, 'startup'),
+      },
+      stdio: ['ignore', 'pipe', 'pipe'],
+    },
+  );
+  try {
+    await new Promise((resolve, reject) => {
+      let stdout = '';
+      let stderr = '';
+      const timer = setTimeout(() => reject(new Error('symlink worker did not listen')), 8_000);
+      startupChild.stdout.on('data', (chunk) => {
+        stdout += chunk;
+        if (stdout.includes('[sim2real-local] listening on')) {
+          clearTimeout(timer);
+          resolve();
+        }
+      });
+      startupChild.stderr.on('data', (chunk) => (stderr += chunk));
+      startupChild.once('error', (error) => {
+        clearTimeout(timer);
+        reject(error);
+      });
+      startupChild.once('exit', (code) => {
+        clearTimeout(timer);
+        reject(new Error(`symlink worker exited before listening (${code}): ${stderr}`));
+      });
+    });
+    const startupHealth = await fetch(`http://127.0.0.1:${startupPort}/healthz`);
+    assert.equal(startupHealth.status, 200);
+    assert.equal((await startupHealth.json()).ok, true);
+  } finally {
+    if (startupChild.exitCode === null && startupChild.signalCode === null) {
+      const exited = new Promise((resolve) => startupChild.once('exit', resolve));
+      startupChild.kill('SIGTERM');
+      await exited;
+    }
+    await rm(currentDir, { force: true });
+    await rm(path.join(fixtureDir, 'startup'), { recursive: true, force: true });
+  }
+  for (const entryPath of [undefined, path.join(fixtureDir, 'missing-entry.mjs')]) {
+    const imported = spawnSync(
+      process.execPath,
+      [
+        '--input-type=module',
+        '-e',
+        `process.argv[1] = ${JSON.stringify(entryPath) ?? 'undefined'}; await import(${JSON.stringify(new URL('./local-training-worker.mjs', import.meta.url).href)}); console.log('imported without listening');`,
+      ],
+      { env: process.env, encoding: 'utf8', timeout: 5_000 },
+    );
+    assert.equal(imported.status, 0, imported.stderr);
+    assert.equal(imported.stdout.trim(), 'imported without listening');
+  }
+  console.log('[local-training-worker] PASS — symlink entry listens; imports never auto-start');
+
   const health = await fetch(`${base}/healthz`);
   assert.equal(health.status, 200);
   const healthBody = await health.json();
