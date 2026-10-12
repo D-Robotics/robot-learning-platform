@@ -263,6 +263,26 @@ export interface Sim2RealTelemetryCameraFrame {
   data: string;
 }
 
+/** Simulator state for visual replay. This is browser/import data, not board attestation. */
+export interface Sim2RealSimulationReplaySnapshot {
+  taskId?: string;
+  qpos: number[];
+  qvel: number[];
+  integrationState?: number[];
+  time?: number;
+  stepCount?: number;
+  action?: number[] | number[][];
+  reward?: number | number[];
+  done?: boolean;
+  posture?: number[];
+  prevPosture?: number[];
+  lastAction?: number[];
+  command?: number[];
+  lastBallDistance?: number;
+  lastGoalDistance?: number;
+  scored?: boolean;
+}
+
 /** A bounded, normalized time-series sample accepted by the ingest endpoint. */
 export interface Sim2RealTelemetrySample {
   /** Monotonic timestamp in seconds relative to the run. */
@@ -272,6 +292,12 @@ export interface Sim2RealTelemetrySample {
   reward?: number;
   done?: boolean;
   fall?: boolean;
+  /** Scene identity and simulator pose are replay metadata, never release evidence. */
+  taskId?: string;
+  sceneId?: string;
+  qpos?: number[];
+  qvel?: number[];
+  replay?: Sim2RealSimulationReplaySnapshot;
   /** Physical command actually published to the robot's cmd_vel channel. */
   cmd_vel?: Sim2RealTelemetryTwist;
   /** Whether `action` is already physical or still normalized policy output. */

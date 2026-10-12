@@ -28,7 +28,7 @@ afterEach(async () => {
   vi.restoreAllMocks();
 });
 
-function model() {
+function model(visualAssetBase?: unknown) {
   return {
     id: 'model-1',
     builtin: true,
@@ -51,7 +51,11 @@ function model() {
         decimation: 4,
         observationLayout: [{ name: 'state', size: 61 }],
       },
-      simulator: { backends: ['browser', 'local'], policyArtifactId: 'policy' },
+      simulator: {
+        backends: ['browser', 'local'],
+        policyArtifactId: 'policy',
+        ...(visualAssetBase === undefined ? {} : { visualAssetBase }),
+      },
       artifacts: [
         {
           id: 'policy',
@@ -68,9 +72,14 @@ function model() {
 
 function overview(
   runs?: unknown[],
-  extras: { artifacts?: unknown[]; evaluations?: unknown[]; deployments?: unknown[] } = {},
+  extras: {
+    artifacts?: unknown[];
+    evaluations?: unknown[];
+    deployments?: unknown[];
+    visualAssetBase?: unknown;
+  } = {},
 ) {
-  const selectedModel = model();
+  const selectedModel = model(extras.visualAssetBase);
   const contract = selectedModel.manifest.contract;
   return {
     ok: true,
@@ -197,7 +206,12 @@ async function boot(
     workspaceContext?: Record<string, unknown>;
     /** Override the document URL so hash deep links (#train/configure) can be tested. */
     url?: string;
+    /** Mutable session fixture for same-browser account changes. */
     accountId?: string;
+    sessionAuthenticated?: boolean;
+    replayGate?: Promise<void>;
+    overviewUnauthorized?: boolean;
+    visualAssetBase?: unknown;
     transport?: (
       url: string,
       init: RequestInit | undefined,
@@ -205,6 +219,7 @@ async function boot(
     ) => Promise<Response | null>;
 
     productId?: string;
+    taskId?: string;
     authRequired?: boolean;
   } = {},
 ) {
@@ -216,6 +231,7 @@ async function boot(
   openWindows.push(dom.window);
   const { window } = dom;
   if (options.productId) window.localStorage.setItem('rdk-duck-lab-product', options.productId);
+  if (options.taskId) window.localStorage.setItem('rdk-duck-lab-task', options.taskId);
   if (options.workspaceContext) {
     window.localStorage.setItem(
       'rdk-duck-lab-workspace-context',
@@ -267,12 +283,11 @@ async function boot(
       const intercepted = await options.transport?.(url, init, body);
       if (intercepted) return intercepted;
       let payload: unknown;
-      if (url.includes('/overview') && options.authRequired) {
-        return new Response(JSON.stringify({ ok: false, error: 'SIM2REAL_AUTH_REQUIRED' }), {
-          status: 401,
-          headers: { 'content-type': 'application/json' },
-        });
-      }
+      if (url.includes('/overview') && (options.overviewUnauthorized || options.authRequired))
+        return new Response(
+          JSON.stringify({ ok: false, error: 'SIM2REAL_AUTH_REQUIRED', message: '请先登录' }),
+          { status: 401, headers: { 'content-type': 'application/json' } },
+        );
       if (url.includes('/overview') && options.failOverview) {
         return new Response(
           JSON.stringify({
@@ -286,16 +301,33 @@ async function boot(
           },
         );
       }
-      if (url.includes('/overview'))
+      if (url.includes('/overview')) {
         payload = {
           ...overview(options.runs, {
             artifacts: options.artifacts,
             evaluations: options.evaluations,
             deployments: options.overviewDeployments,
+            visualAssetBase: options.visualAssetBase,
           }),
-          ...(options.accountId ? { identity: { accountId: options.accountId } } : {}),
+          identity: options.accountId
+            ? { accountId: options.accountId, displayName: options.accountId }
+            : null,
         };
-      else if (url.includes('/workspace-summary')) {
+      } else if (url.includes('/auth/session'))
+        payload = {
+          ok: true,
+          ...(options.accountId || options.sessionAuthenticated !== undefined
+            ? {
+                authenticated: options.sessionAuthenticated ?? Boolean(options.accountId),
+                accountId: options.accountId,
+              }
+            : {}),
+        };
+      else if (url.endsWith('/sso/logout')) {
+        options.accountId = undefined;
+        options.sessionAuthenticated = false;
+        payload = { ok: true };
+      } else if (url.includes('/workspace-summary')) {
         payload = { ok: true, counts: { models: 1, runs: 1, deployments: 0, devices: 0 } };
       } else if (url.includes('/lineage?')) {
         payload = {
@@ -322,12 +354,14 @@ async function boot(
       else if (url.endsWith('/projects')) payload = { ok: true, projects: options.projects || [] };
       else if (url.endsWith('/datasets')) payload = { ok: true, datasets: [] };
       else if (url.includes('/models/model-1')) {
-        payload = { ok: true, model: model(), compatibility: [] };
+        payload = { ok: true, model: model(options.visualAssetBase), compatibility: [] };
       } else if (url.includes('/replay') && options.replayFrames) {
+        const frames = options.replayFrames;
+        if (options.replayGate) await options.replayGate;
         payload = {
           ok: true,
-          frames: options.replayFrames,
-          replay: { sampleCount: options.replayFrames.length },
+          frames,
+          replay: { sampleCount: frames.length },
         };
       } else if (url.includes('/sim2real/notices')) {
         payload = { ok: true, notices: options.notices || [] };
@@ -456,6 +490,212 @@ describe('Sim2Real workbench DOM behavior', () => {
     expect(errors).toEqual([]);
   });
 
+  function mountPrivateRecording(window: InstanceType<typeof JSDOM>['window']) {
+    const select = window.document.querySelector<HTMLSelectElement>('#task-select')!;
+    select.value = 'balance-stilts';
+    select.dispatchEvent(new window.Event('change', { bubbles: true }));
+    const iframe = window.document.querySelector<HTMLIFrameElement>('#simulator-frame')!,
+      source = iframe.contentWindow!;
+    const sample = {
+      t: 0.02,
+      taskId: 'balance-stilts',
+      observation: Array(61).fill(0),
+      action: Array(14).fill(0),
+      qpos: [1],
+      qvel: [0],
+      replay: { taskId: 'balance-stilts', qpos: [1], qvel: [0] },
+    };
+    const data = {
+      type: 'rdk-task-recording-ready',
+      format: 'rdk-task-trajectory-v1',
+      taskId: 'balance-stilts',
+      text: [
+        {
+          type: 'header',
+          format: 'rdk-task-trajectory-v1',
+          taskId: 'balance-stilts',
+          contractId: 'microduck-policy-v1',
+        },
+        sample,
+      ]
+        .map((row) => JSON.stringify(row))
+        .join('\n'),
+    };
+    const stop = vi.fn();
+    Object.assign(source, {
+      __rdkTaskRecorder: { recording: true, stop, getText: () => data.text },
+    });
+    window.dispatchEvent(
+      new window.MessageEvent('message', {
+        data,
+        source: source as never,
+        origin: window.location.origin,
+      }),
+    );
+    return { iframe, source, data, sample, stop };
+  }
+
+  it('clears account A simulation evidence and replaces frames before account B can use the workspace', async () => {
+    const fixture = {
+      accountId: 'account-a',
+      projects: [project({ id: 'project-a', name: 'Private A project' })],
+      workspaceContext: {
+        projectId: 'project-a',
+        deviceId: 'private-device-a',
+        trainingProfile: 'high-vram',
+      },
+    };
+    const { window, errors } = await boot(fixture);
+    const previous = mountPrivateRecording(window);
+    window.document
+      .querySelector<HTMLButtonElement>('.sidebar [data-view-target="evaluate"]')
+      ?.click();
+    const oldReplay = window.document.querySelector<HTMLIFrameElement>('#replay-scene-frame')!,
+      replaySource = oldReplay.contentWindow;
+    expect(window.document.querySelector('#replay-frame-detail')?.textContent).toContain('61D');
+    fixture.accountId = 'account-b';
+    fixture.projects = [];
+    window.document.querySelector<HTMLButtonElement>('#refresh-button')?.click();
+    await vi.waitFor(() =>
+      expect(window.document.querySelector('#account-menu-name')?.textContent).toBe('account-b'),
+    );
+    expect(previous.iframe.isConnected).toBe(false);
+    expect(oldReplay.isConnected).toBe(false);
+    expect(previous.stop).toHaveBeenCalledWith({ notify: false });
+    expect(window.eval('currentTelemetry()')).toBeNull();
+    expect(window.document.querySelector('option[value="local-recording"]')).toBeNull();
+    expect(window.document.querySelector('#replay-frame-detail')?.textContent).not.toContain('61D');
+    const stored = JSON.parse(
+      window.localStorage.getItem('rdk-duck-lab-workspace-context') || '{}',
+    );
+    expect(stored.projectId).toBe('');
+    expect(stored.deviceId).toBe('');
+    expect(stored.trainingProfile).toBe('high-vram');
+    for (const source of [previous.source, replaySource])
+      window.dispatchEvent(
+        new window.MessageEvent('message', {
+          source: source as never,
+          origin: window.location.origin,
+          data: previous.data,
+        }),
+      );
+    window.dispatchEvent(
+      new window.MessageEvent('message', {
+        source: previous.source as never,
+        origin: window.location.origin,
+        data: { type: 'rdk-simulator-task-state', taskId: 'balance-stilts', phase: 'ready' },
+      }),
+    );
+    expect(window.document.querySelector('option[value="local-recording"]')).toBeNull();
+    expect(
+      window.document.querySelector('#simulator-live-label')?.classList.contains('is-ready'),
+    ).toBe(false);
+    expect(errors).toEqual([]);
+  });
+
+  it('logout immediately stops recording and policy and ignores a late acknowledgement from the former owner', async () => {
+    const { window, errors } = await boot({ accountId: 'account-a' });
+    const main = window.document.querySelector<HTMLIFrameElement>('#simulator-frame')!,
+      source = main.contentWindow!,
+      messages = vi.spyOn(source, 'postMessage');
+    window.document.querySelector<HTMLButtonElement>('#policy-trial-button')?.click();
+    const trial = messages.mock.calls.find(([message]) => message.type === 'rdk-policy-run')?.[0];
+    expect(trial).toBeTruthy();
+    const previous = mountPrivateRecording(window);
+    window.document.querySelector<HTMLButtonElement>('#account-pill-logout')?.click();
+    expect(previous.iframe.isConnected).toBe(false);
+    expect(previous.stop).toHaveBeenCalledWith({ notify: false });
+    window.dispatchEvent(
+      new window.MessageEvent('message', {
+        source: source as never,
+        origin: window.location.origin,
+        data: {
+          type: 'rdk-policy-status',
+          trialId: trial.trialId,
+          taskId: trial.taskId,
+          phase: 'running',
+          message: 'OLD ACCOUNT POLICY',
+        },
+      }),
+    );
+    await vi.waitFor(() =>
+      expect(window.document.querySelector('#account-menu-wrap')?.hasAttribute('hidden')).toBe(
+        true,
+      ),
+    );
+    expect(window.document.querySelector('#policy-trial-status')?.textContent).not.toContain(
+      'OLD ACCOUNT POLICY',
+    );
+    expect(window.eval('currentTelemetry()')).toBeNull();
+    expect(window.document.querySelector('option[value="local-recording"]')).toBeNull();
+    expect(errors).toEqual([]);
+  });
+
+  it('retains anonymous local recordings during ordinary refresh but never mounts a former account replay response', async () => {
+    const anonymous = await boot({ sessionAuthenticated: false });
+    mountPrivateRecording(anonymous.window);
+    anonymous.window.document.querySelector<HTMLButtonElement>('#refresh-button')?.click();
+    await vi.waitFor(() =>
+      expect(
+        anonymous.window.document.querySelector('#main-content')?.getAttribute('aria-busy'),
+      ).toBe('false'),
+    );
+    expect(
+      anonymous.window.document.querySelector('option[value="local-recording"]'),
+    ).not.toBeNull();
+    let complete: () => void = () => {};
+    const fixture = {
+      accountId: 'account-a',
+      replayFrames: [
+        {
+          t: 0,
+          observation: Array(61).fill(0),
+          action: Array(14).fill(0),
+          taskId: 'balance-stilts',
+          replay: { taskId: 'balance-stilts', qpos: [1], qvel: [0] },
+        },
+      ],
+      replayGate: new Promise<void>((resolve) => {
+        complete = resolve;
+      }),
+    };
+    const { window } = await boot(fixture);
+    window.document.querySelector<HTMLButtonElement>('#replay-load-button')?.click();
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    fixture.accountId = 'account-b';
+    window.document.querySelector<HTMLButtonElement>('#refresh-button')?.click();
+    await vi.waitFor(() =>
+      expect(window.document.querySelector('#account-menu-name')?.textContent).toBe('account-b'),
+    );
+    complete();
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(window.document.querySelector('#replay-frame-label')?.textContent).toBe('0 / 0 帧');
+    expect(window.document.querySelector('#replay-scene-frame')?.getAttribute('src')).toBeNull();
+  });
+
+  it.each(['session-switch', 'session-expiry', 'overview-401'])(
+    'clears previously owned simulation data on %s',
+    async (change) => {
+      const fixture = {
+        accountId: 'account-a',
+        sessionAuthenticated: true,
+        overviewUnauthorized: false,
+      };
+      const { window, errors } = await boot(fixture);
+      const previous = mountPrivateRecording(window);
+      if (change === 'session-switch') fixture.accountId = 'account-b';
+      if (change === 'session-expiry') fixture.sessionAuthenticated = false;
+      if (change === 'overview-401') {
+        fixture.overviewUnauthorized = true;
+        window.document.querySelector<HTMLButtonElement>('#refresh-button')?.click();
+      } else await window.eval('refreshSessionMenu()');
+      await vi.waitFor(() => expect(previous.iframe.isConnected).toBe(false));
+      expect(window.eval('currentTelemetry()')).toBeNull();
+      expect(window.document.querySelector('option[value="local-recording"]')).toBeNull();
+      expect(previous.stop).toHaveBeenCalledWith({ notify: false });
+      expect(errors).toEqual([]);
+    },
+  );
   it('loads the relay transport before the app that resumes durable training runs', () => {
     const relayTag = html.indexOf('src="./relay-training.js');
     const appTag = html.indexOf('src="./app.js');
@@ -584,6 +824,48 @@ describe('Sim2Real workbench DOM behavior', () => {
     ).toBe(false);
   });
 
+  it('stops the former owner relay immediately when the session identity changes', async () => {
+    let resolveWorker!: (response: Response) => void;
+    let workerSignal: AbortSignal | null | undefined;
+    const fixture = {
+      accountId: 'owner-one',
+      runs: [
+        {
+          id: 'relay-owner-switch',
+          modelId: 'model-1',
+          backend: 'local',
+          status: 'running',
+          relayAgentUrl: 'http://127.0.0.1:19190/proxy',
+          externalRunId: 'worker-private',
+        },
+      ],
+      transport: async (url: string, init: RequestInit | undefined) => {
+        if (url === 'http://127.0.0.1:19190/proxy/runs/worker-private') {
+          workerSignal = init?.signal;
+          return new Promise<Response>((resolve) => {
+            resolveWorker = resolve;
+          });
+        }
+        return null;
+      },
+    };
+    const { window, requests, errors } = await boot(fixture);
+    expect(workerSignal?.aborted).toBe(false);
+    fixture.accountId = 'owner-two';
+    await window.eval('refreshSessionMenu()');
+    expect(workerSignal?.aborted).toBe(true);
+    resolveWorker(
+      Response.json({ status: 'completed', artifact: { sha256: 'a'.repeat(64) }, mock: false }),
+    );
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(
+      requests.some(
+        (call) => call.url.includes('/relay/sync') || call.url.includes('/relay/artifact'),
+      ),
+    ).toBe(false);
+    expect(errors).toEqual([]);
+  });
+
   it('shows the actual MicroDuck installation path when public guest health reports missing resources', async () => {
     const { window } = await boot({ authRequired: true });
     window.eval(
@@ -633,6 +915,42 @@ describe('Sim2Real workbench DOM behavior', () => {
       ),
     );
     await vi.waitFor(() => expect(window.document.body.dataset.activeView).toBe('simulate'));
+    expect(requests.filter((entry) => entry.method === 'POST')).toHaveLength(0);
+    expect(errors).toEqual([]);
+  });
+
+  it('starts the browser experience on walk even when an engine football task was persisted', async () => {
+    const { window, requests, errors } = await boot({ taskId: 'football-2v2' });
+    const doc = window.document;
+    const task = doc.querySelector<HTMLSelectElement>('#task-select')!;
+    expect(task.value).toBe('football-2v2');
+    expect(window.localStorage.getItem('rdk-duck-lab-task')).toBe('football-2v2');
+    expect(new URL(doc.querySelector<HTMLIFrameElement>('#simulator-frame')!.src).pathname).toBe(
+      '/sim2real/task-sim/',
+    );
+    doc.querySelector<HTMLButtonElement>('#next-action-button')?.click();
+    await vi.waitFor(() => expect(doc.body.dataset.activeView).toBe('simulate'));
+    expect(task.value).toBe('walk');
+    expect(window.localStorage.getItem('rdk-duck-lab-task')).toBe('walk');
+    const simulator = doc.querySelector<HTMLIFrameElement>('#simulator-frame')!;
+    expect(new URL(simulator.src).pathname).toBe('/mujoco/microduck/');
+    window.dispatchEvent(
+      new window.MessageEvent('message', {
+        source: simulator.contentWindow as never,
+        origin: window.location.origin,
+        data: {
+          type: 'rdk-microduck-recording-ready',
+          format: 'microduck-trajectory-v1',
+          text: [0, 0.02, 0.04]
+            .map((time) => JSON.stringify({ time, observation: [time], action: [time], reward: 0 }))
+            .join('\n'),
+          sampleCount: 3,
+        },
+      }),
+    );
+    expect(window.eval('currentTelemetry().source')).toBe('browser-microduck');
+    expect(doc.querySelector<HTMLElement>('#experience-recording-review')?.hidden).toBe(false);
+    expect(doc.querySelector('#onboard-count')?.textContent).toBe('2 / 4');
     expect(requests.filter((entry) => entry.method === 'POST')).toHaveLength(0);
     expect(errors).toEqual([]);
   });
@@ -713,8 +1031,8 @@ describe('Sim2Real workbench DOM behavior', () => {
     expect(doc.querySelector('.simulator-frame-wrap .simulator-fallback')).toBeNull();
     expect(doc.querySelector('#microduck-entry-link')?.closest('.simulator-frame-wrap')).toBeNull();
     expect(doc.querySelector('#microduck-entry-link')?.textContent).toContain('画面打不开');
-    expect(doc.querySelector('#simulator-live-text')?.textContent).toBe('示例可打开');
-    expect(doc.querySelector('#simulator-run-status')?.textContent).toBe('示例可打开');
+    expect(doc.querySelector('#simulator-live-text')?.textContent).toBe('等待进入仿真');
+    expect(doc.querySelector('#simulator-run-status')?.textContent).toBe('等待进入仿真');
     const trainingLink = doc.querySelector('.guide-panel [data-view-target="train"]');
     expect(trainingLink?.classList.contains('button-ghost')).toBe(true);
     expect(trainingLink?.textContent).toContain('了解模型训练');
@@ -722,6 +1040,8 @@ describe('Sim2Real workbench DOM behavior', () => {
       window.dispatchEvent(
         new window.MessageEvent('message', {
           origin: window.location.origin,
+          source: window.document.querySelector<HTMLIFrameElement>('#simulator-frame')
+            ?.contentWindow as never,
           data: {
             type: 'rdk-microduck-recording-ready',
             format: 'microduck-trajectory-v1',
@@ -748,6 +1068,10 @@ describe('Sim2Real workbench DOM behavior', () => {
     button.click();
     await vi.waitFor(() => expect(dialog.open).toBe(true));
     expect(dialog.querySelector('#replay-player')).toBe(player);
+    expect(doc.querySelector<HTMLSelectElement>('#replay-run-select')?.value).toBe(
+      'local-recording',
+    );
+    expect(doc.querySelector<HTMLButtonElement>('#replay-play-button')?.disabled).toBe(false);
     expect(doc.body.dataset.activeView).toBe('simulate');
     expect(window.location.hash).toBe('#simulate/simulate');
     const seek = doc.querySelector<HTMLInputElement>('#replay-seek')!;
@@ -783,6 +1107,8 @@ describe('Sim2Real workbench DOM behavior', () => {
       window.dispatchEvent(
         new window.MessageEvent('message', {
           origin: window.location.origin,
+          source: window.document.querySelector<HTMLIFrameElement>('#simulator-frame')
+            ?.contentWindow as never,
           data: {
             type: 'rdk-microduck-recording-ready',
             format: 'microduck-trajectory-v1',
@@ -830,6 +1156,8 @@ describe('Sim2Real workbench DOM behavior', () => {
       window.dispatchEvent(
         new window.MessageEvent('message', {
           origin: window.location.origin,
+          source: window.document.querySelector<HTMLIFrameElement>('#simulator-frame')!
+            .contentWindow as never,
           data: {
             type: 'rdk-microduck-recording-ready',
             format: 'microduck-trajectory-v1',
@@ -896,6 +1224,8 @@ describe('Sim2Real workbench DOM behavior', () => {
     window.dispatchEvent(
       new window.MessageEvent('message', {
         origin: window.location.origin,
+        source: window.document.querySelector<HTMLIFrameElement>('#simulator-frame')!
+          .contentWindow as never,
         data: {
           type: 'rdk-microduck-recording-ready',
           format: 'microduck-trajectory-v1',
@@ -917,6 +1247,39 @@ describe('Sim2Real workbench DOM behavior', () => {
     await new Promise((resolve) => setTimeout(resolve, 260));
     expect(window.document.querySelector('#onboard-count')?.textContent).toBe('2 / 4');
     expect(requests.filter((entry) => entry.method === 'POST')).toHaveLength(0);
+    expect(errors).toEqual([]);
+  });
+
+  it('closes an open recording review and releases its private evidence when the account changes', async () => {
+    const fixture = { accountId: 'account-a' };
+    const { window, errors } = await boot(fixture);
+    const player = window.document.querySelector('#replay-player')!;
+    const originalParent = player.parentNode;
+    const source =
+      window.document.querySelector<HTMLIFrameElement>('#simulator-frame')!.contentWindow!;
+    window.dispatchEvent(
+      new window.MessageEvent('message', {
+        origin: window.location.origin,
+        source: source as never,
+        data: {
+          type: 'rdk-microduck-recording-ready',
+          format: 'microduck-trajectory-v1',
+          text: [0, 0.02, 0.04]
+            .map((time) => JSON.stringify({ time, observation: [time], action: [time] }))
+            .join('\n'),
+        },
+      }),
+    );
+    window.document.querySelector<HTMLButtonElement>('#next-action-button')?.click();
+    const dialog = window.document.querySelector<HTMLDialogElement>('#experience-review-dialog')!;
+    await vi.waitFor(() => expect(dialog.open).toBe(true));
+    fixture.accountId = 'account-b';
+    await window.eval('loadOverview({ quiet: true })');
+    expect(dialog.open).toBe(false);
+    expect(player.parentNode).toBe(originalParent);
+    expect(window.eval('__workbenchState.reviewedRecording')).toBeNull();
+    expect(window.eval('currentTelemetry()')).toBeNull();
+    expect(window.eval('__workbenchState.replay.frames.length')).toBe(0);
     expect(errors).toEqual([]);
   });
 
@@ -1263,6 +1626,35 @@ describe('Sim2Real workbench DOM behavior', () => {
     await new Promise((resolve) => setTimeout(resolve, 20));
     expect(templateButton?.textContent).toContain('OriginBot');
     expect(contractTip?.textContent).toContain('OriginBot');
+    expect(errors).toEqual([]);
+  });
+
+  it('shows OriginBot connection failures and recovery from the active scene', async () => {
+    const { window, errors } = await boot();
+    const doc = window.document;
+    const productSelect = doc.querySelector<HTMLSelectElement>('#product-select')!;
+    productSelect.value = 'originbot';
+    productSelect.dispatchEvent(new window.Event('change', { bubbles: true }));
+    const frame = doc.querySelector<HTMLIFrameElement>('#simulator-frame')!;
+    const notify = (phase: string) =>
+      window.dispatchEvent(
+        new window.MessageEvent('message', {
+          origin: window.location.origin,
+          source: frame.contentWindow as never,
+          data: {
+            type: 'rdk-simulator-task-state',
+            taskId: 'goal-navigation',
+            phase,
+            controlHz: 20,
+          },
+        }),
+      );
+    notify('failed');
+    expect(doc.getElementById('simulator-live-text')?.textContent).toBe('场景连接失败');
+    expect(doc.getElementById('simulator-live-label')?.classList.contains('is-ready')).toBe(false);
+    notify('ready');
+    expect(doc.getElementById('simulator-live-text')?.textContent).toBe('任务场景已就绪');
+    expect(doc.getElementById('simulator-live-label')?.classList.contains('is-ready')).toBe(true);
     expect(errors).toEqual([]);
   });
 
@@ -1668,6 +2060,340 @@ describe('Sim2Real workbench DOM behavior', () => {
       (request) => request.url.endsWith('/sim2real/runs') && request.method === 'POST',
     );
     expect(runRequest?.body).toMatchObject({ modelId: 'model-1', projectId: 'project-1' });
+    expect(errors).toEqual([]);
+  });
+
+  it('switches the visible simulator to the selected engine task and restores the duck sandbox', async () => {
+    const { window, errors } = await boot();
+    const select = window.document.querySelector<HTMLSelectElement>('#task-select')!;
+    const iframe = window.document.querySelector<HTMLIFrameElement>('#simulator-frame')!;
+    for (const taskId of ['balance-stilts', 'balance-basketball', 'football-2v2', 'swing-pump']) {
+      select.value = taskId;
+      select.dispatchEvent(new window.Event('change', { bubbles: true }));
+      const src = new URL(iframe.src);
+      expect(src.pathname).toBe('/sim2real/task-sim/');
+      expect(src.searchParams.get('taskId')).toBe(taskId);
+      expect(src.searchParams.get('duckAssetBase')).toBe('/sim2real/mujoco/microduck/robot/mjlab/');
+      expect(window.document.querySelector('#task-context-note')?.textContent).not.toContain(
+        '画面不随',
+      );
+    }
+    select.value = 'walk';
+    select.dispatchEvent(new window.Event('change', { bubbles: true }));
+    expect(new URL(iframe.src).pathname).toBe('/mujoco/microduck/');
+    expect(errors).toEqual([]);
+  });
+
+  it('passes the selected model visual directory to the engine scene while preserving its task API', async () => {
+    const { window, errors } = await boot({ visualAssetBase: '/sim2real/visual-models/my-duck/' });
+    const select = window.document.querySelector<HTMLSelectElement>('#task-select')!;
+    select.value = 'balance-stilts';
+    select.dispatchEvent(new window.Event('change', { bubbles: true }));
+    const source = new URL(
+      window.document.querySelector<HTMLIFrameElement>('#simulator-frame')!.src,
+    );
+    expect(source.searchParams.get('duckAssetBase')).toBe('/sim2real/visual-models/my-duck/');
+    expect(source.searchParams.get('taskId')).toBe('balance-stilts');
+    expect(source.searchParams.get('mujocoBase')).toBe('/sim2real/mujoco');
+    expect(errors).toEqual([]);
+  });
+
+  it.each(['https://other.example/duck/', '/models/../duck/', '/models/%2e%2e/duck/'])(
+    'falls back to reviewed assets for an unsafe raw visual directory: %s',
+    async (visualAssetBase) => {
+      const { window, errors } = await boot({ visualAssetBase });
+      const select = window.document.querySelector<HTMLSelectElement>('#task-select')!;
+      select.value = 'balance-stilts';
+      select.dispatchEvent(new window.Event('change', { bubbles: true }));
+      const source = new URL(
+        window.document.querySelector<HTMLIFrameElement>('#simulator-frame')!.src,
+      );
+      expect(source.searchParams.get('duckAssetBase')).toBe(
+        '/sim2real/mujoco/microduck/robot/mjlab/',
+      );
+      expect(source.searchParams.get('mujocoBase')).toBe('/sim2real/mujoco');
+      expect(errors).toEqual([]);
+    },
+  );
+
+  it('accepts a recording only from the active simulator and makes it locally replayable', async () => {
+    const { window } = await boot();
+    const iframe = window.document.querySelector<HTMLIFrameElement>('#simulator-frame')!;
+    const text = [
+      {
+        type: 'header',
+        format: 'rdk-task-trajectory-v1',
+        taskId: 'balance-stilts',
+        source: 'engine-task-simulation',
+        contractId: 'microduck-policy-v1',
+      },
+      {
+        t: 0,
+        taskId: 'balance-stilts',
+        observation: Array(61).fill(0),
+        action: Array(14).fill(0),
+        qpos: [1, 0, 0, 0],
+        qvel: [0, 0, 0],
+        replay: { taskId: 'balance-stilts', qpos: [1, 0, 0, 0], qvel: [0, 0, 0] },
+      },
+    ]
+      .map((row) => JSON.stringify(row))
+      .join('\n');
+    const data = {
+      type: 'rdk-task-recording-ready',
+      format: 'rdk-task-trajectory-v1',
+      taskId: 'balance-stilts',
+      text,
+    };
+    window.dispatchEvent(
+      new window.MessageEvent('message', { data, origin: window.location.origin, source: null }),
+    );
+    expect(
+      window.document
+        .querySelector<HTMLSelectElement>('#replay-run-select')
+        ?.querySelector('option[value="local-recording"]'),
+    ).toBeNull();
+    const select = window.document.querySelector<HTMLSelectElement>('#task-select')!;
+    select.value = 'balance-stilts';
+    select.dispatchEvent(new window.Event('change', { bubbles: true }));
+    window.dispatchEvent(
+      new window.MessageEvent('message', {
+        data,
+        origin: window.location.origin,
+        source: iframe.contentWindow as never,
+      }),
+    );
+    expect(window.document.querySelector<HTMLSelectElement>('#replay-run-select')?.value).toBe(
+      'local-recording',
+    );
+    expect(window.document.querySelector<HTMLButtonElement>('#replay-play-button')?.disabled).toBe(
+      false,
+    );
+    expect(window.document.querySelector('#replay-frame-detail')?.textContent).toContain('61D');
+  });
+
+  it('restores an earlier task recording after switching tasks without waiting for the hidden scene', async () => {
+    const { window, errors } = await boot();
+    const select = window.document.querySelector<HTMLSelectElement>('#task-select')!;
+    const mainFrame = window.document.querySelector<HTMLIFrameElement>('#simulator-frame')!;
+    const chooseTask = (taskId: string) => {
+      select.value = taskId;
+      select.dispatchEvent(new window.Event('change', { bubbles: true }));
+    };
+    chooseTask('balance-stilts');
+    const sample = {
+      t: 0.02,
+      taskId: 'balance-stilts',
+      observation: Array(61).fill(0),
+      action: Array(14).fill(0),
+      replay: { taskId: 'balance-stilts', qpos: [1, 0, 0, 0], qvel: [0, 0, 0] },
+    };
+    const text = [
+      { type: 'header', taskId: sample.taskId, source: 'engine-task-simulation' },
+      sample,
+    ]
+      .map((row) => JSON.stringify(row))
+      .join('\n');
+    window.dispatchEvent(
+      new window.MessageEvent('message', {
+        origin: window.location.origin,
+        source: mainFrame.contentWindow as never,
+        data: {
+          type: 'rdk-task-recording-ready',
+          format: 'rdk-task-trajectory-v1',
+          taskId: sample.taskId,
+          text,
+        },
+      }),
+    );
+    chooseTask('balance-basketball');
+    window.document
+      .querySelector<HTMLButtonElement>('.sidebar [data-view-target="records"]')
+      ?.click();
+    const openRecording = Array.from(
+      window.document.querySelectorAll<HTMLButtonElement>('#history-list button'),
+    ).find((button) => button.textContent === '回放本次录制');
+    expect(openRecording).toBeTruthy();
+    openRecording?.click();
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    const replayFrame = window.document.querySelector<HTMLIFrameElement>('#replay-scene-frame')!;
+    expect(new URL(replayFrame.src).searchParams.get('taskId')).toBe(sample.taskId);
+    expect(mainFrame.dataset.taskId).toBe('balance-basketball');
+    const replayMessages = vi.spyOn(replayFrame.contentWindow!, 'postMessage');
+    const ready = {
+      type: 'rdk-simulator-task-state',
+      taskId: sample.taskId,
+      phase: 'ready',
+      controlHz: 50,
+    };
+    // The hidden scene may still be loading or acknowledging its own task.
+    // Only the replay scene's readiness can release the waiting replay frame.
+    window.dispatchEvent(
+      new window.MessageEvent('message', {
+        data: ready,
+        origin: window.location.origin,
+        source: mainFrame.contentWindow as never,
+      }),
+    );
+    expect(replayMessages.mock.calls.some(([message]) => message.type === 'rdk-replay-frame')).toBe(
+      false,
+    );
+    window.dispatchEvent(
+      new window.MessageEvent('message', {
+        data: ready,
+        origin: window.location.origin,
+        source: replayFrame.contentWindow as never,
+      }),
+    );
+    expect(
+      replayMessages.mock.calls.find(([message]) => message.type === 'rdk-replay-frame')?.[0],
+    ).toMatchObject({
+      taskId: sample.taskId,
+      frame: { replay: sample.replay },
+      index: 0,
+    });
+    expect(mainFrame.dataset.taskId).toBe(sample.taskId);
+    expect(window.document.querySelector<HTMLButtonElement>('#replay-play-button')?.disabled).toBe(
+      false,
+    );
+    expect(window.document.querySelector('#replay-status')?.textContent).toContain('已加载 1 帧');
+    expect(errors).toEqual([]);
+  });
+
+  it('runs and stops policy trials in the visible replay scene and accepts its status acknowledgements', async () => {
+    const run = {
+      id: 'balance-policy-run',
+      modelId: 'model-1',
+      backend: 'local',
+      status: 'completed',
+      taskId: 'balance-stilts',
+      mock: false,
+      createdAt: '2026-09-16T00:00:00.000Z',
+      metrics: {},
+    };
+    const sample = {
+      t: 0.02,
+      taskId: run.taskId,
+      observation: Array(61).fill(0),
+      action: Array(14).fill(0),
+      replay: { taskId: run.taskId, qpos: [1, 0, 0, 0], qvel: [0, 0, 0] },
+    };
+    const { window, errors } = await boot({ runs: [run], replayFrames: [sample] });
+    window.document
+      .querySelector<HTMLButtonElement>('.sidebar [data-view-target="evaluate"]')
+      ?.click();
+    window.document.querySelector<HTMLButtonElement>('#replay-load-button')?.click();
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    const mainFrame = window.document.querySelector<HTMLIFrameElement>('#simulator-frame')!;
+    const replayFrame = window.document.querySelector<HTMLIFrameElement>('#replay-scene-frame')!;
+    expect(replayFrame.hidden).toBe(false);
+    const replayMessages = vi.spyOn(replayFrame.contentWindow!, 'postMessage');
+    window.dispatchEvent(
+      new window.MessageEvent('message', {
+        origin: window.location.origin,
+        source: replayFrame.contentWindow as never,
+        data: {
+          type: 'rdk-simulator-task-state',
+          taskId: run.taskId,
+          phase: 'ready',
+          controlHz: 50,
+        },
+      }),
+    );
+    const mainMessages = vi.spyOn(mainFrame.contentWindow!, 'postMessage');
+    const start = window.document.querySelector<HTMLButtonElement>('#policy-trial-button')!;
+    const stop = window.document.querySelector<HTMLButtonElement>('#policy-trial-stop')!;
+    start.click();
+    expect(
+      replayMessages.mock.calls.some(
+        ([message]) => message.type === 'rdk-simulator-active' && message.active === true,
+      ),
+    ).toBe(true);
+    const command = replayMessages.mock.calls.find(
+      ([message]) => message.type === 'rdk-policy-run',
+    )?.[0];
+    expect(command).toMatchObject({ runId: run.id, taskId: run.taskId });
+    expect(mainMessages.mock.calls.some(([message]) => message.type === 'rdk-policy-run')).toBe(
+      false,
+    );
+    const acknowledgement = {
+      type: 'rdk-policy-status',
+      trialId: command.trialId,
+      taskId: run.taskId,
+      phase: 'running',
+      message: '当前回放场景策略正在运行',
+    };
+    window.dispatchEvent(
+      new window.MessageEvent('message', {
+        data: acknowledgement,
+        origin: window.location.origin,
+        source: mainFrame.contentWindow as never,
+      }),
+    );
+    expect(window.document.querySelector('#policy-trial-status')?.textContent).not.toContain(
+      acknowledgement.message,
+    );
+    window.dispatchEvent(
+      new window.MessageEvent('message', {
+        data: { ...acknowledgement, trialId: 'older-trial' },
+        origin: window.location.origin,
+        source: replayFrame.contentWindow as never,
+      }),
+    );
+    expect(window.document.querySelector('#policy-trial-status')?.textContent).not.toContain(
+      acknowledgement.message,
+    );
+    window.dispatchEvent(
+      new window.MessageEvent('message', {
+        data: acknowledgement,
+        origin: window.location.origin,
+        source: replayFrame.contentWindow as never,
+      }),
+    );
+    expect(window.document.querySelector('#policy-trial-status')?.textContent).toBe(
+      acknowledgement.message,
+    );
+    expect(start.disabled).toBe(true);
+    expect(stop.disabled).toBe(false);
+    stop.click();
+    expect(replayMessages.mock.calls.some(([message]) => message.type === 'rdk-policy-stop')).toBe(
+      true,
+    );
+    expect(mainMessages.mock.calls.some(([message]) => message.type === 'rdk-policy-stop')).toBe(
+      false,
+    );
+    expect(start.disabled).toBe(false);
+    expect(stop.disabled).toBe(true);
+    mainMessages.mockClear();
+    replayMessages.mockClear();
+    window.document
+      .querySelector<HTMLButtonElement>('.sidebar [data-view-target="simulate"]')
+      ?.click();
+    expect(
+      mainMessages.mock.calls.some(
+        ([message]) => message.type === 'rdk-simulator-active' && message.active === true,
+      ),
+    ).toBe(true);
+    expect(
+      replayMessages.mock.calls.some(
+        ([message]) => message.type === 'rdk-simulator-active' && message.active === false,
+      ),
+    ).toBe(true);
+    mainMessages.mockClear();
+    replayMessages.mockClear();
+    window.document
+      .querySelector<HTMLButtonElement>('.sidebar [data-view-target="evaluate"]')
+      ?.click();
+    expect(
+      mainMessages.mock.calls.some(
+        ([message]) => message.type === 'rdk-simulator-active' && message.active === false,
+      ),
+    ).toBe(true);
+    expect(
+      replayMessages.mock.calls.some(
+        ([message]) => message.type === 'rdk-simulator-active' && message.active === true,
+      ),
+    ).toBe(true);
     expect(errors).toEqual([]);
   });
 

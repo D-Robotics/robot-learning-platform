@@ -654,7 +654,7 @@
                 <div class="simulator-footer">
                   <span id="simulator-run-status">入口状态待确认</span
                   ><span class="mono" id="simulator-runtime-label">资源状态 · 需挂载</span
-                  ><span class="mono" id="simulator-scene-note" hidden>训练场景在引擎侧运行 · 画面不随任务切换</span>
+                  ><span class="mono" id="simulator-scene-note" hidden>任务场景 · 训练代理模型</span>
                   <span class="simulator-evidence-status" id="simulator-evidence-status">停止录制后，可在这里查看记录</span>
                 </div>
                 <section class="sim-context-panel experience-recording-review" id="experience-recording-review" aria-labelledby="experience-recording-title" hidden>
@@ -1188,6 +1188,7 @@
                 <div class="empty-inline">完成一次训练或评测后，这里会显示可比较的指标。</div>
               </div>
             </article>
+            </div>
             <details class="panel telemetry-panel workspace-inspector" aria-labelledby="telemetry-title">
               <summary class="panel-heading panel-heading-lean workspace-inspector-summary"><span><small>Inspector</small><h2 id="telemetry-title">遥测回放与证据</h2></span>
                 <span class="state-badge state-neutral" id="telemetry-state">尚未导入</span>
@@ -1224,6 +1225,9 @@
                 </div>
               </div>
               <div class="replay-player" id="replay-player" aria-label="逐帧回放播放器">
+                <div class="simulator-frame-wrap" id="replay-scene-wrap" hidden>
+                  <iframe id="replay-scene-frame" title="轨迹的三维场景回放" allow="fullscreen" hidden></iframe>
+                </div>
                 <div class="replay-player-heading"><strong>逐帧回放</strong><span id="replay-status">选择一个运行记录后加载</span></div>
                 <div class="replay-player-controls">
                   <select id="replay-run-select" aria-label="选择要回放的运行"></select>
@@ -1366,7 +1370,6 @@
                 >
               </div>
             </details>
-            </div>
             <div class="evaluation-next">
               <span class="next-line" id="evaluation-next-line"></span>
               <strong id="evaluation-next-title">下一步：通过评测后生成 X5 预检计划</strong>
@@ -2187,7 +2190,7 @@
       downloads start in parallel during HTML parse instead of serially
       blocking the parser at body end.
     -->
-    <script defer src="./telemetry-core.js?v=duck-lab-30"></script>
+    <script defer src="./telemetry-core.js?v=duck-lab-32"></script>
     <script defer src="./ui-components.js?v=ui-1"></script>
     <script defer src="./first-use-core.js?v=start-5"></script>
     <script defer src="./relay-training.js?v=relay-1"></script>

@@ -18,6 +18,8 @@ const TS_FILES = ['server/**/*.ts', 'shared/**/*.ts', 'services/**/*.ts'];
 const NODE_JS_FILES = ['scripts/**/*.mjs', 'services/**/*.mjs', '*.mjs'];
 const BROWSER_JS_FILES = [
   'services/sim2real-web/public/*.js',
+  'services/sim2real-web/public/task-sim/*.{js,mjs}',
+  'services/sim2real-web/public/originbot-sim/sim.js',
   'services/mujoco-web/microduck-community-overlay.js',
 ];
 
@@ -168,7 +170,7 @@ export default tseslint.config(
     extends: [js.configs.recommended],
     languageOptions: {
       ecmaVersion: 2023,
-      sourceType: 'script',
+      sourceType: 'module',
       globals: {
         ...globals.browser,
         // app.js defines `setView` as a classic-script global that

@@ -22,7 +22,7 @@ const BASE_PATH = (() => {
 function appRelativePath(value) {
   const raw = String(value || '').trim();
   if (!raw || raw.startsWith('//') || /^https?:\/\//i.test(raw)) return raw;
-  if (BASE_PATH && (raw.startsWith('/mujoco/') || raw.startsWith('/originbot-sim/'))) return BASE_PATH + raw;
+  if (BASE_PATH && (raw.startsWith('/mujoco/') || raw.startsWith('/originbot-sim/') || raw.startsWith('/task-sim/'))) return BASE_PATH + raw;
   return raw;
 }
 const PRODUCT_PROFILES = Object.freeze({
@@ -93,8 +93,8 @@ const ACTION_TASKS = Object.freeze({
   'football-3v3': { label: '足球：3v3', hint: '三鸭协作、多智能体比赛与 GPU 并行训练', scene: '6 鸭 · 双方各 3 · 双球门 · GPU 并行' },
   custom: { label: '自定义动作', hint: '使用自己的策略包' },
   'goal-navigation': { label: '目标导航', hint: '基于 odom/IMU 的目标点导航' },
-  'visual-twist': { label: '视觉跟随', hint: '相机观测到线速度/角速度' },
-  'data-collection': { label: '数据采集', hint: '同步记录图像、状态和动作' },
+  'visual-twist': { label: '视觉跟随', hint: '相机与传感器预览；视觉控制需接入检测特征适配器' },
+  'data-collection': { label: '数据采集', hint: '同步记录状态、传感器与动作' },
 });
 
 const ORIGINBOT_TASK_IDS = Object.freeze(['goal-navigation', 'visual-twist', 'data-collection', 'custom']);
@@ -448,6 +448,86 @@ const state = {
     switchWired: false,
   },
 };
+
+let workspaceOwnerId = null;
+let workspaceOwnerEpoch = 0;
+let overviewLoadSequence = 0;
+let sessionProbeSequence = 0;
+
+function wireSimulatorFrameLifecycle(frame) {
+  if (!frame) return;
+  frame.addEventListener('load', () => {
+    if ($(frame.id) !== frame || !frame.getAttribute('src') || frame.getAttribute('src') === 'about:blank') return;
+    syncSimulatorTask(frame);
+    simulatorMessage({ type: 'rdk-simulator-active', active: document.body.dataset.activeView === (frame.id === 'replay-scene-frame' ? 'evaluate' : 'simulate') }, frame);
+  });
+}
+
+function clearPrivateWorkspaceState({ keepOverviewLoading = false } = {}) {
+  // A new browsing context rejects delayed messages from the former account;
+  // navigating the same iframe would retain its WindowProxy identity.
+  workspaceOwnerEpoch += 1;
+  trainingRelay?.stop();
+  sessionProbeSequence += 1;
+  if (!keepOverviewLoading) { overviewLoadSequence += 1; setLoading(false); }
+  closeExperienceReview();
+  state.reviewedRecording = null;
+  stopPolicyTrial();
+  Object.assign(policyTrial, { runId: '', running: false, target: null, taskId: '', id: '' });
+  setPolicyTrialStatus('');
+  if (state.replay.timer) clearTimeout(state.replay.timer);
+  state.replay = { runId: '', frames: [], index: 0, timer: null, speed: 1, loaded: false };
+  state.telemetry = null; state.localRecording = null; state.localRecordings = {};
+  for (const id of ['simulator-frame', 'replay-scene-frame']) {
+    const frame = $(id); if (!frame) continue;
+    simulatorMessage({ type: 'rdk-policy-stop' }, frame);
+    simulatorMessage({ type: 'rdk-replay-clear' }, frame);
+    simulatorMessage({ type: 'rdk-simulator-active', active: false }, frame);
+    try {
+      const child = frame.contentWindow;
+      for (const recorder of [child?.__rdkTaskRecorder, child?.__microduckRecorder, child?.__rdkOriginbotRecorder]) recorder?.stop?.({ notify: false });
+    } catch { /* Cross-origin scenes still receive stop and are unloaded. */ }
+    const replacement = frame.cloneNode(false);
+    replacement.removeAttribute('src'); replacement.hidden = true; delete replacement.dataset.taskId;
+    frame.setAttribute('src', 'about:blank'); frame.replaceWith(replacement);
+    wireSimulatorFrameLifecycle(replacement);
+  }
+  Object.assign(simulatorTaskState, { taskId: '', phase: 'loading', message: '', controlHz: null });
+  replayFrameIndex = { source: null, runId: '', indices: [] };
+  mountReplayVideo('', null);
+  Object.assign(state, { overview: null, workspaceSummary: null, projects: [], projectsLoaded: false, projectsLoadError: false, datasets: [], datasetsLoaded: false, model: null, compatibility: [], validation: null, goldenPath: null, researchLoop: null, selectedModelId: '', selectedDeviceId: '', selectedComputeResourceId: '', computeResourceEditingId: '', projectId: '', activeDeployment: null, selectedRecord: null, recordsQuery: '', publishingTelemetry: false });
+  state.notifiedRunIds.clear(); state.runLogs = { runId: null, cursor: 0, lines: [], inFlight: false, terminalDone: null };
+  state.agent.boardHealth = null;
+  stationStopStatusStream(); state.station.streamAbort?.abort(); clearTimeout(state.station.streamReconnectTimer);
+  Object.assign(state.station, { ready: false, initialized: false, offline: false, offlineReason: '', mock: false, device: null, statusReader: null, streamAbort: null, streamReconnectTimer: null, cameraOn: false, log: [] });
+  $('station-camera-img')?.removeAttribute('src');
+  $('station-log-list')?.replaceChildren(); $('station-policy-files')?.replaceChildren();
+  setText('station-device-name', '（未选择）'); setText('station-command-output', '');
+  settleConfirmAction(false);
+  for (const id of ['run-detail-dialog', 'project-dialog']) { const dialog = $(id); if (dialog?.open) dialog.close(); }
+  $('run-detail-body')?.replaceChildren();
+  for (const id of ['manifest-editor', 'project-name-input', 'project-slug-input', 'compute-resource-editing-id', 'compute-resource-token', 'compute-resource-url', 'resume-checkpoint-id', 'resume-artifact-ref']) { const input = $(id); if (input) input.value = ''; }
+  for (const id of ['account-name', 'account-menu-name', 'account-menu-id']) { const node = $(id); if (node) { node.textContent = ''; node.removeAttribute('title'); } }
+  saveWorkspaceContext();
+  renderAll();
+}
+
+function reconcileWorkspaceIdentity(identity, options = {}) {
+  const accountId = typeof identity?.accountId === 'string' ? identity.accountId.trim() : '';
+  const nextOwner = identity?.authenticated === false ? null : accountId || workspaceOwnerId;
+  if (nextOwner === workspaceOwnerId) return false;
+  const previousOwner = workspaceOwnerId; workspaceOwnerId = nextOwner;
+  // Initial anonymous/local use remains usable; only an established account
+  // changing or expiring discards its privately owned browser state.
+  if (previousOwner !== null) clearPrivateWorkspaceState(options);
+  else if (nextOwner !== null) {
+    // Existing storage does not record an owner. Never carry its project,
+    // model or device selection into the first verified account on a reload.
+    state.projectId = ''; state.selectedModelId = ''; state.selectedDeviceId = ''; state.selectedComputeResourceId = '';
+    saveWorkspaceContext();
+  }
+  return true;
+}
 
 function saveWorkspaceContext() {
   try {
@@ -1669,6 +1749,7 @@ function syncAuthGateLoginLinks() {
 // 已登录用户在“更多”菜单里看到当前账号与退出登录入口；游客看不到（顶栏
 // 已有登录按钮）。失败静默：会话接口不可达时菜单保持原样，不影响其他功能。
 async function refreshSessionMenu() {
+  const probe = ++sessionProbeSequence;
   const accountItem = $('account-menu-item');
   const accountName = $('account-name');
   const logoutLink = $('logout-link');
@@ -1677,6 +1758,10 @@ async function refreshSessionMenu() {
     const session = await request('/sim2real/auth/session', {
       headers: { accept: 'application/json' },
     });
+    if (probe !== sessionProbeSequence) return;
+    const hadAccount = workspaceOwnerId !== null;
+    reconcileWorkspaceIdentity(session);
+    if (hadAccount && session?.authenticated === false) setAuthGate(session);
     // Unauthenticated visitors and deployments without a logout route must
     // hide the rows explicitly, or a stale account row survives logout and
     // account switches.
@@ -1698,6 +1783,8 @@ async function refreshSessionMenu() {
 }
 
 function setAuthGate(payload) {
+  const hadIdentity = Boolean(workspaceOwnerId || state.overview?.identity?.accountId);
+  reconcileWorkspaceIdentity({ authenticated: false });
   trainingRelay?.stop();
   state.authRequired = true;
   const loginUrl = withLocalReturnTo(safeLoginUrl(
@@ -1709,9 +1796,8 @@ function setAuthGate(payload) {
   const loginButton = $('auth-login-button');
   const loginLink = $('login-link');
   const bannerLogin = $('auth-gate-banner-login');
-  // The gate is a dismissible banner, not a wall: the simulator stays fully
-  // playable while logged out, so first-contact visitors can try the product
-  // before any account step. The full login form opens on demand.
+  // The base WASM scene remains playable while logged out. Shared engine
+  // sessions and OriginBot still require login; the full form opens on demand.
   if (gate) gate.hidden = false;
   for (const node of [loginButton, loginLink, bannerLogin]) {
     if (!node) continue;
@@ -1733,11 +1819,10 @@ function setAuthGate(payload) {
     state.authNoticeShown = true;
     // 区分「从未登录」与「登录已过期」：后者换个口径，提示重新登录即可恢复
     // 训练与部署，而不是把访客当成第一次来的游客。
-    const hadIdentity = Boolean(state.overview?.identity?.accountId);
     showToast(
       hadIdentity
-        ? '登录已过期：仿真可直接试玩；重新登录后可继续训练与真机部署。'
-        : '当前为游客模式：仿真可直接试玩；训练记录与真机部署需要登录。',
+        ? '登录已过期：基础场景可试玩；引擎仿真、训练记录与真机部署需要登录。'
+        : '当前为游客模式：基础场景可试玩；引擎仿真、训练记录与真机部署需要登录。',
       'normal',
     );
   }
@@ -1778,6 +1863,8 @@ async function submitAuthLogin() {
 }
 
 async function logoutAccount() {
+  workspaceOwnerId = null;
+  clearPrivateWorkspaceState();
   // Prefer the deployment-provided logout endpoint: it is mode-aware and
   // clears every session cookie server-side. The in-place /sso/logout posts
   // the same clear-all Set-Cookie set and covers direct-login sessions too.
@@ -2002,6 +2089,7 @@ function friendlyError(error, fallback = '操作失败') {
 }
 
 async function request(path, options = {}) {
+  const ownerEpoch = workspaceOwnerEpoch;
   const headers = Object.assign(
     options.body ? { 'content-type': 'application/json' } : {},
     options.headers || {},
@@ -2023,6 +2111,7 @@ async function request(path, options = {}) {
   const payload = contentType.includes('application/json')
     ? await response.json().catch(() => null)
     : await response.text().catch(() => '');
+  if (ownerEpoch !== workspaceOwnerEpoch) throw new DOMException('账号已变化，已丢弃旧工作区响应。', 'AbortError');
   if (contentType.includes('text/html')) {
     // An expired session surfaces as a redirected HTML login document — this
     // platform's own login page or the Studio gateway's — never as JSON. Any
@@ -2097,7 +2186,7 @@ const VIEW_STAGE_LABELS = {
 // view with another node, but it always selects a distinct module, filter, or
 // evidence panel so the destination is visible and bookmarkable.
 const FLOW_CHILD_CONTEXTS = {
-  simulate: { kicker: '01 · 数据与仿真', title: '仿真与录制', description: '运行 MicroDuck 场景，录制可回放轨迹。' },
+  simulate: { kicker: '01 · 数据与仿真', title: '仿真与录制', description: '运行当前机器人和任务的场景，录制可回放轨迹。' },
   replays: { kicker: '01 · 数据与仿真', title: '轨迹与回放', description: '按运行筛选轨迹，并打开逐帧回放证据。', view: 'records', recordTab: 'run', focus: '#history-list' },
   prepare: { kicker: '02 · 训练与策略', title: '模型与兼容性', description: '登记模型说明，检查输入、输出和设备是否匹配。', view: 'train', trainModule: 'contract', focus: '#contract-fold' },
   configure: { kicker: '02 · 训练与策略', title: '训练配置', description: '选择算法、训练档位、GPU 资源和续训 checkpoint。', view: 'train', trainModule: 'config', focus: '#train-module-config' },
@@ -2195,6 +2284,12 @@ function renderFlowBanner() {
 
 function setView(view, { updateHash = true, scroll = true, focus = true } = {}) {
   const wanted = WORKFLOW_VIEWS.includes(view) ? view : 'overview';
+  if (document.body.dataset.activeView && document.body.dataset.activeView !== wanted && policyTrial.running) stopPolicyTrial();
+  if (document.body.dataset.activeView === 'simulate' && wanted !== 'simulate') preserveActiveRecording();
+  const replayScene = $('replay-scene-frame');
+  if (document.body.dataset.activeView === 'evaluate' && wanted !== 'evaluate') {
+    simulatorMessage({ type: 'rdk-simulator-active', active: false }, replayScene);
+  }
   clearFlowChild();
   const changed = document.body.dataset.activeView !== wanted;
   document.body.dataset.activeView = wanted;
@@ -2203,6 +2298,10 @@ function setView(view, { updateHash = true, scroll = true, focus = true } = {}) 
   if (contextStrip) contextStrip.hidden = wanted === 'overview';
   const workbench = $('sidebar-workbench');
   if (workbench) workbench.open = wanted !== 'overview';
+  simulatorMessage({ type: 'rdk-simulator-active', active: wanted === 'simulate' }, $('simulator-frame'));
+  if (wanted === 'evaluate' && state.replay.loaded && replayScene?.getAttribute('src')) {
+    simulatorMessage({ type: 'rdk-simulator-active', active: true }, replayScene);
+  }
   // Keep the compact project / stage breadcrumb in sync even before the next
   // data refresh; changing views is itself a state change the user needs to see.
   renderContextLive();
@@ -2747,13 +2846,101 @@ function selectedTask() {
   return ACTION_TASKS[state.taskId] || ACTION_TASKS.walk;
 }
 
-// Engine-side scenes (multi-duck football, balance rigs) never appear in the
-// single-duck browser sandbox; state that wherever the task is shown, or the
-// task switch reads as a no-op to the operator.
 function taskContextNote(task) {
   return task.scene
-    ? `${task.hint}。训练在引擎侧场景（${task.scene}）中进行；浏览器沙盒保持单鸭，画面不随任务切换。`
-    : `${task.hint}。切换后会同步仿真、训练和评测参数。`;
+    ? `${task.hint}。已选择${task.scene}场景；物理状态来自对应训练环境，可控制、录制和回放。`
+    : `${task.hint}。任务切换会重置仿真并准备对应动作；点击“开始录制”保存轨迹。`;
+}
+
+const simulatorTaskState = { taskId: '', phase: 'loading', message: '', controlHz: null };
+
+function taskSimulatorUrl(taskId) {
+  const entry = safeLaunchUrl(state.overview?.integrations?.simulator?.browser?.entryUrl) || SIMULATOR_PATH;
+  let assetRoot = appRelativePath('/mujoco/microduck/');
+  try {
+    const url = new URL(appRelativePath(entry), window.location.href);
+    assetRoot = url.origin === window.location.origin ? url.pathname.replace(/index\.html?$/i, '').replace(/\/?$/, '/') : appRelativePath('/mujoco/microduck-proxy/');
+  } catch { /* use the local reviewed release */ }
+  const configuredAssets = selectedModel()?.manifest?.simulator?.visualAssetBase;
+  const visualAssetBase = typeof configuredAssets === 'string' && configuredAssets.length <= 300 && /^\/(?:[A-Za-z0-9._~-]+\/)*$/.test(configuredAssets) && !configuredAssets.includes('..') && !configuredAssets.split('/').includes('.')
+    ? appRelativePath(configuredAssets) : assetRoot + 'robot/mjlab/';
+  return appRelativePath('/task-sim/') + '?taskId=' + encodeURIComponent(taskId) +
+    '&mujocoBase=' + encodeURIComponent(appRelativePath('/mujoco/').replace(/\/$/, '')) +
+    '&duckAssetBase=' + encodeURIComponent(visualAssetBase);
+}
+
+function activeSimulatorFrame() {
+  const replay = $('replay-scene-frame');
+  return document.body.dataset.activeView === 'evaluate' && state.replay.loaded && !replay?.hidden && replay?.getAttribute('src')
+    ? replay : $('simulator-frame');
+}
+
+function simulatorMessage(payload, frame = activeSimulatorFrame()) {
+  if (!frame?.contentWindow) return;
+  try {
+    const origin = new URL(frame.src, window.location.href).origin;
+    frame.contentWindow.postMessage(payload, origin === 'null' ? '*' : origin);
+  } catch { /* a removed or inaccessible frame cannot receive a command */ }
+}
+
+function syncSimulatorTask(frame = activeSimulatorFrame()) {
+  if (!['microduck', 'originbot'].includes(state.productId)) return;
+  simulatorMessage({ type: 'rdk-simulator-task', taskId: state.taskId }, frame);
+}
+
+function preserveActiveRecording() {
+  const child = $('simulator-frame')?.contentWindow;
+  try {
+    const recorder = child?.__rdkTaskRecorder || child?.__microduckRecorder || child?.__rdkOriginbotRecorder;
+    if (!recorder?.recording) return;
+    recorder.stop({ notify: false });
+    const text = recorder.getText();
+    const evidence = parseTelemetryText(text);
+    evidence.rawText = text;
+    state.telemetry = stampTelemetryContext(evidence);
+    mountLocalRecordingReplay(state.telemetry);
+  } catch (error) {
+    console.warn('切换前保存录制失败：', error);
+  }
+}
+
+function isSimulatorMessage(event) {
+  return event?.source === activeSimulatorFrame()?.contentWindow &&
+    event.origin === window.location.origin;
+}
+
+function handleSimulatorTaskState(event) {
+  if (!isSimulatorMessage(event)) return;
+  const data = event.data;
+  if (data?.type !== 'rdk-simulator-task-state' || data.taskId !== state.taskId) return;
+  if (!['loading', 'ready', 'failed'].includes(data.phase)) return;
+  Object.assign(simulatorTaskState, {
+    taskId: data.taskId, phase: data.phase,
+    message: String(data.message || '').slice(0, 240), controlHz: Number(data.controlHz) || null,
+  });
+  renderAll();
+  if (data.phase === 'ready' && state.replay.pendingFrame) {
+    state.replay.pendingFrame = false;
+    sendReplayFrame();
+    scheduleReplayStep();
+  }
+}
+
+function handleSimulatorReplayState(event) {
+  if (!isSimulatorMessage(event)) return;
+  const data = event.data;
+  if (!['rdk-replay-status', 'rdk-replay-state'].includes(data?.type)) return;
+  if (data.taskId && data.taskId !== state.taskId) return;
+  if (data.phase === 'failed' || data.applied === false) {
+    stopReplay();
+    state.replay.error = String(data.message || '当前轨迹缺少可还原的仿真状态。').slice(0, 240);
+    renderReplayPlayer();
+    showToast(state.replay.error, 'error');
+  } else if (data.phase === 'applied' || data.applied === true) {
+    state.replay.error = '';
+    state.replay.restoredScope = data.scope || 'full';
+    renderReplayPlayer();
+  }
 }
 
 function selectedDevice() {
@@ -2784,7 +2971,7 @@ function renderSelects() {
   if (!PRODUCT_PROFILES[state.productId]) state.productId = 'microduck';
   if (productSelect) productSelect.value = state.productId;
   if (taskSelect) {
-    const taskIds = state.productId === 'originbot' ? ORIGINBOT_TASK_IDS : Object.keys(ACTION_TASKS).filter((id) => !ORIGINBOT_TASK_IDS.includes(id));
+    const taskIds = state.productId === 'originbot' ? ORIGINBOT_TASK_IDS : Object.keys(ACTION_TASKS).filter((id) => id === 'custom' || !ORIGINBOT_TASK_IDS.includes(id));
     if (!taskIds.includes(state.taskId)) state.taskId = state.productId === 'originbot' ? 'goal-navigation' : 'walk';
     syncSelect(
       taskSelect,
@@ -3211,7 +3398,8 @@ function renderIntegrations() {
   const guestSimulatorMounted = guestHealth
     ? ['mounted', 'redirect'].includes(guestHealth.microduck?.state)
     : false;
-  const browserAvailable = Boolean(
+  const engineTaskScene = profile.id === 'microduck' && Boolean(selectedTask().scene);
+  const browserAvailable = Boolean(engineTaskScene ||
     (overviewReady || guestSimulatorMounted) &&
       profile.simulatorPath &&
       (originbotProduct || simulator.browser?.available !== false),
@@ -3495,20 +3683,22 @@ function renderIntegrations() {
   const simulatorLiveLabel = $('simulator-live-label');
   const simulatorLiveText = $('simulator-live-text');
   const simulatorRuntimeLabel = $('simulator-runtime-label');
-  if (simulatorTitle) simulatorTitle.textContent = microduckProduct ? 'MicroDuck 仿真场' : originbotProduct ? 'OriginBot 仿真适配器' : 'RDK Duck 仿真适配器';
+  const taskReady = simulatorTaskState.taskId === state.taskId && simulatorTaskState.phase === 'ready';
+  const taskFailed = simulatorTaskState.taskId === state.taskId && simulatorTaskState.phase === 'failed';
+  if (simulatorTitle) simulatorTitle.textContent = microduckProduct ? `MicroDuck · ${selectedTask().scene || selectedTask().label}` : originbotProduct ? 'OriginBot 仿真适配器' : 'RDK Duck 仿真适配器';
   if (simulatorFrame) simulatorFrame.title = microduckProduct ? 'MicroDuck 浏览器仿真' : originbotProduct ? 'OriginBot 仿真适配器状态' : 'RDK Duck 仿真适配器状态';
   if (simulatorLiveText) {
     simulatorLiveText.textContent = browserAvailable
-      ? microduckProduct ? '示例可打开' : '仿真入口可打开'
+      ? taskFailed ? '场景连接失败' : taskReady ? '任务场景已就绪' : engineTaskScene || originbotProduct ? '正在连接任务场景' : '等待进入仿真'
       : microduckProduct
         ? '资源待挂载'
         : originbotProduct ? '使用本地或外部 OriginBot 适配器' : '适配器待配置';
   }
-  simulatorLiveLabel?.classList.toggle('is-ready', browserAvailable);
-  simulatorLiveLabel?.classList.toggle('is-waiting', !browserAvailable);
+  simulatorLiveLabel?.classList.toggle('is-ready', browserAvailable && taskReady);
+  simulatorLiveLabel?.classList.toggle('is-waiting', !browserAvailable || !taskReady);
   if (simulatorRuntimeLabel) {
     simulatorRuntimeLabel.textContent = browserAvailable
-      ? 'MuJoCo WASM · 50Hz'
+      ? engineTaskScene ? `MuJoCo 训练环境${taskReady && simulatorTaskState.controlHz ? ' · ' + simulatorTaskState.controlHz + 'Hz' : ''}` : originbotProduct ? 'MuJoCo · 20Hz' : 'MuJoCo WASM · 50Hz'
       : microduckProduct
         ? '资源状态 · 需挂载'
         : '无浏览器适配器';
@@ -3521,16 +3711,25 @@ function renderIntegrations() {
   const simulatorGateInstall = $('simulator-gate-install');
   const configuredBrowserEntry = safeLaunchUrl(browserSurface?.entryUrl);
   const localMicroduckMounted = microduckProduct && browserSurface?.state === 'mounted';
-  const browserEntry = originbotProduct
-    ? appRelativePath('/originbot-sim/')
+  const browserEntry = engineTaskScene
+    ? taskSimulatorUrl(state.taskId)
+    : originbotProduct
+    ? appRelativePath('/originbot-sim/') + '?taskId=' + encodeURIComponent(state.taskId) + '&mujocoBase=' + encodeURIComponent(appRelativePath('/mujoco/').replace(/\/$/, ''))
     : localMicroduckMounted
       ? appRelativePath('/mujoco/microduck/')
       : browserSurface?.entryUrl
         ? configuredBrowserEntry || appRelativePath(SIMULATOR_PATH)
         : appRelativePath(SIMULATOR_PATH);
-  const microduckMissing = microduckProduct && browserSurface?.state === 'missing';
+  const microduckMissing = !engineTaskScene && microduckProduct && browserSurface?.state === 'missing';
   if (simulatorFrame && simulatorFrame.getAttribute('src') !== browserEntry) {
     simulatorFrame.setAttribute('src', browserEntry);
+  }
+  if (simulatorFrame && simulatorFrame.dataset.taskId !== state.taskId) {
+    simulatorFrame.dataset.taskId = state.taskId;
+    if (activeSimulatorFrame() === simulatorFrame) {
+      Object.assign(simulatorTaskState, { taskId: state.taskId, phase: 'loading', message: '', controlHz: null });
+    }
+    syncSimulatorTask(simulatorFrame);
   }
   for (const id of ['microduck-entry-link', 'microduck-footer-link']) {
     const link = $(id);
@@ -3572,12 +3771,12 @@ function renderIntegrations() {
     simulatorGateInstall.setAttribute('href', browserEntry);
   }
   if (simulatorFrame) simulatorFrame.hidden = !browserAvailable;
-  if (simulatorStartHint) simulatorStartHint.hidden = !microduckProduct || !browserAvailable;
+  if (simulatorStartHint) simulatorStartHint.hidden = !microduckProduct || !browserAvailable || engineTaskScene;
   if (simulatorProductGate) simulatorProductGate.hidden = browserAvailable;
   setText(
     'simulator-run-status',
     browserAvailable
-      ? microduckProduct ? '示例可打开' : '仿真入口可打开'
+      ? taskFailed ? simulatorTaskState.message || '场景连接失败，请在画面内重试' : taskReady ? '任务场景已就绪' : engineTaskScene || originbotProduct ? '正在连接任务场景' : '等待进入仿真'
       : microduckProduct
         ? '资源待挂载'
         : originbotProduct
@@ -3586,7 +3785,7 @@ function renderIntegrations() {
   );
   const evidenceStatus = $('simulator-evidence-status');
   const evidence = currentTelemetry();
-  const browserEvidence = microduckProduct && evidence?.source === 'browser-microduck' && evidence.samples?.length > 1;
+  const browserEvidence = microduckProduct && ['browser-microduck', 'engine-task-simulation'].includes(evidence?.source) && evidence.samples?.length > 1;
   evidenceStatus?.classList.toggle('is-ready', browserEvidence);
   if (evidenceStatus) {
     evidenceStatus.textContent = browserEvidence
@@ -3594,11 +3793,11 @@ function renderIntegrations() {
       : '停止录制后，可在这里查看记录';
   }
   renderBrowserRecordingReview();
-  // Engine-side scenes (multi-duck football, balance rigs) never appear in the
-  // single-duck browser sandbox. Repeat that next to the canvas, not only in
-  // the task selector note, or the task switch reads as a no-op.
   const sceneNote = $('simulator-scene-note');
-  if (sceneNote) sceneNote.hidden = !selectedTask().scene;
+  if (sceneNote) {
+    sceneNote.hidden = !engineTaskScene;
+    sceneNote.textContent = `${selectedTask().scene} · 训练代理模型`;
+  }
   setText('status-board', device ? device.boardPlatform || '待探测板型' : '尚未选择板卡');
   setText('status-board-detail', device ? device.status || '设备状态未知' : '真机流程需要先连接设备');
   setText('status-board-action', device ? '打开设备管理 →' : '去连接设备 →');
@@ -3937,6 +4136,13 @@ function renderActionLibrary() {
     : [];
   const entries = controls.length ? controls : policies;
   root.replaceChildren();
+  if (state.productId === 'microduck' && task.scene) {
+    empty.hidden = false;
+    empty.textContent = '当前任务的动作维度、手动控制与录制面板位于仿真画面内。';
+    if (taskStatus) taskStatus.hidden = true;
+    return;
+  }
+  empty.textContent = '选择一个模型后，这里会显示动作和按键。';
   empty.hidden = entries.length > 0;
   if (taskStatus) {
     const declared = policies.some((policy) => policy.id === state.taskId || policy.taskId === state.taskId);
@@ -4107,6 +4313,8 @@ function renderHistory() {
   const root = $('history-list');
   if (!root) return;
   const query = state.recordsQuery.trim().toLowerCase();
+  const local = state.localRecording;
+  const showLocal = local && projectIncludesRecord(local) && (!query || (ACTION_TASKS[local.taskId]?.label || '').toLowerCase().includes(query));
   const records = recordCollection()
     .filter((record) => state.recordsTab === 'all' || record.recordType === state.recordsTab)
     .filter((record) => {
@@ -4130,10 +4338,32 @@ function renderHistory() {
     .slice(0, 30);
   setText(
     'records-count',
-    records.length + ' 条记录 · 仅当前产品 ' + selectedProductProfile().displayName,
+    (records.length + (showLocal ? 1 : 0)) + ' 条记录 · 仅当前产品 ' + selectedProductProfile().displayName,
   );
   root.replaceChildren();
+  if (showLocal) {
+    const row = document.createElement('div');
+    row.className = 'history-row';
+    const kind = document.createElement('strong');
+    kind.className = 'history-kind'; kind.textContent = '本次录制';
+    const summary = document.createElement('span');
+    summary.className = 'history-summary';
+    summary.textContent = `${ACTION_TASKS[local.taskId]?.label || '仿真轨迹'} · ${local.summary.sampleCount} 帧 · 刷新前请导出`;
+    const replay = document.createElement('button');
+    replay.type = 'button'; replay.className = 'button button-primary button-small'; replay.textContent = '回放本次录制';
+    replay.addEventListener('click', () => openLocalRecordingReplay(local));
+    const download = document.createElement('button');
+    download.type = 'button'; download.className = 'button button-ghost button-small'; download.textContent = '导出 JSONL';
+    download.addEventListener('click', () => {
+      const text = local.rawText || [{ type: 'header', source: local.source, taskId: local.taskId, contractId: local.contractId }, ...local.samples].map((value) => JSON.stringify(value)).join('\n');
+      const url = URL.createObjectURL(new Blob([text], { type: 'application/x-ndjson' }));
+      const anchor = document.createElement('a'); anchor.href = url; anchor.download = local.fileName || `${local.taskId || 'simulation'}-recording.jsonl`; anchor.click();
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+    });
+    row.append(kind, summary, replay, download); root.append(row);
+  }
   if (!records.length) {
+    if (showLocal) return;
     const hasBrowserSimulator = Boolean(selectedProductProfile().simulatorPath);
     // 项目筛选会把未归属到本项目的账号级运行隐藏（projectIncludesRecord）。
     // 这种「被筛选造成的空」必须如实说明，否则用户会误以为账号里真的
@@ -5452,7 +5682,7 @@ function handleMicroduckRecordingReady(event) {
   if (data.format !== 'microduck-trajectory-v1') return;
   // Accept the same-origin mounted simulator (and `null` for local file://
   // previews), while ignoring unsolicited messages from other frames.
-  if (event.origin && event.origin !== window.location.origin && event.origin !== 'null') return;
+  if (!isSimulatorMessage(event)) return;
   if (state.productId !== 'microduck') {
     showToast('录制来自 MicroDuck，请先切换到 MicroDuck 产品线', 'error');
     return;
@@ -5475,6 +5705,7 @@ function handleMicroduckRecordingReady(event) {
   }
   try {
     const evidence = parseTelemetryText(text);
+    evidence.rawText = text;
     evidence.fileName = 'microduck-browser-recording.jsonl';
     evidence.source = 'browser-microduck';
     evidence.contractId = data.contractId || evidence.contractId || CONTRACT_ID;
@@ -5483,11 +5714,61 @@ function handleMicroduckRecordingReady(event) {
       durationSeconds: Number(data.durationSeconds) || evidence.summary.durationSeconds,
     };
     state.telemetry = stampTelemetryContext(evidence);
+    mountLocalRecordingReplay(state.telemetry);
     state.reviewedRecording = null;
     renderAll();
     showToast(`已录下 ${evidence.summary.sampleCount} 帧动作数据。点击画面下方“查看这段记录”检查采样时间轴；记录只保留在当前页面。`, 'success');
   } catch (error) {
     showToast(error instanceof Error ? `录制解析失败：${error.message}` : '录制解析失败，请导出 JSONL 后重试', 'error');
+  }
+}
+
+function mountLocalRecordingReplay(evidence) {
+  stopReplay();
+  state.localRecording = evidence;
+  evidence.productId = state.productId;
+  state.localRecordings ||= {};
+  state.localRecordings[state.productId] = evidence;
+  state.replay = {
+    ...state.replay, source: 'run', recording: null, runId: 'local-recording', frames: evidence.samples,
+    taskId: evidence.taskId || state.taskId, index: 0, loaded: true, timer: null, error: '', restoredScope: '',
+  };
+  mountReplayVideo('', null);
+}
+
+function openLocalRecordingReplay(evidence = state.localRecording) {
+  if (!evidence) return;
+  mountLocalRecordingReplay(evidence);
+  state.evalModule = 'run';
+  setView('evaluate');
+  const panel = document.querySelector('.telemetry-panel');
+  if (panel) panel.open = true;
+  renderAll();
+  sendReplayFrame();
+  $('replay-player')?.scrollIntoView({ block: 'start' });
+}
+
+function handleTaskRecordingReady(event) {
+  if (!isSimulatorMessage(event)) return;
+  const data = event.data;
+  const originbot = data?.type === 'rdk-originbot-recording-ready' && data.format === 'originbot-trajectory-v1';
+  const engineTask = data?.type === 'rdk-task-recording-ready' && data.format === 'rdk-task-trajectory-v1';
+  if (!originbot && !engineTask) return;
+  if (state.productId !== (originbot ? 'originbot' : 'microduck') || data.taskId !== state.taskId) return;
+  try {
+    const recorder = originbot ? event.source.__rdkOriginbotRecorder : event.source.__rdkTaskRecorder;
+    const text = typeof data.text === 'string' ? data.text : recorder?.getText?.();
+    const evidence = parseTelemetryText(text);
+    evidence.rawText = text;
+    if (evidence.taskId !== data.taskId) throw new Error('轨迹任务与当前场景不一致');
+    evidence.source = originbot ? 'originbot-sim' : 'engine-task-simulation';
+    evidence.fileName = data.taskId + '-recording.jsonl';
+    state.telemetry = stampTelemetryContext(evidence);
+    mountLocalRecordingReplay(state.telemetry);
+    renderAll();
+    showToast(`已录制 ${evidence.summary.sampleCount} 帧，可在评测页直接回放或导出 JSONL`, 'success');
+  } catch (error) {
+    showToast(error instanceof Error ? `录制同步失败：${error.message}` : '录制同步失败', 'error');
   }
 }
 
@@ -6164,13 +6445,18 @@ function renderTelemetryEvidence() {
   clear.disabled = false;
   clear.title = '清除当前页面的本地遥测证据';
   if (publish) {
-    publish.disabled = state.publishingTelemetry || !latestRun();
+    const run = latestRun();
+    const contract = selectedModel()?.manifest?.contract;
+    const matchesRun = (!evidence.taskId || evidence.taskId === run?.taskId) &&
+      (!evidence.contractId || evidence.contractId === contract?.id);
+    publish.disabled = state.publishingTelemetry || !run || !matchesRun;
     publish.textContent = state.publishingTelemetry
       ? '上传中…'
       : demoEvidence
         ? '上传演示样例并评测（不解锁发布）'
         : '上传到当前 Run 并评测';
-    publish.title = demoEvidence
+    publish.title = !matchesRun ? '录制任务或契约与当前 Run 不一致；可直接本地回放和导出'
+      : demoEvidence
       ? '演示样例可以写入回放，但始终不会解锁真实评测或发布'
       : unverifiedEvidence
         ? '将当前遥测分块写入最新 Run，并生成可回放摘要；来源仍需受信适配器验证'
@@ -6189,31 +6475,57 @@ function renderReplayPlayer() {
   const seek = $('replay-seek');
   if (!select || !play || !stop || !seek) return;
   const runs = replayRuns();
-  const browserRecording = currentTelemetry()?.source === 'browser-microduck' && currentTelemetry()?.samples?.length > 1;
-  const localReplay = browserRecording && state.replay.source === 'browser-recording' && state.replay.recording === currentTelemetry();
-  const current = localReplay || (!state.replay.runId && browserRecording) ? 'local-recording' : state.replay.runId || runs[0]?.id || '';
-  const options = [
-    ...(browserRecording ? [{ value: 'local-recording', textContent: '当前浏览器录制 · 无需上传' }] : []),
-    ...runs.map((run) => ({ value: run.id, textContent: `${run.id.slice(0, 8)} · ${statusLabel(run.status)}` })),
-  ];
+  const local = state.localRecording;
+  const localAvailable = local && (!local.productId || local.productId === state.productId) && projectIncludesRecord(local);
+  const localReplay = state.replay.source === 'browser-recording' && state.replay.recording === currentTelemetry();
+  const current = state.replay.runId || runs[0]?.id || '';
   syncSelect(
     select,
-    options,
-    options.some((option) => option.value === current) ? current : '',
+    [
+      ...(localAvailable ? [{ value: 'local-recording', textContent: `本次录制 · ${ACTION_TASKS[local.taskId]?.label || '仿真轨迹'}` }] : []),
+      ...runs.map((run) => ({ value: run.id, textContent: `${run.id.slice(0, 8)} · ${statusLabel(run.status)}` })),
+    ],
+    (current === 'local-recording' && localAvailable) || runs.some((run) => run.id === current) ? current : '',
   );
-  const loaded = state.replay.loaded && (localReplay || state.replay.runId === select.value);
+  const loaded = state.replay.loaded && state.replay.runId === select.value;
+  renderReplayScene(loaded);
   seek.max = String(Math.max(0, state.replay.frames.length - 1));
   seek.value = String(Math.min(state.replay.index, Math.max(0, state.replay.frames.length - 1)));
   seek.disabled = !loaded || !state.replay.frames.length;
   play.disabled = !loaded || !state.replay.frames.length;
   stop.disabled = !loaded || !state.replay.frames.length;
-  play.textContent = state.replay.timer ? '❚❚ 暂停' : '▶ 播放';
+  play.textContent = state.replay.playRequested ? '❚❚ 暂停' : '▶ 播放';
   const frame = state.replay.frames[state.replay.index];
   setText('replay-frame-label', `${state.replay.frames.length ? state.replay.index + 1 : 0} / ${state.replay.frames.length} 帧`);
   setText('replay-time-label', frame ? formatTelemetrySeconds(frame.t) : '0.00s');
-  setText('replay-status', loaded ? `${localReplay ? '当前浏览器录制 · ' : ''}已加载 ${state.replay.frames.length} 帧` : (browserRecording ? '点击加载，回看当前浏览器录制' : runs.length ? '选择运行并加载回放' : '暂无可回放运行'));
-  setText('replay-frame-detail', frame ? (localReplay ? `动作数据帧 ${state.replay.index + 1} · 此处回看采样时间轴，不重演三维动作。` : `当前帧 ${state.replay.index + 1} · observation ${frame.observation?.length || 0}D · action ${frame.action?.length || 0}D`) : '加载后可拖动时间轴查看采样记录。');
+  setText('replay-status', state.replay.error || (loaded ? `已加载 ${state.replay.frames.length} 帧${state.replay.restoredScope === 'base-only' ? ' · 旧轨迹只还原基座姿态' : ''}` : (runs.length ? '选择运行并加载回放' : '暂无可回放运行')));
+  setText('replay-frame-detail', frame ? localReplay ? `动作数据帧 ${state.replay.index + 1} · 此处回看采样时间轴，不重演三维动作。` : `当前帧 ${state.replay.index + 1} · observation ${frame.observation?.length || 0}D · action ${frame.action?.length || 0}D` : '加载后可拖动时间轴；回放帧会同步发送到嵌入仿真器。');
   renderReplayCameraFrame(frame);
+}
+
+function renderReplayScene(loaded) {
+  const wrap = $('replay-scene-wrap');
+  const frame = $('replay-scene-frame');
+  if (!wrap || !frame) return;
+  const visible = loaded && state.replay.source !== 'browser-recording' && document.body.dataset.activeView === 'evaluate';
+  wrap.hidden = !visible;
+  frame.hidden = !visible;
+  if (!visible) return;
+  const taskId = state.replay.taskId || state.replay.frames[0]?.taskId || state.taskId;
+  const base = appRelativePath('/mujoco/').replace(/\/$/, '');
+  const browser = state.overview?.integrations?.simulator?.browser;
+  const src = state.productId === 'originbot'
+    ? appRelativePath('/originbot-sim/') + '?taskId=' + encodeURIComponent(taskId) + '&mujocoBase=' + encodeURIComponent(base)
+    : ACTION_TASKS[taskId]?.scene
+      ? taskSimulatorUrl(taskId)
+      : appRelativePath(safeLaunchUrl(browser?.entryUrl) || SIMULATOR_PATH);
+  if (frame.getAttribute('src') !== src) {
+    state.taskId = taskId;
+    simulatorTaskState.taskId = taskId;
+    simulatorTaskState.phase = 'loading';
+    state.replay.pendingFrame = true;
+    frame.setAttribute('src', src);
+  }
 }
 
 // Indices of the replay frames that actually carry a camera frame.
@@ -6328,8 +6640,20 @@ function renderReplayCameraFrame(frame) {
 function sendReplayFrame() {
   const frame = state.replay.frames[state.replay.index];
   if (!frame) return;
-  const iframe = $('simulator-frame');
-  try { iframe?.contentWindow?.postMessage({ type: 'rdk-replay-frame', frame, index: state.replay.index, runId: state.replay.runId }, '*'); } catch { /* cross-origin iframe may reject; controls still work */ }
+  const taskId = frame.taskId || state.replay.taskId || runsForCurrentModel().find((run) => run.id === state.replay.runId)?.taskId || state.taskId;
+  if (state.replay.source === 'browser-recording') {
+    state.replay.pendingFrame = false;
+  } else if (ACTION_TASKS[taskId] && state.taskId !== taskId) {
+    state.taskId = taskId;
+    state.replay.pendingFrame = true;
+    renderAll();
+  } else if (['microduck', 'originbot'].includes(state.productId) &&
+    (simulatorTaskState.taskId !== taskId || simulatorTaskState.phase !== 'ready')) {
+    state.replay.pendingFrame = true;
+  } else {
+    simulatorMessage({ type: 'rdk-simulator-active', active: true });
+    simulatorMessage({ type: 'rdk-replay-frame', taskId, frame, index: state.replay.index, runId: state.replay.runId });
+  }
   renderReplayPlayer();
   // Keep the unified telemetry canvases (reward curve / heatmaps) on the same
   // frame as the replay player; they only redraw when local samples exist.
@@ -6436,6 +6760,7 @@ function syncReplayVideoToFrame() {
 }
 
 async function renderReplayVideo() {
+  const ownerEpoch = workspaceOwnerEpoch;
   const runId = state.replay.runId;
   if (!runId) {
     showToast('先加载一个带相机帧的运行', 'error');
@@ -6448,6 +6773,7 @@ async function renderReplayVideo() {
       '/sim2real/runs/' + encodeURIComponent(runId) + '/replay-video',
       { method: 'POST' },
     );
+    if (ownerEpoch !== workspaceOwnerEpoch) return;
     if (payload?.video) {
       mountReplayVideoSource(runId, payload.video);
       showToast(`视频已导出：${payload.video.frameCount} 帧 · ${formatMetricNumber(Number(payload.video.fps) || 0, 2)} fps`, 'success');
@@ -6455,6 +6781,7 @@ async function renderReplayVideo() {
     const caption = $('replay-video-caption');
     if (caption) caption.textContent = '已导出';
   } catch (error) {
+    if (ownerEpoch !== workspaceOwnerEpoch) return;
     showToast(error instanceof Error ? error.message : '视频导出失败', 'error');
     const caption = $('replay-video-caption');
     if (caption) caption.textContent = '导出失败（见提示）';
@@ -6463,29 +6790,52 @@ async function renderReplayVideo() {
   }
 }
 
-function stopReplay() {
+function stopReplay(release = false) {
   if (state.replay.timer) clearInterval(state.replay.timer);
   state.replay.timer = null;
+  state.replay.playRequested = false;
+  if (release) { state.replay.pendingFrame = false; simulatorMessage({ type: 'rdk-replay-stop' }); }
   renderReplayPlayer();
 }
 
 function toggleReplay() {
   if (!state.replay.frames.length) return;
-  if (state.replay.timer) { stopReplay(); return; }
+  if (state.replay.playRequested) { stopReplay(); return; }
   if (state.replay.source === 'browser-recording' || state.replay.index >= state.replay.frames.length - 1) state.replay.index = 0;
+  state.replay.playRequested = true;
   state.replay.playbackSteps = 0;
-  state.replay.timer = setInterval(() => {
-    if (state.replay.index >= state.replay.frames.length - 1) { stopReplay(); return; }
-    state.replay.index += 1; state.replay.playbackSteps += 1; sendReplayFrame();
-  }, Math.max(10, 20 / Number(state.replay.speed || 1)));
   sendReplayFrame();
+  scheduleReplayStep();
+}
+
+function scheduleReplayStep() {
+  if (!state.replay.playRequested || state.replay.pendingFrame || state.replay.timer) return;
+  if (state.replay.index >= state.replay.frames.length - 1) { stopReplay(); return; }
+  const current = state.replay.frames[state.replay.index];
+  const next = state.replay.frames[state.replay.index + 1];
+  const period = Math.max(0.01, Number(next.t) - Number(current.t) || Number(current.controlPeriodSeconds) || 0.02);
+  const ownerEpoch = workspaceOwnerEpoch;
+  state.replay.timer = setTimeout(() => {
+    if (ownerEpoch !== workspaceOwnerEpoch) return;
+    state.replay.timer = null;
+    state.replay.index += 1;
+    state.replay.playbackSteps = Number(state.replay.playbackSteps || 0) + 1;
+    sendReplayFrame();
+    scheduleReplayStep();
+  }, period * 1000 / Math.max(0.25, Number(state.replay.speed) || 1));
+  renderReplayPlayer();
 }
 
 async function loadRunReplay() {
   const select = $('replay-run-select');
   const runId = String(select?.value || '').trim();
-  if (runId === 'local-recording') { mountBrowserRecordingReplay(); return; }
   if (!runId) { showToast('请选择包含遥测的运行记录', 'error'); return; }
+  if (runId === 'local-recording' && state.localRecording) {
+    mountLocalRecordingReplay(state.localRecording);
+    sendReplayFrame();
+    renderReplayPlayer();
+    return;
+  }
   await fetchAndMountReplay(runId, { interactive: true });
 }
 
@@ -6494,24 +6844,29 @@ async function loadRunReplay() {
 // a 404/empty on the first attempt is expected and re-attempted a few times
 // with backoff, not surfaced as an error.
 async function autoLoadRunReplay(runId, { interactive = false } = {}) {
+  const ownerEpoch = workspaceOwnerEpoch;
   if (state.replay.autoLoadedFor === runId) return;
   for (let attempt = 0; attempt < 3; attempt += 1) {
+    if (ownerEpoch !== workspaceOwnerEpoch) return;
     const loaded = await fetchAndMountReplay(runId, { interactive });
+    if (ownerEpoch !== workspaceOwnerEpoch) return;
     if (loaded) { state.replay.autoLoadedFor = runId; return; }
     await new Promise((resolve) => setTimeout(resolve, 1500 * (attempt + 1)));
   }
 }
 
 async function fetchAndMountReplay(runId, { interactive = false } = {}) {
+  const ownerEpoch = workspaceOwnerEpoch;
   try {
     const payload = await request('/sim2real/runs/' + encodeURIComponent(runId) + '/replay');
+    if (ownerEpoch !== workspaceOwnerEpoch) return false;
     const frames = (Array.isArray(payload?.frames) ? payload.frames : []).map((sample) => ({ ...sample, t: Number(sample.t ?? sample.time ?? 0) })).sort((a, b) => a.t - b.t);
     if (!frames.length) {
       if (interactive) showToast('该运行没有原始遥测帧', 'normal');
       return false;
     }
-    stopReplay();
-    state.replay = { ...state.replay, source: 'run', recording: null, runId, frames, index: 0, loaded: true, timer: null, autoLoadedFor: runId };
+    stopReplay(true);
+    state.replay = { ...state.replay, source: 'run', recording: null, runId, frames, taskId: frames[0].taskId || runsForCurrentModel().find((run) => run.id === runId)?.taskId, index: 0, loaded: true, timer: null, error: '', restoredScope: '', autoLoadedFor: runId };
     renderReplayPlayer();
     sendReplayFrame();
     // The replay payload carries frames, not run metrics; fetch the run row
@@ -6519,15 +6874,17 @@ async function fetchAndMountReplay(runId, { interactive = false } = {}) {
     void (async () => {
       try {
         const runPayload = await request('/sim2real/runs/' + encodeURIComponent(runId));
+        if (ownerEpoch !== workspaceOwnerEpoch) return;
         mountReplayVideo(runId, runPayload?.run?.metrics, runPayload?.run?.taskId);
       } catch {
-        mountReplayVideo(runId, null);
+        if (ownerEpoch === workspaceOwnerEpoch) mountReplayVideo(runId, null);
       }
     })();
     if (interactive) showToast(`已加载 ${frames.length} 帧，可开始回放`, 'success');
     else showToast(`评测回放已自动挂载：${frames.length} 帧（${runId.slice(0, 8)}）`, 'normal');
     return true;
   } catch (error) {
+    if (ownerEpoch !== workspaceOwnerEpoch) return false;
     if (interactive) showToast(error instanceof Error ? error.message : '回放加载失败', 'error');
     return false;
   }
@@ -6539,7 +6896,7 @@ async function fetchAndMountReplay(runId, { interactive = false } = {}) {
 // postMessage cannot carry functions, so the iframe performs the inference
 // itself; this side only sends the clonable runId/apiRoot and relays the
 // status messages the simulator posts back.
-const policyTrial = { runId: '', running: false };
+const policyTrial = { runId: '', running: false, target: null, taskId: '', id: '' };
 
 function setPolicyTrialStatus(text) {
   const status = $('policy-trial-status');
@@ -6551,10 +6908,13 @@ function setPolicyTrialStatus(text) {
 }
 
 window.addEventListener('message', (event) => {
+  if (event.origin !== window.location.origin || event.source !== policyTrial.target?.contentWindow) return;
   const data = event.data;
   if (!data || typeof data !== 'object' || data.type !== 'rdk-policy-status') return;
+  if (!policyTrial.id || data.trialId !== policyTrial.id) return;
   const message = String(data.message || '');
-  if (data.phase === 'running') {
+  if (data.taskId && data.taskId !== policyTrial.taskId) return;
+  if (data.phase === 'running' || data.phase === 'armed') {
     policyTrial.running = true;
     setPolicyTrialStatus(message || '策略试跑进行中：浏览器 wasm 推理驱动仿真器。');
   } else if (data.phase === 'finished' || data.phase === 'failed' || data.phase === 'stopped') {
@@ -6574,16 +6934,23 @@ function startPolicyTrial() {
     showToast('当前是浏览器动作记录。策略试跑需要先加载已完成训练任务的回放。'); return;
   }
   const runId = state.replay.runId || String($('replay-run-select')?.value || '').trim();
+  if (runId === 'local-recording') { showToast('本次录制可直接回放；策略试跑请选择带 ONNX 制品的训练 Run', 'error'); return; }
   if (!boardBackend && !runId) { showToast('请先加载一个已完成运行的回放，再试跑策略（板端推理模式无需回放）', 'error'); return; }
-  const iframe = $('simulator-frame');
+  const iframe = activeSimulatorFrame();
   if (!iframe?.contentWindow) { showToast('嵌入仿真器不可用', 'error'); return; }
   policyTrial.runId = boardBackend ? 'board' : runId;
+  policyTrial.taskId = state.taskId;
+  policyTrial.target = iframe;
+  policyTrial.id = globalThis.crypto?.randomUUID?.() || `trial-${Date.now()}-${Math.random().toString(16).slice(2)}`;
   policyTrial.running = true;
   setPolicyTrialStatus(boardBackend ? '正在启动板端推理…' : '正在启动浏览器推理…');
+  simulatorMessage({ type: 'rdk-simulator-active', active: true }, iframe);
   try {
     iframe.contentWindow.postMessage(
       {
         type: 'rdk-policy-run',
+        trialId: policyTrial.id,
+        taskId: state.taskId,
         runId,
         apiRoot: apiPath('/sim2real'),
         maxSteps: 600,
@@ -6601,25 +6968,29 @@ function startPolicyTrial() {
 
 function stopPolicyTrial() {
   if (!policyTrial.running) return;
-  const iframe = $('simulator-frame');
-  try { iframe?.contentWindow?.postMessage({ type: 'rdk-policy-stop' }, '*'); } catch { /* cross-origin iframe may reject */ }
-  setPolicyTrialStatus('正在停止策略试跑…');
+  const iframe = policyTrial.target || activeSimulatorFrame();
+  simulatorMessage({ type: 'rdk-policy-stop' }, iframe);
+  policyTrial.running = false;
+  setPolicyTrialStatus('策略试跑已停止。');
 }
 
 async function importTelemetryFile(event) {
+  const ownerEpoch = workspaceOwnerEpoch;
   const input = event.target;
   const file = input?.files?.[0];
   if (!file) return;
   try {
-    const evidence = parseTelemetryText(
-      await readImportTextWithinLimit(
+    const text = await readImportTextWithinLimit(
         file,
         SimTelemetryCore.MAX_TELEMETRY_IMPORT_BYTES,
         '遥测文件',
-      ),
     );
+    if (ownerEpoch !== workspaceOwnerEpoch) return;
+    const evidence = parseTelemetryText(text);
+    evidence.rawText = text;
     evidence.fileName = file.name;
     state.telemetry = stampTelemetryContext(evidence);
+    if (evidence.samples.some((sample) => sample.replay || sample.qpos)) mountLocalRecordingReplay(state.telemetry);
     renderAll();
     const skippedHint = evidence.skipped ? `，跳过 ${evidence.skipped} 条无效行` : '';
     showToast(
@@ -6627,6 +6998,7 @@ async function importTelemetryFile(event) {
       'success',
     );
   } catch (error) {
+    if (ownerEpoch !== workspaceOwnerEpoch) return;
     showToast(error instanceof Error ? error.message : '遥测文件无法解析', 'error');
   } finally {
     input.value = '';
@@ -6634,6 +7006,7 @@ async function importTelemetryFile(event) {
 }
 
 async function loadDemoTelemetry() {
+  const ownerEpoch = workspaceOwnerEpoch;
   if (state.productId !== 'microduck') {
     showToast('合成演示证据对应 MicroDuck，请先切换产品线', 'error');
     return;
@@ -6644,7 +7017,9 @@ async function loadDemoTelemetry() {
       cache: 'no-store',
     });
     if (!response.ok) throw new Error('演示证据文件不可用（HTTP ' + response.status + '）');
-    const evidence = parseTelemetryText(await response.text());
+    const text = await response.text();
+    if (ownerEpoch !== workspaceOwnerEpoch) return;
+    const evidence = parseTelemetryText(text);
     evidence.fileName = 'microduck-telemetry-sample.jsonl';
     evidence.source = 'demo-fixture';
     state.telemetry = stampTelemetryContext(evidence);
@@ -6679,6 +7054,10 @@ async function publishTelemetry() {
   }
   if (evidence.contractId && evidence.contractId !== contract.id) {
     showToast('遥测契约与当前 Run 不一致，请切换产品或选择对应 Run', 'error');
+    return;
+  }
+  if (evidence.taskId && evidence.taskId !== run.taskId) {
+    showToast('录制任务与当前 Run 不一致，请选择对应任务的运行记录', 'error');
     return;
   }
   for (const [index, sample] of (evidence.samples || []).entries()) {
@@ -6775,6 +7154,12 @@ async function publishTelemetry() {
 }
 
 function clearTelemetry() {
+  if (state.replay.runId === 'local-recording') {
+    stopReplay(true);
+    state.replay = { runId: '', frames: [], index: 0, timer: null, speed: 1, loaded: false };
+  }
+  state.localRecording = null;
+  if (state.localRecordings) delete state.localRecordings[state.productId];
   state.telemetry = null;
   renderAll();
   showToast('已清除本地遥测证据');
@@ -6837,7 +7222,7 @@ function renderEvaluation() {
     statusLabel = dashboardEmpty ? '已有协议演示 · 等待真实评测' : '协议演示完成';
   }
   else if (demoEvidence && status === 'completed') statusLabel = '演示评测完成';
-  else if (unverifiedEvidence) statusLabel = '评测已保存 · 来源未验证';
+  else if (unverifiedEvidence) statusLabel = evidence && !evidence.publishedRunId && !hasRunEvaluation ? '本地轨迹 · 来源未验证' : '评测已保存 · 来源未验证';
   else if (status === 'completed') statusLabel = '评测已完成';
   else if (status === 'running') statusLabel = '评测进行中';
   else if (status === 'failed') statusLabel = '评测失败';
@@ -6849,7 +7234,7 @@ function renderEvaluation() {
     latest
       ? (latest.summary || latest.modelId || '最新运行') + ' · ' + (latest.backend || 'unknown')
       : evidence
-        ? evidence.fileName + ' · 本地聚合，可继续绑定到正式 Run'
+        ? evidence.fileName + ' · 本地回放，刷新前请导出'
         : dashboardEmpty
           ? '导入遥测或完成一次训练后，这里会展开完整评测面板。'
           : '训练完成后，这里会显示最新一次运行的仿真/真机指标。',
@@ -7403,7 +7788,7 @@ function mountBrowserRecordingReplay() {
     showToast('先在示例机器人中录下一段动作，再检查记录。'); return false;
   }
   stopReplay();
-  state.replay = { runId: '', source: 'browser-recording', recording, frames: recording.samples, index: 0, loaded: true, timer: null, speed: 1, playbackSteps: 0 };
+  state.replay = { runId: 'local-recording', source: 'browser-recording', recording, frames: recording.samples, index: 0, loaded: true, timer: null, speed: 1, playbackSteps: 0, pendingFrame: false };
   mountReplayVideo('', null);
   renderReplayPlayer(); sendReplayFrame();
   return true;
@@ -7459,6 +7844,9 @@ async function performStartAction(action, trigger) {
   }
   if (action === 'begin-experience' || action === 'record-experience' || action === 'simulator-help') {
     if (state.productId !== 'microduck') await changeProduct('microduck');
+    // The introductory experience always uses the anonymous WASM sandbox;
+    // a saved football/balance task belongs to the complete workbench.
+    changeSimulationTask('walk', { notify: false, resetRecording: true });
     setView('simulate'); setFlowChild('simulate');
     if (action !== 'simulator-help') showToast('在示例画面中点击“开始录制”，操作几秒后停止；动作会保存在当前页面，随后可以回放。');
     return;
@@ -8523,6 +8911,7 @@ async function loadModelDetails(modelId = state.selectedModelId) {
 }
 
 async function refreshActiveRuns() {
+  const ownerEpoch = workspaceOwnerEpoch;
   const overview = state.overview;
   if (!overview?.runs?.length) return;
   const now = Date.now();
@@ -8571,6 +8960,7 @@ async function refreshActiveRuns() {
       }
     }),
   );
+  if (ownerEpoch !== workspaceOwnerEpoch) return;
   const byId = new Map(updates.filter(Boolean).map((run) => [run.id, run]));
   if (!byId.size || !state.overview) return;
   const previousRuns = state.overview.runs;
@@ -8710,13 +9100,17 @@ async function loadOverview({ quiet = false, silent = false } = {}) {
     if (silent) return;
     // A mutation may finish after a background request captured its snapshot.
     // Run a fresh foreground request after that load; joining it is insufficient.
+    const pendingOwner = workspaceOwnerEpoch;
     await state.overviewLoadDone;
+    if (pendingOwner !== workspaceOwnerEpoch) return;
     return loadOverview({ quiet, silent });
   }
   state.overviewInFlight = true;
   let resolveLoad;
   state.overviewLoadDone = new Promise((resolve) => { resolveLoad = resolve; });
   if (!silent) setLoading(true);
+  const loadSequence = ++overviewLoadSequence;
+  let ownerEpoch = workspaceOwnerEpoch;
   if (!state.overview) {
     setWorkspaceStatus('loading', '正在连接工作区', '正在读取项目、模型和设备状态…');
   }
@@ -8724,6 +9118,9 @@ async function loadOverview({ quiet = false, silent = false } = {}) {
     const payload = await request(
       '/sim2real/overview?productId=' + encodeURIComponent(state.productId),
     );
+    if (loadSequence !== overviewLoadSequence) return;
+    reconcileWorkspaceIdentity(payload.identity === null ? { authenticated: false } : payload.identity, { keepOverviewLoading: true });
+    ownerEpoch = workspaceOwnerEpoch;
     state.overview = payload;
     trainingRelay?.reconcile(payload, { retryPaused: !quiet && !silent });
     state.selectedComputeResourceId = state.selectedComputeResourceId || '';
@@ -8746,6 +9143,7 @@ async function loadOverview({ quiet = false, silent = false } = {}) {
           }).toString()),
           request('/sim2real/research-loop/summary?days=30'),
         ]);
+    if (ownerEpoch !== workspaceOwnerEpoch || loadSequence !== overviewLoadSequence) return;
     if (!silent && summaryResult.status === 'fulfilled') state.workspaceSummary = summaryResult.value;
     if (researchLoopResult.status === 'fulfilled' && researchLoopResult.value?.ok && researchLoopResult.value?.summary) {
       state.researchLoop = researchLoopResult.value.summary;
@@ -8774,10 +9172,12 @@ async function loadOverview({ quiet = false, silent = false } = {}) {
     void loadWorkspaceNotices();
     clearAuthGate();
     await refreshActiveRuns();
+    if (ownerEpoch !== workspaceOwnerEpoch || loadSequence !== overviewLoadSequence) return;
     renderAll();
     // Model details rarely change while a run is in flight; re-fetching them
     // every silent poll doubles request volume for zero operator value.
     if (!silent) await loadModelDetails();
+    if (ownerEpoch !== workspaceOwnerEpoch || loadSequence !== overviewLoadSequence) return;
     setText('hero-updated', '更新于 ' + formatDate(new Date().toISOString()));
     if (summaryResult.status === 'rejected' || projectsResult.status === 'rejected' || datasetsResult.status === 'rejected') {
       const failed = [summaryResult, projectsResult, datasetsResult].filter((result) => result.status === 'rejected').length;
@@ -8786,6 +9186,7 @@ async function loadOverview({ quiet = false, silent = false } = {}) {
       clearWorkspaceStatus();
     }
   } catch (error) {
+    if (ownerEpoch !== workspaceOwnerEpoch || loadSequence !== overviewLoadSequence) return;
     state.serviceError = !(error instanceof ApiError && error.status === 401);
     setText(
       'service-status',
@@ -8801,6 +9202,7 @@ async function loadOverview({ quiet = false, silent = false } = {}) {
     }
   } finally {
     state.overviewInFlight = false;
+    if (loadSequence === overviewLoadSequence) {
     if (silent) {
       // Silent polls never touched the loading chrome (setLoading(false) is
       // safe to skip), but still reconcile the CTA states in case the poll
@@ -8820,6 +9222,7 @@ async function loadOverview({ quiet = false, silent = false } = {}) {
       void refreshSessionMenu();
     }
     scheduleOverviewPolling();
+    }
     resolveLoad();
   }
 }
@@ -9328,6 +9731,7 @@ function loadManifestTemplate({ notify = true } = {}) {
 }
 
 async function importManifestFile(event) {
+  const ownerEpoch = workspaceOwnerEpoch;
   const input = event.target;
   const file = input?.files?.[0];
   if (!file) return;
@@ -9340,6 +9744,7 @@ async function importManifestFile(event) {
         '请精简 JSON 后再导入',
       ),
     );
+    if (ownerEpoch !== workspaceOwnerEpoch) return;
     $('manifest-editor').value = JSON.stringify(parsed, null, 2);
     showToast('已导入本地 manifest；请先校验再登记', 'success');
   } catch (error) {
@@ -9754,6 +10159,7 @@ function stationScheduleStreamReconnect() {
 }
 
 function stationStartStatusStream() {
+  const ownerEpoch = workspaceOwnerEpoch;
   if (state.station.statusReader) return;
   stationClearStreamReconnect();
   const badge = $('station-live-badge');
@@ -9762,6 +10168,7 @@ function stationStartStatusStream() {
     headers: { accept: 'application/x-ndjson' },
   })
     .then(async (response) => {
+      if (ownerEpoch !== workspaceOwnerEpoch) { await response.body?.cancel(); return; }
       if (!response.ok || !response.body) throw new Error('HTTP ' + response.status);
       if (badge) badge.hidden = false;
       // 流真正建立后重置退避计数，短暂中断不会累积到长间隔。
@@ -9772,6 +10179,7 @@ function stationStartStatusStream() {
       let buffer = '';
       for (;;) {
         const { done, value } = await reader.read();
+        if (ownerEpoch !== workspaceOwnerEpoch) { await reader.cancel(); break; }
         if (done) break;
         buffer += decoder.decode(value, { stream: true });
         for (;;) {
@@ -9794,6 +10202,7 @@ function stationStartStatusStream() {
       }
     })
     .catch(() => {
+      if (ownerEpoch !== workspaceOwnerEpoch) return;
       if (badge) badge.hidden = true;
       const freshness = $('station-freshness');
       if (freshness) {
@@ -9803,6 +10212,7 @@ function stationStartStatusStream() {
       stationLog('状态流已断开或不可用', 'error');
     })
     .finally(() => {
+      if (ownerEpoch !== workspaceOwnerEpoch) return;
       state.station.statusReader = null;
       if (badge) badge.hidden = true;
       // 流结束（正常关闭或错误）后自动重连；页面隐藏/视图切走时由
@@ -10941,9 +11351,54 @@ function wireStationEvents() {
   });
 }
 
+function changeSimulationTask(next, { notify = true, resetRecording = false } = {}) {
+  if (!ACTION_TASKS[next] || next === state.taskId) return;
+  preserveActiveRecording();
+  stopReplay(true);
+  if (policyTrial.running) stopPolicyTrial();
+  policyTrial.running = false;
+  setPolicyTrialStatus('任务已切换，选择对应训练 Run 可重新试跑。');
+  const previousTask = state.taskId;
+  state.taskId = next;
+  if (resetRecording) {
+    // Keep archived task recordings, but do not present the prior task's
+    // active evidence as a recording made in the introductory walk scene.
+    closeExperienceReview();
+    state.telemetry = null;
+    state.localRecording = null;
+    state.reviewedRecording = null;
+    state.replay = { runId: '', frames: [], index: 0, timer: null, speed: 1, loaded: false, pendingFrame: false };
+    mountReplayVideo('', null);
+  }
+  // Selecting a task prepares its engine unless the user explicitly chose
+  // another engine. Introductory and ordinary task changes share this path.
+  const taskEngine = (taskId) => taskId.startsWith('football-') ? 'microduck-football'
+    : taskId.startsWith('balance-') || taskId.startsWith('swing-') ? 'microduck-recurrent' : 'starter-ppo';
+  const engine = $('training-engine');
+  if (engine && (!engine.value || engine.value === 'starter-ppo' || engine.value === taskEngine(previousTask))) {
+    engine.value = taskEngine(next);
+    renderEngineCapability();
+  }
+  saveWorkspaceContext();
+  try {
+    window.localStorage?.setItem('rdk-duck-lab-task', next);
+  } catch {
+    // Preference persistence is optional in file:// and privacy contexts.
+  }
+  // Keep the selector responsive even when another dashboard panel fails.
+  renderSelects();
+  renderActionLibrary();
+  if (notify) showToast('已切换任务：' + ACTION_TASKS[next].label, 'success');
+  try { renderAll(); } catch (error) { console.warn('任务面板刷新失败，已保留当前动作：', error); }
+}
+
 async function changeProduct(next) {
     if (!PRODUCT_PROFILES[next]) return;
+    preserveActiveRecording();
+    closeExperienceReview();
+    stopReplay(true);
     state.productId = next;
+    state.localRecording = state.localRecordings?.[next] || null;
     state.selectedModelId = '';
     // A project can span several robot profiles. Keep it only when it links a
     // model for the newly selected product; otherwise return to the account
@@ -11050,6 +11505,19 @@ function wireEvents() {
     }
   });
   window.addEventListener('message', handleMicroduckRecordingReady);
+  window.addEventListener('message', handleTaskRecordingReady);
+  window.addEventListener('message', handleSimulatorTaskState);
+  window.addEventListener('message', handleSimulatorReplayState);
+  window.addEventListener('message', (event) => {
+    if (!isSimulatorMessage(event) || event.data?.type !== 'rdk-simulator-task-selected') return;
+    const taskId = event.data.taskId;
+    const select = $('task-select');
+    if (!select || !ACTION_TASKS[taskId] || select.value === taskId) return;
+    select.value = taskId;
+    select.dispatchEvent(new Event('change', { bubbles: true }));
+  });
+  wireSimulatorFrameLifecycle($('simulator-frame'));
+  wireSimulatorFrameLifecycle($('replay-scene-frame'));
   window.addEventListener('pagehide', () => trainingRelay?.stop());
   window.addEventListener('pageshow', (event) => {
     if (event.persisted) void loadOverview({ quiet: true });
@@ -11254,45 +11722,7 @@ function wireEvents() {
     });
   }
   $('task-select')?.addEventListener('change', (event) => {
-    const next = event.target.value;
-    if (!ACTION_TASKS[next]) return;
-    state.taskId = next;
-    // Football tasks are owned by the platform football engine. Selecting one
-    // in the workbench should prepare the matching engine automatically while
-    // still allowing an operator to override it afterwards.
-    if (next.startsWith('football-')) {
-      const engine = $('training-engine');
-      if (engine && (!engine.value || engine.value === 'starter-ppo')) {
-        engine.value = 'microduck-football';
-        renderEngineCapability();
-      }
-    }
-    // Recurrent-engine tasks (balance/swing proxies) are owned by the
-    // recurrent engine the same way: selecting one prepares the matching
-    // engine without locking the operator in.
-    if (next.startsWith('balance-') || next.startsWith('swing-')) {
-      const engine = $('training-engine');
-      if (engine && (!engine.value || engine.value === 'starter-ppo')) {
-        engine.value = 'microduck-recurrent';
-        renderEngineCapability();
-      }
-    }
-    saveWorkspaceContext();
-    try {
-      window.localStorage?.setItem('rdk-duck-lab-task', next);
-    } catch {
-      // Preference persistence is optional in file:// and privacy contexts.
-    }
-    // Keep the selector responsive even when another dashboard panel fails to refresh.
-    // The task is used by training payloads and the context panel can update independently.
-    renderSelects();
-    renderActionLibrary();
-    const task = ACTION_TASKS[next];
-    showToast(
-      '当前动作任务：' + task.label + (task.scene ? ' · 训练场景在引擎侧运行，画面不随任务切换' : ''),
-      'success',
-    );
-    try { renderAll(); } catch (error) { console.warn('任务面板刷新失败，已保留当前动作：', error); }
+    changeSimulationTask(event.target.value);
   });
   document.querySelectorAll('[data-record-tab]').forEach((control) => {
     control.addEventListener('click', () => {
@@ -11340,9 +11770,9 @@ function wireEvents() {
   $('telemetry-publish-button')?.addEventListener('click', () => publishTelemetry());
   $('replay-load-button')?.addEventListener('click', () => { void loadRunReplay(); });
   $('replay-play-button')?.addEventListener('click', toggleReplay);
-  $('replay-stop-button')?.addEventListener('click', () => { state.replay.index = 0; stopReplay(); sendReplayFrame(); });
+  $('replay-stop-button')?.addEventListener('click', () => { state.replay.index = 0; stopReplay(true); syncSimulatorTask(); });
   $('replay-video-render')?.addEventListener('click', () => { void renderReplayVideo(); });
-  $('replay-run-select')?.addEventListener('change', (event) => { state.replay.source = event.target.value === 'local-recording' ? 'browser-recording' : 'run'; state.replay.recording = null; state.replay.runId = event.target.value === 'local-recording' ? '' : String(event.target.value || ''); state.replay.loaded = false; state.replay.frames = []; state.replay.index = 0; stopReplay(); renderReplayPlayer(); });
+  $('replay-run-select')?.addEventListener('change', (event) => { state.replay.source = 'run'; state.replay.recording = null; state.replay.runId = String(event.target.value || ''); state.replay.loaded = false; state.replay.frames = []; state.replay.index = 0; stopReplay(true); renderReplayPlayer(); });
   $('replay-speed-select')?.addEventListener('change', (event) => { state.replay.speed = Number(event.target.value || 1); if (state.replay.timer) { stopReplay(); toggleReplay(); } });
   $('replay-seek')?.addEventListener('input', (event) => { if (state.replay.source === 'browser-recording') { stopReplay(); state.replay.playbackSteps = 0; } state.replay.index = Number(event.target.value || 0); sendReplayFrame(); });
   // 统一时间轴与逐帧回放共用 state.replay.index 作为唯一位置源：从任一控件

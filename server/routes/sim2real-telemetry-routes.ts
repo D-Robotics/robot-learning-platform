@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import { type Request, type Response, type Router } from 'express';
 
 import type { Device } from '../../shared/types.js';
+import type { Sim2RealSimulationReplaySnapshot } from '../../shared/sim2real-telemetry.js';
 import {
   SIM2REAL_CONTRACT_LIMITS,
   type Sim2RealEvaluationSummary,
@@ -134,6 +135,29 @@ const TELEMETRY_VECTOR_CAP = Math.max(
   SIM2REAL_CONTRACT_LIMITS.maxActionSize,
 );
 const TELEMETRY_BODY_CAP = 2_000_000;
+const TELEMETRY_POSE_VECTOR_CAP = 4096;
+const TELEMETRY_POSE_TOTAL_CAP = 16_384;
+const SAFE_SCENE_ID = /^[a-zA-Z0-9][a-zA-Z0-9._:-]{0,95}$/;
+const REPLAY_VECTOR_FIELDS = [
+  'qpos',
+  'qvel',
+  'integrationState',
+  'posture',
+  'prevPosture',
+  'lastAction',
+  'command',
+] as const;
+const REPLAY_NUMBER_FIELDS = ['time', 'stepCount', 'lastBallDistance', 'lastGoalDistance'] as const;
+const REPLAY_BOOLEAN_FIELDS = ['done', 'scored'] as const;
+const REPLAY_KEYS = new Set<string>([
+  'taskId',
+  ...REPLAY_VECTOR_FIELDS,
+  ...REPLAY_NUMBER_FIELDS,
+  ...REPLAY_BOOLEAN_FIELDS,
+  'action',
+  'reward',
+]);
+const SIMULATION_SAMPLE_FIELDS = ['taskId', 'sceneId', 'qpos', 'qvel', 'replay'] as const;
 const SAFE_TELEMETRY_ID = /^[a-zA-Z0-9][a-zA-Z0-9._:-]{0,127}$/;
 const SAFE_TELEMETRY_OWNER = /^[^\u0000-\u001f\u007f/]{1,160}$/;
 const SAFE_IDEMPOTENCY_KEY = /^[\x21-\x7e]{1,128}$/;
@@ -204,6 +228,129 @@ function finiteVector(value: unknown, label: string): { value?: number[]; error?
     return { error: `${label} contains a non-finite or out-of-range value` };
   }
   return { value: values };
+}
+
+function normalizeSimulationFields(
+  source: Record<string, unknown>,
+  label: string,
+): {
+  value?: Pick<Sim2RealTelemetrySample, 'taskId' | 'sceneId' | 'qpos' | 'qvel' | 'replay'>;
+  error?: string;
+} {
+  const normalized: Pick<
+    Sim2RealTelemetrySample,
+    'taskId' | 'sceneId' | 'qpos' | 'qvel' | 'replay'
+  > = {};
+  let footprint = 0;
+  function vector(value: unknown, name: string): number[] {
+    if (!Array.isArray(value) || value.length > TELEMETRY_POSE_VECTOR_CAP) {
+      throw new Error(`${name} must be an array with at most ${TELEMETRY_POSE_VECTOR_CAP} values`);
+    }
+    if (
+      value.some(
+        (item) => typeof item !== 'number' || !Number.isFinite(item) || Math.abs(item) > 1_000_000,
+      )
+    ) {
+      throw new Error(`${name} must contain finite numbers in range`);
+    }
+    footprint += value.length;
+    if (footprint > TELEMETRY_POSE_TOTAL_CAP) {
+      throw new Error(
+        `${label} simulator state exceeds ${TELEMETRY_POSE_TOTAL_CAP} total array values`,
+      );
+    }
+    return [...value] as number[];
+  }
+  function identifier(value: unknown, name: string): string {
+    if (typeof value !== 'string' || !SAFE_SCENE_ID.test(value)) {
+      throw new Error(`${name} must be a safe scene identifier of at most 96 characters`);
+    }
+    return value;
+  }
+  function scalar(value: unknown, name: string, minimum: number): number {
+    if (
+      typeof value !== 'number' ||
+      !Number.isFinite(value) ||
+      value < minimum ||
+      Math.abs(value) > 1_000_000
+    ) {
+      throw new Error(`${name} must be a finite number in range`);
+    }
+    return value;
+  }
+  try {
+    for (const key of ['taskId', 'sceneId'] as const) {
+      if (Object.prototype.hasOwnProperty.call(source, key))
+        normalized[key] = identifier(source[key], `${label}.${key}`);
+    }
+    for (const key of ['qpos', 'qvel'] as const) {
+      if (Object.prototype.hasOwnProperty.call(source, key))
+        normalized[key] = vector(source[key], `${label}.${key}`);
+    }
+    if (Object.prototype.hasOwnProperty.call(source, 'replay')) {
+      const raw = source.replay;
+      if (!raw || typeof raw !== 'object' || Array.isArray(raw))
+        throw new Error(`${label}.replay must be an object`);
+      const snapshot = raw as Record<string, unknown>;
+      for (const key of Object.keys(snapshot)) {
+        if (!REPLAY_KEYS.has(key)) throw new Error(`${label}.replay contains unknown field ${key}`);
+      }
+      const replay: Sim2RealSimulationReplaySnapshot = {
+        qpos: vector(snapshot.qpos, `${label}.replay.qpos`),
+        qvel: vector(snapshot.qvel, `${label}.replay.qvel`),
+      };
+      if (Object.prototype.hasOwnProperty.call(snapshot, 'taskId'))
+        replay.taskId = identifier(snapshot.taskId, `${label}.replay.taskId`);
+      for (const key of REPLAY_VECTOR_FIELDS) {
+        if (
+          key !== 'qpos' &&
+          key !== 'qvel' &&
+          Object.prototype.hasOwnProperty.call(snapshot, key)
+        ) {
+          replay[key] = vector(snapshot[key], `${label}.replay.${key}`);
+        }
+      }
+      for (const key of REPLAY_NUMBER_FIELDS) {
+        if (Object.prototype.hasOwnProperty.call(snapshot, key)) {
+          const number = scalar(snapshot[key], `${label}.replay.${key}`, 0);
+          if (key === 'stepCount' && !Number.isSafeInteger(number))
+            throw new Error(`${label}.replay.stepCount must be an integer`);
+          replay[key] = number;
+        }
+      }
+      for (const key of REPLAY_BOOLEAN_FIELDS) {
+        if (Object.prototype.hasOwnProperty.call(snapshot, key)) {
+          if (typeof snapshot[key] !== 'boolean')
+            throw new Error(`${label}.replay.${key} must be boolean`);
+          replay[key] = snapshot[key] as boolean;
+        }
+      }
+      if (Object.prototype.hasOwnProperty.call(snapshot, 'action')) {
+        const action = snapshot.action;
+        if (Array.isArray(action) && action.length && Array.isArray(action[0])) {
+          if (action.length > 6)
+            throw new Error(`${label}.replay.action supports at most 6 agent rows`);
+          replay.action = action.map((row, index) =>
+            vector(row, `${label}.replay.action[${index}]`),
+          );
+          if (replay.action.some((row) => row.length !== (replay.action as number[][])[0].length)) {
+            throw new Error(`${label}.replay.action must be a rectangular agent matrix`);
+          }
+        } else replay.action = vector(action, `${label}.replay.action`);
+      }
+      if (Object.prototype.hasOwnProperty.call(snapshot, 'reward')) {
+        replay.reward = Array.isArray(snapshot.reward)
+          ? vector(snapshot.reward, `${label}.replay.reward`)
+          : scalar(snapshot.reward, `${label}.replay.reward`, -1_000_000);
+      }
+      normalized.replay = replay;
+    }
+    return { value: normalized };
+  } catch (error) {
+    return {
+      error: error instanceof Error ? error.message : `${label} contains invalid simulator state`,
+    };
+  }
 }
 
 function boundedTelemetryNumber(
@@ -493,6 +640,11 @@ function normalizeTelemetrySample(
     return { error: `samples[${index}].t must be between 0 and 86400 seconds` };
   }
   if (source.event != null) {
+    for (const field of SIMULATION_SAMPLE_FIELDS) {
+      if (Object.prototype.hasOwnProperty.call(source, field)) {
+        return { error: `samples[${index}].event 样本不能同时携带 ${field} 仿真数据` };
+      }
+    }
     // Lifecycle markers are pure events: control data on the same sample
     // would blur the boundary between "what the robot did" (counted by
     // replay statistics) and "what happened to the session" (aggregated by
@@ -517,8 +669,11 @@ function normalizeTelemetrySample(
   const action = finiteVector(source.action, `samples[${index}].action`);
   if (observation.error) return { error: observation.error };
   if (action.error) return { error: action.error };
+  const simulation = normalizeSimulationFields(source, `samples[${index}]`);
+  if (simulation.error) return { error: simulation.error };
   const sample: Sim2RealTelemetrySample = {
     t,
+    ...simulation.value,
     ...(observation.value ? { observation: observation.value } : {}),
     ...(action.value ? { action: action.value } : {}),
   };
@@ -1214,6 +1369,21 @@ export function registerSim2RealTelemetryRoutes(
         retryable: false,
       });
       return;
+    }
+    if (run.taskId) {
+      const mismatchedIndex = parsed.samples.findIndex(
+        (sample) => sample.taskId !== undefined && sample.taskId !== run.taskId,
+      );
+      if (mismatchedIndex !== -1) {
+        sendApiError(
+          response,
+          400,
+          'SIM2REAL_INVALID_TELEMETRY',
+          `samples[${mismatchedIndex}].taskId 与当前 Run 的任务不一致。`,
+          { retryable: false },
+        );
+        return;
+      }
     }
     // A token without an explicit source is the board-agent convenience form;
     // legacy no-token requests keep their historical `import` default.  An

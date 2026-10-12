@@ -13,11 +13,15 @@
   // The MuJoCo service is mounted independently from the Sim2Real app. Keep
   // the base configurable for installations that put both routes below one
   // reverse-proxy prefix while retaining /mujoco as the production default.
-  const configuredBase = String(
+  const query = new URLSearchParams(location.search);
+  const configuredBase = String(query.get('mujocoBase') ||
     window.RDK_MUJOCO_BASE || document.documentElement.dataset.mujocoBase || '/mujoco',
   ).trim();
-  const normalizedBase = configuredBase.replace(/^\/+|\/+$/g, '');
-  const mujocoBase = normalizedBase ? `/${normalizedBase}` : '';
+  const baseUrl = new URL(configuredBase, location.origin);
+  if (baseUrl.origin !== location.origin || !/^https?:$/.test(baseUrl.protocol)) {
+    setEvent('MuJoCo 接口必须与工作台同源。', 'warn'); return;
+  }
+  const mujocoBase = baseUrl.pathname.replace(/\/+$/, '');
   const API_ROOT = `${mujocoBase}/api`;
   const LOOP_MS = 50; // five 10 ms MuJoCo steps per control update = 20 Hz
   const FRAME_MS = 100; // keep control/telemetry at 20 Hz without rendering 20 JPEGs/s
@@ -36,6 +40,13 @@
   let running = true;
   let recording = false;
   let rows = [];
+  let recordingTask = null;
+  let recordingCreatedAt = '';
+  let recordingBytes = 0;
+  let pendingRecordedCommand = null;
+  let pendingRecordingNotice = null;
+  const MAX_RECORDING_BYTES = 30 * 1024 * 1024;
+  const lineBytes = (row) => new TextEncoder().encode(JSON.stringify(row) + '\n').byteLength;
   let goal = { x: 1.5, y: 0.8 };
   let goalStartDistance = Math.hypot(goal.x, goal.y);
   let loopTimer = null;
@@ -46,6 +57,22 @@
   let depthObjectUrl = null;
   let lastOutcome = '';
   let pageUnloading = false;
+  let active = true;
+  let replaying = false;
+  let generation = 0;
+  let mutationQueue = Promise.resolve();
+  let currentTask = query.get('taskId') || 'goal-navigation';
+  let manualCommand = { linear: 0, angular: 0 };
+  let resumeRunning = true;
+  let loadingPolicy = false;
+  let loadingPolicyTrialId;
+  let connectionError = false;
+  const TASKS = {
+    'goal-navigation': { name: '目标导航', help: '点击场景设置目标，导航控制器驱动物理场景。', automatic: true },
+    'data-collection': { name: '遥操作采集', help: '用线速度与角速度控制机器人，录制真实 8D 观测、2D 动作及传感器。', manual: true },
+    'visual-twist': { name: '视觉控制预览', help: '查看相机和传感器。视觉策略需要目标检测特征适配器，当前尚未提供，不会自动产生视觉控制动作。' },
+    custom: { name: '自定义手动控制', help: '使用手动速度探索物理环境；自定义策略须匹配 OriginBot 8D→2D 契约。', manual: true },
+  };
   // Recorded replay trajectory and policy-drive session state (driven by
   // postMessage from the parent Sim2Real Run page).
   let replayTrace = null;
@@ -69,8 +96,24 @@
     return finite(odom.yaw, 2 * Math.atan2(finite(qpos[6]), finite(qpos[3], 1)));
   };
 
+  const post = (type, data = {}) => { if (window.parent !== window) window.parent.postMessage({ type, taskId: currentTask, ...data }, location.origin); };
+  const taskState = (phase, message) => post('rdk-simulator-task-state', { phase, message, controlHz: 20, contract: { observationDim: 8, actionDim: 2, numAgents: 1, contractId: 'originbot-policy-v1', source: 'originbot-sim' } });
   async function api(path, options = {}) {
+    const { guardGeneration, recordTransition, ...requestOptions } = options;
+    if (['POST', 'DELETE'].includes(options.method)) {
+      const next = mutationQueue.catch(() => {}).then(() => {
+        if (guardGeneration !== undefined && (guardGeneration !== generation || !active || pageUnloading)) return null;
+        if (recordTransition) recordTransition.accepted = true;
+        return executeApi(path, requestOptions);
+      });
+      mutationQueue = next.catch(() => {});
+      return next;
+    }
+    return executeApi(path, requestOptions);
+  }
+  async function executeApi(path, options = {}) {
     const response = await fetch(`${API_ROOT}/${path.replace(/^\/+/, '')}`, {
+      credentials: 'same-origin', cache: 'no-store',
       ...options,
       headers: {
         accept: 'application/json',
@@ -99,7 +142,7 @@
       try {
         const parsed = JSON.parse(detail);
         const code = typeof parsed?.error === 'string' ? parsed.error : '';
-        const message = typeof parsed?.message === 'string' ? parsed.message : '';
+        const message = typeof parsed?.message === 'string' ? parsed.message : typeof parsed?.detail === 'string' ? parsed.detail : '';
         return [code, message].filter(Boolean).join('：') || 'request failed';
       } catch {
         return 'request failed';
@@ -111,6 +154,8 @@
 
   function releaseSession() {
     pageUnloading = true;
+    generation++;
+    stopPolicyRun('页面已关闭。');
     const id = sessionId;
     if (!id) return;
     sessionId = null;
@@ -121,6 +166,7 @@
     // is killed mid-request cannot pin a slot forever.
     fetch(`${API_ROOT}/sessions/${id}`, {
       method: 'DELETE',
+      credentials: 'same-origin',
       keepalive: true,
       headers: { accept: 'application/json' },
     }).catch(() => {});
@@ -139,6 +185,7 @@
     const text = $('engine-label');
     if (text) text.textContent = label;
     if (badge) badge.classList.toggle('disconnected', !connected);
+    if ($('retry')) $('retry').hidden = connected;
   }
 
   function updateGoalReadout() {
@@ -146,9 +193,9 @@
     if (readout) readout.textContent = `X ${goal.x.toFixed(2)} · Y ${goal.y.toFixed(2)}`;
   }
 
-  function distanceToGoal(state = latestState) {
+  function distanceToGoal(state = latestState, target = goal) {
     const position = positionOf(state);
-    return Math.hypot(goal.x - position.x, goal.y - position.y);
+    return Math.hypot(target.x - position.x, target.y - position.y);
   }
 
   function updateTransport() {
@@ -156,7 +203,9 @@
     const recordButton = $('record');
     const exportButton = $('stop');
     const status = $('status-badge');
+    if ($('samples-readout')) $('samples-readout').textContent = String(rows.length);
     if (runButton) {
+      runButton.disabled = !sessionId || !active || currentTask === 'visual-twist' || Boolean(policySession) || loadingPolicy;
       runButton.textContent = running ? 'Ⅱ 暂停' : '▶ 继续';
       runButton.setAttribute('aria-pressed', String(running));
     }
@@ -164,14 +213,14 @@
       recordButton.textContent = recording ? '■ 停止录制' : '● 开始录制';
       recordButton.classList.toggle('recording', recording);
       recordButton.setAttribute('aria-pressed', String(recording));
-      recordButton.disabled = !sessionId;
+      recordButton.disabled = !sessionId || replaying || !active || loadingPolicy || currentTask === 'visual-twist' || (!recording && pendingRecordedCommand?.accepted);
     }
     if (exportButton) exportButton.disabled = rows.length === 0;
     if (status) {
-      const reached = latestState && distanceToGoal(latestState) <= GOAL_EPSILON;
+      const reached = TASKS[currentTask]?.automatic && latestState && distanceToGoal(latestState) <= GOAL_EPSILON;
       const collision = Boolean(latestState?.collision);
       const outcome = collision ? 'collision' : reached ? 'goal' : '';
-      status.textContent = outcome === 'collision' ? '● 发生碰撞' : outcome === 'goal' ? '● 已到达目标' : running ? (recording ? '● 录制中' : '● 运行中') : '● 已暂停';
+      status.textContent = replaying ? '● 回放中' : outcome === 'collision' ? '● 发生碰撞' : outcome === 'goal' ? '● 已到达目标' : policySession ? '● 策略试跑中' : running ? (recording ? '● 录制中' : '● 运行中') : '● 已暂停';
       status.classList.toggle('paused', !running && !outcome);
       status.classList.toggle('warn', outcome === 'collision');
       if (outcome && outcome !== lastOutcome) {
@@ -306,7 +355,7 @@
     return { position, distance, progress };
   }
 
-  function observationOf(state) {
+  function observationOf(state, target = goal) {
     const position = positionOf(state);
     const yaw = yawOf(state);
     const odom = odomOf(state);
@@ -316,8 +365,8 @@
       position.y,
       Math.sin(yaw),
       Math.cos(yaw),
-      goal.x - position.x,
-      goal.y - position.y,
+      target.x - position.x,
+      target.y - position.y,
       finite(odom.linearX),
       finite(imu.gyroZ),
     ].map((value) => finite(value));
@@ -360,24 +409,28 @@
     );
   }
 
-  function appendSample(state, previousState = state, command = actionOf(state)) {
-    const metrics = updateReadouts(state);
+  function appendSample(state, previousState = state, command = actionOf(state), transition = null) {
+    const sampleGoal = transition?.goal || goal, sampleTask = transition?.taskId || currentTask;
+    if (active && sampleTask === currentTask) updateReadouts(state);
     const action = [finite(command?.linear), finite(command?.angular)];
     const maxLinear = finite(state?.cmd_vel?.maxLinear, 0.3);
     const maxAngular = finite(state?.cmd_vel?.maxAngular, 1.0);
-    const distanceBefore = distanceToGoal(previousState);
-    const distanceAfter = metrics.distance;
+    const distanceBefore = distanceToGoal(previousState, sampleGoal);
+    const distanceAfter = distanceToGoal(state, sampleGoal);
     const collision = Boolean(state?.collision);
-    const done = distanceAfter <= GOAL_EPSILON || collision;
-    rows.push({
-      t: finite(previousState?.time, finite(state?.time)),
+    const goalReached = TASKS[sampleTask]?.automatic && distanceAfter <= GOAL_EPSILON;
+    const done = goalReached || collision;
+    const sample = {
+      type: 'sample', taskId: sampleTask, qpos: qposOf(state), qvel: qvelOf(state), replay: state?.replay || null,
+      metrics: { goalX: sampleGoal.x, goalY: sampleGoal.y, goalDistance: distanceAfter, collision },
+      t: finite(state?.time), tStart: finite(previousState?.time),
       tNext: finite(state?.time),
       controlPeriodSeconds: finite(state?.model?.controlPeriod, 0.05),
       controlHz: finite(state?.model?.controlHz, 20),
       // Keep the original observation/action keys while adding an explicit
       // transition pair for offline RL consumers.
-      observation: observationOf(previousState),
-      nextObservation: observationOf(state),
+      observation: transition?.observation || observationOf(previousState, sampleGoal),
+      nextObservation: observationOf(state, sampleGoal),
       action,
       // Browser control is a physical twist. Keep a normalized copy for
       // consumers that train the 2D [-1, 1] policy head; never make them
@@ -392,7 +445,7 @@
         linear: finite(state?.cmd_vel?.appliedLinear, action[0]),
         angular: finite(state?.cmd_vel?.appliedAngular, action[1]),
       },
-      reward: Number((distanceBefore - distanceAfter - 0.01 * (Math.abs(action[0]) + Math.abs(action[1])) + (distanceAfter <= GOAL_EPSILON ? 5 : 0) - (collision ? 5 : 0)).toFixed(6)),
+      reward: Number(((TASKS[sampleTask]?.automatic ? distanceBefore - distanceAfter : 0) - 0.01 * (Math.abs(action[0]) + Math.abs(action[1])) + (goalReached ? 5 : 0) - (collision ? 5 : 0)).toFixed(6)),
       done,
       terminated: done,
       truncated: false,
@@ -404,20 +457,26 @@
         finite(state?.cmd_vel?.appliedAngular, action[1]),
       ],
       episode: state?.episode || null,
-    });
+    };
+    const bytes = lineBytes(sample);
+    if (recordingBytes + bytes <= MAX_RECORDING_BYTES) { rows.push(sample); recordingBytes += bytes; }
+    else { stopRecording('已达到 30 MiB 录制上限，已保存此前完整帧。'); return; }
+    if (rows.length >= 30000) stopRecording('已达到 30,000 帧录制上限，轨迹已保存。');
   }
 
   async function drawFrame() {
     if (!sessionId) return;
+    const token = generation;
     const response = await fetch(
       `${API_ROOT}/sessions/${sessionId}/frame.jpg?t=${Date.now()}`,
-      { cache: 'no-store', headers: { accept: 'image/jpeg' } },
+      { cache: 'no-store', credentials: 'same-origin', headers: { accept: 'image/jpeg' } },
     );
     if (!response.ok) throw new Error(`frame ${response.status}`);
     const blob = await response.blob();
+    if (token !== generation || pageUnloading) return;
     if (typeof createImageBitmap === 'function') {
       const bitmap = await createImageBitmap(blob);
-      paintFrame(bitmap, bitmap.width, bitmap.height);
+      if (token === generation && !pageUnloading) paintFrame(bitmap, bitmap.width, bitmap.height);
       bitmap.close();
       return;
     }
@@ -426,7 +485,7 @@
       const image = new Image();
       const objectUrl = URL.createObjectURL(blob);
       image.onload = () => {
-        paintFrame(image, image.naturalWidth || image.width, image.naturalHeight || image.height);
+        if (token === generation && !pageUnloading) paintFrame(image, image.naturalWidth || image.width, image.naturalHeight || image.height);
         URL.revokeObjectURL(objectUrl);
         resolve();
       };
@@ -440,11 +499,13 @@
 
   async function drawDepth() {
     if (!sessionId || !document.getElementById('depth-view')) return;
+    const token = generation;
     const response = await fetch(`${API_ROOT}/sessions/${sessionId}/depth.jpg?t=${Date.now()}`, {
-      cache: 'no-store', headers: { accept: 'image/jpeg' },
+      cache: 'no-store', credentials: 'same-origin', headers: { accept: 'image/jpeg' },
     });
     if (!response.ok) throw new Error(`depth ${response.status}`);
     const nextUrl = URL.createObjectURL(await response.blob());
+    if (token !== generation || pageUnloading) { URL.revokeObjectURL(nextUrl); return; }
     const previousUrl = depthObjectUrl;
     depthObjectUrl = nextUrl;
     const image = $('depth-view');
@@ -453,7 +514,8 @@
     if ($('depth-readout-mini')) $('depth-readout-mini').textContent = '实时 · mono8';
   }
 
-  async function render(state, { forceFrame = false } = {}) {
+  async function render(state, { forceFrame = false, token = generation, requireFrame = false } = {}) {
+    if (token !== generation || pageUnloading) return;
     latestState = state;
     updateReadouts(state);
     drawMap(state);
@@ -463,12 +525,14 @@
     if (!forceFrame && Date.now() - lastFrameAt < FRAME_MS) return;
     try {
       await drawFrame();
+      if (token !== generation || pageUnloading) return;
       if (forceFrame || Date.now() - lastDepthAt >= 300) {
         await drawDepth();
         lastDepthAt = Date.now();
       }
       lastFrameAt = Date.now();
     } catch (error) {
+      if (requireFrame) throw error;
       // Do not turn a transient JPEG request into a noisy event every 50 ms.
       const now = Date.now();
       if (now - imageErrorAt > 2000) {
@@ -490,27 +554,55 @@
     };
   }
 
+  function captureCommandRecording(state) {
+    const transition = { rows, recorded: recording, accepted: false, goal: { ...goal }, taskId: currentTask, observation: observationOf(state) };
+    pendingRecordedCommand = transition;
+    return transition;
+  }
+  function finishCommandRecording(transition) {
+    if (pendingRecordedCommand === transition) pendingRecordedCommand = null;
+    if (pendingRecordingNotice === rows) { pendingRecordingNotice = null; publishRecording(); }
+    updateTransport();
+  }
+
   async function loop() {
-    if (!sessionId || loopBusy) return;
+    if (!sessionId || loopBusy || !active || pageUnloading) return;
     loopBusy = true;
+    const token = generation;
+    let nextDelay = LOOP_MS;
+    let transition = null;
     try {
+      if (policySession || loadingPolicy || replaying) return;
+      await mutationQueue;
       let state = await api(`sessions/${sessionId}/state`);
+      if (token !== generation || pageUnloading || !active) return;
+      setConnection(true, 'MuJoCo 已连接'); if (connectionError) { connectionError = false; taskState('ready', 'MuJoCo 连接已恢复，仿真保持暂停。'); }
       if (running) {
         const previousState = state;
-        const command = computeCommand(state);
+        const command = TASKS[currentTask]?.automatic ? computeCommand(state) : { ...manualCommand };
+        transition = captureCommandRecording(previousState);
         state = await api(`sessions/${sessionId}/cmd_vel`, {
           method: 'POST',
           body: JSON.stringify(command),
+          guardGeneration: token, recordTransition: transition,
         });
-        if (recording) appendSample(state, previousState, command);
+        if (!state) return;
+        if (transition.recorded && transition.rows === rows) appendSample(state, previousState, command, transition);
+        if (token !== generation || pageUnloading || !active) return;
+        if (state.collision || (TASKS[currentTask]?.automatic && distanceToGoal(state) <= GOAL_EPSILON)) { running = false; stopRecording(state.collision ? '发生碰撞，仿真已暂停，轨迹已保存。' : '已到达目标，仿真已暂停，轨迹已保存。'); }
       }
-      await render(state);
+      await render(state, { token });
     } catch (error) {
+      if (token !== generation || pageUnloading || !active) return;
+      running = false; stopRecording(); nextDelay = 2000;
       setConnection(false, 'MuJoCo 连接异常');
       setEvent(`MuJoCo 服务暂时不可用：${error.message}`, 'warn');
+      if (!connectionError) taskState('failed', error.message); connectionError = true;
+      if (/^404\b/.test(error.message)) { sessionId = null; running = false; stopPolicyRun('仿真会话已过期。'); stopRecording('会话已过期，已有录制可导出。'); updateTransport(); }
     } finally {
+      finishCommandRecording(transition);
       loopBusy = false;
-      if (sessionId) loopTimer = window.setTimeout(loop, LOOP_MS);
+      if (sessionId && active && !pageUnloading) loopTimer = window.setTimeout(loop, nextDelay);
     }
   }
 
@@ -528,15 +620,18 @@
   }
 
   // ---- embedded replay / policy-drive channel (parent app.js) ----
-  // The parent Run page posts frames of a completed run's evaluation
-  // telemetry. Rendering keeps the physics session untouched: the replay is
-  // recorded evidence, not a re-simulation, so it paints onto the map view
-  // as a trajectory trace while the robot marker follows the frame's
-  // position.
-  function renderReplayFrame(frame) {
-    if (!frame || !Array.isArray(frame.observation)) return;
-    const [x, y] = frame.observation;
-    if (!Number.isFinite(x) || !Number.isFinite(y)) return;
+  // Restore the recorded physical state before asking the server for images.
+  // Telemetry without a real state snapshot cannot faithfully move this scene.
+  async function renderReplayFrame(frame, taskId, index = 0) {
+    if (!sessionId) { const message = 'OriginBot 场景正在加载，请稍后重新选择回放帧。'; setEvent(message, 'warn'); post('rdk-replay-status', { phase: 'loading', index, message }); return; }
+    if (!frame || (frame.taskId || taskId) !== currentTask) { const message = '回放任务与当前 OriginBot 任务不一致。'; setEvent(message, 'warn'); post('rdk-replay-status', { phase: 'failed', index, message }); return; }
+    if (!frame.replay || frame.replay.taskId !== 'originbot' || !Array.isArray(frame.replay.qpos) || !Array.isArray(frame.replay.qvel) || [...frame.replay.qpos, ...frame.replay.qvel].some((n) => !Number.isFinite(n))) { const message = '回放缺少 OriginBot 引擎快照，无法还原三维场景。'; setEvent(message, 'warn'); post('rdk-replay-status', { phase: 'failed', index, message }); return; }
+    stopPolicyRun(); stopRecording(); running = false; replaying = true; const token = ++generation;
+    try {
+      const state = await api(`sessions/${sessionId}/replay`, { method: 'POST', body: JSON.stringify(frame.replay) });
+      if (token !== generation || pageUnloading) return;
+      if (Number.isFinite(frame.metrics?.goalX) && Number.isFinite(frame.metrics?.goalY)) setGoal({ x: frame.metrics.goalX, y: frame.metrics.goalY });
+      const { x, y } = positionOf(state);
     if (!replayTrace) replayTrace = { positions: [], t: [] };
     replayTrace.positions.push({ x, y });
     replayTrace.t.push(finite(frame.t));
@@ -544,28 +639,22 @@
       replayTrace.positions.shift();
       replayTrace.t.shift();
     }
-    const mockState = {
-      qpos: [x, y, 0, 1, 0, 0, 0],
-      sensors: {
-        odom: { x, y },
-        scan: Array.isArray(frame.observation) ? [] : [],
-      },
-      time: finite(frame.t),
-    };
-    drawMap(mockState);
+    await render(state, { forceFrame: true, token, requireFrame: true });
+    if (token !== generation || pageUnloading) return;
     if ($('map-readout')) {
       $('map-readout').textContent = `回放 t=${finite(frame.t).toFixed(2)} s`;
     }
-    setEvent(`回放帧 ${replayTrace.positions.length}：position (${x.toFixed(2)}, ${y.toFixed(2)})`, 'ok');
+    const message = `回放帧 ${index + 1}：位置 (${x.toFixed(2)}, ${y.toFixed(2)})`; setEvent(message, 'ok'); updateTransport(); post('rdk-replay-status', { phase: 'applied', index, message });
+    } catch (error) { if (token === generation) { setEvent(`回放还原失败：${error.message}`, 'warn'); post('rdk-replay-status', { phase: 'failed', index, message: error.message }); } }
   }
 
   // Policy trial runs entirely inside this page (microduck pattern): the
   // parent posts only clonable data (runId + API root); postMessage cannot
   // carry functions, so the ONNX session, the bytes fetch, and the inference
   // loop all live here. Status flows back through 'rdk-policy-status'.
-  const postPolicyStatus = (phase, message) => {
+  const postPolicyStatus = (phase, message, trialId) => {
     try {
-      window.parent?.postMessage({ type: 'rdk-policy-status', phase, message }, '*');
+      post('rdk-policy-status', { phase, message, trialId });
     } catch {
       // A detached or cross-origin parent simply misses the status update;
       // the local event line below still informs this page.
@@ -592,190 +681,189 @@
     return ort;
   }
 
+  function stopPolicyRun(message = '策略试跑已停止。') {
+    if (!policySession && !loadingPolicy) return;
+    const previous = policySession;
+    const trialId = previous ? previous.trialId : loadingPolicyTrialId;
+    policySession = null; loadingPolicy = false; running = false; generation++;
+    loadingPolicyTrialId = undefined;
+    if (previous?.session) void Promise.resolve(previous.inference).catch(() => {}).then(() => previous.session.release()).catch(() => {});
+    postPolicyStatus('stopped', message, trialId); updateTransport();
+  }
+
   async function startPolicyRun(options = {}) {
-    if (policySession) {
-      setEvent('策略试跑已在进行中。', 'warn');
-      return;
-    }
-    const backend = options.backend === 'board' ? 'board' : 'wasm';
-    const runId = String(options.runId || '').trim();
-    const apiRoot = String(options.apiRoot || '').trim();
-    // Board mode serves actions from the board's already-loaded model, so no
-    // run artifact (and no browser ONNX runtime) is needed — only the API root.
-    if (backend !== 'board' && !runId) {
-      setEvent('父页面未提供 runId，无法试跑策略。', 'warn');
-      postPolicyStatus('failed', '缺少 runId。');
-      return;
-    }
-    if (!apiRoot) {
-      setEvent('父页面未提供 apiRoot，无法试跑策略。', 'warn');
-      postPolicyStatus('failed', '缺少 apiRoot。');
-      return;
-    }
-    if (!sessionId) {
-      setEvent('MuJoCo 会话不可用，策略试跑中止。', 'warn');
-      postPolicyStatus('failed', 'MuJoCo 会话不可用。');
-      return;
-    }
-    policySession = {
-      runId,
-      apiRoot,
-      backend,
-      maxSteps: finite(options.maxSteps, 600),
-      steps: 0,
-      session: null,
-    };
-    setEvent(`策略试跑开始：${backend === 'board' ? '板端推理' : `run ${runId.slice(0, 8)}`}（最多 ${policySession.maxSteps} 步）。`, 'ok');
-    if (backend === 'board') {
-      postPolicyStatus('running', '板端推理模式：物理由本仿真器计算，动作逐 tick 请求板端已加载模型。');
-      runPolicyStep();
-      return;
-    }
-    postPolicyStatus('loading', '正在加载浏览器 ONNX 运行时…');
+    stopPolicyRun(); stopRecording(); running = false; replaying = false;
+    const token = ++generation; loadingPolicy = true; loadingPolicyTrialId = options.trialId; updateTransport();
+    let loaded = null;
     try {
+      if (!sessionId || !active) throw new Error('OriginBot 场景尚未就绪或当前视图未激活。');
+      if (options.taskId !== currentTask) throw new Error('策略任务与当前 OriginBot 场景任务不一致。');
+      if (currentTask === 'visual-twist') throw new Error('视觉策略需要目标检测特征适配器；当前相机预览不能替代模型所需的视觉观测。');
+      if (options.backend === 'board') throw new Error('板端策略未提供 OriginBot 任务与 8D→2D 契约证明，无法在此场景试跑。');
+      if (!options.runId || !options.apiRoot) throw new Error('缺少策略运行 ID 或接口地址。');
+      const maxSteps = options.maxSteps === undefined ? 600 : options.maxSteps;
+      if (!Number.isInteger(maxSteps) || maxSteps < 1 || maxSteps > 10000) throw new Error('策略试跑步数必须是 1 到 10,000 的整数。');
+      const root = new URL(options.apiRoot, location.origin);
+      if (root.origin !== location.origin || !/^https?:$/.test(root.protocol)) throw new Error('策略接口必须与工作台同源。');
+      const base = root.href.replace(/\/+$/, '');
+      postPolicyStatus('loading', '正在校验 OriginBot 任务并加载 ONNX 策略…', options.trialId);
+      const response = await fetch(`${base}/runs/${encodeURIComponent(options.runId)}`, { credentials: 'same-origin', cache: 'no-store' });
+      const payload = await response.json();
+      if (!response.ok) throw new Error(payload.message || '策略运行不可访问。');
+      const run = payload.run || payload;
+      if (run.taskId !== currentTask) throw new Error('制品所属任务与当前 OriginBot 任务不一致。');
       const ort = await loadOrt();
-      const response = await fetch(
-        `${apiRoot.replace(/\/+$/, '')}/runs/${encodeURIComponent(runId)}/policy.onnx`,
-        { credentials: 'same-origin', cache: 'no-store', headers: { accept: 'application/octet-stream' } },
-      );
-      if (!response.ok) throw new Error(`策略字节获取失败（HTTP ${response.status}）`);
-      const bytes = await response.arrayBuffer();
-      if (!bytes.byteLength) throw new Error('策略字节为空');
-      postPolicyStatus('loading', '正在编译 ONNX 模型（首次约数秒）…');
-      policySession.session = await ort.InferenceSession.create(bytes, {
-        executionProviders: ['wasm'],
-        graphOptimizationLevel: 'all',
-      });
-      postPolicyStatus('running', `模型已编译，开始推理（${policySession.maxSteps} 步上限）。`);
-      runPolicyStep();
+      const bytes = await fetch(`${base}/runs/${encodeURIComponent(options.runId)}/policy.onnx`, { credentials: 'same-origin', cache: 'no-store' });
+      if (!bytes.ok) { const error = await bytes.json().catch(() => null); throw new Error(error?.message || `策略制品加载失败（HTTP ${bytes.status}）`); }
+      loaded = await ort.InferenceSession.create(await bytes.arrayBuffer(), { executionProviders: ['wasm'], graphOptimizationLevel: 'all' });
+      if (token !== generation || pageUnloading) { await loaded.release(); return; }
+      if (loaded.inputNames.length !== 1) throw new Error('OriginBot 试跑仅支持已声明的单一 8D 观测输入。');
+      const inputName = loaded.inputNames[0];
+      const metadata = Array.isArray(loaded.inputMetadata) ? loaded.inputMetadata[0] : loaded.inputMetadata?.[inputName];
+      const shape = metadata?.shape || metadata?.dimensions;
+      if (!Array.isArray(shape) || shape.length !== 2 || Number(shape[1]) !== 8 || (Number(shape[0]) > 0 && Number(shape[0]) !== 1)) throw new Error('模型观测输入不符合 OriginBot 8D 契约。');
+      policySession = { session: loaded, ort, inputName, outputName: loaded.outputNames.find((name) => ['action', 'actions', 'act'].includes(name)) || loaded.outputNames[0], token, steps: 0, maxSteps, trialId: options.trialId };
+      loadingPolicy = false; loadingPolicyTrialId = undefined;
+      await mutationQueue;
+      if (token !== generation || pageUnloading) return;
+      postPolicyStatus('running', 'OriginBot ONNX 策略正在试跑，导航控制器已暂停。', options.trialId); updateTransport();
+      void runPolicyStep();
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      setEvent(`策略试跑启动失败：${message}`, 'warn');
-      postPolicyStatus('failed', message);
-      policySession = null;
+      if (loaded) void loaded.release().catch(() => {});
+      if (token !== generation || pageUnloading) return;
+      policySession = null; loadingPolicy = false; loadingPolicyTrialId = undefined; running = false;
+      setEvent(`策略试跑失败：${error.message}`, 'warn'); postPolicyStatus('failed', error.message, options.trialId); updateTransport();
     }
   }
 
   async function runPolicyStep() {
-    if (!policySession || (policySession.backend !== 'board' && !policySession.session)) return;
-    if (policySession.steps >= policySession.maxSteps) {
-      const reached = latestState && distanceToGoal(latestState) <= GOAL_EPSILON;
-      const message = `策略试跑结束：${policySession.steps} 步${reached ? '，到达目标点。' : '，达到步数上限。'}`;
-      setEvent(message, reached ? 'ok' : 'warn');
-      postPolicyStatus('finished', message);
-      policySession = null;
-      return;
-    }
+    const driver = policySession;
+    if (!driver || !active || pageUnloading) return;
+    let transition = null;
     try {
       const state = await api(`sessions/${sessionId}/state`);
-      const obs = observationOf(state).map(finite);
-      let action;
-      if (policySession.backend === 'board') {
-        // Hybrid mode: physics stays in the simulator, the action comes from
-        // the board's loaded model. Sequential awaits are the backpressure —
-        // a slow board simply lowers the effective control rate.
-        const endpoint = `${policySession.apiRoot.replace(/\/+$/, '')}/board-station/policy-infer`;
-        const res = await fetch(endpoint, {
-          method: 'POST',
-          credentials: 'same-origin',
-          headers: { 'content-type': 'application/json' },
-          body: JSON.stringify({ observations: [obs] }),
-        });
-        const payload = await res.json().catch(() => null);
-        if (!res.ok || !payload?.ok) {
-          throw new Error(payload?.error ? `板端推理被拒绝：${payload.error}` : `板端推理失败（HTTP ${res.status}）`);
-        }
-        action = [finite(payload.actions?.[0]?.[0]), finite(payload.actions?.[0]?.[1])];
-      } else {
-        const ort = ortRuntime;
-        const session = policySession.session;
-        const inputName = session.inputNames[0] || 'observation';
-        const outputName = session.outputNames[0] || 'action';
-        const results = await session.run({
-          [inputName]: new ort.Tensor('float32', Float32Array.from(obs), [1, obs.length]),
-        });
-        const output = results[outputName]?.data;
-        action = [finite(output?.[0]), finite(output?.[1])];
-      }
-      const maxLinear = finite(state?.cmd_vel?.maxLinear, 0.3);
-      const maxAngular = finite(state?.cmd_vel?.maxAngular, 1.0);
-      // The policy head is normalized [-1, 1]; project to the same physical
-      // twist bounds the built-in navigator and the board runtime use.
-      const command = {
-        linear: clamp(action[0], -1, 1) * maxLinear,
-        angular: clamp(action[1], -1, 1) * maxAngular,
-      };
-      const next = await api(`sessions/${sessionId}/cmd_vel`, {
-        method: 'POST',
-        body: JSON.stringify(command),
-      });
-      policySession.steps += 1;
-      await render(next);
-      if (distanceToGoal(next) <= GOAL_EPSILON || next?.collision) {
-        const collided = Boolean(next?.collision);
-        const message = `策略试跑结束：${policySession.steps} 步，${collided ? '发生碰撞。' : '到达目标点。'}`;
-        setEvent(message, collided ? 'warn' : 'ok');
-        postPolicyStatus('finished', message);
-        policySession = null;
-        return;
+      if (driver !== policySession || driver.token !== generation) return;
+      const observation = observationOf(state);
+      driver.inference = driver.session.run({ [driver.inputName]: new driver.ort.Tensor('float32', Float32Array.from(observation), [1, 8]) });
+      const results = await driver.inference;
+      if (driver !== policySession || driver.token !== generation || !active) return;
+      const output = results[driver.outputName]?.data;
+      if (!output || output.length !== 2 || Array.from(output).some((value) => !Number.isFinite(value))) throw new Error('模型动作输出不符合 OriginBot 2D 有限数值契约。');
+      const command = { linear: clamp(output[0], -1, 1) * finite(state?.cmd_vel?.maxLinear, .3), angular: clamp(output[1], -1, 1) * finite(state?.cmd_vel?.maxAngular, 1) };
+      transition = captureCommandRecording(state);
+      const next = await api(`sessions/${sessionId}/cmd_vel`, { method: 'POST', body: JSON.stringify(command), guardGeneration: driver.token, recordTransition: transition });
+      if (!next) return;
+      if (transition.recorded && transition.rows === rows) appendSample(next, state, command, transition);
+      if (driver !== policySession || driver.token !== generation || !active) return;
+      driver.steps++;
+      await render(next, { token: driver.token });
+      if (driver !== policySession || driver.token !== generation || !active || pageUnloading) return;
+      const reached = TASKS[currentTask]?.automatic && distanceToGoal(next) <= GOAL_EPSILON;
+      if (driver.steps >= driver.maxSteps || reached || next.collision) {
+        policySession = null; stopRecording(); void driver.session.release().catch(() => {});
+        const message = `策略试跑结束：${driver.steps} 步${next.collision ? '，发生碰撞' : reached ? '，到达目标' : '，达到步数上限'}。`;
+        setEvent(message, 'ok'); postPolicyStatus('finished', message, driver.trialId); updateTransport(); return;
       }
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      setEvent(`策略试跑失败：${message}`, 'warn');
-      postPolicyStatus('failed', message);
-      policySession = null;
-      return;
-    }
-    if (policySession) {
-      window.setTimeout(runPolicyStep, LOOP_MS);
-    }
+      if (driver !== policySession || driver.token !== generation) return;
+      policySession = null; stopRecording(); void driver.session.release().catch(() => {});
+      setEvent(`策略试跑失败：${error.message}`, 'warn'); postPolicyStatus('failed', error.message, driver.trialId); updateTransport(); return;
+    } finally { finishCommandRecording(transition); }
+    if (driver === policySession) window.setTimeout(runPolicyStep, LOOP_MS);
   }
 
   window.addEventListener('message', (event) => {
+    if (event.origin !== location.origin || event.source !== window.parent) return;
     const data = event.data;
     if (!data || typeof data !== 'object') return;
     if (data.type === 'rdk-replay-frame' && data.frame) {
-      renderReplayFrame(data.frame);
+      void renderReplayFrame(data.frame, data.taskId, finite(data.index));
       return;
     }
     if (data.type === 'rdk-policy-run') {
-      startPolicyRun(data);
+      void startPolicyRun(data);
       return;
     }
     if (data.type === 'rdk-policy-stop') {
-      if (policySession) {
-        policySession = null;
-        setEvent('策略试跑已手动停止。', 'warn');
-        postPolicyStatus('stopped', '策略试跑已手动停止。');
-      }
+      stopPolicyRun();
       return;
     }
-    if (data.type === 'rdk-replay-clear') {
+    if (data.type === 'rdk-replay-clear' || data.type === 'rdk-replay-stop') {
+      replaying = false; generation++;
       replayTrace = null;
       setEvent('回放轨迹已清除，恢复实时地图。', 'ok');
       if (latestState) drawMap(latestState);
+      updateTransport();
+    }
+    if (data.type === 'rdk-simulator-task') void setTask(data.taskId);
+    if (data.type === 'rdk-simulator-active') {
+      const next = data.active === true; if (next === active) return;
+      active = next; generation++;
+      if (!active) { resumeRunning = running; running = false; stopPolicyRun('当前仿真视图已暂停。'); stopRecording(); window.clearTimeout(loopTimer); loopTimer = null; }
+      else { running = resumeRunning && currentTask !== 'visual-twist' && !replaying; void loop(); }
+      updateTransport();
     }
   });
 
-  function clearRecording(message) {
-    rows = [];
+  function recordingHeader() {
+    return { type: 'header', format: 'originbot-trajectory-v1', source: 'originbot-sim', contractId: 'originbot-policy-v1', taskId: recordingTask, observationSize: 8, actionSize: 2, actionOutput: 'physical-twist', controlPeriodSeconds: .05, createdAt: recordingCreatedAt };
+  }
+  function recordingText() {
+    if (!rows.length) return '';
+    return [recordingHeader(), ...rows].map((row) => JSON.stringify(row)).join('\n') + '\n';
+  }
+  function stopRecording(message, notify = true) {
+    if (!recording) { if (!notify) pendingRecordingNotice = null; return recordingText(); }
     recording = false;
-    updateTransport();
-    if (message) setEvent(message, 'ok');
+    if (notify && pendingRecordedCommand?.recorded && pendingRecordedCommand.accepted && pendingRecordedCommand.rows === rows) pendingRecordingNotice = rows;
+    else if (notify) publishRecording();
+    if (message) setEvent(message, 'ok'); updateTransport(); return recordingText();
+  }
+  function publishRecording() {
+    if (rows.length) post('rdk-originbot-recording-ready', { taskId: recordingTask, format: 'originbot-trajectory-v1', source: 'originbot-sim', sampleCount: rows.length, contractId: 'originbot-policy-v1', observationSize: 8, actionSize: 2, durationSeconds: finite(rows.at(-1)?.t) - finite(rows[0]?.tStart) });
+  }
+  window.__rdkOriginbotRecorder = Object.freeze({ get recording() { return recording; }, getText: recordingText, stop: (options = {}) => stopRecording('轨迹已保存。', options.notify !== false), getMetadata: () => ({ taskId: recordingTask, sampleCount: rows.length, format: 'originbot-trajectory-v1' }) });
+
+  function configureTask() {
+    const task = TASKS[currentTask];
+    $('task-select').value = currentTask;
+    if ($('task-title')) $('task-title').textContent = `OriginBot ${task.name}仿真`;
+    if ($('stage-title')) $('stage-title').textContent = `${task.name}工作区`;
+    if ($('stage-help')) $('stage-help').textContent = task.help;
+    if ($('task-description')) $('task-description').textContent = task.help;
+    if ($('canvas-hint')) $('canvas-hint').textContent = task.automatic ? '点击设置目标点' : task.manual ? '使用手动速度控制；可录制轨迹' : '相机预览 · 等待视觉观测适配器';
+    if ($('manual-controls')) $('manual-controls').hidden = !task.manual;
+    manualCommand = { linear: 0, angular: 0 };
+    for (const key of ['linear', 'angular']) if ($(`manual-${key}`)) { $(`manual-${key}`).value = '0'; $(`manual-${key}-value`).textContent = key === 'linear' ? '0.00 m/s' : '0.00 rad/s'; }
+    running = active && Boolean(task.automatic); resumeRunning = Boolean(task.automatic); updateTransport();
+  }
+  async function setTask(taskId) {
+    if (!TASKS[taskId]) { setEvent(`不支持的 OriginBot 任务：${String(taskId)}`, 'warn'); return; }
+    if (taskId === currentTask) { taskState(sessionId ? 'ready' : 'loading', TASKS[currentTask].help); return; }
+    stopPolicyRun(); stopRecording(); replaying = false; replayTrace = null; currentTask = taskId;
+    const token = ++generation; configureTask();
+    taskState('loading', '正在重置并切换 OriginBot 任务控制模式。');
+    if (!sessionId) return;
+    try { const state = await api(`sessions/${sessionId}/reset`, { method: 'POST' }); if (token !== generation || pageUnloading) return; goalStartDistance = Math.max(distanceToGoal(state), GOAL_EPSILON); await render(state, { forceFrame: true, token }); setEvent(TASKS[currentTask].help, 'ok'); taskState('ready', TASKS[currentTask].help); }
+    catch (error) { if (token === generation) { setEvent(`任务切换失败：${error.message}`, 'warn'); taskState('failed', error.message); } }
   }
 
   $('run').addEventListener('click', () => {
+    if (currentTask === 'visual-twist' || !active || !sessionId) return;
+    replaying = false;
     running = !running;
+    if (!running) stopRecording('仿真已暂停，轨迹已保存。');
     setEvent(running ? '仿真继续运行。' : '仿真已暂停。', running ? 'ok' : 'warn');
     updateTransport();
   });
 
   $('reset').addEventListener('click', async () => {
     if (!sessionId) return;
+    stopPolicyRun(); stopRecording(); running = false; replaying = false; replayTrace = null; const token = ++generation;
     try {
       const state = await api(`sessions/${sessionId}/reset`, { method: 'POST' });
-      running = true;
-      clearRecording('仿真已重置，录制缓存已清空。');
+      if (token !== generation || pageUnloading) return;
+      configureTask(); setEvent('仿真已重置，已有录制可导出。', 'ok');
       goalStartDistance = Math.max(distanceToGoal(state), GOAL_EPSILON);
       await render(state, { forceFrame: true });
     } catch (error) {
@@ -787,19 +875,22 @@
     if (!sessionId) return;
     if (!recording) {
       rows = [];
+      recordingTask = currentTask; recordingCreatedAt = new Date().toISOString();
+      recordingBytes = lineBytes(recordingHeader());
       recording = true;
+      running = !policySession;
       setEvent('开始录制 OriginBot 8D→2D 契约数据。', 'ok');
     } else {
-      recording = false;
-      setEvent(`录制已停止，共 ${rows.length} 个样本；可导出 JSONL。`, 'ok');
+      stopRecording(`录制已停止，共 ${rows.length} 个样本；可导出 JSONL。`);
     }
     updateTransport();
   });
 
   $('stop').addEventListener('click', () => {
     if (!rows.length) return;
+    stopRecording();
     const url = URL.createObjectURL(
-      new Blob([`${rows.map((row) => JSON.stringify(row)).join('\n')}\n`], {
+      new Blob([recordingText()], {
         type: 'application/x-ndjson',
       }),
     );
@@ -812,12 +903,13 @@
   });
 
   $('task-select').addEventListener('change', (event) => {
-    const cruise = event.target.value.includes('巡航');
-    setGoal(cruise ? { x: -1.1, y: 1 } : { x: 1.5, y: 0.8 }, cruise ? '已切换到定点巡航示例。' : '已切换到目标导航。');
-    clearRecording('任务已切换，录制缓存已清空。');
+    void setTask(event.target.value); post('rdk-simulator-task-selected', { taskId: event.target.value });
   });
+  for (const key of ['linear', 'angular']) $(`manual-${key}`)?.addEventListener('input', (event) => { manualCommand[key] = finite(event.target.value); $(`manual-${key}-value`).textContent = `${manualCommand[key].toFixed(2)} ${key === 'linear' ? 'm/s' : 'rad/s'}`; });
+  $('manual-zero')?.addEventListener('click', () => { manualCommand = { linear: 0, angular: 0 }; for (const key of ['linear', 'angular']) { $(`manual-${key}`).value = '0'; $(`manual-${key}-value`).textContent = `0.00 ${key === 'linear' ? 'm/s' : 'rad/s'}`; } });
 
   canvas.addEventListener('click', (event) => {
+    if (!TASKS[currentTask]?.automatic || replaying || policySession || loadingPolicy) return;
     const rect = canvas.getBoundingClientRect();
     if (!rect.width || !rect.height) return;
     setGoal(
@@ -846,48 +938,39 @@
         })
       : Promise.reject(new Error('MuJoCo session is not ready')),
     get data() { return { qpos: qposOf(latestState), qvel: qvelOf(latestState) }; },
-    get mode() { return 'goal-navigation'; },
+    get mode() { return currentTask; },
     get loco() { return 'differential-drive'; },
     get telemetry() { return telemetryOf(latestState); },
   };
 
-  updateGoalReadout();
-  updateTransport();
-  setEvent('正在创建 OriginBot MuJoCo 会话……');
-  api('sessions', {
-    method: 'POST',
-    body: JSON.stringify({
-      model: 'originbot',
-      seed: sessionSeed,
-      domain_randomization: domainRandomization,
-    }),
-  })
-    .then(async (state) => {
-      // A slow session create can resolve after pagehide.  Do not install a
-      // late session into a page that is already gone; release it directly
-      // with keepalive so it cannot consume a slot until the TTL.
-      if (pageUnloading) {
-        fetch(`${API_ROOT}/sessions/${state.id}`, {
-          method: 'DELETE',
-          keepalive: true,
-          headers: { accept: 'application/json' },
-        }).catch(() => {});
-        return;
-      }
-      sessionId = state.id;
+  let connectionAttempt = 0;
+  async function connect() {
+    const attempt = ++connectionAttempt; generation++; running = false;
+    window.clearTimeout(loopTimer); loopTimer = null;
+    stopPolicyRun(); stopRecording();
+    const previousId = sessionId; sessionId = null; updateTransport();
+    setConnection(false, '连接 MuJoCo…'); if ($('retry')) $('retry').disabled = true;
+    taskState('loading', '正在创建 OriginBot 物理场景。');
+    try {
+      if (previousId) await api(`sessions/${previousId}`, { method: 'DELETE' }).catch(() => {});
+      const state = await api('sessions', { method: 'POST', body: JSON.stringify({ model: 'originbot', seed: sessionSeed, domain_randomization: domainRandomization }) });
+      if (pageUnloading || attempt !== connectionAttempt) { void fetch(`${API_ROOT}/sessions/${state.id}`, { method: 'DELETE', credentials: 'same-origin', keepalive: true }).catch(() => {}); return; }
+      sessionId = state.id; latestState = state; configureTask();
       setConnection(true, 'MuJoCo 已连接');
-      latestState = state;
       goalStartDistance = Math.max(distanceToGoal(state), GOAL_EPSILON);
-      updateTransport();
       await render(state, { forceFrame: true });
-      setEvent('MuJoCo 会话已就绪，点击场景可设置目标点。', 'ok');
-      loop();
-    })
-    .catch((error) => {
-      setConnection(false, 'MuJoCo 不可用');
-      updateTransport();
-      setEvent(`MuJoCo 服务不可用：${error.message}`, 'warn');
-    });
+      setEvent(TASKS[currentTask].help, 'ok'); taskState('ready', TASKS[currentTask].help);
+      if (active) void loop();
+    } catch (error) {
+      if (pageUnloading || attempt !== connectionAttempt) return;
+      setConnection(false, 'MuJoCo 不可用'); updateTransport();
+      setEvent(`MuJoCo 服务不可用：${error.message}`, 'warn'); taskState('failed', error.message);
+    } finally { if ($('retry')) $('retry').disabled = false; }
+  }
+  if (!TASKS[currentTask]) currentTask = 'goal-navigation';
+  configureTask(); updateGoalReadout(); updateTransport();
+  $('retry')?.addEventListener('click', () => { void connect(); });
+  void connect();
 
   window.addEventListener('pagehide', () => {
     releaseSession();

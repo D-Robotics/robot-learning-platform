@@ -364,6 +364,8 @@ export interface Sim2RealModelManifest {
     policyBundle?: Sim2RealPolicyBundle;
     controls?: Sim2RealControlBinding[];
     entryUrl?: string;
+    /** Installed same-origin directory containing reviewed visual assets only. */
+    visualAssetBase?: string;
   };
   artifacts: Sim2RealArtifact[];
   metadata?: {
@@ -1680,6 +1682,20 @@ export function validateSim2RealManifest(input: unknown): Sim2RealValidationResu
   if (entryUrl && (!entryUrl.startsWith('/') || entryUrl.startsWith('//'))) {
     errors.push('simulator.entryUrl must be a same-origin absolute path');
   }
+  const rawVisualAssetBase = simulator.visualAssetBase;
+  const visualAssetBase =
+    typeof rawVisualAssetBase === 'string' &&
+    rawVisualAssetBase.length <= 300 &&
+    /^\/(?:[A-Za-z0-9._~-]+\/)*$/.test(rawVisualAssetBase) &&
+    !rawVisualAssetBase.includes('..') &&
+    !rawVisualAssetBase.split('/').includes('.')
+      ? rawVisualAssetBase
+      : undefined;
+  if (rawVisualAssetBase !== undefined && visualAssetBase === undefined) {
+    errors.push(
+      'simulator.visualAssetBase must be a same-origin absolute directory path ending in /, without URLs, traversal, encoded segments, query, fragment or backslash',
+    );
+  }
   const normalized: Sim2RealModelManifest = {
     schemaVersion: SIM2REAL_SCHEMA_VERSION,
     modelId,
@@ -1696,6 +1712,7 @@ export function validateSim2RealManifest(input: unknown): Sim2RealValidationResu
       ...(policyBundle ? { policyBundle } : {}),
       ...(controls ? { controls } : {}),
       ...(entryUrl && entryUrl.startsWith('/') && !entryUrl.startsWith('//') ? { entryUrl } : {}),
+      ...(visualAssetBase !== undefined ? { visualAssetBase } : {}),
     },
     artifacts,
     ...(safeText(sourceMetadata.source, 300) || safeText(sourceMetadata.notes, 500)

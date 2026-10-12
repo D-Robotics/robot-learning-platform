@@ -31,10 +31,13 @@ npm start
    ONNX Runtime Web 在浏览器里 50Hz 推理驱动 MuJoCo——这就是最小的
    「模型 → 下发 → 仿真闭环」。
 
-界面上的「当前动作任务」选择器管的是训练链路（选中带引擎侧场景的任务会自动匹配
-训练引擎），浏览器画面始终保持单鸭，页脚会提示「训练场景在引擎侧运行 ·
-画面不随任务切换」。没有上游 MicroDuck 资源时仿真页会给出安装指引，按
-[`MICRODUCK-UPSTREAM.md`](../services/mujoco-web/MICRODUCK-UPSTREAM.md) 挂载。
+界面上的「当前动作任务」会同时切换仿真场景与训练参数。行走、坐站、踢球等动作使用
+完整 MicroDuck 浏览器模型；平衡、梯子、秋千和足球比赛使用对应训练引擎的 MuJoCo
+代理模型，页面会明确标注。后者需要启动本地 MuJoCo 服务，步骤见
+[`仿真与录制`](./simulation.md)。停止录制后可在评测页直接回放本次轨迹，也可导出 JSONL。
+没有上游 MicroDuck 资源时，基础动作页会给出安装指引，按
+[`MICRODUCK-UPSTREAM.md`](../services/mujoco-web/MICRODUCK-UPSTREAM.md) 挂载；训练任务场景
+无需这份上游静态包。
 
 ## ② 真训练：拿到一个真的 ONNX
 
