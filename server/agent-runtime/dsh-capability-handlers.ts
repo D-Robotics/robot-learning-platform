@@ -1490,6 +1490,23 @@ export function createDshCapabilityHandlers(
         ok: result.body.ok !== false,
         wasMoving: defined(result.body.wasMoving),
         homed: defined(result.body.homed),
+        moving: defined(result.body.moving),
+        stopRequested: defined(result.body.stopRequested),
+        interrupted: defined(result.body.interrupted),
+      };
+    },
+
+    async rdk_board_arm_reset(args: unknown, exec: ToolRunContext) {
+      const input = argsRecord(args);
+      const result = await run(exec.signal).fetch(
+        stationPath('/api/sim2real/board-station/arm/reset', input),
+        { method: 'POST', json: {} },
+      );
+      if (!result.ok) fail(result.status, result.body, '机械臂复位被拒绝');
+      return {
+        ok: result.body.ok !== false,
+        stopRequested: defined(result.body.stopRequested),
+        moving: defined(result.body.moving),
       };
     },
 
@@ -1542,7 +1559,9 @@ export function createDshCapabilityHandlers(
       return {
         policyStopped: true,
         driveStopped: true,
-        armStopped: Boolean(armStop?.ok) && armStop?.body.ok !== false,
+        armStopped: Boolean(armStop?.ok) && armStop?.body.ok !== false && armStop?.body.moving === false,
+        armStopRequested: Boolean(armStop?.ok) && armStop?.body.ok !== false && armStop?.body.stopRequested === true,
+        armMoving: defined(armStop?.body.moving),
       };
     },
 

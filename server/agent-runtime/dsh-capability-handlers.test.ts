@@ -58,6 +58,59 @@ afterEach(() => {
 });
 
 describe('DSH capability handlers', () => {
+  it('reports a latched arm stop without claiming a blocking move has stopped', async () => {
+    const { fetchImpl, calls } = fakeLoopback([
+      () => ({
+        status: 200,
+        body: {
+          ok: true,
+          wasMoving: true,
+          moving: true,
+          stopRequested: true,
+          interrupted: false,
+          homed: false,
+        },
+      }),
+    ]);
+    const handlers = createDshCapabilityHandlers({ fetchImpl });
+    await expect(
+      handlers.rdk_board_arm_stop({ deviceId: 'arm-board' }, {
+        signal: new AbortController().signal,
+      } as never),
+    ).resolves.toMatchObject({
+      wasMoving: true,
+      moving: true,
+      stopRequested: true,
+      interrupted: false,
+      homed: false,
+    });
+    expect(calls[0].path).toBe('/api/sim2real/board-station/arm/stop?deviceId=arm-board');
+  });
+
+  it('exposes an explicit arm reset and preserves refusal while an action is in progress', async () => {
+    const { fetchImpl, calls } = fakeLoopback([
+      () => ({
+        status: 409,
+        body: { error: 'SIM2REAL_ARM_RESET_REFUSED', message: 'move-in-progress' },
+      }),
+    ]);
+    const handlers = createDshCapabilityHandlers({ fetchImpl });
+    await expect(
+      handlers.rdk_board_arm_reset({ deviceId: 'arm-board' }, {
+        signal: new AbortController().signal,
+      } as never),
+    ).rejects.toThrow('move-in-progress');
+    expect(calls).toHaveLength(1);
+    expect(calls[0]).toMatchObject({
+      path: '/api/sim2real/board-station/arm/reset?deviceId=arm-board',
+      method: 'POST',
+      body: '{}',
+    });
+    expect(
+      listDshCapabilityCatalog(handlers).find((item) => item.id === 'rdk_board_arm_reset'),
+    ).toMatchObject({ bound: true, readOnly: false });
+  });
+
   it('binds every catalog entry to a product route handler', () => {
     const { fetchImpl } = fakeLoopback([() => ({ status: 200, body: {} })]);
     const catalog = listDshCapabilityCatalog(createDshCapabilityHandlers({ fetchImpl }));
@@ -377,6 +430,25 @@ describe('DSH capability handlers', () => {
     ).rejects.toMatchObject({
       code: 'DSH_CAPABILITY_FAILED',
       message: expect.stringContaining('策略与驱动'),
+    });
+  });
+
+  it('keeps aggregate stop honest when the arm SDK action is still running', async () => {
+    const { fetchImpl } = fakeLoopback([
+      () => ({ status: 200, body: { ok: true } }),
+      () => ({ status: 200, body: { ok: true } }),
+      () => ({
+        status: 200,
+        body: { ok: true, moving: true, stopRequested: true, interrupted: false },
+      }),
+    ]);
+    const handlers = createDshCapabilityHandlers({ fetchImpl });
+    await expect(
+      handlers.rdk_board_stop({}, { signal: new AbortController().signal } as never),
+    ).resolves.toMatchObject({
+      armStopped: false,
+      armStopRequested: true,
+      armMoving: true,
     });
   });
 

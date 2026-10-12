@@ -21,6 +21,11 @@ import { spawn } from 'node:child_process';
 import path from 'node:path';
 import process from 'node:process';
 import { fileURLToPath } from 'node:url';
+import {
+  terminateWorkerChild,
+  workerKillGraceMs,
+  writeDurableWorkerJson,
+} from './local-worker-runtime.mjs';
 
 const HOST =
   String(process.env.RDK_SIM2REAL_LOCAL_WORKER_HOST || '127.0.0.1').trim() || '127.0.0.1';
@@ -133,6 +138,9 @@ const queuedJobs = [];
 const activeJobs = new Set();
 const activeChildren = new Set();
 const finalizingJobs = new Set();
+const childRuntime = new WeakMap();
+const recoveryIssues = new Set();
+const pendingAdmissions = new WeakMap();
 let jobsLoadPromise;
 
 function loopbackHost(host) {
@@ -566,24 +574,37 @@ async function restorePersistedJobs() {
   try {
     entries = await readdir(DATA_DIR, { withFileTypes: true });
   } catch {
+    recoveryIssues.add('directory');
     return;
   }
   for (const entry of entries) {
-    if (!entry.isDirectory() || !SAFE_RUN_ID.test(entry.name) || jobs.size >= MAX_JOBS) continue;
+    if (!entry.isDirectory() || !SAFE_RUN_ID.test(entry.name)) continue;
+    if (jobs.size >= MAX_JOBS) {
+      recoveryIssues.add(entry.name);
+      continue;
+    }
     const dir = path.join(DATA_DIR, entry.name);
     try {
       const parsed = JSON.parse(await readFile(path.join(dir, 'job.json'), 'utf8'));
-      if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) continue;
+      if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+        recoveryIssues.add(entry.name);
+        continue;
+      }
       const candidate = { ...parsed, runId: entry.name, dir };
       if (
         !SAFE_RUN_ID.test(candidate.runId) ||
         !text(candidate.accountId, 160) ||
         !['queued', 'running', 'completed', 'failed'].includes(candidate.status) ||
         typeof candidate.fingerprint !== 'string'
-      )
+      ) {
+        recoveryIssues.add(entry.name);
         continue;
+      }
       candidate.accountId = text(candidate.accountId, 160);
-      if (!candidate.accountId || /[\u0000-\u001f\u007f/]/.test(candidate.accountId)) continue;
+      if (!candidate.accountId || /[\u0000-\u001f\u007f/]/.test(candidate.accountId)) {
+        recoveryIssues.add(entry.name);
+        continue;
+      }
       // A process restart terminates children through systemd's cgroup. Keep
       // the record visible, but close the stale reservation explicitly rather
       // than relaunching user work or reporting a false running state.
@@ -597,13 +618,18 @@ async function restorePersistedJobs() {
       delete candidate.pid;
       delete candidate.timeout;
       jobs.set(candidate.runId, candidate);
-      if (candidate.errorCode === 'worker_restarted')
-        await persist(candidate).catch(() => undefined);
+      if (candidate.errorCode === 'worker_restarted') await persist(candidate);
     } catch {
-      // A partial/corrupt job must not make the worker unavailable. It is
-      // intentionally left on disk for operator inspection.
+      // Its owner/idempotency key cannot be inferred from damaged bytes.
+      // Keep the evidence untouched and block new work until an operator
+      // repairs the snapshot and restarts the worker; valid jobs stay readable.
+      recoveryIssues.add(entry.name);
     }
   }
+  if (recoveryIssues.size)
+    console.error(
+      `[sim2real-local] ${recoveryIssues.size} job recovery issue(s); repair snapshots and restart before submitting training`,
+    );
 }
 
 function ensureJobsLoaded() {
@@ -815,7 +841,11 @@ async function launch(job, config) {
     shell: false,
     stdio: ['ignore', 'pipe', 'pipe'],
     env: childEnvironment(job),
+    detached: process.platform !== 'win32',
   });
+  const runtime = { child, grouped: process.platform !== 'win32', timedOut: false };
+  childRuntime.set(job, runtime);
+  childRuntime.set(child, runtime);
   activeChildren.add(child);
   job.status = 'running';
   job.startedAt = new Date().toISOString();
@@ -841,7 +871,15 @@ async function launch(job, config) {
     Math.max(Number(process.env.RDK_SIM2REAL_TRAIN_TIMEOUT_MS || 86_400_000), 1000),
     7 * 86_400_000,
   );
-  job.timeout = setTimeout(() => child.kill('SIGTERM'), timeoutMs);
+  job.timeout = setTimeout(() => {
+    runtime.timedOut = true;
+    runtime.termination ??= terminateWorkerChild(child, runtime);
+    // Surface failures without creating an unhandled promise rejection;
+    // finish() still awaits and handles the same termination promise.
+    void runtime.termination.catch((error) =>
+      console.error('[sim2real-local] trainer termination failed:', scrubLog(error?.message)),
+    );
+  }, timeoutMs);
   child.once('error', (error) => finish(job, 1, stdout, `${stderr}\n${error.message}`));
   child.once('exit', (code, signal) =>
     finish(job, code ?? 1, stdout, `${stderr}${signal ? `\nterminated:${signal}` : ''}`),
@@ -859,9 +897,17 @@ async function finish(job, code, stdout, stderr) {
   }
   job.logPartials = undefined;
   if (job.timeout) clearTimeout(job.timeout);
-  const childPid = job.pid;
-  for (const child of activeChildren) {
-    if (childPid != null && child.pid === childPid) activeChildren.delete(child);
+  const runtime = childRuntime.get(job);
+  try {
+    if (runtime) await (runtime.termination ?? terminateWorkerChild(runtime.child, runtime));
+  } catch {
+    // Releasing the slot after failed cleanup could overcommit a live trainer.
+    recoveryIssues.add(job.runId);
+  }
+  childRuntime.delete(job);
+  if (runtime) {
+    childRuntime.delete(runtime.child);
+    activeChildren.delete(runtime.child);
   }
   activeJobs.delete(job);
   job.timeout = undefined;
@@ -869,7 +915,7 @@ async function finish(job, code, stdout, stderr) {
   job.pid = undefined;
   try {
     const result = await readResult(job);
-    const artifact = code === 0 && result ? resultArtifact(result) : null;
+    const artifact = code === 0 && result && !runtime?.timedOut ? resultArtifact(result) : null;
     if (artifact) {
       // Verify the produced bundle before publishing the run. An artifact whose
       // job directory does not match its own manifest is not a valid deliverable:
@@ -916,7 +962,12 @@ async function finish(job, code, stdout, stderr) {
         code === 0
           ? '训练进程完成，但未写入有效 artifact:// 结果；任务不会标记为成功。'
           : '本地训练进程失败。';
-      job.errorCode = code === 0 ? 'training_result_missing' : 'training_process_failed';
+      job.errorCode = runtime?.timedOut
+        ? 'training_timeout'
+        : code === 0
+          ? 'training_result_missing'
+          : 'training_process_failed';
+      if (runtime?.timedOut) job.message = '训练超过时限，已终止训练进程及其子进程。';
     }
     job.exitCode = code;
     if (stdout) job.stdoutTail = scrubLog(stdout);
@@ -944,6 +995,7 @@ async function finish(job, code, stdout, stderr) {
 }
 
 async function pumpQueue() {
+  if (recoveryIssues.size) return;
   let limit;
   try {
     limit = maxConcurrentJobs();
@@ -991,18 +1043,35 @@ async function pumpQueue() {
   }
 }
 
-async function persist(job) {
+async function persist(job, writeSnapshot = writeDurableWorkerJson) {
   // Timeout handles are process-local and circular; never serialize runtime
   // state into the durable job snapshot exposed to status readers.
   const { timeout: _timeout, ...snapshot } = job;
-  await writeFile(path.join(job.dir, 'job.json'), JSON.stringify(snapshot, null, 2), {
-    mode: 0o600,
-  });
+  try {
+    await writeSnapshot(path.join(job.dir, 'job.json'), snapshot);
+  } catch (error) {
+    // rename may already have committed before directory fsync fails. Keep
+    // the reservation and disk evidence; accepting a new one would lose the
+    // idempotency identity of a write whose outcome is uncertain.
+    recoveryIssues.add(job.runId);
+    throw error;
+  }
 }
 
-async function handleTrain(request, response) {
+function requireAdmissionReady() {
+  if (recoveryIssues.size)
+    throw fail(
+      '任务记录无法完整恢复；请修复 worker 数据目录中的记录后重启，避免重复启动训练。',
+      503,
+      'worker_recovery_required',
+    );
+}
+
+async function handleTrain(request, response, writeSnapshot) {
   await ensureJobsLoaded();
+  requireAdmissionReady();
   const source = await bodyJson(request);
+  requireAdmissionReady();
   const engines = workerEngines();
   maxConcurrentJobs();
   if (!engines.size) {
@@ -1028,6 +1097,8 @@ async function handleTrain(request, response) {
           409,
           'idempotency_conflict',
         );
+      await pendingAdmissions.get(job);
+      requireAdmissionReady();
       json(response, 200, { ...publicJob(job), idempotentReplay: true });
       return;
     }
@@ -1059,13 +1130,23 @@ async function handleTrain(request, response) {
   // Reserve synchronously before the first await so two concurrent requests
   // carrying one idempotency key cannot both launch an engine process.
   jobs.set(runId, job);
-  try {
-    await mkdir(dir, { recursive: true, mode: 0o700 });
-    await persist(job);
-  } catch (error) {
-    jobs.delete(runId);
-    throw error;
-  }
+  const admission = (async () => {
+    try {
+      await mkdir(dir, { recursive: true, mode: 0o700 });
+      await persist(job, writeSnapshot);
+    } catch {
+      recoveryIssues.add(runId);
+      job.status = 'failed';
+      job.finishedAt = new Date().toISOString();
+      job.errorCode = 'worker_recovery_required';
+      job.message = '任务接单记录无法确认持久化；请修复数据目录后重启 worker。';
+      throw fail(job.message, 503, 'worker_recovery_required');
+    }
+  })();
+  pendingAdmissions.set(job, admission);
+  await admission;
+  pendingAdmissions.delete(job);
+  requireAdmissionReady();
   queuedJobs.push(job);
   void pumpQueue();
   json(response, 202, publicJob(job));
@@ -1334,10 +1415,11 @@ async function handleLogs(request, response) {
   });
 }
 
-export function createLocalTrainingWorkerServer() {
+export function createLocalTrainingWorkerServer({ writeSnapshot = writeDurableWorkerJson } = {}) {
   return createServer(async (request, response) => {
     try {
       if (request.method === 'GET' && request.url === '/healthz') {
+        await ensureJobsLoaded();
         let configured = false;
         let engineIds = [];
         try {
@@ -1362,8 +1444,9 @@ export function createLocalTrainingWorkerServer() {
         const tokenConfigured = Boolean(tokenValue);
         const tokenUsable = runnerTokenUsable(tokenValue);
         const authReady = !runnerTokenRequired() || tokenUsable;
-        json(response, configured && authReady ? 200 : 503, {
-          ok: configured && authReady,
+        const recoveryReady = recoveryIssues.size === 0;
+        json(response, configured && authReady && recoveryReady ? 200 : 503, {
+          ok: configured && authReady && recoveryReady,
           worker: 'sim2real-local',
           mode: 'external-engine',
           configured,
@@ -1371,6 +1454,8 @@ export function createLocalTrainingWorkerServer() {
           authConfigured: tokenConfigured,
           authTokenUsable: tokenUsable,
           ...(authReady ? {} : { error: 'worker_auth_not_configured' }),
+          ...(recoveryReady ? {} : { error: 'worker_recovery_required' }),
+          recoveryIssues: recoveryIssues.size,
           maxConcurrentJobs: maxConcurrentJobs(),
           activeJobs: activeJobs.size,
           queuedJobs: queuedJobs.length,
@@ -1384,7 +1469,7 @@ export function createLocalTrainingWorkerServer() {
         return;
       }
       if (request.method === 'POST' && request.url === '/train') {
-        await handleTrain(request, response);
+        await handleTrain(request, response, writeSnapshot);
         return;
       }
       if (
@@ -1451,16 +1536,23 @@ if (isDirectEntry()) {
   server.listen(PORT, HOST, () =>
     console.log(`[sim2real-local] listening on http://${HOST}:${PORT}`),
   );
-  const close = () => {
-    for (const child of activeChildren) child.kill('SIGTERM');
+  let closing = false;
+  const close = async () => {
+    if (closing) return;
+    closing = true;
+    recoveryIssues.add('shutdown');
+    const cleanup = [...activeChildren].map((child) => {
+      const runtime = childRuntime.get(child);
+      if (!runtime) return terminateWorkerChild(child, { grouped: process.platform !== 'win32' });
+      return (runtime.termination ??= terminateWorkerChild(child, runtime));
+    });
     server.closeIdleConnections?.();
     server.closeAllConnections?.();
-    const forceExit = setTimeout(() => process.exit(1), 5_000);
+    const forceExit = setTimeout(() => process.exit(1), workerKillGraceMs() + 5_000);
     forceExit.unref();
-    server.close(() => {
-      clearTimeout(forceExit);
-      process.exit(0);
-    });
+    await Promise.allSettled([...cleanup, new Promise((resolve) => server.close(resolve))]);
+    clearTimeout(forceExit);
+    process.exit(0);
   };
   process.once('SIGTERM', close);
   process.once('SIGINT', close);

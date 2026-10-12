@@ -986,7 +986,7 @@ export function registerSim2RealBoardStationRoutes(
   // every target into the declared workspace box and speed cap, and the
   // agent clamps again on the board. arm_sdk move_to is blocking, so an
   // in-flight move cannot be interrupted — arm/stop refuses NEW commands
-  // and best-effort returns home, and the arm's physical e-stop stays the
+  // until an explicit idle reset without issuing motion. The arm's physical e-stop stays the
   // final safety floor.
   const armPlatformEnabled = () => stationSwitchEnabled('arm');
   const ARM_PROXY_WORKSPACE_MM: Record<'x' | 'y' | 'z', [number, number]> = {
@@ -1155,7 +1155,59 @@ export function registerSim2RealBoardStationRoutes(
     }),
   );
 
-  /** POST /board-station/arm/stop — refuse-new + best-effort home, always allowed. */
+  /** POST /board-station/arm/reset — gated idle-only latch reset, without motion. */
+  router.post(
+    api('/board-station/arm/reset'),
+    wrapAsync(async (request, response) => {
+      const resolved = await resolveStation(request, response);
+      if (!resolved) return;
+      if (!requirePermission(request, response, SIM2REAL_PERMISSIONS.operate)) return;
+      noStore(response);
+      if (!armPlatformEnabled()) {
+        sendApiError(
+          response,
+          409,
+          'SIM2REAL_STATION_ARM_DISABLED',
+          '平台未开启受限机械臂驱动，不能解除停止锁定。',
+          { retryable: false },
+        );
+        return;
+      }
+      if (
+        request.body !== undefined &&
+        (request.body === null ||
+          typeof request.body !== 'object' ||
+          Array.isArray(request.body) ||
+          Object.keys(request.body).length > 0)
+      ) {
+        sendApiError(
+          response,
+          400,
+          'SIM2REAL_STATION_ARM_INVALID',
+          '机械臂恢复请求不接受参数；请发送空请求体或 {}。',
+          { retryable: false },
+        );
+        return;
+      }
+      const agent = await stationAgentFetchWithStatus(
+        '/v1/station/arm/reset',
+        stationOptions(request, { method: 'POST', timeoutMs: 5000 }),
+      );
+      if (!agent) {
+        sendApiError(
+          response,
+          502,
+          'SIM2REAL_BOARD_AGENT_UNREACHABLE',
+          '板端 agent 不可达，机械臂停止锁定未解除。',
+          { retryable: true },
+        );
+        return;
+      }
+      response.status(agent.status).json(agent.payload);
+    }),
+  );
+
+  /** POST /board-station/arm/stop — latch new-command refusal without motion. */
   router.post(
     api('/board-station/arm/stop'),
     wrapAsync(async (request, response) => {

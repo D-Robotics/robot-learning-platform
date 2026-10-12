@@ -1,11 +1,13 @@
 import assert from 'node:assert/strict';
-import { mkdtemp, readdir, rm, symlink, writeFile } from 'node:fs/promises';
+import * as workerFs from 'node:fs/promises';
+import { mkdtemp, readdir, readFile, rm, symlink, writeFile } from 'node:fs/promises';
 import { spawn, spawnSync } from 'node:child_process';
 import { createServer } from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
 import process from 'node:process';
 import { fileURLToPath } from 'node:url';
+import { writeDurableWorkerJson } from './local-worker-runtime.mjs';
 
 const fixtureDir = await mkdtemp(path.join(os.tmpdir(), 'rdk-local-worker-'));
 const fixture = path.join(fixtureDir, 'engine.mjs');
@@ -44,7 +46,151 @@ const request = {
   contract: { id: 'microduck-policy-v1', observationSize: 61, actionSize: 14 },
   training: { profile: 'smoke', maxIterations: 10 },
 };
+
+async function verifyFailedAdmission(postRename) {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'rdk-admission-failure-'));
+  const previousDataDir = process.env.RDK_SIM2REAL_LOCAL_WORKER_DATA_DIR;
+  process.env.RDK_SIM2REAL_LOCAL_WORKER_DATA_DIR = directory;
+  const isolated = await import(
+    `./local-training-worker.mjs?admission=${postRename}-${Date.now()}`
+  );
+  process.env.RDK_SIM2REAL_LOCAL_WORKER_DATA_DIR = previousDataDir;
+  let entered;
+  const writing = new Promise((resolve) => {
+    entered = resolve;
+  });
+  let release;
+  const gate = new Promise((resolve) => {
+    release = resolve;
+  });
+  let snapshotPath;
+  const failureServer = isolated.createLocalTrainingWorkerServer({
+    writeSnapshot: async (file, value) => {
+      snapshotPath = file;
+      entered();
+      await gate;
+      const error = Object.assign(new Error('injected snapshot I/O failure'), { code: 'EIO' });
+      if (!postRename) throw error;
+      await writeDurableWorkerJson(file, value, {
+        ...workerFs,
+        open: async (target, ...args) => {
+          const handle = await workerFs.open(target, ...args);
+          return target === path.dirname(file)
+            ? {
+                sync: async () => {
+                  throw error;
+                },
+                close: () => handle.close(),
+              }
+            : handle;
+        },
+      });
+    },
+  });
+  await new Promise((resolve) => failureServer.listen(0, '127.0.0.1', resolve));
+  const failureBase = `http://127.0.0.1:${failureServer.address().port}`;
+  const submitFailure = () =>
+    fetch(`${failureBase}/train`, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        'x-sim2real-account': 'alice',
+        authorization: 'Bearer worker-test-token',
+        'idempotency-key': 'admission-one',
+      },
+      body: JSON.stringify(request),
+    });
+  let first;
+  let replay;
+  try {
+    first = submitFailure();
+    await Promise.race([
+      writing,
+      new Promise((_, reject) =>
+        setTimeout(() => reject(new Error('admission writer was not reached')), 2000),
+      ),
+    ]);
+    let replayResolved = false;
+    replay = submitFailure().then((response) => {
+      replayResolved = true;
+      return response;
+    });
+    await new Promise((resolve) => setTimeout(resolve, 60));
+    const acknowledgedTooSoon = replayResolved;
+    release();
+    const responses = await Promise.all([first, replay]);
+    assert.equal(
+      acknowledgedTooSoon,
+      false,
+      'same-key replay acknowledged an unpersisted reservation',
+    );
+    for (const response of responses) {
+      assert.equal(
+        response.status,
+        503,
+        'both callers must see the uncertain admission as unavailable',
+      );
+      assert.equal((await response.json()).error, 'worker_recovery_required');
+    }
+    const retry = await submitFailure();
+    assert.equal(retry.status, 503, 'uncertain persistence must block a second reservation');
+    const health = await fetch(`${failureBase}/healthz`);
+    assert.equal(health.status, 503);
+    assert.equal((await health.json()).activeJobs, 0);
+    assert.equal((await readdir(directory)).length, 1, 'retain exactly one reservation directory');
+    if (postRename) {
+      const snapshot = JSON.parse(await readFile(snapshotPath, 'utf8'));
+      assert.equal(snapshot.idempotencyKey, 'admission-one');
+      assert.equal(
+        snapshot.status,
+        'queued',
+        'retain the actual committed snapshot as recovery evidence',
+      );
+    }
+  } finally {
+    release();
+    await Promise.allSettled([first, replay].filter(Boolean));
+    failureServer.closeIdleConnections?.();
+    failureServer.closeAllConnections?.();
+    await new Promise((resolve) => failureServer.close(resolve));
+    await rm(directory, { recursive: true, force: true });
+  }
+}
 try {
+  const admissionFailures = [];
+  for (const postRename of [false, true]) {
+    try {
+      await verifyFailedAdmission(postRename);
+    } catch (error) {
+      admissionFailures.push(`${postRename ? 'directory-fsync' : 'pre-rename'}: ${error.message}`);
+    }
+  }
+  assert.deepEqual(admissionFailures, []);
+  console.log(
+    '[local-training-worker] PASS — concurrent admissions wait for durability; uncertain writes block new work',
+  );
+  const atomicSnapshot = path.join(fixtureDir, 'atomic-snapshot.json');
+  await writeDurableWorkerJson(atomicSnapshot, { acknowledged: 1 });
+  const failureIo = {
+    ...workerFs,
+    rename: async () => {
+      throw Object.assign(new Error('injected rename failure'), { code: 'EIO' });
+    },
+  };
+  await assert.rejects(writeDurableWorkerJson(atomicSnapshot, { acknowledged: 2 }, failureIo), {
+    code: 'EIO',
+  });
+  assert.deepEqual(JSON.parse(await readFile(atomicSnapshot, 'utf8')), { acknowledged: 1 });
+  assert.equal(
+    (await readdir(fixtureDir)).some((name) => name.endsWith('.tmp')),
+    false,
+  );
+  await writeDurableWorkerJson(atomicSnapshot, { acknowledged: 2 });
+  assert.deepEqual(JSON.parse(await readFile(atomicSnapshot, 'utf8')), { acknowledged: 2 });
+  console.log(
+    '[local-training-worker] PASS — failed atomic replacement preserves acknowledged snapshot',
+  );
+
   // Production starts through a `current` directory symlink. Node resolves
   // import.meta.url to the release file while argv retains the symlink path.
   const currentDir = path.join(fixtureDir, 'current');
@@ -593,6 +739,136 @@ try {
 
   console.log(
     '[local-training-worker] PASS — external engine result is required; unconfigured mode fails closed',
+  );
+
+  // A trainer and its subprocess may both ignore TERM. The deadline must
+  // reclaim the whole owned process group before releasing the queue slot.
+  const stubbornFixture = path.join(fixtureDir, 'stubborn-engine.mjs');
+  await writeFile(
+    stubbornFixture,
+    `import { spawn } from 'node:child_process';
+import { writeFile } from 'node:fs/promises';
+process.on('SIGTERM', () => {});
+const descendant = spawn(process.execPath, ['-e', "process.on('SIGTERM', () => {}); console.log('ready'); setInterval(() => {}, 1000);"], { stdio: ['ignore', 'pipe', 'ignore'] });
+await new Promise((resolve) => descendant.stdout.once('data', resolve));
+await writeFile(process.env.RDK_SIM2REAL_JOB_DIR + '/process-tree.json', JSON.stringify([process.pid, descendant.pid]));
+setInterval(() => {}, 1000);
+`,
+  );
+  process.env.RDK_SIM2REAL_TRAIN_ARGS_JSON = JSON.stringify([stubbornFixture]);
+  process.env.RDK_SIM2REAL_TRAIN_TIMEOUT_MS = '1000';
+  process.env.RDK_SIM2REAL_TRAIN_KILL_GRACE_MS = '100';
+  const stubbornRunId = await submit('stubborn-engine', 'stubborn-engine');
+  let ownedPids = [];
+  try {
+    for (let attempt = 0; attempt < 50; attempt += 1) {
+      try {
+        ownedPids = JSON.parse(
+          await readFile(path.join(fixtureDir, stubbornRunId, 'process-tree.json'), 'utf8'),
+        );
+        break;
+      } catch {
+        await new Promise((resolve) => setTimeout(resolve, 20));
+      }
+    }
+    assert.equal(ownedPids.length, 2, 'fixture parent and descendant started');
+    await new Promise((resolve) => setTimeout(resolve, 1700));
+    const timedOut = await fetch(
+      `http://127.0.0.1:${recoveredAddress.port}/runs/${stubbornRunId}`,
+      { headers: { 'x-sim2real-account': 'alice', authorization: 'Bearer worker-test-token' } },
+    );
+    const timedOutJob = await timedOut.json();
+    assert.equal(
+      timedOutJob.status,
+      'failed',
+      'an engine ignoring TERM must reach a terminal state',
+    );
+    assert.equal(timedOutJob.errorCode, 'training_timeout');
+    for (const pid of ownedPids) {
+      let alive = false;
+      try {
+        process.kill(pid, 0);
+        alive = true;
+      } catch (error) {
+        assert.equal(error.code, 'ESRCH');
+      }
+      assert.equal(alive, false, `owned process ${pid} survived timeout`);
+    }
+    const afterTimeout = await fetch(`http://127.0.0.1:${recoveredAddress.port}/healthz`);
+    assert.equal((await afterTimeout.json()).activeJobs, 0);
+  } finally {
+    // These PIDs come only from the fixture we just created; never scan or
+    // signal an unrelated system process when a regression assertion fails.
+    for (const pid of ownedPids) {
+      try {
+        process.kill(pid, 'SIGKILL');
+      } catch {
+        // The fixture process was already reaped by the timeout path.
+      }
+    }
+    delete process.env.RDK_SIM2REAL_TRAIN_TIMEOUT_MS;
+    delete process.env.RDK_SIM2REAL_TRAIN_KILL_GRACE_MS;
+    process.env.RDK_SIM2REAL_TRAIN_ARGS_JSON = JSON.stringify([fixture]);
+  }
+  console.log('[local-training-worker] PASS — timeout kills TERM-resistant trainer and descendant');
+
+  // Losing a damaged snapshot must not silently lose the deduplication
+  // history and launch the same expensive training request again.
+  const damagedSnapshot = path.join(fixtureDir, verifiedRun.runId, 'job.json');
+  const previousSnapshot = await readFile(damagedSnapshot, 'utf8');
+  await writeFile(damagedSnapshot, '{broken');
+  recoveredServer.closeIdleConnections?.();
+  recoveredServer.closeAllConnections?.();
+  await new Promise((resolve) => recoveredServer.close(resolve));
+  const damagedWorker = await import(`./local-training-worker.mjs?damaged=${Date.now()}`);
+  const damagedServer = damagedWorker.createLocalTrainingWorkerServer();
+  serverToClose = damagedServer;
+  await new Promise((resolve) => damagedServer.listen(0, '127.0.0.1', resolve));
+  const damagedBase = `http://127.0.0.1:${damagedServer.address().port}`;
+  const blockedReplay = await fetch(`${damagedBase}/train`, {
+    method: 'POST',
+    headers: {
+      'content-type': 'application/json',
+      'x-sim2real-account': 'alice',
+      authorization: 'Bearer worker-test-token',
+      'idempotency-key': 'manifest-good',
+    },
+    body: JSON.stringify({ ...request, model: { modelId: 'manifest-good', version: 'v1' } }),
+  });
+  assert.equal(blockedReplay.status, 503, 'unknown deduplication history must block submissions');
+  assert.equal((await blockedReplay.json()).error, 'worker_recovery_required');
+  const damagedHealth = await fetch(`${damagedBase}/healthz`);
+  assert.equal(damagedHealth.status, 503);
+  assert.equal((await damagedHealth.json()).recoveryIssues, 1);
+  assert.equal(await readFile(damagedSnapshot, 'utf8'), '{broken', 'keep damaged evidence intact');
+  const intactStatus = await fetch(`${damagedBase}/runs/${launched.runId}`, {
+    headers: { 'x-sim2real-account': 'alice', authorization: 'Bearer worker-test-token' },
+  });
+  assert.equal(intactStatus.status, 200, 'valid retained jobs remain readable during recovery');
+  await writeFile(damagedSnapshot, previousSnapshot);
+  damagedServer.closeIdleConnections?.();
+  damagedServer.closeAllConnections?.();
+  await new Promise((resolve) => damagedServer.close(resolve));
+  const repairedWorker = await import(`./local-training-worker.mjs?repaired=${Date.now()}`);
+  const repairedServer = repairedWorker.createLocalTrainingWorkerServer();
+  serverToClose = repairedServer;
+  await new Promise((resolve) => repairedServer.listen(0, '127.0.0.1', resolve));
+  const repairedBase = `http://127.0.0.1:${repairedServer.address().port}`;
+  assert.equal((await fetch(`${repairedBase}/healthz`)).status, 200);
+  const restoredReplay = await fetch(`${repairedBase}/train`, {
+    method: 'POST',
+    headers: {
+      'content-type': 'application/json',
+      'x-sim2real-account': 'alice',
+      authorization: 'Bearer worker-test-token',
+      'idempotency-key': 'manifest-good',
+    },
+    body: JSON.stringify({ ...request, model: { modelId: 'manifest-good', version: 'v1' } }),
+  });
+  assert.equal(restoredReplay.status, 200);
+  assert.equal((await restoredReplay.json()).runId, verifiedRun.runId);
+  console.log(
+    '[local-training-worker] PASS — corrupt recovery fails admissions closed, retains evidence',
   );
 } finally {
   // Node's fetch keeps an idle connection alive; explicitly drain it so this

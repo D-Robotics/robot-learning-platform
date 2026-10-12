@@ -23,6 +23,7 @@ import shutil
 import stat
 import sys
 import tempfile
+import threading
 import time
 import unittest
 from unittest import mock
@@ -958,6 +959,9 @@ class ArmSdkEnabledContract(unittest.TestCase):
         self.agent = load_agent_module(enable_arm=True)
         self.fake = _FakeArmSdk()
         _install_fake_arm_sdk(self.agent, self.fake)
+        # Every fresh agent starts locked; normal motion cases explicitly
+        # perform the non-actuating, idle-only reset first.
+        self.assertTrue(self.agent.arm_reset()["ok"])
 
     def _drain(self):
         """Wait out the single in-flight worker thread."""
@@ -968,6 +972,19 @@ class ArmSdkEnabledContract(unittest.TestCase):
 
     def test_capability_advertises_drive_when_enabled(self):
         self.assertIn("constrained-arm-drive", self.agent.arm_capability())
+
+    def test_new_agent_starts_locked_until_explicit_reset(self):
+        for _ in range(2):  # A fresh process/restart must not clear the latch.
+            restarted = load_agent_module(enable_arm=True)
+            fake = _FakeArmSdk()
+            _install_fake_arm_sdk(restarted, fake)
+            self.assertTrue(restarted._arm_state["stopRequested"])
+            self.assertEqual(restarted.arm_move(250.0, 0.0, 80.0, 60.0), (False, "arm-stopped"))
+            self.assertEqual(restarted.arm_gripper("open", 10.0), (False, "arm-stopped", None))
+            self.assertEqual(fake.calls, [])
+            self.assertTrue(restarted.arm_reset()["ok"])
+            self.assertEqual(fake.calls, [], "startup reset must not call the SDK")
+            self.assertTrue(restarted.arm_gripper("open", 10.0)[0])
 
     def test_move_is_clamped_into_the_workspace_box(self):
         ok, reason = self.agent.arm_move(2000.0, -900.0, 5.0, 9999.0)
@@ -1021,12 +1038,155 @@ class ArmSdkEnabledContract(unittest.TestCase):
         self.assertFalse(ok)
         self.assertEqual(reason, "value-invalid")
 
-    def test_stop_with_no_motion_homes_the_arm(self):
+    def test_stop_with_no_motion_latches_without_actuating(self):
         result = self.agent.arm_stop()
         self.assertTrue(result["ok"])
         self.assertFalse(result["wasMoving"])
-        self.assertTrue(result["homed"])
-        self.assertIn(("home",), self.fake.calls)
+        self.assertFalse(result["homed"])
+        self.assertFalse(result["interrupted"])
+        self.assertTrue(result["stopRequested"])
+        self.assertEqual(self.fake.calls, [])
+
+    def test_stop_blocks_move_and_gripper_until_explicit_idle_reset(self):
+        self.agent.arm_stop()
+        self.assertEqual(self.agent.arm_move(250.0, 0.0, 80.0, 60.0), (False, "arm-stopped"))
+        self.assertEqual(self.agent.arm_gripper("close", 8.0), (False, "arm-stopped", None))
+        self.assertEqual(self.fake.calls, [])
+        result = self.agent.arm_reset()
+        self.assertTrue(result["ok"])
+        self.assertFalse(result["stopRequested"])
+        self.assertEqual(self.fake.calls, [], "reset must never actuate or probe the SDK")
+        self.assertTrue(self.agent.arm_move(250.0, 0.0, 80.0, 60.0)[0])
+        self._drain()
+
+    def test_stop_preserves_inflight_motion_and_latch_after_completion(self):
+        entered, release, finished = threading.Event(), threading.Event(), threading.Event()
+
+        def blocking_move(*args, **kwargs):
+            entered.set()
+            release.wait(2)
+
+        def get_pose():
+            finished.set()
+            return dict(self.fake._pose)
+
+        self.fake.arm.move_to = blocking_move
+        self.fake.arm.get_pose = get_pose
+        self.addCleanup(release.set)
+        self.assertTrue(self.agent.arm_move(250.0, 0.0, 80.0, 60.0)[0])
+        self.assertTrue(entered.wait(1))
+        stopped = self.agent.arm_stop()
+        self.assertTrue(stopped["wasMoving"])
+        self.assertTrue(self.agent._arm_state["moving"], "SDK call is still in flight")
+        self.assertTrue(self.agent.arm_status()["moving"])
+        self.agent._arm_state["lastCmdAt"] = 0.0
+        self.assertEqual(self.agent.arm_move(260.0, 0.0, 80.0, 60.0), (False, "arm-stopped"))
+        self.assertEqual(self.agent.arm_gripper("open", 10.0), (False, "arm-stopped", None))
+        self.assertEqual(self.agent.arm_reset()["error"], "move-in-progress")
+        release.set()
+        self.assertTrue(finished.wait(1))
+        self._drain()
+        self.assertFalse(self.agent._arm_state["moving"])
+        self.assertTrue(self.agent.arm_status()["stopRequested"])
+        self.assertEqual(self.agent.arm_move(260.0, 0.0, 80.0, 60.0), (False, "arm-stopped"))
+
+    def test_stop_during_gripper_operation_preserves_busy_state(self):
+        entered, release = threading.Event(), threading.Event()
+
+        def blocking_close(force):
+            entered.set()
+            release.wait(2)
+            return True
+
+        self.fake.arm.gripper.close = blocking_close
+        worker = threading.Thread(target=self.agent.arm_gripper, args=("close", 8.0))
+        self.addCleanup(release.set)
+        worker.start()
+        self.assertTrue(entered.wait(1))
+        self.assertTrue(self.agent.arm_stop()["wasMoving"])
+        self.assertTrue(self.agent._arm_state["moving"])
+        self.assertEqual(self.agent.arm_reset()["error"], "move-in-progress")
+        release.set()
+        worker.join(1)
+        self.assertFalse(worker.is_alive())
+        self.assertFalse(self.agent._arm_state["moving"])
+        self.assertTrue(self.agent._arm_state["stopRequested"])
+
+    def test_reset_refuses_when_board_arm_switch_is_off(self):
+        disabled = load_agent_module(enable_arm=False)
+        disabled.arm_stop()
+        result = disabled.arm_reset()
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["error"], "arm-disabled")
+
+    def test_sdk_move_failure_finishes_busy_state_and_requires_reset(self):
+        def failed_move(*args, **kwargs):
+            raise ValueError("SDK rejected the target")
+
+        self.fake.arm.move_to = failed_move
+        self.assertTrue(self.agent.arm_move(250.0, 0.0, 80.0, 60.0)[0])
+        self._drain()
+        self.assertFalse(self.agent._arm_state["moving"])
+        self.assertTrue(self.agent._arm_state["stopRequested"])
+        self.assertIn("SDK rejected", self.agent._arm_state["lastError"])
+        self.assertEqual(self.agent.arm_gripper("open", 10.0), (False, "arm-stopped", None))
+
+    def test_sdk_gripper_failure_finishes_busy_state_and_requires_reset(self):
+        def failed_close(force):
+            raise RuntimeError("SDK disconnected")
+
+        self.fake.arm.gripper.close = failed_close
+        self.assertEqual(self.agent.arm_gripper("close", 8.0), (False, "gripper-failed", None))
+        self.assertFalse(self.agent._arm_state["moving"])
+        self.assertTrue(self.agent._arm_state["stopRequested"])
+        self.assertEqual(self.agent.arm_move(250.0, 0.0, 80.0, 60.0), (False, "arm-stopped"))
+
+
+class ArmHttpResetContract(unittest.TestCase):
+    """Exercise the real HTTP dispatch without sockets or hardware."""
+
+    def setUp(self):
+        self.agent = load_agent_module(enable_arm=True)
+        self.fake = _FakeArmSdk()
+        _install_fake_arm_sdk(self.agent, self.fake)
+        self.agent.arm_stop()
+
+    def _post(self, path, body=b"", authorized=True):
+        handler = object.__new__(self.agent.Handler)
+        handler.path = path
+        handler.headers = {"content-length": str(len(body))}
+        if authorized:
+            handler.headers["authorization"] = "Bearer test-token"
+        handler.rfile = io.BytesIO(body)
+        handler.close_connection = False
+        answers = []
+        handler._json = lambda status, payload: answers.append((status, payload))
+        handler.do_POST()
+        self.assertEqual(len(answers), 1)
+        return answers[0]
+
+    def test_reset_http_clears_latch_without_sdk_calls(self):
+        status, payload = self._post("/v1/station/arm/reset", b"{}")
+        self.assertEqual(status, 200)
+        self.assertEqual(payload, {"ok": True, "stopRequested": False, "moving": False})
+        self.assertEqual(self.fake.calls, [])
+
+    def test_reset_http_requires_authorization_and_empty_body(self):
+        status, _ = self._post("/v1/station/arm/reset", authorized=False)
+        self.assertEqual(status, 401)
+        self.assertTrue(self.agent._arm_state["stopRequested"])
+        status, _ = self._post("/v1/station/arm/reset", b'{"x":250}')
+        self.assertEqual(status, 400)
+        self.assertTrue(self.agent._arm_state["stopRequested"])
+        self.assertEqual(self.fake.calls, [])
+
+    def test_stop_http_latches_without_sdk_calls(self):
+        status, payload = self._post("/v1/station/arm/stop")
+        self.assertEqual(status, 200)
+        self.assertTrue(payload["arm"]["stopRequested"])
+        self.assertFalse(payload["interrupted"])
+        self.assertFalse(payload["homed"])
+        self.assertEqual(self.fake.calls, [])
 
 
 if __name__ == "__main__":

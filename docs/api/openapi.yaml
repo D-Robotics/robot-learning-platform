@@ -2091,22 +2091,42 @@ paths:
   /api/v1/duck/board-station/arm/stop:
     post:
       tags: [board-station]
-      summary: Refuse-new + best-effort home (always available)
+      summary: Latch a stop request without issuing a movement (always available)
       operationId: postBoardStationArmStop
       description: >-
-        Always forwarded regardless of switches. Refuses NEW arm commands and
-        best-effort returns the arm home; a mid-flight blocking move cannot be
-        interrupted — the arm's physical e-stop is the final safety floor and
-        the response states whether a move was in progress.
+        Always forwarded regardless of switches. Latches a stop request and
+        refuses new moves and gripper commands until an explicit reset. Does
+        not issue a home movement. A blocking SDK action cannot be interrupted;
+        moving remains true until it finishes and interrupted is false. Use
+        the arm's physical e-stop to interrupt physical motion.
       parameters:
         - in: query
           name: deviceId
           schema: { type: string }
       responses:
         "200":
-          description: Stop delivered (homed best-effort; wasMoving reported honestly).
+          description: Stop latched; stopRequested, moving and wasMoving are reported honestly; homed and interrupted are false.
         "401": { $ref: "#/components/responses/AuthRequired" }
         "502": { description: Board agent unreachable; use the arm's physical e-stop. }
+  /api/v1/duck/board-station/arm/reset:
+    post:
+      tags: [board-station]
+      summary: Explicitly clear the arm stop latch while idle
+      operationId: postBoardStationArmReset
+      description: >-
+        Requires operate permission and both arm switches. Refuses reset while
+        a move or gripper action is still in progress. Clears the stop request
+        without sending any SDK movement or gripper command.
+      parameters:
+        - in: query
+          name: deviceId
+          schema: { type: string }
+      responses:
+        "200": { description: Stop latch cleared without actuation. }
+        "401": { $ref: "#/components/responses/AuthRequired" }
+        "403": { description: Operate permission required. }
+        "409": { description: Arm switch disabled or an SDK action is still in progress. }
+        "502": { description: Board agent unreachable. }
   /api/v1/duck/board-station/switches:
     get:
       tags: [board-station]
