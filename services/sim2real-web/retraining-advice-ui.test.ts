@@ -14,9 +14,11 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
  */
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), 'public');
-const [html, telemetrySource, appSource] = await Promise.all([
+const [html, telemetrySource, componentSource, firstUseSource, appSource] = await Promise.all([
   readFile(path.join(root, 'index.html'), 'utf8'),
   readFile(path.join(root, 'telemetry-core.js'), 'utf8'),
+  readFile(path.join(root, 'ui-components.js'), 'utf8'),
+  readFile(path.join(root, 'first-use-core.js'), 'utf8'),
   readFile(path.join(root, 'app.js'), 'utf8'),
 ]);
 
@@ -331,6 +333,8 @@ async function boot(options: BootOptions = {}) {
   };
   window.cancelAnimationFrame = () => undefined;
   window.eval(telemetrySource);
+  window.eval(componentSource);
+  window.eval(firstUseSource);
   window.eval(appSource);
 
   for (let attempt = 0; attempt < 50; attempt += 1) {

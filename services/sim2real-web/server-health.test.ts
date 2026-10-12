@@ -3,11 +3,14 @@ import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
 import type { AddressInfo } from 'node:net';
+import { fileURLToPath } from 'node:url';
+import { gunzipSync } from 'node:zlib';
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import {
   createSim2RealWebApp,
+  contentHashedWorkbenchScriptName,
   hardenSim2RealHttpServer,
   publicDshEventTail,
   publicDshReasoning,
@@ -120,6 +123,26 @@ async function fixture(): Promise<{ baseUrl: string; microduckRoot: string }> {
 async function json(url: string): Promise<{ response: Response; payload: any }> {
   const response = await fetch(url);
   return { response, payload: await response.json() };
+}
+
+async function rawScript(
+  url: string,
+  headers: Record<string, string>,
+): Promise<{ status: number; headers: http.IncomingHttpHeaders; body: Buffer }> {
+  return new Promise((resolve, reject) => {
+    const request = http.get(url, { headers }, (response) => {
+      const chunks: Buffer[] = [];
+      response.on('data', (chunk: Buffer) => chunks.push(chunk));
+      response.on('end', () =>
+        resolve({
+          status: response.statusCode ?? 0,
+          headers: response.headers,
+          body: Buffer.concat(chunks),
+        }),
+      );
+    });
+    request.on('error', reject);
+  });
 }
 
 describe('standalone Sim2Real health and optional simulator surface', () => {
@@ -511,6 +534,63 @@ describe('standalone Sim2Real health and optional simulator surface', () => {
     expect(simulator.status).toBe(200);
     expect(simulator.headers.get('cache-control')).toBe('no-cache');
     expect(await simulator.text()).toContain('MuJoCo');
+  });
+
+  it('identifies different app bytes with different content-hash pathnames', () => {
+    const oldName = contentHashedWorkbenchScriptName('app', Buffer.from('previous app'));
+    const newName = contentHashedWorkbenchScriptName('app', Buffer.from('current app'));
+    expect(oldName).toMatch(/^app\.[a-f0-9]{64}\.js$/);
+    expect(newName).not.toBe(oldName);
+    expect(contentHashedWorkbenchScriptName('app', Buffer.from('current app'))).toBe(newName);
+  });
+
+  it('loads ordered classic scripts by current content hash and rejects stale hashes', async () => {
+    const { baseUrl } = await fixture();
+    const html = await fetch(`${baseUrl}/`).then((response) => response.text());
+    const publicRoot = fileURLToPath(new URL('./public/', import.meta.url));
+    let precedingScript = -1;
+    for (const script of ['ui-components', 'first-use-core', 'app'] as const) {
+      const bytes = await fs.readFile(path.join(publicRoot, `${script}.js`));
+      const filename = contentHashedWorkbenchScriptName(script, bytes);
+      const position = html.indexOf(`<script defer src="./${filename}"></script>`);
+      expect(position).toBeGreaterThan(precedingScript);
+      precedingScript = position;
+      expect(html).not.toMatch(new RegExp(`src="\\./${script}\\.js(?:\\?|"|$)`));
+
+      for (const encoding of ['identity', 'gzip']) {
+        const response = await rawScript(`${baseUrl}/${filename}`, {
+          'accept-encoding': encoding,
+        });
+        expect(response.status).toBe(200);
+        expect(response.headers['content-type']).toMatch(/javascript/);
+        expect(response.headers['cache-control']).toBe('no-cache');
+        const decoded = encoding === 'gzip' ? gunzipSync(response.body) : response.body;
+        expect(decoded).toEqual(bytes);
+        const revalidated = await rawScript(`${baseUrl}/${filename}`, {
+          'accept-encoding': encoding,
+          'if-none-match': String(response.headers.etag),
+        });
+        expect(revalidated.status).toBe(304);
+        expect(revalidated.body.length).toBe(0);
+        expect(revalidated.headers['cache-control']).toBe('no-cache');
+      }
+
+      const stale = contentHashedWorkbenchScriptName(script, Buffer.from('older release'));
+      for (const wrongName of [stale, `${script}.invalid.js`]) {
+        const rejected = await fetch(`${baseUrl}/${wrongName}`, {
+          headers: { 'accept-encoding': 'gzip' },
+        });
+        expect(rejected.status).toBe(404);
+        expect(rejected.headers.get('cache-control')).toBe('no-store');
+        expect(await rejected.json()).toMatchObject({ error: 'SIM2REAL_UI_ASSET_NOT_FOUND' });
+      }
+
+      const prefixed = await fetch(`${baseUrl}/sim2real/${filename}`);
+      expect(prefixed.status).toBe(200);
+      expect(Buffer.from(await prefixed.arrayBuffer())).toEqual(bytes);
+    }
+    const bookmarked = await fetch(`${baseUrl}/index.html`).then((response) => response.text());
+    expect(bookmarked).toBe(html);
   });
 
   it('canonicalizes the OriginBot simulator bookmark so relative assets resolve', async () => {

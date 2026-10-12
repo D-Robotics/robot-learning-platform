@@ -20,7 +20,7 @@
          theme x view screenshots). See services/sim2real-web/ui-layout-invariants.mjs
          for the guards that keep new overrides from re-introducing layering. -->
     <link rel="stylesheet" href="./tokens.css?v=3" />
-    <link rel="stylesheet" href="./app.css?v=51" />
+    <link rel="stylesheet" href="./app.css?v=56" />
   </head>
   <body>
     <a class="skip-link" href="#main-content">跳到主要内容</a>
@@ -126,6 +126,7 @@
       <div class="shell-layout">
         <div class="sidebar-backdrop" id="sidebar-backdrop" hidden></div>
         <aside class="sidebar" id="platform-sidebar" aria-label="平台导航">
+          <button class="button button-ghost sidebar-drawer-close" id="sidebar-drawer-close" type="button">关闭导航 <span aria-hidden="true">×</span></button>
           <div class="sidebar-project">
             <div class="sidebar-project-heading">
               <span class="sidebar-project-icon" aria-hidden="true">◇</span>
@@ -177,11 +178,11 @@
               </div>
             </details>
             <details class="sidebar-nav-group" data-sidebar-group="build-policy">
-              <summary class="nav-item nav-item-parent"><span class="nav-index">02</span><span><strong>训练与策略</strong><small>模型 · 配置 · 训练 Run</small></span><i aria-hidden="true">⌄</i></summary>
+              <summary class="nav-item nav-item-parent"><span class="nav-index">02</span><span><strong>训练与策略</strong><small>模型 · 配置 · 训练任务</small></span><i aria-hidden="true">⌄</i></summary>
               <div class="nav-subitems">
-                <button class="nav-subitem" type="button" data-view-target="train" data-flow-child="prepare" data-train-step="1">模型与契约</button>
+                <button class="nav-subitem" type="button" data-view-target="train" data-flow-child="prepare" data-train-step="1">模型与兼容性</button>
                 <button class="nav-subitem" type="button" data-view-target="train" data-flow-child="configure" data-train-step="2">训练配置</button>
-                <button class="nav-subitem" type="button" data-view-target="train" data-flow-child="submit" data-train-step="3">Run 与进度</button>
+                <button class="nav-subitem" type="button" data-view-target="train" data-flow-child="submit" data-train-step="3">训练任务与进度</button>
               </div>
             </details>
             <details class="sidebar-nav-group" data-sidebar-group="build-evaluation">
@@ -208,7 +209,7 @@
           <div class="sidebar-divider sidebar-divider-compact"></div>
           <div class="nav-label">证据中心</div>
           <nav class="workflow-nav" aria-label="证据与资源">
-            <button class="nav-item" type="button" data-view-target="records"><span class="nav-index" aria-hidden="true">▦</span><span><strong>证据与记录</strong><small>Dataset、Run、Artifact、评测与遥测</small></span></button>
+            <button class="nav-item" type="button" data-view-target="records"><span class="nav-index" aria-hidden="true">▦</span><span><strong>证据与记录</strong><small>数据、训练任务、模型文件与评测</small></span></button>
             <button class="nav-item" type="button" data-view-target="resources"><span class="nav-index" aria-hidden="true">▣</span><span><strong>执行资源</strong><small>本机、远程与云端算力</small></span></button>
           </nav>
           <div class="sidebar-bottom">
@@ -385,68 +386,82 @@
             aria-labelledby="overview-title"
           >
             <div class="section-heading section-heading-lean">
-              <div class="overview-page-title"><h2 id="overview-title">开始机器人学习</h2><p>先创建项目并准备数据，再训练和验证策略；需要真机时再连接设备。</p></div>
+              <div class="overview-page-title"><h2 id="overview-title">你想先做什么？</h2><p>先完成一个小任务，再按需要训练模型或连接真机。</p></div>
               <span class="section-caption" id="hero-updated">—</span>
             </div>
+            <section class="user-start-panel" id="user-start-panel" aria-labelledby="user-start-title">
+              <h2 id="user-start-title">选择开始方式</h2>
+              <div class="user-start-options" role="group" aria-labelledby="user-start-title">
+                <button class="user-start-option" id="start-intent-experience" type="button" data-start-intent="experience" aria-pressed="true"><strong>先体验一下</strong><small>示例机器人 · 无需设备或 GPU</small></button>
+                <button class="user-start-option" id="start-intent-device" type="button" data-start-intent="device" aria-pressed="false"><strong>连接我的 RDK</strong><small>检查连接 · 先检查连接，再选择任务</small></button>
+                <button class="user-start-option" id="start-intent-model" type="button" data-start-intent="model" aria-pressed="false"><strong>使用已有模型</strong><small>导入模型 · 检查兼容性再继续</small></button>
+              </div>
+            </section>
             <div class="next-card">
               <div class="next-card-main">
-                <span class="next-badge">下一步</span>
-                <h3 id="next-action-title">从一个动作任务开始</h3>
-                <p id="next-action-copy">选一个任务，先在仿真里跑起来。</p>
+                <span class="next-badge" id="start-goal-badge">当前目标</span>
+                <h3 id="next-action-title">录一段动作，再回放看看</h3>
+                <p id="next-action-copy">打开示例机器人，在仿真里录制并回放一段动作。</p>
+                <p id="start-goal-note" class="user-start-note">完成后，你会得到一段可回放的动作记录；无需连接设备或配置 GPU。</p>
                 <button
                   class="button button-primary"
                   id="next-action-button"
                   type="button"
                   data-view-target="simulate"
                 >
-                  进入仿真与录制 →
+                  开始示例体验 →
                 </button>
               </div>
             </div>
             <section class="first-run-path panel" aria-labelledby="first-run-path-title" id="onboard-card">
               <div class="onboard-card-bar">
-                <h2 id="first-run-path-title">上手 · 走完第一个闭环</h2>
+                <h2 id="first-run-path-title">接下来可以逐步完成</h2>
                 <div class="onboard-meter" aria-hidden="true"><i id="onboard-fill"></i></div>
                 <span class="onboard-count" id="onboard-count">— / 4</span>
               </div>
               <ol class="onboard-list" id="onboard-list">
                 <li class="onboard-item" data-onboard-step="simulate">
                   <span class="onboard-item-no">01</span><span class="onboard-item-dot"></span>
-                  <div class="onboard-item-body"><strong>在仿真中验证</strong><span>运行 MicroDuck 仿真，录制一段可回放轨迹</span></div>
+                  <div class="onboard-item-body"><strong>录制并回放动作</strong><span>先用示例机器人，保存一段你能看懂的动作记录</span></div>
                   <div class="onboard-item-meta" data-onboard-meta></div>
                 </li>
                 <li class="onboard-item" data-onboard-step="train">
                   <span class="onboard-item-no">02</span><span class="onboard-item-dot"></span>
-                  <div class="onboard-item-body"><strong>发起第一次训练</strong><span>用 starter 模板提交 PPO 任务，跟踪奖励曲线</span></div>
+                  <div class="onboard-item-body"><strong>尝试训练模型</strong><span>有了动作数据后，选择模板并查看训练进度</span></div>
                   <div class="onboard-item-meta" data-onboard-meta></div>
                 </li>
                 <li class="onboard-item" data-onboard-step="evaluate">
                   <span class="onboard-item-no">03</span><span class="onboard-item-dot"></span>
-                  <div class="onboard-item-body"><strong>查看评测证据</strong><span>检查成功率、跌倒率与控制延迟</span></div>
+                  <div class="onboard-item-body"><strong>看看模型表现</strong><span>用评测结果检查动作效果，以及还需要改进的地方</span></div>
                   <div class="onboard-item-meta" data-onboard-meta></div>
                 </li>
                 <li class="onboard-item" data-onboard-step="deploy">
                   <span class="onboard-item-no">04</span><span class="onboard-item-dot"></span>
-                  <div class="onboard-item-body"><strong>部署到真机</strong><span>只读预检通过后，把策略推进 RDK 板卡</span></div>
+                  <div class="onboard-item-body"><strong>完成设备预检</strong><span>检查模型与设备能否配合；预检不会启动机器人</span></div>
                   <div class="onboard-item-meta" data-onboard-meta></div>
                 </li>
               </ol>
             </section>
-            <section class="platform-scorecard panel" aria-labelledby="platform-scorecard-title">
-              <div class="platform-scorecard-heading">
-                <div><span class="eyebrow">平台健康度</span><h2 id="platform-scorecard-title">研发闭环评分</h2><p>把“能演示”与“能上真机”分开显示，下一步始终有据可依。</p></div>
-                <div class="platform-scorecard-total"><strong id="platform-score-total">—</strong><span>/ 10 软件门槛</span></div>
+            <details class="user-start-advanced" id="overview-advanced-evidence">
+              <summary><strong>查看研发证据与统计</strong><small>训练、评测和发布条件</small></summary>
+              <div class="user-start-advanced-body">
+                <section class="platform-scorecard panel" aria-labelledby="platform-scorecard-title">
+                  <div class="platform-scorecard-heading">
+                    <div><span class="eyebrow">证据准备度</span><h2 id="platform-scorecard-title">当前项目准备情况</h2><p>检查训练、评测和发布证据是否齐全；分数随项目进展积累。</p></div>
+                    <div class="platform-scorecard-total"><strong id="platform-score-total">—</strong><span>证据准备度 / 10</span></div>
+                  </div>
+                  <div class="platform-scorecard-grid" id="platform-scorecard-grid" aria-live="polite"><span class="empty-inline">正在检查契约、训练、评测和设备证据…</span></div>
+                  <div class="platform-scorecard-foot"><span id="platform-scorecard-note">真实 X5 运动证据和签名制品会单独计入现场验收。</span><button type="button" class="button button-ghost button-small" data-view-target="records">查看证据记录 →</button></div>
+                </section>
+                <section class="platform-scorecard panel" aria-labelledby="research-loop-title">
+                  <div class="platform-scorecard-heading">
+                    <div><span class="eyebrow">研究反馈回路</span><h2 id="research-loop-title">闭环指标</h2><p>发起、时延、自主度与边际收益——检验研究回路是否越转越快。</p></div>
+                  </div>
+                  <div class="platform-scorecard-grid" id="research-loop-grid" aria-live="polite"><span class="empty-inline">正在汇总近 30 天的闭环指标…</span></div>
+                  <div class="platform-scorecard-foot"><span id="research-loop-note">口径：近 30 天；发起方未标记的记录不计入占比分母；免审批链长为会话内内存口径。</span></div>
+                </section>
               </div>
-              <div class="platform-scorecard-grid" id="platform-scorecard-grid" aria-live="polite"><span class="empty-inline">正在检查契约、训练、评测和设备证据…</span></div>
-              <div class="platform-scorecard-foot"><span id="platform-scorecard-note">真实 X5 运动证据和签名制品会单独计入现场验收。</span><button type="button" class="button button-ghost button-small" data-view-target="records">查看证据记录 →</button></div>
-            </section>
-            <section class="platform-scorecard panel" aria-labelledby="research-loop-title">
-              <div class="platform-scorecard-heading">
-                <div><span class="eyebrow">研究反馈回路</span><h2 id="research-loop-title">闭环指标</h2><p>发起、时延、自主度与边际收益——检验研究回路是否越转越快。</p></div>
-              </div>
-              <div class="platform-scorecard-grid" id="research-loop-grid" aria-live="polite"><span class="empty-inline">正在汇总近 30 天的闭环指标…</span></div>
-              <div class="platform-scorecard-foot"><span id="research-loop-note">口径：近 30 天；发起方未标记的记录不计入占比分母；免审批链长为会话内内存口径。</span></div>
-            </section>
+            </details>
             <section class="project-workspace panel" id="project-workspace" aria-labelledby="project-workspace-title">
               <div class="panel-heading panel-heading-lean project-workspace-heading">
                 <div>
@@ -708,9 +723,9 @@
           >
             <p class="mobile-desktop-hint" role="note">手机端适合查看训练进度、审批与结果；训练参数配置建议在桌面端完成。</p>
             <div class="submodule-tabs" role="tablist" aria-label="训练与策略模块">
-              <button class="submodule-tab" type="button" role="tab" id="train-tab-contract" aria-controls="contract-fold" aria-selected="false" data-train-module-tab="contract">模型与契约<small>Manifest 与兼容性</small></button>
+              <button class="submodule-tab" type="button" role="tab" id="train-tab-contract" aria-controls="contract-fold" aria-selected="false" data-train-module-tab="contract">模型与兼容性<small>模型描述与兼容性检查</small></button>
               <button class="submodule-tab" type="button" role="tab" id="train-tab-config" aria-controls="train-module-config" aria-selected="false" data-train-module-tab="config">训练配置<small>算法、算力与续训</small></button>
-              <button class="submodule-tab is-active" type="button" role="tab" id="train-tab-run" aria-controls="train-module-run-model train-module-run-robogo" aria-selected="true" data-train-module-tab="run">Run 与进度<small>提交任务与实时曲线</small></button>
+              <button class="submodule-tab is-active" type="button" role="tab" id="train-tab-run" aria-controls="train-module-run-model train-module-run-robogo" aria-selected="true" data-train-module-tab="run">训练任务与进度<small>提交任务与实时曲线</small></button>
 
             </div>
             <div class="train-onboarding" role="note" aria-label="训练流程引导">
@@ -1482,9 +1497,9 @@
               <article class="panel compute-resources-panel">
                 <div class="panel-heading panel-heading-lean">
                   <div><h2>我的 GPU 训练资源</h2><p class="panel-caption">支持本机 CPU/GPU、SSH 远端服务器和平台 Runner。首次使用可以点击“获取安装命令”，用户只需在自己的终端执行一次；网页随后通过 127.0.0.1 连接 Agent，核心服务器不会接触用户本地 GPU。</p></div>
-                  <span id="compute-resource-count" class="state-badge state-neutral">0 个</span>
+                  <span id="compute-resource-count" class="state-badge state-neutral">待读取</span>
                 </div>
-                <div id="compute-resource-list" class="compute-resource-list"><p class="empty-inline">还没有接入 GPU。添加后可在上方训练资源中选择。</p></div>
+                <div id="compute-resource-list" class="compute-resource-list"><p class="empty-inline">正在读取 GPU 资源及连接状态…</p></div>
                 <details class="compute-resource-add">
                   <summary>添加 GPU 或连接远程资源 <small>首次使用或新增 Runner</small></summary>
                 <form id="compute-resource-form" class="compute-resource-form">
@@ -2095,6 +2110,14 @@
         </div>
       </div>
     </dialog>
+    <dialog class="run-dialog experience-review-dialog" id="experience-review-dialog" aria-labelledby="experience-review-title" aria-describedby="experience-review-note">
+      <div class="run-dialog-heading">
+        <h2 id="experience-review-title">回看这段动作记录</h2>
+        <button class="button button-ghost button-small" id="experience-review-close" type="button">关闭</button>
+      </div>
+      <p class="experience-review-note" id="experience-review-note">点击“播放”检查这次录制的采样时间轴，完整播放后完成体验。这里展示动作数据，不重演三维动作；记录只保留在当前页面。</p>
+      <div class="experience-review-slot" id="experience-review-slot"></div>
+    </dialog>
     <dialog class="run-dialog project-dialog" id="project-dialog" aria-labelledby="project-dialog-title">
       <form id="project-form" method="dialog" novalidate>
         <div class="run-dialog-heading">
@@ -2140,7 +2163,7 @@
         <p class="command-palette-hint">使用 ↑ ↓ 选择，Enter 执行，Esc 关闭</p>
       </div>
     </dialog>
-    <div class="toast-region" id="toast-region" aria-live="polite" aria-atomic="true"></div>
+    <div class="toast-region" id="toast-region" aria-label="工作区通知" tabindex="-1"></div>
     <button
       id="station-float-stop"
       class="station-float-stop"
@@ -2165,14 +2188,17 @@
       the same ordering while working from both file:// and the served app.
       telemetry-core.js must stay FIRST: app.js boots synchronously and its
       telemetry delegations resolve SimTelemetryCore at call time.
-      defer keeps that same DOM-ready execution order while letting all five
+      ui-components.js publishes the shared SimUI primitives before app.js.
+      defer keeps that same DOM-ready execution order while letting all seven
       downloads start in parallel during HTML parse instead of serially
       blocking the parser at body end.
     -->
     <script defer src="./telemetry-core.js?v=duck-lab-32"></script>
-    <script defer src="./app.js?v=duck-lab-64"></script>
+    <script defer src="./ui-components.js?v=ui-1"></script>
+    <script defer src="./first-use-core.js?v=start-5"></script>
+    <script defer src="./app.js?v=duck-lab-67"></script>
     <script defer src="./visualization-enhancements.js?v=viz-1"></script>
     <script defer src="./agent-chat.js?v=agent-17"></script>
-    <script defer src="./onboarding.js?v=onboarding-6"></script>
+    <script defer src="./onboarding.js?v=onboarding-9"></script>
   </body>
 </html>

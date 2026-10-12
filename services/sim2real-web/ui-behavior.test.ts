@@ -5,9 +5,11 @@ import { JSDOM } from 'jsdom';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), 'public');
-const [html, telemetrySource, appSource] = await Promise.all([
+const [html, telemetrySource, componentSource, firstUseSource, appSource] = await Promise.all([
   readFile(path.join(root, 'index.html'), 'utf8'),
   readFile(path.join(root, 'telemetry-core.js'), 'utf8'),
+  readFile(path.join(root, 'ui-components.js'), 'utf8'),
+  readFile(path.join(root, 'first-use-core.js'), 'utf8'),
   readFile(path.join(root, 'app.js'), 'utf8'),
 ]);
 
@@ -208,6 +210,8 @@ async function boot(
     replayGate?: Promise<void>;
     overviewUnauthorized?: boolean;
     visualAssetBase?: unknown;
+    productId?: string;
+    authRequired?: boolean;
   } = {},
 ) {
   const dom = new JSDOM(html, {
@@ -217,6 +221,7 @@ async function boot(
   });
   openWindows.push(dom.window);
   const { window } = dom;
+  if (options.productId) window.localStorage.setItem('rdk-duck-lab-product', options.productId);
   if (options.workspaceContext) {
     window.localStorage.setItem(
       'rdk-duck-lab-workspace-context',
@@ -266,7 +271,7 @@ async function boot(
       }
       requests.push({ url, method, body });
       let payload: unknown;
-      if (url.includes('/overview') && options.overviewUnauthorized)
+      if (url.includes('/overview') && (options.overviewUnauthorized || options.authRequired))
         return new Response(
           JSON.stringify({ ok: false, error: 'SIM2REAL_AUTH_REQUIRED', message: '请先登录' }),
           { status: 401, headers: { 'content-type': 'application/json' } },
@@ -406,7 +411,9 @@ async function boot(
   };
   window.cancelAnimationFrame = () => undefined;
   window.eval(telemetrySource);
-  window.eval(appSource);
+  window.eval(componentSource);
+  window.eval(firstUseSource);
+  window.eval(appSource + '\nwindow.__workbenchState = state;');
 
   for (let attempt = 0; attempt < 50; attempt += 1) {
     if (window.document.querySelector('#main-content')?.getAttribute('aria-busy') === 'false')
@@ -623,6 +630,433 @@ describe('Sim2Real workbench DOM behavior', () => {
       expect(errors).toEqual([]);
     },
   );
+  it('shows the actual MicroDuck installation path when public guest health reports missing resources', async () => {
+    const { window } = await boot({ authRequired: true });
+    window.eval(
+      '__workbenchState.publicHealth={microduck:{state:"missing"}}; renderIntegrations(); renderNextAction();',
+    );
+    expect(
+      window.document.querySelector('#next-action-button')?.getAttribute('data-start-action'),
+    ).toBe('simulator-help');
+    window.document.querySelector<HTMLButtonElement>('#next-action-button')?.click();
+    await vi.waitFor(() => expect(window.document.body.dataset.activeView).toBe('simulate'));
+    expect(window.document.querySelector('#simulator-gate-title')?.textContent).toContain(
+      'MicroDuck',
+    );
+    expect(
+      window.document.querySelector<HTMLAnchorElement>('#simulator-gate-install')?.hidden,
+    ).toBe(false);
+    expect(window.document.querySelector('#simulator-gate-install')?.getAttribute('href')).toBe(
+      '/sim2real/mujoco/microduck/',
+    );
+  });
+  it('requires a user model instead of treating the builtin reference as an import', async () => {
+    const { window } = await boot();
+    window.document.querySelector<HTMLButtonElement>('#start-intent-model')?.click();
+    expect(window.document.querySelector('#onboard-count')?.textContent).toBe('0 / 4');
+    expect(
+      window.document.querySelector('#next-action-button')?.getAttribute('data-start-action'),
+    ).toBe('model-import');
+    window.document.querySelector<HTMLButtonElement>('#next-action-button')?.click();
+    await vi.waitFor(() => expect(window.document.body.dataset.flowChild).toBe('prepare'));
+    expect(window.document.querySelector<HTMLDetailsElement>('#contract-fold')?.open).toBe(true);
+    expect(
+      window.document.querySelector('#train-tab-contract')?.getAttribute('aria-selected'),
+    ).toBe('true');
+  });
+  it('explains the example switch for a custom robot and keeps advanced evidence folded', async () => {
+    const { window, requests, errors } = await boot({ productId: 'custom' });
+    expect(window.document.querySelector('#next-action-copy')?.textContent).toContain(
+      '切换到 MicroDuck',
+    );
+    expect(
+      window.document.querySelector<HTMLDetailsElement>('#overview-advanced-evidence')?.open,
+    ).toBe(false);
+    window.document.querySelector<HTMLButtonElement>('#next-action-button')?.click();
+    await vi.waitFor(() =>
+      expect(window.document.querySelector<HTMLSelectElement>('#product-select')?.value).toBe(
+        'microduck',
+      ),
+    );
+    await vi.waitFor(() => expect(window.document.body.dataset.activeView).toBe('simulate'));
+    expect(requests.filter((entry) => entry.method === 'POST')).toHaveLength(0);
+    expect(errors).toEqual([]);
+  });
+
+  it('changes the goal without changing the selected robot or executing device/model actions', async () => {
+    const { window, requests } = await boot({ productId: 'custom' });
+    window.document.querySelector<HTMLButtonElement>('#start-intent-device')?.click();
+    expect(
+      window.document.querySelector('#start-intent-device')?.getAttribute('aria-pressed'),
+    ).toBe('true');
+    expect(window.document.querySelector('#onboard-list')?.textContent).not.toContain('MicroDuck');
+    window.document.querySelector<HTMLButtonElement>('#next-action-button')?.click();
+    await vi.waitFor(() => expect(window.document.body.dataset.activeView).toBe('station'));
+    window.document.querySelector<HTMLButtonElement>('#start-intent-model')?.click();
+    window.document.querySelector<HTMLButtonElement>('#next-action-button')?.click();
+    await vi.waitFor(() => expect(window.document.body.dataset.flowChild).toBe('prepare'));
+    expect(window.document.querySelector<HTMLSelectElement>('#product-select')?.value).toBe(
+      'custom',
+    );
+    expect(window.document.querySelector<HTMLDetailsElement>('#contract-fold')?.open).toBe(true);
+    expect(requests.filter((entry) => entry.method === 'POST')).toHaveLength(0);
+  });
+
+  it('allows guest experience while sign-in remains the next step for private device data', async () => {
+    const { window, requests } = await boot({ authRequired: true });
+    expect(
+      window.document.querySelector('#next-action-button')?.getAttribute('data-start-action'),
+    ).toBe('begin-experience');
+    window.document.querySelector<HTMLButtonElement>('#start-intent-device')?.click();
+    expect(
+      window.document.querySelector('#next-action-button')?.getAttribute('data-start-action'),
+    ).toBe('login');
+    window.document.querySelector<HTMLButtonElement>('#next-action-button')?.click();
+    await vi.waitFor(() =>
+      expect(window.document.querySelector<HTMLElement>('#auth-gate-panel')?.hidden).toBe(false),
+    );
+    expect(requests.filter((entry) => entry.method === 'POST')).toHaveLength(0);
+  });
+
+  it('completes experience only after the actual browser recording is played through, with no upload', async () => {
+    const { window, requests, errors } = await boot();
+    const player = window.document.querySelector('#replay-player')!;
+    const originalParent = player.parentNode;
+    const originalNext = player.nextSibling;
+    const button = window.document.querySelector<HTMLButtonElement>('#next-action-button')!;
+    const dialog = window.document.querySelector<HTMLDialogElement>('#experience-review-dialog')!;
+    const recording = [0, 0.02, 0.04]
+      .map((time) => JSON.stringify({ time, observation: [time, 1], action: [time], reward: time }))
+      .join('\n');
+    const recordMessage = () =>
+      window.dispatchEvent(
+        new window.MessageEvent('message', {
+          origin: window.location.origin,
+          source: window.document.querySelector<HTMLIFrameElement>('#simulator-frame')!
+            .contentWindow as never,
+          data: {
+            type: 'rdk-microduck-recording-ready',
+            format: 'microduck-trajectory-v1',
+            text: recording,
+            sampleCount: 3,
+          },
+        }),
+      );
+    recordMessage();
+    expect(
+      window.document.querySelector('#next-action-button')?.getAttribute('data-start-action'),
+    ).toBe('replay-experience');
+    expect(window.document.querySelector('#onboard-count')?.textContent).toBe('2 / 4');
+    button.focus();
+    button.click();
+    await vi.waitFor(() => expect(dialog.open).toBe(true));
+    expect(window.document.body.dataset.activeView).toBe('overview');
+    expect(dialog.querySelector('#replay-player')).toBe(player);
+    expect(player.closest('.view-section')).toBeNull();
+    expect(window.document.querySelectorAll('#replay-player')).toHaveLength(1);
+    expect(window.document.activeElement?.id).toBe('replay-play-button');
+    expect(window.document.querySelector<HTMLInputElement>('#replay-seek')?.disabled).toBe(false);
+    const seek = window.document.querySelector<HTMLInputElement>('#replay-seek')!;
+    expect(seek.max).toBe('2');
+    seek.value = seek.max;
+    seek.dispatchEvent(new window.Event('input', { bubbles: true }));
+    expect(window.document.querySelector('#onboard-count')?.textContent).toBe('2 / 4');
+    window.document.querySelector<HTMLButtonElement>('#replay-play-button')?.click();
+    await vi.waitFor(() =>
+      expect(window.document.querySelector('#onboard-count')?.textContent).toBe('4 / 4'),
+    );
+    expect(window.document.querySelector('#next-action-title')?.textContent).toContain('已完成');
+    expect(requests.filter((entry) => entry.method === 'POST')).toHaveLength(0);
+    window.document.querySelector<HTMLButtonElement>('#experience-review-close')?.click();
+    expect(dialog.open).toBe(false);
+    expect(player.parentNode).toBe(originalParent);
+    expect(player.nextSibling).toBe(originalNext);
+    expect(window.document.activeElement).toBe(button);
+    expect(window.document.querySelector<HTMLElement>('#policy-trial-controls')?.hidden).toBe(
+      false,
+    );
+    button.click();
+    await vi.waitFor(() => expect(dialog.open).toBe(true));
+    expect(dialog.querySelector('#replay-player')).toBe(player);
+    dialog.dispatchEvent(new window.Event('cancel', { cancelable: true }));
+    expect(dialog.open).toBe(false);
+    expect(player.parentNode).toBe(originalParent);
+    expect(window.document.activeElement).toBe(button);
+    recordMessage();
+    expect(window.document.querySelector('#onboard-count')?.textContent).toBe('2 / 4');
+    expect(errors).toEqual([]);
+  });
+
+  it('stops unfinished local playback on Escape and restores the original player without completing experience', async () => {
+    const { window, requests, errors } = await boot();
+    const player = window.document.querySelector('#replay-player')!;
+    const originalParent = player.parentNode;
+    const originalNext = player.nextSibling;
+    const button = window.document.querySelector<HTMLButtonElement>('#next-action-button')!;
+    const dialog = window.document.querySelector<HTMLDialogElement>('#experience-review-dialog')!;
+    const recording = Array.from({ length: 12 }, (_, index) =>
+      JSON.stringify({ time: index * 0.02, observation: [index], action: [index], reward: 0 }),
+    ).join('\n');
+    window.dispatchEvent(
+      new window.MessageEvent('message', {
+        origin: window.location.origin,
+        source: window.document.querySelector<HTMLIFrameElement>('#simulator-frame')!
+          .contentWindow as never,
+        data: {
+          type: 'rdk-microduck-recording-ready',
+          format: 'microduck-trajectory-v1',
+          text: recording,
+          sampleCount: 12,
+        },
+      }),
+    );
+    button.click();
+    await vi.waitFor(() => expect(dialog.open).toBe(true));
+    window.document.querySelector<HTMLButtonElement>('#replay-play-button')?.click();
+    expect(window.eval('__workbenchState.replay.timer')).not.toBeNull();
+    dialog.dispatchEvent(new window.Event('cancel', { cancelable: true }));
+    expect(dialog.open).toBe(false);
+    expect(window.eval('__workbenchState.replay.timer')).toBeNull();
+    expect(player.parentNode).toBe(originalParent);
+    expect(player.nextSibling).toBe(originalNext);
+    expect(window.document.activeElement).toBe(button);
+    await new Promise((resolve) => setTimeout(resolve, 260));
+    expect(window.document.querySelector('#onboard-count')?.textContent).toBe('2 / 4');
+    expect(requests.filter((entry) => entry.method === 'POST')).toHaveLength(0);
+    expect(errors).toEqual([]);
+  });
+
+  it('closes an open recording review and releases its private evidence when the account changes', async () => {
+    const fixture = { accountId: 'account-a' };
+    const { window, errors } = await boot(fixture);
+    const player = window.document.querySelector('#replay-player')!;
+    const originalParent = player.parentNode;
+    const source =
+      window.document.querySelector<HTMLIFrameElement>('#simulator-frame')!.contentWindow!;
+    window.dispatchEvent(
+      new window.MessageEvent('message', {
+        origin: window.location.origin,
+        source: source as never,
+        data: {
+          type: 'rdk-microduck-recording-ready',
+          format: 'microduck-trajectory-v1',
+          text: [0, 0.02, 0.04]
+            .map((time) => JSON.stringify({ time, observation: [time], action: [time] }))
+            .join('\n'),
+        },
+      }),
+    );
+    window.document.querySelector<HTMLButtonElement>('#next-action-button')?.click();
+    const dialog = window.document.querySelector<HTMLDialogElement>('#experience-review-dialog')!;
+    await vi.waitFor(() => expect(dialog.open).toBe(true));
+    fixture.accountId = 'account-b';
+    await window.eval('loadOverview({ quiet: true })');
+    expect(dialog.open).toBe(false);
+    expect(player.parentNode).toBe(originalParent);
+    expect(window.eval('__workbenchState.reviewedRecording')).toBeNull();
+    expect(window.eval('currentTelemetry()')).toBeNull();
+    expect(window.eval('__workbenchState.replay.frames.length')).toBe(0);
+    expect(errors).toEqual([]);
+  });
+
+  it('does not apply another device preflight or compatibility to the selected device', async () => {
+    const { window } = await boot();
+    window.eval(
+      '__workbenchState.startIntent="device"; __workbenchState.overview.devices=[{id:"board-b",status:"connected",boardPlatform:"rdk-s100"}]; __workbenchState.selectedDeviceId="board-b"; __workbenchState.overview.deployments=[{id:"preflight-a",modelId:"model-1",deviceId:"board-a",status:"ready"}]; __workbenchState.compatibility=[{platformId:"rdk-x5",deployable:true}]; renderNextAction(); renderOnboardChecklist();',
+    );
+    expect(
+      window.document.querySelector('#next-action-button')?.getAttribute('data-start-action'),
+    ).toBe('model-check');
+    expect(
+      window.document
+        .querySelector('[data-onboard-step="deploy"]')
+        ?.classList.contains('is-complete'),
+    ).toBe(false);
+    expect(
+      window.document
+        .querySelector('[data-onboard-step="evaluate"]')
+        ?.classList.contains('is-complete'),
+    ).toBe(false);
+  });
+
+  it('keeps auxiliary project state and summary during a silent refresh', async () => {
+    const { window } = await boot({ projects: [project()] });
+    const before = window.eval('__workbenchState.workspaceSummary');
+    expect(before).toBeTruthy();
+    await window.eval('loadOverview({ silent: true })');
+    expect(window.eval('__workbenchState.workspaceSummary')).toBe(before);
+    expect(window.eval('__workbenchState.projectsLoadError')).toBe(false);
+    expect(window.document.querySelector('#project-context-note')?.textContent).not.toContain(
+      '暂不可用',
+    );
+  });
+
+  it('keeps the GPU form locked until one submission settles', async () => {
+    const { window } = await boot();
+    const originalFetch = window.fetch;
+    let release!: (response: Response) => void;
+    let saves = 0;
+    window.fetch = vi.fn((input, init) => {
+      if (String(input).endsWith('/compute-resources') && init?.method === 'POST') {
+        saves += 1;
+        return new Promise<Response>((resolve) => {
+          release = resolve;
+        });
+      }
+      return originalFetch(input, init);
+    });
+    const form = window.document.querySelector<HTMLFormElement>('#compute-resource-form')!;
+    form.dispatchEvent(new window.Event('submit', { bubbles: true, cancelable: true }));
+    form.dispatchEvent(new window.Event('submit', { bubbles: true, cancelable: true }));
+    expect(saves).toBe(1);
+    expect(form.getAttribute('aria-busy')).toBe('true');
+    expect(
+      window.document.querySelector<HTMLButtonElement>('#compute-resource-save')?.disabled,
+    ).toBe(true);
+    expect(
+      window.document.querySelector<HTMLInputElement>('#compute-resource-name')?.disabled,
+    ).toBe(true);
+    release(
+      new Response(JSON.stringify({ ok: true }), {
+        headers: { 'content-type': 'application/json' },
+      }),
+    );
+    await vi.waitFor(() => expect(form.getAttribute('aria-busy')).toBe('false'));
+    expect(
+      window.document.querySelector<HTMLButtonElement>('#compute-resource-save')?.textContent,
+    ).toBe('添加 GPU');
+    expect(
+      window.document.querySelector<HTMLInputElement>('#compute-resource-name')?.disabled,
+    ).toBe(false);
+  });
+
+  it('shows an error with retry instead of an empty GPU collection after a failed load', async () => {
+    const { window } = await boot({ failOverview: true });
+    const list = window.document.querySelector('#compute-resource-list')!;
+    expect(list.querySelector('.ui-state-error')).toBeTruthy();
+    expect(list.textContent).not.toContain('还没有接入 GPU');
+    expect(list.querySelector('button')?.textContent).toContain('重新连接');
+  });
+
+  it('makes the narrow sidebar modal and restores focus after backdrop dismissal', async () => {
+    const { window } = await boot();
+    Object.assign(window, { matchMedia: () => ({ matches: true }) });
+    const toggle = window.document.querySelector<HTMLButtonElement>('#sidebar-toggle')!;
+    toggle.click();
+    expect(window.document.querySelector('#main-content')?.hasAttribute('inert')).toBe(true);
+    expect(window.document.querySelector('#platform-sidebar')?.getAttribute('aria-modal')).toBe(
+      'true',
+    );
+    window.document.querySelector<HTMLElement>('#sidebar-backdrop')?.click();
+    expect(window.document.activeElement).toBe(toggle);
+    expect(window.document.querySelector('#main-content')?.hasAttribute('inert')).toBe(false);
+  });
+
+  it('keeps GPU action focus when background data has not changed', async () => {
+    const { window } = await boot();
+    window.eval(
+      '__workbenchState.overview.computeResources = [{ id: "gpu-1", name: "GPU", status: "online" }]; renderComputeResources();',
+    );
+    const edit = window.document.querySelector<HTMLButtonElement>('[data-resource-action="edit"]')!;
+    edit.focus();
+    window.eval('renderComputeResources()');
+    expect(window.document.activeElement).toBe(edit);
+    expect(edit.isConnected).toBe(true);
+  });
+
+  it('preserves the focused GPU action while checking and after the request settles', async () => {
+    const { window } = await boot();
+    const resource = { id: 'gpu-1', name: 'GPU', status: 'online' };
+    window.eval(
+      `__workbenchState.overview.computeResources = ${JSON.stringify([resource])}; renderComputeResources();`,
+    );
+    const originalFetch = window.fetch;
+    let release!: (response: Response) => void;
+    window.fetch = vi.fn(async (input, init) => {
+      if (String(input).endsWith('/compute-resources/gpu-1/test')) {
+        return new Promise<Response>((resolve) => {
+          release = resolve;
+        });
+      }
+      const response = await originalFetch(input, init);
+      if (String(input).includes('/overview')) {
+        const payload = await response.json();
+        payload.computeResources = [resource];
+        return new Response(JSON.stringify(payload), {
+          headers: { 'content-type': 'application/json' },
+        });
+      }
+      return response;
+    });
+    const check = window.document.querySelector<HTMLButtonElement>(
+      '[data-resource-action="test"]',
+    )!;
+    check.focus();
+    check.click();
+    expect(window.document.activeElement).toBe(check);
+    expect(check.getAttribute('aria-disabled')).toBe('true');
+    release(
+      new Response(JSON.stringify({ connected: true }), {
+        headers: { 'content-type': 'application/json' },
+      }),
+    );
+    await vi.waitFor(() => expect(check.getAttribute('aria-disabled')).toBe('false'));
+    expect(window.document.activeElement).toBe(check);
+  });
+
+  it('queues a fresh foreground load after a pending background snapshot', async () => {
+    const { window } = await boot();
+    const originalFetch = window.fetch;
+    let release!: (response: Response) => void;
+    let loads = 0;
+    const resource = { id: 'gpu-new', name: '新 GPU', status: 'online' };
+    window.fetch = vi.fn(async (input, init) => {
+      if (String(input).includes('/overview')) {
+        loads += 1;
+        if (loads === 1)
+          return new Promise<Response>((resolve) => {
+            release = resolve;
+          });
+        const payload = await (await originalFetch(input, init)).json();
+        payload.computeResources = [resource];
+        return new Response(JSON.stringify(payload), {
+          headers: { 'content-type': 'application/json' },
+        });
+      }
+      return originalFetch(input, init);
+    });
+    const background = window.eval('loadOverview({ silent: true })');
+    const foreground = window.eval('loadOverview({ quiet: true })');
+    expect(loads).toBe(1);
+    release(
+      new Response(JSON.stringify(overview()), { headers: { 'content-type': 'application/json' } }),
+    );
+    await Promise.all([background, foreground]);
+    expect(loads).toBe(2);
+    expect(window.document.querySelector('#compute-resource-list')?.textContent).toContain(
+      '新 GPU',
+    );
+  });
+
+  it('keeps the account menu open through a data render and skips hidden top-menu items', async () => {
+    const { window } = await boot();
+    window.eval(
+      '__workbenchState.overview.identity = { displayName: "用户", accountId: "user-1" }; renderIntegrations();',
+    );
+    window.document.querySelector<HTMLButtonElement>('#account-avatar')?.click();
+    const logout = window.document.querySelector<HTMLButtonElement>('#account-pill-logout')!;
+    logout.focus();
+    window.eval('renderIntegrations()');
+    expect(window.document.querySelector<HTMLElement>('#account-menu')?.hidden).toBe(false);
+    expect(window.document.activeElement).toBe(logout);
+    const trigger = window.document.querySelector<HTMLButtonElement>('#top-menu-button')!;
+    trigger.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'ArrowUp', bubbles: true }));
+    expect(window.document.activeElement?.id).toBe('refresh-button');
+    window.document.dispatchEvent(
+      new window.KeyboardEvent('keydown', { key: 'Escape', bubbles: true }),
+    );
+    expect(window.document.activeElement).toBe(trigger);
+  });
 
   it('boots the real app bundle and changes one visible workspace view at a time', async () => {
     const { window, errors } = await boot();
@@ -1215,7 +1649,7 @@ describe('Sim2Real workbench DOM behavior', () => {
     }
     select.value = 'walk';
     select.dispatchEvent(new window.Event('change', { bubbles: true }));
-    expect(new URL(iframe.src).pathname).toBe('/sim2real/mujoco/microduck/');
+    expect(new URL(iframe.src).pathname).toBe('/mujoco/microduck/');
     expect(errors).toEqual([]);
   });
 

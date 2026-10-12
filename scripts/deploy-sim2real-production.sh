@@ -5,20 +5,21 @@
 # 且未重启 worker 服务——问题潜伏到下一次重启才爆发。本脚本把部署固化为
 # 不可跳过的机器步骤：构建 → 组包（含补齐 linux/x64 原生可选依赖）→ 上传
 # → 服务端解压（engines 由服务端历代拷贝，绝不用 Mac 构建覆盖）→ **按
-# systemd ExecStart 逐一校验新 release 的入口文件** → 切软链 → 重启双服务
+# systemd ExecStart 逐一校验新 release 的入口文件** → 切软链 → 重启相关服务
 # → 健康检查，失败自动回滚。
 #
 # 用法：
 #   scripts/deploy-sim2real-production.sh                # 完整部署
 #   scripts/deploy-sim2real-production.sh --skip-build   # 复用已有 dist-server
 #   DEPLOY_HOST=user@other-host scripts/...              # 覆盖目标主机
+#   DEPLOY_NODE_BIN=/absolute/path/to/node scripts/...   # 覆盖远端 Node
 set -euo pipefail
 
 HOST="${DEPLOY_HOST:-root@47.110.142.255}"
 BASE=/opt/sim2real-web
-NODE_BIN=/opt/node-v22.16.0-linux-x64/bin/node
 WEB_UNIT=sim2real-web.service
 WORKER_UNIT=sim2real-mock-worker.service
+CPU_WORKER_UNIT=sim2real-cpu-worker.service
 SKIP_BUILD=0
 [[ "${1:-}" == "--skip-build" ]] && SKIP_BUILD=1
 
@@ -72,8 +73,49 @@ else
 fi
 
 cd "$(dirname "$0")/.."
+if [ -n "$(git status --porcelain --untracked-files=all)" ]; then
+  echo "!! 工作区含未提交或未跟踪文件；先提交已验收的发布候选，再部署。" >&2
+  exit 1
+fi
 SHA=$(git rev-parse --short HEAD)
 RELEASE="robot-learning-$(date +%Y%m%d)-$SHA"
+
+# Release 不可覆盖。先检查目标，解压时再用 mkdir 原子拒绝竞争者。
+# 只打印 Node 路径和 unit 名；不读取或输出 EnvironmentFile 的凭据。
+DEPLOY_INFO=$(ssh -o BatchMode=yes "$HOST" bash -s "$BASE" "$RELEASE" "$WEB_UNIT" "$WORKER_UNIT" "$CPU_WORKER_UNIT" "${DEPLOY_NODE_BIN:-}" <<'REMOTE'
+set -euo pipefail
+BASE=$1; RELEASE=$2; WEB_UNIT=$3; WORKER_UNIT=$4; CPU_WORKER_UNIT=$5; NODE_BIN=${6:-}
+REL=$BASE/releases/$RELEASE
+if [ -e "$REL" ] || [ -L "$REL" ]; then
+  echo "FATAL: release already exists; refusing to overwrite: $RELEASE" >&2
+  exit 1
+fi
+if [ -z "$NODE_BIN" ]; then
+  pid=$(systemctl show "$WEB_UNIT" -p MainPID --value)
+  if [ -n "$pid" ] && [ "$pid" != "0" ]; then
+    NODE_BIN=$(readlink -f "/proc/$pid/exe")
+  else
+    NODE_BIN=$(systemctl show "$WEB_UNIT" -p ExecStart --value | sed -n 's/.*path=\([^ ;]*\).*/\1/p')
+  fi
+fi
+if [[ "$NODE_BIN" != /* ]] || [[ "${NODE_BIN##*/}" != node && "${NODE_BIN##*/}" != nodejs ]]; then
+  echo "FATAL: cannot resolve the web service Node executable; set DEPLOY_NODE_BIN" >&2
+  exit 1
+fi
+[ -x "$NODE_BIN" ] || { echo "FATAL: remote Node executable is unavailable" >&2; exit 1; }
+UNITS="$WEB_UNIT $WORKER_UNIT"
+if [ "$(systemctl show "$CPU_WORKER_UNIT" -p LoadState --value)" != "not-found" ]; then
+  UNITS="$UNITS $CPU_WORKER_UNIT"
+fi
+printf '%s\n%s\n' "$NODE_BIN" "$UNITS"
+REMOTE
+)
+NODE_BIN=$(printf '%s\n' "$DEPLOY_INFO" | sed -n '1p')
+UNITS=$(printf '%s\n' "$DEPLOY_INFO" | sed -n '2p')
+[ -n "$NODE_BIN" ] && [ -n "$UNITS" ] || { echo "!! 发布目标预检结果不完整" >&2; exit 1; }
+# Pass each controlled unit name separately: SSH serializes its command as
+# shell text, so a quoted local string containing spaces is not one remote arg.
+read -r -a DEPLOY_UNITS <<< "$UNITS"
 STAGING=$(mktemp -d)/$RELEASE
 
 echo "== [1/7] 构建 ($SHA) =="
@@ -97,6 +139,10 @@ for entry in "$STAGING"/dist-server/services/sim2real-web/*.mjs; do
 done
 
 echo "== [3/7] 打包上传 =="
+if [ -n "$(git status --porcelain --untracked-files=all)" ]; then
+  echo "!! 构建期间工作区发生变化；停止发布，重新验收并提交候选。" >&2
+  exit 1
+fi
 # 固定名 + 预删除：macOS mktemp 对「尾部含 .tar.gz 后缀」的模板会按字面
 # 文件名创建，第二次运行必然 File exists。
 TARBALL="/tmp/release-$SHA.tar.gz"
@@ -109,7 +155,7 @@ ssh -o BatchMode=yes "$HOST" bash -s "$BASE" "$RELEASE" "$(basename "$TARBALL")"
 set -euo pipefail
 BASE=$1; RELEASE=$2; TARBALL=$3; NODE_BIN=$4
 REL=$BASE/releases/$RELEASE
-rm -rf "$REL" && mkdir -p "$REL"
+mkdir "$REL" || { echo "FATAL: release already exists; refusing to overwrite: $RELEASE" >&2; exit 1; }
 # 包内含顶层 release 目录，strip 掉再解到目标路径。
 tar xzf "/tmp/$TARBALL" -C "$REL" --strip-components=1 2>/dev/null
 # engines 是 Linux venv，只能由服务端历代拷贝，绝不能被上传覆盖。
@@ -131,13 +177,13 @@ rm -f "/tmp/$TARBALL"
 REMOTE
 
 echo "== [5/7] 入口文件预检（按 systemd ExecStart 逐一核对）=="
-ssh -o BatchMode=yes "$HOST" bash -s "$BASE" "$RELEASE" "$WEB_UNIT $WORKER_UNIT" <<'REMOTE'
+ssh -o BatchMode=yes "$HOST" bash -s "$BASE" "$RELEASE" "${DEPLOY_UNITS[@]}" <<'REMOTE'
 set -euo pipefail
-BASE=$1; RELEASE=$2; UNITS=$3
+BASE=$1; RELEASE=$2; shift 2
 MISSING=0
-for unit in $UNITS; do
-  exec_start=$(systemctl cat "$unit" | sed -n 's/^ExecStart=//p' | head -1)
-  # ExecStart 形如 "/opt/node.../node /opt/sim2real-web/current/<script> [args]"。
+for unit in "$@"; do
+  exec_start=$(systemctl show "$unit" -p ExecStart --value)
+  # 使用已合并 drop-in 的 ExecStart，而非 systemctl cat 中可能已被覆盖的第一行。
   # 在所有 token 中找经 current 软链的脚本路径（第一个 token 是 node 二进制，
   # 不能只取首 token，否则预检空转）。
   script=""
@@ -146,7 +192,11 @@ for unit in $UNITS; do
       "$BASE/current/"*) script=$token; break;;
     esac
   done
-  [ -z "$script" ] && continue
+  if [ -z "$script" ]; then
+    echo "预检失败：$unit 的有效 ExecStart 没有 current 下的入口文件" >&2
+    MISSING=1
+    continue
+  fi
   rel=${script#"$BASE/current/"}
   if [ ! -f "$BASE/releases/$RELEASE/$rel" ]; then
     echo "预检失败：$unit 的入口文件在新 release 中缺失：$rel" >&2
@@ -159,37 +209,50 @@ echo "入口文件预检通过。"
 
 rollback() {
   echo "!! 部署验证失败，自动回滚到上一 release 并重启服务" >&2
-  ssh -o BatchMode=yes "$HOST" bash -s "$BASE" "$PREV_RELEASE" "$WEB_UNIT $WORKER_UNIT" <<'REMOTE'
+  ssh -o BatchMode=yes "$HOST" bash -s "$BASE" "$PREV_RELEASE" "${DEPLOY_UNITS[@]}" <<'REMOTE'
 set -euo pipefail
-BASE=$1; PREV=$2; UNITS=$3
+BASE=$1; PREV=$2; shift 2
 ln -sfn "releases/$PREV" "$BASE/current"
-for unit in $UNITS; do systemctl restart "$unit"; done
+for unit in "$@"; do systemctl restart "$unit"; done
 sleep 5
-for unit in $UNITS; do systemctl is-active "$unit"; done
+for unit in "$@"; do systemctl is-active "$unit"; done
 REMOTE
 }
 
 PREV_RELEASE=$(ssh -o BatchMode=yes "$HOST" "basename \$(readlink -f $BASE/current)")
 
 echo "== [6/7] 切换软链 + 重启服务 =="
-ssh -o BatchMode=yes "$HOST" bash -s "$BASE" "$RELEASE" "$WEB_UNIT $WORKER_UNIT" <<'REMOTE'
+if ! ssh -o BatchMode=yes "$HOST" bash -s "$BASE" "$RELEASE" "${DEPLOY_UNITS[@]}" <<'REMOTE'
 set -euo pipefail
-BASE=$1; RELEASE=$2; UNITS=$3
+BASE=$1; RELEASE=$2; shift 2
 ln -sfn "releases/$RELEASE" "$BASE/current"
-for unit in $UNITS; do systemctl restart "$unit"; done
+for unit in "$@"; do systemctl restart "$unit"; done
 sleep 6
-for unit in $UNITS; do systemctl is-active "$unit"; done
+for unit in "$@"; do systemctl is-active "$unit"; done
 REMOTE
+then
+  rollback
+  exit 1
+fi
 
 echo "== [7/7] 健康检查（失败自动回滚）=="
-if ! ssh -o BatchMode=yes "$HOST" bash -s <<'REMOTE'
+if ! ssh -o BatchMode=yes "$HOST" bash -s "${DEPLOY_UNITS[@]}" <<'REMOTE'
 set -euo pipefail
-code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 http://127.0.0.1:18102/healthz)
-[ "$code" = "200" ] || { echo "healthz=$code" >&2; exit 1; }
-worker=$(curl -s -o /dev/null -w '%{http_code}' --max-time 8 -X POST \
-  http://127.0.0.1:19090/train -H 'content-type: application/json' -d '{}')
-[ "$worker" != "000" ] || { echo "worker 不可达" >&2; exit 1; }
-echo "healthz=$code worker=$worker(400=正常拒绝=活着)"
+for endpoint in healthz readyz; do
+  code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 "http://127.0.0.1:18102/$endpoint")
+  [ "$code" = "200" ] || { echo "$endpoint=$code" >&2; exit 1; }
+  echo "$endpoint=$code"
+done
+for unit in "$@"; do
+  case "$unit" in
+    sim2real-mock-worker.service) port=19090;;
+    sim2real-cpu-worker.service) port=19091;;
+    *) continue;;
+  esac
+  code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 8 "http://127.0.0.1:$port/healthz")
+  [ "$code" = "200" ] || { echo "$unit healthz=$code" >&2; exit 1; }
+  echo "$unit healthz=$code"
+done
 REMOTE
 then
   rollback

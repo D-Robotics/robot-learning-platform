@@ -202,7 +202,12 @@ export async function probeSim2Real({
   check(
     checks,
     'metrics-redaction',
-    !/(authorization|cookie|token|secret|password)/i.test(metricsText),
+    // The public palette path contains "token" but is not a credential.
+    // Exclude only this exact Prometheus route label; keep scanning every
+    // other label, value and comment, including leaks in the same body.
+    !/(authorization|cookie|token|secret|password)/i.test(
+      metricsText.replace(/([,{]\s*route=)"\/tokens\.css"(?=\s*[,}])/g, '$1""'),
+    ),
     '指标输出未发现凭据字段',
     '不要把请求头、token 或 secret 加入 Prometheus 标签/值',
   );
