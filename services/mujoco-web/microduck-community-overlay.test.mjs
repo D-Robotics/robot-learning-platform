@@ -150,6 +150,56 @@ test('task bridge waits for runtime, rejects foreign messages and sets up a kick
   );
 });
 
+test('reading the introduction beyond the startup deadline still becomes ready after the real runtime appears', async (t) => {
+  const fixture = bridgeFixture();
+  t.after(() => fixture.dom.window.close());
+  let now = 0;
+  Object.defineProperty(fixture.window.performance, 'now', { value: () => now });
+  fixture.window.document.body.textContent = 'WADDLE IN';
+  fixture.window.document.body.innerText = 'WADDLE IN';
+  fixture.send({ type: 'rdk-simulator-task', taskId: 'walk' });
+  now = 60_000;
+  await new Promise((resolve) => setTimeout(resolve, 150));
+  assert.equal(
+    fixture.messages.some((message) => message.phase === 'failed'),
+    false,
+  );
+  assert.ok(
+    fixture.messages.some(
+      (message) => message.phase === 'loading' && /开始仿真/.test(message.message),
+    ),
+  );
+  // Clicking start may still compile WASM before window.rl is exposed.
+  fixture.window.document.body.textContent = 'Compiling simulator';
+  fixture.window.document.body.innerText = 'Compiling simulator';
+  now = 120_000;
+  await new Promise((resolve) => setTimeout(resolve, 150));
+  assert.equal(
+    fixture.messages.some((message) => message.phase === 'failed'),
+    false,
+  );
+  fixture.window.rl = policyRuntime();
+  await new Promise((resolve) => setTimeout(resolve, 150));
+  assert.equal(fixture.window.__microduckSimulator.ready, true);
+  assert.ok(
+    fixture.messages.some((message) => message.phase === 'ready' && message.taskId === 'walk'),
+  );
+});
+
+test('the preparation deadline still reports a runtime that never unlocks', async (t) => {
+  const fixture = bridgeFixture(policyRuntime({ inputLocked: true }));
+  t.after(() => fixture.dom.window.close());
+  let now = 0;
+  Object.defineProperty(fixture.window.performance, 'now', { value: () => now });
+  fixture.send({ type: 'rdk-simulator-task', taskId: 'walk' });
+  now = 15_001;
+  await new Promise((resolve) => setTimeout(resolve, 150));
+  assert.ok(
+    fixture.messages.some((message) => message.phase === 'failed' && /15 秒/.test(message.message)),
+  );
+  assert.equal(fixture.window.__microduckSimulator.ready, false);
+});
+
 test('recovery perturbation is explicit and recordings retain task and complete state', async (t) => {
   const calls = [];
   const fixture = bridgeFixture({

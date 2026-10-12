@@ -481,7 +481,8 @@
     simulatorContext.active = active === true;
     if (simulatorContext.active) {
       stopSimulatorPause();
-      if (simulatorContext.pending) simulatorContext.pending.startedAt = performance.now();
+      if (simulatorContext.pending?.startedAt !== null && simulatorContext.pending)
+        simulatorContext.pending.startedAt = performance.now();
       pumpTask();
     } else {
       if (recorder.active) stopRecording('仿真视图已离开，录制已结束');
@@ -506,7 +507,7 @@
     if (!preserveTrial) stopPolicyRun();
     stopReplayState();
     simulatorContext.ready = false;
-    simulatorContext.pending = { taskId, startedAt: performance.now(), reset: false };
+    simulatorContext.pending = { taskId, startedAt: null, waitStage: null, reset: false };
     taskState(taskId, 'loading', '正在准备任务场景');
     pumpTask();
     return true;
@@ -520,6 +521,33 @@
     if (!simulatorContext.active) return;
     const current = runtime();
     try {
+      // The introduction is user-paced, and WASM does not expose window.rl
+      // until initialization finishes. Neither wait consumes task setup time.
+      const waitStage = isLanding()
+        ? 'intro'
+        : !current || typeof current.resetSim !== 'function'
+          ? 'runtime'
+          : null;
+      if (waitStage) {
+        pending.startedAt = null;
+        if (pending.waitStage !== waitStage) {
+          pending.waitStage = waitStage;
+          taskState(
+            pending.taskId,
+            'loading',
+            waitStage === 'intro'
+              ? '等待开始仿真，请点击画面中的“开始仿真”'
+              : '正在加载仿真引擎，加载完成后会自动准备任务',
+          );
+        }
+        simulatorContext.timer = setTimeout(pumpTask, 100);
+        return;
+      }
+      if (pending.startedAt === null) {
+        pending.startedAt = performance.now();
+        pending.waitStage = null;
+        taskState(pending.taskId, 'loading', '正在准备任务场景');
+      }
       if (performance.now() - pending.startedAt > 15_000)
         throw new Error('仿真引擎未在 15 秒内就绪');
       if (current && typeof current.resetSim === 'function') {
