@@ -549,7 +549,13 @@ describe('standalone Sim2Real health and optional simulator surface', () => {
     const html = await fetch(`${baseUrl}/`).then((response) => response.text());
     const publicRoot = fileURLToPath(new URL('./public/', import.meta.url));
     let precedingScript = -1;
-    for (const script of ['ui-components', 'first-use-core', 'app'] as const) {
+    for (const script of [
+      'telemetry-core',
+      'ui-components',
+      'first-use-core',
+      'relay-training',
+      'app',
+    ] as const) {
       const bytes = await fs.readFile(path.join(publicRoot, `${script}.js`));
       const filename = contentHashedWorkbenchScriptName(script, bytes);
       const position = html.indexOf(`<script defer src="./${filename}"></script>`);

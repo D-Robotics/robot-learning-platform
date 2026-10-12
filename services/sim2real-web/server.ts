@@ -511,7 +511,13 @@ export function configuredPublicBasePath(): string {
   return normalizePublicBasePath(process.env.RDK_SIM2REAL_PUBLIC_BASE_PATH);
 }
 
-const HASHED_WORKBENCH_SCRIPTS = ['ui-components', 'first-use-core', 'app'] as const;
+const HASHED_WORKBENCH_SCRIPTS = [
+  'telemetry-core',
+  'ui-components',
+  'first-use-core',
+  'relay-training',
+  'app',
+] as const;
 type HashedWorkbenchScript = (typeof HASHED_WORKBENCH_SCRIPTS)[number];
 
 /** A pathname identifies the exact script bytes, independent of query caches. */
@@ -535,7 +541,7 @@ function sendIndexDocument(response: express.Response): void {
     const html = readFileSync(path.join(PUBLIC_ROOT, 'index.html'), 'utf8')
       .replace('__RDK_SIM2REAL_BASE_PATH__', configuredPublicBasePath())
       .replace(
-        /(<script\b[^>]*\bsrc="\.\/)(ui-components|first-use-core|app)\.js(?:\?[^"<>]*)?("[^>]*>)/g,
+        /(<script\b[^>]*\bsrc="\.\/)(telemetry-core|ui-components|first-use-core|relay-training|app)\.js(?:\?[^"<>]*)?("[^>]*>)/g,
         (_match, prefix: string, script: HashedWorkbenchScript, suffix: string) =>
           `${prefix}${currentWorkbenchScriptName(script)}${suffix}`,
       );
@@ -827,7 +833,10 @@ export function createSim2RealWebApp(): Express {
       next();
       return;
     }
-    const match = /^\/(ui-components|first-use-core|app)\.([^/]+)\.js$/.exec(request.path);
+    const match =
+      /^\/(telemetry-core|ui-components|first-use-core|relay-training|app)\.([^/]+)\.js$/.exec(
+        request.path,
+      );
     if (!match) {
       next();
       return;
