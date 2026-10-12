@@ -27,6 +27,8 @@ const invoke = (cmd, args, cwd) => {
 
 // All remote shell bodies execute unchanged in a temporary filesystem. Only
 // the fixed production root argument is mapped; no real SSH or HTTP is used.
+// SSH sends command text to the remote shell: empty arguments disappear and
+// local arguments containing spaces are parsed again. Preserve that boundary.
 const commandDouble = `#!${process.execPath}
 import fs from 'node:fs';
 import path from 'node:path';
@@ -78,7 +80,7 @@ if(name==='ssh') {
       fs.mkdirSync(base+'/releases/'+command[3]);
       fs.writeFileSync(base+'/releases/'+command[3]+'/keep','immutable');
     }
-    const result=spawnSync('/bin/bash',command.slice(1),{input:body,encoding:'utf8',env:process.env});
+    const result=spawnSync('/bin/bash',['-c',command.join(' ')],{input:body,encoding:'utf8',env:process.env});
     process.stdout.write(result.stdout||'');process.stderr.write(result.stderr||'');
     process.exit(result.status??1);
   }
@@ -224,7 +226,17 @@ try {
     );
     assert.match(check.commands, /node --check .*server\.js/);
     assert.doesNotMatch(check.commands, /curl .*POST|19090\/train/);
+    for (const unit of ['sim2real-web.service', 'sim2real-mock-worker.service']) {
+      assert.match(check.commands, new RegExp(`systemctl show ${unit} -p ExecStart --value`));
+      assert.match(check.commands, new RegExp(`systemctl restart ${unit}`));
+    }
+    assert.match(check.commands, /18102\/readyz/);
+    assert.match(check.commands, /19090\/healthz/);
     if (cpu) {
+      assert.match(
+        check.commands,
+        /systemctl show sim2real-cpu-worker\.service -p ExecStart --value/,
+      );
       assert.match(check.commands, /systemctl restart sim2real-cpu-worker\.service/);
       assert.match(check.commands, /19091\/healthz/);
     } else {

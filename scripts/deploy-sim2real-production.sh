@@ -84,7 +84,7 @@ RELEASE="robot-learning-$(date +%Y%m%d)-$SHA"
 # 只打印 Node 路径和 unit 名；不读取或输出 EnvironmentFile 的凭据。
 DEPLOY_INFO=$(ssh -o BatchMode=yes "$HOST" bash -s "$BASE" "$RELEASE" "$WEB_UNIT" "$WORKER_UNIT" "$CPU_WORKER_UNIT" "${DEPLOY_NODE_BIN:-}" <<'REMOTE'
 set -euo pipefail
-BASE=$1; RELEASE=$2; WEB_UNIT=$3; WORKER_UNIT=$4; CPU_WORKER_UNIT=$5; NODE_BIN=$6
+BASE=$1; RELEASE=$2; WEB_UNIT=$3; WORKER_UNIT=$4; CPU_WORKER_UNIT=$5; NODE_BIN=${6:-}
 REL=$BASE/releases/$RELEASE
 if [ -e "$REL" ] || [ -L "$REL" ]; then
   echo "FATAL: release already exists; refusing to overwrite: $RELEASE" >&2
@@ -113,6 +113,9 @@ REMOTE
 NODE_BIN=$(printf '%s\n' "$DEPLOY_INFO" | sed -n '1p')
 UNITS=$(printf '%s\n' "$DEPLOY_INFO" | sed -n '2p')
 [ -n "$NODE_BIN" ] && [ -n "$UNITS" ] || { echo "!! 发布目标预检结果不完整" >&2; exit 1; }
+# Pass each controlled unit name separately: SSH serializes its command as
+# shell text, so a quoted local string containing spaces is not one remote arg.
+read -r -a DEPLOY_UNITS <<< "$UNITS"
 STAGING=$(mktemp -d)/$RELEASE
 
 echo "== [1/7] 构建 ($SHA) =="
@@ -174,11 +177,11 @@ rm -f "/tmp/$TARBALL"
 REMOTE
 
 echo "== [5/7] 入口文件预检（按 systemd ExecStart 逐一核对）=="
-ssh -o BatchMode=yes "$HOST" bash -s "$BASE" "$RELEASE" "$UNITS" <<'REMOTE'
+ssh -o BatchMode=yes "$HOST" bash -s "$BASE" "$RELEASE" "${DEPLOY_UNITS[@]}" <<'REMOTE'
 set -euo pipefail
-BASE=$1; RELEASE=$2; UNITS=$3
+BASE=$1; RELEASE=$2; shift 2
 MISSING=0
-for unit in $UNITS; do
+for unit in "$@"; do
   exec_start=$(systemctl show "$unit" -p ExecStart --value)
   # 使用已合并 drop-in 的 ExecStart，而非 systemctl cat 中可能已被覆盖的第一行。
   # 在所有 token 中找经 current 软链的脚本路径（第一个 token 是 node 二进制，
@@ -206,26 +209,26 @@ echo "入口文件预检通过。"
 
 rollback() {
   echo "!! 部署验证失败，自动回滚到上一 release 并重启服务" >&2
-  ssh -o BatchMode=yes "$HOST" bash -s "$BASE" "$PREV_RELEASE" "$UNITS" <<'REMOTE'
+  ssh -o BatchMode=yes "$HOST" bash -s "$BASE" "$PREV_RELEASE" "${DEPLOY_UNITS[@]}" <<'REMOTE'
 set -euo pipefail
-BASE=$1; PREV=$2; UNITS=$3
+BASE=$1; PREV=$2; shift 2
 ln -sfn "releases/$PREV" "$BASE/current"
-for unit in $UNITS; do systemctl restart "$unit"; done
+for unit in "$@"; do systemctl restart "$unit"; done
 sleep 5
-for unit in $UNITS; do systemctl is-active "$unit"; done
+for unit in "$@"; do systemctl is-active "$unit"; done
 REMOTE
 }
 
 PREV_RELEASE=$(ssh -o BatchMode=yes "$HOST" "basename \$(readlink -f $BASE/current)")
 
 echo "== [6/7] 切换软链 + 重启服务 =="
-if ! ssh -o BatchMode=yes "$HOST" bash -s "$BASE" "$RELEASE" "$UNITS" <<'REMOTE'
+if ! ssh -o BatchMode=yes "$HOST" bash -s "$BASE" "$RELEASE" "${DEPLOY_UNITS[@]}" <<'REMOTE'
 set -euo pipefail
-BASE=$1; RELEASE=$2; UNITS=$3
+BASE=$1; RELEASE=$2; shift 2
 ln -sfn "releases/$RELEASE" "$BASE/current"
-for unit in $UNITS; do systemctl restart "$unit"; done
+for unit in "$@"; do systemctl restart "$unit"; done
 sleep 6
-for unit in $UNITS; do systemctl is-active "$unit"; done
+for unit in "$@"; do systemctl is-active "$unit"; done
 REMOTE
 then
   rollback
@@ -233,15 +236,14 @@ then
 fi
 
 echo "== [7/7] 健康检查（失败自动回滚）=="
-if ! ssh -o BatchMode=yes "$HOST" bash -s "$UNITS" <<'REMOTE'
+if ! ssh -o BatchMode=yes "$HOST" bash -s "${DEPLOY_UNITS[@]}" <<'REMOTE'
 set -euo pipefail
-UNITS=$1
 for endpoint in healthz readyz; do
   code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 "http://127.0.0.1:18102/$endpoint")
   [ "$code" = "200" ] || { echo "$endpoint=$code" >&2; exit 1; }
   echo "$endpoint=$code"
 done
-for unit in $UNITS; do
+for unit in "$@"; do
   case "$unit" in
     sim2real-mock-worker.service) port=19090;;
     sim2real-cpu-worker.service) port=19091;;
