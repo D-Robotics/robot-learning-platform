@@ -86,6 +86,12 @@ for (const intent of ['experience', 'device', 'model']) {
 }
 assert.match(
   html,
+  /<dialog[^>]*id="experience-review-dialog"[^>]*aria-labelledby="experience-review-title"/,
+  'local recording review needs an independently visible named native dialog',
+);
+assert.match(html, /id="experience-review-slot"/, 'local review must host the existing player');
+assert.match(
+  html,
   /<details[^>]*id="overview-advanced-evidence"/,
   'advanced evidence stays in an opt-in disclosure',
 );

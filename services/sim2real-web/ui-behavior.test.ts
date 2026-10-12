@@ -477,7 +477,12 @@ describe('Sim2Real workbench DOM behavior', () => {
   });
 
   it('completes experience only after the actual browser recording is played through, with no upload', async () => {
-    const { window, requests } = await boot();
+    const { window, requests, errors } = await boot();
+    const player = window.document.querySelector('#replay-player')!;
+    const originalParent = player.parentNode;
+    const originalNext = player.nextSibling;
+    const button = window.document.querySelector<HTMLButtonElement>('#next-action-button')!;
+    const dialog = window.document.querySelector<HTMLDialogElement>('#experience-review-dialog')!;
     const recording = [0, 0.02, 0.04]
       .map((time) => JSON.stringify({ time, observation: [time, 1], action: [time], reward: time }))
       .join('\n');
@@ -498,8 +503,14 @@ describe('Sim2Real workbench DOM behavior', () => {
       window.document.querySelector('#next-action-button')?.getAttribute('data-start-action'),
     ).toBe('replay-experience');
     expect(window.document.querySelector('#onboard-count')?.textContent).toBe('2 / 4');
-    window.document.querySelector<HTMLButtonElement>('#next-action-button')?.click();
-    await vi.waitFor(() => expect(window.document.body.dataset.activeView).toBe('evaluate'));
+    button.focus();
+    button.click();
+    await vi.waitFor(() => expect(dialog.open).toBe(true));
+    expect(window.document.body.dataset.activeView).toBe('overview');
+    expect(dialog.querySelector('#replay-player')).toBe(player);
+    expect(player.closest('.view-section')).toBeNull();
+    expect(window.document.querySelectorAll('#replay-player')).toHaveLength(1);
+    expect(window.document.activeElement?.id).toBe('replay-play-button');
     expect(window.document.querySelector<HTMLInputElement>('#replay-seek')?.disabled).toBe(false);
     const seek = window.document.querySelector<HTMLInputElement>('#replay-seek')!;
     expect(seek.max).toBe('2');
@@ -512,8 +523,61 @@ describe('Sim2Real workbench DOM behavior', () => {
     );
     expect(window.document.querySelector('#next-action-title')?.textContent).toContain('已完成');
     expect(requests.filter((entry) => entry.method === 'POST')).toHaveLength(0);
+    window.document.querySelector<HTMLButtonElement>('#experience-review-close')?.click();
+    expect(dialog.open).toBe(false);
+    expect(player.parentNode).toBe(originalParent);
+    expect(player.nextSibling).toBe(originalNext);
+    expect(window.document.activeElement).toBe(button);
+    expect(window.document.querySelector<HTMLElement>('#policy-trial-controls')?.hidden).toBe(
+      false,
+    );
+    button.click();
+    await vi.waitFor(() => expect(dialog.open).toBe(true));
+    expect(dialog.querySelector('#replay-player')).toBe(player);
+    dialog.dispatchEvent(new window.Event('cancel', { cancelable: true }));
+    expect(dialog.open).toBe(false);
+    expect(player.parentNode).toBe(originalParent);
+    expect(window.document.activeElement).toBe(button);
     recordMessage();
     expect(window.document.querySelector('#onboard-count')?.textContent).toBe('2 / 4');
+    expect(errors).toEqual([]);
+  });
+
+  it('stops unfinished local playback on Escape and restores the original player without completing experience', async () => {
+    const { window, requests, errors } = await boot();
+    const player = window.document.querySelector('#replay-player')!;
+    const originalParent = player.parentNode;
+    const originalNext = player.nextSibling;
+    const button = window.document.querySelector<HTMLButtonElement>('#next-action-button')!;
+    const dialog = window.document.querySelector<HTMLDialogElement>('#experience-review-dialog')!;
+    const recording = Array.from({ length: 12 }, (_, index) =>
+      JSON.stringify({ time: index * 0.02, observation: [index], action: [index], reward: 0 }),
+    ).join('\n');
+    window.dispatchEvent(
+      new window.MessageEvent('message', {
+        origin: window.location.origin,
+        data: {
+          type: 'rdk-microduck-recording-ready',
+          format: 'microduck-trajectory-v1',
+          text: recording,
+          sampleCount: 12,
+        },
+      }),
+    );
+    button.click();
+    await vi.waitFor(() => expect(dialog.open).toBe(true));
+    window.document.querySelector<HTMLButtonElement>('#replay-play-button')?.click();
+    expect(window.eval('__workbenchState.replay.timer')).not.toBeNull();
+    dialog.dispatchEvent(new window.Event('cancel', { cancelable: true }));
+    expect(dialog.open).toBe(false);
+    expect(window.eval('__workbenchState.replay.timer')).toBeNull();
+    expect(player.parentNode).toBe(originalParent);
+    expect(player.nextSibling).toBe(originalNext);
+    expect(window.document.activeElement).toBe(button);
+    await new Promise((resolve) => setTimeout(resolve, 260));
+    expect(window.document.querySelector('#onboard-count')?.textContent).toBe('2 / 4');
+    expect(requests.filter((entry) => entry.method === 'POST')).toHaveLength(0);
+    expect(errors).toEqual([]);
   });
 
   it('does not apply another device preflight or compatibility to the selected device', async () => {

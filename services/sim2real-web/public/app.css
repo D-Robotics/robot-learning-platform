@@ -2637,6 +2637,25 @@ h2 {
   background: rgba(28, 28, 26, 0.32);
   backdrop-filter: blur(3px);
 }
+.experience-review-dialog {
+  width: min(760px, calc(100vw - 24px));
+  max-height: calc(100dvh - 24px);
+  border-color: var(--line-strong);
+  color: var(--text);
+  background: var(--panel-raised);
+}
+.experience-review-dialog::backdrop {
+  background: color-mix(in srgb, var(--warm-ink) 55%, transparent);
+}
+.experience-review-note {
+  margin: 8px 0;
+  color: var(--muted);
+  font-size: var(--fs-body);
+  line-height: 1.6;
+}
+.experience-review-slot {
+  min-width: 0;
+}
 .confirm-run-note {
   margin: 0;
   font-size:var(--fs-meta);

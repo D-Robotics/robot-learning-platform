@@ -20,7 +20,7 @@
          theme x view screenshots). See services/sim2real-web/ui-layout-invariants.mjs
          for the guards that keep new overrides from re-introducing layering. -->
     <link rel="stylesheet" href="./tokens.css?v=3" />
-    <link rel="stylesheet" href="./app.css?v=55" />
+    <link rel="stylesheet" href="./app.css?v=56" />
   </head>
   <body>
     <a class="skip-link" href="#main-content">跳到主要内容</a>
@@ -2106,6 +2106,14 @@
           </button>
         </div>
       </div>
+    </dialog>
+    <dialog class="run-dialog experience-review-dialog" id="experience-review-dialog" aria-labelledby="experience-review-title" aria-describedby="experience-review-note">
+      <div class="run-dialog-heading">
+        <h2 id="experience-review-title">回看这段动作记录</h2>
+        <button class="button button-ghost button-small" id="experience-review-close" type="button">关闭</button>
+      </div>
+      <p class="experience-review-note" id="experience-review-note">点击“播放”检查这次录制的采样时间轴，完整播放后完成体验。这里展示动作数据，不重演三维动作；记录只保留在当前页面。</p>
+      <div class="experience-review-slot" id="experience-review-slot"></div>
     </dialog>
     <dialog class="run-dialog project-dialog" id="project-dialog" aria-labelledby="project-dialog-title">
       <form id="project-form" method="dialog" novalidate>

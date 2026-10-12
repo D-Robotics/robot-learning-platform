@@ -7388,6 +7388,45 @@ function mountBrowserRecordingReplay() {
   return true;
 }
 
+let experienceReviewMount = null;
+
+function restoreExperienceReviewPlayer() {
+  if (!experienceReviewMount) return;
+  stopReplay();
+  const { player, marker, controls, returnFocus } = experienceReviewMount;
+  experienceReviewMount = null;
+  marker.replaceWith(player);
+  controls.forEach(({ node, hidden }) => { node.hidden = hidden; });
+  if (returnFocus?.isConnected) returnFocus.focus({ preventScroll: true });
+}
+
+function closeExperienceReview() {
+  const dialog = $('experience-review-dialog');
+  if (dialog?.open && typeof dialog.close === 'function') dialog.close();
+  else dialog?.removeAttribute('open');
+  restoreExperienceReviewPlayer();
+}
+
+function openExperienceReview() {
+  const dialog = $('experience-review-dialog');
+  const slot = $('experience-review-slot');
+  const player = $('replay-player');
+  if (!(dialog instanceof HTMLDialogElement) || !slot || !player) return;
+  if (experienceReviewMount) closeExperienceReview();
+  const marker = document.createComment('experience-review-player-origin');
+  player.before(marker);
+  const controls = ['replay-run-select', 'replay-load-button', 'policy-trial-controls']
+    .map((id) => $(id)).filter(Boolean).map((node) => ({ node, hidden: node.hidden }));
+  experienceReviewMount = { player, marker, controls, returnFocus: $('next-action-button') };
+  controls.forEach(({ node }) => { node.hidden = true; });
+  slot.append(player);
+  if (typeof dialog.showModal === 'function') dialog.showModal();
+  else dialog.setAttribute('open', '');
+  window.requestAnimationFrame(() => {
+    if (dialog.open) $('replay-play-button')?.focus();
+  });
+}
+
 async function performStartAction(action) {
   if (state.loading) return;
   if (action === 'refresh') return loadOverview();
@@ -7405,11 +7444,7 @@ async function performStartAction(action) {
   }
   if (action === 'replay-experience') {
     if (!mountBrowserRecordingReplay()) return;
-    setView('evaluate'); setFlowChild('evaluation-run');
-    document.querySelector('.telemetry-panel')?.setAttribute('open', '');
-    $('replay-player')?.scrollIntoView({ block: 'center' });
-    $('replay-play-button')?.focus();
-    showToast('点击“播放”检查采样时间轴，完整播放后完成体验。这里回看动作数据，不重演三维动作；记录只保留在当前页面。');
+    openExperienceReview();
     return;
   }
   if (action === 'device-setup') { setView('station'); setFlowChild('devices'); return; }
@@ -10978,6 +11013,14 @@ function wireEvents() {
     void SimUI.withButtonPending(button, () => performStartAction(button.dataset.startAction))
       .catch((error) => showToast(friendlyError(error, '暂时无法打开，请重试'), 'error'))
       .finally(() => { renderNextAction(); renderOnboardChecklist(); });
+  });
+  $('experience-review-close')?.addEventListener('click', closeExperienceReview);
+  $('experience-review-dialog')?.addEventListener('cancel', (event) => {
+    event.preventDefault();
+    closeExperienceReview();
+  });
+  $('experience-review-dialog')?.addEventListener('close', () => {
+    if (!$('experience-review-dialog')?.open) restoreExperienceReviewPlayer();
   });
   wireTopMenu();
   wireSidebarDrawer();
