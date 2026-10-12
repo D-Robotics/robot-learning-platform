@@ -509,12 +509,34 @@ export function configuredPublicBasePath(): string {
   return normalizePublicBasePath(process.env.RDK_SIM2REAL_PUBLIC_BASE_PATH);
 }
 
+const HASHED_WORKBENCH_SCRIPTS = ['ui-components', 'first-use-core', 'app'] as const;
+type HashedWorkbenchScript = (typeof HASHED_WORKBENCH_SCRIPTS)[number];
+
+/** A pathname identifies the exact script bytes, independent of query caches. */
+export function contentHashedWorkbenchScriptName(
+  script: HashedWorkbenchScript,
+  contents: Uint8Array,
+): string {
+  if (!HASHED_WORKBENCH_SCRIPTS.includes(script)) throw new Error('Unknown workbench script');
+  return `${script}.${createHash('sha256').update(contents).digest('hex')}.js`;
+}
+
+function currentWorkbenchScriptName(script: HashedWorkbenchScript): string {
+  return contentHashedWorkbenchScriptName(
+    script,
+    readFileSync(path.join(PUBLIC_ROOT, `${script}.js`)),
+  );
+}
+
 function sendIndexDocument(response: express.Response): void {
   try {
-    const html = readFileSync(path.join(PUBLIC_ROOT, 'index.html'), 'utf8').replace(
-      '__RDK_SIM2REAL_BASE_PATH__',
-      configuredPublicBasePath(),
-    );
+    const html = readFileSync(path.join(PUBLIC_ROOT, 'index.html'), 'utf8')
+      .replace('__RDK_SIM2REAL_BASE_PATH__', configuredPublicBasePath())
+      .replace(
+        /(<script\b[^>]*\bsrc="\.\/)(ui-components|first-use-core|app)\.js(?:\?[^"<>]*)?("[^>]*>)/g,
+        (_match, prefix: string, script: HashedWorkbenchScript, suffix: string) =>
+          `${prefix}${currentWorkbenchScriptName(script)}${suffix}`,
+      );
     response.setHeader('Cache-Control', 'no-cache');
     response.type('html').send(html);
   } catch {
@@ -795,6 +817,37 @@ export function createSim2RealWebApp(): Express {
   // Keep the same signed-cookie context as the board/device adapters.
   app.use(storageRequestContextMiddleware);
   app.use(studioSecurityHeadersMiddleware);
+
+  // Rewrite only a current content hash before the compression/static layers
+  // resolve filenames. A stale hash must never return new bytes or the SPA.
+  app.use((request, response, next) => {
+    if (request.method !== 'GET' && request.method !== 'HEAD') {
+      next();
+      return;
+    }
+    const match = /^\/(ui-components|first-use-core|app)\.([^/]+)\.js$/.exec(request.path);
+    if (!match) {
+      next();
+      return;
+    }
+    try {
+      const script = match[1] as HashedWorkbenchScript;
+      if (request.path !== `/${currentWorkbenchScriptName(script)}`) {
+        response
+          .status(404)
+          .setHeader('Cache-Control', 'no-store')
+          .json({ ok: false, error: 'SIM2REAL_UI_ASSET_NOT_FOUND' });
+        return;
+      }
+      request.url = `/${script}.js${request.url.slice(request.path.length)}`;
+      next();
+    } catch {
+      response
+        .status(503)
+        .setHeader('Cache-Control', 'no-store')
+        .json({ ok: false, error: 'SIM2REAL_UI_UNAVAILABLE' });
+    }
+  });
 
   // gzip 响应压缩（零依赖，Node zlib）。379KB 的 app.js 在弱网下是首屏
   // 主要瓶颈；API JSON 顺带受益。SSE 与已编码的代理流在中间件内部跳过。
