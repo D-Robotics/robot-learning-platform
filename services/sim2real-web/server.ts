@@ -7,6 +7,7 @@
  */
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { createRequire } from 'node:module';
 import {
   realpathSync,
   readFileSync,
@@ -115,6 +116,7 @@ export { normalizeMicroduckRedirect } from './runtime-config.js';
 
 const SERVICE_ROOT = path.dirname(fileURLToPath(import.meta.url));
 const PUBLIC_ROOT = path.join(SERVICE_ROOT, 'public');
+const ONNX_RUNTIME_ROOT = path.dirname(createRequire(import.meta.url).resolve('onnxruntime-web'));
 /** Keep slow clients from holding a production process indefinitely. */
 export const SIM2REAL_HTTP_REQUEST_TIMEOUT_MS = 120_000;
 export const SIM2REAL_HTTP_HEADERS_TIMEOUT_MS = 15_000;
@@ -634,7 +636,7 @@ function microduckUnavailablePage(response: express.Response): void {
   response
     .status(503)
     .setHeader('Cache-Control', 'no-store')
-    .sendFile(path.join(PUBLIC_ROOT, 'microduck-unavailable.html'));
+    .sendFile(path.join(PUBLIC_ROOT, 'microduck-unavailable.html'), { dotfiles: 'allow' });
 }
 
 async function proxyMicroduck(request: express.Request, response: express.Response): Promise<void> {
@@ -908,7 +910,7 @@ export function createSim2RealWebApp(): Express {
       ok: true,
       authenticated: Boolean(principal),
       ...(principal?.displayName ? { displayName: principal.displayName } : {}),
-      ...(principal && !principal.displayName ? { accountId: principal.accountId } : {}),
+      ...(principal ? { accountId: principal.accountId } : {}),
       ...(logoutUrl ? { logoutUrl } : {}),
     });
   });
@@ -1566,13 +1568,10 @@ export function createSim2RealWebApp(): Express {
     }
   }
 
-  // Same-origin bridge for the local MuJoCo Web service. In production nginx
-  // owns `/mujoco/` and forwards to 127.0.0.1:18100 itself; in local dev
-  // there is no nginx, so this route reproduces that hop for the OriginBot
-  // simulator iframe (`/mujoco/api/sessions...` at a 20 Hz control rate).
-  // The route is opt-in via RDK_SIM2REAL_MUJOCO_WEB_URL so deployments that
-  // keep nginx forwarding (or run without MuJoCo) see no behavior change.
-  app.all('/mujoco/api/{*splat}', createMujocoApiBridge());
+  // Production and local simulation APIs share the verified account boundary.
+  // Nginx sends /mujoco/api here; only this service signs the private Python
+  // hop, keeping browser credentials and client owner claims out of that API.
+  app.all(['/mujoco/api', '/mujoco/api/{*splat}'], createMujocoApiBridge({ auth: studioSsoAuth }));
 
   // Same-origin MicroDuck proxy used by the Agent control bridge. Register it
   // before the legacy `/mujoco/microduck` route because Express wildcard
@@ -1606,7 +1605,7 @@ export function createSim2RealWebApp(): Express {
     if (surface.state === 'mounted') {
       const root = configuredMicroduckRoot();
       if (root) {
-        response.sendFile(path.join(root, 'index.html'));
+        response.sendFile(path.join(root, 'index.html'), { dotfiles: 'allow' });
         return;
       }
       microduckUnavailablePage(response);
@@ -1660,8 +1659,30 @@ export function createSim2RealWebApp(): Express {
   });
   app.get('/originbot-sim/', (_request, response) => {
     response.setHeader('Cache-Control', 'no-cache');
-    response.sendFile(path.join(PUBLIC_ROOT, 'originbot-sim', 'index.html'));
+    response.sendFile(path.join(PUBLIC_ROOT, 'originbot-sim', 'index.html'), { dotfiles: 'allow' });
   });
+
+  app.get('/task-sim', (request, response, next) => {
+    if (request.path !== '/task-sim') {
+      next();
+      return;
+    }
+    const query = request.url.includes('?') ? request.url.slice(request.url.indexOf('?')) : '';
+    response.redirect(308, publicPath('/task-sim/') + query);
+  });
+  app.get('/task-sim/', (_request, response) => {
+    response.setHeader('Cache-Control', 'no-cache');
+    response.sendFile(path.join(PUBLIC_ROOT, 'task-sim', 'index.html'), { dotfiles: 'allow' });
+  });
+  app.use(
+    '/vendor/onnxruntime-web/dist',
+    express.static(ONNX_RUNTIME_ROOT, {
+      index: false,
+      setHeaders: (response) => {
+        response.setHeader('Cache-Control', 'no-cache');
+      },
+    }),
+  );
 
   // The browser cannot start a process on the user's computer. These two
   // endpoints make the one-command Local GPU Agent install flow possible

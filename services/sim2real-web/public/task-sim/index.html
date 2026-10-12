@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>任务仿真 · RDK Robot Learning Platform</title>
+    <link rel="stylesheet" href="../tokens.css" />
+    <link rel="stylesheet" href="./task-sim.css" />
+  </head>
+  <body>
+    <main class="sim-shell">
+      <header class="sim-header">
+        <div><span class="eyebrow">TASK SIMULATION</span><h1 id="task-name">正在加载任务场景</h1></div>
+        <div class="engine-label"><span id="engine-name">训练引擎</span><span id="clock">0.00 s · 0 步</span></div>
+      </header>
+      <section class="workspace">
+        <div class="viewport-wrap">
+          <canvas id="viewport" aria-label="当前任务三维仿真场景；拖动旋转，滚轮缩放" tabindex="0"></canvas>
+          <div class="viewport-note">拖动旋转 · 滚轮缩放 · 双击归位</div>
+          <div class="scene-badge" id="scene-badge">训练引擎场景</div>
+          <div class="loading-card" id="loading-card" role="status" aria-live="polite"><strong id="loading-title">连接仿真引擎…</strong><p id="loading-message">正在创建与当前任务对应的独立场景。</p><button id="retry" hidden>重新连接</button></div>
+        </div>
+        <aside class="inspector" aria-label="仿真控制">
+          <p id="description" class="description">加载任务说明…</p>
+          <div class="transport"><button id="run" disabled>开始仿真</button><button id="step" disabled>单步</button><button id="reset" disabled>重置</button></div>
+          <p id="status" class="status" role="status" aria-live="polite">准备场景…</p>
+          <dl id="metrics" class="metrics"></dl>
+          <details class="action-panel" open><summary>手动动作 <span id="action-contract"></span></summary><p class="help" id="action-help">所有动作限制在 −1 到 1。</p><div id="actions" class="actions"></div><button id="zero" disabled class="quiet">动作归零</button></details>
+          <div class="record-panel"><strong>轨迹录制</strong><p class="help">保存真实引擎观测、动作、状态和任务指标，可逐帧回放。</p><div class="transport"><button id="record" disabled>开始录制</button><button id="export" disabled>导出 JSONL</button></div><output id="record-count">0 帧 · 0.00 s</output></div>
+        </aside>
+      </section>
+      <footer id="evidence-note">场景和状态由任务训练引擎计算。手动动作不代表训练策略表现。</footer>
+    </main>
+    <script type="module" src="./task-sim.js?v=duck-visual-1"></script>
+  </body>
+</html>

@@ -899,6 +899,7 @@ export async function validateProductionConfig({
 
   for (const key of [
     'RDK_SIM2REAL_MICRODUCK_URL',
+    'RDK_SIM2REAL_MUJOCO_WEB_URL',
     'RDK_SIM2REAL_LOCAL_RUNNER_URL',
     'RDK_SIM2REAL_ROBOGO_RUNNER_URL',
     'RDK_SIM2REAL_ROBOGO_API_URL',
@@ -913,6 +914,17 @@ export async function validateProductionConfig({
       urlIsAllowed(configured),
       `${key} URL 格式合法`,
       '使用 HTTPS；仅允许回环地址使用 HTTP',
+    );
+  }
+
+  if (value(values, 'RDK_SIM2REAL_MUJOCO_WEB_URL') && productionShared) {
+    check(
+      checks,
+      'simulation-signing-key',
+      'fail',
+      mode === 'template' || usableSecret(value(values, 'RDK_SIM2REAL_SIMULATION_SECRET')),
+      '共享仿真必须使用服务端签名密钥',
+      '在 Web 与 MuJoCo 的受控 EnvironmentFile 中配置同一份至少 32 字节随机密钥；API 由 Web 鉴权后转发',
     );
   }
 

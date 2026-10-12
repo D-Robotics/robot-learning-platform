@@ -12,6 +12,7 @@
   const RECORDER_PANEL_ID = 'rdk-microduck-recorder';
   const RECORDER_STYLE_ID = 'rdk-microduck-recorder-style';
   const RECORDER_MAX_STEPS = 30_000; // 10 minutes at the 50 Hz policy loop.
+  const RECORDER_MAX_BYTES = 30 * 1024 * 1024; // Leave room for the parent's 32 MiB import limit.
   const POLICY_PANEL_ID = 'rdk-microduck-policy';
   const POLICY_STYLE_ID = 'rdk-microduck-policy-style';
   // The platform's own run list. Same origin as this page in the standard
@@ -332,6 +333,696 @@
     return window.rl || null;
   }
 
+  const BROWSER_SCENE_ID = 'microduck-single-duck-v1';
+  const BROWSER_TASK_IDS = new Set(['walk', 'turn', 'sit', 'recover', 'kick', 'custom']);
+  const BROWSER_TASK_LABELS = {
+    walk: '行走',
+    turn: '转向',
+    sit: '坐下 / 站起',
+    recover: '自恢复',
+    kick: '踢球',
+    custom: '自定义动作',
+  };
+  const simulatorContext = {
+    taskId: 'walk',
+    ready: false,
+    active: true,
+    pending: null,
+    timer: null,
+    replay: null,
+    pause: null,
+  };
+  const policyTrial = {
+    token: 0,
+    timer: null,
+    active: false,
+    loading: false,
+    runId: '',
+    trialId: undefined,
+    loadChain: Promise.resolve(),
+    binding: null,
+    monitor: null,
+    phase: 'stopped',
+    message: '',
+    taskId: '',
+    slots: [],
+    relevantModeCount: 0,
+    maxSteps: 600,
+    startedAt: 0,
+  };
+
+  function parentOrigin() {
+    try {
+      return window.parent.location.origin;
+    } catch {
+      /* cross-origin embed */
+    }
+    try {
+      return new URL(document.referrer).origin;
+    } catch {
+      return window.location.origin;
+    }
+  }
+
+  function trustedParentMessage(event) {
+    return (
+      window.parent !== window &&
+      event.source === window.parent &&
+      event.origin !== 'null' &&
+      event.origin === parentOrigin()
+    );
+  }
+
+  function notifyParent(payload, origin = parentOrigin()) {
+    if (window.parent === window) return;
+    try {
+      window.parent.postMessage(payload, origin);
+    } catch {
+      /* detached parent */
+    }
+  }
+
+  function taskState(taskId, phase, message) {
+    notifyParent({
+      type: 'rdk-simulator-task-state',
+      taskId,
+      sceneId: BROWSER_SCENE_ID,
+      phase,
+      message,
+    });
+  }
+
+  function clearMotionCommand(current) {
+    current.velCmd?.fill?.(0);
+    for (const source of current.controller?.sources || []) source.command?.fill?.(0);
+    if (current.cmd?.length >= 3) {
+      current.cmd[0] = 0;
+      current.cmd[1] = 0;
+      current.cmd[2] = 0;
+    }
+  }
+
+  function stopReplayState() {
+    const replay = simulatorContext.replay;
+    if (!replay) return;
+    if (replay.current.mujoco.mj_step === replay.guard)
+      replay.current.mujoco.mj_step = replay.originalStep;
+    replay.current.controller?.setLocked?.(replay.wasLocked);
+    simulatorContext.replay = null;
+    if (!simulatorContext.active) pauseSimulatorState();
+  }
+
+  function stopSimulatorPause() {
+    const pause = simulatorContext.pause;
+    if (!pause) return;
+    if (pause.current.mujoco.mj_step === pause.guard)
+      pause.current.mujoco.mj_step = pause.originalStep;
+    pause.current.controller?.setLocked?.(pause.wasLocked);
+    simulatorContext.pause = null;
+  }
+
+  function pauseSimulatorState() {
+    if (simulatorContext.pause || simulatorContext.replay) return;
+    const current = runtime();
+    if (
+      !current?.model ||
+      !current.data?.qpos ||
+      !current.data?.qvel ||
+      typeof current.mujoco?.mj_step !== 'function' ||
+      typeof current.mujoco?.mj_forward !== 'function'
+    )
+      return;
+    const pause = {
+      current,
+      model: current.model,
+      data: current.data,
+      originalStep: current.mujoco.mj_step,
+      wasLocked: Boolean(current.inputLocked),
+      qpos: Array.from(current.data.qpos),
+      qvel: Array.from(current.data.qvel),
+    };
+    pause.guard = (...args) => {
+      if (current.data !== pause.data) {
+        stopSimulatorPause();
+        return pause.originalStep.apply(current.mujoco, args);
+      }
+      if (args.length && (args[0] !== pause.model || args[1] !== pause.data))
+        return pause.originalStep.apply(current.mujoco, args);
+      pause.data.qpos.set(pause.qpos);
+      pause.data.qvel.set(pause.qvel);
+      current.mujoco.mj_forward(pause.model, pause.data);
+    };
+    current.mujoco.mj_step = pause.guard;
+    current.controller?.setLocked?.(true);
+    simulatorContext.pause = pause;
+  }
+
+  function setSimulatorActive(active) {
+    simulatorContext.active = active === true;
+    if (simulatorContext.active) {
+      stopSimulatorPause();
+      if (simulatorContext.pending) simulatorContext.pending.startedAt = performance.now();
+      pumpTask();
+    } else {
+      if (recorder.active) stopRecording('仿真视图已离开，录制已结束');
+      if (simulatorContext.timer) clearTimeout(simulatorContext.timer);
+      simulatorContext.timer = null;
+      stopPolicyRun();
+      pauseSimulatorState();
+    }
+  }
+
+  function queueTask(taskId, preserveTrial = false) {
+    if (!BROWSER_TASK_IDS.has(taskId)) {
+      taskState(taskId, 'failed', '当前单鸭仿真未装载该任务场景');
+      return false;
+    }
+    if (simulatorContext.ready && simulatorContext.taskId === taskId && !simulatorContext.pending) {
+      taskState(taskId, 'ready', '任务场景已就绪');
+      return true;
+    }
+    if (simulatorContext.pending?.taskId === taskId) return true;
+    if (recorder.active) stopRecording('任务切换，已结束上一段录制');
+    if (!preserveTrial) stopPolicyRun();
+    stopReplayState();
+    simulatorContext.ready = false;
+    simulatorContext.pending = { taskId, startedAt: performance.now(), reset: false };
+    taskState(taskId, 'loading', '正在准备任务场景');
+    pumpTask();
+    return true;
+  }
+
+  function pumpTask() {
+    if (simulatorContext.timer) clearTimeout(simulatorContext.timer);
+    simulatorContext.timer = null;
+    const pending = simulatorContext.pending;
+    if (!pending) return;
+    if (!simulatorContext.active) return;
+    const current = runtime();
+    try {
+      if (performance.now() - pending.startedAt > 15_000)
+        throw new Error('仿真引擎未在 15 秒内就绪');
+      if (current && typeof current.resetSim === 'function') {
+        if (!pending.reset) {
+          clearMotionCommand(current);
+          current.resetSim();
+          pending.reset = true;
+        }
+        // Reset animations lock the controller; wait for the real runtime to
+        // release it before requesting a one-shot action.
+        if (!current.inputLocked && !current.locoSwitching) {
+          if (current.loco && current.loco !== 'legs') {
+            if (typeof current.setLoco !== 'function') throw new Error('当前仿真不能切回双足模型');
+            current.setLoco('legs');
+          } else {
+            if (pending.taskId === 'kick') {
+              if (typeof current.spawnBall !== 'function')
+                throw new Error('当前仿真未开放球的生成接口');
+              current.spawnBall();
+            }
+            if (pending.taskId === 'sit' && !dispatchControllerAction('sitToggle')) {
+              throw new Error('当前仿真未开放坐下动作接口');
+            }
+            simulatorContext.taskId = pending.taskId;
+            simulatorContext.ready = true;
+            simulatorContext.pending = null;
+            document.body.dataset.simulatorTask = pending.taskId;
+            updateTaskControls();
+            taskState(
+              pending.taskId,
+              'ready',
+              pending.taskId === 'recover'
+                ? '自恢复场景已就绪；点击跌倒测试后施加扰动'
+                : '任务场景已就绪，使用操作控件执行动作',
+            );
+            return;
+          }
+        }
+      }
+      simulatorContext.timer = setTimeout(pumpTask, 100);
+    } catch (error) {
+      simulatorContext.pending = null;
+      taskState(pending.taskId, 'failed', String(error?.message || error));
+    }
+  }
+
+  function testRecovery() {
+    const current = runtime();
+    if (
+      !simulatorContext.ready ||
+      simulatorContext.taskId !== 'recover' ||
+      current?.inputLocked ||
+      typeof current?.debugPush !== 'function'
+    )
+      return false;
+    current.debugPush(0, 0, 0, 7, 0, 0);
+    return true;
+  }
+
+  function updateTaskControls() {
+    const panel = document.getElementById(RECORDER_PANEL_ID);
+    const label = panel?.querySelector('[data-simulator-task-label]');
+    const taskId = simulatorContext.pending?.taskId || simulatorContext.taskId;
+    if (label) label.textContent = `当前任务 · ${BROWSER_TASK_LABELS[taskId] || taskId}`;
+    const button = panel?.querySelector('[data-recovery-test]');
+    if (button) {
+      button.hidden = taskId !== 'recover';
+      button.disabled =
+        !simulatorContext.ready ||
+        Boolean(runtime()?.inputLocked) ||
+        typeof runtime()?.debugPush !== 'function';
+    }
+  }
+
+  function validatedState(value, expected, legacy, label) {
+    if (!Array.isArray(value) && !ArrayBuffer.isView(value)) throw new Error(`缺少 ${label} 状态`);
+    if (value.length !== expected && !(expected > legacy && value.length === legacy))
+      throw new Error(`${label} 维度与当前模型不匹配`);
+    if (
+      !Array.from(value).every((number) => typeof number === 'number' && Number.isFinite(number))
+    ) {
+      throw new Error(`${label} 包含非有限数值`);
+    }
+    return Array.from(value);
+  }
+
+  function applyReplay(payload) {
+    const frame = payload.frame;
+    const current = runtime();
+    let scope = 'full';
+    try {
+      const taskId = payload.taskId || frame?.taskId;
+      const sceneId = payload.sceneId || frame?.sceneId;
+      if (taskId && !BROWSER_TASK_IDS.has(taskId)) throw new Error('回放任务不属于当前单鸭场景');
+      if (sceneId && sceneId !== BROWSER_SCENE_ID) throw new Error('回放场景与当前模型不匹配');
+      if (frame?.locomotion && current?.loco && frame.locomotion !== current.loco)
+        throw new Error('回放的双足 / 滚轮模型与当前模型不匹配');
+      if (
+        !current?.model ||
+        !current.data?.qpos ||
+        !current.data?.qvel ||
+        typeof current.mujoco?.mj_forward !== 'function' ||
+        typeof current.render !== 'function'
+      ) {
+        throw new Error('当前仿真未开放物理状态回放接口');
+      }
+      const qpos = validatedState(frame?.qpos, current.data.qpos.length, 7, 'qpos');
+      const qvel = validatedState(frame?.qvel, current.data.qvel.length, 6, 'qvel');
+      const quaternionNorm = Math.hypot(...qpos.slice(3, 7));
+      if (Math.abs(quaternionNorm - 1) > 0.01) throw new Error('回放浮动基座的姿态四元数无效');
+      if (qpos.length !== current.data.qpos.length || qvel.length !== current.data.qvel.length)
+        scope = 'base-only';
+      if (recorder.active) stopRecording('进入回放，已结束当前录制');
+      stopPolicyRun();
+      stopSimulatorPause();
+      if (
+        simulatorContext.replay?.current !== current ||
+        simulatorContext.replay?.data !== current.data
+      )
+        stopReplayState();
+      if (!simulatorContext.replay) {
+        if (typeof current.mujoco.mj_step !== 'function')
+          throw new Error('当前仿真不能暂停物理步进');
+        const replay = {
+          current,
+          model: current.model,
+          data: current.data,
+          originalStep: current.mujoco.mj_step,
+          wasLocked: Boolean(current.inputLocked),
+          qpos: null,
+          qvel: null,
+        };
+        replay.guard = (...args) => {
+          if (current.data !== replay.data) {
+            stopReplayState();
+            return replay.originalStep.apply(current.mujoco, args);
+          }
+          // Other model instances may share this WASM module (for example a
+          // lazily loaded roller model). Freeze only this playback world.
+          if (args.length && (args[0] !== replay.model || args[1] !== replay.data)) {
+            return replay.originalStep.apply(current.mujoco, args);
+          }
+          if (replay.qpos) {
+            replay.data.qpos.set(replay.qpos);
+            replay.data.qvel.set(replay.qvel);
+            current.mujoco.mj_forward(replay.model, replay.data);
+          }
+        };
+        current.mujoco.mj_step = replay.guard;
+        if (current.mujoco.mj_step !== replay.guard) throw new Error('当前仿真物理步进不可暂停');
+        current.controller?.setLocked?.(true);
+        simulatorContext.replay = replay;
+      }
+      const replay = simulatorContext.replay;
+      // Legacy recordings retain only the floating base; keep joint state
+      // stationary and report that limitation instead of claiming full pose.
+      replay.qpos = Array.from(current.data.qpos);
+      replay.qvel = Array.from(current.data.qvel);
+      qpos.forEach((value, index) => {
+        replay.qpos[index] = value;
+      });
+      qvel.forEach((value, index) => {
+        replay.qvel[index] = value;
+      });
+      replay.guard();
+      current.render();
+      notifyParent({
+        type: 'rdk-replay-state',
+        applied: true,
+        scope,
+        runId: payload.runId,
+        index: payload.index,
+      });
+      window.dispatchEvent(
+        new CustomEvent('rdk-replay-frame', {
+          detail: { ...frame, index: payload.index, runId: payload.runId, applied: true, scope },
+        }),
+      );
+      return true;
+    } catch (error) {
+      notifyParent({
+        type: 'rdk-replay-state',
+        applied: false,
+        runId: payload.runId,
+        index: payload.index,
+        message: String(error?.message || error),
+      });
+      return false;
+    }
+  }
+
+  window.__microduckSimulator = {
+    setTask: queueTask,
+    testRecovery,
+    stopReplay: stopReplayState,
+    setActive: setSimulatorActive,
+    get taskId() {
+      return simulatorContext.taskId;
+    },
+    get sceneId() {
+      return BROWSER_SCENE_ID;
+    },
+    get ready() {
+      return simulatorContext.ready;
+    },
+  };
+
+  function policyStatus(phase, message) {
+    policyTrial.phase = phase;
+    policyTrial.message = message;
+    notifyParent({
+      type: 'rdk-policy-status',
+      phase,
+      message,
+      runId: policyTrial.runId,
+      ...(policyTrial.trialId ? { trialId: policyTrial.trialId } : {}),
+      taskId: policyTrial.taskId,
+      slots: policyTrial.binding?.slots || policyTrial.slots,
+      relevantModeCount: policyTrial.relevantModeCount,
+      maxSteps: policyTrial.maxSteps,
+    });
+  }
+
+  function restorePolicyBinding(binding) {
+    if (!binding) return;
+    for (const [slot, original] of Object.entries(binding.originals)) {
+      // The runtime may have restored its official walker itself, or loaded
+      // another move. Restore only references still owned by this trial.
+      if (binding.current.sessions[slot] === binding.loaded.session)
+        binding.current.sessions[slot] = original;
+    }
+    if (binding.loaded.session.run === binding.run)
+      binding.loaded.session.run = binding.originalRun;
+    if (binding.loaded.slot === binding.slot) binding.loaded.slot = binding.originalSlot;
+  }
+
+  function taskPolicySlot(current, taskId) {
+    if (current.loco !== 'legs' || current.recovery === 'fallen') return null;
+    if (current.recovery === 'recovering') return taskId === 'recover' ? 'stand' : null;
+    if (taskId === 'sit') return current.mode === 'sitstand' ? 'sitstand' : null;
+    if (taskId === 'kick') return ['kickL', 'kickR'].includes(current.mode) ? current.mode : null;
+    if (taskId === 'recover') return null;
+    return current.mode === 'walk' ? 'walk' : null;
+  }
+
+  function attachTaskPolicy(current, loaded, taskId, originals) {
+    const slots =
+      taskId === 'sit'
+        ? ['sitstand']
+        : taskId === 'kick'
+          ? ['kickL', 'kickR']
+          : taskId === 'recover'
+            ? ['stand']
+            : ['walk'];
+    if (!current.sessions || slots.some((slot) => typeof originals[slot]?.run !== 'function'))
+      throw new Error(`当前仿真未开放任务策略槽位：${slots.join(' / ')}`);
+    const binding = {
+      current,
+      loaded,
+      slots,
+      originals,
+      taskId,
+      originalRun: loaded.session.run,
+      originalSlot: loaded.slot,
+      slot: slots[0],
+    };
+    policyTrial.binding = binding;
+    // Direct ONNX URLs default to walk upstream. Keep unrelated reference
+    // policies in place, then bind this validated graph to its real task.
+    for (const [slot, original] of Object.entries(originals)) {
+      if (current.sessions[slot] === loaded.session) current.sessions[slot] = original;
+    }
+    loaded.slot = binding.slot;
+    for (const slot of slots) {
+      current.sessions[slot] = loaded.session;
+      if (current.sessions[slot] !== loaded.session) throw new Error(`任务策略槽位 ${slot} 不可写`);
+    }
+    binding.run = async function (feeds, ...args) {
+      const slot = taskPolicySlot(current, taskId);
+      if (current.customPolicy !== loaded) {
+        // Upstream's watchdog only restores walk/sitstand/roll. A kick or
+        // recovery session captured just before its revert must use the
+        // reference graph as well, without one extra custom inference.
+        if (policyTrial.binding === binding)
+          stopPolicyRun('failed', '仿真引擎已撤销策略，已还原任务参考策略');
+        else restorePolicyBinding(binding);
+        const official = originals[slot || binding.slot];
+        const observation = feeds[loaded.session.inputNames?.[0]] || Object.values(feeds)[0];
+        const outputs = await official.run({ [official.inputNames[0]]: observation }, ...args);
+        return { ...outputs, [loaded.session.outputNames[0]]: outputs[official.outputNames[0]] };
+      }
+      const relevant = Boolean(
+        slot && slots.includes(slot) && current.sessions[slot] === loaded.session,
+      );
+      let result;
+      try {
+        result = await binding.originalRun.call(this, feeds, ...args);
+      } catch (error) {
+        if (policyTrial.binding === binding)
+          stopPolicyRun('failed', `策略推理失败：${error?.message || error}`);
+        throw error;
+      }
+      if (policyTrial.binding !== binding || current.customPolicy !== loaded) return result;
+      const action = result?.[loaded.session.outputNames?.[0]]?.data;
+      if (!action || action.length !== 14 || !Array.from(action).every(Number.isFinite)) {
+        stopPolicyRun('failed', '策略返回了无效的 14D 动作，已还原任务参考策略');
+        return result;
+      }
+      if (relevant) {
+        policyTrial.relevantModeCount++;
+        if (policyTrial.relevantModeCount === 1)
+          policyStatus(
+            'running',
+            `策略正在执行${BROWSER_TASK_LABELS[taskId]}；已完成 1 次任务模式推理`,
+          );
+        if (policyTrial.relevantModeCount >= policyTrial.maxSteps) {
+          // Let the control loop consume this last output with the loaded
+          // graph's action scale before releasing the custom policy.
+          if (policyTrial.timer) clearTimeout(policyTrial.timer);
+          policyTrial.timer = setTimeout(() => {
+            if (policyTrial.binding === binding)
+              stopPolicyRun(
+                'finished',
+                `策略试跑已完成 ${policyTrial.relevantModeCount} 次任务模式推理，已还原参考策略`,
+              );
+          }, 0);
+        }
+      }
+      return result;
+    };
+    loaded.session.run = binding.run;
+    if (loaded.session.run !== binding.run) throw new Error('当前仿真未开放策略执行计数接口');
+    return binding;
+  }
+
+  function stopPolicyRun(phase = 'stopped', message = '策略试跑已停止，已还原官方策略') {
+    policyTrial.token++;
+    if (policyTrial.timer) clearTimeout(policyTrial.timer);
+    policyTrial.timer = null;
+    if (policyTrial.monitor) clearInterval(policyTrial.monitor);
+    policyTrial.monitor = null;
+    const running = policyTrial.active || policyTrial.loading;
+    const binding = policyTrial.binding;
+    restorePolicyBinding(binding);
+    if (binding && binding.current.customPolicy === binding.loaded)
+      binding.current.clearCustomPolicy?.();
+    policyTrial.binding = null;
+    policyTrial.active = false;
+    policyTrial.loading = false;
+    if (running) policyStatus(phase, message);
+  }
+
+  async function startPolicyRun(payload) {
+    stopPolicyRun();
+    const token = policyTrial.token;
+    policyTrial.runId = String(payload.runId || '');
+    policyTrial.trialId = typeof payload.trialId === 'string' ? payload.trialId : undefined;
+    policyTrial.taskId = '';
+    policyTrial.slots = [];
+    policyTrial.relevantModeCount = 0;
+    const requested = Number(payload.maxSteps);
+    policyTrial.maxSteps = Math.round(
+      Math.min(3000, Math.max(1, Number.isFinite(requested) ? requested : 600)),
+    );
+    policyTrial.loading = true;
+    policyStatus('loading', '正在校验并装载 MicroDuck ONNX 策略');
+    try {
+      if (payload.backend && payload.backend !== 'wasm')
+        throw new Error('MicroDuck 单鸭仿真只支持浏览器 ONNX 策略试跑');
+      if (!policyTrial.runId || policyTrial.runId.length > 256)
+        throw new Error('请选择已完成的训练运行');
+      const api = new URL(
+        payload.apiRoot || `${POLICY_API_BASE}/api/sim2real`,
+        `${parentOrigin()}/`,
+      );
+      if (api.origin !== parentOrigin() || !api.pathname.endsWith('/api/sim2real')) {
+        throw new Error('策略接口必须属于当前工作台');
+      }
+      const response = await fetch(
+        `${api.href.replace(/\/$/, '')}/runs/${encodeURIComponent(policyTrial.runId)}`,
+        { credentials: 'same-origin', headers: { accept: 'application/json' } },
+      );
+      if (!response.ok) throw new Error(`读取策略运行失败：HTTP ${response.status}`);
+      const result = await response.json();
+      const run = result.run;
+      if (
+        !run ||
+        run.status !== 'completed' ||
+        run.backend !== 'local' ||
+        run.mock === true ||
+        String(run.artifact?.format || '').toLowerCase() !== 'onnx' ||
+        !BROWSER_TASK_IDS.has(run.taskId)
+      ) {
+        throw new Error('该运行不是适用于单鸭场景的已完成 ONNX 策略');
+      }
+      if (token !== policyTrial.token) return;
+      policyTrial.taskId = run.taskId;
+      // The operator explicitly started this trial. Prepare the run's task
+      // before loading its graph; a pending reset must never erase its setup.
+      if (!simulatorContext.ready || simulatorContext.taskId !== run.taskId) {
+        queueTask(run.taskId, true);
+      }
+      const taskToken = policyTrial.token;
+      while (simulatorContext.pending) {
+        await new Promise((resolve) => setTimeout(resolve, 100));
+        if (taskToken !== policyTrial.token) return;
+      }
+      if (!simulatorContext.ready || simulatorContext.taskId !== run.taskId)
+        throw new Error('任务场景未就绪');
+      const current = runtime();
+      if (
+        typeof current?.loadCustomPolicy !== 'function' ||
+        typeof current?.clearCustomPolicy !== 'function'
+      )
+        throw new Error('当前仿真未开放 ONNX 策略装载');
+      stopReplayState();
+      const policyUrl = `${api.href.replace(/\/$/, '')}/runs/${encodeURIComponent(run.id || policyTrial.runId)}/policy.onnx`;
+      // The upstream loader is asynchronous and has no cancellation hook.
+      // Revert a cancelled load before the next trial enters that loader;
+      // otherwise an old completion can overwrite or clear the newer graph.
+      const loadTask = policyTrial.loadChain
+        .catch(() => {})
+        .then(async () => {
+          if (taskToken !== policyTrial.token) return false;
+          if (current.customPolicy) current.clearCustomPolicy();
+          const originals = Object.fromEntries(
+            ['walk', 'sitstand', 'roll', 'kickL', 'kickR', 'stand']
+              .filter((slot) => current.sessions && slot in current.sessions)
+              .map((slot) => [slot, current.sessions[slot]]),
+          );
+          await current.loadCustomPolicy(policyUrl);
+          if (taskToken !== policyTrial.token) {
+            if (current.customPolicy?.ref === policyUrl) current.clearCustomPolicy();
+            return false;
+          }
+          const loaded = current.customPolicy;
+          // Upstream resolves its promise even for a rejected graph or a
+          // busy loader. Inspect the actual runtime before reporting success.
+          try {
+            if (loaded?.ref !== policyUrl || typeof loaded.session?.run !== 'function')
+              throw new Error('ONNX 策略未实际装载；引擎可能拒绝了接口或仍在装载其他策略');
+            attachTaskPolicy(current, loaded, run.taskId, originals);
+          } catch (error) {
+            if (loaded?.ref === policyUrl) {
+              restorePolicyBinding(policyTrial.binding);
+              policyTrial.binding = null;
+              current.clearCustomPolicy();
+            }
+            throw error;
+          }
+          return true;
+        });
+      policyTrial.loadChain = loadTask.catch(() => {});
+      if (!(await loadTask) || taskToken !== policyTrial.token) return;
+      policyTrial.active = true;
+      policyTrial.loading = false;
+      policyTrial.slots = policyTrial.binding.slots;
+      const seconds = policyTrial.maxSteps / 50;
+      policyTrial.startedAt = performance.now();
+      const instructions =
+        run.taskId === 'kick'
+          ? '按 Q / E 或点击踢球后执行该策略'
+          : run.taskId === 'recover'
+            ? '点击“测试跌倒恢复”，进入恢复状态后执行该策略'
+            : '使用操作控件执行任务';
+      policyStatus(
+        'armed',
+        `策略已装入 ${policyTrial.binding.slots.join(' / ')}；${instructions}，最多 ${policyTrial.maxSteps} 次任务模式推理 / ${seconds.toFixed(1)} 秒`,
+      );
+      policyTrial.monitor = setInterval(() => {
+        const binding = policyTrial.binding;
+        if (!binding) return;
+        if (
+          runtime() !== binding.current ||
+          binding.current.customPolicy !== binding.loaded ||
+          binding.slots.some((slot) => binding.current.sessions[slot] !== binding.loaded.session)
+        )
+          stopPolicyRun('failed', '任务策略已被引擎撤销或替换，已还原参考策略');
+        else if (policyTrial.relevantModeCount > 0) {
+          const executing = Boolean(taskPolicySlot(binding.current, binding.taskId));
+          policyStatus(
+            executing ? 'running' : 'armed',
+            `已完成 ${policyTrial.relevantModeCount} / ${policyTrial.maxSteps} 次任务模式推理${executing ? '' : `；${instructions}`}`,
+          );
+        }
+      }, 250);
+      policyTrial.timer = setTimeout(
+        () =>
+          stopPolicyRun(
+            'finished',
+            `策略试跑窗口已结束；完成 ${policyTrial.relevantModeCount} 次任务模式推理，已还原参考策略`,
+          ),
+        seconds * 1000,
+      );
+      return true;
+    } catch (error) {
+      if (token === policyTrial.token) {
+        stopPolicyRun('failed', String(error?.message || error));
+      }
+      return false;
+    }
+  }
+
   // The upstream simulator intentionally exposes a small, read-only-ish
   // verification surface as window.rl.  The recorder uses that surface rather
   // than guessing from key presses: every sample contains the actual 61D
@@ -344,6 +1035,7 @@
     active: false,
     startedAt: 0,
     samples: [],
+    bytes: 1024, // Fixed header allowance; event and step JSON are charged incrementally.
     events: [],
     last: null,
     timer: null,
@@ -354,7 +1046,10 @@
   function copyNumeric(value) {
     if (!value || typeof value.length !== 'number') return null;
     try {
-      return Array.from(value, (item) => (Number.isFinite(Number(item)) ? Number(item) : 0));
+      const copied = Array.from(value);
+      return copied.every((item) => typeof item === 'number' && Number.isFinite(item))
+        ? copied
+        : null;
     } catch {
       return null;
     }
@@ -362,7 +1057,14 @@
 
   function recorderReady() {
     const current = runtime();
-    return Boolean(current && typeof current.buildObs === 'function' && current.lastAction?.length);
+    return Boolean(
+      simulatorContext.active &&
+      !simulatorContext.pending &&
+      !simulatorContext.replay &&
+      current &&
+      typeof current.buildObs === 'function' &&
+      current.lastAction?.length === 14,
+    );
   }
 
   function recordSample() {
@@ -376,7 +1078,7 @@
     try {
       const observation = copyNumeric(current.buildObs());
       const action = copyNumeric(current.lastAction);
-      if (!observation || !action) return;
+      if (!observation || !action || observation.length !== 61 || action.length !== 14) return;
       const sample = {
         step: recorder.samples.length,
         time: Number(((performance.now() - recorder.startedAt) / 1000).toFixed(4)),
@@ -385,14 +1087,21 @@
         command: copyNumeric(current.cmd),
         mode: typeof current.mode === 'string' ? current.mode : null,
         locomotion: typeof current.loco === 'string' ? current.loco : null,
+        taskId: simulatorContext.taskId,
+        sceneId: BROWSER_SCENE_ID,
       };
-      // qpos/qvel are useful for debugging and reward design, but are not
-      // required by the policy contract.  Keep them bounded to the base state
-      // so a long browser recording remains reasonably small.
+      // Full physical state permits an exact pose replay. Legacy recordings
+      // retained only the floating base; consumers must label that fallback.
       const qpos = copyNumeric(current.data?.qpos);
       const qvel = copyNumeric(current.data?.qvel);
-      if (qpos) sample.qpos = qpos.slice(0, 7);
-      if (qvel) sample.qvel = qvel.slice(0, 6);
+      if (qpos?.length <= 512) sample.qpos = qpos;
+      if (qvel?.length <= 512) sample.qvel = qvel;
+      const bytes = new Blob([JSON.stringify({ type: 'step', ...sample }), '\n']).size;
+      if (recorder.bytes + bytes > RECORDER_MAX_BYTES) {
+        stopRecording('已达到 30 MiB 录制上限');
+        return;
+      }
+      recorder.bytes += bytes;
       recorder.samples.push(sample);
     } catch (error) {
       console.warn('[microduck recorder] sample failed', error);
@@ -405,6 +1114,8 @@
       format: 'microduck-trajectory-v1',
       source: 'browser-microduck',
       contractId: 'microduck-policy-v1',
+      taskId: first.taskId || simulatorContext.taskId,
+      sceneId: first.sceneId || BROWSER_SCENE_ID,
       observationSize: Array.isArray(first.observation) ? first.observation.length : 61,
       actionSize: Array.isArray(first.action) ? first.action.length : 14,
       sampleHz: 50,
@@ -439,6 +1150,8 @@
           sampleCount: recorder.samples.length,
           durationSeconds: recorder.samples.at(-1)?.time || 0,
           contractId: 'microduck-policy-v1',
+          taskId: recorder.samples[0]?.taskId || simulatorContext.taskId,
+          sceneId: BROWSER_SCENE_ID,
         },
         '*',
       );
@@ -466,17 +1179,18 @@
   function clearRecording() {
     if (recorder.active) stopRecording('已停止');
     recorder.samples = [];
+    recorder.bytes = 1024;
     recorder.events = [];
     recorder.last = null;
   }
 
-  function stopRecording(reason = '已停止') {
+  function stopRecording(reason = '已停止', notify = true) {
     if (!recorder.active && !recorder.timer) return;
     recorder.active = false;
     if (recorder.timer) clearInterval(recorder.timer);
     recorder.timer = null;
     recorder.last = recorder.samples.length ? recordingHeader() : null;
-    notifyParentRecordingReady();
+    if (notify) notifyParentRecordingReady();
     const panel = document.getElementById(RECORDER_PANEL_ID);
     panel
       ?.querySelector('[data-recorder-status]')
@@ -503,6 +1217,7 @@
     if (!recorderReady()) return false;
     if (recorder.active) return true;
     recorder.samples = [];
+    recorder.bytes = 1024;
     recorder.events = [];
     recorder.last = null;
     recorder.active = true;
@@ -523,13 +1238,21 @@
 
   function recordInputEvent(type, event) {
     if (!recorder.active || event.repeat) return;
+    if (recorder.events.length >= 2000) return;
     const code = String(event.code || event.key || '').slice(0, 24);
     if (!code) return;
-    recorder.events.push({
+    const recorded = {
       type,
       code,
       time: Number(((performance.now() - recorder.startedAt) / 1000).toFixed(4)),
-    });
+    };
+    const bytes = new Blob([JSON.stringify(recorded), ',']).size;
+    if (recorder.bytes + bytes > RECORDER_MAX_BYTES) {
+      stopRecording('已达到 30 MiB 录制上限');
+      return;
+    }
+    recorder.bytes += bytes;
+    recorder.events.push(recorded);
   }
 
   function mountRecorder() {
@@ -560,6 +1283,8 @@
         #${RECORDER_PANEL_ID}.is-recording { border-color: rgba(255, 92, 113, .85); box-shadow: 0 16px 38px rgba(0, 0, 0, .4), 0 0 28px rgba(255, 92, 113, .18); }
         #${RECORDER_PANEL_ID}.is-recording .rdk-recorder-status { color: #ff8d91; }
         #${RECORDER_PANEL_ID} .rdk-recorder-note { margin: 0 0 9px; color: rgba(255, 255, 255, .52); font-size: 10px; }
+        #${RECORDER_PANEL_ID} .rdk-task-context { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 9px; }
+        #${RECORDER_PANEL_ID} button[hidden] { display: none; }
         #${RECORDER_PANEL_ID} .rdk-recorder-count { display: block; margin: 0 0 9px; color: rgba(255, 255, 255, .72); font: 10px ui-monospace, SFMono-Regular, Menlo, monospace; }
         #${RECORDER_PANEL_ID} .rdk-recorder-actions { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; }
         #${RECORDER_PANEL_ID} button { min-height: 30px; border: 1px solid rgba(255, 255, 255, .2); border-radius: 8px; padding: 5px 8px; color: #fff; background: rgba(255, 255, 255, .07); cursor: pointer; font: 700 11px/1 system-ui, -apple-system, sans-serif; }
@@ -580,6 +1305,7 @@
     panel.innerHTML = `
       <div class="rdk-recorder-head"><strong>动作录制</strong><span class="rdk-recorder-status" data-recorder-status>等待仿真引擎</span></div>
       <p class="rdk-recorder-note">记录真实 61D 观测 + 14D 动作，不只是按键。可导出给模仿学习或奖励设计。</p>
+      <div class="rdk-task-context"><strong data-simulator-task-label>当前任务 · 行走</strong><button type="button" data-recovery-test hidden>测试跌倒恢复</button></div>
       <span class="rdk-recorder-count" data-recorder-count>0 帧 · 0.0 秒</span>
       <div class="rdk-recorder-actions">
         <button type="button" data-recorder-start disabled>开始录制</button>
@@ -593,6 +1319,12 @@
     const stop = panel.querySelector('[data-recorder-stop]');
     const exportButton = panel.querySelector('[data-recorder-export]');
     const clear = panel.querySelector('[data-recorder-clear]');
+    panel.querySelector('[data-recovery-test]').addEventListener('click', () => {
+      panel.querySelector('[data-recorder-status]').textContent = testRecovery()
+        ? '已施加跌倒扰动，观察起身结果'
+        : '引擎尚未开放跌倒测试';
+    });
+    updateTaskControls();
     start.addEventListener('click', () => {
       if (!startRecording())
         panel.querySelector('[data-recorder-status]').textContent = '等待仿真引擎';
@@ -602,14 +1334,24 @@
     clear.addEventListener('click', clearRecording);
     window.__microduckRecorder = {
       start: startRecording,
-      stop: stopRecording,
+      stop(options) {
+        const config = options && typeof options === 'object' ? options : null;
+        stopRecording(config ? undefined : options, config ? config.notify !== false : true);
+        return recorder.samples.length ? recordingText() : '';
+      },
       clear: clearRecording,
       download: downloadRecording,
       get active() {
         return recorder.active;
       },
+      get recording() {
+        return recorder.active;
+      },
       get sampleCount() {
         return recorder.samples.length;
+      },
+      get byteLength() {
+        return recorder.samples.length ? new Blob([recordingText()]).size : 0;
       },
       get lastHeader() {
         return recorder.last;
@@ -627,7 +1369,9 @@
       },
     };
     recorder.uiTimer = setInterval(() => {
+      if (!simulatorContext.active) pauseSimulatorState();
       const ready = recorderReady();
+      updateTaskControls();
       panel.hidden = isLanding();
       if (!recorder.active) {
         start.disabled = !ready;
@@ -647,7 +1391,7 @@
    * The upstream bundle already owns the hard part: `window.rl.loadCustomPolicy(ref)`
    * accepts an absolute .onnx URL, validates that the graph takes the robot's 61D
    * observation and emits 14 actions (the same contract the platform's training
-   * manifest pins), loads it into the walk slot, and — importantly — reverts to
+   * manifest pins), binds it to the selected task slot, and reverts to
    * the stock policy and reports a reason whenever the move misbehaves. The
    * panel therefore adds no policy maths of its own; it lists the account's
    * completed runs, hands the simulator the platform's digest-verified bytes
@@ -795,6 +1539,7 @@
             run.backend === 'local' &&
             run.mock !== true &&
             run.status === 'completed' &&
+            BROWSER_TASK_IDS.has(run.taskId) &&
             run.artifact &&
             String(run.artifact.format || '').toLowerCase() === 'onnx',
         );
@@ -817,31 +1562,36 @@
         setStatus('仿真引擎未就绪', 'error');
         return;
       }
-      const absolute = new URL(
-        `${POLICY_API_BASE}/api/sim2real/runs/${encodeURIComponent(run.id)}/policy.onnx`,
-        window.location.href,
-      ).href;
+      if (!BROWSER_TASK_IDS.has(run.taskId)) {
+        setStatus('该策略需要对应的训练场景，不能装入当前单鸭场景', 'error');
+        return;
+      }
+      if (state.busy) return;
+      state.busy = true;
       setStatus('装载中…');
       renderList();
       try {
-        await current.loadCustomPolicy(absolute);
-        state.current = run.id;
-        setStatus('已装载到行走槽位', 'active');
+        const loaded = await startPolicyRun({
+          runId: run.id,
+          apiRoot: `${POLICY_API_BASE}/api/sim2real`,
+        });
+        state.current = loaded ? run.id : null;
+        setStatus(policyTrial.message, policyTrial.phase === 'failed' ? 'error' : 'active');
       } catch (error) {
-        // The simulator reverts to the stock policy itself and rejects a
-        // graph whose observation/action dims do not match the robot; surface
-        // its reason verbatim instead of inventing one.
         state.current = null;
         setStatus(String(error?.message || error).slice(0, 120), 'error');
       } finally {
+        state.busy = false;
         renderList();
         clearButton.disabled = !state.current;
       }
     }
 
     function clearPolicy() {
+      stopPolicyRun();
       const current = runtime();
-      if (current && typeof current.clearCustomPolicy === 'function') current.clearCustomPolicy();
+      if (current?.customPolicy && typeof current.clearCustomPolicy === 'function')
+        current.clearCustomPolicy();
       state.current = null;
       clearButton.disabled = true;
       setStatus('已还原官方策略', 'active');
@@ -851,21 +1601,52 @@
     refresh.addEventListener('click', () => void refreshRuns());
     clearButton.addEventListener('click', clearPolicy);
 
-    const uiTimer = setInterval(() => {
+    const syncPolicyStatus = () => {
       panel.hidden = isLanding();
       const ready = policyLoaderReady();
       refresh.disabled = state.busy;
       const active = runtime()?.customPolicy;
-      if (active && active.status === 'active' && !state.current) {
+      if (policyTrial.loading) {
+        setStatus(policyTrial.message);
+      } else if (policyTrial.active || state.current) {
+        state.current = policyTrial.active ? policyTrial.runId : null;
+        setStatus(policyTrial.message, policyTrial.phase === 'failed' ? 'error' : 'active');
+        clearButton.disabled = !state.current;
+        renderList();
+      } else if (active?.session && !state.current) {
         // The operator can also load a move from the simulator's own menu;
         // mirror whatever is actually active instead of claiming otherwise.
         state.current = null;
         setStatus(`引擎已装载：${active.name || active.ref}`, 'active');
       }
-      if (!ready)
-        setStatus('等待仿真引擎', panel.classList.contains('is-error') ? 'error' : undefined);
+      const waiting = [
+        '等待仿真引擎',
+        '未连接平台',
+        '仿真引擎未就绪',
+        '当前仿真版本未开放策略装载',
+      ].includes(status.textContent);
+      if (!state.busy && !policyTrial.loading && !policyTrial.active) {
+        if (!ready && !panel.classList.contains('is-error')) {
+          setStatus(
+            typeof runtime()?.buildObs === 'function'
+              ? '当前仿真版本未开放策略装载'
+              : '等待仿真引擎',
+          );
+        } else if (ready && waiting) {
+          setStatus(
+            state.loaded
+              ? state.runs.length
+                ? `${state.runs.length} 个可用策略`
+                : '暂无可用策略'
+              : '引擎已就绪；点击刷新训练结果',
+          );
+        }
+      }
+      clearButton.disabled = !policyTrial.active && !policyTrial.loading && !active;
       for (const button of list.querySelectorAll('button')) button.disabled = state.busy || !ready;
-    }, 700);
+    };
+    const uiTimer = setInterval(syncPolicyStatus, 700);
+    syncPolicyStatus();
 
     window.__microduckPolicy = {
       refresh: refreshRuns,
@@ -878,7 +1659,13 @@
         return state.runs.slice();
       },
       get current() {
-        return state.current;
+        return policyTrial.active ? policyTrial.runId : null;
+      },
+      get phase() {
+        return policyTrial.phase;
+      },
+      get relevantModeCount() {
+        return policyTrial.relevantModeCount;
       },
       destroy() {
         clearInterval(uiTimer);
@@ -1574,34 +2361,35 @@
     });
   }
 
-  // Host workbench replay bridge. New simulator builds may expose an
-  // applyReplayFrame(frame) hook; older builds still receive a cancellable
-  // custom event so integrations can consume the exact same frame contract.
+  // Only the embedding workbench may control this runtime. A peer tab or
+  // unrelated frame must never trigger a task, policy, or physical state write.
   window.addEventListener('message', (event) => {
+    if (!trustedParentMessage(event)) return;
     const payload = event?.data;
-    if (!payload || payload.type !== 'rdk-replay-frame' || !payload.frame) return;
-    const frame = payload.frame;
-    const current = runtime();
-    let applied = false;
-    for (const method of ['applyReplayFrame', 'setReplayFrame', 'replayFrame']) {
-      if (typeof current?.[method] !== 'function') continue;
-      try {
-        current[method](frame);
-        applied = true;
-        break;
-      } catch (error) {
-        console.warn('[microduck replay] frame apply failed', error);
-      }
+    if (payload?.type === 'rdk-simulator-task') {
+      queueTask(payload.taskId);
+      return;
     }
-    try {
-      window.dispatchEvent(
-        new CustomEvent('rdk-replay-frame', {
-          detail: { ...frame, index: payload.index, runId: payload.runId, applied },
-        }),
-      );
-    } catch {
-      /* isolated runtimes may not support CustomEvent */
+    if (payload?.type === 'rdk-simulator-action' && payload.action === 'recovery-test') {
+      notifyParent({
+        type: 'rdk-simulator-action-state',
+        action: payload.action,
+        applied: testRecovery(),
+      });
+      return;
     }
+    if (payload?.type === 'rdk-replay-frame' && payload.frame) applyReplay(payload);
+    if (payload?.type === 'rdk-replay-stop') stopReplayState();
+    if (payload?.type === 'rdk-simulator-active') setSimulatorActive(payload.active);
+    if (payload?.type === 'rdk-policy-run') void startPolicyRun(payload);
+    if (payload?.type === 'rdk-policy-stop') stopPolicyRun();
+  });
+  window.addEventListener('pagehide', () => {
+    simulatorContext.active = true;
+    stopReplayState();
+    stopSimulatorPause();
+    stopPolicyRun();
+    if (simulatorContext.timer) clearTimeout(simulatorContext.timer);
   });
 
   document.addEventListener('keydown', (event) => {

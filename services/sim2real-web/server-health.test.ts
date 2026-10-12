@@ -38,6 +38,29 @@ vi.mock('../../server/agent-runtime/dsh-runtime.js', async (importOriginal) => {
   };
 });
 
+// A verified-principal seam for identity response tests. This exists only in
+// this private HTTP fixture; it does not infer production identity from headers.
+vi.mock('./studio-sso-auth.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('./studio-sso-auth.js')>();
+  return {
+    ...actual,
+    studioSsoAuth: {
+      ...actual.studioSsoAuth,
+      resolvePrincipal: (request: import('express').Request) => {
+        const session = request.headers['x-verified-session-fixture'];
+        if (session === 'alice-session' || session === 'bob-session') {
+          return {
+            accountId: session === 'alice-session' ? 'account-alice' : 'account-bob',
+            displayName: '同名用户',
+            roles: ['operator'],
+          };
+        }
+        return actual.studioSsoAuth.resolvePrincipal(request);
+      },
+    },
+  };
+});
+
 const originalEnv = { ...process.env };
 const temporaryRoots: string[] = [];
 const openServers: Array<ReturnType<ReturnType<typeof createSim2RealWebApp>['listen']>> = [];
@@ -100,6 +123,30 @@ async function json(url: string): Promise<{ response: Response; payload: any }> 
 }
 
 describe('standalone Sim2Real health and optional simulator surface', () => {
+  it('returns stable account IDs for authenticated users with the same display name', async () => {
+    const { baseUrl } = await fixture();
+    const session = async (id: string) => {
+      const response = await fetch(`${baseUrl}/api/sim2real/auth/session`, {
+        headers: { 'x-verified-session-fixture': id },
+      });
+      expect(response.status).toBe(200);
+      expect(response.headers.get('cache-control')).toBe('no-store');
+      return response.json();
+    };
+    const alice = await session('alice-session');
+    const bob = await session('bob-session');
+    expect(alice).toMatchObject({
+      authenticated: true,
+      accountId: 'account-alice',
+      displayName: '同名用户',
+    });
+    expect(bob).toMatchObject({
+      authenticated: true,
+      accountId: 'account-bob',
+      displayName: '同名用户',
+    });
+    expect(alice.accountId).not.toBe(bob.accountId);
+  });
   it('sets bounded HTTP timeouts and socket request caps for production starts', () => {
     const server = http.createServer();
     hardenSim2RealHttpServer(server);

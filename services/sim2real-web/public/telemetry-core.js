@@ -163,6 +163,10 @@
     if (timestamp === null) return null;
     return {
       t: timestamp,
+      ...(typeof raw.taskId === 'string' && /^[a-z0-9-]{1,96}$/.test(raw.taskId) ? { taskId: raw.taskId } : {}),
+      ...(typeof raw.sceneId === 'string' && /^[a-z0-9-]{1,96}$/.test(raw.sceneId) ? { sceneId: raw.sceneId } : {}),
+      ...Object.fromEntries(['qpos', 'qvel'].filter((key) => Array.isArray(raw[key]) && raw[key].length <= 4096 && raw[key].every((entry) => typeof entry === 'number' && Number.isFinite(entry))).map((key) => [key, raw[key].slice()])),
+      ...(normalizeSimulatorReplay(raw.replay) ? { replay: normalizeSimulatorReplay(raw.replay) } : {}),
       ...(Array.isArray(raw.observation)
         ? { observation: raw.observation.slice(0, MAX_TELEMETRY_VECTOR_VALUES) }
         : {}),
@@ -206,6 +210,25 @@
         return controlPeriodSeconds === null ? {} : { controlPeriodSeconds };
       })(),
     };
+  }
+
+  function normalizeSimulatorReplay(value) {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+    const keys = ['taskId', 'qpos', 'qvel', 'integrationState', 'time', 'stepCount', 'action', 'reward', 'done', 'posture', 'prevPosture', 'lastAction', 'command', 'lastBallDistance', 'lastGoalDistance', 'scored'];
+    const normalized = {};
+    const finiteArray = (entry) => Array.isArray(entry) && entry.length <= 4096 && entry.every((item) => typeof item === 'number' && Number.isFinite(item));
+    for (const [key, entry] of Object.entries(value)) {
+      if (!keys.includes(key)) return null;
+      if (key === 'taskId') {
+        if (typeof entry !== 'string' || !/^[a-z0-9-]{1,96}$/.test(entry)) return null;
+      } else if (['done', 'scored'].includes(key)) {
+        if (typeof entry !== 'boolean') return null;
+      } else if (Array.isArray(entry)) {
+        if (!finiteArray(entry) && !(key === 'action' && entry.length <= 6 && entry.every(finiteArray))) return null;
+      } else if (typeof entry !== 'number' || !Number.isFinite(entry)) return null;
+      normalized[key] = entry;
+    }
+    return normalized;
   }
 
   // Keep the browser parser bounded before it calls split()/JSON.parse(). A
@@ -289,6 +312,10 @@
     }
     const samples = values.map(normalizeTelemetrySample).filter(Boolean);
     if (!samples.length) throw new Error('没有找到带 t/time 时间戳的有效遥测样本');
+    const taskIds = new Set(samples.map((sample) => sample.taskId).filter(Boolean));
+    if (taskIds.size > 1 || (header?.taskId && [...taskIds].some((taskId) => taskId !== header.taskId))) {
+      throw new Error('轨迹包含不同任务的帧，请按任务分别导入。');
+    }
     const firstTimestamp = samples[0].t;
     const lastTimestamp = samples[samples.length - 1].t;
     const durationSeconds = Math.max(0, lastTimestamp - firstTimestamp);
@@ -297,6 +324,9 @@
       fileName: '',
       source: header?.source || 'import',
       contractId: header?.contractId || '',
+      taskId: typeof header?.taskId === 'string' ? header.taskId : samples[0]?.taskId || '',
+      ...(header?.observationSize ? { observationSize: header.observationSize } : {}),
+      ...(header?.actionSize ? { actionSize: header.actionSize } : {}),
       samples,
       skipped,
       summary: {

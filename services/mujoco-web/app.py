@@ -18,14 +18,16 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from PIL import Image
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from models import MODEL_DEFINITIONS, ModelDefinition
+from task_simulation import close_task_sessions, cleanup_task_sessions, router as task_router
+from simulation_auth import LOCAL_OWNER, SimulationAuthMiddleware, current_owner, reserve_session, release_session
 
 
 ROOT = Path(__file__).resolve().parent
 STATIC_DIR = ROOT / "static"
-MAX_SESSIONS = 24
+MAX_SESSIONS = 32
 SESSION_TTL_SECONDS = 30 * 60
 # A browser normally sends DELETE on pagehide, but a crashed tab, a mobile
 # suspension, or a dead reverse-proxy connection cannot do that. The janitor
@@ -46,6 +48,7 @@ class SimulationSession:
     model: mujoco.MjModel
     data: mujoco.MjData
     last_seen: float
+    owner: str = LOCAL_OWNER
     seed: int | None = None
     domain_randomization: dict[str, float] = field(default_factory=dict)
     # Last bounded command is part of the observable control feedback.  Keep
@@ -101,12 +104,42 @@ class SessionRequest(BaseModel):
     domain_randomization: bool = False
 
 
+class OriginBotReplayRequest(BaseModel):
+    """The same bounded simulator snapshot whitelist accepted by telemetry."""
+    model_config = ConfigDict(extra="forbid")
+    taskId: str = Field(max_length=96)
+    qpos: list[float] = Field(max_length=4096)
+    qvel: list[float] = Field(max_length=4096)
+    integrationState: list[float] = Field(max_length=4096)
+    time: float = Field(ge=0, le=1_000_000)
+    stepCount: int = Field(ge=0, le=1_000_000)
+    action: list[float] = Field(max_length=32)
+    reward: float
+    done: bool
+    command: list[float] = Field(min_length=13, max_length=13)
+
+    @field_validator("qpos", "qvel", "integrationState", "action", "command")
+    @classmethod
+    def finite_vectors(cls, values):
+        if any(not math.isfinite(value) or abs(value) > 1_000_000 for value in values):
+            raise ValueError("replay vectors must contain bounded finite numbers")
+        return values
+
+    @field_validator("time", "reward")
+    @classmethod
+    def finite_scalars(cls, value):
+        if not math.isfinite(value):
+            raise ValueError("replay values must be finite")
+        return value
+
+
 def _session_cleanup_loop(stop_event: threading.Event) -> None:
     """Reclaim idle sessions independently of request traffic."""
 
     while not stop_event.wait(SESSION_CLEANUP_INTERVAL_SECONDS):
         with _sessions_lock:
             _cleanup_sessions(time.monotonic())
+        cleanup_task_sessions()
 
 
 @asynccontextmanager
@@ -126,6 +159,7 @@ async def lifespan(_app: FastAPI):
         janitor.join(timeout=2.0)
         with _sessions_lock:
             _close_all_sessions()
+        close_task_sessions()
 
 
 app = FastAPI(
@@ -135,6 +169,7 @@ app = FastAPI(
     lifespan=lifespan,
 )
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
+app.include_router(task_router)
 
 
 @app.middleware("http")
@@ -160,6 +195,9 @@ async def content_security_policy(request: Request, call_next):
     response.headers["X-Frame-Options"] = "SAMEORIGIN"
     response.headers["Permissions-Policy"] = "camera=(), microphone=(), geolocation=()"
     return response
+
+
+app.add_middleware(SimulationAuthMiddleware)
 
 
 @app.exception_handler(RequestValidationError)
@@ -251,6 +289,7 @@ def _drop_session(session_id: str) -> SimulationSession | None:
 
     session = _sessions.pop(session_id, None)
     if session is not None:
+        release_session("playground", session_id)
         _close_renderers(session)
     return session
 
@@ -379,7 +418,7 @@ def _new_session(
 def _get_session(session_id: str) -> SimulationSession:
     with _sessions_lock:
         session = _sessions.get(session_id)
-        if session is None:
+        if session is None or session.owner != current_owner():
             raise HTTPException(status_code=404, detail="Simulation session not found")
         now = time.monotonic()
         # Creation-time cleanup alone leaves an abandoned session resident
@@ -393,7 +432,29 @@ def _get_session(session_id: str) -> SimulationSession:
         return session
 
 
+def _originbot_replay_snapshot(session: SimulationSession) -> dict[str, Any]:
+    spec = mujoco.mjtState.mjSTATE_INTEGRATION
+    integration = np.zeros(mujoco.mj_stateSize(session.model, spec))
+    mujoco.mj_getState(session.model, session.data, integration, spec)
+    command = session.last_cmd_vel
+    return {
+        "taskId": "originbot", "qpos": session.data.qpos.tolist(), "qvel": session.data.qvel.tolist(),
+        "integrationState": integration.tolist(), "time": float(session.data.time),
+        "stepCount": int(round(session.data.time / session.model.opt.timestep)),
+        "action": session.data.ctrl.tolist(), "reward": 0.0, "done": False,
+        # Numeric command context fits the common replay whitelist. It is
+        # simulator feedback; source is restored as "replay", never board data.
+        "command": [command["requestedLinear"], command["requestedAngular"],
+                    command["appliedLinear"], command["appliedAngular"],
+                    *command["requestedWheelRadS"], *command["wheelRadS"],
+                    *command["wheelCtrl"], *command["wheelTorqueNm"], float(command["saturated"])],
+    }
+
+
 def _state(session: SimulationSession) -> dict[str, Any]:
+    # Refresh sensors from the exported current qpos instead of the preceding
+    # integration stage, so a restored state and its saved sensor view agree.
+    mujoco.mj_forward(session.model, session.data)
     q = session.data.qpos
     v = session.data.qvel
     yaw = float(2 * math.atan2(q[6], q[3])) if len(q) >= 7 else 0.0
@@ -489,6 +550,7 @@ def _state(session: SimulationSession) -> dict[str, Any]:
         "qpos": [float(value) for value in session.data.qpos],
         "qvel": [float(value) for value in session.data.qvel],
         "controls": [float(value) for value in session.data.ctrl],
+        **({"replay": _originbot_replay_snapshot(session)} if session.definition.key == "originbot" else {}),
         "actuatorForces": [float(value) for value in session.data.actuator_force],
         "contacts": contacts,
         "collision": collision,
@@ -649,14 +711,23 @@ def create_session(request: SessionRequest) -> dict[str, Any]:
     with _sessions_lock:
         _cleanup_sessions(time.monotonic())
         if len(_sessions) >= MAX_SESSIONS:
-            raise HTTPException(status_code=503, detail="Too many active simulations")
-        session = _new_session(
-            definition,
-            seed=request.seed,
-            enable_domain_randomization=request.domain_randomization,
-        )
-        _sessions[session.session_id] = session
-        return _state(session)
+            raise HTTPException(status_code=429, detail="Too many active simulations")
+        session_id, owner = uuid.uuid4().hex, current_owner()
+        reserve_session("playground", session_id, owner)
+        try:
+            session = _new_session(
+                definition,
+                seed=request.seed,
+                enable_domain_randomization=request.domain_randomization,
+            )
+            session.session_id = session_id
+            session.owner = owner
+            state = _state(session)
+            _sessions[session.session_id] = session
+            return state
+        except Exception:
+            release_session("playground", session_id)
+            raise
 
 
 @app.delete("/api/sessions/{session_id}")
@@ -664,6 +735,7 @@ def delete_session(session_id: str) -> dict[str, Any]:
     """Explicitly end a simulation and release its model/renderer resources."""
 
     with _sessions_lock:
+        _get_session(session_id)
         session = _drop_session(session_id)
         if session is None:
             raise HTTPException(status_code=404, detail="Simulation session not found")
@@ -862,4 +934,62 @@ def reset_session(session_id: str) -> dict[str, Any]:
             if index < session.model.nq:
                 session.data.qpos[index] = value
         mujoco.mj_forward(session.model, session.data)
+        return _state(session)
+
+
+@app.post("/api/sessions/{session_id}/replay")
+def replay_originbot_session(session_id: str, request: OriginBotReplayRequest) -> dict[str, Any]:
+    """Restore recorded physics, not another live command with similar motion."""
+    with _sessions_lock:
+        session = _get_session(session_id)
+        if session.definition.key != "originbot" or request.taskId != "originbot":
+            raise HTTPException(422, "Replay snapshot must match an OriginBot session")
+        if len(request.qpos) != session.model.nq or len(request.qvel) != session.model.nv:
+            raise HTTPException(422, "Replay qpos/qvel dimensions do not match the model")
+        spec = mujoco.mjtState.mjSTATE_INTEGRATION
+        if len(request.integrationState) != mujoco.mj_stateSize(session.model, spec):
+            raise HTTPException(422, "Replay integrationState dimensions do not match the model")
+        if len(request.action) != session.model.nu:
+            raise HTTPException(422, "Replay action dimensions do not match the model")
+        candidate = mujoco.MjData(session.model)
+        integration = np.asarray(request.integrationState, dtype=float)
+        mujoco.mj_setState(session.model, candidate, integration, spec)
+        if (candidate.time != request.time or not np.array_equal(candidate.qpos, request.qpos)
+                or not np.array_equal(candidate.qvel, request.qvel) or not np.array_equal(candidate.ctrl, request.action)):
+            raise HTTPException(422, "Replay integrationState contradicts time, pose or controls")
+        if request.stepCount != int(round(request.time / session.model.opt.timestep)):
+            raise HTTPException(422, "Replay stepCount contradicts simulation time")
+        if request.reward != 0.0 or request.done:
+            raise HTTPException(422, "OriginBot playground snapshots have zero reward and done=false")
+        for joint in range(session.model.njnt):
+            kind = int(session.model.jnt_type[joint])
+            if kind in (int(mujoco.mjtJoint.mjJNT_FREE), int(mujoco.mjtJoint.mjJNT_BALL)):
+                start = int(session.model.jnt_qposadr[joint]) + (3 if kind == int(mujoco.mjtJoint.mjJNT_FREE) else 0)
+                if not np.isclose(np.linalg.norm(candidate.qpos[start:start + 4]), 1.0, atol=1e-6):
+                    raise HTTPException(422, "Replay joint quaternions must be unit length")
+        for index, value in enumerate(request.action):
+            if session.model.actuator_ctrllimited[index]:
+                low, high = session.model.actuator_ctrlrange[index]
+                if not low <= value <= high:
+                    raise HTTPException(422, "Replay actuator controls exceed the model limits")
+        command = request.command
+        if command[12] not in (0.0, 1.0) or not np.array_equal(command[6:8], request.action[:2]) or not np.array_equal(command[8:10], request.action[:2]):
+            raise HTTPException(422, "Replay command context contradicts wheel controls")
+        radius = session.definition.wheel_radius or 0.09
+        track = session.definition.track_width or 0.50
+        expected_linear = radius * sum(request.action[:2]) / 2.0
+        expected_angular = radius * (request.action[1] - request.action[0]) / track
+        if not np.allclose(command[2:4], [expected_linear, expected_angular], atol=1e-12, rtol=1e-12):
+            raise HTTPException(422, "Replay command context contradicts applied twist")
+        # Complete all checks before changing the live session.
+        mujoco.mj_setState(session.model, session.data, integration, spec)
+        session.last_cmd_vel = {
+            **_zero_cmd_vel(session.definition, "replay"),
+            "linear": command[0], "angular": command[1],
+            "requestedLinear": command[0], "requestedAngular": command[1],
+            "appliedLinear": command[2], "appliedAngular": command[3],
+            "requestedWheelRadS": command[4:6], "wheelRadS": command[6:8],
+            "wheelCtrl": command[8:10], "wheelTorqueNm": command[10:12],
+            "saturated": bool(command[12]),
+        }
         return _state(session)

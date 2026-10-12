@@ -82,6 +82,28 @@ const valid = await validateProductionConfig({
 });
 assert.equal(valid.ok, true);
 
+const unsignedSimulation = await validateProductionConfig({
+  mode: 'runtime',
+  fileMode: 0o600,
+  values: { ...validValues, RDK_SIM2REAL_MUJOCO_WEB_URL: 'http://127.0.0.1:18100' },
+});
+assert.equal(unsignedSimulation.ok, false);
+assert.ok(
+  unsignedSimulation.checks.some(
+    (item) => item.id === 'simulation-signing-key' && item.status === 'fail',
+  ),
+);
+const signedSimulation = await validateProductionConfig({
+  mode: 'runtime',
+  fileMode: 0o600,
+  values: {
+    ...validValues,
+    RDK_SIM2REAL_MUJOCO_WEB_URL: 'http://127.0.0.1:18100',
+    RDK_SIM2REAL_SIMULATION_SECRET: 'test-simulation-config-secret-0123456789',
+  },
+});
+assert.equal(signedSimulation.ok, true);
+
 const validWithSystemdPaths = await validateProductionConfig({
   mode: 'runtime',
   fileMode: 0o600,

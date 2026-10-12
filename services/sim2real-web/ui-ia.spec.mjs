@@ -14,6 +14,11 @@ const agentChat = fs.readFileSync(path.join(here, 'public', 'agent-chat.js'), 'u
 // assertions below now point at the merged files.
 const cssApp = fs.readFileSync(path.join(here, 'public', 'app.css'), 'utf8');
 const cssIa = cssApp;
+assert.match(
+  html,
+  /<\/article>\s*<\/div>\s*<details class="panel telemetry-panel/,
+  'telemetry replay must sit outside the comparison-only wrapper',
+);
 
 import {
   assertStyleInvariants,
@@ -274,6 +279,27 @@ assert.match(
   'product selector lives in the sidebar project card',
 );
 assert.match(html, /id="task-select"/, 'task selector must exist');
+assert.match(
+  app,
+  /appRelativePath\('\/task-sim\/'\)/,
+  'engine tasks must open their own simulator scene',
+);
+assert.match(
+  app,
+  /handleSimulatorTaskState/,
+  'simulator readiness follows the actual task runtime',
+);
+assert.match(
+  app,
+  /mountLocalRecordingReplay/,
+  'new recordings are replayable without a training run',
+);
+assert.doesNotMatch(app, /画面不随任务切换/, 'task switching must update the visible simulator');
+assert.match(
+  html,
+  /id="replay-scene-frame"/,
+  'pose replay must render a visible scene beside its timeline',
+);
 assert.match(
   html,
   /guide-panel[\s\S]{0,2000}id="task-select"/,

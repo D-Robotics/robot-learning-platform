@@ -9,7 +9,7 @@ Run locally:
 ```bash
 cd /path/to/robot-learning-platform
 set -euo pipefail
-python3.11 -m venv services/mujoco-web/.venv
+python3.12 -m venv services/mujoco-web/.venv
 . services/mujoco-web/.venv/bin/activate
 pip install -r services/mujoco-web/requirements.txt
 MUJOCO_GL=egl uvicorn --app-dir services/mujoco-web app:app --host 127.0.0.1 --port 18100
@@ -35,17 +35,23 @@ if ! id -u mujoco >/dev/null 2>&1; then
 fi
 release_id="$(git rev-parse --verify HEAD)"
 release=/opt/mujoco-web/releases/"$release_id"
+if [ -e "$release" ]; then
+  echo "release already exists: $release; use a new reviewed release id" >&2
+  exit 1
+fi
+mujoco_release_stage="$(mktemp -d)"
+node scripts/package-task-simulator.mjs --output "$mujoco_release_stage"
 sudo install -d -o root -g root -m 0755 "$release"
 sudo install -d -o root -g root -m 0755 /opt/mujoco-web/venv
-sudo cp -a services/mujoco-web/. "$release/"
+sudo cp -a "$mujoco_release_stage/." "$release/"
 sudo chown -R root:root "$release"
 current=/opt/mujoco-web/current
 if [ -e "$current" ] && [ ! -L "$current" ]; then
   echo "refusing to replace non-symlink $current; migrate it manually" >&2
   exit 1
 fi
-sudo ln -sfnT "$release" "$current"
-sudo python3.11 -m venv /opt/mujoco-web/venv
+sudo ln -sfnT "$release/services/mujoco-web" "$current"
+sudo python3.12 -m venv /opt/mujoco-web/venv
 sudo /opt/mujoco-web/venv/bin/pip install --requirement \
   /opt/mujoco-web/current/requirements.txt
 sudo install -o root -g root -m 0644 services/mujoco-web/mujoco-web.service \
@@ -57,9 +63,20 @@ for attempt in $(seq 1 30); do
   sleep 1
 done
 curl -fsS http://127.0.0.1:18100/healthz
+curl -fsS http://127.0.0.1:18100/api/task-scenes
 ```
 
-If the deployment only needs the browser simulator, skip this Python block;
+The package preserves `services/mujoco-web`, `engines/`, and
+`assets/originbot` under one release root. Keep that layout: copying only the
+service directory omits both the task environments and the calibration module
+imported by `models.py`. The `current` symlink points at the service subdirectory
+so the existing systemd working directory, application entry, requirements path,
+and Nginx target remain valid. The staging directory can be removed after its
+manifest has been checked against the installed release. Interactive task setup
+and recording/replay instructions are in [`docs/simulation.md`](../../docs/simulation.md).
+
+If the deployment only needs the browser-only MicroDuck sandbox and no engine
+task scenes, skip this Python block;
 the `mujoco` user, virtualenv, and `mujoco-web.service` are not required.
 
 #### Browser MicroDuck static service (18101)
@@ -107,7 +124,7 @@ done
 curl -fsS -o /dev/null http://127.0.0.1:18101/index.html
 ```
 
-The `mujoco` service needs a real Linux Python 3.11 environment and the
+The pinned NumPy stack requires Python 3.12 or newer. The `mujoco` service needs a real Linux Python environment and the
 `mujoco` wheel's headless rendering dependencies; a browser-only MicroDuck
 deployment can omit `mujoco-web.service` and use only the static service.
 After updating either `current` directory, run `systemctl restart` for the
@@ -137,9 +154,10 @@ Valid entries appear in
 the same checks through `npm run verify:mujoco-models` (SKIP without
 mujoco).
 
-Because the production release is a copy under `/opt/mujoco-web/current`,
-deploy the registry with the release — `sudo cp -a` of the checkout already
-carries `registry/`; afterwards `systemctl restart mujoco-web.service` and
+The runtime package contains the registry contract; deploy your reviewed
+registry JSON files into the packaged release's `services/mujoco-web/registry/`
+through config management before promoting it. The package does not copy local
+registry entries automatically. Afterwards `systemctl restart mujoco-web.service` and
 verify with `curl http://127.0.0.1:18100/api/models`.
 
 If the HTTPS virtual host has not yet received a MuJoCo route, install the
@@ -159,7 +177,7 @@ sudo nginx -t && sudo systemctl reload nginx
 `sites-enabled` 或其它域名，请设置 `RDK_SIM2REAL_NGINX_CONFIG=/绝对路径/your-server.conf`。
 脚本只会在目标 server block 内验证端口和完整受管路由，发现旧配置不一致会停止并要求人工迁移。
 
-If the browser-only deployment does not use the Python MuJoCo lab, the first
+If the browser-only deployment does not use engine task scenes or the Python MuJoCo lab, the first
 unit and its Python environment can be omitted; keep `microduck-web.service`
 and the `/mujoco/microduck/` route.
 
@@ -226,6 +244,27 @@ ONNX policies in the user's browser. The original fixed-model lab remains at
 The static release is built from the upstream Pollen Robotics simulator and
 keeps its upstream model, policy, and attribution files. Upstream references
 are recorded in `MICRODUCK-UPSTREAM.md`.
+
+The basketball, stilts, stability-ball, ladder, swing, and football task views
+continue to run their training engines' MuJoCo proxy dynamics. Their visual duck
+uses the reviewed MicroDuck appearance when available and follows the engine's
+actual robot reference position and orientation. Height alignment and mapping
+proxy joint posture to the visual rig are display adapters; they do not replace
+the collision bodies, observation and action contract, reward calculation, or
+recorded engine snapshot. The view
+identifies this separation. If the visual assets are absent or fail to load, it
+shows an explicitly identified mechanical duck approximation.
+
+Mount a reviewed upstream release with `RDK_SIM2REAL_MICRODUCK_ROOT` to provide
+`robot/mjlab/microduck.glb` and `robot/mjlab/kinematics.json` through the existing
+MicroDuck static route. The GLB supplies named geometries; the kinematics file
+supplies their body hierarchy and transforms. The public repository and Python
+task-service package do not redistribute these upstream visual assets. Obtain,
+verify, and record their source through `MICRODUCK-UPSTREAM.md`, and retain the
+release's license, model-file terms, and attribution files when mounting it.
+Engine task stepping remains available with the explicit visual approximation
+when no upstream release is mounted; the basic WASM sandbox requires the full
+browser release.
 
 The production page may load `microduck-community-overlay.js` together with
 `community/microduck-wechat.png`. The overlay keeps a branded community card on

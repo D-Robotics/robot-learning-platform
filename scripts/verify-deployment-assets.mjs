@@ -359,7 +359,7 @@ const mujocoStaticApp = read('services/mujoco-web/static/app.js');
 const mujocoModels = read('services/mujoco-web/models.py');
 const mujocoUnit = read('services/mujoco-web/mujoco-web.service');
 assert.match(originbotHtml, /MuJoCo 3D/);
-assert.match(originbotHtml, /<script\s+src="\.\/sim\.js\?v=12"/);
+assert.match(originbotHtml, /<script\s+src="\.\/sim\.js\?v=13"/);
 assert.match(originbotSim, /const API_ROOT = `\$\{mujocoBase\}\/api`/);
 assert.match(originbotSim, /source: 'originbot-sim'/);
 assert.match(originbotSim, /domain_randomization: domainRandomization/);
@@ -716,6 +716,35 @@ assert.match(read('services/mujoco-web/mujoco-web.service'), /127\.0\.0\.1 --por
 const mujocoNginx = read('services/mujoco-web/install-nginx-route.py');
 assert.match(mujocoNginx, /location \/mujoco\//);
 assert.match(mujocoNginx, /proxy_pass http:\/\/127\.0\.0\.1:18100\//);
+assert.match(mujocoNginx, /location \^~ \/mujoco\/api\//);
+assert.match(mujocoNginx, /location \^~ \/sim2real\/mujoco\/api\//);
+assert.match(mujocoNginx, /proxy_pass http:\/\/127\.0\.0\.1:18102;/);
+assert.match(mujocoNginx, /proxy_pass http:\/\/127\.0\.0\.1:18102\/mujoco\/api\//);
+assert.match(
+  read('services/sim2real-web/server.ts'),
+  /createMujocoApiBridge\(\{ auth: studioSsoAuth \}\)/,
+);
+const simulationNginxTests = spawnSync(
+  'python3',
+  [
+    '-m',
+    'unittest',
+    'discover',
+    '-s',
+    path.join(root, 'services/mujoco-web'),
+    '-p',
+    'test_install_nginx_route.py',
+  ],
+  { encoding: 'utf8' },
+);
+if (simulationNginxTests.status !== 0) {
+  process.stderr.write(
+    simulationNginxTests.stderr ||
+      simulationNginxTests.stdout ||
+      'simulation API routing checks failed\n',
+  );
+  process.exit(simulationNginxTests.status || 1);
+}
 
 // Compile Python sources without creating __pycache__ files. This catches a
 // broken provisioning script before an operator copies it to a production

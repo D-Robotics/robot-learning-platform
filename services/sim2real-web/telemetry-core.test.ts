@@ -350,6 +350,94 @@ describe('parseTelemetryText', () => {
     expect(evidence.summary.fallCount).toBe(0);
   });
 
+  it('preserves task identity and complete simulator replay state in exported and batched recordings', () => {
+    const qpos = [0.1, -0.2, 0.35, 1, 0, 0, 0];
+    const qvel = [0.03, 0, 0, 0, 0.01, 0];
+    const replay = {
+      taskId: 'balance-stilts',
+      qpos,
+      qvel,
+      integrationState: [0.02, ...qpos, ...qvel, 0.12, -0.03],
+      time: 0.02,
+      stepCount: 1,
+      action: Array(14).fill(0.1),
+      reward: 0.75,
+      done: false,
+      posture: Array(14).fill(0.035),
+      prevPosture: Array(14).fill(0),
+      lastAction: Array(14).fill(0.1),
+      command: Array(13).fill(0),
+    };
+    const header = {
+      type: 'header',
+      taskId: replay.taskId,
+      source: 'engine-task-simulation',
+      contractId: 'microduck-policy-v1',
+      observationSize: 61,
+      actionSize: 14,
+    };
+    const sample = {
+      t: 0.02,
+      taskId: replay.taskId,
+      sceneId: 'balance-stilts',
+      qpos,
+      qvel,
+      replay,
+      observation: Array(61).fill(0),
+      action: replay.action,
+      reward: replay.reward,
+      done: false,
+    };
+    for (const text of [
+      [header, sample].map((row) => JSON.stringify(row)).join('\n'),
+      JSON.stringify({ ...header, samples: [sample] }),
+    ]) {
+      const evidence = core.parseTelemetryText(text);
+      expect(evidence.taskId).toBe(replay.taskId);
+      expect(evidence.source).toBe(header.source);
+      expect(evidence.contractId).toBe(header.contractId);
+      expect(evidence.samples).toEqual([sample]);
+    }
+    const headerless = core.parseTelemetryText(JSON.stringify([sample]));
+    expect(headerless.taskId).toBe(sample.taskId);
+    expect(headerless.samples[0]).toEqual(sample);
+  });
+
+  it('rejects mixed task frames and a header naming a different task instead of merging the recording', () => {
+    const first = { t: 0.02, taskId: 'balance-stilts', qpos: [1, 0, 0, 0] };
+    const other = { t: 0.04, taskId: 'balance-basketball', qpos: [1, 0, 0, 0] };
+    const header = { type: 'header', taskId: first.taskId };
+    for (const text of [
+      [first, other].map((row) => JSON.stringify(row)).join('\n'),
+      [header, first, other].map((row) => JSON.stringify(row)).join('\n'),
+      JSON.stringify({ ...header, samples: [other] }),
+      [header, other].map((row) => JSON.stringify(row)).join('\n'),
+    ]) {
+      expect(() => core.parseTelemetryText(text)).toThrow('轨迹包含不同任务的帧');
+    }
+  });
+
+  it('keeps legacy recordings without task IDs replayable and permits an explicit header for taskless frames', () => {
+    const samples = [
+      { t: 0, qpos: [0, 0, 0.3, 1, 0, 0, 0], qvel: Array(6).fill(0) },
+      { t: 0.02, qpos: [0.01, 0, 0.3, 1, 0, 0, 0], qvel: [0.5, 0, 0, 0, 0, 0] },
+    ];
+    const legacy = core.parseTelemetryText(samples.map((row) => JSON.stringify(row)).join('\n'));
+    expect(legacy.taskId).toBe('');
+    expect(legacy.samples).toEqual(samples);
+    expect(legacy.summary.sampleCount).toBe(2);
+    const withHeader = core.parseTelemetryText(
+      [{ type: 'header', taskId: 'walk' }, ...samples].map((row) => JSON.stringify(row)).join('\n'),
+    );
+    expect(withHeader.taskId).toBe('walk');
+    expect(withHeader.samples).toEqual(samples);
+    expect(
+      withHeader.samples.every(
+        (sample: Record<string, unknown>) => !Object.hasOwn(sample, 'taskId'),
+      ),
+    ).toBe(true);
+  });
+
   it('accepts a header line plus a batched {samples: [...]} envelope', () => {
     const evidence = core.parseTelemetryText(
       [
