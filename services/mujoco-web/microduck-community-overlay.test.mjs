@@ -75,7 +75,7 @@ function runResponse(taskId, id = `run-${taskId}`) {
   };
 }
 
-function bridgeFixture(runtime) {
+function bridgeFixture(runtime, { now } = {}) {
   const dom = new JSDOM('<!doctype html><html><head></head><body>Simulation</body></html>', {
     url: 'https://studio.example.test/mujoco/microduck/',
     runScripts: 'dangerously',
@@ -88,6 +88,7 @@ function bridgeFixture(runtime) {
     postMessage: (data) => messages.push(data),
   };
   Object.defineProperty(window, 'parent', { value: parent });
+  if (now) Object.defineProperty(window.performance, 'now', { value: now });
   window.matchMedia = () => ({ matches: false });
   if (runtime) window.rl = runtime;
   window.eval(overlaySource);
@@ -148,6 +149,82 @@ test('task bridge waits for runtime, rejects foreign messages and sets up a kick
       (message) => message.phase === 'failed' && message.taskId === 'balance-stilts',
     ),
   );
+});
+
+test('task preparation waits for the user to start WASM before measuring its timeout', async (t) => {
+  let now = 0;
+  const fixture = bridgeFixture(undefined, { now: () => now });
+  t.after(() => fixture.dom.window.close());
+  fixture.send({ type: 'rdk-simulator-task', taskId: 'walk' });
+  now = 60_000;
+  await new Promise((resolve) => setTimeout(resolve, 150));
+  assert.equal(
+    fixture.messages.some((message) => message.phase === 'failed'),
+    false,
+  );
+  assert.equal(
+    fixture.messages.some((message) => message.phase === 'ready'),
+    false,
+  );
+  assert.equal(fixture.window.__microduckSimulator.ready, false);
+  let resets = 0;
+  fixture.window.rl = policyRuntime({ resetSim: () => resets++ });
+  await new Promise((resolve) => setTimeout(resolve, 150));
+  assert.equal(resets, 1);
+  assert.equal(fixture.window.__microduckSimulator.ready, true);
+  assert.equal(fixture.messages.at(-1).phase, 'ready');
+});
+
+test('task preparation gives a delayed runtime its own deadline and fails a permanent reset lock', async (t) => {
+  let now = 0;
+  const fixture = bridgeFixture(undefined, { now: () => now });
+  t.after(() => fixture.dom.window.close());
+  fixture.send({ type: 'rdk-simulator-task', taskId: 'sit' });
+  now = 60_000;
+  let resets = 0;
+  const current = policyRuntime({ inputLocked: true, resetSim: () => resets++ });
+  fixture.window.rl = current;
+  await new Promise((resolve) => setTimeout(resolve, 150));
+  assert.equal(resets, 1);
+  assert.equal(
+    fixture.messages.some((message) => message.phase === 'failed'),
+    false,
+  );
+  now = 74_999;
+  await new Promise((resolve) => setTimeout(resolve, 150));
+  assert.equal(
+    fixture.messages.some((message) => message.phase === 'failed'),
+    false,
+  );
+  assert.equal(fixture.window.__microduckSimulator.ready, false);
+  now = 75_001;
+  await new Promise((resolve) => setTimeout(resolve, 150));
+  assert.equal(fixture.messages.at(-1).phase, 'failed');
+  assert.match(fixture.messages.at(-1).message, /15 秒/);
+  current.inputLocked = false;
+  await new Promise((resolve) => setTimeout(resolve, 150));
+  assert.equal(fixture.window.__microduckSimulator.ready, false);
+  assert.equal(fixture.messages.at(-1).phase, 'failed');
+});
+
+test('task preparation still rejects an incomplete runtime and an action failure', async (t) => {
+  let now = 0;
+  const fixture = bridgeFixture({}, { now: () => now });
+  t.after(() => fixture.dom.window.close());
+  fixture.send({ type: 'rdk-simulator-task', taskId: 'walk' });
+  now = 15_001;
+  await new Promise((resolve) => setTimeout(resolve, 150));
+  assert.equal(fixture.messages.at(-1).phase, 'failed');
+  assert.equal(fixture.window.__microduckSimulator.ready, false);
+  fixture.window.rl = policyRuntime({
+    resetSim() {
+      throw new Error('reset rejected by runtime');
+    },
+  });
+  fixture.send({ type: 'rdk-simulator-task', taskId: 'kick' });
+  assert.equal(fixture.messages.at(-1).phase, 'failed');
+  assert.match(fixture.messages.at(-1).message, /reset rejected by runtime/);
+  assert.equal(fixture.window.__microduckSimulator.ready, false);
 });
 
 test('recovery perturbation is explicit and recordings retain task and complete state', async (t) => {

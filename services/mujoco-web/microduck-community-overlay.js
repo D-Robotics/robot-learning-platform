@@ -481,7 +481,8 @@
     simulatorContext.active = active === true;
     if (simulatorContext.active) {
       stopSimulatorPause();
-      if (simulatorContext.pending) simulatorContext.pending.startedAt = performance.now();
+      if (simulatorContext.pending && simulatorContext.pending.startedAt !== null)
+        simulatorContext.pending.startedAt = performance.now();
       pumpTask();
     } else {
       if (recorder.active) stopRecording('仿真视图已离开，录制已结束');
@@ -506,7 +507,7 @@
     if (!preserveTrial) stopPolicyRun();
     stopReplayState();
     simulatorContext.ready = false;
-    simulatorContext.pending = { taskId, startedAt: performance.now(), reset: false };
+    simulatorContext.pending = { taskId, startedAt: null, reset: false };
     taskState(taskId, 'loading', '正在准备任务场景');
     pumpTask();
     return true;
@@ -520,7 +521,10 @@
     if (!simulatorContext.active) return;
     const current = runtime();
     try {
-      if (performance.now() - pending.startedAt > 15_000)
+      // The introductory screen creates no runtime until the user starts
+      // WASM. Time the actual preparation, never time spent reading it.
+      if (pending.startedAt === null && current) pending.startedAt = performance.now();
+      if (pending.startedAt !== null && performance.now() - pending.startedAt > 15_000)
         throw new Error('仿真引擎未在 15 秒内就绪');
       if (current && typeof current.resetSim === 'function') {
         if (!pending.reset) {
