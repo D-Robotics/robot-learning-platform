@@ -3404,6 +3404,24 @@ export function createSim2RealRouter(
         });
         return;
       }
+      if (status === 'completed' && request.body?.mock !== true) {
+        const sha256 = String(request.body?.artifact?.sha256 ?? '')
+          .trim()
+          .toLowerCase();
+        const bytes = /^[a-f0-9]{64}$/.test(sha256)
+          ? await readSim2RealRelayArtifact(sha256)
+          : null;
+        if (!bytes) {
+          sendApiError(
+            response,
+            409,
+            'SIM2REAL_RELAY_ARTIFACT_PENDING',
+            '真实训练制品尚未回传或校验失败；先上传制品，再同步完成状态。',
+            { retryable: true },
+          );
+          return;
+        }
+      }
       const summary = safeComputeHealthText(
         request.body?.message ?? request.body?.summary ?? '',
         500,

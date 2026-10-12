@@ -369,6 +369,7 @@ export const TOOL_PARAM_HINTS: Record<string, ToolParamHint> = {
     },
   },
   rdk_board_arm_stop: { required: [], properties: {} },
+  rdk_board_arm_reset: { required: [], properties: {} },
   rdk_board_stop: { required: [], properties: {} },
   rdk_docs_search: {
     required: ['query'],

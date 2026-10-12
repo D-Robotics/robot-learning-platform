@@ -37,7 +37,7 @@ function routeHandler(router: Router, method: 'get' | 'post', path: string): Han
   return handler;
 }
 
-function buildRouter(devices: readonly unknown[] = [device]) {
+function buildRouter(devices: readonly unknown[] = [device], roles?: string[]) {
   const router = {} as Router;
   router.stack = [];
   router.get = (path: string, ...handlers: Handler[]) => {
@@ -59,7 +59,10 @@ function buildRouter(devices: readonly unknown[] = [device]) {
     return router;
   };
   registerSim2RealBoardStationRoutes(router, {
-    auth: { isMultiUserDeployment: () => false } as never,
+    auth: {
+      isMultiUserDeployment: () => roles !== undefined,
+      resolvePrincipal: () => ({ accountId: 'test-account', roles }),
+    } as never,
     requestOwner: () => 'local-dev',
     visibleDevices: async () => devices,
   });
@@ -349,7 +352,12 @@ describe('board-station constrained arm proxy', () => {
   });
 
   it('always forwards arm stop, even with the switch off', async () => {
-    const fetchMock = mockAgent(200, { ok: true, wasMoving: false, homed: true });
+    const fetchMock = mockAgent(200, {
+      ok: true,
+      wasMoving: false,
+      homed: false,
+      stopRequested: true,
+    });
     const router = buildRouter();
     const res = await call(routeHandler(router, 'post', '/api/sim2real/board-station/arm/stop'), {
       method: 'POST',
@@ -360,6 +368,72 @@ describe('board-station constrained arm proxy', () => {
       'http://127.0.0.1:19100/v1/station/arm/stop',
       expect.objectContaining({ method: 'POST' }),
     );
+  });
+
+  it('refuses arm reset while the platform switch is off without contacting the board', async () => {
+    const fetchMock = vi.spyOn(globalThis, 'fetch');
+    const router = buildRouter();
+    const res = await call(routeHandler(router, 'post', '/api/sim2real/board-station/arm/reset'), {
+      method: 'POST',
+    });
+    expect(res.statusCode).toBe(409);
+    expect(res.body).toMatchObject({ error: 'SIM2REAL_STATION_ARM_DISABLED' });
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('requires operator permission to clear an arm stop latch', async () => {
+    process.env.RDK_SIM2REAL_STATION_ARM_ENABLED = '1';
+    const fetchMock = vi.spyOn(globalThis, 'fetch');
+    const router = buildRouter([device], ['viewer']);
+    const res = await call(routeHandler(router, 'post', '/api/sim2real/board-station/arm/reset'), {
+      method: 'POST',
+    });
+    expect(res.statusCode).toBe(403);
+    expect(res.body).toMatchObject({ error: 'SIM2REAL_PERMISSION_DENIED' });
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('passes a board reset refusal through without clearing it in the platform', async () => {
+    process.env.RDK_SIM2REAL_STATION_ARM_ENABLED = '1';
+    const fetchMock = mockAgent(409, { ok: false, error: 'move-in-progress', stopRequested: true });
+    const router = buildRouter([device], ['operator']);
+    const res = await call(routeHandler(router, 'post', '/api/sim2real/board-station/arm/reset'), {
+      method: 'POST',
+    });
+    expect(res.statusCode).toBe(409);
+    expect(res.body).toEqual({ ok: false, error: 'move-in-progress', stopRequested: true });
+    expect(fetchMock).toHaveBeenCalledWith(
+      'http://127.0.0.1:19100/v1/station/arm/reset',
+      expect.objectContaining({ method: 'POST' }),
+    );
+  });
+
+  it('clears an idle arm stop latch with a gated reset request and no motion parameters', async () => {
+    process.env.RDK_SIM2REAL_STATION_ARM_ENABLED = '1';
+    const fetchMock = mockAgent(200, { ok: true, stopRequested: false, moving: false });
+    const router = buildRouter();
+    const res = await call(routeHandler(router, 'post', '/api/sim2real/board-station/arm/reset'), {
+      method: 'POST',
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.body).toEqual({ ok: true, stopRequested: false, moving: false });
+    expect(fetchMock).toHaveBeenCalledWith(
+      'http://127.0.0.1:19100/v1/station/arm/reset',
+      expect.objectContaining({ method: 'POST' }),
+    );
+    expect((fetchMock.mock.calls[0]![1] as RequestInit).body).toBeUndefined();
+  });
+
+  it('rejects motion parameters on an arm reset request before contacting the board', async () => {
+    process.env.RDK_SIM2REAL_STATION_ARM_ENABLED = '1';
+    const fetchMock = vi.spyOn(globalThis, 'fetch');
+    const router = buildRouter();
+    const res = await call(routeHandler(router, 'post', '/api/sim2real/board-station/arm/reset'), {
+      method: 'POST',
+      body: { x: 250, y: 0, z: 80 },
+    });
+    expect(res.statusCode).toBe(400);
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 
   it('reports arm status with the platform gate state', async () => {

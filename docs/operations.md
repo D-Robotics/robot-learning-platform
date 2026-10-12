@@ -4,6 +4,21 @@
 
 发布前配置、部署后健康探针、文件台账备份/恢复和共享存储迁移的可执行 runbook 见 [`production-operations.md`](production-operations.md)。
 
+## 训练 Worker 的恢复与超时
+
+真实 Worker 的 `job.json` 使用同目录临时文件、文件同步、原子替换和目录同步保存。
+重启时，未完成任务会记录为失败，不自动重启训练；原运行 ID 与幂等记录保留。
+
+发现损坏、缺失或无法完整恢复的任务快照时，`/healthz` 与新训练提交返回
+`503 worker_recovery_required`，健康响应给出 `recoveryIssues` 数量。有效任务仍可查询，
+损坏文件保持原样。运维应先保存故障目录，从可信备份恢复对应快照并核对完整性，
+再重启 Worker；不要删除记录后重新提交，以免丢失幂等历史并重复启动训练。
+
+训练超过 `RDK_SIM2REAL_TRAIN_TIMEOUT_MS` 后，Worker 向自有进程组发送 TERM，
+等待 `RDK_SIM2REAL_TRAIN_KILL_GRACE_MS`（默认 2000 ms，允许 100–30000 ms），
+随后用 KILL 回收残留进程，结果标记为 `training_timeout`。主动脱离进程组的
+daemon 仍由生产 systemd cgroup 负责回收。发布前确认真实 Worker 没有活动或排队任务。
+
 ## 暴露面与认证
 
 | 变量 | 作用 | 生产建议 |

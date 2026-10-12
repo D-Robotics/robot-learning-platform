@@ -1698,6 +1698,7 @@ async function refreshSessionMenu() {
 }
 
 function setAuthGate(payload) {
+  trainingRelay?.stop();
   state.authRequired = true;
   const loginUrl = withLocalReturnTo(safeLoginUrl(
     payload && typeof payload === 'object' && typeof payload.ssoLoginUrl === 'string'
@@ -8707,6 +8708,7 @@ async function loadOverview({ quiet = false, silent = false } = {}) {
       '/sim2real/overview?productId=' + encodeURIComponent(state.productId),
     );
     state.overview = payload;
+    trainingRelay?.reconcile(payload, { retryPaused: !quiet && !silent });
     state.selectedComputeResourceId = state.selectedComputeResourceId || '';
     // The summary is intentionally lightweight and remains useful to future
     // dashboard surfaces. It is allowed to fail independently from the main
@@ -8980,53 +8982,22 @@ function confirmRobogoRun() {
   });
 }
 
-async function relayTrainingRun(run, model, requestBody) {
-  const agentUrl = String(run.relayAgentUrl || '').replace(/\/+$/, '');
-  const manifest = model?.manifest;
-  if (!agentUrl || !manifest) throw new Error('缺少本地 Agent 或模型契约，无法中继训练');
-  const accountId = state.overview?.identity?.accountId || 'local-dev';
-  const relayPayload = {
-    accountId,
-    schemaVersion: manifest.schemaVersion,
-    contractId: manifest.contract.id,
-    model: { modelId: manifest.modelId, displayName: manifest.displayName, version: manifest.version },
-    robot: manifest.robot,
-    contract: manifest.contract,
-    simulator: manifest.simulator,
-    artifacts: manifest.artifacts,
-    ...(requestBody.taskId ? { taskId: requestBody.taskId } : {}),
-    ...(requestBody.training ? { training: requestBody.training } : {}),
-    ...(requestBody.resumeFrom ? { resumeFrom: requestBody.resumeFrom } : {}),
-    idempotencyKey: requestBody.idempotencyKey,
-  };
-  const submitted = await fetch(agentUrl, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json', 'x-sim2real-account': accountId, 'idempotency-key': requestBody.idempotencyKey },
-    body: JSON.stringify(relayPayload),
-    signal: AbortSignal.timeout(30_000),
-  });
-  const result = await submitted.json().catch(() => ({}));
-  if (!submitted.ok || !result.runId) throw new Error(result.message || result.error || '本机 Agent 未接受训练任务');
-  await request(`/sim2real/runs/${encodeURIComponent(run.id)}/relay/claim`, { method: 'POST', body: JSON.stringify({ externalRunId: result.runId }) });
-  const poll = async () => {
-    try {
-      const statusResponse = await fetch(`${agentUrl}/runs/${encodeURIComponent(result.runId)}`, { headers: { 'x-sim2real-account': accountId }, signal: AbortSignal.timeout(10_000) });
-      const status = await statusResponse.json().catch(() => ({}));
-      if (!statusResponse.ok) throw new Error(status.message || status.error || 'Agent 状态不可用');
-      await request(`/sim2real/runs/${encodeURIComponent(run.id)}/relay/sync`, { method: 'POST', body: JSON.stringify(status) });
-      if (status.status === 'completed' && status.artifact?.sha256) {
-        const artifactResponse = await fetch(`${agentUrl}/runs/${encodeURIComponent(result.runId)}/artifact`, { headers: { 'x-sim2real-account': accountId }, signal: AbortSignal.timeout(60_000) });
-        if (!artifactResponse.ok) throw new Error('训练完成但制品下载失败');
-        const bytes = new Uint8Array(await artifactResponse.arrayBuffer());
-        await fetch(apiPath(`/sim2real/runs/${encodeURIComponent(run.id)}/relay/artifact`), { method: 'POST', headers: { 'content-type': 'application/octet-stream', 'x-artifact-sha256': status.artifact.sha256 }, body: bytes, credentials: 'same-origin' }).then(async (response) => { if (!response.ok) throw new Error('制品回传平台失败'); });
-      }
-      if (!['completed', 'failed'].includes(String(status.status))) window.setTimeout(poll, 5000);
-      else await loadOverview({ quiet: true });
-    } catch (error) {
-      setText('simulator-run-status', error instanceof Error ? `本机 Agent 中继失败：${error.message}` : '本机 Agent 中继失败');
-    }
-  };
-  void poll();
+const trainingRelay = globalThis.SimTrainingRelay?.create({
+  fetch: (...args) => fetch(...args),
+  request: (path, options) => request(path, options),
+  onComplete: () => { void loadOverview({ quiet: true }); },
+  onError: (error, retry) => {
+    const detail = error?.message || '本机 Agent 中继失败';
+    setText('simulator-run-status', retry.retrying
+      ? `本机 Agent 中继暂不可用，${retry.delay / 1000} 秒后重试：${detail}`
+      : `本机 Agent 中继已暂停：${detail}。重新连接工作区可继续同步。`);
+    if (!retry.retrying) showToast('本机 Agent 中继已暂停；检查连接后点击“刷新”可继续同步。', 'error');
+  },
+});
+
+async function relayTrainingRun(run, model) {
+  if (!trainingRelay) throw new Error('训练中继模块未加载，请刷新页面');
+  trainingRelay.start(run, model);
 }
 
 async function runModel(backend) {
@@ -9084,7 +9055,7 @@ async function runModel(backend) {
     });
     const run = payload.run || {};
     if (backend === 'local' && run.relayAgentUrl) {
-      void relayTrainingRun(run, model, body).catch((error) => {
+      void relayTrainingRun(run, model).catch((error) => {
         setText('simulator-run-status', error instanceof Error ? `本机 Agent 训练提交失败：${error.message}` : '本机 Agent 训练提交失败');
       });
     }
@@ -11062,6 +11033,10 @@ function wireEvents() {
     }
   });
   window.addEventListener('message', handleMicroduckRecordingReady);
+  window.addEventListener('pagehide', () => trainingRelay?.stop());
+  window.addEventListener('pageshow', (event) => {
+    if (event.persisted) void loadOverview({ quiet: true });
+  });
   // Hidden tabs keep their data but stop paying for it: every scoped poll
   // holds its timer while hidden and is resumed here on return (the overview
   // poll refreshes immediately; view-scoped polls re-arm at cadence).
