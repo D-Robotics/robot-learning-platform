@@ -3652,6 +3652,10 @@ describe('joint station device ownership', () => {
     expectJointDisabled(window);
     expect(window.eval('__workbenchState.station.policyMotionReady')).toBe(false);
     expect(window.eval('__workbenchState.station.policy')).toBeNull();
+    const floatingStop = window.document.querySelector<HTMLButtonElement>('#station-float-stop')!;
+    expect(floatingStop.hidden).toBe(true);
+    expect(floatingStop.dataset.deviceId).toBeUndefined();
+    expect(floatingStop.textContent).not.toContain('board-a');
     await window.eval('stationJointCommand(true)');
     expect(
       requests.filter(

@@ -501,6 +501,15 @@ function clearPrivateWorkspaceState({ keepOverviewLoading = false } = {}) {
   state.notifiedRunIds.clear(); state.runLogs = { runId: null, cursor: 0, lines: [], inFlight: false, terminalDone: null };
   state.agent.boardHealth = null;
   stationInvalidatePolicy();
+  const floatingStop = $('station-float-stop');
+  if (floatingStop) {
+    floatingStop.hidden = true;
+    delete floatingStop.dataset.deviceId;
+    delete floatingStop.dataset.actuatorKind;
+    floatingStop.textContent = '■ 停止';
+    floatingStop.removeAttribute('title');
+    floatingStop.setAttribute('aria-label', '停止当前设备');
+  }
   stationStopStatusStream(); state.station.streamAbort?.abort(); clearTimeout(state.station.streamReconnectTimer);
   Object.assign(state.station, { ready: false, initialized: false, offline: false, offlineReason: '', mock: false, device: null, statusReader: null, streamAbort: null, streamReconnectTimer: null, cameraOn: false, log: [] });
   $('station-camera-img')?.removeAttribute('src');
