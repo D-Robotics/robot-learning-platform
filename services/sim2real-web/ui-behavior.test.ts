@@ -3758,3 +3758,192 @@ describe('joint station device ownership', () => {
     expect(errors).toEqual([]);
   });
 });
+
+describe('floating station stop target', () => {
+  const devices = [
+    { id: 'board-a', name: 'Duck A', status: 'connected', boardPlatform: 'rdk-x5' },
+    { id: 'board-b', name: 'Duck B', status: 'connected', boardPlatform: 'rdk-x5' },
+  ];
+  const policy = {
+    actuatorKind: 'joint',
+    state: 'running',
+    enabled: true,
+    actuatorEnabled: true,
+    model: { path: 'policy-a.onnx' },
+    sensorFresh: true,
+    commandLimits: { linearX: 0.3, linearY: 0.3, angularZ: 1 },
+  };
+  function select(window: InstanceType<typeof JSDOM>['window'], id: string) {
+    const input = window.document.querySelector<HTMLSelectElement>('#device-select')!;
+    input.value = id;
+    input.dispatchEvent(new window.Event('change', { bubbles: true }));
+  }
+  function runningA(window: InstanceType<typeof JSDOM>['window']) {
+    select(window, 'board-a');
+    window.eval(
+      `__workbenchState.station.policyMotionReady=true; stationRenderPolicy(${JSON.stringify(policy)});`,
+    );
+    return window.document.querySelector<HTMLButtonElement>('#station-float-stop')!;
+  }
+  function json(payload: unknown) {
+    return new Response(JSON.stringify(payload), {
+      headers: { 'content-type': 'application/json' },
+    });
+  }
+
+  it('does not append B to an explicitly targeted A station URL', async () => {
+    const { window, errors } = await boot({ devices });
+    select(window, 'board-b');
+    const target = new URL(
+      window.eval('apiPath("/sim2real/board-station/drive/stop?deviceId=board-a&marker=keep")'),
+      window.location.href,
+    );
+    expect(target.searchParams.getAll('deviceId')).toEqual(['board-a']);
+    expect(target.searchParams.get('marker')).toBe('keep');
+    expect(errors).toEqual([]);
+  });
+
+  it('does not fall back to current B when a floating button lacks an explicit target', async () => {
+    const { window, requests, errors } = await boot({ devices });
+    const floating = runningA(window);
+    select(window, 'board-b');
+    delete floating.dataset.deviceId;
+    floating.click();
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(
+      requests.filter(
+        (request) => request.method === 'POST' && request.url.includes('/drive/stop'),
+      ),
+    ).toHaveLength(0);
+    expect(window.document.querySelector('#station-log-list')?.textContent).toContain(
+      '停止目标未明确',
+    );
+    expect(errors).toEqual([]);
+  });
+
+  it('keeps last-running A visible through B inactivity and stops A without overwriting current B', async () => {
+    let finish!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      finish = resolve;
+    });
+    const { window, requests, errors } = await boot({
+      devices,
+      transport: async (url) => {
+        if (!url.includes('/board-station/drive/stop')) return null;
+        await gate;
+        return json({
+          ok: true,
+          stop: { ok: true, state: 'idle' },
+          policy: { ...policy, state: 'idle', model: { path: 'stopped-a.onnx' } },
+        });
+      },
+    });
+    const floating = runningA(window);
+    expect(floating.hidden).toBe(false);
+    select(window, 'board-b');
+    window.eval('stationUpdateFloatStop(null); stationUpdateFloatStop({active:false})');
+    expect(floating.hidden).toBe(false);
+    expect(floating.dataset.deviceId).toBe('board-a');
+    expect(floating.textContent).toContain('Duck A');
+    expect(floating.getAttribute('aria-label')).toContain('board-a');
+    floating.click();
+    await vi.waitFor(() =>
+      expect(
+        requests.some(
+          (request) => request.method === 'POST' && request.url.includes('/drive/stop'),
+        ),
+      ).toBe(true),
+    );
+    window.eval(
+      `__workbenchState.station.policyMotionReady=true; stationRenderPolicy(${JSON.stringify({ ...policy, state: 'ready', model: { path: 'current-b.onnx' } })});`,
+    );
+    finish();
+    await vi.waitFor(() => expect(floating.hidden).toBe(true));
+    const sent = requests.filter(
+      (request) => request.method === 'POST' && request.url.includes('/drive/stop'),
+    );
+    expect(sent).toHaveLength(1);
+    expect(new URL(sent[0].url, window.location.href).searchParams.getAll('deviceId')).toEqual([
+      'board-a',
+    ]);
+    expect(window.eval('__workbenchState.station.policy.model.path')).toBe('current-b.onnx');
+    expect(window.eval('__workbenchState.station.policyDeviceId')).toBe('board-b');
+    expect(window.document.querySelector('#confirm-action-dialog')?.hasAttribute('open')).toBe(
+      false,
+    );
+    expect(errors).toEqual([]);
+  });
+
+  it('retains the A stop entry after a missing receipt, explicit rejection or network failure without retrying', async () => {
+    let result: unknown = { ok: true };
+    let networkFailure = false;
+    const { window, requests, errors } = await boot({
+      devices,
+      transport: async (url) => {
+        if (!url.includes('/board-station/drive/stop')) return null;
+        if (networkFailure) throw new Error('offline fixture');
+        return json(result);
+      },
+    });
+    const floating = runningA(window);
+    select(window, 'board-b');
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      if (attempt === 1) result = { ok: false, stop: { ok: false } };
+      if (attempt === 2) networkFailure = true;
+      await window.eval('stationEmergencyStop("board-a")');
+      expect(floating.hidden).toBe(false);
+      expect(floating.dataset.deviceId).toBe('board-a');
+      expect(
+        requests.filter(
+          (request) => request.method === 'POST' && request.url.includes('/drive/stop'),
+        ),
+      ).toHaveLength(attempt + 1);
+    }
+    expect(window.document.querySelector('#station-log-list')?.textContent).not.toMatch(
+      /请求已确认|急停已下发/,
+    );
+    expect(window.document.querySelector('#confirm-action-dialog')?.hasAttribute('open')).toBe(
+      false,
+    );
+    expect(errors).toEqual([]);
+  });
+
+  it('keeps ordinary stop and Space targeted at current B without dismissing A pending stop', async () => {
+    const { window, requests, errors } = await boot({
+      devices,
+      transport: async (url) =>
+        url.includes('/board-station/drive/stop')
+          ? json({
+              ok: true,
+              stop: { ok: true, state: 'idle' },
+              policy: { ...policy, state: 'idle', model: { path: 'stopped-b.onnx' } },
+            })
+          : null,
+    });
+    const floating = runningA(window);
+    select(window, 'board-b');
+    await window.eval('stationEmergencyStop()');
+    expect(floating.hidden).toBe(false);
+    expect(floating.dataset.deviceId).toBe('board-a');
+    window.document.body.dispatchEvent(
+      new window.KeyboardEvent('keydown', { code: 'Space', key: ' ', bubbles: true }),
+    );
+    await vi.waitFor(() =>
+      expect(
+        requests.filter(
+          (request) => request.method === 'POST' && request.url.includes('/drive/stop'),
+        ),
+      ).toHaveLength(2),
+    );
+    for (const request of requests.filter(
+      (item) => item.method === 'POST' && item.url.includes('/drive/stop'),
+    )) {
+      expect(new URL(request.url, window.location.href).searchParams.getAll('deviceId')).toEqual([
+        'board-b',
+      ]);
+    }
+    expect(floating.hidden).toBe(false);
+    expect(floating.dataset.deviceId).toBe('board-a');
+    expect(errors).toEqual([]);
+  });
+});

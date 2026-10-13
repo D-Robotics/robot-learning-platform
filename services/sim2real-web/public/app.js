@@ -1477,7 +1477,8 @@ function connectEventStream() {
 const $ = (id) => document.getElementById(id);
 
 function apiPath(path) {
-  const deviceQuery = /^\/sim2real\/board-station(?:\/|$)/.test(path) && state.selectedDeviceId
+  const suppliedDevice = new URLSearchParams(path.split('?')[1] || '').has('deviceId');
+  const deviceQuery = /^\/sim2real\/board-station(?:\/|\?|$)/.test(path) && state.selectedDeviceId && !suppliedDevice
     ? `${path.includes('?') ? '&' : '?'}deviceId=${encodeURIComponent(state.selectedDeviceId)}` : '';
   return BASE_PATH + '/api' + path + deviceQuery;
 }
@@ -10560,22 +10561,40 @@ async function stationSendDrive() {
   }
 }
 
-async function stationEmergencyStop() {
+async function stationEmergencyStop(targetDeviceId = state.selectedDeviceId) {
   const ownerEpoch = workspaceOwnerEpoch;
-  const deviceId = state.selectedDeviceId;
-  const joint = state.station.policy?.actuatorKind === 'joint';
+  const deviceId = typeof targetDeviceId === 'string' ? targetDeviceId.trim() : '';
+  if (!deviceId) { stationLog('停止目标未明确，请使用现场控制器急停。', 'error'); return; }
+  const button = $('station-float-stop');
+  const target = state.overview?.devices?.find((item) => item.id === deviceId);
+  const targetName = target?.name ? `${target.name}（${deviceId}）` : deviceId;
+  const joint = (state.station.policyDeviceId === deviceId && state.station.policy?.actuatorKind === 'joint') ||
+    (button?.dataset.deviceId === deviceId && button.dataset.actuatorKind === 'joint');
   try {
-    const payload = await request('/sim2real/board-station/drive/stop', { method: 'POST', body: '{}' });
-    if (ownerEpoch !== workspaceOwnerEpoch || deviceId !== state.selectedDeviceId) return;
-    if (payload?.ok !== true || payload?.stop?.ok === false || (joint && payload?.stop?.ok !== true)) {
-      stationLog('停止未获板端确认，请使用现场控制器急停。', 'error'); return;
+    const payload = await request('/sim2real/board-station/drive/stop?deviceId=' + encodeURIComponent(deviceId), { method: 'POST', body: '{}' });
+    if (ownerEpoch !== workspaceOwnerEpoch) return;
+    const stoppedPolicy = ['idle', 'ready', 'stopped'].includes(payload?.policy?.state);
+    const confirmed = payload?.ok === true && (payload?.stop?.ok === true || stoppedPolicy) &&
+      payload?.stop?.ok !== false && payload?.policy?.state !== 'running' && payload?.drive?.active !== true;
+    if (!confirmed) {
+      stationLog(`${targetName} 停止未获板端确认，请使用现场控制器急停。`, 'error'); return;
     }
-    stationLog(joint ? '关节策略停止请求已确认，保持最后限幅目标；实际停止以现场反馈为准。' : '急停已下发：零速帧发布，底盘看门狗兜底停车', 'ok');
-    if (payload?.policy) stationRenderPolicy(payload.policy);
-    const driveState = $('station-drive-state');
-    if (driveState) driveState.textContent = '急停（operator-emergency-stop）';
+    stationLog(joint ? `${targetName} 关节策略停止请求已确认，保持最后限幅目标；实际停止以现场反馈为准。` : `${targetName} 停止请求已确认，实际停止以现场反馈为准。`, 'ok');
+    // A receipt for the former target is useful for its stop affordance, but
+    // must never replace the policy or drive status of the newly selected duck.
+    if (deviceId === state.selectedDeviceId) {
+      if (payload?.policy) stationRenderPolicy(payload.policy);
+      const driveState = $('station-drive-state');
+      if (driveState) driveState.textContent = '急停（operator-emergency-stop）';
+    }
+    if (button?.dataset.deviceId === deviceId) {
+      button.hidden = true;
+      delete button.dataset.deviceId;
+      delete button.dataset.actuatorKind;
+    }
   } catch (error) {
-    stationLog(`急停下发失败，请使用现场控制器急停：${error instanceof Error ? error.message : '未知错误'}`, 'error');
+    if (ownerEpoch !== workspaceOwnerEpoch) return;
+    stationLog(`${targetName} 急停下发失败，请使用现场控制器急停：${error instanceof Error ? error.message : '未知错误'}`, 'error');
   }
 }
 
@@ -10585,10 +10604,25 @@ async function stationEmergencyStop() {
 function stationUpdateFloatStop(drive) {
   const button = $('station-float-stop');
   if (!button) return;
-  const active = Boolean(drive && drive.active);
+  const deviceId = state.selectedDeviceId;
+  if (drive?.active === true && deviceId) {
+    button.dataset.deviceId = deviceId;
+    button.dataset.actuatorKind = state.station.policyDeviceId === deviceId ? state.station.policy?.actuatorKind || '' : '';
+    const target = state.overview?.devices?.find((item) => item.id === deviceId);
+    const name = target?.name ? `${target.name}（${deviceId}）` : deviceId;
+    button.textContent = `■ 停止 ${name}`;
+    button.title = `停止目标：${name}。停止关节策略保持最后限幅目标，实际停止以现场反馈为准。`;
+    button.setAttribute('aria-label', `停止设备 ${name}`);
+    button.hidden = false;
+    return;
+  }
   // Loss of a stream is not a stop receipt. Keep the last known running
-  // control visible until an explicit inactive snapshot arrives.
-  button.hidden = !active;
+  // target visible; an inactive B snapshot cannot dismiss a pending A stop.
+  if (drive?.active === false && button.dataset.deviceId === deviceId) {
+    button.hidden = true;
+    delete button.dataset.deviceId;
+    delete button.dataset.actuatorKind;
+  }
 }
 
 function wireStationFloatStop() {
@@ -10596,7 +10630,7 @@ function wireStationFloatStop() {
   if (!button || button.dataset.wired === '1') return;
   button.dataset.wired = '1';
   button.addEventListener('click', () => {
-    void stationEmergencyStop();
+    void stationEmergencyStop(button.dataset.deviceId || '');
   });
 }
 
