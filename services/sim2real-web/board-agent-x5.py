@@ -675,11 +675,12 @@ def _stop_drive_publisher():
 
 def _finite_number(value):
     """Return true for JSON numeric scalars that are safe to actuate."""
-    return (
-        isinstance(value, (int, float))
-        and not isinstance(value, bool)
-        and math.isfinite(float(value))
-    )
+    if not isinstance(value, (int, float)) or isinstance(value, bool):
+        return False
+    try:
+        return math.isfinite(float(value))
+    except (OverflowError, TypeError, ValueError):
+        return False
 
 
 # ---- constrained arm (D6A, arm_sdk) ---------------------------------------
@@ -1857,6 +1858,144 @@ def find_camera_device():
     return candidates
 
 
+def _preflight_sensor_source(sensor, now_ns, stall_sec):
+    """Report board-local sensor age; a rewritten wrapper is not a new sample."""
+    source = sensor if isinstance(sensor, dict) else {}
+    stamp = source.get("sampleMonotonicNs")
+    sample_ns = None
+    if isinstance(stamp, int) and not isinstance(stamp, bool) and 0 <= stamp < 10**24:
+        sample_ns = stamp
+    elif isinstance(stamp, str) and stamp.isdecimal() and len(stamp) <= 24:
+        sample_ns = int(stamp)
+    age_ms = (now_ns - sample_ns) / 1_000_000.0 if sample_ns is not None else None
+    fresh = age_ms is not None and 0.0 <= age_ms <= stall_sec * 1000.0
+    sample_ts = source.get("sampleTs")
+    return fresh, age_ms, {
+        "sampleTs": float(sample_ts) if _finite_number(sample_ts) else None,
+        "sampleMonotonicNs": str(sample_ns) if sample_ns is not None else None,
+    }
+
+
+def _preflight_ros_snapshot():
+    """Bound the last successful topic-list observation without invoking ROS."""
+    with _ros_lock:
+        topics = _ros_cache.get("topics")
+        topics = list(topics) if isinstance(topics, list) else []
+        stamp = _ros_cache.get("ts")
+    # A refresh normally takes at most 8 s followed by a 10 s interval.
+    # Leave bounded scheduling headroom without trusting a failed refresh forever.
+    ttl_sec = 30.0
+    valid_stamp = _finite_number(stamp) and stamp > 0
+    age_sec = time.time() - stamp if valid_stamp else None
+    fresh = age_sec is not None and 0.0 <= age_sec <= ttl_sec
+    observed_at = None
+    if valid_stamp:
+        try:
+            observed_at = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(stamp))
+        except (OverflowError, OSError, ValueError):
+            pass
+    return {"topics": topics if fresh else [], "fresh": fresh, "observedAt": observed_at,
+            "sourceAgeSec": age_sec, "cacheTtlSec": ttl_sec}
+
+
+def _preflight_leg_joints(telemetry, runtime, now_ns, stall_sec):
+    names = runtime.get("jointNames")
+    homes = runtime.get("homePositionRad")
+    issues = []
+    names_valid = (isinstance(names, list) and len(names) == 14
+                   and all(isinstance(name, str) and name.strip() for name in names)
+                   and len(set(names)) == 14)
+    home_valid = isinstance(homes, list) and len(homes) == 14 and all(_finite_number(value) for value in homes)
+    if not names_valid:
+        issues.append("joint-profile-names-invalid")
+    if not home_valid:
+        issues.append("joint-profile-home-invalid")
+    expected = names if names_valid else []
+    joint = telemetry.get("jointStates")
+    joint = joint if isinstance(joint, dict) else {}
+    actual_names = joint.get("names")
+    position, velocity = joint.get("position"), joint.get("velocity")
+    vectors_valid = (isinstance(actual_names, list)
+                     and all(isinstance(name, str) and name.strip() for name in actual_names)
+                     and isinstance(position, list) and isinstance(velocity, list)
+                     and len(actual_names) == len(position) == len(velocity))
+    if not vectors_valid:
+        issues.append("joint-state-vectors-invalid")
+    elif len(set(actual_names)) != len(actual_names):
+        issues.append("joint-state-duplicate-names")
+    actual_names = actual_names if isinstance(actual_names, list) else []
+    by_name = {}
+    if vectors_valid:
+        for index, name in enumerate(actual_names):
+            if name not in by_name:
+                by_name[name] = (position[index], velocity[index])
+    missing = [name for name in expected if name not in by_name]
+    if missing:
+        issues.append("joint-state-missing-joints")
+    rows = []
+    for index, name in enumerate(expected):
+        measured, speed = by_name.get(name, (None, None))
+        measured = float(measured) if _finite_number(measured) else None
+        speed = float(speed) if _finite_number(speed) else None
+        home = float(homes[index]) if home_valid else None
+        if measured is None or speed is None:
+            issues.append("joint-state-non-finite:" + name)
+        rows.append({"name": name, "homeRad": home, "positionRad": measured,
+                     "velocityRadSec": speed,
+                     "errorFromHomeRad": measured - home if measured is not None and home is not None else None})
+    fresh, age_ms, source_time = _preflight_sensor_source(joint, now_ns, stall_sec)
+    if not fresh:
+        issues.append("jointStates-stale")
+    return {
+        "ok": not issues, "supported": True, "expectedNames": list(expected),
+        "homePositionRad": [float(value) for value in homes] if home_valid else [],
+        "rows": rows, "missingNames": missing,
+        "unexpectedNames": [name[:80] for name in actual_names if isinstance(name, str) and name not in expected][:32],
+        "issues": issues,
+    }, fresh, age_ms, source_time
+
+
+def _preflight_telemetry(telemetry, runtime, safety):
+    data = telemetry if isinstance(telemetry, dict) else {}
+    stall = safety.get("sensorStallSec", 0.1 if JOINT_ACTUATOR else 0.5)
+    stall = max(0.1, min(2.0, float(stall))) if _finite_number(stall) else 0.1
+    now_ns = time.monotonic_ns()
+    issues, ages, source_times, freshness = [], {}, {}, []
+    # The two controller families consume different sensor contracts.
+    sensors = ("imu", "jointStates") if JOINT_ACTUATOR else ("imu", "odom")
+    for key in sensors:
+        fresh, age_ms, source_time = _preflight_sensor_source(data.get(key), now_ns, stall)
+        ages[key], source_times[key] = age_ms, source_time
+        freshness.append(fresh)
+        if not isinstance(data.get(key), dict):
+            issues.append(key + "-missing")
+        if not fresh:
+            issues.append(key + "-stale")
+    imu = data.get("imu") if isinstance(data.get("imu"), dict) else {}
+    quat = imu.get("quaternion") if isinstance(imu.get("quaternion"), dict) else imu
+    quat_values = [quat.get(axis) for axis in ("x", "y", "z", "w")]
+    # Mirror the runtime's squared normalization arithmetic: finite components
+    # alone do not prevent an overflowing norm from producing invalid gravity.
+    norm_squared = sum(float(value) * float(value) for value in quat_values) if all(_finite_number(value) for value in quat_values) else None
+    if norm_squared is None or not math.isfinite(norm_squared) or norm_squared < 1e-12:
+        issues.append("imu-quaternion-invalid")
+    if JOINT_ACTUATOR:
+        gyro = imu.get("gyro") if isinstance(imu.get("gyro"), dict) else {}
+        if not all(_finite_number(gyro.get(axis)) for axis in ("x", "y", "z")):
+            issues.append("imu-gyro-invalid")
+        joints, _fresh, _age, _time = _preflight_leg_joints(data, runtime, now_ns, stall)
+        issues.extend(joints["issues"])
+    else:
+        odom = data.get("odom") if isinstance(data.get("odom"), dict) else {}
+        if not all(_finite_number(odom.get(key)) for key in ("positionX", "positionY", "linearX", "angularZ")):
+            issues.append("odom-values-invalid")
+        joints = {"ok": True, "supported": False, "expectedNames": [], "homePositionRad": [],
+                  "rows": [], "missingNames": [], "unexpectedNames": [], "issues": []}
+    return {"ok": not issues, "fresh": all(freshness), "fields": sorted(data.keys())[:32],
+            "issues": list(dict.fromkeys(issues)), "sensorStallSec": stall,
+            "sourceAgeMs": ages, "sourceTime": source_times}, joints
+
+
 def onboarding_preflight():
     """Return a structured, read-only onboarding passport for a new board.
 
@@ -1867,42 +2006,91 @@ def onboarding_preflight():
     observations; ``ready`` is never inferred from the board model alone.
     """
     camera_devices = find_camera_device()
-    topics = ros_topics_cached() or []
-    telemetry = originbot_telemetry_cached()
+    ros_snapshot = _preflight_ros_snapshot()
+    topics = ros_snapshot["topics"]
+    # The UI cache refreshes at 1 Hz, longer than the leg runtime's 100 ms
+    # freshness budget. Read the current private snapshot for this diagnostic;
+    # it remains a read-only operation and does not start any sampler/runtime.
+    telemetry = _read_telemetry_snapshot()
     tros_present = os.path.exists(TROS_SETUP) or os.path.isdir("/opt/ros")
     python_present = bool(shutil.which("python3"))
     policy_dir = os.path.isdir(POLICY_ALLOWED_MODEL_DIR)
     policy_files = policy_list().get("policies", [])
-    expected_topics = {
-        "imu": str((_profile_topics.get("imu") or {}).get("name") or "/imu"),
-        "odom": str((_profile_topics.get("odom") or {}).get("name") or "/odom"),
-        "cmdVel": DRIVE_COMMAND_TOPIC,
+    runtime = _adapter_profile.get("runtime") if isinstance(_adapter_profile.get("runtime"), dict) else {}
+    safety = _adapter_profile.get("safety") if isinstance(_adapter_profile.get("safety"), dict) else {}
+    policy = _adapter_profile.get("policy") if isinstance(_adapter_profile.get("policy"), dict) else {}
+    defaults = ({"imu": "/imu", "jointStates": "/joint_states", "jointCommand": DRIVE_COMMAND_TOPIC}
+                if JOINT_ACTUATOR else {"imu": "/imu", "odom": "/odom", "cmdVel": DRIVE_COMMAND_TOPIC})
+    expected_topics = _profile_topics if _profile_topics else {
+        key: {"name": name, "required": True} for key, name in defaults.items()
     }
+    if JOINT_ACTUATOR:
+        # These sensors and the controller are intrinsic to the 61D/14D runtime,
+        # even when a malformed profile omits them or marks them optional.
+        expected_topics = {**expected_topics}
+        for key, name in defaults.items():
+            if key not in expected_topics:
+                expected_topics[key] = {"name": name, "required": True}
     topic_names = set(str(item) for item in topics)
-    topic_checks = {
-        key: {"name": name, "present": name in topic_names}
-        for key, name in expected_topics.items()
-    }
+    topic_checks = {}
+    for key, raw in expected_topics.items():
+        raw = raw if isinstance(raw, dict) else {}
+        name = str(raw.get("name") or "")
+        required_topic = raw.get("required") is True or (JOINT_ACTUATOR and key in defaults)
+        topic_checks[key] = {"name": name, "type": raw.get("type") if isinstance(raw.get("type"), str) else None,
+                             "qos": raw.get("qos") if isinstance(raw.get("qos"), str) else None,
+                             "required": required_topic, "present": bool(name) and name in topic_names}
+    missing_topics = [key for key, value in topic_checks.items() if value["required"] and not value["present"]]
+    telemetry_check, joint_check = _preflight_telemetry(telemetry, runtime, safety)
+    raw_provenance = _adapter_profile.get("provenance")
+    provenance = {
+        "kind": raw_provenance.get("kind") if isinstance(raw_provenance.get("kind"), str) else None,
+        "mock": raw_provenance.get("mock") if isinstance(raw_provenance.get("mock"), bool) else None,
+        "note": raw_provenance.get("note", "")[:500] if isinstance(raw_provenance.get("note", ""), str) else "",
+    } if isinstance(raw_provenance, dict) else None
+    try:
+        profile_hash = hashlib.sha256(json.dumps(_adapter_profile, sort_keys=True, separators=(",", ":"), allow_nan=False).encode()).hexdigest() if _adapter_profile else None
+    except (TypeError, ValueError):
+        profile_hash = None
+    contract_numbers = {"observationSize": policy.get("observationSize"), "actionSize": policy.get("actionSize"),
+                        "controlHz": runtime.get("decisionHz", DRIVE_PUBLISH_HZ),
+                        "commandVectorSize": runtime.get("commandVectorSize")}
+    contract = {key: value if _finite_number(value) else None for key, value in contract_numbers.items()}
+    contract.update({"observationLayout": runtime.get("observationLayout") if isinstance(runtime.get("observationLayout"), str) else None,
+                     "actionOutput": runtime.get("actionOutput") if isinstance(runtime.get("actionOutput"), str) else None})
+    contract["ok"] = not JOINT_ACTUATOR or (
+        contract["observationSize"] == 61 and contract["actionSize"] == 14
+        and contract["observationLayout"] == "microduck-61d-v1"
+        and contract["actionOutput"] == "joint-position-offset"
+        and contract["commandVectorSize"] == 13 and _finite_number(contract["controlHz"])
+        and 1 <= contract["controlHz"] <= 50)
     checks = {
         "identity": {
             "ok": bool(_identity.get("platform") and _identity.get("model")),
             "board": _identity,
             "adapterId": _adapter_id,
+            "profileSha256": profile_hash,
+            "provenance": provenance,
         },
         "python": {"ok": python_present, "path": shutil.which("python3") or "missing"},
         "tros": {"ok": tros_present, "setup": TROS_SETUP if os.path.exists(TROS_SETUP) else "/opt/ros"},
-        "camera": {"ok": bool(camera_devices), "devices": camera_devices, "cv2": CV2_AVAILABLE},
+        "camera": {"ok": bool(camera_devices), "devices": camera_devices, "cv2": CV2_AVAILABLE,
+                   "required": not JOINT_ACTUATOR or bool((topic_checks.get("camera") or {}).get("required")),
+                   "requiredReason": "legacy-wheel-onboarding" if not JOINT_ACTUATOR else "profile" if (topic_checks.get("camera") or {}).get("required") else "optional-for-joint-preflight"},
         "ros": {
-            "ok": bool(topics),
+            "ok": ros_snapshot["fresh"] and bool(topics) and not missing_topics,
+            "fresh": ros_snapshot["fresh"],
+            "observedAt": ros_snapshot["observedAt"],
+            "sourceAgeSec": ros_snapshot["sourceAgeSec"],
+            "cacheTtlSec": ros_snapshot["cacheTtlSec"],
             "topicCount": len(topics),
             "topics": sorted(topic_names)[:80],
             "expected": topic_checks,
+            "missingRequired": missing_topics,
         },
-        "telemetry": {
-            "ok": isinstance(telemetry, dict),
-            "fresh": isinstance(telemetry, dict),
-            "fields": sorted(telemetry.keys())[:32] if isinstance(telemetry, dict) else [],
-        },
+        "telemetry": telemetry_check,
+        "joints": joint_check,
+        "contract": contract,
         "policy": {
             "enabled": POLICY_ENABLED,
             "runtimeRunning": _policy_runtime_alive(),
@@ -1918,25 +2106,33 @@ def onboarding_preflight():
             "motionAuthorized": MOTION_SWITCH_ENABLED and POLICY_ENABLED,
             "limits": _actuator_policy(),
             "emergencyStop": "/v1/station/drive/stop",
+            "stopBehavior": "hold-last-bounded-target" if JOINT_ACTUATOR else "chassis-zero-velocity",
+            "physicalCalibrationVerified": False,
         },
     }
-    required = ("identity", "python", "tros", "camera", "ros", "telemetry")
+    required = ("identity", "python", "tros", "ros", "telemetry")
+    if checks["camera"]["required"]:
+        required += ("camera",)
+    if JOINT_ACTUATOR:
+        required += ("joints", "contract")
     missing = [key for key in required if not checks[key]["ok"]]
     next_actions = []
     if not tros_present:
         next_actions.append("install or source TROS (/opt/tros or /opt/ros)")
     if not camera_devices:
         next_actions.append("connect a V4L2 camera and verify /dev/video*")
-    if not topics:
-        next_actions.append("start the OriginBot bringup and verify ROS topics")
-    if not isinstance(telemetry, dict):
-        next_actions.append("start the read-only IMU/odom telemetry sampler")
+    if missing_topics or not topics:
+        next_actions.append("start the selected robot controller and verify required ROS topics: " + ", ".join(missing_topics))
+    if not telemetry_check["ok"]:
+        next_actions.append("verify fresh source timestamps and complete IMU/" + ("joint-state" if JOINT_ACTUATOR else "odom") + " telemetry")
+    if JOINT_ACTUATOR:
+        next_actions.append("joint home, directions, absolute limits and physical stop protection still require recorded on-site calibration")
     if not POLICY_ENABLED:
         next_actions.append("stage/load a policy first; keep policy motion disabled by default")
     status = "ready" if not missing else "attention"
     return {
         "ok": True,
-        "kind": "originbot-onboarding-preflight",
+        "kind": "joint-onboarding-preflight" if JOINT_ACTUATOR else "originbot-onboarding-preflight",
         "schemaVersion": 1,
         "mock": False,
         "status": status,

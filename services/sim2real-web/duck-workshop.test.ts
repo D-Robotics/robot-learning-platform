@@ -17,6 +17,7 @@ type Workshop = {
   derive: (input?: Snapshot) => WorkshopView;
   render: (input?: Snapshot) => WorkshopView;
   setNavigate: (handler: (destination: Destination) => void) => void;
+  experimentRecord: (input?: Snapshot) => Record<string, unknown>;
 };
 
 let dom: JSDOM;
@@ -82,6 +83,74 @@ function button(selector: string) {
 }
 
 describe('duck workshop evidence', () => {
+  it('keeps unknown or prebuilt origin distinct from an explicitly non-mock run', () => {
+    expect(
+      workshop.experimentRecord({ model: { id: 'reference', builtin: true } }).provenance,
+    ).toMatchObject({
+      preset: true,
+      mock: null,
+      source: 'prebuilt-reference',
+      physicalMotionVerified: false,
+    });
+    expect(
+      workshop.experimentRecord({ model: base.model, run: { ...run, mock: undefined } }).provenance,
+    ).toMatchObject({ mock: null });
+    expect(
+      workshop.experimentRecord({
+        model: base.model,
+        run: { ...run, evaluation: { replay: { source: 'demo-fixture' } } },
+      }).provenance,
+    ).toMatchObject({ mock: true, source: 'demo-fixture' });
+  });
+
+  it('refuses an explicitly different project run even when its model matches', () => {
+    const record = workshop.experimentRecord({
+      project: { id: 'my-project' },
+      model: base.model,
+      run: { ...run, projectId: 'other-project' },
+      device: base.device,
+      deployments: [{ ...deployment, projectId: 'other-project' }],
+    });
+    expect(record.run).toBeNull();
+    expect(record.deployments).toEqual([]);
+    expect(record.evidenceReferences).toEqual({});
+  });
+
+  it('keeps unrelated or unattributed deployment history out of a selected project export', () => {
+    const record = workshop.experimentRecord({
+      project: { id: 'my-project' },
+      model: base.model,
+      device: base.device,
+      run: { ...run, projectId: 'my-project' },
+      deployments: [
+        { ...deployment, id: 'other-project', projectId: 'other-project', runId: run.id },
+        { ...deployment, id: 'unattributed', runId: 'another-run' },
+      ],
+    });
+    expect(record.deployments).toEqual([]);
+    expect(record.projectAttribution).toMatchObject({ excludedUnattributedDeployments: 1 });
+    const legacy = workshop.experimentRecord({
+      project: { id: 'my-project' },
+      model: base.model,
+      device: base.device,
+      run,
+    });
+    expect(legacy.run).toBeNull();
+    expect(legacy.projectAttribution).toMatchObject({ excludedLegacyRun: true });
+  });
+
+  it('retains a legacy deployment only through a run explicitly attributed to the selected project', () => {
+    const record = workshop.experimentRecord({
+      project: { id: 'my-project' },
+      model: base.model,
+      device: base.device,
+      run: { ...run, projectId: 'my-project' },
+      deployments: [{ ...deployment, id: 'matched-legacy', runId: run.id }],
+    });
+    expect(record.deployments).toEqual([
+      expect.objectContaining({ id: 'matched-legacy', projectAttribution: 'matched-project-run' }),
+    ]);
+  });
   it('records real walking training but still requests model evaluation', () => {
     expect(step(base, 'train').state).toBe('recorded');
     expect(step(base, 'evaluate').state).not.toBe('recorded');
@@ -147,7 +216,7 @@ describe('duck workshop evidence', () => {
     for (const key of ['calibration', 'trial', 'follow']) {
       expect(step(input, key).state).toBe('pending');
     }
-    expect(step(input, 'calibration').status).toBe('待接通');
+    expect(step(input, 'calibration').status).toBe('待只读检查');
     expect(step(input, 'follow').status).toBe('待接通');
     expect(step(input, 'trial').detail).toContain('不代表站立已验证或舵机断电');
   });

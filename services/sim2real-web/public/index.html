@@ -455,6 +455,7 @@
                 <div class="duck-workshop-actions">
                   <button class="button button-primary button-small" id="duck-workshop-next-button" type="button" data-duck-action="devices" disabled>等待工作区加载</button>
                   <button class="button button-ghost button-small" type="button" data-duck-action="simulate">打开参考仿真</button>
+                  <button class="button button-ghost button-small" id="duck-experiment-export" type="button" disabled>下载实验记录 JSON</button>
                 </div>
                 <ol class="duck-workshop-steps" id="duck-workshop-steps" aria-label="机器人鸭专项步骤"></ol>
                 <div class="duck-workshop-detail" id="duck-workshop-detail" aria-live="polite">
@@ -1817,6 +1818,7 @@
                   </button>
                   <span class="station-camera-state" id="station-camera-state">未连接</span>
                 </div>
+                <p class="duck-preparation-note" id="duck-follow-readiness" hidden>先读取鸭子准备报告并检查相机画面；人体检测与跟随控制状态分别显示。</p>
               </details>
 
               <article role="tabpanel" aria-labelledby="station-tab-control" class="panel station-switch-panel" id="station-switch-panel" data-station-module="control">
@@ -2063,6 +2065,18 @@
               </article>
 
               <article id="station-module-diagnostics-command" role="tabpanel" aria-labelledby="station-tab-diagnostics" class="panel station-command-panel" data-station-module="diagnostics">
+                <section class="duck-preparation" id="duck-preparation" aria-labelledby="duck-preparation-title" hidden>
+                  <div class="duck-preparation-heading"><div><h3 id="duck-preparation-title">机器人鸭准备报告</h3><p>读取传感器、关节和配置，核对开始实验的条件。</p></div><span class="state-badge state-neutral">只读检查</span></div>
+                  <div class="duck-workshop-actions">
+                    <button class="button button-primary button-small" id="duck-preparation-refresh" type="button" disabled>刷新只读检查</button>
+                    <button class="button button-ghost button-small" id="duck-preparation-export" type="button" disabled>下载准备报告 JSON</button>
+                  </div>
+                  <p class="duck-preparation-status" id="duck-preparation-status" role="status" aria-live="polite">选择本组机器人后，刷新只读检查。</p>
+                  <div class="duck-preparation-summary" id="duck-preparation-summary"></div>
+                  <div class="duck-preparation-table-wrap"><table class="duck-preparation-table" id="duck-preparation-table" hidden><caption>关节准备检查（rad）</caption><thead><tr><th scope="col">关节</th><th scope="col">配置 home</th><th scope="col">当前角度</th><th scope="col">偏离 home</th><th scope="col">速度（rad/s）</th></tr></thead><tbody id="duck-preparation-joints"></tbody></table></div>
+                  <ul class="duck-preparation-issues" id="duck-preparation-issues"></ul>
+                  <p class="duck-preparation-note">检查通过只表示软件与传感器准备情况已读取。关节零位、方向、限位、站立和停止保护仍需现场验收；本检查不会校准或启动机器人。</p>
+                </section>
                 <div class="panel-heading panel-heading-lean"><h2>命令面板</h2>
                   <span class="panel-caption">白名单只读命令</span>
                 </div>

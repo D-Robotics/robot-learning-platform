@@ -276,6 +276,7 @@ function studioBridgeCommand(
 ): string | null {
   const allowed = new Set([
     '/healthz',
+    '/v1/onboarding/preflight',
     '/v1/station/status',
     '/v1/station/commands',
     '/v1/station/drive',
@@ -294,6 +295,7 @@ function studioBridgeCommand(
   ]);
   if (!allowed.has(pathname)) return null;
   const method = options.method ?? 'GET';
+  if (pathname === '/v1/onboarding/preflight' && method !== 'GET') return null;
   const body = options.body ? ` --data ${shellQuote(options.body)}` : '';
   const auth = token ? ` -H ${shellQuote(`Authorization: Bearer ${token}`)}` : '';
   // Do not use curl --fail: a 409 from BoardAgent is a deliberate safety

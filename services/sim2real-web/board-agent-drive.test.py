@@ -258,6 +258,283 @@ class OnboardingPreflightContract(unittest.TestCase):
         self.assertIn("telemetry", passport["checks"])
 
 
+class ProfileAwareOnboardingContract(unittest.TestCase):
+    def setUp(self):
+        self.profile_path = os.path.join(HERE, "..", "..", "profiles", "rdk-x5-microduck-leg.json")
+        self.agent = load_agent_module(profile_path=self.profile_path)
+        with open(self.profile_path, encoding="utf-8") as handle:
+            self.profile = json.load(handle)
+
+    def telemetry(self):
+        now = time.monotonic_ns()
+        return {
+            "imu": {"quaternion": {"x": 0.0, "y": 0.0, "z": 0.0, "w": 1.0},
+                    "gyro": {"x": 0.0, "y": 0.0, "z": 0.0},
+                    "sampleTs": time.time(), "sampleMonotonicNs": now},
+            "jointStates": {"names": self.profile["runtime"]["jointNames"],
+                            "position": self.profile["runtime"]["homePositionRad"],
+                            "velocity": [0.0] * 14,
+                            "sampleTs": time.time(), "sampleMonotonicNs": now},
+        }
+
+    def passport(self, telemetry=None, topics=None, agent=None, camera_devices=None, ros_cache_ts=None):
+        agent = agent or self.agent
+        if topics is None:
+            topics = [value["name"] for value in self.profile["ros"]["topics"].values()]
+        with mock.patch.object(agent, "find_camera_device", return_value=["/dev/video-fixture"] if camera_devices is None else camera_devices), \
+                mock.patch.dict(agent._ros_cache, {"topics": topics, "ts": time.time() if ros_cache_ts is None else ros_cache_ts}, clear=True), \
+                mock.patch.object(agent, "_read_telemetry_snapshot", return_value=telemetry), \
+                mock.patch.object(agent, "policy_list", return_value={"policies": []}), \
+                mock.patch.object(agent, "_policy_runtime_alive", return_value=False), \
+                mock.patch.object(agent.os.path, "exists", return_value=True), \
+                mock.patch.object(agent.shutil, "which", return_value="/fixture/python3"):
+            return agent.onboarding_preflight()
+
+    def test_joint_passport_uses_profile_contract_and_does_not_claim_calibration(self):
+        passport = self.passport(self.telemetry())
+        self.assertEqual(passport["kind"], "joint-onboarding-preflight")
+        self.assertTrue(passport["ready"])
+        self.assertFalse(passport["motion"]["started"])
+        self.assertFalse(passport["checks"]["safety"]["physicalCalibrationVerified"])
+        self.assertEqual(passport["checks"]["safety"]["stopBehavior"], "hold-last-bounded-target")
+        self.assertEqual(passport["checks"]["identity"]["provenance"]["kind"], "template")
+        self.assertEqual(len(passport["checks"]["identity"]["profileSha256"]), 64)
+        self.assertEqual(passport["checks"]["contract"]["observationSize"], 61)
+        self.assertEqual(passport["checks"]["joints"]["rows"][0]["errorFromHomeRad"], 0.0)
+
+    def test_unrelated_topics_and_battery_only_cannot_pass_leg_preflight(self):
+        passport = self.passport({"batteryVoltage": 5.0}, ["/unrelated"])
+        self.assertFalse(passport["ready"])
+        self.assertIn("ros", passport["blockingChecks"])
+        self.assertIn("telemetry", passport["blockingChecks"])
+        self.assertEqual(set(passport["checks"]["ros"]["missingRequired"]), {"imu", "jointStates", "jointCommand"})
+
+    def test_wrapper_freshness_cannot_mask_frozen_sensor_topics(self):
+        data = self.telemetry()
+        data["imu"]["sampleMonotonicNs"] -= 1_000_000_000
+        passport = self.passport(data)
+        self.assertFalse(passport["ready"])
+        self.assertFalse(passport["checks"]["telemetry"]["fresh"])
+        self.assertIn("imu-stale", passport["checks"]["telemetry"]["issues"])
+
+    def test_current_safe_snapshot_is_used_instead_of_a_frozen_one_hz_cache(self):
+        fresh = self.telemetry()
+        cached = json.loads(json.dumps(fresh))
+        for sensor in ("imu", "jointStates"):
+            cached[sensor]["sampleMonotonicNs"] -= 1_000_000_000
+        with mock.patch.object(self.agent, "originbot_telemetry_cached", return_value=cached) as cache:
+            passport = self.passport(fresh)
+        self.assertTrue(passport["ready"])
+        self.assertTrue(passport["checks"]["telemetry"]["fresh"])
+        self.assertEqual(passport["checks"]["telemetry"]["sourceTime"]["imu"]["sampleMonotonicNs"],
+                         str(fresh["imu"]["sampleMonotonicNs"]))
+        cache.assert_not_called()
+
+    def test_joint_rows_reorder_feedback_by_name(self):
+        data = self.telemetry()
+        for key in ("names", "position", "velocity"):
+            data["jointStates"][key] = list(reversed(data["jointStates"][key]))
+        passport = self.passport(data)
+        self.assertTrue(passport["ready"])
+        rows = passport["checks"]["joints"]["rows"]
+        self.assertEqual([row["name"] for row in rows], self.profile["runtime"]["jointNames"])
+        self.assertTrue(all(row["errorFromHomeRad"] == 0.0 for row in rows))
+
+    def test_each_required_topic_missing_blocks_ready(self):
+        all_topics = self.profile["ros"]["topics"]
+        for key in ("imu", "jointStates", "jointCommand"):
+            topics = [value["name"] for name, value in all_topics.items() if name != key]
+            with self.subTest(key=key):
+                passport = self.passport(self.telemetry(), topics)
+                self.assertFalse(passport["ready"])
+                self.assertEqual(passport["checks"]["ros"]["missingRequired"], [key])
+
+    def test_old_required_topic_cache_cannot_remain_ready_indefinitely(self):
+        passport = self.passport(self.telemetry(), ros_cache_ts=time.time() - 60.0)
+        self.assertFalse(passport["ready"])
+        self.assertFalse(passport["checks"]["ros"]["fresh"])
+        self.assertFalse(passport["checks"]["ros"]["ok"])
+        self.assertGreater(passport["checks"]["ros"]["sourceAgeSec"], 30.0)
+        self.assertEqual(set(passport["checks"]["ros"]["missingRequired"]), {"imu", "jointStates", "jointCommand"})
+
+    def test_unknown_invalid_and_future_ros_cache_is_explicitly_untrusted(self):
+        for stamp in (0.0, True, float("nan"), float("inf"), time.time() + 60):
+            with self.subTest(stamp=stamp):
+                passport = self.passport(self.telemetry(), ros_cache_ts=stamp)
+                self.assertFalse(passport["ready"])
+                self.assertFalse(passport["checks"]["ros"]["fresh"])
+                self.assertEqual(len(passport["checks"]["ros"]["missingRequired"]), 3)
+                json.dumps(passport, allow_nan=False)
+
+    def test_ros_cache_observation_time_and_ttl_are_reported(self):
+        stamp = time.time() - 5.0
+        passport = self.passport(self.telemetry(), ros_cache_ts=stamp)
+        ros = passport["checks"]["ros"]
+        self.assertTrue(passport["ready"])
+        self.assertTrue(ros["fresh"])
+        self.assertTrue(ros["observedAt"].endswith("Z"))
+        self.assertGreaterEqual(ros["sourceAgeSec"], 5.0)
+        self.assertEqual(ros["cacheTtlSec"], 30.0)
+
+    def test_optional_odom_and_camera_do_not_block_leg_sensor_readiness(self):
+        topics = [value["name"] for value in self.profile["ros"]["topics"].values() if value["required"]]
+        passport = self.passport(self.telemetry(), topics, camera_devices=[])
+        self.assertTrue(passport["ready"])
+        self.assertFalse(passport["checks"]["camera"]["required"])
+        self.assertFalse(passport["checks"]["camera"]["ok"])
+        self.assertEqual(passport["checks"]["camera"]["requiredReason"], "optional-for-joint-preflight")
+
+    def test_profile_required_camera_blocks_when_no_device_is_found(self):
+        topics = dict(self.agent._profile_topics)
+        topics["camera"] = {"name": "/camera/image_raw", "required": True}
+        topic_names = [value["name"] for value in topics.values()]
+        with mock.patch.object(self.agent, "_profile_topics", topics):
+            passport = self.passport(self.telemetry(), topic_names, camera_devices=[])
+        self.assertFalse(passport["ready"])
+        self.assertIn("camera", passport["blockingChecks"])
+        self.assertEqual(passport["checks"]["camera"]["requiredReason"], "profile")
+
+    def test_invalid_source_stamps_and_far_future_samples_do_not_count_as_fresh(self):
+        for stamp in (None, True, float("nan"), float("inf"), time.monotonic_ns() + 1_000_000_000):
+            with self.subTest(stamp=stamp):
+                data = self.telemetry()
+                data["jointStates"]["sampleMonotonicNs"] = stamp
+                passport = self.passport(data)
+                self.assertFalse(passport["ready"])
+                self.assertFalse(passport["checks"]["telemetry"]["fresh"])
+                # The response remains interoperable strict JSON even when
+                # input telemetry/profile data contains NaN or infinity.
+                json.dumps(passport, allow_nan=False)
+
+    def test_source_clock_rejects_even_small_future_skew_and_unbounded_integer_stamps(self):
+        for stamp in (1_000_001, -1, 10**100):
+            with self.subTest(stamp=stamp):
+                fresh, _age, _source = self.agent._preflight_sensor_source(
+                    {"sampleMonotonicNs": stamp}, 1_000_000, 0.1
+                )
+                self.assertFalse(fresh)
+
+    def test_invalid_imu_quaternion_or_gyro_cannot_pass(self):
+        for quaternion, gyro in [
+            ({"x": 0, "y": 0, "z": 0, "w": 0}, {"x": 0, "y": 0, "z": 0}),
+            ({"x": True, "y": 0, "z": 0, "w": 1}, {"x": 0, "y": 0, "z": 0}),
+            ({"x": 0, "y": 0, "z": float("nan"), "w": 1}, {"x": 0, "y": 0, "z": 0}),
+            ({"x": 0, "y": 0, "z": 0, "w": 1}, {"x": 0, "y": 0}),
+            ({"x": 0, "y": 0, "z": 0, "w": 1}, {"x": 0, "y": True, "z": 0}),
+        ]:
+            with self.subTest(quaternion=quaternion, gyro=gyro):
+                data = self.telemetry()
+                data["imu"].update(quaternion=quaternion, gyro=gyro)
+                passport = self.passport(data)
+                self.assertFalse(passport["ready"])
+                self.assertFalse(passport["checks"]["telemetry"]["ok"])
+                json.dumps(passport, allow_nan=False)
+
+    def test_json_giant_integers_are_invalid_values_instead_of_exceptions(self):
+        giant = 10**1000
+        self.assertFalse(self.agent._finite_number(giant))
+        for field in ("position", "gyro", "ros-cache"):
+            with self.subTest(field=field):
+                data = self.telemetry()
+                if field == "position":
+                    data["jointStates"]["position"] = list(data["jointStates"]["position"])
+                    data["jointStates"]["position"][0] = giant
+                elif field == "gyro":
+                    data["imu"]["gyro"]["x"] = giant
+                passport = self.passport(data, ros_cache_ts=giant if field == "ros-cache" else None)
+                self.assertFalse(passport["ready"])
+                json.dumps(passport, allow_nan=False)
+
+    def test_finite_components_with_overflowing_quaternion_norm_cannot_pass(self):
+        for value in (1e308, 1e155):
+            with self.subTest(value=value):
+                data = self.telemetry()
+                data["imu"]["quaternion"] = dict.fromkeys(("x", "y", "z", "w"), value)
+                passport = self.passport(data)
+                self.assertFalse(passport["ready"])
+                self.assertIn("imu-quaternion-invalid", passport["checks"]["telemetry"]["issues"])
+
+    def test_duplicate_missing_and_nonfinite_joint_feedback_cannot_pass(self):
+        for mode in ("duplicate", "missing", "short-velocity", "nan-position", "bool-velocity"):
+            with self.subTest(mode=mode):
+                data = self.telemetry()
+                joint = data["jointStates"]
+                joint["names"] = list(joint["names"])
+                joint["position"] = list(joint["position"])
+                joint["velocity"] = list(joint["velocity"])
+                if mode == "duplicate":
+                    joint["names"][1] = joint["names"][0]
+                elif mode == "missing":
+                    for key in ("names", "position", "velocity"):
+                        joint[key].pop()
+                elif mode == "short-velocity":
+                    joint["velocity"].pop()
+                elif mode == "nan-position":
+                    joint["position"][0] = float("nan")
+                else:
+                    joint["velocity"][0] = True
+                passport = self.passport(data)
+                self.assertFalse(passport["ready"])
+                self.assertFalse(passport["checks"]["joints"]["ok"])
+                json.dumps(passport, allow_nan=False)
+
+    def test_source_time_is_distinct_from_report_time_and_preserves_ns_precision(self):
+        data = self.telemetry()
+        passport = self.passport(data)
+        source = passport["checks"]["telemetry"]["sourceTime"]["jointStates"]
+        self.assertEqual(source["sampleTs"], data["jointStates"]["sampleTs"])
+        self.assertEqual(source["sampleMonotonicNs"], str(data["jointStates"]["sampleMonotonicNs"]))
+        self.assertTrue(passport["observedAt"].endswith("Z"))
+        self.assertGreaterEqual(passport["checks"]["telemetry"]["sourceAgeMs"]["jointStates"], 0)
+
+    def test_preflight_never_issues_ipc_or_motion_or_enables_switches(self):
+        with mock.patch.object(self.agent, "_policy_send") as ipc, \
+                mock.patch.object(self.agent, "policy_start") as start, \
+                mock.patch.object(self.agent, "drive_command") as drive, \
+                mock.patch.object(self.agent, "atomic_write_text") as write, \
+                mock.patch.object(self.agent, "run_ros2_list") as ros_command:
+            passport = self.passport(self.telemetry())
+        ipc.assert_not_called()
+        start.assert_not_called()
+        drive.assert_not_called()
+        write.assert_not_called()
+        ros_command.assert_not_called()
+        self.assertFalse(self.agent.MOTION_SWITCH_ENABLED)
+        self.assertFalse(self.agent.POLICY_ENABLED)
+        self.assertFalse(passport["checks"]["safety"]["motionAuthorized"])
+
+    def test_incompatible_joint_contract_is_reported_without_loading_a_policy(self):
+        profile = dict(self.agent._adapter_profile)
+        profile["policy"] = {**profile["policy"], "observationSize": 42}
+        with mock.patch.object(self.agent, "_adapter_profile", profile):
+            passport = self.passport(self.telemetry())
+        self.assertFalse(passport["ready"])
+        self.assertIn("contract", passport["blockingChecks"])
+
+    def test_report_preserves_safe_profile_metadata_and_omits_unrelated_secret_fields(self):
+        profile = dict(self.agent._adapter_profile)
+        profile["provenance"] = {"kind": "template", "mock": True, "note": "fixture",
+                                 "token": "fixture-secret", "sshTarget": "fixture-target"}
+        with mock.patch.object(self.agent, "_adapter_profile", profile):
+            passport = self.passport(self.telemetry())
+        self.assertNotIn("fixture-secret", json.dumps(passport))
+        self.assertNotIn("fixture-target", json.dumps(passport))
+        self.assertEqual(passport["checks"]["identity"]["provenance"]["kind"], "template")
+        self.assertFalse(passport["checks"]["safety"]["physicalCalibrationVerified"])
+
+    def test_wheeled_preflight_keeps_kind_and_requires_fresh_imu_odom(self):
+        agent = load_agent_module()
+        data = self.telemetry()
+        data["odom"] = {"positionX": 0.0, "positionY": 0.0, "linearX": 0.0, "angularZ": 0.0,
+                        "sampleMonotonicNs": time.monotonic_ns(), "sampleTs": time.time()}
+        passport = self.passport(data, ["/imu", "/odom", "/cmd_vel"], agent)
+        self.assertEqual(passport["kind"], "originbot-onboarding-preflight")
+        self.assertTrue(passport["ready"])
+        self.assertFalse(passport["checks"]["joints"]["supported"])
+        data["odom"]["sampleMonotonicNs"] -= 1_000_000_000
+        self.assertFalse(self.passport(data, ["/imu", "/odom", "/cmd_vel"], agent)["ready"])
+
+
 class DriveEnabledContract(unittest.TestCase):
     def setUp(self):
         self.agent = load_agent_module(enable_drive=True)

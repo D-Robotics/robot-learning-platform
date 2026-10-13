@@ -110,6 +110,31 @@ const invariantSummary = assertStyleInvariants(path.join(here, 'public'));
 const liveGuards = assertGuardsAreLive(path.join(here, 'public'), os.tmpdir());
 const markupSummary = assertMarkupInvariants(html);
 
+// The duck preparation report extends diagnostics without a navigation or
+// control surface. Read-only readiness must never stand in for calibration.
+assert.match(
+  html,
+  /id="duck-preparation"[\s\S]*?id="duck-preparation-refresh"/,
+  'duck diagnostics must expose an explicit read-only refresh',
+);
+assert.match(html, /id="duck-preparation-export"/, 'preparation snapshots must be downloadable');
+assert.match(
+  html,
+  /id="duck-experiment-export"/,
+  'the DDC guide must retain actual experiment metadata',
+);
+assert.match(app, /onboarding\/preflight/, 'preparation must read the structured board passport');
+assert.match(
+  app,
+  /deviceId !== state\.selectedDeviceId \|\| requestId !== state\.duckPreparationRequestId/,
+  'late readiness reports must be scoped to their original device and request',
+);
+assert.match(
+  html,
+  /本检查不会校准或启动机器人/,
+  'read-only preparation must state its physical calibration boundary',
+);
+
 // ---- accessibility anchors ----
 // Every labelled region must resolve to a real heading. A stale aria-labelledby
 // silently removes the region from a screen reader's landmark tree, so keep the

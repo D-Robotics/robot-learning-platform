@@ -11774,3 +11774,18 @@ body .depth-led #workflow-progress-strip {
 .station-joint-table { width: 100%; border-collapse: collapse; font-size: var(--fs-meta); }
 .station-joint-table caption { padding: 8px; color: var(--muted-strong); text-align: start; }
 .station-joint-table th, .station-joint-table td { padding: 8px; border-bottom: 1px solid var(--line); text-align: start; }
+.duck-preparation { padding-bottom: 20px; margin-bottom: 20px; border-bottom: 1px solid var(--line); min-width: 0; }
+.duck-preparation-heading { display: flex; align-items: flex-start; flex-wrap: wrap; gap: 12px; margin-bottom: 16px; }
+.duck-preparation-heading > div { flex: 1 1 240px; min-width: 0; }
+.duck-preparation-heading h3 { margin: 0; font-size: var(--fs-body); }
+.duck-preparation-heading p, .duck-preparation-note { margin: 8px 0 0; color: var(--muted-strong); font-size: var(--fs-body); line-height: 1.65; }
+.duck-preparation-status { padding: 12px; border: 1px solid var(--line); border-radius: var(--ui-radius-md); background: var(--panel-soft); color: var(--text); font-size: var(--fs-body); line-height: 1.65; }
+.duck-preparation-summary { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 180px), 1fr)); gap: 12px; margin: 16px 0; }
+.duck-preparation-field { min-width: 0; display: grid; gap: 6px; }
+.duck-preparation-field span { color: var(--muted-strong); font-size: var(--fs-meta); }
+.duck-preparation-field strong { font-size: var(--fs-body); overflow-wrap: anywhere; }
+.duck-preparation-table-wrap { max-width: 100%; overflow-x: auto; }
+.duck-preparation-table { width: 100%; border-collapse: collapse; font-size: var(--fs-meta); }
+.duck-preparation-table caption { padding: 8px; color: var(--muted-strong); text-align: start; }
+.duck-preparation-table th, .duck-preparation-table td { padding: 8px; border-bottom: 1px solid var(--line); text-align: start; }
+.duck-preparation-issues { color: var(--muted-strong); padding-inline-start: 20px; font-size: var(--fs-body); line-height: 1.65; }

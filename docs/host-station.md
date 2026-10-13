@@ -9,6 +9,7 @@
 | 板卡实时状态（CPU/内存/磁盘/网络/电源/uptime/TROS 话题） | ✅ | NDJSON 心跳流，1Hz |
 | 板载相机画面 | ✅ | MJPEG 流（multipart/x-mixed-replace），`<img>` 直接渲染 |
 | 白名单只读命令 | ✅ | TROS 节点/话题列表、磁盘用量、服务状态 |
+| 按硬件配置的准备检查 | ✅ 只读 | `onboarding/preflight` 返回话题、传感器源时间、关节状态和契约缺项；检查通过不代表物理校准或运动验收通过 |
 | 遥控/电机控制 | ⚠️ 默认关闭的受限驱动 | 双开关（平台 `RDK_SIM2REAL_STATION_DRIVE_ENABLED` + 板端 `RDK_SIM2REAL_BOARD_AGENT_ENABLE_DRIVE`）全开后提供 0.05–0.3 m/s / ≤2 s 的运动金丝雀；`actuatorControl` 全链路如实上报开关状态 |
 | 网页添加真机（设备管理） | ✅ | 上位机页「设备管理」面板：填 SSH 坐标 → 服务端建 loopback SSH 隧道 + 探测 agent；不存密码，认证走本机 ssh 密钥/代理（见下） |
 | 运动开关网页切换 | ✅ | 「运动开关」面板：平台侧持久化运行时覆盖（开启需确认）；板端侧经代理改 `agent.env` 两行并重启 agent |
@@ -36,10 +37,11 @@ RDK_SIM2REAL_BOARD_AGENT_URL=http://127.0.0.1:19100 npm run dev:sim2real
 
 ## 线协议（agent 侧）
 
-BoardAgent 在部署预检协议之外新增 12 个端点（7 个只读 + 3 个受限驱动 + 2 个受控 staging/config）：
+BoardAgent 在部署预检协议之外提供以下端点：
 
 ```
 GET  /healthz                       能力声明 + stationCommands 白名单
+GET  /v1/onboarding/preflight        按当前 profile 汇总准备条件（只读，不校准、不启动运动）
 GET  /v1/station/status             一次状态快照（JSON）
 GET  /v1/station/status/stream      NDJSON 心跳流（1 行 = 1 个快照）
 GET  /v1/station/camera.mjpeg       MJPEG 相机流
@@ -64,6 +66,7 @@ POST /v1/config                     { "switches": { ...两个开关... } } 原�
 
 ```
 GET  /board-station/health          agent 能力 + 当前板卡信息（不含敏感字段）
+GET  /board-station/onboarding/preflight   原样代理板端准备检查，支持 ?deviceId=<本组设备>
 GET  /board-station/status          快照
 GET  /board-station/status/stream   逐字节转发 NDJSON（1 上游连接/客户端，15 分钟上限）
 GET  /board-station/camera.mjpeg    逐字节转发 MJPEG（同上）
@@ -96,6 +99,32 @@ POST   /device-connections/:connectionId/config        代理改板端两个开�
 - 请求体上限 64KB、JSON 响应上限 256KB、超时 4–15s 有界。
 - 直连模式不转发 Studio 凭据；Local Bridge 模式只转发当前浏览器已有的 Studio cookie，且 `redirect: 'error'` 防重定向 SSRF。
 - Local Bridge 无法承载长连接 MJPEG 时，平台轮询板端 `/v1/station/camera.snapshot`，在服务端重建同一 multipart 流；无相机仍返回 `CAMERA_UNAVAILABLE`，不生成合成画面。
+
+## 准备检查、物理校准与跟随输入
+
+`GET /board-station/onboarding/preflight?deviceId=<设备编号>` 先经过当前账号的读取
+权限与可见设备检查，再读取该设备的 `/v1/onboarding/preflight`。直连隧道和 Studio
+Local Bridge 使用同一个端点；Bridge 只允许这一固定路径的 GET，不接受自由路径或
+写入请求。返回的 `passport.kind` 与 `passport.checks` 保持板端原始结构，平台代理
+不把 `ready=false` 改成通过，也不自动开启任何运动开关。
+
+轮式配置保留 `originbot-onboarding-preflight`；关节配置使用
+`joint-onboarding-preflight`。后者根据当前 profile 的话题、关节名称和 home 配置
+核对必需话题、IMU/关节传感器的源时间及关节位置、速度，并给出缺项与下一步提示。
+`checks.identity.profileSha256` 和 provenance 标识被检查的配置；
+`checks.telemetry` 的 sourceTime、sourceAgeMs 和 issues 描述数据是否新鲜，
+`checks.joints` 提供对应关节的读数与偏离 home 的量，`checks.contract` 给出运行时
+输入输出契约。这些都是当前观察值，不能证明舵机零位、方向、限位或跌倒保护已经
+在实体机器人上验收；`checks.safety.physicalCalibrationVerified` 保持 false。
+
+准备报告可以和已有项目、Run、模型、评测、部署记录一起导出，标注观察时间、设备
+编号和证据来源。下载报告不创建校准证据、不签发制品，也不改变台账中的发布状态。
+分享用报告不包含账号凭据、SSH 坐标或本机文件路径。
+
+MJPEG 画面与关节健康检查并不提供人体跟随闭环。当前仍缺少带源时间的检测/跟踪
+目标编号、可信度，以及经过校准的方向和距离输入；还需实现目标丢失、输入过期和
+人工接管时的命令停止。缺少这些输入时，报告应明确标注人体跟随尚未接通，不能
+从“相机可预览”或“策略可加载”推断为跟随可用。
 
 ## 网页添加真机（设备管理 · RDK Studio 网页版风格）
 

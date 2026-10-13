@@ -33,7 +33,11 @@ const names: Array<[string, string, boolean]> = [
   ['rdk_device_connect', '连接指定 RDK 设备并探测 BoardAgent', false],
   ['rdk_device_disconnect', '断开指定 RDK 设备的受控连接', false],
   ['rdk_board_health', '读取 BoardAgent 健康、磁盘、传感器和遥测状态', true],
-  ['rdk_board_onboarding_preflight', '读取新接入板卡的相机、TROS、遥测和安全预检', true],
+  [
+    'rdk_board_onboarding_preflight',
+    '按 deviceId 读取硬件配置、相机、TROS、关节与传感器的只读准备检查；通过不代表实体校准或运动验收',
+    true,
+  ],
   ['rdk_board_station_status', '读取板端状态、传感器和心跳快照', true],
   ['rdk_board_station_command', '执行白名单内的只读板端命令', true],
   ['rdk_board_policy_status', '读取板端策略运行时与延迟证据状态', true],

@@ -58,6 +58,49 @@ afterEach(() => {
 });
 
 describe('DSH capability handlers', () => {
+  it('reads the selected duck readiness without publishing commands or asserting calibration', async () => {
+    const passport = {
+      kind: 'joint-onboarding-preflight',
+      ready: false,
+      physicalCalibrationVerified: false,
+      blockingChecks: ['telemetry'],
+      checks: { telemetry: { ok: false, fresh: false, issues: ['imu-stale'] } },
+      motion: { started: false },
+    };
+    const { fetchImpl, calls } = fakeLoopback([
+      () => ({ status: 200, body: { ok: true, deviceId: 'duck & group', passport } }),
+    ]);
+    const handlers = createDshCapabilityHandlers({ fetchImpl });
+    await expect(
+      handlers.rdk_board_onboarding_preflight({ deviceId: 'duck & group' }, {
+        signal: new AbortController().signal,
+      } as never),
+    ).resolves.toEqual({ deviceId: 'duck & group', passport });
+    expect(calls).toHaveLength(1);
+    expect(calls[0]).toMatchObject({
+      method: 'GET',
+      path: '/api/sim2real/board-station/onboarding/preflight?deviceId=duck%20%26%20group',
+    });
+    expect(calls[0].body).toBeUndefined();
+  });
+
+  it('keeps readiness ownership rejection without retrying against a default device', async () => {
+    const { fetchImpl, calls } = fakeLoopback([
+      () => ({ status: 403, body: { ok: false, message: '该设备不属于当前账号。' } }),
+    ]);
+    const handlers = createDshCapabilityHandlers({ fetchImpl });
+    await expect(
+      handlers.rdk_board_onboarding_preflight({ deviceId: 'other-group' }, {
+        signal: new AbortController().signal,
+      } as never),
+    ).rejects.toMatchObject({
+      code: 'DSH_CAPABILITY_REJECTED',
+      message: expect.stringContaining('不属于当前账号'),
+    });
+    expect(calls).toHaveLength(1);
+    expect(calls[0].path).toContain('deviceId=other-group');
+  });
+
   it('reports a latched arm stop without claiming a blocking move has stopped', async () => {
     const { fetchImpl, calls } = fakeLoopback([
       () => ({

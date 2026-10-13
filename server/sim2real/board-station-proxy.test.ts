@@ -175,6 +175,58 @@ describe('board-station proxy bounded body handling', () => {
     },
   );
 
+  it('relays a joint onboarding passport unchanged through the read-only Studio bridge', async () => {
+    delete process.env.RDK_SIM2REAL_BOARD_AGENT_URL;
+    process.env.RDK_SIM2REAL_STUDIO_EXEC_ORIGIN = 'http://127.0.0.1:18090';
+    const passport = {
+      ok: true,
+      kind: 'joint-onboarding-preflight',
+      schemaVersion: 1,
+      ready: false,
+      blockingChecks: ['telemetry'],
+      checks: {
+        joints: { ok: true, rows: [{ name: 'joint-1', positionRad: 0.1 }] },
+        safety: { physicalCalibrationVerified: false, stopBehavior: 'hold-last-bounded-target' },
+      },
+      motion: { started: false },
+    };
+    const fetchMock = vi
+      .spyOn(globalThis, 'fetch')
+      .mockResolvedValue(
+        new Response(JSON.stringify({ output: JSON.stringify(passport) }), { status: 200 }),
+      );
+    await expect(
+      stationAgentFetch('/v1/onboarding/preflight', {
+        cookieHeader: 'studio_session=test',
+        deviceId: 'studio-device-2',
+      }),
+    ).resolves.toEqual(passport);
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe('http://127.0.0.1:18090/api/devices/studio-device-2/exec');
+    const command = JSON.parse(String(init.body)).command;
+    expect(command).toContain("-X 'GET'");
+    expect(command).toContain('/v1/onboarding/preflight');
+    expect(command).not.toContain('--data');
+  });
+
+  it('rejects non-read and free-form onboarding bridge paths before any request', async () => {
+    delete process.env.RDK_SIM2REAL_BOARD_AGENT_URL;
+    process.env.RDK_SIM2REAL_STUDIO_EXEC_ORIGIN = 'http://127.0.0.1:18090';
+    const fetchMock = vi
+      .spyOn(globalThis, 'fetch')
+      .mockRejectedValue(new Error('unexpected fetch'));
+    const options = { cookieHeader: 'studio_session=test', deviceId: 'studio-device-2' };
+    for (const method of ['POST', 'PUT', 'DELETE']) {
+      await expect(
+        stationAgentFetch('/v1/onboarding/preflight', { ...options, method }),
+      ).resolves.toBeNull();
+    }
+    await expect(
+      stationAgentFetch('/v1/onboarding/preflight/arbitrary', options),
+    ).resolves.toBeNull();
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
   it('allows a bounded policy command through the cookie-authenticated Studio bridge', async () => {
     delete process.env.RDK_SIM2REAL_BOARD_AGENT_URL;
     process.env.RDK_SIM2REAL_STUDIO_EXEC_ORIGIN = 'http://127.0.0.1:18090';

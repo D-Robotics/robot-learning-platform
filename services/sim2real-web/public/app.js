@@ -388,6 +388,8 @@ const state = {
   overviewInFlight: false,
   overviewLoadDone: null,
   serviceError: false,
+  duckPreparation: null,
+  duckPreparationRequestId: 0,
   authRequired: false,
   authNoticeShown: false,
   productId: readProductPreference(),
@@ -9096,7 +9098,154 @@ function renderDuckWorkshop() {
     authRequired: state.authRequired, serviceError: state.serviceError,
     loading: state.loading, loaded: Boolean(state.overview),
     releaseEvidenceReady: hasReleaseGradeEvidence(currentTelemetry(), latestRun()),
+    preparation: currentDuckPreparation(),
   });
+  renderDuckPreparation();
+}
+
+const duckDownloadUrls = new Set();
+
+function currentDuckPreparation() {
+  const report = state.duckPreparation;
+  return state.productId === 'microduck' && report?.ownerEpoch === workspaceOwnerEpoch && report.deviceId === state.selectedDeviceId ? report : null;
+}
+
+function invalidateDuckPreparation() {
+  state.duckPreparation = null;
+  state.duckPreparationRequestId += 1;
+  for (const url of duckDownloadUrls) URL.revokeObjectURL?.(url);
+  duckDownloadUrls.clear();
+  renderDuckWorkshop();
+}
+
+function renderDuckPreparation() {
+  const panel = $('duck-preparation');
+  if (!panel) return;
+  panel.hidden = state.productId !== 'microduck';
+  const device = selectedDevice();
+  const report = currentDuckPreparation();
+  const passport = report?.passport;
+  const checks = passport?.checks || {};
+  const safeReport = passport ? globalThis.DuckWorkshop?.preparationRecord({ passport }) : null;
+  const refresh = $('duck-preparation-refresh');
+  if (refresh) refresh.disabled = !device || state.authRequired || state.serviceError || report?.status === 'loading';
+  const download = $('duck-preparation-export');
+  if (download) download.disabled = !passport || state.authRequired || state.serviceError || report?.status === 'loading' || report?.status === 'error';
+  const experiment = $('duck-experiment-export');
+  if (experiment) experiment.disabled = !state.overview || !selectedModel() || state.authRequired || state.serviceError;
+  const source = passport?.observedAt ? `报告时间 ${formatDate(passport.observedAt)}` : '板端未提供报告时间';
+  setText('duck-preparation-status', report?.status === 'loading' ? '正在读取当前设备的只读准备情况…'
+    : report?.status === 'error' ? `准备检查未完成：${report.error}。修复后可重新检查。`
+      : passport ? `${safeReport?.ready === true ? '读取时只读准备检查通过；人工校准仍待现场验收。' : safeReport?.source.mock === true ? '报告或配置含 mock / 模板来源，不能作为真实准备通过；人工校准仍待现场验收。' : '只读准备检查有缺项，按下列结果修复后重新检查。'} ${source}；这是读取时刻的截面，不代表传感器持续有效。`
+        : device ? '已选择本组设备。点击“刷新只读检查”读取关节、传感器和配置。' : '选择本组机器人后，刷新只读检查。');
+  const summary = $('duck-preparation-summary');
+  if (summary) {
+    summary.replaceChildren();
+    if (passport) {
+      const number = (value) => typeof value === 'number' && Number.isFinite(value) ? String(value) : '未提供';
+      const sensor = (key) => {
+        const stamp = checks.telemetry?.sourceTime?.[key]?.sampleTs;
+        const age = checks.telemetry?.sourceAgeMs?.[key];
+        const date = typeof stamp === 'number' && Number.isFinite(stamp) ? new Date(stamp * 1000) : null;
+        return `${date && Number.isFinite(date.getTime()) ? formatDate(date.toISOString()) : '未提供有效源时间'} · ${typeof age === 'number' && Number.isFinite(age) ? age.toFixed(1) + ' ms' : '源年龄未提供'}`;
+      };
+      const items = [
+        ['目标设备', device?.name || device?.id || '未选择'], ['报告时间', passport.observedAt ? formatDate(passport.observedAt) : '未提供'],
+        ['IMU 来源 / 读取时源年龄', sensor('imu')], ['关节来源 / 读取时源年龄', sensor('jointStates')],
+        ['Profile 来源', checks.identity?.provenance?.kind || '未提供'], ['Profile 摘要', checks.identity?.profileSha256 || '未提供'],
+        ['模型契约', `${number(checks.contract?.observationSize)} → ${number(checks.contract?.actionSize)} · ${number(checks.contract?.controlHz)} Hz`],
+        ['关节完整性', `${Array.isArray(checks.joints?.rows) ? checks.joints.rows.length : 0} / ${Array.isArray(checks.joints?.expectedNames) ? checks.joints.expectedNames.length : 14} · 缺失 ${checks.joints?.missingNames?.length || 0}`],
+        ['相机条件', `${checks.camera?.required === false ? '腿式准备可选项' : '必需项'} · ${checks.camera?.ok === true ? '读取时发现设备' : '读取时未发现设备'}`],
+        ['停止行为', checks.safety?.stopBehavior || '未提供'], ['人工校准', '待现场验收'],
+      ];
+      for (const [label, value] of items) {
+        const field = document.createElement('div'); field.className = 'duck-preparation-field';
+        const caption = document.createElement('span'); caption.textContent = label;
+        const text = document.createElement('strong'); text.textContent = value;
+        field.append(caption, text); summary.append(field);
+      }
+    }
+  }
+  const table = $('duck-preparation-table');
+  const rows = Array.isArray(checks.joints?.rows) ? checks.joints.rows.slice(0, 14) : [];
+  if (table) table.hidden = rows.length === 0;
+  const body = $('duck-preparation-joints');
+  if (body) {
+    body.replaceChildren();
+    for (const row of rows) {
+      const line = document.createElement('tr');
+      for (const value of [row.name, row.homeRad, row.positionRad, row.errorFromHomeRad, row.velocityRadSec]) {
+        const cell = document.createElement('td'); cell.textContent = typeof value === 'number' && Number.isFinite(value) ? value.toFixed(4) : typeof value === 'string' ? value : '未提供'; line.append(cell);
+      }
+      body.append(line);
+    }
+  }
+  const issues = $('duck-preparation-issues');
+  if (issues) {
+    issues.replaceChildren();
+    const names = { identity: '设备身份', python: 'Python', tros: 'TROS', camera: '相机', ros: '必需话题', telemetry: '传感器来源与新鲜度', joints: '关节完整性' };
+    const missing = Object.keys(names).filter((key) => checks[key]?.ok === false).map((key) => key === 'camera' && checks.camera.required === false ? '相机未连接：腿式准备检查为可选项，人体跟随前仍需连接。' : `缺项：${names[key]}`);
+    if (passport && passport.kind !== 'joint-onboarding-preflight') missing.push('板端返回通用预检，未提供鸭子关节准备报告；请检查 profile 并更新 BoardAgent。');
+    if (passport && !checks.joints) missing.push('未提供关节 / home 数据，不能判断机器人鸭准备情况。');
+    if (safeReport?.missingChecks.includes('contract')) missing.push('缺项：机器人鸭契约（观测、14 维关节输出、频率或指令向量）未匹配。');
+    if (checks.joints?.missingNames?.length) missing.push('缺失关节：' + checks.joints.missingNames.join('、'));
+    for (const issue of [...missing, ...(Array.isArray(checks.telemetry?.issues) ? checks.telemetry.issues : []), ...(Array.isArray(checks.joints?.issues) ? checks.joints.issues : [])].slice(0, 32)) {
+      const item = document.createElement('li'); item.textContent = String(issue); issues.append(item);
+    }
+  }
+  const follow = $('duck-follow-readiness');
+  if (follow) {
+    follow.hidden = state.productId !== 'microduck';
+    follow.textContent = `${checks.camera?.ok === true ? '读取时发现相机设备，请开启画面核对出图。' : checks.camera?.ok === false ? '准备报告未发现可用相机，请检查相机连接。' : '相机条件尚未检查，可在设备诊断中刷新鸭子准备报告。'} 当前仍缺人体检测目标、距离来源和跟随控制接口；相机画面不作为人体跟随已完成的证据。`;
+  }
+}
+
+async function refreshDuckPreparation() {
+  const deviceId = state.selectedDeviceId;
+  if (!deviceId || state.productId !== 'microduck' || state.authRequired) return;
+  const ownerEpoch = workspaceOwnerEpoch;
+  const requestId = ++state.duckPreparationRequestId;
+  state.duckPreparation = { ownerEpoch, deviceId, status: 'loading', passport: null };
+  renderDuckWorkshop();
+  try {
+    const payload = await request('/sim2real/board-station/onboarding/preflight');
+    if (ownerEpoch !== workspaceOwnerEpoch || deviceId !== state.selectedDeviceId || requestId !== state.duckPreparationRequestId || state.productId !== 'microduck') return;
+    if (payload?.ok !== true || payload.deviceId !== deviceId || !payload.passport?.checks) throw new Error('板端没有返回当前设备的结构化准备报告');
+    state.duckPreparation = { ownerEpoch, deviceId, status: 'loaded', passport: payload.passport, receivedAt: new Date().toISOString() };
+  } catch (error) {
+    if (ownerEpoch !== workspaceOwnerEpoch || deviceId !== state.selectedDeviceId || requestId !== state.duckPreparationRequestId) return;
+    state.duckPreparation = { ownerEpoch, deviceId, status: 'error', passport: null, error: error instanceof Error ? error.message : '读取失败' };
+  }
+  renderDuckWorkshop();
+}
+
+function downloadDuckRecord(kind) {
+  const device = selectedDevice();
+  const generatedAt = new Date().toISOString();
+  const preparation = currentDuckPreparation();
+  if (!globalThis.DuckWorkshop || state.authRequired || state.serviceError) return;
+  let data;
+  if (kind === 'preparation') {
+    if (!device || !preparation?.passport || preparation.status !== 'loaded') return;
+    data = DuckWorkshop.preparationRecord({ passport: preparation.passport, device, generatedAt });
+  } else {
+    const model = selectedModel();
+    if (!state.overview || !model) return;
+    const run = latestRun();
+    data = DuckWorkshop.experimentRecord({ project: selectedProject(), model, device, run, deployments: deploymentsForCurrentModel(), preparation: preparation?.passport ? preparation : null, generatedAt,
+      evidencePaths: run ? { boardSessionsPath: apiPath('/sim2real/runs/' + encodeURIComponent(run.id) + '/board-sessions'), ...(run.artifact?.format === 'onnx' ? { policyDownloadPath: apiPath('/sim2real/runs/' + encodeURIComponent(run.id) + '/policy.onnx') } : {}) } : {},
+    });
+  }
+  const url = URL.createObjectURL(new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' }));
+  duckDownloadUrls.add(url);
+  const anchor = document.createElement('a'); anchor.href = url; anchor.download = `duck-${kind}-${generatedAt.slice(0, 10)}.json`; anchor.click();
+  setTimeout(() => { URL.revokeObjectURL(url); duckDownloadUrls.delete(url); }, 0);
+}
+
+function wireDuckPreparation() {
+  $('duck-preparation-refresh')?.addEventListener('click', () => { void refreshDuckPreparation(); });
+  $('duck-preparation-export')?.addEventListener('click', () => downloadDuckRecord('preparation'));
+  $('duck-experiment-export')?.addEventListener('click', () => downloadDuckRecord('experiment'));
 }
 
 function renderAll() {
@@ -10702,6 +10851,7 @@ async function stationProbePolicy() {
 
 /** 1Hz 流渲染：state/model/infer/published/obsSlots 全部如实显示。 */
 function stationInvalidatePolicy() {
+  invalidateDuckPreparation();
   state.station.policy = null;
   state.station.policyDeviceId = '';
   state.station.policyMotionReady = false;
@@ -12671,7 +12821,13 @@ globalThis.DuckWorkshop?.setNavigate(({ view, child, module }) => {
   setView(view);
   if (child) { applyFlowChildDestination(FLOW_CHILD_CONTEXTS[child]); setFlowChild(child); }
   if (module) setStationModule(module);
+  if (module === 'telemetry') {
+    const camera = $('station-module-telemetry-camera'); if (camera) camera.open = true;
+    $('station-camera-toggle')?.focus();
+  }
+  if (module === 'diagnostics' && state.productId === 'microduck') $('duck-preparation')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
 });
+wireDuckPreparation();
 wireEvents();
 wireViewShortcuts();
 syncShortcutChrome();

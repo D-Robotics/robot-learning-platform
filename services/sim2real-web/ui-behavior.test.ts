@@ -5,15 +5,23 @@ import { JSDOM } from 'jsdom';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), 'public');
-const [html, telemetrySource, componentSource, firstUseSource, relaySource, appSource] =
-  await Promise.all([
-    readFile(path.join(root, 'index.html'), 'utf8'),
-    readFile(path.join(root, 'telemetry-core.js'), 'utf8'),
-    readFile(path.join(root, 'ui-components.js'), 'utf8'),
-    readFile(path.join(root, 'first-use-core.js'), 'utf8'),
-    readFile(path.join(root, 'relay-training.js'), 'utf8'),
-    readFile(path.join(root, 'app.js'), 'utf8'),
-  ]);
+const [
+  html,
+  telemetrySource,
+  componentSource,
+  firstUseSource,
+  relaySource,
+  duckWorkshopSource,
+  appSource,
+] = await Promise.all([
+  readFile(path.join(root, 'index.html'), 'utf8'),
+  readFile(path.join(root, 'telemetry-core.js'), 'utf8'),
+  readFile(path.join(root, 'ui-components.js'), 'utf8'),
+  readFile(path.join(root, 'first-use-core.js'), 'utf8'),
+  readFile(path.join(root, 'relay-training.js'), 'utf8'),
+  readFile(path.join(root, 'duck-workshop.js'), 'utf8'),
+  readFile(path.join(root, 'app.js'), 'utf8'),
+]);
 const demoTelemetrySource = await readFile(
   path.join(root, 'demo', 'microduck-telemetry-sample.jsonl'),
   'utf8',
@@ -220,6 +228,8 @@ async function boot(
     workspaceContext?: Record<string, unknown>;
     /** Override the document URL so hash deep links (#train/configure) can be tested. */
     url?: string;
+    /** Prefix injected by the server when mounted beside Studio. */
+    basePath?: string;
     /** Mutable session fixture for same-browser account changes. */
     accountId?: string;
     sessionAuthenticated?: boolean;
@@ -244,6 +254,10 @@ async function boot(
   });
   openWindows.push(dom.window);
   const { window } = dom;
+  if (options.basePath)
+    window.document
+      .querySelector('meta[name="rdk-sim2real-base-path"]')
+      ?.setAttribute('content', options.basePath);
   if (options.productId) window.localStorage.setItem('rdk-duck-lab-product', options.productId);
   if (options.workspaceContext) {
     window.localStorage.setItem(
@@ -454,6 +468,7 @@ async function boot(
   window.eval(componentSource);
   window.eval(firstUseSource);
   window.eval(relaySource);
+  window.eval(duckWorkshopSource);
   window.eval(appSource + '\nwindow.__workbenchState = state;');
 
   for (let attempt = 0; attempt < 50; attempt += 1) {
@@ -3948,6 +3963,384 @@ describe('floating station stop target', () => {
     }
     expect(floating.hidden).toBe(false);
     expect(floating.dataset.deviceId).toBe('board-a');
+    expect(errors).toEqual([]);
+  });
+});
+
+describe('duck preparation and experiment records', () => {
+  const devices = [
+    {
+      id: 'duck-a',
+      name: 'Duck A',
+      host: 'PRIVATE_CONNECTION_HOST',
+      status: 'connected',
+      boardPlatform: 'rdk-x5',
+    },
+    { id: 'duck-b', name: 'Duck B', status: 'connected', boardPlatform: 'rdk-x5' },
+  ];
+  function passport() {
+    return {
+      kind: 'joint-onboarding-preflight',
+      ready: true,
+      mock: false,
+      observedAt: '2026-10-13T00:00:00.000Z',
+      checks: {
+        identity: {
+          ok: true,
+          profileSha256: 'a'.repeat(64),
+          provenance: { kind: 'real', mock: false, note: 'PRIVATE_PROVENANCE_NOTE' },
+        },
+        python: { ok: true, path: '/root/PRIVATE_PYTHON_PATH' },
+        tros: { ok: true, setup: '/root/PRIVATE_TROS_PATH' },
+        camera: {
+          ok: false,
+          required: false,
+          devices: [],
+          requiredReason: 'optional-for-joint-preflight',
+        },
+        ros: {
+          ok: true,
+          expected: {
+            imu: {
+              name: '/imu',
+              type: 'sensor_msgs/msg/Imu',
+              qos: 'reliable',
+              required: true,
+              present: true,
+            },
+          },
+        },
+        telemetry: {
+          ok: true,
+          fresh: true,
+          sensorStallSec: 0.1,
+          sourceAgeMs: { imu: 2, jointStates: 3 },
+          sourceTime: {
+            imu: { sampleTs: 1791849600, sampleMonotonicNs: '1234567890123456789' },
+            jointStates: { sampleTs: 1791849600 },
+          },
+        },
+        joints: {
+          ok: true,
+          expectedNames: Array.from({ length: 14 }, (_, i) => `joint_${i}`),
+          missingNames: [],
+          rows: Array.from({ length: 14 }, (_, i) => ({
+            name: `joint_${i}`,
+            homeRad: 0.1,
+            positionRad: 0.11,
+            velocityRadSec: 0,
+            errorFromHomeRad: 0.01,
+          })),
+        },
+        contract: {
+          ok: true,
+          observationSize: 61,
+          actionSize: 14,
+          observationLayout: 'microduck-61d-v1',
+          actionOutput: 'joint-position-offset',
+          controlHz: 50,
+          commandVectorSize: 13,
+        },
+        policy: { artifactDir: '/root/PRIVATE_POLICY_DIR' },
+        safety: { stopBehavior: 'hold-last-bounded-target', physicalCalibrationVerified: false },
+      },
+    };
+  }
+  function select(window: InstanceType<typeof JSDOM>['window'], id = 'duck-a') {
+    const input = window.document.querySelector<HTMLSelectElement>('#device-select')!;
+    input.value = id;
+    input.dispatchEvent(new window.Event('change', { bubbles: true }));
+  }
+  function json(value: unknown) {
+    return new Response(JSON.stringify(value), { headers: { 'content-type': 'application/json' } });
+  }
+  function captureDownloads(window: InstanceType<typeof JSDOM>['window']) {
+    const blobs: Blob[] = [];
+    const revoke = vi.fn();
+    Object.assign(window.URL, {
+      createObjectURL: vi.fn((blob: Blob) => {
+        blobs.push(blob);
+        return 'blob:fixture-' + blobs.length;
+      }),
+      revokeObjectURL: revoke,
+    });
+    vi.spyOn(window.HTMLAnchorElement.prototype, 'click').mockImplementation(() => {});
+    return { blobs, revoke };
+  }
+  function readBlob(window: InstanceType<typeof JSDOM>['window'], blob: Blob) {
+    return new Promise<string>((resolve, reject) => {
+      const reader = new window.FileReader();
+      reader.onload = () => resolve(String(reader.result));
+      reader.onerror = reject;
+      reader.readAsText(blob);
+    });
+  }
+
+  it('reads a real report on demand, displays fourteen joint values and never marks physical calibration complete', async () => {
+    const { window, requests, errors } = await boot({
+      devices,
+      transport: async (url) =>
+        url.includes('/onboarding/preflight')
+          ? json({ ok: true, deviceId: 'duck-a', passport: passport() })
+          : null,
+    });
+    select(window);
+    expect(requests.some((item) => item.url.includes('/onboarding/preflight'))).toBe(false);
+    await window.eval('refreshDuckPreparation()');
+    expect(window.document.querySelector('#duck-preparation-status')?.textContent).toContain(
+      '读取时只读准备检查通过',
+    );
+    expect(window.document.querySelector('#duck-preparation-status')?.textContent).toContain(
+      '截面',
+    );
+    expect(window.document.querySelectorAll('#duck-preparation-joints tr')).toHaveLength(14);
+    expect(window.document.querySelector('#duck-preparation-joints')?.textContent).toContain(
+      '0.1100',
+    );
+    expect(window.document.querySelector('#duck-preparation-summary')?.textContent).toContain(
+      '人工校准待现场验收',
+    );
+    expect(window.document.querySelector('#duck-preparation-issues')?.textContent).toContain(
+      '可选项',
+    );
+    expect(
+      window.document.querySelector('[data-duck-step="calibration"]')?.parentElement?.dataset.state,
+    ).toBe('ready');
+    expect(window.document.querySelector('[data-duck-step="calibration"]')?.textContent).toContain(
+      '校准待验',
+    );
+    expect(window.document.querySelector('#duck-follow-readiness')?.textContent).toContain(
+      '仍缺人体检测目标',
+    );
+    expect(
+      requests.filter((item) => item.method === 'POST' && item.url.includes('/board-station/')),
+    ).toHaveLength(0);
+    expect(errors).toEqual([]);
+  });
+
+  it('uses the same strict readiness rule for report headings, exports and the DDC calibration step', async () => {
+    let report = passport();
+    const { window, errors } = await boot({
+      devices,
+      transport: async (url) =>
+        url.includes('/onboarding/preflight')
+          ? json({ ok: true, deviceId: 'duck-a', passport: report })
+          : null,
+    });
+    select(window);
+    for (const patch of ['mock', 'contract', 'telemetry', 'joints']) {
+      report = passport();
+      if (patch === 'mock') report.checks.identity.provenance.mock = true;
+      if (patch === 'contract') report.checks.contract.ok = false;
+      if (patch === 'telemetry') report.checks.telemetry.ok = false;
+      if (patch === 'joints') report.checks.joints.ok = false;
+      await window.eval('refreshDuckPreparation()');
+      expect(window.document.querySelector('#duck-preparation-status')?.textContent).not.toContain(
+        '读取时只读准备检查通过',
+      );
+      expect(
+        window.document.querySelector('[data-duck-step="calibration"]')?.parentElement?.dataset
+          .state,
+      ).toBe('blocked');
+      expect(
+        window.eval(
+          'DuckWorkshop.preparationRecord({passport:__workbenchState.duckPreparation.passport}).ready',
+        ),
+      ).toBe(false);
+      if (patch === 'contract')
+        expect(window.document.querySelector('#duck-preparation-issues')?.textContent).toContain(
+          '契约',
+        );
+    }
+    expect(errors).toEqual([]);
+  });
+
+  it('exports only safe preparation fields with source timestamps, required topics and no local paths', async () => {
+    const { window, errors } = await boot({
+      devices,
+      transport: async (url) =>
+        url.includes('/onboarding/preflight')
+          ? json({ ok: true, deviceId: 'duck-a', passport: passport() })
+          : null,
+    });
+    select(window);
+    await window.eval('refreshDuckPreparation()');
+    const { blobs } = captureDownloads(window);
+    window.document.querySelector<HTMLButtonElement>('#duck-preparation-export')!.click();
+    expect(blobs).toHaveLength(1);
+    const text = await readBlob(window, blobs[0]);
+    const data = JSON.parse(text);
+    expect(data.generatedAt).toMatch(/^\d{4}-\d{2}-\d{2}T/);
+    expect(data.observedAt).toBe('2026-10-13T00:00:00.000Z');
+    expect(data.telemetry.sourceTime.imu.sampleMonotonicNs).toBe('1234567890123456789');
+    expect(data.ros.expected[0]).toMatchObject({ key: 'imu', name: '/imu', required: true });
+    expect(data.camera).toMatchObject({
+      ok: false,
+      required: false,
+      requiredReason: 'optional-for-joint-preflight',
+    });
+    expect(data.physicalCalibrationVerified).toBe(false);
+    expect(data.motionStarted).toBe(false);
+    expect(text).not.toContain('PRIVATE_');
+    expect(text).not.toContain('/root/');
+    expect(errors).toEqual([]);
+  });
+
+  it('drops delayed preparation success and failure after changing the selected device', async () => {
+    for (const fails of [false, true]) {
+      let finish!: () => void;
+      const gate = new Promise<void>((resolve) => {
+        finish = resolve;
+      });
+      let started = false;
+      const { window, errors } = await boot({
+        devices,
+        transport: async (url) => {
+          if (!url.includes('/onboarding/preflight')) return null;
+          started = true;
+          await gate;
+          if (fails) throw new Error('OLD_A_ERROR');
+          return json({ ok: true, deviceId: 'duck-a', passport: passport() });
+        },
+      });
+      select(window);
+      const pending = window.eval('refreshDuckPreparation()');
+      await vi.waitFor(() => expect(started).toBe(true));
+      select(window, 'duck-b');
+      finish();
+      await pending;
+      expect(window.eval('currentDuckPreparation()')).toBeNull();
+      expect(
+        window.document.querySelector<HTMLButtonElement>('#duck-preparation-export')?.disabled,
+      ).toBe(true);
+      expect(window.document.querySelector('#duck-preparation-status')?.textContent).not.toMatch(
+        /OLD_A_ERROR|检查通过/,
+      );
+      expect(errors).toEqual([]);
+    }
+  });
+
+  it('invalidates the preparation record and its download immediately on account changes', async () => {
+    const fixture = {
+      devices,
+      accountId: 'account-a',
+      sessionAuthenticated: true,
+      transport: async (url: string) =>
+        url.includes('/onboarding/preflight')
+          ? json({ ok: true, deviceId: 'duck-a', passport: passport() })
+          : null,
+    };
+    const { window, errors } = await boot(fixture);
+    select(window);
+    await window.eval('refreshDuckPreparation()');
+    const { blobs, revoke } = captureDownloads(window);
+    window.document.querySelector<HTMLButtonElement>('#duck-preparation-export')!.click();
+    fixture.accountId = 'account-b';
+    await window.eval('refreshSessionMenu()');
+    expect(window.eval('currentDuckPreparation()')).toBeNull();
+    expect(
+      window.document.querySelector<HTMLButtonElement>('#duck-preparation-export')?.disabled,
+    ).toBe(true);
+    expect(
+      window.document.querySelector<HTMLButtonElement>('#duck-experiment-export')?.disabled,
+    ).toBe(true);
+    expect(revoke).toHaveBeenCalled();
+    await window.eval('downloadDuckRecord("preparation")');
+    expect(blobs).toHaveLength(1);
+    expect(errors).toEqual([]);
+  });
+
+  it('exports only the chosen project experiment and preserves the served API prefix in evidence links', async () => {
+    const chosen = {
+      id: 'my-run',
+      projectId: 'project-1',
+      modelId: 'model-1',
+      backend: 'local',
+      status: 'completed',
+      mock: true,
+      metrics: { engine: 'microduck-rl' },
+      artifact: { format: 'onnx', artifactRef: 'https://PRIVATE_SIGNED_URL?token=SECRET' },
+      workerConfig: { token: 'PRIVATE_TOKEN', path: '/Users/private' },
+      createdAt: '2026-10-12T00:00:00Z',
+    };
+    const other = {
+      ...chosen,
+      id: 'OTHER_PROJECT_PRIVATE_RUN',
+      projectId: 'other-project',
+      createdAt: '2026-10-13T00:00:00Z',
+    };
+    const { window, errors } = await boot({
+      devices,
+      projects: [project()],
+      workspaceContext: { projectId: 'project-1' },
+      runs: [chosen, other],
+      url: 'http://localhost/robotics-learning/',
+      basePath: '/robotics-learning',
+    });
+    select(window);
+    const { blobs } = captureDownloads(window);
+    window.document.querySelector<HTMLButtonElement>('#duck-experiment-export')!.click();
+    expect(blobs).toHaveLength(1);
+    const text = await readBlob(window, blobs[0]);
+    const data = JSON.parse(text);
+    expect(data.project.id).toBe('project-1');
+    expect(data.run.id).toBe('my-run');
+    expect(data.provenance.mock).toBe(true);
+    expect(data.provenance.preset).toBe(true);
+    expect(data.evidenceReferences.policyDownloadPath).toBe(
+      '/robotics-learning/api/sim2real/runs/my-run/policy.onnx',
+    );
+    expect(text).not.toMatch(/PRIVATE_|SECRET|\/Users\/private|OTHER_PROJECT/);
+    expect(errors).toEqual([]);
+  });
+
+  it('handles malicious timestamp extremes without crashing the report or upgrading calibration', async () => {
+    const report = passport();
+    report.checks.telemetry.sourceTime.imu.sampleTs = 1e300;
+    report.checks.telemetry.ok = false;
+    report.checks.telemetry.fresh = false;
+    report.ready = false;
+    const { window, errors } = await boot({
+      devices,
+      transport: async (url) =>
+        url.includes('/onboarding/preflight')
+          ? json({ ok: true, deviceId: 'duck-a', passport: report })
+          : null,
+    });
+    select(window);
+    await window.eval('refreshDuckPreparation()');
+    expect(window.document.querySelector('#duck-preparation-summary')?.textContent).toContain(
+      '未提供有效源时间',
+    );
+    expect(
+      window.document.querySelector('[data-duck-step="calibration"]')?.parentElement?.dataset.state,
+    ).toBe('blocked');
+    window.eval('stationInvalidatePolicy()');
+    expect(
+      window.document.querySelector('[data-duck-step="calibration"]')?.parentElement?.dataset.state,
+    ).toBe('pending');
+    expect(errors).toEqual([]);
+  });
+
+  it('opens the real camera view for following preparation without a motion request', async () => {
+    const { window, requests, errors } = await boot({ devices });
+    select(window);
+    window.document.querySelector<HTMLButtonElement>('[data-duck-step="follow"]')!.click();
+    window.document.querySelector<HTMLButtonElement>('#duck-workshop-detail-button')!.click();
+    expect(
+      window.document
+        .querySelector('[data-view-section="station"]')
+        ?.getAttribute('data-active-station-module'),
+    ).toBe('telemetry');
+    expect(
+      window.document.querySelector<HTMLDetailsElement>('#station-module-telemetry-camera')?.open,
+    ).toBe(true);
+    expect(window.document.querySelector('#duck-follow-readiness')?.textContent).toContain(
+      '仍缺人体检测目标',
+    );
+    expect(
+      requests.filter((item) => item.method === 'POST' && /\/(?:drive|policy)\//.test(item.url)),
+    ).toHaveLength(0);
     expect(errors).toEqual([]);
   });
 });

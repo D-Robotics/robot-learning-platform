@@ -202,17 +202,15 @@ export const TOOL_PARAM_HINTS: Record<string, ToolParamHint> = {
       connectionId: { type: 'string' },
     },
   },
-  rdk_board_health: { required: [], properties: {} },
-  rdk_board_onboarding_preflight: { required: [], properties: {} },
-  rdk_board_station_status: { required: [], properties: {} },
+  rdk_board_health: { required: [], properties: { deviceId: { type: 'string' } } },
+  rdk_board_onboarding_preflight: { required: [], properties: { deviceId: { type: 'string' } } },
+  rdk_board_station_status: { required: [], properties: { deviceId: { type: 'string' } } },
   rdk_board_station_command: {
     required: ['id'],
-    properties: {
-      id: { type: 'string' },
-    },
+    properties: { deviceId: { type: 'string' }, id: { type: 'string' } },
   },
-  rdk_board_policy_status: { required: [], properties: {} },
-  rdk_board_policy_files: { required: [], properties: {} },
+  rdk_board_policy_status: { required: [], properties: { deviceId: { type: 'string' } } },
+  rdk_board_policy_files: { required: [], properties: { deviceId: { type: 'string' } } },
   rdk_training_submit: {
     required: [],
     properties: {
@@ -331,30 +329,30 @@ export const TOOL_PARAM_HINTS: Record<string, ToolParamHint> = {
   rdk_board_policy_stage: {
     required: ['runId'],
     properties: {
+      deviceId: { type: 'string' },
       runId: { type: 'string' },
       filename: { type: 'string' },
     },
   },
   rdk_board_policy_load: {
     required: ['path'],
-    properties: {
-      path: { type: 'string' },
-      rehearsalReceipt: {},
-    },
+    properties: { deviceId: { type: 'string' }, path: { type: 'string' }, rehearsalReceipt: {} },
   },
   rdk_board_policy_start: {
     required: [],
     properties: {
+      deviceId: { type: 'string' },
       direction: { type: 'number' },
       goalX: { type: 'number' },
       goalY: { type: 'number' },
     },
   },
-  rdk_board_policy_reset: { required: [], properties: {} },
-  rdk_board_arm_status: { required: [], properties: {} },
+  rdk_board_policy_reset: { required: [], properties: { deviceId: { type: 'string' } } },
+  rdk_board_arm_status: { required: [], properties: { deviceId: { type: 'string' } } },
   rdk_board_arm_move: {
     required: [],
     properties: {
+      deviceId: { type: 'string' },
       x: { type: 'number' },
       y: { type: 'number' },
       z: { type: 'number' },
@@ -363,14 +361,11 @@ export const TOOL_PARAM_HINTS: Record<string, ToolParamHint> = {
   },
   rdk_board_arm_gripper: {
     required: [],
-    properties: {
-      value: { type: 'number' },
-      action: {},
-    },
+    properties: { deviceId: { type: 'string' }, value: { type: 'number' }, action: {} },
   },
-  rdk_board_arm_stop: { required: [], properties: {} },
-  rdk_board_arm_reset: { required: [], properties: {} },
-  rdk_board_stop: { required: [], properties: {} },
+  rdk_board_arm_stop: { required: [], properties: { deviceId: { type: 'string' } } },
+  rdk_board_arm_reset: { required: [], properties: { deviceId: { type: 'string' } } },
+  rdk_board_stop: { required: [], properties: { deviceId: { type: 'string' } } },
   rdk_docs_search: {
     required: ['query'],
     properties: {

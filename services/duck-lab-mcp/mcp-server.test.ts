@@ -570,6 +570,8 @@ describe('duck-lab-mcp protocol surface', () => {
       for (const match of body.matchAll(/(?:input|args)\.([a-zA-Z]+)(?![a-zA-Z])/g)) {
         if (!helpers.has(match[1])) helpers.set(match[1], 'unknown');
       }
+      // stationPath reads the optional device target outside the handler body.
+      if (/stationPath\(/.test(body)) helpers.set('deviceId', 'argString');
       const required = [...helpers.entries()]
         .filter(([, helper]) => helper === 'requiredArg')
         .map(([key]) => key);
@@ -614,6 +616,12 @@ describe('duck-lab-mcp protocol surface', () => {
         datasetIds: { type: 'array' },
         video: { type: 'boolean' },
       },
+    });
+    expect(byName.get('rdk_board_onboarding_preflight')?.inputSchema).toMatchObject({
+      properties: { deviceId: { type: 'string' } },
+    });
+    expect(byName.get('rdk_board_stop')?.inputSchema).toMatchObject({
+      properties: { deviceId: { type: 'string' } },
     });
     expect(byName.get('rdk_platform_status')?.inputSchema).toMatchObject({
       type: 'object',

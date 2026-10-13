@@ -574,10 +574,11 @@ export function registerSim2RealBoardStationRoutes(
 
   /**
    * GET /board-station/onboarding/preflight — one structured, read-only
-   * passport for a newly attached OriginBot.  This is intentionally separate
+   * profile-aware passport for a newly attached board. This is intentionally separate
    * from the legacy shell-compatible deployment probe: the UI can render all
    * missing prerequisites (camera, TROS, ROS topics, telemetry, safety
-   * switches) without ever receiving an arbitrary command channel.
+   * switches) without ever receiving an arbitrary command channel. The board's
+   * kind and checks are preserved; readable readiness is not calibration evidence.
    */
   router.get(
     api('/board-station/onboarding/preflight'),

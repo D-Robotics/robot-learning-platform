@@ -12,7 +12,7 @@
     evaluate: { view: 'evaluate', child: 'evaluation-run' },
     deploy: { view: 'deploy', child: 'preflight' },
     trial: { view: 'station', module: 'policy' },
-    follow: { view: 'station', module: 'diagnostics' },
+    follow: { view: 'station', module: 'telemetry' },
     records: { view: 'records', child: 'evaluation-evidence' },
   });
   let navigate = null;
@@ -44,18 +44,22 @@
     );
     const executed = deployments.some((item) => ['canary', 'live'].includes(item.mode) && item.status === 'completed' && item.executedAt && item.verification?.passed === true && item.verification.mock !== true);
     const preflight = deployments.some((item) => item.mode === 'preflight' && ['ready', 'completed'].includes(item.status) && item.verification?.passed === true && item.verification.mock !== true);
+    const preparation = input.preparation;
+    const passport = preparation?.passport;
+    const preparationReady = passport ? preparationRecord({ passport }).ready : false;
+    const preparationBlocked = preparation?.status === 'error' || Boolean(passport && !preparationReady);
     let source = model?.builtin ? '预置参考模型' : model ? '登记模型 · 来源待验' : '尚未选择模型';
     if (run) source = synthetic ? '协议演示 · 不可部署' : run.backend === 'browser' ? '参考仿真记录' : trained ? '本次行走训练成果' : training ? '训练记录 · 尚待验收' : source;
     const steps = [
       { key: 'devices', name: '绑定设备', state: device ? 'recorded' : 'ready', status: device ? '已选择' : '待绑定', detail: device ? `${device.name || device.id}。请核对本组设备编号与连接状态。` : '在设备管理中登记并选择本组机器人。未接好机器人时可以先体验参考仿真。', action: 'devices', label: '打开设备管理' },
-      { key: 'calibration', name: '校准检查', state: 'pending', status: '待接通', detail: '关节零位、方向、限位与停止保护需完成实体校准。当前没有可核验的校准结果，设备连接和模型加载不能代替校准。', action: 'calibration', label: '查看设备诊断' },
+      { key: 'calibration', name: '校准检查', state: preparationReady ? 'ready' : preparationBlocked ? 'blocked' : 'pending', status: preparationReady ? '准备通过 · 校准待验' : preparationBlocked ? '准备检查受阻' : '待只读检查', detail: preparationReady ? '只读报告已检查关节、home 配置与传感器来源。检查通过不等于完成零位、方向、限位和停止保护的现场验收。' : '刷新鸭子准备报告，查看传感器源时间、14 个关节的 home 与当前角度、配置来源和缺项；可下载报告留存，不会自动校准或运动。', action: 'calibration', label: '查看鸭子准备报告' },
       { key: 'simulate', name: '仿真试跑', state: recorded ? 'recorded' : available ? 'ready' : 'blocked', status: recorded ? '有录制' : available ? '可体验' : '待资源', detail: '打开参考仿真，试跑并录下动作。参考策略用于体验，本次训练成果的试跑与评测在评测页查看。', action: 'simulate', label: '打开参考仿真' },
       { key: 'train', name: '行走训练', state: trained ? 'recorded' : failed ? 'failed' : active ? 'active' : 'ready', status: trained ? '已训练' : uncertain ? '待找回' : failed ? '需修复' : active ? (status === 'queued' ? '排队中' : '运行中') : '待配置', detail: uncertain ? '任务状态尚未确认。先检查训练资源连接与日志、找回原任务；确认原任务已经结束后再重试。' : failed ? '打开 Run 查看错误与日志。修复配置后重试，或选择可用 checkpoint 续训；原运行记录保留。' : trained ? '保留本次 checkpoint 与 ONNX，继续核对导出一致性和仿真评测。训练完成不等于实体鸭可以行走。' : '选择 microduck-rl 与可用 GPU。现场时间不足时可先体验参考仿真；冒烟训练只验证链路，训练完成仍需验收。', action: active || failed ? 'train' : 'configure', label: active || failed ? '查看 Run 与日志' : '配置行走训练' },
       { key: 'evaluate', name: '模型验收', state: passed ? 'recorded' : 'ready', status: passed ? '有通过记录' : '待验收', detail: '检查 ONNX 契约、导出一致性与仿真评测。未通过时修复后重测；仿真通过仍需实体校准与受控试走。', action: 'evaluate', label: '查看模型验收' },
       { key: 'deploy', name: '受控部署', state: executed ? 'recorded' : preflight ? 'ready' : 'blocked', status: executed ? '有执行记录' : preflight ? '预检通过' : '待预检', detail: '为当前模型与设备执行只读预检，再按证据和人工审批推进受控发布。审批通过与计划就绪不等于模型已下发。', action: 'deploy', label: '打开预检与发布' },
       { key: 'trial', name: '实体试走', state: 'pending', status: '待现场验收', detail: '确认已校准、急停可用，再在现场受控试走并保存姿态和关节遥测。零命令只停止步态指令，不代表站立已验证或舵机断电。', action: 'trial', label: '查看策略运行时' },
-      { key: 'follow', name: '人体跟随', state: 'pending', status: '待接通', detail: '人体检测到行走指令的跟随闭环尚待接入。目标丢失、断连和人工停止的保护需在真实机器人上验收。', action: 'follow', label: '查看设备诊断' },
-      { key: 'records', name: '保存成果', state: run ? 'recorded' : 'ready', status: run ? '有记录' : '待成果', detail: '按当前项目查看模型、训练、评测与部署记录，保留现场结果；参考示例不能作为自己的训练或实体运动成果。', action: 'records', label: '查看全部证据' },
+      { key: 'follow', name: '人体跟随', state: passport?.checks?.camera?.ok === false ? 'blocked' : 'pending', status: passport?.checks?.camera?.ok === false ? '缺相机 · 跟随待接入' : passport?.checks?.camera?.ok === true ? '发现相机 · 跟随待接入' : '待接通', detail: '打开板载相机画面并检查输入。相机出图不等于人体检测或跟随控制已接入；当前缺少检测目标、距离和目标丢失保护的真实接口。', action: 'follow', label: '查看相机与跟随条件' },
+      { key: 'records', name: '保存成果', state: run ? 'recorded' : 'ready', status: run ? '有记录' : '待成果', detail: '下载实验记录 JSON，保存当前项目、模型、训练、评测、部署与证据引用，明确标注预置、mock 和现场来源。模型文件、原始轨迹与视频在各自记录中另行下载。', action: 'records', label: '查看全部证据' },
     ];
     let next;
     if (input.serviceError) next = { key: 'devices', title: '工作区暂不可用', copy: '重新加载后再查看设备与训练状态，已有记录会从台账恢复。', action: 'refresh', label: '重新加载工作区' };
@@ -71,6 +75,67 @@
     else if (!preflight && !executed) next = { key: 'deploy', title: '检查目标设备与模型', copy: '执行当前机器人与模型的只读预检，再查看发布所需的证据与审批。', action: 'deploy', label: '进入只读预检' };
     else next = { key: 'calibration', title: '实体运动仍需现场验收', copy: '软件证据与实体运动分别验收。关节校准、停止保护和受控试走仍需真实机器人完成并留存结果。', action: 'calibration', label: '查看设备诊断' };
     return { visible: input.productId === 'microduck', context: `${input.productId}:${model?.id || ''}:${device?.id || ''}`, source, steps, next };
+  }
+
+  // Exports are deliberately assembled from an allowlist. A raw passport or
+  // manifest may contain connection addresses, local paths or account fields.
+  function fields(value, names) {
+    const result = {};
+    for (const name of names) {
+      const item = value?.[name];
+      if (typeof item === 'boolean' || typeof item === 'number' && Number.isFinite(item) || typeof item === 'string' && item.length <= 256) result[name] = item;
+    }
+    return result;
+  }
+  function rows(value, names, limit = 100) {
+    return (Array.isArray(value) ? value : []).slice(0, limit).map((item) => fields(item, names));
+  }
+  function preparationRecord(input = {}) {
+    const passport = input.passport || {};
+    const checks = passport.checks || {};
+    const ages = checks.telemetry?.sourceAgeMs || {};
+    const sourceTime = checks.telemetry?.sourceTime || {};
+    const contract = checks.contract || {};
+    const contractReady = contract.ok === true && Number.isInteger(contract.observationSize) && contract.observationSize > 0 && contract.observationSize % 61 === 0 && contract.actionSize === 14 && contract.actionOutput === 'joint-position-offset' && contract.commandVectorSize === 13 && Number.isFinite(contract.controlHz) && contract.controlHz > 0;
+    const mock = passport.mock === true || checks.identity?.provenance?.mock === true;
+    const expectedTopics = Array.isArray(checks.ros?.expected) ? checks.ros.expected : checks.ros?.expected && typeof checks.ros.expected === 'object' ? Object.entries(checks.ros.expected).map(([key, topic]) => ({ key, ...fields(topic, ['name', 'type', 'qos', 'required', 'present']) })) : [];
+    return {
+      schemaVersion: 1, kind: 'duck-preparation-record', generatedAt: input.generatedAt,
+      device: fields(input.device, ['id']), observedAt: passport.observedAt || null,
+      source: { kind: passport.kind || 'unknown', mock },
+      ready: passport.kind === 'joint-onboarding-preflight' && passport.ready === true && !mock && contractReady && checks.joints?.ok === true && checks.telemetry?.ok === true && checks.telemetry?.fresh === true, physicalCalibrationVerified: false, motionStarted: false,
+      profile: { sha256: checks.identity?.profileSha256 || null, provenance: fields(checks.identity?.provenance, ['kind', 'mock']) },
+      contract: fields(checks.contract, ['ok', 'observationSize', 'actionSize', 'observationLayout', 'actionOutput', 'controlHz', 'commandVectorSize']),
+      camera: fields(checks.camera, ['ok', 'required', 'requiredReason']),
+      telemetry: { ...fields(checks.telemetry, ['ok', 'fresh', 'sensorStallSec']), sourceAgeMs: fields(ages, ['imu', 'jointStates', 'odom']), sourceTime: Object.fromEntries(['imu', 'jointStates', 'odom'].map((key) => [key, fields(sourceTime[key], ['sampleTs', 'sampleMonotonicNs'])])) },
+      joints: { ok: checks.joints?.ok === true, expectedNames: (Array.isArray(checks.joints?.expectedNames) ? checks.joints.expectedNames : []).filter((name) => typeof name === 'string').slice(0, 14), rows: rows(checks.joints?.rows, ['name', 'homeRad', 'positionRad', 'velocityRadSec', 'errorFromHomeRad'], 14), missingNames: (Array.isArray(checks.joints?.missingNames) ? checks.joints.missingNames : []).filter((name) => typeof name === 'string').slice(0, 14) },
+      ros: { ...fields(checks.ros, ['ok', 'fresh', 'observedAt', 'sourceAgeSec']), expected: rows(expectedTopics, ['key', 'name', 'type', 'qos', 'required', 'present'], 20) },
+      missingChecks: [...['identity', 'python', 'tros', 'camera', 'ros', 'telemetry', 'joints'].filter((key) => checks[key]?.ok === false && !(key === 'camera' && checks.camera.required === false)), ...(!contractReady ? ['contract'] : [])],
+      safety: { stopBehavior: checks.safety?.stopBehavior || null, physicalCalibrationVerified: false },
+    };
+  }
+  function experimentRecord(input = {}) {
+    const model = input.model;
+    const projectId = input.project?.id;
+    const run = input.run && input.run.modelId === model?.id && (!projectId || input.run.projectId === projectId) ? input.run : null;
+    const artifact = run?.artifact || {};
+    const demo = run?.evaluation?.replay?.source === 'demo-fixture';
+    const candidates = (Array.isArray(input.deployments) ? input.deployments : []).filter((item) => item.modelId === model?.id && item.deviceId === input.device?.id);
+    const included = candidates.filter((item) => !projectId || (item.projectId ? item.projectId === projectId : Boolean(run?.projectId === projectId && item.runId === run.id)));
+    return {
+      schemaVersion: 1, kind: 'duck-experiment-record', generatedAt: input.generatedAt,
+      project: fields(input.project, ['id', 'name']), device: fields(input.device, ['id']),
+      projectAttribution: { mode: projectId ? 'selected-project' : 'account-view', excludedLegacyRun: Boolean(projectId && input.run?.modelId === model?.id && !input.run.projectId), excludedUnattributedDeployments: projectId ? candidates.filter((item) => !item.projectId && !included.includes(item)).length : 0, note: 'Without a selected project, records follow the model/account view. A selected project includes only explicitly attributed runs; legacy deployments require a matching run attributed to that project.' },
+      model: { ...fields(model, ['id', 'builtin']), ...fields(model?.manifest, ['modelId', 'displayName', 'version']), robot: fields(model?.manifest?.robot, ['id', 'variant']), contract: fields(model?.manifest?.contract, ['id', 'observationSize', 'actionSize', 'controlHz', 'jointCount']) },
+      provenance: { preset: model?.builtin === true, mock: run?.mock === true || demo ? true : run?.mock === false ? false : null, source: demo ? 'demo-fixture' : run?.backend === 'browser' ? 'browser-reference' : run?.backend || (model?.builtin === true ? 'prebuilt-reference' : 'unknown'), physicalMotionVerified: false },
+      run: run ? { ...fields(run, ['id', 'projectId', 'experimentId', 'label', 'modelId', 'taskId', 'backend', 'status', 'mock', 'createdAt', 'updatedAt']), training: fields(run.training, ['engine', 'algorithm', 'profile', 'numEnvs', 'maxIterations', 'seed']), metrics: fields(run.metrics, ['engine', 'physicsBackend', 'contractValid', 'successRate', 'fallRate', 'controlLatencyMs', 'onnxExported', 'onnxGate']) } : null,
+      evaluation: run ? { ...fields(run.evaluation || run.taskEvaluation, ['evaluatedAt', 'taskId']), qualityGate: fields((run.taskEvaluation || run.evaluation)?.qualityGate, ['passed', 'gateOn']), replay: fields(run.evaluation?.replay, ['source', 'attested', 'sampleCount', 'durationSeconds']) } : null,
+      artifact: fields(artifact, ['artifactId', 'version', 'format', 'sizeBytes', 'sha256']),
+      deployments: rows(included.map((item) => ({ ...item, projectAttribution: !projectId ? 'account-view' : item.projectId ? 'explicit-project' : 'matched-project-run' })), ['id', 'projectId', 'projectAttribution', 'modelId', 'runId', 'artifactId', 'evaluationId', 'deviceId', 'mode', 'status', 'createdAt', 'updatedAt', 'executedAt']),
+      evidenceReferences: run ? { runId: run.id, artifactIds: Array.isArray(run.artifactIds) ? run.artifactIds.filter((id) => typeof id === 'string') : [], evaluationId: typeof run.evaluationId === 'string' ? run.evaluationId : null, ...Object.fromEntries(Object.entries(fields(input.evidencePaths, ['boardSessionsPath', 'policyDownloadPath'])).filter(([, value]) => typeof value === 'string' && value.startsWith('/') && !value.startsWith('//') && !/[?#]/.test(value))) } : {},
+      preparation: input.preparation ? preparationRecord({ ...input.preparation, device: input.device, generatedAt: input.generatedAt }) : null,
+      scope: 'Metadata and existing evidence references; model files, raw trajectories and videos are separate downloads. Read-only preparation is not physical calibration or motion evidence.',
+    };
   }
 
   function text(id, value) {
@@ -142,5 +207,5 @@
     return view;
   }
 
-  root.DuckWorkshop = Object.freeze({ derive, render, setNavigate(handler) { navigate = typeof handler === 'function' ? handler : null; } });
+  root.DuckWorkshop = Object.freeze({ derive, render, preparationRecord, experimentRecord, setNavigate(handler) { navigate = typeof handler === 'function' ? handler : null; } });
 })(globalThis);

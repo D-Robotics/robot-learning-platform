@@ -92,6 +92,13 @@ MCP 客户端自行 spawn 本服务，进程环境即配置：
 （`RDK_SIM2REAL_STATION_{DRIVE,POLICY,ARM}_ENABLED` + 板端开关），未开启时
 平台直接拒绝，MCP 层不会也不应绕过。
 
+板端工具可传 `deviceId` 选择本组已绑定设备，省略时沿用平台的目标选择规则。
+准备检查使用 `rdk_board_onboarding_preflight({"deviceId":"<设备编号>"})`；
+报告按板端 profile 核对 required ROS 话题、IMU 源时间和关节状态。
+`ready=true` 只表示这次只读检查的必需项齐全，不能替代零位、方向、绝对限位和
+硬件急停的现场校准验收，也不会开启任何运动开关。平台拒绝该设备时原样报告，
+不退回检查另一组的默认设备。
+
 ## 幂等重试语义
 
 写操作（提交训练、创建项目、登记数据集等）由平台按 `Idempotency-Key` 去重。
