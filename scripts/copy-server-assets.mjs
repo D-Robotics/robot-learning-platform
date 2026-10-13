@@ -6,6 +6,7 @@ function copyFile(src, dst) {
   if (!fs.existsSync(src)) throw new Error(`[copy-server-assets] required file is missing: ${src}`);
   fs.mkdirSync(path.dirname(dst), { recursive: true });
   fs.copyFileSync(src, dst);
+  fs.chmodSync(dst, fs.statSync(src).mode & 0o777);
   console.log(
     '[copy-server-assets]',
     path.relative(process.cwd(), src),

@@ -667,6 +667,7 @@ describe('standalone Sim2Real health and optional simulator surface', () => {
       'ui-components',
       'first-use-core',
       'relay-training',
+      'duck-workshop',
       'app',
     ] as const) {
       const bytes = await fs.readFile(path.join(publicRoot, `${script}.js`));

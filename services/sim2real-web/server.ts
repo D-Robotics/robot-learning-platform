@@ -516,6 +516,7 @@ const HASHED_WORKBENCH_SCRIPTS = [
   'ui-components',
   'first-use-core',
   'relay-training',
+  'duck-workshop',
   'app',
 ] as const;
 type HashedWorkbenchScript = (typeof HASHED_WORKBENCH_SCRIPTS)[number];
@@ -541,7 +542,7 @@ function sendIndexDocument(response: express.Response): void {
     const html = readFileSync(path.join(PUBLIC_ROOT, 'index.html'), 'utf8')
       .replace('__RDK_SIM2REAL_BASE_PATH__', configuredPublicBasePath())
       .replace(
-        /(<script\b[^>]*\bsrc="\.\/)(telemetry-core|ui-components|first-use-core|relay-training|app)\.js(?:\?[^"<>]*)?("[^>]*>)/g,
+        /(<script\b[^>]*\bsrc="\.\/)(telemetry-core|ui-components|first-use-core|relay-training|duck-workshop|app)\.js(?:\?[^"<>]*)?("[^>]*>)/g,
         (_match, prefix: string, script: HashedWorkbenchScript, suffix: string) =>
           `${prefix}${currentWorkbenchScriptName(script)}${suffix}`,
       );
@@ -834,7 +835,7 @@ export function createSim2RealWebApp(): Express {
       return;
     }
     const match =
-      /^\/(telemetry-core|ui-components|first-use-core|relay-training|app)\.([^/]+)\.js$/.exec(
+      /^\/(telemetry-core|ui-components|first-use-core|relay-training|duck-workshop|app)\.([^/]+)\.js$/.exec(
         request.path,
       );
     if (!match) {

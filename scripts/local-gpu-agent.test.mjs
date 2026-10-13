@@ -442,7 +442,7 @@ const reverseWorker = createServer((req, res) => {
 });
 
 const forwarder = createServer(async (req, res) => {
-  // Stands in for `ssh -R 127.0.0.1:19092:127.0.0.1:19091` on the GPU side.
+  // Stands in for the GPU's reverse SSH tunnel using an isolated local port.
   const chunks = [];
   for await (const chunk of req) chunks.push(chunk);
   const upstream = await fetch(`http://127.0.0.1:${reverseWorker.address().port}${req.url}`, {
@@ -457,7 +457,8 @@ const forwarder = createServer(async (req, res) => {
 });
 
 await once(reverseWorker.listen(0, '127.0.0.1'), 'listening');
-await once(forwarder.listen(19092, '127.0.0.1'), 'listening');
+await once(forwarder.listen(0, '127.0.0.1'), 'listening');
+const forwardPort = forwarder.address().port;
 
 const home2 = mkdtempSync(path.join(tmpdir(), 'rdk-gpu-agent-reverse-'));
 const { child: agent2, agentPort: agent2Port } = spawnAgent(home2);
@@ -482,7 +483,7 @@ const pair = await fetch(`${agent2Base}/reverse`, {
     host: 'gpu.example.com',
     user: 'robot',
     dialback: 'robot@127.0.0.1',
-    forwardPort: 19092,
+    forwardPort,
   }),
 }).then((r) => {
   assert.equal(r.status, 202);
@@ -493,7 +494,10 @@ assert.match(
   pair.workerUrl,
   new RegExp(`^http://127\\.0\\.0\\.1:${agent2Port}/pair/[a-f0-9]{32}$`),
 );
-assert.match(pair.gpuCommand, /ssh -N -R 127\.0\.0\.1:19092:127\.0\.0\.1:19091/);
+assert.match(
+  pair.gpuCommand,
+  new RegExp(`ssh -N -R 127\\.0\\.0\\.1:${forwardPort}:127\\.0\\.0\\.1:19091`),
+);
 
 // Before the GPU dials in, status must stay honest: the forwarder IS up in
 // this simulation, so online=true through the probe; verify the probe path.
