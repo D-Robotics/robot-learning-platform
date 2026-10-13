@@ -237,7 +237,7 @@
           <section class="auth-gate" id="auth-gate" hidden>
             <div class="auth-gate-banner">
               <strong class="auth-gate-banner-title">游客模式</strong>
-              <span class="auth-gate-banner-copy">仿真可以直接试玩；保存训练记录和连接真机时再登录。</span>
+              <span class="auth-gate-banner-copy">基础仿真可直接运行；保存训练记录和连接真机时需登录。</span>
               <button
                 class="button button-ghost button-small"
                 id="auth-gate-toggle"
@@ -401,8 +401,8 @@
               <div class="home-start-content">
                 <span class="home-start-badge" id="start-goal-badge">快速开始</span>
                 <h3 id="next-action-title">浏览器仿真</h3>
-                <p id="next-action-copy">控制示例机器人，录制动作并查看轨迹数据。</p>
-                <button class="button button-primary" id="next-action-button" type="button">打开示例机器人</button>
+                <p id="next-action-copy">运行参考仿真，采集观测与动作数据，并回放采样记录。</p>
+                <button class="button button-primary" id="next-action-button" type="button">打开参考仿真</button>
                 <p id="start-goal-note" class="home-start-note">无需设备或训练服务器；记录暂存在当前页面。</p>
               </div>
               <div class="home-start-outcome" aria-label="示例功能">
@@ -413,29 +413,29 @@
             </section>
             <details class="home-progress user-start-advanced" id="onboard-card">
               <summary class="home-progress-heading">
-                <strong id="first-run-path-title">体验步骤</strong>
+                <strong id="first-run-path-title">仿真数据流程</strong>
                 <span class="onboard-count" id="onboard-count">— / 4</span>
               </summary>
               <div class="onboard-meter" aria-hidden="true" hidden><i id="onboard-fill"></i></div>
               <ol class="onboard-list" id="onboard-list">
                 <li class="onboard-item" data-onboard-step="simulate">
                   <span class="onboard-item-no">01</span><span class="onboard-item-dot"></span>
-                  <div class="onboard-item-body"><strong>录制并回放动作</strong><span>先用示例机器人，保存一段你能看懂的动作记录</span></div>
+                  <div class="onboard-item-body"><strong>准备仿真场景</strong><span>检查仿真资源，打开 MicroDuck 参考场景</span></div>
                   <div class="onboard-item-meta" data-onboard-meta></div>
                 </li>
                 <li class="onboard-item" data-onboard-step="train">
                   <span class="onboard-item-no">02</span><span class="onboard-item-dot"></span>
-                  <div class="onboard-item-body"><strong>尝试训练模型</strong><span>有了动作数据后，选择模板并查看训练进度</span></div>
+                  <div class="onboard-item-body"><strong>采集动作数据</strong><span>启动录制，采集观测与动作数据，停止后保存记录</span></div>
                   <div class="onboard-item-meta" data-onboard-meta></div>
                 </li>
                 <li class="onboard-item" data-onboard-step="evaluate">
                   <span class="onboard-item-no">03</span><span class="onboard-item-dot"></span>
-                  <div class="onboard-item-body"><strong>看看模型表现</strong><span>用评测结果检查动作效果，以及还需要改进的地方</span></div>
+                  <div class="onboard-item-body"><strong>回放采样数据</strong><span>打开采集记录，回放同一份采样时间轴</span></div>
                   <div class="onboard-item-meta" data-onboard-meta></div>
                 </li>
                 <li class="onboard-item" data-onboard-step="deploy">
                   <span class="onboard-item-no">04</span><span class="onboard-item-dot"></span>
-                  <div class="onboard-item-body"><strong>完成设备预检</strong><span>检查模型与设备能否配合；预检不会启动机器人</span></div>
+                  <div class="onboard-item-body"><strong>完成录制与回放</strong><span>保存采集记录并完整播放采样时间轴，完成本次流程</span></div>
                   <div class="onboard-item-meta" data-onboard-meta></div>
                 </li>
               </ol>
@@ -443,7 +443,7 @@
             <details class="user-start-panel user-start-advanced" id="user-start-panel">
               <summary><strong id="user-start-title">我已有设备或模型</strong></summary>
               <div class="user-start-options" role="group" aria-labelledby="user-start-title">
-                <button class="user-start-option" id="start-intent-experience" type="button" data-start-intent="experience" aria-pressed="true"><strong>回到示例体验</strong><small>先在浏览器里操作机器人</small></button>
+                <button class="user-start-option" id="start-intent-experience" type="button" data-start-intent="experience" aria-pressed="true"><strong>打开参考仿真</strong><small>先在浏览器里操作机器人</small></button>
                 <button class="user-start-option" id="start-intent-device" type="button" data-start-intent="device" aria-pressed="false"><strong>连接我的 RDK</strong><small>已有设备，从连接检查开始</small></button>
                 <button class="user-start-option" id="start-intent-model" type="button" data-start-intent="model" aria-pressed="false"><strong>使用已有模型</strong><small>已有模型，先检查是否适用</small></button>
               </div>
@@ -462,7 +462,7 @@
                   <div><strong id="duck-workshop-detail-title">步骤说明</strong><p id="duck-workshop-detail-copy"></p></div>
                   <button class="button button-ghost button-small" id="duck-workshop-detail-button" type="button" data-duck-action="devices">打开设备管理</button>
                 </div>
-                <p class="duck-workshop-note" id="duck-workshop-note">预置参考用于仿真体验；训练、板端推理和实体运动分别验收。</p>
+                <p class="duck-workshop-note" id="duck-workshop-note">预置策略用于参考仿真；训练、板端推理和实体运动分别验收。</p>
               </div>
             </details>
             <details class="user-start-advanced" id="overview-advanced-evidence">
@@ -2172,10 +2172,10 @@
     </dialog>
     <dialog class="run-dialog experience-review-dialog" id="experience-review-dialog" aria-labelledby="experience-review-title" aria-describedby="experience-review-note">
       <div class="run-dialog-heading">
-        <h2 id="experience-review-title">回看这段动作记录</h2>
+        <h2 id="experience-review-title">回放采样数据</h2>
         <button class="button button-ghost button-small" id="experience-review-close" type="button">关闭</button>
       </div>
-      <p class="experience-review-note" id="experience-review-note">点击“播放”检查这次录制的采样时间轴，完整播放后完成体验。这里展示动作数据，不重演三维动作；记录只保留在当前页面。</p>
+      <p class="experience-review-note" id="experience-review-note">点击“播放”回放本次录制的采样时间轴，完整播放后完成仿真数据流程。这里展示采样数据，不重演三维动作；记录只保留在当前页面。</p>
       <div class="experience-review-slot" id="experience-review-slot"></div>
     </dialog>
     <dialog class="run-dialog project-dialog" id="project-dialog" aria-labelledby="project-dialog-title">
@@ -2261,6 +2261,6 @@
     <script defer src="./app.js?v=duck-lab-67"></script>
     <script defer src="./visualization-enhancements.js?v=viz-1"></script>
     <script defer src="./agent-chat.js?v=agent-17"></script>
-    <script defer src="./onboarding.js?v=onboarding-9"></script>
+    <script defer src="./onboarding.js?v=onboarding-10"></script>
   </body>
 </html>

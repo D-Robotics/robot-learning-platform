@@ -30,9 +30,9 @@ describe('first-use experience', () => {
       browserAvailable: true,
     });
     expect(plan.title).toBe('浏览器仿真');
-    expect(plan.description).toBe('控制示例机器人，录制动作并查看轨迹数据。');
+    expect(plan.description).toBe('运行参考仿真，采集观测与动作数据，并回放采样记录。');
     expect(plan.note).toBe('开始时会切换到 MicroDuck 示例。无需设备或训练服务器。');
-    expect(plan.action).toEqual({ key: 'begin-experience', label: '打开示例机器人' });
+    expect(plan.action).toEqual({ key: 'begin-experience', label: '打开参考仿真' });
     expect(plan.steps[0].done).toBe(false);
   });
 
@@ -45,17 +45,17 @@ describe('first-use experience', () => {
       hasDevice: false,
       trainingReady: false,
     });
-    expect(plan.action).toEqual({ key: 'begin-experience', label: '打开示例机器人' });
+    expect(plan.action).toEqual({ key: 'begin-experience', label: '打开参考仿真' });
     expect(plan.note).toContain('无需设备或训练服务器');
     expect(plan.note).toContain('记录暂存在当前页面');
     expect(plan.note).toContain('刷新前可在示例中导出');
     expect(plan.title).toBe('浏览器仿真');
-    expect(plan.description).toBe('控制示例机器人，录制动作并查看轨迹数据。');
+    expect(plan.description).toBe('运行参考仿真，采集观测与动作数据，并回放采样记录。');
     expect(plan.steps.map((step) => step.title)).toEqual([
-      '准备示例机器人',
-      '录下一段动作',
-      '回看动作记录',
-      '完成体验',
+      '准备仿真场景',
+      '采集动作数据',
+      '回放采样数据',
+      '完成录制与回放',
     ]);
     expect(plan.steps.map((step) => step.done)).toEqual([true, false, false, false]);
     expect(plan.steps.map((step) => step.key)).toEqual(['simulate', 'train', 'evaluate', 'deploy']);
@@ -84,11 +84,11 @@ describe('first-use experience', () => {
       recordingReviewed: false,
     });
     expect(recorded.steps.map((step) => step.done)).toEqual([true, true, false, false]);
-    expect(recorded.title).toBe('动作已录下，查看你的记录');
-    expect(recorded.description).toBe('这段动作数据已录下。打开记录，查看采样时间轴。');
-    expect(recorded.action).toEqual({ key: 'replay-experience', label: '回看这段记录' });
+    expect(recorded.title).toBe('动作数据已采集');
+    expect(recorded.description).toBe('本次观测与动作数据已录制。打开记录，回放采样时间轴。');
+    expect(recorded.action).toEqual({ key: 'replay-experience', label: '回放采样数据' });
     expect(recorded.steps[2].description).toBe(
-      '打开采样时间轴，检查这段记录；此处回看数据，不重演三维动作。',
+      '打开采样时间轴，回放本次记录；此处展示采样数据，不重演三维动作。',
     );
     const reviewed = core.plan({
       productId: 'microduck',
@@ -97,9 +97,9 @@ describe('first-use experience', () => {
       recordingReviewed: true,
     });
     expect(reviewed.steps.every((step) => step.done)).toBe(true);
-    expect(reviewed.title).toBe('已完成动作录制与记录检查');
-    expect(reviewed.action).toEqual({ key: 'replay-experience', label: '再次查看记录' });
-    expect(reviewed.steps[3].title).toBe('完成体验');
+    expect(reviewed.title).toBe('录制与数据回放已完成');
+    expect(reviewed.action).toEqual({ key: 'replay-experience', label: '再次回放记录' });
+    expect(reviewed.steps[3].title).toBe('完成录制与回放');
     expect(reviewed.steps[3].description).toContain('浏览器');
     expect(JSON.stringify(reviewed)).not.toMatch(/已部署|部署成功|已训练|训练成功|真机运行/);
   });
@@ -246,7 +246,7 @@ describe('first-use availability and malformed evidence', () => {
     (input) => {
       const plan = core.plan(input);
       expect(plan.steps).toHaveLength(4);
-      expect(plan.steps[3].title).toBe('完成体验');
+      expect(plan.steps[3].title).toBe('完成录制与回放');
       expect(plan.action.key).toBe('begin-experience');
       expect(plan.steps.every((step) => !step.done)).toBe(true);
     },

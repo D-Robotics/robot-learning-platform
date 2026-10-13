@@ -31,25 +31,25 @@
     const exampleReady = microduck && input.browserAvailable === true;
     const recorded = input.recordingReady === true;
     const reviewed = recorded && input.recordingReviewed === true;
-    const begin = action('begin-experience', '打开示例机器人');
-    const replay = action('replay-experience', reviewed ? '再次查看记录' : '回看这段记录');
-    const install = action('simulator-help', '查看示例安装指引');
+    const begin = action('begin-experience', '打开参考仿真');
+    const replay = action('replay-experience', reviewed ? '再次回放记录' : '回放采样数据');
+    const install = action('simulator-help', '查看仿真安装指引');
     const unavailable = microduck && input.browserAvailable === false;
     const nextAction = unavailable ? install : !exampleReady ? begin : recorded ? replay : begin;
 
     return {
       title: reviewed
-        ? '已完成动作录制与记录检查'
+        ? '录制与数据回放已完成'
         : recorded
-          ? '动作已录下，查看你的记录'
+          ? '动作数据已采集'
           : '浏览器仿真',
       description: unavailable
         ? 'MicroDuck 浏览器示例暂时不可用。先按安装指引准备示例，再录制动作。'
         : reviewed
-          ? '你已经录下动作并检查了采样记录，可以再次查看记录或继续了解模型训练。'
+          ? '本次已完成录制与采样数据回放，可导出记录或继续配置模型训练。'
           : recorded
-            ? '这段动作数据已录下。打开记录，查看采样时间轴。'
-            : '控制示例机器人，录制动作并查看轨迹数据。',
+            ? '本次观测与动作数据已录制。打开记录，回放采样时间轴。'
+            : '运行参考仿真，采集观测与动作数据，并回放采样记录。',
       note: microduck
         ? '无需设备或训练服务器。记录暂存在当前页面，刷新前可在示例中导出。'
         : '开始时会切换到 MicroDuck 示例。无需设备或训练服务器。',
@@ -57,41 +57,41 @@
       steps: [
         step(
           'simulate',
-          '准备示例机器人',
+          '准备仿真场景',
           exampleReady
-            ? 'MicroDuck 浏览器示例已可用，打开后即可开始操作。'
+            ? 'MicroDuck 仿真资源可用，可打开参考场景进行操作。'
             : unavailable
               ? '先查看安装指引，准备可打开的 MicroDuck 浏览器示例。'
               : '选择 MicroDuck 示例机器人，检查浏览器示例是否可用。',
           exampleReady,
-          unavailable ? install : action('begin-experience', '打开示例机器人'),
+          unavailable ? install : action('begin-experience', '打开参考仿真'),
         ),
         step(
           'train',
-          '录下一段动作',
+          '采集动作数据',
           recorded
-            ? '已保存本次体验录下的动作。'
-            : '在示例中点击开始录制，操作机器人，再停止录制并保存。',
+            ? '已保存本次仿真的观测与动作数据。'
+            : '在仿真场景中启动录制，操作机器人，停止录制后保存数据。',
           recorded,
-          action('begin-experience', recorded ? '再录一段动作' : '打开动作录制'),
+          action('begin-experience', recorded ? '继续采集数据' : '打开动作录制'),
         ),
         step(
           'evaluate',
-          '回看动作记录',
+          '回放采样数据',
           reviewed
-            ? '已完整查看本次录制的采样时间轴。'
+            ? '已完整播放本次录制的采样时间轴。'
             : recorded
-              ? '打开采样时间轴，检查这段记录；此处回看数据，不重演三维动作。'
-              : '先保存一段录制，再查看同一段记录的采样时间轴。',
+              ? '打开采样时间轴，回放本次记录；此处展示采样数据，不重演三维动作。'
+              : '先保存采集记录，再回放同一份记录的采样时间轴。',
           reviewed,
           replay,
         ),
         step(
           'deploy',
-          '完成体验',
+          '完成录制与回放',
           reviewed
-            ? '已完成浏览器中的录制与记录检查。接下来可以了解如何用动作数据训练模型。'
-            : '录下动作并完整播放记录的采样时间轴，就完成这次浏览器体验。',
+            ? '已完成浏览器中的录制与数据回放。可导出记录或继续配置模型训练。'
+            : '保存采集记录并完整播放同一份采样时间轴，完成本次仿真数据流程。',
           reviewed,
           recorded ? replay : begin,
         ),

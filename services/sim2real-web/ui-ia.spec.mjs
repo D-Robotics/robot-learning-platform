@@ -616,10 +616,10 @@ assert.match(html, /onboarding\.js/, 'workspace must load the guided onboarding 
 assert.match(onboarding, /const steps = \[/, 'onboarding must define guided steps');
 assert.match(onboarding, /最佳实践/, 'onboarding must include practical guidance');
 assert.match(onboarding, /localStorage/, 'onboarding completion must persist locally');
-assert.match(onboarding, /先选你想做的事/, 'onboarding begins with the user goal');
+assert.match(onboarding, /选择工作流程/, 'onboarding begins with the user goal');
 assert.match(
   onboarding,
-  /体验：录下动作，再回看记录/,
+  /采集动作数据并回放记录/,
   'experience must not require setting up a server or device',
 );
 assert.match(
@@ -627,7 +627,7 @@ assert.match(
   /使用自己的设备或模型/,
   'device and model goals have their own preparation guidance',
 );
-assert.match(onboarding, /准备训练或真机时再继续/, 'advanced tasks follow the first goal');
+assert.match(onboarding, /配置模型训练与设备部署/, 'advanced tasks follow the first goal');
 assert.equal(
   (onboarding.match(/kicker: '\d{2} \/ 04/g) || []).length,
   4,

@@ -619,7 +619,7 @@ function renderPlatformScorecard() {
     const title = document.createElement('strong');
     title.textContent = '登录后评估';
     const copy = document.createElement('span');
-    copy.textContent = '评分依据账号内的契约、训练、评测与发布证据；仿真试玩不受影响。';
+    copy.textContent = '评分依据账号内的契约、训练、评测与发布证据；基础仿真不受影响。';
     item.append(title, copy);
     grid.append(item);
     const guestNote = $('platform-scorecard-note');
@@ -1838,8 +1838,8 @@ function setAuthGate(payload) {
     // 训练与部署，而不是把访客当成第一次来的游客。
     showToast(
       hadIdentity
-        ? '登录已过期：基础场景可试玩；引擎仿真、训练记录与真机部署需要登录。'
-        : '当前为游客模式：基础场景可试玩；引擎仿真、训练记录与真机部署需要登录。',
+        ? '登录已过期：基础场景可运行；引擎仿真、训练记录与真机部署需要登录。'
+        : '当前为游客模式：基础场景可运行；引擎仿真、训练记录与真机部署需要登录。',
       'normal',
     );
   }
@@ -3612,7 +3612,7 @@ function renderIntegrations() {
         ? '发起 RoboGo 训练'
         : robogoLoginRequired
           ? '检查 RoboGo 连接'
-          : '尝试发起 RoboGo 训练'
+          : '发起 RoboGo 训练'
       : '登记 RoboGo 训练',
   );
   setText(
@@ -7993,7 +7993,7 @@ function renderBrowserRecordingReview() {
 function mountBrowserRecordingReplay() {
   const recording = currentTelemetry();
   if (state.productId !== 'microduck' || recording?.source !== 'browser-microduck' || !(recording.samples?.length > 1)) {
-    showToast('先在示例机器人中录下一段动作，再检查记录。'); return false;
+    showToast('先在示例机器人中采集动作数据，再检查记录。'); return false;
   }
   stopReplay();
   state.replay = { runId: 'local-recording', source: 'browser-recording', recording, frames: recording.samples, index: 0, loaded: true, timer: null, speed: 1, playbackSteps: 0, pendingFrame: false };
@@ -8405,7 +8405,7 @@ function renderOnboardChecklist() {
   const planKey = JSON.stringify([state.startIntent, plan.steps, state.loading]);
   if (list.dataset.planKey === planKey) return;
   list.dataset.planKey = planKey;
-  setText('first-run-path-title', ({ experience: '体验步骤', device: '设备准备步骤', model: '模型准备步骤' })[state.startIntent]);
+  setText('first-run-path-title', ({ experience: '仿真数据流程', device: '设备准备步骤', model: '模型准备步骤' })[state.startIntent]);
   list.querySelectorAll('.onboard-item').forEach((item) => {
     const step = plan.steps.find((entry) => entry.key === item.dataset.onboardStep);
     if (!step) return;
@@ -9424,7 +9424,7 @@ function renderResearchLoop() {
   // "the platform is broken" for a logged-out visitor.
   if (state.authRequired && !state.overview) {
     grid.replaceChildren();
-    const item = researchLoopItem('登录后可见', '闭环指标按账号内的训练、评测与部署记录计算；仿真试玩不受影响。');
+    const item = researchLoopItem('登录后可见', '闭环指标按账号内的训练、评测与部署记录计算；基础仿真不受影响。');
     item.style.gridColumn = '1 / -1';
     grid.append(item);
     return;

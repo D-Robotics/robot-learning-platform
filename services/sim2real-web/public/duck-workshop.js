@@ -51,10 +51,10 @@
     let source = model?.builtin ? '预置参考模型' : model ? '登记模型 · 来源待验' : '尚未选择模型';
     if (run) source = synthetic ? '协议演示 · 不可部署' : run.backend === 'browser' ? '参考仿真记录' : trained ? '本次行走训练成果' : training ? '训练记录 · 尚待验收' : source;
     const steps = [
-      { key: 'devices', name: '绑定设备', state: device ? 'recorded' : 'ready', status: device ? '已选择' : '待绑定', detail: device ? `${device.name || device.id}。请核对本组设备编号与连接状态。` : '在设备管理中登记并选择本组机器人。未接好机器人时可以先体验参考仿真。', action: 'devices', label: '打开设备管理' },
+      { key: 'devices', name: '绑定设备', state: device ? 'recorded' : 'ready', status: device ? '已选择' : '待绑定', detail: device ? `${device.name || device.id}。请核对本组设备编号与连接状态。` : '在设备管理中登记并选择本组机器人。未接好机器人时可以运行参考仿真。', action: 'devices', label: '打开设备管理' },
       { key: 'calibration', name: '校准检查', state: preparationReady ? 'ready' : preparationBlocked ? 'blocked' : 'pending', status: preparationReady ? '准备通过 · 校准待验' : preparationBlocked ? '准备检查受阻' : '待只读检查', detail: preparationReady ? '只读报告已检查关节、home 配置与传感器来源。检查通过不等于完成零位、方向、限位和停止保护的现场验收。' : '刷新鸭子准备报告，查看传感器源时间、14 个关节的 home 与当前角度、配置来源和缺项；可下载报告留存，不会自动校准或运动。', action: 'calibration', label: '查看鸭子准备报告' },
-      { key: 'simulate', name: '仿真试跑', state: recorded ? 'recorded' : available ? 'ready' : 'blocked', status: recorded ? '有录制' : available ? '可体验' : '待资源', detail: '打开参考仿真，试跑并录下动作。参考策略用于体验，本次训练成果的试跑与评测在评测页查看。', action: 'simulate', label: '打开参考仿真' },
-      { key: 'train', name: '行走训练', state: trained ? 'recorded' : failed ? 'failed' : active ? 'active' : 'ready', status: trained ? '已训练' : uncertain ? '待找回' : failed ? '需修复' : active ? (status === 'queued' ? '排队中' : '运行中') : '待配置', detail: uncertain ? '任务状态尚未确认。先检查训练资源连接与日志、找回原任务；确认原任务已经结束后再重试。' : failed ? '打开 Run 查看错误与日志。修复配置后重试，或选择可用 checkpoint 续训；原运行记录保留。' : trained ? '保留本次 checkpoint 与 ONNX，继续核对导出一致性和仿真评测。训练完成不等于实体鸭可以行走。' : '选择 microduck-rl 与可用 GPU。现场时间不足时可先体验参考仿真；冒烟训练只验证链路，训练完成仍需验收。', action: active || failed ? 'train' : 'configure', label: active || failed ? '查看 Run 与日志' : '配置行走训练' },
+      { key: 'simulate', name: '仿真试跑', state: recorded ? 'recorded' : available ? 'ready' : 'blocked', status: recorded ? '有录制' : available ? '可用' : '待资源', detail: '打开参考仿真，试跑并录下动作。参考策略用于观察仿真行为，本次训练成果的试跑与评测在评测页查看。', action: 'simulate', label: '打开参考仿真' },
+      { key: 'train', name: '行走训练', state: trained ? 'recorded' : failed ? 'failed' : active ? 'active' : 'ready', status: trained ? '已训练' : uncertain ? '待找回' : failed ? '需修复' : active ? (status === 'queued' ? '排队中' : '运行中') : '待配置', detail: uncertain ? '任务状态尚未确认。先检查训练资源连接与日志、找回原任务；确认原任务已经结束后再重试。' : failed ? '打开 Run 查看错误与日志。修复配置后重试，或选择可用 checkpoint 续训；原运行记录保留。' : trained ? '保留本次 checkpoint 与 ONNX，继续核对导出一致性和仿真评测。训练完成不等于实体鸭可以行走。' : '选择 microduck-rl 与可用 GPU。现场时间不足时可运行参考仿真；冒烟训练只验证链路，训练完成仍需验收。', action: active || failed ? 'train' : 'configure', label: active || failed ? '查看 Run 与日志' : '配置行走训练' },
       { key: 'evaluate', name: '模型验收', state: passed ? 'recorded' : 'ready', status: passed ? '有通过记录' : '待验收', detail: '检查 ONNX 契约、导出一致性与仿真评测。未通过时修复后重测；仿真通过仍需实体校准与受控试走。', action: 'evaluate', label: '查看模型验收' },
       { key: 'deploy', name: '受控部署', state: executed ? 'recorded' : preflight ? 'ready' : 'blocked', status: executed ? '有执行记录' : preflight ? '预检通过' : '待预检', detail: '为当前模型与设备执行只读预检，再按证据和人工审批推进受控发布。审批通过与计划就绪不等于模型已下发。', action: 'deploy', label: '打开预检与发布' },
       { key: 'trial', name: '实体试走', state: 'pending', status: '待现场验收', detail: '确认已校准、急停可用，再在现场受控试走并保存姿态和关节遥测。零命令只停止步态指令，不代表站立已验证或舵机断电。', action: 'trial', label: '查看策略运行时' },
@@ -63,12 +63,12 @@
     ];
     let next;
     if (input.serviceError) next = { key: 'devices', title: '工作区暂不可用', copy: '重新加载后再查看设备与训练状态，已有记录会从台账恢复。', action: 'refresh', label: '重新加载工作区' };
-    else if (input.authRequired) next = { key: 'simulate', title: '先体验参考仿真', copy: '参考仿真可以直接打开；保存训练记录和连接机器人时登录活动账号。', action: 'simulate', label: '进入参考仿真' };
+    else if (input.authRequired) next = { key: 'simulate', title: '运行参考仿真', copy: '参考仿真可以直接打开；保存训练记录和连接机器人时登录活动账号。', action: 'simulate', label: '进入参考仿真' };
     else if (!input.loaded) next = { key: 'devices', title: '正在读取当前进度', copy: '进度来自当前项目的设备、训练和评测记录。', action: 'devices', label: '等待工作区加载', disabled: true };
-    else if (active) next = { key: 'train', title: status === 'queued' ? '训练已排队' : '训练正在运行', copy: '查看曲线、进度与日志。现场时间不足时可以先体验参考仿真，原任务继续保留。', action: 'train', label: '查看训练进度' };
+    else if (active) next = { key: 'train', title: status === 'queued' ? '训练已排队' : '训练正在运行', copy: '查看曲线、进度与日志。现场时间不足时可以运行参考仿真，原任务继续保留。', action: 'train', label: '查看训练进度' };
     else if (uncertain) next = { key: 'train', title: '找回原训练任务', copy: '任务状态尚未确认。先检查连接与日志、找回原任务，确认已结束后再重试。', action: 'train', label: '查看任务与日志' };
-    else if (failed) next = { key: 'train', title: '修复后继续训练', copy: '查看错误与日志，修复后重新提交或从可用 checkpoint 续训。参考仿真可继续体验。', action: 'train', label: '查看错误与日志' };
-    else if (!device) next = { key: 'devices', title: '绑定本组机器人鸭', copy: '登记并选择本组设备，核对设备编号。也可以先完成参考仿真体验。', action: 'devices', label: '绑定设备' };
+    else if (failed) next = { key: 'train', title: '修复后继续训练', copy: '查看错误与日志，修复后重新提交或从可用 checkpoint 续训。可继续运行参考仿真。', action: 'train', label: '查看错误与日志' };
+    else if (!device) next = { key: 'devices', title: '绑定本组机器人鸭', copy: '登记并选择本组设备，核对设备编号。也可以先完成参考仿真流程。', action: 'devices', label: '绑定设备' };
     else if (!model) next = { key: 'train', title: '准备机器人鸭模型契约', copy: '选择或登记与机器人鸭匹配的模型，再配置行走训练。', action: 'prepare', label: '选择模型与契约' };
     else if (!trained) next = { key: 'train', title: '配置机器人鸭行走训练', copy: '使用 microduck-rl 与可用 GPU 训练腿式策略。参考模型与其它引擎结果不会计为本次行走训练完成。', action: 'configure', label: '配置行走训练' };
     else if (!passed) next = { key: 'evaluate', title: '验收本次训练成果', copy: '检查导出一致性和仿真评测，缺少或未通过评测时先修复，再推进部署。', action: 'evaluate', label: '查看模型验收' };

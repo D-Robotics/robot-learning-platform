@@ -1,10 +1,10 @@
 (() => {
   const STORAGE_KEY = 'rdk-duck-lab-onboarding-v1';
   const steps = [
-    { target: '#user-start-panel', view: 'overview', kicker: '01 / 04 · 选择目标', title: '先选你想做的事', body: '首页提供三条入口：先体验一下、使用自己的设备、导入已有模型。先体验无需设备或 GPU；有设备和已有模型分别有自己的准备步骤。', best: '先选一个目标即可。左侧导航和进阶功能可以在需要时再看。', time: '约 10 秒阅读' },
-    { target: '#onboard-card', view: 'overview', kicker: '02 / 04 · 先体验', title: '体验：录下动作，再回看记录', body: '选择“先体验一下”后，在示例仿真中实际采集观测和动作数据，再到评测页回看采样时间轴。录制并完整播放同一段记录，才算完成体验；阅读指引不会替你完成操作。', best: '此处回看动作数据，不重演三维机器人动作。无需先连接 GPU 或开发板；刷新前可在示例中导出记录。', time: '约 15 秒阅读' },
+    { target: '#user-start-panel', view: 'overview', kicker: '01 / 04 · 选择目标', title: '选择工作流程', body: '首页提供三条入口：参考仿真、设备接入和模型导入。参考仿真无需开发板或 GPU；设备与模型分别有对应的准备流程。', best: '按当前工作目标选择入口，再进入所需的工具与操作步骤。', time: '约 10 秒阅读' },
+    { target: '#onboard-card', view: 'overview', kicker: '02 / 04 · 仿真数据', title: '采集动作数据并回放记录', body: '打开参考仿真，采集观测与动作数据，再回放采样时间轴。录制并完整播放同一份记录后，完成本次仿真数据流程。', best: '此处展示采样数据，不重演三维机器人动作。无需连接 GPU 或开发板；刷新前可在示例中导出记录。', time: '约 15 秒阅读' },
     { target: '#user-start-panel', view: 'overview', kicker: '03 / 04 · 设备与模型', title: '使用自己的设备或模型', body: '有自己的设备，先连接设备并检查连接状态。已有模型，先导入文件并检查与所选机器人是否兼容。平台会根据检查结果提示可继续的操作和缺少的条件。', best: '设备连接成功只是准备就绪；模型检查通过也不代表已经训练或部署。', time: '约 15 秒阅读' },
-    { target: '#overview-advanced-evidence', view: 'overview', kicker: '04 / 04 · 继续进阶', title: '准备训练或真机时再继续', body: '需要训练时，选择任务模板并准备可用的训练后端。准备真机时，先完成只读预检；预检不会启动机器人。真实部署和运动仍需现场确认安全条件。', best: '体验以实际录制并完整回看同一段记录为准。关闭指引不会完成任务，训练、评测和部署按需要继续。', time: '约 15 秒阅读' },
+    { target: '#overview-advanced-evidence', view: 'overview', kicker: '04 / 04 · 训练与部署', title: '配置模型训练与设备部署', body: '训练前选择任务配置和可用的训练后端。部署前完成设备只读预检，确认模型、设备与运行条件；实体运动仍需现场验收。', best: '录制与回放完成只表示仿真数据流程完成；模型训练、评测和部署分别依据对应记录确认。', time: '约 15 秒阅读' },
   ];
   let index = 0, overlay = null, spotlight = null, card = null, lastFocus = null;
   // 指引声明了 role="dialog" aria-modal="true"，所以必须真的把背景隔离掉：
