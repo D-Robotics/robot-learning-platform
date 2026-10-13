@@ -273,7 +273,7 @@ const navLabels = [
 assert.deepEqual(
   navLabels,
   [
-    '开始使用',
+    '概览',
     'Agent 助手',
     '数据与仿真',
     '训练与策略',
@@ -294,8 +294,8 @@ assert.deepEqual(
 assert.match(html, /app\.css/, 'the merged app.css must be loaded');
 assert.match(html, /tokens\.css/, 'the single token source must be loaded');
 
-// Typography scale is locked at four steps; any new overview text size must
-// map onto 12/13/15/24 instead of reintroducing a fifth step.
+// New typography uses the shared tokens. The legacy density layer may keep
+// only its original 12/13/15/24 literals; do not add private font sizes here.
 // The floor moved 11px -> 12px: 11px CJK metadata was the smallest reading text
 // in the product and measured poorly for legibility, so the whole UI now floors
 // at 12px (the mono micro-label family additionally moved 9px -> 10.5px).
@@ -312,7 +312,7 @@ const densityCss = cssApp.slice(densityBanner.index, densityEnd === -1 ? undefin
 assert.doesNotMatch(
   densityCss,
   /font-size:\s*(?:9|10|11|14|16|17|18)px/,
-  'overview density layer must only speak the 12/13/15/24 scale',
+  'overview density layer must use tokens or its original 12/13/15/24 literals',
 );
 assert.match(
   densityCss,

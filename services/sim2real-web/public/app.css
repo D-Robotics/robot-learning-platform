@@ -47,10 +47,7 @@ body {
     BlinkMacSystemFont,
     'Segoe UI',
     sans-serif;
-  background:
-    radial-gradient(ellipse 70% 48% at 12% 4%, rgba(255, 107, 0, 0.06), transparent 58%),
-    radial-gradient(ellipse 56% 46% at 92% 10%, rgba(6, 182, 212, 0.045), transparent 64%),
-    var(--bg-deep);
+  background: var(--bg);
 }
 button,
 select,
@@ -88,11 +85,8 @@ a {
   border: 1px solid var(--accent);
   border-radius: 8px;
   padding: 8px 10px;
-  /* 前景必须是背景的互补深浅。--accent-text 在浅色是深橙 #c2410c、在暗色是
-     亮橙 #ffb377，任何固定前景都会在其中一套主题上失效（白字 5.07:1 / 1.75:1，
-     深字 3.66:1 / 10.79:1）。改成和 .button-primary 同一套做法：实心 --accent
-     配深色前景，浅色 6.75:1、暗色约 9:1。 */
-  color: var(--warm-ink);
+  /* Foreground follows the same theme-aware contrast token as primary actions. */
+  color: var(--accent-contrast);
   background: var(--accent);
   font-size:var(--fs-meta);
   font-weight: 750;
@@ -107,9 +101,12 @@ a {
   align-items: center;
   justify-content: space-between;
   gap: 20px;
-  min-height: 58px;
-  padding-bottom: 20px;
+  min-height: var(--shell-topbar-height);
+  padding-bottom: 0;
   border-bottom: 1px solid var(--line);
+  background: var(--panel);
+  box-shadow: none;
+  backdrop-filter: none;
 }
 .brand {
   display: inline-flex;
@@ -123,14 +120,12 @@ a {
   place-items: center;
   width: 38px;
   height: 38px;
-  border-radius: 13px;
-  color: var(--white);
-  background: linear-gradient(135deg, var(--flame) 0%, var(--accent) 100%);
+  border-radius: 6px;
+  color: var(--panel);
+  background: var(--text);
   font-size: 19px;
   font-weight: 900;
-  box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.3),
-    0 4px 14px rgba(240, 90, 26, 0.22);
+  box-shadow: none;
 }
 .brand-kicker,
 .eyebrow,
@@ -146,8 +141,9 @@ a {
 .brand strong {
   display: block;
   margin-top: 2px;
-  font-size: 16px;
-  letter-spacing: -0.02em;
+  font-size: var(--fs-body);
+  letter-spacing: 0;
+  font-weight: 600;
 }
 .topbar-context {
   display: flex;
@@ -208,7 +204,7 @@ a {
   height: 7px;
   border-radius: 50%;
   background: var(--green);
-  box-shadow: 0 0 13px var(--green);
+  box-shadow: none;
 }
 .service-pill.is-loading .status-dot {
   background: var(--orange);
@@ -226,7 +222,7 @@ a {
   gap: 6px;
   min-height: 36px;
   border: 1px solid var(--line-strong);
-  border-radius: 9px;
+  border-radius: 6px;
   padding: 6px 12px;
   color: var(--text);
   background: var(--white);
@@ -237,6 +233,7 @@ a {
     background 0.15s ease,
     transform 0.15s ease,
     box-shadow 0.15s ease;
+  font-size: var(--fs-body);
 }
 .button:hover {
   border-color: rgba(240, 90, 26, 0.7);
@@ -265,19 +262,17 @@ textarea:focus-visible {
 }
 .button-primary {
   border-color: transparent;
-  color: var(--white);
-  background: linear-gradient(180deg, var(--flame) 0%, var(--accent) 100%);
+  color: var(--accent-contrast);
+  background: var(--accent);
   font-weight: 750;
-  box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.28),
-    0 6px 16px rgba(240, 90, 26, 0.18);
+  box-shadow: none;
+  border: 1px solid var(--accent);
 }
 .button-primary:hover {
   border-color: transparent;
-  background: linear-gradient(180deg, var(--flame-hot) 0%, var(--accent-hover) 100%);
-  box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.28),
-    0 8px 20px rgba(240, 90, 26, 0.24);
+  background: var(--accent-hover);
+  box-shadow: none;
+  color: var(--accent-contrast);
 }
 .button-ghost {
   background: transparent;
@@ -309,11 +304,12 @@ textarea:focus-visible {
   grid-template-columns: 31px minmax(0, 1fr) auto;
   align-items: center;
   gap: 8px;
-  margin-bottom: 32px;
+  margin-bottom: 16px;
   padding: 10px;
   border: 1px solid var(--line);
   border-radius: 13px;
   background: var(--panel);
+  box-shadow: none;
 }
 .sidebar-project-icon {
   display: grid;
@@ -321,8 +317,8 @@ textarea:focus-visible {
   width: 29px;
   height: 29px;
   border-radius: 9px;
-  color: var(--cyan);
-  background: rgba(240, 90, 26, 0.11);
+  color: var(--muted-strong);
+  background: var(--panel-soft);
   font-size: 18px;
 }
 .sidebar-project strong,
@@ -409,6 +405,7 @@ textarea:focus-visible {
 .sidebar-divider-compact {
   margin-top: 16px;
   margin-bottom: 16px;
+  margin: 16px 10px;
 }
 .nav-item {
   display: grid;
@@ -417,8 +414,8 @@ textarea:focus-visible {
   gap: 8px;
   width: 100%;
   border: 1px solid transparent;
-  border-radius: 10px;
-  padding: 8px 10px;
+  border-radius: 6px;
+  padding: 6px 10px;
   color: var(--muted-strong);
   text-align: left;
   background: transparent;
@@ -427,6 +424,7 @@ textarea:focus-visible {
     background 0.15s ease,
     border-color 0.15s ease,
     color 0.15s ease;
+  min-height: 36px;
 }
 .nav-index {
   color: var(--muted);
@@ -451,6 +449,7 @@ textarea:focus-visible {
   margin-top: 2px;
   color: var(--muted-strong);
   font-size:var(--fs-meta);
+  line-height: 1.3;
 }
 .sidebar-divider {
   height: 1px;
@@ -527,7 +526,7 @@ textarea:focus-visible {
 
 .main-content {
   min-width: 0;
-  padding: 32px 0 0;
+  padding: 20px 24px 92px;
 }
 .hero {
   display: flex;
@@ -697,7 +696,8 @@ h1 em {
   border: 1px solid var(--line);
   border-radius: 13px;
   padding: 12px;
-  background: var(--panel-raised);
+  background: var(--panel);
+  box-shadow: none;
 }
 .workflow-node.is-active {
   border-color: rgba(240, 90, 26, 0.38);
@@ -742,24 +742,25 @@ input:focus {
   align-items: center;
   gap: 8px;
   min-width: 130px;
-  padding: 6px 8px;
+  padding: 0 8px;
   border-left: 1px solid var(--line);
+  min-height: 28px;
 }
 .health-ring {
   color: var(--green-text);
   font-size: 14px;
-  text-shadow: 0 0 10px rgba(70, 160, 98, 0.45);
+  text-shadow: none;
 }
 .context-health span,
 .context-health strong {
-  display: block;
+  display: inline;
 }
 .context-health span {
   color: var(--muted);
   font-size:var(--fs-meta);
 }
 .context-health strong {
-  margin-top: 2px;
+  margin-top: 0;
   color: var(--green-text);
   font-size:var(--fs-meta);
 }
@@ -771,7 +772,7 @@ input:focus {
 .context-health.is-blocked .health-ring,
 .context-health.is-blocked strong {
   color: var(--orange-text);
-  text-shadow: 0 0 10px rgba(217, 119, 6, 0.35);
+  text-shadow: none;
 }
 
 /* Workspace command surface: a compact bridge between context, actions and the
@@ -838,7 +839,7 @@ h2 {
   letter-spacing: -0.04em;
 }
 .section-heading-lean {
-  margin-bottom: 12px;
+  margin-bottom: 16px;
 }
 .panel-heading-lean {
   margin-bottom: 12px;
@@ -930,8 +931,8 @@ h2 {
   min-width: 0;
 }
 .user-start-advanced summary {
-  min-height: 52px;
-  padding: 16px 20px;
+  min-height: 44px;
+  padding: 10px 16px;
   border: 1px solid var(--line);
   border-radius: var(--ui-radius-md);
   background: var(--panel-soft);
@@ -1389,7 +1390,7 @@ h2 {
 }
 .live-label.is-waiting .status-dot {
   background: var(--orange);
-  box-shadow: 0 0 13px var(--orange);
+  box-shadow: none;
 }
 .live-label.is-ready {
   border-color: rgba(70, 160, 98, 0.28);
@@ -3172,25 +3173,30 @@ h2 {
   gap: 8px;
   min-height: 48px;
   padding: 8px 12px 8px 8px;
-  border: 1px solid rgba(255, 121, 24, .64);
+  border: 1px solid var(--line-strong);
   border-radius: 999px;
-  color: var(--cream);
-  background: linear-gradient(135deg, var(--flame-bright), var(--float-orange));
-  box-shadow: 0 12px 32px rgba(0, 0, 0, .42), 0 0 0 5px rgba(255, 121, 24, .1);
+  color: var(--text);
+  background: var(--panel);
+  box-shadow: var(--shadow);
   cursor: grab;
   user-select: none;
   transition: transform .18s ease, box-shadow .18s ease, filter .18s ease;
 }
-.agent-floating-toggle:hover { filter: brightness(1.08); transform: translateY(-2px); box-shadow: 0 16px 36px rgba(0, 0, 0, .5), 0 0 0 6px rgba(255, 121, 24, .14); }
+.agent-floating-toggle:hover { filter: brightness(1.08); transform: none; box-shadow: var(--shadow); }
 .agent-floating-toggle:active { cursor: grabbing; transform: scale(.97); }
 /* 桌面端侧栏常驻"Agent 对话"入口；悬浮球只在侧栏收成抽屉的宽度以下出现，
    避免同一屏两个 Agent 入口。 */
 @media (min-width: 1081px) {
-  .agent-floating-toggle { display: none; }
+  .agent-floating-toggle { display: none;
+  background: var(--panel);
+  color: var(--text);
+  border: 1px solid var(--line-strong);
+  box-shadow: var(--shadow);
 }
-.agent-floating-icon { display: grid; place-items: center; width: 30px; height: 30px; border-radius: 50%; color: var(--flame-bright); background: var(--navy-deep); font-size: 17px; }
+}
+.agent-floating-icon { display: grid; place-items: center; width: 30px; height: 30px; border-radius: 50%; color: var(--muted-strong); background: var(--panel-soft); font-size: 17px; }
 .agent-floating-label { font-size:var(--fs-meta); font-weight: 760; letter-spacing: .02em; }
-.agent-floating-pulse { width: 7px; height: 7px; border-radius: 50%; background: var(--mint-pale); box-shadow: 0 0 0 4px rgba(154, 242, 196, .14); }
+.agent-floating-pulse { width: 7px; height: 7px; border-radius: 50%; background: var(--green); box-shadow: none; }
 .agent-chat-backdrop { position: fixed; inset: 0; z-index: var(--z-chat-backdrop); background: rgba(2, 7, 14, .58); backdrop-filter: blur(3px); }
 .agent-chat-panel {
   position: fixed;
@@ -3221,7 +3227,12 @@ body.agent-chat-open .agent-chat-panel { opacity: 1; visibility: visible; pointe
 .agent-chat-panel:focus { outline: 2px solid rgba(255, 121, 24, .72); outline-offset: 3px; }
 body.agent-chat-open { overflow: hidden; }
 @media (max-width: 720px) {
-  .agent-floating-toggle { right: 16px; bottom: 16px; min-height: 46px; }
+  .agent-floating-toggle { right: 16px; bottom: 16px; min-height: 46px;
+  background: var(--panel);
+  color: var(--text);
+  border: 1px solid var(--line-strong);
+  box-shadow: var(--shadow);
+}
   .agent-chat-panel { right: 10px; bottom: 76px; width: calc(100vw - 20px); max-height: calc(100vh - 96px); padding: 16px; border-radius: 16px; }
   .agent-chat-heading { align-items: flex-start; }
   .agent-chat-heading-actions { gap: 8px; }
@@ -3511,6 +3522,10 @@ button[aria-busy='true']::before {
 }
 body.is-loading .app-shell {
   cursor: progress;
+  width: 100%;
+  max-width: none;
+  padding: 0;
+  padding-top: 0;
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -3534,7 +3549,12 @@ body.is-loading .app-shell {
   }
   .sidebar-project {
     grid-template-columns: 29px minmax(0, 1fr);
-  }
+  margin-bottom: 16px;
+  border: 1px solid var(--line);
+  background: var(--panel);
+  box-shadow: none;
+  padding: 10px;
+}
   .sidebar-project-state {
     display: none;
   }
@@ -3553,26 +3573,37 @@ body.is-loading .app-shell {
   }
   .context-strip {
     grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
+  margin-bottom: 12px;
+  background: var(--panel);
+  box-shadow: none;
+}
   .context-health {
     grid-column: 1 / -1;
     border-top: 1px solid var(--line);
     border-left: 0;
-    padding: 10px 2px 0;
-  }
+    padding: 0 8px;
+  min-height: 28px;
+}
   .telemetry-summary {
     grid-template-columns: repeat(3, minmax(0, 1fr));
   }
 }
 @media (max-width: 720px) {
   .app-shell {
-    width: min(100% - 26px, 690px);
-    padding-top: 12px;
-  }
+    width: 100%;
+    padding-top: 0;
+  max-width: none;
+  padding: 0;
+}
   .topbar {
     align-items: flex-start;
     flex-wrap: wrap;
-  }
+  min-height: var(--shell-topbar-height);
+  background: var(--panel);
+  box-shadow: none;
+  backdrop-filter: none;
+  padding-bottom: 0;
+}
   .topbar-context {
     order: 3;
     flex-basis: 100%;
@@ -3587,13 +3618,17 @@ body.is-loading .app-shell {
   .sidebar {
     position: static;
     min-height: 0;
-    padding: 16px 0 0;
+    padding: 16px 10px 24px;
   }
   .sidebar-project {
     display: flex;
     gap: 8px;
-    margin-bottom: 12px;
-  }
+    margin-bottom: 16px;
+  border: 1px solid var(--line);
+  background: var(--panel);
+  box-shadow: none;
+  padding: 10px;
+}
   .sidebar-project div {
     flex: 1;
   }
@@ -3609,10 +3644,14 @@ body.is-loading .app-shell {
   }
   .nav-item {
     flex: 1 0 130px;
-  }
+  min-height: 36px;
+  padding: 6px 10px;
+  border-radius: 6px;
+}
   .nav-item small {
     display: none;
-  }
+  line-height: 1.3;
+}
   .sidebar-divider,
   .module-nav,
   .sidebar-bottom,
@@ -3621,7 +3660,7 @@ body.is-loading .app-shell {
     display: none;
   }
   .main-content {
-    padding-top: 32px;
+    padding-top: 20px;
   }
   .hero {
     display: block;
@@ -3629,13 +3668,17 @@ body.is-loading .app-shell {
   }
   .context-strip {
     grid-template-columns: 1fr 1fr;
-  }
+  margin-bottom: 12px;
+  background: var(--panel);
+  box-shadow: none;
+}
   .context-health {
     grid-column: 1 / -1;
     border-top: 1px solid var(--line);
     border-left: 0;
-    padding: 10px 2px 0;
-  }
+    padding: 0 8px;
+  min-height: 28px;
+}
   .overview-columns,
   .sim-layout,
   .train-layout,
@@ -3713,7 +3756,9 @@ body.is-loading .app-shell {
   .deploy-recovery-note .button { margin-left: 24px; }
   .context-health {
     grid-column: auto;
-  }
+  min-height: 28px;
+  padding: 0 8px;
+}
   .training-grid {
     grid-template-columns: 1fr;
   }
@@ -4881,8 +4926,8 @@ html.theme-dark body::before {
   mask-image: linear-gradient(to bottom, var(--black), transparent 78%);
 }
 html.theme-dark .topbar {
-  min-height: 64px;
-  padding-bottom: 16px;
+  min-height: var(--shell-topbar-height);
+  padding-bottom: 0;
   border-bottom-color: var(--line);
 }
 html.theme-dark .topbar-context { color: var(--muted-strong); }
@@ -4897,13 +4942,14 @@ html.theme-dark .button:hover {
 }
 html.theme-dark .button-primary {
   border-color: var(--accent);
-  color: var(--ink-dark);
-  background: linear-gradient(135deg, var(--dk-primary-a), var(--dk-primary-b));
-  box-shadow: 0 6px 18px rgba(255, 116, 31, 0.2);
+  color: var(--accent-contrast);
+  background: var(--accent);
+  box-shadow: none;
 }
 html.theme-dark .button-primary:hover {
-  color: var(--ink-dark);
-  background: linear-gradient(135deg, var(--dk-primary-hover-a), var(--dk-primary-hover-b));
+  color: var(--accent-contrast);
+  background: var(--accent-hover);
+  box-shadow: none;
 }
 /* ⚠️ 这两条是"桌面双列"布局，只在侧栏还是栅格列的时候成立。
    ≤1080px 侧栏变成 position:fixed 的抽屉后就不再占据栅格单元，如果这个
@@ -4914,8 +4960,8 @@ html.theme-dark .button-primary:hover {
    而不是靠提高皮肤层优先级去压。 */
 @media (min-width: 1081px) {
   html.theme-dark .shell-layout {
-    grid-template-columns: 224px minmax(0, 1fr);
-    gap: 24px;
+    grid-template-columns: var(--shell-sidebar-width) minmax(0, 1fr);
+    gap: 0;
   }
   html.theme-dark .sidebar {
     min-height: calc(100vh - 125px);
@@ -4954,7 +5000,7 @@ html.theme-dark textarea {
   background: rgba(8, 14, 21, 0.8);
 }
 html.theme-dark select option { color: var(--text); background: var(--navy-panel); }
-html.theme-dark .main-content { padding-top: 24px; }
+html.theme-dark .main-content { padding-top: 20px; }
 html.theme-dark .context-strip {
   padding: 12px;
   background: rgba(13, 22, 31, 0.96);
@@ -4983,9 +5029,13 @@ html.theme-dark .command-palette-search input { background: transparent; }
 html.theme-dark .footer { color: var(--muted); }
 
 @media (max-width: 720px) {
-  html.theme-dark .app-shell { width: min(100% - 24px, 700px); }
+  html.theme-dark .app-shell { width: 100%;
+  max-width: none;
+  padding: 0;
+  padding-top: 0;
+}
   html.theme-dark .shell-layout { display: block; }
-  html.theme-dark .main-content { padding-top: 24px; }
+  html.theme-dark .main-content { padding-top: 20px; }
 }
 
 /* -------------------------------------------------------------------------
@@ -5001,16 +5051,14 @@ html.theme-dark .footer { color: var(--muted); }
 ------------------------------------------------------------------------- */
 html.theme-dark body {
   color: var(--text);
-  background:
-    radial-gradient(ellipse 70% 55% at 12% 0%, rgba(255, 121, 24, 0.095), transparent 60%),
-    radial-gradient(ellipse 55% 48% at 93% 8%, rgba(58, 124, 198, 0.08), transparent 62%),
-    linear-gradient(rgba(139, 168, 202, 0.022) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(139, 168, 202, 0.022) 1px, transparent 1px),
-    var(--bg-deep);
-  background-size: auto, auto, 32px 32px, 32px 32px, auto;
+  background: var(--bg);
+  background-size: auto;
 }
 
-:where(html.theme-dark) .app-shell { width: min(1500px, calc(100% - 34px)); padding: 16px 0 24px; }
+:where(html.theme-dark) .app-shell { width: 100%; padding: 0;
+  max-width: none;
+  padding-top: 0;
+}
 :where(html.theme-dark) .topbar { min-height: 52px; padding-bottom: 12px; border-bottom-color: var(--line); }
 :where(html.theme-dark) .brand { gap: 10px; }
 :where(html.theme-dark) .brand-mark { width: 34px; height: 34px; border-radius: 9px; font-size: 17px; box-shadow: 0 0 22px rgba(255, 121, 24, 0.3); }
@@ -5030,7 +5078,7 @@ html.theme-dark body {
 :where(html.theme-dark) .button-quiet:hover { border-color: var(--line); background: rgba(255, 255, 255, 0.055); }
 :where(html.theme-dark) button:focus-visible, :where(html.theme-dark) a:focus-visible, :where(html.theme-dark) select:focus-visible, :where(html.theme-dark) input:focus-visible, :where(html.theme-dark) textarea:focus-visible { outline-color: var(--accent); }
 
-:where(html.theme-dark) .shell-layout { grid-template-columns: 220px minmax(0, 1fr); gap: 24px; }
+:where(html.theme-dark) .shell-layout { grid-template-columns: var(--shell-sidebar-width) minmax(0, 1fr); gap: 0; }
 :where(html.theme-dark) .sidebar { top: 12px; min-height: calc(100vh - 124px); padding: 24px 12px 12px 0; border-right: 1px solid var(--line); }
 :where(html.theme-dark) .sidebar-project { margin-bottom: 24px; border-color: var(--line); background: rgba(16, 26, 39, 0.82); box-shadow: none; }
 :where(html.theme-dark) .sidebar-project-icon, :where(html.theme-dark) .module-icon { color: var(--accent-text); background: rgba(255, 121, 24, 0.12); }
@@ -5122,27 +5170,53 @@ html.theme-dark body {
 :where(html.theme-dark) .compute-resource-card { background: var(--panel-raised); }
 
 @media (max-width: 1080px) {
-  .app-shell { width: min(100% - 24px, 900px); }
+  .app-shell { width: 100%;
+  max-width: none;
+  padding: 0;
+  padding-top: 0;
+}
   .shell-layout { grid-template-columns: 184px minmax(0, 1fr); gap: 16px; }
   .sidebar { padding-right: 10px; }
   .topbar-context { display: none; }
 }
 @media (max-width: 720px) {
-  .app-shell { width: calc(100% - 20px); padding-top: 10px; }
-  .topbar { align-items: flex-start; flex-wrap: wrap; gap: 10px; }
+  .app-shell { width: 100%; padding-top: 0;
+  max-width: none;
+  padding: 0;
+}
+  .topbar { align-items: flex-start; flex-wrap: wrap; gap: 10px;
+  min-height: var(--shell-topbar-height);
+  background: var(--panel);
+  box-shadow: none;
+  backdrop-filter: none;
+  padding-bottom: 0;
+}
   .top-actions { width: 100%; justify-content: flex-start; }
   .shell-layout { display: block; }
-  .sidebar { position: static; min-height: 0; padding: 12px 0 8px; border-right: 0; border-bottom: 1px solid var(--line); }
-  .sidebar-project { margin-bottom: 10px; }
+  .sidebar { position: static; min-height: 0; padding: 16px 10px 24px; border-right: 0; border-bottom: 1px solid var(--line); }
+  .sidebar-project { margin-bottom: 16px;
+  border: 1px solid var(--line);
+  background: var(--panel);
+  box-shadow: none;
+  padding: 10px;
+}
   .workflow-nav { grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 4px; }
-  .nav-item { grid-template-columns: 1fr; gap: 2px; padding: 6px 4px; text-align: center; }
+  .nav-item { grid-template-columns: 1fr; gap: 2px; padding: 6px 10px; text-align: center;
+  min-height: 36px;
+  border-radius: 6px;
+}
   .nav-item .nav-index { font-size:var(--fs-meta); }
   .nav-item strong { font-size:var(--fs-meta); }
-  .nav-item small { display: none; }
+  .nav-item small { display: none;
+  line-height: 1.3;
+}
   .sidebar-divider, .nav-label, .sidebar-bottom { display: none; }
-  .main-content { padding-top: 12px; }
+  .main-content { padding-top: 20px; }
   .hero { display: block; padding-top: 8px; }
-  .context-health { grid-column: 1 / -1; border-left: 0; border-top: 1px solid var(--line); }
+  .context-health { grid-column: 1 / -1; border-left: 0; border-top: 1px solid var(--line);
+  min-height: 28px;
+  padding: 0 8px;
+}
   .workspace-command-bar, .module-grid, .status-grid { grid-template-columns: 1fr; }
   .next-card { grid-template-columns: 1fr; }
 }
@@ -5228,9 +5302,11 @@ body.agent-chat-open .agent-chat-composer { flex: 0 0 auto; }
    看起来像"页面没做完"；居中后两侧留白对称，读线仍然收在 1120px。 */
 .main-content { max-width: 1120px; margin-inline: auto; }
 .context-strip select { min-height: 34px; padding: 6px 8px; font-size:var(--fs-meta); }
-.context-health { min-height: 34px; padding: 4px 8px; }
+.context-health { min-height: 28px; padding: 0 8px; }
 .view-section { margin-top: 8px; }
-.section-heading-lean { padding-bottom: 8px; border-bottom: 1px solid var(--line); }
+.section-heading-lean { padding-bottom: 8px; border-bottom: 1px solid var(--line);
+  margin-bottom: 16px;
+}
 .next-card-main { padding: 10px 12px; gap: 10px; }
 .next-card .button { min-height: 32px; padding: 6px 10px; font-size:var(--fs-meta); }
 .context-live { gap: 8px; margin-bottom: 10px; }
@@ -5258,8 +5334,15 @@ body.agent-chat-open .agent-chat-composer { flex: 0 0 auto; }
   .main-content { margin-inline: 0; }
 }
 @media (max-width: 720px) {
-  .context-strip { grid-template-columns: 1fr 1fr; }
-  .context-health { grid-column: 1 / -1; }
+  .context-strip { grid-template-columns: 1fr 1fr;
+  margin-bottom: 12px;
+  background: var(--panel);
+  box-shadow: none;
+}
+  .context-health { grid-column: 1 / -1;
+  min-height: 28px;
+  padding: 0 8px;
+}
 }
 
 /* The inline next-step helper is a secondary hint, so keep it as a compact
@@ -5655,11 +5738,18 @@ html.theme-dark .agent-assistant-health { max-width: 150px; }
   }
 }
 .train-onboarding{margin:12px 0 16px;padding:16px 20px;border:1px solid color-mix(in srgb,var(--accent) 35%,transparent);border-radius:14px;background:linear-gradient(110deg,color-mix(in srgb,var(--accent) 10%,transparent),var(--panel));}
-.submodule-tabs{display:flex;gap:8px;margin:12px 0 12px;padding:4px;border:1px solid var(--line-strong);border-radius:12px;background:var(--panel-soft);overflow:auto}
-.submodule-tab{flex:1;min-width:150px;padding:10px 12px;border:1px solid transparent;border-radius:8px;background:transparent;color:var(--muted-strong);text-align:left;font:inherit;cursor:pointer;transition:.18s ease}
-.submodule-tab small{display:block;margin-top:2px;color:var(--muted);font-size:var(--fs-meta)}
+.submodule-tabs{display:flex;gap: 16px;margin: 0 0 16px;padding: 0;border: 0;border-radius: 0;background: transparent;overflow:auto;
+  border-bottom: 1px solid var(--line);
+}
+.submodule-tab{flex: 0 0 auto;min-width: 0;padding: 8px 0;border: 0;border-radius: 0;background:transparent;color:var(--muted-strong);text-align:left;font:inherit;cursor:pointer;transition:.18s ease;
+  min-height: 40px;
+  border-bottom: 2px solid transparent;
+  font-size: var(--fs-body);
+}
+.submodule-tab small{display: none;margin-top:2px;color:var(--muted);font-size:var(--fs-meta)}
 .submodule-tab:hover,.submodule-tab:focus-visible{border-color:var(--line-strong);outline:none;color:var(--text)}
-.submodule-tab.is-active{border-color:var(--accent);background:color-mix(in srgb,var(--accent) 12%,transparent);color:var(--text)}
+.submodule-tab.is-active{border-color: var(--accent);background: transparent;color: var(--text);
+}
 .submodule-tab.is-active small{color:var(--accent-text)}
 .view-section[data-active-train-module="contract"] .compute-resources-panel{display:none}
 .train-layout[data-train-active-module="resources"] > [data-train-module="run"]{display:none}
@@ -5700,20 +5790,67 @@ html.theme-dark .agent-assistant-health { max-width: 150px; }
 .view-section[data-active-deploy-module="feedback"] #preflight-panel{display:none}
 .view-section[data-active-deploy-module="preflight"] #feedback-panel{display:none}
 .view-section[data-active-deploy-module] .deploy-layout{grid-template-columns:minmax(0,1fr)}
-@media (max-width:720px){.submodule-tabs{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));margin-left:-2px;margin-right:-2px;overflow:visible}.submodule-tab{min-width:0;width:100%;padding:8px 10px}}
-.flow-context-strip{display:flex;align-items:center;gap:12px;margin:12px 0 16px;padding:12px 16px;border:1px solid color-mix(in srgb,var(--accent) 42%,var(--line));border-radius:12px;background:color-mix(in srgb,var(--accent) 8%,var(--panel));}
-.flow-context-copy{min-width:0;flex:1}.flow-context-kicker{color:var(--accent-text);font-size:var(--fs-meta)}.flow-context-copy h2{margin:2px 0 2px;font-size:29px;font-weight:680;letter-spacing:-.055em}.flow-context-copy p{margin:0;color:var(--muted-strong);font-size:var(--fs-meta);line-height:1.4}
+@media (max-width:720px){.submodule-tabs{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));margin-left:-2px;margin-right:-2px;overflow:visible;
+  padding: 0;
+  border: 0;
+  border-bottom: 1px solid var(--line);
+  border-radius: 0;
+  background: transparent;
+  gap: 16px;
+  margin: 0 0 16px;
+}.submodule-tab{min-width: 0;width:100%;padding: 8px 0;
+  min-height: 40px;
+  border-radius: 0;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  font-size: var(--fs-body);
+}}
+.flow-context-strip{display:flex;align-items:center;gap:12px;margin: 0 0 12px;padding: 0 0 12px;border: 0;border-radius: 0;background: transparent;
+  border-bottom: 1px solid var(--line);
+}
+.flow-context-copy{min-width:0;flex:1}.flow-context-kicker{color:var(--accent-text);font-size:var(--fs-meta);
+  display: inline-block;
+}.flow-context-copy h2{margin: 0;font-size: var(--fs-section-heading);font-weight: 600;letter-spacing:-.055em;
+  letter-spacing: -0.02em;
+}.flow-context-copy p{margin:0;color:var(--muted-strong);font-size:var(--fs-meta);line-height:1.4;
+  line-height: 1.5;
+}
 .flow-focus-target{border-color:var(--accent);box-shadow:0 0 0 4px color-mix(in srgb,var(--accent) 18%,transparent);}
 /* 子界面分割（D-002）：评测与部署的多子项共享视图内，面板互斥显隐——
    一次只展示当前子项自己的内容，与训练页模块切换同构。 */
 [data-view-section="evaluate"][data-active-eval-module="run"] .evaluation-evidence{display:none}
 [data-view-section="evaluate"][data-active-eval-module="comparison"] #evaluation-run-panel{display:none}
 [data-view-section="deploy"][data-active-deploy-module="preflight"] #feedback-panel{display:none}
-[data-view-section="deploy"][data-active-deploy-module="feedback"] #preflight-panel{display:none}@media (max-width:720px){.flow-context-strip{align-items:flex-start;padding:10px 12px}#flow-context .flow-context-copy h2{font-size:26px}}
-.module-step-strip{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;margin:12px 0 16px;padding:8px;border:1px solid var(--line);border-radius:12px;background:var(--panel-soft)}
-.module-step{display:flex;align-items:center;gap:8px;min-width:0;padding:10px 12px;border:1px solid transparent;border-radius:8px}.module-step>span{display:grid;place-items:center;width:24px;height:24px;border-radius:50%;background:var(--panel-raised);color:var(--muted-strong);font-size:var(--fs-meta);font-weight:700}.module-step strong{display:block;font-size:13px}.module-step small{display:block;margin-top:2px;color:var(--muted);font-size:var(--fs-meta)}.module-step.is-current{border-color:var(--accent);background:color-mix(in srgb,var(--accent) 9%,transparent)}.module-step.is-current>span{background:var(--accent);color:var(--accent-contrast,var(--panel))}
+[data-view-section="deploy"][data-active-deploy-module="feedback"] #preflight-panel{display:none}@media (max-width:720px){.flow-context-strip{align-items:flex-start;padding: 0 0 12px;
+  border: 0;
+  border-bottom: 1px solid var(--line);
+  border-radius: 0;
+  background: transparent;
+}#flow-context .flow-context-copy h2{font-size:26px}}
+.module-step-strip{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap: 16px;margin: 0 0 12px;padding: 0;border: 0;border-radius: 0;background:var(--panel-soft);
+  background: transparent;
+}
+.module-step{display:flex;align-items:center;gap: 8px;min-width:0;padding: 4px 0;border: 0;border-radius:8px;
+  border-radius: 0;
+}.module-step>span{display:grid;place-items:center;width: 20px;height: 20px;border-radius: 4px;background: var(--bg-soft);color:var(--muted-strong);font-size:var(--fs-meta);font-weight:700;
+  font-weight: 500;
+}.module-step strong{display:block;font-size:13px;
+  font-size: var(--fs-body);
+  font-weight: 500;
+}.module-step small{display: none;margin-top:2px;color:var(--muted);font-size:var(--fs-meta)}.module-step.is-current{border-color: transparent;background:color-mix(in srgb,var(--accent) 9%,transparent);
+  background: transparent;
+}.module-step.is-current>span{background: var(--bg-soft);color:var(--accent-contrast,var(--panel));
+  color: var(--muted-strong);
+}
 .view-section[data-active-train-module="config"] .model-panel>.panel-heading{display:flex}
-@media (max-width:720px){.module-step-strip{grid-template-columns:1fr}}
+@media (max-width:720px){.module-step-strip{grid-template-columns:1fr;
+  gap: 16px;
+  margin: 0 0 12px;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+}}
 .model-empty-guide{display:flex;flex-direction:column;align-items:flex-start;gap:8px;padding:16px}.model-empty-guide strong{font-size:17px}.model-empty-guide span{color:var(--muted);font-size:var(--fs-meta)}.model-empty-guide .button{margin-top:4px}
 .train-onboarding-heading{display:flex;align-items:flex-start;justify-content:space-between;gap:16px}.train-onboarding h3{margin:2px 0 0;font-size:20px}.train-onboarding-note{color:var(--accent-text);font-size:var(--fs-meta);padding-top:6px}.train-onboarding .eyebrow{color:var(--accent-text);font-size:var(--fs-meta);letter-spacing:.12em;text-transform:uppercase}.train-onboarding-steps{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-top:16px}.train-onboarding-step{display:flex;gap:10px;align-items:center;padding:10px 12px;border:1px solid var(--line);border-radius:10px;background:var(--panel-soft)}.train-onboarding-step b{display:grid;place-items:center;width:26px;height:26px;border-radius:50%;background:var(--panel-raised);color:var(--muted-strong)}.train-onboarding-step strong,.train-onboarding-step small{display:block}.train-onboarding-step small{margin-top:2px;color:var(--muted);font-size:var(--fs-meta)}.train-onboarding-step.is-current{border-color:var(--accent)}.train-onboarding-step.is-current b{background:var(--accent-soft);color:var(--accent-text)}.train-onboarding-help{margin:12px 0 0;color:var(--muted-strong);font-size:var(--fs-meta)}.panel-tip{color:var(--muted);font-size:var(--fs-meta);font-weight:400}.manifest-panel h2{margin-bottom:2px}
 @media (max-width:720px){.train-onboarding-steps{grid-template-columns:1fr}.train-onboarding-heading{display:block}.train-onboarding-note{display:block}}
@@ -5729,18 +5866,34 @@ html.theme-dark .agent-assistant-health { max-width: 150px; }
 
 .view-section{max-width:1180px;margin:0 auto;padding:24px 32px 64px}
 .section-heading{margin:0 0 16px;border-bottom:1px solid var(--line);padding-bottom:16px}
-.section-heading h2{font-size:26px;letter-spacing:-.02em;margin:0}
-.panel{border:1px solid var(--line);border-radius:12px;background:var(--surface-1);box-shadow:0 8px 24px rgba(0,0,0,.12)}
+.section-heading h2{font-size: var(--fs-section-heading);letter-spacing:-.02em;margin:0;
+  font-weight: 600;
+}
+.panel{border:1px solid var(--line);border-radius: var(--ui-radius-md);background: var(--panel);box-shadow: none;
+}
 .panel+.panel{margin-top:16px}
-.submodule-tabs{margin:0 0 16px;border:0;background:var(--surface-1);padding:4px;border-radius:10px}
-.submodule-tab{min-height:54px;padding:10px 16px}
-.submodule-tab.is-active{background:color-mix(in srgb,var(--accent) 16%,var(--surface-2));border-color:var(--accent);box-shadow:inset 0 -2px 0 var(--accent);color:var(--text)}
+.submodule-tabs{margin: 0 0 16px;border: 0;background: transparent;padding: 0;border-radius: 0;
+  gap: 16px;
+}
+.submodule-tab{min-height: 40px;padding: 8px 0;
+  min-width: 0;
+  border-radius: 0;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  font-size: var(--fs-body);
+}
+.submodule-tab.is-active{background: transparent;border-color: var(--accent);box-shadow: none;color:var(--text);
+  color: var(--text);
+}
 .train-onboarding{margin:0 0 16px;padding:16px 20px;border-color:var(--line);background:var(--surface-1);box-shadow:none}
 .train-onboarding h3{font-size:18px}
 .train-onboarding-steps{gap:8px;margin-top:12px}
 .train-onboarding-step{padding:12px;border-radius:10px}
 .train-onboarding-help{margin-top:10px;color:var(--muted)}
-@media(max-width:720px){.view-section{padding:20px 16px 40px}.section-heading h2{font-size:22px}.train-onboarding{padding:16px}.train-onboarding-steps{gap:8px}}
+@media(max-width:720px){.view-section{padding:20px 16px 40px}.section-heading h2{font-size:22px;
+  font-size: var(--fs-section-heading);
+  font-weight: 600;
+}.train-onboarding{padding:16px}.train-onboarding-steps{gap:8px}}
 
 /* ======================== onboarding.css — 新手指引浮层 ======================== */
 
@@ -5865,7 +6018,8 @@ body.onboarding-open { overflow: hidden; }
   border: 1px solid var(--line);
   border-radius: 13px;
   padding: 10px 16px;
-  background: var(--panel-raised);
+  background: var(--panel);
+  box-shadow: none;
 }
 .context-strip .context-live {
   display: flex;
@@ -5927,7 +6081,8 @@ body.onboarding-open { overflow: hidden; }
 
 /* Train page: model select beside the contract-run button */
 .model-panel-select { display: flex; gap: 8px; align-items: center; }
-.model-panel-select select { min-width: 230px; }
+.model-panel-select select { min-width: 0; flex: 1 1 0; }
+.model-panel-select .button { flex: 0 0 auto; white-space: nowrap; }
 
 /* Sim page: task selector panel */
 .sim-context-panel { margin-bottom: 16px; padding: 12px 16px; border: 1px solid var(--line); border-radius: 10px; }
@@ -5970,13 +6125,19 @@ body.onboarding-open { overflow: hidden; }
 
 /* ---- Responsive ---- */
 @media (max-width: 1080px) {
-  .context-strip { padding: 10px 12px; }
+  .context-strip { padding: 10px 12px;
+  margin-bottom: 12px;
+  background: var(--panel);
+  box-shadow: none;
+}
   .context-strip .context-live { gap: 2px 16px; }
   .context-strip .context-live-item strong { max-width: 150px; }
 }
 @media (max-width: 720px) {
   .context-strip .context-health { flex: 1 1 100%; }
-  .model-panel-select { flex-wrap: wrap; }
+  .model-panel > .panel-heading { flex-wrap: wrap; }
+  .model-panel > .panel-heading > h2 { flex: 0 0 100%; min-width: 0; }
+  .model-panel-select { flex-wrap: wrap; width: 100%; flex: 0 0 100%; }
   .model-panel-select select { min-width: 0; flex: 1 1 100%; }
 }
 
@@ -6189,21 +6350,32 @@ body.onboarding-open { overflow: hidden; }
 /* Layout-only polish: sizing, rhythm and radii. All colors continue to come
    from the theme-dark tokens in styles.css so this layer stays theme-safe. */
 .brand { gap: 10px; }
-.button { min-height: 34px; border-radius: 8px; padding: 6px 12px; font-size:var(--fs-meta); }
-.sidebar-project { margin-bottom: 24px; padding: 8px; border-radius: 11px; background: var(--panel); }
-.sidebar-project-icon { width: 28px; height: 28px; border-radius: 8px; }
+.button { min-height: 34px; border-radius: 6px; padding: 6px 12px; font-size: var(--fs-body); }
+.sidebar-project { margin-bottom: 16px; padding: 10px; border-radius: 11px; background: var(--panel);
+  border: 1px solid var(--line);
+  box-shadow: none;
+}
+.sidebar-project-icon { width: 28px; height: 28px; border-radius: 8px;
+  background: var(--panel-soft);
+  color: var(--muted-strong);
+}
 .nav-label { margin: 0 10px 6px; font-size:var(--fs-meta); letter-spacing: .12em; }
 .workflow-nav { gap: 2px; }
-.nav-item { min-height: 38px; border-radius: 8px; padding: 8px 10px; }
-.nav-item.is-active { border-color: color-mix(in srgb, var(--accent) 42%, transparent); color: var(--text); background: color-mix(in srgb, var(--accent) 12%, transparent); box-shadow: inset 3px 0 0 var(--accent); }
+.nav-item { min-height: 36px; border-radius: 6px; padding: 6px 10px; }
+.nav-item.is-active { border-color: color-mix(in srgb, var(--accent) 42%, transparent); color: var(--text); background: color-mix(in srgb, var(--accent) 12%, transparent); box-shadow: none; }
 .nav-item strong { font-size:var(--fs-meta); }
-.sidebar-divider-compact { margin: 20px 10px; }
+.sidebar-divider-compact { margin: 16px 10px; }
 .safety-mini { border-radius: 10px; padding: 8px; }
-.context-strip { margin-bottom: 24px; border: 1px solid var(--line); border-radius: 12px; background: var(--panel); }
+.context-strip { margin-bottom: 12px; border: 1px solid var(--line); border-radius: 12px; background: var(--panel);
+  box-shadow: none;
+}
 .context-live { gap: 0; }
 .context-live-item { min-height: 58px; padding: 10px 16px; border-right: 1px solid var(--line); border-radius: 0; background: transparent; }
 .context-live-item:last-child { border-right: 0; }
-.context-health { border-left: 1px solid var(--line); border-radius: 0; }
+.context-health { border-left: 1px solid var(--line); border-radius: 0;
+  min-height: 28px;
+  padding: 0 8px;
+}
 .section-heading { margin-bottom: 16px; }
 .overview-page-title h2 { font-size: 27px; letter-spacing: -.045em; }
 .overview-page-title p { margin: 6px 0 0; color: var(--muted); font-size: var(--fs-body); }
@@ -6222,7 +6394,10 @@ body.onboarding-open { overflow: hidden; }
 .workspace-summary-card em { font-size:var(--fs-meta); }
 .workspace-recent-row { padding: 12px 16px 16px; border-top: 1px solid var(--line); }
 
-.panel { border-color: var(--line); border-radius: 12px; box-shadow: none; }
+.panel { border-color: var(--line); border-radius: var(--ui-radius-md); box-shadow: none;
+  padding: 16px;
+  background: var(--panel);
+}
 .section-heading-lean h2 { font-size: 22px; }
 .agent-chat-panel { border-radius: 14px; box-shadow: var(--shadow); }
 body.agent-chat-open .agent-chat-panel { right: 16px; bottom: 72px; width: min(1120px, calc(100vw - 32px)); height: min(760px, calc(100vh - 88px)); max-height: min(760px, calc(100vh - 88px)); padding: 0; overflow: hidden; border: 1px solid var(--line-strong); border-radius: 20px; background: var(--panel-raised); box-shadow: var(--shadow); }
@@ -6285,25 +6460,41 @@ body.agent-chat-open .agent-chat-composer input { min-height: 44px; border-color
 @media (max-width: 560px) { .station-studio-connect { align-items: flex-start; flex-direction: column; } }
 
 @media (max-width: 720px) {
-  .app-shell { width: min(100% - 32px, 720px); }
+  .app-shell { width: 100%;
+  max-width: none;
+  padding: 0;
+  padding-top: 0;
+}
   .shell-layout { grid-template-columns: 1fr; gap: 12px; }
-  .sidebar { position: static; min-height: 0; padding: 12px 0 0; }
+  .sidebar { position: static; min-height: 0; padding: 16px 10px 24px; }
   .sidebar-bottom, .sidebar-divider, .sidebar > .nav-label:nth-of-type(2) { display: none; }
   .workflow-nav { grid-template-columns: repeat(4,1fr); }
   .workflow-nav:first-of-type { grid-template-columns: repeat(2,1fr); }
-  .nav-item { grid-template-columns: 20px 1fr; }
-  .main-content { padding-top: 8px; }
+  .nav-item { grid-template-columns: 20px 1fr;
+  min-height: 36px;
+  padding: 6px 10px;
+  border-radius: 6px;
+}
+  .main-content { padding-top: 20px; }
   .workspace-summary-grid, .status-grid { grid-template-columns: repeat(2,1fr); }
   .workspace-summary-card:nth-child(2) { border-right: 0; }
   .workspace-summary-card:nth-child(-n+2) { border-bottom: 1px solid var(--line); }
 }
 @media (max-width: 560px) {
-  .app-shell { width: calc(100% - 24px); }
+  .app-shell { width: 100%;
+  max-width: none;
+  padding: 0;
+  padding-top: 0;
+}
   .topbar-context { display: none; }
   .top-actions .button-ghost { display: none; }
   .workflow-nav { grid-template-columns: repeat(2,1fr); }
   .next-card { grid-template-columns: 1fr; }
-  .context-strip { grid-template-columns: 1fr 1fr; }
+  .context-strip { grid-template-columns: 1fr 1fr;
+  margin-bottom: 12px;
+  background: var(--panel);
+  box-shadow: none;
+}
 }
 .platform-scorecard { margin-top: 16px; }
 .platform-scorecard-heading { display:flex; align-items:flex-start; justify-content:flex-start; gap:24px; }
@@ -6964,10 +7155,11 @@ html.theme-dark .app-shell {
   width: 100%;
   max-width: none;
   padding-top: 0;
+  padding: 0;
 }
 
 html.theme-dark .topbar {
-  min-height: 54px;
+  min-height: var(--shell-topbar-height);
   padding: 0 16px;
 }
 
@@ -6996,24 +7188,27 @@ html.theme-dark body::before {
 .brand-mark {
   width: 28px;
   height: 28px;
-  border-radius: 8px;
+  border-radius: 6px;
   font-size: 14px;
   box-shadow: none;
-  background: var(--accent);
+  background: var(--text);
+  color: var(--panel);
 }
 
 .brand strong {
-  font-size: 13.5px;
-  font-weight: 700;
-  letter-spacing: -0.01em;
+  font-size: var(--fs-body);
+  font-weight: 600;
+  letter-spacing: 0;
 }
 
 html.theme-dark .brand-mark {
   width: 28px;
   height: 28px;
-  border-radius: 8px;
+  border-radius: 6px;
   font-size: 14px;
   box-shadow: none;
+  background: var(--text);
+  color: var(--panel);
 }
 
 .topbar-context {
@@ -7050,13 +7245,15 @@ html.theme-dark .brand-mark {
   z-index: 40;
   align-items: center;
   gap: 16px;
-  min-height: 54px;
+  min-height: var(--shell-topbar-height);
   width: 100%;
   margin: 0;
   padding: 0 16px;
   border-bottom: 1px solid var(--line);
-  background: var(--bg);
+  background: var(--panel);
   box-shadow: none;
+  backdrop-filter: none;
+  padding-bottom: 0;
 }
 
 .app-shell {
@@ -7064,23 +7261,24 @@ html.theme-dark .brand-mark {
   max-width: none;
   margin: 0;
   padding: 0;
+  padding-top: 0;
 }
 
 /* shell-layout 原本是 grid；改为全宽 flex 感知更接近预览页的贴边侧栏 */
 .shell-layout {
   display: grid;
-  grid-template-columns: 224px minmax(0, 1fr);
+  grid-template-columns: var(--shell-sidebar-width) minmax(0, 1fr);
   gap: 0;
   align-items: stretch;
 }
 
 .sidebar {
   position: sticky;
-  top: 54px;
-  height: calc(100vh - 54px);
+  top: var(--shell-topbar-height);
+  height: calc(100vh - var(--shell-topbar-height));
   min-height: 0;
   margin: 0;
-  padding: 16px 10px 32px 12px;
+  padding: 16px 10px 24px;
   border-right: 1px solid var(--line);
   overflow-y: auto;
 }
@@ -7088,7 +7286,7 @@ html.theme-dark .brand-mark {
 /* 主内容区贴边内边距（覆盖 .main-content 的 35px 顶部外距与 view 各自的
    侧向内边距——预览页主区是 26/30 内边距的整片滚动区） */
 .main-content {
-  padding: 20px 24px 70px;
+  padding: 20px 24px 92px;
 }
 
 [data-view-section] {
@@ -7105,10 +7303,11 @@ html.theme-dark .brand-mark {
   align-items: center;
   gap: 8px;
   border: none;
-  border-radius: 8px;
+  border-radius: 6px;
   padding: 6px 10px;
   background: transparent;
   position: relative;
+  min-height: 36px;
 }
 
 .nav-item:hover {
@@ -7121,6 +7320,7 @@ html.theme-dark .brand-mark {
   background: var(--accent-soft);
   color: var(--accent-text);
   font-weight: 600;
+  box-shadow: none;
 }
 
 .nav-item.is-active::before {
@@ -7141,17 +7341,19 @@ html.theme-dark .brand-mark {
 
 /* 卡片：预览页 12px 圆角、无重阴影、16/18 内边距 */
 .panel {
-  border-radius: 12px;
+  border-radius: var(--ui-radius-md);
   box-shadow: none;
-  padding: 16px 16px;
+  padding: 16px;
+  background: var(--panel);
 }
 
 /* 按钮：实心橙、9px 圆角、去掉渐变和高光（预览页是平的） */
 .button {
   min-height: 34px;
-  border-radius: 9px;
+  border-radius: 6px;
   background: var(--panel);
   font-weight: 550;
+  font-size: var(--fs-body);
 }
 
 .button:hover {
@@ -7160,18 +7362,18 @@ html.theme-dark .brand-mark {
 
 .button-primary {
   background: var(--accent);
-  /* 橙色实底上必须用深色前景。白字在浅色 --accent（#f97316）上只有 2.8:1，
-     不达 AA；深色主题本来就用 #14100b。这里统一两套主题：深字在浅色
-     --accent 上为 6.75:1。 */
-  color: var(--warm-ink);
-  border: none;
+  /* Theme tokens pair a dark orange with white text in light mode and a
+     lighter orange with dark text in dark mode. Both retain readable contrast. */
+  color: var(--accent-contrast);
+  border: 1px solid var(--accent);
   box-shadow: none;
   font-weight: 600;
 }
 
 .button-primary:hover {
   background: var(--accent-hover);
-  box-shadow: var(--shadow);
+  box-shadow: none;
+  color: var(--accent-contrast);
 }
 
 html.theme-dark .button:not(.button-primary) {
@@ -7179,7 +7381,9 @@ html.theme-dark .button:not(.button-primary) {
 }
 
 html.theme-dark .button-primary {
-  color: var(--warm-ink);
+  color: var(--accent-contrast);
+  background: var(--accent);
+  box-shadow: none;
 }
 
 /* 徽标统一胶囊形 */
@@ -7499,7 +7703,9 @@ html.theme-dark .onboard-item.is-current .onboard-cta {
 
 @media (max-width: 1080px) {
   /* 必须用 .app-shell .shell-layout（0,2,0）压过 styles.css 里的
-     `html.theme-dark .shell-layout { grid-template-columns: 224px minmax(0,1fr) }`
+     `html.theme-dark .shell-layout { grid-template-columns: var(--shell-sidebar-width) minmax(0,1fr);
+  gap: 0;
+}`
      （0,2,0，同优先级但 pro-skin 后加载才赢）。侧栏在这个断点变成
      position:fixed 后不再占据栅格单元，如果两列模板还留着，正文会落进
      第一列（224px）——实测 821–1080px 暗色主题下 #main-content 只有 224px，
@@ -7600,13 +7806,18 @@ html.theme-dark .onboard-item.is-current .onboard-cta {
    全部通过 pro-skin 层同优先级覆盖，不回改 styles.css。 */
 
 .app-shell {
-  width: min(1760px, calc(100% - 40px));
-  padding: 12px 0 32px;
+  width: 100%;
+  padding: 0;
+  max-width: none;
+  padding-top: 0;
 }
 
 /* 面板内衬微收：19px → 16px，与参考版 12px 和 workbench 密度层一致。 */
 .panel {
   padding: 16px;
+  border-radius: var(--ui-radius-md);
+  background: var(--panel);
+  box-shadow: none;
 }
 
 /* 仿真画布：500px 写死高改为跟随视口（上限 720px），宽屏不再留白。 */
@@ -7619,8 +7830,8 @@ html.theme-dark .onboard-item.is-current .onboard-cta {
 /* 网格沟与侧栏：32px 沟 → 24px；侧栏给工作区切换器留出完整宽度；915px 以下降级
    回单列（原 820 断点提前到 915，避免右栏过窄）。 */
 .shell-layout {
-  grid-template-columns: 224px minmax(0, 1fr);
-  gap: 24px;
+  grid-template-columns: var(--shell-sidebar-width) minmax(0, 1fr);
+  gap: 0;
 }
 
 .sim-layout,
@@ -7632,8 +7843,11 @@ html.theme-dark .onboard-item.is-current .onboard-cta {
 
 @media (min-width: 1081px) and (max-width: 1280px) {
   .app-shell {
-    width: min(1480px, calc(100% - 32px));
-  }
+    width: 100%;
+  max-width: none;
+  padding: 0;
+  padding-top: 0;
+}
 }
 
 @media (max-width: 1080px) {
@@ -7641,9 +7855,11 @@ html.theme-dark .onboard-item.is-current .onboard-cta {
     /* The sidebar is a fixed drawer in this range, so the workbench owns the
        whole available rail.  A 740px cap left a third of laptop viewports
        empty and squeezed the overview cards for no interaction benefit. */
-    width: calc(100% - 24px);
+    width: 100%;
     max-width: none;
-  }
+  padding: 0;
+  padding-top: 0;
+}
   /* ④ 的桌面双列规则在源顺序上晚于 ③ 段的窄屏回退，会把它压掉——
      这里必须重申单列，窄屏才回到侧栏上收的原生布局。 */
   .shell-layout {
@@ -7651,8 +7867,11 @@ html.theme-dark .onboard-item.is-current .onboard-cta {
     gap: 16px;
   }
   .panel {
-    padding: 12px;
-  }
+    padding: 16px;
+  border-radius: var(--ui-radius-md);
+  background: var(--panel);
+  box-shadow: none;
+}
   .simulator-frame-wrap,
   .simulator-frame-wrap iframe {
     min-height: 58vh;
@@ -7675,6 +7894,9 @@ html.theme-dark .onboard-item.is-current .onboard-cta {
   gap: 8px 12px;
   padding: 8px 12px;
   overflow: hidden;
+  margin-bottom: 12px;
+  background: var(--panel);
+  box-shadow: none;
 }
 .context-strip .context-live {
   flex-wrap: nowrap;
@@ -7704,7 +7926,10 @@ body[data-active-view]:not([data-active-view='overview']) .workflow-progress-str
 @media (max-width: 1080px) {
   .context-strip {
     padding: 6px 12px;
-  }
+  margin-bottom: 12px;
+  background: var(--panel);
+  box-shadow: none;
+}
   .context-strip .context-live-item strong {
     max-width: 150px;
   }
@@ -7786,6 +8011,11 @@ body[data-active-view]:not([data-active-view='overview']) .workflow-progress-str
   grid-template-columns: minmax(0, 1fr);
   align-items: start;
   gap: 8px;
+  margin-bottom: 16px;
+  border: 1px solid var(--line);
+  background: var(--panel);
+  box-shadow: none;
+  padding: 10px;
 }
 .sidebar-project-heading {
   display: flex;
@@ -7854,9 +8084,11 @@ body[data-active-view]:not([data-active-view='overview']) .workflow-progress-str
    full-width work rail on laptop viewports. */
 @media (max-width: 1080px) {
   html.theme-dark .app-shell {
-    width: calc(100% - 24px);
+    width: 100%;
     max-width: none;
-  }
+  padding: 0;
+  padding-top: 0;
+}
 }
 
 /* 「完整看板 ↗」这类可点标题用的是 .panel-caption（mono 微标签族，17px 高），
@@ -7905,6 +8137,8 @@ a.panel-caption {
 .button {
   min-height: 32px;
   padding: 4px 12px;
+  border-radius: 6px;
+  font-size: var(--fs-body);
 }
 
 .button-small {
@@ -7950,9 +8184,10 @@ body.agent-chat-open .agent-chat-composer input {
    统一固定 44px（单行项 padding 上下 10px，双行项描述行收 11px/1.3
    行高）；分组标签 .nav-label 高度不变，仍是锚点。 */
 .nav-item {
-  min-height: 44px;
-  padding: 8px 10px;
+  min-height: 36px;
+  padding: 6px 10px;
   grid-template-columns: 20px 1fr;
+  border-radius: 6px;
 }
 
 .nav-item small {
@@ -7966,12 +8201,24 @@ body.agent-chat-open .agent-chat-composer input {
    去掉与主内容卡片的双层边框+背景包裹（4889 仍是 54px，4842 无高度，
    实测 67）。标签是导航件不是内容件，不应比一级导航 44px 更重。 ---------- */
 .submodule-tab {
-  min-height: 48px;
-  padding: 6px 12px;
+  min-height: 40px;
+  padding: 8px 0;
+  flex: 0 0 auto;
+  min-width: 0;
+  border-radius: 0;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  font-size: var(--fs-body);
 }
 
 .submodule-tabs {
-  padding: 4px;
+  padding: 0;
+  border: 0;
+  border-bottom: 1px solid var(--line);
+  border-radius: 0;
+  background: transparent;
+  gap: 16px;
+  margin: 0 0 16px;
 }
 
 /* ---------- ⑤ 字号阶梯收敛：正文 13.5px、辅助 12px、微标签 11px ----------
@@ -7989,7 +8236,9 @@ body.agent-chat-open .agent-chat-composer input {
    旧皮肤在 button-primary:hover 上残留 var(--shadow)（6246），它是
    30px 大投影，与 pro-skin "平的" 方向冲突。统一为一致的 1px 贴合感。 */
 .button-primary:hover {
-  box-shadow: 0 2px 8px rgba(240, 90, 26, 0.18);
+  box-shadow: none;
+  background: var(--accent-hover);
+  color: var(--accent-contrast);
 }
 
 /* ---------- ⑦ 输入控件统一 32px（与 .button 对齐，消除表单行高低差） ---------- */
@@ -8102,10 +8351,11 @@ body.agent-chat-open .agent-chat-composer .button {
 }
 
 .nav-item {
-  min-height: 44px;
+  min-height: 36px;
   max-height: 56px;
   padding: 6px 10px;
   align-content: center;
+  border-radius: 6px;
 }
 
 .nav-item:has(small) {
@@ -8114,7 +8364,7 @@ body.agent-chat-open .agent-chat-composer .button {
 
 .nav-item small {
   font-size:var(--fs-meta);
-  line-height: 1.35;
+  line-height: 1.3;
   margin-top: 2px;
 }
 
@@ -8192,6 +8442,8 @@ body.agent-chat-open .agent-chat-composer .button-primary {
    完全没必要，全部压到 1.4（12→16.8、13→18.2）。 */
 .button {
   line-height: 1.4;
+  border-radius: 6px;
+  font-size: var(--fs-body);
 }
 
 .agent-new-session,
@@ -8380,18 +8632,17 @@ body.agent-chat-open .agent-chat-composer {
 ========================================================================== */
 
 body {
-  background:
-    radial-gradient(ellipse 58% 38% at 12% 0%, color-mix(in srgb, var(--accent) 7%, transparent), transparent 68%),
-    radial-gradient(ellipse 48% 34% at 90% 5%, color-mix(in srgb, var(--blue) 5%, transparent), transparent 72%),
-    var(--bg);
+  background: var(--bg);
 }
 
 .topbar {
-  min-height: 64px;
+  min-height: var(--shell-topbar-height);
   padding-inline: 24px;
   border-bottom-color: var(--ui-border-soft);
-  background: color-mix(in srgb, var(--bg) 90%, transparent);
-  backdrop-filter: blur(18px);
+  background: var(--panel);
+  backdrop-filter: none;
+  box-shadow: none;
+  padding-bottom: 0;
 }
 
 .brand {
@@ -8401,14 +8652,16 @@ body {
 .brand-mark {
   width: 32px;
   height: 32px;
-  border-radius: 10px;
-  background: linear-gradient(145deg, var(--accent-hover), var(--accent-strong));
-  box-shadow: 0 6px 18px color-mix(in srgb, var(--accent) 22%, transparent);
+  border-radius: 6px;
+  background: var(--text);
+  box-shadow: none;
+  color: var(--panel);
 }
 
 .brand strong {
-  font-size: 14px;
-  letter-spacing: -0.025em;
+  font-size: var(--fs-body);
+  letter-spacing: 0;
+  font-weight: 600;
 }
 
 .topbar-context {
@@ -8417,30 +8670,32 @@ body {
 }
 
 .shell-layout {
-  grid-template-columns: 248px minmax(0, 1fr);
+  grid-template-columns: var(--shell-sidebar-width) minmax(0, 1fr);
+  gap: 0;
 }
 
 .sidebar {
-  padding: 24px 16px 32px;
+  padding: 16px 10px 24px;
   border-right-color: var(--ui-border-soft);
-  background: color-mix(in srgb, var(--bg) 92%, var(--panel));
+  background: var(--panel);
 }
 
 .sidebar-project {
-  margin-bottom: 32px;
-  padding: 12px;
+  margin-bottom: 16px;
+  padding: 10px;
   border-color: var(--ui-border-soft);
   border-radius: var(--ui-radius-md);
-  background: linear-gradient(145deg, color-mix(in srgb, var(--panel) 94%, var(--accent-soft)), var(--panel));
-  box-shadow: 0 12px 30px color-mix(in srgb, var(--text) 5%, transparent);
+  background: var(--panel);
+  box-shadow: none;
+  border: 1px solid var(--line);
 }
 
 .sidebar-project-icon {
   width: 32px;
   height: 32px;
   border-radius: 10px;
-  color: var(--accent-text);
-  background: var(--accent-soft);
+  color: var(--muted-strong);
+  background: var(--panel-soft);
 }
 
 .nav-label {
@@ -8455,24 +8710,24 @@ body {
 }
 
 .nav-item {
-  min-height: 44px;
-  padding: 10px 12px;
-  border-radius: 11px;
+  min-height: 36px;
+  padding: 6px 10px;
+  border-radius: 6px;
   color: var(--muted-strong);
 }
 
 html body .nav-item:hover {
-  background: color-mix(in srgb, var(--panel) 80%, var(--accent-soft));
+  background: var(--panel-soft);
 }
 
 .nav-item.is-active {
   border-color: color-mix(in srgb, var(--accent) 24%, transparent);
   background: color-mix(in srgb, var(--accent) 10%, var(--panel));
-  box-shadow: inset 3px 0 0 var(--accent), 0 5px 14px color-mix(in srgb, var(--accent) 8%, transparent);
+  box-shadow: none;
 }
 
 .sidebar-divider-compact {
-  margin: 24px 12px 24px;
+  margin: 16px 10px;
 }
 
 .sidebar-bottom {
@@ -8483,17 +8738,17 @@ html body .nav-item:hover {
 
 .main-content {
   max-width: 1240px;
-  padding: 32px clamp(32px, 4vw, 64px) 88px;
+  padding: 20px 24px 92px;
 }
 
 .context-strip {
   position: relative;
   overflow: hidden;
-  margin-bottom: 32px;
+  margin-bottom: 12px;
   border-radius: var(--ui-radius-md);
   border-color: var(--ui-border-soft);
-  background: color-mix(in srgb, var(--panel) 94%, var(--accent-soft));
-  box-shadow: 0 14px 34px color-mix(in srgb, var(--text) 5%, transparent);
+  background: var(--panel);
+  box-shadow: none;
 }
 
 .context-strip::before {
@@ -8502,6 +8757,7 @@ html body .nav-item:hover {
   width: 3px;
   content: '';
   background: linear-gradient(180deg, var(--accent), color-mix(in srgb, var(--accent) 22%, transparent));
+  display: none;
 }
 
 .context-strip .context-live-item {
@@ -8523,6 +8779,8 @@ body .context-strip .context-live-item span {
 
 .context-health {
   padding-inline: 16px;
+  min-height: 28px;
+  padding: 0 8px;
 }
 
 body .workflow-progress-strip {
@@ -8585,7 +8843,7 @@ body .workflow-progress-steps li.is-current button {
 }
 
 .section-heading-lean {
-  margin-bottom: 24px;
+  margin-bottom: 16px;
   padding-bottom: 0;
   border-bottom: 0;
 }
@@ -8619,12 +8877,13 @@ body .section-heading-lean h2,
 }
 
 body .depth-led [data-view-section='overview'] .overview-page-title h2 {
-  font-size: clamp(30px, 3vw, 40px);
-  line-height: 1.12;
+  font-size: var(--fs-start-heading);
+  line-height: 1.35;
   white-space: normal;
   overflow: visible;
   text-overflow: clip;
   text-wrap: balance;
+  font-weight: 600;
 }
 
 [data-view-section='overview'] .overview-page-title p {
@@ -8843,22 +9102,26 @@ body .deploy-device-select,
 body .replay-player {
   border-radius: var(--ui-radius-md);
   border-color: var(--ui-border-soft);
-  background: color-mix(in srgb, var(--panel) 96%, var(--accent-soft));
-  box-shadow: 0 12px 28px color-mix(in srgb, var(--text) 4%, transparent);
+  background: var(--panel);
+  box-shadow: none;
 }
 
 .panel {
-  padding: 24px;
+  padding: 16px;
+  border-radius: var(--ui-radius-md);
+  background: var(--panel);
+  box-shadow: none;
 }
 
 body .panel-heading {
   align-items: center;
-  margin-bottom: 20px;
+  margin-bottom: 12px;
 }
 
 .panel-heading h2 {
-  font-size: 18px;
-  font-weight: 680;
+  font-size: var(--fs-panel-heading);
+  font-weight: 600;
+  margin-top: 0;
 }
 
 body .panel-heading > :last-child:is(button, a.button, .button) {
@@ -8881,28 +9144,38 @@ body .panel-heading > :last-child:is(button, a.button, .button) {
 @media (max-width: 1080px) {
   .topbar {
     padding-inline: 16px;
-  }
+  min-height: var(--shell-topbar-height);
+  background: var(--panel);
+  box-shadow: none;
+  backdrop-filter: none;
+  padding-bottom: 0;
+}
 
   .main-content {
     padding-inline: 32px;
   }
 
   .shell-layout {
-    grid-template-columns: 220px minmax(0, 1fr);
-  }
+    grid-template-columns: var(--shell-sidebar-width) minmax(0, 1fr);
+  gap: 0;
+}
 }
 
 @media (max-width: 720px) {
   .topbar {
-    min-height: 58px;
-  }
+    min-height: var(--shell-topbar-height);
+  background: var(--panel);
+  box-shadow: none;
+  backdrop-filter: none;
+  padding-bottom: 0;
+}
 
   .sidebar {
-    padding: 16px 12px 20px;
+    padding: 16px 10px 24px;
   }
 
   .main-content {
-    padding: 24px 24px 64px;
+    padding: 20px 24px 92px;
   }
 
   html body [data-view-section='overview'] {
@@ -8926,10 +9199,15 @@ body .panel-heading > :last-child:is(button, a.button, .button) {
 @media (max-width: 560px) {
   .topbar {
     padding-inline: 12px;
-  }
+  min-height: var(--shell-topbar-height);
+  background: var(--panel);
+  box-shadow: none;
+  backdrop-filter: none;
+  padding-bottom: 0;
+}
 
   .main-content {
-    padding: 20px 16px 48px;
+    padding: 20px 24px 92px;
   }
 
   html body .workflow-progress-strip {
@@ -9245,7 +9523,7 @@ html body .toast-region {
   .app-shell .main-content {
     min-width: 0;
     width: 100%;
-    padding-inline: clamp(32px, 3.2vw, 64px);
+    padding-inline: 24px;
   }
 
   body .app-shell .main-content .view-section {
@@ -9334,14 +9612,17 @@ body .app-shell .workspace-summary-card strong {
    保留原来的断点和抽屉布局。 */
 @media (min-width: 1281px) {
   .app-shell {
-    width: min(100%, 2048px);
-  }
+    width: 100%;
+  max-width: none;
+  padding: 0;
+  padding-top: 0;
+}
 
   .app-shell .main-content {
     width: 100%;
     max-width: none;
     margin-inline: 0;
-    padding-inline: clamp(32px, 3vw, 64px);
+    padding-inline: 24px;
   }
 
   .app-shell .main-content .view-section {
@@ -9429,21 +9710,27 @@ body [data-view-section='overview'] .next-card-main .button {
 
 /* A quieter shell leaves the central visualization in charge. */
 .topbar {
-  box-shadow: 0 1px 0 color-mix(in srgb, var(--line-strong) 55%, transparent);
+  box-shadow: none;
+  min-height: var(--shell-topbar-height);
+  background: var(--panel);
+  backdrop-filter: none;
+  padding-bottom: 0;
 }
 .sidebar {
-  background: color-mix(in srgb, var(--bg) 94%, var(--panel));
+  background: var(--panel);
 }
 .nav-item {
-  min-height: 42px;
+  min-height: 36px;
+  padding: 6px 10px;
+  border-radius: 6px;
 }
 .nav-item strong { letter-spacing: -0.01em; }
 
 /* Give each view one clear title and let the content breathe below it. */
 body .section-heading-lean {
-  min-height: 48px;
+  min-height: 36px;
   align-items: end;
-  margin-bottom: 20px;
+  margin-bottom: 16px;
 }
 body .section-heading-lean h2,
 body .section-heading h2 {
@@ -9479,9 +9766,9 @@ body .deploy-preflight-panel {
 }
 body .simulator-frame-wrap {
   min-height: clamp(430px, 54vh, 640px);
-  border-radius: 14px;
+  border-radius: 6px;
   background: var(--frame-navy);
-  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--line-strong) 50%, transparent), 0 18px 36px color-mix(in srgb, var(--text) 8%, transparent);
+  box-shadow: none;
 }
 body .simulator-frame-wrap iframe {
   height: clamp(430px, 54vh, 640px);
@@ -9656,8 +9943,9 @@ body .telemetry-summary {
     align-self: center;
     min-width: 0;
     border-left: 1px solid var(--ui-border-soft);
-    padding: 6px 10px;
-  }
+    padding: 0 8px;
+  min-height: 28px;
+}
 }
 
 /* At drawer and laptop widths the fixed Agent launcher otherwise sits on top
@@ -9691,7 +9979,11 @@ body .telemetry-summary {
    the same state, so the top bar can stay intentionally minimal. */
 @media (max-width: 1080px) {
   .topbar-context { display: none; }
-  .context-strip { overflow: visible; }
+  .context-strip { overflow: visible;
+  margin-bottom: 12px;
+  background: var(--panel);
+  box-shadow: none;
+}
   .context-strip .context-live {
     display: grid;
     grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -9889,31 +10181,29 @@ body .product-clarity-shell .agent-chat-role {
 ============================================================================ */
 
 body .product-clarity-shell .main-content {
-  background:
-    radial-gradient(ellipse 72% 28% at 48% 0%, color-mix(in srgb, var(--accent) 5%, transparent), transparent 72%),
-    linear-gradient(180deg, color-mix(in srgb, var(--bg) 88%, var(--panel)), var(--bg) 560px);
+  background: var(--bg);
 }
 
 body .product-clarity-shell .sidebar {
-  background: color-mix(in srgb, var(--bg) 90%, var(--panel));
+  background: var(--panel);
 }
 
 body .product-clarity-shell .sidebar-project {
-  border-color: transparent;
-  background: linear-gradient(145deg, color-mix(in srgb, var(--accent) 12%, var(--panel)), var(--panel));
-  box-shadow: 0 12px 26px color-mix(in srgb, var(--text) 7%, transparent);
+  border-color: var(--line);
+  background: var(--panel);
+  box-shadow: none;
 }
 
 body .product-clarity-shell .nav-item.is-active {
-  background: color-mix(in srgb, var(--accent) 16%, var(--panel));
-  box-shadow: inset 4px 0 0 var(--accent), 0 4px 12px color-mix(in srgb, var(--accent) 10%, transparent);
+  background: var(--accent-soft);
+  box-shadow: none;
 }
 
 body .product-clarity-shell .context-strip {
-  border: 0;
-  border-left: 4px solid var(--accent);
-  background: color-mix(in srgb, var(--panel) 82%, var(--bg-soft));
-  box-shadow: 0 14px 32px color-mix(in srgb, var(--text) 7%, transparent);
+  border: 1px solid var(--line);
+  border-left: 1px solid var(--line);
+  background: var(--panel);
+  box-shadow: none;
 }
 
 body .product-clarity-shell .context-strip .context-live-item {
@@ -9921,10 +10211,10 @@ body .product-clarity-shell .context-strip .context-live-item {
 }
 
 body .product-clarity-shell .workspace-status-banner {
-  border: 0;
-  border-left: 4px solid var(--accent);
-  background: color-mix(in srgb, var(--accent-soft) 72%, var(--panel));
-  box-shadow: 0 10px 24px color-mix(in srgb, var(--text) 5%, transparent);
+  border: 1px solid var(--line);
+  border-left: 1px solid var(--line);
+  background: var(--panel-soft);
+  box-shadow: none;
 }
 
 body .product-clarity-shell .workspace-status-banner.is-error {
@@ -9933,9 +10223,9 @@ body .product-clarity-shell .workspace-status-banner.is-error {
 }
 
 body .product-clarity-shell [data-view-section='simulate'] .simulator-panel {
-  border-color: transparent;
+  border-color: var(--line);
   background: var(--panel);
-  box-shadow: 0 20px 46px color-mix(in srgb, var(--text) 11%, transparent);
+  box-shadow: none;
 }
 
 body .product-clarity-shell [data-view-section='simulate'] .simulator-panel .panel-heading {
@@ -9945,8 +10235,8 @@ body .product-clarity-shell [data-view-section='simulate'] .simulator-panel .pan
 
 body .product-clarity-shell [data-view-section='simulate'] .simulator-frame-wrap {
   border: 0;
-  border-radius: 16px;
-  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--line-strong) 48%, transparent), 0 14px 28px rgba(0, 0, 0, 0.22);
+  border-radius: 6px;
+  box-shadow: none;
 }
 
 body .product-clarity-shell [data-view-section='simulate'] .simulator-footer {
@@ -9984,18 +10274,12 @@ body .product-clarity-shell [data-view-section='simulate'] .sim-action-library {
    only change hierarchy, grouping and responsive behavior; existing data and
    interaction hooks stay untouched. */
 
-/* A blocked simulator still deserves a convincing workspace surface. Keep the
-   canvas dark and technical so the empty state reads as “adapter unavailable”
-   instead of a blank white iframe. */
+/* Missing adapters use the same neutral surface as other empty states. */
 body .simulator-frame-wrap:has(.simulator-product-gate:not([hidden])) {
-  border-color: color-mix(in srgb, var(--line-strong) 72%, var(--accent));
-  background-color: var(--frame-navy);
-  background-image:
-    linear-gradient(rgba(127, 151, 174, .07) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(127, 151, 174, .07) 1px, transparent 1px),
-    radial-gradient(circle at 72% 28%, rgba(255, 145, 65, .15), transparent 32%),
-    radial-gradient(circle at 22% 76%, rgba(91, 144, 190, .14), transparent 34%);
-  background-size: 32px 32px, 32px 32px, auto, auto;
+  border-color: var(--line);
+  background-color: var(--panel);
+  background-image: none;
+  background-size: auto;
 }
 body .simulator-frame-wrap:has(.simulator-product-gate:not([hidden]))::after {
   position: absolute;
@@ -10006,30 +10290,31 @@ body .simulator-frame-wrap:has(.simulator-product-gate:not([hidden]))::after {
   pointer-events: none;
   transform: perspective(560px) rotateX(58deg) rotateZ(-4deg);
   transform-origin: center;
+  display: none;
 }
 body .simulator-product-gate {
   z-index: 1;
   align-content: center;
   justify-items: start;
   padding: clamp(24px, 6vw, 64px);
-  background: linear-gradient(90deg, rgba(8, 15, 23, .96), rgba(8, 15, 23, .72) 62%, rgba(8, 15, 23, .28));
-  color: var(--frost);
+  background: var(--panel);
+  color: var(--text);
 }
 body .simulator-product-gate > * { position: relative; z-index: 1; }
 body .simulator-product-gate .gate-icon {
-  border-color: rgba(255, 145, 65, .58);
-  background: rgba(255, 145, 65, .12);
-  color: var(--accent-pale);
+  border-color: var(--line);
+  background: var(--panel-soft);
+  color: var(--muted-strong);
 }
-body .simulator-product-gate strong { max-width: 520px; color: var(--frost-bright); }
+body .simulator-product-gate strong { max-width: 520px; color: var(--text); }
 body .simulator-product-gate p,
-body .simulator-product-gate li { color: var(--mist-text); }
-body .simulator-product-gate li strong { color: var(--frost); }
+body .simulator-product-gate li { color: var(--muted-strong); }
+body .simulator-product-gate li strong { color: var(--text); }
 body .simulator-gate-steps {
   margin-top: 8px;
   margin-bottom: 12px;
-  padding-left: 24px;
-  border-left: 1px solid rgba(255, 145, 65, .3);
+  padding-left: 20px;
+  border-left: 0;
 }
 body .simulator-gate-actions { justify-content: flex-start; }
 body .simulator-panel:has(.simulator-product-gate:not([hidden])) .simulator-footer {
@@ -10052,9 +10337,9 @@ body #train-module-run-model .model-actions {
   border-top: 1px solid var(--ui-border-soft);
 }
 body #train-module-run-model .run-progress-card {
-  border-color: color-mix(in srgb, var(--accent) 36%, var(--ui-border-soft));
-  background: linear-gradient(145deg, color-mix(in srgb, var(--accent) 9%, var(--panel)), var(--panel-soft));
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, .04);
+  border-color: var(--line);
+  background: var(--panel-soft);
+  box-shadow: none;
 }
 body #train-module-run-model .run-progress-track {
   height: 8px;
@@ -10063,7 +10348,7 @@ body #train-module-run-model .run-progress-track {
 }
 body #train-module-run-model .run-progress-track i {
   border-radius: inherit;
-  background: linear-gradient(90deg, var(--accent), var(--peach-bright));
+  background: var(--accent);
 }
 body #train-module-run-robogo .backend-choice {
   display: grid;
@@ -10244,10 +10529,10 @@ body .train-onboarding-step small {
 body .workflow-nav-hierarchical summary.nav-item-parent {
   display: grid;
   grid-template-columns: 28px minmax(0, 1fr) 16px;
-  align-items: start;
+  align-items: center;
   gap: 8px;
-  min-height: 52px;
-  padding: 8px 10px;
+  min-height: 36px;
+  padding: 6px 10px;
   appearance: none;
   -webkit-appearance: none;
   list-style: none;
@@ -10261,7 +10546,7 @@ body .workflow-nav-hierarchical summary.nav-item-parent {
 body .workflow-nav-hierarchical {
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 4px;
 }
 
 body .workflow-nav-hierarchical .sidebar-nav-group {
@@ -10272,15 +10557,15 @@ body .workflow-nav-hierarchical .sidebar-nav-group {
 body .workflow-nav-hierarchical summary.nav-item-parent .nav-index {
   display: grid;
   place-items: center;
-  width: 24px;
-  height: 24px;
-  margin-top: 2px;
-  border: 1px solid var(--line-strong);
+  width: 20px;
+  height: 20px;
+  margin-top: 0;
+  border: 0;
   border-radius: 7px;
   color: var(--muted-strong);
-  background: var(--panel-soft);
+  background: transparent;
   font-size:var(--fs-mono-micro);
-  font-weight: 700;
+  font-weight: 500;
 }
 
 body .workflow-nav-hierarchical summary.nav-item-parent > span:nth-child(2) {
@@ -10303,7 +10588,7 @@ body .workflow-nav-hierarchical summary.nav-item-parent small {
 }
 
 body .workflow-nav-hierarchical summary.nav-item-parent > i {
-  margin-top: 4px;
+  margin-top: 0;
   color: var(--muted);
   font-size:var(--fs-body);
   font-style: normal;
@@ -10343,8 +10628,9 @@ body .workflow-nav-hierarchical .nav-subitems {
   grid-template-columns: minmax(0, 1fr);
   gap: 4px;
   margin: 0 0 2px 20px;
-  padding: 8px 0 4px 16px;
+  padding: 4px 0 4px 8px;
   border-left: 1px solid color-mix(in srgb, var(--accent) 28%, var(--line));
+  border-left-color: var(--line);
 }
 
 body .workflow-nav-hierarchical .nav-subitems::before {
@@ -10355,6 +10641,7 @@ body .workflow-nav-hierarchical .nav-subitems::before {
   bottom: 0;
   width: 1px;
   background: linear-gradient(180deg, transparent, var(--accent-ring) 18%, var(--accent-ring) 82%, transparent);
+  display: none;
 }
 
 body .workflow-nav-hierarchical .nav-subitem {
@@ -10394,11 +10681,11 @@ body .workflow-nav-hierarchical .nav-subitem:hover,
 body .workflow-nav-hierarchical .nav-subitem:focus-visible,
 body .workflow-nav-hierarchical .nav-subitem.is-active {
   border-color: color-mix(in srgb, var(--accent) 28%, transparent);
-  background: linear-gradient(90deg, var(--accent-soft), color-mix(in srgb, var(--accent-soft) 45%, transparent));
+  background: var(--accent-soft);
   color: var(--accent-text);
-  box-shadow: 0 4px 12px color-mix(in srgb, var(--accent) 10%, transparent);
+  box-shadow: none;
   outline: none;
-  transform: translateX(2px);
+  transform: none;
 }
 
 body .workflow-nav-hierarchical .nav-subitem.is-active::before {
@@ -10410,10 +10697,7 @@ body .workflow-nav-hierarchical .nav-subitem.is-active::before {
 /* Child modules are real focused screens inside their parent view. A click
    changes the flow state, and the page keeps only the tools needed for that
    task visible instead of presenting the same long canvas every time. */
-body[data-flow-child='prepare'] [data-view-section='train'] > .train-onboarding,
-body[data-flow-child='prepare'] [data-view-section='train'] > .train-layout,
-body[data-flow-child='configure'] [data-view-section='train'] > .train-onboarding,
-body[data-flow-child='submit'] [data-view-section='train'] > .train-onboarding {
+body[data-flow-child='prepare'] [data-view-section='train'] > .train-layout {
   display: none;
 }
 
@@ -10514,8 +10798,8 @@ body [data-view-section='deploy'] .promotion-stage {
 }
 
 /* ======================== depth-led final surface ========================
-   Final override for the live workbench: use surface contrast and elevation
-   to establish a clear focal point. The dedicated shell class keeps this pass
+   The live workbench uses flat neutral surfaces and compact spacing
+   so the task canvas remains the focal point. The dedicated shell class keeps this pass
    isolated from the legacy component vocabulary and makes the hierarchy easy
    to tune without growing cross-layer selector debt. */
 
@@ -10524,26 +10808,24 @@ body .depth-led {
 }
 
 body .depth-led .topbar {
-  background: color-mix(in srgb, var(--panel) 88%, transparent);
-  box-shadow: 0 1px 0 var(--line-strong), 0 10px 28px color-mix(in srgb, var(--text) 4%, transparent);
+  background: var(--panel);
+  box-shadow: none;
 }
 
 body .depth-led .sidebar {
-  background: color-mix(in srgb, var(--bg-soft) 86%, var(--panel));
-  box-shadow: inset -1px 0 0 var(--line), 8px 0 24px color-mix(in srgb, var(--text) 3%, transparent);
+  background: var(--panel);
+  box-shadow: none;
 }
 
 body .depth-led .main-content {
-  background:
-    radial-gradient(ellipse 76% 30% at 50% 0%, color-mix(in srgb, var(--accent) 8%, transparent), transparent 72%),
-    linear-gradient(180deg, color-mix(in srgb, var(--bg-soft) 78%, var(--panel)), var(--bg) 620px);
+  background: var(--bg);
 }
 
 body .depth-led .context-strip {
-  border: 0;
-  border-left: 4px solid var(--accent);
-  background: color-mix(in srgb, var(--panel) 78%, var(--bg-soft));
-  box-shadow: 0 16px 34px color-mix(in srgb, var(--text) 9%, transparent);
+  border: 1px solid var(--line);
+  border-left: 1px solid var(--line);
+  background: var(--panel);
+  box-shadow: none;
 }
 
 body .depth-led .context-strip .context-live-item {
@@ -10551,10 +10833,10 @@ body .depth-led .context-strip .context-live-item {
 }
 
 body .depth-led .workspace-status-banner {
-  border: 0;
+  border: 1px solid var(--line);
   border-left: 4px solid var(--accent);
-  background: color-mix(in srgb, var(--accent-soft) 72%, var(--panel));
-  box-shadow: 0 12px 26px color-mix(in srgb, var(--text) 7%, transparent);
+  background: var(--panel-soft);
+  box-shadow: none;
 }
 
 body .depth-led .workspace-status-banner.is-error {
@@ -10563,38 +10845,41 @@ body .depth-led .workspace-status-banner.is-error {
 }
 
 body .depth-led [data-view-section='simulate'] .simulator-panel {
-  border: 0;
+  border: 1px solid var(--line);
   background: var(--panel);
-  box-shadow: 0 24px 54px color-mix(in srgb, var(--text) 14%, transparent);
+  box-shadow: none;
 }
 
 body .depth-led [data-view-section='simulate'] .simulator-panel .panel-heading {
-  padding-bottom: 16px;
+  padding-bottom: 10px;
   border-bottom: 1px solid var(--ui-border-soft);
+  margin-bottom: 8px;
 }
 
 body .depth-led [data-view-section='simulate'] .simulator-frame-wrap {
-  border: 0;
-  border-radius: 18px;
-  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--line-strong) 52%, transparent), 0 18px 34px rgba(0, 0, 0, 0.24);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  box-shadow: none;
 }
 
 body .depth-led [data-view-section='simulate'] .simulator-footer {
-  padding: 16px 4px 0;
+  padding: 8px 0 0;
+  margin-top: 0;
 }
 
 body .depth-led [data-view-section='simulate'] .guide-panel {
-  border: 0;
-  background: color-mix(in srgb, var(--panel-soft) 92%, var(--bg));
-  box-shadow: inset 0 0 0 1px var(--ui-border-soft);
+  border: 1px solid var(--line);
+  background: var(--panel);
+  box-shadow: none;
 }
 
 body .depth-led [data-view-section='simulate'] .sim-context-panel {
-  margin-bottom: 20px;
+  margin-bottom: 12px;
   border: 0;
-  border-left: 3px solid var(--accent);
-  background: var(--panel);
-  box-shadow: 0 10px 24px color-mix(in srgb, var(--text) 7%, transparent);
+  border-left: 0;
+  background: transparent;
+  box-shadow: none;
+  padding: 8px 0;
 }
 
 body .depth-led [data-view-section='simulate'] .sim-action-item {
@@ -10608,30 +10893,30 @@ body .depth-led [data-view-section='simulate'] .sim-action-item:hover {
 
 @media (max-width: 720px) {
   body .depth-led [data-view-section='simulate'] > .sim-layout > .guide-panel {
-    box-shadow: inset 0 0 0 1px var(--ui-border-soft), 0 12px 28px color-mix(in srgb, var(--text) 7%, transparent);
+    box-shadow: none;
   }
 }
 
 /* depth-led component hierarchy: the shell, hero surface and support rail
-   need three different weights. Keep the hairline inside the surface so
-   cards read as elevated objects rather than a grid of outlined boxes. */
+   share neutral surfaces. Hairlines group content without decorative
+   elevation, and the primary action carries the accent color. */
 body .depth-led .panel {
-  border: 0;
+  border: 1px solid var(--line);
   border-radius: var(--ui-radius-lg);
-  background: linear-gradient(145deg, color-mix(in srgb, var(--panel) 94%, var(--accent-soft)), var(--panel));
-  box-shadow: 0 18px 38px color-mix(in srgb, var(--text) 9%, transparent), inset 0 0 0 1px var(--ui-border-soft);
+  background: var(--panel);
+  box-shadow: none;
 }
 
 body .depth-led .panel-heading {
   border-bottom: 1px solid var(--ui-border-soft);
-  padding-bottom: 16px;
+  padding-bottom: 12px;
 }
 
 body .depth-led .status-card {
-  border: 0;
+  border: 1px solid var(--line);
   border-radius: var(--ui-radius-md);
-  background: color-mix(in srgb, var(--panel) 86%, var(--bg-soft));
-  box-shadow: inset 0 0 0 1px var(--ui-border-soft), 0 10px 24px color-mix(in srgb, var(--text) 6%, transparent);
+  background: var(--panel);
+  box-shadow: none;
 }
 
 body .depth-led .context-strip,
@@ -10641,23 +10926,24 @@ body .depth-led .workspace-notices {
 }
 
 body .depth-led .submodule-tabs {
-  border-radius: var(--ui-radius-md);
-  background: color-mix(in srgb, var(--panel) 84%, var(--bg-soft));
-  box-shadow: 0 10px 24px color-mix(in srgb, var(--text) 5%, transparent), inset 0 0 0 1px var(--ui-border-soft);
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
 }
 
 body .depth-led [data-view-section='overview'] .project-workspace,
 body .depth-led [data-view-section='overview'] .overview-environment,
 body .depth-led [data-view-section='train'] .train-onboarding {
-  border: 0;
-  box-shadow: 0 18px 38px color-mix(in srgb, var(--text) 8%, transparent), inset 0 0 0 1px var(--ui-border-soft);
+  border: 1px solid var(--line);
+  background: var(--panel);
+  box-shadow: none;
 }
 
 body .depth-led [data-view-section='overview'] .workspace-summary-grid {
   border-color: transparent;
   border-radius: var(--ui-radius-md);
   background: color-mix(in srgb, var(--panel-soft) 86%, var(--bg));
-  box-shadow: inset 0 0 0 1px var(--ui-border-soft);
+  box-shadow: none;
 }
 
 body .depth-led [data-view-section='overview'] .workspace-summary-card {
@@ -10668,21 +10954,23 @@ body .depth-led [data-view-section='train'] .train-onboarding-step,
 body .depth-led [data-view-section='deploy'] .release-step {
   border-color: transparent;
   background: color-mix(in srgb, var(--panel) 72%, var(--bg-soft));
-  box-shadow: inset 0 0 0 1px var(--ui-border-soft);
+  box-shadow: none;
 }
 
 body .depth-led [data-view-section='simulate'] > .sim-layout > .guide-panel {
-  box-shadow: inset 0 0 0 1px var(--ui-border-soft), 0 18px 38px color-mix(in srgb, var(--text) 8%, transparent);
+  box-shadow: none;
 }
 
 body .depth-led [data-view-section='simulate'] > .sim-layout > .guide-panel .sim-context-panel {
-  box-shadow: 0 12px 26px color-mix(in srgb, var(--text) 8%, transparent), inset 0 0 0 1px var(--ui-border-soft);
+  box-shadow: none;
 }
 
 @media (max-width: 720px) {
   body .depth-led .panel {
     border-radius: var(--ui-radius-md);
-    box-shadow: 0 12px 28px color-mix(in srgb, var(--text) 7%, transparent), inset 0 0 0 1px var(--ui-border-soft);
+    box-shadow: none;
+    border: 1px solid var(--line);
+    background: var(--panel);
   }
 }
 
@@ -10710,8 +10998,8 @@ body .depth-led [data-view-section='simulate'] > .sim-layout > .guide-panel .sim
 /* compact-workbench pass: show the decision surface first and keep evidence
    drawers closed until the operator asks for them. */
 body .depth-led > .shell-layout > .main-content > .context-strip {
-  min-height: 0;
-  margin-bottom: 16px;
+  min-height: 40px;
+  margin-bottom: 12px;
   padding: 4px 10px;
 }
 
@@ -10727,6 +11015,8 @@ body .depth-led > .shell-layout > .main-content > .context-strip .context-live-i
 
 body .depth-led > .shell-layout > .main-content > .context-strip .context-health {
   padding-inline: 10px;
+  min-height: 28px;
+  padding: 0 8px;
 }
 
 body .depth-led [data-view-section='simulate'] > .sim-layout > .guide-panel > .sim-action-library {
@@ -10837,6 +11127,9 @@ body .depth-led [data-view-section='deploy'] > .deploy-layout > .deploy-flow-pan
    project and stage. Everything else is an on-demand environment drawer. */
 body .depth-led > .shell-layout > .main-content > .context-strip {
   align-items: center;
+  margin-bottom: 12px;
+  padding: 4px 10px;
+  min-height: 40px;
 }
 
 body .depth-led > .shell-layout > .main-content > .context-strip .context-live {
@@ -10851,9 +11144,9 @@ body .depth-led > .shell-layout > .main-content > .context-strip .context-live {
 body .depth-led .context-breadcrumb {
   display: inline-flex;
   align-items: baseline;
-  gap: 8px;
+  gap: 6px;
   min-width: 0;
-  padding: 8px 2px;
+  padding: 4px 2px;
   color: var(--text);
   white-space: nowrap;
 }
@@ -10861,7 +11154,7 @@ body .depth-led .context-breadcrumb {
 body .depth-led .context-breadcrumb-label {
   color: var(--muted);
   font-size: var(--fs-meta);
-  letter-spacing: .08em;
+  letter-spacing: 0;
 }
 
 body .depth-led .context-breadcrumb strong {
@@ -10869,7 +11162,7 @@ body .depth-led .context-breadcrumb strong {
   overflow: hidden;
   color: var(--text);
   font-size: var(--fs-body);
-  font-weight: 680;
+  font-weight: 500;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -10887,7 +11180,7 @@ body .depth-led .context-extra-details > summary {
   min-height: 30px;
   padding: 4px 8px;
   border: 0;
-  background: color-mix(in srgb, var(--panel-soft) 76%, transparent);
+  background: transparent;
   font-size: var(--fs-meta);
 }
 
@@ -10914,10 +11207,10 @@ body .depth-led .workspace-inspector {
 body .depth-led .workspace-inspector > summary.workspace-inspector-summary {
   display: flex;
   align-items: center;
-  gap: 12px;
-  min-height: 68px;
+  gap: 8px;
+  min-height: 44px;
   margin: 0;
-  padding: 16px 20px;
+  padding: 10px 16px;
   cursor: pointer;
   list-style: none;
 }
@@ -10939,6 +11232,7 @@ body .depth-led .workspace-inspector > summary.workspace-inspector-summary small
   font-weight: 680;
   letter-spacing: .08em;
   text-transform: uppercase;
+  display: none;
 }
 
 body .depth-led .workspace-inspector > summary.workspace-inspector-summary h2 {
@@ -11003,7 +11297,8 @@ body .depth-led #workflow-progress-strip {
 @media (max-width: 720px) {
   body .depth-led .context-breadcrumb strong {
     max-width: 36vw;
-  }
+  font-weight: 500;
+}
 
   body .depth-led .context-extra-details > summary small {
     display: none;
@@ -11016,9 +11311,10 @@ body .depth-led #workflow-progress-strip {
   }
 
   body .depth-led .workspace-inspector > summary.workspace-inspector-summary {
-    min-height: 58px;
-    padding: 12px;
-  }
+    min-height: 44px;
+    padding: 10px 16px;
+  gap: 8px;
+}
 
   body .depth-led .workspace-inspector > :not(summary) {
     margin-inline: 12px;
@@ -11059,8 +11355,8 @@ body .depth-led #workflow-progress-strip {
   padding: 8px;
   background: var(--panel);
   border: 1px solid var(--line-strong);
-  border-radius: 10px;
-  box-shadow: 0 10px 24px color-mix(in srgb, var(--text) 16%, transparent);
+  border-radius: 8px;
+  box-shadow: var(--shadow-strong);
   z-index: var(--z-sticky);
 }
 .account-menu[hidden] {
@@ -11104,13 +11400,14 @@ body .depth-led #workflow-progress-strip {
 .home-start {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(min(100%, 300px), 1fr));
-  gap: clamp(20px, 3vw, 32px);
-  padding: clamp(20px, 3vw, 32px);
+  gap: 24px;
+  padding: 24px;
   border: 1px solid var(--accent-ring);
   border-radius: var(--ui-radius-lg);
   background: var(--panel);
-  box-shadow: var(--shadow);
+  box-shadow: none;
   min-width: 0;
+  border-color: var(--line);
 }
 .home-start-content {
   display: grid;
@@ -11138,9 +11435,9 @@ body .depth-led #workflow-progress-strip {
   padding-inline: 24px;
 }
 .home-start-badge {
-  color: var(--accent-text);
+  color: var(--muted-strong);
   font-size: var(--fs-meta);
-  font-weight: 700;
+  font-weight: 500;
 }
 .home-start-note {
   max-width: 42em;
@@ -11148,10 +11445,11 @@ body .depth-led #workflow-progress-strip {
 .home-start-outcome {
   display: grid;
   align-content: center;
-  gap: 24px;
-  padding: 24px;
-  border-radius: var(--ui-radius-md);
-  background: var(--panel-soft);
+  gap: 20px;
+  padding: 16px 24px;
+  border-radius: 0;
+  background: transparent;
+  border-left: 1px solid var(--line);
 }
 .home-start-outcome div {
   display: flex;
@@ -11159,7 +11457,7 @@ body .depth-led #workflow-progress-strip {
   gap: 16px;
 }
 .home-start-outcome div > span {
-  color: var(--accent-text);
+  color: var(--muted);
   font-size: var(--fs-meta);
   font-family: var(--font-label);
 }
@@ -11181,10 +11479,10 @@ body .depth-led #workflow-progress-strip {
   margin: 0;
 }
 .sidebar-disclosure {
-  padding: 16px 12px;
+  padding: 10px;
   font-size: var(--fs-body);
   color: var(--muted-strong);
-  font-weight: 650;
+  font-weight: 500;
   cursor: pointer;
   line-height: 1.5;
 }
@@ -11193,28 +11491,35 @@ body .depth-led #workflow-progress-strip {
   outline-offset: 2px;
 }
 .sidebar-settings-body {
-  padding-top: 12px;
+  padding-top: 8px;
 }
 .sidebar-settings {
   padding: 0;
 }
 .sidebar-workbench {
-  margin-top: 12px;
+  margin-top: 8px;
 }
 @media (max-width: 720px) {
-  .home-start-outcome { display: none; }
+  .home-start-outcome { display: none;
+  padding: 16px 24px;
+  background: transparent;
+  border-left: 1px solid var(--line);
+  border-radius: 0;
+  gap: 20px;
+}
 }
 .experience-recording-review {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
-  gap: 16px;
-  margin: 16px;
-  padding: 20px;
+  gap: 12px;
+  margin: 12px 0 0;
+  padding: 12px;
   border: 1px solid var(--accent-ring);
   border-radius: var(--ui-radius-md);
-  background: var(--accent-soft);
+  background: var(--panel-soft);
+  border-color: var(--line);
 }
 .experience-recording-review p {
   margin: 6px 0 0;
@@ -11238,4 +11543,22 @@ body .depth-led #workflow-progress-strip {
 .manifest-source-fold summary:focus-visible {
   outline: 2px solid var(--accent-text);
   outline-offset: 2px;
+}
+
+/* The simulator title, runtime status and separate-window link share one
+   compact toolbar. Controls wrap naturally on narrow screens. */
+.simulator-panel-heading {
+  flex-wrap: wrap;
+  gap: 8px 12px;
+}
+.simulator-panel-heading > div {
+  min-width: 0;
+  flex: 1;
+}
+.simulator-panel-heading .side-link {
+  margin: 0;
+  padding: 0;
+  min-height: 24px;
+  color: var(--muted-strong);
+  white-space: nowrap;
 }

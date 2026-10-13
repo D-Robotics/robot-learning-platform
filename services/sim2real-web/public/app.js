@@ -1990,9 +1990,9 @@ function renderWorkspaceNotices(items) {
     if (!item || typeof item !== 'object') continue;
     const id = String(item.id || '');
     if (!id || dismissed.has(id)) continue;
-    // The version-only notice belongs to workbench metadata; keep errors and
-    // operational notices visible on the starting page.
-    if (workspaceNoticeVersion(id) === state.noticeFirstVersion && workspaceNoticeVersion(id) && document.body.dataset.activeView === 'overview') continue;
+    // A stable version is metadata. Notify only when it changes; operational
+    // notices remain visible in every view.
+    if (workspaceNoticeVersion(id) === state.noticeFirstVersion && workspaceNoticeVersion(id)) continue;
     const kind = item.kind === 'degraded' ? 'degraded' : 'info';
     const row = document.createElement('div');
     row.className = 'workspace-notice kind-' + kind;
@@ -2189,7 +2189,7 @@ const VIEW_STAGE_LABELS = {
 // view with another node, but it always selects a distinct module, filter, or
 // evidence panel so the destination is visible and bookmarkable.
 const FLOW_CHILD_CONTEXTS = {
-  simulate: { kicker: '01 · 数据与仿真', title: '仿真与录制', description: '运行当前机器人和任务的场景，录制可回放轨迹。' },
+  simulate: { kicker: '01 · 数据与仿真', title: '仿真与录制', description: '控制机器人，录制动作并查看轨迹。' },
   replays: { kicker: '01 · 数据与仿真', title: '轨迹与回放', description: '按运行筛选轨迹，并打开逐帧回放证据。', view: 'records', recordTab: 'run', focus: '#history-list' },
   prepare: { kicker: '02 · 训练与策略', title: '模型与兼容性', description: '登记模型说明，检查输入、输出和设备是否匹配。', view: 'train', trainModule: 'contract', focus: '#contract-fold' },
   configure: { kicker: '02 · 训练与策略', title: '训练配置', description: '选择算法、训练档位、GPU 资源和续训 checkpoint。', view: 'train', trainModule: 'config', focus: '#train-module-config' },
@@ -3830,13 +3830,19 @@ function renderIntegrations() {
   }
   if (simulatorGateCopy) {
     simulatorGateCopy.textContent = microduckMissing
-      ? '当前源码不内置上游静态包；请先按部署说明挂载经过审核的 release，再回到这里开始录制。'
+      ? '浏览器仿真暂不可用。请按安装指引配置示例资源，完成后刷新工作区。'
       : originbotProduct
         ? '可直接在浏览器中生成 OriginBot 轨迹；真实设备连接、数据采集和部署预检在后续步骤完成。'
         : microduckProduct
           ? '平台尚未确认示例是否可用。请刷新工作区后再试。'
       : '当前产品线不会复用 MicroDuck 的浏览器场景。先准备真实契约 manifest 或本地 headless 仿真 worker；连接真机是部署前的后续步骤。';
   }
+  // Missing or unconfirmed browser assets have one recovery path. Device
+  // delivery steps belong to the adapter gate, rather than this empty state.
+  const simulatorGateSteps = document.querySelector('.simulator-gate-steps');
+  const simulatorGateActions = document.querySelector('.simulator-gate-actions');
+  if (simulatorGateSteps) simulatorGateSteps.hidden = microduckProduct;
+  if (simulatorGateActions) simulatorGateActions.hidden = microduckProduct;
   if (simulatorGateTrain) simulatorGateTrain.hidden = microduckProduct;
   if (simulatorGateTrain && originbotProduct) {
     simulatorGateTrain.textContent = '使用默认模板开始 →';
@@ -4051,7 +4057,7 @@ function renderModel() {
   const model = selectedModel();
   const product = selectedProductProfile();
   setText('train-onboarding-model-help', `载入 ${product.displayName} 默认模板并登记`);
-  setText('train-onboarding-title', `${product.displayName} · 按 3 步完成一次强化学习训练`);
+  setText('train-onboarding-title', `${product.displayName} · 训练指南`);
   setText('contract-panel-tip', `推荐：载入 ${product.displayName} 模板 → 校验 → 登记`);
   setText('template-button', `载入 ${product.displayName} 模板`);
   const summary = $('model-summary');
@@ -7843,7 +7849,7 @@ function renderNextAction() {
   document.querySelectorAll('[data-start-intent]').forEach((button) => {
     button.setAttribute('aria-pressed', String(button.dataset.startIntent === state.startIntent));
   });
-  setText('start-goal-badge', ({ experience: '示例体验', device: '我的设备', model: '我的模型' })[state.startIntent]);
+  setText('start-goal-badge', ({ experience: '快速开始', device: '设备接入', model: '模型接入' })[state.startIntent]);
   setText('next-action-title', plan.title);
   setText('next-action-copy', plan.description);
   setText('start-goal-note', plan.note);
@@ -12049,7 +12055,7 @@ const COMMANDS = [
   { id: 'refresh', label: '刷新工作区', hint: '重新加载项目状态与设备信息', action: () => loadOverview() },
   { id: 'login', label: '登录工作区', hint: '登录以解锁训练记录与真机部署', action: () => window.open(state.publicHealth?.ssoLoginUrl || '/rdkstudio/', '_blank', 'noopener') },
   { id: 'agent', label: '呼出 Agent 助手', hint: '按当前阻塞项生成下一步计划', action: () => { if (typeof window.setAgentDrawerOpen === 'function') window.setAgentDrawerOpen(true); } },
-  { id: 'onboarding', label: '重看新手指引', hint: '按你的目标完成第一次体验', action: () => $('onboarding-help-button')?.click() },
+  { id: 'onboarding', label: '打开使用指南', hint: '按目标完成仿真、模型或设备准备', action: () => $('onboarding-help-button')?.click() },
 ];
 
 // 窄屏侧栏抽屉。

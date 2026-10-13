@@ -890,6 +890,10 @@ describe('Sim2Real workbench DOM behavior', () => {
     expect(window.document.querySelector('#simulator-gate-install')?.getAttribute('href')).toBe(
       '/sim2real/mujoco/microduck/',
     );
+    expect(window.document.querySelector<HTMLElement>('.simulator-gate-steps')?.hidden).toBe(true);
+    expect(window.document.querySelector<HTMLElement>('.simulator-gate-actions')?.hidden).toBe(
+      true,
+    );
   });
   it('requires a user model instead of treating the builtin reference as an import', async () => {
     const { window } = await boot();
@@ -1028,7 +1032,11 @@ describe('Sim2Real workbench DOM behavior', () => {
     );
     expect(doc.querySelector('.simulator-frame-wrap .simulator-fallback')).toBeNull();
     expect(doc.querySelector('#microduck-entry-link')?.closest('.simulator-frame-wrap')).toBeNull();
-    expect(doc.querySelector('#microduck-entry-link')?.textContent).toContain('画面打不开');
+    expect(doc.querySelector('#microduck-entry-link')?.textContent).toContain('独立打开');
+    expect(
+      doc.querySelector('#microduck-entry-link')?.closest('.simulator-panel-heading'),
+    ).not.toBeNull();
+    expect(doc.querySelector('#microduck-entry-link')?.getAttribute('title')).toContain('无法连接');
     expect(doc.querySelector('#simulator-live-text')?.textContent).toBe('示例可打开');
     expect(doc.querySelector('#simulator-run-status')?.textContent).toBe('示例可打开');
     const trainingLink = doc.querySelector('.guide-panel [data-view-target="train"]');
@@ -2842,7 +2850,7 @@ describe('Sim2Real workbench DOM behavior', () => {
     expect(errors).toEqual([]);
   });
 
-  it('keeps passive version metadata off the overview while degraded notices remain visible and dismissible', async () => {
+  it('keeps passive version metadata off all views while degraded notices remain visible and dismissible', async () => {
     const { window, errors } = await boot({
       notices: [
         {
@@ -2870,20 +2878,18 @@ describe('Sim2Real workbench DOM behavior', () => {
       .querySelector<HTMLButtonElement>('.sidebar [data-view-target="train"]')
       ?.click();
     const rows = [...(strip?.querySelectorAll('.workspace-notice') || [])];
-    expect(rows).toHaveLength(2);
-    expect(rows[0]?.className).toContain('kind-info');
-    expect(rows[0]?.textContent).toContain('当前平台版本 0.9.9-test');
-    expect(rows[1]?.className).toContain('kind-degraded');
-    expect(rows[1]?.textContent).toContain('storage-not-configured');
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.className).toContain('kind-degraded');
+    expect(rows[0]?.textContent).toContain('storage-not-configured');
 
     // First paint records the version; no reload CTA may appear for it.
     expect(rows[0]?.querySelector('.workspace-notice-reload')).toBeNull();
 
-    rows[1]?.querySelector<HTMLButtonElement>('.workspace-notice-dismiss')?.click();
+    rows[0]?.querySelector<HTMLButtonElement>('.workspace-notice-dismiss')?.click();
     await new Promise((resolve) => setTimeout(resolve, 10));
     const remaining = [...(strip?.querySelectorAll('.workspace-notice') || [])];
-    expect(remaining).toHaveLength(1);
-    expect(remaining[0]?.textContent).toContain('当前平台版本');
+    expect(remaining).toHaveLength(0);
+    expect(window.document.querySelector<HTMLElement>('#workspace-notices')?.hidden).toBe(true);
     window.document
       .querySelector<HTMLButtonElement>('.sidebar [data-view-target="overview"]')
       ?.click();

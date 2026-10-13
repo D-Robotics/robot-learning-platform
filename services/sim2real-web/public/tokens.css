@@ -13,28 +13,34 @@
   --blue: #2563eb;
   --orange: #d97706;
   --orange-text: #854d0e;
-  --surface-1:var(--panel);
-  --surface-2:var(--panel-raised);
+  --surface-1: var(--panel);
+  --surface-2: var(--panel-raised);
   --font-label: ui-monospace, 'SF Mono', SFMono-Regular, 'JetBrains Mono',
     'Cascadia Code', Menlo, Consolas, 'Liberation Mono', monospace;
-  /* 字阶：正文/日志/表格 13px，辅助元数据（chip、标签、kicker）12px，
+  /* 字阶：正文/日志/表格 14px，辅助元数据（chip、标签、kicker）12px，
      10.5px 仅限 mono 微标签（ui-layout-invariants 的 12px 地板唯一豁免）。
      阅读面一律引用 --fs-body，不要再写死 12px。 */
   --fs-start-heading: 24px;
-  --fs-body: 13px;
+  --fs-section-heading: 20px;
+  --fs-panel-heading: 16px;
+  --fs-body-lg: 16px;
+  --shell-sidebar-width: 216px;
+  --shell-topbar-height: 56px;
+  --accent-contrast: #ffffff;
+  --fs-body: 14px;
   --fs-meta: 12px;
   --fs-mono-micro: 10.5px;
-  --bg: #fbfbf9;
-  --bg-deep: #f6f4ee;
-  --bg-soft: #f3f1ea;
+  --bg: #f8fafc;
+  --bg-deep: #f8fafc;
+  --bg-soft: #f1f5f9;
   --panel: #ffffff;
   --panel-raised: #ffffff;
-  --panel-soft: #faf9f5;
-  --line: rgba(27, 27, 24, 0.11);
-  --line-strong: rgba(27, 27, 24, 0.22);
-  --text: #1b1b18;
-  --muted: #6f6a5f;
-  --muted-strong: #55514a;
+  --panel-soft: #f8fafc;
+  --line: #e2e8f0;
+  --line-strong: #cbd5e1;
+  --text: #111827;
+  --muted: #64748b;
+  --muted-strong: #475569;
   --orange-50: #fff7ed;
   --orange-100: #ffedd5;
   --orange-200: #fed7aa;
@@ -43,13 +49,13 @@
   --orange-500: #f97316;
   --orange-600: #ea580c;
   --orange-700: #c2410c;
-  --accent: #f97316;
-  --accent-hover: #ea8a3a;
-  --accent-strong: #ea580c;
+  --accent: #c2410c;
+  --accent-hover: #9a3412;
+  --accent-strong: #9a3412;
   --accent-text: #9a3412;
   --accent-soft: #fff7ed;
   --accent-ring: #fed7aa;
-  --accent-glow: #ffedd5;
+  --accent-glow: transparent;
   /* Cyan and violet carry different evidence tiers. Keeping both mapped to
      accent-text made every status read as the same warning color. */
   --cyan: #0f766e;
@@ -66,12 +72,12 @@
   --amber-soft: #fffbeb;
   --amber-border: #fde68a;
   --amber-text: #854d0e;
-  --shadow: 0 10px 30px rgba(27, 27, 24, 0.08);
-  --shadow-strong: 0 10px 30px rgba(27, 27, 24, 0.12);
-  --ui-radius-lg: 18px;
-  --ui-radius-md: 14px;
-  --ui-border-soft: color-mix(in srgb, var(--line) 72%, transparent);
-  --ui-surface-tint: color-mix(in srgb, var(--panel) 88%, var(--accent-soft));
+  --shadow: 0 2px 8px rgba(15, 23, 42, 0.08);
+  --shadow-strong: 0 8px 24px rgba(15, 23, 42, 0.14);
+  --ui-radius-lg: 8px;
+  --ui-radius-md: 8px;
+  --ui-border-soft: var(--line);
+  --ui-surface-tint: var(--panel-soft);
   --z-sticky: 100;
   --z-chat-backdrop: 1090;
   --z-chat-panel: 1100;
@@ -155,23 +161,23 @@
 
 html.theme-dark {
   color-scheme: dark;
+  --accent-contrast: #111827;
   --blue: #73a7ff;
   --orange: #ffc05a;
   --orange-text: #ffc05a;
-  --surface-1:#101b24;
-  --surface-2:#14232d;
-  --shadow: 0 10px 30px rgba(2, 8, 14, 0.38);
-  --bg: #0b1219;
-  --bg-deep: #0b1219;
-  --bg-soft: #0e1620;
-  --panel: #101b24;
-  --panel-raised: #101b24;
-  --panel-soft: #0d1620;
-  --line: rgba(154, 177, 201, 0.15);
-  --line-strong: rgba(154, 177, 201, 0.32);
-  --text: #edf3fa;
-  --muted: #8fa3b8;
-  --muted-strong: #a9bccd;
+  --surface-1: var(--panel);
+  --surface-2: var(--panel-raised);
+  --bg: #111827;
+  --bg-deep: #111827;
+  --bg-soft: #1e293b;
+  --panel: #172131;
+  --panel-raised: #1e293b;
+  --panel-soft: #1e293b;
+  --line: #334155;
+  --line-strong: #475569;
+  --text: #f1f5f9;
+  --muted: #a0aec0;
+  --muted-strong: #cbd5e1;
   --orange-50: rgba(249, 115, 22, 0.09);
   --orange-100: rgba(249, 115, 22, 0.14);
   --orange-200: rgba(253, 186, 116, 0.35);
@@ -180,13 +186,13 @@ html.theme-dark {
   --orange-500: #ff9d4d;
   --orange-600: #f97316;
   --orange-700: #ea580c;
-  --accent: #ff9d4d;
-  --accent-hover: #ffb061;
-  --accent-strong: #ff8f3d;
-  --accent-text: #ffb377;
-  --accent-soft: rgba(249, 115, 22, 0.11);
-  --accent-ring: rgba(253, 186, 116, 0.4);
-  --accent-glow: rgba(249, 115, 22, 0.16);
+  --accent: #fb923c;
+  --accent-hover: #fdba74;
+  --accent-strong: #fb923c;
+  --accent-text: #fdba74;
+  --accent-soft: rgba(251, 146, 60, 0.09);
+  --accent-ring: rgba(251, 146, 60, 0.32);
+  --accent-glow: transparent;
   --cyan: #67e8f9;
   --violet: #c4b5fd;
   --green: #5ec57f;
@@ -201,8 +207,8 @@ html.theme-dark {
   --amber-soft: rgba(217, 119, 6, 0.13);
   --amber-border: rgba(217, 119, 6, 0.38);
   --amber-text: #e5b567;
-  --shadow: 0 10px 30px rgba(0, 0, 0, 0.45);
-  --shadow-strong: 0 14px 36px rgba(0, 0, 0, 0.5);
+  --shadow: 0 2px 8px rgba(0, 0, 0, 0.18);
+  --shadow-strong: 0 8px 24px rgba(0, 0, 0, 0.24);
 
   /* ---- app.css 暗色作用域字面量收容区（2026-09-21 批量迁移）----------------------
      以下 token 的值与被替换的字面量逐字节相同，且保持主题无关

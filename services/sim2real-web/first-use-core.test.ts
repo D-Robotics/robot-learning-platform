@@ -29,8 +29,8 @@ describe('first-use experience', () => {
       productName: '通用 RDK 设备',
       browserAvailable: true,
     });
-    expect(plan.title).toBe('在浏览器里体验机器人');
-    expect(plan.description).toBe('用方向键操作示例机器人，录下一段动作数据，再查看记录。');
+    expect(plan.title).toBe('浏览器仿真');
+    expect(plan.description).toBe('控制示例机器人，录制动作并查看轨迹数据。');
     expect(plan.note).toBe('开始时会切换到 MicroDuck 示例。无需设备或训练服务器。');
     expect(plan.action).toEqual({ key: 'begin-experience', label: '打开示例机器人' });
     expect(plan.steps[0].done).toBe(false);
@@ -49,8 +49,8 @@ describe('first-use experience', () => {
     expect(plan.note).toContain('无需设备或训练服务器');
     expect(plan.note).toContain('记录暂存在当前页面');
     expect(plan.note).toContain('刷新前可在示例中导出');
-    expect(plan.title).toBe('在浏览器里体验机器人');
-    expect(plan.description).toBe('用方向键操作示例机器人，录下一段动作数据，再查看记录。');
+    expect(plan.title).toBe('浏览器仿真');
+    expect(plan.description).toBe('控制示例机器人，录制动作并查看轨迹数据。');
     expect(plan.steps.map((step) => step.title)).toEqual([
       '准备示例机器人',
       '录下一段动作',
