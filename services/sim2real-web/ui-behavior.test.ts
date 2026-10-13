@@ -14,6 +14,10 @@ const [html, telemetrySource, componentSource, firstUseSource, relaySource, appS
     readFile(path.join(root, 'relay-training.js'), 'utf8'),
     readFile(path.join(root, 'app.js'), 'utf8'),
   ]);
+const demoTelemetrySource = await readFile(
+  path.join(root, 'demo', 'microduck-telemetry-sample.jsonl'),
+  'utf8',
+);
 
 const openWindows: Array<InstanceType<typeof JSDOM>['window']> = [];
 
@@ -78,6 +82,10 @@ function overview(
     deployments?: unknown[];
     visualAssetBase?: unknown;
     modelBuiltin?: boolean;
+    computeResources?: unknown[];
+    localRunner?: Record<string, unknown>;
+    devices?: unknown[];
+    boardAgent?: Record<string, unknown>;
   } = {},
 ) {
   const selectedModel = model(extras.visualAssetBase, extras.modelBuiltin);
@@ -121,14 +129,14 @@ function overview(
       },
     ],
     deployments: extras.deployments || [],
-    devices: [],
-    computeResources: [],
+    devices: extras.devices || [],
+    computeResources: extras.computeResources || [],
     artifacts: extras.artifacts || [],
     evaluations: extras.evaluations || [],
     integrations: {
       simulator: {
         browser: { available: true, entryUrl: '/mujoco/microduck/' },
-        boardAgent: { available: false, reason: 'not configured' },
+        boardAgent: { available: false, reason: 'not configured', ...extras.boardAgent },
         robogo: { available: false, reason: 'not configured' },
         local: {
           available: true,
@@ -136,6 +144,7 @@ function overview(
           healthy: true,
           mock: true,
           message: 'mock protocol worker',
+          ...extras.localRunner,
         },
       },
       robogo: {
@@ -195,6 +204,10 @@ async function boot(
     artifacts?: unknown[];
     evaluations?: unknown[];
     overviewDeployments?: unknown[];
+    computeResources?: unknown[];
+    localRunner?: Record<string, unknown>;
+    devices?: unknown[];
+    boardAgent?: Record<string, unknown>;
     /** Frames the replay endpoint returns; drives the aligned camera frame tests. */
     replayFrames?: unknown[];
     /** Notices payload served by GET /sim2real/notices. */
@@ -282,6 +295,12 @@ async function boot(
       requests.push({ url, method, body });
       const intercepted = await options.transport?.(url, init, body);
       if (intercepted) return intercepted;
+      if (url.includes('microduck-telemetry-sample.jsonl')) {
+        return new Response(demoTelemetrySource, {
+          status: 200,
+          headers: { 'content-type': 'application/x-ndjson' },
+        });
+      }
       let payload: unknown;
       if (url.includes('/overview') && (options.overviewUnauthorized || options.authRequired))
         return new Response(
@@ -309,6 +328,10 @@ async function boot(
             deployments: options.overviewDeployments,
             visualAssetBase: options.visualAssetBase,
             modelBuiltin: options.modelBuiltin,
+            computeResources: options.computeResources,
+            localRunner: options.localRunner,
+            devices: options.devices,
+            boardAgent: options.boardAgent,
           }),
           identity: options.accountId
             ? { accountId: options.accountId, displayName: options.accountId }
@@ -1674,6 +1697,333 @@ describe('Sim2Real workbench DOM behavior', () => {
     expect(window.document.activeElement).toBe(trigger);
   });
 
+  it.each([
+    ['detect-button', false, false],
+    ['plan-button', true, false],
+    ['preflight-button', true, true],
+  ])(
+    'emphasizes %s as the current read-only preflight step without launching it',
+    async (primary, detected, planned) => {
+      const { window, requests, errors } = await boot({
+        devices: [
+          {
+            id: 'board-1',
+            name: 'Test board',
+            status: 'connected',
+            ...(detected ? { boardPlatform: 'rdk-x5' } : {}),
+          },
+        ],
+        boardAgent: { available: true, mock: true },
+        overviewDeployments: planned
+          ? [
+              {
+                id: 'plan-1',
+                modelId: 'model-1',
+                deviceId: 'board-1',
+                status: 'planned',
+                mode: 'preflight',
+              },
+            ]
+          : [],
+      });
+      const buttons = window.document.querySelectorAll('.board-actions .button-primary');
+      expect(buttons).toHaveLength(1);
+      expect(buttons[0]?.id).toBe(primary);
+      expect(requests.filter((request) => request.method === 'POST')).toHaveLength(0);
+      expect(window.document.getElementById('deploy-gate-detail')?.textContent).toContain(
+        'Mock 不可部署',
+      );
+      expect(errors).toEqual([]);
+    },
+  );
+
+  it('keeps the evaluation upload path outside disclosures and names the actual target Run', async () => {
+    const { window, errors } = await boot({
+      url: 'http://127.0.0.1:3000/sim2real/#evaluate/evaluation-run',
+    });
+    const doc = window.document;
+    const work = doc.getElementById('evaluation-run-panel');
+    expect(work?.contains(doc.getElementById('telemetry-panel'))).toBe(true);
+    expect(doc.getElementById('evaluation-empty-import')?.closest('details')).toBeNull();
+    expect(doc.getElementById('telemetry-publish-button')?.closest('details')).toBeNull();
+    expect(doc.getElementById('replay-player')?.closest('details')?.id).toBe('telemetry-analysis');
+    expect(doc.getElementById('evaluation-target-run')?.textContent).toContain('mock-run-1');
+    doc.getElementById('telemetry-demo-button')?.click();
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(doc.getElementById('telemetry-state')?.textContent).toContain('演示');
+    expect(doc.getElementById('deploy-gate-detail')?.textContent).toContain('Mock 不可部署');
+    expect(doc.getElementById('telemetry-analysis')?.hasAttribute('open')).toBe(false);
+    expect(errors).toEqual([]);
+  });
+
+  it('routes evaluation without a registered model back to training without a deployment child', async () => {
+    const { window, errors } = await boot({ productId: 'custom', runs: [] });
+    const next = window.document.getElementById('evaluation-next-button');
+    expect(next?.getAttribute('data-view-target')).toBe('train');
+    expect(next?.hasAttribute('data-flow-child')).toBe(false);
+    next?.click();
+    expect(window.document.body.dataset.activeView).toBe('train');
+    expect(window.location.hash).toMatch(/^#train(?:\/(?:prepare|configure|submit))?$/);
+    expect(errors).toEqual([]);
+  });
+
+  it('routes untrusted evaluation to the visible release gate with synchronized feedback selection', async () => {
+    const { window, errors } = await boot();
+    const doc = window.document;
+    const next = doc.getElementById('evaluation-next-button');
+    expect(next?.hasAttribute('data-flow-child')).toBe(false);
+    next?.click();
+    expect(window.location.hash).toBe('#deploy/feedback');
+    expect(doc.getElementById('feedback-panel')?.hasAttribute('open')).toBe(true);
+    expect(doc.getElementById('deploy-tab-feedback')?.getAttribute('aria-selected')).toBe('true');
+    expect(doc.getElementById('deploy-tab-preflight')?.getAttribute('aria-selected')).toBe('false');
+    expect(doc.getElementById('deploy-gate-summary')?.getAttribute('data-state')).toBe('blocked');
+    expect(doc.getElementById('deploy-gate-detail')?.textContent).toContain('Mock 不可部署');
+    doc.getElementById('deploy-tab-preflight')?.click();
+    doc.getElementById('deploy-gate-details-button')?.click();
+    expect(window.location.hash).toBe('#deploy/feedback');
+    expect(doc.getElementById('deploy-tab-feedback')?.getAttribute('aria-selected')).toBe('true');
+    expect(errors).toEqual([]);
+  });
+
+  it('finds records by Run ID, model name and translated status and can clear a type filter', async () => {
+    const { window, errors } = await boot();
+    const doc = window.document;
+    const search = doc.getElementById('record-search') as HTMLInputElement;
+    doc.querySelector<HTMLButtonElement>('[data-record-tab="run"]')?.click();
+    for (const query of ['mock-run-1', 'MicroDuck Test', '已完成', '协议演示']) {
+      search.value = query;
+      search.dispatchEvent(new window.Event('input', { bubbles: true }));
+      expect(doc.querySelectorAll('#history-list .history-row')).toHaveLength(1);
+    }
+    search.value = '';
+    search.dispatchEvent(new window.Event('input', { bubbles: true }));
+    doc.querySelector<HTMLButtonElement>('[data-record-tab="deploy"]')?.click();
+    expect(doc.querySelectorAll('#history-list .history-row')).toHaveLength(0);
+    expect(doc.querySelector('[data-empty-action="clear-filters"]')).not.toBeNull();
+    doc.querySelector<HTMLButtonElement>('[data-empty-action="clear-filters"]')?.click();
+    expect(doc.querySelector('[data-record-tab="all"]')?.getAttribute('aria-pressed')).toBe('true');
+    expect(doc.querySelectorAll('#history-list .history-row')).toHaveLength(2);
+    expect(errors).toEqual([]);
+  });
+
+  it('keeps an empty loaded project list ready through silent background refreshes', async () => {
+    const { window, errors, requests } = await boot();
+    const projectRequests = requests.filter((request) => request.url.endsWith('/projects')).length;
+    await window.eval('loadOverview({ silent: true })');
+    expect(window.document.getElementById('project-context-note')?.textContent).toBe(
+      '还没有项目 · 可先创建一个',
+    );
+    expect(window.document.getElementById('context-live-project')?.textContent).toBe('全部项目');
+    expect(requests.filter((request) => request.url.endsWith('/projects'))).toHaveLength(
+      projectRequests,
+    );
+    expect(errors).toEqual([]);
+  });
+
+  it('keeps task choices synchronized and follows recommendations without replacing advanced overrides', async () => {
+    const { window, errors, requests } = await boot();
+    const doc = window.document;
+    const change = (id: string, value: string) => {
+      const select = doc.getElementById(id) as HTMLSelectElement;
+      select.value = value;
+      select.dispatchEvent(new window.Event('change', { bubbles: true }));
+    };
+    change('training-task-select', 'football-single-goal-kick');
+    expect((doc.getElementById('task-select') as HTMLSelectElement).value).toBe(
+      'football-single-goal-kick',
+    );
+    expect((doc.getElementById('training-engine') as HTMLSelectElement).value).toBe(
+      'microduck-football',
+    );
+    expect(doc.getElementById('training-plan-summary')?.textContent).toContain('MuJoCo 足球');
+    change('training-engine', '');
+    await window.eval('loadOverview({ silent: true })');
+    expect((doc.getElementById('training-engine') as HTMLSelectElement).value).toBe('');
+    doc.getElementById('training-recommend-button')?.click();
+    change('task-select', 'balance-ball');
+    expect((doc.getElementById('training-task-select') as HTMLSelectElement).value).toBe(
+      'balance-ball',
+    );
+    expect((doc.getElementById('training-engine') as HTMLSelectElement).value).toBe(
+      'microduck-recurrent',
+    );
+    change('training-engine', 'mjx-ppo');
+    change('training-algorithm', 'sac');
+    change('training-task-select', 'walk');
+    expect((doc.getElementById('training-engine') as HTMLSelectElement).value).toBe('mjx-ppo');
+    expect(doc.getElementById('training-plan-summary')?.textContent).toContain(
+      '当前方案：行走 · SAC · MJX',
+    );
+    doc.getElementById('training-recommend-button')?.click();
+    expect((doc.getElementById('training-engine') as HTMLSelectElement).value).toBe('');
+    expect((doc.getElementById('training-algorithm') as HTMLSelectElement).value).toBe('ppo');
+    expect(doc.getElementById('training-plan-summary')?.textContent).toContain('协议演示');
+    doc.getElementById('training-start-button')?.click();
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(
+      requests.find(
+        (request) => request.url.endsWith('/sim2real/runs') && request.method === 'POST',
+      )?.body,
+    ).toMatchObject({ taskId: 'walk', training: { profile: 'standard', algorithm: 'ppo' } });
+    expect(errors).toEqual([]);
+  });
+
+  it('uses the same automatic resource for the plan, action and submitted Run', async () => {
+    const { window, errors, requests } = await boot({
+      computeResources: [
+        { id: 'gpu-1', name: 'Test GPU', status: 'online', activeJobs: 0, maxConcurrentJobs: 1 },
+      ],
+      localRunner: {
+        configured: false,
+        available: false,
+        reachable: false,
+        healthy: false,
+        mock: false,
+      },
+    });
+    expect(window.document.getElementById('training-plan-summary')?.textContent).toContain(
+      'Test GPU',
+    );
+    expect(window.document.getElementById('training-start-button')?.textContent).toContain('GPU');
+    window.document.getElementById('training-start-button')?.click();
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(
+      requests.find(
+        (request) => request.url.endsWith('/sim2real/runs') && request.method === 'POST',
+      )?.body,
+    ).toMatchObject({ computeResourceId: 'gpu-1' });
+    expect(errors).toEqual([]);
+  });
+
+  it('opens the model summary link with the contract module and a matching deep link', async () => {
+    const { window, errors } = await boot();
+    window.document
+      .querySelector<HTMLElement>('.sidebar [data-view-target="train"][data-flow-child="submit"]')
+      ?.click();
+    expect(window.location.hash).toBe('#train/submit');
+    window.document.querySelector<HTMLElement>('[data-workspace-view="contract"]')?.click();
+    expect(window.location.hash).toBe('#train/prepare');
+    expect(window.document.getElementById('flow-context-title')?.textContent).toBe('模型与兼容性');
+    expect(
+      window.document
+        .querySelector('[data-view-section="train"]')
+        ?.getAttribute('data-active-train-module'),
+    ).toBe('contract');
+    expect(errors).toEqual([]);
+  });
+
+  it('retains advanced settings when folded and reveals incomplete resume fields for recovery', async () => {
+    const { window, errors, requests } = await boot();
+    const doc = window.document;
+    const advanced = doc.getElementById('training-advanced');
+    expect(advanced?.hasAttribute('open')).toBe(false);
+    for (const [id, value] of [
+      ['training-engine', 'mjx-ppo'],
+      ['training-algorithm', 'sac'],
+      ['resume-checkpoint-id', 'checkpoint-10'],
+    ]) {
+      const control = doc.getElementById(id) as HTMLInputElement;
+      control.value = value;
+      control.dispatchEvent(new window.Event('change', { bubbles: true }));
+    }
+    doc.getElementById('local-run-button')?.click();
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(
+      requests.filter(
+        (request) => request.url.endsWith('/sim2real/runs') && request.method === 'POST',
+      ),
+    ).toHaveLength(0);
+    expect(window.location.hash).toBe('#train/configure');
+    expect(advanced?.hasAttribute('open')).toBe(true);
+    expect(doc.activeElement?.id).toBe('resume-artifact-ref');
+    const reference = doc.getElementById('resume-artifact-ref') as HTMLInputElement;
+    reference.value = 'artifact://tests/checkpoint.onnx';
+    reference.dispatchEvent(new window.Event('input', { bubbles: true }));
+    advanced?.removeAttribute('open');
+    doc.getElementById('train-tab-run')?.click();
+    doc.getElementById('local-run-button')?.click();
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(
+      requests.find(
+        (request) => request.url.endsWith('/sim2real/runs') && request.method === 'POST',
+      )?.body,
+    ).toMatchObject({
+      training: { engine: 'mjx-ppo', algorithm: 'sac' },
+      resumeFrom: {
+        checkpointId: 'checkpoint-10',
+        artifactRef: 'artifact://tests/checkpoint.onnx',
+      },
+    });
+    expect(advanced?.hasAttribute('open')).toBe(false);
+    expect(errors).toEqual([]);
+  });
+
+  it('restores all legacy module deep links with one current sidebar destination', async () => {
+    const { window, errors } = await boot();
+    const links = [
+      ['simulate', 'simulate'],
+      ['records', 'replays'],
+      ['train', 'prepare'],
+      ['train', 'configure'],
+      ['train', 'submit'],
+      ['evaluate', 'evaluation-run'],
+      ['evaluate', 'comparison'],
+      ['records', 'evaluation-evidence'],
+      ['station', 'devices'],
+      ['deploy', 'preflight'],
+      ['deploy', 'feedback'],
+    ];
+    for (const [view, child] of links) {
+      window.location.hash = `#${view}/${child}`;
+      await new Promise((resolve) => setTimeout(resolve, 25));
+      expect(window.document.body.dataset.activeView).toBe(view);
+      expect(window.document.body.dataset.flowChild).toBe(child);
+      const current = window.document.querySelectorAll('.sidebar [aria-current="page"]');
+      expect(current).toHaveLength(1);
+      expect((current[0] as HTMLElement).dataset.viewTarget).toBe(view);
+    }
+    const tabs = window.document.querySelector('[aria-label="训练与策略模块"]');
+    window.document.getElementById('train-tab-config')?.click();
+    tabs?.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'End', bubbles: true }));
+    expect(window.location.hash).toBe('#train/submit');
+    expect(window.document.querySelectorAll('[data-train-module-tab][tabindex="0"]')).toHaveLength(
+      1,
+    );
+    expect(errors).toEqual([]);
+  });
+
+  it('opens the disclosed training guide with canonical routes by click, Enter and Space', async () => {
+    const { window, requests, errors } = await boot();
+    const doc = window.document;
+    const guide = doc.querySelector<HTMLDetailsElement>('[aria-label="训练指南"]')!;
+    guide.open = true;
+    for (const activation of ['click', 'Enter', ' ']) {
+      for (const [step, child, module, focusId] of [
+        ['1', 'prepare', 'contract', 'template-button'],
+        ['2', 'configure', 'config', 'training-task-select'],
+        ['3', 'submit', 'run', 'local-run-button'],
+      ]) {
+        const control = guide.querySelector<HTMLElement>(`[data-train-step="${step}"]`)!;
+        expect(control).toBeTruthy();
+        if (activation === 'click') control.click();
+        else
+          control.dispatchEvent(
+            new window.KeyboardEvent('keydown', { key: activation, bubbles: true }),
+          );
+        expect(window.location.hash).toBe(`#train/${child}`);
+        expect(
+          doc
+            .querySelector('[data-view-section="train"]')
+            ?.getAttribute('data-active-train-module'),
+        ).toBe(module);
+        expect(doc.activeElement?.id).toBe(focusId);
+      }
+    }
+    expect(requests.filter((request) => request.method === 'POST')).toHaveLength(0);
+    expect(errors).toEqual([]);
+  });
+
   it('boots the real app bundle and changes one visible workspace view at a time', async () => {
     const { window, errors } = await boot();
     // Scoped to the scorecard grid: the research-loop panel reuses the same
@@ -1685,15 +2035,14 @@ describe('Sim2Real workbench DOM behavior', () => {
       /^\d+\.\d$/,
     );
     const trainButton = window.document.querySelector<HTMLButtonElement>(
-      '.sidebar [data-view-target="train"]',
+      '.sidebar [data-view-target="train"][data-flow-child="submit"]',
     );
     trainButton?.click();
 
     expect(window.document.body.dataset.activeView).toBe('train');
-    // Grouped IA (2026-09): sidebar sub-entries are alternate entry points and
-    // intentionally carry no aria-current; this click switches the view but
-    // does NOT (yet) drive setFlowChild/openTrainStep — the train-step
-    // activation gap is tracked separately for the navigation refactor.
+    expect(trainButton?.getAttribute('aria-current')).toBe('page');
+    expect(window.document.querySelectorAll('.sidebar [aria-current="page"]')).toHaveLength(1);
+    expect(window.location.hash).toBe('#train/submit');
     expect(
       window.document.querySelector<HTMLElement>('[data-view-section="overview"]')?.hidden,
     ).toBe(true);
@@ -2021,7 +2370,7 @@ describe('Sim2Real workbench DOM behavior', () => {
     expect(doc.getElementById('flow-context-title')?.textContent).toBe('训练配置');
     expect(doc.getElementById('train-module-config')?.hasAttribute('open')).toBe(true);
 
-    doc.querySelector<HTMLButtonElement>('[data-flow-child="submit"]')?.click();
+    doc.querySelector<HTMLButtonElement>('#train-tab-run')?.click();
     await new Promise((resolve) => setTimeout(resolve, 20));
     expect(window.location.hash).toBe('#train/submit');
     const trainSection = doc.querySelector('[data-view-section="train"]');
@@ -2031,9 +2380,9 @@ describe('Sim2Real workbench DOM behavior', () => {
     // not stack extra history entries.
     expect(window.history.length).toBe(1);
 
-    doc.querySelector<HTMLButtonElement>('[data-flow-child="replays"]')?.click();
+    doc.querySelector<HTMLButtonElement>('.sidebar .nav-item[data-view-target="records"]')?.click();
     await new Promise((resolve) => setTimeout(resolve, 20));
-    expect(window.location.hash).toBe('#records/replays');
+    expect(window.location.hash).toBe('#records');
     expect(window.history.length).toBe(2);
     window.history.back();
     await new Promise((resolve) => setTimeout(resolve, 40));
@@ -2521,6 +2870,79 @@ describe('Sim2Real workbench DOM behavior', () => {
     expect(window.document.querySelector('#replay-frame-detail')?.textContent).toContain('61D');
   });
 
+  it.each([
+    {
+      productId: 'originbot',
+      taskId: 'goal-navigation',
+      type: 'rdk-originbot-recording-ready',
+      format: 'originbot-trajectory-v1',
+      observations: 8,
+      actions: 2,
+    },
+    {
+      productId: 'microduck',
+      taskId: 'balance-stilts',
+      type: 'rdk-task-recording-ready',
+      format: 'rdk-task-trajectory-v1',
+      observations: 61,
+      actions: 14,
+    },
+  ])(
+    'opens the analysis disclosure when replaying the current $productId recording from records',
+    async (fixture) => {
+      const { window, requests, errors } = await boot({ productId: fixture.productId });
+      const doc = window.document;
+      const select = doc.querySelector<HTMLSelectElement>('#task-select')!;
+      select.value = fixture.taskId;
+      select.dispatchEvent(new window.Event('change', { bubbles: true }));
+      const source = doc.querySelector<HTMLIFrameElement>('#simulator-frame')!.contentWindow!;
+      const text = [
+        { type: 'header', format: fixture.format, taskId: fixture.taskId },
+        {
+          t: 0.02,
+          taskId: fixture.taskId,
+          observation: Array(fixture.observations).fill(0),
+          action: Array(fixture.actions).fill(0),
+          replay: { taskId: fixture.taskId, qpos: [1, 0, 0, 0], qvel: [0, 0, 0] },
+        },
+      ]
+        .map((row) => JSON.stringify(row))
+        .join('\n');
+      window.dispatchEvent(
+        new window.MessageEvent('message', {
+          origin: window.location.origin,
+          source: source as never,
+          data: { type: fixture.type, format: fixture.format, taskId: fixture.taskId, text },
+        }),
+      );
+      doc
+        .querySelector<HTMLButtonElement>('.sidebar .nav-item[data-view-target="records"]')
+        ?.click();
+      const replay = Array.from(
+        doc.querySelectorAll<HTMLButtonElement>('#history-list button'),
+      ).find((button) => button.textContent === '回放本次录制');
+      const analysis = doc.querySelector<HTMLDetailsElement>('#telemetry-analysis')!;
+      expect(analysis.open).toBe(false);
+      expect(
+        replay,
+        doc.querySelector('#toast-region')?.textContent ||
+          window.eval('JSON.stringify(__workbenchState.localRecording?.summary)'),
+      ).toBeTruthy();
+      replay?.click();
+      expect(doc.body.dataset.activeView).toBe('evaluate');
+      expect(
+        doc
+          .querySelector('[data-view-section="evaluate"]')
+          ?.getAttribute('data-active-eval-module'),
+      ).toBe('run');
+      expect(analysis.open).toBe(true);
+      expect(doc.querySelector('#replay-player')?.closest('details')).toBe(analysis);
+      expect(window.eval('__workbenchState.replay.loaded')).toBe(true);
+      expect(requests.filter((request) => request.method === 'POST')).toHaveLength(0);
+      expect(errors).toEqual([]);
+    },
+  );
+
   it('restores an earlier task recording after switching tasks without waiting for the hidden scene', async () => {
     const { window, errors } = await boot();
     const select = window.document.querySelector<HTMLSelectElement>('#task-select')!;
@@ -2557,7 +2979,7 @@ describe('Sim2Real workbench DOM behavior', () => {
     );
     chooseTask('balance-basketball');
     window.document
-      .querySelector<HTMLButtonElement>('.sidebar [data-view-target="records"]')
+      .querySelector<HTMLButtonElement>('.sidebar .nav-item[data-view-target="records"]')
       ?.click();
     const openRecording = Array.from(
       window.document.querySelectorAll<HTMLButtonElement>('#history-list button'),

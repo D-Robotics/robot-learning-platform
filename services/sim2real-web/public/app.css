@@ -1593,13 +1593,14 @@ h2 {
    陡增被组界打断。全部为新选择器，不与既有层交叉。 */
 .training-field-group {
   display: grid;
+  grid-column: 1 / -1;
   grid-template-columns: subgrid;
   gap: 6px 8px;
   align-items: center;
   padding: 8px;
-  border-radius: 10px;
-  border: 1px solid rgba(28, 28, 26, 0.07);
-  background: rgba(28, 28, 26, 0.015);
+  border-radius: var(--ui-radius-md);
+  border: 1px solid var(--line);
+  background: var(--panel-soft);
 }
 .training-field-group + .training-field-group {
   margin-top: 10px;
@@ -1622,6 +1623,75 @@ h2 {
   outline: none;
   background: var(--panel-soft);
   font-size:var(--fs-meta);
+}
+.training-plan-summary {
+  grid-column: 1 / -1;
+  margin: 12px 0 0;
+  padding: 12px;
+  border-left: 3px solid var(--accent);
+  border-radius: 0 var(--ui-radius-md) var(--ui-radius-md) 0;
+  color: var(--muted-strong);
+  background: var(--accent-soft);
+  font-size: var(--fs-body);
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+}
+.training-recommend-button {
+  grid-column: 1 / -1;
+  justify-self: start;
+}
+.training-advanced {
+  margin-top: 16px;
+  border-top: 1px solid var(--line);
+}
+.training-advanced > summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 44px;
+  padding: 10px 2px;
+  color: var(--muted-strong);
+  font-size: var(--fs-body);
+  font-weight: 600;
+  list-style: none;
+  cursor: pointer;
+}
+.training-advanced > summary::-webkit-details-marker {
+  display: none;
+}
+.training-advanced > summary::after {
+  content: '⌄';
+  color: var(--muted);
+  transition: transform .16s ease;
+}
+.training-advanced[open] > summary::after {
+  transform: rotate(180deg);
+}
+.training-advanced > summary:hover {
+  color: var(--text);
+}
+.training-advanced > summary:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: 6px;
+}
+.training-advanced > .training-grid {
+  margin-top: 0;
+}
+.training-config-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 16px;
+  padding-top: 16px;
+  border-top: 1px solid var(--line);
+}
+@media (max-width: 720px) {
+  .training-config-actions > .button {
+    flex: 1 1 100%;
+  }
 }
 .small-note {
   margin: 12px 0 0;
@@ -1761,6 +1831,49 @@ h2 {
   margin-top: 8px;
   color: var(--muted);
   font-size: var(--fs-body);
+}
+.deploy-gate-summary {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 12px;
+  margin: 0 0 16px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--ui-radius-md);
+  background: var(--panel-soft);
+}
+.deploy-gate-summary > strong {
+  flex: 1 0 100%;
+  color: var(--text);
+  font-size: var(--fs-body);
+  font-weight: 600;
+}
+.deploy-gate-summary > span {
+  flex: 1 1 320px;
+  min-width: 0;
+  color: var(--muted-strong);
+  font-size: var(--fs-meta);
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+.deploy-gate-summary > .button {
+  margin-left: auto;
+}
+.deploy-gate-summary[data-state='blocked'] {
+  border-left: 3px solid var(--orange);
+}
+.deploy-gate-summary[data-state='blocked'] > strong {
+  color: var(--orange-text);
+}
+.deploy-gate-summary[data-state='ready'] {
+  border-left: 3px solid var(--green);
+}
+.deploy-gate-summary[data-state='error'] {
+  border-left: 3px solid var(--red);
+}
+.deploy-gate-summary[data-state='error'] > strong {
+  color: var(--red-text);
 }
 .release-steps {
   display: grid;
@@ -1906,7 +2019,7 @@ h2 {
   gap: 16px;
 }
 .telemetry-panel {
-  margin-top: 16px;
+  margin-top: 0;
 }
 /* 2026-09-17 层次优化：评测页中段（最近实验对比 + 遥测回放与证据）
    原是两个全宽面板首尾堆叠，页面 1775px 高、五个同级标题一路排下来，
@@ -1926,25 +2039,27 @@ h2 {
   margin-top: 0;
   min-width: 0;
 }
-/* 2026-09-17 空态优先：没有任何 Run 和遥测时，data-empty="true" 收起
-   全部空数据面板（双栏 grid、六个面板的空文案墙），只显示一张
-   三步引导卡。有数据即恢复正常仪表盘。 */
-[data-view-section='evaluate'][data-empty='true'] .evaluation-grid,
-[data-view-section='evaluate'][data-empty='true'] .evaluation-evidence {
+/* Empty metrics stay out of the reading path; the evidence import action and
+   its current Run remain available before any evaluation result exists. */
+[data-view-section='evaluate'][data-empty='true'] .evaluation-grid > .metrics-panel,
+[data-view-section='evaluate'][data-empty='true'] .evaluation-grid > .comparison-panel {
   display: none;
 }
 .evaluation-empty-card {
-  display: grid;
-  gap: 16px;
-  margin-top: 16px;
-  padding: 24px;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+  margin: 12px 0;
+  padding: 16px;
   border: 1px solid var(--line);
-  border-radius: 14px;
+  border-radius: var(--ui-radius-md);
   background: var(--panel);
-  max-width: 640px;
+  max-width: none;
 }
 .evaluation-empty-head {
   display: grid;
+  flex: 1 1 320px;
   gap: 4px;
 }
 .evaluation-empty-head strong {
@@ -2005,12 +2120,15 @@ h2 {
 }
 .telemetry-intro {
   display: flex;
+  flex-wrap: wrap;
   align-items: flex-start;
   justify-content: space-between;
-  gap: 16px;
-  margin: -3px 0 12px;
+  gap: 8px 12px;
+  margin: 0 0 12px;
 }
 .telemetry-intro p {
+  flex: 1 1 320px;
+  min-width: 0;
   max-width: 720px;
   margin: 0;
   color: var(--muted);
@@ -2020,10 +2138,62 @@ h2 {
 .telemetry-file-button {
   flex: 0 0 auto;
 }
+.evaluation-target-run {
+  margin: 0 0 12px;
+  padding: 8px 10px;
+  border-left: 3px solid var(--accent);
+  border-radius: 0 var(--ui-radius-md) var(--ui-radius-md) 0;
+  background: var(--panel-soft);
+  color: var(--muted-strong);
+  font-size: var(--fs-body);
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
 .telemetry-summary {
   display: grid;
   grid-template-columns: repeat(6, minmax(0, 1fr));
   gap: 6px;
+}
+.telemetry-summary > .empty-inline {
+  grid-column: 1 / -1;
+  color: var(--muted);
+  font-size: var(--fs-body);
+}
+.evaluation-analysis {
+  margin-top: 16px;
+  border-top: 1px solid var(--line);
+}
+.evaluation-analysis > summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 44px;
+  padding: 10px 2px;
+  color: var(--muted-strong);
+  font-size: var(--fs-body);
+  font-weight: 600;
+  list-style: none;
+  cursor: pointer;
+}
+.evaluation-analysis > summary::-webkit-details-marker {
+  display: none;
+}
+.evaluation-analysis > summary::after {
+  content: '⌄';
+  color: var(--muted);
+  transition: transform .16s ease;
+}
+.evaluation-analysis[open] > summary::after {
+  transform: rotate(180deg);
+}
+.evaluation-analysis > summary:hover {
+  color: var(--text);
+}
+.evaluation-analysis > summary:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: 6px;
 }
 .telemetry-stat {
   min-height: 62px;
@@ -2186,6 +2356,7 @@ h2 {
 }
 .telemetry-actions {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 10px;
   margin-top: 12px;
@@ -2450,6 +2621,24 @@ h2 {
   overflow: hidden;
   color: var(--muted-strong);
   font-size:var(--fs-meta);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.history-summary-main {
+  display: block;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.history-context {
+  display: block;
+  min-width: 0;
+  margin-top: 2px;
+  overflow: hidden;
+  color: var(--muted);
+  font-size: var(--fs-meta);
+  line-height: 1.5;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -9574,14 +9763,14 @@ body .app-shell .workspace-summary-card strong {
 }
 
 [data-view-section='evaluate'][data-empty='true'] .evaluation-empty-card {
-  width: min(100%, 760px);
+  width: 100%;
   max-width: none;
-  border-color: var(--accent-ring);
-  background: linear-gradient(135deg, var(--accent-soft), var(--panel));
+  border-color: var(--line);
+  background: var(--panel-soft);
 }
 
 [data-view-section='evaluate'][data-empty='true'] .evaluation-empty-head strong {
-  font-size: 18px;
+  font-size: var(--fs-body);
 }
 
 @media (max-width: 720px) {
@@ -10737,7 +10926,6 @@ body[data-flow-child='submit'] [data-view-section='train'] .action-block-hint {
   margin-top: 12px;
 }
 
-body[data-flow-child='evaluation-run'] [data-view-section='evaluate'] .evaluation-empty,
 body[data-flow-child='comparison'] [data-view-section='evaluate'] .evaluation-empty {
   display: none;
 }

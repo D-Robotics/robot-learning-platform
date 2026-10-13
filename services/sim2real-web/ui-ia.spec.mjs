@@ -14,10 +14,55 @@ const agentChat = fs.readFileSync(path.join(here, 'public', 'agent-chat.js'), 'u
 // assertions below now point at the merged files.
 const cssApp = fs.readFileSync(path.join(here, 'public', 'app.css'), 'utf8');
 const cssIa = cssApp;
+// Check the actual parent chain: the evaluation run partition must own import
+// and publishing, while comparison-only content must not hide their surface.
+function elementAncestorsOf(id) {
+  const stack = [];
+  const voidTags = new Set([
+    'area',
+    'base',
+    'br',
+    'col',
+    'embed',
+    'hr',
+    'img',
+    'input',
+    'link',
+    'meta',
+    'param',
+    'source',
+    'track',
+    'wbr',
+  ]);
+  for (const match of html.matchAll(/<!--[\s\S]*?-->|<\/?[a-z][^>]*>/gi)) {
+    const token = match[0];
+    if (token.startsWith('<!--')) continue;
+    const closing = token.match(/^<\/([a-z][\w:-]*)/i)?.[1]?.toLowerCase();
+    if (closing) {
+      const index = stack.findLastIndex((entry) => entry.tag === closing);
+      if (index >= 0) stack.length = index;
+      continue;
+    }
+    const tag = token.match(/^<([a-z][\w:-]*)/i)?.[1]?.toLowerCase();
+    const elementId = token.match(/\sid="([^"]+)"/)?.[1];
+    if (elementId === id) return [...stack];
+    if (tag && !voidTags.has(tag) && !/\/\s*>$/.test(token)) stack.push({ tag, id: elementId });
+  }
+  assert.fail(`markup id must exist: ${id}`);
+}
+const telemetryParents = elementAncestorsOf('telemetry-panel');
+assert.ok(
+  telemetryParents.some((entry) => entry.id === 'evaluation-run-panel'),
+  'evaluation run partition must own the import and publish panel',
+);
+assert.ok(
+  !telemetryParents.some((entry) => entry.id === 'evaluation-comparison-panel'),
+  'comparison-only partition must not hide evaluation import and publishing',
+);
 assert.match(
   html,
-  /<\/article>\s*<\/div>\s*<details class="panel telemetry-panel/,
-  'telemetry replay must sit outside the comparison-only wrapper',
+  /<article[^>]*id="telemetry-panel"[^>]*>/,
+  'evaluation import must be a visible main panel rather than a closed disclosure',
 );
 
 import {
@@ -53,7 +98,7 @@ for (const element of [...html.matchAll(/aria-labelledby="([^"]+)"/g)]) {
 }
 assert.match(
   html,
-  /id="telemetry-title"[^>]*>遥测回放与证据/,
+  /id="telemetry-title"[^>]*>导入证据并评测/,
   'telemetry panel must expose a real heading for aria-labelledby',
 );
 assert.match(
@@ -242,7 +287,8 @@ assert.match(
 );
 
 // ---- IA: one navigation surface, grouped by user intent ----
-// 工作区 / 构建策略 / 交付到设备 / 证据中心. Execution backends remain resources.
+// Production sidebar keeps its disclosed workbench and four intent groups.
+// Module deep links and in-view training tabs share a canonical route.
 const viewNames = [...app.matchAll(/WORKFLOW_VIEWS\s*=\s*\[([^\]]+)\]/g)][0][1]
   .match(/['"][^'"]+['"]/g)
   .map((value) => value.slice(1, -1));
@@ -282,13 +328,28 @@ assert.deepEqual(
     '证据与记录',
     '执行资源',
   ],
-  'sidebar nav labels must match the three-group IA',
+  'sidebar nav labels must match the production grouped IA',
 );
 const navGroups = [...html.matchAll(/class="nav-label">([^<]+)<\/div>/g)].map((m) => m[1]);
 assert.deepEqual(
   navGroups,
   ['开始', '构建策略', '交付到设备', '证据中心'],
   'sidebar must group nav by workspace, strategy construction, delivery, and evidence',
+);
+
+const trainingAdvanced = html.match(/<details[^>]*id="training-advanced"[^>]*>/)?.[0];
+assert.ok(trainingAdvanced, 'advanced training stays reachable as a disclosure');
+assert.doesNotMatch(trainingAdvanced, /\bopen(?:\s|=|>)/, 'advanced training starts collapsed');
+assert.match(html, /id="training-task-select"/, 'training must expose its own task selector');
+assert.match(
+  html,
+  /id="training-plan-summary"[^>]*role="status"/,
+  'training must explain its current plan',
+);
+assert.match(
+  app,
+  /function openTrainingModule\(module\)/,
+  'training tabs must share the deep-link path',
 );
 
 assert.match(html, /app\.css/, 'the merged app.css must be loaded');
@@ -847,5 +908,5 @@ assert.match(
 assert.doesNotMatch(app, /:19100/, 'the browser must never hardcode the board agent port');
 
 console.log(
-  `[sim2real-ui] PASS — ${viewNames.length} views, ${navItems} sidebar entries, grouped IA (start / learning loop / advanced tools), read-only context strip; ${invariantSummary.stylesheets} stylesheets (tokens.css + app.css), ${markupSummary.tabs} tabs / ${markupSummary.panels} tabpanels, ${invariantSummary.pages} pages, ${invariantSummary.layers} style layers (cross-layer selectors ${invariantSummary.crossLayerSelectors}/${invariantSummary.crossLayerBudget}), ${liveGuards.length} guards self-tested`,
+  `[sim2real-ui] PASS — ${viewNames.length} views, ${navItems} sidebar entries, grouped IA (workspace / learning / management), read-only context strip; ${invariantSummary.stylesheets} stylesheets (tokens.css + app.css), ${markupSummary.tabs} tabs / ${markupSummary.panels} tabpanels, ${invariantSummary.pages} pages, ${invariantSummary.layers} style layers (cross-layer selectors ${invariantSummary.crossLayerSelectors}/${invariantSummary.crossLayerBudget}), ${liveGuards.length} guards self-tested`,
 );

@@ -2192,7 +2192,7 @@ const FLOW_CHILD_CONTEXTS = {
   simulate: { kicker: '01 · 数据与仿真', title: '仿真与录制', description: '控制机器人，录制动作并查看轨迹。' },
   replays: { kicker: '01 · 数据与仿真', title: '轨迹与回放', description: '按运行筛选轨迹，并打开逐帧回放证据。', view: 'records', recordTab: 'run', focus: '#history-list' },
   prepare: { kicker: '02 · 训练与策略', title: '模型与兼容性', description: '登记模型说明，检查输入、输出和设备是否匹配。', view: 'train', trainModule: 'contract', focus: '#contract-fold' },
-  configure: { kicker: '02 · 训练与策略', title: '训练配置', description: '选择算法、训练档位、GPU 资源和续训 checkpoint。', view: 'train', trainModule: 'config', focus: '#train-module-config' },
+  configure: { kicker: '02 · 训练与策略', title: '训练配置', description: '选择任务、训练档位与资源；需要时展开高级配置。', view: 'train', trainModule: 'config', focus: '#train-module-config' },
   submit: { kicker: '02 · 训练与策略', title: 'Run 与进度', description: '提交训练任务，查看实时曲线、状态和引擎日志。', view: 'train', trainModule: 'run', focus: '#train-module-run-model' },
   'evaluation-run': { kicker: '03 · 评测与证据', title: '发起评测', description: '选择评测来源和目标，生成一份可追溯评测 Run。', view: 'evaluate', evalModule: 'run', focus: '#evaluation-run-panel' },
   comparison: { kicker: '03 · 评测与证据', title: '结果对比', description: '比较最近 Run 的成功率、奖励和跌倒率趋势。', view: 'evaluate', evalModule: 'comparison', focus: '#evaluation-comparison-panel' },
@@ -2372,6 +2372,10 @@ function setView(view, { updateHash = true, scroll = true, focus = true } = {}) 
       window.location.pathname + window.location.search + '#' + wanted,
     );
   }
+  if (wanted === 'train') {
+    setTrainModule(state.overview && !selectedModel() ? 'contract' : state.trainModule, { persist: false });
+    if (updateHash) setFlowChild(MODULE_FLOW_CHILD.train[state.trainModule], { focus: false });
+  }
   // Reset the scroll position when switching views so a sticky header or a
   // previous deep scroll cannot hide the section title and its primary action.
   if (scroll) window.scrollTo({ top: 0, left: 0, behavior: 'auto' });
@@ -2534,17 +2538,7 @@ function renderContractModelCheckAvailability() {
 }
 
 function setTrainModule(module, { persist = true } = {}) {
-  const wanted = ['run', 'contract', 'config', 'resources'].includes(module) ? module : 'run';
-  const activeFlowChild = FLOW_CHILD_CONTEXTS[document.body.dataset.flowChild || ''];
-  // A direct in-view tab click intentionally exits a focused sidebar flow
-  // child when it selects a different training module. Keeping the old child
-  // marker would reapply its copy and narrow layout during the next refresh.
-  if (activeFlowChild?.trainModule && activeFlowChild.trainModule !== wanted) {
-    clearFlowChild();
-    if (window.location.hash.includes('/')) {
-      window.history.replaceState({ rdkView: 'train' }, '', `${window.location.pathname}${window.location.search}#train`);
-    }
-  }
+  const wanted = ['run', 'contract', 'config'].includes(module) ? module : 'run';
   const previous = state.trainModule;
   state.trainModule = wanted;
   const section = document.querySelector('[data-view-section="train"]');
@@ -2567,6 +2561,19 @@ function setTrainModule(module, { persist = true } = {}) {
   if (persist) {
     try { window.localStorage?.setItem('rdk-lab-train-module', wanted); } catch { /* optional */ }
   }
+}
+
+function openTrainingModule(module) {
+  setView('train');
+  setTrainModule(module);
+  const child = MODULE_FLOW_CHILD.train[module];
+  if (child) setFlowChild(child, { focus: false });
+}
+
+function openDeploymentModule(child) {
+  setView('deploy');
+  applyFlowChildDestination(FLOW_CHILD_CONTEXTS[child]);
+  setFlowChild(child, { focus: false });
 }
 
 function setStationModule(module) {
@@ -3041,27 +3048,29 @@ function renderSelects() {
     (!linkedModelIds || linkedModelIds.has(String(model.id))),
   );
   const devices = state.overview?.devices || [];
-  const taskSelect = $('task-select');
+  const taskSelects = [$('task-select'), $('training-task-select')].filter(Boolean);
   const productSelect = $('product-select');
   const modelSelect = $('model-select');
   const deviceSelect = $('device-select');
   const computeSelect = $('compute-resource-select');
   if (!PRODUCT_PROFILES[state.productId]) state.productId = 'microduck';
   if (productSelect) productSelect.value = state.productId;
-  if (taskSelect) {
+  if (taskSelects.length) {
     const taskIds = state.productId === 'originbot' ? ORIGINBOT_TASK_IDS : Object.keys(ACTION_TASKS).filter((id) => id === 'custom' || !ORIGINBOT_TASK_IDS.includes(id));
     if (!taskIds.includes(state.taskId)) state.taskId = state.productId === 'originbot' ? 'goal-navigation' : 'walk';
-    syncSelect(
-      taskSelect,
-      taskIds.map((id) => ({ value: id, textContent: ACTION_TASKS[id].label })),
-      state.taskId,
-    );
+    for (const taskSelect of taskSelects) {
+      syncSelect(
+        taskSelect,
+        taskIds.map((id) => ({ value: id, textContent: ACTION_TASKS[id].label })),
+        state.taskId,
+      );
+    }
     // Keep the task context visibly in sync with the native select.  The
     // action library below describes the model's controls, while this note
     // describes the workflow task selected by the operator.  Previously the
     // select changed state but the neighbouring copy stayed static, making a
     // successful change look like a no-op.
-    const taskNote = taskSelect.closest('.sim-context-panel')?.querySelector('.small-note');
+    const taskNote = $('task-select')?.closest('.sim-context-panel')?.querySelector('.small-note');
     if (taskNote) {
       const task = selectedTask();
       taskNote.textContent = `${task.hint}。点击仿真器“开始录制”采集动作数据，停止后可在画面下方查看记录。`;
@@ -3130,7 +3139,7 @@ function renderSelects() {
     syncSelect(
       computeSelect,
       [
-        { value: '', textContent: 'AI 自动选择（推荐）', ai: true },
+        { value: '', textContent: '自动选择可用资源（推荐）' },
         ...resources.map((resource) => ({
           value: resource.id,
           textContent: `${resource.name} · ${resource.status === 'online' ? '在线' : resource.status === 'offline' ? '离线' : '未测试'}`,
@@ -3142,6 +3151,7 @@ function renderSelects() {
   setText('model-count', models.length + ' 个 ' + selectedProductProfile().displayName + ' 模型');
   setText('device-count', devices.length + ' 块板卡');
   renderProjectContext();
+  if (!trainingEngineCustomized) applyRecommendedTrainingEngine();
 }
 
 function renderComputeResources() {
@@ -3452,10 +3462,7 @@ function renderIntegrations() {
   const latest = latestRun();
   const currentEvidence = currentTelemetry();
   const latestRealEvidence = hasReleaseGradeEvidence(currentEvidence, latest);
-  const computeResources = state.overview?.computeResources || [];
-  const selectedComputeResource = computeResources.find(
-    (resource) => String(resource.id) === String(state.selectedComputeResourceId),
-  );
+  const selectedComputeResource = trainingResource();
   const selectedResourceReady = selectedComputeResource?.status === 'online';
   // `configured` distinguishes an endpoint that exists but is blocked by a
   // missing production bearer from an endpoint that has not been registered;
@@ -3617,6 +3624,11 @@ function renderIntegrations() {
           ? '本地 worker 已登记，但认证配置未就绪；请补充至少 32 字节随机 bearer token'
           : '当前没有可用的本地强化学习 worker';
   }
+  const trainingStart = $('training-start-button');
+  if (trainingStart && localRunButton) {
+    trainingStart.textContent = localRunButton.textContent;
+    trainingStart.title = localRunButton.title;
+  }
   setText(
     'status-robogo',
     selectedResourceReady
@@ -3715,6 +3727,8 @@ function renderIntegrations() {
     ? '先在训练页登记模型契约。'
     : !device
       ? '先到设备控制台登记并选择目标板卡。'
+      : !device.boardPlatform
+        ? '先点击“探测板型”，确认目标设备与模型契约匹配。'
       : !targetDeployment
         ? '模型和板卡已选择；点击“生成预检计划”开始只读检查。'
         : boardAgent.available !== true
@@ -3753,8 +3767,16 @@ function renderIntegrations() {
     preflightButton.title =
       boardAgent.reason || '先生成预检计划，并在部署环境接入 BoardAgent';
   }
+  const nextPreflightAction = !device?.boardPlatform
+    ? 'detect-button'
+    : targetDeployment ? 'preflight-button' : 'plan-button';
+  for (const id of ['detect-button', 'plan-button', 'preflight-button']) {
+    const button = $(id);
+    button?.classList.toggle('button-primary', id === nextPreflightAction);
+    button?.classList.toggle('button-ghost', id !== nextPreflightAction);
+  }
   renderContractModelCheckAvailability();
-  for (const id of ['local-run-button', 'robogo-run-button']) {
+  for (const id of ['local-run-button', 'training-start-button', 'robogo-run-button']) {
     $(id)?.toggleAttribute('disabled', state.runSubmitting || !model);
   }
   const simulatorFrame = $('simulator-frame');
@@ -4028,7 +4050,53 @@ const ENGINE_CAPABILITIES = Object.freeze({
   },
 });
 
+let trainingEngineCustomized = false;
+
+function applyRecommendedTrainingEngine() {
+  const engine = $('training-engine');
+  if (!engine) return;
+  engine.value = state.taskId.startsWith('football-')
+    ? 'microduck-football'
+    : state.taskId.startsWith('balance-') || state.taskId.startsWith('swing-')
+      ? 'microduck-recurrent'
+      : '';
+}
+
+function trainingResource() {
+  const resources = state.overview?.computeResources || [];
+  return state.selectedComputeResourceId
+    ? resources.find((resource) => resource.id === state.selectedComputeResourceId)
+    : resources.find((resource) => resource.status === 'online' &&
+        (resource.activeJobs == null || resource.activeJobs < (resource.maxConcurrentJobs || 1)));
+}
+
+function renderTrainingPlan() {
+  const engine = $('training-engine');
+  const algorithm = $('training-algorithm')?.value || 'ppo';
+  const capability = ENGINE_CAPABILITIES[engine?.value];
+  const resource = trainingResource();
+  const local = state.overview?.integrations?.simulator?.local;
+  const custom = trainingEngineCustomized || algorithm !== 'ppo';
+  const resumeId = $('resume-checkpoint-id')?.value.trim();
+  const resumeRef = $('resume-artifact-ref')?.value.trim();
+  const profile = $('training-profile')?.selectedOptions?.[0]?.textContent || '标准';
+  const model = selectedModel();
+  const parts = [
+    `${custom ? '当前方案' : '推荐方案'}：${selectedTask().label} · ${algorithm.toUpperCase()} · ${capability?.name || '资源默认引擎'} · ${profile}`,
+    `模型：${model ? modelLabel(model) : '尚未选择，请先登记模型'}。资源：${resource?.name || '服务端默认 Worker'}`,
+  ];
+  if (resource && resource.status !== 'online') parts.push('所选资源尚未在线，请先在执行资源中检查连接');
+  if (!resource && local?.mock) parts.push('协议演示：不会生成可部署模型');
+  if (capability) parts.push(capability.badges.join(' / '));
+  else parts.push('物理后端以执行资源实际配置与运行结果为准');
+  if (engine?.selectedOptions?.[0]?.disabled) parts.push('当前 Worker 未注册该引擎，请检查资源或高级配置');
+  if (resumeId || resumeRef) parts.push(resumeId && resumeRef ? `续训：${resumeId}` : '续训配置未完整填写');
+  if (selectedTask().scene) parts.push(taskContextNote(selectedTask()));
+  setText('training-plan-summary', parts.join('。'));
+}
+
 function renderEngineCapability() {
+  renderTrainingPlan();
   const note = $('engine-capability-note');
   const engineSelect = $('training-engine');
   if (!note || !engineSelect) return;
@@ -4076,7 +4144,7 @@ function renderModel() {
     updateTrainProgress(1);
     if (summary) summary.innerHTML = `<div class="model-empty-guide"><strong>还没有 ${escapeHtml(product.displayName)} 模型</strong><span>先导入模型说明，或载入模板并登记版本。</span><button class="button button-primary button-small" type="button" data-empty-model-action>载入 ${escapeHtml(product.displayName)} 模板 →</button></div>`;
     summary?.querySelector('[data-empty-model-action]')?.addEventListener('click', () => {
-      document.querySelector('#contract-fold')?.setAttribute('open', '');
+      openTrainingModule('contract');
       document.querySelector('#template-button')?.click();
       document.querySelector('#manifest-editor')?.scrollIntoView({ behavior: 'smooth', block: 'center' });
     });
@@ -4401,22 +4469,39 @@ function recordKindLabel(record) {
   return mode ? `${type} · ${mode}` : type;
 }
 
+function recordStatusLabel(record) {
+  if (record.recordType === 'run' && record.mock === true) return '协议演示';
+  const synthetic = record.recordType === 'run' && record.evaluation?.replay?.source === 'demo-fixture';
+  return synthetic || (record.recordType === 'telemetry' && record.source === 'demo-fixture')
+    ? '演示样例'
+    : statusLabel(record.status);
+}
+
 function renderHistory() {
   const root = $('history-list');
   if (!root) return;
   const query = state.recordsQuery.trim().toLowerCase();
   const local = state.localRecording;
-  const showLocal = local && projectIncludesRecord(local) && (!query || (ACTION_TASKS[local.taskId]?.label || '').toLowerCase().includes(query));
-  const records = recordCollection()
+  const showLocal = local && projectIncludesRecord(local) && ['all', 'telemetry'].includes(state.recordsTab) && (!query || (ACTION_TASKS[local.taskId]?.label || '').toLowerCase().includes(query));
+  const allRecords = recordCollection();
+  const modelById = new Map((state.overview?.models || []).map((model) => [model.id, model]));
+  const deviceById = new Map((state.overview?.devices || []).map((device) => [device.id, device]));
+  const matchingRecords = allRecords
     .filter((record) => state.recordsTab === 'all' || record.recordType === state.recordsTab)
     .filter((record) => {
       if (!query) return true;
       return [
+        record.id,
         record.kind,
         recordKindLabel(record),
         record.status,
+        statusLabel(record.status),
+        recordStatusLabel(record),
         record.summary,
         record.modelId,
+        modelById.has(record.modelId) && modelLabel(modelById.get(record.modelId)),
+        record.deviceId,
+        deviceById.get(record.deviceId)?.name,
         record.taskId,
         record.taskId && ACTION_TASKS[record.taskId]?.label,
         record.backend,
@@ -4426,11 +4511,13 @@ function renderHistory() {
       ]
         .filter(Boolean)
         .some((value) => String(value).toLowerCase().includes(query));
-    })
-    .slice(0, 30);
+    });
+  const records = matchingRecords.slice(0, 30);
   setText(
     'records-count',
-    (records.length + (showLocal ? 1 : 0)) + ' 条记录 · 仅当前产品 ' + selectedProductProfile().displayName,
+    ((matchingRecords.length > records.length
+      ? `显示 ${records.length + (showLocal ? 1 : 0)} / ${matchingRecords.length + (showLocal ? 1 : 0)} 条`
+      : (records.length + (showLocal ? 1 : 0)) + ' 条记录') + ' · 当前产品 ' + selectedProductProfile().displayName),
   );
   root.replaceChildren();
   if (showLocal) {
@@ -4470,18 +4557,20 @@ function renderHistory() {
         ? '还没有运行记录。先校验契约或打开浏览器仿真。'
         : '还没有运行记录。先登记模型契约，再发起本地或 GPU 训练。';
     const unavailable = !state.overview && !state.authRequired;
+    const filtered = Boolean(query) || state.recordsTab !== 'all';
+    const filterLabel = document.querySelector(`[data-record-tab="${state.recordsTab}"]`)?.textContent?.trim() || '当前类型';
     const action = (id, label, onClick, variant = 'ghost') => ({ label, onClick, variant, attributes: { 'data-empty-action': id } });
-    const actions = query ? [action('clear-search', '清空搜索', () => {
+    const actions = filtered ? [action('clear-filters', '清空筛选', () => {
       const input = $('record-search'); if (input) { input.value = ''; input.focus(); }
-      state.recordsQuery = ''; renderHistory();
+      state.recordsQuery = ''; setRecordsTab('all');
     })] : [
       ...(hasBrowserSimulator ? [action('simulate', '打开仿真录制', () => setView('simulate'), 'primary')] : []),
       action('train', '去发起训练', () => setView('train'), hasBrowserSimulator ? 'ghost' : 'primary'),
     ];
     root.append(SimUI.createStatePanel({
       state: unavailable ? (state.serviceError ? 'error' : 'loading') : 'empty',
-      title: unavailable ? (state.serviceError ? '暂时无法读取记录' : '正在读取记录') : query ? '没有匹配的记录' : emptyHint,
-      description: unavailable ? '等待工作区连接后再确认记录。' : query ? '试试模型名、状态或后端，或清空筛选查看全部。' : '每条记录都会关联当前任务、模型和时间，可从这里打开详情或进入下一步。',
+      title: unavailable ? (state.serviceError ? '暂时无法读取记录' : '正在读取记录') : query ? '没有匹配的记录' : filtered ? `暂无${filterLabel}记录` : emptyHint,
+      description: unavailable ? '等待工作区连接后再确认记录。' : filtered ? `当前项目和产品范围内共有 ${allRecords.length + (local && projectIncludesRecord(local) ? 1 : 0)} 条记录。清空筛选可查看全部类型。` : '每条记录都会关联当前任务、模型和时间，可从这里打开详情或进入下一步。',
       className: 'records-empty',
       actions: unavailable ? (state.serviceError ? [{ label: '重新连接', onClick: () => loadOverview() }] : []) : actions,
     }));
@@ -4509,6 +4598,10 @@ function renderHistory() {
       record.recordType === 'run' && ENGINE_SCENE_SHORT[record.taskId]
         ? ENGINE_SCENE_SHORT[record.taskId]
         : '';
+    const context = [
+      record.taskId && ACTION_TASKS[record.taskId]?.label,
+      modelById.has(record.modelId) && modelLabel(modelById.get(record.modelId)),
+    ].filter(Boolean).join(' · ');
     row.innerHTML =
       '<span class="history-time">' +
       escapeHtml(formatDate(record.createdAt)) +
@@ -4516,8 +4609,10 @@ function renderHistory() {
       escapeHtml(
         recordKindLabel(record),
       ) +
-      '</span><span class="history-summary">' +
+      '</span><span class="history-summary"><span class="history-summary-main">' +
       escapeHtml(record.summary || record.modelId || '') +
+      '</span>' +
+      (context ? '<span class="history-context">' + escapeHtml(context) + '</span>' : '') +
       (physicsChip
         ? '<span class="history-physics">' + escapeHtml(physicsChip) + '</span>'
         : '') +
@@ -4528,7 +4623,7 @@ function renderHistory() {
       escapeHtml(status) +
       '">' +
       escapeHtml(
-        mockRun ? '协议演示' : syntheticRun || demoTelemetry ? '演示样例' : statusLabel(status),
+        recordStatusLabel(record),
       ) +
       '</span>';
     row.querySelector('.history-status')?.classList.toggle(
@@ -5833,7 +5928,7 @@ function openLocalRecordingReplay(evidence = state.localRecording) {
   mountLocalRecordingReplay(evidence);
   state.evalModule = 'run';
   setView('evaluate');
-  const panel = document.querySelector('.telemetry-panel');
+  const panel = $('telemetry-analysis');
   if (panel) panel.open = true;
   renderAll();
   sendReplayFrame();
@@ -6396,6 +6491,9 @@ function renderTelemetryEvidence() {
   if (!root || !stateBadge || !timeline || !clear) return;
   const evidence = currentTelemetry();
   const latest = latestRun();
+  setText('evaluation-target-run', latest
+    ? `上传评测绑定最新 Run：${latest.id}。下方回放选择仅用于浏览证据。`
+    : '还没有可绑定的 Run；可先导入并查看证据，完成一次训练或仿真运行后再上传评测。');
   // Raw chunks intentionally stay in the server ledger and are not restored
   // into browser memory on a refresh. Keep a persisted replay summary visible
   // so the evidence card, CTA, and release gate tell the same story without
@@ -6404,6 +6502,9 @@ function renderTelemetryEvidence() {
     latest?.evaluation?.replay && Number(latest.evaluation.replay.sampleCount) > 0
       ? latest.evaluation
       : null;
+  const importButton = $('evaluation-empty-import');
+  importButton?.classList.toggle('button-primary', !evidence && !persistedEvaluation);
+  importButton?.classList.toggle('button-ghost', Boolean(evidence || persistedEvaluation));
   const renderStats = (summary, evaluation) => {
     const stats = [
       ['样本数', summary.sampleCount],
@@ -8085,6 +8186,28 @@ function renderReleaseGate() {
       ['ready', 'completed'].includes(deployment.status),
   );
   const releaseReady = preflightReady && evidenceReady;
+  const gateSummary = $('deploy-gate-summary');
+  if (gateSummary) {
+    gateSummary.dataset.state = releaseReady ? 'ready' : 'blocked';
+    let detail = !model
+      ? '先选择并校验模型契约。'
+      : !contractReady
+        ? '模型契约尚未校验；先完成输入、输出和频率检查。'
+        : mockRun
+          ? 'Mock 不可部署；需要真实训练或受信评测证据。'
+          : demoEvidence
+            ? '合成证据仅用于演示；不能解锁真机发布。'
+            : !evidenceReady
+              ? evaluationExists
+                ? '来源未验证；需要真实 worker 指标或受信 attested replay。'
+                : '缺少真实评测证据；先完成训练或导入受信遥测。'
+              : !preflightReady
+                ? '证据已就绪；选择设备并完成只读预检。'
+                : '只读预检已通过；后续发布仍需人工批准、安全开关和受控 BoardAgent。';
+    if (deployment?.approval?.status === 'rejected') detail = '人工审批已拒绝；修复证据或兼容性问题后重新建计划。';
+    setText('deploy-gate-title', releaseReady ? '只读预检就绪 · 发布仍受控' : '发布尚未放行');
+    setText('deploy-gate-detail', detail);
+  }
   const update = (key, stateName, detail) => {
     const node = document.querySelector('[data-release-step="' + key + '"]');
     if (!node) return;
@@ -8957,6 +9080,7 @@ function renderAll() {
   syncStationDeviceForm();
   renderComputeResources();
   renderIntegrations();
+  renderEngineCapability();
   renderContextLive();
   renderModel();
   renderActionLibrary();
@@ -9255,6 +9379,7 @@ async function loadOverview({ quiet = false, silent = false } = {}) {
       state.goldenPath = goldenPathResult.value.goldenPath;
     }
     state.projectsLoaded = projectsAvailable || state.projectsLoaded;
+    // Skipped auxiliary requests retain the last known state, including empty lists.
     if (!silent) state.projectsLoadError = !projectsAvailable;
     state.datasetsLoaded = datasetsAvailable || state.datasetsLoaded;
     if (projectsAvailable && state.projectId && !state.projects.some((project) => String(project.id) === String(state.projectId))) {
@@ -9550,14 +9675,9 @@ async function runModel(backend) {
       ...(state.projectId ? { projectId: state.projectId } : {}),
     };
     if (backend === 'local') {
-      // AI 模式会优先使用已测试在线且并发有余量的 GPU；没有可用资源时回退到服务端默认 Worker。
-      if (state.selectedComputeResourceId) {
-        body.computeResourceId = state.selectedComputeResourceId;
-      } else {
-        const resources = state.overview?.computeResources || [];
-        const online = resources.find((resource) => resource.status === 'online' && (resource.activeJobs == null || resource.activeJobs < (resource.maxConcurrentJobs || 1)));
-        if (online) body.computeResourceId = online.id;
-      }
+      // The visible plan and submit share the same resource selection.
+      const resource = trainingResource();
+      if (resource) body.computeResourceId = resource.id;
     }
     const profile = $('training-profile')?.value;
     const algorithm = $('training-algorithm')?.value;
@@ -9570,6 +9690,9 @@ async function runModel(backend) {
     if (checkpointId || artifactRef) {
       if (!checkpointId || !artifactRef) {
         showToast('续训需要同时填写 checkpoint ID 和 artifact:// 引用', 'error');
+        openTrainingModule('config');
+        $('training-advanced')?.setAttribute('open', '');
+        $(checkpointId ? 'resume-artifact-ref' : 'resume-checkpoint-id')?.focus();
         return;
       }
       body.resumeFrom = { checkpointId, artifactRef };
@@ -11713,14 +11836,7 @@ function wireEvents() {
   };
   document.querySelectorAll('[data-train-module-tab]').forEach((tab) => {
     tab.addEventListener('click', () => {
-      // A sidebar flow child is a focused deep link. Clicking an in-view tab
-      // is an explicit request to return to the full training workbench, so
-      // clear that deep-link filter before switching modules.
-      if (document.body.dataset.flowChild) {
-        clearFlowChild();
-        window.history.replaceState({ rdkView: 'train' }, '', `${window.location.pathname}${window.location.search}#train`);
-      }
-      setSubmodule('train', tab.dataset.trainModuleTab || 'run');
+      openTrainingModule(tab.dataset.trainModuleTab || 'run');
     });
   });
   document.querySelectorAll('[data-station-module-tab]').forEach((tab) => {
@@ -11728,45 +11844,21 @@ function wireEvents() {
   });
   setSubmodule('train', state.trainModule);
   setSubmodule('station', 'devices');
-  const openTrainStep = (step) => {
-    if (step === 1) {
-      setView('train');
-      setSubmodule('train', 'contract');
-      document.querySelector('#template-button')?.focus();
-    } else if (step === 2) {
-      // Replay is optional for RL. Step 2 opens training configuration directly.
-      setView('train');
-      setSubmodule('train', 'config');
-      const controls = $('train-module-config');
-      const panel = controls || $('training-profile') || $('local-run-button');
-      panel?.scrollIntoView({ behavior: 'smooth', block: 'center' });
-      $('training-profile')?.focus();
-    } else {
-      setView('train');
-      setSubmodule('train', 'run');
-      const button = $('local-run-button');
-      const panel = button?.closest('.train-panel') || button;
-      panel?.scrollIntoView({ behavior: 'smooth', block: 'center' });
-      if (button && !button.disabled) button.focus();
-      else {
-        // The step remains actionable even when no runner is configured: guide the
-        // operator to the training panel instead of making the card appear inert.
-        button?.focus();
-        showToast('请先在训练方式中登记或选择本地 / RoboGo worker。', 'normal');
-      }
-    }
-  };
-  document.querySelectorAll('[data-train-step]').forEach((step) => {
+  document.querySelectorAll('[data-train-step]:not([data-flow-child])').forEach((step) => {
     const activate = () => {
-      openTrainStep(Number(step.dataset.trainStep || 1));
-      if (step.dataset.flowChild) setFlowChild(step.dataset.flowChild);
+      const module = ({ 1: 'contract', 2: 'config', 3: 'run' })[step.dataset.trainStep];
+      if (!module) return;
+      openTrainingModule(module);
+      const target = $(module === 'contract' ? 'template-button' : module === 'config' ? 'training-task-select' : 'local-run-button');
+      target?.scrollIntoView({ block: 'center' });
+      target?.focus();
     };
     step.addEventListener('click', activate);
     step.addEventListener('keydown', (event) => {
       if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); activate(); }
     });
   });
-  document.querySelectorAll('[data-flow-child]:not([data-train-step])').forEach((child) => {
+  document.querySelectorAll('[data-flow-child]').forEach((child) => {
     const activate = () => {
       setView(child.dataset.viewTarget || 'overview');
       const target = child.dataset.flowChild;
@@ -11780,8 +11872,19 @@ function wireEvents() {
     });
   });
   $('training-engine')?.addEventListener('change', () => {
+    trainingEngineCustomized = true;
     renderEngineCapability();
   });
+  $('training-recommend-button')?.addEventListener('click', () => {
+    trainingEngineCustomized = false;
+    if ($('training-algorithm')) $('training-algorithm').value = 'ppo';
+    applyRecommendedTrainingEngine();
+    renderEngineCapability();
+  });
+  for (const id of ['training-algorithm', 'resume-checkpoint-id', 'resume-artifact-ref']) {
+    $(id)?.addEventListener('input', renderTrainingPlan);
+    $(id)?.addEventListener('change', renderTrainingPlan);
+  }
   renderEngineCapability();
   // G13 explicit preference: restore the last-used training profile and label
   // it; every change persists for the next visit. The saved value never
@@ -11796,9 +11899,10 @@ function wireEvents() {
     trainingProfileSelect.addEventListener('change', () => {
       state.trainingProfile = trainingProfileSelect.value || '';
       saveWorkspaceContext();
+      renderTrainingPlan();
     });
   }
-  $('task-select')?.addEventListener('change', (event) => {
+  const changeTrainingTask = (event) => {
     const next = event.target.value;
     if (!ACTION_TASKS[next]) return;
     preserveActiveRecording();
@@ -11806,18 +11910,10 @@ function wireEvents() {
     if (policyTrial.running) stopPolicyTrial();
     policyTrial.running = false;
     setPolicyTrialStatus('任务已切换，选择对应训练 Run 可重新试跑。');
-    const previousTask = state.taskId;
     state.taskId = next;
-    // Football tasks are owned by the platform football engine. Selecting one
-    // in the workbench should prepare the matching engine automatically while
-    // still allowing an operator to override it afterwards.
-    const taskEngine = (taskId) => taskId.startsWith('football-') ? 'microduck-football'
-      : taskId.startsWith('balance-') || taskId.startsWith('swing-') ? 'microduck-recurrent' : 'starter-ppo';
-    const engine = $('training-engine');
-    if (engine && (!engine.value || engine.value === 'starter-ppo' || engine.value === taskEngine(previousTask))) {
-      engine.value = taskEngine(next);
-      renderEngineCapability();
-    }
+    // A recommended plan follows the task; an explicit advanced choice stays
+    // intact until the operator asks to use the recommendation again.
+    if (!trainingEngineCustomized) applyRecommendedTrainingEngine();
     saveWorkspaceContext();
     try {
       window.localStorage?.setItem('rdk-duck-lab-task', next);
@@ -11834,7 +11930,9 @@ function wireEvents() {
       'success',
     );
     try { renderAll(); } catch (error) { console.warn('任务面板刷新失败，已保留当前动作：', error); }
-  });
+  };
+  $('task-select')?.addEventListener('change', changeTrainingTask);
+  $('training-task-select')?.addEventListener('change', changeTrainingTask);
   document.querySelectorAll('[data-record-tab]').forEach((control) => {
     control.addEventListener('click', () => {
       setRecordsTab(control.dataset.recordTab || 'all');
@@ -11845,8 +11943,7 @@ function wireEvents() {
     if (!control) return;
     const view = control.dataset.workspaceView;
     if (view === 'contract') {
-      setView('train');
-      setTrainModule('contract');
+      openTrainingModule('contract');
       document.querySelector('#contract-fold')?.setAttribute('open', '');
       document.querySelector('#template-button')?.focus();
     } else if (view) setView(view);
@@ -11879,6 +11976,16 @@ function wireEvents() {
   $('telemetry-demo-button')?.addEventListener('click', () => loadDemoTelemetry());
   $('telemetry-clear-button')?.addEventListener('click', clearTelemetry);
   $('telemetry-publish-button')?.addEventListener('click', () => publishTelemetry());
+  $('telemetry-analysis')?.addEventListener('toggle', (event) => {
+    if (event.currentTarget.open) {
+      renderTelemetryVisuals();
+      renderReplayPlayer();
+    }
+  });
+  $('run-comparison-analysis')?.addEventListener('toggle', (event) => {
+    if (event.currentTarget.open) renderRunComparison([...runsForCurrentModel()].sort((a, b) =>
+      String(b.createdAt || '').localeCompare(String(a.createdAt || ''))));
+  });
   $('replay-load-button')?.addEventListener('click', () => { void loadRunReplay(); });
   $('replay-play-button')?.addEventListener('click', toggleReplay);
   $('replay-stop-button')?.addEventListener('click', () => { state.replay.index = 0; stopReplay(true); syncSimulatorTask(); });
@@ -11927,6 +12034,12 @@ function wireEvents() {
     if (event.currentTarget?.dataset.action === 'import-telemetry') {
       event.preventDefault();
       $('telemetry-file-input')?.click();
+    } else if (event.currentTarget?.dataset.viewTarget === 'deploy') {
+      const latest = latestRun();
+      const trusted = latest?.mock !== true &&
+        !isSyntheticEvidence(currentTelemetry(), latest) &&
+        hasReleaseGradeEvidence(currentTelemetry(), latest);
+      openDeploymentModule(trusted ? 'preflight' : 'feedback');
     }
   });
   $('evaluation-empty-import')?.addEventListener('click', () => {
@@ -11975,11 +12088,15 @@ function wireEvents() {
     runModel('browser');
   });
   $('local-run-button')?.addEventListener('click', () => {
-    setView('train');
+    openTrainingModule('run');
+    runModel('local');
+  });
+  $('training-start-button')?.addEventListener('click', () => {
+    openTrainingModule('run');
     runModel('local');
   });
   $('robogo-run-button')?.addEventListener('click', () => {
-    setView('train');
+    openTrainingModule('run');
     const integrations = state.overview?.integrations || {};
     const runnerAvailable = integrations.simulator?.robogo?.available === true;
     const accountReady = integrations.robogo?.state === 'ready';
@@ -12023,15 +12140,15 @@ function wireEvents() {
     if (state.confirmActionResolve) settleConfirmAction(false);
   });
   $('detect-button')?.addEventListener('click', () => {
-    setView('deploy');
+    openDeploymentModule('preflight');
     detectBoard();
   });
   $('plan-button')?.addEventListener('click', () => {
-    setView('deploy');
+    openDeploymentModule('preflight');
     createPlan();
   });
   $('preflight-button')?.addEventListener('click', () => {
-    setView('deploy');
+    openDeploymentModule('preflight');
     executePreflight();
   });
   wireStationEvents();

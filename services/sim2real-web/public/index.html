@@ -712,7 +712,7 @@
             <p class="mobile-desktop-hint" role="note">手机端适合查看训练进度、审批与结果；训练参数配置建议在桌面端完成。</p>
             <div class="submodule-tabs" role="tablist" aria-label="训练与策略模块">
               <button class="submodule-tab" type="button" role="tab" id="train-tab-contract" aria-controls="contract-fold" aria-selected="false" data-train-module-tab="contract">模型与兼容性<small>模型描述与兼容性检查</small></button>
-              <button class="submodule-tab" type="button" role="tab" id="train-tab-config" aria-controls="train-module-config" aria-selected="false" data-train-module-tab="config">训练配置<small>算法、算力与续训</small></button>
+              <button class="submodule-tab" type="button" role="tab" id="train-tab-config" aria-controls="train-module-config" aria-selected="false" data-train-module-tab="config">训练配置<small>任务、方案与资源</small></button>
               <button class="submodule-tab is-active" type="button" role="tab" id="train-tab-run" aria-controls="train-module-run-model train-module-run-robogo" aria-selected="true" data-train-module-tab="run">训练任务与进度<small>提交任务与实时曲线</small></button>
 
             </div>
@@ -852,10 +852,10 @@
                   </div>
                 </details>
                 <div class="model-actions">
-                  <button class="button button-ghost" id="browser-run-button" type="button">
+                  <button class="button button-primary" id="local-run-button" type="button">
+                    开始训练</button
+                  ><button class="button button-ghost" id="browser-run-button" type="button">
                     浏览器回放</button
-                  ><button class="button button-primary" id="local-run-button" type="button">
-                    发起本地强化学习训练</button
                   ><button class="button button-ghost" id="robogo-run-button" type="button">
                     登记 RoboGo 训练
                   </button>
@@ -923,20 +923,41 @@
                   </button>
                 </div>
                 <details class="training-controls" id="train-module-config" data-train-module="config" role="tabpanel" aria-labelledby="train-tab-config">
-                  <summary>训练参数与续训</summary>
-                  <div class="training-grid"><div class="training-field-group" role="group" aria-labelledby="training-group-basic">
-                      <div class="training-group-title" id="training-group-basic">训练设置</div>
+                  <summary>选择任务与训练方案</summary>
+                  <div class="training-grid">
+                    <div class="training-field-group" role="group" aria-labelledby="training-group-basic">
+                      <div class="training-group-title" id="training-group-basic">本次训练</div>
+                      <label class="field-label" for="training-task-select">当前任务</label>
+                      <select id="training-task-select" aria-label="选择训练任务">
+                        <option value="walk" selected>行走</option>
+                        <option value="stand">站立</option>
+                        <option value="turn">转向</option>
+                      </select>
+                      <p class="training-plan-summary" id="training-plan-summary" role="status" aria-live="polite">正在读取当前任务的训练方案…</p>
+                      <button class="button button-ghost button-small training-recommend-button" id="training-recommend-button" type="button">使用推荐方案</button>
                       <label class="field-label" for="training-profile">训练档位<small class="profile-pref-note" data-training-profile-note hidden>已按你上次的选择预选</small></label
                     ><select id="training-profile" aria-label="选择训练档位">
                       <option value="smoke">冒烟 · 64 环境 / 5 轮</option>
                       <option value="low-vram">低显存 · 64 环境起步</option>
                       <option value="standard" selected>标准 · 1024 环境</option>
-                      <option value="high-vram">高显存 · 4096 环境</option></select
-                    ><label class="field-label" for="training-algorithm">算法</label
+                      <option value="high-vram">高显存 · 4096 环境</option></select>
+                      <label class="field-label" for="compute-resource-select">训练资源</label
+                    ><select id="compute-resource-select" aria-label="选择 GPU 训练资源">
+                      <option value="">服务端默认本地 Worker</option>
+                    </select
+                    >
+                    </div>
+                  </div>
+                  <details class="training-advanced" id="training-advanced">
+                    <summary>高级配置 · 算法、引擎与续训</summary>
+                    <div class="training-grid">
+                      <div class="training-field-group" role="group" aria-labelledby="training-group-advanced">
+                        <div class="training-group-title" id="training-group-advanced">算法与引擎</div>
+                      <label class="field-label" for="training-algorithm">算法</label
                     ><select id="training-algorithm" aria-label="选择强化学习算法">
                       <option value="ppo" selected>PPO · 在策略</option>
-                      <option value="sac">SAC · 离策略</option></select
-                    ><label class="field-label" for="training-engine">训练引擎</label
+                      <option value="sac">SAC · 离策略</option></select>
+                      <label class="field-label" for="training-engine">训练引擎</label
                     ><select id="training-engine" aria-label="选择训练引擎">
                       <option value="" selected>默认 · worker 配置的引擎</option>
                       <option value="starter-ppo">starter-ppo · 运动学（CPU 友好）</option>
@@ -950,13 +971,8 @@
                       <option value="act">act · 动作分块模仿（示教轨迹，CPU）</option>
                       <option value="diffusion-policy">diffusion-policy · 扩散动作分块模仿（示教轨迹，CPU）</option>
                       <option value="smolvla">smolvla · LeRobot VLA 参考（CPU 规划 / CUDA 全量）</option>
-                      <option value="isaac-lab">isaac-lab · Isaac Lab 上游训练栈（CUDA 主机，含 sim2sim 验证）</option></select
-                    ><label class="field-label" for="compute-resource-select">训练资源</label
-                    ><select id="compute-resource-select" aria-label="选择 GPU 训练资源">
-                      <option value="">服务端默认本地 Worker</option>
-                    </select
-                    >
-                    </div>
+                      <option value="isaac-lab">isaac-lab · Isaac Lab 上游训练栈（CUDA 主机，含 sim2sim 验证）</option></select>
+                      </div>
                     <div class="training-field-group" role="group" aria-labelledby="training-group-resume">
                       <div class="training-group-title" id="training-group-resume">续训（可选）</div>
                       <label class="field-label" for="resume-checkpoint-id"
@@ -980,6 +996,10 @@
                       <span class="engine-capability-badges" id="engine-capability-badges"></span>
                       <p class="engine-capability-desc" id="engine-capability-desc"></p>
                     </div>
+                    </div>
+                  </details>
+                  <div class="training-config-actions">
+                    <button class="button button-primary" id="training-start-button" type="button">开始训练</button>
                   </div>
                 </details>
               </article>
@@ -1055,30 +1075,193 @@
             <div class="evaluation-empty" id="evaluation-empty" hidden>
               <div class="evaluation-empty-card">
                 <div class="evaluation-empty-head">
-                  <strong>还没有可评测的数据</strong>
-                  <span>页面只展示真实结果，没有数据时不摆空面板占位。</span>
+                  <strong>还没有评测结果</strong>
+                  <span>导入遥测或完成一次训练后，即可查看指标与结果对比。</span>
                 </div>
-                <ol class="evaluation-empty-steps">
-                  <li>
-                    <span class="evaluation-empty-step-index">01</span>
-                    <div><strong>发起一次训练或回放</strong><small>训练完成后，指标和运行记录会自动出现在这里</small></div>
-                  </li>
-                  <li>
-                    <span class="evaluation-empty-step-index">02</span>
-                    <div><strong>导入一段遥测证据</strong><small>X5 Agent 或浏览器录制的 JSONL，本地解析不上传</small></div>
-                  </li>
-                  <li>
-                    <span class="evaluation-empty-step-index">03</span>
-                    <div><strong>对比仿真与真机</strong><small>指标卡、效果对比和逐帧回放在有数据后展开</small></div>
-                  </li>
-                </ol>
                 <div class="evaluation-empty-actions">
-                  <button class="button button-ghost" id="evaluation-empty-import" type="button">导入遥测 JSONL</button>
-                  <button class="button button-ghost" data-view-target="train" type="button">去发起训练</button>
+                  <button class="button button-ghost button-small" data-view-target="train" type="button">去发起训练</button>
                 </div>
               </div>
             </div>
             <div class="evaluation-grid" id="evaluation-run-panel" role="tabpanel" aria-labelledby="eval-tab-run">
+              <article class="panel telemetry-panel" id="telemetry-panel" aria-labelledby="telemetry-title">
+                <div class="panel-heading panel-heading-lean">
+                  <h2 id="telemetry-title">导入证据并评测</h2>
+                  <span class="state-badge state-neutral" id="telemetry-state">尚未导入</span>
+                </div>
+                <p class="small-note evaluation-target-run" id="evaluation-target-run" role="status" aria-live="polite">评测证据将绑定当前模型的最新 Run。</p>
+                <div class="telemetry-intro">
+                  <p>导入 X5 Agent 或浏览器录制的 JSONL（单文件 ≤32 MiB），本地解析、不上传。</p>
+                  <button class="button button-ghost button-small telemetry-file-button" id="evaluation-empty-import" type="button">导入遥测 JSONL（≤32 MiB）</button>
+                  <input id="telemetry-file-input" type="file" accept=".jsonl,.json,.ndjson,application/json,text/plain" aria-label="导入遥测 JSONL" hidden />
+                  <button
+                    class="button button-quiet button-small"
+                    type="button"
+                    id="telemetry-demo-button"
+                    title="载入 8 帧合成证据，仅用于演示页面流程"
+                  >
+                    载入合成演示证据
+                  </button>
+                </div>
+                <div class="telemetry-summary" id="telemetry-summary">
+                  <div class="empty-inline">等待导入遥测；训练完成后可用它做仿真 / 真机对照。</div>
+                </div>
+                <div class="telemetry-actions">
+                  <button
+                    class="button button-primary button-small"
+                    type="button"
+                    id="telemetry-publish-button"
+                    disabled
+                  >
+                    上传到当前 Run 并评测
+                  </button>
+                  <button
+                    class="button button-ghost button-small"
+                    type="button"
+                    id="telemetry-clear-button"
+                    disabled
+                  >
+                    清除本地证据
+                  </button>
+                  <span class="small-note" id="telemetry-source-note"
+                    >只显示聚合统计，不替代正式评测报告。</span
+                  >
+                </div>
+                <details class="evaluation-analysis" id="telemetry-analysis">
+                  <summary>回放与逐帧分析</summary>
+                  <div class="telemetry-timeline" id="telemetry-timeline" hidden>
+                    <div class="telemetry-timeline-track"><i id="telemetry-timeline-fill"></i></div>
+                    <div class="telemetry-timeline-meta">
+                      <span id="telemetry-timeline-start">0.00s</span
+                      ><span id="telemetry-timeline-end">0.00s</span>
+                    </div>
+                  </div>
+                  <div class="replay-player" id="replay-player" aria-label="逐帧回放播放器">
+                    <div class="simulator-frame-wrap" id="replay-scene-wrap" hidden>
+                      <iframe id="replay-scene-frame" title="轨迹的三维场景回放" allow="fullscreen" hidden></iframe>
+                    </div>
+                    <div class="replay-player-heading"><strong>逐帧回放</strong><span id="replay-status">选择一个运行记录后加载</span></div>
+                    <div class="replay-player-controls">
+                      <select id="replay-run-select" aria-label="选择要回放的运行"></select>
+                      <button class="button button-primary button-small" id="replay-load-button" type="button">加载回放</button>
+                      <button class="button button-ghost button-small" id="replay-play-button" type="button" disabled>▶ 播放</button>
+                      <button class="button button-ghost button-small" id="replay-stop-button" type="button" disabled>■ 停止</button>
+                      <label class="replay-speed">倍速 <select id="replay-speed-select"><option value="0.5">0.5×</option><option value="1" selected>1×</option><option value="2">2×</option><option value="4">4×</option></select></label>
+                    </div>
+                    <input id="replay-seek" type="range" min="0" max="0" value="0" step="1" disabled aria-label="回放进度" />
+                    <div class="replay-player-meta"><span id="replay-frame-label">0 / 0 帧</span><span id="replay-time-label">0.00s</span></div>
+                    <p class="small-note" id="replay-frame-detail">加载后可拖动时间轴；回放帧会同步发送到嵌入仿真器。</p>
+                    <figure class="replay-camera" id="replay-camera" hidden>
+                      <canvas id="replay-camera-canvas" width="1" height="1" role="img" aria-label="该回放帧对应的相机画面"></canvas>
+                      <figcaption class="small-note" id="replay-camera-note">该运行没有对齐的相机帧（向量观测回放）。</figcaption>
+                    </figure>
+                    <div class="replay-video-block" id="replay-video-block" hidden>
+                      <div class="replay-video-heading">
+                        <strong>回放视频（MP4）</strong>
+                        <span class="panel-caption" id="replay-video-caption">—</span>
+                      </div>
+                      <video
+                        id="replay-video-element"
+                        controls
+                        muted
+                        playsinline
+                        preload="none"
+                        aria-label="该运行的相机帧导出视频"
+                      ></video>
+                      <div class="replay-video-controls">
+                        <button class="button button-ghost button-small" id="replay-video-render" type="button">导出视频（ffmpeg）</button>
+                        <a id="replay-video-download" class="button button-ghost button-small" hidden download>下载 MP4</a>
+                      </div>
+                      <p class="small-note" id="replay-video-note">
+                        服务端把已验收的板端相机帧编码为 MP4（单来源且全部 attested 的运行才可导出）；视频是已验收证据的渲染，不是新证据。播放进度与统一时间轴联动。
+                      </p>
+                    </div>
+                    <div class="replay-player-controls policy-trial" id="policy-trial-controls">
+                      <button class="button button-primary button-small" id="policy-trial-button" type="button">🚀 策略试跑（浏览器推理）</button>
+                      <button class="button button-ghost button-small" id="policy-trial-stop" type="button" disabled>■ 停止试跑</button>
+                      <label class="small-note" for="policy-trial-board"><input type="checkbox" id="policy-trial-board"> 板端推理（物理在本机仿真器，动作来自板端已加载模型）</label>
+                      <span id="policy-trial-status" class="small-note">在嵌入仿真器中用本机浏览器运行该策略的 ONNX 模型。</span>
+                    </div>
+                  </div>
+                  <div class="telemetry-visuals" id="telemetry-visuals" hidden>
+                    <div class="telemetry-scrub" id="telemetry-scrub" hidden>
+                      <div class="telemetry-scrub-heading">
+                        <strong>统一时间轴</strong>
+                        <span id="telemetry-scrub-position">0.00s · 帧 0 / 0</span>
+                      </div>
+                      <input id="telemetry-scrub-input" type="range" min="0" max="0" value="0" step="1" disabled aria-label="统一回放时间轴：同步奖励曲线、热力图与相机帧" />
+                      <p class="small-note" id="telemetry-scrub-note">拖动后奖励曲线、观测 / 动作热力图与相机帧会同步到同一时刻。</p>
+                    </div>
+                    <div class="telemetry-chart-block">
+                      <div class="telemetry-chart-heading">
+                        <span class="telemetry-chart-legend">
+                          <i class="legend-swatch legend-reward"></i>奖励
+                          <i class="legend-swatch legend-fall"></i>跌倒
+                          <i class="legend-swatch legend-done"></i>完成
+                        </span>
+                      </div>
+                      <canvas
+                        id="telemetry-reward-canvas"
+                        class="telemetry-canvas"
+                        width="720"
+                        height="200"
+                        role="img"
+                        aria-label="奖励随时间变化曲线"
+                      ></canvas>
+                      <p class="telemetry-chart-note small-note" id="telemetry-reward-note">
+                        奖励为逐帧原始值；跌倒 / 完成标记取自样本 done / fall 字段。
+                      </p>
+                    </div>
+                    <div class="telemetry-heatmap-grid">
+                      <div class="telemetry-chart-block">
+                        <div class="telemetry-chart-heading">
+                          <span class="panel-caption" id="telemetry-obs-caption">—</span>
+                        </div>
+                        <canvas
+                          id="telemetry-obs-heatmap"
+                          class="telemetry-canvas telemetry-heatmap"
+                          width="720"
+                          height="240"
+                          role="img"
+                          aria-label="观测向量随时间热力图"
+                        ></canvas>
+                      </div>
+                      <div class="telemetry-chart-block">
+                        <div class="telemetry-chart-heading">
+                          <span class="panel-caption" id="telemetry-action-caption">—</span>
+                        </div>
+                        <canvas
+                          id="telemetry-action-heatmap"
+                          class="telemetry-canvas telemetry-heatmap"
+                          width="720"
+                          height="240"
+                          role="img"
+                          aria-label="动作向量随时间热力图"
+                        ></canvas>
+                      </div>
+                    </div>
+                    <div class="telemetry-heatmap-legend">
+                      <i class="heatmap-scale"></i>
+                      <span id="telemetry-heatmap-range">—</span>
+                      <span class="small-note">按维度均值归一化的逐帧值（蓝 → 白 → 红）</span>
+                    </div>
+                    <div class="telemetry-chart-block" id="telemetry-episodes-block" hidden>
+                      <div class="telemetry-chart-heading">
+                        <span class="panel-caption" id="telemetry-episodes-caption">episode 长度分布</span>
+                      </div>
+                      <canvas
+                        id="telemetry-episodes-canvas"
+                        class="telemetry-canvas"
+                        width="720"
+                        height="180"
+                        role="img"
+                        aria-label="episode 长度分布直方图与离群标记"
+                      ></canvas>
+                      <p class="telemetry-chart-note small-note" id="telemetry-episodes-note">episode 以 done/fall 事件切分；直方图为长度分布，红点为离群 episode（与中位数相差超过 3×MAD）。</p>
+                    </div>
+                  </div>
+                </details>
+              </article>
               <article class="panel metrics-panel">
                 <div class="panel-heading panel-heading-lean"><h2>关键指标</h2>
                 </div>
@@ -1168,211 +1351,33 @@
                   叠加各次运行的训练曲线（均值奖励，左轴）；图例顺序与下方列表一致。
                 </p>
               </div>
-              <div class="run-comparison-parcoords" id="run-comparison-parcoords" hidden>
-                <canvas role="img"
-                  id="run-parcoords-canvas"
-                  width="720"
-                  height="220"
-                  aria-label="多次运行指标的平行坐标对比"
-                ></canvas>
-                <p class="small-note" id="run-parcoords-note">每条折线是一次运行，各列已归一化；折线越靠右侧列高位的运行整体表现越好。缺指标的运行不参与。</p>
-              </div>
-              <details class="run-comparison-diff" id="run-comparison-diff" hidden>
-                <summary>参数差异（相对最近一次）</summary>
-                <div class="table-scroll">
-                  <table class="record-table" aria-label="各次运行训练参数差异">
-                    <thead><tr id="run-diff-header"><th>参数</th><th id="run-diff-col-0">#1 · 最近</th></tr></thead>
-                    <tbody id="run-diff-body"></tbody>
-                  </table>
+              <details class="evaluation-analysis" id="run-comparison-analysis">
+                <summary>深入分析与参数差异</summary>
+                <div class="run-comparison-parcoords" id="run-comparison-parcoords" hidden>
+                  <canvas role="img"
+                    id="run-parcoords-canvas"
+                    width="720"
+                    height="220"
+                    aria-label="多次运行指标的平行坐标对比"
+                  ></canvas>
+                  <p class="small-note" id="run-parcoords-note">每条折线是一次运行，各列已归一化；折线越靠右侧列高位的运行整体表现越好。缺指标的运行不参与。</p>
                 </div>
-                <p class="small-note" id="run-diff-note">只列出各次运行之间实际不同的训练参数；全部一致时显示一行说明。</p>
+                <details class="run-comparison-diff" id="run-comparison-diff" hidden>
+                  <summary>参数差异（相对最近一次）</summary>
+                  <div class="table-scroll">
+                    <table class="record-table" aria-label="各次运行训练参数差异">
+                      <thead><tr id="run-diff-header"><th>参数</th><th id="run-diff-col-0">#1 · 最近</th></tr></thead>
+                      <tbody id="run-diff-body"></tbody>
+                    </table>
+                  </div>
+                  <p class="small-note" id="run-diff-note">只列出各次运行之间实际不同的训练参数；全部一致时显示一行说明。</p>
+                </details>
               </details>
               <div class="run-comparison" id="run-comparison" aria-live="polite">
                 <div class="empty-inline">完成一次训练或评测后，这里会显示可比较的指标。</div>
               </div>
             </article>
             </div>
-            <details class="panel telemetry-panel workspace-inspector" aria-labelledby="telemetry-title">
-              <summary class="panel-heading panel-heading-lean workspace-inspector-summary"><span><small>Inspector</small><h2 id="telemetry-title">遥测回放与证据</h2></span>
-                <span class="state-badge state-neutral" id="telemetry-state">尚未导入</span>
-                <span class="workspace-inspector-toggle">展开 <i aria-hidden="true">⌄</i></span>
-              </summary>
-              <div class="telemetry-intro">
-                <p>导入 X5 Agent 或浏览器录制的 JSONL（单文件 ≤32 MiB），本地解析、不上传。</p>
-                <label
-                  class="button button-ghost button-small file-input-button telemetry-file-button"
-                >
-                  导入遥测 JSONL（≤32 MiB）<input
-                    id="telemetry-file-input"
-                    type="file"
-                    accept=".jsonl,.json,.ndjson,application/json,text/plain"
-                  />
-                </label>
-                <button
-                  class="button button-quiet button-small"
-                  type="button"
-                  id="telemetry-demo-button"
-                  title="载入 8 帧合成证据，仅用于演示页面流程"
-                >
-                  载入合成演示证据
-                </button>
-              </div>
-              <div class="telemetry-summary" id="telemetry-summary">
-                <div class="empty-inline">等待导入遥测；训练完成后可用它做仿真 / 真机对照。</div>
-              </div>
-              <div class="telemetry-timeline" id="telemetry-timeline" hidden>
-                <div class="telemetry-timeline-track"><i id="telemetry-timeline-fill"></i></div>
-                <div class="telemetry-timeline-meta">
-                  <span id="telemetry-timeline-start">0.00s</span
-                  ><span id="telemetry-timeline-end">0.00s</span>
-                </div>
-              </div>
-              <div class="replay-player" id="replay-player" aria-label="逐帧回放播放器">
-                <div class="simulator-frame-wrap" id="replay-scene-wrap" hidden>
-                  <iframe id="replay-scene-frame" title="轨迹的三维场景回放" allow="fullscreen" hidden></iframe>
-                </div>
-                <div class="replay-player-heading"><strong>逐帧回放</strong><span id="replay-status">选择一个运行记录后加载</span></div>
-                <div class="replay-player-controls">
-                  <select id="replay-run-select" aria-label="选择要回放的运行"></select>
-                  <button class="button button-primary button-small" id="replay-load-button" type="button">加载回放</button>
-                  <button class="button button-ghost button-small" id="replay-play-button" type="button" disabled>▶ 播放</button>
-                  <button class="button button-ghost button-small" id="replay-stop-button" type="button" disabled>■ 停止</button>
-                  <label class="replay-speed">倍速 <select id="replay-speed-select"><option value="0.5">0.5×</option><option value="1" selected>1×</option><option value="2">2×</option><option value="4">4×</option></select></label>
-                </div>
-                <input id="replay-seek" type="range" min="0" max="0" value="0" step="1" disabled aria-label="回放进度" />
-                <div class="replay-player-meta"><span id="replay-frame-label">0 / 0 帧</span><span id="replay-time-label">0.00s</span></div>
-                <p class="small-note" id="replay-frame-detail">加载后可拖动时间轴；回放帧会同步发送到嵌入仿真器。</p>
-                <figure class="replay-camera" id="replay-camera" hidden>
-                  <canvas id="replay-camera-canvas" width="1" height="1" role="img" aria-label="该回放帧对应的相机画面"></canvas>
-                  <figcaption class="small-note" id="replay-camera-note">该运行没有对齐的相机帧（向量观测回放）。</figcaption>
-                </figure>
-                <div class="replay-video-block" id="replay-video-block" hidden>
-                  <div class="replay-video-heading">
-                    <strong>回放视频（MP4）</strong>
-                    <span class="panel-caption" id="replay-video-caption">—</span>
-                  </div>
-                  <video
-                    id="replay-video-element"
-                    controls
-                    muted
-                    playsinline
-                    preload="none"
-                    aria-label="该运行的相机帧导出视频"
-                  ></video>
-                  <div class="replay-video-controls">
-                    <button class="button button-ghost button-small" id="replay-video-render" type="button">导出视频（ffmpeg）</button>
-                    <a id="replay-video-download" class="button button-ghost button-small" hidden download>下载 MP4</a>
-                  </div>
-                  <p class="small-note" id="replay-video-note">
-                    服务端把已验收的板端相机帧编码为 MP4（单来源且全部 attested 的运行才可导出）；视频是已验收证据的渲染，不是新证据。播放进度与统一时间轴联动。
-                  </p>
-                </div>
-                <div class="replay-player-controls policy-trial" id="policy-trial-controls">
-                  <button class="button button-primary button-small" id="policy-trial-button" type="button">🚀 策略试跑（浏览器推理）</button>
-                  <button class="button button-ghost button-small" id="policy-trial-stop" type="button" disabled>■ 停止试跑</button>
-                  <label class="small-note" for="policy-trial-board"><input type="checkbox" id="policy-trial-board"> 板端推理（物理在本机仿真器，动作来自板端已加载模型）</label>
-                  <span id="policy-trial-status" class="small-note">在嵌入仿真器中用本机浏览器运行该策略的 ONNX 模型。</span>
-                </div>
-              </div>
-              <div class="telemetry-visuals" id="telemetry-visuals" hidden>
-                <div class="telemetry-scrub" id="telemetry-scrub" hidden>
-                  <div class="telemetry-scrub-heading">
-                    <strong>统一时间轴</strong>
-                    <span id="telemetry-scrub-position">0.00s · 帧 0 / 0</span>
-                  </div>
-                  <input id="telemetry-scrub-input" type="range" min="0" max="0" value="0" step="1" disabled aria-label="统一回放时间轴：同步奖励曲线、热力图与相机帧" />
-                  <p class="small-note" id="telemetry-scrub-note">拖动后奖励曲线、观测 / 动作热力图与相机帧会同步到同一时刻。</p>
-                </div>
-                <div class="telemetry-chart-block">
-                  <div class="telemetry-chart-heading">
-                    <span class="telemetry-chart-legend">
-                      <i class="legend-swatch legend-reward"></i>奖励
-                      <i class="legend-swatch legend-fall"></i>跌倒
-                      <i class="legend-swatch legend-done"></i>完成
-                    </span>
-                  </div>
-                  <canvas
-                    id="telemetry-reward-canvas"
-                    class="telemetry-canvas"
-                    width="720"
-                    height="200"
-                    role="img"
-                    aria-label="奖励随时间变化曲线"
-                  ></canvas>
-                  <p class="telemetry-chart-note small-note" id="telemetry-reward-note">
-                    奖励为逐帧原始值；跌倒 / 完成标记取自样本 done / fall 字段。
-                  </p>
-                </div>
-                <div class="telemetry-heatmap-grid">
-                  <div class="telemetry-chart-block">
-                    <div class="telemetry-chart-heading">
-                      <span class="panel-caption" id="telemetry-obs-caption">—</span>
-                    </div>
-                    <canvas
-                      id="telemetry-obs-heatmap"
-                      class="telemetry-canvas telemetry-heatmap"
-                      width="720"
-                      height="240"
-                      role="img"
-                      aria-label="观测向量随时间热力图"
-                    ></canvas>
-                  </div>
-                  <div class="telemetry-chart-block">
-                    <div class="telemetry-chart-heading">
-                      <span class="panel-caption" id="telemetry-action-caption">—</span>
-                    </div>
-                    <canvas
-                      id="telemetry-action-heatmap"
-                      class="telemetry-canvas telemetry-heatmap"
-                      width="720"
-                      height="240"
-                      role="img"
-                      aria-label="动作向量随时间热力图"
-                    ></canvas>
-                  </div>
-                </div>
-                <div class="telemetry-heatmap-legend">
-                  <i class="heatmap-scale"></i>
-                  <span id="telemetry-heatmap-range">—</span>
-                  <span class="small-note">按维度均值归一化的逐帧值（蓝 → 白 → 红）</span>
-                </div>
-                <div class="telemetry-chart-block" id="telemetry-episodes-block" hidden>
-                  <div class="telemetry-chart-heading">
-                    <span class="panel-caption" id="telemetry-episodes-caption">episode 长度分布</span>
-                  </div>
-                  <canvas
-                    id="telemetry-episodes-canvas"
-                    class="telemetry-canvas"
-                    width="720"
-                    height="180"
-                    role="img"
-                    aria-label="episode 长度分布直方图与离群标记"
-                  ></canvas>
-                  <p class="telemetry-chart-note small-note" id="telemetry-episodes-note">episode 以 done/fall 事件切分；直方图为长度分布，红点为离群 episode（与中位数相差超过 3×MAD）。</p>
-                </div>
-              </div>
-              <div class="telemetry-actions">
-                <button
-                  class="button button-primary button-small"
-                  type="button"
-                  id="telemetry-publish-button"
-                  disabled
-                >
-                  上传到当前 Run 并评测
-                </button>
-                <button
-                  class="button button-ghost button-small"
-                  type="button"
-                  id="telemetry-clear-button"
-                  disabled
-                >
-                  清除本地证据
-                </button>
-                <span class="small-note" id="telemetry-source-note"
-                  >只显示聚合统计，不替代正式评测报告。</span
-                >
-              </div>
-            </details>
             <div class="evaluation-next">
               <span class="next-line" id="evaluation-next-line"></span>
               <strong id="evaluation-next-title">下一步：通过评测后生成 X5 预检计划</strong>
@@ -1397,12 +1402,17 @@
           >
             <div class="submodule-tabs" role="tablist" aria-label="设备与发布模块">
               <button class="submodule-tab is-active" type="button" role="tab" id="deploy-tab-preflight" aria-controls="preflight-panel" data-view-target="deploy" data-flow-child="preflight">预检与发布<small>只读预检 · NO MOTOR</small></button>
-              <button class="submodule-tab" type="button" role="tab" aria-controls="feedback-panel" data-view-target="deploy" data-flow-child="feedback">运行反馈与回滚<small>上线闸门 · 时间线</small></button>
+              <button class="submodule-tab" type="button" role="tab" id="deploy-tab-feedback" aria-controls="feedback-panel" data-view-target="deploy" data-flow-child="feedback">运行反馈与回滚<small>上线闸门 · 时间线</small></button>
             </div>
             <div class="deploy-layout">
               <article class="panel board-panel" id="preflight-panel" role="tabpanel" aria-labelledby="deploy-tab-preflight">
                 <div class="panel-heading panel-heading-lean"><h2>设备预检</h2>
                   <span class="deploy-safe" lang="en" title="No motor: 只读预检，不会驱动电机">NO MOTOR</span>
+                </div>
+                <div class="deploy-gate-summary" id="deploy-gate-summary" role="status" aria-live="polite">
+                  <strong id="deploy-gate-title">正在检查上线闸门</strong>
+                  <span id="deploy-gate-detail">契约、评测、设备预检与人工确认将按证据分别检查。</span>
+                  <button class="button button-ghost button-small" id="deploy-gate-details-button" type="button" data-view-target="deploy" data-flow-child="feedback">查看上线闸门</button>
                 </div>
                 <div class="deploy-device-select">
                   <label class="field-label" for="device-select">目标板卡</label>

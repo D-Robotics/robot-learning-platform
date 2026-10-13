@@ -149,12 +149,22 @@ record(
 );
 
 async function clickStable(id) {
-  await page.evaluate((buttonId) => {
-    const button = document.getElementById(buttonId);
-    if (!button) throw new Error(`missing #${buttonId}`);
-    if (button.disabled) throw new Error(`#${buttonId} is disabled`);
-    button.click();
-  }, id);
+  const button = page.locator(`#${id}`);
+  // A hidden or collapsed control must fail this journey: programmatic
+  // DOM.click() used to bypass the workbench's module partition entirely.
+  await button.waitFor({ state: 'visible', timeout: 10_000 });
+  if (!(await button.isEnabled())) throw new Error(`#${id} is disabled`);
+  await button.click({ timeout: 10_000 });
+}
+
+async function openTrainingModule(tabId, child) {
+  await clickStable(tabId);
+  await page.waitForFunction(
+    (wanted) =>
+      document.body.dataset.activeView === 'train' && document.body.dataset.flowChild === wanted,
+    child,
+    { timeout: 5_000 },
+  );
 }
 
 // Poll a page-side fetch until it returns a non-pending result. Deliberately
@@ -181,6 +191,7 @@ await page.evaluate(() => {
 await page.waitForTimeout(900);
 let stepOk = true;
 try {
+  await openTrainingModule('train-tab-contract', 'prepare');
   await clickStable('template-button');
   const templateChars = await page.evaluate(
     () => document.getElementById('manifest-editor')?.value.length ?? 0,
@@ -216,9 +227,10 @@ if (stepOk) {
     registered ? 'validation-result reports 登记' : 'no success confirmation within 15s',
   );
 
-  // ---- step 2: 选中刚登记的模型 + smoke 档位 ----
+  // ---- step 2: 配置任务、资源与 smoke 档位，无需打开高级配置 ----
   // Option values are internal model ids, not manifest.modelId, so identify
-  // the registered model by the option that appears after registration.
+  // the registered model by the option that appears after registration. Its
+  // selector is on the run module, so select it only once that module opens.
   const newModelValue = await page
     .waitForFunction(
       (before) => {
@@ -226,32 +238,49 @@ if (stepOk) {
         if (!select) return false;
         const fresh = [...select.options].find((option) => !before.includes(option.value));
         if (!fresh) return false;
-        if (select.value !== fresh.value) {
-          select.value = fresh.value;
-          select.dispatchEvent(new Event('change', { bubbles: true }));
-        }
-        return select.value === fresh.value ? fresh.value : false;
+        return fresh.value;
       },
       optionsBefore,
       { timeout: 15_000 },
     )
+    .then((handle) => handle.jsonValue())
     .catch(() => false);
   record(
-    'registered model is selectable and selected',
+    'registered model appears in the model selector',
     Boolean(newModelValue),
-    newModelValue ? `selected ${newModelValue}` : 'no new option appeared after registration',
+    newModelValue ? `available ${newModelValue}` : 'no new option appeared after registration',
   );
-  await page.evaluate(() => {
-    const select = document.getElementById('training-profile');
-    if (select) {
-      select.value = 'smoke';
-      select.dispatchEvent(new Event('change', { bubbles: true }));
-    }
-  });
+
+  await openTrainingModule('train-tab-config', 'configure');
+  const basicControls = await Promise.all(
+    ['training-task-select', 'training-profile', 'compute-resource-select'].map((id) =>
+      page.locator(`#${id}`).isVisible(),
+    ),
+  );
+  const advancedClosed = await page.locator('#training-advanced').evaluate((panel) => !panel.open);
+  record(
+    'training task, profile and resource are visible with advanced configuration collapsed',
+    basicControls.every(Boolean) && advancedClosed,
+    `basic controls ${basicControls.every(Boolean) ? 'visible' : 'hidden'}; advanced ${advancedClosed ? 'collapsed' : 'expanded'}`,
+  );
+  await page.locator('#training-profile').selectOption('smoke');
 
   // ---- step 3: 发起本地训练并等它走完 ----
   let launched = false;
   try {
+    await openTrainingModule('train-tab-run', 'submit');
+    const modelSelect = page.locator('#model-select');
+    await modelSelect.waitFor({ state: 'visible', timeout: 10_000 });
+    if (newModelValue) await modelSelect.selectOption(String(newModelValue));
+    record(
+      'registered model is selected through the visible run module',
+      Boolean(newModelValue) && (await modelSelect.inputValue()) === newModelValue,
+      newModelValue ? `selected ${newModelValue}` : 'registered model was not available',
+    );
+    record(
+      'training starts without opening advanced configuration',
+      await page.locator('#training-advanced').evaluate((panel) => !panel.open),
+    );
     await clickStable('local-run-button');
     launched = true;
   } catch (error) {
