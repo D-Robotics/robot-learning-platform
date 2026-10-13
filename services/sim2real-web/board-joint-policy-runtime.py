@@ -9,7 +9,12 @@ bounded ``JointTrajectory`` command.
 
 Observation contract (61 values):
 ``gyro(3), projected_gravity(3), joint_position_error(14), joint_velocity(14),
-last_action(14), command(13)``.  Every sensor value is sourced from the
+last_action(14), command(13)``.  The command matches the evaluator's velocity
+contract: ``linearX, linearY, angularZ`` (m/s, m/s, rad/s), then ten zero
+head/body pose values. Nonzero twists expire after a bounded command window;
+zero twist requests stop the gait while policy inference may maintain balance.
+This is distinct from stopping the runtime, which holds its last bounded joint
+target and does not claim to disable servo torque. Every sensor value is sourced from the
 atomic telemetry snapshot and carries a monotonic sample timestamp.  Missing,
 stale, non-finite, or misordered joints fail closed before inference.
 """
@@ -132,6 +137,47 @@ def _finite(value):
     return number if math.isfinite(number) else None
 
 
+def _command_limit(key, default, ceiling):
+    raw = SAFETY.get(key, ACTUATOR.get(key, default))
+    value = _finite(raw) if type(raw) in (int, float) else None
+    # A malformed adapter must not grant a wider command envelope.
+    return max(0.0, min(ceiling, value)) if value is not None else 0.0
+
+
+COMMAND_LINEAR_LIMIT = _command_limit("maxLinear", 0.05, 0.3)
+COMMAND_ANGULAR_LIMIT = _command_limit("maxAngular", 1.0, 1.0)
+COMMAND_DURATION_MIN = 0.2
+COMMAND_DURATION_MAX = 2.0
+COMMAND_KEYS = ("linearX", "linearY", "angularZ")
+
+
+def _zero_command():
+    return dict.fromkeys(COMMAND_KEYS, 0.0)
+
+
+def validate_joint_command(command):
+    """Validate a physical twist, without coercing bools, strings or units."""
+    if not isinstance(command, dict) or any(key not in COMMAND_KEYS for key in command):
+        return None, {"ok": False, "error": "joint-command-invalid", "detail": "command requires linearX, linearY and/or angularZ"}
+    values = _zero_command()
+    for key in COMMAND_KEYS:
+        raw = command.get(key, 0.0)
+        if type(raw) not in (int, float) or _finite(raw) is None:
+            return None, {"ok": False, "error": "joint-command-invalid", "detail": key + " must be a finite number"}
+        values[key] = float(raw)
+    if (math.hypot(values["linearX"], values["linearY"]) > COMMAND_LINEAR_LIMIT + 1e-12
+            or abs(values["angularZ"]) > COMMAND_ANGULAR_LIMIT + 1e-12):
+        return None, {"ok": False, "error": "joint-command-out-of-range", "detail": "twist exceeds the adapter/platform command limits"}
+    return values, None
+
+
+def _command_duration(duration_sec):
+    if (type(duration_sec) not in (int, float) or _finite(duration_sec) is None
+            or not COMMAND_DURATION_MIN <= duration_sec <= COMMAND_DURATION_MAX):
+        return None, {"ok": False, "error": "joint-command-duration-invalid", "detail": "durationSec must be a finite number in [0.2, 2.0]"}
+    return float(duration_sec), None
+
+
 def _sample_fresh(sensor, now_ns=None):
     if not isinstance(sensor, dict):
         return False
@@ -168,7 +214,7 @@ def _component(mapping, *keys):
 
 
 def build_joint_observation(snapshot, joint_names=JOINT_NAMES, home_position=HOME_POSITION,
-                            last_action=None, command_size=COMMAND_VECTOR_SIZE):
+                            last_action=None, command_size=COMMAND_VECTOR_SIZE, command=None):
     """Build the exact MicroDuck 61D vector, or ``None`` on any bad input."""
     if len(joint_names) != 14 or len(home_position) != 14:
         return None
@@ -214,8 +260,13 @@ def build_joint_observation(snapshot, joint_names=JOINT_NAMES, home_position=HOM
     joint_velocity = [by_name[name][1] for name in joint_names]
     previous = list(last_action or ())[:14]
     previous += [0.0] * (14 - len(previous))
-    command = [0.0] * max(0, int(command_size))
-    observation = list(gyro_values) + list(gravity) + joint_error + joint_velocity + previous + command
+    if command_size != 13:
+        return None
+    twist, error = validate_joint_command(_zero_command() if command is None else command)
+    if error is not None:
+        return None
+    command_vector = [twist[key] for key in COMMAND_KEYS] + [0.0] * 10
+    observation = list(gyro_values) + list(gravity) + joint_error + joint_velocity + previous + command_vector
     if len(observation) != EXPECTED_OBS_DIM:
         return None
     if not all(math.isfinite(float(value)) for value in observation):
@@ -275,6 +326,12 @@ class JointPolicyRuntime:
         self._started_at = None
         self._stopped_at = None
         self._stop_reason = "never-started"
+        self._command = _zero_command()
+        self._command_deadline = None
+        self._command_stop_reason = "never-started"
+        self._motion_generation = 0
+        self._sensor_fresh = False
+        self._sensor_state = "waiting"
 
     def snapshot(self):
         with self._lock:
@@ -300,6 +357,20 @@ class JointPolicyRuntime:
                 "lastError": self._last_error,
                 "lastOp": self._last_op,
                 "lastTargetRad": list(self._last_target) if self._last_target is not None else None,
+                "command": dict(self._command),
+                "commandLimits": {
+                    "linearX": COMMAND_LINEAR_LIMIT,
+                    "linearY": COMMAND_LINEAR_LIMIT,
+                    "angularZ": COMMAND_ANGULAR_LIMIT,
+                    "maxLinearMagnitude": COMMAND_LINEAR_LIMIT,
+                    "durationSecMin": COMMAND_DURATION_MIN,
+                    "durationSecMax": COMMAND_DURATION_MAX,
+                },
+                "commandRemainingSec": max(0.0, self._command_deadline - time.monotonic()) if self._command_deadline is not None else 0.0,
+                "commandStopReason": self._command_stop_reason,
+                "sensorFresh": self._sensor_fresh,
+                "sensorState": self._sensor_state,
+                "stopBehavior": "hold-last-bounded-target",
                 "session": {
                     "id": self._session_id,
                     "startedAt": self._started_at,
@@ -340,7 +411,8 @@ class JointPolicyRuntime:
             return {"ok": False, "error": "ros-unavailable", "detail": str(exc)[:200]}
 
     def load(self, model_path):
-        if len(JOINT_NAMES) != 14 or len(HOME_POSITION) != 14 or EXPECTED_OBS_DIM != 61 or EXPECTED_ACTION_DIM != 14:
+        if (len(JOINT_NAMES) != 14 or len(HOME_POSITION) != 14 or EXPECTED_OBS_DIM != 61
+                or EXPECTED_ACTION_DIM != 14 or COMMAND_VECTOR_SIZE != 13):
             return {"ok": False, "error": "joint-profile-contract-invalid"}
         history_error = observation_history_error()
         if history_error is not None:
@@ -420,14 +492,72 @@ class JointPolicyRuntime:
                 self._last_error = str(exc)[:200]
             return {"ok": False, "error": "model-load-failed", "detail": str(exc)[:200]}
 
-    def start(self, _direction=0.0, _goal_x=None, _goal_y=None):
+    def _clear_command_locked(self, reason):
+        self._command = _zero_command()
+        self._command_deadline = None
+        self._command_stop_reason = str(reason)[:120]
+        self._motion_generation += 1
+
+    def _set_command_locked(self, command, duration_sec):
+        self._command = dict(command)
+        moving = any(command.values())
+        self._command_deadline = time.monotonic() + duration_sec if moving else None
+        self._command_stop_reason = None if moving else "zero-command"
+        self._motion_generation += 1
+
+    def _expire_command_locked(self):
+        if self._command_deadline is not None and time.monotonic() >= self._command_deadline:
+            self._clear_command_locked("command-window-expired")
+
+    def set_command(self, command, duration_sec=1.0):
+        values, error = validate_joint_command(command)
+        if error is not None:
+            return error
+        duration, error = _command_duration(duration_sec)
+        if error is not None:
+            return error
+        # Check the actual sensor source times before authorizing a new twist.
+        # A stale cached status bit cannot authorize continued locomotion.
+        fresh = build_joint_observation(_read_snapshot()) is not None if any(values.values()) else None
+        with self._lock:
+            if self._state != "running" or self._stop_flag.is_set():
+                return {"ok": False, "error": "not-running", "state": self._state}
+            if fresh is False:
+                self._sensor_fresh = False
+                self._sensor_state = "stale"
+                self._clear_command_locked("sensor-stale")
+                result = {"ok": False, "error": "joint-sensors-not-ready", "state": self._state}
+            else:
+                if fresh is True:
+                    self._sensor_fresh = True
+                    self._sensor_state = "fresh"
+                self._set_command_locked(values, duration)
+                result = {"ok": True, "state": self._state, "command": dict(values), "durationSec": duration}
+        self._write_state()
+        return result
+
+    def start(self, _direction=0.0, _goal_x=None, _goal_y=None, command=None, duration_sec=1.0):
+        # The historical direction/goal vocabulary belongs to the wheeled
+        # runtime. Never guess which physical joint command it intended.
+        if (type(_direction) not in (int, float) or _finite(_direction) != 0.0
+                or _goal_x is not None or _goal_y is not None):
+            return {"ok": False, "error": "unsupported-joint-command", "detail": "use command:{linearX,linearY,angularZ}; joint runtime does not accept direction or goals"}
+        values, error = validate_joint_command(_zero_command() if command is None else command)
+        if error is not None:
+            return error
+        duration, error = _command_duration(duration_sec)
+        if error is not None:
+            return error
+        fresh = build_joint_observation(_read_snapshot()) is not None
+        if any(values.values()) and not fresh:
+            return {"ok": False, "error": "joint-sensors-not-ready"}
         with self._lock:
             if self._model is None:
                 return {"ok": False, "error": "no-model", "state": self._state}
             if self._publisher is None:
                 return {"ok": False, "error": "ros-unavailable", "state": self._state}
             if self._state == "running":
-                return {"ok": True, "state": "running"}
+                return {"ok": True, "state": "running", "command": dict(self._command)}
             if self._state != "ready":
                 return {"ok": False, "error": "not-ready", "state": self._state}
             self._state = "running"
@@ -436,6 +566,9 @@ class JointPolicyRuntime:
             self._infer_ms = 0.0
             self._last_action = [0.0] * 14
             self._last_target = None
+            self._sensor_fresh = fresh
+            self._sensor_state = "fresh" if fresh else "waiting"
+            self._set_command_locked(values, duration)
             if OBS_HISTORY_FRAMES > 1:
                 import numpy as np
 
@@ -446,8 +579,9 @@ class JointPolicyRuntime:
             self._started_at = time.time()
             self._stopped_at = None
             self._stop_reason = None
-        threading.Thread(target=self._loop, daemon=True).start()
-        return {"ok": True, "state": "running"}
+            session_id = self._session_id
+        threading.Thread(target=self._loop, args=(session_id,), daemon=True).start()
+        return {"ok": True, "state": "running", "command": dict(values), "durationSec": duration}
 
     def stop(self, reason="operator-stop"):
         with self._lock:
@@ -456,8 +590,9 @@ class JointPolicyRuntime:
             self._stop_flag.set()
             self._stopped_at = time.time()
             self._stop_reason = str(reason or "operator-stop")[:120]
-        if was_running:
-            self._publish_target(self._last_target or HOME_POSITION)
+            self._clear_command_locked(self._stop_reason)
+            if was_running:
+                self._publish_target(self._last_target or HOME_POSITION)
         self._write_state()
         return {"ok": True, "state": "idle", "reason": reason}
 
@@ -468,14 +603,17 @@ class JointPolicyRuntime:
                 self._last_error = None
         return {"ok": True, "state": self._state}
 
-    def _fault(self, message):
+    def _fault(self, message, session_id=None):
         with self._lock:
+            if session_id is not None and session_id != self._session_id:
+                return
             self._state = "fault"
             self._last_error = str(message)[:200]
             self._stop_flag.set()
             self._stopped_at = time.time()
             self._stop_reason = "fault:" + str(message)[:60]
-        self._publish_target(self._last_target or HOME_POSITION)
+            self._clear_command_locked(self._stop_reason)
+            self._publish_target(self._last_target or HOME_POSITION)
         self._write_state()
 
     def _publish_target(self, target):
@@ -512,41 +650,70 @@ class JointPolicyRuntime:
         self._obs_history[-1] = frame
         return self._obs_history.reshape(-1)
 
-    def _loop(self):
+    def _loop(self, session_id=None):
         import numpy as np
+        with self._lock:
+            loop_session = self._session_id if session_id is None else session_id
         period = 1.0 / DECISION_HZ
         while not self._stop_flag.is_set():
             started = time.time()
             try:
                 telemetry = _read_snapshot()
+                with self._lock:
+                    if loop_session != self._session_id or self._state != "running" or self._stop_flag.is_set():
+                        return
+                    self._expire_command_locked()
+                    command = dict(self._command)
+                    generation = self._motion_generation
+                    last_action = list(self._last_action)
                 observation = build_joint_observation(
-                    telemetry, JOINT_NAMES, HOME_POSITION, self._last_action, COMMAND_VECTOR_SIZE
+                    telemetry, JOINT_NAMES, HOME_POSITION, last_action, COMMAND_VECTOR_SIZE, command
                 )
                 if observation is None:
                     # Hold the last bounded target while sensors recover. No
                     # inference or published counter increment is claimed.
-                    if self._last_target is not None:
-                        self._publish_target(self._last_target)
+                    with self._lock:
+                        if loop_session != self._session_id:
+                            return
+                        self._sensor_fresh = False
+                        self._sensor_state = "stale"
+                        self._clear_command_locked("sensor-stale")
+                        if self._state == "running" and not self._stop_flag.is_set() and self._last_target is not None:
+                            self._publish_target(self._last_target)
                     self._write_state()
                     time.sleep(period)
                     continue
                 t0 = time.time()
-                model_input = self._push_history(observation)
-                result = self._model.run(None, {self._input_name: np.asarray([model_input], dtype=np.float32)})[0][0]
+                with self._lock:
+                    if loop_session != self._session_id or self._state != "running" or self._stop_flag.is_set():
+                        return
+                    self._sensor_fresh = True
+                    self._sensor_state = "fresh"
+                    model_input = self._push_history(observation)
+                    model, input_name = self._model, self._input_name
+                    previous_target = list(self._last_target) if self._last_target is not None else None
+                result = model.run(None, {input_name: np.asarray([model_input], dtype=np.float32)})[0][0]
                 action = [float(value) for value in result]
                 target = project_joint_action(
-                    action, HOME_POSITION, ACTION_SCALE, self._last_target,
+                    action, HOME_POSITION, ACTION_SCALE, previous_target,
                     MAX_JOINT_STEP, MAX_JOINT_VELOCITY, DECISION_HZ
                 )
-                self._publish_target(target)
                 with self._lock:
+                    if loop_session != self._session_id:
+                        return
+                    self._expire_command_locked()
+                    # stop, a new command or a deadline can supersede inference
+                    # while ONNX is running. That result has no motion authority.
+                    if self._state != "running" or self._stop_flag.is_set() or generation != self._motion_generation:
+                        continue
+                    self._publish_target(target)
                     self._last_action = [max(-1.0, min(1.0, value)) for value in action]
                     self._published += 1
                     elapsed = (time.time() - t0) * 1000.0
                     self._infer_ms = elapsed if not self._infer_ms else 0.9 * self._infer_ms + 0.1 * elapsed
                 self._spin_once()
             except Exception as exc:  # noqa: BLE001 - any control error stops policy
-                self._fault("loop: " + str(exc))
+                self._fault("loop: " + str(exc), loop_session)
                 return
             self._write_state()
             time.sleep(max(0.0, period - (time.time() - started)))
@@ -567,11 +734,16 @@ def _serve(runtime):
             request = json.loads(raw)
         except ValueError:
             continue
+        if not isinstance(request, dict):
+            continue
         op = request.get("op")
         if op == "load":
             result = runtime.load(str(request.get("path", "")))
         elif op == "start":
-            result = runtime.start(request.get("direction", 0.0), request.get("goalX"), request.get("goalY"))
+            result = runtime.start(request.get("direction", 0.0), request.get("goalX"), request.get("goalY"),
+                                   command=request.get("command"), duration_sec=request.get("durationSec", 1.0))
+        elif op == "command":
+            result = runtime.set_command(request.get("command"), request.get("durationSec", 1.0))
         elif op == "stop":
             result = runtime.stop(str(request.get("reason", "operator-stop")))
         elif op == "reset":

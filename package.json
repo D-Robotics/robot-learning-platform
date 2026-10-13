@@ -99,7 +99,7 @@
     "verify:board-drive": "python3 services/sim2real-web/board-agent-drive.test.py",
     "verify:board-uploader": "python3 services/sim2real-web/board-telemetry-uploader.test.py",
     "verify:policy-runtime": "python3 scripts/verify-policy-runtime-safety.py",
-    "verify:joint-policy-runtime": "python3 scripts/verify-joint-policy-runtime.py",
+    "verify:joint-policy-runtime": "python3 scripts/verify-joint-policy-runtime.py && python3 services/sim2real-web/board-joint-policy-runtime.test.py",
     "verify:policy-provider-layout": "python3 scripts/verify-policy-provider-layout.py",
     "verify:hardware-profiles": "node scripts/verify-hardware-adapters.mjs && node scripts/verify-hardware-profile.mjs",
     "verify:adapters": "npm run verify:hardware-profiles",

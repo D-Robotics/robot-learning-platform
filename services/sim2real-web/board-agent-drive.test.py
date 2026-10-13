@@ -670,6 +670,55 @@ def _optional_onnx_stack():
     return True
 
 
+class JointPolicyCommandContract(unittest.TestCase):
+    def agent(self, enabled=True):
+        profile = os.path.join(HERE, "..", "..", "profiles", "rdk-x5-microduck-leg.json")
+        return load_agent_module(enable_drive=enabled, enable_policy=enabled, profile_path=profile)
+
+    def test_joint_command_keeps_both_motion_gates(self):
+        agent = self.agent(False)
+        with mock.patch.object(agent, "_policy_send") as send:
+            result = agent.policy_command({"linearX": 0.01, "linearY": 0.0, "angularZ": 0.0})
+        self.assertFalse(result["ok"])
+        send.assert_not_called()
+
+    def test_joint_command_forwards_explicit_twist_and_short_window(self):
+        agent = self.agent()
+        command = {"linearX": 0.02, "linearY": 0.0, "angularZ": -0.2}
+        with mock.patch.object(agent, "_policy_send", return_value={"ok": True}) as send:
+            self.assertTrue(agent.policy_command(command, 1.0)["ok"])
+        send.assert_called_once_with("command", command=command, durationSec=1.0)
+
+    def test_joint_command_rejects_bad_types_limits_and_windows_before_ipc(self):
+        agent = self.agent()
+        for command, duration in [
+            ({"linearX": True, "linearY": 0.0, "angularZ": 0.0}, 1.0),
+            ({"linearX": "0.02", "linearY": 0.0, "angularZ": 0.0}, 1.0),
+            ({"linearX": 0.06, "linearY": 0.0, "angularZ": 0.0}, 1.0),
+            ({"linearX": 0.01, "linearY": 0.0, "angularZ": float("nan")}, 1.0),
+            ({"linearX": 0.01, "linearY": 0.0, "angularZ": 0.0, "extra": 1}, 1.0),
+            ({"linearX": 0.01, "linearY": 0.0, "angularZ": 0.0}, 3.0),
+            ({"linearX": 0.01, "linearY": 0.0, "angularZ": 0.0}, True),
+        ]:
+            with self.subTest(command=command, duration=duration), mock.patch.object(agent, "_policy_send") as send:
+                self.assertFalse(agent.policy_command(command, duration)["ok"])
+                send.assert_not_called()
+
+    def test_wheeled_runtime_rejects_joint_command(self):
+        agent = load_agent_module(enable_drive=True, enable_policy=True)
+        with mock.patch.object(agent, "_policy_send") as send:
+            self.assertFalse(agent.policy_command({"linearX": 0.0, "linearY": 0.0, "angularZ": 0.0})["ok"])
+        send.assert_not_called()
+
+    def test_joint_start_does_not_silently_ignore_legacy_direction(self):
+        agent = self.agent()
+        with mock.patch.object(agent, "_policy_send") as send:
+            result = agent.policy_start(0.5)
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["error"], "unsupported-joint-command")
+        send.assert_not_called()
+
+
 class PolicyStartGoalGateContract(unittest.TestCase):
     """The agent's policy-start gate must refuse goal-less goalnav sessions.
 

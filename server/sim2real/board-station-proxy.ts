@@ -288,6 +288,7 @@ function studioBridgeCommand(
     '/v1/station/policy',
     '/v1/station/policy/load',
     '/v1/station/policy/start',
+    '/v1/station/policy/command',
     '/v1/station/policy/reset',
     '/v1/station/policy/stop',
   ]);

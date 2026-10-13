@@ -1333,6 +1333,16 @@ def policy_status():
         "actionOutput": snap.get("actionOutput") if snap else None,
         "actionOutputConfigError": snap.get("actionOutputConfigError") if snap else None,
         "actionScale": snap.get("actionScale") if snap else None,
+        "jointNames": snap.get("jointNames") if JOINT_ACTUATOR and snap else None,
+        "lastTargetRad": snap.get("lastTargetRad") if JOINT_ACTUATOR and snap else None,
+        "jointStates": (_read_telemetry_snapshot() or {}).get("jointStates") if JOINT_ACTUATOR else None,
+        "commandLimits": snap.get("commandLimits") if JOINT_ACTUATOR and runtime_running and snap else None,
+        "jointCommand": snap.get("command") if JOINT_ACTUATOR and runtime_running and snap else None,
+        "commandRemainingSec": snap.get("commandRemainingSec") if JOINT_ACTUATOR and runtime_running and snap else None,
+        "commandStopReason": snap.get("commandStopReason") if JOINT_ACTUATOR and snap else None,
+        "stopBehavior": snap.get("stopBehavior") if JOINT_ACTUATOR and snap else None,
+        "sensorFresh": snap.get("sensorFresh") if JOINT_ACTUATOR and runtime_running and snap else False if JOINT_ACTUATOR else None,
+        "sensorState": snap.get("sensorState") if JOINT_ACTUATOR and snap else None,
         "controlHz": snap.get("controlHz") if snap else None,
         "controlPeriodSeconds": snap.get("controlPeriodSeconds") if snap else None,
         "lastCmdVel": snap.get("lastCmdVel") if snap else None,
@@ -1593,15 +1603,52 @@ def policy_load(path):
     return _policy_send("load", path=resolved)
 
 
-def policy_start(direction, goal_x=None, goal_y=None):
+def _joint_command_payload(command, duration_sec=1.0):
+    if not JOINT_ACTUATOR:
+        return None, "unsupported-joint-command"
+    if not isinstance(command, dict) or set(command) != {"linearX", "linearY", "angularZ"}:
+        return None, "joint-command-invalid"
+    if not all(_finite_number(value) for value in command.values()):
+        return None, "joint-command-invalid"
+    if not _finite_number(duration_sec) or not 0.2 <= duration_sec <= 2.0:
+        return None, "joint-command-invalid"
+    if math.hypot(command["linearX"], command["linearY"]) > DRIVE_MAX_LINEAR or any(abs(command[key]) > limit for key, limit in (
+        ("linearX", DRIVE_MAX_LINEAR), ("linearY", DRIVE_MAX_LINEAR),
+        ("angularZ", DRIVE_MAX_ANGULAR),
+    )):
+        return None, "joint-command-out-of-range"
+    return {"command": {key: float(value) for key, value in command.items()},
+            "durationSec": float(duration_sec)}, None
+
+
+def policy_command(command, duration_sec=1.0):
+    if not POLICY_ENABLED:
+        return {"ok": False, "error": "policy-disabled"}
+    if not MOTION_SWITCH_ENABLED:
+        return {"ok": False, "error": "drive-disabled"}
+    payload, error = _joint_command_payload(command, duration_sec)
+    if error:
+        return {"ok": False, "error": error}
+    return _policy_send("command", **payload)
+
+
+def policy_start(direction, goal_x=None, goal_y=None, command=None, duration_sec=1.0):
     if not POLICY_ENABLED:
         return {"ok": False, "error": "policy-disabled"}
     if not MOTION_SWITCH_ENABLED:
         # Gate honesty: refuse before touching the runtime, explain both gates.
         return {"ok": False, "error": "drive-disabled",
                 "message": "policy start requires RDK_SIM2REAL_BOARD_AGENT_ENABLE_DRIVE=1 too"}
-    if not JOINT_ACTUATOR and not _finite_number(direction):
+    if not _finite_number(direction):
         return {"ok": False, "error": "invalid-type"}
+    if JOINT_ACTUATOR and (direction != 0 or goal_x is not None or goal_y is not None):
+        return {"ok": False, "error": "unsupported-joint-command",
+                "message": "MicroDuck uses explicit linearX/linearY/angularZ commands, not direction or navigation goals."}
+    command_payload = None
+    if command is not None:
+        command_payload, error = _joint_command_payload(command, duration_sec)
+        if error:
+            return {"ok": False, "error": error}
     if (goal_x is None) != (goal_y is None):
         return {"ok": False, "error": "invalid-goal",
                 "message": "goalX 与 goalY 必须同时提供或同时省略"}
@@ -1616,6 +1663,8 @@ def policy_start(direction, goal_x=None, goal_y=None):
             return {"ok": False, "error": "goal-required",
                     "message": "%s 策略需要同时提供 goalX/goalY（odom 绝对坐标，单位：米）" % contract}
     payload = {"direction": float(direction) if _finite_number(direction) else 0.0}
+    if command_payload is not None:
+        payload.update(command_payload)
     if goal_x is not None or goal_y is not None:
         payload.update({"goalX": goal_x, "goalY": goal_y})
     # Exclusive /cmd_vel ownership: the resident drive publisher streams idle
@@ -2402,9 +2451,11 @@ class Handler(BaseHTTPRequestHandler):
             # Emergency stop is always accepted — even when drive is disabled
             # — so the UI stop button never has a failure mode.
             drive_stop("operator-emergency-stop")
-            policy_stop("operator-emergency-stop")
-            self._json(200, {"ok": True, "drive": drive_status(),
-                             "note": "zero-speed frame published; chassis watchdog enforces rest"})
+            stopped = policy_stop("operator-emergency-stop")
+            self._json(200, {"ok": stopped.get("ok") is True, "drive": drive_status(),
+                             "stop": stopped, "policy": policy_status(),
+                             "note": "joint policy holds the last bounded target" if JOINT_ACTUATOR
+                                     else "zero-speed frame published; chassis watchdog enforces rest"})
             return
         if path == "/v1/station/policy/stop":
             if not self._require_empty_body():
@@ -2413,8 +2464,9 @@ class Handler(BaseHTTPRequestHandler):
             # Same always-on stance as drive/stop: stopping is never refused.
             res = policy_stop("operator-stop")
             drive_stop("operator-stop")  # belt-and-braces zero the canary too
-            self._json(200, {"ok": True, "stop": res, "policy": policy_status(),
-                             "note": "policy output zeroed; chassis watchdog enforces rest"})
+            self._json(200, {"ok": res.get("ok") is True, "stop": res, "policy": policy_status(),
+                             "note": "joint policy holds the last bounded target" if JOINT_ACTUATOR
+                                     else "policy output zeroed; chassis watchdog enforces rest"})
             return
         if path == "/v1/station/policy/load":
             payload = self._read_json()
@@ -2454,9 +2506,18 @@ class Handler(BaseHTTPRequestHandler):
             if not isinstance(payload, dict):
                 self._json(400, {"ok": False, "error": "BOARD_AGENT_INVALID_JSON"})
                 return
-            res = policy_start(payload.get("direction", 0.0), payload.get("goalX"), payload.get("goalY"))
+            res = policy_start(payload.get("direction", 0.0), payload.get("goalX"), payload.get("goalY"),
+                               payload.get("command"), payload.get("durationSec", 1.0))
             self._json(200 if res.get("ok") else 409,
                        {**res, "policy": policy_status()})
+            return
+        if path == "/v1/station/policy/command":
+            payload = self._read_json()
+            if not isinstance(payload, dict):
+                self._json(400, {"ok": False, "error": "BOARD_AGENT_INVALID_JSON"})
+                return
+            res = policy_command(payload.get("command"), payload.get("durationSec", 1.0))
+            self._json(200 if res.get("ok") else 409, {**res, "policy": policy_status()})
             return
         if path == "/v1/station/policy/reset":
             if not self._require_empty_body():

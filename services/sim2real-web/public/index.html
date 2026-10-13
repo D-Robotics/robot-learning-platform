@@ -448,6 +448,22 @@
                 <button class="user-start-option" id="start-intent-model" type="button" data-start-intent="model" aria-pressed="false"><strong>使用已有模型</strong><small>已有模型，先检查是否适用</small></button>
               </div>
             </details>
+            <details class="duck-workshop user-start-advanced" id="duck-workshop" hidden>
+              <summary class="duck-workshop-heading"><strong id="duck-workshop-title">机器人鸭 DDC 流程</strong><span id="duck-workshop-source">正在读取模型来源</span></summary>
+              <div class="duck-workshop-body">
+                <div class="duck-workshop-next" aria-live="polite" aria-atomic="true"><strong id="duck-workshop-next-title">正在读取当前进度</strong><p id="duck-workshop-next-copy">进度来自当前项目的设备、训练和评测记录。</p></div>
+                <div class="duck-workshop-actions">
+                  <button class="button button-primary button-small" id="duck-workshop-next-button" type="button" data-duck-action="devices" disabled>等待工作区加载</button>
+                  <button class="button button-ghost button-small" type="button" data-duck-action="simulate">打开参考仿真</button>
+                </div>
+                <ol class="duck-workshop-steps" id="duck-workshop-steps" aria-label="机器人鸭专项步骤"></ol>
+                <div class="duck-workshop-detail" id="duck-workshop-detail" aria-live="polite">
+                  <div><strong id="duck-workshop-detail-title">步骤说明</strong><p id="duck-workshop-detail-copy"></p></div>
+                  <button class="button button-ghost button-small" id="duck-workshop-detail-button" type="button" data-duck-action="devices">打开设备管理</button>
+                </div>
+                <p class="duck-workshop-note" id="duck-workshop-note">预置参考用于仿真体验；训练、板端推理和实体运动分别验收。</p>
+              </div>
+            </details>
             <details class="user-start-advanced" id="overview-advanced-evidence">
               <summary><strong>我的项目与运行记录</strong><small>查看训练、评测、环境与进阶工具</small></summary>
               <div class="user-start-advanced-body">
@@ -1975,6 +1991,26 @@
                       value="0"
                     />
                   </div>
+                  <div class="station-joint-controls" id="station-joint-controls" hidden>
+                    <div class="station-policy-goal">
+                      <label for="station-joint-linear">前进速度（m/s）
+                        <input type="number" id="station-joint-linear" min="-0.3" max="0.3" step="0.01" value="0" disabled />
+                      </label>
+                      <label for="station-joint-angular">转向速度（rad/s）
+                        <input type="number" id="station-joint-angular" min="-1" max="1" step="0.1" value="0" disabled />
+                      </label>
+                      <label for="station-joint-duration">指令持续时间（s）
+                        <input type="number" id="station-joint-duration" min="0.2" max="2" step="0.2" value="1" disabled />
+                      </label>
+                    </div>
+                    <div class="station-policy-actions">
+                      <button class="button" type="button" id="station-joint-command" disabled>发送短窗指令</button>
+                      <button class="button button-quiet" type="button" id="station-joint-stand" disabled>停止步态（零命令）</button>
+                    </div>
+                    <p class="station-drive-note">零命令保持策略运行；停止按钮终止策略，关节目标保持，不代表舵机断电。短窗指令到期后不自动恢复。</p>
+                    <p class="station-drive-state" id="station-joint-command-state" role="status" aria-live="polite">等待板端报告指令限幅。</p>
+                  </div>
+                  <div class="station-joint-feedback" id="station-joint-feedback" hidden></div>
                   <div class="station-policy-goal">
                     <label for="station-policy-goal-x">目标点 X（m）
                       <input type="number" id="station-policy-goal-x" step="0.1" min="-10" max="10" placeholder="必填" />
@@ -2207,6 +2243,7 @@
     <script defer src="./ui-components.js?v=ui-1"></script>
     <script defer src="./first-use-core.js?v=start-5"></script>
     <script defer src="./relay-training.js?v=relay-1"></script>
+    <script defer src="./duck-workshop.js?v=duck-workshop-1"></script>
     <script defer src="./app.js?v=duck-lab-67"></script>
     <script defer src="./visualization-enhancements.js?v=viz-1"></script>
     <script defer src="./agent-chat.js?v=agent-17"></script>

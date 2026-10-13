@@ -1718,6 +1718,11 @@ paths:
       tags: [board-station]
       summary: Start constrained policy motion after all gates are enabled
       operationId: startBoardStationPolicy
+      description: >-
+        Requires an owner-visible device, operate permission, and both platform policy and
+        drive gates. Joint runtimes accept a bounded three-axis command with direction zero
+        and no wheel goal coordinates. Nonzero joint commands expire to zero after at most
+        two seconds; this does not disable servo torque or certify real hardware safety.
       parameters:
         - in: query
           name: deviceId
@@ -1727,17 +1732,69 @@ paths:
         content:
           application/json:
             schema:
-              type: object
-              required: [direction]
-              properties:
-                direction: { type: number, minimum: -1, maximum: 1 }
+              oneOf:
+                - type: object
+                  required: [direction]
+                  not: { required: [command] }
+                  properties:
+                    direction: { type: number, minimum: -1, maximum: 1 }
+                    goalX: { type: number, description: Optional wheel-runtime goal X. }
+                    goalY: { type: number, description: Optional wheel-runtime goal Y. }
+                - $ref: "#/components/schemas/JointPolicyStartRequest"
+            examples:
+              wheel:
+                value: { direction: 0.25, goalX: 1.2, goalY: -0.4 }
+              jointStand:
+                value:
+                  direction: 0
+                  command: { linearX: 0, linearY: 0, angularZ: 0 }
+                  durationSec: 1
+              jointWalk:
+                value:
+                  direction: 0
+                  command: { linearX: 0.05, linearY: 0, angularZ: 0 }
+                  durationSec: 1
       responses:
         "200": { description: Policy motion started. }
         "400": { $ref: "#/components/responses/BadRequest" }
         "401": { $ref: "#/components/responses/AuthRequired" }
+        "403": { description: The authenticated account lacks operate permission. }
         "404": { $ref: "#/components/responses/NotFound" }
-        "409": { description: One or more safety gates are disabled. }
+        "409": { description: A safety gate is disabled or the board runtime refuses the operation. }
         "502": { description: Board agent unreachable. }
+  /api/v1/duck/board-station/policy/command:
+    post:
+      tags: [board-station]
+      summary: Update a bounded three-axis command on a running joint policy
+      operationId: commandBoardStationPolicy
+      description: >-
+        Requires an owner-visible device, operate permission, and both platform policy and
+        drive gates. All three axes must be finite JSON numbers. Unknown fields, arrays,
+        strings, booleans, and values outside the bounds are rejected before forwarding.
+        The board applies its profile's narrower bounds and requires fresh sensor data.
+        Nonzero commands expire to zero within durationSec, which defaults to one second
+        and is at most two seconds. Sensor loss clears the command; sensor recovery never
+        restores the previous walking command. Board refusal details are relayed unchanged.
+      parameters:
+        - in: query
+          name: deviceId
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/JointPolicyMotionRequest" }
+            example:
+              command: { linearX: 0.05, linearY: 0, angularZ: 0 }
+              durationSec: 1
+      responses:
+        "200": { description: The board runtime accepted the bounded command. }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/AuthRequired" }
+        "403": { description: The authenticated account lacks operate permission. }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { description: A safety gate is disabled, sensors are stale, or the runtime refuses commands. }
+        "502": { description: Board agent unreachable; no command execution is claimed. }
   /api/v1/duck/board-station/policy/reset:
     post:
       tags: [board-station]
@@ -1756,8 +1813,13 @@ paths:
   /api/v1/duck/board-station/policy/stop:
     post:
       tags: [board-station]
-      summary: Stop policy motion and publish zero output
+      summary: Stop policy motion using the selected runtime's stop behavior
       operationId: stopBoardStationPolicy
+      description: >-
+        Always forwarded regardless of platform motion switches. The joint runtime clears
+        its velocity command and stops inference while holding the last bounded joint target;
+        it does not disable servo torque. Wheel runtimes publish zero drive output. Actual
+        controller stopping, watchdog behavior, and fall protection need hardware acceptance.
       parameters:
         - in: query
           name: deviceId
@@ -1766,7 +1828,7 @@ paths:
         "200": { description: Policy stopped. }
         "401": { $ref: "#/components/responses/AuthRequired" }
         "404": { $ref: "#/components/responses/NotFound" }
-        "502": { description: Board agent unreachable; watchdog remains active. }
+        "502": { description: Board agent unreachable; actual hardware stopping is not confirmed. }
   /api/v1/duck/board-station/health:
     get:
       tags: [board-station]
@@ -3144,6 +3206,47 @@ components:
             - type: object
               additionalProperties: true
             - type: "null"
+    JointPolicyCommand:
+      type: object
+      additionalProperties: false
+      required: [linearX, linearY, angularZ]
+      properties:
+        linearX:
+          type: number
+          minimum: -0.3
+          maximum: 0.3
+          description: Forward velocity in m/s; the board profile may impose a lower limit.
+        linearY:
+          type: number
+          minimum: -0.3
+          maximum: 0.3
+          description: Lateral velocity in m/s; the board profile may impose a lower limit.
+        angularZ:
+          type: number
+          minimum: -1
+          maximum: 1
+          description: Yaw velocity in rad/s; the board profile may impose a lower limit.
+    JointPolicyCommandDuration:
+      type: number
+      minimum: 0.2
+      maximum: 2
+      default: 1
+      description: Seconds until a nonzero velocity command expires to zero on the board.
+    JointPolicyMotionRequest:
+      type: object
+      additionalProperties: false
+      required: [command]
+      properties:
+        command: { $ref: "#/components/schemas/JointPolicyCommand" }
+        durationSec: { $ref: "#/components/schemas/JointPolicyCommandDuration" }
+    JointPolicyStartRequest:
+      type: object
+      additionalProperties: false
+      required: [command]
+      properties:
+        direction: { type: number, enum: [0], default: 0 }
+        command: { $ref: "#/components/schemas/JointPolicyCommand" }
+        durationSec: { $ref: "#/components/schemas/JointPolicyCommandDuration" }
     DriveCommand:
       type: object
       required: [linear, angular, durationSec]

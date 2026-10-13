@@ -234,6 +234,52 @@ function noStore(response: Response): void {
   response.setHeader('Cache-Control', 'no-store');
 }
 
+interface PolicyMotionRequest {
+  command: { linearX: number; linearY: number; angularZ: number };
+  durationSec: number;
+}
+
+/** Reject coercions and excess fields before a bounded joint command reaches a board. */
+function policyMotionRequest(value: unknown, starting = false): PolicyMotionRequest | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  const body = value as Record<string, unknown>;
+  const allowed = starting ? ['command', 'durationSec', 'direction'] : ['command', 'durationSec'];
+  if (Object.keys(body).some((key) => !allowed.includes(key))) return null;
+  // Joint policy commands cannot also ask the wheel runtime to drive or set a goal.
+  if (starting && body.direction !== undefined && body.direction !== 0) return null;
+  const raw = body.command;
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
+  const command = raw as Record<string, unknown>;
+  const keys = ['linearX', 'linearY', 'angularZ'];
+  if (
+    Object.keys(command).length !== keys.length ||
+    Object.keys(command).some((key) => !keys.includes(key))
+  )
+    return null;
+  const { linearX, linearY, angularZ } = command;
+  if (
+    typeof linearX !== 'number' ||
+    !Number.isFinite(linearX) ||
+    Math.abs(linearX) > 0.3 ||
+    typeof linearY !== 'number' ||
+    !Number.isFinite(linearY) ||
+    Math.abs(linearY) > 0.3 ||
+    typeof angularZ !== 'number' ||
+    !Number.isFinite(angularZ) ||
+    Math.abs(angularZ) > 1
+  )
+    return null;
+  const durationSec = body.durationSec === undefined ? 1 : body.durationSec;
+  if (
+    typeof durationSec !== 'number' ||
+    !Number.isFinite(durationSec) ||
+    durationSec < 0.2 ||
+    durationSec > 2
+  )
+    return null;
+  return { command: { linearX, linearY, angularZ }, durationSec };
+}
+
 /**
  * A board station is an optional, operator-attached resource.  Read-only
  * views must be able to render that resource's absence without turning the
@@ -1654,7 +1700,18 @@ export function registerSim2RealBoardStationRoutes(
         request.body && typeof request.body === 'object' && !Array.isArray(request.body)
           ? (request.body as Record<string, unknown>)
           : {};
-      const direction = Number(body.direction);
+      const jointMotion = Object.hasOwn(body, 'command') ? policyMotionRequest(body, true) : null;
+      if (Object.hasOwn(body, 'command') && !jointMotion) {
+        sendApiError(
+          response,
+          400,
+          'SIM2REAL_STATION_POLICY_INVALID_COMMAND',
+          '关节策略 command 需包含有限数值 linearX / linearY（绝对值 ≤ 0.3）和 angularZ（绝对值 ≤ 1）；durationSec 为 0.2..2 秒，direction 只能为 0，不能混用目标坐标或未知字段。',
+          { retryable: false },
+        );
+        return;
+      }
+      const direction = jointMotion ? 0 : Number(body.direction);
       if (!Number.isFinite(direction)) {
         sendApiError(
           response,
@@ -1687,6 +1744,7 @@ export function registerSim2RealBoardStationRoutes(
           timeoutMs: 15_000,
           body: JSON.stringify({
             direction: Math.min(Math.max(direction, -1), 1),
+            ...(jointMotion ?? {}),
             ...(goalX === undefined ? {} : { goalX }),
             ...(goalY === undefined ? {} : { goalY }),
           }),
@@ -1698,6 +1756,67 @@ export function registerSim2RealBoardStationRoutes(
           502,
           'SIM2REAL_BOARD_AGENT_UNREACHABLE',
           '板端 agent 不可达，策略未启动。底盘看门狗保证机器人保持静止。',
+          { retryable: true },
+        );
+        return;
+      }
+      response.status(agent.status).json(agent.payload);
+    }),
+  );
+
+  /** POST /board-station/policy/command — update a time-boxed joint-policy command. */
+  router.post(
+    api('/board-station/policy/command'),
+    wrapAsync(async (request, response) => {
+      const resolved = await resolveStation(request, response);
+      if (!resolved) return;
+      if (!requirePermission(request, response, SIM2REAL_PERMISSIONS.operate)) return;
+      noStore(response);
+      if (!policyPlatformEnabled()) {
+        sendApiError(
+          response,
+          409,
+          'SIM2REAL_STATION_POLICY_DISABLED',
+          '平台未开启策略运行时（RDK_SIM2REAL_STATION_POLICY_ENABLED）。',
+          { retryable: false },
+        );
+        return;
+      }
+      if (!drivePlatformEnabled()) {
+        sendApiError(
+          response,
+          409,
+          'SIM2REAL_STATION_DRIVE_DISABLED',
+          '策略运动同时需要平台侧 RDK_SIM2REAL_STATION_DRIVE_ENABLED=1。',
+          { retryable: false },
+        );
+        return;
+      }
+      const motion = policyMotionRequest(request.body);
+      if (!motion) {
+        sendApiError(
+          response,
+          400,
+          'SIM2REAL_STATION_POLICY_INVALID_COMMAND',
+          'command 需包含有限数值 linearX / linearY（绝对值 ≤ 0.3）和 angularZ（绝对值 ≤ 1）；durationSec 为 0.2..2 秒，不能包含未知字段。',
+          { retryable: false },
+        );
+        return;
+      }
+      const agent = await stationAgentFetchWithStatus(
+        '/v1/station/policy/command',
+        stationOptions(request, {
+          method: 'POST',
+          timeoutMs: 5000,
+          body: JSON.stringify(motion),
+        }),
+      );
+      if (!agent) {
+        sendApiError(
+          response,
+          502,
+          'SIM2REAL_BOARD_AGENT_UNREACHABLE',
+          '板端 agent 不可达，运动命令未送达；请查看板端状态。',
           { retryable: true },
         );
         return;

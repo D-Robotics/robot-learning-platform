@@ -39,6 +39,8 @@ function routeHandler(router: Router, method: 'get' | 'post', path: string): Han
 
 function buildRouter(
   deps: {
+    roles?: string[];
+    devices?: readonly unknown[];
     getRun?: (runId: string, owner?: string) => Promise<unknown>;
     fetchRunArtifact?: (
       run: unknown,
@@ -67,9 +69,12 @@ function buildRouter(
     return router;
   };
   registerSim2RealBoardStationRoutes(router, {
-    auth: { isMultiUserDeployment: () => false } as never,
+    auth: {
+      isMultiUserDeployment: () => deps.roles !== undefined,
+      resolvePrincipal: () => ({ accountId: 'test-account', roles: deps.roles }),
+    } as never,
     requestOwner: () => 'local-dev',
-    visibleDevices: async () => [device],
+    visibleDevices: async () => (deps.devices ?? [device]) as never,
     ...(deps.getRun ? { getRun: deps.getRun as never } : {}),
     ...(deps.fetchRunArtifact ? { fetchRunArtifact: deps.fetchRunArtifact as never } : {}),
   });
@@ -80,7 +85,13 @@ function call(
   handler: Handler,
   init: { method?: string; body?: unknown; query?: Record<string, string> } = {},
 ) {
-  return new Promise<{ statusCode: number; body?: unknown; ended: boolean }>((resolve, reject) => {
+  return new Promise<{
+    statusCode: number;
+    body?: unknown;
+    ended: boolean;
+    headers: Record<string, unknown>;
+  }>((resolve, reject) => {
+    const headers: Record<string, unknown> = {};
     const response = {
       statusCode: 200,
       ended: false,
@@ -88,7 +99,9 @@ function call(
         response.statusCode = code;
         return response;
       },
-      setHeader() {},
+      setHeader(name: string, value: unknown) {
+        headers[name] = value;
+      },
       writeHead() {},
       write() {
         return true;
@@ -97,7 +110,7 @@ function call(
         response.ended = true;
       },
       json(body: unknown) {
-        resolve({ statusCode: response.statusCode, body });
+        resolve({ statusCode: response.statusCode, body, headers });
         return response;
       },
       on() {},
@@ -112,7 +125,7 @@ function call(
     } as unknown as Request;
     handler(request, response, (error?: unknown) => {
       if (error) reject(error);
-      else resolve({ statusCode: response.statusCode, ended: response.ended });
+      else resolve({ statusCode: response.statusCode, ended: response.ended, headers });
     });
   });
 }
@@ -413,6 +426,149 @@ describe('board-station policy runtime proxy', () => {
     );
     expect(res.statusCode).toBe(409);
     expect(res.body).toMatchObject({ reason: 'no-model' });
+  });
+
+  describe('bounded joint-policy motion commands', () => {
+    const command = { linearX: 0.1, linearY: 0, angularZ: -0.2 };
+    const invoke = (router: Router, body: unknown, operation = 'command') =>
+      call(routeHandler(router, 'post', `/api/sim2real/board-station/policy/${operation}`), {
+        method: 'POST',
+        body,
+      });
+
+    beforeEach(() => {
+      process.env.RDK_SIM2REAL_STATION_POLICY_ENABLED = '1';
+      process.env.RDK_SIM2REAL_STATION_DRIVE_ENABLED = '1';
+    });
+
+    it.each([
+      ['RDK_SIM2REAL_STATION_POLICY_ENABLED', 'SIM2REAL_STATION_POLICY_DISABLED'],
+      ['RDK_SIM2REAL_STATION_DRIVE_ENABLED', 'SIM2REAL_STATION_DRIVE_DISABLED'],
+    ])('refuses a command while %s is off', async (flag, error) => {
+      delete process.env[flag];
+      const fetchMock = vi.spyOn(globalThis, 'fetch');
+      const res = await invoke(buildRouter(), { command });
+      expect(res.statusCode).toBe(409);
+      expect(res.body).toMatchObject({ error });
+      expect(res.headers['Cache-Control']).toBe('no-store');
+      expect(fetchMock).not.toHaveBeenCalled();
+    });
+
+    it.each([['viewer'], ['editor']])('requires operate permission for %s', async (role) => {
+      const fetchMock = vi.spyOn(globalThis, 'fetch');
+      const res = await invoke(buildRouter({ roles: [role] }), { command });
+      expect(res.statusCode).toBe(403);
+      expect(res.body).toMatchObject({ error: 'SIM2REAL_PERMISSION_DENIED' });
+      expect(fetchMock).not.toHaveBeenCalled();
+    });
+
+    it('requires an owner-visible device before forwarding', async () => {
+      const fetchMock = vi.spyOn(globalThis, 'fetch');
+      const res = await invoke(buildRouter({ devices: [] }), { command });
+      expect(res.statusCode).toBe(404);
+      expect(res.body).toMatchObject({ error: 'SIM2REAL_DEVICE_NOT_FOUND' });
+      expect(fetchMock).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      {},
+      [],
+      { command: [] },
+      { command: null },
+      { command: { linearX: 0.1, angularZ: 0 } },
+      { command: { ...command, unknown: 1 } },
+      { command, direction: 0 },
+      { command, goalX: 1 },
+      { command, extra: true },
+      { command: { ...command, linearX: '0.1' } },
+      { command: { ...command, linearY: false } },
+      { command: { ...command, angularZ: null } },
+      { command: { ...command, linearX: Number.NaN } },
+      { command: { ...command, angularZ: Number.POSITIVE_INFINITY } },
+      { command: { ...command, linearX: 0.301 } },
+      { command: { ...command, linearY: -0.301 } },
+      { command: { ...command, angularZ: 1.001 } },
+      { command, durationSec: '1' },
+      { command, durationSec: true },
+      { command, durationSec: null },
+      { command, durationSec: Number.NaN },
+      { command, durationSec: Number.POSITIVE_INFINITY },
+      { command, durationSec: 0.199 },
+      { command, durationSec: 2.001 },
+    ])('rejects malformed or out-of-range command %# before fetch', async (body) => {
+      const fetchMock = vi.spyOn(globalThis, 'fetch');
+      const res = await invoke(buildRouter(), body);
+      expect(res.statusCode).toBe(400);
+      expect(res.body).toMatchObject({ error: 'SIM2REAL_STATION_POLICY_INVALID_COMMAND' });
+      expect(fetchMock).not.toHaveBeenCalled();
+    });
+
+    it('forwards a bounded command with its default one-second lifetime', async () => {
+      const fetchMock = mockAgent(200, { ok: true, policy: { state: 'running' } });
+      const res = await invoke(buildRouter({ roles: ['operator'] }), { command });
+      expect(res.statusCode).toBe(200);
+      expect(res.headers['Cache-Control']).toBe('no-store');
+      const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+      expect(url).toBe('http://127.0.0.1:19100/v1/station/policy/command');
+      expect(init.method).toBe('POST');
+      expect(JSON.parse(String(init.body))).toEqual({ command, durationSec: 1 });
+    });
+
+    it.each([0.2, 2])('accepts the platform bounds with durationSec=%s', async (durationSec) => {
+      const bounded = { linearX: 0.3, linearY: -0.3, angularZ: -1 };
+      const fetchMock = mockAgent(200, { ok: true });
+      expect((await invoke(buildRouter(), { command: bounded, durationSec })).statusCode).toBe(200);
+      const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+      expect(JSON.parse(String(init.body))).toEqual({ command: bounded, durationSec });
+    });
+
+    it('starts a joint policy with zero wheel direction and a bounded command', async () => {
+      const fetchMock = mockAgent(200, { ok: true });
+      expect((await invoke(buildRouter(), { command, durationSec: 0.5 }, 'start')).statusCode).toBe(
+        200,
+      );
+      const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+      expect(JSON.parse(String(init.body))).toEqual({ direction: 0, command, durationSec: 0.5 });
+    });
+
+    it.each([
+      { command, direction: 0.1 },
+      { command, direction: '0' },
+      { command, direction: false },
+      { command, goalX: 0 },
+      { command, goalY: null },
+      { command, unexpected: 0 },
+      { command: { ...command, linearX: true }, direction: 0 },
+      { command, durationSec: 3 },
+    ])('refuses mixed wheel/goal or malformed joint start %#', async (body) => {
+      const fetchMock = vi
+        .spyOn(globalThis, 'fetch')
+        .mockRejectedValue(new Error('unexpected forwarding'));
+      const res = await invoke(buildRouter(), body, 'start');
+      expect(res.statusCode).toBe(400);
+      expect(res.body).toMatchObject({ error: 'SIM2REAL_STATION_POLICY_INVALID_COMMAND' });
+      expect(fetchMock).not.toHaveBeenCalled();
+    });
+
+    it('preserves an older board runtime refusal and its HTTP status', async () => {
+      const refusal = {
+        ok: false,
+        error: 'BOARD_AGENT_POLICY_REFUSED',
+        reason: 'runtime-command-unsupported',
+        policy: { state: 'ready' },
+      };
+      mockAgent(409, refusal);
+      const res = await invoke(buildRouter(), { command });
+      expect(res.statusCode).toBe(409);
+      expect(res.body).toEqual(refusal);
+    });
+
+    it('reports an unreachable board without claiming that a command executed', async () => {
+      vi.spyOn(globalThis, 'fetch').mockRejectedValue(new Error('offline'));
+      const res = await invoke(buildRouter(), { command });
+      expect(res.statusCode).toBe(502);
+      expect(res.body).toMatchObject({ error: 'SIM2REAL_BOARD_AGENT_UNREACHABLE' });
+    });
   });
 
   it('always forwards the policy stop, even with both switches off', async () => {

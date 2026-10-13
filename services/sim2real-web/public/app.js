@@ -500,6 +500,7 @@ function clearPrivateWorkspaceState({ keepOverviewLoading = false } = {}) {
   Object.assign(state, { overview: null, workspaceSummary: null, projects: [], projectsLoaded: false, projectsLoadError: false, datasets: [], datasetsLoaded: false, model: null, compatibility: [], validation: null, goldenPath: null, researchLoop: null, selectedModelId: '', selectedDeviceId: '', selectedComputeResourceId: '', computeResourceEditingId: '', projectId: '', activeDeployment: null, selectedRecord: null, recordsQuery: '', publishingTelemetry: false, runSubmitting: false });
   state.notifiedRunIds.clear(); state.runLogs = { runId: null, cursor: 0, lines: [], inFlight: false, terminalDone: null };
   state.agent.boardHealth = null;
+  stationInvalidatePolicy();
   stationStopStatusStream(); state.station.streamAbort?.abort(); clearTimeout(state.station.streamReconnectTimer);
   Object.assign(state.station, { ready: false, initialized: false, offline: false, offlineReason: '', mock: false, device: null, statusReader: null, streamAbort: null, streamReconnectTimer: null, cameraOn: false, log: [] });
   $('station-camera-img')?.removeAttribute('src');
@@ -1476,7 +1477,9 @@ function connectEventStream() {
 const $ = (id) => document.getElementById(id);
 
 function apiPath(path) {
-  return BASE_PATH + '/api' + path;
+  const deviceQuery = /^\/sim2real\/board-station(?:\/|$)/.test(path) && state.selectedDeviceId
+    ? `${path.includes('?') ? '&' : '?'}deviceId=${encodeURIComponent(state.selectedDeviceId)}` : '';
+  return BASE_PATH + '/api' + path + deviceQuery;
 }
 
 function escapeHtml(value) {
@@ -9075,6 +9078,17 @@ async function agentCheckBoard() {
   }
 }
 
+function renderDuckWorkshop() {
+  globalThis.DuckWorkshop?.render({
+    productId: state.productId, model: selectedModel(), device: selectedDevice(),
+    run: latestRun(), deployments: deploymentsForCurrentModel(), telemetry: currentTelemetry(),
+    publicHealth: state.publicHealth, integrations: state.overview?.integrations,
+    authRequired: state.authRequired, serviceError: state.serviceError,
+    loading: state.loading, loaded: Boolean(state.overview),
+    releaseEvidenceReady: hasReleaseGradeEvidence(currentTelemetry(), latestRun()),
+  });
+}
+
 function renderAll() {
   renderSelects();
   syncStationDeviceForm();
@@ -9099,6 +9113,7 @@ function renderAll() {
   renderResearchLoop();
   renderAgentPanel();
   renderPromotionFlow();
+  renderDuckWorkshop();
   // Data refreshes can replace or hide panels after a tab click. Re-assert the
   // active sub-interface at the end of every render so async ledger updates
   // never reopen a sibling panel or desynchronise aria-selected.
@@ -10209,6 +10224,7 @@ function stationRenderStatus(status) {
     if (node) node.textContent = value;
   };
   if (status.available === false || status.state === 'offline') {
+    stationInvalidatePolicy();
     const reason = String(status.message || status.reason || '实体板卡离线');
     if (freshness) {
       freshness.textContent = `板卡离线 · ${reason}`;
@@ -10401,6 +10417,7 @@ function stationScheduleStreamReconnect() {
 
 function stationStartStatusStream() {
   const ownerEpoch = workspaceOwnerEpoch;
+  const deviceId = state.selectedDeviceId;
   if (state.station.statusReader) return;
   stationClearStreamReconnect();
   const badge = $('station-live-badge');
@@ -10409,7 +10426,7 @@ function stationStartStatusStream() {
     headers: { accept: 'application/x-ndjson' },
   })
     .then(async (response) => {
-      if (ownerEpoch !== workspaceOwnerEpoch) { await response.body?.cancel(); return; }
+      if (ownerEpoch !== workspaceOwnerEpoch || deviceId !== state.selectedDeviceId) { await response.body?.cancel(); return; }
       if (!response.ok || !response.body) throw new Error('HTTP ' + response.status);
       if (badge) badge.hidden = false;
       // 流真正建立后重置退避计数，短暂中断不会累积到长间隔。
@@ -10420,7 +10437,7 @@ function stationStartStatusStream() {
       let buffer = '';
       for (;;) {
         const { done, value } = await reader.read();
-        if (ownerEpoch !== workspaceOwnerEpoch) { await reader.cancel(); break; }
+        if (ownerEpoch !== workspaceOwnerEpoch || deviceId !== state.selectedDeviceId) { await reader.cancel(); break; }
         if (done) break;
         buffer += decoder.decode(value, { stream: true });
         for (;;) {
@@ -10432,6 +10449,7 @@ function stationStartStatusStream() {
           try {
             const snapshot = JSON.parse(line);
             if (snapshot?.available === false || snapshot?.state === 'offline') {
+              stationInvalidatePolicy();
               state.station.offline = true;
               state.station.offlineReason = String(snapshot.message || '实体板卡离线');
             }
@@ -10443,7 +10461,8 @@ function stationStartStatusStream() {
       }
     })
     .catch(() => {
-      if (ownerEpoch !== workspaceOwnerEpoch) return;
+      if (ownerEpoch !== workspaceOwnerEpoch || deviceId !== state.selectedDeviceId) return;
+      stationInvalidatePolicy();
       if (badge) badge.hidden = true;
       const freshness = $('station-freshness');
       if (freshness) {
@@ -10453,7 +10472,7 @@ function stationStartStatusStream() {
       stationLog('状态流已断开或不可用', 'error');
     })
     .finally(() => {
-      if (ownerEpoch !== workspaceOwnerEpoch) return;
+      if (ownerEpoch !== workspaceOwnerEpoch || deviceId !== state.selectedDeviceId) return;
       state.station.statusReader = null;
       if (badge) badge.hidden = true;
       // 流结束（正常关闭或错误）后自动重连；页面隐藏/视图切走时由
@@ -10542,37 +10561,34 @@ async function stationSendDrive() {
 }
 
 async function stationEmergencyStop() {
+  const ownerEpoch = workspaceOwnerEpoch;
+  const deviceId = state.selectedDeviceId;
+  const joint = state.station.policy?.actuatorKind === 'joint';
   try {
-    await request('/sim2real/board-station/drive/stop', { method: 'POST', body: '{}' });
-    stationLog('急停已下发：零速帧发布，底盘看门狗兜底停车', 'ok');
+    const payload = await request('/sim2real/board-station/drive/stop', { method: 'POST', body: '{}' });
+    if (ownerEpoch !== workspaceOwnerEpoch || deviceId !== state.selectedDeviceId) return;
+    if (payload?.ok !== true || payload?.stop?.ok === false || (joint && payload?.stop?.ok !== true)) {
+      stationLog('停止未获板端确认，请使用现场控制器急停。', 'error'); return;
+    }
+    stationLog(joint ? '关节策略停止请求已确认，保持最后限幅目标；实际停止以现场反馈为准。' : '急停已下发：零速帧发布，底盘看门狗兜底停车', 'ok');
+    if (payload?.policy) stationRenderPolicy(payload.policy);
     const driveState = $('station-drive-state');
     if (driveState) driveState.textContent = '急停（operator-emergency-stop）';
   } catch (error) {
-    stationLog(`急停下发失败（底盘看门狗仍兜底）：${error instanceof Error ? error.message : '未知错误'}`, 'error');
+    stationLog(`急停下发失败，请使用现场控制器急停：${error instanceof Error ? error.message : '未知错误'}`, 'error');
   }
 }
 
 // 浮动急停：驱动窗口激活时在视口角落常驻一枚红色停止按钮，任何页面可见。
-// 只依赖 1Hz 状态流里的 drive.active；流断开时按钮 2s 后自动隐藏，宁可
-// 多显示不可在运动中消失。急停端点本身永远可用，与按钮显隐无关。
-let stationFloatStopTimer = null;
-
+// 最后一次运行状态会保留停止入口；断流不能当作停止回执。
+// 急停端点本身永远可用，与按钮显隐无关。
 function stationUpdateFloatStop(drive) {
   const button = $('station-float-stop');
   if (!button) return;
   const active = Boolean(drive && drive.active);
-  if (active) {
-    button.hidden = false;
-    if (stationFloatStopTimer) clearTimeout(stationFloatStopTimer);
-    stationFloatStopTimer = setTimeout(() => {
-      button.hidden = true;
-      stationFloatStopTimer = null;
-    }, 2000);
-  } else if (stationFloatStopTimer) {
-    clearTimeout(stationFloatStopTimer);
-    stationFloatStopTimer = null;
-    button.hidden = true;
-  }
+  // Loss of a stream is not a stop receipt. Keep the last known running
+  // control visible until an explicit inactive snapshot arrives.
+  button.hidden = !active;
 }
 
 function wireStationFloatStop() {
@@ -10589,9 +10605,13 @@ function wireStationFloatStop() {
 // 面板只在平台策略开关开启时展开控制区；停止（策略归零）永远可点。
 
 async function stationProbePolicy() {
+  const ownerEpoch = workspaceOwnerEpoch;
+  const deviceId = state.selectedDeviceId;
   try {
     const payload = await request('/sim2real/board-station/policy');
+    if (ownerEpoch !== workspaceOwnerEpoch || deviceId !== state.selectedDeviceId) return;
     if (payload?.available === false || payload?.state === 'offline') {
+      stationInvalidatePolicy();
       const controls = $('station-policy-controls');
       const note = $('station-policy-note');
       if (controls) controls.hidden = true;
@@ -10602,8 +10622,9 @@ async function stationProbePolicy() {
     const drivePlatform = payload?.drivePlatformEnabled === true;
     const agent = payload?.policy;
     const agentPolicy = agent?.enabled === true;
-    const agentDrive = agent?.driveEnabled === true;
-    const agentReady = agentPolicy && agentDrive;
+    const joint = agent?.actuatorKind === 'joint';
+    const agentDrive = joint ? agent?.actuatorEnabled === true : agent?.driveEnabled === true;
+    state.station.policyMotionReady = platform && drivePlatform && agentPolicy && agentDrive;
     const controls = $('station-policy-controls');
     const note = $('station-policy-note');
     if (controls) controls.hidden = !platform;
@@ -10615,8 +10636,9 @@ async function stationProbePolicy() {
       if (!agentPolicy) missing.push('板端 RDK_SIM2REAL_BOARD_AGENT_ENABLE_POLICY');
       if (!agentDrive) missing.push('板端 RDK_SIM2REAL_BOARD_AGENT_ENABLE_DRIVE');
       if (!missing.length) {
-        note.textContent =
-          '策略运动通道已开启：输出钳制 0.3 m/s / 1.0 rad/s，500ms 无命令底盘自动停车，急停始终可用。';
+        note.textContent = joint
+          ? '关节策略通道已开启。行走指令单次最长 2 秒，到期归零；停止策略保持最后限幅目标。实体校准、控制器急停与跌倒保护需现场验收。'
+          : '策略运动通道已开启：输出钳制 0.3 m/s / 1.0 rad/s，500ms 无命令底盘自动停车，急停始终可用。';
       } else if (platform) {
         note.textContent = `平台策略开关已开启，尚未开启：${missing.join('、')}。`;
       } else {
@@ -10628,14 +10650,120 @@ async function stationProbePolicy() {
     // 平台策略开关开启时顺带拉一次板端制品列表（staging 面板随 controls 显示）。
     if (platform) void stationRenderPolicyFiles();
   } catch {
+    if (ownerEpoch !== workspaceOwnerEpoch || deviceId !== state.selectedDeviceId) return;
+    stationInvalidatePolicy();
     const controls = $('station-policy-controls');
     if (controls) controls.hidden = true;
   }
 }
 
 /** 1Hz 流渲染：state/model/infer/published/obsSlots 全部如实显示。 */
+function stationInvalidatePolicy() {
+  state.station.policy = null;
+  state.station.policyDeviceId = '';
+  state.station.policyMotionReady = false;
+  for (const id of ['station-policy-start', 'station-joint-command', 'station-joint-stand', 'station-joint-linear', 'station-joint-angular', 'station-joint-duration']) {
+    if ($(id)) $(id).disabled = true;
+  }
+  $('station-joint-feedback')?.replaceChildren();
+  setText('station-policy-model-meta', '等待当前设备报告模型状态');
+  setText('station-policy-state', '未检查');
+  setText('station-joint-command-state', '等待当前设备报告策略状态与限幅。');
+}
+
+function stationRenderJointPolicy(policy) {
+  const joint = policy.actuatorKind === 'joint';
+  $('station-joint-controls')?.toggleAttribute('hidden', !joint);
+  $('station-joint-feedback')?.toggleAttribute('hidden', !joint);
+  $('station-policy-direction')?.closest('.station-policy-slider')?.toggleAttribute('hidden', joint);
+  $('station-policy-goal-x')?.closest('.station-policy-goal')?.toggleAttribute('hidden', joint);
+  if (!joint) {
+    if ($('station-policy-start')) $('station-policy-start').disabled = state.station.policyMotionReady !== true || !policy.model || policy.state === 'running';
+    return;
+  }
+  const limits = policy.commandLimits;
+  const supported = limits && ['linearX', 'linearY', 'angularZ'].every((key) =>
+    typeof limits[key] === 'number' && Number.isFinite(limits[key]) && limits[key] > 0);
+  const ready = supported && state.station.policyMotionReady === true;
+  const running = ready && policy.state === 'running';
+  for (const [id, limit] of [['station-joint-linear', limits?.linearX], ['station-joint-angular', limits?.angularZ]]) {
+    const input = $(id);
+    if (input) {
+      input.disabled = !running;
+      if (supported) { input.min = String(-limit); input.max = String(limit); }
+    }
+  }
+  if ($('station-joint-duration')) $('station-joint-duration').disabled = !running;
+  if ($('station-joint-command')) $('station-joint-command').disabled = !running || policy.sensorFresh !== true;
+  if ($('station-joint-stand')) $('station-joint-stand').disabled = !running;
+  if ($('station-policy-start')) $('station-policy-start').disabled = !ready || !policy.model || policy.state === 'running';
+  const command = policy.jointCommand || {};
+  const format = (value) => typeof value === 'number' && Number.isFinite(value) ? value.toFixed(3) : '—';
+  setText('station-joint-command-state', !supported
+    ? '板端尚未提供腿式命令接口，请更新 BoardAgent 与关节运行时后重新检查。'
+    : `${policy.sensorFresh === true ? '传感器有效' : '传感器未就绪/已过期'} · 前进 ${format(command.linearX)} m/s · 转向 ${format(command.angularZ)} rad/s · ${policy.commandStopReason || '短窗命令'}${Number.isFinite(policy.commandRemainingSec) ? ` · 剩余 ${Math.max(0, policy.commandRemainingSec).toFixed(1)} 秒` : ''}`);
+  const mount = $('station-joint-feedback');
+  if (!mount) return;
+  const names = Array.isArray(policy.jointNames) ? policy.jointNames.slice(0, 14) : [];
+  const targets = Array.isArray(policy.lastTargetRad) ? policy.lastTargetRad : [];
+  const actual = policy.jointStates || {};
+  const positions = new Map(Array.isArray(actual.names) && Array.isArray(actual.position)
+    ? actual.names.map((name, index) => [name, actual.position[index]]) : []);
+  const table = document.createElement('table');
+  table.className = 'station-joint-table';
+  const caption = document.createElement('caption');
+  caption.textContent = '关节反馈（rad） · 数据新鲜度以传感器状态为准';
+  const head = document.createElement('thead');
+  const heading = document.createElement('tr');
+  for (const label of ['关节', '实际', '目标', '偏差']) {
+    const cell = document.createElement('th'); cell.scope = 'col'; cell.textContent = label; heading.append(cell);
+  }
+  head.append(heading);
+  const body = document.createElement('tbody');
+  names.forEach((name, index) => {
+    const measured = positions.get(name); const target = targets[index];
+    const delta = typeof measured === 'number' && typeof target === 'number' ? target - measured : null;
+    const row = document.createElement('tr');
+    for (const value of [String(name), format(measured), format(target), format(delta)]) {
+      const cell = document.createElement('td'); cell.textContent = value; row.append(cell);
+    }
+    body.append(row);
+  });
+  table.append(caption, head, body);
+  mount.replaceChildren(table);
+}
+
+async function stationJointCommand(stopGait = false) {
+  const policy = state.station.policy;
+  if (!state.selectedDeviceId || state.station.policyDeviceId !== state.selectedDeviceId || policy?.actuatorKind !== 'joint' || !policy.commandLimits || policy.state !== 'running' || state.station.policyMotionReady !== true) {
+    stationLog('腿式指令暂不可用：检查板端能力、运动开关与策略状态。', 'error'); return;
+  }
+  const command = { linearX: stopGait ? 0 : Number($('station-joint-linear')?.value), linearY: 0, angularZ: stopGait ? 0 : Number($('station-joint-angular')?.value) };
+  const durationSec = stopGait ? 1 : Number($('station-joint-duration')?.value);
+  if (!Object.values(command).every(Number.isFinite) || !Number.isFinite(durationSec) || durationSec < 0.2 || durationSec > 2 ||
+      Math.abs(command.linearX) > policy.commandLimits.linearX || Math.abs(command.angularZ) > policy.commandLimits.angularZ) {
+    stationLog('指令超出板端限幅，持续时间需在 0.2–2 秒之间。', 'error'); return;
+  }
+  const ownerEpoch = workspaceOwnerEpoch;
+  const deviceId = selectedDevice()?.id;
+  if (!stopGait && !(await confirmAction({ title: '确认机器人鸭短窗运动',
+    note: `前进 ${command.linearX.toFixed(2)} m/s，转向 ${command.angularZ.toFixed(2)} rad/s，持续 ${durationSec.toFixed(1)} 秒。请确认关节已校准、控制器急停可用，人在现场。到期只归零步态命令，策略继续运行。`, approveLabel: '发送指令' }))) return;
+  if (ownerEpoch !== workspaceOwnerEpoch || deviceId !== selectedDevice()?.id) return;
+  if (state.station.policyDeviceId !== state.selectedDeviceId || state.station.policy?.state !== 'running' || state.station.policyMotionReady !== true ||
+      (!stopGait && state.station.policy?.sensorFresh !== true) || Math.abs(command.linearX) > state.station.policy.commandLimits?.linearX || Math.abs(command.angularZ) > state.station.policy.commandLimits?.angularZ) return;
+  try {
+    const payload = await request('/sim2real/board-station/policy/command', { method: 'POST', body: JSON.stringify({ command, durationSec }) });
+    if (ownerEpoch !== workspaceOwnerEpoch || deviceId !== selectedDevice()?.id) return;
+    stationLog(payload?.ok ? (stopGait ? '零步态命令已接受，策略继续运行。' : '短窗指令已接受，实际动作以关节与姿态反馈为准。') : `腿式指令被拒绝：${payload?.error || payload?.reason || '板端未接受'}`, payload?.ok ? 'ok' : 'error');
+    if (payload?.policy) stationRenderPolicy(payload.policy);
+  } catch (error) { stationLog(`腿式指令失败：${error instanceof Error ? error.message : '请求失败'}`, 'error'); }
+}
+
 function stationRenderPolicy(policy) {
   if (!policy || typeof policy !== 'object') return;
+  state.station.policy = policy;
+  state.station.policyDeviceId = state.selectedDeviceId;
+  stationRenderJointPolicy(policy);
   const stateText = String(policy.state ?? 'idle');
   const stateNode = $('station-policy-state');
   if (stateNode) {
@@ -10868,9 +10996,15 @@ async function stationPolicyLoad() {
 }
 
 async function stationPolicyStart() {
-  const direction = Number($('station-policy-direction')?.value ?? 0);
-  const goalXRaw = String($('station-policy-goal-x')?.value ?? '').trim();
-  const goalYRaw = String($('station-policy-goal-y')?.value ?? '').trim();
+  const joint = state.station.policy?.actuatorKind === 'joint';
+  if (joint && (state.station.policyDeviceId !== state.selectedDeviceId || !state.station.policy?.commandLimits || state.station.policyMotionReady !== true)) {
+    stationLog('请先检查当前机器人鸭的策略能力与运动开关。', 'error'); return;
+  }
+  const ownerEpoch = workspaceOwnerEpoch;
+  const deviceId = selectedDevice()?.id;
+  const direction = joint ? 0 : Number($('station-policy-direction')?.value ?? 0);
+  const goalXRaw = joint ? '' : String($('station-policy-goal-x')?.value ?? '').trim();
+  const goalYRaw = joint ? '' : String($('station-policy-goal-y')?.value ?? '').trim();
   const goalX = goalXRaw === '' ? undefined : Number(goalXRaw);
   const goalY = goalYRaw === '' ? undefined : Number(goalYRaw);
   if ((goalX !== undefined && !Number.isFinite(goalX)) || (goalY !== undefined && !Number.isFinite(goalY))) {
@@ -10879,24 +11013,29 @@ async function stationPolicyStart() {
   }
   const acknowledged = await confirmAction({
     title: '确认策略驱动运动',
-    note:
+    note: joint
+      ? '以零速度命令启动机器人鸭关节策略，仍会发布关节目标。请确认关节已校准、控制器急停可用且人在现场。停止策略保持最后限幅目标，不代表舵机断电；跌倒保护需现场验收。'
+      :
       `即将让 OriginBot 由策略网络驱动运动（方向指令 ${direction.toFixed(1)}${goalX !== undefined && goalY !== undefined ? `，目标 ${goalX.toFixed(2)}, ${goalY.toFixed(2)} m` : ''}）。\n` +
       '策略输出将被钳制在 0.3 m/s / 1.0 rad/s 内，500ms 无命令底盘自动停车。\n' +
       '请确认机器人周围无障碍物、场地已清空，急停按钮随时可用。',
     approveLabel: '启动策略',
   });
   if (!acknowledged) return;
+  if (ownerEpoch !== workspaceOwnerEpoch || deviceId !== selectedDevice()?.id) return;
   try {
     const payload = await request('/sim2real/board-station/policy/start', {
       method: 'POST',
       body: JSON.stringify({
         direction,
+        ...(joint ? { command: { linearX: 0, linearY: 0, angularZ: 0 }, durationSec: 1 } : {}),
         ...(goalX === undefined ? {} : { goalX }),
         ...(goalY === undefined ? {} : { goalY }),
       }),
     });
+    if (ownerEpoch !== workspaceOwnerEpoch || deviceId !== selectedDevice()?.id) return;
     if (payload?.ok) {
-      stationLog('策略已启动：板端实时推理中（观测→动作→/cmd_vel）', 'ok');
+      stationLog(joint ? '关节策略已启动；当前为零速度命令，实际姿态以现场反馈为准。' : '策略已启动：板端实时推理中（观测→动作→/cmd_vel）', 'ok');
     } else {
       stationLog(`策略启动被拒绝：${payload?.error ?? payload?.reason ?? '未知原因'}`, 'error');
     }
@@ -10907,11 +11046,20 @@ async function stationPolicyStart() {
 }
 
 async function stationPolicyStop() {
+  const ownerEpoch = workspaceOwnerEpoch;
+  const deviceId = state.selectedDeviceId;
   try {
-    await request('/sim2real/board-station/policy/stop', { method: 'POST', body: '{}' });
-    stationLog('策略已停止：输出归零，底盘看门狗兜底', 'ok');
+    const payload = await request('/sim2real/board-station/policy/stop', { method: 'POST', body: '{}' });
+    if (ownerEpoch !== workspaceOwnerEpoch || deviceId !== state.selectedDeviceId) return;
+    if (payload?.ok !== true || payload?.stop?.ok === false) {
+      stationLog(`策略停止未确认，请使用现场控制器急停：${payload?.stop?.error || payload?.error || payload?.reason || '板端未确认'}`, 'error');
+      return;
+    }
+    const joint = state.station.policy?.actuatorKind === 'joint';
+    stationLog(joint ? '停止请求已接受：关节策略停止并保持最后限幅目标，实际停止以现场反馈为准。' : '策略已停止：输出归零，底盘看门狗兜底', 'ok');
+    if (payload?.policy) stationRenderPolicy(payload.policy);
   } catch (error) {
-    stationLog(`策略停止失败（底盘看门狗仍兜底）：${error instanceof Error ? error.message : '未知错误'}`, 'error');
+    stationLog(`策略停止请求失败，请使用现场控制器急停：${error instanceof Error ? error.message : '未知错误'}`, 'error');
   }
 }
 
@@ -10996,10 +11144,14 @@ async function stationRunCommand(id) {
 }
 
 async function stationInit() {
+  const ownerEpoch = workspaceOwnerEpoch;
+  const deviceId = state.selectedDeviceId;
+  stationInvalidatePolicy();
   const notice = $('station-notice');
   const honestyNote = $('station-honesty-note');
   try {
     const health = await request('/sim2real/board-station/health');
+    if (ownerEpoch !== workspaceOwnerEpoch || deviceId !== state.selectedDeviceId) return;
     if (health?.available === false || health?.state === 'offline') {
       state.station.ready = false;
       state.station.offline = true;
@@ -11053,6 +11205,8 @@ async function stationInit() {
     // 同样探测策略运行时开关（独立的面板、独立的第三重开关）。
     stationProbePolicy();
   } catch (error) {
+    if (ownerEpoch !== workspaceOwnerEpoch || deviceId !== state.selectedDeviceId) return;
+    stationInvalidatePolicy();
     state.station.ready = false;
     const fallbackDevice = selectedDevice();
     const deviceName = $('station-device-name');
@@ -11308,6 +11462,9 @@ function wireDeviceManagerEvents() {
     }
     if (action === 'bridge-select') {
       state.selectedDeviceId = button.dataset.deviceId || '';
+      stationInvalidatePolicy();
+      stationStopStatusStream();
+      state.station.initialized = false;
       saveWorkspaceContext();
       renderAll();
       showToast('已选择目标设备；现在可继续做预检或部署。', 'success');
@@ -11556,6 +11713,8 @@ function wireStationEvents() {
   $('station-policy-stop')?.addEventListener('click', () => {
     void stationPolicyStop();
   });
+  $('station-joint-command')?.addEventListener('click', () => { void stationJointCommand(); });
+  $('station-joint-stand')?.addEventListener('click', () => { void stationJointCommand(true); });
   $('station-policy-reset')?.addEventListener('click', () => {
     void stationPolicyReset();
   });
@@ -12065,9 +12224,13 @@ function wireEvents() {
   });
   $('device-select')?.addEventListener('change', (event) => {
     state.selectedDeviceId = event.target.value;
+    stationInvalidatePolicy();
+    stationStopStatusStream();
+    state.station.initialized = false;
     state.activeDeployment = null;
     saveWorkspaceContext();
     renderAll();
+    stationMaybeInit();
   });
   $('compute-resource-select')?.addEventListener('change', (event) => {
     state.selectedComputeResourceId = event.target.value;
@@ -12460,6 +12623,12 @@ function wireViewShortcuts() {
   });
 }
 
+globalThis.DuckWorkshop?.setNavigate(({ view, child, module }) => {
+  clearFlowChild();
+  setView(view);
+  if (child) { applyFlowChildDestination(FLOW_CHILD_CONTEXTS[child]); setFlowChild(child); }
+  if (module) setStationModule(module);
+});
 wireEvents();
 wireViewShortcuts();
 syncShortcutChrome();

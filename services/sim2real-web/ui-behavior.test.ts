@@ -3536,3 +3536,225 @@ describe('Sim2Real workbench DOM behavior', () => {
     expect(errors).toEqual([]);
   });
 });
+
+describe('joint station device ownership', () => {
+  const devices = [
+    { id: 'board-a', name: 'Duck A', status: 'connected', boardPlatform: 'rdk-x5' },
+    { id: 'board-b', name: 'Duck B', status: 'connected', boardPlatform: 'rdk-x5' },
+  ];
+  const jointPolicy = {
+    actuatorKind: 'joint',
+    state: 'running',
+    enabled: true,
+    actuatorEnabled: true,
+    model: { path: 'policy-a.onnx' },
+    sensorFresh: true,
+    commandLimits: { linearX: 0.3, linearY: 0.3, angularZ: 1 },
+    jointNames: ['left_hip_pitch'],
+    lastTargetRad: [0],
+    jointStates: { names: ['left_hip_pitch'], position: [0] },
+  };
+
+  function selectDevice(window: InstanceType<typeof JSDOM>['window'], id: string) {
+    const select = window.document.querySelector<HTMLSelectElement>('#device-select')!;
+    select.value = id;
+    select.dispatchEvent(new window.Event('change', { bubbles: true }));
+  }
+
+  function mountPolicy(window: InstanceType<typeof JSDOM>['window']) {
+    selectDevice(window, 'board-a');
+    window.eval(
+      `__workbenchState.station.policyMotionReady = true; stationRenderPolicy(${JSON.stringify(jointPolicy)});`,
+    );
+  }
+
+  function expectJointDisabled(window: InstanceType<typeof JSDOM>['window']) {
+    for (const id of [
+      'station-joint-command',
+      'station-joint-stand',
+      'station-joint-linear',
+      'station-joint-angular',
+      'station-joint-duration',
+    ]) {
+      expect(window.document.querySelector<HTMLInputElement>(`#${id}`)?.disabled).toBe(true);
+    }
+  }
+
+  function json(payload: unknown) {
+    return new Response(JSON.stringify(payload), {
+      status: 200,
+      headers: { 'content-type': 'application/json' },
+    });
+  }
+
+  it('targets the selected B device for every station URL and preserves unrelated query parameters', async () => {
+    const { window, errors } = await boot({ devices });
+    selectDevice(window, 'board-b');
+    for (const path of [
+      '/sim2real/board-station/health',
+      '/sim2real/board-station/status/stream',
+      '/sim2real/board-station/policy/command?marker=keep',
+    ]) {
+      const target = new URL(window.eval(`apiPath(${JSON.stringify(path)})`), window.location.href);
+      expect(target.searchParams.get('deviceId')).toBe('board-b');
+      if (path.includes('marker')) expect(target.searchParams.get('marker')).toBe('keep');
+    }
+    const overviewPath = new URL(
+      window.eval('apiPath("/sim2real/overview")'),
+      window.location.href,
+    );
+    expect(overviewPath.searchParams.has('deviceId')).toBe(false);
+    expect(errors).toEqual([]);
+  });
+
+  it('invalidates cached A capability on selecting B and cannot send a B command using it', async () => {
+    const { window, requests, errors } = await boot({ devices });
+    mountPolicy(window);
+    expect(
+      window.document.querySelector<HTMLButtonElement>('#station-joint-command')?.disabled,
+    ).toBe(false);
+    selectDevice(window, 'board-b');
+    expectJointDisabled(window);
+    expect(window.eval('__workbenchState.station.policyMotionReady')).toBe(false);
+    expect(window.eval('__workbenchState.station.policyDeviceId')).not.toBe('board-a');
+    await window.eval('stationJointCommand(true)');
+    expect(
+      requests.filter(
+        (request) => request.method === 'POST' && request.url.includes('/policy/command'),
+      ),
+    ).toHaveLength(0);
+    expect(errors).toEqual([]);
+  });
+
+  it('disables joint commands immediately when an offline status replaces a running policy', async () => {
+    const { window, requests, errors } = await boot({ devices });
+    mountPolicy(window);
+    window.eval(
+      'stationRenderStatus({available:false,state:"offline",message:"agent disconnected"})',
+    );
+    expectJointDisabled(window);
+    expect(window.eval('__workbenchState.station.policyMotionReady')).toBe(false);
+    await window.eval('stationJointCommand(true)');
+    expect(
+      requests.filter(
+        (request) => request.method === 'POST' && request.url.includes('/policy/command'),
+      ),
+    ).toHaveLength(0);
+    expect(errors).toEqual([]);
+  });
+
+  it('clears private joint capability on an account change', async () => {
+    const fixture = { devices, accountId: 'account-a', sessionAuthenticated: true };
+    const { window, requests, errors } = await boot(fixture);
+    mountPolicy(window);
+    fixture.accountId = 'account-b';
+    await window.eval('refreshSessionMenu()');
+    expectJointDisabled(window);
+    expect(window.eval('__workbenchState.station.policyMotionReady')).toBe(false);
+    expect(window.eval('__workbenchState.station.policy')).toBeNull();
+    await window.eval('stationJointCommand(true)');
+    expect(
+      requests.filter(
+        (request) => request.method === 'POST' && request.url.includes('/policy/command'),
+      ),
+    ).toHaveLength(0);
+    expect(errors).toEqual([]);
+  });
+
+  it('ignores a delayed A policy probe after B becomes the selected device', async () => {
+    let finish!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      finish = resolve;
+    });
+    let probeStarted = false;
+    const { window, errors } = await boot({
+      devices,
+      transport: async (url, init) => {
+        const target = new URL(url, 'http://localhost/');
+        if (
+          target.pathname.endsWith('/board-station/policy') &&
+          target.searchParams.get('deviceId') === 'board-a' &&
+          (!init?.method || init.method === 'GET')
+        ) {
+          probeStarted = true;
+          await gate;
+          return json({
+            ok: true,
+            platformEnabled: true,
+            drivePlatformEnabled: true,
+            policy: { ...jointPolicy, model: { path: 'late-a-only.onnx' } },
+          });
+        }
+        return null;
+      },
+    });
+    mountPolicy(window);
+    const pending = window.eval('stationProbePolicy()');
+    await vi.waitFor(() => expect(probeStarted).toBe(true));
+    selectDevice(window, 'board-b');
+    finish();
+    await pending;
+    expectJointDisabled(window);
+    expect(window.eval('__workbenchState.station.policyMotionReady')).toBe(false);
+    expect(window.eval('__workbenchState.station.policyDeviceId')).not.toBe('board-a');
+    expect(window.document.querySelector('#station-policy-model-meta')?.textContent).not.toContain(
+      'late-a-only.onnx',
+    );
+    expect(errors).toEqual([]);
+  });
+
+  it('cancels or ignores A status stream samples after B becomes the selected device', async () => {
+    let controller!: ReadableStreamDefaultController<Uint8Array>;
+    let cancelled = false;
+    const stream = new ReadableStream<Uint8Array>({
+      start(value) {
+        controller = value;
+      },
+      cancel() {
+        cancelled = true;
+      },
+    });
+    const { window, errors } = await boot({
+      devices,
+      transport: async (url) =>
+        url.includes('/board-station/status/stream')
+          ? new Response(stream, { headers: { 'content-type': 'application/x-ndjson' } })
+          : null,
+    });
+    mountPolicy(window);
+    window.eval('stationStartStatusStream()');
+    await vi.waitFor(() =>
+      expect(window.eval('__workbenchState.station.statusReader')).not.toBeNull(),
+    );
+    selectDevice(window, 'board-b');
+    if (!cancelled) {
+      controller.enqueue(new TextEncoder().encode(JSON.stringify({ policy: jointPolicy }) + '\n'));
+      controller.close();
+    }
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expectJointDisabled(window);
+    expect(window.eval('__workbenchState.station.policyMotionReady')).toBe(false);
+    expect(window.eval('__workbenchState.station.policyDeviceId')).not.toBe('board-a');
+    expect(errors).toEqual([]);
+  });
+
+  it('reports an unconfirmed stop instead of acceptance when the agent returns ok false', async () => {
+    const { window, requests, errors } = await boot({
+      devices,
+      transport: async (url) =>
+        url.includes('/board-station/policy/stop')
+          ? json({ ok: false, error: 'controller did not accept stop' })
+          : null,
+    });
+    mountPolicy(window);
+    await window.eval('stationPolicyStop()');
+    const stop = requests.find(
+      (request) => request.method === 'POST' && request.url.includes('/policy/stop'),
+    )!;
+    expect(new URL(stop.url, window.location.href).searchParams.get('deviceId')).toBe('board-a');
+    const log = window.document.querySelector('#station-log-list')?.textContent || '';
+    expect(log).toMatch(/未确认|失败|拒绝/);
+    expect(log).not.toMatch(/停止请求已接受|策略已停止/);
+    expect(errors).toEqual([]);
+  });
+});

@@ -14,6 +14,33 @@ const agentChat = fs.readFileSync(path.join(here, 'public', 'agent-chat.js'), 'u
 // assertions below now point at the merged files.
 const cssApp = fs.readFileSync(path.join(here, 'public', 'app.css'), 'utf8');
 const cssIa = cssApp;
+const duckWorkshop = fs.readFileSync(path.join(here, 'public', 'duck-workshop.js'), 'utf8');
+assert.match(html, /<details[^>]*id="duck-workshop"[^>]*hidden>/, 'DDC guide is an optional fold');
+assert.ok(
+  html.indexOf('./duck-workshop.js') < html.indexOf('./app.js'),
+  'workshop loads before app state projection',
+);
+assert.match(
+  app,
+  /DuckWorkshop\?\.render\(/,
+  'workshop consumes the existing account-scoped read model',
+);
+assert.match(
+  app,
+  /DuckWorkshop\?\.setNavigate\(/,
+  'workshop uses the existing navigation controller',
+);
+assert.doesNotMatch(
+  duckWorkshop,
+  /\bfetch\s*\(|localStorage/,
+  'workshop cannot create a second ledger or execute device commands',
+);
+assert.match(html, /id="station-joint-command" disabled/, 'joint command controls start locked');
+assert.match(
+  app,
+  /policy\.actuatorKind === 'joint'/,
+  'joint feedback is selected by the hardware contract',
+);
 // Check the actual parent chain: the evaluation run partition must own import
 // and publishing, while comparison-only content must not hide their surface.
 function elementAncestorsOf(id) {

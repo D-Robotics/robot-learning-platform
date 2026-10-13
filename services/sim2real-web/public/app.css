@@ -11750,3 +11750,27 @@ body .depth-led #workflow-progress-strip {
   color: var(--muted-strong);
   white-space: nowrap;
 }
+
+/* The DDC guide expands into one selected step; the first-use goals remain
+   the primary entry. All colors and type sizes use the shared palette. */
+.duck-workshop-heading { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 16px; }
+.duck-workshop-heading span { margin-inline-start: auto; color: var(--muted); font-size: var(--fs-meta); }
+.duck-workshop-body { display: grid; gap: 16px; padding: 16px; border-top: 1px solid var(--line); }
+.duck-workshop-next strong, .duck-workshop-detail strong { font-size: var(--fs-body); }
+.duck-workshop-next p, .duck-workshop-detail p, .duck-workshop-note { margin: 8px 0 0; color: var(--muted-strong); line-height: 1.65; font-size: var(--fs-body); }
+.duck-workshop-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.duck-workshop-steps { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 140px), 1fr)); gap: 8px; list-style: none; margin: 0; padding: 0; }
+.duck-workshop-step { display: grid; grid-template-columns: auto 1fr; align-items: center; gap: 4px 8px; width: 100%; min-height: 56px; padding: 10px; text-align: start; color: var(--text); border: 1px solid var(--line); border-radius: 8px; background: var(--panel); cursor: pointer; font: inherit; }
+.duck-workshop-step[aria-pressed="true"] { border-color: var(--accent); background: var(--accent-soft); }
+.duck-workshop-step-number { grid-row: span 2; color: var(--muted); font-size: var(--fs-meta); }
+.duck-workshop-step-name { font-weight: 600; font-size: var(--fs-body); }
+.duck-workshop-step-status { color: var(--muted-strong); font-size: var(--fs-meta); }
+.duck-workshop-detail { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; padding: 16px; border-radius: 8px; background: var(--panel-soft); }
+.duck-workshop-detail > div { flex: 1 1 240px; min-width: 0; }
+.duck-workshop-detail .button { flex: 0 1 auto; white-space: normal; }
+.duck-workshop-step:focus-visible { outline: 2px solid var(--accent-text); outline-offset: 2px; }
+.station-joint-controls { margin: 16px 0; padding: 16px; border: 1px solid var(--line); border-radius: 8px; }
+.station-joint-feedback { max-width: 100%; overflow-x: auto; }
+.station-joint-table { width: 100%; border-collapse: collapse; font-size: var(--fs-meta); }
+.station-joint-table caption { padding: 8px; color: var(--muted-strong); text-align: start; }
+.station-joint-table th, .station-joint-table td { padding: 8px; border-bottom: 1px solid var(--line); text-align: start; }

@@ -175,6 +175,36 @@ describe('board-station proxy bounded body handling', () => {
     },
   );
 
+  it('allows a bounded policy command through the cookie-authenticated Studio bridge', async () => {
+    delete process.env.RDK_SIM2REAL_BOARD_AGENT_URL;
+    process.env.RDK_SIM2REAL_STUDIO_EXEC_ORIGIN = 'http://127.0.0.1:18090';
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(
+        JSON.stringify({ output: JSON.stringify({ ok: true, commandAccepted: true }) }),
+        {
+          status: 200,
+        },
+      ),
+    );
+    const body = JSON.stringify({
+      command: { linearX: 0.1, linearY: 0, angularZ: 0 },
+      durationSec: 1,
+    });
+    await expect(
+      stationAgentFetchWithStatus('/v1/station/policy/command', {
+        method: 'POST',
+        body,
+        cookieHeader: 'studio_session=test',
+        deviceId: 'studio-device-2',
+      }),
+    ).resolves.toEqual({ status: 200, payload: { ok: true, commandAccepted: true } });
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe('http://127.0.0.1:18090/api/devices/studio-device-2/exec');
+    const bridge = JSON.parse(String(init.body));
+    expect(bridge.command).toContain('/v1/station/policy/command');
+    expect(bridge.command).toContain(body);
+  });
+
   it('rejects oversized or control-character cookies before the Studio bridge', async () => {
     delete process.env.RDK_SIM2REAL_BOARD_AGENT_URL;
     process.env.RDK_SIM2REAL_STUDIO_EXEC_ORIGIN = 'http://127.0.0.1:18090';
