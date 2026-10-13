@@ -476,6 +476,55 @@
     return ACTIVE_RUN_STATUSES.includes(String(status || '').toLowerCase());
   }
 
+  // Keep training progress attached to training: a newer compatibility check
+  // or browser replay must not hide an active worker job. This selector only
+  // chooses a record; it never changes its status or treats a blocker as success.
+  function selectTrainingRun(runs) {
+    if (!Array.isArray(runs)) return null;
+    const historyStatuses = ['ready', 'completed', 'failed', 'blocked', 'cancelled', 'canceled', 'unknown'];
+    const candidates = [];
+    for (const run of runs) {
+      if (!run || typeof run !== 'object' || Array.isArray(run) || !['local', 'robogo'].includes(run.backend) || typeof run.status !== 'string') continue;
+      const status = run.status.toLowerCase();
+      const priority = status === 'running' ? 0 : status === 'queued' ? 1 : historyStatuses.includes(status) ? 2 : null;
+      if (priority === null) continue;
+      const timestamp = typeof run.createdAt === 'string' ? Date.parse(run.createdAt) : NaN;
+      candidates.push({
+        run, priority,
+        synthetic: run.mock === true || isSyntheticEvidence(null, run),
+        createdAt: Number.isFinite(timestamp) ? timestamp : -Infinity,
+        id: typeof run.id === 'string' ? run.id : '',
+      });
+    }
+    const real = candidates.filter((candidate) => !candidate.synthetic);
+    const pool = real.length ? real : candidates;
+    pool.sort((left, right) => {
+      if (left.priority !== right.priority) return left.priority - right.priority;
+      if (left.createdAt !== right.createdAt) return left.createdAt > right.createdAt ? -1 : 1;
+      return left.id < right.id ? -1 : left.id > right.id ? 1 : 0;
+    });
+    return pool[0]?.run || null;
+  }
+
+  // A completed engine plan is a useful task record, but cannot complete the
+  // learned-result step. Require a supported model artifact, not just a
+  // checkpoint reference; deployment readiness is a separate decision.
+  function hasTrainingResult(run) {
+    if (!run || typeof run !== 'object' || Array.isArray(run) ||
+        !['local', 'robogo'].includes(run.backend) ||
+        !['completed', 'ready'].includes(run.status) || run.mock === true ||
+        isSyntheticEvidence(null, run) || run.dryRun === true || run.planOnly === true ||
+        run.metrics?.dryRun === true) return false;
+    const artifact = run.artifact;
+    return Boolean(
+      artifact && typeof artifact === 'object' && !Array.isArray(artifact) &&
+      artifact.planOnly !== true && ['source', 'compiled'].includes(artifact.kind) &&
+      ['pytorch', 'onnx', 'bin', 'hbm', 'gguf'].includes(artifact.format) &&
+      typeof artifact.artifactRef === 'string' &&
+      /^artifact:\/\/[a-zA-Z0-9][a-zA-Z0-9._-]{0,63}(?:\/[a-zA-Z0-9][a-zA-Z0-9._-]{0,119}){0,8}$/.test(artifact.artifactRef)
+    );
+  }
+
   function stateClass(status) {
     const normalized = String(status || '').toLowerCase();
     if (['ready', 'completed', 'success', 'succeeded', 'available', 'online', 'connected', 'healthy'].includes(normalized)) return 'state-success';
@@ -645,6 +694,8 @@
     formatDate,
     isTerminalRunStatus,
     isActiveRunStatus,
+    selectTrainingRun,
+    hasTrainingResult,
     stateClass,
     statusLabel,
     metricPercent,

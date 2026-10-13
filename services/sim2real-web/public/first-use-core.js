@@ -3,7 +3,7 @@
  * behavior tests. This module describes actions; it never runs, trains, or
  * deploys anything. Completion comes only from explicit evidence in `input`.
  *
- * `plan(input)` accepts intent (`experience`, `device`, or `model`), productId,
+ * `plan(input)` accepts intent (`experience`, `train`, `device`, or `model`), productId,
  * productName, and boolean evidence fields. Only literal `true` counts as
  * evidence. An omitted browserAvailable is unknown; literal `false` means the
  * browser simulator was checked and is unavailable. The caller owns fetching,
@@ -22,8 +22,16 @@
     return { key, label };
   }
 
-  function step(key, title, description, done, nextAction) {
-    return { key, title, description, done: done === true, action: nextAction };
+  function step(key, title, description, done, nextAction, actionEnabled = true, actionReason = '') {
+    return {
+      key,
+      title,
+      description,
+      done: done === true,
+      action: nextAction,
+      actionEnabled: actionEnabled === true,
+      actionReason,
+    };
   }
 
   function experiencePlan(input) {
@@ -54,6 +62,7 @@
         ? '无需设备或训练服务器。记录暂存在当前页面，刷新前可在示例中导出。'
         : '开始时会切换到 MicroDuck 示例。无需设备或训练服务器。',
       action: nextAction,
+      secondaryAction: reviewed ? action('train-setup', '配置模型训练') : null,
       steps: [
         step(
           'simulate',
@@ -85,6 +94,8 @@
               : '先保存采集记录，再回放同一份记录的采样时间轴。',
           reviewed,
           replay,
+          recorded,
+          recorded ? '' : '先采集并保存动作数据，再回放采样记录。',
         ),
         step(
           'deploy',
@@ -94,6 +105,117 @@
             : '保存采集记录并完整播放同一份采样时间轴，完成本次仿真数据流程。',
           reviewed,
           recorded ? replay : begin,
+        ),
+      ],
+    };
+  }
+
+  function trainPlan(input) {
+    const imported = input.hasModel === true;
+    const compatible = imported && input.contractValid === true;
+    // A visited setup page is not a saved configuration or a submitted Run.
+    const submitted = compatible && input.trainingSubmitted === true;
+    const active = submitted && input.trainingActive === true;
+    const failed = submitted && input.trainingFailed === true;
+    const trained = submitted && !active && !failed && input.trainingReady === true;
+    const evaluated = trained && input.evaluationReady === true;
+    const importAction = action('model-import', '选择或登记模型');
+    const checkAction = action('model-check', '检查模型兼容性');
+    const setupAction = action('train-setup', submitted ? '查看训练配置' : '配置训练任务');
+    const statusAction = action(
+      'train-status',
+      failed ? '查看训练错误' : active ? '查看训练进度' : trained ? '查看训练结果' : '查看原训练任务',
+    );
+    const evaluationAction = evaluated
+      ? action('records', '查看训练与评测记录')
+      : action('evaluate', '查看模型评测');
+    const nextAction = !imported
+      ? importAction
+      : !compatible
+        ? checkAction
+        : !submitted
+          ? setupAction
+          : !trained
+            ? statusAction
+            : evaluationAction;
+
+    return {
+      title: !submitted
+        ? '模型训练'
+        : failed
+          ? '训练任务失败'
+          : active
+            ? '训练任务排队或运行中'
+            : !trained
+              ? '训练状态待核对'
+              : evaluated
+                ? '已有训练与评测记录'
+                : '训练结果已生成',
+      description: !imported
+        ? '先选择或登记模型，检查输入输出要求，再配置训练任务。'
+        : !compatible
+          ? '模型已选择。先检查模型与当前机器人是否匹配。'
+          : !submitted
+            ? '兼容性已检查。设置数据、引擎与训练参数，提交后保存任务记录。'
+            : failed
+              ? '查看原任务的错误和日志，修复问题后再决定是否重新提交。'
+              : active
+                ? '任务已保存。查看排队或运行进度与日志，等待实际训练结果。'
+                : !trained
+                  ? '已有任务记录，尚未确认训练结果。先查找原任务和日志，核对状态后再继续。'
+                  : evaluated
+                    ? '已有训练结果与评测记录，可查看模型表现和本次任务证据。'
+                    : '已有实际训练结果。进入评测查看模型表现，评测完成后保存结果记录。',
+      note: '训练和评测以保存的任务与结果为准。打开页面不会完成步骤；此流程不会部署或启动设备。',
+      action: nextAction,
+      steps: [
+        step(
+          'simulate',
+          '选择模型',
+          imported ? '已选择模型，可检查输入输出要求。' : '选择已有模型，或登记模型说明。',
+          imported,
+          importAction,
+        ),
+        step(
+          'train',
+          '配置训练',
+          submitted
+            ? '训练任务已保存，可查看任务使用的配置。'
+            : compatible
+              ? '配置数据、引擎与训练参数；提交并保存任务后，此步骤才完成。'
+              : '先选择模型并检查兼容性，再配置训练任务。',
+          submitted,
+          !imported ? importAction : !compatible ? checkAction : setupAction,
+        ),
+        step(
+          'evaluate',
+          '提交与跟踪',
+          trained
+            ? '任务已完成并生成实际训练结果，可查看结果和日志。'
+            : failed
+              ? '任务失败。查看原任务错误和日志，修复后再决定是否重新提交。'
+              : active
+                ? '任务已排队或正在运行，查看进度与日志。'
+                : submitted
+                  ? '已有任务记录，训练状态待核对；先查看原任务，避免重复提交。'
+                  : '先配置并提交训练任务，再跟踪进度与日志。',
+          trained,
+          statusAction,
+          submitted,
+          submitted ? '' : '先提交并保存训练任务，才能查看任务进度。',
+        ),
+        step(
+          'deploy',
+          '查看评测',
+          evaluated
+            ? '已有评测记录，可查看模型表现和对应训练任务。'
+            : trained
+              ? '已有训练结果，进入评测查看模型表现。'
+              : '等待实际训练结果，再进入模型评测。',
+          evaluated,
+          evaluationAction,
+          trained,
+          trained ? '' : '需要实际训练结果，才能进入模型评测。',
         ),
       ],
     };
@@ -249,13 +371,17 @@
   function plan(value) {
     const input = value && typeof value === 'object' && !Array.isArray(value) ? value : {};
     const intent =
-      input.intent === 'device' || input.intent === 'model' ? input.intent : 'experience';
+      input.intent === 'device' || input.intent === 'model' || input.intent === 'train'
+        ? input.intent
+        : 'experience';
     const result =
       intent === 'device'
         ? devicePlan(input)
         : intent === 'model'
           ? modelPlan(input)
-          : experiencePlan(input);
+          : intent === 'train'
+            ? trainPlan(input)
+            : experiencePlan(input);
 
     if (input.loading === true) {
       result.description = '正在检查服务与当前使用条件，请稍候。';

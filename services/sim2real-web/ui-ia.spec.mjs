@@ -179,15 +179,14 @@ const appTag = html.indexOf('./app.js');
 const componentTag = html.indexOf('./ui-components.js');
 const firstUseTag = html.indexOf('./first-use-core.js');
 assert.ok(firstUseTag >= 0 && firstUseTag < appTag, 'first-use guidance must load before app.js');
-for (const intent of ['experience', 'device', 'model']) {
+for (const intent of ['experience', 'train', 'device', 'model']) {
   assert.match(
     html,
     new RegExp(`data-start-intent="${intent}"`),
     `homepage must expose the ${intent} goal`,
   );
 }
-// Closed native disclosures keep the first screen focused on one task while
-// preserving the full workbench and project context for experienced users.
+// Workflow choices stay visible; progress and advanced tools use disclosures.
 function detailsAncestorsOf(id) {
   const ancestors = [];
   for (const match of html.matchAll(/<!--[\s\S]*?-->|<\/?[a-z][^>]*>/gi)) {
@@ -203,7 +202,6 @@ function detailsAncestorsOf(id) {
   assert.fail(`markup id must exist: ${id}`);
 }
 for (const id of [
-  'user-start-panel',
   'onboard-card',
   'overview-advanced-evidence',
   'sidebar-workbench',
@@ -222,19 +220,34 @@ for (const id of ['project-workspace', 'platform-scorecard-title', 'research-loo
 for (const id of ['product-select', 'project-select']) {
   assert.ok(detailsAncestorsOf(id).includes('sidebar-settings'), `${id} stays inside settings`);
 }
-for (const intent of ['experience', 'device', 'model']) {
+for (const intent of ['experience', 'train', 'device', 'model']) {
   assert.ok(
-    detailsAncestorsOf(`start-intent-${intent}`).includes('user-start-panel'),
-    'alternative goals must be available through the secondary disclosure',
+    detailsAncestorsOf(`start-intent-${intent}`).length === 0,
+    'workflow goals must be visible without opening a disclosure',
   );
 }
+assert.match(
+  html,
+  /<section\b[^>]*id="user-start-panel"[^>]*aria-labelledby="user-start-title"/,
+  'visible workflows must be a named section',
+);
 const checklistStart = html.indexOf('id="onboard-list"');
 assert.ok(checklistStart >= 0, 'first-use progress list must exist');
 const checklistHtml = html.slice(checklistStart, html.indexOf('</ol>', checklistStart));
 assert.doesNotMatch(
   checklistHtml,
   /<button\b|<a\b[^>]*href=|tabindex="0"/,
-  'first-use progress must not expose parallel task actions',
+  'static progress markup must not enable actions before evidence has loaded',
+);
+assert.match(
+  app,
+  /action\.dataset\.startAction = step\.action\.key/,
+  'steps must expose their actual next action',
+);
+assert.match(
+  app,
+  /action\.disabled = state\.loading \|\| step\.actionEnabled !== true/,
+  'step actions must respect loading and evidence prerequisites',
 );
 assert.match(
   html,

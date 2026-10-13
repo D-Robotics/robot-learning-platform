@@ -232,12 +232,19 @@ describe('duck workshop evidence', () => {
 });
 
 describe('duck workshop disclosure and navigation', () => {
-  it('stays collapsed after initial render and keeps the existing three first-use goals', () => {
+  it('stays collapsed after initial render while the three main workflows and model entry remain available', () => {
     workshop.render(base);
     const panel = document.getElementById('duck-workshop') as HTMLDetailsElement;
     expect(panel.hidden).toBe(false);
     expect(panel.open).toBe(false);
-    expect(document.querySelectorAll('[data-start-intent]')).toHaveLength(3);
+    expect(
+      [...document.querySelectorAll('.user-start-options [data-start-intent]')].map((element) =>
+        element.getAttribute('data-start-intent'),
+      ),
+    ).toEqual(['experience', 'train', 'device']);
+    expect(document.querySelector('#start-intent-model')?.getAttribute('data-start-intent')).toBe(
+      'model',
+    );
     expect(fetch).not.toHaveBeenCalled();
     expect(navigate).not.toHaveBeenCalled();
   });

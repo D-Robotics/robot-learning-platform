@@ -397,12 +397,22 @@
               <div class="overview-page-title"><h2 id="overview-title">机器人学习工作台</h2><p>仿真、数据采集、模型训练与设备部署。</p></div>
               <span class="section-caption sr-only" id="hero-updated">—</span>
             </div>
+            <section class="user-start-panel home-workflows" id="user-start-panel" aria-labelledby="user-start-title">
+              <strong id="user-start-title">选择工作流程</strong>
+              <div class="user-start-options" role="group" aria-labelledby="user-start-title">
+                <button class="user-start-option" id="start-intent-experience" type="button" data-start-intent="experience" aria-pressed="true"><strong>仿真数据</strong><small>操作、录制与回放</small></button>
+                <button class="user-start-option" id="start-intent-train" type="button" data-start-intent="train" aria-pressed="false"><strong>模型训练</strong><small>配置、运行与评测</small></button>
+                <button class="user-start-option" id="start-intent-device" type="button" data-start-intent="device" aria-pressed="false"><strong>设备接入</strong><small>连接、检查与预检</small></button>
+              </div>
+              <button class="home-model-entry" id="start-intent-model" type="button" data-start-intent="model" aria-pressed="false"><strong>已有模型？登记并检查兼容性 →</strong></button>
+            </section>
             <section class="home-start" aria-labelledby="next-action-title">
               <div class="home-start-content">
                 <span class="home-start-badge" id="start-goal-badge">快速开始</span>
                 <h3 id="next-action-title">浏览器仿真</h3>
                 <p id="next-action-copy">运行参考仿真，采集观测与动作数据，并回放采样记录。</p>
                 <button class="button button-primary" id="next-action-button" type="button">打开参考仿真</button>
+                <button class="button button-ghost" id="start-secondary-button" type="button" hidden>配置模型训练</button>
                 <p id="start-goal-note" class="home-start-note">无需设备或训练服务器；记录暂存在当前页面。</p>
               </div>
               <div class="home-start-outcome" aria-label="示例功能">
@@ -439,14 +449,6 @@
                   <div class="onboard-item-meta" data-onboard-meta></div>
                 </li>
               </ol>
-            </details>
-            <details class="user-start-panel user-start-advanced" id="user-start-panel">
-              <summary><strong id="user-start-title">我已有设备或模型</strong></summary>
-              <div class="user-start-options" role="group" aria-labelledby="user-start-title">
-                <button class="user-start-option" id="start-intent-experience" type="button" data-start-intent="experience" aria-pressed="true"><strong>打开参考仿真</strong><small>先在浏览器里操作机器人</small></button>
-                <button class="user-start-option" id="start-intent-device" type="button" data-start-intent="device" aria-pressed="false"><strong>连接我的 RDK</strong><small>已有设备，从连接检查开始</small></button>
-                <button class="user-start-option" id="start-intent-model" type="button" data-start-intent="model" aria-pressed="false"><strong>使用已有模型</strong><small>已有模型，先检查是否适用</small></button>
-              </div>
             </details>
             <details class="duck-workshop user-start-advanced" id="duck-workshop" hidden>
               <summary class="duck-workshop-heading"><strong id="duck-workshop-title">机器人鸭 DDC 流程</strong><span id="duck-workshop-source">正在读取模型来源</span></summary>

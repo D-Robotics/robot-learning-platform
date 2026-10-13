@@ -7,7 +7,16 @@ type Plan = {
   description: string;
   note: string;
   action: Action;
-  steps: { key: string; title: string; description: string; done: boolean; action: Action }[];
+  secondaryAction?: Action | null;
+  steps: {
+    key: string;
+    title: string;
+    description: string;
+    done: boolean;
+    action: Action;
+    actionEnabled: boolean;
+    actionReason: string;
+  }[];
 };
 type FirstUseCore = { plan: (input?: unknown) => Plan };
 
@@ -99,6 +108,7 @@ describe('first-use experience', () => {
     expect(reviewed.steps.every((step) => step.done)).toBe(true);
     expect(reviewed.title).toBe('录制与数据回放已完成');
     expect(reviewed.action).toEqual({ key: 'replay-experience', label: '再次回放记录' });
+    expect(reviewed.secondaryAction).toEqual({ key: 'train-setup', label: '配置模型训练' });
     expect(reviewed.steps[3].title).toBe('完成录制与回放');
     expect(reviewed.steps[3].description).toContain('浏览器');
     expect(JSON.stringify(reviewed)).not.toMatch(/已部署|部署成功|已训练|训练成功|真机运行/);
@@ -117,7 +127,170 @@ describe('first-use experience', () => {
     });
     expect(plan.steps.map((step) => step.done)).toEqual([true, false, false, false]);
     expect(plan.action.key).toBe('begin-experience');
+    expect(plan.secondaryAction).toBeNull();
+    expect(plan.steps[2].actionEnabled).toBe(false);
+    expect(plan.steps[2].actionReason).toContain('先采集并保存');
+    expect(plan.steps[1].actionEnabled).toBe(true);
+    expect(plan.steps[3].actionEnabled).toBe(true);
   });
+
+  it('enables replay once a recording exists without requiring a completed review', () => {
+    const plan = core.plan({ recordingReady: true, recordingReviewed: false });
+    expect(plan.steps[2].actionEnabled).toBe(true);
+    expect(plan.steps[2].actionReason).toBe('');
+    expect(plan.steps[2].done).toBe(false);
+    expect(plan.secondaryAction).toBeNull();
+  });
+});
+
+describe('first-use model training', () => {
+  const compatibleModel = { intent: 'train', hasModel: true, contractValid: true };
+  const savedTask = { ...compatibleModel, trainingSubmitted: true };
+  const trainedTask = { ...savedTask, trainingReady: true };
+
+  it('starts with a model and checks compatibility before configuring training', () => {
+    const empty = core.plan({ intent: 'train' });
+    expect(empty.action.key).toBe('model-import');
+    expect(empty.steps.map((step) => step.title)).toEqual([
+      '选择模型',
+      '配置训练',
+      '提交与跟踪',
+      '查看评测',
+    ]);
+    expect(empty.steps.every((step) => !step.done)).toBe(true);
+    const imported = core.plan({ intent: 'train', hasModel: true });
+    expect(imported.action.key).toBe('model-check');
+    expect(imported.steps.map((step) => step.done)).toEqual([true, false, false, false]);
+    expect(imported.steps[1].action.key).toBe('model-check');
+    expect(imported.steps[1].actionEnabled).toBe(true);
+  });
+
+  it('keeps configuration incomplete after a page visit and uses a saved Run as completion evidence', () => {
+    const visited = core.plan({
+      ...compatibleModel,
+      visited: ['train-setup'],
+      trainingConfigured: true,
+      trainingSubmitted: false,
+    });
+    expect(visited.action.key).toBe('train-setup');
+    expect(visited.steps[1].done).toBe(false);
+    expect(visited.steps[1].actionEnabled).toBe(true);
+    const submitted = core.plan(savedTask);
+    expect(submitted.steps[1].done).toBe(true);
+    expect(submitted.action.key).toBe('train-status');
+  });
+
+  it('tracks an active saved task without offering another submission as the primary action', () => {
+    const plan = core.plan({ ...savedTask, trainingActive: true });
+    expect(plan.action).toEqual({ key: 'train-status', label: '查看训练进度' });
+    expect(plan.description).toContain('排队或运行');
+    expect(plan.steps.map((step) => step.done)).toEqual([true, true, false, false]);
+    expect(plan.steps[2].actionEnabled).toBe(true);
+    expect(plan.steps[3].actionEnabled).toBe(false);
+  });
+
+  it('keeps the failed original task accessible for diagnosis and does not claim a result', () => {
+    const plan = core.plan({ ...savedTask, trainingFailed: true });
+    expect(plan.action).toEqual({ key: 'train-status', label: '查看训练错误' });
+    expect(plan.description).toContain('原任务的错误和日志');
+    expect(plan.steps.map((step) => step.done)).toEqual([true, true, false, false]);
+    expect(plan.steps[2].actionEnabled).toBe(true);
+    expect(plan.steps[3].actionEnabled).toBe(false);
+  });
+
+  it('looks up a submitted task whose current status is unknown before any resubmission', () => {
+    const plan = core.plan(savedTask);
+    expect(plan.title).toBe('训练状态待核对');
+    expect(plan.action).toEqual({ key: 'train-status', label: '查看原训练任务' });
+    expect(plan.steps[2].description).toContain('避免重复提交');
+    expect(plan.steps[2].done).toBe(false);
+    expect(plan.steps[2].actionEnabled).toBe(true);
+  });
+
+  it('offers evaluation only after an actual completed task and does not count training as evaluation', () => {
+    const plan = core.plan(trainedTask);
+    expect(plan.action).toEqual({ key: 'evaluate', label: '查看模型评测' });
+    expect(plan.steps.map((step) => step.done)).toEqual([true, true, true, false]);
+    expect(plan.steps[3].actionEnabled).toBe(true);
+    expect(plan.steps[3].actionReason).toBe('');
+    expect(plan.note).toContain('不会部署或启动设备');
+    expect(JSON.stringify(plan)).not.toMatch(/评测已通过|已部署|真机已运行/);
+  });
+
+  it('ends with actual training and evaluation records without requiring a device', () => {
+    const plan = core.plan({ ...trainedTask, evaluationReady: true, hasDevice: false });
+    expect(plan.action.key).toBe('records');
+    expect(plan.steps.every((step) => step.done)).toBe(true);
+    expect(plan.steps[3].action.key).toBe('records');
+    expect(plan.steps[3].description).toContain('已有评测记录');
+    expect(JSON.stringify(plan)).not.toMatch(/评测已通过|已部署|真机已运行/);
+  });
+
+  it('blocks future task tracking and evaluation while keeping preparation navigation available', () => {
+    const plan = core.plan(compatibleModel);
+    expect(plan.steps[0].actionEnabled).toBe(true);
+    expect(plan.steps[1].actionEnabled).toBe(true);
+    expect(plan.steps[2].action.key).toBe('train-status');
+    expect(plan.steps[2].actionEnabled).toBe(false);
+    expect(plan.steps[2].actionReason).toContain('先提交并保存训练任务');
+    expect(plan.steps[3].action.key).toBe('evaluate');
+    expect(plan.steps[3].actionEnabled).toBe(false);
+    expect(plan.steps[3].actionReason).toContain('需要实际训练结果');
+    expect(plan.steps.every((step) => typeof step.actionEnabled === 'boolean')).toBe(true);
+  });
+
+  it('rejects downstream completion evidence when model, compatibility, or submission is missing', () => {
+    const downstream = { trainingSubmitted: true, trainingReady: true, evaluationReady: true };
+    const noModel = core.plan({ intent: 'train', contractValid: true, ...downstream });
+    expect(noModel.action.key).toBe('model-import');
+    expect(noModel.steps.every((step) => !step.done)).toBe(true);
+    const noContract = core.plan({ intent: 'train', hasModel: true, ...downstream });
+    expect(noContract.action.key).toBe('model-check');
+    expect(noContract.steps.map((step) => step.done)).toEqual([true, false, false, false]);
+    const noTask = core.plan({ ...compatibleModel, trainingReady: true, evaluationReady: true });
+    expect(noTask.action.key).toBe('train-setup');
+    expect(noTask.steps[3].actionEnabled).toBe(false);
+  });
+
+  it.each(['trainingActive', 'trainingFailed'])(
+    'does not let an old completed result override the current %s task',
+    (status) => {
+      const plan = core.plan({ ...trainedTask, evaluationReady: true, [status]: true });
+      expect(plan.action.key).toBe('train-status');
+      expect(plan.steps.map((step) => step.done)).toEqual([true, true, false, false]);
+      expect(plan.steps[3].actionEnabled).toBe(false);
+    },
+  );
+
+  it.each(['true', 'false', 1, -1, {}, []])(
+    'requires literal booleans for training evidence %j',
+    (value) => {
+      const malformedSubmission = core.plan({
+        ...compatibleModel,
+        trainingSubmitted: value,
+        trainingActive: value,
+        trainingFailed: value,
+        trainingReady: value,
+        evaluationReady: value,
+      });
+      expect(malformedSubmission.action.key).toBe('train-setup');
+      expect(malformedSubmission.steps.map((step) => step.done)).toEqual([
+        true,
+        false,
+        false,
+        false,
+      ]);
+      const malformedResult = core.plan({
+        ...savedTask,
+        trainingActive: value,
+        trainingFailed: value,
+        trainingReady: value,
+        evaluationReady: value,
+      });
+      expect(malformedResult.action.key).toBe('train-status');
+      expect(malformedResult.steps[2].done).toBe(false);
+    },
+  );
 });
 
 describe('first-use device', () => {
@@ -210,7 +383,7 @@ describe('first-use model', () => {
 });
 
 describe('first-use availability and malformed evidence', () => {
-  it.each(['experience', 'device', 'model'])(
+  it.each(['experience', 'device', 'model', 'train'])(
     'offers a reconnect on a service error for %s',
     (intent) => {
       const plan = core.plan({ intent, serviceError: true });
@@ -227,7 +400,7 @@ describe('first-use availability and malformed evidence', () => {
     expect(plan.steps[0].done).toBe(false);
   });
 
-  it.each(['device', 'model'])(
+  it.each(['device', 'model', 'train'])(
     'guides a visitor to login without fabricating progress for %s',
     (intent) => {
       const plan = core.plan({ intent, authRequired: true });

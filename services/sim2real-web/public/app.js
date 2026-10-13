@@ -124,7 +124,7 @@ function readProductPreference() {
 function readStartIntent() {
   try {
     const value = window.localStorage?.getItem('rdk-lab-start-intent');
-    return ['experience', 'device', 'model'].includes(value) ? value : 'experience';
+    return ['experience', 'train', 'device', 'model'].includes(value) ? value : 'experience';
   } catch { return 'experience'; }
 }
 
@@ -2204,7 +2204,7 @@ const VIEW_STAGE_LABELS = {
 // view with another node, but it always selects a distinct module, filter, or
 // evidence panel so the destination is visible and bookmarkable.
 const FLOW_CHILD_CONTEXTS = {
-  simulate: { kicker: '01 · 数据与仿真', title: '仿真与录制', description: '控制机器人，录制动作并查看轨迹。' },
+  simulate: { kicker: '01 · 数据与仿真', title: '仿真与录制', description: '控制机器人，录制动作并查看轨迹。', view: 'simulate' },
   replays: { kicker: '01 · 数据与仿真', title: '轨迹与回放', description: '按运行筛选轨迹，并打开逐帧回放证据。', view: 'records', recordTab: 'run', focus: '#history-list' },
   prepare: { kicker: '02 · 训练与策略', title: '模型与兼容性', description: '登记模型说明，检查输入、输出和设备是否匹配。', view: 'train', trainModule: 'contract', focus: '#contract-fold' },
   configure: { kicker: '02 · 训练与策略', title: '训练配置', description: '选择任务、训练档位与资源；需要时展开高级配置。', view: 'train', trainModule: 'config', focus: '#train-module-config' },
@@ -2216,6 +2216,16 @@ const FLOW_CHILD_CONTEXTS = {
   preflight: { kicker: '04 · 设备与发布', title: '预检与发布', description: '生成并执行只读预检，确认制品可以进入目标板卡。', view: 'deploy', deployModule: 'preflight', focus: '#preflight-panel' },
   feedback: { kicker: '04 · 设备与发布', title: '运行反馈与回滚', description: '查看上线闸门、部署时间线和可回滚版本。', view: 'deploy', deployModule: 'feedback', focus: '#feedback-panel' },
 };
+
+// Station tabs are bookmarkable module destinations, not additional sidebar
+// workflow children. Keep the eleven existing sidebar routes unchanged.
+const STATION_MODULE_CONTEXTS = {
+  telemetry: { kicker: '04 · 设备与发布', title: '遥测概览', description: '查看设备状态、相机画面与话题信息。', view: 'station', stationModule: 'telemetry' },
+  control: { kicker: '04 · 设备与发布', title: '安全控制', description: '查看安全开关、停止入口与受限控制条件。', view: 'station', stationModule: 'control' },
+  policy: { kicker: '04 · 设备与发布', title: '策略运行时', description: '查看已加载制品、策略状态与受控运行条件。', view: 'station', stationModule: 'policy' },
+  diagnostics: { kicker: '04 · 设备与发布', title: '诊断命令', description: '查看设备准备报告、TROS 与系统诊断入口。', view: 'station', stationModule: 'diagnostics' },
+};
+const FLOW_ROUTE_CONTEXTS = { ...FLOW_CHILD_CONTEXTS, ...STATION_MODULE_CONTEXTS };
 
 // 无侧栏子项的落地位置（从进度条、对象链或深链直接进入视图）复用的横幅文案。
 // 名称与侧边栏入口保持一致，避免同一视图出现多套叫法。
@@ -2232,15 +2242,24 @@ const MODULE_FLOW_CHILD = {
   train: { run: 'submit', contract: 'prepare', config: 'configure' },
   evaluate: { run: 'evaluation-run', comparison: 'comparison' },
   deploy: { preflight: 'preflight', feedback: 'feedback' },
-  station: { devices: 'devices' },
+  station: { devices: 'devices', telemetry: 'telemetry', control: 'control', policy: 'policy', diagnostics: 'diagnostics' },
 };
 
 function parseHashLocation() {
-  const raw = decodeURIComponent(window.location.hash.slice(1));
-  const [view, child] = raw.split('/');
+  let raw;
+  try {
+    raw = decodeURIComponent(window.location.hash.slice(1));
+  } catch {
+    return { view: 'overview', child: '', invalid: true };
+  }
+  const [view, child, ...extra] = raw.split('/');
+  const validView = WORKFLOW_VIEWS.includes(view);
+  const context = child && FLOW_ROUTE_CONTEXTS[child];
+  const validChild = validView && context?.view === view && extra.length === 0;
   return {
-    view: WORKFLOW_VIEWS.includes(view) ? view : 'overview',
-    child: child && FLOW_CHILD_CONTEXTS[child] ? child : '',
+    view: validView ? view : 'overview',
+    child: validChild ? child : '',
+    invalid: Boolean(raw && (!validView || (child && !validChild) || extra.length)),
   };
 }
 
@@ -2257,7 +2276,7 @@ function clearFlowChild() {
 // 例如「强化学习训练 · 训练配置」；子项名与阶段名相同（仿真与录制）时不重复。
 function flowStageLabel(view) {
   const stage = VIEW_STAGE_LABELS[view] || '工作台';
-  const child = FLOW_CHILD_CONTEXTS[document.body.dataset.flowChild || ''];
+  const child = FLOW_ROUTE_CONTEXTS[document.body.dataset.flowChild || ''];
   if (!child || (child.view || view) !== view || child.title === stage) return stage;
   return `${stage} · ${child.title}`;
 }
@@ -2284,11 +2303,11 @@ function renderFlowBanner() {
     banner.hidden = true;
     return;
   }
-  let ctx = FLOW_CHILD_CONTEXTS[document.body.dataset.flowChild || ''];
+  let ctx = FLOW_ROUTE_CONTEXTS[document.body.dataset.flowChild || ''];
   if (ctx && (ctx.view || view) !== view) ctx = null;
   if (!ctx) {
     const moduleChild = MODULE_FLOW_CHILD[view]?.[activeModuleOf(view)];
-    ctx = (moduleChild && FLOW_CHILD_CONTEXTS[moduleChild]) || VIEW_BANNERS[view] || null;
+    ctx = (moduleChild && FLOW_ROUTE_CONTEXTS[moduleChild]) || VIEW_BANNERS[view] || null;
   }
   if (!ctx) {
     banner.hidden = true;
@@ -2350,18 +2369,6 @@ function setView(view, { updateHash = true, scroll = true, focus = true } = {}) 
   // still collapse it manually and that choice remains respected elsewhere.
   const toolsGroup = document.querySelector('[data-sidebar-group="tools"]');
   if (toolsGroup && ['resources', 'records', 'station'].includes(wanted)) toolsGroup.open = true;
-  // Bare landings on evaluate/deploy show the sticky default module; a flow
-  // child (sidebar subitem, in-view tab, hash) overrides it right after.
-  if (wanted === 'evaluate') {
-    document
-      .querySelector('[data-view-section="evaluate"]')
-      ?.setAttribute('data-active-eval-module', state.evalModule || 'run');
-  }
-  if (wanted === 'deploy') {
-    document
-      .querySelector('[data-view-section="deploy"]')
-      ?.setAttribute('data-active-deploy-module', state.deployModule || 'preflight');
-  }
   const locationState = parseHashLocation();
   const willPush = updateHash && locationState.view !== wanted;
   if (updateHash && locationState.child && !willPush) {
@@ -2389,7 +2396,24 @@ function setView(view, { updateHash = true, scroll = true, focus = true } = {}) 
   }
   if (wanted === 'train') {
     setTrainModule(state.overview && !selectedModel() ? 'contract' : state.trainModule, { persist: false });
-    if (updateHash) setFlowChild(MODULE_FLOW_CHILD.train[state.trainModule], { focus: false });
+  }
+  // Restore sticky modules through the same route transition as a tab click.
+  // Updating only the section attribute leaves its tabs and chrome on the
+  // default module. Explicit deep links still override this landing below.
+  const module = wanted === 'train' ? state.trainModule
+    : wanted === 'evaluate' ? state.evalModule || 'run'
+      : wanted === 'deploy' ? state.deployModule || 'preflight'
+        : activeModuleOf(wanted);
+  const child = MODULE_FLOW_CHILD[wanted]?.[module];
+  const canonicalHash = updateHash || locationState.invalid || (!locationState.child && locationState.view === wanted);
+  if (child) {
+    applyFlowChildDestination(FLOW_ROUTE_CONTEXTS[child]);
+    setFlowChild(child, { updateHash: canonicalHash, focus: false });
+  } else {
+    if (locationState.invalid) {
+      window.history.replaceState({ rdkView: wanted }, '', `${window.location.pathname}${window.location.search}#${wanted}`);
+    }
+    renderContextLive();
   }
   // Reset the scroll position when switching views so a sticky header or a
   // previous deep scroll cannot hide the section title and its primary action.
@@ -2440,7 +2464,7 @@ function applyFlowChildDestination(context) {
   if (!context) return;
   if (context.recordTab) setRecordsTab(context.recordTab);
   if (context.trainModule) setTrainModule(context.trainModule);
-  if (context.stationModule) setStationModule(context.stationModule);
+  if (context.stationModule) setStationModule(context.stationModule, { syncRoute: false });
   if (context.evalModule) {
     state.evalModule = context.evalModule;
     document
@@ -2462,11 +2486,14 @@ function applyFlowChildDestination(context) {
 
 function setFlowChild(child, { updateHash = true, focus = true } = {}) {
   const wanted = String(child || '');
-  const context = FLOW_CHILD_CONTEXTS[wanted];
-  if (!context) {
+  const context = FLOW_ROUTE_CONTEXTS[wanted];
+  if (!context || context.view !== document.body.dataset.activeView) {
     clearFlowChild();
     return;
   }
+  if (context.stationModule) setStationModule(context.stationModule, { syncRoute: false });
+  if (context.evalModule) state.evalModule = context.evalModule;
+  if (context.deployModule) state.deployModule = context.deployModule;
   document.body.dataset.flowChild = wanted;
   // body 自身也带 data-flow-child（全局状态标记），控制类匹配必须跳过它，
   // 否则 aria-current 会落到 body 上，父分组也找不到真正的侧边栏入口。
@@ -2591,7 +2618,7 @@ function openDeploymentModule(child) {
   setFlowChild(child, { focus: false });
 }
 
-function setStationModule(module) {
+function setStationModule(module, { syncRoute = true } = {}) {
   const wanted = ['devices', 'telemetry', 'control', 'policy', 'diagnostics'].includes(module)
     ? module
     : 'telemetry';
@@ -2605,6 +2632,9 @@ function setStationModule(module) {
     // roving tabindex：整组 tab 只占一个 Tab 停靠点，组内用方向键移动。
     tab.setAttribute('tabindex', active ? '0' : '-1');
   });
+  if (syncRoute && document.body.dataset.activeView === 'station') {
+    setFlowChild(MODULE_FLOW_CHILD.station[wanted], { focus: false });
+  }
 }
 
 function modelLabel(model) {
@@ -7938,7 +7968,7 @@ function firstUsePlan() {
   const browserAvailable = state.authRequired
     ? state.publicHealth?.microduck ? ['mounted', 'redirect'].includes(state.publicHealth.microduck.state) : undefined
     : typeof simulator?.available === 'boolean' ? simulator.available : undefined;
-  const latest = latestRun();
+  const latest = SimTelemetryCore.selectTrainingRun(runsForCurrentModel());
   const modelForGoal = Boolean(model && (state.startIntent !== 'model' || model.builtin !== true));
   const platform = device?.boardPlatform || device?.platformId;
   const contractValid = state.startIntent === 'device'
@@ -7952,20 +7982,23 @@ function firstUsePlan() {
     contractValid,
     preflightReady: Boolean(modelForGoal && device && deploymentsForCurrentModel().some((item) => item.modelId === model.id && item.deviceId === device.id && ['ready', 'completed'].includes(String(item.status).toLowerCase()))),
     recordingReady: Boolean(recordingReady), recordingReviewed: Boolean(recordingReady && state.reviewedRecording === evidence),
-    trainingReady: Boolean(modelForGoal && latest && latest.mock !== true && ['completed', 'ready'].includes(String(latest.status))),
-    evaluationReady: modelForGoal && hasRealEvaluation(evidence, latest),
+    trainingSubmitted: Boolean(latest),
+    trainingActive: Boolean(latest && ['queued', 'running'].includes(String(latest.status))),
+    trainingFailed: Boolean(latest && ['failed', 'blocked', 'cancelled', 'canceled'].includes(String(latest.status))),
+    trainingReady: Boolean(modelForGoal && SimTelemetryCore.hasTrainingResult(latest)),
+    evaluationReady: Boolean(modelForGoal && hasRealEvaluation(evidence, latest)),
   });
 }
 
 function renderNextAction() {
   const plan = firstUsePlan();
-  setText('user-start-title', state.startIntent === 'experience' ? '我已有设备或模型' : '换一种开始方式');
+  setText('user-start-title', '选择工作流程');
   const outcome = document.querySelector('.home-start-outcome');
   if (outcome) outcome.hidden = state.startIntent !== 'experience';
   document.querySelectorAll('[data-start-intent]').forEach((button) => {
     button.setAttribute('aria-pressed', String(button.dataset.startIntent === state.startIntent));
   });
-  setText('start-goal-badge', ({ experience: '快速开始', device: '设备接入', model: '模型接入' })[state.startIntent]);
+  setText('start-goal-badge', ({ experience: '仿真数据', train: '模型训练', device: '设备接入', model: '模型接入' })[state.startIntent]);
   setText('next-action-title', plan.title);
   setText('next-action-copy', plan.description);
   setText('start-goal-note', plan.note);
@@ -7975,6 +8008,15 @@ function renderNextAction() {
     button.dataset.startAction = plan.action.key;
     button.textContent = plan.action.label;
     button.disabled = state.loading;
+  }
+  const secondary = $('start-secondary-button');
+  if (secondary) {
+    secondary.hidden = !plan.secondaryAction;
+    secondary.disabled = state.loading;
+    if (plan.secondaryAction) {
+      secondary.dataset.startAction = plan.secondaryAction.key;
+      secondary.textContent = plan.secondaryAction.label;
+    } else delete secondary.dataset.startAction;
   }
 }
 
@@ -8075,7 +8117,15 @@ async function performStartAction(action, trigger) {
     (action === 'model-check' ? $('contract-run-button') : $('manifest-file-input'))?.focus();
     return;
   }
-  if (action === 'train-setup') { setView('train'); applyFlowChildDestination(FLOW_CHILD_CONTEXTS.configure); setFlowChild('configure'); return; }
+  if (action === 'train-setup') {
+    if (state.startIntent === 'experience') {
+      state.startIntent = 'train';
+      try { window.localStorage?.setItem('rdk-lab-start-intent', 'train'); } catch { /* optional preference */ }
+      renderNextAction(); renderOnboardChecklist();
+    }
+    setView('train'); applyFlowChildDestination(FLOW_CHILD_CONTEXTS.configure); setFlowChild('configure'); return;
+  }
+  if (action === 'train-status') { setView('train'); applyFlowChildDestination(FLOW_CHILD_CONTEXTS.submit); setFlowChild('submit'); return; }
   if (action === 'evaluate') { setView('evaluate'); setFlowChild('evaluation-run'); return; }
   if (action === 'device-preflight') { setView('deploy'); setFlowChild('preflight'); return; }
   if (action === 'records') setView('records');
@@ -8405,7 +8455,7 @@ function renderOnboardChecklist() {
   const planKey = JSON.stringify([state.startIntent, plan.steps, state.loading]);
   if (list.dataset.planKey === planKey) return;
   list.dataset.planKey = planKey;
-  setText('first-run-path-title', ({ experience: '仿真数据流程', device: '设备准备步骤', model: '模型准备步骤' })[state.startIntent]);
+  setText('first-run-path-title', ({ experience: '仿真数据流程', train: '模型训练流程', device: '设备准备步骤', model: '模型准备步骤' })[state.startIntent]);
   list.querySelectorAll('.onboard-item').forEach((item) => {
     const step = plan.steps.find((entry) => entry.key === item.dataset.onboardStep);
     if (!step) return;
@@ -8421,6 +8471,24 @@ function renderOnboardChecklist() {
     status.className = step.done ? 'onboard-done' : 'onboard-locked';
     status.textContent = step.done ? '已完成 ✓' : step.key === progress.currentKey ? '当前步骤' : '接下来';
     meta.append(status);
+    if (step.action) {
+      const action = document.createElement('button');
+      action.type = 'button';
+      action.className = 'button button-ghost button-small';
+      action.dataset.startAction = step.action.key;
+      action.textContent = step.action.label;
+      action.disabled = state.loading || step.actionEnabled !== true;
+      action.setAttribute('aria-label', `${step.title}：${step.action.label}`);
+      meta.append(action);
+      if (step.actionReason) {
+        const reason = document.createElement('span');
+        reason.id = `onboard-reason-${step.key}`;
+        reason.className = 'onboard-action-reason';
+        reason.textContent = step.actionReason;
+        action.setAttribute('aria-describedby', reason.id);
+        meta.append(reason);
+      }
+    }
   });
   const fill = $('onboard-fill');
   if (fill) fill.style.width = `${Math.round(progress.doneCount / progress.steps.length * 100)}%`;
@@ -8430,10 +8498,7 @@ function renderOnboardChecklist() {
 function renderRunProgress() {
   const card = $('run-progress-card');
   if (!card) return;
-  const runs = [...runsForCurrentModel()].sort((a, b) =>
-    String(b.createdAt || '').localeCompare(String(a.createdAt || '')),
-  );
-  const latest = runs[0];
+  const latest = SimTelemetryCore.selectTrainingRun(runsForCurrentModel());
   if (!latest) {
     card.hidden = true;
     state.selectedRecord = null;
@@ -9091,13 +9156,14 @@ async function agentCheckBoard() {
 }
 
 function renderDuckWorkshop() {
+  const trainingRun = SimTelemetryCore.selectTrainingRun(runsForCurrentModel());
   globalThis.DuckWorkshop?.render({
     productId: state.productId, model: selectedModel(), device: selectedDevice(),
-    run: latestRun(), deployments: deploymentsForCurrentModel(), telemetry: currentTelemetry(),
+    run: trainingRun, deployments: deploymentsForCurrentModel(), telemetry: currentTelemetry(),
     publicHealth: state.publicHealth, integrations: state.overview?.integrations,
     authRequired: state.authRequired, serviceError: state.serviceError,
     loading: state.loading, loaded: Boolean(state.overview),
-    releaseEvidenceReady: hasReleaseGradeEvidence(currentTelemetry(), latestRun()),
+    releaseEvidenceReady: hasReleaseGradeEvidence(currentTelemetry(), trainingRun),
     preparation: currentDuckPreparation(),
   });
   renderDuckPreparation();
@@ -10926,6 +10992,28 @@ function stationRenderJointPolicy(policy) {
   mount.replaceChildren(table);
 }
 
+function stationMotionIdentity() {
+  const policy = state.station.policy;
+  return JSON.stringify([state.selectedDeviceId, policy?.actuatorKind, policy?.model?.path, policy?.model?.sha256]);
+}
+
+function stationMotionDetails() {
+  const device = selectedDevice();
+  const model = state.station.policy?.model;
+  return [
+    { label: '目标设备', value: device ? `${device.name || device.id} · ${device.id}` : '未选择设备' },
+    { label: '板卡型号', value: device?.boardPlatform || device?.platformId || '未提供型号' },
+    { label: '板端已加载策略', value: typeof model?.path === 'string' ? model.path.split('/').pop() : '未加载模型' },
+    { label: '策略 SHA-256', value: typeof model?.sha256 === 'string' && model.sha256 ? model.sha256 : '未提供 SHA-256，需核对板端模型' },
+  ];
+}
+
+function stationMotionStillConfirmed(identity) {
+  if (identity === stationMotionIdentity()) return true;
+  stationLog('板端策略或目标已变化，请核对设备与模型后重新确认。', 'error');
+  return false;
+}
+
 async function stationJointCommand(stopGait = false) {
   const policy = state.station.policy;
   if (!state.selectedDeviceId || state.station.policyDeviceId !== state.selectedDeviceId || policy?.actuatorKind !== 'joint' || !policy.commandLimits || policy.state !== 'running' || state.station.policyMotionReady !== true) {
@@ -10939,9 +11027,11 @@ async function stationJointCommand(stopGait = false) {
   }
   const ownerEpoch = workspaceOwnerEpoch;
   const deviceId = selectedDevice()?.id;
+  const motionIdentity = stationMotionIdentity();
   if (!stopGait && !(await confirmAction({ title: '确认机器人鸭短窗运动',
-    note: `前进 ${command.linearX.toFixed(2)} m/s，转向 ${command.angularZ.toFixed(2)} rad/s，持续 ${durationSec.toFixed(1)} 秒。请确认关节已校准、控制器急停可用，人在现场。到期只归零步态命令，策略继续运行。`, approveLabel: '发送指令' }))) return;
+    note: `前进 ${command.linearX.toFixed(2)} m/s，转向 ${command.angularZ.toFixed(2)} rad/s，持续 ${durationSec.toFixed(1)} 秒。请确认关节已校准、控制器急停可用，人在现场。到期只归零步态命令，策略继续运行。`, approveLabel: '发送指令', details: stationMotionDetails() }))) return;
   if (ownerEpoch !== workspaceOwnerEpoch || deviceId !== selectedDevice()?.id) return;
+  if (!stopGait && !stationMotionStillConfirmed(motionIdentity)) return;
   if (state.station.policyDeviceId !== state.selectedDeviceId || state.station.policy?.state !== 'running' || state.station.policyMotionReady !== true ||
       (!stopGait && state.station.policy?.sensorFresh !== true) || Math.abs(command.linearX) > state.station.policy.commandLimits?.linearX || Math.abs(command.angularZ) > state.station.policy.commandLimits?.angularZ) return;
   try {
@@ -11195,6 +11285,7 @@ async function stationPolicyStart() {
   }
   const ownerEpoch = workspaceOwnerEpoch;
   const deviceId = selectedDevice()?.id;
+  const motionIdentity = stationMotionIdentity();
   const direction = joint ? 0 : Number($('station-policy-direction')?.value ?? 0);
   const goalXRaw = joint ? '' : String($('station-policy-goal-x')?.value ?? '').trim();
   const goalYRaw = joint ? '' : String($('station-policy-goal-y')?.value ?? '').trim();
@@ -11213,9 +11304,11 @@ async function stationPolicyStart() {
       '策略输出将被钳制在 0.3 m/s / 1.0 rad/s 内，500ms 无命令底盘自动停车。\n' +
       '请确认机器人周围无障碍物、场地已清空，急停按钮随时可用。',
     approveLabel: '启动策略',
+    details: stationMotionDetails(),
   });
   if (!acknowledged) return;
   if (ownerEpoch !== workspaceOwnerEpoch || deviceId !== selectedDevice()?.id) return;
+  if (!stationMotionStillConfirmed(motionIdentity)) return;
   try {
     const payload = await request('/sim2real/board-station/policy/start', {
       method: 'POST',

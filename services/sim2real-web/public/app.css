@@ -11789,3 +11789,15 @@ body .depth-led #workflow-progress-strip {
 .duck-preparation-table caption { padding: 8px; color: var(--muted-strong); text-align: start; }
 .duck-preparation-table th, .duck-preparation-table td { padding: 8px; border-bottom: 1px solid var(--line); text-align: start; }
 .duck-preparation-issues { color: var(--muted-strong); padding-inline-start: 20px; font-size: var(--fs-body); line-height: 1.65; }
+
+/* Visible workflow choices reduce the amount users must remember. */
+.home-workflows { display: grid; gap: 12px; padding: 16px; border: 1px solid var(--line); border-radius: var(--ui-radius-md); background: var(--panel); }
+.home-workflows > strong { color: var(--muted-strong); font-size: var(--fs-meta); font-weight: 500; }
+.home-workflows .user-start-options { padding-top: 0; }
+.home-model-entry { justify-self: start; min-height: 44px; padding: 4px 0; border: 0; background: transparent; color: var(--muted-strong); font: inherit; cursor: pointer; text-align: start; }
+.home-model-entry strong { font-size: var(--fs-meta); font-weight: 500; }
+.home-model-entry:hover, .home-model-entry[aria-pressed="true"] { color: var(--accent-text); }
+.home-model-entry:focus-visible { outline: 2px solid var(--accent-text); outline-offset: 4px; }
+.onboard-item-meta { display: grid; justify-items: end; gap: 8px; max-width: 240px; }
+.onboard-item-meta .button { white-space: normal; text-align: start; }
+.onboard-action-reason { color: var(--muted-strong); font-size: var(--fs-meta); line-height: 1.5; text-align: start; }

@@ -686,14 +686,16 @@ describe('Sim2Real workbench DOM behavior', () => {
       expect(errors).toEqual([]);
     },
   );
-  it('starts with one task action while goals, progress, project details, and tools stay disclosed on demand', async () => {
+  it('exposes workflows while keeping progress and advanced tools available on demand', async () => {
     const { window, errors } = await boot();
     const doc = window.document;
     const overview = doc.querySelector('[data-view-section="overview"]')!;
     expect(doc.body.dataset.activeView).toBe('overview');
-    expect(overview.querySelectorAll('button[data-start-action]')).toHaveLength(1);
-    expect(overview.querySelector('button[data-start-action]')?.id).toBe('next-action-button');
-    expect(doc.querySelectorAll('#user-start-panel [data-start-intent]')).toHaveLength(3);
+    expect(overview.querySelectorAll('.home-start button[data-start-action]')).toHaveLength(1);
+    expect(
+      doc.querySelectorAll('#user-start-panel .user-start-options [data-start-intent]'),
+    ).toHaveLength(3);
+    expect(doc.querySelector('#user-start-panel')?.closest('details')).toBeNull();
     expect(
       [...doc.querySelectorAll('[data-start-intent][aria-pressed="true"]')].map(
         (button) => button.id,
@@ -703,9 +705,15 @@ describe('Sim2Real workbench DOM behavior', () => {
       doc.querySelectorAll(
         '#onboard-list button, #onboard-list a[href], #onboard-list [tabindex="0"], #onboard-list [role="button"]',
       ),
-    ).toHaveLength(0);
+    ).toHaveLength(4);
+    const replay = doc.querySelector<HTMLButtonElement>(
+      '#onboard-list [data-start-action="replay-experience"]',
+    );
+    expect(replay?.disabled).toBe(true);
+    expect(doc.getElementById(replay!.getAttribute('aria-describedby')!)?.textContent).toContain(
+      '先采集',
+    );
     for (const id of [
-      'user-start-panel',
       'onboard-card',
       'overview-advanced-evidence',
       'sidebar-workbench',
@@ -737,6 +745,283 @@ describe('Sim2Real workbench DOM behavior', () => {
     expect(doc.querySelector('#sidebar-settings #product-select')).not.toBeNull();
     expect(doc.querySelector('#sidebar-settings #project-select')).not.toBeNull();
     expect(errors).toEqual([]);
+  });
+
+  describe('first-use training integration', () => {
+    it('offers configuration for a builtin model with no Run and keeps future actions disabled', async () => {
+      const { window, requests, errors } = await boot({ runs: [] });
+      const doc = window.document;
+      doc.querySelector<HTMLButtonElement>('#start-intent-train')!.click();
+      expect(doc.querySelector('#start-intent-train')?.getAttribute('aria-pressed')).toBe('true');
+      expect(window.localStorage.getItem('rdk-lab-start-intent')).toBe('train');
+      expect(doc.querySelector('#first-run-path-title')?.textContent).toBe('模型训练流程');
+      expect(doc.querySelector('#onboard-count')?.textContent).toBe('1 / 4');
+      expect(doc.querySelector('#next-action-button')?.getAttribute('data-start-action')).toBe(
+        'train-setup',
+      );
+      expect(doc.querySelector<HTMLElement>('.home-start-outcome')?.hidden).toBe(true);
+      doc.querySelector<HTMLDetailsElement>('#onboard-card')!.open = true;
+      const tracking = doc.querySelector<HTMLButtonElement>(
+        '[data-onboard-step="evaluate"] button',
+      )!;
+      const evaluation = doc.querySelector<HTMLButtonElement>(
+        '[data-onboard-step="deploy"] button',
+      )!;
+      expect(tracking.dataset.startAction).toBe('train-status');
+      expect(tracking.disabled).toBe(true);
+      expect(doc.getElementById(tracking.getAttribute('aria-describedby')!)?.textContent).toContain(
+        '先提交并保存训练任务',
+      );
+      expect(evaluation.dataset.startAction).toBe('evaluate');
+      expect(evaluation.disabled).toBe(true);
+      expect(
+        doc.getElementById(evaluation.getAttribute('aria-describedby')!)?.textContent,
+      ).toContain('需要实际训练结果');
+      tracking.click();
+      evaluation.click();
+      expect(doc.body.dataset.activeView).toBe('overview');
+      doc.querySelector<HTMLButtonElement>('[data-onboard-step="train"] button')!.click();
+      await vi.waitFor(() => expect(doc.body.dataset.flowChild).toBe('configure'));
+      expect(doc.body.dataset.activeView).toBe('train');
+      expect(doc.querySelector('#onboard-count')?.textContent).toBe('1 / 4');
+      expect(
+        doc.querySelector('[data-onboard-step="train"]')?.classList.contains('is-complete'),
+      ).toBe(false);
+      expect(window.eval('__workbenchState.overview.runs.length')).toBe(0);
+      expect(requests.filter((entry) => entry.method === 'POST')).toHaveLength(0);
+      expect(errors).toEqual([]);
+    });
+
+    it('routes a training goal with no selected model to registration without counting a visit', async () => {
+      const { window, requests, errors } = await boot({
+        runs: [],
+        transport: async (url) =>
+          url.includes('/overview') ? Response.json({ ...overview([]), models: [] }) : null,
+      });
+      const doc = window.document;
+      doc.querySelector<HTMLButtonElement>('#start-intent-train')!.click();
+      expect(doc.querySelector('#next-action-button')?.getAttribute('data-start-action')).toBe(
+        'model-import',
+      );
+      expect(doc.querySelector('#onboard-count')?.textContent).toBe('0 / 4');
+      doc.querySelector<HTMLButtonElement>('#next-action-button')!.click();
+      await vi.waitFor(() => expect(doc.body.dataset.flowChild).toBe('prepare'));
+      expect(doc.querySelector<HTMLDetailsElement>('#contract-fold')?.open).toBe(true);
+      expect(doc.querySelector('#onboard-count')?.textContent).toBe('0 / 4');
+      expect(requests.filter((entry) => entry.method === 'POST')).toHaveLength(0);
+      expect(errors).toEqual([]);
+    });
+
+    it('keeps the hero, progress card, and step action attached to running training after a newer contract check', async () => {
+      const training = {
+        id: 'active-training',
+        modelId: 'model-1',
+        backend: 'local',
+        status: 'running',
+        mock: false,
+        summary: '真实训练 · 行走策略',
+        createdAt: '2026-10-13T01:00:00Z',
+        training: { engine: 'microduck-rl', targetIterations: 100 },
+        checkpoint: { iteration: 30 },
+      };
+      const contract = {
+        id: 'newer-contract',
+        modelId: 'model-1',
+        backend: 'contract',
+        status: 'completed',
+        summary: '较新的模型兼容性检查',
+        createdAt: '2026-10-13T02:00:00Z',
+        metrics: { contractValid: true },
+      };
+      const { window, requests, errors } = await boot({ runs: [contract, training] });
+      const doc = window.document;
+      doc.querySelector<HTMLButtonElement>('#start-intent-train')!.click();
+      expect(doc.querySelector('#next-action-button')?.getAttribute('data-start-action')).toBe(
+        'train-status',
+      );
+      expect(doc.querySelector('#next-action-button')?.textContent).toBe('查看训练进度');
+      expect(doc.querySelector('#next-action-title')?.textContent).toContain('排队或运行中');
+      expect(doc.querySelector('#onboard-count')?.textContent).toBe('2 / 4');
+      doc.querySelector<HTMLDetailsElement>('#onboard-card')!.open = true;
+      const stepAction = doc.querySelector<HTMLButtonElement>(
+        '[data-onboard-step="evaluate"] button',
+      )!;
+      expect(stepAction.dataset.startAction).toBe('train-status');
+      expect(stepAction.disabled).toBe(false);
+      stepAction.click();
+      await vi.waitFor(() => expect(doc.body.dataset.flowChild).toBe('submit'));
+      expect(doc.body.dataset.activeView).toBe('train');
+      expect(doc.querySelector<HTMLElement>('#run-progress-card')?.hidden).toBe(false);
+      expect(doc.querySelector('#run-progress-title')?.textContent).toBe(training.summary);
+      expect(doc.querySelector('#run-progress-status')?.textContent).toContain('运行');
+      expect(doc.querySelector('#run-progress-track')?.getAttribute('aria-valuenow')).toBe('30');
+      expect(window.eval('__workbenchState.selectedRecord.id')).toBe(training.id);
+      const releaseEvidenceRunIds = window.eval(`(() => {
+        const original = hasReleaseGradeEvidence;
+        const ids = [];
+        hasReleaseGradeEvidence = (evidence, run) => { ids.push(run?.id); return original(evidence, run); };
+        try { renderDuckWorkshop(); return ids; } finally { hasReleaseGradeEvidence = original; }
+      })()`);
+      expect(releaseEvidenceRunIds).toEqual([training.id]);
+      expect(doc.querySelector('#onboard-count')?.textContent).toBe('2 / 4');
+      expect(requests.filter((entry) => entry.method === 'POST')).toHaveLength(0);
+      expect(errors).toEqual([]);
+    });
+
+    it.each(['failed', 'unknown'])(
+      'opens the original %s task without resubmitting or enabling evaluation',
+      async (status) => {
+        const { window, requests, errors } = await boot({
+          runs: [
+            {
+              id: 'saved-training',
+              modelId: 'model-1',
+              backend: 'local',
+              status,
+              mock: false,
+              createdAt: '2026-10-13T01:00:00Z',
+              summary: '原训练任务',
+            },
+          ],
+        });
+        const doc = window.document;
+        doc.querySelector<HTMLButtonElement>('#start-intent-train')!.click();
+        const primary = doc.querySelector<HTMLButtonElement>('#next-action-button')!;
+        expect(primary.dataset.startAction).toBe('train-status');
+        expect(primary.textContent).toBe(status === 'failed' ? '查看训练错误' : '查看原训练任务');
+        expect(doc.querySelector('#onboard-count')?.textContent).toBe('2 / 4');
+        expect(
+          doc.querySelector<HTMLButtonElement>('[data-onboard-step="deploy"] button')?.disabled,
+        ).toBe(true);
+        primary.click();
+        await vi.waitFor(() => expect(doc.body.dataset.flowChild).toBe('submit'));
+        expect(window.eval('__workbenchState.selectedRecord.id')).toBe('saved-training');
+        expect(doc.querySelector('#onboard-count')?.textContent).toBe('2 / 4');
+        expect(requests.filter((entry) => entry.method === 'POST')).toHaveLength(0);
+        expect(errors).toEqual([]);
+      },
+    );
+
+    it.each([false, true])(
+      'routes a completed real training to its evidenced next step with evaluation=%s',
+      async (evaluated) => {
+        const { window, requests, errors } = await boot({
+          runs: [
+            {
+              id: 'completed-training',
+              modelId: 'model-1',
+              backend: 'local',
+              status: 'completed',
+              mock: false,
+              artifact: {
+                kind: 'source',
+                format: 'onnx',
+                artifactRef: 'artifact://tests/trained-policy.onnx',
+              },
+              createdAt: '2026-10-13T01:00:00Z',
+              metrics: evaluated ? { successRate: 0.7 } : { contractValid: true },
+            },
+          ],
+        });
+        const doc = window.document;
+        doc.querySelector<HTMLButtonElement>('#start-intent-train')!.click();
+        const primary = doc.querySelector<HTMLButtonElement>('#next-action-button')!;
+        expect(primary.dataset.startAction).toBe(evaluated ? 'records' : 'evaluate');
+        expect(doc.querySelector('#onboard-count')?.textContent).toBe(
+          evaluated ? '4 / 4' : '3 / 4',
+        );
+        expect(
+          doc.querySelector<HTMLButtonElement>('[data-onboard-step="deploy"] button')?.disabled,
+        ).toBe(false);
+        expect(doc.querySelector('.home-start')?.textContent).not.toMatch(/评测已通过|部署成功/);
+        primary.click();
+        await vi.waitFor(() =>
+          expect(doc.body.dataset.activeView).toBe(evaluated ? 'records' : 'evaluate'),
+        );
+        expect(requests.filter((entry) => entry.method === 'POST')).toHaveLength(0);
+        expect(errors).toEqual([]);
+      },
+    );
+
+    it('keeps a completed training plan without model weights pending and opens its original task', async () => {
+      const { window, requests, errors } = await boot({
+        runs: [
+          {
+            id: 'smolvla-plan',
+            modelId: 'model-1',
+            backend: 'local',
+            status: 'completed',
+            mock: false,
+            training: { engine: 'smolvla' },
+            metrics: { engine: 'smolvla', contractValid: true },
+            checkpoint: {
+              checkpointId: 'planned-checkpoint',
+              artifactRef: 'artifact://smolvla/test/checkpoint',
+              iteration: 1000,
+            },
+            createdAt: '2026-10-13T01:00:00Z',
+          },
+        ],
+      });
+      const doc = window.document;
+      doc.querySelector<HTMLButtonElement>('#start-intent-train')!.click();
+      expect(doc.querySelector('#next-action-button')?.getAttribute('data-start-action')).toBe(
+        'train-status',
+      );
+      expect(doc.querySelector('#onboard-count')?.textContent).toBe('2 / 4');
+      expect(
+        doc.querySelector<HTMLButtonElement>('[data-onboard-step="deploy"] button')?.disabled,
+      ).toBe(true);
+      doc.querySelector<HTMLButtonElement>('#next-action-button')!.click();
+      await vi.waitFor(() => expect(doc.body.dataset.flowChild).toBe('submit'));
+      expect(window.eval('__workbenchState.selectedRecord.id')).toBe('smolvla-plan');
+      expect(requests.filter((entry) => entry.method === 'POST')).toHaveLength(0);
+      expect(errors).toEqual([]);
+    });
+
+    it('offers training configuration after actual recording playback without submitting training', async () => {
+      const { window, requests, errors } = await boot({ runs: [] });
+      const doc = window.document;
+      const secondary = doc.querySelector<HTMLButtonElement>('#start-secondary-button')!;
+      expect(secondary.hidden).toBe(true);
+      window.dispatchEvent(
+        new window.MessageEvent('message', {
+          origin: window.location.origin,
+          source: doc.querySelector<HTMLIFrameElement>('#simulator-frame')!.contentWindow as never,
+          data: {
+            type: 'rdk-microduck-recording-ready',
+            format: 'microduck-trajectory-v1',
+            text: [0, 0.02, 0.04]
+              .map((time) => JSON.stringify({ time, observation: [time], action: [time] }))
+              .join('\n'),
+            sampleCount: 3,
+          },
+        }),
+      );
+      expect(secondary.hidden).toBe(true);
+      doc.querySelector<HTMLButtonElement>('#next-action-button')!.click();
+      await vi.waitFor(() =>
+        expect(doc.querySelector<HTMLDialogElement>('#experience-review-dialog')?.open).toBe(true),
+      );
+      doc.querySelector<HTMLButtonElement>('#replay-play-button')!.click();
+      await vi.waitFor(() =>
+        expect(doc.querySelector('#onboard-count')?.textContent).toBe('4 / 4'),
+      );
+      doc.querySelector<HTMLButtonElement>('#experience-review-close')!.click();
+      expect(secondary.hidden).toBe(false);
+      expect(secondary.dataset.startAction).toBe('train-setup');
+      expect(doc.querySelector('#next-action-button')?.getAttribute('data-start-action')).toBe(
+        'replay-experience',
+      );
+      secondary.click();
+      await vi.waitFor(() => expect(doc.body.dataset.flowChild).toBe('configure'));
+      expect(window.eval('__workbenchState.startIntent')).toBe('train');
+      expect(doc.querySelector('#start-intent-train')?.getAttribute('aria-pressed')).toBe('true');
+      expect(doc.body.dataset.activeView).toBe('train');
+      expect(window.eval('__workbenchState.overview.runs.length')).toBe(0);
+      expect(requests.filter((entry) => entry.method === 'POST')).toHaveLength(0);
+      expect(errors).toEqual([]);
+    });
   });
 
   it('loads the relay transport before the app that resumes durable training runs', () => {
@@ -3602,6 +3887,53 @@ describe('joint station device ownership', () => {
     });
   }
 
+  it('shows the actual board and loaded policy before motion and cancellation sends nothing', async () => {
+    const { window, requests, errors } = await boot({ devices });
+    mountPolicy(window);
+    const pending = window.eval('stationPolicyStart()');
+    await vi.waitFor(() =>
+      expect(window.document.querySelector<HTMLDialogElement>('#confirm-action-dialog')?.open).toBe(
+        true,
+      ),
+    );
+    const details = window.document.querySelector('#confirm-action-details')!;
+    expect(details.textContent).toContain('Duck A');
+    expect(details.textContent).toContain('board-a');
+    expect(details.textContent).toContain('rdk-x5');
+    expect(details.textContent).toContain('policy-a.onnx');
+    expect(details.textContent).toContain('未提供 SHA-256');
+    window.eval('settleConfirmAction(false)');
+    await pending;
+    expect(
+      requests.filter(
+        (request) => request.method === 'POST' && request.url.includes('/policy/start'),
+      ),
+    ).toHaveLength(0);
+    expect(errors).toEqual([]);
+  }, 10_000);
+
+  it('invalidates a motion confirmation when the loaded board policy changes', async () => {
+    const { window, requests, errors } = await boot({ devices });
+    mountPolicy(window);
+    const pending = window.eval('stationPolicyStart()');
+    await vi.waitFor(() =>
+      expect(window.document.querySelector<HTMLDialogElement>('#confirm-action-dialog')?.open).toBe(
+        true,
+      ),
+    );
+    window.eval(
+      'stationRenderPolicy({...__workbenchState.station.policy, model:{path:"policy-b.onnx"}}); settleConfirmAction(true)',
+    );
+    await pending;
+    expect(
+      requests.filter(
+        (request) => request.method === 'POST' && request.url.includes('/policy/start'),
+      ),
+    ).toHaveLength(0);
+    expect(window.document.querySelector('#station-log-list')?.textContent).toContain('重新确认');
+    expect(errors).toEqual([]);
+  }, 10_000);
+
   it('targets the selected B device for every station URL and preserves unrelated query parameters', async () => {
     const { window, errors } = await boot({ devices });
     selectDevice(window, 'board-b');
@@ -4343,4 +4675,143 @@ describe('duck preparation and experiment records', () => {
     ).toHaveLength(0);
     expect(errors).toEqual([]);
   });
+});
+
+describe('workbench navigation state recovery', () => {
+  const waitNavigation = () => new Promise((resolve) => setTimeout(resolve, 40));
+
+  it('recovers malformed hashes during boot and a later hash change', async () => {
+    const { window, errors } = await boot({ url: 'http://localhost/sim2real/#train/%' });
+    expect(window.document.body.dataset.activeView).toBe('overview');
+    expect(window.location.hash).toBe('#overview');
+    expect(window.document.querySelector('#main-content')?.getAttribute('aria-busy')).toBe('false');
+    window.location.hash = '#evaluate/%E0%A4%A';
+    await waitNavigation();
+    expect(window.document.body.dataset.activeView).toBe('overview');
+    expect(window.location.hash).toBe('#overview');
+    expect(errors).toEqual([]);
+  });
+
+  it('rejects a flow child belonging to another view without selecting its sidebar entry', async () => {
+    const { window, errors } = await boot({
+      url: 'http://localhost/sim2real/#simulate/prepare',
+    });
+    expect(window.document.body.dataset.activeView).toBe('simulate');
+    expect(window.document.body.dataset.flowChild).not.toBe('prepare');
+    expect(
+      window.document
+        .querySelector('.sidebar [data-flow-child="prepare"]')
+        ?.hasAttribute('aria-current'),
+    ).toBe(false);
+    expect(window.document.getElementById('flow-context-title')?.textContent).toBe('仿真与录制');
+    expect(window.location.hash).toBe('#simulate');
+    window.location.hash = '#train/comparison';
+    await waitNavigation();
+    expect(window.document.body.dataset.activeView).toBe('train');
+    expect(window.document.body.dataset.flowChild).toBe('submit');
+    expect(
+      window.document
+        .querySelector('.sidebar [data-flow-child="comparison"]')
+        ?.hasAttribute('aria-current'),
+    ).toBe(false);
+    expect(window.location.hash).toBe('#train/submit');
+    expect(errors).toEqual([]);
+  });
+
+  it('keeps station diagnostics location consistent and restores its deep link after refresh and Back', async () => {
+    const { window, errors, requests } = await boot({
+      url: 'http://localhost/sim2real/#station/devices',
+    });
+    const doc = window.document;
+    doc.querySelector<HTMLButtonElement>('#station-tab-diagnostics')!.click();
+    const assertDiagnostics = (target: InstanceType<typeof JSDOM>['window']) => {
+      const document = target.document;
+      expect(target.location.hash).toBe('#station/diagnostics');
+      expect(document.body.dataset.flowChild).toBe('diagnostics');
+      expect(
+        document
+          .querySelector('[data-view-section="station"]')
+          ?.getAttribute('data-active-station-module'),
+      ).toBe('diagnostics');
+      expect(
+        document.querySelector('#station-tab-diagnostics')?.getAttribute('aria-selected'),
+      ).toBe('true');
+      expect(document.querySelector('#station-tab-devices')?.getAttribute('aria-selected')).toBe(
+        'false',
+      );
+      expect(
+        document
+          .querySelector('.sidebar [data-flow-child="devices"]')
+          ?.hasAttribute('aria-current'),
+      ).toBe(false);
+      expect(document.getElementById('flow-context-title')?.textContent).toBe('诊断命令');
+      expect(document.getElementById('context-live-stage')?.textContent).toContain('诊断命令');
+      expect(document.title).toContain('诊断命令');
+    };
+    assertDiagnostics(window);
+    expect(window.history.length).toBe(1);
+    const fresh = await boot({ url: window.location.href });
+    assertDiagnostics(fresh.window);
+    doc.querySelector<HTMLButtonElement>('.sidebar .nav-item[data-view-target="records"]')!.click();
+    expect(window.history.length).toBe(2);
+    window.history.back();
+    await waitNavigation();
+    assertDiagnostics(window);
+    expect(window.history.length).toBe(2);
+    expect(
+      requests.filter((item) => item.method === 'POST' && /\/(?:drive|policy)\//.test(item.url)),
+    ).toHaveLength(0);
+    expect(errors).toEqual([]);
+    expect(fresh.errors).toEqual([]);
+  }, 10_000);
+
+  it.each([
+    {
+      view: 'evaluate',
+      child: 'comparison',
+      module: 'comparison',
+      tab: 'eval-tab-comparison',
+      otherTab: 'eval-tab-run',
+      title: '结果对比',
+      attribute: 'data-active-eval-module',
+    },
+    {
+      view: 'deploy',
+      child: 'feedback',
+      module: 'feedback',
+      tab: 'deploy-tab-feedback',
+      otherTab: 'deploy-tab-preflight',
+      title: '运行反馈与回滚',
+      attribute: 'data-active-deploy-module',
+    },
+  ])(
+    'synchronizes $view sticky modules immediately on generic and bare-hash landings',
+    async ({ view, child, module, tab, otherTab, title, attribute }) => {
+      const { window, errors } = await boot({ url: `http://localhost/sim2real/#${view}/${child}` });
+      const doc = window.document;
+      const assertModule = () => {
+        expect(doc.querySelector(`[data-view-section="${view}"]`)?.getAttribute(attribute)).toBe(
+          module,
+        );
+        expect(doc.querySelector(`#${tab}`)?.getAttribute('aria-selected')).toBe('true');
+        expect(doc.querySelector(`#${tab}`)?.classList.contains('is-active')).toBe(true);
+        expect(doc.querySelector(`#${tab}`)?.getAttribute('tabindex')).toBe('0');
+        expect(doc.querySelector(`#${otherTab}`)?.getAttribute('aria-selected')).toBe('false');
+        expect(doc.querySelector(`#${otherTab}`)?.classList.contains('is-active')).toBe(false);
+        expect(doc.getElementById('flow-context-title')?.textContent).toBe(title);
+        expect(doc.getElementById('context-live-stage')?.textContent).toContain(title);
+        expect(doc.title).toContain(title);
+        expect(window.location.hash).toBe(`#${view}/${child}`);
+      };
+      doc
+        .querySelector<HTMLButtonElement>('.sidebar .nav-item[data-view-target="records"]')!
+        .click();
+      doc.querySelector<HTMLButtonElement>(`[data-workflow-step="${view}"] button`)!.click();
+      assertModule();
+      window.location.hash = `#${view}`;
+      await waitNavigation();
+      assertModule();
+      expect(errors).toEqual([]);
+    },
+  );
 });

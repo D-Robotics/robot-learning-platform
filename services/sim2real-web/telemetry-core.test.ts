@@ -26,6 +26,333 @@ beforeAll(async () => {
   if (!core) throw new Error('telemetry-core.js did not publish globalThis.SimTelemetryCore');
 });
 
+describe('hasTrainingResult (completed worker task must contain learned artifact)', () => {
+  const trained = {
+    backend: 'local',
+    status: 'completed',
+    mock: false,
+    artifact: {
+      kind: 'source',
+      format: 'onnx',
+      artifactRef: 'artifact://microduck/policy/weights',
+    },
+  };
+
+  it('rejects the normalized SmolVLA plan that has a checkpoint but no trained artifact', () => {
+    const plan = {
+      backend: 'local',
+      status: 'completed',
+      mock: false,
+      checkpoint: {
+        checkpointId: 'smolvla-plan',
+        artifactRef: 'artifact://smolvla/model/checkpoint',
+      },
+      metrics: { contractValid: true, observationSize: 61, actionSize: 14, engine: 'smolvla' },
+    };
+    expect(core.hasTrainingResult(plan)).toBe(false);
+    expect(core.selectTrainingRun([plan])).toBe(plan);
+  });
+
+  it('accepts real ONNX or PyTorch training even when the artifact is not deployable yet', () => {
+    expect(core.hasTrainingResult(trained)).toBe(true);
+    expect(
+      core.hasTrainingResult({
+        ...trained,
+        backend: 'robogo',
+        status: 'ready',
+        artifact: { ...trained.artifact, format: 'pytorch', deployable: false },
+      }),
+    ).toBe(true);
+    for (const format of ['bin', 'hbm', 'gguf']) {
+      expect(
+        core.hasTrainingResult({
+          ...trained,
+          artifact: { ...trained.artifact, kind: 'compiled', format },
+        }),
+      ).toBe(true);
+    }
+  });
+
+  it('rejects JSON and unknown-format plans even with a valid artifact reference', () => {
+    for (const format of ['json', 'unknown', '', undefined]) {
+      expect(
+        core.hasTrainingResult({ ...trained, artifact: { ...trained.artifact, format } }),
+      ).toBe(false);
+    }
+  });
+
+  it('rejects explicit dry-run and plan-only evidence', () => {
+    for (const run of [
+      { ...trained, dryRun: true },
+      { ...trained, planOnly: true },
+      { ...trained, artifact: { ...trained.artifact, planOnly: true } },
+      { ...trained, metrics: { dryRun: true } },
+    ])
+      expect(core.hasTrainingResult(run)).toBe(false);
+  });
+
+  it('rejects mock or demo-fixture runs, active tasks and non-training backends', () => {
+    for (const run of [
+      { ...trained, mock: true },
+      { ...trained, evaluation: { replay: { source: 'demo-fixture' } } },
+      ...['queued', 'running', 'failed', 'blocked', 'cancelled', 'unknown'].map((status) => ({
+        ...trained,
+        status,
+      })),
+      ...['contract', 'browser', undefined].map((backend) => ({ ...trained, backend })),
+    ])
+      expect(core.hasTrainingResult(run)).toBe(false);
+  });
+
+  it('rejects missing or malformed artifact references and artifact metadata', () => {
+    for (const artifact of [
+      undefined,
+      null,
+      [],
+      'artifact',
+      {},
+      { ...trained.artifact, kind: 'plan' },
+      ...[
+        undefined,
+        null,
+        '',
+        ' ',
+        'artifact://',
+        'weights.onnx',
+        'https://example.test/weights',
+      ].map((artifactRef) => ({ ...trained.artifact, artifactRef })),
+    ])
+      expect(core.hasTrainingResult({ ...trained, artifact })).toBe(false);
+  });
+
+  it('is defensive with malformed input and does not alter the Run', () => {
+    for (const run of [undefined, null, [], {}, 0, 'run'])
+      expect(core.hasTrainingResult(run)).toBe(false);
+    const run = Object.freeze({ ...trained, artifact: Object.freeze({ ...trained.artifact }) });
+    const before = JSON.stringify(run);
+    expect(core.hasTrainingResult(run)).toBe(true);
+    expect(JSON.stringify(run)).toBe(before);
+  });
+});
+
+describe('selectTrainingRun (training progress stays attached to a training Run)', () => {
+  it('keeps a running training visible after a newer contract check or browser replay', () => {
+    const training = {
+      id: 'train-1',
+      backend: 'local',
+      status: 'running',
+      mock: false,
+      createdAt: '2026-10-13T01:00:00Z',
+    };
+    const contract = {
+      id: 'contract-2',
+      backend: 'contract',
+      status: 'completed',
+      createdAt: '2026-10-13T02:00:00Z',
+    };
+    const replay = {
+      id: 'browser-3',
+      backend: 'browser',
+      status: 'completed',
+      createdAt: '2026-10-13T03:00:00Z',
+    };
+    expect(core.selectTrainingRun([training, contract, replay])).toBe(training);
+  });
+
+  it('prioritizes real running, then queued, over newer terminal or mock records', () => {
+    const running = {
+      id: 'running',
+      backend: 'robogo',
+      status: 'running',
+      createdAt: '2026-10-13T01:00:00Z',
+    };
+    const queued = {
+      id: 'queued',
+      backend: 'local',
+      status: 'queued',
+      createdAt: '2026-10-13T02:00:00Z',
+    };
+    const failed = {
+      id: 'failed',
+      backend: 'local',
+      status: 'failed',
+      createdAt: '2026-10-13T03:00:00Z',
+    };
+    const mock = {
+      id: 'mock',
+      backend: 'local',
+      status: 'running',
+      mock: true,
+      createdAt: '2026-10-13T04:00:00Z',
+    };
+    expect(core.selectTrainingRun([mock, failed, queued, running])).toBe(running);
+    expect(core.selectTrainingRun([mock, failed, queued])).toBe(queued);
+    expect(core.selectTrainingRun([mock, failed])).toBe(failed);
+  });
+
+  it('preserves a recent blocked training as a blocker instead of using a mock success', () => {
+    const blocked = {
+      id: 'blocked',
+      backend: 'robogo',
+      status: 'blocked',
+      createdAt: '2026-10-13T02:00:00Z',
+    };
+    const completed = {
+      id: 'older',
+      backend: 'local',
+      status: 'completed',
+      createdAt: '2026-10-13T01:00:00Z',
+    };
+    const mock = {
+      id: 'mock',
+      backend: 'local',
+      status: 'completed',
+      mock: true,
+      createdAt: '2026-10-13T03:00:00Z',
+    };
+    expect(core.selectTrainingRun([mock, completed, blocked])).toBe(blocked);
+    expect(core.selectTrainingRun([mock, completed, blocked])?.status).toBe('blocked');
+  });
+
+  it('returns null for no training records or malformed inputs', () => {
+    for (const input of [
+      undefined,
+      null,
+      {},
+      'runs',
+      [],
+      [null, 1, 'run', [], {}],
+      [{ backend: 'contract', status: 'running' }],
+      [{ backend: 'browser', status: 'queued' }],
+    ]) {
+      expect(core.selectTrainingRun(input)).toBeNull();
+    }
+  });
+
+  it('uses mock training only when there is no real training candidate', () => {
+    const completed = {
+      id: 'real',
+      backend: 'local',
+      status: 'completed',
+      createdAt: '2026-10-12T01:00:00Z',
+    };
+    const queued = {
+      id: 'mock-queued',
+      backend: 'local',
+      status: 'queued',
+      mock: true,
+      createdAt: '2026-10-13T01:00:00Z',
+    };
+    const running = {
+      id: 'mock-running',
+      backend: 'robogo',
+      status: 'running',
+      mock: true,
+      createdAt: '2026-10-13T00:00:00Z',
+    };
+    expect(core.selectTrainingRun([queued, running, completed])).toBe(completed);
+    expect(core.selectTrainingRun([queued, running])).toBe(running);
+    expect(core.selectTrainingRun([queued, { backend: 'contract', status: 'completed' }])).toBe(
+      queued,
+    );
+  });
+
+  it('does not promote a demo-fixture replay to real training', () => {
+    const real = {
+      id: 'failed',
+      backend: 'local',
+      status: 'failed',
+      createdAt: '2026-10-12T01:00:00Z',
+    };
+    const fixture = {
+      id: 'fixture',
+      backend: 'local',
+      status: 'running',
+      mock: false,
+      evaluation: { replay: { source: 'demo-fixture' } },
+      createdAt: '2026-10-13T01:00:00Z',
+    };
+    expect(core.selectTrainingRun([fixture, real])).toBe(real);
+    expect(core.selectTrainingRun([fixture])).toBe(fixture);
+  });
+
+  it('keeps failed, blocked, cancelled and unknown statuses intact for recovery', () => {
+    for (const status of ['ready', 'failed', 'blocked', 'cancelled', 'canceled', 'unknown']) {
+      const record = { id: status, backend: 'robogo', status, createdAt: '2026-10-13T01:00:00Z' };
+      expect(core.selectTrainingRun([record])).toBe(record);
+      expect(core.selectTrainingRun([record]).status).toBe(status);
+    }
+  });
+
+  it('chooses the newest timestamp within a priority and uses id for stable ties', () => {
+    const older = {
+      id: 'old',
+      backend: 'local',
+      status: 'running',
+      createdAt: '2026-10-13T01:00:00Z',
+    };
+    const newer = {
+      id: 'new',
+      backend: 'robogo',
+      status: 'running',
+      createdAt: '2026-10-13T02:00:00Z',
+    };
+    const tieA = { id: 'a', backend: 'local', status: 'queued', createdAt: '2026-10-13T02:00:00Z' };
+    const tieB = {
+      id: 'b',
+      backend: 'robogo',
+      status: 'queued',
+      createdAt: '2026-10-13T10:00:00+08:00',
+    };
+    expect(core.selectTrainingRun([newer, older])).toBe(newer);
+    expect(core.selectTrainingRun([tieB, tieA])).toBe(tieA);
+    expect(core.selectTrainingRun([tieA, tieB])).toBe(tieA);
+  });
+
+  it('puts missing or invalid dates after valid dates without inventing a timestamp', () => {
+    const valid = {
+      id: 'z',
+      backend: 'local',
+      status: 'completed',
+      createdAt: '2026-10-13T01:00:00Z',
+    };
+    const invalid = { id: 'a', backend: 'local', status: 'completed', createdAt: 'not-a-date' };
+    const missing = { id: 'b', backend: 'local', status: 'completed' };
+    expect(core.selectTrainingRun([missing, invalid, valid])).toBe(valid);
+    expect(core.selectTrainingRun([missing, invalid])).toBe(invalid);
+  });
+
+  it('does not coerce malformed backend or status fields into a training record', () => {
+    expect(
+      core.selectTrainingRun([
+        { backend: { toString: () => 'local' }, status: 'running' },
+        { backend: 'local', status: { toString: () => 'running' } },
+        { backend: 'local', status: 'unrecognized' },
+        { backend: 'local' },
+      ]),
+    ).toBeNull();
+  });
+
+  it('returns the original record without mutating frozen inputs or record fields', () => {
+    const earlier = Object.freeze({
+      id: 'earlier',
+      backend: 'local',
+      status: 'running',
+      createdAt: '2026-10-12T01:00:00Z',
+    });
+    const latest = Object.freeze({
+      id: 'latest',
+      backend: 'local',
+      status: 'running',
+      createdAt: '2026-10-13T01:00:00Z',
+    });
+    const input = Object.freeze([earlier, latest]);
+    expect(core.selectTrainingRun(input)).toBe(latest);
+    expect(input).toEqual([earlier, latest]);
+    expect(Object.keys(latest)).toEqual(['id', 'backend', 'status', 'createdAt']);
+  });
+});
+
 describe('formatTelemetrySeconds / formatTelemetryRate', () => {
   it('renders finite seconds with two decimals', () => {
     expect(core.formatTelemetrySeconds(1.5)).toBe('1.50s');
