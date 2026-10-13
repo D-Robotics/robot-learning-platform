@@ -160,7 +160,8 @@
     "verify:ci:build-e2e": "npm run build && npm run verify:api-contract && npm run smoke:sim2real-local && node services/sim2real-web/server-wiring.spec.mjs && npm run verify:device-connections && npm run verify:policy-provider-layout && npm run verify:deployment",
     "verify:preflight": "npx prettier --check . && npm run lint -- --max-warnings=0 && npx tsc -p tsconfig.build.json --noEmit && node scripts/lock-engines.mjs --check && npm run build && npm run verify:api-contract",
     "verify:engine-locks-test": "node --test scripts/lock-engines.test.mjs",
-    "verify:arm-acceptance-test": "node --test scripts/verify-arm-acceptance.test.mjs"
+    "verify:arm-acceptance-test": "node --test scripts/verify-arm-acceptance.test.mjs",
+    "verify:microduck-browser-runtime": "node --test scripts/verify-microduck-browser-runtime.test.mjs && node scripts/verify-microduck-browser-runtime.mjs"
   },
   "dependencies": {
     "@deepseek-ai/cordis": "4.0.2",

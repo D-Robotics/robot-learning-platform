@@ -15,17 +15,23 @@
   const RECORDER_MAX_BYTES = 30 * 1024 * 1024; // Leave room for the parent's 32 MiB import limit.
   const POLICY_PANEL_ID = 'rdk-microduck-policy';
   const POLICY_STYLE_ID = 'rdk-microduck-policy-style';
-  // The platform's own run list. Same origin as this page in the standard
-  // deployment; a deployment that mounts the simulator elsewhere can point the
-  // panel at its API with ?rdkApi=https://studio.example.com.
+  // Keep every policy request in the workbench's mounted API namespace. The
+  // site root can host a separate Studio API, even though the origin is shared.
+  // An independently mounted simulator can use ?rdkApi=/robotics-learning.
   const POLICY_API_BASE = (() => {
+    const mounted = window.location.pathname.match(/^(.*?)\/mujoco\/microduck(?:\/|$)/);
+    const fallback = String(mounted?.[1] || '').replace(/\/+$/, '');
     try {
       const override = new URLSearchParams(window.location.search).get('rdkApi');
-      if (override) return String(override).replace(/\/+$/, '');
+      if (override) {
+        const api = new URL(override, `${window.location.origin}/`);
+        if (api.origin === window.location.origin && !api.search && !api.hash)
+          return api.pathname.replace(/\/+$/, '');
+      }
     } catch {
-      /* keep the same-origin default */
+      /* keep the mounted same-origin default */
     }
-    return '';
+    return fallback;
   })();
   const QR_SRC = './community/microduck-wechat.png';
 
@@ -481,7 +487,7 @@
     simulatorContext.active = active === true;
     if (simulatorContext.active) {
       stopSimulatorPause();
-      if (simulatorContext.pending && simulatorContext.pending.startedAt !== null)
+      if (simulatorContext.pending?.startedAt !== null && simulatorContext.pending)
         simulatorContext.pending.startedAt = performance.now();
       pumpTask();
     } else {
@@ -507,7 +513,7 @@
     if (!preserveTrial) stopPolicyRun();
     stopReplayState();
     simulatorContext.ready = false;
-    simulatorContext.pending = { taskId, startedAt: null, reset: false };
+    simulatorContext.pending = { taskId, startedAt: null, waitStage: null, reset: false };
     taskState(taskId, 'loading', '正在准备任务场景');
     pumpTask();
     return true;
@@ -521,10 +527,34 @@
     if (!simulatorContext.active) return;
     const current = runtime();
     try {
-      // The introductory screen creates no runtime until the user starts
-      // WASM. Time the actual preparation, never time spent reading it.
-      if (pending.startedAt === null && current) pending.startedAt = performance.now();
-      if (pending.startedAt !== null && performance.now() - pending.startedAt > 15_000)
+      // The introduction is user-paced, and WASM does not expose window.rl
+      // until initialization finishes. Neither wait consumes task setup time.
+      const waitStage = isLanding()
+        ? 'intro'
+        : !current || typeof current.resetSim !== 'function'
+          ? 'runtime'
+          : null;
+      if (waitStage) {
+        pending.startedAt = null;
+        if (pending.waitStage !== waitStage) {
+          pending.waitStage = waitStage;
+          taskState(
+            pending.taskId,
+            'loading',
+            waitStage === 'intro'
+              ? '等待开始仿真，请点击画面中的“开始仿真”'
+              : '正在加载仿真引擎，加载完成后会自动准备任务',
+          );
+        }
+        simulatorContext.timer = setTimeout(pumpTask, 100);
+        return;
+      }
+      if (pending.startedAt === null) {
+        pending.startedAt = performance.now();
+        pending.waitStage = null;
+        taskState(pending.taskId, 'loading', '正在准备任务场景');
+      }
+      if (performance.now() - pending.startedAt > 15_000)
         throw new Error('仿真引擎未在 15 秒内就绪');
       if (current && typeof current.resetSim === 'function') {
         if (!pending.reset) {
@@ -1536,7 +1566,9 @@
         });
         if (!response.ok) throw new Error(`HTTP ${response.status}`);
         const payload = await response.json();
-        const runs = Array.isArray(payload.runs) ? payload.runs : [];
+        if (payload?.ok !== true || !Array.isArray(payload.runs))
+          throw new Error('训练记录响应格式错误');
+        const runs = payload.runs;
         state.runs = runs.filter(
           (run) =>
             run &&
@@ -1551,7 +1583,7 @@
         setStatus(state.runs.length ? `${state.runs.length} 个可用策略` : '暂无可用策略');
       } catch (error) {
         state.runs = [];
-        state.loaded = true;
+        state.loaded = false;
         setStatus(`平台不可达：${error?.message || error}`, 'error');
       } finally {
         state.busy = false;

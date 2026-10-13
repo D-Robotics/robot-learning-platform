@@ -35,6 +35,8 @@ RDK_SIM2REAL_MUJOCO_WEB_URL=http://127.0.0.1:18100 npm run dev:sim2real
 
 这组任务的物理步进无需上游 MicroDuck 静态包，未挂载时采用机械鸭简模。若要使用上游外观，将审核后的浏览器 release 挂载到 `RDK_SIM2REAL_MICRODUCK_ROOT`；浏览器读取其中 `robot/mjlab/microduck.glb` 的命名几何体和 `kinematics.json` 的装配层级。基础动作任务仍需要完整浏览器 release。获取、来源登记、许可与校验流程见 [`services/mujoco-web/MICRODUCK-UPSTREAM.md`](../services/mujoco-web/MICRODUCK-UPSTREAM.md)，本地挂载配置见 [`services/mujoco-web/README.md`](../services/mujoco-web/README.md)。这些上游可视资产不复制进公开仓库，部署者保留原 release 的许可证、模型文件条款和归属文件。更新覆盖层后，用 `install-microduck-overlay.py` 把本仓库最新的任务桥、录制和策略装载功能同步到该 release。
 
+发布前以该完整目录运行 `MICRODUCK_REQUIRE_NETWORK_BOUNDARY=1 MICRODUCK_STATIC_ROOT=/srv/releases/microduck-simulator-approved npm run verify:microduck-browser-runtime`。门禁核对完整资源摘要、真实策略装载与恢复接口，以及 ONNX 维度、有限值和非恒定输出；仅复制覆盖层不能为旧运行时补出不存在的接口。
+
 ## 自有机器人外观
 
 训练引擎任务页面可使用部署者审核过的自有可视模型。先把 GLB 与 `kinematics.json` 部署到工作台的同源静态目录，再在已有模型 Manifest 的 `simulator` 中设置目录；下面是局部配置，`policyArtifactId` 仍引用该模型已经登记的 ONNX 制品：
@@ -69,7 +71,7 @@ RDK_SIM2REAL_MUJOCO_WEB_URL=http://127.0.0.1:18100 npm run dev:sim2real
 
 ## 共享部署的身份边界
 
-共享服务中，基础 MicroDuck WASM 场景可用于游客试玩；Python 引擎与 OriginBot 的会话操作需要登录。模型、项目、运行及证据台账按 owner 隔离。浏览器检测账号切换、退出或会话失效时，会停止录制和策略、卸载主场景与回放 iframe，并清除旧账号的本地轨迹、遥测、回放和项目/模型/设备选择；延迟消息和响应无法恢复旧账号数据。正常匿名本地刷新保留当前本地录制。
+共享服务中，基础 MicroDuck WASM 场景可用于游客试玩；Python 引擎与 OriginBot 的会话操作需要登录。模型、项目、运行及证据台账按 owner 隔离。基础浏览器场景不加入上游公共多人房间，也不向房间成员广播姿态、关节或球状态。安装器在上游脚本执行前加入同步网络边界和同源连接策略；这不会代替服务端账号校验。浏览器检测账号切换、退出或会话失效时，会停止录制和策略、卸载主场景与回放 iframe，并清除旧账号的本地轨迹、遥测、回放和项目/模型/设备选择；延迟消息和响应无法恢复旧账号数据。正常匿名本地刷新保留当前本地录制。
 
 Node 与 Python 服务须通过私有运行配置设置相同的 `RDK_SIM2REAL_SIMULATION_SECRET`，密钥至少 32 个 UTF-8 字节；Node 同时配置 `RDK_SIM2REAL_MUJOCO_WEB_URL` 指向内部 Python 服务。密钥由服务端签名桥使用，不传给浏览器、Manifest 或公开文档。共享部署缺失有效密钥时，会话接口拒绝服务。两类仿真会话共用每账号 4 个、全局 32 个的配额；达到配额时返回明确的容量错误，关闭闲置场景后再创建。
 

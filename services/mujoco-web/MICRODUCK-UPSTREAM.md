@@ -1,7 +1,10 @@
 # Microduck upstream
 
-The production browser simulator is built from the public Pollen Robotics
-repository at commit `1261013e7e28ba2a6878bd76ae573751c0e4b457`.
+The browser simulator is supplied as an immutable, reviewed Pollen Robotics
+release. Its source revision and complete asset digests are recorded in
+[`microduck-browser-runtime.lock.json`](./microduck-browser-runtime.lock.json); the deployed directory must pass
+`MICRODUCK_REQUIRE_NETWORK_BOUNDARY=1 npm run verify:microduck-browser-runtime`
+after the overlay installer and before a current-link switch.
 
 - Simulator: https://github.com/pollen-robotics/microduck-simulator
 - Robot model and runtime: https://github.com/pollen-robotics/microduck
@@ -12,9 +15,11 @@ The upstream repositories' license and model-file terms apply to the
 corresponding static assets. Do not add arbitrary model or code uploads to the
 public route.
 
-The hosted build applies one integration fix in `app/src/game/duck.js`: the
-upstream absolute STL directory is resolved against the page URL so roller
-assets work under `/mujoco/microduck/`.
+The static release must support the mounted `/mujoco/microduck/` route and
+expose the documented `window.rl` controller interface, including the native
+custom-policy loader and restore operation. A functioning recorder alone does
+not prove that policy loading is supported. Preserve all upstream attribution,
+license, and model-file terms when replacing a release.
 
 ## Release acquisition and verification
 
@@ -39,8 +44,10 @@ tar -xzf "$MICRODUCK_RELEASE_ARCHIVE" \
 test -s /srv/releases/microduck-simulator-approved/index.html
 ```
 
-If the upstream release is built from source instead of an archive, pin the
-repositories above to `1261013e7e28ba2a6878bd76ae573751c0e4b457`, follow each
-upstream repository's documented build, and store the resulting build log and
-digest alongside the release. The static bundle's own license and attribution
+If the upstream release is built from source instead of an archive, use the
+reviewed source revision recorded in the runtime lock, follow the upstream
+repository's documented build, and store the resulting build log and digest
+alongside the release. A new upstream revision requires a reviewed lock update
+and a fresh runtime compatibility check; do not replace assets in place. The
+static bundle's own license and attribution
 files must remain in the release; the platform cannot infer or replace them.

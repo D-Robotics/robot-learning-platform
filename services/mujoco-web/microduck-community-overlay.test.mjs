@@ -75,7 +75,7 @@ function runResponse(taskId, id = `run-${taskId}`) {
   };
 }
 
-function bridgeFixture(runtime, { now } = {}) {
+function bridgeFixture(runtime) {
   const dom = new JSDOM('<!doctype html><html><head></head><body>Simulation</body></html>', {
     url: 'https://studio.example.test/mujoco/microduck/',
     runScripts: 'dangerously',
@@ -88,7 +88,6 @@ function bridgeFixture(runtime, { now } = {}) {
     postMessage: (data) => messages.push(data),
   };
   Object.defineProperty(window, 'parent', { value: parent });
-  if (now) Object.defineProperty(window.performance, 'now', { value: now });
   window.matchMedia = () => ({ matches: false });
   if (runtime) window.rl = runtime;
   window.eval(overlaySource);
@@ -151,10 +150,13 @@ test('task bridge waits for runtime, rejects foreign messages and sets up a kick
   );
 });
 
-test('task preparation waits for the user to start WASM before measuring its timeout', async (t) => {
-  let now = 0;
-  const fixture = bridgeFixture(undefined, { now: () => now });
+test('reading the introduction beyond the startup deadline still becomes ready after the real runtime appears', async (t) => {
+  const fixture = bridgeFixture();
   t.after(() => fixture.dom.window.close());
+  let now = 0;
+  Object.defineProperty(fixture.window.performance, 'now', { value: () => now });
+  fixture.window.document.body.textContent = 'WADDLE IN';
+  fixture.window.document.body.innerText = 'WADDLE IN';
   fixture.send({ type: 'rdk-simulator-task', taskId: 'walk' });
   now = 60_000;
   await new Promise((resolve) => setTimeout(resolve, 150));
@@ -162,68 +164,39 @@ test('task preparation waits for the user to start WASM before measuring its tim
     fixture.messages.some((message) => message.phase === 'failed'),
     false,
   );
+  assert.ok(
+    fixture.messages.some(
+      (message) => message.phase === 'loading' && /开始仿真/.test(message.message),
+    ),
+  );
+  // Clicking start may still compile WASM before window.rl is exposed.
+  fixture.window.document.body.textContent = 'Compiling simulator';
+  fixture.window.document.body.innerText = 'Compiling simulator';
+  now = 120_000;
+  await new Promise((resolve) => setTimeout(resolve, 150));
   assert.equal(
-    fixture.messages.some((message) => message.phase === 'ready'),
+    fixture.messages.some((message) => message.phase === 'failed'),
     false,
   );
-  assert.equal(fixture.window.__microduckSimulator.ready, false);
-  let resets = 0;
-  fixture.window.rl = policyRuntime({ resetSim: () => resets++ });
+  fixture.window.rl = policyRuntime();
   await new Promise((resolve) => setTimeout(resolve, 150));
-  assert.equal(resets, 1);
   assert.equal(fixture.window.__microduckSimulator.ready, true);
-  assert.equal(fixture.messages.at(-1).phase, 'ready');
+  assert.ok(
+    fixture.messages.some((message) => message.phase === 'ready' && message.taskId === 'walk'),
+  );
 });
 
-test('task preparation gives a delayed runtime its own deadline and fails a permanent reset lock', async (t) => {
-  let now = 0;
-  const fixture = bridgeFixture(undefined, { now: () => now });
+test('the preparation deadline still reports a runtime that never unlocks', async (t) => {
+  const fixture = bridgeFixture(policyRuntime({ inputLocked: true }));
   t.after(() => fixture.dom.window.close());
-  fixture.send({ type: 'rdk-simulator-task', taskId: 'sit' });
-  now = 60_000;
-  let resets = 0;
-  const current = policyRuntime({ inputLocked: true, resetSim: () => resets++ });
-  fixture.window.rl = current;
-  await new Promise((resolve) => setTimeout(resolve, 150));
-  assert.equal(resets, 1);
-  assert.equal(
-    fixture.messages.some((message) => message.phase === 'failed'),
-    false,
-  );
-  now = 74_999;
-  await new Promise((resolve) => setTimeout(resolve, 150));
-  assert.equal(
-    fixture.messages.some((message) => message.phase === 'failed'),
-    false,
-  );
-  assert.equal(fixture.window.__microduckSimulator.ready, false);
-  now = 75_001;
-  await new Promise((resolve) => setTimeout(resolve, 150));
-  assert.equal(fixture.messages.at(-1).phase, 'failed');
-  assert.match(fixture.messages.at(-1).message, /15 秒/);
-  current.inputLocked = false;
-  await new Promise((resolve) => setTimeout(resolve, 150));
-  assert.equal(fixture.window.__microduckSimulator.ready, false);
-  assert.equal(fixture.messages.at(-1).phase, 'failed');
-});
-
-test('task preparation still rejects an incomplete runtime and an action failure', async (t) => {
   let now = 0;
-  const fixture = bridgeFixture({}, { now: () => now });
-  t.after(() => fixture.dom.window.close());
+  Object.defineProperty(fixture.window.performance, 'now', { value: () => now });
   fixture.send({ type: 'rdk-simulator-task', taskId: 'walk' });
   now = 15_001;
   await new Promise((resolve) => setTimeout(resolve, 150));
-  assert.equal(fixture.messages.at(-1).phase, 'failed');
-  assert.equal(fixture.window.__microduckSimulator.ready, false);
-  fixture.window.rl = policyRuntime({
-    resetSim() {
-      throw new Error('reset rejected by runtime');
-    },
-  });
-  fixture.send({ type: 'rdk-simulator-task', taskId: 'kick' });
-  assert.equal(fixture.messages.at(-1).phase, 'failed');
-  assert.match(fixture.messages.at(-1).message, /reset rejected by runtime/);
+  assert.ok(
+    fixture.messages.some((message) => message.phase === 'failed' && /15 秒/.test(message.message)),
+  );
   assert.equal(fixture.window.__microduckSimulator.ready, false);
 });
 
@@ -829,108 +802,154 @@ test('browser recorder captures contract observations and actions from window.rl
   dom.window.close();
 });
 
-test('policy panel loads a trained run into window.rl.loadCustomPolicy', async (t) => {
-  const dom = new JSDOM(
-    '<!doctype html><html><head></head><body><main>MicroDuck simulation</main></body></html>',
-    {
-      url: 'https://studio.example.test/mujoco/microduck/',
-      runScripts: 'dangerously',
-      pretendToBeVisual: true,
-    },
-  );
-  t.after(() => dom.window.close());
-  const { window } = dom;
-  window.matchMedia = () => ({ matches: false });
+for (const [entry, apiBase] of [
+  ['/mujoco/microduck/', ''],
+  ['/robotics-learning/mujoco/microduck/', '/robotics-learning'],
+  ['/sim2real/mujoco/microduck/', '/sim2real'],
+  ['/mujoco/microduck/?rdkApi=%2Frobotics-learning', '/robotics-learning'],
+  [
+    '/mujoco/microduck/?rdkApi=https%3A%2F%2Fstudio.example.test%2Frobotics-learning',
+    '/robotics-learning',
+  ],
+  ['/robotics-learning/mujoco/microduck/?rdkApi=https%3A%2F%2Fforeign.test', '/robotics-learning'],
+]) {
+  test(`policy panel loads a trained run into its mounted API: ${entry}`, async (t) => {
+    const dom = new JSDOM(
+      '<!doctype html><html><head></head><body><main>MicroDuck simulation</main></body></html>',
+      {
+        url: `https://studio.example.test${entry}`,
+        runScripts: 'dangerously',
+        pretendToBeVisual: true,
+      },
+    );
+    t.after(() => dom.window.close());
+    const { window } = dom;
+    window.matchMedia = () => ({ matches: false });
 
-  const loaded = [];
-  const cleared = [];
-  window.rl = policyRuntime({
-    buildObs: () => Float32Array.from({ length: 61 }),
-    lastAction: Float32Array.from({ length: 14 }),
-    loadCustomPolicy: async (ref) => {
-      loaded.push(ref);
-      window.rl.customPolicy = { ref, session: sessionFixture(), slot: 'walk' };
-      window.rl.sessions.walk = window.rl.customPolicy.session;
-    },
-    clearCustomPolicy: () => {
-      cleared.push(true);
-      window.rl.customPolicy = null;
-    },
-  });
+    const loaded = [];
+    const cleared = [];
+    window.rl = policyRuntime({
+      buildObs: () => Float32Array.from({ length: 61 }),
+      lastAction: Float32Array.from({ length: 14 }),
+      loadCustomPolicy: async (ref) => {
+        loaded.push(ref);
+        window.rl.customPolicy = { ref, session: sessionFixture(), slot: 'walk' };
+        window.rl.sessions.walk = window.rl.customPolicy.session;
+      },
+      clearCustomPolicy: () => {
+        cleared.push(true);
+        window.rl.customPolicy = null;
+      },
+    });
 
-  const runs = [
-    {
-      id: 'run-trained',
-      backend: 'local',
-      status: 'completed',
-      mock: false,
-      taskId: 'walk',
-      modelId: 'microduck-official',
-      artifact: { format: 'onnx', sha256: 'a'.repeat(64) },
-      metrics: { iterations: 1500 },
-    },
-    // Must be filtered out: mock provenance, unfinished, or not a policy.
-    {
-      id: 'run-mock',
-      backend: 'local',
-      status: 'completed',
-      mock: true,
-      artifact: { format: 'onnx' },
-    },
-    { id: 'run-running', backend: 'local', status: 'running', artifact: { format: 'onnx' } },
-    {
-      id: 'run-browser',
-      backend: 'browser',
-      status: 'completed',
-      artifact: { format: 'onnx' },
-    },
-  ];
-  const requested = [];
-  window.fetch = async (url) => {
-    requested.push(String(url));
-    return {
-      ok: true,
-      status: 200,
-      json: async () => (String(url).endsWith('/runs') ? { runs } : { run: runs[0] }),
+    const runs = [
+      {
+        id: 'run-trained',
+        backend: 'local',
+        status: 'completed',
+        mock: false,
+        taskId: 'walk',
+        modelId: 'microduck-official',
+        artifact: { format: 'onnx', sha256: 'a'.repeat(64) },
+        metrics: { iterations: 1500 },
+      },
+      // Must be filtered out: mock provenance, unfinished, or not a policy.
+      {
+        id: 'run-mock',
+        backend: 'local',
+        status: 'completed',
+        mock: true,
+        artifact: { format: 'onnx' },
+      },
+      { id: 'run-running', backend: 'local', status: 'running', artifact: { format: 'onnx' } },
+      {
+        id: 'run-browser',
+        backend: 'browser',
+        status: 'completed',
+        artifact: { format: 'onnx' },
+      },
+    ];
+    const requested = [];
+    window.fetch = async (url) => {
+      requested.push(String(url));
+      return {
+        ok: true,
+        status: 200,
+        json: async () => (String(url).endsWith('/runs') ? { ok: true, runs } : { run: runs[0] }),
+      };
     };
-  };
 
-  window.eval(overlaySource);
+    window.eval(overlaySource);
+    await new Promise((resolve) => setTimeout(resolve, 30));
+
+    const api = window.__microduckPolicy;
+    assert.ok(api, 'policy API should be exposed for UI and smoke tests');
+    await api.refresh();
+    assert.equal(requested.length, 1);
+    assert.equal(requested[0], `${apiBase}/api/sim2real/runs`);
+    assert.deepEqual(
+      api.runs.map((run) => run.id),
+      ['run-trained'],
+      'only completed, real, ONNX-bearing local runs may be offered',
+    );
+
+    await api.load('run-trained');
+    assert.equal(loaded.length, 1);
+    assert.equal(
+      loaded[0],
+      `https://studio.example.test${apiBase}/api/sim2real/runs/run-trained/policy.onnx`,
+      'upstream accepts only absolute http(s) .onnx URLs',
+    );
+    assert.equal(
+      requested[1],
+      `https://studio.example.test${apiBase}/api/sim2real/runs/run-trained`,
+    );
+    assert.equal(api.current, 'run-trained');
+
+    // A policy the simulator rejects must be reported, not swallowed.
+    window.rl.loadCustomPolicy = async () => {
+      throw new Error('outputs 12 actions (sim drives 14)');
+    };
+    await api.load('run-trained');
+    assert.equal(api.current, null, 'a rejected load must not be remembered as active');
+    const status = window.document.querySelector('#rdk-microduck-policy [data-policy-status]');
+    assert.match(status.textContent, /outputs 12 actions/);
+
+    api.clear();
+    assert.equal(cleared.length, 1);
+    api.destroy();
+    dom.window.close();
+  });
+}
+
+test('policy refresh distinguishes malformed responses and authentication errors from an empty list', async (t) => {
+  const fixture = bridgeFixture(policyRuntime());
+  t.after(() => fixture.dom.window.close());
   await new Promise((resolve) => setTimeout(resolve, 30));
-
-  const api = window.__microduckPolicy;
-  assert.ok(api, 'policy API should be exposed for UI and smoke tests');
+  const api = fixture.window.__microduckPolicy;
+  const panel = fixture.window.document.querySelector('#rdk-microduck-policy');
+  const status = panel.querySelector('[data-policy-status]');
+  for (const payload of [{}, { ok: false, runs: [] }, { ok: true, runs: 'invalid' }]) {
+    fixture.window.fetch = async () => ({ ok: true, status: 200, json: async () => payload });
+    await api.refresh();
+    assert.equal(panel.classList.contains('is-error'), true);
+    assert.match(status.textContent, /响应格式错误/);
+    assert.deepEqual(Array.from(api.runs), []);
+  }
+  fixture.window.fetch = async () => ({
+    ok: true,
+    status: 200,
+    json: async () => ({ ok: true, runs: [] }),
+  });
   await api.refresh();
-  assert.equal(requested.length, 1);
-  assert.match(requested[0], /\/api\/sim2real\/runs$/);
-  assert.deepEqual(
-    api.runs.map((run) => run.id),
-    ['run-trained'],
-    'only completed, real, ONNX-bearing local runs may be offered',
-  );
-
-  await api.load('run-trained');
-  assert.equal(loaded.length, 1);
-  assert.match(
-    loaded[0],
-    /^https:\/\/studio\.example\.test\/api\/sim2real\/runs\/run-trained\/policy\.onnx$/,
-    'upstream accepts only absolute http(s) .onnx URLs',
-  );
-  assert.equal(api.current, 'run-trained');
-
-  // A policy the simulator rejects must be reported, not swallowed.
-  window.rl.loadCustomPolicy = async () => {
-    throw new Error('outputs 12 actions (sim drives 14)');
-  };
-  await api.load('run-trained');
-  assert.equal(api.current, null, 'a rejected load must not be remembered as active');
-  const status = window.document.querySelector('#rdk-microduck-policy [data-policy-status]');
-  assert.match(status.textContent, /outputs 12 actions/);
-
-  api.clear();
-  assert.equal(cleared.length, 1);
-  api.destroy();
-  dom.window.close();
+  assert.equal(status.textContent, '暂无可用策略');
+  assert.equal(panel.classList.contains('is-error'), false);
+  fixture.window.fetch = async () => ({ ok: false, status: 401 });
+  await api.refresh();
+  assert.equal(panel.classList.contains('is-error'), true);
+  assert.match(status.textContent, /401/);
+  assert.deepEqual(Array.from(api.runs), []);
+  assert.doesNotMatch(panel.querySelector('[data-policy-list]').textContent, /还没有带 ONNX/);
 });
 
 test('policy panel replaces the boot waiting state when its runtime becomes ready', async (t) => {

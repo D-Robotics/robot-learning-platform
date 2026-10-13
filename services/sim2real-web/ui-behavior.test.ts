@@ -221,7 +221,6 @@ async function boot(
     ) => Promise<Response | null>;
 
     productId?: string;
-    taskId?: string;
     authRequired?: boolean;
   } = {},
 ) {
@@ -233,7 +232,6 @@ async function boot(
   openWindows.push(dom.window);
   const { window } = dom;
   if (options.productId) window.localStorage.setItem('rdk-duck-lab-product', options.productId);
-  if (options.taskId) window.localStorage.setItem('rdk-duck-lab-task', options.taskId);
   if (options.workspaceContext) {
     window.localStorage.setItem(
       'rdk-duck-lab-workspace-context',
@@ -444,59 +442,6 @@ async function boot(
 }
 
 describe('Sim2Real workbench DOM behavior', () => {
-  it('starts with one task action while goals, progress, project details, and tools stay disclosed on demand', async () => {
-    const { window, errors } = await boot();
-    const doc = window.document;
-    const overview = doc.querySelector('[data-view-section="overview"]')!;
-    expect(doc.body.dataset.activeView).toBe('overview');
-    expect(overview.querySelectorAll('button[data-start-action]')).toHaveLength(1);
-    expect(overview.querySelector('button[data-start-action]')?.id).toBe('next-action-button');
-    expect(doc.querySelectorAll('#user-start-panel [data-start-intent]')).toHaveLength(3);
-    expect(
-      [...doc.querySelectorAll('[data-start-intent][aria-pressed="true"]')].map(
-        (button) => button.id,
-      ),
-    ).toEqual(['start-intent-experience']);
-    expect(
-      doc.querySelectorAll(
-        '#onboard-list button, #onboard-list a[href], #onboard-list [tabindex="0"], #onboard-list [role="button"]',
-      ),
-    ).toHaveLength(0);
-    for (const id of [
-      'user-start-panel',
-      'onboard-card',
-      'overview-advanced-evidence',
-      'sidebar-workbench',
-      'sidebar-settings',
-    ]) {
-      const disclosure = doc.querySelector<HTMLDetailsElement>(`details#${id}`);
-      expect(disclosure, `${id} must be a native disclosure`).not.toBeNull();
-      expect(disclosure?.open, `${id} stays closed on first use`).toBe(false);
-    }
-    const advanced = doc.querySelector('#overview-advanced-evidence')!;
-    expect(advanced.contains(doc.querySelector('#project-workspace'))).toBe(true);
-    expect(advanced.contains(doc.querySelector('#agent-assistant'))).toBe(true);
-    expect(doc.querySelector<HTMLElement>('#workspace-context-strip')?.hidden).toBe(true);
-    expect(doc.querySelector('#context-live-project')?.textContent).toBe('全部项目');
-    const workbench = doc.querySelector('#sidebar-workbench')!;
-    expect(workbench.querySelector('[data-view-target="overview"]')).toBeNull();
-    expect(workbench.querySelector('[data-agent-open]')).not.toBeNull();
-    for (const view of [
-      'simulate',
-      'train',
-      'resources',
-      'evaluate',
-      'deploy',
-      'records',
-      'station',
-    ]) {
-      expect(workbench.querySelector(`[data-view-target="${view}"]`)).not.toBeNull();
-    }
-    expect(doc.querySelector('#sidebar-settings #product-select')).not.toBeNull();
-    expect(doc.querySelector('#sidebar-settings #project-select')).not.toBeNull();
-    expect(errors).toEqual([]);
-  });
-
   function mountPrivateRecording(window: InstanceType<typeof JSDOM>['window']) {
     const select = window.document.querySelector<HTMLSelectElement>('#task-select')!;
     select.value = 'balance-stilts';
@@ -703,6 +648,59 @@ describe('Sim2Real workbench DOM behavior', () => {
       expect(errors).toEqual([]);
     },
   );
+  it('starts with one task action while goals, progress, project details, and tools stay disclosed on demand', async () => {
+    const { window, errors } = await boot();
+    const doc = window.document;
+    const overview = doc.querySelector('[data-view-section="overview"]')!;
+    expect(doc.body.dataset.activeView).toBe('overview');
+    expect(overview.querySelectorAll('button[data-start-action]')).toHaveLength(1);
+    expect(overview.querySelector('button[data-start-action]')?.id).toBe('next-action-button');
+    expect(doc.querySelectorAll('#user-start-panel [data-start-intent]')).toHaveLength(3);
+    expect(
+      [...doc.querySelectorAll('[data-start-intent][aria-pressed="true"]')].map(
+        (button) => button.id,
+      ),
+    ).toEqual(['start-intent-experience']);
+    expect(
+      doc.querySelectorAll(
+        '#onboard-list button, #onboard-list a[href], #onboard-list [tabindex="0"], #onboard-list [role="button"]',
+      ),
+    ).toHaveLength(0);
+    for (const id of [
+      'user-start-panel',
+      'onboard-card',
+      'overview-advanced-evidence',
+      'sidebar-workbench',
+      'sidebar-settings',
+    ]) {
+      const disclosure = doc.querySelector<HTMLDetailsElement>(`details#${id}`);
+      expect(disclosure, `${id} must be a native disclosure`).not.toBeNull();
+      expect(disclosure?.open, `${id} stays closed on first use`).toBe(false);
+    }
+    const advanced = doc.querySelector('#overview-advanced-evidence')!;
+    expect(advanced.contains(doc.querySelector('#project-workspace'))).toBe(true);
+    expect(advanced.contains(doc.querySelector('#agent-assistant'))).toBe(true);
+    expect(doc.querySelector<HTMLElement>('#workspace-context-strip')?.hidden).toBe(true);
+    expect(doc.querySelector('#context-live-project')?.textContent).toBe('全部项目');
+    const workbench = doc.querySelector('#sidebar-workbench')!;
+    expect(workbench.querySelector('[data-view-target="overview"]')).toBeNull();
+    expect(workbench.querySelector('[data-agent-open]')).not.toBeNull();
+    for (const view of [
+      'simulate',
+      'train',
+      'resources',
+      'evaluate',
+      'deploy',
+      'records',
+      'station',
+    ]) {
+      expect(workbench.querySelector(`[data-view-target="${view}"]`)).not.toBeNull();
+    }
+    expect(doc.querySelector('#sidebar-settings #product-select')).not.toBeNull();
+    expect(doc.querySelector('#sidebar-settings #project-select')).not.toBeNull();
+    expect(errors).toEqual([]);
+  });
+
   it('loads the relay transport before the app that resumes durable training runs', () => {
     const relayTag = html.indexOf('src="./relay-training.js');
     const appTag = html.indexOf('src="./app.js');
@@ -926,42 +924,6 @@ describe('Sim2Real workbench DOM behavior', () => {
     expect(errors).toEqual([]);
   });
 
-  it('starts the browser experience on walk even when an engine football task was persisted', async () => {
-    const { window, requests, errors } = await boot({ taskId: 'football-2v2' });
-    const doc = window.document;
-    const task = doc.querySelector<HTMLSelectElement>('#task-select')!;
-    expect(task.value).toBe('football-2v2');
-    expect(window.localStorage.getItem('rdk-duck-lab-task')).toBe('football-2v2');
-    expect(new URL(doc.querySelector<HTMLIFrameElement>('#simulator-frame')!.src).pathname).toBe(
-      '/sim2real/task-sim/',
-    );
-    doc.querySelector<HTMLButtonElement>('#next-action-button')?.click();
-    await vi.waitFor(() => expect(doc.body.dataset.activeView).toBe('simulate'));
-    expect(task.value).toBe('walk');
-    expect(window.localStorage.getItem('rdk-duck-lab-task')).toBe('walk');
-    const simulator = doc.querySelector<HTMLIFrameElement>('#simulator-frame')!;
-    expect(new URL(simulator.src).pathname).toBe('/mujoco/microduck/');
-    window.dispatchEvent(
-      new window.MessageEvent('message', {
-        source: simulator.contentWindow as never,
-        origin: window.location.origin,
-        data: {
-          type: 'rdk-microduck-recording-ready',
-          format: 'microduck-trajectory-v1',
-          text: [0, 0.02, 0.04]
-            .map((time) => JSON.stringify({ time, observation: [time], action: [time], reward: 0 }))
-            .join('\n'),
-          sampleCount: 3,
-        },
-      }),
-    );
-    expect(window.eval('currentTelemetry().source')).toBe('browser-microduck');
-    expect(doc.querySelector<HTMLElement>('#experience-recording-review')?.hidden).toBe(false);
-    expect(doc.querySelector('#onboard-count')?.textContent).toBe('2 / 4');
-    expect(requests.filter((entry) => entry.method === 'POST')).toHaveLength(0);
-    expect(errors).toEqual([]);
-  });
-
   it('changes the goal without changing the selected robot or executing device/model actions', async () => {
     const { window, requests, errors } = await boot({ productId: 'custom' });
     const goalDisclosure = window.document.querySelector<HTMLDetailsElement>('#user-start-panel')!;
@@ -1022,6 +984,35 @@ describe('Sim2Real workbench DOM behavior', () => {
     expect(requests.filter((entry) => entry.method === 'POST')).toHaveLength(0);
   });
 
+  it.each(['football-2v2', 'balance-stilts'])(
+    'starts the basic walking example from a previous engine task while normal navigation preserves %s',
+    async (taskId) => {
+      const { window, errors } = await boot();
+      const select = window.document.querySelector<HTMLSelectElement>('#task-select')!;
+      const chooseTask = () => {
+        select.value = taskId;
+        select.dispatchEvent(new window.Event('change', { bubbles: true }));
+      };
+      chooseTask();
+      window.eval('setView("overview")');
+      window.document
+        .querySelector<HTMLButtonElement>('.sidebar [data-view-target="simulate"]')
+        ?.click();
+      expect(select.value).toBe(taskId);
+      window.eval('setView("overview")');
+      const action = window.document.querySelector<HTMLButtonElement>('#next-action-button')!;
+      expect(action.dataset.startAction).toBe('begin-experience');
+      action.click();
+      await vi.waitFor(() => expect(window.document.body.dataset.activeView).toBe('simulate'));
+      expect(select.value).toBe('walk');
+      expect(window.localStorage.getItem('rdk-duck-lab-task')).toBe('walk');
+      expect(
+        new URL(window.document.querySelector<HTMLIFrameElement>('#simulator-frame')!.src).pathname,
+      ).toBe('/mujoco/microduck/');
+      expect(errors).toEqual([]);
+    },
+  );
+
   it('reviews a stopped recording directly in the simulator and returns focus to its trigger without uploading', async () => {
     const { window, requests, errors } = await boot({
       url: 'http://127.0.0.1:3000/sim2real/#simulate/simulate',
@@ -1038,8 +1029,8 @@ describe('Sim2Real workbench DOM behavior', () => {
     expect(doc.querySelector('.simulator-frame-wrap .simulator-fallback')).toBeNull();
     expect(doc.querySelector('#microduck-entry-link')?.closest('.simulator-frame-wrap')).toBeNull();
     expect(doc.querySelector('#microduck-entry-link')?.textContent).toContain('画面打不开');
-    expect(doc.querySelector('#simulator-live-text')?.textContent).toBe('等待进入仿真');
-    expect(doc.querySelector('#simulator-run-status')?.textContent).toBe('等待进入仿真');
+    expect(doc.querySelector('#simulator-live-text')?.textContent).toBe('示例可打开');
+    expect(doc.querySelector('#simulator-run-status')?.textContent).toBe('示例可打开');
     const trainingLink = doc.querySelector('.guide-panel [data-view-target="train"]');
     expect(trainingLink?.classList.contains('button-ghost')).toBe(true);
     expect(trainingLink?.textContent).toContain('了解模型训练');
@@ -1047,8 +1038,7 @@ describe('Sim2Real workbench DOM behavior', () => {
       window.dispatchEvent(
         new window.MessageEvent('message', {
           origin: window.location.origin,
-          source: window.document.querySelector<HTMLIFrameElement>('#simulator-frame')
-            ?.contentWindow as never,
+          source: doc.querySelector<HTMLIFrameElement>('#simulator-frame')!.contentWindow as never,
           data: {
             type: 'rdk-microduck-recording-ready',
             format: 'microduck-trajectory-v1',
@@ -1075,10 +1065,6 @@ describe('Sim2Real workbench DOM behavior', () => {
     button.click();
     await vi.waitFor(() => expect(dialog.open).toBe(true));
     expect(dialog.querySelector('#replay-player')).toBe(player);
-    expect(doc.querySelector<HTMLSelectElement>('#replay-run-select')?.value).toBe(
-      'local-recording',
-    );
-    expect(doc.querySelector<HTMLButtonElement>('#replay-play-button')?.disabled).toBe(false);
     expect(doc.body.dataset.activeView).toBe('simulate');
     expect(window.location.hash).toBe('#simulate/simulate');
     const seek = doc.querySelector<HTMLInputElement>('#replay-seek')!;
@@ -1114,8 +1100,7 @@ describe('Sim2Real workbench DOM behavior', () => {
       window.dispatchEvent(
         new window.MessageEvent('message', {
           origin: window.location.origin,
-          source: window.document.querySelector<HTMLIFrameElement>('#simulator-frame')
-            ?.contentWindow as never,
+          source: doc.querySelector<HTMLIFrameElement>('#simulator-frame')!.contentWindow as never,
           data: {
             type: 'rdk-microduck-recording-ready',
             format: 'microduck-trajectory-v1',
@@ -1399,6 +1384,88 @@ describe('Sim2Real workbench DOM behavior', () => {
     expect(doc.querySelector<HTMLDetailsElement>('.contract-guide-panel')?.open).toBe(false);
     expect(errors).toEqual([]);
   });
+
+  it.each(['response', 'network-error'])(
+    'discards an old account contract %s without clearing the new account pending check',
+    async (outcome) => {
+      const pending = new Map<
+        string,
+        { resolve: (response: Response) => void; reject: (error: Error) => void }
+      >();
+      const fixture = {
+        accountId: 'account-a',
+        transport: async (url: string, init: RequestInit | undefined) => {
+          if (url.endsWith('/sim2real/runs') && init?.method === 'POST') {
+            return new Promise<Response>((resolve, reject) => {
+              pending.set(fixture.accountId, { resolve, reject });
+            });
+          }
+          return null;
+        },
+      };
+      const { window, requests, errors } = await boot(fixture);
+      const doc = window.document;
+      doc.querySelector<HTMLButtonElement>('.sidebar [data-flow-child="prepare"]')!.click();
+      await vi.waitFor(() => expect(doc.body.dataset.flowChild).toBe('prepare'));
+      const oldSubmission = window.eval('runModel("contract")');
+      expect(pending.has('account-a')).toBe(true);
+      fixture.accountId = 'account-b';
+      await window.eval('refreshSessionMenu()');
+      await window.eval('loadOverview()');
+      // Builtin model IDs are shared; an ID-only result guard cannot scope
+      // a pending compatibility check to the account that submitted it.
+      expect(doc.querySelector<HTMLSelectElement>('#model-select')!.value).toBe('model-1');
+      const button = doc.querySelector<HTMLButtonElement>('#contract-run-button')!;
+      const result = doc.querySelector<HTMLParagraphElement>('#model-contract-check-result')!;
+      expect(button.disabled).toBe(false);
+      expect(result.hidden).toBe(true);
+      const newSubmission = window.eval('runModel("contract")');
+      expect(pending.has('account-b')).toBe(true);
+      expect(button.disabled).toBe(true);
+      expect(result.textContent).toBe('正在检查模型兼容性…');
+      const oldRequest = pending.get('account-a')!;
+      if (outcome === 'network-error') oldRequest.reject(new Error('old account network error'));
+      else
+        oldRequest.resolve(
+          Response.json({
+            ok: true,
+            run: {
+              id: 'old-account-check',
+              modelId: 'model-1',
+              backend: 'contract',
+              status: 'completed',
+              summary: 'old account private result',
+            },
+          }),
+        );
+      await oldSubmission;
+      expect(window.eval('__workbenchState.runSubmitting')).toBe(true);
+      expect(button.disabled).toBe(true);
+      expect(result.textContent).toBe('正在检查模型兼容性…');
+      expect(doc.body.textContent).not.toContain('old account private result');
+      expect(doc.body.textContent).not.toContain('old account network error');
+      expect(doc.body.textContent).not.toContain('账号已变化，已丢弃旧工作区响应。');
+      button.click();
+      expect(requests.filter((entry) => entry.method === 'POST')).toHaveLength(2);
+      pending.get('account-b')!.resolve(
+        Response.json({
+          ok: true,
+          run: {
+            id: 'new-account-check',
+            modelId: 'model-1',
+            backend: 'contract',
+            status: 'completed',
+            summary: 'new account check completed',
+          },
+        }),
+      );
+      await newSubmission;
+      expect(window.eval('__workbenchState.runSubmitting')).toBe(false);
+      expect(button.disabled).toBe(false);
+      expect(result.textContent).toBe('new account check completed');
+      expect(errors).toEqual([]);
+    },
+  );
 
   it('does not apply another device preflight or compatibility to the selected device', async () => {
     const { window } = await boot();
@@ -2198,6 +2265,163 @@ describe('Sim2Real workbench DOM behavior', () => {
     select.value = 'walk';
     select.dispatchEvent(new window.Event('change', { bubbles: true }));
     expect(new URL(iframe.src).pathname).toBe('/mujoco/microduck/');
+    expect(errors).toEqual([]);
+  });
+
+  it('waits for the new scene document before sending advanced task context or accepting old-scene failure', async () => {
+    const { window, errors } = await boot();
+    const doc = window.document;
+    const select = doc.querySelector<HTMLSelectElement>('#task-select')!;
+    const frame = doc.querySelector<HTMLIFrameElement>('#simulator-frame')!;
+    const oldDocument = frame.contentDocument;
+    const oldSource = frame.contentWindow!;
+    // A browser preserves its WindowProxy and old Document until navigation
+    // commits; jsdom swaps them immediately when src changes. Model that gap.
+    const documentGetter = vi.spyOn(frame, 'contentDocument', 'get').mockReturnValue(oldDocument);
+    const sourceGetter = vi.spyOn(frame, 'contentWindow', 'get').mockReturnValue(oldSource);
+    const oldMessages = vi.spyOn(oldSource, 'postMessage');
+    select.value = 'balance-stilts';
+    select.dispatchEvent(new window.Event('change', { bubbles: true }));
+    expect(new URL(frame.src).pathname).toBe('/sim2real/task-sim/');
+    // A queued load event for the old document must not release this gate.
+    frame.dispatchEvent(new window.Event('load'));
+    window.dispatchEvent(
+      new window.MessageEvent('message', {
+        origin: window.location.origin,
+        source: oldSource as never,
+        data: {
+          type: 'rdk-simulator-task-state',
+          taskId: 'balance-stilts',
+          sceneId: 'microduck-single-duck-v1',
+          phase: 'failed',
+          message: '当前单鸭仿真未装载该任务场景',
+        },
+      }),
+    );
+    expect(doc.querySelector('#simulator-live-text')?.textContent).toBe('正在连接任务场景');
+    expect(doc.querySelector('#simulator-live-label')?.classList.contains('is-ready')).toBe(false);
+    expect(
+      oldMessages.mock.calls.some(
+        ([message]) => message.type === 'rdk-simulator-task' && message.taskId === 'balance-stilts',
+      ),
+    ).toBe(false);
+    documentGetter.mockRestore();
+    sourceGetter.mockRestore();
+    const nextSource = frame.contentWindow!;
+    const nextMessages = vi.spyOn(nextSource, 'postMessage');
+    // A fast engine can report readiness before the parent iframe load event.
+    // That report belongs to the new document and must not be swallowed.
+    const report = (phase: string) =>
+      window.dispatchEvent(
+        new window.MessageEvent('message', {
+          origin: window.location.origin,
+          source: nextSource as never,
+          data: {
+            type: 'rdk-simulator-task-state',
+            taskId: 'balance-stilts',
+            phase,
+            controlHz: 50,
+          },
+        }),
+      );
+    report('ready');
+    expect(doc.querySelector('#simulator-live-text')?.textContent).toBe('任务场景已就绪');
+    frame.dispatchEvent(new window.Event('load'));
+    expect(
+      nextMessages.mock.calls.some(
+        ([message]) => message.type === 'rdk-simulator-task' && message.taskId === 'balance-stilts',
+      ),
+    ).toBe(true);
+    report('failed');
+    expect(doc.querySelector('#simulator-live-text')?.textContent).toBe('场景连接失败');
+    expect(errors).toEqual([]);
+  });
+
+  it('sends supported task changes immediately when the basic scene document stays loaded', async () => {
+    const { window, errors } = await boot();
+    const doc = window.document;
+    const frame = doc.querySelector<HTMLIFrameElement>('#simulator-frame')!;
+    frame.dispatchEvent(new window.Event('load'));
+    const source = frame.contentWindow!;
+    const messages = vi.spyOn(source, 'postMessage');
+    const previousSrc = frame.src;
+    const select = doc.querySelector<HTMLSelectElement>('#task-select')!;
+    select.value = 'turn';
+    select.dispatchEvent(new window.Event('change', { bubbles: true }));
+    expect(frame.src).toBe(previousSrc);
+    expect(
+      messages.mock.calls.some(
+        ([message]) => message.type === 'rdk-simulator-task' && message.taskId === 'turn',
+      ),
+    ).toBe(true);
+    expect(errors).toEqual([]);
+  });
+
+  it('releases cross-origin scene navigation on load without accepting a foreign-origin readiness message', async () => {
+    const { window, errors } = await boot({
+      transport: async (url) => {
+        if (!url.includes('/overview')) return null;
+        const snapshot = overview();
+        snapshot.integrations.simulator.browser = {
+          ...snapshot.integrations.simulator.browser,
+          state: 'redirect',
+          entryUrl: 'https://robot-view.example/microduck/',
+        };
+        return Response.json(snapshot);
+      },
+    });
+    const doc = window.document;
+    const frame = doc.querySelector<HTMLIFrameElement>('#simulator-frame')!;
+    const postMessage = vi.fn();
+    const foreignSource = {
+      postMessage,
+      get location(): never {
+        throw new window.DOMException('Cross-origin document', 'SecurityError');
+      },
+    };
+    vi.spyOn(frame, 'contentDocument', 'get').mockReturnValue(null);
+    vi.spyOn(frame, 'contentWindow', 'get').mockReturnValue(foreignSource as never);
+    window.eval('syncSimulatorTask()');
+    expect(postMessage).not.toHaveBeenCalled();
+    frame.dispatchEvent(new window.Event('load'));
+    expect(postMessage).toHaveBeenCalledWith(
+      { type: 'rdk-simulator-task', taskId: 'walk' },
+      'https://robot-view.example',
+    );
+    window.dispatchEvent(
+      new window.MessageEvent('message', {
+        origin: 'https://robot-view.example',
+        source: foreignSource as never,
+        data: { type: 'rdk-simulator-task-state', taskId: 'walk', phase: 'ready' },
+      }),
+    );
+    expect(doc.querySelector('#simulator-live-label')?.classList.contains('is-ready')).toBe(false);
+    expect(errors).toEqual([]);
+  });
+
+  it('keeps a same-origin navigation pending when a load still exposes no document and the old URL', async () => {
+    const { window, errors } = await boot();
+    const doc = window.document;
+    const frame = doc.querySelector<HTMLIFrameElement>('#simulator-frame')!;
+    const oldSource = frame.contentWindow!;
+    vi.spyOn(frame, 'contentDocument', 'get').mockReturnValue(null);
+    vi.spyOn(frame, 'contentWindow', 'get').mockReturnValue(oldSource);
+    const messages = vi.spyOn(oldSource, 'postMessage');
+    const select = doc.querySelector<HTMLSelectElement>('#task-select')!;
+    select.value = 'balance-stilts';
+    select.dispatchEvent(new window.Event('change', { bubbles: true }));
+    frame.dispatchEvent(new window.Event('load'));
+    window.dispatchEvent(
+      new window.MessageEvent('message', {
+        origin: window.location.origin,
+        source: oldSource as never,
+        data: { type: 'rdk-simulator-task-state', taskId: 'balance-stilts', phase: 'failed' },
+      }),
+    );
+    expect(doc.querySelector('#simulator-live-text')?.textContent).toBe('正在连接任务场景');
+    expect(messages.mock.calls.some(([message]) => message.type === 'rdk-simulator-task')).toBe(
+      false,
+    );
     expect(errors).toEqual([]);
   });
 

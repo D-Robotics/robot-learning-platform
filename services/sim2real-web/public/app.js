@@ -458,6 +458,8 @@ function wireSimulatorFrameLifecycle(frame) {
   if (!frame) return;
   frame.addEventListener('load', () => {
     if ($(frame.id) !== frame || !frame.getAttribute('src') || frame.getAttribute('src') === 'about:blank') return;
+    if (!simulatorFrameLoadCommitted(frame)) return;
+    simulatorFrameNavigations.delete(frame);
     syncSimulatorTask(frame);
     simulatorMessage({ type: 'rdk-simulator-active', active: document.body.dataset.activeView === (frame.id === 'replay-scene-frame' ? 'evaluate' : 'simulate') }, frame);
   });
@@ -495,7 +497,7 @@ function clearPrivateWorkspaceState({ keepOverviewLoading = false } = {}) {
   Object.assign(simulatorTaskState, { taskId: '', phase: 'loading', message: '', controlHz: null });
   replayFrameIndex = { source: null, runId: '', indices: [] };
   mountReplayVideo('', null);
-  Object.assign(state, { overview: null, workspaceSummary: null, projects: [], projectsLoaded: false, projectsLoadError: false, datasets: [], datasetsLoaded: false, model: null, compatibility: [], validation: null, goldenPath: null, researchLoop: null, selectedModelId: '', selectedDeviceId: '', selectedComputeResourceId: '', computeResourceEditingId: '', projectId: '', activeDeployment: null, selectedRecord: null, recordsQuery: '', publishingTelemetry: false });
+  Object.assign(state, { overview: null, workspaceSummary: null, projects: [], projectsLoaded: false, projectsLoadError: false, datasets: [], datasetsLoaded: false, model: null, compatibility: [], validation: null, goldenPath: null, researchLoop: null, selectedModelId: '', selectedDeviceId: '', selectedComputeResourceId: '', computeResourceEditingId: '', projectId: '', activeDeployment: null, selectedRecord: null, recordsQuery: '', publishingTelemetry: false, runSubmitting: false });
   state.notifiedRunIds.clear(); state.runLogs = { runId: null, cursor: 0, lines: [], inFlight: false, terminalDone: null };
   state.agent.boardHealth = null;
   stationStopStatusStream(); state.station.streamAbort?.abort(); clearTimeout(state.station.streamReconnectTimer);
@@ -2294,15 +2296,15 @@ function setView(view, { updateHash = true, scroll = true, focus = true } = {}) 
   clearFlowChild();
   const changed = document.body.dataset.activeView !== wanted;
   document.body.dataset.activeView = wanted;
+  simulatorMessage({ type: 'rdk-simulator-active', active: wanted === 'simulate' }, $('simulator-frame'));
+  if (wanted === 'evaluate' && state.replay.loaded && replayScene?.getAttribute('src')) {
+    simulatorMessage({ type: 'rdk-simulator-active', active: true }, replayScene);
+  }
   renderWorkspaceNotices(workspaceNoticeItems);
   const contextStrip = $('workspace-context-strip');
   if (contextStrip) contextStrip.hidden = wanted === 'overview';
   const workbench = $('sidebar-workbench');
   if (workbench) workbench.open = wanted !== 'overview';
-  simulatorMessage({ type: 'rdk-simulator-active', active: wanted === 'simulate' }, $('simulator-frame'));
-  if (wanted === 'evaluate' && state.replay.loaded && replayScene?.getAttribute('src')) {
-    simulatorMessage({ type: 'rdk-simulator-active', active: true }, replayScene);
-  }
   // Keep the compact project / stage breadcrumb in sync even before the next
   // data refresh; changing views is itself a state change the user needs to see.
   renderContextLive();
@@ -2901,6 +2903,33 @@ function taskContextNote(task) {
 }
 
 const simulatorTaskState = { taskId: '', phase: 'loading', message: '', controlHz: null };
+const simulatorFrameNavigations = new WeakMap();
+
+function setSimulatorFrameSource(frame, source) {
+  // src changes before navigation commits. Its WindowProxy can still address
+  // the old scene, which must not receive the new scene's task command.
+  simulatorFrameNavigations.set(frame, frame.contentDocument);
+  frame.setAttribute('src', source);
+}
+
+function simulatorFrameIsNavigating(frame) {
+  if (!frame || !simulatorFrameNavigations.has(frame)) return false;
+  const current = frame.contentDocument;
+  return !current || current === simulatorFrameNavigations.get(frame);
+}
+
+function simulatorFrameLoadCommitted(frame) {
+  if (!simulatorFrameNavigations.has(frame)) return true;
+  const current = frame.contentDocument;
+  if (current) return current !== simulatorFrameNavigations.get(frame);
+  try {
+    return frame.contentWindow?.location.href === frame.src;
+  } catch (error) {
+    // Cross-origin documents keep contentDocument null; their successful load
+    // is the commit signal. Origin checks on incoming messages stay unchanged.
+    return error?.name === 'SecurityError';
+  }
+}
 
 function taskSimulatorUrl(taskId) {
   const entry = safeLaunchUrl(state.overview?.integrations?.simulator?.browser?.entryUrl) || SIMULATOR_PATH;
@@ -2933,6 +2962,7 @@ function simulatorMessage(payload, frame = activeSimulatorFrame()) {
 
 function syncSimulatorTask(frame = activeSimulatorFrame()) {
   if (!['microduck', 'originbot'].includes(state.productId)) return;
+  if (simulatorFrameIsNavigating(frame)) return;
   simulatorMessage({ type: 'rdk-simulator-task', taskId: state.taskId }, frame);
 }
 
@@ -2958,7 +2988,7 @@ function isSimulatorMessage(event) {
 }
 
 function handleSimulatorTaskState(event) {
-  if (!isSimulatorMessage(event)) return;
+  if (!isSimulatorMessage(event) || simulatorFrameIsNavigating(activeSimulatorFrame())) return;
   const data = event.data;
   if (data?.type !== 'rdk-simulator-task-state' || data.taskId !== state.taskId) return;
   if (!['loading', 'ready', 'failed'].includes(data.phase)) return;
@@ -3738,7 +3768,7 @@ function renderIntegrations() {
   if (simulatorFrame) simulatorFrame.title = microduckProduct ? 'MicroDuck 浏览器仿真' : originbotProduct ? 'OriginBot 仿真适配器状态' : 'RDK Duck 仿真适配器状态';
   if (simulatorLiveText) {
     simulatorLiveText.textContent = browserAvailable
-      ? taskFailed ? '场景连接失败' : taskReady ? '任务场景已就绪' : engineTaskScene || originbotProduct ? '正在连接任务场景' : '等待进入仿真'
+      ? taskFailed ? '场景连接失败' : taskReady ? '任务场景已就绪' : engineTaskScene || originbotProduct ? '正在连接任务场景' : '示例可打开'
       : microduckProduct
         ? '资源待挂载'
         : originbotProduct ? '使用本地或外部 OriginBot 适配器' : '适配器待配置';
@@ -3771,7 +3801,7 @@ function renderIntegrations() {
         : appRelativePath(SIMULATOR_PATH);
   const microduckMissing = !engineTaskScene && microduckProduct && browserSurface?.state === 'missing';
   if (simulatorFrame && simulatorFrame.getAttribute('src') !== browserEntry) {
-    simulatorFrame.setAttribute('src', browserEntry);
+    setSimulatorFrameSource(simulatorFrame, browserEntry);
   }
   if (simulatorFrame && simulatorFrame.dataset.taskId !== state.taskId) {
     simulatorFrame.dataset.taskId = state.taskId;
@@ -3825,7 +3855,7 @@ function renderIntegrations() {
   setText(
     'simulator-run-status',
     browserAvailable
-      ? taskFailed ? simulatorTaskState.message || '场景连接失败，请在画面内重试' : taskReady ? '任务场景已就绪' : engineTaskScene || originbotProduct ? '正在连接任务场景' : '等待进入仿真'
+      ? taskFailed ? simulatorTaskState.message || '场景连接失败，请在画面内重试' : taskReady ? '任务场景已就绪' : engineTaskScene || originbotProduct ? '正在连接任务场景' : '示例可打开'
       : microduckProduct
         ? '资源待挂载'
         : originbotProduct
@@ -3834,7 +3864,7 @@ function renderIntegrations() {
   );
   const evidenceStatus = $('simulator-evidence-status');
   const evidence = currentTelemetry();
-  const browserEvidence = microduckProduct && ['browser-microduck', 'engine-task-simulation'].includes(evidence?.source) && evidence.samples?.length > 1;
+  const browserEvidence = ['browser-microduck', 'engine-task-simulation', 'originbot-sim'].includes(evidence?.source) && evidence.samples?.length > 1;
   evidenceStatus?.classList.toggle('is-ready', browserEvidence);
   if (evidenceStatus) {
     evidenceStatus.textContent = browserEvidence
@@ -6580,7 +6610,7 @@ function renderReplayScene(loaded) {
     simulatorTaskState.taskId = taskId;
     simulatorTaskState.phase = 'loading';
     state.replay.pendingFrame = true;
-    frame.setAttribute('src', src);
+    setSimulatorFrameSource(frame, src);
   }
 }
 
@@ -7900,9 +7930,13 @@ async function performStartAction(action, trigger) {
   }
   if (action === 'begin-experience' || action === 'record-experience' || action === 'simulator-help') {
     if (state.productId !== 'microduck') await changeProduct('microduck');
-    // The introductory experience always uses the anonymous WASM sandbox;
-    // a saved football/balance task belongs to the complete workbench.
-    changeSimulationTask('walk', { notify: false, resetRecording: true });
+    if (action === 'begin-experience' && state.taskId !== 'walk') {
+      const taskSelect = $('task-select');
+      if (taskSelect) {
+        taskSelect.value = 'walk';
+        taskSelect.dispatchEvent(new Event('change', { bubbles: true }));
+      }
+    }
     setView('simulate'); setFlowChild('simulate');
     if (action !== 'simulator-help') showToast('在示例画面中点击“开始录制”，操作几秒后停止；动作会保存在当前页面，随后可以回放。');
     return;
@@ -9478,6 +9512,7 @@ async function relayTrainingRun(run, model) {
 
 async function runModel(backend) {
   if (state.runSubmitting) return;
+  const ownerEpoch = workspaceOwnerEpoch;
   if (backend === 'browser' && !selectedProductProfile().simulatorPath) {
     showToast('RDK Duck 尚未配置浏览器仿真适配器，请使用本地仿真或先登记 manifest', 'error');
     return;
@@ -9490,7 +9525,7 @@ async function runModel(backend) {
   state.runSubmitting = true;
   renderIntegrations();
   const setContractCheckResult = (text) => {
-    if (backend !== 'contract' || selectedModel()?.id !== model.id) return;
+    if (ownerEpoch !== workspaceOwnerEpoch || backend !== 'contract' || selectedModel()?.id !== model.id) return;
     const result = $('model-contract-check-result');
     if (!result) return;
     result.dataset.modelId = model.id;
@@ -9541,12 +9576,14 @@ async function runModel(backend) {
       method: 'POST',
       body: JSON.stringify(body),
     });
+    if (ownerEpoch !== workspaceOwnerEpoch) return;
     const run = payload.run || {};
     setContractCheckResult(run.summary || (['completed', 'ready'].includes(String(run.status || ''))
       ? '兼容性检查已完成。请查看下方设备匹配结果。'
       : '检查请求已记录，请到运行记录查看状态。'));
     if (backend === 'local' && run.relayAgentUrl) {
       void relayTrainingRun(run, model).catch((error) => {
+        if (ownerEpoch !== workspaceOwnerEpoch) return;
         setText('simulator-run-status', error instanceof Error ? `本机 Agent 训练提交失败：${error.message}` : '本机 Agent 训练提交失败');
       });
     }
@@ -9563,12 +9600,15 @@ async function runModel(backend) {
     }
     await loadOverview({ quiet: true });
   } catch (error) {
+    if (ownerEpoch !== workspaceOwnerEpoch) return;
     setContractCheckResult(friendlyError(error, '模型兼容性检查失败'));
     if (!(error instanceof ApiError && error.status === 401))
       showToast(error instanceof Error ? error.message : '运行请求失败', 'error');
   } finally {
-    state.runSubmitting = false;
-    renderIntegrations();
+    if (ownerEpoch === workspaceOwnerEpoch) {
+      state.runSubmitting = false;
+      renderIntegrations();
+    }
   }
 }
 
@@ -11423,47 +11463,6 @@ function wireStationEvents() {
   });
 }
 
-function changeSimulationTask(next, { notify = true, resetRecording = false } = {}) {
-  if (!ACTION_TASKS[next] || next === state.taskId) return;
-  preserveActiveRecording();
-  stopReplay(true);
-  if (policyTrial.running) stopPolicyTrial();
-  policyTrial.running = false;
-  setPolicyTrialStatus('任务已切换，选择对应训练 Run 可重新试跑。');
-  const previousTask = state.taskId;
-  state.taskId = next;
-  if (resetRecording) {
-    // Keep archived task recordings, but do not present the prior task's
-    // active evidence as a recording made in the introductory walk scene.
-    closeExperienceReview();
-    state.telemetry = null;
-    state.localRecording = null;
-    state.reviewedRecording = null;
-    state.replay = { runId: '', frames: [], index: 0, timer: null, speed: 1, loaded: false, pendingFrame: false };
-    mountReplayVideo('', null);
-  }
-  // Selecting a task prepares its engine unless the user explicitly chose
-  // another engine. Introductory and ordinary task changes share this path.
-  const taskEngine = (taskId) => taskId.startsWith('football-') ? 'microduck-football'
-    : taskId.startsWith('balance-') || taskId.startsWith('swing-') ? 'microduck-recurrent' : 'starter-ppo';
-  const engine = $('training-engine');
-  if (engine && (!engine.value || engine.value === 'starter-ppo' || engine.value === taskEngine(previousTask))) {
-    engine.value = taskEngine(next);
-    renderEngineCapability();
-  }
-  saveWorkspaceContext();
-  try {
-    window.localStorage?.setItem('rdk-duck-lab-task', next);
-  } catch {
-    // Preference persistence is optional in file:// and privacy contexts.
-  }
-  // Keep the selector responsive even when another dashboard panel fails.
-  renderSelects();
-  renderActionLibrary();
-  if (notify) showToast('已切换任务：' + ACTION_TASKS[next].label, 'success');
-  try { renderAll(); } catch (error) { console.warn('任务面板刷新失败，已保留当前动作：', error); }
-}
-
 async function changeProduct(next) {
     if (!PRODUCT_PROFILES[next]) return;
     preserveActiveRecording();
@@ -11794,7 +11793,41 @@ function wireEvents() {
     });
   }
   $('task-select')?.addEventListener('change', (event) => {
-    changeSimulationTask(event.target.value);
+    const next = event.target.value;
+    if (!ACTION_TASKS[next]) return;
+    preserveActiveRecording();
+    stopReplay(true);
+    if (policyTrial.running) stopPolicyTrial();
+    policyTrial.running = false;
+    setPolicyTrialStatus('任务已切换，选择对应训练 Run 可重新试跑。');
+    const previousTask = state.taskId;
+    state.taskId = next;
+    // Football tasks are owned by the platform football engine. Selecting one
+    // in the workbench should prepare the matching engine automatically while
+    // still allowing an operator to override it afterwards.
+    const taskEngine = (taskId) => taskId.startsWith('football-') ? 'microduck-football'
+      : taskId.startsWith('balance-') || taskId.startsWith('swing-') ? 'microduck-recurrent' : 'starter-ppo';
+    const engine = $('training-engine');
+    if (engine && (!engine.value || engine.value === 'starter-ppo' || engine.value === taskEngine(previousTask))) {
+      engine.value = taskEngine(next);
+      renderEngineCapability();
+    }
+    saveWorkspaceContext();
+    try {
+      window.localStorage?.setItem('rdk-duck-lab-task', next);
+    } catch {
+      // Preference persistence is optional in file:// and privacy contexts.
+    }
+    // Keep the selector responsive even when another dashboard panel fails to refresh.
+    // The task is used by training payloads and the context panel can update independently.
+    renderSelects();
+    renderActionLibrary();
+    const task = ACTION_TASKS[next];
+    showToast(
+      '已切换任务：' + task.label,
+      'success',
+    );
+    try { renderAll(); } catch (error) { console.warn('任务面板刷新失败，已保留当前动作：', error); }
   });
   document.querySelectorAll('[data-record-tab]').forEach((control) => {
     control.addEventListener('click', () => {
