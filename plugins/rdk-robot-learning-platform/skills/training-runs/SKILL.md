@@ -1,9 +1,11 @@
 ---
 name: training-runs
-description: 在 RDK 学习平台选择任务、训练引擎与执行资源，提交训练并跟踪 Run、日志和重训建议；也支持仓库已有的模仿学习和强化学习 CLI。
+description: 在 RDK 学习平台选择任务、训练引擎与执行资源，提交训练并跟踪 Run、日志和重训建议；也支持仓库已有的模仿学习和强化学习 CLI；验收 Workshop 从零到一的软件学习链路。
 ---
 
 # 训练与 Run
+
+验收 Workshop 从零到一时，先读 [分层验收流程](../../references/workshop-acceptance.md)，分别报告软件执行、策略闭环、板端纯计算和实体运动。
 
 交付单次可追踪的训练请求和 Run 状态，完成时绑定真实产物。读 [训练/评测/部署契约](../../references/workflow-contracts.md)；参数查 [工具目录](../../references/tool-catalog.md)。
 
