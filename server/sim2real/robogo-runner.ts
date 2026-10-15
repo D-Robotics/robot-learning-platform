@@ -1,5 +1,6 @@
 import type {
   Sim2RealCheckpointRef,
+  Sim2RealDemonstrations,
   Sim2RealModelManifest,
   Sim2RealRunArtifactMetadata,
   Sim2RealRunMetrics,
@@ -458,6 +459,16 @@ function safeMetrics(value: unknown): Sim2RealRunMetrics | undefined {
   };
   const physicsBackend = safeLabel('physicsBackend');
   const engine = safeLabel('engine');
+  const trainingCounts: Record<string, number> = {};
+  for (const key of ['trainingRows', 'validationRows', 'epochs']) {
+    const value = bounded(key, 0, 2_000_000);
+    if (value !== undefined && Number.isSafeInteger(value)) trainingCounts[key] = value;
+  }
+  const trainingLosses: Record<string, number> = {};
+  for (const key of ['initialTrainLoss', 'trainLoss', 'validationLoss']) {
+    const value = bounded(key, 0, 1e12);
+    if (value !== undefined) trainingLosses[key] = value;
+  }
   return {
     contractValid,
     observationSize,
@@ -497,6 +508,13 @@ function safeMetrics(value: unknown): Sim2RealRunMetrics | undefined {
       : { iterations: bounded('iterations', 0, 2_000_000) }),
     ...(physicsBackend == null ? {} : { physicsBackend }),
     ...(engine == null ? {} : { engine }),
+    ...trainingCounts,
+    ...trainingLosses,
+    ...(typeof source.syntheticData === 'boolean' ? { syntheticData: source.syntheticData } : {}),
+    ...(typeof source.trainingDataSha256 === 'string' &&
+    /^[a-f0-9]{64}$/i.test(source.trainingDataSha256)
+      ? { trainingDataSha256: source.trainingDataSha256.toLowerCase() }
+      : {}),
     ...(source.cuda === true ? { cuda: true } : source.cuda === false ? { cuda: false } : {}),
   };
 }
@@ -613,6 +631,7 @@ function runnerPayload(
   resumeFrom?: Sim2RealCheckpointRef,
   taskId?: string,
   idempotencyKey?: string,
+  demonstrations?: Sim2RealDemonstrations,
 ): Record<string, unknown> {
   return {
     accountId,
@@ -632,6 +651,7 @@ function runnerPayload(
     ...(training ? { training } : {}),
     ...(resumeFrom ? { resumeFrom } : {}),
     ...(idempotencyKey ? { idempotencyKey } : {}),
+    ...(demonstrations ? { demonstrations } : {}),
   };
 }
 
@@ -648,6 +668,7 @@ export async function requestRobogoTraining(input: {
   requestToken?: string | null;
   manifest: Sim2RealModelManifest;
   training?: Sim2RealTrainingSpec;
+  demonstrations?: Sim2RealDemonstrations;
   resumeFrom?: Sim2RealCheckpointRef;
   taskId?: string;
   idempotencyKey?: string;
@@ -694,6 +715,7 @@ export async function requestRobogoTraining(input: {
             input.resumeFrom,
             input.taskId,
             idempotencyKey,
+            input.demonstrations,
           ),
         ),
       });

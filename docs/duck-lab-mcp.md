@@ -70,9 +70,9 @@ MCP 客户端自行 spawn 本服务，进程环境即配置：
 `tools/list`、`tools/call`、`ping`；传输为按行分隔的 JSON-RPC 2.0（MCP stdio
 约定），stdout 仅承载协议流量，运行日志走 stderr。
 
-## 工具目录（56 + 1）
+## 工具目录（57 + 1）
 
-`tools/list` 返回 56 个 `rdk_*` 业务工具加 1 个连接诊断工具，全部带
+`tools/list` 返回 57 个 `rdk_*` 业务工具加 1 个连接诊断工具，全部带
 `readOnlyHint` 标注（与内嵌 Agent 目录一致），危险生命周期操作额外带
 `destructiveHint`：
 
@@ -123,6 +123,6 @@ npm run verify:mcp     # 协议层 + HTTP 适配 + 真实平台路由 + 子进�
 ```
 
 套件起真实 standalone 应用于临时端口，走版本化 API 断言：目录完整性
-（56 工具与只读/破坏性标注）、前缀改写、训练提交与幂等重放、平台拒绝与
+（57 工具与只读/破坏性标注）、前缀改写、训练提交与幂等重放、平台拒绝与
 未知工具错误映射、`rdk_platform_status`、以及 spawn 真实 server.ts 的 stdio
 协议往返。已纳入 `npm run verify` 与 `verify:ci:agents` 链。

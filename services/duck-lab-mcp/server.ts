@@ -70,14 +70,32 @@ export type McpToolDescriptor = {
  * Per-tool argument hints for the MCP-facing inputSchema. Derived from the
  * capability handlers' own arg readers (requiredArg/argText/argNumber/
  * argStringList and direct `input.<field>` access); `properties` values are
- * JSON Schema type fragments, and every schema keeps
- * `additionalProperties: true` because handlers forward platform-API fields
- * this table does not enumerate. mcp-server.test.ts re-derives this table
- * from the handlers source and fails when they drift apart.
+ * JSON Schema type fragments. Training accepts exactly its declared fields;
+ * other tools retain `additionalProperties: true` for compatible forwarding.
+ * mcp-server.test.ts re-derives this table from the handlers source and fails
+ * when they drift apart.
  */
 export type ToolParamHint = {
   required: string[];
   properties: Record<string, unknown>;
+};
+
+const STATION_DEVICE_PROPERTIES = { deviceId: { type: 'string' } };
+const POLICY_COMMAND_SCHEMA = {
+  type: 'object',
+  required: ['vx', 'vy', 'wz'],
+  additionalProperties: false,
+  properties: {
+    vx: { type: 'number', description: '前进速度（m/s），板端按校准档案限幅。' },
+    vy: { type: 'number', description: '侧向速度（m/s），与 vx 一起限幅。' },
+    wz: { type: 'number', description: '转向角速度（rad/s）。' },
+    ttlMs: {
+      type: 'integer',
+      minimum: 1,
+      maximum: 2000,
+      description: '命令租约；实际时长不超过板端 watchdog，过期归零。',
+    },
+  },
 };
 
 /**
@@ -86,6 +104,21 @@ export type ToolParamHint = {
  * list. The drift test skips these ids after asserting the override exists.
  */
 export const MANUAL_PARAM_HINT_OVERRIDES: Record<string, ToolParamHint> = {
+  // Nested command validation and alternative start modes live in helpers.
+  rdk_board_policy_start: {
+    required: [],
+    properties: {
+      direction: { type: 'number' },
+      goalX: { type: 'number' },
+      goalY: { type: 'number' },
+      command: POLICY_COMMAND_SCHEMA,
+      ...STATION_DEVICE_PROPERTIES,
+    },
+  },
+  rdk_board_policy_command: {
+    required: ['command'],
+    properties: { command: POLICY_COMMAND_SCHEMA, ...STATION_DEVICE_PROPERTIES },
+  },
   rdk_lineage_get: {
     required: [],
     properties: {
@@ -129,6 +162,7 @@ export const TOOL_PARAM_HINTS: Record<string, ToolParamHint> = {
       description: { type: 'string' },
       uri: { type: 'string' },
       format: { type: 'string' },
+      sha256: { type: 'string' },
       contractId: { type: 'string' },
       sourceRunId: { type: 'string' },
       sampleCount: { type: 'number' },
@@ -191,7 +225,7 @@ export const TOOL_PARAM_HINTS: Record<string, ToolParamHint> = {
   },
   rdk_device_discover: { required: [], properties: {} },
   rdk_device_connect: {
-    required: [],
+    required: ['connectionId'],
     properties: {
       connectionId: { type: 'string' },
     },
@@ -202,21 +236,23 @@ export const TOOL_PARAM_HINTS: Record<string, ToolParamHint> = {
       connectionId: { type: 'string' },
     },
   },
-  rdk_board_health: { required: [], properties: {} },
-  rdk_board_onboarding_preflight: { required: [], properties: {} },
-  rdk_board_station_status: { required: [], properties: {} },
+  rdk_board_health: { required: [], properties: { ...STATION_DEVICE_PROPERTIES } },
+  rdk_board_onboarding_preflight: { required: [], properties: { ...STATION_DEVICE_PROPERTIES } },
+  rdk_board_station_status: { required: [], properties: { ...STATION_DEVICE_PROPERTIES } },
   rdk_board_station_command: {
     required: ['id'],
     properties: {
       id: { type: 'string' },
+      ...STATION_DEVICE_PROPERTIES,
     },
   },
-  rdk_board_policy_status: { required: [], properties: {} },
-  rdk_board_policy_files: { required: [], properties: {} },
+  rdk_board_policy_status: { required: [], properties: { ...STATION_DEVICE_PROPERTIES } },
+  rdk_board_policy_files: { required: [], properties: { ...STATION_DEVICE_PROPERTIES } },
   rdk_training_submit: {
     required: [],
     properties: {
       modelId: { type: 'string' },
+      demonstrationRunId: { type: 'string' },
       backend: { type: 'string' },
       profile: { type: 'string' },
       engine: { type: 'string' },
@@ -234,7 +270,7 @@ export const TOOL_PARAM_HINTS: Record<string, ToolParamHint> = {
     },
   },
   rdk_training_status: {
-    required: [],
+    required: ['runId'],
     properties: {
       runId: { type: 'string' },
     },
@@ -286,7 +322,7 @@ export const TOOL_PARAM_HINTS: Record<string, ToolParamHint> = {
   },
   rdk_feedback_summary: { required: [], properties: {} },
   rdk_artifact_promote: {
-    required: ['artifactId'],
+    required: ['artifactId', 'status'],
     properties: {
       artifactId: { type: 'string' },
       status: { type: 'string' },
@@ -333,43 +369,40 @@ export const TOOL_PARAM_HINTS: Record<string, ToolParamHint> = {
     properties: {
       runId: { type: 'string' },
       filename: { type: 'string' },
+      ...STATION_DEVICE_PROPERTIES,
     },
   },
   rdk_board_policy_load: {
     required: ['path'],
     properties: {
       path: { type: 'string' },
+      artifactSha256: { type: 'string' },
       rehearsalReceipt: {},
+      ...STATION_DEVICE_PROPERTIES,
     },
   },
-  rdk_board_policy_start: {
-    required: [],
-    properties: {
-      direction: { type: 'number' },
-      goalX: { type: 'number' },
-      goalY: { type: 'number' },
-    },
-  },
-  rdk_board_policy_reset: { required: [], properties: {} },
-  rdk_board_arm_status: { required: [], properties: {} },
+  rdk_board_policy_reset: { required: [], properties: { ...STATION_DEVICE_PROPERTIES } },
+  rdk_board_arm_status: { required: [], properties: { ...STATION_DEVICE_PROPERTIES } },
   rdk_board_arm_move: {
-    required: [],
+    required: ['x', 'y', 'z'],
     properties: {
       x: { type: 'number' },
       y: { type: 'number' },
       z: { type: 'number' },
       speedMmPerS: { type: 'number' },
+      ...STATION_DEVICE_PROPERTIES,
     },
   },
   rdk_board_arm_gripper: {
-    required: [],
+    required: ['action', 'value'],
     properties: {
+      action: { type: 'string' },
       value: { type: 'number' },
-      action: {},
+      ...STATION_DEVICE_PROPERTIES,
     },
   },
-  rdk_board_arm_stop: { required: [], properties: {} },
-  rdk_board_stop: { required: [], properties: {} },
+  rdk_board_arm_stop: { required: [], properties: { ...STATION_DEVICE_PROPERTIES } },
+  rdk_board_stop: { required: [], properties: { ...STATION_DEVICE_PROPERTIES } },
   rdk_docs_search: {
     required: ['query'],
     properties: {
@@ -401,12 +434,75 @@ export const TOOL_PARAM_HINTS: Record<string, ToolParamHint> = {
 
 const PLATFORM_STATUS_HINT: ToolParamHint = { required: [], properties: {} };
 
-export function buildInputSchema(hint: ToolParamHint): Record<string, unknown> {
+/** Client-facing units and choices; business enforcement remains in the handlers/API. */
+const ARGUMENT_GUIDANCE: Record<string, Record<string, Record<string, unknown>>> = {
+  rdk_training_submit: {
+    modelId: { description: '目标模型 ID；省略时沿用首模型，请按本次任务显式选择。' },
+    backend: {
+      enum: ['local', 'robogo', 'browser', 'contract'],
+      description: '执行后端，默认 local；未知值会拒绝。',
+    },
+    profile: { description: '训练预算档，默认 smoke；提交响应会列出实际配置与兼容默认。' },
+    engine: { description: '当前执行资源已注册的引擎 ID；CLI 存在不等于此资源支持。' },
+    datasetIds: { description: '数据集血缘 ID 数组；不上传轨迹、不证明 worker 消费了这些字节。' },
+    demonstrationRunId: {
+      description:
+        '已上传真实轨迹的来源 Run ID；用于 local + offline-bc，平台校验来源、维度并冻结数据摘要。无有效轨迹会拒绝，不回退合成数据。',
+    },
+    maxIterations: { description: '训练迭代预算；offline-bc 中表示训练轮数（epochs）。' },
+  },
+  rdk_artifact_promote: { status: { enum: ['validated', 'published', 'revoked'] } },
+  rdk_board_policy_load: {
+    path: { description: '板端 policies 目录内已暂存的 ONNX 文件名，不是任意主机路径。' },
+    artifactSha256: { description: '实际加载字节的 SHA-256，与板端文件和 rehearsal 收据绑定。' },
+  },
+  rdk_board_policy_start: {
+    direction: { minimum: -1, maximum: 1, description: '归一化方向指令 -1..1，不是角度。' },
+    goalX: { description: '目标 odom 绝对 x 坐标（米）；导航策略与 goalY 成对提供。' },
+    goalY: { description: '目标 odom 绝对 y 坐标（米）；导航策略与 goalX 成对提供。' },
+  },
+  rdk_board_arm_move: {
+    x: { description: '机械臂基座系目标 x 坐标（mm），以当前 workspace 为准。' },
+    y: { description: '机械臂基座系目标 y 坐标（mm），以当前 workspace 为准。' },
+    z: { description: '机械臂基座系目标 z 坐标（mm），以当前 workspace 为准。' },
+    speedMmPerS: { exclusiveMinimum: 0, description: '移动速度（mm/s）；平台和板端执行安全钳制。' },
+  },
+  rdk_board_arm_gripper: {
+    action: { enum: ['close', 'open'], description: 'close 夹紧，open 张开。' },
+    value: { exclusiveMinimum: 0, description: '正数：close 使用力值，open 使用宽度（mm）。' },
+  },
+};
+
+export function buildInputSchema(hint: ToolParamHint, toolId = ''): Record<string, unknown> {
+  const properties = Object.fromEntries(
+    Object.entries(hint.properties).map(([key, value]) => [
+      key,
+      {
+        ...(value as Record<string, unknown>),
+        ...(key === 'deviceId'
+          ? { description: '本次目标平台设备 ID；从工作区/板卡预检核对，不默认另一设备。' }
+          : {}),
+        ...ARGUMENT_GUIDANCE[toolId]?.[key],
+      },
+    ]),
+  );
   return {
     type: 'object',
-    ...(Object.keys(hint.properties).length ? { properties: hint.properties } : {}),
+    properties: {
+      ...properties,
+      idempotencyKey: {
+        type: 'string',
+        minLength: 1,
+        maxLength: 200,
+        pattern: '^[A-Za-z0-9._:-]+$',
+        description: '同一逻辑写操作重试复用此键；改变请求语义时使用新键。',
+      },
+    },
     ...(hint.required.length ? { required: hint.required } : {}),
-    additionalProperties: true,
+    ...(toolId === 'rdk_board_policy_start'
+      ? { anyOf: [{ required: ['direction'] }, { required: ['command'] }] }
+      : {}),
+    additionalProperties: toolId !== 'rdk_training_submit',
   };
 }
 
@@ -425,6 +521,7 @@ export function buildToolCatalog(
     description: `${description}。${readOnly ? '只读操作。' : '需要平台安全门控。'}`,
     inputSchema: buildInputSchema(
       (TOOL_PARAM_HINTS[id] as ToolParamHint | undefined) ?? PLATFORM_STATUS_HINT,
+      id,
     ),
     annotations: {
       readOnlyHint: readOnly,
@@ -526,7 +623,10 @@ export function createMcpService(
       if (typeof requestedKey !== 'string' || !requestedKey.trim()) {
         throw new RpcError(-32602, 'idempotencyKey 必须是非空字符串。');
       }
-      const candidate = requestedKey.trim().slice(0, 200);
+      const candidate = requestedKey.trim();
+      if (candidate.length > 200) {
+        throw new RpcError(-32602, 'idempotencyKey 长度不超过 200；不会截断请求键。');
+      }
       if (!/^[A-Za-z0-9._:-]+$/.test(candidate)) {
         throw new RpcError(
           -32602,

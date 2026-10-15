@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdtemp, readdir, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import process from 'node:process';
@@ -40,6 +40,9 @@ const request = {
   model: { modelId: 'microduck-walk', version: 'v1' },
   contract: { id: 'microduck-policy-v1', observationSize: 61, actionSize: 14 },
   training: { profile: 'smoke', maxIterations: 10 },
+  // Exercise transport above the old 2 MiB body cap. Engine schema validation
+  // has its own 4 MiB snapshot cap; this worker must preserve bytes unchanged.
+  demonstrations: { jsonl: 'x'.repeat(2 * 1024 * 1024 + 4096) },
 };
 try {
   const health = await fetch(`${base}/healthz`);
@@ -76,6 +79,17 @@ try {
     body: JSON.stringify(request),
   });
   assert.equal(unauthorized.status, 401);
+  const oversizedRequest = await fetch(`${base}/train`, {
+    method: 'POST',
+    headers: {
+      'content-type': 'application/json',
+      'x-sim2real-account': 'alice',
+      authorization: 'Bearer worker-test-token',
+    },
+    body: JSON.stringify({ ...request, demonstrations: { jsonl: 'x'.repeat(8 * 1024 * 1024) } }),
+  });
+  assert.equal(oversizedRequest.status, 413);
+  assert.equal((await oversizedRequest.json()).error, 'request_too_large');
   const launch = await fetch(`${base}/train`, {
     method: 'POST',
     headers: {
@@ -142,6 +156,10 @@ try {
       throw new Error(`status response ${statusResponse.status}: ${JSON.stringify(status)}`);
   }
   assert.equal(status.status, 'completed', JSON.stringify(status));
+  const savedRequest = JSON.parse(
+    await readFile(path.join(fixtureDir, launched.runId, 'request.json'), 'utf8'),
+  );
+  assert.equal(savedRequest.demonstrations.jsonl, request.demonstrations.jsonl);
   assert.equal(status.checkpoint.artifactRef, 'artifact://microduck/cp-1');
   assert.equal(status.artifact.sizeBytes, 12);
   assert.match(status.artifact.sha256, /^[a-f0-9]{64}$/);

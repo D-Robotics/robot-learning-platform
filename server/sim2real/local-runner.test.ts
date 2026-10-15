@@ -30,6 +30,93 @@ afterEach(() => {
 });
 
 describe('local Sim2Real runner adapter', () => {
+  it('retains bounded BC learning evidence and drops malformed claims', async () => {
+    const metrics = {
+      contractValid: true,
+      observationSize: 61,
+      actionSize: 14,
+      engine: 'offline-bc',
+      syntheticData: false,
+      trainingRows: 48,
+      validationRows: 12,
+      initialTrainLoss: 0.5,
+      trainLoss: 0.01,
+      validationLoss: 0.03,
+      epochs: 100,
+      trainingDataSha256: 'a'.repeat(64),
+    };
+    const call = (evidence: Record<string, unknown>) =>
+      requestLocalTraining({
+        accountId: 'alice',
+        manifest: BUILTIN_MICRODUCK_MODEL.manifest,
+        runnerUrl: 'http://127.0.0.1:18198/train',
+        fetchImpl: (async () =>
+          new Response(
+            JSON.stringify({ status: 'completed', runId: 'real-bc-1', metrics: evidence }),
+            { status: 200 },
+          )) as typeof fetch,
+      });
+    expect((await call(metrics)).metrics).toMatchObject(metrics);
+    const malformed = (
+      await call({
+        ...metrics,
+        syntheticData: 'false',
+        trainingRows: 1.5,
+        validationRows: -1,
+        initialTrainLoss: Infinity,
+        trainLoss: -0.1,
+        validationLoss: 1e13,
+        epochs: 3e6,
+        trainingDataSha256: 'not-a-digest',
+      })
+    ).metrics;
+    for (const key of [
+      'syntheticData',
+      'trainingRows',
+      'validationRows',
+      'initialTrainLoss',
+      'trainLoss',
+      'validationLoss',
+      'epochs',
+      'trainingDataSha256',
+    ]) {
+      expect(malformed).not.toHaveProperty(key);
+    }
+  });
+
+  it('sends the exact platform-frozen demonstration snapshot to the worker', async () => {
+    const jsonl = '{"observation":[1],"action":[2]}\n';
+    const demonstrations = {
+      schemaVersion: 1 as const,
+      sourceRunId: 'recording-1',
+      telemetryRevision: 'b'.repeat(64),
+      source: 'browser' as const,
+      sha256: createHash('sha256').update(jsonl).digest('hex'),
+      jsonl,
+    };
+    let received: Record<string, unknown> = {};
+    await requestLocalTraining({
+      accountId: 'alice',
+      manifest: BUILTIN_MICRODUCK_MODEL.manifest,
+      training: {
+        profile: 'smoke',
+        numEnvs: 1,
+        maxIterations: 10,
+        video: false,
+        engine: 'offline-bc',
+      },
+      demonstrations,
+      runnerUrl: 'http://127.0.0.1:18198/train',
+      fetchImpl: (async (_input, init) => {
+        received = JSON.parse(String(init?.body));
+        return new Response(JSON.stringify({ status: 'queued', runId: 'real-bc-1' }), {
+          status: 202,
+        });
+      }) as typeof fetch,
+    } as Parameters<typeof requestLocalTraining>[0]);
+    expect(received.demonstrations).toEqual(demonstrations);
+  });
+
   it('fails closed instead of falling back to a RoboGo endpoint', async () => {
     delete process.env.RDK_SIM2REAL_LOCAL_RUNNER_URL;
     process.env.RDK_SIM2REAL_ROBOGO_RUNNER_URL = 'https://robogo.example.test/train';

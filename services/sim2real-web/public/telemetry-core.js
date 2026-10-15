@@ -163,6 +163,7 @@
     if (timestamp === null) return null;
     return {
       t: timestamp,
+      ...(raw.pairing === 'policy-inference-v1' ? { pairing: raw.pairing } : {}),
       ...(Array.isArray(raw.observation)
         ? { observation: raw.observation.slice(0, MAX_TELEMETRY_VECTOR_VALUES) }
         : {}),

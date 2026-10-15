@@ -1517,10 +1517,57 @@ export function createSim2RealWebApp(): Express {
   // Resolve the release root per request. Operators can atomically switch the
   // reviewed `current` symlink without a race where healthz reports a mounted
   // bundle but the handler still holds the null/old path captured at startup.
+  // Recording and platform hand-off belong to this service, even when the
+  // reviewed upstream release contains only physics/rendering assets. Serve
+  // our overlay separately and decorate the response, never edit that release.
+  app.get('/mujoco/microduck/rdk-platform-overlay.js', (_request, response) => {
+    response.setHeader('Cache-Control', 'no-cache');
+    response.sendFile(path.join(SERVICE_ROOT, '../mujoco-web/microduck-community-overlay.js'), {
+      dotfiles: 'allow',
+    });
+  });
+  app.get('/mujoco/microduck/community/microduck-wechat.png', (_request, response) => {
+    response.sendFile(path.join(SERVICE_ROOT, '../mujoco-web/community/microduck-wechat.png'), {
+      dotfiles: 'allow',
+    });
+  });
   app.use('/mujoco/microduck', (request, response, next) => {
     const root = configuredMicroduckRoot();
     if (!root) {
       next();
+      return;
+    }
+    if (request.method === 'GET' && ['/', '/index.html'].includes(request.path)) {
+      const originalUrl = new URL(request.originalUrl, 'http://localhost');
+      if (originalUrl.pathname.endsWith('/microduck')) {
+        response.redirect(308, publicPath('/mujoco/microduck/') + originalUrl.search);
+        return;
+      }
+      try {
+        const original = readFileSync(path.join(root, 'index.html'), 'utf8');
+        const overlay = '<script defer src="./rdk-platform-overlay.js"></script>';
+        let hasOverlay = false;
+        // A reviewed release may carry an older recorder. Canonicalize its
+        // response tag so it uses the current causal recorder, without changing
+        // immutable upstream files or installing two recording hooks.
+        const upgraded = original.replace(
+          /<script\b[^>]*\bsrc=["'][^"']*(?:rdk-platform-overlay|microduck-community-overlay)\.js(?:\?[^"']*)?["'][^>]*>\s*<\/script\s*>/gi,
+          () => {
+            const replacement = hasOverlay ? '' : overlay;
+            hasOverlay = true;
+            return replacement;
+          },
+        );
+        const decorated = hasOverlay
+          ? upgraded
+          : /<\/body\s*>/i.test(upgraded)
+            ? upgraded.replace(/<\/body\s*>/i, `${overlay}</body>`)
+            : upgraded + overlay;
+        response.setHeader('Cache-Control', 'no-cache');
+        response.type('html').send(decorated);
+      } catch (error) {
+        next(error);
+      }
       return;
     }
     express.static(root, { index: 'index.html' })(request, response, next);

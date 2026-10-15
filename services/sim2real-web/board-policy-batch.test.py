@@ -23,6 +23,7 @@ import os
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
 import numpy as np
 
@@ -34,6 +35,11 @@ _spec = importlib.util.spec_from_file_location("board_policy_runtime", MODULE_PA
 _mod = importlib.util.module_from_spec(_spec)
 assert _spec.loader is not None
 _spec.loader.exec_module(_mod)
+with mock.patch.dict(os.environ, {"RDK_SIM2REAL_ADAPTER_CONFIG": os.path.join(ROOT, "adapters", "microduck-leg.json")}):
+    _joint_spec = importlib.util.spec_from_file_location("board_joint_policy_runtime", os.path.join(ROOT, "services", "sim2real-web", "board-joint-policy-runtime.py"))
+    _joint_mod = importlib.util.module_from_spec(_joint_spec)
+    assert _joint_spec.loader is not None
+    _joint_spec.loader.exec_module(_joint_mod)
 
 
 class _FakeInput:
@@ -170,6 +176,83 @@ class InferBatchTest(unittest.TestCase):
 
         source = inspect.getsource(_mod._serve_file_protocol)
         self.assertIn('"infer_batch"', source)
+
+
+class JointInferBatchTest(unittest.TestCase):
+    def _ready(self, session=None):
+        runtime = _joint_mod.JointPolicyRuntime()
+        runtime._model = session or _FixedBatchSession()
+        runtime._input_name = "obs"
+        runtime._state = "ready"
+        runtime._publish_target = mock.Mock(side_effect=AssertionError("actuation forbidden"))
+        runtime.bind_ros = mock.Mock(side_effect=AssertionError("ROS forbidden"))
+        runtime._spin_once = mock.Mock(side_effect=AssertionError("ROS forbidden"))
+        return runtime
+
+    def test_refuses_unready_and_live_motion_states(self):
+        runtime = _joint_mod.JointPolicyRuntime()
+        self.assertEqual(runtime.infer_batch([[0.0] * 61])["error"], "model-not-ready")
+        runtime = self._ready()
+        runtime._state = "running"
+        self.assertEqual(runtime.infer_batch([[0.0] * 61])["error"], "model-not-ready")
+
+    def test_fixed_rows_remain_independent_and_in_order_without_actuation(self):
+        session = _FixedBatchSession()
+        runtime = self._ready(session)
+        rows = np.random.default_rng(42).normal(size=(16, 61)).astype(np.float32)
+        result = runtime.infer_batch(rows)
+        self.assertTrue(result.get("ok"), result)
+        self.assertEqual(result["path"], "per-sample")
+        self.assertEqual(session.calls, [1] * 16)
+        np.testing.assert_array_equal(result["actions"], session._derive(rows))
+        self.assertEqual(runtime._published, 0)
+        self.assertIsNone(runtime._session_id)
+        self.assertIsNone(runtime._last_target)
+        runtime._publish_target.assert_not_called()
+        runtime.bind_ros.assert_not_called()
+        runtime._spin_once.assert_not_called()
+
+    def test_dynamic_batch_runs_once(self):
+        session = _DynamicBatchSession()
+        result = self._ready(session).infer_batch(np.zeros((9, 61), dtype=np.float32))
+        self.assertTrue(result.get("ok"), result)
+        self.assertEqual(result["path"], "dynamic-batch")
+        self.assertEqual(session.calls, [9])
+
+    def test_rejects_bad_counts_widths_and_non_finite_inputs(self):
+        runtime = self._ready()
+        for rows, code in (([0.0] * 61, "observations-not-2d"),
+                           (np.zeros((65, 61)), "observations-count-out-of-range"),
+                           (np.zeros((1, 60)), "observation-dimension-mismatch"),
+                           ([[float("nan")] * 61], "observations-non-finite")):
+            self.assertEqual(runtime.infer_batch(rows).get("error"), code)
+
+    def test_rejects_wrong_action_width_instead_of_truncating(self):
+        result = self._ready(_FixedBatchSession(action_dim=15)).infer_batch([[0.0] * 61])
+        self.assertEqual(result.get("error"), "model-output-dim-mismatch")
+
+    def test_rejects_entire_batch_on_non_finite_action(self):
+        session = _FixedBatchSession()
+        session.run = lambda _outputs, feeds: [np.full((1, 14), float("inf"), dtype=np.float32)]
+        self.assertEqual(self._ready(session).infer_batch([[0.0] * 61]).get("error"), "action-non-finite")
+
+    def test_history_rows_are_caller_composed_and_do_not_mutate_live_history(self):
+        runtime = self._ready(_FixedBatchSession(obs_dim=183))
+        with mock.patch.object(_joint_mod, "OBS_HISTORY_FRAMES", 3):
+            self.assertEqual(runtime.infer_batch([[0.0] * 61]).get("error"), "observation-dimension-mismatch")
+            self.assertTrue(runtime.infer_batch([[0.0] * 183]).get("ok"))
+        self.assertIsNone(runtime._obs_history)
+
+    def test_ipc_reply_carries_actions_and_template_start_remains_refused(self):
+        runtime = self._ready()
+        request = {"op": "infer_batch", "seq": 7, "observations": [[0.0] * 61]}
+        result = _joint_mod.apply_request(runtime, request)
+        self.assertTrue(result.get("ok"), result)
+        runtime._record_op("infer_batch", request, result)
+        self.assertEqual(runtime.snapshot()["lastOp"]["actions"], [[0.0] * 14])
+        self.assertEqual(runtime.snapshot()["lastOp"]["seq"], 7)
+        self.assertEqual(runtime.start(0).get("error"), "joint-profile-not-calibrated")
+        self.assertEqual(runtime._published, 0)
 
 
 if __name__ == "__main__":

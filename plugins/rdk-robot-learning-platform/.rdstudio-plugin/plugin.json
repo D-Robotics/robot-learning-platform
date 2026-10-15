@@ -1,0 +1,15 @@
+{
+  "name": "rdk-robot-learning-platform",
+  "displayName": "RDK Robot Learning Platform",
+  "version": "0.1.2",
+  "description": "通过 Duck Lab MCP 完成机器人学习工作区、真实示教训练、评测和受控板端接入。",
+  "author": {
+    "name": "D-Robotics",
+    "url": "https://d-robotics.cc"
+  },
+  "category": "Robotics",
+  "tags": ["RDK", "MicroDuck", "Sim2Real", "PPO", "MCP"],
+  "mcpServers": "./.mcp.json",
+  "defaultEnabled": true,
+  "skills": "./skills"
+}

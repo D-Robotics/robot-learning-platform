@@ -21,11 +21,13 @@ the model with a real MLP trained by minibatch Adam:
   versions actually imported and the dependency-lock digest, mirroring the
   runner engines (`npm run verify:training-provenance`).
 
-File protocol (engine mode): when RDK_SIM2REAL_REQUEST_FILE and
-RDK_SIM2REAL_RESULT_FILE are set, the trainer runs a smoke round on a
-deterministic SYNTHETIC dataset generated from the request's contract
-dimensions. The synthetic source is labeled in the result — the training is
-real, the data is not, and the result says which is which.
+File protocol (engine mode): authenticated platform requests may carry a
+bounded, hashed snapshot of uploaded observation/action demonstrations.
+Those rows are validated and consumed by the same trainer as the CLI. A
+request with NO demonstrations runs the explicitly labeled SYNTHETIC smoke
+round. Invalid demonstrations never fall back to synthetic data. This mode
+requires verified ONNX export and produces the worker's artifact:// bundle
+contract; software training completion does not authorize board deployment.
 
 Output model format `rdk-offline-bc-v2` (JSON): layer weights, activation,
 normalization constants, metrics, seed and provenance blocks. The v1 format's
@@ -36,10 +38,12 @@ historical validation notes keeps reading the dimension fields.
 import argparse
 import base64
 import binascii
+import hashlib
 import json
 import math
 import os
 import pathlib
+import re
 import sys
 
 import numpy as np
@@ -54,6 +58,8 @@ MIN_TRAIN_ROWS = 8
 MIN_VAL_ROWS = 4
 EQUIVALENCE_ATOL = 1e-4
 EQUIVALENCE_ROWS = 64
+MAX_DEMONSTRATION_BYTES = 4 * 1024 * 1024
+MIN_DEMONSTRATION_ROWS = MIN_TRAIN_ROWS + MIN_VAL_ROWS
 # Fixed image-branch encoder: three stride-2 convolutions (k=4) shrink the
 # input by 8x per side before the dense head. Deliberately NOT configurable:
 # a fixed encoder keeps the ONNX graph, the equivalence proof and the review
@@ -303,6 +309,7 @@ def fit(x, y, hidden_sizes, activation, epochs, lr, batch_size, seed, val_fracti
     x_train_n = (x_train - mean) / std
     sizes = [x.shape[1], *hidden_sizes, y.shape[1]]
     layers = init_mlp(sizes, activation, seed)
+    initial_train_loss = evaluate(layers, x_train_n, y_train, activation)
     train_mlp(layers, x_train_n, y_train, activation, epochs, lr, batch_size, seed)
 
     train_loss = evaluate(layers, x_train_n, y_train, activation)
@@ -325,6 +332,7 @@ def fit(x, y, hidden_sizes, activation, epochs, lr, batch_size, seed, val_fracti
     }
     report = {
         "train_loss": train_loss,
+        "initial_train_loss": initial_train_loss,
         "validation": validation,
         "epochs": int(epochs),
         "learning_rate": float(lr),
@@ -1020,6 +1028,9 @@ def export_onnx(model, path, x_check):
     rows = x_check[:EQUIVALENCE_ROWS].astype(np.float32)
     expected = forward_float32(model, rows)
     actual = session.run(["action"], {"observation": rows})[0]
+    if not np.isfinite(expected).all() or not np.isfinite(actual).all():
+        pathlib.Path(path).unlink()
+        raise ValueError("ONNX equivalence produced non-finite outputs; the invalid file was not kept")
     worst = float(np.max(np.abs(expected - actual)))
     if worst >= EQUIVALENCE_ATOL:
         pathlib.Path(path).unlink()
@@ -1096,38 +1107,171 @@ def _print_onnx_state(onnx_report):
         )
 
 
-def run_engine_mode():
-    """File-protocol smoke round for the provenance gate.
+def load_request_demonstrations(payload, observation_size, action_size):
+    """Validate the immutable snapshot the platform selected, never a path.
 
-    The request carries no dataset, so this mode trains on a deterministic
-    SYNTHETIC dataset sized by the request's contract. That is labeled in
-    the result (`dataset.synthetic: true`) — the training itself is real, and
-    no claim is made about real demonstrations.
+    Hash the original UTF-8 bytes before parsing: reformatted, reordered or
+    truncated rows must not silently retain the platform's source identity.
+    This snapshot has one episode's rows, so its validation is a seeded ROW
+    split, not an independent episode/task-quality acceptance test.
     """
+    fields = {"schemaVersion", "sourceRunId", "telemetryRevision", "source", "sha256", "jsonl"}
+    if not isinstance(payload, dict) or set(payload) != fields:
+        raise ValueError("demonstrations must contain exactly schemaVersion/sourceRunId/telemetryRevision/source/sha256/jsonl")
+    if type(payload["schemaVersion"]) is not int or payload["schemaVersion"] != 1:
+        raise ValueError("demonstrations.schemaVersion must be 1")
+    if not isinstance(payload["sourceRunId"], str) or not re.fullmatch(
+        r"[a-zA-Z0-9][a-zA-Z0-9._-]{0,199}", payload["sourceRunId"]
+    ):
+        raise ValueError("demonstrations.sourceRunId is invalid")
+    if not isinstance(payload["telemetryRevision"], str) or not re.fullmatch(
+        r"[a-f0-9]{64}", payload["telemetryRevision"]
+    ):
+        raise ValueError("demonstrations.telemetryRevision must be the platform's SHA-256 revision")
+    if payload["source"] not in ("browser", "import", "board-agent"):
+        raise ValueError("demonstrations.source must be browser, import or board-agent")
+    jsonl = payload["jsonl"]
+    if not isinstance(jsonl, str):
+        raise ValueError("demonstrations.jsonl must be a UTF-8 string")
+    try:
+        raw = jsonl.encode("utf-8")
+    except UnicodeEncodeError:
+        raise ValueError("demonstrations.jsonl must be valid UTF-8")
+    if not raw or len(raw) > MAX_DEMONSTRATION_BYTES:
+        raise ValueError("demonstrations.jsonl must be non-empty and at most 4 MiB")
+    if not isinstance(payload["sha256"], str) or not re.fullmatch(r"[a-f0-9]{64}", payload["sha256"]):
+        raise ValueError("demonstrations.sha256 must be a lowercase SHA-256 digest")
+    if hashlib.sha256(raw).hexdigest() != payload["sha256"]:
+        raise ValueError("demonstrations.sha256 does not match the supplied JSONL bytes")
+    if not jsonl.endswith("\n") or "\r" in jsonl:
+        raise ValueError("demonstrations.jsonl must use LF lines including a final LF")
+
+    def unique_object(pairs):
+        result = {}
+        for key, value in pairs:
+            if key in result:
+                raise ValueError("duplicate JSON object key")
+            result[key] = value
+        return result
+
+    def reject_constant(value):
+        raise ValueError("non-finite JSON number %s" % value)
+
+    observations, actions = [], []
+    for line_no, line in enumerate(jsonl[:-1].split("\n"), 1):
+        try:
+            row = json.loads(line, object_pairs_hook=unique_object, parse_constant=reject_constant)
+        except ValueError as error:
+            raise ValueError("demonstrations line %d: invalid JSON (%s)" % (line_no, error))
+        if not isinstance(row, dict) or set(row) != {"observation", "action"}:
+            raise ValueError("demonstrations line %d: only observation/action fields are allowed" % line_no)
+        obs, act = row["observation"], row["action"]
+        if not isinstance(obs, list) or not isinstance(act, list):
+            raise ValueError("demonstrations line %d: observation/action must be numeric lists" % line_no)
+        if len(obs) != observation_size or len(act) != action_size:
+            raise ValueError("demonstrations line %d: dimensions differ from the request contract" % line_no)
+        values = obs + act
+        if any(isinstance(value, bool) or not isinstance(value, (int, float)) for value in values):
+            raise ValueError("demonstrations line %d: values must be numeric" % line_no)
+        try:
+            finite = all(math.isfinite(value) for value in values)
+        except OverflowError:
+            finite = False
+        if not finite:
+            raise ValueError("demonstrations line %d: values must be finite" % line_no)
+        observations.append(obs)
+        actions.append(act)
+    if len(observations) < MIN_DEMONSTRATION_ROWS:
+        raise ValueError("demonstrations requires at least %d rows" % MIN_DEMONSTRATION_ROWS)
+    return np.asarray(observations, dtype=np.float64), np.asarray(actions, dtype=np.float64), {
+        "source": payload["source"], "synthetic": False, "rows": len(observations),
+        "validationKind": "seeded-row-split",
+        "provenance": {key: payload[key] for key in ("sourceRunId", "telemetryRevision", "sha256")},
+    }
+
+
+def write_artifact_manifest(directory):
+    """Digest immutable deliverables, excluding protocol and worker state."""
+    directory = pathlib.Path(directory)
+    lines = []
+    for artifact in sorted(directory.iterdir()):
+        if artifact.name in ("SHA256SUMS", "request.json", "result.json", "job.json") or artifact.name.startswith("."):
+            continue
+        if artifact.is_file():
+            lines.append("%s  %s" % (hashlib.sha256(artifact.read_bytes()).hexdigest(), artifact.name))
+    if not lines:
+        raise ValueError("no immutable artifacts to record in SHA256SUMS")
+    (directory / "SHA256SUMS").write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def run_engine_mode():
+    """Consume controlled demonstrations or explicitly labeled smoke data."""
     request = json.loads(pathlib.Path(os.environ["RDK_SIM2REAL_REQUEST_FILE"]).read_text())
     if request.get("schemaVersion") != 1:
         raise ValueError("unsupported request schemaVersion %r" % request.get("schemaVersion"))
     contract = request.get("contract") or {}
-    obs_size = int(contract.get("observationSize", 0))
-    act_size = int(contract.get("actionSize", 0))
-    if obs_size <= 0 or act_size <= 0:
+    obs_size = contract.get("observationSize", 0)
+    act_size = contract.get("actionSize", 0)
+    if type(obs_size) is not int or type(act_size) is not int or obs_size <= 0 or act_size <= 0:
         raise ValueError("request contract must define observationSize and actionSize")
     training = request.get("training") or {}
-    epochs = max(1, int(training.get("maxIterations", 2)))
+    epochs = training.get("maxIterations", 2)
+    if type(epochs) is not int or not 1 <= epochs <= 10000:
+        raise ValueError("training.maxIterations must be an integer in [1, 10000] epochs")
 
-    rng = np.random.default_rng(0)
-    rows = 128
-    x = rng.uniform(-1.0, 1.0, (rows, obs_size))
-    mixing = rng.uniform(-0.5, 0.5, (obs_size, act_size))
-    y = np.tanh(x @ mixing)
+    if "demonstrations" in request:
+        x, y, dataset = load_request_demonstrations(request["demonstrations"], obs_size, act_size)
+        # Twelve rows is the smallest accepted snapshot: 8 train + 4 val.
+        # Larger recordings retain a 20% row split with the same fixed seed.
+        val_fraction = max(0.2, MIN_VAL_ROWS / len(x))
+    else:
+        rng = np.random.default_rng(0)
+        rows = 128
+        x = rng.uniform(-1.0, 1.0, (rows, obs_size))
+        mixing = rng.uniform(-0.5, 0.5, (obs_size, act_size))
+        y = np.tanh(x @ mixing)
+        dataset = {"source": "synthetic-smoke", "synthetic": True, "rows": rows,
+                   "validationKind": "seeded-row-split"}
+        val_fraction = 0.25
 
-    model, report = fit(
-        x, y, [16, 16], "tanh", epochs=epochs, lr=1e-2, batch_size=32, seed=0,
-        val_fraction=0.25,
-    )
+    try:
+        with np.errstate(over="raise", invalid="raise", divide="raise"):
+            model, report = fit(
+                x, y, [16, 16], "tanh", epochs=epochs, lr=1e-2, batch_size=32, seed=0,
+                val_fraction=val_fraction,
+            )
+    except FloatingPointError:
+        raise ValueError("training numeric range overflowed; normalize the observation/action vectors")
+    losses = (report["initial_train_loss"], report["train_loss"], report["validation"]["loss"])
+    parameters = [model["normalization"]["mean"], model["normalization"]["std"]]
+    parameters.extend(value for layer in model["layers"] for value in layer.values())
+    if not all(math.isfinite(value) for value in losses) or not all(
+        np.isfinite(np.asarray(value)).all() for value in parameters
+    ):
+        raise ValueError("training produced non-finite metrics or parameters; no artifact was published")
     model_path = pathlib.Path("model.json")
     onnx_report = export_onnx(model, "policy.onnx", x)
+    if not onnx_report.get("exported") or onnx_report.get("equivalence") != "verified":
+        # A graph without verified runtime equivalence is not this protocol's
+        # deliverable. The CLI still supports optional export for researchers.
+        pathlib.Path("policy.onnx").unlink(missing_ok=True)
+        raise ValueError("engine mode requires VERIFIED ONNX export (%s); install %s" %
+                         (onnx_report.get("equivalence"), ONNX_MISSING_HINT))
+    model["dataset"] = dataset
     save_model(model, report, onnx_report, model_path)
+    policy_path = pathlib.Path("policy.onnx")
+    policy_sha256 = hashlib.sha256(policy_path.read_bytes()).hexdigest()
+    write_artifact_manifest(".")
+    metrics = dict(report)
+    metrics.update({
+        "contractValid": True, "observationSize": obs_size, "actionSize": act_size,
+        "engine": "offline-bc", "syntheticData": dataset["synthetic"],
+        "trainingRows": report["samples"]["train"], "validationRows": report["samples"]["val"],
+        "initialTrainLoss": report["initial_train_loss"], "trainLoss": report["train_loss"],
+        "validationLoss": report["validation"]["loss"],
+    })
+    if not dataset["synthetic"]:
+        metrics["trainingDataSha256"] = dataset["provenance"]["sha256"]
 
     result = {
         "schemaVersion": 1,
@@ -1140,14 +1284,19 @@ def run_engine_mode():
             "observationSize": obs_size,
             "actionSize": act_size,
         },
-        "dataset": {"source": "synthetic-smoke", "synthetic": True, "rows": rows},
-        "metrics": report,
+        "dataset": dataset,
+        "metrics": metrics,
+        "training": {"profile": training.get("profile"), "epochs": epochs},
+        "artifactRef": "artifact://policy.onnx",
         "artifact": {
-            "format": MODEL_FORMAT,
-            "path": model_path.name,
-            "sizeBytes": model_path.stat().st_size,
-            "onnxExported": bool(onnx_report and onnx_report.get("exported")),
+            "artifactId": "offline-bc-" + policy_sha256,
+            "artifactRef": "artifact://policy.onnx", "format": "onnx",
+            "path": policy_path.name, "sizeBytes": policy_path.stat().st_size,
+            "sha256": policy_sha256, "onnxExported": True,
+            "kind": "source", "deployable": False,
         },
+        "cuda": False,
+        "deployable": False,
     }
     result.update(provenance_block({"numpy"} | _used_optional(onnx_report)))
     pathlib.Path(os.environ["RDK_SIM2REAL_RESULT_FILE"]).write_text(

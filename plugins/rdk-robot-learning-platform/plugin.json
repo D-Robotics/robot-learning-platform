@@ -1,0 +1,28 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "rdk-robot-learning-platform",
+  "version": "0.1.2",
+  "description": "RDK Robot Learning Platform 的平台插件：复用 Duck Lab MCP，覆盖工作区、仿真与轨迹、训练、评测、制品、受控部署、设备与运维。",
+  "author": {
+    "name": "D-Robotics"
+  },
+  "homepage": "https://github.com/D-Robotics/robot-learning-platform#readme",
+  "repository": "https://github.com/D-Robotics/robot-learning-platform",
+  "keywords": ["rdk", "robot-learning", "sim2real", "mcp", "microduck"],
+  "extensions": {
+    "com.openai": {
+      "onboardingSkill": "./skills/setup/SKILL.md",
+      "interface": {
+        "displayName": "RDK Robot Learning Platform",
+        "shortDescription": "仿真、训练、评测、制品、受控部署与设备工作流",
+        "developerName": "D-Robotics",
+        "category": "Developer Tools",
+        "defaultPrompt": [
+          "连接学习平台并查看工作区、设备和训练状态",
+          "把仿真录制的数据转成训练任务并检查评测证据",
+          "检查制品和部署预检，说明阻塞项"
+        ]
+      }
+    }
+  }
+}

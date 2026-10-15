@@ -182,6 +182,39 @@ export function createPlatformFetch(
   let sessionCookie: string | null = config.cookie ?? null;
   let loginPromise: Promise<void> | null = null;
 
+  // Give every client the same actionable, credential-free diagnostics. Never
+  // replay a transport failure: a timed-out write may already have executed.
+  async function fetchWithDiagnostics(url: string, init: RequestInit): Promise<Response> {
+    try {
+      return await doFetch(url, init);
+    } catch (error) {
+      const name = error instanceof Error ? error.name : '';
+      const target = new URL(url);
+      target.username = '';
+      target.password = '';
+      target.search = '';
+      target.hash = '';
+      const code =
+        name === 'TimeoutError'
+          ? 'PLATFORM_TIMEOUT'
+          : name === 'AbortError' || init.signal?.aborted
+            ? 'PLATFORM_CANCELLED'
+            : 'PLATFORM_UNREACHABLE';
+      const guidance =
+        code === 'PLATFORM_CANCELLED'
+          ? '请求已取消。'
+          : code === 'PLATFORM_TIMEOUT'
+            ? `等待平台超过 ${config.timeoutMs} ms；请检查服务状态或 RDK_SIM2REAL_MCP_TIMEOUT_MS。`
+            : '无法连接平台；本地使用请在平台仓库运行 npm run dev:sim2real，再检查 /healthz；远程使用请核对 RDK_SIM2REAL_MCP_BASE_URL 与网络。';
+      // Raw transport causes may include request bodies/cookies; expose only
+      // the safe classification above to external clients.
+      // eslint-disable-next-line preserve-caught-error
+      throw new Error(
+        `[${code}] ${init.method ?? 'GET'} ${target.toString()}：${guidance} 写请求结果可能不确定，请先查询状态；实体动作不要自动重试。`,
+      );
+    }
+  }
+
   function extractCookie(lines: string[]): string {
     const pairs = lines
       .map((line) => line.split(';')[0]?.trim() ?? '')
@@ -191,7 +224,7 @@ export function createPlatformFetch(
   }
 
   async function login(): Promise<void> {
-    const response = await doFetch(`${config.baseUrl}/api/sso/login`, {
+    const response = await fetchWithDiagnostics(`${config.baseUrl}/api/sso/login`, {
       method: 'POST',
       headers: { 'content-type': 'application/json', accept: 'application/json' },
       body: JSON.stringify({
@@ -240,7 +273,7 @@ export function createPlatformFetch(
     headers: Record<string, string>,
     signal: AbortSignal,
   ): Promise<Response> {
-    return doFetch(url, {
+    return fetchWithDiagnostics(url, {
       method,
       headers,
       body,

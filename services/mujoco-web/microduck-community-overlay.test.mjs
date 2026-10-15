@@ -13,6 +13,79 @@ test('control legend uses the simulator Q/E kick contract', () => {
   assert.doesNotMatch(overlaySource, /<kbd>A \/ Q · E<\/kbd>/);
 });
 
+test('recorder pairs immutable pre-inference observation with that inference action', async () => {
+  const dom = new JSDOM('<!doctype html><html><head></head><body></body></html>', {
+    url: 'https://studio.example.test/mujoco/microduck/',
+    runScripts: 'dangerously',
+    pretendToBeVisual: true,
+  });
+  const { window } = dom;
+  window.matchMedia = () => ({ matches: false });
+  let finish;
+  const session = {
+    inputNames: ['observation'],
+    outputNames: ['action'],
+    run: async () =>
+      new Promise((resolve) => {
+        finish = resolve;
+      }),
+  };
+  const originalRun = session.run;
+  const observation = new Float32Array(61);
+  observation[0] = 3;
+  observation.fill(0.1, 34, 48);
+  window.rl = {
+    sessions: { walk: session },
+    buildObs: () => observation,
+    lastAction: new Float32Array(14).fill(0.1),
+    data: { time: 1, qpos: [0, 0, 0.118, 1, 0, 0, 0], qvel: [0, 0, 0, 0, 0, 0] },
+  };
+  try {
+    window.eval(overlaySource);
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    const recorder = window.__microduckRecorder;
+    assert.equal(recorder.start(), true);
+    assert.equal(recorder.sampleCount, 0, 'Starting or waiting must not fabricate an inference');
+    const pending = session.run({ observation: { data: observation } });
+    observation[0] = 99;
+    finish({ action: { data: new Float32Array(14).fill(0.2) } });
+    await pending;
+    window.rl.lastAction.fill(0.2);
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    recorder.stop();
+    assert.equal(recorder.sampleCount, 1, 'One completed inference must produce exactly one pair');
+    const [header, sample] = recorder.getText().trim().split('\n').map(JSON.parse);
+    assert.equal(header.pairing, 'policy-inference-v1');
+    assert.equal(sample.observation[0], 3, 'The tensor must be copied before inference awaits');
+    assert.ok(Math.abs(sample.observation[34] - 0.1) < 1e-7);
+    assert.ok(Math.abs(sample.action[0] - 0.2) < 1e-7);
+    assert.equal(session.run, originalRun, 'Stopping restores the exact upstream session method');
+    assert.equal(recorder.start(), true);
+    const previousRecording = session.run({ observation: { data: observation } });
+    const finishPrevious = finish;
+    recorder.stop();
+    assert.equal(recorder.start(), true);
+    const currentRecording = session.run({ observation: { data: observation } });
+    const finishCurrent = finish;
+    finishPrevious({ action: { data: new Float32Array(14).fill(0.3) } });
+    await previousRecording;
+    assert.equal(
+      recorder.sampleCount,
+      0,
+      'A stopped recording cannot leak into the next recording',
+    );
+    finishCurrent({ action: { data: new Float32Array(14).fill(0.4) } });
+    await currentRecording;
+    recorder.stop();
+    assert.equal(recorder.sampleCount, 1);
+    const currentSample = JSON.parse(recorder.getText().trim().split('\n')[1]);
+    assert.ok(Math.abs(currentSample.action[0] - 0.4) < 1e-7);
+    recorder.destroy();
+  } finally {
+    dom.window.close();
+  }
+});
+
 test('browser recorder captures contract observations and actions from window.rl', async () => {
   const dom = new JSDOM(
     '<!doctype html><html><head></head><body><main>MicroDuck simulation</main></body></html>',
@@ -47,6 +120,13 @@ test('browser recorder captures contract observations and actions from window.rl
     },
   };
 
+  const session = {
+    inputNames: ['observation'],
+    outputNames: ['action'],
+    run: async () => ({ action: { data: window.rl.lastAction } }),
+  };
+  window.rl.sessions = { walk: session };
+
   window.eval(overlaySource);
   await new Promise((resolve) => setTimeout(resolve, 30));
 
@@ -54,7 +134,8 @@ test('browser recorder captures contract observations and actions from window.rl
   assert.ok(recorder, 'recorder API should be exposed for UI and smoke tests');
   assert.equal(recorder.active, false);
   assert.equal(recorder.start(), true);
-  await new Promise((resolve) => setTimeout(resolve, 70));
+  await session.run({ observation: { data: window.rl.buildObs() } });
+  await session.run({ observation: { data: window.rl.buildObs() } });
   recorder.stop();
 
   assert.equal(recorder.active, false);

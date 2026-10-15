@@ -548,6 +548,34 @@ function validLedgerShape(value: Record<string, unknown>): boolean {
     )
   )
     return false;
+  // A submitted training snapshot is platform-owned provenance. Legacy Runs
+  // omit it; present values must stay a small closed metadata shape, never
+  // embed the raw trajectory or make corrupted data look reproducible.
+  if (
+    !(value.runs as Array<Record<string, unknown>>).every((item) => {
+      if (item.trainingData === undefined) return true;
+      const data = item.trainingData;
+      return (
+        isRecord(data) &&
+        Object.keys(data).every((key) =>
+          ['sourceRunId', 'telemetryRevision', 'source', 'rows', 'sha256'].includes(key),
+        ) &&
+        typeof data.sourceRunId === 'string' &&
+        /^[a-zA-Z0-9][a-zA-Z0-9._-]{0,127}$/.test(data.sourceRunId) &&
+        typeof data.telemetryRevision === 'string' &&
+        /^[a-f0-9]{64}$/i.test(data.telemetryRevision) &&
+        typeof data.sha256 === 'string' &&
+        /^[a-f0-9]{64}$/i.test(data.sha256) &&
+        typeof data.source === 'string' &&
+        ['browser', 'import', 'board-agent'].includes(data.source) &&
+        typeof data.rows === 'number' &&
+        Number.isSafeInteger(data.rows) &&
+        data.rows >= 12 &&
+        data.rows <= 50_000
+      );
+    })
+  )
+    return false;
   // Freshness metadata is server-owned. Keep the parser strict so a hand
   // edited ledger cannot make an old evaluation look current or attach an
   // invalid revision to a run.
@@ -1358,7 +1386,7 @@ function telemetryRequestFingerprint(
  * before committing its ledger index, the indexed read path below excludes
  * that line and therefore excludes it from this revision too.
  */
-function telemetryRevision(records: readonly Sim2RealTelemetryRecord[]): string {
+export function telemetryRevision(records: readonly Sim2RealTelemetryRecord[]): string {
   const rows = [...records].sort(compareTelemetryRecords).map((record) => ({
     id: record.id,
     sequence: record.sequence ?? null,

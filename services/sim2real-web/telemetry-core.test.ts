@@ -26,6 +26,24 @@ beforeAll(async () => {
   if (!core) throw new Error('telemetry-core.js did not publish globalThis.SimTelemetryCore');
 });
 
+describe('inference pairing provenance', () => {
+  it('retains the declared same-inference marker without inventing it for legacy rows', () => {
+    const declared = core.parseTelemetryText(
+      JSON.stringify({
+        time: 0,
+        observation: [1],
+        action: [2],
+        pairing: 'policy-inference-v1',
+      }),
+    );
+    expect(declared.samples[0].pairing).toBe('policy-inference-v1');
+    const legacy = core.parseTelemetryText(
+      JSON.stringify({ time: 0, observation: [1], action: [2] }),
+    );
+    expect(legacy.samples[0]).not.toHaveProperty('pairing');
+  });
+});
+
 describe('formatTelemetrySeconds / formatTelemetryRate', () => {
   it('renders finite seconds with two decimals', () => {
     expect(core.formatTelemetrySeconds(1.5)).toBe('1.50s');

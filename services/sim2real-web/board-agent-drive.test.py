@@ -669,6 +669,98 @@ def _optional_onnx_stack():
     return True
 
 
+class JointPolicyCommandContract(unittest.TestCase):
+    def _agent(self):
+        profile = os.path.abspath(os.path.join(HERE, "../../adapters/microduck-leg.json"))
+        agent = load_agent_module(enable_drive=True, enable_policy=True, profile_path=profile)
+        agent._adapter_profile = {**agent._adapter_profile, "provenance": {"kind": "real", "mock": False}}
+        return agent
+
+    def test_joint_start_and_refresh_forward_explicit_command_with_board_monotonic_stamp(self):
+        agent = self._agent()
+        command = {"vx": 0.03, "vy": 0.0, "wz": 0.2, "ttlMs": 200}
+        with mock.patch.object(agent, "_policy_read_state", return_value={}), \
+                mock.patch.object(agent, "_policy_runtime_alive", return_value=True), \
+                mock.patch.object(agent, "_policy_send", return_value={"ok": True}) as send, \
+                mock.patch.object(agent.time, "monotonic_ns", return_value=123456789):
+            self.assertTrue(agent.policy_start(1.0, command=command).get("ok"))
+            send.assert_called_with("start", direction=1.0, command=command, issuedMonotonicNs=123456789)
+            self.assertTrue(agent.policy_command(command).get("ok"))
+            send.assert_called_with("command", command=command, issuedMonotonicNs=123456789)
+
+    def test_command_requires_joint_profile_and_all_board_gates_before_ipc(self):
+        agent = self._agent()
+        command = {"vx": 0.03, "vy": 0.0, "wz": 0.0}
+        with mock.patch.object(agent, "_policy_send") as send:
+            agent.POLICY_ENABLED = False
+            self.assertEqual(agent.policy_command(command).get("error"), "policy-disabled")
+            agent.POLICY_ENABLED = True
+            agent.MOTION_SWITCH_ENABLED = False
+            self.assertEqual(agent.policy_command(command).get("error"), "drive-disabled")
+            agent.MOTION_SWITCH_ENABLED = True
+            agent.JOINT_ACTUATOR = False
+            self.assertEqual(agent.policy_command(command).get("error"), "unsupported-actuator")
+            self.assertEqual(agent.policy_start(0.0, command=command).get("error"), "unsupported-actuator")
+            send.assert_not_called()
+
+    def test_template_profile_and_invalid_command_refuse_before_ipc(self):
+        agent = self._agent()
+        with mock.patch.object(agent, "_policy_send") as send:
+            for command in ({}, {"vx": True, "vy": 0, "wz": 0},
+                            {"vx": 0, "vy": 0, "wz": float("inf")},
+                            {"vx": 0, "vy": 0, "wz": 0, "ttlMs": 2001}):
+                self.assertEqual(agent.policy_command(command).get("error"), "invalid-command")
+            agent._adapter_profile["provenance"] = {"kind": "template", "mock": True}
+            self.assertEqual(agent.policy_start(0.0).get("error"), "joint-profile-not-calibrated")
+            self.assertEqual(agent.policy_command({"vx": 0, "vy": 0, "wz": 0}).get("error"), "joint-profile-not-calibrated")
+            send.assert_not_called()
+
+    def test_command_http_surface_authenticates_before_dispatch(self):
+        agent = self._agent()
+        command = {"vx": 0.01, "vy": 0.0, "wz": 0.0}
+        payload = json.dumps({"command": command}).encode()
+        with mock.patch.object(agent, "policy_command", return_value={"ok": True}) as update, \
+                mock.patch.object(agent, "policy_status", return_value={}):
+            for token, expected in (("wrong", 401), ("test-token", 200)):
+                handler = object.__new__(agent.Handler)
+                handler.path = "/v1/station/policy/command"
+                handler.headers = {"content-length": str(len(payload)), "authorization": "Bearer " + token}
+                handler.rfile = io.BytesIO(payload)
+                handler.close_connection = False
+                handler._json = mock.Mock()
+                handler.do_POST()
+                self.assertEqual(handler._json.call_args[0][0], expected)
+            update.assert_called_once_with(command)
+
+    def test_policy_mailbox_round_trips_do_not_overlap(self):
+        agent = self._agent()
+        entered = agent.threading.Event()
+        second_entered = agent.threading.Event()
+        release = agent.threading.Event()
+
+        def exchange(op, **_fields):
+            if op == "command":
+                entered.set()
+                self.assertTrue(release.wait(2))
+            else:
+                second_entered.set()
+            return {"ok": True}
+
+        with mock.patch.object(agent, "_policy_send_unlocked", side_effect=exchange):
+            first = agent.threading.Thread(target=agent._policy_send, args=("command",))
+            second = agent.threading.Thread(target=agent._policy_send, args=("stop",))
+            first.start()
+            self.assertTrue(entered.wait(1))
+            second.start()
+            try:
+                self.assertFalse(second_entered.wait(0.05))
+            finally:
+                release.set()
+                first.join(2)
+                second.join(2)
+            self.assertTrue(second_entered.is_set())
+
+
 class PolicyStartGoalGateContract(unittest.TestCase):
     """The agent's policy-start gate must refuse goal-less goalnav sessions.
 

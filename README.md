@@ -63,6 +63,10 @@ index](docs/README.md).
 
 ### 外部 Agent 接入（MCP）
 
+RDK Studio 原生插件的导出、认证与宿主验收见 [安装指南](docs/studio-plugin.md)。
+Workshop 的真实示教 → BC → 独立仿真评测见 [示教训练](docs/demonstration-training.md)；
+本轮已测范围与未通过项见 [Workshop 验收记录](docs/testing/workshop-2026-10-15.md)。
+
 仓库内置 `services/duck-lab-mcp/`，通过 stdio 提供 MCP（Model Context Protocol）适配层，
 让 Claude Code、Qoder 等外部 Agent 可以调用同一套仿真、训练、评测、制品、部署和板端工具。
 MCP 层只负责协议适配和证据投影，所有幂等、配额、权限、审批和运动安全门禁仍由版本化

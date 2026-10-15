@@ -720,10 +720,10 @@
               </div>
               <div class="train-onboarding-steps">
                 <div class="train-onboarding-step is-current" data-train-step="1" role="button" tabindex="0"><b>1</b><div><strong>准备模型</strong><small id="train-onboarding-model-help">载入默认模板并登记</small></div></div>
-                <div class="train-onboarding-step" data-train-step="2" role="button" tabindex="0"><b>2</b><div><strong>配置训练</strong><small>选择算法与算力资源</small></div></div>
-                <div class="train-onboarding-step" data-train-step="3" role="button" tabindex="0"><b>3</b><div><strong>开始强化学习训练</strong><small>选择 GPU 和 PPO / SAC 后提交任务</small></div></div>
+                <div class="train-onboarding-step" data-train-step="2" role="button" tabindex="0"><b>2</b><div><strong id="train-onboarding-config-title">配置训练</strong><small id="train-onboarding-config-help">选择算法与算力资源</small></div></div>
+                <div class="train-onboarding-step" data-train-step="3" role="button" tabindex="0"><b>3</b><div><strong id="train-onboarding-submit-title">开始强化学习训练</strong><small id="train-onboarding-submit-help">选择 GPU 和 PPO / SAC 后提交任务</small></div></div>
               </div>
-              <p class="train-onboarding-help">第一次使用？先点击“载入模板”，不用编辑 JSON。回放是可选的验证工具；强化学习训练可直接提交 PPO / SAC 任务。</p>
+              <p class="train-onboarding-help" id="train-onboarding-help">第一次使用？先点击“载入模板”，不用编辑 JSON。回放是可选的验证工具；强化学习训练可直接提交 PPO / SAC 任务。</p>
             </div>
             <details class="panel contract-fold" id="contract-fold" data-train-module="contract" role="tabpanel" aria-labelledby="train-tab-contract">
               <summary>
@@ -899,6 +899,7 @@
                   <div class="run-progress-warning" id="run-progress-warning" hidden>
                     Mock 只验证协议和台账，不会生成可部署模型。
                   </div>
+                  <p class="small-note" id="run-progress-bc-result" hidden></p>
                   <button
                     class="button button-ghost button-small"
                     id="run-progress-detail"
@@ -932,15 +933,25 @@
                       <option value="microduck-recurrent">microduck-recurrent · 循环 LSTM 策略 · 篮球/高跷平衡（CPU 冒烟）</option>
                       <option value="microduck-football">microduck-football · 足球 MuJoCo + 14D MicroDuck（CUDA）</option>
                       <option value="mjlab-rsl-rl">mjlab-rsl-rl · mjlab 物理 + rsl-rl PPO（CUDA）</option>
+                      <option value="offline-bc">offline-bc · 录制轨迹模仿学习（CPU）</option>
                       <option value="act">act · 动作分块模仿（示教轨迹，CPU）</option>
                       <option value="diffusion-policy">diffusion-policy · 扩散动作分块模仿（示教轨迹，CPU）</option>
                       <option value="smolvla">smolvla · LeRobot VLA 参考（CPU 规划 / CUDA 全量）</option>
                       <option value="isaac-lab">isaac-lab · Isaac Lab 上游训练栈（CUDA 主机，含 sim2sim 验证）</option></select
                     ><label class="field-label" for="compute-resource-select">训练资源</label
-                    ><select id="compute-resource-select" aria-label="选择 GPU 训练资源">
+                    ><select id="compute-resource-select" aria-label="选择训练资源">
                       <option value="">服务端默认本地 Worker</option>
                     </select
                     >
+                    </div>
+                    <div class="training-field-group" id="training-demonstration-group" role="group" aria-labelledby="training-group-demonstration" hidden>
+                      <div class="training-group-title" id="training-group-demonstration">用录制轨迹训练</div>
+                      <label class="field-label" for="training-demonstration-run">训练轨迹</label>
+                      <select id="training-demonstration-run" aria-describedby="training-demonstration-note"><option value="">先上传一段轨迹</option></select>
+                      <label class="field-label" for="training-bc-epochs">训练轮数</label>
+                      <input id="training-bc-epochs" type="number" value="100" min="1" max="10000" step="1" inputmode="numeric" />
+                      <p class="small-note" id="training-demonstration-note">先在仿真中录制，再到评测页上传到 Run；上传后的真实轨迹才会出现在这里。</p>
+                      <button class="button button-ghost button-small" id="training-demonstration-upload" type="button">去上传录制轨迹 →</button>
                     </div>
                     <div class="training-field-group" role="group" aria-labelledby="training-group-resume">
                       <div class="training-group-title" id="training-group-resume">续训（可选）</div>
@@ -1176,6 +1187,7 @@
                 <div class="empty-inline">完成一次训练或评测后，这里会显示可比较的指标。</div>
               </div>
             </article>
+            </div>
             <details class="panel telemetry-panel workspace-inspector" aria-labelledby="telemetry-title">
               <summary class="panel-heading panel-heading-lean workspace-inspector-summary"><span><small>Inspector</small><h2 id="telemetry-title">遥测回放与证据</h2></span>
                 <span class="state-badge state-neutral" id="telemetry-state">尚未导入</span>
@@ -1354,7 +1366,6 @@
                 >
               </div>
             </details>
-            </div>
             <div class="evaluation-next">
               <span class="next-line" id="evaluation-next-line"></span>
               <strong id="evaluation-next-title">下一步：通过评测后生成 X5 预检计划</strong>
@@ -2166,8 +2177,8 @@
       downloads start in parallel during HTML parse instead of serially
       blocking the parser at body end.
     -->
-    <script defer src="./telemetry-core.js?v=duck-lab-30"></script>
-    <script defer src="./app.js?v=duck-lab-58"></script>
+    <script defer src="./telemetry-core.js?v=duck-lab-31"></script>
+    <script defer src="./app.js?v=duck-lab-59"></script>
     <script defer src="./visualization-enhancements.js?v=viz-1"></script>
     <script defer src="./agent-chat.js?v=agent-18"></script>
     <script defer src="./onboarding.js?v=onboarding-6"></script>

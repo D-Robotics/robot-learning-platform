@@ -65,6 +65,16 @@ export interface Sim2RealRunMetrics {
   physicsBackend?: string;
   /** Engine id that produced the run (e.g. "mjx-ppo", "mjlab-rsl-rl"). */
   engine?: string;
+  /** True for generated smoke data; false only when the engine actually read demonstrations. */
+  syntheticData?: boolean;
+  trainingRows?: number;
+  validationRows?: number;
+  initialTrainLoss?: number;
+  trainLoss?: number;
+  validationLoss?: number;
+  epochs?: number;
+  /** SHA-256 of the exact demonstration bytes the engine consumed. */
+  trainingDataSha256?: string;
   /**
    * True only when the training backend actually ran on CUDA. A requested but
    * unavailable GPU falls back to CPU and must stay false; an absent value
@@ -267,6 +277,8 @@ export interface Sim2RealTelemetryCameraFrame {
 export interface Sim2RealTelemetrySample {
   /** Monotonic timestamp in seconds relative to the run. */
   t: number;
+  /** Producer-declared same-inference pairing, not a hardware attestation. */
+  pairing?: 'policy-inference-v1';
   observation?: number[];
   action?: number[];
   reward?: number;

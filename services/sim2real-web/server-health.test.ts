@@ -444,6 +444,54 @@ describe('standalone Sim2Real health and optional simulator surface', () => {
     expect(await response.text()).toContain('mounted');
   });
 
+  it('adds the platform recording overlay to a mounted simulator without changing its release', async () => {
+    const { baseUrl, microduckRoot } = await fixture();
+    const original = '<!doctype html><html><body>reviewed simulator</body></html>';
+    await fs.mkdir(microduckRoot, { recursive: true });
+    await fs.writeFile(path.join(microduckRoot, 'index.html'), original);
+    process.env.RDK_SIM2REAL_MICRODUCK_ROOT = microduckRoot;
+    const bare = await fetch(baseUrl + '/mujoco/microduck?test=1', { redirect: 'manual' });
+    expect(bare.status).toBe(308);
+    expect(bare.headers.get('location')).toBe('/mujoco/microduck/?test=1');
+    for (const entry of ['/mujoco/microduck/', '/mujoco/microduck/index.html']) {
+      const response = await fetch(baseUrl + entry);
+      expect(response.status).toBe(200);
+      expect(response.headers.get('cache-control')).toBe('no-cache');
+      expect(await response.text()).toContain('src="./rdk-platform-overlay.js"');
+    }
+    const overlay = await fetch(baseUrl + '/mujoco/microduck/rdk-platform-overlay.js');
+    expect(overlay.status).toBe(200);
+    expect(overlay.headers.get('content-type')).toContain('javascript');
+    expect(await overlay.text()).toContain('RECORDER_PANEL_ID');
+    const communityImage = await fetch(
+      baseUrl + '/mujoco/microduck/community/microduck-wechat.png',
+    );
+    expect(communityImage.status).toBe(200);
+    expect(communityImage.headers.get('content-type')).toContain('image/png');
+    expect(
+      Buffer.from(await communityImage.arrayBuffer())
+        .subarray(0, 8)
+        .toString('hex'),
+    ).toBe('89504e470d0a1a0a');
+    expect(await fs.readFile(path.join(microduckRoot, 'index.html'), 'utf8')).toBe(original);
+    const supplied = original.replace(
+      '</body>',
+      '<script src="./rdk-platform-overlay.js"></script></body>',
+    );
+    await fs.writeFile(path.join(microduckRoot, 'index.html'), supplied);
+    const existing = await (await fetch(baseUrl + '/mujoco/microduck/')).text();
+    expect(existing.match(/src="\.\/rdk-platform-overlay.js"/g)).toHaveLength(1);
+    const legacy = original.replace(
+      '</body>',
+      '<script defer src="./microduck-community-overlay.js?v=old"></script></body>',
+    );
+    await fs.writeFile(path.join(microduckRoot, 'index.html'), legacy);
+    const upgraded = await (await fetch(baseUrl + '/mujoco/microduck/')).text();
+    expect(upgraded).toContain('src="./rdk-platform-overlay.js"');
+    expect(upgraded).not.toContain('microduck-community-overlay.js');
+    expect(await fs.readFile(path.join(microduckRoot, 'index.html'), 'utf8')).toBe(legacy);
+  });
+
   it('revalidates the HTML entry so versioned assets are picked up immediately', async () => {
     const { baseUrl } = await fixture();
     const response = await fetch(`${baseUrl}/index.html`);

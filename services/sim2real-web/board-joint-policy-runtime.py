@@ -12,6 +12,13 @@ Observation contract (61 values):
 last_action(14), command(13)``.  Every sensor value is sourced from the
 atomic telemetry snapshot and carries a monotonic sample timestamp.  Missing,
 stale, non-finite, or misordered joints fail closed before inference.
+
+Explicit ``command={vx, vy, wz, ttlMs?}`` uses m/s, m/s and rad/s. Only the
+first three command slots are populated; head/body pose stays zero. Commands
+have a monotonic lease bounded by the adapter watchdog and 2000 ms. Legacy
+``direction`` remains ignored for joints, so an old start request still asks
+for standing. Motion requires a non-mock ``provenance.kind=real`` profile;
+loading/inference alone never establishes hardware calibration.
 """
 
 import hashlib
@@ -132,6 +139,52 @@ def _finite(value):
     return number if math.isfinite(number) else None
 
 
+def _command_limit(key, default, hard_limit):
+    values = [_finite(section.get(key, default)) for section in (SAFETY, ACTUATOR)]
+    if any(value is None or value < 0 for value in values):
+        return 0.0
+    return min(hard_limit, *values)
+
+
+COMMAND_MAX_LINEAR = _command_limit("maxLinear", 0.05, 0.3)
+COMMAND_MAX_ANGULAR = _command_limit("maxAngular", 1.0, 1.0)
+COMMAND_MAX_TTL_MS = 2000
+COMMAND_DEFAULT_TTL_MS = min(COMMAND_MAX_TTL_MS, max(1, int(
+    _finite(ACTUATOR.get("watchdogMs", 500)) or 500
+)))
+
+
+def _prepare_command(command, issued_monotonic_ns=None):
+    if not isinstance(command, dict) or set(command) - {"vx", "vy", "wz", "ttlMs"}:
+        raise ValueError("invalid-command")
+    values = [command.get(axis) for axis in ("vx", "vy", "wz")]
+    if any(isinstance(value, bool) or not isinstance(value, (int, float)) or _finite(value) is None
+           for value in values):
+        raise ValueError("invalid-command")
+    ttl = command.get("ttlMs", COMMAND_DEFAULT_TTL_MS)
+    if isinstance(ttl, bool) or not isinstance(ttl, int) or not 1 <= ttl <= COMMAND_MAX_TTL_MS:
+        raise ValueError("invalid-command")
+    ttl = min(ttl, COMMAND_DEFAULT_TTL_MS)
+    now = time.monotonic_ns()
+    issued = now if issued_monotonic_ns is None else issued_monotonic_ns
+    if isinstance(issued, bool) or not isinstance(issued, int) or issued <= 0 or issued > now:
+        raise ValueError("invalid-command-timestamp")
+    deadline = issued + ttl * 1_000_000
+    if now >= deadline:
+        raise ValueError("command-expired")
+    vx, vy, wz = (float(value) for value in values)
+    speed = math.hypot(vx, vy)
+    if speed > COMMAND_MAX_LINEAR:
+        ratio = COMMAND_MAX_LINEAR / speed
+        vx, vy = vx * ratio, vy * ratio
+    return [vx, vy, max(-COMMAND_MAX_ANGULAR, min(COMMAND_MAX_ANGULAR, wz))], ttl, deadline
+
+
+def _calibrated_profile():
+    provenance = ADAPTER.get("provenance") or {}
+    return isinstance(provenance, dict) and provenance.get("kind") == "real" and provenance.get("mock") is False
+
+
 def _sample_fresh(sensor, now_ns=None):
     if not isinstance(sensor, dict):
         return False
@@ -168,7 +221,7 @@ def _component(mapping, *keys):
 
 
 def build_joint_observation(snapshot, joint_names=JOINT_NAMES, home_position=HOME_POSITION,
-                            last_action=None, command_size=COMMAND_VECTOR_SIZE):
+                            last_action=None, command_size=COMMAND_VECTOR_SIZE, command=None):
     """Build the exact MicroDuck 61D vector, or ``None`` on any bad input."""
     if len(joint_names) != 14 or len(home_position) != 14:
         return None
@@ -214,8 +267,13 @@ def build_joint_observation(snapshot, joint_names=JOINT_NAMES, home_position=HOM
     joint_velocity = [by_name[name][1] for name in joint_names]
     previous = list(last_action or ())[:14]
     previous += [0.0] * (14 - len(previous))
-    command = [0.0] * max(0, int(command_size))
-    observation = list(gyro_values) + list(gravity) + joint_error + joint_velocity + previous + command
+    twist = [0.0] * 3 if command is None else list(command)
+    if len(twist) != 3 or any(isinstance(value, bool) or _finite(value) is None for value in twist):
+        return None
+    if command_size != 13:
+        return None
+    command_vector = [float(value) for value in twist] + [0.0] * (command_size - 3)
+    observation = list(gyro_values) + list(gravity) + joint_error + joint_velocity + previous + command_vector
     if len(observation) != EXPECTED_OBS_DIM:
         return None
     if not all(math.isfinite(float(value)) for value in observation):
@@ -275,9 +333,29 @@ class JointPolicyRuntime:
         self._started_at = None
         self._stopped_at = None
         self._stop_reason = "never-started"
+        self._command = [0.0, 0.0, 0.0]
+        self._command_deadline_ns = None
+        self._command_ttl_ms = 0
+        self._command_expired = False
+
+    def _clear_command_locked(self, expired=False):
+        self._command = [0.0, 0.0, 0.0]
+        self._command_deadline_ns = None
+        self._command_ttl_ms = 0
+        self._command_expired = expired
+
+    def _expire_command_locked(self):
+        if self._command_deadline_ns is not None and time.monotonic_ns() >= self._command_deadline_ns:
+            self._clear_command_locked(expired=True)
+
+    def _command_vector(self):
+        with self._lock:
+            self._expire_command_locked()
+            return list(self._command)
 
     def snapshot(self):
         with self._lock:
+            self._expire_command_locked()
             return {
                 "ok": True,
                 "ts": time.time(),
@@ -294,6 +372,12 @@ class JointPolicyRuntime:
                 "jointNames": list(JOINT_NAMES),
                 "controlHz": int(DECISION_HZ),
                 "controlPeriodSeconds": 1.0 / DECISION_HZ,
+                "command": dict(zip(("vx", "vy", "wz"), self._command)),
+                "commandTtlMs": self._command_ttl_ms,
+                "commandExpired": self._command_expired,
+                "commandLimits": {"linearMps": COMMAND_MAX_LINEAR, "angularRadSec": COMMAND_MAX_ANGULAR,
+                                  "maxTtlMs": COMMAND_DEFAULT_TTL_MS},
+                "profileMotionEligible": _calibrated_profile(),
                 "published": self._published,
                 "inferMs": round(self._infer_ms, 2),
                 "model": self._model_meta,
@@ -323,6 +407,13 @@ class JointPolicyRuntime:
                 "detail": result.get("detail"),
                 "at": round(time.time(), 3),
             }
+            if op == "infer_batch" and result.get("ok"):
+                self._last_op.update({
+                    "actions": result.get("actions"),
+                    "count": result.get("count"),
+                    "batchPath": result.get("path"),
+                    "elapsedMs": result.get("elapsedMs"),
+                })
 
     def bind_ros(self):
         try:
@@ -340,7 +431,7 @@ class JointPolicyRuntime:
             return {"ok": False, "error": "ros-unavailable", "detail": str(exc)[:200]}
 
     def load(self, model_path):
-        if len(JOINT_NAMES) != 14 or len(HOME_POSITION) != 14 or EXPECTED_OBS_DIM != 61 or EXPECTED_ACTION_DIM != 14:
+        if len(JOINT_NAMES) != 14 or len(HOME_POSITION) != 14 or EXPECTED_OBS_DIM != 61 or EXPECTED_ACTION_DIM != 14 or COMMAND_VECTOR_SIZE != 13:
             return {"ok": False, "error": "joint-profile-contract-invalid"}
         history_error = observation_history_error()
         if history_error is not None:
@@ -412,6 +503,7 @@ class JointPolicyRuntime:
                 self._model_meta = meta
                 self._state = "ready"
                 self._last_error = None
+                self._clear_command_locked()
             return {"ok": True, "model": meta}
         except ImportError:
             return {"ok": False, "error": "onnxruntime-not-installed"}
@@ -420,13 +512,74 @@ class JointPolicyRuntime:
                 self._last_error = str(exc)[:200]
             return {"ok": False, "error": "model-load-failed", "detail": str(exc)[:200]}
 
-    def start(self, _direction=0.0, _goal_x=None, _goal_y=None):
+    BATCH_MAX_SAMPLES = 64
+
+    def infer_batch(self, observations):
+        """Pure compute only: no ROS, command updates, history, or live counters.
+
+        Callers compose every full observation/history row themselves. A
+        fixed batch-one model is evaluated once per independent row; dynamic
+        exports receive one batch. Never return a partial/truncated action.
+        """
+        import numpy as np
+
+        with self._lock:
+            state, model, input_name = self._state, self._model, self._input_name
+        if state != "ready" or model is None:
+            return {"ok": False, "error": "model-not-ready", "state": state}
+        try:
+            rows = np.asarray(observations, dtype=np.float32)
+        except (TypeError, ValueError, OverflowError):
+            return {"ok": False, "error": "observations-not-numeric"}
+        if rows.ndim != 2:
+            return {"ok": False, "error": "observations-not-2d", "shape": list(rows.shape)}
+        count, width = rows.shape
+        if not 1 <= count <= self.BATCH_MAX_SAMPLES:
+            return {"ok": False, "error": "observations-count-out-of-range", "count": count,
+                    "min": 1, "max": self.BATCH_MAX_SAMPLES}
+        expected_width = EXPECTED_OBS_DIM * OBS_HISTORY_FRAMES
+        if width != expected_width:
+            return {"ok": False, "error": "observation-dimension-mismatch",
+                    "expected": expected_width, "actual": width}
+        finite_rows = np.isfinite(rows).all(axis=1)
+        if not bool(finite_rows.all()):
+            return {"ok": False, "error": "observations-non-finite", "sample": int(np.argmin(finite_rows))}
+        started = time.monotonic()
+        dynamic_batch = not isinstance(model.get_inputs()[0].shape[0], int)
+        outputs = np.zeros((count, EXPECTED_ACTION_DIM), dtype=np.float32)
+        try:
+            batches = [(0, count)] if dynamic_batch else [(index, index + 1) for index in range(count)]
+            for begin, end in batches:
+                result = np.asarray(model.run(None, {input_name: rows[begin:end]})[0], dtype=np.float32)
+                if result.shape != (end - begin, EXPECTED_ACTION_DIM):
+                    return {"ok": False, "error": "model-output-dim-mismatch", "sample": begin}
+                outputs[begin:end] = result
+        except Exception as exc:  # noqa: BLE001 - reject the complete compute request
+            return {"ok": False, "error": "inference-failed", "detail": str(exc)[:200]}
+        finite_rows = np.isfinite(outputs).all(axis=1)
+        if not bool(finite_rows.all()):
+            return {"ok": False, "error": "action-non-finite", "sample": int(np.argmin(finite_rows))}
+        return {"ok": True, "actions": outputs.tolist(), "count": count,
+                "path": "dynamic-batch" if dynamic_batch else "per-sample",
+                "elapsedMs": round((time.monotonic() - started) * 1000.0, 3)}
+
+    def start(self, _direction=0.0, _goal_x=None, _goal_y=None, command=None, issued_monotonic_ns=None):
+        if not _calibrated_profile():
+            return {"ok": False, "error": "joint-profile-not-calibrated"}
+        try:
+            prepared = _prepare_command(command, issued_monotonic_ns) if command is not None else ([0.0] * 3, 0, None)
+        except ValueError as exc:
+            with self._lock:
+                self._clear_command_locked()
+            return {"ok": False, "error": str(exc)}
         with self._lock:
             if self._model is None:
                 return {"ok": False, "error": "no-model", "state": self._state}
             if self._publisher is None:
                 return {"ok": False, "error": "ros-unavailable", "state": self._state}
             if self._state == "running":
+                self._command, self._command_ttl_ms, self._command_deadline_ns = prepared
+                self._command_expired = False
                 return {"ok": True, "state": "running"}
             if self._state != "ready":
                 return {"ok": False, "error": "not-ready", "state": self._state}
@@ -446,7 +599,27 @@ class JointPolicyRuntime:
             self._started_at = time.time()
             self._stopped_at = None
             self._stop_reason = None
+            self._command, self._command_ttl_ms, self._command_deadline_ns = prepared
+            self._command_expired = False
         threading.Thread(target=self._loop, daemon=True).start()
+        return {"ok": True, "state": "running"}
+
+    def set_command(self, command, issued_monotonic_ns=None):
+        try:
+            prepared = _prepare_command(command, issued_monotonic_ns)
+        except ValueError as exc:
+            with self._lock:
+                self._clear_command_locked(expired=str(exc) == "command-expired")
+            return {"ok": False, "error": str(exc)}
+        with self._lock:
+            if not _calibrated_profile():
+                self._clear_command_locked()
+                return {"ok": False, "error": "joint-profile-not-calibrated"}
+            if self._state != "running":
+                self._clear_command_locked()
+                return {"ok": False, "error": "not-running"}
+            self._command, self._command_ttl_ms, self._command_deadline_ns = prepared
+            self._command_expired = False
         return {"ok": True, "state": "running"}
 
     def stop(self, reason="operator-stop"):
@@ -456,6 +629,7 @@ class JointPolicyRuntime:
             self._stop_flag.set()
             self._stopped_at = time.time()
             self._stop_reason = str(reason or "operator-stop")[:120]
+            self._clear_command_locked()
         if was_running:
             self._publish_target(self._last_target or HOME_POSITION)
         self._write_state()
@@ -475,6 +649,7 @@ class JointPolicyRuntime:
             self._stop_flag.set()
             self._stopped_at = time.time()
             self._stop_reason = "fault:" + str(message)[:60]
+            self._clear_command_locked()
         self._publish_target(self._last_target or HOME_POSITION)
         self._write_state()
 
@@ -519,8 +694,10 @@ class JointPolicyRuntime:
             started = time.time()
             try:
                 telemetry = _read_snapshot()
+                command = self._command_vector()
                 observation = build_joint_observation(
-                    telemetry, JOINT_NAMES, HOME_POSITION, self._last_action, COMMAND_VECTOR_SIZE
+                    telemetry, JOINT_NAMES, HOME_POSITION, self._last_action, COMMAND_VECTOR_SIZE,
+                    command=command
                 )
                 if observation is None:
                     # Hold the last bounded target while sensors recover. No
@@ -538,18 +715,46 @@ class JointPolicyRuntime:
                     action, HOME_POSITION, ACTION_SCALE, self._last_target,
                     MAX_JOINT_STEP, MAX_JOINT_VELOCITY, DECISION_HZ
                 )
-                self._publish_target(target)
                 with self._lock:
-                    self._last_action = [max(-1.0, min(1.0, value)) for value in action]
-                    self._published += 1
-                    elapsed = (time.time() - t0) * 1000.0
-                    self._infer_ms = elapsed if not self._infer_ms else 0.9 * self._infer_ms + 0.1 * elapsed
+                    # Stop may have arrived during ONNX inference. It must
+                    # prevent a late action from superseding the held target.
+                    if self._state != "running" or self._stop_flag.is_set():
+                        return
+                    self._expire_command_locked()
+                    # An inference result for a replaced/expired velocity
+                    # request is stale even if its sensor frame was fresh.
+                    if self._command == command:
+                        self._publish_target(target)
+                        self._last_action = [max(-1.0, min(1.0, value)) for value in action]
+                        self._published += 1
+                        elapsed = (time.time() - t0) * 1000.0
+                        self._infer_ms = elapsed if not self._infer_ms else 0.9 * self._infer_ms + 0.1 * elapsed
                 self._spin_once()
             except Exception as exc:  # noqa: BLE001 - any control error stops policy
                 self._fault("loop: " + str(exc))
                 return
             self._write_state()
             time.sleep(max(0.0, period - (time.time() - started)))
+
+
+def apply_request(runtime, request):
+    op = request.get("op")
+    if op in ("start", "command") and request.get("command") is not None and "issuedMonotonicNs" not in request:
+        return {"ok": False, "error": "command-timestamp-required"}
+    if op == "load":
+        return runtime.load(str(request.get("path", "")))
+    if op == "start":
+        return runtime.start(request.get("direction", 0.0), request.get("goalX"), request.get("goalY"),
+                             command=request.get("command"), issued_monotonic_ns=request.get("issuedMonotonicNs"))
+    if op == "command":
+        return runtime.set_command(request.get("command"), request.get("issuedMonotonicNs"))
+    if op == "infer_batch":
+        return runtime.infer_batch(request.get("observations"))
+    if op == "stop":
+        return runtime.stop(str(request.get("reason", "operator-stop")))
+    if op == "reset":
+        return runtime.reset()
+    return None if op == "snapshot" else {"ok": False, "error": "unknown-op"}
 
 
 def _serve(runtime):
@@ -567,19 +772,10 @@ def _serve(runtime):
             request = json.loads(raw)
         except ValueError:
             continue
+        if not isinstance(request, dict):
+            continue
         op = request.get("op")
-        if op == "load":
-            result = runtime.load(str(request.get("path", "")))
-        elif op == "start":
-            result = runtime.start(request.get("direction", 0.0), request.get("goalX"), request.get("goalY"))
-        elif op == "stop":
-            result = runtime.stop(str(request.get("reason", "operator-stop")))
-        elif op == "reset":
-            result = runtime.reset()
-        elif op == "snapshot":
-            result = None
-        else:
-            result = {"ok": False, "error": "unknown-op"}
+        result = apply_request(runtime, request)
         if result is not None:
             runtime._record_op(op, request, result)
         runtime._write_state()

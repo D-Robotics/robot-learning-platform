@@ -133,6 +133,15 @@ try {
     path.join('dist-server', 'services', 'sim2real-web', 'local-board-agent.mjs'),
   );
 
+  copyFile(
+    path.join('services', 'mujoco-web', 'microduck-community-overlay.js'),
+    path.join('dist-server', 'services', 'mujoco-web', 'microduck-community-overlay.js'),
+  );
+  copyFile(
+    path.join('services', 'mujoco-web', 'community', 'microduck-wechat.png'),
+    path.join('dist-server', 'services', 'mujoco-web', 'community', 'microduck-wechat.png'),
+  );
+
   // The web installer serves this dependency-free agent to user machines.
   copyFile(
     path.join('scripts', 'local-gpu-agent.mjs'),

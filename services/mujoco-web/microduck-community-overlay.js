@@ -349,12 +349,15 @@
     timer: null,
     uiTimer: null,
     observer: null,
+    generation: 0,
+    sessions: new Map(),
   };
 
   function copyNumeric(value) {
     if (!value || typeof value.length !== 'number') return null;
     try {
-      return Array.from(value, (item) => (Number.isFinite(Number(item)) ? Number(item) : 0));
+      const values = Array.from(value, Number);
+      return values.every(Number.isFinite) ? values : null;
     } catch {
       return null;
     }
@@ -362,47 +365,92 @@
 
   function recorderReady() {
     const current = runtime();
-    return Boolean(current && typeof current.buildObs === 'function' && current.lastAction?.length);
+    return Boolean(
+      current?.sessions &&
+      Object.values(current.sessions).some(
+        (session) =>
+          typeof session?.run === 'function' &&
+          session.inputNames?.length === 1 &&
+          session.outputNames?.length === 1,
+      ),
+    );
   }
 
-  function recordSample() {
+  function recordSample(sample, action) {
     if (!recorder.active) return;
-    const current = runtime();
-    if (!current || typeof current.buildObs !== 'function' || !current.lastAction) return;
     if (recorder.samples.length >= RECORDER_MAX_STEPS) {
       stopRecording('已达到 10 分钟上限');
       return;
     }
-    try {
-      const observation = copyNumeric(current.buildObs());
-      const action = copyNumeric(current.lastAction);
-      if (!observation || !action) return;
-      const sample = {
-        step: recorder.samples.length,
-        time: Number(((performance.now() - recorder.startedAt) / 1000).toFixed(4)),
-        observation,
-        action,
-        command: copyNumeric(current.cmd),
-        mode: typeof current.mode === 'string' ? current.mode : null,
-        locomotion: typeof current.loco === 'string' ? current.loco : null,
+    if (sample?.observation?.length !== 61 || action?.length !== 14) return;
+    recorder.samples.push({
+      ...sample,
+      pairing: 'policy-inference-v1',
+      step: recorder.samples.length,
+      action,
+    });
+  }
+
+  // Intercept only the public session method: copy its actual input tensor
+  // before awaiting inference and pair it with that call's output. Polling
+  // buildObs()/lastAction after a tick leaks the label into last-action slots.
+  function hookRecorderSessions() {
+    const current = runtime();
+    for (const session of Object.values(current?.sessions || {})) {
+      if (
+        !session ||
+        recorder.sessions.has(session) ||
+        typeof session.run !== 'function' ||
+        session.inputNames?.length !== 1 ||
+        session.outputNames?.length !== 1
+      )
+        continue;
+      const original = session.run;
+      const wrapped = async function (feeds, ...args) {
+        const generation = recorder.generation;
+        const observation = recorder.active
+          ? copyNumeric(feeds?.[session.inputNames[0]]?.data)
+          : null;
+        const sample =
+          observation?.length === 61
+            ? {
+                time: Number(((performance.now() - recorder.startedAt) / 1000).toFixed(4)),
+                observation,
+                command: observation.slice(48, 61),
+                mode: typeof current.mode === 'string' ? current.mode : null,
+                locomotion: typeof current.loco === 'string' ? current.loco : null,
+                qpos: copyNumeric(current.data?.qpos)?.slice(0, 7),
+                qvel: copyNumeric(current.data?.qvel)?.slice(0, 6),
+              }
+            : null;
+        const outputs = await original.call(this, feeds, ...args);
+        if (sample && recorder.active && generation === recorder.generation) {
+          recordSample(sample, copyNumeric(outputs?.[session.outputNames[0]]?.data));
+        }
+        return outputs;
       };
-      // qpos/qvel are useful for debugging and reward design, but are not
-      // required by the policy contract.  Keep them bounded to the base state
-      // so a long browser recording remains reasonably small.
-      const qpos = copyNumeric(current.data?.qpos);
-      const qvel = copyNumeric(current.data?.qvel);
-      if (qpos) sample.qpos = qpos.slice(0, 7);
-      if (qvel) sample.qvel = qvel.slice(0, 6);
-      recorder.samples.push(sample);
-    } catch (error) {
-      console.warn('[microduck recorder] sample failed', error);
+      try {
+        session.run = wrapped;
+        if (session.run === wrapped) recorder.sessions.set(session, { original, wrapped });
+      } catch (error) {
+        console.warn('[microduck recorder] inference capture unavailable', error);
+      }
     }
+    return recorder.sessions.size > 0;
+  }
+
+  function unhookRecorderSessions() {
+    for (const [session, { original, wrapped }] of recorder.sessions) {
+      if (session.run === wrapped) session.run = original;
+    }
+    recorder.sessions.clear();
   }
 
   function recordingHeader() {
     const first = recorder.samples[0] || {};
     return {
       format: 'microduck-trajectory-v1',
+      pairing: 'policy-inference-v1',
       source: 'browser-microduck',
       contractId: 'microduck-policy-v1',
       observationSize: Array.isArray(first.observation) ? first.observation.length : 61,
@@ -473,8 +521,10 @@
   function stopRecording(reason = '已停止') {
     if (!recorder.active && !recorder.timer) return;
     recorder.active = false;
+    recorder.generation += 1;
     if (recorder.timer) clearInterval(recorder.timer);
     recorder.timer = null;
+    unhookRecorderSessions();
     recorder.last = recorder.samples.length ? recordingHeader() : null;
     notifyParentRecordingReady();
     const panel = document.getElementById(RECORDER_PANEL_ID);
@@ -502,13 +552,14 @@
   function startRecording() {
     if (!recorderReady()) return false;
     if (recorder.active) return true;
+    if (!hookRecorderSessions()) return false;
     recorder.samples = [];
     recorder.events = [];
     recorder.last = null;
     recorder.active = true;
+    recorder.generation += 1;
     recorder.startedAt = performance.now();
-    recorder.timer = setInterval(recordSample, 20);
-    recordSample();
+    recorder.timer = setInterval(hookRecorderSessions, 20);
     const panel = document.getElementById(RECORDER_PANEL_ID);
     panel?.classList.add('is-recording');
     panel

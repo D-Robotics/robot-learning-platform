@@ -7,6 +7,52 @@ import {
 } from './sim2real.js';
 
 describe('training spec engine routing', () => {
+  it.each(['smoke', 'low-vram', 'standard', 'high-vram'])(
+    'defaults BC to 100 epochs for %s instead of an RL iteration budget',
+    (profile) => {
+      const result = normalizeTrainingSpec({ profile, engine: 'offline-bc' });
+      expect(result.errors).toEqual([]);
+      expect(result.spec).toMatchObject({ engine: 'offline-bc', maxIterations: 100, numEnvs: 1 });
+      expect(result.spec?.algorithm).toBeUndefined();
+    },
+  );
+  it.each([1, 100, 10_000])('preserves an explicit legal BC budget of %i', (maxIterations) => {
+    const result = normalizeTrainingSpec({ engine: 'offline-bc', maxIterations });
+    expect(result.errors).toEqual([]);
+    expect(result.spec?.maxIterations).toBe(maxIterations);
+  });
+  it.each([0, -1, 1.2, 10_001, 100_000, null, true, '100'])(
+    'rejects invalid BC epoch budget %s with a useful error',
+    (maxIterations) => {
+      const result = normalizeTrainingSpec({ engine: 'offline-bc', maxIterations });
+      expect(result.spec).toBeUndefined();
+      expect(result.errors[0]).toContain('1 到 10000');
+    },
+  );
+  it.each([{ algorithm: 'ppo' }, { algorithm: 'sac' }, { numEnvs: 1 }, { numEnvs: 64 }])(
+    'refuses irrelevant RL knobs for BC rather than silently ignoring %j',
+    (knob) => {
+      const result = normalizeTrainingSpec({ engine: 'offline-bc', ...knob });
+      expect(result.spec).toBeUndefined();
+      expect(result.errors[0]).toContain('offline-bc');
+    },
+  );
+  it('preserves other engines and their explicit and profile budgets', () => {
+    for (const profile of ['smoke', 'low-vram', 'standard', 'high-vram'] as const) {
+      expect(normalizeTrainingSpec({ profile, engine: 'starter-ppo' }).spec).toEqual({
+        ...trainingSpecForProfile(profile),
+        engine: 'starter-ppo',
+      });
+    }
+    expect(
+      normalizeTrainingSpec({
+        engine: 'starter-ppo',
+        maxIterations: 100_000,
+        numEnvs: 64,
+        algorithm: 'sac',
+      }).spec,
+    ).toMatchObject({ maxIterations: 100_000, numEnvs: 64, algorithm: 'sac' });
+  });
   it('accepts the engine allowlist and rejects unknown ids at submission time', () => {
     const mjx = normalizeTrainingSpec({ profile: 'smoke', engine: 'mjx-ppo' });
     expect(mjx.errors).toEqual([]);
@@ -41,6 +87,7 @@ describe('training spec engine routing', () => {
       'visual-ppo',
       'dm-control-ppo',
       'mjlab-rsl-rl',
+      'offline-bc',
       'act',
       'diffusion-policy',
       'smolvla',

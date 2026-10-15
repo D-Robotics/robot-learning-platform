@@ -281,6 +281,21 @@ class OnnxExportTest(unittest.TestCase):
                 os.path.exists(target), "an unverified ONNX file was kept"
             )
 
+    def test_nonfinite_equivalence_cannot_pass_a_nan_tolerance_comparison(self):
+        from unittest import mock
+
+        x, y = nonlinear_dataset(rows=40)
+        model, _ = train_bc.fit(
+            x, y, [8], "tanh", epochs=2, lr=1e-3, batch_size=16,
+            seed=0, val_fraction=0.2,
+        )
+        with tempfile.TemporaryDirectory(prefix="offline-bc-nan-equivalence-") as workdir:
+            target = pathlib.Path(workdir, "policy.onnx")
+            with mock.patch.object(train_bc, "forward_float32", return_value=np.full_like(y, np.nan)):
+                with self.assertRaisesRegex(ValueError, "non-finite outputs"):
+                    train_bc.export_onnx(model, target, x)
+            self.assertFalse(target.exists(), "NaN difference was accepted as verified ONNX")
+
 
 class ModelFormatTest(unittest.TestCase):
     def test_model_records_format_dims_and_provenance(self):
@@ -320,6 +335,167 @@ class ModelFormatTest(unittest.TestCase):
 class EngineModeTest(unittest.TestCase):
     """The file protocol the provenance gate drives."""
 
+    def _request(self, rows=40):
+        # Offset observations make the saved normalization an independent
+        # witness: generating the old [-1, 1] smoke rows cannot pass this.
+        transitions = [
+            {"observation": [10.0 + i / 10, 20.0 - i / 20],
+             "action": [float(np.sin(i / 10))]}
+            for i in range(rows)
+        ]
+        jsonl = "".join(json.dumps(row, separators=(",", ":")) + "\n" for row in transitions)
+        return {
+            "schemaVersion": 1,
+            "contract": {"id": "recorded-policy", "observationSize": 2, "actionSize": 1},
+            "training": {"profile": "smoke", "maxIterations": 8},
+            "demonstrations": {
+                "schemaVersion": 1, "sourceRunId": "recorded-1", "telemetryRevision": "a" * 64,
+                "source": "browser", "sha256": hashlib.sha256(jsonl.encode()).hexdigest(),
+                "jsonl": jsonl,
+            },
+        }
+
+    def _invoke(self, request, workdir):
+        request_path = pathlib.Path(workdir) / "request.json"
+        result_path = pathlib.Path(workdir) / "result.json"
+        request_path.write_text(json.dumps(request), encoding="utf-8")
+        run = subprocess.run(
+            [sys.executable, ENGINE], capture_output=True, text=True, timeout=300,
+            cwd=workdir,
+            env={**os.environ, "RDK_SIM2REAL_REQUEST_FILE": str(request_path),
+                 "RDK_SIM2REAL_RESULT_FILE": str(result_path)},
+        )
+        result = json.loads(result_path.read_text()) if result_path.exists() else None
+        return run, result
+
+    @unittest.skipUnless(ONNX_AVAILABLE, "file protocol requires verified ONNX toolchain")
+    def test_recorded_rows_are_consumed_and_deliverable_is_worker_compatible(self):
+        request = self._request()
+        with tempfile.TemporaryDirectory(prefix="offline-bc-recorded-") as workdir:
+            pathlib.Path(workdir, "job.json").write_text('{"status":"running"}')
+            run, result = self._invoke(request, workdir)
+            self.assertEqual(run.returncode, 0, run.stderr)
+            self.assertFalse(result["dataset"]["synthetic"])
+            self.assertEqual(result["dataset"]["source"], "browser")
+            self.assertEqual(result["dataset"]["provenance"]["sha256"],
+                             request["demonstrations"]["sha256"])
+            self.assertEqual(result["dataset"]["provenance"]["sourceRunId"], "recorded-1")
+            self.assertEqual(result["dataset"]["provenance"]["telemetryRevision"], "a" * 64)
+            model = json.loads(pathlib.Path(workdir, "model.json").read_text())
+            xs = np.asarray([json.loads(line)["observation"]
+                             for line in request["demonstrations"]["jsonl"].splitlines()])
+            train_idx, _ = train_bc.split_dataset(len(xs), 0.2, 0)
+            np.testing.assert_allclose(model["normalization"]["mean"], xs[train_idx].mean(axis=0))
+            metrics = result["metrics"]
+            self.assertFalse(metrics["syntheticData"])
+            self.assertTrue(metrics["contractValid"])
+            self.assertEqual(metrics["trainingDataSha256"], request["demonstrations"]["sha256"])
+            self.assertEqual(metrics["trainingRows"] + metrics["validationRows"], len(xs))
+            self.assertEqual(metrics["epochs"], 8)
+            self.assertLess(metrics["trainLoss"], metrics["initialTrainLoss"])
+            self.assertEqual(result["dataset"]["validationKind"], "seeded-row-split")
+            self.assertFalse(result["deployable"])
+            self.assertEqual(result["artifact"]["artifactRef"], "artifact://policy.onnx")
+            self.assertEqual(result["artifact"]["kind"], "source")
+            self.assertEqual(result["artifact"]["format"], "onnx")
+            self.assertFalse(result["artifact"]["deployable"])
+            policy = pathlib.Path(workdir, "policy.onnx").read_bytes()
+            policy_sha256 = hashlib.sha256(policy).hexdigest()
+            self.assertEqual(result["artifact"]["artifactId"], "offline-bc-" + policy_sha256)
+            self.assertRegex(result["artifact"]["artifactId"], r"^[a-zA-Z0-9][a-zA-Z0-9._:-]{0,119}$")
+            self.assertEqual(result["artifact"]["sha256"], policy_sha256)
+            self.assertEqual(result["artifact"]["sizeBytes"], len(policy))
+            manifest = pathlib.Path(workdir, "SHA256SUMS").read_text()
+            self.assertNotIn("job.json", manifest)
+            self.assertNotIn("request.json", manifest)
+            self.assertNotIn("result.json", manifest)
+            for line in manifest.splitlines():
+                sha, name = line.split("  ")
+                self.assertEqual(sha, hashlib.sha256(pathlib.Path(workdir, name).read_bytes()).hexdigest())
+
+    def test_invalid_recordings_never_fall_back_to_synthetic_data(self):
+        mutations = {
+            "hash": lambda d: d.update(sha256="f" * 64),
+            "null": lambda d: None,
+            "source": lambda d: d.update(source="synthetic-smoke"),
+            "revision": lambda d: d.update(telemetryRevision=True),
+            "extra-field": lambda d: d.update(path="/tmp/untrusted.jsonl"),
+            "too-short": lambda d: d.update(jsonl=d["jsonl"].splitlines()[0] + "\n"),
+            "wrong-dim": lambda d: d.update(jsonl='{"observation":[1],"action":[0]}\n' * 40),
+            "nonfinite": lambda d: d.update(jsonl='{"observation":[NaN,1],"action":[0]}\n' * 40),
+            "finite-overflow": lambda d: d.update(jsonl='{"observation":[1e308,1e308],"action":[1e308]}\n' * 40),
+            "boolean": lambda d: d.update(jsonl='{"observation":[true,1],"action":[0]}\n' * 40),
+            "duplicate-key": lambda d: d.update(jsonl='{"observation":[1,2],"action":[0],"action":[1]}\n' * 40),
+            "extra-row-key": lambda d: d.update(jsonl='{"observation":[1,2],"action":[0],"path":"x"}\n' * 40),
+            "missing-lf": lambda d: d.update(jsonl=d["jsonl"].rstrip("\n")),
+            "oversize": lambda d: d.update(jsonl=" " * (train_bc.MAX_DEMONSTRATION_BYTES + 1)),
+        }
+        for name, mutate in mutations.items():
+            with self.subTest(name=name), tempfile.TemporaryDirectory(prefix="offline-bc-invalid-") as workdir:
+                request = self._request()
+                if name == "null":
+                    request["demonstrations"] = None
+                else:
+                    mutate(request["demonstrations"])
+                    if name not in ("hash", "source", "revision", "extra-field"):
+                        request["demonstrations"]["sha256"] = hashlib.sha256(
+                            request["demonstrations"]["jsonl"].encode()).hexdigest()
+                run, result = self._invoke(request, workdir)
+                self.assertEqual(run.returncode, 2, run.stderr)
+                self.assertIn("[offline-bc] FAIL", run.stderr)
+                self.assertNotIn("Traceback", run.stderr)
+                self.assertIsNone(result, "invalid recordings produced a successful result")
+                self.assertFalse(pathlib.Path(workdir, "model.json").exists())
+                self.assertFalse(pathlib.Path(workdir, "policy.onnx").exists())
+
+    def test_unverified_export_is_not_published_as_a_worker_deliverable(self):
+        from unittest import mock
+
+        request = self._request()
+        previous_cwd = pathlib.Path.cwd()
+        with tempfile.TemporaryDirectory(prefix="offline-bc-unverified-") as workdir:
+            request_path = pathlib.Path(workdir, "request.json")
+            result_path = pathlib.Path(workdir, "result.json")
+            request_path.write_text(json.dumps(request))
+            try:
+                os.chdir(workdir)
+                for export_state in ("skipped-no-onnx", "skipped-no-onnxruntime"):
+                    pathlib.Path("policy.onnx").write_bytes(b"unverified-graph")
+                    with mock.patch.dict(os.environ, {
+                        "RDK_SIM2REAL_REQUEST_FILE": str(request_path),
+                        "RDK_SIM2REAL_RESULT_FILE": str(result_path),
+                    }), mock.patch.object(train_bc, "export_onnx", return_value={
+                        "exported": export_state == "skipped-no-onnxruntime",
+                        "equivalence": export_state,
+                    }):
+                        with self.assertRaisesRegex(ValueError, "VERIFIED ONNX export"):
+                            train_bc.run_engine_mode()
+                    self.assertFalse(result_path.exists())
+                    self.assertFalse(pathlib.Path("model.json").exists())
+                    self.assertFalse(pathlib.Path("policy.onnx").exists())
+            finally:
+                os.chdir(previous_cwd)
+
+    def test_epoch_budget_rejects_invalid_or_excessive_direct_worker_requests(self):
+        for epochs in (True, "100", 0, -1, 1.5, 10001):
+            with self.subTest(epochs=epochs), tempfile.TemporaryDirectory(prefix="offline-bc-budget-") as workdir:
+                request = self._request()
+                request["training"]["maxIterations"] = epochs
+                run, result = self._invoke(request, workdir)
+                self.assertEqual(run.returncode, 2, run.stderr)
+                self.assertIn("[1, 10000] epochs", run.stderr)
+                self.assertIsNone(result)
+                self.assertFalse(pathlib.Path(workdir, "policy.onnx").exists())
+
+    @unittest.skipUnless(ONNX_AVAILABLE, "file protocol requires verified ONNX toolchain")
+    def test_twelve_recorded_rows_keep_eight_training_and_four_validation_rows(self):
+        with tempfile.TemporaryDirectory(prefix="offline-bc-minimum-") as workdir:
+            run, result = self._invoke(self._request(rows=12), workdir)
+            self.assertEqual(run.returncode, 0, run.stderr)
+            self.assertEqual(result["metrics"]["trainingRows"], 8)
+            self.assertEqual(result["metrics"]["validationRows"], 4)
+
+    @unittest.skipUnless(ONNX_AVAILABLE, "file protocol requires verified ONNX toolchain")
     def test_smoke_run_is_real_training_on_labeled_synthetic_data(self):
         with tempfile.TemporaryDirectory(prefix="offline-bc-engine-") as workdir:
             request = {

@@ -223,6 +223,7 @@ export type Sim2RealTrainingEngine =
   | 'visual-ppo'
   | 'dm-control-ppo'
   | 'mjlab-rsl-rl'
+  | 'offline-bc'
   | 'microduck-rl'
   | 'microduck-football'
   | 'act'
@@ -240,6 +241,25 @@ export interface Sim2RealTrainingSpec {
   algorithm?: Sim2RealTrainingAlgorithm;
   /** Engine the worker must route to; omitted keeps the platform default. */
   engine?: Sim2RealTrainingEngine;
+}
+
+/** Platform-frozen vector demonstrations; never a user-supplied local path or URL. */
+export interface Sim2RealDemonstrations {
+  schemaVersion: 1;
+  sourceRunId: string;
+  telemetryRevision: string;
+  source: 'browser' | 'import' | 'board-agent';
+  sha256: string;
+  jsonl: string;
+}
+
+/** Snapshot sent to a trainer. Actual consumption additionally requires the engine digest. */
+export interface Sim2RealTrainingData {
+  sourceRunId: string;
+  telemetryRevision: string;
+  source: Sim2RealDemonstrations['source'];
+  rows: number;
+  sha256: string;
 }
 
 export interface Sim2RealCheckpointRef {
@@ -398,8 +418,10 @@ export interface Sim2RealRunRecord {
   computeResourceId?: string;
   /** Optional project context for experiment history and comparison. */
   projectId?: string;
-  /** Dataset snapshots consumed by this run (immutable ids). */
+  /** Dataset versions associated with this run; metadata linkage does not prove byte consumption. */
   datasetIds?: string[];
+  /** Frozen demonstration identity; raw vectors remain in the source telemetry and worker request. */
+  trainingData?: Sim2RealTrainingData;
   /** First-class registry artifact ids produced or selected by this run. */
   artifactIds?: string[];
   /** Latest first-class evaluation associated with this run. */
@@ -843,6 +865,7 @@ const ALLOWED_TRAINING_ENGINES = new Set<Sim2RealTrainingEngine>([
   'visual-ppo',
   'dm-control-ppo',
   'mjlab-rsl-rl',
+  'offline-bc',
   'microduck-rl',
   'microduck-football',
   'act',
@@ -1011,28 +1034,59 @@ export function normalizeTrainingSpec(value: unknown): {
     errors.push('training.profile must be smoke, low-vram, standard, or high-vram');
   }
   const defaults = trainingSpecForProfile(selected);
-  const numEnvs = source.numEnvs == null ? defaults.numEnvs : Number(source.numEnvs);
-  const maxIterations =
-    source.maxIterations == null ? defaults.maxIterations : Number(source.maxIterations);
+  const engine = safeText(source.engine, 32);
+  const offlineBc = engine === 'offline-bc';
+  // BC budgets count dataset passes, not parallel-environment RL iterations.
+  // A missing budget must not inherit the profiles' 100,000 PPO iterations.
+  const numEnvs = offlineBc
+    ? 1
+    : source.numEnvs == null
+      ? defaults.numEnvs
+      : Number(source.numEnvs);
+  const maxIterations = offlineBc
+    ? source.maxIterations === undefined
+      ? 100
+      : Number(source.maxIterations)
+    : source.maxIterations == null
+      ? defaults.maxIterations
+      : Number(source.maxIterations);
   const rawVideo = source.video == null ? defaults.video : source.video;
+  if (offlineBc && Object.prototype.hasOwnProperty.call(source, 'numEnvs')) {
+    errors.push('offline-bc 使用单个示教数据集，不使用 training.numEnvs；请移除环境数参数。');
+  }
+  if (offlineBc && Object.prototype.hasOwnProperty.call(source, 'algorithm')) {
+    errors.push('offline-bc 使用行为克隆，不运行 PPO/SAC；请移除 training.algorithm。');
+  }
   if (!Number.isSafeInteger(numEnvs) || numEnvs < 1 || numEnvs > 16_384)
     errors.push('training.numEnvs must be an integer between 1 and 16384');
-  if (!Number.isSafeInteger(maxIterations) || maxIterations < 1 || maxIterations > 2_000_000)
+  if (
+    offlineBc &&
+    ((source.maxIterations !== undefined && typeof source.maxIterations !== 'number') ||
+      !Number.isSafeInteger(maxIterations) ||
+      maxIterations < 1 ||
+      maxIterations > 10_000)
+  )
+    errors.push(
+      'offline-bc 的 training.maxIterations 是训练轮数（epochs），必须是 1 到 10000 的整数；未指定时默认 100 轮。',
+    );
+  else if (
+    !offlineBc &&
+    (!Number.isSafeInteger(maxIterations) || maxIterations < 1 || maxIterations > 2_000_000)
+  )
     errors.push('training.maxIterations must be an integer between 1 and 2000000');
   if (typeof rawVideo !== 'boolean') errors.push('training.video must be boolean');
   const runName = safeText(source.runName, 80);
   if (runName && !/^[a-zA-Z0-9][a-zA-Z0-9._-]{0,79}$/.test(runName))
     errors.push('training.runName contains unsupported characters');
   const algorithm = safeText(source.algorithm, 12);
-  if (algorithm && algorithm !== 'ppo' && algorithm !== 'sac') {
+  if (!offlineBc && algorithm && algorithm !== 'ppo' && algorithm !== 'sac') {
     errors.push('training.algorithm must be ppo or sac');
   }
   // Same allowlist rationale as algorithm: a typo must 400 at submission
   // time instead of falling through to whichever engine the worker default.
-  const engine = safeText(source.engine, 32);
   if (engine && !ALLOWED_TRAINING_ENGINES.has(engine as Sim2RealTrainingEngine)) {
     errors.push(
-      'training.engine must be one of starter-ppo, mjx-ppo, visual-ppo, dm-control-ppo, mjlab-rsl-rl, microduck-rl, microduck-football, act, diffusion-policy, smolvla, isaac-lab',
+      'training.engine must be one of starter-ppo, mjx-ppo, visual-ppo, dm-control-ppo, mjlab-rsl-rl, offline-bc, microduck-rl, microduck-football, act, diffusion-policy, smolvla, isaac-lab',
     );
   }
   if (errors.length) return { errors };

@@ -522,6 +522,12 @@ function normalizeTelemetrySample(
     ...(observation.value ? { observation: observation.value } : {}),
     ...(action.value ? { action: action.value } : {}),
   };
+  if (source.pairing !== undefined) {
+    if (source.pairing !== 'policy-inference-v1') {
+      return { error: `samples[${index}].pairing must be policy-inference-v1` };
+    }
+    sample.pairing = source.pairing;
+  }
   if (source.reward != null) {
     const reward = Number(source.reward);
     if (!Number.isFinite(reward) || Math.abs(reward) > 1_000_000) {
@@ -1445,8 +1451,28 @@ export function registerSim2RealTelemetryRoutes(
       }
       const rawLimit = request.query.limit;
       const limit = Array.isArray(rawLimit) ? rawLimit[0] : rawLimit;
+      const includeSamples = request.query.includeSamples;
+      if (includeSamples !== undefined && includeSamples !== 'true' && includeSamples !== 'false') {
+        response.status(400).json({
+          ok: false,
+          code: 'SIM2REAL_TELEMETRY_QUERY_INVALID',
+          message: 'includeSamples 必须为 true 或 false。',
+        });
+        return;
+      }
       const telemetry = await listSim2RealTelemetry(runId, owner, Number(limit) || 200);
-      response.json({ ok: true, runId, telemetry, count: telemetry.length });
+      response.json({
+        ok: true,
+        runId,
+        telemetry:
+          includeSamples === 'false'
+            ? telemetry.map(({ samples, ...metadata }) => ({
+                ...metadata,
+                sampleCount: samples.length,
+              }))
+            : telemetry,
+        count: telemetry.length,
+      });
     }),
   );
   router.get(
@@ -1477,7 +1503,14 @@ export function registerSim2RealTelemetryRoutes(
       const frames = telemetry
         .flatMap((chunk) => chunk.samples || [])
         .filter((sample) => !sample.event);
-      response.json({ ok: true, runId, replay: evaluation.replay, evaluation, frames });
+      response.json({
+        ok: true,
+        runId,
+        replay: evaluation.replay,
+        evaluation,
+        frameCount: frames.length,
+        frames,
+      });
     }),
   );
 

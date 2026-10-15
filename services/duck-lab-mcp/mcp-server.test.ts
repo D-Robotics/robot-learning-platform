@@ -9,6 +9,11 @@ import type { AddressInfo } from 'node:net';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import { createDshCapabilityHandlers } from '../../server/agent-runtime/dsh-capability-handlers.js';
+import {
+  appendSim2RealTelemetry,
+  createSim2RealRun,
+} from '../../server/sim2real/sim2real-store.js';
+import { BUILTIN_MICRODUCK_MODEL } from '../../shared/sim2real.js';
 import { createSim2RealWebApp } from '../sim2real-web/server.js';
 import { createJsonRpcDispatcher, RPC_ERROR_CODES, serveStdio } from './jsonrpc.js';
 import {
@@ -501,8 +506,8 @@ describe('duck-lab-mcp protocol surface', () => {
       result?: { tools?: Array<Record<string, unknown>> };
     };
     const tools = response.result?.tools ?? [];
-    // The embedded catalog (56 rdk_* tools) plus rdk_platform_status.
-    expect(tools).toHaveLength(57);
+    // The embedded catalog (57 rdk_* tools) plus rdk_platform_status.
+    expect(tools).toHaveLength(58);
     const byName = new Map(tools.map((tool) => [tool.name as string, tool]));
     expect(byName.get('rdk_workspace_overview')).toMatchObject({
       annotations: { readOnlyHint: true, destructiveHint: false },
@@ -517,7 +522,10 @@ describe('duck-lab-mcp protocol surface', () => {
       annotations: { readOnlyHint: false, destructiveHint: false },
     });
     for (const tool of tools) {
-      expect(tool.inputSchema).toMatchObject({ type: 'object', additionalProperties: true });
+      expect(tool.inputSchema).toMatchObject({
+        type: 'object',
+        additionalProperties: tool.name !== 'rdk_training_submit',
+      });
       expect(typeof tool.description).toBe('string');
     }
   });
@@ -545,7 +553,7 @@ describe('duck-lab-mcp protocol surface', () => {
     }));
     const derived = new Map<string, { required: string[]; properties: Record<string, unknown> }>();
     const typeOf = (helper: string): unknown =>
-      helper === 'argNumber'
+      helper === 'argNumber' || helper === 'requiredNumberArg'
         ? { type: 'number' }
         : helper === 'argStringList'
           ? { type: 'array', items: { type: 'string' } }
@@ -559,24 +567,29 @@ describe('duck-lab-mcp protocol surface', () => {
       );
       const helpers = new Map<string, string>();
       for (const match of body.matchAll(
-        /(requiredArg|argText|argString|argNumber|argStringList)\(\s*(?:input|args)\s*,\s*['"]([a-zA-Z]+)['"]/g,
+        /(requiredArg|requiredNumberArg|argText|argString|argNumber|argStringList)\(\s*(?:input|args)\s*,\s*['"]([a-zA-Z][a-zA-Z0-9]*)['"]/g,
       )) {
         const previous = helpers.get(match[2]);
-        if (!previous || match[1] === 'requiredArg') helpers.set(match[2], match[1]);
+        if (!previous || ['requiredArg', 'requiredNumberArg'].includes(match[1]))
+          helpers.set(match[2], match[1]);
       }
-      for (const match of body.matchAll(/typeof (?:input|args)\.([a-zA-Z]+) === 'boolean'/g)) {
+      for (const match of body.matchAll(
+        /typeof (?:input|args)\.([a-zA-Z][a-zA-Z0-9]*) === 'boolean'/g,
+      )) {
         if (!helpers.has(match[1])) helpers.set(match[1], 'boolean');
       }
-      for (const match of body.matchAll(/(?:input|args)\.([a-zA-Z]+)(?![a-zA-Z])/g)) {
+      for (const match of body.matchAll(/(?:input|args)\.([a-zA-Z][a-zA-Z0-9]*)(?![a-zA-Z0-9])/g)) {
         if (!helpers.has(match[1])) helpers.set(match[1], 'unknown');
       }
       const required = [...helpers.entries()]
-        .filter(([, helper]) => helper === 'requiredArg')
+        .filter(([, helper]) => ['requiredArg', 'requiredNumberArg'].includes(helper))
         .map(([key]) => key);
       const properties: Record<string, unknown> = {};
       for (const [key, helper] of helpers) {
         properties[key] = helper === 'unknown' ? {} : typeOf(helper);
       }
+      // Station target selection is performed by the shared stationPath helper.
+      if (body.includes('stationPath(')) properties.deviceId = { type: 'string' };
       derived.set(marks[index].id, { required, properties });
     }
 
@@ -612,6 +625,7 @@ describe('duck-lab-mcp protocol surface', () => {
       properties: {
         numEnvs: { type: 'number' },
         datasetIds: { type: 'array' },
+        demonstrationRunId: { type: 'string' },
         video: { type: 'boolean' },
       },
     });
@@ -633,7 +647,388 @@ describe('duck-lab-mcp protocol surface', () => {
   });
 });
 
+describe('duck-lab-mcp user input semantics', () => {
+  function trainingProbe(runOverrides: Record<string, unknown> = {}) {
+    const requests: Array<{
+      url: string;
+      method: string;
+      body: Record<string, unknown> | null;
+    }> = [];
+    const probeFetch = (async (
+      url: Parameters<typeof fetch>[0],
+      init?: Parameters<typeof fetch>[1],
+    ) => {
+      const body = init?.body ? (JSON.parse(String(init.body)) as Record<string, unknown>) : null;
+      requests.push({ url: String(url), method: init?.method ?? 'GET', body });
+      const payload = String(url).endsWith('/overview')
+        ? { models: [{ id: 'fixture-first-model' }], devices: [] }
+        : {
+            run: {
+              id: 'fixture-run',
+              status: 'queued',
+              modelId: body?.modelId,
+              backend: body?.backend,
+              mock: false,
+              training: {
+                numEnvs: 4,
+                maxIterations: 6,
+                video: false,
+                ...(body?.training as object),
+              },
+              ...runOverrides,
+            },
+          };
+      return new Response(JSON.stringify(payload), {
+        headers: { 'content-type': 'application/json' },
+      });
+    }) as typeof fetch;
+    return { ...makeDispatcher('http://platform.test', { fetch: probeFetch }), requests };
+  }
+
+  it('rejects an invalid backend before creating a different local job', async () => {
+    const { call, requests } = trainingProbe();
+    const response = (await call('tools/call', {
+      name: 'rdk_training_submit',
+      arguments: { backend: 'locla' },
+    })) as { result?: { isError?: boolean; content?: Array<{ text?: string }> } };
+    expect(response.result?.isError).toBe(true);
+    expect(response.result?.content?.[0]?.text).toContain('backend');
+    expect(requests).toHaveLength(0);
+  });
+
+  it.each([
+    ['trajectoryPath', 'user-trajectory.jsonl'],
+    ['trajectoryFile', 'user-trajectory.jsonl'],
+    ['datasetPath', 'user-dataset'],
+    ['datasetUri', 'file:///user-dataset'],
+    ['dataPath', 'user-data.jsonl'],
+    ['resumeFrom', { checkpointId: 'checkpoint', artifactRef: 'artifact://fixture/checkpoint' }],
+    ['checkpointId', 'checkpoint'],
+    ['training', { profile: 'standard' }],
+  ])('rejects unsupported training input %s without silently dropping it', async (field, value) => {
+    const { call, requests } = trainingProbe();
+    const response = (await call('tools/call', {
+      name: 'rdk_training_submit',
+      arguments: { [field as string]: value },
+    })) as { result?: { isError?: boolean; content?: Array<{ text?: string }> } };
+    expect(response.result?.isError).toBe(true);
+    expect(response.result?.content?.[0]?.text).toContain(String(field));
+    expect(requests).toHaveLength(0);
+  });
+
+  it('preserves compatibility defaults while making the chosen configuration explicit', async () => {
+    const { call, requests } = trainingProbe();
+    const response = (await call('tools/call', {
+      name: 'rdk_training_submit',
+      arguments: {},
+    })) as { result?: { structuredContent?: Record<string, unknown> } };
+    const result = response.result?.structuredContent;
+    expect(result?.resolvedTraining).toMatchObject({
+      modelId: 'fixture-first-model',
+      backend: 'local',
+      profile: 'smoke',
+      engine: null,
+      numEnvs: 4,
+      maxIterations: 6,
+    });
+    expect(result?.defaultsApplied).toEqual(['modelId', 'backend', 'profile']);
+    expect(requests.filter((request) => request.method === 'POST')).toHaveLength(1);
+  });
+
+  it.each([
+    ['learningRate', 0.0001],
+    ['seed', 42],
+    ['customTuning', { epochs: 100 }],
+  ])(
+    'rejects undeclared training parameter %s instead of reporting false tuning success',
+    async (field, value) => {
+      const { call, requests } = trainingProbe();
+      const response = (await call('tools/call', {
+        name: 'rdk_training_submit',
+        arguments: { [field as string]: value },
+      })) as { result?: { isError?: boolean; content?: Array<{ text?: string }> } };
+      expect(response.result?.isError).toBe(true);
+      expect(response.result?.content?.[0]?.text).toContain(String(field));
+      expect(requests).toHaveLength(0);
+    },
+  );
+
+  it.each([
+    ['modelId', 123],
+    ['profile', 123],
+    ['modelId', ' '],
+    ['profile', null],
+    ['numEnvs', '16'],
+    ['maxIterations', 'bad-number'],
+    ['video', 'false'],
+  ])(
+    'rejects invalid training argument type/value %s without a fallback task',
+    async (field, value) => {
+      const { call, requests } = trainingProbe();
+      const response = (await call('tools/call', {
+        name: 'rdk_training_submit',
+        arguments: { [field as string]: value },
+      })) as { result?: { isError?: boolean; content?: Array<{ text?: string }> } };
+      expect(response.result?.isError).toBe(true);
+      expect(response.result?.content?.[0]?.text).toContain(String(field));
+      expect(requests).toHaveLength(0);
+    },
+  );
+
+  it.each(['user-dataset', [42], ['']])(
+    'rejects malformed dataset IDs instead of silently training without their lineage',
+    async (datasetIds) => {
+      const { call, requests } = trainingProbe();
+      const response = (await call('tools/call', {
+        name: 'rdk_training_submit',
+        arguments: { datasetIds },
+      })) as { result?: { isError?: boolean; content?: Array<{ text?: string }> } };
+      expect(response.result?.isError).toBe(true);
+      expect(response.result?.content?.[0]?.text).toContain('datasetIds');
+      expect(requests).toHaveLength(0);
+    },
+  );
+
+  it('does not claim registered dataset IDs were consumed by a real imitation trainer', async () => {
+    const { call } = trainingProbe();
+    const response = (await call('tools/call', {
+      name: 'rdk_training_submit',
+      arguments: {
+        modelId: 'user-model',
+        backend: 'local',
+        profile: 'standard',
+        engine: 'act',
+        datasetIds: ['user-dataset'],
+      },
+    })) as { result?: { structuredContent?: Record<string, unknown> } };
+    expect(response.result?.structuredContent?.dataUsage).toMatchObject({
+      datasetIds: ['user-dataset'],
+      consumptionVerified: false,
+    });
+    expect(response.result?.structuredContent?.syntheticData).toMatchObject({
+      confirmed: null,
+      builtinSmokePath: true,
+    });
+    expect(response.result?.structuredContent?.defaultsApplied).toEqual([]);
+  });
+
+  it('forwards a managed demonstration source without claiming queued data was consumed', async () => {
+    const snapshot = {
+      sourceRunId: 'recorded-run',
+      telemetryRevision: 'c'.repeat(64),
+      source: 'import',
+      rows: 140,
+      sha256: 'a'.repeat(64),
+    };
+    const { call, requests } = trainingProbe({ trainingData: snapshot });
+    const response = (await call('tools/call', {
+      name: 'rdk_training_submit',
+      arguments: {
+        modelId: 'user-model',
+        engine: 'offline-bc',
+        demonstrationRunId: 'recorded-run',
+        maxIterations: 100,
+      },
+    })) as { result?: { isError?: boolean; structuredContent?: Record<string, unknown> } };
+    expect(response.result?.isError).not.toBe(true);
+    expect(requests.find((entry) => entry.method === 'POST')?.body).toMatchObject({
+      demonstrationRunId: 'recorded-run',
+      training: { engine: 'offline-bc', maxIterations: 100 },
+    });
+    expect(response.result?.structuredContent?.dataUsage).toMatchObject({
+      trainingData: snapshot,
+      consumptionVerified: false,
+    });
+    expect(response.result?.structuredContent?.syntheticData).toMatchObject({
+      builtinSmokePath: false,
+      confirmed: null,
+    });
+  });
+
+  it.each([
+    ['completed', 'a', true],
+    ['completed', 'b', false],
+    ['running', 'a', false],
+  ])(
+    'requires completion and a matching consumed data digest (%s/%s)',
+    async (status, digest, verified) => {
+      const snapshot = {
+        sourceRunId: 'recorded-run',
+        telemetryRevision: 'c'.repeat(64),
+        source: 'import',
+        rows: 140,
+        sha256: 'a'.repeat(64),
+      };
+      const { call } = trainingProbe({
+        status,
+        trainingData: snapshot,
+        metrics: { syntheticData: false, trainingDataSha256: digest.repeat(64) },
+      });
+      const response = (await call('tools/call', {
+        name: 'rdk_training_submit',
+        arguments: { engine: 'offline-bc', demonstrationRunId: 'recorded-run' },
+      })) as { result?: { structuredContent?: Record<string, unknown> } };
+      expect(response.result?.structuredContent?.dataUsage).toMatchObject({
+        consumptionVerified: verified,
+      });
+    },
+  );
+
+  it('advertises required fields, device selection, digests and stable operation keys', () => {
+    const catalog = buildToolCatalog(createDshCapabilityHandlers());
+    const tools = new Map(catalog.map((tool) => [tool.name, tool]));
+    for (const [name, required] of [
+      ['rdk_training_status', ['runId']],
+      ['rdk_device_connect', ['connectionId']],
+      ['rdk_board_policy_command', ['command']],
+      ['rdk_board_arm_move', ['x', 'y', 'z']],
+      ['rdk_board_arm_gripper', ['action', 'value']],
+      ['rdk_artifact_promote', ['artifactId', 'status']],
+    ] as const) {
+      expect(tools.get(name)?.inputSchema.required, name).toEqual([...required]);
+    }
+    expect(tools.get('rdk_dataset_register')?.inputSchema.properties).toMatchObject({
+      sha256: { type: 'string' },
+    });
+    expect(tools.get('rdk_board_policy_load')?.inputSchema.properties).toMatchObject({
+      artifactSha256: { type: 'string' },
+      deviceId: { type: 'string' },
+    });
+    expect(tools.get('rdk_board_station_status')?.inputSchema.properties).toMatchObject({
+      deviceId: { type: 'string' },
+    });
+    expect(tools.get('rdk_board_policy_start')?.inputSchema.anyOf).toEqual([
+      { required: ['direction'] },
+      { required: ['command'] },
+    ]);
+    expect(tools.get('rdk_board_policy_command')?.inputSchema.properties).toMatchObject({
+      command: {
+        type: 'object',
+        required: ['vx', 'vy', 'wz'],
+        additionalProperties: false,
+        properties: { ttlMs: { type: 'integer', minimum: 1, maximum: 2000 } },
+      },
+    });
+    expect(tools.get('rdk_training_submit')?.inputSchema.properties).toMatchObject({
+      idempotencyKey: { type: 'string', maxLength: 200 },
+      backend: { enum: ['local', 'robogo', 'browser', 'contract'] },
+      datasetIds: { description: expect.stringContaining('不上传轨迹') },
+    });
+    expect(tools.get('rdk_training_submit')?.inputSchema.additionalProperties).toBe(false);
+    expect(tools.get('rdk_board_arm_gripper')?.inputSchema.properties).toMatchObject({
+      action: { enum: ['close', 'open'] },
+      value: { description: expect.stringContaining('mm') },
+    });
+    expect(tools.get('rdk_board_arm_move')?.inputSchema.properties).toMatchObject({
+      x: { description: expect.stringContaining('mm') },
+      speedMmPerS: { description: expect.stringContaining('mm/s') },
+    });
+  });
+
+  it('rejects overlong operation keys instead of truncating two different requests to one key', async () => {
+    const { call, requests } = trainingProbe();
+    const response = (await call('tools/call', {
+      name: 'rdk_training_submit',
+      arguments: { idempotencyKey: `${'same-prefix-'.repeat(20)}distinct-suffix` },
+    })) as { error?: { code: number; message: string } };
+    expect(response.error?.code).toBe(RPC_ERROR_CODES.INVALID_PARAMS);
+    expect(response.error?.message).toContain('200');
+    expect(requests).toHaveLength(0);
+  });
+});
+
 describe('duck-lab-mcp tools over the live platform', () => {
+  it('reads exact telemetry summaries without buffering large sample vectors into MCP', async () => {
+    const base = await fixture();
+    const contract = BUILTIN_MICRODUCK_MODEL.manifest.contract;
+    const run = await createSim2RealRun({
+      modelId: BUILTIN_MICRODUCK_MODEL.id,
+      contractId: contract.id,
+      backend: 'browser',
+      status: 'ready',
+      summary: 'recording',
+    });
+    const samples = Array.from({ length: 300 }, (_, i) => ({
+      t: i / 50,
+      observation: Array(contract.observationSize).fill(0.1234567890123456),
+      action: Array(contract.actionSize).fill(0.2345678901234567),
+    }));
+    await appendSim2RealTelemetry({
+      runId: run.id,
+      modelId: run.modelId,
+      contractId: contract.id,
+      source: 'browser',
+      sequence: 7,
+      samples,
+    });
+    const endpoint = `${base}/api/v1/duck/runs/${run.id}/telemetry`;
+    const raw = await (await fetch(endpoint)).text();
+    expect(Buffer.byteLength(raw)).toBeGreaterThan(256 * 1024);
+    expect(JSON.parse(raw).telemetry[0].samples).toHaveLength(300);
+    const summary = await (await fetch(endpoint + '?includeSamples=false')).json();
+    expect(summary.telemetry[0]).toMatchObject({ sampleCount: 300, sequence: 7 });
+    expect(summary.telemetry[0]).not.toHaveProperty('samples');
+    const recorded = passThroughFetch();
+    const { call } = makeDispatcher(base, { fetch: recorded.fetch });
+    const response = (await call('tools/call', {
+      name: 'rdk_telemetry_list',
+      arguments: { runId: run.id },
+    })) as {
+      result?: {
+        isError?: boolean;
+        structuredContent?: { telemetry: Array<Record<string, unknown>> };
+      };
+    };
+    expect(response.result?.isError).toBeFalsy();
+    expect(response.result?.structuredContent?.telemetry).toEqual([
+      expect.objectContaining({ sampleCount: 300, sequence: 7 }),
+    ]);
+    expect(recorded.urls.some((url) => url.includes('includeSamples=false'))).toBe(true);
+    const replay = (await call('tools/call', {
+      name: 'rdk_runs_replay',
+      arguments: { runId: run.id },
+    })) as { result?: { isError?: boolean; structuredContent?: Record<string, unknown> } };
+    expect(replay.result?.isError).toBeFalsy();
+    expect(replay.result?.structuredContent).toMatchObject({
+      frameCount: 300,
+      returnedFrameCount: 12,
+    });
+    expect(replay.result?.structuredContent?.projection).toMatchObject({ truncated: true });
+    expect((await fetch(endpoint + '?includeSamples=maybe')).status).toBe(400);
+  });
+  it('preserves full 200-character logical keys through the platform 128-character header limit', async () => {
+    const base = await fixture();
+    const { call } = makeDispatcher(base);
+    const firstKey = `${'same-prefix-'.repeat(16)}${'x'.repeat(7)}1`;
+    const secondKey = `${'same-prefix-'.repeat(16)}${'x'.repeat(7)}2`;
+    expect(firstKey.length).toBe(200);
+    const submit = (idempotencyKey: string) =>
+      call('tools/call', {
+        name: 'rdk_training_submit',
+        arguments: { backend: 'local', idempotencyKey },
+      });
+    const first = (await submit(firstKey)) as {
+      result?: { isError?: boolean; structuredContent?: Record<string, unknown> };
+    };
+    expect(first.result?.isError).toBeFalsy();
+    const runId = first.result?.structuredContent?.runId;
+    expect(runId).toBeTruthy();
+    const retry = (await submit(firstKey)) as {
+      result?: { structuredContent?: Record<string, unknown> };
+    };
+    expect(retry.result?.structuredContent?.runId).toBe(runId);
+    const different = (await submit(secondKey)) as {
+      result?: { structuredContent?: Record<string, unknown> };
+    };
+    expect(different.result?.structuredContent?.runId).toBeTruthy();
+    expect(different.result?.structuredContent?.runId).not.toBe(runId);
+    const runs = (await call('tools/call', {
+      name: 'rdk_runs_list',
+      arguments: { limit: 10 },
+    })) as { result?: { structuredContent?: Record<string, unknown> } };
+    expect(runs.result?.structuredContent?.total).toBe(2);
+  });
+
   it('drives workspace reads through the versioned API', async () => {
     const base = await fixture();
     const recorded = passThroughFetch();
@@ -665,6 +1060,8 @@ describe('duck-lab-mcp tools over the live platform', () => {
     const runId = String(first.result?.structuredContent?.runId ?? '');
     expect(runId).toBeTruthy();
     expect(first.result?.structuredContent).toMatchObject({ backend: 'local', status: 'blocked' });
+    expect(String(first.result?.structuredContent?.note)).toContain('被阻断');
+    expect(first.result?.structuredContent?.resolvedTraining).toMatchObject({ backend: 'local' });
 
     const retry = (await call('tools/call', submit)) as {
       result?: { structuredContent?: Record<string, unknown> };

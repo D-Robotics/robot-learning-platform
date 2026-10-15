@@ -20,6 +20,8 @@ import type {
   Sim2RealRunStatus,
   Sim2RealComputeResource,
   Sim2RealTelemetrySample,
+  Sim2RealDemonstrations,
+  Sim2RealTrainingData,
 } from '../../shared/sim2real.js';
 import {
   MICRODUCK_SIM2REAL_CONTRACT,
@@ -40,6 +42,10 @@ import {
   wrapAsync,
 } from '../sim2real/http-helpers.js';
 import { createSim2RealLogger } from '../sim2real/observability.js';
+import {
+  loadTrainingDemonstrations,
+  TrainingDemonstrationError,
+} from '../sim2real/training-demonstrations.js';
 import { computeResearchLoopMetrics } from '../sim2real/research-loop-metrics.js';
 import { listSim2RealAgentRunSnapshots } from './sim2real-agent-routes.js';
 import {
@@ -793,6 +799,7 @@ function runRequestFingerprint(input: {
   label?: string;
   computeResourceId?: string;
   datasetIds?: string[];
+  demonstrationRunId?: string;
   requestedVia?: 'workbench' | 'agent';
 }): string {
   return JSON.stringify({
@@ -807,6 +814,7 @@ function runRequestFingerprint(input: {
     computeResourceId: input.computeResourceId || null,
     datasetIds: input.datasetIds || [],
     requestedVia: input.requestedVia || null,
+    ...(input.demonstrationRunId ? { demonstrationRunId: input.demonstrationRunId } : {}),
   });
 }
 
@@ -1371,6 +1379,7 @@ interface ParsedRunRequest {
   label?: string;
   computeResourceId?: string;
   datasetIds?: string[];
+  demonstrationRunId?: string;
   requestedVia?: 'workbench' | 'agent';
 }
 
@@ -1453,6 +1462,31 @@ function parseRunRequest(
     return {
       apiError: { status: 400, code: 'SIM2REAL_INVALID_RESUME', message: resumeResult.error },
     };
+  }
+  let demonstrationRunId: string | undefined;
+  if (body.demonstrationRunId !== undefined) {
+    if (
+      typeof body.demonstrationRunId !== 'string' ||
+      !/^[a-zA-Z0-9][a-zA-Z0-9._-]{0,127}$/.test(body.demonstrationRunId.trim())
+    ) {
+      return {
+        apiError: {
+          status: 400,
+          code: 'SIM2REAL_INVALID_DEMONSTRATION',
+          message: 'demonstrationRunId 必须是有效的录制 Run 标识。',
+        },
+      };
+    }
+    demonstrationRunId = body.demonstrationRunId.trim();
+    if (backend !== 'local' || training?.engine !== 'offline-bc' || resumeResult.value) {
+      return {
+        apiError: {
+          status: 400,
+          code: 'SIM2REAL_DEMONSTRATION_UNSUPPORTED',
+          message: '真实示教目前仅支持 local + offline-bc 新训练；不支持续训或其他后端/引擎。',
+        },
+      };
+    }
   }
   const projectId = String(body.projectId ?? '').trim();
   const experimentId = String(body.experimentId ?? '').trim();
@@ -1546,6 +1580,7 @@ function parseRunRequest(
       ...(label ? { label } : {}),
       ...(computeResourceId ? { computeResourceId } : {}),
       ...(datasetIds ? { datasetIds } : {}),
+      ...(demonstrationRunId ? { demonstrationRunId } : {}),
       ...(requestedVia ? { requestedVia } : {}),
     },
   };
@@ -1614,6 +1649,7 @@ async function dispatchRunBackend(input: {
   owner: string | undefined;
   model: Sim2RealModelRecord;
   parsed: ParsedRunRequest;
+  demonstrations?: Sim2RealDemonstrations;
 }): Promise<RunBackendOutcome> {
   const { request, auth, owner, model, parsed } = input;
   const { backend, taskId, training, resumeFrom, idempotencyKey, computeResourceId } = parsed;
@@ -1797,6 +1833,7 @@ async function dispatchRunBackend(input: {
         accountId,
         manifest: model.manifest,
         training,
+        ...(input.demonstrations ? { demonstrations: input.demonstrations } : {}),
         resumeFrom,
         taskId: taskId || undefined,
         idempotencyKey,
@@ -4021,6 +4058,7 @@ export function createSim2RealRouter(
         label,
         computeResourceId,
         datasetIds: requestedDatasetIds,
+        demonstrationRunId,
         requestedVia,
       } = parsed;
       const model = await getSim2RealModel(modelId, owner);
@@ -4085,6 +4123,7 @@ export function createSim2RealRouter(
         label,
         computeResourceId,
         datasetIds,
+        demonstrationRunId,
         requestedVia,
       });
       const replay = await findIdempotentRunReplay(idempotencyKey, requestFingerprint, owner);
@@ -4101,6 +4140,39 @@ export function createSim2RealRouter(
       if (replay) {
         response.status(200).json({ ok: true, run: replay, idempotentReplay: true });
         return;
+      }
+      let trainingData: Sim2RealTrainingData | undefined;
+      let demonstrations: Sim2RealDemonstrations | undefined;
+      if (demonstrationRunId) {
+        // The browser relay does not yet transport the frozen dataset; reject
+        // before reserving a Run so it cannot silently execute smoke training.
+        const resource = computeResourceId
+          ? await getSim2RealComputeResourceSecret(computeResourceId, owner)
+          : null;
+        if (resource?.resource.source === 'local-agent') {
+          sendApiError(
+            response,
+            422,
+            'SIM2REAL_DEMONSTRATION_RELAY_UNSUPPORTED',
+            '真实示教训练暂不支持浏览器转发的 Local GPU Agent；请选择平台可直连的 worker。',
+            { retryable: false },
+          );
+          return;
+        }
+        try {
+          ({ demonstrations, trainingData } = await loadTrainingDemonstrations(
+            demonstrationRunId,
+            model.manifest,
+            owner,
+          ));
+        } catch (error) {
+          if (error instanceof TrainingDemonstrationError) {
+            sendApiError(response, error.status, error.code, error.message, { retryable: false });
+          } else {
+            storageError(request, response, error, 'sim2real-demonstration-read');
+          }
+          return;
+        }
       }
       if ((backend === 'local' || backend === 'robogo') && !sim2RealStorageInfo().writable) {
         storageError(
@@ -4130,6 +4202,7 @@ export function createSim2RealRouter(
               ...(requestedVia ? { requestedVia } : {}),
               ...(computeResourceId ? { computeResourceId } : {}),
               ...(datasetIds.length ? { datasetIds } : {}),
+              ...(trainingData ? { trainingData } : {}),
               status: 'queued',
               summary:
                 backend === 'robogo'
@@ -4164,7 +4237,14 @@ export function createSim2RealRouter(
         }
       }
 
-      const outcome = await dispatchRunBackend({ request, auth, owner, model, parsed });
+      const outcome = await dispatchRunBackend({
+        request,
+        auth,
+        owner,
+        model,
+        parsed,
+        demonstrations,
+      });
       try {
         const finalRunInput = {
           status: outcome.status,
@@ -4194,6 +4274,7 @@ export function createSim2RealRouter(
                 ...(requestedVia ? { requestedVia } : {}),
                 ...(computeResourceId ? { computeResourceId } : {}),
                 ...(datasetIds.length ? { datasetIds } : {}),
+                ...(trainingData ? { trainingData } : {}),
                 ...finalRunInput,
                 ...(training ? { training } : {}),
                 ...(resumeFrom ? { resumeFrom } : {}),

@@ -31,8 +31,10 @@ v2（当前版本）换成真 MLP + minibatch Adam，保持同一 CLI 和数据�
   `dependencies`（实际导入的库版本）和 `dependencyLockSha256`（本引擎
   requirements.txt 的 SHA-256），与 starter-ppo/mjx 等运行引擎同一规范，
   `npm run verify:training-provenance` 断言。
-- 引擎模式（文件协议）下用**确定性合成数据**跑 smoke 轮，结果里
-  `dataset.synthetic=true` 明确标注——训练是真的，数据是合成的，两者都写明。
+- 引擎模式（文件协议）接收平台冻结的真实示教快照，验证摘要、来源和维度后训练；
+  未传入快照时使用明确标注的合成 smoke 数据。平台方式见
+  [录制轨迹训练](../demonstration-training.md)。引擎模式必须导出通过数值比对的 ONNX，
+  缺依赖或非有限数值会失败；输出完整制品 ID、引用、摘要和 SHA256SUMS。
 
 ## 与其他引擎的关系
 

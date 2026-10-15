@@ -40,6 +40,36 @@ const STATION_COMMANDS: readonly { id: string; label: string; timeoutMs: number 
 type OwnedDevice = Device & { bridgeOwnerKey?: string };
 type OwnerResolver = (request: Request, response: Response) => string | undefined | null;
 
+type JointPolicyCommand = { vx: number; vy: number; wz: number; ttlMs?: number };
+
+function jointPolicyCommand(value: unknown): JointPolicyCommand | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  const command = value as Record<string, unknown>;
+  if (Object.keys(command).some((key) => !['vx', 'vy', 'wz', 'ttlMs'].includes(key))) return null;
+  if (
+    ['vx', 'vy', 'wz'].some(
+      (key) => typeof command[key] !== 'number' || !Number.isFinite(command[key]),
+    )
+  ) {
+    return null;
+  }
+  if (
+    command.ttlMs !== undefined &&
+    (typeof command.ttlMs !== 'number' ||
+      !Number.isInteger(command.ttlMs) ||
+      command.ttlMs < 1 ||
+      command.ttlMs > 2000)
+  ) {
+    return null;
+  }
+  return {
+    vx: command.vx as number,
+    vy: command.vy as number,
+    wz: command.wz as number,
+    ...(command.ttlMs === undefined ? {} : { ttlMs: command.ttlMs as number }),
+  };
+}
+
 /**
  * Pre-load rehearsal gate, for boards run with
  * `RDK_SIM2REAL_STATION_POLICY_REQUIRE_REHEARSAL=1`.
@@ -1570,89 +1600,108 @@ export function registerSim2RealBoardStationRoutes(
     }),
   );
 
-  /** POST /board-station/policy/start — begin policy-driven motion (gated). */
-  router.post(
-    api('/board-station/policy/start'),
-    wrapAsync(async (request, response) => {
-      const resolved = await resolveStation(request, response);
-      if (!resolved) return;
-      if (!requirePermission(request, response, SIM2REAL_PERMISSIONS.operate)) return;
-      noStore(response);
-      if (!policyPlatformEnabled()) {
-        sendApiError(
-          response,
-          409,
-          'SIM2REAL_STATION_POLICY_DISABLED',
-          '平台未开启策略运行时（RDK_SIM2REAL_STATION_POLICY_ENABLED）。',
-          { retryable: false },
-        );
-        return;
-      }
-      if (!drivePlatformEnabled()) {
-        sendApiError(
-          response,
-          409,
-          'SIM2REAL_STATION_DRIVE_DISABLED',
-          '策略运动同时需要平台侧 RDK_SIM2REAL_STATION_DRIVE_ENABLED=1。',
-          { retryable: false },
-        );
-        return;
-      }
-      const body =
-        request.body && typeof request.body === 'object' && !Array.isArray(request.body)
-          ? (request.body as Record<string, unknown>)
-          : {};
-      const direction = Number(body.direction);
-      if (!Number.isFinite(direction)) {
-        sendApiError(
-          response,
-          400,
-          'SIM2REAL_STATION_POLICY_INVALID',
-          'direction 需为数值（-1..1）。',
-          { retryable: false },
-        );
-        return;
-      }
-      const goalX = body.goalX == null || body.goalX === '' ? undefined : Number(body.goalX);
-      const goalY = body.goalY == null || body.goalY === '' ? undefined : Number(body.goalY);
-      if (
-        (goalX !== undefined && !Number.isFinite(goalX)) ||
-        (goalY !== undefined && !Number.isFinite(goalY))
-      ) {
-        sendApiError(
-          response,
-          400,
-          'SIM2REAL_STATION_POLICY_INVALID_GOAL',
-          'goalX / goalY 需为数值。',
-          { retryable: false },
-        );
-        return;
-      }
-      const agent = await stationAgentFetchWithStatus(
-        '/v1/station/policy/start',
-        stationOptions(request, {
-          method: 'POST',
-          timeoutMs: 15_000,
-          body: JSON.stringify({
-            direction: Math.min(Math.max(direction, -1), 1),
-            ...(goalX === undefined ? {} : { goalX }),
-            ...(goalY === undefined ? {} : { goalY }),
+  /** Start and command refresh share the same identity and motion gates. */
+  for (const operation of ['start', 'command'] as const) {
+    router.post(
+      api(`/board-station/policy/${operation}`),
+      wrapAsync(async (request, response) => {
+        const resolved = await resolveStation(request, response);
+        if (!resolved) return;
+        if (!requirePermission(request, response, SIM2REAL_PERMISSIONS.operate)) return;
+        noStore(response);
+        if (!policyPlatformEnabled()) {
+          sendApiError(
+            response,
+            409,
+            'SIM2REAL_STATION_POLICY_DISABLED',
+            '平台未开启策略运行时（RDK_SIM2REAL_STATION_POLICY_ENABLED）。',
+            { retryable: false },
+          );
+          return;
+        }
+        if (!drivePlatformEnabled()) {
+          sendApiError(
+            response,
+            409,
+            'SIM2REAL_STATION_DRIVE_DISABLED',
+            '策略运动同时需要平台侧 RDK_SIM2REAL_STATION_DRIVE_ENABLED=1。',
+            { retryable: false },
+          );
+          return;
+        }
+        const body =
+          request.body && typeof request.body === 'object' && !Array.isArray(request.body)
+            ? (request.body as Record<string, unknown>)
+            : {};
+        const commandSupplied = Object.prototype.hasOwnProperty.call(body, 'command');
+        const command = commandSupplied ? jointPolicyCommand(body.command) : null;
+        if ((commandSupplied || operation === 'command') && !command) {
+          sendApiError(
+            response,
+            400,
+            'SIM2REAL_STATION_POLICY_INVALID_COMMAND',
+            'command 必须包含有限数值 vx / vy / wz；ttlMs 可选，须为 1..2000 的整数。',
+            { retryable: false },
+          );
+          return;
+        }
+        const direction = body.direction === undefined && command ? 0 : Number(body.direction);
+        if (operation === 'start' && !Number.isFinite(direction)) {
+          sendApiError(
+            response,
+            400,
+            'SIM2REAL_STATION_POLICY_INVALID',
+            'direction 需为数值（-1..1）。',
+            { retryable: false },
+          );
+          return;
+        }
+        const goalX = body.goalX == null || body.goalX === '' ? undefined : Number(body.goalX);
+        const goalY = body.goalY == null || body.goalY === '' ? undefined : Number(body.goalY);
+        if (
+          (goalX !== undefined && !Number.isFinite(goalX)) ||
+          (goalY !== undefined && !Number.isFinite(goalY))
+        ) {
+          sendApiError(
+            response,
+            400,
+            'SIM2REAL_STATION_POLICY_INVALID_GOAL',
+            'goalX / goalY 需为数值。',
+            { retryable: false },
+          );
+          return;
+        }
+        const agent = await stationAgentFetchWithStatus(
+          `/v1/station/policy/${operation}`,
+          stationOptions(request, {
+            method: 'POST',
+            timeoutMs: 15_000,
+            body: JSON.stringify(
+              operation === 'command'
+                ? { command }
+                : {
+                    direction: Math.min(Math.max(direction, -1), 1),
+                    ...(goalX === undefined ? {} : { goalX }),
+                    ...(goalY === undefined ? {} : { goalY }),
+                    ...(command ? { command } : {}),
+                  },
+            ),
           }),
-        }),
-      );
-      if (!agent) {
-        sendApiError(
-          response,
-          502,
-          'SIM2REAL_BOARD_AGENT_UNREACHABLE',
-          '板端 agent 不可达，策略未启动。底盘看门狗保证机器人保持静止。',
-          { retryable: true },
         );
-        return;
-      }
-      response.status(agent.status).json(agent.payload);
-    }),
-  );
+        if (!agent) {
+          sendApiError(
+            response,
+            502,
+            'SIM2REAL_BOARD_AGENT_UNREACHABLE',
+            '板端 agent 不可达，策略请求未确认。请查询状态后重试。',
+            { retryable: true },
+          );
+          return;
+        }
+        response.status(agent.status).json(agent.payload);
+      }),
+    );
+  }
 
   /** POST /board-station/policy/reset — clear a sticky fault (gated). */
   router.post(

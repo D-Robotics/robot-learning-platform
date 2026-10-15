@@ -33,7 +33,8 @@ const DATA_DIR = path.resolve(
       path.join(process.cwd(), '.data', 'local-worker'),
   ),
 );
-const MAX_BODY = 2 * 1024 * 1024;
+// A bounded 4 MiB demonstration snapshot grows when embedded as JSON text.
+const MAX_BODY = 8 * 1024 * 1024;
 const MAX_RESULT = 1 * 1024 * 1024;
 const MAX_ARTIFACT_BYTES = 10_000_000_000;
 const MAX_LOG = 64 * 1024;

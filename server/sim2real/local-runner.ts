@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 
 import type {
   Sim2RealCheckpointRef,
+  Sim2RealDemonstrations,
   Sim2RealModelManifest,
   Sim2RealTrainingSpec,
 } from '../../shared/sim2real.js';
@@ -114,6 +115,7 @@ export async function requestLocalTraining(input: {
   requestToken?: string | null;
   manifest: Sim2RealModelManifest;
   training?: Sim2RealTrainingSpec;
+  demonstrations?: Sim2RealDemonstrations;
   resumeFrom?: Sim2RealCheckpointRef;
   taskId?: string;
   idempotencyKey?: string;

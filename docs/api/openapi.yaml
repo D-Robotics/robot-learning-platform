@@ -574,10 +574,22 @@ paths:
       tags: [telemetry]
       summary: List accepted telemetry chunks
       operationId: listTelemetry
+      description: >-
+        Owner-scoped list. By default each chunk includes its raw samples.
+        includeSamples=false omits the sample vectors and returns the exact
+        sampleCount per chunk, suitable for bounded Agent summary reads.
+      parameters:
+        - in: query
+          name: includeSamples
+          schema: { type: boolean, default: true }
+        - in: query
+          name: limit
+          schema: { type: integer, minimum: 1, maximum: 200 }
       responses:
         "200":
           description: Telemetry chunks.
           content: { application/json: { schema: { $ref: "#/components/schemas/TelemetryListResponse" } } }
+        "400": { $ref: "#/components/responses/BadRequest" }
         "404": { $ref: "#/components/responses/NotFound" }
     post:
       tags: [telemetry]
@@ -1728,6 +1740,13 @@ paths:
       tags: [board-station]
       summary: Start constrained policy motion after all gates are enabled
       operationId: startBoardStationPolicy
+      description: >-
+        Requires operate permission and platform/board motion gates. A joint
+        profile without command keeps its historical standing request; direction
+        remains a chassis-only input. Explicit command uses vx/vy in m/s and wz
+        in rad/s. Template/synthetic profiles cannot start joint motion. A real
+        profile declaration is a required gate, not evidence of measured hardware
+        calibration or successful standing/walking.
       parameters:
         - in: query
           name: deviceId
@@ -1738,9 +1757,12 @@ paths:
           application/json:
             schema:
               type: object
-              required: [direction]
+              anyOf:
+                - required: [direction]
+                - required: [command]
               properties:
                 direction: { type: number, minimum: -1, maximum: 1 }
+                command: { $ref: "#/components/schemas/BoardJointVelocityCommand" }
       responses:
         "200": { description: Policy motion started. }
         "400": { $ref: "#/components/responses/BadRequest" }
@@ -1748,6 +1770,44 @@ paths:
         "404": { $ref: "#/components/responses/NotFound" }
         "409": { description: One or more safety gates are disabled. }
         "502": { description: Board agent unreachable. }
+  /api/v1/duck/board-station/policy/command:
+    post:
+      tags: [board-station]
+      summary: Refresh the running joint policy velocity lease
+      operationId: commandBoardStationPolicy
+      description: >-
+        Joint-actuator only. Uses the same verified owner, operate permission,
+        policy and drive gates as start. Missing/malformed commands return 400.
+        Board refuses template/synthetic profiles and a stopped runtime. Each
+        accepted update refreshes a monotonic lease; its effective TTL is the
+        minimum of ttlMs, the adapter actuator.watchdogMs and 2000 ms (500 ms
+        default when the adapter omits it). Refresh before expiry to keep a
+        nonzero command. Expiry, stop and fault zero all velocity command slots.
+        Late inference results for expired or replaced commands are discarded.
+        Planar speed is bounded by the stricter actuator/safety linear limit
+        and a 0.3 m/s ceiling; yaw uses the stricter angular limit and 1 rad/s.
+        This software contract does not establish physical standing/walking.
+      parameters:
+        - in: query
+          name: deviceId
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [command]
+              properties:
+                command: { $ref: "#/components/schemas/BoardJointVelocityCommand" }
+      responses:
+        "200": { description: Lease refreshed; policy snapshot reports the bounded command and TTL. }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/AuthRequired" }
+        "403": { description: Account lacks operate permission. }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { description: Motion gate closed, unsupported actuator, profile not calibrated, runtime stopped or command expired in transit. }
+        "502": { description: Board agent unreachable; command was not confirmed. }
   /api/v1/duck/board-station/policy/reset:
     post:
       tags: [board-station]
@@ -2749,6 +2809,15 @@ components:
       description: Resource is not visible to this account.
       content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } }
   schemas:
+    BoardJointVelocityCommand:
+      type: object
+      additionalProperties: false
+      required: [vx, vy, wz]
+      properties:
+        vx: { type: number, description: Forward velocity in m/s. }
+        vy: { type: number, description: Lateral velocity in m/s. }
+        wz: { type: number, description: Yaw velocity in rad/s. }
+        ttlMs: { type: integer, minimum: 1, maximum: 2000 }
     Project:
       type: object
       required: [id, name, slug, modelIds, datasetIds, createdAt, updatedAt]
@@ -3418,13 +3487,26 @@ components:
             platforms: { type: array, items: { type: string } }
     Training:
       type: object
-      description: All fields are optional; the selected profile supplies safe defaults.
+      description: All fields are optional; the selected profile supplies safe defaults. offline-bc defaults to 100 epochs, accepts explicit maxIterations from 1 to 10000, and rejects explicit algorithm or numEnvs.
       properties:
         profile: { type: string, enum: [smoke, low-vram, standard, high-vram] }
         numEnvs: { type: integer, minimum: 1, maximum: 16384 }
         maxIterations: { type: integer, minimum: 1, maximum: 2000000 }
         video: { type: boolean }
         runName: { type: string, maxLength: 80 }
+        engine: { type: string, description: Engine registered on the selected worker, including offline-bc. }
+        algorithm: { type: string, enum: [ppo, sac] }
+    TrainingData:
+      type: object
+      additionalProperties: false
+      required: [sourceRunId, telemetryRevision, source, rows, sha256]
+      description: Immutable metadata of the actual vector snapshot dispatched to the worker. Consumption is verified only after completion with matching metrics.trainingDataSha256 and syntheticData=false; this is not independent rollout or release evidence.
+      properties:
+        sourceRunId: { type: string, pattern: "^[a-zA-Z0-9][a-zA-Z0-9._-]{0,199}$" }
+        telemetryRevision: { type: string, pattern: "^[a-f0-9]{64}$" }
+        source: { type: string, enum: [browser, import, board-agent] }
+        rows: { type: integer, minimum: 12, maximum: 50000 }
+        sha256: { type: string, pattern: "^[a-f0-9]{64}$" }
     RunRequest:
       type: object
       required: [modelId, backend]
@@ -3437,6 +3519,7 @@ components:
         label: { type: string, maxLength: 120 }
         computeResourceId: { type: string }
         datasetIds: { type: array, maxItems: 500, items: { type: string } }
+        demonstrationRunId: { type: string, description: Owner-visible Run containing uploaded vectors. Requires local plus offline-bc; the platform checks contract and source and freezes up to 4 MiB with at least 12 rows. Browser frames require policy-inference-v1 pairing. No synthetic fallback, resumeFrom, or local-agent relay. }
         training: { $ref: "#/components/schemas/Training" }
         resumeFrom: { type: object, required: [checkpointId, artifactRef], properties: { checkpointId: { type: string }, artifactRef: { type: string }, iteration: { type: integer, minimum: 0 } } }
         idempotencyKey: { type: string, maxLength: 128 }
@@ -3507,6 +3590,7 @@ components:
         externalRunId: { type: string }
         mock: { type: boolean }
         training: { $ref: "#/components/schemas/Training" }
+        trainingData: { $ref: "#/components/schemas/TrainingData" }
         checkpoint: { type: object, additionalProperties: true }
         artifact: { type: object, additionalProperties: true }
         metrics: { type: object, additionalProperties: true }
@@ -3608,6 +3692,7 @@ components:
       type: object
       required: [t]
       properties:
+        pairing: { type: string, enum: [policy-inference-v1], description: Producer declaration that observation and action belong to the same inference. Required for browser demonstration training; not hardware attestation. }
         t: { type: number, minimum: 0, maximum: 86400 }
         observation: { type: array, maxItems: 4096, items: { type: number } }
         action: { type: array, maxItems: 4096, items: { type: number } }
@@ -3895,6 +3980,7 @@ components:
         runId: { type: string }
         replay: { type: object, additionalProperties: true }
         evaluation: { type: object, additionalProperties: true }
+        frameCount: { type: integer, minimum: 0, description: Total accepted control frames, excluding lifecycle events; retained when an external adapter projects the frames array. }
         # The replay endpoint returns the accepted raw samples for deterministic
         # frame seeking; keep this in the contract rather than relying on
         # additionalProperties.

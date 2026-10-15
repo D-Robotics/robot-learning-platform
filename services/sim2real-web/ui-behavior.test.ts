@@ -64,7 +64,15 @@ function model() {
 
 function overview(
   runs?: unknown[],
-  extras: { artifacts?: unknown[]; evaluations?: unknown[]; deployments?: unknown[] } = {},
+  extras: {
+    artifacts?: unknown[];
+    evaluations?: unknown[];
+    deployments?: unknown[];
+    localMock?: boolean;
+    computeResources?: unknown[];
+    recordingCreateFailures?: number;
+    telemetryUploadFailures?: number;
+  } = {},
 ) {
   const selectedModel = model();
   const contract = selectedModel.manifest.contract;
@@ -108,7 +116,7 @@ function overview(
     ],
     deployments: extras.deployments || [],
     devices: [],
-    computeResources: [],
+    computeResources: extras.computeResources || [],
     artifacts: extras.artifacts || [],
     evaluations: extras.evaluations || [],
     integrations: {
@@ -120,7 +128,7 @@ function overview(
           available: true,
           reachable: true,
           healthy: true,
-          mock: true,
+          mock: extras.localMock ?? true,
           message: 'mock protocol worker',
         },
       },
@@ -181,6 +189,8 @@ async function boot(
     artifacts?: unknown[];
     evaluations?: unknown[];
     overviewDeployments?: unknown[];
+    localMock?: boolean;
+    computeResources?: unknown[];
     /** Frames the replay endpoint returns; drives the aligned camera frame tests. */
     replayFrames?: unknown[];
     /** Notices payload served by GET /sim2real/notices. */
@@ -210,6 +220,9 @@ async function boot(
   }
   const errors: string[] = [];
   const requests: Array<{ url: string; method: string; body: unknown }> = [];
+  const createdRecordingRuns: unknown[] = [];
+  let recordingCreateFailures = options.recordingCreateFailures || 0;
+  let telemetryUploadFailures = options.telemetryUploadFailures || 0;
   window.addEventListener('error', (event) => errors.push(event.error?.message || event.message));
   Object.defineProperty(window.HTMLCanvasElement.prototype, 'getContext', {
     configurable: true,
@@ -265,11 +278,18 @@ async function boot(
         );
       }
       if (url.includes('/overview'))
-        payload = overview(options.runs, {
-          artifacts: options.artifacts,
-          evaluations: options.evaluations,
-          deployments: options.overviewDeployments,
-        });
+        payload = overview(
+          createdRecordingRuns.length
+            ? [...createdRecordingRuns, ...(options.runs || [])]
+            : options.runs,
+          {
+            artifacts: options.artifacts,
+            evaluations: options.evaluations,
+            deployments: options.overviewDeployments,
+            localMock: options.localMock,
+            computeResources: options.computeResources,
+          },
+        );
       else if (url.includes('/workspace-summary')) {
         payload = { ok: true, counts: { models: 1, runs: 1, deployments: 0, devices: 0 } };
       } else if (url.includes('/lineage?')) {
@@ -298,6 +318,37 @@ async function boot(
       else if (url.endsWith('/datasets')) payload = { ok: true, datasets: [] };
       else if (url.includes('/models/model-1')) {
         payload = { ok: true, model: model(), compatibility: [] };
+      } else if (
+        url.endsWith('/sim2real/runs') &&
+        method === 'POST' &&
+        (body as { backend?: string })?.backend === 'browser'
+      ) {
+        if (recordingCreateFailures > 0) {
+          recordingCreateFailures -= 1;
+          return new Response(
+            JSON.stringify({ ok: false, message: 'recording gateway unavailable' }),
+            { status: 503, headers: { 'content-type': 'application/json' } },
+          );
+        }
+        const run = {
+          id: 'recording-run-new',
+          modelId: 'model-1',
+          backend: 'browser',
+          status: 'completed',
+          mock: false,
+          createdAt: '2026-10-14T00:00:00.000Z',
+          projectId: (body as { projectId?: string }).projectId,
+        };
+        createdRecordingRuns.push(run);
+        payload = { ok: true, run };
+      } else if (url.endsWith('/telemetry') && method === 'POST' && telemetryUploadFailures > 0) {
+        telemetryUploadFailures -= 1;
+        return new Response(
+          JSON.stringify({ ok: false, message: 'telemetry gateway unavailable' }),
+          { status: 503, headers: { 'content-type': 'application/json' } },
+        );
+      } else if (url.endsWith('/evaluate') && method === 'POST') {
+        payload = { ok: true, evaluation: { replay: { sampleCount: 1, source: 'import' } } };
       } else if (url.includes('/replay') && options.replayFrames) {
         payload = {
           ok: true,
@@ -375,6 +426,392 @@ async function boot(
 }
 
 describe('Sim2Real workbench DOM behavior', () => {
+  const deliverBrowserRecording = (window: InstanceType<typeof JSDOM>['window']) => {
+    window.dispatchEvent(
+      new window.MessageEvent('message', {
+        origin: window.location.origin,
+        data: {
+          type: 'rdk-microduck-recording-ready',
+          format: 'microduck-trajectory-v1',
+          contractId: 'microduck-policy-v1',
+          text: JSON.stringify({
+            t: 0,
+            pairing: 'policy-inference-v1',
+            observation: Array(61).fill(0),
+            action: Array(14).fill(0),
+          }),
+        },
+      }),
+    );
+  };
+
+  it('saves browser recording without a pre-existing Run and never silently attaches it to local training', async () => {
+    for (const runs of [
+      [],
+      [
+        {
+          id: 'trained-policy',
+          modelId: 'model-1',
+          backend: 'local',
+          status: 'completed',
+          createdAt: '2026-10-13T00:00:00.000Z',
+        },
+      ],
+    ]) {
+      const { window, requests, errors } = await boot({ runs });
+      deliverBrowserRecording(window);
+      const publish = window.document.querySelector<HTMLButtonElement>('#telemetry-publish-button');
+      expect(publish?.disabled).toBe(false);
+      expect(publish?.textContent).toContain('保存轨迹并评测');
+      publish?.click();
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      const mutations = requests.filter((request) => request.method === 'POST');
+      expect(
+        mutations.map((request) => new URL(request.url, window.location.href).pathname),
+      ).toEqual([
+        '/sim2real/api/sim2real/runs',
+        '/sim2real/api/sim2real/runs/recording-run-new/telemetry',
+        '/sim2real/api/sim2real/runs/recording-run-new/evaluate',
+      ]);
+      expect(mutations[0]?.body).toMatchObject({ modelId: 'model-1', backend: 'browser' });
+      expect(mutations[1]?.body).toMatchObject({
+        source: 'browser',
+        samples: [{ pairing: 'policy-inference-v1' }],
+      });
+      expect(errors).toEqual([]);
+    }
+  });
+
+  it('keeps the recording after creation or upload failure and reuses the same request identity on retry', async () => {
+    for (const failure of [{ recordingCreateFailures: 1 }, { telemetryUploadFailures: 1 }]) {
+      const { window, requests, errors } = await boot({ runs: [], ...failure });
+      deliverBrowserRecording(window);
+      const publish = window.document.querySelector<HTMLButtonElement>('#telemetry-publish-button');
+      publish?.click();
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      expect(window.document.querySelector('#telemetry-summary')?.textContent).toContain('样本数1');
+      expect(window.document.querySelector('#telemetry-state')?.textContent).not.toContain(
+        '已上传',
+      );
+      expect(publish?.disabled).toBe(false);
+      publish?.click();
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      const creates = requests.filter(
+        (request) => request.url.endsWith('/sim2real/runs') && request.method === 'POST',
+      );
+      const uploads = requests.filter(
+        (request) => request.url.endsWith('/telemetry') && request.method === 'POST',
+      );
+      if (failure.recordingCreateFailures) {
+        expect(creates).toHaveLength(2);
+        expect((creates[0].body as { idempotencyKey: string }).idempotencyKey).toBe(
+          (creates[1].body as { idempotencyKey: string }).idempotencyKey,
+        );
+      } else {
+        expect(creates).toHaveLength(1);
+        expect(uploads).toHaveLength(2);
+        expect((uploads[0].body as { idempotencyKey: string }).idempotencyKey).toBe(
+          (uploads[1].body as { idempotencyKey: string }).idempotencyKey,
+        );
+      }
+      expect(uploads.at(-1)?.url).toContain('/runs/recording-run-new/telemetry');
+      expect(errors).toEqual([]);
+    }
+  });
+
+  it('keeps an explicit replay target for recording upload and shows the selected Run in the action', async () => {
+    const run = {
+      id: 'trained-policy',
+      modelId: 'model-1',
+      backend: 'local',
+      status: 'completed',
+      createdAt: '2026-10-13T00:00:00.000Z',
+    };
+    const { window, requests, errors } = await boot({ runs: [run] });
+    deliverBrowserRecording(window);
+    const target = window.document.querySelector<HTMLSelectElement>('#replay-run-select');
+    if (target) {
+      target.value = run.id;
+      target.dispatchEvent(new window.Event('change', { bubbles: true }));
+    }
+    const publish = window.document.querySelector<HTMLButtonElement>('#telemetry-publish-button');
+    expect(publish?.textContent).toContain('trained-poli');
+    publish?.click();
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(
+      requests.some(
+        (request) => request.url.endsWith('/sim2real/runs') && request.method === 'POST',
+      ),
+    ).toBe(false);
+    expect(
+      requests.some(
+        (request) =>
+          request.url.endsWith('/runs/trained-policy/telemetry') && request.method === 'POST',
+      ),
+    ).toBe(true);
+    expect(errors).toEqual([]);
+  });
+
+  it('requires an uploaded real trajectory before submitting BC and gives an actionable empty state', async () => {
+    const { window, requests, errors } = await boot({ runs: [], localMock: false });
+    const engine = window.document.querySelector<HTMLSelectElement>('#training-engine');
+    expect(Array.from(engine?.options || []).some((option) => option.value === 'offline-bc')).toBe(
+      true,
+    );
+    if (engine) {
+      engine.value = 'offline-bc';
+      engine.dispatchEvent(new window.Event('change', { bubbles: true }));
+    }
+    expect(
+      window.document.querySelector<HTMLElement>('#training-demonstration-group')?.hidden,
+    ).toBe(false);
+    expect(window.document.querySelector('#training-demonstration-note')?.textContent).toContain(
+      '先在仿真中录制',
+    );
+    expect(window.document.querySelector<HTMLSelectElement>('#training-algorithm')?.disabled).toBe(
+      true,
+    );
+    expect(window.document.querySelector<HTMLButtonElement>('#local-run-button')?.disabled).toBe(
+      true,
+    );
+    window.document.querySelector<HTMLButtonElement>('#local-run-button')?.click();
+    expect(
+      requests.some(
+        (request) => request.url.endsWith('/sim2real/runs') && request.method === 'POST',
+      ),
+    ).toBe(false);
+    window.document.querySelector<HTMLButtonElement>('#training-demonstration-upload')?.click();
+    expect(window.document.body.dataset.activeView).toBe('evaluate');
+    expect(window.document.querySelector<HTMLDetailsElement>('.telemetry-panel')?.open).toBe(true);
+    expect(errors).toEqual([]);
+  });
+
+  it('guides BC through recorded data and a server Worker and restores the RL guide when switching back', async () => {
+    const { window, errors } = await boot({ runs: [], localMock: false });
+    const engine = window.document.querySelector<HTMLSelectElement>('#training-engine');
+    if (!engine) throw new Error('training engine selection is missing');
+    engine.value = 'offline-bc';
+    engine.dispatchEvent(new window.Event('change', { bubbles: true }));
+    expect(window.document.querySelector('#train-onboarding-title')?.textContent).toContain(
+      '录制轨迹模仿学习',
+    );
+    expect(window.document.querySelector('.train-onboarding')?.textContent).not.toMatch(
+      /强化学习|PPO|SAC|GPU/,
+    );
+    expect(window.document.querySelector('[data-train-step="2"] small')?.textContent).toContain(
+      '训练轮数',
+    );
+    expect(
+      window.document.querySelector('.train-onboarding-step[data-train-step="3"] small')
+        ?.textContent,
+    ).toContain('服务端 Worker');
+    engine.value = 'starter-ppo';
+    engine.dispatchEvent(new window.Event('change', { bubbles: true }));
+    expect(window.document.querySelector('#train-onboarding-title')?.textContent).toContain(
+      '强化学习训练',
+    );
+    expect(
+      window.document.querySelector('.train-onboarding-step[data-train-step="3"] small')
+        ?.textContent,
+    ).toBe('选择 GPU 和 PPO / SAC 后提交任务');
+    expect(errors).toEqual([]);
+  });
+
+  it('keeps BC data scoped to the selected model and project and excludes mock and synthetic replay', async () => {
+    const source = {
+      id: 'source-good',
+      modelId: 'model-1',
+      projectId: 'project-1',
+      backend: 'browser',
+      status: 'completed',
+      mock: false,
+      telemetryRevision: 'a'.repeat(64),
+      createdAt: '2026-10-14T00:00:00.000Z',
+      evaluation: { replay: { sampleCount: 120, source: 'import' } },
+    };
+    const { window, requests, errors } = await boot({
+      runs: [
+        source,
+        { ...source, id: 'source-mock', mock: true },
+        {
+          ...source,
+          id: 'source-demo',
+          evaluation: { replay: { sampleCount: 120, source: 'demo-fixture' } },
+        },
+        { ...source, id: 'source-other-model', modelId: 'model-2' },
+        { ...source, id: 'source-other-project', projectId: 'project-2' },
+        { ...source, id: 'source-worker-replay', telemetryRevision: undefined },
+      ],
+      projects: [project()],
+      workspaceContext: { projectId: 'project-1' },
+      localMock: false,
+      computeResources: [
+        { id: 'agent-gpu', name: '本机 GPU', source: 'local-agent', status: 'online' },
+      ],
+    });
+    const engine = window.document.querySelector<HTMLSelectElement>('#training-engine');
+    if (engine) {
+      engine.value = 'offline-bc';
+      engine.dispatchEvent(new window.Event('change', { bubbles: true }));
+    }
+    const sources = window.document.querySelector<HTMLSelectElement>('#training-demonstration-run');
+    expect(Array.from(sources?.options || []).map((option) => option.value)).toEqual([
+      '',
+      'source-good',
+    ]);
+    expect(window.document.querySelector<HTMLButtonElement>('#local-run-button')?.disabled).toBe(
+      true,
+    );
+    if (sources) {
+      sources.value = 'source-good';
+      sources.dispatchEvent(new window.Event('change', { bubbles: true }));
+    }
+    const epochs = window.document.querySelector<HTMLInputElement>('#training-bc-epochs');
+    if (epochs) epochs.value = '250';
+    expect(window.document.querySelector<HTMLButtonElement>('#local-run-button')?.disabled).toBe(
+      false,
+    );
+    expect(
+      Array.from(
+        window.document.querySelector<HTMLSelectElement>('#compute-resource-select')?.options || [],
+      ).find((option) => option.value === 'agent-gpu')?.disabled,
+    ).toBe(true);
+    window.document.querySelector<HTMLButtonElement>('#local-run-button')?.click();
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    const request = requests.find(
+      (item) => item.url.endsWith('/sim2real/runs') && item.method === 'POST',
+    );
+    expect(request?.body).toMatchObject({
+      modelId: 'model-1',
+      projectId: 'project-1',
+      backend: 'local',
+      demonstrationRunId: 'source-good',
+      training: { engine: 'offline-bc', profile: 'smoke', maxIterations: 250 },
+    });
+    expect(
+      (request?.body as { training?: Record<string, unknown> })?.training?.algorithm,
+    ).toBeUndefined();
+    expect((request?.body as Record<string, unknown>)?.computeResourceId).toBeUndefined();
+    expect(errors).toEqual([]);
+  });
+
+  it('rejects BC continuation and invalid epoch values before sending a Run', async () => {
+    const source = {
+      id: 'source-good',
+      modelId: 'model-1',
+      backend: 'browser',
+      status: 'completed',
+      mock: false,
+      telemetryRevision: 'a'.repeat(64),
+      evaluation: { replay: { sampleCount: 120, source: 'browser' } },
+      createdAt: '2026-10-14T00:00:00.000Z',
+    };
+    const { window, requests, errors } = await boot({ runs: [source], localMock: false });
+    const engine = window.document.querySelector<HTMLSelectElement>('#training-engine');
+    if (engine) {
+      engine.value = 'offline-bc';
+      engine.dispatchEvent(new window.Event('change', { bubbles: true }));
+    }
+    const sources = window.document.querySelector<HTMLSelectElement>('#training-demonstration-run');
+    if (sources) {
+      sources.value = 'source-good';
+      sources.dispatchEvent(new window.Event('change', { bubbles: true }));
+    }
+    const epochs = window.document.querySelector<HTMLInputElement>('#training-bc-epochs');
+    if (epochs) epochs.value = '0';
+    window.document.querySelector<HTMLButtonElement>('#local-run-button')?.click();
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(
+      requests.some(
+        (request) => request.url.endsWith('/sim2real/runs') && request.method === 'POST',
+      ),
+    ).toBe(false);
+    expect(window.document.body.textContent).toContain('训练轮数需为');
+    if (epochs) epochs.value = '100';
+    const checkpoint = window.document.querySelector<HTMLInputElement>('#resume-checkpoint-id');
+    if (checkpoint) checkpoint.value = 'old-checkpoint';
+    window.document.querySelector<HTMLButtonElement>('#local-run-button')?.click();
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(
+      requests.some(
+        (request) => request.url.endsWith('/sim2real/runs') && request.method === 'POST',
+      ),
+    ).toBe(false);
+    expect(window.document.body.textContent).toContain('BC 暂不支持续训');
+    expect(errors).toEqual([]);
+  });
+
+  it('shows BC data consumption and losses without presenting training completion as a quality pass', async () => {
+    const bcRun = {
+      id: 'bc-run',
+      modelId: 'model-1',
+      backend: 'local',
+      status: 'completed',
+      mock: false,
+      createdAt: '2026-10-14T00:00:00.000Z',
+      training: { engine: 'offline-bc', maxIterations: 100, profile: 'smoke', numEnvs: 4 },
+      trainingData: { sourceRunId: 'source-good', rows: 120, sha256: 'b'.repeat(64) },
+      metrics: {
+        engine: 'offline-bc',
+        trainingRows: 96,
+        validationRows: 24,
+        initialTrainLoss: 0.2,
+        trainLoss: 0.01,
+        validationLoss: 0.03,
+        epochs: 100,
+        syntheticData: false,
+        trainingDataSha256: 'b'.repeat(64),
+      },
+    };
+    const { window, errors } = await boot({ runs: [bcRun], localMock: false });
+    expect(window.document.querySelector('#run-progress-meta')?.textContent).toContain(
+      '轨迹 · source-good',
+    );
+    expect(window.document.querySelector('#run-progress-meta')?.textContent).toContain(
+      '轮数 · 100',
+    );
+    expect(window.document.querySelector('#run-progress-meta')?.textContent).not.toContain('档位');
+    expect(window.document.querySelector('#run-progress-meta')?.textContent).not.toContain('环境');
+    expect(window.document.querySelector('#run-progress-bc-result')?.textContent).toContain(
+      '训练数据已核对',
+    );
+    expect(window.document.querySelector('#run-progress-bc-result')?.textContent).toContain(
+      '独立轨迹',
+    );
+    window.document.querySelector<HTMLButtonElement>('#run-progress-detail')?.click();
+    expect(window.document.querySelector('#run-detail-body')?.textContent).toContain('训练损失');
+    expect(window.document.querySelector('#run-detail-body')?.textContent).toContain('验证损失');
+    expect(window.document.querySelector('#run-detail-body')?.textContent).toContain('source-good');
+    expect(errors).toEqual([]);
+  });
+
+  it('does not claim verified BC consumption for failed or running Runs with leftover matching metrics', async () => {
+    for (const status of ['failed', 'running']) {
+      const run = {
+        id: 'bc-incomplete',
+        modelId: 'model-1',
+        backend: 'local',
+        status,
+        mock: false,
+        createdAt: '2026-10-14T00:00:00.000Z',
+        training: { engine: 'offline-bc' },
+        trainingData: { sourceRunId: 'source-good', rows: 120, sha256: 'b'.repeat(64) },
+        metrics: {
+          engine: 'offline-bc',
+          trainLoss: 0.01,
+          validationLoss: 0.03,
+          syntheticData: false,
+          trainingDataSha256: 'b'.repeat(64),
+        },
+      };
+      const { window, errors } = await boot({ runs: [run], localMock: false });
+      expect(window.document.querySelector('#run-progress-bc-result')?.textContent).not.toContain(
+        '训练数据已核对',
+      );
+      expect(errors).toEqual([]);
+    }
+  });
+
   it('boots the real app bundle and changes one visible workspace view at a time', async () => {
     const { window, errors } = await boot();
     // Scoped to the scorecard grid: the research-loop panel reuses the same

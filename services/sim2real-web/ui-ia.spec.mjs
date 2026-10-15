@@ -53,6 +53,26 @@ assert.match(
 );
 assert.match(
   html,
+  /id="evaluation-comparison-panel"[\s\S]*?<\/article>\s*<\/div>\s*<details class="panel telemetry-panel/,
+  'telemetry import must sit outside the comparison-only wrapper so the evaluation run module can expose it',
+);
+assert.match(
+  html,
+  /<option value="offline-bc">/,
+  'training engine selection must expose real recorded-trajectory BC',
+);
+assert.match(
+  html,
+  /id="training-demonstration-run" aria-describedby="training-demonstration-note"/,
+  'BC trajectory selection must expose its data-source guidance to screen readers',
+);
+assert.match(
+  app,
+  /\$\('training-demonstration-upload'\)[\s\S]*?setFlowChild\('evaluation-run'\)/,
+  'missing BC data must lead to the evaluation run module where telemetry upload is visible',
+);
+assert.match(
+  html,
   /id="contract-panel-tip"/,
   'contract guidance copy must be replaceable when the product line changes',
 );
@@ -547,8 +567,13 @@ assert.match(
 );
 assert.match(
   app,
-  /const telemetrySource = acceptedSources\.has\(evidence\.source\)/,
+  /acceptedSources\.has\(evidence\.source\)\s*\?\s*evidence\.source\s*:\s*'import'/,
   'fixture uploads must retain provenance',
+);
+assert.match(
+  app,
+  /evidence\.source === 'browser-microduck'\s*\?\s*'browser'/,
+  'MicroDuck browser recordings must retain browser provenance and pairing gates',
 );
 assert.match(app, /Mock 协议演示 · 非真实 RL/, 'mock metrics must be visibly labelled');
 assert.match(

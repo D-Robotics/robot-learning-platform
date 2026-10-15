@@ -363,6 +363,79 @@ function requiredArg(args: Record<string, unknown>, key: string, message: string
   return value;
 }
 
+function requiredNumberArg(args: Record<string, unknown>, key: string, message: string): number {
+  const value = argNumber(args, key);
+  if (value === undefined) throw new CapabilityError('DSH_CAPABILITY_REJECTED', message);
+  return value;
+}
+
+function policyCommandArg(value: unknown): Record<string, number> {
+  const command = argsRecord(value);
+  if (Object.keys(command).some((key) => !['vx', 'vy', 'wz', 'ttlMs'].includes(key)) ||
+      !['vx', 'vy', 'wz'].every((key) => typeof command[key] === 'number' && Number.isFinite(command[key])) ||
+      (command.ttlMs !== undefined && (!Number.isInteger(command.ttlMs) || Number(command.ttlMs) < 1 || Number(command.ttlMs) > 2000))) {
+    throw new CapabilityError('DSH_CAPABILITY_REJECTED', 'command 需包含有限数值 vx/vy/wz（m/s、m/s、rad/s）；ttlMs 可选，必须为 1..2000 的整数。');
+  }
+  return command as Record<string, number>;
+}
+
+/** Adapter shape only; platform policy, resource limits and approvals remain upstream. */
+const TRAINING_ARGUMENT_TYPES: Record<string, 'string' | 'number' | 'boolean' | 'string-array'> = {
+  modelId: 'string', backend: 'string', profile: 'string', engine: 'string', algorithm: 'string',
+  numEnvs: 'number', maxIterations: 'number', runName: 'string', taskId: 'string',
+  projectId: 'string', experimentId: 'string', label: 'string', datasetIds: 'string-array',
+  computeResourceId: 'string', video: 'boolean', idempotencyKey: 'string',
+  demonstrationRunId: 'string',
+};
+
+function rejectUnsupportedTrainingInputs(input: Record<string, unknown>): void {
+  const unsupported = Object.keys(input).filter((key) => !Object.hasOwn(TRAINING_ARGUMENT_TYPES, key));
+  if (unsupported.length) {
+    throw new CapabilityError(
+      'DSH_CAPABILITY_REJECTED',
+      `rdk_training_submit 不支持参数 ${unsupported.join('、')}，不会忽略后提交另一种任务。` +
+        '使用工具 schema 声明的平铺参数；真实 BC 可用 demonstrationRunId 选择已上传轨迹，ACT/DP 和额外调参请按仓库 CLI 契约执行，' +
+        '检查点续训使用平台版本化 API 的 resumeFrom 契约。datasetIds 只关联血缘，不上传文件。',
+    );
+  }
+  for (const [key, value] of Object.entries(input)) {
+    const expected = TRAINING_ARGUMENT_TYPES[key];
+    const valid = expected === 'string-array'
+      ? Array.isArray(value) && value.every((id) => typeof id === 'string' && !!id.trim())
+      : expected === 'number'
+        ? typeof value === 'number' && Number.isFinite(value)
+        : expected === 'string'
+          ? typeof value === 'string' && !!value.trim()
+          : typeof value === 'boolean';
+    if (!valid) {
+      throw new CapabilityError(
+        'DSH_CAPABILITY_REJECTED',
+        `${key} 必须是${expected === 'string-array' ? '非空字符串 ID 的数组' : expected === 'number' ? '有限 JSON 数值（不接受字符串）' : expected === 'string' ? '非空字符串' : 'JSON 布尔值'}；不会忽略无效值或采用默认值后提交另一种训练。`,
+      );
+    }
+  }
+}
+
+function trainingDataEvidence(trainingRun: Record<string, unknown>) {
+  const source = objectValue(trainingRun.trainingData);
+  const metrics = objectValue(trainingRun.metrics);
+  const sha256 = str(source.sha256);
+  const valid = /^[a-f0-9]{64}$/.test(sha256) && /^[a-f0-9]{64}$/.test(str(source.telemetryRevision)) &&
+    /^[a-zA-Z0-9][a-zA-Z0-9._-]{0,199}$/.test(str(source.sourceRunId)) &&
+    ['browser', 'import', 'board-agent'].includes(str(source.source)) &&
+    typeof source.rows === 'number' && Number.isSafeInteger(source.rows) && source.rows >= 12 && source.rows <= 50000;
+  const trainingData = valid ? {
+    sourceRunId: str(source.sourceRunId).slice(0, 200),
+    telemetryRevision: str(source.telemetryRevision).slice(0, 128),
+    source: str(source.source).slice(0, 64),
+    rows: defined(source.rows),
+    sha256,
+  } : null;
+  const consumptionVerified = !!trainingData && trainingRun.status === 'completed' &&
+    metrics.syntheticData === false && metrics.trainingDataSha256 === sha256;
+  return { trainingData, consumptionVerified };
+}
+
 function queryPath(pathname: string, query: Record<string, string | number | undefined>): string {
   const params = Object.entries(query).filter(([, value]) => value !== undefined && value !== '');
   if (!params.length) return pathname;
@@ -819,9 +892,7 @@ export function createDshCapabilityHandlers(
 
     async rdk_device_connect(args: unknown, exec: ToolRunContext) {
       const input = argsRecord(args);
-      const connectionId = argString(input, 'connectionId');
-      if (!connectionId)
-        throw new CapabilityError('DSH_CAPABILITY_REJECTED', '请提供 connectionId。');
+      const connectionId = requiredArg(input, 'connectionId', '请提供 connectionId。');
       const result = await run(exec.signal).fetch(
         `/api/sim2real/device-connections/${encodeURIComponent(connectionId)}/connect`,
         { method: 'POST', json: {} },
@@ -943,15 +1014,19 @@ export function createDshCapabilityHandlers(
 
     async rdk_training_submit(args: unknown, exec: ToolRunContext) {
       const input = argsRecord(args);
+      rejectUnsupportedTrainingInputs(input);
+      const requestedBackend = argString(input, 'backend');
+      if (input.backend !== undefined && !['local', 'robogo', 'browser', 'contract'].includes(requestedBackend)) {
+        throw new CapabilityError('DSH_CAPABILITY_REJECTED', 'backend 必须是 local、robogo、browser 或 contract；不会回退到另一后端。');
+      }
       const overview = await run(exec.signal).fetch('/api/sim2real/overview', { method: 'GET' });
       if (!overview.ok) fail(overview.status, overview.body, '工作区读取失败');
-      const modelId = argString(input, 'modelId') || firstModelId(overview.body);
-      const requestedBackend = argString(input, 'backend');
-      const backend = ['local', 'robogo', 'browser', 'contract'].includes(requestedBackend)
-        ? requestedBackend
-        : 'local';
+      const requestedModelId = argString(input, 'modelId');
+      const requestedProfile = argString(input, 'profile');
+      const modelId = requestedModelId || firstModelId(overview.body);
+      const backend = requestedBackend || 'local';
       const training: Record<string, unknown> = {
-        profile: argString(input, 'profile') || 'smoke',
+        profile: requestedProfile || 'smoke',
         ...(argString(input, 'engine') ? { engine: argString(input, 'engine') } : {}),
         ...(argString(input, 'algorithm') ? { algorithm: argString(input, 'algorithm') } : {}),
         ...(argNumber(input, 'numEnvs') === undefined
@@ -986,33 +1061,69 @@ export function createDshCapabilityHandlers(
           ...(argString(input, 'computeResourceId')
             ? { computeResourceId: argString(input, 'computeResourceId') }
             : {}),
+          ...(argString(input, 'demonstrationRunId')
+            ? { demonstrationRunId: argString(input, 'demonstrationRunId') }
+            : {}),
         },
       });
       if (!result.ok) fail(result.status, result.body, 'GPU 训练提交失败');
       const trainingRun = (result.body.run ?? {}) as Record<string, unknown>;
+      const resolved = { ...training, ...objectValue(trainingRun.training) };
+      const metrics = objectValue(trainingRun.metrics);
+      const evidence = trainingDataEvidence(trainingRun);
+      const realDemonstrations = !!argString(input, 'demonstrationRunId');
+      const syntheticData = {
+        confirmed: typeof metrics.syntheticData === 'boolean' ? metrics.syntheticData : null,
+        builtinSmokePath: !realDemonstrations && ['act', 'diffusion-policy', 'offline-bc'].includes(str(resolved.engine)),
+        note: realDemonstrations
+          ? '已选择受管轨迹；以完成状态和训练输入摘要核对实际消费，不会回退合成数据。'
+          : '没有提供 demonstrationRunId 时，仓库 ACT/BC/DP 文件协议包装使用 synthetic-smoke；数据集 ID 只关联血缘。',
+      };
+      const defaultsApplied = [
+        ...(!requestedModelId ? ['modelId'] : []),
+        ...(!requestedBackend ? ['backend'] : []),
+        ...(!requestedProfile ? ['profile'] : []),
+      ];
+      const status = str(trainingRun.status);
+      const summary = str(trainingRun.summary);
       return {
         runId: str(trainingRun.id),
-        status: str(trainingRun.status),
+        status,
         modelId,
         backend,
-        note: '任务已提交；用 rdk_training_status 查询进度。',
+        mock: typeof trainingRun.mock === 'boolean' ? trainingRun.mock : null,
+        summary: summary || null,
+        resolvedTraining: {
+          modelId: str(trainingRun.modelId) || modelId,
+          backend: str(trainingRun.backend) || backend,
+          profile: defined(resolved.profile),
+          engine: defined(resolved.engine),
+          algorithm: defined(resolved.algorithm),
+          numEnvs: defined(resolved.numEnvs),
+          maxIterations: defined(resolved.maxIterations),
+          video: defined(resolved.video),
+          runName: defined(resolved.runName),
+        },
+        defaultsApplied,
+        dataUsage: {
+          datasetIds: argStringList(input, 'datasetIds') ?? [],
+          ...evidence,
+          note: evidence.consumptionVerified
+            ? '已完成训练且输入摘要一致；行划分验证误差不能替代独立仿真评测或部署质量门。'
+            : 'datasetIds 关联数据血缘；受管轨迹快照发送后，需等待训练完成并核对输入摘要。',
+        },
+        syntheticData,
+        note: ['blocked', 'failed'].includes(status)
+          ? `请求已登记，但训练${status === 'blocked' ? '被阻断' : '失败'}${summary ? `：${summary}` : ''}；先检查执行资源和运行详情，不要重复提交。`
+          : '任务已提交；用 rdk_training_status 和 rdk_run_logs 查询进度，提交成功不等于训练或发布完成。',
       };
     },
 
     async rdk_training_status(args: unknown, exec: ToolRunContext) {
       const input = argsRecord(args);
-      const runId = argString(input, 'runId');
-      if (!runId) throw new CapabilityError('DSH_CAPABILITY_REJECTED', '请提供 runId。');
-      let target = runId;
-      if (!target) {
-        const overview = await run(exec.signal).fetch('/api/sim2real/overview', { method: 'GET' });
-        const runs = overview.ok && Array.isArray(overview.body.runs) ? overview.body.runs : [];
-        target = String(((runs[0] ?? {}) as Record<string, unknown>).id ?? '');
-      }
-      if (!target)
-        throw new CapabilityError('DSH_CAPABILITY_REJECTED', '当前没有可查询的训练任务。');
+      const runId = requiredArg(input, 'runId', '请提供 runId。');
       const result = await run(exec.signal).fetch(
-        `/api/sim2real/runs/${encodeURIComponent(target)}`,
+        `/api/sim2real/runs/${encodeURIComponent(runId)}`,
         { method: 'GET' },
       );
       if (!result.ok) fail(result.status, result.body, '训练状态查询失败');
@@ -1028,7 +1139,15 @@ export function createDshCapabilityHandlers(
           successRate: defined(metrics.successRate),
           fallRate: defined(metrics.fallRate),
           iterations: defined(metrics.iterations),
+          trainingRows: defined(metrics.trainingRows),
+          validationRows: defined(metrics.validationRows),
+          initialTrainLoss: defined(metrics.initialTrainLoss),
+          trainLoss: defined(metrics.trainLoss),
+          validationLoss: defined(metrics.validationLoss),
+          epochs: defined(metrics.epochs),
+          syntheticData: defined(metrics.syntheticData),
         },
+        dataUsage: trainingDataEvidence(trainingRun),
       };
     },
 
@@ -1042,6 +1161,11 @@ export function createDshCapabilityHandlers(
       if (!result.ok) fail(result.status, result.body, '运行回放读取失败');
       const replay = objectValue(result.body.replay);
       const evaluation = objectValue(result.body.evaluation);
+      const returnedFrameCount = Array.isArray(result.body.frames) ? result.body.frames.length : 0;
+      const projection = objectValue(result.body.projection);
+      const declaredFrameCount = result.body.frameCount;
+      const frameCount = typeof declaredFrameCount === 'number' && Number.isSafeInteger(declaredFrameCount) && declaredFrameCount >= 0
+        ? declaredFrameCount : projection.truncated === true ? null : returnedFrameCount;
       return {
         runId,
         replay,
@@ -1049,7 +1173,9 @@ export function createDshCapabilityHandlers(
           status: defined(evaluation.status),
           warnings: boundedArray(evaluation.warnings, 10),
         },
-        frameCount: Array.isArray(result.body.frames) ? result.body.frames.length : 0,
+        frameCount,
+        returnedFrameCount,
+        projection: Object.keys(projection).length ? projection : null,
       };
     },
 
@@ -1058,7 +1184,7 @@ export function createDshCapabilityHandlers(
       const runId = requiredArg(input, 'runId', '请提供 runId。');
       const limit = Math.min(Math.max(Math.trunc(argNumber(input, 'limit') ?? 50), 1), 200);
       const result = await run(exec.signal).fetch(
-        queryPath(`/api/sim2real/runs/${encodeURIComponent(runId)}/telemetry`, { limit }),
+        queryPath(`/api/sim2real/runs/${encodeURIComponent(runId)}/telemetry`, { limit, includeSamples: 'false' }),
         { method: 'GET' },
       );
       if (!result.ok) fail(result.status, result.body, '遥测读取失败');
@@ -1069,7 +1195,8 @@ export function createDshCapabilityHandlers(
           source: str(chunk.source),
           sequence: defined(chunk.sequence),
           receivedAt: str(chunk.receivedAt),
-          sampleCount: Array.isArray(chunk.samples) ? chunk.samples.length : null,
+          sampleCount: typeof chunk.sampleCount === 'number' && Number.isSafeInteger(chunk.sampleCount) && chunk.sampleCount >= 0
+            ? chunk.sampleCount : Array.isArray(chunk.samples) ? chunk.samples.length : null,
           droppedCount: defined(chunk.droppedCount),
           attested: chunk.attested === true,
         };
@@ -1202,7 +1329,7 @@ export function createDshCapabilityHandlers(
     async rdk_artifact_promote(args: unknown, exec: ToolRunContext) {
       const input = argsRecord(args);
       const artifactId = requiredArg(input, 'artifactId', '请提供 artifactId。');
-      const status = argString(input, 'status');
+      const status = requiredArg(input, 'status', '请提供 status（validated、published 或 revoked）。');
       if (!['validated', 'published', 'revoked'].includes(status)) {
         throw new CapabilityError(
           'DSH_CAPABILITY_REJECTED',
@@ -1394,16 +1521,21 @@ export function createDshCapabilityHandlers(
 
     async rdk_board_policy_start(args: unknown, exec: ToolRunContext) {
       const input = argsRecord(args);
+      const command = input.command === undefined ? undefined : policyCommandArg(input.command);
       const direction = argNumber(input, 'direction');
-      if (direction === undefined) {
-        throw new CapabilityError('DSH_CAPABILITY_REJECTED', '请提供 direction 数值。');
+      if (!command && direction === undefined) {
+        throw new CapabilityError('DSH_CAPABILITY_REJECTED', '请提供 direction 数值或显式 command。');
+      }
+      if (input.direction !== undefined && (typeof input.direction !== 'number' || !Number.isFinite(input.direction) || input.direction < -1 || input.direction > 1)) {
+        throw new CapabilityError('DSH_CAPABILITY_REJECTED', 'direction 必须是 -1..1 的有限数值。');
       }
       const result = await run(exec.signal).fetch(
         stationPath('/api/sim2real/board-station/policy/start', input),
         {
           method: 'POST',
           json: {
-            direction,
+            ...(direction === undefined ? {} : { direction }),
+            ...(command ? { command } : {}),
             ...(argNumber(input, 'goalX') === undefined
               ? {}
               : { goalX: argNumber(input, 'goalX') }),
@@ -1414,6 +1546,17 @@ export function createDshCapabilityHandlers(
         },
       );
       if (!result.ok) fail(result.status, result.body, '板端策略启动失败');
+      return { ok: result.body.ok !== false, policy: defined(result.body.policy) };
+    },
+
+    async rdk_board_policy_command(args: unknown, exec: ToolRunContext) {
+      const input = argsRecord(args);
+      const command = policyCommandArg(input.command);
+      const result = await run(exec.signal).fetch(
+        stationPath('/api/sim2real/board-station/policy/command', input),
+        { method: 'POST', json: { command } },
+      );
+      if (!result.ok) fail(result.status, result.body, '板端策略命令更新失败');
       return { ok: result.body.ok !== false, policy: defined(result.body.policy) };
     },
 
@@ -1444,12 +1587,9 @@ export function createDshCapabilityHandlers(
 
     async rdk_board_arm_move(args: unknown, exec: ToolRunContext) {
       const input = argsRecord(args);
-      const x = argNumber(input, 'x');
-      const y = argNumber(input, 'y');
-      const z = argNumber(input, 'z');
-      if (x === undefined || y === undefined || z === undefined) {
-        throw new CapabilityError('DSH_CAPABILITY_REJECTED', '请提供数值型 x/y/z（mm）。');
-      }
+      const x = requiredNumberArg(input, 'x', '请提供数值型 x（mm）。');
+      const y = requiredNumberArg(input, 'y', '请提供数值型 y（mm）。');
+      const z = requiredNumberArg(input, 'z', '请提供数值型 z（mm）。');
       const result = await run(exec.signal).fetch(
         stationPath('/api/sim2real/board-station/arm/move', input),
         {
@@ -1470,12 +1610,12 @@ export function createDshCapabilityHandlers(
 
     async rdk_board_arm_gripper(args: unknown, exec: ToolRunContext) {
       const input = argsRecord(args);
-      const action = input.action;
-      const value = argNumber(input, 'value');
+      const action = requiredArg(input, 'action', "action 需为 'close' 或 'open'。");
+      const value = requiredNumberArg(input, 'value', '请提供正数 value（close=力，open=宽度 mm）。');
       if (action !== 'close' && action !== 'open') {
         throw new CapabilityError('DSH_CAPABILITY_REJECTED', "action 需为 'close' 或 'open'。");
       }
-      if (value === undefined || value <= 0) {
+      if (value <= 0) {
         throw new CapabilityError('DSH_CAPABILITY_REJECTED', '请提供正数 value（close=力，open=宽度 mm）。');
       }
       const result = await run(exec.signal).fetch(

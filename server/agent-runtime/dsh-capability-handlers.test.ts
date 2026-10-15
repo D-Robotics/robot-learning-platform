@@ -58,6 +58,29 @@ afterEach(() => {
 });
 
 describe('DSH capability handlers', () => {
+  it('does not turn a projected legacy replay length into a claimed total', async () => {
+    const { fetchImpl } = fakeLoopback([
+      () => ({
+        status: 200,
+        body: {
+          frames: [{ t: 0 }, { t: 0.02 }],
+          projection: { truncated: true },
+          replay: {},
+          evaluation: {},
+        },
+      }),
+    ]);
+    const handlers = createDshCapabilityHandlers({ fetchImpl });
+    await expect(
+      handlers.rdk_runs_replay({ runId: 'legacy-run' }, {
+        signal: new AbortController().signal,
+      } as never),
+    ).resolves.toMatchObject({
+      frameCount: null,
+      returnedFrameCount: 2,
+      projection: { truncated: true },
+    });
+  });
   it('binds every catalog entry to a product route handler', () => {
     const { fetchImpl } = fakeLoopback([() => ({ status: 200, body: {} })]);
     const catalog = listDshCapabilityCatalog(createDshCapabilityHandlers({ fetchImpl }));
@@ -601,5 +624,38 @@ describe('DSH web search tool (free Bing tier)', () => {
     const briefing = capabilityBriefing(handlers);
     expect(briefing).toContain('rdk_web_search');
     expect(briefing).toContain('非官方');
+  });
+});
+
+describe('DSH joint policy command leases', () => {
+  it('forwards explicit twist and device selection through the guarded station route', async () => {
+    const { fetchImpl, calls } = fakeLoopback([
+      () => ({ status: 200, body: { ok: true, policy: { state: 'running' } } }),
+    ]);
+    const handlers = createDshCapabilityHandlers({ fetchImpl });
+    const exec = { signal: new AbortController().signal } as never;
+    const command = { vx: 0.03, vy: 0, wz: 0.2, ttlMs: 250 };
+    await handlers.rdk_board_policy_command({ deviceId: 'device-x5', command }, exec);
+    expect(calls[0].path).toBe('/api/sim2real/board-station/policy/command?deviceId=device-x5');
+    expect(JSON.parse(calls[0].body || '{}')).toEqual({ command });
+    await handlers.rdk_board_policy_start({ deviceId: 'device-x5', command }, exec);
+    expect(JSON.parse(calls[1].body || '{}')).toEqual({ command });
+  });
+
+  it.each([
+    undefined,
+    {},
+    { vx: 1, vy: 0 },
+    { vx: '1', vy: 0, wz: 0 },
+    { vx: 0, vy: 0, wz: Infinity },
+    { vx: 0, vy: 0, wz: 0, ttlMs: 0 },
+    { vx: 0, vy: 0, wz: 0, ttlMs: 2001 },
+    { vx: 0, vy: 0, wz: 0, extra: true },
+  ])('rejects invalid command leases before contacting the board', async (command) => {
+    const { fetchImpl, calls } = fakeLoopback([() => ({ status: 200, body: {} })]);
+    const handlers = createDshCapabilityHandlers({ fetchImpl });
+    const exec = { signal: new AbortController().signal } as never;
+    await expect(handlers.rdk_board_policy_command({ command }, exec)).rejects.toThrow();
+    expect(calls).toHaveLength(0);
   });
 });

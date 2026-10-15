@@ -1111,6 +1111,7 @@ POLICY_APPLY_TIMEOUT = 10.0  # file-protocol round trip for load/start
 POLICY_ALLOWED_MODEL_DIR = "/root/rdk-board-agent/policies"
 
 _policy_lock = threading.Lock()
+_policy_request_lock = threading.Lock()
 _policy_proc = None
 _policy_seq = 0
 
@@ -1214,6 +1215,13 @@ def _stop_policy_runtime():
 
 
 def _policy_send(op, **fields):
+    # IPC is a single mailbox. Serialize the whole ack round trip so a
+    # heartbeat cannot overwrite a stop/load/start before the runtime sees it.
+    with _policy_request_lock:
+        return _policy_send_unlocked(op, **fields)
+
+
+def _policy_send_unlocked(op, **fields):
     """Write one file-protocol request and wait for the runtime's ack.
 
     Returns the runtime's post-op state snapshot (which carries a seq-
@@ -1278,12 +1286,16 @@ def policy_status():
         "commandTopic": DRIVE_COMMAND_TOPIC,
         # Policy motion requires BOTH switches; report the combined verdict so
         # the UI can render exactly one gate explanation.
-        "motionAuthorized": POLICY_ENABLED and MOTION_SWITCH_ENABLED,
+        "motionAuthorized": POLICY_ENABLED and MOTION_SWITCH_ENABLED and (not JOINT_ACTUATOR or _joint_profile_motion_ready()),
         # A historical state file must never make a stopped process look
         # ready/running to the station UI or API consumers.
         "state": snap.get("state") if runtime_running and snap else "stopped" if snap else None,
         "model": snap.get("model") if snap else None,
         "command": snap.get("command") if runtime_running and snap else 0.0 if snap else None,
+        "commandTtlMs": snap.get("commandTtlMs") if runtime_running and snap else 0,
+        "commandExpired": snap.get("commandExpired") if runtime_running and snap else None,
+        "commandLimits": snap.get("commandLimits") if snap else None,
+        "profileMotionEligible": _joint_profile_motion_ready() if JOINT_ACTUATOR else None,
         "published": snap.get("published") if runtime_running and snap else 0 if snap else None,
         "inferMs": snap.get("inferMs") if runtime_running and snap else None,
         "provider": (snap.get("model") or {}).get("provider") if snap else None,
@@ -1554,7 +1566,43 @@ def policy_load(path):
     return _policy_send("load", path=resolved)
 
 
-def policy_start(direction, goal_x=None, goal_y=None):
+def _joint_profile_motion_ready():
+    provenance = _adapter_profile.get("provenance") or {}
+    return isinstance(provenance, dict) and provenance.get("kind") == "real" and provenance.get("mock") is False
+
+
+def _valid_joint_command(command):
+    if not isinstance(command, dict) or set(command) - {"vx", "vy", "wz", "ttlMs"}:
+        return False
+    try:
+        finite = all(_finite_number(command.get(axis)) for axis in ("vx", "vy", "wz"))
+    except (OverflowError, TypeError, ValueError):
+        return False
+    if not finite:
+        return False
+    ttl = command.get("ttlMs", 500)
+    return isinstance(ttl, int) and not isinstance(ttl, bool) and 1 <= ttl <= 2000
+
+
+def policy_command(command):
+    """Refresh the joint-only velocity lease; never changes chassis policy semantics."""
+    if not POLICY_ENABLED:
+        return {"ok": False, "error": "policy-disabled"}
+    if not MOTION_SWITCH_ENABLED:
+        return {"ok": False, "error": "drive-disabled"}
+    if not JOINT_ACTUATOR:
+        return {"ok": False, "error": "unsupported-actuator"}
+    if not _joint_profile_motion_ready():
+        return {"ok": False, "error": "joint-profile-not-calibrated"}
+    if not _valid_joint_command(command):
+        return {"ok": False, "error": "invalid-command"}
+    issued = time.monotonic_ns()
+    if not _policy_runtime_alive():
+        return {"ok": False, "error": "runtime-not-running"}
+    return _policy_send("command", command=command, issuedMonotonicNs=issued)
+
+
+def policy_start(direction, goal_x=None, goal_y=None, command=None):
     if not POLICY_ENABLED:
         return {"ok": False, "error": "policy-disabled"}
     if not MOTION_SWITCH_ENABLED:
@@ -1563,6 +1611,12 @@ def policy_start(direction, goal_x=None, goal_y=None):
                 "message": "policy start requires RDK_SIM2REAL_BOARD_AGENT_ENABLE_DRIVE=1 too"}
     if not JOINT_ACTUATOR and not _finite_number(direction):
         return {"ok": False, "error": "invalid-type"}
+    if command is not None and not JOINT_ACTUATOR:
+        return {"ok": False, "error": "unsupported-actuator"}
+    if JOINT_ACTUATOR and not _joint_profile_motion_ready():
+        return {"ok": False, "error": "joint-profile-not-calibrated"}
+    if command is not None and not _valid_joint_command(command):
+        return {"ok": False, "error": "invalid-command"}
     if (goal_x is None) != (goal_y is None):
         return {"ok": False, "error": "invalid-goal",
                 "message": "goalX 与 goalY 必须同时提供或同时省略"}
@@ -1577,6 +1631,8 @@ def policy_start(direction, goal_x=None, goal_y=None):
             return {"ok": False, "error": "goal-required",
                     "message": "%s 策略需要同时提供 goalX/goalY（odom 绝对坐标，单位：米）" % contract}
     payload = {"direction": float(direction) if _finite_number(direction) else 0.0}
+    if command is not None:
+        payload.update({"command": command, "issuedMonotonicNs": time.monotonic_ns()})
     if goal_x is not None or goal_y is not None:
         payload.update({"goalX": goal_x, "goalY": goal_y})
     # Exclusive /cmd_vel ownership: the resident drive publisher streams idle
@@ -1827,7 +1883,7 @@ def onboarding_preflight():
             "actuatorEnabled": MOTION_SWITCH_ENABLED,
             "actuatorKind": PROFILE_ACTUATOR_KIND,
             "policyEnabled": POLICY_ENABLED,
-            "motionAuthorized": MOTION_SWITCH_ENABLED and POLICY_ENABLED,
+            "motionAuthorized": MOTION_SWITCH_ENABLED and POLICY_ENABLED and (not JOINT_ACTUATOR or _joint_profile_motion_ready()),
             "limits": _actuator_policy(),
             "emergencyStop": "/v1/station/drive/stop",
         },
@@ -2408,9 +2464,17 @@ class Handler(BaseHTTPRequestHandler):
             if not isinstance(payload, dict):
                 self._json(400, {"ok": False, "error": "BOARD_AGENT_INVALID_JSON"})
                 return
-            res = policy_start(payload.get("direction", 0.0), payload.get("goalX"), payload.get("goalY"))
+            res = policy_start(payload.get("direction", 0.0), payload.get("goalX"), payload.get("goalY"), payload.get("command"))
             self._json(200 if res.get("ok") else 409,
                        {**res, "policy": policy_status()})
+            return
+        if path == "/v1/station/policy/command":
+            payload = self._read_json()
+            if not isinstance(payload, dict):
+                self._json(400, {"ok": False, "error": "BOARD_AGENT_INVALID_JSON"})
+                return
+            res = policy_command(payload.get("command"))
+            self._json(200 if res.get("ok") else 409, {**res, "policy": policy_status()})
             return
         if path == "/v1/station/policy/reset":
             if not self._require_empty_body():

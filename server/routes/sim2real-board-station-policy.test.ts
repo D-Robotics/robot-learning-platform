@@ -7,6 +7,7 @@ import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { registerSim2RealBoardStationRoutes } from './sim2real-board-station-routes.js';
+import type { Sim2RealAuthPort } from '../sim2real/sim2real-auth.js';
 
 const originalAgentUrl = process.env.RDK_SIM2REAL_BOARD_AGENT_URL;
 const originalAgentToken = process.env.RDK_SIM2REAL_BOARD_AGENT_TOKEN;
@@ -39,6 +40,7 @@ function routeHandler(router: Router, method: 'get' | 'post', path: string): Han
 
 function buildRouter(
   deps: {
+    auth?: Sim2RealAuthPort;
     getRun?: (runId: string, owner?: string) => Promise<unknown>;
     fetchRunArtifact?: (
       run: unknown,
@@ -67,7 +69,7 @@ function buildRouter(
     return router;
   };
   registerSim2RealBoardStationRoutes(router, {
-    auth: { isMultiUserDeployment: () => false } as never,
+    auth: deps.auth ?? ({ isMultiUserDeployment: () => false } as never),
     requestOwner: () => 'local-dev',
     visibleDevices: async () => [device],
     ...(deps.getRun ? { getRun: deps.getRun as never } : {}),
@@ -392,6 +394,102 @@ describe('board-station policy runtime proxy', () => {
     expect(res.statusCode).toBe(200);
     const sent = JSON.parse(String((fetchMock.mock.calls[0] as unknown[])[1]!.body));
     expect(sent).toEqual({ direction: 0.25, goalX: 1.2, goalY: -0.4 });
+  });
+
+  it('forwards an explicit joint command at start without inventing a nonzero legacy direction', async () => {
+    process.env.RDK_SIM2REAL_STATION_POLICY_ENABLED = '1';
+    process.env.RDK_SIM2REAL_STATION_DRIVE_ENABLED = '1';
+    const fetchMock = mockAgent(200, { ok: true });
+    const command = { vx: 0.03, vy: -0.01, wz: 0.2, ttlMs: 300 };
+    const res = await call(
+      routeHandler(buildRouter(), 'post', '/api/sim2real/board-station/policy/start'),
+      { method: 'POST', body: { command } },
+    );
+    expect(res.statusCode).toBe(200);
+    expect(JSON.parse(String((fetchMock.mock.calls[0] as unknown[])[1]!.body))).toEqual({
+      direction: 0,
+      command,
+    });
+  });
+
+  it('refreshes a joint command through the dedicated gated endpoint with board authentication', async () => {
+    process.env.RDK_SIM2REAL_STATION_POLICY_ENABLED = '1';
+    process.env.RDK_SIM2REAL_STATION_DRIVE_ENABLED = '1';
+    const fetchMock = mockAgent(200, { ok: true });
+    const command = { vx: 0.01, vy: 0, wz: 0.2, ttlMs: 200 };
+    const res = await call(
+      routeHandler(buildRouter(), 'post', '/api/sim2real/board-station/policy/command'),
+      { method: 'POST', body: { command } },
+    );
+    expect(res.statusCode).toBe(200);
+    expect(fetchMock).toHaveBeenCalledWith(
+      'http://127.0.0.1:19100/v1/station/policy/command',
+      expect.objectContaining({
+        headers: expect.objectContaining({ authorization: 'Bearer board-secret' }),
+      }),
+    );
+    expect(JSON.parse(String((fetchMock.mock.calls[0] as unknown[])[1]!.body))).toEqual({
+      command,
+    });
+  });
+
+  it('refuses command updates when either platform motion gate is closed', async () => {
+    const fetchMock = vi.spyOn(globalThis, 'fetch');
+    for (const gate of ['policy', 'drive']) {
+      process.env.RDK_SIM2REAL_STATION_POLICY_ENABLED = gate === 'policy' ? '0' : '1';
+      process.env.RDK_SIM2REAL_STATION_DRIVE_ENABLED = gate === 'drive' ? '0' : '1';
+      const res = await call(
+        routeHandler(buildRouter(), 'post', '/api/sim2real/board-station/policy/command'),
+        { method: 'POST', body: { command: { vx: 0.01, vy: 0, wz: 0 } } },
+      );
+      expect(res.statusCode).toBe(409);
+    }
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('requires operate permission to refresh commands in a shared deployment', async () => {
+    process.env.RDK_SIM2REAL_STATION_POLICY_ENABLED = '1';
+    process.env.RDK_SIM2REAL_STATION_DRIVE_ENABLED = '1';
+    const fetchMock = vi.spyOn(globalThis, 'fetch');
+    const router = buildRouter({
+      auth: {
+        isMultiUserDeployment: () => true,
+        resolvePrincipal: () => ({ accountId: 'viewer', roles: ['viewer'] }),
+        resolveAccessToken: () => null,
+      },
+    });
+    const res = await call(
+      routeHandler(router, 'post', '/api/sim2real/board-station/policy/command'),
+      { method: 'POST', body: { command: { vx: 0, vy: 0, wz: 0 } } },
+    );
+    expect(res.statusCode).toBe(403);
+    expect(res.body).toMatchObject({ error: 'SIM2REAL_PERMISSION_DENIED' });
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('rejects malformed twists and leases before forwarding either motion surface', async () => {
+    process.env.RDK_SIM2REAL_STATION_POLICY_ENABLED = '1';
+    process.env.RDK_SIM2REAL_STATION_DRIVE_ENABLED = '1';
+    const fetchMock = vi.spyOn(globalThis, 'fetch');
+    for (const op of ['start', 'command']) {
+      for (const command of [
+        null,
+        {},
+        { vx: '1', vy: 0, wz: 0 },
+        { vx: 0, vy: true, wz: 0 },
+        { vx: 0, vy: 0, wz: Infinity },
+        { vx: 0, vy: 0, wz: 0, ttlMs: 2001 },
+        { vx: 0, vy: 0, wz: 0, ttlMs: 0 },
+      ]) {
+        const res = await call(
+          routeHandler(buildRouter(), 'post', `/api/sim2real/board-station/policy/${op}`),
+          { method: 'POST', body: { direction: 0, command } },
+        );
+        expect(res.statusCode).toBe(400);
+        expect(res.body).toMatchObject({ error: 'SIM2REAL_STATION_POLICY_INVALID_COMMAND' });
+      }
+    }
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 
   it('passes an agent-side refusal (409) through to the browser verbatim', async () => {

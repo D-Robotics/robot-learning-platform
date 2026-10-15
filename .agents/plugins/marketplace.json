@@ -1,0 +1,12 @@
+{
+  "name": "rdk-learning-platform",
+  "interface": { "displayName": "RDK Robot Learning Platform" },
+  "plugins": [
+    {
+      "name": "rdk-robot-learning-platform",
+      "source": { "source": "local", "path": "./plugins/rdk-robot-learning-platform" },
+      "policy": { "installation": "AVAILABLE", "authentication": "ON_INSTALL" },
+      "category": "Developer Tools"
+    }
+  ]
+}
