@@ -27,13 +27,27 @@ if (targetIndex < 0 || !args[targetIndex + 1]) {
   process.exit(2);
 }
 const target = resolve(args[targetIndex + 1]);
-const modulesDir = join(target, 'node_modules');
 const lockfile = JSON.parse(readFileSync(join(target, 'package-lock.json'), 'utf8'));
-const lockEntry = (name) => lockfile.packages[`node_modules/${name}`];
+const lockEntry = (location) => lockfile.packages[location];
 
-const pkgDir = (name) => join(modulesDir, ...name.split('/'));
-const installedVersion = (name) => {
-  const file = join(pkgDir(name), 'package.json');
+// npm may retain multiple versions below a parent's node_modules. Resolve each
+// edge from that parent's locked location instead of substituting the root's
+// package with the same name.
+function dependencyLocation(parent, name) {
+  let ancestor = parent;
+  while (true) {
+    const location = `${ancestor ? `${ancestor}/` : ''}node_modules/${name}`;
+    if (lockEntry(location)) return location;
+    if (!ancestor) return null;
+    const separator = ancestor.lastIndexOf('/node_modules/');
+    ancestor = separator < 0 ? '' : ancestor.slice(0, separator);
+  }
+}
+
+const packageName = (location) => location.split('node_modules/').at(-1);
+const pkgDir = (location) => join(target, location);
+const installedVersion = (location) => {
+  const file = join(pkgDir(location), 'package.json');
   if (!existsSync(file)) return null;
   return JSON.parse(readFileSync(file, 'utf8')).version;
 };
@@ -43,37 +57,39 @@ const walked = new Set();
 const stack = [];
 const rootEntry = lockfile.packages[''] || {};
 for (const name of Object.keys({ ...rootEntry.dependencies, ...rootEntry.optionalDependencies })) {
-  if (installedVersion(name)) stack.push(name);
+  const location = dependencyLocation('', name);
+  if (location) stack.push(location);
 }
 while (stack.length > 0) {
-  const name = stack.pop();
-  if (walked.has(name)) continue;
-  walked.add(name);
-  const entry = lockEntry(name);
+  const location = stack.pop();
+  if (walked.has(location)) continue;
+  walked.add(location);
+  const entry = lockEntry(location);
   if (!entry) continue;
-  const onDisk = installedVersion(name);
+  const onDisk = installedVersion(location);
   if (!onDisk) {
     if (!(entry.os || []).includes('linux') || (entry.cpu && !entry.cpu.includes('x64'))) continue;
-    wanted.add(name);
+    wanted.add(location);
   }
   const manifest = onDisk
-    ? JSON.parse(readFileSync(join(pkgDir(name), 'package.json'), 'utf8'))
+    ? JSON.parse(readFileSync(join(pkgDir(location), 'package.json'), 'utf8'))
     : entry;
   for (const child of Object.keys({
     ...manifest.dependencies,
     ...manifest.optionalDependencies,
   })) {
-    if (!lockEntry(child)) continue;
-    if (installedVersion(child) || !wanted.has(child)) stack.push(child);
+    const childLocation = dependencyLocation(location, child);
+    if (childLocation) stack.push(childLocation);
   }
 }
 
 // 手工解压不经过 npm reify：被补装包自身若声明普通依赖，必须确认已在树上。
-for (const name of wanted) {
-  for (const dep of Object.keys(lockEntry(name).dependencies || {})) {
-    if (!installedVersion(dep)) {
+for (const location of wanted) {
+  for (const dep of Object.keys(lockEntry(location).dependencies || {})) {
+    const depLocation = dependencyLocation(location, dep);
+    if (!depLocation || !installedVersion(depLocation)) {
       console.error(
-        `FATAL: ${name} 的普通依赖 ${dep} 不在组包树中，手工补装会破坏布局；请先排查组包结果。`,
+        `FATAL: ${packageName(location)} 的普通依赖 ${dep} 不在组包树中，手工补装会破坏布局；请先排查组包结果。`,
       );
       process.exit(1);
     }
@@ -85,16 +101,17 @@ if (wanted.size === 0) {
   process.exit(0);
 }
 
-const names = [...wanted].sort();
-for (const name of names) {
-  console.log(`缺失：${name}@${lockEntry(name).version}`);
+const locations = [...wanted].sort();
+for (const location of locations) {
+  console.log(`缺失：${packageName(location)}@${lockEntry(location).version}（${location}）`);
 }
 if (dryRun) process.exit(0);
 
 const work = mkdtempSync(join(tmpdir(), 'reify-addons.'));
 try {
-  for (const name of names) {
-    const entry = lockEntry(name);
+  for (const location of locations) {
+    const name = packageName(location);
+    const entry = lockEntry(location);
     execFileSync(
       'npm',
       ['pack', `${name}@${entry.version}`, '--pack-destination', work, '--loglevel=error'],
@@ -109,7 +126,7 @@ try {
     rmSync(extractDir, { recursive: true, force: true });
     mkdirSync(extractDir, { recursive: true });
     execFileSync('tar', ['-xzf', tgz, '-C', extractDir]);
-    cpSync(join(extractDir, 'package'), pkgDir(name), { recursive: true });
+    cpSync(join(extractDir, 'package'), pkgDir(location), { recursive: true });
     console.log(`已补齐：${name}@${entry.version}（sha512 校验通过）`);
   }
 } finally {

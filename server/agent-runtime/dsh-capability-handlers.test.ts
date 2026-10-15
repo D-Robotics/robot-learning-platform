@@ -261,6 +261,62 @@ describe('DSH capability handlers', () => {
     expect(keys).toEqual(['dsh-training-turn-repeat-0', 'dsh-training-turn-repeat-1']);
   });
 
+  it('keeps accepted 120-character turn ids within the route idempotency key limit', async () => {
+    const { fetchImpl, calls } = fakeLoopback([
+      (call) => ({
+        status: call.method === 'POST' ? 201 : 200,
+        body:
+          call.method === 'POST'
+            ? { ok: true, run: { id: 'run-long', status: 'queued' } }
+            : overviewPayload,
+      }),
+    ]);
+    const handlers = createDshCapabilityHandlers({ fetchImpl });
+    const channel = createDshAuthChannel();
+    const exec = { signal: new AbortController().signal } as never;
+    await channel.withAuth({ 'x-sim2real-turn-id': 'a'.repeat(120) }, async () => {
+      await handlers.rdk_training_submit({}, exec);
+      await handlers.rdk_training_submit({}, exec);
+    });
+    const keys = calls
+      .filter((call) => call.path === '/api/sim2real/runs')
+      .map((call) => call.headers['idempotency-key']);
+    expect(keys).toHaveLength(2);
+    for (const key of keys) expect(key).toMatch(/^[\x21-\x7e]{1,128}$/);
+    expect(keys[0]).toMatch(/^dsh-training-.+-0$/);
+    expect(keys[1]).toMatch(/^dsh-training-.+-1$/);
+    expect(keys[0]).not.toBe(keys[1]);
+  });
+
+  it('hashes long turn ids stably without collapsing ids that share a long prefix', async () => {
+    const { fetchImpl, calls } = fakeLoopback([
+      (call) => ({
+        status: call.method === 'POST' ? 201 : 200,
+        body:
+          call.method === 'POST'
+            ? { ok: true, run: { id: 'run-long', status: 'queued' } }
+            : overviewPayload,
+      }),
+    ]);
+    const handlers = createDshCapabilityHandlers({ fetchImpl });
+    const channel = createDshAuthChannel();
+    const exec = { signal: new AbortController().signal } as never;
+    const first = `${'a'.repeat(119)}b`;
+    const second = `${'a'.repeat(119)}c`;
+    for (const turnId of [first, first, second]) {
+      await channel.withAuth({ 'x-sim2real-turn-id': turnId }, () =>
+        handlers.rdk_training_submit({}, exec),
+      );
+    }
+    const keys = calls
+      .filter((call) => call.path === '/api/sim2real/runs')
+      .map((call) => call.headers['idempotency-key']);
+    expect(keys).toHaveLength(3);
+    expect(keys[0]).toMatch(/^dsh-training-sha256:[a-f0-9]{64}-0$/);
+    expect(keys[0]).toBe(keys[1]);
+    expect(keys[0]).not.toBe(keys[2]);
+  });
+
   it('digests the overview to compact model/run/device facts', async () => {
     const { fetchImpl } = fakeLoopback([() => ({ status: 200, body: overviewPayload })]);
     const handlers = createDshCapabilityHandlers({ fetchImpl });

@@ -1070,13 +1070,17 @@ paths:
                 model: { type: string, minLength: 1, maxLength: 160, pattern: "^[A-Za-z0-9][A-Za-z0-9._:/-]{0,159}$" }
                 turnId:
                   type: string
+                  minLength: 1
                   maxLength: 120
                   pattern: "^[A-Za-z0-9_-]+$"
                   description: >-
                     Client-generated turn key. When present, the turn survives a
                     client disconnect and its outcome stays pollable at
-                    `/dsh/chat/turns/{turnId}` until expiry; without it a client
-                    disconnect cancels the turn (legacy behaviour).
+                    `/dsh/chat/turns/{turnId}` until expiry or capacity eviction;
+                    without it a client disconnect cancels the turn (legacy
+                    behaviour). Keys are owner-scoped. Resubmitting a retained
+                    key returns 409; poll the existing turn instead of
+                    executing the prompt again.
       responses:
         "200":
           description: DSH response and session evidence.
@@ -1109,7 +1113,9 @@ paths:
         "400": { $ref: "#/components/responses/BadRequest" }
         "401": { $ref: "#/components/responses/AuthRequired" }
         "403": { description: Account lacks the Agent permission. }
-        "502": { description: DSH provider or runtime failure (generic, retryable). }
+        "409": { description: DSH_TURN_EXISTS; poll this owner's existing turn. }
+        "429": { description: DSH_TURN_CAPACITY; all 64 registry entries are active. Retry-After is 30 seconds. }
+        "502": { description: DSH provider/runtime failure, cancellation or timeout. }
         "503": { description: DSH runtime is not enabled on this deployment. }
   /api/sim2real/dsh/chat/turns/{turnId}:
     get:
@@ -1119,9 +1125,11 @@ paths:
       description: >-
         Re-attach surface for a turn sent with a `turnId`: the turn keeps
         running after its browser connection dies, and a reloaded page polls
-        here until the terminal state. 404 covers missing, expired (15 min
-        retention) and foreign turns alike; running turns past the retention
-        window report `status: failed` with `DSH_TURN_TIMEOUT`.
+        here until the terminal state. Outcomes are retained in this application
+        instance for up to 15 minutes after completion; capacity eviction or a
+        server restart can remove them earlier. 404 covers missing, expired
+        and foreign turns alike. After 15 minutes, running turns are aborted
+        and report `status: failed` with `DSH_TURN_TIMEOUT`.
       parameters:
         - name: turnId
           in: path
@@ -1157,7 +1165,10 @@ paths:
       operationId: cancelSim2RealDshTurn
       description: >-
         Owner-scoped cancellation of a still-running turn. Idempotent: an
-        already-terminal turn reports its current status unchanged.
+        already-terminal turn reports its current status unchanged. Unknown
+        or foreign keys also return cancelled and remember this owner's stop
+        intent briefly (up to 30 seconds, bounded to 64 entries), so a stop
+        racing ahead of the chat POST cancels that turn before execution.
       parameters:
         - name: turnId
           in: path
@@ -1178,7 +1189,6 @@ paths:
         "400": { $ref: "#/components/responses/BadRequest" }
         "401": { $ref: "#/components/responses/AuthRequired" }
         "403": { description: Account lacks the Agent permission. }
-        "404": { description: Unknown, expired or foreign turn. }
   /api/sim2real/auth/session:
     get:
       tags: [sso]

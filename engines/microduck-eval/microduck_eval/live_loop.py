@@ -40,7 +40,7 @@ from urllib.parse import urlsplit
 import numpy as np
 
 from .envelope import NOMINAL
-from .policy import load_policy
+from .policy import MAX_HISTORY_FRAMES, OBSERVATION_SIZE, load_policy
 from .sim import CONTROL_HZ, MicroDuckSim, find_scene
 
 #: The velocity envelope the shipped policies train against is ±0.4 m/s
@@ -110,15 +110,23 @@ class BoardInferError(RuntimeError):
 class BoardPolicy:
     """One-row client for the board station batch-inference contract.
 
-    Response rows are the loaded model's actions; the board runtime owns any
-    recurrent/stacked state, so this side stays stateless on purpose.
+    Response rows are the loaded model's actions. The board batch endpoint
+    applies rows verbatim and owns no rolling history, so stacked policies
+    require caller-composed frames, oldest first, zero-filled at reset.
 
     The connection is reused across ticks: at 50 Hz a fresh TCP handshake per
     inference consumes most of the 20 ms budget, so one keep-alive connection
     is held open and re-opened (once per call) if the agent dropped it.
     """
 
-    def __init__(self, base_url: str, *, token: str = "", timeout_s: float = 2.0) -> None:
+    def __init__(
+        self, base_url: str, *, token: str = "", timeout_s: float = 2.0,
+        history_frames: int = 1,
+    ) -> None:
+        if not isinstance(history_frames, int) or not 1 <= history_frames <= MAX_HISTORY_FRAMES:
+            raise BoardInferError(
+                f"history_frames must be an integer in [1, {MAX_HISTORY_FRAMES}], got {history_frames!r}"
+            )
         url = base_url.rstrip("/")
         if not url.endswith(BOARD_INFER_PATH):
             url += BOARD_INFER_PATH
@@ -134,6 +142,13 @@ class BoardPolicy:
         self.timeout_s = timeout_s
         self.calls = 0
         self._connection: http.client.HTTPConnection | None = None
+        self.history_frames = history_frames
+        self.reset()
+
+    def reset(self) -> None:
+        self.history = [
+            np.zeros(OBSERVATION_SIZE, dtype=np.float32) for _ in range(self.history_frames)
+        ]
 
     def _headers(self) -> dict[str, str]:
         headers = {"Content-Type": "application/json", "Connection": "keep-alive"}
@@ -183,7 +198,12 @@ class BoardPolicy:
         return payload
 
     def act(self, observation: np.ndarray) -> np.ndarray:
-        body = json.dumps({"observations": [observation.astype(np.float32).tolist()]}).encode("utf-8")
+        observation = np.asarray(observation, dtype=np.float32)
+        if observation.shape != (OBSERVATION_SIZE,) or not np.all(np.isfinite(observation)):
+            raise BoardInferError(f"observation must be a finite ({OBSERVATION_SIZE},) row")
+        history = [*self.history[1:], observation.copy()]
+        model_input = np.concatenate(history)
+        body = json.dumps({"observations": [model_input.tolist()]}).encode("utf-8")
         status, payload = self._request("POST", self._infer_path, body)
         actions = payload.get("actions") if isinstance(payload, dict) else None
         if status >= 400 or not payload.get("ok") or not isinstance(actions, list) or not actions:
@@ -202,6 +222,7 @@ class BoardPolicy:
             raise BoardInferError(f"board returned action of shape {row.shape}, expected (14,){hint}")
         if not np.all(np.isfinite(row)):
             raise BoardInferError("board returned a non-finite action")
+        self.history = history
         self.calls += 1
         return row
 
@@ -255,18 +276,25 @@ def run_live(
     tick = 0
     started = time.monotonic()
     next_tick = started
+    period = 1.0 / CONTROL_HZ
+    deadline = started + duration_s if duration_s > 0 else None
     stop = False
     summary: dict[str, Any] = {}
     try:
         while not stop:
             now = time.monotonic()
-            if now < next_tick:
-                time.sleep(next_tick - now)
-            else:
-                slipped_ticks += int((now - next_tick) / (1.0 / CONTROL_HZ))
-            next_tick += 1.0 / CONTROL_HZ
-            if duration_s > 0 and now - started >= duration_s:
+            if deadline is not None and now >= deadline:
                 break
+            if now < next_tick:
+                wake_at = min(next_tick, deadline) if deadline is not None else next_tick
+                time.sleep(wake_at - now)
+                now = time.monotonic()
+            if deadline is not None and now >= deadline:
+                break
+            slipped_ticks += int(max(0.0, now - next_tick) / period)
+            # Rebase after a late tick: old deadlines are missed periods, not
+            # queued physics steps to run in a catch-up burst.
+            next_tick = now + period
 
             twist = command.get()
             # The 13-slot command block: live twist + head/body pose at rest,
@@ -332,7 +360,7 @@ def run_demo(
     sim: MicroDuckSim,
     backend,
     *,
-    schedule: list[tuple[str, tuple[float, float, float]]] | None = None,
+    schedule: list[tuple[str, tuple[float, float, float], float]] | None = None,
     print_hz: float = 5.0,
     on_status: Callable[[str], None] | None = None,
 ) -> dict[str, Any]:
@@ -342,18 +370,17 @@ def run_demo(
     the observable proof that a changed command reaches the policy on the next
     tick and the sim answers in closed loop.
     """
-    stages = list(schedule or DEMO_SCHEDULE)
+    stages = list(DEMO_SCHEDULE if schedule is None else schedule)
     command = TwistCommand(np.zeros(3, dtype=np.float32))
     emit = on_status or (lambda line: print(line, flush=True))
     ticks_per_stage = [int(round(seconds * CONTROL_HZ)) for _, _, seconds in stages]
+    if not stages or any(width < 1 for width in ticks_per_stage):
+        raise ValueError("demo needs at least one stage, each lasting at least one control tick")
     total_ticks = sum(ticks_per_stage)
     state = {"stage": -1}
 
-    def on_step(tick: int, _observation: np.ndarray, _action: np.ndarray):
+    def set_stage(tick: int) -> None:
         index = state["stage"]
-        if tick >= total_ticks:
-            emit(f"demo 编排完成：{len(stages)} 个阶段，共 {total_ticks / CONTROL_HZ:.0f}s")
-            return False
         next_index = 0
         consumed = 0
         for candidate, width in enumerate(ticks_per_stage):
@@ -366,8 +393,15 @@ def run_demo(
             command.set(twist)
             state["stage"] = next_index
             emit(f"▶ 阶段 {next_index + 1}/{len(stages)}：{label}（{seconds:.0f}s）→ cmd={list(twist)}")
+
+    def on_step(tick: int, _observation: np.ndarray, _action: np.ndarray):
+        if tick >= total_ticks:
+            emit(f"demo 编排完成：{len(stages)} 个阶段，共 {total_ticks / CONTROL_HZ:.0f}s")
+            return False
+        set_stage(tick)
         return None
 
+    set_stage(0)
     return run_live(
         sim,
         backend,
@@ -417,7 +451,8 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--model-root", required=True, help="path to a microduck_rl checkout")
     parser.add_argument("--backend", choices=("local", "board"), default="local")
     parser.add_argument("--policy", default=None, help="ONNX policy for --backend local")
-    parser.add_argument("--history-frames", type=int, default=1)
+    parser.add_argument("--history-frames", type=int, default=1,
+                        help="stacked observation depth for local or board inference (oldest first)")
     parser.add_argument("--board-url", default="http://127.0.0.1:19100",
                         help="board station agent base URL for --backend board")
     parser.add_argument("--board-token", default="",
@@ -449,8 +484,8 @@ def main(argv: list[str] | None = None) -> int:
         print("error: --backend local 需要 --policy 指向 ONNX 文件", file=sys.stderr)
         return 2
     if args.backend == "board":
-        backend = BoardPolicy(args.board_url, token=token)
         try:
+            backend = BoardPolicy(args.board_url, token=token, history_frames=args.history_frames)
             status = backend.check_reachable()
         except BoardInferError as error:
             print(f"error: {error}", file=sys.stderr)

@@ -304,9 +304,10 @@ describe('standalone Sim2Real health and optional simulator surface', () => {
     expect(cancel.status).toBe(200);
     expect(await cancel.json()).toMatchObject({ ok: true, status: 'cancelled' });
 
-    // The original poster's socket was still open, so it receives the generic
-    // upstream failure — the registry keeps the accurate cancelled reason.
-    await posting;
+    // Both the original response and a re-attaching poll keep the reviewed
+    // cancellation reason even when the provider rejects with a generic abort.
+    const stopped = await posting;
+    expect(await stopped.json()).toMatchObject({ error: 'DSH_TURN_CANCELLED' });
     const poll = await json(`${base}/api/sim2real/dsh/chat/turns/turn-cancel-1`);
     expect(poll.response.status).toBe(200);
     expect(poll.payload).toMatchObject({ ok: true, status: 'failed', error: 'DSH_TURN_CANCELLED' });

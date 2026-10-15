@@ -3,7 +3,7 @@
 No upstream MJCF is needed (the repo never distributes microduck_rl assets):
 the scene here is a minimal synthetic stand-in that satisfies the layout the
 harness asserts (14 named servos, trunk freejoint, gyro sensor). It proves the
-loop mechanics — 50 Hz pacing, twist injection into obs slots 58:61, backend
+loop mechanics — 50 Hz pacing, twist injection into obs slots 48:51, backend
 dispatch — not gait quality, which remains the evaluator's job.
 """
 
@@ -28,6 +28,7 @@ from microduck_eval.live_loop import (  # noqa: E402
     run_demo,
     run_live,
 )
+from microduck_eval import live_loop  # noqa: E402
 from microduck_eval.policy import ACTION_SIZE, OBSERVATION_SIZE, load_policy  # noqa: E402
 from microduck_eval.sim import SERVO_JOINT_ORDER, MicroDuckSim, find_scene  # noqa: E402
 
@@ -95,6 +96,7 @@ class StubStationHandler(BaseHTTPRequestHandler):
     token = ""
     last_body: dict | None = None
     client_ports: set[int] = set()
+    observation_width = OBSERVATION_SIZE
 
     def log_message(self, *args) -> None:  # keep pytest output clean
         pass
@@ -128,6 +130,9 @@ class StubStationHandler(BaseHTTPRequestHandler):
         if not isinstance(rows, list) or not rows or not isinstance(rows[0], list):
             self._json(400, {"ok": False, "error": "observations-not-2d"})
             return
+        if any(len(row) != type(self).observation_width for row in rows):
+            self._json(400, {"ok": False, "error": "observation-dimension-mismatch"})
+            return
         self._json(200, {"ok": True, "actions": [STUB_ACTION_ROW.tolist()] * len(rows)})
 
 
@@ -136,6 +141,7 @@ def stub_station():
     StubStationHandler.token = ""
     StubStationHandler.last_body = None
     StubStationHandler.client_ports = set()
+    StubStationHandler.observation_width = OBSERVATION_SIZE
     server = ThreadingHTTPServer(("127.0.0.1", 0), StubStationHandler)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
@@ -193,6 +199,51 @@ def test_board_policy_reuses_one_tcp_connection_across_calls(stub_station):
     assert board.calls == 5
 
 
+def test_board_policy_composes_and_resets_caller_owned_history(stub_station):
+    StubStationHandler.observation_width = OBSERVATION_SIZE * 3
+    board = BoardPolicy(stub_station, history_frames=3)
+    first = np.ones(OBSERVATION_SIZE, dtype=np.float32)
+    second = first * 2
+    board.act(first)
+    np.testing.assert_array_equal(
+        StubStationHandler.last_body["observations"][0],
+        np.concatenate([first * 0, first * 0, first]),
+    )
+    board.act(second)
+    np.testing.assert_array_equal(
+        StubStationHandler.last_body["observations"][0],
+        np.concatenate([first * 0, first, second]),
+    )
+    board.reset()
+    board.act(second)
+    np.testing.assert_array_equal(
+        StubStationHandler.last_body["observations"][0],
+        np.concatenate([first * 0, first * 0, second]),
+    )
+
+
+@pytest.mark.parametrize("frames", [0, -1, 65, 1.5])
+def test_board_policy_rejects_invalid_history_depth(frames):
+    with pytest.raises(BoardInferError, match="history_frames"):
+        BoardPolicy("http://127.0.0.1:9", history_frames=frames)
+
+
+def test_main_forwards_history_depth_to_board_backend(tmp_path, stub_station, monkeypatch):
+    _write_synthetic_scene(tmp_path / "microduck_rl")
+    StubStationHandler.observation_width = OBSERVATION_SIZE * 3
+
+    def run_once(_sim, backend, _command, **kwargs):
+        backend.act(np.ones(OBSERVATION_SIZE, dtype=np.float32))
+        return {"steps": 1}
+
+    monkeypatch.setattr(live_loop, "run_live", run_once)
+    assert live_loop.main([
+        "--backend", "board", "--board-url", stub_station,
+        "--model-root", str(tmp_path / "microduck_rl"),
+        "--history-frames", "3", "--duration", "0.02",
+    ]) == 0
+
+
 def test_board_policy_requires_matching_token(stub_station):
     StubStationHandler.token = "secret"
     board = BoardPolicy(stub_station, token="secret")
@@ -220,6 +271,62 @@ def _build_fixtures(tmp_path: Path):
     return load_policy(policy_path)
 
 
+class FakeClock:
+    def __init__(self):
+        self.now = 0.0
+
+    def monotonic(self):
+        return self.now
+
+    def sleep(self, seconds):
+        self.now += seconds
+
+
+class RecordingPolicy:
+    def __init__(self, clock, latencies=()):
+        self.clock = clock
+        self.latencies = iter(latencies)
+        self.observations = []
+        self.start_times = []
+
+    def act(self, observation):
+        self.start_times.append(self.clock.now)
+        self.observations.append(observation.copy())
+        self.clock.now += next(self.latencies, 0.0)
+        return np.zeros(ACTION_SIZE, dtype=np.float32)
+
+
+def test_run_live_drops_missed_deadlines_without_catchup_bursts(tmp_path, monkeypatch):
+    _write_synthetic_scene(tmp_path / "microduck_rl")
+    sim = MicroDuckSim(find_scene(tmp_path / "microduck_rl", with_ball=False, variant="walk"))
+    clock = FakeClock()
+    monkeypatch.setattr(live_loop, "time", clock)
+    policy = RecordingPolicy(clock, latencies=[0.09])
+    summary = run_live(
+        sim, policy, TwistCommand(parse_twist("0,0,0")),
+        on_step=lambda tick, *_: tick < 4,
+        on_status=lambda _: None,
+    )
+    # An initial 90 ms inference misses three complete 20 ms deadlines. Later
+    # inferences must each wait a fresh period instead of draining old ticks.
+    assert policy.start_times == pytest.approx([0.0, 0.09, 0.11, 0.13])
+    assert summary["slippedTicks"] == 3
+
+
+def test_run_live_checks_duration_after_waiting_for_tick(tmp_path, monkeypatch):
+    _write_synthetic_scene(tmp_path / "microduck_rl")
+    sim = MicroDuckSim(find_scene(tmp_path / "microduck_rl", with_ball=False, variant="walk"))
+    clock = FakeClock()
+    monkeypatch.setattr(live_loop, "time", clock)
+    policy = RecordingPolicy(clock)
+    summary = run_live(
+        sim, policy, TwistCommand(parse_twist("0,0,0")),
+        duration_s=0.05, on_status=lambda _: None,
+    )
+    assert policy.start_times == pytest.approx([0.0, 0.02, 0.04])
+    assert summary["wallSeconds"] == 0.05
+
+
 def test_run_live_local_backend_steps_and_injects_twist(tmp_path):
     policy = _build_fixtures(tmp_path)
     sim = MicroDuckSim(find_scene(tmp_path / "microduck_rl", with_ball=False, variant="walk"))
@@ -231,14 +338,15 @@ def test_run_live_local_backend_steps_and_injects_twist(tmp_path):
         seen.append((observation, action))
         if tick == 6:
             command.set(parse_twist("0.0,0.0,0.4"))
+        return tick < 12
 
     summary = run_live(
         sim, policy, command,
-        duration_s=0.24, print_hz=10.0,
+        print_hz=10.0,
         on_step=on_step, on_status=statuses.append,
     )
 
-    assert summary["steps"] >= 10
+    assert summary["steps"] == 12
     assert summary["slippedTicks"] >= 0
     assert len(seen) == summary["steps"]
     first_obs, first_action = seen[0]
@@ -261,14 +369,19 @@ def test_run_live_board_backend_applies_station_actions(tmp_path, stub_station):
     board.check_reachable()
 
     seen: list[tuple[np.ndarray, np.ndarray]] = []
+
+    def on_step(tick, observation, action):
+        seen.append((observation, action))
+        return tick < 6
+
     summary = run_live(
         sim, board, TwistCommand(parse_twist("0.1,0,0")),
-        duration_s=0.12, print_hz=50.0,
-        on_step=lambda tick, obs, action: seen.append((obs, action)),
+        print_hz=50.0,
+        on_step=on_step,
         on_status=lambda line: None,
     )
 
-    assert summary["steps"] >= 5
+    assert summary["steps"] == 6
     assert board.calls == summary["steps"]
     for observation, action in seen:
         assert observation.shape == (OBSERVATION_SIZE,)
@@ -278,8 +391,11 @@ def test_run_live_board_backend_applies_station_actions(tmp_path, stub_station):
 
 # ---- demo choreography ------------------------------------------------------
 
-def test_run_demo_walks_preset_schedule_and_stops(tmp_path):
-    policy = _build_fixtures(tmp_path)
+def test_run_demo_walks_preset_schedule_and_stops(tmp_path, monkeypatch):
+    _write_synthetic_scene(tmp_path / "microduck_rl")
+    clock = FakeClock()
+    monkeypatch.setattr(live_loop, "time", clock)
+    policy = RecordingPolicy(clock)
     sim = MicroDuckSim(find_scene(tmp_path / "microduck_rl", with_ball=False, variant="walk"))
     # Compressed schedule: three stages of 0.1 s each so the whole hello world
     # fits in 0.3 s of wall time while still exercising every transition.
@@ -300,3 +416,15 @@ def test_run_demo_walks_preset_schedule_and_stops(tmp_path):
     assert "左转" in stage_lines[1] and "cmd=[0.0, 0.0, 0.5]" in stage_lines[1]
     assert "站立" in stage_lines[2]
     assert any("编排完成" in line for line in lines)
+    # Every stage starts with its own command, including the very first tick.
+    np.testing.assert_allclose(
+        np.asarray(policy.observations)[:, 48:51],
+        np.repeat(np.asarray([stage[1] for stage in schedule]), 5, axis=0),
+        atol=1e-7,
+    )
+
+
+@pytest.mark.parametrize("schedule", [[], [("empty", (0, 0, 0), 0.0)], [("negative", (0, 0, 0), -1.0)]])
+def test_run_demo_rejects_schedules_without_any_control_ticks(schedule):
+    with pytest.raises(ValueError, match="at least one"):
+        run_demo(None, None, schedule=schedule)

@@ -18,7 +18,7 @@ import type { DshCapabilityHandlers } from './dsh-capability-tools.js';
 import type { ToolRunContext } from '@deepseek-ai/dsh-tools';
 import { readSim2RealAgentResponseText } from '../routes/sim2real-agent-routes.js';
 import { AsyncLocalStorage } from 'node:async_hooks';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { listManuals } from 'rdk-docs-mcp/dist/catalog.js';
 import { fetchText } from 'rdk-docs-mcp/dist/http.js';
 import { getPage, listToc, searchDocs } from 'rdk-docs-mcp/dist/service.js';
@@ -67,7 +67,14 @@ function dshIdempotencyKey(prefix: string): string {
     ? (store.idempotencyCounters.get(prefix) ?? 0)
     : 0;
   store?.idempotencyCounters.set(prefix, ordinal + 1);
-  return `dsh-${prefix}-${suffix}-${ordinal}`.slice(0, 200);
+  const key = `dsh-${prefix}-${suffix}-${ordinal}`;
+  if (key.length <= 128) return key;
+  // Chat accepts turn ids up to 120 characters, while domain routes cap the
+  // complete key at 128. Hash the entire suffix instead of truncating either
+  // the id or ordinal. ':' cannot occur in a client turn id, keeping hashed
+  // long ids distinct from unchanged short ids.
+  const digest = createHash('sha256').update(suffix).digest('hex');
+  return `dsh-${prefix}-sha256:${digest}-${ordinal}`;
 }
 
 function loopbackFetch(): LoopbackFetch {

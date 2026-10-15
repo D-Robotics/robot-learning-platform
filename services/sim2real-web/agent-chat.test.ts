@@ -333,6 +333,14 @@ describe('Agent chat browser behavior', () => {
       '已停止等待',
     );
     expect(stop.hidden).toBe(true);
+    input.value = '再检查一次设备';
+    form.dispatchEvent(new window.Event('submit', { bubbles: true, cancelable: true }));
+    await wait(10);
+    expect(stop.hidden).toBe(false);
+    expect(stop.disabled).toBe(false);
+    stop.click();
+    await wait(20);
+    expect(stop.hidden).toBe(true);
   });
 
   it('traps keyboard focus in the drawer and restores the opener on close', async () => {
@@ -871,6 +879,162 @@ describe('Agent session rail (G12: remember recent context)', () => {
     const transcript = window.document.querySelector('#agent-chat-messages')?.textContent || '';
     expect(transcript).toContain('刷新前的那轮没有完成');
     expect(transcript).toContain('本轮等待超时，请重试。');
+    expect(window.sessionStorage.getItem('rdk-sim2real-agent-pending-turn-v1')).toBeNull();
+  });
+
+  it('keeps a recovered turn busy, discovers approvals, and lets the operator cancel it', async () => {
+    const fetchImpl = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.endsWith('/turns/turn-busy')) {
+        return new Promise<Response>((_resolve, reject) => {
+          init?.signal?.addEventListener('abort', () => {
+            reject(new DOMException('The operation was aborted', 'AbortError'));
+          }, { once: true });
+        });
+      }
+      return jsonResponse({ ok: true });
+    });
+    const window = boot(fetchImpl, (win) => {
+      win.sessionStorage.setItem('rdk-sim2real-agent-pending-turn-v1', JSON.stringify({ turnId: 'turn-busy' }));
+      win.localStorage.setItem(SESSIONS_KEY, JSON.stringify([{
+        id: 'session-original', title: '原对话', messages: [{ role: 'user', text: '原问题' }],
+      }]));
+    });
+    await wait(30);
+    const form = window.document.querySelector<HTMLFormElement>('#agent-chat-form');
+    const stop = window.document.querySelector<HTMLButtonElement>('[data-agent-stop]');
+    expect(form?.getAttribute('aria-busy')).toBe('true');
+    expect(stop?.hidden).toBe(false);
+    expect(fetchImpl.mock.calls.some(([url]) => String(url).endsWith('/dsh/approvals'))).toBe(true);
+    window.document.querySelector<HTMLButtonElement>('#agent-new-session')?.click();
+    expect(window.document.querySelector('#agent-chat-messages')?.textContent).toContain('原问题');
+
+    stop?.click();
+    await wait(30);
+    expect(fetchImpl.mock.calls.some(([url]) => String(url).endsWith('/turns/turn-busy/cancel'))).toBe(true);
+    expect(form?.getAttribute('aria-busy')).toBe('false');
+    expect(window.sessionStorage.getItem('rdk-sim2real-agent-pending-turn-v1')).toBeNull();
+  });
+
+  it('restores the pending turn into its original session and keeps its DSH context for the next message', async () => {
+    const dshBodies: Array<Record<string, unknown>> = [];
+    const fetchImpl = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.endsWith('/turns/turn-context')) {
+        return jsonResponse({ ok: true, status: 'complete', sessionId: 'dsh-recovered', text: '恢复的回答' });
+      }
+      if (url.endsWith('/dsh/chat')) {
+        dshBodies.push(JSON.parse(String(init?.body)));
+        return jsonResponse({ ok: true, sessionId: 'dsh-recovered', text: '继续原对话' });
+      }
+      return jsonResponse({ ok: true });
+    });
+    const window = boot(fetchImpl, (win) => {
+      win.localStorage.setItem(SESSIONS_KEY, JSON.stringify([
+        { id: 'another-tab', title: '其它对话', messages: [{ role: 'user', text: '其它标签页的问题' }] },
+        { id: 'original', title: '原对话', messages: [{ role: 'user', text: '原来的问题' }] },
+      ]));
+      win.sessionStorage.setItem('rdk-sim2real-agent-pending-turn-v1', JSON.stringify({ turnId: 'turn-context', localSessionId: 'original' }));
+    });
+    await wait(30);
+    const transcript = window.document.querySelector('#agent-chat-messages')?.textContent;
+    expect(transcript).toContain('原来的问题');
+    expect(transcript).not.toContain('其它标签页的问题');
+    const stored = JSON.parse(window.localStorage.getItem(SESSIONS_KEY) || '[]');
+    expect(stored.find((item: { id: string }) => item.id === 'original').dshSessionId).toBe('dsh-recovered');
+    const input = window.document.querySelector<HTMLInputElement>('#agent-chat-input');
+    const form = window.document.querySelector<HTMLFormElement>('#agent-chat-form');
+    if (!input || !form) throw new Error('missing composer');
+    input.value = '继续';
+    form.dispatchEvent(new window.Event('submit', { bubbles: true, cancelable: true }));
+    await wait(30);
+    expect(dshBodies[0]?.sessionId).toBe('dsh-recovered');
+  });
+
+  it.each(['network', 401, 403, 502])('retries a transient recovery failure (%s) without throwing away the pending answer', async (failure) => {
+    let polls = 0;
+    const fetchImpl = vi.fn(async (input: RequestInfo | URL) => {
+      if (String(input).endsWith('/turns/turn-flaky')) {
+        polls += 1;
+        if (polls === 1) {
+          if (typeof failure === 'number') return jsonResponse({ error: 'TEMPORARILY_UNAVAILABLE' }, failure);
+          throw new TypeError('network offline');
+        }
+        return jsonResponse({ ok: true, status: 'complete', text: '网络恢复后取得的回答' });
+      }
+      return jsonResponse({ ok: true });
+    });
+    const window = boot(fetchImpl, (win) => {
+      win.sessionStorage.setItem('rdk-sim2real-agent-pending-turn-v1', JSON.stringify({ turnId: 'turn-flaky' }));
+    });
+    await wait(30);
+    expect(window.sessionStorage.getItem('rdk-sim2real-agent-pending-turn-v1')).not.toBeNull();
+    expect(window.document.querySelector('#agent-chat-form')?.getAttribute('aria-busy')).toBe('true');
+    await wait(1550);
+    expect(window.document.querySelector('#agent-chat-messages')?.textContent).toContain('网络恢复后取得的回答');
+    expect(window.sessionStorage.getItem('rdk-sim2real-agent-pending-turn-v1')).toBeNull();
+  });
+
+  it.each(['disconnect', 'duplicate'])('recovers a %s response within the active turn instead of offering a concurrent retry', async (failure) => {
+    let finishPoll: (response: Response) => void = () => {};
+    const fetchImpl = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith('/dsh/chat')) {
+        if (failure === 'disconnect') throw new TypeError('connection reset');
+        return jsonResponse({ ok: false, error: 'DSH_TURN_EXISTS' }, 409);
+      }
+      if (/\/turns\/[^/]+$/.test(url)) {
+        return new Promise<Response>((resolve) => { finishPoll = resolve; });
+      }
+      return jsonResponse({ ok: true });
+    });
+    const window = boot(fetchImpl);
+    const input = window.document.querySelector<HTMLInputElement>('#agent-chat-input');
+    const form = window.document.querySelector<HTMLFormElement>('#agent-chat-form');
+    if (!input || !form) throw new Error('missing composer');
+    input.value = '检查状态';
+    form.dispatchEvent(new window.Event('submit', { bubbles: true, cancelable: true }));
+    await wait(30);
+    expect(form.getAttribute('aria-busy')).toBe('true');
+    expect(window.document.querySelector('.agent-retry')).toBeNull();
+    expect(window.sessionStorage.getItem('rdk-sim2real-agent-pending-turn-v1')).not.toBeNull();
+    finishPoll(jsonResponse({ ok: true, status: 'complete', text: '原轮次的答案' }));
+    await wait(30);
+    expect(window.document.querySelector('#agent-chat-messages')?.textContent).toContain('原轮次的答案');
+    expect(form.getAttribute('aria-busy')).toBe('false');
+    expect(window.sessionStorage.getItem('rdk-sim2real-agent-pending-turn-v1')).toBeNull();
+  });
+
+  it('keeps a long recovery busy and cancellable until its original answer completes', async () => {
+    let now = 0;
+    let polls = 0;
+    let finishPoll: (response: Response) => void = () => {};
+    const fetchImpl = vi.fn(async (input: RequestInfo | URL) => {
+      if (String(input).endsWith('/turns/turn-long-recovery')) {
+        polls += 1;
+        if (polls === 1) {
+          now = 10 * 60_000 + 1;
+          return jsonResponse({ ok: true, status: 'running' });
+        }
+        return new Promise<Response>((resolve) => { finishPoll = resolve; });
+      }
+      return jsonResponse({ ok: true });
+    });
+    const window = boot(fetchImpl, (win) => {
+      vi.spyOn(win.Date, 'now').mockImplementation(() => now);
+      win.sessionStorage.setItem('rdk-sim2real-agent-pending-turn-v1', JSON.stringify({ turnId: 'turn-long-recovery' }));
+    });
+    await wait(1550);
+    const form = window.document.querySelector<HTMLFormElement>('#agent-chat-form');
+    const stop = window.document.querySelector<HTMLButtonElement>('[data-agent-stop]');
+    expect(polls).toBe(2);
+    expect(form?.getAttribute('aria-busy')).toBe('true');
+    expect(stop?.hidden).toBe(false);
+    expect(window.sessionStorage.getItem('rdk-sim2real-agent-pending-turn-v1')).not.toBeNull();
+    finishPoll(jsonResponse({ ok: true, status: 'complete', text: '长等待后仍保留的原回答' }));
+    await wait(30);
+    expect(window.document.querySelector('#agent-chat-messages')?.textContent).toContain('长等待后仍保留的原回答');
+    expect(form?.getAttribute('aria-busy')).toBe('false');
     expect(window.sessionStorage.getItem('rdk-sim2real-agent-pending-turn-v1')).toBeNull();
   });
 });

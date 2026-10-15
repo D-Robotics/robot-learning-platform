@@ -88,6 +88,7 @@ import {
   studioSsoAuth,
 } from './studio-sso-auth.js';
 import type { Sim2RealPrincipal } from '../../server/sim2real/sim2real-auth.js';
+import { DshTurnRegistry, type DshTurnRecord } from './dsh-turn-registry.js';
 import {
   createStudioDirectRelay,
   renderStudioDirectLoginPage,
@@ -128,7 +129,7 @@ const SIM2REAL_DSH_MAX_REASONING_CHARS = 8_000;
 const SIM2REAL_DSH_MAX_TOOL_TRAIL = 30;
 const SAFE_DSH_MODEL = /^[A-Za-z0-9][A-Za-z0-9._:/-]{0,159}$/;
 
-const dshSessionTails = new Map<string, Promise<void>>();
+const dshSessionWaiters = new Map<string, Set<() => void>>();
 type DshApprovalOutcome = 'allowed-once' | 'rejected' | 'cancelled' | 'unavailable';
 type PendingDshApproval = {
   id: string;
@@ -142,20 +143,45 @@ const pendingDshApprovals = new Map<string, PendingDshApproval>();
 const DSH_APPROVAL_TTL_MS = 120_000;
 
 /** Serialize turns that target one persisted conversation. */
-async function withDshSessionLock<T>(key: string, work: () => Promise<T>): Promise<T> {
-  const previous = dshSessionTails.get(key) ?? Promise.resolve();
-  let release!: () => void;
-  const current = new Promise<void>((resolve) => {
-    release = resolve;
-  });
-  const queued = previous.then(() => current);
-  dshSessionTails.set(key, queued);
-  await previous;
+async function withDshSessionLock<T>(
+  key: string,
+  signal: AbortSignal,
+  work: () => Promise<T>,
+): Promise<T> {
+  signal.throwIfAborted();
+  const existing = dshSessionWaiters.get(key);
+  const waiters = existing ?? new Set<() => void>();
+  if (existing) {
+    await new Promise<void>((resolve, reject) => {
+      const grant = () => {
+        signal.removeEventListener('abort', abort);
+        resolve();
+      };
+      const abort = () => {
+        // Remove only this waiting turn. The active turn still owns the
+        // session, and later turns must continue waiting for its release.
+        waiters.delete(grant);
+        signal.removeEventListener('abort', abort);
+        reject(signal.reason);
+      };
+      waiters.add(grant);
+      signal.addEventListener('abort', abort, { once: true });
+    });
+  } else {
+    dshSessionWaiters.set(key, waiters);
+  }
   try {
+    // Abort can happen after a grant but before this continuation runs.
+    signal.throwIfAborted();
     return await work();
   } finally {
-    release();
-    if (dshSessionTails.get(key) === queued) dshSessionTails.delete(key);
+    const next = waiters.values().next().value;
+    if (next) {
+      waiters.delete(next);
+      next();
+    } else {
+      dshSessionWaiters.delete(key);
+    }
   }
 }
 
@@ -163,107 +189,6 @@ function dshOwnerScope(principal: { accountId?: string } | null, multiUser: bool
   return multiUser
     ? `sso:${String(principal?.accountId ?? '').trim() || 'unknown'}`
     : 'single-user';
-}
-
-/**
- * Terminal DSH turns are kept briefly so a page refreshed mid-interpretation
- * can re-attach and still receive the answer instead of losing it. Entries
- * are owner-scoped at the askDsh layer; the registry only remembers which
- * owner scope may poll each turn.
- */
-type DshTurnRecord = {
-  ownerScope: string;
-  publicSessionId: string;
-  status: 'running' | 'complete' | 'failed';
-  controller: AbortController;
-  startedAt: number;
-  completedAt?: number;
-  reply?: Record<string, unknown>;
-  failure?: { status: number; body: Record<string, unknown> };
-};
-
-const DSH_TURN_RETENTION_MS = 15 * 60_000;
-const DSH_TURN_REGISTRY_CAP = 64;
-const dshTurns = new Map<string, DshTurnRecord>();
-
-// A cancel can outrun the POST that registers the turn (both race through
-// validation); remember it briefly so the stop button never turns into a
-// no-op for a turn that starts microseconds later.
-const DSH_EARLY_CANCEL_TTL_MS = 30_000;
-const dshEarlyCancels = new Map<string, { ownerScope: string; at: number }>();
-
-function rememberEarlyCancel(turnId: string, ownerScope: string): void {
-  const now = Date.now();
-  for (const [key, entry] of dshEarlyCancels) {
-    if (now - entry.at > DSH_EARLY_CANCEL_TTL_MS) dshEarlyCancels.delete(key);
-  }
-  dshEarlyCancels.set(turnId, { ownerScope, at: now });
-}
-
-function consumeEarlyCancel(turnId: string, ownerScope: string): boolean {
-  const entry = dshEarlyCancels.get(turnId);
-  if (!entry || entry.ownerScope !== ownerScope) return false;
-  if (Date.now() - entry.at > DSH_EARLY_CANCEL_TTL_MS) {
-    dshEarlyCancels.delete(turnId);
-    return false;
-  }
-  dshEarlyCancels.delete(turnId);
-  return true;
-}
-
-function sweepDshTurns(now = Date.now()): void {
-  for (const [key, record] of dshTurns) {
-    if (record.status !== 'running' && now - (record.completedAt ?? now) > DSH_TURN_RETENTION_MS) {
-      dshTurns.delete(key);
-    }
-  }
-  while (dshTurns.size >= DSH_TURN_REGISTRY_CAP) {
-    const oldest = dshTurns.keys().next().value as string | undefined;
-    if (oldest === undefined) break;
-    const record = dshTurns.get(oldest);
-    if (record?.status === 'running') break;
-    dshTurns.delete(oldest);
-  }
-}
-
-function registerDshTurn(
-  turnId: string,
-  init: { ownerScope: string; publicSessionId: string; controller: AbortController },
-): DshTurnRecord {
-  sweepDshTurns();
-  const record: DshTurnRecord = { ...init, status: 'running', startedAt: Date.now() };
-  dshTurns.set(turnId, record);
-  if (consumeEarlyCancel(turnId, init.ownerScope)) {
-    failRunningDshTurn(record, {
-      ok: false,
-      error: 'DSH_TURN_CANCELLED',
-      message: '本轮已按要求停止。',
-    });
-    init.controller.abort();
-  }
-  return record;
-}
-
-function completeDshTurn(record: DshTurnRecord, reply: Record<string, unknown>): void {
-  record.status = 'complete';
-  record.completedAt = Date.now();
-  record.reply = reply;
-}
-
-function failRunningDshTurn(
-  record: DshTurnRecord,
-  body: Record<string, unknown>,
-  status = 502,
-): void {
-  if (record.status !== 'running') return;
-  record.status = 'failed';
-  record.completedAt = Date.now();
-  record.failure = { status, body };
-}
-
-function failDshTurnById(turnId: string, status: number, body: Record<string, unknown>): void {
-  const record = dshTurns.get(turnId);
-  if (record) failRunningDshTurn(record, body, status);
 }
 
 function dshTurnPrincipal(request: express.Request) {
@@ -634,7 +559,7 @@ function microduckUnavailablePage(response: express.Response): void {
   response
     .status(503)
     .setHeader('Cache-Control', 'no-store')
-    .sendFile(path.join(PUBLIC_ROOT, 'microduck-unavailable.html'));
+    .sendFile(path.join(PUBLIC_ROOT, 'microduck-unavailable.html'), { dotfiles: 'allow' });
 }
 
 async function proxyMicroduck(request: express.Request, response: express.Response): Promise<void> {
@@ -754,6 +679,7 @@ async function proxyMicroduck(request: express.Request, response: express.Respon
 
 export function createSim2RealWebApp(): Express {
   const app = express();
+  const dshTurns = new DshTurnRegistry();
   app.disable('x-powered-by');
   if (parseTrustProxyFlag(process.env.EXPRESS_TRUST_PROXY)) app.set('trust proxy', 1);
 
@@ -1223,10 +1149,17 @@ export function createSim2RealWebApp(): Express {
     }
     const requestAbort = new AbortController();
     const abortRequest = () => requestAbort.abort();
+    const abortDisconnectedResponse = () => {
+      if (!response.writableEnded) requestAbort.abort();
+    };
+    let turnRecord: DshTurnRecord | null = null;
     if (!turnId) {
       // Without a turn id there is nothing to re-attach to after a reload, so
       // keep the legacy contract: a client disconnect cancels the work.
       request.once('aborted', abortRequest);
+      // Once the JSON body is fully uploaded, a disconnect closes the
+      // response without aborting the completed IncomingMessage.
+      response.once('close', abortDisconnectedResponse);
     }
     try {
       // The browser sees an opaque per-conversation id. In shared deployments
@@ -1263,13 +1196,31 @@ export function createSim2RealWebApp(): Express {
       const turnPrompt = contextPart ? `${prompt}\n\n[当前工作区选择] ${contextPart}` : prompt;
       const channel = (app.locals as Record<string, unknown>).dshAuthChannel as
         ReturnType<typeof createDshAuthChannel> | undefined;
-      const turnRecord = turnId
-        ? registerDshTurn(turnId, {
-            ownerScope,
-            publicSessionId,
-            controller: requestAbort,
-          })
-        : null;
+      if (turnId) {
+        const registration = dshTurns.register(turnId, {
+          ownerScope,
+          publicSessionId,
+          controller: requestAbort,
+        });
+        if ('error' in registration) {
+          if (registration.error === 'exists') {
+            response.status(409).json({
+              ok: false,
+              error: 'DSH_TURN_EXISTS',
+              message: '该轮次已经提交，请查询已有轮次的结果。',
+            });
+          } else {
+            response.setHeader('Retry-After', '30');
+            response.status(429).json({
+              ok: false,
+              error: 'DSH_TURN_CAPACITY',
+              message: '当前进行中的轮次过多，请稍后重试。',
+            });
+          }
+          return;
+        }
+        turnRecord = registration.record;
+      }
       if (turnRecord) {
         // With a turn id the interpretation outlives the connection: a page
         // refresh must not kill it, so the disconnect is deliberately ignored
@@ -1277,13 +1228,15 @@ export function createSim2RealWebApp(): Express {
         // Writes to the dead socket are discarded instead of crashing.
         response.on('error', () => {});
       }
-      const result = await withDshSessionLock(sessionLockKey, () => {
-        const work = () =>
-          askDsh(runtime, turnPrompt, {
+      const result = await withDshSessionLock(sessionLockKey, requestAbort.signal, () => {
+        const work = () => {
+          requestAbort.signal.throwIfAborted();
+          return askDsh(runtime, turnPrompt, {
             ...(model ? { model } : {}),
             sessionId: backendSessionId,
             signal: requestAbort.signal,
           });
+        };
         return channel ? channel.withAuth(forwarded, work) : work();
       });
       const replyPayload = {
@@ -1295,7 +1248,13 @@ export function createSim2RealWebApp(): Express {
         events: publicDshEventTail(result.events),
         ...(result.usage ? { usage: result.usage } : {}),
       };
-      if (turnRecord) completeDshTurn(turnRecord, replyPayload);
+      if (turnRecord) {
+        dshTurns.complete(turnRecord, replyPayload);
+        if (turnRecord.failure) {
+          response.status(turnRecord.failure.status).json(turnRecord.failure.body);
+          return;
+        }
+      }
       response.json(replyPayload);
     } catch (error) {
       console.error('[sim2real-web] DSH chat failed:', redactInternalError(error));
@@ -1308,7 +1267,7 @@ export function createSim2RealWebApp(): Express {
       // A detached client (page refreshed mid-turn) can no longer receive the
       // failure, so the terminal state lands in the registry either way and
       // the HTTP body is only written while a socket remains.
-      const failure =
+      let failure: { status: number; body: Record<string, unknown> } =
         error instanceof DshAgentFailure
           ? {
               status: 502,
@@ -1328,8 +1287,9 @@ export function createSim2RealWebApp(): Express {
                 ...(responseRequestId(response) ? { requestId: responseRequestId(response) } : {}),
               },
             };
-      if (turnId) {
-        failDshTurnById(turnId, failure.status, failure.body);
+      if (turnRecord) {
+        dshTurns.fail(turnRecord, failure.body, failure.status);
+        failure = turnRecord.failure ?? failure;
         if (response.writable && !response.writableEnded) {
           response.status(failure.status).json(failure.body);
         }
@@ -1340,6 +1300,7 @@ export function createSim2RealWebApp(): Express {
       }
     } finally {
       request.off('aborted', abortRequest);
+      response.off('close', abortDisconnectedResponse);
     }
   });
   // Re-attach surface for a turn whose browser went away mid-interpretation
@@ -1358,22 +1319,15 @@ export function createSim2RealWebApp(): Express {
         .json({ ok: false, error: 'DSH_TURN_INVALID', message: '对话轮次标识无效。' });
       return;
     }
-    const record = dshTurns.get(turnId);
     const ownerScope = dshOwnerScope(principal, studioSsoAuth.isMultiUserDeployment());
-    if (!record || record.ownerScope !== ownerScope) {
+    const record = dshTurns.get(turnId, ownerScope);
+    if (!record) {
       response.status(404).json({
         ok: false,
         error: 'DSH_TURN_NOT_FOUND',
         message: '该轮次不存在、已过期或不在当前工作区。',
       });
       return;
-    }
-    if (record.status === 'running' && Date.now() - record.startedAt > DSH_TURN_RETENTION_MS) {
-      failRunningDshTurn(record, {
-        ok: false,
-        error: 'DSH_TURN_TIMEOUT',
-        message: '本轮等待超时，请重试。',
-      });
     }
     const base = { ok: true, turnId, sessionId: record.publicSessionId, status: record.status };
     if (record.status === 'complete' && record.reply) {
@@ -1412,34 +1366,8 @@ export function createSim2RealWebApp(): Express {
         .json({ ok: false, error: 'DSH_TURN_INVALID', message: '对话轮次标识无效。' });
       return;
     }
-    const record = dshTurns.get(turnId);
     const ownerScope = dshOwnerScope(principal, studioSsoAuth.isMultiUserDeployment());
-    if (!record) {
-      // The POST may still be in flight; remember the intent so the turn, if
-      // it starts, begins already cancelled instead of ignoring the stop.
-      rememberEarlyCancel(turnId, ownerScope);
-      response.json({ ok: true, turnId, status: 'cancelled' });
-      return;
-    }
-    if (record.ownerScope !== ownerScope) {
-      response.status(404).json({
-        ok: false,
-        error: 'DSH_TURN_NOT_FOUND',
-        message: '该轮次不存在、已过期或不在当前工作区。',
-      });
-      return;
-    }
-    if (record.status === 'running') {
-      failRunningDshTurn(record, {
-        ok: false,
-        error: 'DSH_TURN_CANCELLED',
-        message: '本轮已按要求停止。',
-      });
-      record.controller.abort();
-      response.json({ ok: true, turnId, status: 'cancelled' });
-      return;
-    }
-    response.json({ ok: true, turnId, status: record.status });
+    response.json({ ok: true, turnId, status: dshTurns.cancel(turnId, ownerScope) });
   });
   // Studio-cookie deployments also expose a credential relay so the workbench
   // can log in directly (POST /api/sso/login) instead of bouncing users to
@@ -1606,7 +1534,7 @@ export function createSim2RealWebApp(): Express {
     if (surface.state === 'mounted') {
       const root = configuredMicroduckRoot();
       if (root) {
-        response.sendFile(path.join(root, 'index.html'));
+        response.sendFile(path.join(root, 'index.html'), { dotfiles: 'allow' });
         return;
       }
       microduckUnavailablePage(response);
@@ -1660,7 +1588,7 @@ export function createSim2RealWebApp(): Express {
   });
   app.get('/originbot-sim/', (_request, response) => {
     response.setHeader('Cache-Control', 'no-cache');
-    response.sendFile(path.join(PUBLIC_ROOT, 'originbot-sim', 'index.html'));
+    response.sendFile(path.join(PUBLIC_ROOT, 'originbot-sim', 'index.html'), { dotfiles: 'allow' });
   });
 
   // The browser cannot start a process on the user's computer. These two
@@ -1671,7 +1599,9 @@ export function createSim2RealWebApp(): Express {
     response
       .setHeader('Cache-Control', 'no-cache')
       .type('application/javascript')
-      .sendFile(path.join(SERVICE_ROOT, '..', '..', 'scripts', 'local-gpu-agent.mjs'));
+      .sendFile(path.join(SERVICE_ROOT, '..', '..', 'scripts', 'local-gpu-agent.mjs'), {
+        dotfiles: 'allow',
+      });
   });
   app.get('/agent/install.sh', (request, response) => {
     const forwardedProto = String(request.headers['x-forwarded-proto'] ?? '')

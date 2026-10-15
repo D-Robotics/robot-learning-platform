@@ -773,6 +773,13 @@ if (process.env.VERIFY_SYSTEMD === '1') {
   }
 }
 
+const optionalDependencyTests = spawnSync(
+  process.execPath,
+  [path.join(root, 'scripts/reify-deployment-optional-deps.test.mjs')],
+  { stdio: 'inherit' },
+);
+assert.equal(optionalDependencyTests.status, 0, 'deployment optional dependency regressions');
+
 console.log(
   '[deployment-assets] PASS — service units, release guards, and static fallback are wired',
 );
