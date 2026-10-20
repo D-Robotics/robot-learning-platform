@@ -1259,12 +1259,12 @@ export function createSim2RealWebApp(): Express {
     }
     const requestAbort = new AbortController();
     const abortRequest = () => requestAbort.abort();
+    const abortResponse = () => {
+      if (!response.writableEnded) requestAbort.abort();
+    };
     if (!turnId) {
       // Without a turn id there is nothing to re-attach to after a reload, so
       // keep the legacy contract: a client disconnect cancels the work.
-      const abortResponse = () => {
-        if (!response.writableEnded) requestAbort.abort();
-      };
       request.once('aborted', abortRequest);
       response.once('close', abortResponse);
     }
