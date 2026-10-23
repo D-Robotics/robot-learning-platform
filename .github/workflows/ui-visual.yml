@@ -87,14 +87,14 @@ jobs:
         run: node services/sim2real-web/ui-train-journey.spec.mjs
       - name: Upload the journey logs on failure
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: journey-service-logs
           path: /tmp/journey-*.log
           if-no-files-found: ignore
       - name: Upload the service log on failure
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: sim2real-service-log
           path: /tmp/sim2real.log
