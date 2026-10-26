@@ -99,6 +99,22 @@ const ACTION_TASKS = Object.freeze({
 
 const ORIGINBOT_TASK_IDS = Object.freeze(['goal-navigation', 'visual-twist', 'data-collection', 'custom']);
 
+// The selector mixes two kinds of entries: basic actions recordable in the
+// browser sandbox, and engine-side training scenes (recurrent balance/swing,
+// football) that never change the sandbox picture. Group them so an operator
+// sees that difference before selecting, not only in the fine-print note.
+const TASK_OPTION_GROUPS = Object.freeze([
+  { label: '基础动作', ids: ['walk', 'turn', 'sit', 'recover', 'kick'] },
+  { label: '循环策略 · 引擎侧场景', match: (id) => id.startsWith('balance-') || id.startsWith('swing-') },
+  { label: '足球 · 引擎侧场景', match: (id) => id.startsWith('football-') },
+]);
+
+function taskEngineRequirement(taskId) {
+  if (taskId.startsWith('football-')) return 'microduck-football';
+  if (taskId.startsWith('balance-') || taskId.startsWith('swing-')) return 'microduck-recurrent';
+  return '';
+}
+
 function readTaskPreference() {
   try {
     // The one-command demo must open on the same, familiar action every time.
@@ -1429,6 +1445,41 @@ function syncSelect(select, options, value) {
     if (option.ai) el.dataset.ai = 'true';
     return el;
   }));
+  select.value = value;
+}
+
+// Grouped variant of syncSelect for the action-task selector only: entries
+// outside every group (custom, OriginBot tasks) stay flat after the groups.
+function syncTaskSelect(select, taskIds, value) {
+  if (!select) return;
+  const groups = TASK_OPTION_GROUPS.map((group) => ({
+    label: group.label,
+    ids: taskIds.filter((id) => (group.ids ? group.ids.includes(id) : group.match(id))),
+  })).filter((group) => group.ids.length > 0);
+  const groupedIds = new Set(groups.flatMap((group) => group.ids));
+  const rest = taskIds.filter((id) => !groupedIds.has(id));
+  const unchanged =
+    select.options.length === taskIds.length &&
+    taskIds.every((id, index) => select.options[index]?.value === id) &&
+    select.value === value;
+  if (unchanged) return;
+  const buildOption = (id) => {
+    const task = ACTION_TASKS[id];
+    const el = document.createElement('option');
+    el.value = id;
+    el.textContent = task.label;
+    el.title = task.scene ? `${task.hint}（引擎侧场景：${task.scene}）` : task.hint;
+    return el;
+  };
+  select.replaceChildren(
+    ...groups.flatMap((group) => {
+      const groupEl = document.createElement('optgroup');
+      groupEl.label = group.label;
+      for (const id of group.ids) groupEl.append(buildOption(id));
+      return [groupEl];
+    }),
+    ...rest.map(buildOption),
+  );
   select.value = value;
 }
 
@@ -2803,11 +2854,7 @@ function renderSelects() {
   if (taskSelect) {
     const taskIds = state.productId === 'originbot' ? ORIGINBOT_TASK_IDS : Object.keys(ACTION_TASKS).filter((id) => !ORIGINBOT_TASK_IDS.includes(id));
     if (!taskIds.includes(state.taskId)) state.taskId = state.productId === 'originbot' ? 'goal-navigation' : 'walk';
-    syncSelect(
-      taskSelect,
-      taskIds.map((id) => ({ value: id, textContent: ACTION_TASKS[id].label })),
-      state.taskId,
-    );
+    syncTaskSelect(taskSelect, taskIds, state.taskId);
     // Keep the task context visibly in sync with the native select.  The
     // action library below describes the model's controls, while this note
     // describes the workflow task selected by the operator.  Previously the
@@ -3709,6 +3756,23 @@ function renderEngineCapability() {
     }
   }
   setText('engine-capability-desc', capability.desc);
+}
+
+// A task whose scene lives engine-side only trains correctly on the engine
+// that implements it. Auto-switch deliberately covers only the unset/starter
+// default, so surface a persistent hint when operator override leaves a
+// mismatch instead of letting the run fail (or train the wrong scene) later.
+function renderTaskEngineCompatibility() {
+  const note = $('task-engine-mismatch-note');
+  if (!note) return;
+  const required = taskEngineRequirement(state.taskId);
+  const engine = String($('training-engine')?.value || '');
+  const task = ACTION_TASKS[state.taskId];
+  const mismatch = Boolean(required && engine && engine !== required);
+  note.hidden = !mismatch;
+  if (mismatch) {
+    note.textContent = `任务「${task.label}」的训练场景由 ${required} 引擎实现；当前训练引擎为「${engine}」，不包含该场景。如需训练此任务，请改选 ${required}。`;
+  }
 }
 
 function renderModel() {
@@ -11383,8 +11447,10 @@ function wireEvents() {
   $('training-engine')?.addEventListener('change', () => {
     renderEngineCapability();
     renderDemonstrations();
+    renderTaskEngineCompatibility();
   });
   renderEngineCapability();
+  renderTaskEngineCompatibility();
   // G13 explicit preference: restore the last-used training profile and label
   // it; every change persists for the next visit. The saved value never
   // reaches the submit body on its own — the select stays the single source.
@@ -11425,6 +11491,7 @@ function wireEvents() {
         renderEngineCapability();
       }
     }
+    renderTaskEngineCompatibility();
     saveWorkspaceContext();
     try {
       window.localStorage?.setItem('rdk-duck-lab-task', next);

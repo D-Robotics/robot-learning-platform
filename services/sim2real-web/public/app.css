@@ -7976,6 +7976,10 @@ body.agent-chat-open .agent-chat-composer .button-primary {
   font-size:var(--fs-meta);
   line-height: 1.55;
 }
+.task-engine-mismatch-note {
+  grid-column: 1 / -1;
+  color: var(--orange-text);
+}
 
 /* ---- Agent drawer v2: conversation first, inspector on demand ----------
    The previous drawer gave three equal-weight columns to history, chat and
