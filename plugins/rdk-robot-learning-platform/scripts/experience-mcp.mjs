@@ -36,6 +36,44 @@ export const EXPERIENCE_TOOLS = [
 ];
 
 export function experienceProxy(upstream, { env = process.env } = {}) {
+  const reservedNames = new Set(EXPERIENCE_TOOLS.map((tool) => tool.name));
+  const validateCatalogPage = (page) => {
+    if (
+      !Array.isArray(page?.tools) ||
+      page.tools.some((tool) => typeof tool?.name !== 'string' || !tool.name.trim()) ||
+      (page.nextCursor !== undefined &&
+        (typeof page.nextCursor !== 'string' || !page.nextCursor.length))
+    )
+      throw new Error('Invalid upstream tool catalog or paging cursor.');
+    const names = page.tools.map((tool) => tool.name);
+    if (new Set(names).size !== names.length)
+      throw new Error('Duplicate names in upstream tool catalog.');
+    if (names.some((name) => reservedNames.has(name)))
+      throw new Error('Upstream tool name collides with a reserved experience extension tool.');
+    return page;
+  };
+  const readCatalog = async (signal) => {
+    const tools = [];
+    const names = new Set();
+    const cursors = new Set();
+    let params = {};
+    for (let pageNumber = 0; pageNumber < 128; pageNumber++) {
+      signal?.throwIfAborted();
+      const page = validateCatalogPage(await upstream.request('tools/list', params, { signal }));
+      signal?.throwIfAborted();
+      for (const tool of page.tools) {
+        if (names.has(tool.name)) throw new Error('Duplicate names across catalog pages.');
+        names.add(tool.name);
+        tools.push(tool);
+      }
+      if (tools.length > 10000) throw new Error('Upstream tool catalog exceeds safety budget.');
+      if (page.nextCursor === undefined) return { tools };
+      if (cursors.has(page.nextCursor)) throw new Error('Repeated upstream paging cursor.');
+      cursors.add(page.nextCursor);
+      params = { cursor: page.nextCursor };
+    }
+    throw new Error('Upstream tool catalog exceeds paging budget.');
+  };
   const clientContext = () => {
     const configured = [
       'RDK_LEARNING_STUDIO_HOST_ORIGIN',
@@ -74,8 +112,11 @@ export function experienceProxy(upstream, { env = process.env } = {}) {
       };
     }
     if (method === 'tools/list') {
-      const result = await upstream.request(method, params, { signal });
-      return { ...result, tools: [...result.tools, ...EXPERIENCE_TOOLS] };
+      const result = validateCatalogPage(await upstream.request(method, params, { signal }));
+      // Preserve upstream paging; advertise the extension exactly once, on the final page.
+      return result.nextCursor === undefined
+        ? { ...result, tools: [...result.tools, ...EXPERIENCE_TOOLS] }
+        : result;
     }
     if (method === 'tools/call' && EXPERIENCE_TOOLS.some((t) => t.name === params.name)) {
       try {
@@ -94,8 +135,8 @@ export function experienceProxy(upstream, { env = process.env } = {}) {
             readToolResult(
               await upstream.request('tools/call', { name, arguments: args }, { signal }),
             );
+          const catalog = await readCatalog(signal);
           const status = await call('rdk_platform_status', {});
-          const catalog = await upstream.request('tools/list', {}, { signal });
           if (params.name === 'rdk_training_prepare')
             payload = await prepareTraining(params.arguments, call);
           else if (params.name === 'rdk_workflow_inspect')

@@ -283,3 +283,143 @@ test('packaging coverage accepts discovered optional tools but still rejects inv
     /unknown tool: rdk_invented/,
   );
 });
+
+test('experience tools appear once on the final upstream catalog page and preserve opaque cursors', async () => {
+  const { experienceProxy, EXPERIENCE_TOOLS } =
+    await import('../plugins/rdk-robot-learning-platform/scripts/experience-mcp.mjs');
+  const cursor = 'opaque+/token= with spaces';
+  const calls = [];
+  const first = { tools: [{ name: 'first' }], nextCursor: cursor, _meta: { page: 1 } };
+  const last = { tools: [{ name: 'last' }], _meta: { page: 2 } };
+  const proxy = experienceProxy({
+    request: async (method, params) => {
+      assert.equal(method, 'tools/list');
+      calls.push(params);
+      return params.cursor === cursor ? last : first;
+    },
+  });
+  assert.deepEqual(await proxy('tools/list', {}), first);
+  assert.deepEqual(await proxy('tools/list', { cursor }), {
+    ...last,
+    tools: [...last.tools, ...EXPERIENCE_TOOLS],
+  });
+  assert.deepEqual(calls, [{}, { cursor }]);
+});
+
+test('preparation discovers required tools beyond the first catalog page', async () => {
+  const { experienceProxy } =
+    await import('../plugins/rdk-robot-learning-platform/scripts/experience-mcp.mjs');
+  const calls = [];
+  const proxy = experienceProxy({
+    request: async (method, params) => {
+      calls.push([method, params]);
+      if (method === 'tools/list')
+        return params.cursor
+          ? { tools: [{ name: 'rdk_simulator_open' }] }
+          : { tools: [{ name: 'rdk_platform_status' }], nextCursor: 'next-page' };
+      const value =
+        params.name === 'rdk_platform_status'
+          ? { ...ready, baseUrl: options.baseUrl }
+          : { entryUrl: '/mujoco/microduck/' };
+      return { structuredContent: value };
+    },
+  });
+  const result = await proxy('tools/call', {
+    name: 'rdk_experience_prepare',
+    arguments: { profile },
+  });
+  assert.equal(result.structuredContent.status, 'prepared');
+  assert.deepEqual(
+    calls.filter(([method]) => method === 'tools/list').map(([, params]) => params),
+    [{}, { cursor: 'next-page' }],
+  );
+});
+
+test('catalog name collisions and repeated paging cursors fail explicitly before business calls', async () => {
+  const { experienceProxy } =
+    await import('../plugins/rdk-robot-learning-platform/scripts/experience-mcp.mjs');
+  const collision = experienceProxy({
+    request: async () => ({ tools: [{ name: 'rdk_experience_guide' }] }),
+  });
+  await assert.rejects(collision('tools/list'), /reserved|collision/i);
+  let reads = 0;
+  const looping = experienceProxy({
+    request: async (method) => {
+      assert.equal(method, 'tools/list', 'invalid catalog must not execute business tools');
+      return { tools: [{ name: `tool_${++reads}` }], nextCursor: 'same-cursor' };
+    },
+  });
+  const result = await looping('tools/call', {
+    name: 'rdk_experience_prepare',
+    arguments: { profile },
+  });
+  assert.equal(result.isError, true);
+  assert.match(JSON.stringify(result), /cursor|paging/i);
+  assert.equal(reads, 2);
+});
+
+test('catalog traversal rejects cross-page duplicates, invalid cursors and page-budget exhaustion', async () => {
+  const { experienceProxy } =
+    await import('../plugins/rdk-robot-learning-platform/scripts/experience-mcp.mjs');
+  for (const mode of ['duplicate', 'invalid-cursor', 'page-budget']) {
+    let reads = 0;
+    const proxy = experienceProxy({
+      request: async (method) => {
+        assert.equal(method, 'tools/list');
+        reads++;
+        if (mode === 'duplicate') return { tools: [{ name: 'same' }], nextCursor: `${reads}` };
+        if (mode === 'invalid-cursor') return { tools: [], nextCursor: 123 };
+        return { tools: [], nextCursor: `${reads}` };
+      },
+    });
+    const result = await proxy('tools/call', {
+      name: 'rdk_experience_prepare',
+      arguments: { profile },
+    });
+    assert.equal(result.isError, true);
+    assert.match(JSON.stringify(result), /Duplicate|cursor|budget/i);
+    assert.equal(reads, mode === 'page-budget' ? 128 : mode === 'duplicate' ? 2 : 1);
+  }
+});
+
+test('cancellation during catalog paging stops before platform reads', async () => {
+  const { experienceProxy } =
+    await import('../plugins/rdk-robot-learning-platform/scripts/experience-mcp.mjs');
+  const controller = new AbortController();
+  const proxy = experienceProxy({
+    request: async (method, _params, options) => {
+      assert.equal(method, 'tools/list');
+      assert.equal(options.signal, controller.signal);
+      controller.abort(new Error('catalog read cancelled'));
+      return { tools: [{ name: 'rdk_platform_status' }] };
+    },
+  });
+  const result = await proxy(
+    'tools/call',
+    { name: 'rdk_experience_prepare', arguments: { profile } },
+    controller.signal,
+  );
+  assert.equal(result.isError, true);
+  assert.match(JSON.stringify(result), /catalog read cancelled/);
+});
+
+test('preparation follows opaque catalog pages over an actual stdio child connection', async () => {
+  const { experienceProxy } =
+    await import('../plugins/rdk-robot-learning-platform/scripts/experience-mcp.mjs');
+  const source = `require('node:readline').createInterface({input:process.stdin}).on('line',line=>{const m=JSON.parse(line);if(m.id===undefined)return;let result;if(m.method==='tools/list')result=m.params.cursor==='opaque+/= second page'?{tools:[{name:'rdk_simulator_open'}]}:{tools:[{name:'rdk_platform_status'}],nextCursor:'opaque+/= second page'};else result={structuredContent:m.params.name==='rdk_platform_status'?{ok:true,baseUrl:'https://studio.example/learning',authMode:'cookie',health:{ready:true,degraded:[]},session:{authenticated:true}}:{entryUrl:'/mujoco/microduck/'}};console.log(JSON.stringify({jsonrpc:'2.0',id:m.id,result}));});`;
+  const upstream = connectMcp({ args: ['-e', source], timeoutMs: 2000 });
+  try {
+    const result = await experienceProxy(upstream)('tools/call', {
+      name: 'rdk_experience_prepare',
+      arguments: { profile },
+    });
+    assert.equal(result.structuredContent.status, 'prepared');
+    assert.equal(
+      result.structuredContent.entryUrl,
+      'https://studio.example/learning/mujoco/microduck/',
+    );
+    assert.ok(Object.values(result.structuredContent.execution).every((value) => value === false));
+  } finally {
+    await upstream.close();
+  }
+});
