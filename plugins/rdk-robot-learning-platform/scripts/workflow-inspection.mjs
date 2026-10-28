@@ -1,0 +1,417 @@
+/** Compose a lifecycle evidence report; never submits training or a deployment. */
+export const WORKFLOW_TOOLS = [
+  {
+    name: 'rdk_training_prepare',
+    description:
+      '新训练提交前刷新指定资源的健康检查并核对 MicroDuck 任务环境，避免“环境预检通过但健康记录过期”的卡点。只准备参数预览，不提交训练，不替换资源。',
+    inputSchema: {
+      type: 'object',
+      properties: { computeResourceId: { type: 'string' }, taskId: { type: 'string' } },
+      required: ['computeResourceId'],
+      additionalProperties: false,
+    },
+    annotations: { readOnlyHint: true, destructiveHint: false },
+  },
+  {
+    name: 'rdk_workflow_inspect',
+    description:
+      '读取当前同账号的机器人学习全流程证据，输出仿真、训练、评测、调优、部署的可视化状态与阻塞原因。只读，不自动选择最新 Run、不提交任务、不操作设备。',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        productId: { type: 'string' },
+        taskId: { type: 'string' },
+        runId: { type: 'string' },
+        computeResourceId: { type: 'string' },
+        evaluationId: { type: 'string' },
+        compareWithEvaluationId: { type: 'string' },
+      },
+      additionalProperties: false,
+    },
+    annotations: { readOnlyHint: true, destructiveHint: false },
+  },
+];
+const LABELS = {
+  ready: '可继续',
+  blocked: '受阻',
+  unknown: '待验证',
+  needs_input: '待选择',
+  completed: '已有完成证据',
+  running: '进行中',
+};
+export async function inspectWorkflow(input, call, toolNames, { now = Date.now() } = {}) {
+  if (!input || typeof input !== 'object' || Array.isArray(input))
+    throw new Error('参数必须是对象。');
+  for (const [key, value] of Object.entries(input))
+    if (
+      ![
+        'productId',
+        'taskId',
+        'runId',
+        'computeResourceId',
+        'evaluationId',
+        'compareWithEvaluationId',
+      ].includes(key) ||
+      typeof value !== 'string' ||
+      !value.trim()
+    )
+      throw new Error('仅接受非空的产品、任务、Run、资源或评测 ID。');
+  const observations = [];
+  async function read(name, args = {}) {
+    if (!toolNames.includes(name)) {
+      const observation = { tool: name, status: 'unsupported', error: '当前插件未提供此工具。' };
+      observations.push(observation);
+      return null;
+    }
+    try {
+      const value = await call(name, args);
+      observations.push({ tool: name, status: 'returned' });
+      return value;
+    } catch (error) {
+      observations.push({
+        tool: name,
+        status: 'failed',
+        error: error.message,
+        platformCode: error.platformCode ?? null,
+        httpStatus: error.httpStatus ?? null,
+      });
+      return null;
+    }
+  }
+  const status = await read('rdk_platform_status');
+  const stages = [];
+  const add = (id, title, state, reason, action) =>
+    stages.push({ id, title, state, reason, nextAction: action });
+  if (
+    !status ||
+    status.ok !== true ||
+    status.health?.ready !== true ||
+    status.health?.degraded?.length ||
+    status.canAccessWorkspace === false ||
+    (status.session?.authenticated !== true && status.authMode !== 'standalone-anonymous')
+  ) {
+    add(
+      'connect',
+      '连接与身份',
+      'blocked',
+      '当前连接、身份或服务就绪检查未通过。',
+      '先恢复当前客户端登录和服务，不切换数据源。',
+    );
+    return finish();
+  }
+  add('connect', '连接与身份', 'ready', '当前平台身份与服务就绪检查通过。', '沿当前连接继续。');
+  if (input.productId && input.productId !== 'microduck') {
+    add(
+      'product',
+      '机器人流程适配',
+      'unknown',
+      '当前组合流程尚未声明支持此产品；不会套用机器鸭配置。',
+      '使用该产品原子工具，或补充产品适配配置与验收。',
+    );
+    return finish();
+  }
+  const overview = await read('rdk_workspace_overview');
+  const simulator = overview?.integrations?.simulator;
+  add(
+    'simulate',
+    '仿真',
+    simulator?.available === true
+      ? 'ready'
+      : simulator?.available === false
+        ? 'blocked'
+        : 'unknown',
+    simulator?.available === true
+      ? '平台报告参考资源已挂载；画布加载与运动仍需页面证据。'
+      : (simulator?.reason ?? '没有取得可验证的仿真资源状态。'),
+    '调用场景准备工具取得入口，等待控制器加载稳定后观察运动与停止。',
+  );
+  const resources = await read('rdk_compute_resources_list');
+  const list = resources?.computeResources ?? [];
+  const resource = input.computeResourceId
+    ? list.find((x) => x.id === input.computeResourceId)
+    : null;
+  if (!input.computeResourceId)
+    add(
+      'compute',
+      '训练资源',
+      'needs_input',
+      `当前读取到 ${list.length} 个资源，尚未明确选择。`,
+      '指定 computeResourceId，再做实时连接测试与训练预检。',
+    );
+  else if (!resource)
+    add(
+      'compute',
+      '训练资源',
+      'blocked',
+      '指定资源未出现在本次返回中，可能不可见或结果被截断。',
+      '核对账号、资源 ID 和分页，不自动改选资源。',
+    );
+  else {
+    const checked = Date.parse(resource.lastCheckedAt ?? '');
+    const fresh = Number.isFinite(checked) && now - checked >= 0 && now - checked <= 600000;
+    const online = resource.status === 'online' && fresh;
+    add(
+      'compute',
+      '训练资源',
+      resource.status === 'offline' ? 'blocked' : online ? 'ready' : 'unknown',
+      resource.status === 'offline'
+        ? '平台最近一次检测报告 Worker 不可达。'
+        : online
+          ? '最近健康状态在线；仍需任务环境预检。'
+          : '健康状态缺失、未知或过期，不能以历史成功或提示文案代替。',
+      '通过原资源测试工具重新检测，不重复提交训练来测试连接。',
+    );
+  }
+  let lineage = null;
+  if (input.runId)
+    lineage = (await read('rdk_lineage_get', { runId: input.runId }))?.lineage ?? null;
+  const runStatus = input.runId ? await read('rdk_training_status', { runId: input.runId }) : null;
+  const run =
+    input.runId && runStatus?.runId === input.runId
+      ? { ...lineage?.run, ...runStatus, id: runStatus.runId }
+      : lineage?.run;
+  if (!input.runId)
+    add(
+      'train',
+      '训练',
+      'needs_input',
+      '尚未选择要检查的 Run。',
+      '先用明确模板预检并提交一次，保存 Run ID 和幂等键。',
+    );
+  else if (!run || run.id !== input.runId)
+    add(
+      'train',
+      '训练',
+      'blocked',
+      '指定 Run 的完整来源证据未取得或不匹配。',
+      '核对 Run ID、账号与平台接口。',
+    );
+  else
+    add(
+      'train',
+      '训练',
+      run.status === 'completed'
+        ? 'completed'
+        : ['queued', 'running'].includes(run.status)
+          ? 'running'
+          : 'blocked',
+      run.status === 'completed'
+        ? '此 Run 已完成；不代表策略质量或真机任务通过。'
+        : (run.summary ?? `Run 状态为 ${run.status}。`),
+      run.status === 'completed'
+        ? '核对模型、制品摘要、保留状态与独立评测。'
+        : '查询原 Run 状态和日志，不重复提交。',
+    );
+  const preflight = input.computeResourceId
+    ? await read('rdk_training_preflight', {
+        computeResourceId: input.computeResourceId,
+        taskId: input.taskId ?? run?.taskId ?? 'walk',
+      })
+    : null;
+  if (input.computeResourceId)
+    add(
+      'environment',
+      '训练环境',
+      preflight?.readyForSmokeTraining === true || preflight?.report?.readyForSmokeTraining === true
+        ? 'ready'
+        : preflight
+          ? 'unknown'
+          : 'blocked',
+      preflight
+        ? '已取得环境回执，实际字段与任务依赖仍按平台结果判断。'
+        : '环境预检未取得；缺接口或执行器不可达时不允许宣称训练可用。',
+      '修复预检接口及 Worker 环境后复测；不将预检降级为训练通过。',
+    );
+  let evaluation = null;
+  let comparison = null;
+  if (input.evaluationId)
+    evaluation = await read('rdk_physical_evaluation_status', { evaluationId: input.evaluationId });
+  const record = evaluation?.evaluation;
+  const expectedSha = run?.artifactRetention?.sha256 ?? run?.artifact?.sha256;
+  const sameRun = Boolean(input.runId && record?.runId === input.runId && run?.id === input.runId);
+  const digestBound = Boolean(
+    /^[a-f0-9]{64}$/.test(expectedSha ?? '') &&
+    record?.execution?.policySha256 === expectedSha &&
+    record?.taskEvaluation?.dynamicsFacts?.policySha256 === expectedSha,
+  );
+  const reportValid =
+    record?.source === 'runner' &&
+    record?.execution?.kind === 'microduck-physics' &&
+    record?.taskEvaluation?.harnessQualification?.passed === true &&
+    /^[a-f0-9]{64}$/.test(record?.taskEvaluation?.reportSha256 ?? '') &&
+    ['nominal', 'hard'].every((name) => {
+      const e = record?.taskEvaluation?.trained?.envelopes?.[name];
+      return (
+        Number.isSafeInteger(e?.episodes) &&
+        e.episodes > 0 &&
+        Number.isFinite(e.successRate) &&
+        e.successRate >= 0 &&
+        e.successRate <= 1
+      );
+    });
+  const qualityPassed =
+    sameRun &&
+    digestBound &&
+    reportValid &&
+    record?.status === 'passed' &&
+    evaluation?.qualityConclusion?.conclusive === true &&
+    evaluation?.qualityConclusion?.passed === true &&
+    record?.taskEvaluation?.qualityGate?.passed === true;
+  let evalState = input.evaluationId ? 'unknown' : 'needs_input';
+  let evalReason = input.evaluationId
+    ? '已取得回执，但尚未核齐 Run、制品摘要、样本与独立质量证据。'
+    : '尚未取得明确绑定的独立评测证据。';
+  if (input.evaluationId && !evaluation) {
+    evalState = 'blocked';
+    evalReason = '评测回执不可读。';
+  } else if (record && input.runId && record.runId !== input.runId) {
+    evalState = 'blocked';
+    evalReason = '这份评测属于其他 Run，不能借用其通过结论。';
+  } else if (record && sameRun && expectedSha && record.execution?.policySha256 !== expectedSha) {
+    evalState = 'blocked';
+    evalReason = '评测绑定的策略摘要与当前制品不同。';
+  } else if (record && ['queued', 'running'].includes(record.status)) {
+    evalState = 'running';
+    evalReason = '原独立评测仍在运行；继续查询，不重复提交。';
+  } else if (qualityPassed) {
+    evalState = 'completed';
+    evalReason = '同一 Run、同一摘要的独立仿真质量门通过；不代表真机部署通过。';
+  } else if (
+    evaluation?.qualityConclusion?.conclusive === true &&
+    evaluation.qualityConclusion.passed === false
+  ) {
+    evalState = 'blocked';
+    evalReason = '独立仿真质量门未通过；保留原策略用于诊断。';
+  }
+  add(
+    'evaluate',
+    '独立评测',
+    evalState,
+    evalReason,
+    '指定同一 Run 的 evaluationId，保留原评测与制品证据。',
+  );
+  if (input.compareWithEvaluationId && sameRun && digestBound)
+    comparison = (
+      await read('rdk_physical_evaluation_status', {
+        evaluationId: input.evaluationId,
+        compareWithEvaluationId: input.compareWithEvaluationId,
+      })
+    )?.comparison;
+  const comparable =
+    comparison?.comparable === true &&
+    comparison.left?.evaluationId === input.evaluationId &&
+    comparison.right?.evaluationId === input.compareWithEvaluationId &&
+    comparison.left?.runId === input.runId;
+  add(
+    'tune',
+    '调优与比较',
+    comparable ? 'ready' : 'unknown',
+    comparable
+      ? '同条件评测可以比较；差值不代表自动改善或部署授权。'
+      : '尚无绑定正确、同条件的两份评测比较。',
+    '一次改变少量明确参数，独立评测后再比较；不自动提交多轮训练。',
+  );
+  add(
+    'deploy',
+    '受控部署',
+    run?.artifact?.deployable === false ? 'blocked' : 'unknown',
+    run?.artifact?.deployable === false
+      ? '当前 Run 的策略明确为不可部署。'
+      : '尚未取得制品、设备绑定和部署门的完整结果。',
+    '核对制品摘要、质量与目标设备；部署预检会写入计划，不在本只读检查中执行。',
+  );
+  return finish();
+
+  function finish() {
+    const markdown =
+      '| 环节 | 状态 | 依据 | 下一步 |\n|---|---|---|---|\n' +
+      stages
+        .map(
+          (s) => `| ${s.title} | ${LABELS[s.state]} | ${cell(s.reason)} | ${cell(s.nextAction)} |`,
+        )
+        .join('\n');
+    return {
+      schemaVersion: 'rdk.workflow-inspection.v1',
+      generatedAt: new Date(now).toISOString(),
+      scope:
+        status?.dataScope ??
+        (status?.authMode === 'standalone-anonymous'
+          ? 'local-anonymous'
+          : 'current-platform-account'),
+      selection: input,
+      stages,
+      observations,
+      markdown,
+      verdict: stages.some((s) => s.state === 'blocked') ? 'blocked' : 'incomplete',
+      execution: {
+        trainingSubmitted: false,
+        evaluationSubmitted: false,
+        deploymentCreated: false,
+        deviceActuated: false,
+      },
+      note: '这是流程证据检查，不是完整任务验收。平台 reported 状态、真实执行和物理成功分别判断。',
+    };
+  }
+}
+function cell(value) {
+  return String(value)
+    .replace(/\|/g, '／')
+    .replace(/[\r\n]/g, ' ');
+}
+
+export async function prepareTraining(input, call) {
+  if (
+    !input ||
+    typeof input.computeResourceId !== 'string' ||
+    !input.computeResourceId.trim() ||
+    (input.taskId !== undefined && (typeof input.taskId !== 'string' || !input.taskId.trim()))
+  )
+    throw new Error('请明确指定训练资源和有效任务。');
+  const resource = await call('rdk_compute_resource_test', {
+    computeResourceId: input.computeResourceId,
+  });
+  if (
+    resource.id !== input.computeResourceId ||
+    resource.connected !== true ||
+    resource.mock !== false ||
+    resource.browserRelay === true
+  )
+    return {
+      status: 'blocked',
+      computeResourceId: input.computeResourceId,
+      reason: '指定执行资源未通过真实连接检查，不创建训练记录。',
+      trainingSubmitted: false,
+      resource,
+    };
+  const preflight = await call('rdk_training_preflight', {
+    computeResourceId: input.computeResourceId,
+    taskId: input.taskId ?? 'walk',
+  });
+  if (
+    preflight.computeResourceId !== input.computeResourceId ||
+    preflight.report?.readyForSmokeTraining !== true
+  )
+    return {
+      status: 'blocked',
+      reason: '任务环境检查尚未通过。',
+      trainingSubmitted: false,
+      preflight,
+    };
+  return {
+    status: 'prepared',
+    computeResourceId: input.computeResourceId,
+    trainingSubmitted: false,
+    preflight,
+    preview: {
+      tool: 'rdk_training_submit',
+      arguments: {
+        computeResourceId: input.computeResourceId,
+        taskId: input.taskId ?? 'walk',
+        backend: 'local',
+        engine: 'microduck-rl',
+        algorithm: 'ppo',
+      },
+    },
+    note: '这是新提交前的实时准备；参数仍由平台校验。续训还须确认 checkpoint 在所选 Worker 上；保存 Run ID 和幂等键，重试已提交任务时直接查原 Run。',
+  };
+}

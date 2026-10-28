@@ -1,0 +1,232 @@
+#!/usr/bin/env node
+/** Add read-only experience composition while preserving the installed upstream MCP. */
+import { readFileSync } from 'node:fs';
+import { createInterface } from 'node:readline';
+import {
+  connectMcp,
+  prepareExperience,
+  readToolResult,
+  isDirectInvocation,
+} from './experience.mjs';
+import { WORKFLOW_TOOLS, inspectWorkflow, prepareTraining } from './workflow-inspection.mjs';
+
+export const EXPERIENCE_TOOLS = [
+  ...WORKFLOW_TOOLS,
+  {
+    name: 'rdk_experience_guide',
+    description:
+      '读取可复用的场景准备、恢复与自由探索指南，以及本次宿主计算接口配置状态；不返回凭据，不依赖宿主 load_skill。',
+    inputSchema: { type: 'object', properties: {}, additionalProperties: false },
+    annotations: { readOnlyHint: true, destructiveHint: false },
+  },
+  {
+    name: 'rdk_experience_prepare',
+    description:
+      '用当前同一账号连接实时检查场景、指定策略并准备仿真入口。不会打开页面、驱动设备或提交训练；恢复动作仅返回待执行指引。可传其他场景配置，默认机器鸭参考体验。',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        action: { type: 'string', enum: ['check', 'prepare', 'recover'] },
+        profile: { type: 'object' },
+      },
+      additionalProperties: false,
+    },
+    annotations: { readOnlyHint: true, destructiveHint: false },
+  },
+];
+
+export function experienceProxy(upstream, { env = process.env } = {}) {
+  const clientContext = () => {
+    const configured = [
+      'RDK_LEARNING_STUDIO_HOST_ORIGIN',
+      'RDK_LEARNING_STUDIO_HOST_TOKEN',
+      'RDK_STUDIO_PLUGIN_REGISTRY',
+      'RDK_STUDIO_PLUGIN_ROOT',
+      'RDK_STUDIO_SESSION_FILE',
+    ].every((name) => typeof env[name] === 'string' && env[name].trim());
+    return {
+      observedAt: new Date().toISOString(),
+      nativeCompute: {
+        configuration: configured ? 'present' : 'missing',
+        runtimeVerified: false,
+        nextAction: configured
+          ? '配置存在；仍需通过原生计算状态工具核对宿主、账号和连接，不据配置宣称已接通。'
+          : '当前进程缺少受管计算宿主接口绑定。即使正在桌面 Studio 内，也需核对兼容宿主接口与插件连接配置；重复登录或改用独立 MCP 不会补齐接口。已有远程训练资源仍可单独检查。',
+      },
+      browserAuthentication:
+        '插件认证与网页认证分别验证；网页显示游客时，通过正常登录流程进入同一账号，不复制会话凭据。',
+    };
+  };
+  const readProfile = () =>
+    JSON.parse(
+      readFileSync(new URL('../references/experience-profile.json', import.meta.url), 'utf8'),
+    );
+  return async (method, params = {}, signal) => {
+    if (method === 'initialize') {
+      const result = await upstream.request(method, params, { signal });
+      return {
+        ...result,
+        instructions:
+          (result.instructions ?? '') +
+          '\n准备演示、首次体验或课程时优先调用 rdk_experience_guide 与 rdk_experience_prepare；可按用户目标自由组合步骤。工具准备成功不表示仿真已经运行。仿真、训练、调优、部署的全流程状态用 rdk_workflow_inspect 读取并展示 markdown 表格；未取得证据保持待验证。新提交训练前用 rdk_training_prepare 同时刷新资源健康和任务环境，预检结果不是训练结果；已提交任务只按 Run ID 查询。默认先一次流程检查并展示状态表；有明确阻塞时先解释和恢复，不为了凑齐工具而展开大量无关查询。指定 Run 的结论必须绑定同一 Run 和摘要，不借用全局 golden_path 或其他 Run 的通过状态；用户需要时再展开明细。\n本次原生计算配置：' +
+          clientContext().nativeCompute.configuration +
+          '。宿主接口缺失时不要要求已经在桌面中的用户重复“去桌面操作”；用指南中的 clientContext 说明实际缺口。',
+      };
+    }
+    if (method === 'tools/list') {
+      const result = await upstream.request(method, params, { signal });
+      return { ...result, tools: [...result.tools, ...EXPERIENCE_TOOLS] };
+    }
+    if (method === 'tools/call' && EXPERIENCE_TOOLS.some((t) => t.name === params.name)) {
+      try {
+        let payload;
+        if (params.name === 'rdk_experience_guide')
+          payload = {
+            clientContext: clientContext(),
+            guide: readFileSync(
+              new URL('../skills/experience-preparation/SKILL.md', import.meta.url),
+              'utf8',
+            ),
+            profile: readProfile(),
+          };
+        else {
+          const call = async (name, args) =>
+            readToolResult(
+              await upstream.request('tools/call', { name, arguments: args }, { signal }),
+            );
+          const status = await call('rdk_platform_status', {});
+          const catalog = await upstream.request('tools/list', {}, { signal });
+          if (params.name === 'rdk_training_prepare')
+            payload = await prepareTraining(params.arguments, call);
+          else if (params.name === 'rdk_workflow_inspect')
+            payload = await inspectWorkflow(
+              params.arguments ?? {},
+              call,
+              catalog.tools.map((t) => t.name),
+            );
+          else
+            payload = await prepareExperience(params.arguments?.profile ?? readProfile(), call, {
+              baseUrl: status.baseUrl,
+              tools: catalog.tools.map((t) => t.name),
+              action: params.arguments?.action ?? 'check',
+            });
+        }
+        return {
+          content: [{ type: 'text', text: JSON.stringify(payload) }],
+          structuredContent: payload,
+        };
+      } catch (error) {
+        const payload = {
+          ok: false,
+          error: {
+            message: error.message,
+            platformCode: error.platformCode ?? null,
+            httpStatus: error.httpStatus ?? null,
+          },
+        };
+        return {
+          isError: true,
+          content: [{ type: 'text', text: JSON.stringify(payload) }],
+          structuredContent: payload,
+        };
+      }
+    }
+    return upstream.request(method, params, { signal });
+  };
+}
+
+async function main() {
+  const upstream = connectMcp();
+  const dispatch = experienceProxy(upstream);
+  const lines = createInterface({ input: process.stdin });
+  const active = new Set();
+  const controllers = new Map();
+  const stop = async () => {
+    for (const c of controllers.values()) c.abort();
+    lines.close();
+    await upstream.close();
+    process.exit(0);
+  };
+  process.once('SIGTERM', stop);
+  process.once('SIGINT', stop);
+  for await (const line of lines) {
+    if (line.length > 1048576) {
+      process.stdout.write(
+        JSON.stringify({
+          jsonrpc: '2.0',
+          id: null,
+          error: { code: -32700, message: 'Request too large.' },
+        }) + '\n',
+      );
+      continue;
+    }
+    let request;
+    try {
+      request = JSON.parse(line);
+    } catch {
+      process.stdout.write(
+        JSON.stringify({
+          jsonrpc: '2.0',
+          id: null,
+          error: { code: -32700, message: 'Invalid JSON.' },
+        }) + '\n',
+      );
+      continue;
+    }
+    if (
+      !request ||
+      typeof request !== 'object' ||
+      Array.isArray(request) ||
+      typeof request.method !== 'string'
+    ) {
+      process.stdout.write(
+        JSON.stringify({
+          jsonrpc: '2.0',
+          id: request?.id ?? null,
+          error: { code: -32600, message: 'Invalid request.' },
+        }) + '\n',
+      );
+      continue;
+    }
+    if (!Object.hasOwn(request, 'id')) {
+      if (request.method === 'notifications/cancelled')
+        controllers.get(request.params?.requestId)?.abort();
+      else upstream.notify(request.method, request.params);
+      continue;
+    }
+    if (controllers.has(request.id)) {
+      process.stdout.write(
+        JSON.stringify({
+          jsonrpc: '2.0',
+          id: request.id,
+          error: { code: -32600, message: 'Duplicate request id.' },
+        }) + '\n',
+      );
+      continue;
+    }
+    const controller = new AbortController();
+    controllers.set(request.id, controller);
+    const task = dispatch(request.method, request.params, controller.signal)
+      .then(
+        (result) => ({ jsonrpc: '2.0', id: request.id, result }),
+        (error) => ({
+          jsonrpc: '2.0',
+          id: request.id,
+          error: { code: -32603, message: error.message },
+        }),
+      )
+      .then((response) => process.stdout.write(JSON.stringify(response) + '\n'));
+    active.add(task);
+    task.finally(() => {
+      active.delete(task);
+      controllers.delete(request.id);
+    });
+  }
+  await Promise.allSettled(active);
+  await upstream.close();
+}
+if (isDirectInvocation(import.meta.url))
+  main().catch((error) => {
+    console.error(error.message);
+    process.exitCode = 1;
+  });

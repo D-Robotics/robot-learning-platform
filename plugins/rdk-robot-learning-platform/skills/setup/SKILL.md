@@ -19,3 +19,5 @@ RDK Studio / WorkBuddy 的配置导出和接入步骤先读 [客户端接入](..
 遇到 `fetch failed` 或连接拒绝时说明“MCP 已加载，但目标平台尚未连通”，先核对脱敏地址/挂载前缀、目标服务是否运行、health/readiness，再给启动或连接修复动作。`--check` 不会启动平台；不要反复列工具或提交训练来测试连通。浏览器登录态不会自动传给 stdio 子进程。
 
 现场安装和部署参考 `$RDK_ROBOT_LEARNING_PLATFORM_ROOT/docs/first-run.md`、`docs/duck-lab-mcp.md`；其他 CLI 入口见 [仓库能力](../../references/cli-capabilities.md)。
+
+需要准备演示、首次仿真体验或恢复场景时，使用 [场景准备与恢复](../experience-preparation/SKILL.md)，可按配置组合步骤，保留自由探索。

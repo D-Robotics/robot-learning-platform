@@ -8,6 +8,8 @@ import os from 'node:os';
 import path from 'node:path';
 import { createRequire } from 'node:module';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import { EXPERIENCE_TOOLS } from '../plugins/rdk-robot-learning-platform/scripts/experience-mcp.mjs';
+import { isDirectInvocation } from '../plugins/rdk-robot-learning-platform/scripts/experience.mjs';
 
 const repositoryRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const pluginRelative = 'plugins/rdk-robot-learning-platform';
@@ -311,7 +313,7 @@ function expectedCatalog() {
   );
 }
 
-function verifyTools(tools, expected, documentedTools) {
+export function verifyTools(tools, expected, documentedTools, verifiedOptionalTools = []) {
   assert.ok(Array.isArray(tools));
   assert.deepEqual(
     tools.map((tool) => tool.name).sort(),
@@ -350,7 +352,7 @@ function verifyTools(tools, expected, documentedTools) {
   }
   for (const name of documentedTools)
     assert.ok(
-      tools.some((tool) => tool.name === name),
+      [...tools, ...verifiedOptionalTools].some((tool) => tool.name === name),
       `Plugin documentation advertises an unknown tool: ${name}`,
     );
 }
@@ -412,6 +414,30 @@ async function main() {
     const unconfiguredFile = path.join(temporary, 'missing-binding.json');
     fs.cpSync(pluginRoot, installedRoot, { recursive: true });
     fs.mkdirSync(foreignCwd);
+    const extendedTools = await probeMcp(
+      {
+        command: process.execPath,
+        args: [path.join(installedRoot, 'scripts/experience-mcp.mjs')],
+        env: {
+          ...cleanEnvironment(unconfiguredFile),
+          [rootVariable]: repositoryRoot,
+          RDK_ROBOT_LEARNING_PLATFORM_MCP_MODE: 'source',
+        },
+      },
+      foreignCwd,
+    );
+    assert.deepEqual(extendedTools.slice(0, expected.tools.length), expected.tools);
+    const optionalTools = extendedTools.slice(expected.tools.length);
+    assert.deepEqual(
+      optionalTools,
+      EXPERIENCE_TOOLS,
+      'Optional entry must expose its real descriptors',
+    );
+    assert.equal(new Set(extendedTools.map((tool) => tool.name)).size, extendedTools.length);
+    for (const tool of optionalTools) {
+      assert.equal(tool.annotations?.readOnlyHint, true);
+      assert.equal(tool.annotations?.destructiveHint, false);
+    }
     for (const config of [portable, compat]) {
       const installedConfig = path.join(installedRoot, path.relative(pluginRoot, config.mcpFile));
       const invocation = mcpInvocation(installedConfig, installedRoot, {
@@ -419,7 +445,7 @@ async function main() {
         [rootVariable]: repositoryRoot,
         RDK_ROBOT_LEARNING_PLATFORM_MCP_MODE: 'source',
       });
-      verifyTools(await probeMcp(invocation, foreignCwd), expected, documentedTools);
+      verifyTools(await probeMcp(invocation, foreignCwd), expected, documentedTools, optionalTools);
     }
     verifyTools(
       await probeMcp(
@@ -432,6 +458,7 @@ async function main() {
       ),
       expected,
       documentedTools,
+      optionalTools,
     );
     for (const badRoot of [undefined, path.join(temporary, 'missing-root'), foreignCwd]) {
       const env = cleanEnvironment(unconfiguredFile);
@@ -470,6 +497,7 @@ async function main() {
       ),
       expected,
       documentedTools,
+      optionalTools,
     );
     const malformedBinding = path.join(temporary, 'malformed-binding.json');
     fs.writeFileSync(malformedBinding, '{invalid json');
@@ -529,20 +557,22 @@ async function main() {
         ),
         expected,
         documentedTools,
+        optionalTools,
       );
       console.log('[platform-plugin] compiled-only repository entry passed');
     } else {
       console.log('[platform-plugin] compiled entry not checked; run npm run build to include it');
     }
     console.log(
-      `[platform-plugin] ${skillCount} skills, ${expected.tools.length} MCP tools, portable/compat discovery, root/local-binding cases and npm pack resources passed`,
+      `[platform-plugin] ${skillCount} skills, ${expected.tools.length} platform + ${optionalTools.length} optional MCP tools, portable/compat discovery, root/local-binding cases and npm pack resources passed`,
     );
   } finally {
     fs.rmSync(temporary, { recursive: true, force: true });
   }
 }
 
-main().catch((error) => {
-  console.error(`[platform-plugin] ${error instanceof Error ? error.message : error}`);
-  process.exitCode = 1;
-});
+if (isDirectInvocation(import.meta.url))
+  main().catch((error) => {
+    console.error(`[platform-plugin] ${error instanceof Error ? error.message : error}`);
+    process.exitCode = 1;
+  });

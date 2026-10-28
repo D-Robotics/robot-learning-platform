@@ -1,6 +1,6 @@
 # RDK Robot Learning Platform 插件
 
-这个平台插件封装本仓库 `rdk-robot-learning-platform-public`：项目与数据、浏览器仿真、训练、评测、制品与部署、RDK 设备、平台运维及扩展开发。它包含 10 个工作流技能，复用现有 Duck Lab MCP 的 58 个工具；工作台、版本化 HTTP 和仓库 CLI 中没有专用 MCP 工具的能力也有真实操作入口。
+这个平台插件封装本仓库 `rdk-robot-learning-platform-public`：项目与数据、浏览器仿真、训练、评测、制品与部署、RDK 设备、平台运维及扩展开发。工作流技能复用 Duck Lab MCP 原子工具；实际工具数量以当前安装版本的工具目录为准。工作台、版本化 HTTP 和仓库 CLI 中没有专用 MCP 工具的能力也有真实操作入口。
 
 平台版本化 API 执行业务校验、认证、幂等、配额、审批和运动门禁。
 
@@ -29,6 +29,7 @@ node scripts/start-mcp.mjs --check
 | 技能 | 结果 |
 | --- | --- |
 | [setup](skills/setup/SKILL.md) | 插件、仓库、平台、认证和首次主线检查 |
+| [experience-preparation](skills/experience-preparation/SKILL.md) | 场景准备、恢复、训练前检查和全流程证据表 |
 | [workspace-data](skills/workspace-data/SKILL.md) | 项目、模型 manifest、数据版本与 lineage |
 | [simulation-replay](skills/simulation-replay/SKILL.md) | 仿真、轨迹录制、遥测/会话与回放视频 |
 | [training-runs](skills/training-runs/SKILL.md) | 任务/引擎/算力选择、单次提交、Run 与日志 |
@@ -50,3 +51,9 @@ node scripts/start-mcp.mjs --check
 BC 可通过 `demonstrationRunId` 使用浏览器真实示教快照；核对 `dataUsage`、worker 消费摘要和独立闭环结果。无示教的内置 BC 冒烟以及 ACT/DP 包装仍不能证明消费了用户数据。循环训练虽有 UI 选项，当前 API 提交 allowlist 未包含 microduck-recurrent。SmolVLA 真微调需要部署方 GPU/LeRobot/权重/数据；dry-run 写计划结果但不产模型。纯推理、回放和官方资料查询不隐含真实运动验收。
 
 本插件通过包内技能和参考把入口连起来，不伪造尚未实现的工具。凭据、用户设备坐标、个人路径不内置。真实运动和失败后重试遵守平台既有安全开关、审批和现场授权；取消请求不保证已提交 Run 或实体动作撤销。
+
+## 可配置的场景体验
+
+[场景准备与恢复](skills/experience-preparation/SKILL.md) 可复用到日常演示、首次体验和课程。配置绑定参考策略或指定 Run，不默认提交训练。自检脚本通过原 MCP 查询状态，页面加载、运行和恢复由宿主浏览器实际确认。准备成功不等于仿真已经运动。
+
+可选的 MCP 场景扩展入口为 `scripts/experience-mcp.mjs`，以上游同目录的 `start-mcp.mjs` 保留现有工具、身份与拒绝结果，额外提供场景指南、场景准备、训练前准备和流程检查四个工具。部署前备份当前连接，将该连接的启动入口指向扩展脚本，保留原环境配置；不同时新增第二个数据源。直接返回指南用于兼容宿主技能加载不精确的情况。此入口要求标准上游启动脚本已经可以独立工作；不会为缺少本机接口的宿主补造权限。

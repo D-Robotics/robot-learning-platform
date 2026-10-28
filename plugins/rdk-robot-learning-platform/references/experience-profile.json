@@ -1,0 +1,10 @@
+{
+  "schemaVersion": 1,
+  "id": "microduck-simulation-intro",
+  "title": "机器鸭仿真入门",
+  "policy": { "source": "reference" },
+  "requiredTools": ["rdk_runs_list", "rdk_run_logs"],
+  "trainingTemplate": {
+    "note": "由组织者填入当前平台已验证的参数；本配置不自动提交训练。"
+  }
+}

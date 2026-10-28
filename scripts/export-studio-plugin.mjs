@@ -90,6 +90,7 @@ export function exportStudioPlugin({
     readme.replace(/\]\(skills\/([^/]+)\//g, (_, name) => `](skills/${clientNameFor(name)}/`),
   );
   copyResources(path.join(template, 'references'), path.join(destination, 'references'));
+  copyResources(path.join(template, 'scripts'), path.join(destination, 'scripts'));
   for (const name of fs.readdirSync(path.join(template, 'skills')).sort()) {
     const source = path.join(template, 'skills', name);
     if (!fs.existsSync(path.join(source, 'SKILL.md'))) continue;
@@ -99,7 +100,15 @@ export function exportStudioPlugin({
     const file = path.join(directory, 'SKILL.md');
     const text = fs.readFileSync(file, 'utf8');
     if (!/^name:\s*\S+\s*$/m.test(text)) throw new Error(`Skill name missing: ${name}`);
-    fs.writeFileSync(file, text.replace(/^name:\s*\S+\s*$/m, `name: ${clientName}`));
+    fs.writeFileSync(
+      file,
+      text
+        .replace(/^name:\s*\S+\s*$/m, `name: ${clientName}`)
+        .replace(
+          /\]\(\.\.\/([^/]+)\/SKILL\.md\)/g,
+          (_, sibling) => `](../${clientNameFor(sibling)}/SKILL.md)`,
+        ),
+    );
   }
   return {
     pluginDirectory: destination,
