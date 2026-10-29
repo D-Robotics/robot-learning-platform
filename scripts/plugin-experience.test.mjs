@@ -9,7 +9,63 @@ import {
   validateProfile,
   prepareExperience,
   connectMcp,
+  readToolResult,
 } from '../plugins/rdk-robot-learning-platform/scripts/experience.mjs';
+
+test('MCP business failures retain flat, nested and textual diagnostics', () => {
+  for (const [result, message, code, status] of [
+    [
+      {
+        structuredContent: {
+          ok: false,
+          message: 'Worker unreachable',
+          platformCode: 'WORKER_OFFLINE',
+          httpStatus: 503,
+        },
+      },
+      'Worker unreachable',
+      'WORKER_OFFLINE',
+      503,
+    ],
+    [
+      {
+        isError: true,
+        structuredContent: {
+          error: { message: 'Not authorized', platformCode: 'DENIED', httpStatus: 403 },
+        },
+      },
+      'Not authorized',
+      'DENIED',
+      403,
+    ],
+    [
+      { isError: true, content: [{ type: 'text', text: 'Connection failed' }] },
+      'Connection failed',
+      undefined,
+      undefined,
+    ],
+    [
+      { structuredContent: { ok: false, error: 'Invalid resource' } },
+      'Invalid resource',
+      undefined,
+      undefined,
+    ],
+  ]) {
+    assert.throws(
+      () => readToolResult(result),
+      (error) => {
+        assert.equal(error.message, message);
+        assert.equal(error.platformCode, code);
+        assert.equal(error.httpStatus, status);
+        return true;
+      },
+    );
+  }
+  assert.deepEqual(readToolResult({ structuredContent: { ok: true, value: 0 } }), {
+    ok: true,
+    value: 0,
+  });
+});
 
 const profile = { schemaVersion: 1, id: 'demo', policy: { source: 'reference' } };
 const tools = ['rdk_platform_status', 'rdk_simulator_open', 'rdk_training_status'];

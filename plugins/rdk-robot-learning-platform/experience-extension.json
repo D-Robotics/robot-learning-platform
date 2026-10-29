@@ -1,10 +1,10 @@
 {
   "schemaVersion": 1,
   "name": "learning-experience-extension",
-  "version": "0.2.3",
-  "identitySha256": "a51e8471c6e2e60c963340abdace88ec047274354b45f896f636383a91a9f7b0",
+  "version": "0.2.4",
+  "identitySha256": "638c579574b8490b909344eed1dbc165b40cc4778920dd88bcf77f80452b9a30",
   "files": {
-    "scripts/experience.mjs": "3a70ee2d3ec7d7604e5ba601565212ed447b7c1545d16ef271c0fb0e17e8e2a2",
+    "scripts/experience.mjs": "720e1c36cbff78f7cc8e9f7224a26e8c07d6a14be418bd758bc4f9e4cf6c0477",
     "scripts/experience-mcp.mjs": "6e3449bd586fb0f928ddddac29f7d1492b1aa7a88f6cf7e2c0ccf5cc1d5f7c99",
     "scripts/workflow-inspection.mjs": "d141d666b27b0dd98a7b94cdb54f4daee89d4c963a96c534c11652121b0d500c",
     "skills/experience-preparation/SKILL.md": "cc6230291c7ae3f2eb2569ff72a2d909174fb1a2f2c4727506c89bd8fd4237a6",

@@ -15,13 +15,26 @@ export function isDirectInvocation(moduleUrl, entry = process.argv[1]) {
 }
 
 export function readToolResult(result) {
-  const payload =
-    result.structuredContent ?? JSON.parse(result.content.find((x) => x.type === 'text').text);
+  let payload = result.structuredContent;
+  if (payload == null) {
+    const text = result.content?.find((x) => x.type === 'text')?.text;
+    if (typeof text !== 'string') throw new Error('MCP tool returned no readable result.');
+    try {
+      payload = JSON.parse(text);
+    } catch (error) {
+      if (!result.isError) throw error;
+      payload = { error: { message: text } };
+    }
+  }
   if (result.isError || payload?.ok === false) {
     const detail = payload?.error ?? {};
-    throw Object.assign(new Error(detail.message ?? 'MCP tool failed.'), {
-      platformCode: detail.platformCode,
-      httpStatus: detail.httpStatus,
+    const message =
+      (typeof detail === 'string' ? detail : detail.message) ??
+      payload?.message ??
+      'MCP tool failed.';
+    throw Object.assign(new Error(message), {
+      platformCode: detail.platformCode ?? payload?.platformCode,
+      httpStatus: detail.httpStatus ?? payload?.httpStatus,
     });
   }
   return payload;
