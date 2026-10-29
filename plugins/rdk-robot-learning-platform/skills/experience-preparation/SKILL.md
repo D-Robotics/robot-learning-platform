@@ -13,6 +13,8 @@ description: 在 Studio 或其他 Agent 宿主中准备可复用的机器人体�
 
 沿 [平台连接技能](../setup/SKILL.md) 复用当前宿主的同一 MCP 连接与身份。依次调用 rdk_platform_status、rdk_simulator_open；检查工具目录、平台 ready、降级状态和账号。当前连接未就绪时报告具体阻塞，不创建匿名实例或改账号。
 
+若宿主同时挂载多条学习平台连接，使用提供本指南的连接调用状态、准备和后续业务工具，全程核对同一工具命名空间；不要把旧 Duck Lab 服务连接的状态与新版账号连接的结果拼接。Studio 账号模式应核对 `studio-session`、`account` 和实际认证账号；静态服务账号或匿名连接不能冒充当前用户。发现同名工具歧义时先说明连接冲突，按用户允许的范围停用旧重复连接或明确选定一条连接，再重新只读自检，不继续跨连接执行。
+
 仅参考体验遇到 `SIM2REAL_API_NOT_FOUND` 且 HTTP 404 时，可调用同一连接的 `rdk_workspace_overview`，使用其 `integrations.simulator` 入口，记录兼容分支；不得自行猜地址。401、403、超时和训练策略入口失败不走此分支。
 
 有可用终端且确认脚本绑定与当前宿主连接一致时，也可调用随包 scripts/experience.mjs：
