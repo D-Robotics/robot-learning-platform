@@ -20,7 +20,7 @@
  *   node scripts/lock-engines.mjs --check    # fail if a lock is out of date
  */
 import { spawnSync } from 'node:child_process';
-import { copyFileSync, existsSync, readFileSync, renameSync } from 'node:fs';
+import { copyFileSync, existsSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { mkdtempSync, rmSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -131,6 +131,13 @@ try {
       // one filesystem (scratch lives in os.tmpdir(), possibly another volume).
       const staged = `${targetPath}.tmp`;
       copyFileSync(output, staged);
+      // The resolver uses a temporary output to avoid retaining old pins.
+      // Keep that operator-specific path out of the shared lock's header.
+      const generated = readFileSync(staged, 'utf8').replace(
+        /^# {4}uv pip compile .*$/m,
+        `#    uv pip compile ${source} -o ${target} --generate-hashes`,
+      );
+      writeFileSync(staged, generated);
       renameSync(staged, targetPath);
       const written = readFileSync(targetPath, 'utf8');
       console.log(`[lock-engines] ${engine}: wrote ${target} (${packageCount(written)} packages)`);
