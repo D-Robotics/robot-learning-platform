@@ -1,13 +1,14 @@
 {
   "schemaVersion": 1,
   "name": "learning-experience-extension",
-  "version": "0.2.4",
-  "identitySha256": "638c579574b8490b909344eed1dbc165b40cc4778920dd88bcf77f80452b9a30",
+  "version": "0.2.5",
+  "identitySha256": "76c5a239f75992b1296db8322570c4e60e76d252a53e1ccc80a1b073edca7758",
   "files": {
-    "scripts/experience.mjs": "720e1c36cbff78f7cc8e9f7224a26e8c07d6a14be418bd758bc4f9e4cf6c0477",
+    "scripts/experience.mjs": "012e0c9a17984533bf655d6a3b3ddf3290ad56312b1de436b0a9bf7fe446aaad",
     "scripts/experience-mcp.mjs": "6e3449bd586fb0f928ddddac29f7d1492b1aa7a88f6cf7e2c0ccf5cc1d5f7c99",
     "scripts/workflow-inspection.mjs": "d141d666b27b0dd98a7b94cdb54f4daee89d4c963a96c534c11652121b0d500c",
-    "skills/experience-preparation/SKILL.md": "cc6230291c7ae3f2eb2569ff72a2d909174fb1a2f2c4727506c89bd8fd4237a6",
+    "skills/experience-preparation/SKILL.md": "a57ba560b790105d0a7861653639a8e77fb65da198f1ad4f55bdbae2c89011aa",
     "references/experience-profile.json": "4475ca96aeaebf56881054613ee7a44b6c86aa3b571e61745928f0f428752c6f"
-  }
+  },
+  "identityAlgorithm": "sha256-json-canonical-files-v1"
 }

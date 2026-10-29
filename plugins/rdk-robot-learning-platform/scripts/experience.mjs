@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 /** Read-only experience preparation. All business reads go through existing MCP tools. */
 import { spawn } from 'node:child_process';
-import { readFileSync, realpathSync } from 'node:fs';
+import { existsSync, readFileSync, realpathSync } from 'node:fs';
 import { createInterface } from 'node:readline';
 import { fileURLToPath } from 'node:url';
 
@@ -186,7 +186,16 @@ export async function prepareExperience(profile, call, { baseUrl, tools, action 
 
 export function connectMcp({
   command = process.execPath,
-  args = [fileURLToPath(new URL('./start-mcp.mjs', import.meta.url))],
+  args = [
+    fileURLToPath(
+      new URL(
+        existsSync(new URL('./start-core-mcp.mjs', import.meta.url))
+          ? './start-core-mcp.mjs'
+          : './start-mcp.mjs',
+        import.meta.url,
+      ),
+    ),
+  ],
   timeoutMs = 120000,
 } = {}) {
   const child = spawn(command, args, { stdio: ['pipe', 'pipe', 'inherit'] });
