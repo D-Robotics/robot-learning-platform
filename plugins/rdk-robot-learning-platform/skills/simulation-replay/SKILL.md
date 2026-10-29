@@ -16,4 +16,10 @@ description: 在 RDK 学习平台打开浏览器仿真、录制轨迹、检查�
 
 空录制不登记成有数据的 dataset；无样本的 Run 报告暂无可回放证据。用户取消录制时停止并清楚报告已保存/未保存的轨迹；取消 MCP 请求不保证服务已提交的工作撤销，按返回实体检查状态。
 
+## 两种录制入口
+
+画面内“动作录制”导出 `microduck-trajectory-v1`，用于分析或模仿学习。新录制须核对 `pairing: policy-inference-v1`：每组输入与输出来自同一次实际推理。没有该标记的旧数据不能默认视为已对齐训练样本；保存文件也不代表已经建成 dataset 或获得评测证据。
+
+工作台外层“录制状态 → 停止录制 → 保存录制 → 查看录制”使用 `microduck-state-snapshots-v1`，用于完整状态诊断。其 previousAction 不是对齐的训练标签；不要与动作轨迹混用。检查读取帧数、播放推进及末帧停止，明确说明验证的是状态向量播放器还是三维重演，不从一个推断另一个。当前没有专用 MCP 录制或文件上传工具时，如实引导受支持页面操作，不声称对话已经执行了按钮动作。
+
 详细 UI 操作从 `$RDK_ROBOT_LEARNING_PLATFORM_ROOT/docs/hello-world.md`、`docs/product-guide.md` 读取，录制契约入口为 `services/mujoco-web/microduck-community-overlay.test.mjs`。
