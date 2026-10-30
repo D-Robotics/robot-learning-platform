@@ -1,30 +1,538 @@
 <!doctype html>
-<html lang="zh-CN"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>OriginMan 原地受扰恢复 · 实验观察台</title>
-<style>
-:root{font-family:system-ui,sans-serif;color:#233440;background:#f3f6f7}*{box-sizing:border-box}body{max-width:1400px;margin:auto;padding:28px}h1{font-size:27px;margin:8px 0}p{color:#536673;line-height:1.7}header{display:flex;align-items:center;justify-content:space-between;gap:20px}.badge{background:#e6f0ee;color:#216254;padding:7px 12px;border-radius:20px;font-size:13px}.grid{display:grid;grid-template-columns:1fr 1fr;gap:18px}.card{background:white;padding:20px;border:1px solid #dce4e8;border-radius:12px;margin:16px 0}.grid .card{margin:0}h2{font-size:17px;margin:0 0 12px}canvas{width:100%;height:220px}#scene{height:360px}select,button{padding:9px 12px;border:1px solid #c7d4dc;background:white;border-radius:6px;color:inherit}button{cursor:pointer}progress{width:100%;height:12px;margin:12px 0}.metrics{display:flex;gap:36px;flex-wrap:wrap}.metrics b{display:block;font-size:25px;margin-top:4px}.muted{color:#657581;font-size:13px}pre{overflow:auto;font-size:12px;line-height:1.6;max-height:400px}#error{color:#9d3329}.controls{display:flex;gap:10px;flex-wrap:wrap;align-items:center}input[type=range]{flex:1;min-width:180px}details{margin-top:16px}summary{cursor:pointer}#result{font-size:14px;white-space:pre-wrap;line-height:1.7}@media(max-width:800px){.grid{grid-template-columns:1fr}body{padding:14px}header{display:block}}
-</style>
-<header><div><div class="muted">OriginMan · 原始模型 · MuJoCo 自由底座</div><h1>原地受扰恢复 · 实验观察台</h1></div><span class="badge">离线仿真；无设备运动出口</span></header>
-<p id="objective">验证同样侧向扰动下，参考站姿跌倒、RL 恢复稳定。训练分数、被动站稳和一次成功回放均不代替最终验收。</p>
-<div id="error" role="alert"></div>
-<section class="card"><div class="controls"><select id="runs" aria-label="训练实验"></select><span id="state"></span><span class="muted">每 3 秒刷新</span></div><progress id="progress" max="100"></progress><div class="metrics"><div>控制步<b id="steps">—</b></div><div>原始平均奖励<b id="reward">—</b></div><div>最近训练回合恢复比例<b id="recent">—</b></div><div>固定开发条件恢复数<b id="dev">—</b></div></div></section>
-<div class="grid"><section class="card"><h2>训练过程：原始奖励</h2><canvas id="curve"></canvas><div class="muted">浅色为逐轮记录，深色为 30 轮移动平均。奖励上升不等于恢复通过。</div></section><section class="card"><h2>固定开发条件：对照与 RL</h2><canvas id="validation"></canvas><div class="muted">9 个固定条件，按训练间隔记录；用于诊断。最终测试另行固定，不按此选择检查点。</div></section></div>
-<section class="card"><h2>训练阶段的配对轨迹回放</h2><div class="controls"><select id="checkpoint" aria-label="训练阶段"></select><select id="case" aria-label="开发条件"></select><button id="play">播放</button><input id="frame" type="range" min="0" max="149" value="0" aria-label="回放时间"><span id="time"></span></div><canvas id="scene"></canvas><div id="replay-note" class="muted"></div><p class="muted">回放依据记录的真实连杆坐标绘制关节骨架；未记录脚部网格轮廓。精确模型的前后对照另导出视频；跌倒后保持最后记录姿态。</p></section>
-<section class="card" id="correction-card" hidden><h2>RL实际增加的关节目标</h2><canvas id="corrections"></canvas><p class="muted">相对于同状态基础反馈、经过合并限幅和变化率限制后的额外目标（rad）。这是位置指令，关节实际响应另记。</p></section><section class="card"><h2>最终固定条件评测</h2><div id="result">尚未生成；当前开发回放不是最终结果。</div></section>
-<details class="card"><summary>配置、验收条件与代码摘要</summary><p class="muted">修改配置时创建新实验目录，保留原实验、权重与日志。当前观察台只读。</p><pre id="config"></pre><pre id="sources"></pre></details>
-<script>
-'use strict';
-const $=id=>document.getElementById(id);let current=new URLSearchParams(location.search).get('run')||'standing-roll-seed7',data=null,replay=null,replayKey='',playing=false,frame=0;
-const names={training:'训练中',completed:'训练完成，需看最终评测',failed:'训练失败',preparing:'准备中'};
-async function api(url){const r=await fetch(url,{cache:'no-store'});if(!r.ok)throw Error('读取失败：'+r.status);return r.json()}
-function options(el,rows){const old=el.value;if(JSON.stringify([...el.options].map(o=>o.value))===JSON.stringify(rows.map(r=>String(r[0]))))return;el.replaceChildren(...rows.map(([v,t])=>{let o=document.createElement('option');o.value=v;o.textContent=t;return o}));if([...el.options].some(o=>o.value===old))el.value=old;else if(el.options.length)el.selectedIndex=el.options.length-1}
-function canvas(id){const c=$(id),w=c.clientWidth,h=c.clientHeight,d=devicePixelRatio||1;c.width=w*d;c.height=h*d;const ctx=c.getContext('2d');ctx.scale(d,d);ctx.font='12px system-ui';return{ctx,w,h}}
-function plot(id,series,maxY=null,timeAxis=false){const{ctx,w,h}=canvas(id),all=series.flatMap(s=>s.p);if(!all.length){ctx.fillText('等待记录',45,90);return}const x1=Math.max(1,...all.map(p=>p[0])),y0=maxY?0:Math.min(...all.map(p=>p[1]))-.1,y1=maxY||Math.max(...all.map(p=>p[1]))+.1;const px=x=>48+(w-62)*x/x1,py=y=>h-30-(h-50)*(y-y0)/(y1-y0||1);ctx.strokeStyle='#dbe3e7';ctx.fillStyle='#60727e';for(let i=0;i<4;i++){const y=y0+(y1-y0)*i/3;ctx.beginPath();ctx.moveTo(44,py(y));ctx.lineTo(w-10,py(y));ctx.stroke();ctx.fillText(y.toFixed(1),3,py(y)+4)}series.forEach((s,i)=>{ctx.strokeStyle=s.c;ctx.lineWidth=s.width||2;ctx.beginPath();s.p.forEach((p,j)=>j?ctx.lineTo(px(p[0]),py(p[1])):ctx.moveTo(px(p[0]),py(p[1])));ctx.stroke();ctx.fillStyle=s.c;ctx.fillText(s.name,50+i*145,14)});ctx.fillStyle='#60727e';ctx.fillText('0',47,h-9);ctx.fillText(timeAxis?x1.toFixed(2)+' 秒':(x1/1000).toFixed(0)+' 千控制步',w-100,h-9)}
-function draw(){if(!data)return;const c=data.curve,avg=c.map((r,i)=>[r.timesteps,c.slice(Math.max(0,i-29),i+1).reduce((s,x)=>s+x.meanReward,0)/Math.min(i+1,30)]);plot('curve',[{name:'逐轮原始奖励',c:'#b8d3d7',p:c.map(r=>[r.timesteps,r.meanReward]),width:1},{name:'30 轮平均',c:'#176e78',p:avg}]);plot('validation',[{name:data.experiment.training?.taskParameters?.baselineGains?'基础反馈':'参考站姿',c:'#8b7a60',p:data.validations.map(v=>[v.step,v.reference])},{name:'RL',c:'#176e78',p:data.validations.map(v=>[v.step,v.rl])}],9);drawScene()}
-const chains=[['body_link','l_hip_roll_link','l_hip_pitch_link','l_knee_link','l_ank_pitch_link','l_ank_roll_link'],['body_link','r_hip_roll_link','r_hip_pitch_link','r_knee_link','r_ank_pitch_link','r_ank_roll_link']];
-function drawScene(){const{ctx,w,h}=canvas('scene');if(!replay){ctx.fillText('等待第一个开发回放',25,60);return}const modes=[['reference',data?.experiment.training?.taskParameters?.baselineGains?'冻结基础反馈':'参考站姿'],['rl','当前阶段 RL']];modes.forEach(([key,title],i)=>{const row=replay[key],f=row.frames[Math.min(frame,row.frames.length-1)],off=i*w/2;const project=p=>[off+w/4+(p[1]+p[0]*.4)*700,h-35-p[2]*700];ctx.fillStyle='#233440';ctx.fillText(title,off+18,24);ctx.fillText(`t=${f.time.toFixed(2)}s  侧倾=${f.tiltDegrees.toFixed(1)}°  推力=${f.externalForceWorldN[1].toFixed(1)}N`,off+18,48);ctx.strokeStyle='#d2dee4';ctx.beginPath();ctx.moveTo(off+10,h-35);ctx.lineTo(off+w/2-10,h-35);ctx.stroke();ctx.strokeStyle=i?'#176e78':'#9c8161';ctx.lineWidth=7;chains.forEach(chain=>{ctx.beginPath();chain.forEach((name,j)=>{const p=project(f.bodyPositions[name]);j?ctx.lineTo(...p):ctx.moveTo(...p)});ctx.stroke()});const p=project(f.bodyPositions.body_link);ctx.fillStyle=i?'#176e78':'#9c8161';ctx.fillRect(p[0]-25,p[1]-47,50,46);ctx.beginPath();ctx.arc(p[0],p[1]-65,15,0,Math.PI*2);ctx.fill();ctx.fillStyle=row.fallen&&frame>=row.frames.length-1?'#a0362d':'#536673';ctx.fillText(row.fallen&&frame>=row.frames.length-1?'跌倒：停在末帧':row.recoverySuccess?'本回合最终恢复通过':'本回合最终恢复未通过',off+18,h-8)});$('time').textContent=(frame*.04+.02).toFixed(2)+' 秒'}
-function drawCorrections(){const active=Boolean(data?.experiment.training?.taskParameters?.baselineGains&&replay);$('correction-card').hidden=!active;if(!active)return;plot('corrections',['踝额外目标','髋额外目标'].map((name,i)=>({name,c:i?'#7a66a3':'#176e78',p:replay.rl.frames.map(f=>[f.time,f.executedExtraTargetRadians?.[i]||0])})),null,true)}
-async function loadReplay(){if(!$('checkpoint').value)return;const key=[current,$('checkpoint').value,$('case').value].join('|');if(key===replayKey)return;replay=await api('/api/replay?'+new URLSearchParams({run:current,step:$('checkpoint').value,case:$('case').value||0}));replayKey=key;frame=0;drawCorrections();$('frame').max=Math.max(replay.reference.frames.length,replay.rl.frames.length)-1;$('frame').value=0;$('replay-note').textContent=`开发条件：${replay.reference.force} N，${replay.reference.start} 秒开始，持续 0.2 秒；训练 ${replay.step.toLocaleString()} 步。`;drawScene()}
-async function refresh(){try{data=await api('/api/state?run='+encodeURIComponent(current));options($('runs'),data.runs.map(r=>[r,r]));$('runs').value=current;const last=data.curve.at(-1)||{},steps=last.timesteps||0,total=data.experiment.training?.totalTimesteps||1000000;if(data.experiment.training?.taskParameters?.baselineGains)$('objective').textContent='比较同样扰动下，冻结基础反馈与每20ms学习髋踝修正的RL。零初始策略与基础反馈轨迹完全一致；开发回放不用于挑选最终权重。';$('state').textContent=names[data.status.state]||data.status.state||'准备中';$('progress').value=Math.min(100,100*steps/total);$('steps').textContent=steps.toLocaleString()+' / '+total.toLocaleString();$('reward').textContent=last.meanReward?.toFixed(3)||'—';$('recent').textContent=last.recentRecoveryFraction==null?'—':(100*last.recentRecoveryFraction).toFixed(0)+'%';const dev=data.validations.at(-1);$('dev').textContent=dev?`${dev.reference} → ${dev.rl} / 9`:'—';const latestStage=$('checkpoint').selectedIndex===$('checkpoint').options.length-1;options($('checkpoint'),data.validations.map(v=>[v.file,`${v.step.toLocaleString()} 步`]));if(latestStage)$('checkpoint').selectedIndex=$('checkpoint').options.length-1;if(!$('case').options.length)options($('case'),[-8.25,-7.25,7.25,8.25].flatMap(f=>[1.9,2.9].map(t=>[`${[-8.25,-7.25,7.25,8.25].indexOf(f)*2+[1.9,2.9].indexOf(t)}`,`${f}N · ${t}s`])).concat([['8','无扰动']]));$('config').textContent=JSON.stringify({experiment:data.experiment,criteria:data.criteria,latestLearnedFeedback:data.validations.at(-1)?.learnedFeedback},null,2);$('sources').textContent=JSON.stringify(data.sources,null,2);if(data.final)$('result').textContent=Object.entries(data.final.controllers||data.final).filter(([k,v])=>v&&typeof v==='object'&&'cases' in v).map(([k,v])=>`${k}：恢复 ${v.recoverySuccesses}/${v.cases}；跌倒 ${v.falls}/${v.cases}`).join('\n');draw();await loadReplay();$('error').textContent=''}catch(e){$('error').textContent=e.message}}
-$('runs').onchange=()=>{current=$('runs').value;replayKey='';refresh()};$('checkpoint').onchange=loadReplay;$('case').onchange=loadReplay;$('frame').oninput=()=>{frame=+$('frame').value;drawScene()};$('play').onclick=()=>{playing=!playing;$('play').textContent=playing?'暂停':'播放'};setInterval(()=>{if(playing&&replay){frame=(frame+1)%(+$('frame').max+1);$('frame').value=frame;drawScene()}},40);window.onresize=draw;refresh();setInterval(refresh,3000);
-</script></html>
+<html lang="zh-CN">
+  <meta charset="utf-8" /><meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>OriginMan 原地受扰恢复 · 实验观察台</title>
+  <style>
+    :root {
+      font-family: system-ui, sans-serif;
+      color: #233440;
+      background: #f3f6f7;
+    }
+    * {
+      box-sizing: border-box;
+    }
+    body {
+      max-width: 1400px;
+      margin: auto;
+      padding: 28px;
+    }
+    h1 {
+      font-size: 27px;
+      margin: 8px 0;
+    }
+    p {
+      color: #536673;
+      line-height: 1.7;
+    }
+    header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 20px;
+    }
+    .badge {
+      background: #e6f0ee;
+      color: #216254;
+      padding: 7px 12px;
+      border-radius: 20px;
+      font-size: 13px;
+    }
+    .grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 18px;
+    }
+    .card {
+      background: white;
+      padding: 20px;
+      border: 1px solid #dce4e8;
+      border-radius: 12px;
+      margin: 16px 0;
+    }
+    .grid .card {
+      margin: 0;
+    }
+    h2 {
+      font-size: 17px;
+      margin: 0 0 12px;
+    }
+    canvas {
+      width: 100%;
+      height: 220px;
+    }
+    #scene {
+      height: 360px;
+    }
+    select,
+    button {
+      padding: 9px 12px;
+      border: 1px solid #c7d4dc;
+      background: white;
+      border-radius: 6px;
+      color: inherit;
+    }
+    button {
+      cursor: pointer;
+    }
+    progress {
+      width: 100%;
+      height: 12px;
+      margin: 12px 0;
+    }
+    .metrics {
+      display: flex;
+      gap: 36px;
+      flex-wrap: wrap;
+    }
+    .metrics b {
+      display: block;
+      font-size: 25px;
+      margin-top: 4px;
+    }
+    .muted {
+      color: #657581;
+      font-size: 13px;
+    }
+    pre {
+      overflow: auto;
+      font-size: 12px;
+      line-height: 1.6;
+      max-height: 400px;
+    }
+    #error {
+      color: #9d3329;
+    }
+    .controls {
+      display: flex;
+      gap: 10px;
+      flex-wrap: wrap;
+      align-items: center;
+    }
+    input[type='range'] {
+      flex: 1;
+      min-width: 180px;
+    }
+    details {
+      margin-top: 16px;
+    }
+    summary {
+      cursor: pointer;
+    }
+    #result {
+      font-size: 14px;
+      white-space: pre-wrap;
+      line-height: 1.7;
+    }
+    @media (max-width: 800px) {
+      .grid {
+        grid-template-columns: 1fr;
+      }
+      body {
+        padding: 14px;
+      }
+      header {
+        display: block;
+      }
+    }
+  </style>
+  <header>
+    <div>
+      <div class="muted">OriginMan · 原始模型 · MuJoCo 自由底座</div>
+      <h1>原地受扰恢复 · 实验观察台</h1>
+    </div>
+    <span class="badge">离线仿真；无设备运动出口</span>
+  </header>
+  <p id="objective">
+    验证同样侧向扰动下，参考站姿跌倒、RL
+    恢复稳定。训练分数、被动站稳和一次成功回放均不代替最终验收。
+  </p>
+  <div id="error" role="alert"></div>
+  <section class="card">
+    <div class="controls">
+      <select id="runs" aria-label="训练实验"></select
+      ><span id="state"></span><span class="muted">每 3 秒刷新</span>
+    </div>
+    <progress id="progress" max="100"></progress>
+    <div class="metrics">
+      <div>控制步<b id="steps">—</b></div>
+      <div>原始平均奖励<b id="reward">—</b></div>
+      <div>最近训练回合恢复比例<b id="recent">—</b></div>
+      <div>固定开发条件恢复数<b id="dev">—</b></div>
+    </div>
+  </section>
+  <div class="grid">
+    <section class="card">
+      <h2>训练过程：原始奖励</h2>
+      <canvas id="curve"></canvas>
+      <div class="muted">浅色为逐轮记录，深色为 30 轮移动平均。奖励上升不等于恢复通过。</div>
+    </section>
+    <section class="card">
+      <h2>固定开发条件：对照与 RL</h2>
+      <canvas id="validation"></canvas>
+      <div class="muted">
+        9 个固定条件，按训练间隔记录；用于诊断。最终测试另行固定，不按此选择检查点。
+      </div>
+    </section>
+  </div>
+  <section class="card">
+    <h2>训练阶段的配对轨迹回放</h2>
+    <div class="controls">
+      <select id="checkpoint" aria-label="训练阶段"></select
+      ><select id="case" aria-label="开发条件"></select
+      ><button id="play">播放</button
+      ><input id="frame" type="range" min="0" max="149" value="0" aria-label="回放时间" /><span
+        id="time"
+      ></span>
+    </div>
+    <canvas id="scene"></canvas>
+    <div id="replay-note" class="muted"></div>
+    <p class="muted">
+      回放依据记录的真实连杆坐标绘制关节骨架；未记录脚部网格轮廓。精确模型的前后对照另导出视频；跌倒后保持最后记录姿态。
+    </p>
+  </section>
+  <section class="card" id="correction-card" hidden>
+    <h2>RL实际增加的关节目标</h2>
+    <canvas id="corrections"></canvas>
+    <p class="muted">
+      相对于同状态基础反馈、经过合并限幅和变化率限制后的额外目标（rad）。这是位置指令，关节实际响应另记。
+    </p>
+  </section>
+  <section class="card">
+    <h2>最终固定条件评测</h2>
+    <div id="result">尚未生成；当前开发回放不是最终结果。</div>
+  </section>
+  <details class="card">
+    <summary>配置、验收条件与代码摘要</summary>
+    <p class="muted">修改配置时创建新实验目录，保留原实验、权重与日志。当前观察台只读。</p>
+    <pre id="config"></pre>
+    <pre id="sources"></pre>
+  </details>
+  <script>
+    'use strict';
+    const $ = (id) => document.getElementById(id);
+    let current = new URLSearchParams(location.search).get('run') || 'standing-roll-seed7',
+      data = null,
+      replay = null,
+      replayKey = '',
+      playing = false,
+      frame = 0;
+    const names = {
+      training: '训练中',
+      completed: '训练完成，需看最终评测',
+      failed: '训练失败',
+      preparing: '准备中',
+    };
+    async function api(url) {
+      const r = await fetch(url, { cache: 'no-store' });
+      if (!r.ok) throw Error('读取失败：' + r.status);
+      return r.json();
+    }
+    function options(el, rows) {
+      const old = el.value;
+      if (
+        JSON.stringify([...el.options].map((o) => o.value)) ===
+        JSON.stringify(rows.map((r) => String(r[0])))
+      )
+        return;
+      el.replaceChildren(
+        ...rows.map(([v, t]) => {
+          let o = document.createElement('option');
+          o.value = v;
+          o.textContent = t;
+          return o;
+        }),
+      );
+      if ([...el.options].some((o) => o.value === old)) el.value = old;
+      else if (el.options.length) el.selectedIndex = el.options.length - 1;
+    }
+    function canvas(id) {
+      const c = $(id),
+        w = c.clientWidth,
+        h = c.clientHeight,
+        d = devicePixelRatio || 1;
+      c.width = w * d;
+      c.height = h * d;
+      const ctx = c.getContext('2d');
+      ctx.scale(d, d);
+      ctx.font = '12px system-ui';
+      return { ctx, w, h };
+    }
+    function plot(id, series, maxY = null, timeAxis = false) {
+      const { ctx, w, h } = canvas(id),
+        all = series.flatMap((s) => s.p);
+      if (!all.length) {
+        ctx.fillText('等待记录', 45, 90);
+        return;
+      }
+      const x1 = Math.max(1, ...all.map((p) => p[0])),
+        y0 = maxY ? 0 : Math.min(...all.map((p) => p[1])) - 0.1,
+        y1 = maxY || Math.max(...all.map((p) => p[1])) + 0.1;
+      const px = (x) => 48 + ((w - 62) * x) / x1,
+        py = (y) => h - 30 - ((h - 50) * (y - y0)) / (y1 - y0 || 1);
+      ctx.strokeStyle = '#dbe3e7';
+      ctx.fillStyle = '#60727e';
+      for (let i = 0; i < 4; i++) {
+        const y = y0 + ((y1 - y0) * i) / 3;
+        ctx.beginPath();
+        ctx.moveTo(44, py(y));
+        ctx.lineTo(w - 10, py(y));
+        ctx.stroke();
+        ctx.fillText(y.toFixed(1), 3, py(y) + 4);
+      }
+      series.forEach((s, i) => {
+        ctx.strokeStyle = s.c;
+        ctx.lineWidth = s.width || 2;
+        ctx.beginPath();
+        s.p.forEach((p, j) =>
+          j ? ctx.lineTo(px(p[0]), py(p[1])) : ctx.moveTo(px(p[0]), py(p[1])),
+        );
+        ctx.stroke();
+        ctx.fillStyle = s.c;
+        ctx.fillText(s.name, 50 + i * 145, 14);
+      });
+      ctx.fillStyle = '#60727e';
+      ctx.fillText('0', 47, h - 9);
+      ctx.fillText(
+        timeAxis ? x1.toFixed(2) + ' 秒' : (x1 / 1000).toFixed(0) + ' 千控制步',
+        w - 100,
+        h - 9,
+      );
+    }
+    function draw() {
+      if (!data) return;
+      const c = data.curve,
+        avg = c.map((r, i) => [
+          r.timesteps,
+          c.slice(Math.max(0, i - 29), i + 1).reduce((s, x) => s + x.meanReward, 0) /
+            Math.min(i + 1, 30),
+        ]);
+      plot('curve', [
+        {
+          name: '逐轮原始奖励',
+          c: '#b8d3d7',
+          p: c.map((r) => [r.timesteps, r.meanReward]),
+          width: 1,
+        },
+        { name: '30 轮平均', c: '#176e78', p: avg },
+      ]);
+      plot(
+        'validation',
+        [
+          {
+            name: data.experiment.training?.taskParameters?.baselineGains ? '基础反馈' : '参考站姿',
+            c: '#8b7a60',
+            p: data.validations.map((v) => [v.step, v.reference]),
+          },
+          { name: 'RL', c: '#176e78', p: data.validations.map((v) => [v.step, v.rl]) },
+        ],
+        9,
+      );
+      drawScene();
+    }
+    const chains = [
+      [
+        'body_link',
+        'l_hip_roll_link',
+        'l_hip_pitch_link',
+        'l_knee_link',
+        'l_ank_pitch_link',
+        'l_ank_roll_link',
+      ],
+      [
+        'body_link',
+        'r_hip_roll_link',
+        'r_hip_pitch_link',
+        'r_knee_link',
+        'r_ank_pitch_link',
+        'r_ank_roll_link',
+      ],
+    ];
+    function drawScene() {
+      const { ctx, w, h } = canvas('scene');
+      if (!replay) {
+        ctx.fillText('等待第一个开发回放', 25, 60);
+        return;
+      }
+      const modes = [
+        [
+          'reference',
+          data?.experiment.training?.taskParameters?.baselineGains ? '冻结基础反馈' : '参考站姿',
+        ],
+        ['rl', '当前阶段 RL'],
+      ];
+      modes.forEach(([key, title], i) => {
+        const row = replay[key],
+          f = row.frames[Math.min(frame, row.frames.length - 1)],
+          off = (i * w) / 2;
+        const project = (p) => [off + w / 4 + (p[1] + p[0] * 0.4) * 700, h - 35 - p[2] * 700];
+        ctx.fillStyle = '#233440';
+        ctx.fillText(title, off + 18, 24);
+        ctx.fillText(
+          `t=${f.time.toFixed(2)}s  侧倾=${f.tiltDegrees.toFixed(1)}°  推力=${f.externalForceWorldN[1].toFixed(1)}N`,
+          off + 18,
+          48,
+        );
+        ctx.strokeStyle = '#d2dee4';
+        ctx.beginPath();
+        ctx.moveTo(off + 10, h - 35);
+        ctx.lineTo(off + w / 2 - 10, h - 35);
+        ctx.stroke();
+        ctx.strokeStyle = i ? '#176e78' : '#9c8161';
+        ctx.lineWidth = 7;
+        chains.forEach((chain) => {
+          ctx.beginPath();
+          chain.forEach((name, j) => {
+            const p = project(f.bodyPositions[name]);
+            j ? ctx.lineTo(...p) : ctx.moveTo(...p);
+          });
+          ctx.stroke();
+        });
+        const p = project(f.bodyPositions.body_link);
+        ctx.fillStyle = i ? '#176e78' : '#9c8161';
+        ctx.fillRect(p[0] - 25, p[1] - 47, 50, 46);
+        ctx.beginPath();
+        ctx.arc(p[0], p[1] - 65, 15, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.fillStyle = row.fallen && frame >= row.frames.length - 1 ? '#a0362d' : '#536673';
+        ctx.fillText(
+          row.fallen && frame >= row.frames.length - 1
+            ? '跌倒：停在末帧'
+            : row.recoverySuccess
+              ? '本回合最终恢复通过'
+              : '本回合最终恢复未通过',
+          off + 18,
+          h - 8,
+        );
+      });
+      $('time').textContent = (frame * 0.04 + 0.02).toFixed(2) + ' 秒';
+    }
+    function drawCorrections() {
+      const active = Boolean(data?.experiment.training?.taskParameters?.baselineGains && replay);
+      $('correction-card').hidden = !active;
+      if (!active) return;
+      plot(
+        'corrections',
+        ['踝额外目标', '髋额外目标'].map((name, i) => ({
+          name,
+          c: i ? '#7a66a3' : '#176e78',
+          p: replay.rl.frames.map((f) => [f.time, f.executedExtraTargetRadians?.[i] || 0]),
+        })),
+        null,
+        true,
+      );
+    }
+    async function loadReplay() {
+      if (!$('checkpoint').value) return;
+      const key = [current, $('checkpoint').value, $('case').value].join('|');
+      if (key === replayKey) return;
+      replay = await api(
+        '/api/replay?' +
+          new URLSearchParams({
+            run: current,
+            step: $('checkpoint').value,
+            case: $('case').value || 0,
+          }),
+      );
+      replayKey = key;
+      frame = 0;
+      drawCorrections();
+      $('frame').max = Math.max(replay.reference.frames.length, replay.rl.frames.length) - 1;
+      $('frame').value = 0;
+      $('replay-note').textContent =
+        `开发条件：${replay.reference.force} N，${replay.reference.start} 秒开始，持续 0.2 秒；训练 ${replay.step.toLocaleString()} 步。`;
+      drawScene();
+    }
+    async function refresh() {
+      try {
+        data = await api('/api/state?run=' + encodeURIComponent(current));
+        options(
+          $('runs'),
+          data.runs.map((r) => [r, r]),
+        );
+        $('runs').value = current;
+        const last = data.curve.at(-1) || {},
+          steps = last.timesteps || 0,
+          total = data.experiment.training?.totalTimesteps || 1000000;
+        if (data.experiment.training?.taskParameters?.baselineGains)
+          $('objective').textContent =
+            '比较同样扰动下，冻结基础反馈与每20ms学习髋踝修正的RL。零初始策略与基础反馈轨迹完全一致；开发回放不用于挑选最终权重。';
+        $('state').textContent = names[data.status.state] || data.status.state || '准备中';
+        $('progress').value = Math.min(100, (100 * steps) / total);
+        $('steps').textContent = steps.toLocaleString() + ' / ' + total.toLocaleString();
+        $('reward').textContent = last.meanReward?.toFixed(3) || '—';
+        $('recent').textContent =
+          last.recentRecoveryFraction == null
+            ? '—'
+            : (100 * last.recentRecoveryFraction).toFixed(0) + '%';
+        const dev = data.validations.at(-1);
+        $('dev').textContent = dev ? `${dev.reference} → ${dev.rl} / 9` : '—';
+        const latestStage = $('checkpoint').selectedIndex === $('checkpoint').options.length - 1;
+        options(
+          $('checkpoint'),
+          data.validations.map((v) => [v.file, `${v.step.toLocaleString()} 步`]),
+        );
+        if (latestStage) $('checkpoint').selectedIndex = $('checkpoint').options.length - 1;
+        if (!$('case').options.length)
+          options(
+            $('case'),
+            [-8.25, -7.25, 7.25, 8.25]
+              .flatMap((f) =>
+                [1.9, 2.9].map((t) => [
+                  `${[-8.25, -7.25, 7.25, 8.25].indexOf(f) * 2 + [1.9, 2.9].indexOf(t)}`,
+                  `${f}N · ${t}s`,
+                ]),
+              )
+              .concat([['8', '无扰动']]),
+          );
+        $('config').textContent = JSON.stringify(
+          {
+            experiment: data.experiment,
+            criteria: data.criteria,
+            latestLearnedFeedback: data.validations.at(-1)?.learnedFeedback,
+          },
+          null,
+          2,
+        );
+        $('sources').textContent = JSON.stringify(data.sources, null, 2);
+        if (data.final)
+          $('result').textContent = Object.entries(data.final.controllers || data.final)
+            .filter(([k, v]) => v && typeof v === 'object' && 'cases' in v)
+            .map(
+              ([k, v]) =>
+                `${k}：恢复 ${v.recoverySuccesses}/${v.cases}；跌倒 ${v.falls}/${v.cases}`,
+            )
+            .join('\n');
+        draw();
+        await loadReplay();
+        $('error').textContent = '';
+      } catch (e) {
+        $('error').textContent = e.message;
+      }
+    }
+    $('runs').onchange = () => {
+      current = $('runs').value;
+      replayKey = '';
+      refresh();
+    };
+    $('checkpoint').onchange = loadReplay;
+    $('case').onchange = loadReplay;
+    $('frame').oninput = () => {
+      frame = +$('frame').value;
+      drawScene();
+    };
+    $('play').onclick = () => {
+      playing = !playing;
+      $('play').textContent = playing ? '暂停' : '播放';
+    };
+    setInterval(() => {
+      if (playing && replay) {
+        frame = (frame + 1) % (+$('frame').max + 1);
+        $('frame').value = frame;
+        drawScene();
+      }
+    }, 40);
+    window.onresize = draw;
+    refresh();
+    setInterval(refresh, 3000);
+  </script>
+</html>
