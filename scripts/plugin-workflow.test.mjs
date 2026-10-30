@@ -2,6 +2,88 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { inspectWorkflow } from '../plugins/rdk-robot-learning-platform/scripts/workflow-inspection.mjs';
 const now = 1800000000000;
+test('OriginMan inspection binds its evaluation Run and never reuses MicroDuck quality', async () => {
+  const sha = 'a'.repeat(64);
+  const tools = ['rdk_platform_status', 'rdk_workshop_catalog', 'rdk_training_status'];
+  for (const wrong of [false, true]) {
+    const calls = [];
+    const r = await inspectWorkflow(
+      { productId: 'originman', runId: 'train', evaluationRunId: 'eval' },
+      async (name, args) => {
+        calls.push([name, args]);
+        if (name === 'rdk_platform_status')
+          return {
+            ok: true,
+            health: { ready: true, degraded: ['microduck-not-mounted'] },
+            session: { authenticated: true },
+          };
+        if (name === 'rdk_workshop_catalog')
+          return {
+            robot: 'originman',
+            simulationOnly: true,
+            manifest: {
+              contract: {
+                id: 'custom-policy-originman-recovery-v1',
+                observationSize: 14,
+                actionSize: 2,
+              },
+            },
+          };
+        return {
+          runId: args.runId,
+          modelId: 'origin-model',
+          status: 'completed',
+          metrics: {
+            originmanWorkshop:
+              args.runId === 'train'
+                ? {
+                    phase: 'train',
+                    hardwareEligible: false,
+                    policySha256: sha,
+                    actualTimesteps: 4096,
+                  }
+                : {
+                    phase: 'evaluate',
+                    hardwareEligible: false,
+                    policySha256: sha,
+                    sourceRunId: wrong ? 'another-group' : 'train',
+                    cases: Array(31).fill({}),
+                    baselineRecovered: 13,
+                    rlRecovered: 13,
+                    clearGain: false,
+                  },
+          },
+        };
+      },
+      tools,
+      { now },
+    );
+    assert.equal(r.stages.find((s) => s.id === 'evaluate').state, wrong ? 'blocked' : 'completed');
+    assert.equal(r.stages.find((s) => s.id === 'deploy').state, 'blocked');
+    assert.ok(calls.every(([name]) => !name.includes('physical_evaluation')));
+    if (!wrong) assert.match(r.markdown, /未达明显收益/);
+  }
+});
+
+test('OriginMan preparation never previews PPO or accepts another task', async () => {
+  const { prepareTraining } =
+    await import('../plugins/rdk-robot-learning-platform/scripts/workflow-inspection.mjs');
+  const calls = [];
+  const call = async (name, args) => {
+    calls.push([name, args]);
+    return name === 'rdk_compute_resource_test'
+      ? { id: 'cpu', connected: true, mock: false }
+      : { computeResourceId: 'cpu', report: { readyForSmokeTraining: true } };
+  };
+  const r = await prepareTraining({ productId: 'originman', computeResourceId: 'cpu' }, call);
+  assert.equal(r.preview.arguments.engine, 'originman-recovery');
+  assert.equal(r.preview.arguments.algorithm, 'sac');
+  assert.equal(r.preview.arguments.originmanWorkshop.timesteps, 500000);
+  assert.equal(calls[1][1].taskId, 'originman-recovery');
+  await assert.rejects(
+    prepareTraining({ productId: 'originman', computeResourceId: 'cpu', taskId: 'walk' }, call),
+  );
+});
 const names = [
   'rdk_platform_status',
   'rdk_workspace_overview',

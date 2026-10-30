@@ -1,10 +1,19 @@
 {
   "schemaVersion": 1,
-  "id": "microduck-simulation-intro",
-  "title": "机器鸭仿真入门",
+  "id": "originman-standing-recovery",
+  "title": "OriginMan 受扰恢复体验",
+  "robot": "originman",
   "policy": { "source": "reference" },
-  "requiredTools": ["rdk_runs_list", "rdk_run_logs"],
+  "requiredTools": ["rdk_workshop_catalog", "rdk_training_submit", "rdk_runs_list", "rdk_run_logs"],
   "trainingTemplate": {
-    "note": "由组织者填入当前平台已验证的参数；本配置不自动提交训练。"
+    "engine": "originman-recovery",
+    "backend": "local",
+    "profile": "standard",
+    "taskId": "originman-recovery",
+    "maxIterations": 1954,
+    "algorithm": "sac",
+    "numEnvs": 4,
+    "originmanWorkshop": { "phase": "train", "timesteps": 500000, "seed": 7, "pushMaxForce": 8.1 },
+    "note": "先读取课程目录，登记同契约模型并选择支持此引擎的资源。短训练仅软件检查，不保证收益。仅仿真，不自动提交训练。"
   }
 }

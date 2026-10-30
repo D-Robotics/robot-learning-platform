@@ -31,9 +31,10 @@ test('plugin CLI talks to actual MCP and isolated platform without creating runs
     const profile = 'plugins/rdk-robot-learning-platform/references/experience-profile.json';
     const before = await (await fetch(`${base}/api/v1/duck/runs`)).json();
     const result = await main(['prepare', profile]);
-    // This isolated platform deliberately lacks a live worker and simulation assets.
-    assert.equal(result.status, 'blocked');
-    assert.ok(result.checks.some((c) => c.id === 'platform'));
+    // Preparing an OriginMan entry is read-only; it does not claim an executor exists.
+    // Missing optional MicroDuck browser assets must not select or block this product.
+    assert.equal(result.status, 'prepared');
+    assert.ok(result.entryUrl.includes('robot=originman'));
     if (result.status === 'prepared') {
       assert.ok(result.entryUrl.startsWith(base));
       assert.ok(Object.values(result.execution).every((x) => x === false));

@@ -1,3 +1,4 @@
+import { normalizeOriginmanWorkshop, type OriginmanWorkshopConfig } from './originman-workshop.js';
 import type {
   ModelArtifactDescriptor,
   ModelArtifactKind,
@@ -100,7 +101,7 @@ export const SIM2REAL_CONTRACT_LIMITS = Object.freeze({
 });
 
 /** Product lines share a workflow, not a policy contract. */
-export type Sim2RealRobotId = 'microduck' | 'rdk-duck' | 'originbot' | 'custom';
+export type Sim2RealRobotId = 'microduck' | 'rdk-duck' | 'originbot' | 'originman' | 'custom';
 
 export type Sim2RealProductContractMode = 'fixed' | 'manifest-defined';
 
@@ -125,6 +126,14 @@ export const SIM2REAL_PRODUCT_PROFILES: Readonly<Record<Sim2RealRobotId, Sim2Rea
       simulatorPath: '/mujoco/microduck/',
       targetPlatforms: ['rdk-x5'],
       accessories: ['ball'],
+    },
+    originman: {
+      id: 'originman',
+      displayName: 'OriginMan',
+      contractMode: 'manifest-defined',
+      contractIdPrefix: 'custom-policy-originman-',
+      targetPlatforms: [],
+      accessories: ['imu', 'servo'],
     },
     originbot: {
       id: 'originbot',
@@ -226,6 +235,8 @@ export type Sim2RealTrainingEngine =
   | 'offline-bc'
   | 'microduck-rl'
   | 'microduck-football'
+  | 'originman-straight'
+  | 'originman-recovery'
   | 'act'
   | 'diffusion-policy'
   | 'smolvla'
@@ -241,6 +252,7 @@ export interface Sim2RealTrainingSpec {
   algorithm?: Sim2RealTrainingAlgorithm;
   /** Engine the worker must route to; omitted keeps the platform default. */
   engine?: Sim2RealTrainingEngine;
+  originmanWorkshop?: OriginmanWorkshopConfig;
 }
 
 /** Platform-frozen vector demonstrations; never a user-supplied local path or URL. */
@@ -848,6 +860,7 @@ const ALLOWED_ROLES = new Set<Sim2RealArtifactRole>(['policy', 'compiled-policy'
 const ALLOWED_BACKENDS = new Set<Sim2RealBackend>(['browser', 'robogo', 'local']);
 const ALLOWED_VARIANTS = new Set<Sim2RealRobotVariant>(['legs', 'rollers', 'both']);
 const ALLOWED_ROBOT_IDS = new Set<Sim2RealRobotId>([
+  'originman',
   'microduck',
   'rdk-duck',
   'originbot',
@@ -868,6 +881,8 @@ const ALLOWED_TRAINING_ENGINES = new Set<Sim2RealTrainingEngine>([
   'offline-bc',
   'microduck-rl',
   'microduck-football',
+  'originman-straight',
+  'originman-recovery',
   'act',
   'diffusion-policy',
   'smolvla',
@@ -1086,8 +1101,18 @@ export function normalizeTrainingSpec(value: unknown): {
   // time instead of falling through to whichever engine the worker default.
   if (engine && !ALLOWED_TRAINING_ENGINES.has(engine as Sim2RealTrainingEngine)) {
     errors.push(
-      'training.engine must be one of starter-ppo, mjx-ppo, visual-ppo, dm-control-ppo, mjlab-rsl-rl, offline-bc, microduck-rl, microduck-football, act, diffusion-policy, smolvla, isaac-lab',
+      'training.engine must be one of starter-ppo, mjx-ppo, visual-ppo, dm-control-ppo, mjlab-rsl-rl, offline-bc, microduck-rl, microduck-football, originman-straight, originman-recovery, act, diffusion-policy, smolvla, isaac-lab',
     );
+  }
+  let originmanWorkshop: OriginmanWorkshopConfig | undefined;
+  if (source.originmanWorkshop !== undefined || engine === 'originman-recovery') {
+    try {
+      originmanWorkshop = normalizeOriginmanWorkshop(source.originmanWorkshop);
+      if (engine !== 'originman-recovery' || algorithm !== 'sac' || numEnvs !== 4)
+        errors.push('OriginMan Workshop requires originman-recovery, SAC and 4 environments');
+    } catch (error) {
+      errors.push(error instanceof Error ? error.message : 'Workshop 配置无效');
+    }
   }
   if (errors.length) return { errors };
   return {
@@ -1100,6 +1125,7 @@ export function normalizeTrainingSpec(value: unknown): {
       ...(runName ? { runName } : {}),
       ...(algorithm ? { algorithm: algorithm as Sim2RealTrainingAlgorithm } : {}),
       ...(engine ? { engine: engine as Sim2RealTrainingEngine } : {}),
+      ...(originmanWorkshop ? { originmanWorkshop } : {}),
     },
   };
 }

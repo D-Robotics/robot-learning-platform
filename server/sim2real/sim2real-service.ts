@@ -68,7 +68,9 @@ export function compatibilityForManifest(
         ],
       },
       deployable: false,
-      reason: `${productProfile.displayName} 当前只登记面向 ${productProfile.targetPlatforms.join('、')} 的板端目标。`,
+      reason: productProfile.targetPlatforms.length
+        ? `${productProfile.displayName} 当前只登记面向 ${productProfile.targetPlatforms.join('、')} 的板端目标。`
+        : `${productProfile.displayName} 当前仅完成仿真适配，尚无经过验证的板端目标，不能部署到真机。`,
     };
   }
   const candidates = manifest.artifacts

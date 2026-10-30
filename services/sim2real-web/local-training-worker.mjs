@@ -1207,6 +1207,57 @@ async function handleArtifact(request, response) {
  * ownership gate as handleArtifact; only completed non-mock jobs serve
  * bytes, and the payload stays under the same ceiling as artifacts.
  */
+async function handleWorkshopVideo(request, response) {
+  await ensureJobsLoaded();
+  const runId = decodeURIComponent(
+    (request.url || '').slice('/runs/'.length, -'/workshop-video'.length),
+  );
+  const job = jobs.get(runId);
+  const owner = accountId(request, {});
+  if (!job || job.accountId !== owner) {
+    json(response, 404, { ok: false, error: 'run_not_found' });
+    return;
+  }
+  const video = job.metrics?.originmanWorkshop?.video;
+  if (
+    job.status !== 'completed' ||
+    job.mock ||
+    job.engine !== 'originman-recovery' ||
+    !video ||
+    !/^[a-f0-9]{64}$/.test(video.sha256)
+  ) {
+    json(response, 409, { ok: false, error: 'workshop_video_unavailable' });
+    return;
+  }
+  const file = path.join(job.dir, 'comparison.mp4');
+  let info;
+  try {
+    info = await stat(file);
+  } catch {
+    json(response, 409, { ok: false, error: 'workshop_video_missing' });
+    return;
+  }
+  if (!info.isFile() || info.size !== video.bytes || info.size <= 0 || info.size > 20000000) {
+    json(response, 409, { ok: false, error: 'workshop_video_invalid' });
+    return;
+  }
+  const hash = createHash('sha256');
+  for await (const chunk of createReadStream(file)) hash.update(chunk);
+  if (hash.digest('hex') !== video.sha256) {
+    json(response, 409, { ok: false, error: 'workshop_video_digest_mismatch' });
+    return;
+  }
+  response.writeHead(200, {
+    'content-type': 'video/mp4',
+    'content-length': info.size,
+    'x-artifact-sha256': video.sha256,
+    'cache-control': 'no-store',
+  });
+  const stream = createReadStream(file);
+  stream.on('error', () => response.destroy());
+  stream.pipe(response);
+}
+
 async function handleTelemetry(request, response) {
   await ensureJobsLoaded();
   const runId = decodeURIComponent(
@@ -1410,6 +1461,14 @@ export function createLocalTrainingWorkerServer() {
         request.url.split('?')[0].endsWith('/logs')
       ) {
         await handleLogs(request, response);
+        return;
+      }
+      if (
+        request.method === 'GET' &&
+        request.url?.startsWith('/runs/') &&
+        request.url.endsWith('/workshop-video')
+      ) {
+        await handleWorkshopVideo(request, response);
         return;
       }
       if (request.method === 'GET' && request.url?.startsWith('/runs/')) {

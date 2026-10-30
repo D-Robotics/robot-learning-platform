@@ -75,6 +75,74 @@ const ready = {
   health: { ready: true, degraded: [] },
   session: { authenticated: true },
 };
+
+test('OriginMan never accepts a MicroDuck entry or legacy fallback', async () => {
+  const origin = { ...profile, robot: 'originman' };
+  for (const wrong of [
+    { entryUrl: '/mujoco/microduck/' },
+    { robot: 'microduck', entryUrl: '/mujoco/microduck/' },
+  ]) {
+    const calls = [];
+    const result = await prepareExperience(
+      origin,
+      async (name, args) => {
+        calls.push([name, args]);
+        return name === 'rdk_platform_status' ? ready : wrong;
+      },
+      { tools, baseUrl: 'https://platform.test/robotics-learning/' },
+    );
+    assert.equal(result.status, 'blocked');
+    assert.deepEqual(calls[1], ['rdk_simulator_open', { robot: 'originman' }]);
+  }
+  await assert.rejects(
+    prepareExperience(
+      origin,
+      async (name) => {
+        if (name === 'rdk_platform_status') return ready;
+        throw Object.assign(new Error('old server'), {
+          platformCode: 'SIM2REAL_API_NOT_FOUND',
+          httpStatus: 404,
+        });
+      },
+      { tools: [...tools, 'rdk_workspace_overview'], baseUrl: 'https://platform.test/' },
+    ),
+    /old server/,
+  );
+});
+
+test('OriginMan preparation preserves product and reverse proxy mount', async () => {
+  const result = await prepareExperience(
+    { ...profile, robot: 'originman' },
+    async (name) =>
+      name === 'rdk_platform_status'
+        ? ready
+        : { robot: 'originman', entryUrl: './?robot=originman#train/submit' },
+    { tools, baseUrl: 'https://platform.test/robotics-learning/' },
+  );
+  assert.equal(result.status, 'prepared');
+  assert.equal(
+    result.entryUrl,
+    'https://platform.test/robotics-learning/?robot=originman#train/submit',
+  );
+  assert.ok(Object.values(result.execution).every((value) => value === false));
+});
+
+test('missing MicroDuck assets do not block OriginMan, while other degradation still does', async () => {
+  for (const [degraded, expected] of [
+    [['microduck-not-mounted'], 'prepared'],
+    [['microduck-not-mounted', 'worker-offline'], 'blocked'],
+  ]) {
+    const result = await prepareExperience(
+      { ...profile, robot: 'originman' },
+      async (name) =>
+        name === 'rdk_platform_status'
+          ? { ...ready, health: { ready: true, degraded } }
+          : { robot: 'originman', entryUrl: './?robot=originman#train/submit' },
+      { tools, baseUrl: 'https://platform.test/' },
+    );
+    assert.equal(result.status, expected);
+  }
+});
 function context(overrides = {}) {
   const calls = [];
   return {

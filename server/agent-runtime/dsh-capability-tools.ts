@@ -46,6 +46,7 @@ const names: Array<[string, string, boolean]> = [
   ['rdk_run_logs', '读取本地训练运行的有界日志', true],
   ['rdk_retraining_advice', '根据运行、评测和遥测生成重训建议', true],
   ['rdk_replay_video', '为满足证据条件的真机运行渲染回放视频', false],
+  ['rdk_workshop_catalog', '读取指定机器人的课程契约和训练模板（不提交训练）', true],
   ['rdk_simulator_open', '打开浏览器参考仿真', true],
   ['rdk_evaluation_summarize', '汇总训练评测证据', true],
   ['rdk_feedback_summary', '汇总当前账号对工作台结果的反馈', true],

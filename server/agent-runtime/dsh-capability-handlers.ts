@@ -18,6 +18,7 @@ import type { DshCapabilityHandlers } from './dsh-capability-tools.js';
 import type { ToolRunContext } from '@deepseek-ai/dsh-tools';
 import { readSim2RealAgentResponseText } from '../routes/sim2real-agent-routes.js';
 import { AsyncLocalStorage } from 'node:async_hooks';
+import { normalizeOriginmanWorkshopResult } from '../../shared/originman-workshop.js';
 import { createHash, randomUUID } from 'node:crypto';
 import { listManuals } from 'rdk-docs-mcp/dist/catalog.js';
 import { fetchText } from 'rdk-docs-mcp/dist/http.js';
@@ -380,12 +381,12 @@ function policyCommandArg(value: unknown): Record<string, number> {
 }
 
 /** Adapter shape only; platform policy, resource limits and approvals remain upstream. */
-const TRAINING_ARGUMENT_TYPES: Record<string, 'string' | 'number' | 'boolean' | 'string-array'> = {
+const TRAINING_ARGUMENT_TYPES: Record<string, 'string' | 'number' | 'boolean' | 'string-array' | 'object'> = {
   modelId: 'string', backend: 'string', profile: 'string', engine: 'string', algorithm: 'string',
   numEnvs: 'number', maxIterations: 'number', runName: 'string', taskId: 'string',
   projectId: 'string', experimentId: 'string', label: 'string', datasetIds: 'string-array',
   computeResourceId: 'string', video: 'boolean', idempotencyKey: 'string',
-  demonstrationRunId: 'string',
+  demonstrationRunId: 'string', originmanWorkshop: 'object',
 };
 
 function rejectUnsupportedTrainingInputs(input: Record<string, unknown>): void {
@@ -400,7 +401,9 @@ function rejectUnsupportedTrainingInputs(input: Record<string, unknown>): void {
   }
   for (const [key, value] of Object.entries(input)) {
     const expected = TRAINING_ARGUMENT_TYPES[key];
-    const valid = expected === 'string-array'
+    const valid = expected === 'object'
+      ? value !== null && typeof value === 'object' && !Array.isArray(value)
+      : expected === 'string-array'
       ? Array.isArray(value) && value.every((id) => typeof id === 'string' && !!id.trim())
       : expected === 'number'
         ? typeof value === 'number' && Number.isFinite(value)
@@ -1027,6 +1030,7 @@ export function createDshCapabilityHandlers(
       const backend = requestedBackend || 'local';
       const training: Record<string, unknown> = {
         profile: requestedProfile || 'smoke',
+        ...(input.originmanWorkshop === undefined ? {} : { originmanWorkshop: input.originmanWorkshop }),
         ...(argString(input, 'engine') ? { engine: argString(input, 'engine') } : {}),
         ...(argString(input, 'algorithm') ? { algorithm: argString(input, 'algorithm') } : {}),
         ...(argNumber(input, 'numEnvs') === undefined
@@ -1103,6 +1107,7 @@ export function createDshCapabilityHandlers(
           maxIterations: defined(resolved.maxIterations),
           video: defined(resolved.video),
           runName: defined(resolved.runName),
+          originmanWorkshop: defined(resolved.originmanWorkshop),
         },
         defaultsApplied,
         dataUsage: {
@@ -1129,6 +1134,7 @@ export function createDshCapabilityHandlers(
       if (!result.ok) fail(result.status, result.body, '训练状态查询失败');
       const trainingRun = (result.body.run ?? {}) as Record<string, unknown>;
       const metrics = (trainingRun.metrics ?? {}) as Record<string, unknown>;
+      const workshop = normalizeOriginmanWorkshopResult(metrics.originmanWorkshop);
       return {
         runId: str(trainingRun.id),
         status: str(trainingRun.status),
@@ -1146,6 +1152,24 @@ export function createDshCapabilityHandlers(
           validationLoss: defined(metrics.validationLoss),
           epochs: defined(metrics.epochs),
           syntheticData: defined(metrics.syntheticData),
+          originmanWorkshop: workshop ? {
+            phase: workshop.phase,
+            requestedTimesteps: workshop.requestedTimesteps,
+            actualTimesteps: workshop.actualTimesteps,
+            seed: workshop.seed,
+            pushMaxForce: workshop.pushMaxForce,
+            policySha256: workshop.policySha256,
+            sourceRunId: workshop.sourceRunId,
+            baselineRecovered: workshop.baselineRecovered,
+            rlRecovered: workshop.rlRecovered,
+            clearGain: workshop.clearGain,
+            normalStanding: workshop.normalStanding,
+            cases: workshop.cases,
+            video: workshop.video,
+            videoError: workshop.videoError,
+            hardwareEligible: false,
+            note: '仅本次仿真、公开课堂条件和原基础反馈对照；不代表未见测试、优化传统控制或真机。',
+          } : null,
         },
         dataUsage: trainingDataEvidence(trainingRun),
       };
@@ -1260,7 +1284,29 @@ export function createDshCapabilityHandlers(
       return { runId, video: defined(result.body.video) };
     },
 
-    async rdk_simulator_open(_args: unknown, exec: ToolRunContext) {
+    async rdk_workshop_catalog(args: unknown, exec: ToolRunContext) {
+      const input = argsRecord(args);
+      if (requiredArg(input, 'robot', 'robot is required') !== 'originman')
+        throw new CapabilityError('DSH_CAPABILITY_REJECTED', '当前课程目录需显式选择 robot=originman。');
+      const result = await run(exec.signal).fetch('/api/sim2real/workshops/originman', { method: 'GET' });
+      if (!result.ok) fail(result.status, result.body, 'OriginMan 课程目录读取失败');
+      return { ...result.body, robot: 'originman', entryUrl: './?robot=originman#train/submit' };
+    },
+
+    async rdk_simulator_open(args: unknown, exec: ToolRunContext) {
+      const input = argsRecord(args);
+      const robot = argString(input, 'robot');
+      const runId = argString(input, 'runId');
+      if (input.robot !== undefined && !['originman', 'microduck'].includes(robot))
+        throw new CapabilityError('DSH_CAPABILITY_REJECTED', '不支持的机器人；不会回退到 MicroDuck。');
+      if (robot === 'originman') {
+        if (runId || input.runId !== undefined)
+          throw new CapabilityError('DSH_CAPABILITY_REJECTED', 'OriginMan 请在工作台按 Run 选择评测；打开入口不代表已加载策略。');
+        const result = await run(exec.signal).fetch('/api/sim2real/workshops/originman', { method: 'GET' });
+        if (!result.ok) fail(result.status, result.body, 'OriginMan 课程入口不可用');
+        return { entryUrl: './?robot=originman#train/submit', robot: 'originman', simulationOnly: true,
+          note: 'OriginMan 受扰恢复工作台；需要实际运行训练与评测后才有本组物理回放。' };
+      }
       const overview = await run(exec.signal).fetch('/api/sim2real/overview', { method: 'GET' });
       if (!overview.ok) fail(overview.status, overview.body, '工作区读取失败');
       const digest = overviewDigest(overview.body);
@@ -1272,6 +1318,7 @@ export function createDshCapabilityHandlers(
           : '/mujoco/microduck/');
       return {
         entryUrl: String(entryUrl),
+        robot: 'microduck',
         note: '在浏览器打开该路径即可查看参考仿真。',
       };
     },

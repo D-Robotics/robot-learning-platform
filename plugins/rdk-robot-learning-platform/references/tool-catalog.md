@@ -1,6 +1,6 @@
 # MCP 工具目录（由仓库契约生成）
 
-当前同源目录共 58 个工具；JSON 全量 descriptor（含 schema/annotation）见 [tool-catalog.json](tool-catalog.json)。
+当前同源目录共 59 个工具；JSON 全量 descriptor（含 schema/annotation）见 [tool-catalog.json](tool-catalog.json)。
 
 生成真源：目标仓库 `server/agent-runtime/dsh-capability-tools.ts`、`dsh-capability-handlers.ts`、`services/duck-lab-mcp/server.ts`。在 `RDK_ROBOT_LEARNING_PLATFORM_ROOT` 执行：
 
@@ -46,7 +46,7 @@ node --import tsx/esm scripts/update-platform-plugin-catalog.mjs --check
 | `rdk_board_station_command` | 执行白名单内的只读板端命令。只读操作。 | true | false | `id*: string`, `deviceId: string`, `idempotencyKey: string` |
 | `rdk_board_policy_status` | 读取板端策略运行时与延迟证据状态。只读操作。 | true | false | `deviceId: string`, `idempotencyKey: string` |
 | `rdk_board_policy_files` | 列出板端已暂存的 ONNX 策略制品。只读操作。 | true | false | `deviceId: string`, `idempotencyKey: string` |
-| `rdk_training_submit` | 提交受控强化学习或真实轨迹 BC 训练任务。需要平台安全门控。 | false | false | `modelId: string`, `demonstrationRunId: string`, `backend: string`, `profile: string`, `engine: string`, `algorithm: string`, `numEnvs: number`, `maxIterations: number`, `runName: string`, `taskId: string`, `projectId: string`, `experimentId: string`, `label: string`, `datasetIds: array<string>`, `computeResourceId: string`, `video: boolean`, `idempotencyKey: string` |
+| `rdk_training_submit` | 提交受控强化学习或真实轨迹 BC 训练任务。需要平台安全门控。 | false | false | `modelId: string`, `demonstrationRunId: string`, `originmanWorkshop: object`, `backend: string`, `profile: string`, `engine: string`, `algorithm: string`, `numEnvs: number`, `maxIterations: number`, `runName: string`, `taskId: string`, `projectId: string`, `experimentId: string`, `label: string`, `datasetIds: array<string>`, `computeResourceId: string`, `video: boolean`, `idempotencyKey: string` |
 | `rdk_training_status` | 读取训练任务状态和指标。只读操作。 | true | false | `runId*: string`, `idempotencyKey: string` |
 | `rdk_runs_replay` | 读取运行的遥测回放和聚合评测证据。只读操作。 | true | false | `runId*: string`, `idempotencyKey: string` |
 | `rdk_telemetry_list` | 读取运行的遥测分片和样本数量。只读操作。 | true | false | `runId*: string`, `limit: number`, `idempotencyKey: string` |
@@ -54,7 +54,8 @@ node --import tsx/esm scripts/update-platform-plugin-catalog.mjs --check
 | `rdk_run_logs` | 读取本地训练运行的有界日志。只读操作。 | true | false | `runId*: string`, `after: number`, `idempotencyKey: string` |
 | `rdk_retraining_advice` | 根据运行、评测和遥测生成重训建议。只读操作。 | true | false | `runId*: string`, `idempotencyKey: string` |
 | `rdk_replay_video` | 为满足证据条件的真机运行渲染回放视频。需要平台安全门控。 | false | false | `runId*: string`, `idempotencyKey: string` |
-| `rdk_simulator_open` | 打开浏览器参考仿真。只读操作。 | true | false | `idempotencyKey: string` |
+| `rdk_workshop_catalog` | 读取指定机器人的课程契约和训练模板（不提交训练）。只读操作。 | true | false | `robot*: string`, `idempotencyKey: string` |
+| `rdk_simulator_open` | 打开浏览器参考仿真。只读操作。 | true | false | `robot: string`, `runId: string`, `idempotencyKey: string` |
 | `rdk_evaluation_summarize` | 汇总训练评测证据。只读操作。 | true | false | `runId: string`, `idempotencyKey: string` |
 | `rdk_feedback_summary` | 汇总当前账号对工作台结果的反馈。只读操作。 | true | false | `idempotencyKey: string` |
 | `rdk_artifact_promote` | 推进或撤销一个已登记制品的生命周期状态。需要平台安全门控。 | false | true | `artifactId*: string`, `status*: string`, `reason: string`, `idempotencyKey: string` |

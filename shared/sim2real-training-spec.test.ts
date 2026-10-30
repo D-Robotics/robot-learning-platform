@@ -92,6 +92,7 @@ describe('training spec engine routing', () => {
       'diffusion-policy',
       'smolvla',
       'microduck-football',
+      'originman-straight',
       'isaac-lab',
     ]) {
       const submission = normalizeTrainingSpec({ profile: 'smoke', engine });

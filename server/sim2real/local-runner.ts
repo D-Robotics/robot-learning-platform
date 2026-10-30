@@ -176,6 +176,7 @@ export async function requestLocalTrainingStatus(input: {
  */
 export async function fetchLocalRunArtifact(input: {
   /** The worker gates every /runs/:id route on the owning account. */
+  purpose?: 'policy' | 'originman-comparison';
   accountId: string;
   externalRunId: string;
   fetchImpl?: typeof fetch;
@@ -211,7 +212,7 @@ export async function fetchLocalRunArtifact(input: {
     const runnerPath = parsedRunner.pathname.replace(/\/+$/, '');
     if (runnerPath.endsWith('/train')) parsedRunner.pathname = runnerPath.slice(0, -6);
     const response = await (input.fetchImpl ?? fetch)(
-      `${parsedRunner.toString().replace(/\/+$/, '')}/runs/${encodeURIComponent(input.externalRunId)}/artifact`,
+      `${parsedRunner.toString().replace(/\/+$/, '')}/runs/${encodeURIComponent(input.externalRunId)}/${input.purpose === 'originman-comparison' ? 'workshop-video' : 'artifact'}`,
       {
         method: 'GET',
         headers: {

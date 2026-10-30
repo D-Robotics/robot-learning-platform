@@ -2,7 +2,7 @@
   "name": "@d-robotics/robot-learning-platform",
   "version": "0.1.0",
   "private": false,
-  "description": "RDK-X5 \u00d7 MicroDuck robot learning platform for browser simulation, RL training, model artifacts, Sim2Real evaluation, and deployment.",
+  "description": "RDK-X5 × MicroDuck robot learning platform for browser simulation, RL training, model artifacts, Sim2Real evaluation, and deployment.",
   "homepage": "https://github.com/D-Robotics/robot-learning-platform#readme",
   "repository": {
     "type": "git",
@@ -86,7 +86,7 @@
     "verify:deployment": "node scripts/verify-deployment-assets.mjs",
     "verify:security": "node scripts/verify-release-security.mjs",
     "verify:examples": "node scripts/verify-examples.mjs",
-    "verify:local-worker": "node services/sim2real-web/local-training-worker.test.mjs",
+    "verify:local-worker": "node services/sim2real-web/local-training-worker.test.mjs && node services/sim2real-web/originman-workshop-worker.test.mjs",
     "verify:board-agent": "node services/sim2real-web/local-board-agent.test.mjs",
     "verify:gpu-agent": "node scripts/local-gpu-agent.test.mjs",
     "verify:mcp": "vitest run --configLoader runner services/duck-lab-mcp",
@@ -165,7 +165,10 @@
     "setup:plugin": "node scripts/configure-platform-plugin.mjs",
     "package:plugin": "node scripts/package-platform-plugin.mjs",
     "verify:plugin:contracts": "node --test scripts/plugin-experience.test.mjs scripts/plugin-workflow.test.mjs scripts/export-studio-plugin.test.mjs scripts/verify-platform-plugin-journey.test.mjs scripts/lib/browser-bc-acceptance.test.mjs",
-    "verify:plugin:experience": "node --test scripts/plugin-experience.test.mjs scripts/plugin-workflow.test.mjs && node --import tsx/esm --test scripts/plugin-experience-integration.test.mjs"
+    "verify:plugin:experience": "node --test scripts/plugin-experience.test.mjs scripts/plugin-workflow.test.mjs && node --import tsx/esm --test scripts/plugin-experience-integration.test.mjs",
+    "dev:originman-workshop": "node scripts/dev-originman-workshop.mjs",
+    "verify:originman-straight": "node scripts/verify-originman-straight.mjs",
+    "verify:originman-kick": "node scripts/verify-originman-kick.mjs"
   },
   "dependencies": {
     "@deepseek-ai/cordis": "4.0.2",

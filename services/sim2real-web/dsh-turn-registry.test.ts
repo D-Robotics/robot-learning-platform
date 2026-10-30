@@ -7,6 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { createSim2RealWebApp } from './server.js';
 import { DshTurnRegistry } from './dsh-turn-registry.js';
+import { flushSim2RealAudit } from '../../server/sim2real/audit-log.js';
 import { askDsh } from '../../server/agent-runtime/dsh-runtime.js';
 
 vi.mock('../../server/agent-runtime/dsh-runtime.js', async (importOriginal) => ({
@@ -47,6 +48,8 @@ afterEach(async () => {
       .splice(0)
       .map((server) => new Promise<void>((resolve) => server.close(() => resolve()))),
   );
+  // Response audit writes outlive the HTTP response; drain before deleting its storage.
+  await flushSim2RealAudit();
   await Promise.all(
     temporaryRoots.splice(0).map((root) => fs.rm(root, { recursive: true, force: true })),
   );
@@ -61,6 +64,7 @@ async function fixture(): Promise<string> {
   temporaryRoots.push(root);
   process.env.RDK_SIM2REAL_DEPLOYMENT = 'local';
   process.env.RDK_SIM2REAL_STORAGE_DIR = path.join(root, 'ledger');
+  process.env.RDK_DATA_DIR = path.join(root, 'data');
   process.env.RDK_SIM2REAL_REQUIRE_MICRODUCK = '0';
   delete process.env.RDK_SIM2REAL_DSH_RUNTIME;
   const app = createSim2RealWebApp();

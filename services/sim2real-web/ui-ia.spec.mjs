@@ -739,3 +739,25 @@ assert.doesNotMatch(app, /:19100/, 'the browser must never hardcode the board ag
 console.log(
   `[sim2real-ui] PASS — ${viewNames.length} views, ${navItems} sidebar entries, grouped IA (start / learning loop / advanced tools), read-only context strip; ${invariantSummary.stylesheets} stylesheets (tokens.css + app.css), ${markupSummary.tabs} tabs / ${markupSummary.panels} tabpanels, ${invariantSummary.pages} pages, ${invariantSummary.layers} style layers (cross-layer selectors ${invariantSummary.crossLayerSelectors}/${invariantSummary.crossLayerBudget}), ${liveGuards.length} guards self-tested`,
 );
+
+// OriginMan shares the training view and the native Run lifecycle, with a dedicated contract.
+assert.match(html, /option value="originman"/);
+assert.match(app, /get\('robot'\) === 'originman'\) return 'originman'/);
+const workshopUi = fs.readFileSync(path.join(here, 'public', 'originman-workshop.js'), 'utf8');
+assert.match(html, /id="originman-workshop"/);
+for (const id of [
+  'originman-steps',
+  'originman-seed',
+  'originman-force',
+  'originman-train',
+  'originman-evaluate',
+  'originman-run',
+  'originman-evaluation',
+  'originman-cases',
+  'originman-video',
+])
+  assert.ok(html.includes(`id="${id}"`), `workshop control exists: ${id}`);
+assert.ok(html.indexOf('originman-workshop.js') < html.indexOf('./app.js'));
+assert.match(app, /OriginmanWorkshop\?\.mount/);
+assert.match(workshopUi, /sourceRunId: parent.id/);
+assert.match(workshopUi, /Idempotency-Key/);

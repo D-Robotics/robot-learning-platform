@@ -22,7 +22,7 @@ export const EXPERIENCE_TOOLS = [
   {
     name: 'rdk_experience_prepare',
     description:
-      '用当前同一账号连接实时检查场景、指定策略并准备仿真入口。不会打开页面、驱动设备或提交训练；恢复动作仅返回待执行指引。可传其他场景配置，默认机器鸭参考体验。',
+      '用当前同一账号检查场景、指定策略并准备入口。不会打开页面、驱动设备或提交训练；恢复仅返回指引。默认 OriginMan 受扰恢复，MicroDuck 可通过配置继续选择。',
     inputSchema: {
       type: 'object',
       properties: {

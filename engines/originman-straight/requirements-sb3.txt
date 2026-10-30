@@ -1,0 +1,6 @@
+-r requirements.txt
+stable-baselines3==2.7.1
+gymnasium==1.2.2
+cloudpickle==3.1.2
+farama-notifications==0.0.6
+pandas==3.1.0

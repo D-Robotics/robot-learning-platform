@@ -132,6 +132,7 @@
               <strong id="sidebar-product-name">MicroDuck</strong>
             </div>
             <select id="product-select" aria-label="选择产品线">
+                <option value="originman">OriginMan · 受扰恢复仿真</option>
                 <option value="microduck">MicroDuck · 官方参考</option>
                 <option value="originbot">OriginBot · X5 真机</option>
                 <option value="rdk-duck">RDK Duck · X5 产品</option>
@@ -805,6 +806,57 @@
                   </ul>
                 </article>
               </div>
+            </details>
+            <details class="panel originman-workshop" id="originman-workshop">
+              <summary><strong>OriginMan Workshop · 受扰恢复强化学习</strong></summary>
+              <p>固定稳定反馈打底，SAC 每 20ms 连续修正髋踝。配置 → 本组训练 → 固定 31 条件评测 → RL 前后对照。仅仿真。</p>
+              <form id="originman-workshop-form">
+                <div class="training-grid">
+                  <div class="training-field-group">
+                    <label class="field-label" for="originman-steps">训练控制步数</label>
+                    <input id="originman-steps" type="number" min="4096" max="1000000" step="1" value="500000" required>
+                    <label class="field-label" for="originman-seed">随机种子</label>
+                    <input id="originman-seed" type="number" min="0" max="1000000" step="1" value="7" required>
+                    <label class="field-label" for="originman-force">训练侧推上限（N）</label>
+                    <input id="originman-force" type="number" min="6.4" max="9" step="0.1" value="8.1" required>
+                  </div>
+                  <div class="training-field-group">
+                    <strong>冻结的控制与评测</strong>
+                    <p class="small-note">SAC · CPU / 4 环境 · 14 维观测 → 2 维修正。基础 PD、奖励、控制周期、动作映射与评测条件固定。改配置会创建新 Run，不覆盖旧权重。</p>
+                    <p class="small-note">先用 50 万步主实验；4096～1 万步仅检查流程，不保证学好。31 条件是公开课堂基准，不是真机成功率或未见测试。</p>
+                    <label class="field-label" for="originman-resource">执行资源</label>
+                    <select id="originman-resource"><option value="">服务端默认本地 Worker</option></select>
+                  </div>
+                </div>
+                <div class="model-actions">
+                  <button class="button button-primary" id="originman-train" type="submit">1. 创建本组训练</button>
+                  <button class="button button-ghost" id="originman-refresh" type="button">刷新记录</button>
+                </div>
+              </form>
+              <p id="originman-status" class="action-block-hint" role="status" aria-live="polite">展开后加载本组实验。Worker 需已配置模型与 OriginMan 引擎。</p>
+              <label class="field-label" for="originman-run">本组训练记录</label>
+              <select id="originman-run"><option value="">尚无训练</option></select>
+              <div class="model-actions"><button class="button button-primary" id="originman-evaluate" type="button" disabled>2. 评测所选权重</button></div>
+              <p class="small-note" id="originman-provenance">训练与评测分别保存为平台 Run；无法确认提交结果时保留幂等键供重试。</p>
+              <div class="run-progress-live-chart" id="originman-progress" hidden>
+                <strong>本组训练奖励与开发检查</strong>
+                <canvas id="originman-progress-chart" width="900" height="240" role="img" aria-label="本组真实训练奖励曲线"></canvas>
+                <p class="small-note">横轴为累计控制步；曲线为引擎日志中的奖励。开发集恢复数每 5 万步检查一次，最终效果看独立评测。</p>
+              </div>
+              <label class="field-label" for="originman-evaluation">本组评测记录</label>
+              <select id="originman-evaluation"><option value="">尚无评测</option></select>
+              <section id="originman-comparison" aria-labelledby="originman-comparison-title" hidden>
+                <h3 id="originman-comparison-title">3. 相同扰动下的 RL 前后对照</h3>
+                <p id="originman-verdict" role="status"></p>
+                <p id="originman-comparison-note" class="small-note"></p>
+                <div class="run-comparison-chart"><canvas id="originman-tilt-chart" width="900" height="260" role="img" aria-label="同一条件下参考、基础、未训练与训练后身体倾角"></canvas></div>
+                <div class="run-comparison-chart"><canvas id="originman-correction-chart" width="900" height="240" role="img" aria-label="RL 实际额外踝和髋目标随时间变化"></canvas></div>
+                <video id="originman-video" class="originman-comparison-video" controls preload="metadata" aria-label="本次同条件物理回放" hidden></video>
+                <p class="small-note" id="originman-video-note"></p>
+                <div class="originman-case-table"><table><thead><tr><th>条件</th><th>推力 / 开始</th><th>基础</th><th>未训练</th><th>训练后</th><th>冻结输出</th><th>变化</th></tr></thead><tbody id="originman-cases"></tbody></table></div>
+                <div class="model-actions"><button class="button button-ghost" id="originman-download" type="button">下载本次评测记录</button></div>
+              </section>
+              <details><summary>本组引擎日志与失败原因</summary><pre id="originman-logs" class="run-progress-logs-body">尚无日志</pre></details>
             </details>
             <div class="train-layout" data-train-active-module="run">
               <article class="panel model-panel" id="train-module-run-model" data-train-module="run" role="tabpanel" aria-labelledby="train-tab-run">
@@ -2178,7 +2230,8 @@
       blocking the parser at body end.
     -->
     <script defer src="./telemetry-core.js?v=duck-lab-31"></script>
-    <script defer src="./app.js?v=duck-lab-59"></script>
+    <script defer src="./originman-workshop.js?v=originman-1"></script>
+    <script defer src="./app.js?v=originman-1"></script>
     <script defer src="./visualization-enhancements.js?v=viz-1"></script>
     <script defer src="./agent-chat.js?v=agent-18"></script>
     <script defer src="./onboarding.js?v=onboarding-6"></script>

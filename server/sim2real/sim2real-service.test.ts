@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { ORIGINMAN_WORKSHOP_MANIFEST } from '../../shared/originman-workshop.js';
 
 import {
   BUILTIN_MICRODUCK_MODEL,
@@ -20,6 +21,23 @@ function manifestFixture(): Sim2RealModelManifest {
 }
 
 describe('Sim2Real compatibility service', () => {
+  it('never grants OriginMan hardware eligibility even when a compiled artifact names the board', () => {
+    for (const platform of ['rdk-x5', 'rdk-s600']) {
+      const manifest = structuredClone(ORIGINMAN_WORKSHOP_MANIFEST);
+      manifest.artifacts.push({
+        id: 'unverified-compiled',
+        role: 'compiled-policy',
+        ref: 'artifact://unverified/policy.bin',
+        kind: 'compiled',
+        format: 'bin',
+        name: 'policy.bin',
+        targetPlatforms: [platform],
+      });
+      const compatibility = compatibilityForManifest(manifest, platform);
+      expect(compatibility.deployable).toBe(false);
+      expect(compatibility.reason).toContain('仅完成仿真');
+    }
+  });
   it('does not present a stale persisted device as connected', () => {
     const stale = publicDeviceSummary({
       id: 'x5-real-stale',

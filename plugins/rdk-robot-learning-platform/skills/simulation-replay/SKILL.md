@@ -7,7 +7,7 @@ description: 在 RDK 学习平台打开浏览器仿真、录制轨迹、检查�
 
 交付实际仿真入口、可检查的轨迹或 Run 回放。参数见 [工具目录](../../references/tool-catalog.md)，连接边界见 [连接契约](../../references/connection-contract.md)。
 
-- `rdk_simulator_open` 返回 `entryUrl`，不操作画布。相对路径应在已配置平台地址/挂载前缀下解析；通过可用浏览器工具打开。用真实 UI 选择任务和动作、开始/停止录制、保存/导出 JSONL。MCP 没有键盘驱动、录制开关或通用仿真控制工具。
+- `rdk_simulator_open` 显式选择 robot；OriginMan 返回受扰恢复工作台，MicroDuck 返回鸭子仿真。返回 `entryUrl` 不代表已经操作页面。相对路径保留平台挂载前缀。OriginMan 用课程目录、真实训练及父 Run 评测生成本次回放，不使用下述 MicroDuck 录制协议；不能把机器鸭录制结果作为 OriginMan 证据。MCP 没有键盘驱动或通用仿真控制工具。
 - WebGL 不可用时报告真实错误，可继续使用轨迹页；不得用静态截图证明仿真运行。浏览器参考策略是仿真证据，不是当前模型已训练或真机成功。
 - 已有 Run 用 `rdk_runs_list` 找 ID，再用 `rdk_runs_replay`、`rdk_telemetry_list`、`rdk_board_sessions`。检查样本数、来源、时间轴、会话停止原因及关联契约；需要回放视觉检查时用工作台的轨迹页。
 - `rdk_replay_video` 会请求服务生成视频，只对满足平台证据条件的运行调用。记录返回的视频引用；无相机/无合格真机证据时保留拒绝，不把仿真素材改称真机视频。

@@ -58,6 +58,76 @@ afterEach(() => {
 });
 
 describe('DSH capability handlers', () => {
+  it('opens OriginMan only after its authenticated catalog succeeds', async () => {
+    const { fetchImpl, calls } = fakeLoopback([
+      () => ({
+        status: 200,
+        body: {
+          simulationOnly: true,
+          manifest: { contract: { observationSize: 14, actionSize: 2 } },
+        },
+      }),
+    ]);
+    const handlers = createDshCapabilityHandlers({ fetchImpl });
+    const exec = { signal: new AbortController().signal } as never;
+    const result = await handlers.rdk_simulator_open!({ robot: 'originman' }, exec);
+    expect(result).toMatchObject({
+      robot: 'originman',
+      entryUrl: './?robot=originman#train/submit',
+      simulationOnly: true,
+    });
+    expect(calls.map((c) => c.path)).toEqual(['/api/sim2real/workshops/originman']);
+    await expect(handlers.rdk_simulator_open!({ robot: 'unknown' }, exec)).rejects.toThrow(
+      '不支持',
+    );
+    await expect(
+      handlers.rdk_simulator_open!({ robot: 'originman', runId: 'run-a' }, exec),
+    ).rejects.toThrow('不代表');
+    expect(calls).toHaveLength(1);
+  });
+
+  it('does not substitute a MicroDuck URL when the OriginMan catalog is missing', async () => {
+    const { fetchImpl, calls } = fakeLoopback([
+      () => ({ status: 404, body: { error: 'SIM2REAL_API_NOT_FOUND' } }),
+    ]);
+    const handlers = createDshCapabilityHandlers({ fetchImpl });
+    await expect(
+      handlers.rdk_simulator_open!({ robot: 'originman' }, {
+        signal: new AbortController().signal,
+      } as never),
+    ).rejects.toThrow();
+    expect(calls).toHaveLength(1);
+  });
+
+  it('forwards OriginMan frozen training configuration without replacing the parent Run', async () => {
+    const { fetchImpl, calls } = fakeLoopback([
+      () => ({ status: 200, body: overviewPayload }),
+      () => ({ status: 201, body: { run: { id: 'eval-a', status: 'queued' } } }),
+    ]);
+    const handlers = createDshCapabilityHandlers({ fetchImpl });
+    const config = {
+      phase: 'evaluate',
+      timesteps: 500000,
+      seed: 7,
+      pushMaxForce: 8.1,
+      sourceRunId: 'train-a',
+    };
+    const result = await handlers.rdk_training_submit!(
+      {
+        modelId: 'origin-a',
+        backend: 'local',
+        engine: 'originman-recovery',
+        algorithm: 'sac',
+        numEnvs: 4,
+        originmanWorkshop: config,
+      },
+      { signal: new AbortController().signal } as never,
+    );
+    expect(result).toMatchObject({ resolvedTraining: { originmanWorkshop: config } });
+    expect(JSON.parse(calls[1].body!).training.originmanWorkshop).toEqual(config);
+    expect(calls[1].headers['idempotency-key']).toBeTruthy();
+  });
+
   it('does not turn a projected legacy replay length into a claimed total', async () => {
     const { fetchImpl } = fakeLoopback([
       () => ({

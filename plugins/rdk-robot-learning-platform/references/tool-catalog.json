@@ -540,6 +540,10 @@
           "type": "string",
           "description": "已上传真实轨迹的来源 Run ID；用于 local + offline-bc，平台校验来源、维度并冻结数据摘要。无有效轨迹会拒绝，不回退合成数据。"
         },
+        "originmanWorkshop": {
+          "type": "object",
+          "description": "Read rdk_workshop_catalog first; platform validates phase, budget and parent Run."
+        },
         "backend": {
           "type": "string",
           "enum": ["local", "robogo", "browser", "contract"],
@@ -726,11 +730,33 @@
     "annotations": { "readOnlyHint": false, "destructiveHint": false }
   },
   {
+    "name": "rdk_workshop_catalog",
+    "description": "读取指定机器人的课程契约和训练模板（不提交训练）。只读操作。",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "robot": { "type": "string", "enum": ["originman"] },
+        "idempotencyKey": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200,
+          "pattern": "^[A-Za-z0-9._:-]+$",
+          "description": "同一逻辑写操作重试复用此键；改变请求语义时使用新键。"
+        }
+      },
+      "required": ["robot"],
+      "additionalProperties": true
+    },
+    "annotations": { "readOnlyHint": true, "destructiveHint": false }
+  },
+  {
     "name": "rdk_simulator_open",
     "description": "打开浏览器参考仿真。只读操作。",
     "inputSchema": {
       "type": "object",
       "properties": {
+        "robot": { "type": "string", "enum": ["originman", "microduck"] },
+        "runId": { "type": "string" },
         "idempotencyKey": {
           "type": "string",
           "minLength": 1,

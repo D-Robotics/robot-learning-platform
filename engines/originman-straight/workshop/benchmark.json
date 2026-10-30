@@ -1,0 +1,134 @@
+{
+  "cases": [
+    {
+      "force": -7.9,
+      "start": 1.55
+    },
+    {
+      "force": -7.9,
+      "start": 2.75
+    },
+    {
+      "force": -7.9,
+      "start": 3.95
+    },
+    {
+      "force": -7.55,
+      "start": 1.55
+    },
+    {
+      "force": -7.55,
+      "start": 2.75
+    },
+    {
+      "force": -7.55,
+      "start": 3.95
+    },
+    {
+      "force": -7.3,
+      "start": 1.55
+    },
+    {
+      "force": -7.3,
+      "start": 2.75
+    },
+    {
+      "force": -7.3,
+      "start": 3.95
+    },
+    {
+      "force": -7.05,
+      "start": 1.55
+    },
+    {
+      "force": -7.05,
+      "start": 2.75
+    },
+    {
+      "force": -7.05,
+      "start": 3.95
+    },
+    {
+      "force": -6.8,
+      "start": 1.55
+    },
+    {
+      "force": -6.8,
+      "start": 2.75
+    },
+    {
+      "force": -6.8,
+      "start": 3.95
+    },
+    {
+      "force": 6.8,
+      "start": 1.55
+    },
+    {
+      "force": 6.8,
+      "start": 2.75
+    },
+    {
+      "force": 6.8,
+      "start": 3.95
+    },
+    {
+      "force": 7.05,
+      "start": 1.55
+    },
+    {
+      "force": 7.05,
+      "start": 2.75
+    },
+    {
+      "force": 7.05,
+      "start": 3.95
+    },
+    {
+      "force": 7.3,
+      "start": 1.55
+    },
+    {
+      "force": 7.3,
+      "start": 2.75
+    },
+    {
+      "force": 7.3,
+      "start": 3.95
+    },
+    {
+      "force": 7.55,
+      "start": 1.55
+    },
+    {
+      "force": 7.55,
+      "start": 2.75
+    },
+    {
+      "force": 7.55,
+      "start": 3.95
+    },
+    {
+      "force": 7.9,
+      "start": 1.55
+    },
+    {
+      "force": 7.9,
+      "start": 2.75
+    },
+    {
+      "force": 7.9,
+      "start": 3.95
+    },
+    {
+      "force": 0,
+      "start": 2.75
+    }
+  ],
+  "minimumClearGainConditions": 6,
+  "normalStandingRequired": true,
+  "comparison": "reference, frozen stable PD, PD plus initial policy, PD plus final policy; frozen pre-push correction ablation",
+  "weights": "final only; no checkpoint selection",
+  "hardwareEligible": false,
+  "scope": "Classroom benchmark reused from the published simulation experiment; not a new held-out test or hardware evidence."
+}

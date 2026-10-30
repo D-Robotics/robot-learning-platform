@@ -253,6 +253,7 @@ export const TOOL_PARAM_HINTS: Record<string, ToolParamHint> = {
     properties: {
       modelId: { type: 'string' },
       demonstrationRunId: { type: 'string' },
+      originmanWorkshop: {},
       backend: { type: 'string' },
       profile: { type: 'string' },
       engine: { type: 'string' },
@@ -313,7 +314,11 @@ export const TOOL_PARAM_HINTS: Record<string, ToolParamHint> = {
       runId: { type: 'string' },
     },
   },
-  rdk_simulator_open: { required: [], properties: {} },
+  rdk_workshop_catalog: { required: ['robot'], properties: { robot: { type: 'string' } } },
+  rdk_simulator_open: {
+    required: [],
+    properties: { robot: { type: 'string' }, runId: { type: 'string' } },
+  },
   rdk_evaluation_summarize: {
     required: [],
     properties: {
@@ -436,7 +441,14 @@ const PLATFORM_STATUS_HINT: ToolParamHint = { required: [], properties: {} };
 
 /** Client-facing units and choices; business enforcement remains in the handlers/API. */
 const ARGUMENT_GUIDANCE: Record<string, Record<string, Record<string, unknown>>> = {
+  rdk_workshop_catalog: { robot: { enum: ['originman'] } },
+  rdk_simulator_open: { robot: { enum: ['originman', 'microduck'] } },
   rdk_training_submit: {
+    originmanWorkshop: {
+      type: 'object',
+      description:
+        'Read rdk_workshop_catalog first; platform validates phase, budget and parent Run.',
+    },
     modelId: { description: '目标模型 ID；省略时沿用首模型，请按本次任务显式选择。' },
     backend: {
       enum: ['local', 'robogo', 'browser', 'contract'],

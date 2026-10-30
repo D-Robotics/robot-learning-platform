@@ -1,0 +1,201 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>OriginMan 训练观察台</title>
+    <link rel="stylesheet" href="/app.css" />
+  </head>
+  <body>
+    <aside>
+      <div class="brand">OriginMan<span>直行纠偏 · 仿真训练</span></div>
+      <p class="subtle">实时观察 · 配对验证 · 保留证据</p>
+      <button id="refresh">刷新运行列表</button>
+      <div id="runs" aria-label="训练运行列表"></div>
+      <p class="subtle foot">本地独立观察台<br />不连接机器人<br />旧运行缺少的明细不补造</p>
+    </aside>
+    <main>
+      <header>
+        <div>
+          <div class="eyebrow">TRAINING OBSERVATORY</div>
+          <h1>OriginMan 训练观察台</h1>
+          <p id="run-title">选择一次运行</p>
+        </div>
+        <div>
+          <span id="state" class="badge">加载中</span><button id="stop">停止本次训练</button>
+        </div>
+      </header>
+      <div id="error" role="alert" hidden></div>
+      <div class="statusline">
+        <progress id="progress" max="100" value="0"></progress
+        ><span id="progress-label">等待运行</span>
+      </div>
+      <div id="summary" class="summary"></div>
+      <nav aria-label="观察台功能">
+        <button data-tab="overview" class="active">训练与验证</button
+        ><button data-tab="inspect">逐帧定位</button
+        ><button data-tab="experiment">修改后新建</button
+        ><button data-tab="provenance">溯源与完整性</button>
+      </nav>
+      <section id="overview" class="tab">
+        <div class="section-head">
+          <h2>训练信号</h2>
+          <span>训练奖励不代表行走能力</span>
+        </div>
+        <div class="grid">
+          <article>
+            <h3>总奖励</h3>
+            <canvas id="reward" aria-label="总奖励随迭代变化"></canvas>
+          </article>
+          <article>
+            <h3>
+              PPO 诊断
+              <select id="metric">
+                <option value="valueLoss">价值损失</option>
+                <option value="actorLoss">策略损失</option>
+                <option value="approxKl">近似 KL</option>
+                <option value="clipFraction">裁剪比例</option>
+                <option value="gradNorm">裁剪前梯度范数</option>
+                <option value="entropy">策略熵</option>
+              </select>
+            </h3>
+            <canvas id="diagnostic"></canvas>
+          </article>
+          <article>
+            <h3>奖励惩罚分项 <button class="link" id="reward-source">定位源码</button></h3>
+            <canvas id="parts"></canvas>
+            <p class="subtle">负值为惩罚；完整分项保存在每轮日志中。</p>
+          </article>
+          <article>
+            <h3>
+              运动与关节
+              <select id="physical-metric">
+                <option value="trackingError">平均关节跟踪误差 rad</option>
+                <option value="rateLimited">残差被速率限制比例</option>
+                <option value="velocity">平均前进速度 m/s</option>
+                <option value="actionAbs">平均残差绝对值</option>
+              </select>
+            </h3>
+            <canvas id="physical"></canvas>
+          </article>
+        </div>
+        <div class="section-head">
+          <h2>固定条件开发验证</h2>
+          <span>4 个固定案例 · 不是最终 30 组配对测试</span>
+        </div>
+        <div class="grid">
+          <article>
+            <h3>终点侧偏 m</h3>
+            <canvas id="validation-error"></canvas>
+          </article>
+          <article>
+            <h3>前进距离 m</h3>
+            <canvas id="validation-distance"></canvas>
+          </article>
+        </div>
+        <p id="evaluation" class="note">最终配对评测尚未生成。</p>
+        <h2>最近事件</h2>
+        <div id="events"></div>
+      </section>
+      <section id="inspect" class="tab" hidden>
+        <div class="section-head">
+          <h2>把指标定位到动作</h2>
+          <span>采样环境与验证案例分开标记</span>
+        </div>
+        <div class="controls">
+          <label
+            >数据来源<select id="trace-mode">
+              <option value="training">训练环境 0 采样</option>
+              <option value="validation-rl">开发验证 RL</option>
+              <option value="validation-reference">开发验证 参考</option>
+            </select></label
+          ><label>轮次<select id="trace-iteration"></select></label
+          ><label id="case-label"
+            >验证案例<select id="trace-case">
+              <option value="0">案例 0</option>
+              <option value="1">案例 1</option>
+              <option value="2">案例 2</option>
+              <option value="3">案例 3</option>
+            </select></label
+          ><button id="play">播放回放</button>
+        </div>
+        <p id="trace-hint" class="subtle"></p>
+        <div class="grid">
+          <article>
+            <h3>真实仿真坐标的腿部骨架</h3>
+            <canvas id="skeleton"></canvas>
+          </article>
+          <article>
+            <h3>俯视运动轨迹 <span class="subtle">x 与 y 使用相同比例</span></h3>
+            <canvas id="trajectory"></canvas>
+          </article>
+        </div>
+        <input id="frame" type="range" min="0" max="0" value="0" aria-label="仿真回放帧" />
+        <div id="frame-values" class="summary"></div>
+        <article>
+          <h3>
+            关节目标与实际角度
+            <select id="joint"></select>
+          </h3>
+          <canvas id="tracking"></canvas>
+        </article>
+        <div id="frame-rewards"></div>
+      </section>
+      <section id="experiment" class="tab" hidden>
+        <h2>修改配置，生成新的运行</h2>
+        <p>
+          原配置、原权重和原评测保留。下方修改只应用于新运行；每次创建都会记录父运行和字段差异。
+        </p>
+        <div class="controls">
+          <label
+            >初始化<select id="warm-start">
+              <option value="">重新初始化权重</option>
+            </select></label
+          ><button id="export">导出配置 JSON</button
+          ><button id="create" class="primary">按修改配置开始新训练</button>
+        </div>
+        <div class="grid editor-grid">
+          <article>
+            <label for="config">完整实验配置</label
+            ><textarea id="config" spellcheck="false" aria-label="实验配置 JSON"></textarea>
+          </article>
+          <article>
+            <h3>与当前运行的差异</h3>
+            <div id="diff"></div>
+            <h3>修改入口</h3>
+            <p class="subtle">
+              environment：步态、执行器假设、奖励权重。<br />training：训练预算、随机种子、学习率、PPO、记录间隔。
+            </p>
+            <p class="subtle">
+              checkpoint_every 同时控制策略快照与开发验证；trace_every
+              控制训练明细采样。更密的记录会增加运行时间和磁盘占用。
+            </p>
+            <p class="subtle">
+              从检查点初始化仅继承权重，优化器与随机过程重新开始；它是新的微调实验，不是逐步精确续训。
+            </p>
+          </article>
+        </div>
+      </section>
+      <section id="provenance" class="tab" hidden>
+        <div class="section-head">
+          <h2>配置到策略的证据链</h2>
+          <button id="verify">校验本次证据完整性</button>
+        </div>
+        <p id="verification" class="note">
+          校验检查本地文件是否与清单一致，不代表独立签证或真机放行。
+        </p>
+        <div id="identity"></div>
+        <h3>运行时留存的源码</h3>
+        <div class="controls">
+          <select id="source-files"></select
+          ><button id="view-source">查看源码快照</button>
+        </div>
+        <p class="subtle">
+          源码快照只读。需要改程序逻辑时，在工作区编辑并发起新运行，新的源码指纹会自动记录。
+        </p>
+        <pre id="source" aria-label="源码快照"></pre>
+      </section>
+    </main>
+    <script src="/app.js"></script>
+  </body>
+</html>

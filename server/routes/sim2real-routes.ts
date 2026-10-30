@@ -1,3 +1,7 @@
+import {
+  ORIGINMAN_WORKSHOP_MANIFEST,
+  matchesOriginmanWorkshopContract,
+} from '../../shared/originman-workshop.js';
 import { Router, type Request, type Response } from 'express';
 import { readFileSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
@@ -850,7 +854,12 @@ function safeBackend(value: unknown): Sim2RealRunBackend | null {
 }
 
 function requestedProduct(value: unknown): Sim2RealRobotId {
-  return value === 'rdk-duck' || value === 'originbot' ? value : 'microduck';
+  return value === 'rdk-duck' ||
+    value === 'originbot' ||
+    value === 'originman' ||
+    value === 'custom'
+    ? value
+    : 'microduck';
 }
 
 function normalizeResumeFrom(value: unknown): { value?: Sim2RealCheckpointRef; error?: string } {
@@ -1003,6 +1012,7 @@ function availableContractsFor(models: readonly Sim2RealModelRecord[]): {
   contracts: Record<Sim2RealRobotId, Sim2RealAvailableContract[]>;
 } {
   const grouped: Record<Sim2RealRobotId, Sim2RealAvailableContract[]> = {
+    originman: [],
     microduck: [],
     'rdk-duck': [],
     originbot: [],
@@ -3959,6 +3969,78 @@ export function createSim2RealRouter(
     }),
   );
 
+  router.get(
+    api('/runs/:id/workshop-video'),
+    wrapAsync(async (request, response) => {
+      const owner = requestOwner(request, response, auth);
+      if (owner === null) return;
+      noStore(response);
+      const run = await getSim2RealRun(String(request.params.id), owner);
+      if (!run) {
+        sendApiError(response, 404, 'SIM2REAL_RUN_NOT_FOUND', '运行记录不存在，或不属于当前账号。');
+        return;
+      }
+      const video = run.metrics?.originmanWorkshop?.video;
+      if (
+        run.backend !== 'local' ||
+        run.status !== 'completed' ||
+        !run.externalRunId ||
+        run.training?.engine !== 'originman-recovery' ||
+        !video
+      ) {
+        sendApiError(
+          response,
+          409,
+          'SIM2REAL_WORKSHOP_VIDEO_UNAVAILABLE',
+          '本次评测尚无可用的物理回放。',
+        );
+        return;
+      }
+      const runner = await resolveRunRunner(run.computeResourceId, owner);
+      if (run.computeResourceId && !runner) {
+        sendApiError(
+          response,
+          409,
+          'SIM2REAL_WORKSHOP_WORKER_UNAVAILABLE',
+          '原评测Worker不可用，无法读取回放。',
+        );
+        return;
+      }
+      const bytes = await fetchLocalRunArtifact({
+        purpose: 'originman-comparison',
+        accountId: owner ?? 'local-dev',
+        externalRunId: run.externalRunId,
+        ...(runner ? { runnerUrl: runner.runnerUrl, runnerToken: runner.runnerToken } : {}),
+      });
+      if (!bytes || bytes.sha256 !== video.sha256 || bytes.bytes.length !== video.bytes) {
+        sendApiError(
+          response,
+          503,
+          'SIM2REAL_WORKSHOP_VIDEO_UNVERIFIED',
+          '无法读取或校验本次回放；数值结果仍保留。',
+        );
+        return;
+      }
+      response.type('video/mp4').setHeader('Content-Length', bytes.bytes.length);
+      response.send(bytes.bytes);
+    }),
+  );
+
+  router.get(
+    api('/workshops/originman'),
+    wrapAsync(async (request, response) => {
+      const owner = requestOwner(request, response, auth);
+      if (owner === null) return;
+      noStore(response);
+      response.json({
+        ok: true,
+        manifest: ORIGINMAN_WORKSHOP_MANIFEST,
+        defaults: { phase: 'train', timesteps: 500000, seed: 7, pushMaxForce: 8.1 },
+        simulationOnly: true,
+      });
+    }),
+  );
+
   router.post(
     api('/models'),
     wrapAsync(async (request, response) => {
@@ -4069,6 +4151,62 @@ export function createSim2RealRouter(
           message: '模型制品不存在，或不属于当前账号。',
         });
         return;
+      }
+      const workshop = training?.originmanWorkshop;
+      if (workshop) {
+        if (
+          backend !== 'local' ||
+          taskId !== 'originman-recovery' ||
+          !matchesOriginmanWorkshopContract(model.manifest.contract) ||
+          resumeFrom
+        ) {
+          sendApiError(
+            response,
+            400,
+            'SIM2REAL_WORKSHOP_CONTRACT_INVALID',
+            'OriginMan Workshop 仅支持专用14→2契约的本地仿真，不接受续训引用。',
+          );
+          return;
+        }
+        if (workshop.phase === 'evaluate') {
+          const source = await getSim2RealRun(workshop.sourceRunId!, owner);
+          const parent = source?.training?.originmanWorkshop;
+          if (
+            !source ||
+            source.backend !== 'local' ||
+            source.status !== 'completed' ||
+            !source.externalRunId ||
+            source.relayAgentUrl ||
+            source.modelId !== modelId ||
+            source.computeResourceId !== computeResourceId ||
+            source.training?.engine !== 'originman-recovery' ||
+            parent?.phase !== 'train' ||
+            !source.metrics?.originmanWorkshop ||
+            source.metrics.originmanWorkshop.policySha256 !== source.artifact?.sha256
+          ) {
+            sendApiError(
+              response,
+              409,
+              'SIM2REAL_WORKSHOP_SOURCE_INVALID',
+              '请先选择同模型、同Worker且已完成制品校验的本组训练。',
+            );
+            return;
+          }
+          if (
+            workshop.seed !== parent.seed ||
+            workshop.timesteps !== parent.timesteps ||
+            workshop.pushMaxForce !== parent.pushMaxForce
+          ) {
+            sendApiError(
+              response,
+              400,
+              'SIM2REAL_WORKSHOP_SOURCE_CONFIG_MISMATCH',
+              '评测必须沿用所选训练的冻结配置。修改配置请创建新训练。',
+            );
+            return;
+          }
+          workshop.sourceExternalRunId = source.externalRunId;
+        }
       }
       if (projectId && !(await getSim2RealProject(projectId, owner))) {
         response.status(404).json({

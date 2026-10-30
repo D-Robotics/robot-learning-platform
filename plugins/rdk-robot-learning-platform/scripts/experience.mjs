@@ -41,6 +41,8 @@ export function readToolResult(result) {
 }
 
 export function validateProfile(value) {
+  if (value?.robot !== undefined && !['microduck', 'originman'].includes(value.robot))
+    throw new Error('Unsupported robot; no implicit robot fallback.');
   if (!value || value.schemaVersion !== 1 || typeof value.id !== 'string' || !value.id.trim())
     throw new Error('Profile requires schemaVersion=1 and a nonempty id.');
   if (!['reference', 'trained'].includes(value.policy?.source))
@@ -82,13 +84,25 @@ export async function prepareExperience(profile, call, { baseUrl, tools, action 
   if (profile.policy.source === 'trained') required.add('rdk_training_status');
   for (const name of required)
     if (!tools.includes(name)) blocked(name, '当前插件未提供所需工具，请核对兼容版本。');
-  if (checks.length) return { status: 'blocked', profileId: profile.id, checks };
+  if (checks.some((check) => check.status === 'blocked'))
+    return { status: 'blocked', profileId: profile.id, checks };
   const status = await call('rdk_platform_status', {});
-  if (status.ok !== true || status.health?.ready !== true || status.health?.degraded?.length)
+  const degradations = status.health?.degraded ?? [];
+  const blockingDegradations = degradations.filter(
+    (reason) => !(profile.robot === 'originman' && reason === 'microduck-not-mounted'),
+  );
+  if (status.ok !== true || status.health?.ready !== true || blockingDegradations.length)
     blocked('platform', '平台未就绪或处于降级状态。');
+  if (degradations.length !== blockingDegradations.length)
+    checks.push({
+      id: 'optional-microduck',
+      status: 'not-required',
+      reason: 'OriginMan 受扰恢复不依赖 MicroDuck 仿真资源；其他降级项仍阻塞。',
+    });
   if (status.session?.authenticated !== true && status.authMode !== 'standalone-anonymous')
     blocked('session', '当前平台会话未认证，请在当前客户端登录。');
-  if (checks.length) return { status: 'blocked', profileId: profile.id, checks };
+  if (checks.some((check) => check.status === 'blocked'))
+    return { status: 'blocked', profileId: profile.id, checks };
   checks.push({ id: 'platform', status: 'passed' });
   if (profile.policy.source === 'trained') {
     const run = await call('rdk_training_status', { runId: profile.policy.runId });
@@ -106,12 +120,13 @@ export async function prepareExperience(profile, call, { baseUrl, tools, action 
     return { status: 'blocked', profileId: profile.id, checks };
   let entry;
   try {
-    entry = await call(
-      'rdk_simulator_open',
-      profile.policy.source === 'trained' ? { runId: profile.policy.runId } : {},
-    );
+    entry = await call('rdk_simulator_open', {
+      ...(profile.robot ? { robot: profile.robot } : {}),
+      ...(profile.policy.source === 'trained' ? { runId: profile.policy.runId } : {}),
+    });
   } catch (error) {
     if (
+      profile.robot === 'originman' ||
       profile.policy.source !== 'reference' ||
       error.platformCode !== 'SIM2REAL_API_NOT_FOUND' ||
       error.httpStatus !== 404 ||
@@ -129,6 +144,19 @@ export async function prepareExperience(profile, call, { baseUrl, tools, action 
       reason: '新版仿真入口 API 不存在；使用同账号 overview 提供的参考仿真入口，页面仍需实测。',
     });
   }
+  if (profile.robot && entry.robot !== profile.robot)
+    return {
+      status: 'blocked',
+      profileId: profile.id,
+      checks: [
+        ...checks,
+        {
+          id: 'robot',
+          status: 'blocked',
+          reason: 'Platform returned a different robot; refusing fallback.',
+        },
+      ],
+    };
   if (entry.available === false)
     return {
       status: 'blocked',
@@ -171,15 +199,21 @@ export async function prepareExperience(profile, call, { baseUrl, tools, action 
       resetCompleted: false,
     },
     next:
-      action === 'recover'
+      profile.robot === 'originman'
         ? [
-            '在宿主可用的浏览器中停止当前仿真；有未保存录制时先处理保存。',
-            '使用页面恢复初始场景，再重新选择配置指定策略，观察恢复结果。',
+            '打开入口，确认 OriginMan 受扰恢复面板及当前账号。',
+            '读取课程目录，核对 14→2 契约和执行资源，再显式提交训练与父 Run 评测。',
+            '参考站姿与传统反馈用于主线；短训练如实对比。仅仿真，不产生真机部署资格。',
           ]
-        : [
-            '在宿主可用的浏览器中打开 entryUrl，观察引擎就绪。',
-            '按配置选择参考或指定 Run 策略；核对加载结果，再尝试行走、停止。',
-          ],
+        : action === 'recover'
+          ? [
+              '在宿主可用的浏览器中停止当前仿真；有未保存录制时先处理保存。',
+              '使用页面恢复初始场景，再重新选择配置指定策略，观察恢复结果。',
+            ]
+          : [
+              '在宿主可用的浏览器中打开 entryUrl，观察引擎就绪。',
+              '按配置选择参考或指定 Run 策略；核对加载结果，再尝试行走、停止。',
+            ],
     note: '这里只做实时自检与准备；页面操作成功需宿主实际观察。训练模板仅供后续显式提交。',
   };
 }

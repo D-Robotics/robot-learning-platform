@@ -11,6 +11,12 @@ description: 在 Studio 或其他 Agent 宿主中准备可复用的机器人体�
 
 ## 准备
 
+先确认机器人与任务。默认体验配置是 OriginMan 原地受扰恢复；MicroDuck 示例保留在 `references/experience-profile-microduck.json`。旧版已安装插件可能仍默认机器鸭，不能仅凭名称认定迁移完成。OriginMan 必须显式传 `robot: "originman"` 调用 `rdk_simulator_open`，并读取 `rdk_workshop_catalog`；旧服务不识别时保持阻塞，不能回退到 MicroDuck 的 overview 仿真入口。
+
+OriginMan 当前课程契约是 `custom-policy-originman-recovery-v1`，14维观测、2维髋踝连续修正。先通过目录返回的 manifest 登记模型，再选择已注册 `originman-recovery` 的真实执行资源。训练提交显式传 `engine: "originman-recovery"`、`algorithm: "sac"`、`numEnvs: 4` 及 `originmanWorkshop`（phase、timesteps、seed、pushMaxForce）；评测另建 Run，phase=evaluate 且 sourceRunId 指向本组完成的训练，配置冻结由平台核对。4096至10000步仅检查软件流程，不能保证收益。
+
+OriginMan 入口是训练工作台及本次物理回放，不是 MicroDuck WASM 自由行走页面。现阶段只保证仿真能力；步态、人体跟随、板端运动和 Sim2Real 需要独立验证。历史基础反馈对照不能代替合理调好的传统控制基线，课程不要承诺 RL 一定更好。下面关于按键行走、鸭子录制的步骤只适用于 MicroDuck。
+
 沿 [平台连接技能](../setup/SKILL.md) 复用当前宿主的同一 MCP 连接与身份。依次调用 rdk_platform_status、rdk_simulator_open；检查工具目录、平台 ready、降级状态和账号。当前连接未就绪时报告具体阻塞，不创建匿名实例或改账号。
 
 若宿主同时挂载多条学习平台连接，使用提供本指南的连接调用状态、准备和后续业务工具，全程核对同一工具命名空间；不要把旧 Duck Lab 服务连接的状态与新版账号连接的结果拼接。Studio 账号模式应核对 `studio-session`、`account` 和实际认证账号；静态服务账号或匿名连接不能冒充当前用户。发现同名工具歧义时先说明连接冲突，按用户允许的范围停用旧重复连接或明确选定一条连接，再重新只读自检，不继续跨连接执行。

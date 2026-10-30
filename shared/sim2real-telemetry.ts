@@ -1,3 +1,4 @@
+import type { OriginmanWorkshopResult } from './originman-workshop.js';
 import type { LatencyMeasurementStage } from './board-rehearsal.js';
 import type {
   ModelArtifactFormat,
@@ -22,6 +23,7 @@ export interface Sim2RealRunArtifactMetadata {
 }
 
 export interface Sim2RealRunMetrics {
+  originmanWorkshop?: OriginmanWorkshopResult;
   contractValid: boolean;
   observationSize: number;
   actionSize: number;

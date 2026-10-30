@@ -1,3 +1,4 @@
+import { normalizeOriginmanWorkshopResult } from '../../shared/originman-workshop.js';
 import type {
   Sim2RealCheckpointRef,
   Sim2RealDemonstrations,
@@ -470,6 +471,9 @@ function safeMetrics(value: unknown): Sim2RealRunMetrics | undefined {
     if (value !== undefined) trainingLosses[key] = value;
   }
   return {
+    ...(normalizeOriginmanWorkshopResult(source.originmanWorkshop)
+      ? { originmanWorkshop: normalizeOriginmanWorkshopResult(source.originmanWorkshop) }
+      : {}),
     contractValid,
     observationSize,
     actionSize,

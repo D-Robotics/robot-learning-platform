@@ -3,10 +3,14 @@ export const WORKFLOW_TOOLS = [
   {
     name: 'rdk_training_prepare',
     description:
-      '新训练提交前刷新指定资源的健康检查并核对 MicroDuck 任务环境，避免“环境预检通过但健康记录过期”的卡点。只准备参数预览，不提交训练，不替换资源。',
+      '新训练提交前刷新指定资源的健康检查并核对所选机器人任务环境。只准备参数预览，不提交训练，不替换资源；OriginMan 不套用 MicroDuck 配置。',
     inputSchema: {
       type: 'object',
-      properties: { computeResourceId: { type: 'string' }, taskId: { type: 'string' } },
+      properties: {
+        computeResourceId: { type: 'string' },
+        taskId: { type: 'string' },
+        productId: { type: 'string', enum: ['microduck', 'originman'] },
+      },
       required: ['computeResourceId'],
       additionalProperties: false,
     },
@@ -24,6 +28,7 @@ export const WORKFLOW_TOOLS = [
         runId: { type: 'string' },
         computeResourceId: { type: 'string' },
         evaluationId: { type: 'string' },
+        evaluationRunId: { type: 'string' },
         compareWithEvaluationId: { type: 'string' },
       },
       additionalProperties: false,
@@ -50,6 +55,7 @@ export async function inspectWorkflow(input, call, toolNames, { now = Date.now()
         'runId',
         'computeResourceId',
         'evaluationId',
+        'evaluationRunId',
         'compareWithEvaluationId',
       ].includes(key) ||
       typeof value !== 'string' ||
@@ -86,7 +92,9 @@ export async function inspectWorkflow(input, call, toolNames, { now = Date.now()
     !status ||
     status.ok !== true ||
     status.health?.ready !== true ||
-    status.health?.degraded?.length ||
+    status.health?.degraded?.some(
+      (reason) => !(input.productId === 'originman' && reason === 'microduck-not-mounted'),
+    ) ||
     status.canAccessWorkspace === false ||
     (status.session?.authenticated !== true && status.authMode !== 'standalone-anonymous')
   ) {
@@ -100,6 +108,94 @@ export async function inspectWorkflow(input, call, toolNames, { now = Date.now()
     return finish();
   }
   add('connect', '连接与身份', 'ready', '当前平台身份与服务就绪检查通过。', '沿当前连接继续。');
+  if (input.productId === 'originman') {
+    const catalog = await read('rdk_workshop_catalog', { robot: 'originman' });
+    const contract = catalog?.manifest?.contract;
+    const correct =
+      catalog?.robot === 'originman' &&
+      catalog.simulationOnly === true &&
+      contract?.id === 'custom-policy-originman-recovery-v1' &&
+      contract.observationSize === 14 &&
+      contract.actionSize === 2;
+    add(
+      'simulate',
+      'OriginMan 仿真',
+      correct ? 'ready' : 'blocked',
+      correct
+        ? '取得 OriginMan 14→2 受扰恢复契约；实际物理回放仍需本次评测。'
+        : '未取得匹配的 OriginMan 课程契约，不能借用机器鸭入口。',
+      '用 robot=originman 打开工作台，先核对参考站姿与当前账号。',
+    );
+    const training = input.runId ? await read('rdk_training_status', { runId: input.runId }) : null;
+    const evidence = training?.metrics?.originmanWorkshop;
+    const validTraining =
+      training?.runId === input.runId &&
+      training.status === 'completed' &&
+      evidence?.phase === 'train' &&
+      evidence.hardwareEligible === false &&
+      /^[a-f0-9]{64}$/.test(evidence.policySha256 ?? '');
+    add(
+      'train',
+      'OriginMan 训练',
+      !input.runId
+        ? 'needs_input'
+        : validTraining
+          ? 'completed'
+          : ['queued', 'running'].includes(training?.status)
+            ? 'running'
+            : 'blocked',
+      validTraining
+        ? `本组训练完成 ${evidence.actualTimesteps} 步，已取得策略摘要；完成不等于训练收益。`
+        : '需选择本组 OriginMan 训练 Run 并核对其执行证据。',
+      '沿原 Run 查询状态和日志；不重新提交来查询进度。',
+    );
+    const evaluation = input.evaluationRunId
+      ? await read('rdk_training_status', { runId: input.evaluationRunId })
+      : null;
+    const measured = evaluation?.metrics?.originmanWorkshop;
+    const validEvaluation =
+      validTraining &&
+      evaluation?.runId === input.evaluationRunId &&
+      evaluation.status === 'completed' &&
+      evaluation.modelId === training.modelId &&
+      measured?.phase === 'evaluate' &&
+      measured.hardwareEligible === false &&
+      measured.sourceRunId === input.runId &&
+      measured.policySha256 === evidence.policySha256 &&
+      measured.cases?.length === 31;
+    add(
+      'evaluate',
+      'OriginMan 对照评测',
+      !input.evaluationRunId
+        ? 'needs_input'
+        : validEvaluation
+          ? 'completed'
+          : ['queued', 'running'].includes(evaluation?.status)
+            ? 'running'
+            : 'blocked',
+      validEvaluation
+        ? `同一父 Run 与策略摘要的课堂对照已完成：基础 ${measured.baselineRecovered}/31，RL ${measured.rlRecovered}/31；${measured.clearGain ? '达到本次课堂收益判据' : '未达明显收益判据'}。`
+        : '评测应填写 evaluationRunId；不能套用 MicroDuck 的 evaluationId 或其他组的结果。',
+      '保留全部失败和退化；31 条件是公开课堂基准，不是未见测试或真机成功率。',
+    );
+    add(
+      'tune',
+      '调优与解释',
+      validEvaluation ? 'ready' : 'unknown',
+      validEvaluation
+        ? '已有本组逐条件对照，可分析差异；不保证换种子或短训练会改善。'
+        : '需先取得绑定正确的评测 Run。',
+      '一次修改种子或训练扰动上限，新建实验；合理传统控制对比另核对冻结的实验报告。',
+    );
+    add(
+      'deploy',
+      'OriginMan 真机迁移',
+      'blocked',
+      '本课程制品明确仅仿真，尚无真机部署资格。',
+      '需要实测关节、伺服延迟、IMU、控制周期与受控运动验收；不要将仿真通过称作 Sim2Real 完成。',
+    );
+    return finish();
+  }
   if (input.productId && input.productId !== 'microduck') {
     add(
       'product',
@@ -367,6 +463,11 @@ export async function prepareTraining(input, call) {
     (input.taskId !== undefined && (typeof input.taskId !== 'string' || !input.taskId.trim()))
   )
     throw new Error('请明确指定训练资源和有效任务。');
+  if (input.productId !== undefined && !['microduck', 'originman'].includes(input.productId))
+    throw new Error('不支持的机器人；不会采用机器鸭训练配置。');
+  const originman = input.productId === 'originman';
+  if (originman && input.taskId !== undefined && input.taskId !== 'originman-recovery')
+    throw new Error('OriginMan 当前只接入 originman-recovery。');
   const resource = await call('rdk_compute_resource_test', {
     computeResourceId: input.computeResourceId,
   });
@@ -385,7 +486,7 @@ export async function prepareTraining(input, call) {
     };
   const preflight = await call('rdk_training_preflight', {
     computeResourceId: input.computeResourceId,
-    taskId: input.taskId ?? 'walk',
+    taskId: input.taskId ?? (originman ? 'originman-recovery' : 'walk'),
   });
   if (
     preflight.computeResourceId !== input.computeResourceId ||
@@ -406,10 +507,18 @@ export async function prepareTraining(input, call) {
       tool: 'rdk_training_submit',
       arguments: {
         computeResourceId: input.computeResourceId,
-        taskId: input.taskId ?? 'walk',
+        taskId: input.taskId ?? (originman ? 'originman-recovery' : 'walk'),
         backend: 'local',
-        engine: 'microduck-rl',
-        algorithm: 'ppo',
+        engine: originman ? 'originman-recovery' : 'microduck-rl',
+        algorithm: originman ? 'sac' : 'ppo',
+        ...(originman
+          ? {
+              numEnvs: 4,
+              profile: 'standard',
+              maxIterations: 1954,
+              originmanWorkshop: { phase: 'train', timesteps: 500000, seed: 7, pushMaxForce: 8.1 },
+            }
+          : {}),
       },
     },
     note: '这是新提交前的实时准备；参数仍由平台校验。续训还须确认 checkpoint 在所选 Worker 上；保存 Run ID 和幂等键，重试已提交任务时直接查原 Run。',

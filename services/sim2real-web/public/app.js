@@ -26,6 +26,14 @@ function appRelativePath(value) {
   return raw;
 }
 const PRODUCT_PROFILES = Object.freeze({
+  originman: {
+    id: 'originman',
+    displayName: 'OriginMan',
+    projectName: 'OriginMan · 受扰恢复',
+    kitName: 'OriginMan · 纯仿真',
+    contractId: 'custom-policy-originman-recovery-v1',
+    simulatorPath: '',
+  },
   microduck: {
     id: 'microduck',
     displayName: 'MicroDuck',
@@ -113,6 +121,7 @@ function readTaskPreference() {
 
 function readProductPreference() {
   try {
+    if (new URLSearchParams(window.location.search).get('robot') === 'originman') return 'originman';
     if (new URLSearchParams(window.location.search).get('demo') === '1') return 'microduck';
     const value = window.localStorage?.getItem('rdk-duck-lab-product');
     return value && PRODUCT_PROFILES[value] ? value : 'microduck';
@@ -11085,6 +11094,7 @@ function wireStationEvents() {
 }
 
 function wireEvents() {
+  window.OriginmanWorkshop?.mount({ request, apiPath, getOverview: () => state.overview });
   document.querySelectorAll('[data-view-target]').forEach((control) => {
     control.addEventListener('click', () => setView(control.dataset.viewTarget));
   });

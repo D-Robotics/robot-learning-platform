@@ -21,6 +21,26 @@ tags:
 security:
   - cookieAuth: []
 paths:
+  /api/v1/duck/workshops/originman:
+    get:
+      tags: [workspace]
+      summary: Read the OriginMan simulation workshop contract and frozen defaults
+      operationId: getOriginmanWorkshop
+      responses:
+        "200": { description: Account-scoped catalog. The manifest is a contract placeholder, not trained weights; simulationOnly is true. }
+        "401": { $ref: "#/components/responses/AuthRequired" }
+  /api/v1/duck/runs/{runId}/workshop-video:
+    parameters: [{ $ref: "#/components/parameters/RunId" }]
+    get:
+      tags: [runs]
+      summary: Read this account's completed OriginMan evaluation video after digest verification
+      operationId: getOriginmanWorkshopVideo
+      responses:
+        "200": { description: This evaluation's verified MP4 bytes. }
+        "401": { $ref: "#/components/responses/AuthRequired" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { description: Video missing or digest mismatch; numerical evidence remains available. }
+        "503": { description: Worker video unavailable or unverified. }
   /healthz:
     get:
       tags: [service]

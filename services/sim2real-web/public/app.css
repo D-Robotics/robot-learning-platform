@@ -1471,6 +1471,13 @@ h2 {
   color: var(--muted-strong);
   font-size:var(--fs-meta);
 }
+.originman-workshop { margin-block: 12px; min-width: 0; }
+.originman-workshop summary { cursor: pointer; }
+.originman-workshop select { max-width: 100%; }
+.originman-comparison-video { width: 100%; height: auto; }
+.originman-case-table { max-width: 100%; overflow-x: auto; }
+.originman-case-table table { width: 100%; border-collapse: collapse; }
+.originman-case-table td, .originman-case-table th { padding: 8px; border-bottom: 1px solid var(--line); text-align: left; }
 .training-grid {
   display: grid;
   grid-template-columns: 1fr 1.4fr;

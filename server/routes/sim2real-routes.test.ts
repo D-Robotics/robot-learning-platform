@@ -1,3 +1,4 @@
+import { ORIGINMAN_WORKSHOP_MANIFEST } from '../../shared/originman-workshop.js';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
@@ -3316,5 +3317,97 @@ describe('Sim2Real HTTP routes', () => {
     await fs.mkdir(moduleDirectory, { recursive: true });
     await fs.writeFile(path.join(root, 'package.json'), JSON.stringify({ version: '9.9.9-test' }));
     expect(workspacePackageVersion(moduleDirectory)).toBe('9.9.9-test');
+  });
+});
+
+describe('OriginMan workshop source binding', () => {
+  const base = {
+    profile: 'standard',
+    engine: 'originman-recovery',
+    algorithm: 'sac',
+    numEnvs: 4,
+    maxIterations: 1954,
+    video: false,
+  };
+  const config = {
+    phase: 'evaluate',
+    timesteps: 500000,
+    seed: 7,
+    pushMaxForce: 8.1,
+    sourceRunId: 'missing-source',
+  };
+  it('rejects the old model contract and forged worker paths before launching', async () => {
+    const router = await fixture();
+    const wrongContract = await invoke(router, 'post', '/api/sim2real/runs', {
+      body: {
+        backend: 'local',
+        modelId: BUILTIN_MICRODUCK_MODEL.id,
+        taskId: 'originman-recovery',
+        idempotencyKey: 'originman-wrong-contract',
+        training: {
+          ...base,
+          originmanWorkshop: { ...config, phase: 'train', sourceRunId: undefined },
+        },
+      },
+    });
+    expect(wrongContract.statusCode).toBe(400);
+    expect(wrongContract.body).toMatchObject({ code: 'SIM2REAL_WORKSHOP_CONTRACT_INVALID' });
+    const forged = await invoke(router, 'post', '/api/sim2real/runs', {
+      body: {
+        backend: 'local',
+        modelId: BUILTIN_MICRODUCK_MODEL.id,
+        taskId: 'originman-recovery',
+        idempotencyKey: 'originman-forged-worker',
+        training: { ...base, originmanWorkshop: { ...config, sourceExternalRunId: 'other-job' } },
+      },
+    });
+    expect(forged.statusCode).toBe(400);
+    const listed = await invoke(router, 'get', '/api/sim2real/runs');
+    expect(listed.body.runs).toHaveLength(0);
+  });
+  it('never resolves an evaluation source from another account', async () => {
+    await fixture();
+    const auth: Sim2RealAuthPort = {
+      isMultiUserDeployment: () => true,
+      resolvePrincipal: () => ({ accountId: 'originman-alice', roles: ['admin'] }),
+      resolveAccessToken: () => null,
+    };
+    const router = createSim2RealRouter({ auth });
+    const created = await invoke(router, 'post', '/api/sim2real/models', {
+      body: { manifest: ORIGINMAN_WORKSHOP_MANIFEST },
+    });
+    expect(created.statusCode).toBe(201);
+    const bobRouter = createSim2RealRouter({
+      auth: { ...auth, resolvePrincipal: () => ({ accountId: 'originman-bob', roles: ['admin'] }) },
+    });
+    const bobModel = await invoke(bobRouter, 'post', '/api/sim2real/models', {
+      body: { manifest: ORIGINMAN_WORKSHOP_MANIFEST },
+    });
+    expect(bobModel.statusCode).toBe(201);
+    const reserved = await reserveSim2RealRun(
+      {
+        modelId: bobModel.body.model.id,
+        backend: 'local',
+        status: 'completed',
+        summary: 'other tenant test fixture',
+      },
+      'originman-bob',
+      { idempotencyKey: 'originman-bob-training' },
+    );
+    const response = await invoke(router, 'post', '/api/sim2real/runs', {
+      body: {
+        backend: 'local',
+        modelId: created.body.model.id,
+        taskId: 'originman-recovery',
+        idempotencyKey: 'originman-cross-owner',
+        training: { ...base, originmanWorkshop: { ...config, sourceRunId: reserved.run.id } },
+      },
+    });
+    expect(response.statusCode).toBe(409);
+    expect(response.body).toMatchObject({ code: 'SIM2REAL_WORKSHOP_SOURCE_INVALID' });
+    const video = await invoke(router, 'get', '/api/sim2real/runs/:id/workshop-video', {
+      params: { id: reserved.run.id },
+    });
+    expect(video.statusCode).toBe(404);
   });
 });
