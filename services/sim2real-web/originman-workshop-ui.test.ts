@@ -8,7 +8,7 @@ afterEach(() => {
   for (const dom of windows.splice(0)) dom.window.close();
 });
 
-function page(request: ReturnType<typeof vi.fn>) {
+function page(request: ReturnType<typeof vi.fn>, overview: Record<string, unknown> = {}) {
   const dom = new JSDOM(fs.readFileSync('services/sim2real-web/public/index.html', 'utf8'), {
     url: 'http://localhost/?workshop=originman#train',
     runScripts: 'outside-only',
@@ -30,7 +30,7 @@ function page(request: ReturnType<typeof vi.fn>) {
   ).OriginmanWorkshop.mount({
     request,
     apiPath: (p: string) => '/api' + p,
-    getOverview: () => ({}),
+    getOverview: () => overview,
   });
   return { dom, document: dom.window.document, app };
 }
@@ -38,6 +38,57 @@ const cfg = { phase: 'train', timesteps: 500000, seed: 7, pushMaxForce: 8.1 };
 const model = { id: 'model-originman-test', manifest: ORIGINMAN_WORKSHOP_MANIFEST };
 
 describe('OriginMan classroom browser behavior', () => {
+  it('selects the sole verified OriginMan GPU without overriding an explicit user choice', async () => {
+    const request = vi.fn(async (path: string) =>
+      path.endsWith('/workshops/originman')
+        ? { manifest: ORIGINMAN_WORKSHOP_MANIFEST }
+        : { runs: [] },
+    );
+    const { dom, document, app } = page(request, {
+      computeResources: [
+        {
+          id: 'duck-gpu',
+          engines: ['microduck-rl'],
+          status: 'online',
+          kind: 'local-gpu',
+          mock: false,
+        },
+        {
+          id: 'origin-gpu',
+          engines: ['originman-recovery'],
+          status: 'online',
+          kind: 'local-gpu',
+          mock: false,
+        },
+      ],
+    });
+    const resource = document.getElementById('originman-resource') as HTMLSelectElement;
+    await vi.waitFor(() => expect(resource.value).toBe('origin-gpu'));
+    expect([...resource.options].some((o) => o.value === 'duck-gpu')).toBe(false);
+    resource.value = '';
+    resource.dispatchEvent(new dom.window.Event('change', { bubbles: true }));
+    await app.refresh();
+    expect(resource.value).toBe('');
+  });
+  it('does not guess among multiple verified OriginMan GPUs', async () => {
+    const request = vi.fn(async (path: string) =>
+      path.endsWith('/workshops/originman')
+        ? { manifest: ORIGINMAN_WORKSHOP_MANIFEST }
+        : { runs: [] },
+    );
+    const { document, app } = page(request, {
+      computeResources: ['gpu-a', 'gpu-b'].map((id) => ({
+        id,
+        engines: ['originman-recovery'],
+        status: 'online',
+        kind: 'local-gpu',
+        mock: false,
+      })),
+    });
+    await app.refresh();
+    expect((document.getElementById('originman-resource') as HTMLSelectElement).value).toBe('');
+  });
+
   it('shows instructor material without borrowing its score for this group', async () => {
     const { document } = page(async (path: string) =>
       path.endsWith('/workshops/originman')

@@ -56,6 +56,8 @@
     const form = $('originman-workshop-form');
     let catalog, runs = [], busy = false, loading = false, pending = null;
     let selected = '', selectedEvaluation = '', logRun = '', logAfter = 0, logLines = [];
+    let resourceChosen = false;
+    $('originman-resource').addEventListener('change', () => { resourceChosen = true; });
     const text = (id, value) => { $(id).textContent = value; };
     const selectedRun = () => runs.find((r) => r.id === selected);
     const evaluations = () => runs.filter((r) => r.training?.originmanWorkshop?.phase === 'evaluate' && r.training.originmanWorkshop.sourceRunId === selected);
@@ -141,8 +143,11 @@
           const latest = await request(`/sim2real/runs/${encodeURIComponent(run.id)}`);
           const i = runs.findIndex((r) => r.id === run.id); if (i >= 0) runs[i] = latest.run;
         }
-        const resources = getOverview()?.computeResources || [];
-        options($('originman-resource'), [{ value: '', label: '服务端默认本地 Worker' }, ...resources.filter((r) => r.source !== 'local-agent').map((r) => ({ value: r.id, label: r.name || r.id }))], $('originman-resource').value, '默认本地 Worker');
+        const resources = (getOverview()?.computeResources || []).filter((r) => r.source !== 'local-agent' && (!Array.isArray(r.engines) || !r.engines.length || r.engines.includes(ENGINE)));
+        const verifiedGpu = resources.filter((r) => r.status === 'online' && r.mock === false && r.engines?.includes(ENGINE) && (r.kind === 'local-gpu' || r.cuda === true));
+        const currentResource = $('originman-resource').value;
+        const preferredResource = !resourceChosen && !currentResource && verifiedGpu.length === 1 ? verifiedGpu[0].id : currentResource;
+        options($('originman-resource'), [{ value: '', label: '服务端默认本地 Worker（需支持所选设备）' }, ...resources.map((r) => ({ value: r.id, label: r.name || r.id }))], preferredResource, '默认本地 Worker');
         render();
         const latest = evaluations().find(active) || selectedRun();
         if (latest && !pending) status(`${latest.training.originmanWorkshop.phase === 'evaluate' ? '评测' : '训练'}：${latest.status}${latest.summary ? ` · ${latest.summary}` : ''}`);

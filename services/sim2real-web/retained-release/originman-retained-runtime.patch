@@ -925,7 +925,7 @@ index 19df86b..9f75773 100644
    display: grid;
    grid-template-columns: 1fr 1.4fr;
 diff --git a/dist-server/services/sim2real-web/public/index.html b/dist-server/services/sim2real-web/public/index.html
-index a0cabf1..2e429b7 100644
+index a0cabf1..a6645d5 100644
 --- a/dist-server/services/sim2real-web/public/index.html
 +++ b/dist-server/services/sim2real-web/public/index.html
 @@ -20,8 +20,7 @@
@@ -1944,7 +1944,7 @@ index a0cabf1..2e429b7 100644
 -    <script defer src="./state-recording-workspace.js?v=recordings-3"></script>
 -    <script defer src="./learning-lab.js?v=learning-6"></script>
 +    <script defer src="./telemetry-core.js?v=duck-lab-31"></script>
-+    <script defer src="./originman-workshop.js?v=originman-3"></script>
++    <script defer src="./originman-workshop.js?v=originman-4"></script>
 +    <script defer src="./app.js?v=originman-1"></script>
      <script defer src="./visualization-enhancements.js?v=viz-1"></script>
 -    <script defer src="./agent-chat.js?v=agent-17"></script>
