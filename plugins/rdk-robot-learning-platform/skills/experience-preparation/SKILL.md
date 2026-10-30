@@ -11,7 +11,7 @@ description: 在 Studio 或其他 Agent 宿主中准备可复用的机器人体�
 
 ## 准备
 
-先确认机器人与任务。默认体验配置是 OriginMan 原地受扰恢复；MicroDuck 示例保留在 `references/experience-profile-microduck.json`。旧版已安装插件可能仍默认机器鸭，不能仅凭名称认定迁移完成。OriginMan 必须显式传 `robot: "originman"` 调用 `rdk_simulator_open`，并读取 `rdk_workshop_catalog`；旧服务不识别时保持阻塞，不能回退到 MicroDuck 的 overview 仿真入口。
+先确认机器人与任务。默认体验配置是 OriginMan 原地受扰恢复；[MicroDuck 示例](../../references/experience-profile-microduck.json)保留供选择。旧版已安装插件可能仍默认机器鸭，不能仅凭名称认定迁移完成。OriginMan 必须显式传 `robot: "originman"` 调用 `rdk_simulator_open`，并读取 `rdk_workshop_catalog`；旧服务不识别时保持阻塞，不能回退到 MicroDuck 的 overview 仿真入口。
 
 OriginMan 当前课程契约是 `custom-policy-originman-recovery-v1`，14维观测、2维髋踝连续修正。先通过目录返回的 manifest 登记模型，再选择已注册 `originman-recovery` 的真实执行资源。训练提交显式传 `engine: "originman-recovery"`、`algorithm: "sac"`、`numEnvs: 4` 及 `originmanWorkshop`（phase、timesteps、seed、pushMaxForce）；评测另建 Run，phase=evaluate 且 sourceRunId 指向本组完成的训练，配置冻结由平台核对。4096至10000步仅检查软件流程，不能保证收益。
 
