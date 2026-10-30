@@ -15,6 +15,7 @@ if __name__ == "__main__":
     p.add_argument("--out", type=Path, required=True)
     p.add_argument("--steps", type=int, default=500000)
     p.add_argument("--seed", type=int, default=7)
+    p.add_argument("--device", choices=["cuda", "cpu"], default="cuda")
     a = p.parse_args()
     torch.set_num_threads(1)
     train(
@@ -23,6 +24,7 @@ if __name__ == "__main__":
         a.out,
         a.steps,
         a.seed,
+        device=a.device,
         env_class_override=ResidualStandingGym,
         entropy_coef=0.001,
         initial_mean_zero=True,

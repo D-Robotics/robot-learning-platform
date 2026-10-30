@@ -810,6 +810,11 @@
             <details class="panel originman-workshop" id="originman-workshop">
               <summary><strong>OriginMan Workshop · 受扰恢复强化学习</strong></summary>
               <p>固定稳定反馈打底，SAC 每 20ms 连续修正髋踝。配置 → 本组训练 → 固定 31 条件评测 → RL 前后对照。仅仿真。</p>
+              <section aria-labelledby="originman-reference-title">
+                <h3 id="originman-reference-title">先看经过验证的课前参考</h3>
+                <p id="originman-reference-note">课前参考材料尚未读取；它与下面本组训练、评测记录分开标注。</p>
+                <video id="originman-reference-video" class="originman-comparison-video" controls preload="metadata" aria-label="讲师课前参考物理回放 非本组训练" hidden></video>
+              </section>
               <form id="originman-workshop-form">
                 <div class="training-grid">
                   <div class="training-field-group">
@@ -822,8 +827,11 @@
                   </div>
                   <div class="training-field-group">
                     <strong>冻结的控制与评测</strong>
-                    <p class="small-note">SAC · CPU / 4 环境 · 14 维观测 → 2 维修正。基础 PD、奖励、控制周期、动作映射与评测条件固定。改配置会创建新 Run，不覆盖旧权重。</p>
+                    <p class="small-note">SAC · 默认 GPU / 4 环境 · 14 维观测 → 2 维修正。基础 PD、奖励、控制周期、动作映射与评测条件固定。改配置会创建新 Run，不覆盖旧权重。</p>
                     <p class="small-note">先用 50 万步主实验；4096～1 万步仅检查流程，不保证学好。31 条件是公开课堂基准，不是真机成功率或未见测试。</p>
+                    <label class="field-label" for="originman-device">策略训练设备</label>
+                    <select id="originman-device"><option value="cuda">GPU（CUDA，默认）</option><option value="cpu">CPU（显式选择）</option></select>
+                    <p class="small-note">物理仿真仍由 CPU 执行；GPU 不可用时训练报错，不自动切回 CPU。</p>
                     <label class="field-label" for="originman-resource">执行资源</label>
                     <select id="originman-resource"><option value="">服务端默认本地 Worker</option></select>
                   </div>
@@ -2230,7 +2238,7 @@
       blocking the parser at body end.
     -->
     <script defer src="./telemetry-core.js?v=duck-lab-31"></script>
-    <script defer src="./originman-workshop.js?v=originman-1"></script>
+    <script defer src="./originman-workshop.js?v=originman-3"></script>
     <script defer src="./app.js?v=originman-1"></script>
     <script defer src="./visualization-enhancements.js?v=viz-1"></script>
     <script defer src="./agent-chat.js?v=agent-18"></script>

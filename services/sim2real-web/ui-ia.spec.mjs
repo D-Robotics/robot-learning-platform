@@ -742,6 +742,7 @@ console.log(
 
 // OriginMan shares the training view and the native Run lifecycle, with a dedicated contract.
 assert.match(html, /option value="originman"/);
+assert.match(html, /id="originman-reference-video"/);
 assert.match(app, /get\('robot'\) === 'originman'\) return 'originman'/);
 const workshopUi = fs.readFileSync(path.join(here, 'public', 'originman-workshop.js'), 'utf8');
 assert.match(html, /id="originman-workshop"/);

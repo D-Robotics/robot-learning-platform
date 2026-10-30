@@ -14,7 +14,9 @@ from monitor import digest, write_json
 HERE = Path(__file__).resolve().parent
 
 
-def prepare(workspace, scene, seed=7, steps=500000, push_max_force=8.1):
+def prepare(workspace, scene, seed=7, steps=500000, push_max_force=8.1, device="cuda"):
+    if device not in ("cuda", "cpu"):
+        raise ValueError("training device must be cuda or cpu")
     workspace, scene = Path(workspace).resolve(), Path(scene).resolve()
     if not scene.is_file():
         raise ValueError("caller-owned adapted scene.xml required")
@@ -41,6 +43,7 @@ def prepare(workspace, scene, seed=7, steps=500000, push_max_force=8.1):
         "sceneSha256": digest(scene),
         "experimentSha256": digest(workspace / "experiment.json"),
         "benchmarkSha256": digest(workspace / "benchmark.json"),
+        "device": device,
         "seed": seed,
         "steps": steps,
         "runName": run_name,
@@ -83,6 +86,8 @@ def train(workspace):
             str(data["seed"]),
             "--steps",
             str(data["steps"]),
+            "--device",
+            data.get("device", "cpu"),
         ],
         check=True,
     )
@@ -247,6 +252,7 @@ def main():
     p.add_argument("--seed", type=int, default=7)
     p.add_argument("--steps", type=int, default=500000)
     p.add_argument("--push-max-force", type=float, default=8.1)
+    p.add_argument("--device", choices=["cuda", "cpu"], default="cuda")
     for name in ["train", "evaluate"]:
         sub.add_parser(name).add_argument("--workspace", type=Path, required=True)
     p = sub.add_parser("report")
@@ -255,7 +261,7 @@ def main():
     args = parser.parse_args()
     if args.command == "prepare":
         result = prepare(
-            args.workspace, args.scene, args.seed, args.steps, args.push_max_force
+            args.workspace, args.scene, args.seed, args.steps, args.push_max_force, args.device
         )
     elif args.command == "train":
         result = train(args.workspace)

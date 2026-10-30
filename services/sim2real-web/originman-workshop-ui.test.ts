@@ -38,6 +38,34 @@ const cfg = { phase: 'train', timesteps: 500000, seed: 7, pushMaxForce: 8.1 };
 const model = { id: 'model-originman-test', manifest: ORIGINMAN_WORKSHOP_MANIFEST };
 
 describe('OriginMan classroom browser behavior', () => {
+  it('shows instructor material without borrowing its score for this group', async () => {
+    const { document } = page(async (path: string) =>
+      path.endsWith('/workshops/originman')
+        ? {
+            manifest: ORIGINMAN_WORKSHOP_MANIFEST,
+            reference: {
+              available: true,
+              source: 'instructor-reference',
+              isUserTraining: false,
+              title: 'Frozen reference',
+              note: '26/31 in separate pre-class evaluation',
+            },
+          }
+        : { runs: [] },
+    );
+    await vi.waitFor(() =>
+      expect(document.getElementById('originman-reference-note')!.textContent).toContain(
+        '非本组训练',
+      ),
+    );
+    expect(document.getElementById('originman-reference-video')!.getAttribute('src')).toBe(
+      '/api/sim2real/workshops/originman/reference-video',
+    );
+    expect(document.getElementById('originman-verdict')!.textContent).toBe('');
+    expect((document.getElementById('originman-evaluate') as HTMLButtonElement).disabled).toBe(
+      true,
+    );
+  });
   it('retries an uncertain submit using the same idempotency key and frozen body', async () => {
     const submits: { key: string; body: string }[] = [];
     const request = vi.fn(
@@ -69,6 +97,7 @@ describe('OriginMan classroom browser behavior', () => {
     form.dispatchEvent(new dom.window.Event('submit', { bubbles: true, cancelable: true }));
     await vi.waitFor(() => expect(submits).toHaveLength(2));
     expect(submits[1]).toEqual(submits[0]);
+    expect(JSON.parse(submits[0].body).training.originmanWorkshop.device).toBe('cuda');
   });
   it('evaluates the selected frozen training rather than the currently edited form', async () => {
     const source = {
@@ -102,6 +131,7 @@ describe('OriginMan classroom browser behavior', () => {
     expect(payload!.training.originmanWorkshop).toEqual({
       ...cfg,
       phase: 'evaluate',
+      device: 'cpu',
       sourceRunId: source.id,
     });
     expect(payload!.computeResourceId).toBe('source-worker');

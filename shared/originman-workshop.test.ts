@@ -26,9 +26,20 @@ describe('OriginMan Workshop contract', () => {
         physicsTimestepSeconds: 0.0005,
       }),
     ).toBe(false);
-    expect(normalizeTrainingSpec(training).spec?.originmanWorkshop).toEqual(config);
+    expect(normalizeTrainingSpec(training).spec?.originmanWorkshop).toEqual({
+      ...config,
+      device: 'cuda',
+    });
+  });
+  it('preserves an explicit CPU selection', () => {
+    expect(
+      normalizeTrainingSpec({ ...training, originmanWorkshop: { ...config, device: 'cpu' } }).spec
+        ?.originmanWorkshop?.device,
+    ).toBe('cpu');
   });
   it.each([
+    { device: 'auto' },
+    { device: 'mps' },
     { timesteps: 4095 },
     { timesteps: Infinity },
     { seed: '7' },
@@ -47,6 +58,37 @@ describe('OriginMan Workshop contract', () => {
       normalizeTrainingSpec({ ...training, engine: 'originman-straight' }).spec,
     ).toBeUndefined();
     expect(normalizeTrainingSpec({ ...training, algorithm: 'ppo' }).spec).toBeUndefined();
+  });
+  it('retains actual GPU evidence and rejects a CPU parameter device claimed as CUDA', () => {
+    const result = {
+      schemaVersion: 1,
+      hardwareEligible: false,
+      phase: 'train',
+      policySha256: 'a'.repeat(64),
+      seed: 7,
+      requestedTimesteps: 12032,
+      actualTimesteps: 12032,
+      pushMaxForce: 8.1,
+      gradientUpdates: 1792,
+      trainingDevice: {
+        requestedDevice: 'cuda',
+        resolvedDevice: 'cuda',
+        parameterDevices: ['cuda:0'],
+        torchVersion: '2.9.1+cu128',
+        cudaRuntime: '12.8',
+        gpuName: 'GPU',
+        physicsBackend: 'cpu-mujoco',
+      },
+    };
+    expect(normalizeOriginmanWorkshopResult(result)?.trainingDevice?.parameterDevices).toEqual([
+      'cuda:0',
+    ]);
+    expect(
+      normalizeOriginmanWorkshopResult({
+        ...result,
+        trainingDevice: { ...result.trainingDevice, parameterDevices: ['cpu'] },
+      }),
+    ).toBeUndefined();
   });
   it('rejects a worker learning claim inconsistent with all 31 paired outcomes', () => {
     const result = {

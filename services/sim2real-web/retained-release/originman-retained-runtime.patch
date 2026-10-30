@@ -1,0 +1,1955 @@
+diff --git a/dist-server/server/routes/sim2real-routes.js b/dist-server/server/routes/sim2real-routes.js
+index 9d19367..7fd8b2e 100644
+--- a/dist-server/server/routes/sim2real-routes.js
++++ b/dist-server/server/routes/sim2real-routes.js
+@@ -1,7 +1,9 @@
++import { readOriginmanReference } from '../sim2real/originman-reference.js';
+ import { DesktopComputeRelayBroker } from '../sim2real/desktop-compute-relay.js';
+ import { withDesktopComputeContext, rememberDesktopComputeResource, desktopComputeConnected, desktopComputeAwareFetch, } from '../sim2real/desktop-compute-context.js';
+ import { registerDesktopComputeRelayRoutes } from './sim2real-desktop-compute-routes.js';
+ import { desktopRelayBridgeStatus } from '../sim2real/studio-desktop-relay-status.js';
++import { ORIGINMAN_WORKSHOP_MANIFEST, matchesOriginmanWorkshopContract, } from '../../shared/originman-workshop.js';
+ import { Router } from 'express';
+ import { readFileSync } from 'node:fs';
+ import { readFile } from 'node:fs/promises';
+@@ -632,7 +634,12 @@ function safeBackend(value) {
+         : null;
+ }
+ function requestedProduct(value) {
+-    return value === 'rdk-duck' || value === 'originbot' ? value : 'microduck';
++    return value === 'rdk-duck' ||
++        value === 'originbot' ||
++        value === 'originman' ||
++        value === 'custom'
++        ? value
++        : 'microduck';
+ }
+ function normalizeResumeFrom(value) {
+     if (value == null)
+@@ -759,6 +766,7 @@ function latestByTimestamp(items, timestamp) {
+ }
+ function availableContractsFor(models) {
+     const grouped = {
++        originman: [],
+         microduck: [],
+         'rdk-duck': [],
+         originbot: [],
+@@ -2464,11 +2472,12 @@ export function createSim2RealRouter(deps = {}, options = {}) {
+         response.json({ ok: true, deleted: true });
+     }));
+     async function inspectTrainingEnvironment(request, response, owner, input) {
+-        if (input.engine !== undefined && input.engine !== 'microduck-rl') {
+-            sendApiError(response, 400, 'SIM2REAL_ENGINE_PREFLIGHT_UNSUPPORTED', '当前环境预检支持 microduck-rl。', { retryable: false });
++        const engine = input.engine ?? (input.taskId === 'originman-recovery' ? 'originman-recovery' : 'microduck-rl');
++        if (!['microduck-rl', 'originman-recovery'].includes(engine)) {
++            sendApiError(response, 400, 'SIM2REAL_ENGINE_PREFLIGHT_UNSUPPORTED', '环境预检支持 microduck-rl 或 originman-recovery；不会回退其他引擎。', { retryable: false });
+             return null;
+         }
+-        const taskId = input.taskId ?? 'walk';
++        const taskId = input.taskId ?? (engine === 'originman-recovery' ? 'originman-recovery' : 'walk');
+         if (typeof taskId !== 'string' || !/^[a-z][a-z0-9-]{0,63}$/.test(taskId)) {
+             sendApiError(response, 400, 'SIM2REAL_TASK_INVALID', '请提供有效任务 ID。', {
+                 retryable: false,
+@@ -2506,6 +2515,7 @@ export function createSim2RealRouter(deps = {}, options = {}) {
+         try {
+             const report = await requestLocalEnginePreflight({
+                 accountId,
++                engine,
+                 taskId,
+                 ...(selected
+                     ? { runnerUrl: selected.resource.runnerUrl, runnerToken: selected.runnerToken ?? '' }
+@@ -3634,6 +3644,71 @@ export function createSim2RealRouter(deps = {}, options = {}) {
+             sendApiError(response, 503, 'SIM2REAL_RUN_RECONCILE_UNAVAILABLE', 'runner 暂时无法返回对账状态，台账未修改。', { retryable: true, retryAfterSeconds: 15 });
+         }
+     }));
++    router.get(api('/runs/:id/workshop-video'), wrapAsync(async (request, response) => {
++        const owner = requestOwner(request, response, auth);
++        if (owner === null)
++            return;
++        noStore(response);
++        const run = await getSim2RealRun(String(request.params.id), owner);
++        if (!run) {
++            sendApiError(response, 404, 'SIM2REAL_RUN_NOT_FOUND', '运行记录不存在，或不属于当前账号。');
++            return;
++        }
++        const video = run.metrics?.originmanWorkshop?.video;
++        if (run.backend !== 'local' ||
++            run.status !== 'completed' ||
++            !run.externalRunId ||
++            run.training?.engine !== 'originman-recovery' ||
++            !video) {
++            sendApiError(response, 409, 'SIM2REAL_WORKSHOP_VIDEO_UNAVAILABLE', '本次评测尚无可用的物理回放。');
++            return;
++        }
++        const runner = await resolveRunRunner(run.computeResourceId, owner);
++        if (run.computeResourceId && !runner) {
++            sendApiError(response, 409, 'SIM2REAL_WORKSHOP_WORKER_UNAVAILABLE', '原评测Worker不可用，无法读取回放。');
++            return;
++        }
++        const bytes = await fetchLocalRunArtifact({
++            purpose: 'originman-comparison',
++            accountId: owner ?? 'local-dev',
++            externalRunId: run.externalRunId,
++            ...(runner ? { runnerUrl: runner.runnerUrl, runnerToken: runner.runnerToken } : {}),
++        });
++        if (!bytes || bytes.sha256 !== video.sha256 || bytes.bytes.length !== video.bytes) {
++            sendApiError(response, 503, 'SIM2REAL_WORKSHOP_VIDEO_UNVERIFIED', '无法读取或校验本次回放；数值结果仍保留。');
++            return;
++        }
++        response.type('video/mp4').setHeader('Content-Length', bytes.bytes.length);
++        response.send(bytes.bytes);
++    }));
++    router.get(api('/workshops/originman'), wrapAsync(async (request, response) => {
++        const owner = requestOwner(request, response, auth);
++        if (owner === null)
++            return;
++        noStore(response);
++        const reference = await readOriginmanReference();
++        response.json({
++            ok: true,
++            manifest: ORIGINMAN_WORKSHOP_MANIFEST,
++            defaults: { phase: 'train', timesteps: 500000, seed: 7, pushMaxForce: 8.1, device: 'cuda' },
++            simulationOnly: true,
++            reference: reference.available ? { available: true, ...reference.metadata } : reference,
++        });
++    }));
++    router.get(api('/workshops/originman/reference-video'), wrapAsync(async (request, response) => {
++        const owner = requestOwner(request, response, auth);
++        if (owner === null)
++            return;
++        noStore(response);
++        const reference = await readOriginmanReference();
++        if (!reference.available) {
++            sendApiError(response, 409, 'SIM2REAL_REFERENCE_UNVERIFIED', '课前参考视频未配置或校验未通过，不能用本组训练冒充。');
++            return;
++        }
++        response.type('video/mp4').setHeader('X-Artifact-Sha256', reference.metadata.video.sha256);
++        response.setHeader('Content-Length', reference.bytes.length);
++        response.send(reference.bytes);
++    }));
+     router.post(api('/models'), wrapAsync(async (request, response) => {
+         const owner = requestOwner(request, response, auth);
+         if (owner === null)
+@@ -3721,6 +3796,41 @@ export function createSim2RealRouter(deps = {}, options = {}) {
+             });
+             return;
+         }
++        const workshop = training?.originmanWorkshop;
++        if (workshop) {
++            if (backend !== 'local' ||
++                taskId !== 'originman-recovery' ||
++                !matchesOriginmanWorkshopContract(model.manifest.contract) ||
++                resumeFrom) {
++                sendApiError(response, 400, 'SIM2REAL_WORKSHOP_CONTRACT_INVALID', 'OriginMan Workshop 仅支持专用14→2契约的本地仿真，不接受续训引用。');
++                return;
++            }
++            if (workshop.phase === 'evaluate') {
++                const source = await getSim2RealRun(workshop.sourceRunId, owner);
++                const parent = source?.training?.originmanWorkshop;
++                if (!source ||
++                    source.backend !== 'local' ||
++                    source.status !== 'completed' ||
++                    !source.externalRunId ||
++                    source.relayAgentUrl ||
++                    source.modelId !== modelId ||
++                    source.computeResourceId !== computeResourceId ||
++                    source.training?.engine !== 'originman-recovery' ||
++                    parent?.phase !== 'train' ||
++                    !source.metrics?.originmanWorkshop ||
++                    source.metrics.originmanWorkshop.policySha256 !== source.artifact?.sha256) {
++                    sendApiError(response, 409, 'SIM2REAL_WORKSHOP_SOURCE_INVALID', '请先选择同模型、同Worker且已完成制品校验的本组训练。');
++                    return;
++                }
++                if (workshop.seed !== parent.seed ||
++                    workshop.timesteps !== parent.timesteps ||
++                    workshop.pushMaxForce !== parent.pushMaxForce) {
++                    sendApiError(response, 400, 'SIM2REAL_WORKSHOP_SOURCE_CONFIG_MISMATCH', '评测必须沿用所选训练的冻结配置。修改配置请创建新训练。');
++                    return;
++                }
++                workshop.sourceExternalRunId = source.externalRunId;
++            }
++        }
+         if (projectId && !(await getSim2RealProject(projectId, owner))) {
+             response.status(404).json({
+                 ok: false,
+@@ -4541,5 +4651,4 @@ export function createSim2RealRouter(deps = {}, options = {}) {
+         }
+     }));
+     return router;
+-}
+-//# sourceMappingURL=sim2real-routes.js.map
+\ No newline at end of file
++}
+\ No newline at end of file
+diff --git a/dist-server/server/sim2real/local-runner.js b/dist-server/server/sim2real/local-runner.js
+index 8c139f4..1954a7d 100644
+--- a/dist-server/server/sim2real/local-runner.js
++++ b/dist-server/server/sim2real/local-runner.js
+@@ -183,7 +183,7 @@ export async function fetchLocalRunArtifact(input) {
+         const runnerPath = parsedRunner.pathname.replace(/\/+$/, '');
+         if (runnerPath.endsWith('/train'))
+             parsedRunner.pathname = runnerPath.slice(0, -6);
+-        const response = await (input.fetchImpl ?? desktopComputeAwareFetch)(`${parsedRunner.toString().replace(/\/+$/, '')}/runs/${encodeURIComponent(input.externalRunId)}/artifact`, {
++        const response = await (input.fetchImpl ?? desktopComputeAwareFetch)(`${parsedRunner.toString().replace(/\/+$/, '')}/runs/${encodeURIComponent(input.externalRunId)}/${input.purpose === 'originman-comparison' ? 'workshop-video' : 'artifact'}`, {
+             method: 'GET',
+             headers: {
+                 accept: 'application/octet-stream',
+@@ -459,6 +459,9 @@ async function isWorkerPreflightBusy(response) {
+ /** Explicit environment probe; never submits /train or falls back to another resource. */
+ export async function requestLocalEnginePreflight(input) {
+     const accountId = safeAccountId(input.accountId);
++    const engine = input.engine ?? 'microduck-rl';
++    if (!['microduck-rl', 'originman-recovery'].includes(engine) || (engine === 'originman-recovery' && input.taskId !== 'originman-recovery'))
++        throw new Error('Unsupported engine/task preflight; no fallback.');
+     if (!/^[a-z][a-z0-9-]{0,63}$/.test(input.taskId))
+         throw new Error('Invalid preflight task id.');
+     const runnerUrl = input.runnerUrl ?? process.env.RDK_SIM2REAL_LOCAL_RUNNER_URL ?? '';
+@@ -468,7 +471,7 @@ export async function requestLocalEnginePreflight(input) {
+     const pathname = url.pathname.replace(/\/+$/, '');
+     if (!pathname.endsWith('/train'))
+         throw new Error('Worker URL must end with /train.');
+-    url.pathname = pathname.slice(0, -6) + '/engines/microduck-rl/preflight';
++    url.pathname = pathname.slice(0, -6) + '/engines/' + engine + '/preflight';
+     url.search = '';
+     url.hash = '';
+     const response = await (input.fetchImpl ?? desktopComputeAwareFetch)(url, {
+@@ -506,7 +509,7 @@ export async function requestLocalEnginePreflight(input) {
+     }
+     const body = JSON.parse(Buffer.concat(chunks).toString('utf8'));
+     const report = body.report;
+-    const required = new Set([
++    const required = new Set(engine === 'originman-recovery' ? ['python', 'dependencies', 'robot-assets', 'exporter', 'task-registry', 'source-snapshot', 'training-device'] : [
+         'upstream',
+         'uv',
+         'project-spec',
+@@ -521,9 +524,10 @@ export async function requestLocalEnginePreflight(input) {
+     if (body.ok !== true ||
+         !report ||
+         report.schemaVersion !== 1 ||
+-        report.engine !== 'microduck-rl' ||
++        report.engine !== engine ||
+         report.taskId !== input.taskId ||
+         report.trainingPerformed !== false ||
++        (engine === 'originman-recovery' && report.hardwareEligible !== false) ||
+         !Array.isArray(report.checks) ||
+         report.checks.length > 32)
+         throw new Error('Worker preflight report does not match the requested engine/task.');
+@@ -592,7 +596,8 @@ export async function requestLocalEnginePreflight(input) {
+                 : null;
+         })(),
+         schemaVersion: 1,
+-        engine: 'microduck-rl',
++        engine,
++        ...(engine === 'originman-recovery' ? { hardwareEligible: false } : {}),
+         taskId: input.taskId,
+         checkedAt,
+         checks,
+@@ -607,5 +612,4 @@ export async function requestLocalEnginePreflight(input) {
+         simulationVerified: false,
+         next: '基础检查通过后仍需小规模真实训练与独立评测，不能据此认定策略可部署。',
+     };
+-}
+-//# sourceMappingURL=local-runner.js.map
+\ No newline at end of file
++}
+\ No newline at end of file
+diff --git a/dist-server/server/sim2real/robogo-runner.js b/dist-server/server/sim2real/robogo-runner.js
+index 4009178..98b89a2 100644
+--- a/dist-server/server/sim2real/robogo-runner.js
++++ b/dist-server/server/sim2real/robogo-runner.js
+@@ -1,3 +1,4 @@
++import { normalizeOriginmanWorkshopResult } from '../../shared/originman-workshop.js';
+ import { isIP } from 'node:net';
+ import { normalizeLatencyMeasurementStage } from '../../shared/board-rehearsal.js';
+ import { SAFE_ARTIFACT_REF } from '../../shared/sim2real.js';
+@@ -422,6 +423,9 @@ function safeMetrics(value) {
+     const engine = safeLabel('engine');
+     const trainingTask = normalizeMicroDuckTrainingTask(source.trainingTask);
+     return {
++        ...(normalizeOriginmanWorkshopResult(source.originmanWorkshop)
++            ? { originmanWorkshop: normalizeOriginmanWorkshopResult(source.originmanWorkshop) }
++            : {}),
+         contractValid,
+         observationSize,
+         actionSize,
+@@ -799,5 +803,4 @@ export async function requestRobogoTrainingStatus(input) {
+     finally {
+         clearTimeout(timer);
+     }
+-}
+-//# sourceMappingURL=robogo-runner.js.map
+\ No newline at end of file
++}
+\ No newline at end of file
+diff --git a/dist-server/server/sim2real/sim2real-service.js b/dist-server/server/sim2real/sim2real-service.js
+index 95cce6c..d719ecc 100644
+--- a/dist-server/server/sim2real/sim2real-service.js
++++ b/dist-server/server/sim2real/sim2real-service.js
+@@ -42,7 +42,9 @@ export function compatibilityForManifest(manifest, platformId) {
+                 ],
+             },
+             deployable: false,
+-            reason: `${productProfile.displayName} 当前只登记面向 ${productProfile.targetPlatforms.join('、')} 的板端目标。`,
++            reason: productProfile.targetPlatforms.length
++                ? `${productProfile.displayName} 当前只登记面向 ${productProfile.targetPlatforms.join('、')} 的板端目标。`
++                : `${productProfile.displayName} 当前仅完成仿真适配，尚无经过验证的板端目标，不能部署到真机。`,
+         };
+     }
+     const candidates = manifest.artifacts
+@@ -645,5 +647,4 @@ export function supportedRdkPlatforms() {
+ }
+ export function storageIntegration() {
+     return sim2RealStorageInfo();
+-}
+-//# sourceMappingURL=sim2real-service.js.map
+\ No newline at end of file
++}
+\ No newline at end of file
+diff --git a/dist-server/server/agent-runtime/dsh-capability-handlers.js b/dist-server/server/agent-runtime/dsh-capability-handlers.js
+index 888d4fb..7c4bb2b 100644
+--- a/dist-server/server/agent-runtime/dsh-capability-handlers.js
++++ b/dist-server/server/agent-runtime/dsh-capability-handlers.js
+@@ -18,7 +18,8 @@ import { normalizeTrainingSpec } from '../../shared/sim2real.js';
+ import { workbenchDestination } from '../../shared/workbench-navigation.js';
+ import { readSim2RealAgentResponseText } from '../routes/sim2real-agent-routes.js';
+ import { AsyncLocalStorage } from 'node:async_hooks';
+-import { randomUUID } from 'node:crypto';
++import { normalizeOriginmanWorkshopResult } from '../../shared/originman-workshop.js';
++import { createHash, randomUUID } from 'node:crypto';
+ import { listManuals } from 'rdk-docs-mcp/dist/catalog.js';
+ import { fetchText } from 'rdk-docs-mcp/dist/http.js';
+ import { getPage, listToc, searchDocs } from 'rdk-docs-mcp/dist/service.js';
+@@ -300,6 +301,71 @@ function requiredArg(args, key, message) {
+         throw new CapabilityError('DSH_CAPABILITY_REJECTED', message);
+     return value;
+ }
++function requiredNumberArg(args, key, message) {
++    const value = argNumber(args, key);
++    if (value === undefined)
++        throw new CapabilityError('DSH_CAPABILITY_REJECTED', message);
++    return value;
++}
++function policyCommandArg(value) {
++    const command = argsRecord(value);
++    if (Object.keys(command).some((key) => !['vx', 'vy', 'wz', 'ttlMs'].includes(key)) ||
++        !['vx', 'vy', 'wz'].every((key) => typeof command[key] === 'number' && Number.isFinite(command[key])) ||
++        (command.ttlMs !== undefined && (!Number.isInteger(command.ttlMs) || Number(command.ttlMs) < 1 || Number(command.ttlMs) > 2000))) {
++        throw new CapabilityError('DSH_CAPABILITY_REJECTED', 'command 需包含有限数值 vx/vy/wz（m/s、m/s、rad/s）；ttlMs 可选，必须为 1..2000 的整数。');
++    }
++    return command;
++}
++/** Adapter shape only; platform policy, resource limits and approvals remain upstream. */
++const TRAINING_ARGUMENT_TYPES = {
++    modelId: 'string', backend: 'string', profile: 'string', engine: 'string', algorithm: 'string',
++    numEnvs: 'number', maxIterations: 'number', runName: 'string', taskId: 'string',
++    projectId: 'string', experimentId: 'string', label: 'string', datasetIds: 'string-array',
++    computeResourceId: 'string', video: 'boolean', idempotencyKey: 'string',
++    originmanWorkshop: 'object', ppo: 'object', taskTuning: 'object', resumeFrom: 'object',
++};
++function rejectUnsupportedTrainingInputs(input) {
++    const unsupported = Object.keys(input).filter((key) => !Object.hasOwn(TRAINING_ARGUMENT_TYPES, key));
++    if (unsupported.length) {
++        throw new CapabilityError('DSH_CAPABILITY_REJECTED', `rdk_training_submit 不支持参数 ${unsupported.join('、')}，不会忽略后提交另一种任务。` +
++            '使用工具 schema 声明的平铺参数；真实 BC 可用 demonstrationRunId 选择已上传轨迹，ACT/DP 和额外调参请按仓库 CLI 契约执行，' +
++            '检查点续训使用平台版本化 API 的 resumeFrom 契约。datasetIds 只关联血缘，不上传文件。');
++    }
++    for (const [key, value] of Object.entries(input)) {
++        const expected = TRAINING_ARGUMENT_TYPES[key];
++        const valid = expected === 'object'
++            ? value !== null && typeof value === 'object' && !Array.isArray(value)
++            : expected === 'string-array'
++                ? Array.isArray(value) && value.every((id) => typeof id === 'string' && !!id.trim())
++                : expected === 'number'
++                    ? typeof value === 'number' && Number.isFinite(value)
++                    : expected === 'string'
++                        ? typeof value === 'string' && !!value.trim()
++                        : typeof value === 'boolean';
++        if (!valid) {
++            throw new CapabilityError('DSH_CAPABILITY_REJECTED', `${key} 必须是${expected === 'string-array' ? '非空字符串 ID 的数组' : expected === 'number' ? '有限 JSON 数值（不接受字符串）' : expected === 'string' ? '非空字符串' : 'JSON 布尔值'}；不会忽略无效值或采用默认值后提交另一种训练。`);
++        }
++    }
++}
++function trainingDataEvidence(trainingRun) {
++    const source = objectValue(trainingRun.trainingData);
++    const metrics = objectValue(trainingRun.metrics);
++    const sha256 = str(source.sha256);
++    const valid = /^[a-f0-9]{64}$/.test(sha256) && /^[a-f0-9]{64}$/.test(str(source.telemetryRevision)) &&
++        /^[a-zA-Z0-9][a-zA-Z0-9._-]{0,199}$/.test(str(source.sourceRunId)) &&
++        ['browser', 'import', 'board-agent'].includes(str(source.source)) &&
++        typeof source.rows === 'number' && Number.isSafeInteger(source.rows) && source.rows >= 12 && source.rows <= 50000;
++    const trainingData = valid ? {
++        sourceRunId: str(source.sourceRunId).slice(0, 200),
++        telemetryRevision: str(source.telemetryRevision).slice(0, 128),
++        source: str(source.source).slice(0, 64),
++        rows: defined(source.rows),
++        sha256,
++    } : null;
++    const consumptionVerified = !!trainingData && trainingRun.status === 'completed' &&
++        metrics.syntheticData === false && metrics.trainingDataSha256 === sha256;
++    return { trainingData, consumptionVerified };
++}
+ function queryPath(pathname, query) {
+     const params = Object.entries(query).filter(([, value]) => value !== undefined && value !== '');
+     if (!params.length)
+@@ -919,18 +985,24 @@ export function createDshCapabilityHandlers(options = {}) {
+         },
+         async rdk_training_submit(args, exec) {
+             const input = argsRecord(args);
++            rejectUnsupportedTrainingInputs(input);
++            const requestedModelId = argString(input, 'modelId');
++            const requestedProfile = argString(input, 'profile');
++            const requestedBackend = argString(input, 'backend');
++            if (input.backend !== undefined && !['local', 'robogo', 'browser', 'contract'].includes(requestedBackend))
++                throw new CapabilityError('DSH_CAPABILITY_REJECTED', 'Unsupported backend; no implicit local fallback.');
+             const overview = await run(exec.signal).fetch('/api/sim2real/overview', { method: 'GET' });
+             if (!overview.ok)
+                 fail(overview.status, overview.body, '工作区读取失败');
+-            const modelId = argString(input, 'modelId') || firstModelId(overview.body);
+-            const requestedBackend = argString(input, 'backend');
++            const modelId = requestedModelId || firstModelId(overview.body);
+             const backend = ['local', 'robogo', 'browser', 'contract'].includes(requestedBackend)
+                 ? requestedBackend
+                 : 'local';
+             const training = {
+-                profile: argString(input, 'profile') || 'smoke',
++                profile: requestedProfile || 'smoke',
+                 ...(Object.hasOwn(input, 'ppo') ? { ppo: input.ppo } : {}),
+                 ...(Object.hasOwn(input, 'taskTuning') ? { taskTuning: input.taskTuning } : {}),
++                ...(input.originmanWorkshop === undefined ? {} : { originmanWorkshop: input.originmanWorkshop }),
+                 ...(argString(input, 'engine') ? { engine: argString(input, 'engine') } : {}),
+                 ...(argString(input, 'algorithm') ? { algorithm: argString(input, 'algorithm') } : {}),
+                 ...(argNumber(input, 'numEnvs') === undefined
+@@ -984,15 +1056,53 @@ export function createDshCapabilityHandlers(options = {}) {
+             if (!result.ok)
+                 fail(result.status, result.body, 'GPU 训练提交失败');
+             const trainingRun = (result.body.run ?? {});
++            const resolved = { ...training, ...objectValue(trainingRun.training) };
++            const metrics = objectValue(trainingRun.metrics);
++            const evidence = trainingDataEvidence(trainingRun);
++            const realDemonstrations = !!argString(input, 'demonstrationRunId');
++            const syntheticData = {
++                confirmed: typeof metrics.syntheticData === 'boolean' ? metrics.syntheticData : null,
++                builtinSmokePath: !realDemonstrations && ['act', 'diffusion-policy', 'offline-bc'].includes(str(resolved.engine)),
++                note: realDemonstrations
++                    ? '已选择受管轨迹；以完成状态和训练输入摘要核对实际消费，不会回退合成数据。'
++                    : '没有提供 demonstrationRunId 时，仓库 ACT/BC/DP 文件协议包装使用 synthetic-smoke；数据集 ID 只关联血缘。',
++            };
++            const defaultsApplied = [
++                ...(!requestedModelId ? ['modelId'] : []),
++                ...(!requestedBackend ? ['backend'] : []),
++                ...(!requestedProfile ? ['profile'] : []),
++            ];
+             const status = str(trainingRun.status);
+             const summary = str(trainingRun.summary);
+             const stateNote = `任务状态为 ${status || 'unknown'}${summary ? `：${summary}` : '，尚未确认任务已启动'}；用 rdk_training_status 核查详情，不要重复提交。`;
+             return {
+                 runId: str(trainingRun.id),
+                 status,
+-                summary: defined(trainingRun.summary),
+                 modelId,
+                 backend,
++                mock: typeof trainingRun.mock === 'boolean' ? trainingRun.mock : null,
++                summary: summary || null,
++                resolvedTraining: {
++                    modelId: str(trainingRun.modelId) || modelId,
++                    backend: str(trainingRun.backend) || backend,
++                    profile: defined(resolved.profile),
++                    engine: defined(resolved.engine),
++                    algorithm: defined(resolved.algorithm),
++                    numEnvs: defined(resolved.numEnvs),
++                    maxIterations: defined(resolved.maxIterations),
++                    video: defined(resolved.video),
++                    runName: defined(resolved.runName),
++                    originmanWorkshop: defined(resolved.originmanWorkshop),
++                },
++                defaultsApplied,
++                dataUsage: {
++                    datasetIds: argStringList(input, 'datasetIds') ?? [],
++                    ...evidence,
++                    note: evidence.consumptionVerified
++                        ? '已完成训练且输入摘要一致；行划分验证误差不能替代独立仿真评测或部署质量门。'
++                        : 'datasetIds 关联数据血缘；受管轨迹快照发送后，需等待训练完成并核对输入摘要。',
++                },
++                syntheticData,
+                 idempotentReplay: result.body.idempotentReplay === true,
+                 note: result.body.idempotentReplay === true
+                     ? `已返回原训练记录，未新建训练；${stateNote}`
+@@ -1006,7 +1116,7 @@ export function createDshCapabilityHandlers(options = {}) {
+             const taskId = argString(input, 'taskId') || 'walk';
+             const computeResourceId = argString(input, 'computeResourceId');
+             const result = await run(exec.signal).fetch('/api/sim2real/training/preflight', { method: 'POST', json: {
+-                    taskId, engine: 'microduck-rl', ...(computeResourceId ? { computeResourceId } : {}),
++                    taskId, engine: taskId === 'originman-recovery' ? 'originman-recovery' : 'microduck-rl', ...(computeResourceId ? { computeResourceId } : {}),
+                 } });
+             if (!result.ok)
+                 fail(result.status, result.body, '训练环境预检未完成');
+@@ -1083,6 +1193,7 @@ export function createDshCapabilityHandlers(options = {}) {
+                 fail(result.status, result.body, '训练状态查询失败');
+             const trainingRun = (result.body.run ?? {});
+             const metrics = (trainingRun.metrics ?? {});
++            const workshop = normalizeOriginmanWorkshopResult(metrics.originmanWorkshop);
+             return {
+                 runId: str(trainingRun.id),
+                 status: str(trainingRun.status),
+@@ -1111,6 +1222,33 @@ export function createDshCapabilityHandlers(options = {}) {
+                     successRate: defined(metrics.successRate),
+                     fallRate: defined(metrics.fallRate),
+                     iterations: defined(metrics.iterations),
++                    trainingRows: defined(metrics.trainingRows),
++                    validationRows: defined(metrics.validationRows),
++                    initialTrainLoss: defined(metrics.initialTrainLoss),
++                    trainLoss: defined(metrics.trainLoss),
++                    validationLoss: defined(metrics.validationLoss),
++                    epochs: defined(metrics.epochs),
++                    syntheticData: defined(metrics.syntheticData),
++                    originmanWorkshop: workshop ? {
++                        phase: workshop.phase,
++                        trainingDevice: workshop.trainingDevice,
++                        gradientUpdates: workshop.gradientUpdates,
++                        requestedTimesteps: workshop.requestedTimesteps,
++                        actualTimesteps: workshop.actualTimesteps,
++                        seed: workshop.seed,
++                        pushMaxForce: workshop.pushMaxForce,
++                        policySha256: workshop.policySha256,
++                        sourceRunId: workshop.sourceRunId,
++                        baselineRecovered: workshop.baselineRecovered,
++                        rlRecovered: workshop.rlRecovered,
++                        clearGain: workshop.clearGain,
++                        normalStanding: workshop.normalStanding,
++                        cases: workshop.cases,
++                        video: workshop.video,
++                        videoError: workshop.videoError,
++                        hardwareEligible: false,
++                        note: '仅本次仿真、公开课堂条件和原基础反馈对照；不代表未见测试、优化传统控制或真机。',
++                    } : null,
+                 },
+             };
+         },
+@@ -1235,9 +1373,30 @@ export function createDshCapabilityHandlers(options = {}) {
+                 fail(result.status, result.body, '回放视频生成失败');
+             return { runId, video: defined(result.body.video) };
+         },
++        async rdk_workshop_catalog(args, exec) {
++            const input = argsRecord(args);
++            if (requiredArg(input, 'robot', 'robot is required') !== 'originman')
++                throw new CapabilityError('DSH_CAPABILITY_REJECTED', '当前课程目录需显式选择 robot=originman。');
++            const result = await run(exec.signal).fetch('/api/sim2real/workshops/originman', { method: 'GET' });
++            if (!result.ok)
++                fail(result.status, result.body, 'OriginMan 课程目录读取失败');
++            return { ...result.body, robot: 'originman', entryUrl: './?robot=originman#train/submit' };
++        },
+         async rdk_simulator_open(args, exec) {
+             const input = argsRecord(args);
++            const robot = argString(input, 'robot');
+             const runId = argString(input, 'runId');
++            if (input.robot !== undefined && !['originman', 'microduck'].includes(robot))
++                throw new CapabilityError('DSH_CAPABILITY_REJECTED', '不支持的机器人；不会回退到 MicroDuck。');
++            if (robot === 'originman') {
++                if (runId || input.runId !== undefined)
++                    throw new CapabilityError('DSH_CAPABILITY_REJECTED', 'OriginMan 请在工作台按 Run 选择评测；打开入口不代表已加载策略。');
++                const result = await run(exec.signal).fetch('/api/sim2real/workshops/originman', { method: 'GET' });
++                if (!result.ok)
++                    fail(result.status, result.body, 'OriginMan 课程入口不可用');
++                return { entryUrl: './?robot=originman#train/submit', robot: 'originman', simulationOnly: true,
++                    note: 'OriginMan 受扰恢复工作台；需要实际运行训练与评测后才有本组物理回放。' };
++            }
+             if (runId) {
+                 const result = await run(exec.signal).fetch(`/api/sim2real/runs/${encodeURIComponent(runId)}/simulator`, { method: 'GET' });
+                 if (!result.ok)
+@@ -1251,6 +1410,7 @@ export function createDshCapabilityHandlers(options = {}) {
+                 fail(result.status, result.body, '仿真入口读取失败');
+             const reference = objectValue(objectValue(result.body.guide).reference);
+             return {
++                robot: 'microduck',
+                 ...reference,
+                 ...workbenchDestination('simulate'),
+                 opensAutomatically: false,
+@@ -1686,5 +1846,4 @@ export function createDshCapabilityHandlers(options = {}) {
+             }
+         },
+     };
+-}
+-//# sourceMappingURL=dsh-capability-handlers.js.map
+\ No newline at end of file
++}
+\ No newline at end of file
+diff --git a/dist-server/server/agent-runtime/dsh-capability-tools.js b/dist-server/server/agent-runtime/dsh-capability-tools.js
+index d0536b0..595bcaa 100644
+--- a/dist-server/server/agent-runtime/dsh-capability-tools.js
++++ b/dist-server/server/agent-runtime/dsh-capability-tools.js
+@@ -61,6 +61,7 @@ const names = [
+     ['rdk_run_logs', '读取本地训练运行的有界日志', true],
+     ['rdk_retraining_advice', '根据运行、评测和遥测生成重训建议', true],
+     ['rdk_replay_video', '为满足证据条件的真机运行渲染回放视频', false],
++    ['rdk_workshop_catalog', '读取指定机器人的课程契约和训练模板（不提交训练）', true],
+     ['rdk_simulator_open', '读取参考仿真或指定训练 Run 的可视调试入口；不自动加载或生成评测', true],
+     ['rdk_evaluation_summarize', '汇总既有遥测并保存评测证据；不启动新的物理仿真', false],
+     [
+@@ -181,5 +182,4 @@ export function installDshCapabilityTools(ctx, handlers = {}) {
+         for (const dispose of disposers.reverse())
+             dispose();
+     };
+-}
+-//# sourceMappingURL=dsh-capability-tools.js.map
+\ No newline at end of file
++}
+\ No newline at end of file
+diff --git a/dist-server/services/duck-lab-mcp/server.js b/dist-server/services/duck-lab-mcp/server.js
+index db58315..cc91501 100644
+--- a/dist-server/services/duck-lab-mcp/server.js
++++ b/dist-server/services/duck-lab-mcp/server.js
+@@ -367,6 +367,7 @@ export const TOOL_PARAM_HINTS = {
+         required: [],
+         properties: {
+             modelId: { type: 'string' },
++            originmanWorkshop: {},
+             backend: { type: 'string' },
+             profile: { type: 'string' },
+             engine: { type: 'string' },
+@@ -489,9 +490,11 @@ export const TOOL_PARAM_HINTS = {
+             runId: { type: 'string' },
+         },
+     },
++    rdk_workshop_catalog: { required: ['robot'], properties: { robot: { type: 'string' } } },
+     rdk_simulator_open: {
+         required: [],
+         properties: {
++            robot: { type: 'string' },
+             productId: { type: 'string' },
+             modelId: { type: 'string' },
+             runId: { type: 'string' },
+@@ -618,12 +621,65 @@ export const TOOL_PARAM_HINTS = {
+     },
+ };
+ const PLATFORM_STATUS_HINT = { required: [], properties: {} };
+-export function buildInputSchema(hint) {
++/** Client-facing units and choices; business enforcement remains in the handlers/API. */
++const ARGUMENT_GUIDANCE = {
++    rdk_workshop_catalog: { robot: { enum: ['originman'] } },
++    rdk_simulator_open: { robot: { enum: ['originman', 'microduck'] } },
++    rdk_training_submit: {
++        originmanWorkshop: {
++            type: 'object',
++            description: 'Read rdk_workshop_catalog first; platform validates phase, budget and parent Run.',
++        },
++        modelId: { description: '目标模型 ID；省略时沿用首模型，请按本次任务显式选择。' },
++        backend: {
++            enum: ['local', 'robogo', 'browser', 'contract'],
++            description: '执行后端，默认 local；未知值会拒绝。',
++        },
++        profile: { description: '训练预算档，默认 smoke；提交响应会列出实际配置与兼容默认。' },
++        engine: { description: '当前执行资源已注册的引擎 ID；CLI 存在不等于此资源支持。' },
++        datasetIds: { description: '数据集血缘 ID 数组；不上传轨迹、不证明 worker 消费了这些字节。' },
++        demonstrationRunId: {
++            description: '已上传真实轨迹的来源 Run ID；用于 local + offline-bc，平台校验来源、维度并冻结数据摘要。无有效轨迹会拒绝，不回退合成数据。',
++        },
++        maxIterations: { description: '训练迭代预算；offline-bc 中表示训练轮数（epochs）。' },
++    },
++    rdk_artifact_promote: { status: { enum: ['validated', 'published', 'revoked'] } },
++    rdk_board_policy_load: {
++        path: { description: '板端 policies 目录内已暂存的 ONNX 文件名，不是任意主机路径。' },
++        artifactSha256: { description: '实际加载字节的 SHA-256，与板端文件和 rehearsal 收据绑定。' },
++    },
++    rdk_board_policy_start: {
++        direction: { minimum: -1, maximum: 1, description: '归一化方向指令 -1..1，不是角度。' },
++        goalX: { description: '目标 odom 绝对 x 坐标（米）；导航策略与 goalY 成对提供。' },
++        goalY: { description: '目标 odom 绝对 y 坐标（米）；导航策略与 goalX 成对提供。' },
++    },
++    rdk_board_arm_move: {
++        x: { description: '机械臂基座系目标 x 坐标（mm），以当前 workspace 为准。' },
++        y: { description: '机械臂基座系目标 y 坐标（mm），以当前 workspace 为准。' },
++        z: { description: '机械臂基座系目标 z 坐标（mm），以当前 workspace 为准。' },
++        speedMmPerS: { exclusiveMinimum: 0, description: '移动速度（mm/s）；平台和板端执行安全钳制。' },
++    },
++    rdk_board_arm_gripper: {
++        action: { enum: ['close', 'open'], description: 'close 夹紧，open 张开。' },
++        value: { exclusiveMinimum: 0, description: '正数：close 使用力值，open 使用宽度（mm）。' },
++    },
++};
++export function buildInputSchema(hint, toolId = '') {
++    const properties = Object.fromEntries(Object.entries(hint.properties).map(([key, value]) => [
++        key,
++        {
++            ...value,
++            ...(key === 'deviceId'
++                ? { description: '本次目标平台设备 ID；从工作区/板卡预检核对，不默认另一设备。' }
++                : {}),
++            ...ARGUMENT_GUIDANCE[toolId]?.[key],
++        },
++    ]));
+     return {
+         type: 'object',
+-        ...(Object.keys(hint.properties).length ? { properties: hint.properties } : {}),
++        properties: { ...properties, idempotencyKey: { type: 'string' } },
+         ...(hint.required.length ? { required: hint.required } : {}),
+-        additionalProperties: true,
++        additionalProperties: toolId !== 'rdk_training_submit',
+     };
+ }
+ export function buildToolCatalog(handlers, extra = []) {
+@@ -636,7 +692,7 @@ export function buildToolCatalog(handlers, extra = []) {
+     return catalog.map(({ id, description, readOnly }) => ({
+         name: id,
+         description: `${description}。${readOnly ? '只读操作。' : '需要平台安全门控。'}`,
+-        inputSchema: buildInputSchema(TOOL_PARAM_HINTS[id] ?? PLATFORM_STATUS_HINT),
++        inputSchema: buildInputSchema(TOOL_PARAM_HINTS[id] ?? PLATFORM_STATUS_HINT, id),
+         annotations: {
+             readOnlyHint: readOnly,
+             destructiveHint: DESTRUCTIVE_TOOLS.has(id),
+@@ -940,5 +996,4 @@ export function main() {
+ }
+ if (isDirectEntryInvocation()) {
+     main();
+-}
+-//# sourceMappingURL=server.js.map
+\ No newline at end of file
++}
+\ No newline at end of file
+diff --git a/dist-server/shared/sim2real.js b/dist-server/shared/sim2real.js
+index 7d05db3..34bed1c 100644
+--- a/dist-server/shared/sim2real.js
++++ b/dist-server/shared/sim2real.js
+@@ -1,4 +1,5 @@
+ import { normalizeMicroDuckTaskTuning } from './microduck-task-tuning.js';
++import { normalizeOriginmanWorkshop } from './originman-workshop.js';
+ export const SIM2REAL_SCHEMA_VERSION = 1;
+ export const MICRODUCK_SIM2REAL_CONTRACT_ID = 'microduck-policy-v1';
+ /**
+@@ -68,6 +69,14 @@ export const SIM2REAL_PRODUCT_PROFILES = Object.freeze({
+         targetPlatforms: ['rdk-x5'],
+         accessories: ['ball'],
+     },
++    originman: {
++        id: 'originman',
++        displayName: 'OriginMan',
++        contractMode: 'manifest-defined',
++        contractIdPrefix: 'custom-policy-originman-',
++        targetPlatforms: [],
++        accessories: ['imu', 'servo'],
++    },
+     originbot: {
+         id: 'originbot',
+         displayName: 'OriginBot',
+@@ -113,6 +122,7 @@ const ALLOWED_ROLES = new Set(['policy', 'compiled-policy', 'calibration']);
+ const ALLOWED_BACKENDS = new Set(['browser', 'robogo', 'local']);
+ const ALLOWED_VARIANTS = new Set(['legs', 'rollers', 'both']);
+ const ALLOWED_ROBOT_IDS = new Set([
++    'originman',
+     'microduck',
+     'rdk-duck',
+     'originbot',
+@@ -132,6 +142,8 @@ const ALLOWED_TRAINING_ENGINES = new Set([
+     'mjlab-rsl-rl',
+     'microduck-rl',
+     'microduck-football',
++    'originman-straight',
++    'originman-recovery',
+     'act',
+     'diffusion-policy',
+     'smolvla',
+@@ -327,7 +339,18 @@ export function normalizeTrainingSpec(value) {
+     // time instead of falling through to whichever engine the worker default.
+     const engine = safeText(source.engine, 32);
+     if (engine && !ALLOWED_TRAINING_ENGINES.has(engine)) {
+-        errors.push('training.engine must be one of starter-ppo, mjx-ppo, visual-ppo, dm-control-ppo, mjlab-rsl-rl, microduck-rl, microduck-football, act, diffusion-policy, smolvla, isaac-lab');
++        errors.push('training.engine must be one of starter-ppo, mjx-ppo, visual-ppo, dm-control-ppo, mjlab-rsl-rl, offline-bc, microduck-rl, microduck-football, originman-straight, originman-recovery, act, diffusion-policy, smolvla, isaac-lab');
++    }
++    let originmanWorkshop;
++    if (source.originmanWorkshop !== undefined || engine === 'originman-recovery') {
++        try {
++            originmanWorkshop = normalizeOriginmanWorkshop(source.originmanWorkshop);
++            if (engine !== 'originman-recovery' || algorithm !== 'sac' || numEnvs !== 4)
++                errors.push('OriginMan Workshop requires originman-recovery, SAC and 4 environments');
++        }
++        catch (error) {
++            errors.push(error instanceof Error ? error.message : 'Workshop 配置无效');
++        }
+     }
+     if (engine === 'microduck-rl' && algorithm && algorithm !== 'ppo')
+         errors.push('microduck-rl supports PPO only; training.algorithm must be ppo');
+@@ -361,6 +384,7 @@ export function normalizeTrainingSpec(value) {
+             ...(runName ? { runName } : {}),
+             ...(algorithm ? { algorithm: algorithm } : {}),
+             ...(engine ? { engine: engine } : {}),
++            ...(originmanWorkshop ? { originmanWorkshop } : {}),
+         },
+     };
+ }
+@@ -1234,5 +1258,4 @@ export const BUILTIN_ORIGINBOT_MODEL = {
+             notes: '可直接仿真、录制、训练和评测；真机部署前必须替换为真实训练制品并完成遥测与预检。',
+         },
+     },
+-};
+-//# sourceMappingURL=sim2real.js.map
+\ No newline at end of file
++};
+\ No newline at end of file
+diff --git a/dist-server/shared/sim2real-telemetry.js b/dist-server/shared/sim2real-telemetry.js
+index c91c6bb..8cec2e9 100644
+--- a/dist-server/shared/sim2real-telemetry.js
++++ b/dist-server/shared/sim2real-telemetry.js
+@@ -1,2 +1 @@
+-export {};
+-//# sourceMappingURL=sim2real-telemetry.js.map
+\ No newline at end of file
++export {};
+\ No newline at end of file
+diff --git a/dist-server/services/sim2real-web/local-training-worker.mjs b/dist-server/services/sim2real-web/local-training-worker.mjs
+index 61f2f9c..7009e09 100644
+--- a/dist-server/services/sim2real-web/local-training-worker.mjs
++++ b/dist-server/services/sim2real-web/local-training-worker.mjs
+@@ -1840,6 +1840,57 @@ async function handleArtifact(request, response) {
+  * ownership gate as handleArtifact; only completed non-mock jobs serve
+  * bytes, and the payload stays under the same ceiling as artifacts.
+  */
++async function handleWorkshopVideo(request, response) {
++  await ensureJobsLoaded();
++  const runId = decodeURIComponent(
++    (request.url || '').slice('/runs/'.length, -'/workshop-video'.length),
++  );
++  const job = jobs.get(runId);
++  const owner = accountId(request, {});
++  if (!job || job.accountId !== owner) {
++    json(response, 404, { ok: false, error: 'run_not_found' });
++    return;
++  }
++  const video = job.metrics?.originmanWorkshop?.video;
++  if (
++    job.status !== 'completed' ||
++    job.mock ||
++    job.engine !== 'originman-recovery' ||
++    !video ||
++    !/^[a-f0-9]{64}$/.test(video.sha256)
++  ) {
++    json(response, 409, { ok: false, error: 'workshop_video_unavailable' });
++    return;
++  }
++  const file = path.join(job.dir, 'comparison.mp4');
++  let info;
++  try {
++    info = await stat(file);
++  } catch {
++    json(response, 409, { ok: false, error: 'workshop_video_missing' });
++    return;
++  }
++  if (!info.isFile() || info.size !== video.bytes || info.size <= 0 || info.size > 20000000) {
++    json(response, 409, { ok: false, error: 'workshop_video_invalid' });
++    return;
++  }
++  const hash = createHash('sha256');
++  for await (const chunk of createReadStream(file)) hash.update(chunk);
++  if (hash.digest('hex') !== video.sha256) {
++    json(response, 409, { ok: false, error: 'workshop_video_digest_mismatch' });
++    return;
++  }
++  response.writeHead(200, {
++    'content-type': 'video/mp4',
++    'content-length': info.size,
++    'x-artifact-sha256': video.sha256,
++    'cache-control': 'no-store',
++  });
++  const stream = createReadStream(file);
++  stream.on('error', () => response.destroy());
++  stream.pipe(response);
++}
++
+ async function handleTelemetry(request, response) {
+   await ensureJobsLoaded();
+   const runId = decodeURIComponent(
+@@ -2082,6 +2133,14 @@ export function createLocalTrainingWorkerServer() {
+         await handleLogs(request, response);
+         return;
+       }
++      if (
++        request.method === 'GET' &&
++        request.url?.startsWith('/runs/') &&
++        request.url.endsWith('/workshop-video')
++      ) {
++        await handleWorkshopVideo(request, response);
++        return;
++      }
+       if (request.method === 'GET' && request.url?.startsWith('/runs/')) {
+         await handleStatus(
+           request,
+diff --git a/dist-server/services/sim2real-web/public/app.js b/dist-server/services/sim2real-web/public/app.js
+index de46817..c74928c 100644
+--- a/dist-server/services/sim2real-web/public/app.js
++++ b/dist-server/services/sim2real-web/public/app.js
+@@ -26,6 +26,14 @@ function appRelativePath(value) {
+   return raw;
+ }
+ const PRODUCT_PROFILES = Object.freeze({
++  originman: {
++    id: 'originman',
++    displayName: 'OriginMan',
++    projectName: 'OriginMan · 受扰恢复',
++    kitName: 'OriginMan · 纯仿真',
++    contractId: 'custom-policy-originman-recovery-v1',
++    simulatorPath: '',
++  },
+   microduck: {
+     id: 'microduck',
+     displayName: 'MicroDuck',
+@@ -129,6 +137,7 @@ function readTaskPreference() {
+ 
+ function readProductPreference() {
+   try {
++    if (new URLSearchParams(window.location.search).get('robot') === 'originman') return 'originman';
+     if (new URLSearchParams(window.location.search).get('demo') === '1' || new URLSearchParams(window.location.search).has('simulatorRun')) return 'microduck';
+     const value = window.localStorage?.getItem('rdk-duck-lab-product');
+     return value && PRODUCT_PROFILES[value] ? value : 'microduck';
+@@ -12430,6 +12439,7 @@ function wireEvents() {
+     renderPhysicalEvaluation();
+   });
+   for (const operation of ['start', 'refresh', 'cancel']) $('physical-evaluation-' + operation)?.addEventListener('click', () => { void operatePhysicalEvaluation(operation); });
++  window.OriginmanWorkshop?.mount({ request, apiPath, getOverview: () => state.overview });
+   document.querySelectorAll('[data-view-target]').forEach((control) => {
+     if (control.id !== 'evaluation-next-button') control.addEventListener('click', () => setView(control.dataset.viewTarget));
+   });
+diff --git a/dist-server/services/sim2real-web/public/app.css b/dist-server/services/sim2real-web/public/app.css
+index 19df86b..9f75773 100644
+--- a/dist-server/services/sim2real-web/public/app.css
++++ b/dist-server/services/sim2real-web/public/app.css
+@@ -1451,6 +1451,13 @@ h2 {
+   color: var(--muted-strong);
+   font-size:var(--fs-meta);
+ }
++.originman-workshop { margin-block: 12px; min-width: 0; }
++.originman-workshop summary { cursor: pointer; }
++.originman-workshop select { max-width: 100%; }
++.originman-comparison-video { width: 100%; height: auto; }
++.originman-case-table { max-width: 100%; overflow-x: auto; }
++.originman-case-table table { width: 100%; border-collapse: collapse; }
++.originman-case-table td, .originman-case-table th { padding: 8px; border-bottom: 1px solid var(--line); text-align: left; }
+ .training-grid {
+   display: grid;
+   grid-template-columns: 1fr 1.4fr;
+diff --git a/dist-server/services/sim2real-web/public/index.html b/dist-server/services/sim2real-web/public/index.html
+index a0cabf1..2e429b7 100644
+--- a/dist-server/services/sim2real-web/public/index.html
++++ b/dist-server/services/sim2real-web/public/index.html
+@@ -20,8 +20,7 @@
+          theme x view screenshots). See services/sim2real-web/ui-layout-invariants.mjs
+          for the guards that keep new overrides from re-introducing layering. -->
+     <link rel="stylesheet" href="./tokens.css?v=3" />
+-    <link rel="stylesheet" href="./app.css?v=62" />
+-    <link rel="stylesheet" href="./ui-components.css?v=1" />
++    <link rel="stylesheet" href="./app.css?v=51" />
+   </head>
+   <body>
+     <a class="skip-link" href="#main-content">跳到主要内容</a>
+@@ -133,6 +132,7 @@
+               <strong id="sidebar-product-name">MicroDuck</strong>
+             </div>
+             <select id="product-select" aria-label="选择产品线">
++                <option value="originman">OriginMan · 受扰恢复仿真</option>
+                 <option value="microduck">MicroDuck · 官方参考</option>
+                 <option value="originbot">OriginBot · X5 真机</option>
+                 <option value="rdk-duck">RDK Duck · X5 产品</option>
+@@ -157,7 +157,6 @@
+               title="正在检查工作区"
+               >检查中</span
+             >
+-            <button class="button button-ghost button-small" id="workflow-readiness-open" type="button" aria-haspopup="dialog" aria-controls="workflow-readiness-dialog">流程检查</button>
+           </div>
+           <div class="nav-label">工作区</div>
+           <nav class="workflow-nav" aria-label="工作区导航">
+@@ -364,9 +363,9 @@
+           <div class="workspace-notices" id="workspace-notices" role="region" aria-label="平台通知" hidden></div>
+ 
+           <nav class="workflow-progress-strip" id="workflow-progress-strip" aria-label="闭环进度">
+-            <div class="workflow-progress-intro"><span class="eyebrow">闭环证据进度</span><strong id="workflow-progress-summary">先体验参考策略，也可直接配置强化学习训练</strong></div>
++            <div class="workflow-progress-intro"><span class="eyebrow">学习进度</span><strong id="workflow-progress-summary">从准备数据开始</strong></div>
+             <ol class="workflow-progress-steps">
+-              <li data-workflow-step="simulate"><button type="button" data-view-target="simulate"><b>1</b><span><strong>数据与仿真</strong><small>验证参考场景</small></span></button></li>
++              <li data-workflow-step="simulate"><button type="button" data-view-target="simulate"><b>1</b><span><strong>数据与仿真</strong><small>生成可回放轨迹</small></span></button></li>
+               <li data-workflow-step="train"><button type="button" data-view-target="train"><b>2</b><span><strong>训练与策略</strong><small>训练策略模型</small></span></button></li>
+               <li data-workflow-step="evaluate"><button type="button" data-view-target="evaluate"><b>3</b><span><strong>评测与证据</strong><small>对比仿真与真机</small></span></button></li>
+               <li data-workflow-step="deploy"><button type="button" data-view-target="deploy"><b>4</b><span><strong>设备与发布</strong><small>预检后受控上线</small></span></button></li>
+@@ -375,9 +374,9 @@
+ 
+           <section class="flow-context-strip" id="flow-context" aria-live="polite" hidden>
+             <div class="flow-context-copy">
+-              <span class="eyebrow flow-context-kicker" id="flow-context-kicker">当前流程节点</span>
+-              <div class="workspace-context-heading"><h2 id="flow-context-title" aria-describedby="flow-context-description">—</h2><button class="button button-ghost button-small" id="workspace-help-button" type="button" data-workspace-help aria-haspopup="dialog" aria-controls="learning-help-dialog">使用帮助</button></div>
+-              <p class="sr-only" id="flow-context-description">—</p>
++              <span class="eyebrow" id="flow-context-kicker">当前流程节点</span>
++              <h2 id="flow-context-title">—</h2>
++              <p id="flow-context-description">—</p>
+             </div>
+           </section>
+ 
+@@ -387,8 +386,8 @@
+             aria-labelledby="overview-title"
+           >
+             <div class="section-heading section-heading-lean">
+-              <div class="overview-page-title"><h2 id="overview-title">项目概况</h2></div>
+-              <div class="workspace-help-actions"><span class="section-caption" id="hero-updated">—</span><button class="button button-ghost button-small" type="button" data-learning-help="overview" aria-haspopup="dialog" aria-controls="learning-help-dialog">使用帮助</button></div>
++              <div class="overview-page-title"><h2 id="overview-title">开始机器人学习</h2><p>先创建项目并准备数据，再训练和验证策略；需要真机时再连接设备。</p></div>
++              <span class="section-caption" id="hero-updated">—</span>
+             </div>
+             <div class="next-card">
+               <div class="next-card-main">
+@@ -405,6 +404,50 @@
+                 </button>
+               </div>
+             </div>
++            <section class="first-run-path panel" aria-labelledby="first-run-path-title" id="onboard-card">
++              <div class="onboard-card-bar">
++                <h2 id="first-run-path-title">上手 · 走完第一个闭环</h2>
++                <div class="onboard-meter" aria-hidden="true"><i id="onboard-fill"></i></div>
++                <span class="onboard-count" id="onboard-count">— / 4</span>
++              </div>
++              <ol class="onboard-list" id="onboard-list">
++                <li class="onboard-item" data-onboard-step="simulate">
++                  <span class="onboard-item-no">01</span><span class="onboard-item-dot"></span>
++                  <div class="onboard-item-body"><strong>在仿真中验证</strong><span>运行 MicroDuck 仿真，录制一段可回放轨迹</span></div>
++                  <div class="onboard-item-meta" data-onboard-meta></div>
++                </li>
++                <li class="onboard-item" data-onboard-step="train">
++                  <span class="onboard-item-no">02</span><span class="onboard-item-dot"></span>
++                  <div class="onboard-item-body"><strong>发起第一次训练</strong><span>用 starter 模板提交 PPO 任务，跟踪奖励曲线</span></div>
++                  <div class="onboard-item-meta" data-onboard-meta></div>
++                </li>
++                <li class="onboard-item" data-onboard-step="evaluate">
++                  <span class="onboard-item-no">03</span><span class="onboard-item-dot"></span>
++                  <div class="onboard-item-body"><strong>查看评测证据</strong><span>检查成功率、跌倒率与控制延迟</span></div>
++                  <div class="onboard-item-meta" data-onboard-meta></div>
++                </li>
++                <li class="onboard-item" data-onboard-step="deploy">
++                  <span class="onboard-item-no">04</span><span class="onboard-item-dot"></span>
++                  <div class="onboard-item-body"><strong>部署到真机</strong><span>只读预检通过后，把策略推进 RDK 板卡</span></div>
++                  <div class="onboard-item-meta" data-onboard-meta></div>
++                </li>
++              </ol>
++            </section>
++            <section class="platform-scorecard panel" aria-labelledby="platform-scorecard-title">
++              <div class="platform-scorecard-heading">
++                <div><span class="eyebrow">平台健康度</span><h2 id="platform-scorecard-title">研发闭环评分</h2><p>把“能演示”与“能上真机”分开显示，下一步始终有据可依。</p></div>
++                <div class="platform-scorecard-total"><strong id="platform-score-total">—</strong><span>/ 10 软件门槛</span></div>
++              </div>
++              <div class="platform-scorecard-grid" id="platform-scorecard-grid" aria-live="polite"><span class="empty-inline">正在检查契约、训练、评测和设备证据…</span></div>
++              <div class="platform-scorecard-foot"><span id="platform-scorecard-note">真实 X5 运动证据和签名制品会单独计入现场验收。</span><button type="button" class="button button-ghost button-small" data-view-target="records">查看证据记录 →</button></div>
++            </section>
++            <section class="platform-scorecard panel" aria-labelledby="research-loop-title">
++              <div class="platform-scorecard-heading">
++                <div><span class="eyebrow">研究反馈回路</span><h2 id="research-loop-title">闭环指标</h2><p>发起、时延、自主度与边际收益——检验研究回路是否越转越快。</p></div>
++              </div>
++              <div class="platform-scorecard-grid" id="research-loop-grid" aria-live="polite"><span class="empty-inline">正在汇总近 30 天的闭环指标…</span></div>
++              <div class="platform-scorecard-foot"><span id="research-loop-note">口径：近 30 天；发起方未标记的记录不计入占比分母；免审批链长为会话内内存口径。</span></div>
++            </section>
+             <section class="project-workspace panel" id="project-workspace" aria-labelledby="project-workspace-title">
+               <div class="panel-heading panel-heading-lean project-workspace-heading">
+                 <div>
+@@ -435,21 +478,6 @@
+                 <div class="workspace-recent-list" id="workspace-recent-list" aria-live="polite"><span class="empty-inline">加载项目活动…</span></div>
+               </div>
+             </section>
+-            <details class="platform-scorecard panel workspace-metrics-fold" aria-labelledby="platform-scorecard-title">
+-              <summary class="platform-scorecard-heading">
+-                <div><span class="eyebrow">平台健康度</span><h2 id="platform-scorecard-title">研发闭环评分</h2></div>
+-                <div class="platform-scorecard-total"><strong id="platform-score-total">—</strong><span>/ 10 软件门槛</span></div>
+-              </summary>
+-              <div class="platform-scorecard-grid" id="platform-scorecard-grid" aria-live="polite"><span class="empty-inline">正在检查契约、训练、评测和设备证据…</span></div>
+-              <div class="platform-scorecard-foot"><span id="platform-scorecard-note">真实 X5 运动证据和签名制品会单独计入现场验收。</span><button type="button" class="button button-ghost button-small" data-view-target="records">查看证据记录 →</button></div>
+-            </details>
+-            <details class="platform-scorecard panel workspace-metrics-fold" aria-labelledby="research-loop-title">
+-              <summary class="platform-scorecard-heading">
+-                <div><span class="eyebrow">研究反馈回路</span><h2 id="research-loop-title">闭环指标</h2></div>
+-              </summary>
+-              <div class="platform-scorecard-grid" id="research-loop-grid" aria-live="polite"><span class="empty-inline">正在汇总近 30 天的闭环指标…</span></div>
+-              <div class="platform-scorecard-foot"><span id="research-loop-note">口径：近 30 天；发起方未标记的记录不计入占比分母；免审批链长为会话内内存口径。</span></div>
+-            </details>
+             <details class="overview-environment" id="overview-environment">
+               <summary>
+                 <span class="overview-environment-icon" aria-hidden="true">⌘</span>
+@@ -503,7 +531,7 @@
+ 
+           <section class="agent-chat-panel" id="agent-chat-panel" role="dialog" aria-modal="true" aria-hidden="true" aria-labelledby="agent-chat-title" aria-describedby="agent-chat-role">
+             <div class="agent-chat-heading">
+-              <div><span class="workspace-kicker">RDK STUDIO AGENT</span><h2 id="agent-chat-title">Agent 任务助手</h2><p class="agent-chat-role" id="agent-chat-role">按任务生成计划、执行受控操作并返回证据。</p></div>
++              <div><span class="workspace-kicker">RDK STUDIO AGENT</span><h2 id="agent-chat-title">Agent 任务助手</h2><p class="agent-chat-role" id="agent-chat-role">核心动作：解释状态 · 生成计划 · 执行受控操作 · 留存证据。训练、设备和发布操作会在执行前请求确认，不会静默驱动机器人。</p></div>
+               <div class="agent-chat-heading-actions">
+                 <span class="agent-chat-runtime"><i class="status-dot"></i>工具链可用 · 真机需单独连接</span>
+                 <button class="agent-chat-close" id="agent-chat-close" type="button" aria-label="关闭 Agent 对话"><span aria-hidden="true">×</span></button>
+@@ -543,31 +571,20 @@
+             hidden
+             aria-labelledby="flow-context-title"
+           >
++            <div class="module-step-strip" aria-label="仿真工作流">
++              <div class="module-step is-current"><span>01</span><div><strong>任务与场景</strong><small>选择动作任务和模型</small></div></div>
++              <div class="module-step"><span>02</span><div><strong>仿真运行</strong><small>观察动作和实时状态</small></div></div>
++              <div class="module-step"><span>03</span><div><strong>录制与回放</strong><small>保存轨迹并进入评测</small></div></div>
++            </div>
+             <div class="sim-layout">
+               <article class="panel simulator-panel">
+                 <div class="panel-heading">
+                   <div>
+                     <h2 id="simulator-title">MicroDuck 仿真场</h2>
+                   </div>
+-                  <div class="workspace-help-actions">
+-                  <span class="workspace-help-actions" id="simulator-record-actions">
+-                  <button class="button button-ghost button-small" id="simulator-record-start" type="button">录制状态</button>
+-                  <button class="button button-quiet button-small" id="simulator-record-stop" type="button" disabled>停止录制</button>
+-                  <button class="button button-quiet button-small" id="simulator-record-download" type="button" disabled>下载 JSONL</button>
+-                  <button class="button button-quiet button-small" id="simulator-record-save" type="button" disabled>保存录制</button>
+-                  <button class="button button-quiet button-small" type="button" data-view-target="records" data-flow-child="replays">查看录制</button>
+-                  </span>
+                   <span class="live-label is-waiting" id="simulator-live-label"
+                     ><i class="status-dot"></i><span id="simulator-live-text">资源待挂载</span></span
+                   >
+-                  </div>
+-                </div>
+-                <div class="beginner-actions simulator-policy-controls" id="simulator-policy-controls" hidden>
+-                  <label for="simulator-policy-source">调试策略</label>
+-                  <select id="simulator-policy-source" aria-label="选择仿真调试策略"></select>
+-                  <button class="button button-ghost button-small" id="simulator-policy-load" type="button">加载策略</button>
+-                  <button class="button button-quiet button-small" id="simulator-policy-clear" type="button" disabled>恢复参考策略</button>
+-                  <span class="small-note" id="simulator-policy-status" role="status">当前：官方参考策略</span>
+                 </div>
+                 <div class="simulator-frame-wrap">
+                   <iframe
+@@ -580,14 +597,21 @@
+                   <div class="simulator-product-gate" id="simulator-product-gate" hidden>
+                     <span class="gate-icon" aria-hidden="true">◇</span>
+                     <strong id="simulator-gate-title">RDK Duck 仿真适配器待配置</strong>
+-                    <p id="simulator-gate-copy">请配置当前产品的仿真适配器与控制接口。</p>
++                    <p id="simulator-gate-copy">
++                      当前产品线不会复用 MicroDuck 的浏览器场景。先准备真实契约 manifest
++                      或本地 headless 仿真 worker；连接真机是部署前的后续步骤。
++                    </p>
++                    <ol class="simulator-gate-steps">
++                      <li><strong>先准备仿真</strong>：导入并校验当前产品线的真实 manifest，或启动本地 headless worker。</li>
++                      <li><strong>需要上真机时</strong>：到“设备控制台”添加并连接设备。</li>
++                      <li><strong>最后选择设备</strong>：回到“部署与上线”选择已连接的目标板卡，再执行预检。</li>
++                    </ol>
+                     <div class="simulator-gate-actions">
+                     <button
+                       id="simulator-gate-train"
+                       class="button button-primary button-small"
+                       type="button"
+                       data-view-target="train"
+-                      data-flow-child="prepare"
+                     >
+                       去训练与模型 →
+                     </button>
+@@ -604,13 +628,25 @@
+                       >查看 MicroDuck 安装指引 ↗</a
+                     >
+                   </div>
++                  <div class="simulator-fallback">
++                    <strong>动作录制</strong>
++                    <p>
++                      进入仿真后，左下角会出现录制面板。录制文件可下载为 JSONL，用于复盘或后续训练。
++                    </p>
++                    <a
++                      class="button button-primary button-small"
++                      href="./mujoco/microduck/"
++                      target="_blank"
++                      rel="noreferrer"
++                      >新标签页打开 ↗</a
++                    >
++                  </div>
+                 </div>
+                 <div class="simulator-footer">
+                   <span id="simulator-run-status">参考策略可用</span
+                   ><span class="mono" id="simulator-runtime-label">资源状态 · 需挂载</span
+                   ><span class="mono" id="simulator-scene-note" hidden>训练场景在引擎侧运行 · 画面不随任务切换</span>
+-                  <span class="simulator-evidence-status" id="simulator-record-status" role="status">参考仿真状态 · 待录制</span>
+-                  <span class="simulator-evidence-status" id="simulator-evidence-status" hidden></span>
++                  <span class="simulator-evidence-status" id="simulator-evidence-status">录制后自动同步到评测证据</span>
+                 </div>
+               </article>
+               <details class="panel guide-panel workspace-inspector" open>
+@@ -628,7 +664,7 @@
+                     <option value="kick">踢球</option>
+                     <option value="custom">自定义动作</option>
+                   </select>
+-                  <p id="task-context-note" class="small-note">任务决定训练目标与评测标准；录制是可选的回放材料，不是 PPO 的前置步骤。</p>
++                  <p id="task-context-note" class="small-note">切换任务后请点击“开始录制”生成轨迹；录制完成即可在评测页回放。</p>
+                   <a class="side-link" href="#records" data-replay-task-link>查看该任务的最近回放 ↗</a>
+                 </div>
+                 <details class="sim-action-library" aria-label="当前模型动作库">
+@@ -657,7 +693,6 @@
+                   class="button button-primary button-block"
+                   type="button"
+                   data-view-target="train"
+-                  data-flow-child="configure"
+                 >
+               下一步：配置强化学习训练 →
+                 </button>
+@@ -679,23 +714,35 @@
+               <button class="submodule-tab is-active" type="button" role="tab" id="train-tab-run" aria-controls="train-module-run-model train-module-run-robogo" aria-selected="true" data-train-module-tab="run">Run 与进度<small>提交任务与实时曲线</small></button>
+ 
+             </div>
++            <div class="train-onboarding" role="note" aria-label="训练流程引导">
++              <div class="train-onboarding-heading">
++                <div><span class="eyebrow">新手流程</span><h3 id="train-onboarding-title">按 3 步完成一次训练</h3></div>
++                <span class="train-onboarding-note">预计 2–5 分钟</span>
++              </div>
++              <div class="train-onboarding-steps">
++                <div class="train-onboarding-step is-current" data-train-step="1" role="button" tabindex="0"><b>1</b><div><strong>准备模型</strong><small id="train-onboarding-model-help">载入默认模板并登记</small></div></div>
++                <div class="train-onboarding-step" data-train-step="2" role="button" tabindex="0"><b>2</b><div><strong id="train-onboarding-config-title">配置训练</strong><small id="train-onboarding-config-help">选择算法与算力资源</small></div></div>
++                <div class="train-onboarding-step" data-train-step="3" role="button" tabindex="0"><b>3</b><div><strong id="train-onboarding-submit-title">开始强化学习训练</strong><small id="train-onboarding-submit-help">选择 GPU 和 PPO / SAC 后提交任务</small></div></div>
++              </div>
++              <p class="train-onboarding-help" id="train-onboarding-help">第一次使用？先点击“载入模板”，不用编辑 JSON。回放是可选的验证工具；强化学习训练可直接提交 PPO / SAC 任务。</p>
++            </div>
+             <details class="panel contract-fold" id="contract-fold" data-train-module="contract" role="tabpanel" aria-labelledby="train-tab-contract">
+               <summary>
+                 <span class="overview-environment-icon" aria-hidden="true">◈</span>
+-                <span><strong>套件与契约 · 确认控制接口</strong><small>确认输入输出要求，保留可追溯的配置版本</small></span>
++                <span><strong>套件与契约 · 登记模型</strong><small>导入并校验 manifest，登记后模型可追溯</small></span>
+                 <span class="overview-environment-toggle" aria-hidden="true">展开 <i>⌄</i></span>
+               </summary>
+               <div class="records-layout">
+                 <article class="panel manifest-panel">
+-                  <div class="panel-heading panel-heading-lean"><h2>第 1 步 · 确认控制接口</h2>
+-                    <button class="button button-ghost button-small" type="button" data-learning-help="training" aria-haspopup="dialog" aria-controls="learning-help-dialog">接口说明</button>
++                  <div class="panel-heading panel-heading-lean"><h2>第 1 步 · 准备模型</h2>
++                    <small class="panel-tip" id="contract-panel-tip">推荐：载入当前产品模板 → 校验 → 登记</small>
+                   </div>
+-                  <details class="beginner-json" id="manifest-json-details"><summary>高级：查看或编辑接口清单（JSON）</summary>
++                  <div class="manifest-explainer"><strong>这一步是做什么？</strong><span>把模型的输入、输出和设备要求登记进工作区，后续训练、评测和部署都会用它做兼容性检查。</span><em>第一次使用：点击“载入模板”，然后依次点击“校验清单”和“登记版本”。</em></div>
+                   <textarea
+                     id="manifest-editor"
+                     spellcheck="false"
+                     aria-label="模型 manifest JSON"
+-                  ></textarea></details>
++                  ></textarea>
+                   <div class="editor-actions">
+                     <button
+                       class="button button-ghost button-small"
+@@ -724,7 +771,100 @@
+                   </div>
+                   <div class="validation-result" id="validation-result" role="status">尚未校验</div>
+                 </article>
++                <article class="panel contract-guide-panel">
++                  <div class="panel-heading panel-heading-lean"><h2>契约检查清单</h2>
++                    <span class="state-badge state-neutral">FAIL-CLOSED</span>
++                  </div>
++                  <ul class="contract-check-list">
++                    <li>
++                      <span>01</span>
++                      <div>
++                        <strong>产品标识</strong><small>MicroDuck 与 RDK Duck 不共用机器人维度</small>
++                      </div>
++                    </li>
++                    <li>
++                      <span>02</span>
++                      <div>
++                        <strong>观测 / 动作布局</strong
++                        ><small>字段顺序、形状和控制频率必须自洽</small>
++                      </div>
++                    </li>
++                    <li>
++                      <span>03</span>
++                      <div>
++                        <strong>运行时分工</strong
++                        ><small>运控 CPU ONNX 单线程，感知制品走 X5 BPU</small>
++                      </div>
++                    </li>
++                    <li>
++                      <span>04</span>
++                      <div>
++                        <strong>制品引用</strong
++                        ><small>只接受不透明 artifact 引用和可追溯校验和</small>
++                      </div>
++                    </li>
++                  </ul>
++                </article>
++              </div>
++            </details>
++            <details class="panel originman-workshop" id="originman-workshop">
++              <summary><strong>OriginMan Workshop · 受扰恢复强化学习</strong></summary>
++              <p>固定稳定反馈打底，SAC 每 20ms 连续修正髋踝。配置 → 本组训练 → 固定 31 条件评测 → RL 前后对照。仅仿真。</p>
++              <section aria-labelledby="originman-reference-title">
++                <h3 id="originman-reference-title">先看经过验证的课前参考</h3>
++                <p id="originman-reference-note">课前参考材料尚未读取；它与下面本组训练、评测记录分开标注。</p>
++                <video id="originman-reference-video" class="originman-comparison-video" controls preload="metadata" aria-label="讲师课前参考物理回放 非本组训练" hidden></video>
++              </section>
++              <form id="originman-workshop-form">
++                <div class="training-grid">
++                  <div class="training-field-group">
++                    <label class="field-label" for="originman-steps">训练控制步数</label>
++                    <input id="originman-steps" type="number" min="4096" max="1000000" step="1" value="500000" required>
++                    <label class="field-label" for="originman-seed">随机种子</label>
++                    <input id="originman-seed" type="number" min="0" max="1000000" step="1" value="7" required>
++                    <label class="field-label" for="originman-force">训练侧推上限（N）</label>
++                    <input id="originman-force" type="number" min="6.4" max="9" step="0.1" value="8.1" required>
++                  </div>
++                  <div class="training-field-group">
++                    <strong>冻结的控制与评测</strong>
++                    <p class="small-note">SAC · 默认 GPU / 4 环境 · 14 维观测 → 2 维修正。基础 PD、奖励、控制周期、动作映射与评测条件固定。改配置会创建新 Run，不覆盖旧权重。</p>
++                    <p class="small-note">先用 50 万步主实验；4096～1 万步仅检查流程，不保证学好。31 条件是公开课堂基准，不是真机成功率或未见测试。</p>
++                    <label class="field-label" for="originman-device">策略训练设备</label>
++                    <select id="originman-device"><option value="cuda">GPU（CUDA，默认）</option><option value="cpu">CPU（显式选择）</option></select>
++                    <p class="small-note">物理仿真仍由 CPU 执行；GPU 不可用时训练报错，不自动切回 CPU。</p>
++                    <label class="field-label" for="originman-resource">执行资源</label>
++                    <select id="originman-resource"><option value="">服务端默认本地 Worker</option></select>
++                  </div>
++                </div>
++                <div class="model-actions">
++                  <button class="button button-primary" id="originman-train" type="submit">1. 创建本组训练</button>
++                  <button class="button button-ghost" id="originman-refresh" type="button">刷新记录</button>
++                </div>
++              </form>
++              <p id="originman-status" class="action-block-hint" role="status" aria-live="polite">展开后加载本组实验。Worker 需已配置模型与 OriginMan 引擎。</p>
++              <label class="field-label" for="originman-run">本组训练记录</label>
++              <select id="originman-run"><option value="">尚无训练</option></select>
++              <div class="model-actions"><button class="button button-primary" id="originman-evaluate" type="button" disabled>2. 评测所选权重</button></div>
++              <p class="small-note" id="originman-provenance">训练与评测分别保存为平台 Run；无法确认提交结果时保留幂等键供重试。</p>
++              <div class="run-progress-live-chart" id="originman-progress" hidden>
++                <strong>本组训练奖励与开发检查</strong>
++                <canvas id="originman-progress-chart" width="900" height="240" role="img" aria-label="本组真实训练奖励曲线"></canvas>
++                <p class="small-note">横轴为累计控制步；曲线为引擎日志中的奖励。开发集恢复数每 5 万步检查一次，最终效果看独立评测。</p>
+               </div>
++              <label class="field-label" for="originman-evaluation">本组评测记录</label>
++              <select id="originman-evaluation"><option value="">尚无评测</option></select>
++              <section id="originman-comparison" aria-labelledby="originman-comparison-title" hidden>
++                <h3 id="originman-comparison-title">3. 相同扰动下的 RL 前后对照</h3>
++                <p id="originman-verdict" role="status"></p>
++                <p id="originman-comparison-note" class="small-note"></p>
++                <div class="run-comparison-chart"><canvas id="originman-tilt-chart" width="900" height="260" role="img" aria-label="同一条件下参考、基础、未训练与训练后身体倾角"></canvas></div>
++                <div class="run-comparison-chart"><canvas id="originman-correction-chart" width="900" height="240" role="img" aria-label="RL 实际额外踝和髋目标随时间变化"></canvas></div>
++                <video id="originman-video" class="originman-comparison-video" controls preload="metadata" aria-label="本次同条件物理回放" hidden></video>
++                <p class="small-note" id="originman-video-note"></p>
++                <div class="originman-case-table"><table><thead><tr><th>条件</th><th>推力 / 开始</th><th>基础</th><th>未训练</th><th>训练后</th><th>冻结输出</th><th>变化</th></tr></thead><tbody id="originman-cases"></tbody></table></div>
++                <div class="model-actions"><button class="button button-ghost" id="originman-download" type="button">下载本次评测记录</button></div>
++              </section>
++              <details><summary>本组引擎日志与失败原因</summary><pre id="originman-logs" class="run-progress-logs-body">尚无日志</pre></details>
+             </details>
+             <div class="train-layout" data-train-active-module="run">
+               <article class="panel model-panel" id="train-module-run-model" data-train-module="run" role="tabpanel" aria-labelledby="train-tab-run">
+@@ -798,16 +938,9 @@
+                       aria-label="训练中实时奖励与成功率曲线"
+                     ></canvas>
+                     <p class="small-note" id="run-progress-live-note">
+-                      曲线来自执行端日志；成功率仅在训练器实际测量并报告时显示。
++                      引擎每个 checkpoint 间隔回报一次均值奖励与近期成功率；数据来自 worker 解析的引擎 stdout。
+                     </p>
+                   </div>
+-                  <div class="run-training-snapshot" id="run-training-snapshot" hidden>
+-                    <div class="run-progress-live-heading">
+-                      <strong>训练画面（引擎快照）</strong>
+-                      <span class="panel-caption" id="run-training-snapshot-note">—</span>
+-                    </div>
+-                    <img id="run-training-snapshot-img" alt="训练中策略画面快照" hidden />
+-                  </div>
+                   <div class="run-progress-logs" id="run-progress-logs" hidden>
+                     <div class="run-progress-logs-heading">
+                       <strong>引擎日志流</strong>
+@@ -826,6 +959,7 @@
+                   <div class="run-progress-warning" id="run-progress-warning" hidden>
+                     Mock 只验证协议和台账，不会生成可部署模型。
+                   </div>
++                  <p class="small-note" id="run-progress-bc-result" hidden></p>
+                   <button
+                     class="button button-ghost button-small"
+                     id="run-progress-detail"
+@@ -833,19 +967,9 @@
+                   >
+                     查看运行详情 →
+                   </button>
+-                  <button class="button button-ghost button-small" id="run-cancel-button" type="button" hidden>取消训练</button>
+-                  <button class="button button-ghost button-small" id="run-simulator-debug" type="button" hidden>在仿真中调试 →</button>
+-                </div>
+-                <div class="manifest-explainer" id="beginner-training-result-panel" hidden>
+-                  <strong id="beginner-training-result-title">怎样理解这次运行？</strong>
+-                  <span id="beginner-training-result" role="status"></span>
+-                  <button class="button button-ghost button-small" id="beginner-training-next" type="button" data-view-target="evaluate">查看下一步 →</button>
+                 </div>
+                 <details class="training-controls" id="train-module-config" data-train-module="config" role="tabpanel" aria-labelledby="train-tab-config">
+                   <summary>训练参数与续训</summary>
+-              <p class="small-note" id="beginner-training-mode" role="status">正在确认训练资源。CPU 教学环境、MicroDuck 全身训练和 Mock 演练的成果不同。</p>
+-
+-                  <div class="beginner-actions"><button class="button button-ghost button-small" id="beginner-training-preset" type="button">使用首次训练设置</button><button class="button button-ghost button-small" type="button" data-learning-help="training" aria-haspopup="dialog" aria-controls="learning-help-dialog">配置说明</button></div>
+                   <div class="training-grid"><div class="training-field-group" role="group" aria-labelledby="training-group-basic">
+                       <div class="training-group-title" id="training-group-basic">训练设置</div>
+                       <label class="field-label" for="training-profile">训练档位<small class="profile-pref-note" data-training-profile-note hidden>已按你上次的选择预选</small></label
+@@ -854,11 +978,7 @@
+                       <option value="low-vram">低显存 · 64 环境起步</option>
+                       <option value="standard" selected>标准 · 1024 环境</option>
+                       <option value="high-vram">高显存 · 4096 环境</option></select
+-                    ><label class="field-label" for="training-num-envs">并行环境数（可覆盖档位）</label>
+-                    <input id="training-num-envs" type="number" min="1" max="16384" step="1" placeholder="留空使用档位默认值" />
+-                    <label class="field-label" for="training-max-iterations">本次迭代数（续训时为追加次数）</label>
+-                    <input id="training-max-iterations" type="number" min="1" max="2000000" step="1" placeholder="留空使用档位默认值" />
+-                    <label class="field-label" for="training-algorithm">算法</label
++                    ><label class="field-label" for="training-algorithm">算法</label
+                     ><select id="training-algorithm" aria-label="选择强化学习算法">
+                       <option value="ppo" selected>PPO · 在策略</option>
+                       <option value="sac">SAC · 离策略</option></select
+@@ -873,42 +993,28 @@
+                       <option value="microduck-recurrent">microduck-recurrent · 循环 LSTM 策略 · 篮球/高跷平衡（CPU 冒烟）</option>
+                       <option value="microduck-football">microduck-football · 足球 MuJoCo + 14D MicroDuck（CUDA）</option>
+                       <option value="mjlab-rsl-rl">mjlab-rsl-rl · mjlab 物理 + rsl-rl PPO（CUDA）</option>
++                      <option value="offline-bc">offline-bc · 录制轨迹模仿学习（CPU）</option>
+                       <option value="act">act · 动作分块模仿（示教轨迹，CPU）</option>
+                       <option value="diffusion-policy">diffusion-policy · 扩散动作分块模仿（示教轨迹，CPU）</option>
+                       <option value="smolvla">smolvla · LeRobot VLA 参考（CPU 规划 / CUDA 全量）</option>
+                       <option value="isaac-lab">isaac-lab · Isaac Lab 上游训练栈（CUDA 主机，含 sim2sim 验证）</option></select
+                     ><label class="field-label" for="compute-resource-select">训练资源</label
+-                    ><select id="compute-resource-select" aria-label="选择 GPU 训练资源">
++                    ><select id="compute-resource-select" aria-label="选择训练资源">
+                       <option value="">服务端默认本地 Worker</option>
+                     </select
+                     >
+-                    <details id="training-ppo-options" hidden>
+-                      <summary>高级：训练调参</summary>
+-                      <label class="field-label" for="training-ppo-learning-rate">学习率</label>
+-                      <input id="training-ppo-learning-rate" type="number" min="0.0000001" max="0.01" step="any" placeholder="留空沿用上游配置" />
+-                      <label class="field-label" for="training-ppo-entropy">熵系数</label>
+-                      <input id="training-ppo-entropy" type="number" min="0" max="1" step="any" placeholder="留空沿用上游配置" />
+-                      <label class="field-label" for="training-ppo-clip">PPO 裁剪参数</label>
+-                      <input id="training-ppo-clip" type="number" min="0.01" max="0.5" step="any" placeholder="留空沿用上游配置" />
+-                      <p class="small-note">留空不覆盖。学习率在续训时用于本次优化器副本；自适应调度仍可在训练中改变它。范围校验不代表推荐值。</p>
+-                      <label class="field-label" for="training-reward-linear">前进速度跟踪奖励权重</label>
+-                      <input id="training-reward-linear" type="number" min="0.1" max="20" step="any" placeholder="留空沿用上游配置" />
+-                      <label class="field-label" for="training-reward-angular">转向速度跟踪奖励权重</label>
+-                      <input id="training-reward-angular" type="number" min="0" max="20" step="any" placeholder="留空沿用上游配置" />
+-                      <label class="field-label" for="training-reward-head">头部姿态跟踪奖励权重</label>
+-                      <input id="training-reward-head" type="number" min="0" max="10" step="any" placeholder="留空沿用上游配置" />
+-                      <p class="small-note">任务奖励调优仅支持 MicroDuck 行走与本地 PPO。训练后核对实际配置；权重范围不代表推荐值或效果保证。</p>
+-                    </details>
+-                    <div id="training-preflight-controls" hidden>
+-                      <button class="button button-ghost button-small" id="training-preflight-button" type="button">检查训练环境</button>
+-                      <p class="small-note" id="training-preflight-status" role="status" aria-live="polite">尚未检查当前资源与任务。</p>
+-                      <details id="training-preflight-details" hidden><summary>检查详情</summary><ul id="training-preflight-checks"></ul></details>
+                     </div>
++                    <div class="training-field-group" id="training-demonstration-group" role="group" aria-labelledby="training-group-demonstration" hidden>
++                      <div class="training-group-title" id="training-group-demonstration">用录制轨迹训练</div>
++                      <label class="field-label" for="training-demonstration-run">训练轨迹</label>
++                      <select id="training-demonstration-run" aria-describedby="training-demonstration-note"><option value="">先上传一段轨迹</option></select>
++                      <label class="field-label" for="training-bc-epochs">训练轮数</label>
++                      <input id="training-bc-epochs" type="number" value="100" min="1" max="10000" step="1" inputmode="numeric" />
++                      <p class="small-note" id="training-demonstration-note">先在仿真中录制，再到评测页上传到 Run；上传后的真实轨迹才会出现在这里。</p>
++                      <button class="button button-ghost button-small" id="training-demonstration-upload" type="button">去上传录制轨迹 →</button>
+                     </div>
+-                    <details class="training-field-group" id="beginner-resume-options">
+-                      <summary class="training-group-title" id="training-group-resume">高级：接着已有模型训练（可选）</summary>
+-                      <label class="field-label" for="resume-run-select">续训来源</label>
+-                      <select id="resume-run-select"><option value="">新训练</option><option value="manual">手动填写引用</option></select>
++                    <div class="training-field-group" role="group" aria-labelledby="training-group-resume">
++                      <div class="training-group-title" id="training-group-resume">续训（可选）</div>
+                       <label class="field-label" for="resume-checkpoint-id"
+                       >续训 checkpoint</label
+                     ><input
+@@ -924,13 +1030,12 @@
+                       placeholder="artifact://model/checkpoint-1500"
+                       autocomplete="off"
+                     />
+-                    </details>
++                    </div>
+                     <div class="engine-capability-note" id="engine-capability-note" hidden>
+                       <span class="engine-capability-name" id="engine-capability-name"></span>
+                       <span class="engine-capability-badges" id="engine-capability-badges"></span>
+                       <p class="engine-capability-desc" id="engine-capability-desc"></p>
+                     </div>
+-                    <p class="small-note task-engine-mismatch-note" id="task-engine-mismatch-note" hidden></p>
+                   </div>
+                 </details>
+               </article>
+@@ -954,7 +1059,7 @@
+                   <div><span id="robogo-board-label">可见算力资源</span><strong id="robogo-board-count">—</strong></div>
+                   <div><span id="robogo-machine-label">开发机</span><strong id="robogo-machine-count">—</strong></div>
+                 </div>
+-
++                <p class="small-note">训练引擎 = 本地 worker 资源：注册 starter / mjlab / MJX 等引擎 worker 后，此处会显示对应资源，运行台账也会标注实际物理后端（如「物理 · MuJoCo MJX」）。</p>
+                 <p id="robogo-message" class="small-note">—</p>
+                 <div class="robogo-actions">
+                   <button
+@@ -986,37 +1091,6 @@
+               <button class="submodule-tab is-active" type="button" role="tab" id="eval-tab-run" aria-controls="evaluation-run-panel" data-view-target="evaluate" data-flow-child="evaluation-run">发起评测<small>指标 · 仿真对照</small></button>
+               <button class="submodule-tab" type="button" role="tab" id="eval-tab-comparison" aria-controls="evaluation-comparison-panel" data-view-target="evaluate" data-flow-child="comparison">结果对比<small>最近 Run 趋势</small></button>
+             </div>
+-            <article class="panel" id="physical-evaluation-panel" aria-labelledby="physical-evaluation-title">
+-              <div class="panel-heading panel-heading-lean"><h2 id="physical-evaluation-title">策略重评测</h2></div>
+-              <label class="field-label" for="physical-evaluation-source">已训练策略</label>
+-              <select id="physical-evaluation-source"></select>
+-              <label class="field-label" for="physical-evaluation-baseline">下次评测的对照策略</label>
+-              <select id="physical-evaluation-baseline"><option value="zero-action">零动作基线</option><option value="reference-policy">官方参考行走策略</option></select>
+-              <div class="evaluation-empty-actions">
+-                <button class="button button-primary" id="physical-evaluation-start" type="button">发起物理评测</button>
+-                <button class="button button-ghost" id="physical-evaluation-refresh" type="button" hidden>刷新状态</button>
+-                <button class="button button-ghost" id="physical-evaluation-cancel" type="button" hidden>取消评测</button>
+-              </div>
+-              <p class="small-note" id="physical-evaluation-status" role="status" aria-live="polite"></p>
+-              <p class="small-note" id="physical-evaluation-metrics" hidden></p>
+-              <p class="small-note" id="physical-evaluation-baseline-metrics" hidden></p>
+-              <details class="context-extra-details" id="physical-evaluation-details">
+-                <summary>来源与报告</summary>
+-                <p id="physical-evaluation-qualification"></p>
+-                <p id="physical-evaluation-conditions" hidden></p>
+-                <pre class="run-detail-code" id="physical-evaluation-report"></pre>
+-                <details class="context-extra-details">
+-                  <summary>原始评测 JSON</summary>
+-                  <pre class="run-detail-code" id="physical-evaluation-raw-report"></pre>
+-                </details>
+-                <details class="context-extra-details" id="physical-evaluation-logs-details">
+-                  <summary>评测日志</summary>
+-                  <button class="button button-ghost button-small" id="physical-evaluation-logs-read" type="button">读取日志</button>
+-                  <p class="small-note" id="physical-evaluation-logs-status" role="status" aria-live="polite"></p>
+-                  <pre class="run-detail-code" id="physical-evaluation-logs"></pre>
+-                </details>
+-              </details>
+-            </article>
+             <div class="evaluation-banner">
+               <div class="evaluation-status-mark" id="eval-status-mark">○</div>
+               <div>
+@@ -1034,16 +1108,26 @@
+                 查看运行记录 →
+               </button>
+             </div>
+-            <details class="context-extra-details" id="eval-physics-provenance" hidden>
+-              <summary>物理评测来源</summary>
+-              <p id="eval-physics-provenance-text"></p>
+-            </details>
+             <div class="evaluation-empty" id="evaluation-empty" hidden>
+               <div class="evaluation-empty-card">
+                 <div class="evaluation-empty-head">
+                   <strong>还没有可评测的数据</strong>
+-                  <span>导入遥测或完成一次训练后查看指标。</span>
++                  <span>页面只展示真实结果，没有数据时不摆空面板占位。</span>
+                 </div>
++                <ol class="evaluation-empty-steps">
++                  <li>
++                    <span class="evaluation-empty-step-index">01</span>
++                    <div><strong>发起一次训练或回放</strong><small>训练完成后，指标和运行记录会自动出现在这里</small></div>
++                  </li>
++                  <li>
++                    <span class="evaluation-empty-step-index">02</span>
++                    <div><strong>导入一段遥测证据</strong><small>X5 Agent 或浏览器录制的 JSONL，本地解析不上传</small></div>
++                  </li>
++                  <li>
++                    <span class="evaluation-empty-step-index">03</span>
++                    <div><strong>对比仿真与真机</strong><small>指标卡、效果对比和逐帧回放在有数据后展开</small></div>
++                  </li>
++                </ol>
+                 <div class="evaluation-empty-actions">
+                   <button class="button button-ghost" id="evaluation-empty-import" type="button">导入遥测 JSONL</button>
+                   <button class="button button-ghost" data-view-target="train" type="button">去发起训练</button>
+@@ -1114,33 +1198,20 @@
+                 <span class="panel-caption" id="run-comparison-caption">最近 5 次</span>
+               </div>
+               <div class="run-comparison-controls">
+-                <div class="run-comparison-field">
+                 <label class="field-label" for="run-compare-metric">对比指标</label
+                 ><select id="run-compare-metric" aria-label="选择对比指标">
+                   <option value="successRate" selected>成功率</option>
+-                  <option value="meanForwardSpeedMps">前向均速</option>
+-                  <option value="speedTrackingErrorMps">速度误差</option>
+                   <option value="reward">平均奖励</option>
+                   <option value="fallRate">跌倒率</option>
+                   <option value="episodeLength">平均步数</option>
+                   <option value="iterations">迭代数</option>
+                 </select>
+-                </div>
+-                <div class="run-comparison-field">
+                 <label class="field-label" for="run-compare-count">对比数量</label
+                 ><select id="run-compare-count" aria-label="选择对比的 run 数量">
+                   <option value="5" selected>最近 5 次</option>
+                   <option value="10">最近 10 次</option>
+                   <option value="20">最近 20 次</option>
+                 </select>
+-                </div>
+-                <div class="run-comparison-field">
+-                <label class="field-label" for="run-compare-envelope">评测场景</label>
+-                <select id="run-compare-envelope" aria-label="选择对比评测场景">
+-                  <option value="nominal" selected>普通</option>
+-                  <option value="hard">扰动</option>
+-                </select>
+-                </div>
+               </div>
+               <div class="run-comparison-chart" id="run-comparison-chart" hidden>
+                 <canvas role="img"
+@@ -1160,7 +1231,7 @@
+                   height="220"
+                   aria-label="多次运行指标的平行坐标对比"
+                 ></canvas>
+-                <p class="small-note" id="run-parcoords-note">各列已归一化；按指标方向判断优劣，缺失值不参与。</p>
++                <p class="small-note" id="run-parcoords-note">每条折线是一次运行，各列已归一化；折线越靠右侧列高位的运行整体表现越好。缺指标的运行不参与。</p>
+               </div>
+               <details class="run-comparison-diff" id="run-comparison-diff" hidden>
+                 <summary>参数差异（相对最近一次）</summary>
+@@ -1170,19 +1241,20 @@
+                     <tbody id="run-diff-body"></tbody>
+                   </table>
+                 </div>
+-                <p class="small-note" id="run-diff-note">仅显示不同的训练参数。</p>
++                <p class="small-note" id="run-diff-note">只列出各次运行之间实际不同的训练参数；全部一致时显示一行说明。</p>
+               </details>
+               <div class="run-comparison" id="run-comparison" aria-live="polite">
+                 <div class="empty-inline">完成一次训练或评测后，这里会显示可比较的指标。</div>
+               </div>
+             </article>
++            </div>
+             <details class="panel telemetry-panel workspace-inspector" aria-labelledby="telemetry-title">
+               <summary class="panel-heading panel-heading-lean workspace-inspector-summary"><span><small>Inspector</small><h2 id="telemetry-title">遥测回放与证据</h2></span>
+                 <span class="state-badge state-neutral" id="telemetry-state">尚未导入</span>
+                 <span class="workspace-inspector-toggle">展开 <i aria-hidden="true">⌄</i></span>
+               </summary>
+               <div class="telemetry-intro">
+-                <p>JSONL · ≤32 MiB · 本地解析</p>
++                <p>导入 X5 Agent 或浏览器录制的 JSONL（单文件 ≤32 MiB），本地解析、不上传。</p>
+                 <label
+                   class="button button-ghost button-small file-input-button telemetry-file-button"
+                 >
+@@ -1251,7 +1323,7 @@
+                 <div class="replay-player-controls policy-trial" id="policy-trial-controls">
+                   <button class="button button-primary button-small" id="policy-trial-button" type="button">🚀 策略试跑（浏览器推理）</button>
+                   <button class="button button-ghost button-small" id="policy-trial-stop" type="button" disabled>■ 停止试跑</button>
+-                  <label class="small-note" for="policy-trial-board"><input type="checkbox" id="policy-trial-board"> 板端推理</label>
++                  <label class="small-note" for="policy-trial-board"><input type="checkbox" id="policy-trial-board"> 板端推理（物理在本机仿真器，动作来自板端已加载模型）</label>
+                   <span id="policy-trial-status" class="small-note">在嵌入仿真器中用本机浏览器运行该策略的 ONNX 模型。</span>
+                 </div>
+               </div>
+@@ -1354,7 +1426,6 @@
+                 >
+               </div>
+             </details>
+-            </div>
+             <div class="evaluation-next">
+               <span class="next-line" id="evaluation-next-line"></span>
+               <strong id="evaluation-next-title">下一步：通过评测后生成 X5 预检计划</strong>
+@@ -1478,21 +1549,21 @@
+             <div class="records-layout records-single">
+               <article class="panel compute-resources-panel">
+                 <div class="panel-heading panel-heading-lean">
+-                  <div><h2>执行资源</h2></div>
++                  <div><h2>我的 GPU 训练资源</h2><p class="panel-caption">支持本机 CPU/GPU、SSH 远端服务器和平台 Runner。首次使用可以点击“获取安装命令”，用户只需在自己的终端执行一次；网页随后通过 127.0.0.1 连接 Agent，核心服务器不会接触用户本地 GPU。</p></div>
+                   <span id="compute-resource-count" class="state-badge state-neutral">0 个</span>
+                 </div>
+-                <div id="compute-resource-list" class="compute-resource-list"><p class="empty-inline">暂无执行资源。添加后可用于训练。</p></div>
+-                <details class="compute-resource-add" open>
+-                  <summary>添加执行资源 <small>首次使用或新增 Runner</small></summary>
++                <div id="compute-resource-list" class="compute-resource-list"><p class="empty-inline">还没有接入 GPU。添加后可在上方训练资源中选择。</p></div>
++                <details class="compute-resource-add">
++                  <summary>添加 GPU 或连接远程资源 <small>首次使用或新增 Runner</small></summary>
+                 <form id="compute-resource-form" class="compute-resource-form">
+                   <input id="compute-resource-editing-id" type="hidden" />
+                   <div class="compute-resource-form-grid">
+-                    <label class="field-label">名称<input id="compute-resource-name" required maxlength="120" placeholder="训练主机" /></label>
++                    <label class="field-label">名称<input id="compute-resource-name" required maxlength="120" placeholder="我的 RTX 5090" /></label>
+                     <label class="field-label">Runner 地址<input id="compute-resource-url" required placeholder="http://127.0.0.1:19091/train" /></label>
+                     <label class="field-label">访问令牌<input id="compute-resource-token" type="password" autocomplete="new-password" placeholder="可选" /></label>
+                     <label class="field-label">并发任务<input id="compute-resource-concurrency" type="number" min="1" max="32" value="1" /></label>
+                   </div>
+-                  <div class="compute-resource-form-actions"><button class="button button-ghost button-small" type="button" id="compute-resource-install">获取安装命令</button><button class="button button-ghost button-small" type="button" id="compute-resource-autodetect">自动发现本机 Agent</button><button class="button button-primary button-small" type="submit" id="compute-resource-save">添加资源</button><button class="button button-ghost button-small" type="button" id="compute-resource-cancel" hidden>取消编辑</button><span id="compute-resource-form-status" class="small-note" role="status"></span></div>
++                  <div class="compute-resource-form-actions"><button class="button button-ghost button-small" type="button" id="compute-resource-install">获取安装命令</button><button class="button button-ghost button-small" type="button" id="compute-resource-autodetect">自动发现本机 Agent</button><button class="button button-primary button-small" type="submit" id="compute-resource-save">添加 GPU</button><button class="button button-ghost button-small" type="button" id="compute-resource-cancel" hidden>取消编辑</button><span id="compute-resource-form-status" class="small-note" role="status"></span></div>
+                   <pre id="compute-resource-install-command" class="compute-resource-install-command" hidden></pre>
+                   <details class="compute-resource-remote-connect"><summary>连接远程 GPU 服务器（SSH）</summary><div class="compute-resource-remote-grid"><label class="field-label">服务器地址<input id="compute-resource-ssh-host" placeholder="gpu.example.com 或 192.168.1.20" /></label><label class="field-label">SSH 用户<input id="compute-resource-ssh-user" value="root" /></label><label class="field-label">SSH 端口<input id="compute-resource-ssh-port" type="number" min="1" max="65535" value="22" /></label><label class="field-label">远程 Agent 端口<input id="compute-resource-remote-port" type="number" min="1" max="65535" value="19091" /></label><label class="field-label">Worker Token<input id="compute-resource-remote-token" type="password" autocomplete="new-password" /></label><label class="field-label">资源名称<input id="compute-resource-ssh-name" placeholder="我的远程 GPU" /></label></div><button class="button button-ghost button-small" type="button" id="compute-resource-ssh-connect">通过 Agent 建立 SSH 连接</button><span class="small-note">服务器需要已安装 Worker，SSH 密钥由用户电脑上的 Agent 使用；不保存 SSH 密码。</span></details>
+                 </form>
+@@ -1508,20 +1579,6 @@
+             aria-labelledby="flow-context-title"
+           >
+             <div class="records-layout records-single">
+-              <article class="panel" id="state-recordings-panel" aria-labelledby="state-recordings-title">
+-                <div class="panel-heading panel-heading-lean"><h2 id="state-recordings-title">仿真状态录制</h2><button class="button button-ghost button-small" id="state-recordings-refresh" type="button">刷新列表</button></div>
+-                <div class="state-recording-controls">
+-                  <div class="state-recording-choice"><label class="field-label" for="state-recording-select">已保存录制</label><select id="state-recording-select"><option value="">尚无录制</option></select></div>
+-                  <label class="button button-quiet button-small file-input-button">导入并保存 JSONL<input id="state-recording-import" type="file" accept=".jsonl,.ndjson" /></label>
+-                  <button class="button button-quiet button-small" id="state-recording-export" type="button" disabled>下载记录 JSONL</button>
+-                </div>
+-                <p class="small-note" id="state-recordings-status" role="status">在仿真页录制并保存，或导入状态 JSONL。</p>
+-                <div id="state-recording-player" hidden>
+-                  <div class="state-recording-transport"><button class="button button-ghost button-small" id="state-recording-play" type="button">播放</button><label for="state-recording-frame">帧</label><input id="state-recording-frame" type="range" min="0" max="0" value="0" /><output class="mono" id="state-recording-position"></output></div>
+-                  <p class="mono" id="state-recording-body"></p>
+-                  <details><summary>查看本帧状态向量</summary><pre class="mono" id="state-recording-vectors"></pre></details>
+-                </div>
+-              </article>
+               <article class="panel history-panel">
+                 <div class="panel-heading panel-heading-lean"><h2>全部证据与记录</h2>
+                   <span class="panel-caption" id="records-count">最近 30 条</span>
+@@ -1604,7 +1661,14 @@
+               <div class="panel-heading panel-heading-lean"><h2>设备管理</h2>
+                 <span class="panel-caption">平台内添加 · 受控连接 · 状态可追踪</span>
+               </div>
+-
++              <p class="station-drive-note" id="station-device-manager-note">
++                在平台内登记板卡并建立受控连接：设备档案、连接状态、心跳、
++                能力检查和后续预检都在本页完成。
++              </p>
++              <div class="station-studio-connect">
++                <div><strong>原生连接设备</strong><small>填写板卡地址并添加，平台会建立受控隧道并读取设备状态。</small></div>
++              </div>
++              <p class="station-device-ssh-hint" id="station-device-ssh-path"><strong>路径 A · 网页内配对</strong>：SSH 可密码登录的板卡，填下表一次完成设备档案与受控隧道。</p>
+               <div class="station-device-add" id="station-device-add">
+                 <label for="station-device-host">板卡 IP / 主机名
+                   <input type="text" id="station-device-host" placeholder="例如 board-host.example.internal" spellcheck="false" autocomplete="off" />
+@@ -1632,10 +1696,10 @@
+                 <button class="button station-device-add-btn" type="button" id="station-device-add-btn">
+                   添加设备与能力档案
+                 </button>
+-                <button class="button button-primary station-device-script-btn" type="button" id="station-device-script-btn">生成配对脚本</button>
++                <button class="button button-primary station-device-script-btn" type="button" id="station-device-script-btn">生成一键配对脚本（路径 B）</button>
+               </div>
+               <div class="station-connect-script" id="station-connect-script" hidden>
+-                <div><strong>首次配对脚本</strong><small>在可访问板卡的终端粘贴运行一次；运行后设备会自动出现在下方列表（本页约每 3 秒刷新），配对完成后的连接、检测和预检均在平台内完成。脚本含一次性配对凭据，请勿转发。</small></div>
++                <div><strong>首次配对脚本（路径 B）</strong><small>在可访问板卡的终端粘贴运行一次；运行后设备会自动出现在下方列表（本页约每 3 秒刷新），配对完成后的连接、检测和预检均在平台内完成。脚本含一次性配对凭据，请勿转发。</small></div>
+                 <textarea id="station-connect-script-text" readonly aria-label="设备连接脚本"></textarea>
+                 <button class="button button-ghost button-small" type="button" id="station-connect-script-copy">复制脚本</button>
+               </div>
+@@ -1643,8 +1707,13 @@
+               <div class="station-device-list" id="station-device-list">
+                 <span class="station-topic-empty" id="station-device-list-empty">尚未添加设备。</span>
+               </div>
+-
+-
++              <p class="station-device-ssh-hint" id="station-bridge-hint">
++                如果已连接 RDK Studio Local Bridge，设备会在上方板卡选择器中直接出现；无需在这里重复添加 SSH。
++              </p>
++              <p class="station-device-ssh-hint" id="station-device-ssh-hint">
++                提示：RDK Studio 场景不需要填写 SSH。下方 SSH 仅用于服务器能直接访问板卡的独立部署，
++                需要服务器已有密钥或 ssh-agent。
++              </p>
+             </article>
+             <div class="station-layout">
+               <article id="station-module-telemetry-status" role="tabpanel" aria-labelledby="station-tab-telemetry" class="panel station-status-panel" data-station-module="telemetry">
+@@ -1749,8 +1818,8 @@
+                   </div>
+                 </div>
+                 <p class="station-honesty-note" id="station-honesty-note" hidden>
+-                  当前连接为模拟数据（mock=true），不能作为真机就绪或部署证据。
+-                  实体动作需要额外审批和板端安全开关放行。
++                  当前连接的是本地参考 BoardAgent（模拟数据，mock=true）；真机接入见
++                  docs/host-station.md。所有命令均为只读，本平台不提供电机/执行器控制通道。
+                 </p>
+               </article>
+ 
+@@ -1781,12 +1850,16 @@
+                 <div class="panel-heading panel-heading-lean"><h2>运动开关</h2>
+                   <span class="panel-caption">双开关 · 网页切换 · 急停永不依赖开关</span>
+                 </div>
+-                <p class="station-drive-note" id="station-switch-note">开启前确认操作者在场、场地已清空、急停可用。运动需要平台与板端开关同时开启。</p>
++                <p class="station-drive-note" id="station-switch-note">
++                  受限运动需要两侧开关同时开启：平台侧在这里切换（持久化保存），
++                  板端侧在连接真机后于此处切换（写板端 env 并自动重启 agent，约 2 秒生效）。
++                  开启即代表你确认操作者在场、场地已清空、急停可用。
++                </p>
+                 <div class="station-switch-rows" id="station-switch-rows">
+                   <div class="station-switch-row">
+                     <div class="station-switch-info">
+                       <strong>平台 · 驱动金丝雀</strong>
+-                      <span class="station-switch-sub">允许受限运动</span>
++                      <span class="station-switch-sub">RDK_SIM2REAL_STATION_DRIVE_ENABLED（运行时覆盖）</span>
+                     </div>
+                     <button class="button station-switch-toggle" type="button" id="station-switch-drive" data-switch="drive" aria-pressed="false">
+                       开启
+@@ -1795,7 +1868,7 @@
+                   <div class="station-switch-row">
+                     <div class="station-switch-info">
+                       <strong>平台 · 策略运行时</strong>
+-                      <span class="station-switch-sub">允许执行策略</span>
++                      <span class="station-switch-sub">RDK_SIM2REAL_STATION_POLICY_ENABLED（运行时覆盖）</span>
+                     </div>
+                     <button class="button station-switch-toggle" type="button" id="station-switch-policy" data-switch="policy" aria-pressed="false">
+                       开启
+@@ -2060,188 +2133,6 @@
+         >
+       </footer>
+     </div>
+-    <dialog class="run-dialog" id="workflow-readiness-dialog" aria-labelledby="workflow-readiness-title">
+-      <div class="run-dialog-heading"><h2 id="workflow-readiness-title">流程检查</h2><button class="button button-ghost button-small" id="workflow-readiness-close" type="button" autofocus>关闭</button></div>
+-      <div class="learning-help-body"><div class="beginner-actions"><span class="small-note">按当前机器人、任务与训练资源检查；不会提交训练或启动设备。</span><button class="button button-ghost button-small" id="workflow-readiness-refresh" type="button">刷新检查</button></div><div id="workflow-readiness-body" role="status" aria-live="polite"></div></div>
+-    </dialog>
+-    <dialog class="run-dialog learning-help-dialog" id="learning-help-dialog" aria-labelledby="learning-help-title">
+-      <div class="run-dialog-heading"><h2 id="learning-help-title">使用帮助</h2><button class="button button-ghost button-small" id="learning-help-close" type="button" autofocus>关闭</button></div>
+-      <div class="learning-help-body">
+-            <div class="beginner-guide" data-help-group="simulate">
+-              <details id="learning-simulation" data-learning-topic="simulation"><summary id="beginner-simulator-title">当前场景与资源</summary><span class="state-badge state-neutral" id="beginner-simulator-source">正在确认场景来源</span>
+-              <div class="module-step-strip" aria-label="仿真工作流">
+-                <div class="module-step"><span>01</span><div><strong>任务与场景</strong><small>选择动作任务和模型</small></div></div>
+-                <div class="module-step"><span>02</span><div><strong>仿真运行</strong><small>观察动作和实时状态</small></div></div>
+-                <div class="module-step"><span>03</span><div><strong>状态录制</strong><small>下载状态用于排查</small></div></div>
+-              </div>
+-              <p id="beginner-simulator-exercise">场景就绪后，点击仿真画面，按其控制提示练习前进、停止和转向。这是在运行已有策略，尚未训练自己的模型。</p>
+-              <p class="beginner-intro" id="beginner-overview-note">无需先连接板卡或 GPU。参考体验和轨迹录制是可选练习，PPO 强化学习可以直接在仿真中试错。</p>
+-                    <ol class="simulator-gate-steps" id="simulator-gate-steps">
+-                      <li><strong>先准备仿真</strong>：导入并校验当前产品线的真实 manifest，或启动本地 headless worker。</li>
+-                      <li><strong>需要上真机时</strong>：到“设备控制台”添加并连接设备。</li>
+-                      <li><strong>最后选择设备</strong>：回到“部署与上线”选择已连接的目标板卡，再执行预检。</li>
+-                    </ol>
+-              </details>
+-              <details id="simulator-recording-help" data-learning-topic="recording"><summary>轨迹录制与下载</summary><p>开始双足参考仿真后，使用工具栏“录制状态 → 停止录制 → 下载 JSONL”。文件保存仿真时间、关节状态、观测、指令和上一次动作，供状态排查；浏览器定时采样不保证与策略推理对齐，不能直接作为模仿学习样本或当前训练 Run 的评测证据。仿真重置或策略切换会结束本段。PPO 无需预先录制示教数据。</p><a class="button button-ghost button-small" href="./mujoco/microduck/" target="_blank" rel="noreferrer">独立打开仿真 ↗</a></details>
+-              <details id="beginner-control-loop" data-learning-topic="control">
+-                <summary>看懂机器人怎么动：指令、策略与仿真器</summary>
+-                <ol class="beginner-loop-grid" aria-label="控制循环示意">
+-                  <li><button class="button button-ghost beginner-loop-step" type="button" data-beginner-loop-step="0" aria-pressed="true"><strong>1 · 目标指令</strong><span>希望怎样移动</span></button></li>
+-                  <li><button class="button button-ghost beginner-loop-step" type="button" data-beginner-loop-step="1" aria-pressed="false"><strong>2 · 策略判断</strong><span>输出关节目标</span></button></li>
+-                  <li><button class="button button-ghost beginner-loop-step" type="button" data-beginner-loop-step="2" aria-pressed="false"><strong>3 · 物理计算</strong><span>计算运动结果</span></button></li>
+-                  <li><button class="button button-ghost beginner-loop-step" type="button" data-beginner-loop-step="3" aria-pressed="false"><strong>4 · 状态反馈</strong><span>再次交给策略</span></button></li>
+-                </ol>
+-                <p id="beginner-loop-description" aria-live="polite">目标指令描述想做什么；当前状态描述机器人现在怎么样。此处是原理示意，不会向仿真或真机发送动作。</p>
+-                <p class="small-note">机器人模型提供结构、质量和关节等物理信息。策略模型是计算动作的神经网络；仿真器结合身体模型、电机和环境计算结果。</p>
+-                <details id="beginner-contract-details">
+-                  <summary>查看当前策略的输入、输出与频率</summary>
+-                  <p id="beginner-contract-summary">选择模型后显示实际接口。</p>
+-                  <div class="beginner-contract-table"><table><thead><tr><th>输入字段</th><th>维度</th><th>含义</th></tr></thead><tbody id="beginner-contract-fields"></tbody></table></div>
+-                  <p class="small-note" id="beginner-contract-note">接口约定数据顺序、单位和控制频率；接口登记不会自动创建机器人模型或训练权重。</p>
+-                </details>
+-              </details>
+-              <details id="learning-lab" class="learning-lab" data-learning-topic="experiment">
+-                <summary>动手理解连续反馈：推一下，看看为什么会倒</summary>
+-                <p>一轴平衡教学实验：简化刚体 + 公式控制器。它不运行 MicroDuck 神经网络，也不代表真实鸭子的训练效果。无需安装仿真资源即可操作。</p>
+-                <div class="learning-lab-grid">
+-                  <svg class="lesson-scene" viewBox="0 0 320 270" role="img" aria-label="一轴平衡小鸭：身体绕脚部转动，角度来自物理计算">
+-                    <path class="lesson-ground" d="M20 222H300M160 45V222" />
+-                    <g id="lesson-body"><path class="lesson-leg" d="M160 220V145" /><ellipse class="lesson-duck" cx="160" cy="125" rx="42" ry="31" /><circle class="lesson-duck" cx="183" cy="82" r="23" /><path class="lesson-beak" d="M204 79L230 90L203 95Z" /><circle class="lesson-eye" cx="190" cy="78" r="3" /></g>
+-                    <path class="lesson-foot" d="M135 223H190" /><text x="20" y="255">教学参数：2 kg · 质心高度 0.3 m</text>
+-                  </svg>
+-                  <div class="lesson-controls">
+-                    <label>目标倾角（任务指令）<select id="lesson-target"><option value="0">0° · 站直</option><option value="0.12">约 7° · 前倾</option><option value="-0.12">约 −7° · 后倾</option></select></label>
+-                    <label class="lesson-toggle"><input id="lesson-feedback" type="checkbox" checked /> 开启反馈控制</label><label class="lesson-toggle"><input id="lesson-slow" type="checkbox" checked /> 五倍慢放</label>
+-                    <div class="beginner-actions"><button class="button button-small" id="lesson-play" type="button">开始观察</button><button class="button button-small" id="lesson-step" type="button">单步（0.02 秒）</button><button class="button button-small" id="lesson-push" type="button">推一下</button><button class="button button-small" id="lesson-reset" type="button">重新开始</button></div>
+-                    <p id="lesson-state"></p><p id="lesson-action"></p><p id="lesson-clock"></p><p id="lesson-status" role="status"></p>
+-                  </div>
+-                </div>
+-                <p>试一试：先推一下并运行，观察恢复；再关掉反馈，重新推一下，观察重力怎样使它继续倾倒。</p>
+-                <details><summary>讲解文字与真实计算公式</summary><p id="lesson-transcript">先设置希望的倾角。控制器结合目标、当前倾角和角速度，计算支撑力矩。物理计算保持这个力矩不变，连续推进四个小步，每步零点零零五秒。新角度与角速度再次交给控制器。推一下改变的是身体角速度。关闭反馈后，控制器不再纠正，重力仍使身体继续倾倒。本实验使用公式控制器；真实鸭子的策略通常是训练出的神经网络，身体与控制接口也更复杂。</p><p>τ = clip(−45(θ−目标)−10ω, −12, 12)；α = (mgl·sinθ + τ − 0.15ω)/(ml²)；每步先更新 ω ← ω+αΔt，再更新 θ ← θ+ωΔt。角度用弧度，Δt=0.005 秒。倾斜到 60° 时教学实验停止。</p></details>
+-                <div class="beginner-actions"><button class="button button-small" id="lesson-narrate" type="button">语音讲解</button><span class="small-note" id="lesson-voice-note"></span></div>
+-              </details>
+-              <div class="beginner-actions"><button class="button button-ghost button-small" type="button" data-view-target="train" data-flow-child="prepare">下一步：确认训练接口 →</button><span class="small-note">录制用于回放；纯 PPO 不要求先有示教数据。</span></div>
+-            </div>
+-        <details class="beginner-guide" id="learning-training" data-learning-topic="training" data-help-group="train"><summary>训练配置、控制接口与 Agent 接入</summary>
+-            <div class="train-onboarding" role="note" aria-label="训练流程引导">
+-              <div class="train-onboarding-heading">
+-                <h3 id="train-onboarding-title">训练流程</h3>
+-              </div>
+-              <div class="train-onboarding-steps">
+-                <div class="train-onboarding-step is-current" data-train-step="1" role="button" tabindex="0"><b>1</b><div><strong>确认控制接口</strong><small id="train-onboarding-model-help">使用参考接口或载入模板</small></div></div>
+-                <div class="train-onboarding-step" data-train-step="2" role="button" tabindex="0"><b>2</b><div><strong>配置训练</strong><small>选择算法与算力资源</small></div></div>
+-                <div class="train-onboarding-step" data-train-step="3" role="button" tabindex="0"><b>3</b><div><strong>训练并检查结果</strong><small>进度、日志与模型产出</small></div></div>
+-              </div>
+-            </div>
+-
+-              <p class="small-note" id="contract-panel-tip">推荐：载入当前产品模板 → 校验 → 登记</p>
+-              <p class="train-onboarding-help">已有匹配的参考接口可直接用于配置训练；没有时载入当前产品模板，无需先编辑 JSON。PPO 在仿真中收集试错经历；模仿学习才需要先准备示教数据。</p>
+-                  <div class="manifest-explainer"><strong>契约就是输入输出的约定</strong><span>约定策略读取哪些数字、输出怎样的动作，以及单位和频率。机器人模型描述身体；策略模型保存学到的控制能力。登记这份清单只保存接口配置，不会生成训练权重。</span><em id="beginner-template-help">第一次使用：载入模板 → 校验清单 → 登记版本；已有匹配的参考接口可直接进入训练配置。</em></div>
+-                <article class="panel contract-guide-panel">
+-                  <div class="panel-heading panel-heading-lean"><h2>契约检查清单</h2>
+-                    <span class="state-badge state-neutral">FAIL-CLOSED</span>
+-                  </div>
+-                  <ul class="contract-check-list">
+-                    <li>
+-                      <span>01</span>
+-                      <div>
+-                        <strong>产品标识</strong><small>MicroDuck 与 RDK Duck 不共用机器人维度</small>
+-                      </div>
+-                    </li>
+-                    <li>
+-                      <span>02</span>
+-                      <div>
+-                        <strong>观测 / 动作布局</strong
+-                        ><small>字段顺序、形状和控制频率必须自洽</small>
+-                      </div>
+-                    </li>
+-                    <li>
+-                      <span>03</span>
+-                      <div>
+-                        <strong>运行时分工</strong
+-                        ><small>运控 CPU ONNX 单线程，感知制品走 X5 BPU</small>
+-                      </div>
+-                    </li>
+-                    <li>
+-                      <span>04</span>
+-                      <div>
+-                        <strong>制品引用</strong
+-                        ><small>只接受不透明 artifact 引用和可追溯校验和</small>
+-                      </div>
+-                    </li>
+-                  </ul>
+-                </article>
+-
+-                <p class="small-note">训练引擎 = 本地 worker 资源：注册 starter / mjlab / MJX 等引擎 worker 后，此处会显示对应资源，运行台账也会标注实际物理后端（如「物理 · MuJoCo MJX」）。</p>
+-                  <div><p id="learning-task-guide">加载工作区后显示当前任务配置。</p><button class="button button-small" type="button" id="learning-guide-refresh">刷新任务指南</button><details><summary>查看服务端任务配置</summary><pre id="learning-task-config"></pre></details><p class="small-note" id="learning-agent-entry">插件与工作台使用同一份平台指南。</p></div>
+-        </details>
+-      <details class="beginner-guide" data-learning-topic="overview" data-help-group="overview"><summary>项目与流程</summary><p>先在左侧选择产品与项目。概况汇总运行、制品、数据与部署；下一步入口根据当前证据更新。</p>            <section class="first-run-path panel" aria-labelledby="first-run-path-title" id="onboard-card">
+-              <div class="onboard-card-bar">
+-                <h2 id="first-run-path-title">第一次使用 · 先体验，再训练</h2>
+-                <div class="onboard-meter" aria-hidden="true"><i id="onboard-fill"></i></div>
+-                <span class="onboard-count" id="onboard-count">— / 4</span>
+-              </div>
+-              <ol class="onboard-list" id="onboard-list">
+-                <li class="onboard-item" data-onboard-step="simulate">
+-                  <span class="onboard-item-no">01</span><span class="onboard-item-dot"></span>
+-                  <div class="onboard-item-body"><strong>体验参考策略（可选）</strong><span>先看已有策略怎样控制机器人；录制可用于回放与比较</span></div>
+-                  <div class="onboard-item-meta" data-onboard-meta></div>
+-                </li>
+-                <li class="onboard-item" data-onboard-step="train">
+-                  <span class="onboard-item-no">02</span><span class="onboard-item-dot"></span>
+-                  <div class="onboard-item-body"><strong>训练自己的策略</strong><span>确认机器人接口，先用少量训练检查流程，再增加训练预算</span></div>
+-                  <div class="onboard-item-meta" data-onboard-meta></div>
+-                </li>
+-                <li class="onboard-item" data-onboard-step="evaluate">
+-                  <span class="onboard-item-no">03</span><span class="onboard-item-dot"></span>
+-                  <div class="onboard-item-body"><strong>检查任务效果</strong><span>训练结束后还要评测成功率与稳定性，不能只看奖励</span></div>
+-                  <div class="onboard-item-meta" data-onboard-meta></div>
+-                </li>
+-                <li class="onboard-item" data-onboard-step="deploy">
+-                  <span class="onboard-item-no">04</span><span class="onboard-item-dot"></span>
+-                  <div class="onboard-item-body"><strong>有真机再部署（可选）</strong><span>核对硬件、校准与预检；板端能推理还需验证实体动作</span></div>
+-                  <div class="onboard-item-meta" data-onboard-meta></div>
+-                </li>
+-              </ol>
+-            </section>
+-<p>把“能演示”与“能上真机”分开显示，下一步始终有据可依。</p><p>发起、时延、自主度与边际收益——检验研究回路是否越转越快。</p></details>
+-<details class="beginner-guide" data-learning-topic="evaluate" data-help-group="evaluate"><summary>评测与证据</summary><p>训练完成后检查指标与来源。导入 JSONL 可在本地回放；上传到 Run 会保存到平台。Mock、合成演示、板端推理与实体任务分别验收。</p>                <ol class="evaluation-empty-steps">
+-                  <li>
+-                    <span class="evaluation-empty-step-index">01</span>
+-                    <div><strong>发起一次训练或回放</strong><small>训练完成后，指标和运行记录会自动出现在这里</small></div>
+-                  </li>
+-                  <li>
+-                    <span class="evaluation-empty-step-index">02</span>
+-                    <div><strong>导入一段遥测证据</strong><small>X5 Agent 或浏览器录制的 JSONL，本地解析不上传</small></div>
+-                  </li>
+-                  <li>
+-                    <span class="evaluation-empty-step-index">03</span>
+-                    <div><strong>对比仿真与真机</strong><small>指标卡、效果对比和逐帧回放在有数据后展开</small></div>
+-                  </li>
+-                </ol>
+-</details>
+-<details class="beginner-guide" data-learning-topic="deploy" data-help-group="deploy"><summary>预检与发布</summary><p>选择已连接设备和模型后生成预检计划，再执行只读预检。预检会写入台账，不下发动作。上线与回滚仍按真实证据和平台门禁推进。</p></details>
+-<details class="beginner-guide" data-learning-topic="resources" data-help-group="resources"><summary>执行资源接入</summary><p>在可访问训练硬件的环境启动 Worker，登记地址后测试连接。安装命令按需生成；远程资源可通过受控 SSH 接入。</p><p>支持本机 CPU/GPU、SSH 远端服务器和平台 Runner。首次使用可以点击“获取安装命令”，用户只需在自己的终端执行一次；网页随后通过 127.0.0.1 连接 Agent，核心服务器不会接触用户本地 GPU。</p></details>
+-<details class="beginner-guide" data-learning-topic="records" data-help-group="records"><summary>记录、筛选与追溯</summary><p>按类型或关键字筛选记录，打开运行详情查看状态、日志、制品与来源。训练提交后按同一个 Run ID 跟踪，不重复提交查询进度。</p></details>
+-<details class="beginner-guide" data-learning-topic="station" data-help-group="station"><summary>连接、遥测与安全控制</summary><p>先添加设备或选择已配对的 Local Bridge 设备，再查看心跳与能力。遥测、相机、安全控制、策略运行时和诊断分别在对应页签使用。</p><p class="station-drive-note" id="station-device-manager-note">
+-                在平台内登记板卡并建立受控连接：设备档案、连接状态、心跳、
+-                能力检查和后续预检都在本页完成。
+-              </p><p class="station-device-ssh-hint" id="station-device-ssh-path"><strong>路径 A · 网页内配对</strong>：SSH 可密码登录的板卡，填下表一次完成设备档案与受控隧道。</p><p class="station-device-ssh-hint" id="station-bridge-hint">
+-                如果已连接 RDK Studio Local Bridge，设备会在上方板卡选择器中直接出现；无需在这里重复添加 SSH。
+-              </p><p class="station-device-ssh-hint" id="station-device-ssh-hint">
+-                提示：RDK Studio 场景不需要填写 SSH。下方 SSH 仅用于服务器能直接访问板卡的独立部署，
+-                需要服务器已有密钥或 ssh-agent。
+-              </p>              <div class="station-studio-connect">
+-                <div><strong>原生连接设备</strong><small>填写板卡地址并添加，平台会建立受控隧道并读取设备状态。</small></div>
+-              </div>
+-
+-<p class="station-drive-note">
+-                  受限运动需要两侧开关同时开启：平台侧在这里切换（持久化保存），
+-                  板端侧在连接真机后于此处切换（写板端 env 并自动重启 agent，约 2 秒生效）。
+-                  开启即代表你确认操作者在场、场地已清空、急停可用。
+-                </p></details>
+-      </div>
+-    </dialog>
+     <dialog class="run-dialog" id="run-detail-dialog" aria-labelledby="run-detail-title">
+       <div class="run-dialog-heading">
+         <div>
+@@ -2346,14 +2237,11 @@
+       downloads start in parallel during HTML parse instead of serially
+       blocking the parser at body end.
+     -->
+-    <script defer src="./telemetry-core.js?v=duck-lab-36"></script>
+-    <script defer src="./ui-components.js?v=1"></script>
+-    <script defer src="./app.js?v=duck-lab-96"></script>
+-    <script defer src="./microduck-state-recorder.js?v=recorder-3"></script>
+-    <script defer src="./state-recording-workspace.js?v=recordings-3"></script>
+-    <script defer src="./learning-lab.js?v=learning-6"></script>
++    <script defer src="./telemetry-core.js?v=duck-lab-31"></script>
++    <script defer src="./originman-workshop.js?v=originman-3"></script>
++    <script defer src="./app.js?v=originman-1"></script>
+     <script defer src="./visualization-enhancements.js?v=viz-1"></script>
+-    <script defer src="./agent-chat.js?v=agent-17"></script>
+-    <script defer src="./onboarding.js?v=onboarding-10"></script>
++    <script defer src="./agent-chat.js?v=agent-18"></script>
++    <script defer src="./onboarding.js?v=onboarding-6"></script>
+   </body>
+ </html>

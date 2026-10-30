@@ -1,0 +1,66 @@
+{
+  "schemaVersion": 1,
+  "upstreamRelease": "duck-board-detect-20261028",
+  "qualification": "Retained compiled upstream plus reviewed OriginMan source changes. Not a complete source reconstruction of upstream. All original API auth and ledger behavior must remain enforced.",
+  "patchSha256": "422112efecd81e1d38526cceb14156a56d3375dd4c5e27ea56906f0a337c39b7",
+  "files": {
+    "dist-server/server/routes/sim2real-routes.js": {
+      "beforeSha256": "8ced71a3054814b1200a39cb13c08a7911ae706847f0dda14e0602cca982e7b9",
+      "afterSha256": "5fe964fdde1e43d4595f132edca9c8c2eab1ee00a3c38dfdd69559748f0a7e6d"
+    },
+    "dist-server/server/sim2real/local-runner.js": {
+      "beforeSha256": "f7334d3c70525b03cc0e19d632330d132f1039a9e067b633d2502cc8701babe1",
+      "afterSha256": "a91d1a00a7aadd1ca526301263bea07f870167d9dbbb9de2c2c06f8ba48315c4"
+    },
+    "dist-server/server/sim2real/robogo-runner.js": {
+      "beforeSha256": "af405af4c1071a48d45a3a27076a45cd57195582659bbce27b17397470bf174e",
+      "afterSha256": "d04911a76abcaf6174a0a1c31826c446ead1cac90a88728c1252f7c472a9c160"
+    },
+    "dist-server/server/sim2real/sim2real-service.js": {
+      "beforeSha256": "9d517b552c5934622f6f65d216499584c018e10a9b9e235dfb38e875d9466785",
+      "afterSha256": "0d808b7f2eed39102ceb0b8f0ed447f1ed6d99096ee05da2daa4dc5cbb509eba"
+    },
+    "dist-server/server/agent-runtime/dsh-capability-handlers.js": {
+      "beforeSha256": "e5a447f8e8fa83d599a4bfd4d72fadc6ac72f8627108a9c85ba0fd23f1e417b7",
+      "afterSha256": "13bf0b2d7eff751d04d532179ecd5b00c6da06643177eccd98257376da511978"
+    },
+    "dist-server/server/agent-runtime/dsh-capability-tools.js": {
+      "beforeSha256": "afac46613fc8f49d9c48a1758b2e56e260ad0f8dc32540f43d337d54b28934ca",
+      "afterSha256": "fb1e2e7ecd7ebbfa08e5734ffdf762bd0e847a18e405f4585531dc24d477aeae"
+    },
+    "dist-server/services/duck-lab-mcp/server.js": {
+      "beforeSha256": "5a5774cbd2dc3a506d9587e85fed2ce8961f390be4c077ea32e43d7b0cb6af70",
+      "afterSha256": "7209998669205f0663557edc66b89958a0f20a124b6bd0246f2a1c0d5bcc498d"
+    },
+    "dist-server/shared/sim2real.js": {
+      "beforeSha256": "934ec7feb042fbe54af224ec50ed1e14d57dd63267ddd5ca0f87b2d389c682b7",
+      "afterSha256": "3b8ab4476f3ea8f113293f6462bbeb107e6f0f6758add94cb40a171bb7503018"
+    },
+    "dist-server/shared/sim2real-telemetry.js": {
+      "beforeSha256": "d487f861f699b252fa4540f40acc1356ba1590e3c199411ad5dee183a35c336a",
+      "afterSha256": "2e29cd9a98755c46896f7a2d56524db2d6d96b248e36db46de14c30bf47c8d05"
+    },
+    "dist-server/services/sim2real-web/local-training-worker.mjs": {
+      "beforeSha256": "93b5dd9645efbfa58ea798d4006ebdd36fcf89b287845ca2ee8aeeeb89622795",
+      "afterSha256": "55e65f886daa46bfcf2cc1d80f3c7ee92450358949781b5726c94e2bdf79ebcc"
+    },
+    "dist-server/services/sim2real-web/public/app.js": {
+      "beforeSha256": "c09c0b7186a9b8c904862ad2ddbbbd01ca6790883adbe3652ef77764a3b89ced",
+      "afterSha256": "9c74607e232f6eec6d49e6fa14cb47cdaefaf0cc6b733034042e90ea65c35849"
+    },
+    "dist-server/services/sim2real-web/public/app.css": {
+      "beforeSha256": "ea560d0fc5579397713b5496e630eff6526488eda468b4787a40ae877d1d6e54",
+      "afterSha256": "9fe1efd135d7f4d79caaf45e3623f9e593345ea9d29577e7f8208679333995f2"
+    },
+    "dist-server/services/sim2real-web/public/index.html": {
+      "beforeSha256": "2df1a1eea91869bc53aeedb08a268f685efbc6f95cf3777d0a43e31097d164ba",
+      "afterSha256": "44fd56bcda0e08b52e7b1fa5592ad9c3e4154b20b843f8a129fed06c76d25437"
+    }
+  },
+  "addedSourceFiles": {
+    "server/sim2real/originman-reference.ts": "dist-server/server/sim2real/originman-reference.js",
+    "shared/originman-workshop.ts": "dist-server/shared/originman-workshop.js",
+    "services/sim2real-web/public/originman-workshop.js": "dist-server/services/sim2real-web/public/originman-workshop.js"
+  },
+  "addedEngineDirectories": ["originman-straight", "originman-kick"]
+}

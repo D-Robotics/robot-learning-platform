@@ -41,3 +41,5 @@ board 延迟证据要求 `board-onnx` 阶段、当前 artifact SHA-256、一致�
 Canary/Live 工作流经真实版本化 API 创建（携带 Run、制品、评测、设备证据与稳定 Idempotency-Key）→ owner/admin 记录审批 → 计划 ready → 受控 BoardAgent 按执行、现场确认、时间盒和回滚契约消费。没有可用真实执行适配器时明确尚未完成；审批 ready 不等于运动。具体入口见 [API 工作流](api-workflows.md)。
 
 板端 staging → load → start 必须逐项检查，任何一项都不隐含后一项授权。平台和板端开关由当前部署执行，插件不放宽。用户授权继续存在时不重复确认普通只读/登记操作；物理动作失败后遵守现有 MCP 的重新确认纪律。
+
+OriginMan 受扰恢复使用 `originmanWorkshop.device` 选择策略训练设备，默认 `cuda`，显式 `cpu` 保留。必须选择支持 OriginMan 的执行资源，GPU 不可用报错而不静默降级。MuJoCo 采样仍使用 CPU。通过 `rdk_training_status` 核对 `metrics.originmanWorkshop.trainingDevice.parameterDevices` 和 `gradientUpdates`；仅检测到显卡不足以证明训练发生在 GPU。

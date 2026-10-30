@@ -5,6 +5,7 @@ export interface OriginmanWorkshopConfig {
   timesteps: number;
   seed: number;
   pushMaxForce: number;
+  device?: 'cuda' | 'cpu';
   sourceRunId?: string;
   /** Resolved by the platform from an owner-visible completed Run. */
   sourceExternalRunId?: string;
@@ -20,10 +21,12 @@ export function normalizeOriginmanWorkshop(value: unknown): OriginmanWorkshopCon
   const v = value as Record<string, unknown>;
   if (
     Object.keys(v).some(
-      (k) => !['phase', 'timesteps', 'seed', 'pushMaxForce', 'sourceRunId'].includes(k),
+      (k) => !['phase', 'timesteps', 'seed', 'pushMaxForce', 'sourceRunId', 'device'].includes(k),
     )
   )
     throw new Error('Workshop 配置包含不支持的字段');
+  if (v.device !== undefined && !['cuda', 'cpu'].includes(String(v.device)))
+    throw new Error('训练设备应为 cuda 或 cpu');
   if (!['train', 'evaluate'].includes(String(v.phase))) throw new Error('Workshop 阶段无效');
   if (
     typeof v.timesteps !== 'number' ||
@@ -52,8 +55,19 @@ export function normalizeOriginmanWorkshop(value: unknown): OriginmanWorkshopCon
     timesteps: v.timesteps,
     seed: v.seed,
     pushMaxForce: v.pushMaxForce,
+    device: (v.device ?? 'cuda') as 'cuda' | 'cpu',
     ...(v.phase === 'evaluate' ? { sourceRunId: v.sourceRunId as string } : {}),
   };
+}
+
+export interface OriginmanTrainingDevice {
+  requestedDevice: 'cuda' | 'cpu';
+  resolvedDevice: 'cuda' | 'cpu';
+  parameterDevices: string[];
+  torchVersion: string;
+  cudaRuntime: string | null;
+  gpuName?: string;
+  physicsBackend: 'cpu-mujoco';
 }
 
 export interface OriginmanWorkshopResult {
@@ -63,6 +77,8 @@ export interface OriginmanWorkshopResult {
   requestedTimesteps: number;
   actualTimesteps: number;
   pushMaxForce: number;
+  trainingDevice?: OriginmanTrainingDevice;
+  gradientUpdates?: number;
   policySha256: string;
   hardwareEligible: false;
   sourceRunId?: string;
@@ -170,6 +186,32 @@ export function normalizeOriginmanWorkshopResult(
         v.video.bytes > 20000000)
     )
       return undefined;
+    if (v.trainingDevice) {
+      const d = v.trainingDevice;
+      if (
+        !['cuda', 'cpu'].includes(d.requestedDevice) ||
+        d.resolvedDevice !== d.requestedDevice ||
+        d.physicsBackend !== 'cpu-mujoco' ||
+        typeof d.torchVersion !== 'string' ||
+        d.torchVersion.length > 100 ||
+        !(
+          d.cudaRuntime === null ||
+          (typeof d.cudaRuntime === 'string' && d.cudaRuntime.length <= 100)
+        ) ||
+        !Array.isArray(d.parameterDevices) ||
+        d.parameterDevices.length < 1 ||
+        d.parameterDevices.length > 8 ||
+        d.parameterDevices.some(
+          (p) =>
+            typeof p !== 'string' ||
+            !(d.resolvedDevice === 'cpu' ? p === 'cpu' : /^cuda:\d{1,2}$/.test(p)),
+        ) ||
+        (d.gpuName !== undefined && (typeof d.gpuName !== 'string' || d.gpuName.length > 160)) ||
+        !Number.isSafeInteger(v.gradientUpdates) ||
+        v.gradientUpdates! < 0
+      )
+        return undefined;
+    }
     // Clone only declared fields, never arbitrary worker markup or file paths.
     return {
       schemaVersion: 1,
@@ -178,6 +220,20 @@ export function normalizeOriginmanWorkshopResult(
       requestedTimesteps: v.requestedTimesteps,
       actualTimesteps: v.actualTimesteps,
       pushMaxForce: v.pushMaxForce,
+      ...(v.trainingDevice
+        ? {
+            trainingDevice: {
+              requestedDevice: v.trainingDevice.requestedDevice,
+              resolvedDevice: v.trainingDevice.resolvedDevice,
+              parameterDevices: [...v.trainingDevice.parameterDevices],
+              torchVersion: v.trainingDevice.torchVersion,
+              cudaRuntime: v.trainingDevice.cudaRuntime,
+              physicsBackend: v.trainingDevice.physicsBackend,
+              ...(v.trainingDevice.gpuName ? { gpuName: v.trainingDevice.gpuName } : {}),
+            },
+            gradientUpdates: v.gradientUpdates,
+          }
+        : {}),
       policySha256: v.policySha256,
       hardwareEligible: false,
       ...(v.phase === 'evaluate'

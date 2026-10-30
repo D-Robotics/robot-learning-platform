@@ -72,6 +72,17 @@
     }
 
     function render() {
+      const reference = catalog?.reference;
+      const referenceVideo = $('originman-reference-video');
+      const referenceSrc = reference?.available === true && reference.source === 'instructor-reference' && reference.isUserTraining === false
+        ? apiPath('/sim2real/workshops/originman/reference-video') : '';
+      if (referenceVideo.getAttribute('src') !== referenceSrc) {
+        if (referenceSrc) referenceVideo.src = referenceSrc; else referenceVideo.removeAttribute('src');
+      }
+      referenceVideo.hidden = !referenceSrc;
+      text('originman-reference-note', referenceSrc
+        ? `课前参考，非本组训练：${reference.title}。${reference.note}`
+        : '课前参考材料未配置或未通过校验，请讲师补齐；不能用本组训练冒充参考结果。');
       const training = runs.filter((r) => r.training?.originmanWorkshop?.phase === 'train');
       if (!training.some((r) => r.id === selected)) selected = training[0]?.id || '';
       options($('originman-run'), training.map((r) => ({ value: r.id, label: `${r.label || r.id} · ${r.status}` })), selected, '尚无训练');
@@ -84,14 +95,14 @@
       $('originman-train').textContent = pending?.phase === 'train' ? '重试同一训练提交' : '1. 创建本组训练';
       $('originman-evaluate').disabled = busy || isActive || run?.status !== 'completed' || (pending && pending.phase !== 'evaluate');
       $('originman-evaluate').textContent = pending?.phase === 'evaluate' ? '重试同一评测提交' : '2. 评测所选权重';
-      for (const id of ['originman-steps', 'originman-seed', 'originman-force', 'originman-resource', 'originman-run', 'originman-evaluation']) $(id).disabled = busy || Boolean(pending);
+      for (const id of ['originman-steps', 'originman-seed', 'originman-force', 'originman-device', 'originman-resource', 'originman-run', 'originman-evaluation']) $(id).disabled = busy || Boolean(pending);
       const progress = run?.progress || [];
       $('originman-progress').hidden = !progress.length;
       if (progress.length) chart($('originman-progress-chart'), [{ name: '本组训练奖励', points: progress.map((p) => [p.iteration, p.meanReward]) }], '奖励 / 累计控制步');
       if (run) {
         const cfg = run.training.originmanWorkshop;
         const last = progress[progress.length - 1];
-        text('originman-provenance', `训练 Run：${run.id} · ${run.status} · 请求 ${cfg.timesteps} 步${run.metrics?.originmanWorkshop ? ` / 实际 ${run.metrics.originmanWorkshop.actualTimesteps} 步 · 策略 ${run.metrics.originmanWorkshop.policySha256.slice(0, 12)}` : ''} · seed=${cfg.seed} · 训练侧推上限 ${cfg.pushMaxForce}N${last ? ` · 最近开发检查恢复 ${Math.round(last.recentSuccess * 9)}/9` : ''}。评测只读取所选 Run 的权重。`);
+        text('originman-provenance', `训练 Run：${run.id} · ${run.status} · 请求 ${cfg.timesteps} 步${run.metrics?.originmanWorkshop ? ` / 实际 ${run.metrics.originmanWorkshop.actualTimesteps} 步 · 策略 ${run.metrics.originmanWorkshop.policySha256.slice(0, 12)}` : ''} · 训练设备 ${cfg.device || 'cpu（历史记录）'} ${run.metrics?.originmanWorkshop?.trainingDevice ? ` / 实际 ${run.metrics.originmanWorkshop.trainingDevice.parameterDevices.join(',')} · 梯度更新 ${run.metrics.originmanWorkshop.gradientUpdates}` : ''} · seed=${cfg.seed} · 训练侧推上限 ${cfg.pushMaxForce}N${last ? ` · 最近开发检查恢复 ${Math.round(last.recentSuccess * 9)}/9` : ''}。评测只读取所选 Run 的权重。`);
       }
       const assessment = evaluated.find((r) => r.id === selectedEvaluation);
       const result = assessment?.metrics?.originmanWorkshop;
@@ -165,7 +176,7 @@
           if (!model) model = (await request('/sim2real/models', { method: 'POST', body: JSON.stringify({ manifest: catalog.manifest }) })).model;
           const parent = selectedRun();
           if (phase === 'evaluate' && parent?.status !== 'completed') throw new Error('请先选择已完成的本组训练');
-          const cfg = phase === 'train' ? { phase, timesteps: Number($('originman-steps').value), seed: Number($('originman-seed').value), pushMaxForce: Number($('originman-force').value) } : { phase, timesteps: parent.training.originmanWorkshop.timesteps, seed: parent.training.originmanWorkshop.seed, pushMaxForce: parent.training.originmanWorkshop.pushMaxForce, sourceRunId: parent.id };
+          const cfg = phase === 'train' ? { phase, timesteps: Number($('originman-steps').value), seed: Number($('originman-seed').value), pushMaxForce: Number($('originman-force').value), device: $('originman-device').value } : { phase, timesteps: parent.training.originmanWorkshop.timesteps, seed: parent.training.originmanWorkshop.seed, pushMaxForce: parent.training.originmanWorkshop.pushMaxForce, device: parent.training.originmanWorkshop.device || 'cpu', sourceRunId: parent.id };
           const resource = phase === 'train' ? $('originman-resource').value : parent.computeResourceId;
           pending = { phase, key: `originman-${crypto.randomUUID()}`, body: { backend: 'local', taskId: 'originman-recovery', modelId: model.id, label: phase === 'train' ? `OriginMan SAC · seed ${cfg.seed} · ${cfg.timesteps}步` : `OriginMan 31条件评测 · ${parent.id}`, ...(resource ? { computeResourceId: resource } : {}), training: { profile: 'standard', engine: ENGINE, algorithm: 'sac', numEnvs: 4, maxIterations: Math.ceil(cfg.timesteps / 256), video: phase === 'evaluate', originmanWorkshop: cfg } } };
         }

@@ -21,6 +21,15 @@ tags:
 security:
   - cookieAuth: []
 paths:
+  /api/v1/duck/workshops/originman/reference-video:
+    get:
+      tags: [workspace]
+      summary: Read digest-verified instructor reference video without creating a user Run
+      operationId: getOriginmanInstructorReferenceVideo
+      responses:
+        "200": { description: Verified instructor MP4. This is not the current group's training result. }
+        "401": { $ref: "#/components/responses/AuthRequired" }
+        "409": { description: Reference not configured or digest verification failed. }
   /api/v1/duck/workshops/originman:
     get:
       tags: [workspace]

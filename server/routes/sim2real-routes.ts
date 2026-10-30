@@ -6,6 +6,7 @@ import { Router, type Request, type Response } from 'express';
 import { readFileSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
+import { readOriginmanReference } from '../sim2real/originman-reference.js';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -4032,12 +4033,36 @@ export function createSim2RealRouter(
       const owner = requestOwner(request, response, auth);
       if (owner === null) return;
       noStore(response);
+      const reference = await readOriginmanReference();
       response.json({
         ok: true,
         manifest: ORIGINMAN_WORKSHOP_MANIFEST,
-        defaults: { phase: 'train', timesteps: 500000, seed: 7, pushMaxForce: 8.1 },
+        defaults: { phase: 'train', timesteps: 500000, seed: 7, pushMaxForce: 8.1, device: 'cuda' },
         simulationOnly: true,
+        reference: reference.available ? { available: true, ...reference.metadata } : reference,
       });
+    }),
+  );
+
+  router.get(
+    api('/workshops/originman/reference-video'),
+    wrapAsync(async (request, response) => {
+      const owner = requestOwner(request, response, auth);
+      if (owner === null) return;
+      noStore(response);
+      const reference = await readOriginmanReference();
+      if (!reference.available) {
+        sendApiError(
+          response,
+          409,
+          'SIM2REAL_REFERENCE_UNVERIFIED',
+          '课前参考视频未配置或校验未通过，不能用本组训练冒充。',
+        );
+        return;
+      }
+      response.type('video/mp4').setHeader('X-Artifact-Sha256', reference.metadata.video.sha256);
+      response.setHeader('Content-Length', reference.bytes.length);
+      response.send(reference.bytes);
     }),
   );
 

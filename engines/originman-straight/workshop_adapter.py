@@ -54,7 +54,10 @@ def config(request):
         or not 6.4 <= value["pushMaxForce"] <= 9
     ):
         raise ValueError("invalid training disturbance range")
-    return value
+    device = value.get("device", "cuda")
+    if device not in ("cuda", "cpu"):
+        raise ValueError("training device must be cuda or cpu")
+    return {**value, "device": device}
 
 
 def train_session(session):
@@ -225,7 +228,7 @@ def main():
         scene = Path(os.environ["ORIGINMAN_SCENE"]).resolve()
         session = out / "workshop"
         prepare(
-            session, scene, value["seed"], value["timesteps"], value["pushMaxForce"]
+            session, scene, value["seed"], value["timesteps"], value["pushMaxForce"], value["device"]
         )
         train_session(session)
         run = session / f"standing-residual-seed{value['seed']}"
@@ -239,6 +242,8 @@ def main():
         "requestedTimesteps": value["timesteps"],
         "actualTimesteps": summary["actualTimesteps"],
         "pushMaxForce": value["pushMaxForce"],
+        **({"trainingDevice": summary["trainingDevice"]} if "trainingDevice" in summary else {}),
+        "gradientUpdates": summary["gradientUpdates"],
         "policySha256": digest(run / "policy.onnx"),
         "hardwareEligible": False,
     }
@@ -268,7 +273,7 @@ def main():
         "status": "completed",
         "engine": "originman-recovery",
         "mock": False,
-        "cuda": False,
+        "cuda": value["phase"] == "train" and summary.get("trainingDevice", {}).get("resolvedDevice") == "cuda",
         "deployable": False,
         "hardwareEligible": False,
         "metrics": {

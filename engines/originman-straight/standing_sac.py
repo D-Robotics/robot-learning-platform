@@ -1,6 +1,8 @@
 """Independent off-policy SAC recovery trial with one normalized proprioceptive frame."""
 
 import argparse
+import copy
+import hashlib
 import json
 from dataclasses import asdict
 from pathlib import Path
@@ -32,7 +34,7 @@ def export(model, normalizer, out):
             )
             return torch.tanh(self.actor.mu(self.actor.latent_pi(features)))
 
-    actor = Actor(model.actor).eval()
+    actor = Actor(copy.deepcopy(model.actor).cpu()).eval()
     size = model.observation_space.shape[0]
     sample = np.random.default_rng(729).normal(0, 0.5, (32, size)).astype(np.float32)
     expected = model.predict(sample, deterministic=True)[0]
@@ -154,7 +156,11 @@ def train(
     task_parameters=None,
     actor_inputs=None,
     action_scope=None,
+    device="cuda",
 ):
+    from training_device import resolve_training_device
+
+    device_evidence = resolve_training_device(device)
     cfg = Config(**experiment["environment"])
     if cfg.recovery_roll_threshold:
         raise ValueError("SAC ablation requires continuous feedback")
@@ -166,6 +172,7 @@ def train(
     identity = {
         "environment": asdict(cfg),
         "training": {
+            "device": device_evidence,
             "implementation": "stable-baselines3",
             "algorithm": "SAC",
             "sb3Version": sb3.__version__,
@@ -217,7 +224,7 @@ def train(
             "MlpPolicy",
             vector,
             seed=seed,
-            device="cpu",
+            device=device_evidence["resolvedDevice"],
             buffer_size=200000,
             learning_starts=5000,
             batch_size=256,
@@ -229,6 +236,11 @@ def train(
             policy_kwargs={"net_arch": architecture, "log_std_init": -2},
             verbose=0,
         )
+        parameter_devices = sorted({str(p.device) for p in model.policy.parameters()})
+        if any(torch.device(d).type != device_evidence["resolvedDevice"] for d in parameter_devices):
+            raise RuntimeError("SAC parameter device differs from requested training device")
+        device_evidence["parameterDevices"] = parameter_devices
+        print("[originman-training-device] " + json.dumps(device_evidence), flush=True)
         # Non-SDE SAC uses a learned log-std layer; set its actual initial values.
         torch.nn.init.zeros_(model.actor.log_std.weight)
         torch.nn.init.constant_(model.actor.log_std.bias, -2.0)
@@ -240,6 +252,14 @@ def train(
             torch.nn.init.zeros_(model.actor.mu.weight)
             torch.nn.init.zeros_(model.actor.mu.bias)
             torch.nn.init.constant_(model.actor.log_std.bias, -3.0)
+        def parameter_hash():
+            h = hashlib.sha256()
+            for name, tensor in model.policy.state_dict().items():
+                h.update(name.encode())
+                h.update(tensor.detach().cpu().numpy().tobytes())
+            return h.hexdigest()
+
+        initial_parameter_sha256 = parameter_hash()
         initial = out / "initial"
         initial.mkdir()
         model.save(initial / "policy.zip")
@@ -259,6 +279,9 @@ def train(
             "config": asdict(cfg),
             "actualTimesteps": model.num_timesteps,
             "gradientUpdates": model._n_updates,
+            "initialParameterSha256": initial_parameter_sha256,
+            "finalParameterSha256": parameter_hash(),
+            "trainingDevice": device_evidence,
             "onnxParityMaxAbsError": parity,
             "hardwareEligible": False,
             "task": "stationary-disturbance-recovery",
@@ -312,6 +335,7 @@ if __name__ == "__main__":
     p.add_argument("--steps", type=int, default=250000)
     p.add_argument("--seed", type=int, default=7)
     p.add_argument("--linear", action="store_true")
+    p.add_argument("--device", choices=["cuda", "cpu"], default="cuda")
     a = p.parse_args()
     torch.set_num_threads(1)
     train(
@@ -321,4 +345,5 @@ if __name__ == "__main__":
         a.steps,
         a.seed,
         linear=a.linear,
+        device=a.device,
     )

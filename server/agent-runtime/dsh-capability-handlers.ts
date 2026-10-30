@@ -1154,6 +1154,8 @@ export function createDshCapabilityHandlers(
           syntheticData: defined(metrics.syntheticData),
           originmanWorkshop: workshop ? {
             phase: workshop.phase,
+            trainingDevice: workshop.trainingDevice,
+            gradientUpdates: workshop.gradientUpdates,
             requestedTimesteps: workshop.requestedTimesteps,
             actualTimesteps: workshop.actualTimesteps,
             seed: workshop.seed,

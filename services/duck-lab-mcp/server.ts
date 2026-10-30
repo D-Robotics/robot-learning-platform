@@ -447,7 +447,7 @@ const ARGUMENT_GUIDANCE: Record<string, Record<string, Record<string, unknown>>>
     originmanWorkshop: {
       type: 'object',
       description:
-        'Read rdk_workshop_catalog first; platform validates phase, budget and parent Run.',
+        'Read rdk_workshop_catalog first; platform validates phase, budget and parent Run. OriginMan device defaults to cuda; cpu is an explicit option. CUDA unavailability fails without fallback.',
     },
     modelId: { description: '目标模型 ID；省略时沿用首模型，请按本次任务显式选择。' },
     backend: {
