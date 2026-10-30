@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "upstreamRelease": "duck-board-detect-20261028",
   "qualification": "Retained compiled upstream plus reviewed OriginMan source changes. Not a complete source reconstruction of upstream. All original API auth and ledger behavior must remain enforced.",
-  "patchSha256": "27b0b32ade1c25c967b03d39f7300225996650b6c881c2c6deb2b7d139ba694c",
+  "patchSha256": "30e605e24d55c48139d104b284b062005b81521f025cd8f12c6c7342461e5706",
   "files": {
     "dist-server/server/routes/sim2real-routes.js": {
       "beforeSha256": "8ced71a3054814b1200a39cb13c08a7911ae706847f0dda14e0602cca982e7b9",
@@ -55,9 +55,14 @@
     "dist-server/services/sim2real-web/public/index.html": {
       "beforeSha256": "2df1a1eea91869bc53aeedb08a268f685efbc6f95cf3777d0a43e31097d164ba",
       "afterSha256": "db2f83a338cc8a70c25a3eb4585a1f2f76c0ca1054b2906a7c2c6d17155ad074"
+    },
+    "dist-server/server/sim2real/learning-guide.js": {
+      "beforeSha256": "b50c50102c2a6f7346fc88036ead6af01af7809f26371458a0d16964ee043d30",
+      "afterSha256": "9ef34077a40088b7e5b06b65a339a10c8ed1cc4484137ac548e9a38c3b23df9a"
     }
   },
   "addedSourceFiles": {
+    "server/sim2real/originman-learning-guide.ts": "dist-server/server/sim2real/originman-learning-guide.js",
     "server/sim2real/originman-reference.ts": "dist-server/server/sim2real/originman-reference.js",
     "shared/originman-workshop.ts": "dist-server/shared/originman-workshop.js",
     "services/sim2real-web/public/originman-workshop.js": "dist-server/services/sim2real-web/public/originman-workshop.js"

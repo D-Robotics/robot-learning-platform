@@ -1,7 +1,7 @@
 {
   "name": "rdk-robot-learning-platform",
-  "version": "0.1.2",
-  "description": "RDK Robot Learning Platform 的平台插件：复用 Duck Lab MCP，覆盖工作区、仿真与轨迹、训练、评测、制品、受控部署、设备与运维。",
+  "version": "0.1.3",
+  "description": "OriginMan 受扰恢复与 MicroDuck 学习工作流：仿真、默认 GPU / 可选 CPU 训练、评测、制品与受控部署；由 setup 技能连接同账号平台。",
   "author": {
     "name": "D-Robotics"
   },

@@ -1953,3 +1953,28 @@ index a0cabf1..a6645d5 100644
 +    <script defer src="./onboarding.js?v=onboarding-6"></script>
    </body>
  </html>
+diff --git a/dist-server/server/sim2real/learning-guide.js b/dist-server/server/sim2real/learning-guide.js
+index 2dfcc10..92e05d5 100644
+--- a/dist-server/server/sim2real/learning-guide.js
++++ b/dist-server/server/sim2real/learning-guide.js
+@@ -1,9 +1,11 @@
++import { buildOriginmanLearningGuide } from './originman-learning-guide.js';
+ import { SIM2REAL_PRODUCT_PROFILES, } from '../../shared/sim2real.js';
+ import { resolvedTaskPack } from './robogo-runner.js';
+ import { isSim2RealComputeResourceHealthFresh } from './sim2real-store.js';
+ import { WORKBENCH_DESTINATIONS } from '../../shared/workbench-navigation.js';
+ /** Read-only guidance, never a replacement for submission or release checks. */
+ export function buildLearningGuide(input) {
++    if (input.productId === 'originman') return buildOriginmanLearningGuide(input, isSim2RealComputeResourceHealthFresh, WORKBENCH_DESTINATIONS);
+     const { productId, model, simulator } = input;
+     const taskIds = productId === 'microduck'
+         ? ['walk', 'sit', 'recover', 'kick']
+@@ -422,5 +424,4 @@ export function buildLearningGuide(input) {
+             truth: '工具目录表示接口存在；可用性由实时平台检查决定。此指南不授予部署或运动权限。',
+         },
+     };
+-}
+-//# sourceMappingURL=learning-guide.js.map
+\ No newline at end of file
++}
+\ No newline at end of file
