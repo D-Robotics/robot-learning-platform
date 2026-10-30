@@ -542,7 +542,7 @@
         },
         "originmanWorkshop": {
           "type": "object",
-          "description": "Read rdk_workshop_catalog first; platform validates phase, budget and parent Run."
+          "description": "Read rdk_workshop_catalog first; platform validates phase, budget and parent Run. OriginMan device defaults to cuda; cpu is an explicit option. CUDA unavailability fails without fallback."
         },
         "backend": {
           "type": "string",
