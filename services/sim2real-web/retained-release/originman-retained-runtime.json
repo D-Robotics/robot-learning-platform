@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "upstreamRelease": "duck-board-detect-20261028",
   "qualification": "Retained compiled upstream plus reviewed OriginMan source changes. Not a complete source reconstruction of upstream. All original API auth and ledger behavior must remain enforced.",
-  "patchSha256": "30e605e24d55c48139d104b284b062005b81521f025cd8f12c6c7342461e5706",
+  "patchSha256": "053a01dc1080a002de8fbc46f7041a6be50836aa07b967a9097e2f6e979dbfad",
   "files": {
     "dist-server/server/routes/sim2real-routes.js": {
       "beforeSha256": "8ced71a3054814b1200a39cb13c08a7911ae706847f0dda14e0602cca982e7b9",
@@ -30,7 +30,7 @@
     },
     "dist-server/services/duck-lab-mcp/server.js": {
       "beforeSha256": "5a5774cbd2dc3a506d9587e85fed2ce8961f390be4c077ea32e43d7b0cb6af70",
-      "afterSha256": "7209998669205f0663557edc66b89958a0f20a124b6bd0246f2a1c0d5bcc498d"
+      "afterSha256": "6af1de7d1886f5b98bba9b714f2ea2949ec95efa26780f7163eb050f9ffb07b2"
     },
     "dist-server/shared/sim2real.js": {
       "beforeSha256": "934ec7feb042fbe54af224ec50ed1e14d57dd63267ddd5ca0f87b2d389c682b7",
@@ -54,7 +54,7 @@
     },
     "dist-server/services/sim2real-web/public/index.html": {
       "beforeSha256": "2df1a1eea91869bc53aeedb08a268f685efbc6f95cf3777d0a43e31097d164ba",
-      "afterSha256": "db2f83a338cc8a70c25a3eb4585a1f2f76c0ca1054b2906a7c2c6d17155ad074"
+      "afterSha256": "2cc6ed0ef4356eba937bac1a065be25d7adfdf5eafdb35ac6f9fd068dc72f6a0"
     },
     "dist-server/server/sim2real/learning-guide.js": {
       "beforeSha256": "b50c50102c2a6f7346fc88036ead6af01af7809f26371458a0d16964ee043d30",

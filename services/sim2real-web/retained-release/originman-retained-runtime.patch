@@ -595,7 +595,7 @@ index d0536b0..595bcaa 100644
 +}
 \ No newline at end of file
 diff --git a/dist-server/services/duck-lab-mcp/server.js b/dist-server/services/duck-lab-mcp/server.js
-index db58315..cc91501 100644
+index db58315..9fa6783 100644
 --- a/dist-server/services/duck-lab-mcp/server.js
 +++ b/dist-server/services/duck-lab-mcp/server.js
 @@ -367,6 +367,7 @@ export const TOOL_PARAM_HINTS = {
@@ -618,7 +618,7 @@ index db58315..cc91501 100644
              productId: { type: 'string' },
              modelId: { type: 'string' },
              runId: { type: 'string' },
-@@ -618,12 +621,65 @@ export const TOOL_PARAM_HINTS = {
+@@ -618,12 +621,62 @@ export const TOOL_PARAM_HINTS = {
      },
  };
  const PLATFORM_STATUS_HINT = { required: [], properties: {} };
@@ -628,10 +628,7 @@ index db58315..cc91501 100644
 +    rdk_workshop_catalog: { robot: { enum: ['originman'] } },
 +    rdk_simulator_open: { robot: { enum: ['originman', 'microduck'] } },
 +    rdk_training_submit: {
-+        originmanWorkshop: {
-+            type: 'object',
-+            description: 'Read rdk_workshop_catalog first; platform validates phase, budget and parent Run.',
-+        },
++        originmanWorkshop: {"type": "object", "additionalProperties": false, "required": ["phase", "timesteps", "seed", "pushMaxForce"], "properties": {"phase": {"type": "string", "enum": ["train", "evaluate"]}, "timesteps": {"type": "integer", "minimum": 4096, "maximum": 1000000}, "seed": {"type": "integer", "minimum": 0, "maximum": 1000000}, "pushMaxForce": {"type": "number", "minimum": 6.4, "maximum": 9}, "device": {"type": "string", "enum": ["cuda", "cpu"], "default": "cuda"}, "sourceRunId": {"type": "string", "description": "Required for evaluate; the completed source training Run ID."}}, "description": "Read rdk_workshop_catalog first; platform validates phase, budget and parent Run. OriginMan device defaults to cuda; cpu is an explicit option. CUDA unavailability fails without fallback."},
 +        modelId: { description: '目标模型 ID；省略时沿用首模型，请按本次任务显式选择。' },
 +        backend: {
 +            enum: ['local', 'robogo', 'browser', 'contract'],
@@ -687,7 +684,7 @@ index db58315..cc91501 100644
      };
  }
  export function buildToolCatalog(handlers, extra = []) {
-@@ -636,7 +692,7 @@ export function buildToolCatalog(handlers, extra = []) {
+@@ -636,7 +689,7 @@ export function buildToolCatalog(handlers, extra = []) {
      return catalog.map(({ id, description, readOnly }) => ({
          name: id,
          description: `${description}。${readOnly ? '只读操作。' : '需要平台安全门控。'}`,
@@ -696,7 +693,7 @@ index db58315..cc91501 100644
          annotations: {
              readOnlyHint: readOnly,
              destructiveHint: DESTRUCTIVE_TOOLS.has(id),
-@@ -940,5 +996,4 @@ export function main() {
+@@ -940,5 +993,4 @@ export function main() {
  }
  if (isDirectEntryInvocation()) {
      main();
@@ -925,7 +922,7 @@ index 19df86b..9f75773 100644
    display: grid;
    grid-template-columns: 1fr 1.4fr;
 diff --git a/dist-server/services/sim2real-web/public/index.html b/dist-server/services/sim2real-web/public/index.html
-index a0cabf1..a6645d5 100644
+index a0cabf1..e2b0f73 100644
 --- a/dist-server/services/sim2real-web/public/index.html
 +++ b/dist-server/services/sim2real-web/public/index.html
 @@ -20,8 +20,7 @@
@@ -1944,7 +1941,7 @@ index a0cabf1..a6645d5 100644
 -    <script defer src="./state-recording-workspace.js?v=recordings-3"></script>
 -    <script defer src="./learning-lab.js?v=learning-6"></script>
 +    <script defer src="./telemetry-core.js?v=duck-lab-31"></script>
-+    <script defer src="./originman-workshop.js?v=originman-4"></script>
++    <script defer src="./originman-workshop.js?v=originman-5"></script>
 +    <script defer src="./app.js?v=originman-1"></script>
      <script defer src="./visualization-enhancements.js?v=viz-1"></script>
 -    <script defer src="./agent-chat.js?v=agent-17"></script>

@@ -24,6 +24,7 @@ import {
 } from './platform-client.js';
 import {
   buildToolCatalog,
+  buildInputSchema,
   createMcpService,
   MANUAL_PARAM_HINT_OVERRIDES,
   SERVER_INFO,
@@ -1186,4 +1187,29 @@ describe('duck-lab-mcp stdio entry', () => {
       await new Promise<void>((resolve) => child.once('exit', () => resolve()));
     }
   }, 60_000);
+});
+
+describe('OriginMan nested schema for native tool hosts', () => {
+  it('declares every nested field so object-schema hosts retain the training configuration', () => {
+    const schema = buildInputSchema(
+      TOOL_PARAM_HINTS.rdk_training_submit,
+      'rdk_training_submit',
+    ) as { properties: Record<string, any> };
+    const workshop = schema.properties.originmanWorkshop;
+    expect(workshop.required).toEqual(['phase', 'timesteps', 'seed', 'pushMaxForce']);
+    expect(workshop.additionalProperties).toBe(false);
+    expect(workshop.properties.timesteps).toEqual({
+      type: 'integer',
+      minimum: 4096,
+      maximum: 1000000,
+    });
+    expect(workshop.properties.device).toMatchObject({
+      type: 'string',
+      enum: ['cuda', 'cpu'],
+      default: 'cuda',
+    });
+    for (const name of ['phase', 'timesteps', 'seed', 'pushMaxForce', 'device', 'sourceRunId']) {
+      expect(workshop.properties[name].type).toBeDefined();
+    }
+  });
 });

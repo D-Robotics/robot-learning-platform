@@ -50,14 +50,12 @@ describe('OriginMan classroom browser behavior', () => {
           id: 'duck-gpu',
           engines: ['microduck-rl'],
           status: 'online',
-          kind: 'local-gpu',
           mock: false,
         },
         {
           id: 'origin-gpu',
           engines: ['originman-recovery'],
           status: 'online',
-          kind: 'local-gpu',
           mock: false,
         },
       ],
@@ -81,7 +79,6 @@ describe('OriginMan classroom browser behavior', () => {
         id,
         engines: ['originman-recovery'],
         status: 'online',
-        kind: 'local-gpu',
         mock: false,
       })),
     });

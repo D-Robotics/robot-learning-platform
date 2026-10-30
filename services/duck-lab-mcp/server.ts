@@ -446,6 +446,19 @@ const ARGUMENT_GUIDANCE: Record<string, Record<string, Record<string, unknown>>>
   rdk_training_submit: {
     originmanWorkshop: {
       type: 'object',
+      additionalProperties: false,
+      required: ['phase', 'timesteps', 'seed', 'pushMaxForce'],
+      properties: {
+        phase: { type: 'string', enum: ['train', 'evaluate'] },
+        timesteps: { type: 'integer', minimum: 4096, maximum: 1000000 },
+        seed: { type: 'integer', minimum: 0, maximum: 1000000 },
+        pushMaxForce: { type: 'number', minimum: 6.4, maximum: 9 },
+        device: { type: 'string', enum: ['cuda', 'cpu'], default: 'cuda' },
+        sourceRunId: {
+          type: 'string',
+          description: 'Required for evaluate; the completed source training Run ID.',
+        },
+      },
       description:
         'Read rdk_workshop_catalog first; platform validates phase, budget and parent Run. OriginMan device defaults to cuda; cpu is an explicit option. CUDA unavailability fails without fallback.',
     },

@@ -43,3 +43,5 @@ Canary/Live 工作流经真实版本化 API 创建（携带 Run、制品、评�
 板端 staging → load → start 必须逐项检查，任何一项都不隐含后一项授权。平台和板端开关由当前部署执行，插件不放宽。用户授权继续存在时不重复确认普通只读/登记操作；物理动作失败后遵守现有 MCP 的重新确认纪律。
 
 OriginMan 受扰恢复使用 `originmanWorkshop.device` 选择策略训练设备，默认 `cuda`，显式 `cpu` 保留。必须选择支持 OriginMan 的执行资源，GPU 不可用报错而不静默降级。MuJoCo 采样仍使用 CPU。通过 `rdk_training_status` 核对 `metrics.originmanWorkshop.trainingDevice.parameterDevices` 和 `gradientUpdates`；仅检测到显卡不足以证明训练发生在 GPU。
+
+训练提交被参数校验拒绝时，不得把列表里相似参数的旧 Run 当成本次任务。只有提交响应实际返回的 runId，或按原幂等键精确确认的记录，才能关联本次操作。400 前置拒绝与旧任务的健康过期阻塞必须分开报告；未经关联不得宣称新 Run 已创建。OriginMan 的 CPU 选择位于 `originmanWorkshop.device`，数值必须使用 JSON 数字。
