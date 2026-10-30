@@ -77,7 +77,7 @@
       const reference = catalog?.reference;
       const referenceVideo = $('originman-reference-video');
       const referenceSrc = reference?.available === true && reference.source === 'instructor-reference' && reference.isUserTraining === false
-        ? apiPath('/sim2real/workshops/originman/reference-video') : '';
+        ? apiPath('/sim2real/workshops/originman/reference-video?format=webm') : '';
       if (referenceVideo.getAttribute('src') !== referenceSrc) {
         if (referenceSrc) referenceVideo.src = referenceSrc; else referenceVideo.removeAttribute('src');
       }
@@ -125,10 +125,10 @@
           } return tr;
         }));
         const video = $('originman-video');
-        const src = result.video ? apiPath(`/sim2real/runs/${encodeURIComponent(assessment.id)}/workshop-video`) : '';
+        const src = result.video ? apiPath(`/sim2real/runs/${encodeURIComponent(assessment.id)}/workshop-video?format=webm`) : '';
         if (video.getAttribute('src') !== src) { if (src) video.src = src; else video.removeAttribute('src'); }
         video.hidden = !src;
-        text('originman-video-note', src ? '本次评测原始物理轨迹的四组回放；失败后保持实际终止姿态。仅仿真，无硬件部署资格。' : result.videoError || '本次尚无物理回放。');
+        text('originman-video-note', src ? '本次评测物理轨迹的四组回放，以 WebM 兼容展示；原始 MP4 和摘要独立保留。失败后保持实际终止姿态。仅仿真，无硬件部署资格。' : result.videoError || '本次尚无物理回放。');
       }
     }
 

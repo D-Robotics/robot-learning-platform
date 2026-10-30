@@ -1,8 +1,9 @@
 diff --git a/dist-server/server/routes/sim2real-routes.js b/dist-server/server/routes/sim2real-routes.js
-index 9d19367..7fd8b2e 100644
+index 9d19367..8f3beda 100644
 --- a/dist-server/server/routes/sim2real-routes.js
 +++ b/dist-server/server/routes/sim2real-routes.js
-@@ -1,7 +1,9 @@
+@@ -1,7 +1,10 @@
++import { verifiedVideoWebm } from '../sim2real/verified-video.js';
 +import { readOriginmanReference } from '../sim2real/originman-reference.js';
  import { DesktopComputeRelayBroker } from '../sim2real/desktop-compute-relay.js';
  import { withDesktopComputeContext, rememberDesktopComputeResource, desktopComputeConnected, desktopComputeAwareFetch, } from '../sim2real/desktop-compute-context.js';
@@ -12,7 +13,7 @@ index 9d19367..7fd8b2e 100644
  import { Router } from 'express';
  import { readFileSync } from 'node:fs';
  import { readFile } from 'node:fs/promises';
-@@ -632,7 +634,12 @@ function safeBackend(value) {
+@@ -632,7 +635,12 @@ function safeBackend(value) {
          : null;
  }
  function requestedProduct(value) {
@@ -26,7 +27,7 @@ index 9d19367..7fd8b2e 100644
  }
  function normalizeResumeFrom(value) {
      if (value == null)
-@@ -759,6 +766,7 @@ function latestByTimestamp(items, timestamp) {
+@@ -759,6 +767,7 @@ function latestByTimestamp(items, timestamp) {
  }
  function availableContractsFor(models) {
      const grouped = {
@@ -34,7 +35,7 @@ index 9d19367..7fd8b2e 100644
          microduck: [],
          'rdk-duck': [],
          originbot: [],
-@@ -2464,11 +2472,12 @@ export function createSim2RealRouter(deps = {}, options = {}) {
+@@ -2464,11 +2473,12 @@ export function createSim2RealRouter(deps = {}, options = {}) {
          response.json({ ok: true, deleted: true });
      }));
      async function inspectTrainingEnvironment(request, response, owner, input) {
@@ -50,7 +51,7 @@ index 9d19367..7fd8b2e 100644
          if (typeof taskId !== 'string' || !/^[a-z][a-z0-9-]{0,63}$/.test(taskId)) {
              sendApiError(response, 400, 'SIM2REAL_TASK_INVALID', '请提供有效任务 ID。', {
                  retryable: false,
-@@ -2506,6 +2515,7 @@ export function createSim2RealRouter(deps = {}, options = {}) {
+@@ -2506,6 +2516,7 @@ export function createSim2RealRouter(deps = {}, options = {}) {
          try {
              const report = await requestLocalEnginePreflight({
                  accountId,
@@ -58,7 +59,7 @@ index 9d19367..7fd8b2e 100644
                  taskId,
                  ...(selected
                      ? { runnerUrl: selected.resource.runnerUrl, runnerToken: selected.runnerToken ?? '' }
-@@ -3634,6 +3644,71 @@ export function createSim2RealRouter(deps = {}, options = {}) {
+@@ -3634,6 +3645,86 @@ export function createSim2RealRouter(deps = {}, options = {}) {
              sendApiError(response, 503, 'SIM2REAL_RUN_RECONCILE_UNAVAILABLE', 'runner 暂时无法返回对账状态，台账未修改。', { retryable: true, retryAfterSeconds: 15 });
          }
      }));
@@ -96,8 +97,16 @@ index 9d19367..7fd8b2e 100644
 +            sendApiError(response, 503, 'SIM2REAL_WORKSHOP_VIDEO_UNVERIFIED', '无法读取或校验本次回放；数值结果仍保留。');
 +            return;
 +        }
-+        response.type('video/mp4').setHeader('Content-Length', bytes.bytes.length);
-+        response.send(bytes.bytes);
++        const format = request.query.format ?? 'mp4';
++      if (format !== 'mp4' && format !== 'webm') { sendApiError(response, 400, 'SIM2REAL_VIDEO_FORMAT_INVALID', 'Unsupported video format.'); return; }
++      let presentation = bytes.bytes;
++      try { if (format === 'webm') presentation = await verifiedVideoWebm(bytes.bytes); }
++      catch { sendApiError(response, 503, 'SIM2REAL_VIDEO_PRESENTATION_UNAVAILABLE', '回放兼容格式暂不可用；原始视频和数值证据仍保留。'); return; }
++      response.type(format === 'webm' ? 'video/webm' : 'video/mp4');
++      response.setHeader('X-Source-Artifact-Sha256', video.sha256);
++      response.setHeader('X-Artifact-Sha256', createHash('sha256').update(presentation).digest('hex'));
++      response.setHeader('Content-Length', presentation.length);
++      response.send(presentation);
 +    }));
 +    router.get(api('/workshops/originman'), wrapAsync(async (request, response) => {
 +        const owner = requestOwner(request, response, auth);
@@ -123,14 +132,21 @@ index 9d19367..7fd8b2e 100644
 +            sendApiError(response, 409, 'SIM2REAL_REFERENCE_UNVERIFIED', '课前参考视频未配置或校验未通过，不能用本组训练冒充。');
 +            return;
 +        }
-+        response.type('video/mp4').setHeader('X-Artifact-Sha256', reference.metadata.video.sha256);
-+        response.setHeader('Content-Length', reference.bytes.length);
-+        response.send(reference.bytes);
++        const format = request.query.format ?? 'mp4';
++      if (format !== 'mp4' && format !== 'webm') { sendApiError(response, 400, 'SIM2REAL_VIDEO_FORMAT_INVALID', 'Unsupported video format.'); return; }
++      let presentation = reference.bytes;
++      try { if (format === 'webm') presentation = await verifiedVideoWebm(reference.bytes); }
++      catch { sendApiError(response, 503, 'SIM2REAL_VIDEO_PRESENTATION_UNAVAILABLE', '课前参考兼容格式暂不可用；原始视频仍保留。'); return; }
++      response.type(format === 'webm' ? 'video/webm' : 'video/mp4');
++      response.setHeader('X-Source-Artifact-Sha256', reference.metadata.video.sha256);
++      response.setHeader('X-Artifact-Sha256', createHash('sha256').update(presentation).digest('hex'));
++      response.setHeader('Content-Length', presentation.length);
++      response.send(presentation);
 +    }));
      router.post(api('/models'), wrapAsync(async (request, response) => {
          const owner = requestOwner(request, response, auth);
          if (owner === null)
-@@ -3721,6 +3796,41 @@ export function createSim2RealRouter(deps = {}, options = {}) {
+@@ -3721,6 +3812,41 @@ export function createSim2RealRouter(deps = {}, options = {}) {
              });
              return;
          }
@@ -172,7 +188,7 @@ index 9d19367..7fd8b2e 100644
          if (projectId && !(await getSim2RealProject(projectId, owner))) {
              response.status(404).json({
                  ok: false,
-@@ -4541,5 +4651,4 @@ export function createSim2RealRouter(deps = {}, options = {}) {
+@@ -4541,5 +4667,4 @@ export function createSim2RealRouter(deps = {}, options = {}) {
          }
      }));
      return router;
@@ -922,7 +938,7 @@ index 19df86b..9f75773 100644
    display: grid;
    grid-template-columns: 1fr 1.4fr;
 diff --git a/dist-server/services/sim2real-web/public/index.html b/dist-server/services/sim2real-web/public/index.html
-index a0cabf1..e2b0f73 100644
+index a0cabf1..c39a691 100644
 --- a/dist-server/services/sim2real-web/public/index.html
 +++ b/dist-server/services/sim2real-web/public/index.html
 @@ -20,8 +20,7 @@
@@ -1941,7 +1957,7 @@ index a0cabf1..e2b0f73 100644
 -    <script defer src="./state-recording-workspace.js?v=recordings-3"></script>
 -    <script defer src="./learning-lab.js?v=learning-6"></script>
 +    <script defer src="./telemetry-core.js?v=duck-lab-31"></script>
-+    <script defer src="./originman-workshop.js?v=originman-5"></script>
++    <script defer src="./originman-workshop.js?v=originman-6"></script>
 +    <script defer src="./app.js?v=originman-1"></script>
      <script defer src="./visualization-enhancements.js?v=viz-1"></script>
 -    <script defer src="./agent-chat.js?v=agent-17"></script>

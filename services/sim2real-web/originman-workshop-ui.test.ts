@@ -107,7 +107,7 @@ describe('OriginMan classroom browser behavior', () => {
       ),
     );
     expect(document.getElementById('originman-reference-video')!.getAttribute('src')).toBe(
-      '/api/sim2real/workshops/originman/reference-video',
+      '/api/sim2real/workshops/originman/reference-video?format=webm',
     );
     expect(document.getElementById('originman-verdict')!.textContent).toBe('');
     expect((document.getElementById('originman-evaluate') as HTMLButtonElement).disabled).toBe(

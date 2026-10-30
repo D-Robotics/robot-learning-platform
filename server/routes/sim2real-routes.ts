@@ -1,3 +1,4 @@
+import { verifiedVideoWebm } from '../sim2real/verified-video.js';
 import {
   ORIGINMAN_WORKSHOP_MANIFEST,
   matchesOriginmanWorkshopContract,
@@ -4022,8 +4023,31 @@ export function createSim2RealRouter(
         );
         return;
       }
-      response.type('video/mp4').setHeader('Content-Length', bytes.bytes.length);
-      response.send(bytes.bytes);
+      const format = request.query.format ?? 'mp4';
+      if (format !== 'mp4' && format !== 'webm') {
+        sendApiError(response, 400, 'SIM2REAL_VIDEO_FORMAT_INVALID', 'Unsupported video format.');
+        return;
+      }
+      let presentation = bytes.bytes;
+      try {
+        if (format === 'webm') presentation = await verifiedVideoWebm(bytes.bytes);
+      } catch {
+        sendApiError(
+          response,
+          503,
+          'SIM2REAL_VIDEO_PRESENTATION_UNAVAILABLE',
+          '回放兼容格式暂不可用；原始视频和数值证据仍保留。',
+        );
+        return;
+      }
+      response.type(format === 'webm' ? 'video/webm' : 'video/mp4');
+      response.setHeader('X-Source-Artifact-Sha256', video.sha256);
+      response.setHeader(
+        'X-Artifact-Sha256',
+        createHash('sha256').update(presentation).digest('hex'),
+      );
+      response.setHeader('Content-Length', presentation.length);
+      response.send(presentation);
     }),
   );
 
@@ -4060,9 +4084,31 @@ export function createSim2RealRouter(
         );
         return;
       }
-      response.type('video/mp4').setHeader('X-Artifact-Sha256', reference.metadata.video.sha256);
-      response.setHeader('Content-Length', reference.bytes.length);
-      response.send(reference.bytes);
+      const format = request.query.format ?? 'mp4';
+      if (format !== 'mp4' && format !== 'webm') {
+        sendApiError(response, 400, 'SIM2REAL_VIDEO_FORMAT_INVALID', 'Unsupported video format.');
+        return;
+      }
+      let presentation: Buffer = reference.bytes;
+      try {
+        if (format === 'webm') presentation = await verifiedVideoWebm(reference.bytes);
+      } catch {
+        sendApiError(
+          response,
+          503,
+          'SIM2REAL_VIDEO_PRESENTATION_UNAVAILABLE',
+          '课前参考兼容格式暂不可用；原始视频仍保留。',
+        );
+        return;
+      }
+      response.type(format === 'webm' ? 'video/webm' : 'video/mp4');
+      response.setHeader('X-Source-Artifact-Sha256', reference.metadata.video.sha256);
+      response.setHeader(
+        'X-Artifact-Sha256',
+        createHash('sha256').update(presentation).digest('hex'),
+      );
+      response.setHeader('Content-Length', presentation.length);
+      response.send(presentation);
     }),
   );
 

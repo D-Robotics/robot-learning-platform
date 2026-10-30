@@ -26,8 +26,10 @@ paths:
       tags: [workspace]
       summary: Read digest-verified instructor reference video without creating a user Run
       operationId: getOriginmanInstructorReferenceVideo
+      parameters:
+        - { name: format, in: query, schema: { type: string, enum: [mp4, webm], default: mp4 } }
       responses:
-        "200": { description: Verified instructor MP4. This is not the current group's training result. }
+        "200": { description: Verified instructor source or compatible WebM presentation. Source and presentation digests are separate; not the current group's training result. }
         "401": { $ref: "#/components/responses/AuthRequired" }
         "409": { description: Reference not configured or digest verification failed. }
   /api/v1/duck/workshops/originman:
@@ -44,8 +46,10 @@ paths:
       tags: [runs]
       summary: Read this account's completed OriginMan evaluation video after digest verification
       operationId: getOriginmanWorkshopVideo
+      parameters:
+        - { name: format, in: query, schema: { type: string, enum: [mp4, webm], default: mp4 } }
       responses:
-        "200": { description: This evaluation's verified MP4 bytes. }
+        "200": { description: This evaluation's verified MP4 source or WebM presentation; separate source and presentation digests. }
         "401": { $ref: "#/components/responses/AuthRequired" }
         "404": { $ref: "#/components/responses/NotFound" }
         "409": { description: Video missing or digest mismatch; numerical evidence remains available. }
