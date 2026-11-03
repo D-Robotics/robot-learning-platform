@@ -137,3 +137,5 @@
 视频回执存在也不证明当前媒体端点可达。recorded表示历史上记录了摘要和字节数；原Worker掉线时仍可能返回503/VIDEO_UNVERIFIED。此时保留原结果，恢复原Worker连接后重新打开同一视频，不重提评测。
 
 版本检查：恢复或指南回执中的`pluginRuntime.version`应为0.1.15，`loadedSourcesMatch=true`。该信息核对当前进程加载的编排模块与本地分发记录，不代表服务端版本或签名认证。若为null或false，刷新旧MCP连接后重试；不能只看插件中心的版本号。
+
+若Studio本轮只暴露`video_generate`，没有学习平台MCP工具：这是宿主任务分支选择问题。新建一个任务，先说“机器人学习平台插件软件诊断”，明确调用已配置连接的`rdk_platform_status`和`rdk_experiment_resume`。成功后再说“机器人学习平台实验结果回看，打开恢复回执的links.video（已有制品，不是创作生成）”。不要靠禁用权限或换匿名平台绕过；这个宿主问题尚未由插件关闭。
