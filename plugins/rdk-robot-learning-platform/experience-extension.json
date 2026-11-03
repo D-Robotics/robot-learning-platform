@@ -1,18 +1,18 @@
 {
   "schemaVersion": 1,
   "name": "learning-experience-extension",
-  "version": "0.4.1",
-  "identitySha256": "57adf37fdaa58267f80f89a46b6a5ec3b98f2d101e1fcf40ab6a204ff32502d1",
+  "version": "0.4.2",
+  "identitySha256": "f93faffbd0b52aeb982666a452c7affb745bbf09d73c97ec47e08b7551f543fa",
   "files": {
     "references/experience-profile-microduck.json": "4475ca96aeaebf56881054613ee7a44b6c86aa3b571e61745928f0f428752c6f",
     "references/experience-profile.json": "50a496e78883abb343dcde119b422e2c8cdb5f6b3df86d4b004b04d015a121d0",
-    "scripts/experience-mcp.mjs": "86c2ff4012f2d8f4ac2a0d6045fea32fb6f167469eb409eb85d9d4ac5308b2b6",
+    "scripts/experience-mcp.mjs": "2bccf85524ac024abe02edf779b3b756f815c79c88f19c50aa0b3878c394248c",
     "scripts/experience.mjs": "63301cec4335fa9a54278eafd2d55843f3512feb0ab651ee06f72f5da7510f33",
-    "scripts/experiment-context.mjs": "8e1bdbc449498a0048cbc11df00bfecae2f9a7880e51b3e741f2073860a5c20c",
+    "scripts/experiment-context.mjs": "fa0967ac80b50b92561843195bbe7c961ac9bb07c4efabeb4431e5e4f5059c7c",
     "scripts/workflow-inspection.mjs": "8ca89d1204bbabc496477f2199af3fd60dee8f5afa05edbd9b8cbff179f1b64e",
     "skills/experience-preparation/SKILL.md": "220d141455737a953823927df5db61e7d85ef32e93fc79f6a829799a0d46f5c9",
     "skills/simulation-replay/SKILL.md": "045a242f00b88ad08af166cc339c53076eae37468e81ce8e9f209f9c7a9debd3",
-    "skills/training-runs/SKILL.md": "fa6e17ce64f392cd40eab3739af3e618c9b3d2bf3f79f6a5214b83d2de4c6eb6"
+    "skills/training-runs/SKILL.md": "b93f0563378dea7d2fe6c1f0ec241e558593fc0a5066efb347d13feecf6a2ce0"
   },
   "identityAlgorithm": "sha256-json-canonical-files-v1"
 }

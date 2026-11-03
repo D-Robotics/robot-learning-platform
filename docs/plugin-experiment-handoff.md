@@ -36,4 +36,8 @@ MCP 请求结束或取消不等于后台训练停止。本扩展不提供后台�
 
 评测失败、阻塞或取消且没有执行摘要时，保留平台原状态和summary，建议读取原评测日志，不误报摘要冲突。若平台请求和执行结果的来源矛盾或已提供摘要确实不一致，仍拒绝关联。恢复结束前再次确认平台与正式身份，变化时不返回或保存引用。
 
-回放只有在同源完成执行、明确视频SHA256和正字节数均存在时提供入口。`playback.state`区分available、missing、blocked、pending，`verifiedInPlayer`始终为false；视频实际播放仍由宿主确认。缺视频不自动重提评测。
+回放只有在同源完成执行、明确视频SHA256和正字节数均存在时提供入口。`playback.state`区分recorded、missing、blocked、pending，`verifiedInPlayer`始终为false；视频实际播放仍由宿主确认。缺视频不自动重提评测。
+
+视频回执存在也不证明当前媒体端点可达。recorded表示历史上记录了摘要和字节数；原Worker掉线时仍可能返回503/VIDEO_UNVERIFIED。此时保留原结果，恢复原Worker连接后重新打开同一视频，不重提评测。
+
+版本诊断：`pluginRuntime.version`仅在本进程加载时的编排源码摘要与分发provenance一致时返回，旧进程不能靠磁盘文件被替换冒充新版本。它不核验平台服务端版本或签名；没有分发记录时明确返回未验证。

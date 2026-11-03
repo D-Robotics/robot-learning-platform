@@ -46,4 +46,6 @@ MCP 无训练取消/续训专用工具。用户取消时停止继续提交和轮
 
 视频回放只用宿主打开链接能力，不对 MP4 调用“网页正文抓取”。抓取超时或没有正文不能推断 401、登录墙或播放器未加载；仅有明确 HTTP/页面证据才报告认证问题。宿主没有播放器观测能力时说明“入口已打开，工具未自动核验播放”，不要为补截图申请新的系统权限或循环重试。OriginMan 的 evaluate Run 不是独立 evaluation 实体，不能把 evaluations_list 为空当作没有评测。
 
-恢复结果的`playback.state=available`只说明有完整视频回执，`verifiedInPlayer=false`仍要求宿主实际播放确认。`missing`时不生成视频入口，不自动重交评测；`blocked`时先看原评测summary和日志。评测failed/blocked/cancelled而没有执行摘要，不应误称策略摘要冲突；父Run或已提供摘要确实不一致时仍拒绝关联。查询期间账号或目标平台变化，整个恢复停止，不保存引用。
+恢复结果的`playback.state=recorded`只说明有历史视频回执，`endpointVerified=false、verifiedInPlayer=false`仍要求宿主实际播放确认。`missing`时不生成视频入口，不自动重交评测；`blocked`时先看原评测summary和日志。评测failed/blocked/cancelled而没有执行摘要，不应误称策略摘要冲突；父Run或已提供摘要确实不一致时仍拒绝关联。查询期间账号或目标平台变化，整个恢复停止，不保存引用。
+
+视频回执存在也不证明当前媒体端点可达。recorded表示历史上记录了摘要和字节数；原Worker掉线时仍可能返回503/VIDEO_UNVERIFIED。此时保留原结果，恢复原Worker连接后重新打开同一视频，不重提评测。

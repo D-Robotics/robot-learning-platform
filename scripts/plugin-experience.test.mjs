@@ -547,3 +547,50 @@ test('preparation follows opaque catalog pages over an actual stdio child connec
     await upstream.close();
   }
 });
+
+test('runtime version requires matching loaded source hashes and rejects a stale cached process', async (t) => {
+  const { createHash } = await import('node:crypto');
+  const { pathToFileURL } = await import('node:url');
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'rdk-runtime-identity-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  fs.mkdirSync(path.join(root, 'scripts'));
+  for (const name of [
+    'experience-mcp.mjs',
+    'experience.mjs',
+    'workflow-inspection.mjs',
+    'experiment-context.mjs',
+  ])
+    fs.copyFileSync(
+      new URL('../plugins/rdk-robot-learning-platform/scripts/' + name, import.meta.url),
+      path.join(root, 'scripts', name),
+    );
+  const { pluginRuntimeIdentity } = await import(
+    pathToFileURL(path.join(root, 'scripts/experience-mcp.mjs')).href
+  );
+  assert.equal(pluginRuntimeIdentity().loadedSourcesMatch, false);
+  const writeProvenance = () =>
+    fs.writeFileSync(
+      path.join(root, 'provenance.json'),
+      JSON.stringify({
+        version: '0.1.15',
+        wrapperSources: Object.fromEntries(
+          ['experience-mcp.mjs', 'experiment-context.mjs'].map((name) => [
+            'scripts/' + name,
+            createHash('sha256')
+              .update(fs.readFileSync(path.join(root, 'scripts', name)))
+              .digest('hex'),
+          ]),
+        ),
+      }),
+    );
+  writeProvenance();
+  assert.equal(pluginRuntimeIdentity().version, '0.1.15');
+  assert.equal(pluginRuntimeIdentity().loadedSourcesMatch, true);
+  fs.appendFileSync(
+    path.join(root, 'scripts/experiment-context.mjs'),
+    '\n// replaced after this process loaded\n',
+  );
+  writeProvenance();
+  assert.equal(pluginRuntimeIdentity().version, null);
+  assert.equal(pluginRuntimeIdentity().loadedSourcesMatch, false);
+});

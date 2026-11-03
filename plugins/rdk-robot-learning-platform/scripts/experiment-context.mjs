@@ -232,15 +232,16 @@ export async function experimentContext(
     association,
     playback: {
       state: canReplay
-        ? 'available'
+        ? 'recorded'
         : evaluationFailed
           ? 'blocked'
           : evaluation?.status === 'completed'
             ? 'missing'
             : 'pending',
+      endpointVerified: false,
       verifiedInPlayer: false,
       reason: canReplay
-        ? '平台返回视频字节数与摘要；实际播放仍需宿主确认。'
+        ? '平台曾记录视频字节数与摘要；本次未检查媒体端点，原Worker离线或文件不可读仍可能导致失败。'
         : (evaluationEvidence?.videoError ??
           '尚无可用视频的完整平台回执；不生成回放入口，不自动重交评测。'),
     },
@@ -276,7 +277,7 @@ export async function experimentContext(
               ? '继续查询已关联评测，不自动重交。'
               : !canReplay
                 ? '评测已完成；视频回执缺失或生成失败，查看原评测日志，不自动重交。'
-                : '核对质量结论；用户要求时打开当前账号的回放，并实际确认能播放。',
+                : '核对质量结论；用户要求时打开视频候选入口，检查当前访问与播放。端点失败保留原错误并排查原Worker，不自动重交。',
     suggestedRead: {
       tool: 'rdk_run_logs',
       arguments: { runId: failed || !evaluation ? runId : evaluationRunId },

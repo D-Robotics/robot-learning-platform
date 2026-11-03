@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 /** Add read-only experience composition while preserving the installed upstream MCP. */
 import { readFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
 import { createInterface } from 'node:readline';
 import {
   connectMcp,
@@ -10,6 +11,44 @@ import {
 } from './experience.mjs';
 import { WORKFLOW_TOOLS, inspectWorkflow, prepareTraining } from './workflow-inspection.mjs';
 import { EXPERIMENT_TOOLS, experimentContext } from './experiment-context.mjs';
+
+// Capture at import time so an old cached process cannot claim newly replaced files.
+const loadedSources = Object.fromEntries(
+  ['experience-mcp.mjs', 'experiment-context.mjs'].map((name) => [
+    'scripts/' + name,
+    createHash('sha256')
+      .update(readFileSync(new URL(name, import.meta.url)))
+      .digest('hex'),
+  ]),
+);
+export function pluginRuntimeIdentity() {
+  try {
+    const declared = JSON.parse(
+      readFileSync(new URL('../provenance.json', import.meta.url), 'utf8'),
+    );
+    if (
+      !/^\d+\.\d+\.\d+$/.test(declared.version ?? '') ||
+      Object.entries(loadedSources).some(([name, hash]) => declared.wrapperSources?.[name] !== hash)
+    )
+      return {
+        version: null,
+        loadedSourcesMatch: false,
+        reason: '当前进程与分发来源记录不一致，需刷新连接。',
+      };
+    return {
+      version: declared.version,
+      loadedSourcesMatch: true,
+      source: 'local-distribution-provenance',
+      note: '仅核对本进程加载的编排模块与本地分发记录；不是服务端版本或签名认证。',
+    };
+  } catch {
+    return {
+      version: null,
+      loadedSourcesMatch: false,
+      reason: '当前入口未提供可核对的便携分发记录。',
+    };
+  }
+}
 
 export const EXPERIENCE_TOOLS = [
   ...EXPERIMENT_TOOLS,
@@ -167,6 +206,7 @@ export function experienceProxy(upstream, { env = process.env, contextDirectory 
               });
           }
         }
+        payload = { ...payload, pluginRuntime: pluginRuntimeIdentity() };
         return {
           content: [{ type: 'text', text: JSON.stringify(payload) }],
           structuredContent: payload,
