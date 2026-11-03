@@ -455,7 +455,7 @@ function cell(value) {
     .replace(/[\r\n]/g, ' ');
 }
 
-export async function prepareTraining(input, call) {
+export async function prepareTraining(input, call, toolNames) {
   if (
     !input ||
     typeof input.computeResourceId !== 'string' ||
@@ -474,7 +474,7 @@ export async function prepareTraining(input, call) {
   if (
     resource.id !== input.computeResourceId ||
     resource.connected !== true ||
-    resource.mock !== false ||
+    resource.mock === true ||
     resource.browserRelay === true
   )
     return {
@@ -483,6 +483,27 @@ export async function prepareTraining(input, call) {
       reason: '指定执行资源未通过真实连接检查，不创建训练记录。',
       trainingSubmitted: false,
       resource,
+    };
+  if (toolNames && !toolNames.includes('rdk_training_preflight'))
+    return {
+      status: 'incomplete',
+      computeResourceId: input.computeResourceId,
+      resource,
+      trainingSubmitted: false,
+      taskEnvironmentVerified: false,
+      unsupportedTools: ['rdk_training_preflight'],
+      reason: '资源已连接，但当前核心未提供任务环境预检；不能据此声称环境已就绪。',
+      nextAction:
+        '使用当前核心支持的模型校验、明确参数和受控短训练验证实际执行；失败保留原Run，不自动降级CPU或重交。',
+    };
+  if (resource.mock !== false)
+    return {
+      status: 'incomplete',
+      computeResourceId: input.computeResourceId,
+      resource,
+      trainingSubmitted: false,
+      taskEnvironmentVerified: false,
+      reason: '资源连接正常，但核心没有返回明确的非Mock证据；不能据此声称真实训练已验证。',
     };
   const preflight = await call('rdk_training_preflight', {
     computeResourceId: input.computeResourceId,

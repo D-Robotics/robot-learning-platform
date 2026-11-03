@@ -16,6 +16,16 @@ description: 在 RDK 学习平台选择任务、训练引擎与执行资源，�
 3. `rdk_training_submit` 显式传实际 `modelId`、`taskId`、`projectId`、`datasetIds`、`computeResourceId`（适用时）、`backend`、`engine`、`profile` 及预算。默认 backend 是 local、profile 是 smoke；用户要求真训练时先确认 worker 不是 Mock。未知 backend 和本工具不支持的轨迹路径/续训/嵌套 training 字段会在任何请求前拒绝；不改成另一路径重试。读取返回的 `resolvedTraining` 与 `defaultsApplied`，说明所选模型与预算，避免缺参默认首模型被误认成用户选择。用稳定 `idempotencyKey`，提交一次保存返回 `runId`。
 4. 用 `rdk_training_status(runId)` 查状态、`rdk_run_logs(runId, after)` 增量读日志。等待间隔随耗时调整，不为查进度再次 submit。结束后查 `rdk_artifacts_list`、`rdk_lineage_get`；再用 `rdk_retraining_advice` 辅助诊断。
 
+## 实验接续（有扩展工具时）
+
+提交成功后，为本次训练选择一个新的明确 `contextId`（ASCII字母数字、点、下划线或短横线），调用 `rdk_experiment_remember({contextId, runId})`。它只保存当前平台和正式账号下的任务引用，不提交训练。新训练必须使用新标识，不能覆盖旧训练。
+
+用户说“继续这个实验”时，用已明确的标识调用 `rdk_experiment_resume({contextId})`；标识不明确时询问，不猜全局最新Run。它会实时核对权限和状态；404、失效登录、blocked都保留失败，不自动重交。书签保存在当前系统用户的私有目录，不保存账号原文或凭据；换电脑不会自动同步。
+
+评测仍使用平台现有提交工具与原训练参数。提交后用同一标识调用 `rdk_experiment_remember({contextId, runId, evaluationRunId})`，核对父Run、模型及策略摘要后才建立关联。未知引擎的评测来源没有明确字段时，保留独立Run，不能猜测已关联。
+
+恢复工具提供的工作台链接不保证自动选中Run；视频入口也不保证文件已生成。用户要求打开时复用宿主打开接口，实际核对登录、Run和播放；不能仅凭链接说已播放。不能把MCP请求取消等同于后台训练停止。此扩展不提供后台自动轮询、训练取消或真机部署。
+
 训练运行完成不等于质量门通过或可上板。平台、worker 或引擎拒绝时报告原因和残留 Run；不换成 Mock 伪装成功。改变任务/参数才创建新的逻辑操作键。没有资源、模型或可用数据时先完成准备，不擅自启动计费资源。
 
 提交响应中的 `dataUsage.consumptionVerified=false` 表示它没有证明用户数据被消费；`syntheticData.confirmed=null` 表示尚无来源证据，`builtinSmokePath` 只提示当前仓库内置包装的风险，不推断自定义 worker 的实际输入。`status=blocked|failed` 与 `summary`/`note` 原因优先于“请求已登记”，不要把登记成功说成训练已启动。
@@ -29,3 +39,9 @@ MCP 无训练取消/续训专用工具。用户取消时停止继续提交和轮
 引擎、任务包、自定义奖励、GPU 接入、LeRobot、足球和循环策略的可用仓库入口见 [仓库能力](../../references/cli-capabilities.md)。凭据与执行器路径从部署环境读取，不进入请求 manifest 或共享产物。
 
 真实浏览器示教 BC：提交时指定 `engine=offline-bc`、`demonstrationRunId` 和真实 local worker。平台冻结 observation/action 字节与摘要，校验同账号、同模型和维度；完成后核对数据消费回执与 ONNX。录制必须配对同一次推理前输入和输出，避免当前动作泄漏到 last_action 槽。闭环评测需新 reset，覆盖站立、前进、转向及 zero/参考对照；拒载或跌倒保留失败，不绕过验证器。
+
+模型列表若只返回 ID，不按第一个条目猜模型。用明确 taskId 的运行记录与同一 modelId 的血缘/契约交叉核对；需要校验 manifest 时使用真实登记原文，不能自造不完整字段。宿主未提供文件读取能力时，不能声称已读插件引用。
+
+可选准备工具的能力以当前 tools/list 为准。核心没有任务预检时返回未验证；不要反复调用不存在的接口。queued 评测可能尚无执行摘要：按平台明确 sourceRunId 暂存引用，并在终态重新核对摘要，不把排队关联当作执行验证。
+
+视频回放只用宿主打开链接能力，不对 MP4 调用“网页正文抓取”。抓取超时或没有正文不能推断 401、登录墙或播放器未加载；仅有明确 HTTP/页面证据才报告认证问题。宿主没有播放器观测能力时说明“入口已打开，工具未自动核验播放”，不要为补截图申请新的系统权限或循环重试。OriginMan 的 evaluate Run 不是独立 evaluation 实体，不能把 evaluations_list 为空当作没有评测。

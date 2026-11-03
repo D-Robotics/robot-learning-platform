@@ -263,3 +263,23 @@ test('new-training preparation refreshes health before environment without submi
   assert.equal(bad.status, 'blocked');
   assert.equal(stopped.length, 1);
 });
+
+test('older cores without task preflight return an explicit limitation without calling a missing tool', async () => {
+  const { prepareTraining } =
+    await import('../plugins/rdk-robot-learning-platform/scripts/workflow-inspection.mjs');
+  const calls = [];
+  const result = await prepareTraining(
+    { productId: 'originman', computeResourceId: 'gpu' },
+    async (name) => {
+      calls.push(name);
+      if (name !== 'rdk_compute_resource_test') throw new Error('unknown tool');
+      return { id: 'gpu', connected: true, browserRelay: false };
+    },
+    ['rdk_compute_resource_test'],
+  );
+  assert.equal(result.status, 'incomplete');
+  assert.equal(result.trainingSubmitted, false);
+  assert.equal(result.taskEnvironmentVerified, false);
+  assert.deepEqual(result.unsupportedTools, ['rdk_training_preflight']);
+  assert.deepEqual(calls, ['rdk_compute_resource_test']);
+});

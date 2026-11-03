@@ -339,7 +339,7 @@ test('experience MCP preserves upstream tools, results and errors and exposes gu
   assert.ok(init.instructions.startsWith('original'));
   const list = await proxy('tools/list');
   assert.deepEqual(list.tools[0], original);
-  assert.equal(list.tools.length, 5);
+  assert.equal(list.tools.length, 7);
   const guide = await proxy('tools/call', { name: 'rdk_experience_guide' });
   assert.match(guide.structuredContent.guide, /场景准备/);
   const passthrough = await proxy('tools/call', {

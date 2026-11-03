@@ -9,8 +9,10 @@ import {
   isDirectInvocation,
 } from './experience.mjs';
 import { WORKFLOW_TOOLS, inspectWorkflow, prepareTraining } from './workflow-inspection.mjs';
+import { EXPERIMENT_TOOLS, experimentContext } from './experiment-context.mjs';
 
 export const EXPERIENCE_TOOLS = [
+  ...EXPERIMENT_TOOLS,
   ...WORKFLOW_TOOLS,
   {
     name: 'rdk_experience_guide',
@@ -35,7 +37,7 @@ export const EXPERIENCE_TOOLS = [
   },
 ];
 
-export function experienceProxy(upstream, { env = process.env } = {}) {
+export function experienceProxy(upstream, { env = process.env, contextDirectory } = {}) {
   const reservedNames = new Set(EXPERIENCE_TOOLS.map((tool) => tool.name));
   const validateCatalogPage = (page) => {
     if (
@@ -106,7 +108,7 @@ export function experienceProxy(upstream, { env = process.env } = {}) {
         ...result,
         instructions:
           (result.instructions ?? '') +
-          '\n准备演示、首次体验或课程时优先调用 rdk_experience_guide 与 rdk_experience_prepare；可按用户目标自由组合步骤。工具准备成功不表示仿真已经运行。仿真、训练、调优、部署的全流程状态用 rdk_workflow_inspect 读取并展示 markdown 表格；未取得证据保持待验证。新提交训练前用 rdk_training_prepare 同时刷新资源健康和任务环境，预检结果不是训练结果；已提交任务只按 Run ID 查询。默认先一次流程检查并展示状态表；有明确阻塞时先解释和恢复，不为了凑齐工具而展开大量无关查询。指定 Run 的结论必须绑定同一 Run 和摘要，不借用全局 golden_path 或其他 Run 的通过状态；用户需要时再展开明细。\n本次原生计算配置：' +
+          '\n实验接续：提交训练后，用新的明确 contextId 调 rdk_experiment_remember 保存返回的训练Run；提交评测后以同一contextId、训练Run和评测Run补关联。用户说“继续刚才实验”时调用 rdk_experiment_resume；只有明确知道该contextId才恢复，歧义时询问，不选全局最新Run。等待、断线、404或blocked不自动重交训练；新训练使用新contextId。回放入口仍需宿主实际打开与确认播放，不能根据链接生成声称已播放。MP4不调用网页正文抓取；超时不代表401或登录墙。没有播放器观测能力就报告未自动核验，不为视频验证申请新系统权限。OriginMan的evaluate Run不是独立evaluation实体，不套用evaluationId接口。\n准备演示、首次体验或课程时优先调用 rdk_experience_guide 与 rdk_experience_prepare；可按用户目标自由组合步骤。工具准备成功不表示仿真已经运行。仿真、训练、调优、部署的全流程状态用 rdk_workflow_inspect 读取并展示 markdown 表格；未取得证据保持待验证。新提交训练前用 rdk_training_prepare 同时刷新资源健康和任务环境，预检结果不是训练结果；已提交任务只按 Run ID 查询。默认先一次流程检查并展示状态表；有明确阻塞时先解释和恢复，不为了凑齐工具而展开大量无关查询。指定 Run 的结论必须绑定同一 Run 和摘要，不借用全局 golden_path 或其他 Run 的通过状态；用户需要时再展开明细。\n本次原生计算配置：' +
           clientContext().nativeCompute.configuration +
           '。宿主接口缺失时不要要求已经在桌面中的用户重复“去桌面操作”；用指南中的 clientContext 说明实际缺口。',
       };
@@ -135,22 +137,35 @@ export function experienceProxy(upstream, { env = process.env } = {}) {
             readToolResult(
               await upstream.request('tools/call', { name, arguments: args }, { signal }),
             );
-          const catalog = await readCatalog(signal);
-          const status = await call('rdk_platform_status', {});
-          if (params.name === 'rdk_training_prepare')
-            payload = await prepareTraining(params.arguments, call);
-          else if (params.name === 'rdk_workflow_inspect')
-            payload = await inspectWorkflow(
-              params.arguments ?? {},
+          if (EXPERIMENT_TOOLS.some((t) => t.name === params.name)) {
+            payload = await experimentContext(
+              params.name === 'rdk_experiment_remember' ? 'remember' : 'resume',
+              params.arguments,
               call,
-              catalog.tools.map((t) => t.name),
+              { directory: contextDirectory },
             );
-          else
-            payload = await prepareExperience(params.arguments?.profile ?? readProfile(), call, {
-              baseUrl: status.baseUrl,
-              tools: catalog.tools.map((t) => t.name),
-              action: params.arguments?.action ?? 'check',
-            });
+          } else {
+            const catalog = await readCatalog(signal);
+            const status = await call('rdk_platform_status', {});
+            if (params.name === 'rdk_training_prepare')
+              payload = await prepareTraining(
+                params.arguments,
+                call,
+                catalog.tools.map((t) => t.name),
+              );
+            else if (params.name === 'rdk_workflow_inspect')
+              payload = await inspectWorkflow(
+                params.arguments ?? {},
+                call,
+                catalog.tools.map((t) => t.name),
+              );
+            else
+              payload = await prepareExperience(params.arguments?.profile ?? readProfile(), call, {
+                baseUrl: status.baseUrl,
+                tools: catalog.tools.map((t) => t.name),
+                action: params.arguments?.action ?? 'check',
+              });
+          }
         }
         return {
           content: [{ type: 'text', text: JSON.stringify(payload) }],
@@ -176,7 +191,7 @@ export function experienceProxy(upstream, { env = process.env } = {}) {
   };
 }
 
-async function main() {
+export async function main() {
   const upstream = connectMcp();
   const dispatch = experienceProxy(upstream);
   const lines = createInterface({ input: process.stdin });

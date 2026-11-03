@@ -435,7 +435,7 @@ async function main() {
     );
     assert.equal(new Set(extendedTools.map((tool) => tool.name)).size, extendedTools.length);
     for (const tool of optionalTools) {
-      assert.equal(tool.annotations?.readOnlyHint, true);
+      assert.equal(tool.annotations?.readOnlyHint, tool.name !== 'rdk_experiment_remember');
       assert.equal(tool.annotations?.destructiveHint, false);
     }
     for (const config of [portable, compat]) {
