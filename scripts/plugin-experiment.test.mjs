@@ -39,6 +39,7 @@ function fixture(t) {
           sourceRunId: evaluation ? state.source : null,
           clearGain: false,
           videoError: null,
+          video: evaluation ? state.video : undefined,
         },
       },
     };
@@ -85,6 +86,7 @@ test('evaluation parent must match; no failed association is persisted', async (
 test('associated evaluation is read again and quality is separate from completion', async (t) => {
   const f = fixture(t);
   f.state.status = 'completed';
+  f.state.video = { sha256: 'c'.repeat(64), bytes: 1024 };
   const r = await f.tool('remember', {
     contextId: 'pair',
     runId: 'train',
@@ -174,4 +176,139 @@ test('queued evaluation can be saved from explicit requested parent, then must r
     experimentContext('resume', { contextId: 'pending' }, call, { directory: f.directory }),
     /摘要/,
   );
+});
+
+test('failed evaluation without a digest preserves its actual failure and original log target', async (t) => {
+  const f = fixture(t);
+  f.state.status = 'completed';
+  let status = 'queued';
+  const call = async (name, args) => {
+    if (name !== 'rdk_training_status' || args.runId !== 'eval') return f.call(name, args);
+    return {
+      runId: 'eval',
+      modelId: 'model',
+      status,
+      summary: 'GPU Worker disconnected',
+      training: { originmanWorkshop: { phase: 'evaluate', sourceRunId: 'train' } },
+    };
+  };
+  await experimentContext(
+    'remember',
+    { contextId: 'worker-lost', runId: 'train', evaluationRunId: 'eval' },
+    call,
+    { directory: f.directory },
+  );
+  for (status of ['failed', 'blocked', 'cancelled']) {
+    const r = await experimentContext('resume', { contextId: 'worker-lost' }, call, {
+      directory: f.directory,
+    });
+    assert.equal(r.evaluation.status, status);
+    assert.equal(r.evaluation.summary, 'GPU Worker disconnected');
+    assert.equal(r.association.executionVerified, false);
+    assert.equal(r.quality.clearGain, null);
+    assert.equal(r.links.video, undefined);
+    assert.equal(r.suggestedRead.arguments.runId, 'eval');
+    assert.match(r.nextAction, /评测.*日志/);
+    assert.doesNotMatch(r.nextAction, /继续查询/);
+  }
+});
+
+test('completed evaluation without a video receipt never advertises a playable link', async (t) => {
+  const f = fixture(t);
+  f.state.status = 'completed';
+  const r = await f.tool('remember', {
+    contextId: 'no-video',
+    runId: 'train',
+    evaluationRunId: 'eval',
+  });
+  assert.equal(r.links.video, undefined);
+  assert.equal(r.playback.state, 'missing');
+  assert.match(r.nextAction, /视频/);
+});
+
+test('contradictory evaluation parent declarations are rejected', async (t) => {
+  const f = fixture(t);
+  const call = async (name, args) => {
+    const r = await f.call(name, args);
+    if (args?.runId === 'eval')
+      r.training = { originmanWorkshop: { phase: 'evaluate', sourceRunId: 'foreign' } };
+    return r;
+  };
+  await assert.rejects(
+    experimentContext(
+      'remember',
+      { contextId: 'contradictory', runId: 'train', evaluationRunId: 'eval' },
+      call,
+      { directory: f.directory },
+    ),
+    /来源/,
+  );
+});
+
+test('identity changes during Run reads do not persist or return an experiment', async (t) => {
+  const f = fixture(t);
+  const call = async (name, args) => {
+    const r = await f.call(name, args);
+    if (name === 'rdk_training_status') f.state.account = 'B';
+    return r;
+  };
+  await assert.rejects(
+    experimentContext('remember', { contextId: 'switch', runId: 'train' }, call, {
+      directory: f.directory,
+    }),
+    /身份.*变化/,
+  );
+  assert.equal(fs.readdirSync(f.directory).length, 0);
+});
+
+test('actual stdio wrapper returns a failed evaluation as diagnostic data and remains usable after rejection', async (t) => {
+  const { connectMcp, readToolResult } =
+    await import('../plugins/rdk-robot-learning-platform/scripts/experience.mjs');
+  const f = fixture(t);
+  const moduleUrl = new URL(
+    '../plugins/rdk-robot-learning-platform/scripts/experience-mcp.mjs',
+    import.meta.url,
+  ).href;
+  const source = `
+    import {createInterface} from 'node:readline';
+    import {experienceProxy} from ${JSON.stringify(moduleUrl)};
+    let failed=false;
+    const proxy=experienceProxy({request:async(method,p={})=>{
+      if(method==='initialize')return {serverInfo:{name:'fixture',version:'1'}};
+      if(method==='tools/list')return {tools:[]};
+      if(method==='fixture/fail'){failed=true;return {changed:true};}
+      if(p.name==='rdk_platform_status')return {structuredContent:{ok:true,baseUrl:'https://example.test/learning',session:{authenticated:true,accountId:'A'}}};
+      if(p.name!=='rdk_training_status')throw Error('Unexpected business operation');
+      const evaluation=p.arguments.runId==='eval';
+      return {structuredContent:evaluation?{runId:'eval',modelId:'model',status:failed?'failed':'queued',summary:failed?'Worker offline':null,training:{originmanWorkshop:{phase:'evaluate',sourceRunId:'train'}}}:{runId:p.arguments.runId,modelId:'model',status:'completed',metrics:{originmanWorkshop:{phase:'train',policySha256:'a'.repeat(64)}}}};
+    }},{contextDirectory:${JSON.stringify(f.directory)}});
+    createInterface({input:process.stdin}).on('line',async line=>{const m=JSON.parse(line);if(m.id==null)return;try{const result=await proxy(m.method,m.params);console.log(JSON.stringify({jsonrpc:'2.0',id:m.id,result}));}catch(e){console.log(JSON.stringify({jsonrpc:'2.0',id:m.id,error:{code:-32603,message:e.message}}));}});
+  `;
+  const client = connectMcp({ args: ['--input-type=module', '-e', source], timeoutMs: 3000 });
+  try {
+    const call = (name, args) => client.request('tools/call', { name, arguments: args });
+    const saved = readToolResult(
+      await call('rdk_experiment_remember', {
+        contextId: 'stdio',
+        runId: 'train',
+        evaluationRunId: 'eval',
+      }),
+    );
+    assert.equal(saved.evaluation.status, 'queued');
+    await client.request('fixture/fail');
+    const failed = readToolResult(await call('rdk_experiment_resume', { contextId: 'stdio' }));
+    assert.equal(failed.evaluation.summary, 'Worker offline');
+    assert.equal(failed.playback.state, 'blocked');
+    const rejected = await call('rdk_experiment_remember', {
+      contextId: 'stdio',
+      runId: 'foreign',
+    });
+    assert.equal(rejected.isError, true);
+    const recovered = readToolResult(await call('rdk_experiment_resume', { contextId: 'stdio' }));
+    assert.equal(recovered.training.runId, 'train');
+    assert.equal(recovered.evaluation.runId, 'eval');
+    assert.equal(recovered.execution.trainingSubmitted, false);
+  } finally {
+    await client.close();
+  }
 });

@@ -99,18 +99,29 @@ function evidence(run) {
   return run.metrics?.originmanWorkshop;
 }
 function validatePair(training, evaluation) {
-  const source =
-    evidence(evaluation)?.sourceRunId ??
-    evaluation.sourceRunId ??
-    evaluation.training?.originmanWorkshop?.sourceRunId;
-  if (source !== training.runId || evaluation.modelId !== training.modelId)
+  const sources = [
+    evidence(evaluation)?.sourceRunId,
+    evaluation.sourceRunId,
+    evaluation.training?.originmanWorkshop?.sourceRunId,
+  ].filter((value) => value != null);
+  const phases = [
+    evidence(evaluation)?.phase,
+    evaluation.training?.originmanWorkshop?.phase,
+  ].filter((value) => value != null);
+  if (
+    !sources.length ||
+    sources.some((source) => source !== training.runId) ||
+    phases.some((phase) => phase !== 'evaluate') ||
+    evaluation.modelId !== training.modelId
+  )
     throw new Error('评测来源与本实验训练不一致，不保存或展示为同一实验。');
   const trainSha = evidence(training)?.policySha256;
   const evalSha = evidence(evaluation)?.policySha256;
   const pending = ['queued', 'running'].includes(evaluation.status);
   if (
     (trainSha || evalSha) &&
-    (!/^[a-f0-9]{64}$/.test(trainSha ?? '') || ((evalSha || !pending) && trainSha !== evalSha))
+    (!/^[a-f0-9]{64}$/.test(trainSha ?? '') ||
+      ((evalSha || evaluation.status === 'completed') && trainSha !== evalSha))
   )
     throw new Error('评测策略摘要与训练不一致。');
   return {
@@ -118,7 +129,9 @@ function validatePair(training, evaluation) {
       evaluation.status === 'completed' && Boolean(trainSha) && trainSha === evalSha,
     note: pending
       ? '暂按平台请求中的明确父Run保存引用；执行摘要尚待终态重验。'
-      : '本次查询已重新核对父Run与策略摘要。',
+      : evaluation.status === 'completed' && trainSha && trainSha === evalSha
+        ? '本次查询已重新核对父Run与策略摘要。'
+        : '父Run引用已核对；尚无匹配的完成执行摘要。保留原评测状态和失败原因。',
   };
 }
 export async function experimentContext(
@@ -186,24 +199,54 @@ export async function experimentContext(
     throw new Error('请绑定训练Run，不能将评测Run当作训练。');
   const evaluation = evaluationRunId ? await getRun(evaluationRunId) : null;
   const association = evaluation ? validatePair(training, evaluation) : null;
+  const finalIdentity = await call('rdk_platform_status', {});
+  if (
+    finalIdentity?.ok !== true ||
+    finalIdentity.session?.authenticated !== true ||
+    finalIdentity.session.accountId !== status.session.accountId ||
+    new URL(finalIdentity.baseUrl).toString().replace(/\/+$/, '') !== baseUrl
+  )
+    throw new Error('查询期间平台或账号身份发生变化；未保存或返回实验，请确认当前连接后重试查询。');
   if (operation === 'remember') {
     createReference(trainingFile, runId);
     if (evaluationRunId) createReference(evaluationFile, evaluationRunId);
   }
   const failed = ['blocked', 'failed', 'cancelled'].includes(training.status);
+  const evaluationFailed = ['blocked', 'failed', 'cancelled'].includes(evaluation?.status);
   const evaluationEvidence = evaluation ? evidence(evaluation) : null;
+  const video = evaluationEvidence?.video;
   const canReplay =
+    training.status === 'completed' &&
+    association?.executionVerified === true &&
     evaluation?.status === 'completed' &&
     evaluationEvidence?.phase === 'evaluate' &&
-    !evaluationEvidence.videoError;
+    !evaluationEvidence.videoError &&
+    /^[a-f0-9]{64}$/.test(video?.sha256 ?? '') &&
+    Number.isSafeInteger(video?.bytes) &&
+    video.bytes > 0;
   return {
     contextId: input.contextId,
     observedAt: new Date().toISOString(),
     training,
     evaluation,
     association,
+    playback: {
+      state: canReplay
+        ? 'available'
+        : evaluationFailed
+          ? 'blocked'
+          : evaluation?.status === 'completed'
+            ? 'missing'
+            : 'pending',
+      verifiedInPlayer: false,
+      reason: canReplay
+        ? '平台返回视频字节数与摘要；实际播放仍需宿主确认。'
+        : (evaluationEvidence?.videoError ??
+          '尚无可用视频的完整平台回执；不生成回放入口，不自动重交评测。'),
+    },
     quality: {
-      clearGain: evaluationEvidence?.clearGain ?? null,
+      clearGain:
+        evaluation?.status === 'completed' ? (evaluationEvidence?.clearGain ?? null) : null,
       hardwareVerified: false,
       note: '执行完成与质量达标分别判断；本工具不验证视频实际播放或真机效果。',
     },
@@ -227,9 +270,13 @@ export async function experimentContext(
         ? '继续查询本实验原Run；等待或断线不代表需要重交训练。'
         : !evaluation
           ? '训练已完成；按原训练参数调用平台评测工具，并将返回的同源评测Run关联到此实验。'
-          : evaluation.status !== 'completed'
-            ? '继续查询已关联评测；失败时查看原评测日志，不自动重交。'
-            : '核对质量结论；用户要求时打开当前账号的回放，并实际确认能播放。',
+          : evaluationFailed
+            ? '评测未成功结束：先查看原评测失败原因与日志，不自动重新提交。'
+            : evaluation.status !== 'completed'
+              ? '继续查询已关联评测，不自动重交。'
+              : !canReplay
+                ? '评测已完成；视频回执缺失或生成失败，查看原评测日志，不自动重交。'
+                : '核对质量结论；用户要求时打开当前账号的回放，并实际确认能播放。',
     suggestedRead: {
       tool: 'rdk_run_logs',
       arguments: { runId: failed || !evaluation ? runId : evaluationRunId },

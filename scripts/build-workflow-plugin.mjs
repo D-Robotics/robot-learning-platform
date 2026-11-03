@@ -100,7 +100,7 @@ fs.appendFileSync(
 );
 const identity = {
   name: 'rdk-robot-learning-platform',
-  version: '0.1.13',
+  version: '0.1.14',
   description: '通用机器人学习工作流：实验接续、训练、评测、回放与失败诊断；GPU默认、CPU显式选择。',
 };
 fs.writeFileSync(path.join(out, 'plugin.json'), JSON.stringify(identity, null, 2));
@@ -140,7 +140,7 @@ fs.writeFileSync(
 );
 fs.writeFileSync(
   path.join(out, 'README.md'),
-  '# Robot Learning 工作流插件 0.1.13\n\n先在解压后的最终目录运行 `node configure.mjs --platform-url <平台地址>`，按原有方式配置私人认证，再在宿主导入实际配置。插件包自包含，无须平台源码或npm install。\n\n新增rdk_experiment_remember与rdk_experiment_resume：按平台、账号和明确contextId保存引用，每次恢复都查原Run，不自动重交或选择最新任务。不会自动同步另一台电脑；不把后台任务标为已停止，不自动打开页面或操作机器人。训练与评测仍使用原平台工具，平台继续执行权限和幂等校验。\n\n主线、状态与恢复操作见skills/training-runs/SKILL.md。能力验证范围以本轮交接记录为准。配置产生的私人文件不能再次分发。底层固定为已验证便携核心，来源见upstream-provenance.json，扩展源码摘要见provenance.json。\n',
+  '# Robot Learning 工作流插件 0.1.14\n\n先在解压后的最终目录运行 `node configure.mjs --platform-url <平台地址>`，按原有方式配置私人认证，再在宿主导入实际配置。插件包自包含，无须平台源码或npm install。\n\n新增rdk_experiment_remember与rdk_experiment_resume：按平台、账号和明确contextId保存引用，每次恢复都查原Run，不自动重交或选择最新任务。不会自动同步另一台电脑；不把后台任务标为已停止，不自动打开页面或操作机器人。训练与评测仍使用原平台工具，平台继续执行权限和幂等校验。\n\n主线、状态与恢复操作见skills/training-runs/SKILL.md。能力验证范围以本轮交接记录为准。配置产生的私人文件不能再次分发。底层固定为已验证便携核心，来源见upstream-provenance.json，扩展源码摘要见provenance.json。\n',
 );
 const entries = [];
 function inventory(directory) {
