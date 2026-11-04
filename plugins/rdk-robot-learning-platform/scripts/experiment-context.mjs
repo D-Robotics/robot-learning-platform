@@ -260,7 +260,7 @@ export async function experimentContext(
               baseUrl +
               '/api/v1/duck/runs/' +
               encodeURIComponent(evaluationRunId) +
-              '/workshop-video',
+              '/workshop-video?format=webm',
           }
         : {}),
       note: '工作台入口不保证自动选中Run。视频入口仍由平台认证与文件状态决定；不复制Cookie、不声称已打开或播放。',

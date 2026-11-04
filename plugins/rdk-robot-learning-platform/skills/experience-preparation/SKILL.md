@@ -3,6 +3,11 @@ name: experience-preparation
 description: 在 Studio 或其他 Agent 宿主中准备可复用的机器人体验场景，检查平台连接与指定策略，打开仿真并引导恢复；适用于日常演示、初次体验和 workshop。
 ---
 
+## 一句话短训练
+
+用户说“OriginMan受扰恢复，短训练后对比并回放”时，先用rdk_experience_guide取operation.contextId。依次调用rdk_originman_short_train、training_wait至终态、rdk_originman_short_evaluate、training_wait至终态、experiment_resume。训练与评测工具内部已核对完整manifest、选择当前明确课程模型/原资源并冻结配方，不再手工拼training_submit或跑experience_prepare/workshop_catalog。失败原地停止，不换键、参数或资源重交。播放使用返回的format=webm入口，经宿主实际观察播放进度和画面；不能凭链接宣称成功。只有短训练授权且原资源在线、核心确实缺预检接口时才可继续，保留taskEnvironmentVerified=false。输出中文四步进度和实际效果，不输出内部推理。
+
+
 # 场景准备与恢复
 
 用户说“开始体验”“帮我准备演示环境”“课程自检”“恢复仿真”时使用。流程由目标和配置决定，允许跳过已完成步骤、回答原理、自由探索，随后回到原步骤；不要强迫用户按固定话术操作。不要默认进入课程模式。其他工作区、训练、部署工具继续照常使用。
@@ -13,7 +18,7 @@ description: 在 Studio 或其他 Agent 宿主中准备可复用的机器人体�
 
 先确认机器人与任务。默认体验配置是 OriginMan 原地受扰恢复；[MicroDuck 示例](../../references/experience-profile-microduck.json)保留供选择。旧版已安装插件可能仍默认机器鸭，不能仅凭名称认定迁移完成。OriginMan 必须显式传 `robot: "originman"` 调用 `rdk_simulator_open`，并读取 `rdk_workshop_catalog`；旧服务不识别时保持阻塞，不能回退到 MicroDuck 的 overview 仿真入口。
 
-OriginMan 当前课程契约是 `custom-policy-originman-recovery-v1`，14维观测、2维髋踝连续修正。先通过目录返回的 manifest 登记模型，再选择已注册 `originman-recovery` 的真实执行资源。训练提交显式传 `engine: "originman-recovery"`、`algorithm: "sac"`、`numEnvs: 4` 及 `originmanWorkshop`（phase、timesteps、seed、pushMaxForce）；评测另建 Run，phase=evaluate 且 sourceRunId 指向本组完成的训练，配置冻结由平台核对。4096至10000步仅检查软件流程，不能保证收益。
+OriginMan 当前课程契约是 `custom-policy-originman-recovery-v1`，14维观测、2维髋踝连续修正。先通过目录返回的 manifest 登记模型，再选择已注册 `originman-recovery` 的真实执行资源。训练提交显式传 `engine: "originman-recovery-reflect"`、`algorithm: "sac"`、`numEnvs: 4` 及 `originmanWorkshop`（phase、timesteps、seed、pushMaxForce）；评测另建 Run，phase=evaluate 且 sourceRunId 指向本组完成的训练，配置冻结由平台核对。4096至10000步仅检查软件流程，不能保证收益。
 
 OriginMan 入口是训练工作台及本次物理回放，不是 MicroDuck WASM 自由行走页面。现阶段只保证仿真能力；步态、人体跟随、板端运动和 Sim2Real 需要独立验证。历史基础反馈对照不能代替合理调好的传统控制基线，课程不要承诺 RL 一定更好。下面关于按键行走、鸭子录制的步骤只适用于 MicroDuck。
 

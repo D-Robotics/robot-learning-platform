@@ -96,7 +96,7 @@ test('associated evaluation is read again and quality is separate from completio
   assert.equal(r.quality.clearGain, false);
   assert.equal(r.playback.state, 'recorded');
   assert.equal(r.playback.endpointVerified, false);
-  assert.match(r.links.video, /\/api\/v1\/duck\/runs\/eval\/workshop-video$/);
+  assert.match(r.links.video, /\/api\/v1\/duck\/runs\/eval\/workshop-video\?format=webm$/);
   f.state.source = 'other';
   await assert.rejects(f.tool('resume', { contextId: 'pair' }), /来源/);
 });

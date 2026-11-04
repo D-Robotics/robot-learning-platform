@@ -426,7 +426,22 @@ async function main() {
       },
       foreignCwd,
     );
-    assert.deepEqual(extendedTools.slice(0, expected.tools.length), expected.tools);
+    const coreTools = extendedTools.slice(0, expected.tools.length);
+    assert.equal(coreTools.length, expected.tools.length);
+    for (let i = 0; i < coreTools.length; i++) {
+      const actual = coreTools[i],
+        original = expected.tools[i];
+      if (original.name === 'rdk_replay_video') {
+        // This deliberate applicability note fixes the workshop/board replay confusion.
+        // Every schema, permission, name and other core field remains exact.
+        assert.equal(
+          actual.description,
+          '仅用于真机遥测视频渲染；OriginMan短训评测的视频已随评测Run生成，不能用本工具。请rdk_experiment_resume获取links.video并由宿主打开。\n' +
+            original.description,
+        );
+        assert.deepEqual({ ...actual, description: original.description }, original);
+      } else assert.deepEqual(actual, original);
+    }
     const optionalTools = extendedTools.slice(expected.tools.length);
     assert.deepEqual(
       optionalTools,
@@ -435,7 +450,14 @@ async function main() {
     );
     assert.equal(new Set(extendedTools.map((tool) => tool.name)).size, extendedTools.length);
     for (const tool of optionalTools) {
-      assert.equal(tool.annotations?.readOnlyHint, tool.name !== 'rdk_experiment_remember');
+      const mutations = new Set([
+        'rdk_experiment_remember',
+        'rdk_auth_login',
+        'rdk_auth_logout',
+        'rdk_originman_short_train',
+        'rdk_originman_short_evaluate',
+      ]);
+      assert.equal(tool.annotations?.readOnlyHint, !mutations.has(tool.name));
       assert.equal(tool.annotations?.destructiveHint, false);
     }
     for (const config of [portable, compat]) {

@@ -73,7 +73,15 @@ test('OriginMan preparation never previews PPO or accepts another task', async (
     calls.push([name, args]);
     return name === 'rdk_compute_resource_test'
       ? { id: 'cpu', connected: true, mock: false }
-      : { computeResourceId: 'cpu', report: { readyForSmokeTraining: true } };
+      : {
+          computeResourceId: 'cpu',
+          report: {
+            readyForSmokeTraining: true,
+            taskId: 'originman-recovery',
+            engine: 'originman-recovery-reflect',
+            device: 'cuda',
+          },
+        };
   };
   const r = await prepareTraining({ productId: 'originman', computeResourceId: 'cpu' }, call);
   assert.equal(r.preview.arguments.engine, 'originman-recovery');

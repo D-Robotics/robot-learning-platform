@@ -231,8 +231,9 @@ export function connectMcp({
     ),
   ],
   timeoutMs = 120000,
+  env = process.env,
 } = {}) {
-  const child = spawn(command, args, { stdio: ['pipe', 'pipe', 'inherit'] });
+  const child = spawn(command, args, { stdio: ['pipe', 'pipe', 'inherit'], env });
   let sequence = 0;
   const pending = new Map();
   const rejectAll = (error) => {

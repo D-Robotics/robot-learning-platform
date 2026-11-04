@@ -1,6 +1,17 @@
 /** Compose a lifecycle evidence report; never submits training or a deployment. */
 export const WORKFLOW_TOOLS = [
   {
+    name: 'rdk_originman_evaluation_read',
+    description: '只读指定 OriginMan 评测 Run 的已有扰动恢复结果及来源；不重新计算或保存评测。',
+    inputSchema: {
+      type: 'object',
+      properties: { runId: { type: 'string', minLength: 1 } },
+      required: ['runId'],
+      additionalProperties: false,
+    },
+    annotations: { readOnlyHint: true, destructiveHint: false },
+  },
+  {
     name: 'rdk_training_prepare',
     description:
       '新训练提交前刷新指定资源的健康检查并核对所选机器人任务环境。只准备参数预览，不提交训练，不替换资源；OriginMan 不套用 MicroDuck 配置。',
@@ -36,6 +47,84 @@ export const WORKFLOW_TOOLS = [
     annotations: { readOnlyHint: true, destructiveHint: false },
   },
 ];
+export async function readOriginmanEvaluation(input, call) {
+  if (
+    !input ||
+    typeof input.runId !== 'string' ||
+    !input.runId.trim() ||
+    Object.keys(input).some((k) => k !== 'runId')
+  )
+    throw new Error('请明确指定评测 Run ID。');
+  const readRun = async (runId, artifactRequired = false) => {
+    const current = await call('rdk_training_status', { runId });
+    if (current?.runId !== runId) throw new Error('平台返回的Run身份不一致。');
+    if (!current.taskId || current.mock === undefined || (artifactRequired && !current.artifact)) {
+      const full = (await call('rdk_lineage_get', { runId }))?.lineage?.run;
+      if (full?.id === runId && full.status === current.status) return { ...full, runId };
+    }
+    return current;
+  };
+  const run = await readRun(input.runId);
+  const training = run?.training?.originmanWorkshop;
+  const evidence = run?.metrics?.originmanWorkshop;
+  if (
+    run?.runId !== input.runId ||
+    run?.taskId !== 'originman-recovery' ||
+    training?.phase !== 'evaluate' ||
+    evidence?.phase !== 'evaluate'
+  )
+    throw new Error('指定 Run 不是可核对的 OriginMan 评测。');
+  let sourceVerified = false;
+  const sourceRunId = training.sourceRunId;
+  if (typeof sourceRunId === 'string' && sourceRunId && sourceRunId !== run.runId) {
+    try {
+      const parent = await readRun(sourceRunId, true);
+      const parentEvidence = parent?.metrics?.originmanWorkshop;
+      sourceVerified =
+        run.status === 'completed' &&
+        run.mock === false &&
+        parent?.runId === sourceRunId &&
+        parent.status === 'completed' &&
+        parent.mock === false &&
+        parent.taskId === 'originman-recovery' &&
+        typeof run.modelId === 'string' &&
+        run.modelId.length > 0 &&
+        parent.modelId === run.modelId &&
+        parent.training?.originmanWorkshop?.phase === 'train' &&
+        parentEvidence?.phase === 'train' &&
+        evidence.sourceRunId === sourceRunId &&
+        /^[a-f0-9]{64}$/.test(evidence.policySha256 ?? '') &&
+        parentEvidence.policySha256 === evidence.policySha256 &&
+        parent.artifact?.sha256 === evidence.policySha256;
+    } catch {
+      // A missing or inaccessible source is not evidence of a matching policy.
+    }
+  }
+  const comparison = evidence.feedbackComparison;
+  const suites = Array.isArray(comparison?.suites)
+    ? comparison.suites.slice(0, 10).map((s) => ({
+        id: s.id,
+        caseCount: Array.isArray(s.cases) ? s.cases.length : null,
+        originalRecovered: s.originalRecovered ?? null,
+        tunedRecovered: s.tunedRecovered ?? null,
+        rlRecovered: s.rlRecovered ?? null,
+      }))
+    : [];
+  return {
+    runId: run.runId,
+    status: run.status,
+    mock: run.mock ?? null,
+    sourceRunId: training.sourceRunId ?? null,
+    sourceVerified,
+    policySha256: evidence.policySha256 ?? null,
+    hardwareEligible: evidence.hardwareEligible ?? null,
+    clearGain: sourceVerified ? (comparison?.clearGain ?? null) : null,
+    suites,
+    note: sourceVerified
+      ? '来源与策略摘要已核对；读取已有记录，未重新计算或保存评测。'
+      : '来源或策略摘要尚未核对；读取已有记录，未重新计算或保存评测。',
+  };
+}
 const LABELS = {
   ready: '可继续',
   blocked: '受阻',
@@ -484,7 +573,11 @@ export async function prepareTraining(input, call, toolNames) {
       trainingSubmitted: false,
       resource,
     };
-  if (toolNames && !toolNames.includes('rdk_training_preflight'))
+  const preflightTool =
+    originman && toolNames?.includes('rdk_originman_training_preflight')
+      ? 'rdk_originman_training_preflight'
+      : 'rdk_training_preflight';
+  if (toolNames && !toolNames.includes(preflightTool))
     return {
       status: 'incomplete',
       computeResourceId: input.computeResourceId,
@@ -496,7 +589,7 @@ export async function prepareTraining(input, call, toolNames) {
       nextAction:
         '使用当前核心支持的模型校验、明确参数和受控短训练验证实际执行；失败保留原Run，不自动降级CPU或重交。',
     };
-  if (resource.mock !== false)
+  if (!originman && resource.mock !== false)
     return {
       status: 'incomplete',
       computeResourceId: input.computeResourceId,
@@ -505,13 +598,31 @@ export async function prepareTraining(input, call, toolNames) {
       taskEnvironmentVerified: false,
       reason: '资源连接正常，但核心没有返回明确的非Mock证据；不能据此声称真实训练已验证。',
     };
-  const preflight = await call('rdk_training_preflight', {
-    computeResourceId: input.computeResourceId,
-    taskId: input.taskId ?? (originman ? 'originman-recovery' : 'walk'),
-  });
+  let preflight;
+  try {
+    preflight = await call(preflightTool, {
+      computeResourceId: input.computeResourceId,
+      taskId: input.taskId ?? (originman ? 'originman-recovery' : 'walk'),
+    });
+  } catch (error) {
+    if (error.platformCode !== 'SIM2REAL_ENGINE_PREFLIGHT_BUSY') throw error;
+    return {
+      status: 'waiting',
+      platformCode: error.platformCode,
+      resource,
+      computeResourceId: input.computeResourceId,
+      trainingSubmitted: false,
+      reason: '课程资源正在执行其他任务，本次尚未提交。',
+      nextAction: '等待同一资源空闲后再继续本实验，不换机器或改参数重试。',
+    };
+  }
   if (
     preflight.computeResourceId !== input.computeResourceId ||
-    preflight.report?.readyForSmokeTraining !== true
+    preflight.report?.readyForSmokeTraining !== true ||
+    (originman &&
+      (preflight.report?.taskId !== 'originman-recovery' ||
+        preflight.report?.engine !== 'originman-recovery-reflect' ||
+        preflight.report?.device !== 'cuda'))
   )
     return {
       status: 'blocked',
@@ -521,6 +632,8 @@ export async function prepareTraining(input, call, toolNames) {
     };
   return {
     status: 'prepared',
+    resource,
+    taskEnvironmentVerified: true,
     computeResourceId: input.computeResourceId,
     trainingSubmitted: false,
     preflight,

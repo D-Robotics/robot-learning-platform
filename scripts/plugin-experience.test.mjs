@@ -339,7 +339,9 @@ test('experience MCP preserves upstream tools, results and errors and exposes gu
   assert.ok(init.instructions.startsWith('original'));
   const list = await proxy('tools/list');
   assert.deepEqual(list.tools[0], original);
-  assert.equal(list.tools.length, 7);
+  assert.equal(list.tools.length, 14);
+  assert.ok(list.tools.some((t) => t.name === 'rdk_originman_evaluation_read'));
+  assert.ok(list.tools.some((t) => t.name === 'rdk_training_wait'));
   const guide = await proxy('tools/call', { name: 'rdk_experience_guide' });
   assert.match(guide.structuredContent.guide, /场景准备/);
   const passthrough = await proxy('tools/call', {
@@ -559,6 +561,12 @@ test('runtime version requires matching loaded source hashes and rejects a stale
     'experience.mjs',
     'workflow-inspection.mjs',
     'experiment-context.mjs',
+    'short-training.mjs',
+    'plugin-auth.mjs',
+    'authenticated-core.mjs',
+    'plugin-errors.mjs',
+    'course-setup.mjs',
+    'submission-journal.mjs',
   ])
     fs.copyFileSync(
       new URL('../plugins/rdk-robot-learning-platform/scripts/' + name, import.meta.url),
@@ -574,7 +582,18 @@ test('runtime version requires matching loaded source hashes and rejects a stale
       JSON.stringify({
         version: '0.1.15',
         wrapperSources: Object.fromEntries(
-          ['experience-mcp.mjs', 'experiment-context.mjs'].map((name) => [
+          [
+            'experience-mcp.mjs',
+            'experience.mjs',
+            'workflow-inspection.mjs',
+            'experiment-context.mjs',
+            'short-training.mjs',
+            'plugin-auth.mjs',
+            'authenticated-core.mjs',
+            'plugin-errors.mjs',
+            'course-setup.mjs',
+            'submission-journal.mjs',
+          ].map((name) => [
             'scripts/' + name,
             createHash('sha256')
               .update(fs.readFileSync(path.join(root, 'scripts', name)))

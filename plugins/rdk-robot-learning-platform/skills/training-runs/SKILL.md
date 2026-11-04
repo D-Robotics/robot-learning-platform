@@ -5,6 +5,14 @@ description: 在 RDK 学习平台选择任务、训练引擎与执行资源，�
 
 # 训练与 Run
 
+OriginMan 一句话短训优先使用专用流程，不能套用下方通用 training_submit 步骤。
+先核对 rdk_auth_status 的认证和 pluginRuntime.version，再读 rdk_experience_guide。
+同一 contextId 依次 short_train、training_wait、short_evaluate、training_wait、experiment_resume、宿主打开视频。
+错误 stopWorkflow=true 时立即结束，说明尚未提交及由课程维护者更新插件；不查文档、不拼 manifest、
+不注册替代模型、不换 contextId 或资源重试。只有选择错误才按名称向学员询问一次。
+分四步简短报告进度，最终给可点击的 Markdown 回放链接、实际对比和未验证项。
+
+
 验收 Workshop 从零到一时，先读 [分层验收流程](../../references/workshop-acceptance.md)，分别报告软件执行、策略闭环、板端纯计算和实体运动。
 
 交付单次可追踪的训练请求和 Run 状态，完成时绑定真实产物。读 [训练/评测/部署契约](../../references/workflow-contracts.md)；参数查 [工具目录](../../references/tool-catalog.md)。
@@ -49,3 +57,10 @@ MCP 无训练取消/续训专用工具。用户取消时停止继续提交和轮
 恢复结果的`playback.state=recorded`只说明有历史视频回执，`endpointVerified=false、verifiedInPlayer=false`仍要求宿主实际播放确认。`missing`时不生成视频入口，不自动重交评测；`blocked`时先看原评测summary和日志。评测failed/blocked/cancelled而没有执行摘要，不应误称策略摘要冲突；父Run或已提供摘要确实不一致时仍拒绝关联。查询期间账号或目标平台变化，整个恢复停止，不保存引用。
 
 视频回执存在也不证明当前媒体端点可达。recorded表示历史上记录了摘要和字节数；原Worker掉线时仍可能返回503/VIDEO_UNVERIFIED。此时保留原结果，恢复原Worker连接后重新打开同一视频，不重提评测。
+
+## OriginMan 学员短训
+
+首次流程读 [学员安装、登录与恢复](../../references/workshop-first-run.md)，完整课程契约见
+[OriginMan manifest](../../references/originman-manifest.json)。首次短训核对当前账号的模型和资源，
+不依赖历史成功 Run；资源通过准备后才按需要登记课程模型。多个资源按名称让学员选择，
+不给学员技术 UUID 填写题。保留提交记录与原 Run，提交结果未知不重交。
