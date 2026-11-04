@@ -1,0 +1,16 @@
+---
+name: setup
+description: 连接当前机器人学习平台，确认正式身份与明确模型，再按真实工具能力执行训练与评测。
+---
+
+这是自包含便携插件，不需要平台源码或 npm install。Windows双击setup-windows.cmd，macOS双击setup-macos.command；安装器会准备兼容运行时、生成配置并接入已初始化的Studio。其他宿主导入安装目录的.mcp.json。无须手写凭据。每次先调用 rdk_platform_status，确认目标平台、正式身份和工具目录；导入版本不等于连接已切换。宿主存在旧的同类 MCP 连接时，更新那条连接的启动配置，不绕过认证或随意添加重复连接。
+
+训练与评测先读 ../training-runs/SKILL.md。OriginMan 的登记材料在 ../../references/originman-manifest.json；使用真实原文，不补造 manifest。模型列表若只有 ID，读取明确任务的运行记录和对应血缘确认模型与契约，不按顺序猜、不误用 MicroDuck。不具备读取引用文件的宿主，应请用户选明确模型，不能假装已经读到文件。
+
+以实际 tools/list 为准：预检接口缺失时保持未验证，不能声称环境已就绪；可用已支持的模型校验、资源测试和经授权的短训练验证。默认 GPU，CPU 必须显式选择；GPU不可用不自动降级。训练 device=cuda 不表示物理仿真也在 GPU。
+
+提交成功保存 contextId 和原 Run；同源评测使用相同参数、sourceRunId 与独立幂等键。断线后恢复原引用，不自动重交。结果执行完成、效果门和真机资格分别报告。只有宿主实际打开且视频播放后才称回放通过。
+
+实验连续操作先读 ../training-runs/SKILL.md；提交后保存明确contextId，恢复原Run而不是重交。默认GPU，CPU必须显式选择。平台版本和引擎以实际工具回执为准。
+
+宿主安装与连接诊断参考 [客户端接入](../../references/client-setup.md)、[连接契约](../../references/connection-contract.md)、[用户工作流](../../references/user-journeys.md) 和 [仓库能力](../../references/cli-capabilities.md)。便携包优先使用本版安装器与浏览器授权。

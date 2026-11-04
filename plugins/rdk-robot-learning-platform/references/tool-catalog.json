@@ -1,0 +1,600 @@
+[
+  {
+    "name": "rdk_workspace_overview",
+    "description": "读取当前模型、设备、训练资源和运行状态。只读操作。",
+    "inputSchema": { "type": "object", "additionalProperties": true },
+    "annotations": { "readOnlyHint": true, "destructiveHint": false }
+  },
+  {
+    "name": "rdk_workspace_summary",
+    "description": "读取项目、数据集、运行和部署的工作区摘要。只读操作。",
+    "inputSchema": { "type": "object", "additionalProperties": true },
+    "annotations": { "readOnlyHint": true, "destructiveHint": false }
+  },
+  {
+    "name": "rdk_golden_path",
+    "description": "读取从任务、数据、训练到 RDK 反馈的唯一主链路进度。只读操作。",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "projectId": { "type": "string" },
+        "modelId": { "type": "string" },
+        "taskId": { "type": "string" }
+      },
+      "additionalProperties": true
+    },
+    "annotations": { "readOnlyHint": true, "destructiveHint": false }
+  },
+  {
+    "name": "rdk_projects_list",
+    "description": "列出当前账号的机器人学习项目。只读操作。",
+    "inputSchema": { "type": "object", "additionalProperties": true },
+    "annotations": { "readOnlyHint": true, "destructiveHint": false }
+  },
+  {
+    "name": "rdk_project_create",
+    "description": "创建机器人学习项目并绑定模型或数据集。需要平台安全门控。",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "name": { "type": "string" },
+        "modelIds": { "type": "array", "items": { "type": "string" } },
+        "datasetIds": { "type": "array", "items": { "type": "string" } },
+        "slug": { "type": "string" },
+        "description": { "type": "string" }
+      },
+      "required": ["name"],
+      "additionalProperties": true
+    },
+    "annotations": { "readOnlyHint": false, "destructiveHint": false }
+  },
+  {
+    "name": "rdk_datasets_list",
+    "description": "列出当前账号的数据集和来源运行。只读操作。",
+    "inputSchema": { "type": "object", "additionalProperties": true },
+    "annotations": { "readOnlyHint": true, "destructiveHint": false }
+  },
+  {
+    "name": "rdk_dataset_register",
+    "description": "登记一个已有轨迹或遥测数据集。需要平台安全门控。",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "name": { "type": "string" },
+        "tags": { "type": "array", "items": { "type": "string" } },
+        "version": { "type": "string" },
+        "description": { "type": "string" },
+        "uri": { "type": "string" },
+        "format": { "type": "string" },
+        "contractId": { "type": "string" },
+        "sourceRunId": { "type": "string" },
+        "sampleCount": { "type": "number" },
+        "sizeBytes": { "type": "number" }
+      },
+      "required": ["name"],
+      "additionalProperties": true
+    },
+    "annotations": { "readOnlyHint": false, "destructiveHint": false }
+  },
+  {
+    "name": "rdk_models_list",
+    "description": "列出当前账号登记的模型 manifest。只读操作。",
+    "inputSchema": { "type": "object", "additionalProperties": true },
+    "annotations": { "readOnlyHint": true, "destructiveHint": false }
+  },
+  {
+    "name": "rdk_model_validate",
+    "description": "校验模型 manifest 与目标平台兼容性。只读操作。",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "platforms": { "type": "array", "items": { "type": "string" } },
+        "manifest": {}
+      },
+      "additionalProperties": true
+    },
+    "annotations": { "readOnlyHint": true, "destructiveHint": false }
+  },
+  {
+    "name": "rdk_model_register",
+    "description": "登记一个已经校验过的模型 manifest。需要平台安全门控。",
+    "inputSchema": {
+      "type": "object",
+      "properties": { "manifest": {} },
+      "additionalProperties": true
+    },
+    "annotations": { "readOnlyHint": false, "destructiveHint": false }
+  },
+  {
+    "name": "rdk_runs_list",
+    "description": "按模型、项目或状态列出训练运行。只读操作。",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "modelId": { "type": "string" },
+        "projectId": { "type": "string" },
+        "status": { "type": "string" },
+        "backend": { "type": "string" },
+        "query": { "type": "string" },
+        "limit": { "type": "number" }
+      },
+      "additionalProperties": true
+    },
+    "annotations": { "readOnlyHint": true, "destructiveHint": false }
+  },
+  {
+    "name": "rdk_artifacts_list",
+    "description": "列出模型、检查点、录制和发布制品。只读操作。",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "type": { "type": "string" },
+        "modelId": { "type": "string" },
+        "runId": { "type": "string" },
+        "projectId": { "type": "string" },
+        "status": { "type": "string" },
+        "query": { "type": "string" },
+        "limit": { "type": "number" }
+      },
+      "additionalProperties": true
+    },
+    "annotations": { "readOnlyHint": true, "destructiveHint": false }
+  },
+  {
+    "name": "rdk_evaluations_list",
+    "description": "列出训练和真机评测记录。只读操作。",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "runId": { "type": "string" },
+        "artifactId": { "type": "string" },
+        "status": { "type": "string" },
+        "limit": { "type": "number" }
+      },
+      "additionalProperties": true
+    },
+    "annotations": { "readOnlyHint": true, "destructiveHint": false }
+  },
+  {
+    "name": "rdk_lineage_get",
+    "description": "读取运行、制品、评测或项目的血缘关系。只读操作。",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "runId": { "type": "string" },
+        "artifactId": { "type": "string" },
+        "evaluationId": { "type": "string" },
+        "projectId": { "type": "string" }
+      },
+      "additionalProperties": true
+    },
+    "annotations": { "readOnlyHint": true, "destructiveHint": false }
+  },
+  {
+    "name": "rdk_compute_resources_list",
+    "description": "列出本地、远程和云端训练资源。只读操作。",
+    "inputSchema": { "type": "object", "additionalProperties": true },
+    "annotations": { "readOnlyHint": true, "destructiveHint": false }
+  },
+  {
+    "name": "rdk_compute_resource_test",
+    "description": "测试指定训练资源的健康状态。只读操作。",
+    "inputSchema": {
+      "type": "object",
+      "properties": { "computeResourceId": { "type": "string" } },
+      "required": ["computeResourceId"],
+      "additionalProperties": true
+    },
+    "annotations": { "readOnlyHint": true, "destructiveHint": false }
+  },
+  {
+    "name": "rdk_device_discover",
+    "description": "发现可连接的 RDK 设备。只读操作。",
+    "inputSchema": { "type": "object", "additionalProperties": true },
+    "annotations": { "readOnlyHint": true, "destructiveHint": false }
+  },
+  {
+    "name": "rdk_device_connect",
+    "description": "连接指定 RDK 设备并探测 BoardAgent。需要平台安全门控。",
+    "inputSchema": {
+      "type": "object",
+      "properties": { "connectionId": { "type": "string" } },
+      "additionalProperties": true
+    },
+    "annotations": { "readOnlyHint": false, "destructiveHint": false }
+  },
+  {
+    "name": "rdk_device_disconnect",
+    "description": "断开指定 RDK 设备的受控连接。需要平台安全门控。",
+    "inputSchema": {
+      "type": "object",
+      "properties": { "connectionId": { "type": "string" } },
+      "required": ["connectionId"],
+      "additionalProperties": true
+    },
+    "annotations": { "readOnlyHint": false, "destructiveHint": true }
+  },
+  {
+    "name": "rdk_board_health",
+    "description": "读取 BoardAgent 健康、磁盘、传感器和遥测状态。只读操作。",
+    "inputSchema": { "type": "object", "additionalProperties": true },
+    "annotations": { "readOnlyHint": true, "destructiveHint": false }
+  },
+  {
+    "name": "rdk_board_onboarding_preflight",
+    "description": "读取新接入板卡的相机、TROS、遥测和安全预检。只读操作。",
+    "inputSchema": { "type": "object", "additionalProperties": true },
+    "annotations": { "readOnlyHint": true, "destructiveHint": false }
+  },
+  {
+    "name": "rdk_board_station_status",
+    "description": "读取板端状态、传感器和心跳快照。只读操作。",
+    "inputSchema": { "type": "object", "additionalProperties": true },
+    "annotations": { "readOnlyHint": true, "destructiveHint": false }
+  },
+  {
+    "name": "rdk_board_station_command",
+    "description": "执行白名单内的只读板端命令。只读操作。",
+    "inputSchema": {
+      "type": "object",
+      "properties": { "id": { "type": "string" } },
+      "required": ["id"],
+      "additionalProperties": true
+    },
+    "annotations": { "readOnlyHint": true, "destructiveHint": false }
+  },
+  {
+    "name": "rdk_board_policy_status",
+    "description": "读取板端策略运行时与延迟证据状态。只读操作。",
+    "inputSchema": { "type": "object", "additionalProperties": true },
+    "annotations": { "readOnlyHint": true, "destructiveHint": false }
+  },
+  {
+    "name": "rdk_board_policy_files",
+    "description": "列出板端已暂存的 ONNX 策略制品。只读操作。",
+    "inputSchema": { "type": "object", "additionalProperties": true },
+    "annotations": { "readOnlyHint": true, "destructiveHint": false }
+  },
+  {
+    "name": "rdk_training_submit",
+    "description": "提交受控 GPU 强化学习训练任务。需要平台安全门控。",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "modelId": { "type": "string" },
+        "backend": { "type": "string" },
+        "profile": { "type": "string" },
+        "engine": { "type": "string" },
+        "demonstrationRunId": { "type": "string" },
+        "syntheticSmoke": { "type": "boolean" },
+        "algorithm": { "type": "string" },
+        "numEnvs": { "type": "number" },
+        "maxIterations": { "type": "number" },
+        "runName": { "type": "string" },
+        "taskId": { "type": "string" },
+        "projectId": { "type": "string" },
+        "experimentId": { "type": "string" },
+        "label": { "type": "string" },
+        "datasetIds": { "type": "array", "items": { "type": "string" } },
+        "computeResourceId": { "type": "string" },
+        "video": { "type": "boolean" }
+      },
+      "additionalProperties": true
+    },
+    "annotations": { "readOnlyHint": false, "destructiveHint": false }
+  },
+  {
+    "name": "rdk_training_status",
+    "description": "读取训练任务状态和指标。只读操作。",
+    "inputSchema": {
+      "type": "object",
+      "properties": { "runId": { "type": "string" } },
+      "additionalProperties": true
+    },
+    "annotations": { "readOnlyHint": true, "destructiveHint": false }
+  },
+  {
+    "name": "rdk_runs_replay",
+    "description": "读取运行的遥测回放和聚合评测证据。只读操作。",
+    "inputSchema": {
+      "type": "object",
+      "properties": { "runId": { "type": "string" } },
+      "required": ["runId"],
+      "additionalProperties": true
+    },
+    "annotations": { "readOnlyHint": true, "destructiveHint": false }
+  },
+  {
+    "name": "rdk_telemetry_list",
+    "description": "读取运行的遥测分片和样本数量。只读操作。",
+    "inputSchema": {
+      "type": "object",
+      "properties": { "runId": { "type": "string" }, "limit": { "type": "number" } },
+      "required": ["runId"],
+      "additionalProperties": true
+    },
+    "annotations": { "readOnlyHint": true, "destructiveHint": false }
+  },
+  {
+    "name": "rdk_board_sessions",
+    "description": "汇总运行中的板端策略会话和停止原因。只读操作。",
+    "inputSchema": {
+      "type": "object",
+      "properties": { "runId": { "type": "string" } },
+      "required": ["runId"],
+      "additionalProperties": true
+    },
+    "annotations": { "readOnlyHint": true, "destructiveHint": false }
+  },
+  {
+    "name": "rdk_run_logs",
+    "description": "读取本地训练运行的有界日志。只读操作。",
+    "inputSchema": {
+      "type": "object",
+      "properties": { "runId": { "type": "string" }, "after": { "type": "number" } },
+      "required": ["runId"],
+      "additionalProperties": true
+    },
+    "annotations": { "readOnlyHint": true, "destructiveHint": false }
+  },
+  {
+    "name": "rdk_retraining_advice",
+    "description": "根据运行、评测和遥测生成重训建议。只读操作。",
+    "inputSchema": {
+      "type": "object",
+      "properties": { "runId": { "type": "string" } },
+      "required": ["runId"],
+      "additionalProperties": true
+    },
+    "annotations": { "readOnlyHint": true, "destructiveHint": false }
+  },
+  {
+    "name": "rdk_replay_video",
+    "description": "为满足证据条件的真机运行渲染回放视频。需要平台安全门控。",
+    "inputSchema": {
+      "type": "object",
+      "properties": { "runId": { "type": "string" } },
+      "required": ["runId"],
+      "additionalProperties": true
+    },
+    "annotations": { "readOnlyHint": false, "destructiveHint": false }
+  },
+  {
+    "name": "rdk_simulator_open",
+    "description": "打开浏览器参考仿真。只读操作。",
+    "inputSchema": { "type": "object", "additionalProperties": true },
+    "annotations": { "readOnlyHint": true, "destructiveHint": false }
+  },
+  {
+    "name": "rdk_evaluation_summarize",
+    "description": "汇总训练评测证据。只读操作。",
+    "inputSchema": {
+      "type": "object",
+      "properties": { "runId": { "type": "string" } },
+      "additionalProperties": true
+    },
+    "annotations": { "readOnlyHint": true, "destructiveHint": false }
+  },
+  {
+    "name": "rdk_feedback_summary",
+    "description": "汇总当前账号对工作台结果的反馈。只读操作。",
+    "inputSchema": { "type": "object", "additionalProperties": true },
+    "annotations": { "readOnlyHint": true, "destructiveHint": false }
+  },
+  {
+    "name": "rdk_artifact_promote",
+    "description": "推进或撤销一个已登记制品的生命周期状态。需要平台安全门控。",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "artifactId": { "type": "string" },
+        "status": { "type": "string" },
+        "reason": { "type": "string" }
+      },
+      "required": ["artifactId"],
+      "additionalProperties": true
+    },
+    "annotations": { "readOnlyHint": false, "destructiveHint": true }
+  },
+  {
+    "name": "rdk_deployment_preflight",
+    "description": "执行只读部署预检。只读操作。",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "modelId": { "type": "string" },
+        "deviceId": { "type": "string" },
+        "runId": { "type": "string" },
+        "artifactId": { "type": "string" },
+        "evaluationId": { "type": "string" }
+      },
+      "additionalProperties": true
+    },
+    "annotations": { "readOnlyHint": true, "destructiveHint": false }
+  },
+  {
+    "name": "rdk_deployment_status",
+    "description": "读取部署计划和当前状态。只读操作。",
+    "inputSchema": {
+      "type": "object",
+      "properties": { "deploymentId": { "type": "string" } },
+      "required": ["deploymentId"],
+      "additionalProperties": true
+    },
+    "annotations": { "readOnlyHint": true, "destructiveHint": false }
+  },
+  {
+    "name": "rdk_deployment_history",
+    "description": "读取部署计划的历史和验证证据。只读操作。",
+    "inputSchema": {
+      "type": "object",
+      "properties": { "deploymentId": { "type": "string" } },
+      "required": ["deploymentId"],
+      "additionalProperties": true
+    },
+    "annotations": { "readOnlyHint": true, "destructiveHint": false }
+  },
+  {
+    "name": "rdk_deployment_version_switch",
+    "description": "为部署计划创建另一个模型版本的只读预检计划。需要平台安全门控。",
+    "inputSchema": {
+      "type": "object",
+      "properties": { "deploymentId": { "type": "string" }, "targetModelId": { "type": "string" } },
+      "required": ["deploymentId", "targetModelId"],
+      "additionalProperties": true
+    },
+    "annotations": { "readOnlyHint": false, "destructiveHint": false }
+  },
+  {
+    "name": "rdk_deployment_cancel",
+    "description": "取消尚未执行板端动作的部署计划。需要平台安全门控。",
+    "inputSchema": {
+      "type": "object",
+      "properties": { "deploymentId": { "type": "string" } },
+      "required": ["deploymentId"],
+      "additionalProperties": true
+    },
+    "annotations": { "readOnlyHint": false, "destructiveHint": true }
+  },
+  {
+    "name": "rdk_board_policy_stage",
+    "description": "将真实训练制品暂存到板端策略目录。需要平台安全门控。",
+    "inputSchema": {
+      "type": "object",
+      "properties": { "runId": { "type": "string" }, "filename": { "type": "string" } },
+      "required": ["runId"],
+      "additionalProperties": true
+    },
+    "annotations": { "readOnlyHint": false, "destructiveHint": false }
+  },
+  {
+    "name": "rdk_board_policy_load",
+    "description": "在板端加载已暂存的 ONNX 策略。需要平台安全门控。",
+    "inputSchema": {
+      "type": "object",
+      "properties": { "path": { "type": "string" }, "rehearsalReceipt": {} },
+      "required": ["path"],
+      "additionalProperties": true
+    },
+    "annotations": { "readOnlyHint": false, "destructiveHint": false }
+  },
+  {
+    "name": "rdk_board_policy_start",
+    "description": "在三重安全开关通过后启动板端策略。需要平台安全门控。",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "direction": { "type": "number" },
+        "goalX": { "type": "number" },
+        "goalY": { "type": "number" }
+      },
+      "additionalProperties": true
+    },
+    "annotations": { "readOnlyHint": false, "destructiveHint": false }
+  },
+  {
+    "name": "rdk_board_policy_reset",
+    "description": "在板端策略故障后执行受控复位。需要平台安全门控。",
+    "inputSchema": { "type": "object", "additionalProperties": true },
+    "annotations": { "readOnlyHint": false, "destructiveHint": true }
+  },
+  {
+    "name": "rdk_board_arm_status",
+    "description": "读取 D6A 机械臂位姿预检与能力状态。只读操作。",
+    "inputSchema": { "type": "object", "additionalProperties": true },
+    "annotations": { "readOnlyHint": true, "destructiveHint": false }
+  },
+  {
+    "name": "rdk_board_arm_move",
+    "description": "在双安全开关与工作空间钳制下移动 D6A 机械臂。需要平台安全门控。",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "x": { "type": "number" },
+        "y": { "type": "number" },
+        "z": { "type": "number" },
+        "speedMmPerS": { "type": "number" }
+      },
+      "additionalProperties": true
+    },
+    "annotations": { "readOnlyHint": false, "destructiveHint": false }
+  },
+  {
+    "name": "rdk_board_arm_gripper",
+    "description": "在双安全开关与钳制下控制 D6A 夹爪开合。需要平台安全门控。",
+    "inputSchema": {
+      "type": "object",
+      "properties": { "value": { "type": "number" }, "action": {} },
+      "additionalProperties": true
+    },
+    "annotations": { "readOnlyHint": false, "destructiveHint": false }
+  },
+  {
+    "name": "rdk_board_arm_stop",
+    "description": "停止机械臂新命令并尽力回 home（随时可用）。需要平台安全门控。",
+    "inputSchema": { "type": "object", "additionalProperties": true },
+    "annotations": { "readOnlyHint": false, "destructiveHint": false }
+  },
+  {
+    "name": "rdk_board_stop",
+    "description": "停止板端策略与驱动。需要平台安全门控。",
+    "inputSchema": { "type": "object", "additionalProperties": true },
+    "annotations": { "readOnlyHint": false, "destructiveHint": true }
+  },
+  {
+    "name": "rdk_docs_search",
+    "description": "检索 D-Robotics 官方文档与社区（结果按官方/相关/论坛补充排序）。只读操作。",
+    "inputSchema": {
+      "type": "object",
+      "properties": { "query": { "type": "string" }, "manual": { "type": "string" } },
+      "required": ["query"],
+      "additionalProperties": true
+    },
+    "annotations": { "readOnlyHint": true, "destructiveHint": false }
+  },
+  {
+    "name": "rdk_docs_manuals",
+    "description": "列出 D-Robotics 官方手册目录。只读操作。",
+    "inputSchema": { "type": "object", "additionalProperties": true },
+    "annotations": { "readOnlyHint": true, "destructiveHint": false }
+  },
+  {
+    "name": "rdk_docs_toc",
+    "description": "读取指定官方手册的章节目录。只读操作。",
+    "inputSchema": {
+      "type": "object",
+      "properties": { "manual": { "type": "string" }, "query": { "type": "string" } },
+      "required": ["manual"],
+      "additionalProperties": true
+    },
+    "annotations": { "readOnlyHint": true, "destructiveHint": false }
+  },
+  {
+    "name": "rdk_docs_page",
+    "description": "读取一篇官方文档或社区帖子的正文（Markdown，仅限官方站点）。只读操作。",
+    "inputSchema": {
+      "type": "object",
+      "properties": { "url": { "type": "string" } },
+      "required": ["url"],
+      "additionalProperties": true
+    },
+    "annotations": { "readOnlyHint": true, "destructiveHint": false }
+  },
+  {
+    "name": "rdk_web_search",
+    "description": "全网搜索公开资料（免费通用检索；结果为第三方信息，非官方结论）。只读操作。",
+    "inputSchema": {
+      "type": "object",
+      "properties": { "query": { "type": "string" } },
+      "required": ["query"],
+      "additionalProperties": true
+    },
+    "annotations": { "readOnlyHint": true, "destructiveHint": false }
+  },
+  {
+    "name": "rdk_platform_status",
+    "description": "读取平台服务健康、就绪与当前会话身份。只读操作。",
+    "inputSchema": { "type": "object", "additionalProperties": true },
+    "annotations": { "readOnlyHint": true, "destructiveHint": false }
+  }
+]

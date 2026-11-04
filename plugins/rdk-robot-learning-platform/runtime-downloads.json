@@ -1,0 +1,30 @@
+{
+  "version": "24.15.0",
+  "checksumSource": "https://nodejs.org/dist/v24.15.0/SHASUMS256.txt",
+  "targets": {
+    "darwin-arm64": {
+      "url": "https://nodejs.org/dist/v24.15.0/node-v24.15.0-darwin-arm64.tar.gz",
+      "sha256": "372331b969779ab5d15b949884fc6eaf88d5afe87bde8ba881d6400b9100ffc4",
+      "folder": "node-v24.15.0-darwin-arm64",
+      "binary": "bin/node"
+    },
+    "darwin-x64": {
+      "url": "https://nodejs.org/dist/v24.15.0/node-v24.15.0-darwin-x64.tar.gz",
+      "sha256": "ffd5ee293467927f3ee731a553eb88fd1f48cf74eebc2d74a6babe4af228673b",
+      "folder": "node-v24.15.0-darwin-x64",
+      "binary": "bin/node"
+    },
+    "win32-x64": {
+      "url": "https://nodejs.org/dist/v24.15.0/node-v24.15.0-win-x64.zip",
+      "sha256": "cc5149eabd53779ce1e7bdc5401643622d0c7e6800ade18928a767e940bb0e62",
+      "folder": "node-v24.15.0-win-x64",
+      "binary": "node.exe"
+    },
+    "win32-arm64": {
+      "url": "https://nodejs.org/dist/v24.15.0/node-v24.15.0-win-arm64.zip",
+      "sha256": "c9eb7402eda26e2ba7e44b6727fc85a8de56c5095b1f71ebd3062892211aa116",
+      "folder": "node-v24.15.0-win-arm64",
+      "binary": "node.exe"
+    }
+  }
+}

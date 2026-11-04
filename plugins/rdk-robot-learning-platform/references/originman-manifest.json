@@ -1,0 +1,56 @@
+{
+  "schemaVersion": 1,
+  "modelId": "originman-recovery-workshop",
+  "displayName": "OriginMan · 受扰恢复 Workshop",
+  "version": "residual-v1",
+  "robot": {
+    "id": "originman",
+    "variant": "legs"
+  },
+  "contract": {
+    "id": "custom-policy-originman-recovery-v1",
+    "robotId": "originman",
+    "jointCount": 20,
+    "observationSize": 14,
+    "actionSize": 2,
+    "controlHz": 50,
+    "physicsTimestepSeconds": 0.001,
+    "decimation": 20,
+    "observationLayout": [
+      {
+        "name": "roll_pitch_rates",
+        "size": 4
+      },
+      {
+        "name": "hip_ankle_offsets",
+        "size": 4
+      },
+      {
+        "name": "hip_ankle_velocities",
+        "size": 4
+      },
+      {
+        "name": "previous_correction",
+        "size": 2
+      }
+    ]
+  },
+  "simulator": {
+    "backends": ["local"],
+    "policyArtifactId": "originman-simulation-contract"
+  },
+  "artifacts": [
+    {
+      "id": "originman-simulation-contract",
+      "role": "policy",
+      "ref": "artifact://originman-recovery/contract",
+      "kind": "source",
+      "format": "onnx",
+      "name": "contract-placeholder.onnx"
+    }
+  ],
+  "metadata": {
+    "source": "OriginMan residual SAC workshop",
+    "notes": "契约占位不含策略；训练后生成本组权重。仅仿真，固定PD加两个连续髋踝修正，不具备硬件部署资格。"
+  }
+}

@@ -1,5 +1,7 @@
 # RDK Robot Learning Platform
 
+Studio 插件： [0.3.1 体验教程](docs/plugin-experience-test.md) · [安装与首次使用](plugins/rdk-robot-learning-platform/references/workshop-first-run.md) · [交付与验收范围](docs/plugin-031-delivery.md)。
+
 <div align="center">
 
 **从浏览器里的第一步，到 RDK-X5 上的下一步。**
