@@ -71,6 +71,7 @@ export function createPluginAuth({
     cacheDirectory,
     createHash('sha256').update(cacheScope).digest('hex') + '.json',
   );
+  const pendingFilename = filename.replace(/\.json$/, '.pending.json');
   let cached = null,
     pending = null,
     disconnected = false,
@@ -107,11 +108,10 @@ export function createPluginAuth({
     )
       throw cacheError();
   }
-  async function read() {
-    if (cached) return cached;
+  async function readPrivate(file) {
     try {
       check(fs.lstatSync(cacheDirectory), true);
-      const fd = fs.openSync(filename, fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW || 0));
+      const fd = fs.openSync(file, fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW || 0));
       try {
         const stat = fs.fstatSync(fd);
         check(stat);
@@ -119,11 +119,10 @@ export function createPluginAuth({
         let value = JSON.parse(fs.readFileSync(fd, 'utf8'));
         if (process.platform === 'win32') {
           const { unprotectWindowsBinding } = await import('../windows-binding.mjs');
-          const decoded = unprotectWindowsBinding(value.protected, root);
-          value = { ...decoded, cookie: decoded.credentials?.RDK_SIM2REAL_MCP_COOKIE };
+          value = unprotectWindowsBinding(value.protected, root);
         }
-        if (value.platformUrl === audience && safe(value)) cached = value;
-        return cached;
+        if (value.platformUrl !== audience) throw cacheError();
+        return value;
       } finally {
         fs.closeSync(fd);
       }
@@ -133,34 +132,83 @@ export function createPluginAuth({
       throw cacheError();
     }
   }
-  async function save(value, expectedRevision = revision) {
+  async function read() {
+    if (cached && safe(cached)) return cached;
+    cached = null;
+    const value = await readPrivate(filename);
+    if (!value) return null;
+    const session =
+      process.platform === 'win32'
+        ? { ...value, cookie: value.credentials?.RDK_SIM2REAL_MCP_COOKIE }
+        : value;
+    if (safe(session)) cached = session;
+    return cached;
+  }
+  async function writePrivate(file, value, expectedRevision) {
     assertRevision(expectedRevision);
-    if (!safe(value))
-      throw new PluginRequestError('AUTH_RESPONSE_INVALID', '平台未提供有效的登录结果。');
     fs.mkdirSync(cacheDirectory, { recursive: true, mode: 0o700 });
     check(fs.lstatSync(cacheDirectory), true);
     let payload = { ...value, platformUrl: audience };
     if (process.platform === 'win32') {
       const { protectWindowsBinding } = await import('../windows-binding.mjs');
-      payload = {
-        protected: protectWindowsBinding({
-          root,
-          platformUrl: audience,
-          accountId: value.accountId,
-          expiresAt: value.expiresAt,
-          credentials: { RDK_SIM2REAL_MCP_COOKIE: value.cookie },
-        }),
-      };
+      payload = { protected: protectWindowsBinding({ ...payload, root }) };
     }
     assertRevision(expectedRevision);
-    const temp = filename + '.' + randomBytes(8).toString('hex') + '.tmp';
+    const temp = file + '.' + randomBytes(8).toString('hex') + '.tmp';
     try {
       fs.writeFileSync(temp, JSON.stringify(payload), { mode: 0o600, flag: 'wx' });
-      fs.renameSync(temp, filename);
+      fs.renameSync(temp, file);
     } finally {
       fs.rmSync(temp, { force: true });
     }
+  }
+  async function save(value, expectedRevision = revision) {
+    if (!safe(value))
+      throw new PluginRequestError('AUTH_RESPONSE_INVALID', '平台未提供有效的登录结果。');
+    const payload =
+      process.platform === 'win32'
+        ? {
+            accountId: value.accountId,
+            expiresAt: value.expiresAt,
+            credentials: { RDK_SIM2REAL_MCP_COOKIE: value.cookie },
+          }
+        : value;
+    await writePrivate(filename, payload, expectedRevision);
+    assertRevision(expectedRevision);
     cached = value;
+  }
+  function validPending(value) {
+    let url;
+    try {
+      url = new URL(value?.verificationUrl);
+    } catch {
+      return false;
+    }
+    return (
+      url.origin === origin &&
+      !url.username &&
+      !url.password &&
+      !url.hash &&
+      url.pathname === '/api/sso/plugin/authorize' &&
+      /^[a-f0-9]{32}$/.test(value.id ?? '') &&
+      /^[A-Za-z0-9_-]{43}$/.test(value.secret ?? '') &&
+      /^[A-Z0-9]{8}$/.test(value.userCode ?? '') &&
+      url.searchParams.get('id') === value.id &&
+      [...url.searchParams.keys()].every((key) => key === 'id') &&
+      Number.isFinite(value.expiresAt)
+    );
+  }
+  async function restorePending() {
+    const value = pending ?? (await readPrivate(pendingFilename));
+    if (!value) return null;
+    if (!validPending(value)) throw cacheError();
+    pending = value.expiresAt > now() ? value : null;
+    return pending;
+  }
+  async function discardPending(flow = pending) {
+    pending = null;
+    const stored = await readPrivate(pendingFilename);
+    if (stored && (!flow || stored.id === flow.id)) fs.unlinkSync(pendingFilename);
   }
   async function request(route, { body, headers = {} } = {}) {
     let response;
@@ -212,32 +260,18 @@ export function createPluginAuth({
     return { status: response.status, value };
   }
   async function begin() {
-    if (pending && pending.expiresAt > now()) return pending;
     if (startPromise) return startPromise;
     const expectedRevision = revision;
     const flight = (async () => {
+      if (await restorePending()) {
+        assertRevision(expectedRevision);
+        return pending;
+      }
       const { value } = await request('/api/sso/plugin/start', { body: { audience } });
       assertRevision(expectedRevision);
-      let url;
-      try {
-        url = new URL(value.verificationUrl);
-      } catch {
+      if (!validPending(value) || value.expiresAt <= now())
         throw new PluginRequestError('AUTH_RESPONSE_INVALID', '浏览器授权入口无效。');
-      }
-      if (
-        url.origin !== origin ||
-        url.username ||
-        url.password ||
-        url.hash ||
-        url.pathname !== '/api/sso/plugin/authorize' ||
-        !/^([a-f0-9]{32})$/.test(value.id ?? '') ||
-        !/^([A-Za-z0-9_-]{43})$/.test(value.secret ?? '') ||
-        url.searchParams.get('id') !== value.id ||
-        [...url.searchParams.keys()].some((key) => key !== 'id') ||
-        !Number.isFinite(value.expiresAt) ||
-        value.expiresAt <= now()
-      )
-        throw new PluginRequestError('AUTH_RESPONSE_INVALID', '浏览器授权入口无效。');
+      await writePrivate(pendingFilename, value, expectedRevision);
       pending = value;
       return pending;
     })();
@@ -262,7 +296,9 @@ export function createPluginAuth({
         : {}),
       nextAction: native
         ? '请在Studio账户菜单登录后重新发起任务。'
-        : '在浏览器登录自己的账号并确认连接，再调用rdk_auth_status。不要在聊天中发送密码或Cookie。',
+        : pending
+          ? '在浏览器确认当前连接码，再调用rdk_auth_status；不需要重新申请验证码。'
+          : '调用rdk_auth_login开始浏览器授权；不要在聊天中发送密码或Cookie。',
     };
   }
   async function clear() {
@@ -271,13 +307,15 @@ export function createPluginAuth({
     pending = null;
     startPromise = null;
     pollPromise = null;
-    try {
-      fs.unlinkSync(filename);
-    } catch (error) {
-      if (error.code !== 'ENOENT') throw error;
+    for (const file of [filename, pendingFilename]) {
+      try {
+        fs.unlinkSync(file);
+      } catch (error) {
+        if (error.code !== 'ENOENT') throw error;
+      }
     }
   }
-  async function cookie() {
+  async function cookie({ startLogin = true } = {}) {
     const expectedRevision = revision;
     if (disconnected)
       throw loginRequired('LOGIN_REQUIRED', '插件已退出，请调用rdk_auth_login重新连接。');
@@ -308,11 +346,21 @@ export function createPluginAuth({
         const { value } = await request('/api/sso/me', { headers: { cookie: saved.cookie } });
         assertRevision(expectedRevision);
         if (value.user?.id === saved.accountId) return saved.cookie;
+        if (value.user !== null)
+          throw new PluginRequestError(
+            value.user?.id ? 'AUTH_ACCOUNT_MISMATCH' : 'AUTH_RESPONSE_INVALID',
+            '登录身份回执与已授权账号不一致或格式无效，连接已停止；不会自动换码。',
+            {
+              httpStatus: 502,
+              nextAction: '保留当前授权，由维护者核对身份接口；不要反复申请验证码。',
+            },
+          );
       } catch (error) {
         if (!error.needsLogin) throw error;
       }
       await clear();
     }
+    if (!startLogin) throw loginRequired();
     const flow = await begin();
     throw loginRequired(
       'LOGIN_REQUIRED',
@@ -336,6 +384,16 @@ export function createPluginAuth({
   }
   async function status() {
     if (disconnected) return { authenticated: false, mode, needsLogin: true };
+    if (!native) {
+      try {
+        if (startPromise) await startPromise;
+        // Another MCP process may already have claimed this flow and saved its session.
+        if (await read()) pending = null;
+        else await restorePending();
+      } catch (error) {
+        return unavailable(error);
+      }
+    }
     if (!native && pending) {
       if (!pollPromise) {
         const expectedRevision = revision,
@@ -349,8 +407,15 @@ export function createPluginAuth({
           if (code === 202) return publicPending();
           if (value.status !== 'authenticated')
             throw new PluginRequestError('AUTH_RESPONSE_INVALID', '平台未返回明确的登录确认结果。');
+          const current = await readPrivate(pendingFilename);
+          if (!current || current.id !== flow.id || current.secret !== flow.secret)
+            throw new PluginRequestError(
+              'AUTH_OPERATION_SUPERSEDED',
+              '授权已退出或更新，不会恢复旧会话。',
+              { httpStatus: 409 },
+            );
           await save(value, expectedRevision);
-          pending = null;
+          await discardPending(flow);
           return null;
         })();
       }
@@ -359,14 +424,14 @@ export function createPluginAuth({
         const progress = await flight;
         if (progress) return progress;
       } catch (error) {
-        if (error.needsLogin || error.httpStatus === 403) pending = null;
+        if (error.needsLogin || error.httpStatus === 403) await discardPending();
         return unavailable(error);
       } finally {
         if (pollPromise === flight) pollPromise = null;
       }
     }
     try {
-      await cookie();
+      await cookie({ startLogin: false });
       if (native) return { authenticated: true, mode, accountId: env.RDK_STUDIO_LOGIN_ACCOUNT };
       const saved = await read();
       return { authenticated: true, mode, accountId: saved.accountId, expiresAt: saved.expiresAt };
@@ -393,6 +458,9 @@ export function createPluginAuth({
       if (name === 'rdk_auth_login') {
         disconnected = false;
         if (native) return status();
+        const current = await status();
+        if (current.authenticated !== false || (current.error && !current.needsLogin))
+          return current;
         loginPromise ??= begin().finally(() => {
           loginPromise = null;
         });

@@ -139,7 +139,7 @@ fs.appendFileSync(
 );
 const identity = {
   name: 'rdk-robot-learning-platform',
-  version: '0.3.1',
+  version: '0.3.2',
   description: '通用机器人学习工作流：实验接续、训练、评测、回放与失败诊断；GPU默认、CPU显式选择。',
 };
 fs.writeFileSync(path.join(out, 'plugin.json'), JSON.stringify(identity, null, 2));
@@ -179,7 +179,7 @@ fs.writeFileSync(
 );
 fs.writeFileSync(
   path.join(out, 'README.md'),
-  '# Robot Learning Workshop 插件 0.3.1\n\n解压到最终目录后，Windows 双击 setup-windows.cmd，macOS 双击 setup-macos.command。\n安装器自动准备兼容 Node、校验下载摘要、生成配置，并接入已初始化的 Studio。\n不需要平台源码、npm install、手写密码或 Cookie。其他宿主导入生成的 .mcp.json。\n完整说明见 references/workshop-first-run.md。\n\n支持登录继承的 Studio 自动复用当前任务账号；配套接线适配 Windows/macOS 安装路径，\n只修改文件摘要匹配的宿主，并保留备份。不停止正在进行的任务；版本不兼容不强行覆盖。\n其他宿主使用 rdk_auth_login 打开浏览器确认，再调用 rdk_auth_status。\n\n已有统一账号，无须提前访问学习平台。首次训练不依赖成功历史；资源就绪后按需登记课程模型。\n教师须先分配学员可见的计算资源；插件不会借用其他账号资源或自动开通计费算力。\n\n学员可以说：帮我做一次 OriginMan 受扰恢复短训练，评测后播放本次回放。\n固定短训仅仿真，8192 步 SAC+GPU；参数调整走平台工作台或公开提交工具。\n\n网络异常保留登录；断线、超时与重复点击不重交。重启后按同一实验引用恢复原 Run。\n评测核对父 Run 与策略摘要；completed 不等于学会，链接也不等于视频已经播放。\n\n底层便携核心来源见 upstream-provenance.json，扩展摘要见 provenance.json，文件摘要见 FILES.sha256。\n原始分享包不含凭据；配置后含本机路径，不要把配置后的私人副本再分发。\n',
+  '# Robot Learning Workshop 插件 0.3.2\n\n解压到最终目录后，Windows 双击 setup-windows.cmd，macOS 双击 setup-macos.command。\n安装器自动准备兼容 Node、校验下载摘要、生成配置，并接入已初始化的 Studio。\n不需要平台源码、npm install、手写密码或 Cookie。其他宿主导入生成的 .mcp.json。\n完整说明见 references/workshop-first-run.md。\n\n支持登录继承的 Studio 自动复用当前任务账号；配套接线适配 Windows/macOS 安装路径，\n只修改文件摘要匹配的宿主，并保留备份。不停止正在进行的任务；版本不兼容不强行覆盖。\n其他宿主使用 rdk_auth_login 打开浏览器确认，再调用 rdk_auth_status。\n\n已有统一账号，无须提前访问学习平台。首次训练不依赖成功历史；资源就绪后按需登记课程模型。\n教师须先分配学员可见的计算资源；插件不会借用其他账号资源或自动开通计费算力。\n\n学员可以说：帮我做一次 OriginMan 受扰恢复短训练，评测后播放本次回放。\n固定短训仅仿真，8192 步 SAC+GPU；参数调整走平台工作台或公开提交工具。\n\n网络异常保留登录；断线、超时与重复点击不重交。重启后按同一实验引用恢复原 Run。\n评测核对父 Run 与策略摘要；completed 不等于学会，链接也不等于视频已经播放。\n\n底层便携核心来源见 upstream-provenance.json，扩展摘要见 provenance.json，文件摘要见 FILES.sha256。\n原始分享包不含凭据；配置后含本机路径，不要把配置后的私人副本再分发。\n',
 );
 const windowsResultFile = path.join(out, 'WINDOWS_RESULT_TEMPLATE.json');
 if (fs.existsSync(windowsResultFile)) {

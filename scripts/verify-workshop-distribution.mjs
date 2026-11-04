@@ -30,6 +30,7 @@ fs.mkdirSync(home);
 let client, server;
 const state = {
   approved: false,
+  authStarts: 0,
   models: [],
   runs: new Map(),
   writes: [],
@@ -96,14 +97,17 @@ try {
         res.writeHead(status, { 'content-type': 'application/json' });
         res.end(JSON.stringify(value));
       };
-      if (route === '/api/sso/plugin/start')
+      if (route === '/api/sso/plugin/start') {
+        state.authStarts++;
         return json({
           ...login,
           verificationUrl: origin + '/api/sso/plugin/authorize?id=' + login.id,
           userCode: login.id.slice(0, 8).toUpperCase(),
           expiresAt: Date.now() + 300000,
         });
+      }
       if (route === '/api/sso/plugin/poll') {
+        assert.equal(body.id, login.id);
         assert.equal(req.headers.authorization, 'Bearer ' + login.secret);
         return state.approved
           ? json({
@@ -258,11 +262,21 @@ try {
   await init();
   const catalog = await client.request('tools/list', {});
   assert.ok(catalog.tools.some((t) => t.name === 'rdk_auth_login'));
-  const pending = await call('rdk_auth_status');
+  assert.equal((await call('rdk_auth_status')).authenticated, false);
+  assert.equal(state.authStarts, 0);
+  const pending = await call('rdk_auth_login', { openBrowser: false });
   assert.equal(pending.authenticated, false);
   assert.ok(pending.verificationUrl);
+  await client.close();
+  client = open();
+  await init();
+  for (let attempt = 0; attempt < 6; attempt++)
+    assert.equal((await call('rdk_auth_status')).userCode, pending.userCode);
+  assert.equal(state.authStarts, 1);
   state.approved = true;
   assert.equal((await call('rdk_auth_status')).authenticated, true);
+  assert.equal((await call('rdk_auth_login', { openBrowser: false })).authenticated, true);
+  assert.equal(state.authStarts, 1);
   const guide = await call('rdk_experience_guide');
   const contextId = guide.shortTraining.operation.contextId;
   const train = await call('rdk_originman_short_train', { contextId });
@@ -329,6 +343,8 @@ try {
         version: result.pluginRuntime.version,
         toolCount: catalog.tools.length,
         firstLogin: true,
+        authorizationSurvivedMcpRestart: true,
+        confirmationCodesIssued: state.authStarts,
         firstCourseModelRegistered: true,
         historyRequired: false,
         trainingSubmissions: 1,
