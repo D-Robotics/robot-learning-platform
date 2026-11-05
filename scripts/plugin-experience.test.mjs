@@ -350,10 +350,7 @@ test('experience MCP preserves upstream tools, results and errors and exposes gu
   assert.ok(list.tools.some((t) => t.name === 'rdk_training_wait'));
   const guide = await proxy('tools/call', { name: 'rdk_experience_guide' });
   assert.match(guide.structuredContent.guide, /场景准备/);
-  assert.equal(
-    guide.structuredContent.learnerInterface.entryPrompt,
-    '带我完成 OriginMan Workshop。',
-  );
+  assert.equal(guide.structuredContent.learnerInterface.entryPrompt, '带我开始 Workshop');
   assert.equal(guide.structuredContent.learnerInterface.inlineAppAvailable, false);
   assert.equal(guide.structuredContent.learnerInterface.diagnostics, 'on-demand');
   const passthrough = await proxy('tools/call', {

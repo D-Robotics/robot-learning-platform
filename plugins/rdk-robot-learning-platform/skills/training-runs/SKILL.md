@@ -8,7 +8,7 @@ description: 在 RDK 学习平台选择任务、训练引擎与执行资源，�
 
 ## OriginMan 训练预算与结果口径
 
-进入 OriginMan Workshop 训练时，先调用 `rdk_originman_training_choice`。用户未选择预算时传空参数，只展示返回的一个中文选择题并等待；不要默认短训。已明确“快检/短训/8192”传 `choice=quick`，已明确“正式/50万”传 `choice=formal`，不重问。回答“不清楚”传 `choice=unknown` 并暂停，不能自动提交。用户说先不开始时只记录选择。
+默认“开始 Workshop / 继续 / 看看效果”直接使用 `rdk_workshop` 打开按钮工作台，预算在页面选择；不要在聊天重复问。以下仅用于用户明确的高级手动或独立训练：先调用 `rdk_originman_training_choice`。用户未选择预算时传空参数，只展示返回的一个中文选择题并等待；不要默认短训。已明确“快检/短训/8192”传 `choice=quick`，已明确“正式/50万”传 `choice=formal`，不重问。回答“不清楚”传 `choice=unknown` 并暂停，不能自动提交。用户说先不开始时只记录选择。
 
 预算单位是训练步：8192 步不是8192次优化或外层迭代。旧进度字段iteration也可能记录步数，按本引擎回执说明单位。
 
@@ -19,7 +19,7 @@ description: 在 RDK 学习平台选择任务、训练引擎与执行资源，�
 
 # 训练与 Run
 
-用户要求完整 OriginMan Workshop 时，使用 [体验流程](../experience-preparation/SKILL.md)：先实际运行参考仿真，再训练、同源评测、查看结果与回放。专用短训工具内部完成模型、manifest与资源校验，不需要下面的通用提交步骤。用户明确只要求训练时按其范围执行。
+用户要求完整 OriginMan Workshop 时，使用 [体验流程](../experience-preparation/SKILL.md)：调用rdk_workshop后由页面负责参考、预算和后续步骤；不再把下述高级工具串成默认学员流程。用户明确只要求训练时按其范围执行。
 
 收到 stopWorkflow=true 后停止新提交；已有 Run 继续按原引用只读恢复，未取得提交回执则保持未知。不能把引用保存失败说成尚未提交，不能换 contextId、资源或参数重交。普通结果使用 studentReply，技术明细按需展开。
 

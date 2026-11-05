@@ -22,7 +22,7 @@ export function courseBrief(args = {}) {
 export const TRAINING_CHOICE_TOOL = {
   name: 'rdk_originman_training_choice',
   description:
-    'OriginMan Workshop训练前的中文预算引导：未选择时只问8192步快检还是50万步正式效果实验；已明确短训/8192或正式/50万时传对应choice避免重问。不清楚传unknown并暂停，不自动选择或提交，不需登录。',
+    '独立预算咨询或高级手动训练的中文引导；默认开始Workshop用rdk_workshop页面按钮，不先调用本问答：未选择时只问8192步快检还是50万步正式效果实验；已明确短训/8192或正式/50万时传对应choice避免重问。不清楚传unknown并暂停，不自动选择或提交，不需登录。',
   inputSchema: {
     type: 'object',
     properties: { choice: { type: 'string', enum: ['quick', 'formal', 'unknown'] } },
@@ -119,9 +119,8 @@ export const ORIGINMAN_COURSE = {
 
     '预算单位是训练步，不是优化次数或外层迭代：8192步对应32个256帧采样批次；500000请求可因批次取整实际为500224步。旧进度字段iteration/totalIterations在本引擎中也记训练步，不照字段名翻译成8192次迭代。梯度更新次数另读optimizer记录。',
 
-    '训练预算必须由学员选择。Workshop/完整彩排不隐含8192或50万：先调用rdk_originman_training_choice；已有明确短训、8192、正式或50万时传已知choice，不重复问。未知只说明并暂停，不提交。用户只咨询不开始训练。',
+    '训练预算必须由学员明确选择。默认Workshop在rdk_workshop页面点预算按钮，不在聊天重复询问。只有高级手动流程才调用rdk_originman_training_choice；已有明确短训、8192、正式或50万时传已知choice，不重复问。未知只说明并暂停，不提交。用户只咨询不开始训练。',
     '分别报告流程执行、仿真效果、实体效果。快检完成只算流程通过；正式训练completed也不算效果通过，须本轮同源评测sourceVerified和clearGain=true，并展示两组实际基线与RL恢复数；未评测待验证、未提升明确未达标、来源不符停止结论。回放只展示其中一个条件，不代替62条件评测。',
-    '历史验证：固定seed=7、侧推8.1N及相同协议下，8192步为1/31、1/31；正式请求500000实际500224步为27/31、25/31，原PD13/31、13/31，调参反馈13/31、17/31。新旧正式权重相同；本次短训不足有同配方对照支持，不能泛化成所有失败都只需加步数。详细依据按需读references/workshop-training-evidence.md，不重复读整包。',
     '新平台的experiment_resume返回links.experiment时，优先由宿主打开这个明确实验页查看实时曲线、同源比较与回放；同一账号可跨Studio、Qoder和网页恢复原实验。persistence.sharedAcrossHosts=false时仅为本机引用，不声称跨机器同步。',
     '正式预算用rdk_originman_train显式传timesteps（例如500000），随后rdk_originman_evaluate沿用原训练参数读取既有权重；不要把正式预算传给固定8192短训工具。单变量调参须新contextId，保留原实验。',
     '结果与导出页用course.links.comparison；不要猜#compare。页面打开不保证选中本次Run；先核对训练和评测选择器再播放或点课程内置导出。离线HTML须含真实视频字节，0字节或引用不存在的视频文件不能算保存成功。',
@@ -135,7 +134,7 @@ export const ORIGINMAN_COURSE = {
     '账号身份、Worker连通、任务依赖就绪、开发机SSH和宿主原生计算接口分别判断；nativeCompute缺失不等于本地无法训练。',
     '已提交任务的引用保存失败时，禁止重复提交，按回执原Run只读查询；不能将禁止重交解释为禁止查询。没有可核对引用时保留未知状态，交维护者恢复。',
     '需要课程能力介绍时先读本指南，不为泛泛介绍调用部署、运动、全网或官方文档工具；通用平台能力与本课可完成范围分开说明。',
-    '参考演示优先打开course.links.simulation，在页面内启动并观察基础PD参考。用户要求先参考后训练时，必须先实际运行参考，再训练；页面失败先排查，不先训练再补看。讲师参考不算本组结果。referenceVideo仅为原始媒体，不直接导航媒体文件，也不拼接apiPrefix。',
+    '默认按钮课程播放明确标注的讲师参考，也可自由探索参考仿真；参考不算本组结果。用户明确要求实时参考时，打开course.links.simulation并实际启动观察，再训练；页面失败先排查，不先训练再补看。讲师参考不算本组结果。referenceVideo仅为原始媒体，不直接导航媒体文件，也不拼接apiPrefix。',
     'OriginMan评测视频与通用遥测样本是两种证据；rdk_runs_replay样本为0不能推出评测视频不存在。引用保存失败先用原训练与评测Run恢复关联，不新提交，核对本次视频回执再提供入口。',
     'Worker连通不等于任务依赖预检通过；没有任务环境证据时只报告连通已验证，不能说训练无阻塞。新实验短训未提升时先报告本轮数据；历史同配方预算对照只作为历史解释，不代替本轮诊断，不承诺50万步必然改善。',
   ],

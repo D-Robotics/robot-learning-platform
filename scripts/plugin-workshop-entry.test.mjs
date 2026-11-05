@@ -78,6 +78,10 @@ test('native text-only host gets short actionable entry and preserves expert too
   });
   const initialized = await p('initialize', { clientInfo: { name: 'Qoder', version: '0.5.3' } });
   assert.match(initialized.instructions, /0.6按钮工作台入口优先/);
+  assert.doesNotMatch(
+    initialized.instructions,
+    /用户只说Workshop\/彩排\/验证流程但没选预算，调用空参数/,
+  );
   const tools = await p('tools/list');
   assert.ok(tools.tools.some((t) => t.name === 'expert_tool'));
   assert.ok(tools.tools.some((t) => t.name === 'rdk_workshop'));

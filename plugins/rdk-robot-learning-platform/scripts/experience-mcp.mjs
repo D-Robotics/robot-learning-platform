@@ -191,7 +191,7 @@ export const EXPERIENCE_TOOLS = [
   {
     name: 'rdk_experience_guide',
     description:
-      '介绍机器人学习插件能力、开始或继续OriginMan Workshop前先读取本指南：返回仅仿真课程范围、学员步骤、短训目的与下一步规则，另含宿主计算接口配置状态；不返回凭据，不依赖宿主 load_skill。',
+      '高级手动编排或维护者查询完整课程配方时读取本指南；默认学员开始/继续/看效果直接rdk_workshop，不先读本指南：返回仅仿真课程范围、学员步骤、短训目的与下一步规则，另含宿主计算接口配置状态；不返回凭据，不依赖宿主 load_skill。',
     inputSchema: { type: 'object', properties: {}, additionalProperties: false },
     annotations: { readOnlyHint: true, destructiveHint: false },
   },
@@ -364,7 +364,7 @@ export function experienceProxy(
           '\n认证：先读platform_status。未认证时调用rdk_auth_login取得浏览器登录确认入口；请用户在浏览器登录并确认验证码，然后调用rdk_auth_status完成连接，不索取密码或Cookie。Studio使用宿主绑定的当前身份，未登录时请在Studio账号菜单登录，不扫描其他账号、不静默切换。' +
           '\n简短咨询预算用途、计数单位或流程/效果/回放完成标准：优先rdk_originman_course_brief，逐字展示studentReply两句即结束，不加载整份指南和历史证据。实际成绩另读原评测；明确问依据才按需读引用。不编造计数倍率。' +
           '\n交互约定：默认简短中文，按“当前进度→本次结果→下一步”回答。认证、版本、契约和资源校验在后台完成，正常时不逐项播报。只在阶段变化、阻断或需要用户选择时更新；不重复播报running，不展示内部推理。UUID、工具名、摘要和错误码仅在用户查看诊断时展开。正常结果优先给曲线、对比图和回放入口；宿主能打开工作台则在工作台展示，否则给可点击链接。没有实际渲染能力不伪装交互卡片，没有播放器观测不称已播放。' +
-          '\nOriginMan训练前先rdk_originman_training_choice：用户只说Workshop/彩排/验证流程但没选预算，调用空参数，仅展示一个中文预算问题并等待，不默认8192。已说短训/快检/8192传choice=quick；已说正式/50万传formal，不重复询问。回答不清楚传unknown并暂停。选择不等于已提交，用户要求先不要开始时停止。选定且授权训练后，后台核对rdk_auth_status和rdk_experience_guide；完整Workshop先实际观察基础PD参考。quick用short_train→training_wait→short_evaluate；formal用originman_train({contextId,timesteps:500000})→training_wait→originman_evaluate。再等待评测、experiment_resume与originman_evaluation_read读取本轮真实比较。模型、manifest和绑定资源由工具校验，不手拼training_submit，不让学员填写UUID。不重读已取得的指南；已有实验恢复原contextId，不改预算、不重训。' +
+          '\n高级独立训练才使用预算选择与原子训练工具：按用户已选预算执行，不重复问。默认Workshop先rdk_workshop打开按钮工作台，在页面选择预算并自动接续；只咨询或先不要开始时不提交。高级手动提交仍核对当前账号、完整manifest、同源父Run与权重，失败不改标识重交。' +
           '\n等待：沿用同一Run及nextPollArguments，正常等待窗口结束继续读；不启动shell sleep。失败或stopWorkflow=true停止所有自动提交，不换标识、资源或参数重交；仍可只读查询原Run、日志及恢复已有引用。SUBMISSION_REFERENCE_SAVE_FAILED表示任务已经提交，保留回执并恢复，绝不能说尚未提交。' +
           '\n实验接续：通用流程提交后用明确contextId保存训练及同源评测引用；专用短训工具已保存，无需重复。跨聊天或软件继续时使用明确实验标识调用experiment_resume，并重新验证当前平台和账号；不选择全局最新Run，不扫描其他账号。本机引用不等于跨机器同步。404、网络失败和断线不触发重交。新实验使用新contextId，调参须用户明确提出。' +
           '\n结果：只展示本次Run的真实original/tuned/rl对比；执行完成、质量提升和真机资格分别判断，短训不承诺提升。回放优先打开resume.links.experiment；旧平台打开links.workbench并按selection核对本次Run，再在页面播放器播放一次；不要直接导航媒体URL，OriginMan不调用真机rdk_replay_video或evaluationId接口；媒体链接不做正文抓取、HEAD、curl或独立浏览器认证探测。没有观测就报告播放待验证。一般流程用workflow_inspect按需看证据，不默认打印整张技术状态表；新训练前training_prepare刷新资源。默认GPU，CPU须明确选择，不自动降级、不操作真机。\n本次原生计算配置：' +
@@ -594,11 +594,11 @@ export function experienceProxy(
             formalTraining: {
               trainTool: 'rdk_originman_train',
               evaluateTool: 'rdk_originman_evaluate',
-              note: '仅在用户明确选择预算时使用。完整彩排无默认预算；先中文引导学员选择8192快检或500000正式，不自动扩训。',
+              note: '仅在用户明确选择预算时使用。完整彩排无默认预算；默认在Workshop页面选择，只有高级手动流程才在聊天引导，不自动扩训。',
             },
             course: { ...ORIGINMAN_COURSE, links: courseLinks(env.RDK_SIM2REAL_MCP_BASE_URL) },
             learnerInterface: {
-              entryPrompt: '带我完成 OriginMan Workshop。',
+              entryPrompt: '带我开始 Workshop',
               locale: 'zh-CN',
               responseOrder: ['当前进度', '本次结果', '下一步'],
               notifyOn: ['stage-change', 'blocked', 'selection-required', 'completed'],
@@ -775,7 +775,7 @@ export function experienceProxy(
           };
         }
         if (params.name === 'rdk_training_wait') payload = observe(payload, params.arguments.runId);
-        if (workflow?.stopped)
+        if (workflow?.stopped && params.name !== 'rdk_workshop')
           payload = {
             ...payload,
             stopWorkflow: true,
