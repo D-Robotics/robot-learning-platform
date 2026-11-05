@@ -27,6 +27,7 @@ export const ORIGINMAN_COURSE = {
     {
       id: 'tune',
       title: '单变量调参',
+      optional: true,
       nextAction: '学员要求继续时，保留原实验，复制参数建立新实验，只改训练步数或训练侧推上限。',
     },
   ],
@@ -61,7 +62,7 @@ export const ORIGINMAN_COURSE_INSTRUCTIONS =
   '\nOriginMan学员课程口径（优先于平台通用全链路介绍，仅用于本课程）：\n' +
   ORIGINMAN_COURSE.completion +
   '\n' +
-  ORIGINMAN_COURSE.stages.map((s) => s.title).join(' → ') +
+  ORIGINMAN_COURSE.stages.map((s) => s.title + (s.optional ? '（可选）' : '')).join(' → ') +
   '。\n' +
   ORIGINMAN_COURSE.shortTraining.note +
   '\n' +
@@ -93,6 +94,8 @@ export function courseLinks(baseUrl) {
 export function courseToolHint(name) {
   if (name === 'rdk_training_submit')
     return 'OriginMan课程优先rdk_originman_train显式选择预算，再rdk_originman_evaluate同源评测；不手拼SAC大小写、环境数、sourceRunId或groupId。\n';
+  if (name === 'rdk_artifact_promote')
+    return '这是制品发布生命周期晋升，不是保存或下载文件。OriginMan保存评测记录使用links.experiment页面的保存按钮；不要因用户说保存、导出或回放而调用晋升。\n';
   if (name === 'rdk_runs_replay')
     return 'OriginMan评测视频不依赖本工具的通用遥测样本；样本为0不能判定视频不存在。请恢复原评测引用并读取workshop视频回执。\n';
   if (name === 'rdk_simulator_open')

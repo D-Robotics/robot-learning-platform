@@ -702,6 +702,22 @@ export function experienceProxy(
             };
           }
         }
+        if (
+          EXPERIMENT_TOOLS.some((t) => t.name === params.name) &&
+          (payload.training?.taskId === 'originman-recovery' ||
+            payload.training?.metrics?.originmanWorkshop?.phase === 'train')
+        ) {
+          workflow = {
+            contextId: payload.contextId,
+            runId: payload.training.runId,
+            evaluationRunId: payload.evaluation?.runId,
+            stopped:
+              ['failed', 'blocked', 'cancelled'].includes(payload.training.status) ||
+              ['failed', 'blocked', 'cancelled'].includes(payload.evaluation?.status),
+            completed:
+              payload.training.status === 'completed' && payload.evaluation?.status === 'completed',
+          };
+        }
         if (params.name === 'rdk_training_wait') payload = observe(payload, params.arguments.runId);
         if (workflow?.stopped)
           payload = {

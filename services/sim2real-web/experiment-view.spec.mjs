@@ -5,7 +5,16 @@ import { JSDOM } from 'jsdom';
 import { startExperimentView, rewardPoints } from './public/experiment-view.mjs';
 
 const markup = fs.readFileSync(new URL('./public/experiment.html', import.meta.url), 'utf8');
-async function fixture(t, { context = 'lesson', failed = false, pagePlayback = false } = {}) {
+async function fixture(
+  t,
+  {
+    context = 'lesson',
+    failed = false,
+    pagePlayback = false,
+    eventSource = null,
+    pendingEvaluation = false,
+  } = {},
+) {
   const dom = new JSDOM(markup, {
     url: 'https://platform.test/learning/experiment.html' + (context ? '?context=' + context : ''),
   });
@@ -51,6 +60,10 @@ async function fixture(t, { context = 'lesson', failed = false, pagePlayback = f
       },
     },
   };
+  if (pendingEvaluation) {
+    state.view.evaluation.status = 'running';
+    state.view.videoRecorded = false;
+  }
   const calls = [],
     exports = [];
   const opened = [];
@@ -58,7 +71,7 @@ async function fixture(t, { context = 'lesson', failed = false, pagePlayback = f
   const instance = await startExperimentView({
     document: dom.window.document,
     location: dom.window.location,
-    EventSourceImpl: null,
+    EventSourceImpl: eventSource,
     fetchImpl: async (url) => {
       calls.push(String(url));
       if (unauthorized) return Response.json({}, { status: 401 });
@@ -161,4 +174,34 @@ test('sandboxed App playback opens the same experiment page and never navigates 
   f.instance.dispose();
   f.$('open-playback-page').click();
   assert.deepEqual(f.opened, ['same-experiment']);
+});
+
+test('terminal views stop streaming; active views clear reconnect labels after open and close at completion', async (t) => {
+  const streams = [];
+  class Stream {
+    handlers = {};
+    closed = false;
+    constructor() {
+      streams.push(this);
+    }
+    addEventListener(name, fn) {
+      this.handlers[name] = fn;
+    }
+    close() {
+      this.closed = true;
+    }
+  }
+  await fixture(t, { eventSource: Stream });
+  assert.equal(streams.length, 0, 'completed result must not keep reconnecting');
+  const f = await fixture(t, { eventSource: Stream, pendingEvaluation: true });
+  assert.equal(streams.length, 1);
+  streams[0].handlers.error();
+  assert.match(f.$('connection-status').textContent, /重连/);
+  streams[0].handlers.open();
+  assert.equal(f.$('connection-status').textContent, '已连接本次实验');
+  f.state.view.evaluation.status = 'completed';
+  await f.instance.refresh();
+  assert.equal(streams[0].closed, true);
+  streams[0].handlers.error();
+  assert.equal(f.$('connection-status').textContent, '已连接本次实验');
 });

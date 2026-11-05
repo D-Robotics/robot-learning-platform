@@ -22,6 +22,8 @@ export async function startExperimentView({ document, location, fetchImpl = fetc
   const base = new URL('./api/v1/duck/', location.href);
   let view = null, stream = null, active = false, pending = false, disposed = false, generation = 0, refreshTimer = null;
   let trainingId = null, evaluationId = null, latestRecord = null;
+  const terminal = () => view && (['failed', 'blocked', 'cancelled', 'canceled'].includes(view.training?.status) ||
+    view.training?.status === 'completed' && ['completed', 'failed', 'blocked', 'cancelled', 'canceled'].includes(view.evaluation?.status));
   const listeners = [];
   const listen = (id, type, callback) => { $(id).addEventListener(type, callback); listeners.push(() => $(id).removeEventListener(type, callback)); };
   const clearResults = () => {
@@ -133,6 +135,7 @@ export async function startExperimentView({ document, location, fetchImpl = fetc
       $('export-experiment').disabled = false;
       $('experiment-error').hidden = true; $('login-platform').hidden = true;
       $('connection-status').textContent = '已连接本次实验';
+      if (terminal()) { stream?.close(); stream = null; }
       // Worker adapters currently refresh on exact Run reads. Keep this in the view,
       // rather than spending a model turn narrating each poll. Terminal views stop.
       if (['queued', 'running'].includes(view.training.status) || ['queued', 'running'].includes(view.evaluation?.status))
@@ -154,11 +157,12 @@ export async function startExperimentView({ document, location, fetchImpl = fetc
   if (!idPattern.test(contextId ?? '')) fail(Error('需要通过插件打开明确实验，不会自动选择最近任务。'));
   else {
     await refresh();
-    if (view && EventSourceImpl) {
+    if (view && EventSourceImpl && !terminal()) {
       stream = new EventSourceImpl(new URL('experiments/' + encodeURIComponent(contextId) + '/events', base));
       for (const type of ['snapshot', 'reset']) stream.addEventListener(type, () => { void refresh(); });
-      stream.addEventListener('unavailable', () => { $('connection-status').textContent = '连接中断，正在接续原实验'; });
-      stream.addEventListener('error', () => { $('connection-status').textContent = '正在重连原实验'; });
+      stream.addEventListener('open', () => { if (!disposed && view && !terminal()) $('connection-status').textContent = '已连接本次实验'; });
+      stream.addEventListener('unavailable', () => { if (!disposed && !terminal()) $('connection-status').textContent = '连接中断，正在接续原实验'; });
+      stream.addEventListener('error', () => { if (!disposed && !terminal()) $('connection-status').textContent = '正在重连原实验'; });
     }
   }
   return { refresh, dispose() {

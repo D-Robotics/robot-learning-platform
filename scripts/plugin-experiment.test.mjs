@@ -470,6 +470,9 @@ test('actual stdio wrapper returns a failed evaluation as diagnostic data and re
     assert.equal(recovered.training.runId, 'train');
     assert.equal(recovered.evaluation.runId, 'eval');
     assert.equal(recovered.execution.trainingSubmitted, false);
+    const wrongReplay = await call('rdk_replay_video', { runId: 'eval' });
+    assert.equal(wrongReplay.isError, true);
+    assert.equal(wrongReplay.structuredContent.error.platformCode, 'ORIGINMAN_REPLAY_ROUTE');
   } finally {
     await client.close();
   }

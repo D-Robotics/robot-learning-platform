@@ -334,6 +334,14 @@ try {
     assert.equal(state.mediaRequests, 0);
     await call('rdk_originman_short_evaluate', { contextId });
     assert.equal(state.writes.length, 2);
+    await client.close();
+    client = open();
+    await init();
+    const restored = await call('rdk_experiment_resume', { contextId });
+    assert.equal(restored.training.runId, 'train-fixture');
+    assert.equal(restored.evaluation.runId, 'eval-fixture');
+    await assert.rejects(call('rdk_replay_video', { runId: 'eval-fixture' }), /OriginMan评测视频/);
+    assert.equal(state.writes.length, 2);
     state.brokenDigest = true;
     await assert.rejects(call('rdk_experiment_resume', { contextId }), /摘要/);
     assert.equal(state.writes.length, 2);
@@ -353,6 +361,7 @@ try {
         trainingSubmissions: 1,
         evaluationSubmissions: 1,
         restartRecovery: true,
+        resumedCourseRejectsTelemetryRender: true,
         repeatSubmissionPrevented: true,
         parentAndDigestVerified: true,
         changedDigestRejected: true,
