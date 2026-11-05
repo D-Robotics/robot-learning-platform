@@ -143,7 +143,7 @@ test('new draft reuses selected course assets among multiple resources, after ow
             ],
           };
         if (name === 'rdk_compute_resource_test')
-          return { id: args.computeResourceId, connected: true, mock: false };
+          return { id: args.computeResourceId, connected: true, status: 'online', mock: false };
         throw Error('Unexpected call ' + name);
       },
       {
