@@ -20,7 +20,11 @@ export const EXPERIMENT_TOOLS = [
       type: 'object',
       required: ['contextId', 'runId'],
       additionalProperties: false,
-      properties: { contextId: idSchema, runId: idSchema, evaluationRunId: idSchema },
+      properties: {
+        contextId: idSchema,
+        runId: idSchema,
+        evaluationRunId: idSchema,
+      },
     },
     annotations: { readOnlyHint: false, destructiveHint: false },
   },
@@ -134,12 +138,63 @@ function validatePair(training, evaluation) {
         : '父Run引用已核对；尚无匹配的完成执行摘要。保留原评测状态和失败原因。',
   };
 }
+// Keep recovery bounded; detailed cases/traces remain available from the exact Run tools.
+export function compactRun(run) {
+  if (!run) return null;
+  const compact = (value, depth = 0) => {
+    if (depth > 8) return undefined;
+    if (Array.isArray(value))
+      return value.length <= 4
+        ? value.map((v) => compact(v, depth + 1))
+        : { count: value.length, detailOmitted: true };
+    if (value && typeof value === 'object')
+      return Object.fromEntries(
+        Object.entries(value)
+          .filter(
+            ([key]) =>
+              ![
+                'cases',
+                'traces',
+                'selectedCase',
+                'progress',
+                'checkpoint',
+                'optimizerDiagnostics',
+              ].includes(key),
+          )
+          .map(([key, v]) => [key, compact(v, depth + 1)]),
+      );
+    return typeof value === 'string' && value.length > 1200 ? value.slice(0, 1200) + '…' : value;
+  };
+  return compact(
+    Object.fromEntries(
+      [
+        'runId',
+        'id',
+        'modelId',
+        'computeResourceId',
+        'taskId',
+        'status',
+        'summary',
+        'createdAt',
+        'finishedAt',
+        'mock',
+        'backend',
+        'training',
+        'artifact',
+        'metrics',
+      ]
+        .filter((k) => run[k] !== undefined)
+        .map((k) => [k, run[k]]),
+    ),
+  );
+}
 export async function experimentContext(
   operation,
   input,
   call,
   {
     directory = path.join(os.homedir(), '.config', 'rdk-robot-learning-platform', 'experiments'),
+    remote,
   } = {},
 ) {
   validate(operation, input);
@@ -161,15 +216,43 @@ export async function experimentContext(
   )
     throw new Error('平台地址不适合生成实验入口。');
   const baseUrl = base.toString().replace(/\/+$/, '');
+  const remoteSupported = remote && (await remote('capabilities', {})).supported === true;
+  let remoteBound = false;
+  let serverView = null;
   const scope = digest(JSON.stringify([baseUrl, status.session.accountId, input.contextId]));
   if (operation === 'remember') fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
-  else if (!fs.existsSync(directory))
+  else if (!fs.existsSync(directory) && !remoteSupported)
     throw new Error('当前平台和账号下未保存此实验；请明确选择已有Run，不自动选最新任务。');
-  checkPrivate(fs.lstatSync(directory), true);
+  if (fs.existsSync(directory)) checkPrivate(fs.lstatSync(directory), true);
   const trainingFile = path.join(directory, scope + '.json');
   const evaluationFile = path.join(directory, scope + '.evaluation.json');
-  const savedTraining = read(trainingFile);
-  const savedEvaluation = read(evaluationFile);
+  let savedTraining = read(trainingFile);
+  let savedEvaluation = read(evaluationFile);
+  if (remoteSupported && operation === 'resume') {
+    try {
+      const restored = await remote('resume', { contextId: input.contextId });
+      const view = restored.view;
+      if (
+        view?.contextId !== input.contextId ||
+        !/^[A-Za-z0-9][A-Za-z0-9_.-]{0,95}$/.test(view.training?.runId ?? '') ||
+        (view.evaluation && !/^[A-Za-z0-9][A-Za-z0-9_.-]{0,95}$/.test(view.evaluation.runId ?? ''))
+      )
+        throw Error('平台实验回执缺少明确的同一实验引用。');
+      if (
+        (savedTraining && savedTraining.runId !== view.training.runId) ||
+        (savedEvaluation && savedEvaluation.runId !== view.evaluation?.runId)
+      )
+        throw Error('平台实验与本机引用冲突；保留原记录，不自动改绑。');
+      savedTraining = { runId: view.training.runId };
+      savedEvaluation = view.evaluation ? { runId: view.evaluation.runId } : null;
+      remoteBound = true;
+      serverView = view;
+    } catch (error) {
+      if (error.code !== 'EXPERIMENT_NOT_FOUND') throw error;
+      // A read never creates a server reference. Explicit remember migrates old bookmarks.
+      if (!savedTraining) throw Error('当前平台和账号下未保存此实验；不自动选择最近任务。');
+    }
+  }
   if (operation === 'resume' && !savedTraining)
     throw new Error('当前平台和账号下未保存此实验；请明确选择已有Run，不自动选最新任务。');
   if (savedTraining && input.runId && input.runId !== savedTraining.runId)
@@ -188,24 +271,37 @@ export async function experimentContext(
       !result.modelId
     )
       throw new Error('平台未返回所请求Run的明确身份与状态。');
-    // Some platform versions omit request provenance from compact status replies.
-    // Hydrate only the exact Run; never infer a parent from a recent/global Run.
+    // Some platform versions return null workshop metrics in the status summary.
+    // Resolve only the requested Run, with matching identity and state; never use
+    // the model's other historical Runs or deployment records in lineage.
     if (
-      requireParent &&
-      !evidence(result)?.sourceRunId &&
-      !result.sourceRunId &&
-      !result.training?.originmanWorkshop?.sourceRunId
+      result.metrics?.originmanWorkshop === null ||
+      (requireParent &&
+        !evidence(result)?.sourceRunId &&
+        !result.sourceRunId &&
+        !result.training?.originmanWorkshop?.sourceRunId)
     ) {
       const full = (await call('rdk_lineage_get', { runId: id }))?.lineage?.run;
-      if (full?.id !== id || full.modelId !== result.modelId || full.status !== result.status)
-        throw new Error('血缘与当前Run身份、模型或状态不一致；请重新读取原Run，不重新提交。');
-      validatePair(training, { ...full, runId: id });
-      return {
-        ...full,
-        ...result,
-        training: result.training ?? full.training,
-        sourceRunId: result.sourceRunId ?? full.sourceRunId,
-      };
+      if (
+        !full ||
+        full.id !== id ||
+        full.modelId !== result.modelId ||
+        full.status !== result.status
+      )
+        throw new Error('Run摘要与血缘身份或状态不一致；保留原引用，不自动重交。');
+      if (requireParent) validatePair(training, { ...full, runId: id });
+      if (requireParent || full.taskId === 'originman-recovery')
+        return {
+          ...full,
+          ...result,
+          training: full.training,
+          sourceRunId: result.sourceRunId ?? full.sourceRunId,
+          metrics: {
+            ...full.metrics,
+            ...result.metrics,
+            originmanWorkshop: full.metrics?.originmanWorkshop ?? null,
+          },
+        };
     }
     return result;
   };
@@ -230,6 +326,21 @@ export async function experimentContext(
     createReference(trainingFile, runId);
     if (evaluationRunId) createReference(evaluationFile, evaluationRunId);
   }
+  if (remoteSupported && operation === 'remember') {
+    const saved = await remote('remember', {
+      contextId: input.contextId,
+      runId,
+      ...(evaluationRunId ? { evaluationRunId } : {}),
+    });
+    if (
+      saved.view?.contextId !== input.contextId ||
+      saved.view.training?.runId !== runId ||
+      (saved.view.evaluation?.runId ?? null) !== (evaluationRunId ?? null)
+    )
+      throw Error('平台未确认相同实验引用；保留原Run，不重新提交。');
+    remoteBound = true;
+    serverView = saved.view;
+  }
   const failed = ['blocked', 'failed', 'cancelled'].includes(training.status);
   const evaluationFailed = ['blocked', 'failed', 'cancelled'].includes(evaluation?.status);
   const evaluationEvidence = evaluation ? evidence(evaluation) : null;
@@ -246,8 +357,18 @@ export async function experimentContext(
   return {
     contextId: input.contextId,
     observedAt: new Date().toISOString(),
-    training,
-    evaluation,
+    ...(serverView ? { view: serverView } : {}),
+    persistence: {
+      scope: remoteBound ? 'platform-account' : 'local-account',
+      sharedAcrossHosts: remoteBound,
+    },
+    training: compactRun(training),
+    evaluation: compactRun(evaluation),
+    detailOmitted: true,
+    detailRead: {
+      tool: 'rdk_originman_evaluation_read',
+      arguments: { runId: evaluationRunId ?? runId },
+    },
     association,
     playback: {
       state: canReplay
@@ -271,8 +392,16 @@ export async function experimentContext(
       note: '执行完成与质量达标分别判断；本工具不验证视频实际播放或真机效果。',
     },
     links: {
-      workbench: baseUrl + '/#train',
+      ...(remoteBound
+        ? {
+            experiment: baseUrl + '/experiment.html?context=' + encodeURIComponent(input.contextId),
+          }
+        : {}),
+      workbench: baseUrl + '/?robot=originman#evaluate/comparison',
+      parameterTuning: baseUrl + '/?robot=originman#train/submit',
       exactRunSelected: false,
+      preferredPlayback: 'page-player',
+      selection: { trainingRunId: runId, evaluationRunId: evaluationRunId ?? null },
       ...(canReplay
         ? {
             video:
@@ -282,7 +411,9 @@ export async function experimentContext(
               '/workshop-video?format=webm',
           }
         : {}),
-      note: '工作台入口不保证自动选中Run。视频入口仍由平台认证与文件状态决定；不复制Cookie、不声称已打开或播放。',
+      note: remoteBound
+        ? '优先打开experiment，它绑定本次训练与评测，并提供曲线、对比和页面播放器。视频开始播放后才确认已播放，不直接导航原始媒体地址。'
+        : '打开workbench后按selection核对并选择本次训练与评测，再展开页面播放器；入口不保证自动选中Run。video保留为原始媒体地址，不直接导航，不声称已播放。',
     },
     nextAction: failed
       ? '先读取失败原因与原Run日志，不自动重新提交。'
@@ -296,7 +427,7 @@ export async function experimentContext(
               ? '继续查询已关联评测，不自动重交。'
               : !canReplay
                 ? '评测已完成；视频回执缺失或生成失败，查看原评测日志，不自动重交。'
-                : '核对质量结论；用户要求时打开视频候选入口，检查当前访问与播放。端点失败保留原错误并排查原Worker，不自动重交。',
+                : '核对质量结论；用户要求时打开工作台页面播放器，核对本次训练与评测并观察播放。端点失败保留原错误并排查原Worker，不自动重交。',
     suggestedRead: {
       tool: 'rdk_run_logs',
       arguments: { runId: failed || !evaluation ? runId : evaluationRunId },

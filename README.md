@@ -317,3 +317,5 @@ MicroDuck 浏览器资源的上游 commit、仓库和许可证边界记录在 [`
 - [`docs/design/sim2real-90-acceptance.md`](docs/design/sim2real-90-acceptance.md)
 - [`docs/design/sim2real-mvp-guide.md`](docs/design/sim2real-mvp-guide.md)
 - [`docs/design/rdk-duck-product-design.md`](docs/design/rdk-duck-product-design.md)
+
+Studio / Qoder 插件与平台共用实验页的接入约定，见 [插件与宿主联动](docs/plugin-host-integration.md)。

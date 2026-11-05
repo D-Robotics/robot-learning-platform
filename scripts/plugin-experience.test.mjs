@@ -319,7 +319,7 @@ test('only a reference API-not-found may use the same workspace simulator entry'
 });
 
 test('experience MCP preserves upstream tools, results and errors and exposes guide without host skills', async () => {
-  const { experienceProxy } =
+  const { experienceProxy, EXPERIENCE_TOOLS } =
     await import('../plugins/rdk-robot-learning-platform/scripts/experience-mcp.mjs');
   const original = { name: 'existing_write_tool', annotations: { readOnlyHint: false } };
   const proxy = experienceProxy({
@@ -345,7 +345,7 @@ test('experience MCP preserves upstream tools, results and errors and exposes gu
   );
   const list = await proxy('tools/list');
   assert.deepEqual(list.tools[0], original);
-  assert.equal(list.tools.length, 14);
+  assert.equal(list.tools.length, 1 + EXPERIENCE_TOOLS.length);
   assert.ok(list.tools.some((t) => t.name === 'rdk_originman_evaluation_read'));
   assert.ok(list.tools.some((t) => t.name === 'rdk_training_wait'));
   const guide = await proxy('tools/call', { name: 'rdk_experience_guide' });
@@ -378,6 +378,25 @@ test('MCP cancellation reaches upstream and leaves subsequent reads usable', asy
   }
 });
 
+test('offline diagnostics separate reported host, loaded runtime and unqueried platform layers', async () => {
+  const { experienceProxy } =
+    await import('../plugins/rdk-robot-learning-platform/scripts/experience-mcp.mjs');
+  const calls = [];
+  const proxy = experienceProxy({
+    request: async (method) => {
+      calls.push(method);
+      return {};
+    },
+  });
+  await proxy('initialize', { clientInfo: { name: 'Qoder Desktop', version: '0.5.3' } });
+  const result = await proxy('tools/call', { name: 'rdk_plugin_status', arguments: {} });
+  assert.equal(result.structuredContent.diagnostics.host.family, 'qoder');
+  assert.equal(result.structuredContent.diagnostics.host.verified, false);
+  assert.equal(result.structuredContent.diagnostics.layers.authentication, 'not-queried');
+  assert.equal(result.structuredContent.diagnostics.layers.platform, 'not-queried');
+  assert.deepEqual(calls, ['initialize']);
+});
+
 test('guide distinguishes native compute configuration from desktop presence without leaking secrets', async () => {
   const { experienceProxy } =
     await import('../plugins/rdk-robot-learning-platform/scripts/experience-mcp.mjs');
@@ -402,7 +421,7 @@ test('guide distinguishes native compute configuration from desktop presence wit
       JSON.stringify(result),
       /private-host-token-never-return|12345|private\/session/,
     );
-    if (!configured) assert.match(context.nativeCompute.nextAction, /宿主接口/);
+    if (!configured) assert.match(context.nativeCompute.nextAction, /适配器/);
   }
 });
 
@@ -579,6 +598,11 @@ test('runtime version requires matching loaded source hashes and rejects a stale
     'plugin-errors.mjs',
     'course-setup.mjs',
     'submission-journal.mjs',
+    'workshop-course.mjs',
+    'mcp-app-resource.mjs',
+    'guided-input.mjs',
+    'robot-onboarding.mjs',
+    'classroom-guide.mjs',
   ])
     fs.copyFileSync(
       new URL('../plugins/rdk-robot-learning-platform/scripts/' + name, import.meta.url),
@@ -605,6 +629,11 @@ test('runtime version requires matching loaded source hashes and rejects a stale
             'plugin-errors.mjs',
             'course-setup.mjs',
             'submission-journal.mjs',
+            'workshop-course.mjs',
+            'mcp-app-resource.mjs',
+            'guided-input.mjs',
+            'robot-onboarding.mjs',
+            'classroom-guide.mjs',
           ].map((name) => [
             'scripts/' + name,
             createHash('sha256')

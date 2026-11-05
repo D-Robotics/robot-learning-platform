@@ -133,6 +133,7 @@ export async function submitOnce({
           contextId,
           runId: submission.runId,
           submitted: true,
+          phase,
           reason: error.code ?? 'reference-not-saved',
         },
       },

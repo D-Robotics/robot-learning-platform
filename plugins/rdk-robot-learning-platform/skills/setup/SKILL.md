@@ -3,9 +3,15 @@ name: setup
 description: 连接当前机器人学习平台，确认正式身份与明确模型，再按真实工具能力执行训练与评测。
 ---
 
-这是自包含便携插件，不需要平台源码或 npm install。Windows双击setup-windows.cmd，macOS双击setup-macos.command；安装器会准备兼容运行时、生成配置并接入已初始化的Studio。其他宿主导入安装目录的.mcp.json。无须手写凭据。每次先调用 rdk_platform_status，确认目标平台、正式身份和工具目录；导入版本不等于连接已切换。宿主存在旧的同类 MCP 连接时，更新那条连接的启动配置，不绕过认证或随意添加重复连接。
+课堂准备、教学演示或解释证据，先使用[classroom-rehearsal](../classroom-rehearsal/SKILL.md)与本地 `rdk_classroom_guide`；仅阅读知识无需平台登录。Qoder安装使用 setup-qoder-macos.command / setup-qoder-windows.cmd，不修改Studio。
+
+这是自包含便携插件，不需要平台源码或 npm install。Windows双击setup-windows.cmd，macOS双击setup-macos.command；安装器会准备兼容运行时、生成配置并接入已初始化的Studio。其他宿主导入安装目录的.mcp.json。无须手写凭据。需要平台数据或真实任务时先调用 rdk_platform_status，确认目标平台、正式身份和工具目录；导入版本不等于连接已切换。宿主存在旧的同类 MCP 连接时，更新那条连接的启动配置，不绕过认证或随意添加重复连接。
 
 训练与评测先读 ../training-runs/SKILL.md。OriginMan 的登记材料在 ../../references/originman-manifest.json；使用真实原文，不补造 manifest。模型列表若只有 ID，读取明确任务的运行记录和对应血缘确认模型与契约，不按顺序猜、不误用 MicroDuck。不具备读取引用文件的宿主，应请用户选明确模型，不能假装已经读到文件。
+
+任何新机器人接入或换机验收，先使用[逐机验收技能](../robot-acceptance/SKILL.md)；本地指南和证据字段审查无需平台登录，平台数据再按账号连接。
+
+用户连接新OriginMan或要把已有站立模型拿到真机验证时，转到[设备技能](../devices-board/SKILL.md)的OriginMan接入分支；不要直接套用仿真短训或通用策略启动。安装插件、连接设备、模型纯推理和实体站立分别报告。
 
 以实际 tools/list 为准：预检接口缺失时保持未验证，不能声称环境已就绪；可用已支持的模型校验、资源测试和经授权的短训练验证。默认 GPU，CPU 必须显式选择；GPU不可用不自动降级。训练 device=cuda 不表示物理仿真也在 GPU。
 

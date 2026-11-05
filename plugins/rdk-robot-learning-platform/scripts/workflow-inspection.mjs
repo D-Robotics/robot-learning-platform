@@ -30,7 +30,7 @@ export const WORKFLOW_TOOLS = [
   {
     name: 'rdk_workflow_inspect',
     description:
-      '读取当前同账号的机器人学习全流程证据，输出仿真、训练、评测、调优、部署的可视化状态与阻塞原因。只读，不自动选择最新 Run、不提交任务、不操作设备。',
+      '读取当前同账号、明确实验的流程证据。OriginMan Workshop仅仿真，真机部署标为不属于本课，不计入阻塞或进度；其他产品保留独立部署检查。只读，不自动选择最新Run、不提交任务、不操作设备。',
     inputSchema: {
       type: 'object',
       properties: {
@@ -58,9 +58,15 @@ export async function readOriginmanEvaluation(input, call) {
   const readRun = async (runId, artifactRequired = false) => {
     const current = await call('rdk_training_status', { runId });
     if (current?.runId !== runId) throw new Error('平台返回的Run身份不一致。');
-    if (!current.taskId || current.mock === undefined || (artifactRequired && !current.artifact)) {
+    if (
+      !current.taskId ||
+      current.mock === undefined ||
+      current.metrics?.originmanWorkshop === null ||
+      (artifactRequired && !current.artifact)
+    ) {
       const full = (await call('rdk_lineage_get', { runId }))?.lineage?.run;
-      if (full?.id === runId && full.status === current.status) return { ...full, runId };
+      if (full?.id === runId && full.status === current.status && full.modelId === current.modelId)
+        return { ...full, runId };
     }
     return current;
   };
@@ -132,6 +138,7 @@ const LABELS = {
   needs_input: '待选择',
   completed: '已有完成证据',
   running: '进行中',
+  not_applicable: '不属于本课',
 };
 export async function inspectWorkflow(input, call, toolNames, { now = Date.now() } = {}) {
   if (!input || typeof input !== 'object' || Array.isArray(input))
@@ -218,6 +225,7 @@ export async function inspectWorkflow(input, call, toolNames, { now = Date.now()
     const training = input.runId ? await read('rdk_training_status', { runId: input.runId }) : null;
     const evidence = training?.metrics?.originmanWorkshop;
     const validTraining =
+      Boolean(input.runId && training) &&
       training?.runId === input.runId &&
       training.status === 'completed' &&
       evidence?.phase === 'train' &&
@@ -274,14 +282,14 @@ export async function inspectWorkflow(input, call, toolNames, { now = Date.now()
       validEvaluation
         ? '已有本组逐条件对照，可分析差异；不保证换种子或短训练会改善。'
         : '需先取得绑定正确的评测 Run。',
-      '一次修改种子或训练扰动上限，新建实验；合理传统控制对比另核对冻结的实验报告。',
+      '先看本次对比与回放并保存记录；学员要求调参时，复制参数新建实验，只改训练步数或训练侧推上限，保留原实验。',
     );
     add(
       'deploy',
       'OriginMan 真机迁移',
-      'blocked',
-      '本课程制品明确仅仿真，尚无真机部署资格。',
-      '需要实测关节、伺服延迟、IMU、控制周期与受控运动验收；不要将仿真通过称作 Sim2Real 完成。',
+      'not_applicable',
+      '本课仅仿真；真机迁移不计入课程完成条件。',
+      '继续本组仿真结果、回放与保存；硬件工作须由用户独立明确提出。',
     );
     return finish();
   }
@@ -544,7 +552,7 @@ function cell(value) {
     .replace(/[\r\n]/g, ' ');
 }
 
-export async function prepareTraining(input, call, toolNames) {
+export async function prepareTraining(input, call, toolNames, { courseReadiness } = {}) {
   if (
     !input ||
     typeof input.computeResourceId !== 'string' ||
@@ -573,6 +581,32 @@ export async function prepareTraining(input, call, toolNames) {
       trainingSubmitted: false,
       resource,
     };
+  if (originman && courseReadiness) {
+    const preflight = await courseReadiness({
+      computeResourceId: input.computeResourceId,
+      device: 'cuda',
+    });
+    if (preflight.supported !== false) {
+      const ready =
+        preflight.computeResourceId === input.computeResourceId &&
+        preflight.trainingSubmitted === false &&
+        preflight.report?.readyForSmokeTraining === true &&
+        preflight.report?.schemaVersion === 1 &&
+        preflight.report?.trainingPerformed === false &&
+        preflight.report?.device === 'cuda' &&
+        preflight.report?.engine === 'originman-recovery-reflect' &&
+        preflight.report?.taskId === 'originman-recovery';
+      return {
+        status: ready ? 'prepared' : 'blocked',
+        computeResourceId: input.computeResourceId,
+        resource,
+        preflight,
+        trainingSubmitted: false,
+        taskEnvironmentVerified: ready,
+        reason: ready ? '课程预检通过。' : '课程引擎、依赖或容量未就绪，尚未提交。',
+      };
+    }
+  }
   const preflightTool =
     originman && toolNames?.includes('rdk_originman_training_preflight')
       ? 'rdk_originman_training_preflight'

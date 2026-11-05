@@ -1,0 +1,69 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>本次实验 · RDK Robot Learning</title>
+    <link rel="stylesheet" href="./tokens.css" />
+    <link rel="stylesheet" href="./experiment.css" />
+    <script type="module" src="./experiment-page.mjs"></script>
+  </head>
+  <body>
+    <a class="skip-link" href="#experiment-main">跳到实验内容</a>
+    <header class="experiment-header">
+      <a href="./">RDK Robot Learning</a><span>OriginMan Workshop</span>
+      <span id="connection-status" role="status">正在连接本次实验</span>
+    </header>
+    <main id="experiment-main" class="experiment-layout">
+      <aside aria-label="课程进度">
+        <p id="evidence-scope" class="eyebrow">本次实验 · 仅仿真</p>
+        <h1>观察、训练、看结果。</h1>
+        <ol class="experiment-steps">
+          <li>观察参考仿真</li>
+          <li id="step-training">训练本组策略</li>
+          <li id="step-evaluation">同源评测</li>
+          <li id="step-results">查看对比与回放</li>
+        </ol>
+        <p id="next-action" aria-live="polite">通过插件打开明确实验，接续原任务。</p>
+        <button id="refresh-experiment" type="button">刷新本次实验</button>
+        <a id="login-platform" href="./" hidden>登录学习平台</a>
+      </aside>
+      <section class="experiment-content" aria-label="实验结果">
+        <div id="experiment-error" class="experiment-error" role="alert" hidden></div>
+        <section class="experiment-summary" aria-label="当前状态">
+          <div><span>训练</span><strong id="training-status">待连接</strong></div>
+          <div><span>评测</span><strong id="evaluation-status">待连接</strong></div>
+          <div><span>同源校验</span><strong id="association-status">待验证</strong></div>
+        </section>
+        <section aria-labelledby="reward-heading">
+          <div class="section-heading"><h2 id="reward-heading">本次训练曲线</h2><span id="curve-caption">等待真实训练数据</span></div>
+          <svg id="reward-chart" viewBox="0 0 720 240" role="img" aria-label="本次训练奖励曲线" hidden></svg>
+          <p id="curve-empty" class="empty-state">暂无训练曲线。不会使用参考曲线代替本次结果。</p>
+        </section>
+        <section aria-labelledby="comparison-heading">
+          <div class="section-heading"><h2 id="comparison-heading">同条件效果对比</h2><span id="quality-status">等待独立评测</span></div>
+          <div class="comparison-scroll">
+            <table id="comparison-table" hidden>
+              <caption>恢复成功次数；仅显示本次同源评测记录</caption>
+              <thead><tr><th scope="col">条件组</th><th scope="col">原 PD</th><th scope="col">调参反馈</th><th scope="col">本次 RL</th></tr></thead>
+              <tbody id="comparison-body"></tbody>
+            </table>
+          </div>
+          <p id="comparison-empty" class="empty-state">评测完成并核对来源后，在这里比较真实结果。</p>
+        </section>
+        <section aria-labelledby="replay-heading">
+          <div class="section-heading"><h2 id="replay-heading">本次评测回放</h2><span id="playback-status">尚未播放</span></div>
+          <video id="experiment-video" controls playsinline preload="none" hidden aria-label="本次评测视频"></video>
+          <p id="video-empty" class="empty-state">尚无可用回放。不重新提交评测。</p>
+          <a id="download-video" hidden download>保存本次视频</a>
+          <button id="open-playback-page" type="button" hidden>打开本次回放</button>
+          <button id="export-experiment" type="button" disabled>保存评测记录</button>
+        </section>
+        <details class="experiment-details">
+          <summary>技术详情</summary>
+          <pre id="experiment-diagnostics">尚未取得明确实验。</pre>
+        </details>
+      </section>
+    </main>
+  </body>
+</html>

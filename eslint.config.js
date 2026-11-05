@@ -18,6 +18,8 @@ const TS_FILES = ['server/**/*.ts', 'shared/**/*.ts', 'services/**/*.ts'];
 const NODE_JS_FILES = ['scripts/**/*.mjs', 'services/**/*.mjs', '*.mjs'];
 const BROWSER_JS_FILES = [
   'services/sim2real-web/public/*.js',
+  'services/sim2real-web/public/*.mjs',
+  'plugins/rdk-robot-learning-platform/ui/*.mjs',
   'services/mujoco-web/microduck-community-overlay.js',
 ];
 
@@ -229,6 +231,10 @@ export default tseslint.config(
     rules: {
       'no-control-regex': 'off',
     },
+  },
+  {
+    files: ['services/sim2real-web/public/*.mjs', 'plugins/rdk-robot-learning-platform/ui/*.mjs'],
+    languageOptions: { sourceType: 'module' },
   },
   eslintConfigPrettier,
 );

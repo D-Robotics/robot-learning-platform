@@ -1,13 +1,17 @@
 ---
 name: devices-board
-description: 通过 RDK 学习平台连接设备、检查 BoardAgent 和传感器、暂存加载策略并执行受控策略或 D6A 机械臂动作及停止。
+description: 通过 RDK 学习平台连接设备、检查 BoardAgent 和传感器、指导 OriginMan 新机标定与实机验证，或暂存加载策略、执行受控策略及 D6A 机械臂动作。
 ---
 
 # 设备、策略与机械臂
 
 交付真实设备状态或受控动作证据。参数见 [工具目录](../../references/tool-catalog.md)，运动和重试边界见 [连接契约](../../references/connection-contract.md) 与 [设备契约](../../references/device-contracts.md)。
 
+任何机型首次接入或换机复测，先使用 [robot-acceptance](../robot-acceptance/SKILL.md) 建立逐机证据记录，不能复用另一台机器的标定和通过状态。
+
 新用户从仿真到板端的逐项验收见 [用户工作流](../../references/user-journeys.md)。明确本次目标设备及“不运动纯推理”或“实体动作”的用户结果，不从连接成功推断本体、传感器和模型都可用。connectionId 用于连接记录，deviceId 用于平台设备选择；按读取结果核对实际目标关系，不用未经核对的首条历史记录。
+
+OriginMan“新机器人接入、站立模型上机、标定或复测”先读[新机接入与有限验证](../../references/originman-onboarding.md)。先利用官方资料与本机只读配置，再确定需要现场核对的安装差异。按模型摘要、真实观测、完整周期时序、同配置仿真、零致动、短实体试验逐阶段留证。历史30秒静止通过不能转成新机资格或抗扰优势；本插件未新增OriginMan实时执行工具，缺适配器时保持该阶段未接入。
 
 - `rdk_device_discover` 列出当前账号已登记连接，不扫描整个网络。没有连接时用工作台设备管理添加；MCP 没有添加 SSH 坐标的工具。`rdk_device_connect(connectionId)` / `rdk_device_disconnect(connectionId)` 操作已有连接。
 - 只读验收用 `rdk_board_health`、`rdk_board_onboarding_preflight`、`rdk_board_station_status`、`rdk_board_policy_status`、`rdk_board_policy_files`。`rdk_board_station_command(id)` 仅执行现有白名单命令 ID，不是任意 shell。多个设备时所有 station 类参数显式带实际 `deviceId`。

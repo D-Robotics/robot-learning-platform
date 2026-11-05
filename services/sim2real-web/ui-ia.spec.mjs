@@ -14,6 +14,12 @@ const agentChat = fs.readFileSync(path.join(here, 'public', 'agent-chat.js'), 'u
 // assertions below now point at the merged files.
 const cssApp = fs.readFileSync(path.join(here, 'public', 'app.css'), 'utf8');
 const cssIa = cssApp;
+const experimentPage = fs.readFileSync(path.join(here, 'public/experiment.html'), 'utf8');
+assert.match(experimentPage, /id="experiment-main"/);
+assert.match(experimentPage, /id="experiment-video"[^>]*controls/);
+assert.match(experimentPage, /<summary>技术详情<\/summary>/);
+assert.match(experimentPage, /src="\.\/experiment-page.mjs"/);
+assert.doesNotMatch(experimentPage, /\son\w+\s*=|javascript:/i);
 
 import {
   assertStyleInvariants,

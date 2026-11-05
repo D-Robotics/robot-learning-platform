@@ -92,6 +92,52 @@ test('course model reader uses the same verified identity and preserves full man
   });
   assert.deepEqual((await f.core.readModels()).models[0].manifest, manifest);
 });
+
+test('experiment sessions use only the pinned platform and never return its session cookie', async (t) => {
+  const observed = [];
+  const f = await fixture(t, async (url, options) => {
+    observed.push({ url: String(url), method: options.method });
+    assert.equal(options.headers.cookie, 'rdk_sso_web_session=fixture-verified');
+    assert.equal(options.redirect, 'error');
+    return Response.json({
+      ok: true,
+      schemaVersion: 1,
+      ownerScoped: true,
+      view: { contextId: 'lesson', training: { runId: 'train' } },
+    });
+  });
+  const caps = await f.core.experimentSession('capabilities');
+  assert.equal(caps.supported, true);
+  const result = await f.core.experimentSession('remember', {
+    contextId: 'lesson',
+    runId: 'train',
+  });
+  assert.doesNotMatch(JSON.stringify(result), /fixture-verified/);
+  assert.deepEqual(observed, [
+    {
+      url: 'https://studio.example/robotics-learning/api/v1/duck/experiments/capabilities',
+      method: 'GET',
+    },
+    { url: 'https://studio.example/robotics-learning/api/v1/duck/experiments', method: 'POST' },
+  ]);
+  await assert.rejects(f.core.experimentSession('resume', { contextId: '../../other' }));
+  assert.equal(observed.length, 2);
+});
+
+test('only a missing capability route permits local fallback; other session errors remain failures', async (t) => {
+  let status = 404;
+  const f = await fixture(t, async () =>
+    Response.json({ ok: false, code: 'EXPERIMENT_NOT_FOUND', message: '未找到此实验' }, { status }),
+  );
+  assert.deepEqual(await f.core.experimentSession('capabilities'), { supported: false });
+  await assert.rejects(f.core.experimentSession('resume', { contextId: 'lesson' }), {
+    code: 'EXPERIMENT_NOT_FOUND',
+    httpStatus: 404,
+  });
+  status = 503;
+  await assert.rejects(f.core.experimentSession('capabilities'), { httpStatus: 503 });
+  assert.equal(f.invalidations(), 0);
+});
 test('course model reader rejects malformed and oversized responses without invalidating login', async (t) => {
   let payload = 'not json';
   const f = await fixture(t, async () => new Response(payload));

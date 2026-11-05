@@ -1,7 +1,7 @@
 {
   "name": "rdk-robot-learning-platform",
   "displayName": "RDK Robot Learning Platform",
-  "version": "0.3.2",
+  "version": "0.5.0",
   "description": "OriginMan 受扰恢复与 MicroDuck 学习工作流：仿真、默认 GPU / 可选 CPU 训练、评测、制品与受控部署；由 setup 技能连接同账号平台。",
   "author": {
     "name": "D-Robotics",

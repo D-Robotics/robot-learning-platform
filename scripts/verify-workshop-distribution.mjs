@@ -172,12 +172,14 @@ try {
         assert.equal(body.training.originmanWorkshop.device, 'cuda');
         assert.equal(body.training.originmanWorkshop.timesteps, 8192);
         assert.ok(!state.runs.has(id), 'duplicate submission');
-        assert.equal(
-          req.headers['idempotency-key'],
-          'dsh-training-' +
-            body.training.originmanWorkshop.groupId +
-            (phase === 'train' ? '-train-0' : '-eval-0'),
-        );
+        // The retained legacy core does not expose groupId in its submit schema.
+        // The wrapper must preserve the operation through its stable submission key.
+        assert.match(req.headers['idempotency-key'], /^dsh-training-om-[a-f0-9]+-(train|eval)-0$/);
+        if (phase === 'evaluate')
+          assert.equal(
+            req.headers['idempotency-key'].replace('-eval-0', '-train-0'),
+            state.trainKey,
+          );
         if (phase === 'evaluate')
           assert.equal(body.training.originmanWorkshop.sourceRunId, 'train-fixture');
         const run = {
@@ -199,6 +201,7 @@ try {
           },
         };
         state.runs.set(id, { run, reads: 0 });
+        if (phase === 'train') state.trainKey = req.headers['idempotency-key'];
         state.writes.push(body);
         return json({ run }, 201);
       }

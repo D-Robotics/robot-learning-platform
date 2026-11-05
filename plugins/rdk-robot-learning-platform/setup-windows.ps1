@@ -37,7 +37,11 @@ try {
       Move-Item -LiteralPath (Join-Path $temp $runtime.folder) -Destination $destination
     }
   }
-  & $node (Join-Path $root 'setup.mjs')
+  if ($env:RDK_PLUGIN_SETUP_HOST -eq 'qoder') {
+    & $node (Join-Path $root 'setup.mjs') --host qoder
+  } else {
+    & $node (Join-Path $root 'setup.mjs')
+  }
   if ($LASTEXITCODE -ne 0) { throw 'Plugin configuration was not completed. Read the message above.' }
 } finally {
   if ($temp -and (Test-Path -LiteralPath $temp)) { Remove-Item -LiteralPath $temp -Recurse -Force }

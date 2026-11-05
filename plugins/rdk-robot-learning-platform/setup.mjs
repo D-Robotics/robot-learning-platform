@@ -26,24 +26,23 @@ try {
     if (options[args[i]]) throw Error('安装参数重复。');
     options[args[i]] = args[i + 1];
   }
-  if (options['--host'] && !['studio', 'other'].includes(options['--host']))
-    throw Error('host只支持studio或other。');
+  if (options['--host'] && !['studio', 'other', 'qoder'].includes(options['--host']))
+    throw Error('host只支持studio、other或qoder。');
   const configured = configurePlugin({
     root,
     platformUrl: options['--platform-url'],
     courseResourceId: options['--resource-id'],
   });
-  const installed =
-    options['--host'] === 'other'
-      ? { installed: false, needsHostImport: true }
-      : installStudioConnection(configured.manifest.mcpServers['rdk-learning-platform'], {
-          directory: options['--studio-data-dir'],
-          connectionName: options['--connection-name'],
-        });
+  const installed = ['other', 'qoder'].includes(options['--host'])
+    ? { installed: false, needsHostImport: true }
+    : installStudioConnection(configured.manifest.mcpServers['rdk-learning-platform'], {
+        directory: options['--studio-data-dir'],
+        connectionName: options['--connection-name'],
+      });
   let loginInheritance;
   const patchFile = path.join(root, 'host', 'host-patch.json');
   const app = options['--studio-app'] ?? detectStudioApp();
-  if (options['--host'] !== 'other' && app && fs.existsSync(patchFile)) {
+  if (!['other', 'qoder'].includes(options['--host']) && app && fs.existsSync(patchFile)) {
     try {
       loginInheritance = installStudioLoginPatch({
         appPath: app,
@@ -53,6 +52,10 @@ try {
       loginInheritance = { installed: false, reason: error.message };
     }
   }
+  const qoderImport =
+    options['--host'] === 'qoder'
+      ? (await import('./scripts/qoder-install.mjs')).createQoderImportZip(root)
+      : null;
   const pluginVersion = JSON.parse(fs.readFileSync(path.join(root, 'plugin.json'), 'utf8')).version;
   console.log(
     JSON.stringify({
@@ -61,6 +64,7 @@ try {
       configured: true,
       ...installed,
       credentialsStored: false,
+      ...(qoderImport ? { qoderImport } : {}),
       ...(loginInheritance ? { loginInheritance } : {}),
     }),
   );
@@ -69,8 +73,12 @@ try {
       pluginVersion +
       '，连接：' +
       (installed.name ?? '等待宿主导入') +
-      '。新建对话先核对插件返回的实际版本与登录状态。',
+      '。新建对话核对实际版本；本地引导无需登录，平台任务另行核对账号。',
   );
+  if (qoderImport)
+    console.log(
+      'Qoder桌面：扩展→已安装→添加→上传Plugin，选择刚生成的“Qoder本机导入包.zip”。这是本机配置副本，不要转发；共享请使用原始发行ZIP。',
+    );
   if (loginInheritance?.installed === false)
     console.log(
       'Studio自动登录接线尚未安装：' + loginInheritance.reason + ' 当前仍可使用浏览器授权。',
@@ -89,7 +97,8 @@ try {
     console.log(
       '安装配置完成。请在Studio新建对话，说：帮我做一次OriginMan受扰恢复短训练，评测后播放本次回放。首次无登录时按浏览器提示确认。',
     );
-  else console.log('配置已生成。请在宿主中导入当前插件目录或.mcp.json，然后按浏览器提示登录。');
+  else
+    console.log('配置已生成。导入完整插件目录即可使用本地知识；需要平台数据时再按浏览器提示登录。');
 } catch (error) {
   console.error('安装配置未完成：' + error.message);
   process.exitCode = 1;

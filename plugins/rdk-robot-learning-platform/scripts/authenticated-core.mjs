@@ -131,6 +131,110 @@ export async function connectAuthenticatedCore({
   let closed = false;
   return {
     authentication: auth,
+    async experimentSession(operation, input = {}, { signal } = {}) {
+      if (!['capabilities', 'remember', 'resume'].includes(operation))
+        throw new PluginRequestError('EXPERIMENT_INVALID_OPERATION', '实验会话操作无效。');
+      if (
+        operation !== 'capabilities' &&
+        !/^[A-Za-z0-9][A-Za-z0-9_.-]{0,95}$/.test(input.contextId ?? '')
+      )
+        throw new PluginRequestError('EXPERIMENT_INVALID_ID', '请选择明确实验。');
+      const pathname =
+        '/api/v1/duck/experiments' +
+        (operation === 'capabilities'
+          ? '/capabilities'
+          : operation === 'resume'
+            ? '/' + encodeURIComponent(input.contextId)
+            : '');
+      const response = await fetchPlatform(pathname, {
+        method: operation === 'remember' ? 'POST' : 'GET',
+        headers: {
+          accept: 'application/json',
+          ...(operation === 'remember' ? { 'content-type': 'application/json' } : {}),
+        },
+        ...(operation === 'remember' ? { body: JSON.stringify(input) } : {}),
+        signal,
+      });
+      if (operation === 'capabilities' && response.status === 404) return { supported: false };
+      const chunks = [];
+      let size = 0;
+      if (response.body)
+        for await (const chunk of response.body) {
+          size += chunk.byteLength;
+          if (size > 65536)
+            throw new PluginRequestError('EXPERIMENT_RESPONSE_TOO_LARGE', '实验回执超出预算。');
+          chunks.push(Buffer.from(chunk));
+        }
+      let value;
+      try {
+        value = JSON.parse(Buffer.concat(chunks).toString('utf8'));
+      } catch {
+        throw new PluginRequestError('EXPERIMENT_RESPONSE_INVALID', '实验接口没有返回有效回执。');
+      }
+      if (!response.ok)
+        throw new PluginRequestError(
+          value.code ?? 'EXPERIMENT_REQUEST_REJECTED',
+          value.message ?? '无法读取本次实验。',
+          { httpStatus: response.status },
+        );
+      if (
+        value.ok !== true ||
+        value.schemaVersion !== 1 ||
+        (operation === 'capabilities' && value.ownerScoped !== true)
+      )
+        throw new PluginRequestError('EXPERIMENT_RESPONSE_INVALID', '实验接口契约不匹配。');
+      return { ...value, supported: true };
+    },
+    async courseReadiness({ computeResourceId, device = 'cuda', signal } = {}) {
+      if (
+        typeof computeResourceId !== 'string' ||
+        !computeResourceId.trim() ||
+        computeResourceId.length > 160 ||
+        device !== 'cuda'
+      )
+        throw new PluginRequestError('INVALID_COURSE_RESOURCE', '请选择明确的课程资源。');
+      const response = await fetchPlatform(
+        '/api/v1/duck/compute-resources/' + encodeURIComponent(computeResourceId) + '/preflight',
+        {
+          method: 'POST',
+          headers: { accept: 'application/json', 'content-type': 'application/json' },
+          body: JSON.stringify({ taskId: 'originman-recovery', device }),
+          signal,
+        },
+      );
+      const chunks = [];
+      let size = 0;
+      if (response.body)
+        for await (const chunk of response.body) {
+          size += chunk.byteLength;
+          if (size > 65536)
+            throw new PluginRequestError(
+              'PREFLIGHT_RESPONSE_INVALID',
+              '课程预检回执超出预算；没有提交训练。',
+            );
+          chunks.push(Buffer.from(chunk));
+        }
+      let value;
+      try {
+        value = JSON.parse(Buffer.concat(chunks).toString('utf8'));
+      } catch {
+        if (response.status === 404)
+          return { supported: false, trainingSubmitted: false, taskEnvironmentVerified: false };
+        throw new PluginRequestError(
+          'PREFLIGHT_RESPONSE_INVALID',
+          '课程预检未返回有效回执；没有提交训练。',
+        );
+      }
+      if (response.status === 404 || value.error === 'SIM2REAL_PREFLIGHT_NOT_SUPPORTED')
+        return { supported: false, trainingSubmitted: false, taskEnvironmentVerified: false };
+      if (!response.ok)
+        throw new PluginRequestError(
+          'COURSE_PREFLIGHT_REJECTED',
+          '课程预检被平台拒绝，请维护者检查当前资源；没有提交训练。',
+          { httpStatus: response.status },
+        );
+      return value;
+    },
     async readModels({ signal } = {}) {
       const response = await fetchPlatform('/api/v1/duck/models', {
         method: 'GET',
@@ -167,6 +271,82 @@ export async function connectAuthenticatedCore({
     },
     async request(method, params, options) {
       const result = await upstream.request(method, params, options);
+      // Older retained cores omit the platform's structured pre-engine diagnostic.
+      // Enrich only failed empty logs through the same owner-authorized read API.
+      if (method === 'tools/call' && params.name === 'rdk_run_logs' && !result.isError) {
+        let value = result.structuredContent;
+        if (!value) {
+          try {
+            value = JSON.parse(result.content?.find((c) => c.type === 'text')?.text);
+          } catch {}
+        }
+        if (
+          value?.status === 'failed' &&
+          Array.isArray(value.lines) &&
+          value.lines.length === 0 &&
+          !value.diagnostic
+        ) {
+          const id = params.arguments?.runId;
+          if (typeof id === 'string' && id.length > 0 && id.length <= 160) {
+            const response = await fetchPlatform(
+              '/api/v1/duck/runs/' + encodeURIComponent(id) + '/logs',
+              { method: 'GET', headers: { accept: 'application/json' }, signal: options?.signal },
+            );
+            if (!response.ok)
+              throw new PluginRequestError(
+                'RUN_DIAGNOSTIC_UNAVAILABLE',
+                '当前账号无法读取该Run的启动诊断；保留原Run，不重交。',
+                { httpStatus: response.status },
+              );
+            const chunks = [];
+            let size = 0;
+            if (response.body)
+              for await (const chunk of response.body) {
+                size += chunk.byteLength;
+                if (size > 65536)
+                  throw new PluginRequestError('RUN_DIAGNOSTIC_INVALID', '启动诊断超出读取预算。');
+                chunks.push(Buffer.from(chunk));
+              }
+            let body;
+            try {
+              body = JSON.parse(Buffer.concat(chunks).toString('utf8'));
+            } catch {
+              throw new PluginRequestError('RUN_DIAGNOSTIC_INVALID', '平台未返回有效启动诊断。');
+            }
+            const d = body.diagnostic;
+            if (
+              body.runId === id &&
+              body.logAvailability === 'not-started' &&
+              body.trainingStarted === false &&
+              d &&
+              typeof d.code === 'string' &&
+              d.code.length <= 80 &&
+              typeof d.message === 'string' &&
+              d.message.length <= 500 &&
+              typeof d.nextAction === 'string' &&
+              d.nextAction.length <= 500 &&
+              typeof d.outcomeUnknown === 'boolean'
+            ) {
+              value = {
+                ...value,
+                logAvailability: 'not-started',
+                trainingStarted: false,
+                diagnostic: {
+                  code: d.code,
+                  message: d.message,
+                  nextAction: d.nextAction,
+                  outcomeUnknown: d.outcomeUnknown,
+                },
+              };
+              return {
+                ...result,
+                structuredContent: value,
+                content: [{ type: 'text', text: JSON.stringify(value) }],
+              };
+            }
+          }
+        }
+      }
       if (method === 'tools/call' && params.name === 'rdk_platform_status' && !result.isError) {
         let value = result.structuredContent;
         if (!value) {

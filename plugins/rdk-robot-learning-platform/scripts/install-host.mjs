@@ -34,7 +34,13 @@ export function mergeStudioConnection(current, connection, { connectionName } = 
   if (!knownNames.includes(name)) throw Error('请明确选择学习平台连接；不会覆盖其他MCP服务器。');
   return {
     name,
-    configuration: { ...current, mcpServers: { ...servers, [name]: connection } },
+    configuration: {
+      ...current,
+      mcpServers: {
+        ...servers,
+        [name]: { ...connection, managedPlugin: 'rdk-robot-learning-platform' },
+      },
+    },
     wasDisabled: Array.isArray(current.disabled) && current.disabled.includes(name),
   };
 }

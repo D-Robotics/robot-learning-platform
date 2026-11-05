@@ -1,0 +1,228 @@
+{
+  "schemaVersion": 1,
+  "caseId": "originman-finite-standing-2026-11-04",
+  "scope": "One supervised installation, finite stationary engineering trials; summary only, not a deployment receipt or transferable device clearance.",
+  "productionQualified": false,
+  "hardwareEligibilityChanged": false,
+  "externalDisturbanceTested": false,
+  "longTermReliabilityVerified": false,
+  "policySha256": "69ec85bd0ce885c00bda5702f8de52d92861e1520ce938d1012fad76509cb0fa",
+  "normalizationSha256": "1cb92227068d7cd4e198b110a0761067d45b891aee1f9f33a7509ab910d46cf1",
+  "codeSha256": {
+    "originman_control.py": "03c4bcd1058641a85fe35f8c26f1b6e5bfa1393a39f385a1ef3712602aa27041",
+    "originman_io.py": "a3757a68cc0fdd5ee8b96942ca390b532b456648181f48fdb1690a4b7ea3f709",
+    "originman_estimator.py": "129b6c46415815225f5d922440afe246d1542586884a09575f8f1e1d1b4873d5",
+    "originman_lease.py": "46a273534a608fdc608a383ba3ce4adeda0ff83c75e9a013d7229fc38bcc8328",
+    "originman_runtime.py": "c6f6a9b6299415aa8d1a8f9e33b0e381e040cfc10d4243039410b6d94414a667"
+  },
+  "frequency": {
+    "trainingHz": 50,
+    "engineeringTrialHz": 25,
+    "frequencyChangeReevaluated": true
+  },
+  "engineeringEnvelope": {
+    "control_period": 0.04,
+    "radians_per_count": 0.0041887902047863905,
+    "center": [500, 500, 500, 500],
+    "signs": [1, 1, -1, -1],
+    "amplitude_counts": 20,
+    "slew_counts_per_cycle": 1,
+    "max_joint_age": 0.04,
+    "max_imu_age": 0.02,
+    "max_tilt": 0.13962634015954636,
+    "max_rate": 1.3,
+    "position_margin_counts": 5
+  },
+  "simulationComparisons": [
+    {
+      "sourceReport": "bounded-sim-report.json",
+      "evaluationHz": 50,
+      "nominalSeconds": 6,
+      "otherCaseSeconds": 6,
+      "cases": 9,
+      "successByMode": {
+        "bounded-baseline": 7,
+        "bounded-rl": 7,
+        "original-baseline": 5,
+        "original-rl": 9
+      },
+      "failureMeaning": "Not meeting the source recovery criterion is not synonymous with falling."
+    },
+    {
+      "sourceReport": "bounded-sim-25hz.json",
+      "evaluationHz": 25,
+      "nominalSeconds": 30,
+      "otherCaseSeconds": 6,
+      "cases": 9,
+      "successByMode": {
+        "bounded-baseline": 7,
+        "bounded-rl": 7,
+        "original-baseline": 9,
+        "original-rl": 0
+      },
+      "failureMeaning": "Not meeting the source recovery criterion is not synonymous with falling."
+    }
+  ],
+  "physicalTrials": [
+    {
+      "sourceReport": "stage7-baseline3-25hz-report.json",
+      "mode": "baseline",
+      "secondsRequested": 3.0,
+      "elapsedSeconds": 3.0002573350011517,
+      "status": "completed",
+      "summary": {
+        "frames": 75,
+        "maximumAbsRollDeg": 0.43634569808556606,
+        "maximumAbsPitchDeg": 0.107955726292483,
+        "maximumWorkMs": 25.24908399936976,
+        "controlFramesSent": 75,
+        "learnedActorFramesSent": 0,
+        "expiredProposals": 0,
+        "skippedSensorCycles": 0
+      },
+      "crcErrors": 0,
+      "readFailures": 0,
+      "restorationComplete": true,
+      "finalMeasuredCounts": [500, 501, 499, 500]
+    },
+    {
+      "sourceReport": "stage7-rl3-25hz-report.json",
+      "mode": "rl",
+      "secondsRequested": 3.0,
+      "elapsedSeconds": 3.0004858339998464,
+      "status": "completed",
+      "summary": {
+        "frames": 75,
+        "maximumAbsRollDeg": 0.471539994054806,
+        "maximumAbsPitchDeg": 0.14332804344112898,
+        "maximumWorkMs": 35.39941600138263,
+        "controlFramesSent": 75,
+        "learnedActorFramesSent": 75,
+        "expiredProposals": 0,
+        "skippedSensorCycles": 0
+      },
+      "crcErrors": 0,
+      "readFailures": 0,
+      "restorationComplete": true,
+      "finalMeasuredCounts": [500, 501, 497, 498]
+    },
+    {
+      "sourceReport": "stage7-baseline30-25hz-report.json",
+      "mode": "baseline",
+      "secondsRequested": 30.0,
+      "elapsedSeconds": 30.00016476499877,
+      "status": "completed",
+      "summary": {
+        "frames": 749,
+        "maximumAbsRollDeg": 0.4535473160514457,
+        "maximumAbsPitchDeg": 0.14543368483328598,
+        "maximumWorkMs": 28.954540999620804,
+        "controlFramesSent": 748,
+        "learnedActorFramesSent": 0,
+        "expiredProposals": 1,
+        "skippedSensorCycles": 1
+      },
+      "crcErrors": 0,
+      "readFailures": 1,
+      "restorationComplete": true,
+      "finalMeasuredCounts": [500, 501, 498, 499],
+      "rollRmsDeg": 0.3683600273592864,
+      "pitchRmsDeg": 0.10918728239721115,
+      "maximumFrameGapMs": 80.85075000053621
+    },
+    {
+      "sourceReport": "stage7-rl30-25hz-report.json",
+      "mode": "rl",
+      "secondsRequested": 30.0,
+      "elapsedSeconds": 30.000293221999527,
+      "status": "completed",
+      "summary": {
+        "frames": 749,
+        "maximumAbsRollDeg": 0.5425767264429568,
+        "maximumAbsPitchDeg": 0.19912903389603795,
+        "maximumWorkMs": 32.26166600143188,
+        "controlFramesSent": 748,
+        "learnedActorFramesSent": 748,
+        "expiredProposals": 1,
+        "skippedSensorCycles": 1
+      },
+      "crcErrors": 0,
+      "readFailures": 1,
+      "restorationComplete": true,
+      "finalMeasuredCounts": [501, 502, 499, 499],
+      "rollRmsDeg": 0.3672836243915056,
+      "pitchRmsDeg": 0.10058934601798937,
+      "maximumFrameGapMs": 80.0064579998434
+    }
+  ],
+  "operatorObservation": {
+    "rl3Seconds": "全程自行站立，没有异常，可以继续30秒",
+    "rl30Seconds": "是，全程自行站立，没有异常",
+    "source": "Operator replies in the validation session; raw telemetry alone does not establish foot contact or absence of support."
+  },
+  "replay": {
+    "replayedActorMaximumAbsError": 1.1920928955078125e-7,
+    "comparedSentFrames": 747,
+    "sentFramesDifferingFromZeroResidualAtSamePreviousTargets": 568
+  },
+  "limits": [
+    "Sequential stationary trials do not prove causal superiority over baseline.",
+    "Case installation mappings and calibrations must not be transferred to new robots.",
+    "Isolated read failures and expired unsent proposals remained; communication was not proven fault-free.",
+    "The original research hardware eligibility remains unchanged."
+  ],
+  "sourceReceipts": [
+    {
+      "name": "bounded-sim-report.json",
+      "sha256": "432063ebbbcc8c4c356d325ffc1ba3fae1cfef10111e7eae1cd437cea1c28db1"
+    },
+    {
+      "name": "bounded-sim-25hz.json",
+      "sha256": "d66ac59b27e0171214eb003c13acc30ddd477611b70edc61348af7f8dd6eba52"
+    },
+    {
+      "name": "observed-sim-25hz.json",
+      "sha256": "6c5a8189a314a00729eb6c133f978eb3b5d07b9e446d556795294e47fc9bb6b4"
+    },
+    {
+      "name": "stage7-shadow30-25hz-report.json",
+      "sha256": "0d5e5d50ab550687322c09d2d8fd8024ef1baeffe2177bfbd4d5f3d0b8391936"
+    },
+    {
+      "name": "stage7-tests.log",
+      "sha256": "27e4ac508fd4ca99dab892cbd831c140c075ff576f8fe24b03a420ca7f2b2866"
+    },
+    {
+      "name": "trial-permit-30s-25hz.json",
+      "sha256": "58ac1fa49eacd92aa4d7ddea70162cc07fa876d4b0d978b08e696087a82708ed"
+    },
+    {
+      "name": "standing-comparison.json",
+      "sha256": "a22cbaca76de152f68df5cc25368750dc8b70e4bcb01141c6ce5a3995f9a4919"
+    },
+    {
+      "name": "electrical-final.json",
+      "sha256": "67a530b68acb4d5e98ca6153f64bf3faf37ef1cf558342463be7b50f589dabd7"
+    },
+    {
+      "name": "final-service-state.txt",
+      "sha256": "9a7e8b5f79715da44eef7fcba63bc08a32c7a30d3104d3b167ab57d3fccaf5ed"
+    },
+    {
+      "name": "stage7-baseline3-25hz-report.json",
+      "sha256": "c6282ea743e86deca8be2763d78918534e4f6ffe92196bceb7f81a8595c235ee"
+    },
+    {
+      "name": "stage7-rl3-25hz-report.json",
+      "sha256": "a14155bf6bb0499cd918ee58b7985f51aea6a267f5ea02fe6edc9d891b709c6b"
+    },
+    {
+      "name": "stage7-baseline30-25hz-report.json",
+      "sha256": "04080ed1d5776792677d8c8a954deed6f014655db0e0907271541f703efed3d0"
+    },
+    {
+      "name": "stage7-rl30-25hz-report.json",
+      "sha256": "d76f4e1a9a738646c121ce6e89360d8ff8c35908bcaf104124d8536a842703d1"
+    }
+  ]
+}

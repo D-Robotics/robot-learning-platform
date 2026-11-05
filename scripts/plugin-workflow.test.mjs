@@ -59,7 +59,10 @@ test('OriginMan inspection binds its evaluation Run and never reuses MicroDuck q
       { now },
     );
     assert.equal(r.stages.find((s) => s.id === 'evaluate').state, wrong ? 'blocked' : 'completed');
-    assert.equal(r.stages.find((s) => s.id === 'deploy').state, 'blocked');
+    // The retained course explicitly ends in simulation; an omitted hardware
+    // exercise is not a failed deployment and must never trigger a deploy call.
+    assert.equal(r.stages.find((s) => s.id === 'deploy').state, 'not_applicable');
+    assert.ok(calls.every(([name]) => !name.includes('deployment')));
     assert.ok(calls.every(([name]) => !name.includes('physical_evaluation')));
     if (!wrong) assert.match(r.markdown, /未达明显收益/);
   }

@@ -225,6 +225,80 @@ test('compact queued status restores the exact evaluation parent through lineage
   );
 });
 
+test('a fresh host restores a server-owned experiment without local files or a mutation', async (t) => {
+  const f = fixture(t);
+  const directory = path.join(f.directory, 'fresh-client');
+  const calls = [];
+  const remote = async (operation, input) => {
+    calls.push({ operation, input });
+    if (operation === 'capabilities') return { supported: true };
+    assert.equal(operation, 'resume');
+    return {
+      view: { contextId: 'shared', training: { runId: 'train' }, evaluation: { runId: 'eval' } },
+    };
+  };
+  const result = await experimentContext('resume', { contextId: 'shared' }, f.call, {
+    directory,
+    remote,
+  });
+  assert.equal(result.persistence.sharedAcrossHosts, true);
+  assert.equal(result.training.runId, 'train');
+  assert.equal(result.evaluation.runId, 'eval');
+  assert.match(result.links.experiment, /\/learning\/experiment.html\?context=shared$/);
+  assert.equal(fs.existsSync(directory), false);
+  assert.deepEqual(
+    calls.map((c) => c.operation),
+    ['capabilities', 'resume'],
+  );
+});
+
+test('server reference binding preserves the same Run; legacy platforms never claim cross-host synchronization', async (t) => {
+  const f = fixture(t);
+  const remoteCalls = [];
+  const remote = async (operation, input) => {
+    remoteCalls.push(operation);
+    return operation === 'capabilities'
+      ? { supported: true }
+      : {
+          view: {
+            contextId: input.contextId,
+            training: { runId: input.runId },
+            evaluation: null,
+          },
+        };
+  };
+  const shared = await experimentContext(
+    'remember',
+    { contextId: 'shared', runId: 'train' },
+    f.call,
+    { directory: f.directory, remote },
+  );
+  assert.equal(shared.persistence.scope, 'platform-account');
+  assert.deepEqual(remoteCalls, ['capabilities', 'remember']);
+  const legacy = await experimentContext('resume', { contextId: 'shared' }, f.call, {
+    directory: f.directory,
+    remote: async () => ({ supported: false }),
+  });
+  assert.equal(legacy.persistence.sharedAcrossHosts, false);
+  assert.equal(legacy.links.experiment, undefined);
+});
+
+test('conflicting remote and local bindings fail closed without changing either reference', async (t) => {
+  const f = fixture(t);
+  await f.tool('remember', { contextId: 'same', runId: 'train' });
+  const remote = async (operation) =>
+    operation === 'capabilities'
+      ? { supported: true }
+      : {
+          view: { contextId: 'same', training: { runId: 'foreign' }, evaluation: null },
+        };
+  await assert.rejects(
+    experimentContext('resume', { contextId: 'same' }, f.call, { directory: f.directory, remote }),
+    /冲突/,
+  );
+  assert.equal((await f.tool('resume', { contextId: 'same' })).training.runId, 'train');
+});
+
 test('compact status never adopts lineage from another Run, model, state or parent', async (t) => {
   for (const wrong of [
     { id: 'foreign' },

@@ -1,0 +1,12 @@
+{
+  "schemaVersion": 1,
+  "identity": {
+    "robotId": "REPLACE_WITH_PRIVATE_ROBOT_ID",
+    "adapterSha256": "",
+    "calibrationSha256": "",
+    "policySha256": "",
+    "runtimeSha256": ""
+  },
+  "evidence": [],
+  "unresolvedFaults": []
+}

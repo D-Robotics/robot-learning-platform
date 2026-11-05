@@ -1,0 +1,56 @@
+{
+  "schemaVersion": 1,
+  "caseId": "originman-candidate-static-2026-11-05",
+  "scope": "Sanitized historical engineering summary; not a deployment receipt or new-robot clearance",
+  "policySha256": "e7dd7c2f868d09090c5a49922704817a540fa1dfb9fd49c349300a5b315476e9",
+  "ioSourceSha256": "648b2c56c41bffdf8815c48d4c49c71b0934a96b7134d8b765161345ce4bce4e",
+  "hardwareEligibilityChanged": false,
+  "externalDisturbanceTested": false,
+  "longTermReliabilityVerified": false,
+  "shadow": {
+    "seconds": 30,
+    "frames": 750,
+    "readFailures": 0,
+    "expiredProposals": 0
+  },
+  "physicalStatic": {
+    "seconds": 3,
+    "learnedTargetsSent": 75,
+    "plannedFrames": 75,
+    "readFailures": 0,
+    "expiredProposals": 0,
+    "operatorConfirmedUnassisted": true
+  },
+  "contribution": {
+    "exactOneStepReplays": 74,
+    "differentFromZeroResidual": 60,
+    "closedLoopSuperiorityProven": false
+  },
+  "unresolvedFaults": [
+    "Intermittent negative servo read status, including official SDK temperature read before next trial",
+    "Temperature rose beyond this engineering trial entry gate; disturbance comparison never started"
+  ],
+  "operatorConfirmedEndState": "total-power-off-and-cooling",
+  "retainedReceipts": [
+    {
+      "name": "current-shadow30.json",
+      "sha256": "3e9b473e0351a2478e3de64d3707683142e19a88a030d78dcb97867f30090042",
+      "includedInPlugin": false
+    },
+    {
+      "name": "current-rl-trial3.json",
+      "sha256": "5adcc23988b99a3f3bdcc3871b177f20ba0aecc55734d41c398e557281f6415e",
+      "includedInPlugin": false
+    },
+    {
+      "name": "learned-target-contribution.json",
+      "sha256": "5938c976e0bcaabda1612308b0707ae6cf8ffd54da594da302e6f68c67977b94",
+      "includedInPlugin": false
+    },
+    {
+      "name": "end-shutdown.json",
+      "sha256": "e44c99585034ff087299ed02f1b5bf551343efe4e556e10ad70dd2dc3b07ea82",
+      "includedInPlugin": false
+    }
+  ]
+}
