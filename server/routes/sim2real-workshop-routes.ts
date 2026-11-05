@@ -22,7 +22,7 @@ export function registerSim2RealWorkshopRoutes(
     findRun: async (key, owner) => (await findSim2RealRunByIdempotency(key, owner))?.run ?? null,
     remember: experiments.remember,
   });
-  const api = (p: string) => options.prefix + '/workshops' + p;
+  const api = (p: string) => options.prefix + '/workshop-sessions' + p;
   const handle = (fn: (r: Request, owner: string | undefined) => Promise<unknown>) =>
     wrapAsync(async (r, s) => {
       const owner = deps.requestOwner(r, s);

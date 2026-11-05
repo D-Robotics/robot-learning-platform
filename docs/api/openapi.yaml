@@ -2698,7 +2698,7 @@ paths:
         second source of truth that can drift. Accessible without a session.
       responses:
         "200": { description: Current notices, content: { application/json: { schema: { type: object } } } }
-  /api/v1/duck/workshops:
+  /api/v1/duck/workshop-sessions:
     get:
       tags: [workspace]
       summary: Read owner-scoped current Workshop and history
@@ -2738,7 +2738,7 @@ paths:
           description: No owned experiment or course asset
         "409":
           description: Frozen recipe, uncertain submission, or previously claimed step
-  /api/v1/duck/workshops/{contextId}:
+  /api/v1/duck/workshop-sessions/{contextId}:
     parameters:
       - in: path
         name: contextId
@@ -2761,7 +2761,7 @@ paths:
           description: No owned experiment or course asset
         "409":
           description: Frozen recipe, uncertain submission, or previously claimed step
-  /api/v1/duck/workshops/{contextId}/select:
+  /api/v1/duck/workshop-sessions/{contextId}/select:
     parameters:
       - in: path
         name: contextId
@@ -2789,7 +2789,7 @@ paths:
           description: No owned experiment or course asset
         "409":
           description: Frozen recipe, uncertain submission, or previously claimed step
-  /api/v1/duck/workshops/{contextId}/reference:
+  /api/v1/duck/workshop-sessions/{contextId}/reference:
     parameters:
       - in: path
         name: contextId
@@ -2817,7 +2817,7 @@ paths:
           description: No owned experiment or course asset
         "409":
           description: Frozen recipe, uncertain submission, or previously claimed step
-  /api/v1/duck/workshops/{contextId}/pause:
+  /api/v1/duck/workshop-sessions/{contextId}/pause:
     parameters:
       - in: path
         name: contextId
@@ -2845,7 +2845,7 @@ paths:
           description: No owned experiment or course asset
         "409":
           description: Frozen recipe, uncertain submission, or previously claimed step
-  /api/v1/duck/workshops/{contextId}/continue:
+  /api/v1/duck/workshop-sessions/{contextId}/continue:
     parameters:
       - in: path
         name: contextId
@@ -2873,7 +2873,7 @@ paths:
           description: No owned experiment or course asset
         "409":
           description: Frozen recipe, uncertain submission, or previously claimed step
-  /api/v1/duck/workshops/{contextId}/claim/{phase}:
+  /api/v1/duck/workshop-sessions/{contextId}/claim/{phase}:
     parameters:
       - in: path
         name: contextId

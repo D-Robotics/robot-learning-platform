@@ -145,7 +145,7 @@ export async function connectAuthenticatedCore({
             ? '/' + encodeURIComponent(input.contextId)
             : '';
       const write = ['create', 'select'].includes(operation);
-      const response = await fetchPlatform('/api/v1/duck/workshops' + suffix, {
+      const response = await fetchPlatform('/api/v1/duck/workshop-sessions' + suffix, {
         method: write ? 'POST' : 'GET',
         headers: {
           accept: 'application/json',

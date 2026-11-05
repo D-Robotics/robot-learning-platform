@@ -106,7 +106,7 @@ export async function startWorkshop({
     // A durable single claim is obtained before the only POST /runs. On a lost
     // response we only read: another tab or restarted host cannot submit twice.
     const claim = await json(
-      'workshops/' + encodeURIComponent(contextId) + '/claim/' + phase,
+      'workshop-sessions/' + encodeURIComponent(contextId) + '/claim/' + phase,
       recipe,
     );
     await json('runs', claim.submission);
@@ -115,15 +115,15 @@ export async function startWorkshop({
     if (busy || disposed || !contextId) return;
     busy = true;
     try {
-      session = (await json('workshops/' + encodeURIComponent(contextId))).session;
+      session = (await json('workshop-sessions/' + encodeURIComponent(contextId))).session;
       for (const r of [session.training, session.evaluation])
         if (r && ['queued', 'running', 'pending'].includes(r.status))
           await json('runs/' + encodeURIComponent(r.runId));
-      session = (await json('workshops/' + encodeURIComponent(contextId))).session;
+      session = (await json('workshop-sessions/' + encodeURIComponent(contextId))).session;
       show();
       if (session.stage === 'ready-evaluate' && session.autoContinue) {
         await claimAndSubmit('evaluate');
-        session = (await json('workshops/' + encodeURIComponent(contextId))).session;
+        session = (await json('workshop-sessions/' + encodeURIComponent(contextId))).session;
       }
       $('workshop-error').hidden = true;
     } catch (e) {
@@ -140,12 +140,12 @@ export async function startWorkshop({
     show();
     try {
       await claimAndSubmit('train', { ...recipe, reference });
-      session = (await json('workshops/' + encodeURIComponent(contextId))).session;
+      session = (await json('workshop-sessions/' + encodeURIComponent(contextId))).session;
       $('workshop-error').hidden = true;
     } catch (e) {
       error(e);
       try {
-        session = (await json('workshops/' + encodeURIComponent(contextId))).session;
+        session = (await json('workshop-sessions/' + encodeURIComponent(contextId))).session;
       } catch {
         /* preserve uncertain state */
       }
@@ -163,13 +163,13 @@ export async function startWorkshop({
     selectedUrl.searchParams.set('context', id);
     historyImpl?.replaceState(null, '', selectedUrl.href);
     reference = null;
-    session = (await json('workshops/' + encodeURIComponent(id) + '/select', {})).session;
+    session = (await json('workshop-sessions/' + encodeURIComponent(id) + '/select', {})).session;
     show();
     $('history').hidden = true;
     schedule();
   };
   const history = async () => {
-    const list = await json('workshops');
+    const list = await json('workshop-sessions');
     $('history-list').replaceChildren();
     $('history-empty').hidden = list.sessions.length > 0 || (list.experiments?.length ?? 0) > 0;
     for (const s of list.sessions) {
@@ -203,7 +203,7 @@ export async function startWorkshop({
   listen('reference-video', 'ended', () =>
     run(async () => {
       session = (
-        await json('workshops/' + encodeURIComponent(contextId) + '/reference', {
+        await json('workshop-sessions/' + encodeURIComponent(contextId) + '/reference', {
           reference: 'observed',
         })
       ).session;
@@ -218,7 +218,7 @@ export async function startWorkshop({
   listen('skip-reference', 'click', () =>
     run(async () => {
       session = (
-        await json('workshops/' + encodeURIComponent(contextId) + '/reference', {
+        await json('workshop-sessions/' + encodeURIComponent(contextId) + '/reference', {
           reference: 'skipped',
         })
       ).session;
@@ -256,13 +256,13 @@ export async function startWorkshop({
   listen('refresh-workshop', 'click', () => run(refresh));
   listen('pause-workshop', 'click', () =>
     run(async () => {
-      session = (await json('workshops/' + encodeURIComponent(contextId) + '/pause', {})).session;
+      session = (await json('workshop-sessions/' + encodeURIComponent(contextId) + '/pause', {})).session;
       show();
     }),
   );
   listen('continue-evaluation', 'click', () =>
     run(async () => {
-      await json('workshops/' + encodeURIComponent(contextId) + '/continue', {});
+      await json('workshop-sessions/' + encodeURIComponent(contextId) + '/continue', {});
       await refresh();
     }),
   );
@@ -278,7 +278,7 @@ export async function startWorkshop({
     run(async () => {
       if (busy) return;
       const next = (
-        await json('workshops', {
+        await json('workshop-sessions', {
           modelId: session.modelId,
           computeResourceId: session.computeResourceId,
         })
