@@ -39,6 +39,8 @@ function fixture({ lost = false, failedSwitch = false, offline = false } = {}) {
       return { ok: false, json: async () => ({ ok: false, message: '目标实验不可用。' }) };
     if (p === 'runs' && lost) throw Error('lost response');
     if (p.endsWith('/reference')) state.reference = b.reference;
+    if (p.endsWith('/pause')) state.autoContinue = false;
+    if (p.endsWith('/continue')) state.autoContinue = true;
     if (p.endsWith('/claim/train')) {
       state.stage = 'unknown';
       state.autoContinue = true;
@@ -289,6 +291,43 @@ test('offline resource stops before consuming a claim or submitting a run', asyn
       false,
     );
     assert.match(d.getElementById('workshop-error').textContent, /训练资源暂不可用/);
+  } finally {
+    c.dispose();
+    f.dom.window.close();
+  }
+});
+
+test('pause survives page reopen; explicit continue evaluates the original training once', async () => {
+  const f = fixture(),
+    d = f.dom.window.document;
+  const open = () =>
+    startWorkshop({
+      document: d,
+      location: f.dom.window.location,
+      fetchImpl: f.fetchImpl,
+      setTimer: f.setTimer,
+      clearTimer: f.clearTimer,
+    });
+  let c = await open();
+  try {
+    d.getElementById('skip-reference').click();
+    await settle();
+    d.getElementById('start-quick').click();
+    await settle();
+    d.getElementById('pause-workshop').click();
+    await settle();
+    await c.refresh();
+    assert.equal(f.state.stage, 'ready-evaluate');
+    assert.equal(f.calls.filter((x) => x.p === 'runs').length, 1);
+    c.dispose();
+    c = await open();
+    assert.equal(f.calls.filter((x) => x.p === 'runs').length, 1);
+    assert.equal(d.getElementById('continue-evaluation').hidden, false);
+    d.getElementById('continue-evaluation').click();
+    await settle();
+    const writes = f.calls.filter((x) => x.p === 'runs');
+    assert.equal(writes.length, 2);
+    assert.equal(writes[1].b.training.originmanWorkshop.sourceRunId, 'train');
   } finally {
     c.dispose();
     f.dom.window.close();
