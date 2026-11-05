@@ -85,6 +85,13 @@ export async function workshopEntry(
       await remote('create', { modelId: model.id, computeResourceId: selected.resource.id })
     ).session;
   }
+  const finalIdentity = await call('rdk_platform_status', {});
+  if (
+    finalIdentity.baseUrl !== status.baseUrl ||
+    finalIdentity.session?.authenticated !== true ||
+    finalIdentity.session.accountId !== status.session.accountId
+  )
+    throw Error('账号或平台已变化，请在当前账号重新接续。');
   const root = base.toString().replace(/\/+$/, '');
   const url =
     root + '/workshop.html' + (session ? '?context=' + encodeURIComponent(session.contextId) : '');

@@ -28,7 +28,7 @@ test('short continue/results use shared current without scanning runs or writing
         },
       },
     );
-    assert.deepEqual(calls, ['rdk_platform_status']);
+    assert.deepEqual(calls, ['rdk_platform_status', 'rdk_platform_status']);
     assert.equal(result.contextId, current.contextId);
     assert.match(result.links.workshop, /context=ws-current$/);
     assert.equal(result.submission.training, false);
@@ -85,4 +85,21 @@ test('native text-only host gets short actionable entry and preserves expert too
   assert.notEqual(r.isError, true);
   assert.equal(r.structuredContent.contextId, 'ws-current');
   assert.match(r.content[0].text, /workshop.html/);
+});
+
+test('account switch during a shared-current read fails closed before returning an experiment link', async () => {
+  let reads = 0;
+  await assert.rejects(
+    workshopEntry(
+      { intent: 'continue' },
+      async () => {
+        reads++;
+        return reads === 1
+          ? status
+          : { ...status, session: { authenticated: true, accountId: 'bob' } };
+      },
+      { remote: async () => ({ current }) },
+    ),
+    /账号或平台已变化/,
+  );
 });
