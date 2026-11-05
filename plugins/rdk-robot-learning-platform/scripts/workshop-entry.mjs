@@ -59,7 +59,12 @@ export async function workshopEntry(
     const valid = await call('rdk_model_validate', { manifest });
     if (valid.valid !== true) throw Error('课程模型契约不匹配，请先更新课程材料。');
     const selected = await selectCourseAssets(
-      { manifest, readModels, computeResourceId: defaultResourceId },
+      {
+        manifest,
+        readModels,
+        modelId: session?.modelId,
+        computeResourceId: defaultResourceId ?? session?.computeResourceId,
+      },
       call,
     );
     const prepared = await prepareTraining(

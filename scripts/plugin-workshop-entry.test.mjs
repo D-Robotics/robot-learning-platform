@@ -115,3 +115,76 @@ test('account switch during a shared-current read fails closed before returning 
     /账号或平台已变化/,
   );
 });
+
+test('new draft reuses selected course assets among multiple resources, after ownership and health checks', async () => {
+  const { readFile } = await import('node:fs/promises');
+  const manifest = JSON.parse(
+    await readFile(
+      new URL(
+        '../plugins/rdk-robot-learning-platform/references/originman-manifest.json',
+        import.meta.url,
+      ),
+      'utf8',
+    ),
+  );
+  const calls = [];
+  const invoke = async (visible = true) =>
+    workshopEntry(
+      { intent: 'start' },
+      async (name, args) => {
+        calls.push({ name, args });
+        if (name === 'rdk_platform_status') return status;
+        if (name === 'rdk_model_validate') return { valid: true };
+        if (name === 'rdk_compute_resources_list')
+          return {
+            computeResources: [
+              { id: 'other', name: 'OriginMan other' },
+              ...(visible ? [{ id: 'chosen-resource', name: 'OriginMan selected' }] : []),
+            ],
+          };
+        if (name === 'rdk_compute_resource_test')
+          return { id: args.computeResourceId, connected: true, mock: false };
+        throw Error('Unexpected call ' + name);
+      },
+      {
+        readModels: async () => ({ models: [{ id: 'chosen-model', manifest }] }),
+        courseReadiness: async ({ computeResourceId }) => ({
+          computeResourceId,
+          trainingSubmitted: false,
+          report: {
+            schemaVersion: 1,
+            readyForSmokeTraining: true,
+            trainingPerformed: false,
+            device: 'cuda',
+            engine: 'originman-recovery-reflect',
+            taskId: 'originman-recovery',
+          },
+        }),
+        remote: async (op, input) => {
+          if (op === 'list')
+            return {
+              current: {
+                contextId: 'old',
+                stage: 'results',
+                modelId: 'chosen-model',
+                computeResourceId: 'chosen-resource',
+              },
+            };
+          assert.equal(op, 'create');
+          assert.deepEqual(input, {
+            modelId: 'chosen-model',
+            computeResourceId: 'chosen-resource',
+          });
+          return { session: { contextId: 'new', stage: 'ready', ...input } };
+        },
+      },
+    );
+  assert.equal((await invoke()).contextId, 'new');
+  assert.ok(
+    calls.some(
+      (c) =>
+        c.name === 'rdk_compute_resource_test' && c.args.computeResourceId === 'chosen-resource',
+    ),
+  );
+  await assert.rejects(invoke(false), /当前账号不可见/);
+});

@@ -1,6 +1,6 @@
 ---
 name: experience-preparation
-description: 一句话开始 Workshop、继续当前实验或看看效果；自动打开带下一步按钮的课程工作台，支持跨 Studio 和 Qoder 接续，仍可自由调整参数和使用高级工具。
+description: 用户说“带我开始 Workshop”“继续”“看看效果”时，静默调用课程入口并打开内置按钮工作台，最后只给一句提示；不播报加载技能或打开页面。支持接续及自定义实验。
 ---
 
 ## 一句话进入，按钮推进
