@@ -6,6 +6,7 @@ export async function startWorkshop({
   setTimer = setTimeout,
   clearTimer = clearTimeout,
   historyImpl = globalThis.history,
+  ResizeObserverImpl = globalThis.ResizeObserver,
 } = {}) {
   const $ = (id) => document.getElementById(id);
   const root = new URL('./', location.href),
@@ -18,7 +19,8 @@ export async function startWorkshop({
     disposed = false,
     halted = false,
     reference = null,
-    pendingRecipe = null;
+    pendingRecipe = null,
+    frameObserver = null;
   const validId = (v) => typeof v === 'string' && /^[A-Za-z0-9][A-Za-z0-9_.-]{0,95}$/.test(v);
   const listeners = [];
   const listen = (id, type, fn) => {
@@ -72,7 +74,7 @@ export async function startWorkshop({
   const show = () => {
     const ready = session?.stage === 'ready';
     if (ready && ['observed', 'skipped'].includes(session.reference)) reference = session.reference;
-    $('reference-section').hidden = !ready;
+    $('reference-section').hidden = !ready || Boolean(reference);
     $('budget-section').hidden = !ready || !reference;
     $('execution-section').hidden = !session || ready;
     $('result-section').hidden = !session?.training;
@@ -85,6 +87,20 @@ export async function startWorkshop({
       busy || selecting || !session?.autoContinue || ['results', 'blocked'].includes(session.stage);
     $('continue-evaluation').hidden =
       session?.stage !== 'ready-evaluate' || session.autoContinue || session.legacy;
+    const step = ready ? (reference ? 1 : 0) : session?.stage === 'results' ? 3 : 2;
+    for (const [i, name] of ['reference', 'budget', 'execution', 'result'].entries()) {
+      const b = $('workshop-step-' + name);
+      b.disabled = busy || selecting || !session ||
+        (i < 2 ? !ready : !session.training);
+      b.dataset.state = i < step ? 'done' : i === step ? 'current' : 'waiting';
+      if (session && i === step) b.setAttribute('aria-current', 'step');
+      else b.removeAttribute('aria-current');
+    }
+    $('go-results').disabled = !session?.training;
+    $('go-results').textContent = session?.stage === 'results' ? '查看对比与回放 ↓' : '查看实时曲线 ↓';
+    $('active-recipe').textContent = session?.recipe
+      ? `${session.recipe.timesteps.toLocaleString('zh-CN')} 步 · seed ${session.recipe.seed} · 侧推 ${session.recipe.pushMaxForce} N`
+      : '';
     $('workshop-status').textContent =
       session?.nextAction ?? '选择一个实验继续，或回到插件开始课程。';
     $('execution-status').textContent =
@@ -118,10 +134,43 @@ export async function startWorkshop({
       $('open-result').href = url;
       if ($('result-frame').getAttribute('src') !== url) $('result-frame').src = url;
     }
-    $('start-quick').disabled = busy;
-    $('start-formal').disabled = busy;
-    $('confirm-recipe').disabled = busy;
+    $('start-quick').disabled = busy || selecting || !ready;
+    $('start-formal').disabled = busy || selecting || !ready;
+    $('confirm-recipe').disabled = busy || selecting || !ready;
   };
+  const reveal = (id) => {
+    const node = $(id);
+    if (node.hidden) return;
+    node.scrollIntoView?.({ behavior: 'smooth', block: 'start' });
+    node.setAttribute('tabindex', '-1');
+    node.focus({ preventScroll: true });
+  };
+  // The result remains an independently authenticated view, but shares one
+  // scroll surface with the host. Never inspect an unrelated iframe document.
+  listen('result-frame', 'load', () => {
+    frameObserver?.disconnect();
+    frameObserver = null;
+    const frame = $('result-frame');
+    try {
+      const actual = new URL(frame.contentWindow.location.href);
+      const expected = new URL('experiment.html?context=' + encodeURIComponent(contextId), root);
+      if (actual.href !== expected.href || !session?.training) return;
+      const child = frame.contentDocument;
+      child.body.classList.add('workshop-embedded');
+      const resize = () => { frame.style.height = Math.ceil(child.body.scrollHeight) + 'px'; };
+      if (ResizeObserverImpl) {
+        frameObserver = new ResizeObserverImpl(resize);
+        frameObserver.observe(child.body);
+      }
+      resize();
+    } catch { /* The independent view handles auth and load failures itself. */ }
+  });
+  for (const name of ['reference', 'budget', 'execution', 'result'])
+    listen('workshop-step-' + name, 'click', () => {
+      if (name === 'reference' && session?.stage === 'ready') $('reference-section').hidden = false;
+      reveal(name === 'result' ? 'result-section' : name + '-section');
+    });
+  listen('go-results', 'click', () => reveal('result-section'));
   const claimAndSubmit = async (phase, recipe = {}) => {
     // A draft can outlive the resource health TTL; probe before consuming its
     // durable submission claim, including after a long training run.
@@ -194,6 +243,11 @@ export async function startWorkshop({
     contextId = id;
     session = null;
     reference = null;
+    pendingRecipe = null;
+    $('recipe-confirm').hidden = true;
+    $('reference-status').textContent = '点击播放参考。';
+    frameObserver?.disconnect();
+    frameObserver = null;
     halted = false;
     $('result-frame').src = 'about:blank';
     show();
@@ -256,6 +310,7 @@ export async function startWorkshop({
       reference = 'observed';
       $('reference-status').textContent = '参考播放已结束。现在选择一次预算。';
       show();
+      reveal('budget-section');
     }),
   );
   listen('reference-video', 'error', () => {
@@ -364,6 +419,7 @@ export async function startWorkshop({
     refresh,
     dispose() {
       disposed = true;
+      frameObserver?.disconnect();
       clearTimer(timer);
       for (const remove of listeners) remove();
     },

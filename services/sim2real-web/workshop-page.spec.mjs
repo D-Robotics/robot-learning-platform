@@ -126,9 +126,13 @@ test('one prompt opens ready state; reference and explicit quick button drive on
       false,
     );
     assert.equal(d.getElementById('budget-section').hidden, true);
+    assert.equal(d.getElementById('workshop-step-reference').getAttribute('aria-current'), 'step');
     d.getElementById('reference-video').dispatchEvent(new f.dom.window.Event('ended'));
     await settle();
     assert.equal(d.getElementById('budget-section').hidden, false);
+    assert.equal(d.getElementById('reference-section').hidden, true);
+    assert.equal(d.getElementById('workshop-step-budget').getAttribute('aria-current'), 'step');
+    assert.equal(d.activeElement.id, 'budget-section');
     d.getElementById('start-quick').click();
     d.getElementById('start-quick').click();
     await settle();
@@ -151,6 +155,9 @@ test('one prompt opens ready state; reference and explicit quick button drive on
       'https://platform.test/course/experiment.html?context=ws-test',
     );
     assert.match(d.getElementById('execution-status').textContent, /已完成/);
+    assert.equal(d.getElementById('workshop-step-result').getAttribute('aria-current'), 'step');
+    d.getElementById('go-results').click();
+    assert.equal(d.activeElement.id, 'result-section');
   } finally {
     c.dispose();
     f.dom.window.close();

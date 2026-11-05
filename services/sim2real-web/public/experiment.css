@@ -52,3 +52,9 @@ video { width: 100%; max-height: 480px; background: var(--bg-deep); border-radiu
 #curve-inspector { display: flex; gap: 16px; flex-wrap: wrap; align-items: center; margin: 16px 0; }
 #curve-sample { flex: 1; min-width: 160px; accent-color: var(--accent); }
 #curve-value { font-variant-numeric: tabular-nums; color: var(--muted-strong); }
+
+/* Workshop owns the course navigation; its result frame only shows evidence. */
+.workshop-embedded > .experiment-header,
+.workshop-embedded > .skip-link,
+.workshop-embedded .experiment-layout > aside { display: none; }
+.workshop-embedded .experiment-layout { display: block; padding: 8px 0; }

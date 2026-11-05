@@ -1,7 +1,7 @@
 {
   "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
   "name": "rdk-robot-learning-platform",
-  "version": "0.6.0",
+  "version": "0.6.1",
   "description": "一句话开始 Workshop：下一步按钮、当前实验跨软件接续、曲线对比与回放；保留自定义参数及高级机器人学习工具。",
   "author": {
     "name": "D-Robotics"

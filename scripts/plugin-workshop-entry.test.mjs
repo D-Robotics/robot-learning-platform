@@ -89,6 +89,14 @@ test('native text-only host gets short actionable entry and preserves expert too
   assert.notEqual(r.isError, true);
   assert.equal(r.structuredContent.contextId, 'ws-current');
   assert.match(r.content[0].text, /workshop.html/);
+  const compact = JSON.parse(r.content[0].text);
+  assert.deepEqual(
+    compact.qoderNavigation.steps.map((s) => s.tool),
+    ['navigate_page', 'list_pages', 'select_page'],
+  );
+  assert.equal(compact.qoderNavigation.steps[0].arguments.url, compact.links.workshop);
+  assert.match(compact.qoderNavigation.steps[2].argumentsFrom, /pageId/);
+  assert.equal(compact.studentReply.split('\n').length, 2);
 });
 
 test('account switch during a shared-current read fails closed before returning an experiment link', async () => {

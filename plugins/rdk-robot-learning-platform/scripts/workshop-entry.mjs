@@ -103,13 +103,23 @@ export async function workshopEntry(
     submission: { training: false, evaluation: false },
     studentReply:
       session?.stage === 'ready'
-        ? 'Workshop 已准备好。先看参考，再点一次预算按钮，后续训练与评测会自动接续。\n[打开 Workshop](' +
-          url +
-          ')'
+        ? '先看参考，再选预算，训练与评测会自动接上。\n[打开 Workshop](' + url + ')'
         : session
-          ? '已接上当前实验，直接查看进度、对比与回放。\n[继续实验](' + url + ')'
+          ? '已接上当前实验，进度和结果都在页面。\n[继续实验](' + url + ')'
           : '请选择要继续的实验。\n[打开实验列表](' + url + ')',
+    qoderNavigation: {
+      surface: '内置 browser-use MCP，非外部 Chrome Connector',
+      steps: [
+        { tool: 'navigate_page', arguments: { url } },
+        { tool: 'list_pages', arguments: {} },
+        {
+          tool: 'select_page',
+          argumentsFrom:
+            '从 list_pages 中按完整 URL 精确匹配取得 pageId，传 {pageId, bringToFront:true}；navigate_page 只返回成功文字，不提供 pageId。',
+        },
+      ],
+    },
     delivery:
-      '只展示studentReply并打开links.workshop。Qoder使用browser-use内置navigate_page，再用select_page并传bringToFront:true显示工作面，页面标识取真实回执。不要使用外部Browser Connector；必要时点任务产出→网页查阅。置前后简短收尾，保持面板展示，不重复截图验证。不要再问UUID、重读指南或由模型提交训练；页面按钮已提供预算、参考、自动评测、暂停、历史与自定义参数。只有用户明确要求高级操作时使用其余原子工具。',
+      '静默完成导航后只展示studentReply，不添加“我来加载”“我在打开”等过程说明。Qoder依次执行qoderNavigation三个步骤：navigate_page→list_pages→select_page({pageId:真实页面编号,bringToFront:true})，禁止省略pageId或把URL当编号。成功后结束，保持面板展示，不重复截图或询问预算。内置工具不可用时直接给一次链接；不启动外部Browser Connector。其余工具仅在用户明确要求高级操作时使用。',
   };
 }

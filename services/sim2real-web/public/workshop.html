@@ -17,11 +17,17 @@
     </header>
     <main id="workshop-main" class="workshop-shell">
       <div class="section-heading">
-        <h1>从这里开始，按你的节奏探索。</h1>
+        <h1>OriginMan Workshop</h1>
         <button id="new-experiment" type="button" disabled>新实验</button
         ><button id="history-toggle" type="button" aria-expanded="false">切换实验</button>
       </div>
       <p id="workshop-status" role="status">正在读取当前账号的课程。</p>
+      <nav class="workshop-progress" aria-label="课程进度">
+        <button id="workshop-step-reference" type="button" disabled>1 · 看参考</button>
+        <button id="workshop-step-budget" type="button" disabled>2 · 选预算</button>
+        <button id="workshop-step-execution" type="button" disabled>3 · 训练与评测</button>
+        <button id="workshop-step-result" type="button" disabled>4 · 看结果</button>
+      </nav>
       <div id="workshop-error" class="experiment-error" role="alert" hidden></div>
       <section id="history" hidden aria-label="选择已有实验">
         <h2>选择要继续的实验</h2>
@@ -106,11 +112,13 @@
       <section id="execution-section" hidden aria-labelledby="execution-heading">
         <h2 id="execution-heading">3 · 训练与同源评测</h2>
         <p id="execution-status" aria-live="polite"></p>
+        <p id="active-recipe" class="workshop-recipe"></p>
         <div class="workshop-actions">
           <button id="refresh-workshop" type="button">刷新原实验</button
           ><button id="pause-workshop" type="button">暂停后续自动步骤</button
           ><button id="continue-evaluation" type="button" hidden>继续同源评测</button
-          ><a id="open-run-details" href="./?robot=originman#train/runs">查看日志与运行记录</a>
+          ><button id="go-results" type="button">查看曲线与结果 ↓</button>
+          <a id="open-run-details" href="./?robot=originman#train/runs">查看运行记录</a>
         </div>
         <p>暂停不会取消已提交任务。失败或提交状态不明时只恢复原记录，不自动重训。</p>
       </section>

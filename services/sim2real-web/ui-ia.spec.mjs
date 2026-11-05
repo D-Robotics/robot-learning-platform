@@ -750,6 +750,11 @@ assert.ok(
 );
 
 const workshopPage = fs.readFileSync(path.join(here, 'public/workshop.html'), 'utf8');
+assert.match(workshopPage, /<nav class="workshop-progress" aria-label="课程进度">/);
+for (const stage of ['reference', 'budget', 'execution', 'result'])
+  assert.match(workshopPage, new RegExp('id="workshop-step-' + stage + '"'));
+assert.match(workshopPage, /id="go-results"/);
+assert.match(workshopPage, /<summary>自由调整参数<\/summary>/);
 for (const id of [
   'start-quick',
   'start-formal',

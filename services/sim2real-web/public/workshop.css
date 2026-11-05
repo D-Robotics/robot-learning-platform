@@ -47,3 +47,37 @@
   border-radius: 8px;
   margin-top: 16px;
 }
+.workshop-progress {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+  margin: 24px 0;
+}
+.workshop-progress button {
+  padding: 12px 8px;
+  border-color: var(--line);
+  color: var(--muted-strong);
+}
+.workshop-progress button[data-state="current"] {
+  background: var(--accent-soft);
+  border-color: var(--accent);
+  color: var(--accent-text);
+  font-weight: 700;
+}
+.workshop-progress button[data-state="done"] {
+  color: var(--green-text);
+  border-color: var(--green-border);
+}
+.workshop-recipe {
+  color: var(--muted-strong);
+  font-variant-numeric: tabular-nums;
+}
+#start-quick, #confirm-recipe, #go-results {
+  background: var(--accent-soft);
+  border-color: var(--accent);
+  color: var(--accent-text);
+  font-weight: 700;
+}
+.workshop-shell section { scroll-margin-top: 24px; }
+#result-frame { min-height: 520px; overflow: hidden; border: 0; }
+.workshop-shell h1 { flex: 1; margin-bottom: 0; }
