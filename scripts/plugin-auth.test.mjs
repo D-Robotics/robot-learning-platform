@@ -3,7 +3,10 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { createPluginAuth } from '../plugins/rdk-robot-learning-platform/scripts/plugin-auth.mjs';
+const authModuleUrl =
+  process.env.RDK_PLUGIN_AUTH_TEST_MODULE ||
+  new URL('../plugins/rdk-robot-learning-platform/scripts/plugin-auth.mjs', import.meta.url).href;
+const { createPluginAuth } = await import(authModuleUrl);
 const origin = 'https://studio.example';
 const base = origin + '/robotics-learning';
 function fixture(t) {
@@ -457,10 +460,7 @@ test('pending browser authorization survives actual Node process exit, approval,
       }),
   );
   const url = 'http://127.0.0.1:' + server.address().port;
-  const moduleUrl = new URL(
-    '../plugins/rdk-robot-learning-platform/scripts/plugin-auth.mjs',
-    import.meta.url,
-  ).href;
+  const moduleUrl = authModuleUrl;
   const call = (name) =>
     new Promise((resolve, reject) => {
       const script = `import {createPluginAuth} from ${JSON.stringify(moduleUrl)}; const a=createPluginAuth({env:{RDK_SIM2REAL_MCP_BASE_URL:process.env.AUTH_FIXTURE_URL},cacheDirectory:process.env.AUTH_FIXTURE_DIRECTORY}); console.log(JSON.stringify(await a.call(process.env.AUTH_FIXTURE_OPERATION,{openBrowser:false})));`;

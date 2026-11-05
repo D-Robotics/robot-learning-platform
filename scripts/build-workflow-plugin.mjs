@@ -4,6 +4,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createHash } from 'node:crypto';
+import { verifyPluginAuthRelease } from './verify-plugin-auth-release.mjs';
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const args = process.argv.slice(2);
 if (
@@ -187,6 +188,7 @@ if (fs.existsSync(windowsResultFile)) {
   template.candidateVersion = identity.version;
   fs.writeFileSync(windowsResultFile, JSON.stringify(template, null, 2) + '\n');
 }
+const authorizationGate = verifyPluginAuthRelease(out);
 const entries = [];
 function inventory(directory) {
   for (const entry of fs
@@ -218,5 +220,6 @@ console.log(
       await import('../plugins/rdk-robot-learning-platform/scripts/experience-mcp.mjs')
     ).EXPERIENCE_TOOLS.length,
     configured: false,
+    authorizationGate,
   }),
 );
