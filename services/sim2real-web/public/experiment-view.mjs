@@ -148,6 +148,7 @@ export async function startExperimentView({ document, location, fetchImpl = fetc
   };
   listen('experiment-video', 'playing', () => { $('playback-status').textContent = '正在播放本次回放'; });
   listen('experiment-video', 'ended', () => { $('playback-status').textContent = '本次回放已结束'; });
+  listen('experiment-video','pause',()=>{const video=$('experiment-video');if(!video.ended&&video.currentTime>0)$('playback-status').textContent='已暂停回放';});
   listen('experiment-video', 'error', () => { $('playback-status').textContent = '回放暂不可用；保留原评测'; });
   listen('refresh-experiment', 'click', refresh);
   listen('open-playback-page', 'click', () => { if (openPlayback) void openPlayback(); });

@@ -110,6 +110,6 @@ export async function workshopEntry(
           ? '已接上当前实验，直接查看进度、对比与回放。\n[继续实验](' + url + ')'
           : '请选择要继续的实验。\n[打开实验列表](' + url + ')',
     delivery:
-      '只展示studentReply并打开links.workshop。Qoder使用browser-use内置navigate_page，不使用外部Browser Connector；必要时点任务产出→网页查阅打开面板。不要再问UUID、重读指南或由模型提交训练；页面按钮已提供预算、参考、自动评测、暂停、历史与自定义参数。只有用户明确要求高级操作时使用其余原子工具。',
+      '只展示studentReply并打开links.workshop。Qoder使用browser-use内置navigate_page，再用select_page并传bringToFront:true显示工作面，页面标识取真实回执。不要使用外部Browser Connector；必要时点任务产出→网页查阅。置前后简短收尾，保持面板展示，不重复截图验证。不要再问UUID、重读指南或由模型提交训练；页面按钮已提供预算、参考、自动评测、暂停、历史与自定义参数。只有用户明确要求高级操作时使用其余原子工具。',
   };
 }

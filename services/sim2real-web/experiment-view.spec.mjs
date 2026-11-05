@@ -218,3 +218,12 @@ test('curve inspector reads actual samples with keyboard-accessible range and tr
   input.dispatchEvent(new f.dom.window.Event('input'));
   assert.match(d.getElementById('curve-value').textContent, /2 训练步.*4\.000/);
 });
+
+test('manual pause is reported as paused rather than continuing to claim playback', async (t) => {
+  const f = await fixture(t),
+    video = f.dom.window.document.getElementById('experiment-video');
+  video.currentTime = 2;
+  video.dispatchEvent(new f.dom.window.Event('playing'));
+  video.dispatchEvent(new f.dom.window.Event('pause'));
+  assert.equal(f.dom.window.document.getElementById('playback-status').textContent, '已暂停回放');
+});

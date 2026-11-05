@@ -371,7 +371,7 @@ export function experienceProxy(
           clientContext().nativeCompute.configuration +
           '。宿主接口缺失时不要要求已经在桌面中的用户重复“去桌面操作”；用指南中的 clientContext 说明实际缺口。' +
           ORIGINMAN_COURSE_INSTRUCTIONS +
-          '\n0.6按钮工作台入口优先于旧编排：用户说带我开始Workshop/开始课程时只调用rdk_workshop({intent:start})，继续/看看效果用continue/results。不要先调用旧预算问答或experience_guide；预算和后续步骤改在页面按钮选择。打开返回links.workshop，Qoder必须用内置浏览器navigate_page并提示产出→网页查阅，避免外部Browser Connector。保留高级工具，自由问答与用户明确的自定义训练不受本入口限制。' +
+          '\n0.6按钮工作台入口优先于旧编排：用户说带我开始Workshop/开始课程时只调用rdk_workshop({intent:start})，继续/看看效果用continue/results。不要先调用旧预算问答或experience_guide；预算和后续步骤改在页面按钮选择。打开返回links.workshop，Qoder必须用内置navigate_page并select_page(bringToFront:true)显示工作面，页面标识取真实回执；必要时提示产出→网页查阅，避免外部Browser Connector。保留高级工具，自由问答与用户明确的自定义训练不受本入口限制。' +
           '\n普通Workshop回执：优先使用工具studentReply，最多三句中文加一个实验页链接。页面已显示曲线和对比时不重复抄技术表；账号、UUID、英文套件名、摘要、video字节和部署细节按用户明确要求再展开。正常完成后不再询问是否播放，能操作播放器就实际播放，否则明确待播放。只报告完成的四个主阶段；单变量调参是可选后续，不算本轮未完成项。',
       };
     }

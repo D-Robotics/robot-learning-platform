@@ -7,7 +7,7 @@ description: 一句话开始 Workshop、继续当前实验或看看效果；自�
 
 “带我开始 Workshop”“开始课程”只调用 `rdk_workshop({intent:"start"})`；“继续”“继续刚才的实验”用 `intent:"continue"`；“看看效果”用 `intent:"results"`；用户明确说“新实验”用 `intent:"new"`，不取消原任务。已有明确实验时可传contextId，否则工具使用当前账号已选实验；多个候选由工作台卡片选择，不能让学员抄UUID，也不猜全局最新Run。
 
-只展示返回的studentReply并打开links.workshop，随后结束回答。预算、参考观察、训练、等待、评测、回放和保存都在页面，不再先问预算、不调用旧experience_guide或替学员提交训练。Qoder用内置browser-use navigate_page，随后点产出→网页查阅打开可见面板；不要调用外部Browser Connector，也不用截图工具反复证明面板打开。Studio用右侧工作台。无法自动打开时只给该链接和一次点击提示。
+只展示返回的studentReply并打开links.workshop，随后结束回答。预算、参考观察、训练、等待、评测、回放和保存都在页面，不再先问预算、不调用旧experience_guide或替学员提交训练。Qoder用内置browser-use navigate_page，再select_page并传bringToFront:true显示工作面，页面标识取真实回执；需要时点产出→网页查阅。不要调用外部Browser Connector，也不用截图工具反复证明面板打开。Studio用右侧工作台。无法自动打开时只给该链接和一次点击提示。
 
 学员在页面看完参考或明确跳过，然后点“开始快速体验·8192步”；正式或自定义预算先显示配方确认。此按钮授权训练与同源评测，后续无需继续发提示词。页面刷新、切换宿主和重复点击都恢复原任务，不重交。只有实际播放完才称回放完成；已录制不等于已播放。
 
