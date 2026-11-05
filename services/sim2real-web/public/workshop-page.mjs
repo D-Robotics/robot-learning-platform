@@ -14,6 +14,7 @@ export async function startWorkshop({
     session = null,
     timer = null,
     busy = false,
+    selecting = false,
     disposed = false,
     halted = false,
     reference = null,
@@ -75,10 +76,13 @@ export async function startWorkshop({
     $('budget-section').hidden = !ready || !reference;
     $('execution-section').hidden = !session || ready;
     $('result-section').hidden = !session?.training;
-    $('new-experiment').disabled = !session || busy;
+    $('new-experiment').disabled = !session || busy || selecting;
+    $('history-toggle').disabled = busy || selecting;
+    for (const button of $('history-list').querySelectorAll('button'))
+      button.disabled = busy || selecting;
     $('new-experiment').title = '保留原实验和已提交任务，创建独立新实验；不会取消或重交原任务。';
     $('pause-workshop').disabled =
-      !session?.autoContinue || ['results', 'blocked'].includes(session.stage);
+      busy || selecting || !session?.autoContinue || ['results', 'blocked'].includes(session.stage);
     $('continue-evaluation').hidden =
       session?.stage !== 'ready-evaluate' || session.autoContinue || session.legacy;
     $('workshop-status').textContent =
@@ -128,9 +132,10 @@ export async function startWorkshop({
     await json('runs', claim.submission);
   };
   const refresh = async () => {
-    if (busy || disposed || !contextId) return;
+    if (busy || selecting || disposed || !contextId) return;
     busy = true;
     halted = false;
+    show();
     try {
       session = (await json('workshop-sessions/' + encodeURIComponent(contextId))).session;
       for (const r of [session.training, session.evaluation])
@@ -152,7 +157,7 @@ export async function startWorkshop({
     }
   };
   const start = async (recipe) => {
-    if (busy || session?.stage !== 'ready' || !reference) return;
+    if (busy || selecting || session?.stage !== 'ready' || !reference) return;
     busy = true;
     halted = false;
     show();
@@ -174,18 +179,31 @@ export async function startWorkshop({
     }
   };
   const choose = async (id) => {
+    if (busy || selecting) return;
     if (!validId(id)) throw Error('实验标识无效。');
+    selecting = true;
     clearTimer(timer);
     contextId = id;
+    session = null;
+    reference = null;
+    halted = false;
+    $('result-frame').src = 'about:blank';
+    show();
     const selectedUrl = new URL(location.href);
     selectedUrl.searchParams.set('context', id);
     historyImpl?.replaceState(null, '', selectedUrl.href);
-    reference = null;
-    halted = false;
-    session = (await json('workshop-sessions/' + encodeURIComponent(id) + '/select', {})).session;
-    show();
-    $('history').hidden = true;
-    schedule();
+    try {
+      const selected = (await json('workshop-sessions/' + encodeURIComponent(id) + '/select', {}))
+        .session;
+      if (selected?.contextId !== id) throw Error('返回的实验与所选记录不一致。');
+      session = selected;
+      $('history').hidden = true;
+      $('workshop-error').hidden = true;
+    } finally {
+      selecting = false;
+      show();
+      schedule();
+    }
   };
   const history = async () => {
     const list = await json('workshop-sessions');
@@ -273,19 +291,25 @@ export async function startWorkshop({
     $('recipe-confirm').hidden = true;
   });
   listen('refresh-workshop', 'click', () => run(refresh));
-  listen('pause-workshop', 'click', () =>
-    run(async () => {
-      session = (await json('workshop-sessions/' + encodeURIComponent(contextId) + '/pause', {}))
-        .session;
+  const updateIntent = async (action) => {
+    if (busy || selecting || !contextId) return;
+    busy = true;
+    show();
+    try {
+      const next = (
+        await json('workshop-sessions/' + encodeURIComponent(contextId) + '/' + action, {})
+      ).session;
+      if (next?.contextId !== contextId) throw Error('返回的实验与当前记录不一致。');
+      session = next;
+    } finally {
+      busy = false;
       show();
-    }),
-  );
-  listen('continue-evaluation', 'click', () =>
-    run(async () => {
-      await json('workshop-sessions/' + encodeURIComponent(contextId) + '/continue', {});
-      await refresh();
-    }),
-  );
+      schedule();
+    }
+    if (action === 'continue') await refresh();
+  };
+  listen('pause-workshop', 'click', () => run(() => updateIntent('pause')));
+  listen('continue-evaluation', 'click', () => run(() => updateIntent('continue')));
   listen('history-toggle', 'click', () =>
     run(async () => {
       const opened = $('history').hidden;
@@ -296,13 +320,21 @@ export async function startWorkshop({
   );
   listen('new-experiment', 'click', () =>
     run(async () => {
-      if (busy) return;
-      const next = (
-        await json('workshop-sessions', {
-          modelId: session.modelId,
-          computeResourceId: session.computeResourceId,
-        })
-      ).session;
+      if (busy || selecting || !session) return;
+      busy = true;
+      show();
+      let next;
+      try {
+        next = (
+          await json('workshop-sessions', {
+            modelId: session.modelId,
+            computeResourceId: session.computeResourceId,
+          })
+        ).session;
+      } finally {
+        busy = false;
+        show();
+      }
       await choose(next.contextId);
     }),
   );

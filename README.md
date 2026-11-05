@@ -34,12 +34,12 @@ index](docs/README.md).
 
 ## 先看懂平台
 
-| 你想做什么 | 从哪里开始 | 结果是什么 |
-| --- | --- | --- |
-| 亲手演示一个动作 | **仿真与录制** | 浏览器轨迹 JSON / JSONL |
-| 训练一个策略 | **强化学习训练** | 本地 Mock、本地 worker 或 RoboGo Run |
-| 判断仿真是否接近真机 | **Sim2Real 评测** | 遥测、回放和虚实偏差摘要 |
-| 给 X5 做上线准备 | **部署与反馈** | 契约、板型、制品和只读预检 |
+| 你想做什么           | 从哪里开始        | 结果是什么                           |
+| -------------------- | ----------------- | ------------------------------------ |
+| 亲手演示一个动作     | **仿真与录制**    | 浏览器轨迹 JSON / JSONL              |
+| 训练一个策略         | **强化学习训练**  | 本地 Mock、本地 worker 或 RoboGo Run |
+| 判断仿真是否接近真机 | **Sim2Real 评测** | 遥测、回放和虚实偏差摘要             |
+| 给 X5 做上线准备     | **部署与反馈**    | 契约、板型、制品和只读预检           |
 
 平台把“可视化入口”和“受控执行”分开：浏览器负责观察和录制，服务端负责权限、制品、幂等和审计，板端/云端 adapter 负责真正的训练或部署。
 
@@ -87,64 +87,64 @@ npm run dev:mcp
 
 ### 工作台一览
 
-| 轨迹与回放 / 制品库 | 训练配置 |
-| --- | --- |
-| ![轨迹与回放、制品库视图](docs/assets/product-guide/03-replays.png) | ![训练配置视图](docs/assets/product-guide/04-train-configure.png) |
-| **Sim2Real 评测** | **部署预检（NO MOTOR 只读）** |
-| ![Sim2Real 评测视图](docs/assets/product-guide/06-evaluate.png) | ![部署预检视图](docs/assets/product-guide/07-deploy-preflight.png) |
+| 轨迹与回放 / 制品库                                                 | 训练配置                                                           |
+| ------------------------------------------------------------------- | ------------------------------------------------------------------ |
+| ![轨迹与回放、制品库视图](docs/assets/product-guide/03-replays.png) | ![训练配置视图](docs/assets/product-guide/04-train-configure.png)  |
+| **Sim2Real 评测**                                                   | **部署预检（NO MOTOR 只读）**                                      |
+| ![Sim2Real 评测视图](docs/assets/product-guide/06-evaluate.png)     | ![部署预检视图](docs/assets/product-guide/07-deploy-preflight.png) |
 
 轨迹与回放按 Run 筛选轨迹，制品库统一管理仿真录制、训练 Run、评测证据与部署记录；训练配置覆盖训练档位、算法、引擎与续训 checkpoint（可选引擎需由 worker 显式注册）。评测页绑定遥测或轨迹来源，生成可追溯评测 Run；部署预检只读检查架构、系统目录与磁盘信息，不下发模型、不启动节点、不驱动电机。遥测回放时间轴（奖励曲线与观测/动作热图联动、逐帧检查）与数据体检（episode 长度分布与离群提示）等视图见[产品指南](docs/product-guide.md)。
 
 ### 训练路径与引擎
 
-| 路径 | 适合谁 | 当前仓库能验证什么 | 生产接入点 |
-| --- | --- | --- | --- |
-| **本地 / Mock** | 没有 CUDA、先验证产品和协议 | 任务台账、状态流转、遥测、评测、回放 | `LocalRunnerPort` |
-| **本地 / starter-ppo** | 无 GPU 但要看真实训练 | `mock=false` 的真 PPO、ONNX 导出、遥测评测（`npm run demo:starter`） | `engines/starter-ppo` |
-| **本地 / MJX** | 要真 MuJoCo 接触动力学（CPU 即可） | 真 MuJoCo 物理 + 纯 JAX PPO + ONNX/质量门证据（`npm run verify:mjx-adapter`） | `engines/mjx-adapter` |
-| **本地 / 视觉观测** | 要「顶置相机像素 → 策略」端到端 | 纯 JAX PPO + ONNX 导出 ≡ JAX 前向（`npm run verify:vision-observation`） | `engines/visual-ppo` |
-| **本地 / dm_control** | 要 DeepMind 生态 env API | dm_control `rl.control.Environment` + 同一 MJCF 物理（`npm run verify:dm-control-adapter`） | `engines/dm-control-adapter` |
-| **GPU / MicroDuck 全身强化学习** | 要站立、行走、踢球、恢复等 14 舵机任务 | 四个 61D→14D 任务包、`microduck-rl` 路由、关节 profile 与板端安全运行时 | `engines/microduck-rl-adapter` + `services/sim2real-web/board-joint-policy-runtime.py` |
-| **本地 / 行为克隆** | 有示教/录制数据，想直接克隆策略 | 真 MLP BC + 图像观测分支（mono8 像素 → CNN，NHWC ONNX）+ train/val 分离 + ONNX 数值等价证明（`npm run verify:offline-bc`） | `engines/offline-bc` |
-| **本地 / ACT 分块模仿** | 有带 episode 边界的示教轨迹，想训练动作分块策略 | 真 ACT（Zhao et al. 2023）：Transformer 编解码 + CVAE 隐变量 + k 步动作分块 + 时序集成，episode 级 train/val 划分，ONNX 与 torch 前向数值等价（`npm run verify:act`） | `engines/act` |
-| **本地 / Diffusion Policy** | 示教多模态（两种风格都要保留），要生成式动作分块 | 真 Diffusion Policy（Chi et al. 2023，CNN 版式）：条件 1D UNet + DDPM + EMA，整个反向去噪循环固化为一张 ONNX（`npm run verify:diffusion-policy`） | `engines/diffusion-policy` |
-| **本地 / SmolVLA 参考** | 对接 LeRobot VLA 生态、规划先行 | CPU 栈产出诚实标注的训练计划（dry-run），CUDA worker 全量微调；缺栈时明确拒绝（`npm run verify:smolvla`） | `engines/smolvla` |
-| **LeRobot v3 数据集转换** | 与 HF LeRobot 社区交换数据集 | 双向转换（导出/导入 v3.0 布局，含 mono8 逐字节无损视频往返），`npm run convert:lerobot`（`npm run verify:lerobot-converter`） | `engines/lerobot-converter` |
-| **GPU / Isaac Lab 上游（RPO 流水线）** | 要在 Isaac Lab 里训练上游运动策略并做 sim2sim 交叉验证 | 逐字驱动上游 train → 引擎内回放 → MuJoCo sim2sim 三步，缺工作区诚实拒绝（`npm run verify:isaac-lab-adapter`） | `engines/isaac-lab-adapter` + `RDK_ISAAC_LAB_ROOT` |
-| **RoboGo** | 有云端算力和训练账号 | manifest 校验、请求边界、token 不出浏览器、状态 reconcile | `RoboGoRunnerPort` |
+| 路径                                   | 适合谁                                                 | 当前仓库能验证什么                                                                                                                                                    | 生产接入点                                                                             |
+| -------------------------------------- | ------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------- |
+| **本地 / Mock**                        | 没有 CUDA、先验证产品和协议                            | 任务台账、状态流转、遥测、评测、回放                                                                                                                                  | `LocalRunnerPort`                                                                      |
+| **本地 / starter-ppo**                 | 无 GPU 但要看真实训练                                  | `mock=false` 的真 PPO、ONNX 导出、遥测评测（`npm run demo:starter`）                                                                                                  | `engines/starter-ppo`                                                                  |
+| **本地 / MJX**                         | 要真 MuJoCo 接触动力学（CPU 即可）                     | 真 MuJoCo 物理 + 纯 JAX PPO + ONNX/质量门证据（`npm run verify:mjx-adapter`）                                                                                         | `engines/mjx-adapter`                                                                  |
+| **本地 / 视觉观测**                    | 要「顶置相机像素 → 策略」端到端                        | 纯 JAX PPO + ONNX 导出 ≡ JAX 前向（`npm run verify:vision-observation`）                                                                                              | `engines/visual-ppo`                                                                   |
+| **本地 / dm_control**                  | 要 DeepMind 生态 env API                               | dm_control `rl.control.Environment` + 同一 MJCF 物理（`npm run verify:dm-control-adapter`）                                                                           | `engines/dm-control-adapter`                                                           |
+| **GPU / MicroDuck 全身强化学习**       | 要站立、行走、踢球、恢复等 14 舵机任务                 | 四个 61D→14D 任务包、`microduck-rl` 路由、关节 profile 与板端安全运行时                                                                                               | `engines/microduck-rl-adapter` + `services/sim2real-web/board-joint-policy-runtime.py` |
+| **本地 / 行为克隆**                    | 有示教/录制数据，想直接克隆策略                        | 真 MLP BC + 图像观测分支（mono8 像素 → CNN，NHWC ONNX）+ train/val 分离 + ONNX 数值等价证明（`npm run verify:offline-bc`）                                            | `engines/offline-bc`                                                                   |
+| **本地 / ACT 分块模仿**                | 有带 episode 边界的示教轨迹，想训练动作分块策略        | 真 ACT（Zhao et al. 2023）：Transformer 编解码 + CVAE 隐变量 + k 步动作分块 + 时序集成，episode 级 train/val 划分，ONNX 与 torch 前向数值等价（`npm run verify:act`） | `engines/act`                                                                          |
+| **本地 / Diffusion Policy**            | 示教多模态（两种风格都要保留），要生成式动作分块       | 真 Diffusion Policy（Chi et al. 2023，CNN 版式）：条件 1D UNet + DDPM + EMA，整个反向去噪循环固化为一张 ONNX（`npm run verify:diffusion-policy`）                     | `engines/diffusion-policy`                                                             |
+| **本地 / SmolVLA 参考**                | 对接 LeRobot VLA 生态、规划先行                        | CPU 栈产出诚实标注的训练计划（dry-run），CUDA worker 全量微调；缺栈时明确拒绝（`npm run verify:smolvla`）                                                             | `engines/smolvla`                                                                      |
+| **LeRobot v3 数据集转换**              | 与 HF LeRobot 社区交换数据集                           | 双向转换（导出/导入 v3.0 布局，含 mono8 逐字节无损视频往返），`npm run convert:lerobot`（`npm run verify:lerobot-converter`）                                         | `engines/lerobot-converter`                                                            |
+| **GPU / Isaac Lab 上游（RPO 流水线）** | 要在 Isaac Lab 里训练上游运动策略并做 sim2sim 交叉验证 | 逐字驱动上游 train → 引擎内回放 → MuJoCo sim2sim 三步，缺工作区诚实拒绝（`npm run verify:isaac-lab-adapter`）                                                         | `engines/isaac-lab-adapter` + `RDK_ISAAC_LAB_ROOT`                                     |
+| **RoboGo**                             | 有云端算力和训练账号                                   | manifest 校验、请求边界、token 不出浏览器、状态 reconcile                                                                                                             | `RoboGoRunnerPort`                                                                     |
 
 Mock 的 `completed` 只表示协议演练完成，不代表真实 PPO 权重或可部署模型；真实训练必须由已配置的 runner 明确返回制品。starter-ppo 返回的是真实训练产物（`mock=false`），但其 numpy 物理不是 MicroDuck 全身动力学；MJX 引擎跑真 MuJoCo 接触动力学（台账标注 `physicsBackend=mjx`）；dm_control 适配器跑同一 MJCF 物理但经 DeepMind 生态 env API（`physicsBackend=dm-control-mujoco`）；视觉训练引擎吃顶置相机像素观测（`physicsBackend=cpu-mujoco-vision`）。所有本地引擎 `deployable` 恒为 `false`。
 
 ### 当前能力边界
 
-| 能力 | 状态 | 说明 |
-| --- | --- | --- |
-| 浏览器 MicroDuck + 中文控制层 | ✅ | 上游资源需由部署方挂载；仓库不重新分发上游 bundle |
-| 动作录制、契约校验、JSONL 导入 | ✅ | 可在本地直接验收 |
-| 本地 Mock 闭环 | ✅ | 无 CUDA 可跑通 API 和 UI 流程 |
-| **CPU 真实 PPO 训练（starter-ppo）** | ✅ | `npm run demo:starter`：真训练 + 真 ONNX + 遥测评测，无 GPU 依赖 |
-| **视觉观测训练（顶置相机像素 → 策略）** | ✅ | `engines/visual-ppo`：真 JAX PPO 吃 64×64 顶置相机渲染 + 板载 8D 混合观测，ONNX 导出与 JAX 前向数值等价，`npm run verify:vision-observation` |
-| **ACT 动作分块模仿** | ✅ 本地 / Worker 示教训练 | Transformer + CVAE 隐变量、episode 级训练/验证划分、动作分块与时序集成；worker 读取同账号/项目/契约的原始示教 Run 并校验摘要，缺数据拒绝；图像分支仍走明确的 CLI 参数（见 [ACT 使用说明](docs/engines/act.md)）。ONNX 导出带数值等价检查；不代表真机效果或上板就绪。 |
-| **Diffusion Policy 动作分块模仿** | ✅ 本地 / Worker 示教训练 | 条件 1D UNet + DDPM（cosine 调度）+ EMA 权重，多模态示教不被平均；worker 接受摘要锁定的示教 Run，合成数据仅为显式 smoke；完整反向去噪 ONNX 逐元素等价验证。见 [Diffusion Policy 使用说明](docs/engines/diffusion-policy.md) |
-| **SmolVLA 参考适配** | 🟡 CPU 规划 / 🔌 CUDA 全量 | CPU 栈产出诚实标注的训练计划（dry-run，`metrics.dryRun=true`），完整微调需注册带 HuggingFace 栈的 CUDA worker；缺栈时明确拒绝而非假装训练。见 [SmolVLA 说明](docs/engines/smolvla.md) |
-| **LeRobot v3 数据集双向转换** | ✅ | `engines/lerobot-converter`：平台轨迹 ↔ LeRobot v3.0（meta/parquet/视频）布局，mono8 视频逐字节无损往返，v1.0 数据集拒绝并给迁移指引。见 [转换器说明](docs/engines/lerobot-converter.md) |
-| **物理级域随机化（质量/摩擦/执行器）** | ✅ | MJX 引擎任务包契约新增 `physicalDomainRandomization`（轮摩擦、底盘质量、伺服 kv 按 episode 重采样并进入 vmap 轨迹），`npm run verify:mjx-adapter` 实证质量被真实改变 |
-| **观测历史堆叠（RPO 式策略输入）** | ✅ | 适配器声明 `observationHistory {frames, order}`，策略输入 = 帧宽 × 帧数（最旧在前，episode/会话起点零初始化）；starter-ppo、mjx-ppo、microduck-recurrent 三引擎与两侧板端运行时、microduck-eval 评测同语义贯通，`npm run verify:observation-history` 全链断言 |
-| **dm_control 生态适配** | ✅ | `engines/dm-control-adapter`：dm_control 1.x `rl.control.Environment`/`Task` 钩子 + 与 MJX 同源 MJCF 物理，`npm run verify:dm-control-adapter`；Playground 侧如实结论见 [docs/engines/dm-control-adapter.md](docs/engines/dm-control-adapter.md) |
-| **MJX 引擎（MuJoCo 接触动力学，纯 JAX）** | ✅ | `npm run verify:mjx-adapter`：真 MJX 物理 + 纯 JAX PPO + 质量门证据，本机 CPU 可验证（无 jax 时 SKIP）；GPU 按 profile 放大吞吐。见 [docs/engines/mjx-adapter.md](docs/engines/mjx-adapter.md) |
-| **MicroDuck 腿式板端策略链路** | ✅ 软件契约 / 🧩 真机验收 | `microduck-stand/walk/kick/recover` 固定 61D→14D 关节输出；profile、joint telemetry、轨迹发布器、动作步长/速度限幅和部署脚本已接通。真实关节名、home 位姿、控制器和跌倒保护仍需在装配好的 X5 上验收。见 [MicroDuck 腿式运行链路](docs/microduck-leg-runtime.md) |
-| **mujoco-web 部署方模型注册表** | ✅ | 受审 MJCF 白名单 + 启动时真实编译 fail-closed（`npm run verify:mujoco-models`）；不开放任意上传 |
-| mjlab + rsl-rl GPU 训练 | 🔌 | 参考适配器在 `engines/mjlab-rsl-rl-adapter/`：rsl-rl `OnPolicyRunner` 真跑 2 迭代（`npm run verify:mjlab-adapter`，CPU 可验证），mjlab GPU 物理侧需自备 GPU 训练栈；物理级 DR 与 dm_control 生态接入已补齐见上表 |
-| Isaac Lab 上游训练（RPO 流水线） | 🔌 CUDA 主机 / 🧩 真链待验收 | `engines/isaac-lab-adapter` 逐字驱动上游工作区 train → play 回放 → MuJoCo sim2sim 三步；RPO 教程契约（78D 单帧 × 10 帧历史 = 780D 输入、23D 关节动作）已入任务包；缺 `RDK_ISAAC_LAB_ROOT` 时 exit 3 诚实拒绝、制品永不标记可部署（`npm run verify:isaac-lab-adapter`）。见 [engines/isaac-lab-adapter/README.md](engines/isaac-lab-adapter/README.md) |
-| RoboGo 适配接口 | 🔌 | 需要服务端配置真实地址、凭据和网络策略 |
-| RDK-X5 真机采集 / BoardAgent / OTA | 🧩 | 提供端口、预检和部署边界，需接入实际设备 |
-| **D6A 机械臂（arm_sdk）** | 🧩 软件就绪 / 真机验收待做 | 机型 profile + 板端预检/受限笛卡尔运动/夹爪（双开关、工作空间盒与速度双钳制、急停恒可用），见 [docs/arm-drive.md](docs/arm-drive.md) |
-| 真机遥测（IMU/里程计/电池） | 🟡 参考实现 | 常驻只读遥测节点 + 认证代理 + 评估页同屏对比已具备；参考机型 OriginBot 的现场证据需按发布清单归档 |
-| 真机受限驱动（运动金丝雀） | 🧩 代码门禁已具备 | 通用 `/cmd_vel` 通道默认关闭，含双开关 + 双重钳制 + 时间盒 + 急停恒可用；真实运动验收见 [docs/actuator-drive.md](docs/actuator-drive.md) |
-| 板端延迟 rehearsal（上板时序证据） | 🧩 代码门禁已具备 | `services/sim2real-web/board-latency-rehearsal.py` 复用真实 runtime 加载路径在板上采样，产出 `board-onnx` 收据；`validateArtifactForDeployment` 对**声称可部署**的制品强制要求新鲜、同字节、达标且自洽的收据，训练主机的 `host-torch` 数字不再能替代它。探针与门禁一致性见 `npm run verify:board-latency`；**收据自动入库与真实 X5 测量待现场验收**，见 [docs/host-station.md](docs/host-station.md) |
-| 生产加固（CSP / 限流 / 结构化日志 / 指标） | ✅ | 自家页面严格 `script-src 'self'`、进程内限流 429、JSON 行日志、Prometheus `/metrics`；MicroDuck 上游 bundle 所在的 `/mujoco` 刻意放宽，见 [docs/operations.md](docs/operations.md) |
-| 遥测有界读 + 保留策略 | ✅ | 小 `limit` 的遥测列表不再解析整个分片；可按天淘汰过期遥测（默认关闭），见 [docs/scalability.md](docs/scalability.md) |
-| 多实例部署 | 🟡 部分 | **1 写 + N 只读副本**：写者持文件租约，第二个写者 fail-fast；只读副本用 `RDK_SIM2REAL_STORAGE_READ_ONLY=1` 安全扩读。多写者仍需 PostgreSQL + 对象存储，见 [docs/scalability.md](docs/scalability.md) |
+| 能力                                       | 状态                         | 说明                                                                                                                                                                                                                                                                                                                                                                                                 |
+| ------------------------------------------ | ---------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 浏览器 MicroDuck + 中文控制层              | ✅                           | 上游资源需由部署方挂载；仓库不重新分发上游 bundle                                                                                                                                                                                                                                                                                                                                                    |
+| 动作录制、契约校验、JSONL 导入             | ✅                           | 可在本地直接验收                                                                                                                                                                                                                                                                                                                                                                                     |
+| 本地 Mock 闭环                             | ✅                           | 无 CUDA 可跑通 API 和 UI 流程                                                                                                                                                                                                                                                                                                                                                                        |
+| **CPU 真实 PPO 训练（starter-ppo）**       | ✅                           | `npm run demo:starter`：真训练 + 真 ONNX + 遥测评测，无 GPU 依赖                                                                                                                                                                                                                                                                                                                                     |
+| **视觉观测训练（顶置相机像素 → 策略）**    | ✅                           | `engines/visual-ppo`：真 JAX PPO 吃 64×64 顶置相机渲染 + 板载 8D 混合观测，ONNX 导出与 JAX 前向数值等价，`npm run verify:vision-observation`                                                                                                                                                                                                                                                         |
+| **ACT 动作分块模仿**                       | ✅ 本地 / Worker 示教训练    | Transformer + CVAE 隐变量、episode 级训练/验证划分、动作分块与时序集成；worker 读取同账号/项目/契约的原始示教 Run 并校验摘要，缺数据拒绝；图像分支仍走明确的 CLI 参数（见 [ACT 使用说明](docs/engines/act.md)）。ONNX 导出带数值等价检查；不代表真机效果或上板就绪。                                                                                                                                 |
+| **Diffusion Policy 动作分块模仿**          | ✅ 本地 / Worker 示教训练    | 条件 1D UNet + DDPM（cosine 调度）+ EMA 权重，多模态示教不被平均；worker 接受摘要锁定的示教 Run，合成数据仅为显式 smoke；完整反向去噪 ONNX 逐元素等价验证。见 [Diffusion Policy 使用说明](docs/engines/diffusion-policy.md)                                                                                                                                                                          |
+| **SmolVLA 参考适配**                       | 🟡 CPU 规划 / 🔌 CUDA 全量   | CPU 栈产出诚实标注的训练计划（dry-run，`metrics.dryRun=true`），完整微调需注册带 HuggingFace 栈的 CUDA worker；缺栈时明确拒绝而非假装训练。见 [SmolVLA 说明](docs/engines/smolvla.md)                                                                                                                                                                                                                |
+| **LeRobot v3 数据集双向转换**              | ✅                           | `engines/lerobot-converter`：平台轨迹 ↔ LeRobot v3.0（meta/parquet/视频）布局，mono8 视频逐字节无损往返，v1.0 数据集拒绝并给迁移指引。见 [转换器说明](docs/engines/lerobot-converter.md)                                                                                                                                                                                                             |
+| **物理级域随机化（质量/摩擦/执行器）**     | ✅                           | MJX 引擎任务包契约新增 `physicalDomainRandomization`（轮摩擦、底盘质量、伺服 kv 按 episode 重采样并进入 vmap 轨迹），`npm run verify:mjx-adapter` 实证质量被真实改变                                                                                                                                                                                                                                 |
+| **观测历史堆叠（RPO 式策略输入）**         | ✅                           | 适配器声明 `observationHistory {frames, order}`，策略输入 = 帧宽 × 帧数（最旧在前，episode/会话起点零初始化）；starter-ppo、mjx-ppo、microduck-recurrent 三引擎与两侧板端运行时、microduck-eval 评测同语义贯通，`npm run verify:observation-history` 全链断言                                                                                                                                        |
+| **dm_control 生态适配**                    | ✅                           | `engines/dm-control-adapter`：dm_control 1.x `rl.control.Environment`/`Task` 钩子 + 与 MJX 同源 MJCF 物理，`npm run verify:dm-control-adapter`；Playground 侧如实结论见 [docs/engines/dm-control-adapter.md](docs/engines/dm-control-adapter.md)                                                                                                                                                     |
+| **MJX 引擎（MuJoCo 接触动力学，纯 JAX）**  | ✅                           | `npm run verify:mjx-adapter`：真 MJX 物理 + 纯 JAX PPO + 质量门证据，本机 CPU 可验证（无 jax 时 SKIP）；GPU 按 profile 放大吞吐。见 [docs/engines/mjx-adapter.md](docs/engines/mjx-adapter.md)                                                                                                                                                                                                       |
+| **MicroDuck 腿式板端策略链路**             | ✅ 软件契约 / 🧩 真机验收    | `microduck-stand/walk/kick/recover` 固定 61D→14D 关节输出；profile、joint telemetry、轨迹发布器、动作步长/速度限幅和部署脚本已接通。真实关节名、home 位姿、控制器和跌倒保护仍需在装配好的 X5 上验收。见 [MicroDuck 腿式运行链路](docs/microduck-leg-runtime.md)                                                                                                                                      |
+| **mujoco-web 部署方模型注册表**            | ✅                           | 受审 MJCF 白名单 + 启动时真实编译 fail-closed（`npm run verify:mujoco-models`）；不开放任意上传                                                                                                                                                                                                                                                                                                      |
+| mjlab + rsl-rl GPU 训练                    | 🔌                           | 参考适配器在 `engines/mjlab-rsl-rl-adapter/`：rsl-rl `OnPolicyRunner` 真跑 2 迭代（`npm run verify:mjlab-adapter`，CPU 可验证），mjlab GPU 物理侧需自备 GPU 训练栈；物理级 DR 与 dm_control 生态接入已补齐见上表                                                                                                                                                                                     |
+| Isaac Lab 上游训练（RPO 流水线）           | 🔌 CUDA 主机 / 🧩 真链待验收 | `engines/isaac-lab-adapter` 逐字驱动上游工作区 train → play 回放 → MuJoCo sim2sim 三步；RPO 教程契约（78D 单帧 × 10 帧历史 = 780D 输入、23D 关节动作）已入任务包；缺 `RDK_ISAAC_LAB_ROOT` 时 exit 3 诚实拒绝、制品永不标记可部署（`npm run verify:isaac-lab-adapter`）。见 [engines/isaac-lab-adapter/README.md](engines/isaac-lab-adapter/README.md)                                                |
+| RoboGo 适配接口                            | 🔌                           | 需要服务端配置真实地址、凭据和网络策略                                                                                                                                                                                                                                                                                                                                                               |
+| RDK-X5 真机采集 / BoardAgent / OTA         | 🧩                           | 提供端口、预检和部署边界，需接入实际设备                                                                                                                                                                                                                                                                                                                                                             |
+| **D6A 机械臂（arm_sdk）**                  | 🧩 软件就绪 / 真机验收待做   | 机型 profile + 板端预检/受限笛卡尔运动/夹爪（双开关、工作空间盒与速度双钳制、急停恒可用），见 [docs/arm-drive.md](docs/arm-drive.md)                                                                                                                                                                                                                                                                 |
+| 真机遥测（IMU/里程计/电池）                | 🟡 参考实现                  | 常驻只读遥测节点 + 认证代理 + 评估页同屏对比已具备；参考机型 OriginBot 的现场证据需按发布清单归档                                                                                                                                                                                                                                                                                                    |
+| 真机受限驱动（运动金丝雀）                 | 🧩 代码门禁已具备            | 通用 `/cmd_vel` 通道默认关闭，含双开关 + 双重钳制 + 时间盒 + 急停恒可用；真实运动验收见 [docs/actuator-drive.md](docs/actuator-drive.md)                                                                                                                                                                                                                                                             |
+| 板端延迟 rehearsal（上板时序证据）         | 🧩 代码门禁已具备            | `services/sim2real-web/board-latency-rehearsal.py` 复用真实 runtime 加载路径在板上采样，产出 `board-onnx` 收据；`validateArtifactForDeployment` 对**声称可部署**的制品强制要求新鲜、同字节、达标且自洽的收据，训练主机的 `host-torch` 数字不再能替代它。探针与门禁一致性见 `npm run verify:board-latency`；**收据自动入库与真实 X5 测量待现场验收**，见 [docs/host-station.md](docs/host-station.md) |
+| 生产加固（CSP / 限流 / 结构化日志 / 指标） | ✅                           | 自家页面严格 `script-src 'self'`、进程内限流 429、JSON 行日志、Prometheus `/metrics`；MicroDuck 上游 bundle 所在的 `/mujoco` 刻意放宽，见 [docs/operations.md](docs/operations.md)                                                                                                                                                                                                                   |
+| 遥测有界读 + 保留策略                      | ✅                           | 小 `limit` 的遥测列表不再解析整个分片；可按天淘汰过期遥测（默认关闭），见 [docs/scalability.md](docs/scalability.md)                                                                                                                                                                                                                                                                                 |
+| 多实例部署                                 | 🟡 部分                      | **1 写 + N 只读副本**：写者持文件租约，第二个写者 fail-fast；只读副本用 `RDK_SIM2REAL_STORAGE_READ_ONLY=1` 安全扩读。多写者仍需 PostgreSQL + 对象存储，见 [docs/scalability.md](docs/scalability.md)                                                                                                                                                                                                 |
 
 <div align="center">
 
@@ -256,18 +256,18 @@ npm run format:check
 
 ## 目录
 
-| 目录 | 内容 |
-| --- | --- |
-| `services/sim2real-web` | 独立 Web 入口、总览 + 四流程 + 两工具工作流 UI、Mock worker 与服务单元示例 |
-| `services/mujoco-web` | MicroDuck 静态入口、中文交互覆盖层、社区二维码和浏览器轨迹录制 |
-| `shared` | MicroDuck 61D observation / 14D action / 50 Hz 契约、模型制品和遥测类型 |
-| `server/routes` | Sim2Real HTTP API（模型、运行、部署、遥测） |
-| `server/sim2real` | 本地/RoboGo runner、JSON ledger、兼容性策略和可替换 adapter |
-| `services/duck-lab-mcp` | 面向外部 Agent 的 stdio MCP 适配层，调用版本化平台 API |
-| `docs/api` | 版本化 OpenAPI 契约与外部集成调用顺序 |
-| `docs/sim2real-plugins.md` | 事件驱动扩展层：实验追踪、对象存储、通知和硬件适配器 |
-| `docs/assets` | README 首屏与工作台示意图（自绘 SVG）及产品指南运行界面截图（`product-guide/`），无运行时依赖 |
-| `docs/design` | 产品设计、MVP/90 分验收、Sim2Real 方案和端到端流程 |
+| 目录                       | 内容                                                                                          |
+| -------------------------- | --------------------------------------------------------------------------------------------- |
+| `services/sim2real-web`    | 独立 Web 入口、总览 + 四流程 + 两工具工作流 UI、Mock worker 与服务单元示例                    |
+| `services/mujoco-web`      | MicroDuck 静态入口、中文交互覆盖层、社区二维码和浏览器轨迹录制                                |
+| `shared`                   | MicroDuck 61D observation / 14D action / 50 Hz 契约、模型制品和遥测类型                       |
+| `server/routes`            | Sim2Real HTTP API（模型、运行、部署、遥测）                                                   |
+| `server/sim2real`          | 本地/RoboGo runner、JSON ledger、兼容性策略和可替换 adapter                                   |
+| `services/duck-lab-mcp`    | 面向外部 Agent 的 stdio MCP 适配层，调用版本化平台 API                                        |
+| `docs/api`                 | 版本化 OpenAPI 契约与外部集成调用顺序                                                         |
+| `docs/sim2real-plugins.md` | 事件驱动扩展层：实验追踪、对象存储、通知和硬件适配器                                          |
+| `docs/assets`              | README 首屏与工作台示意图（自绘 SVG）及产品指南运行界面截图（`product-guide/`），无运行时依赖 |
+| `docs/design`              | 产品设计、MVP/90 分验收、Sim2Real 方案和端到端流程                                            |
 
 总览页还提供动态“研发闭环评分”，按契约、训练、评测、发布和项目血缘五项软件证据给出下一步建议；数据集可记录版本、SHA-256、契约和来源运行，详见 [`docs/dataset-lineage.md`](docs/dataset-lineage.md)。
 
@@ -318,4 +318,4 @@ MicroDuck 浏览器资源的上游 commit、仓库和许可证边界记录在 [`
 - [`docs/design/sim2real-mvp-guide.md`](docs/design/sim2real-mvp-guide.md)
 - [`docs/design/rdk-duck-product-design.md`](docs/design/rdk-duck-product-design.md)
 
-Studio / Qoder 插件与平台共用实验页的接入约定，见 [插件与宿主联动](docs/plugin-host-integration.md)。
+Studio / Qoder 插件与平台共用实验页的接入约定，见 [插件与宿主联动](docs/plugin-host-integration.md)；学员入口与自由探索设计见 [一句话 Workshop](docs/plugin-workshop-060.md)。

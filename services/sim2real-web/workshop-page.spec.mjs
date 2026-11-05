@@ -5,7 +5,7 @@ import { JSDOM } from 'jsdom';
 import { startWorkshop } from './public/workshop-page.mjs';
 const html = await fs.readFile(new URL('./public/workshop.html', import.meta.url), 'utf8');
 const settle = () => new Promise((r) => setTimeout(r, 25));
-function fixture({ lost = false } = {}) {
+function fixture({ lost = false, failedSwitch = false } = {}) {
   const dom = new JSDOM(html, {
     url: 'https://platform.test/course/workshop.html?context=ws-test',
   });
@@ -26,6 +26,8 @@ function fixture({ lost = false } = {}) {
     const p = new URL(url).pathname.split('/api/v1/duck/')[1],
       b = options.body ? JSON.parse(options.body) : null;
     calls.push({ p, b });
+    if (failedSwitch && p.endsWith('/other/select'))
+      return { ok: false, json: async () => ({ ok: false, message: '目标实验不可用。' }) };
     if (p === 'runs' && lost) throw Error('lost response');
     if (p.endsWith('/reference')) state.reference = b.reference;
     if (p.endsWith('/claim/train')) {
@@ -70,7 +72,15 @@ function fixture({ lost = false } = {}) {
       state.evaluation.status = 'completed';
       state.stage = 'results';
     }
-    return { ok: true, json: async () => ({ ok: true, session: structuredClone(state) }) };
+    return {
+      ok: true,
+      json: async () => ({
+        ok: true,
+        session: structuredClone(state),
+        sessions: [{ contextId: 'other', createdAt: '2026-11-05T10:00:00Z', timesteps: 8192 }],
+        experiments: [],
+      }),
+    };
   };
   return {
     dom,
@@ -175,6 +185,62 @@ test('formal budget requires a visible recipe confirmation; custom inputs and hi
     assert.equal(d.getElementById('recipe-confirm').hidden, true);
     assert.ok(d.getElementById('custom-seed'));
     assert.ok(d.getElementById('history-toggle'));
+  } finally {
+    c.dispose();
+    f.dom.window.close();
+  }
+});
+
+test('an unavailable history selection clears the previous experiment instead of keeping its result', async () => {
+  const f = fixture({ failedSwitch: true }),
+    d = f.dom.window.document;
+  const c = await startWorkshop({
+    document: d,
+    location: f.dom.window.location,
+    fetchImpl: f.fetchImpl,
+    setTimer: f.setTimer,
+    clearTimer: f.clearTimer,
+  });
+  try {
+    d.getElementById('skip-reference').click();
+    await settle();
+    d.getElementById('start-quick').click();
+    await settle();
+    await f.tick();
+    await f.tick();
+    assert.equal(d.getElementById('result-section').hidden, false);
+    d.getElementById('history-toggle').click();
+    await settle();
+    d.querySelector('#history-list button').click();
+    await settle();
+    assert.equal(d.getElementById('result-section').hidden, true);
+    assert.equal(d.getElementById('result-frame').getAttribute('src'), 'about:blank');
+    assert.match(d.getElementById('workshop-error').textContent, /不可用/);
+  } finally {
+    c.dispose();
+    f.dom.window.close();
+  }
+});
+
+test('double-clicking new experiment only creates one draft and never submits training', async () => {
+  const f = fixture(),
+    d = f.dom.window.document;
+  const c = await startWorkshop({
+    document: d,
+    location: f.dom.window.location,
+    fetchImpl: f.fetchImpl,
+    setTimer: f.setTimer,
+    clearTimer: f.clearTimer,
+  });
+  try {
+    d.getElementById('new-experiment').click();
+    d.getElementById('new-experiment').click();
+    await settle();
+    assert.equal(f.calls.filter((x) => x.p === 'workshop-sessions' && x.b).length, 1);
+    assert.equal(
+      f.calls.some((x) => x.p === 'runs'),
+      false,
+    );
   } finally {
     c.dispose();
     f.dom.window.close();
