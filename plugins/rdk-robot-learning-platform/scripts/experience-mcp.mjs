@@ -28,6 +28,10 @@ import {
   uiResource,
 } from './mcp-app-resource.mjs';
 import {
+  COURSE_BRIEF_TOOL,
+  courseBrief,
+  TRAINING_CHOICE_TOOL,
+  trainingChoice,
   ORIGINMAN_COURSE,
   ORIGINMAN_COURSE_INSTRUCTIONS,
   courseToolHint,
@@ -36,6 +40,7 @@ import {
 
 import { ROBOT_ONBOARDING_TOOLS, onboardingGuide, assessOnboarding } from './robot-onboarding.mjs';
 import { CLASSROOM_TOOLS, classroomGuide } from './classroom-guide.mjs';
+import { WORKSHOP_TOOLS, workshopEntry } from './workshop-entry.mjs';
 
 /** Learner text uses the same verified facts; full diagnostics remain structured. */
 export function experimentStudentReply(payload) {
@@ -54,12 +59,14 @@ export function experimentStudentReply(payload) {
     return '任务已结束，来源尚待核对。暂不展示效果结论。';
   const quality =
     result.quality?.clearGain === true
-      ? '本次达到收益判据。'
+      ? '本次仿真评测达到收益判据；未验证真机。'
       : result.quality?.clearGain === false
-        ? '本次未达到收益判据。'
+        ? '本次未达到收益判据，效果未达标。'
         : '效果尚待验证。';
   return (
-    '训练与评测已完成。' +
+    (result.trainingBudget === 8192
+      ? '8192步快检流程已完成，不代表正式效果验收通过。'
+      : '训练与评测流程已完成。') +
     quality +
     '\n' +
     (result.links?.experiment
@@ -73,6 +80,7 @@ export function experimentModelResult(payload) {
   const run = (value) => (value ? { runId: value.runId, status: value.status } : null);
   return {
     contextId: payload.contextId,
+    trainingBudget: payload.trainingBudget ?? null,
     studentReply: payload.studentReply,
     training: run(payload.training),
     evaluation: run(payload.evaluation),
@@ -106,6 +114,7 @@ const loadedSources = Object.fromEntries(
     'course-setup.mjs',
     'submission-journal.mjs',
     'workshop-course.mjs',
+    'workshop-entry.mjs',
   ].map((name) => [
     'scripts/' + name,
     createHash('sha256')
@@ -151,6 +160,9 @@ export const EXPERIENCE_TOOLS = [
     inputSchema: { type: 'object', properties: {}, additionalProperties: false },
     annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
   },
+  COURSE_BRIEF_TOOL,
+  TRAINING_CHOICE_TOOL,
+  ...WORKSHOP_TOOLS,
   ...CLASSROOM_TOOLS,
   ...ROBOT_ONBOARDING_TOOLS,
   ...AUTH_TOOLS,
@@ -350,14 +362,16 @@ export function experienceProxy(
           (result.instructions ?? '') +
           '\n课堂新学员或新机离线准备：rdk_classroom_guide携带已知answers，只展示studentReply，每次一个中文问题，不重复问已知项。要求依据才detail=full。阶段标准读robot_onboarding_guide，证据读robot_acceptance_assess；needs-input不是通过。离线知识不要求平台登录，不因离线准备启动训练。' +
           '\n认证：先读platform_status。未认证时调用rdk_auth_login取得浏览器登录确认入口；请用户在浏览器登录并确认验证码，然后调用rdk_auth_status完成连接，不索取密码或Cookie。Studio使用宿主绑定的当前身份，未登录时请在Studio账号菜单登录，不扫描其他账号、不静默切换。' +
+          '\n简短咨询预算用途、计数单位或流程/效果/回放完成标准：优先rdk_originman_course_brief，逐字展示studentReply两句即结束，不加载整份指南和历史证据。实际成绩另读原评测；明确问依据才按需读引用。不编造计数倍率。' +
           '\n交互约定：默认简短中文，按“当前进度→本次结果→下一步”回答。认证、版本、契约和资源校验在后台完成，正常时不逐项播报。只在阶段变化、阻断或需要用户选择时更新；不重复播报running，不展示内部推理。UUID、工具名、摘要和错误码仅在用户查看诊断时展开。正常结果优先给曲线、对比图和回放入口；宿主能打开工作台则在工作台展示，否则给可点击链接。没有实际渲染能力不伪装交互卡片，没有播放器观测不称已播放。' +
-          '\n用户说“带我完成OriginMan Workshop”或明确要求短训练、评测和回放，即授权8192步仅仿真流程；仅介绍或咨询不提交。后台先rdk_auth_status核对认证及pluginRuntime，再rdk_experience_guide取得operation.contextId。完整Workshop先打开course.links.simulation，实际启动并观察基础PD参考；参考不计为本组训练结果。然后依次rdk_originman_short_train、rdk_training_wait、rdk_originman_short_evaluate、rdk_training_wait、rdk_experiment_resume及rdk_originman_evaluation_read。只传专用工具要求的标识，模型、manifest和绑定资源由工具校验，不重复调用prepare/catalog或手拼training_submit。不要让用户填写UUID。只有未登录、明确选择歧义或真实阻断才提问。宿主已绑定课程资源时沿用它，不按名称猜其他机器。' +
+          '\nOriginMan训练前先rdk_originman_training_choice：用户只说Workshop/彩排/验证流程但没选预算，调用空参数，仅展示一个中文预算问题并等待，不默认8192。已说短训/快检/8192传choice=quick；已说正式/50万传formal，不重复询问。回答不清楚传unknown并暂停。选择不等于已提交，用户要求先不要开始时停止。选定且授权训练后，后台核对rdk_auth_status和rdk_experience_guide；完整Workshop先实际观察基础PD参考。quick用short_train→training_wait→short_evaluate；formal用originman_train({contextId,timesteps:500000})→training_wait→originman_evaluate。再等待评测、experiment_resume与originman_evaluation_read读取本轮真实比较。模型、manifest和绑定资源由工具校验，不手拼training_submit，不让学员填写UUID。不重读已取得的指南；已有实验恢复原contextId，不改预算、不重训。' +
           '\n等待：沿用同一Run及nextPollArguments，正常等待窗口结束继续读；不启动shell sleep。失败或stopWorkflow=true停止所有自动提交，不换标识、资源或参数重交；仍可只读查询原Run、日志及恢复已有引用。SUBMISSION_REFERENCE_SAVE_FAILED表示任务已经提交，保留回执并恢复，绝不能说尚未提交。' +
           '\n实验接续：通用流程提交后用明确contextId保存训练及同源评测引用；专用短训工具已保存，无需重复。跨聊天或软件继续时使用明确实验标识调用experiment_resume，并重新验证当前平台和账号；不选择全局最新Run，不扫描其他账号。本机引用不等于跨机器同步。404、网络失败和断线不触发重交。新实验使用新contextId，调参须用户明确提出。' +
           '\n结果：只展示本次Run的真实original/tuned/rl对比；执行完成、质量提升和真机资格分别判断，短训不承诺提升。回放优先打开resume.links.experiment；旧平台打开links.workbench并按selection核对本次Run，再在页面播放器播放一次；不要直接导航媒体URL，OriginMan不调用真机rdk_replay_video或evaluationId接口；媒体链接不做正文抓取、HEAD、curl或独立浏览器认证探测。没有观测就报告播放待验证。一般流程用workflow_inspect按需看证据，不默认打印整张技术状态表；新训练前training_prepare刷新资源。默认GPU，CPU须明确选择，不自动降级、不操作真机。\n本次原生计算配置：' +
           clientContext().nativeCompute.configuration +
           '。宿主接口缺失时不要要求已经在桌面中的用户重复“去桌面操作”；用指南中的 clientContext 说明实际缺口。' +
           ORIGINMAN_COURSE_INSTRUCTIONS +
+          '\n0.6按钮工作台入口优先于旧编排：用户说带我开始Workshop/开始课程时只调用rdk_workshop({intent:start})，继续/看看效果用continue/results。不要先调用旧预算问答或experience_guide；预算和后续步骤改在页面按钮选择。打开返回links.workshop，Qoder必须用内置浏览器navigate_page并提示产出→网页查阅，避免外部Browser Connector。保留高级工具，自由问答与用户明确的自定义训练不受本入口限制。' +
           '\n普通Workshop回执：优先使用工具studentReply，最多三句中文加一个实验页链接。页面已显示曲线和对比时不重复抄技术表；账号、UUID、英文套件名、摘要、video字节和部署细节按用户明确要求再展开。正常完成后不再询问是否播放，能操作播放器就实际播放，否则明确待播放。只报告完成的四个主阶段；单变量调参是可选后续，不算本轮未完成项。',
       };
     }
@@ -487,7 +501,27 @@ export function experienceProxy(
               ? `当前实际运行插件 ${runtime.version}，加载源码核对一致。此项未验证平台连接或实机效果。`
               : '当前进程与分发记录未核对通过，请刷新插件连接后再检查；暂不执行训练或实体操作。',
           };
-        } else if (params.name === 'rdk_classroom_guide')
+        } else if (params.name === 'rdk_workshop') {
+          const call = async (name, args) =>
+            readToolResult(
+              await upstream.request('tools/call', { name, arguments: args }, { signal }),
+            );
+          const catalog = await readCatalog(signal);
+          payload = await workshopEntry(params.arguments ?? {}, call, {
+            remote:
+              upstream.workshopSession &&
+              ((operation, input) => upstream.workshopSession(operation, input, { signal })),
+            readModels: upstream.readModels && (() => upstream.readModels({ signal })),
+            courseReadiness:
+              upstream.courseReadiness && ((args) => upstream.courseReadiness({ ...args, signal })),
+            toolNames: catalog.tools.map((t) => t.name),
+            defaultResourceId: env.RDK_WORKSHOP_COMPUTE_RESOURCE_ID,
+          });
+        } else if (params.name === 'rdk_originman_course_brief')
+          payload = courseBrief(params.arguments ?? {});
+        else if (params.name === 'rdk_originman_training_choice')
+          payload = trainingChoice(params.arguments ?? {});
+        else if (params.name === 'rdk_classroom_guide')
           payload = classroomGuide(params.arguments ?? {});
         else if (params.name === 'rdk_robot_onboarding_guide')
           payload = onboardingGuide(params.arguments ?? {});
@@ -555,11 +589,12 @@ export function experienceProxy(
           }
         } else if (params.name === 'rdk_experience_guide')
           payload = {
+            trainingChoice: trainingChoice(),
             clientContext: clientContext(),
             formalTraining: {
               trainTool: 'rdk_originman_train',
               evaluateTool: 'rdk_originman_evaluate',
-              note: '仅在用户明确选择预算时使用。默认完整彩排仍为8192步短训；不自动扩训。',
+              note: '仅在用户明确选择预算时使用。完整彩排无默认预算；先中文引导学员选择8192快检或500000正式，不自动扩训。',
             },
             course: { ...ORIGINMAN_COURSE, links: courseLinks(env.RDK_SIM2REAL_MCP_BASE_URL) },
             learnerInterface: {
@@ -762,12 +797,22 @@ export function experienceProxy(
               type: 'text',
               text:
                 params.name === 'rdk_plugin_status' ||
+                params.name === 'rdk_originman_course_brief' ||
                 (params.name === 'rdk_classroom_guide' && params.arguments?.detail !== 'full')
                   ? payload.studentReply
                   : JSON.stringify(
                       EXPERIMENT_TOOLS.some((t) => t.name === params.name)
                         ? experimentModelResult(payload)
-                        : payload,
+                        : params.name === 'rdk_workshop'
+                          ? {
+                              studentReply: payload.studentReply,
+                              links: payload.links,
+                              stage: payload.stage,
+                              submission: payload.submission,
+                              delivery: payload.delivery,
+                              pluginRuntime: payload.pluginRuntime,
+                            }
+                          : payload,
                     ),
             },
           ],

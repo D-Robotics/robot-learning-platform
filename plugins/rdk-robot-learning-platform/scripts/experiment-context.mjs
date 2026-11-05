@@ -364,6 +364,7 @@ export async function experimentContext(
     },
     training: compactRun(training),
     evaluation: compactRun(evaluation),
+    trainingBudget: training?.training?.originmanWorkshop?.timesteps ?? null,
     detailOmitted: true,
     detailRead: {
       tool: 'rdk_originman_evaluation_read',
@@ -387,7 +388,9 @@ export async function experimentContext(
     },
     quality: {
       clearGain:
-        evaluation?.status === 'completed' ? (evaluationEvidence?.clearGain ?? null) : null,
+        evaluation?.status === 'completed' && association?.executionVerified === true
+          ? (evaluationEvidence?.clearGain ?? null)
+          : null,
       hardwareVerified: false,
       note: '执行完成与质量达标分别判断；本工具不验证视频实际播放或真机效果。',
     },

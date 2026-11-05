@@ -48,3 +48,7 @@ video { width: 100%; max-height: 480px; background: var(--bg-deep); border-radiu
   .experiment-steps li { margin-left: 16px; }
   h1 { margin-bottom: 12px; }
 }
+
+#curve-inspector { display: flex; gap: 16px; flex-wrap: wrap; align-items: center; margin: 16px 0; }
+#curve-sample { flex: 1; min-width: 160px; accent-color: var(--accent); }
+#curve-value { font-variant-numeric: tabular-nums; color: var(--muted-strong); }

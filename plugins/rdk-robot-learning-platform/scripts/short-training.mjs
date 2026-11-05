@@ -375,7 +375,7 @@ export async function shortTraining(
     ...submitted,
   };
 }
-function requireConnected(p) {
+export function requireConnected(p) {
   if (p.status === 'waiting' && p.platformCode === 'SIM2REAL_ENGINE_PREFLIGHT_BUSY')
     throw Object.assign(new Error(p.reason), {
       platformCode: p.platformCode,

@@ -1,3 +1,73 @@
+export const COURSE_BRIEF_TOOL = {
+  name: 'rdk_originman_course_brief',
+  description:
+    '只读本地两句中文简答：解释8192快检与50万正式训练、训练步/迭代单位、流程完成与效果达标/回放待验的区别。学员咨询这些口径时优先调用并原样展示studentReply，不重复读课程或历史资料；不登录、不提交任务。实际实验成绩仍须读原评测。',
+  inputSchema: { type: 'object', properties: {}, additionalProperties: false },
+  annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
+};
+export function courseBrief(args = {}) {
+  if (!args || typeof args !== 'object' || Array.isArray(args) || Object.keys(args).length)
+    throw Error('简答无需参数；实际结果请指定原实验读取。');
+  return {
+    scope: 'local-course-explanation-only',
+    motionAuthorized: false,
+    studentReply:
+      '8192步用于流程快检，50万步用于正式效果对比；训练步、采样批次和梯度更新次数是不同计数，不能混称。\n训练完成不等于效果达标，视频未实播只记回放待验；真机效果须独立验证。',
+    delivery:
+      '原样展示studentReply两句，不另加标题、数字倍率、历史成绩或下一步问题，不读取更多资料；用户明确追问依据时才按需读取workshop-training-evidence.md。实际成绩必须读本轮同源评测，不能从预算推出。',
+  };
+}
+
+/** Local choice only: does not authenticate, submit training or authorize hardware. */
+export const TRAINING_CHOICE_TOOL = {
+  name: 'rdk_originman_training_choice',
+  description:
+    'OriginMan Workshop训练前的中文预算引导：未选择时只问8192步快检还是50万步正式效果实验；已明确短训/8192或正式/50万时传对应choice避免重问。不清楚传unknown并暂停，不自动选择或提交，不需登录。',
+  inputSchema: {
+    type: 'object',
+    properties: { choice: { type: 'string', enum: ['quick', 'formal', 'unknown'] } },
+    additionalProperties: false,
+  },
+  annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
+};
+export function trainingChoice(args = {}) {
+  if (
+    !args ||
+    typeof args !== 'object' ||
+    Array.isArray(args) ||
+    Object.keys(args).some((k) => k !== 'choice') ||
+    (args.choice !== undefined && !['quick', 'formal', 'unknown'].includes(args.choice))
+  )
+    throw Error('请选择快检、正式训练或不清楚；不猜测训练预算。');
+  const selected = ['quick', 'formal'].includes(args.choice);
+  const formal = args.choice === 'formal';
+  return {
+    scope: 'simulation-only',
+    state: selected ? 'selected' : args.choice === 'unknown' ? 'deferred' : 'needs-input',
+    needsInput: args.choice === undefined,
+    selection: selected ? args.choice : null,
+    timesteps: selected ? (formal ? 500000 : 8192) : null,
+    trainTool: selected ? (formal ? 'rdk_originman_train' : 'rdk_originman_short_train') : null,
+    evaluateTool: selected
+      ? formal
+        ? 'rdk_originman_evaluate'
+        : 'rdk_originman_short_evaluate'
+      : null,
+    qualityClaimAllowed: false,
+    motionAuthorized: false,
+    studentReply: selected
+      ? formal
+        ? '已选50万步正式效果实验。训练后须同条件评测并对比基线，实际达标才报告效果通过；不保证提升。本轮仅仿真。'
+        : '已选8192步快检。只验证训练、评测与回放链路；策略可能弱于基线，流程完成不算效果达标。本轮仅仿真。'
+      : args.choice === 'unknown'
+        ? '先不训练。8192步用于熟悉流程；50万步用于正式效果对比，耗时取决于资源。准备好后回复“快检”或“正式”。'
+        : '这次选哪种训练？①8192步快检：验证流程，不要求效果提升；②50万步正式训练：评测是否优于基线，耗时更长；③不清楚，先说明。',
+    nextAction: selected
+      ? '保留已选预算，按用户授权范围执行；需要新训练时从experience_guide取得新contextId。正式工具显式传timesteps=500000，评测沿用原实验。仅选择不代表已经提交；用户说先不要开始时不得提交。'
+      : '只展示studentReply并结束本轮；未选预算或回答不清楚时不调用训练工具、不生成默认预算。',
+  };
+}
+
 /** Learner-facing scope shared by runtime instructions and the course guide. */
 export const ORIGINMAN_COURSE = {
   id: 'originman-workshop',
@@ -31,6 +101,11 @@ export const ORIGINMAN_COURSE = {
       nextAction: '学员要求继续时，保留原实验，复制参数建立新实验，只改训练步数或训练侧推上限。',
     },
   ],
+  trainingChoice: {
+    tool: TRAINING_CHOICE_TOOL.name,
+    default: null,
+    options: ['quick', 'formal', 'unknown'],
+  },
   shortTraining: {
     purpose: 'workflow-check',
     timesteps: 8192,
@@ -39,6 +114,14 @@ export const ORIGINMAN_COURSE = {
   completion:
     '本课完成条件不包含真机部署；确认本组实验来源，解释同条件评测，查看回放并提供保存入口。播放与下载是否完成以宿主实际观察为准。',
   responseRules: [
+    '预算用途、计数单位、完成标准等简短咨询优先rdk_originman_course_brief，仅逐字展示studentReply两句；不再读指南和证据全文。明确追问依据才按需展开；不能编造倍率或把历史成绩当本组结果。',
+    '没有实际播放时，只能说训练与评测完成、回放待验证，不能说完整Workshop或全流程通过。Qoder提示外部Browser Connector未连接时保留原实验，不重训；学员可点任务右侧产出中的网页查询，打开内置实验页后手动播放。人工点击验收与模型自动播放分别记录，不要求为阅读已有结果重新登录CLI。',
+
+    '预算单位是训练步，不是优化次数或外层迭代：8192步对应32个256帧采样批次；500000请求可因批次取整实际为500224步。旧进度字段iteration/totalIterations在本引擎中也记训练步，不照字段名翻译成8192次迭代。梯度更新次数另读optimizer记录。',
+
+    '训练预算必须由学员选择。Workshop/完整彩排不隐含8192或50万：先调用rdk_originman_training_choice；已有明确短训、8192、正式或50万时传已知choice，不重复问。未知只说明并暂停，不提交。用户只咨询不开始训练。',
+    '分别报告流程执行、仿真效果、实体效果。快检完成只算流程通过；正式训练completed也不算效果通过，须本轮同源评测sourceVerified和clearGain=true，并展示两组实际基线与RL恢复数；未评测待验证、未提升明确未达标、来源不符停止结论。回放只展示其中一个条件，不代替62条件评测。',
+    '历史验证：固定seed=7、侧推8.1N及相同协议下，8192步为1/31、1/31；正式请求500000实际500224步为27/31、25/31，原PD13/31、13/31，调参反馈13/31、17/31。新旧正式权重相同；本次短训不足有同配方对照支持，不能泛化成所有失败都只需加步数。详细依据按需读references/workshop-training-evidence.md，不重复读整包。',
     '新平台的experiment_resume返回links.experiment时，优先由宿主打开这个明确实验页查看实时曲线、同源比较与回放；同一账号可跨Studio、Qoder和网页恢复原实验。persistence.sharedAcrossHosts=false时仅为本机引用，不声称跨机器同步。',
     '正式预算用rdk_originman_train显式传timesteps（例如500000），随后rdk_originman_evaluate沿用原训练参数读取既有权重；不要把正式预算传给固定8192短训工具。单变量调参须新contextId，保留原实验。',
     '结果与导出页用course.links.comparison；不要猜#compare。页面打开不保证选中本次Run；先核对训练和评测选择器再播放或点课程内置导出。离线HTML须含真实视频字节，0字节或引用不存在的视频文件不能算保存成功。',
@@ -54,7 +137,7 @@ export const ORIGINMAN_COURSE = {
     '需要课程能力介绍时先读本指南，不为泛泛介绍调用部署、运动、全网或官方文档工具；通用平台能力与本课可完成范围分开说明。',
     '参考演示优先打开course.links.simulation，在页面内启动并观察基础PD参考。用户要求先参考后训练时，必须先实际运行参考，再训练；页面失败先排查，不先训练再补看。讲师参考不算本组结果。referenceVideo仅为原始媒体，不直接导航媒体文件，也不拼接apiPrefix。',
     'OriginMan评测视频与通用遥测样本是两种证据；rdk_runs_replay样本为0不能推出评测视频不存在。引用保存失败先用原训练与评测Run恢复关联，不新提交，核对本次视频回执再提供入口。',
-    'Worker连通不等于任务依赖预检通过；没有任务环境证据时只报告连通已验证，不能说训练无阻塞。短训未提升只陈述结果与预算，不推断差异主要来自步数，不承诺50万步必然改善。',
+    'Worker连通不等于任务依赖预检通过；没有任务环境证据时只报告连通已验证，不能说训练无阻塞。新实验短训未提升时先报告本轮数据；历史同配方预算对照只作为历史解释，不代替本轮诊断，不承诺50万步必然改善。',
   ],
 };
 
@@ -105,4 +188,38 @@ export function courseToolHint(name) {
   if (/^rdk_(deployment_|board_|physical_evaluation|replay_video)/.test(name))
     return 'OriginMan本课仅仿真：此通用硬件能力不属于本课下一步，不因本课仿真完成自动调用；仅在用户独立明确要求对应硬件工作时使用。\n';
   return '';
+}
+
+/** Separate verifiable execution from the recorded simulation quality criterion. */
+export function trainingVerdict({ status, sourceVerified, clearGain, suites = [] }) {
+  const comparable =
+    suites.length === 2 &&
+    suites.every(
+      (s) =>
+        s.caseCount === 31 &&
+        ['originalRecovered', 'tunedRecovered', 'rlRecovered'].every(
+          (k) => Number.isInteger(s[k]) && s[k] >= 0 && s[k] <= s.caseCount,
+        ),
+    );
+  const consistentGain =
+    comparable &&
+    suites.every((s) => s.rlRecovered > s.originalRecovered && s.rlRecovered > s.tunedRecovered);
+  return {
+    execution:
+      status === 'completed'
+        ? 'completed'
+        : ['failed', 'blocked', 'cancelled', 'canceled'].includes(status)
+          ? 'failed'
+          : 'pending',
+    quality:
+      status !== 'completed' || !sourceVerified
+        ? 'pending'
+        : clearGain === false
+          ? 'not-met'
+          : clearGain === true && consistentGain
+            ? 'met'
+            : 'pending',
+    hardware: 'unverified',
+    criterion: '本轮同源、两组各31条件的记录收益判据；不外推未知条件或真机。',
+  };
 }

@@ -2698,6 +2698,213 @@ paths:
         second source of truth that can drift. Accessible without a session.
       responses:
         "200": { description: Current notices, content: { application/json: { schema: { type: object } } } }
+  /api/v1/duck/workshops:
+    get:
+      tags: [workspace]
+      summary: Read owner-scoped current Workshop and history
+      operationId: getWorkshop
+      responses:
+        "200":
+          description: Owner-scoped Workshop state or single submission claim
+        "400":
+          description: Invalid or missing explicit input
+        "401":
+          description: Authentication required
+        "403":
+          description: Role does not allow this mutation
+        "404":
+          description: No owned experiment or course asset
+        "409":
+          description: Frozen recipe, uncertain submission, or previously claimed step
+    post:
+      tags: [workspace]
+      summary: Record learner intent or claim one workflow step; submissions use normal runs API
+      operationId: postWorkshop
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object }
+      responses:
+        "200":
+          description: Owner-scoped Workshop state or single submission claim
+        "400":
+          description: Invalid or missing explicit input
+        "401":
+          description: Authentication required
+        "403":
+          description: Role does not allow this mutation
+        "404":
+          description: No owned experiment or course asset
+        "409":
+          description: Frozen recipe, uncertain submission, or previously claimed step
+  /api/v1/duck/workshops/{contextId}:
+    parameters:
+      - in: path
+        name: contextId
+        required: true
+        schema: { type: string, pattern: "^[A-Za-z0-9][A-Za-z0-9_.-]{0,95}$" }
+    get:
+      tags: [workspace]
+      summary: Read owner-scoped current Workshop and history
+      operationId: getWorkshopContextid
+      responses:
+        "200":
+          description: Owner-scoped Workshop state or single submission claim
+        "400":
+          description: Invalid or missing explicit input
+        "401":
+          description: Authentication required
+        "403":
+          description: Role does not allow this mutation
+        "404":
+          description: No owned experiment or course asset
+        "409":
+          description: Frozen recipe, uncertain submission, or previously claimed step
+  /api/v1/duck/workshops/{contextId}/select:
+    parameters:
+      - in: path
+        name: contextId
+        required: true
+        schema: { type: string, pattern: "^[A-Za-z0-9][A-Za-z0-9_.-]{0,95}$" }
+    post:
+      tags: [workspace]
+      summary: Record learner intent or claim one workflow step; submissions use normal runs API
+      operationId: postWorkshopContextidSelect
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object }
+      responses:
+        "200":
+          description: Owner-scoped Workshop state or single submission claim
+        "400":
+          description: Invalid or missing explicit input
+        "401":
+          description: Authentication required
+        "403":
+          description: Role does not allow this mutation
+        "404":
+          description: No owned experiment or course asset
+        "409":
+          description: Frozen recipe, uncertain submission, or previously claimed step
+  /api/v1/duck/workshops/{contextId}/reference:
+    parameters:
+      - in: path
+        name: contextId
+        required: true
+        schema: { type: string, pattern: "^[A-Za-z0-9][A-Za-z0-9_.-]{0,95}$" }
+    post:
+      tags: [workspace]
+      summary: Record learner intent or claim one workflow step; submissions use normal runs API
+      operationId: postWorkshopContextidReference
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object }
+      responses:
+        "200":
+          description: Owner-scoped Workshop state or single submission claim
+        "400":
+          description: Invalid or missing explicit input
+        "401":
+          description: Authentication required
+        "403":
+          description: Role does not allow this mutation
+        "404":
+          description: No owned experiment or course asset
+        "409":
+          description: Frozen recipe, uncertain submission, or previously claimed step
+  /api/v1/duck/workshops/{contextId}/pause:
+    parameters:
+      - in: path
+        name: contextId
+        required: true
+        schema: { type: string, pattern: "^[A-Za-z0-9][A-Za-z0-9_.-]{0,95}$" }
+    post:
+      tags: [workspace]
+      summary: Record learner intent or claim one workflow step; submissions use normal runs API
+      operationId: postWorkshopContextidPause
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object }
+      responses:
+        "200":
+          description: Owner-scoped Workshop state or single submission claim
+        "400":
+          description: Invalid or missing explicit input
+        "401":
+          description: Authentication required
+        "403":
+          description: Role does not allow this mutation
+        "404":
+          description: No owned experiment or course asset
+        "409":
+          description: Frozen recipe, uncertain submission, or previously claimed step
+  /api/v1/duck/workshops/{contextId}/continue:
+    parameters:
+      - in: path
+        name: contextId
+        required: true
+        schema: { type: string, pattern: "^[A-Za-z0-9][A-Za-z0-9_.-]{0,95}$" }
+    post:
+      tags: [workspace]
+      summary: Record learner intent or claim one workflow step; submissions use normal runs API
+      operationId: postWorkshopContextidContinue
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object }
+      responses:
+        "200":
+          description: Owner-scoped Workshop state or single submission claim
+        "400":
+          description: Invalid or missing explicit input
+        "401":
+          description: Authentication required
+        "403":
+          description: Role does not allow this mutation
+        "404":
+          description: No owned experiment or course asset
+        "409":
+          description: Frozen recipe, uncertain submission, or previously claimed step
+  /api/v1/duck/workshops/{contextId}/claim/{phase}:
+    parameters:
+      - in: path
+        name: contextId
+        required: true
+        schema: { type: string, pattern: "^[A-Za-z0-9][A-Za-z0-9_.-]{0,95}$" }
+      - in: path
+        name: phase
+        required: true
+        schema: { type: string, enum: [train, evaluate] }
+    post:
+      tags: [workspace]
+      summary: Record learner intent or claim one workflow step; submissions use normal runs API
+      operationId: postWorkshopContextidClaimPhase
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object }
+      responses:
+        "200":
+          description: Owner-scoped Workshop state or single submission claim
+        "400":
+          description: Invalid or missing explicit input
+        "401":
+          description: Authentication required
+        "403":
+          description: Role does not allow this mutation
+        "404":
+          description: No owned experiment or course asset
+        "409":
+          description: Frozen recipe, uncertain submission, or previously claimed step
   /api/v1/duck/experiments/capabilities:
     get:
       tags: [workspace]

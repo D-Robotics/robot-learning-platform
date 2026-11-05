@@ -290,6 +290,35 @@ export function createExperimentSessions(options: {
     }
   };
   return {
+    async list(owner?: string) {
+      const dir = path.dirname(location(owner, 'inventory'));
+      let names: string[];
+      try {
+        names = await fs.readdir(dir);
+      } catch (e) {
+        if ((e as NodeJS.ErrnoException).code === 'ENOENT') return [];
+        throw e;
+      }
+      const items = [];
+      for (const name of names.filter((n) => n.endsWith('.json')).slice(-24)) {
+        if (!safeId(name.slice(0, -5))) continue;
+        const record = await read(path.join(dir, name));
+        if (record) {
+          let view: ExperimentView | null = null;
+          try {
+            view = await snapshot(record.reference, owner);
+          } catch (e) {
+            if (!(e instanceof ExperimentError) || ![404, 409].includes(e.status)) throw e;
+          }
+          items.push({
+            contextId: record.reference.contextId,
+            createdAt: record.reference.createdAt,
+            view,
+          });
+        }
+      }
+      return items.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+    },
     async remember(input: ExperimentInput, owner?: string) {
       if (
         !input ||

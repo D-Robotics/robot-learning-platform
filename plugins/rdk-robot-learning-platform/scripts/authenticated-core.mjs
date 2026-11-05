@@ -131,6 +131,51 @@ export async function connectAuthenticatedCore({
   let closed = false;
   return {
     authentication: auth,
+    async workshopSession(operation, input = {}, { signal } = {}) {
+      if (!['list', 'create', 'select', 'read'].includes(operation)) throw Error('课程操作无效。');
+      if (
+        ['select', 'read'].includes(operation) &&
+        !/^[A-Za-z0-9][A-Za-z0-9_.-]{0,95}$/.test(input.contextId ?? '')
+      )
+        throw Error('课程标识无效。');
+      const suffix =
+        operation === 'select'
+          ? '/' + encodeURIComponent(input.contextId) + '/select'
+          : operation === 'read'
+            ? '/' + encodeURIComponent(input.contextId)
+            : '';
+      const write = ['create', 'select'].includes(operation);
+      const response = await fetchPlatform('/api/v1/duck/workshops' + suffix, {
+        method: write ? 'POST' : 'GET',
+        headers: {
+          accept: 'application/json',
+          ...(write ? { 'content-type': 'application/json' } : {}),
+        },
+        ...(write ? { body: JSON.stringify(operation === 'select' ? {} : input) } : {}),
+        signal,
+      });
+      const chunks = [];
+      let size = 0;
+      if (response.body)
+        for await (const chunk of response.body) {
+          size += chunk.byteLength;
+          if (size > 65536) throw Error('课程回执超出预算。');
+          chunks.push(Buffer.from(chunk));
+        }
+      let value;
+      try {
+        value = JSON.parse(Buffer.concat(chunks).toString('utf8'));
+      } catch {
+        throw Error('课程接口没有返回有效回执。');
+      }
+      if (!response.ok || value.ok !== true || value.schemaVersion !== 1)
+        throw new PluginRequestError(
+          value.code ?? 'WORKSHOP_UNAVAILABLE',
+          value.message ?? '课程接口尚未就绪，请更新平台服务。',
+          { httpStatus: response.status },
+        );
+      return value;
+    },
     async experimentSession(operation, input = {}, { signal } = {}) {
       if (!['capabilities', 'remember', 'resume'].includes(operation))
         throw new PluginRequestError('EXPERIMENT_INVALID_OPERATION', '实验会话操作无效。');

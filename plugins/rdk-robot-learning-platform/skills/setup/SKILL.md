@@ -3,6 +3,15 @@ name: setup
 description: 连接当前机器人学习平台，确认正式身份与明确模型，再按真实工具能力执行训练与评测。
 ---
 
+用户说“带我开始 Workshop”“继续”或“看看效果”时优先使用 `rdk_workshop`，打开带按钮的工作台；不要先问预算或启动旧多工具编排。课程入口见 [体验流程](../experience-preparation/SKILL.md)。高级操作仍按用户明确请求处理。
+
+
+只咨询预算用途、计数单位或完成标准时，直接调用 `rdk_originman_course_brief`，逐字展示返回的两句 `studentReply` 后结束，不再读指南、目录或历史证据；用户明确追问依据再按需读引用。不能推算或编造计数倍率。
+
+
+OriginMan Workshop 训练先用 `rdk_originman_training_choice`：未选预算只问一个中文问题；已知快检/8192传quick，正式/50万传formal，不清楚传unknown并暂停。不要默认开训，也不因completed称效果通过。执行与结果标准见[训练技能](../training-runs/SKILL.md)，不重复读取已取得的指南。
+
+
 课堂准备、教学演示或解释证据，先使用[classroom-rehearsal](../classroom-rehearsal/SKILL.md)与本地 `rdk_classroom_guide`；仅阅读知识无需平台登录。Qoder安装使用 setup-qoder-macos.command / setup-qoder-windows.cmd，不修改Studio。
 
 这是自包含便携插件，不需要平台源码或 npm install。Windows双击setup-windows.cmd，macOS双击setup-macos.command；安装器会准备兼容运行时、生成配置并接入已初始化的Studio。其他宿主导入安装目录的.mcp.json。无须手写凭据。需要平台数据或真实任务时先调用 rdk_platform_status，确认目标平台、正式身份和工具目录；导入版本不等于连接已切换。宿主存在旧的同类 MCP 连接时，更新那条连接的启动配置，不绕过认证或随意添加重复连接。

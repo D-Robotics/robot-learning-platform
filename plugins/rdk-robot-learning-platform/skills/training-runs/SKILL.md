@@ -3,6 +3,20 @@ name: training-runs
 description: 在 RDK 学习平台选择任务、训练引擎与执行资源，提交训练并跟踪 Run、日志和重训建议；也支持仓库已有的模仿学习和强化学习 CLI。
 ---
 
+只咨询预算用途、计数单位或完成标准时，直接调用 `rdk_originman_course_brief`，逐字展示返回的两句 `studentReply` 后结束，不再读指南、目录或历史证据；用户明确追问依据再按需读引用。不能推算或编造计数倍率。
+
+
+## OriginMan 训练预算与结果口径
+
+进入 OriginMan Workshop 训练时，先调用 `rdk_originman_training_choice`。用户未选择预算时传空参数，只展示返回的一个中文选择题并等待；不要默认短训。已明确“快检/短训/8192”传 `choice=quick`，已明确“正式/50万”传 `choice=formal`，不重问。回答“不清楚”传 `choice=unknown` 并暂停，不能自动提交。用户说先不开始时只记录选择。
+
+预算单位是训练步：8192 步不是8192次优化或外层迭代。旧进度字段iteration也可能记录步数，按本引擎回执说明单位。
+
+8192 步快检只验训练→评测→回放链路，可能比基线差；50 万步正式效果实验用 `rdk_originman_train({contextId,timesteps:500000})` 和 `rdk_originman_evaluate`，不能落到固定短训工具。预算改变须新实验，原实验用工具返回引用恢复，不手抄或猜 UUID。完整 Workshop 仍先看基础 PD 参考，再按已选预算执行。
+
+分别报告：流程执行是否完成、同源仿真效果是否达到收益判据、实体效果是否验证。`completed` 仅说明执行结束。必须读取本轮 `rdk_originman_evaluation_read`，核对来源、两组条件与 original/tuned/rl 实际恢复数；`clearGain=false` 明确“效果未达标”，无评测或来源未核对保持待验证，仿真成功不代表真机成功。历史结果不能当本组成绩。正常回答三句以内加实验页链接；历史解释只在追问时读 [预算对照证据](../../references/workshop-training-evidence.md)，不要重复读整包。
+
+
 # 训练与 Run
 
 用户要求完整 OriginMan Workshop 时，使用 [体验流程](../experience-preparation/SKILL.md)：先实际运行参考仿真，再训练、同源评测、查看结果与回放。专用短训工具内部完成模型、manifest与资源校验，不需要下面的通用提交步骤。用户明确只要求训练时按其范围执行。

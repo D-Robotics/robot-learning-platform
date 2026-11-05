@@ -3,6 +3,12 @@ name: classroom-rehearsal
 description: Qoder课堂演练和新学员分步输入引导；新机器人不知道从哪开始、缺资料、通信或温升排查、解释证据时使用。先问一个待补问题，不要求学生填写SHA或密码。
 ---
 
+只咨询预算用途、计数单位或完成标准时，直接调用 `rdk_originman_course_brief`，逐字展示返回的两句 `studentReply` 后结束，不再读指南、目录或历史证据；用户明确追问依据再按需读引用。不能推算或编造计数倍率。
+
+
+OriginMan Workshop 训练先用 `rdk_originman_training_choice`：未选预算只问一个中文问题；已知快检/8192传quick，正式/50万传formal，不清楚传unknown并暂停。不要默认开训，也不因completed称效果通过。执行与结果标准见[训练技能](../training-runs/SKILL.md)，不重复读取已取得的指南。
+
+
 # 课堂逐项引导
 
 首先从用户当前话语和本轮上下文提取已知准备信息，调用一次 `rdk_classroom_guide({scenario,answers})`。例如已说“离线”，传 `answers.mode=offline`；已说“还没选模型”，传 `policyStatus=not-selected`。只传实际已知值，不猜。其输入schema声明选项；普通称呼用robotLabel，不把它当已核实robotId。

@@ -38,6 +38,7 @@
         <section aria-labelledby="reward-heading">
           <div class="section-heading"><h2 id="reward-heading">本次训练曲线</h2><span id="curve-caption">等待真实训练数据</span></div>
           <svg id="reward-chart" viewBox="0 0 720 240" role="img" aria-label="本次训练奖励曲线" hidden></svg>
+          <div id="curve-inspector" hidden><label for="curve-sample">查看曲线采样点</label><input id="curve-sample" type="range" min="0" max="0" value="0"><output id="curve-value" for="curve-sample" aria-live="polite"></output></div>
           <p id="curve-empty" class="empty-state">暂无训练曲线。不会使用参考曲线代替本次结果。</p>
         </section>
         <section aria-labelledby="comparison-heading">

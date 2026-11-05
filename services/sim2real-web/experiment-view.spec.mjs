@@ -205,3 +205,16 @@ test('terminal views stop streaming; active views clear reconnect labels after o
   streams[0].handlers.error();
   assert.equal(f.$('connection-status').textContent, '已连接本次实验');
 });
+
+test('curve inspector reads actual samples with keyboard-accessible range and training-step unit', async (t) => {
+  const f = await fixture(t);
+  const d = f.dom.window.document;
+  const input = d.getElementById('curve-sample');
+  assert.equal(input.max, '1');
+  input.value = '0';
+  input.dispatchEvent(new f.dom.window.Event('input'));
+  assert.match(d.getElementById('curve-value').textContent, /1 训练步.*-2\.000/);
+  input.value = '1';
+  input.dispatchEvent(new f.dom.window.Event('input'));
+  assert.match(d.getElementById('curve-value').textContent, /2 训练步.*4\.000/);
+});

@@ -46,6 +46,7 @@ fs.mkdirSync(path.join(out, 'scripts'), { recursive: true });
 const sources = {};
 for (const name of [
   'workshop-course.mjs',
+  'workshop-entry.mjs',
   'mcp-app-resource.mjs',
   'guided-input.mjs',
   'classroom-guide.mjs',
@@ -98,6 +99,7 @@ for (const name of [
   if (name.endsWith('.command')) fs.chmodSync(path.join(out, name), 0o755);
   sources[name] = sha(bytes);
 }
+fs.mkdirSync(path.join(out, 'references'), { recursive: true });
 for (const name of ['experience-profile.json', 'experience-profile-microduck.json'])
   fs.copyFileSync(
     path.join(root, 'plugins/rdk-robot-learning-platform/references', name),
@@ -134,7 +136,8 @@ const identity = {
   version: JSON.parse(
     fs.readFileSync(path.join(root, 'plugins/rdk-robot-learning-platform/plugin.json'), 'utf8'),
   ).version,
-  description: '通用机器人学习工作流：实验接续、训练、评测、回放与失败诊断；GPU默认、CPU显式选择。',
+  description:
+    '一句话开始 Workshop：下一步按钮、跨软件接续、交互曲线、对比与回放；保留自定义参数及高级工具。',
 };
 fs.writeFileSync(path.join(out, 'plugin.json'), JSON.stringify(identity, null, 2));
 for (const directory of ['.rdstudio-plugin', '.codex-plugin', '.qoder-plugin']) {

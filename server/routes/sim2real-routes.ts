@@ -145,6 +145,7 @@ import { registerSim2RealBoardStationRoutes } from './sim2real-board-station-rou
 import { registerSim2RealDeviceConnectionRoutes } from './sim2real-device-connection-routes.js';
 import { registerSim2RealWorkspaceRoutes } from './sim2real-workspace-routes.js';
 import { registerSim2RealExperimentRoutes } from './sim2real-experiment-routes.js';
+import { registerSim2RealWorkshopRoutes } from './sim2real-workshop-routes.js';
 import { registerSim2RealAuditRoutes } from './sim2real-audit-routes.js';
 import { deviceConnectionAgentUrl } from '../sim2real/board-tunnel-manager.js';
 import {
@@ -2408,6 +2409,11 @@ export function createSim2RealRouter(
       requestOwner: (request, response) => requestOwner(request, response, auth),
       storageError,
     },
+    { prefix },
+  );
+  registerSim2RealWorkshopRoutes(
+    router,
+    { requestOwner: (request, response) => requestOwner(request, response, auth) },
     { prefix },
   );
   registerSim2RealExperimentRoutes(

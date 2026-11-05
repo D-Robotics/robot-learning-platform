@@ -1,3 +1,4 @@
+import { trainingVerdict } from './workshop-course.mjs';
 /** Compose a lifecycle evidence report; never submits training or a deployment. */
 export const WORKFLOW_TOOLS = [
   {
@@ -81,11 +82,13 @@ export async function readOriginmanEvaluation(input, call) {
   )
     throw new Error('指定 Run 不是可核对的 OriginMan 评测。');
   let sourceVerified = false;
+  let requestedTimesteps = null;
   const sourceRunId = training.sourceRunId;
   if (typeof sourceRunId === 'string' && sourceRunId && sourceRunId !== run.runId) {
     try {
       const parent = await readRun(sourceRunId, true);
       const parentEvidence = parent?.metrics?.originmanWorkshop;
+      requestedTimesteps = parent?.training?.originmanWorkshop?.timesteps ?? null;
       sourceVerified =
         run.status === 'completed' &&
         run.mock === false &&
@@ -116,6 +119,12 @@ export async function readOriginmanEvaluation(input, call) {
         rlRecovered: s.rlRecovered ?? null,
       }))
     : [];
+  const assessment = trainingVerdict({
+    status: run.status,
+    sourceVerified,
+    clearGain: comparison?.clearGain,
+    suites,
+  });
   return {
     runId: run.runId,
     status: run.status,
@@ -124,8 +133,17 @@ export async function readOriginmanEvaluation(input, call) {
     sourceVerified,
     policySha256: evidence.policySha256 ?? null,
     hardwareEligible: evidence.hardwareEligible ?? null,
-    clearGain: sourceVerified ? (comparison?.clearGain ?? null) : null,
+    clearGain:
+      assessment.quality === 'met' ? true : assessment.quality === 'not-met' ? false : null,
     suites,
+    requestedTimesteps,
+    trainingPurpose:
+      requestedTimesteps === 8192
+        ? 'workflow-check'
+        : requestedTimesteps === 500000
+          ? 'formal-effect-experiment'
+          : 'other-or-unknown',
+    assessment,
     note: sourceVerified
       ? '来源与策略摘要已核对；读取已有记录，未重新计算或保存评测。'
       : '来源或策略摘要尚未核对；读取已有记录，未重新计算或保存评测。',

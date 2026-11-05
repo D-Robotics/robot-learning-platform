@@ -1,8 +1,8 @@
 {
   "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
   "name": "rdk-robot-learning-platform",
-  "version": "0.5.1",
-  "description": "RDK Robot Learning Platform 的平台插件：复用 Duck Lab MCP，覆盖工作区、仿真与轨迹、训练、评测、制品、受控部署、设备与运维。",
+  "version": "0.6.0",
+  "description": "一句话开始 Workshop：下一步按钮、当前实验跨软件接续、曲线对比与回放；保留自定义参数及高级机器人学习工具。",
   "author": {
     "name": "D-Robotics"
   },

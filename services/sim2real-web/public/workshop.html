@@ -1,0 +1,135 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>Workshop · RDK Robot Learning</title>
+    <link rel="stylesheet" href="./tokens.css" />
+    <link rel="stylesheet" href="./experiment.css" />
+    <link rel="stylesheet" href="./workshop.css" />
+    <script type="module" src="./workshop-page.mjs"></script>
+  </head>
+  <body>
+    <a class="skip-link" href="#workshop-main">跳到课程</a>
+    <header class="experiment-header">
+      <a href="./">RDK Robot Learning</a><span>OriginMan Workshop · 仅仿真</span
+      ><span id="connection-status" role="status">正在接续课程</span>
+    </header>
+    <main id="workshop-main" class="workshop-shell">
+      <div class="section-heading">
+        <h1>从这里开始，按你的节奏探索。</h1>
+        <button id="new-experiment" type="button" disabled>新实验</button
+        ><button id="history-toggle" type="button" aria-expanded="false">切换实验</button>
+      </div>
+      <p id="workshop-status" role="status">正在读取当前账号的课程。</p>
+      <div id="workshop-error" class="experiment-error" role="alert" hidden></div>
+      <section id="history" hidden aria-label="选择已有实验">
+        <h2>选择要继续的实验</h2>
+        <div id="history-list" class="workshop-actions"></div>
+        <p id="history-empty" hidden>
+          还没有课程实验。回到插件说“带我开始 Workshop”，会自动准备模型与算力。
+        </p>
+      </section>
+      <section id="reference-section" aria-labelledby="reference-heading" hidden>
+        <div class="section-heading">
+          <h2 id="reference-heading">1 · 看参考</h2>
+          <span>讲师参考，非本组训练结果</span>
+        </div>
+        <p>先看看机器人如何保持平衡和应对扰动。可以看完参考，也可以明确跳过。</p>
+        <video
+          id="reference-video"
+          controls
+          playsinline
+          preload="none"
+          aria-label="讲师参考回放"
+        ></video>
+        <p id="reference-status" role="status">点击播放参考。</p>
+        <div class="workshop-actions">
+          <a id="open-simulation" href="./?robot=originman#simulate" target="_blank" rel="noopener"
+            >自由探索参考仿真</a
+          ><button id="skip-reference" type="button">跳过参考，选择预算</button>
+        </div>
+      </section>
+      <section id="budget-section" hidden aria-labelledby="budget-heading">
+        <h2 id="budget-heading">2 · 选择一次预算</h2>
+        <p>开始后自动完成训练与同源评测，不自动扩大预算。关闭窗口后可在另一软件说“继续”。</p>
+        <div class="workshop-actions">
+          <button id="start-quick" type="button">开始快速体验 · 8192 步</button
+          ><button id="start-formal" type="button">选择正式效果实验 · 50 万步</button>
+        </div>
+        <p>快速体验用于熟悉流程，不保证策略提升；正式预算也以本轮实际评测为准。</p>
+        <details id="custom-recipe">
+          <summary>自由调整参数</summary>
+          <p>
+            新实验保留旧结果。其余配方固定为 SAC、4
+            环境、CUDA；更多引擎和平台功能仍可在聊天或主工作台使用。
+          </p>
+          <div class="workshop-fields">
+            <label
+              >训练步数
+              <input
+                id="custom-timesteps"
+                type="number"
+                min="4096"
+                max="1000000"
+                value="8192"
+                required /></label
+            ><label
+              >随机种子
+              <input
+                id="custom-seed"
+                type="number"
+                min="0"
+                max="1000000"
+                value="7"
+                required /></label
+            ><label
+              >训练侧推上限（N）
+              <input
+                id="custom-push"
+                type="number"
+                min="6.4"
+                max="9"
+                step="0.1"
+                value="8.1"
+                required
+            /></label>
+          </div>
+          <button id="review-custom" type="button">检查并选择此配方</button>
+        </details>
+        <div id="recipe-confirm" hidden>
+          <p id="recipe-confirm-text"></p>
+          <button id="confirm-recipe" type="button">按此预算开始训练与评测</button
+          ><button id="cancel-recipe" type="button">返回选择</button>
+        </div>
+      </section>
+      <section id="execution-section" hidden aria-labelledby="execution-heading">
+        <h2 id="execution-heading">3 · 训练与同源评测</h2>
+        <p id="execution-status" aria-live="polite"></p>
+        <div class="workshop-actions">
+          <button id="refresh-workshop" type="button">刷新原实验</button
+          ><button id="pause-workshop" type="button">暂停后续自动步骤</button
+          ><button id="continue-evaluation" type="button" hidden>继续同源评测</button
+          ><a id="open-run-details" href="./?robot=originman#train/runs">查看日志与运行记录</a>
+        </div>
+        <p>暂停不会取消已提交任务。失败或提交状态不明时只恢复原记录，不自动重训。</p>
+      </section>
+      <section id="result-section" hidden aria-labelledby="result-heading">
+        <h2 id="result-heading">4 · 看本次结果与回放</h2>
+        <p>训练完成、效果提升与回放播放分别记录。回放展示一个条件，不替代全部条件的评测。</p>
+        <a id="open-result" target="_blank" rel="noopener">单独打开本次实验</a
+        ><iframe
+          id="result-frame"
+          title="本次实验曲线、对比与回放"
+          loading="lazy"
+          allow="fullscreen"
+        ></iframe>
+      </section>
+      <details class="experiment-details">
+        <summary>技术详情</summary>
+        <pre id="workshop-diagnostics">尚未取得课程实验。</pre>
+      </details>
+      <p>随时回到聊天提问、解释结果或提出自定义实验；不会因为打开此页锁住其他工具。</p>
+    </main>
+  </body>
+</html>

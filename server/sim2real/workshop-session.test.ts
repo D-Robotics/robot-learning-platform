@@ -1,0 +1,140 @@
+import { describe, it, expect } from 'vitest';
+import fs from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
+import { createWorkshopSessions } from './workshop-session.js';
+describe('Workshop button workflow', () => {
+  it('requires explicit budget, serializes claims and never retries an uncertain write', async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'workshop-test-'));
+    const store = createWorkshopSessions({
+      root: () => root,
+      getRun: async () => null,
+      findRun: async () => null,
+      remember: async () => {},
+    });
+    try {
+      const draft = await store.create({ modelId: 'm', computeResourceId: 'r' }, 'alice');
+      expect(draft.training).toBeNull();
+      await expect(store.claim(draft.contextId, 'train', {}, 'alice')).rejects.toThrow();
+      const args = { timesteps: 8192, seed: 7, pushMaxForce: 8.1, reference: 'skipped' };
+      const claims = await Promise.allSettled([
+        store.claim(draft.contextId, 'train', args, 'alice'),
+        store.claim(draft.contextId, 'train', args, 'alice'),
+      ]);
+      expect(claims.filter((c) => c.status === 'fulfilled')).toHaveLength(1);
+      expect((await store.read(draft.contextId, 'alice')).stage).toBe('unknown');
+      await expect(store.claim(draft.contextId, 'train', args, 'alice')).rejects.toThrow();
+      await expect(store.read(draft.contextId, 'bob')).rejects.toThrow();
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+  it('keeps account current selection explicit and shared across fresh instances', async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'workshop-current-'));
+    const deps = {
+      root: () => root,
+      getRun: async () => null,
+      findRun: async () => null,
+      remember: async () => {},
+    };
+    try {
+      const a = createWorkshopSessions(deps);
+      const one = await a.create({ modelId: 'm', computeResourceId: 'r' }, 'alice');
+      await a.create({ modelId: 'm', computeResourceId: 'r' }, 'bob');
+      const fresh = createWorkshopSessions(deps);
+      expect((await fresh.current('alice'))?.contextId).toBe(one.contextId);
+      expect(await fresh.current('nobody')).toBeNull();
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('restoration and consent', () => {
+  it('recovers a lost reference from its exact owner-scoped idempotency key and preserves a paused evaluation', async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'workshop-recover-'));
+    const runs = new Map<string, any>();
+    const keys = new Map<string, any>();
+    const saved: any[] = [];
+    const deps = {
+      root: () => root,
+      getRun: async (id: string) => runs.get(id) ?? null,
+      findRun: async (key: string) => keys.get(key) ?? null,
+      remember: async (x: any) => {
+        saved.push(x);
+      },
+    };
+    try {
+      const store = createWorkshopSessions(deps),
+        draft = await store.create({ modelId: 'm', computeResourceId: 'r' }, 'alice');
+      await store.reference(draft.contextId, 'observed', 'alice');
+      expect((await createWorkshopSessions(deps).current('alice'))?.reference).toBe('observed');
+      const claim = await store.claim(
+        draft.contextId,
+        'train',
+        { timesteps: 8192, seed: 7, pushMaxForce: 8.1, reference: 'observed' },
+        'alice',
+      );
+      const run = {
+        id: 't',
+        modelId: 'm',
+        computeResourceId: 'r',
+        taskId: 'originman-recovery',
+        status: 'completed',
+        mock: false,
+        training: claim.submission.training,
+        metrics: { originmanWorkshop: { phase: 'train', policySha256: 'a'.repeat(64) } },
+      };
+      runs.set('t', run);
+      keys.set(draft.contextId + '-train', run);
+      expect((await store.read(draft.contextId, 'alice')).training?.runId).toBe('t');
+      await store.pause(draft.contextId, 'alice');
+      await expect(store.claim(draft.contextId, 'evaluate', {}, 'alice')).rejects.toThrow();
+      await store.continue(draft.contextId, 'alice');
+      const evaluation = await store.claim(draft.contextId, 'evaluate', {}, 'alice');
+      expect(evaluation.submission.training.originmanWorkshop.sourceRunId).toBe('t');
+      expect(evaluation.submission.training.originmanWorkshop.timesteps).toBe(8192);
+      expect(saved.some((s) => s.runId === 't')).toBe(true);
+      await expect(store.claim(draft.contextId, 'evaluate', {}, 'alice')).rejects.toThrow();
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+  it('cannot evaluate mock, failed, nonterminal or unverified training', async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'workshop-reject-'));
+    let run: any = null;
+    const store = createWorkshopSessions({
+      root: () => root,
+      getRun: async () => run,
+      findRun: async () => run,
+      remember: async () => {},
+    });
+    try {
+      const d = await store.create({ modelId: 'm', computeResourceId: 'r' }, 'alice');
+      const c = await store.claim(
+        d.contextId,
+        'train',
+        { timesteps: 8192, seed: 7, pushMaxForce: 8.1, reference: 'skipped' },
+        'alice',
+      );
+      for (const state of [
+        { status: 'running', mock: false },
+        { status: 'failed', mock: false },
+        { status: 'completed', mock: true },
+        { status: 'completed', mock: false },
+      ]) {
+        run = {
+          id: 't',
+          modelId: 'm',
+          computeResourceId: 'r',
+          taskId: 'originman-recovery',
+          training: c.submission.training,
+          ...state,
+        };
+        await expect(store.claim(d.contextId, 'evaluate', {}, 'alice')).rejects.toThrow();
+      }
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+});

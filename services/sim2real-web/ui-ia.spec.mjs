@@ -748,3 +748,15 @@ assert.ok(
   html.indexOf('capability-workbench.js') < html.indexOf('agent-chat.js'),
   'capability workbench loads before Agent integration',
 );
+
+const workshopPage = fs.readFileSync(path.join(here, 'public/workshop.html'), 'utf8');
+for (const id of [
+  'start-quick',
+  'start-formal',
+  'custom-recipe',
+  'pause-workshop',
+  'history-list',
+  'result-frame',
+])
+  assert.match(workshopPage, new RegExp('id="' + id + '"'));
+assert.doesNotMatch(workshopPage, /\son\w+\s*=|javascript:/i);

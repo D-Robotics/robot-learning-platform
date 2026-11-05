@@ -21,7 +21,7 @@ export async function startExperimentView({ document, location, fetchImpl = fetc
   const contextId = new URL(location.href).searchParams.get('context');
   const base = new URL('./api/v1/duck/', location.href);
   let view = null, stream = null, active = false, pending = false, disposed = false, generation = 0, refreshTimer = null;
-  let trainingId = null, evaluationId = null, latestRecord = null;
+  let trainingId = null, evaluationId = null, latestRecord = null, curvePoints = [], curveUnit = '训练步';
   const terminal = () => view && (['failed', 'blocked', 'cancelled', 'canceled'].includes(view.training?.status) ||
     view.training?.status === 'completed' && ['completed', 'failed', 'blocked', 'cancelled', 'canceled'].includes(view.evaluation?.status));
   const listeners = [];
@@ -33,7 +33,7 @@ export async function startExperimentView({ document, location, fetchImpl = fetc
     $('download-video').hidden = true; $('export-experiment').disabled = true;
     $('open-playback-page').hidden = true;
     $('video-empty').hidden = false; $('playback-status').textContent = '尚未播放';
-    $('curve-caption').textContent = '等待真实训练数据'; latestRecord = null;
+    $('curve-caption').textContent = '等待真实训练数据'; latestRecord = null;curvePoints=[];$('curve-inspector').hidden=true;
   };
   const fail = error => {
     clearResults();
@@ -69,9 +69,12 @@ export async function startExperimentView({ document, location, fetchImpl = fetc
     $('quality-status').textContent = view.clearGain === true ? '本次达到收益判据' : view.clearGain === false ? '本次未达到收益判据' : '效果尚未验证';
     $('experiment-diagnostics').textContent = JSON.stringify(view, null, 2);
   };
+  const inspectCurve = () => {const point=curvePoints[Number($('curve-sample').value)];if(point)$('curve-value').textContent=`${point.iteration} ${curveUnit} · 平均奖励 ${point.meanReward.toFixed(3)}`;};
+  listen('curve-sample','input',inspectCurve);
   const drawCurve = run => {
     const points = rewardPoints(run); const chart = $('reward-chart'); chart.replaceChildren();
     chart.toggleAttribute('hidden', points.length === 0); $('curve-empty').hidden = points.length !== 0;
+    $('curve-inspector').hidden=!points.length;curvePoints=points;curveUnit=run?.training?.originmanWorkshop||run?.metrics?.originmanWorkshop?'训练步':'记录步';$('curve-sample').max=String(Math.max(0,points.length-1));$('curve-sample').value=String(Math.max(0,points.length-1));inspectCurve();
     if (!points.length) return;
     const rewards = points.map(p => p.meanReward); const low = Math.min(...rewards), high = Math.max(...rewards);
     const left = 64, right = 696, top = 16, bottom = 208;
@@ -86,7 +89,7 @@ export async function startExperimentView({ document, location, fetchImpl = fetc
     svg('text', { class: 'reward-label', x: 8, y: 20 }, high.toFixed(1));
     svg('text', { class: 'reward-label', x: 8, y: bottom }, low.toFixed(1));
     svg('text', { class: 'reward-label', x: left, y: 232 }, '0');
-    svg('text', { class: 'reward-label', x: right, y: 232, 'text-anchor': 'end' }, max + ' 次迭代');
+    svg('text', { class: 'reward-label', x: right, y: 232, 'text-anchor': 'end' }, max + ' ' + curveUnit);
     $('curve-caption').textContent = (view.evidence === 'fixture' ? '测试数据 · ' : '引擎记录 · ') + points.length + ' 个采样点';
   };
   const drawComparison = run => {
