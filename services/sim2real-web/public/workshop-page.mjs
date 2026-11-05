@@ -123,6 +123,14 @@ export async function startWorkshop({
     $('confirm-recipe').disabled = busy;
   };
   const claimAndSubmit = async (phase, recipe = {}) => {
+    // A draft can outlive the resource health TTL; probe before consuming its
+    // durable submission claim, including after a long training run.
+    const health = await json(
+      'compute-resources/' + encodeURIComponent(session.computeResourceId) + '/test',
+      {},
+    );
+    if (health.connected !== true || health.computeResource?.status !== 'online')
+      throw Error('训练资源暂不可用，请检查连接后刷新原实验。');
     // A durable single claim is obtained before the only POST /runs. On a lost
     // response we only read: another tab or restarted host cannot submit twice.
     const claim = await json(
