@@ -178,7 +178,7 @@ export async function experimentContext(
     throw new Error('该实验已有其他评测；新的评测请使用新的实验标识。');
   const runId = savedTraining?.runId ?? input.runId;
   const evaluationRunId = savedEvaluation?.runId ?? input.evaluationRunId;
-  const getRun = async (id) => {
+  const getRun = async (id, requireParent = false) => {
     const result = await call('rdk_training_status', { runId: id });
     if (
       result?.runId !== id ||
@@ -188,6 +188,25 @@ export async function experimentContext(
       !result.modelId
     )
       throw new Error('平台未返回所请求Run的明确身份与状态。');
+    // Some platform versions omit request provenance from compact status replies.
+    // Hydrate only the exact Run; never infer a parent from a recent/global Run.
+    if (
+      requireParent &&
+      !evidence(result)?.sourceRunId &&
+      !result.sourceRunId &&
+      !result.training?.originmanWorkshop?.sourceRunId
+    ) {
+      const full = (await call('rdk_lineage_get', { runId: id }))?.lineage?.run;
+      if (full?.id !== id || full.modelId !== result.modelId || full.status !== result.status)
+        throw new Error('血缘与当前Run身份、模型或状态不一致；请重新读取原Run，不重新提交。');
+      validatePair(training, { ...full, runId: id });
+      return {
+        ...full,
+        ...result,
+        training: result.training ?? full.training,
+        sourceRunId: result.sourceRunId ?? full.sourceRunId,
+      };
+    }
     return result;
   };
   const training = await getRun(runId);
@@ -197,7 +216,7 @@ export async function experimentContext(
     training.training?.originmanWorkshop?.phase === 'evaluate'
   )
     throw new Error('请绑定训练Run，不能将评测Run当作训练。');
-  const evaluation = evaluationRunId ? await getRun(evaluationRunId) : null;
+  const evaluation = evaluationRunId ? await getRun(evaluationRunId, true) : null;
   const association = evaluation ? validatePair(training, evaluation) : null;
   const finalIdentity = await call('rdk_platform_status', {});
   if (

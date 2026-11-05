@@ -81,6 +81,12 @@ export function exportStudioPlugin({
     path.join(destination, '.rdstudio-plugin/plugin.json'),
     JSON.stringify(manifest, null, 2) + '\n',
   );
+  const { defaultEnabled: _defaultEnabled, ...qoderManifest } = manifest;
+  fs.mkdirSync(path.join(destination, '.qoder-plugin'), { recursive: true });
+  fs.writeFileSync(
+    path.join(destination, '.qoder-plugin/plugin.json'),
+    JSON.stringify(qoderManifest, null, 2) + '\n',
+  );
   fs.writeFileSync(path.join(destination, '.mcp.json'), JSON.stringify(mcp, null, 2) + '\n');
   const clientNameFor = (name) =>
     name.startsWith('rdk-platform-') ? name : `rdk-platform-${name}`;

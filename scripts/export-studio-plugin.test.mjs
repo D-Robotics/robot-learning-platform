@@ -14,6 +14,12 @@ test('native Studio export contains discoverable namespaced teaching skills and 
     fs.readFileSync(path.join(output, '.rdstudio-plugin/plugin.json'), 'utf8'),
   );
   assert.equal(manifest.skills, './skills');
+  const qoder = JSON.parse(fs.readFileSync(path.join(output, '.qoder-plugin/plugin.json'), 'utf8'));
+  assert.equal(qoder.name, manifest.name);
+  assert.equal(qoder.version, manifest.version);
+  assert.equal(qoder.mcpServers, './.mcp.json');
+  assert.equal(qoder.skills, './skills');
+  assert.ok(!('defaultEnabled' in qoder));
   const skills = fs.readdirSync(path.join(output, 'skills')).sort();
   assert.ok(skills.includes('rdk-platform-setup'));
   assert.ok(skills.includes('rdk-platform-training-runs'));

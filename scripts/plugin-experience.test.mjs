@@ -337,6 +337,12 @@ test('experience MCP preserves upstream tools, results and errors and exposes gu
   const init = await proxy('initialize');
   assert.equal(init.serverInfo.name, 'original');
   assert.ok(init.instructions.startsWith('original'));
+  assert.match(init.instructions, /当前进度→本次结果→下一步/);
+  assert.match(init.instructions, /仍可只读查询原Run/);
+  assert.doesNotMatch(
+    init.instructions,
+    /先rdk_auth_status显示实际版本|默认先一次流程检查并展示状态表/,
+  );
   const list = await proxy('tools/list');
   assert.deepEqual(list.tools[0], original);
   assert.equal(list.tools.length, 14);
@@ -344,6 +350,12 @@ test('experience MCP preserves upstream tools, results and errors and exposes gu
   assert.ok(list.tools.some((t) => t.name === 'rdk_training_wait'));
   const guide = await proxy('tools/call', { name: 'rdk_experience_guide' });
   assert.match(guide.structuredContent.guide, /场景准备/);
+  assert.equal(
+    guide.structuredContent.learnerInterface.entryPrompt,
+    '带我完成 OriginMan Workshop。',
+  );
+  assert.equal(guide.structuredContent.learnerInterface.inlineAppAvailable, false);
+  assert.equal(guide.structuredContent.learnerInterface.diagnostics, 'on-demand');
   const passthrough = await proxy('tools/call', {
     name: 'existing_write_tool',
     arguments: { x: 1 },

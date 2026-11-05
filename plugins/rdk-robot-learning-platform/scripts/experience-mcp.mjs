@@ -228,9 +228,11 @@ export function experienceProxy(
         instructions:
           (result.instructions ?? '') +
           '\n认证：先读platform_status。未认证时调用rdk_auth_login取得浏览器登录确认入口；请用户在浏览器登录并确认验证码，然后调用rdk_auth_status完成连接，不索取密码或Cookie。Studio使用宿主绑定的当前身份，未登录时请在Studio账号菜单登录，不扫描其他账号、不静默切换。' +
-          '\nOriginMan短训练→评测→回放的唯一默认路径：先rdk_auth_status显示实际版本，再rdk_experience_guide取得operation.contextId，再rdk_originman_short_train({contextId})，不要额外传modelId或computeResourceId：工具自行匹配课程与宿主资源配置；它已负责完整manifest校验、当前账号模型/资源选择与参数冻结，不再调用experience_prepare、workshop_catalog或手工拼training_submit。用training_wait查询返回Run至终态；失败停止，不换键不换资源不重试。成功才rdk_originman_short_evaluate({contextId})，等待它的Run完成后experiment_resume({contextId})核对摘要，用rdk_originman_evaluation_read读取本次评测的基线对比，取webm回放入口，并用宿主打开一次。所有MP4/WebM媒体链接禁止web_fetch、网页正文抓取、fetch HEAD、curl或独立浏览器认证探测；没有播放器观测能力时直接收尾，标明已打开但播放需宿主验收，不能启动抓取等待。用户一句话足够授权此8192步仅仿真短流程。先调用rdk_auth_status并显示pluginRuntime.version和认证模式，版本摘要不匹配立即停止。短训错误stopWorkflow=true时立即收尾，只报告尚未提交及下一步由课程维护者更新；禁止查文档、重复尝试、手拼manifest或改用其他写工具。只有*_SELECTION_REQUIRED才按名称询问一次，保留原contextId。展示检查→训练→评测→回放进度；回答只给中文结论、指标和未验证项，不输出内部推理、英文草稿或清单自言自语。' +
-          '\n用户一句话要求OriginMan短训练、效果对比和回放时，先读rdk_experience_guide的shortTraining，按其配方和步骤执行；不要要求用户写技术参数或UUID。等待使用rdk_training_wait，不启动shell或后台sleep。' +
-          '\n实验接续：提交训练后，用新的明确 contextId 调 rdk_experiment_remember 保存返回的训练Run；提交评测后以同一contextId、训练Run和评测Run补关联。用户说“继续刚才实验”时调用 rdk_experiment_resume；只有明确知道该contextId才恢复，歧义时询问，不选全局最新Run。等待、断线、404或blocked不自动重交训练；新训练使用新contextId。回放入口仍需宿主实际打开与确认播放，不能根据链接生成声称已播放。MP4不调用网页正文抓取；超时不代表401或登录墙。没有播放器观测能力就报告未自动核验，不为视频验证申请新系统权限。OriginMan的evaluate Run不是独立evaluation实体，不套用evaluationId接口。\n非OriginMan短训场景可调用 rdk_experience_guide 与 rdk_experience_prepare；可按用户目标自由组合步骤。工具准备成功不表示仿真已经运行。仿真、训练、调优、部署的全流程状态用 rdk_workflow_inspect 读取并展示 markdown 表格；未取得证据保持待验证。新提交训练前用 rdk_training_prepare 同时刷新资源健康和任务环境，预检结果不是训练结果；已提交任务只按 Run ID 查询。默认先一次流程检查并展示状态表；有明确阻塞时先解释和恢复，不为了凑齐工具而展开大量无关查询。指定 Run 的结论必须绑定同一 Run 和摘要，不借用全局 golden_path 或其他 Run 的通过状态；用户需要时再展开明细。\n本次原生计算配置：' +
+          '\n交互约定：默认简短中文，按“当前进度→本次结果→下一步”回答。认证、版本、契约和资源校验在后台完成，正常时不逐项播报。只在阶段变化、阻断或需要用户选择时更新；不重复播报running，不展示内部推理。UUID、工具名、摘要和错误码仅在用户查看诊断时展开。正常结果优先给曲线、对比图和回放入口；宿主能打开工作台则在工作台展示，否则给可点击链接。没有实际渲染能力不伪装交互卡片，没有播放器观测不称已播放。' +
+          '\n用户说“带我完成OriginMan Workshop”或明确要求短训练、评测和回放，即授权8192步仅仿真流程；仅介绍或咨询不提交。后台先rdk_auth_status核对认证及pluginRuntime，再rdk_experience_guide取得operation.contextId，依次rdk_originman_short_train、rdk_training_wait、rdk_originman_short_evaluate、rdk_training_wait、rdk_experiment_resume及rdk_originman_evaluation_read。只传专用工具要求的标识，模型、manifest和绑定资源由工具校验，不重复调用prepare/catalog或手拼training_submit。不要让用户填写UUID。只有未登录、明确选择歧义或真实阻断才提问。宿主已绑定课程资源时沿用它，不按名称猜其他机器。' +
+          '\n等待：沿用同一Run及nextPollArguments，正常等待窗口结束继续读；不启动shell sleep。失败或stopWorkflow=true停止所有自动提交，不换标识、资源或参数重交；仍可只读查询原Run、日志及恢复已有引用。SUBMISSION_REFERENCE_SAVE_FAILED表示任务已经提交，保留回执并恢复，绝不能说尚未提交。' +
+          '\n实验接续：通用流程提交后用明确contextId保存训练及同源评测引用；专用短训工具已保存，无需重复。跨聊天或软件继续时使用明确实验标识调用experiment_resume，并重新验证当前平台和账号；不选择全局最新Run，不扫描其他账号。本机引用不等于跨机器同步。404、网络失败和断线不触发重交。新实验使用新contextId，调参须用户明确提出。' +
+          '\n结果：只展示本次Run的真实original/tuned/rl对比；执行完成、质量提升和真机资格分别判断，短训不承诺提升。回放用resume的links.video由宿主打开一次，OriginMan不调用真机rdk_replay_video或evaluationId接口；媒体链接不做正文抓取、HEAD、curl或独立浏览器认证探测。没有观测就报告播放待验证。一般流程用workflow_inspect按需看证据，不默认打印整张技术状态表；新训练前training_prepare刷新资源。默认GPU，CPU须明确选择，不自动降级、不操作真机。\n本次原生计算配置：' +
           clientContext().nativeCompute.configuration +
           '。宿主接口缺失时不要要求已经在桌面中的用户重复“去桌面操作”；用指南中的 clientContext 说明实际缺口。',
       };
@@ -352,6 +354,16 @@ export function experienceProxy(
         } else if (params.name === 'rdk_experience_guide')
           payload = {
             clientContext: clientContext(),
+            learnerInterface: {
+              entryPrompt: '带我完成 OriginMan Workshop。',
+              locale: 'zh-CN',
+              responseOrder: ['当前进度', '本次结果', '下一步'],
+              notifyOn: ['stage-change', 'blocked', 'selection-required', 'completed'],
+              diagnostics: 'on-demand',
+              preferredSurfaces: ['host-workbench', 'browser-link', 'concise-text'],
+              inlineAppAvailable: false,
+              note: '本版尚未提供MCP Apps资源；可交互工作台是否嵌入由宿主实际能力决定。',
+            },
             shortTraining: {
               intent:
                 '一句话要求OriginMan短训练、对比效果和回放时使用；无需用户提供UUID或技术参数。',
@@ -360,6 +372,9 @@ export function experienceProxy(
               manifestSource:
                 'bundled-reference-contract; verify against registered model, not retrieved registration',
               courseResourceConfigured: Boolean(env.RDK_WORKSHOP_COMPUTE_RESOURCE_ID),
+              resourceSelection: env.RDK_WORKSHOP_COMPUTE_RESOURCE_ID
+                ? 'host-bound; do not select a different resource by name'
+                : 'explicit-selection-if-ambiguous',
               operation: (() => {
                 const id = operationId;
                 return {
@@ -392,7 +407,7 @@ export function experienceProxy(
                 '第三步：rdk_originman_short_evaluate({contextId:同一标识})；只允许已完成训练，自动冻结sourceRunId、groupId与参数。用rdk_training_wait及返回的nextPollArguments接续等待同一评测Run至终态。',
                 '第四步：rdk_experiment_resume({contextId:同一标识})，核对本次父Run与摘要，展示original/tuned/rl实际对比。用宿主打开其links.video一次；rdk_replay_video只适用于真机遥测，本课程禁止调用。MP4/WebM禁止网页正文抓取、独立HTTP探测或新浏览器登录测试。打开后直接收尾，播放器由宿主实际观察，不循环验证。',
                 '只输出简短中文四步进度与真实对比；不主动提出延长训练、换seed或复用contextId调优，不推测效果差的原因。调优必须由用户明确要求并建立新实验。短训不保证提升，未做真机。',
-                'stopWorkflow=true立即停止并解释维护者需处理的问题；不要反复查询、拼manifest或改用其他提交工具。多个资源仅按名称选择；宿主已配置课程资源时沿用它，不换机。',
+                'stopWorkflow=true停止自动写入并解释阻断；已提交任务可只读查询原Run、日志和恢复引用，禁止重交、拼manifest或改用其他提交工具。多个资源仅按名称选择；宿主已配置课程资源时沿用它，不换机。',
               ],
             },
             guide:

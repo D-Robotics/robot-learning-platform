@@ -144,7 +144,7 @@ const identity = {
   description: '通用机器人学习工作流：实验接续、训练、评测、回放与失败诊断；GPU默认、CPU显式选择。',
 };
 fs.writeFileSync(path.join(out, 'plugin.json'), JSON.stringify(identity, null, 2));
-for (const directory of ['.rdstudio-plugin', '.codex-plugin']) {
+for (const directory of ['.rdstudio-plugin', '.codex-plugin', '.qoder-plugin']) {
   fs.mkdirSync(path.join(out, directory), { recursive: true });
   fs.writeFileSync(
     path.join(out, directory, 'plugin.json'),
@@ -154,7 +154,7 @@ for (const directory of ['.rdstudio-plugin', '.codex-plugin']) {
         displayName: 'RDK Robot Learning Platform',
         mcpServers: './.mcp.json',
         skills: './skills',
-        defaultEnabled: true,
+        ...(directory === '.qoder-plugin' ? {} : { defaultEnabled: true }),
       },
       null,
       2,

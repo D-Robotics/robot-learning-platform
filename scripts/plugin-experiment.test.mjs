@@ -180,6 +180,92 @@ test('queued evaluation can be saved from explicit requested parent, then must r
   );
 });
 
+test('compact queued status restores the exact evaluation parent through lineage without resubmitting', async (t) => {
+  const f = fixture(t);
+  const call = async (name, args) => {
+    if (name === 'rdk_training_status' && args.runId === 'eval')
+      return { runId: 'eval', modelId: 'model', status: 'queued', metrics: {} };
+    if (name === 'rdk_lineage_get') {
+      f.calls.push({ name, args });
+      assert.deepEqual(args, { runId: 'eval' });
+      return {
+        lineage: {
+          run: {
+            id: 'eval',
+            modelId: 'model',
+            status: 'queued',
+            training: { originmanWorkshop: { phase: 'evaluate', sourceRunId: 'train' } },
+          },
+        },
+      };
+    }
+    return f.call(name, args);
+  };
+  const result = await experimentContext(
+    'remember',
+    {
+      contextId: 'compact',
+      runId: 'train',
+      evaluationRunId: 'eval',
+    },
+    call,
+    { directory: f.directory },
+  );
+  assert.equal(result.evaluation.runId, 'eval');
+  assert.equal(result.association.executionVerified, false);
+  assert.equal(result.links.video, undefined);
+  const resumed = await experimentContext('resume', { contextId: 'compact' }, call, {
+    directory: f.directory,
+  });
+  assert.equal(resumed.evaluation.runId, 'eval');
+  assert.ok(
+    f.calls.every((c) =>
+      ['rdk_platform_status', 'rdk_training_status', 'rdk_lineage_get'].includes(c.name),
+    ),
+  );
+});
+
+test('compact status never adopts lineage from another Run, model, state or parent', async (t) => {
+  for (const wrong of [
+    { id: 'foreign' },
+    { modelId: 'foreign' },
+    { status: 'completed' },
+    { training: { originmanWorkshop: { phase: 'evaluate', sourceRunId: 'foreign' } } },
+  ]) {
+    const f = fixture(t);
+    const call = async (name, args) => {
+      if (name === 'rdk_training_status' && args.runId === 'eval')
+        return { runId: 'eval', modelId: 'model', status: 'queued' };
+      if (name === 'rdk_lineage_get')
+        return {
+          lineage: {
+            run: {
+              id: 'eval',
+              modelId: 'model',
+              status: 'queued',
+              training: { originmanWorkshop: { phase: 'evaluate', sourceRunId: 'train' } },
+              ...wrong,
+            },
+          },
+        };
+      return f.call(name, args);
+    };
+    await assert.rejects(
+      experimentContext(
+        'remember',
+        {
+          contextId: 'wrong',
+          runId: 'train',
+          evaluationRunId: 'eval',
+        },
+        call,
+        { directory: f.directory },
+      ),
+    );
+    assert.equal(fs.readdirSync(f.directory).length, 0);
+  }
+});
+
 test('failed evaluation without a digest preserves its actual failure and original log target', async (t) => {
   const f = fixture(t);
   f.state.status = 'completed';
