@@ -160,6 +160,12 @@ test('one prompt opens ready state; reference and explicit quick button drive on
     assert.equal(d.getElementById('workshop-step-result').getAttribute('aria-current'), 'step');
     d.getElementById('go-results').click();
     assert.equal(d.activeElement.id, 'result-section');
+    d.getElementById('workshop-step-reference').click();
+    assert.equal(d.getElementById('reference-section').hidden, false);
+    d.getElementById('reference-video').dispatchEvent(new f.dom.window.Event('ended'));
+    await settle();
+    assert.equal(f.calls.filter((x) => x.p.endsWith('/reference')).length, 1);
+    assert.equal(f.calls.filter((x) => x.p === 'runs').length, 2);
   } finally {
     c.dispose();
     f.dom.window.close();

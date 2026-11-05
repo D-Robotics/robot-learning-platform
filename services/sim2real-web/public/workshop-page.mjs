@@ -19,6 +19,7 @@ export async function startWorkshop({
     disposed = false,
     halted = false,
     reference = null,
+    referenceExpanded = false,
     pendingRecipe = null,
     frameObserver = null;
   const validId = (v) => typeof v === 'string' && /^[A-Za-z0-9][A-Za-z0-9_.-]{0,95}$/.test(v);
@@ -74,7 +75,9 @@ export async function startWorkshop({
   const show = () => {
     const ready = session?.stage === 'ready';
     if (ready && ['observed', 'skipped'].includes(session.reference)) reference = session.reference;
-    $('reference-section').hidden = !ready || Boolean(reference);
+    $('reference-section').hidden = !session || (!(ready && !reference) && !referenceExpanded);
+    $('skip-reference').hidden = !ready || Boolean(reference);
+    $('skip-reference').disabled = busy || selecting;
     $('budget-section').hidden = !ready || !reference;
     $('execution-section').hidden = !session || ready;
     $('result-section').hidden = !session?.training;
@@ -91,7 +94,7 @@ export async function startWorkshop({
     for (const [i, name] of ['reference', 'budget', 'execution', 'result'].entries()) {
       const b = $('workshop-step-' + name);
       b.disabled = busy || selecting || !session ||
-        (i < 2 ? !ready : !session.training);
+        (i === 1 ? !ready : i > 1 ? !session.training : false);
       b.dataset.state = i < step ? 'done' : i === step ? 'current' : 'waiting';
       if (session && i === step) b.setAttribute('aria-current', 'step');
       else b.removeAttribute('aria-current');
@@ -99,7 +102,7 @@ export async function startWorkshop({
     $('go-results').disabled = !session?.training;
     $('go-results').textContent = session?.stage === 'results' ? '查看对比与回放 ↓' : '查看实时曲线 ↓';
     $('active-recipe').textContent = session?.recipe
-      ? `${session.recipe.timesteps.toLocaleString('zh-CN')} 步 · seed ${session.recipe.seed} · 侧推 ${session.recipe.pushMaxForce} N`
+      ? `${session.recipe.timesteps.toLocaleString('zh-CN')} 步 · 随机种子 ${session.recipe.seed} · 侧推 ${session.recipe.pushMaxForce} N`
       : '';
     $('workshop-status').textContent =
       session?.nextAction ?? '选择一个实验继续，或回到插件开始课程。';
@@ -167,7 +170,8 @@ export async function startWorkshop({
   });
   for (const name of ['reference', 'budget', 'execution', 'result'])
     listen('workshop-step-' + name, 'click', () => {
-      if (name === 'reference' && session?.stage === 'ready') $('reference-section').hidden = false;
+      referenceExpanded = name === 'reference';
+      show();
       reveal(name === 'result' ? 'result-section' : name + '-section');
     });
   listen('go-results', 'click', () => reveal('result-section'));
@@ -243,6 +247,7 @@ export async function startWorkshop({
     contextId = id;
     session = null;
     reference = null;
+    referenceExpanded = false;
     pendingRecipe = null;
     $('recipe-confirm').hidden = true;
     $('reference-status').textContent = '点击播放参考。';
@@ -308,6 +313,7 @@ export async function startWorkshop({
         })
       ).session;
       reference = 'observed';
+      referenceExpanded = false;
       $('reference-status').textContent = '参考播放已结束。现在选择一次预算。';
       show();
       reveal('budget-section');
@@ -318,6 +324,7 @@ export async function startWorkshop({
   });
   listen('skip-reference', 'click', () =>
     run(async () => {
+      if (busy || selecting || session?.stage !== 'ready' || reference) return;
       session = (
         await json('workshop-sessions/' + encodeURIComponent(contextId) + '/reference', {
           reference: 'skipped',
