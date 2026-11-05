@@ -1,3 +1,4 @@
+import { createPlaybackPlan } from './playback-plan.mjs';
 /** Durable references only. Platform reads remain the authority for identity and Run access. */
 import fs from 'node:fs';
 import path from 'node:path';
@@ -354,7 +355,7 @@ export async function experimentContext(
     /^[a-f0-9]{64}$/.test(video?.sha256 ?? '') &&
     Number.isSafeInteger(video?.bytes) &&
     video.bytes > 0;
-  return {
+  const result = {
     contextId: input.contextId,
     observedAt: new Date().toISOString(),
     ...(serverView ? { view: serverView } : {}),
@@ -442,4 +443,5 @@ export async function experimentContext(
       hardwareCommandSent: false,
     },
   };
+  return { ...result, playbackPlan: createPlaybackPlan(result) };
 }

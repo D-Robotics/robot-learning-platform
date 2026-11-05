@@ -47,6 +47,7 @@ const sources = {};
 for (const name of [
   'workshop-course.mjs',
   'workshop-entry.mjs',
+  'playback-plan.mjs',
   'mcp-app-resource.mjs',
   'guided-input.mjs',
   'classroom-guide.mjs',
