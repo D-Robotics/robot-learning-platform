@@ -740,7 +740,6 @@ export function experienceProxy(
             {
               type: 'text',
               text:
-                payload.studentReply != null ||
                 params.name === 'rdk_plugin_status' ||
                 (params.name === 'rdk_classroom_guide' && params.arguments?.detail !== 'full')
                   ? payload.studentReply

@@ -466,7 +466,12 @@ test('actual stdio wrapper returns a failed evaluation as diagnostic data and re
       runId: 'foreign',
     });
     assert.equal(rejected.isError, true);
-    const recovered = readToolResult(await call('rdk_experiment_resume', { contextId: 'stdio' }));
+    const rawRecovered = await call('rdk_experiment_resume', { contextId: 'stdio' });
+    const textOnly = JSON.parse(rawRecovered.content.find((c) => c.type === 'text').text);
+    assert.equal(textOnly.training.runId, 'train');
+    assert.equal(textOnly.evaluation.runId, 'eval');
+    assert.ok(textOnly.studentReply);
+    const recovered = readToolResult(rawRecovered);
     assert.equal(recovered.training.runId, 'train');
     assert.equal(recovered.evaluation.runId, 'eval');
     assert.equal(recovered.execution.trainingSubmitted, false);
