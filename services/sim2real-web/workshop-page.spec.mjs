@@ -124,6 +124,9 @@ test('one prompt opens ready state; reference and explicit quick button drive on
     d.getElementById('start-quick').click();
     await settle();
     assert.equal(f.calls.filter((x) => x.p === 'runs').length, 1);
+    d.getElementById('reference-video').dispatchEvent(new f.dom.window.Event('ended'));
+    await settle();
+    assert.equal(f.calls.filter((x) => x.p.endsWith('/reference')).length, 1);
     await f.tick();
     await f.tick();
     const writes = f.calls.filter((x) => x.p === 'runs');

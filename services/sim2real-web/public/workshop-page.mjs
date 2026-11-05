@@ -239,6 +239,7 @@ export async function startWorkshop({
   ).href;
   listen('reference-video', 'ended', () =>
     run(async () => {
+      if (busy || selecting || session?.stage !== 'ready' || reference === 'observed') return;
       session = (
         await json('workshop-sessions/' + encodeURIComponent(contextId) + '/reference', {
           reference: 'observed',
