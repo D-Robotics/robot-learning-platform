@@ -64,7 +64,7 @@ export const SHORT_TRAINING_TOOLS = [
   {
     name: 'rdk_originman_short_train',
     description:
-      '学员要求OriginMan短训练时使用。自动核对完整manifest、当前账号的课程模型和明确资源；首次会在资源就绪后登记课程模型，固定8192步SAC+CUDA配方并提交一次，保存实验引用。相同contextId复用幂等键；拒绝/失败不改参数不换资源重试。仅仿真。',
+      '学员要求OriginMan短训练时使用；完整Workshop先按experience_guide实际观察基础PD参考，再调用此训练步骤。自动核对完整manifest、当前账号的课程模型和明确资源；首次会在资源就绪后登记课程模型，固定8192步SAC+CUDA配方并提交一次，保存实验引用。相同contextId复用幂等键；拒绝/失败不改参数不换资源重试。仅仿真。',
     inputSchema: trainSchema,
     annotations: { readOnlyHint: false, destructiveHint: false },
   },

@@ -589,6 +589,7 @@ export function experienceProxy(
                 },
               },
               steps: [
+                '完整Workshop先做参考观察：由宿主打开course.links.simulation，在页面启动基础PD并实际观察运行，再执行下面的训练。仅打开入口不算观察完成；没有页面操作或观察能力时先明确由学员完成此步，不先训练再补看。用户明确只要求训练时按其范围执行。',
                 '第一步：只传contextId调用rdk_originman_short_train({contextId:operation.contextId})，不要复制manifest.modelId或自行挑资源。此工具执行完整manifest校验、当前账号课程模型/明确资源匹配、健康检查、必填参数装配与单次提交。不要手工重复model_validate或training_submit，不调用experience_prepare/workshop_catalog。',
                 '第二步：首次rdk_training_wait({runId:返回的submission.runId})；若仍在运行，下次必须原样使用该回执nextPollArguments接续查询（含pollCursor），直到completed。等待窗口正常结束不是超时错误。失败立即停止，不换contextId、资源或参数重试。',
                 '第三步：rdk_originman_short_evaluate({contextId:同一标识})；只允许已完成训练，自动冻结sourceRunId、groupId与参数。用rdk_training_wait及返回的nextPollArguments接续等待同一评测Run至终态。',

@@ -7,7 +7,7 @@ description: 连接当前机器人学习平台，确认正式身份与明确模�
 
 这是自包含便携插件，不需要平台源码或 npm install。Windows双击setup-windows.cmd，macOS双击setup-macos.command；安装器会准备兼容运行时、生成配置并接入已初始化的Studio。其他宿主导入安装目录的.mcp.json。无须手写凭据。需要平台数据或真实任务时先调用 rdk_platform_status，确认目标平台、正式身份和工具目录；导入版本不等于连接已切换。宿主存在旧的同类 MCP 连接时，更新那条连接的启动配置，不绕过认证或随意添加重复连接。
 
-训练与评测先读 ../training-runs/SKILL.md。OriginMan 的登记材料在 ../../references/originman-manifest.json；使用真实原文，不补造 manifest。模型列表若只有 ID，读取明确任务的运行记录和对应血缘确认模型与契约，不按顺序猜、不误用 MicroDuck。不具备读取引用文件的宿主，应请用户选明确模型，不能假装已经读到文件。
+用户说“带我完成 OriginMan Workshop”时，直接使用 [体验流程](../experience-preparation/SKILL.md)。专用工具内部读取课程登记材料并校验，不要求学员填写manifest或UUID。普通训练、CLI或高级配方再读 [训练技能](../training-runs/SKILL.md)；手工登记时使用真实manifest，不自造字段。
 
 任何新机器人接入或换机验收，先使用[逐机验收技能](../robot-acceptance/SKILL.md)；本地指南和证据字段审查无需平台登录，平台数据再按账号连接。
 

@@ -1,19 +1,15 @@
 ---
 name: training-runs
-description: 在 RDK 学习平台选择任务、训练引擎与执行资源，提交训练并跟踪 Run、日志和重训建议；也支持仓库已有的模仿学习和强化学习 CLI；验收 Workshop 从零到一的软件学习链路。
+description: 在 RDK 学习平台选择任务、训练引擎与执行资源，提交训练并跟踪 Run、日志和重训建议；也支持仓库已有的模仿学习和强化学习 CLI。
 ---
 
 # 训练与 Run
 
-OriginMan 一句话短训优先使用专用流程，不能套用下方通用 training_submit 步骤。
-先核对 rdk_auth_status 的认证和 pluginRuntime.version，再读 rdk_experience_guide。
-同一 contextId 依次 short_train、training_wait、short_evaluate、training_wait、experiment_resume、宿主打开视频。
-错误 stopWorkflow=true 时立即结束，说明尚未提交及由课程维护者更新插件；不查文档、不拼 manifest、
-不注册替代模型、不换 contextId 或资源重试。只有选择错误才按名称向学员询问一次。
-分四步简短报告进度，最终给可点击的 Markdown 回放链接、实际对比和未验证项。
+用户要求完整 OriginMan Workshop 时，使用 [体验流程](../experience-preparation/SKILL.md)：先实际运行参考仿真，再训练、同源评测、查看结果与回放。专用短训工具内部完成模型、manifest与资源校验，不需要下面的通用提交步骤。用户明确只要求训练时按其范围执行。
 
+收到 stopWorkflow=true 后停止新提交；已有 Run 继续按原引用只读恢复，未取得提交回执则保持未知。不能把引用保存失败说成尚未提交，不能换 contextId、资源或参数重交。普通结果使用 studentReply，技术明细按需展开。
 
-验收 Workshop 从零到一时，先读 [分层验收流程](../../references/workshop-acceptance.md)，分别报告软件执行、策略闭环、板端纯计算和实体运动。
+平台或硬件交付类验收才读取 [分层验收流程](../../references/workshop-acceptance.md)。OriginMan 仿真课程不要求板端纯计算或实体运动验收。
 
 交付单次可追踪的训练请求和 Run 状态，完成时绑定真实产物。读 [训练/评测/部署契约](../../references/workflow-contracts.md)；参数查 [工具目录](../../references/tool-catalog.md)。
 
