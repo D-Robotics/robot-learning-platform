@@ -37,6 +37,37 @@ import {
 import { ROBOT_ONBOARDING_TOOLS, onboardingGuide, assessOnboarding } from './robot-onboarding.mjs';
 import { CLASSROOM_TOOLS, classroomGuide } from './classroom-guide.mjs';
 
+/** Learner text uses the same verified facts; full diagnostics remain structured. */
+export function experimentStudentReply(payload) {
+  const result = payload.experiment ?? payload;
+  const training = result.training,
+    evaluation = result.evaluation;
+  if (!training) return null;
+  if (payload.stopWorkflow) return '流程已暂停，保留原任务。先核对已有提交，不重新训练。';
+  const failed = (status) => ['failed', 'blocked', 'cancelled', 'canceled'].includes(status);
+  if (failed(training.status) || failed(evaluation?.status))
+    return '本次任务未成功，已保留原记录。下一步查看失败原因。';
+  if (training.status !== 'completed') return '训练进行中，正在等待本次任务完成。';
+  if (!evaluation) return '训练已完成，下一步评测同一策略。';
+  if (evaluation.status !== 'completed') return '训练已完成，正在评测同一策略。';
+  if (result.association?.executionVerified !== true)
+    return '任务已结束，来源尚待核对。暂不展示效果结论。';
+  const quality =
+    result.quality?.clearGain === true
+      ? '本次达到收益判据。'
+      : result.quality?.clearGain === false
+        ? '本次未达到收益判据。'
+        : '效果尚待验证。';
+  return (
+    '训练与评测已完成。' +
+    quality +
+    '\n' +
+    (result.links?.experiment
+      ? '[查看曲线、对比与回放](' + result.links.experiment + ')'
+      : '下一步在工作台查看本次对比与回放。')
+  );
+}
+
 // Capture at import time so an old cached process cannot claim newly replaced files.
 const loadedSources = Object.fromEntries(
   [
@@ -306,7 +337,8 @@ export function experienceProxy(
           '\n结果：只展示本次Run的真实original/tuned/rl对比；执行完成、质量提升和真机资格分别判断，短训不承诺提升。回放优先打开resume.links.experiment；旧平台打开links.workbench并按selection核对本次Run，再在页面播放器播放一次；不要直接导航媒体URL，OriginMan不调用真机rdk_replay_video或evaluationId接口；媒体链接不做正文抓取、HEAD、curl或独立浏览器认证探测。没有观测就报告播放待验证。一般流程用workflow_inspect按需看证据，不默认打印整张技术状态表；新训练前training_prepare刷新资源。默认GPU，CPU须明确选择，不自动降级、不操作真机。\n本次原生计算配置：' +
           clientContext().nativeCompute.configuration +
           '。宿主接口缺失时不要要求已经在桌面中的用户重复“去桌面操作”；用指南中的 clientContext 说明实际缺口。' +
-          ORIGINMAN_COURSE_INSTRUCTIONS,
+          ORIGINMAN_COURSE_INSTRUCTIONS +
+          '\n普通Workshop回执：优先使用工具studentReply，最多三句中文加一个实验页链接。页面已显示曲线和对比时不重复抄技术表；账号、UUID、英文套件名、摘要、video字节和部署细节按用户明确要求再展开。正常完成后不再询问是否播放，能操作播放器就实际播放，否则明确待播放。只报告完成的四个主阶段；单变量调参是可选后续，不算本轮未完成项。',
       };
     }
     if (method === 'resources/read' && params.uri === UI_URI) {
@@ -679,12 +711,20 @@ export function experienceProxy(
             nextAction:
               '停止新的提交，保留原Run与原错误；可按原Run只读查询已有状态和结果，不改标识、模型、资源或参数重交。',
           };
+        if (
+          SHORT_TRAINING_TOOLS.some((t) => t.name === params.name) ||
+          EXPERIMENT_TOOLS.some((t) => t.name === params.name)
+        ) {
+          const studentReply = experimentStudentReply(payload);
+          if (studentReply) payload = { ...payload, studentReply };
+        }
         payload = { ...payload, pluginRuntime: pluginRuntimeIdentity() };
         return {
           content: [
             {
               type: 'text',
               text:
+                payload.studentReply != null ||
                 params.name === 'rdk_plugin_status' ||
                 (params.name === 'rdk_classroom_guide' && params.arguments?.detail !== 'full')
                   ? payload.studentReply

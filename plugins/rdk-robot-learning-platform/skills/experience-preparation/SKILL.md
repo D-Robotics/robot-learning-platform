@@ -5,7 +5,11 @@ description: 在 Studio 或其他 Agent 宿主中准备可复用的机器人体�
 
 ## 一句话短训练
 
-用户说“OriginMan受扰恢复，短训练后对比并回放”时，先用rdk_experience_guide取operation.contextId。依次调用rdk_originman_short_train、training_wait至终态、rdk_originman_short_evaluate、training_wait至终态、experiment_resume。训练与评测工具内部已核对完整manifest、选择当前明确课程模型/原资源并冻结配方，不再手工拼training_submit或跑experience_prepare/workshop_catalog。失败原地停止，不换键、参数或资源重交。播放使用返回的format=webm入口，经宿主实际观察播放进度和画面；不能凭链接宣称成功。只有短训练授权且原资源在线、核心确实缺预检接口时才可继续，保留taskEnvironmentVerified=false。输出中文四步进度和实际效果，不输出内部推理。
+用户说“带我完成 OriginMan Workshop”或要求短训练、评测、回放时，先用 `rdk_experience_guide` 取得本轮明确实验。先打开 `course.links.simulation`，实际启动并观察基础 PD 参考；然后用专用短训练工具提交固定8192步、等待原Run、做同源评测、等待原评测、恢复实验。专用工具内部核对课程manifest、模型和绑定资源，不为此反复搜仓库、读旧验收报告、手拼提交或调用通用准备工具。咨询不提交，失败保留原Run，不改参数或资源重交。
+
+返回 `links.experiment` 时打开这个本次实验页；旧平台才打开工作台并按 `selection` 核对训练与评测。视频用页面播放器，不直接导航原始WebM。实际观察画面和播放进度后才确认播放；无观察能力明确待播放。
+
+默认使用工具 `studentReply`：最多三句中文加一个实验页链接。曲线和比较已在页面显示时，不再抄整张技术表。正常校验在后台做，不逐项播报；只在训练、评测、结果阶段变化时简短更新。技术参数、账号、UUID、摘要和英文套件名按需展开。调参是可选后续，不列成本轮欠缺。
 
 
 # 场景准备与恢复
@@ -16,7 +20,7 @@ description: 在 Studio 或其他 Agent 宿主中准备可复用的机器人体�
 
 ## 准备
 
-先确认机器人与任务。默认体验配置是 OriginMan 原地受扰恢复；[MicroDuck 示例](../../references/experience-profile-microduck.json)保留供选择。旧版已安装插件可能仍默认机器鸭，不能仅凭名称认定迁移完成。OriginMan 必须显式传 `robot: "originman"` 调用 `rdk_simulator_open`，并核对目标平台确实支持 OriginMan 课程。通用参考准备依赖目标部署的课程目录；当前工具目录不包含课程目录时，此可选准备流程保持阻塞，不能回退到 MicroDuck 的 overview 仿真入口。0.3.1 一句话短训使用前述专用工具和包内 manifest，不依赖这条旧参考准备路径。
+先确认机器人与任务。默认体验配置是 OriginMan 原地受扰恢复；[MicroDuck 示例](../../references/experience-profile-microduck.json)保留供选择。旧版已安装插件可能仍默认机器鸭，不能仅凭名称认定迁移完成。OriginMan 必须显式传 `robot: "originman"` 调用 `rdk_simulator_open`，并核对目标平台确实支持 OriginMan 课程。通用参考准备依赖目标部署的课程目录；当前工具目录不包含课程目录时，此可选准备流程保持阻塞，不能回退到 MicroDuck 的 overview 仿真入口。本版一句话短训使用前述专用工具和包内 manifest，不依赖这条旧参考准备路径。
 
 OriginMan 当前课程契约是 `custom-policy-originman-recovery-v1`，14维观测、2维髋踝连续修正。先通过目录返回的 manifest 登记模型，再选择已注册 `originman-recovery` 的真实执行资源。训练提交显式传 `engine: "originman-recovery-reflect"`、`algorithm: "sac"`、`numEnvs: 4` 及 `originmanWorkshop`（phase、timesteps、seed、pushMaxForce）；评测另建 Run，phase=evaluate 且 sourceRunId 指向本组完成的训练，配置冻结由平台核对。4096至10000步仅检查软件流程，不能保证收益。
 

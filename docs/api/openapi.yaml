@@ -2698,6 +2698,87 @@ paths:
         second source of truth that can drift. Accessible without a session.
       responses:
         "200": { description: Current notices, content: { application/json: { schema: { type: object } } } }
+  /api/v1/duck/experiments/capabilities:
+    get:
+      tags: [workspace]
+      operationId: getExperimentCapabilities
+      summary: Discover owner-scoped experiment references
+      responses:
+        "200":
+          description: Versioned capability; does not submit a task.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [ok, schemaVersion, ownerScoped, submission]
+                properties:
+                  ok: { const: true }
+                  schemaVersion: { const: 1 }
+                  ownerScoped: { const: true }
+                  submission: { const: false }
+        "401": { description: Login required. }
+        "403": { description: Workspace read permission required. }
+  /api/v1/duck/experiments:
+    post:
+      tags: [workspace]
+      operationId: rememberExperiment
+      summary: Bind existing training and same-parent evaluation to an owner-scoped experiment
+      description: Requires workspace edit permission. Does not submit or retry Runs. Existing training binding is immutable; status and policy digests are re-read from the original Runs.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [contextId, runId]
+              properties:
+                contextId: { type: string, pattern: '^[A-Za-z0-9][A-Za-z0-9_.-]{0,95}$' }
+                runId: { type: string, pattern: '^[A-Za-z0-9][A-Za-z0-9_.-]{0,95}$' }
+                evaluationRunId: { type: string, pattern: '^[A-Za-z0-9][A-Za-z0-9_.-]{0,95}$' }
+      responses:
+        "200": { description: Same owner reference saved; repeated binding is idempotent. }
+        "400": { description: Invalid reference. }
+        "401": { description: Login required. }
+        "403": { description: Workspace edit permission required. }
+        "404": { description: Referenced Run not visible to current owner. }
+        "409": { description: Reference, parent, model or policy digest conflict. }
+        "503": { description: Private reference storage unavailable. }
+  /api/v1/duck/experiments/{contextId}:
+    get:
+      tags: [workspace]
+      operationId: resumeExperiment
+      summary: Re-read the current owner's original Runs and verified experiment view
+      parameters:
+        - { in: path, name: contextId, required: true, schema: { type: string } }
+      responses:
+        "200": { description: Version 1 view and revision; completion, quality, media receipt and hardware evidence remain distinct. }
+        "401": { description: Login required. }
+        "403": { description: Workspace read permission required. }
+        "404": { description: Experiment or original Run not visible to current owner. }
+        "409": { description: Original reference no longer passes source validation. }
+        "503": { description: Private reference storage unavailable. }
+  /api/v1/duck/experiments/{contextId}/events:
+    get:
+      tags: [workspace]
+      operationId: streamExperimentEvents
+      summary: Replay owner-scoped snapshots with a bounded SSE connection
+      description: Retains 128 changes. An expired cursor yields reset snapshots; future or malformed cursors are rejected. Connections close after 20 seconds so reconnect re-enters authentication. Closing a stream does not cancel any Run.
+      parameters:
+        - { in: path, name: contextId, required: true, schema: { type: string } }
+        - { in: header, name: Last-Event-ID, schema: { type: string, pattern: '^[0-9]{1,12}$' } }
+        - { in: query, name: after, schema: { type: string, pattern: '^[0-9]{1,12}$' } }
+      responses:
+        "200":
+          description: snapshot/reset events contain id, observation time and verified view.
+          content:
+            text/event-stream:
+              schema: { type: string }
+        "400": { description: Invalid or future cursor. }
+        "401": { description: Login required. }
+        "403": { description: Workspace read permission required. }
+        "404": { description: Experiment not visible to current owner. }
+        "503": { description: Stream capacity or storage unavailable. }
 components:
   securitySchemes:
     cookieAuth:
