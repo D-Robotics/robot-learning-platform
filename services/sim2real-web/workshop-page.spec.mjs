@@ -149,6 +149,7 @@ test('lost submit response only reads original state; no retry or budget expansi
     await c.refresh();
     assert.equal(f.calls.filter((x) => x.p === 'runs').length, 1);
     assert.match(d.getElementById('execution-status').textContent, /不明确|待核对/);
+    assert.equal(d.getElementById('connection-status').textContent, '需要处理');
   } finally {
     c.dispose();
     f.dom.window.close();

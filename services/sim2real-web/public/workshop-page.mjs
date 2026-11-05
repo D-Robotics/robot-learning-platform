@@ -15,6 +15,7 @@ export async function startWorkshop({
     timer = null,
     busy = false,
     disposed = false,
+    halted = false,
     reference = null,
     pendingRecipe = null;
   const validId = (v) => typeof v === 'string' && /^[A-Za-z0-9][A-Za-z0-9_.-]{0,95}$/.test(v);
@@ -36,12 +37,19 @@ export async function startWorkshop({
             body: JSON.stringify(body),
           }),
     });
-    const value = await r.json();
+    let value;
+    try {
+      value = await r.json();
+    } catch {
+      throw Error('课程响应暂不可用，请保留原实验稍后刷新。');
+    }
     if (!r.ok || value.ok !== true)
       throw Error(value.message ?? '课程读取失败，请保留原实验稍后恢复。');
     return value;
   };
   const error = (e) => {
+    halted = true;
+    clearTimer(timer);
     $('workshop-error').textContent = e.message ?? '课程暂不可用。';
     $('workshop-error').hidden = false;
     $('connection-status').textContent = '需要处理';
@@ -53,6 +61,7 @@ export async function startWorkshop({
     clearTimer(timer);
     if (
       !disposed &&
+      !halted &&
       session &&
       (['training', 'evaluating', 'unknown'].includes(session.stage) ||
         (session.stage === 'ready-evaluate' && session.autoContinue))
@@ -77,21 +86,28 @@ export async function startWorkshop({
     $('execution-status').textContent =
       session?.stage === 'unknown'
         ? '提交状态待核对。已停止新的提交，可刷新恢复原任务。'
-        : session?.stage === 'results'
-          ? '训练与评测已完成。效果和回放请在下方查看。'
-          : session?.stage === 'blocked'
-            ? '原任务未成功，已停止自动步骤。'
-            : session?.stage === 'ready-evaluate'
-              ? session.legacy
-                ? '已有训练完成；此旧版实验仅查看，可在聊天明确要求同源评测。'
-                : session.autoContinue
-                  ? '训练完成，准备评测同一策略。'
-                  : '训练完成，后续自动步骤已暂停。'
-              : session?.stage === 'evaluating'
-                ? '正在评测同一策略。'
-                : '训练进行中，正在等待本次任务。';
+        : halted
+          ? '连接或提交需要处理，已暂停自动推进；请刷新原实验。'
+          : session?.stage === 'results'
+            ? '训练与评测已完成。效果和回放请在下方查看。'
+            : session?.stage === 'blocked'
+              ? '原任务未成功，已停止自动步骤。'
+              : session?.stage === 'ready-evaluate'
+                ? session.legacy
+                  ? '已有训练完成；此旧版实验仅查看，可在聊天明确要求同源评测。'
+                  : session.autoContinue
+                    ? '训练完成，准备评测同一策略。'
+                    : '训练完成，后续自动步骤已暂停。'
+                : session?.stage === 'evaluating'
+                  ? '正在评测同一策略。'
+                  : '训练进行中，正在等待本次任务。';
     $('workshop-diagnostics').textContent = JSON.stringify(session, null, 2);
-    $('connection-status').textContent = session ? '已连接当前实验' : '请选择实验';
+    $('connection-status').textContent =
+      halted || session?.stage === 'unknown'
+        ? '需要处理'
+        : session
+          ? '已连接当前实验'
+          : '请选择实验';
     if (session?.training) {
       const url = new URL('experiment.html?context=' + encodeURIComponent(session.contextId), root)
         .href;
@@ -114,6 +130,7 @@ export async function startWorkshop({
   const refresh = async () => {
     if (busy || disposed || !contextId) return;
     busy = true;
+    halted = false;
     try {
       session = (await json('workshop-sessions/' + encodeURIComponent(contextId))).session;
       for (const r of [session.training, session.evaluation])
@@ -137,6 +154,7 @@ export async function startWorkshop({
   const start = async (recipe) => {
     if (busy || session?.stage !== 'ready' || !reference) return;
     busy = true;
+    halted = false;
     show();
     try {
       await claimAndSubmit('train', { ...recipe, reference });
@@ -163,6 +181,7 @@ export async function startWorkshop({
     selectedUrl.searchParams.set('context', id);
     historyImpl?.replaceState(null, '', selectedUrl.href);
     reference = null;
+    halted = false;
     session = (await json('workshop-sessions/' + encodeURIComponent(id) + '/select', {})).session;
     show();
     $('history').hidden = true;
@@ -256,7 +275,8 @@ export async function startWorkshop({
   listen('refresh-workshop', 'click', () => run(refresh));
   listen('pause-workshop', 'click', () =>
     run(async () => {
-      session = (await json('workshop-sessions/' + encodeURIComponent(contextId) + '/pause', {})).session;
+      session = (await json('workshop-sessions/' + encodeURIComponent(contextId) + '/pause', {}))
+        .session;
       show();
     }),
   );
