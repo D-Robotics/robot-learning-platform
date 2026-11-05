@@ -22,6 +22,10 @@
         ><button id="history-toggle" type="button" aria-expanded="false">切换实验</button>
       </div>
       <p id="workshop-status" role="status">正在读取当前账号的课程。</p>
+      <div class="workshop-actions" aria-label="交互仿真入口">
+        <a id="open-interactive-simulation" href="./?robot=originman#simulate">交互仿真 · 调力度与慢放</a>
+        <span>自由施力、8 秒实验和慢放回看。用浏览器后退返回本次课程。</span>
+      </div>
       <nav class="workshop-progress" aria-label="课程进度">
         <button id="workshop-step-reference" type="button" disabled>1 · 看参考</button>
         <button id="workshop-step-budget" type="button" disabled>2 · 选预算</button>
@@ -51,7 +55,7 @@
         ></video>
         <p id="reference-status" role="status">点击播放参考。</p>
         <div class="workshop-actions">
-          <a id="open-simulation" href="./?robot=originman#simulate" target="_blank" rel="noopener"
+          <a id="open-simulation" href="./?robot=originman#simulate"
             >自由探索参考仿真</a
           ><button id="skip-reference" type="button">跳过参考，选择预算</button>
         </div>

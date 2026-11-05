@@ -294,3 +294,36 @@ test('offline resource stops before consuming a claim or submitting a run', asyn
     f.dom.window.close();
   }
 });
+
+test('interactive simulator stays reachable after results and opens inside the host tab', async () => {
+  const f = fixture();
+  f.state.stage = 'results';
+  f.state.training = { runId: 'train', status: 'completed' };
+  f.state.evaluation = { runId: 'eval', status: 'completed' };
+  const d = f.dom.window.document;
+  const c = await startWorkshop({
+    document: d,
+    location: f.dom.window.location,
+    fetchImpl: f.fetchImpl,
+    setTimer: f.setTimer,
+    clearTimer: f.clearTimer,
+  });
+  try {
+    assert.equal(d.getElementById('reference-section').hidden, true);
+    const entry = d.getElementById('open-interactive-simulation');
+    assert.ok(entry, 'a permanent simulator entry is required outside the reference step');
+    assert.equal(entry.closest('[hidden]'), null);
+    assert.equal(entry.target, '');
+    assert.equal(entry.href, 'https://platform.test/course/?robot=originman#simulate');
+    assert.equal(
+      f.calls.some((x) => x.p === 'runs'),
+      false,
+    );
+    const referenceEntry = d.getElementById('open-simulation');
+    assert.equal(referenceEntry.target, '');
+    assert.equal(referenceEntry.href, entry.href);
+  } finally {
+    c.dispose();
+    f.dom.window.close();
+  }
+});
