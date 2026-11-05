@@ -13,3 +13,5 @@ description: 带用户完成 OriginMan Workshop：参考仿真、短训练、同
 
 
 其他机器人、录制、通用参考配置或仿真恢复，按实际请求读取 [通用场景准备](../../references/experience-preparation-general.md)。OriginMan 完整 Workshop 不需要加载通用场景、硬件验收或历史项目报告。
+
+连接、安装或登录问题使用 [平台连接技能](../setup/SKILL.md)。

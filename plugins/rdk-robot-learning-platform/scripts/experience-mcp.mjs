@@ -68,6 +68,26 @@ export function experimentStudentReply(payload) {
   );
 }
 
+/** Text-only hosts need actionable references, while rich clients retain full structured data. */
+export function experimentModelResult(payload) {
+  const run = (value) => (value ? { runId: value.runId, status: value.status } : null);
+  return {
+    contextId: payload.contextId,
+    studentReply: payload.studentReply,
+    training: run(payload.training),
+    evaluation: run(payload.evaluation),
+    association: { executionVerified: payload.association?.executionVerified === true },
+    quality: { clearGain: payload.quality?.clearGain ?? null, hardwareVerified: false },
+    playback: { state: payload.playback?.state, verifiedInPlayer: false },
+    links: payload.links,
+    persistence: payload.persistence,
+    view: payload.view,
+    nextAction: payload.nextAction,
+    ...(payload.stopWorkflow ? { stopWorkflow: true, retryAllowed: false } : {}),
+    pluginRuntime: payload.pluginRuntime,
+  };
+}
+
 // Capture at import time so an old cached process cannot claim newly replaced files.
 const loadedSources = Object.fromEntries(
   [
@@ -744,7 +764,11 @@ export function experienceProxy(
                 params.name === 'rdk_plugin_status' ||
                 (params.name === 'rdk_classroom_guide' && params.arguments?.detail !== 'full')
                   ? payload.studentReply
-                  : JSON.stringify(payload),
+                  : JSON.stringify(
+                      EXPERIMENT_TOOLS.some((t) => t.name === params.name)
+                        ? experimentModelResult(payload)
+                        : payload,
+                    ),
             },
           ],
           structuredContent: payload,

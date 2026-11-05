@@ -1,6 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { experimentStudentReply } from '../plugins/rdk-robot-learning-platform/scripts/experience-mcp.mjs';
+import {
+  experimentStudentReply,
+  experimentModelResult,
+} from '../plugins/rdk-robot-learning-platform/scripts/experience-mcp.mjs';
 const record = {
   training: { status: 'completed', runId: 'PRIVATE-RUN' },
   evaluation: { status: 'completed' },
@@ -33,4 +36,21 @@ test('failed, unknown and pending tasks never become a successful result', () =>
   assert.match(experimentStudentReply({ ...record, stopWorkflow: true }), /暂停/);
   assert.match(experimentStudentReply({ ...record, quality: {} }), /效果尚待验证/);
   assert.equal(experimentStudentReply({}), null);
+});
+
+test('text-only model view keeps precise references without duplicating the raw run diagnostics', () => {
+  const payload = {
+    ...record,
+    contextId: 'owned',
+    studentReply: '结果已读取',
+    training: { ...record.training, metrics: { largeDiagnostic: [1, 2, 3] } },
+  };
+  const result = experimentModelResult(payload);
+  assert.equal(result.contextId, 'owned');
+  assert.equal(result.training.runId, 'PRIVATE-RUN');
+  assert.equal(result.training.status, 'completed');
+  assert.equal(result.quality.clearGain, false);
+  assert.equal(result.training.metrics, undefined);
+  assert.deepEqual(payload.training.metrics, { largeDiagnostic: [1, 2, 3] });
+  assert.equal(result.playback.verifiedInPlayer, false);
 });
