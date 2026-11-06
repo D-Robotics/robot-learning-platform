@@ -179,12 +179,15 @@ export function createWorkshopSessions(deps: Dependencies) {
     const failed = [training, evaluation].some(
       (r) => r && ['failed', 'blocked', 'cancelled', 'canceled'].includes(r.status),
     );
-    const unknown = Boolean(
-      (s.claims.train && !s.training) || (s.claims.evaluate && !s.evaluation),
-    );
+    const recoveryPhase =
+      s.claims.train && !s.training
+        ? 'train'
+        : s.claims.evaluate && !s.evaluation
+          ? 'evaluate'
+          : null;
     const stage = failed
       ? 'blocked'
-      : unknown
+      : recoveryPhase
         ? 'unknown'
         : evaluation?.status === 'completed'
           ? 'results'
@@ -200,9 +203,10 @@ export function createWorkshopSessions(deps: Dependencies) {
       training: training ? { runId: training.id, status: training.status } : null,
       evaluation: evaluation ? { runId: evaluation.id, status: evaluation.status } : null,
       stage,
+      recoveryPhase: stage === 'unknown' ? recoveryPhase : null,
       nextAction:
         stage === 'unknown'
-          ? '提交结果暂不明确，保留原实验，只读恢复，不重复提交。'
+          ? '原请求尚未登记。可继续原请求，沿用已确认的预算与参数。'
           : stage === 'blocked'
             ? '原任务未成功，查看原因；不自动重训。'
             : stage === 'results'
@@ -336,9 +340,16 @@ export function createWorkshopSessions(deps: Dependencies) {
       return serial(file(contextId, owner), async () => {
         const s = await sync(await session(contextId, owner), owner);
         const args = object(input);
-        if (!['train', 'evaluate'].includes(phase) || s.claims[phase])
-          reject('此步骤已发起；只恢复原任务，不重复提交。');
-        if (phase === 'train') {
+        if (phase !== 'train' && phase !== 'evaluate') reject('课程步骤无效。');
+        const recovering = args.recover === true && Object.keys(args).length === 1;
+        if (recovering) {
+          const boundRun = phase === 'train' ? s.training : s.evaluation;
+          if (!s.claims[phase] || !s.recipe || boundRun)
+            reject('没有待接续的请求，请刷新查看原任务。');
+        } else if (s.claims[phase]) {
+          reject('此步骤已发起，请刷新查看原任务。');
+        }
+        if (phase === 'train' && !recovering) {
           if (
             s.training ||
             Object.keys(args).some(
@@ -360,8 +371,12 @@ export function createWorkshopSessions(deps: Dependencies) {
           s.recipe = args as unknown as Recipe;
           s.reference = s.recipe.reference;
           s.autoContinue = true;
-        } else {
-          if (Object.keys(args).length || !s.autoContinue || !s.training || !s.recipe)
+        } else if (phase === 'evaluate') {
+          if (
+            (!recovering && (Object.keys(args).length || !s.autoContinue)) ||
+            !s.training ||
+            !s.recipe
+          )
             reject('课程已暂停或训练尚未绑定。');
           const r = await deps.getRun(s.training!, owner);
           const m = object(object(r?.metrics).originmanWorkshop),
@@ -379,8 +394,10 @@ export function createWorkshopSessions(deps: Dependencies) {
           )
             reject('训练未完成或真实策略证据不足，不提交评测。');
         }
-        s.claims[phase] = new Date().toISOString();
-        await save(file(contextId, owner), s);
+        if (!recovering) {
+          s.claims[phase] = new Date().toISOString();
+          await save(file(contextId, owner), s);
+        }
         const recipe = s.recipe!;
         return {
           contextId,

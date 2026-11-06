@@ -23,6 +23,18 @@ describe('Workshop button workflow', () => {
       ]);
       expect(claims.filter((c) => c.status === 'fulfilled')).toHaveLength(1);
       expect((await store.read(draft.contextId, 'alice')).stage).toBe('unknown');
+      const pending = await store.read(draft.contextId, 'alice');
+      expect(pending).toMatchObject({ stage: 'unknown', recoveryPhase: 'train' });
+      const original = claims.find((claim) => claim.status === 'fulfilled');
+      expect(await store.claim(draft.contextId, 'train', { recover: true }, 'alice')).toEqual(
+        original?.status === 'fulfilled' ? original.value : undefined,
+      );
+      await expect(
+        store.claim(draft.contextId, 'train', { recover: true, seed: 8 }, 'alice'),
+      ).rejects.toThrow();
+      await expect(
+        store.claim(draft.contextId, 'train', { recover: true }, 'bob'),
+      ).rejects.toThrow();
       await expect(store.claim(draft.contextId, 'train', args, 'alice')).rejects.toThrow();
       await expect(store.read(draft.contextId, 'bob')).rejects.toThrow();
     } finally {
@@ -88,12 +100,19 @@ describe('restoration and consent', () => {
       runs.set('t', run);
       keys.set(draft.contextId + '-train', run);
       expect((await store.read(draft.contextId, 'alice')).training?.runId).toBe('t');
+      await expect(
+        store.claim(draft.contextId, 'train', { recover: true }, 'alice'),
+      ).rejects.toThrow();
       await store.pause(draft.contextId, 'alice');
       await expect(store.claim(draft.contextId, 'evaluate', {}, 'alice')).rejects.toThrow();
       await store.continue(draft.contextId, 'alice');
       const evaluation = await store.claim(draft.contextId, 'evaluate', {}, 'alice');
       expect(evaluation.submission.training.originmanWorkshop.sourceRunId).toBe('t');
       expect(evaluation.submission.training.originmanWorkshop.timesteps).toBe(8192);
+      expect((await store.read(draft.contextId, 'alice')).recoveryPhase).toBe('evaluate');
+      expect(await store.claim(draft.contextId, 'evaluate', { recover: true }, 'alice')).toEqual(
+        evaluation,
+      );
       expect(saved.some((s) => s.runId === 't')).toBe(true);
       await expect(store.claim(draft.contextId, 'evaluate', {}, 'alice')).rejects.toThrow();
     } finally {

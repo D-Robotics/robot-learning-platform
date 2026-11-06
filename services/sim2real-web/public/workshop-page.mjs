@@ -92,6 +92,8 @@ export async function startWorkshop({
     $('new-experiment').title = '保留原实验和已提交任务，创建独立新实验；不会取消或重交原任务。';
     $('pause-workshop').disabled =
       busy || selecting || !session?.autoContinue || ['results', 'blocked'].includes(session.stage);
+    $('recover-workshop-request').hidden = session?.stage !== 'unknown' || !session.recoveryPhase;
+    $('recover-workshop-request').disabled = busy || selecting;
     $('continue-evaluation').hidden =
       session?.stage !== 'ready-evaluate' || session.autoContinue || session.legacy;
     const step = ready ? (reference ? 1 : 0) : session?.stage === 'results' ? 3 : 2;
@@ -112,7 +114,9 @@ export async function startWorkshop({
       session?.nextAction ?? '选择一个实验继续，或回到插件开始课程。';
     $('execution-status').textContent =
       session?.stage === 'unknown'
-        ? '提交状态待核对。已停止新的提交，可刷新恢复原任务。'
+        ? session.recoveryPhase
+          ? '提交状态待核对。可接续原请求，沿用原预算和参数。'
+          : '提交状态待核对。可刷新恢复原任务。'
         : halted
           ? '连接或提交需要处理，已暂停自动推进；请刷新原实验。'
           : session?.stage === 'results'
@@ -190,8 +194,8 @@ export async function startWorkshop({
     );
     if (health.connected !== true || health.computeResource?.status !== 'online')
       throw Error('训练资源暂不可用，请检查连接后刷新原实验。');
-    // A durable single claim is obtained before the only POST /runs. On a lost
-    // response we only read: another tab or restarted host cannot submit twice.
+    // Recovering an interrupted claim returns the same payload and idempotency
+    // key. The /runs reservation prevents concurrent requests from dispatching twice.
     const claim = await json(
       'workshop-sessions/' + encodeURIComponent(contextId) + '/claim/' + phase,
       recipe,
@@ -419,6 +423,22 @@ export async function startWorkshop({
     $('recipe-confirm').hidden = true;
   });
   listen('refresh-workshop', 'click', () => run(refresh));
+  listen('recover-workshop-request', 'click', () =>
+    run(async () => {
+      if (busy || selecting || session?.stage !== 'unknown') return;
+      const phase = session.recoveryPhase;
+      if (phase !== 'train' && phase !== 'evaluate') return;
+      busy = true;
+      show();
+      try {
+        await claimAndSubmit(phase, { recover: true });
+      } finally {
+        busy = false;
+        show();
+      }
+      await refresh();
+    }),
+  );
   const updateIntent = async (action) => {
     if (busy || selecting || !contextId) return;
     busy = true;
