@@ -758,7 +758,7 @@ test('preview stays offline until Start and login opens in the same tab', async 
   assert.equal($('workshop-login').target, '');
 });
 
-for (const outcome of ['ready', 'blocked', 'unverified', 'mismatched', 'offline']) {
+for (const outcome of ['ready', 'blocked', 'unverified', 'mismatched', 'offline', 'wrong-engine']) {
   test(`worker setup ${outcome} keeps explicit selection and the observed reference`, async (t) => {
     const dom = new JSDOM(html, {
       url: 'https://platform.test/course/workshop.html?start=1&setup=1',
@@ -791,7 +791,12 @@ for (const outcome of ['ready', 'blocked', 'unverified', 'mismatched', 'offline'
         if (route === 'compute-resources/worker/test')
           return ok({
             connected: outcome !== 'offline',
-            computeResource: { status: outcome === 'offline' ? 'offline' : 'online' },
+            computeResource: {
+              status: outcome === 'offline' ? 'offline' : 'online',
+              engines: [
+                outcome === 'wrong-engine' ? 'originman-recovery' : 'originman-recovery-reflect',
+              ],
+            },
           });
         if (route === 'training/preflight') {
           assert.deepEqual(body, {
@@ -853,6 +858,7 @@ for (const outcome of ['ready', 'blocked', 'unverified', 'mismatched', 'offline'
       blocked: /CUDA 检查未通过/,
       mismatched: /无法与本次选机对应/,
       offline: /暂时连不上/,
+      'wrong-engine': /缺少本课程的训练引擎/,
     }[outcome];
     if (blockedMessage) {
       assert.match($('workshop-compute-check').textContent, blockedMessage);
@@ -864,7 +870,7 @@ for (const outcome of ['ready', 'blocked', 'unverified', 'mismatched', 'offline'
         [
           'workshop-sessions/setup',
           'compute-resources/worker/test',
-          ...(outcome === 'offline' ? [] : ['training/preflight']),
+          ...(['offline', 'wrong-engine'].includes(outcome) ? [] : ['training/preflight']),
         ],
       );
       return;

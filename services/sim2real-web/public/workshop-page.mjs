@@ -1,3 +1,5 @@
+const WORKSHOP_ENGINE = 'originman-recovery-reflect';
+
 /** Button-driven orchestration. The normal authenticated /runs API owns every submission. */
 export async function startWorkshop({
   document,
@@ -464,6 +466,9 @@ export async function startWorkshop({
     );
     if (health.connected !== true || health.computeResource?.status !== 'online')
       throw Error('训练资源暂不可用，请检查连接后刷新原实验。');
+    const engines = health.computeResource.engines;
+    if (phase === 'train' && Array.isArray(engines) && !engines.includes(WORKSHOP_ENGINE))
+      throw Error('这台算力机缺少本课程的训练引擎。请另开实验，选择支持本课程的算力机。');
     // Recovering an interrupted claim returns the same payload and idempotency
     // key. The /runs reservation prevents concurrent requests from dispatching twice.
     const claim = await json(
@@ -760,6 +765,11 @@ export async function startWorkshop({
     const health = await json(resource + '/test', {});
     if (health.connected !== true || health.computeResource?.status !== 'online')
       return 'offline';
+    // CUDA preflight exercises the base engine. The Workshop claim uses the
+    // reflect variant, which must also be registered on this worker.
+    const engines = health.computeResource.engines;
+    if (!Array.isArray(engines)) return 'unverified';
+    if (!engines.includes(WORKSHOP_ENGINE)) return 'engine';
     let checked;
     try {
       checked = await json('training/preflight', {
@@ -853,6 +863,7 @@ export async function startWorkshop({
             checkStatus.textContent = {
               invalid: '平台返回的检查结果无法与本次选机对应。请重新检查，或联系课程管理员。',
               offline: '这台算力机暂时连不上。可以重新检查，或另选一台。',
+              engine: '这台算力机缺少本课程的训练引擎。请选择另一台。',
               busy: '课程环境检查正忙。稍后重新检查，或另选一台。',
               blocked: '连接正常，但课程运行环境未通过检查。请选择另一台，或联系课程管理员。',
               cuda: '这台机器的 CUDA 检查未通过。请选择另一台支持本课程的算力机。',
