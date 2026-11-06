@@ -58,8 +58,9 @@
           <label>训练算力机
             <select id="workshop-compute" required></select>
           </label>
-          <button id="workshop-setup-confirm" type="submit">用这台算力机，去选预算</button>
+          <button id="workshop-setup-confirm" type="submit">检查这台算力机并继续</button>
         </form>
+        <p id="workshop-compute-check" role="status"></p>
       </section>
       <section id="history" hidden aria-label="选择已有实验">
         <h2>选择要继续的实验</h2>
@@ -94,6 +95,7 @@
       </section>
       <section id="budget-section" hidden aria-labelledby="budget-heading">
         <h2 id="budget-heading">2 · 选择一次预算</h2>
+        <p id="budget-readiness" hidden></p>
         <div id="budget-presets">
           <p>第一次用，选<strong>快速体验</strong>。两档训练完成后都会评测本轮策略。</p>
           <div class="workshop-actions">
@@ -160,12 +162,20 @@
         <h2 id="execution-heading">3 · 训练与评测</h2>
         <p id="execution-status" aria-live="polite"></p>
         <p id="active-recipe" class="workshop-recipe"></p>
+        <div id="workshop-recovery" hidden>
+          <p id="workshop-recovery-status" role="status"></p>
+          <div class="workshop-actions">
+            <button id="refresh-original-workshop" type="button">刷新原实验</button>
+            <a id="workshop-recovery-records" href="./?robot=originman#train/runs" target="_blank" rel="noopener">查看运行记录</a>
+            <a id="workshop-recovery-new" href="./workshop.html?start=1" hidden>另开实验并选算力</a>
+          </div>
+        </div>
         <div class="workshop-actions">
           <button id="recover-workshop-request" type="button" hidden>接续原请求</button>
           <button id="continue-evaluation" type="button" hidden>继续同源评测</button>
           <button id="go-results" type="button">查看曲线与结果 ↓</button>
         </div>
-        <details>
+        <details id="workshop-execution-more">
           <summary>更多操作</summary>
           <div class="workshop-actions">
             <button id="refresh-workshop" type="button">刷新原实验</button>

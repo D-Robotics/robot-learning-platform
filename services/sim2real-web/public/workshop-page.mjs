@@ -37,6 +37,9 @@ export async function startWorkshop({
     reconnectNeeded = false,
     setupAccount,
     setupReady = false,
+    unverifiedCompute = null,
+    failureLogsUnavailable = false,
+    budgetReadiness = '',
     previewObserved = false;
   const validId = (v) => typeof v === 'string' && /^[A-Za-z0-9][A-Za-z0-9_.-]{0,95}$/.test(v);
   const listeners = [];
@@ -70,10 +73,12 @@ export async function startWorkshop({
     try {
       value = await r.json();
     } catch {
-      throw Error('课程响应暂不可用，请保留原实验稍后刷新。');
+      throw Object.assign(Error('课程响应暂不可用，请保留原实验稍后刷新。'), { status: r.status });
     }
     if (!r.ok || value.ok !== true)
-      throw Error(value.message ?? '课程读取失败，请保留原实验稍后恢复。');
+      throw Object.assign(Error(value.message ?? '课程读取失败，请保留原实验稍后恢复。'), {
+        status: r.status, code: value.code ?? value.error,
+      });
     return value;
   };
   const error = (e) => {
@@ -213,6 +218,8 @@ export async function startWorkshop({
     $('skip-reference').hidden = !ready || Boolean(reference);
     $('skip-reference').disabled = busy || selecting;
     if (referencePlayButton) referencePlayButton.disabled = busy || selecting;
+    $('budget-readiness').textContent = budgetReadiness;
+    $('budget-readiness').hidden = !budgetReadiness;
     $('budget-section').hidden = !ready || !reference;
     $('execution-section').hidden = !session || ready || (session.stage === 'results' && !executionExpanded);
     $('result-section').hidden = !session?.training;
@@ -250,7 +257,9 @@ export async function startWorkshop({
       else b.removeAttribute('aria-current');
     }
     $('go-results').disabled = !session?.training;
-    $('go-results').textContent = session?.stage === 'results' ? '查看对比与回放 ↓' : '查看实时曲线 ↓';
+    $('go-results').textContent = session?.stage === 'results' ? '查看对比与回放 ↓'
+      : session?.stage === 'blocked' && session.training?.status === 'completed' ? '查看保留的训练结果 ↓'
+        : '查看实时曲线 ↓';
     $('active-recipe').textContent = session?.recipe
       ? `${session.recipe.timesteps.toLocaleString('zh-CN')} 步 · 随机种子 ${session.recipe.seed} · 侧推 ${session.recipe.pushMaxForce} N`
       : '';
@@ -265,8 +274,8 @@ export async function startWorkshop({
             ? '训练与评测已完成。效果和回放请在下方查看。'
             : session?.stage === 'blocked'
               ? failureMessage || (session.training?.status === 'completed'
-                ? '测试未完成，本次训练已保留。请联系课程管理员查看运行记录。'
-                : '训练未完成。请联系课程管理员查看运行记录。')
+                ? '评测没有完成，本次训练结果仍可查看。'
+                : '训练没有完成。可查看原运行，或另开实验重新选择算力。')
               : session?.stage === 'ready-evaluate'
                 ? session.legacy
                   ? '已有训练完成；此旧版实验仅查看，可在聊天明确要求同源评测。'
@@ -279,6 +288,20 @@ export async function startWorkshop({
                     ? '训练已提交，等待算力开始。'
                     : '训练进行中，页面会自动更新。';
     const phase = session?.stage;
+    const terminalRun = [session?.evaluation, session?.training].find(
+      (run) => run && ['failed', 'blocked', 'canceled', 'cancelled'].includes(run.status),
+    );
+    $('workshop-recovery').hidden = phase !== 'blocked' && phase !== 'unknown';
+    $('workshop-execution-more').hidden = phase === 'blocked';
+    $('refresh-workshop').hidden = phase === 'unknown';
+    $('workshop-recovery-status').textContent = phase === 'unknown'
+      ? '先刷新核对原任务。若仍显示待核对，可点「接续原请求」，沿用原提交记录。'
+      : terminalRun
+        ? `原运行 ${terminalRun.runId} 已保留。${failureLogsUnavailable ? '暂时读不到该运行的引擎日志。' : ''}`
+        : '';
+    $('workshop-recovery-records').hidden = phase === 'unknown';
+    $('workshop-recovery-new').hidden = phase !== 'blocked' || session?.training?.status === 'completed';
+    $('refresh-original-workshop').disabled = busy || selecting;
     let guide;
     if (selecting) {
       guide = ['正在切换实验', '正在读取所选实验的进度。'];
@@ -286,7 +309,7 @@ export async function startWorkshop({
       guide = setupReady
         ? $('workshop-setup-form').hidden
           ? ['选择本轮算力机', '当前没有可选算力机。', '刷新算力列表', 'start-setup']
-          : ['选择本轮算力机', '选好后进入预算页。']
+          : ['选择本轮算力机', '检查课程环境后进入预算页。']
         : ['先看看，再动手', '用仿真训练一个受扰恢复策略，比较恢复次数并看回放。', '开始实操', 'start-setup'];
     } else if (halted) {
       guide = loginNeeded && preview
@@ -456,6 +479,7 @@ export async function startWorkshop({
     busy = true;
     halted = false;
     failureMessage = '';
+    failureLogsUnavailable = false;
     show();
     try {
       session = (await json('workshop-sessions/' + encodeURIComponent(contextId))).session;
@@ -472,7 +496,9 @@ export async function startWorkshop({
       if (session.stage === 'blocked' && validId(failed?.runId)) {
         try {
           const log = await json('runs/' + encodeURIComponent(failed.runId) + '/logs');
-          if (log.runId === failed.runId && Array.isArray(log.lines) &&
+          const matching = log.runId === failed.runId;
+          failureLogsUnavailable = !matching || !Array.isArray(log.lines) || log.lines.length === 0;
+          if (matching && Array.isArray(log.lines) &&
               log.lines.some((line) => line.stream === 'stderr' &&
                 typeof line.text === 'string' &&
                 line.text.includes('RuntimeError: 可用磁盘空间不足，保留记录'))) {
@@ -481,7 +507,7 @@ export async function startWorkshop({
               : '算力机磁盘空间不足，训练停在这里。请联系课程管理员处理。';
           }
         } catch {
-          // Keep the safe explanation if this worker does not return logs.
+          failureLogsUnavailable = true;
         }
       }
       $('workshop-error').hidden = true;
@@ -531,7 +557,9 @@ export async function startWorkshop({
     clearTimer(timer);
     contextId = id;
     session = null;
+    budgetReadiness = '';
     failureMessage = '';
+    failureLogsUnavailable = false;
     if (!referenceVideo.paused) referenceVideo.pause();
     if (referenceVideo.currentTime > 0) referenceVideo.currentTime = 0;
     reference = null;
@@ -721,6 +749,47 @@ export async function startWorkshop({
     $('recipe-confirm').hidden = true;
   });
   listen('refresh-workshop', 'click', () => run(refresh));
+  listen('refresh-original-workshop', 'click', () => run(refresh));
+  const resetComputeCheck = () => {
+    unverifiedCompute = null;
+    $('workshop-compute-check').textContent = '';
+    $('workshop-setup-confirm').textContent = '检查这台算力机并继续';
+  };
+  const checkCompute = async (id) => {
+    const resource = 'compute-resources/' + encodeURIComponent(id);
+    const health = await json(resource + '/test', {});
+    if (health.connected !== true || health.computeResource?.status !== 'online')
+      return 'offline';
+    let checked;
+    try {
+      checked = await json('training/preflight', {
+        computeResourceId: id, taskId: 'originman-recovery', engine: 'originman-recovery',
+      });
+    } catch (e) {
+      if (e.code === 'SIM2REAL_ENGINE_PREFLIGHT_BUSY') return 'busy';
+      if (e.code === 'SIM2REAL_PREFLIGHT_NOT_SUPPORTED' ||
+          e.code === 'SIM2REAL_ENGINE_PREFLIGHT_UNSUPPORTED' || (e.status === 404 && !e.code))
+        return 'unverified';
+      throw e;
+    }
+    const report = checked.report;
+    if (checked.computeResourceId !== id || report?.schemaVersion !== 1 ||
+        report.trainingPerformed !== false || report.engine !== 'originman-recovery' ||
+        report.taskId !== 'originman-recovery' || !Array.isArray(report.checks)) return 'invalid';
+    const device = report.checks.find((check) => check.id === 'training-device');
+    if (device?.status === 'blocked') return 'cuda';
+    if (report.readyForSmokeTraining !== true) return 'blocked';
+    try {
+      if (device?.status === 'passed') {
+        const resolved = JSON.parse(device.detail)?.resolvedDevice;
+        if (resolved === 'cuda') return 'ready';
+        if (resolved === 'cpu') return 'cuda';
+      }
+    } catch {
+      // An older runner may not include machine-readable CUDA evidence.
+    }
+    return 'unverified';
+  };
   const loadSetup = async () => {
     if (busy || selecting || disposed || contextId) return;
     busy = true;
@@ -729,6 +798,7 @@ export async function startWorkshop({
       const data = await json('workshop-sessions/setup');
       if (!Array.isArray(data.resources)) throw Error('暂时读不到算力机列表。');
       setupAccount = data.accountId;
+      resetComputeCheck();
       const select = $('workshop-compute');
       const placeholder = new document.defaultView.Option('请选择一台算力机', '', true, true);
       placeholder.disabled = true;
@@ -752,7 +822,10 @@ export async function startWorkshop({
     }
     reveal('workshop-setup');
   };
-  listen('workshop-compute', 'change', show);
+  listen('workshop-compute', 'change', () => {
+    resetComputeCheck();
+    show();
+  });
   listen('workshop-setup-form', 'submit', (event) => {
     event.preventDefault();
     const select = $('workshop-compute');
@@ -761,18 +834,51 @@ export async function startWorkshop({
     run(async () => {
       busy = true;
       show();
+      const resourceId = select.value;
+      const checkStatus = $('workshop-compute-check');
       let created;
+      const environmentUnverified = unverifiedCompute === resourceId;
       try {
+        if (!environmentUnverified) {
+          checkStatus.textContent = '正在检查连接和本课程的运行环境…';
+          let result;
+          try {
+            result = await checkCompute(resourceId);
+          } catch (e) {
+            if (e.status === 401) throw e;
+            checkStatus.textContent = '暂时无法完成算力检查。可以重新检查这台机器，或另选一台。';
+            return;
+          }
+          if (result !== 'ready') {
+            checkStatus.textContent = {
+              invalid: '平台返回的检查结果无法与本次选机对应。请重新检查，或联系课程管理员。',
+              offline: '这台算力机暂时连不上。可以重新检查，或另选一台。',
+              busy: '课程环境检查正忙。稍后重新检查，或另选一台。',
+              blocked: '连接正常，但课程运行环境未通过检查。请选择另一台，或联系课程管理员。',
+              cuda: '这台机器的 CUDA 检查未通过。请选择另一台支持本课程的算力机。',
+              unverified: '连接正常，当前平台无法核对课程环境。可换一台，或确认继续选预算。',
+            }[result];
+            if (result === 'unverified') {
+              unverifiedCompute = resourceId;
+              $('workshop-setup-confirm').textContent = '环境未验证，仍继续选预算';
+            }
+            return;
+          }
+          checkStatus.textContent = '连接与课程环境检查通过，正在打开预算页。';
+        }
         ({ session: created } = await json('workshop-sessions/setup', {
-          accountId: setupAccount, computeResourceId: select.value,
+          accountId: setupAccount, computeResourceId: resourceId,
         }));
-        if (!validId(created?.contextId) || created.computeResourceId !== select.value)
+        if (!validId(created?.contextId) || created.computeResourceId !== resourceId)
           throw Error('平台尚未确认本次实验，请在历史中核对后继续。');
       } finally {
         busy = false;
         show();
       }
       await choose(created.contextId);
+      budgetReadiness = environmentUnverified
+        ? '所选算力机连接正常，课程环境未验证。'
+        : '所选算力机的连接和课程环境检查通过。';
       await saveReference(previewObserved ? 'observed' : 'skipped');
     });
   });

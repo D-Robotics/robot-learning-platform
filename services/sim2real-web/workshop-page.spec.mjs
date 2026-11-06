@@ -485,7 +485,12 @@ test('a disk failure in evaluation explains the block and preserves the trained 
     await settle();
     await f.tick();
     assert.match(d.getElementById('execution-status').textContent, /磁盘空间不足.*本次训练已保留/);
-    await c.refresh();
+    assert.equal(d.getElementById('workshop-recovery').hidden, false);
+    assert.match(d.getElementById('workshop-recovery-status').textContent, /eval.*已保留/);
+    assert.equal(d.getElementById('workshop-recovery-new').hidden, true);
+    assert.match(d.getElementById('go-results').textContent, /查看保留的训练结果/);
+    d.getElementById('refresh-original-workshop').click();
+    await settle();
     assert.equal(f.state.training.runId, 'train');
     assert.equal(f.calls.filter((x) => x.p === 'runs').length, 2);
     assert.equal(d.getElementById('result-section').hidden, false);
@@ -753,69 +758,140 @@ test('preview stays offline until Start and login opens in the same tab', async 
   assert.equal($('workshop-login').target, '');
 });
 
-test('same-tab return opens the worker list with no selection and preserves observed reference', async (t) => {
-  const dom = new JSDOM(html, {
-    url: 'https://platform.test/course/workshop.html?start=1&setup=1',
+for (const outcome of ['ready', 'blocked', 'unverified', 'mismatched', 'offline']) {
+  test(`worker setup ${outcome} keeps explicit selection and the observed reference`, async (t) => {
+    const dom = new JSDOM(html, {
+      url: 'https://platform.test/course/workshop.html?start=1&setup=1',
+    });
+    dom.window.sessionStorage.setItem('rdk-workshop:preview-observed', '1');
+    const calls = [];
+    const session = {
+      contextId: 'ws-new',
+      modelId: 'model',
+      computeResourceId: 'worker',
+      stage: 'ready',
+      training: null,
+      evaluation: null,
+      reference: 'pending',
+    };
+    const controller = await startWorkshop({
+      document: dom.window.document,
+      location: dom.window.location,
+      historyImpl: dom.window.history,
+      fetchImpl: async (url, options) => {
+        const route = new URL(url).pathname.split('/api/v1/duck/')[1];
+        const body = options.body ? JSON.parse(options.body) : undefined;
+        calls.push({ route, body });
+        const ok = (data) => ({ ok: true, json: async () => ({ ok: true, ...data }) });
+        if (route === 'workshop-sessions/setup' && !body)
+          return ok({
+            accountId: 'learner',
+            resources: [{ id: 'worker', name: 'Course GPU', status: 'online' }],
+          });
+        if (route === 'compute-resources/worker/test')
+          return ok({
+            connected: outcome !== 'offline',
+            computeResource: { status: outcome === 'offline' ? 'offline' : 'online' },
+          });
+        if (route === 'training/preflight') {
+          assert.deepEqual(body, {
+            computeResourceId: 'worker',
+            taskId: 'originman-recovery',
+            engine: 'originman-recovery',
+          });
+          if (outcome === 'unverified')
+            return {
+              status: 404,
+              ok: false,
+              json: async () => {
+                throw Error('no endpoint');
+              },
+            };
+          return ok({
+            computeResourceId: outcome === 'mismatched' ? 'another-worker' : 'worker',
+            report: {
+              schemaVersion: 1,
+              taskId: 'originman-recovery',
+              engine: 'originman-recovery',
+              trainingPerformed: false,
+              readyForSmokeTraining: outcome === 'ready',
+              checks: [
+                {
+                  id: 'training-device',
+                  status: outcome === 'ready' ? 'passed' : 'blocked',
+                  detail: '{"resolvedDevice":"cuda"}',
+                },
+              ],
+            },
+          });
+        }
+        if (route === 'workshop-sessions/setup' && body) {
+          assert.deepEqual(body, { accountId: 'learner', computeResourceId: 'worker' });
+          return ok({ session });
+        }
+        if (route.endsWith('/select')) return ok({ session });
+        if (route.endsWith('/reference')) {
+          assert.equal(body.reference, 'observed');
+          return ok({ session: { ...session, reference: body.reference } });
+        }
+        throw Error('Unexpected call ' + route);
+      },
+    });
+    t.after(() => {
+      controller.dispose();
+      dom.window.close();
+    });
+    const $ = (id) => dom.window.document.getElementById(id);
+    assert.equal($('workshop-setup').hidden, false);
+    assert.equal($('workshop-compute').value, '');
+    assert.equal($('workshop-setup-confirm').disabled, true);
+    $('workshop-compute').value = 'worker';
+    $('workshop-compute').dispatchEvent(new dom.window.Event('change'));
+    $('workshop-setup-confirm').click();
+    await settle();
+    const blockedMessage = {
+      blocked: /CUDA 检查未通过/,
+      mismatched: /无法与本次选机对应/,
+      offline: /暂时连不上/,
+    }[outcome];
+    if (blockedMessage) {
+      assert.match($('workshop-compute-check').textContent, blockedMessage);
+      assert.equal($('workshop-setup').hidden, false);
+      assert.equal($('workshop-compute').value, 'worker');
+      assert.equal($('workshop-setup-confirm').textContent, '检查这台算力机并继续');
+      assert.deepEqual(
+        calls.map(({ route }) => route),
+        [
+          'workshop-sessions/setup',
+          'compute-resources/worker/test',
+          ...(outcome === 'offline' ? [] : ['training/preflight']),
+        ],
+      );
+      return;
+    }
+    if (outcome === 'unverified') {
+      assert.match($('workshop-compute-check').textContent, /无法核对课程环境/);
+      assert.equal(calls.length, 3);
+      $('workshop-setup-confirm').click();
+      await settle();
+    }
+    assert.equal($('budget-section').hidden, false);
+    assert.equal($('workshop-setup').hidden, true);
+    assert.match(
+      $('budget-readiness').textContent,
+      outcome === 'ready' ? /检查通过/ : /课程环境未验证/,
+    );
+    assert.equal(dom.window.location.search, '?context=ws-new');
+    assert.deepEqual(
+      calls.map(({ route }) => route),
+      [
+        'workshop-sessions/setup',
+        'compute-resources/worker/test',
+        'training/preflight',
+        'workshop-sessions/setup',
+        'workshop-sessions/ws-new/select',
+        'workshop-sessions/ws-new/reference',
+      ],
+    );
   });
-  dom.window.sessionStorage.setItem('rdk-workshop:preview-observed', '1');
-  const calls = [];
-  const session = {
-    contextId: 'ws-new',
-    modelId: 'model',
-    computeResourceId: 'worker',
-    stage: 'ready',
-    training: null,
-    evaluation: null,
-    reference: 'pending',
-  };
-  const controller = await startWorkshop({
-    document: dom.window.document,
-    location: dom.window.location,
-    historyImpl: dom.window.history,
-    fetchImpl: async (url, options) => {
-      const route = new URL(url).pathname.split('/api/v1/duck/')[1];
-      const body = options.body ? JSON.parse(options.body) : undefined;
-      calls.push({ route, body });
-      const ok = (data) => ({ ok: true, json: async () => ({ ok: true, ...data }) });
-      if (route === 'workshop-sessions/setup' && !body)
-        return ok({
-          accountId: 'learner',
-          resources: [{ id: 'worker', name: 'Course GPU', status: 'online' }],
-        });
-      if (route === 'workshop-sessions/setup' && body) {
-        assert.deepEqual(body, { accountId: 'learner', computeResourceId: 'worker' });
-        return ok({ session });
-      }
-      if (route.endsWith('/select')) return ok({ session });
-      if (route.endsWith('/reference')) {
-        assert.equal(body.reference, 'observed');
-        return ok({ session: { ...session, reference: body.reference } });
-      }
-      throw Error('Unexpected call ' + route);
-    },
-  });
-  t.after(() => {
-    controller.dispose();
-    dom.window.close();
-  });
-  const $ = (id) => dom.window.document.getElementById(id);
-  assert.equal($('workshop-setup').hidden, false);
-  assert.equal($('workshop-compute').value, '');
-  assert.equal($('workshop-setup-confirm').disabled, true);
-  $('workshop-compute').value = 'worker';
-  $('workshop-compute').dispatchEvent(new dom.window.Event('change'));
-  $('workshop-setup-confirm').click();
-  await settle();
-  assert.equal($('budget-section').hidden, false);
-  assert.equal($('workshop-setup').hidden, true);
-  assert.equal(dom.window.location.search, '?context=ws-new');
-  assert.deepEqual(
-    calls.map(({ route }) => route),
-    [
-      'workshop-sessions/setup',
-      'workshop-sessions/setup',
-      'workshop-sessions/ws-new/select',
-      'workshop-sessions/ws-new/reference',
-    ],
-  );
-});
+}
