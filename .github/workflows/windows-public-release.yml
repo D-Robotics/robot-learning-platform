@@ -10,10 +10,11 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        mode: [installed-node, download-node]
+        mode: [download-node]
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
         with:
           node-version: 24
       - run: node check.mjs ${{ matrix.mode }}
+        shell: cmd

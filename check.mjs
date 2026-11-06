@@ -49,6 +49,14 @@ try {
   env.PATH = mode==='download-node'
     ? [path.dirname(cmd),process.env.SystemRoot,path.dirname(powerShell)].join(path.delimiter)
     : [path.dirname(process.execPath),process.env.PATH].join(path.delimiter);
+  if (mode==='download-node') {
+    // Explorer launches .cmd files with the default Windows PowerShell module path,
+    // independently of the GitHub Actions PowerShell 7 process.
+    for (const key of Object.keys(env)) if (key.toLowerCase()==='psmodulepath') delete env[key];
+    const commands=run(powerShell,['-NoLogo','-NoProfile','-NonInteractive','-Command',
+      "$ErrorActionPreference='Stop'; (Get-Command Get-FileHash,Expand-Archive).Name"],{env});
+    console.log('Default Windows PowerShell commands: '+commands.trim().replace(/\r?\n/g,', '));
+  }
   const output=run(cmd,['/d','/c','setup-qoder-windows.cmd'],{cwd:plugin,env,input:'\r\n'});
   const installed=output.split(/\r?\n/).find(line=>line.startsWith('{"pluginVersion"'));
   assert.equal(JSON.parse(installed).pluginVersion,'0.6.8');
