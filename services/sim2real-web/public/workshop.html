@@ -16,15 +16,8 @@
       ><span id="connection-status" role="status">正在接续课程</span>
     </header>
     <main id="workshop-main" class="workshop-shell">
-      <div class="section-heading">
+      <div class="section-heading workshop-title">
         <h1>OriginMan Workshop</h1>
-        <button id="new-experiment" type="button" disabled>新实验</button
-        ><button id="history-toggle" type="button" aria-expanded="false">切换实验</button>
-      </div>
-      <p id="workshop-status" role="status">正在读取当前账号的课程。</p>
-      <div class="workshop-actions" aria-label="交互仿真入口">
-        <a id="open-interactive-simulation" href="./?robot=originman#simulate">交互仿真 · 调力度与慢放</a>
-        <span>自由施力、8 秒实验和慢放回看。用浏览器后退返回本次课程。</span>
       </div>
       <nav class="workshop-progress" aria-label="课程进度">
         <button id="workshop-step-reference" type="button" disabled>1 · 看参考</button>
@@ -32,6 +25,23 @@
         <button id="workshop-step-execution" type="button" disabled>3 · 训练与评测</button>
         <button id="workshop-step-result" type="button" disabled>4 · 看结果</button>
       </nav>
+      <div class="workshop-current" role="region" aria-labelledby="workshop-current-title">
+        <div>
+          <p id="workshop-current-step" class="eyebrow">课程进度</p>
+          <h2 id="workshop-current-title">正在打开课程</h2>
+          <p id="workshop-status" role="status">正在读取当前账号的课程。</p>
+        </div>
+        <button id="workshop-primary" type="button" hidden></button>
+      </div>
+      <details class="workshop-extras">
+        <summary>实验管理与自由探索</summary>
+        <div class="workshop-actions">
+          <button id="new-experiment" type="button" disabled>新实验</button>
+          <button id="history-toggle" type="button" aria-expanded="false" aria-controls="history">切换实验</button>
+          <a id="open-interactive-simulation" href="./?robot=originman#simulate">打开交互仿真</a>
+        </div>
+        <p>可自由施力、跑 8 秒实验或慢放回看。浏览器后退可回到本轮课程。</p>
+      </details>
       <div id="workshop-error" class="experiment-error" role="alert" hidden></div>
       <section id="history" hidden aria-label="选择已有实验">
         <h2>选择要继续的实验</h2>

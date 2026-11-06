@@ -164,9 +164,20 @@ test('one prompt opens ready state; reference and explicit quick button drive on
     );
     assert.equal(d.getElementById('budget-section').hidden, true);
     assert.equal(d.getElementById('workshop-step-reference').getAttribute('aria-current'), 'step');
+    const primary = d.getElementById('workshop-primary');
+    assert.equal(primary.textContent, '看参考或跳过');
+    primary.click();
+    assert.equal(d.activeElement.id, 'reference-section');
+    assert.equal(
+      f.calls.some((x) => x.p === 'runs'),
+      false,
+    );
     d.getElementById('reference-video').dispatchEvent(new f.dom.window.Event('ended'));
     await settle();
     assert.equal(d.getElementById('budget-section').hidden, false);
+    assert.equal(primary.textContent, '选择训练预算');
+    primary.click();
+    assert.equal(d.activeElement.id, 'budget-section');
     assert.equal(d.getElementById('reference-section').hidden, true);
     assert.equal(d.getElementById('workshop-step-budget').getAttribute('aria-current'), 'step');
     assert.equal(d.activeElement.id, 'budget-section');
@@ -526,10 +537,23 @@ test('completed experiment starts an independent parameter draft with the prior 
     f.dom.window.close();
   });
   assert.equal($('compare-parameters').hidden, false);
+  assert.equal($('workshop-primary').textContent, '查看本轮结果');
+  assert.equal($('execution-section').hidden, true);
+  $('workshop-step-execution').click();
+  assert.equal($('execution-section').hidden, false);
+  $('workshop-step-result').click();
+  assert.equal($('execution-section').hidden, true);
+  $('workshop-primary').click();
+  assert.equal(d.activeElement.id, 'result-section');
   $('compare-parameters').click();
   await settle();
   assert.equal($('budget-section').hidden, false);
   assert.equal($('custom-recipe').open, true);
+  assert.equal($('workshop-primary').textContent, '编辑训练参数');
+  $('custom-recipe').open = false;
+  $('workshop-primary').click();
+  assert.equal($('custom-recipe').open, true);
+  assert.equal(d.activeElement.id, 'custom-timesteps');
   assert.deepEqual(
     ['custom-timesteps', 'custom-seed', 'custom-push'].map((id) => $(id).value),
     ['16384', '11', '7.5'],

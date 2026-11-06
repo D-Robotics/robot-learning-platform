@@ -22,9 +22,11 @@ export async function startWorkshop({
     halted = false,
     reference = null,
     referenceExpanded = false,
+    executionExpanded = false,
     pendingRecipe = null,
     failureMessage = '',
-    frameObserver = null;
+    frameObserver = null,
+    primaryAction = null;
   const validId = (v) => typeof v === 'string' && /^[A-Za-z0-9][A-Za-z0-9_.-]{0,95}$/.test(v);
   const listeners = [];
   const listen = (id, type, fn) => {
@@ -60,6 +62,7 @@ export async function startWorkshop({
     $('workshop-error').textContent = e.message ?? '课程暂不可用。';
     $('workshop-error').hidden = false;
     $('connection-status').textContent = '需要处理';
+    show();
   };
   const run = (fn) => {
     void fn().catch(error);
@@ -83,12 +86,12 @@ export async function startWorkshop({
     $('skip-reference').disabled = busy || selecting;
     if (referencePlayButton) referencePlayButton.disabled = busy || selecting;
     $('budget-section').hidden = !ready || !reference;
-    $('execution-section').hidden = !session || ready;
+    $('execution-section').hidden = !session || ready || (session.stage === 'results' && !executionExpanded);
     $('result-section').hidden = !session?.training;
     $('compare-parameters').hidden = session?.stage !== 'results' || !session.recipe;
     $('compare-parameters').disabled = busy || selecting;
     $('result-guide').textContent = session?.stage === 'results'
-      ? '先看恢复成功次数，再用回放观察一例。想弄清哪个参数有影响，就保留本轮并只改一项。'
+      ? '回放展示一个条件。整体表现请看两组固定条件的恢复次数。'
       : '训练曲线随任务更新。等评测完成，再看同条件下的恢复次数。';
     $('new-experiment').disabled = !session || busy || selecting;
     $('history-toggle').disabled = busy || selecting;
@@ -115,10 +118,6 @@ export async function startWorkshop({
     $('active-recipe').textContent = session?.recipe
       ? `${session.recipe.timesteps.toLocaleString('zh-CN')} 步 · 随机种子 ${session.recipe.seed} · 侧推 ${session.recipe.pushMaxForce} N`
       : '';
-    $('workshop-status').textContent =
-      ready && reference
-        ? '下一步选训练预算。第一次可以选快速体验。'
-        : session?.nextAction ?? '选择一个实验继续，或回到插件开始课程。';
     $('execution-status').textContent =
       session?.stage === 'unknown'
         ? session.recoveryPhase
@@ -143,6 +142,50 @@ export async function startWorkshop({
                   : ['queued', 'pending'].includes(session?.training?.status)
                     ? '训练已提交，等待算力开始。'
                     : '训练进行中，页面会自动更新。';
+    const phase = session?.stage;
+    let guide;
+    if (selecting) {
+      guide = ['正在切换实验', '正在读取所选实验的进度。'];
+    } else if (halted) {
+      guide = ['当前步骤需要处理', '查看下方原因。原实验和已经提交的任务会保留。', '查看原因', 'workshop-error'];
+    } else if (!session) {
+      guide = ['选择课程实验', '有实验就从列表接着做。第一次可以在聊天说“带我开始 Workshop”。', '查看实验列表', 'history'];
+    } else if (ready) {
+      if (reference && !$('comparison-recipe-help').hidden) {
+        guide = ['修改上一轮配方', '只改一个参数，再检查配方。你确认后才会开始训练。', '编辑训练参数', 'custom-recipe'];
+      } else {
+        guide = reference
+          ? ['选择这轮怎么训练', '第一次可以选快速体验。开始后会用同一策略自动评测。', '选择训练预算', 'budget-section']
+          : ['先看看机器人怎样恢复站稳', '播放一段讲师参考，或跳过后直接选训练预算。', '看参考或跳过', 'reference-section'];
+      }
+    } else if (phase === 'results') {
+      guide = ['训练和评测已完成', '先看恢复成功次数，再看回放。想找原因，可以只改一项参数再试。', '查看本轮结果', 'result-section'];
+    } else if (phase === 'blocked' || phase === 'unknown' || phase === 'ready-evaluate') {
+      guide = [
+        phase === 'blocked' ? '实验暂时停在这里' : phase === 'unknown' ? '正在核对原提交' : '本轮训练已完成',
+        $('execution-status').textContent,
+        phase === 'ready-evaluate' ? '查看评测安排' : '查看处理方式',
+        'execution-section',
+      ];
+    } else {
+      guide = [
+        phase === 'evaluating' ? '正在评测本轮策略' : ['queued', 'pending'].includes(session.training?.status) ? '训练正在排队' : '正在训练本轮策略',
+        phase === 'evaluating' ? '结果出来后，可以比较三种策略的恢复次数。' : '可看实时曲线。训练完成后，页面会按当前设置继续评测。',
+        '查看本轮进度', 'execution-section',
+      ];
+    }
+    const [title, description, label, target] = guide;
+    $('workshop-current-step').textContent = session
+      ? `第 ${step + 1} 步 / 共 4 步`
+      : '课程进度';
+    $('workshop-current-title').textContent = title;
+    if ($('workshop-status').textContent !== description)
+      $('workshop-status').textContent = description;
+    const primary = $('workshop-primary');
+    primary.hidden = !label;
+    primary.disabled = busy || selecting;
+    primary.textContent = label ?? '';
+    primaryAction = target;
     $('workshop-diagnostics').textContent = JSON.stringify(session, null, 2);
     $('connection-status').textContent =
       halted || session?.stage === 'unknown'
@@ -190,10 +233,26 @@ export async function startWorkshop({
   for (const name of ['reference', 'budget', 'execution', 'result'])
     listen('workshop-step-' + name, 'click', () => {
       referenceExpanded = name === 'reference';
+      executionExpanded = name === 'execution';
       show();
       reveal(name === 'result' ? 'result-section' : name + '-section');
     });
   listen('go-results', 'click', () => reveal('result-section'));
+  listen('workshop-primary', 'click', () => {
+    if (!primaryAction) return;
+    if (primaryAction === 'history') {
+      run(async () => {
+        await history();
+        $('history').hidden = false;
+        $('history-toggle').setAttribute('aria-expanded', 'true');
+        reveal('history');
+      });
+      return;
+    }
+    if (primaryAction === 'custom-recipe') $('custom-recipe').open = true;
+    reveal(primaryAction);
+    if (primaryAction === 'custom-recipe') $('custom-timesteps').focus({ preventScroll: true });
+  });
   const claimAndSubmit = async (phase, recipe = {}) => {
     // A draft can outlive the resource health TTL; probe before consuming its
     // durable submission claim, including after a long training run.
@@ -214,6 +273,7 @@ export async function startWorkshop({
   const refresh = async () => {
     if (busy || selecting || disposed || !contextId) return;
     const previousStage = session?.stage;
+    const wasReadingExecution = document.activeElement === $('execution-section');
     busy = true;
     halted = false;
     failureMessage = '';
@@ -254,7 +314,7 @@ export async function startWorkshop({
       schedule();
     }
     if (previousStage !== 'results' && session?.stage === 'results' &&
-        document.activeElement === $('execution-section') && $('history').hidden &&
+        wasReadingExecution && $('history').hidden &&
         !referenceExpanded) reveal('result-section');
   };
   const start = async (recipe) => {
@@ -292,6 +352,7 @@ export async function startWorkshop({
     if (referenceVideo.currentTime > 0) referenceVideo.currentTime = 0;
     reference = null;
     referenceExpanded = false;
+    executionExpanded = false;
     pendingRecipe = null;
     $('recipe-confirm').hidden = true;
     $('comparison-recipe-help').hidden = true;

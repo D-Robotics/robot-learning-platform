@@ -1,7 +1,7 @@
 .workshop-shell {
   max-width: 1200px;
   margin: auto;
-  padding: 32px;
+  padding: clamp(16px, 4vw, 32px);
 }
 .workshop-shell section {
   margin: 32px 0;
@@ -51,7 +51,7 @@
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 8px;
-  margin: 24px 0;
+  margin: 12px 0;
 }
 .workshop-progress button {
   padding: 12px 8px;
@@ -72,7 +72,7 @@
   color: var(--muted-strong);
   font-variant-numeric: tabular-nums;
 }
-#play-reference, #start-quick, #confirm-recipe, #go-results {
+#workshop-primary, #play-reference, #start-quick, #confirm-recipe, #go-results {
   background: var(--accent-soft);
   border-color: var(--accent);
   color: var(--accent-text);
@@ -81,3 +81,23 @@
 .workshop-shell section { scroll-margin-top: 24px; }
 #result-frame { min-height: 520px; overflow: hidden; border: 0; }
 .workshop-shell h1 { flex: 1; margin-bottom: 0; }
+
+.workshop-title { margin-bottom: 12px; }
+.workshop-current {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: end;
+  justify-content: space-between;
+  gap: 12px 24px;
+  padding: 16px;
+  border: 1px solid var(--accent);
+  border-radius: 12px;
+  background: var(--panel);
+}
+.workshop-current > div { flex: 1 1 320px; }
+.workshop-current p { margin: 4px 0; }
+.workshop-extras { margin: 16px 0; color: var(--muted-strong); }
+.workshop-extras summary { cursor: pointer; }
+@media (max-width: 480px) {
+  .workshop-progress { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
