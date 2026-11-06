@@ -4,6 +4,8 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
+import { connectMcp } from '../plugins/rdk-robot-learning-platform/scripts/experience.mjs';
 import {
   windowsBootstrap,
   protectWindowsBinding,
@@ -76,3 +78,110 @@ test('Windows DPAPI contract is CurrentUser, stdin-only, and cannot decrypt unde
     /DPAPI failed/,
   );
 });
+
+test(
+  'Windows runs the Qoder CMD installer and starts the configured MCP from its import ZIP',
+  {
+    skip: process.platform !== 'win32',
+    timeout: 60000,
+  },
+  async (t) => {
+    const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'rdk-win-'));
+    t.after(() => fs.rmSync(temp, { recursive: true, force: true }));
+    const root = path.join(temp, '课程 插件');
+    const source = fileURLToPath(
+      new URL('../plugins/rdk-robot-learning-platform/', import.meta.url),
+    );
+    fs.cpSync(source, root, { recursive: true });
+    fs.mkdirSync(path.join(root, 'mcp'), { recursive: true });
+    fs.writeFileSync(
+      path.join(root, 'mcp/bundle.mjs'),
+      `
+    import { createInterface } from 'node:readline';
+    export async function main() {
+      for await (const line of createInterface({input:process.stdin})) {
+        const request = JSON.parse(line);
+        if (request.id === undefined) continue;
+        const result = request.method === 'tools/list' ? { tools: [] } : { capabilities: { tools: {} } };
+        process.stdout.write(JSON.stringify({jsonrpc:'2.0',id:request.id,result})+'\\n');
+      }
+    }
+  `,
+    );
+    fs.writeFileSync(
+      path.join(root, 'scripts/start-core-mcp.mjs'),
+      "import { main } from '../mcp/bundle.mjs'; await main();",
+    );
+    const installation = spawnSync('cmd.exe', ['/d', '/c', 'setup-qoder-windows.cmd'], {
+      cwd: root,
+      env: {
+        ...process.env,
+        PATH: path.dirname(process.execPath) + path.delimiter + process.env.PATH,
+      },
+      input: '\r\n',
+      encoding: 'utf8',
+      windowsHide: true,
+      timeout: 25000,
+    });
+    assert.ifError(installation.error);
+    assert.equal(installation.status, 0, installation.stdout + installation.stderr);
+    const archive = path.join(root, 'Qoder本机导入包.zip');
+    const extracted = path.join(temp, '导入后');
+    const unzip = spawnSync(
+      'powershell.exe',
+      [
+        '-NoProfile',
+        '-NonInteractive',
+        '-Command',
+        'Expand-Archive -LiteralPath $env:RDK_TEST_ZIP -DestinationPath $env:RDK_TEST_EXTRACT',
+      ],
+      {
+        env: { ...process.env, RDK_TEST_ZIP: archive, RDK_TEST_EXTRACT: extracted },
+        encoding: 'utf8',
+        windowsHide: true,
+        timeout: 15000,
+      },
+    );
+    assert.ifError(unzip.error);
+    assert.equal(unzip.status, 0, unzip.stderr);
+    const importedRoot = path.join(extracted, 'rdk-robot-learning-platform');
+    const config = JSON.parse(fs.readFileSync(path.join(importedRoot, '.mcp.json'), 'utf8'));
+    const entry = config.mcpServers['rdk-learning-platform'];
+    assert.equal(entry.args[0], path.join(root, 'scripts/experience-mcp.mjs'));
+    assert.equal(entry.env.RDK_STUDIO_INHERIT_LOGIN, '0');
+    assert.ok(!JSON.stringify(entry).includes('RDK_SIM2REAL_MCP_COOKIE'));
+    const client = connectMcp({
+      ...entry,
+      env: { ...process.env, ...entry.env },
+      timeoutMs: 10000,
+    });
+    try {
+      await client.request('initialize', {
+        clientInfo: { name: 'Qoder', version: 'windows-fixture' },
+      });
+      const catalog = await client.request('tools/list');
+      assert.ok(catalog.tools.some((tool) => tool.name === 'rdk_workshop'));
+      assert.ok(catalog.tools.some((tool) => tool.name === 'rdk_auth_login'));
+    } finally {
+      await client.close();
+    }
+  },
+);
+
+test(
+  'Windows can protect and reopen a real current-user DPAPI binding',
+  {
+    skip: process.platform !== 'win32',
+    timeout: 30000,
+  },
+  () => {
+    const config = {
+      root: 'C:\\课程 插件',
+      platformUrl: 'https://studio.example/robotics-learning',
+      credentials: { RDK_SIM2REAL_MCP_COOKIE: 'fixture-cookie' },
+    };
+    const cipher = protectWindowsBinding(config);
+    assert.ok(!Buffer.from(cipher, 'base64').includes(Buffer.from('fixture-cookie')));
+    assert.deepEqual(unprotectWindowsBinding(cipher, config.root), config);
+  },
+);

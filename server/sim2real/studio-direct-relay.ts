@@ -114,6 +114,13 @@ function normalizeRelayBasePath(value: string | undefined): string {
   return `/${raw.replace(/^\/+|\/+$/g, '')}`;
 }
 
+// Only the Workshop's two local entry forms may continue after login.
+function workshopContinuation(value: unknown): string | undefined {
+  return typeof value === 'string' && (value === 'start' || /^ws-[a-f0-9]{20}$/.test(value))
+    ? value
+    : undefined;
+}
+
 /** 结构化最小响应类型：兼容全局 fetch Response，避免解析成 express Response。 */
 type UpstreamResponse = {
   ok: boolean;
@@ -131,8 +138,12 @@ export type RelayOutcome = {
 
 export function createStudioDirectRelay(deps: StudioDirectRelayDeps = {}) {
   const basePath = normalizeRelayBasePath(deps.basePath);
-  const loginRedirect = (error?: string) =>
-    error ? `${basePath}/login?error=${error}` : `${basePath}/login`;
+  const loginRedirect = (error?: string, workshop?: string) => {
+    const query = new URLSearchParams();
+    if (error) query.set('error', error);
+    if (workshop) query.set('workshop', workshop);
+    return `${basePath}/login${query.size ? '?' + query : ''}`;
+  };
   const post =
     deps.post ??
     (async (url: string, body: string) =>
@@ -259,8 +270,9 @@ export function createStudioDirectRelay(deps: StudioDirectRelayDeps = {}) {
 
     /** 表单形态（无 JS 的 HTML 登录页）：成功/失败一律重定向。 */
     async handleForm(request: Request, response: Response): Promise<void> {
+      const workshop = workshopContinuation(request.body?.workshop);
       if (!studioDirectRelayAvailable()) {
-        response.redirect(302, loginRedirect('unavailable'));
+        response.redirect(302, loginRedirect('unavailable', workshop));
         return;
       }
       const userName = String(request.body?.userName ?? '')
@@ -268,12 +280,17 @@ export function createStudioDirectRelay(deps: StudioDirectRelayDeps = {}) {
         .slice(0, 160);
       const password = String(request.body?.password ?? '').slice(0, 256);
       if (!userName || !password) {
-        response.redirect(302, loginRedirect('missing'));
+        response.redirect(302, loginRedirect('missing', workshop));
         return;
       }
       const outcome = await runWithGuards(request, userName, password);
       applyCookies(response, outcome);
-      response.redirect(302, outcome.redirect ?? `${basePath}/`);
+      const destination = workshop
+        ? outcome.status === 200
+          ? `${basePath}/workshop.html?${workshop === 'start' ? 'start=1&setup=1' : 'context=' + workshop}`
+          : loginRedirect(outcome.status === 401 ? 'invalid' : 'unavailable', workshop)
+        : (outcome.redirect ?? `${basePath}/`);
+      response.redirect(302, destination);
     },
   };
 }
@@ -283,7 +300,9 @@ export function renderStudioDirectLoginPage(
   error?: string,
   basePath?: string,
   notice?: string,
+  workshopInput?: unknown,
 ): string {
+  const workshop = workshopContinuation(workshopInput);
   const base = normalizeRelayBasePath(basePath);
   const messages: Record<string, string> = {
     missing: '请输入账号与密码。',
@@ -323,6 +342,7 @@ export function renderStudioDirectLoginPage(
   ${errorHtml}
   ${noticeHtml}
   <form method="post" action="${base}/api/sim2real/auth/studio-direct/login">
+    ${workshop ? `<input type="hidden" name="workshop" value="${workshop}"/>` : ''}
     <label for="userName">账号</label>
     <input id="userName" name="userName" autocomplete="username" required/>
     <label for="password">密码</label>

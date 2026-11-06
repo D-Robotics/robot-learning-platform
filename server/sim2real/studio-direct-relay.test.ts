@@ -60,8 +60,10 @@ function makeApp(
       void relay.handleForm(req, res);
     });
   }
-  app.get('/login', (_req, res) => {
-    res.type('html').send(renderStudioDirectLoginPage('invalid', basePath));
+  app.get('/login', (req, res) => {
+    res
+      .type('html')
+      .send(renderStudioDirectLoginPage('invalid', basePath, undefined, req.query.workshop));
   });
   return app;
 }
@@ -83,6 +85,37 @@ function configuredEnv(): Record<string, string> {
 }
 
 describe('studio direct-login relay', () => {
+  it('returns to Workshop in the same tab and ignores untrusted redirect targets', async () => {
+    setTestEnv(configuredEnv());
+    const app = makeApp(
+      async (_url, body) =>
+        JSON.parse(body).password === 'ok'
+          ? studioResponse({ setCookie: ['rdk_sso_web_session=v1.a.b.c; Path=/; HttpOnly'] })
+          : studioResponse({ status: 401 }),
+      'form',
+      '/robotics-learning',
+    );
+    const base = await listen(app);
+    const form = (workshop: string, password = 'ok') =>
+      fetch(`${base}/api/sim2real/auth/studio-direct/login`, {
+        method: 'POST',
+        redirect: 'manual',
+        body: new URLSearchParams({ userName: 'user', password, workshop }),
+      });
+    const html = await (await fetch(`${base}/login?workshop=start`)).text();
+    expect(html).toContain('name="workshop" value="start"');
+    expect((await form('start', 'wrong')).headers.get('location')).toBe(
+      '/robotics-learning/login?error=invalid&workshop=start',
+    );
+    expect((await form('start')).headers.get('location')).toBe(
+      '/robotics-learning/workshop.html?start=1&setup=1',
+    );
+    expect((await form('ws-0123456789abcdef0123')).headers.get('location')).toBe(
+      '/robotics-learning/workshop.html?context=ws-0123456789abcdef0123',
+    );
+    expect((await form('//other.example')).headers.get('location')).toBe('/robotics-learning/');
+  });
+
   it('relays credentials and passes studio session cookies through', async () => {
     setTestEnv(configuredEnv());
     const bodies: string[] = [];

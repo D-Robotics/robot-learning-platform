@@ -37,7 +37,6 @@ export async function startWorkshop({
     reconnectNeeded = false,
     setupAccount,
     setupReady = false,
-    awaitingSetupLogin = false,
     previewObserved = false;
   const validId = (v) => typeof v === 'string' && /^[A-Za-z0-9][A-Za-z0-9_.-]{0,95}$/.test(v);
   const listeners = [];
@@ -84,7 +83,13 @@ export async function startWorkshop({
     reconnectNeeded = e.offline === true;
     $('workshop-error-message').textContent = e.message ?? '课程暂不可用。';
     $('workshop-error').hidden = false;
-    $('workshop-login').hidden = !loginNeeded;
+    const login = $('workshop-login');
+    login.hidden = !loginNeeded;
+    const destination = new URL('login', root);
+    if (entryPreview && !contextId) destination.searchParams.set('workshop', 'start');
+    else if (/^ws-[a-f0-9]{20}$/.test(contextId ?? ''))
+      destination.searchParams.set('workshop', contextId);
+    login.href = destination.href;
     $('workshop-retry').textContent = entryPreview && !contextId
       ? loginNeeded ? '已登录，继续选算力' : '重试读取算力机'
       : loginNeeded ? '登录后接续原实验' : '重试读取本轮';
@@ -285,7 +290,7 @@ export async function startWorkshop({
         : ['先看看，再动手', '用仿真训练一个受扰恢复策略，比较恢复次数并看回放。', '开始实操', 'start-setup'];
     } else if (halted) {
       guide = loginNeeded && preview
-        ? ['登录后选算力机', '在学习平台登录，回来就能选择本轮使用的机器。', '登录学习平台', 'workshop-login']
+        ? ['登录后选算力机', '登录后会直接进入选算力页。', '登录学习平台', 'workshop-login']
         : loginNeeded
         ? ['先登录学习平台', '请使用原实验所在的学习平台账号。', '去登录', 'workshop-login']
         : reconnectNeeded
@@ -553,6 +558,7 @@ export async function startWorkshop({
     const selectedUrl = new URL(location.href);
     selectedUrl.searchParams.set('context', id);
     selectedUrl.searchParams.delete('start');
+    selectedUrl.searchParams.delete('setup');
     if (id !== entryContextId) selectedUrl.searchParams.delete('with');
     historyImpl?.replaceState(null, '', selectedUrl.href);
     try {
@@ -738,7 +744,6 @@ export async function startWorkshop({
         ? (setupAccount ? '当前账号：' + setupAccount + '。' : '') + '选择一台算力机后再选预算。'
         : '当前账号没有可选算力机。请联系课程管理员分配算力，再刷新列表。';
       $('workshop-error').hidden = true;
-      awaitingSetupLogin = false;
       setupReady = true;
       halted = false;
     } finally {
@@ -771,18 +776,23 @@ export async function startWorkshop({
       await saveReference(previewObserved ? 'observed' : 'skipped');
     });
   });
+  const previewReferenceKey = 'rdk-workshop:preview-observed';
   listen('workshop-login', 'click', () => {
-    if (entryPreview && !contextId) awaitingSetupLogin = true;
+    if (!entryPreview || contextId) return;
+    try {
+      if (previewObserved) document.defaultView?.sessionStorage.setItem(previewReferenceKey, '1');
+      else document.defaultView?.sessionStorage.removeItem(previewReferenceKey);
+    } catch {
+      // Private browser settings can disable session storage.
+    }
   });
-  const onSetupReturn = () => {
-    if (awaitingSetupLogin && !document.hidden) run(loadSetup);
+  const onVisible = () => {
+    if (!document.hidden && !halted && contextId && session?.autoContinue &&
+        ['training', 'ready-evaluate', 'evaluating', 'unknown'].includes(session.stage))
+      run(refresh);
   };
-  document.defaultView?.addEventListener('focus', onSetupReturn);
-  document.addEventListener('visibilitychange', onSetupReturn);
-  listeners.push(() => {
-    document.defaultView?.removeEventListener('focus', onSetupReturn);
-    document.removeEventListener('visibilitychange', onSetupReturn);
-  });
+  document.addEventListener('visibilitychange', onVisible);
+  listeners.push(() => document.removeEventListener('visibilitychange', onVisible));
   const reconnect = async () => {
     if (busy || selecting || disposed) return;
     if (entryPreview && !contextId) return loadSetup();
@@ -912,8 +922,17 @@ export async function startWorkshop({
   listen('compare-parameters', 'click', () => run(() => createExperiment(true)));
   try {
     if (entryPreview) {
-      $('workshop-login').href = new URL('login', root).href;
       show();
+      if (entryUrl.searchParams.get('setup') === '1') {
+        try {
+          const storage = document.defaultView?.sessionStorage;
+          previewObserved = storage?.getItem(previewReferenceKey) === '1';
+          storage?.removeItem(previewReferenceKey);
+        } catch {
+          // Reference completion is optional.
+        }
+        await loadSetup();
+      }
     } else if (contextId) {
       if (!validId(contextId)) throw Error('实验标识无效。');
       await choose(contextId);
