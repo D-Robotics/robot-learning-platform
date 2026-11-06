@@ -66,6 +66,12 @@ export function registerSim2RealWorkshopRoutes(
     }),
   );
   router.get(
+    api('/:contextId/comparison'),
+    handle(async (r, owner) => ({
+      comparison: await sessions.compare(String(r.params.contextId), r.query.with, owner),
+    })),
+  );
+  router.get(
     api('/:contextId'),
     handle(async (r, owner) => ({
       session: await sessions.read(String(r.params.contextId), owner),

@@ -157,3 +157,127 @@ describe('restoration and consent', () => {
     }
   });
 });
+
+it('compares a durable three-round chain and rejects foreign or incomparable evidence', async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'workshop-compare-'));
+  const runs = new Map<string, any>();
+  const keys = new Map<string, any>();
+  const deps = {
+    root: () => root,
+    getRun: async (id: string) => runs.get(id) ?? null,
+    findRun: async (key: string) => keys.get(key) ?? null,
+    remember: async () => {},
+  };
+  const store = createWorkshopSessions(deps);
+  const owner = 'alice';
+  const hash = 'a'.repeat(64);
+  const protocol = Object.fromEntries(
+    [
+      'modelSha256',
+      'evaluatorSha256',
+      'runtimeSha256',
+      'physicalConfigSha256',
+      'conditionsSha256',
+      'controllerSha256',
+    ].map((key) => [key, hash]),
+  );
+  const finish = async (context: string, timesteps: number, recovered: number) => {
+    const recipe = { timesteps, seed: 7, pushMaxForce: 8.1, reference: 'skipped' as const };
+    for (const phase of ['train', 'evaluate'] as const) {
+      await store.claim(context, phase, phase === 'train' ? recipe : {}, owner);
+      const run = {
+        id: context + '-' + phase,
+        modelId: 'm',
+        computeResourceId: 'r',
+        taskId: 'originman-recovery',
+        mock: false,
+        status: 'completed',
+        training: {
+          engine: 'originman-recovery-reflect',
+          algorithm: 'sac',
+          numEnvs: 4,
+          originmanWorkshop: {
+            ...recipe,
+            groupId: context,
+            phase,
+            ...(phase === 'evaluate' ? { sourceRunId: context + '-train' } : {}),
+          },
+        },
+        metrics: {
+          originmanWorkshop: {
+            phase,
+            policySha256: hash,
+            actorRecipe: 'reflection-equivariant',
+            trainingDevice: 'cuda',
+            actualTimesteps: timesteps,
+            ...(phase === 'evaluate'
+              ? {
+                  sourceRunId: context + '-train',
+                  feedbackComparison: {
+                    protocol: { ...protocol },
+                    baselineSha256: hash,
+                    suites: ['historical', 'additional'].map((id) => ({
+                      id,
+                      cases: Array.from({ length: 31 }, (_, index) => ({
+                        index,
+                        force: 7,
+                        start: 2,
+                        duration: 0.2,
+                        original: index < 13,
+                        tuned: index < 17,
+                        rl: index < recovered,
+                      })),
+                    })),
+                  },
+                }
+              : {}),
+          },
+        },
+      };
+      runs.set(run.id, run);
+      keys.set(run.id, run);
+      await store.read(context, owner);
+    }
+  };
+  try {
+    const base = await store.create({ modelId: 'm', computeResourceId: 'r' }, owner);
+    await finish(base.contextId, 8192, 1);
+    const second = await store.create(
+      { modelId: 'm', computeResourceId: 'r', comparisonBaseId: base.contextId },
+      owner,
+    );
+    expect(second).toMatchObject({
+      reference: 'skipped',
+      comparisonBase: { contextId: base.contextId, recipe: { timesteps: 8192 } },
+    });
+    await finish(second.contextId, 16384, 2);
+    const third = await store.create(
+      { modelId: 'm', computeResourceId: 'r', comparisonBaseId: second.contextId },
+      owner,
+    );
+    await finish(third.contextId, 500000, 27);
+    const fresh = createWorkshopSessions(deps);
+    const result = await fresh.compare(third.contextId, undefined, owner);
+    expect(result).toMatchObject({ comparable: true, sameTrainingSetup: true });
+    expect(result.rounds.map((r) => [r.recipe.timesteps, r.suites[0].recovered])).toEqual([
+      [8192, 1],
+      [16384, 2],
+      [500000, 27],
+    ]);
+    await expect(fresh.compare(third.contextId, base.contextId, 'bob')).rejects.toThrow();
+    await expect(
+      fresh.create(
+        { modelId: 'm', computeResourceId: 'r', comparisonBaseId: base.contextId },
+        'bob',
+      ),
+    ).rejects.toThrow();
+    runs.get(
+      third.contextId + '-evaluate',
+    ).metrics.originmanWorkshop.feedbackComparison.protocol.conditionsSha256 = 'b'.repeat(64);
+    expect((await fresh.compare(third.contextId, undefined, owner)).comparable).toBe(false);
+    runs.get(third.contextId + '-evaluate').metrics.originmanWorkshop.policySha256 = 'c'.repeat(64);
+    await expect(fresh.compare(third.contextId, undefined, owner)).rejects.toThrow();
+  } finally {
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});

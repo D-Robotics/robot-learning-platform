@@ -2,7 +2,12 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
-import { ExperimentError, type ExperimentRun, type ExperimentView } from './experiment-sessions.js';
+import {
+  experimentView,
+  ExperimentError,
+  type ExperimentRun,
+  type ExperimentView,
+} from './experiment-sessions.js';
 type Run = ExperimentRun & { computeResourceId?: string; taskId?: string; training?: unknown };
 type Recipe = {
   timesteps: number;
@@ -17,6 +22,7 @@ type Session = {
   computeResourceId: string;
   createdAt: string;
   recipe: Recipe | null;
+  comparisonBase?: { contextId: string; recipe: Recipe };
   reference: 'pending' | 'observed' | 'skipped';
   autoContinue: boolean;
   training: string | null;
@@ -254,21 +260,41 @@ export function createWorkshopSessions(deps: Dependencies) {
     );
   };
   return {
-    async create(input: { modelId: string; computeResourceId: string }, owner?: string) {
+    async create(
+      input: { modelId: string; computeResourceId: string; comparisonBaseId?: string },
+      owner?: string,
+    ) {
       if (
         !input ||
-        Object.keys(input).some((k) => !['modelId', 'computeResourceId'].includes(k)) ||
+        Object.keys(input).some(
+          (k) => !['modelId', 'computeResourceId', 'comparisonBaseId'].includes(k),
+        ) ||
         !id(input.modelId) ||
-        !id(input.computeResourceId)
+        !id(input.computeResourceId) ||
+        (input.comparisonBaseId !== undefined && !id(input.comparisonBaseId))
       )
         reject('需要当前账号的明确课程模型和资源。', 'WORKSHOP_INPUT_INVALID', 400);
+      let comparisonBase: Session['comparisonBase'];
+      if (input.comparisonBaseId) {
+        const parent = await read(input.comparisonBaseId, owner);
+        if (
+          parent.stage !== 'results' ||
+          !parent.recipe ||
+          parent.modelId !== input.modelId ||
+          parent.computeResourceId !== input.computeResourceId
+        )
+          reject('请选择已完成评测且使用同一模型与算力的来源实验。');
+        comparisonBase = { contextId: parent.contextId, recipe: parent.recipe! };
+      }
       const s: Session = {
         schemaVersion: 1,
         contextId: 'ws-' + randomUUID().replaceAll('-', '').slice(0, 20),
-        ...input,
+        modelId: input.modelId,
+        computeResourceId: input.computeResourceId,
+        ...(comparisonBase ? { comparisonBase } : {}),
         createdAt: new Date().toISOString(),
         recipe: null,
-        reference: 'pending' as const,
+        reference: comparisonBase ? 'skipped' : 'pending',
         autoContinue: false,
         training: null,
         evaluation: null,
@@ -296,16 +322,39 @@ export function createWorkshopSessions(deps: Dependencies) {
         throw e;
       }
       const records = [];
-      for (const name of names.filter((n) => /^ws-[a-f0-9]{20}\.json$/.test(n)).slice(-24)) {
+      for (const name of names.filter((n) => /^ws-[a-f0-9]{20}\.json$/.test(n))) {
         const s = await session(name.slice(0, -5), owner);
         records.push({
           contextId: s.contextId,
           createdAt: s.createdAt,
           timesteps: s.recipe?.timesteps ?? null,
           started: Boolean(s.claims.train),
+          evaluationRecorded: Boolean(s.evaluation),
         });
       }
-      return records.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+      return records.sort((a, b) => b.createdAt.localeCompare(a.createdAt)).slice(0, 40);
+    },
+    async compare(contextId: string, previous: unknown, owner?: string) {
+      if (
+        previous !== undefined &&
+        (typeof previous !== 'string' ||
+          !previous.split(',').every(id) ||
+          previous.split(',').length > 2 ||
+          new Set([contextId, ...previous.split(',')]).size !== previous.split(',').length + 1)
+      )
+        reject('最多选择两轮不同的历史实验。', 'WORKSHOP_INPUT_INVALID', 400);
+      const current = await session(contextId, owner);
+      const selected = [current];
+      if (typeof previous === 'string') {
+        for (const context of previous.split(',')) selected.push(await session(context, owner));
+      } else {
+        while (selected.length < 3) {
+          const parentId = selected.at(-1)?.comparisonBase?.contextId;
+          if (!parentId || selected.some((s) => s.contextId === parentId)) break;
+          selected.push(await session(parentId, owner));
+        }
+      }
+      return compareWorkshopRuns(selected, deps, owner);
     },
     async reference(contextId: string, value: unknown, owner?: string) {
       return serial(file(contextId, owner), async () => {
@@ -432,5 +481,115 @@ export function createWorkshopSessions(deps: Dependencies) {
         };
       });
     },
+  };
+}
+
+async function compareWorkshopRuns(selected: Session[], deps: Dependencies, owner?: string) {
+  const digest = (value: unknown) => typeof value === 'string' && /^[a-f0-9]{64}$/.test(value);
+  const read = async (s: Session) => {
+    const [training, evaluation] = await Promise.all([
+      s.training ? deps.getRun(s.training, owner) : null,
+      s.evaluation ? deps.getRun(s.evaluation, owner) : null,
+    ]);
+    if (!training || !evaluation || !s.recipe || training.modelId !== s.modelId)
+      return reject('所选实验仍缺少训练或评测结果。');
+    const view = experimentView(
+      { contextId: s.contextId, runId: s.training!, evaluationRunId: s.evaluation! },
+      training,
+      evaluation,
+    );
+    if (!view.associationVerified) return reject('所选实验的同源评测尚未核对完成。');
+    const metrics = object(object(evaluation.metrics).originmanWorkshop);
+    const comparison = object(metrics.feedbackComparison);
+    const protocol = object(comparison.protocol);
+    const hashes = [
+      'modelSha256',
+      'evaluatorSha256',
+      'runtimeSha256',
+      'physicalConfigSha256',
+      'conditionsSha256',
+      'controllerSha256',
+    ].map((key) => protocol[key]);
+    if (
+      !hashes.every(digest) ||
+      !digest(comparison.baselineSha256) ||
+      !Array.isArray(comparison.suites) ||
+      comparison.suites.length !== 2
+    )
+      return reject('所选实验缺少可核对的评测协议。');
+    const signatures = [];
+    const suites = [];
+    for (const suiteId of ['historical', 'additional']) {
+      const suite = comparison.suites.find((s) => s?.id === suiteId);
+      if (!Array.isArray(suite?.cases) || suite.cases.length !== 31)
+        return reject('所选实验的固定条件记录不完整。');
+      const cases = (suite.cases as unknown[]).map(object);
+      if (
+        cases.some(
+          (c, index) =>
+            c.index !== index ||
+            ![c.force, c.start, c.duration].every(Number.isFinite) ||
+            ![c.original, c.tuned, c.rl].every((x) => typeof x === 'boolean'),
+        )
+      )
+        return reject('所选实验的固定条件记录无效。');
+      signatures.push(cases.map((c) => [c.force, c.start, c.duration, c.original, c.tuned]));
+      suites.push({
+        id: suiteId,
+        total: cases.length,
+        original: cases.filter((c) => c.original).length,
+        tuned: cases.filter((c) => c.tuned).length,
+        recovered: cases.filter((c) => c.rl).length,
+      });
+    }
+    return {
+      contextId: s.contextId,
+      createdAt: s.createdAt,
+      recipe: {
+        timesteps: s.recipe.timesteps,
+        seed: s.recipe.seed,
+        pushMaxForce: s.recipe.pushMaxForce,
+      },
+      clearGain: view.clearGain,
+      evidence: view.evidence,
+      actualTimesteps: Number.isSafeInteger(metrics.actualTimesteps)
+        ? (metrics.actualTimesteps as number)
+        : null,
+      suites,
+      protocolKey: JSON.stringify([
+        s.modelId,
+        comparison.baselineSha256,
+        protocol.durationSeconds,
+        hashes,
+        signatures,
+      ]),
+      recipeKey: [
+        object(training.training).engine,
+        metrics.actorRecipe,
+        metrics.trainingDevice,
+      ].every(id)
+        ? JSON.stringify([
+            s.computeResourceId,
+            object(training.training).engine,
+            metrics.actorRecipe,
+            metrics.trainingDevice,
+          ])
+        : null,
+    };
+  };
+  const records = await Promise.all(selected.map(read));
+  records.sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+  const comparable = records.every(
+    (r) => r.protocolKey === records[0].protocolKey && r.evidence === records[0].evidence,
+  );
+  const sameTrainingSetup = records.every(
+    (r) => r.recipeKey !== null && r.recipeKey === records[0].recipeKey,
+  );
+  return {
+    comparable,
+    sameTrainingSetup,
+    rounds: records.map(
+      ({ protocolKey: _protocolKey, recipeKey: _recipeKey, ...record }) => record,
+    ),
   };
 }

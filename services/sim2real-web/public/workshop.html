@@ -76,11 +76,12 @@
       </section>
       <section id="budget-section" hidden aria-labelledby="budget-heading">
         <h2 id="budget-heading">2 · 选择一次预算</h2>
-        <p>第一次玩，选快速体验。系统会训练一个策略，再自动评测这份策略。</p>
+        <p>第一次熟悉流程，选快速体验。需要判断策略能否超过 PD，再选正式预算。两档都会自动评测本轮策略。</p>
         <div class="workshop-actions">
           <button id="start-quick" type="button">开始快速体验 · 8192 步</button>
         </div>
-        <p>快速体验用于熟悉流程，不保证策略提升；正式预算也以本轮实际评测为准。</p>
+        <p>快速体验用 8,192 步检查训练、评测和回放链路。前 5,000 步主要收集经验，短训成绩可能低于原 PD。</p>
+        <p>正式预算请求 50 万步，用于做效果实验，需要更长的算力时间。以两组固定条件的评测判断结果。</p>
         <p id="comparison-recipe-help" hidden>
           已带入上一轮参数。只改一项，再比较两轮在相同条件下的恢复次数。
           <a id="comparison-base-link" target="_blank" rel="noopener">打开上一轮结果</a>
@@ -158,6 +159,24 @@
           <button id="compare-parameters" type="button" hidden>改一个参数再试</button>
           <a id="open-result" target="_blank" rel="noopener">单独打开本次实验</a>
         </div>
+        <details id="round-comparison">
+          <summary>跨轮对比 · 参数和恢复次数</summary>
+          <p>从本轮选最多两轮历史实验。由「改一个参数再试」创建的实验会自动带入来源轮次。</p>
+          <p id="round-comparison-status" role="status"></p>
+          <div class="comparison-scroll">
+            <table id="round-comparison-table" hidden>
+              <caption>恢复成功次数与相对上一行的变化</caption>
+              <thead><tr><th scope="col">实验</th><th scope="col">训练步数 / 种子 / 侧推上限</th><th scope="col">相比上一轮</th><th scope="col">公开组</th><th scope="col">补充组</th><th scope="col">收益判据</th></tr></thead>
+              <tbody id="round-comparison-rows"></tbody>
+            </table>
+          </div>
+          <button id="choose-rounds" type="button">选择历史轮次</button>
+          <div id="round-comparison-picker" class="workshop-actions" hidden>
+            <label>历史实验一 <select id="round-one"></select></label>
+            <label>历史实验二 <select id="round-two"></select></label>
+            <button id="apply-rounds" type="button">对比所选实验</button>
+          </div>
+        </details>
         <iframe
           id="result-frame"
           title="本次实验曲线、对比与回放"

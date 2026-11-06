@@ -2724,7 +2724,15 @@ paths:
         required: true
         content:
           application/json:
-            schema: { type: object }
+            schema:
+              type: object
+              required: [modelId, computeResourceId]
+              properties:
+                modelId: { type: string }
+                computeResourceId: { type: string }
+                comparisonBaseId:
+                  type: string
+                  description: Owned Workshop with completed evaluation and the same model and resource.
       responses:
         "200":
           description: Owner-scoped Workshop state or single submission claim
@@ -2761,6 +2769,32 @@ paths:
           description: No owned experiment or course asset
         "409":
           description: Frozen recipe, uncertain submission, or previously claimed step
+  /api/v1/duck/workshop-sessions/{contextId}/comparison:
+    parameters:
+      - in: path
+        name: contextId
+        required: true
+        schema: { type: string, pattern: "^[A-Za-z0-9][A-Za-z0-9_.-]{0,95}$" }
+    get:
+      tags: [workspace]
+      summary: Compare up to three owner-scoped Workshop rounds
+      operationId: getWorkshopComparison
+      parameters:
+        - in: query
+          name: with
+          description: One or two comma-separated owned context IDs. Omit to follow saved comparison links.
+          schema: { type: string }
+      responses:
+        "200":
+          description: Ordered round summaries and protocol and training-setup comparability flags
+        "400":
+          description: Invalid or duplicate round selection
+        "401":
+          description: Authentication required
+        "404":
+          description: No owned experiment
+        "409":
+          description: Incomplete or unverified evaluation evidence
   /api/v1/duck/workshop-sessions/{contextId}/select:
     parameters:
       - in: path

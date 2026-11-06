@@ -13,7 +13,10 @@ export async function startWorkshop({
   const referencePlayButton = $('play-reference');
   const root = new URL('./', location.href),
     api = new URL('api/v1/duck/', root);
-  let contextId = new URL(location.href).searchParams.get('context'),
+  const entryUrl = new URL(location.href);
+  const entryContextId = entryUrl.searchParams.get('context');
+  const entryRounds = entryUrl.searchParams.get('with')?.split(',') ?? [];
+  let contextId = entryContextId,
     session = null,
     timer = null,
     busy = false,
@@ -26,7 +29,9 @@ export async function startWorkshop({
     pendingRecipe = null,
     failureMessage = '',
     frameObserver = null,
-    primaryAction = null;
+    primaryAction = null,
+    comparisonRequest = 0,
+    comparisonLoaded = null;
   const validId = (v) => typeof v === 'string' && /^[A-Za-z0-9][A-Za-z0-9_.-]{0,95}$/.test(v);
   const listeners = [];
   const listen = (id, type, fn) => {
@@ -78,6 +83,80 @@ export async function startWorkshop({
     )
       timer = setTimer(() => run(refresh), 4000);
   };
+  const recipeFields = [
+    ['timesteps', '训练步数', 'custom-timesteps'],
+    ['seed', '随机种子', 'custom-seed'],
+    ['pushMaxForce', '侧推上限', 'custom-push'],
+  ];
+  const formatNumber = (n) => n.toLocaleString('zh-CN');
+  const comparisonStatus = (message) => { $('round-comparison-status').textContent = message; };
+  const renderRounds = (comparison) => {
+    const table = $('round-comparison-table');
+    const body = $('round-comparison-rows');
+    body.replaceChildren();
+    const { rounds, comparable, sameTrainingSetup } = comparison;
+    const evidenceNote = rounds.every((round) => round.evidence === 'fixture') ? '测试数据。' : '';
+    table.hidden = rounds.length < 2;
+    if (table.hidden) {
+      comparisonStatus('本轮还没有对照实验。可选择历史轮次，或点「改一个参数再试」。');
+      return;
+    }
+    let multipleChanges = false;
+    let unchanged = false;
+    for (const [index, round] of rounds.entries()) {
+      const previous = rounds[index - 1];
+      const changes = previous ? recipeFields.filter(([key]) => previous.recipe[key] !== round.recipe[key]) : [];
+      if (previous && changes.length > 1) multipleChanges = true;
+      if (previous && !changes.length) unchanged = true;
+      const row = document.createElement('tr');
+      const title = document.createElement('th');
+      title.scope = 'row';
+      const link = document.createElement('a');
+      link.href = new URL('workshop.html?context=' + encodeURIComponent(round.contextId), root).href;
+      link.textContent = '第 ' + (index + 1) + ' 轮' + (round.contextId === contextId ? ' · 本轮' : '');
+      title.append(link);
+      row.append(title);
+      const { timesteps, seed, pushMaxForce } = round.recipe;
+      const steps = formatNumber(timesteps) + (round.actualTimesteps != null && round.actualTimesteps !== timesteps
+        ? '（实跑 ' + formatNumber(round.actualTimesteps) + '）' : '');
+      const changeLabel = previous ? changes.map(([key, label]) =>
+        label + ' ' + formatNumber(previous.recipe[key]) + ' → ' + formatNumber(round.recipe[key])).join('；') || '参数相同' : '对照起点';
+      const counts = round.suites.map((suite, i) => {
+        const count = suite.recovered + '/' + suite.total;
+        if (!previous || !comparable) return count;
+        const difference = suite.recovered - previous.suites[i].recovered;
+        return count + (difference === 0 ? '（持平）' : '（' + (difference > 0 ? '+' : '−') + Math.abs(difference) + '）');
+      });
+      const verdict = round.clearGain === true ? '通过' : round.clearGain === false ? '未通过' : '待核对';
+      for (const value of [steps + ' / ' + seed + ' / ' + pushMaxForce + ' N', changeLabel, ...counts, verdict]) {
+        const cell = document.createElement('td');
+        cell.textContent = value;
+        row.append(cell);
+      }
+      body.append(row);
+    }
+    const [historical, additional] = rounds[0].suites;
+    const baselines = '原 PD：' + historical.original + '/' + historical.total + '、' + additional.original + '/' + additional.total +
+      '；调参反馈：' + historical.tuned + '/' + historical.total + '、' + additional.tuned + '/' + additional.total + '。';
+    comparisonStatus(evidenceNote + (!comparable ? '所选轮次的评测协议、基线或证据类型不同，仅列各轮原始成绩。'
+      : baselines + (!sameTrainingSetup || multipleChanges ? '有多项参数或训练设置同时变化，差值不能归给单一参数。'
+        : unchanged ? '参数相同的相邻轮次可用于复核复现。'
+          : '每行括号内为相对上一轮的恢复次数变化。此对比只代表所列仿真与种子。')));
+  };
+  const loadRounds = async (ids = []) => {
+    const activeId = contextId;
+    const request = ++comparisonRequest;
+    $('round-comparison-table').hidden = true;
+    comparisonStatus('正在核对各轮的训练、权重与评测条件。');
+    try {
+      const suffix = ids.length ? '?with=' + encodeURIComponent(ids.join(',')) : '';
+      const { comparison } = await json('workshop-sessions/' + encodeURIComponent(activeId) + '/comparison' + suffix);
+      if (!disposed && contextId === activeId && request === comparisonRequest) renderRounds(comparison);
+    } catch (e) {
+      if (!disposed && contextId === activeId && request === comparisonRequest)
+        comparisonStatus(e.message ?? '暂时无法对比所选实验。');
+    }
+  };
   const show = () => {
     const ready = session?.stage === 'ready';
     if (ready && ['observed', 'skipped'].includes(session.reference)) reference = session.reference;
@@ -88,6 +167,14 @@ export async function startWorkshop({
     $('budget-section').hidden = !ready || !reference;
     $('execution-section').hidden = !session || ready || (session.stage === 'results' && !executionExpanded);
     $('result-section').hidden = !session?.training;
+    $('round-comparison').hidden = session?.stage !== 'results' || Boolean(session.legacy);
+    const linkedRounds = contextId === entryContextId && entryRounds.length <= 2 &&
+      entryRounds.every(validId) ? entryRounds : [];
+    if (session?.stage === 'results' && (session.comparisonBase || linkedRounds.length) && comparisonLoaded !== contextId) {
+      comparisonLoaded = contextId;
+      $('round-comparison').open = true;
+      void loadRounds(linkedRounds);
+    }
     $('compare-parameters').hidden = session?.stage !== 'results' || !session.recipe;
     $('compare-parameters').disabled = busy || selecting;
     $('result-guide').textContent = session?.stage === 'results'
@@ -199,6 +286,7 @@ export async function startWorkshop({
       $('open-result').href = url;
       if ($('result-frame').getAttribute('src') !== url) $('result-frame').src = url;
     }
+    $('start-quick').hidden = Boolean(session?.comparisonBase);
     $('start-quick').disabled = busy || selecting || !ready;
     $('start-formal').disabled = busy || selecting || !ready;
     $('confirm-recipe').disabled = busy || selecting || !ready;
@@ -355,6 +443,12 @@ export async function startWorkshop({
     executionExpanded = false;
     pendingRecipe = null;
     $('recipe-confirm').hidden = true;
+    comparisonRequest++;
+    comparisonLoaded = null;
+    $('round-comparison').open = false;
+    $('round-comparison-table').hidden = true;
+    $('round-comparison-picker').hidden = true;
+    comparisonStatus('');
     $('comparison-recipe-help').hidden = true;
     $('custom-recipe').open = false;
     for (const id of ['custom-timesteps', 'custom-seed', 'custom-push']) $(id).value = $(id).defaultValue;
@@ -366,12 +460,22 @@ export async function startWorkshop({
     show();
     const selectedUrl = new URL(location.href);
     selectedUrl.searchParams.set('context', id);
+    if (id !== entryContextId) selectedUrl.searchParams.delete('with');
     historyImpl?.replaceState(null, '', selectedUrl.href);
     try {
       const selected = (await json('workshop-sessions/' + encodeURIComponent(id) + '/select', {}))
         .session;
       if (selected?.contextId !== id) throw Error('返回的实验与所选记录不一致。');
       session = selected;
+      if (session.stage === 'ready' && session.comparisonBase) {
+        const parent = session.comparisonBase;
+        for (const [key, , id] of recipeFields) $(id).value = parent.recipe[key];
+        $('comparison-base-link').href = new URL(
+          'experiment.html?context=' + encodeURIComponent(parent.contextId), root,
+        ).href;
+        $('comparison-recipe-help').hidden = false;
+        $('custom-recipe').open = true;
+      }
       $('history').hidden = true;
       $('workshop-error').hidden = true;
     } finally {
@@ -478,7 +582,10 @@ export async function startWorkshop({
       `本次选择 ${recipe.timesteps} 训练步、seed ${recipe.seed}、侧推上限 ${recipe.pushMaxForce}N，随后自动做同源评测。不会扩大预算，也不保证提升。`;
     $('recipe-confirm').hidden = false;
   };
-  listen('start-formal', 'click', () => review({ timesteps: 500000, seed: 7, pushMaxForce: 8.1 }));
+  listen('start-formal', 'click', () => {
+    const { seed = 7, pushMaxForce = 8.1 } = session?.comparisonBase?.recipe ?? {};
+    review({ timesteps: 500000, seed, pushMaxForce });
+  });
   listen('review-custom', 'click', () => {
     for (const n of ['custom-timesteps', 'custom-seed', 'custom-push'])
       if (!$(n).reportValidity()) return;
@@ -550,6 +657,7 @@ export async function startWorkshop({
         await json('workshop-sessions', {
           modelId: source.modelId,
           computeResourceId: source.computeResourceId,
+          ...(compare ? { comparisonBaseId: source.contextId } : {}),
         })
       ).session;
     } finally {
@@ -558,17 +666,44 @@ export async function startWorkshop({
     }
     await choose(next.contextId);
     if (!compare || session?.stage !== 'ready') return;
-    $('custom-timesteps').value = source.recipe.timesteps;
-    $('custom-seed').value = source.recipe.seed;
-    $('custom-push').value = source.recipe.pushMaxForce;
-    $('comparison-base-link').href = new URL(
-      'experiment.html?context=' + encodeURIComponent(source.contextId), root,
-    ).href;
-    $('comparison-recipe-help').hidden = false;
-    $('custom-recipe').open = true;
-    await saveReference('skipped');
     if (reference) reveal('custom-recipe');
   };
+  listen('choose-rounds', 'click', () => {
+    const activeId = contextId;
+    void json('workshop-sessions').then(({ sessions }) => {
+      if (disposed || activeId !== contextId) return;
+      for (const id of ['round-one', 'round-two']) {
+        const select = $(id);
+        const option = (value, label) => {
+          const element = document.createElement('option');
+          element.value = value;
+          element.textContent = label;
+          return element;
+        };
+        select.replaceChildren(option('', '不选择'), ...sessions
+          .filter((row) => row.contextId !== activeId && row.evaluationRecorded)
+          .map((row) => option(row.contextId, formatNumber(row.timesteps) + ' 步 · ' +
+            new Date(row.createdAt).toLocaleString('zh-CN') + ' · ' + row.contextId.slice(-6))));
+      }
+      $('round-comparison-picker').hidden = false;
+      $('round-one').focus();
+    }).catch((e) => { if (activeId === contextId) comparisonStatus(e.message); });
+  });
+  listen('apply-rounds', 'click', () => {
+    const ids = [$('round-one').value, $('round-two').value].filter(validId);
+    if (new Set(ids).size !== ids.length) {
+      comparisonStatus('两处选到了同一轮，请选择不同实验。');
+      return;
+    }
+    if (!ids.length) {
+      comparisonStatus('请选择至少一轮历史实验。');
+      return;
+    }
+    const url = new URL(location.href);
+    url.searchParams.set('with', ids.join(','));
+    historyImpl?.replaceState(null, '', url.href);
+    void loadRounds(ids);
+  });
   listen('new-experiment', 'click', () => run(() => createExperiment()));
   listen('compare-parameters', 'click', () => run(() => createExperiment(true)));
   try {

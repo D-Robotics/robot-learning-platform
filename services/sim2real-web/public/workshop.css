@@ -101,3 +101,7 @@
 @media (max-width: 480px) {
   .workshop-progress { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
+
+#round-comparison { margin: 16px 0; }
+#round-comparison-table { min-width: 640px; }
+#round-comparison-picker select { max-width: 100%; }

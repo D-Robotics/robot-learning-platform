@@ -53,6 +53,36 @@ function fixture({
     if (failedSwitch && p.endsWith('/other/select'))
       return { ok: false, json: async () => ({ ok: false, message: '目标实验不可用。' }) };
     if (p === 'runs' && lost) throw Error('lost response');
+    if (comparison && p.endsWith('/comparison')) {
+      const selected = new URL(url).searchParams.get('with');
+      if (selected !== 'ws-older,ws-middle') throw Error('unexpected comparison selection');
+      return {
+        ok: true,
+        json: async () => ({
+          ok: true,
+          comparison: {
+            comparable: true,
+            sameTrainingSetup: true,
+            rounds: [
+              ['ws-older', 8192, 1, 1],
+              ['ws-middle', 16384, 2, 3],
+              ['ws-test', 500000, 27, 25],
+            ].map(([contextId, timesteps, publicCount, additionalCount]) => ({
+              contextId,
+              recipe: { timesteps, seed: 7, pushMaxForce: 8.1 },
+              clearGain: timesteps === 500000,
+              actualTimesteps: timesteps === 500000 ? 500224 : timesteps,
+              suites: [publicCount, additionalCount].map((recovered, i) => ({
+                recovered,
+                original: 13,
+                tuned: i ? 17 : 13,
+                total: 31,
+              })),
+            })),
+          },
+        }),
+      };
+    }
     if (comparison && p === 'workshop-sessions' && b)
       Object.assign(state, {
         contextId: 'ws-comparison',
@@ -60,7 +90,10 @@ function fixture({
         recipe: null,
         training: null,
         evaluation: null,
-        reference: 'pending',
+        reference: b.comparisonBaseId ? 'skipped' : 'pending',
+        comparisonBase: b.comparisonBaseId
+          ? { contextId: original.contextId, recipe: original.recipe }
+          : undefined,
       });
     if (p.endsWith('/reference')) state.reference = b.reference;
     if (p.endsWith('/pause')) state.autoContinue = false;
@@ -122,7 +155,17 @@ function fixture({
       json: async () => ({
         ok: true,
         session: structuredClone(state),
-        sessions: [{ contextId: 'other', createdAt: '2026-11-05T10:00:00Z', timesteps: 8192 }],
+        sessions: [
+          { contextId: 'other', createdAt: '2026-11-05T10:00:00Z', timesteps: 8192 },
+          ...(comparison
+            ? ['ws-older', 'ws-middle'].map((contextId, i) => ({
+                contextId,
+                timesteps: 8192 * (i + 1),
+                createdAt: '2026-11-05T10:00:00Z',
+                evaluationRecorded: true,
+              }))
+            : []),
+        ],
         experiments: [],
       }),
     };
@@ -576,4 +619,36 @@ test('completed experiment starts an independent parameter draft with the prior 
     { timesteps: 32768, seed: 11, pushMaxForce: 7.5, reference: 'skipped' },
   );
   assert.equal(f.original.recipe.timesteps, 16384);
+});
+
+test('selecting two historical rounds shows parameter changes and signed deltas', async (t) => {
+  const f = fixture({ comparison: true });
+  const d = f.dom.window.document;
+  const $ = (id) => d.getElementById(id);
+  const c = await startWorkshop({
+    document: d,
+    location: f.dom.window.location,
+    fetchImpl: f.fetchImpl,
+    setTimer: f.setTimer,
+    clearTimer: f.clearTimer,
+  });
+  t.after(() => {
+    c.dispose();
+    f.dom.window.close();
+  });
+  $('choose-rounds').click();
+  await settle();
+  $('round-one').value = 'ws-older';
+  $('round-two').value = 'ws-middle';
+  $('apply-rounds').click();
+  await settle();
+  assert.equal($('round-comparison-table').hidden, false);
+  assert.match(
+    $('round-comparison-rows').textContent,
+    /16,384 → 500,000.*27\/31（\+25）.*25\/31（\+22）/,
+  );
+  assert.equal(
+    f.calls.some(({ p }) => p.includes('/claim/') || p === 'runs'),
+    false,
+  );
 });
