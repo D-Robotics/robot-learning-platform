@@ -9,6 +9,8 @@ export async function startWorkshop({
   ResizeObserverImpl = globalThis.ResizeObserver,
 } = {}) {
   const $ = (id) => document.getElementById(id);
+  const referenceVideo = $('reference-video');
+  const referencePlayButton = $('play-reference');
   const root = new URL('./', location.href),
     api = new URL('api/v1/duck/', root);
   let contextId = new URL(location.href).searchParams.get('context'),
@@ -78,6 +80,7 @@ export async function startWorkshop({
     $('reference-section').hidden = !session || (!(ready && !reference) && !referenceExpanded);
     $('skip-reference').hidden = !ready || Boolean(reference);
     $('skip-reference').disabled = busy || selecting;
+    if (referencePlayButton) referencePlayButton.disabled = busy || selecting;
     $('budget-section').hidden = !ready || !reference;
     $('execution-section').hidden = !session || ready;
     $('result-section').hidden = !session?.training;
@@ -194,6 +197,7 @@ export async function startWorkshop({
   };
   const refresh = async () => {
     if (busy || selecting || disposed || !contextId) return;
+    const previousStage = session?.stage;
     busy = true;
     halted = false;
     show();
@@ -216,6 +220,9 @@ export async function startWorkshop({
       show();
       schedule();
     }
+    if (previousStage !== 'results' && session?.stage === 'results' &&
+        document.activeElement === $('execution-section') && $('history').hidden &&
+        !referenceExpanded) reveal('result-section');
   };
   const start = async (recipe) => {
     if (busy || selecting || session?.stage !== 'ready' || !reference) return;
@@ -238,6 +245,7 @@ export async function startWorkshop({
       show();
       schedule();
     }
+    if (session?.training) reveal('execution-section');
   };
   const choose = async (id) => {
     if (busy || selecting) return;
@@ -246,11 +254,13 @@ export async function startWorkshop({
     clearTimer(timer);
     contextId = id;
     session = null;
+    if (!referenceVideo.paused) referenceVideo.pause();
+    if (referenceVideo.currentTime > 0) referenceVideo.currentTime = 0;
     reference = null;
     referenceExpanded = false;
     pendingRecipe = null;
     $('recipe-confirm').hidden = true;
-    $('reference-status').textContent = '点击播放参考。';
+    $('reference-status').textContent = '';
     frameObserver?.disconnect();
     frameObserver = null;
     halted = false;
@@ -300,41 +310,67 @@ export async function startWorkshop({
     }
     return list;
   };
-  $('reference-video').src = new URL(
+  referenceVideo.src = new URL(
     'api/sim2real/workshops/originman/reference-video?format=webm',
     root,
   ).href;
-  listen('reference-video', 'ended', () =>
-    run(async () => {
-      if (busy || selecting || session?.stage !== 'ready' || reference === 'observed') return;
-      session = (
+  if (referencePlayButton) {
+    listen('play-reference', 'click', () => {
+      if (referenceVideo.paused) {
+        void referenceVideo.play().catch(() => {
+          $('reference-status').textContent = '参考暂不可播放。可以跳过参考继续。';
+        });
+      } else {
+        referenceVideo.pause();
+      }
+    });
+    listen('reference-video', 'playing', () => {
+      referencePlayButton.textContent = '暂停讲师参考';
+    });
+    for (const event of ['pause', 'ended', 'error'])
+      listen('reference-video', event, () => {
+        referencePlayButton.textContent = '播放讲师参考';
+      });
+  }
+  const saveReference = async (choice) => {
+    if (busy || selecting || disposed || session?.stage !== 'ready') return;
+    if (reference === 'observed' || (choice === 'skipped' && reference)) return;
+    busy = true;
+    show();
+    try {
+      const saved = (
         await json('workshop-sessions/' + encodeURIComponent(contextId) + '/reference', {
-          reference: 'observed',
+          reference: choice,
         })
       ).session;
-      reference = 'observed';
+      if (disposed) return;
+      if (saved?.contextId !== contextId || saved.reference !== choice)
+        throw Error('参考记录与本次实验不一致，请刷新课程。');
+      session = saved;
+      reference = choice;
+      if (choice === 'skipped' && !referenceVideo.paused) referenceVideo.pause();
       referenceExpanded = false;
-      $('reference-status').textContent = '参考播放已结束。现在选择一次预算。';
-      show();
-      reveal('budget-section');
-    }),
-  );
+      $('reference-status').textContent =
+        choice === 'observed' ? '参考播放已结束。现在选择一次预算。' : '已选择跳过参考。';
+      $('workshop-error').hidden = true;
+      halted = false;
+    } catch (e) {
+      if (!disposed) error(e);
+      return;
+    } finally {
+      busy = false;
+      if (!disposed) {
+        show();
+        schedule();
+      }
+    }
+    reveal('budget-section');
+  };
+  listen('reference-video', 'ended', () => run(() => saveReference('observed')));
   listen('reference-video', 'error', () => {
     $('reference-status').textContent = '参考暂不可播放。可打开参考仿真，或明确跳过后继续。';
   });
-  listen('skip-reference', 'click', () =>
-    run(async () => {
-      if (busy || selecting || session?.stage !== 'ready' || reference) return;
-      session = (
-        await json('workshop-sessions/' + encodeURIComponent(contextId) + '/reference', {
-          reference: 'skipped',
-        })
-      ).session;
-      reference = 'skipped';
-      $('reference-status').textContent = '已选择跳过参考。';
-      show();
-    }),
-  );
+  listen('skip-reference', 'click', () => run(() => saveReference('skipped')));
   listen('start-quick', 'click', () =>
     run(() => start({ timesteps: 8192, seed: 7, pushMaxForce: 8.1 })),
   );

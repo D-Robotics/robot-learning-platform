@@ -18,6 +18,7 @@ export function comparisonRows(run) {
 
 export async function startExperimentView({ document, location, fetchImpl = fetch, EventSourceImpl = globalThis.EventSource, onExport, openPlayback } = {}) {
   const $ = id => document.getElementById(id);
+  const playButton = $('play-experiment-video');
   const contextId = new URL(location.href).searchParams.get('context');
   const base = new URL('./api/v1/duck/', location.href);
   let view = null, stream = null, active = false, pending = false, disposed = false, generation = 0, refreshTimer = null;
@@ -30,6 +31,10 @@ export async function startExperimentView({ document, location, fetchImpl = fetc
     $('reward-chart').replaceChildren(); $('reward-chart').setAttribute('hidden', ''); $('curve-empty').hidden = false;
     $('comparison-body').replaceChildren(); $('comparison-table').hidden = true; $('comparison-empty').hidden = false;
     $('experiment-video').hidden = true; $('experiment-video').removeAttribute('src');
+    if (playButton) {
+      playButton.hidden = true;
+      playButton.textContent = '播放本次回放';
+    }
     $('download-video').hidden = true; $('export-experiment').disabled = true;
     $('open-playback-page').hidden = true;
     $('video-empty').hidden = false; $('playback-status').textContent = '尚未播放';
@@ -135,6 +140,7 @@ export async function startExperimentView({ document, location, fetchImpl = fetc
         $('download-video').href = url; $('download-video').hidden = false;
       } else { $('experiment-video').hidden = true; $('experiment-video').removeAttribute('src'); $('download-video').hidden = true; $('video-empty').hidden = false; }
       latestRecord = { schemaVersion: 1, observedAt: new Date().toISOString(), experiment: view, training, evaluation, comparison: comparisonRows(evaluation) };
+      if (playButton) playButton.hidden = $('experiment-video').hidden;
       $('export-experiment').disabled = false;
       $('experiment-error').hidden = true; $('login-platform').hidden = true;
       $('connection-status').textContent = '已连接本次实验';
@@ -146,9 +152,30 @@ export async function startExperimentView({ document, location, fetchImpl = fetc
     } catch (error) { if (!disposed) fail(error); }
     finally { active = false; if (pending && !disposed) { pending = false; void refresh(); } }
   };
-  listen('experiment-video', 'playing', () => { $('playback-status').textContent = '正在播放本次回放'; });
-  listen('experiment-video', 'ended', () => { $('playback-status').textContent = '本次回放已结束'; });
-  listen('experiment-video','pause',()=>{const video=$('experiment-video');if(!video.ended&&video.currentTime>0)$('playback-status').textContent='已暂停回放';});
+  if (playButton) listen('play-experiment-video', 'click', () => {
+    const video = $('experiment-video');
+    if (video.hidden || !video.getAttribute('src')) return;
+    if (!video.paused) {
+      video.pause();
+      return;
+    }
+    void video.play().catch(() => { $('playback-status').textContent = '回放暂不可用，可稍后再试'; });
+  });
+  listen('experiment-video', 'playing', () => {
+    $('playback-status').textContent = '正在播放本次回放';
+    if (playButton) playButton.textContent = '暂停回放';
+  });
+  listen('experiment-video', 'ended', () => {
+    $('playback-status').textContent = '本次回放已结束';
+    if (playButton) playButton.textContent = '重新播放';
+  });
+  listen('experiment-video', 'pause', () => {
+    const video = $('experiment-video');
+    if (!video.ended && video.currentTime > 0) {
+      $('playback-status').textContent = '已暂停回放';
+      if (playButton) playButton.textContent = '继续播放';
+    }
+  });
   listen('experiment-video', 'error', () => { $('playback-status').textContent = '回放暂不可用；保留原评测'; });
   listen('refresh-experiment', 'click', refresh);
   listen('open-playback-page', 'click', () => { if (openPlayback) void openPlayback(); });

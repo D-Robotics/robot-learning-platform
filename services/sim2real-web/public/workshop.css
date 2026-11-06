@@ -72,7 +72,7 @@
   color: var(--muted-strong);
   font-variant-numeric: tabular-nums;
 }
-#start-quick, #confirm-recipe, #go-results {
+#play-reference, #start-quick, #confirm-recipe, #go-results {
   background: var(--accent-soft);
   border-color: var(--accent);
   color: var(--accent-text);

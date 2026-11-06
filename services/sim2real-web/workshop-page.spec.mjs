@@ -5,7 +5,12 @@ import { JSDOM } from 'jsdom';
 import { startWorkshop } from './public/workshop-page.mjs';
 const html = await fs.readFile(new URL('./public/workshop.html', import.meta.url), 'utf8');
 const settle = () => new Promise((r) => setTimeout(r, 25));
-function fixture({ lost = false, failedSwitch = false, offline = false } = {}) {
+function fixture({
+  lost = false,
+  lostAfterAccept = false,
+  failedSwitch = false,
+  offline = false,
+} = {}) {
   const dom = new JSDOM(html, {
     url: 'https://platform.test/course/workshop.html?context=ws-test',
   });
@@ -70,6 +75,7 @@ function fixture({ lost = false, failedSwitch = false, offline = false } = {}) {
       if (b.training.originmanWorkshop.phase === 'train') {
         state.training = { runId: 'train', status: 'running' };
         state.stage = 'training';
+        if (lostAfterAccept) throw Error('lost response after accepting training');
       } else {
         state.evaluation = { runId: 'eval', status: 'running' };
         state.stage = 'evaluating';
@@ -191,6 +197,81 @@ test('lost submit response only reads original state; no retry or budget expansi
     assert.equal(f.calls.filter((x) => x.p === 'runs').length, 1);
     assert.match(d.getElementById('execution-status').textContent, /不明确|待核对/);
     assert.equal(d.getElementById('connection-status').textContent, '需要处理');
+  } finally {
+    c.dispose();
+    f.dom.window.close();
+  }
+});
+
+test('a reference write in flight cannot be duplicated or carried into a new experiment', async () => {
+  const f = fixture(),
+    d = f.dom.window.document;
+  let finishReference;
+  const pending = new Promise((resolve) => {
+    finishReference = resolve;
+  });
+  const c = await startWorkshop({
+    document: d,
+    location: f.dom.window.location,
+    fetchImpl: async (url, options) => {
+      if (url.pathname.endsWith('/reference')) await pending;
+      return f.fetchImpl(url, options);
+    },
+    setTimer: f.setTimer,
+    clearTimer: f.clearTimer,
+  });
+  try {
+    d.getElementById('skip-reference').click();
+    d.getElementById('skip-reference').click();
+    d.getElementById('reference-video').dispatchEvent(new f.dom.window.Event('ended'));
+    d.getElementById('new-experiment').click();
+    await settle();
+    assert.equal(f.calls.filter((x) => x.p === 'workshop-sessions' && x.b).length, 0);
+    finishReference();
+    await settle();
+    const writes = f.calls.filter((x) => x.p.endsWith('/reference'));
+    assert.deepEqual(writes, [
+      {
+        p: 'workshop-sessions/ws-test/reference',
+        b: { reference: 'skipped' },
+      },
+    ]);
+    assert.equal(d.getElementById('budget-section').hidden, false);
+    assert.equal(d.activeElement.id, 'budget-section');
+  } finally {
+    c.dispose();
+    finishReference();
+    f.dom.window.close();
+  }
+});
+
+test('reopening after a lost acknowledgement evaluates the accepted training exactly once', async () => {
+  const f = fixture({ lostAfterAccept: true }),
+    d = f.dom.window.document;
+  const open = () =>
+    startWorkshop({
+      document: d,
+      location: f.dom.window.location,
+      fetchImpl: f.fetchImpl,
+      setTimer: f.setTimer,
+      clearTimer: f.clearTimer,
+    });
+  let c = await open();
+  try {
+    d.getElementById('skip-reference').click();
+    await settle();
+    d.getElementById('start-quick').click();
+    await settle();
+    assert.equal(f.state.training.runId, 'train');
+    assert.equal(f.calls.filter((x) => x.p === 'runs').length, 1);
+    c.dispose();
+    c = await open();
+    await f.tick();
+    await c.refresh();
+    const writes = f.calls.filter((x) => x.p === 'runs');
+    assert.equal(writes.length, 2);
+    assert.equal(writes[1].b.training.originmanWorkshop.sourceRunId, 'train');
+    assert.equal(f.state.stage, 'results');
   } finally {
     c.dispose();
     f.dom.window.close();

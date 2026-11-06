@@ -45,7 +45,11 @@
           <h2 id="reference-heading">1 · 看参考</h2>
           <span>讲师参考，非本组训练结果</span>
         </div>
-        <p>先看看机器人如何保持平衡和应对扰动。可以看完参考，也可以明确跳过。</p>
+        <p>先看看机器人被推了一下后，怎样重新站稳。播完会自动进入下一步。</p>
+        <div class="workshop-actions">
+          <button id="play-reference" type="button">播放讲师参考</button>
+          <button id="skip-reference" type="button">跳过参考，选择预算</button>
+        </div>
         <video
           id="reference-video"
           controls
@@ -53,23 +57,23 @@
           preload="none"
           aria-label="讲师参考回放"
         ></video>
-        <p id="reference-status" role="status">点击播放参考。</p>
+        <p id="reference-status" role="status"></p>
         <div class="workshop-actions">
           <a id="open-simulation" href="./?robot=originman#simulate"
             >自由探索参考仿真</a
-          ><button id="skip-reference" type="button">跳过参考，选择预算</button>
+          >
         </div>
       </section>
       <section id="budget-section" hidden aria-labelledby="budget-heading">
         <h2 id="budget-heading">2 · 选择一次预算</h2>
-        <p>开始后自动完成训练与同源评测，不自动扩大预算。关闭窗口后可在另一软件说“继续”。</p>
+        <p>第一次玩，选快速体验。系统会训练一个策略，然后用同一策略自动测试。</p>
         <div class="workshop-actions">
-          <button id="start-quick" type="button">开始快速体验 · 8192 步</button
-          ><button id="start-formal" type="button">选择正式效果实验 · 50 万步</button>
+          <button id="start-quick" type="button">开始快速体验 · 8192 步</button>
         </div>
         <p>快速体验用于熟悉流程，不保证策略提升；正式预算也以本轮实际评测为准。</p>
         <details id="custom-recipe">
-          <summary>自由调整参数</summary>
+          <summary>更多选择 · 正式实验和自定义参数</summary>
+          <p><button id="start-formal" type="button">选择正式效果实验 · 50 万步</button></p>
           <p>
             新实验保留旧结果。其余配方固定为 SAC、4
             环境、CUDA；更多引擎和平台功能仍可在聊天或主工作台使用。
@@ -114,7 +118,7 @@
         </div>
       </section>
       <section id="execution-section" hidden aria-labelledby="execution-heading">
-        <h2 id="execution-heading">3 · 训练与同源评测</h2>
+        <h2 id="execution-heading">3 · 训练与测试</h2>
         <p id="execution-status" aria-live="polite"></p>
         <p id="active-recipe" class="workshop-recipe"></p>
         <div class="workshop-actions">
@@ -124,7 +128,7 @@
           ><button id="go-results" type="button">查看曲线与结果 ↓</button>
           <a id="open-run-details" href="./?robot=originman#train/runs">查看运行记录</a>
         </div>
-        <p>暂停不会取消已提交任务。失败或提交状态不明时只恢复原记录，不自动重训。</p>
+        <p>可以关掉页面。回来在 Qoder 说“继续 Workshop”，就会接回本次实验。</p>
       </section>
       <section id="result-section" hidden aria-labelledby="result-heading">
         <h2 id="result-heading">4 · 看本次结果与回放</h2>
