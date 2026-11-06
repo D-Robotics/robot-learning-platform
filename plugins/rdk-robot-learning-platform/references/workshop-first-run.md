@@ -84,6 +84,6 @@ Qoder 插件同一时间使用一个学习平台账号。Studio 默认也走插�
 
 ## 验证范围
 
-本轮原生验收以交付的验收报告为准。Windows 安装入口支持 x64 和 ARM64。Windows CI 分别检查安装器、Qoder 本机导入 ZIP、MCP 启动和 DPAPI；原生 Qoder 桌面验收单独记录。本课程仅仿真，不包含真机运动验收。
+本轮原生验收以交付的验收报告为准。Windows 版 Qoder Desktop 按其官方要求使用 x64。插件的 Node 安装入口也有 ARM64 运行时，但 Windows ARM64 上的 Qoder Desktop 兼容性需另行确认。Windows CI 分别检查安装器、Qoder 本机导入 ZIP、MCP 启动和 DPAPI；原生 Qoder 桌面验收单独记录。本课程仅仿真，不包含真机运动验收。
 
 分发源码与摘要：`provenance.json`、`upstream-provenance.json`、`FILES.sha256`。配置后 `.mcp.json` 会改变，保留原始 ZIP 用于分发和完整性核对。

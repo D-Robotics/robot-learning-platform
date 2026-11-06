@@ -93,6 +93,12 @@ test(
       new URL('../plugins/rdk-robot-learning-platform/', import.meta.url),
     );
     fs.cpSync(source, root, { recursive: true });
+    // Retained distributions supply this file. The test fixture supplies the
+    // same runtime contract without embedding the retained bundle in source.
+    fs.writeFileSync(
+      path.join(root, 'runtime-requirements.json'),
+      JSON.stringify({ node: '^22.22.2 || ^24.15.0 || >=26.0.0' }),
+    );
     fs.mkdirSync(path.join(root, 'mcp'), { recursive: true });
     fs.writeFileSync(
       path.join(root, 'mcp/bundle.mjs'),
