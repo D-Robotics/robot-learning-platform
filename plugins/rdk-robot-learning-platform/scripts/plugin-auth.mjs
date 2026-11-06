@@ -21,6 +21,17 @@ export const AUTH_TOOLS = [
     annotations: { readOnlyHint: false, destructiveHint: false },
   },
   {
+    name: 'rdk_auth_switch_account',
+    description:
+      '用户明确要求换学习平台账号时使用。Qoder 重新打开授权页，需要在浏览器选择另一个账号；Studio 在宿主账户菜单切换。不会更改原账号的实验或机器。',
+    inputSchema: {
+      type: 'object',
+      properties: { openBrowser: { type: 'boolean' } },
+      additionalProperties: false,
+    },
+    annotations: { readOnlyHint: false, destructiveHint: false },
+  },
+  {
     name: 'rdk_auth_status',
     description: '检查插件当前认证状态并领取已完成的浏览器登录结果；不返回Cookie、密码或会话密钥。',
     inputSchema: AUTH_SCHEMA,
@@ -72,8 +83,7 @@ export function createPluginAuth({
     createHash('sha256').update(cacheScope).digest('hex') + '.json',
   );
   const pendingFilename = filename.replace(/\.json$/, '.pending.json');
-  let cached = null,
-    pending = null,
+  let pending = null,
     disconnected = false,
     loginPromise = null,
     startPromise = null,
@@ -133,16 +143,13 @@ export function createPluginAuth({
     }
   }
   async function read() {
-    if (cached && safe(cached)) return cached;
-    cached = null;
     const value = await readPrivate(filename);
     if (!value) return null;
     const session =
       process.platform === 'win32'
         ? { ...value, cookie: value.credentials?.RDK_SIM2REAL_MCP_COOKIE }
         : value;
-    if (safe(session)) cached = session;
-    return cached;
+    return safe(session) ? session : null;
   }
   async function writePrivate(file, value, expectedRevision) {
     assertRevision(expectedRevision);
@@ -175,7 +182,6 @@ export function createPluginAuth({
         : value;
     await writePrivate(filename, payload, expectedRevision);
     assertRevision(expectedRevision);
-    cached = value;
   }
   function validPending(value) {
     let url;
@@ -195,14 +201,16 @@ export function createPluginAuth({
       /^[A-Z0-9]{8}$/.test(value.userCode ?? '') &&
       url.searchParams.get('id') === value.id &&
       [...url.searchParams.keys()].every((key) => key === 'id') &&
-      Number.isFinite(value.expiresAt)
+      Number.isFinite(value.expiresAt) &&
+      (value.previousAccountId === undefined ||
+        (typeof value.previousAccountId === 'string' && value.previousAccountId.length > 0)) &&
+      (value.rejectedAccount === undefined || value.rejectedAccount === true)
     );
   }
   async function restorePending() {
-    const value = pending ?? (await readPrivate(pendingFilename));
-    if (!value) return null;
-    if (!validPending(value)) throw cacheError();
-    pending = value.expiresAt > now() ? value : null;
+    const value = await readPrivate(pendingFilename);
+    if (value && !validPending(value)) throw cacheError();
+    pending = value && value.expiresAt > now() ? value : null;
     return pending;
   }
   async function discardPending(flow = pending) {
@@ -259,21 +267,25 @@ export function createPluginAuth({
     }
     return { status: response.status, value };
   }
-  async function begin() {
+  async function begin(previousAccountId) {
     if (startPromise) return startPromise;
     const expectedRevision = revision;
     const flight = (async () => {
-      if (await restorePending()) {
+      const existing = await restorePending();
+      if (existing && !existing.rejectedAccount && !previousAccountId) {
         assertRevision(expectedRevision);
-        return pending;
+        return existing;
       }
+      const prior = previousAccountId ?? (await readPrivate(pendingFilename))?.previousAccountId;
       const { value } = await request('/api/sso/plugin/start', { body: { audience } });
       assertRevision(expectedRevision);
       if (!validPending(value) || value.expiresAt <= now())
         throw new PluginRequestError('AUTH_RESPONSE_INVALID', '浏览器授权入口无效。');
-      await writePrivate(pendingFilename, value, expectedRevision);
-      pending = value;
-      return pending;
+      const flow = prior ? { ...value, previousAccountId: prior } : value;
+      await writePrivate(pendingFilename, flow, expectedRevision);
+      assertRevision(expectedRevision);
+      pending = flow;
+      return flow;
     })();
     startPromise = flight;
     try {
@@ -287,7 +299,8 @@ export function createPluginAuth({
       authenticated: false,
       mode,
       needsLogin: true,
-      ...(pending
+      ...(pending?.rejectedAccount ? { accountSelectionRequired: true } : {}),
+      ...(pending && !pending.rejectedAccount
         ? {
             verificationUrl: pending.verificationUrl,
             userCode: pending.userCode,
@@ -296,26 +309,41 @@ export function createPluginAuth({
         : {}),
       nextAction: native
         ? '请在Studio账户菜单登录后重新发起任务。'
-        : pending
-          ? '在浏览器确认当前连接码，再调用rdk_auth_status；不需要重新申请验证码。'
-          : '调用rdk_auth_login开始浏览器授权；不要在聊天中发送密码或Cookie。',
+        : pending?.rejectedAccount
+          ? '刚才确认的是原账号。先在浏览器切到目标账号，再说“切换学习平台账号”。'
+          : pending?.previousAccountId
+            ? '在浏览器用目标账号完成授权。如果页面仍显示原账号，请先在浏览器切换账号。'
+            : pending
+              ? '在浏览器确认当前连接码，再调用rdk_auth_status；不需要重新申请验证码。'
+              : '调用rdk_auth_login开始浏览器授权；不要在聊天中发送密码或Cookie。',
     };
+  }
+  function unlink(file) {
+    try {
+      fs.unlinkSync(file);
+    } catch (error) {
+      if (error.code !== 'ENOENT') throw error;
+    }
   }
   async function clear() {
     revision++;
-    cached = null;
     pending = null;
     startPromise = null;
     pollPromise = null;
-    for (const file of [filename, pendingFilename]) {
-      try {
-        fs.unlinkSync(file);
-      } catch (error) {
-        if (error.code !== 'ENOENT') throw error;
-      }
+    if (!native) {
+      unlink(filename);
+      unlink(pendingFilename);
     }
   }
-  async function cookie({ startLogin = true } = {}) {
+  async function clearIfCurrent(expectedCookie) {
+    const saved = await read();
+    if (saved && saved.cookie === expectedCookie) await clear();
+  }
+  const accountChanged = () =>
+    new PluginRequestError('AUTH_OPERATION_SUPERSEDED', '账号已切换，请用当前账号重新操作。', {
+      httpStatus: 409,
+    });
+  async function cookie({ startLogin = true, accountId } = {}) {
     const expectedRevision = revision;
     if (disconnected)
       throw loginRequired('LOGIN_REQUIRED', '插件已退出，请调用rdk_auth_login重新连接。');
@@ -327,6 +355,7 @@ export function createPluginAuth({
           'STUDIO_LOGIN_REQUIRED',
           '请在当前Studio账号菜单登录后重新发起任务；不会改用其他账号。',
         );
+      if (accountId && id !== accountId) throw accountChanged();
       const { value } = await request('/api/sso/plugin/session', {
         body: { audience, accountId: id },
         headers: { 'x-rdk-sso-session': sid },
@@ -341,11 +370,16 @@ export function createPluginAuth({
       return value.cookie;
     }
     const saved = await read();
-    if (saved && safe(saved)) {
+    if (accountId && saved?.accountId !== accountId) throw accountChanged();
+    if (saved) {
       try {
         const { value } = await request('/api/sso/me', { headers: { cookie: saved.cookie } });
         assertRevision(expectedRevision);
-        if (value.user?.id === saved.accountId) return saved.cookie;
+        if (value.user?.id === saved.accountId) {
+          if ((await read())?.cookie !== saved.cookie) throw accountChanged();
+          assertRevision(expectedRevision);
+          return saved.cookie;
+        }
         if (value.user !== null)
           throw new PluginRequestError(
             value.user?.id ? 'AUTH_ACCOUNT_MISMATCH' : 'AUTH_RESPONSE_INVALID',
@@ -358,9 +392,11 @@ export function createPluginAuth({
       } catch (error) {
         if (!error.needsLogin) throw error;
       }
-      await clear();
+      await clearIfCurrent(saved.cookie);
+      if (await read()) throw accountChanged();
     }
-    if (!startLogin) throw loginRequired();
+    if (!startLogin || accountId || (await restorePending())?.rejectedAccount)
+      throw loginRequired();
     const flow = await begin();
     throw loginRequired(
       'LOGIN_REQUIRED',
@@ -395,6 +431,7 @@ export function createPluginAuth({
       }
     }
     if (!native && pending) {
+      if (pending.rejectedAccount) return publicPending();
       if (!pollPromise) {
         const expectedRevision = revision,
           flow = pending;
@@ -405,7 +442,7 @@ export function createPluginAuth({
           });
           assertRevision(expectedRevision);
           if (code === 202) return publicPending();
-          if (value.status !== 'authenticated')
+          if (value.status !== 'authenticated' || !safe(value))
             throw new PluginRequestError('AUTH_RESPONSE_INVALID', '平台未返回明确的登录确认结果。');
           const current = await readPrivate(pendingFilename);
           if (!current || current.id !== flow.id || current.secret !== flow.secret)
@@ -414,6 +451,11 @@ export function createPluginAuth({
               '授权已退出或更新，不会恢复旧会话。',
               { httpStatus: 409 },
             );
+          if (flow.previousAccountId === value.accountId) {
+            pending = { ...flow, rejectedAccount: true };
+            await writePrivate(pendingFilename, pending, expectedRevision);
+            return publicPending();
+          }
           await save(value, expectedRevision);
           await discardPending(flow);
           return null;
@@ -424,16 +466,18 @@ export function createPluginAuth({
         const progress = await flight;
         if (progress) return progress;
       } catch (error) {
-        if (error.needsLogin || error.httpStatus === 403) await discardPending();
+        if ((error.needsLogin || error.httpStatus === 403) && !pending?.previousAccountId)
+          await discardPending();
         return unavailable(error);
       } finally {
         if (pollPromise === flight) pollPromise = null;
       }
     }
     try {
-      await cookie({ startLogin: false });
+      const validated = await cookie({ startLogin: false });
       if (native) return { authenticated: true, mode, accountId: env.RDK_STUDIO_LOGIN_ACCOUNT };
       const saved = await read();
+      if (saved?.cookie !== validated) throw accountChanged();
       return { authenticated: true, mode, accountId: saved.accountId, expiresAt: saved.expiresAt };
     } catch (error) {
       return unavailable(error);
@@ -455,20 +499,37 @@ export function createPluginAuth({
         disconnected = true;
         return { authenticated: false, loggedOut: true, studioAccountUnchanged: native };
       }
-      if (name === 'rdk_auth_login') {
+      if (name === 'rdk_auth_login' || name === 'rdk_auth_switch_account') {
         disconnected = false;
-        if (native) return status();
+        const switching = name === 'rdk_auth_switch_account';
+        if (native) {
+          const current = await status();
+          return switching
+            ? { ...current, nextAction: '请在 RDK Studio 账户菜单切换账号，再回来继续。' }
+            : current;
+        }
         const current = await status();
-        if (current.authenticated !== false || (current.error && !current.needsLogin))
+        if (current.authenticated === null || (current.error && !current.needsLogin))
           return current;
-        loginPromise ??= begin().finally(() => {
+        if (current.authenticated === true && !switching) return current;
+        const active = current.authenticated === true ? await read() : null;
+        if (current.authenticated === true && active?.accountId !== current.accountId)
+          throw accountChanged();
+        loginPromise ??= (async () => {
+          const flow = await begin(active?.accountId);
+          if (active) {
+            if ((await read())?.cookie !== active.cookie) throw accountChanged();
+            unlink(filename);
+          }
+          return flow;
+        })().finally(() => {
           loginPromise = null;
         });
-        await loginPromise;
+        const flow = await loginPromise;
         let opened = false;
         if (args.openBrowser !== false) {
           try {
-            await openUrl(pending.verificationUrl);
+            await openUrl(flow.verificationUrl);
             opened = true;
           } catch {}
         }
@@ -476,7 +537,7 @@ export function createPluginAuth({
       }
       return status();
     },
-    invalidate: clear,
+    invalidate: clearIfCurrent,
   };
 }
 function defaultOpen(url) {

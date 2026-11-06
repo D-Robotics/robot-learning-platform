@@ -754,11 +754,15 @@ assert.match(workshopPage, /<nav class="workshop-progress" aria-label="课程进
 for (const stage of ['reference', 'budget', 'execution', 'result'])
   assert.match(workshopPage, new RegExp('id="workshop-step-' + stage + '"'));
 assert.match(workshopPage, /id="go-results"/);
-assert.match(workshopPage, /<summary>更多选择 · 正式实验和自定义参数<\/summary>/);
+assert.match(workshopPage, /<summary>自定义训练参数<\/summary>/);
+assert.match(workshopPage, /id="budget-presets"[\s\S]*?id="start-quick"[\s\S]*?id="start-formal"/);
 assert.match(workshopPage, /id="play-reference"/);
 for (const id of [
   'start-quick',
   'start-formal',
+  'go-recovery-counts',
+  'go-replay',
+  'workshop-retry',
   'custom-recipe',
   'pause-workshop',
   'history-list',

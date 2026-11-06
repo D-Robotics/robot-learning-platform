@@ -41,6 +41,7 @@ import {
 import { ROBOT_ONBOARDING_TOOLS, onboardingGuide, assessOnboarding } from './robot-onboarding.mjs';
 import { CLASSROOM_TOOLS, classroomGuide } from './classroom-guide.mjs';
 import { WORKSHOP_TOOLS, workshopEntry } from './workshop-entry.mjs';
+import { DEVELOPMENT_TARGET_TOOL, developmentTargets } from './development-targets.mjs';
 
 /** Learner text uses the same verified facts; full diagnostics remain structured. */
 export function experimentStudentReply(payload) {
@@ -116,6 +117,7 @@ const loadedSources = Object.fromEntries(
     'submission-journal.mjs',
     'workshop-course.mjs',
     'workshop-entry.mjs',
+    'development-targets.mjs',
     'playback-plan.mjs',
   ].map((name) => [
     'scripts/' + name,
@@ -165,6 +167,7 @@ export const EXPERIENCE_TOOLS = [
   COURSE_BRIEF_TOOL,
   TRAINING_CHOICE_TOOL,
   ...WORKSHOP_TOOLS,
+  DEVELOPMENT_TARGET_TOOL,
   ...CLASSROOM_TOOLS,
   ...ROBOT_ONBOARDING_TOOLS,
   ...AUTH_TOOLS,
@@ -364,6 +367,7 @@ export function experienceProxy(
           (result.instructions ?? '') +
           '\n课堂新学员或新机离线准备：rdk_classroom_guide携带已知answers，只展示studentReply，每次一个中文问题，不重复问已知项。要求依据才detail=full。阶段标准读robot_onboarding_guide，证据读robot_acceptance_assess；needs-input不是通过。离线知识不要求平台登录，不因离线准备启动训练。' +
           '\n认证：先读platform_status。未认证时调用rdk_auth_login取得浏览器登录确认入口；请用户在浏览器登录并确认验证码，然后调用rdk_auth_status完成连接，不索取密码或Cookie。Studio使用宿主绑定的当前身份，未登录时请在Studio账号菜单登录，不扫描其他账号、不静默切换。' +
+          '\n换学习平台账号用rdk_auth_switch_account。查看开发机先用rdk_development_targets list。用户明确选算力机开始Workshop时，按唯一名称匹配算力机ID，传rdk_workshop intent:new和computeResourceId。用户明确要求连接某台板卡时才按板卡列表匹配ID并用connect-board。名称有歧义时让用户选择，不在聊天收集凭据。' +
           '\n简短咨询预算用途、计数单位或流程/效果/回放完成标准：优先rdk_originman_course_brief，逐字展示studentReply两句即结束，不加载整份指南和历史证据。实际成绩另读原评测；明确问依据才按需读引用。不编造计数倍率。' +
           '\n交互约定：默认简短中文，按“当前进度→本次结果→下一步”回答。认证、版本、契约和资源校验在后台完成，正常时不逐项播报。只在阶段变化、阻断或需要用户选择时更新；不重复播报running，不展示内部推理。UUID、工具名、摘要和错误码仅在用户查看诊断时展开。正常结果优先给曲线、对比图和回放入口；宿主能打开工作台则在工作台展示，否则给可点击链接。没有实际渲染能力不伪装交互卡片，没有播放器观测不称已播放。' +
           '\n高级独立训练才使用预算选择与原子训练工具：按用户已选预算执行，不重复问。默认Workshop先rdk_workshop打开按钮工作台，在页面选择预算并自动接续；只咨询或先不要开始时不提交。高级手动提交仍核对当前账号、完整manifest、同源父Run与权重，失败不改标识重交。' +
@@ -504,6 +508,14 @@ export function experienceProxy(
               ? `当前实际运行插件 ${runtime.version}，加载源码核对一致。此项未验证平台连接或实机效果。`
               : '当前进程与分发记录未核对通过，请刷新插件连接后再检查；暂不执行训练或实体操作。',
           };
+        } else if (params.name === DEVELOPMENT_TARGET_TOOL.name) {
+          payload = await developmentTargets(params.arguments ?? {}, {
+            authentication,
+            request:
+              upstream.developmentTarget &&
+              ((operation, options) =>
+                upstream.developmentTarget(operation, { ...options, signal })),
+          });
         } else if (params.name === 'rdk_workshop') {
           const call = async (name, args) =>
             readToolResult(
@@ -513,12 +525,16 @@ export function experienceProxy(
           payload = await workshopEntry(params.arguments ?? {}, call, {
             remote:
               upstream.workshopSession &&
-              ((operation, input) => upstream.workshopSession(operation, input, { signal })),
+              ((operation, input, accountId) =>
+                upstream.workshopSession(operation, input, { signal, accountId })),
             readModels: upstream.readModels && (() => upstream.readModels({ signal })),
             courseReadiness:
               upstream.courseReadiness && ((args) => upstream.courseReadiness({ ...args, signal })),
             toolNames: catalog.tools.map((t) => t.name),
             defaultResourceId: env.RDK_WORKSHOP_COMPUTE_RESOURCE_ID,
+            authentication,
+            openAuthBrowser: host.family === 'qoder',
+            signal,
           });
         } else if (params.name === 'rdk_originman_course_brief')
           payload = courseBrief(params.arguments ?? {});
@@ -533,6 +549,13 @@ export function experienceProxy(
         else if (AUTH_TOOLS.some((t) => t.name === params.name)) {
           if (!authentication) throw Error('当前入口未启用统一登录，请使用本版完整插件入口。');
           payload = await authentication.call(params.name, params.arguments);
+          if (params.name === 'rdk_auth_switch_account') {
+            const link = payload.verificationUrl;
+            payload.studentReply = link
+              ? `[授权另一个学习平台账号](${link})。在浏览器确认后，回来继续 Workshop。`
+              : payload.nextAction;
+            payload.delivery = '只展示 studentReply。授权后用 rdk_auth_status 确认账号。';
+          }
         } else if (params.name === 'rdk_training_wait') {
           const args = params.arguments ?? {};
           if (

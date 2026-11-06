@@ -124,6 +124,12 @@ try {
       if (req.headers.cookie !== cookie) return json({ error: 'LOGIN_REQUIRED' }, 401);
       if (route === '/api/v1/duck/auth/session')
         return json({ authenticated: true, accountId: 'classroom-fixture' });
+      if (route === '/api/v1/duck/workshop-sessions' && req.method === 'GET')
+        return json({
+          ok: true,
+          schemaVersion: 1,
+          current: { contextId: 'ws-owned-fixture', stage: 'training' },
+        });
       if (route === '/api/v1/duck/overview')
         return json({ models: state.models, runs: [...state.runs.values()].map((x) => x.run) });
       if (route === '/api/v1/duck/lineage') {
@@ -151,9 +157,24 @@ try {
       }
       if (route === '/api/v1/duck/compute-resources')
         return json({
+          ok: true,
           computeResources: [
             { id: 'worker-fixture', name: 'OriginMan classroom', source: 'server-runner' },
           ],
+        });
+      if (route === '/api/v1/duck/device-connections' && req.method === 'GET')
+        return json({
+          ok: true,
+          connections: [{ id: 'board-fixture', label: 'RDK classroom', host: 'fixture-private' }],
+        });
+      if (
+        route === '/api/v1/duck/device-connections/board-fixture/connect' &&
+        req.method === 'POST'
+      )
+        return json({
+          ok: true,
+          connection: { id: 'board-fixture', tunnelActive: true },
+          probe: { ok: true },
         });
       if (route === '/api/v1/duck/compute-resources/worker-fixture/test')
         return json({
@@ -265,11 +286,18 @@ try {
   await init();
   const catalog = await client.request('tools/list', {});
   assert.ok(catalog.tools.some((t) => t.name === 'rdk_auth_login'));
+  assert.ok(catalog.tools.some((t) => t.name === 'rdk_auth_switch_account'));
   assert.equal((await call('rdk_auth_status')).authenticated, false);
   assert.equal(state.authStarts, 0);
-  const pending = await call('rdk_auth_login', { openBrowser: false });
+  const initial = await call('rdk_workshop', { intent: 'start' });
+  assert.equal(initial.stage, 'authorize');
+  assert.equal(initial.submission.training, false);
+  assert.match(initial.links.login, /\/api\/sso\/plugin\/authorize\?id=/);
+  assert.equal(state.authStarts, 1);
+  assert.equal(state.writes.length, 0);
+  const pending = await call('rdk_auth_status');
   assert.equal(pending.authenticated, false);
-  assert.ok(pending.verificationUrl);
+  assert.equal(pending.verificationUrl, initial.links.login);
   await client.close();
   client = open();
   await init();
@@ -280,6 +308,25 @@ try {
   assert.equal((await call('rdk_auth_status')).authenticated, true);
   assert.equal((await call('rdk_auth_login', { openBrowser: false })).authenticated, true);
   assert.equal(state.authStarts, 1);
+  const targets = await call('rdk_development_targets');
+  assert.equal(targets.compute[0].id, 'worker-fixture');
+  assert.equal(targets.boards[0].id, 'board-fixture');
+  assert.doesNotMatch(JSON.stringify(targets), /fixture-private/);
+  const worker = await call('rdk_development_targets', {
+    action: 'test-compute',
+    targetId: 'worker-fixture',
+  });
+  assert.equal(worker.connected, true);
+  const board = await call('rdk_development_targets', {
+    action: 'connect-board',
+    targetId: 'board-fixture',
+  });
+  assert.equal(board.tunnelActive, true);
+  assert.equal(board.agentReady, true);
+  const continued = await call('rdk_workshop', { intent: 'start' });
+  assert.equal(continued.contextId, 'ws-owned-fixture');
+  assert.equal(continued.submission.training, false);
+  assert.equal(state.writes.length, 0);
   const guide = await call('rdk_experience_guide');
   const contextId = guide.shortTraining.operation.contextId;
   const train = await call('rdk_originman_short_train', { contextId });

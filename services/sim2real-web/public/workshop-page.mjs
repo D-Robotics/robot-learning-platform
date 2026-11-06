@@ -31,7 +31,9 @@ export async function startWorkshop({
     frameObserver = null,
     primaryAction = null,
     comparisonRequest = 0,
-    comparisonLoaded = null;
+    comparisonLoaded = null,
+    loginNeeded = false,
+    reconnectNeeded = false;
   const validId = (v) => typeof v === 'string' && /^[A-Za-z0-9][A-Za-z0-9_.-]{0,95}$/.test(v);
   const listeners = [];
   const listen = (id, type, fn) => {
@@ -40,17 +42,24 @@ export async function startWorkshop({
     listeners.push(() => node.removeEventListener(type, fn));
   };
   const json = async (path, body) => {
-    const r = await fetchImpl(new URL(path, api), {
-      credentials: 'same-origin',
-      cache: 'no-store',
-      ...(body === undefined
-        ? {}
-        : {
-            method: 'POST',
-            headers: { 'content-type': 'application/json' },
-            body: JSON.stringify(body),
-          }),
-    });
+    let r;
+    try {
+      r = await fetchImpl(new URL(path, api), {
+        credentials: 'same-origin',
+        cache: 'no-store',
+        ...(body === undefined
+          ? {}
+          : {
+              method: 'POST',
+              headers: { 'content-type': 'application/json' },
+              body: JSON.stringify(body),
+            }),
+      });
+    } catch {
+      throw Object.assign(Error('与学习平台的连接中断。恢复网络后会核对原实验。'), { offline: true });
+    }
+    if (r.status === 401)
+      throw Object.assign(Error('登录学习平台后，回到这里继续原实验。'), { status: 401 });
     let value;
     try {
       value = await r.json();
@@ -64,8 +73,12 @@ export async function startWorkshop({
   const error = (e) => {
     halted = true;
     clearTimer(timer);
-    $('workshop-error').textContent = e.message ?? '课程暂不可用。';
+    loginNeeded = e.status === 401;
+    reconnectNeeded = e.offline === true;
+    $('workshop-error-message').textContent = e.message ?? '课程暂不可用。';
     $('workshop-error').hidden = false;
+    $('workshop-login').hidden = !loginNeeded;
+    $('workshop-retry').textContent = loginNeeded ? '登录后接续原实验' : '重试读取本轮';
     $('connection-status').textContent = '需要处理';
     show();
   };
@@ -89,9 +102,12 @@ export async function startWorkshop({
     ['pushMaxForce', '侧推上限', 'custom-push'],
   ];
   const formatNumber = (n) => n.toLocaleString('zh-CN');
+  const roundDifference = (current, previous) => current.recovered - previous.recovered;
   const comparisonStatus = (message) => { $('round-comparison-status').textContent = message; };
   const renderRounds = (comparison) => {
     const table = $('round-comparison-table');
+    const summary = $('round-comparison-summary');
+    summary.hidden = true;
     const body = $('round-comparison-rows');
     body.replaceChildren();
     const { rounds, comparable, sameTrainingSetup } = comparison;
@@ -124,7 +140,7 @@ export async function startWorkshop({
       const counts = round.suites.map((suite, i) => {
         const count = suite.recovered + '/' + suite.total;
         if (!previous || !comparable) return count;
-        const difference = suite.recovered - previous.suites[i].recovered;
+        const difference = roundDifference(suite, previous.suites[i]);
         return count + (difference === 0 ? '（持平）' : '（' + (difference > 0 ? '+' : '−') + Math.abs(difference) + '）');
       });
       const verdict = round.clearGain === true ? '通过' : round.clearGain === false ? '未通过' : '待核对';
@@ -134,6 +150,17 @@ export async function startWorkshop({
         row.append(cell);
       }
       body.append(row);
+    }
+    if (comparable) {
+      const latest = rounds.at(-1);
+      const previous = rounds.at(-2);
+      const subject = latest.contextId === contextId ? '本轮' : '最后一轮';
+      summary.textContent = subject + '比上一轮：' + latest.suites.map((suite, i) => {
+        const difference = roundDifference(suite, previous.suites[i]);
+        const label = i === 0 ? '公开组' : '补充组';
+        return label + ' ' + (difference === 0 ? '持平' : (difference > 0 ? '多' : '少') + '恢复 ' + Math.abs(difference) + ' 次');
+      }).join('，') + '。';
+      summary.hidden = false;
     }
     const [historical, additional] = rounds[0].suites;
     const baselines = '原 PD：' + historical.original + '/' + historical.total + '、' + additional.original + '/' + additional.total +
@@ -147,6 +174,7 @@ export async function startWorkshop({
     const activeId = contextId;
     const request = ++comparisonRequest;
     $('round-comparison-table').hidden = true;
+    $('round-comparison-summary').hidden = true;
     comparisonStatus('正在核对各轮的训练、权重与评测条件。');
     try {
       const suffix = ids.length ? '?with=' + encodeURIComponent(ids.join(',')) : '';
@@ -178,7 +206,7 @@ export async function startWorkshop({
     $('compare-parameters').hidden = session?.stage !== 'results' || !session.recipe;
     $('compare-parameters').disabled = busy || selecting;
     $('result-guide').textContent = session?.stage === 'results'
-      ? '回放展示一个条件。整体表现请看两组固定条件的恢复次数。'
+      ? '先看两组各恢复了几次。原 PD 是未叠加学习修正的基线；回放只展示其中一个条件。'
       : '训练曲线随任务更新。等评测完成，再看同条件下的恢复次数。';
     $('new-experiment').disabled = !session || busy || selecting;
     $('history-toggle').disabled = busy || selecting;
@@ -234,12 +262,16 @@ export async function startWorkshop({
     if (selecting) {
       guide = ['正在切换实验', '正在读取所选实验的进度。'];
     } else if (halted) {
-      guide = ['当前步骤需要处理', '查看下方原因。原实验和已经提交的任务会保留。', '查看原因', 'workshop-error'];
+      guide = loginNeeded
+        ? ['先登录学习平台', '请使用原实验所在的学习平台账号。', '去登录', 'workshop-login']
+        : reconnectNeeded
+          ? ['连接暂时中断', '网络恢复后会核对原实验，无需重新开始。', '查看恢复方式', 'workshop-error']
+          : ['当前步骤需要处理', '原实验和已经提交的任务会保留，可先重试读取状态。', '查看原因', 'workshop-error'];
     } else if (!session) {
       guide = ['选择课程实验', '有实验就从列表接着做。第一次可以在聊天说“带我开始 Workshop”。', '查看实验列表', 'history'];
     } else if (ready) {
       if (reference && !$('comparison-recipe-help').hidden) {
-        guide = ['修改上一轮配方', '只改一个参数，再检查配方。你确认后才会开始训练。', '编辑训练参数', 'custom-recipe'];
+        guide = ['修改上一轮配方', '可以直接选步数加倍，或只改一项自定义参数。确认后才会开训。', '选择要改的参数', 'budget-section'];
       } else {
         guide = reference
           ? ['选择这轮怎么训练', '第一次可以选快速体验。开始后会用同一策略自动评测。', '选择训练预算', 'budget-section']
@@ -284,9 +316,18 @@ export async function startWorkshop({
       const url = new URL('experiment.html?context=' + encodeURIComponent(session.contextId), root)
         .href;
       $('open-result').href = url;
+      $('go-recovery-counts').href = url + '#comparison-heading';
+      $('go-replay').href = url + '#replay-heading';
       if ($('result-frame').getAttribute('src') !== url) $('result-frame').src = url;
     }
-    $('start-quick').hidden = Boolean(session?.comparisonBase);
+    $('go-recovery-counts').hidden = phase !== 'results';
+    $('go-replay').hidden = phase !== 'results';
+    const parentRecipe = session?.comparisonBase?.recipe;
+    $('budget-presets').hidden = Boolean(parentRecipe);
+    $('comparison-presets').hidden = !parentRecipe;
+    $('compare-double-steps').disabled = busy || selecting || !ready || !parentRecipe || parentRecipe.timesteps > 500000;
+    $('compare-formal-budget').disabled = busy || selecting || !ready || parentRecipe?.timesteps === 500000;
+    $('workshop-retry').disabled = busy || selecting;
     $('start-quick').disabled = busy || selecting || !ready;
     $('start-formal').disabled = busy || selecting || !ready;
     $('confirm-recipe').disabled = busy || selecting || !ready;
@@ -300,23 +341,41 @@ export async function startWorkshop({
   };
   // The result remains an independently authenticated view, but shares one
   // scroll surface with the host. Never inspect an unrelated iframe document.
-  listen('result-frame', 'load', () => {
-    frameObserver?.disconnect();
-    frameObserver = null;
+  const experimentFrameDocument = () => {
+    if (!session?.training) return null;
     const frame = $('result-frame');
     try {
       const actual = new URL(frame.contentWindow.location.href);
       const expected = new URL('experiment.html?context=' + encodeURIComponent(contextId), root);
-      if (actual.href !== expected.href || !session?.training) return;
-      const child = frame.contentDocument;
-      child.body.classList.add('workshop-embedded');
-      const resize = () => { frame.style.height = Math.ceil(child.body.scrollHeight) + 'px'; };
-      if (ResizeObserverImpl) {
-        frameObserver = new ResizeObserverImpl(resize);
-        frameObserver.observe(child.body);
-      }
-      resize();
-    } catch { /* The independent view handles auth and load failures itself. */ }
+      return actual.href === expected.href ? frame.contentDocument : null;
+    } catch {
+      return null;
+    }
+  };
+  for (const [id, heading] of [['go-recovery-counts', 'comparison-heading'], ['go-replay', 'replay-heading']]) {
+    listen(id, 'click', (event) => {
+      if (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+      const target = experimentFrameDocument()?.getElementById(heading);
+      if (!target) return;
+      event.preventDefault();
+      target.scrollIntoView?.({ block: 'start' });
+      target.setAttribute('tabindex', '-1');
+      target.focus({ preventScroll: true });
+    });
+  }
+  listen('result-frame', 'load', () => {
+    frameObserver?.disconnect();
+    frameObserver = null;
+    const frame = $('result-frame');
+    const child = experimentFrameDocument();
+    if (!child?.body) return;
+    child.body.classList.add('workshop-embedded');
+    const resize = () => { frame.style.height = Math.ceil(child.body.scrollHeight) + 'px'; };
+    if (ResizeObserverImpl) {
+      frameObserver = new ResizeObserverImpl(resize);
+      frameObserver.observe(child.body);
+    }
+    resize();
   });
   for (const name of ['reference', 'budget', 'execution', 'result'])
     listen('workshop-step-' + name, 'click', () => {
@@ -337,9 +396,8 @@ export async function startWorkshop({
       });
       return;
     }
-    if (primaryAction === 'custom-recipe') $('custom-recipe').open = true;
-    reveal(primaryAction);
-    if (primaryAction === 'custom-recipe') $('custom-timesteps').focus({ preventScroll: true });
+    if (primaryAction === 'workshop-login') $('workshop-login').click();
+    else reveal(primaryAction);
   });
   const claimAndSubmit = async (phase, recipe = {}) => {
     // A draft can outlive the resource health TTL; probe before consuming its
@@ -418,6 +476,11 @@ export async function startWorkshop({
       error(e);
       try {
         session = (await json('workshop-sessions/' + encodeURIComponent(contextId))).session;
+        if (e.offline && session?.contextId === contextId && validId(session.training?.runId)) {
+          halted = false;
+          reconnectNeeded = false;
+          $('workshop-error').hidden = true;
+        }
       } catch {
         /* preserve uncertain state */
       }
@@ -447,6 +510,7 @@ export async function startWorkshop({
     comparisonLoaded = null;
     $('round-comparison').open = false;
     $('round-comparison-table').hidden = true;
+    $('round-comparison-summary').hidden = true;
     $('round-comparison-picker').hidden = true;
     comparisonStatus('');
     $('comparison-recipe-help').hidden = true;
@@ -578,14 +642,30 @@ export async function startWorkshop({
   );
   const review = (recipe) => {
     pendingRecipe = recipe;
-    $('recipe-confirm-text').textContent =
-      `本次选择 ${recipe.timesteps} 训练步、seed ${recipe.seed}、侧推上限 ${recipe.pushMaxForce}N，随后自动做同源评测。不会扩大预算，也不保证提升。`;
+    const parent = session?.comparisonBase?.recipe;
+    const changes = parent ? recipeFields
+      .filter(([key]) => recipe[key] !== parent[key])
+      .map(([key, label]) => label + ' ' + formatNumber(parent[key]) + ' → ' + formatNumber(recipe[key])) : [];
+    const difference = parent
+      ? changes.length ? '相对上一轮改动：' + changes.join('、') + '。' : '与上一轮参数相同。'
+      : '';
+    $('recipe-confirm-text').textContent = difference +
+      `本轮 ${formatNumber(recipe.timesteps)} 步 · 随机种子 ${recipe.seed} · 侧推上限 ${recipe.pushMaxForce} N。训练完成后自动评测这份策略。`;
     $('recipe-confirm').hidden = false;
+    reveal('recipe-confirm');
   };
   listen('start-formal', 'click', () => {
     const { seed = 7, pushMaxForce = 8.1 } = session?.comparisonBase?.recipe ?? {};
     review({ timesteps: 500000, seed, pushMaxForce });
   });
+  const reviewComparisonBudget = (timesteps) => {
+    const parent = session?.comparisonBase?.recipe;
+    if (parent) review({ timesteps, seed: parent.seed, pushMaxForce: parent.pushMaxForce });
+  };
+  listen('compare-double-steps', 'click', () => {
+    reviewComparisonBudget(session.comparisonBase.recipe.timesteps * 2);
+  });
+  listen('compare-formal-budget', 'click', () => reviewComparisonBudget(500000));
   listen('review-custom', 'click', () => {
     for (const n of ['custom-timesteps', 'custom-seed', 'custom-push'])
       if (!$(n).reportValidity()) return;
@@ -603,6 +683,29 @@ export async function startWorkshop({
     $('recipe-confirm').hidden = true;
   });
   listen('refresh-workshop', 'click', () => run(refresh));
+  const reconnect = async () => {
+    if (busy || selecting || disposed) return;
+    if (!session && contextId) await choose(contextId);
+    if (contextId) await refresh();
+    else {
+      const list = await history();
+      if (list.current) {
+        await choose(list.current.contextId);
+        await refresh();
+      } else {
+        halted = false;
+        $('history').hidden = false;
+        $('workshop-error').hidden = true;
+        show();
+      }
+    }
+  };
+  listen('workshop-retry', 'click', () => run(reconnect));
+  const onOnline = () => {
+    if (halted && reconnectNeeded) run(reconnect);
+  };
+  document.defaultView?.addEventListener('online', onOnline);
+  listeners.push(() => document.defaultView?.removeEventListener('online', onOnline));
   listen('recover-workshop-request', 'click', () =>
     run(async () => {
       if (busy || selecting || session?.stage !== 'unknown') return;
@@ -666,7 +769,7 @@ export async function startWorkshop({
     }
     await choose(next.contextId);
     if (!compare || session?.stage !== 'ready') return;
-    if (reference) reveal('custom-recipe');
+    if (reference) reveal('budget-section');
   };
   listen('choose-rounds', 'click', () => {
     const activeId = contextId;

@@ -2,13 +2,13 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { connectAuthenticatedCore } from '../plugins/rdk-robot-learning-platform/scripts/authenticated-core.mjs';
 
-async function fixture(t, fetchImpl) {
+async function fixture(t, fetchImpl, cookie = async () => 'rdk_sso_web_session=fixture-verified') {
   let childEnv,
     invalidations = 0;
   const auth = {
     audience: 'https://studio.example/robotics-learning',
     mode: 'browser-login',
-    cookie: async () => 'rdk_sso_web_session=fixture-verified',
+    cookie,
     status: async () => ({ authenticated: true }),
     invalidate: async () => invalidations++,
   };
@@ -145,4 +145,37 @@ test('course model reader rejects malformed and oversized responses without inva
   payload = 'x'.repeat(2 * 1024 * 1024 + 1);
   await assert.rejects(f.core.readModels(), { code: 'MODEL_RESPONSE_TOO_LARGE' });
   assert.equal(f.invalidations(), 0);
+});
+
+test('board connect and Workshop creation use the account that selected the target', async (t) => {
+  let account = 'alice';
+  const requests = [];
+  const f = await fixture(
+    t,
+    async (url, options) => {
+      requests.push([new URL(url).pathname, options.method]);
+      assert.equal(options.headers.cookie, 'rdk_sso_web_session=alice');
+      return Response.json({ ok: true, schemaVersion: 1 });
+    },
+    async (options) => {
+      assert.equal(options.startLogin, false);
+      if (options.accountId !== account) throw Error('账号已切换');
+      return 'rdk_sso_web_session=' + account;
+    },
+  );
+  await f.core.developmentTarget('connect-board', { accountId: account, targetId: 'b1' });
+  await f.core.workshopSession('create', { computeResourceId: 'w1' }, { accountId: account });
+  account = 'bob';
+  await assert.rejects(
+    f.core.developmentTarget('connect-board', { accountId: 'alice', targetId: 'b1' }),
+    /账号已切换/,
+  );
+  await assert.rejects(
+    f.core.workshopSession('create', { computeResourceId: 'w1' }, { accountId: 'alice' }),
+    /账号已切换/,
+  );
+  assert.deepEqual(requests, [
+    ['/robotics-learning/api/sim2real/device-connections/b1/connect', 'POST'],
+    ['/robotics-learning/api/v1/duck/workshop-sessions', 'POST'],
+  ]);
 });

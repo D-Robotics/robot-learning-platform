@@ -5,7 +5,7 @@
 1. 将原始 ZIP 解压到最终目录，保留 `.qoder-plugin`、`.mcp.json` 等隐藏文件。原始包不含账号凭据，移动已配置目录后需要重新配置。
 2. macOS 双击 `setup-qoder-macos.command`；Windows 双击 `setup-qoder-windows.cmd`。安装器准备摘要校验的兼容 Node 并生成绝对路径 MCP 配置，Qoder 入口不修改 Studio。已有兼容 Node 可在目录运行 `node setup.mjs --host qoder`。安装器会在该目录生成 `Qoder本机导入包.zip`，包含本机MCP路径。没有平台源码/npm依赖也可运行。
 3. Qoder桌面使用“扩展→已安装→添加→上传Plugin”，选择安装器新生成的 `Qoder本机导入包.zip`，不要再上传未配置的原始发行ZIP。Qoder IDE若支持目录导入，可导入已配置的完整目录；Qoder CLI 按当前可执行文件名称运行 `qoder plugins validate /绝对路径/插件`，再在目标项目内运行 `qoder plugins install /绝对路径/插件 --scope local`。国内版命令可能是 `qoderclicn`，先用 `--help` 核对。不要只导入 `.mcp.json` 后声称已经安装全部技能。
-4. 在已安装插件里确认版本为 0.6.4；更新后刷新插件连接，再新建空白聊天。无需额外创建同名 MCP 连接。
+4. 在已安装插件里确认版本为 0.6.5；更新后刷新插件连接，再新建空白聊天。无需额外创建同名 MCP 连接。
 5. 输入 **带我开始 Workshop**。首次需要平台授权时按浏览器提示确认，返回原对话继续；正常安装后直接在页面选择预算。学员不需要记工具名。Qoder 与学习平台账号分别验证，跨软件接续使用相同学习平台账号。
 
 官方入口：[CLI 插件](https://docs.qoder.com/cli/plugins)、[IDE 插件](https://docs.qoder.com/extensions/plugins)。安装以当前宿主实际反馈为准。此包不内置Qoder模型账号，也不携带OriginMan权重或实时执行适配器。
@@ -20,4 +20,15 @@
 
 ## 维护者诊断
 
-按需使用离线 `rdk_plugin_status` 核对实际加载版本 0.6.4 和 `loadedSourcesMatch=true`；业务连接再核对认证状态。逐机接入、离线课堂与硬件验收仍使用各自技能，不插入默认 Workshop。IDE/CLI 与连接细节见 [客户端接入](client-setup.md)。
+按需使用离线 `rdk_plugin_status` 核对实际加载版本 0.6.5 和 `loadedSourcesMatch=true`；业务连接再核对认证状态。逐机接入、离线课堂与硬件验收仍使用各自技能，不插入默认 Workshop。IDE/CLI 与连接细节见 [客户端接入](client-setup.md)。
+
+## 换账号、换开发机
+
+| 你想做什么 | 在聊天里这样说 |
+| --- | --- |
+| 换学习平台账号 | **切换学习平台账号**。在浏览器登录目标账号并确认授权，回到聊天说 **继续 Workshop**。工作台若提示登录，也用同一个账号。 |
+| 查看当前账号的机器 | **查看我的开发机**。插件分别列出训练算力机和 RDK 板卡。 |
+| 换算力机开一轮 | **用「机器名称」开始 Workshop**。打开新实验，选预算后才提交训练。旧实验保留原来的算力机和结果。 |
+| 检查算力机或连接板卡 | **检查算力机「机器名称」**，或者 **连接板卡「板卡名称」**。板卡操作建立 SSH 隧道并探测板端服务。 |
+
+Qoder 插件同一时间使用一个学习平台账号。RDK Studio 在自己的账户菜单切换后再继续。还看不到机器时，先在学习平台登记相应的算力资源或 SSH 设备，或请管理员授予权限。账号密码、SSH 私钥和 Runner Token 在各自的安全入口配置。

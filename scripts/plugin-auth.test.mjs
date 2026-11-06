@@ -14,6 +14,7 @@ function fixture(t) {
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
   let approved = false,
     revoked = false,
+    account = 'alice',
     clock = Date.now();
   const seen = [];
   const secret = 's'.repeat(43),
@@ -38,13 +39,16 @@ function fixture(t) {
         ? {
             ok: true,
             status: 'authenticated',
-            accountId: 'alice',
+            accountId: account,
             expiresAt: clock + 60000,
-            cookie: 'rdk_sso_web_session=private-cookie',
+            cookie:
+              'rdk_sso_web_session=private-cookie' + (account === 'alice' ? '' : '-' + account),
           }
         : { ok: true, status: 'pending' };
-    } else if (p === '/api/sso/me') value = { user: revoked ? null : { id: 'alice' } };
-    else if (p.endsWith('/session')) {
+    } else if (p === '/api/sso/me') {
+      const suffix = init.headers.cookie === 'rdk_sso_web_session=private-cookie-bob';
+      value = { user: revoked ? null : { id: suffix ? 'bob' : 'alice' } };
+    } else if (p.endsWith('/session')) {
       const body = JSON.parse(init.body);
       status = revoked ? 401 : 200;
       value = revoked
@@ -65,7 +69,10 @@ function fixture(t) {
     dir,
     fetchImpl,
     seen,
-    approve: () => (approved = true),
+    approve: (id = 'alice') => {
+      account = id;
+      approved = true;
+    },
     revoke: () => (revoked = true),
     now: () => clock,
     expire: () => (clock += 70000),
@@ -112,10 +119,13 @@ test('native host never opens browser or reads another account, sends credential
     openUrl: async () => opens++,
   });
   const result = await a.call('rdk_auth_login');
+  const switchResult = await a.call('rdk_auth_switch_account');
+  assert.equal(switchResult.accountId, 'alice');
+  assert.match(switchResult.nextAction, /Studio 账户菜单/);
   assert.equal(result.mode, 'studio-session');
   assert.equal(result.accountId, 'alice');
   assert.equal(opens, 0);
-  assert.equal(f.seen.length, 1);
+  assert.equal(f.seen.length, 2);
   assert.equal(f.seen[0].headers['x-rdk-sso-session'], 'native-private');
   assert.ok(!JSON.stringify(result).includes('native-private'));
   f.revoke();
@@ -522,4 +532,35 @@ test('unrecognized or mismatched identity receipts preserve authorization and do
   }
   me = undefined;
   assert.equal((await a.status()).authenticated, true);
+});
+
+test('switch requires another browser account across processes and stale 401 cannot clear it', async (t) => {
+  const f = fixture(t);
+  const options = {
+    env: { RDK_SIM2REAL_MCP_BASE_URL: base },
+    cacheDirectory: f.dir,
+    fetchImpl: f.fetchImpl,
+    now: f.now,
+  };
+  const first = createPluginAuth(options);
+  await first.call('rdk_auth_login', { openBrowser: false });
+  f.approve();
+  assert.equal((await first.status()).accountId, 'alice');
+  const oldCookie = await first.cookie();
+  const second = createPluginAuth(options);
+  const switchFlow = await second.call('rdk_auth_switch_account', { openBrowser: false });
+  assert.equal(switchFlow.authenticated, false);
+  assert.ok(switchFlow.verificationUrl);
+  assert.doesNotMatch(JSON.stringify(switchFlow), /alice|private-cookie|previousAccountId/);
+  assert.equal((await first.status()).accountSelectionRequired, true);
+  assert.equal((await second.status()).accountSelectionRequired, true);
+  const before = f.seen.length;
+  await assert.rejects(first.cookie(), /登录/);
+  assert.equal(f.seen.length, before);
+  assert.ok((await first.call('rdk_auth_switch_account', { openBrowser: false })).verificationUrl);
+  f.approve('bob');
+  assert.equal((await second.status()).accountId, 'bob');
+  await first.invalidate(oldCookie);
+  assert.equal((await first.status()).accountId, 'bob');
+  await assert.rejects(first.cookie({ accountId: 'alice' }), /账号已切换/);
 });

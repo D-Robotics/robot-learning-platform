@@ -40,8 +40,9 @@ export async function connectAuthenticatedCore({
     });
     res.end(JSON.stringify(value));
   };
-  const fetchPlatform = async (pathname, options = {}) => {
-    const cookie = pathname === '/healthz' ? null : await auth.cookie();
+  const fetchPlatform = async (pathname, options = {}, accountId) => {
+    const cookie =
+      pathname === '/healthz' ? null : await auth.cookie({ accountId, startLogin: !accountId });
     const response = await fetchImpl(auth.audience + pathname, {
       ...options,
       headers: { ...options.headers, ...(cookie ? { cookie } : {}) },
@@ -52,7 +53,7 @@ export async function connectAuthenticatedCore({
       ]),
     });
     if (response.status === 401) {
-      await auth.invalidate();
+      if (cookie) await auth.invalidate(cookie);
       throw loginRequired();
     }
     return response;
@@ -131,7 +132,7 @@ export async function connectAuthenticatedCore({
   let closed = false;
   return {
     authentication: auth,
-    async workshopSession(operation, input = {}, { signal } = {}) {
+    async workshopSession(operation, input = {}, { signal, accountId } = {}) {
       if (!['list', 'create', 'select', 'read'].includes(operation)) throw Error('课程操作无效。');
       if (
         ['select', 'read'].includes(operation) &&
@@ -145,15 +146,19 @@ export async function connectAuthenticatedCore({
             ? '/' + encodeURIComponent(input.contextId)
             : '';
       const write = ['create', 'select'].includes(operation);
-      const response = await fetchPlatform('/api/v1/duck/workshop-sessions' + suffix, {
-        method: write ? 'POST' : 'GET',
-        headers: {
-          accept: 'application/json',
-          ...(write ? { 'content-type': 'application/json' } : {}),
+      const response = await fetchPlatform(
+        '/api/v1/duck/workshop-sessions' + suffix,
+        {
+          method: write ? 'POST' : 'GET',
+          headers: {
+            accept: 'application/json',
+            ...(write ? { 'content-type': 'application/json' } : {}),
+          },
+          ...(write ? { body: JSON.stringify(operation === 'select' ? {} : input) } : {}),
+          signal,
         },
-        ...(write ? { body: JSON.stringify(operation === 'select' ? {} : input) } : {}),
-        signal,
-      });
+        accountId,
+      );
       const chunks = [];
       let size = 0;
       if (response.body)
@@ -174,6 +179,43 @@ export async function connectAuthenticatedCore({
           value.message ?? '课程接口尚未就绪，请更新平台服务。',
           { httpStatus: response.status },
         );
+      return value;
+    },
+    async developmentTarget(operation, { accountId, targetId, signal } = {}) {
+      if (!accountId || !['compute', 'boards', 'test-compute', 'connect-board'].includes(operation))
+        throw Error('请选择当前账号下的明确设备。');
+      const write = operation === 'test-compute' || operation === 'connect-board';
+      if (write && (typeof targetId !== 'string' || !targetId.trim() || targetId.length > 160))
+        throw Error('设备标识无效。');
+      const path =
+        operation === 'compute' || operation === 'test-compute'
+          ? '/api/sim2real/compute-resources'
+          : '/api/sim2real/device-connections';
+      const suffix = write
+        ? '/' + encodeURIComponent(targetId) + (operation === 'test-compute' ? '/test' : '/connect')
+        : '';
+      const response = await fetchPlatform(
+        path + suffix,
+        {
+          method: write ? 'POST' : 'GET',
+          headers: {
+            accept: 'application/json',
+            ...(write ? { 'content-type': 'application/json' } : {}),
+          },
+          ...(write ? { body: '{}' } : {}),
+          signal,
+        },
+        accountId,
+      );
+      const message = write
+        ? '平台未能完成设备连接检查，请到学习平台查看该设备的状态。'
+        : '当前账号暂时无法读取这类设备。';
+      if (!response.ok)
+        throw new PluginRequestError('DEVELOPMENT_TARGET_UNAVAILABLE', message, {
+          httpStatus: response.status,
+        });
+      const value = await response.json();
+      if (value?.ok !== true) throw Error(message);
       return value;
     },
     async experimentSession(operation, input = {}, { signal } = {}) {

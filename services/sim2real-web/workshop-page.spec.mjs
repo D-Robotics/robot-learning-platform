@@ -346,6 +346,7 @@ test('reopening after a lost acknowledgement evaluates the accepted training exa
     d.getElementById('start-quick').click();
     await settle();
     assert.equal(f.state.training.runId, 'train');
+    assert.equal(d.getElementById('workshop-error').hidden, true);
     assert.equal(f.calls.filter((x) => x.p === 'runs').length, 1);
     c.dispose();
     c = await open();
@@ -374,7 +375,7 @@ test('formal budget requires a visible recipe confirmation; custom inputs and hi
     d.getElementById('skip-reference').click();
     await settle();
     d.getElementById('start-formal').click();
-    assert.match(d.getElementById('recipe-confirm-text').textContent, /500000/);
+    assert.match(d.getElementById('recipe-confirm-text').textContent, /500,000/);
     assert.equal(f.calls.filter((x) => x.p === 'runs').length, 0);
     d.getElementById('cancel-recipe').click();
     assert.equal(d.getElementById('recipe-confirm').hidden, true);
@@ -580,6 +581,8 @@ test('completed experiment starts an independent parameter draft with the prior 
     f.dom.window.close();
   });
   assert.equal($('compare-parameters').hidden, false);
+  assert.match($('go-recovery-counts').href, /context=ws-test#comparison-heading$/);
+  assert.match($('go-replay').href, /context=ws-test#replay-heading$/);
   assert.equal($('workshop-primary').textContent, '查看本轮结果');
   assert.equal($('execution-section').hidden, true);
   $('workshop-step-execution').click();
@@ -592,11 +595,11 @@ test('completed experiment starts an independent parameter draft with the prior 
   await settle();
   assert.equal($('budget-section').hidden, false);
   assert.equal($('custom-recipe').open, true);
-  assert.equal($('workshop-primary').textContent, '编辑训练参数');
-  $('custom-recipe').open = false;
+  assert.equal($('workshop-primary').textContent, '选择要改的参数');
   $('workshop-primary').click();
-  assert.equal($('custom-recipe').open, true);
-  assert.equal(d.activeElement.id, 'custom-timesteps');
+  assert.equal(d.activeElement.id, 'budget-section');
+  assert.equal($('budget-presets').hidden, true);
+  assert.equal($('comparison-presets').hidden, false);
   assert.deepEqual(
     ['custom-timesteps', 'custom-seed', 'custom-push'].map((id) => $(id).value),
     ['16384', '11', '7.5'],
@@ -606,8 +609,18 @@ test('completed experiment starts an independent parameter draft with the prior 
     f.calls.some(({ p }) => p.includes('/claim/') || p === 'runs'),
     false,
   );
-  $('custom-timesteps').value = '32768';
-  $('review-custom').click();
+  $('compare-formal-budget').click();
+  assert.match(
+    $('recipe-confirm-text').textContent,
+    /训练步数 16,384 → 500,000.*随机种子 11.*7.5 N/,
+  );
+  $('cancel-recipe').click();
+  $('compare-double-steps').click();
+  assert.match(
+    $('recipe-confirm-text').textContent,
+    /训练步数 16,384 → 32,768.*随机种子 11.*7.5 N/,
+  );
+  assert.equal(d.activeElement.id, 'recipe-confirm');
   assert.equal(
     f.calls.some(({ p }) => p.includes('/claim/')),
     false,
@@ -643,6 +656,10 @@ test('selecting two historical rounds shows parameter changes and signed deltas'
   $('apply-rounds').click();
   await settle();
   assert.equal($('round-comparison-table').hidden, false);
+  assert.equal(
+    $('round-comparison-summary').textContent,
+    '本轮比上一轮：公开组 多恢复 25 次，补充组 多恢复 22 次。',
+  );
   assert.match(
     $('round-comparison-rows').textContent,
     /16,384 → 500,000.*27\/31（\+25）.*25\/31（\+22）/,
@@ -651,4 +668,58 @@ test('selecting two historical rounds shows parameter changes and signed deltas'
     f.calls.some(({ p }) => p.includes('/claim/') || p === 'runs'),
     false,
   );
+});
+
+test('expired login gives one sign-in action and restores the same experiment without submitting training', async (t) => {
+  const f = fixture();
+  const d = f.dom.window.document;
+  const $ = (id) => d.getElementById(id);
+  let signedIn = false;
+  const c = await startWorkshop({
+    document: d,
+    location: f.dom.window.location,
+    fetchImpl: (url, options) =>
+      signedIn ? f.fetchImpl(url, options) : Promise.resolve({ status: 401, ok: false }),
+    setTimer: f.setTimer,
+    clearTimer: f.clearTimer,
+  });
+  t.after(() => {
+    c.dispose();
+    f.dom.window.close();
+  });
+  assert.equal($('workshop-primary').textContent, '去登录');
+  assert.equal($('workshop-login').hidden, false);
+  assert.equal($('workshop-retry').textContent, '登录后接续原实验');
+  signedIn = true;
+  $('workshop-retry').click();
+  await settle();
+  assert.equal($('workshop-error').hidden, true);
+  assert.equal($('workshop-primary').textContent, '看参考或跳过');
+  assert.ok(f.calls.some(({ p }) => p === 'workshop-sessions/ws-test/select'));
+  assert.ok(f.calls.every(({ p }) => !p.includes('/claim/') && p !== 'runs'));
+});
+
+test('network recovery reads the same experiment without submitting again', async (t) => {
+  const f = fixture();
+  const d = f.dom.window.document;
+  let connected = false;
+  const c = await startWorkshop({
+    document: d,
+    location: f.dom.window.location,
+    fetchImpl: (url, options) =>
+      connected ? f.fetchImpl(url, options) : Promise.reject(new TypeError('offline')),
+    setTimer: f.setTimer,
+    clearTimer: f.clearTimer,
+  });
+  t.after(() => {
+    c.dispose();
+    f.dom.window.close();
+  });
+  assert.equal(d.getElementById('workshop-current-title').textContent, '连接暂时中断');
+  connected = true;
+  f.dom.window.dispatchEvent(new f.dom.window.Event('online'));
+  await settle();
+  assert.equal(d.getElementById('workshop-error').hidden, true);
+  assert.ok(f.calls.some(({ p }) => p === 'workshop-sessions/ws-test'));
+  assert.ok(f.calls.every(({ p }) => !p.includes('/claim/') && p !== 'runs'));
 });

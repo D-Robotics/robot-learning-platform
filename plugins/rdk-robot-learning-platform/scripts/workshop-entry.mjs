@@ -1,5 +1,6 @@
 /** One learner entry; workbench buttons own execution, MCP retains full expert tools. */
 import fs from 'node:fs';
+import { setTimeout as delay } from 'node:timers/promises';
 import { selectCourseAssets, registerCourseModel } from './course-setup.mjs';
 import { prepareTraining } from './workflow-inspection.mjs';
 import { requireConnected } from './short-training.mjs';
@@ -12,6 +13,7 @@ export const WORKSHOP_TOOLS = [
       type: 'object',
       properties: {
         intent: { type: 'string', enum: ['start', 'new', 'continue', 'results'], default: 'start' },
+        computeResourceId: { type: 'string', minLength: 1, maxLength: 160 },
         contextId: { type: 'string', pattern: '^[A-Za-z0-9][A-Za-z0-9_.-]{0,95}$' },
       },
       additionalProperties: false,
@@ -19,23 +21,110 @@ export const WORKSHOP_TOOLS = [
     annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false },
   },
 ];
+const noSubmission = () => ({ training: false, evaluation: false });
+const signedIn = (status) =>
+  status.session?.authenticated === true && Boolean(status.session.accountId);
+
+async function beginWorkshopAuthorization(auth, openBrowser, signal) {
+  // The auth tool owns the trusted origin, authorization link and durable pending code.
+  let state = await auth.call('rdk_auth_login', { openBrowser });
+  const until = Date.now() + 12000;
+  if (state.browserOpened && state.verificationUrl) {
+    while (
+      state.authenticated === false &&
+      state.needsLogin &&
+      state.verificationUrl &&
+      Date.now() < until
+    ) {
+      signal?.throwIfAborted();
+      state = await auth.status();
+      if (state.authenticated === false && state.needsLogin && state.verificationUrl)
+        await delay(1000, undefined, { signal });
+    }
+  }
+  signal?.throwIfAborted();
+  return state;
+}
+
 export async function workshopEntry(
   args = {},
   call,
-  { remote, readModels, courseReadiness, toolNames = [], defaultResourceId } = {},
+  {
+    remote,
+    readModels,
+    courseReadiness,
+    toolNames = [],
+    defaultResourceId,
+    authentication,
+    openAuthBrowser = false,
+    signal,
+  } = {},
 ) {
   if (
     !args ||
     Array.isArray(args) ||
-    Object.keys(args).some((k) => !['intent', 'contextId'].includes(k)) ||
+    Object.keys(args).some((k) => !['intent', 'contextId', 'computeResourceId'].includes(k)) ||
     !['start', 'new', 'continue', 'results'].includes(args.intent ?? 'start') ||
     (args.contextId !== undefined && !/^[A-Za-z0-9][A-Za-z0-9_.-]{0,95}$/.test(args.contextId))
   )
     throw Error('请使用开始、继续或查看效果。');
+  if (args.computeResourceId !== undefined) {
+    if (
+      typeof args.computeResourceId !== 'string' ||
+      !args.computeResourceId.trim() ||
+      args.computeResourceId.length > 160 ||
+      args.intent !== 'new' ||
+      args.contextId !== undefined
+    )
+      throw Error('请用指定算力机新建实验，原实验继续使用原来的算力机。');
+    if (defaultResourceId && args.computeResourceId !== defaultResourceId)
+      throw Error('本课堂已固定算力机。如需更换，请联系教师。');
+  }
   if (!remote) throw Error('当前连接尚不支持按钮工作台，请更新完整插件。');
+  // The retained core may reject platform-status before the first login.
+  // Read the auth owner first so this entry can present a real authorization action.
+  let identity;
+  if (authentication) {
+    identity = await authentication.status();
+    if (identity.authenticated !== true) {
+      if (authentication.mode !== 'browser-login' || identity.needsLogin !== true)
+        throw Error(identity.nextAction ?? '请检查学习平台的连接或登录状态，然后继续。');
+      if (!identity.accountSelectionRequired)
+        identity = await beginWorkshopAuthorization(authentication, openAuthBrowser, signal);
+      if (identity.authenticated !== true) {
+        if (!identity.needsLogin)
+          throw Error(identity.nextAction ?? '授权服务暂时不可用，稍后重试原请求。');
+        const retry =
+          args.contextId || args.intent === 'continue' || args.intent === 'results'
+            ? '继续 Workshop'
+            : args.intent === 'new'
+              ? '新建 Workshop 实验'
+              : '带我开始 Workshop';
+        const login = identity.verificationUrl;
+        return {
+          contextId: args.contextId ?? null,
+          stage: 'authorize',
+          links: login ? { login } : {},
+          submission: noSubmission(),
+          studentReply: identity.accountSelectionRequired
+            ? identity.nextAction
+            : login
+              ? `[确认学习平台授权](${login})。确认后回到聊天说“${retry}”。`
+              : `授权已失效。回到聊天说“${retry}”，重新打开授权。`,
+          delivery:
+            '只展示 studentReply。授权完成前暂停课程工具链，无需输入密码或连接码，不要重复申请授权。',
+        };
+      }
+    }
+  }
+  signal?.throwIfAborted();
   const status = await call('rdk_platform_status', {});
-  if (status.session?.authenticated !== true || !status.session.accountId)
-    throw Error('请先在当前软件登录学习平台，然后继续。');
+  if (!signedIn(status)) throw Error('请先在当前软件登录学习平台，然后继续。');
+  if (
+    identity &&
+    (status.baseUrl !== authentication.audience || status.session.accountId !== identity.accountId)
+  )
+    throw Error('平台登录身份与授权不一致。请保留原实验，核对当前账号。');
   const base = new URL(status.baseUrl);
   if (
     !['http:', 'https:'].includes(base.protocol) ||
@@ -45,9 +134,12 @@ export async function workshopEntry(
     base.hash
   )
     throw Error('平台地址无效。');
-  const list = await remote('list', {});
+  const accountId = status.session.accountId;
+  const list = await remote('list', {}, accountId);
+  let selectedComputeName;
   let session = list.current;
-  if (args.contextId) session = (await remote('select', { contextId: args.contextId })).session;
+  if (args.contextId)
+    session = (await remote('select', { contextId: args.contextId }, accountId)).session;
   else if (
     (args.intent ?? 'start') === 'new' ||
     ((args.intent ?? 'start') === 'start' &&
@@ -63,7 +155,8 @@ export async function workshopEntry(
         manifest,
         readModels,
         modelId: session?.modelId,
-        computeResourceId: defaultResourceId ?? session?.computeResourceId,
+        computeResourceId:
+          defaultResourceId ?? args.computeResourceId ?? session?.computeResourceId,
       },
       call,
     );
@@ -87,8 +180,13 @@ export async function workshopEntry(
     )
       throw Error('账号或平台已变化，停止创建实验。');
     session = (
-      await remote('create', { modelId: model.id, computeResourceId: selected.resource.id })
+      await remote(
+        'create',
+        { modelId: model.id, computeResourceId: selected.resource.id },
+        accountId,
+      )
     ).session;
+    if (args.computeResourceId) selectedComputeName = selected.resource.name;
   }
   const finalIdentity = await call('rdk_platform_status', {});
   if (
@@ -121,8 +219,15 @@ export async function workshopEntry(
     stage,
     session,
     links: { workshop: url },
-    submission: { training: false, evaluation: false },
-    studentReply: message + '\n[' + linkLabel + '](' + url + ')',
+    submission: noSubmission(),
+    studentReply:
+      (selectedComputeName ? '本轮算力机：' + selectedComputeName + '。' : '') +
+      message +
+      '\n[' +
+      linkLabel +
+      '](' +
+      url +
+      ')',
     qoderNavigation: {
       surface: '内置 browser-use MCP，非外部 Chrome Connector',
       steps: [

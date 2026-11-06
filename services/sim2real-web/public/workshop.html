@@ -42,7 +42,13 @@
         </div>
         <p>可自由施力、跑 8 秒实验或慢放回看。浏览器后退可回到本轮课程。</p>
       </details>
-      <div id="workshop-error" class="experiment-error" role="alert" hidden></div>
+      <div id="workshop-error" class="experiment-error" hidden>
+        <p id="workshop-error-message" role="alert"></p>
+        <div class="workshop-actions">
+          <a id="workshop-login" href="./" target="_blank" rel="noopener" hidden>打开平台登录</a>
+          <button id="workshop-retry" type="button">重试读取本轮</button>
+        </div>
+      </div>
       <section id="history" hidden aria-label="选择已有实验">
         <h2>选择要继续的实验</h2>
         <div id="history-list" class="workshop-actions"></div>
@@ -76,19 +82,24 @@
       </section>
       <section id="budget-section" hidden aria-labelledby="budget-heading">
         <h2 id="budget-heading">2 · 选择一次预算</h2>
-        <p>第一次熟悉流程，选快速体验。需要判断策略能否超过 PD，再选正式预算。两档都会自动评测本轮策略。</p>
-        <div class="workshop-actions">
-          <button id="start-quick" type="button">开始快速体验 · 8192 步</button>
+        <div id="budget-presets">
+          <p>第一次用，选<strong>快速体验</strong>。两档训练完成后都会评测本轮策略。</p>
+          <div class="workshop-actions">
+            <button id="start-quick" type="button">开始快速体验 · 8192 步</button>
+            <button id="start-formal" type="button">选择正式效果实验 · 50 万步</button>
+          </div>
+          <p>快速体验用来练流程，恢复次数可能比原 PD 低。正式预算用于判断策略效果，需要更久，点选后会先核对配方。</p>
         </div>
-        <p>快速体验用 8,192 步检查训练、评测和回放链路。前 5,000 步主要收集经验，短训成绩可能低于原 PD。</p>
-        <p>正式预算请求 50 万步，用于做效果实验，需要更长的算力时间。以两组固定条件的评测判断结果。</p>
         <p id="comparison-recipe-help" hidden>
           已带入上一轮参数。只改一项，再比较两轮在相同条件下的恢复次数。
           <a id="comparison-base-link" target="_blank" rel="noopener">打开上一轮结果</a>
         </p>
+        <div class="workshop-actions" id="comparison-presets" hidden>
+          <button id="compare-double-steps" type="button">只把训练步数翻倍</button>
+          <button id="compare-formal-budget" type="button">只把步数改为正式预算</button>
+        </div>
         <details id="custom-recipe">
-          <summary>更多选择 · 正式实验和自定义参数</summary>
-          <p><button id="start-formal" type="button">选择正式效果实验 · 50 万步</button></p>
+          <summary>自定义训练参数</summary>
           <p>
             新实验保留旧结果。其余配方固定为 SAC、4
             环境、CUDA；更多引擎和平台功能仍可在聊天或主工作台使用。
@@ -150,12 +161,14 @@
             <a id="open-run-details" href="./?robot=originman#train/runs">查看运行记录</a>
           </div>
         </details>
-        <p>可以关掉页面。回来在 Qoder 说“继续 Workshop”，就会接回本次实验。</p>
+        <p>关掉页面后，已提交的任务会继续。回到本页可查看原进度，未提交的自动评测会在接续时继续。</p>
       </section>
       <section id="result-section" hidden aria-labelledby="result-heading">
         <h2 id="result-heading">4 · 看本次结果与回放</h2>
-        <p id="result-guide">先看训练曲线，再看同条件下恢复成功了几次。</p>
+        <p id="result-guide">先看两组条件各恢复了几次，再看一次实际动作。</p>
         <div class="workshop-actions">
+          <a id="go-recovery-counts" hidden>看恢复次数 ↓</a>
+          <a id="go-replay" hidden>去看回放 ↓</a>
           <button id="compare-parameters" type="button" hidden>改一个参数再试</button>
           <a id="open-result" target="_blank" rel="noopener">单独打开本次实验</a>
         </div>
@@ -163,6 +176,7 @@
           <summary>跨轮对比 · 参数和恢复次数</summary>
           <p>从本轮选最多两轮历史实验。由「改一个参数再试」创建的实验会自动带入来源轮次。</p>
           <p id="round-comparison-status" role="status"></p>
+          <p id="round-comparison-summary" hidden></p>
           <div class="comparison-scroll">
             <table id="round-comparison-table" hidden>
               <caption>恢复成功次数与相对上一行的变化</caption>
