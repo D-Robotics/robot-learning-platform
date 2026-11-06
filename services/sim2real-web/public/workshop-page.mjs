@@ -23,6 +23,7 @@ export async function startWorkshop({
     reference = null,
     referenceExpanded = false,
     pendingRecipe = null,
+    failureMessage = '',
     frameObserver = null;
   const validId = (v) => typeof v === 'string' && /^[A-Za-z0-9][A-Za-z0-9_.-]{0,95}$/.test(v);
   const listeners = [];
@@ -117,7 +118,9 @@ export async function startWorkshop({
           : session?.stage === 'results'
             ? '训练与评测已完成。效果和回放请在下方查看。'
             : session?.stage === 'blocked'
-              ? '原任务未成功，已停止自动步骤。'
+              ? failureMessage || (session.training?.status === 'completed'
+                ? '测试未完成，本次训练已保留。请联系课程管理员查看运行记录。'
+                : '训练未完成。请联系课程管理员查看运行记录。')
               : session?.stage === 'ready-evaluate'
                 ? session.legacy
                   ? '已有训练完成；此旧版实验仅查看，可在聊天明确要求同源评测。'
@@ -200,6 +203,7 @@ export async function startWorkshop({
     const previousStage = session?.stage;
     busy = true;
     halted = false;
+    failureMessage = '';
     show();
     try {
       session = (await json('workshop-sessions/' + encodeURIComponent(contextId))).session;
@@ -211,6 +215,22 @@ export async function startWorkshop({
       if (session.stage === 'ready-evaluate' && session.autoContinue) {
         await claimAndSubmit('evaluate');
         session = (await json('workshop-sessions/' + encodeURIComponent(contextId))).session;
+      }
+      const failed = [session.evaluation, session.training].find((run) => run?.status === 'failed');
+      if (session.stage === 'blocked' && validId(failed?.runId)) {
+        try {
+          const log = await json('runs/' + encodeURIComponent(failed.runId) + '/logs');
+          if (log.runId === failed.runId && Array.isArray(log.lines) &&
+              log.lines.some((line) => line.stream === 'stderr' &&
+                typeof line.text === 'string' &&
+                line.text.includes('RuntimeError: 可用磁盘空间不足，保留记录'))) {
+            failureMessage = session.training?.status === 'completed'
+              ? '算力机磁盘空间不足，测试停在这里。本次训练已保留，请联系课程管理员处理。'
+              : '算力机磁盘空间不足，训练停在这里。请联系课程管理员处理。';
+          }
+        } catch {
+          // Keep the safe explanation if this worker does not return logs.
+        }
       }
       $('workshop-error').hidden = true;
     } catch (e) {
@@ -254,6 +274,7 @@ export async function startWorkshop({
     clearTimer(timer);
     contextId = id;
     session = null;
+    failureMessage = '';
     if (!referenceVideo.paused) referenceVideo.pause();
     if (referenceVideo.currentTime > 0) referenceVideo.currentTime = 0;
     reference = null;

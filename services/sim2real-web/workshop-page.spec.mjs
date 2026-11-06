@@ -10,6 +10,7 @@ function fixture({
   lostAfterAccept = false,
   failedSwitch = false,
   offline = false,
+  diskFull = false,
 } = {}) {
   const dom = new JSDOM(html, {
     url: 'https://platform.test/course/workshop.html?context=ws-test',
@@ -77,8 +78,8 @@ function fixture({
         state.stage = 'training';
         if (lostAfterAccept) throw Error('lost response after accepting training');
       } else {
-        state.evaluation = { runId: 'eval', status: 'running' };
-        state.stage = 'evaluating';
+        state.evaluation = { runId: 'eval', status: diskFull ? 'failed' : 'running' };
+        state.stage = diskFull ? 'blocked' : 'evaluating';
       }
     }
     if (p === 'runs/train') {
@@ -89,6 +90,15 @@ function fixture({
       state.evaluation.status = 'completed';
       state.stage = 'results';
     }
+    if (p === 'runs/eval/logs' && diskFull)
+      return {
+        ok: true,
+        json: async () => ({
+          ok: true,
+          runId: 'eval',
+          lines: [{ stream: 'stderr', text: 'RuntimeError: 可用磁盘空间不足，保留记录' }],
+        }),
+      };
     return {
       ok: true,
       json: async () => ({
@@ -378,6 +388,33 @@ test('offline resource stops before consuming a claim or submitting a run', asyn
       false,
     );
     assert.match(d.getElementById('workshop-error').textContent, /训练资源暂不可用/);
+  } finally {
+    c.dispose();
+    f.dom.window.close();
+  }
+});
+
+test('a disk failure in evaluation explains the block and preserves the trained policy', async () => {
+  const f = fixture({ diskFull: true }),
+    d = f.dom.window.document;
+  const c = await startWorkshop({
+    document: d,
+    location: f.dom.window.location,
+    fetchImpl: f.fetchImpl,
+    setTimer: f.setTimer,
+    clearTimer: f.clearTimer,
+  });
+  try {
+    d.getElementById('skip-reference').click();
+    await settle();
+    d.getElementById('start-quick').click();
+    await settle();
+    await f.tick();
+    assert.match(d.getElementById('execution-status').textContent, /磁盘空间不足.*本次训练已保留/);
+    await c.refresh();
+    assert.equal(f.state.training.runId, 'train');
+    assert.equal(f.calls.filter((x) => x.p === 'runs').length, 2);
+    assert.equal(d.getElementById('result-section').hidden, false);
   } finally {
     c.dispose();
     f.dom.window.close();
