@@ -8,11 +8,7 @@ import {
   findSim2RealRunByIdempotency,
 } from '../sim2real/sim2real-store.js';
 import { wrapAsync, sendApiError } from '../sim2real/http-helpers.js';
-export function registerSim2RealWorkshopRoutes(
-  router: Router,
-  deps: { requestOwner: (r: Request, s: Response) => string | undefined | null },
-  options: { prefix: string },
-) {
+export function createPlatformWorkshopSessions() {
   const root = () => String(process.env.RDK_SIM2REAL_STORAGE_DIR ?? '').trim();
   const experiments = createExperimentSessions({ root, getRun: getSim2RealRun });
   const sessions = createWorkshopSessions({
@@ -22,6 +18,15 @@ export function registerSim2RealWorkshopRoutes(
     findRun: async (key, owner) => (await findSim2RealRunByIdempotency(key, owner))?.run ?? null,
     remember: experiments.remember,
   });
+  return { sessions, experiments };
+}
+
+export function registerSim2RealWorkshopRoutes(
+  router: Router,
+  deps: { requestOwner: (r: Request, s: Response) => string | undefined | null },
+  options: { prefix: string },
+) {
+  const { sessions, experiments } = createPlatformWorkshopSessions();
   const api = (p: string) => options.prefix + '/workshop-sessions' + p;
   const handle = (fn: (r: Request, owner: string | undefined) => Promise<unknown>) =>
     wrapAsync(async (r, s) => {
