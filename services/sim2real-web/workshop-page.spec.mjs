@@ -758,7 +758,15 @@ test('preview stays offline until Start and login opens in the same tab', async 
   assert.equal($('workshop-login').target, '');
 });
 
-for (const outcome of ['ready', 'blocked', 'unverified', 'mismatched', 'offline', 'wrong-engine']) {
+for (const outcome of [
+  'ready',
+  'blocked',
+  'unverified',
+  'preflight-unavailable',
+  'mismatched',
+  'offline',
+  'wrong-engine',
+]) {
   test(`worker setup ${outcome} keeps explicit selection and the observed reference`, async (t) => {
     const dom = new JSDOM(html, {
       url: 'https://platform.test/course/workshop.html?start=1&setup=1',
@@ -804,6 +812,12 @@ for (const outcome of ['ready', 'blocked', 'unverified', 'mismatched', 'offline'
             taskId: 'originman-recovery',
             engine: 'originman-recovery',
           });
+          if (outcome === 'preflight-unavailable')
+            return {
+              status: 503,
+              ok: false,
+              json: async () => ({ ok: false, code: 'SIM2REAL_ENGINE_PREFLIGHT_UNAVAILABLE' }),
+            };
           if (outcome === 'unverified')
             return {
               status: 404,
@@ -875,7 +889,7 @@ for (const outcome of ['ready', 'blocked', 'unverified', 'mismatched', 'offline'
       );
       return;
     }
-    if (outcome === 'unverified') {
+    if (['unverified', 'preflight-unavailable'].includes(outcome)) {
       assert.match($('workshop-compute-check').textContent, /无法核对课程环境/);
       assert.equal(calls.length, 3);
       $('workshop-setup-confirm').click();

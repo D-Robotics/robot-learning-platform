@@ -778,7 +778,9 @@ export async function startWorkshop({
     } catch (e) {
       if (e.code === 'SIM2REAL_ENGINE_PREFLIGHT_BUSY') return 'busy';
       if (e.code === 'SIM2REAL_PREFLIGHT_NOT_SUPPORTED' ||
-          e.code === 'SIM2REAL_ENGINE_PREFLIGHT_UNSUPPORTED' || (e.status === 404 && !e.code))
+          e.code === 'SIM2REAL_ENGINE_PREFLIGHT_UNSUPPORTED' ||
+          e.code === 'SIM2REAL_ENGINE_PREFLIGHT_UNAVAILABLE' ||
+          (e.status === 404 && !e.code))
         return 'unverified';
       throw e;
     }
