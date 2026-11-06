@@ -66,11 +66,15 @@
       </section>
       <section id="budget-section" hidden aria-labelledby="budget-heading">
         <h2 id="budget-heading">2 · 选择一次预算</h2>
-        <p>第一次玩，选快速体验。系统会训练一个策略，然后用同一策略自动测试。</p>
+        <p>第一次玩，选快速体验。系统会训练一个策略，再自动评测这份策略。</p>
         <div class="workshop-actions">
           <button id="start-quick" type="button">开始快速体验 · 8192 步</button>
         </div>
         <p>快速体验用于熟悉流程，不保证策略提升；正式预算也以本轮实际评测为准。</p>
+        <p id="comparison-recipe-help" hidden>
+          已带入上一轮参数。只改一项，再比较两轮在相同条件下的恢复次数。
+          <a id="comparison-base-link" target="_blank" rel="noopener">打开上一轮结果</a>
+        </p>
         <details id="custom-recipe">
           <summary>更多选择 · 正式实验和自定义参数</summary>
           <p><button id="start-formal" type="button">选择正式效果实验 · 50 万步</button></p>
@@ -78,6 +82,7 @@
             新实验保留旧结果。其余配方固定为 SAC、4
             环境、CUDA；更多引擎和平台功能仍可在聊天或主工作台使用。
           </p>
+          <p>想看训练更久有没有帮助，就只改训练步数。想看不同扰动力度是否影响恢复，就只改侧推上限。想检查结果能否复现，就只改随机种子。</p>
           <div class="workshop-fields">
             <label
               >训练步数
@@ -118,24 +123,32 @@
         </div>
       </section>
       <section id="execution-section" hidden aria-labelledby="execution-heading">
-        <h2 id="execution-heading">3 · 训练与测试</h2>
+        <h2 id="execution-heading">3 · 训练与评测</h2>
         <p id="execution-status" aria-live="polite"></p>
         <p id="active-recipe" class="workshop-recipe"></p>
         <div class="workshop-actions">
           <button id="recover-workshop-request" type="button" hidden>接续原请求</button>
-          <button id="refresh-workshop" type="button">刷新原实验</button
-          ><button id="pause-workshop" type="button">暂停后续自动步骤</button
-          ><button id="continue-evaluation" type="button" hidden>继续同源评测</button
-          ><button id="go-results" type="button">查看曲线与结果 ↓</button>
-          <a id="open-run-details" href="./?robot=originman#train/runs">查看运行记录</a>
+          <button id="continue-evaluation" type="button" hidden>继续同源评测</button>
+          <button id="go-results" type="button">查看曲线与结果 ↓</button>
         </div>
+        <details>
+          <summary>更多操作</summary>
+          <div class="workshop-actions">
+            <button id="refresh-workshop" type="button">刷新原实验</button>
+            <button id="pause-workshop" type="button">暂停后续自动步骤</button>
+            <a id="open-run-details" href="./?robot=originman#train/runs">查看运行记录</a>
+          </div>
+        </details>
         <p>可以关掉页面。回来在 Qoder 说“继续 Workshop”，就会接回本次实验。</p>
       </section>
       <section id="result-section" hidden aria-labelledby="result-heading">
         <h2 id="result-heading">4 · 看本次结果与回放</h2>
-        <p>训练完成、效果提升与回放播放分别记录。回放展示一个条件，不替代全部条件的评测。</p>
-        <a id="open-result" target="_blank" rel="noopener">单独打开本次实验</a
-        ><iframe
+        <p id="result-guide">先看训练曲线，再看同条件下恢复成功了几次。</p>
+        <div class="workshop-actions">
+          <button id="compare-parameters" type="button" hidden>改一个参数再试</button>
+          <a id="open-result" target="_blank" rel="noopener">单独打开本次实验</a>
+        </div>
+        <iframe
           id="result-frame"
           title="本次实验曲线、对比与回放"
           loading="lazy"

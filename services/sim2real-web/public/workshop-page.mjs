@@ -85,6 +85,11 @@ export async function startWorkshop({
     $('budget-section').hidden = !ready || !reference;
     $('execution-section').hidden = !session || ready;
     $('result-section').hidden = !session?.training;
+    $('compare-parameters').hidden = session?.stage !== 'results' || !session.recipe;
+    $('compare-parameters').disabled = busy || selecting;
+    $('result-guide').textContent = session?.stage === 'results'
+      ? '先看恢复成功次数，再用回放观察一例。想弄清哪个参数有影响，就保留本轮并只改一项。'
+      : '训练曲线随任务更新。等评测完成，再看同条件下的恢复次数。';
     $('new-experiment').disabled = !session || busy || selecting;
     $('history-toggle').disabled = busy || selecting;
     for (const button of $('history-list').querySelectorAll('button'))
@@ -111,7 +116,9 @@ export async function startWorkshop({
       ? `${session.recipe.timesteps.toLocaleString('zh-CN')} 步 · 随机种子 ${session.recipe.seed} · 侧推 ${session.recipe.pushMaxForce} N`
       : '';
     $('workshop-status').textContent =
-      session?.nextAction ?? '选择一个实验继续，或回到插件开始课程。';
+      ready && reference
+        ? '下一步选训练预算。第一次可以选快速体验。'
+        : session?.nextAction ?? '选择一个实验继续，或回到插件开始课程。';
     $('execution-status').textContent =
       session?.stage === 'unknown'
         ? session.recoveryPhase
@@ -133,7 +140,9 @@ export async function startWorkshop({
                     : '训练完成，后续自动步骤已暂停。'
                 : session?.stage === 'evaluating'
                   ? '正在评测同一策略。'
-                  : '训练进行中，正在等待本次任务。';
+                  : ['queued', 'pending'].includes(session?.training?.status)
+                    ? '训练已提交，等待算力开始。'
+                    : '训练进行中，页面会自动更新。';
     $('workshop-diagnostics').textContent = JSON.stringify(session, null, 2);
     $('connection-status').textContent =
       halted || session?.stage === 'unknown'
@@ -285,6 +294,9 @@ export async function startWorkshop({
     referenceExpanded = false;
     pendingRecipe = null;
     $('recipe-confirm').hidden = true;
+    $('comparison-recipe-help').hidden = true;
+    $('custom-recipe').open = false;
+    for (const id of ['custom-timesteps', 'custom-seed', 'custom-push']) $(id).value = $(id).defaultValue;
     $('reference-status').textContent = '';
     frameObserver?.disconnect();
     frameObserver = null;
@@ -466,26 +478,38 @@ export async function startWorkshop({
       $('history-toggle').setAttribute('aria-expanded', String(opened));
     }),
   );
-  listen('new-experiment', 'click', () =>
-    run(async () => {
-      if (busy || selecting || !session) return;
-      busy = true;
+  const createExperiment = async (compare = false) => {
+    if (busy || selecting || !session) return;
+    const source = session;
+    busy = true;
+    show();
+    let next;
+    try {
+      next = (
+        await json('workshop-sessions', {
+          modelId: source.modelId,
+          computeResourceId: source.computeResourceId,
+        })
+      ).session;
+    } finally {
+      busy = false;
       show();
-      let next;
-      try {
-        next = (
-          await json('workshop-sessions', {
-            modelId: session.modelId,
-            computeResourceId: session.computeResourceId,
-          })
-        ).session;
-      } finally {
-        busy = false;
-        show();
-      }
-      await choose(next.contextId);
-    }),
-  );
+    }
+    await choose(next.contextId);
+    if (!compare || session?.stage !== 'ready') return;
+    $('custom-timesteps').value = source.recipe.timesteps;
+    $('custom-seed').value = source.recipe.seed;
+    $('custom-push').value = source.recipe.pushMaxForce;
+    $('comparison-base-link').href = new URL(
+      'experiment.html?context=' + encodeURIComponent(source.contextId), root,
+    ).href;
+    $('comparison-recipe-help').hidden = false;
+    $('custom-recipe').open = true;
+    await saveReference('skipped');
+    if (reference) reveal('custom-recipe');
+  };
+  listen('new-experiment', 'click', () => run(() => createExperiment()));
+  listen('compare-parameters', 'click', () => run(() => createExperiment(true)));
   try {
     if (contextId) {
       if (!validId(contextId)) throw Error('实验标识无效。');

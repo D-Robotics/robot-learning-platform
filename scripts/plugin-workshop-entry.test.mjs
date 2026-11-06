@@ -32,6 +32,8 @@ test('short continue/results use shared current without scanning runs or writing
     assert.equal(result.contextId, current.contextId);
     assert.match(result.links.workshop, /context=ws-current$/);
     assert.equal(result.submission.training, false);
+    assert.match(result.studentReply, /查看训练进度/);
+    assert.doesNotMatch(result.studentReply, /先看参考|选预算/);
     assert.match(result.delivery, /内置/);
   }
 });

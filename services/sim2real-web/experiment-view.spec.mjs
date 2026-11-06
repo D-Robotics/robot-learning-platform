@@ -107,6 +107,8 @@ async function fixture(
 test('explicit experiment displays real curve, comparison and media under the same proxy mount', async (t) => {
   const f = await fixture(t);
   assert.equal(f.$('reward-chart').hasAttribute('hidden'), false);
+  assert.match(f.$('curve-reading').textContent, /-2\.000.*4\.000.*采样较少/);
+  assert.match(f.$('comparison-reading').textContent, /恢复 1 \/ 3 次.*比调参反馈少恢复 1 次/);
   assert.equal(f.$('comparison-table').hidden, false);
   assert.match(f.$('comparison-body').textContent, /2 \/ 3.*2 \/ 3.*1 \/ 3/);
   assert.equal(f.$('quality-status').textContent, '本次未达到收益判据');
@@ -133,6 +135,8 @@ test('another Run or policy in a later reply clears stale results and cannot be 
   await f.instance.refresh();
   assert.match(f.$('experiment-error').textContent, /父任务或权重摘要/);
   assert.equal(f.$('comparison-table').hidden, true);
+  assert.equal(f.$('curve-reading').hidden, true);
+  assert.equal(f.$('comparison-reading').hidden, true);
   assert.equal(f.$('experiment-video').hasAttribute('src'), false);
   assert.equal(f.$('export-experiment').disabled, true);
   assert.equal(f.$('playback-status').textContent, '尚未播放');

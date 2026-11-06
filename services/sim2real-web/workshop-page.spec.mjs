@@ -11,6 +11,7 @@ function fixture({
   failedSwitch = false,
   offline = false,
   diskFull = false,
+  comparison = false,
 } = {}) {
   const dom = new JSDOM(html, {
     url: 'https://platform.test/course/workshop.html?context=ws-test',
@@ -26,6 +27,14 @@ function fixture({
     autoContinue: false,
     reference: 'pending',
   };
+  if (comparison)
+    Object.assign(state, {
+      stage: 'results',
+      recipe: { timesteps: 16384, seed: 11, pushMaxForce: 7.5 },
+      training: { runId: 'train', status: 'completed' },
+      evaluation: { runId: 'eval', status: 'completed' },
+    });
+  const original = structuredClone(state);
   const calls = [];
   let timer;
   const fetchImpl = async (url, options = {}) => {
@@ -44,6 +53,15 @@ function fixture({
     if (failedSwitch && p.endsWith('/other/select'))
       return { ok: false, json: async () => ({ ok: false, message: '目标实验不可用。' }) };
     if (p === 'runs' && lost) throw Error('lost response');
+    if (comparison && p === 'workshop-sessions' && b)
+      Object.assign(state, {
+        contextId: 'ws-comparison',
+        stage: 'ready',
+        recipe: null,
+        training: null,
+        evaluation: null,
+        reference: 'pending',
+      });
     if (p.endsWith('/reference')) state.reference = b.reference;
     if (p.endsWith('/pause')) state.autoContinue = false;
     if (p.endsWith('/continue')) state.autoContinue = true;
@@ -112,6 +130,7 @@ function fixture({
   return {
     dom,
     state,
+    original,
     calls,
     fetchImpl,
     setTimer(fn) {
@@ -489,4 +508,48 @@ test('interactive simulator stays reachable after results and opens inside the h
     c.dispose();
     f.dom.window.close();
   }
+});
+
+test('completed experiment starts an independent parameter draft with the prior recipe', async (t) => {
+  const f = fixture({ comparison: true });
+  const d = f.dom.window.document;
+  const $ = (id) => d.getElementById(id);
+  const c = await startWorkshop({
+    document: d,
+    location: f.dom.window.location,
+    fetchImpl: f.fetchImpl,
+    setTimer: f.setTimer,
+    clearTimer: f.clearTimer,
+  });
+  t.after(() => {
+    c.dispose();
+    f.dom.window.close();
+  });
+  assert.equal($('compare-parameters').hidden, false);
+  $('compare-parameters').click();
+  await settle();
+  assert.equal($('budget-section').hidden, false);
+  assert.equal($('custom-recipe').open, true);
+  assert.deepEqual(
+    ['custom-timesteps', 'custom-seed', 'custom-push'].map((id) => $(id).value),
+    ['16384', '11', '7.5'],
+  );
+  assert.match($('comparison-base-link').href, /experiment.html\?context=ws-test$/);
+  assert.equal(
+    f.calls.some(({ p }) => p.includes('/claim/') || p === 'runs'),
+    false,
+  );
+  $('custom-timesteps').value = '32768';
+  $('review-custom').click();
+  assert.equal(
+    f.calls.some(({ p }) => p.includes('/claim/')),
+    false,
+  );
+  $('confirm-recipe').click();
+  await settle();
+  assert.deepEqual(
+    f.calls.find(({ p }) => p === 'workshop-sessions/ws-comparison/claim/train')?.b,
+    { timesteps: 32768, seed: 11, pushMaxForce: 7.5, reference: 'skipped' },
+  );
+  assert.equal(f.original.recipe.timesteps, 16384);
 });

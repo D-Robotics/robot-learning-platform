@@ -29,6 +29,8 @@ export async function startExperimentView({ document, location, fetchImpl = fetc
   const listen = (id, type, callback) => { $(id).addEventListener(type, callback); listeners.push(() => $(id).removeEventListener(type, callback)); };
   const clearResults = () => {
     $('reward-chart').replaceChildren(); $('reward-chart').setAttribute('hidden', ''); $('curve-empty').hidden = false;
+    $('curve-reading').hidden = true;
+    $('comparison-reading').hidden = true;
     $('comparison-body').replaceChildren(); $('comparison-table').hidden = true; $('comparison-empty').hidden = false;
     $('experiment-video').hidden = true; $('experiment-video').removeAttribute('src');
     if (playButton) {
@@ -80,7 +82,12 @@ export async function startExperimentView({ document, location, fetchImpl = fetc
     const points = rewardPoints(run); const chart = $('reward-chart'); chart.replaceChildren();
     chart.toggleAttribute('hidden', points.length === 0); $('curve-empty').hidden = points.length !== 0;
     $('curve-inspector').hidden=!points.length;curvePoints=points;curveUnit=run?.training?.originmanWorkshop||run?.metrics?.originmanWorkshop?'训练步':'记录步';$('curve-sample').max=String(Math.max(0,points.length-1));$('curve-sample').value=String(Math.max(0,points.length-1));inspectCurve();
-    if (!points.length) return;
+    const reading = $('curve-reading');
+    reading.hidden = !points.length;
+    if (!points.length) {
+      $('curve-caption').textContent = '等待真实训练数据';
+      return;
+    }
     const rewards = points.map(p => p.meanReward); const low = Math.min(...rewards), high = Math.max(...rewards);
     const left = 64, right = 696, top = 16, bottom = 208;
     const max = Math.max(1, ...points.map(p => p.iteration));
@@ -95,11 +102,27 @@ export async function startExperimentView({ document, location, fetchImpl = fetc
     svg('text', { class: 'reward-label', x: 8, y: bottom }, low.toFixed(1));
     svg('text', { class: 'reward-label', x: left, y: 232 }, '0');
     svg('text', { class: 'reward-label', x: right, y: 232, 'text-anchor': 'end' }, max + ' ' + curveUnit);
+    const latest = points.at(-1);
+    const previous = points.at(-2);
+    const summary = previous
+      ? `最后一个采样点在 ${latest.iteration} ${curveUnit}，平均奖励从上一点的 ${previous.meanReward.toFixed(3)} 变为 ${latest.meanReward.toFixed(3)}。本轮已显示的峰值是 ${high.toFixed(3)}。`
+      : `目前只采到一笔，平均奖励是 ${latest.meanReward.toFixed(3)}。`;
+    reading.textContent = summary + (points.length <= 5 ? ' 采样较少，先别据此判断趋势。' : '') +
+      ' 奖励反映训练过程。遇到侧推能恢复几次，要看下方同条件评测。';
     $('curve-caption').textContent = (view.evidence === 'fixture' ? '测试数据 · ' : '引擎记录 · ') + points.length + ' 个采样点';
   };
   const drawComparison = run => {
     const rows = view.associationVerified ? comparisonRows(run) : [];
     $('comparison-body').replaceChildren(); $('comparison-table').hidden = !rows.length; $('comparison-empty').hidden = Boolean(rows.length);
+    const reading = $('comparison-reading');
+    reading.hidden = !rows.length;
+    if (rows.length) reading.textContent = rows.map(({ label, count, values }) => {
+      const [original, tuned, trained] = values;
+      const difference = trained - tuned;
+      const relative = difference === 0 ? '与调参反馈持平'
+        : `比调参反馈${difference > 0 ? '多' : '少'}恢复 ${Math.abs(difference)} 次`;
+      return `${label}里，本轮恢复 ${trained} / ${count} 次，原 PD 恢复 ${original} 次，${relative}。`;
+    }).join(' ');
     for (const row of rows) {
       const tr = document.createElement('tr');
       for (const value of [row.label, ...row.values.map(v => `${v} / ${row.count}`)]) {

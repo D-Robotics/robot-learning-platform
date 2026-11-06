@@ -100,18 +100,29 @@ export async function workshopEntry(
   const root = base.toString().replace(/\/+$/, '');
   const url =
     root + '/workshop.html' + (session ? '?context=' + encodeURIComponent(session.contextId) : '');
+  const stage = session?.stage ?? 'choose';
+  const [message, linkLabel] = {
+    choose: ['选择要继续的实验。', '打开实验列表'],
+    ready:
+      session?.reference === 'observed' || session?.reference === 'skipped'
+        ? ['下一步选训练预算。第一次可以选快速体验。', '选择训练预算']
+        : ['可以看一段参考，也可以直接选训练预算。', '打开 Workshop'],
+    training: ['这轮训练已提交，可以看实时曲线。', '查看训练进度'],
+    'ready-evaluate': session?.autoContinue
+      ? ['训练已完成，下一步用同一策略评测。', '查看评测进度']
+      : ['训练已完成。打开实验查看如何继续评测。', '打开当前实验'],
+    evaluating: ['正在评测这轮训练出的策略。', '查看评测进度'],
+    results: ['评测已完成。可以看结果，也可以改一项参数再试。', '查看结果与回放'],
+    blocked: ['这轮实验已停止，打开页面查看原因。', '查看实验状态'],
+    unknown: ['这轮提交状态待核对，打开页面接续原请求。', '恢复当前实验'],
+  }[stage] ?? ['查看当前实验的进度与下一步。', '打开当前实验'];
   return {
     contextId: session?.contextId ?? null,
-    stage: session?.stage ?? 'choose',
+    stage,
     session,
     links: { workshop: url },
     submission: { training: false, evaluation: false },
-    studentReply:
-      session?.stage === 'ready'
-        ? '先看参考，再选预算，训练与评测会自动接上。\n[打开 Workshop](' + url + ')'
-        : session
-          ? '已接上当前实验，进度和结果都在页面。\n[继续实验](' + url + ')'
-          : '请选择要继续的实验。\n[打开实验列表](' + url + ')',
+    studentReply: message + '\n[' + linkLabel + '](' + url + ')',
     qoderNavigation: {
       surface: '内置 browser-use MCP，非外部 Chrome Connector',
       steps: [
