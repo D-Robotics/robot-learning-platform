@@ -203,6 +203,18 @@ jobs:
       - name: Public release security scan
         run: npm run verify:security
 
+  windows-plugin:
+    name: Windows plugin installer and MCP
+    runs-on: windows-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+      - name: Run the Windows installer, Qoder ZIP and DPAPI checks
+        run: node --test scripts/plugin-windows.test.mjs scripts/plugin-install.test.mjs scripts/plugin-qoder-import.test.mjs
+
   summary:
     name: verify summary
     needs:
@@ -214,6 +226,7 @@ jobs:
       - unit
       - coverage
       - audits
+      - windows-plugin
     if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -227,7 +240,8 @@ jobs:
             || [ "${{ needs.build-e2e.result }}" != "success" ] \
             || [ "${{ needs.unit.result }}" != "success" ] \
             || [ "${{ needs.coverage.result }}" != "success" ] \
-            || [ "${{ needs.audits.result }}" != "success" ]; then
+            || [ "${{ needs.audits.result }}" != "success" ] \
+            || [ "${{ needs.windows-plugin.result }}" != "success" ]; then
             echo "one or more verify jobs failed:"
             echo "  static:    ${{ needs.static.result }}"
             echo "  contracts: ${{ needs.contracts.result }}"
@@ -237,6 +251,7 @@ jobs:
             echo "  unit:      ${{ needs.unit.result }}"
             echo "  coverage:  ${{ needs.coverage.result }}"
             echo "  audits:    ${{ needs.audits.result }}"
+            echo "  windows:   ${{ needs.windows-plugin.result }}"
             exit 1
           fi
           echo "all verify jobs passed"

@@ -724,10 +724,41 @@ test('network recovery reads the same experiment without submitting again', asyn
   assert.ok(f.calls.every(({ p }) => !p.includes('/claim/') && p !== 'runs'));
 });
 
-test('preview stays offline until Start, returns from sign-in and requires an explicit worker selection', async (t) => {
+test('preview stays offline until Start and login opens in the same tab', async (t) => {
   const dom = new JSDOM(html, { url: 'https://platform.test/course/workshop.html?start=1' });
   const calls = [];
-  let loggedIn = false;
+  const controller = await startWorkshop({
+    document: dom.window.document,
+    location: dom.window.location,
+    fetchImpl: async (url) => {
+      calls.push(new URL(url).pathname);
+      return { status: 401 };
+    },
+  });
+  t.after(() => {
+    controller.dispose();
+    dom.window.close();
+  });
+  const $ = (id) => dom.window.document.getElementById(id);
+  assert.equal($('workshop-primary').textContent, '开始实操');
+  assert.equal($('workshop-step-execution').dataset.state, 'waiting');
+  assert.equal($('reference-section').hidden, false);
+  assert.equal($('open-run-details').target, '_blank');
+  assert.match($('open-run-details').rel, /noopener/);
+  assert.deepEqual(calls, []);
+  $('workshop-primary').click();
+  await settle();
+  assert.equal($('workshop-primary').textContent, '登录学习平台');
+  assert.equal($('workshop-login').href, 'https://platform.test/course/login?workshop=start');
+  assert.equal($('workshop-login').target, '');
+});
+
+test('same-tab return opens the worker list with no selection and preserves observed reference', async (t) => {
+  const dom = new JSDOM(html, {
+    url: 'https://platform.test/course/workshop.html?start=1&setup=1',
+  });
+  dom.window.sessionStorage.setItem('rdk-workshop:preview-observed', '1');
+  const calls = [];
   const session = {
     contextId: 'ws-new',
     modelId: 'model',
@@ -745,7 +776,6 @@ test('preview stays offline until Start, returns from sign-in and requires an ex
       const route = new URL(url).pathname.split('/api/v1/duck/')[1];
       const body = options.body ? JSON.parse(options.body) : undefined;
       calls.push({ route, body });
-      if (!loggedIn) return { status: 401 };
       const ok = (data) => ({ ok: true, json: async () => ({ ok: true, ...data }) });
       if (route === 'workshop-sessions/setup' && !body)
         return ok({
@@ -757,8 +787,10 @@ test('preview stays offline until Start, returns from sign-in and requires an ex
         return ok({ session });
       }
       if (route.endsWith('/select')) return ok({ session });
-      if (route.endsWith('/reference'))
+      if (route.endsWith('/reference')) {
+        assert.equal(body.reference, 'observed');
         return ok({ session: { ...session, reference: body.reference } });
+      }
       throw Error('Unexpected call ' + route);
     },
   });
@@ -767,20 +799,6 @@ test('preview stays offline until Start, returns from sign-in and requires an ex
     dom.window.close();
   });
   const $ = (id) => dom.window.document.getElementById(id);
-  assert.equal($('workshop-primary').textContent, '开始实操');
-  assert.equal($('workshop-step-execution').dataset.state, 'waiting');
-  assert.equal($('reference-section').hidden, false);
-  assert.deepEqual(calls, []);
-  $('workshop-primary').click();
-  await settle();
-  assert.equal($('workshop-primary').textContent, '登录学习平台');
-  assert.equal($('workshop-login').href, 'https://platform.test/course/login');
-  $('workshop-login').addEventListener('click', (event) => event.preventDefault());
-  $('workshop-primary').click();
-  loggedIn = true;
-  Object.defineProperty(dom.window.document, 'hidden', { value: false, configurable: true });
-  dom.window.dispatchEvent(new dom.window.Event('focus'));
-  await settle();
   assert.equal($('workshop-setup').hidden, false);
   assert.equal($('workshop-compute').value, '');
   assert.equal($('workshop-setup-confirm').disabled, true);
@@ -794,7 +812,6 @@ test('preview stays offline until Start, returns from sign-in and requires an ex
   assert.deepEqual(
     calls.map(({ route }) => route),
     [
-      'workshop-sessions/setup',
       'workshop-sessions/setup',
       'workshop-sessions/setup',
       'workshop-sessions/ws-new/select',

@@ -766,6 +766,8 @@ for (const id of [
   'custom-recipe',
   'pause-workshop',
   'history-list',
+  'workshop-login',
+  'open-run-details',
   'workshop-setup',
   'workshop-compute',
   'result-frame',

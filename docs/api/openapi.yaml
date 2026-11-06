@@ -2746,6 +2746,40 @@ paths:
           description: No owned experiment or course asset
         "409":
           description: Frozen recipe, uncertain submission, or previously claimed step
+  /api/v1/duck/workshop-sessions/setup:
+    get:
+      tags: [workspace]
+      summary: List the current learner's selectable Workshop compute resources
+      operationId: listWorkshopSetupResources
+      responses:
+        "200":
+          description: Current account and a list of resource IDs, names and last-known status.
+        "401": { $ref: "#/components/responses/AuthRequired" }
+    post:
+      tags: [workspace]
+      summary: Prepare a Workshop draft on an explicitly selected compute resource
+      operationId: createWorkshopSetupDraft
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [accountId, computeResourceId]
+              properties:
+                accountId:
+                  type: [string, "null"]
+                  description: Account returned by the resource list, or null in local mode.
+                computeResourceId: { type: string, minLength: 1, maxLength: 160 }
+      responses:
+        "200": { description: Draft session. No training or evaluation is submitted. }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/AuthRequired" }
+        "403": { description: The current role cannot create a draft. }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { description: Existing course model contract does not match. }
+        "503": { description: The course manifest or storage is unavailable. }
   /api/v1/duck/workshop-sessions/{contextId}:
     parameters:
       - in: path
