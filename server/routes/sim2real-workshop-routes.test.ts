@@ -5,7 +5,10 @@ import os from 'node:os';
 import path from 'node:path';
 import { it, expect } from 'vitest';
 import { createSim2RealRouter } from './sim2real-routes.js';
-import { invalidateSim2RealStoreCacheForTest } from '../sim2real/sim2real-store.js';
+import {
+  createSim2RealComputeResource,
+  invalidateSim2RealStoreCacheForTest,
+} from '../sim2real/sim2real-store.js';
 it('workshop routes use normal authentication, viewer mutation denial and isolated account state', async () => {
   const previous = process.env.RDK_SIM2REAL_STORAGE_DIR,
     root = await fs.mkdtemp(path.join(os.tmpdir(), 'workshop-rbac-'));
@@ -51,6 +54,7 @@ it('workshop routes use normal authentication, viewer mutation denial and isolat
     ).toMatchObject({ course: 'existing-course' });
     for (const suffix of [
       '',
+      '/setup',
       '/ws-test/claim/train',
       '/ws-test/select',
       '/ws-test/pause',
@@ -67,6 +71,38 @@ it('workshop routes use normal authentication, viewer mutation denial and isolat
     const empty = await fetch(base, { headers: { 'x-owner': 'A' } });
     expect(empty.status).toBe(200);
     expect(await empty.json()).toMatchObject({ sessions: [], experiments: [], current: null });
+    const setup = base + '/setup';
+    expect((await fetch(setup)).status).toBe(401);
+    const gpu = await createSim2RealComputeResource(
+      {
+        name: 'Course GPU',
+        kind: 'local-gpu',
+        source: 'server-runner',
+        runnerUrl: 'http://127.0.0.1:12345/train',
+        runnerToken: 'private',
+        status: 'unknown',
+      },
+      'A',
+    );
+    const headers = { 'content-type': 'application/json', 'x-owner': 'A' };
+    const options = await (await fetch(setup, { headers })).json();
+    expect(options).toMatchObject({ accountId: 'A', resources: [{ id: gpu.id, name: gpu.name }] });
+    expect(Object.keys(options.resources[0]).sort()).toEqual(['id', 'name', 'status']);
+    const select = (accountId: string, owner: string) =>
+      fetch(setup, {
+        method: 'POST',
+        headers: { ...headers, 'x-owner': owner },
+        body: JSON.stringify({ accountId, computeResourceId: gpu.id }),
+      });
+    expect((await select('A', 'B')).status).toBe(400);
+    expect((await select('B', 'B')).status).toBe(404);
+    const draft = await (await select('A', 'A')).json();
+    expect(draft).toMatchObject({
+      session: { computeResourceId: gpu.id, stage: 'ready', training: null, evaluation: null },
+    });
+    const next = await (await select('A', 'A')).json();
+    expect(next.session.modelId).toBe(draft.session.modelId);
+    expect(next.session.contextId).not.toBe(draft.session.contextId);
     const foreign = await fetch(base + '/ws-00000000000000000000', { headers: { 'x-owner': 'B' } });
     expect(foreign.status).toBe(404);
   } finally {

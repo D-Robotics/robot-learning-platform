@@ -290,14 +290,17 @@ try {
   assert.equal((await call('rdk_auth_status')).authenticated, false);
   assert.equal(state.authStarts, 0);
   const initial = await call('rdk_workshop', { intent: 'start' });
-  assert.equal(initial.stage, 'authorize');
+  assert.equal(initial.stage, 'preview');
   assert.equal(initial.submission.training, false);
-  assert.match(initial.links.login, /\/api\/sso\/plugin\/authorize\?id=/);
+  assert.match(initial.links.workshop, /workshop\.html\?start=1$/);
+  assert.equal(state.authStarts, 0);
+  const explicit = await call('rdk_auth_login', { openBrowser: false });
+  assert.match(explicit.verificationUrl, /\/api\/sso\/plugin\/authorize\?id=/);
   assert.equal(state.authStarts, 1);
   assert.equal(state.writes.length, 0);
   const pending = await call('rdk_auth_status');
   assert.equal(pending.authenticated, false);
-  assert.equal(pending.verificationUrl, initial.links.login);
+  assert.equal(pending.verificationUrl, explicit.verificationUrl);
   await client.close();
   client = open();
   await init();
@@ -329,7 +332,10 @@ try {
   assert.equal(state.writes.length, 0);
   const guide = await call('rdk_experience_guide');
   const contextId = guide.shortTraining.operation.contextId;
-  const train = await call('rdk_originman_short_train', { contextId });
+  const train = await call('rdk_originman_short_train', {
+    contextId,
+    computeResourceId: 'worker-fixture',
+  });
   assert.equal(train.submission.runId, 'train-fixture');
   assert.equal(train.recipeSource.newModelRegistered, true);
   await assert.rejects(

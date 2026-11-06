@@ -24,7 +24,7 @@ test('Windows and macOS produce direct workflow launchers with Unicode paths and
     assert.equal(entry.command, nodePath);
     assert.equal(entry.args.length, 1);
     assert.ok(entry.args[0].endsWith('experience-mcp.mjs'));
-    assert.equal(entry.env.RDK_STUDIO_INHERIT_LOGIN, '1');
+    assert.equal(entry.env.RDK_STUDIO_INHERIT_LOGIN, '0');
     assert.ok(!JSON.stringify(c).includes('credentials'));
   }
   assert.throws(() =>

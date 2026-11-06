@@ -158,7 +158,6 @@ test('board connect and Workshop creation use the account that selected the targ
       return Response.json({ ok: true, schemaVersion: 1 });
     },
     async (options) => {
-      assert.equal(options.startLogin, false);
       if (options.accountId !== account) throw Error('账号已切换');
       return 'rdk_sso_web_session=' + account;
     },

@@ -130,7 +130,11 @@ test('new draft reuses selected course assets among multiple resources, after ow
     ),
   );
   const calls = [];
-  const invoke = async (visible = true, args = { intent: 'start' }, chosen = 'chosen-resource') =>
+  const invoke = async (
+    visible = true,
+    args = { intent: 'new', computeResourceId: 'chosen-resource' },
+    chosen = 'chosen-resource',
+  ) =>
     workshopEntry(
       args,
       async (name, args) => {
@@ -198,88 +202,48 @@ test('new draft reuses selected course assets among multiple resources, after ow
   await assert.rejects(invoke(false), /当前账号不可见/);
 });
 
-test('a cold Qoder launch claims authorization and opens the owned course without another prompt', async () => {
-  let opened = false;
-  const auth = {
-    mode: 'browser-login',
-    audience: status.baseUrl,
-    async call(name, args) {
-      assert.equal(name, 'rdk_auth_login');
-      assert.equal(args.openBrowser, true);
-      opened = true;
-      return {
-        authenticated: false,
-        needsLogin: true,
-        browserOpened: true,
-        verificationUrl: 'https://platform.test/api/sso/plugin/authorize?id=authorized-fixture',
-      };
-    },
-    async status() {
-      return opened
-        ? { authenticated: true, accountId: 'alice' }
-        : { authenticated: false, needsLogin: true };
-    },
-  };
-  let statusReads = 0;
-  const result = await workshopEntry(
-    { intent: 'start' },
-    async (name) => {
-      assert.equal(name, 'rdk_platform_status');
-      assert.equal(opened, true);
-      statusReads++;
-      return status;
-    },
-    {
-      authentication: auth,
-      openAuthBrowser: true,
-      remote: async (op) => {
-        assert.equal(op, 'list');
-        assert.ok(statusReads > 0);
-        return { current };
-      },
-    },
-  );
-  assert.equal(result.contextId, current.contextId);
-  assert.equal(result.submission.training, false);
-  assert.equal(statusReads, 2);
+test('cold Workshop previews offline and only surfaces an already requested authorization', async () => {
+  const login = 'https://platform.test/api/sso/plugin/authorize?id=owned-fixture';
+  let state = { authenticated: false, needsLogin: true };
+  const noCourse = () => assert.fail('no platform operation or new authorization');
+  const authentication = { audience: status.baseUrl, status: async () => state, call: noCourse };
+  const options = { authentication, remote: noCourse };
+  const preview = await workshopEntry({}, noCourse, options);
+  assert.equal(preview.stage, 'preview');
+  assert.match(preview.links.workshop, /workshop\.html\?start=1$/);
+  assert.match(preview.studentReply, /开始实操/);
+  assert.equal(preview.submission.training, false);
+  const requiresLogin = await workshopEntry({ intent: 'new' }, noCourse, options);
+  assert.equal(requiresLogin.stage, 'authorize');
+  assert.deepEqual(requiresLogin.links, {});
+  state = { ...state, verificationUrl: login };
+  assert.deepEqual((await workshopEntry({}, noCourse, options)).links, { login });
+  state = { authenticated: null, needsLogin: false, nextAction: '稍后重试原请求。' };
+  await assert.rejects(workshopEntry({}, noCourse, options), /重试原请求/);
 });
 
-test('pending browser authorization offers one link and network errors do not start auth', async () => {
-  const login = 'https://platform.test/api/sso/plugin/authorize?id=owned-fixture';
-  let starts = 0;
-  let state = { authenticated: false, needsLogin: true };
-  const auth = {
-    mode: 'browser-login',
-    audience: status.baseUrl,
-    async status() {
-      return state;
-    },
-    async call(_name, args) {
-      starts++;
-      assert.equal(args.openBrowser, false);
-      return {
-        authenticated: false,
-        needsLogin: true,
-        verificationUrl: login,
-        browserOpened: false,
-      };
-    },
-  };
-  const noCourse = () => assert.fail('no course read or write before authorization');
-  const pending = await workshopEntry({ intent: 'start' }, noCourse, {
-    authentication: auth,
-    remote: noCourse,
-  });
-  assert.equal(pending.stage, 'authorize');
-  assert.deepEqual(pending.links, { login });
-  assert.equal(pending.submission.training, false);
-  assert.equal(starts, 1);
-  state = { authenticated: null, needsLogin: false, nextAction: '稍后重试原请求。' };
-  await assert.rejects(
-    workshopEntry({}, noCourse, { authentication: auth, remote: noCourse }),
-    /重试原请求/,
-  );
-  assert.equal(starts, 1);
+test('new Workshop needs a fresh resource choice and start preserves an existing completed run', async () => {
+  for (const [intent, current, stage] of [
+    ['start', null, 'choose-compute'],
+    ['new', { contextId: 'previous', stage: 'results' }, 'choose-compute'],
+    ['start', { contextId: 'previous', stage: 'results' }, 'results'],
+  ]) {
+    const result = await workshopEntry(
+      { intent },
+      async (name) => {
+        assert.equal(name, 'rdk_platform_status');
+        return status;
+      },
+      {
+        remote: async (op) => {
+          assert.equal(op, 'list');
+          return { current };
+        },
+      },
+    );
+    assert.equal(result.stage, stage);
+    assert.equal(result.submission.training, false);
+  }
 });
 
 test('development target entry separates workers from boards, keeps scope and requests the exact connection', async () => {

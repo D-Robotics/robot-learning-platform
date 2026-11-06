@@ -24,6 +24,7 @@ export function createMcpConfiguration({
   platformUrl = 'https://rdkstudio.d-robotics.cc/robotics-learning',
   platform = process.platform,
   courseResourceId,
+  inheritStudioLogin = false,
 }) {
   const paths = platform === 'win32' ? path.win32 : path.posix;
   if (!paths.isAbsolute(root) || !paths.isAbsolute(nodePath))
@@ -48,7 +49,7 @@ export function createMcpConfiguration({
         command: nodePath,
         args: [paths.join(root, 'scripts', 'experience-mcp.mjs')],
         env: {
-          RDK_STUDIO_INHERIT_LOGIN: '1',
+          RDK_STUDIO_INHERIT_LOGIN: inheritStudioLogin ? '1' : '0',
           ...(courseResourceId ? { RDK_WORKSHOP_COMPUTE_RESOURCE_ID: courseResourceId } : {}),
           RDK_SIM2REAL_MCP_BASE_URL: url.href.replace(/\/$/, ''),
         },
@@ -63,6 +64,7 @@ export function configurePlugin({
   platform = process.platform,
   nodeVersion = process.versions.node,
   courseResourceId,
+  inheritStudioLogin = false,
 } = {}) {
   const required = JSON.parse(
     fs.readFileSync(path.join(root, 'runtime-requirements.json'), 'utf8'),
@@ -77,6 +79,7 @@ export function configurePlugin({
     platformUrl,
     platform,
     courseResourceId,
+    inheritStudioLogin,
   });
   const target = path.join(root, '.mcp.json');
   const temp = target + '.' + randomBytes(8).toString('hex') + '.tmp';

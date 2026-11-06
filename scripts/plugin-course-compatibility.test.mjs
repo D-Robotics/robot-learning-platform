@@ -24,7 +24,11 @@ test('bundled course matches the formal OriginMan registration identity without 
   assert.equal(manifest.contract.robotId, 'originman');
   assert.equal(manifest.contract.id, 'custom-policy-originman-recovery-v1');
   const asset = await selectCourseAssets(
-    { manifest, readModels: async () => ({ models: [registered()] }) },
+    {
+      manifest,
+      computeResourceId: 'course-resource',
+      readModels: async () => ({ models: [registered()] }),
+    },
     async (name) => {
       assert.equal(name, 'rdk_compute_resources_list');
       return { computeResources: [{ id: 'course-resource', name: 'OriginMan course' }] };
@@ -80,7 +84,7 @@ test('classroom binding is public configuration and invalid bindings are rejecte
   };
   const env = createMcpConfiguration(options).mcpServers['rdk-learning-platform'].env;
   assert.equal(env.RDK_WORKSHOP_COMPUTE_RESOURCE_ID, options.courseResourceId);
-  assert.equal(env.RDK_STUDIO_INHERIT_LOGIN, '1');
+  assert.equal(env.RDK_STUDIO_INHERIT_LOGIN, '0');
   assert.throws(
     () => createMcpConfiguration({ ...options, courseResourceId: 'not a resource' }),
     /资源标识无效/,

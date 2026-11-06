@@ -1,4 +1,4 @@
-# RDK Robot Learning 插件（Qoder / Studio） 0.6.5
+# RDK Robot Learning 插件（Qoder / Studio） 0.6.7
 
 Qoder 用户请先读 references/qoder-first-run.md，运行 setup-qoder-macos.command 或 setup-qoder-windows.cmd，仅配置本插件，不改 Studio，并生成Qoder本机导入包.zip。桌面请上传这个本机包，不要上传未配置的原ZIP。新机器人说：先离线，请逐题引导我输入。
 

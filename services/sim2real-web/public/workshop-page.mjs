@@ -15,6 +15,7 @@ export async function startWorkshop({
     api = new URL('api/v1/duck/', root);
   const entryUrl = new URL(location.href);
   const entryContextId = entryUrl.searchParams.get('context');
+  const entryPreview = entryUrl.searchParams.get('start') === '1' && !entryContextId;
   const entryRounds = entryUrl.searchParams.get('with')?.split(',') ?? [];
   let contextId = entryContextId,
     session = null,
@@ -33,7 +34,11 @@ export async function startWorkshop({
     comparisonRequest = 0,
     comparisonLoaded = null,
     loginNeeded = false,
-    reconnectNeeded = false;
+    reconnectNeeded = false,
+    setupAccount,
+    setupReady = false,
+    awaitingSetupLogin = false,
+    previewObserved = false;
   const validId = (v) => typeof v === 'string' && /^[A-Za-z0-9][A-Za-z0-9_.-]{0,95}$/.test(v);
   const listeners = [];
   const listen = (id, type, fn) => {
@@ -59,7 +64,9 @@ export async function startWorkshop({
       throw Object.assign(Error('与学习平台的连接中断。恢复网络后会核对原实验。'), { offline: true });
     }
     if (r.status === 401)
-      throw Object.assign(Error('登录学习平台后，回到这里继续原实验。'), { status: 401 });
+      throw Object.assign(Error(entryPreview && !contextId
+        ? '登录学习平台后，回到这里选算力机。'
+        : '登录学习平台后，回到这里继续原实验。'), { status: 401 });
     let value;
     try {
       value = await r.json();
@@ -78,7 +85,9 @@ export async function startWorkshop({
     $('workshop-error-message').textContent = e.message ?? '课程暂不可用。';
     $('workshop-error').hidden = false;
     $('workshop-login').hidden = !loginNeeded;
-    $('workshop-retry').textContent = loginNeeded ? '登录后接续原实验' : '重试读取本轮';
+    $('workshop-retry').textContent = entryPreview && !contextId
+      ? loginNeeded ? '已登录，继续选算力' : '重试读取算力机'
+      : loginNeeded ? '登录后接续原实验' : '重试读取本轮';
     $('connection-status').textContent = '需要处理';
     show();
   };
@@ -188,7 +197,14 @@ export async function startWorkshop({
   const show = () => {
     const ready = session?.stage === 'ready';
     if (ready && ['observed', 'skipped'].includes(session.reference)) reference = session.reference;
-    $('reference-section').hidden = !session || (!(ready && !reference) && !referenceExpanded);
+    const preview = entryPreview && !contextId;
+    $('reference-section').hidden = !preview && (!session || (!(ready && !reference) && !referenceExpanded));
+    $('reference-instructions').textContent = preview
+      ? '先看看机器人被推后如何站稳。也可以直接点「开始实操」。'
+      : '先看看机器人被推了一下后，怎样重新站稳。播完会自动进入下一步。';
+    $('workshop-setup').hidden = !preview || !setupReady || halted;
+    $('workshop-compute').disabled = busy || selecting;
+    $('workshop-setup-confirm').disabled = busy || selecting || !$('workshop-compute').value;
     $('skip-reference').hidden = !ready || Boolean(reference);
     $('skip-reference').disabled = busy || selecting;
     if (referencePlayButton) referencePlayButton.disabled = busy || selecting;
@@ -219,7 +235,7 @@ export async function startWorkshop({
     $('recover-workshop-request').disabled = busy || selecting;
     $('continue-evaluation').hidden =
       session?.stage !== 'ready-evaluate' || session.autoContinue || session.legacy;
-    const step = ready ? (reference ? 1 : 0) : session?.stage === 'results' ? 3 : 2;
+    const step = !session ? -1 : ready ? (reference ? 1 : 0) : session.stage === 'results' ? 3 : 2;
     for (const [i, name] of ['reference', 'budget', 'execution', 'result'].entries()) {
       const b = $('workshop-step-' + name);
       b.disabled = busy || selecting || !session ||
@@ -261,8 +277,16 @@ export async function startWorkshop({
     let guide;
     if (selecting) {
       guide = ['正在切换实验', '正在读取所选实验的进度。'];
+    } else if (preview && !halted) {
+      guide = setupReady
+        ? $('workshop-setup-form').hidden
+          ? ['选择本轮算力机', '当前没有可选算力机。', '刷新算力列表', 'start-setup']
+          : ['选择本轮算力机', '选好后进入预算页。']
+        : ['先看看，再动手', '用仿真训练一个受扰恢复策略，比较恢复次数并看回放。', '开始实操', 'start-setup'];
     } else if (halted) {
-      guide = loginNeeded
+      guide = loginNeeded && preview
+        ? ['登录后选算力机', '在学习平台登录，回来就能选择本轮使用的机器。', '登录学习平台', 'workshop-login']
+        : loginNeeded
         ? ['先登录学习平台', '请使用原实验所在的学习平台账号。', '去登录', 'workshop-login']
         : reconnectNeeded
           ? ['连接暂时中断', '网络恢复后会核对原实验，无需重新开始。', '查看恢复方式', 'workshop-error']
@@ -311,7 +335,7 @@ export async function startWorkshop({
         ? '需要处理'
         : session
           ? '已连接当前实验'
-          : '请选择实验';
+          : preview ? (setupReady ? '请选择算力机' : '课程预览') : '请选择实验';
     if (session?.training) {
       const url = new URL('experiment.html?context=' + encodeURIComponent(session.contextId), root)
         .href;
@@ -387,6 +411,10 @@ export async function startWorkshop({
   listen('go-results', 'click', () => reveal('result-section'));
   listen('workshop-primary', 'click', () => {
     if (!primaryAction) return;
+    if (primaryAction === 'start-setup') {
+      run(loadSetup);
+      return;
+    }
     if (primaryAction === 'history') {
       run(async () => {
         await history();
@@ -524,6 +552,7 @@ export async function startWorkshop({
     show();
     const selectedUrl = new URL(location.href);
     selectedUrl.searchParams.set('context', id);
+    selectedUrl.searchParams.delete('start');
     if (id !== entryContextId) selectedUrl.searchParams.delete('with');
     historyImpl?.replaceState(null, '', selectedUrl.href);
     try {
@@ -632,7 +661,10 @@ export async function startWorkshop({
     }
     reveal('budget-section');
   };
-  listen('reference-video', 'ended', () => run(() => saveReference('observed')));
+  listen('reference-video', 'ended', () => {
+    if (entryPreview && !contextId) previewObserved = true;
+    else run(() => saveReference('observed'));
+  });
   listen('reference-video', 'error', () => {
     $('reference-status').textContent = '参考暂不可播放。可打开参考仿真，或明确跳过后继续。';
   });
@@ -683,8 +715,77 @@ export async function startWorkshop({
     $('recipe-confirm').hidden = true;
   });
   listen('refresh-workshop', 'click', () => run(refresh));
+  const loadSetup = async () => {
+    if (busy || selecting || disposed || contextId) return;
+    busy = true;
+    show();
+    try {
+      const data = await json('workshop-sessions/setup');
+      if (!Array.isArray(data.resources)) throw Error('暂时读不到算力机列表。');
+      setupAccount = data.accountId;
+      const select = $('workshop-compute');
+      const placeholder = new document.defaultView.Option('请选择一台算力机', '', true, true);
+      placeholder.disabled = true;
+      select.replaceChildren(placeholder);
+      for (const resource of data.resources) {
+        const status = { online: '上次检查可用', offline: '上次检查离线', unknown: '待检查' }[resource.status] ?? '待检查';
+        const option = new document.defaultView.Option(resource.name + ' · ' + status, resource.id);
+        select.add(option);
+      }
+      const available = data.resources.length > 0;
+      $('workshop-setup-form').hidden = !available;
+      $('workshop-setup-status').textContent = available
+        ? (setupAccount ? '当前账号：' + setupAccount + '。' : '') + '选择一台算力机后再选预算。'
+        : '当前账号没有可选算力机。请联系课程管理员分配算力，再刷新列表。';
+      $('workshop-error').hidden = true;
+      awaitingSetupLogin = false;
+      setupReady = true;
+      halted = false;
+    } finally {
+      busy = false;
+      show();
+    }
+    reveal('workshop-setup');
+  };
+  listen('workshop-compute', 'change', show);
+  listen('workshop-setup-form', 'submit', (event) => {
+    event.preventDefault();
+    const select = $('workshop-compute');
+    if (busy || selecting || disposed || contextId || !setupReady || !select.value ||
+        select.selectedOptions[0]?.disabled) return;
+    run(async () => {
+      busy = true;
+      show();
+      let created;
+      try {
+        ({ session: created } = await json('workshop-sessions/setup', {
+          accountId: setupAccount, computeResourceId: select.value,
+        }));
+        if (!validId(created?.contextId) || created.computeResourceId !== select.value)
+          throw Error('平台尚未确认本次实验，请在历史中核对后继续。');
+      } finally {
+        busy = false;
+        show();
+      }
+      await choose(created.contextId);
+      await saveReference(previewObserved ? 'observed' : 'skipped');
+    });
+  });
+  listen('workshop-login', 'click', () => {
+    if (entryPreview && !contextId) awaitingSetupLogin = true;
+  });
+  const onSetupReturn = () => {
+    if (awaitingSetupLogin && !document.hidden) run(loadSetup);
+  };
+  document.defaultView?.addEventListener('focus', onSetupReturn);
+  document.addEventListener('visibilitychange', onSetupReturn);
+  listeners.push(() => {
+    document.defaultView?.removeEventListener('focus', onSetupReturn);
+    document.removeEventListener('visibilitychange', onSetupReturn);
+  });
   const reconnect = async () => {
     if (busy || selecting || disposed) return;
+    if (entryPreview && !contextId) return loadSetup();
     if (!session && contextId) await choose(contextId);
     if (contextId) await refresh();
     else {
@@ -810,7 +911,10 @@ export async function startWorkshop({
   listen('new-experiment', 'click', () => run(() => createExperiment()));
   listen('compare-parameters', 'click', () => run(() => createExperiment(true)));
   try {
-    if (contextId) {
+    if (entryPreview) {
+      $('workshop-login').href = new URL('login', root).href;
+      show();
+    } else if (contextId) {
       if (!validId(contextId)) throw Error('实验标识无效。');
       await choose(contextId);
     } else {

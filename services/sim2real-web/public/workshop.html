@@ -13,7 +13,7 @@
     <a class="skip-link" href="#workshop-main">跳到课程</a>
     <header class="experiment-header">
       <a href="./">RDK Robot Learning</a><span>OriginMan Workshop · 仅仿真</span
-      ><span id="connection-status" role="status">正在接续课程</span>
+      ><span id="connection-status" role="status">正在打开课程</span>
     </header>
     <main id="workshop-main" class="workshop-shell">
       <div class="section-heading workshop-title">
@@ -29,15 +29,17 @@
         <div>
           <p id="workshop-current-step" class="eyebrow">课程进度</p>
           <h2 id="workshop-current-title">正在打开课程</h2>
-          <p id="workshop-status" role="status">正在读取当前账号的课程。</p>
+          <p id="workshop-status" role="status">正在准备页面。</p>
         </div>
         <button id="workshop-primary" type="button" hidden></button>
       </div>
       <details class="workshop-extras">
         <summary>实验管理与自由探索</summary>
         <div class="workshop-actions">
-          <button id="new-experiment" type="button" disabled>新实验</button>
+          <button id="new-experiment" type="button" disabled>沿用本轮算力开新实验</button>
           <button id="history-toggle" type="button" aria-expanded="false" aria-controls="history">切换实验</button>
+          <a href="./workshop.html?start=1">换算力开新实验</a>
+          <a href="./#station/devices">连接设备</a>
           <a id="open-interactive-simulation" href="./?robot=originman#simulate">打开交互仿真</a>
         </div>
         <p>可自由施力、跑 8 秒实验或慢放回看。浏览器后退可回到本轮课程。</p>
@@ -49,11 +51,21 @@
           <button id="workshop-retry" type="button">重试读取本轮</button>
         </div>
       </div>
+      <section id="workshop-setup" hidden aria-labelledby="workshop-setup-title">
+        <h2 id="workshop-setup-title">选择本轮算力机</h2>
+        <p id="workshop-setup-status" role="status"></p>
+        <form id="workshop-setup-form" class="workshop-fields" hidden>
+          <label>训练算力机
+            <select id="workshop-compute" required></select>
+          </label>
+          <button id="workshop-setup-confirm" type="submit">用这台算力机，去选预算</button>
+        </form>
+      </section>
       <section id="history" hidden aria-label="选择已有实验">
         <h2>选择要继续的实验</h2>
         <div id="history-list" class="workshop-actions"></div>
         <p id="history-empty" hidden>
-          还没有课程实验。回到插件说“带我开始 Workshop”，会自动准备模型与算力。
+          还没有课程实验。点「开始实操」，选择本轮算力机。
         </p>
       </section>
       <section id="reference-section" aria-labelledby="reference-heading" hidden>
@@ -61,7 +73,7 @@
           <h2 id="reference-heading">1 · 看参考</h2>
           <span>讲师参考，非本组训练结果</span>
         </div>
-        <p>先看看机器人被推了一下后，怎样重新站稳。播完会自动进入下一步。</p>
+        <p id="reference-instructions">先看看机器人被推了一下后，怎样重新站稳。播完会自动进入下一步。</p>
         <div class="workshop-actions">
           <button id="play-reference" type="button">播放讲师参考</button>
           <button id="skip-reference" type="button">跳过参考，选择预算</button>

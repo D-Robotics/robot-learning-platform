@@ -121,9 +121,10 @@ function fixture(t) {
     setTerminal: (v) => (terminal = v),
   };
 }
+const selectedWorker = { contextId: 'om-test', computeResourceId: 'worker' };
 test('full fixed training request and repeated context never writes twice', async (t) => {
   const f = fixture(t);
-  await shortTraining('rdk_originman_short_train', { contextId: 'om-test' }, f.call, f.options);
+  await shortTraining('rdk_originman_short_train', selectedWorker, f.call, f.options);
   assert.equal(f.writes.length, 1);
   const a = f.writes[0];
   assert.equal(a.originmanWorkshop.groupId, 'om-test');
@@ -131,27 +132,27 @@ test('full fixed training request and repeated context never writes twice', asyn
   assert.equal(a.video, false);
   assert.equal(a.engine, 'originman-recovery-reflect');
   assert.equal(a.idempotencyKey, 'om-test-train');
-  await shortTraining('rdk_originman_short_train', { contextId: 'om-test' }, f.call, f.options);
+  await shortTraining('rdk_originman_short_train', selectedWorker, f.call, f.options);
   assert.equal(f.writes.length, 1);
 });
 test('invalid manifest or offline original resource cannot submit or switch', async (t) => {
   const f = fixture(t);
   f.setValid(false);
   await assert.rejects(
-    shortTraining('rdk_originman_short_train', { contextId: 'om-test' }, f.call, f.options),
+    shortTraining('rdk_originman_short_train', selectedWorker, f.call, f.options),
     /manifest/,
   );
   f.setValid(true);
   f.setOnline(false);
   await assert.rejects(
-    shortTraining('rdk_originman_short_train', { contextId: 'om-test' }, f.call, f.options),
+    shortTraining('rdk_originman_short_train', selectedWorker, f.call, f.options),
     /资源/,
   );
   assert.equal(f.writes.length, 0);
 });
 test('evaluation freezes source, seed, group and resource; second request is read only', async (t) => {
   const f = fixture(t);
-  await shortTraining('rdk_originman_short_train', { contextId: 'om-test' }, f.call, f.options);
+  await shortTraining('rdk_originman_short_train', selectedWorker, f.call, f.options);
   await shortTraining('rdk_originman_short_evaluate', { contextId: 'om-test' }, f.call, f.options);
   assert.equal(f.writes.length, 2);
   assert.equal(f.writes[1].originmanWorkshop.sourceRunId, 'train');
@@ -164,8 +165,8 @@ test('evaluation freezes source, seed, group and resource; second request is rea
 test('failed training remains original failed run and cannot evaluate or resubmit', async (t) => {
   const f = fixture(t);
   f.setTerminal('failed');
-  await shortTraining('rdk_originman_short_train', { contextId: 'om-test' }, f.call, f.options);
-  await shortTraining('rdk_originman_short_train', { contextId: 'om-test' }, f.call, f.options);
+  await shortTraining('rdk_originman_short_train', selectedWorker, f.call, f.options);
+  await shortTraining('rdk_originman_short_train', selectedWorker, f.call, f.options);
   await assert.rejects(
     shortTraining('rdk_originman_short_evaluate', { contextId: 'om-test' }, f.call, f.options),
     /训练未完成/,
@@ -188,7 +189,7 @@ test('first course training uses the registered manifest without requiring a pre
     if (name === 'rdk_runs_list') throw Error('first training must not depend on historical runs');
     return f.call(name, args);
   };
-  await shortTraining('rdk_originman_short_train', { contextId: 'om-test' }, call, f.options);
+  await shortTraining('rdk_originman_short_train', selectedWorker, call, f.options);
   assert.equal(f.writes.length, 1);
   assert.equal(f.writes[0].modelId, 'model');
 });
@@ -206,8 +207,8 @@ test('a new learner can register the bundled course model after resource readine
     }
     return f.call(name, args);
   };
-  await shortTraining('rdk_originman_short_train', { contextId: 'om-test' }, call, f.options);
-  await shortTraining('rdk_originman_short_train', { contextId: 'om-test' }, call, f.options);
+  await shortTraining('rdk_originman_short_train', selectedWorker, call, f.options);
+  await shortTraining('rdk_originman_short_train', selectedWorker, call, f.options);
   assert.equal(registered, 1);
   assert.equal(f.writes.length, 1);
 });
@@ -224,7 +225,7 @@ test('an offline new learner does not create a model or training job', async (t)
     return f.call(name, args);
   };
   await assert.rejects(
-    shortTraining('rdk_originman_short_train', { contextId: 'om-test' }, call, f.options),
+    shortTraining('rdk_originman_short_train', selectedWorker, call, f.options),
     /资源/,
   );
   assert.equal(registered, 0);
@@ -257,12 +258,7 @@ test('multiple resources require a named selection and never silently choose the
       e.platformCode === 'WORKSHOP_RESOURCE_SELECTION_REQUIRED' && e.details.choices.length === 2,
   );
   assert.equal(f.writes.length, 0);
-  await shortTraining(
-    'rdk_originman_short_train',
-    { contextId: 'om-test', computeResourceId: 'worker' },
-    call,
-    f.options,
-  );
+  await shortTraining('rdk_originman_short_train', selectedWorker, call, f.options);
   assert.equal(f.writes.length, 1);
 });
 
@@ -276,11 +272,9 @@ test('a lost submission reply never issues a second POST for the same experiment
     }
     return f.call(name, args);
   };
+  await assert.rejects(shortTraining('rdk_originman_short_train', selectedWorker, call, f.options));
   await assert.rejects(
-    shortTraining('rdk_originman_short_train', { contextId: 'om-test' }, call, f.options),
-  );
-  await assert.rejects(
-    shortTraining('rdk_originman_short_train', { contextId: 'om-test' }, call, f.options),
+    shortTraining('rdk_originman_short_train', selectedWorker, call, f.options),
     (e) => e.platformCode === 'SUBMISSION_RESULT_UNKNOWN',
   );
   assert.equal(submissions, 1);
@@ -288,8 +282,8 @@ test('a lost submission reply never issues a second POST for the same experiment
 test('concurrent double-clicks submit one job and keep the original experiment key', async (t) => {
   const f = fixture(t);
   const results = await Promise.allSettled([
-    shortTraining('rdk_originman_short_train', { contextId: 'om-test' }, f.call, f.options),
-    shortTraining('rdk_originman_short_train', { contextId: 'om-test' }, f.call, f.options),
+    shortTraining('rdk_originman_short_train', selectedWorker, f.call, f.options),
+    shortTraining('rdk_originman_short_train', selectedWorker, f.call, f.options),
   ]);
   assert.equal(f.writes.length, 1);
   assert.equal(f.writes[0].idempotencyKey, 'om-test-train');
@@ -302,7 +296,7 @@ test('a visible CPU-only resource cannot silently downgrade the GPU recipe', asy
       ? { id: 'worker', ok: true, status: 'online', connected: true, cuda: false }
       : f.call(name, args);
   await assert.rejects(
-    shortTraining('rdk_originman_short_train', { contextId: 'om-test' }, call, f.options),
+    shortTraining('rdk_originman_short_train', selectedWorker, call, f.options),
     /GPU/,
   );
   assert.equal(f.writes.length, 0);
@@ -331,7 +325,7 @@ test('an acknowledged Run with an interrupted bookmark recovers by querying, wit
     return f.call(name, args);
   };
   await assert.rejects(
-    shortTraining('rdk_originman_short_train', { contextId: 'om-test' }, call, f.options),
+    shortTraining('rdk_originman_short_train', selectedWorker, call, f.options),
     (e) => e.platformCode === 'SUBMISSION_REFERENCE_SAVE_FAILED' && e.details.runId === 'train',
   );
   recovery = true;
@@ -356,15 +350,10 @@ test('repeating an explicit resource remains idempotent when the core status pro
     }
     return result;
   };
-  await shortTraining(
-    'rdk_originman_short_train',
-    { contextId: 'om-test', computeResourceId: 'worker' },
-    call,
-    f.options,
-  );
+  await shortTraining('rdk_originman_short_train', selectedWorker, call, f.options);
   const repeated = await shortTraining(
     'rdk_originman_short_train',
-    { contextId: 'om-test', computeResourceId: 'worker' },
+    selectedWorker,
     call,
     f.options,
   );
@@ -383,7 +372,7 @@ test('busy preflight keeps the selected Worker and never submits a job', async (
     return f.call(name, args);
   };
   await assert.rejects(
-    shortTraining('rdk_originman_short_train', { contextId: 'om-test' }, call, f.options),
+    shortTraining('rdk_originman_short_train', selectedWorker, call, f.options),
     (error) =>
       error.platformCode === 'SIM2REAL_ENGINE_PREFLIGHT_BUSY' &&
       error.httpStatus === 429 &&
@@ -410,9 +399,18 @@ test('a configured course resource cannot be overridden before any platform call
   );
   assert.equal(reads, 0);
   assert.equal(f.writes.length, 0);
-  await shortTraining('rdk_originman_short_train', { contextId: 'om-test' }, f.call, {
+  await shortTraining('rdk_originman_short_train', selectedWorker, f.call, {
     ...f.options,
     defaultResourceId: 'worker',
   });
   assert.equal(f.writes[0].computeResourceId, 'worker');
+});
+
+test('a single visible worker is never selected by default', async (t) => {
+  const f = fixture(t);
+  await assert.rejects(
+    shortTraining('rdk_originman_short_train', { contextId: 'om-test' }, f.call, f.options),
+    (error) => error.platformCode === 'WORKSHOP_RESOURCE_SELECTION_REQUIRED',
+  );
+  assert.equal(f.writes.length, 0);
 });

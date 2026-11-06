@@ -41,8 +41,7 @@ export async function connectAuthenticatedCore({
     res.end(JSON.stringify(value));
   };
   const fetchPlatform = async (pathname, options = {}, accountId) => {
-    const cookie =
-      pathname === '/healthz' ? null : await auth.cookie({ accountId, startLogin: !accountId });
+    const cookie = pathname === '/healthz' ? null : await auth.cookie({ accountId });
     const response = await fetchImpl(auth.audience + pathname, {
       ...options,
       headers: { ...options.headers, ...(cookie ? { cookie } : {}) },

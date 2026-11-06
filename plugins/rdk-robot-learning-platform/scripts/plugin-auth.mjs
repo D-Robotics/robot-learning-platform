@@ -75,7 +75,7 @@ export function createPluginAuth({
     );
   const audience = base.href.replace(/\/$/, ''),
     origin = base.origin,
-    native = env.RDK_STUDIO_LOGIN_BOUND === '1';
+    native = env.RDK_STUDIO_LOGIN_BOUND === '1' && env.RDK_STUDIO_INHERIT_LOGIN !== '0';
   const mode = native ? 'studio-session' : 'browser-login';
   const cacheScope = process.platform === 'win32' ? JSON.stringify([audience, root]) : audience;
   const filename = path.join(
@@ -343,7 +343,7 @@ export function createPluginAuth({
     new PluginRequestError('AUTH_OPERATION_SUPERSEDED', '账号已切换，请用当前账号重新操作。', {
       httpStatus: 409,
     });
-  async function cookie({ startLogin = true, accountId } = {}) {
+  async function cookie({ accountId } = {}) {
     const expectedRevision = revision;
     if (disconnected)
       throw loginRequired('LOGIN_REQUIRED', '插件已退出，请调用rdk_auth_login重新连接。');
@@ -395,13 +395,7 @@ export function createPluginAuth({
       await clearIfCurrent(saved.cookie);
       if (await read()) throw accountChanged();
     }
-    if (!startLogin || accountId || (await restorePending())?.rejectedAccount)
-      throw loginRequired();
-    const flow = await begin();
-    throw loginRequired(
-      'LOGIN_REQUIRED',
-      '请在浏览器确认连接码 ' + flow.userCode + ' 后调用rdk_auth_status。',
-    );
+    throw loginRequired('LOGIN_REQUIRED', '请先说“连接学习平台”，并在浏览器确认授权。');
   }
   function unavailable(error) {
     const e = classifyPluginFailure(error);
@@ -474,7 +468,7 @@ export function createPluginAuth({
       }
     }
     try {
-      const validated = await cookie({ startLogin: false });
+      const validated = await cookie();
       if (native) return { authenticated: true, mode, accountId: env.RDK_STUDIO_LOGIN_ACCOUNT };
       const saved = await read();
       if (saved?.cookie !== validated) throw accountChanged();

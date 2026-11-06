@@ -766,6 +766,8 @@ for (const id of [
   'custom-recipe',
   'pause-workshop',
   'history-list',
+  'workshop-setup',
+  'workshop-compute',
   'result-frame',
 ])
   assert.match(workshopPage, new RegExp('id="' + id + '"'));

@@ -73,29 +73,14 @@ export async function selectCourseAssets(
   if (!Array.isArray(resourceList?.computeResources))
     throw new Error('平台未返回明确的资源清单，不登记模型或提交训练。');
   const resources = resourceList.computeResources;
-  let resource;
-  if (computeResourceId) {
-    resource = resources.find((record) => record.id === computeResourceId);
-    if (!resource) throw new Error('所选执行资源当前账号不可见；不会换用其他资源。');
-  } else {
-    // Names narrow an initial choice only; connectivity and task checks still run before any write.
-    const named = resources.filter((record) => /originman/i.test(record.name ?? ''));
-    const candidates = named.length ? named : resources;
-    if (!candidates.length)
-      throw Object.assign(
-        new Error(
-          '当前账号尚无可用训练资源。请由课程教师分配或登记课程算力后继续；尚未创建模型或训练。',
-        ),
-        { platformCode: 'WORKSHOP_RESOURCE_SETUP_REQUIRED' },
-      );
-    if (candidates.length !== 1)
-      throw selectionError(
-        'WORKSHOP_RESOURCE_SELECTION_REQUIRED',
-        '发现多个训练资源，请按名称选择课程使用的一个；不会自动选首条或切换资源。',
-        candidates,
-      );
-    resource = candidates[0];
-  }
+  if (!computeResourceId)
+    throw selectionError(
+      'WORKSHOP_RESOURCE_SELECTION_REQUIRED',
+      '请选择本轮使用的算力机。可以先说“查看我的开发机”。',
+      resources,
+    );
+  const resource = resources.find((record) => record.id === computeResourceId);
+  if (!resource) throw new Error('所选执行资源当前账号不可见；不会换用其他资源。');
   return { model, resource };
 }
 export async function registerCourseModel(manifest, call) {

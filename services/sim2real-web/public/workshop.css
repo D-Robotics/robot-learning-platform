@@ -20,15 +20,19 @@
   display: grid;
   gap: 8px;
 }
-.workshop-fields input {
+.workshop-fields input,
+.workshop-fields select {
   font: inherit;
   color: var(--text);
   background: var(--panel);
   border: 1px solid var(--line-strong);
   border-radius: 8px;
   padding: 8px;
-  max-width: 200px;
 }
+.workshop-fields input { max-width: 200px; }
+.workshop-fields select { max-width: 100%; }
+#workshop-setup-form { align-items: end; }
+#workshop-setup-form label { min-width: 0; }
 #reference-video {
   width: 100%;
   max-height: 420px;
@@ -72,7 +76,7 @@
   color: var(--muted-strong);
   font-variant-numeric: tabular-nums;
 }
-#workshop-primary, #play-reference, #start-quick, #confirm-recipe, #go-results {
+#workshop-primary, #play-reference, #start-quick, #confirm-recipe, #go-results, #workshop-setup-confirm {
   background: var(--accent-soft);
   border-color: var(--accent);
   color: var(--accent-text);

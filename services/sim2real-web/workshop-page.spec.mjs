@@ -723,3 +723,82 @@ test('network recovery reads the same experiment without submitting again', asyn
   assert.ok(f.calls.some(({ p }) => p === 'workshop-sessions/ws-test'));
   assert.ok(f.calls.every(({ p }) => !p.includes('/claim/') && p !== 'runs'));
 });
+
+test('preview stays offline until Start, returns from sign-in and requires an explicit worker selection', async (t) => {
+  const dom = new JSDOM(html, { url: 'https://platform.test/course/workshop.html?start=1' });
+  const calls = [];
+  let loggedIn = false;
+  const session = {
+    contextId: 'ws-new',
+    modelId: 'model',
+    computeResourceId: 'worker',
+    stage: 'ready',
+    training: null,
+    evaluation: null,
+    reference: 'pending',
+  };
+  const controller = await startWorkshop({
+    document: dom.window.document,
+    location: dom.window.location,
+    historyImpl: dom.window.history,
+    fetchImpl: async (url, options) => {
+      const route = new URL(url).pathname.split('/api/v1/duck/')[1];
+      const body = options.body ? JSON.parse(options.body) : undefined;
+      calls.push({ route, body });
+      if (!loggedIn) return { status: 401 };
+      const ok = (data) => ({ ok: true, json: async () => ({ ok: true, ...data }) });
+      if (route === 'workshop-sessions/setup' && !body)
+        return ok({
+          accountId: 'learner',
+          resources: [{ id: 'worker', name: 'Course GPU', status: 'online' }],
+        });
+      if (route === 'workshop-sessions/setup' && body) {
+        assert.deepEqual(body, { accountId: 'learner', computeResourceId: 'worker' });
+        return ok({ session });
+      }
+      if (route.endsWith('/select')) return ok({ session });
+      if (route.endsWith('/reference'))
+        return ok({ session: { ...session, reference: body.reference } });
+      throw Error('Unexpected call ' + route);
+    },
+  });
+  t.after(() => {
+    controller.dispose();
+    dom.window.close();
+  });
+  const $ = (id) => dom.window.document.getElementById(id);
+  assert.equal($('workshop-primary').textContent, '开始实操');
+  assert.equal($('workshop-step-execution').dataset.state, 'waiting');
+  assert.equal($('reference-section').hidden, false);
+  assert.deepEqual(calls, []);
+  $('workshop-primary').click();
+  await settle();
+  assert.equal($('workshop-primary').textContent, '登录学习平台');
+  assert.equal($('workshop-login').href, 'https://platform.test/course/login');
+  $('workshop-login').addEventListener('click', (event) => event.preventDefault());
+  $('workshop-primary').click();
+  loggedIn = true;
+  Object.defineProperty(dom.window.document, 'hidden', { value: false, configurable: true });
+  dom.window.dispatchEvent(new dom.window.Event('focus'));
+  await settle();
+  assert.equal($('workshop-setup').hidden, false);
+  assert.equal($('workshop-compute').value, '');
+  assert.equal($('workshop-setup-confirm').disabled, true);
+  $('workshop-compute').value = 'worker';
+  $('workshop-compute').dispatchEvent(new dom.window.Event('change'));
+  $('workshop-setup-confirm').click();
+  await settle();
+  assert.equal($('budget-section').hidden, false);
+  assert.equal($('workshop-setup').hidden, true);
+  assert.equal(dom.window.location.search, '?context=ws-new');
+  assert.deepEqual(
+    calls.map(({ route }) => route),
+    [
+      'workshop-sessions/setup',
+      'workshop-sessions/setup',
+      'workshop-sessions/setup',
+      'workshop-sessions/ws-new/select',
+      'workshop-sessions/ws-new/reference',
+    ],
+  );
+});

@@ -555,7 +555,7 @@ test('switch requires another browser account across processes and stale 401 can
   assert.equal((await first.status()).accountSelectionRequired, true);
   assert.equal((await second.status()).accountSelectionRequired, true);
   const before = f.seen.length;
-  await assert.rejects(first.cookie(), /登录/);
+  await assert.rejects(first.cookie(), /连接学习平台/);
   assert.equal(f.seen.length, before);
   assert.ok((await first.call('rdk_auth_switch_account', { openBrowser: false })).verificationUrl);
   f.approve('bob');
@@ -563,4 +563,23 @@ test('switch requires another browser account across processes and stale 401 can
   await first.invalidate(oldCookie);
   assert.equal((await first.status()).accountId, 'bob');
   await assert.rejects(first.cookie({ accountId: 'alice' }), /账号已切换/);
+});
+
+test('unconnected requests and disabled Studio inheritance never start browser or native authorization', async (t) => {
+  const f = fixture(t);
+  const auth = createPluginAuth({
+    env: {
+      RDK_SIM2REAL_MCP_BASE_URL: base,
+      RDK_STUDIO_INHERIT_LOGIN: '0',
+      RDK_STUDIO_LOGIN_BOUND: '1',
+      RDK_STUDIO_LOGIN_ACCOUNT: 'alice',
+      RDK_STUDIO_LOGIN_SESSION: 'native-private',
+      RDK_STUDIO_LOGIN_ORIGIN: origin,
+    },
+    cacheDirectory: f.dir,
+    fetchImpl: f.fetchImpl,
+  });
+  await assert.rejects(auth.cookie(), /连接学习平台/);
+  assert.equal((await auth.status()).authenticated, false);
+  assert.equal(f.seen.length, 0);
 });

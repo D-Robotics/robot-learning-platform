@@ -18,6 +18,7 @@ try {
         '--connection-name',
         '--host',
         '--studio-app',
+        '--studio-login',
         '--resource-id',
       ].includes(args[i]) ||
       !args[i + 1]
@@ -28,10 +29,17 @@ try {
   }
   if (options['--host'] && !['studio', 'other', 'qoder'].includes(options['--host']))
     throw Error('host只支持studio、other或qoder。');
+  const inheritStudioLogin = options['--studio-login'] === 'inherit';
+  if (
+    options['--studio-login'] &&
+    (!inheritStudioLogin || ['other', 'qoder'].includes(options['--host']))
+  )
+    throw Error('只有 Studio 支持显式启用 --studio-login inherit。');
   const configured = configurePlugin({
     root,
     platformUrl: options['--platform-url'],
     courseResourceId: options['--resource-id'],
+    inheritStudioLogin,
   });
   const installed = ['other', 'qoder'].includes(options['--host'])
     ? { installed: false, needsHostImport: true }
@@ -41,8 +49,8 @@ try {
       });
   let loginInheritance;
   const patchFile = path.join(root, 'host', 'host-patch.json');
-  const app = options['--studio-app'] ?? detectStudioApp();
-  if (!['other', 'qoder'].includes(options['--host']) && app && fs.existsSync(patchFile)) {
+  const app = inheritStudioLogin && (options['--studio-app'] ?? detectStudioApp());
+  if (app && fs.existsSync(patchFile)) {
     try {
       loginInheritance = installStudioLoginPatch({
         appPath: app,
@@ -95,7 +103,7 @@ try {
     console.log('连接已配置。您此前禁用了这条连接，请在Studio设置中启用后继续。');
   else if (installed.installed)
     console.log(
-      '安装配置完成。请在Studio新建对话，说：帮我做一次OriginMan受扰恢复短训练，评测后播放本次回放。首次无登录时按浏览器提示确认。',
+      '安装配置完成。在 Studio 说“带我开始 Workshop”了解课程。需要实操时再说“连接学习平台”。',
     );
   else
     console.log('配置已生成。导入完整插件目录即可使用本地知识；需要平台数据时再按浏览器提示登录。');

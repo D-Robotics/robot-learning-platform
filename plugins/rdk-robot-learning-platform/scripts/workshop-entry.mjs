@@ -1,6 +1,5 @@
 /** One learner entry; workbench buttons own execution, MCP retains full expert tools. */
 import fs from 'node:fs';
-import { setTimeout as delay } from 'node:timers/promises';
 import { selectCourseAssets, registerCourseModel } from './course-setup.mjs';
 import { prepareTraining } from './workflow-inspection.mjs';
 import { requireConnected } from './short-training.mjs';
@@ -25,26 +24,31 @@ const noSubmission = () => ({ training: false, evaluation: false });
 const signedIn = (status) =>
   status.session?.authenticated === true && Boolean(status.session.accountId);
 
-async function beginWorkshopAuthorization(auth, openBrowser, signal) {
-  // The auth tool owns the trusted origin, authorization link and durable pending code.
-  let state = await auth.call('rdk_auth_login', { openBrowser });
-  const until = Date.now() + 12000;
-  if (state.browserOpened && state.verificationUrl) {
-    while (
-      state.authenticated === false &&
-      state.needsLogin &&
-      state.verificationUrl &&
-      Date.now() < until
-    ) {
-      signal?.throwIfAborted();
-      state = await auth.status();
-      if (state.authenticated === false && state.needsLogin && state.verificationUrl)
-        await delay(1000, undefined, { signal });
-    }
-  }
-  signal?.throwIfAborted();
-  return state;
-}
+const qoderNavigation = (url) => ({
+  surface: '内置 browser-use MCP，非外部 Chrome Connector',
+  steps: [
+    { tool: 'navigate_page', arguments: { url } },
+    { tool: 'list_pages', arguments: {} },
+    {
+      tool: 'select_page',
+      argumentsFrom:
+        '从 list_pages 中按完整 URL 精确匹配取得 pageId，传 {pageId, bringToFront:true}；navigate_page 只返回成功文字，不提供 pageId。',
+    },
+  ],
+});
+const previewEntry = (base, stage) => {
+  const url = base.replace(/\/+$/, '') + '/workshop.html?start=1';
+  return {
+    contextId: null,
+    stage,
+    links: { workshop: url },
+    submission: noSubmission(),
+    studentReply: `[打开 Workshop](${url})。先看参考，准备好后点「开始实操」。`,
+    qoderNavigation: qoderNavigation(url),
+    delivery:
+      '静默打开 links.workshop 后只展示 studentReply。由用户点击开始实操和选择算力，不主动发起授权。',
+  };
+};
 
 export async function workshopEntry(
   args = {},
@@ -56,7 +60,6 @@ export async function workshopEntry(
     toolNames = [],
     defaultResourceId,
     authentication,
-    openAuthBrowser = false,
     signal,
   } = {},
 ) {
@@ -81,41 +84,29 @@ export async function workshopEntry(
       throw Error('本课堂已固定算力机。如需更换，请联系教师。');
   }
   if (!remote) throw Error('当前连接尚不支持按钮工作台，请更新完整插件。');
-  // The retained core may reject platform-status before the first login.
-  // Read the auth owner first so this entry can present a real authorization action.
-  let identity;
-  if (authentication) {
-    identity = await authentication.status();
-    if (identity.authenticated !== true) {
-      if (authentication.mode !== 'browser-login' || identity.needsLogin !== true)
-        throw Error(identity.nextAction ?? '请检查学习平台的连接或登录状态，然后继续。');
-      if (!identity.accountSelectionRequired)
-        identity = await beginWorkshopAuthorization(authentication, openAuthBrowser, signal);
-      if (identity.authenticated !== true) {
-        if (!identity.needsLogin)
-          throw Error(identity.nextAction ?? '授权服务暂时不可用，稍后重试原请求。');
-        const retry =
-          args.contextId || args.intent === 'continue' || args.intent === 'results'
-            ? '继续 Workshop'
-            : args.intent === 'new'
-              ? '新建 Workshop 实验'
-              : '带我开始 Workshop';
-        const login = identity.verificationUrl;
-        return {
-          contextId: args.contextId ?? null,
-          stage: 'authorize',
-          links: login ? { login } : {},
-          submission: noSubmission(),
-          studentReply: identity.accountSelectionRequired
-            ? identity.nextAction
-            : login
-              ? `[确认学习平台授权](${login})。确认后回到聊天说“${retry}”。`
-              : `授权已失效。回到聊天说“${retry}”，重新打开授权。`,
-          delivery:
-            '只展示 studentReply。授权完成前暂停课程工具链，无需输入密码或连接码，不要重复申请授权。',
-        };
-      }
-    }
+  // An explicit login may already be pending. Merely opening Workshop never starts one.
+  const identity = await authentication?.status();
+  if (identity && identity.authenticated !== true) {
+    if (!identity.needsLogin)
+      throw Error(identity.nextAction ?? '授权服务暂时不可用，稍后重试原请求。');
+    const login = identity.verificationUrl;
+    const preview = (args.intent ?? 'start') === 'start' && !args.contextId;
+    if (preview && !login && !identity.accountSelectionRequired && authentication.audience)
+      return previewEntry(authentication.audience, 'preview');
+    return {
+      contextId: null,
+      stage: preview && !login ? 'preview' : 'authorize',
+      links: login ? { login } : {},
+      submission: noSubmission(),
+      studentReply: identity.accountSelectionRequired
+        ? identity.nextAction
+        : login
+          ? `[确认学习平台授权](${login})。确认后回来继续 Workshop。`
+          : preview
+            ? 'OriginMan Workshop 会用仿真训练一个受扰恢复策略，再比较恢复次数并看回放。现在可以先问课程或预算。准备实操时，说“连接学习平台”。'
+            : '这一步需要学习平台账号。准备好后说“连接学习平台”。',
+      delivery: '只展示 studentReply。等待用户明确要求连接或完成已有授权，不自动发起登录。',
+    };
   }
   signal?.throwIfAborted();
   const status = await call('rdk_platform_status', {});
@@ -140,11 +131,8 @@ export async function workshopEntry(
   let session = list.current;
   if (args.contextId)
     session = (await remote('select', { contextId: args.contextId }, accountId)).session;
-  else if (
-    (args.intent ?? 'start') === 'new' ||
-    ((args.intent ?? 'start') === 'start' &&
-      (!session || ['results', 'blocked'].includes(session.stage)))
-  ) {
+  else if (args.intent === 'new' || ((args.intent ?? 'start') === 'start' && !session)) {
+    if (!args.computeResourceId) return previewEntry(base.toString(), 'choose-compute');
     const manifest = JSON.parse(
       fs.readFileSync(new URL('../references/originman-manifest.json', import.meta.url), 'utf8'),
     );
@@ -155,8 +143,7 @@ export async function workshopEntry(
         manifest,
         readModels,
         modelId: session?.modelId,
-        computeResourceId:
-          defaultResourceId ?? args.computeResourceId ?? session?.computeResourceId,
+        computeResourceId: args.computeResourceId,
       },
       call,
     );
@@ -228,18 +215,7 @@ export async function workshopEntry(
       '](' +
       url +
       ')',
-    qoderNavigation: {
-      surface: '内置 browser-use MCP，非外部 Chrome Connector',
-      steps: [
-        { tool: 'navigate_page', arguments: { url } },
-        { tool: 'list_pages', arguments: {} },
-        {
-          tool: 'select_page',
-          argumentsFrom:
-            '从 list_pages 中按完整 URL 精确匹配取得 pageId，传 {pageId, bringToFront:true}；navigate_page 只返回成功文字，不提供 pageId。',
-        },
-      ],
-    },
+    qoderNavigation: qoderNavigation(url),
     delivery:
       '静默完成导航后只展示studentReply，不添加“我来加载”“我在打开”等过程说明。Qoder依次执行qoderNavigation三个步骤：navigate_page→list_pages→select_page({pageId:真实页面编号,bringToFront:true})，禁止省略pageId或把URL当编号。成功后结束，保持面板展示，不重复截图或询问预算。内置工具不可用时直接给一次链接；不启动外部Browser Connector。其余工具仅在用户明确要求高级操作时使用。',
   };
