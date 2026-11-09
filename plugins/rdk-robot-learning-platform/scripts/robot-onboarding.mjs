@@ -17,6 +17,14 @@ export const STAGES = {
     'imuTransformVerified',
   ],
   parity: ['originalArtifactVerified', 'dimensionsAndUnitsVerified', 'numericToleranceMet'],
+  simulation: [
+    'taskSuccessCriteriaMet',
+    'heldOutScenariosPassed',
+    'simToRealPerturbationsEvaluated',
+    'actionLimitsRespected',
+    'failureRecoveryEvaluated',
+    'environmentAndPolicyPinned',
+  ],
   shadow: [
     'realSensorsUsed',
     'noActuation',
@@ -102,7 +110,7 @@ export function onboardingGuide(args = {}) {
     instructions:
       args.detail === 'full'
         ? readFileSync(new URL('../references/new-robot-acceptance.md', import.meta.url), 'utf8')
-        : '先用rdk_classroom_guide逐项引导输入，已有信息不重复问。身份与文件待补时可以记录准备状态，不能标记通过。上电前先离线准备，读取时只允许单一I/O持有者，负状态不填零、过期不接受；实际运动另需当前平台和板端门禁。',
+        : '先用rdk_classroom_guide逐项引导输入，已有信息不重复问。身份与文件待补时可以记录准备状态，不能标记通过。所有任务共用simulation迁移门槛，任务模板只定义效果指标；原始收据记录留出条件、仿真扰动和逐项结果。上电前先离线准备，读取时只允许单一I/O持有者，负状态不填零、过期不接受；simulation通过后仍须完成零致动shadow和逐机检查，不能直接视为可运动。',
     readPolicy: '默认不展开参考文档；只有用户追问依据或具体接口争议时使用detail=full。',
     template: JSON.parse(
       readFileSync(
@@ -110,7 +118,8 @@ export function onboardingGuide(args = {}) {
         'utf8',
       ),
     ),
-    nextAction: '先核对当前设备身份和实际工具目录，离线准备完成后才安排上电；未知项保留未知。',
+    nextAction:
+      '先核对当前设备身份和实际工具目录；训练后用simulation阶段检查通用迁移证据，再完成零致动shadow与逐机门禁。离线准备完成后才安排上电，未知项保留未知。',
   };
 }
 export function assessOnboarding(args, now = Date.now()) {

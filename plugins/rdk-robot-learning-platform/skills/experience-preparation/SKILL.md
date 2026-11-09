@@ -5,6 +5,8 @@ description: 用户说“带我开始 Workshop”“继续”“看看效果”�
 
 ## 一句话进入，按钮推进
 
+课程范围、阶段与质量口径见[Workshop课程说明](../../references/workshop-course.md)。
+
 “带我开始 Workshop”“开始课程”只调用 `rdk_workshop({intent:"start"})`；“继续”“继续刚才的实验”用 `intent:"continue"`；“看看效果”用 `intent:"results"`；用户明确说“新实验”用 `intent:"new"`，不取消原任务。已有明确实验时可传contextId，否则工具使用当前账号已选实验；多个候选由工作台卡片选择，不能让学员抄UUID，也不猜全局最新Run。
 
 只展示返回的studentReply，有 links.workshop 才打开工作台。未授权或未选算力时等待用户明确连接或选择。预算、参考观察、训练、等待、评测、回放和保存都在页面，不再先问预算、不调用旧experience_guide或替学员提交训练。Qoder按工具返回的qoderNavigation静默导航：内置navigate_page({url})→list_pages({})→按完整URL匹配真实编号→select_page({pageId:真实编号,bringToFront:true})。navigate_page成功文字不含编号，不能直接无pageId调用select_page。不要调用外部Browser Connector，也不用截图工具反复证明面板打开。Studio用右侧工作台。无法自动打开时只给该链接和一次点击提示。

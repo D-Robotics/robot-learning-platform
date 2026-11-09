@@ -1,7 +1,95 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { inspectWorkflow } from '../plugins/rdk-robot-learning-platform/scripts/workflow-inspection.mjs';
+import {
+  assessOnboarding,
+  onboardingGuide,
+  STAGES as ACCEPTANCE_STAGES,
+} from '../plugins/rdk-robot-learning-platform/scripts/robot-onboarding.mjs';
 const now = 1800000000000;
+
+const acceptanceIdentity = {
+  robotId: 'originman-lab-01',
+  adapterSha256: 'a'.repeat(64),
+  calibrationSha256: 'b'.repeat(64),
+  policySha256: 'c'.repeat(64),
+  runtimeSha256: 'd'.repeat(64),
+};
+function acceptanceEvidence(
+  stage,
+  facts = Object.fromEntries(ACCEPTANCE_STAGES[stage].map((key) => [key, true])),
+) {
+  return {
+    stage,
+    identity: acceptanceIdentity,
+    observedAt: '2026-11-09T00:00:00.000Z',
+    expiresAt: '2026-12-09T00:00:00.000Z',
+    receiptSha256: 'e'.repeat(64),
+    facts,
+  };
+}
+function acceptanceRecordWithoutSimulation() {
+  return {
+    schemaVersion: 1,
+    identity: acceptanceIdentity,
+    evidence: Object.keys(ACCEPTANCE_STAGES)
+      .filter((stage) => stage !== 'simulation')
+      .map((stage) => acceptanceEvidence(stage)),
+    unresolvedFaults: [],
+  };
+}
+
+test('generic Sim2Real simulation gate is exposed for every task profile', () => {
+  const guide = onboardingGuide();
+  assert.equal(guide.motionAuthorized, false);
+  assert.deepEqual(guide.stageCriteria.simulation, [
+    'taskSuccessCriteriaMet',
+    'heldOutScenariosPassed',
+    'simToRealPerturbationsEvaluated',
+    'actionLimitsRespected',
+    'failureRecoveryEvaluated',
+    'environmentAndPolicyPinned',
+  ]);
+  assert.match(guide.instructions, /所有任务共用simulation迁移门槛/);
+});
+
+test('hardware stages remain blocked until simulation evidence is present', () => {
+  const result = assessOnboarding(
+    { record: acceptanceRecordWithoutSimulation() },
+    Date.parse('2026-11-10T00:00:00.000Z'),
+  );
+  const simulation = result.stages.find((stage) => stage.stage === 'simulation');
+  const shadow = result.stages.find((stage) => stage.stage === 'shadow');
+  assert.equal(simulation.status, 'missing');
+  assert.deepEqual(simulation.issues, ['no-evidence']);
+  assert.equal(shadow.status, 'blocked-by-prerequisite');
+  assert.equal(result.hardwareEligible, false);
+  assert.equal(result.motionAuthorized, false);
+});
+
+test('documented simulation evidence does not itself authorize hardware motion', () => {
+  const record = acceptanceRecordWithoutSimulation();
+  record.evidence.push(acceptanceEvidence('simulation'));
+  const result = assessOnboarding({ record }, Date.parse('2026-11-10T00:00:00.000Z'));
+  assert.equal(result.stages.find((stage) => stage.stage === 'simulation').status, 'documented');
+  assert.equal(result.evidenceCoverageComplete, true);
+  assert.equal(result.hardwareEligible, false);
+  assert.equal(result.motionAuthorized, false);
+  assert.equal(result.receiptsIndependentlyVerified, false);
+});
+
+test('failed task-agnostic robustness checks keep the simulation gate open', () => {
+  const record = acceptanceRecordWithoutSimulation();
+  const facts = Object.fromEntries(ACCEPTANCE_STAGES.simulation.map((key) => [key, true]));
+  facts.heldOutScenariosPassed = false;
+  record.evidence.push(acceptanceEvidence('simulation', facts));
+  const result = assessOnboarding({ record }, Date.parse('2026-11-10T00:00:00.000Z'));
+  const simulation = result.stages.find((stage) => stage.stage === 'simulation');
+  assert.equal(simulation.status, 'needs-review');
+  assert.deepEqual(simulation.issues, ['heldOutScenariosPassed']);
+  assert.equal(result.evidenceCoverageComplete, false);
+  assert.equal(result.motionAuthorized, false);
+});
 test('OriginMan inspection binds its evaluation Run and never reuses MicroDuck quality', async () => {
   const sha = 'a'.repeat(64);
   const tools = ['rdk_platform_status', 'rdk_workshop_catalog', 'rdk_training_status'];

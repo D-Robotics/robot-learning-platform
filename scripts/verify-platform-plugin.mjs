@@ -17,6 +17,27 @@ const pluginRoot = path.join(repositoryRoot, pluginRelative);
 const rootVariable = 'RDK_ROBOT_LEARNING_PLATFORM_ROOT';
 const require = createRequire(import.meta.url);
 
+function expectedCourseHint(name) {
+  const exact = {
+    rdk_training_submit:
+      'OriginMan课程优先rdk_originman_train显式选择预算，再rdk_originman_evaluate同源评测；不手拼SAC大小写、环境数、sourceRunId或groupId。\n',
+    rdk_artifact_promote:
+      '这是制品发布生命周期晋升，不是保存或下载文件。OriginMan保存评测记录使用links.experiment页面的保存按钮；不要因用户说保存、导出或回放而调用晋升。\n',
+    rdk_runs_replay:
+      'OriginMan评测视频不依赖本工具的通用遥测样本；样本为0不能判定视频不存在。请恢复原评测引用并读取workshop视频回执。\n',
+    rdk_simulator_open:
+      'OriginMan参考演示与本组回放不同：打开course.links.simulation，在页面内启动并观察基础PD；entryUrl不是已运行证明。不直接导航WebM，参考不需要先训练。\n',
+    rdk_golden_path:
+      'OriginMan仅仿真课程：此全局平台摘要不能作为本课完成比例，不用其他实验或部署状态替代本次结果。\n',
+  };
+  return (
+    exact[name] ??
+    (/^rdk_(deployment_|board_|physical_evaluation|replay_video)/.test(name)
+      ? 'OriginMan本课仅仿真：此通用硬件能力不属于本课下一步，不因本课仿真完成自动调用；仅在用户独立明确要求对应硬件工作时使用。\n'
+      : '')
+  );
+}
+
 function readJson(file) {
   return JSON.parse(fs.readFileSync(file, 'utf8'));
 }
@@ -436,9 +457,12 @@ async function main() {
         // Every schema, permission, name and other core field remains exact.
         assert.equal(
           actual.description,
-          '仅用于真机遥测视频渲染；OriginMan短训评测的视频已随评测Run生成，不能用本工具。请rdk_experiment_resume获取links.video并由宿主打开。\n' +
+          '仅用于真机遥测视频渲染；OriginMan短训评测的视频已随评测Run生成，不能用本工具。请rdk_experiment_resume优先获取links.experiment；旧平台使用links.workbench并在页面内选择本次Run、打开播放器。\n' +
             original.description,
         );
+        assert.deepEqual({ ...actual, description: original.description }, original);
+      } else if (expectedCourseHint(original.name)) {
+        assert.equal(actual.description, expectedCourseHint(original.name) + original.description);
         assert.deepEqual({ ...actual, description: original.description }, original);
       } else assert.deepEqual(actual, original);
     }
@@ -451,9 +475,14 @@ async function main() {
     assert.equal(new Set(extendedTools.map((tool) => tool.name)).size, extendedTools.length);
     for (const tool of optionalTools) {
       const mutations = new Set([
+        'rdk_workshop',
+        'rdk_development_targets',
         'rdk_experiment_remember',
         'rdk_auth_login',
+        'rdk_auth_switch_account',
         'rdk_auth_logout',
+        'rdk_originman_train',
+        'rdk_originman_evaluate',
         'rdk_originman_short_train',
         'rdk_originman_short_evaluate',
       ]);
