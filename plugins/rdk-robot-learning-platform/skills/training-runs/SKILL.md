@@ -6,7 +6,23 @@ description: 在 RDK 学习平台选择任务、训练引擎与执行资源，�
 只咨询预算用途、计数单位或完成标准时，直接调用 `rdk_originman_course_brief`，逐字展示返回的两句 `studentReply` 后结束，不再读指南、目录或历史证据；用户明确追问依据再按需读引用。不能推算或编造计数倍率。
 
 
-## OriginMan 训练预算与结果口径
+## OriginMan 自定义舞蹈
+
+用户要求训练跳舞时使用独立舞蹈链路，不调用受扰恢复的预算选择、训练或评测工具。先 `rdk_experience_guide` 取得 `danceTraining.operation.contextId`，核对用户明确的资源，再调用 `rdk_originman_dance_train`。`modelId` 可省略，工具按专用契约查找或登记；不必先调用 draft，只有用户要求整理草案时才用它。
+
+当当前任务已经是舞蹈时，即使用户只说“带我开始/重新开始 Workshop”，也保持舞蹈意图：新一轮先取得新 `contextId`，沿用当前对话确认过的编舞；有已知活动 Run 时“继续/看看效果”只读查询原 Run，不展示旧结果冒充新一轮，也不重复提交。提交回执、`rdk_training_wait` 和 `rdk_training_status` 都应附带并打开该 Run 的只读详情页；页面按 Run ID 请求平台记录，账号无权查看时明确显示原因，不回退到全局最新记录。
+
+训练参数结构如下，数值必须保留用户要求；此例只说明字段名：
+
+```json
+{"contextId":"来自本轮guide","computeResourceId":"已确认资源","dance":{"schemaVersion":1,"title":"简单摆臂","bpm":100,"sections":[{"type":"alternating-arms","beats":8,"intensity":0.25}],"seed":7,"trainingSteps":500000}}
+```
+
+舞段类型为 `alternating-arms`、`weight-shift`、`squat-rise`、`open-pose`；每段 `beats` 为 4/8/16，`intensity` 为 0.25–1。预算字段是 `trainingSteps`；draft 接收 `dance` 内的配置对象，不接收外层引用或返回草案的派生字段。工具参数校验失败时按错误中的结构修正，不能反复猜字段。提交取得 Run 后仅对原 Run 使用 `rdk_training_wait`、`rdk_training_status`，失败或引用未知时不换 contextId 重交。
+
+结果核对本轮 `metrics.originmanDance.qualityGatePassed` 与各 BPM 的舞段成绩。出现平台返回的同源 `links.danceVideo` 时用宿主播放器打开本次仿真视频；实际播放和训练、风格达标分别报告。没有媒体链接时保留原结果，不构造未验证的媒体地址，也不为补回放重新训练。舞蹈仿真通过不授权真机部署。
+
+## OriginMan 受扰恢复训练预算与结果口径
 
 默认“开始 Workshop / 继续 / 看看效果”直接使用 `rdk_workshop` 打开按钮工作台，预算在页面选择；不要在聊天重复问。以下仅用于用户明确的高级手动或独立训练：先调用 `rdk_originman_training_choice`。用户未选择预算时传空参数，只展示返回的一个中文选择题并等待；不要默认短训。已明确“快检/短训/8192”传 `choice=quick`，已明确“正式/50万”传 `choice=formal`，不重问。回答“不清楚”传 `choice=unknown` 并暂停，不能自动提交。用户说先不开始时只记录选择。
 

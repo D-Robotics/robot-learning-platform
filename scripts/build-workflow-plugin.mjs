@@ -63,6 +63,8 @@ for (const name of [
   'authenticated-core.mjs',
   'plugin-errors.mjs',
   'course-setup.mjs',
+  'originman-dance-config.mjs',
+  'dance-training.mjs',
   'submission-journal.mjs',
   'install-host.mjs',
   'studio-login-patch.mjs',
@@ -139,7 +141,7 @@ const identity = {
     fs.readFileSync(path.join(root, 'plugins/rdk-robot-learning-platform/plugin.json'), 'utf8'),
   ).version,
   description:
-    '一句话开始 Workshop：下一步按钮、跨软件接续、交互曲线、对比与回放；保留自定义参数及高级工具。',
+    '一句话开始 Workshop：OriginMan 舞蹈 PPO 独立训练、Run 可视化直达、跨软件接续、曲线对比与仿真回放。',
 };
 fs.writeFileSync(path.join(out, 'plugin.json'), JSON.stringify(identity, null, 2));
 for (const directory of ['.rdstudio-plugin', '.codex-plugin', '.qoder-plugin']) {

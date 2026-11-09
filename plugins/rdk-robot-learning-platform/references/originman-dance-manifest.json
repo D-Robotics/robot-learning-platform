@@ -1,0 +1,69 @@
+{
+  "schemaVersion": 1,
+  "modelId": "originman-dance-workshop",
+  "displayName": "OriginMan · 自定义舞蹈 Workshop",
+  "version": "ppo-dance-v2",
+  "robot": {
+    "id": "originman",
+    "variant": "legs"
+  },
+  "contract": {
+    "id": "custom-policy-originman-dance-v2",
+    "robotId": "originman",
+    "jointCount": 20,
+    "observationSize": 78,
+    "actionSize": 18,
+    "controlHz": 50,
+    "physicsTimestepSeconds": 0.001,
+    "decimation": 20,
+    "observationLayout": [
+      {
+        "name": "projected_gravity_and_body_gyro",
+        "size": 6
+      },
+      {
+        "name": "beat_phase_phrase_and_bpm",
+        "size": 5
+      },
+      {
+        "name": "joint_position_error",
+        "size": 18
+      },
+      {
+        "name": "joint_velocity",
+        "size": 18
+      },
+      {
+        "name": "previous_joint_action",
+        "size": 18
+      },
+      {
+        "name": "dance_section_one_hot_8",
+        "size": 8
+      },
+      {
+        "name": "section_progress_alternation_phase_and_hold",
+        "size": 5
+      }
+    ]
+  },
+  "simulator": {
+    "backends": ["local"],
+    "policyArtifactId": "originman-dance-policy-placeholder"
+  },
+  "artifacts": [
+    {
+      "id": "originman-dance-policy-placeholder",
+      "role": "policy",
+      "ref": "artifact://originman-dance/contract-placeholder",
+      "kind": "source",
+      "format": "onnx",
+      "name": "originman-dance-contract-placeholder.onnx",
+      "workload": "humanoid-dance"
+    }
+  ],
+  "metadata": {
+    "source": "Externally staged OriginMan MuJoCo model bundle; no robot assets are included in this plugin.",
+    "notes": "Simulation-only 78→18 dance policy contract. The actual scene and mesh bundle is worker-mounted and separately hash-checked; this manifest does not claim asset redistribution rights, scene provenance match, or hardware deployability."
+  }
+}

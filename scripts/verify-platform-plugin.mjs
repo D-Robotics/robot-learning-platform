@@ -482,6 +482,7 @@ async function main() {
         'rdk_auth_switch_account',
         'rdk_auth_logout',
         'rdk_originman_train',
+        'rdk_originman_dance_train',
         'rdk_originman_evaluate',
         'rdk_originman_short_train',
         'rdk_originman_short_evaluate',

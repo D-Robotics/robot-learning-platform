@@ -1,7 +1,7 @@
 {
   "name": "rdk-robot-learning-platform",
-  "version": "0.6.0",
-  "description": "一句话开始 Workshop：下一步按钮、当前实验跨软件接续、曲线对比与回放；保留自定义参数及高级机器人学习工具。",
+  "version": "0.6.15",
+  "description": "一句话开始 Workshop：OriginMan 舞蹈 PPO 独立训练、Run 可视化直达、跨软件接续、曲线对比与仿真回放。",
   "author": {
     "name": "D-Robotics"
   },

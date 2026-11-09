@@ -31,6 +31,8 @@ import {
   COURSE_BRIEF_TOOL,
   courseBrief,
   TRAINING_CHOICE_TOOL,
+  ORIGINMAN_DANCE_DRAFT_TOOL,
+  originmanDanceDraft,
   trainingChoice,
   ORIGINMAN_COURSE,
   ORIGINMAN_COURSE_INSTRUCTIONS,
@@ -42,6 +44,7 @@ import { ROBOT_ONBOARDING_TOOLS, onboardingGuide, assessOnboarding } from './rob
 import { CLASSROOM_TOOLS, classroomGuide } from './classroom-guide.mjs';
 import { WORKSHOP_TOOLS, workshopEntry } from './workshop-entry.mjs';
 import { DEVELOPMENT_TARGET_TOOL, developmentTargets } from './development-targets.mjs';
+import { DANCE_TRAINING_TOOLS, trainOriginmanDance } from './dance-training.mjs';
 
 /** Learner text uses the same verified facts; full diagnostics remain structured. */
 export function experimentStudentReply(payload) {
@@ -74,6 +77,86 @@ export function experimentStudentReply(payload) {
       ? '[查看曲线、对比与回放](' + result.links.experiment + ')'
       : '下一步在工作台查看本次对比与回放。')
   );
+}
+
+function sameOriginDanceVideoUrl(baseUrl, candidate, runId) {
+  if (typeof candidate !== 'string' || candidate.length > 2048) return null;
+  try {
+    const base = new URL(baseUrl);
+    const video = new URL(candidate, base);
+    const expectedSuffix = `/api/v1/duck/runs/${encodeURIComponent(runId)}/dance-video`;
+    if (
+      !['http:', 'https:'].includes(video.protocol) ||
+      video.origin !== base.origin ||
+      video.username ||
+      video.password ||
+      video.search ||
+      video.hash ||
+      !video.pathname.endsWith(expectedSuffix)
+    )
+      return null;
+    return video;
+  } catch {
+    return null;
+  }
+}
+
+export function runVisualizationLink(baseUrl, runId, danceVideoUrl) {
+  if (typeof runId !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9_.-]{0,119}$/.test(runId)) return null;
+  let base;
+  try {
+    base = new URL(baseUrl);
+  } catch {
+    return null;
+  }
+  if (
+    !['http:', 'https:'].includes(base.protocol) ||
+    base.username ||
+    base.password ||
+    base.search ||
+    base.hash
+  )
+    return null;
+  base.pathname = base.pathname.replace(/\/+$/, '') + '/run-detail.html';
+  base.searchParams.set('runId', runId);
+  const video = sameOriginDanceVideoUrl(baseUrl, danceVideoUrl, runId);
+  if (video) base.searchParams.set('videoUrl', video.href);
+  return base.toString();
+}
+
+function attachRunVisualization(payload, runId, baseUrl) {
+  const url = runVisualizationLink(baseUrl, runId, payload.links?.danceVideo);
+  if (!url) return payload;
+  const rawStatus = payload.run?.status ?? payload.status ?? payload.submission?.status;
+  const status =
+    {
+      queued: '排队中',
+      running: '训练中',
+      completed: '已完成',
+      failed: '失败',
+      blocked: '已阻断',
+      cancelled: '已取消',
+    }[rawStatus] ?? '已提交';
+  const studentReply = payload.studentReply || `本轮训练${status}（Run ${runId}）。`;
+  return {
+    ...payload,
+    links: { ...payload.links, runDetail: url, workbench: url },
+    visualization: { runId, url, exactRunSelected: true },
+    qoderNavigation: {
+      surface: 'Qoder 内置浏览器',
+      steps: [
+        { tool: 'navigate_page', arguments: { url } },
+        { tool: 'list_pages', arguments: {} },
+        {
+          tool: 'select_page',
+          argumentsFrom: '按完整URL匹配刚打开的页面，使用实际pageId并传bringToFront:true。',
+        },
+      ],
+    },
+    studentReply: `${studentReply}\n[在机器人学习平台查看本轮运行](${url})`,
+    delivery:
+      '提交、等待或查询训练后，Qoder按qoderNavigation在内置浏览器打开并置前；其他宿主打开visualization.url。宿主不支持自动导航时展示studentReply中的可点击链接。run-detail.html直接按Run ID读取详情，不搜索或替换成其他运行。',
+  };
 }
 
 /** Text-only hosts need actionable references, while rich clients retain full structured data. */
@@ -116,6 +199,8 @@ const loadedSources = Object.fromEntries(
     'course-setup.mjs',
     'submission-journal.mjs',
     'workshop-course.mjs',
+    'originman-dance-config.mjs',
+    'dance-training.mjs',
     'workshop-entry.mjs',
     'development-targets.mjs',
     'playback-plan.mjs',
@@ -166,6 +251,8 @@ export const EXPERIENCE_TOOLS = [
   },
   COURSE_BRIEF_TOOL,
   TRAINING_CHOICE_TOOL,
+  ORIGINMAN_DANCE_DRAFT_TOOL,
+  ...DANCE_TRAINING_TOOLS,
   ...WORKSHOP_TOOLS,
   DEVELOPMENT_TARGET_TOOL,
   ...CLASSROOM_TOOLS,
@@ -215,6 +302,33 @@ export const EXPERIENCE_TOOLS = [
     annotations: { readOnlyHint: true, destructiveHint: false },
   },
 ];
+
+export function withDancePreview(payload, audience) {
+  const video = payload?.metrics?.originmanDance?.video;
+  const { danceVideo: _unverifiedDanceVideo, ...otherLinks } = payload?.links ?? {};
+  const withoutUnverifiedDanceVideo = payload?.links
+    ? { ...payload, links: otherLinks }
+    : { ...payload };
+  if (
+    payload?.status !== 'completed' ||
+    payload.mock !== false ||
+    typeof payload.runId !== 'string' ||
+    !video ||
+    video.file !== 'dance-replay.mp4' ||
+    !/^[a-f0-9]{64}$/.test(video.sha256 || '') ||
+    video.policySha256 !== payload.artifact?.sha256 ||
+    video.sourceReplaySha256 !== payload.metrics.originmanDance.replay?.sha256
+  )
+    return withoutUnverifiedDanceVideo;
+  const candidate = payload.links?.danceVideo ?? video.url;
+  const verifiedUrl = sameOriginDanceVideoUrl(audience, candidate, payload.runId);
+  if (!verifiedUrl) return withoutUnverifiedDanceVideo;
+  return {
+    ...withoutUnverifiedDanceVideo,
+    links: { ...otherLinks, danceVideo: verifiedUrl.href },
+    replayKind: 'simulation',
+  };
+}
 
 export function experienceProxy(
   upstream,
@@ -269,7 +383,12 @@ export function experienceProxy(
         nextAction: '本次运行已失败；停止训练流程，保留原Run和原因，不换机器、参数或实验标识重交。',
       };
     }
-    if (runId === workflow.evaluationRunId && status === 'completed') workflow.completed = true;
+    if (
+      (runId === workflow.evaluationRunId ||
+        (workflow.phase === 'dance' && runId === workflow.runId)) &&
+      status === 'completed'
+    )
+      workflow.completed = true;
     return value;
   };
   const reservedNames = new Set(EXPERIENCE_TOOLS.map((tool) => tool.name));
@@ -368,17 +487,18 @@ export function experienceProxy(
           '\n课堂新学员或新机离线准备：rdk_classroom_guide携带已知answers，只展示studentReply，每次一个中文问题，不重复问已知项。要求依据才detail=full。阶段标准读robot_onboarding_guide，证据读robot_acceptance_assess；needs-input不是通过。离线知识不要求平台登录，不因离线准备启动训练。' +
           '\n默认离线可了解课程，不主动授权、测试算力或连接板卡。需要账号才能继续时，提示“连接学习平台”，等用户明确要求连接才调用rdk_auth_login，浏览器确认后用rdk_auth_status。只在宿主已显式配置绑定账号时复用该身份，不索取密码或Cookie。' +
           '\n换学习平台账号用rdk_auth_switch_account。查看开发机先用rdk_development_targets list。用户明确选算力机开始Workshop时，按唯一名称匹配算力机ID，传rdk_workshop intent:new和computeResourceId。用户明确要求连接某台板卡时才按板卡列表匹配ID并用connect-board。名称有歧义时让用户选择，不在聊天收集凭据。' +
+          '\n任务意图优先：当前对话已明确OriginMan强化学习跳舞时，“带我开始/重新开始Workshop”沿 danceTraining 流程取得新 contextId并继续已确认编舞；不得展示旧实验结果或调用rdk_workshop、rdk_originman_train等受扰恢复链路。舞蹈继续/看看效果只查询原Run。提交、等待和状态查询回执的qoderNavigation/visualization必须打开并聚焦到本轮Run；宿主不支持导航时给可点击链接。' +
           '\n简短咨询预算用途、计数单位或流程/效果/回放完成标准：优先rdk_originman_course_brief，逐字展示studentReply两句即结束，不加载整份指南和历史证据。实际成绩另读原评测；明确问依据才按需读引用。不编造计数倍率。' +
           '\n交互约定：默认简短中文，按“当前进度→本次结果→下一步”回答。认证、版本、契约和资源校验在后台完成，正常时不逐项播报。只在阶段变化、阻断或需要用户选择时更新；不重复播报running，不展示内部推理。UUID、工具名、摘要和错误码仅在用户查看诊断时展开。正常结果优先给曲线、对比图和回放入口；宿主能打开工作台则在工作台展示，否则给可点击链接。没有实际渲染能力不伪装交互卡片，没有播放器观测不称已播放。' +
           '\n高级独立训练才使用预算选择与原子训练工具：按用户已选预算执行，不重复问。默认Workshop先rdk_workshop打开按钮工作台，在页面选择预算并自动接续；只咨询或先不要开始时不提交。高级手动提交仍核对当前账号、完整manifest、同源父Run与权重，失败不改标识重交。' +
           '\n等待：沿用同一Run及nextPollArguments，正常等待窗口结束继续读；不启动shell sleep。失败或stopWorkflow=true停止所有自动提交，不换标识、资源或参数重交；仍可只读查询原Run、日志及恢复已有引用。SUBMISSION_REFERENCE_SAVE_FAILED表示任务已经提交，保留回执并恢复，绝不能说尚未提交。' +
           '\n实验接续：通用流程提交后用明确contextId保存训练及同源评测引用；专用短训工具已保存，无需重复。跨聊天或软件继续时使用明确实验标识调用experiment_resume，并重新验证当前平台和账号；不选择全局最新Run，不扫描其他账号。本机引用不等于跨机器同步。404、网络失败和断线不触发重交。新实验使用新contextId，调参须用户明确提出。' +
-          '\n结果：只展示本次Run的真实original/tuned/rl对比；执行完成、质量提升和真机资格分别判断，短训不承诺提升。回放优先打开resume.links.experiment；旧平台打开links.workbench并按selection核对本次Run，再在页面播放器播放一次；不要直接导航媒体URL，OriginMan不调用真机rdk_replay_video或evaluationId接口；媒体链接不做正文抓取、HEAD、curl或独立浏览器认证探测。没有观测就报告播放待验证。一般流程用workflow_inspect按需看证据，不默认打印整张技术状态表；新训练前training_prepare刷新资源。默认GPU，CPU须明确选择，不自动降级、不操作真机。\n本次原生计算配置：' +
+          '\n结果：只展示本次Run的真实original/tuned/rl对比；执行完成、质量提升和真机资格分别判断，短训不承诺提升。提交、等待或状态查询新Run后立刻按回执的qoderNavigation在内置浏览器打开并置前，或使用visualization.url；没有导航能力时保留可点击链接。run-detail.html按Run ID读取详情，账号无权查看时明确提示，不改看全局最新Run。舞蹈回放须先通过本次策略和轨迹SHA核验，再由页面内播放器播放；不调用真机rdk_replay_video或evaluationId接口；媒体链接不做正文抓取、HEAD、curl或独立浏览器认证探测。没有观测就报告播放待验证。一般流程用workflow_inspect按需看证据，不默认打印整张技术状态表；新训练前training_prepare刷新资源。默认GPU，CPU须明确选择，不自动降级、不操作真机。\n本次原生计算配置：' +
           clientContext().nativeCompute.configuration +
           '。宿主接口缺失时不要要求已经在桌面中的用户重复“去桌面操作”；用指南中的 clientContext 说明实际缺口。' +
           ORIGINMAN_COURSE_INSTRUCTIONS +
           '\n用户明确要求助手自动播放已有结果时，保留0.5.5能力：按experiment_resume.playbackPlan使用内置页面工具，list_pages取实际pageId，select_page({pageId,bringToFront:true})，核对可见性与本次来源后只执行startScript一次，再观察真实时间推进与ended。计划不等于执行；禁止seek、伪造进度、改安全设置或重交任务。默认按钮课程仍由页面推进，不主动调用此高级计划。' +
-          '\n0.6按钮工作台入口优先于旧编排：用户说带我开始Workshop/开始课程时只调用rdk_workshop({intent:start})，继续/看看效果用continue/results。不要先调用旧预算问答或experience_guide；预算和后续步骤改在页面按钮选择。打开返回links.workshop，Qoder静默执行内置navigate_page→list_pages，按完整URL匹配真实pageId，再select_page({pageId,bringToFront:true})显示工作面，不能漏pageId；必要时提示产出→网页查阅，避免外部Browser Connector。保留高级工具，自由问答与用户明确的自定义训练不受本入口限制。' +
+          '\n默认受扰恢复课程仍由rdk_workshop({intent:start|continue|results})打开按钮工作台；但当前任务明确是OriginMan跳舞时，必须走独立danceTraining流程，不能让默认入口覆盖用户已说明的课程。恢复课不要先调用旧预算问答或experience_guide；预算和后续步骤改在页面按钮选择。打开返回links.workshop，Qoder静默执行内置navigate_page→list_pages，按完整URL匹配真实pageId，再select_page({pageId,bringToFront:true})显示工作面，不能漏pageId；必要时提示产出→网页查阅，避免外部Browser Connector。保留高级工具，自由问答与用户明确的自定义训练不受本入口限制。' +
           '\n普通Workshop回执：优先使用工具studentReply，默认入口不播报加载和打开过程，导航后仅一句中文加一个实验页链接。页面已显示曲线和对比时不重复抄技术表；账号、UUID、英文套件名、摘要、video字节和部署细节按用户明确要求再展开。正常完成后不再询问是否播放，能操作播放器就实际播放，否则明确待播放。只报告完成的四个主阶段；单变量调参是可选后续，不算本轮未完成项。',
       };
     }
@@ -478,6 +598,8 @@ export function experienceProxy(
         (['rdk_originman_short_evaluate', 'rdk_originman_evaluate'].includes(params.name) &&
           workflow.stopped) ||
         params.name === 'rdk_training_submit' ||
+        (params.name === 'rdk_originman_dance_train' &&
+          (workflow.stopped || params.arguments?.contextId !== workflow.contextId)) ||
         (workflow.stopped && params.name === 'rdk_model_register'))
     )
       return stoppedResult();
@@ -539,7 +661,21 @@ export function experienceProxy(
           payload = courseBrief(params.arguments ?? {});
         else if (params.name === 'rdk_originman_training_choice')
           payload = trainingChoice(params.arguments ?? {});
-        else if (params.name === 'rdk_classroom_guide')
+        else if (params.name === ORIGINMAN_DANCE_DRAFT_TOOL.name)
+          payload = originmanDanceDraft(params.arguments ?? {});
+        else if (DANCE_TRAINING_TOOLS.some((tool) => tool.name === params.name)) {
+          const catalog = await readCatalog(signal);
+          const call = async (name, args) =>
+            readToolResult(
+              await upstream.request('tools/call', { name, arguments: args }, { signal }),
+            );
+          payload = await trainOriginmanDance(params.arguments ?? {}, call, {
+            directory: contextDirectory,
+            defaultResourceId: env.RDK_WORKSHOP_COMPUTE_RESOURCE_ID,
+            readModels: upstream.readModels && (() => upstream.readModels({ signal })),
+            toolNames: catalog.tools.map((tool) => tool.name),
+          });
+        } else if (params.name === 'rdk_classroom_guide')
           payload = classroomGuide(params.arguments ?? {});
         else if (params.name === 'rdk_robot_onboarding_guide')
           payload = onboardingGuide(params.arguments ?? {});
@@ -678,6 +814,33 @@ export function experienceProxy(
                 'stopWorkflow=true停止新的写操作，不拼manifest或换工具重交。若回执明确submitted=true且有原runId，只读查询该Run并展示已有结果；未知提交不猜任务。多个资源仅按名称选择；宿主已配置课程资源时沿用它，不换机。',
               ],
             },
+            danceTraining: {
+              intent:
+                '学员明确要训练自定义舞蹈时，使用独立OriginMan dance PPO入口；不复用恢复课合同。',
+              manifestSource:
+                'originman-dance-manifest.json; 78 observations → 18 actions; local simulation only',
+              operation: {
+                contextId: operationId,
+                trainIdempotencyKey: operationId + '-train',
+                note: '同一本轮contextId用于一次提交与重连恢复；要开新一轮实验时重新取得contextId。',
+              },
+              tool: 'rdk_originman_dance_train',
+              parameters: {
+                defaultTrainingSteps: 500000,
+                bpmRange: [80, 140],
+                sectionTypes: ['alternating-arms', 'weight-shift', 'squat-rise', 'open-pose'],
+                beatsPerSection: [4, 8, 16],
+                maxSections: 8,
+                intensityRange: [0.25, 1],
+              },
+              steps: [
+                '保留学员用自然语言描述的舞段、顺序和节奏；如信息不足，只询问缺失的BPM或动作，不擅自追加动作。由助手把描述映射到有界sections。',
+                '调用rdk_originman_dance_train({contextId:operation.contextId,dance})。该工具校验独立模型契约、当前账号GPU资源和Worker engine list，使用相同幂等键提交一次；缺资源或引擎时停止。',
+                '提交后用rdk_training_wait沿返回runId查询至终态；训练期间可穿插其他Workshop动作。不要重复提交来查询进度。',
+                '终态后用rdk_training_status读取同一Run，报告质量门、各段风格评估、策略SHA和回放摘要；qualityGate未通过就明确未达标。出现links.danceVideo时打开本次仿真回放；实际播放由宿主验证。没有链接时说明未生成，不重复提交训练。',
+                '只仿真，不调用部署、board policy start或电机工具；历史舞蹈证据与当前Run分开。',
+              ],
+            },
             guide:
               '场景准备：OriginMan一句话短训练必须按shortTraining.steps调用专用编排工具；完整配方已在专用工具内固定，不要手工提交。其他场景按profile与当前工具能力准备。',
             profile: (() => {
@@ -799,7 +962,43 @@ export function experienceProxy(
               payload.training.status === 'completed' && payload.evaluation?.status === 'completed',
           };
         }
+        if (params.name === 'rdk_originman_dance_train') {
+          const runId = payload.submission?.runId;
+          if (runId) {
+            workflow = {
+              contextId: params.arguments.contextId,
+              runId,
+              phase: 'dance',
+              stopped: false,
+              completed: false,
+            };
+            payload = attachRunVisualization(
+              payload,
+              runId,
+              authentication?.audience ?? env.RDK_SIM2REAL_MCP_BASE_URL,
+            );
+          }
+        } else if (
+          SHORT_TRAINING_TOOLS.some((tool) => tool.name === params.name) ||
+          ['rdk_originman_short_train', 'rdk_originman_train'].includes(params.name)
+        ) {
+          const runId = payload.submission?.runId ?? payload.experiment?.training?.runId;
+          if (runId)
+            payload = attachRunVisualization(
+              payload,
+              runId,
+              authentication?.audience ?? env.RDK_SIM2REAL_MCP_BASE_URL,
+            );
+        }
         if (params.name === 'rdk_training_wait') payload = observe(payload, params.arguments.runId);
+        if (params.name === 'rdk_training_wait')
+          payload = withDancePreview(payload, authentication?.audience);
+        if (params.name === 'rdk_training_wait')
+          payload = attachRunVisualization(
+            payload,
+            params.arguments.runId,
+            authentication?.audience ?? env.RDK_SIM2REAL_MCP_BASE_URL,
+          );
         if (workflow?.stopped && params.name !== 'rdk_workshop')
           payload = {
             ...payload,
@@ -889,14 +1088,32 @@ export function experienceProxy(
       }
     }
     const response = await upstream.request(method, params, { signal });
-    if (
-      method === 'tools/call' &&
-      params.name === 'rdk_training_status' &&
-      workflow &&
-      !response.isError
-    ) {
-      const value = observe(readToolResult(response), params.arguments.runId);
-      if (value.stopWorkflow)
+    if (method === 'tools/call' && params.name === 'rdk_training_submit' && !response.isError) {
+      const value = readToolResult(response);
+      const runId = value.submission?.runId ?? value.runId ?? value.run?.id;
+      const attached = attachRunVisualization(
+        value,
+        runId,
+        authentication?.audience ?? env.RDK_SIM2REAL_MCP_BASE_URL,
+      );
+      if (attached.visualization)
+        return {
+          ...response,
+          structuredContent: attached,
+          content: [{ type: 'text', text: JSON.stringify(attached) }],
+        };
+    }
+    if (method === 'tools/call' && params.name === 'rdk_training_status' && !response.isError) {
+      let value = withDancePreview(
+        observe(readToolResult(response), params.arguments.runId),
+        authentication?.audience,
+      );
+      value = attachRunVisualization(
+        value,
+        params.arguments.runId,
+        authentication?.audience ?? env.RDK_SIM2REAL_MCP_BASE_URL,
+      );
+      if (value.stopWorkflow || value.links?.danceVideo || value.visualization)
         return {
           ...response,
           structuredContent: value,
