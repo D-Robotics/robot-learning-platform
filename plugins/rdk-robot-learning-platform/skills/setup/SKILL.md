@@ -5,6 +5,8 @@ description: 连接当前机器人学习平台，确认正式身份与明确模�
 
 用户说“带我开始 Workshop”“继续”或“看看效果”时优先使用 `rdk_workshop`，打开带按钮的工作台；不要先问预算或启动旧多工具编排。课程入口见 [体验流程](../experience-preparation/SKILL.md)。高级操作仍按用户明确请求处理。
 
+插件安装、自然语言入口、全部 Skill 与 MCP 工具的用户说明见[插件使用手册](../../references/user-guide.md)。
+
 
 只咨询预算用途、计数单位或完成标准时，直接调用 `rdk_originman_course_brief`，逐字展示返回的两句 `studentReply` 后结束，不再读指南、目录或历史证据；用户明确追问依据再按需读引用。不能推算或编造计数倍率。
 
