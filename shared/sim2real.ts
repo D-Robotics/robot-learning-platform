@@ -144,11 +144,14 @@ export const SIM2REAL_PRODUCT_PROFILES: Readonly<Record<Sim2RealRobotId, Sim2Rea
     },
     custom: {
       id: 'custom',
-      displayName: '通用 RDK 设备',
+      displayName: '自定义机器人',
       contractMode: 'manifest-defined',
       contractIdPrefix: 'custom-policy-',
-      targetPlatforms: ['rdk-x5', 'rdk-s100'],
-      accessories: ['imu', 'odom', 'battery', 'twist'],
+      // Hardware compatibility is owned by the selected device adapter and
+      // artifact target. An empty allowlist means no vendor restriction here;
+      // unknown targets still fail closed in the compatibility adapter.
+      targetPlatforms: [],
+      accessories: [],
     },
   });
 
@@ -1678,9 +1681,9 @@ export function validateSim2RealManifest(input: unknown): Sim2RealValidationResu
 
   const robot = record(source.robot);
   const robotId = safeText(robot.id, 40);
-  const variant = safeText(robot.variant, 16) as Sim2RealRobotVariant;
+  const variant = safeText(robot.variant, robotId === 'custom' ? 64 : 16) as Sim2RealRobotVariant;
   if (!ALLOWED_ROBOT_IDS.has(robotId as Sim2RealRobotId)) {
-    errors.push('robot.id must be microduck, rdk-duck, or originbot');
+    errors.push('robot.id must be microduck, rdk-duck, originbot, or custom');
   }
   if (robotId === 'microduck' && !ALLOWED_VARIANTS.has(variant)) {
     errors.push('robot.variant must be legs, rollers, or both for microduck');
@@ -1887,7 +1890,9 @@ export function validateSim2RealManifest(input: unknown): Sim2RealValidationResu
     version,
     robot: {
       id: productId,
-      variant: variant || (productId === 'microduck' ? 'legs' : 'x5-kit'),
+      variant:
+        variant ||
+        (productId === 'microduck' ? 'legs' : productId === 'custom' ? 'default' : 'x5-kit'),
     },
     contract: normalizedContract,
     simulator: {

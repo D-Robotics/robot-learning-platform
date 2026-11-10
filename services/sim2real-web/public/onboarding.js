@@ -1,18 +1,11 @@
 (() => {
   const STORAGE_KEY = 'rdk-duck-lab-onboarding-v1';
   const steps = [
-    { target: '#product-select', view: 'overview', kicker: '01 / 12 · 项目', title: '先选择产品线', body: '在左侧产品选择器选择要使用的机器人、仿真器或硬件适配器。选择后，仿真、模型契约、设备和发布状态都会切换到对应产品线。', best: '不同产品线可以有不同观测和动作契约；平台会按适配器显示可用能力。', time: '约 10 秒' },
-    { target: '[data-view-target="station"]', view: 'station', kicker: '02 / 12 · 服务器与设备', title: '按需要连接算力和设备', body: '浏览器仿真和本地回放可以直接开始。需要训练或上板时，再在设备控制台登记算力和目标设备，完成连接预检；每项依赖会单独显示状态。', best: '先体验最小任务；真实训练和设备部署再补齐对应依赖。', time: '约 1 分钟' },
-    { target: '#task-select', view: 'simulate', kicker: '03 / 12 · 仿真', title: '选择适配器支持的任务', body: '在仿真页选择当前产品线支持的任务。轨迹会进入统一数据契约，后续可回放、评测和对照真实设备。', best: '先用一个最小任务跑通，再扩展视觉和复杂场景。', time: '约 20 秒' },
-    { target: '[data-view-target="simulate"]', view: 'simulate', kicker: '04 / 12 · 录制', title: '录制一段可复现轨迹', body: '运行仿真并录制轨迹。录制结果必须显示来源、版本和 synthetic/mock 标记，不能把仿真证据当成真实设备证据。', best: '建议先录制 30–60 秒稳定轨迹，并立即回放确认。', time: '约 1 分钟' },
-    { target: '#model-select', view: 'train', kicker: '05 / 12 · 模型', title: '确认模型与契约', body: '训练页选择当前产品线的模型，确认 observation/action shape、目标平台和数据来源。契约不匹配时，后续加载会被阻断。', best: '模型版本、manifest 和数据集版本必须一起保存。', time: '约 30 秒' },
-    { target: '[data-view-target="train"]', view: 'train', kicker: '06 / 12 · GPU 训练', title: '选择引擎与数据后训练', body: '按任务选择 CPU 或 GPU worker，先执行冒烟再正式训练。ACT / Diffusion Policy 需选择已保存的完整示教 Run；合成数据只能明确用于冒烟。训练指标与制品会记录来源。', best: 'mock=true 的结果只能验证协议，不能进入发布。', time: '约 1–5 分钟' },
-    { target: '[data-view-target="evaluate"]', view: 'evaluate', kicker: '07 / 12 · 评测', title: '回放并对照原始证据', body: '在评测页导入或选择 Run，相机、奖励、观测、动作和事件共用时间轴。结果对比支持加载两条轨迹；缺图像、单位或奖励分项会直接说明。', best: '不要跳过评测直接部署。', time: '约 1 分钟' },
-    { target: '[data-view-target="deploy"]', view: 'deploy', kicker: '08 / 12 · 编译', title: '编译目标运行时制品', body: '部署页根据当前设备 profile 检查 ONNX、编译器版本、目标架构、校准集和 SHA-256。工具链缺失或制品不匹配时，平台不会伪造成功。', best: '保留编译日志和 artifact digest。', time: '约 1–3 分钟' },
-    { target: '#device-select', view: 'deploy', kicker: '09 / 12 · 加载', title: '加载到目标设备', body: '选择已登记的目标设备，上传并校验制品，然后由对应运行时加载和 forward。只读加载不会启动执行器。', best: '确认设备 profile、provider、shape 和 lastError 均符合当前适配器契约。', time: '约 30 秒' },
-    { target: '[data-view-target="deploy"]', view: 'deploy', kicker: '10 / 12 · 低速验收', title: '执行低速策略验收', body: '现场确认安全区域、急停和速度上限后，才进入低速 canary。运行时间、速度、推理延迟和自动 stop 都会记录。', best: '第一轮建议不超过 0.05 m/s、1–2 秒。', time: '约 1 分钟' },
-    { target: '[data-view-target="records"]', view: 'records', kicker: '11 / 12 · 证据', title: '检查发布证据', body: '记录页查看训练、编译、加载、遥测和 stop 证据。任何 mock、synthetic、stale telemetry 或未完成评测都会阻断发布。', best: '发布前确认所有证据来自同一模型和设备版本。', time: '约 1 分钟' },
-    { target: '#agent-floating-toggle', view: null, kicker: '12 / 12 · Agent', title: '让 Agent 编排下一步', body: '右下角 Agent 可以按当前阻塞项生成下一步计划，并调用服务器、设备和训练工具。危险动作始终需要人工确认。', best: '直接说“检查 OriginBot 并继续到下一步”即可。', time: '随时可用' },
+    { target: '#product-select', view: 'overview', kicker: '01 / 05 · 机器人', title: '选择机器人档案', body: '选择内置参考机器人，或选择自定义机器人并登记自己的契约。', best: '自定义机器人需要对应的仿真、训练或设备适配器；未支持的能力会明确标出。', time: '约 10 秒' },
+    { target: '#task-select', view: 'simulate', kicker: '02 / 05 · 数据', title: '准备数据或场景', body: '选择当前适配器提供的任务和仿真场景。没有仿真时，可沿用已有数据和训练环境。', best: '先跑通一个最小任务，再增加传感器和场景复杂度。', time: '约 30 秒' },
+    { target: '[data-view-target="train"]', view: 'train', kicker: '03 / 05 · 训练', title: '绑定契约并训练', body: '确认观测、动作、数据和训练引擎与机器人档案匹配，再选择算力提交 Run。', best: '训练结果会绑定具体契约和来源；Mock 只验证流程，不代表真实学习。', time: '约 1 分钟' },
+    { target: '[data-view-target="evaluate"]', view: 'evaluate', kicker: '04 / 05 · 结果', title: '检查结果和证据', body: '查看指定 Run 的指标、回放和数据来源；训练完成本身不代表质量达标。', best: '使用同一模型、任务和评测条件进行对比。', time: '约 1 分钟' },
+    { target: '[data-view-target="deploy"]', view: 'deploy', kicker: '05 / 05 · 交付', title: '通过设备适配与预检', body: '在“更多”中管理设备和算力。目标设备须有对应适配器，通过兼容性和安全检查后才可发布。', best: '连接、预检和执行是不同阶段；每一步都保留可核验记录。', time: '约 1 分钟' },
   ];
   let index = 0, overlay = null, spotlight = null, card = null, lastFocus = null;
   // 指引声明了 role="dialog" aria-modal="true"，所以必须真的把背景隔离掉：

@@ -3122,7 +3122,7 @@ components:
     ProductId:
       in: query
       name: productId
-      schema: { type: string, enum: [microduck, rdk-duck] }
+      schema: { type: string, enum: [microduck, rdk-duck, originbot, custom] }
     IdempotencyKey:
       in: header
       name: Idempotency-Key
@@ -3865,7 +3865,7 @@ components:
       required: [id, robotId, jointCount, observationSize, actionSize, controlHz, physicsTimestepSeconds, decimation, observationLayout]
       properties:
         id: { type: string }
-        robotId: { type: string, enum: [microduck, rdk-duck, originbot] }
+        robotId: { type: string, enum: [microduck, rdk-duck, originbot, custom] }
         jointCount: { type: integer, minimum: 1, maximum: 256 }
         observationSize: { type: integer, minimum: 1, maximum: 4096 }
         actionSize: { type: integer, minimum: 1, maximum: 4096 }
@@ -3903,7 +3903,7 @@ components:
         modelId: { type: string }
         displayName: { type: string }
         version: { type: string }
-        robot: { type: object, required: [id, variant], properties: { id: { type: string, enum: [microduck, rdk-duck, originbot] }, variant: { type: string } } }
+        robot: { type: object, required: [id, variant], properties: { id: { type: string, enum: [microduck, rdk-duck, originbot, custom] }, variant: { type: string, description: "For custom robots, use a stable hardware or profile identifier; compatibility is determined by registered adapters." } } }
         contract: { $ref: "#/components/schemas/Contract" }
         simulator: { type: object, required: [backends, policyArtifactId], additionalProperties: true }
         artifacts: { type: array, minItems: 1, items: { $ref: "#/components/schemas/Artifact" } }
@@ -4000,7 +4000,7 @@ components:
       properties:
         id: { type: string }
         modelId: { type: string }
-        productId: { type: string, enum: [microduck, rdk-duck] }
+        productId: { type: string, enum: [microduck, rdk-duck, originbot, custom] }
         contractId: { type: string }
         taskId: { type: string }
         projectId: { type: string }
@@ -4289,7 +4289,7 @@ components:
         schemaVersion: { type: integer, const: 1 }
         identity: { type: [object, "null"], additionalProperties: true }
         productProfiles: { type: array, items: { type: object, additionalProperties: true } }
-        selectedProductId: { type: string, enum: [microduck, rdk-duck] }
+        selectedProductId: { type: string, enum: [microduck, rdk-duck, originbot, custom] }
         selectedContract:
           oneOf:
             - $ref: "#/components/schemas/Contract"

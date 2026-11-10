@@ -52,9 +52,9 @@ const PRODUCT_PROFILES = Object.freeze({
   },
   custom: {
     id: 'custom',
-    displayName: '通用 RDK 设备',
-    projectName: '通用 RDK 设备 · 自定义契约',
-    kitName: '任意 RDK 板卡 + 差速底盘/自定义执行器',
+    displayName: '自定义机器人',
+    projectName: '自定义机器人 · 通用契约',
+    kitName: '自定义设备与控制适配器',
     contractId: 'custom-policy-v1',
     simulatorPath: '',
   },
@@ -332,7 +332,7 @@ function renderContextLive() {
   renderFlowBanner();
   // 浏览器标签页标题跟随位置：11 个流程子项共用 8 个视图，若标题固定，
   // 多开标签页时无法分辨各自停在哪个节点。
-  document.title = `${stageLabel} · RDK Robot Learning Platform`;
+  document.title = `${stageLabel} · Robot Learning Platform`;
   setText(
     'context-live-model',
     model ? modelLabel(model) : (state.overview?.models?.length ? '未选择' : '暂无模型'),
@@ -343,7 +343,7 @@ function renderContextLive() {
   );
   setText(
     'context-live-device',
-    device ? device.name || device.id : (state.overview?.devices?.length ? '未选择' : '暂无板卡'),
+    device ? device.name || device.id : state.overview?.devices?.length ? '未选择' : '暂无设备',
   );
   if (activeRuns.length === 1) {
     setText('context-live-runs', '1 个任务 · ' + statusLabel(activeRuns[0].status));
@@ -606,8 +606,8 @@ function renderPlatformScorecard() {
   }
   const note = $('platform-scorecard-note');
   if (note) note.textContent = points === 10
-    ? '软件闭环已具备完整证据；真实 X5 运动安全记录仍需现场验收。'
-    : '完成上面的下一步即可提高软件门槛；真实 X5 运动安全记录和签名制品会单独计入现场验收。';
+    ? '软件闭环证据已齐；真实设备行为仍需在目标硬件上单独验收。'
+    : '完成上面的下一步即可补齐软件证据；设备行为和签名制品仍需按目标硬件验收。';
 }
 
 function renderProjectWorkspace() {
@@ -631,10 +631,10 @@ function renderProjectWorkspace() {
   setText('workspace-dataset-meta', hasTelemetry ? `${currentTelemetry()?.summary?.sampleCount || 0} 帧 · 可进入评测` : datasetCount ? '可在评测中复用' : '导入证据后生成摘要');
   if (deployment) {
     setText('workspace-deploy-status', statusLabel(deployment.status));
-    setText('workspace-deploy-meta', `${deployment.targetPlatform || 'RDK X5'} · ${formatDate(deployment.updatedAt || deployment.createdAt)}`);
+    setText('workspace-deploy-meta', `${deployment.targetPlatform || '目标设备'} · ${formatDate(deployment.updatedAt || deployment.createdAt)}`);
   } else {
     setText('workspace-deploy-status', '尚未部署');
-    setText('workspace-deploy-meta', counts.devices ? '目标板卡已登记，等待预检' : '登记目标板卡后开始');
+    setText('workspace-deploy-meta', counts.devices ? '目标设备已登记，等待预检' : '登记目标设备后开始');
   }
   const recentRoot = $('workspace-recent-list');
   if (recentRoot) {
@@ -650,7 +650,7 @@ function renderProjectWorkspace() {
     recentRoot.replaceChildren();
     if (!recent.length) {
       recentRoot.innerHTML = project // escape-audit:allow both branches are fixed local literals
-        ? '<div class="empty-state project-empty"><strong>项目还没有活动</strong><span>先在训练页绑定模型，再开始仿真、强化学习训练或只读预检。</span><button type="button" class="button button-primary button-small" data-workspace-view="train">去准备模型 →</button></div>'
+        ? '<div class="empty-state project-empty"><strong>项目还没有活动</strong><span>先在训练页绑定模型，再准备数据、训练策略或检查目标设备。</span><button type="button" class="button button-primary button-small" data-workspace-view="train">去准备模型 →</button></div>'
         : '<span class="empty-inline">还没有活动。完成一次仿真、训练或预检后会显示在这里。</span>';
     } else {
       for (const item of recent) {
@@ -697,12 +697,12 @@ function renderDeploymentTimeline() {
           ? statusLabel(latest.status)
           : '需要一次训练或评测 Run';
   const deviceState = device?.status === 'connected' || device?.status === 'ready' ? 'done' : device ? 'attention' : 'pending';
-  const deviceDetail = device ? `${device.name || device.id} · ${device.status || '待连接'}${device.status === 'connected' ? ' · 仍需验证 BoardAgent 心跳' : ''}` : '尚未选择目标设备';
+  const deviceDetail = device ? `${device.name || device.id} · ${device.status || '待连接'}${device.status === 'connected' ? ' · 仍需验证设备适配器心跳' : ''}` : '尚未选择目标设备';
   const preflightState = deployment && ['ready', 'completed'].includes(String(deployment.status || '')) ? 'done' : deployment ? 'attention' : 'pending';
   const approvalState = deployment?.approval?.status || 'pending';
   const approvalDetail = deployment
     ? approvalState === 'approved'
-      ? '人工审批已通过 · 等待受控 BoardAgent 执行'
+      ? '人工审批已通过 · 等待受控设备适配器执行'
       : approvalState === 'rejected'
         ? `人工审批已拒绝${deployment.approval?.note ? ' · ' + deployment.approval.note : ''}`
         : '等待 owner/admin 人工审批；网页不会直接启动执行器'
@@ -1506,9 +1506,9 @@ function setActionHint(id, stateName, message) {
 const VIEW_ANNOUNCEMENTS = {
   overview: '工作台',
   simulate: '仿真与录制',
-  train: '强化学习训练',
+  train: '训练与策略',
   resources: 'GPU 与算力资源',
-  evaluate: 'Sim2Real 评测',
+  evaluate: '结果与评测',
   deploy: '部署与反馈',
   records: '证据与记录',
   station: '设备控制台',
@@ -2163,7 +2163,7 @@ const FLOW_CHILD_CONTEXTS = {
   comparison: { kicker: '03 · 评测与证据', title: '结果对比', description: '比较最近 Run 的成功率、奖励和跌倒率趋势。', view: 'evaluate', evalModule: 'comparison', focus: '#evaluation-comparison-panel' },
   'evaluation-evidence': { kicker: '03 · 评测与证据', title: '全部证据', description: '查看轨迹、训练、评测、制品和部署记录，保留完整证据链。', view: 'records', recordTab: 'all', focus: '#history-list' },
   devices: { kicker: '04 · 设备与发布', title: '设备管理', description: '登记设备、建立受控连接并查看设备能力。', view: 'station', stationModule: 'devices', focus: '#station-device-manager' },
-  preflight: { kicker: '04 · 设备与发布', title: '预检与发布', description: '生成并执行只读预检，确认制品可以进入目标板卡。', view: 'deploy', deployModule: 'preflight', focus: '#preflight-panel' },
+  preflight: { kicker: '04 · 设备与发布', title: '预检与发布', description: '生成并执行只读预检，确认制品与目标设备兼容。', view: 'deploy', deployModule: 'preflight', focus: '#preflight-panel' },
   feedback: { kicker: '04 · 设备与发布', title: '运行反馈与回滚', description: '查看上线闸门、部署时间线和可回滚版本。', view: 'deploy', deployModule: 'feedback', focus: '#feedback-panel' },
 };
 
@@ -2544,7 +2544,7 @@ function syncStationDeviceForm() {
   const hostInput = $('station-device-host');
   if (hostInput) {
     hostInput.placeholder = bridge
-      ? 'Bridge 中的板卡 IP 或主机名'
+      ? 'Bridge 中的设备 IP 或主机名'
       : '例如 board-host.example.internal';
   }
   const add = $('station-device-add');
@@ -2569,7 +2569,7 @@ function syncStationDeviceForm() {
     'station-device-transport-note',
     bridge
       ? 'Local Bridge 设备会出现在下方列表；无需填写地址或 SSH，直接点击设备卡片上的“连接”。'
-      : '服务器直连板卡时使用；密码只用于本次建档。',
+      : '服务器直连设备时使用；密码只用于本次建档。',
   );
 }
 
@@ -2919,7 +2919,7 @@ function renderSelects() {
       deviceSelect,
       devices.length
         ? devices.map((device) => ({ value: device.id, textContent: device.name || device.id }))
-        : [{ value: '', textContent: '没有已登记的板卡' }],
+        : [{ value: '', textContent: '没有已登记的设备' }],
       state.selectedDeviceId,
     );
   }
@@ -2939,7 +2939,7 @@ function renderSelects() {
     );
   }
   setText('model-count', models.length + ' 个 ' + selectedProductProfile().displayName + ' 模型');
-  setText('device-count', devices.length + ' 块板卡');
+  setText('device-count', devices.length + ' 台设备');
   renderProjectContext();
 }
 
@@ -3324,7 +3324,7 @@ function renderIntegrations() {
       : localAuthReady
       ? local.mock
         ? '运行 Mock 协议演示'
-        : '发起本地强化学习训练'
+        : '发起本地训练'
       : localConfigured
         ? '修复本地训练 worker'
         : '登记本地训练 worker',
@@ -3332,11 +3332,11 @@ function renderIntegrations() {
   const localRunButton = $('local-run-button');
   if (localRunButton) {
     localRunButton.title = selectedResourceReady
-      ? '向已测试的 GPU 训练资源提交 PPO / SAC 任务'
+      ? '向已测试的 GPU 训练资源提交兼容的训练任务'
       : local.mock
       ? '仅验证训练协议和运行台账，不生成可部署模型'
       : localAuthReady
-        ? '向已配置的本地强化学习 worker 提交 PPO / SAC 任务'
+        ? '向已配置的本地训练 worker 提交任务'
         : localConfigured
           ? '本地 worker 已登记，但认证配置未就绪；请补充至少 32 字节随机 bearer token'
           : '当前没有可用的本地强化学习 worker';
@@ -3431,18 +3431,18 @@ function renderIntegrations() {
         ? ['blocked', '台账不可写；训练和登记操作已阻断，请先配置共享存储。']
         : !hasRunnablePath
           ? ['blocked', '没有可用的训练后端；先接入本地 Worker、GPU 资源或 RoboGo。']
-          : ['ready', '模型已就绪：可选择浏览器回放，或提交本地 / RoboGo 强化学习训练。'];
+          : ['ready', '模型已就绪：可选择回放，或提交兼容的本地 / RoboGo 训练任务。'];
   setActionHint('run-action-hint', actionHint[0], actionHint[1]);
   const deployHint = !overviewReady
-    ? '正在读取设备和 BoardAgent 状态…'
+    ? '正在读取设备适配器状态…'
     : !model
     ? '先在训练页登记模型契约。'
     : !device
-      ? '先到设备控制台登记并选择目标板卡。'
+      ? '先到设备管理中登记并选择目标设备。'
       : !targetDeployment
-        ? '模型和板卡已选择；点击“生成预检计划”开始只读检查。'
+        ? '模型和设备已选择；点击“生成预检计划”开始只读检查。'
         : boardAgent.available !== true
-          ? `预检计划已生成，但当前 BoardAgent 不可用：${boardAgent.reason || '请在部署环境接入 agent'}`
+          ? `预检计划已生成，但设备适配器不可用：${boardAgent.reason || '请在部署环境接入适配器'}`
           : targetReady
             ? '只读预检已通过；Canary / Live 仍需要人工批准和安全开关。'
             : '预检计划已生成；点击“执行只读预检”查看兼容性结果。';
@@ -3467,15 +3467,15 @@ function renderIntegrations() {
     const canDetect = Boolean(selectedDevice()) && boardAgent.available === true;
     detectButton.disabled = !canDetect;
     detectButton.title = canDetect
-      ? '通过受控 BoardAgent 读取板型'
-      : boardAgent.reason || '当前部署未接入 BoardAgent';
+      ? '通过设备适配器读取设备能力'
+      : boardAgent.reason || '当前部署未接入设备适配器';
   }
   const preflightButton = $('preflight-button');
   if (preflightButton) {
     preflightButton.disabled =
       state.deploymentSubmitting || !targetDeployment || boardAgent.available !== true;
     preflightButton.title =
-      boardAgent.reason || '先生成预检计划，并在部署环境接入 BoardAgent';
+      boardAgent.reason || '先生成预检计划，并在部署环境接入设备适配器';
   }
   for (const id of ['contract-run-button', 'local-run-button', 'robogo-run-button']) {
     $(id)?.toggleAttribute('disabled', state.runSubmitting || !model);
@@ -3587,8 +3587,8 @@ function renderIntegrations() {
   // the task selector note, or the task switch reads as a no-op.
   const sceneNote = $('simulator-scene-note');
   if (sceneNote) sceneNote.hidden = !selectedTask().scene;
-  setText('status-board', device ? device.boardPlatform || '待探测板型' : '尚未选择板卡');
-  setText('status-board-detail', device ? device.status || '设备状态未知' : '真机流程需要先连接设备');
+  setText('status-board', device ? device.boardPlatform || '待检查设备能力' : '尚未选择设备');
+  setText('status-board-detail', device ? device.status || '设备状态未知' : '设备交付需要先连接目标设备');
   setText('status-board-action', device ? '打开设备管理 →' : '去连接设备 →');
   const boardIcon = $('status-board-icon');
   if (boardIcon) {
@@ -3601,10 +3601,10 @@ function renderIntegrations() {
           : 'status-icon-orange',
     );
     boardIcon.title = targetReady
-      ? '只读板端预检已通过'
+      ? '只读设备预检已通过'
       : device?.boardPlatform
-        ? '板型已探测，等待只读预检'
-        : '尚未探测板型';
+        ? '设备能力已检查，等待只读预检'
+        : '尚未检查设备能力';
   }
 
   const robogoBadge = $('robogo-state-badge');
@@ -3778,9 +3778,24 @@ function renderTaskEngineCompatibility() {
 function renderModel() {
   const model = selectedModel();
   const product = selectedProductProfile();
-  setText('train-onboarding-model-help', `载入 ${product.displayName} 默认模板并登记`);
-  setText('train-onboarding-title', `${product.displayName} · 按 3 步完成一次强化学习训练`);
-  setText('contract-panel-tip', `推荐：载入 ${product.displayName} 模板 → 校验 → 登记`);
+  const customRobot = product.id === 'custom';
+  setText(
+    'train-onboarding-model-help',
+    customRobot ? '填写自定义机器人的真实契约并登记' : `载入 ${product.displayName} 默认模板并登记`,
+  );
+  setText('train-onboarding-title', `${product.displayName} · 按 3 步完成一次训练`);
+  setText(
+    'contract-panel-tip',
+    customRobot
+      ? '模板只提供结构；请补齐真实契约、训练执行器和目标设备适配器后再校验。'
+      : `推荐：载入 ${product.displayName} 模板 → 校验 → 登记`,
+  );
+  setText(
+    'manifest-first-run-help',
+    customRobot
+      ? '自定义模板有意留空；填写真实契约和适配器能力后，先校验再登记。'
+      : '第一次使用：点击“载入模板”，然后依次点击“校验清单”和“登记版本”。',
+  );
   setText('template-button', `载入 ${product.displayName} 模板`);
   const summary = $('model-summary');
   const artifacts = $('artifact-list');
@@ -3892,13 +3907,13 @@ function renderModel() {
         )
         .join('');
       const blockedNote = blockedBoards.length
-        ? `<span class="compatibility-note">其余 ${escapeHtml(String(blockedBoards.length))} 个板卡未登记兼容目标</span>`
+        ? `<span class="compatibility-note">其余 ${escapeHtml(String(blockedBoards.length))} 个设备未登记兼容目标</span>`
         : '';
-      summary.innerHTML = `<span class="compatibility-summary-label">可上板</span>${chips}${blockedNote}`; // escape-audit:allow chips/blockedNote are built only from escapeHtml-wrapped values and a fixed label
+      summary.innerHTML = `<span class="compatibility-summary-label">兼容设备</span>${chips}${blockedNote}`; // escape-audit:allow chips/blockedNote are built only from escapeHtml-wrapped values and a fixed label
     } else {
       summary.innerHTML =
-        '<span class="compatibility-summary-label">暂无可上板卡</span>' +
-        '<span class="compatibility-note">当前模型未登记任何兼容的板端目标</span>';
+        '<span class="compatibility-summary-label">暂无兼容设备</span>' +
+        '<span class="compatibility-note">当前模型未登记任何目标设备的兼容信息</span>';
     }
     compatibility.append(summary);
 
@@ -3916,7 +3931,7 @@ function renderModel() {
         })
         .join('');
       detail.innerHTML =
-        `<summary>各板卡未兼容原因（${escapeHtml(String(distinctReasons.length))}）</summary><ul class="compatibility-reasons">` +
+        `<summary>各设备未兼容原因（${escapeHtml(String(distinctReasons.length))}）</summary><ul class="compatibility-reasons">` +
         reasonLines +
         '</ul>'; // escape-audit:allow reasonLines is built only from escapeHtml-wrapped values
       compatibility.append(detail);
@@ -3993,10 +4008,10 @@ function renderBoard() {
   if (!summary) return;
   if (!device) {
     summary.innerHTML =
-      '<div class="empty-state board-empty"><strong>还没有目标板卡</strong><span>部署只会读取设备状态；先登记一块板卡，再生成只读预检计划。</span><button type="button" class="button button-ghost button-small" data-workspace-view="station">去设备管理登记 →</button></div>';
+      '<div class="empty-state board-empty"><strong>还没有目标设备</strong><span>预检只会读取设备状态；先登记目标设备，再生成只读预检计划。</span><button type="button" class="button button-ghost button-small" data-workspace-view="station">去设备管理登记 →</button></div>';
     return;
   }
-  const platform = device.boardPlatform || '待探测';
+  const platform = device.boardPlatform || '待检查设备能力';
   const reachable = device.sshReachability || device.status || 'unknown';
   const deployment =
     state.activeDeployment ||
@@ -4035,14 +4050,14 @@ function renderBoard() {
       deployment?.reason ||
       blocker?.detail ||
       (String(deployment?.compatibility?.status || '') === 'requires-conversion'
-        ? '源策略是 ONNX 中间表示，目标板卡需要编译后的运行时制品'
+        ? '源策略是 ONNX 中间表示，目标设备需要适配的运行时制品'
         : '')
     );
   })();
   const blockedReason = preflightReady
-    ? '只读预检已通过；执行动作仍由受控 BoardAgent 和人工批准保护。'
+    ? '只读预检已通过；设备执行仍由适配器和人工批准保护。'
     : preflightState.key === 'undetected'
-      ? '先点击“探测板型”，确认目标设备与契约匹配。'
+      ? '先检查设备能力，确认目标设备与契约匹配。'
       : preflightState.key === 'unplanned'
         ? '先生成预检计划，再执行只读检查。'
         : preflightState.key === 'blocked'
@@ -6985,7 +7000,7 @@ function renderEvaluation() {
       ? '以下遥测来自页面内置合成样例；即使完成协议评测，也不代表真实仿真成功率或 X5 实测结果。'
       : unverifiedEvidence
         ? '评测摘要可以查看和回放，但 source 由上传方声明、当前未验证；需要真实 worker 指标或显式 attested replay 才能推进发布。'
-      : '真实成功率、跌倒率和延迟需要训练 worker 或 X5 Agent 回写指标；平台不会用默认值冒充评测结果。',
+      : '真实成功率、跌倒率和延迟需要训练执行器或设备适配器回写指标；平台不会用默认值冒充评测结果。',
   );
   setText(
     'eval-contract',
@@ -7355,7 +7370,7 @@ async function originbotCompareRefresh() {
       setText('ob-compare-voltage', '无数据');
       setText('ob-compare-heading', '无数据');
       setText('ob-compare-odom', '无数据');
-      setText('ob-compare-source', `板卡离线 · ${String(payload.message || '等待实体板卡接入')}`);
+      setText('ob-compare-source', `设备离线 · ${String(payload.message || '等待实体设备接入')}`);
       return;
     }
     const status = payload?.status || {};
@@ -7429,24 +7444,32 @@ function renderNextAction() {
   const hasEvaluation = hasRealEvaluation(evidence, latest);
   const releaseGradeEvidence = hasReleaseGradeEvidence(evidence, latest);
   const deployments = deploymentsForCurrentModel();
-  let view = 'simulate';
-  let title = '先在仿真里验证「' + selectedTask().label + '」';
-  let copy = selectedTask().hint + '。回放用于验证策略，强化学习训练可直接选择本地 GPU 或 RoboGo 提交。';
-  let label = '进入仿真与录制 →';
+  const customRobot = state.productId === 'custom';
+  let view = customRobot ? 'train' : 'simulate';
+  let title = customRobot ? '先登记机器人契约' : '先验证「' + selectedTask().label + '」';
+  let copy = customRobot
+    ? '登记观测、动作和目标运行时；仿真、训练和设备交付由对应适配器提供。'
+    : selectedTask().hint + '。可在仿真中检查动作，再选择本地 GPU 或云端训练。';
+  let label = customRobot ? '配置机器人档案 →' : '进入仿真与录制 →';
   // Zero-friction first contact: anonymous visitors get the playable simulator
   // as the primary CTA instead of an auth wall. Training history, evaluation
   // evidence and device deployment need an account; exploring the physics
   // sandbox does not.
-  if (state.authRequired) {
+  if (state.authRequired && customRobot) {
+    view = 'train';
+    title = '登录后配置自定义机器人';
+    copy = '自定义机器人需要保存契约和适配器配置；登录后可继续登记并训练。';
+    label = '查看机器人设置 →';
+  } else if (state.authRequired) {
     view = 'simulate';
     title = '不用登录，先玩一段仿真';
-    copy = '内置 MicroDuck 物理仿真可以直接运行：选个任务、录一段轨迹、看看回放。要保存训练记录和连接真机时再登录也不迟。';
+    copy = '内置参考仿真可以直接运行：选个任务、录一段轨迹、看看回放。要保存训练记录和连接设备时再登录。';
     label = '直接开始仿真 →';
   } else if (!model) {
     view = 'train';
-    title = '先登记一个模型契约';
-    copy = '选择产品线并导入 manifest，平台会先检查观测、动作、运行时和制品引用。';
-    label = '去训练页登记契约 →';
+    title = '先登记机器人契约';
+    copy = '导入机器人 manifest，检查观测、动作、运行时和制品引用。';
+    label = '配置机器人档案 →';
   } else if (latest && ['queued', 'running'].includes(String(latest.status))) {
     view = 'train';
     title = '训练任务正在运行';
@@ -7467,14 +7490,14 @@ function renderNextAction() {
     } else {
       view = 'evaluate';
       title = '训练完成，先看评测证据';
-      copy = '确认契约、成功率、跌倒率和控制延迟，再决定是否生成 X5 预检计划。';
+      copy = '确认任务指标、控制表现和数据来源，再决定是否生成设备预检计划。';
       label = '进入评测中心 →';
     }
   } else if (demoEvidence) {
     view = 'deploy';
     title = '下一步：查看演示安全闸门';
     copy =
-      '这是页面内置的合成证据，只用于演示导入、聚合和阻断流程；它不会让真实 X5 预检通过或解锁发布策略。';
+        '这是页面内置的合成证据，只用于演示导入、聚合和阻断流程；它不会让真实设备预检通过或解锁发布。';
     label = '查看演示安全闸门 →';
   } else if (evidence && !hasEvaluation) {
     view = 'evaluate';
@@ -7488,8 +7511,8 @@ function renderNextAction() {
     label = '查看安全闸门 →';
   } else if (releaseGradeEvidence && !deployments.length) {
     view = 'deploy';
-    title = '评测完成，可以生成预检计划';
-    copy = '选择目标 X5，先完成只读板端预检；Canary 和 Live 仍由受控 Board Agent 接管。';
+      title = '评测完成，可以生成预检计划';
+      copy = '选择目标设备，先完成只读预检；后续发布由已配置的设备适配器接管。';
     label = '生成设备预检 →';
   } else if (latest && latest.status === 'failed') {
     view = 'train';
@@ -7519,9 +7542,9 @@ function renderNextAction() {
     const skippedAhead = currentKey && stageOrder[goldenStage] > stageOrder[currentKey];
     if (skippedAhead) {
       const onboardCopy = {
-        simulate: { view: 'simulate', title: '第 1 步 · 在仿真中验证', copy: '运行 MicroDuck 仿真，录制一段可回放轨迹；训练、评测和部署都从这份证据继续。', label: '打开仿真 →' },
-        train: { view: 'train', title: '第 2 步 · 发起第一次训练', copy: '用 starter 模板提交训练任务，跟踪奖励曲线。', label: '去发起训练 →' },
-        evaluate: { view: 'evaluate', title: '第 3 步 · 查看评测证据', copy: '检查成功率、跌倒率与控制延迟，确认仿真与真机表现一致。', label: '查看评测 →' },
+        simulate: { view: customRobot ? 'train' : 'simulate', title: customRobot ? '第 1 步 · 配置机器人' : '第 1 步 · 准备数据', copy: customRobot ? '登记观测、动作和目标运行时契约；没有适配器的能力会保持未验证。' : '运行当前机器人支持的仿真场景，或准备已有轨迹。', label: customRobot ? '配置机器人 →' : '准备数据 →' },
+        train: { view: 'train', title: '第 2 步 · 配置训练', copy: '选择匹配的任务、引擎、数据和算力。', label: '配置训练 →' },
+        evaluate: { view: 'evaluate', title: '第 3 步 · 检查结果', copy: '查看指定 Run 的训练指标、评测和来源证据。', label: '查看结果 →' },
       }[currentKey];
       view = onboardCopy.view;
       title = onboardCopy.title;
@@ -7534,11 +7557,32 @@ function renderNextAction() {
       label = '继续' + goldenNext.label + ' →';
     }
   }
+  // A generic robot may not have a built-in simulator. Keep its first action
+  // on contract setup, then offer training after the model is registered.
+  if (customRobot && !state.authRequired && !latest && !evidence && !model) {
+    view = 'train';
+    title = '先登记机器人契约';
+    copy = '描述观测、动作和目标设备；没有对应适配器的部分会保持未验证。';
+    label = '配置机器人档案 →';
+  } else if (customRobot && !latest && !evidence && model) {
+    view = 'train';
+    title = '机器人档案已就绪，开始配置训练';
+    copy = '选择与当前契约匹配的任务、引擎和算力；平台会保留 Run 与数据来源。';
+    label = '配置训练 →';
+  }
   setText('next-action-title', title);
   setText('next-action-copy', copy);
   const button = $('next-action-button');
   if (button) {
     button.dataset.viewTarget = view;
+    button.dataset.flowChild =
+      customRobot && !state.authRequired && !latest && !evidence && !model
+        ? 'prepare'
+        : customRobot && !latest && !evidence && model && view === 'train'
+          ? 'configure'
+          : view === 'simulate'
+            ? 'simulate'
+            : '';
     button.textContent = label;
   }
 }
@@ -7713,7 +7757,7 @@ function renderReleaseGate() {
           : demoEvidence
             ? '合成证据仅用于演示；需要真实评测'
           : evidenceReady
-            ? '选择板卡并生成只读计划'
+            ? '选择设备并生成只读计划'
             : evaluationExists
               ? '来源未验证；需要真实 worker 指标或受信 attested replay'
             : '需要评测指标或遥测证据',
@@ -7732,10 +7776,10 @@ function renderReleaseGate() {
     'canary',
     approvalStatus === 'approved' ? 'ready' : approvalStatus === 'rejected' ? 'failed' : 'blocked',
     approvalStatus === 'approved'
-      ? '人工审批已通过；等待受控 BoardAgent 执行'
+      ? '人工审批已通过；等待受控设备适配器执行'
       : approvalStatus === 'rejected'
         ? '人工审批已拒绝；请修复证据或兼容性问题后重新建计划'
-        : '需要目标设备 BoardAgent、owner/admin 人工审批和双开关；网页不会直接启动执行器',
+        : '需要目标设备适配器、owner/admin 人工审批和双开关；网页不会直接启动执行器',
   );
   update(
     'live',
@@ -7840,6 +7884,7 @@ function onboardingProgress() {
   const telemetry = currentTelemetry();
   const contractReady = Boolean(model?.manifest?.contract?.id && model?.manifest?.artifacts?.length);
   const replayReady = Boolean(telemetry?.summary || latest?.evaluation?.replay || latest?.taskEvaluation?.replay);
+  const preparationReady = state.productId === 'custom' ? contractReady : replayReady;
   const trainingReady = Boolean(latest && ['completed', 'ready'].includes(String(latest.status || '').toLowerCase()));
   const evaluationReady = Boolean(telemetry?.summary || latest?.evaluation || latest?.taskEvaluation);
   const deployReady = deploymentsForCurrentModel().some((deployment) =>
@@ -7847,7 +7892,7 @@ function onboardingProgress() {
   );
   const guest = state.authRequired === true;
   const steps = [
-    { key: 'simulate', done: replayReady, locked: false },
+    { key: 'simulate', done: preparationReady, locked: false },
     { key: 'train', done: trainingReady, locked: guest && !contractReady },
     { key: 'evaluate', done: evaluationReady, locked: guest },
     { key: 'deploy', done: deployReady, locked: guest },
@@ -7865,15 +7910,30 @@ function renderOnboardChecklist() {
   const list = $('onboard-list');
   if (!list) return;
   const guest = state.authRequired === true;
+  const customRobot = state.productId === 'custom';
   const progress = onboardingProgress();
   const currentKey = progress.currentKey;
   const doneCount = progress.doneCount;
   const stepMeta = {
-    simulate: { view: 'simulate', cta: '打开仿真 →' },
-    train: { view: 'train', cta: '去发起训练 →' },
-    evaluate: { view: 'evaluate', cta: '查看评测 →' },
-    deploy: { view: 'deploy', cta: '生成预检 →' },
+    simulate: customRobot
+      ? { view: 'train', flowChild: 'prepare', cta: '配置机器人 →' }
+      : { view: 'simulate', flowChild: 'simulate', cta: '打开数据 →' },
+    train: { view: 'train', flowChild: selectedModel() ? 'configure' : 'prepare', cta: '配置训练 →' },
+    evaluate: { view: 'evaluate', flowChild: 'evaluation-run', cta: '查看评测 →' },
+    deploy: { view: 'deploy', flowChild: 'preflight', cta: '查看预检 →' },
   };
+  const preparationItem = list.querySelector('[data-onboard-step="simulate"]');
+  if (customRobot && preparationItem) {
+    const title = preparationItem.querySelector('.onboard-item-body strong');
+    const copy = preparationItem.querySelector('.onboard-item-body span');
+    if (title) title.textContent = '配置机器人';
+    if (copy) copy.textContent = '登记观测、动作和目标运行时契约';
+  } else if (preparationItem) {
+    const title = preparationItem.querySelector('.onboard-item-body strong');
+    const copy = preparationItem.querySelector('.onboard-item-body span');
+    if (title) title.textContent = '准备数据';
+    if (copy) copy.textContent = '使用仿真场景，或导入已有轨迹';
+  }
   let foundCurrent = false;
   list.querySelectorAll('.onboard-item').forEach((item) => {
     const step = progress.steps.find((entry) => entry.key === item.dataset.onboardStep);
@@ -7901,7 +7961,13 @@ function renderOnboardChecklist() {
         button.type = 'button';
         button.className = 'onboard-cta';
         button.textContent = stepMeta[step.key].cta;
-        button.dataset.viewTarget = stepMeta[step.key].view;
+        button.addEventListener('click', () => {
+          const destination = stepMeta[step.key];
+          setView(destination.view);
+          const context = FLOW_CHILD_CONTEXTS[destination.flowChild];
+          applyFlowChildDestination(context);
+          if (context) setFlowChild(destination.flowChild);
+        });
         meta.append(button);
       }
     }
@@ -8381,7 +8447,7 @@ function ensureAgentPanel() {
     <div class="agent-assistant-body" id="agent-assistant-body">
       <div class="agent-assistant-lead">
         <strong id="agent-assistant-headline">正在读取工作区…</strong>
-        <p id="agent-assistant-summary">助手会根据当前模型、运行和板卡状态给出下一步建议。</p>
+        <p id="agent-assistant-summary">助手会根据当前模型、运行和设备状态给出下一步建议。</p>
       </div>
       <div class="agent-assistant-actions" id="agent-assistant-actions" role="list" aria-label="助手快捷操作"></div>
       <div class="agent-assistant-foot">
@@ -8429,7 +8495,7 @@ function agentSuggestionSet() {
   if (state.authRequired || !state.overview) {
     return {
       headline: '登录后开始你的 Sim2Real 迭代',
-      summary: '助手会在工作区加载后，把模型、训练、评测和板卡状态串起来。',
+      summary: '助手会在工作区加载后，把模型、训练、评测和设备状态串起来。',
       actions: [{ label: '登录工作区', view: null, href: state.publicHealth?.ssoLoginUrl || '/rdkstudio/' }],
     };
   }
@@ -8477,7 +8543,7 @@ function agentSuggestionSet() {
   if (!evidence && latest && ['completed', 'ready'].includes(String(latest.status))) {
     return {
       headline: '训练完成，下一步是评测证据',
-      summary: '先确认成功率、跌倒率和控制延迟，再生成目标板卡的只读预检计划。',
+      summary: '先确认成功率、跌倒率和控制延迟，再生成目标设备的只读预检计划。',
       actions: [{ label: '进入评测中心', view: 'evaluate' }, { label: '查看训练结果', view: 'records' }],
     };
   }
@@ -8490,7 +8556,7 @@ function agentSuggestionSet() {
   }
   if (!device) {
     return {
-      headline: '选择一块目标板卡，准备只读预检',
+      headline: '选择目标设备，准备只读预检',
       summary: '发布前会检查设备连接、运行时和模型制品；网页不会直接开启电机。',
       actions: [{ label: '进入部署预检', view: 'deploy' }, { label: '打开上位机', view: 'station' }],
     };
@@ -8539,7 +8605,7 @@ function renderAgentPanel() {
       health.textContent = '正在检查板端…';
       health.dataset.state = 'loading';
     } else if (boardHealth?.ok) {
-      const name = boardHealth.device?.name || selectedDevice()?.name || '目标板卡';
+      const name = boardHealth.device?.name || selectedDevice()?.name || '目标设备';
       health.textContent = `${name} · 板端在线`;
       health.dataset.state = 'ready';
     } else if (boardHealth?.error) {
@@ -9044,7 +9110,7 @@ async function registerEditor() {
     $('manifest-editor').value = JSON.stringify(payload.model?.manifest || manifest, null, 2);
     updateTrainProgress(2);
     const result = $('validation-result');
-    if (result) { result.className = 'validation-result is-ok'; result.textContent = '模型版本已登记，可以直接配置并提交强化学习训练；回放为可选。'; }
+    if (result) { result.className = 'validation-result is-ok'; result.textContent = '模型版本已登记，可以配置并提交兼容的训练任务；回放按需使用。'; }
     await loadOverview({ quiet: true });
   } catch (error) {
     const message = friendlyError(error, '模型登记失败');
@@ -9271,7 +9337,7 @@ async function runModel(backend) {
 async function detectBoard() {
   const device = selectedDevice();
   if (!device) {
-    showToast('请先选择板卡', 'error');
+    showToast('请先选择设备', 'error');
     return;
   }
   try {
@@ -9280,13 +9346,13 @@ async function detectBoard() {
       { method: 'POST' },
     );
     showToast(
-      payload.platform ? '板型探测完成：' + payload.platform : '板型暂未识别',
+      payload.platform ? '设备能力检查完成：' + payload.platform : '设备能力暂未识别',
       payload.platform ? 'success' : 'normal',
     );
     await loadOverview({ quiet: true });
   } catch (error) {
     if (!(error instanceof ApiError && error.status === 401))
-      showToast(error instanceof Error ? error.message : '板型探测失败', 'error');
+      showToast(error instanceof Error ? error.message : '设备能力检查失败', 'error');
   }
 }
 
@@ -9295,7 +9361,7 @@ async function createPlan() {
   const model = selectedModel();
   const device = selectedDevice();
   if (!model || !device) {
-    showToast('请先选择模型和板卡', 'error');
+    showToast('请先选择模型和目标设备', 'error');
     return;
   }
   state.deploymentSubmitting = true;
@@ -9359,6 +9425,39 @@ async function executePreflight() {
 
 function loadManifestTemplate({ notify = true } = {}) {
   const profile = selectedProductProfile();
+  if (profile.id === 'custom') {
+    // Deliberately leave robot-specific values blank: a generic profile has no
+    // truthful dimensions, simulator, runner or artifact until the user
+    // supplies them. These values fail validation rather than inventing a
+    // robot that appears ready to train.
+    const template = {
+      schemaVersion: 1,
+      modelId: 'my-custom-robot-policy',
+      displayName: '我的机器人策略',
+      version: '0.1.0',
+      robot: { id: 'custom', variant: 'my-robot' },
+      contract: {
+        id: 'custom-policy-my-robot-v1',
+        robotId: 'custom',
+        jointCount: 0,
+        observationSize: 0,
+        actionSize: 0,
+        controlHz: 0,
+        physicsTimestepSeconds: 0,
+        decimation: 0,
+        observationLayout: [],
+      },
+      simulator: { backends: [], policyArtifactId: 'policy-custom' },
+      artifacts: [],
+      metadata: {
+        source: 'User supplied',
+        notes: '请填写真实观测/动作契约，并配置对应的仿真、训练执行器和设备适配器。',
+      },
+    };
+    $('manifest-editor').value = JSON.stringify(template, null, 2);
+    if (notify) showToast('已载入自定义机器人模板；请填写真实契约并接入适配器后再校验');
+    return;
+  }
   if (profile.id === 'originbot') {
     const template = {
       schemaVersion: 1,
@@ -9738,9 +9837,9 @@ function stationRenderStatus(status) {
     if (node) node.textContent = value;
   };
   if (status.available === false || status.state === 'offline') {
-    const reason = String(status.message || status.reason || '实体板卡离线');
+    const reason = String(status.message || status.reason || '实体设备离线');
     if (freshness) {
-      freshness.textContent = `板卡离线 · ${reason}`;
+      freshness.textContent = `设备离线 · ${reason}`;
       freshness.classList.add('is-stale');
     }
     ['station-cpu', 'station-cpu-temp', 'station-memory', 'station-memory-sub',
@@ -9748,9 +9847,9 @@ function stationRenderStatus(status) {
       'station-power-sub', 'station-uptime', 'station-uptime-sub',
       'station-drive-state', 'station-tele-heading', 'station-tele-battery',
       'station-tele-odom', 'station-tele-vel'].forEach((id) => setText(id, '无数据'));
-    setText('station-network-sub', '等待板卡接入');
-    setText('station-tele-battery-sub', '无实体板卡遥测');
-    setText('station-tele-heading-sub', '无实体板卡 IMU');
+    setText('station-network-sub', '等待设备接入');
+    setText('station-tele-battery-sub', '无实体设备遥测');
+    setText('station-tele-heading-sub', '无实体设备 IMU');
     stationSetBar('station-cpu-bar', NaN, 0.6, 0.85);
     stationSetBar('station-memory-bar', NaN, 0.7, 0.9);
     stationSetBar('station-disk-bar', NaN, 0.75, 0.9);
@@ -9971,7 +10070,7 @@ function stationStartStatusStream() {
             const snapshot = JSON.parse(line);
             if (snapshot?.available === false || snapshot?.state === 'offline') {
               state.station.offline = true;
-              state.station.offlineReason = String(snapshot.message || '实体板卡离线');
+              state.station.offlineReason = String(snapshot.message || '实体设备离线');
             }
             stationRenderStatus(snapshot);
           } catch {
@@ -10014,7 +10113,7 @@ async function stationProbeDrive() {
       const controls = $('station-drive-controls');
       const note = $('station-drive-note');
       if (controls) controls.hidden = true;
-      if (note) note.textContent = `板卡离线：${String(payload.message || '接入实体板卡后才能读取驱动状态。')}`;
+      if (note) note.textContent = `设备离线：${String(payload.message || '接入实体设备后才能读取驱动状态。')}`;
       return;
     }
     const enabled = payload?.platformEnabled === true && payload?.drive?.enabled === true;
@@ -10134,7 +10233,7 @@ async function stationProbePolicy() {
       const controls = $('station-policy-controls');
       const note = $('station-policy-note');
       if (controls) controls.hidden = true;
-      if (note) note.textContent = `板卡离线：${String(payload.message || '接入实体板卡后才能读取策略运行时。')}`;
+      if (note) note.textContent = `设备离线：${String(payload.message || '接入实体设备后才能读取策略运行时。')}`;
       return;
     }
     const platform = payload?.platformEnabled === true;
@@ -10626,7 +10725,7 @@ async function stationInit() {
     if (health?.available === false || health?.state === 'offline') {
       state.station.ready = false;
       state.station.offline = true;
-      state.station.offlineReason = String(health.message || '当前没有可达的实体板卡');
+      state.station.offlineReason = String(health.message || '当前没有可达的实体设备');
       state.station.device = health?.device ?? null;
       const fallbackDevice = selectedDevice();
       const deviceName = $('station-device-name');
@@ -10667,7 +10766,7 @@ async function stationInit() {
     }
     stationLog(
       health?.agent?.mock === true
-        ? '已连接本地参考 BoardAgent（模拟数据）'
+        ? '已连接本地参考设备适配器（模拟数据）'
         : '已连接板端 agent',
       'ok',
     );
@@ -10688,13 +10787,13 @@ async function stationInit() {
       deviceName.textContent = fallbackDevice?.name || fallbackDevice?.id || selectedOption?.textContent || '（未选择）';
     }
     if (notice) {
-      const detail = error instanceof Error ? error.message : '板端 agent 或板卡设备不可用';
+      const detail = error instanceof Error ? error.message : '设备适配器或目标设备不可用';
       notice.hidden = false;
       const cleanDetail = detail.replace(/[。.!！?？\s]+$/u, '');
       notice.textContent =
         '上位机未就绪：' +
         cleanDetail +
-        '。请确认板卡上的 rdk-board-agent 已启动、19100 端口可达，并在设备列表中完成接入。';
+        '。请确认目标设备的适配器已启动且端口可达，并在设备列表中完成接入。';
     }
     stationLog('上位机初始化失败', 'error');
   }
@@ -10745,7 +10844,7 @@ function stationBridgeRow(bridge, device) {
   item.dataset.bridgeId = bridge.bridgeId || '';
   const registered = (state.overview?.devices || []).find((candidate) => candidate.bridgeDeviceId && candidate.bridgeDeviceId === device.bridgeDeviceId);
   item.innerHTML = '<div class="station-device-item-main"><span class="station-device-item-title"></span><span class="station-device-item-meta"></span></div><span class="station-device-badge live">Bridge 在线</span><div class="station-device-item-actions"><button class="button station-device-connect" type="button" data-action="bridge-connect"></button></div>';
-  item.querySelector('.station-device-item-title').textContent = device.name || device.host || '本地板卡';
+      item.querySelector('.station-device-item-title').textContent = device.name || device.host || '本地设备';
   item.querySelector('.station-device-item-meta').textContent = `${device.username || 'root'}@${device.host || '本机网络'} · ${device.transport || 'ssh'} · ${device.probeOk === true ? 'SSH 已验证' : '等待验证'}`;
   const button = item.querySelector('.station-device-connect');
   if (registered) {
@@ -10815,19 +10914,19 @@ function stationBridgePollResume() {
 function devicePairingHint(message) {
   const text = String(message || '');
   if (/ECONNREFUSED|连接被拒绝|refused/i.test(text)) {
-    return '板卡端口不通：确认板卡已开机联网，且 IP 与 SSH 端口填写正确。';
+    return '设备端口不通：确认设备已开机联网，且 IP 与 SSH 端口填写正确。';
   }
   if (/ETIMEDOUT|timed? ?out|超时/i.test(text)) {
-    return '连接超时：确认板卡与本机在同一网络，且防火墙已放行该 SSH 端口。';
+    return '连接超时：确认设备与本机在同一网络，且防火墙已放行该 SSH 端口。';
   }
   if (/ENOTFOUND|getaddrinfo|not known|无法解析/i.test(text)) {
-    return '主机名无法解析：改用板卡的 IP 地址再试一次。';
+    return '主机名无法解析：改用设备的 IP 地址再试一次。';
   }
   if (/authentication|password|Permission denied|密码|认证/i.test(text)) {
-    return 'SSH 认证失败：确认用户名与密码；只允许密钥登录的板卡请改用路径 B 一键脚本。';
+    return 'SSH 认证失败：确认用户名与密码；只允许密钥登录的设备请改用路径 B 一键脚本。';
   }
   if (/agent/i.test(text)) {
-    return '板端 agent 未就绪：先在板卡上运行一键配对脚本安装 agent，再回来添加。';
+    return '设备适配器未就绪：先在目标设备上运行一键配对脚本，再回来添加。';
   }
   if (/studio|bridge|桥/i.test(text)) {
     return '本地部署未配置 RDK Studio 桥，路径 B 暂不可用：请用路径 A 表单直接配对。';
@@ -10859,7 +10958,7 @@ function wireDeviceManagerEvents() {
       return;
     }
     if (!host) {
-      stationLog('请填写板卡 IP 或主机名（不带 http://）', 'error');
+      stationLog('请填写设备 IP 或主机名（不带 http://）', 'error');
       return;
     }
     try {
@@ -10867,7 +10966,7 @@ function wireDeviceManagerEvents() {
         method: 'POST',
         body: JSON.stringify({ host, username, port, label, profile, transport }),
       });
-      stationLog(`已添加 SSH 备用设备 ${created?.connection?.label || host}，仅在服务器可达板卡时使用`, 'ok');
+      stationLog(`已添加 SSH 备用设备 ${created?.connection?.label || host}，仅在服务器可达设备时使用`, 'ok');
       showPairingHint('路径 A 完成：设备已建档。下一步：点设备卡片上的「连接」建立受控隧道并做能力检查。');
       try { localStorage.setItem(`rdk-device-profile:${created?.connection?.id || host}`, JSON.stringify({ profile, transport })); } catch {}
       $('station-device-host').value = '';
@@ -10883,7 +10982,7 @@ function wireDeviceManagerEvents() {
     const user = String($('station-device-user')?.value || 'root').trim() || 'root';
     const password = String($('station-device-password')?.value || '');
     const port = Number($('station-device-port')?.value || 22);
-    if (!host) { showToast('请先填写板卡 IP 或主机名。', 'error'); return; }
+    if (!host) { showToast('请先填写设备 IP 或主机名。', 'error'); return; }
     let script = '';
     try {
       // The Studio host exposes the shared Local Bridge protocol under its
@@ -10901,7 +11000,7 @@ function wireDeviceManagerEvents() {
     const text = $('station-connect-script-text');
     if (text) text.value = script;
     output?.removeAttribute('hidden');
-    showPairingHint('路径 B：脚本已含平台地址与一次性配对凭据——在板卡终端粘贴运行即可，设备会自动出现在下方列表（无需再填 SSH）。');
+    showPairingHint('路径 B：脚本已含平台地址与一次性配对凭据——在目标设备终端粘贴运行即可，设备会自动出现在下方列表（无需再填 SSH）。');
     try { await navigator.clipboard?.writeText(script); showToast('连接脚本已生成并复制。', 'success'); } catch { showToast('连接脚本已生成，请手动复制。', 'normal'); }
   });
   $('station-connect-script-copy')?.addEventListener('click', async () => {
@@ -10918,7 +11017,7 @@ function wireDeviceManagerEvents() {
     if (action === 'bridge-connect') {
       button.disabled = true;
       button.textContent = '接入中…';
-      showToast('正在把这块板卡接入 Sim2Real，请稍候…', 'normal');
+      showToast('正在把目标设备接入平台，请稍候…', 'normal');
       try {
         stationLog('正在把本地 Bridge 设备接入 Sim2Real…');
         const bridgeDeviceId = item?.dataset?.bridgeDeviceId;
@@ -11655,7 +11754,9 @@ function wireEvents() {
     loadManifestTemplate();
     const nextProfile = PRODUCT_PROFILES[next];
     showToast(
-      next === 'rdk-duck'
+      next === 'custom'
+        ? '已切换到自定义机器人；请登记契约并配置兼容适配器'
+        : next === 'rdk-duck'
         ? '已切换到 RDK Duck；请导入或填写真实契约 manifest'
         : next === 'originbot'
           ? '已切换到 OriginBot；默认模板可直接开始仿真和训练'
@@ -11770,7 +11871,7 @@ const COMMANDS = [
   { id: 'train', label: '查看训练', hint: `选择模型与训练后端 · ${shortcutHint(3)}`, view: 'train' },
   { id: 'resources', label: '管理 GPU 与算力', hint: `登记本机、远程与云端资源 · ${shortcutHint(4)}`, view: 'resources' },
   { id: 'evaluate', label: '打开评测中心', hint: `查看指标与遥测证据 · ${shortcutHint(5)}`, view: 'evaluate' },
-  { id: 'deploy', label: '准备部署', hint: `检查板卡与模型契约 · ${shortcutHint(6)}`, view: 'deploy' },
+  { id: 'deploy', label: '准备交付', hint: `检查设备与模型契约 · ${shortcutHint(6)}`, view: 'deploy' },
   { id: 'records', label: '查看证据与记录', hint: `搜索 Run、部署与遥测 · ${shortcutHint(7)}`, view: 'records' },
   { id: 'station', label: '打开设备工作台', hint: `查看 X5 连接与只读诊断 · ${shortcutHint(8)}`, view: 'station' },
   { id: 'refresh', label: '刷新工作区', hint: '重新加载项目状态与设备信息', action: () => loadOverview() },

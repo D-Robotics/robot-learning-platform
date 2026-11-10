@@ -3,12 +3,12 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <meta name="description" content="RDK Robot Learning Studio：面向多种 RDK 设备的仿真、训练、评测与部署工作台" />
+    <meta name="description" content="Robot Learning Platform：面向多种机器人的仿真、训练、评测与受控交付工作台" />
     <!-- The server replaces this marker with the configured reverse-proxy
          prefix.  Keeping it in the document makes arbitrary mounts (for
          example /robot-lab) work without hard-coded client paths. -->
     <meta name="rdk-sim2real-base-path" content="__RDK_SIM2REAL_BASE_PATH__" />
-    <title>RDK Robot Learning Platform</title>
+    <title>Robot Learning Platform</title>
     <!-- Anti-flash: theme-boot.js is a same-origin classic script (CSP-safe,
          no inline) that resolves the theme (stored → OS → dark) and classes
          <html> before the stylesheets parse, so the first paint carries the
@@ -20,7 +20,7 @@
          theme x view screenshots). See services/sim2real-web/ui-layout-invariants.mjs
          for the guards that keep new overrides from re-introducing layering. -->
     <link rel="stylesheet" href="./tokens.css?v=3" />
-    <link rel="stylesheet" href="./app.css?v=54" />
+    <link rel="stylesheet" href="./app.css?v=55" />
   </head>
   <body>
     <a class="skip-link" href="#main-content">跳到主要内容</a>
@@ -28,7 +28,7 @@
          拿不到"这是什么页面"的最高层级标题。视图区标题继续用 h2：8 个视图
          各自是一个 section，只有当前视图不带 hidden，所以任一时刻恰好
          一个大纲根。 -->
-    <h1 class="sr-only">RDK Robot Learning Studio · 机器人学习工作台</h1>
+    <h1 class="sr-only">Robot Learning Platform · 机器人学习工作台</h1>
     <div class="app-shell product-clarity-shell depth-led">
       <header class="topbar">
         <button
@@ -42,10 +42,10 @@
         >
           <span aria-hidden="true">☰</span>
         </button>
-        <a class="brand" href="./" aria-label="RDK Robot Learning Studio 首页">
+        <a class="brand" href="./" aria-label="Robot Learning Platform 首页">
           <span class="brand-mark">D</span>
           <span
-            ><span class="brand-kicker">RDK ROBOT LEARNING PLATFORM</span
+            ><span class="brand-kicker">ROBOT LEARNING PLATFORM</span
             ><strong>Robot Learning Workbench</strong></span
           >
         </a>
@@ -131,11 +131,11 @@
               <span class="sidebar-project-icon" aria-hidden="true">◇</span>
               <strong id="sidebar-product-name">MicroDuck</strong>
             </div>
-            <select id="product-select" aria-label="选择产品线">
+            <select id="product-select" aria-label="选择机器人档案">
                 <option value="microduck">MicroDuck · 官方参考</option>
                 <option value="originbot">OriginBot · X5 真机</option>
                 <option value="rdk-duck">RDK Duck · X5 产品</option>
-                <option value="custom">通用 RDK 设备 · 自定义契约</option>
+                <option value="custom">自定义 · 需适配器</option>
             </select>
             <div class="sidebar-project-context">
               <div class="sidebar-project-label-row">
@@ -157,60 +157,24 @@
               >检查中</span
             >
           </div>
-          <div class="nav-label">工作区</div>
+          <div class="nav-label">工作台</div>
           <nav class="workflow-nav" aria-label="工作区导航">
-            <button class="nav-item is-active" type="button" data-view-target="overview" aria-current="page">
-              <span class="nav-index" aria-hidden="true">◇</span><span><strong>项目概况</strong><small>项目、机器人、任务与进度</small></span>
-            </button>
-            <button class="nav-item" type="button" data-agent-open>
-              <span class="nav-index" aria-hidden="true">✦</span><span><strong>Agent 助手</strong><small>用自然语言执行受控操作</small></span>
-            </button>
+            <button class="nav-item is-active" type="button" data-view-target="overview" aria-current="page"><span class="nav-index" aria-hidden="true">◇</span><span><strong>概览</strong></span></button>
+            <button class="nav-item" type="button" data-view-target="simulate"><span class="nav-index" aria-hidden="true">01</span><span><strong>数据</strong></span></button>
+            <button class="nav-item" type="button" data-view-target="train"><span class="nav-index" aria-hidden="true">02</span><span><strong>训练</strong></span></button>
+            <button class="nav-item" type="button" data-view-target="evaluate"><span class="nav-index" aria-hidden="true">03</span><span><strong>结果</strong></span></button>
+            <button class="nav-item" type="button" data-view-target="deploy"><span class="nav-index" aria-hidden="true">04</span><span><strong>交付</strong></span></button>
           </nav>
-          <div class="sidebar-divider sidebar-divider-compact"></div>
-          <div class="nav-label">构建策略</div>
-          <nav class="workflow-nav workflow-nav-hierarchical" aria-label="策略构建流程">
-            <details class="sidebar-nav-group" data-sidebar-group="build-data" open>
-              <summary class="nav-item nav-item-parent"><span class="nav-index">01</span><span><strong>数据与仿真</strong><small>任务、场景与轨迹</small></span><i aria-hidden="true">⌄</i></summary>
-              <div class="nav-subitems">
-                <button class="nav-subitem" type="button" data-view-target="simulate" data-flow-child="simulate">仿真与录制</button>
-                <button class="nav-subitem" type="button" data-view-target="records" data-flow-child="replays">轨迹与回放</button>
-              </div>
-            </details>
-            <details class="sidebar-nav-group" data-sidebar-group="build-policy">
-              <summary class="nav-item nav-item-parent"><span class="nav-index">02</span><span><strong>训练与策略</strong><small>模型 · 配置 · 训练 Run</small></span><i aria-hidden="true">⌄</i></summary>
-              <div class="nav-subitems">
-                <button class="nav-subitem" type="button" data-view-target="train" data-flow-child="prepare" data-train-step="1">模型与契约</button>
-                <button class="nav-subitem" type="button" data-view-target="train" data-flow-child="configure" data-train-step="2">训练配置</button>
-                <button class="nav-subitem" type="button" data-view-target="train" data-flow-child="submit" data-train-step="3">Run 与进度</button>
-              </div>
-            </details>
-            <details class="sidebar-nav-group" data-sidebar-group="build-evaluation">
-              <summary class="nav-item nav-item-parent"><span class="nav-index">03</span><span><strong>评测与证据</strong><small>对比 · 回放 · 可追溯结果</small></span><i aria-hidden="true">⌄</i></summary>
-              <div class="nav-subitems">
-                <button class="nav-subitem" type="button" data-view-target="evaluate" data-flow-child="evaluation-run">发起评测</button>
-                <button class="nav-subitem" type="button" data-view-target="evaluate" data-flow-child="comparison">结果对比</button>
-                <button class="nav-subitem" type="button" data-view-target="records" data-flow-child="evaluation-evidence">全部证据</button>
-              </div>
-            </details>
-          </nav>
-          <div class="sidebar-divider sidebar-divider-compact"></div>
-          <div class="nav-label">交付到设备</div>
-          <nav class="workflow-nav workflow-nav-hierarchical" aria-label="设备交付流程">
-            <details class="sidebar-nav-group" data-sidebar-group="delivery" open>
-              <summary class="nav-item nav-item-parent"><span class="nav-index">04</span><span><strong>设备与发布</strong><small>设备 · 预检 · 上线 · 反馈</small></span><i aria-hidden="true">⌄</i></summary>
-              <div class="nav-subitems">
-                <button class="nav-subitem" type="button" data-view-target="station" data-flow-child="devices">设备管理</button>
-                <button class="nav-subitem" type="button" data-view-target="deploy" data-flow-child="preflight">预检与发布</button>
-                <button class="nav-subitem" type="button" data-view-target="deploy" data-flow-child="feedback">运行反馈与回滚</button>
-              </div>
-            </details>
-          </nav>
-          <div class="sidebar-divider sidebar-divider-compact"></div>
-          <div class="nav-label">证据中心</div>
-          <nav class="workflow-nav" aria-label="证据与资源">
-            <button class="nav-item" type="button" data-view-target="records"><span class="nav-index" aria-hidden="true">▦</span><span><strong>证据与记录</strong><small>Dataset、Run、Artifact、评测与遥测</small></span></button>
-            <button class="nav-item" type="button" data-view-target="resources"><span class="nav-index" aria-hidden="true">▣</span><span><strong>执行资源</strong><small>本机、远程与云端算力</small></span></button>
-          </nav>
+          <div class="nav-label">更多</div>
+          <details class="sidebar-nav-group" data-sidebar-group="tools">
+            <summary class="nav-item nav-item-parent"><span class="nav-index" aria-hidden="true">⋯</span><span><strong>工具与记录</strong></span><i aria-hidden="true">⌄</i></summary>
+            <div class="nav-subitems">
+              <button class="nav-subitem" type="button" data-view-target="records">运行与数据记录</button>
+              <button class="nav-subitem" type="button" data-view-target="resources">训练资源</button>
+              <button class="nav-subitem" type="button" data-view-target="station">设备管理</button>
+              <button class="nav-subitem" type="button" data-agent-open>Agent 助手</button>
+            </div>
+          </details>
           <div class="sidebar-bottom">
             <div class="safety-mini">
               <span aria-hidden="true">✓</span>
@@ -347,7 +311,7 @@
               <div><span>台账</span><strong id="status-storage">检查中</strong></div>
             </div>
             <span id="model-count" class="sr-only">0 个模型</span
-            ><span id="device-count" class="sr-only">0 块板卡</span>
+              ><span id="device-count" class="sr-only">0 台设备</span>
           </section>
 
           <div class="workspace-status-banner" id="workspace-status-banner" role="status" aria-live="polite" hidden>
@@ -385,7 +349,7 @@
             aria-labelledby="overview-title"
           >
             <div class="section-heading section-heading-lean">
-              <div class="overview-page-title"><h2 id="overview-title">开始机器人学习</h2><p>先创建项目并准备数据，再训练和验证策略；需要真机时再连接设备。</p></div>
+              <div class="overview-page-title"><h2 id="overview-title">开始一个机器人项目</h2><p>选择机器人档案，准备数据，训练并检查结果。连接设备和发布可稍后进行。</p></div>
               <span class="section-caption" id="hero-updated">—</span>
             </div>
             <div class="next-card">
@@ -398,6 +362,7 @@
                   id="next-action-button"
                   type="button"
                   data-view-target="simulate"
+                  data-flow-child="simulate"
                 >
                   进入仿真与录制 →
                 </button>
@@ -412,33 +377,35 @@
               <ol class="onboard-list" id="onboard-list">
                 <li class="onboard-item" data-onboard-step="simulate">
                   <span class="onboard-item-no">01</span><span class="onboard-item-dot"></span>
-                  <div class="onboard-item-body"><strong>在仿真中验证</strong><span>运行 MicroDuck 仿真，录制一段可回放轨迹</span></div>
+                  <div class="onboard-item-body"><strong>准备数据</strong><span>使用仿真场景，或导入已有轨迹</span></div>
                   <div class="onboard-item-meta" data-onboard-meta></div>
                 </li>
                 <li class="onboard-item" data-onboard-step="train">
                   <span class="onboard-item-no">02</span><span class="onboard-item-dot"></span>
-                  <div class="onboard-item-body"><strong>发起第一次训练</strong><span>用 starter 模板提交 PPO 任务，跟踪奖励曲线</span></div>
+                  <div class="onboard-item-body"><strong>训练策略</strong><span>选择任务、算法和可用算力</span></div>
                   <div class="onboard-item-meta" data-onboard-meta></div>
                 </li>
                 <li class="onboard-item" data-onboard-step="evaluate">
                   <span class="onboard-item-no">03</span><span class="onboard-item-dot"></span>
-                  <div class="onboard-item-body"><strong>查看评测证据</strong><span>检查成功率、跌倒率与控制延迟</span></div>
+                  <div class="onboard-item-body"><strong>检查结果</strong><span>查看训练指标、评测和来源记录</span></div>
                   <div class="onboard-item-meta" data-onboard-meta></div>
                 </li>
                 <li class="onboard-item" data-onboard-step="deploy">
                   <span class="onboard-item-no">04</span><span class="onboard-item-dot"></span>
-                  <div class="onboard-item-body"><strong>部署到真机</strong><span>只读预检通过后，把策略推进 RDK 板卡</span></div>
+                  <div class="onboard-item-body"><strong>交付到设备</strong><span>通过目标设备适配器与安全预检后再发布</span></div>
                   <div class="onboard-item-meta" data-onboard-meta></div>
                 </li>
               </ol>
             </section>
+            <details class="overview-diagnostics" id="overview-diagnostics">
+              <summary><strong>平台诊断与高级指标</strong><span>排查或评审时展开</span></summary>
             <section class="platform-scorecard panel" aria-labelledby="platform-scorecard-title">
               <div class="platform-scorecard-heading">
                 <div><span class="eyebrow">平台健康度</span><h2 id="platform-scorecard-title">研发闭环评分</h2><p>把“能演示”与“能上真机”分开显示，下一步始终有据可依。</p></div>
                 <div class="platform-scorecard-total"><strong id="platform-score-total">—</strong><span>/ 10 软件门槛</span></div>
               </div>
               <div class="platform-scorecard-grid" id="platform-scorecard-grid" aria-live="polite"><span class="empty-inline">正在检查契约、训练、评测和设备证据…</span></div>
-              <div class="platform-scorecard-foot"><span id="platform-scorecard-note">真实 X5 运动证据和签名制品会单独计入现场验收。</span><button type="button" class="button button-ghost button-small" data-view-target="records">查看证据记录 →</button></div>
+              <div class="platform-scorecard-foot"><span id="platform-scorecard-note">真实设备行为和签名制品需单独验收。</span><button type="button" class="button button-ghost button-small" data-view-target="records">查看证据记录 →</button></div>
             </section>
             <section class="platform-scorecard panel" aria-labelledby="research-loop-title">
               <div class="platform-scorecard-heading">
@@ -447,6 +414,7 @@
               <div class="platform-scorecard-grid" id="research-loop-grid" aria-live="polite"><span class="empty-inline">正在汇总近 30 天的闭环指标…</span></div>
               <div class="platform-scorecard-foot"><span id="research-loop-note">口径：近 30 天；发起方未标记的记录不计入占比分母；免审批链长为会话内内存口径。</span></div>
             </section>
+            </details>
             <section class="project-workspace panel" id="project-workspace" aria-labelledby="project-workspace-title">
               <div class="panel-heading panel-heading-lean project-workspace-heading">
                 <div>
@@ -502,7 +470,7 @@
                   <article class="status-card">
                     <div class="status-card-main">
                       <span class="status-icon status-icon-orange" id="status-board-icon" aria-hidden="true">⌂</span
-                      ><strong id="status-board">尚未选择板卡</strong>
+                      ><strong id="status-board">尚未选择设备</strong>
                     </div>
                     <p id="status-board-detail">连接后进行预检</p><span class="status-card-action" id="status-board-action">去连接设备 →</span>
                   </article>
@@ -530,7 +498,7 @@
 
           <section class="agent-chat-panel" id="agent-chat-panel" role="dialog" aria-modal="true" aria-hidden="true" aria-labelledby="agent-chat-title" aria-describedby="agent-chat-role">
             <div class="agent-chat-heading">
-              <div><span class="workspace-kicker">RDK STUDIO AGENT</span><h2 id="agent-chat-title">Agent 任务助手</h2><p class="agent-chat-role" id="agent-chat-role">核心动作：解释状态 · 生成计划 · 执行受控操作 · 留存证据。训练、设备和发布操作会在执行前请求确认，不会静默驱动机器人。</p></div>
+              <div><span class="workspace-kicker">PLATFORM AGENT</span><h2 id="agent-chat-title">Agent 任务助手</h2><p class="agent-chat-role" id="agent-chat-role">解释状态、整理步骤并保留证据。训练、设备和发布操作会在执行前请求确认。</p></div>
               <div class="agent-chat-heading-actions">
                 <span class="agent-chat-runtime"><i class="status-dot"></i>工具链可用 · 真机需单独连接</span>
                 <button class="agent-chat-close" id="agent-chat-close" type="button" aria-label="关闭 Agent 对话"><span aria-hidden="true">×</span></button>
@@ -544,7 +512,7 @@
                 <div id="agent-session-list"><button class="agent-session-item is-active" type="button" data-static-current>当前对话</button></div>
               </aside>
               <div class="agent-chat-messages" id="agent-chat-messages" aria-live="polite">
-                <div class="agent-chat-message agent-chat-message-agent"><strong>Agent</strong><p>描述一个结果，我会拆成可确认的步骤并回传证据。例如：跑一轮 GPU 训练，检查 X5，再做只读预检。</p></div>
+                <div class="agent-chat-message agent-chat-message-agent"><strong>Agent</strong><p>描述一个结果，我会拆成可确认的步骤并回传证据。例如：训练策略、检查目标设备，再做只读预检。</p></div>
               </div>
               <div class="agent-chat-side">
                 <div class="agent-plan-card" id="agent-plan-card"><span class="agent-empty-state"><strong>任务计划</strong><small>等待任务计划…</small></span></div>
@@ -568,7 +536,7 @@
                 <div><strong id="agent-image-name"></strong><span class="agent-image-source">上传图片</span></div>
                 <button class="button button-ghost" id="agent-image-remove" type="button">移除图片</button>
               </div>
-              <input id="agent-chat-input" autocomplete="off" maxlength="2000" aria-label="描述要执行的任务" placeholder="例如：完成仿真、GPU 训练和 X5 真机预检" />
+              <input id="agent-chat-input" autocomplete="off" maxlength="2000" aria-label="描述要执行的任务" placeholder="例如：准备数据、训练策略并检查目标设备" />
               <button class="button button-ghost" type="button" data-agent-stop hidden>停止等待</button>
               <button class="button button-primary" type="submit">发送任务 ↗</button>
               <p class="agent-image-disclosure" id="agent-image-disclosure" hidden></p>
@@ -614,7 +582,7 @@
                     <ol class="simulator-gate-steps">
                       <li><strong>先准备仿真</strong>：导入并校验当前产品线的真实 manifest，或启动本地 headless worker。</li>
                       <li><strong>需要上真机时</strong>：到“设备控制台”添加并连接设备。</li>
-                      <li><strong>最后选择设备</strong>：回到“部署与上线”选择已连接的目标板卡，再执行预检。</li>
+                      <li><strong>最后选择设备</strong>：回到“交付”选择已连接的目标设备，再执行预检。</li>
                     </ol>
                     <div class="simulator-gate-actions">
                     <button
@@ -704,7 +672,7 @@
                   type="button"
                   data-view-target="train"
                 >
-              下一步：配置强化学习训练 →
+              下一步：配置训练 →
                 </button>
               </details>
             </div>
@@ -732,9 +700,9 @@
               <div class="train-onboarding-steps">
                 <div class="train-onboarding-step is-current" data-train-step="1" role="button" tabindex="0"><b>1</b><div><strong>准备模型</strong><small id="train-onboarding-model-help">载入默认模板并登记</small></div></div>
                 <div class="train-onboarding-step" data-train-step="2" role="button" tabindex="0"><b>2</b><div><strong>配置训练</strong><small>选择算法与算力资源</small></div></div>
-                <div class="train-onboarding-step" data-train-step="3" role="button" tabindex="0"><b>3</b><div><strong>开始强化学习训练</strong><small>选择 GPU 和 PPO / SAC 后提交任务</small></div></div>
+                <div class="train-onboarding-step" data-train-step="3" role="button" tabindex="0"><b>3</b><div><strong>开始训练</strong><small>选择兼容的算法与算力后提交 Run</small></div></div>
               </div>
-              <p class="train-onboarding-help">第一次使用？先点击“载入模板”，不用编辑 JSON。回放是可选的验证工具；强化学习训练可直接提交 PPO / SAC 任务。</p>
+              <p class="train-onboarding-help">第一次使用？载入对应机器人模板并核对契约。回放按任务需要选择；训练算法和算力须与模型契约兼容。</p>
             </div>
             <details class="panel contract-fold" id="contract-fold" data-train-module="contract" role="tabpanel" aria-labelledby="train-tab-contract">
               <summary>
@@ -747,7 +715,7 @@
                   <div class="panel-heading panel-heading-lean"><h2>第 1 步 · 准备模型</h2>
                     <small class="panel-tip" id="contract-panel-tip">推荐：载入当前产品模板 → 校验 → 登记</small>
                   </div>
-                  <div class="manifest-explainer"><strong>这一步是做什么？</strong><span>把模型的输入、输出和设备要求登记进工作区，后续训练、评测和部署都会用它做兼容性检查。</span><em>第一次使用：点击“载入模板”，然后依次点击“校验清单”和“登记版本”。</em></div>
+                  <div class="manifest-explainer"><strong>这一步是做什么？</strong><span>把模型的输入、输出和设备要求登记进工作区，后续训练、评测和交付都会用它做兼容性检查。</span><em id="manifest-first-run-help">第一次使用：点击“载入模板”，然后依次点击“校验清单”和“登记版本”。</em></div>
                   <textarea
                     id="manifest-editor"
                     spellcheck="false"
@@ -789,7 +757,7 @@
                     <li>
                       <span>01</span>
                       <div>
-                        <strong>产品标识</strong><small>MicroDuck 与 RDK Duck 不共用机器人维度</small>
+                        <strong>机器人标识</strong><small>机器人档案与契约中的 robotId 必须一致</small>
                       </div>
                     </li>
                     <li>
@@ -803,7 +771,7 @@
                       <span>03</span>
                       <div>
                         <strong>运行时分工</strong
-                        ><small>运控 CPU ONNX 单线程，感知制品走 X5 BPU</small>
+                        ><small>运行时由目标设备适配器声明并验证</small>
                       </div>
                     </li>
                     <li>
@@ -836,7 +804,7 @@
                     <span class="overview-environment-toggle" aria-hidden="true"><i>⌄</i></span>
                     <span>
                       <strong>模型契约与制品</strong>
-                      <small>查看策略说明、制品清单与板卡兼容性</small>
+                      <small>查看策略说明、制品清单与设备兼容性</small>
                     </span>
                   </summary>
                   <div class="model-details-body">
@@ -851,7 +819,7 @@
                   <button class="button button-ghost" id="browser-run-button" type="button">
                     浏览器回放</button
                   ><button class="button button-primary" id="local-run-button" type="button">
-                    发起本地强化学习训练</button
+                    发起本地训练</button
                   ><button class="button button-ghost" id="robogo-run-button" type="button">
                     登记 RoboGo 训练
                   </button>
@@ -929,7 +897,7 @@
                       <option value="standard" selected>标准 · 1024 环境</option>
                       <option value="high-vram">高显存 · 4096 环境</option></select
                     ><label class="field-label" for="training-algorithm">算法</label
-                    ><select id="training-algorithm" aria-label="选择强化学习算法">
+                    ><select id="training-algorithm" aria-label="选择训练算法">
                       <option value="ppo" selected>PPO · 在策略</option>
                       <option value="sac">SAC · 离策略</option></select
                     ><label class="field-label" for="training-engine">训练引擎</label
@@ -1070,7 +1038,7 @@
                   </li>
                   <li>
                     <span class="evaluation-empty-step-index">02</span>
-                    <div><strong>导入一段遥测证据</strong><small>X5 Agent 或浏览器录制的 JSONL，本地解析不上传</small></div>
+                    <div><strong>导入一段遥测证据</strong><small>设备适配器或浏览器录制的 JSONL，本地解析不上传</small></div>
                   </li>
                   <li>
                     <span class="evaluation-empty-step-index">03</span>
@@ -1097,7 +1065,7 @@
                     <strong id="eval-latency">—</strong><span id="eval-latency-label">控制延迟</span>
                   </div>
                 </div>
-                <p class="small-note" id="eval-metrics-note">指标由训练 worker 或 X5 Agent 回写。</p>
+                <p class="small-note" id="eval-metrics-note">指标由训练执行器或设备适配器回写。</p>
               </article>
               <details class="panel comparison-panel workspace-inspector">
                 <summary class="panel-heading panel-heading-lean workspace-inspector-summary"><span><small>Inspector</small><h2>效果对比</h2></span><span class="workspace-inspector-toggle">展开 <i aria-hidden="true">⌄</i></span></summary>
@@ -1208,7 +1176,7 @@
                 <span class="workspace-inspector-toggle">展开 <i aria-hidden="true">⌄</i></span>
               </summary>
               <div class="telemetry-intro">
-                <p>导入 X5 Agent 或浏览器录制的 JSONL（单文件 ≤32 MiB），本地解析、不上传。</p>
+                <p>导入设备适配器或浏览器录制的 JSONL（单文件 ≤32 MiB），本地解析、不上传。</p>
                 <label
                   class="button button-ghost button-small file-input-button telemetry-file-button"
                 >
@@ -1382,7 +1350,7 @@
             </details>
             <div class="evaluation-next">
               <span class="next-line" id="evaluation-next-line"></span>
-              <strong id="evaluation-next-title">下一步：通过评测后生成 X5 预检计划</strong>
+              <strong id="evaluation-next-title">下一步：通过评测后生成设备预检计划</strong>
               <button
                 class="button button-primary button-small"
                 id="evaluation-next-button"
@@ -1412,22 +1380,22 @@
                   <span class="deploy-safe" lang="en" title="No motor: 只读预检，不会驱动电机">NO MOTOR</span>
                 </div>
                 <div class="deploy-device-select">
-                  <label class="field-label" for="device-select">目标板卡</label>
-                  <select id="device-select" aria-label="选择板卡"></select>
+                  <label class="field-label" for="device-select">目标设备</label>
+                  <select id="device-select" aria-label="选择设备"></select>
                 </div>
                 <div class="board-summary" id="board-summary">
-                  <div class="empty-inline">没有可用板卡；先在设备管理中登记</div>
+                  <div class="empty-inline">没有可用设备；先在设备管理中登记</div>
                 </div>
                 <div class="board-actions">
                   <button class="button button-ghost" id="detect-button" type="button">
-                    探测板型</button
+                    检查设备能力</button
                   ><button class="button button-primary" id="plan-button" type="button">
                     生成预检计划</button
                   ><button class="button button-ghost" id="preflight-button" type="button">
                     执行只读预检
                   </button>
                 </div>
-                <p class="deploy-action-hint" id="deploy-action-hint" role="status" aria-live="polite">先选择模型和目标板卡，再生成只读预检计划。</p>
+                <p class="deploy-action-hint" id="deploy-action-hint" role="status" aria-live="polite">先选择模型和目标设备，再生成只读预检计划。</p>
                 <p class="small-note">
                   预检只读取架构、系统目录和磁盘信息；不会下发模型、启动节点或驱动电机。
                 </p>
@@ -1461,7 +1429,7 @@
                 <details class="deploy-detail-fold">
                   <summary><span>部署时间线</span><span id="deploy-timeline-status">等待预检</span></summary>
                   <div class="deploy-timeline" aria-label="部署状态时间线">
-                    <ol id="deploy-timeline-list"><li class="deploy-timeline-empty">生成预检计划后，这里会显示模型、板卡和证据状态。</li></ol>
+                    <ol id="deploy-timeline-list"><li class="deploy-timeline-empty">生成预检计划后，这里会显示模型、设备和证据状态。</li></ol>
                   </div>
                 </details>
                 <details class="deploy-detail-fold">
@@ -1602,29 +1570,29 @@
           >
             <p class="mobile-desktop-hint" role="note">手机端适合查看设备状态与日志；实时画面和安全控制建议使用桌面端。</p>
             <div class="submodule-tabs" role="tablist" aria-label="设备控制台模块">
-              <button id="station-tab-devices" aria-controls="station-device-manager" class="submodule-tab is-active" type="button" role="tab" aria-selected="true" data-station-module-tab="devices">设备连接<small>Bridge、板卡与能力</small></button>
+              <button id="station-tab-devices" aria-controls="station-device-manager" class="submodule-tab is-active" type="button" role="tab" aria-selected="true" data-station-module-tab="devices">设备连接<small>连接、设备与能力</small></button>
               <button id="station-tab-telemetry" aria-controls="station-module-telemetry-status station-module-telemetry-camera" class="submodule-tab" type="button" role="tab" aria-selected="false" data-station-module-tab="telemetry">遥测概览<small>状态、相机与话题</small></button>
               <button id="station-tab-control" aria-controls="station-switch-panel station-drive-panel" class="submodule-tab" type="button" role="tab" aria-selected="false" data-station-module-tab="control">安全控制<small>开关、急停与低速控制</small></button>
               <button id="station-tab-policy" aria-controls="station-policy-panel" class="submodule-tab" type="button" role="tab" aria-selected="false" data-station-module-tab="policy">策略运行时<small>制品加载与策略状态</small></button>
               <button id="station-tab-diagnostics" aria-controls="station-module-diagnostics-command" class="submodule-tab" type="button" role="tab" aria-selected="false" data-station-module-tab="diagnostics">诊断命令<small>TROS 与系统检查</small></button>
             </div>
             <div class="station-notice" id="station-notice" role="status" aria-live="polite" hidden>
-              上位机未就绪：未配置板端 agent 或板卡设备。
+              设备连接未就绪：未配置设备适配器或目标设备。
             </div>
             <article role="tabpanel" aria-labelledby="station-tab-devices" class="panel station-device-manager" id="station-device-manager" data-station-module="devices">
               <div class="panel-heading panel-heading-lean"><h2>设备管理</h2>
                 <span class="panel-caption">平台内添加 · 受控连接 · 状态可追踪</span>
               </div>
               <p class="station-drive-note" id="station-device-manager-note">
-                在平台内登记板卡并建立受控连接：设备档案、连接状态、心跳、
+                在平台内登记设备并建立受控连接：设备档案、连接状态、心跳、
                 能力检查和后续预检都在本页完成。
               </p>
               <div class="station-studio-connect">
-                <div><strong>原生连接设备</strong><small>填写板卡地址并添加，平台会建立受控隧道并读取设备状态。</small></div>
+                <div><strong>添加设备</strong><small>填写设备地址并添加，平台会建立受控连接并读取设备状态。</small></div>
               </div>
-              <p class="station-device-ssh-hint" id="station-device-ssh-path"><strong>路径 A · 网页内配对</strong>：SSH 可密码登录的板卡，填下表一次完成设备档案与受控隧道。</p>
+              <p class="station-device-ssh-hint" id="station-device-ssh-path"><strong>路径 A · 网页内配对</strong>：SSH 可密码登录的设备，填下表一次完成设备档案与受控连接。</p>
               <div class="station-device-add" id="station-device-add">
-                <label for="station-device-host">板卡 IP / 主机名
+                <label for="station-device-host">设备 IP / 主机名
                   <input type="text" id="station-device-host" placeholder="例如 board-host.example.internal" spellcheck="false" autocomplete="off" />
                 </label>
                 <label for="station-device-user" data-station-ssh-field>SSH 用户
@@ -1640,12 +1608,12 @@
                   <input type="text" id="station-device-label" placeholder="OriginBot 演示机" maxlength="120" />
                 </label>
                 <label for="station-device-profile">设备档案
-                  <select id="station-device-profile"><option value="microduck-x5">MicroDuck · X5</option><option value="originbot-x5">OriginBot · X5</option><option value="custom">通用 RDK / 自定义设备</option></select>
+                  <select id="station-device-profile"><option value="microduck-x5">MicroDuck · X5</option><option value="originbot-x5">OriginBot · X5</option><option value="custom">自定义设备 · 需适配器</option></select>
                   <small class="station-device-profile-note" id="station-device-profile-note">按当前产品线自动推荐，可手动改成板端实际档案。</small>
                 </label>
                 <label for="station-device-transport">连接方式
                   <select id="station-device-transport"><option value="ssh">SSH 隧道</option><option value="bridge">Local Bridge（已配对设备）</option></select>
-                  <small class="station-device-transport-note" id="station-device-transport-note">服务器直连板卡时使用；密码只用于本次建档。</small>
+                  <small class="station-device-transport-note" id="station-device-transport-note">服务器直连设备时使用；密码只用于本次建档。</small>
                 </label>
                 <button class="button station-device-add-btn" type="button" id="station-device-add-btn">
                   添加设备与能力档案
@@ -1653,7 +1621,7 @@
                 <button class="button button-primary station-device-script-btn" type="button" id="station-device-script-btn">生成一键配对脚本（路径 B）</button>
               </div>
               <div class="station-connect-script" id="station-connect-script" hidden>
-                <div><strong>首次配对脚本（路径 B）</strong><small>在可访问板卡的终端粘贴运行一次；运行后设备会自动出现在下方列表（本页约每 3 秒刷新），配对完成后的连接、检测和预检均在平台内完成。脚本含一次性配对凭据，请勿转发。</small></div>
+                <div><strong>首次配对脚本（路径 B）</strong><small>在可访问设备的终端粘贴运行一次；运行后设备会自动出现在下方列表（本页约每 3 秒刷新），配对完成后的连接、检测和预检均在平台内完成。脚本含一次性配对凭据，请勿转发。</small></div>
                 <textarea id="station-connect-script-text" readonly aria-label="设备连接脚本"></textarea>
                 <button class="button button-ghost button-small" type="button" id="station-connect-script-copy">复制脚本</button>
               </div>
@@ -1662,23 +1630,23 @@
                 <span class="station-topic-empty" id="station-device-list-empty">尚未添加设备。</span>
               </div>
               <p class="station-device-ssh-hint" id="station-bridge-hint">
-                如果已连接 RDK Studio Local Bridge，设备会在上方板卡选择器中直接出现；无需在这里重复添加 SSH。
+                如果已连接 RDK Studio Local Bridge，设备会在上方选择器中直接出现；无需在这里重复添加 SSH。
               </p>
               <p class="station-device-ssh-hint" id="station-device-ssh-hint">
-                提示：RDK Studio 场景不需要填写 SSH。下方 SSH 仅用于服务器能直接访问板卡的独立部署，
+                提示：RDK Studio 场景不需要填写 SSH。下方 SSH 仅用于服务器能直接访问设备的独立部署，
                 需要服务器已有密钥或 ssh-agent。
               </p>
             </article>
             <div class="station-layout">
               <article id="station-module-telemetry-status" role="tabpanel" aria-labelledby="station-tab-telemetry" class="panel station-status-panel" data-station-module="telemetry">
-                <div class="panel-heading panel-heading-lean"><h2>板卡实时状态</h2>
+                <div class="panel-heading panel-heading-lean"><h2>设备实时状态</h2>
                   <span class="station-live-badge" id="station-live-badge" hidden>
                     <span class="station-live-dot" aria-hidden="true"></span>LIVE
                   </span>
                   <span class="station-freshness" id="station-freshness" aria-live="polite">等待数据…</span>
                 </div>
                 <div class="station-device-line" id="station-device-line">
-                  目标板卡：<span id="station-device-name">（未选择）</span>
+                  目标设备：<span id="station-device-name">（未选择）</span>
                 </div>
                 <div class="station-metric-grid" id="station-metric-grid">
                   <div class="station-metric-card" id="station-cpu-card">
@@ -1772,7 +1740,7 @@
                   </div>
                 </div>
                 <p class="station-honesty-note" id="station-honesty-note" hidden>
-                  当前连接的是本地参考 BoardAgent（模拟数据，mock=true）；状态和相机画面是合成演示，不构成真机验收。
+                  当前使用本地 RDK 参考设备适配器（模拟数据）；状态和相机画面是合成演示，不构成真机验收。
                 </p>
               </article>
 
@@ -2076,7 +2044,7 @@
         </main>
       </div>
       <footer class="footer">
-        <span>RDK Robot Learning Platform · Robot Learning Workbench</span
+        <span>Robot Learning Platform · Robot Learning Workbench</span
           ><span
           ><a href="/rdkstudio/">RDK Studio</a><span id="microduck-footer-item"> ·
           <a id="microduck-footer-link" href="./mujoco/microduck/">MicroDuck</a></span> ·
@@ -2193,10 +2161,10 @@
     <script defer src="./telemetry-core.js?v=duck-lab-32"></script>
     <script defer src="./run-inspector-core.js?v=2"></script>
     <script defer src="./run-inspector.js?v=3"></script>
-    <script defer src="./app.js?v=duck-lab-71"></script>
+    <script defer src="./app.js?v=duck-lab-73"></script>
     <script defer src="./visualization-enhancements.js?v=viz-1"></script>
     <script defer src="./capability-workbench.js?v=1"></script>
     <script defer src="./agent-chat.js?v=agent-19"></script>
-    <script defer src="./onboarding.js?v=onboarding-7"></script>
+    <script defer src="./onboarding.js?v=onboarding-8"></script>
   </body>
 </html>

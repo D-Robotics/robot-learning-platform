@@ -91,6 +91,28 @@ describe('Sim2Real compatibility service', () => {
     expect(result.result.reasons[0]).toMatch(/rdk-s600/);
   });
 
+  it('accepts a custom robot contract while failing closed for an unregistered hardware adapter', () => {
+    const manifest = manifestFixture();
+    manifest.robot = { id: 'custom', variant: 'unitree-go2-research' };
+    manifest.contract = {
+      ...manifest.contract,
+      id: 'custom-policy-unitree-go2-v1',
+      robotId: 'custom',
+    };
+    manifest.artifacts = manifest.artifacts.map((artifact) => ({
+      ...artifact,
+      targetPlatforms: ['unitree-go2'],
+    }));
+
+    expect(validateSim2RealManifest(manifest).valid).toBe(true);
+    const result = compatibilityForManifest(manifest, 'unitree-go2');
+
+    expect(result.status).toBe('unknown-platform');
+    expect(result.deployable).toBe(false);
+    expect(result.result.reasons.join(' ')).toMatch(/No model compatibility target/);
+    expect(result.result.reasons.join(' ')).not.toMatch(/outside this product target/);
+  });
+
   it('allows the explicitly declared CPU ONNX locomotion path on X5', () => {
     const manifest = manifestFixture();
     manifest.modelId = 'cpu-locomotion';

@@ -51,7 +51,10 @@ export function compatibilityForManifest(
   platformId: string,
 ): Sim2RealCompatibilityView {
   const productProfile = SIM2REAL_PRODUCT_PROFILES[manifest.robot.id];
-  if (productProfile && !productProfile.targetPlatforms.includes(platformId)) {
+  if (
+    productProfile?.targetPlatforms.length &&
+    !productProfile.targetPlatforms.includes(platformId)
+  ) {
     const result = evaluateModelCompatibility(platformId, {
       name: 'product-target',
       kind: 'compiled',

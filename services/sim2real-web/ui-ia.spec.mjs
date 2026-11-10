@@ -151,8 +151,7 @@ assert.match(
   'app.js must delegate IMU quaternion parsing',
 );
 
-// ---- IA: one navigation surface, grouped by user intent ----
-// 工作区 / 构建策略 / 交付到设备 / 证据中心. Execution backends remain resources.
+// ---- IA: one simple primary navigation; diagnostics stay in More ----
 const viewNames = [...app.matchAll(/WORKFLOW_VIEWS\s*=\s*\[([^\]]+)\]/g)][0][1]
   .match(/['"][^'"]+['"]/g)
   .map((value) => value.slice(1, -1));
@@ -176,29 +175,45 @@ assert.deepEqual(
 );
 
 const navItems = [...html.matchAll(/class="nav-item(?:\s[^"]*)?"/g)].length;
-assert.equal(navItems, 8, 'sidebar nav: workspace + build strategy + delivery + evidence center');
+assert.equal(navItems, 6, 'sidebar nav: five primary steps plus one collapsed More group');
 const navLabels = [
   ...html.matchAll(/class="nav-item(?:\s[^"]*)?"[\s\S]*?<strong>([^<]+)<\/strong>/g),
 ].map((m) => m[1]);
 assert.deepEqual(
   navLabels,
-  [
-    '项目概况',
-    'Agent 助手',
-    '数据与仿真',
-    '训练与策略',
-    '评测与证据',
-    '设备与发布',
-    '证据与记录',
-    '执行资源',
-  ],
-  'sidebar nav labels must match the three-group IA',
+  ['概览', '数据', '训练', '结果', '交付', '工具与记录'],
+  'sidebar labels should show the learning loop and collapse advanced tools',
 );
 const navGroups = [...html.matchAll(/class="nav-label">([^<]+)<\/div>/g)].map((m) => m[1]);
 assert.deepEqual(
   navGroups,
-  ['工作区', '构建策略', '交付到设备', '证据中心'],
-  'sidebar must group nav by workspace, strategy construction, delivery, and evidence',
+  ['工作台', '更多'],
+  'sidebar should keep the main path and advanced tools in two groups',
+);
+assert.match(
+  html,
+  /id="overview-diagnostics"[^>]*>[\s\S]*?id="platform-scorecard-grid"[\s\S]*?id="research-loop-grid"/,
+  'platform diagnostics stay collapsed by default',
+);
+assert.match(
+  html,
+  /id="product-select" aria-label="选择机器人档案"[\s\S]*?value="custom">自定义 · 需适配器/,
+  'custom robot profiles are clearly adapter-backed',
+);
+assert.match(
+  html,
+  /Robot Learning Platform：面向多种机器人的/,
+  'workbench brand is robot-family neutral',
+);
+assert.match(
+  app,
+  /if \(profile\.id === 'custom'\)[\s\S]{0,1000}robot: \{ id: 'custom', variant: 'my-robot' \}[\s\S]{0,600}artifacts: \[\]/,
+  'custom robot template must not inherit MicroDuck dimensions or a fake artifact',
+);
+assert.match(
+  onboarding,
+  /自定义机器人需要对应的仿真、训练或设备适配器/,
+  'custom robot setup must disclose the adapter requirement',
 );
 
 assert.match(html, /app\.css/, 'the merged app.css must be loaded');
@@ -374,23 +389,23 @@ assert.match(onboarding, /最佳实践/, 'onboarding must include practical guid
 assert.match(onboarding, /localStorage/, 'onboarding completion must persist locally');
 assert.match(
   onboarding,
-  /在左侧产品选择器选择要使用的机器人、仿真器或硬件适配器/,
-  'onboarding step 01 must explain generic product selection',
+  /选择内置参考机器人，或选择自定义机器人并登记自己的契约/,
+  'onboarding step 01 must explain generic robot profile selection',
 );
 assert.match(
   onboarding,
-  /view: 'station', kicker: '02/,
-  'onboarding step 02 must open the station page for server and device setup',
+  /view: 'simulate', kicker: '02/,
+  'onboarding step 02 must open the generic data preparation page',
 );
 assert.match(
   onboarding,
-  /view: 'simulate', kicker: '03/,
-  'onboarding step 03 must open the simulate page for the OriginBot task',
+  /view: 'train', kicker: '03/,
+  'onboarding step 03 must open the model and training page',
 );
 assert.match(
   onboarding,
-  /view: 'simulate', kicker: '04/,
-  'onboarding step 04 must open the simulate page for recording',
+  /view: 'evaluate', kicker: '04/,
+  'onboarding step 04 must open the evaluation page',
 );
 
 // ---- a11y baseline ----

@@ -4,13 +4,11 @@ Studio 插件： [0.3.2 体验教程](docs/plugin-experience-test.md) · [安装
 
 <div align="center">
 
-**从浏览器里的第一步，到 RDK-X5 上的下一步。**
+**从浏览器里的第一步，到目标机器人上的下一步。**
 
-面向 MicroDuck 与 RDK-X5 的机器人学习工作台：仿真、录制、训练、评测、部署和虚实迭代，都围绕同一份可追溯模型契约组织。
+面向多种机器人的学习工作台：用统一契约串起仿真或数据采集、训练、评测与受控交付。平台内置 MicroDuck、OriginBot 与 RDK 设备适配；接入其他机器人时，需要配置对应的仿真、训练和设备适配器。
 
-**English (short version)** — A web-based robot learning workbench for MicroDuck and RDK-X5,
-covering simulation, trajectory recording, training, telemetry evaluation, controlled deployment,
-and an MCP adapter for external agents. Local engines include PPO, MLP behavior cloning, and ACT
+**English (short version)** — A web-based robot learning workbench for simulation or data collection, training, evaluation, and controlled delivery. It includes first-party MicroDuck, OriginBot, and RDK adapters; other robots need matching simulator, training, and device adapters. An MCP adapter exposes workflows to external agents. Local engines include PPO, MLP behavior cloning, and ACT
 action chunking with numerical ONNX export checks. The default Mock workflow needs no GPU; real
 training requires the selected engine's Python dependencies. ACT and Diffusion Policy accept
 digest-pinned recorded episodes through their workers; synthetic smoke requires an explicit request. Board deployment requires
@@ -22,11 +20,11 @@ index](docs/README.md).
 [![API](https://img.shields.io/badge/API-versioned%20%2Fapi%2Fv1%2Fduck-ff7433)](docs/api/openapi.yaml)
 [![状态](https://img.shields.io/badge/CPU%20真训练闭环-可运行-16a085)](#上手先跑真训练mock只是回退)
 
-<img src="docs/assets/rdk-robot-learning-platform-hero.svg" alt="RDK Robot Learning Platform 从仿真到真机的产品闭环" width="100%" />
+<img src="docs/assets/rdk-robot-learning-platform-hero.svg" alt="机器人学习平台从仿真到设备交付的产品闭环" width="100%" />
 
 </div>
 
-> **一句话理解：这不是一个只能“遛鸭”的游戏。** 浏览器仿真是低门槛的动作入口；录制结果进入统一契约，随后可以交给本地 worker（默认 Mock）或 RoboGo adapter，最后通过制品、评测和 RDK-X5 预检进入受控的真机迭代。
+> **一句话理解：从机器人任务到可核验的交付。** 仿真或导入数据进入统一契约，随后交给本地 worker（默认 Mock）或 RoboGo adapter；目标设备通过对应适配器、评测和预检进入受控迭代。
 
 运营端/源码开发环境的 Node.js 需要 `^22.22.2 || ^24.15.0 || >=26.0.0`（与 `package.json` 的 `engines` 以及 `.nvmrc` 一致）。**网页用户只需要浏览器，不需要安装 Node、Python 或 CUDA。** 正式部署应在服务器镜像或 systemd 环境中固定 Node 版本。下界由工具链本身决定：`jsdom@30` 要求 `^22.22.2 || ^24.15.0 || >=26`，高于 `vitest@5` 的 `^22.12.0 || ^24.0.0 || >=26`。Node 20 不提供 DSH 会话持久化依赖的 `node:zlib` zstd API；Node 23、25 等非 LTS 奇数版本也不在支持范围内。
 
@@ -37,11 +35,11 @@ index](docs/README.md).
 | 你想做什么           | 从哪里开始        | 结果是什么                           |
 | -------------------- | ----------------- | ------------------------------------ |
 | 亲手演示一个动作     | **仿真与录制**    | 浏览器轨迹 JSON / JSONL              |
-| 训练一个策略         | **强化学习训练**  | 本地 Mock、本地 worker 或 RoboGo Run |
-| 判断仿真是否接近真机 | **Sim2Real 评测** | 遥测、回放和虚实偏差摘要             |
-| 给 X5 做上线准备     | **部署与反馈**    | 契约、板型、制品和只读预检           |
+| 训练一个策略         | **训练**          | 本地 Mock、本地 worker 或 RoboGo Run |
+| 检查训练和设备表现   | **结果与评测**    | 指标、遥测、回放和偏差摘要           |
+| 给目标设备做上线准备 | **交付与反馈**    | 契约、适配器、制品和只读预检         |
 
-平台把“可视化入口”和“受控执行”分开：浏览器负责观察和录制，服务端负责权限、制品、幂等和审计，板端/云端 adapter 负责真正的训练或部署。
+平台把“可视化入口”和“受控执行”分开：浏览器负责观察和录制，服务端负责权限、制品、幂等和审计，训练执行器与设备适配器负责实际训练或交付。
 
 <div align="center">
 
@@ -83,7 +81,7 @@ npm run dev:mcp
 默认连接 `http://127.0.0.1:18102`。多用户部署可通过环境变量配置静态 Cookie 或账号密码；
 客户端注册示例、工具目录、认证边界和幂等重试语义见 [`docs/duck-lab-mcp.md`](docs/duck-lab-mcp.md)。
 
-产品定位、同类能力对标和当前成熟度判断见 [`docs/product-maturity-plan.md`](docs/product-maturity-plan.md)。一句话概括：这是 **RDK 机器人策略的证据链与安全交付控制面**，重点是把 Run、制品、评测、板型预检和人工审批连成可审计发布链。
+产品定位、同类能力对标和当前成熟度判断见 [`docs/product-maturity-plan.md`](docs/product-maturity-plan.md)。一句话概括：这是 **面向多种机器人的策略证据链与安全交付控制面**，当前优先提供 RDK 参考适配，并通过统一契约和适配器接入其他机器人。
 
 ### 工作台一览
 
