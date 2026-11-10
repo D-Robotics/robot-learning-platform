@@ -1103,9 +1103,6 @@ h2 {
 .records-single {
   grid-template-columns: 1fr;
 }
-.contract-guide-panel {
-  min-height: 100%;
-}
 .contract-check-list {
   display: grid;
   gap: 8px;
@@ -5382,7 +5379,6 @@ html.theme-dark .agent-assistant-health { max-width: 150px; }
     transition: none !important;
   }
 }
-.train-onboarding{margin:12px 0 16px;padding:16px 20px;border:1px solid color-mix(in srgb,var(--accent) 35%,transparent);border-radius:14px;background:linear-gradient(110deg,color-mix(in srgb,var(--accent) 10%,transparent),var(--panel));}
 .submodule-tabs{display:flex;gap:8px;margin:12px 0 12px;padding:4px;border:1px solid var(--line-strong);border-radius:12px;background:var(--panel-soft);overflow:auto}
 .submodule-tab{flex:1;min-width:150px;padding:10px 12px;border:1px solid transparent;border-radius:8px;background:transparent;color:var(--muted-strong);text-align:left;font:inherit;cursor:pointer;transition:.18s ease}
 .submodule-tab small{display:block;margin-top:2px;color:var(--muted);font-size:var(--fs-meta)}
@@ -5392,10 +5388,8 @@ html.theme-dark .agent-assistant-health { max-width: 150px; }
 .view-section[data-active-train-module="contract"] .compute-resources-panel{display:none}
 .train-layout[data-train-active-module="resources"] > [data-train-module="run"]{display:none}
 .train-layout[data-train-active-module="resources"] > .compute-resources-panel{grid-column:1 / -1}
-.view-section[data-active-train-module="contract"] .train-onboarding{opacity:.72}
 .view-section[data-active-train-module="contract"] .contract-fold{display:block}
 .view-section[data-active-train-module="contract"] .train-layout{display:none}
-.view-section[data-active-train-module="resources"] .train-onboarding{opacity:.72}
 .view-section[data-active-train-module="resources"] .contract-fold{display:none}
 .view-section[data-active-train-module="resources"] .train-layout{display:grid}
 .view-section[data-active-train-module="resources"] .train-layout > [data-train-module="run"]{display:none}
@@ -5407,8 +5401,7 @@ html.theme-dark .agent-assistant-health { max-width: 150px; }
 .view-section[data-active-train-module="run"] .contract-fold,
 .view-section[data-active-train-module="run"] .compute-resources-panel{display:none}
 .view-section[data-active-train-module="config"] .contract-fold,
-.view-section[data-active-train-module="config"] .compute-resources-panel,
-.view-section[data-active-train-module="config"] .robogo-panel{display:none}
+.view-section[data-active-train-module="config"] .compute-resources-panel{display:none}
 .view-section[data-active-train-module="config"] .train-layout{display:block}
 .view-section[data-active-train-module="config"] .model-panel > :not(#train-module-config){display:none}
 .view-section[data-active-train-module="config"] #train-module-config{display:block;margin:0}
@@ -5443,8 +5436,7 @@ html.theme-dark .agent-assistant-health { max-width: 150px; }
 .view-section[data-active-train-module="config"] .model-panel>.panel-heading{display:flex}
 @media (max-width:720px){.module-step-strip{grid-template-columns:1fr}}
 .model-empty-guide{display:flex;flex-direction:column;align-items:flex-start;gap:8px;padding:16px}.model-empty-guide strong{font-size:17px}.model-empty-guide span{color:var(--muted);font-size:var(--fs-meta)}.model-empty-guide .button{margin-top:4px}
-.train-onboarding-heading{display:flex;align-items:flex-start;justify-content:space-between;gap:16px}.train-onboarding h3{margin:2px 0 0;font-size:20px}.train-onboarding-note{color:var(--accent-text);font-size:var(--fs-meta);padding-top:6px}.train-onboarding .eyebrow{color:var(--accent-text);font-size:var(--fs-meta);letter-spacing:.12em;text-transform:uppercase}.train-onboarding-steps{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-top:16px}.train-onboarding-step{display:flex;gap:10px;align-items:center;padding:10px 12px;border:1px solid var(--line);border-radius:10px;background:var(--panel-soft)}.train-onboarding-step b{display:grid;place-items:center;width:26px;height:26px;border-radius:50%;background:var(--panel-raised);color:var(--muted-strong)}.train-onboarding-step strong,.train-onboarding-step small{display:block}.train-onboarding-step small{margin-top:2px;color:var(--muted);font-size:var(--fs-meta)}.train-onboarding-step.is-current{border-color:var(--accent)}.train-onboarding-step.is-current b{background:var(--accent-soft);color:var(--accent-text)}.train-onboarding-help{margin:12px 0 0;color:var(--muted-strong);font-size:var(--fs-meta)}.panel-tip{color:var(--muted);font-size:var(--fs-meta);font-weight:400}.manifest-panel h2{margin-bottom:2px}
-@media (max-width:720px){.train-onboarding-steps{grid-template-columns:1fr}.train-onboarding-heading{display:block}.train-onboarding-note{display:block}}
+.panel-tip{color:var(--muted);font-size:var(--fs-meta);font-weight:400}.manifest-panel h2{margin-bottom:2px}
 
 /* Unified workspace refresh: one clear hierarchy across all modules.
    --surface-1/2 are this layer's own panel tokens: light resolves them to
@@ -5463,12 +5455,7 @@ html.theme-dark .agent-assistant-health { max-width: 150px; }
 .submodule-tabs{margin:0 0 16px;border:0;background:var(--surface-1);padding:4px;border-radius:10px}
 .submodule-tab{min-height:54px;padding:10px 16px}
 .submodule-tab.is-active{background:color-mix(in srgb,var(--accent) 16%,var(--surface-2));border-color:var(--accent);box-shadow:inset 0 -2px 0 var(--accent);color:var(--text)}
-.train-onboarding{margin:0 0 16px;padding:16px 20px;border-color:var(--line);background:var(--surface-1);box-shadow:none}
-.train-onboarding h3{font-size:18px}
-.train-onboarding-steps{gap:8px;margin-top:12px}
-.train-onboarding-step{padding:12px;border-radius:10px}
-.train-onboarding-help{margin-top:10px;color:var(--muted)}
-@media(max-width:720px){.view-section{padding:20px 16px 40px}.section-heading h2{font-size:22px}.train-onboarding{padding:16px}.train-onboarding-steps{gap:8px}}
+@media(max-width:720px){.view-section{padding:20px 16px 40px}.section-heading h2{font-size:22px}}
 
 /* ======================== onboarding.css — 新手指引浮层 ======================== */
 
@@ -5998,16 +5985,7 @@ body.agent-chat-open .agent-chat-composer input { min-height: 44px; border-color
 .station-connect-script strong, .station-connect-script small { display: block; }
 .station-connect-script small { margin: 2px 0 8px; color: var(--muted); font-size:var(--fs-meta); }
 .station-connect-script textarea { width: 100%; min-height: 72px; resize: vertical; color: var(--text); background: var(--bg); font: 12px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; }
-.manifest-explainer { display: grid; gap: 4px; margin: 0 0 12px; padding: 12px 12px; border: 1px solid var(--line-strong); border-left: 3px solid var(--accent); border-radius: 9px; background: var(--panel-soft); }
-.manifest-explainer strong { font-size:var(--fs-body); }
-.manifest-explainer span, .manifest-explainer em { color: var(--muted); font-size: var(--fs-body); font-style: normal; }
-.manifest-explainer em { color: var(--accent-text); }
-.train-onboarding-step.is-complete { border-color: color-mix(in srgb, var(--green) 45%, transparent); background: color-mix(in srgb, var(--green) 8%, transparent); }
-/* 白字压 var(--green) 实测 3.3:1（浅）/2.2:1（深），换 soft 底 + 语义文字色，
-   与 .status-icon-green 同一模式。 */
-.train-onboarding-step.is-complete b { color: var(--green-text); background: var(--green-soft); }
-.train-onboarding-step.is-complete strong::after { content: ' ✓' / ''; color: var(--green-text); }
-.train-onboarding-step[role="button"] { cursor: pointer; }
+
 .train-onboarding-step[role="button"]:hover,
 .train-onboarding-step[role="button"]:focus-visible { border-color: var(--accent); outline: none; transform: translateY(-1px); }
 @media (max-width: 560px) { .station-studio-connect { align-items: flex-start; flex-direction: column; } }

@@ -20,7 +20,7 @@
          theme x view screenshots). See services/sim2real-web/ui-layout-invariants.mjs
          for the guards that keep new overrides from re-introducing layering. -->
     <link rel="stylesheet" href="./tokens.css?v=3" />
-    <link rel="stylesheet" href="./app.css?v=54" />
+    <link rel="stylesheet" href="./app.css?v=55" />
   </head>
   <body>
     <a class="skip-link" href="#main-content">跳到主要内容</a>
@@ -721,70 +721,71 @@
             <div class="submodule-tabs" role="tablist" aria-label="训练与策略模块">
               <button class="submodule-tab" type="button" role="tab" id="train-tab-contract" aria-controls="contract-fold" aria-selected="false" data-train-module-tab="contract">模型与契约<small>Manifest 与兼容性</small></button>
               <button class="submodule-tab" type="button" role="tab" id="train-tab-config" aria-controls="train-module-config" aria-selected="false" data-train-module-tab="config">训练配置<small>算法、算力与续训</small></button>
-              <button class="submodule-tab is-active" type="button" role="tab" id="train-tab-run" aria-controls="train-module-run-model train-module-run-robogo" aria-selected="true" data-train-module-tab="run">Run 与进度<small>提交任务与实时曲线</small></button>
+              <button class="submodule-tab is-active" type="button" role="tab" id="train-tab-run" aria-controls="train-module-run-model" aria-selected="true" data-train-module-tab="run">Run 与进度<small>提交任务与实时曲线</small></button>
 
-            </div>
-            <div class="train-onboarding" role="note" aria-label="训练流程引导">
-              <div class="train-onboarding-heading">
-                <div><span class="eyebrow">新手流程</span><h3 id="train-onboarding-title">按 3 步完成一次训练</h3></div>
-                <span class="train-onboarding-note">预计 2–5 分钟</span>
-              </div>
-              <div class="train-onboarding-steps">
-                <div class="train-onboarding-step is-current" data-train-step="1" role="button" tabindex="0"><b>1</b><div><strong>准备模型</strong><small id="train-onboarding-model-help">载入默认模板并登记</small></div></div>
-                <div class="train-onboarding-step" data-train-step="2" role="button" tabindex="0"><b>2</b><div><strong>配置训练</strong><small>选择算法与算力资源</small></div></div>
-                <div class="train-onboarding-step" data-train-step="3" role="button" tabindex="0"><b>3</b><div><strong>开始强化学习训练</strong><small>选择 GPU 和 PPO / SAC 后提交任务</small></div></div>
-              </div>
-              <p class="train-onboarding-help">第一次使用？先点击“载入模板”，不用编辑 JSON。回放是可选的验证工具；强化学习训练可直接提交 PPO / SAC 任务。</p>
             </div>
             <details class="panel contract-fold" id="contract-fold" data-train-module="contract" role="tabpanel" aria-labelledby="train-tab-contract">
               <summary>
                 <span class="overview-environment-icon" aria-hidden="true">◈</span>
-                <span><strong>套件与契约 · 登记模型</strong><small>导入并校验 manifest，登记后模型可追溯</small></span>
+                <span><strong>登记模型</strong><small>载入产品模板并登记版本；Manifest 与兼容性检查收进高级选项</small></span>
                 <span class="overview-environment-toggle" aria-hidden="true">展开 <i>⌄</i></span>
               </summary>
-              <div class="records-layout">
-                <article class="panel manifest-panel">
-                  <div class="panel-heading panel-heading-lean"><h2>第 1 步 · 准备模型</h2>
-                    <small class="panel-tip" id="contract-panel-tip">推荐：载入当前产品模板 → 校验 → 登记</small>
-                  </div>
-                  <div class="manifest-explainer"><strong>这一步是做什么？</strong><span>把模型的输入、输出和设备要求登记进工作区，后续训练、评测和部署都会用它做兼容性检查。</span><em>第一次使用：点击“载入模板”，然后依次点击“校验清单”和“登记版本”。</em></div>
+              <article class="panel manifest-panel">
+                <div class="panel-heading panel-heading-lean"><h2>登记模型版本</h2>
+                  <small class="panel-tip" id="contract-panel-tip">推荐：载入当前产品模板 → 登记版本</small>
+                </div>
+                <div class="editor-actions">
+                  <button
+                      class="button button-primary button-small"
+                      id="template-button"
+                      type="button"
+                    >
+                      载入当前产品模板</button
+                    ><button
+                      class="button button-primary button-small"
+                      id="register-button"
+                      type="button"
+                    >
+                      登记版本
+                    </button>
+                </div>
+                <div class="validation-result" id="validation-result" role="status">尚未登记</div>
+                <details class="model-details-fold" id="manifest-advanced-fold">
+                  <summary>
+                    <span class="overview-environment-toggle" aria-hidden="true"><i>⌄</i></span>
+                    <span>
+                      <strong>高级 · 编辑或导入 Manifest JSON</strong>
+                      <small>默认无需编辑 JSON；需要自定义观测、动作或设备约束时再展开</small>
+                    </span>
+                  </summary>
                   <textarea
                     id="manifest-editor"
                     spellcheck="false"
                     aria-label="模型 manifest JSON"
                   ></textarea>
                   <div class="editor-actions">
-                    <button
-                      class="button button-ghost button-small"
-                      id="template-button"
-                      type="button"
-                    >
-                      载入当前产品模板</button
-                    ><label class="button button-ghost button-small file-input-button"
+                    <label class="button button-ghost button-small file-input-button"
                       >导入 manifest JSON（≤2 MiB）<input
                         id="manifest-file-input"
                         type="file"
                         accept=".json,application/json" /></label
                     ><button
-                      class="button button-primary button-small"
+                      class="button button-ghost button-small"
                       id="validate-button"
                       type="button"
                     >
-                      校验清单</button
-                    ><button
-                      class="button button-ghost button-small"
-                      id="register-button"
-                      type="button"
-                    >
-                      登记版本
+                      校验清单
                     </button>
                   </div>
-                  <div class="validation-result" id="validation-result" role="status">尚未校验</div>
-                </article>
-                <article class="panel contract-guide-panel">
-                  <div class="panel-heading panel-heading-lean"><h2>契约检查清单</h2>
-                    <span class="state-badge state-neutral">FAIL-CLOSED</span>
-                  </div>
+                </details>
+                <details class="model-details-fold contract-guide-fold">
+                  <summary>
+                    <span class="overview-environment-toggle" aria-hidden="true"><i>⌄</i></span>
+                    <span>
+                      <strong>契约检查清单</strong>
+                      <small>登记时自动校验；不满足时登记被拒绝（FAIL-CLOSED）</small>
+                    </span>
+                  </summary>
                   <ul class="contract-check-list">
                     <li>
                       <span>01</span>
@@ -814,8 +815,8 @@
                       </div>
                     </li>
                   </ul>
-                </article>
-              </div>
+                </details>
+              </article>
             </details>
             <div class="train-layout" data-train-active-module="run">
               <article class="panel model-panel" id="train-module-run-model" data-train-module="run" role="tabpanel" aria-labelledby="train-tab-run">
@@ -988,44 +989,6 @@
                   </div>
                 </details>
               </article>
-              <details class="panel robogo-panel workspace-inspector" id="train-module-run-robogo" data-train-module="run" role="tabpanel" aria-labelledby="train-tab-run">
-                <summary class="panel-heading panel-heading-lean workspace-inspector-summary"><span><small>Inspector</small><h2>算力后端</h2></span>
-                  <span id="robogo-state-badge" class="state-badge state-neutral">检查中</span>
-                  <span class="workspace-inspector-toggle">展开 <i aria-hidden="true">⌄</i></span>
-                </summary>
-                <div class="backend-choice">
-                  <div class="backend-choice-card is-primary">
-                    <span class="backend-icon" aria-hidden="true">⌂</span>
-                    <div><strong>本地服务器</strong><small>无 RoboGo 账号也能运行</small></div>
-                    <span class="choice-tag">默认</span>
-                  </div>
-                  <div class="backend-choice-card">
-                    <span class="backend-icon" aria-hidden="true">☁</span>
-                    <div><strong>RoboGo</strong><small>云端算力，可选接入</small></div>
-                  </div>
-                </div>
-                <div class="robogo-numbers">
-                  <div><span id="robogo-board-label">可见算力资源</span><strong id="robogo-board-count">—</strong></div>
-                  <div><span id="robogo-machine-label">开发机</span><strong id="robogo-machine-count">—</strong></div>
-                </div>
-                <p class="small-note">训练引擎 = 本地 worker 资源：注册 starter / mjlab / MJX 等引擎 worker 后，此处会显示对应资源，运行台账也会标注实际物理后端（如「物理 · MuJoCo MJX」）。</p>
-                <p id="robogo-message" class="small-note">—</p>
-                <div class="robogo-actions">
-                  <button
-                    class="button button-ghost button-small"
-                    id="robogo-refresh-button"
-                    type="button"
-                  >
-                    重新检查</button
-                  ><a
-                    class="text-link"
-                    href="https://robogo.d-robotics.cc"
-                    target="_blank"
-                    rel="noreferrer"
-                    >打开 RoboGo ↗</a
-                  >
-                </div>
-              </details>
 
             </div>
           </section>
@@ -1501,6 +1464,44 @@
             aria-labelledby="flow-context-title"
           >
             <div class="records-layout records-single">
+              <details class="panel robogo-panel workspace-inspector" id="train-module-run-robogo">
+                <summary class="panel-heading panel-heading-lean workspace-inspector-summary"><span><small>Inspector</small><h2>算力后端</h2></span>
+                  <span id="robogo-state-badge" class="state-badge state-neutral">检查中</span>
+                  <span class="workspace-inspector-toggle">展开 <i aria-hidden="true">⌄</i></span>
+                </summary>
+                <div class="backend-choice">
+                  <div class="backend-choice-card is-primary">
+                    <span class="backend-icon" aria-hidden="true">⌂</span>
+                    <div><strong>本地服务器</strong><small>无 RoboGo 账号也能运行</small></div>
+                    <span class="choice-tag">默认</span>
+                  </div>
+                  <div class="backend-choice-card">
+                    <span class="backend-icon" aria-hidden="true">☁</span>
+                    <div><strong>RoboGo</strong><small>云端算力，可选接入</small></div>
+                  </div>
+                </div>
+                <div class="robogo-numbers">
+                  <div><span id="robogo-board-label">可见算力资源</span><strong id="robogo-board-count">—</strong></div>
+                  <div><span id="robogo-machine-label">开发机</span><strong id="robogo-machine-count">—</strong></div>
+                </div>
+                <p class="small-note">训练引擎 = 本地 worker 资源：注册 starter / mjlab / MJX 等引擎 worker 后，此处会显示对应资源，运行台账也会标注实际物理后端（如「物理 · MuJoCo MJX」）。</p>
+                <p id="robogo-message" class="small-note">—</p>
+                <div class="robogo-actions">
+                  <button
+                    class="button button-ghost button-small"
+                    id="robogo-refresh-button"
+                    type="button"
+                  >
+                    重新检查</button
+                  ><a
+                    class="text-link"
+                    href="https://robogo.d-robotics.cc"
+                    target="_blank"
+                    rel="noreferrer"
+                    >打开 RoboGo ↗</a
+                  >
+                </div>
+              </details>
               <article class="panel compute-resources-panel">
                 <div class="panel-heading panel-heading-lean">
                   <div><h2>我的 GPU 训练资源</h2><p class="panel-caption">支持本机 CPU/GPU、SSH 远端服务器和平台 Runner。首次使用可以点击“获取安装命令”，用户只需在自己的终端执行一次；网页随后通过 127.0.0.1 连接 Agent，核心服务器不会接触用户本地 GPU。</p></div>
@@ -2193,7 +2194,7 @@
     <script defer src="./telemetry-core.js?v=duck-lab-32"></script>
     <script defer src="./run-inspector-core.js?v=2"></script>
     <script defer src="./run-inspector.js?v=3"></script>
-    <script defer src="./app.js?v=duck-lab-71"></script>
+    <script defer src="./app.js?v=duck-lab-72"></script>
     <script defer src="./visualization-enhancements.js?v=viz-1"></script>
     <script defer src="./capability-workbench.js?v=1"></script>
     <script defer src="./agent-chat.js?v=agent-19"></script>

@@ -3778,9 +3778,7 @@ function renderTaskEngineCompatibility() {
 function renderModel() {
   const model = selectedModel();
   const product = selectedProductProfile();
-  setText('train-onboarding-model-help', `载入 ${product.displayName} 默认模板并登记`);
-  setText('train-onboarding-title', `${product.displayName} · 按 3 步完成一次强化学习训练`);
-  setText('contract-panel-tip', `推荐：载入 ${product.displayName} 模板 → 校验 → 登记`);
+  setText('contract-panel-tip', `推荐：载入 ${product.displayName} 模板 → 登记版本`);
   setText('template-button', `载入 ${product.displayName} 模板`);
   const summary = $('model-summary');
   const artifacts = $('artifact-list');
@@ -3788,11 +3786,11 @@ function renderModel() {
   if (!model) {
     state.model = null;
     document.querySelector('#model-details-fold')?.setAttribute('open', '');
-    updateTrainProgress(1);
-    if (summary) summary.innerHTML = `<div class="model-empty-guide"><strong>还没有 ${escapeHtml(product.displayName)} 模型</strong><span>先展开上方“套件与契约”，载入模板并登记版本。</span><button class="button button-primary button-small" type="button" data-empty-model-action>载入 ${escapeHtml(product.displayName)} 模板 →</button></div>`;
+    if (summary) summary.innerHTML = `<div class="model-empty-guide"><strong>还没有 ${escapeHtml(product.displayName)} 模型</strong><span>展开上方“登记模型”，载入模板并登记版本。</span><button class="button button-primary button-small" type="button" data-empty-model-action>载入 ${escapeHtml(product.displayName)} 模型 →</button></div>`;
     summary?.querySelector('[data-empty-model-action]')?.addEventListener('click', () => {
       document.querySelector('#contract-fold')?.setAttribute('open', '');
       document.querySelector('#template-button')?.click();
+      document.querySelector('#manifest-advanced-fold')?.setAttribute('open', '');
       document.querySelector('#manifest-editor')?.scrollIntoView({ behavior: 'smooth', block: 'center' });
     });
     if (artifacts) artifacts.replaceChildren();
@@ -3802,7 +3800,6 @@ function renderModel() {
   state.model = model;
   // The built-in starter already satisfies step 1. Do not make users edit or
   // re-register JSON before they can reach replay and training.
-  updateTrainProgress(2);
   const manifest = model.manifest || {};
   if (summary) {
     const note = model.builtin
@@ -8979,7 +8976,6 @@ function showValidation(payload) {
   if (!result) return;
   result.className = 'validation-result ' + (payload.validation?.valid ? 'is-ok' : 'is-error');
   if (payload.validation?.valid) {
-    updateTrainProgress(2);
     const warnings = payload.validation.warnings?.length
       ? '；' + payload.validation.warnings.length + ' 个提示'
       : '';
@@ -8988,13 +8984,6 @@ function showValidation(payload) {
     const first = payload.validation?.errors?.[0] || '清单不合法';
     result.textContent = '校验未通过：' + first;
   }
-}
-
-function updateTrainProgress(step) {
-  document.querySelectorAll('.train-onboarding-step').forEach((node, index) => {
-    node.classList.toggle('is-current', index === step - 1);
-    node.classList.toggle('is-complete', index < step - 1);
-  });
 }
 
 async function validateEditor() {
@@ -9042,7 +9031,6 @@ async function registerEditor() {
       projectBindingFailed ? 'error' : 'success',
     );
     $('manifest-editor').value = JSON.stringify(payload.model?.manifest || manifest, null, 2);
-    updateTrainProgress(2);
     const result = $('validation-result');
     if (result) { result.className = 'validation-result is-ok'; result.textContent = '模型版本已登记，可以直接配置并提交强化学习训练；回放为可选。'; }
     await loadOverview({ quiet: true });
@@ -9246,9 +9234,6 @@ async function runModel(backend) {
       void relayTrainingRun(run, model, body).catch((error) => {
         setText('simulator-run-status', error instanceof Error ? `本机 Agent 训练提交失败：${error.message}` : '本机 Agent 训练提交失败');
       });
-    }
-    if (backend === 'browser' && ['completed', 'ready', 'queued', 'running'].includes(String(run.status || ''))) {
-      updateTrainProgress(3);
     }
     showToast(
       run.summary || '运行请求已记录',
