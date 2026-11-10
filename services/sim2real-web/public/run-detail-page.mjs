@@ -247,13 +247,19 @@ function renderRun(document, location, run, runId) {
   text(document, 'run-model-id', run.modelId);
   text(document, 'run-policy-sha', run.artifact?.sha256 ?? '尚未生成策略摘要');
   text(document, 'run-summary', run.summary ?? '平台未提供本次运行摘要。');
+  const replayUrl = isDance ? danceVideoUrl(location, run, runId) : null;
+  const replayVerified = isDance && verifiedDanceVideo(run);
   text(document, 'run-next-action', run.status === 'queued'
     ? '本次训练正在排队；页面会继续查询同一 Run。'
     : run.status === 'running'
       ? '本次训练正在运行；曲线只显示该 Run 实际上报的采样点。'
-      : run.status === 'completed'
-        ? '本次训练已结束；请分别查看风格门结果和本次仿真回放。'
-        : '已打开本次 Run 的只读详情。');
+      : run.status === 'completed' && isDance && replayVerified && replayUrl
+        ? '本次舞蹈训练已结束；风格门结果已显示，可以播放已核验的本次仿真回放。'
+        : run.status === 'completed' && isDance
+          ? '本次舞蹈训练已结束；风格门结果已显示。当前平台没有提供可核验且可播放的本次回放，请查看下方说明。'
+          : run.status === 'completed'
+            ? '本次训练已结束；请查看本次运行结果。'
+            : '已打开本次 Run 的只读详情。');
   const config = run.training ?? {};
   const table = document.getElementById('run-config-table');
   const body = document.getElementById('run-config-body');

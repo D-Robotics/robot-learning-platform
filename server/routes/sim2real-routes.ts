@@ -642,6 +642,8 @@ interface ComputeHealthPayload {
   gpuName?: string;
   vramMb?: number;
   maxConcurrentJobs?: number;
+  engines?: string[];
+  mock?: boolean;
 }
 
 /** Accept only the small, explicit health contract used by the worker. */
@@ -669,11 +671,33 @@ function parseComputeHealthPayload(text: string): ComputeHealthPayload | null {
   if (source.maxConcurrentJobs != null && maxConcurrentJobs == null) return null;
   if (source.vramMb != null && vramMb == null) return null;
   const gpuName = safeComputeHealthText(source.gpuName, 160);
+  if (source.mock != null && typeof source.mock !== 'boolean') return null;
+  const worker = safeComputeHealthText(source.worker, 80);
+  const mock =
+    typeof source.mock === 'boolean'
+      ? source.mock
+      : worker === 'sim2real-mock'
+        ? true
+        : worker === 'sim2real-local'
+          ? false
+          : undefined;
+  let engines: string[] | undefined;
+  if (source.engines != null) {
+    if (!Array.isArray(source.engines) || source.engines.length > 32) return null;
+    const validEngines = source.engines.filter(
+      (item): item is string =>
+        typeof item === 'string' && /^[a-z][a-z0-9-]{1,31}$/.test(item.trim().toLowerCase()),
+    );
+    if (validEngines.length !== source.engines.length) return null;
+    engines = [...new Set(validEngines.map((engine) => engine.trim().toLowerCase()))].slice(0, 16);
+  }
   return {
     ...(typeof source.cuda === 'boolean' ? { cuda: source.cuda } : {}),
     ...(gpuName ? { gpuName } : {}),
     ...(vramMb == null ? {} : { vramMb }),
     ...(maxConcurrentJobs == null ? {} : { maxConcurrentJobs }),
+    ...(engines === undefined ? {} : { engines }),
+    ...(mock === undefined ? {} : { mock }),
   };
 }
 
@@ -1455,6 +1479,24 @@ function parseRunRequest(
       };
     }
     training = trainingResult.spec;
+    if (training.originmanWorkshop && taskId !== 'originman-recovery') {
+      return {
+        apiError: {
+          status: 400,
+          code: 'SIM2REAL_INVALID_TRAINING',
+          message: 'training.originmanWorkshop 只能用于 originman-recovery 任务。',
+        },
+      };
+    }
+    if (training.originmanDance && taskId !== 'originman-dance') {
+      return {
+        apiError: {
+          status: 400,
+          code: 'SIM2REAL_INVALID_TRAINING',
+          message: 'training.originmanDance 只能用于 originman-dance 任务。',
+        },
+      };
+    }
     // Task packs may recommend an engine (physics-dense tasks → MJX). The
     // recommendation only fills in a spec that chose none, so an explicit
     // user/agent submission always wins and the ledger keeps the default
@@ -2890,7 +2932,10 @@ export function createSim2RealRouter(
         status: 'offline',
         message: '尚未完成 Worker 健康检查。',
         lastCheckedAt: checkedAt,
+        engines: [],
+        mock: undefined,
       };
+      let workerMock: boolean | undefined;
       const runnerUrl = String(secret.resource.runnerUrl);
       const runnerToken = String(secret.runnerToken ?? '').trim();
       if (secret.resource.source === 'local-agent') {
@@ -2900,6 +2945,8 @@ export function createSim2RealRouter(
             status: 'unknown',
             message: '本地 Agent 资源由浏览器直连，请在当前网页重新检查。',
             lastCheckedAt: checkedAt,
+            engines: [],
+            mock: undefined,
           },
           owner,
         );
@@ -2915,6 +2962,8 @@ export function createSim2RealRouter(
           status: 'offline',
           message: tokenError,
           lastCheckedAt: checkedAt,
+          engines: [],
+          mock: undefined,
         };
       } else {
         try {
@@ -2945,11 +2994,14 @@ export function createSim2RealRouter(
                 status: 'offline',
                 message: 'Worker 健康响应过大或无法读取，已拒绝。',
                 lastCheckedAt: checkedAt,
+                engines: [],
+                mock: undefined,
               };
             }
             if (bodyReadable) {
               const payload = result.ok ? parseComputeHealthPayload(bodyText) : null;
               const healthy = result.ok && payload !== null;
+              workerMock = payload?.mock;
               patch = {
                 status: healthy ? 'online' : 'offline',
                 message: healthy
@@ -2964,6 +3016,8 @@ export function createSim2RealRouter(
                 ...(payload?.maxConcurrentJobs == null
                   ? {}
                   : { maxConcurrentJobs: payload.maxConcurrentJobs }),
+                engines: payload?.engines ?? [],
+                mock: payload?.mock,
               };
             }
           } finally {
@@ -2977,6 +3031,8 @@ export function createSim2RealRouter(
                 ? '连接超时：Worker 未在 5 秒内响应。'
                 : '连接失败：Worker 不可达或健康响应无效。',
             lastCheckedAt: checkedAt,
+            engines: [],
+            mock: undefined,
           };
         }
       }
@@ -2989,6 +3045,7 @@ export function createSim2RealRouter(
         ok: true,
         computeResource: updated,
         connected: updated?.status === 'online',
+        ...(workerMock === undefined ? {} : { mock: workerMock }),
       });
     }),
   );

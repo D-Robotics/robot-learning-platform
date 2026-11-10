@@ -1862,6 +1862,76 @@ describe('Sim2Real HTTP routes', () => {
     }
   });
 
+  it('routes bounded OriginMan course recipes intact and rejects a task mismatch', async () => {
+    process.env.RDK_SIM2REAL_LOCAL_RUNNER_URL = 'http://127.0.0.1:18199/train';
+    delete process.env.RDK_SIM2REAL_ROBOGO_RUNNER_URL;
+    const originalFetch = globalThis.fetch;
+    const workerTrainings: Record<string, unknown>[] = [];
+    globalThis.fetch = (async (_input, init) => {
+      const body = JSON.parse(String(init?.body || '{}')) as Record<string, unknown>;
+      workerTrainings.push(body.training as Record<string, unknown>);
+      return new Response(JSON.stringify({ status: 'queued', runId: 'originman-run-1' }), {
+        status: 202,
+        headers: { 'content-type': 'application/json' },
+      });
+    }) as typeof fetch;
+    try {
+      const router = await fixture();
+      const manifest = userManifest();
+      manifest.simulator.backends = ['local'];
+      const registerResponse = await invoke(router, 'post', '/api/sim2real/models', {
+        body: { manifest },
+      });
+      const registered = registerResponse.body as { model: { id: string } };
+      const dance = {
+        schemaVersion: 1,
+        title: '欢快版',
+        bpm: 128,
+        sections: [{ type: 'alternating-arms', beats: 8, intensity: 0.85 }],
+        seed: 128,
+        trainingSteps: 500000,
+      };
+      const submitted = await invoke(router, 'post', '/api/sim2real/runs', {
+        body: {
+          modelId: registered.model.id,
+          backend: 'local',
+          taskId: 'originman-dance',
+          idempotencyKey: 'originman-dance-route-1',
+          training: {
+            profile: 'standard',
+            engine: 'originman-dance-ppo',
+            algorithm: 'ppo',
+            originmanDance: dance,
+          },
+        },
+      });
+      expect(submitted.statusCode).toBe(201);
+      const run = (submitted.body as { run: Record<string, unknown> }).run;
+      expect(run.training).toMatchObject({ originmanDance: dance });
+      expect(workerTrainings[0]).toMatchObject({ originmanDance: dance });
+
+      const mismatched = await invoke(router, 'post', '/api/sim2real/runs', {
+        body: {
+          modelId: registered.model.id,
+          backend: 'local',
+          taskId: 'originman-recovery',
+          idempotencyKey: 'originman-dance-route-mismatch',
+          training: {
+            profile: 'standard',
+            engine: 'originman-dance-ppo',
+            algorithm: 'ppo',
+            originmanDance: dance,
+          },
+        },
+      });
+      expect(mismatched.statusCode).toBe(400);
+      expect(mismatched.body).toMatchObject({ code: 'SIM2REAL_INVALID_TRAINING' });
+      expect(workerTrainings).toHaveLength(1);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
   it('injects a physics-dense task pack engine recommendation but never overrides an explicit choice', async () => {
     process.env.RDK_SIM2REAL_LOCAL_RUNNER_URL = 'http://127.0.0.1:18199/train';
     delete process.env.RDK_SIM2REAL_ROBOGO_RUNNER_URL;
@@ -1982,9 +2052,21 @@ describe('Sim2Real HTTP routes', () => {
           headers: { 'content-type': 'application/json' },
         });
       }
-      return new Response('x'.repeat(33 * 1024), {
-        status: 200,
-        headers: { 'content-type': 'application/json' },
+      if (calls === 2)
+        return new Response('x'.repeat(33 * 1024), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        });
+      if (calls === 3)
+        return Response.json({
+          ok: true,
+          worker: 'sim2real-local',
+          engines: ['OriginMan-Dance-PPO', 'starter-ppo'],
+        });
+      return Response.json({
+        ok: true,
+        worker: 'sim2real-mock',
+        engines: ['originman-dance-ppo'],
       });
     }) as typeof fetch;
     try {
@@ -2014,7 +2096,33 @@ describe('Sim2Real HTTP routes', () => {
           message: 'Worker 健康响应过大或无法读取，已拒绝。',
         },
       });
-      expect(calls).toBe(2);
+      const validHealth = await invoke(router, 'post', '/api/sim2real/compute-resources/:id/test', {
+        params: { id: resourceId },
+      });
+      expect(validHealth.body).toMatchObject({
+        connected: true,
+        mock: false,
+        computeResource: { engines: ['originman-dance-ppo', 'starter-ppo'] },
+      });
+      const mockHealth = await invoke(router, 'post', '/api/sim2real/compute-resources/:id/test', {
+        params: { id: resourceId },
+      });
+      expect(mockHealth.body).toMatchObject({
+        connected: true,
+        mock: true,
+        computeResource: { engines: ['originman-dance-ppo'], mock: true },
+      });
+      const listed = await invoke(router, 'get', '/api/sim2real/compute-resources');
+      expect(listed.body).toMatchObject({
+        computeResources: [{ id: resourceId, engines: ['originman-dance-ppo'], mock: true }],
+      });
+      const edited = await invoke(router, 'patch', '/api/sim2real/compute-resources/:id', {
+        params: { id: resourceId },
+        body: { runnerUrl: 'http://127.0.0.1:19092/train' },
+      });
+      expect(edited.body.computeResource).not.toHaveProperty('engines');
+      expect(edited.body.computeResource).not.toHaveProperty('mock');
+      expect(calls).toBe(4);
     } finally {
       globalThis.fetch = originalFetch;
     }
@@ -2066,6 +2174,7 @@ describe('Sim2Real HTTP routes', () => {
             cuda: true,
             gpuName: 'Test GPU',
             maxConcurrentJobs: 2,
+            engines: ['originman-dance-ppo'],
           }),
           { status: 200, headers: { 'content-type': 'application/json' } },
         );
@@ -2087,11 +2196,13 @@ describe('Sim2Real HTTP routes', () => {
       });
       expect(tested.body).toMatchObject({
         connected: true,
+        mock: false,
         computeResource: {
           status: 'online',
           cuda: true,
           gpuName: 'Test GPU',
           maxConcurrentJobs: 2,
+          engines: ['originman-dance-ppo'],
         },
       });
 

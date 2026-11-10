@@ -76,6 +76,82 @@ describe('training spec engine routing', () => {
     expect(omitted.spec?.engine).toBeUndefined();
   });
 
+  it('keeps validated OriginMan course parameters in the normalized training contract', () => {
+    const workshop = {
+      phase: 'evaluate',
+      timesteps: 500000,
+      seed: 7,
+      pushMaxForce: 8.1,
+      groupId: 'course-42',
+      device: 'cuda',
+      sourceRunId: 'train-42',
+    };
+    const dance = {
+      schemaVersion: 1,
+      title: '欢快版',
+      bpm: 128,
+      sections: [
+        { type: 'alternating-arms', beats: 8, intensity: 0.85 },
+        { type: 'weight-shift', beats: 8, intensity: 0.7 },
+      ],
+      seed: 128,
+      trainingSteps: 500000,
+    };
+    expect(
+      normalizeTrainingSpec({
+        profile: 'standard',
+        engine: 'originman-recovery-reflect',
+        originmanWorkshop: workshop,
+      }).spec?.originmanWorkshop,
+    ).toEqual(workshop);
+    expect(
+      normalizeTrainingSpec({
+        profile: 'standard',
+        engine: 'originman-dance-ppo',
+        algorithm: 'ppo',
+        originmanDance: dance,
+      }).spec?.originmanDance,
+    ).toEqual(dance);
+    for (const input of [
+      {
+        profile: 'standard',
+        engine: 'originman-recovery-reflect',
+        originmanWorkshop: { ...workshop, pushMaxForce: 100 },
+      },
+      {
+        profile: 'standard',
+        engine: 'originman-recovery-reflect',
+        originmanWorkshop: { ...workshop, privatePath: '/tmp/policy.pt' },
+      },
+      {
+        profile: 'standard',
+        engine: 'originman-recovery-reflect',
+        originmanWorkshop: { ...workshop, sourceRunId: undefined },
+      },
+      {
+        profile: 'standard',
+        engine: 'originman-recovery-reflect',
+        originmanWorkshop: { ...workshop, phase: 'train', sourceRunId: 'train-42' },
+      },
+      {
+        profile: 'standard',
+        engine: 'originman-dance-ppo',
+        algorithm: 'ppo',
+        originmanDance: {
+          ...dance,
+          sections: [{ type: 'standing-still', beats: 8, intensity: 0.5 }],
+        },
+      },
+      {
+        profile: 'standard',
+        engine: 'originman-dance-ppo',
+        algorithm: 'sac',
+        originmanDance: dance,
+      },
+    ])
+      expect(normalizeTrainingSpec(input).errors.length).toBeGreaterThan(0);
+  });
+
   it('keeps an explicit engine choice over any task recommendation', () => {
     const explicit = applyTaskEngineRecommendation(trainingSpecForProfile('smoke'), 'mjx-ppo');
     expect(explicit.engine).toBe('mjx-ppo');

@@ -52,7 +52,7 @@ export const DANCE_TRAINING_TOOLS = [
   {
     name: 'rdk_originman_dance_train',
     description:
-      '把学员自定义的有界舞段提交为OriginMan PPO仿真训练Run，默认50万训练步、8个并行环境；8192步只适合明确要求的链路快检。入参{contextId,computeResourceId?,modelId?,dance:{schemaVersion:1,title,bpm,sections:[{type,beats,intensity}],seed?,trainingSteps?}}，不要使用timesteps或moves。先从rdk_experience_guide取得contextId；modelId可省略以按专用契约匹配或登记，使用学员明确的资源。提交前验证模型契约、资源连接和Worker引擎能力；同contextId只提交一次，随后用rdk_training_wait查询同一Run。仅仿真，不部署真机。',
+      '把学员自定义的有界舞段提交为OriginMan PPO仿真训练Run，默认50万训练步、8个并行环境；8192步只适合明确要求的链路快检。入参{contextId,computeResourceId?,modelId?,dance:{schemaVersion:1,title,bpm,sections:[{type,beats,intensity}],seed?,trainingSteps?}}，不要使用timesteps或moves。先从rdk_experience_guide取得contextId；modelId可省略以按专用契约匹配或登记，优先从已报告支持originman-dance-ppo的算力机中让学员按名称选择。提交前仍须重新验证资源连接和Worker引擎能力；同contextId只提交一次，随后用rdk_training_wait查询同一Run。仅仿真，不部署真机。',
     inputSchema: schema,
     annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: true },
   },
@@ -111,6 +111,7 @@ export async function trainOriginmanDance(
       'rdk_model_validate',
       'rdk_models_list',
       'rdk_model_register',
+      'rdk_compute_resources_list',
       'rdk_compute_resource_test',
       'rdk_training_submit',
     ].every((name) => toolNames.includes(name))
@@ -124,6 +125,7 @@ export async function trainOriginmanDance(
       manifest,
       modelId: input.modelId,
       computeResourceId: input.computeResourceId ?? defaultResourceId,
+      requiredEngine: 'originman-dance-ppo',
       readModels,
     },
     call,

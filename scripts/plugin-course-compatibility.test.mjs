@@ -76,6 +76,32 @@ test('configured classroom resource is selected only from the current account an
       e.details.choices.length === 2,
   );
 });
+test('dance resource choices filter known incompatible workers and identify unknown capabilities', async () => {
+  await assert.rejects(
+    selectCourseAssets(
+      {
+        manifest,
+        requiredEngine: 'originman-dance-ppo',
+        readModels: async () => ({ models: [registered()] }),
+      },
+      async () => ({
+        computeResources: [
+          { id: 'recovery-only', name: '恢复机', engines: ['originman-recovery-ppo'] },
+          { id: 'dance-ready', name: '舞蹈机', engines: ['originman-dance-ppo'], mock: false },
+          { id: 'dance-mock', name: '舞蹈模拟机', engines: ['originman-dance-ppo'], mock: true },
+          { id: 'not-tested', name: '待检查机器' },
+          { id: 'no-engine-report', name: '未报告能力机器', engines: [] },
+        ],
+      }),
+    ),
+    (error) =>
+      error.platformCode === 'WORKSHOP_RESOURCE_SELECTION_REQUIRED' &&
+      error.details.choices.map((choice) => choice.id).join(',') === 'dance-ready' &&
+      error.details.unverifiedChoices.map((choice) => choice.id).join(',') ===
+        'not-tested,no-engine-report' &&
+      /不要默认选择第一台/.test(error.nextAction),
+  );
+});
 test('classroom binding is public configuration and invalid bindings are rejected', () => {
   const options = {
     root: '/course/plugin',

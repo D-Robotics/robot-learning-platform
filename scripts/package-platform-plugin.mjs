@@ -42,6 +42,8 @@ for (const relative of [
   '.codex-plugin/plugin.json',
   '.mcp.json',
   'mcp.json',
+  'mcp/bundle.mjs',
+  'runtime-requirements.json',
   'skills/setup/SKILL.md',
   'scripts/start-mcp.mjs',
 ]) {

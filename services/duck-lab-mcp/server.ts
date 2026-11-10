@@ -233,6 +233,50 @@ export const TOOL_PARAM_HINTS: Record<string, ToolParamHint> = {
       datasetIds: { type: 'array', items: { type: 'string' } },
       computeResourceId: { type: 'string' },
       video: { type: 'boolean' },
+      originmanWorkshop: {
+        type: 'object',
+        additionalProperties: false,
+        required: ['phase', 'timesteps', 'seed', 'pushMaxForce'],
+        properties: {
+          phase: { type: 'string', enum: ['train', 'evaluate'] },
+          timesteps: { type: 'integer', minimum: 4096, maximum: 1000000 },
+          seed: { type: 'integer', minimum: 0, maximum: 1000000 },
+          pushMaxForce: { type: 'number', minimum: 6.4, maximum: 9 },
+          groupId: { type: 'string', maxLength: 64 },
+          device: { type: 'string', enum: ['cpu', 'cuda'] },
+          sourceRunId: { type: 'string', maxLength: 200 },
+        },
+      },
+      originmanDance: {
+        type: 'object',
+        additionalProperties: false,
+        required: ['schemaVersion', 'title', 'bpm', 'sections'],
+        properties: {
+          schemaVersion: { type: 'integer', const: 1 },
+          title: { type: 'string', minLength: 1, maxLength: 80 },
+          bpm: { type: 'number', minimum: 80, maximum: 140 },
+          sections: {
+            type: 'array',
+            minItems: 1,
+            maxItems: 8,
+            items: {
+              type: 'object',
+              additionalProperties: false,
+              required: ['type', 'beats', 'intensity'],
+              properties: {
+                type: {
+                  type: 'string',
+                  enum: ['alternating-arms', 'weight-shift', 'squat-rise', 'open-pose'],
+                },
+                beats: { type: 'integer', enum: [4, 8, 16] },
+                intensity: { type: 'number', minimum: 0.25, maximum: 1 },
+              },
+            },
+          },
+          seed: { type: 'integer', minimum: 0, maximum: 2147483647 },
+          trainingSteps: { type: 'integer', minimum: 8192, maximum: 2000000 },
+        },
+      },
     },
   },
   rdk_training_status: {

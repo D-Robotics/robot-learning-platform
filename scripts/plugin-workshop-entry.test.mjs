@@ -9,6 +9,7 @@ import {
   runVisualizationLink,
   withDancePreview,
 } from '../plugins/rdk-robot-learning-platform/scripts/experience-mcp.mjs';
+import { trainOriginmanDance } from '../plugins/rdk-robot-learning-platform/scripts/dance-training.mjs';
 const current = {
   contextId: 'ws-current',
   stage: 'training',
@@ -280,6 +281,71 @@ test('OriginMan dance submission opens the returned Run directly without enterin
   assert.match(response.structuredContent.delivery, /run-detail\.html/);
 });
 
+test('dance submission refuses a Mock worker even when it advertises the right engine', async (t) => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'rdk-dance-mock-'));
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
+  const manifest = JSON.parse(
+    fs.readFileSync(
+      new URL(
+        '../plugins/rdk-robot-learning-platform/references/originman-dance-manifest.json',
+        import.meta.url,
+      ),
+      'utf8',
+    ),
+  );
+  const calls = [];
+  await assert.rejects(
+    trainOriginmanDance(
+      {
+        contextId: 'dance-mock',
+        computeResourceId: 'gpu-mock',
+        dance: {
+          schemaVersion: 1,
+          title: '欢快版',
+          bpm: 100,
+          sections: [{ type: 'alternating-arms', beats: 8, intensity: 0.5 }],
+        },
+      },
+      async (name) => {
+        calls.push(name);
+        if (name === 'rdk_model_validate') return { valid: true };
+        if (name === 'rdk_compute_resources_list')
+          return {
+            computeResources: [
+              { id: 'gpu-mock', name: 'Mock Worker', engines: ['originman-dance-ppo'], mock: true },
+            ],
+          };
+        if (name === 'rdk_compute_resource_test')
+          return {
+            id: 'gpu-mock',
+            connected: true,
+            mock: true,
+            browserRelay: false,
+            engines: ['originman-dance-ppo'],
+          };
+        throw Error(`unexpected call: ${name}`);
+      },
+      {
+        directory,
+        readModels: async () => ({ models: [{ id: 'dance-model', manifest }] }),
+        toolNames: [
+          'rdk_model_validate',
+          'rdk_models_list',
+          'rdk_model_register',
+          'rdk_compute_resources_list',
+          'rdk_compute_resource_test',
+          'rdk_training_submit',
+        ],
+      },
+    ),
+    (error) =>
+      error.platformCode === 'ORIGINMAN_DANCE_RESOURCE_NOT_READY' &&
+      error.details.trainingSubmitted === false,
+  );
+  assert.equal(calls.includes('rdk_training_submit'), false);
+  assert.equal(calls.includes('rdk_model_register'), false);
+});
+
 test('account switch during a shared-current read fails closed before returning an experiment link', async () => {
   let reads = 0;
   await assert.rejects(
@@ -448,7 +514,10 @@ test('development target entry separates workers from boards, keeps scope and re
   );
   const invoke = (args) => p('tools/call', { name: 'rdk_development_targets', arguments: args });
   const list = await invoke({ action: 'list' });
-  assert.match(list.structuredContent.studentReply, /训练算力机：GPU A\nRDK 板卡：RDK A/);
+  assert.match(
+    list.structuredContent.studentReply,
+    /训练算力机：GPU A（状态未知；引擎：待测试）\nRDK 板卡：RDK A/,
+  );
   assert.doesNotMatch(JSON.stringify(list), /private-/);
   assert.equal((await invoke({ action: 'connect-board', targetId: 'w1' })).isError, true);
   assert.equal(

@@ -582,7 +582,16 @@ describe('duck-lab-mcp protocol surface', () => {
 
     for (const [id, hint] of derived) {
       if (id in MANUAL_PARAM_HINT_OVERRIDES) continue;
-      expect(TOOL_PARAM_HINTS[id], `${id} 提示与 handlers 源码不一致`).toEqual(hint);
+      const actual = TOOL_PARAM_HINTS[id];
+      expect(actual?.required, `${id} 必填提示与 handlers 源码不一致`).toEqual(hint.required);
+      expect(
+        Object.keys(actual?.properties ?? {}).sort(),
+        `${id} 参数名与 handlers 源码不一致`,
+      ).toEqual(Object.keys(hint.properties).sort());
+      for (const [key, schema] of Object.entries(hint.properties))
+        expect(actual.properties[key], `${id}.${key} 参数类型与 handlers 源码不一致`).toMatchObject(
+          schema,
+        );
     }
     const handlerIds = new Set([...derived.keys(), ...Object.keys(MANUAL_PARAM_HINT_OVERRIDES)]);
     for (const id of Object.keys(TOOL_PARAM_HINTS)) {
@@ -615,6 +624,16 @@ describe('duck-lab-mcp protocol surface', () => {
         video: { type: 'boolean' },
         demonstrationRunId: { type: 'string' },
         syntheticSmoke: { type: 'boolean' },
+        originmanWorkshop: {
+          type: 'object',
+          additionalProperties: false,
+          required: ['phase', 'timesteps', 'seed', 'pushMaxForce'],
+        },
+        originmanDance: {
+          type: 'object',
+          additionalProperties: false,
+          required: ['schemaVersion', 'title', 'bpm', 'sections'],
+        },
       },
     });
     expect(byName.get('rdk_platform_status')?.inputSchema).toMatchObject({

@@ -2445,6 +2445,8 @@ export async function updateSim2RealComputeResource(
       | 'cuda'
       | 'vramMb'
       | 'maxConcurrentJobs'
+      | 'engines'
+      | 'mock'
       | 'message'
       | 'lastCheckedAt'
     >
@@ -2476,6 +2478,8 @@ export async function updateSim2RealComputeResource(
       delete updated.gpuName;
       delete updated.cuda;
       delete updated.vramMb;
+      delete updated.engines;
+      delete updated.mock;
       delete updated.lastCheckedAt;
     }
     const next = [...resources];

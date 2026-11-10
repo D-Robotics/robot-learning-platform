@@ -90,6 +90,60 @@ describe('DSH capability handlers', () => {
     expect(calls.at(-1)?.path).toBe('/api/sim2real/runs?modelId=model-a&status=completed&limit=7');
   });
 
+  it('surfaces the last tested worker engines in compact compute-resource results', async () => {
+    const { fetchImpl } = fakeLoopback([
+      () => ({
+        status: 200,
+        body: {
+          computeResources: [
+            {
+              id: 'gpu-dance',
+              name: '舞蹈训练机',
+              status: 'online',
+              engines: ['originman-dance-ppo'],
+              mock: false,
+              runnerToken: 'must-not-escape',
+            },
+          ],
+        },
+      }),
+      () => ({
+        status: 200,
+        body: {
+          connected: true,
+          mock: false,
+          computeResource: {
+            id: 'gpu-dance',
+            status: 'online',
+            engines: ['originman-dance-ppo'],
+            health: { engines: ['originman-dance-ppo'] },
+          },
+        },
+      }),
+    ]);
+    const handlers = createDshCapabilityHandlers({ fetchImpl });
+    const exec = { signal: new AbortController().signal } as never;
+    await expect(handlers.rdk_compute_resources_list({}, exec)).resolves.toMatchObject({
+      computeResources: [
+        {
+          id: 'gpu-dance',
+          name: '舞蹈训练机',
+          status: 'online',
+          engines: ['originman-dance-ppo'],
+          mock: false,
+        },
+      ],
+    });
+    await expect(
+      handlers.rdk_compute_resource_test({ computeResourceId: 'gpu-dance' }, exec),
+    ).resolves.toMatchObject({
+      connected: true,
+      mock: false,
+      status: 'online',
+      engines: ['originman-dance-ppo'],
+    });
+  });
+
   it('reads the canonical golden path with owner-scoped filters', async () => {
     const { fetchImpl, calls } = fakeLoopback([
       () => ({
@@ -333,6 +387,36 @@ describe('DSH capability handlers', () => {
       const submit = calls.find((call) => call.method === 'POST');
       expect(JSON.parse(submit!.body!).training).toEqual({ profile: 'smoke', ...options });
     }
+  });
+
+  it('preserves bounded OriginMan recovery and dance recipes for the worker route', async () => {
+    const originmanWorkshop = {
+      phase: 'train',
+      timesteps: 8192,
+      seed: 7,
+      pushMaxForce: 8.1,
+      groupId: 'course-42',
+      device: 'cuda',
+    };
+    const originmanDance = {
+      schemaVersion: 1,
+      title: '欢快版',
+      bpm: 128,
+      sections: [{ type: 'alternating-arms', beats: 8, intensity: 0.85 }],
+      seed: 128,
+      trainingSteps: 500000,
+    };
+    const { fetchImpl, calls } = fakeLoopback([
+      () => ({ status: 200, body: overviewPayload }),
+      () => ({ status: 201, body: { ok: true, run: { id: 'run-dance', status: 'queued' } } }),
+    ]);
+    const handlers = createDshCapabilityHandlers({ fetchImpl });
+    await handlers.rdk_training_submit(
+      { engine: 'originman-dance-ppo', algorithm: 'ppo', originmanWorkshop, originmanDance },
+      { signal: new AbortController().signal } as never,
+    );
+    const submit = calls.find((call) => call.method === 'POST');
+    expect(JSON.parse(submit!.body!).training).toMatchObject({ originmanWorkshop, originmanDance });
   });
 
   it('rejects malformed demonstration fields without silently truncating or dropping them', async () => {

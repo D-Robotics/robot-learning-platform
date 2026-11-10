@@ -766,8 +766,11 @@ export function createDshCapabilityHandlers(
           'id',
           'name',
           'source',
+          'status',
           'runnerUrl',
           'health',
+          'engines',
+          'mock',
           'tokenConfigured',
           'updatedAt',
         ]),
@@ -786,7 +789,12 @@ export function createDshCapabilityHandlers(
       return {
         id,
         ok: result.body.ok !== false,
+        connected: result.body.connected === true,
+        ...(typeof result.body.mock === 'boolean' ? { mock: result.body.mock } : {}),
+        browserRelay: result.body.browserRelay === true,
+        status: str(resource.status ?? result.body.status),
         health: defined(resource.health ?? result.body.health),
+        engines: defined(resource.engines ?? objectValue(resource.health).engines ?? result.body.engines),
         message: str(result.body.message),
       };
     },
@@ -970,6 +978,10 @@ export function createDshCapabilityHandlers(
           ? { demonstrationRunId: argText(input, 'demonstrationRunId', 200) }
           : {}),
         ...(typeof input.syntheticSmoke === 'boolean' ? { syntheticSmoke: input.syntheticSmoke } : {}),
+        ...(input.originmanWorkshop !== undefined
+          ? { originmanWorkshop: input.originmanWorkshop }
+          : {}),
+        ...(input.originmanDance !== undefined ? { originmanDance: input.originmanDance } : {}),
       };
       const idempotencyKey = dshIdempotencyKey('training');
       const result = await run(exec.signal).fetch('/api/sim2real/runs', {

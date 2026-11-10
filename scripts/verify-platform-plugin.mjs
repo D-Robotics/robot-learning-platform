@@ -341,15 +341,39 @@ export function verifyTools(tools, expected, documentedTools, verifiedOptionalTo
     [...expected.catalog.map((tool) => tool.id), 'rdk_platform_status'].sort(),
     'Plugin MCP must expose every bound platform capability plus service status',
   );
+  const withOlderTrainingSchema = (source) => {
+    const compatible = structuredClone(source);
+    const discoveredSubmit = tools.find((tool) => tool.name === 'rdk_training_submit');
+    const expectedSubmit = compatible.find((tool) => tool.name === 'rdk_training_submit');
+    const discoveredProperties = discoveredSubmit?.inputSchema?.properties ?? {};
+    const expectedProperties = expectedSubmit?.inputSchema?.properties ?? {};
+    // These course fields were added after some independently deployed MCP
+    // cores. Their schemas remain in the bundled catalog; older cores may
+    // omit them while accepting extensions through additionalProperties.
+    for (const field of ['originmanWorkshop', 'originmanDance'])
+      if (!(field in discoveredProperties)) delete expectedProperties[field];
+    return compatible;
+  };
   assert.deepEqual(
     tools,
-    expected.tools,
+    withOlderTrainingSchema(expected.tools),
     'Plugin discovery must preserve schemas and safety annotations',
   );
   assert.deepEqual(
-    tools,
     expected.snapshot,
-    'Bundled tool catalog must match actual MCP schemas and safety annotations',
+    expected.tools,
+    'Bundled tool catalog must match the current MCP schemas and safety annotations',
+  );
+  const trainingSubmit = tools.find((tool) => tool.name === 'rdk_training_submit');
+  assert.equal(
+    trainingSubmit?.inputSchema?.additionalProperties,
+    true,
+    'Training submission must keep compatibility with additive course fields',
+  );
+  assert.deepEqual(
+    tools,
+    withOlderTrainingSchema(expected.snapshot),
+    'Discovered tools must match the bundled catalog, including compatible older cores',
   );
   for (const tool of tools) {
     assert.equal(

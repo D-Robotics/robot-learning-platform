@@ -33,6 +33,7 @@ const state = {
   authStarts: 0,
   models: [],
   runs: new Map(),
+  experiments: new Map(),
   writes: [],
   mediaRequests: 0,
   historyRequests: 0,
@@ -130,10 +131,77 @@ try {
           schemaVersion: 1,
           current: { contextId: 'ws-owned-fixture', stage: 'training' },
         });
+      if (route === '/api/v1/duck/experiments/capabilities')
+        return json({
+          ok: true,
+          schemaVersion: 1,
+          ownerScoped: true,
+          events: { replay: true, retained: 128 },
+          view: 'experiment.html',
+          submission: false,
+        });
+      const experimentMatch = route.match(/^\/api\/v1\/duck\/experiments\/([^/]+)$/);
+      if (route === '/api/v1/duck/experiments' && req.method === 'POST') {
+        const existing = state.experiments.get(body.contextId);
+        if (
+          typeof body.contextId !== 'string' ||
+          typeof body.runId !== 'string' ||
+          !state.runs.has(body.runId) ||
+          (existing &&
+            (existing.runId !== body.runId ||
+              (existing.evaluationRunId && existing.evaluationRunId !== body.evaluationRunId)))
+        )
+          return json({ error: 'INVALID_EXPERIMENT_REFERENCE' }, 400);
+        state.experiments.set(body.contextId, {
+          contextId: body.contextId,
+          runId: body.runId,
+          ...(body.evaluationRunId ? { evaluationRunId: body.evaluationRunId } : {}),
+        });
+        const training = state.runs.get(body.runId).run;
+        const evaluation = body.evaluationRunId ? state.runs.get(body.evaluationRunId)?.run : null;
+        if (body.evaluationRunId && !evaluation) return json({ error: 'RUN_NOT_FOUND' }, 404);
+        return json({
+          ok: true,
+          schemaVersion: 1,
+          contextId: body.contextId,
+          revision: 1,
+          view: {
+            contextId: body.contextId,
+            training: { runId: training.id, status: training.status },
+            evaluation: evaluation ? { runId: evaluation.id, status: evaluation.status } : null,
+          },
+        });
+      }
+      if (experimentMatch && req.method === 'GET') {
+        const contextId = decodeURIComponent(experimentMatch[1]);
+        const reference = state.experiments.get(contextId);
+        const training = reference && state.runs.get(reference.runId)?.run;
+        const evaluation = reference?.evaluationRunId
+          ? state.runs.get(reference.evaluationRunId)?.run
+          : null;
+        if (!training)
+          return json(
+            { code: 'EXPERIMENT_NOT_FOUND', message: '未找到此实验，请选择明确实验。' },
+            404,
+          );
+        return json({
+          ok: true,
+          schemaVersion: 1,
+          revision: 1,
+          view: {
+            contextId,
+            training: { runId: training.id, status: training.status },
+            evaluation: evaluation ? { runId: evaluation.id, status: evaluation.status } : null,
+          },
+        });
+      }
       if (route === '/api/v1/duck/overview')
         return json({ models: state.models, runs: [...state.runs.values()].map((x) => x.run) });
       if (route === '/api/v1/duck/lineage') {
-        const run = state.runs.get(url.searchParams.get('runId'))?.run;
+        const runId = url.searchParams.get('runId');
+        const run = structuredClone(state.runs.get(runId)?.run ?? null);
+        if (state.brokenDigest && run?.id === 'eval-fixture')
+          run.metrics.originmanWorkshop.policySha256 = 'c'.repeat(64);
         return run ? json({ lineage: { run } }) : json({ error: 'NOT_FOUND' }, 404);
       }
       if (route === '/api/v1/duck/models/validate')
@@ -159,7 +227,13 @@ try {
         return json({
           ok: true,
           computeResources: [
-            { id: 'worker-fixture', name: 'OriginMan classroom', source: 'server-runner' },
+            {
+              id: 'worker-fixture',
+              name: 'OriginMan classroom',
+              source: 'server-runner',
+              engines: ['originman-recovery-reflect'],
+              mock: false,
+            },
           ],
         });
       if (route === '/api/v1/duck/device-connections' && req.method === 'GET')
@@ -180,7 +254,13 @@ try {
         return json({
           ok: true,
           connected: true,
-          computeResource: { id: 'worker-fixture', status: 'online', cuda: true },
+          mock: false,
+          computeResource: {
+            id: 'worker-fixture',
+            status: 'online',
+            cuda: true,
+            engines: ['originman-recovery-reflect'],
+          },
         });
       if (route === '/api/v1/duck/runs' && req.method === 'GET') {
         state.historyRequests++;
@@ -231,6 +311,8 @@ try {
         const stored = state.runs.get(matched[1]);
         if (!stored) return json({ error: 'NOT_FOUND' }, 404);
         const run = structuredClone(stored.run);
+        if (state.brokenDigest && run.id === 'eval-fixture')
+          run.metrics.originmanWorkshop.policySha256 = 'c'.repeat(64);
         if (matched[2] === 'workshop-video') {
           state.mediaRequests++;
           return json({ error: 'fixture media is intentionally not served' }, 501);
@@ -241,8 +323,6 @@ try {
           stored.run.status = 'completed';
           run.status = 'completed';
         }
-        if (state.brokenDigest && run.id === 'eval-fixture')
-          run.metrics.originmanWorkshop.policySha256 = 'c'.repeat(64);
         return json({ run });
       }
       return json({ error: 'UNEXPECTED_ROUTE', route }, 404);

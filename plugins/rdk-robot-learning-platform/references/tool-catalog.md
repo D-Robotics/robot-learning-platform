@@ -46,7 +46,7 @@ node --import tsx/esm scripts/update-platform-plugin-catalog.mjs --check
 | `rdk_board_station_command` | 执行白名单内的只读板端命令。只读操作。 | true | false | `id*: string` |
 | `rdk_board_policy_status` | 读取板端策略运行时与延迟证据状态。只读操作。 | true | false | — |
 | `rdk_board_policy_files` | 列出板端已暂存的 ONNX 策略制品。只读操作。 | true | false | — |
-| `rdk_training_submit` | 提交受控 GPU 强化学习训练任务。需要平台安全门控。 | false | false | `modelId: string`, `backend: string`, `profile: string`, `engine: string`, `demonstrationRunId: string`, `syntheticSmoke: boolean`, `algorithm: string`, `numEnvs: number`, `maxIterations: number`, `runName: string`, `taskId: string`, `projectId: string`, `experimentId: string`, `label: string`, `datasetIds: array<string>`, `computeResourceId: string`, `video: boolean` |
+| `rdk_training_submit` | 提交受控 GPU 强化学习训练任务。需要平台安全门控。 | false | false | `modelId: string`, `backend: string`, `profile: string`, `engine: string`, `demonstrationRunId: string`, `syntheticSmoke: boolean`, `algorithm: string`, `numEnvs: number`, `maxIterations: number`, `runName: string`, `taskId: string`, `projectId: string`, `experimentId: string`, `label: string`, `datasetIds: array<string>`, `computeResourceId: string`, `video: boolean`, `originmanWorkshop: object`, `originmanDance: object` |
 | `rdk_training_status` | 读取训练任务状态和指标。只读操作。 | true | false | `runId: string` |
 | `rdk_runs_replay` | 读取运行的遥测回放和聚合评测证据。只读操作。 | true | false | `runId*: string` |
 | `rdk_telemetry_list` | 读取运行的遥测分片和样本数量。只读操作。 | true | false | `runId*: string`, `limit: number` |

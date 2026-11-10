@@ -228,7 +228,32 @@ export type Sim2RealTrainingEngine =
   | 'act'
   | 'diffusion-policy'
   | 'smolvla'
-  | 'isaac-lab';
+  | 'isaac-lab'
+  | 'originman-recovery-reflect'
+  | 'originman-dance-ppo';
+
+export interface Sim2RealOriginmanWorkshopTraining {
+  phase: 'train' | 'evaluate';
+  timesteps: number;
+  seed: number;
+  pushMaxForce: number;
+  groupId?: string;
+  device?: 'cpu' | 'cuda';
+  sourceRunId?: string;
+}
+
+export interface Sim2RealOriginmanDanceTraining {
+  schemaVersion: 1;
+  title: string;
+  bpm: number;
+  sections: Array<{
+    type: 'alternating-arms' | 'weight-shift' | 'squat-rise' | 'open-pose';
+    beats: 4 | 8 | 16;
+    intensity: number;
+  }>;
+  seed?: number;
+  trainingSteps?: number;
+}
 
 export interface Sim2RealTrainingSpec {
   profile: Sim2RealTrainingProfile;
@@ -246,6 +271,10 @@ export interface Sim2RealTrainingSpec {
   demonstrationSha256?: string;
   /** Explicit protocol smoke only; never a substitute for recorded data. */
   syntheticSmoke?: boolean;
+  /** Bounded OriginMan recovery-course recipe forwarded to a registered course worker. */
+  originmanWorkshop?: Sim2RealOriginmanWorkshopTraining;
+  /** Bounded OriginMan dance choreography forwarded to a registered dance worker. */
+  originmanDance?: Sim2RealOriginmanDanceTraining;
 }
 
 /** Server-resolved, digest-pinned imitation input; never a client file path. */
@@ -742,6 +771,10 @@ export interface Sim2RealComputeResource {
   cuda?: boolean;
   vramMb?: number;
   maxConcurrentJobs?: number;
+  /** Last worker health report; consumers must still test before submitting. */
+  engines?: string[];
+  /** Explicitly derived from the worker health contract when it can be identified. */
+  mock?: boolean;
   message?: string;
   lastCheckedAt?: string;
   createdAt: string;
@@ -864,6 +897,8 @@ const ALLOWED_TRAINING_ENGINES = new Set<Sim2RealTrainingEngine>([
   'diffusion-policy',
   'smolvla',
   'isaac-lab',
+  'originman-recovery-reflect',
+  'originman-dance-ppo',
 ]);
 const SAFE_ID = /^[a-z][a-z0-9-]{1,63}$/;
 const SHA256 = /^[a-f0-9]{64}$/i;
@@ -1064,6 +1099,138 @@ export function normalizeTrainingSpec(value: unknown): {
     errors.push(
       'syntheticSmoke requires the smoke profile and cannot replace recorded demonstrations',
     );
+  let originmanWorkshop: Sim2RealOriginmanWorkshopTraining | undefined;
+  if (source.originmanWorkshop !== undefined) {
+    const workshop = record(source.originmanWorkshop);
+    const allowedKeys = new Set([
+      'phase',
+      'timesteps',
+      'seed',
+      'pushMaxForce',
+      'groupId',
+      'device',
+      'sourceRunId',
+    ]);
+    const phase = workshop.phase;
+    const timesteps = Number(workshop.timesteps);
+    const seed = Number(workshop.seed);
+    const pushMaxForce = Number(workshop.pushMaxForce);
+    const groupId = safeText(workshop.groupId, 64);
+    const device = workshop.device;
+    const sourceRunId = safeText(workshop.sourceRunId, 200);
+    if (
+      !source.originmanWorkshop ||
+      typeof source.originmanWorkshop !== 'object' ||
+      Array.isArray(source.originmanWorkshop) ||
+      Object.keys(workshop).some((key) => !allowedKeys.has(key)) ||
+      !['train', 'evaluate'].includes(String(phase)) ||
+      !Number.isSafeInteger(timesteps) ||
+      timesteps < 4096 ||
+      timesteps > 1_000_000 ||
+      !Number.isSafeInteger(seed) ||
+      seed < 0 ||
+      seed > 1_000_000 ||
+      !Number.isFinite(pushMaxForce) ||
+      pushMaxForce < 6.4 ||
+      pushMaxForce > 9 ||
+      (workshop.groupId !== undefined && !/^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/.test(groupId)) ||
+      (device !== undefined && device !== 'cpu' && device !== 'cuda') ||
+      (phase === 'evaluate' && !sourceRunId) ||
+      (phase === 'train' && sourceRunId !== '') ||
+      (workshop.sourceRunId !== undefined &&
+        (!sourceRunId || !/^[A-Za-z0-9][A-Za-z0-9._-]{0,199}$/.test(sourceRunId)))
+    ) {
+      errors.push('training.originmanWorkshop contains invalid or unsupported course fields');
+    } else {
+      originmanWorkshop = {
+        phase: phase as Sim2RealOriginmanWorkshopTraining['phase'],
+        timesteps,
+        seed,
+        pushMaxForce,
+        ...(groupId ? { groupId } : {}),
+        ...(device ? { device } : {}),
+        ...(sourceRunId ? { sourceRunId } : {}),
+      };
+    }
+  }
+  let originmanDance: Sim2RealOriginmanDanceTraining | undefined;
+  if (source.originmanDance !== undefined) {
+    const dance = record(source.originmanDance);
+    const allowedKeys = new Set([
+      'schemaVersion',
+      'title',
+      'bpm',
+      'sections',
+      'seed',
+      'trainingSteps',
+    ]);
+    const title = safeText(dance.title, 80);
+    const bpm = Number(dance.bpm);
+    const seed = dance.seed === undefined ? undefined : Number(dance.seed);
+    const trainingSteps =
+      dance.trainingSteps === undefined ? undefined : Number(dance.trainingSteps);
+    const rawSections = dance.sections;
+    const sections: Sim2RealOriginmanDanceTraining['sections'] = [];
+    if (Array.isArray(rawSections)) {
+      for (const item of rawSections) {
+        const section = record(item);
+        if (
+          Object.keys(section).some((key) => !['type', 'beats', 'intensity'].includes(key)) ||
+          !['alternating-arms', 'weight-shift', 'squat-rise', 'open-pose'].includes(
+            String(section.type),
+          ) ||
+          ![4, 8, 16].includes(Number(section.beats)) ||
+          !Number.isFinite(Number(section.intensity)) ||
+          Number(section.intensity) < 0.25 ||
+          Number(section.intensity) > 1
+        ) {
+          errors.push('training.originmanDance.sections contains an invalid choreography section');
+          break;
+        }
+        sections.push({
+          type: section.type as Sim2RealOriginmanDanceTraining['sections'][number]['type'],
+          beats: Number(
+            section.beats,
+          ) as Sim2RealOriginmanDanceTraining['sections'][number]['beats'],
+          intensity: Number(section.intensity),
+        });
+      }
+    }
+    if (
+      !dance ||
+      typeof source.originmanDance !== 'object' ||
+      Array.isArray(source.originmanDance) ||
+      Object.keys(dance).some((key) => !allowedKeys.has(key)) ||
+      dance.schemaVersion !== 1 ||
+      !title ||
+      !Number.isFinite(bpm) ||
+      bpm < 80 ||
+      bpm > 140 ||
+      !Array.isArray(rawSections) ||
+      rawSections.length < 1 ||
+      rawSections.length > 8 ||
+      (seed !== undefined && (!Number.isSafeInteger(seed) || seed < 0 || seed > 2_147_483_647)) ||
+      (trainingSteps !== undefined &&
+        (!Number.isSafeInteger(trainingSteps) || trainingSteps < 8192 || trainingSteps > 2_000_000))
+    ) {
+      errors.push('training.originmanDance must match the bounded OriginMan dance schema');
+    } else {
+      originmanDance = {
+        schemaVersion: 1,
+        title,
+        bpm,
+        sections,
+        ...(seed !== undefined ? { seed } : {}),
+        ...(trainingSteps !== undefined ? { trainingSteps } : {}),
+      };
+    }
+  }
+  if (originmanWorkshop && originmanDance)
+    errors.push('training may contain only one OriginMan course recipe');
+  if (originmanWorkshop && engine !== 'originman-recovery-reflect')
+    errors.push('training.originmanWorkshop requires engine originman-recovery-reflect');
+  if (originmanDance && (engine !== 'originman-dance-ppo' || algorithm !== 'ppo'))
+    errors.push('training.originmanDance requires engine originman-dance-ppo and algorithm ppo');
   if (errors.length) return { errors };
   return {
     errors,
@@ -1077,6 +1244,8 @@ export function normalizeTrainingSpec(value: unknown): {
       ...(engine ? { engine: engine as Sim2RealTrainingEngine } : {}),
       ...(demonstrationRunId ? { demonstrationRunId } : {}),
       ...(source.syntheticSmoke === true ? { syntheticSmoke: true } : {}),
+      ...(originmanWorkshop ? { originmanWorkshop } : {}),
+      ...(originmanDance ? { originmanDance } : {}),
     },
   };
 }

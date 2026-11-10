@@ -91,6 +91,10 @@ test('dance Run detail selects the exact account-scoped record and visualizes it
   assert.equal(f.document.getElementById('reward-chart').hidden, false);
   assert.equal(f.document.getElementById('run-video').hidden, false);
   assert.match(
+    f.document.getElementById('run-next-action').textContent,
+    /可以播放已核验的本次仿真回放/,
+  );
+  assert.match(
     f.document.getElementById('run-video').getAttribute('src'),
     /\/api\/v1\/duck\/runs\/run_42\/dance-video$/,
   );
@@ -162,6 +166,7 @@ test('a verified video digest without a platform media URL does not create a req
   assert.equal(video.hidden, true);
   assert.equal(video.hasAttribute('src'), false);
   assert.match(f.document.getElementById('replay-status').textContent, /未提供本次视频链接/);
+  assert.match(f.document.getElementById('run-next-action').textContent, /没有提供可核验且可播放/);
   page.dispose();
 });
 
