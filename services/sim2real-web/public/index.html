@@ -20,7 +20,7 @@
          theme x view screenshots). See services/sim2real-web/ui-layout-invariants.mjs
          for the guards that keep new overrides from re-introducing layering. -->
     <link rel="stylesheet" href="./tokens.css?v=3" />
-    <link rel="stylesheet" href="./app.css?v=55" />
+    <link rel="stylesheet" href="./app.css?v=56" />
   </head>
   <body>
     <a class="skip-link" href="#main-content">跳到主要内容</a>
@@ -921,6 +921,7 @@
                 </div>
                 <details class="training-controls" id="train-module-config" data-train-module="config" role="tabpanel" aria-labelledby="train-tab-config">
                   <summary>训练参数与续训</summary>
+                  <div class="panel-heading panel-heading-lean config-module-heading"><h2>训练配置</h2><small class="panel-tip">选算法、档位与算力；提交后在「Run 与进度」看曲线和日志</small></div>
                   <div class="training-grid"><div class="training-field-group" role="group" aria-labelledby="training-group-basic">
                       <div class="training-group-title" id="training-group-basic">训练设置</div>
                       <label class="field-label" for="training-profile">训练档位<small class="profile-pref-note" data-training-profile-note hidden>已按你上次的选择预选</small></label
@@ -935,19 +936,27 @@
                       <option value="sac">SAC · 离策略</option></select
                     ><label class="field-label" for="training-engine">训练引擎</label
                     ><select id="training-engine" aria-label="选择训练引擎">
-                      <option value="" selected>默认 · worker 配置的引擎</option>
-                      <option value="starter-ppo">starter-ppo · 运动学（CPU 友好）</option>
-                      <option value="mjx-ppo">MJX · MuJoCo 接触动力学</option>
-                      <option value="visual-ppo">visual-ppo · 顶置相机像素观测（CPU MuJoCo）</option>
-                      <option value="dm-control-ppo">dm-control-ppo · DeepMind 生态 env API（CPU MuJoCo）</option>
-                      <option value="microduck-rl">microduck-rl · mjlab 并行物理（CUDA）</option>
-                      <option value="microduck-recurrent">microduck-recurrent · 循环 LSTM 策略 · 篮球/高跷平衡（CPU 冒烟）</option>
-                      <option value="microduck-football">microduck-football · 足球 MuJoCo + 14D MicroDuck（CUDA）</option>
-                      <option value="mjlab-rsl-rl">mjlab-rsl-rl · mjlab 物理 + rsl-rl PPO（CUDA）</option>
-                      <option value="act">act · 动作分块模仿（示教轨迹，CPU）</option>
-                      <option value="diffusion-policy">diffusion-policy · 扩散动作分块模仿（示教轨迹，CPU）</option>
-                      <option value="smolvla">smolvla · LeRobot VLA 参考（CPU 规划 / CUDA 全量）</option>
-                      <option value="isaac-lab">isaac-lab · Isaac Lab 上游训练栈（CUDA 主机，含 sim2sim 验证）</option></select
+                      <optgroup label="推荐 · 开箱即用">
+                        <option value="" selected>默认 · 平台自动配置引擎</option>
+                        <option value="starter-ppo">步行入门 · CPU 即可（starter-ppo）</option>
+                      </optgroup>
+                      <optgroup label="强化学习 · 真实物理">
+                        <option value="microduck-rl">并行物理全量训练 · 需 GPU（microduck-rl）</option>
+                        <option value="mjx-ppo">MuJoCo 接触动力学 · MJX</option>
+                        <option value="mjlab-rsl-rl">mjlab 物理 + rsl-rl · 需 GPU</option>
+                        <option value="microduck-football">足球任务专用 · 需 GPU</option>
+                        <option value="microduck-recurrent">循环策略 · 篮球/高跷平衡（CPU 冒烟）</option>
+                        <option value="visual-ppo">顶置相机视觉观测（CPU）</option>
+                        <option value="dm-control-ppo">dm-control 环境 API（CPU）</option>
+                      </optgroup>
+                      <optgroup label="模仿学习 · 用示教轨迹">
+                        <option value="act">ACT 动作分块（CPU）</option>
+                        <option value="diffusion-policy">扩散策略（CPU）</option>
+                        <option value="smolvla">SmolVLA 视觉-语言-动作（CPU/GPU）</option>
+                      </optgroup>
+                      <optgroup label="研究栈 · 上游原生">
+                        <option value="isaac-lab">Isaac Lab · CUDA 主机（含 sim2sim）</option>
+                      </optgroup></select
                     ><label class="field-label" for="compute-resource-select">训练资源</label
                     ><select id="compute-resource-select" aria-label="选择 GPU 训练资源">
                       <option value="">服务端默认本地 Worker</option>
@@ -2194,7 +2203,7 @@
     <script defer src="./telemetry-core.js?v=duck-lab-32"></script>
     <script defer src="./run-inspector-core.js?v=2"></script>
     <script defer src="./run-inspector.js?v=3"></script>
-    <script defer src="./app.js?v=duck-lab-72"></script>
+    <script defer src="./app.js?v=duck-lab-73"></script>
     <script defer src="./visualization-enhancements.js?v=viz-1"></script>
     <script defer src="./capability-workbench.js?v=1"></script>
     <script defer src="./agent-chat.js?v=agent-19"></script>

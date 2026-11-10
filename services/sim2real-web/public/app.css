@@ -5456,6 +5456,11 @@ html.theme-dark .agent-assistant-health { max-width: 150px; }
 .submodule-tab{min-height:54px;padding:10px 16px}
 .submodule-tab.is-active{background:color-mix(in srgb,var(--accent) 16%,var(--surface-2));border-color:var(--accent);box-shadow:inset 0 -2px 0 var(--accent);color:var(--text)}
 @media(max-width:720px){.view-section{padding:20px 16px 40px}.section-heading h2{font-size:22px}}
+/* Config module shows a real panel heading; the fold summary only names it on the run page. */
+.train-layout[data-train-active-module="config"] #train-module-config > summary{display:none}
+.train-layout[data-train-active-module="config"] #train-module-config{border:0}
+.train-layout[data-train-active-module="run"] #train-module-config .config-module-heading{display:none}
+#train-module-config .config-module-heading{padding:4px 0 12px;border-bottom:1px solid var(--line);margin-bottom:12px}
 
 /* ======================== onboarding.css — 新手指引浮层 ======================== */
 
