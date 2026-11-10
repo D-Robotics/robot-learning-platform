@@ -2303,7 +2303,18 @@ paths:
       summary: List account-owned GPU workers
       operationId: listComputeResources
       responses:
-        "200": { description: Compute resources returned. }
+        "200":
+          description: Account-owned compute resources returned. Credentials are never returned.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [ok, computeResources]
+                properties:
+                  ok: { type: boolean, const: true }
+                  computeResources:
+                    type: array
+                    items: { $ref: "#/components/schemas/ComputeResource" }
     post:
       tags: [workspace]
       summary: Register a GPU worker
@@ -2311,9 +2322,18 @@ paths:
       requestBody:
         required: true
         content:
-          application/json: { schema: { type: object, required: [name, runnerUrl] } }
+          application/json: { schema: { $ref: "#/components/schemas/ComputeResourceCreateInput" } }
       responses:
-        "201": { description: Compute resource created. }
+        "201":
+          description: Compute resource created. Runner credentials are not returned.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [ok, computeResource]
+                properties:
+                  ok: { type: boolean, const: true }
+                  computeResource: { $ref: "#/components/schemas/ComputeResource" }
         "400": { $ref: "#/components/responses/BadRequest" }
   /api/v1/duck/compute-resources/{id}:
     parameters:
@@ -2329,7 +2349,16 @@ paths:
         content:
           application/json: { schema: { type: object } }
       responses:
-        "200": { description: Compute resource updated. }
+        "200":
+          description: Compute resource updated. Runner credentials are not returned.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [ok, computeResource]
+                properties:
+                  ok: { type: boolean, const: true }
+                  computeResource: { $ref: "#/components/schemas/ComputeResource" }
         "404": { $ref: "#/components/responses/NotFound" }
     delete:
       tags: [workspace]
@@ -2349,7 +2378,19 @@ paths:
       summary: Probe a GPU worker health endpoint
       operationId: testComputeResource
       responses:
-        "200": { description: Probe result returned. }
+        "200":
+          description: Health probe completed; engine support is reported only when advertised by the worker.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [ok, computeResource, connected]
+                properties:
+                  ok: { type: boolean, const: true }
+                  connected: { type: boolean }
+                  browserRelay: { type: boolean, description: True for local-agent resources that must be probed by the browser. }
+                  mock: { type: boolean, description: Present when the worker health contract identifies a mock worker. }
+                  computeResource: { $ref: "#/components/schemas/ComputeResource" }
         "404": { $ref: "#/components/responses/NotFound" }
   /api/v1/duck/datasets/{id}:
     parameters:
@@ -3137,6 +3178,76 @@ components:
       description: Resource is not visible to this account.
       content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } }
   schemas:
+    ComputeResourceCreateInput:
+      type: object
+      required: [name, runnerUrl]
+      properties:
+        name: { type: string, minLength: 1, maxLength: 120 }
+        runnerUrl: { type: string, format: uri, maxLength: 2048, description: HTTP(S) worker endpoint ending in /train; local-agent URLs must resolve to loopback. }
+        runnerToken: { type: string, maxLength: 4096, writeOnly: true, description: Stored server-side and never returned. Required by production or non-loopback Runner endpoints. }
+        source: { type: string, enum: [server-runner, local-agent], default: server-runner }
+        maxConcurrentJobs: { type: integer, minimum: 1, maximum: 32, default: 1 }
+    ComputeResource:
+      type: object
+      description: Account-owned worker metadata. Runner tokens are deliberately never returned.
+      required: [id, name, kind, runnerUrl, tokenConfigured, status, createdAt, updatedAt]
+      properties:
+        id: { type: string }
+        name: { type: string, maxLength: 120 }
+        kind: { type: string, const: local-gpu }
+        source: { type: string, enum: [server-runner, local-agent] }
+        runnerUrl: { type: string, format: uri }
+        tokenConfigured: { type: boolean }
+        status: { type: string, enum: [online, offline, unknown] }
+        gpuName: { type: string }
+        cuda: { type: boolean }
+        vramMb: { type: integer, minimum: 0 }
+        maxConcurrentJobs: { type: integer, minimum: 1 }
+        engines:
+          type: array
+          items: { type: string }
+          description: Engines reported by the most recent worker health probe; absent or empty means capability is unverified.
+        mock: { type: boolean, description: Present only when the worker health contract identifies a mock worker. }
+        message: { type: string }
+        lastCheckedAt: { type: string, format: date-time }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+    OriginManWorkshopTraining:
+      type: object
+      additionalProperties: false
+      description: Bounded recovery-course recipe. Evaluation requires sourceRunId; training forbids it.
+      required: [phase, timesteps, seed, pushMaxForce]
+      properties:
+        phase: { type: string, enum: [train, evaluate] }
+        timesteps: { type: integer, minimum: 4096, maximum: 1000000 }
+        seed: { type: integer, minimum: 0, maximum: 1000000 }
+        pushMaxForce: { type: number, minimum: 6.4, maximum: 9 }
+        groupId: { type: string, pattern: '^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$' }
+        device: { type: string, enum: [cpu, cuda] }
+        sourceRunId: { type: string, maxLength: 200, pattern: '^[A-Za-z0-9][A-Za-z0-9._-]{0,199}$', description: Required for evaluate and omitted for train. }
+    OriginManDanceSection:
+      type: object
+      additionalProperties: false
+      required: [type, beats, intensity]
+      properties:
+        type: { type: string, enum: [alternating-arms, weight-shift, squat-rise, open-pose] }
+        beats: { type: integer, enum: [4, 8, 16] }
+        intensity: { type: number, minimum: 0.25, maximum: 1 }
+    OriginManDanceTraining:
+      type: object
+      additionalProperties: false
+      required: [schemaVersion, title, bpm, sections]
+      properties:
+        schemaVersion: { type: integer, const: 1 }
+        title: { type: string, minLength: 1, maxLength: 80 }
+        bpm: { type: number, minimum: 80, maximum: 140 }
+        sections:
+          type: array
+          minItems: 1
+          maxItems: 8
+          items: { $ref: "#/components/schemas/OriginManDanceSection" }
+        seed: { type: integer, minimum: 0, maximum: 2147483647 }
+        trainingSteps: { type: integer, minimum: 8192, maximum: 2000000 }
     Project:
       type: object
       required: [id, name, slug, modelIds, datasetIds, createdAt, updatedAt]
@@ -3806,7 +3917,7 @@ components:
             platforms: { type: array, items: { type: string } }
     Training:
       type: object
-      description: The profile supplies safe defaults. ACT and Diffusion Policy require an owner/project/contract-matched demonstration Run, or explicit syntheticSmoke with the smoke profile.
+      description: The profile supplies safe defaults. ACT and Diffusion Policy require an owner/project/contract-matched demonstration Run, or explicit syntheticSmoke with the smoke profile. OriginMan recovery and dance recipes are mutually exclusive and require their matching engine; dance also requires algorithm=ppo.
       properties:
         profile: { type: string, enum: [smoke, low-vram, standard, high-vram] }
         numEnvs: { type: integer, minimum: 1, maximum: 16384 }
@@ -3814,10 +3925,12 @@ components:
         video: { type: boolean }
         runName: { type: string, maxLength: 80 }
         algorithm: { type: string, enum: [ppo, sac] }
-        engine: { type: string, enum: [starter-ppo, mjx-ppo, visual-ppo, dm-control-ppo, mjlab-rsl-rl, microduck-rl, microduck-recurrent, microduck-football, act, diffusion-policy, smolvla, isaac-lab] }
+        engine: { type: string, enum: [starter-ppo, mjx-ppo, visual-ppo, dm-control-ppo, mjlab-rsl-rl, microduck-rl, microduck-football, act, diffusion-policy, smolvla, isaac-lab, originman-recovery-reflect, originman-dance-ppo] }
         demonstrationRunId: { type: string, maxLength: 200, description: Recorded telemetry Run with at least eight complete episodes of four or more steps. Requires matching owner, project, and vector contract; Mock and demo-fixture data are rejected. }
         demonstrationSha256: { type: string, pattern: "^[a-f0-9]{64}$", readOnly: true, description: Server-pinned digest of the accepted demonstration JSONL. }
         syntheticSmoke: { type: boolean, description: Explicit synthetic imitation smoke only; mutually exclusive with demonstrationRunId and requires profile=smoke. }
+        originmanWorkshop: { $ref: "#/components/schemas/OriginManWorkshopTraining" }
+        originmanDance: { $ref: "#/components/schemas/OriginManDanceTraining" }
     RunRequest:
       type: object
       required: [modelId, backend]
