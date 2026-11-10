@@ -459,8 +459,8 @@ test('cold Workshop previews offline and only surfaces an already requested auth
   assert.match(preview.studentReply, /开始实操/);
   assert.equal(preview.submission.training, false);
   const requiresLogin = await workshopEntry({ intent: 'new' }, noCourse, options);
-  assert.equal(requiresLogin.stage, 'authorize');
-  assert.deepEqual(requiresLogin.links, {});
+  assert.equal(requiresLogin.stage, 'preview');
+  assert.match(requiresLogin.links.workshop, /workshop\.html\?start=1$/);
   state = { ...state, verificationUrl: login };
   assert.deepEqual((await workshopEntry({}, noCourse, options)).links, { login });
   state = { authenticated: null, needsLogin: false, nextAction: '稍后重试原请求。' };
@@ -536,4 +536,27 @@ test('development target entry separates workers from boards, keeps scope and re
   const before = calls.length;
   assert.equal((await invoke({})).isError, true);
   assert.equal(calls.length, before);
+});
+
+test('explicit new preview does not wait for authentication or list account data', async () => {
+  const r = await workshopEntry(
+    { intent: 'new' },
+    () => {
+      throw Error('no platform read');
+    },
+    {
+      remote: () => {
+        throw Error('no experiment creation');
+      },
+      authentication: {
+        audience: 'https://platform.test/learning',
+        status: () => {
+          throw Error('no auth read');
+        },
+      },
+    },
+  );
+  assert.equal(r.stage, 'preview');
+  assert.deepEqual(r.submission, { training: false, evaluation: false });
+  assert.match(r.links.workshop, /workshop.html\?start=1$/);
 });

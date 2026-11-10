@@ -815,16 +815,18 @@ export async function startWorkshop({
       const placeholder = new document.defaultView.Option('请选择一台算力机', '', true, true);
       placeholder.disabled = true;
       select.replaceChildren(placeholder);
-      for (const resource of data.resources) {
+      const resources = data.resources.filter(resource => resource.mock !== true && resource.status !== 'offline' &&
+        (!Array.isArray(resource.engines) || resource.engines.includes(WORKSHOP_ENGINE)));
+      for (const resource of resources) {
         const status = { online: '上次检查可用', offline: '上次检查离线', unknown: '待检查' }[resource.status] ?? '待检查';
-        const option = new document.defaultView.Option(resource.name + ' · ' + status, resource.id);
+        const option = new document.defaultView.Option(resource.name + ' · ' + status + (!Array.isArray(resource.engines) ? ' · 课程兼容性待检查' : ''), resource.id);
         select.add(option);
       }
-      const available = data.resources.length > 0;
+      const available = resources.length > 0;
       $('workshop-setup-form').hidden = !available;
       $('workshop-setup-status').textContent = available
         ? (setupAccount ? '当前账号：' + setupAccount + '。' : '') + '选择一台算力机后再选预算。'
-        : '当前账号没有可选算力机。请联系课程管理员分配算力，再刷新列表。';
+        : '当前账号没有兼容本课程的算力机。请联系课程管理员分配，再刷新列表。';
       $('workshop-error').hidden = true;
       setupReady = true;
       halted = false;

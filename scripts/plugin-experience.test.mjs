@@ -427,9 +427,18 @@ test('packaging coverage accepts discovered optional tools but still rejects inv
   const tools = [
     { name: 'rdk_platform_status', annotations: { readOnlyHint: true, destructiveHint: false } },
   ];
-  const expected = { tools, snapshot: tools, catalog: [] };
+  tools.push({
+    name: 'rdk_training_submit',
+    annotations: { readOnlyHint: false, destructiveHint: false },
+    inputSchema: { type: 'object', additionalProperties: true, properties: {} },
+  });
+  const expected = { tools, snapshot: tools, catalog: [{ id: 'rdk_training_submit' }] };
   const optional = [{ name: 'rdk_workflow_inspect' }];
-  const documented = new Set(['rdk_platform_status', 'rdk_workflow_inspect']);
+  const documented = new Set([
+    'rdk_platform_status',
+    'rdk_training_submit',
+    'rdk_workflow_inspect',
+  ]);
   assert.throws(() => verifyTools(tools, expected, documented), /unknown tool/);
   verifyTools(tools, expected, documented, optional);
   assert.throws(

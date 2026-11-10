@@ -15,6 +15,7 @@
 
 import { createHash, randomUUID } from 'node:crypto';
 import { createServer } from 'node:http';
+import { recoveryEnvironmentPreflight } from './recovery-environment-preflight.mjs';
 import { mkdir, open, readdir, readFile, stat, writeFile } from 'node:fs/promises';
 import { createReadStream, realpathSync } from 'node:fs';
 import { spawn } from 'node:child_process';
@@ -1415,6 +1416,7 @@ async function handleLogs(request, response) {
   });
 }
 
+let recoveryProbeActive = false;
 export function createLocalTrainingWorkerServer() {
   return createServer(async (request, response) => {
     try {
@@ -1464,7 +1466,27 @@ export function createLocalTrainingWorkerServer() {
         json(response, 401, { ok: false, error: 'local_worker_unauthorized' });
         return;
       }
+      if (request.method === 'POST' && request.url === '/engines/originman-recovery/preflight') {
+        accountId(request, {});
+        const input = await bodyJson(request);
+        if (input.taskId !== 'originman-recovery')
+          throw fail('unsupported task', 400, 'invalid_task');
+        await ensureJobsLoaded();
+        if (recoveryProbeActive || activeJobs.size || queuedJobs.length)
+          throw fail('Worker is busy', 429, 'engine_preflight_busy');
+        recoveryProbeActive = true;
+        try {
+          const config = workerEngines().get('originman-recovery');
+          const report = await recoveryEnvironmentPreflight(config, process.env);
+          json(response, 200, { ok: true, report });
+        } finally {
+          recoveryProbeActive = false;
+        }
+        return;
+      }
       if (request.method === 'POST' && request.url === '/train') {
+        if (recoveryProbeActive)
+          throw fail('Worker is checking environment', 429, 'engine_preflight_busy');
         await handleTrain(request, response);
         return;
       }

@@ -1,7 +1,7 @@
 {
   "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
   "name": "rdk-robot-learning-platform",
-  "version": "0.6.17",
+  "version": "0.6.19",
   "description": "一句话开始 Workshop：OriginMan 舞蹈 PPO 独立训练、Run 可视化直达、跨软件接续、曲线对比与仿真回放。",
   "author": {
     "name": "D-Robotics"

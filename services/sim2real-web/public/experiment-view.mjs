@@ -9,11 +9,20 @@ export function comparisonRows(run) {
   const suites = run?.metrics?.originmanWorkshop?.feedbackComparison?.suites;
   if (!Array.isArray(suites)) return [];
   return suites.slice(0, 10).flatMap(s => {
-    const count = Array.isArray(s.cases) ? s.cases.length : null;
-    const values = [s.originalRecovered, s.tunedRecovered, s.rlRecovered];
-    if (!count || !values.every(v => Number.isInteger(v) && v >= 0 && v <= count)) return [];
-    return [{ label: s.id === 'historical' ? '公开条件组' : s.id === 'additional' ? '补充条件组' : '评测条件组', count, values }];
+    if (!Array.isArray(s.cases) || !s.cases.length || s.cases.some(c =>
+      !Number.isFinite(c.force) || !['original', 'tuned', 'rl'].every(k => typeof c[k] === 'boolean'))) return [];
+    const pushed = s.cases.filter(c => c.force !== 0);
+    const standing = s.cases.filter(c => c.force === 0);
+    const counts = cases => ['original', 'tuned', 'rl'].map(k => cases.filter(c => c[k]).length);
+    if (!pushed.length) return [];
+    return [{ label: s.id === 'historical' ? '公开条件组' : s.id === 'additional' ? '补充条件组' : '评测条件组',
+      count: pushed.length, values: counts(pushed), standing: { count: standing.length, values: counts(standing) } }];
   });
+}
+
+export function experimentFilename(contextId, extension) {
+  if (!idPattern.test(contextId ?? '') || !['json', 'webm', 'mp4'].includes(extension)) throw Error('实验文件标识无效');
+  return `OriginMan-${contextId}-evaluation.${extension}`;
 }
 
 export async function startExperimentView({ document, location, fetchImpl = fetch, EventSourceImpl = globalThis.EventSource, onExport, openPlayback } = {}) {
@@ -21,6 +30,8 @@ export async function startExperimentView({ document, location, fetchImpl = fetc
   const playButton = $('play-experiment-video');
   const contextId = new URL(location.href).searchParams.get('context');
   const base = new URL('./api/v1/duck/', location.href);
+  const back = $('return-workshop');
+  if (back && idPattern.test(contextId ?? '')) back.href = new URL('workshop.html?context=' + encodeURIComponent(contextId), location.href).href;
   let view = null, stream = null, active = false, pending = false, disposed = false, generation = 0, refreshTimer = null;
   let trainingId = null, evaluationId = null, latestRecord = null, curvePoints = [], curveUnit = '训练步';
   const terminal = () => view && (['failed', 'blocked', 'cancelled', 'canceled'].includes(view.training?.status) ||
@@ -30,8 +41,12 @@ export async function startExperimentView({ document, location, fetchImpl = fetc
   const clearResults = () => {
     $('reward-chart').replaceChildren(); $('reward-chart').setAttribute('hidden', ''); $('curve-empty').hidden = false;
     $('curve-reading').hidden = true;
-    $('comparison-reading').hidden = true;
     $('comparison-body').replaceChildren(); $('comparison-table').hidden = true; $('comparison-empty').hidden = false;
+    $('recovery-summary').replaceChildren();
+    $('recovery-summary').hidden = true;
+    $('comparison-details').hidden = true;
+    $('comparison-details').open = false;
+    $('replay-shortcut').hidden = true;
     $('experiment-video').hidden = true; $('experiment-video').removeAttribute('src');
     if (playButton) {
       playButton.hidden = true;
@@ -73,7 +88,6 @@ export async function startExperimentView({ document, location, fetchImpl = fetc
       if (phase === view.stage) $('step-' + phase).setAttribute('aria-current', 'step');
       else $('step-' + phase).removeAttribute('aria-current');
     }
-    $('quality-status').textContent = view.clearGain === true ? '本次达到收益判据' : view.clearGain === false ? '本次未达到收益判据' : '效果尚未验证';
     $('experiment-diagnostics').textContent = JSON.stringify(view, null, 2);
   };
   const inspectCurve = () => {const point=curvePoints[Number($('curve-sample').value)];if(point)$('curve-value').textContent=`${point.iteration} ${curveUnit} · 平均奖励 ${point.meanReward.toFixed(3)}`;};
@@ -108,22 +122,34 @@ export async function startExperimentView({ document, location, fetchImpl = fetc
       ? `最后一个采样点在 ${latest.iteration} ${curveUnit}，平均奖励从上一点的 ${previous.meanReward.toFixed(3)} 变为 ${latest.meanReward.toFixed(3)}。本轮已显示的峰值是 ${high.toFixed(3)}。`
       : `目前只采到一笔，平均奖励是 ${latest.meanReward.toFixed(3)}。`;
     reading.textContent = summary + (points.length <= 5 ? ' 采样较少，先别据此判断趋势。' : '') +
-      ' 奖励反映训练过程。遇到侧推能恢复几次，要看下方同条件评测。';
+      ' 奖励反映训练过程。遇到侧推能恢复几次，要看上方同条件评测。';
     $('curve-caption').textContent = (view.evidence === 'fixture' ? '测试数据 · ' : '引擎记录 · ') + points.length + ' 个采样点';
   };
   const drawComparison = run => {
     const rows = view.associationVerified ? comparisonRows(run) : [];
     $('comparison-body').replaceChildren(); $('comparison-table').hidden = !rows.length; $('comparison-empty').hidden = Boolean(rows.length);
-    const reading = $('comparison-reading');
-    reading.hidden = !rows.length;
-    if (rows.length) reading.textContent = rows.map(({ label, count, values }) => {
-      const [original, tuned, trained] = values;
-      const difference = trained - tuned;
-      const relative = difference === 0 ? '与调参反馈持平'
-        : `比调参反馈${difference > 0 ? '多' : '少'}恢复 ${Math.abs(difference)} 次`;
-      return `${label}里，本轮恢复 ${trained} / ${count} 次，原 PD 恢复 ${original} 次，${relative}。`;
-    }).join(' ');
+    $('recovery-summary').replaceChildren();
+    $('recovery-summary').hidden = !rows.length;
+    $('comparison-details').hidden = !rows.length;
+    $('quality-status').textContent =
+      !rows.length || view.clearGain == null ? '效果尚未验证' :
+        view.clearGain ? '本轮达到改善标准' : '本轮未达到改善标准';
+    const describeDifference = (name, difference) =>
+      difference === 0 ? `与${name}持平` :
+        `比${name}${difference > 0 ? '多' : '少'}恢复 ${Math.abs(difference)} 次`;
     for (const row of rows) {
+      const [original, tuned, recovered] = row.values;
+      const item = document.createElement('li');
+      const headline = document.createElement('strong');
+      headline.textContent = `${row.label}受扰恢复 ${recovered} / ${row.count} 次`;
+      item.append(
+        headline,
+        `，${row.count - recovered} 个条件未恢复。` +
+          `${describeDifference('原 PD', recovered - original)}，` +
+          `${describeDifference('调参反馈', recovered - tuned)}。`,
+      );
+      if (row.standing.count) item.append(` 无扰站立：原 PD ${row.standing.values[0]}、调参反馈 ${row.standing.values[1]}、本次 RL ${row.standing.values[2]} / ${row.standing.count}（不计入受扰恢复）。`);
+      $('recovery-summary').append(item);
       const tr = document.createElement('tr');
       for (const value of [row.label, ...row.values.map(v => `${v} / ${row.count}`)]) {
         const td = document.createElement('td'); td.textContent = value; tr.append(td);
@@ -160,10 +186,11 @@ export async function startExperimentView({ document, location, fetchImpl = fetc
         const url = new URL('runs/' + encodeURIComponent(evaluation.id) + '/workshop-video?format=webm', base).href;
         if ($('experiment-video').getAttribute('src') !== url) $('experiment-video').setAttribute('src', url);
         $('experiment-video').hidden = false; $('video-empty').hidden = true;
-        $('download-video').href = url; $('download-video').hidden = false;
+        $('download-video').href = url; $('download-video').download = experimentFilename(contextId, 'webm'); $('download-video').hidden = false;
       } else { $('experiment-video').hidden = true; $('experiment-video').removeAttribute('src'); $('download-video').hidden = true; $('video-empty').hidden = false; }
       latestRecord = { schemaVersion: 1, observedAt: new Date().toISOString(), experiment: view, training, evaluation, comparison: comparisonRows(evaluation) };
       if (playButton) playButton.hidden = $('experiment-video').hidden;
+      $('replay-shortcut').hidden = $('experiment-video').hidden && $('open-playback-page').hidden;
       $('export-experiment').disabled = false;
       $('experiment-error').hidden = true; $('login-platform').hidden = true;
       $('connection-status').textContent = '已连接本次实验';
@@ -206,7 +233,7 @@ export async function startExperimentView({ document, location, fetchImpl = fetc
     if (!latestRecord) return;
     if (onExport) { onExport(latestRecord); return; }
     const url = URL.createObjectURL(new Blob([JSON.stringify(latestRecord, null, 2)], { type: 'application/json' }));
-    const a = document.createElement('a'); a.href = url; a.download = 'OriginMan-本次实验.json'; a.click(); URL.revokeObjectURL(url);
+    const a = document.createElement('a'); a.href = url; a.download = experimentFilename(contextId, 'json'); a.click(); URL.revokeObjectURL(url);
   });
   if (!idPattern.test(contextId ?? '')) fail(Error('需要通过插件打开明确实验，不会自动选择最近任务。'));
   else {

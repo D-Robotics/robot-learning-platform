@@ -484,6 +484,7 @@ export function experienceProxy(
           : {}),
         instructions:
           (result.instructions ?? '') +
+          '\n默认受扰恢复Workshop入口：直接调用rdk_workshop，不加载指南、不预先询问预算。普通入口立即展示studentReply里的链接供学员点击，不调用浏览器工具等待导航；明确要求替我打开时再导航。工具间不输出旁白或内部推理。页面负责阶段进度与预算授权。' +
           '\n课堂新学员或新机离线准备：rdk_classroom_guide携带已知answers，只展示studentReply，每次一个中文问题，不重复问已知项。要求依据才detail=full。阶段标准读robot_onboarding_guide，证据读robot_acceptance_assess；needs-input不是通过。离线知识不要求平台登录，不因离线准备启动训练。' +
           '\n默认离线可了解课程，不主动授权、测试算力或连接板卡。需要账号才能继续时，提示“连接学习平台”，等用户明确要求连接才调用rdk_auth_login，浏览器确认后用rdk_auth_status。只在宿主已显式配置绑定账号时复用该身份，不索取密码或Cookie。' +
           '\n换学习平台账号用rdk_auth_switch_account。查看开发机先用rdk_development_targets list。用户明确选算力机开始Workshop时，按唯一名称匹配算力机ID，传rdk_workshop intent:new和computeResourceId。用户明确要求连接某台板卡时才按板卡列表匹配ID并用connect-board。名称有歧义时让用户选择，不在聊天收集凭据。' +

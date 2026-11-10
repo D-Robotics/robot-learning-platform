@@ -92,8 +92,20 @@ export function registerSim2RealWorkshopRoutes(
     handle(async (_r, owner) => ({
       accountId: owner ?? null,
       resources: (await listSim2RealComputeResources(owner))
-        .filter((resource) => resource.source !== 'local-agent')
-        .map(({ id, name, status }) => ({ id, name, status })),
+        .filter(
+          (resource) =>
+            resource.source !== 'local-agent' &&
+            resource.mock !== true &&
+            resource.status !== 'offline' &&
+            Array.isArray(resource.engines) &&
+            resource.engines.includes('originman-recovery-reflect'),
+        )
+        .map(({ id, name, status, engines }) => ({
+          id,
+          name,
+          status,
+          ...(engines ? { engines } : {}),
+        })),
     })),
   );
   router.post(

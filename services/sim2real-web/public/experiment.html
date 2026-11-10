@@ -11,13 +11,13 @@
   <body>
     <a class="skip-link" href="#experiment-main">跳到实验内容</a>
     <header class="experiment-header">
-      <a href="./">RDK Robot Learning</a><span>OriginMan Workshop</span>
+      <a href="./">RDK Robot Learning</a><a id="return-workshop" href="./workshop.html">返回 OriginMan 课程</a>
       <span id="connection-status" role="status">正在连接本次实验</span>
     </header>
     <main id="experiment-main" class="experiment-layout">
       <aside aria-label="课程进度">
         <p id="evidence-scope" class="eyebrow">本次实验 · 仅仿真</p>
-        <h1>观察、训练、看结果。</h1>
+        <h1>本次训练与评测</h1>
         <ol class="experiment-steps">
           <li>观察参考仿真</li>
           <li id="step-training">训练本组策略</li>
@@ -33,7 +33,24 @@
         <section class="experiment-summary" aria-label="当前状态">
           <div><span>训练</span><strong id="training-status">待连接</strong></div>
           <div><span>评测</span><strong id="evaluation-status">待连接</strong></div>
-          <div><span>同源校验</span><strong id="association-status">待验证</strong></div>
+          <div><span>评测策略来源</span><strong id="association-status">待验证</strong></div>
+        </section>
+        <section aria-labelledby="comparison-heading">
+          <div class="section-heading"><h2 id="comparison-heading">这次站得更稳了吗？</h2><span id="quality-status">等待独立评测</span></div>
+          <ul id="recovery-summary" hidden></ul>
+          <p id="replay-shortcut" hidden><a href="#replay-heading">看本轮受扰回放 ↓</a></p>
+          <details id="comparison-details" hidden>
+            <summary>查看原始恢复次数</summary>
+            <p>原 PD 是基础控制器。调参反馈是调整过的对照控制器。本次策略来自这轮训练。三者使用相同的扰动条件。</p>
+            <div class="comparison-scroll">
+              <table id="comparison-table" hidden>
+                <caption>受扰恢复成功次数（不含无扰站立）；仅显示本次同源评测记录</caption>
+                <thead><tr><th scope="col">条件组</th><th scope="col">原 PD</th><th scope="col">调参反馈</th><th scope="col">本次 RL</th></tr></thead>
+                <tbody id="comparison-body"></tbody>
+              </table>
+            </div>
+          </details>
+          <p id="comparison-empty" class="empty-state">评测完成并核对来源后，在这里比较真实结果。</p>
         </section>
         <section aria-labelledby="reward-heading">
           <div class="section-heading"><h2 id="reward-heading">本次训练曲线</h2><span id="curve-caption">等待真实训练数据</span></div>
@@ -41,18 +58,6 @@
           <div id="curve-inspector" hidden><label for="curve-sample">查看曲线采样点</label><input id="curve-sample" type="range" min="0" max="0" value="0"><output id="curve-value" for="curve-sample" aria-live="polite"></output></div>
           <p id="curve-reading" hidden></p>
           <p id="curve-empty" class="empty-state">暂无训练曲线。不会使用参考曲线代替本次结果。</p>
-        </section>
-        <section aria-labelledby="comparison-heading">
-          <div class="section-heading"><h2 id="comparison-heading">同条件效果对比</h2><span id="quality-status">等待独立评测</span></div>
-          <div class="comparison-scroll">
-            <table id="comparison-table" hidden>
-              <caption>恢复成功次数；仅显示本次同源评测记录</caption>
-              <thead><tr><th scope="col">条件组</th><th scope="col">原 PD</th><th scope="col">调参反馈</th><th scope="col">本次 RL</th></tr></thead>
-              <tbody id="comparison-body"></tbody>
-            </table>
-          </div>
-          <p id="comparison-reading" hidden></p>
-          <p id="comparison-empty" class="empty-state">评测完成并核对来源后，在这里比较真实结果。</p>
         </section>
         <section aria-labelledby="replay-heading">
           <div class="section-heading"><h2 id="replay-heading">本次评测回放</h2><span id="playback-status">尚未播放</span></div>

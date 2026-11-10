@@ -536,10 +536,10 @@ async function compareWorkshopRuns(selected: Session[], deps: Dependencies, owne
       signatures.push(cases.map((c) => [c.force, c.start, c.duration, c.original, c.tuned]));
       suites.push({
         id: suiteId,
-        total: cases.length,
-        original: cases.filter((c) => c.original).length,
-        tuned: cases.filter((c) => c.tuned).length,
-        recovered: cases.filter((c) => c.rl).length,
+        total: cases.filter((c) => c.force !== 0).length,
+        original: cases.filter((c) => c.force !== 0 && c.original).length,
+        tuned: cases.filter((c) => c.force !== 0 && c.tuned).length,
+        recovered: cases.filter((c) => c.force !== 0 && c.rl).length,
       });
     }
     return {

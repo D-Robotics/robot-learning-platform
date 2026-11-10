@@ -7,7 +7,7 @@ export const WORKSHOP_TOOLS = [
   {
     name: 'rdk_workshop',
     description:
-      '“带我开始 Workshop”“继续”“看看效果”的统一入口。自动使用当前账号已选课程实验，不让学员填写ID；新实验只准备工作台，由页面按钮选择预算后训练及同源评测。本工具不提交训练，不等待外部浏览器连接器。返回链接用Qoder内置浏览器或Studio工作台直接打开，正常只展示studentReply，不再调用旧指南、预算问答或训练工具。高级训练工具仍可自由使用。',
+      '“带我开始 Workshop”“继续”“看看效果”的统一入口。自动使用当前账号已选课程实验，不让学员填写ID；新实验只准备工作台，由页面按钮选择预算后训练及同源评测。本工具不提交训练，不等待外部浏览器连接器。正常立即展示studentReply中的课程入口供学员点击，不调用浏览器工具等待导航；明确要求替我打开时才按qoderNavigation执行，，不再调用旧指南、预算问答或训练工具。高级训练工具仍可自由使用。',
     inputSchema: {
       type: 'object',
       properties: {
@@ -46,7 +46,7 @@ const previewEntry = (base, stage) => {
     studentReply: `[打开 Workshop](${url})。先看参考，准备好后点「开始实操」。`,
     qoderNavigation: qoderNavigation(url),
     delivery:
-      '静默打开 links.workshop 后只展示 studentReply。由用户点击开始实操和选择算力，不主动发起授权。',
+      '立即展示 studentReply 中的链接供学员点击；普通入口不调用浏览器工具等待导航。进入页面后由用户点击开始实操和选择算力，不主动发起授权。',
   };
 };
 
@@ -84,6 +84,15 @@ export async function workshopEntry(
       throw Error('本课堂已固定算力机。如需更换，请联系教师。');
   }
   if (!remote) throw Error('当前连接尚不支持按钮工作台，请更新完整插件。');
+  // A fresh preview reads no account data and allocates no experiment. Account and
+  // resource checks happen when the learner explicitly starts practice.
+  if (
+    args.intent === 'new' &&
+    !args.contextId &&
+    !args.computeResourceId &&
+    authentication?.audience
+  )
+    return previewEntry(authentication.audience, 'preview');
   // An explicit login may already be pending. Merely opening Workshop never starts one.
   const identity = await authentication?.status();
   if (identity && identity.authenticated !== true) {
@@ -217,6 +226,6 @@ export async function workshopEntry(
       ')',
     qoderNavigation: qoderNavigation(url),
     delivery:
-      '静默完成导航后只展示studentReply，不添加“我来加载”“我在打开”等过程说明。Qoder依次执行qoderNavigation三个步骤：navigate_page→list_pages→select_page({pageId:真实页面编号,bringToFront:true})，禁止省略pageId或把URL当编号。成功后结束，保持面板展示，不重复截图或询问预算。内置工具不可用时直接给一次链接；不启动外部Browser Connector。其余工具仅在用户明确要求高级操作时使用。',
+      '普通入口立即展示studentReply中的链接供学员点击，不调用浏览器工具等待导航。只有用户明确要求替我打开页面才按以下导航规则执行。不添加“我来加载”“我在打开”等过程说明。Qoder依次执行qoderNavigation三个步骤：navigate_page→list_pages→select_page({pageId:真实页面编号,bringToFront:true})，禁止省略pageId或把URL当编号。成功后结束，保持面板展示，不重复截图或询问预算。内置工具不可用时直接给一次链接；不启动外部Browser Connector。其余工具仅在用户明确要求高级操作时使用。',
   };
 }
