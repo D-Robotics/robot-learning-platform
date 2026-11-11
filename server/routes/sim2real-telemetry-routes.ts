@@ -173,6 +173,7 @@ const EVENT_FORBIDDEN_SAMPLE_FIELDS = [
   'observation',
   'obs',
   'action',
+  'pairing',
   'reward',
   'done',
   'fall',
@@ -522,6 +523,14 @@ function normalizeTelemetrySample(
     ...(observation.value ? { observation: observation.value } : {}),
     ...(action.value ? { action: action.value } : {}),
   };
+  if (source.pairing !== undefined) {
+    if (source.pairing !== 'policy-inference-v1' || !observation.value || !action.value) {
+      return {
+        error: `samples[${index}].pairing requires a policy-inference-v1 observation and action`,
+      };
+    }
+    sample.pairing = source.pairing;
+  }
   if (source.reward != null) {
     const reward = Number(source.reward);
     if (!Number.isFinite(reward) || Math.abs(reward) > 1_000_000) {
@@ -1446,7 +1455,16 @@ export function registerSim2RealTelemetryRoutes(
       const rawLimit = request.query.limit;
       const limit = Array.isArray(rawLimit) ? rawLimit[0] : rawLimit;
       const telemetry = await listSim2RealTelemetry(runId, owner, Number(limit) || 200);
-      response.json({ ok: true, runId, telemetry, count: telemetry.length });
+      const metadataOnly = request.query.includeSamples === 'false';
+      if (metadataOnly) response.setHeader('X-RDK-Telemetry-Summary', '1');
+      response.json({
+        ok: true,
+        runId,
+        telemetry: metadataOnly
+          ? telemetry.map(({ samples, ...chunk }) => ({ ...chunk, sampleCount: samples.length }))
+          : telemetry,
+        count: telemetry.length,
+      });
     }),
   );
   router.get(
@@ -1474,10 +1492,18 @@ export function registerSim2RealTelemetryRoutes(
       // shard storage. The endpoint is owner-scoped and bounded by the same
       // record cap used for evaluation. Lifecycle event samples are metadata,
       // not frames: a client seeking control frames must never receive them.
-      const frames = telemetry
-        .flatMap((chunk) => chunk.samples || [])
-        .filter((sample) => !sample.event);
-      response.json({ ok: true, runId, replay: evaluation.replay, evaluation, frames });
+      const metadataOnly = request.query.includeFrames === 'false';
+      const frames = metadataOnly
+        ? undefined
+        : telemetry.flatMap((chunk) => chunk.samples || []).filter((sample) => !sample.event);
+      const frameCount =
+        frames?.length ??
+        telemetry.reduce(
+          (count, chunk) => count + chunk.samples.filter((sample) => !sample.event).length,
+          0,
+        );
+      if (metadataOnly) response.setHeader('X-RDK-Telemetry-Summary', '1');
+      response.json({ ok: true, runId, replay: evaluation.replay, evaluation, frameCount, frames });
     }),
   );
 

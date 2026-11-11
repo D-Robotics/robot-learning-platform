@@ -88,40 +88,51 @@ test('cleanup cannot hang after a service spawn fails before receiving a pid', a
   }
 });
 
-test('browser validation reports blocked and exits 2 when real simulation assets are absent', async () => {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'plugin-browser-prerequisites-'));
-  let child;
-  try {
-    const output = path.join(root, 'evidence.json');
-    child = service(
-      'browser-missing-assets',
-      process.execPath,
-      [
-        fileURLToPath(new URL('./verify-platform-plugin-browser.mjs', import.meta.url)),
-        '--output',
-        output,
-      ],
-      environment({ RDK_PLUGIN_JOURNEY_MICRODUCK_ROOT: path.join(root, 'missing-assets') }),
-      root,
-    );
-    const code = await new Promise((resolve) => child.once('close', resolve));
-    assert.equal(code, 2, child.captured);
-    const report = JSON.parse(await fs.readFile(output, 'utf8'));
-    assert.equal(report.status, 'blocked-missing-dependencies');
-    assert.equal(report.exitCode, 2);
-    assert.equal(report.cases.length, 1);
-    assert.equal(report.cases[0].status, 'blocked');
-    assert.equal(report.outcome, undefined, 'Missing real assets must not claim simulated success');
-    assert.deepEqual(report.cleanup, {
-      browserClosed: true,
-      servicesStopped: true,
-      temporaryLedgerRemoved: true,
-    });
-  } finally {
-    await terminate(child);
-    await fs.rm(root, { recursive: true, force: true });
-  }
-});
+for (const mounted of [false, true])
+  test(`browser validation exits 2 when ${mounted ? 'the Studio recording overlay' : 'the simulator'} is missing`, async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'plugin-browser-prerequisites-'));
+    let child;
+    try {
+      const output = path.join(root, 'evidence.json');
+      const assets = path.join(root, 'assets');
+      if (mounted) {
+        await fs.mkdir(assets);
+        await fs.writeFile(path.join(assets, 'index.html'), '<html><body></body></html>');
+      }
+      child = service(
+        'browser-missing-assets',
+        process.execPath,
+        [
+          fileURLToPath(new URL('./verify-platform-plugin-browser.mjs', import.meta.url)),
+          '--output',
+          output,
+        ],
+        environment({ RDK_PLUGIN_JOURNEY_MICRODUCK_ROOT: assets }),
+        root,
+      );
+      const code = await new Promise((resolve) => child.once('close', resolve));
+      assert.equal(code, 2, child.captured);
+      const report = JSON.parse(await fs.readFile(output, 'utf8'));
+      assert.equal(report.status, 'blocked-missing-dependencies');
+      assert.equal(report.exitCode, 2);
+      assert.equal(report.cases.length, 1);
+      assert.equal(report.cases[0].status, 'blocked');
+      if (mounted) assert.match(report.cases[0].error, /install-microduck-overlay\.py/);
+      assert.equal(
+        report.outcome,
+        undefined,
+        'Missing real assets must not claim simulated success',
+      );
+      assert.deepEqual(report.cleanup, {
+        browserClosed: true,
+        servicesStopped: true,
+        temporaryLedgerRemoved: true,
+      });
+    } finally {
+      await terminate(child);
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
 
 test('journey and browser help exits zero before dependencies and writes no evidence', async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'plugin-journey-help-'));

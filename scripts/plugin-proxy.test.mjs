@@ -210,3 +210,27 @@ test('board connection failures distinguish SSH reachability, authentication and
     );
   }
 });
+
+test('telemetry summaries use the authenticated compact route for the exact Run', async (t) => {
+  const f = await fixture(t, async (url) => {
+    const target = new URL(url);
+    assert.match(target.pathname, /\/runs\/run-42\/(telemetry|replay)$/);
+    const list = target.pathname.endsWith('/telemetry');
+    assert.equal(target.searchParams.get(list ? 'includeSamples' : 'includeFrames'), 'false');
+    return Response.json(
+      {
+        ok: true,
+        runId: 'run-42',
+        telemetry: [{ id: 'chunk', sampleCount: 1540, source: 'browser', samples: [{ t: 0 }] }],
+        frameCount: 1540,
+      },
+      { headers: { 'X-RDK-Telemetry-Summary': '1' } },
+    );
+  });
+  const list = await f.core.readTelemetrySummary('rdk_telemetry_list', { runId: 'run-42' });
+  assert.equal(list.telemetry[0].sampleCount, 1540);
+  assert.equal(list.telemetry[0].samples, undefined);
+  const replay = await f.core.readTelemetrySummary('rdk_runs_replay', { runId: 'run-42' });
+  assert.equal(replay.frameCount, 1540);
+  assert.equal(replay.frames, undefined);
+});

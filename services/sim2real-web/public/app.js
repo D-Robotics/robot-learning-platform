@@ -6781,7 +6781,8 @@ async function publishTelemetry() {
     evidence.uploadKey = requestId;
     evidence.modelId = run.modelId;
     const acceptedSources = new Set(['board-agent', 'browser', 'import', 'demo-fixture']);
-    const telemetrySource = acceptedSources.has(evidence.source) ? evidence.source : 'import';
+    const source = evidence.source === 'browser-microduck' ? 'browser' : evidence.source;
+    const telemetrySource = acceptedSources.has(source) ? source : 'import';
     const basePayload = {
       // Preserve the source in the ledger so a refresh cannot turn synthetic
       // presentation data into apparently real evidence. The source is

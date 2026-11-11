@@ -144,6 +144,22 @@ export async function verifyBrowserJourney({ trainBC = false, defaultOutput } = 
         error.code = 'MISSING_ASSETS';
         throw error;
       }
+      const index = await fs.readFile(path.join(assets, 'index.html'), 'utf8').catch(() => '');
+      const overlayReady =
+        index.includes('microduck-community-overlay.js') &&
+        (
+          await fs.stat(path.join(assets, 'microduck-community-overlay.js')).catch(() => null)
+        )?.isFile() &&
+        (
+          await fs.stat(path.join(assets, 'community/microduck-wechat.png')).catch(() => null)
+        )?.isFile();
+      if (!overlayReady) {
+        const error = new Error(
+          'The mounted simulator is missing the Studio recording overlay. Run services/mujoco-web/install-microduck-overlay.py with MICRODUCK_STATIC_ROOT pointing to a copy of the simulator release.',
+        );
+        error.code = 'MISSING_ASSETS';
+        throw error;
+      }
       const playwright = await loadBrowser();
       try {
         browser = await playwright.chromium.launch({
@@ -578,7 +594,7 @@ export async function verifyBrowserJourney({ trainBC = false, defaultOutput } = 
     let uploadedRecording;
     await step(
       'B08.real-command-coverage',
-      'six actual reset recorder episodes, all used for training',
+      'six reset recorder episodes combined for workbench import',
       async () => {
         const directory = path.join(path.dirname(output), 'browser-episodes');
         await fs.mkdir(directory, { recursive: true });
@@ -630,7 +646,7 @@ export async function verifyBrowserJourney({ trainBC = false, defaultOutput } = 
         );
         return {
           episodeCount: 6,
-          allEpisodesUsedForTraining: true,
+          allEpisodesIncludedInImport: true,
           noIndependentEpisodeHoldoutClaim: true,
           sampleCount: rows.length,
           sourceMode: reusedRecording ? 'reused-recording' : 'new-recording',
@@ -655,7 +671,10 @@ export async function verifyBrowserJourney({ trainBC = false, defaultOutput } = 
         await page.evaluate(() => {
           window.location.hash = 'evaluate';
         });
-        await page.locator('.telemetry-panel > summary').click();
+        const inspector = page.locator('.telemetry-panel');
+        if (!(await inspector.evaluate((panel) => panel.open))) {
+          await inspector.locator('summary').click();
+        }
         await page
           .locator('#telemetry-publish-button')
           .waitFor({ state: 'visible', timeout: 10_000 });
@@ -678,13 +697,17 @@ export async function verifyBrowserJourney({ trainBC = false, defaultOutput } = 
         const samples = telemetry.body.telemetry.flatMap((chunk) => chunk.samples);
         assert.equal(samples.length, uploadedRecording.sampleCount);
         const recorded = uploadedTrajectory.trim().split('\n').slice(1).map(JSON.parse);
-        assert.ok(samples.every((sample) => sample.pairing === 'policy-inference-v1'));
+        assert.ok(
+          samples.every((sample) => sample.pairing === 'policy-inference-v1'),
+          'The ledger must retain pairing for every recorded sample',
+        );
         assert.deepEqual(samples[0].observation, recorded[0].observation);
         assert.deepEqual(samples.at(-1).action, recorded.at(-1).action);
         assert.ok(
           telemetry.body.telemetry.every(
             (chunk) => chunk.source === 'browser' && chunk.attested !== true,
           ),
+          'Imported simulator episodes must retain browser provenance without attestation',
         );
         return {
           runId,

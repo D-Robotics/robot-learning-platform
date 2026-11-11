@@ -558,7 +558,7 @@ assert.match(
 );
 assert.match(
   app,
-  /const telemetrySource = acceptedSources\.has\(evidence\.source\)/,
+  /const source = evidence\.source === 'browser-microduck' \? 'browser' : evidence\.source;\s*const telemetrySource = acceptedSources\.has\(source\)/,
   'fixture uploads must retain provenance',
 );
 assert.match(app, /Mock 协议演示 · 非真实 RL/, 'mock metrics must be visibly labelled');

@@ -1053,7 +1053,7 @@ export function createDshCapabilityHandlers(
       const input = argsRecord(args);
       const runId = requiredArg(input, 'runId', '请提供 runId。');
       const result = await run(exec.signal).fetch(
-        `/api/sim2real/runs/${encodeURIComponent(runId)}/replay`,
+        `/api/sim2real/runs/${encodeURIComponent(runId)}/replay?includeFrames=false`,
         { method: 'GET' },
       );
       if (!result.ok) fail(result.status, result.body, '运行回放读取失败');
@@ -1066,7 +1066,9 @@ export function createDshCapabilityHandlers(
           status: defined(evaluation.status),
           warnings: boundedArray(evaluation.warnings, 10),
         },
-        frameCount: Array.isArray(result.body.frames) ? result.body.frames.length : 0,
+        frameCount: typeof result.body.frameCount === 'number'
+          ? result.body.frameCount
+          : Array.isArray(result.body.frames) ? result.body.frames.length : 0,
       };
     },
 
@@ -1075,7 +1077,9 @@ export function createDshCapabilityHandlers(
       const runId = requiredArg(input, 'runId', '请提供 runId。');
       const limit = Math.min(Math.max(Math.trunc(argNumber(input, 'limit') ?? 50), 1), 200);
       const result = await run(exec.signal).fetch(
-        queryPath(`/api/sim2real/runs/${encodeURIComponent(runId)}/telemetry`, { limit }),
+        queryPath(`/api/sim2real/runs/${encodeURIComponent(runId)}/telemetry`, {
+          limit, includeSamples: 'false',
+        }),
         { method: 'GET' },
       );
       if (!result.ok) fail(result.status, result.body, '遥测读取失败');
@@ -1086,7 +1090,9 @@ export function createDshCapabilityHandlers(
           source: str(chunk.source),
           sequence: defined(chunk.sequence),
           receivedAt: str(chunk.receivedAt),
-          sampleCount: Array.isArray(chunk.samples) ? chunk.samples.length : null,
+          sampleCount: typeof chunk.sampleCount === 'number'
+            ? chunk.sampleCount
+            : Array.isArray(chunk.samples) ? chunk.samples.length : null,
           droppedCount: defined(chunk.droppedCount),
           attested: chunk.attested === true,
         };

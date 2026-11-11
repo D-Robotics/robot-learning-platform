@@ -297,6 +297,8 @@ export interface Sim2RealTelemetryCameraFrame {
 export interface Sim2RealTelemetrySample {
   /** Monotonic timestamp in seconds relative to the run. */
   t: number;
+  /** Producer-declared pairing of observation and action from one inference. */
+  pairing?: 'policy-inference-v1';
   observation?: number[];
   action?: number[];
   reward?: number;

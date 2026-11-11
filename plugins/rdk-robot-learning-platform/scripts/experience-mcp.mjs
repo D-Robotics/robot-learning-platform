@@ -1256,6 +1256,24 @@ export function experienceProxy(
         };
       }
     }
+    if (
+      method === 'tools/call' &&
+      upstream.readTelemetrySummary &&
+      ['rdk_telemetry_list', 'rdk_runs_replay'].includes(params.name)
+    ) {
+      try {
+        const summary = await upstream.readTelemetrySummary(params.name, params.arguments ?? {}, {
+          signal,
+        });
+        if (summary)
+          return {
+            structuredContent: summary,
+            content: [{ type: 'text', text: JSON.stringify(summary) }],
+          };
+      } catch {
+        signal?.throwIfAborted();
+      }
+    }
     const response = await upstream.request(method, params, { signal });
     if (method === 'tools/call' && params.name === 'rdk_simulator_open' && response.isError) {
       const args = params.arguments ?? {};

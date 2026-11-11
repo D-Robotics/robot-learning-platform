@@ -178,6 +178,78 @@ export async function connectAuthenticatedCore({
   let closed = false;
   return {
     authentication: auth,
+    async readTelemetrySummary(name, args, { signal } = {}) {
+      const { runId, limit = 50 } = args;
+      const list = name === 'rdk_telemetry_list';
+      if (
+        typeof runId !== 'string' ||
+        !/^[A-Za-z0-9][A-Za-z0-9_.-]{0,119}$/.test(runId) ||
+        Object.keys(args).some((key) => key !== 'runId' && !(list && key === 'limit')) ||
+        !Number.isFinite(limit)
+      )
+        return null;
+      const query = list
+        ? '/telemetry?includeSamples=false&limit=' + Math.min(200, Math.max(1, Math.trunc(limit)))
+        : '/replay?includeFrames=false';
+      const response = await fetchPlatform(
+        '/api/v1/duck/runs/' + encodeURIComponent(runId) + query,
+        { signal },
+      );
+      if (
+        !response.ok ||
+        response.headers.get('x-rdk-telemetry-summary') !== '1' ||
+        !response.body
+      ) {
+        await response.body?.cancel().catch(() => {});
+        return null;
+      }
+      const chunks = [];
+      let size = 0;
+      for await (const chunk of response.body) {
+        size += chunk.byteLength;
+        if (size > 512 * 1024) return null;
+        chunks.push(Buffer.from(chunk));
+      }
+      const value = JSON.parse(Buffer.concat(chunks).toString('utf8'));
+      if (value?.ok !== true || value.runId !== runId) return null;
+      if (!list) {
+        if (!Number.isSafeInteger(value.frameCount) || value.frameCount < 0) return null;
+        return {
+          runId,
+          frameCount: value.frameCount,
+          replay: value.replay ?? {},
+          evaluation: {
+            status: value.evaluation?.status ?? null,
+            warnings: Array.isArray(value.evaluation?.warnings)
+              ? value.evaluation.warnings.slice(0, 10)
+              : [],
+          },
+        };
+      }
+      if (
+        !Array.isArray(value.telemetry) ||
+        value.telemetry.length > 200 ||
+        value.telemetry.some(
+          (chunk) => !Number.isSafeInteger(chunk?.sampleCount) || chunk.sampleCount < 0,
+        )
+      )
+        return null;
+      return {
+        runId,
+        count: value.telemetry.length,
+        telemetry: value.telemetry.map(
+          ({ id, source, sequence, receivedAt, sampleCount, droppedCount, attested }) => ({
+            id,
+            source,
+            sequence: sequence ?? null,
+            receivedAt,
+            sampleCount,
+            droppedCount: droppedCount ?? null,
+            attested: attested === true,
+          }),
+        ),
+      };
+    },
     async readTrainingRun(runId, { signal } = {}) {
       if (typeof runId !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9_.-]{0,119}$/.test(runId))
         throw Error('原 Run 标识无效。');

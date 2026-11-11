@@ -606,6 +606,11 @@ paths:
       tags: [telemetry]
       summary: List accepted telemetry chunks
       operationId: listTelemetry
+      parameters:
+        - name: includeSamples
+          in: query
+          schema: { type: boolean, default: true }
+          description: Set false to receive sample counts without raw samples.
       responses:
         "200":
           description: Telemetry chunks.
@@ -640,6 +645,10 @@ paths:
       operationId: getReplay
       parameters:
         - $ref: "#/components/parameters/RunId"
+        - name: includeFrames
+          in: query
+          schema: { type: boolean, default: true }
+          description: Set false to receive the frame count without raw frames.
       responses:
         "200":
           description: Replay and evaluation summary.
@@ -4056,6 +4065,10 @@ components:
       required: [t]
       properties:
         t: { type: number, minimum: 0, maximum: 86400 }
+        pairing:
+          type: string
+          enum: [policy-inference-v1]
+          description: Producer-declared pairing of an observation and action from one inference.
         observation: { type: array, maxItems: 4096, items: { type: number } }
         action: { type: array, maxItems: 4096, items: { type: number } }
         reward: { type: number }
@@ -4342,6 +4355,7 @@ components:
         runId: { type: string }
         replay: { type: object, additionalProperties: true }
         evaluation: { type: object, additionalProperties: true }
+        frameCount: { type: integer, minimum: 0 }
         # The replay endpoint returns the accepted raw samples for deterministic
         # frame seeking; keep this in the contract rather than relying on
         # additionalProperties.
