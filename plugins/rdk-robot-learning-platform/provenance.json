@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "name": "rdk-robot-learning-platform",
   "version": "0.6.20",
-  "description": "一句话开始 Workshop：OriginMan 舞蹈 PPO 独立训练、Run 可视化直达、跨软件接续、曲线对比与仿真回放。",
+  "description": "RDK 机器人学习平台的通用插件：多机型浏览器仿真与轨迹录制、多引擎强化学习/模仿学习训练、Sim2Real 评测与质量门、制品晋级与受控部署；Workshop 课程与 OriginMan 舞蹈训练只是内含的引导链路。",
   "composition": "retained-core-with-host-neutral-workflow-extension",
   "coreBundleSha256": "df4d52fe9ed58c557200424231af7f1055d96a0aa45d848d09f24e06ed467139",
   "coreVersion": "0.1.0",
