@@ -449,6 +449,18 @@ export interface Sim2RealRunRecord {
   launchUrl?: string;
   externalRunId?: string;
   /**
+   * Worker-reported failure diagnostics (bounded engine stderr/stdout tails,
+   * exit code, error code). Present only on failed runs whose runner supplied
+   * them, so an engine crash (e.g. a serialization TypeError) is visible in
+   * the ledger instead of a bare "训练进程失败" summary.
+   */
+  failureDetail?: {
+    errorCode?: string;
+    exitCode?: number;
+    stderrTail?: string;
+    stdoutTail?: string;
+  };
+  /**
    * Loopback GPU agent URL driving this run (browser relay). Present when the
    * run was dispatched through a `local-agent` compute resource: the browser,
    * not the server, submits to the worker and syncs status/artifacts back.

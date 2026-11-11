@@ -51,6 +51,13 @@ export interface Sim2RealRobogoRunResult {
   taskEvaluation?: Sim2RealTaskEvaluationEvidence;
   /** Live training curve points reported by the worker while the engine runs. */
   progress?: Sim2RealRunProgressPoint[];
+  /** Bounded engine-failure diagnostics reported by local workers. */
+  failureDetail?: {
+    errorCode?: string;
+    exitCode?: number;
+    stderrTail?: string;
+    stdoutTail?: string;
+  };
 }
 
 /**
@@ -599,6 +606,7 @@ function parseRunResult(payload: unknown): Sim2RealRobogoRunResult {
   // pass; anything else is dropped so a hostile runner cannot bloat the run
   // record or the status response.
   const progress = safeProgressPoints(source.progress);
+  const failureDetail = safeFailureDetail(source);
   // Local workers report the honest device fact at the top level of the job
   // view (job.cuda), not inside metrics. Merge it in so the platform run
   // record can surface GPU usage; only an explicit boolean is trusted.
@@ -618,6 +626,32 @@ function parseRunResult(payload: unknown): Sim2RealRobogoRunResult {
     ...(metricsWithCuda ? { metrics: metricsWithCuda } : {}),
     ...(taskEvaluation ? { taskEvaluation } : {}),
     ...(progress ? { progress } : {}),
+    ...(failureDetail ? { failureDetail } : {}),
+  };
+}
+
+/**
+ * Bounded failure diagnostics from a local worker job view. The worker's own
+ * scrubLog already caps the tails; re-clamp here so a hostile or buggy runner
+ * cannot bloat the run record, and only an explicit integer exit code passes.
+ */
+function safeFailureDetail(
+  source: Record<string, unknown>,
+): Sim2RealRobogoRunResult['failureDetail'] {
+  const errorCode = safeText(source.errorCode, 80) || undefined;
+  const exitCodeRaw = source.exitCode;
+  const exitCode =
+    typeof exitCodeRaw === 'number' && Number.isSafeInteger(exitCodeRaw) ? exitCodeRaw : undefined;
+  const stderrTail = safeText(source.stderrTail, 2000) || undefined;
+  const stdoutTail = safeText(source.stdoutTail, 2000) || undefined;
+  if (errorCode === undefined && exitCode === undefined && !stderrTail && !stdoutTail) {
+    return undefined;
+  }
+  return {
+    ...(errorCode ? { errorCode } : {}),
+    ...(exitCode !== undefined ? { exitCode } : {}),
+    ...(stderrTail ? { stderrTail } : {}),
+    ...(stdoutTail ? { stdoutTail } : {}),
   };
 }
 

@@ -3327,6 +3327,7 @@ export function createSim2RealRouter(
             const update = {
               status: latest.status,
               ...(latest.message ? { summary: latest.message } : {}),
+              ...(latest.failureDetail ? { failureDetail: latest.failureDetail } : {}),
               ...(latest.mock ? { mock: true } : {}),
               ...(latest.checkpoint ? { checkpoint: latest.checkpoint } : {}),
               ...(latest.artifact ? { artifact: latest.artifact } : {}),
@@ -3884,6 +3885,7 @@ export function createSim2RealRouter(
           externalRunId,
           status: latest.status,
           ...(latest.message ? { summary: latest.message } : {}),
+          ...(latest.failureDetail ? { failureDetail: latest.failureDetail } : {}),
           ...(latest.mock ? { mock: true } : {}),
           ...(latest.checkpoint ? { checkpoint: latest.checkpoint } : {}),
           ...(latest.artifact ? { artifact: latest.artifact } : {}),

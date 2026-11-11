@@ -267,6 +267,47 @@ describe('RoboGo Sim2Real runner adapter', () => {
     });
   });
 
+  it('propagates bounded worker failure diagnostics onto the run result', async () => {
+    const result = await requestRobogoTrainingStatus({
+      accountId: 'alice',
+      externalRunId: 'run-err-1',
+      runnerUrl: 'https://runner.example.test/train',
+      fetchImpl: (async () =>
+        new Response(
+          JSON.stringify({
+            status: 'failed',
+            runId: 'run-err-1',
+            message: '本地训练进程失败。',
+            errorCode: 'training_process_failed',
+            exitCode: 1,
+            stderrTail: 'TypeError: Object of type ndarray is not JSON serializable',
+            stdoutTail: 'reward=1.58',
+          }),
+          { status: 200, headers: { 'content-type': 'application/json' } },
+        )) as typeof fetch,
+    });
+    expect(result.failureDetail).toEqual({
+      errorCode: 'training_process_failed',
+      exitCode: 1,
+      stderrTail: 'TypeError: Object of type ndarray is not JSON serializable',
+      stdoutTail: 'reward=1.58',
+    });
+  });
+
+  it('keeps run records free of failureDetail when the worker reports none', async () => {
+    const result = await requestRobogoTrainingStatus({
+      accountId: 'alice',
+      externalRunId: 'run-ok-1',
+      runnerUrl: 'https://runner.example.test/train',
+      fetchImpl: (async () =>
+        new Response(JSON.stringify({ status: 'running', runId: 'run-ok-1' }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        })) as typeof fetch,
+    });
+    expect(result.failureDetail).toBeUndefined();
+  });
+
   it('polls a runner job and accepts bounded checkpoint, artifact, and metrics metadata', async () => {
     let capturedUrl = '';
     const result = await requestRobogoTrainingStatus({
