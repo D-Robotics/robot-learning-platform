@@ -9,6 +9,7 @@ import {
   prepareExperience,
   readToolResult,
   isDirectInvocation,
+  workspaceReferenceEntry,
 } from './experience.mjs';
 import {
   WORKFLOW_TOOLS,
@@ -1256,6 +1257,40 @@ export function experienceProxy(
       }
     }
     const response = await upstream.request(method, params, { signal });
+    if (method === 'tools/call' && params.name === 'rdk_simulator_open' && response.isError) {
+      const args = params.arguments ?? {};
+      const referenceOnly =
+        Object.keys(args).every((key) => key === 'robot') &&
+        (args.robot === undefined || args.robot === 'microduck');
+      if (referenceOnly) {
+        try {
+          readToolResult(response);
+        } catch (error) {
+          if (error.platformCode !== 'SIM2REAL_API_NOT_FOUND' || error.httpStatus !== 404)
+            return response;
+          try {
+            const overview = readToolResult(
+              await upstream.request(
+                method,
+                {
+                  name: 'rdk_workspace_overview',
+                  arguments: {},
+                },
+                { signal },
+              ),
+            );
+            const entry = workspaceReferenceEntry(overview);
+            if (entry)
+              return {
+                structuredContent: entry,
+                content: [{ type: 'text', text: JSON.stringify(entry) }],
+              };
+          } catch {
+            signal?.throwIfAborted();
+          }
+        }
+      }
+    }
     if (method === 'tools/call' && params.name === 'rdk_training_submit' && !response.isError) {
       const value = readToolResult(response);
       const runId = value.submission?.runId ?? value.runId ?? value.run?.id;

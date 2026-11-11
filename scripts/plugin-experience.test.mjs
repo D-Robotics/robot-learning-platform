@@ -361,6 +361,44 @@ test('experience MCP preserves upstream tools, results and errors and exposes gu
   assert.deepEqual(passthrough.arguments, { x: 1 });
 });
 
+test('the packaged tool can open the standalone MicroDuck reference without the learning-guide endpoint', async () => {
+  const { experienceProxy } =
+    await import('../plugins/rdk-robot-learning-platform/scripts/experience-mcp.mjs');
+  const missing = {
+    isError: true,
+    structuredContent: { error: { platformCode: 'SIM2REAL_API_NOT_FOUND', httpStatus: 404 } },
+  };
+  const calls = [];
+  const proxy = experienceProxy({
+    request: async (_method, { name }) => {
+      calls.push(name);
+      return name === 'rdk_simulator_open'
+        ? missing
+        : {
+            structuredContent: {
+              integrations: {
+                simulator: { browser: { available: true, entryUrl: '/mujoco/microduck/' } },
+              },
+            },
+          };
+    },
+  });
+  const open = (args) => proxy('tools/call', { name: 'rdk_simulator_open', arguments: args });
+  assert.deepEqual((await open({ robot: 'microduck' })).structuredContent, {
+    robot: 'microduck',
+    available: true,
+    entryUrl: '/mujoco/microduck/',
+  });
+  assert.equal(await open({ robot: 'originman' }), missing);
+  assert.equal(await open({ runId: 'run-42' }), missing);
+  assert.deepEqual(calls, [
+    'rdk_simulator_open',
+    'rdk_workspace_overview',
+    'rdk_simulator_open',
+    'rdk_simulator_open',
+  ]);
+});
+
 test('MCP cancellation reaches upstream and leaves subsequent reads usable', async () => {
   const source = `const r=require('node:readline');let cancelled=false;r.createInterface({input:process.stdin}).on('line',line=>{const m=JSON.parse(line);if(m.method==='notifications/cancelled'){cancelled=true;return;}if(m.method==='hang')return;console.log(JSON.stringify({jsonrpc:'2.0',id:m.id,result:{cancelled}}));});`;
   const client = connectMcp({ args: ['-e', source], timeoutMs: 2000 });

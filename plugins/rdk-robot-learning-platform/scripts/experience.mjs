@@ -40,6 +40,18 @@ export function readToolResult(result) {
   return payload;
 }
 
+export function workspaceReferenceEntry(overview) {
+  const simulator = overview.integrations?.simulator;
+  const reference = simulator?.browser ?? simulator;
+  const entryUrl = typeof reference === 'string' ? reference : reference?.entryUrl;
+  if (
+    typeof entryUrl !== 'string' ||
+    !/^\/(?:[a-zA-Z0-9_-]+\/)*mujoco\/microduck(?:-proxy)?\/?$/.test(entryUrl)
+  )
+    return null;
+  return { robot: 'microduck', entryUrl, available: reference?.available !== false };
+}
+
 export function validateProfile(value) {
   if (value?.robot !== undefined && !['microduck', 'originman'].includes(value.robot))
     throw new Error('Unsupported robot; no implicit robot fallback.');
@@ -134,10 +146,8 @@ export async function prepareExperience(profile, call, { baseUrl, tools, action 
     )
       throw error;
     const overview = await call('rdk_workspace_overview', {});
-    const simulator = overview.integrations?.simulator;
-    if (typeof simulator === 'string') entry = { entryUrl: simulator };
-    else if (simulator && typeof simulator.entryUrl === 'string') entry = simulator;
-    else throw error;
+    entry = workspaceReferenceEntry(overview);
+    if (!entry) throw error;
     checks.push({
       id: 'simulator-api',
       status: 'compatibility',
