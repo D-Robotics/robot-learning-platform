@@ -11931,6 +11931,11 @@ function wireEvents() {
     const next = event.target.value;
     if (!PRODUCT_PROFILES[next]) return;
     clearProductLinkOverride();
+    const url = new URL(location.href);
+    if (next !== 'originman' && url.searchParams.has('fromRun')) {
+      url.searchParams.delete('fromRun');
+      history.replaceState(history.state, '', url);
+    }
     state.productId = next;
     state.selectedModelId = '';
     // A project can span several robot profiles. Keep it only when it links a
@@ -12381,7 +12386,7 @@ trainingPlans = window.TrainingPlans?.mount({
     ...($('training-demonstration-run')?.value && !$('training-demonstrations')?.hidden
       ? { demonstrationRunId: $('training-demonstration-run').value } : {}),
   }),
-  applyContext(config) {
+  applyContext(config, { fromRun = false } = {}) {
     const product = config.productId || state.productId;
     if (!PRODUCT_PROFILES[product] || (config.taskId && !ACTION_TASKS[config.taskId] && !config.training.originmanDance))
       throw Error('方案中的机器人或任务在当前工作台不可用。');
@@ -12389,7 +12394,12 @@ trainingPlans = window.TrainingPlans?.mount({
       ? (state.overview?.models || []).find((item) => item.manifest?.contract?.id === 'custom-policy-originman-dance-v2')
       : null;
     const modelId = config.modelId || danceModel?.id || '';
-    const refs = [['models', modelId], ['projects', config.projectId], ['computeResources', config.computeResourceId]];
+    const projectId = fromRun && !(state.overview?.projects || []).some((item) => item.id === config.projectId)
+      ? '' : config.projectId;
+    const resourceId = fromRun && !(state.overview?.computeResources || []).some((item) =>
+      item.id === config.computeResourceId && supportsOriginmanDance(item))
+      ? '' : config.computeResourceId;
+    const refs = [['models', modelId], ['projects', projectId], ['computeResources', resourceId]];
     if (refs.some(([collection, id]) => id && !(state.overview?.[collection] || []).some((item) => item.id === id)))
       throw Error('方案中的项目、模型或算力当前不可用，已保留表单原值。');
     const productChanged = state.productId !== product;
@@ -12402,9 +12412,9 @@ trainingPlans = window.TrainingPlans?.mount({
     }
     state.productId = product;
     if (config.taskId && ACTION_TASKS[config.taskId]) state.taskId = config.taskId;
-    state.projectId = config.projectId || '';
+    state.projectId = projectId || '';
     state.selectedModelId = modelId;
-    state.selectedComputeResourceId = config.computeResourceId || '';
+    state.selectedComputeResourceId = resourceId || '';
     if ($('product-select')) $('product-select').value = product;
     if (productChanged) clearProductLinkOverride();
   },

@@ -163,7 +163,10 @@ window.TrainingPlans = (() => {
     function setStatus(message) { status.textContent = message; }
     function rememberLink(id) {
       const url = new URL(location.href);
-      if (id) url.searchParams.set('trainingPlan', id);
+      if (id) {
+        url.searchParams.set('trainingPlan', id);
+        url.searchParams.delete('fromRun');
+      }
       else url.searchParams.delete('trainingPlan');
       history.replaceState(history.state, '', url);
     }
@@ -227,8 +230,7 @@ window.TrainingPlans = (() => {
       return { ...config, training };
     }
 
-    function showPlan(plan) {
-      const { config } = plan;
+    function applyPlanConfig(config, options) {
       const training = config.training;
       const engine = byId(controls.engine);
       for (const [key, id] of Object.entries(controls)) {
@@ -238,7 +240,7 @@ window.TrainingPlans = (() => {
         if (!option && !(key === 'engine' && training.originmanDance))
           throw Error('方案中的训练选项当前不可用，已保留表单原值。');
       }
-      applyContext(config);
+      applyContext(config, options);
       for (const old of engine?.querySelectorAll('[data-training-plan-engine]') || []) old.remove();
       if (training.originmanDance && engine && !Array.from(engine.options).some((item) => item.value === training.engine)) {
         const option = new Option('OriginMan 舞蹈 · PPO', training.engine);
@@ -256,6 +258,10 @@ window.TrainingPlans = (() => {
       danceEditor.load(training.originmanDance, training.numEnvs);
       refreshControls();
       if (byId('training-demonstration-run')) byId('training-demonstration-run').value = config.demonstrationRunId || '';
+    }
+
+    function showPlan(plan) {
+      applyPlanConfig(plan.config);
       current = plan;
       select.value = plan.id;
       rememberLink(plan.id);
@@ -325,13 +331,29 @@ window.TrainingPlans = (() => {
       }, (error) => { formError.textContent = errorMessage(error); });
     });
     syncButtons();
-    const linked = new URL(location.href).searchParams.get('trainingPlan');
+    const params = new URL(location.href).searchParams;
+    const linked = params.get('trainingPlan');
+    const sourceRunId = params.get('fromRun');
     const begin = () => {
       if (linked && idValid(linked)) {
         void action(async () => {
           await list();
           const { plan } = await request(base + '/' + linked);
           showPlan(plan);
+        });
+      } else if (sourceRunId && idValid(sourceRunId)) {
+        void action(async () => {
+          const { run } = await request('/sim2real/runs/' + encodeURIComponent(sourceRunId));
+          if (new URL(location.href).searchParams.get('fromRun') !== sourceRunId) return;
+          if (run?.id !== sourceRunId || run.taskId !== 'originman-dance' ||
+              !run.training?.originmanDance || !run.modelId)
+            throw Error('未取得本次舞蹈 Run 的训练配置。');
+          applyPlanConfig({
+            productId: 'originman', taskId: 'originman-dance', modelId: run.modelId,
+            computeResourceId: run.computeResourceId, projectId: run.projectId,
+            training: run.training,
+          }, { fromRun: true });
+          setStatus('已复制本轮参数。可修改并保存为新方案，再到「Run 与进度」提交。');
         });
       } else if (byId('train-module-config').open) {
         void list().catch((error) => setStatus(errorMessage(error)));

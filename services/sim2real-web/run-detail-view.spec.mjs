@@ -251,3 +251,67 @@ test('invalid, missing, and inaccessible Run IDs do not fall back to another rec
   assert.equal(inaccessible.document.getElementById('run-title').textContent, '本次运行');
   page.dispose();
 });
+
+test('copying a dance Run prepares its exact parameters without submitting or saving', async (t) => {
+  const runId = '693b5e1a-dfb4-41c1-b3f6-327c0e60caa0';
+  const page = fixture('https://platform.test/robotics-learning/run-detail.html?runId=' + runId);
+  t.after(page.close);
+  const training = {
+    profile: 'standard',
+    algorithm: 'ppo',
+    engine: 'originman-dance-ppo',
+    numEnvs: 4,
+    originmanDance: {
+      schemaVersion: 1,
+      title: '本轮舞蹈',
+      bpm: 120,
+      trainingSteps: 8192,
+      seed: 7,
+      sections: [{ type: 'alternating-arms', beats: 8, intensity: 0.25 }],
+    },
+  };
+  const run = {
+    id: runId,
+    modelId: 'dance-model',
+    taskId: 'originman-dance',
+    status: 'completed',
+    training,
+  };
+  await startRunDetail({
+    document: page.document,
+    location: page.location,
+    fetchImpl: async () => new Response(JSON.stringify({ run })),
+  });
+  const link = page.document.getElementById('run-copy-config');
+  assert.equal(link.hidden, false);
+  assert.equal(new URL(link.href).searchParams.get('fromRun'), runId);
+  assert.match(page.document.getElementById('run-hardware-readiness').textContent, /可部署制品/);
+  const workspace = new JSDOM(
+    fs.readFileSync(new URL('./public/index.html', import.meta.url), 'utf8'),
+    { url: link.href, runScripts: 'outside-only' },
+  );
+  t.after(() => workspace.window.close());
+  workspace.window.eval(
+    fs.readFileSync(new URL('./public/training-plans.js', import.meta.url), 'utf8'),
+  );
+  const requests = [];
+  const planner = workspace.window.TrainingPlans.mount({
+    request: async (route, options) => {
+      requests.push([route, options]);
+      return { run };
+    },
+    readContext: () => ({ productId: 'originman' }),
+    applyContext: (config) => assert.equal(config.modelId, run.modelId),
+    refreshControls() {},
+    onDraftChange() {},
+    hasDanceContract: () => true,
+  });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(requests, [['/sim2real/runs/' + runId, undefined]]);
+  assert.equal(planner.dance().bpm, 120);
+  assert.equal(planner.danceNumEnvs(), 4);
+  assert.equal(
+    workspace.window.document.getElementById('training-plan-save').textContent,
+    '保存为新方案',
+  );
+});

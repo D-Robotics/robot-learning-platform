@@ -316,6 +316,24 @@ function renderRun(document, location, run, runId) {
   }
   download.hidden = !canDownload;
   text(document, 'run-summary', run.summary ?? '平台未提供本次运行摘要。');
+  const hardware = document.getElementById('run-hardware-readiness');
+  if (hardware) {
+    hardware.hidden = !isDance || run.status !== 'completed';
+    hardware.textContent = run.artifact?.deployable === true
+      ? '真机迁移需核对同源评测、已发布制品、目标设备和部署预检。'
+      : '当前策略用于仿真。真机迁移还需板端契约、关节标定和可部署制品。';
+  }
+  const copyConfig = document.getElementById('run-copy-config');
+  if (copyConfig) {
+    copyConfig.hidden = run.taskId !== 'originman-dance' || !run.training?.originmanDance ||
+      !['completed', 'failed', 'blocked', 'cancelled', 'canceled'].includes(run.status);
+    if (copyConfig.hidden) copyConfig.removeAttribute('href');
+    else {
+      const href = new URL('./?robot=originman#train/configure', location.href);
+      href.searchParams.set('fromRun', runId);
+      copyConfig.href = href.toString();
+    }
+  }
   const replayUrl = isDance ? danceVideoUrl(location, run, runId) : null;
   const replayVerified = isDance && verifiedDanceVideo(run);
   text(document, 'run-next-action', run.status === 'queued'
