@@ -64,6 +64,26 @@ assert.match(
 );
 assert.match(
   html,
+  /<option value="dance" selected>舞蹈编排 · PPO（默认）<\/option>/,
+  'OriginMan starts with the dance contract selected',
+);
+assert.match(
+  html,
+  /<option value="originman-dance" selected>舞蹈编排 · PPO（默认）<\/option>/,
+  'OriginMan starts with dance as its training goal',
+);
+assert.match(
+  app,
+  /if \(select && !select\.value\) select\.value = 'dance';/,
+  'silent initial template loading defaults an empty OriginMan choice to dance',
+);
+assert.match(
+  app,
+  /OriginMan 模板尚未载入。请先选择「舞蹈编排 · PPO」/,
+  'an empty OriginMan manifest gives actionable guidance instead of a JSON parser error',
+);
+assert.match(
+  html,
   /role="menuitemcheckbox"[^>]*aria-checked="false"/,
   'notification menu item must expose the checkbox state with aria-checked',
 );

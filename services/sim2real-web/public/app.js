@@ -9233,8 +9233,16 @@ function scheduleOverviewPolling() {
 }
 
 function readEditorManifest() {
+  const source = String($('manifest-editor')?.value || '').trim();
+  if (!source) {
+    throw new Error(
+      state.productId === 'originman'
+        ? 'OriginMan 模板尚未载入。请先选择「舞蹈编排 · PPO」，再点击「载入当前产品模板」。'
+        : 'Manifest 为空。请先载入机器人模板或导入 JSON。',
+    );
+  }
   try {
-    return JSON.parse($('manifest-editor').value);
+    return JSON.parse(source);
   } catch (error) {
     throw new Error('JSON 格式错误：' + (error instanceof Error ? error.message : '无法解析'));
   }
@@ -9634,15 +9642,16 @@ async function executePreflight() {
 function loadManifestTemplate({ notify = true } = {}) {
   const profile = selectedProductProfile();
   if (profile.id === 'originman') {
-    if (!notify) return;
-    const choice = $('originman-contract-template')?.value;
+    const select = $('originman-contract-template');
+    if (select && !select.value) select.value = 'dance';
+    const choice = select?.value;
     if (!choice) {
-      showToast('请先选择训练任务，再载入对应契约。');
+      if (notify) showToast('请选择 OriginMan 训练任务后再载入对应契约。');
       return;
     }
     void originmanTemplates().then((templates) => {
       const template = templates.find((item) => item.id === choice);
-      if (!template || state.productId !== 'originman' || $('originman-contract-template')?.value !== choice) return;
+      if (!template || state.productId !== 'originman' || select?.value !== choice) return;
       const editor = $('manifest-editor');
       editor.value = JSON.stringify(template.manifest, null, 2);
       originmanRunState.templateText = editor.value;

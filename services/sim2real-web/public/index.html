@@ -752,8 +752,8 @@
                 <div class="model-actions">
                   <label class="field-label" for="originman-contract-template">任务</label>
                   <select id="originman-contract-template" aria-label="选择训练任务契约">
-                    <option value="" selected>请选择任务</option>
-                    <option value="dance">舞蹈编排 · PPO</option>
+                    <option value="dance" selected>舞蹈编排 · PPO（默认）</option>
+                    <option value="">请选择其他任务</option>
                     <option value="recovery">受扰恢复 · SAC</option>
                   </select>
                   <button class="button button-primary button-small" id="originman-use-contract" type="button" disabled>使用所选任务契约</button>
@@ -954,8 +954,8 @@
                   <section class="training-plans dance-goal" id="originman-goal-editor" aria-label="训练目标" hidden>
                     <label class="field-label" for="originman-training-goal">训练目标</label>
                     <select id="originman-training-goal">
+                      <option value="originman-dance" selected>舞蹈编排 · PPO（默认）</option>
                       <option value="">请选择目标</option>
-                      <option value="originman-dance">舞蹈编排 · PPO</option>
                     </select>
                     <div id="originman-dance-fields" hidden>
                       <div class="dance-goal-fields">
