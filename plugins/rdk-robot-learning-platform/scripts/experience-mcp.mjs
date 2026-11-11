@@ -170,9 +170,10 @@ function attachRunVisualization(payload, runId, baseUrl) {
         : passed === false
           ? '本轮仿真风格未达标。'
           : '本轮风格质量待核对。';
-    studentReply += payload.links?.danceVideo
-      ? '打开本轮详情即可查看仿真回放。'
-      : '本轮暂无可播放的视频，可以先看曲线和分段结果。';
+    if (payload.links?.danceVideo) studentReply += '打开本轮详情即可查看仿真回放。';
+    else if ((payload.run?.training ?? payload.training)?.video === false)
+      studentReply += '本轮提交时关闭了视频生成，可以查看曲线和分段结果。';
+    else studentReply += '本轮暂无可播放的视频，可以先看曲线和分段结果。';
   }
   if (failureDetail)
     studentReply += `\n失败原因${failureDetail.code ? `（${failureDetail.code}）` : ''}：${failureDetail.cause}`;

@@ -800,6 +800,10 @@ test('guide reads the exact Run and keeps confirmed retry idempotent', async (t)
   const guide = (args) => call('rdk_learning_guide', args);
   const result = await guide({ intent: 'results', runId: previous.id });
   assert.match(result.studentReply, /mps.*未达标.*暂无可播放/s);
+  previous.training.video = false;
+  const videoDisabled = await guide({ intent: 'results', runId: previous.id });
+  assert.match(videoDisabled.studentReply, /提交时关闭了视频生成/);
+  delete previous.training.video;
   assert.equal(new URL(result.links.runDetail).searchParams.get('runId'), previous.id);
   assert.deepEqual(result.studioNavigation, {
     tool: 'studio_open_url',

@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "name": "rdk-robot-learning-platform",
-  "version": "0.6.34",
+  "version": "0.6.35",
   "description": "通用机器人学习插件，支持按机型和任务进入仿真与录制、强化学习与模仿学习、Sim2Real 评测与回放、制品管理和受控部署。OriginMan 舞蹈和受扰恢复是可选任务。",
   "composition": "retained-core-with-host-neutral-workflow-extension",
   "coreBundleSha256": "fe7e5f440cbc357b47de476bee5b8b15facc7940d7bbcc7a8975adbd4e1bfca5",
@@ -17,7 +17,7 @@
     "scripts/robot-onboarding.mjs": "c8ac06adf47bed664194b513332226249c5c6a33d7646f94dff7af994c2c6421",
     "scripts/qoder-install.mjs": "76a8bc2e2383f31d81e32ff6e8c5ca0316d9baa14e02778bed551d2768d8ef07",
     "scripts/experience.mjs": "c46414e53134509fa25ab195edd44742e05667252da45924be60b13b44796672",
-    "scripts/experience-mcp.mjs": "76bc404049f451216a5c7dc54551f7c5a1599e17295fbf6861657c81ed14f0ad",
+    "scripts/experience-mcp.mjs": "5444baac08704a05feffd7e0b195a4b9ac710dd99269b1b6afbf567a50890fbd",
     "scripts/workflow-inspection.mjs": "5dc21d5d4cb934144854b287acfea97d60bfda2c1c0013bf6eb35f3239cbab96",
     "scripts/experiment-context.mjs": "8057f39f67c3a95abd792b0204af8f03ae7913b7f655c77f83731eb5c4429c4e",
     "scripts/short-training.mjs": "0b7d41d3e9260e47e823cf51da5a54ee1b029d62736eadb70c33b8ddfaf29f81",

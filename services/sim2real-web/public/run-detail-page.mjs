@@ -254,7 +254,12 @@ function renderVideo(document, location, run, runId) {
   }
   empty.hidden = false;
   const evidence = danceEvidenceFor(run);
-  const metadataValid = verifiedDanceVideo(run);
+  if (!evidence?.video && run.status === 'completed' && run.training?.video === false) {
+    text(document, 'replay-status', '提交时关闭了视频生成');
+    text(document, 'replay-empty', '本次 Run 未生成视频。仍可查看训练曲线和分段评测。');
+    return;
+  }
+  const metadataValid = valid;
   text(document, 'replay-status', !evidence?.video
     ? '尚无可核验视频'
     : metadataValid
