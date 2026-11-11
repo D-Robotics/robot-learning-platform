@@ -1,0 +1,50 @@
+.training-plans {
+  margin: 0 0 16px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--panel);
+}
+.training-plans-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: end;
+}
+.training-plans-picker { flex: 1 1 240px; min-width: 0; }
+.training-plans-picker select, .training-plans-name { width: 100%; }
+.training-plans-status { margin: 8px 0 0; }
+.training-plans-dialog {
+  width: min(460px, 90vw);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--panel);
+  color: var(--text);
+  padding: 20px;
+}
+.training-plans-dialog .training-plans-actions { justify-content: flex-end; }
+
+.dance-goal[hidden], .dance-goal [hidden] { display: none; }
+.dance-goal-fields {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 155px), 1fr));
+  gap: 10px;
+  align-items: end;
+  margin: 10px 0;
+}
+.dance-goal-fields label { display: grid; gap: 4px; min-width: 0; }
+.dance-goal-fields input, .dance-goal-fields select { width: 100%; min-width: 0; }
+.dance-goal-section {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  margin: 0 0 8px;
+  padding: 0 10px;
+  min-width: 0;
+}
+.is-dance-goal :is(
+  label[for="training-profile"], #training-profile,
+  label[for="training-algorithm"], #training-algorithm,
+  label[for="training-engine"], #training-engine,
+  [aria-labelledby="training-group-resume"], #training-demonstration-group,
+  #training-demonstrations, #engine-capability-note, #task-engine-mismatch-note
+) { display: none; }

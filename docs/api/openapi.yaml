@@ -246,6 +246,63 @@ paths:
       responses:
         "200": { description: Audit health, content: { application/json: { schema: { $ref: "#/components/schemas/AuditHealthResponse" } } } }
         "401": { $ref: "#/components/responses/AuthRequired" }
+  /api/v1/duck/model-templates/originman:
+    get:
+      tags: [workspace]
+      operationId: listOriginManModelTemplates
+      summary: Read the platform-provided OriginMan training input contracts
+      responses:
+        "200": { description: Available manifests for recovery and dance }
+        "401": { description: Sign in required }
+  /api/v1/duck/training-plans:
+    get:
+      tags: [workspace]
+      operationId: listTrainingPlans
+      summary: List named training plans for the authenticated account
+      responses:
+        "200": { description: Plan summaries }
+        "401": { description: Sign in required }
+    post:
+      tags: [workspace]
+      operationId: createTrainingPlan
+      summary: Save a named training plan without creating a run
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/TrainingPlanWrite" }
+      responses:
+        "200": { description: Saved plan and trainingSubmitted false }
+        "409": { description: Name already exists or plan limit reached }
+  /api/v1/duck/training-plans/{id}:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+    get:
+      tags: [workspace]
+      operationId: readTrainingPlan
+      summary: Load one training plan from the authenticated account
+      responses:
+        "200": { description: Saved plan with configuration and revision }
+        "404": { description: Plan missing in this account }
+    put:
+      tags: [workspace]
+      operationId: updateTrainingPlan
+      summary: Save changes to one plan using its current revision
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              allOf:
+                - { $ref: "#/components/schemas/TrainingPlanWrite" }
+                - { type: object, required: [revision] }
+      responses:
+        "200": { description: Updated plan and trainingSubmitted false }
+        "404": { description: Plan missing in this account }
+        "409": { description: Revision conflict or duplicate name }
   /api/v1/duck/projects:
     get:
       tags: [workspace]
@@ -3178,6 +3235,24 @@ components:
       description: Resource is not visible to this account.
       content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } }
   schemas:
+    TrainingPlanWrite:
+      type: object
+      required: [name, config]
+      properties:
+        name: { type: string, minLength: 1, maxLength: 64 }
+        revision: { type: integer, minimum: 1 }
+        config:
+          type: object
+          required: [training]
+          properties:
+            productId: { type: string }
+            projectId: { type: string }
+            taskId: { type: string }
+            modelId: { type: string }
+            computeResourceId: { type: string }
+            demonstrationRunId: { type: string }
+            training: { type: object }
+            resumeFrom: { type: object }
     ComputeResourceCreateInput:
       type: object
       required: [name, runnerUrl]

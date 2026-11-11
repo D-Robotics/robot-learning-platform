@@ -1,3 +1,4 @@
+import { registerSim2RealTrainingPlanRoutes } from './sim2real-training-plan-routes.js';
 import { Router, type Request, type Response } from 'express';
 import { readFileSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
@@ -2113,7 +2114,7 @@ function mutationAccess(request: Request): MutationAccess {
   // Training, cancellation, reconciliation and evaluation are operational
   // actions; permit either the editor or operator role to keep the workspace
   // useful while still excluding a read-only viewer.
-  if (/\/runs(?:\/|$)/.test(pathname)) return 'edit-or-operate';
+  if (/\/(?:runs|training-plans)(?:\/|$)/.test(pathname)) return 'edit-or-operate';
   return SIM2REAL_PERMISSIONS.edit;
 }
 
@@ -3050,6 +3051,11 @@ export function createSim2RealRouter(
     }),
   );
 
+  registerSim2RealTrainingPlanRoutes(
+    router,
+    (request, response) => requestOwner(request, response, auth),
+    prefix,
+  );
   registerSim2RealTelemetryRoutes(
     router,
     {
