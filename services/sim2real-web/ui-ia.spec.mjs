@@ -64,6 +64,11 @@ assert.match(
 );
 assert.match(
   html,
+  /<p[^>]*id="run-progress-track-note"[^>]*><\/p>\s*<div[^>]*id="run-progress-track"[^>]*aria-describedby="run-progress-track-note"/,
+  'training progress text must sit outside the clipped track and describe the bar',
+);
+assert.match(
+  html,
   /role="menuitemcheckbox"[^>]*aria-checked="false"/,
   'notification menu item must expose the checkbox state with aria-checked',
 );

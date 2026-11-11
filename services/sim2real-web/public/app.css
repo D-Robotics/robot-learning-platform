@@ -2426,7 +2426,7 @@ h2 {
 .run-progress-track {
   position: relative;
   height: 22px;
-  margin: 10px 0 4px;
+  margin: 0 0 4px;
   border: 1px solid var(--line);
   border-radius: 999px;
   background: var(--panel-soft);
@@ -2449,11 +2449,7 @@ h2 {
   100% { transform: translateX(300%); }
 }
 .run-progress-track-note {
-  position: absolute;
-  inset: 0;
-  display: flex;
-  align-items: center;
-  justify-content: center;
+  margin: 10px 0 4px;
   color: var(--muted-strong);
   font-size:var(--fs-meta);
   font-variant-numeric: tabular-nums;
@@ -6058,7 +6054,7 @@ body.agent-chat-open .agent-chat-composer input { min-height: 44px; border-color
 /* Live training curve (worker-parsed engine stdout progress points). Same
    canvas sizing convention as the telemetry visuals. */
 .run-progress-live-chart{margin-top:10px;padding-top:10px;border-top:1px dashed var(--line-strong)}
-.run-progress-live-heading{display:flex;align-items:baseline;justify-content:space-between;gap:8px;margin-bottom:6px}
+.run-progress-live-heading{display:flex;flex-wrap:wrap;align-items:baseline;justify-content:space-between;gap:8px;margin-bottom:6px}
 .run-progress-live-heading strong{font-size:var(--fs-meta)}
 .run-progress-live-chart canvas,.run-detail-live-chart canvas{width:100%;height:auto;display:block;border-radius:8px;background:var(--panel-soft)}
 .run-detail-live-chart{margin-top:10px}

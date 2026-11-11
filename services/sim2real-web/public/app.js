@@ -8189,6 +8189,12 @@ function renderRunProgressLiveChart(run) {
   const show = (active && run.mock !== true) || points.length > 0;
   wrap.hidden = !show;
   if (!show) return;
+  const isDance = run.training?.engine === 'originman-dance-ppo';
+  const rateLabel = isDance ? '近期完成率' : '近期成功率';
+  canvas.setAttribute('aria-label', `训练奖励与${rateLabel}曲线`);
+  setText('run-progress-live-note', isDance
+    ? '完成率来自训练回合或单段练习。舞蹈风格结果在本次 Run 结束后查看。'
+    : '数据来自引擎回报的均值奖励与近期成功率。');
   const caption = $('run-progress-live-caption');
   if (caption) {
     if (!points.length) {
@@ -8196,48 +8202,43 @@ function renderRunProgressLiveChart(run) {
     } else {
       const last = points[points.length - 1];
       const total = last.totalIterations || last.iteration;
-      caption.textContent = `iter ${last.iteration}/${total} · 奖励 ${formatMetricNumber(last.meanReward, 3)} · 成功率 ${metricPercent(last.recentSuccess)}%`;
+      caption.textContent = `第 ${last.iteration}/${total} 轮 · 奖励 ${formatMetricNumber(last.meanReward, 3)} · ${rateLabel} ${metricPercent(last.recentSuccess)}%`;
     }
   }
   drawRunProgressChart(canvas, points);
 }
 
-// Honest progress for long trainings: the server exposes no completion
-// fraction, so the bar is driven by checkpoint iteration against the run's
-// target. Without a target it degrades to an indeterminate "in flight" bar —
-// never a fabricated percentage.
+// Use a worker-reported iteration pair, or a checkpoint with a known target.
 function renderRunProgressTrack(run) {
   const track = $('run-progress-track');
   const fill = $('run-progress-fill');
   const note = $('run-progress-track-note');
-  if (!track || !fill) return;
-  const active = run.status === 'queued' || run.status === 'running';
-  if (!active || run.mock === true) {
-    track.hidden = true;
+  if (!track || !fill || !note) return;
+  const active = run.mock !== true && (run.status === 'queued' || run.status === 'running');
+  track.hidden = note.hidden = !active;
+  if (!active) {
     track.removeAttribute('aria-valuenow');
     return;
   }
-  track.hidden = false;
-  track.classList.toggle('is-indeterminate', !run.training?.targetIterations);
-  const done = Number(run.checkpoint?.iteration) || 0;
-  const target = Number(run.training?.targetIterations) || 0;
+  const lastPoint = runProgressPoints(run).at(-1);
+  const reportedTarget = Number(lastPoint?.totalIterations);
+  const hasLiveProgress = Number.isFinite(reportedTarget) && reportedTarget > 0;
+  const target = hasLiveProgress ? reportedTarget : Number(run.training?.targetIterations) || 0;
+  const done = hasLiveProgress ? Number(lastPoint.iteration) : Number(run.checkpoint?.iteration) || 0;
+  track.classList.toggle('is-indeterminate', target <= 0);
   if (target > 0) {
     const percent = Math.max(0, Math.min(100, Math.round((done / target) * 100)));
     fill.style.width = percent + '%';
     track.setAttribute('aria-valuenow', String(percent));
-    if (note) note.textContent = `checkpoint ${done} / ${target} 轮`;
+    note.textContent = hasLiveProgress ? `训练进度 · 第 ${done} / ${target} 轮` : `检查点 · 第 ${done} / ${target} 轮`;
   } else {
     fill.style.width = '';
     track.removeAttribute('aria-valuenow');
-    if (note) {
-      const elapsed = run.createdAt ? Math.round((Date.now() - new Date(run.createdAt).getTime()) / 60000) : 0;
-      note.textContent =
-        done > 0
-          ? `运行中 · 已到 checkpoint ${done} 轮${elapsed > 0 ? ` · 约 ${elapsed} 分钟` : ''}`
-          : run.status === 'queued'
-            ? '排队中 · 等待 runner 认领'
-            : '运行中 · 尚无 checkpoint 回报';
-    }
+    note.textContent = done > 0
+      ? `运行中 · 已到第 ${done} 轮检查点`
+      : run.status === 'queued'
+        ? '排队中 · 等待算力机接单'
+        : '运行中 · 等待首条进度';
   }
 }
 

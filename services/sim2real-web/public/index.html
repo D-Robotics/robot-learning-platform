@@ -865,17 +865,18 @@
                     </div>
                     <span class="state-badge state-neutral" id="run-progress-status" role="status" aria-live="polite">—</span>
                   </div>
+                  <p class="run-progress-track-note" id="run-progress-track-note" hidden></p>
                   <div
                     class="run-progress-track"
                     id="run-progress-track"
                     role="progressbar"
                     aria-labelledby="run-progress-title"
+                    aria-describedby="run-progress-track-note"
                     aria-valuemin="0"
                     aria-valuemax="100"
                     hidden
                   >
                     <i id="run-progress-fill"></i>
-                    <span class="run-progress-track-note" id="run-progress-track-note"></span>
                   </div>
                   <div class="run-progress-meta" id="run-progress-meta"></div>
                   <div class="run-progress-live-chart" id="run-progress-live-chart" hidden>
