@@ -131,6 +131,18 @@ export async function connectAuthenticatedCore({
   let closed = false;
   return {
     authentication: auth,
+    async readTrainingRun(runId, { signal } = {}) {
+      if (typeof runId !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9_.-]{0,119}$/.test(runId))
+        throw Error('原 Run 标识无效。');
+      const response = await fetchPlatform('/api/v1/duck/runs/' + encodeURIComponent(runId), {
+        headers: { accept: 'application/json' },
+        signal,
+      });
+      const value = await response.json();
+      if (!response.ok || value.run?.id !== runId)
+        throw Error('当前账号无法读取这条 Run，请核对原运行链接。');
+      return value.run;
+    },
     async workshopSession(operation, input = {}, { signal, accountId } = {}) {
       if (!['list', 'create', 'select', 'read'].includes(operation)) throw Error('课程操作无效。');
       if (

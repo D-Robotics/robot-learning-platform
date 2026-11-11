@@ -226,7 +226,8 @@ def main():
         fail("worker output paths must be absolute and the job directory must exist")
 
     report = train(bundle=bundle, output=output, dance_config=dance_config, num_envs=num_envs,
-                   environment_class=environment_class)
+                   environment_class=environment_class,
+                   device=os.environ.get("RDK_ORIGINMAN_DANCE_DEVICE", "cpu").strip().lower())
     report["engineSourceSha256"] = {
         name: hashlib.sha256(Path(__file__).with_name(name).read_bytes()).hexdigest()
         for name in ["adapter.py", "body.py", "env.py", "train.py", "dance_env.py", "dance_env_v2.py", "render_replay.py"]

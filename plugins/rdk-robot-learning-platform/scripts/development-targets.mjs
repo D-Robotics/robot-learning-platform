@@ -5,7 +5,9 @@ export const DEVELOPMENT_TARGET_TOOL = {
   inputSchema: {
     type: 'object',
     properties: {
-      action: { type: 'string', enum: ['list', 'test-compute', 'connect-board'] },
+      action: { type: 'string', enum: ['list', 'list-compute', 'test-compute', 'connect-board'] },
+      engine: { type: 'string', pattern: '^[a-z][a-z0-9-]{1,31}$' },
+      local: { type: 'boolean' },
       targetId: { type: 'string', minLength: 1, maxLength: 160 },
     },
     additionalProperties: false,
@@ -13,13 +15,17 @@ export const DEVELOPMENT_TARGET_TOOL = {
   annotations: { readOnlyHint: false, destructiveHint: false },
 };
 
-export async function developmentTargets(args, { authentication, request } = {}) {
-  const { action = 'list', targetId } = args;
+export async function developmentTargets(args, { authentication, request, baseUrl } = {}) {
+  const { action = 'list', targetId, engine, local } = args;
   if (
     Array.isArray(args) ||
-    Object.keys(args).some((key) => !['action', 'targetId'].includes(key)) ||
-    !['list', 'test-compute', 'connect-board'].includes(action) ||
-    (action === 'list'
+    Object.keys(args).some((key) => !['action', 'targetId', 'engine', 'local'].includes(key)) ||
+    !['list', 'list-compute', 'test-compute', 'connect-board'].includes(action) ||
+    ((engine !== undefined || local !== undefined) && action !== 'list-compute') ||
+    (engine !== undefined &&
+      (typeof engine !== 'string' || !/^[a-z][a-z0-9-]{1,31}$/.test(engine))) ||
+    (local !== undefined && typeof local !== 'boolean') ||
+    (['list', 'list-compute'].includes(action)
       ? targetId !== undefined
       : typeof targetId !== 'string' || !targetId.trim() || targetId.length > 160)
   )
@@ -49,10 +55,55 @@ export async function developmentTargets(args, { authentication, request } = {})
               status: record.status,
               engines: Array.isArray(record.engines) ? record.engines : [],
               mock: record.mock === true,
+              ...(action === 'list-compute'
+                ? {
+                    realWorker: record.mock === false,
+                    source: record.source ?? 'server-runner',
+                    gpuName: record.gpuName ?? null,
+                    cuda: typeof record.cuda === 'boolean' ? record.cuda : null,
+                  }
+                : {}),
             }
           : { tunnelActive: record.tunnelActive === true }),
       }));
   };
+  if (action === 'list-compute') {
+    const records = await list('compute');
+    await verifyAccount();
+    const scoped = records.filter((item) => !local || item.source === 'local-agent');
+    const eligible = scoped.filter(
+      (item) =>
+        item.realWorker &&
+        item.status === 'online' &&
+        (!engine || item.engines.includes(engine)) &&
+        (engine !== 'originman-dance-ppo' || item.source !== 'local-agent'),
+    );
+    const needsCheck = scoped.filter((item) => !eligible.includes(item));
+    const lines = eligible.map(
+      ({ name, source, gpuName, cuda }) =>
+        `${name}（${source === 'local-agent' ? '本机 Agent' : '平台可访问的 Runner'}${gpuName ? ' · ' + gpuName : cuda === true ? ' · 支持 CUDA' : ' · 设备待确认'}）`,
+    );
+    const resources = baseUrl ? new URL(baseUrl.replace(/\/+$/, '') + '/#resources').href : null;
+    return {
+      compute: eligible,
+      needsCheck,
+      links: resources ? { resources } : {},
+      studentReply: [
+        lines.length
+          ? `可选算力：${lines.join('、')}。你想用哪台？`
+          : '当前没有可直接用于这项任务的已验证算力。',
+        local && engine === 'originman-dance-ppo'
+          ? '舞蹈训练需要平台能访问的 Runner。可以在本机部署独立平台，或将本机 Worker 接入为平台可访问的 Runner。'
+          : needsCheck.length
+            ? '连接状态或引擎能力待确认的资源，可以在执行资源页检查。'
+            : null,
+        resources ? `[打开执行资源，检查或添加算力](${resources})` : null,
+      ]
+        .filter(Boolean)
+        .join('\n'),
+      delivery,
+    };
+  }
   if (action === 'list') {
     const [compute, boards] = await Promise.allSettled([list('compute'), list('boards')]);
     await verifyAccount();

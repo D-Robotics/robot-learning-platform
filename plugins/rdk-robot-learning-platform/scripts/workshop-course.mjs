@@ -1,3 +1,5 @@
+import { createHash } from 'node:crypto';
+import { DANCE_TRAINING_TOOLS } from './dance-training.mjs';
 import { resolveOriginmanDanceConfig } from './originman-dance-config.mjs';
 
 export const ORIGINMAN_DANCE_DRAFT_TOOL = {
@@ -39,8 +41,15 @@ export const ORIGINMAN_DANCE_DRAFT_TOOL = {
 
 const danceFields = ORIGINMAN_DANCE_DRAFT_TOOL.inputSchema.properties;
 const sectionFields = danceFields.sections.items.properties;
+const danceSchema = DANCE_TRAINING_TOOLS[0].inputSchema.properties.dance;
+const runIdField = { type: 'string', pattern: '^[A-Za-z0-9][A-Za-z0-9_.-]{0,119}$' };
 const learningFields = {
-  task: { type: 'string', enum: ['dance', 'recovery'] },
+  intent: { type: 'string', enum: ['start', 'new', 'results', 'retry'] },
+  task: { type: 'string', enum: ['dance', 'recovery', 'reinforcement', 'imitation'] },
+  runId: runIdField,
+  dance: danceSchema,
+  changes: { ...danceSchema, required: [] },
+  numEnvs: { type: 'integer', minimum: 1, maximum: 16 },
   target: { type: 'string', enum: ['simulation', 'hardware'] },
   movement: sectionFields.type,
   bpm: danceFields.bpm,
@@ -54,12 +63,12 @@ const learningFields = {
 export const LEARNING_GUIDE_TOOL = {
   name: 'rdk_learning_guide',
   description:
-    '新手开始强化学习的默认入口。携带用户已经明确的选择，每轮返回一个缺项或下一步。task不明先选任务；最终上真机传target=hardware。仅在用户确认本版配方并要求开始时传confirmed=true。只整理计划，不发起登录、训练或设备操作。',
+    '机器人学习的默认引导。重新开始用 intent:new，继续或看看效果用 intent:results 和原 runId；改参重训用 intent:retry、原 runId 和 changes（只传明确修改的舞蹈字段），可传 numEnvs 或 computeResourceId。保留已确定的任务和编舞，多段用 dance，每次只补一个缺项。仅在用户确认当前配方并要求开始时传 confirmed:true。此工具只读，返回下一步所需的工具和参数。',
   inputSchema: { type: 'object', properties: learningFields, additionalProperties: false },
   annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
 };
 
-export function learningGuide(answers = {}) {
+export function learningGuide(answers = {}, { operationId, previous } = {}) {
   if (!answers || typeof answers !== 'object' || Array.isArray(answers))
     throw Error('请传入学员已确认的选项。');
   for (const [key, value] of Object.entries(answers)) {
@@ -69,12 +78,16 @@ export function learningGuide(answers = {}) {
       !rule ||
       typeof value !== type ||
       (rule.enum && !rule.enum.includes(value)) ||
+      (type === 'object' && (!value || Array.isArray(value))) ||
       (type === 'number' &&
         (!Number.isFinite(value) ||
           value < rule.minimum ||
           value > rule.maximum ||
           (rule.type === 'integer' && !Number.isSafeInteger(value)))) ||
-      (type === 'string' && (!value.trim() || value.length > (rule.maxLength ?? 160)))
+      (type === 'string' &&
+        (!value.trim() ||
+          value.length > (rule.maxLength ?? 160) ||
+          (rule.pattern && !new RegExp(rule.pattern).test(value))))
     )
       throw Error('选项不符合课程范围：' + key);
   }
@@ -86,45 +99,157 @@ export function learningGuide(answers = {}) {
     motionAuthorized: false,
     ...extra,
   });
-  if (!answers.task) return progress('task', '你想先练 OriginMan 跳舞，还是练被推后重新站稳？');
+  if (answers.intent === 'retry') {
+    if (!previous?.dance || !previous.computeResourceId || !previous.numEnvs)
+      return progress(
+        'retry-source',
+        '这条 Run 缺少完整的原配置。请在详情页核对编舞和算力，再开始新一轮。',
+      );
+    const before = danceInput(previous.dance);
+    const changes = answers.changes ?? {};
+    const after = danceInput({
+      ...before,
+      ...changes,
+      ...(changes.rewardTuning
+        ? { rewardTuning: { ...before.rewardTuning, ...changes.rewardTuning } }
+        : {}),
+    });
+    const computeResourceId = answers.computeResourceId ?? previous.computeResourceId;
+    const numEnvs = answers.numEnvs ?? previous.numEnvs;
+    const changed = Object.keys(after).filter(
+      (key) => JSON.stringify(after[key]) !== JSON.stringify(before[key]),
+    );
+    if (numEnvs !== previous.numEnvs) changed.push('numEnvs');
+    if (computeResourceId !== previous.computeResourceId) changed.push('computeResourceId');
+    if (!changed.length)
+      return progress('retry-change', '这一轮想改哪一项？例如训练步数、动作幅度或并行环境数。');
+    const labels = {
+      title: '名称',
+      bpm: '节拍',
+      sections: '舞段',
+      seed: '种子',
+      trainingSteps: '训练步数',
+      rewardTuning: '奖励配置',
+      numEnvs: '并行环境数',
+      computeResourceId: '算力机',
+    };
+    const from = {
+      ...before,
+      computeResourceId: previous.computeResourceId,
+      numEnvs: previous.numEnvs,
+    };
+    const to = { ...after, computeResourceId, numEnvs };
+    const delta = changed.map((key) => ({ label: labels[key], before: from[key], after: to[key] }));
+    const sectionsText = (sections) =>
+      sections
+        .map(
+          ({ type, beats, intensity }) => `${sectionTitles[type]} ${beats} 拍（幅度 ${intensity}）`,
+        )
+        .join('、');
+    const summary = delta
+      .map(({ label, before, after }) => {
+        if (label === '舞段') return `舞段由 ${sectionsText(before)} 改为 ${sectionsText(after)}`;
+        if (label === '奖励配置')
+          return Object.keys(after ?? {})
+            .filter((key) => before?.[key] !== after[key])
+            .map((key) => `${key} ${before?.[key] ?? '默认'} → ${after[key]}`)
+            .join('、');
+        if (label === '算力机') return '更换为本轮选定的算力机';
+        return `${label} ${before} → ${after}`;
+      })
+      .join('、');
+    if (!answers.confirmed)
+      return progress(
+        'retry-confirm',
+        `本轮调整：${summary}。确认后将开始一条新 Run，可以和原 Run 对比。`,
+        { changes: delta },
+      );
+    const contextId =
+      'om-' +
+      createHash('sha256')
+        .update(JSON.stringify([answers.runId, to]))
+        .digest('hex')
+        .slice(0, 20);
+    return progress('ready', `已确认${summary}。下一步检查算力并提交新一轮仿真训练。`, {
+      changes: delta,
+      nextTool: 'rdk_originman_dance_train',
+      nextArguments: {
+        contextId,
+        computeResourceId,
+        numEnvs,
+        dance: after,
+        previousRunId: answers.runId,
+        ...(previous.modelId ? { modelId: previous.modelId } : {}),
+      },
+    });
+  }
+  if (!answers.task)
+    return progress(
+      'task',
+      '你想做什么？可以练强化学习、用示教数据做模仿学习，或体验 OriginMan 跳舞、受扰恢复。',
+    );
+  if (['reinforcement', 'imitation'].includes(answers.task))
+    return progress(
+      'platform-training',
+      '先在训练工作台选择机器人和任务，再检查模型、数据和算力。',
+      { platformView: 'train' },
+    );
   if (answers.task === 'recovery')
     return progress('recovery', '先打开受扰恢复课程，看看参考动作。', {
       nextTool: 'rdk_workshop',
+      nextArguments: { intent: answers.intent === 'new' ? 'new' : 'start' },
     });
-  if (!answers.movement) return progress('movement', '第一段舞想做什么？可以从左右交替摆臂开始。');
-  if (answers.bpm === undefined) return progress('bpm', '这段舞想用多少 BPM？可以先试 100 BPM。');
-  if (answers.beats === undefined) return progress('beats', '这段舞要跳 4 拍、8 拍还是 16 拍？');
-  if (answers.intensity === undefined)
+  if (!answers.dance && !answers.movement)
+    return progress('movement', '第一段舞想做什么？可以从左右交替摆臂开始。');
+  if (!answers.dance && answers.bpm === undefined)
+    return progress('bpm', '这段舞想用多少 BPM？可以先试 100 BPM。');
+  if (!answers.dance && answers.beats === undefined)
+    return progress('beats', '这段舞要跳 4 拍、8 拍还是 16 拍？');
+  if (!answers.dance && answers.intensity === undefined)
     return progress('intensity', '动作幅度想先用小幅（0.25），还是半幅（0.5）？');
   if (!answers.computeResourceId)
     return progress('compute', '接下来你想用哪台支持舞蹈训练的算力机？', {
       nextTool: 'rdk_development_targets',
+      nextArguments: { action: 'list-compute', engine: 'originman-dance-ppo' },
     });
-  if (answers.trainingSteps === undefined)
+  if (answers.trainingSteps === undefined && answers.dance?.trainingSteps === undefined)
     return progress('budget', '这轮先做 8192 步流程快检，还是做 50 万步正式效果实验？');
 
-  const titles = {
-    'alternating-arms': '左右交替摆臂',
-    'weight-shift': '左右换重心',
-    'squat-rise': '下蹲起身',
-    'open-pose': '展开定格',
-  };
-  const dance = {
+  const dance = danceInput({
     schemaVersion: 1,
-    title: titles[answers.movement],
-    bpm: answers.bpm,
-    sections: [{ type: answers.movement, beats: answers.beats, intensity: answers.intensity }],
-    trainingSteps: answers.trainingSteps,
-  };
-  resolveOriginmanDanceConfig(dance);
-  const recipe = `${dance.title}，${answers.bpm} BPM、${answers.beats} 拍、幅度 ${answers.intensity}、${answers.trainingSteps} 步 PPO`;
+    ...(answers.dance ?? {
+      title: sectionTitles[answers.movement],
+      bpm: answers.bpm,
+      sections: [{ type: answers.movement, beats: answers.beats, intensity: answers.intensity }],
+    }),
+    trainingSteps: answers.trainingSteps ?? answers.dance?.trainingSteps,
+  });
+  const recipe = `${dance.title}，${dance.bpm} BPM，${dance.sections.map(({ type, beats, intensity }) => `${sectionTitles[type]} ${beats} 拍（幅度 ${intensity}）`).join('、')}，${dance.trainingSteps.toLocaleString('zh-CN')} 步 PPO`;
   if (!answers.confirmed)
     return progress('confirm', `本轮配方是${recipe}。现在开始训练吗？`, { dance });
   return progress('ready', `已确认${recipe}。接下来检查你选的算力并启动本轮仿真训练。`, {
     nextTool: 'rdk_originman_dance_train',
+    nextArguments: {
+      contextId: operationId,
+      computeResourceId: answers.computeResourceId,
+      numEnvs: answers.numEnvs ?? 8,
+      dance,
+    },
     dance,
     computeResourceId: answers.computeResourceId,
   });
+}
+
+const sectionTitles = {
+  'alternating-arms': '左右交替摆臂',
+  'weight-shift': '左右换重心',
+  'squat-rise': '下蹲起身',
+  'open-pose': '展开定格',
+};
+
+function danceInput(value) {
+  const { kind, scope, totalBeats, ...input } = resolveOriginmanDanceConfig(value);
+  return input;
 }
 
 export function originmanDanceDraft(args = {}) {

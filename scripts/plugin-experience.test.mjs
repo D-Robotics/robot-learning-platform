@@ -669,3 +669,173 @@ test('runtime version requires matching loaded source hashes and rejects a stale
   assert.equal(pluginRuntimeIdentity().version, null);
   assert.equal(pluginRuntimeIdentity().loadedSourcesMatch, false);
 });
+
+test('beginner guide starts fresh and routes known tasks without reading old Runs', async () => {
+  const { experienceProxy } =
+    await import('../plugins/rdk-robot-learning-platform/scripts/experience-mcp.mjs');
+  const dispatch = experienceProxy(
+    {
+      request() {
+        assert.fail('new planning is local');
+      },
+    },
+    {
+      env: { RDK_SIM2REAL_MCP_BASE_URL: 'https://platform.test/robotics-learning' },
+    },
+  );
+  const guide = async (args) =>
+    (await dispatch('tools/call', { name: 'rdk_learning_guide', arguments: args }))
+      .structuredContent;
+  assert.equal((await guide({ intent: 'new' })).stage, 'task');
+  assert.equal((await guide({ intent: 'new', task: 'dance' })).stage, 'movement');
+  assert.deepEqual((await guide({ intent: 'new', task: 'recovery' })).nextArguments, {
+    intent: 'new',
+  });
+  assert.equal(
+    (await guide({ task: 'imitation' })).links.workbench,
+    'https://platform.test/robotics-learning/#train',
+  );
+  assert.equal((await guide({ intent: 'results' })).stage, 'choose-run');
+});
+
+test('bundled core guide is advertised once with the wrapper intent contract', async () => {
+  const { experienceProxy } =
+    await import('../plugins/rdk-robot-learning-platform/scripts/experience-mcp.mjs');
+  const dispatch = experienceProxy({
+    request: async () => ({ tools: [{ name: 'rdk_learning_guide', description: 'core' }] }),
+  });
+  const catalog = await dispatch('tools/list');
+  const guides = catalog.tools.filter(({ name }) => name === 'rdk_learning_guide');
+  assert.equal(guides.length, 1);
+  assert.ok(guides[0].inputSchema.properties.intent.enum.includes('retry'));
+});
+
+test('guide reads the exact Run and keeps confirmed retry idempotent', async (t) => {
+  const { experienceProxy } =
+    await import('../plugins/rdk-robot-learning-platform/scripts/experience-mcp.mjs');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'rdk-guide-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const names = [
+    'rdk_model_validate',
+    'rdk_models_list',
+    'rdk_model_register',
+    'rdk_compute_resources_list',
+    'rdk_compute_resource_test',
+    'rdk_training_submit',
+  ];
+  const manifest = JSON.parse(
+    fs.readFileSync(
+      new URL(
+        '../plugins/rdk-robot-learning-platform/references/originman-dance-manifest.json',
+        import.meta.url,
+      ),
+    ),
+  );
+  const dance = {
+    schemaVersion: 1,
+    title: '双段舞',
+    bpm: 100,
+    trainingSteps: 8192,
+    sections: [
+      { type: 'alternating-arms', beats: 8, intensity: 0.25 },
+      { type: 'open-pose', beats: 4, intensity: 0.5 },
+    ],
+  };
+  const previous = {
+    id: 'run-old',
+    modelId: 'dance-model',
+    status: 'completed',
+    computeResourceId: 'worker',
+    training: { numEnvs: 2, originmanDance: dance },
+    metrics: { trainingDevice: 'mps', originmanDance: { qualityGatePassed: false } },
+  };
+  let writes = 0;
+  const dispatch = experienceProxy(
+    {
+      async request(method, { name, arguments: args }) {
+        if (method === 'tools/list') return { tools: names.map((name) => ({ name })) };
+        let value;
+        if (name === 'rdk_training_status') {
+          assert.equal(args.runId, previous.id);
+          value = { run: previous };
+        } else if (name === 'rdk_model_validate') value = { valid: true };
+        else if (name === 'rdk_models_list') value = { models: [{ id: 'dance-model', manifest }] };
+        else if (name === 'rdk_compute_resources_list')
+          value = { computeResources: [{ id: 'worker' }] };
+        else if (name === 'rdk_compute_resource_test')
+          value = { id: 'worker', connected: true, mock: false, engines: ['originman-dance-ppo'] };
+        else if (name === 'rdk_training_submit') {
+          writes++;
+          assert.equal(args.originmanDance.trainingSteps, 500000);
+          assert.equal(args.originmanDance.sections.length, 2);
+          value = { runId: 'run-new', status: 'queued' };
+        } else assert.fail(name);
+        return { structuredContent: value };
+      },
+    },
+    {
+      contextDirectory: dir,
+      env: { RDK_SIM2REAL_MCP_BASE_URL: 'https://platform.test/robotics-learning' },
+    },
+  );
+  const call = async (name, args) =>
+    (await dispatch('tools/call', { name, arguments: args })).structuredContent;
+  const guide = (args) => call('rdk_learning_guide', args);
+  const result = await guide({ intent: 'results', runId: previous.id });
+  assert.match(result.studentReply, /mps.*未达标.*暂无可播放/s);
+  assert.equal(new URL(result.links.runDetail).searchParams.get('runId'), previous.id);
+  const retry = { intent: 'retry', runId: previous.id, changes: { trainingSteps: 500000 } };
+  const preview = await guide(retry);
+  assert.equal(preview.stage, 'retry-confirm');
+  assert.deepEqual(preview.changes, [{ label: '训练步数', before: 8192, after: 500000 }]);
+  assert.equal(writes, 0);
+  const first = await guide({ ...retry, confirmed: true });
+  const repeat = await guide({ ...retry, confirmed: true });
+  assert.deepEqual(first.nextArguments, repeat.nextArguments);
+  const submitted = await call(first.nextTool, first.nextArguments);
+  assert.equal(new URL(submitted.links.runDetail).searchParams.get('runId'), 'run-new');
+  assert.equal(new URL(submitted.links.previousRun).searchParams.get('runId'), previous.id);
+  const duplicate = await call(first.nextTool, first.nextArguments);
+  assert.equal(duplicate.alreadySubmitted, true);
+  assert.equal(writes, 1);
+});
+
+test('compute guide gives an actionable link and excludes incompatible resources', async () => {
+  const { developmentTargets } =
+    await import('../plugins/rdk-robot-learning-platform/scripts/development-targets.mjs');
+  const engine = 'originman-dance-ppo';
+  const result = await developmentTargets(
+    { action: 'list-compute', engine },
+    {
+      authentication: {
+        async status() {
+          return { authenticated: true, accountId: 'owner' };
+        },
+      },
+      baseUrl: 'https://platform.test/robotics-learning',
+      async request(operation) {
+        assert.equal(operation, 'compute');
+        return {
+          computeResources: [
+            {
+              id: 'local',
+              source: 'local-agent',
+              status: 'online',
+              mock: false,
+              engines: [engine],
+            },
+            { id: 'offline', status: 'offline', mock: false, engines: [engine] },
+            { id: 'wrong', status: 'online', mock: false, engines: ['starter-ppo'] },
+            { id: 'right', status: 'online', mock: false, engines: [engine], gpuName: 'RTX 4090' },
+          ],
+        };
+      },
+    },
+  );
+  assert.deepEqual(
+    result.compute.map(({ id }) => id),
+    ['right'],
+  );
+  assert.equal(result.links.resources, 'https://platform.test/robotics-learning/#resources');
+  assert.match(result.studentReply, /RTX 4090/);
+});

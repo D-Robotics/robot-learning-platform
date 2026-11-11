@@ -1,0 +1,112 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>本次运行 · RDK Robot Learning</title>
+    <link rel="stylesheet" href="./tokens.css" />
+    <link rel="stylesheet" href="./experiment.css" />
+    <script type="module" src="./run-detail-page.mjs"></script>
+  </head>
+  <body>
+    <a class="skip-link" href="#run-main">跳到运行内容</a>
+    <header class="experiment-header">
+      <a href="./">RDK Robot Learning</a>
+      <span>本次训练运行</span>
+      <span id="run-connection-status" role="status" aria-live="polite">正在读取运行记录</span>
+    </header>
+    <main id="run-main" class="experiment-layout">
+      <aside aria-label="本次运行导航">
+        <p id="run-kind" class="eyebrow">机器人学习 · 仿真</p>
+        <h1 id="run-title">本次运行</h1>
+        <ol class="experiment-steps">
+          <li id="run-step-progress" aria-current="step">读取本次运行</li>
+          <li id="run-step-quality">核对训练与质量证据</li>
+          <li id="run-step-replay">查看本次回放</li>
+        </ol>
+        <p id="run-next-action" aria-live="polite">正在按链接中的 Run ID 读取详情。</p>
+        <button id="refresh-run" type="button">刷新本次运行</button>
+        <p><a id="run-platform-home" href="./">返回学习平台</a></p>
+      </aside>
+      <section class="experiment-content" aria-label="运行详情与仿真结果">
+        <div id="run-error" class="experiment-error" role="alert" hidden></div>
+        <section class="experiment-summary" aria-label="本次运行状态">
+          <div><span>运行状态</span><strong id="run-status">待连接</strong></div>
+          <div><span>产品 / 任务</span><strong id="run-task">—</strong></div>
+          <div><span>训练引擎</span><strong id="run-engine">—</strong></div>
+        </section>
+
+        <section aria-labelledby="run-overview-heading">
+          <div class="section-heading">
+            <h2 id="run-overview-heading">本轮运行</h2>
+            <span id="run-id-label">等待 Run ID</span>
+          </div>
+          <p id="run-summary" class="empty-state">尚未取得运行记录。</p>
+          <div class="comparison-scroll">
+            <table id="run-config-table" hidden>
+              <caption>平台记录的训练配置</caption>
+              <tbody id="run-config-body"></tbody>
+            </table>
+          </div>
+        </section>
+
+        <section aria-labelledby="dance-heading" id="dance-section" hidden>
+          <div class="section-heading">
+            <h2 id="dance-heading">舞段编排</h2>
+            <span id="dance-title">—</span>
+          </div>
+          <p id="dance-meta"></p>
+          <div class="comparison-scroll">
+            <table>
+              <caption>本次提交的动作段</caption>
+              <thead><tr><th scope="col">顺序</th><th scope="col">动作</th><th scope="col">拍数</th><th scope="col">强度</th></tr></thead>
+              <tbody id="dance-sections"></tbody>
+            </table>
+          </div>
+        </section>
+
+        <section aria-labelledby="curve-heading">
+          <div class="section-heading">
+            <h2 id="curve-heading">训练过程曲线</h2>
+            <span id="curve-caption">等待本次 Run 的采样点</span>
+          </div>
+          <svg id="reward-chart" viewBox="0 0 720 240" role="img" aria-label="本次训练真实上报的奖励曲线" hidden></svg>
+          <p id="curve-empty" class="empty-state">暂无可展示的训练曲线；不会用其他 Run 或示例曲线代替。</p>
+        </section>
+
+        <section aria-labelledby="quality-heading">
+          <div class="section-heading">
+            <h2 id="quality-heading">训练结果与质量门</h2>
+            <span id="quality-status">待核对</span>
+          </div>
+          <p id="quality-summary" class="empty-state">本次运行完成后读取实际质量证据。</p>
+          <div class="comparison-scroll">
+            <table id="quality-table" hidden>
+              <caption>本次 Run 返回的分段测量</caption>
+              <thead><tr><th scope="col">舞段</th><th scope="col">实测结果</th></tr></thead>
+              <tbody id="quality-body"></tbody>
+            </table>
+          </div>
+        </section>
+
+        <section aria-labelledby="replay-heading">
+          <div class="section-heading">
+            <h2 id="replay-heading">本次仿真回放</h2>
+            <span id="replay-status">尚未核验</span>
+          </div>
+          <video id="run-video" controls playsinline preload="none" hidden aria-label="本次训练生成的仿真舞蹈视频"></video>
+          <p id="replay-empty" class="empty-state">回放生成后会校验策略与轨迹摘要，再显示本次视频。</p>
+        </section>
+
+        <details class="experiment-details">
+          <summary>运行标识与制品摘要</summary>
+          <dl>
+            <dt>Run ID</dt><dd id="run-id-detail">—</dd>
+            <dt>模型 ID</dt><dd id="run-model-id">—</dd>
+            <dt>策略 SHA-256</dt><dd id="run-policy-sha">—</dd>
+          </dl>
+        </details>
+      </section>
+    </main>
+  </body>
+</html>

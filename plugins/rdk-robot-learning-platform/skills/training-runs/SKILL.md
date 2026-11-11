@@ -8,7 +8,7 @@ description: 在 RDK 学习平台选择任务、训练引擎与执行资源，�
 
 ## OriginMan 自定义舞蹈
 
-舞蹈新手先调用 `rdk_learning_guide`，每轮只收集一个缺项；按已确认的选择继续。明确确认编舞、算力和预算后，用独立舞蹈链路。先 `rdk_experience_guide` 取得 `danceTraining.operation.contextId`，核对用户明确的资源，再调用 `rdk_originman_dance_train`。`modelId` 可省略，工具按专用契约查找或登记；不必先调用 draft，只有用户要求整理草案时才用它。
+舞蹈新手先调用 `rdk_learning_guide`，每轮只收集一个缺项；按已确认的选择继续。明确确认编舞、算力和预算后，用独立舞蹈链路。将引导返回的 `nextArguments` 原样传给 `rdk_originman_dance_train`。改参重训先以 `intent:"retry"` 读取原 Run，展示参数变化，确认后再用新的 `nextArguments` 提交。`modelId` 可省略，工具按专用契约查找或登记；不必先调用 draft，只有用户要求整理草案时才用它。
 
 当当前任务已经是舞蹈时，即使用户只说“带我开始/重新开始 Workshop”，也保持舞蹈意图：新一轮先取得新 `contextId`，沿用当前对话确认过的编舞；有已知活动 Run 时“继续/看看效果”只读查询原 Run，不展示旧结果冒充新一轮，也不重复提交。提交回执、`rdk_training_wait` 和 `rdk_training_status` 都应附带并打开该 Run 的只读详情页；页面按 Run ID 请求平台记录，账号无权查看时明确显示原因，不回退到全局最新记录。
 

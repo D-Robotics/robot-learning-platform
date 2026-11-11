@@ -11,6 +11,7 @@ const schema = {
   type: 'object',
   properties: {
     contextId: { type: 'string', pattern: '^[A-Za-z0-9][A-Za-z0-9_-]{0,23}$' },
+    previousRunId: { type: 'string', pattern: '^[A-Za-z0-9][A-Za-z0-9_.-]{0,119}$' },
     modelId: { type: 'string', minLength: 1, maxLength: 160 },
     computeResourceId: { type: 'string', minLength: 1, maxLength: 160 },
     numEnvs: {
@@ -92,12 +93,26 @@ function requireInput(args) {
     typeof args !== 'object' ||
     Array.isArray(args) ||
     Object.keys(args).some(
-      (key) => !['contextId', 'modelId', 'computeResourceId', 'numEnvs', 'dance'].includes(key),
+      (key) =>
+        ![
+          'contextId',
+          'modelId',
+          'computeResourceId',
+          'numEnvs',
+          'dance',
+          'previousRunId',
+        ].includes(key),
     ) ||
     typeof args.contextId !== 'string' ||
     !/^[A-Za-z0-9][A-Za-z0-9_-]{0,23}$/.test(args.contextId)
   )
     throw new Error('请先从rdk_experience_guide取得本轮contextId，并提供舞蹈编排。');
+  if (
+    args.previousRunId !== undefined &&
+    (typeof args.previousRunId !== 'string' ||
+      !/^[A-Za-z0-9][A-Za-z0-9_.-]{0,119}$/.test(args.previousRunId))
+  )
+    throw new Error('用于对比的原 Run 标识无效。');
   const dance = resolveOriginmanDanceConfig(args.dance);
   const numEnvs = args.numEnvs ?? 8;
   if (!Number.isSafeInteger(numEnvs) || numEnvs < 1 || numEnvs > 16)
@@ -136,6 +151,7 @@ export async function trainOriginmanDance(
     return {
       stage: 'training',
       ...existing,
+      studentReply: '这个实验已提交。下面是原 Run。如果要改参重训，请以原 Run 开始新一轮。',
       nextAction: '用rdk_training_wait沿该runId查询，不重新提交。',
     };
   if (

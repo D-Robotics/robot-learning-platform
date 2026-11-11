@@ -25,10 +25,18 @@ const coreProvenance = provenance.coreBundleSha256
   ? JSON.parse(fs.readFileSync(path.join(base, 'upstream-provenance.json'), 'utf8'))
   : provenance;
 const bundle = fs.readFileSync(path.join(base, 'mcp/bundle.mjs'));
-if (
-  sha(bundle) !== coreProvenance.bundleSha256 ||
-  (provenance.coreBundleSha256 && sha(bundle) !== provenance.coreBundleSha256)
-)
+const repoPlugin = path.join(root, 'plugins/rdk-robot-learning-platform');
+const repoProvenance = JSON.parse(
+  fs.readFileSync(path.join(repoPlugin, 'provenance.json'), 'utf8'),
+);
+const bundleSha = sha(bundle);
+const matchesUpstream =
+  bundleSha === coreProvenance.bundleSha256 &&
+  (!provenance.coreBundleSha256 || bundleSha === provenance.coreBundleSha256);
+const matchesRepository =
+  bundleSha === repoProvenance.coreBundleSha256 &&
+  bundleSha === sha(fs.readFileSync(path.join(repoPlugin, 'mcp/bundle.mjs')));
+if (!matchesUpstream && !matchesRepository)
   throw new Error('Base bundle does not match retained provenance.');
 const baseConfig = fs.readFileSync(path.join(base, '.mcp.json'), 'utf8');
 if (!baseConfig.includes('throw new Error') || baseConfig.includes('credentials-file'))
@@ -46,6 +54,8 @@ fs.mkdirSync(path.join(out, 'scripts'), { recursive: true });
 const sources = {};
 for (const name of [
   'workshop-course.mjs',
+  'dance-training.mjs',
+  'originman-dance-config.mjs',
   'workshop-entry.mjs',
   'development-targets.mjs',
   'playback-plan.mjs',
@@ -139,7 +149,7 @@ const identity = {
     fs.readFileSync(path.join(root, 'plugins/rdk-robot-learning-platform/plugin.json'), 'utf8'),
   ).version,
   description:
-    '一句话开始 Workshop：下一步按钮、跨软件接续、交互曲线、对比与回放；保留自定义参数及高级工具。',
+    '机器人学习平台插件。引导选择任务和算力，提交训练，查看曲线、评测和回放，并支持从原 Run 改参开新一轮。',
 };
 fs.writeFileSync(path.join(out, 'plugin.json'), JSON.stringify(identity, null, 2));
 for (const directory of ['.rdstudio-plugin', '.codex-plugin', '.qoder-plugin']) {
@@ -170,7 +180,8 @@ fs.writeFileSync(
       schemaVersion: 1,
       ...identity,
       composition: 'retained-core-with-host-neutral-workflow-extension',
-      coreBundleSha256: sha(bundle),
+      coreBundleSha256: bundleSha,
+      coreBundleSource: matchesUpstream ? 'upstream' : 'repository',
       coreVersion: coreProvenance.version,
       wrapperSources: sources,
       uiBuild: uiBuild.provenance,

@@ -7,6 +7,7 @@ import json
 import hashlib
 import math
 import importlib.metadata
+import multiprocessing
 import platform
 import time
 from pathlib import Path
@@ -30,6 +31,16 @@ def _json_default(value):
         return value.item()
     raise TypeError(f"Object of type {type(value).__name__} is not JSON serializable")
 from dance_env import ConfigurableChoreography
+
+
+def resolve_training_device(requested: str) -> str:
+    if requested not in {"cpu", "cuda", "mps"}:
+        raise ValueError("RDK_ORIGINMAN_DANCE_DEVICE must be cpu, cuda, or mps")
+    if requested == "cuda" and not torch.cuda.is_available():
+        raise ValueError("CUDA was requested but is unavailable in this Worker")
+    if requested == "mps" and not torch.backends.mps.is_available():
+        raise ValueError("Apple MPS was requested but is unavailable in this Worker")
+    return requested
 
 
 class WorkerProgress(BaseCallback):
@@ -161,7 +172,8 @@ def evaluate(env, actor, bpm, *, trace=False):
 
 
 def train(*, bundle: Path, output: Path, dance_config: dict, num_envs: int,
-          environment_class=ConfigurableChoreography):
+          environment_class=ConfigurableChoreography, device: str = "cpu"):
+    device = resolve_training_device(device)
     dance = environment_class(bundle, dance_config, training=False)
     contract = {
         "observationSize": int(dance.observation_space.shape[0]),
@@ -178,31 +190,29 @@ def train(*, bundle: Path, output: Path, dance_config: dict, num_envs: int,
         (lambda rank=rank: environment_class(bundle, dance_config, training=True))
         for rank in range(num_envs)
     ]
-    vector = SubprocVecEnv(env_fns, start_method="fork") if num_envs > 1 else None
+    start_method = multiprocessing.get_start_method() if device == "cpu" else "spawn"
+    vector = SubprocVecEnv(env_fns, start_method=start_method) if num_envs > 1 else None
     train_env = vector or env_fns[0]()
     started = time.monotonic()
     total_timesteps = dance_config["trainingSteps"]
     rollout_size = num_envs * 256
     callback = WorkerProgress(total_timesteps, rollout_size)
-    model = PPO(
-        "MlpPolicy",
-        train_env,
-        # MLP PPO on a 78->18 policy is kernel-launch bound on CUDA; SB3 warns
-        # GPU is a net loss here. CPU is faster and removes CUDA init as a
-        # failure source (health reports cuda:null cannot verify the device).
-        device="cpu",
-        seed=dance_config["seed"],
-        n_steps=256,
-        batch_size=128,
-        n_epochs=4,
-        learning_rate=3e-4,
-        gamma=0.99,
-        gae_lambda=0.95,
-        ent_coef=0.001,
-        policy_kwargs={"net_arch": [160, 160], "log_std_init": -1.1},
-        verbose=0,
-    )
     try:
+        model = PPO(
+            "MlpPolicy",
+            train_env,
+            device=device,
+            seed=dance_config["seed"],
+            n_steps=256,
+            batch_size=128,
+            n_epochs=4,
+            learning_rate=3e-4,
+            gamma=0.99,
+            gae_lambda=0.95,
+            ent_coef=0.001,
+            policy_kwargs={"net_arch": [160, 160], "log_std_init": -1.1},
+            verbose=0,
+        )
         model.learn(total_timesteps=total_timesteps, callback=callback, progress_bar=False)
         model.save(output / "final")
         nominal_bpm = dance_config["bpm"]
@@ -251,7 +261,7 @@ def train(*, bundle: Path, output: Path, dance_config: dict, num_envs: int,
             "trainingDeviceName": (
                 torch.cuda.get_device_name(model.device)
                 if model.device.type == "cuda"
-                else "cpu"
+                else model.device.type
             ),
             "runtimeVersions": {
                 "python": platform.python_version(),

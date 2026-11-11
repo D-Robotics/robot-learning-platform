@@ -3,6 +3,7 @@
 import { readFileSync } from 'node:fs';
 import { createHash, randomUUID } from 'node:crypto';
 import { createInterface } from 'node:readline';
+import { isDeepStrictEqual } from 'node:util';
 import {
   connectMcp,
   prepareExperience,
@@ -157,7 +158,22 @@ function attachRunVisualization(payload, runId, baseUrl) {
       cancelled: '已取消',
     }[rawStatus] ?? '已提交';
   const failureDetail = status === '失败' ? runFailureDetail(payload) : null;
-  let studentReply = payload.studentReply || `本轮训练${status}（Run ${runId}）。`;
+  const metrics = payload.run?.metrics ?? payload.metrics;
+  const dance = metrics?.originmanDance;
+  let studentReply = payload.studentReply || `本轮训练${status}。`;
+  if (metrics?.trainingDevice) studentReply += `实际训练设备：${metrics.trainingDevice}。`;
+  if (rawStatus === 'completed' && dance) {
+    const passed = dance.qualityGatePassed;
+    studentReply +=
+      passed === true
+        ? '本轮仿真风格达标。'
+        : passed === false
+          ? '本轮仿真风格未达标。'
+          : '本轮风格质量待核对。';
+    studentReply += payload.links?.danceVideo
+      ? '打开本轮详情即可查看仿真回放。'
+      : '本轮暂无可播放的视频，可以先看曲线和分段结果。';
+  }
   if (failureDetail)
     studentReply += `\n失败原因${failureDetail.code ? `（${failureDetail.code}）` : ''}：${failureDetail.cause}`;
   const { failureDetail: _stale, ...rest } = payload;
@@ -329,24 +345,28 @@ export const EXPERIENCE_TOOLS = [
 ];
 
 export function withDancePreview(payload, audience) {
-  const video = payload?.metrics?.originmanDance?.video;
+  const run = payload?.run ?? payload;
+  const runId = run?.id ?? run?.runId ?? payload?.runId;
+  const video = run?.metrics?.originmanDance?.video;
   const { danceVideo: _unverifiedDanceVideo, ...otherLinks } = payload?.links ?? {};
   const withoutUnverifiedDanceVideo = payload?.links
     ? { ...payload, links: otherLinks }
     : { ...payload };
   if (
-    payload?.status !== 'completed' ||
-    payload.mock !== false ||
-    typeof payload.runId !== 'string' ||
+    run?.status !== 'completed' ||
+    run.mock !== false ||
+    typeof runId !== 'string' ||
     !video ||
     video.file !== 'dance-replay.mp4' ||
     !/^[a-f0-9]{64}$/.test(video.sha256 || '') ||
-    video.policySha256 !== payload.artifact?.sha256 ||
-    video.sourceReplaySha256 !== payload.metrics.originmanDance.replay?.sha256
+    !/^[a-f0-9]{64}$/.test(video.policySha256 || '') ||
+    !/^[a-f0-9]{64}$/.test(video.sourceReplaySha256 || '') ||
+    video.policySha256 !== run.artifact?.sha256 ||
+    video.sourceReplaySha256 !== run.metrics.originmanDance.replay?.sha256
   )
     return withoutUnverifiedDanceVideo;
   const candidate = payload.links?.danceVideo ?? video.url;
-  const verifiedUrl = sameOriginDanceVideoUrl(audience, candidate, payload.runId);
+  const verifiedUrl = sameOriginDanceVideoUrl(audience, candidate, runId);
   if (!verifiedUrl) return withoutUnverifiedDanceVideo;
   return {
     ...withoutUnverifiedDanceVideo,
@@ -366,6 +386,23 @@ export function experienceProxy(
   } = {},
 ) {
   let workflow = null;
+  const confirmedDancePlans = new Map();
+  const baseUrl = authentication?.audience ?? env.RDK_SIM2REAL_MCP_BASE_URL;
+  const readRun = async (runId, signal) => {
+    const value = readToolResult(
+      await upstream.request(
+        'tools/call',
+        {
+          name: 'rdk_training_status',
+          arguments: { runId },
+        },
+        { signal },
+      ),
+    );
+    if ((value.run?.id ?? value.run?.runId ?? value.runId) !== runId)
+      throw Error('平台未确认这条 Run。请重新打开原运行链接确认账号与记录。');
+    return value;
+  };
   let uiEnabled = false,
     upstreamResources = false;
   let host = {
@@ -428,9 +465,11 @@ export function experienceProxy(
     const names = page.tools.map((tool) => tool.name);
     if (new Set(names).size !== names.length)
       throw new Error('Duplicate names in upstream tool catalog.');
-    if (names.some((name) => reservedNames.has(name)))
+    if (names.some((name) => reservedNames.has(name) && name !== LEARNING_GUIDE_TOOL.name))
       throw new Error('Upstream tool name collides with a reserved experience extension tool.');
-    return page;
+    // The bundled core also has a guide. The host always receives the richer
+    // wrapper contract, matching the handler that dispatches this tool.
+    return { ...page, tools: page.tools.filter((tool) => tool.name !== LEARNING_GUIDE_TOOL.name) };
   };
   const readCatalog = async (signal) => {
     const tools = [];
@@ -522,7 +561,7 @@ export function experienceProxy(
         instructions:
           (result.instructions ?? '').replace(/[（(]Duck Lab[）)]/gi, '') +
           '\n面向用户统一称为 RDK Robot Learning Platform（RDK 机器人学习平台）。介绍能力时先给课程、训练、评测与回放入口；仅在用户追问时展开底层服务、协议与部署细节。' +
-          '\n新手引导优先：泛称“带我做强化学习”先用rdk_learning_guide选任务；舞蹈逐轮传入用户已经确定的选项，首次有真机目标就传target=hardware。每轮只展示当前studentReply并等待；到compute阶段先只读列出支持舞蹈引擎的算力，让用户按名称选择。ready才取新contextId并提交一次，随后打开原Run并读质量与回放。未通过时先展示失败点，再问是否另开正式训练；已达标且目标是真机时，下一轮只确认目标机器人，再逐项核对真实制品和板端条件，使用只读部署预检与零致动验证；只有实际证据和用户明确动作授权齐备才进入实体阶段。用户明确要求直接执行且已给齐必要条件时沿用明确选择；改了配方、算力或预算后重新确认。' +
+          '\n新手先用 rdk_learning_guide。重新开始传 intent:new 和已明确的任务；看效果传 intent:results 和原 Run；改参传 intent:retry、原 Run 与 changes，展示差异并等确认。舞蹈多段传 dance，本机算力用 rdk_development_targets 的 list-compute。引导返回 ready 时原样使用 nextArguments，提交后展示本轮平台链接，回放和质量以 Run 实测为准。舞蹈工具只运行仿真。' +
           '\n已明确选择受扰恢复Workshop时：直接调用rdk_workshop，不加载指南、不预先询问预算。普通入口立即展示studentReply里的链接供学员点击，不调用浏览器工具等待导航；明确要求替我打开时再导航。工具间不输出旁白或内部推理。页面负责阶段进度与预算授权。' +
           '\n课堂新学员或新机离线准备：rdk_classroom_guide携带已知answers，只展示studentReply，每次一个中文问题，不重复问已知项。要求依据才detail=full。阶段标准读robot_onboarding_guide，证据读robot_acceptance_assess；needs-input不是通过。离线知识不要求平台登录，不因离线准备启动训练。' +
           '\n默认离线可了解课程，不主动授权、测试算力或连接板卡。需要账号才能继续时，提示“连接学习平台”，等用户明确要求连接才调用rdk_auth_login，浏览器确认后用rdk_auth_status。只在宿主已显式配置绑定账号时复用该身份，不索取密码或Cookie。' +
@@ -639,7 +678,8 @@ export function experienceProxy(
           workflow.stopped) ||
         params.name === 'rdk_training_submit' ||
         (params.name === 'rdk_originman_dance_train' &&
-          (workflow.stopped || params.arguments?.contextId !== workflow.contextId)) ||
+          (workflow.stopped || params.arguments?.contextId !== workflow.contextId) &&
+          !confirmedDancePlans.has(params.arguments?.contextId)) ||
         (workflow.stopped && params.name === 'rdk_model_register'))
     )
       return stoppedResult();
@@ -673,6 +713,7 @@ export function experienceProxy(
         } else if (params.name === DEVELOPMENT_TARGET_TOOL.name) {
           payload = await developmentTargets(params.arguments ?? {}, {
             authentication,
+            baseUrl,
             request:
               upstream.developmentTarget &&
               ((operation, options) =>
@@ -701,11 +742,75 @@ export function experienceProxy(
           payload = courseBrief(params.arguments ?? {});
         else if (params.name === 'rdk_originman_training_choice')
           payload = trainingChoice(params.arguments ?? {});
-        else if (params.name === LEARNING_GUIDE_TOOL.name)
-          payload = learningGuide(params.arguments ?? {});
-        else if (params.name === ORIGINMAN_DANCE_DRAFT_TOOL.name)
+        else if (params.name === LEARNING_GUIDE_TOOL.name) {
+          const args = params.arguments ?? {};
+          const runId = args.runId ?? (workflow?.phase === 'dance' ? workflow.runId : undefined);
+          if (['results', 'retry'].includes(args.intent) && !runId) {
+            payload = {
+              stage: 'choose-run',
+              studentReply: '请打开原运行链接，或告诉我具体是哪一轮，我会从那条 Run 继续。',
+            };
+          } else if (['results', 'retry'].includes(args.intent)) {
+            if (typeof runId !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9_.-]{0,119}$/.test(runId))
+              throw Error('请提供有效的原 Run 标识。');
+            const value =
+              args.intent === 'retry' && upstream.readTrainingRun
+                ? { run: await upstream.readTrainingRun(runId, { signal }) }
+                : await readRun(runId, signal);
+            const run = value.run ?? value;
+            const previousLink = runVisualizationLink(baseUrl, runId);
+            if (args.intent === 'results') {
+              payload = attachRunVisualization(
+                withDancePreview(observe(value, runId), baseUrl),
+                runId,
+                baseUrl,
+              );
+            } else if (
+              !['completed', 'failed', 'blocked', 'cancelled', 'canceled'].includes(run.status)
+            ) {
+              payload = attachRunVisualization(
+                {
+                  ...value,
+                  stage: 'wait-original',
+                  studentReply: '原 Run 还在运行。先查看本轮进度，结束后再用新参数开一轮。',
+                },
+                runId,
+                baseUrl,
+              );
+            } else {
+              const previous = {
+                dance:
+                  run.training?.originmanDance ??
+                  run.originmanDance ??
+                  run.metrics?.danceConfig ??
+                  run.metrics?.originmanDance?.config,
+                computeResourceId: run.computeResourceId,
+                numEnvs: run.training?.numEnvs ?? run.numEnvs,
+                modelId: run.modelId,
+              };
+              payload = learningGuide({ ...args, runId }, { previous });
+              if (previousLink) payload.studentReply += `\n[查看原 Run](${previousLink})`;
+            }
+          } else {
+            payload = learningGuide(args, { operationId });
+            if (payload.platformView && baseUrl) {
+              const url = new URL(baseUrl.replace(/\/+$/, '') + '/');
+              url.hash = payload.platformView;
+              payload.links = { workbench: url.href };
+              payload.studentReply += `\n[打开训练工作台](${url.href})`;
+            }
+          }
+          if (payload.stage === 'ready' && payload.nextArguments?.contextId) {
+            confirmedDancePlans.set(payload.nextArguments.contextId, payload.nextArguments);
+            if (confirmedDancePlans.size > 32)
+              confirmedDancePlans.delete(confirmedDancePlans.keys().next().value);
+          }
+        } else if (params.name === ORIGINMAN_DANCE_DRAFT_TOOL.name)
           payload = originmanDanceDraft(params.arguments ?? {});
         else if (DANCE_TRAINING_TOOLS.some((tool) => tool.name === params.name)) {
+          const plan = confirmedDancePlans.get(params.arguments?.contextId);
+          if (plan && !isDeepStrictEqual(params.arguments, plan))
+            throw Error('配方已变更，请重新预览并确认本轮参数。');
           const catalog = await readCatalog(signal);
           const call = async (name, args) =>
             readToolResult(
@@ -1019,6 +1124,11 @@ export function experienceProxy(
               runId,
               authentication?.audience ?? env.RDK_SIM2REAL_MCP_BASE_URL,
             );
+            const previous = runVisualizationLink(baseUrl, params.arguments.previousRunId);
+            if (previous && params.arguments.previousRunId !== runId) {
+              payload.links = { ...payload.links, previousRun: previous };
+              payload.studentReply = (payload.studentReply ?? '') + `\n[对照原 Run](${previous})`;
+            }
           }
         } else if (
           SHORT_TRAINING_TOOLS.some((tool) => tool.name === params.name) ||
@@ -1033,15 +1143,14 @@ export function experienceProxy(
             );
         }
         if (params.name === 'rdk_training_wait') payload = observe(payload, params.arguments.runId);
-        if (params.name === 'rdk_training_wait')
-          payload = withDancePreview(payload, authentication?.audience);
+        if (params.name === 'rdk_training_wait') payload = withDancePreview(payload, baseUrl);
         if (params.name === 'rdk_training_wait')
           payload = attachRunVisualization(
             payload,
             params.arguments.runId,
             authentication?.audience ?? env.RDK_SIM2REAL_MCP_BASE_URL,
           );
-        if (workflow?.stopped && params.name !== 'rdk_workshop')
+        if (workflow?.stopped && !['rdk_workshop', LEARNING_GUIDE_TOOL.name].includes(params.name))
           payload = {
             ...payload,
             stopWorkflow: true,
@@ -1148,7 +1257,7 @@ export function experienceProxy(
     if (method === 'tools/call' && params.name === 'rdk_training_status' && !response.isError) {
       let value = withDancePreview(
         observe(readToolResult(response), params.arguments.runId),
-        authentication?.audience,
+        baseUrl,
       );
       value = attachRunVisualization(
         value,

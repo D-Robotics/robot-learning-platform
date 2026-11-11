@@ -36,6 +36,33 @@ actual worker input. `sourceSceneSha256` remains separate lineage metadata and
 is reported independently, so an adapted scene is never misreported as the
 original source scene.
 
+## Run on your own computer
+
+Start the local training Worker and the standalone platform on the same
+computer. In the Worker environment, register the engine and choose a device:
+
+```sh
+export RDK_SIM2REAL_TRAIN_ENGINES_JSON='{"originman-dance-ppo":{"executable":"/absolute/venv/bin/python","args":["/absolute/repo/engines/originman-dance-ppo/adapter.py"]}}'
+export RDK_ORIGINMAN_DANCE_BUNDLE_DIR=/absolute/originman-bundle
+export RDK_ORIGINMAN_DANCE_DEVICE=cpu
+export RDK_SIM2REAL_LOCAL_RUNNER_TOKEN='<your local worker token>'
+node services/sim2real-web/local-training-worker.mjs
+```
+
+Set `RDK_SIM2REAL_LOCAL_RUNNER_URL=http://127.0.0.1:19091/train` and the same
+token in the standalone platform environment. Use the OriginMan dance model
+contract and the `originman-dance-ppo` engine. To select this Worker through
+the dance plugin, register its `/train` URL as a server Runner and test the
+connection. A hosted platform needs a connection from its server to the
+Worker. The dance plugin currently excludes browser-only relay resources.
+
+`cpu` is the default. Use `cuda` with an NVIDIA GPU and a CUDA-enabled
+PyTorch build, or `mps` with Apple Silicon and an MPS-enabled PyTorch build.
+An explicitly requested accelerator must be available or the run fails.
+The run records the actual PPO device as `metrics.trainingDevice`; MuJoCo
+physics still runs on the CPU. CPU is a good starting point for this small
+policy, where using a GPU can take longer.
+
 The scene XML SHA-256 must exactly match the manifest's `sceneSha256`, which
 is the digest of the actual mounted scene. `sourceSceneSha256` is a separate
 lineage digest for the source asset and can differ when the scene has been
