@@ -183,6 +183,34 @@ try {
   assert.equal(healthBody.maxConcurrentJobs, 1);
   assert.equal(healthBody.activeJobs, 0);
 
+  const brokenExecutable = path.join(fixtureDir, 'broken-python');
+  await symlink(path.join(fixtureDir, 'missing-python'), brokenExecutable);
+  process.env.RDK_SIM2REAL_TRAIN_EXECUTABLE = brokenExecutable;
+  try {
+    const unhealthy = await fetch(`${base}/healthz`);
+    assert.equal(unhealthy.status, 503);
+    const body = await unhealthy.json();
+    assert.equal(body.error, 'engine_executable_unavailable');
+    assert.deepEqual(body.engines, []);
+    const rejected = await fetch(`${base}/train`, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        'x-sim2real-account': 'alice',
+        authorization: 'Bearer worker-test-token',
+      },
+      body: JSON.stringify(request),
+    });
+    assert.equal(rejected.status, 503);
+    assert.equal((await rejected.json()).error, 'engine_executable_unavailable');
+    assert.equal(
+      (await readdir(fixtureDir)).some((name) => name.startsWith('local-')),
+      false,
+    );
+  } finally {
+    process.env.RDK_SIM2REAL_TRAIN_EXECUTABLE = process.execPath;
+  }
+
   // A production process must reject both a missing and a weak token even on
   // loopback. The development fixture token remains accepted by the local
   // loopback server after the environment is restored below.

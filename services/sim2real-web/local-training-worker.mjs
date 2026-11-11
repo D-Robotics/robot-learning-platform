@@ -16,7 +16,7 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { createServer } from 'node:http';
 import { mkdir, open, readdir, readFile, stat, writeFile } from 'node:fs/promises';
-import { createReadStream, realpathSync } from 'node:fs';
+import { accessSync, constants, createReadStream, realpathSync, statSync } from 'node:fs';
 import { spawn } from 'node:child_process';
 import path from 'node:path';
 import process from 'node:process';
@@ -538,6 +538,15 @@ function workerEngines() {
   return entries;
 }
 
+function engineExecutableReady(executable) {
+  try {
+    accessSync(executable, constants.X_OK);
+    return statSync(executable).isFile();
+  } catch {
+    return false;
+  }
+}
+
 const ENGINE_ID_RE = /^[a-z][a-z0-9-]{1,31}$/;
 
 function engineFor(request) {
@@ -924,7 +933,10 @@ async function launch(job, config) {
     7 * 86_400_000,
   );
   job.timeout = setTimeout(() => child.kill('SIGTERM'), timeoutMs);
-  child.once('error', (error) => finish(job, 1, stdout, `${stderr}\n${error.message}`));
+  child.once('error', (error) => {
+    feedLogStream(job, 'stderr', error.message + '\n');
+    return finish(job, 1, stdout, `${stderr}\n${error.message}`);
+  });
   child.once('exit', (code, signal) =>
     finish(job, code ?? 1, stdout, `${stderr}${signal ? `\nterminated:${signal}` : ''}`),
   );
@@ -1098,7 +1110,7 @@ async function handleTrain(request, response) {
   const normalized = validate(source);
   // Fail an unregistered engine at submit time (400) so the caller can retry
   // with a valid one; the launch-time check stays as the durable backstop.
-  engineFor(source);
+  const engine = engineFor(source);
   const owner = accountId(request, source);
   const key = requestKey(request, source);
   const fingerprint = requestFingerprint(source, owner);
@@ -1114,6 +1126,8 @@ async function handleTrain(request, response) {
       return;
     }
   }
+  if (!engine || !engineExecutableReady(engine.executable))
+    throw fail('所选训练引擎的解释器或可执行文件不可用。', 503, 'engine_executable_unavailable');
   if (jobs.size >= MAX_JOBS)
     throw fail('worker job retention limit reached', 429, 'worker_queue_full');
   const runId = `local-${normalized.modelId.replace(/[^a-zA-Z0-9._-]/g, '-').slice(0, 48)}-${randomUUID()}`;
@@ -1485,7 +1499,10 @@ export function createLocalTrainingWorkerServer() {
         try {
           const engines = workerEngines();
           configured = engines.size > 0;
-          engineIds = [...engines.keys()].sort();
+          engineIds = [...engines.values()]
+            .filter((engine) => engineExecutableReady(engine.executable))
+            .map((engine) => engine.id)
+            .sort();
           maxConcurrentJobs();
         } catch (error) {
           json(response, 503, {
@@ -1504,8 +1521,9 @@ export function createLocalTrainingWorkerServer() {
         const tokenConfigured = Boolean(tokenValue);
         const tokenUsable = runnerTokenUsable(tokenValue);
         const authReady = !runnerTokenRequired() || tokenUsable;
-        json(response, configured && authReady ? 200 : 503, {
-          ok: configured && authReady,
+        const ready = engineIds.length > 0 && authReady;
+        json(response, ready ? 200 : 503, {
+          ok: ready,
           worker: 'sim2real-local',
           mode: 'external-engine',
           configured,
@@ -1513,7 +1531,11 @@ export function createLocalTrainingWorkerServer() {
           mock: false,
           authConfigured: tokenConfigured,
           authTokenUsable: tokenUsable,
-          ...(authReady ? {} : { error: 'worker_auth_not_configured' }),
+          ...(!authReady
+            ? { error: 'worker_auth_not_configured' }
+            : configured && !engineIds.length
+              ? { error: 'engine_executable_unavailable' }
+              : {}),
           maxConcurrentJobs: maxConcurrentJobs(),
           activeJobs: activeJobs.size,
           queuedJobs: queuedJobs.length,
