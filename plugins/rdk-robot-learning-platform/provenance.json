@@ -25,7 +25,7 @@
     "scripts/authenticated-core.mjs": "d6cab82f0a52f669a2f852745789c973eeef947810f878c1300eeced05f58403",
     "scripts/plugin-errors.mjs": "e9838bb69684dece6ecbdedbf4acc7354695c998f26a9e8291886c26cc8e06f0",
     "scripts/course-setup.mjs": "5b3606ed3d38c930213260a0103a3fd76db680af435fb96f735f3bee32014fb9",
-    "scripts/originman-dance-config.mjs": "85acddec36d7a158d25a75cf64af0f8d9a82f37c4531fc15c208176a77c9b7b3",
+    "scripts/originman-dance-config.mjs": "73cd4367e772e1fb331d2faa529c400f3953bad6d80b9852adfb4b304edf76a4",
     "scripts/dance-training.mjs": "4b3b75b85828c45ec3e297b94de2107d75750a1aea2a18c78938c36fba96b551",
     "scripts/submission-journal.mjs": "53fbf9519a6f0f402757baeb1b57d6d9d9aae29c839b747a8fe10ac738b45502",
     "scripts/install-host.mjs": "b21e5abe8ff469aaa5db04835dce21aac94f75ded7b2ee6aece2fae0b80bcf79",
