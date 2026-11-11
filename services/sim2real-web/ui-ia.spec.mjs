@@ -14,6 +14,15 @@ const agentChat = fs.readFileSync(path.join(here, 'public', 'agent-chat.js'), 'u
 // assertions below now point at the merged files.
 const cssApp = fs.readFileSync(path.join(here, 'public', 'app.css'), 'utf8');
 const cssIa = cssApp;
+const runProgressTrackRule = cssApp.match(
+  /body #train-module-run-model \.run-progress-track\s*\{([^}]+)\}/,
+)?.[1];
+assert.ok(runProgressTrackRule, 'training run progress track keeps its dedicated style rule');
+assert.match(
+  runProgressTrackRule,
+  /\bheight:\s*22px\s*;/,
+  'training progress text has enough track height to remain legible',
+);
 const experimentPage = fs.readFileSync(path.join(here, 'public/experiment.html'), 'utf8');
 assert.match(experimentPage, /id="experiment-main"/);
 assert.match(experimentPage, /id="experiment-video"[^>]*controls/);
