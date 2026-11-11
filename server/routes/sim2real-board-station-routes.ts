@@ -1527,6 +1527,8 @@ export function registerSim2RealBoardStationRoutes(
       // Evidence-not-threshold, same as the canary gate: completed, real,
       // non-mock runner, deployable ONNX artifact with a recorded digest.
       const errors: string[] = [];
+      if (run.taskId === 'originman-dance' || run.training?.engine === 'originman-dance-ppo')
+        errors.push('OriginMan 舞蹈策略仅具备仿真资格');
       if (run.status !== 'completed') errors.push('运行未完成');
       if (run.mock === true) errors.push('mock 运行不能下发制品');
       if (run.backend !== 'local' && run.backend !== 'robogo') errors.push('非真实训练后端');

@@ -46,7 +46,7 @@ export function mergeStudioConnection(current, connection, { connectionName } = 
 }
 export function installStudioConnection(
   connection,
-  { directory = studioDataDirectory(), connectionName } = {},
+  { directory = studioDataDirectory(), connectionName, pluginRoot } = {},
 ) {
   if (!fs.existsSync(directory))
     return {
@@ -56,6 +56,27 @@ export function installStudioConnection(
     };
   if (fs.lstatSync(directory).isSymbolicLink() || !fs.statSync(directory).isDirectory())
     throw Error('Studio数据目录必须是明确的常规目录。');
+  const registry = path.join(directory, 'plugins-registry.json');
+  if (pluginRoot && fs.existsSync(registry)) {
+    const stat = fs.lstatSync(registry);
+    if (stat.isSymbolicLink() || !stat.isFile() || stat.size > 2 * 1024 * 1024)
+      throw Error('Studio 插件登记文件不可安全读取。');
+    const record = JSON.parse(fs.readFileSync(registry, 'utf8')).plugins?.[
+      'rdk-robot-learning-platform@user'
+    ];
+    if (
+      record?.enabled === true &&
+      typeof record.installPath === 'string' &&
+      fs.existsSync(record.installPath) &&
+      fs.realpathSync(record.installPath) !== fs.realpathSync(pluginRoot)
+    )
+      return {
+        installed: false,
+        needsHostImport: true,
+        reason:
+          'Studio 已启用从插件中心导入的旧副本。请在插件中心更新这条插件，随后新建对话核对实际加载版本。',
+      };
+  }
   const target = path.join(directory, 'mcp.json');
   let existing = null,
     current = { mcpServers: {} };

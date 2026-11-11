@@ -6,8 +6,9 @@ import os
 from pathlib import Path
 import shutil
 import subprocess
+import sys
 
-os.environ.setdefault('MUJOCO_GL', 'egl')
+os.environ.setdefault('MUJOCO_GL', 'glfw' if sys.platform == 'darwin' else 'egl')
 import mujoco
 import numpy as np
 

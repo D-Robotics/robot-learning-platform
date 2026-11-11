@@ -4,7 +4,7 @@ export type ModelArtifactKind = 'source' | 'compiled';
 export type ModelArtifactRuntime = 'cpu-onnx' | 'bpu';
 
 export type ModelArtifactWorkload =
-  'locomotion' | 'perception' | 'navigation' | 'speech' | 'multimodal';
+  'locomotion' | 'perception' | 'navigation' | 'speech' | 'multimodal' | 'humanoid-dance';
 
 export type ModelArtifactFormat = 'pytorch' | 'onnx' | 'bin' | 'hbm' | 'gguf' | 'unknown';
 

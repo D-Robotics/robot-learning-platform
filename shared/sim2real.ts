@@ -7,6 +7,10 @@ import type {
   ModelCompatibilityResult,
 } from './model-artifacts.js';
 import type { RdkPlatform } from './board-types.js';
+import {
+  normalizeOriginmanDanceTraining,
+  type OriginmanDanceTraining,
+} from './originman-dance-training.js';
 import type {
   Sim2RealEvaluationSummary,
   Sim2RealRunArtifactMetadata,
@@ -100,7 +104,7 @@ export const SIM2REAL_CONTRACT_LIMITS = Object.freeze({
 });
 
 /** Product lines share a workflow, not a policy contract. */
-export type Sim2RealRobotId = 'microduck' | 'rdk-duck' | 'originbot' | 'custom';
+export type Sim2RealRobotId = 'microduck' | 'rdk-duck' | 'originbot' | 'originman' | 'custom';
 
 export type Sim2RealProductContractMode = 'fixed' | 'manifest-defined';
 
@@ -133,6 +137,14 @@ export const SIM2REAL_PRODUCT_PROFILES: Readonly<Record<Sim2RealRobotId, Sim2Rea
       contractIdPrefix: 'originbot-policy-',
       targetPlatforms: ['rdk-x5'],
       accessories: ['imu', 'odom', 'battery', 'camera'],
+    },
+    originman: {
+      id: 'originman',
+      displayName: 'OriginMan',
+      contractMode: 'manifest-defined',
+      contractIdPrefix: 'custom-policy-originman-',
+      targetPlatforms: [],
+      accessories: ['imu'],
     },
     'rdk-duck': {
       id: 'rdk-duck',
@@ -228,7 +240,8 @@ export type Sim2RealTrainingEngine =
   | 'act'
   | 'diffusion-policy'
   | 'smolvla'
-  | 'isaac-lab';
+  | 'isaac-lab'
+  | 'originman-dance-ppo';
 
 export interface Sim2RealTrainingSpec {
   profile: Sim2RealTrainingProfile;
@@ -246,6 +259,7 @@ export interface Sim2RealTrainingSpec {
   demonstrationSha256?: string;
   /** Explicit protocol smoke only; never a substitute for recorded data. */
   syntheticSmoke?: boolean;
+  originmanDance?: OriginmanDanceTraining;
 }
 
 /** Server-resolved, digest-pinned imitation input; never a client file path. */
@@ -750,6 +764,8 @@ export interface Sim2RealComputeResource {
   runnerUrl: string;
   tokenConfigured: boolean;
   status: 'online' | 'offline' | 'unknown';
+  engines?: string[];
+  mock?: boolean;
   gpuName?: string;
   cuda?: boolean;
   vramMb?: number;
@@ -848,6 +864,7 @@ const ALLOWED_WORKLOADS = new Set<ModelArtifactWorkload>([
   'navigation',
   'speech',
   'multimodal',
+  'humanoid-dance',
 ]);
 const ALLOWED_ROLES = new Set<Sim2RealArtifactRole>(['policy', 'compiled-policy', 'calibration']);
 const ALLOWED_BACKENDS = new Set<Sim2RealBackend>(['browser', 'robogo', 'local']);
@@ -856,6 +873,7 @@ const ALLOWED_ROBOT_IDS = new Set<Sim2RealRobotId>([
   'microduck',
   'rdk-duck',
   'originbot',
+  'originman',
   'custom',
 ]);
 const ALLOWED_TRAINING_PROFILES = new Set<Sim2RealTrainingProfile>([
@@ -876,6 +894,7 @@ const ALLOWED_TRAINING_ENGINES = new Set<Sim2RealTrainingEngine>([
   'diffusion-policy',
   'smolvla',
   'isaac-lab',
+  'originman-dance-ppo',
 ]);
 const SAFE_ID = /^[a-z][a-z0-9-]{1,63}$/;
 const SHA256 = /^[a-f0-9]{64}$/i;
@@ -1038,7 +1057,12 @@ export function normalizeTrainingSpec(value: unknown): {
     errors.push('training.profile must be smoke, low-vram, standard, or high-vram');
   }
   const defaults = trainingSpecForProfile(selected);
-  const numEnvs = source.numEnvs == null ? defaults.numEnvs : Number(source.numEnvs);
+  const numEnvs =
+    source.numEnvs == null
+      ? source.engine === 'originman-dance-ppo'
+        ? 8
+        : defaults.numEnvs
+      : Number(source.numEnvs);
   const maxIterations =
     source.maxIterations == null ? defaults.maxIterations : Number(source.maxIterations);
   const rawVideo = source.video == null ? defaults.video : source.video;
@@ -1058,9 +1082,7 @@ export function normalizeTrainingSpec(value: unknown): {
   // time instead of falling through to whichever engine the worker default.
   const engine = safeText(source.engine, 32);
   if (engine && !ALLOWED_TRAINING_ENGINES.has(engine as Sim2RealTrainingEngine)) {
-    errors.push(
-      'training.engine must be one of starter-ppo, mjx-ppo, visual-ppo, dm-control-ppo, mjlab-rsl-rl, microduck-rl, microduck-football, act, diffusion-policy, smolvla, isaac-lab',
-    );
+    errors.push('training.engine must be one of ' + [...ALLOWED_TRAINING_ENGINES].join(', '));
   }
   const demonstrationRunId = safeText(source.demonstrationRunId, 200);
   if (
@@ -1076,6 +1098,16 @@ export function normalizeTrainingSpec(value: unknown): {
     errors.push(
       'syntheticSmoke requires the smoke profile and cannot replace recorded demonstrations',
     );
+  const originmanDance =
+    source.originmanDance === undefined
+      ? null
+      : normalizeOriginmanDanceTraining(source.originmanDance);
+  if (source.originmanDance !== undefined && !originmanDance)
+    errors.push('training.originmanDance must match the bounded OriginMan dance schema');
+  if (originmanDance && (engine !== 'originman-dance-ppo' || algorithm !== 'ppo'))
+    errors.push('training.originmanDance requires engine originman-dance-ppo and algorithm ppo');
+  if (engine === 'originman-dance-ppo' && (!originmanDance || numEnvs > 16))
+    errors.push('originman-dance-ppo requires a dance recipe and 1–16 parallel environments');
   if (errors.length) return { errors };
   return {
     errors,
@@ -1089,6 +1121,7 @@ export function normalizeTrainingSpec(value: unknown): {
       ...(engine ? { engine: engine as Sim2RealTrainingEngine } : {}),
       ...(demonstrationRunId ? { demonstrationRunId } : {}),
       ...(source.syntheticSmoke === true ? { syntheticSmoke: true } : {}),
+      ...(originmanDance ? { originmanDance } : {}),
     },
   };
 }
@@ -1523,7 +1556,7 @@ export function validateSim2RealManifest(input: unknown): Sim2RealValidationResu
   const robotId = safeText(robot.id, 40);
   const variant = safeText(robot.variant, 16) as Sim2RealRobotVariant;
   if (!ALLOWED_ROBOT_IDS.has(robotId as Sim2RealRobotId)) {
-    errors.push('robot.id must be microduck, rdk-duck, or originbot');
+    errors.push('robot.id must be microduck, rdk-duck, originbot, originman, or custom');
   }
   if (robotId === 'microduck' && !ALLOWED_VARIANTS.has(variant)) {
     errors.push('robot.variant must be legs, rollers, or both for microduck');

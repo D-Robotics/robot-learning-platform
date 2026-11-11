@@ -551,7 +551,9 @@ describe('duck-lab-mcp protocol surface', () => {
           ? { type: 'array', items: { type: 'string' } }
           : helper === 'boolean'
             ? { type: 'boolean' }
-            : { type: 'string' };
+            : helper === 'object'
+              ? { type: 'object' }
+              : { type: 'string' };
     for (let index = 0; index < marks.length; index++) {
       const body = source.slice(
         marks[index].start,
@@ -566,6 +568,9 @@ describe('duck-lab-mcp protocol surface', () => {
       }
       for (const match of body.matchAll(/typeof (?:input|args)\.([a-zA-Z]+) === 'boolean'/g)) {
         if (!helpers.has(match[1])) helpers.set(match[1], 'boolean');
+      }
+      for (const match of body.matchAll(/typeof (?:input|args)\.([a-zA-Z]+) === 'object'/g)) {
+        if (!helpers.has(match[1])) helpers.set(match[1], 'object');
       }
       for (const match of body.matchAll(/(?:input|args)\.([a-zA-Z]+)(?![a-zA-Z])/g)) {
         if (!helpers.has(match[1])) helpers.set(match[1], 'unknown');

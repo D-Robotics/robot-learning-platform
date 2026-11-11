@@ -143,6 +143,53 @@ export async function connectAuthenticatedCore({
         throw Error('当前账号无法读取这条 Run，请核对原运行链接。');
       return value.run;
     },
+    async verifyLegacyDanceVideo(runId, receipt, { signal } = {}) {
+      if (
+        typeof runId !== 'string' ||
+        !/^[A-Za-z0-9][A-Za-z0-9_.-]{0,119}$/.test(runId) ||
+        !/^[a-f0-9]{64}$/.test(receipt?.sha256 ?? '') ||
+        !Number.isSafeInteger(receipt.sizeBytes) ||
+        receipt.sizeBytes < 1 ||
+        receipt.sizeBytes > 50 * 1024 * 1024
+      )
+        return null;
+      const route = '/api/v1/duck/runs/' + encodeURIComponent(runId) + '/dance-video';
+      try {
+        const response = await fetchPlatform(route, {
+          headers: { accept: 'video/mp4' },
+          signal: AbortSignal.any([AbortSignal.timeout(15_000), ...(signal ? [signal] : [])]),
+        });
+        if (
+          !response.ok ||
+          response.headers.get('content-type')?.split(';')[0] !== 'video/mp4' ||
+          !response.body ||
+          (response.headers.has('content-length') &&
+            Number(response.headers.get('content-length')) !== receipt.sizeBytes)
+        ) {
+          await response.body?.cancel().catch(() => {});
+          return null;
+        }
+        const reader = response.body.getReader();
+        const digest = createHash('sha256');
+        let size = 0;
+        for (;;) {
+          const { value, done } = await reader.read();
+          if (done) break;
+          size += value.byteLength;
+          if (size > receipt.sizeBytes) {
+            await reader.cancel();
+            return null;
+          }
+          digest.update(value);
+        }
+        return size === receipt.sizeBytes && digest.digest('hex') === receipt.sha256
+          ? '.' + route
+          : null;
+      } catch {
+        signal?.throwIfAborted();
+        return null;
+      }
+    },
     async workshopSession(operation, input = {}, { signal, accountId } = {}) {
       if (!['list', 'create', 'select', 'read'].includes(operation)) throw Error('课程操作无效。');
       if (

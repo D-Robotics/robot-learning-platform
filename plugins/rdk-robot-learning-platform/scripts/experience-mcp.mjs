@@ -86,7 +86,7 @@ function sameOriginDanceVideoUrl(baseUrl, candidate, runId) {
   if (typeof candidate !== 'string' || candidate.length > 2048) return null;
   try {
     const base = new URL(baseUrl);
-    const video = new URL(candidate, base);
+    const video = new URL(candidate, base.href.replace(/\/+$/, '') + '/');
     const expectedSuffix = `/api/v1/duck/runs/${encodeURIComponent(runId)}/dance-video`;
     if (
       !['http:', 'https:'].includes(video.protocol) ||
@@ -366,7 +366,7 @@ export function withDancePreview(payload, audience) {
     video.sourceReplaySha256 !== run.metrics.originmanDance.replay?.sha256
   )
     return withoutUnverifiedDanceVideo;
-  const candidate = payload.links?.danceVideo ?? video.url;
+  const candidate = payload.links?.danceVideo ?? run.links?.danceVideo ?? video.url;
   const verifiedUrl = sameOriginDanceVideoUrl(audience, candidate, runId);
   if (!verifiedUrl) return withoutUnverifiedDanceVideo;
   return {
@@ -389,6 +389,19 @@ export function experienceProxy(
   let workflow = null;
   const confirmedDancePlans = new Map();
   const baseUrl = authentication?.audience ?? env.RDK_SIM2REAL_MCP_BASE_URL;
+  const verifiedPreview = async (payload, runId, signal) => {
+    const value = withDancePreview(payload, baseUrl);
+    if (value.links?.danceVideo || !upstream.verifyLegacyDanceVideo) return value;
+    const candidate = './api/v1/duck/runs/' + encodeURIComponent(runId) + '/dance-video';
+    const expected = withDancePreview(
+      { ...payload, links: { ...payload.links, danceVideo: candidate } },
+      baseUrl,
+    );
+    if (!expected.links?.danceVideo) return value;
+    const receipt = (payload.run ?? payload).metrics.originmanDance.video;
+    const verified = await upstream.verifyLegacyDanceVideo(runId, receipt, { signal });
+    return verified === candidate ? expected : value;
+  };
   const readRun = async (runId, signal) => {
     const value = readToolResult(
       await upstream.request(
@@ -755,15 +768,14 @@ export function experienceProxy(
           } else if (['results', 'retry'].includes(args.intent)) {
             if (typeof runId !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9_.-]{0,119}$/.test(runId))
               throw Error('请提供有效的原 Run 标识。');
-            const value =
-              args.intent === 'retry' && upstream.readTrainingRun
-                ? { run: await upstream.readTrainingRun(runId, { signal }) }
-                : await readRun(runId, signal);
+            const value = upstream.readTrainingRun
+              ? { run: await upstream.readTrainingRun(runId, { signal }) }
+              : await readRun(runId, signal);
             const run = value.run ?? value;
             const previousLink = runVisualizationLink(baseUrl, runId);
             if (args.intent === 'results') {
               payload = attachRunVisualization(
-                withDancePreview(observe(value, runId), baseUrl),
+                await verifiedPreview(observe(value, runId), runId, signal),
                 runId,
                 baseUrl,
               );
@@ -1146,7 +1158,8 @@ export function experienceProxy(
             );
         }
         if (params.name === 'rdk_training_wait') payload = observe(payload, params.arguments.runId);
-        if (params.name === 'rdk_training_wait') payload = withDancePreview(payload, baseUrl);
+        if (params.name === 'rdk_training_wait')
+          payload = await verifiedPreview(payload, params.arguments.runId, signal);
         if (params.name === 'rdk_training_wait')
           payload = attachRunVisualization(
             payload,
@@ -1258,9 +1271,10 @@ export function experienceProxy(
         };
     }
     if (method === 'tools/call' && params.name === 'rdk_training_status' && !response.isError) {
-      let value = withDancePreview(
+      let value = await verifiedPreview(
         observe(readToolResult(response), params.arguments.runId),
-        baseUrl,
+        params.arguments.runId,
+        signal,
       );
       value = attachRunVisualization(
         value,

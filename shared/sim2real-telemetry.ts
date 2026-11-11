@@ -70,6 +70,23 @@ export interface Sim2RealRunMetrics {
   physicsBackend?: string;
   /** Engine id that produced the run (e.g. "mjx-ppo", "mjlab-rsl-rl"). */
   engine?: string;
+  trainingSteps?: number;
+  trainingDevice?: string;
+  originmanDance?: {
+    qualityGatePassed?: boolean;
+    evaluations: {
+      bpm: number;
+      sections: { type: string; passed?: boolean; measurements: Record<string, number> }[];
+    }[];
+    replay?: { sha256: string };
+    video?: {
+      file: 'dance-replay.mp4';
+      sha256: string;
+      sizeBytes: number;
+      policySha256: string;
+      sourceReplaySha256: string;
+    };
+  };
   /**
    * True only when the training backend actually ran on CUDA. A requested but
    * unavailable GPU falls back to CPU and must stay false; an absent value

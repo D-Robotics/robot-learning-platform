@@ -178,7 +178,7 @@ def write_onnx(checkpoint: Path, path: Path, observation_size: int):
 
 
 def write_manifest(directory: Path):
-    excluded = {"request.json", "result.json", "SHA256SUMS"}
+    excluded = {"request.json", "result.json", "job.json", "SHA256SUMS"}
     entries = []
     for path in sorted(directory.iterdir()):
         if path.name in excluded or not path.is_file() or path.is_symlink():

@@ -74,7 +74,7 @@ def write_artifact_manifest(job_dir, names=None):
     import hashlib
 
     directory = os.path.abspath(job_dir)
-    excluded = {"SHA256SUMS", "result.json", "request.json"}
+    excluded = {"SHA256SUMS", "result.json", "request.json", "job.json"}
     candidates = sorted(names) if names is not None else sorted(os.listdir(directory))
     lines = []
     for name in candidates:

@@ -860,3 +860,59 @@ test('compute guide gives an actionable link and excludes incompatible resources
   assert.equal(result.links.resources, 'https://platform.test/robotics-learning/#resources');
   assert.match(result.studentReply, /RTX 4090/);
 });
+
+test('legacy replay is linked only after verifying bytes for the exact Run', async () => {
+  const { experienceProxy } =
+    await import('../plugins/rdk-robot-learning-platform/scripts/experience-mcp.mjs');
+  const sha = 'a'.repeat(64);
+  const replay = 'b'.repeat(64);
+  const run = {
+    id: 'legacy-dance',
+    status: 'completed',
+    mock: false,
+    artifact: { sha256: sha },
+    metrics: {
+      originmanDance: {
+        replay: { sha256: replay },
+        video: {
+          file: 'dance-replay.mp4',
+          sha256: 'c'.repeat(64),
+          sizeBytes: 1024,
+          policySha256: sha,
+          sourceReplaySha256: replay,
+        },
+      },
+    },
+  };
+  let allow = false;
+  let checked = 0;
+  const route = './api/v1/duck/runs/legacy-dance/dance-video';
+  const dispatch = experienceProxy(
+    {
+      readTrainingRun: async () => run,
+      async verifyLegacyDanceVideo(runId, receipt) {
+        assert.equal(runId, run.id);
+        assert.equal(receipt, run.metrics.originmanDance.video);
+        checked++;
+        return allow ? route : null;
+      },
+    },
+    { env: { RDK_SIM2REAL_MCP_BASE_URL: 'https://platform.test/robotics-learning' } },
+  );
+  const guide = async () =>
+    (
+      await dispatch('tools/call', {
+        name: 'rdk_learning_guide',
+        arguments: { intent: 'results', runId: run.id },
+      })
+    ).structuredContent;
+  assert.equal((await guide()).links.danceVideo, undefined);
+  allow = true;
+  assert.equal(
+    (await guide()).links.danceVideo,
+    'https://platform.test/robotics-learning/api/v1/duck/runs/legacy-dance/dance-video',
+  );
+  run.artifact.sha256 = 'd'.repeat(64);
+  assert.equal((await guide()).links.danceVideo, undefined);
+  assert.equal(checked, 2);
+});

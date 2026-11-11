@@ -2442,6 +2442,8 @@ export async function updateSim2RealComputeResource(
       | 'runnerUrl'
       | 'status'
       | 'gpuName'
+      | 'engines'
+      | 'mock'
       | 'cuda'
       | 'vramMb'
       | 'maxConcurrentJobs'
@@ -2474,6 +2476,8 @@ export async function updateSim2RealComputeResource(
       updated.status = 'unknown';
       updated.message = '尚未重新测试。';
       delete updated.gpuName;
+      delete updated.engines;
+      delete updated.mock;
       delete updated.cuda;
       delete updated.vramMb;
       delete updated.lastCheckedAt;

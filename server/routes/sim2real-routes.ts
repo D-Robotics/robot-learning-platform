@@ -638,6 +638,8 @@ function studioConnectRequestBody(value: unknown): Record<string, unknown> | nul
 }
 
 interface ComputeHealthPayload {
+  engines?: string[];
+  mock?: boolean;
   cuda?: boolean;
   gpuName?: string;
   vramMb?: number;
@@ -669,7 +671,17 @@ function parseComputeHealthPayload(text: string): ComputeHealthPayload | null {
   if (source.maxConcurrentJobs != null && maxConcurrentJobs == null) return null;
   if (source.vramMb != null && vramMb == null) return null;
   const gpuName = safeComputeHealthText(source.gpuName, 160);
+  const engines = Array.isArray(source.engines)
+    ? source.engines
+        .filter(
+          (engine): engine is string =>
+            typeof engine === 'string' && /^[a-z][a-z0-9-]{1,31}$/.test(engine),
+        )
+        .slice(0, 64)
+    : undefined;
   return {
+    ...(engines ? { engines } : {}),
+    ...(typeof source.mock === 'boolean' ? { mock: source.mock } : {}),
     ...(typeof source.cuda === 'boolean' ? { cuda: source.cuda } : {}),
     ...(gpuName ? { gpuName } : {}),
     ...(vramMb == null ? {} : { vramMb }),
@@ -1019,6 +1031,7 @@ function availableContractsFor(models: readonly Sim2RealModelRecord[]): {
     microduck: [],
     'rdk-duck': [],
     originbot: [],
+    originman: [],
     custom: [],
   };
   const byKey = new Map<string, Sim2RealAvailableContract>();
@@ -1455,6 +1468,18 @@ function parseRunRequest(
       };
     }
     training = trainingResult.spec;
+    if (
+      (taskId === 'originman-dance' || training.originmanDance) &&
+      (taskId !== 'originman-dance' || !training.originmanDance || backend !== 'local')
+    ) {
+      return {
+        apiError: {
+          status: 400,
+          code: 'SIM2REAL_INVALID_TRAINING',
+          message: 'OriginMan 舞蹈只支持带舞蹈配置的本地训练 Worker。',
+        },
+      };
+    }
     // Task packs may recommend an engine (physics-dense tasks → MJX). The
     // recommendation only fills in a spec that chose none, so an explicit
     // user/agent submission always wins and the ledger keeps the default
@@ -1743,7 +1768,7 @@ async function dispatchRunBackend(input: {
                 : '排队') +
             '；不会在网页层直接驱动电机。',
         ...(launched.externalRunId ? { externalRunId: launched.externalRunId } : {}),
-        ...(launched.mock === true ? { mock: true } : {}),
+        ...(typeof launched.mock === 'boolean' ? { mock: launched.mock } : {}),
         ...(launched.launchUrl ? { launchUrl: launched.launchUrl } : {}),
         ...(launched.checkpoint ? { checkpoint: launched.checkpoint } : {}),
         ...(launched.artifact ? { artifact: launched.artifact } : {}),
@@ -1839,7 +1864,7 @@ async function dispatchRunBackend(input: {
                 : '排队') +
             '；训练进程由受控 worker 管理。',
         ...(launched.externalRunId ? { externalRunId: launched.externalRunId } : {}),
-        ...(launched.mock === true ? { mock: true } : {}),
+        ...(typeof launched.mock === 'boolean' ? { mock: launched.mock } : {}),
         ...(launched.launchUrl ? { launchUrl: launched.launchUrl } : {}),
         ...(launched.checkpoint ? { checkpoint: launched.checkpoint } : {}),
         ...(launched.artifact ? { artifact: launched.artifact } : {}),
@@ -2180,6 +2205,34 @@ async function autoAttachEvaluationTelemetry(
       redactInternalError(error),
     );
   }
+}
+
+function verifiedDanceVideoReceipt(run: Sim2RealRunRecord) {
+  const dance = run.metrics?.originmanDance;
+  const video = dance?.video;
+  if (
+    run.status !== 'completed' ||
+    run.mock !== false ||
+    run.taskId !== 'originman-dance' ||
+    run.backend !== 'local' ||
+    !run.externalRunId ||
+    run.relayAgentUrl ||
+    video?.file !== 'dance-replay.mp4' ||
+    !video.sha256 ||
+    !/^[a-f0-9]{64}$/.test(video.sha256) ||
+    !video.policySha256 ||
+    !/^[a-f0-9]{64}$/.test(video.policySha256) ||
+    !video.sourceReplaySha256 ||
+    !/^[a-f0-9]{64}$/.test(video.sourceReplaySha256) ||
+    video.policySha256 !== run.artifact?.sha256 ||
+    video.sourceReplaySha256 !== dance?.replay?.sha256 ||
+    typeof video.sizeBytes !== 'number' ||
+    !Number.isSafeInteger(video.sizeBytes) ||
+    video.sizeBytes < 1 ||
+    video.sizeBytes > 50 * 1024 * 1024
+  )
+    return null;
+  return { sha256: video.sha256, sizeBytes: video.sizeBytes, externalRunId: run.externalRunId };
 }
 
 export function createSim2RealRouter(
@@ -2958,6 +3011,8 @@ export function createSim2RealRouter(
                     ? 'Worker 返回无效健康响应。'
                     : `Worker 返回 HTTP ${result.status}。`,
                 lastCheckedAt: checkedAt,
+                engines: payload?.engines ?? [],
+                mock: payload?.mock,
                 ...(payload?.cuda == null ? {} : { cuda: payload.cuda }),
                 ...(payload?.gpuName ? { gpuName: payload.gpuName } : {}),
                 ...(payload?.vramMb == null ? {} : { vramMb: payload.vramMb }),
@@ -2989,6 +3044,7 @@ export function createSim2RealRouter(
         ok: true,
         computeResource: updated,
         connected: updated?.status === 'online',
+        ...(updated?.status === 'online' ? { engines: updated.engines, mock: updated.mock } : {}),
       });
     }),
   );
@@ -3328,7 +3384,11 @@ export function createSim2RealRouter(
               status: latest.status,
               ...(latest.message ? { summary: latest.message } : {}),
               ...(latest.failureDetail ? { failureDetail: latest.failureDetail } : {}),
-              ...(latest.mock ? { mock: true } : {}),
+              ...(run.mock === true || latest.mock === true
+                ? { mock: true }
+                : latest.mock === false
+                  ? { mock: false }
+                  : {}),
               ...(latest.checkpoint ? { checkpoint: latest.checkpoint } : {}),
               ...(latest.artifact ? { artifact: latest.artifact } : {}),
               ...(latest.metrics ? { metrics: latest.metrics } : {}),
@@ -3404,7 +3464,93 @@ export function createSim2RealRouter(
           }
         }
       }
-      response.json({ ok: true, run: current });
+      const video = verifiedDanceVideoReceipt(current);
+      response.json({
+        ok: true,
+        run: video
+          ? {
+              ...current,
+              links: {
+                danceVideo: `./api/v1/duck/runs/${encodeURIComponent(current.id)}/dance-video`,
+              },
+            }
+          : current,
+      });
+    }),
+  );
+
+  router.get(
+    api('/runs/:id/dance-video'),
+    wrapAsync(async (request, response) => {
+      const owner = requestOwner(request, response, auth);
+      if (owner === null) return;
+      noStore(response);
+      const run = await getSim2RealRun(String(request.params.id || ''), owner);
+      const video = run && verifiedDanceVideoReceipt(run);
+      if (!run || !video) {
+        sendApiError(
+          response,
+          404,
+          'SIM2REAL_DANCE_VIDEO_NOT_AVAILABLE',
+          '当前账号无法读取这条 Run 的仿真回放。',
+          { retryable: false },
+        );
+        return;
+      }
+      const resource = run.computeResourceId
+        ? await getSim2RealComputeResourceSecret(run.computeResourceId, owner)
+        : null;
+      if (run.computeResourceId && !resource) {
+        sendApiError(response, 409, 'SIM2REAL_DANCE_VIDEO_RUNNER_MISSING', '原训练资源不可用。', {
+          retryable: false,
+        });
+        return;
+      }
+      const accountId =
+        auth.resolvePrincipal(request)?.accountId ??
+        owner ??
+        (!auth.isMultiUserDeployment() ? 'local-dev' : '');
+      const fetched = accountId
+        ? await fetchLocalRunArtifact({
+            accountId,
+            externalRunId: video.externalRunId,
+            kind: 'dance-video',
+            ...(resource
+              ? {
+                  runnerUrl: resource.resource.runnerUrl,
+                  runnerToken: resource.runnerToken ?? '',
+                }
+              : {}),
+          })
+        : null;
+      if (!fetched || fetched.sha256 !== video.sha256 || fetched.bytes.length !== video.sizeBytes) {
+        sendApiError(
+          response,
+          502,
+          'SIM2REAL_DANCE_VIDEO_FETCH_FAILED',
+          '暂时无法取回与原 Run 摘要一致的回放。',
+          { retryable: true },
+        );
+        return;
+      }
+      response.setHeader('Accept-Ranges', 'bytes');
+      response.setHeader('Content-Type', 'video/mp4');
+      response.setHeader('X-Artifact-Sha256', video.sha256);
+      const range = request.headers.range ? request.range(video.sizeBytes) : undefined;
+      if (range === -1) {
+        response.setHeader('Content-Range', `bytes */${video.sizeBytes}`);
+        response.status(416).end();
+        return;
+      }
+      if (Array.isArray(range) && range.type === 'bytes' && range.length === 1) {
+        const { start, end } = range[0];
+        response.setHeader('Content-Range', `bytes ${start}-${end}/${video.sizeBytes}`);
+        response.setHeader('Content-Length', end - start + 1);
+        response.status(206).end(fetched.bytes.subarray(start, end + 1));
+        return;
+      }
+      response.setHeader('Content-Length', video.sizeBytes);
+      response.end(fetched.bytes);
     }),
   );
 
@@ -3988,7 +4134,11 @@ export function createSim2RealRouter(
           status: latest.status,
           ...(latest.message ? { summary: latest.message } : {}),
           ...(latest.failureDetail ? { failureDetail: latest.failureDetail } : {}),
-          ...(latest.mock ? { mock: true } : {}),
+          ...(run.mock === true || latest.mock === true
+            ? { mock: true }
+            : latest.mock === false
+              ? { mock: false }
+              : {}),
           ...(latest.checkpoint ? { checkpoint: latest.checkpoint } : {}),
           ...(latest.artifact ? { artifact: latest.artifact } : {}),
           ...(latest.metrics ? { metrics: latest.metrics } : {}),
@@ -4352,7 +4502,7 @@ export function createSim2RealRouter(
           summary: outcome.summary,
           ...(outcome.launchUrl ? { launchUrl: outcome.launchUrl } : {}),
           ...(outcome.externalRunId ? { externalRunId: outcome.externalRunId } : {}),
-          ...(outcome.mock ? { mock: true } : {}),
+          ...(typeof outcome.mock === 'boolean' ? { mock: outcome.mock } : {}),
           ...(outcome.checkpoint ? { checkpoint: outcome.checkpoint } : {}),
           ...(outcome.artifact ? { artifact: outcome.artifact } : {}),
           ...(outcome.metrics ? { metrics: outcome.metrics } : {}),

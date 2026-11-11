@@ -431,6 +431,38 @@ paths:
           content: { application/json: { schema: { $ref: "#/components/schemas/RunResponse" } } }
         "404": { $ref: "#/components/responses/NotFound" }
         "503": { description: Status lookup is retryable; last known state is preserved. }
+  /api/v1/duck/runs/{runId}/artifact:
+    parameters:
+      - $ref: "#/components/parameters/RunId"
+    get:
+      tags: [runs]
+      summary: Download the digest-verified ONNX policy for a completed local Run
+      operationId: getRunArtifact
+      responses:
+        "200":
+          description: ONNX policy bytes.
+          content: { application/octet-stream: { schema: { type: string, format: binary } } }
+        "401": { $ref: "#/components/responses/AuthRequired" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { description: The run cannot provide a verified artifact. }
+        "502": { description: The worker cannot return the artifact bytes. }
+  /api/v1/duck/runs/{runId}/dance-video:
+    parameters:
+      - $ref: "#/components/parameters/RunId"
+    get:
+      tags: [runs]
+      summary: Read the verified simulation video for a completed OriginMan dance Run
+      operationId: getDanceRunVideo
+      responses:
+        "200":
+          description: MP4 matched against the Run's policy, trajectory and video digests.
+          content: { video/mp4: { schema: { type: string, format: binary } } }
+        "206": { description: Requested byte range of the verified MP4. }
+        "401": { $ref: "#/components/responses/AuthRequired" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { description: The original compute resource is no longer available. }
+        "416": { description: Requested byte range is unsatisfiable. }
+        "502": { description: The worker cannot return the recorded video bytes. }
   /api/v1/duck/runs/{runId}/reconcile:
     post:
       tags: [runs]
@@ -3244,7 +3276,7 @@ components:
         kind: { type: string, enum: [source, compiled] }
         format: { type: string, enum: [pytorch, onnx, bin, hbm, gguf, unknown] }
         runtime: { type: string, enum: [cpu-onnx, bpu] }
-        workload: { type: string, enum: [locomotion, perception, navigation, speech, multimodal] }
+        workload: { type: string, enum: [locomotion, perception, navigation, speech, multimodal, humanoid-dance] }
         threads: { type: integer, minimum: 1, maximum: 128 }
         targetPlatforms: { type: array, items: { type: string } }
         toolchainTarget: { type: string }
@@ -3276,7 +3308,7 @@ components:
         kind: { type: string, enum: [source, compiled] }
         format: { type: string, enum: [pytorch, onnx, bin, hbm, gguf, unknown] }
         runtime: { type: string, enum: [cpu-onnx, bpu] }
-        workload: { type: string, enum: [locomotion, perception, navigation, speech, multimodal] }
+        workload: { type: string, enum: [locomotion, perception, navigation, speech, multimodal, humanoid-dance] }
         threads: { type: integer, minimum: 1, maximum: 128 }
         targetPlatforms: { type: array, maxItems: 16, items: { type: string } }
         toolchainTarget: { type: string, maxLength: 128 }
@@ -3754,7 +3786,7 @@ components:
       required: [id, robotId, jointCount, observationSize, actionSize, controlHz, physicsTimestepSeconds, decimation, observationLayout]
       properties:
         id: { type: string }
-        robotId: { type: string, enum: [microduck, rdk-duck, originbot] }
+        robotId: { type: string, enum: [microduck, rdk-duck, originbot, originman, custom] }
         jointCount: { type: integer, minimum: 1, maximum: 256 }
         observationSize: { type: integer, minimum: 1, maximum: 4096 }
         actionSize: { type: integer, minimum: 1, maximum: 4096 }
@@ -3780,7 +3812,7 @@ components:
         kind: { type: string, enum: [source, compiled] }
         format: { type: string, enum: [pytorch, onnx, bin, hbm, gguf, unknown] }
         runtime: { type: string, enum: [cpu-onnx, bpu] }
-        workload: { type: string, enum: [locomotion, perception, navigation, speech, multimodal] }
+        workload: { type: string, enum: [locomotion, perception, navigation, speech, multimodal, humanoid-dance] }
         threads: { type: integer, minimum: 1, maximum: 128 }
         targetPlatforms: { type: array, items: { type: string } }
         ref: { type: string, pattern: "^artifact://" }
@@ -3792,7 +3824,7 @@ components:
         modelId: { type: string }
         displayName: { type: string }
         version: { type: string }
-        robot: { type: object, required: [id, variant], properties: { id: { type: string, enum: [microduck, rdk-duck, originbot] }, variant: { type: string } } }
+        robot: { type: object, required: [id, variant], properties: { id: { type: string, enum: [microduck, rdk-duck, originbot, originman, custom] }, variant: { type: string } } }
         contract: { $ref: "#/components/schemas/Contract" }
         simulator: { type: object, required: [backends, policyArtifactId], additionalProperties: true }
         artifacts: { type: array, minItems: 1, items: { $ref: "#/components/schemas/Artifact" } }
@@ -3814,7 +3846,29 @@ components:
         video: { type: boolean }
         runName: { type: string, maxLength: 80 }
         algorithm: { type: string, enum: [ppo, sac] }
-        engine: { type: string, enum: [starter-ppo, mjx-ppo, visual-ppo, dm-control-ppo, mjlab-rsl-rl, microduck-rl, microduck-recurrent, microduck-football, act, diffusion-policy, smolvla, isaac-lab] }
+        engine: { type: string, enum: [starter-ppo, mjx-ppo, visual-ppo, dm-control-ppo, mjlab-rsl-rl, microduck-rl, microduck-recurrent, microduck-football, act, diffusion-policy, smolvla, isaac-lab, originman-dance-ppo] }
+        originmanDance:
+          type: object
+          description: Bounded choreography for the local OriginMan PPO dance Worker.
+          required: [schemaVersion, title, bpm, sections]
+          properties:
+            schemaVersion: { const: 1 }
+            title: { type: string, minLength: 1, maxLength: 80 }
+            bpm: { type: number, minimum: 80, maximum: 140 }
+            seed: { type: integer, minimum: 0, maximum: 2147483647 }
+            trainingSteps: { type: integer, minimum: 8192, maximum: 2000000 }
+            sections:
+              type: array
+              minItems: 1
+              maxItems: 8
+              items:
+                type: object
+                required: [type, beats, intensity]
+                properties:
+                  type: { type: string, enum: [alternating-arms, weight-shift, squat-rise, open-pose] }
+                  beats: { type: integer, enum: [4, 8, 16] }
+                  intensity: { type: number, minimum: 0.25, maximum: 1 }
+            rewardTuning: { type: object, additionalProperties: { type: number } }
         demonstrationRunId: { type: string, maxLength: 200, description: Recorded telemetry Run with at least eight complete episodes of four or more steps. Requires matching owner, project, and vector contract; Mock and demo-fixture data are rejected. }
         demonstrationSha256: { type: string, pattern: "^[a-f0-9]{64}$", readOnly: true, description: Server-pinned digest of the accepted demonstration JSONL. }
         syntheticSmoke: { type: boolean, description: Explicit synthetic imitation smoke only; mutually exclusive with demonstrationRunId and requires profile=smoke. }

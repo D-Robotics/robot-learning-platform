@@ -19,8 +19,7 @@ const schema = {
       minimum: 1,
       maximum: 16,
       default: 8,
-      description:
-        '并行仿真环境数；只改变墙钟时间与 rollout 批大小，训练总量仍由 dance.trainingSteps 决定',
+      description: '并行仿真环境数。影响采样批大小与训练耗时；实际步数按完整采样批次取整',
     },
     dance: {
       type: 'object',
@@ -81,7 +80,7 @@ export const DANCE_TRAINING_TOOLS = [
   {
     name: 'rdk_originman_dance_train',
     description:
-      '把学员自定义的有界舞段提交为OriginMan PPO仿真训练Run，默认50万训练步、8个并行环境；8192步只适合明确要求的链路快检。入参{contextId,computeResourceId?,modelId?,numEnvs?(1-16,缺省8;只改墙钟时间与rollout批大小,训练总量仍由trainingSteps决定),dance:{schemaVersion:1,title,bpm,sections:[{type,beats,intensity}],seed?,trainingSteps?,rewardTuning?{weightShiftTargetM?,weightShiftToleranceM?,squatDepthM?,squatToleranceM?,settleStillnessWeight?,workPenalty?,squatWorkPenalty?,tiltPenalty?}}}，不要使用timesteps或moves；rewardTuning只覆盖给出的奖励权重键并落Run记录，缺省用引擎已验证权重。先从rdk_experience_guide取得contextId；modelId可省略以按专用契约匹配或登记，优先从已报告支持originman-dance-ppo的算力机中让学员按名称选择。提交前仍须重新验证资源连接和Worker引擎能力；同contextId只提交一次，随后用rdk_training_wait查询同一Run。仅仿真，不部署真机。',
+      '提交已确认的 OriginMan 舞蹈 PPO 仿真配方。可选算力、模型、并行环境数（1–16），可改舞段、节拍、拍数、幅度、seed、训练预算及参数表列出的奖励项。默认 50 万步和 8 个并行环境；8192 步只用于流程快检。新手或改参重训优先调用 rdk_learning_guide，按其 nextArguments 提交；同一 contextId 用于重试或查原 Run。提交前重新检查指定 Worker。舞蹈仅仿真',
     inputSchema: schema,
     annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: true },
   },

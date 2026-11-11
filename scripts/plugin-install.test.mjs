@@ -213,3 +213,30 @@ test('download metadata pins all Windows/macOS architectures to HTTPS release ar
     assert.ok(!value.folder.includes('/') && !value.folder.includes('\\'));
   }
 });
+
+test('Studio upgrades report an imported plugin that can shadow the configured MCP connection', (t) => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'rdk-studio-shadow-'));
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
+  const oldRoot = path.join(directory, 'old-import');
+  const pluginRoot = path.join(directory, 'new-package');
+  fs.mkdirSync(oldRoot);
+  fs.mkdirSync(pluginRoot);
+  const target = path.join(directory, 'mcp.json');
+  const original = '{"mcpServers":{"unrelated":{"command":"keep"}}}';
+  fs.writeFileSync(target, original);
+  fs.writeFileSync(
+    path.join(directory, 'plugins-registry.json'),
+    JSON.stringify({
+      plugins: { 'rdk-robot-learning-platform@user': { enabled: true, installPath: oldRoot } },
+    }),
+  );
+  const outcome = installStudioConnection({ command: 'new' }, { directory, pluginRoot });
+  assert.equal(outcome.installed, false);
+  assert.equal(outcome.needsHostImport, true);
+  assert.match(outcome.reason, /插件中心更新/);
+  assert.equal(fs.readFileSync(target, 'utf8'), original);
+  assert.equal(
+    installStudioConnection({ command: 'new' }, { directory, pluginRoot: oldRoot }).installed,
+    true,
+  );
+});

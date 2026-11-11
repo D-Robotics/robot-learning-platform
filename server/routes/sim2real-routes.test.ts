@@ -8,7 +8,13 @@ import { afterEach, describe, expect, it } from 'vitest';
 
 import { BUILTIN_MICRODUCK_MODEL, type Sim2RealModelManifest } from '../../shared/sim2real.js';
 import type { Sim2RealAuthPort } from '../sim2real/sim2real-auth.js';
-import { reserveSim2RealRun, updateSim2RealComputeResource } from '../sim2real/sim2real-store.js';
+import {
+  appendSim2RealTelemetry,
+  createSim2RealRun,
+  reserveSim2RealRun,
+  updateSim2RealComputeResource,
+} from '../sim2real/sim2real-store.js';
+import { readDevices } from '../sim2real/standalone-adapters.js';
 import { createSim2RealRouter, workspacePackageVersion } from './sim2real-routes.js';
 
 const roots: string[] = [];
@@ -284,6 +290,82 @@ function vector(size: number, value: number): number[] {
 }
 
 describe('Sim2Real HTTP routes', () => {
+  it('serves only bytes tied to the exact completed dance Run and its recorded digests', async () => {
+    const router = await fixture();
+    process.env.RDK_SIM2REAL_LOCAL_RUNNER_URL = 'http://127.0.0.1:18202/train';
+    const bytes = Buffer.from('fixture-mp4');
+    const digest = createHash('sha256').update(bytes).digest('hex');
+    const policy = 'a'.repeat(64);
+    const trace = 'b'.repeat(64);
+    const run = await createSim2RealRun({
+      modelId: BUILTIN_MICRODUCK_MODEL.id,
+      taskId: 'originman-dance',
+      backend: 'local',
+      externalRunId: 'dance-worker-run',
+      status: 'completed',
+      mock: false,
+      summary: 'fixture',
+      artifact: {
+        artifactId: 'policy',
+        artifactRef: 'artifact://fixture/policy.onnx',
+        kind: 'source',
+        format: 'onnx',
+        runtime: 'cpu-onnx',
+        workload: 'dance',
+        threads: 1,
+        sha256: policy,
+      },
+      metrics: {
+        contractValid: true,
+        observationSize: 78,
+        actionSize: 18,
+        originmanDance: {
+          replay: { sha256: trace },
+          video: {
+            file: 'dance-replay.mp4',
+            sha256: digest,
+            sizeBytes: bytes.length,
+            policySha256: policy,
+            sourceReplaySha256: trace,
+          },
+        },
+      } as NonNullable<Awaited<ReturnType<typeof createSim2RealRun>>['metrics']>,
+    });
+    const status = await invoke(router, 'get', '/api/sim2real/runs/:id', {
+      params: { id: run.id },
+    });
+    expect(status.body).toMatchObject({
+      run: { links: { danceVideo: `./api/v1/duck/runs/${run.id}/dance-video` } },
+    });
+    const originalFetch = globalThis.fetch;
+    let corrupt = false;
+    globalThis.fetch = (async (url) => {
+      expect(String(url)).toBe('http://127.0.0.1:18202/runs/dance-worker-run/dance-video');
+      const body = corrupt ? Buffer.alloc(bytes.length) : bytes;
+      return new Response(new Uint8Array(body), {
+        headers: {
+          'content-type': 'video/mp4',
+          'content-length': String(body.length),
+          'x-artifact-sha256': digest,
+        },
+      });
+    }) as typeof fetch;
+    try {
+      const request = {
+        params: { id: run.id },
+        headers: { range: 'bytes=0-2' },
+        range: () => Object.assign([{ start: 0, end: 2 }], { type: 'bytes' }),
+      } as Partial<Request>;
+      const response = await invoke(router, 'get', '/api/sim2real/runs/:id/dance-video', request);
+      expect(response.statusCode).toBe(206);
+      expect(response.body).toEqual(bytes.subarray(0, 3));
+      corrupt = true;
+      const rejected = await invoke(router, 'get', '/api/sim2real/runs/:id/dance-video', request);
+      expect(rejected.statusCode).toBe(502);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
   it('persists dataset version, digest and validated run lineage', async () => {
     const router = await fixture();
     const run = await invoke(router, 'post', '/api/sim2real/runs', {

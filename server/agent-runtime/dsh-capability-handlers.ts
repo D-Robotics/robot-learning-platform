@@ -786,6 +786,10 @@ export function createDshCapabilityHandlers(
       return {
         id,
         ok: result.body.ok !== false,
+        connected: result.body.connected === true,
+        browserRelay: result.body.browserRelay === true,
+        ...(Array.isArray(resource.engines) ? { engines: resource.engines } : {}),
+        ...(typeof resource.mock === 'boolean' ? { mock: resource.mock } : {}),
         health: defined(resource.health ?? result.body.health),
         message: str(result.body.message),
       };
@@ -947,6 +951,10 @@ export function createDshCapabilityHandlers(
       if (input.syntheticSmoke !== undefined && !(typeof input.syntheticSmoke === 'boolean')) {
         throw new CapabilityError('DSH_CAPABILITY_REJECTED', 'syntheticSmoke 必须是布尔值。');
       }
+      if (
+        input.originmanDance !== undefined &&
+        !(typeof input.originmanDance === 'object' && input.originmanDance && !Array.isArray(input.originmanDance))
+      ) throw new CapabilityError('DSH_CAPABILITY_REJECTED', 'originmanDance 必须是舞蹈配置对象。');
       const overview = await run(exec.signal).fetch('/api/sim2real/overview', { method: 'GET' });
       if (!overview.ok) fail(overview.status, overview.body, '工作区读取失败');
       const modelId = argString(input, 'modelId') || firstModelId(overview.body);
@@ -970,6 +978,7 @@ export function createDshCapabilityHandlers(
           ? { demonstrationRunId: argText(input, 'demonstrationRunId', 200) }
           : {}),
         ...(typeof input.syntheticSmoke === 'boolean' ? { syntheticSmoke: input.syntheticSmoke } : {}),
+        ...(input.originmanDance !== undefined ? { originmanDance: input.originmanDance } : {}),
       };
       const idempotencyKey = dshIdempotencyKey('training');
       const result = await run(exec.signal).fetch('/api/sim2real/runs', {

@@ -1,6 +1,6 @@
 # RDK Robot Learning Platform 插件使用说明
 
-**版本：0.6.32** · 适用：Qoder、RDK Studio，以及支持 MCP 与 Markdown 链接的 Agent 宿主。
+**版本：0.6.33** · 适用：Qoder、RDK Studio，以及支持 MCP 与 Markdown 链接的 Agent 宿主。
 
 这是通用机器人学习平台的跨宿主插件，支持按机型和任务组织学习流程。OriginMan 舞蹈和受扰恢复是可选任务。
 
@@ -33,7 +33,7 @@
 
 1. 解压发行 ZIP 到最终目录。
 2. macOS 双击 `setup-macos.command`；Windows 双击 `setup-windows.cmd`。
-3. 在已初始化的 Studio 中导入/启用生成的插件。按需使用宿主账号继承；默认浏览器授权只连接本插件。
+3. 在已初始化的 Studio 中导入/启用生成的插件。若已经从插件中心导入过旧版，请在插件中心更新同一个插件条目。旧导入副本的同名 MCP 连接优先于手工配置，更新后新建对话并核对实际版本。按需使用宿主账号继承；默认浏览器授权只连接本插件。
 
 ### 其他 MCP 宿主
 

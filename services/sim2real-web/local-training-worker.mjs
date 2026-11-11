@@ -36,6 +36,7 @@ const DATA_DIR = path.resolve(
 const MAX_BODY = 2 * 1024 * 1024;
 const MAX_RESULT = 1 * 1024 * 1024;
 const MAX_ARTIFACT_BYTES = 10_000_000_000;
+const MAX_DANCE_VIDEO_BYTES = 50 * 1024 * 1024;
 const MAX_LOG = 64 * 1024;
 // Line-level engine log capture: the same stdout/stderr streams the tail
 // buffers feed a bounded line ring, so /runs/:id/logs can serve incremental
@@ -1278,6 +1279,66 @@ async function handleArtifact(request, response) {
   stream.pipe(response);
 }
 
+async function handleDanceVideo(request, response) {
+  await ensureJobsLoaded();
+  const runId = decodeURIComponent(request.url.slice('/runs/'.length, -'/dance-video'.length));
+  const job = jobs.get(runId);
+  if (!job || job.accountId !== accountId(request, {})) {
+    json(response, 404, { ok: false, error: 'run_not_found' });
+    return;
+  }
+  const dance = job.metrics?.originmanDance;
+  const video = dance?.video;
+  if (
+    job.status !== 'completed' ||
+    job.mock !== false ||
+    job.request?.task?.id !== 'originman-dance' ||
+    video?.file !== 'dance-replay.mp4' ||
+    ![video.sha256, video.policySha256, video.sourceReplaySha256].every((value) =>
+      /^[a-f0-9]{64}$/.test(value ?? ''),
+    ) ||
+    video.policySha256 !== job.artifact?.sha256 ||
+    video.sourceReplaySha256 !== dance.replay?.sha256 ||
+    !Number.isSafeInteger(video.sizeBytes) ||
+    video.sizeBytes < 1 ||
+    video.sizeBytes > MAX_DANCE_VIDEO_BYTES
+  ) {
+    json(response, 409, { ok: false, error: 'dance_video_unavailable' });
+    return;
+  }
+  const handle = await open(path.join(job.dir, 'dance-replay.mp4'), 'r').catch(() => null);
+  if (!handle) {
+    json(response, 404, { ok: false, error: 'dance_video_missing' });
+    return;
+  }
+  try {
+    const info = await handle.stat();
+    if (!info.isFile() || info.size !== video.sizeBytes) {
+      json(response, 409, { ok: false, error: 'dance_video_size_mismatch' });
+      return;
+    }
+    const bytes = Buffer.alloc(info.size + 1);
+    const { bytesRead } = await handle.read(bytes, 0, bytes.length, 0);
+    const body = bytes.subarray(0, bytesRead);
+    if (
+      bytesRead !== info.size ||
+      createHash('sha256').update(body).digest('hex') !== video.sha256
+    ) {
+      json(response, 409, { ok: false, error: 'dance_video_digest_mismatch' });
+      return;
+    }
+    response.writeHead(200, {
+      'content-type': 'video/mp4',
+      'content-length': body.length,
+      'x-artifact-sha256': video.sha256,
+      'cache-control': 'no-store',
+    });
+    response.end(body);
+  } finally {
+    await handle.close();
+  }
+}
+
 /**
  * GET /runs/:id/telemetry — the completed run's evaluation telemetry.jsonl
  * bytes (hard-envelope policy rollouts the engine already produced).
@@ -1449,6 +1510,7 @@ export function createLocalTrainingWorkerServer() {
           mode: 'external-engine',
           configured,
           engines: engineIds,
+          mock: false,
           authConfigured: tokenConfigured,
           authTokenUsable: tokenUsable,
           ...(authReady ? {} : { error: 'worker_auth_not_configured' }),
@@ -1466,6 +1528,10 @@ export function createLocalTrainingWorkerServer() {
       }
       if (request.method === 'POST' && request.url === '/train') {
         await handleTrain(request, response);
+        return;
+      }
+      if (request.method === 'GET' && /^\/runs\/[^/]+\/dance-video$/.test(request.url ?? '')) {
+        await handleDanceVideo(request, response);
         return;
       }
       if (

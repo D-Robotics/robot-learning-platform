@@ -429,6 +429,78 @@ function dependencyVersions(value: unknown): { dependencyVersions: Record<string
   return Object.keys(normalized).length ? { dependencyVersions: normalized } : null;
 }
 
+function safeDanceMetrics(value: unknown): Sim2RealRunMetrics['originmanDance'] {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
+  const source = value as Record<string, unknown>;
+  const asRecord = (item: unknown) =>
+    item && typeof item === 'object' && !Array.isArray(item)
+      ? (item as Record<string, unknown>)
+      : {};
+  const digest = (item: unknown): item is string =>
+    typeof item === 'string' && /^[a-f0-9]{64}$/.test(item);
+  const replay = asRecord(source.replay);
+  const video = asRecord(source.video);
+  const evaluations = (
+    Array.isArray(source.evaluations) ? source.evaluations.slice(0, 3) : []
+  ).flatMap((item) => {
+    const row = asRecord(item);
+    if (typeof row.bpm !== 'number' || !Number.isFinite(row.bpm) || row.bpm < 80 || row.bpm > 140)
+      return [];
+    const sections = (Array.isArray(row.sections) ? row.sections.slice(0, 8) : []).flatMap(
+      (entry) => {
+        const section = asRecord(entry);
+        if (
+          typeof section.type !== 'string' ||
+          !['alternating-arms', 'weight-shift', 'squat-rise', 'open-pose'].includes(section.type)
+        )
+          return [];
+        const measurements = Object.fromEntries(
+          Object.entries(asRecord(section.measurements))
+            .slice(0, 40)
+            .filter(
+              ([key, n]) =>
+                /^[a-z][a-z0-9]{0,63}$/i.test(key) && typeof n === 'number' && Number.isFinite(n),
+            ),
+        ) as Record<string, number>;
+        return [
+          {
+            type: section.type,
+            ...(typeof section.passed === 'boolean' ? { passed: section.passed } : {}),
+            measurements,
+          },
+        ];
+      },
+    );
+    return [{ bpm: row.bpm, sections }];
+  });
+  return {
+    evaluations,
+    ...(typeof source.qualityGatePassed === 'boolean'
+      ? { qualityGatePassed: source.qualityGatePassed }
+      : {}),
+    ...(digest(replay.sha256) ? { replay: { sha256: replay.sha256 } } : {}),
+    ...(video.file === 'dance-replay.mp4' &&
+    digest(video.sha256) &&
+    digest(video.policySha256) &&
+    digest(video.sourceReplaySha256) &&
+    video.sourceReplaySha256 === replay.sha256 &&
+    typeof video.sizeBytes === 'number' &&
+    Number.isSafeInteger(video.sizeBytes) &&
+    video.sizeBytes > 0 &&
+    video.sizeBytes <= 50 * 1024 * 1024
+      ? {
+          video: {
+            file: 'dance-replay.mp4' as const,
+            sha256: video.sha256,
+            sizeBytes: video.sizeBytes,
+            policySha256: video.policySha256,
+            sourceReplaySha256: video.sourceReplaySha256,
+          },
+        }
+      : {}),
+  };
+}
+
 function safeMetrics(value: unknown): Sim2RealRunMetrics | undefined {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
   const source = value as Record<string, unknown>;
@@ -465,6 +537,8 @@ function safeMetrics(value: unknown): Sim2RealRunMetrics | undefined {
   };
   const physicsBackend = safeLabel('physicsBackend');
   const engine = safeLabel('engine');
+  const originmanDance =
+    engine === 'originman-dance-ppo' ? safeDanceMetrics(source.originmanDance) : undefined;
   return {
     contractValid,
     observationSize,
@@ -504,6 +578,14 @@ function safeMetrics(value: unknown): Sim2RealRunMetrics | undefined {
       : { iterations: bounded('iterations', 0, 2_000_000) }),
     ...(physicsBackend == null ? {} : { physicsBackend }),
     ...(engine == null ? {} : { engine }),
+    ...(originmanDance ? { originmanDance } : {}),
+    ...(bounded('trainingSteps', 1, 10_000_000) == null
+      ? {}
+      : { trainingSteps: bounded('trainingSteps', 1, 10_000_000) }),
+    ...(typeof source.trainingDevice === 'string' &&
+    /^(cpu|mps|cuda(:[0-9]{1,3})?)$/.test(source.trainingDevice)
+      ? { trainingDevice: source.trainingDevice }
+      : {}),
     ...(bounded('trainChunkMse', 0, 1_000_000) == null
       ? {}
       : { trainChunkMse: bounded('trainChunkMse', 0, 1_000_000) }),
@@ -596,7 +678,7 @@ function parseRunResult(payload: unknown): Sim2RealRobogoRunResult {
   const message =
     safeText(source.message, 500) ||
     (status === 'failed' ? '训练 runner 报告任务失败或已取消。' : '');
-  const mock = source.mock === true;
+  const mock = typeof source.mock === 'boolean' ? source.mock : undefined;
   const checkpoint = safeCheckpoint(source.checkpoint);
   const artifact = safeArtifact(source.artifact);
   const metrics = safeMetrics(source.metrics);
@@ -618,7 +700,7 @@ function parseRunResult(payload: unknown): Sim2RealRobogoRunResult {
   return {
     status,
     ...(validExternalRunId ? { externalRunId: validExternalRunId } : {}),
-    ...(mock ? { mock: true } : {}),
+    ...(mock !== undefined ? { mock } : {}),
     ...(launchUrl ? { launchUrl } : {}),
     ...(message ? { message } : {}),
     ...(checkpoint ? { checkpoint } : {}),
@@ -664,6 +746,10 @@ function runnerPayload(
   idempotencyKey?: string,
   demonstrations?: import('../../shared/sim2real.js').Sim2RealDemonstrations,
 ): Record<string, unknown> {
+  const task =
+    taskId === 'originman-dance' && training?.originmanDance
+      ? { id: taskId, originmanDance: training.originmanDance }
+      : resolvedTaskPack(taskId);
   return {
     accountId,
     schemaVersion: manifest.schemaVersion,
@@ -678,7 +764,7 @@ function runnerPayload(
     simulator: manifest.simulator,
     artifacts: manifest.artifacts,
     ...(taskId ? { taskId } : {}),
-    ...(resolvedTaskPack(taskId) ? { task: resolvedTaskPack(taskId) } : {}),
+    ...(task ? { task } : {}),
     ...(training ? { training } : {}),
     ...(demonstrations ? { demonstrations } : {}),
     ...(resumeFrom ? { resumeFrom } : {}),

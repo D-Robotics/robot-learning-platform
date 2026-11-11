@@ -46,6 +46,7 @@ try {
     : installStudioConnection(configured.manifest.mcpServers['rdk-learning-platform'], {
         directory: options['--studio-data-dir'],
         connectionName: options['--connection-name'],
+        pluginRoot: root,
       });
   let loginInheritance;
   const patchFile = path.join(root, 'host', 'host-patch.json');
@@ -103,10 +104,13 @@ try {
     console.log('连接已配置。您此前禁用了这条连接，请在Studio设置中启用后继续。');
   else if (installed.installed)
     console.log(
-      '安装配置完成。在 Studio 说“带我开始 Workshop”了解课程。需要实操时再说“连接学习平台”。',
+      '安装配置完成。在 Studio 说“打开机器人学习工作台”开始。需要访问平台数据时再说“连接学习平台”。',
     );
   else
-    console.log('配置已生成。导入完整插件目录即可使用本地知识；需要平台数据时再按浏览器提示登录。');
+    console.log(
+      installed.reason ??
+        '配置已生成。导入完整插件目录即可使用本地知识；需要平台数据时再按浏览器提示登录。',
+    );
 } catch (error) {
   console.error('安装配置未完成：' + error.message);
   process.exitCode = 1;

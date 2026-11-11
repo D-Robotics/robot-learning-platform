@@ -222,6 +222,7 @@ export const TOOL_PARAM_HINTS: Record<string, ToolParamHint> = {
       engine: { type: 'string' },
       demonstrationRunId: { type: 'string' },
       syntheticSmoke: { type: 'boolean' },
+      originmanDance: { type: 'object' },
       algorithm: { type: 'string' },
       numEnvs: { type: 'number' },
       maxIterations: { type: 'number' },
