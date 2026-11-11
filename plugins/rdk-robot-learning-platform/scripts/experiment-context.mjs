@@ -277,6 +277,7 @@ export async function experimentContext(
     // the model's other historical Runs or deployment records in lineage.
     if (
       result.metrics?.originmanWorkshop === null ||
+      result.metrics?.originmanWorkshop === undefined ||
       (requireParent &&
         !evidence(result)?.sourceRunId &&
         !result.sourceRunId &&

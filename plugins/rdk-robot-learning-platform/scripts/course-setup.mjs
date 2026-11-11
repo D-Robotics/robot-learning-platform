@@ -28,7 +28,7 @@ function selectionError(code, message, records) {
   });
 }
 export async function selectCourseAssets(
-  { manifest, modelId, computeResourceId, readModels },
+  { manifest, modelId, computeResourceId, readModels, requiredEngine },
   call,
 ) {
   const result = await (readModels ? readModels() : call('rdk_models_list', {}));
@@ -73,12 +73,39 @@ export async function selectCourseAssets(
   if (!Array.isArray(resourceList?.computeResources))
     throw new Error('平台未返回明确的资源清单，不登记模型或提交训练。');
   const resources = resourceList.computeResources;
-  if (!computeResourceId)
-    throw selectionError(
+  if (!computeResourceId) {
+    const capableResources = requiredEngine
+      ? resources.filter(
+          (record) => record.engines?.includes(requiredEngine) && record.mock === false,
+        )
+      : resources;
+    const error = selectionError(
       'WORKSHOP_RESOURCE_SELECTION_REQUIRED',
-      '请选择本轮使用的算力机。可以先说“查看我的开发机”。',
-      resources,
+      requiredEngine
+        ? `请选择最近健康检查已报告支持 ${requiredEngine} 且不是 Mock 的算力机。没有匹配项时，先测试目标机器连接以刷新能力。`
+        : '请选择本轮使用的算力机。可以先说“查看我的开发机”。',
+      capableResources,
     );
+    if (requiredEngine) {
+      error.details.unverifiedChoices = resources
+        .filter(
+          (record) =>
+            record.mock !== true &&
+            (!Array.isArray(record.engines) ||
+              record.engines.length === 0 ||
+              (record.engines.includes(requiredEngine) && record.mock !== false)),
+        )
+        .map((record) => ({
+          id: record.id,
+          name: record.name || record.id,
+          status: record.status,
+        }));
+      error.details.excludedCount = resources.length - capableResources.length;
+      error.nextAction =
+        '优先从支持该引擎的资源中按名称让用户选择；没有已知匹配项时，先测试一台引擎能力未知的机器，再重新列出资源。不要默认选择第一台。';
+    }
+    throw error;
+  }
   const resource = resources.find((record) => record.id === computeResourceId);
   if (!resource) throw new Error('所选执行资源当前账号不可见；不会换用其他资源。');
   return { model, resource };

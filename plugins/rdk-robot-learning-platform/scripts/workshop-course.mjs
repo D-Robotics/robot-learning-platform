@@ -1,3 +1,56 @@
+import { resolveOriginmanDanceConfig } from './originman-dance-config.mjs';
+
+export const ORIGINMAN_DANCE_DRAFT_TOOL = {
+  name: 'rdk_originman_dance_draft',
+  description:
+    '把学员确认过的简单舞蹈编排整理成有界草案：节奏80–140 BPM，每段4/8/16拍，舞段限交替摆臂、左右换重心、下蹲起身、展开定格，强度0.25–1，训练预算默认50万步（8192步可显式用于链路快检）。此工具只回显配置；学员明确要训练时，另用rdk_originman_dance_train检查当前模型、资源和Worker引擎并提交仿真Run。草案自身不训练、不声称效果，也不授权真机动作。',
+  inputSchema: {
+    type: 'object',
+    properties: {
+      schemaVersion: { type: 'integer', const: 1 },
+      title: { type: 'string', minLength: 1, maxLength: 80 },
+      bpm: { type: 'number', minimum: 80, maximum: 140 },
+      sections: {
+        type: 'array',
+        minItems: 1,
+        maxItems: 8,
+        items: {
+          type: 'object',
+          properties: {
+            type: {
+              type: 'string',
+              enum: ['alternating-arms', 'weight-shift', 'squat-rise', 'open-pose'],
+            },
+            beats: { type: 'integer', enum: [4, 8, 16] },
+            intensity: { type: 'number', minimum: 0.25, maximum: 1 },
+          },
+          required: ['type', 'beats', 'intensity'],
+          additionalProperties: false,
+        },
+      },
+      seed: { type: 'integer', minimum: 0, maximum: 2147483647 },
+      trainingSteps: { type: 'integer', minimum: 8192, maximum: 2000000, default: 500000 },
+    },
+    required: ['schemaVersion', 'title', 'bpm', 'sections'],
+    additionalProperties: false,
+  },
+  annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
+};
+
+export function originmanDanceDraft(args = {}) {
+  const draft = resolveOriginmanDanceConfig(args);
+  return {
+    scope: 'configuration-only',
+    motionAuthorized: false,
+    trainingSubmitted: false,
+    qualityClaimAllowed: false,
+    draft,
+    studentReply: `舞蹈草案已整理：${draft.title}，${draft.bpm} BPM、${draft.sections.length} 段、共 ${draft.totalBeats} 拍。它还没有提交训练；如果明确要开始，使用独立的OriginMan舞蹈仿真训练入口。训练质量和真机能力需要分别验证。`,
+    nextAction:
+      '保留草案作为课程设计输入；只有舞蹈训练Worker、模型合同、同源评测和回放接通并验收后，才可改为真实训练流程。',
+  };
+}
+
 export const COURSE_BRIEF_TOOL = {
   name: 'rdk_originman_course_brief',
   description:
@@ -12,7 +65,7 @@ export function courseBrief(args = {}) {
     scope: 'local-course-explanation-only',
     motionAuthorized: false,
     studentReply:
-      '8192步用于流程快检，50万步用于正式效果对比；训练步、采样批次和梯度更新次数是不同计数，不能混称。\n训练完成不等于效果达标，视频未实播只记回放待验；真机效果须独立验证。',
+      '恢复课8192步用于流程快检、50万步用于效果对比；舞蹈课默认50万步，8192步只作明确要求的链路快检。\nRun完成不等于风格达标；舞蹈轨迹仍是回放待验，真机效果需单独验收。',
     delivery:
       '原样展示studentReply两句，不另加标题、数字倍率、历史成绩或下一步问题，不读取更多资料；用户明确追问依据时才按需读取workshop-training-evidence.md。实际成绩必须读本轮同源评测，不能从预算推出。',
   };
@@ -117,7 +170,7 @@ export const ORIGINMAN_COURSE = {
     '预算用途、计数单位、完成标准等简短咨询优先rdk_originman_course_brief，仅逐字展示studentReply两句；不再读指南和证据全文。明确追问依据才按需展开；不能编造倍率或把历史成绩当本组结果。',
     '没有实际播放时，只能说训练与评测完成、回放待验证，不能说完整Workshop或全流程通过。Qoder提示外部Browser Connector未连接时保留原实验，不重训；学员可点任务右侧产出中的网页查询，打开内置实验页后手动播放。人工点击验收与模型自动播放分别记录，不要求为阅读已有结果重新登录CLI。',
 
-    '预算单位是训练步，不是优化次数或外层迭代：8192步对应32个256帧采样批次；500000请求可因批次取整实际为500224步。旧进度字段iteration/totalIterations在本引擎中也记训练步，不照字段名翻译成8192次迭代。梯度更新次数另读optimizer记录。',
+    '舞蹈训练默认50万训练步、8个并行环境；每轮采样为8×256步，预算按整轮取整，50万请求实际可达501760步。8192仅用于明确要求的链路快检（4轮采样）。训练步、PPO迭代、梯度更新分别报告，不相互换算冒充。',
 
     '训练预算必须由学员明确选择。默认Workshop在rdk_workshop页面点预算按钮，不在聊天重复询问。只有高级手动流程才调用rdk_originman_training_choice；已有明确短训、8192、正式或50万时传已知choice，不重复问。未知只说明并暂停，不提交。用户只咨询不开始训练。',
     '分别报告流程执行、仿真效果、实体效果。快检完成只算流程通过；正式训练completed也不算效果通过，须本轮同源评测sourceVerified和clearGain=true，并展示两组实际基线与RL恢复数；未评测待验证、未提升明确未达标、来源不符停止结论。回放只展示其中一个条件，不代替62条件评测。',
@@ -127,6 +180,7 @@ export const ORIGINMAN_COURSE = {
     '结果计数相同不能证明评测条件相同；必须逐条核对条件及两种基线。同一父Run的重复评测不是独立训练样本。',
     'Worker端口是平台侧地址，127.0.0.1不证明GPU与平台同机，也不证明两条在线资源是独立GPU；并发槽不能直接当课堂GPU容量。Worker在线不等于SSH可用。',
     '学员问插件或平台能做什么时，先介绍本课五步和第一步参考观察；平台通用硬件能力仅在用户追问时另述，不把历史部署失败插入课程回答。',
+    'OriginMan自定义舞蹈与受扰恢复是两条独立课程链路。用户只要整理舞段时调用rdk_originman_dance_draft；明确要求训练时，按rdk_experience_guide拿到operation.contextId后调用rdk_originman_dance_train，保留学员描述的节奏和动作段。该工具先验证专用78→18模型契约、当前账号资源与Worker已注册originman-dance-ppo，再用同一幂等键提交一次。默认50万训练步、8个并行环境；只有学员明确选择快检时才传8192步。提交后以原Run调用rdk_training_wait至终态，读取本次qualityGate、SHA、舞蹈回放和来源；训练完成不等于风格通过。若资源未证明引擎可用，停止并返回明确原因，不切到恢复任务。舞蹈策略仍仅仿真；模型场景来源、网格摘要、授权、真机关节标定和现场安全验收分别核实，不声称可以部署。',
     '默认只说当前进度、本次结果、下一步；UUID、工具名、manifest和错误码放技术详情，学员不用抄标识。',
     '按每条Run的phase区分训练与评测，Run总数不是训练成功数；只描述已核对且绑定本次实验的状态。',
     '参考结果、历史结果、本组本轮结果必须分开标注；全局golden_path不能作为本课完成比例。',

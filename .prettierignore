@@ -36,3 +36,7 @@ engines/microduck-football/evidence/**/*.json
 server/agent-runtime/dsh-capability-handlers.ts
 services/sim2real-web/agent-chat.test.ts
 services/sim2real-web/ui-layout-invariants.mjs
+
+# Vendored minified MCP core bundle shipped inside the plugin distribution;
+# formatting it would bloat the artifact without touching its semantics.
+plugins/rdk-robot-learning-platform/mcp/

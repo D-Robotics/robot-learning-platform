@@ -46,7 +46,7 @@ node --import tsx/esm scripts/update-platform-plugin-catalog.mjs --check
 | `rdk_board_station_command` | 执行白名单内的只读板端命令。只读操作。 | true | false | `id*: string` |
 | `rdk_board_policy_status` | 读取板端策略运行时与延迟证据状态。只读操作。 | true | false | — |
 | `rdk_board_policy_files` | 列出板端已暂存的 ONNX 策略制品。只读操作。 | true | false | — |
-| `rdk_training_submit` | 提交受控 GPU 强化学习训练任务。需要平台安全门控。 | false | false | `modelId: string`, `backend: string`, `profile: string`, `engine: string`, `demonstrationRunId: string`, `syntheticSmoke: boolean`, `algorithm: string`, `numEnvs: number`, `maxIterations: number`, `runName: string`, `taskId: string`, `projectId: string`, `experimentId: string`, `label: string`, `datasetIds: array<string>`, `computeResourceId: string`, `video: boolean` |
+| `rdk_training_submit` | 提交受控 GPU 强化学习训练任务。需要平台安全门控。 | false | false | `modelId: string`, `backend: string`, `profile: string`, `engine: string`, `demonstrationRunId: string`, `syntheticSmoke: boolean`, `algorithm: string`, `numEnvs: number`, `maxIterations: number`, `runName: string`, `taskId: string`, `projectId: string`, `experimentId: string`, `label: string`, `datasetIds: array<string>`, `computeResourceId: string`, `video: boolean`, `originmanWorkshop: object`, `originmanDance: object` |
 | `rdk_training_status` | 读取训练任务状态和指标。只读操作。 | true | false | `runId: string` |
 | `rdk_runs_replay` | 读取运行的遥测回放和聚合评测证据。只读操作。 | true | false | `runId*: string` |
 | `rdk_telemetry_list` | 读取运行的遥测分片和样本数量。只读操作。 | true | false | `runId*: string`, `limit: number` |
@@ -82,14 +82,3 @@ node --import tsx/esm scripts/update-platform-plugin-catalog.mjs --check
 ## 工作流入口
 
 [训练/评测/部署](workflow-contracts.md) · [设备](device-contracts.md) · [API 能力](api-workflows.md) · [CLI/工作台](cli-capabilities.md) · [开发不变量](development-invariants.md)
-
-## 便携工作流扩展（以实际 tools/list 为准）
-
-- `rdk_robot_onboarding_guide({})`：本地指南、阶段事实字段和逐机模板，不需平台登录。
-- `rdk_robot_acceptance_assess({record})`：严格检查字段、摘要绑定、期限和前置阶段；只读、不保存、不核验收据真实性、不签发运动许可。
-
-源码默认核心入口不自动具有便携扩展；须运行完整便携包的 experience-mcp.mjs。
-
-- `rdk_classroom_guide({scenario?})`：本地课堂知识、来源与结论边界；scenario可选overview/new-robot/communication/temperature/training/evidence，不需平台登录。
-
-- `rdk_plugin_status`：离线检查实际运行版本及加载源码一致性；不需平台登录，不表示实机通过。

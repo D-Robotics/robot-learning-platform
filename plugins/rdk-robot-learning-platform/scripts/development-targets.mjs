@@ -1,7 +1,7 @@
 export const DEVELOPMENT_TARGET_TOOL = {
   name: 'rdk_development_targets',
   description:
-    '列出当前学习平台账号的算力机和 RDK 板卡。明确要求检查某台算力机时用 test-compute，明确要求连接某台板卡时用 connect-board。先从对应列表匹配唯一目标，再传准确的 targetId。算力机用于训练，板卡连接仅打开 SSH 隧道并探测 BoardAgent。要换算力机跑 Workshop，用 rdk_workshop 新建实验。',
+    '列出当前学习平台账号的算力机和 RDK 板卡。算力机会显示最近一次健康检查报告的引擎；舞蹈训练优先选择支持 originman-dance-ppo 的机器。明确要求检查某台算力机时用 test-compute，明确要求连接某台板卡时用 connect-board。先从对应列表匹配唯一目标，再传准确的 targetId。算力机用于训练，板卡连接仅打开 SSH 隧道并探测 BoardAgent。要换算力机跑 Workshop，用 rdk_workshop 新建实验。',
   inputSchema: {
     type: 'object',
     properties: {
@@ -45,7 +45,11 @@ export async function developmentTargets(args, { authentication, request } = {})
         id: record.id,
         name: (kind === 'compute' ? record.name : record.label) || record.id,
         ...(kind === 'compute'
-          ? { status: record.status }
+          ? {
+              status: record.status,
+              engines: Array.isArray(record.engines) ? record.engines : [],
+              mock: record.mock === true,
+            }
           : { tunnelActive: record.tunnelActive === true }),
       }));
   };
@@ -57,11 +61,21 @@ export async function developmentTargets(args, { authentication, request } = {})
       '：' +
       (result.status === 'rejected'
         ? '暂时读不到'
-        : result.value.map((target) => target.name).join('、') || '当前账号还没有登记');
+        : result.value
+            .map((target) =>
+              label === '训练算力机'
+                ? `${target.name}（${target.status || '状态未知'}；引擎：${target.engines.join('、') || '待测试'}${target.mock ? '；Mock' : ''}）`
+                : target.name,
+            )
+            .join('、') || '当前账号还没有登记');
     return {
       compute: compute.status === 'fulfilled' ? compute.value : null,
       boards: boards.status === 'fulfilled' ? boards.value : null,
-      studentReply: [describe('训练算力机', compute), describe('RDK 板卡', boards)].join('\n'),
+      studentReply: [
+        describe('训练算力机', compute),
+        describe('RDK 板卡', boards),
+        '舞蹈训练请选择已报告支持 originman-dance-ppo 且非 Mock 的算力机；状态或能力未知时，先测试连接刷新。',
+      ].join('\n'),
       delivery,
     };
   }

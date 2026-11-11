@@ -1,28 +1,5 @@
 {
-  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
   "name": "rdk-robot-learning-platform",
-  "version": "0.6.10",
-  "description": "一句话开始 Workshop：下一步按钮、当前实验跨软件接续、曲线对比与回放；保留自定义参数及高级机器人学习工具。",
-  "author": {
-    "name": "D-Robotics"
-  },
-  "homepage": "https://github.com/D-Robotics/robot-learning-platform#readme",
-  "repository": "https://github.com/D-Robotics/robot-learning-platform",
-  "keywords": ["rdk", "robot-learning", "sim2real", "mcp", "microduck"],
-  "extensions": {
-    "com.openai": {
-      "onboardingSkill": "./skills/setup/SKILL.md",
-      "interface": {
-        "displayName": "RDK Robot Learning Platform",
-        "shortDescription": "仿真、训练、评测、制品、受控部署与设备工作流",
-        "developerName": "D-Robotics",
-        "category": "Developer Tools",
-        "defaultPrompt": [
-          "连接学习平台并查看工作区、设备和训练状态",
-          "把仿真录制的数据转成训练任务并检查评测证据",
-          "检查制品和部署预检，说明阻塞项"
-        ]
-      }
-    }
-  }
+  "version": "0.6.20",
+  "description": "一句话开始 Workshop：OriginMan 舞蹈 PPO 独立训练、Run 可视化直达、跨软件接续、曲线对比与仿真回放。"
 }

@@ -9,7 +9,8 @@ description: 新机器人首次接入、换机复用模型、逐机标定、只�
 
 准备信息齐、确实需要阶段标准/模板时才调用 `rdk_robot_onboarding_guide`（默认简短）。只有具体接口争议或用户要求依据时才传detail=full；不重复读取工具已返回的参考内容。技术证据用 `rdk_robot_acceptance_assess` 检查，并传入本轮已知answers以免重问称呼或模型状态，needs-input是未通过的准备状态，按中文missingInputs补齐，不能为了通过伪造身份或摘要。
 
-通用 Sim2Real 验收阶段与证据字段见[新机器人验收参考](../../references/new-robot-acceptance.md)，结构化记录见[验收模板](../../references/robot-acceptance-template.json)。
+新机接入的证据字段、覆盖层级和模板见[新机器人验收参考](../../references/new-robot-acceptance.md)。
+结构化收据模板见[机器人验收记录模板](../../references/robot-acceptance-template.json)。
 
 当前目标设备有歧义先辨认；使用插件当前账号的设备记录和真实工具目录，不扫描账号、猜密码或假设通用策略启动支持所有机器人。连接与板端工具使用 [devices-board](../devices-board/SKILL.md)。
 
