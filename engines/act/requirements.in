@@ -13,7 +13,7 @@
 # its own build from the CUDA index; that wheel is a deliberate deployment
 # choice and is recorded per-run in `dependencies.torch`.
 numpy==2.0.2
-torch==2.8.0
+torch==2.9.0
 onnx==1.19.1
 
 # Transitive pins. `uv pip compile` resolves these, but nothing constrains them,

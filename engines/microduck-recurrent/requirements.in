@@ -5,7 +5,7 @@
 # source commit names the code and the lock names the libraries.
 
 numpy==2.0.2
-torch==2.8.0
+torch==2.9.0
 onnx==1.19.1
 onnxruntime==1.19.2
 mujoco==3.3.7

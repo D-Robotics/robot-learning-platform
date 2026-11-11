@@ -10,7 +10,7 @@
 #     npm run lock:engines
 
 numpy==2.0.2
-torch==2.8.0
+torch==2.9.0
 rsl-rl-lib==2.2.3
 
 # Transitive pins. `uv pip compile` resolves these, but nothing constrains them,
