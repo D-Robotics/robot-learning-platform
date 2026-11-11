@@ -13,6 +13,14 @@ const schema = {
     contextId: { type: 'string', pattern: '^[A-Za-z0-9][A-Za-z0-9_-]{0,23}$' },
     modelId: { type: 'string', minLength: 1, maxLength: 160 },
     computeResourceId: { type: 'string', minLength: 1, maxLength: 160 },
+    numEnvs: {
+      type: 'integer',
+      minimum: 1,
+      maximum: 16,
+      default: 8,
+      description:
+        '并行仿真环境数；只改变墙钟时间与 rollout 批大小，训练总量仍由 dance.trainingSteps 决定',
+    },
     dance: {
       type: 'object',
       required: ['schemaVersion', 'title', 'bpm', 'sections'],
@@ -67,7 +75,7 @@ export const DANCE_TRAINING_TOOLS = [
   {
     name: 'rdk_originman_dance_train',
     description:
-      '把学员自定义的有界舞段提交为OriginMan PPO仿真训练Run，默认50万训练步、8个并行环境；8192步只适合明确要求的链路快检。入参{contextId,computeResourceId?,modelId?,dance:{schemaVersion:1,title,bpm,sections:[{type,beats,intensity}],seed?,trainingSteps?,rewardTuning?{weightShiftTargetM?,weightShiftToleranceM?,squatDepthM?,squatToleranceM?,settleStillnessWeight?,workPenalty?,squatWorkPenalty?,tiltPenalty?}}}，不要使用timesteps或moves；rewardTuning只覆盖给出的奖励权重键并落Run记录，缺省用引擎已验证权重。先从rdk_experience_guide取得contextId；modelId可省略以按专用契约匹配或登记，优先从已报告支持originman-dance-ppo的算力机中让学员按名称选择。提交前仍须重新验证资源连接和Worker引擎能力；同contextId只提交一次，随后用rdk_training_wait查询同一Run。仅仿真，不部署真机。',
+      '把学员自定义的有界舞段提交为OriginMan PPO仿真训练Run，默认50万训练步、8个并行环境；8192步只适合明确要求的链路快检。入参{contextId,computeResourceId?,modelId?,numEnvs?(1-16,缺省8;只改墙钟时间与rollout批大小,训练总量仍由trainingSteps决定),dance:{schemaVersion:1,title,bpm,sections:[{type,beats,intensity}],seed?,trainingSteps?,rewardTuning?{weightShiftTargetM?,weightShiftToleranceM?,squatDepthM?,squatToleranceM?,settleStillnessWeight?,workPenalty?,squatWorkPenalty?,tiltPenalty?}}}，不要使用timesteps或moves；rewardTuning只覆盖给出的奖励权重键并落Run记录，缺省用引擎已验证权重。先从rdk_experience_guide取得contextId；modelId可省略以按专用契约匹配或登记，优先从已报告支持originman-dance-ppo的算力机中让学员按名称选择。提交前仍须重新验证资源连接和Worker引擎能力；同contextId只提交一次，随后用rdk_training_wait查询同一Run。仅仿真，不部署真机。',
     inputSchema: schema,
     annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: true },
   },
@@ -79,15 +87,19 @@ function requireInput(args) {
     typeof args !== 'object' ||
     Array.isArray(args) ||
     Object.keys(args).some(
-      (key) => !['contextId', 'modelId', 'computeResourceId', 'dance'].includes(key),
+      (key) => !['contextId', 'modelId', 'computeResourceId', 'numEnvs', 'dance'].includes(key),
     ) ||
     typeof args.contextId !== 'string' ||
     !/^[A-Za-z0-9][A-Za-z0-9_-]{0,23}$/.test(args.contextId)
   )
     throw new Error('请先从rdk_experience_guide取得本轮contextId，并提供舞蹈编排。');
   const dance = resolveOriginmanDanceConfig(args.dance);
+  const numEnvs = args.numEnvs ?? 8;
+  if (!Number.isSafeInteger(numEnvs) || numEnvs < 1 || numEnvs > 16)
+    throw new Error('numEnvs 必须是 1 到 16 的整数；缺省 8。');
   return {
     contextId: args.contextId,
+    numEnvs,
     ...(args.modelId ? { modelId: args.modelId } : {}),
     ...(args.computeResourceId ? { computeResourceId: args.computeResourceId } : {}),
     dance: {
@@ -182,8 +194,8 @@ export async function trainOriginmanDance(
         profile: 'standard',
         engine: 'originman-dance-ppo',
         algorithm: 'ppo',
-        numEnvs: 8,
-        maxIterations: Math.ceil(steps / (8 * 256)),
+        numEnvs: input.numEnvs,
+        maxIterations: Math.ceil(steps / (input.numEnvs * 256)),
         video: true,
         originmanDance: input.dance,
         idempotencyKey: input.contextId + '-train',

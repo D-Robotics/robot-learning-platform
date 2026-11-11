@@ -44,3 +44,15 @@ test('every reward knob is bounded', () => {
     assert.ok(bounds.min < bounds.max);
   }
 });
+
+test('dance training tool exposes a bounded numEnvs argument', async () => {
+  const { DANCE_TRAINING_TOOLS } =
+    await import('../plugins/rdk-robot-learning-platform/scripts/dance-training.mjs');
+  const tool = DANCE_TRAINING_TOOLS.find((t) => t.name === 'rdk_originman_dance_train');
+  const numEnvs = tool.inputSchema.properties.numEnvs;
+  assert.equal(numEnvs.type, 'integer');
+  assert.equal(numEnvs.minimum, 1);
+  assert.equal(numEnvs.maximum, 16);
+  assert.equal(numEnvs.default, 8);
+  assert.ok(tool.description.includes('numEnvs'));
+});
