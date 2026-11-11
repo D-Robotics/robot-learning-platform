@@ -695,6 +695,23 @@ test('beginner guide starts fresh and routes known tasks without reading old Run
     (await guide({ task: 'imitation' })).links.workbench,
     'https://platform.test/robotics-learning/#train',
   );
+  const otherRobot = await guide({ task: 'reinforcement', robot: 'MicroDuck' });
+  assert.match(otherRobot.studentReply, /MicroDuck/);
+  assert.doesNotMatch(otherRobot.studentReply, /OriginMan/);
+  for (const [task, page] of [
+    ['overview', 'overview'],
+    ['simulation', 'simulate'],
+    ['evaluation', 'evaluate'],
+    ['replay', 'records'],
+    ['deployment', 'deploy'],
+  ]) {
+    const next = await guide({ task });
+    assert.equal(next.links.workbench, 'https://platform.test/robotics-learning/#' + page);
+    assert.deepEqual(next.studioNavigation, {
+      tool: 'studio_open_url',
+      arguments: { url: next.links.workbench },
+    });
+  }
   assert.equal((await guide({ intent: 'results' })).stage, 'choose-run');
 });
 
@@ -784,6 +801,10 @@ test('guide reads the exact Run and keeps confirmed retry idempotent', async (t)
   const result = await guide({ intent: 'results', runId: previous.id });
   assert.match(result.studentReply, /mps.*未达标.*暂无可播放/s);
   assert.equal(new URL(result.links.runDetail).searchParams.get('runId'), previous.id);
+  assert.deepEqual(result.studioNavigation, {
+    tool: 'studio_open_url',
+    arguments: { url: result.links.runDetail },
+  });
   const retry = { intent: 'retry', runId: previous.id, changes: { trainingSteps: 500000 } };
   const preview = await guide(retry);
   assert.equal(preview.stage, 'retry-confirm');

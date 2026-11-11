@@ -182,6 +182,7 @@ function attachRunVisualization(payload, runId, baseUrl) {
     ...(failureDetail ? { failureDetail } : {}),
     links: { ...payload.links, runDetail: url, workbench: url },
     visualization: { runId, url, exactRunSelected: true },
+    studioNavigation: { tool: 'studio_open_url', arguments: { url } },
     qoderNavigation: {
       surface: 'Qoder 内置浏览器',
       steps: [
@@ -195,7 +196,7 @@ function attachRunVisualization(payload, runId, baseUrl) {
     },
     studentReply: `${studentReply}\n[在机器人学习平台查看本轮运行](${url})`,
     delivery:
-      '提交、等待或查询训练后，Qoder按qoderNavigation在内置浏览器打开并置前；其他宿主打开visualization.url。宿主不支持自动导航时展示studentReply中的可点击链接。run-detail.html直接按Run ID读取详情，不搜索或替换成其他运行。',
+      'Studio 可用 studio_open_url 时按 studioNavigation 打开右侧工作台；Qoder 按 qoderNavigation 打开并置前。工具不可用时展示可点击链接。打开页面后仍按实际观察区分页面打开、媒体可用和视频已经播放。',
   };
 }
 
@@ -561,7 +562,8 @@ export function experienceProxy(
         instructions:
           (result.instructions ?? '').replace(/[（(]Duck Lab[）)]/gi, '') +
           '\n面向用户统一称为 RDK Robot Learning Platform（RDK 机器人学习平台）。介绍能力时先给课程、训练、评测与回放入口；仅在用户追问时展开底层服务、协议与部署细节。' +
-          '\n新手先用 rdk_learning_guide。重新开始传 intent:new 和已明确的任务；看效果传 intent:results 和原 Run；改参传 intent:retry、原 Run 与 changes，展示差异并等确认。舞蹈多段传 dance，本机算力用 rdk_development_targets 的 list-compute。引导返回 ready 时原样使用 nextArguments，提交后展示本轮平台链接，回放和质量以 Run 实测为准。舞蹈工具只运行仿真。' +
+          '\n这是通用机器人学习插件。先按用户的机型与目标使用 rdk_learning_guide；打开工作台传 task:overview，强化学习或模仿学习有通用入口，只有明确选择课程时才使用 OriginMan 专用工具。开始新实验传 intent:new；查看结果传 intent:results 和原 Run；改参传 intent:retry、原 Run 与 changes，等确认再使用 nextArguments。Studio 优先用 studio_open_url 打开已验证的工作台链接，仍保留可点击地址。已打开不表示已播放。' +
+          '\n版本检查分别报告插件实际加载版本、宿主登记与平台连接；工具不可用、读失败和已确认空列表分别报告。舞蹈仿真通过不具备部署资格。部署预检被拒绝或设备工具缺失时保留阻断，不使用终端、SSH 或设备执行工具替代受控部署。' +
           '\n已明确选择受扰恢复Workshop时：直接调用rdk_workshop，不加载指南、不预先询问预算。普通入口立即展示studentReply里的链接供学员点击，不调用浏览器工具等待导航；明确要求替我打开时再导航。工具间不输出旁白或内部推理。页面负责阶段进度与预算授权。' +
           '\n课堂新学员或新机离线准备：rdk_classroom_guide携带已知answers，只展示studentReply，每次一个中文问题，不重复问已知项。要求依据才detail=full。阶段标准读robot_onboarding_guide，证据读robot_acceptance_assess；needs-input不是通过。离线知识不要求平台登录，不因离线准备启动训练。' +
           '\n默认离线可了解课程，不主动授权、测试算力或连接板卡。需要账号才能继续时，提示“连接学习平台”，等用户明确要求连接才调用rdk_auth_login，浏览器确认后用rdk_auth_status。只在宿主已显式配置绑定账号时复用该身份，不索取密码或Cookie。' +
@@ -797,7 +799,8 @@ export function experienceProxy(
               const url = new URL(baseUrl.replace(/\/+$/, '') + '/');
               url.hash = payload.platformView;
               payload.links = { workbench: url.href };
-              payload.studentReply += `\n[打开训练工作台](${url.href})`;
+              payload.studioNavigation = { tool: 'studio_open_url', arguments: { url: url.href } };
+              payload.studentReply += `\n[打开学习工作台](${url.href})`;
             }
           }
           if (payload.stage === 'ready' && payload.nextArguments?.contextId) {

@@ -1,4 +1,6 @@
-# RDK Robot Learning 插件（Qoder / Studio） 0.6.31
+# RDK Robot Learning 插件（Qoder / Studio） 0.6.32
+
+这是 **通用机器人学习插件**，在 Studio、Qoder 和支持 MCP 的宿主里连接同一套学习平台。可以按机型和任务做仿真、录制、强化学习、模仿学习、评测、回放与部署预检。OriginMan 舞蹈和受扰恢复是可选任务。机型、引擎和设备能力以当前平台的可用适配器为准。
 
 Qoder 用户请先读 references/qoder-first-run.md，运行 setup-qoder-macos.command 或 setup-qoder-windows.cmd，仅配置本插件，不改 Studio，并生成Qoder本机导入包.zip。桌面请上传这个本机包，不要上传未配置的原ZIP。新机器人说：先离线，请逐题引导我输入。
 
@@ -7,7 +9,7 @@ Studio 用户：解压到最终目录后，Windows 双击 setup-windows.cmd，ma
 不需要平台源码、npm install、手写密码或 Cookie。其他宿主导入生成的 .mcp.json。
 完整插件使用说明见 [references/user-guide.md](references/user-guide.md)；Workshop 页面教程见 references/workshop-first-run.md。
 
-0.6.31：项级奖励系数参数面（armSwing/armSpeed/weightShift/squat/settleArms 五键进 rewardTuning）；合入统一线与 Studio 线全部修复。
+0.6.32：通用任务入口覆盖仿真、训练、评测、回放和部署预检。Studio 优先在右侧工作台打开本轮链接。
 0.6.17：算力机清单展示最近健康检查报告的引擎和 Mock 状态；OriginMan 舞蹈训练优先给出已报告支持 `originman-dance-ppo` 且非 Mock 的资源，提交前仍会重新测试。Run 详情会根据实际回放链接准确说明能否播放。舞蹈奖励校准和 NPZ/MP4 媒体读取仍需平台舞蹈引擎及媒体 API 提供数据，本版不会伪造达标或回放。
 
 支持登录继承的 Studio 自动复用当前任务账号；配套接线适配 Windows/macOS 安装路径，
@@ -17,7 +19,7 @@ Studio 用户：解压到最终目录后，Windows 双击 setup-windows.cmd，ma
 已有统一账号，无须提前访问学习平台。首次训练不依赖成功历史；资源就绪后按需登记课程模型。
 教师须先分配学员可见的计算资源；插件不会借用其他账号资源或自动开通计费算力。
 
-学员只需说：**带我开始 Workshop**。默认受扰恢复课打开课程工作台；如果当前目标已明确为 OriginMan 强化学习跳舞，插件沿独立舞蹈训练流程开始，不会带回恢复实验。开始新舞蹈轮次先取新的实验上下文并沿用已确认舞段。
+首次可以说 **打开机器人学习工作台** 或 **带我做一次强化学习**。有明确机型或任务就直接沿用。要体验课程时可说 **开始 OriginMan 受扰恢复 Workshop**，或 **训练 OriginMan 跳舞**。
 
 - OriginMan 舞蹈使用独立 78→18 契约、`originman-dance-ppo` 和 PPO 仿真入口，不复用平衡/受扰恢复参数。资源与引擎检查失败时停止，不改跑恢复任务。
 - 每次训练提交、等待和状态查询都带本轮 Run 的平台链接；Qoder 会打开并置前内置页面，其他宿主可点击链接。只读详情页直接按 Run ID 查询当前账号可见的运行、编排、曲线与质量门；找不到时说明账号无权访问或记录不存在。

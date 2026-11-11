@@ -143,14 +143,10 @@ if (args[5]) {
 }
 const uiBuild = await buildPluginUi(out);
 Object.assign(sources, uiBuild.files);
-const identity = {
-  name: 'rdk-robot-learning-platform',
-  version: JSON.parse(
-    fs.readFileSync(path.join(root, 'plugins/rdk-robot-learning-platform/plugin.json'), 'utf8'),
-  ).version,
-  description:
-    '机器人学习平台插件。引导选择任务和算力，提交训练，查看曲线、评测和回放，并支持从原 Run 改参开新一轮。',
-};
+const { name, version, description } = JSON.parse(
+  fs.readFileSync(path.join(repoPlugin, 'plugin.json'), 'utf8'),
+);
+const identity = { name, version, description };
 fs.writeFileSync(path.join(out, 'plugin.json'), JSON.stringify(identity, null, 2));
 for (const directory of ['.rdstudio-plugin', '.codex-plugin', '.qoder-plugin']) {
   fs.mkdirSync(path.join(out, directory), { recursive: true });

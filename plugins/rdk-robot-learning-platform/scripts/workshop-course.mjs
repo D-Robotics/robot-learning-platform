@@ -45,7 +45,21 @@ const danceSchema = DANCE_TRAINING_TOOLS[0].inputSchema.properties.dance;
 const runIdField = { type: 'string', pattern: '^[A-Za-z0-9][A-Za-z0-9_.-]{0,119}$' };
 const learningFields = {
   intent: { type: 'string', enum: ['start', 'new', 'results', 'retry'] },
-  task: { type: 'string', enum: ['dance', 'recovery', 'reinforcement', 'imitation'] },
+  task: {
+    type: 'string',
+    enum: [
+      'overview',
+      'simulation',
+      'reinforcement',
+      'imitation',
+      'evaluation',
+      'replay',
+      'deployment',
+      'dance',
+      'recovery',
+    ],
+  },
+  robot: { type: 'string', minLength: 1, maxLength: 120 },
   runId: runIdField,
   dance: danceSchema,
   changes: { ...danceSchema, required: [] },
@@ -186,13 +200,26 @@ export function learningGuide(answers = {}, { operationId, previous } = {}) {
   if (!answers.task)
     return progress(
       'task',
-      '你想做什么？可以练强化学习、用示教数据做模仿学习，或体验 OriginMan 跳舞、受扰恢复。',
+      '你想从哪一步开始？可以试仿真和录制、训练策略、评测和回放，或做真机部署预检。',
     );
+  const platformTasks = {
+    overview: ['overview', '打开工作台后，可以按机型和任务选择仿真、训练或评测。'],
+    simulation: ['simulate', '在仿真工作台选择机器人和场景，可以试玩或录制动作。'],
+    evaluation: ['evaluate', '在评测工作台选定策略和评测条件，再查看本轮结果。'],
+    replay: ['records', '在记录工作台选择要查看的轨迹或运行。'],
+    deployment: ['deploy', '先在部署工作台核对设备、策略制品和部署预检。'],
+  };
+  if (Object.hasOwn(platformTasks, answers.task)) {
+    const [platformView, reply] = platformTasks[answers.task];
+    return progress('platform-task', reply, { platformView });
+  }
   if (['reinforcement', 'imitation'].includes(answers.task))
     return progress(
       'platform-training',
-      '先在训练工作台选择机器人和任务，再检查模型、数据和算力。',
-      { platformView: 'train' },
+      answers.robot
+        ? `先在训练工作台选择 ${answers.robot} 对应的模型和任务，再检查${answers.task === 'imitation' ? '示教数据和算力' : '训练引擎和算力'}。`
+        : '先在训练工作台选择机器人和任务，再检查模型、数据和算力。',
+      { platformView: 'train', robot: answers.robot ?? null },
     );
   if (answers.task === 'recovery')
     return progress('recovery', '先打开受扰恢复课程，看看参考动作。', {

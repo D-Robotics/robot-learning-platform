@@ -1,21 +1,14 @@
 # RDK Robot Learning Platform
 
-Studio 插件： [0.3.2 体验教程](docs/plugin-experience-test.md) · [安装与首次使用](plugins/rdk-robot-learning-platform/references/workshop-first-run.md) · [登录修复与验收范围](docs/plugin-auth-recovery.md)。
+[通用插件使用说明](plugins/rdk-robot-learning-platform/references/user-guide.md) · [Studio 与 Qoder 安装](plugins/rdk-robot-learning-platform/README.md)
 
 <div align="center">
 
-**从浏览器里的第一步，到 RDK-X5 上的下一步。**
+**通用机器人学习工作台**
 
-面向 MicroDuck 与 RDK-X5 的机器人学习工作台：仿真、录制、训练、评测、部署和虚实迭代，都围绕同一份可追溯模型契约组织。
+按机型和任务组织仿真、示教录制、强化学习与模仿学习、Sim2Real 评测、制品管理与受控部署。MicroDuck 行走、OriginMan 舞蹈和受扰恢复是可选任务。新机型可通过模型契约与适配器接入，真机能力按对应机型与策略逐项验收。
 
-**English (short version)** — A web-based robot learning workbench for MicroDuck and RDK-X5,
-covering simulation, trajectory recording, training, telemetry evaluation, controlled deployment,
-and an MCP adapter for external agents. Local engines include PPO, MLP behavior cloning, and ACT
-action chunking with numerical ONNX export checks. The default Mock workflow needs no GPU; real
-training requires the selected engine's Python dependencies. ACT and Diffusion Policy accept
-digest-pinned recorded episodes through their workers; synthetic smoke requires an explicit request. Board deployment requires
-hardware integration and release evidence. See the quick start below and the [documentation
-index](docs/README.md).
+**English** — A general-purpose robot learning workbench for simulation, demonstrations, reinforcement and imitation learning, evaluation, artifacts, and controlled deployment. The MCP plugin brings these workflows to Studio, Qoder, and compatible hosts. Supported capabilities depend on the selected robot, model contract, and adapters.
 
 [![verify](https://github.com/D-Robotics/robot-learning-platform/actions/workflows/verify.yml/badge.svg)](https://github.com/D-Robotics/robot-learning-platform/actions/workflows/verify.yml)
 [![Node.js](https://img.shields.io/badge/Node.js-22.22.2%2B-339933?logo=nodedotjs&logoColor=white)](https://nodejs.org/)
@@ -26,7 +19,7 @@ index](docs/README.md).
 
 </div>
 
-> **一句话理解：这不是一个只能“遛鸭”的游戏。** 浏览器仿真是低门槛的动作入口；录制结果进入统一契约，随后可以交给本地 worker（默认 Mock）或 RoboGo adapter，最后通过制品、评测和 RDK-X5 预检进入受控的真机迭代。
+从浏览器仿真和录制开始，按任务选择本机或远程 Worker。平台保留训练 Run、评测和策略制品之间的来源关系，真机操作从对应策略的部署预检开始。
 
 运营端/源码开发环境的 Node.js 需要 `^22.22.2 || ^24.15.0 || >=26.0.0`（与 `package.json` 的 `engines` 以及 `.nvmrc` 一致）。**网页用户只需要浏览器，不需要安装 Node、Python 或 CUDA。** 正式部署应在服务器镜像或 systemd 环境中固定 Node 版本。下界由工具链本身决定：`jsdom@30` 要求 `^22.22.2 || ^24.15.0 || >=26`，高于 `vitest@5` 的 `^22.12.0 || ^24.0.0 || >=26`。Node 20 不提供 DSH 会话持久化依赖的 `node:zlib` zstd API；Node 23、25 等非 LTS 奇数版本也不在支持范围内。
 

@@ -3,7 +3,7 @@ name: setup
 description: 连接当前机器人学习平台，确认正式身份与明确模型，再按真实工具能力执行训练与评测。
 ---
 
-用户说“带我开始 Workshop”“继续”或“看看效果”时优先使用 `rdk_workshop`，打开带按钮的工作台；不要先问预算或启动旧多工具编排。课程入口见 [体验流程](../experience-preparation/SKILL.md)。高级操作仍按用户明确请求处理。
+这是通用机器人学习插件。首次按用户任务选择仿真与录制、强化学习、模仿学习、评测、回放或部署预检，优先调用 `rdk_learning_guide`。沿用已明确的机型和任务。只有明确选择受扰恢复课时才用 `rdk_workshop`。继续或看看效果时读取用户指定或已绑定的 Run，找不到原引用时请用户选择。
 
 插件安装、自然语言入口、全部 Skill 与 MCP 工具的用户说明见[插件使用手册](../../references/user-guide.md)。
 
@@ -24,10 +24,12 @@ OriginMan Workshop 训练先用 `rdk_originman_training_choice`：未选预算�
 
 用户连接新OriginMan或要把已有站立模型拿到真机验证时，转到[设备技能](../devices-board/SKILL.md)的OriginMan接入分支；不要直接套用仿真短训或通用策略启动。安装插件、连接设备、模型纯推理和实体站立分别报告。
 
-以实际 tools/list 为准：预检接口缺失时保持未验证，不能声称环境已就绪；可用已支持的模型校验、资源测试和经授权的短训练验证。默认 GPU，CPU 必须显式选择；GPU不可用不自动降级。训练 device=cuda 不表示物理仿真也在 GPU。
+以实际 tools/list 为准：预检接口缺失时保持未验证，不能声称环境已就绪；可用已支持的模型校验、资源测试和经授权的短训练验证。算力以选定引擎与 Worker 配置为准，实际训练设备以 Run 指标为准；资源名称、CUDA 健康探针和仿真执行设备是不同字段。
 
 提交成功保存 contextId 和原 Run；同源评测使用相同参数、sourceRunId 与独立幂等键。断线后恢复原引用，不自动重交。结果执行完成、效果门和真机资格分别报告。只有宿主实际打开且视频播放后才称回放通过。
 
-实验连续操作先读 ../training-runs/SKILL.md；提交后保存明确contextId，恢复原Run而不是重交。默认GPU，CPU必须显式选择。平台版本和引擎以实际工具回执为准。
+实验连续操作先读 ../training-runs/SKILL.md；提交后保存明确contextId，恢复原Run而不是重交。平台版本和引擎以实际工具回执为准。
+
+Studio 有 `studio_open_url` 时使用返回的本轮链接打开右侧工作台；报告页面打开、媒体可用与实际播放时分别依据真实回执。缺少工具或业务读取失败时如实说明，不能把失败报成空列表。受控部署预检被拒绝或设备工具缺失时，保留阻断原因和官方操作入口，不改走终端、SSH 或设备执行工具绕过平台门禁。
 
 宿主安装与连接诊断参考 [客户端接入](../../references/client-setup.md)、[连接契约](../../references/connection-contract.md)、[用户工作流](../../references/user-journeys.md) 和 [仓库能力](../../references/cli-capabilities.md)。便携包优先使用本版安装器与浏览器授权。

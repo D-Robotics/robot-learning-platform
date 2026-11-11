@@ -1,7 +1,7 @@
 {
   "name": "rdk-robot-learning-platform",
-  "version": "0.6.31",
-  "description": "RDK 机器人学习平台的通用插件：多机型浏览器仿真与轨迹录制、多引擎强化学习/模仿学习训练、Sim2Real 评测与质量门、制品晋级与受控部署；Workshop 课程与 OriginMan 舞蹈训练只是内含的引导链路。",
+  "version": "0.6.32",
+  "description": "通用机器人学习插件，支持按机型和任务进入仿真与录制、强化学习与模仿学习、Sim2Real 评测与回放、制品管理和受控部署。OriginMan 舞蹈和受扰恢复是可选任务。",
   "displayName": "RDK Robot Learning Platform",
   "mcpServers": "./.mcp.json",
   "skills": "./skills",
