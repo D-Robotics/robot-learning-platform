@@ -37,6 +37,96 @@ export const ORIGINMAN_DANCE_DRAFT_TOOL = {
   annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
 };
 
+const danceFields = ORIGINMAN_DANCE_DRAFT_TOOL.inputSchema.properties;
+const sectionFields = danceFields.sections.items.properties;
+const learningFields = {
+  task: { type: 'string', enum: ['dance', 'recovery'] },
+  target: { type: 'string', enum: ['simulation', 'hardware'] },
+  movement: sectionFields.type,
+  bpm: danceFields.bpm,
+  beats: sectionFields.beats,
+  intensity: sectionFields.intensity,
+  computeResourceId: { type: 'string', minLength: 1, maxLength: 160 },
+  trainingSteps: { type: 'integer', minimum: 8192, maximum: 2000000 },
+  confirmed: { type: 'boolean' },
+};
+
+export const LEARNING_GUIDE_TOOL = {
+  name: 'rdk_learning_guide',
+  description:
+    '新手开始强化学习的默认入口。携带用户已经明确的选择，每轮返回一个缺项或下一步。task不明先选任务；最终上真机传target=hardware。仅在用户确认本版配方并要求开始时传confirmed=true。只整理计划，不发起登录、训练或设备操作。',
+  inputSchema: { type: 'object', properties: learningFields, additionalProperties: false },
+  annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
+};
+
+export function learningGuide(answers = {}) {
+  if (!answers || typeof answers !== 'object' || Array.isArray(answers))
+    throw Error('请传入学员已确认的选项。');
+  for (const [key, value] of Object.entries(answers)) {
+    const rule = Object.hasOwn(learningFields, key) ? learningFields[key] : null;
+    const type = rule?.type === 'integer' ? 'number' : rule?.type;
+    if (
+      !rule ||
+      typeof value !== type ||
+      (rule.enum && !rule.enum.includes(value)) ||
+      (type === 'number' &&
+        (!Number.isFinite(value) ||
+          value < rule.minimum ||
+          value > rule.maximum ||
+          (rule.type === 'integer' && !Number.isSafeInteger(value)))) ||
+      (type === 'string' && (!value.trim() || value.length > (rule.maxLength ?? 160)))
+    )
+      throw Error('选项不符合课程范围：' + key);
+  }
+  const progress = (stage, studentReply, extra = {}) => ({
+    stage,
+    studentReply,
+    target: answers.target ?? null,
+    trainingSubmitted: false,
+    motionAuthorized: false,
+    ...extra,
+  });
+  if (!answers.task) return progress('task', '你想先练 OriginMan 跳舞，还是练被推后重新站稳？');
+  if (answers.task === 'recovery')
+    return progress('recovery', '先打开受扰恢复课程，看看参考动作。', {
+      nextTool: 'rdk_workshop',
+    });
+  if (!answers.movement) return progress('movement', '第一段舞想做什么？可以从左右交替摆臂开始。');
+  if (answers.bpm === undefined) return progress('bpm', '这段舞想用多少 BPM？可以先试 100 BPM。');
+  if (answers.beats === undefined) return progress('beats', '这段舞要跳 4 拍、8 拍还是 16 拍？');
+  if (answers.intensity === undefined)
+    return progress('intensity', '动作幅度想先用小幅（0.25），还是半幅（0.5）？');
+  if (!answers.computeResourceId)
+    return progress('compute', '接下来你想用哪台支持舞蹈训练的算力机？', {
+      nextTool: 'rdk_development_targets',
+    });
+  if (answers.trainingSteps === undefined)
+    return progress('budget', '这轮先做 8192 步流程快检，还是做 50 万步正式效果实验？');
+
+  const titles = {
+    'alternating-arms': '左右交替摆臂',
+    'weight-shift': '左右换重心',
+    'squat-rise': '下蹲起身',
+    'open-pose': '展开定格',
+  };
+  const dance = {
+    schemaVersion: 1,
+    title: titles[answers.movement],
+    bpm: answers.bpm,
+    sections: [{ type: answers.movement, beats: answers.beats, intensity: answers.intensity }],
+    trainingSteps: answers.trainingSteps,
+  };
+  resolveOriginmanDanceConfig(dance);
+  const recipe = `${dance.title}，${answers.bpm} BPM、${answers.beats} 拍、幅度 ${answers.intensity}、${answers.trainingSteps} 步 PPO`;
+  if (!answers.confirmed)
+    return progress('confirm', `本轮配方是${recipe}。现在开始训练吗？`, { dance });
+  return progress('ready', `已确认${recipe}。接下来检查你选的算力并启动本轮仿真训练。`, {
+    nextTool: 'rdk_originman_dance_train',
+    dance,
+    computeResourceId: answers.computeResourceId,
+  });
+}
+
 export function originmanDanceDraft(args = {}) {
   const draft = resolveOriginmanDanceConfig(args);
   return {

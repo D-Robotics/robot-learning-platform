@@ -31,8 +31,10 @@ import {
   COURSE_BRIEF_TOOL,
   courseBrief,
   TRAINING_CHOICE_TOOL,
+  LEARNING_GUIDE_TOOL,
   ORIGINMAN_DANCE_DRAFT_TOOL,
   originmanDanceDraft,
+  learningGuide,
   trainingChoice,
   ORIGINMAN_COURSE,
   ORIGINMAN_COURSE_INSTRUCTIONS,
@@ -273,6 +275,7 @@ export const EXPERIENCE_TOOLS = [
   },
   COURSE_BRIEF_TOOL,
   TRAINING_CHOICE_TOOL,
+  LEARNING_GUIDE_TOOL,
   ORIGINMAN_DANCE_DRAFT_TOOL,
   ...DANCE_TRAINING_TOOLS,
   ...WORKSHOP_TOOLS,
@@ -492,10 +495,22 @@ export function experienceProxy(
         verified: false,
       };
       const result = await upstream.request(method, params, { signal });
+      const legacyServer = result.serverInfo?.name === 'duck-lab-mcp';
+      const runtime = legacyServer ? pluginRuntimeIdentity() : null;
       uiEnabled = Boolean(uiHtml) && uiSupported(params);
       upstreamResources = Boolean(result.capabilities?.resources);
       return {
         ...result,
+        ...(legacyServer
+          ? {
+              serverInfo: {
+                ...result.serverInfo,
+                name: 'rdk-robot-learning-platform',
+                title: 'RDK Robot Learning Platform',
+                ...(runtime?.loadedSourcesMatch ? { version: runtime.version } : {}),
+              },
+            }
+          : {}),
         ...(uiEnabled
           ? {
               capabilities: {
@@ -505,15 +520,17 @@ export function experienceProxy(
             }
           : {}),
         instructions:
-          (result.instructions ?? '') +
-          '\n默认受扰恢复Workshop入口：直接调用rdk_workshop，不加载指南、不预先询问预算。普通入口立即展示studentReply里的链接供学员点击，不调用浏览器工具等待导航；明确要求替我打开时再导航。工具间不输出旁白或内部推理。页面负责阶段进度与预算授权。' +
+          (result.instructions ?? '').replace(/[（(]Duck Lab[）)]/gi, '') +
+          '\n面向用户统一称为 RDK Robot Learning Platform（RDK 机器人学习平台）。介绍能力时先给课程、训练、评测与回放入口；仅在用户追问时展开底层服务、协议与部署细节。' +
+          '\n新手引导优先：泛称“带我做强化学习”先用rdk_learning_guide选任务；舞蹈逐轮传入用户已经确定的选项，首次有真机目标就传target=hardware。每轮只展示当前studentReply并等待；到compute阶段先只读列出支持舞蹈引擎的算力，让用户按名称选择。ready才取新contextId并提交一次，随后打开原Run并读质量与回放。未通过时先展示失败点，再问是否另开正式训练；已达标且目标是真机时，下一轮只确认目标机器人，再逐项核对真实制品和板端条件，使用只读部署预检与零致动验证；只有实际证据和用户明确动作授权齐备才进入实体阶段。用户明确要求直接执行且已给齐必要条件时沿用明确选择；改了配方、算力或预算后重新确认。' +
+          '\n已明确选择受扰恢复Workshop时：直接调用rdk_workshop，不加载指南、不预先询问预算。普通入口立即展示studentReply里的链接供学员点击，不调用浏览器工具等待导航；明确要求替我打开时再导航。工具间不输出旁白或内部推理。页面负责阶段进度与预算授权。' +
           '\n课堂新学员或新机离线准备：rdk_classroom_guide携带已知answers，只展示studentReply，每次一个中文问题，不重复问已知项。要求依据才detail=full。阶段标准读robot_onboarding_guide，证据读robot_acceptance_assess；needs-input不是通过。离线知识不要求平台登录，不因离线准备启动训练。' +
           '\n默认离线可了解课程，不主动授权、测试算力或连接板卡。需要账号才能继续时，提示“连接学习平台”，等用户明确要求连接才调用rdk_auth_login，浏览器确认后用rdk_auth_status。只在宿主已显式配置绑定账号时复用该身份，不索取密码或Cookie。' +
           '\n换学习平台账号用rdk_auth_switch_account。查看开发机先用rdk_development_targets list。用户明确选算力机开始Workshop时，按唯一名称匹配算力机ID，传rdk_workshop intent:new和computeResourceId。用户明确要求连接某台板卡时才按板卡列表匹配ID并用connect-board。名称有歧义时让用户选择，不在聊天收集凭据。' +
           '\n任务意图优先：当前对话已明确OriginMan强化学习跳舞时，“带我开始/重新开始Workshop”沿 danceTraining 流程取得新 contextId并继续已确认编舞；不得展示旧实验结果或调用rdk_workshop、rdk_originman_train等受扰恢复链路。舞蹈继续/看看效果只查询原Run。提交、等待和状态查询回执的qoderNavigation/visualization必须打开并聚焦到本轮Run；宿主不支持导航时给可点击链接。' +
           '\n简短咨询预算用途、计数单位或流程/效果/回放完成标准：优先rdk_originman_course_brief，逐字展示studentReply两句即结束，不加载整份指南和历史证据。实际成绩另读原评测；明确问依据才按需读引用。不编造计数倍率。' +
           '\n交互约定：默认简短中文，按“当前进度→本次结果→下一步”回答。认证、版本、契约和资源校验在后台完成，正常时不逐项播报。只在阶段变化、阻断或需要用户选择时更新；不重复播报running，不展示内部推理。UUID、工具名、摘要和错误码仅在用户查看诊断时展开。正常结果优先给曲线、对比图和回放入口；宿主能打开工作台则在工作台展示，否则给可点击链接。没有实际渲染能力不伪装交互卡片，没有播放器观测不称已播放。' +
-          '\n高级独立训练才使用预算选择与原子训练工具：按用户已选预算执行，不重复问。默认Workshop先rdk_workshop打开按钮工作台，在页面选择预算并自动接续；只咨询或先不要开始时不提交。高级手动提交仍核对当前账号、完整manifest、同源父Run与权重，失败不改标识重交。' +
+          '\n高级独立训练才使用预算选择与原子训练工具：按用户已选预算执行，不重复问。已选择恢复课程后用rdk_workshop打开按钮工作台，在页面选择预算并自动接续；只咨询或先不要开始时不提交。高级手动提交仍核对当前账号、完整manifest、同源父Run与权重，失败不改标识重交。' +
           '\n等待：沿用同一Run及nextPollArguments，正常等待窗口结束继续读；不启动shell sleep。失败或stopWorkflow=true停止所有自动提交，不换标识、资源或参数重交；仍可只读查询原Run、日志及恢复已有引用。SUBMISSION_REFERENCE_SAVE_FAILED表示任务已经提交，保留回执并恢复，绝不能说尚未提交。' +
           '\n实验接续：通用流程提交后用明确contextId保存训练及同源评测引用；专用短训工具已保存，无需重复。跨聊天或软件继续时使用明确实验标识调用experiment_resume，并重新验证当前平台和账号；不选择全局最新Run，不扫描其他账号。本机引用不等于跨机器同步。404、网络失败和断线不触发重交。新实验使用新contextId，调参须用户明确提出。' +
           '\n结果：只展示本次Run的真实original/tuned/rl对比；执行完成、质量提升和真机资格分别判断，短训不承诺提升。提交、等待或状态查询新Run后立刻按回执的qoderNavigation在内置浏览器打开并置前，或使用visualization.url；没有导航能力时保留可点击链接。run-detail.html按Run ID读取详情，账号无权查看时明确提示，不改看全局最新Run。舞蹈回放须先通过本次策略和轨迹SHA核验，再由页面内播放器播放；不调用真机rdk_replay_video或evaluationId接口；媒体链接不做正文抓取、HEAD、curl或独立浏览器认证探测。没有观测就报告播放待验证。一般流程用workflow_inspect按需看证据，不默认打印整张技术状态表；新训练前training_prepare刷新资源。默认GPU，CPU须明确选择，不自动降级、不操作真机。\n本次原生计算配置：' +
@@ -521,7 +538,7 @@ export function experienceProxy(
           '。宿主接口缺失时不要要求已经在桌面中的用户重复“去桌面操作”；用指南中的 clientContext 说明实际缺口。' +
           ORIGINMAN_COURSE_INSTRUCTIONS +
           '\n用户明确要求助手自动播放已有结果时，保留0.5.5能力：按experiment_resume.playbackPlan使用内置页面工具，list_pages取实际pageId，select_page({pageId,bringToFront:true})，核对可见性与本次来源后只执行startScript一次，再观察真实时间推进与ended。计划不等于执行；禁止seek、伪造进度、改安全设置或重交任务。默认按钮课程仍由页面推进，不主动调用此高级计划。' +
-          '\n默认受扰恢复课程仍由rdk_workshop({intent:start|continue|results})打开按钮工作台；但当前任务明确是OriginMan跳舞时，必须走独立danceTraining流程，不能让默认入口覆盖用户已说明的课程。恢复课不要先调用旧预算问答或experience_guide；预算和后续步骤改在页面按钮选择。打开返回links.workshop，Qoder静默执行内置navigate_page→list_pages，按完整URL匹配真实pageId，再select_page({pageId,bringToFront:true})显示工作面，不能漏pageId；必要时提示产出→网页查阅，避免外部Browser Connector。保留高级工具，自由问答与用户明确的自定义训练不受本入口限制。' +
+          '\n已选择的受扰恢复课程仍由rdk_workshop({intent:start|continue|results})打开按钮工作台；但当前任务明确是OriginMan跳舞时，必须走独立danceTraining流程，不能让默认入口覆盖用户已说明的课程。恢复课不要先调用旧预算问答或experience_guide；预算和后续步骤改在页面按钮选择。打开返回links.workshop，Qoder静默执行内置navigate_page→list_pages，按完整URL匹配真实pageId，再select_page({pageId,bringToFront:true})显示工作面，不能漏pageId；必要时提示产出→网页查阅，避免外部Browser Connector。保留高级工具，自由问答与用户明确的自定义训练不受本入口限制。' +
           '\n普通Workshop回执：优先使用工具studentReply，默认入口不播报加载和打开过程，导航后仅一句中文加一个实验页链接。页面已显示曲线和对比时不重复抄技术表；账号、UUID、英文套件名、摘要、video字节和部署细节按用户明确要求再展开。正常完成后不再询问是否播放，能操作播放器就实际播放，否则明确待播放。只报告完成的四个主阶段；单变量调参是可选后续，不算本轮未完成项。',
       };
     }
@@ -684,6 +701,8 @@ export function experienceProxy(
           payload = courseBrief(params.arguments ?? {});
         else if (params.name === 'rdk_originman_training_choice')
           payload = trainingChoice(params.arguments ?? {});
+        else if (params.name === LEARNING_GUIDE_TOOL.name)
+          payload = learningGuide(params.arguments ?? {});
         else if (params.name === ORIGINMAN_DANCE_DRAFT_TOOL.name)
           payload = originmanDanceDraft(params.arguments ?? {});
         else if (DANCE_TRAINING_TOOLS.some((tool) => tool.name === params.name)) {

@@ -1,6 +1,6 @@
 # RDK Robot Learning Platform 插件使用说明
 
-**版本：0.6.17** · 适用：Qoder、RDK Studio，以及支持 MCP 与 Markdown 链接的 Agent 宿主。
+**版本：0.6.22** · 适用：Qoder、RDK Studio，以及支持 MCP 与 Markdown 链接的 Agent 宿主。
 
 本手册说明插件能做什么、如何安装连接、常见任务怎么说、每个 Skill 和 MCP 工具负责什么，以及结果应如何判读。学员日常使用自然语言即可；工具名和 ID 主要供维护者排查。每次操作仍以当前平台实际返回的 `tools/list`、账号权限和运行结果为准。
 
@@ -197,6 +197,7 @@ Skill 是按任务使用的操作说明，不是权限提升。实际工具、�
 | --- | --- |
 | `rdk_plugin_status` | 离线核对加载版本和源码是否匹配。 |
 | `rdk_originman_course_brief` / `rdk_originman_training_choice` | 课程预算/完成标准说明；手动高级训练预算选择。 |
+| `rdk_learning_guide` | 新手逐轮选任务、编舞、算力和预算，保留真机目标与已知选项。 |
 | `rdk_originman_dance_draft` / `rdk_originman_dance_train` | 整理有界舞段配置；校验后提交独立 PPO 仿真训练。 |
 | `rdk_workshop` | Workshop 开始、继续、查看结果统一入口；页面选择预算，不直接提交。 |
 | `rdk_development_targets` | 查看算力机和板卡，测试算力机或连接明确板卡。 |

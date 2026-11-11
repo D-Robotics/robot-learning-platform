@@ -4,7 +4,7 @@
       "type": "stdio",
       "command": "/Users/d-robotics/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin/node",
       "args": [
-        "/Users/d-robotics/.codex/plugin-builds/rdk-robot-learning-platform-0.6.19-final/scripts/experience-mcp.mjs"
+        "/Users/d-robotics/.qoder/plugins/cache/local/rdk-robot-learning-platform/0.6.22/scripts/experience-mcp.mjs"
       ],
       "env": {
         "RDK_STUDIO_INHERIT_LOGIN": "0",

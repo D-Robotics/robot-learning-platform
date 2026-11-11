@@ -18,7 +18,7 @@ OriginMan Workshop 训练先用 `rdk_originman_training_choice`：未选预算�
 
 这是自包含便携插件，不需要平台源码或 npm install。Windows双击setup-windows.cmd，macOS双击setup-macos.command；安装器会准备兼容运行时、生成配置并接入已初始化的Studio。其他宿主导入安装目录的.mcp.json。无须手写凭据。默认不继承宿主账号，不自动选择算力机或连接板卡。需要时提示“连接学习平台”，仅在用户明确要求后发起浏览器授权。需要平台数据或真实任务时先调用 rdk_platform_status，确认目标平台、正式身份和工具目录；导入版本不等于连接已切换。宿主存在旧的同类 MCP 连接时，更新那条连接的启动配置，不绕过认证或随意添加重复连接。
 
-用户说“带我完成 OriginMan Workshop”时，直接使用 [体验流程](../experience-preparation/SKILL.md)。专用工具内部读取课程登记材料并校验，不要求学员填写manifest或UUID。普通训练、CLI或高级配方再读 [训练技能](../training-runs/SKILL.md)；手工登记时使用真实manifest，不自造字段。
+用户说“带我完成 OriginMan Workshop”时，先按任务意图用 `rdk_learning_guide` 逐步引导，详细入口见 [体验流程](../experience-preparation/SKILL.md)。专用工具内部读取课程登记材料并校验，不要求学员填写manifest或UUID。普通训练、CLI或高级配方再读 [训练技能](../training-runs/SKILL.md)；手工登记时使用真实manifest，不自造字段。
 
 任何新机器人接入或换机验收，先使用[逐机验收技能](../robot-acceptance/SKILL.md)；本地指南和证据字段审查无需平台登录，平台数据再按账号连接。
 

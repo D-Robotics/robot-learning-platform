@@ -1,4 +1,4 @@
-# RDK Robot Learning 插件（Qoder / Studio） 0.6.17
+# RDK Robot Learning 插件（Qoder / Studio） 0.6.22
 
 Qoder 用户请先读 references/qoder-first-run.md，运行 setup-qoder-macos.command 或 setup-qoder-windows.cmd，仅配置本插件，不改 Studio，并生成Qoder本机导入包.zip。桌面请上传这个本机包，不要上传未配置的原ZIP。新机器人说：先离线，请逐题引导我输入。
 
@@ -7,6 +7,7 @@ Studio 用户：解压到最终目录后，Windows 双击 setup-windows.cmd，ma
 不需要平台源码、npm install、手写密码或 Cookie。其他宿主导入生成的 .mcp.json。
 完整插件使用说明见 [references/user-guide.md](references/user-guide.md)；Workshop 页面教程见 references/workshop-first-run.md。
 
+0.6.22：合并统一线 0.6.21（Workshop 课程与文档更新）；训练失败时在对话层直读平台 failureDetail（引擎退出码与 stderr 尾部，需平台 de8e116 及以上）；插件定位文案改为通用平台描述；.rdstudio 清单版本对齐。
 0.6.17：算力机清单展示最近健康检查报告的引擎和 Mock 状态；OriginMan 舞蹈训练优先给出已报告支持 `originman-dance-ppo` 且非 Mock 的资源，提交前仍会重新测试。Run 详情会根据实际回放链接准确说明能否播放。舞蹈奖励校准和 NPZ/MP4 媒体读取仍需平台舞蹈引擎及媒体 API 提供数据，本版不会伪造达标或回放。
 
 支持登录继承的 Studio 自动复用当前任务账号；配套接线适配 Windows/macOS 安装路径，
