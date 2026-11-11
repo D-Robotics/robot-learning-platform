@@ -541,6 +541,17 @@ function safeMetrics(value: unknown): Sim2RealRunMetrics | undefined {
   };
   const physicsBackend = safeLabel('physicsBackend');
   const engine = safeLabel('engine');
+  const trainingDevice =
+    typeof source.trainingDevice === 'string' &&
+    /^(cpu|mps|cuda(:[0-9]{1,3})?)$/.test(source.trainingDevice)
+      ? source.trainingDevice
+      : undefined;
+  const deviceName =
+    typeof source.trainingDeviceName === 'string' ? source.trainingDeviceName.trim() : '';
+  const trainingDeviceName =
+    trainingDevice && /^[a-zA-Z0-9][a-zA-Z0-9 ._()+-]{0,95}$/.test(deviceName)
+      ? deviceName
+      : undefined;
   const originmanDance =
     engine === 'originman-dance-ppo' ? safeDanceMetrics(source.originmanDance) : undefined;
   return {
@@ -586,10 +597,8 @@ function safeMetrics(value: unknown): Sim2RealRunMetrics | undefined {
     ...(bounded('trainingSteps', 1, 10_000_000) == null
       ? {}
       : { trainingSteps: bounded('trainingSteps', 1, 10_000_000) }),
-    ...(typeof source.trainingDevice === 'string' &&
-    /^(cpu|mps|cuda(:[0-9]{1,3})?)$/.test(source.trainingDevice)
-      ? { trainingDevice: source.trainingDevice }
-      : {}),
+    ...(trainingDevice ? { trainingDevice } : {}),
+    ...(trainingDeviceName ? { trainingDeviceName } : {}),
     ...(bounded('trainChunkMse', 0, 1_000_000) == null
       ? {}
       : { trainChunkMse: bounded('trainChunkMse', 0, 1_000_000) }),

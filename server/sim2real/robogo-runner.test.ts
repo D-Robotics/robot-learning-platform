@@ -405,9 +405,19 @@ describe('RoboGo Sim2Real runner adapter', () => {
       status: 'completed',
       runId: 'run-cuda',
       cuda: true,
-      metrics: { contractValid: true, observationSize: 61, actionSize: 14 },
+      metrics: {
+        contractValid: true,
+        observationSize: 61,
+        actionSize: 14,
+        trainingDevice: 'cuda:0',
+        trainingDeviceName: 'NVIDIA GeForce RTX 4090',
+      },
     });
-    expect(gpu.metrics).toMatchObject({ cuda: true });
+    expect(gpu.metrics).toMatchObject({
+      cuda: true,
+      trainingDevice: 'cuda:0',
+      trainingDeviceName: 'NVIDIA GeForce RTX 4090',
+    });
 
     // The worker-level flag loses when metrics already state it explicitly.
     const explicit = await poll({
@@ -423,8 +433,16 @@ describe('RoboGo Sim2Real runner adapter', () => {
       status: 'completed',
       runId: 'run-cuda',
       cuda: 'yes',
-      metrics: { contractValid: true, observationSize: 61, actionSize: 14 },
+      metrics: {
+        contractValid: true,
+        observationSize: 61,
+        actionSize: 14,
+        trainingDevice: 'mps',
+        trainingDeviceName: '<invalid>',
+      },
     });
     expect(spoofed.metrics?.cuda).toBeUndefined();
+    expect(spoofed.metrics?.trainingDevice).toBe('mps');
+    expect(spoofed.metrics?.trainingDeviceName).toBeUndefined();
   });
 });

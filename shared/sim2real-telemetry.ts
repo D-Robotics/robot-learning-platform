@@ -72,6 +72,8 @@ export interface Sim2RealRunMetrics {
   engine?: string;
   trainingSteps?: number;
   trainingDevice?: string;
+  /** Device model reported by the worker for its selected runtime device. */
+  trainingDeviceName?: string;
   originmanDance?: {
     qualityGatePassed?: boolean;
     evaluations: {
