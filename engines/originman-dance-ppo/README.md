@@ -1,0 +1,59 @@
+# OriginMan dance PPO worker
+
+This directory is the platform-owned home for the OriginMan full-body dance
+environment. It uses a separately staged OriginMan MuJoCo bundle; model meshes
+and hardware assets are not included in this repository. A worker must point
+`RDK_ORIGINMAN_DANCE_BUNDLE_DIR` at a complete, non-symlink bundle containing
+`model/scene.xml`, `model/model-manifest.json`, `model/meshes/`, and
+`reference.npy`.
+
+The training contract is simulation-only. The fixed model produces 18 policy
+actions (the 20-joint robot's two head actuators are excluded) and every
+choreography uses a fixed 78-value observation contract (up to eight section
+slots). Hardware deployment is not
+implemented by this adapter; full-body joint calibration, direction mapping,
+limits, timing, policy parity, safety gates, and physical acceptance remain
+separate requirements.
+
+`body.py`, `env.py`, `dance_env.py`, and `train.py` provide the simulator,
+learner-configurable choreography, PPO training, three-BPM style evaluation,
+and a nominal-BPM replay trace. `adapter.py` implements the local worker's
+file protocol and emits a checked ONNX policy. The platform run contract carries
+the choreography under `training.originmanDance` and the worker receives it as
+`task.originmanDance`.
+
+Install the fully pinned environment with `uv pip install --require-hashes -r
+requirements.txt`, then register the engine in `RDK_SIM2REAL_TRAIN_ENGINES_JSON`
+using that environment's Python and `adapter.py`. Set
+`RDK_ORIGINMAN_DANCE_BUNDLE_DIR` to the separately staged model bundle; the
+worker refuses to train when any required file or mesh digest is invalid.
+`/healthz` advertises registered engine IDs so the plugin can stop before
+submission when this adapter is absent. An engine appearing in health does not
+prove that its assets are valid; the first job performs that check and can fail
+closed without producing a policy. `model-manifest.json` must include
+`sceneSha256`, the exact SHA-256 of the mounted `scene.xml`; this verifies the
+actual worker input. `sourceSceneSha256` remains separate lineage metadata and
+is reported independently, so an adapted scene is never misreported as the
+original source scene.
+
+The scene XML SHA-256 must exactly match the manifest's `sceneSha256`, which
+is the digest of the actual mounted scene. `sourceSceneSha256` is a separate
+lineage digest for the source asset and can differ when the scene has been
+adapted; the worker reports both facts independently.
+
+## Provenance and the 2026-11-11 serialization fix
+
+First committed to the repository on 2026-11-11, snapshotted from the live
+GPU-runner engine directory
+`/root/rdk-originman-dance-validation-20261109/engine/originman-dance-ppo/`
+(the runtime copy registered with the training worker). The runner remains
+the execution surface; this copy is the canonical, version-controlled source.
+
+Includes the 2026-11-11 fix for intermittent run failures after training:
+evaluation reports can carry numpy scalars and (via the traced evaluation)
+a `qpos` ndarray. `train.py` now selects the traced evaluation by qpos
+presence instead of `bpms.index(bpm)` (BPM clamping to 80–140 collapses the
+probe set and misaligned the index, leaving the ndarray in the report), and
+all three JSON write sites (`evaluation.json`, `training-summary.json`,
+`result.json`) serialize through `_json_default`, which converts numpy types
+to built-ins while `allow_nan=False` keeps failing closed on NaN.
