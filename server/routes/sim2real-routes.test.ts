@@ -1,18 +1,14 @@
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
+import { createHash } from 'node:crypto';
 import type { NextFunction, Request, Response } from 'express';
 
 import { afterEach, describe, expect, it } from 'vitest';
 
 import { BUILTIN_MICRODUCK_MODEL, type Sim2RealModelManifest } from '../../shared/sim2real.js';
 import type { Sim2RealAuthPort } from '../sim2real/sim2real-auth.js';
-import { readDevices } from '../sim2real/standalone-adapters.js';
-import {
-  reserveSim2RealRun,
-  updateSim2RealComputeResource,
-  appendSim2RealTelemetry,
-} from '../sim2real/sim2real-store.js';
+import { reserveSim2RealRun, updateSim2RealComputeResource } from '../sim2real/sim2real-store.js';
 import { createSim2RealRouter, workspacePackageVersion } from './sim2real-routes.js';
 
 const roots: string[] = [];
@@ -1770,6 +1766,163 @@ describe('Sim2Real HTTP routes', () => {
     });
     expect(response.statusCode).toBe(400);
     expect(response.body).toMatchObject({ code: 'SIM2REAL_INVALID_RESUME' });
+  });
+
+  it('serves a completed local run artifact with digest cross-checks', async () => {
+    process.env.RDK_SIM2REAL_LOCAL_RUNNER_URL = 'http://127.0.0.1:18201/train';
+    delete process.env.RDK_SIM2REAL_ROBOGO_RUNNER_URL;
+    const artifactBytes = Buffer.from('fake-onnx-policy-bytes');
+    const artifactSha = createHash('sha256').update(artifactBytes).digest('hex');
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async (input, init) => {
+      const url = String(input);
+      if (url.endsWith('/train')) {
+        void init;
+        return new Response(JSON.stringify({ status: 'queued', runId: 'artifact-run-1' }), {
+          status: 202,
+          headers: { 'content-type': 'application/json' },
+        });
+      }
+      if (url.endsWith('/runs/artifact-run-1/artifact')) {
+        return new Response(new Uint8Array(artifactBytes), {
+          status: 200,
+          headers: {
+            'content-type': 'application/octet-stream',
+            'content-length': String(artifactBytes.length),
+            'x-artifact-sha256': artifactSha,
+          },
+        });
+      }
+      if (url.endsWith('/runs/artifact-run-1')) {
+        return new Response(
+          JSON.stringify({
+            status: 'completed',
+            runId: 'artifact-run-1',
+            artifact: {
+              artifactId: 'artifact-run-1-policy',
+              artifactRef: 'artifact://local/artifact-run-1/policy.onnx',
+              kind: 'source',
+              format: 'onnx',
+              runtime: 'cpu-onnx',
+              workload: 'locomotion',
+              threads: 1,
+              sha256: artifactSha,
+            },
+          }),
+          { status: 200, headers: { 'content-type': 'application/json' } },
+        );
+      }
+      return new Response('{}', { status: 404 });
+    }) as typeof fetch;
+    try {
+      const router = await fixture();
+      const manifest = userManifest();
+      manifest.simulator.backends = ['local'];
+      const registerResponse = await invoke(router, 'post', '/api/sim2real/models', {
+        body: { manifest },
+      });
+      const registered = registerResponse.body as { model: { id: string } };
+      const runResponse = await invoke(router, 'post', '/api/sim2real/runs', {
+        body: {
+          modelId: registered.model.id,
+          backend: 'local',
+          idempotencyKey: 'artifact-route-run-1',
+        },
+      });
+      const run = runResponse.body as { run: { id: string } };
+      // The first status read observes completion and attaches the artifact.
+      await invoke(router, 'get', '/api/sim2real/runs/:id', { params: { id: run.run.id } });
+      const download = await invoke(router, 'get', '/api/sim2real/runs/:id/artifact', {
+        params: { id: run.run.id },
+      });
+      expect(download.statusCode).toBe(200);
+      expect(download.headers['x-artifact-sha256']).toBe(artifactSha);
+      expect(download.headers['content-disposition']).toContain('policy-');
+      expect(Buffer.from(download.body as Buffer).toString()).toBe(artifactBytes.toString());
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it('refuses artifact bytes whose digest disagrees with the ledger record', async () => {
+    process.env.RDK_SIM2REAL_LOCAL_RUNNER_URL = 'http://127.0.0.1:18202/train';
+    delete process.env.RDK_SIM2REAL_ROBOGO_RUNNER_URL;
+    const ledgerSha = createHash('sha256').update(Buffer.from('ledger-claim')).digest('hex');
+    const servedSha = createHash('sha256').update(Buffer.from('worker-served')).digest('hex');
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async (input) => {
+      const url = String(input);
+      if (url.endsWith('/train')) {
+        return new Response(JSON.stringify({ status: 'queued', runId: 'artifact-run-2' }), {
+          status: 202,
+          headers: { 'content-type': 'application/json' },
+        });
+      }
+      if (url.endsWith('/runs/artifact-run-2/artifact')) {
+        return new Response(new Uint8Array(Buffer.from('worker-served')), {
+          status: 200,
+          headers: {
+            'content-type': 'application/octet-stream',
+            'content-length': String(Buffer.from('worker-served').length),
+            'x-artifact-sha256': servedSha,
+          },
+        });
+      }
+      if (url.endsWith('/runs/artifact-run-2')) {
+        return new Response(
+          JSON.stringify({
+            status: 'completed',
+            runId: 'artifact-run-2',
+            artifact: {
+              artifactId: 'artifact-run-2-policy',
+              artifactRef: 'artifact://local/artifact-run-2/policy.onnx',
+              kind: 'source',
+              format: 'onnx',
+              runtime: 'cpu-onnx',
+              workload: 'locomotion',
+              threads: 1,
+              sha256: ledgerSha,
+            },
+          }),
+          { status: 200, headers: { 'content-type': 'application/json' } },
+        );
+      }
+      return new Response('{}', { status: 404 });
+    }) as typeof fetch;
+    try {
+      const router = await fixture();
+      const manifest = userManifest();
+      manifest.simulator.backends = ['local'];
+      const registerResponse = await invoke(router, 'post', '/api/sim2real/models', {
+        body: { manifest },
+      });
+      const registered = registerResponse.body as { model: { id: string } };
+      const runResponse = await invoke(router, 'post', '/api/sim2real/runs', {
+        body: {
+          modelId: registered.model.id,
+          backend: 'local',
+          idempotencyKey: 'artifact-route-run-2',
+        },
+      });
+      const run = runResponse.body as { run: { id: string } };
+      await invoke(router, 'get', '/api/sim2real/runs/:id', { params: { id: run.run.id } });
+      const download = await invoke(router, 'get', '/api/sim2real/runs/:id/artifact', {
+        params: { id: run.run.id },
+      });
+      expect(download.statusCode).toBe(409);
+      expect(download.body).toMatchObject({ code: 'SIM2REAL_ARTIFACT_DIGEST_MISMATCH' });
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it('returns 404 for artifact downloads of unknown runs', async () => {
+    const router = await fixture();
+    const response = await invoke(router, 'get', '/api/sim2real/runs/:id/artifact', {
+      params: { id: 'no-such-run' },
+    });
+    expect(response.statusCode).toBe(404);
+    expect(response.body).toMatchObject({ code: 'SIM2REAL_RUN_NOT_FOUND' });
   });
 
   it('runs a local training worker without consulting the RoboGo endpoint', async () => {

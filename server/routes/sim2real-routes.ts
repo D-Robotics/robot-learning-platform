@@ -3480,6 +3480,108 @@ export function createSim2RealRouter(
     }),
   );
 
+  router.get(
+    api('/runs/:id/artifact'),
+    wrapAsync(async (request, response) => {
+      const owner = requestOwner(request, response, auth);
+      if (owner === null) return;
+      const run = await getSim2RealRun(String(request.params.id || ''), owner);
+      if (!run) {
+        sendApiError(response, 404, 'SIM2REAL_RUN_NOT_FOUND', '运行记录不存在。', {
+          retryable: false,
+        });
+        return;
+      }
+      if (run.backend !== 'local' || !run.externalRunId) {
+        sendApiError(
+          response,
+          409,
+          'SIM2REAL_ARTIFACT_BACKEND_UNSUPPORTED',
+          '仅本地 worker 运行提供制品下载。',
+          { retryable: false },
+        );
+        return;
+      }
+      if (run.status !== 'completed' || run.mock) {
+        sendApiError(
+          response,
+          409,
+          'SIM2REAL_RUN_NOT_COMPLETED',
+          '只有已完成的真实运行才能下载制品。',
+          {
+            retryable: false,
+          },
+        );
+        return;
+      }
+      const artifact = run.artifact;
+      if (
+        artifact?.format?.toLowerCase() !== 'onnx' ||
+        !/^[a-f0-9]{64}$/.test(artifact.sha256 ?? '')
+      ) {
+        sendApiError(
+          response,
+          409,
+          'SIM2REAL_ARTIFACT_NOT_DOWNLOADABLE',
+          '该运行没有可下载的 ONNX 制品记录。',
+          { retryable: false },
+        );
+        return;
+      }
+      const selectedResource = run.computeResourceId
+        ? await getSim2RealComputeResourceSecret(run.computeResourceId, owner)
+        : null;
+      const accountId = String(
+        auth.resolvePrincipal(request)?.accountId ??
+          owner ??
+          (!auth.isMultiUserDeployment() ? 'local-dev' : ''),
+      ).trim();
+      // fetchLocalRunArtifact re-hashes the worker-served bytes against the
+      // digest the worker recorded at completion; the extra comparison below
+      // pins them to the ledger's claim as well before anything leaves the
+      // process.
+      const fetched = accountId
+        ? await fetchLocalRunArtifact({
+            accountId,
+            externalRunId: run.externalRunId,
+            ...(selectedResource
+              ? {
+                  runnerUrl: selectedResource.resource.runnerUrl,
+                  runnerToken: selectedResource.runnerToken ?? '',
+                }
+              : {}),
+          })
+        : null;
+      if (!fetched) {
+        sendApiError(
+          response,
+          502,
+          'SIM2REAL_ARTIFACT_FETCH_FAILED',
+          '无法从执行端取回制品字节。',
+          {
+            retryable: true,
+          },
+        );
+        return;
+      }
+      if (fetched.sha256 !== artifact.sha256) {
+        sendApiError(
+          response,
+          409,
+          'SIM2REAL_ARTIFACT_DIGEST_MISMATCH',
+          '制品摘要与台账记录不一致，已拒绝下发。',
+          { retryable: false },
+        );
+        return;
+      }
+      response.setHeader('Content-Type', 'application/octet-stream');
+      response.setHeader('X-Artifact-Sha256', fetched.sha256);
+      response.setHeader('Cache-Control', 'no-store');
+      response.setHeader('Content-Disposition', `attachment; filename="policy-${run.id}.onnx"`);
+      response.end(fetched.bytes);
+    }),
+  );
+
   router.post(
     api('/runs/:id/relay/artifact'),
     wrapAsync(async (request, response) => {
