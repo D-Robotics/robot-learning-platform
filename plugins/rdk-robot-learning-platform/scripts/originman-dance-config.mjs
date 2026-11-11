@@ -11,6 +11,11 @@ export const REWARD_TUNING_LIMITS = {
   workPenalty: { min: 0.2, max: 1.5 },
   squatWorkPenalty: { min: 0.05, max: 1.0 },
   tiltPenalty: { min: 1.0, max: 6.0 },
+  armSwingWeight: { min: 1.0, max: 8.0 },
+  armSpeedWeight: { min: 0.2, max: 4.0 },
+  weightShiftWeight: { min: 1.0, max: 8.0 },
+  squatWeight: { min: 1.0, max: 8.0 },
+  settleArmsWeight: { min: 0.2, max: 6.0 },
 };
 
 function fail(message) {

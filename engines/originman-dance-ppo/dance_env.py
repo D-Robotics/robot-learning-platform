@@ -28,6 +28,11 @@ REWARD_TUNING_LIMITS = {
     "workPenalty": (0.2, 1.5),
     "squatWorkPenalty": (0.05, 1.0),
     "tiltPenalty": (1.0, 6.0),
+    "armSwingWeight": (1.0, 8.0),
+    "armSpeedWeight": (0.2, 4.0),
+    "weightShiftWeight": (1.0, 8.0),
+    "squatWeight": (1.0, 8.0),
+    "settleArmsWeight": (0.2, 6.0),
 }
 DEFAULT_REWARD_TUNING = {
     "weightShiftTargetM": 0.036,
@@ -38,6 +43,11 @@ DEFAULT_REWARD_TUNING = {
     "workPenalty": 0.8,
     "squatWorkPenalty": 0.35,
     "tiltPenalty": 3.0,
+    "armSwingWeight": 4.0,
+    "armSpeedWeight": 1.5,
+    "weightShiftWeight": 3.4,
+    "squatWeight": 3.5,
+    "settleArmsWeight": 2.5,
 }
 
 
@@ -200,20 +210,20 @@ class ConfigurableChoreography(Dance):
         if section["type"] == "alternating-arms":
             target, pulse = alternating_arm_targets(local, intensity)
             style = (
-                4.0 * math.exp(-((asymmetry - target) / 0.045) ** 2)
-                + 1.5 * math.exp(-((info["armSpeed"] - (0.15 + 1.8 * pulse)) / 0.65) ** 2)
+                self.reward["armSwingWeight"] * math.exp(-((asymmetry - target) / 0.045) ** 2)
+                + self.reward["armSpeedWeight"] * math.exp(-((info["armSpeed"] - (0.15 + 1.8 * pulse)) / 0.65) ** 2)
             )
         elif section["type"] == "weight-shift":
             target = self.reward["weightShiftTargetM"] * slow
             style = intensity * (
-                3.4 * math.exp(-((lateral - target) / self.reward["weightShiftToleranceM"]) ** 2)
+                self.reward["weightShiftWeight"] * math.exp(-((lateral - target) / self.reward["weightShiftToleranceM"]) ** 2)
                 + 0.8 * np.clip(slow * lateral / self.reward["weightShiftTargetM"], -1, 1)
                 + 0.55 * accent
             )
         elif section["type"] == "squat-rise":
             target = self.robot.base_height - 0.009 - self.reward["squatDepthM"] * (0.5 - 0.5 * slow)
             style = intensity * (
-                3.5 * math.exp(-((height - target) / self.reward["squatToleranceM"]) ** 2)
+                self.reward["squatWeight"] * math.exp(-((height - target) / self.reward["squatToleranceM"]) ** 2)
                 + 1.10 * np.clip(-slow * arm_forward / 0.13, -1, 1)
                 + 0.4 * accent
             )
@@ -222,7 +232,7 @@ class ConfigurableChoreography(Dance):
             open_arms = np.clip((spread - 0.18) / 0.17, 0, 1.4)
             style = intensity * (
                 (1 - settle) * (accent + 0.85 * open_arms)
-                + settle * (2.5 * open_arms + self.reward["settleStillnessWeight"] * math.exp(-2.2 * speed**2))
+                + settle * (self.reward["settleArmsWeight"] * open_arms + self.reward["settleStillnessWeight"] * math.exp(-2.2 * speed**2))
             )
         tilt = math.radians(info["tiltDeg"])
         work = info["mechanicalWorkJ"] - getattr(self, "previous_work", 0.0) if self.ticks > 1 else info["mechanicalWorkJ"]

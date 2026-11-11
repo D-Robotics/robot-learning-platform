@@ -1,10 +1,10 @@
 {
   "schemaVersion": 1,
   "name": "rdk-robot-learning-platform",
-  "version": "0.6.24",
+  "version": "0.6.30",
   "description": "RDK \u673a\u5668\u4eba\u5b66\u4e60\u5e73\u53f0\u7684\u901a\u7528\u63d2\u4ef6\uff1a\u591a\u673a\u578b\u6d4f\u89c8\u5668\u4eff\u771f\u4e0e\u8f68\u8ff9\u5f55\u5236\u3001\u591a\u5f15\u64ce\u5f3a\u5316\u5b66\u4e60/\u6a21\u4eff\u5b66\u4e60\u8bad\u7ec3\u3001Sim2Real \u8bc4\u6d4b\u4e0e\u8d28\u91cf\u95e8\u3001\u5236\u54c1\u664b\u7ea7\u4e0e\u53d7\u63a7\u90e8\u7f72\uff1bWorkshop \u8bfe\u7a0b\u4e0e OriginMan \u821e\u8e48\u8bad\u7ec3\u53ea\u662f\u5185\u542b\u7684\u5f15\u5bfc\u94fe\u8def\u3002",
   "composition": "retained-core-with-host-neutral-workflow-extension",
-  "coreBundleSha256": "8d22bef2b36cca43f346e839d94618716205efb216db4a020ad120a7afb94950",
+  "coreBundleSha256": "fe7e5f440cbc357b47de476bee5b8b15facc7940d7bbcc7a8975adbd4e1bfca5",
   "coreVersion": "0.1.0",
   "wrapperSources": {
     "scripts/workshop-course.mjs": "d226cce6d3703b25f29c7cf16a94ba97307fc0954237fb40bc0965425b9a3d79",
@@ -25,8 +25,8 @@
     "scripts/authenticated-core.mjs": "d6cab82f0a52f669a2f852745789c973eeef947810f878c1300eeced05f58403",
     "scripts/plugin-errors.mjs": "e9838bb69684dece6ecbdedbf4acc7354695c998f26a9e8291886c26cc8e06f0",
     "scripts/course-setup.mjs": "5b3606ed3d38c930213260a0103a3fd76db680af435fb96f735f3bee32014fb9",
-    "scripts/originman-dance-config.mjs": "73cd4367e772e1fb331d2faa529c400f3953bad6d80b9852adfb4b304edf76a4",
-    "scripts/dance-training.mjs": "35d43a16fc201a8efdd76faf662d0313656cee1891b95575feffc2ec6c41cc70",
+    "scripts/originman-dance-config.mjs": "de53eeb16314374152b8bd7bcc2fd3c64de7b448b32c109b0ae86d3a46e834b7",
+    "scripts/dance-training.mjs": "2a44d5979fcea4834b09e7328cc0c06eba701fa57b1dc2e9caf90fe7e7a93941",
     "scripts/submission-journal.mjs": "53fbf9519a6f0f402757baeb1b57d6d9d9aae29c839b747a8fe10ac738b45502",
     "scripts/install-host.mjs": "b21e5abe8ff469aaa5db04835dce21aac94f75ded7b2ee6aece2fae0b80bcf79",
     "scripts/studio-login-patch.mjs": "92f18a1e794b722507a2908ee953e203bba236c71836bc712c9222c3048d02a6",

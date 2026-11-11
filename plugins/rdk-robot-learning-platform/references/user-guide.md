@@ -1,6 +1,6 @@
 # RDK Robot Learning Platform 插件使用说明
 
-**版本：0.6.22** · 适用：Qoder、RDK Studio，以及支持 MCP 与 Markdown 链接的 Agent 宿主。
+**版本：0.6.30** · 适用：Qoder、RDK Studio，以及支持 MCP 与 Markdown 链接的 Agent 宿主。
 
 本手册说明插件能做什么、如何安装连接、常见任务怎么说、每个 Skill 和 MCP 工具负责什么，以及结果应如何判读。学员日常使用自然语言即可；工具名和 ID 主要供维护者排查。每次操作仍以当前平台实际返回的 `tools/list`、账号权限和运行结果为准。
 
