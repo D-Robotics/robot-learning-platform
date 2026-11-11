@@ -584,6 +584,14 @@ test('runtime version requires matching loaded source hashes and rejects a stale
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'rdk-runtime-identity-'));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   fs.mkdirSync(path.join(root, 'scripts'));
+  fs.mkdirSync(path.join(root, 'references'));
+  fs.copyFileSync(
+    new URL(
+      '../plugins/rdk-robot-learning-platform/references/originman-dance-manifest.json',
+      import.meta.url,
+    ),
+    path.join(root, 'references/originman-dance-manifest.json'),
+  );
   for (const name of [
     'experience-mcp.mjs',
     'experience.mjs',
@@ -596,6 +604,8 @@ test('runtime version requires matching loaded source hashes and rejects a stale
     'course-setup.mjs',
     'submission-journal.mjs',
     'workshop-course.mjs',
+    'originman-dance-config.mjs',
+    'dance-training.mjs',
     'workshop-entry.mjs',
     'development-targets.mjs',
     'playback-plan.mjs',
@@ -630,6 +640,8 @@ test('runtime version requires matching loaded source hashes and rejects a stale
             'course-setup.mjs',
             'submission-journal.mjs',
             'workshop-course.mjs',
+            'originman-dance-config.mjs',
+            'dance-training.mjs',
             'workshop-entry.mjs',
             'development-targets.mjs',
             'playback-plan.mjs',

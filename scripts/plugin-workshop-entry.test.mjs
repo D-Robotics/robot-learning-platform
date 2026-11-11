@@ -79,7 +79,7 @@ test('native text-only host gets short actionable entry and preserves expert too
     workshopSession: async () => ({ current }),
   });
   const initialized = await p('initialize', { clientInfo: { name: 'Qoder', version: '0.5.3' } });
-  assert.match(initialized.instructions, /0.6按钮工作台入口优先/);
+  assert.match(initialized.instructions, /打开按钮工作台/);
   assert.doesNotMatch(
     initialized.instructions,
     /用户只说Workshop\/彩排\/验证流程但没选预算，调用空参数/,
@@ -213,7 +213,15 @@ test('cold Workshop previews offline and only surfaces an already requested auth
   assert.match(preview.links.workshop, /workshop\.html\?start=1$/);
   assert.match(preview.studentReply, /开始实操/);
   assert.equal(preview.submission.training, false);
-  const requiresLogin = await workshopEntry({ intent: 'new' }, noCourse, options);
+  // A fresh 'new' preview intentionally reads no account data; authorization is
+  // only requested when the learner resumes or actually starts practice.
+  const freshPreview = await workshopEntry({ intent: 'new' }, noCourse, options);
+  assert.equal(freshPreview.stage, 'preview');
+  const requiresLogin = await workshopEntry(
+    { intent: 'continue', contextId: 'ws-cold' },
+    noCourse,
+    options,
+  );
   assert.equal(requiresLogin.stage, 'authorize');
   assert.deepEqual(requiresLogin.links, {});
   state = { ...state, verificationUrl: login };
@@ -269,7 +277,7 @@ test('development target entry separates workers from boards, keeps scope and re
   );
   const invoke = (args) => p('tools/call', { name: 'rdk_development_targets', arguments: args });
   const list = await invoke({ action: 'list' });
-  assert.match(list.structuredContent.studentReply, /训练算力机：GPU A\nRDK 板卡：RDK A/);
+  assert.match(list.structuredContent.studentReply, /训练算力机：GPU A[^\n]*\nRDK 板卡：RDK A/);
   assert.doesNotMatch(JSON.stringify(list), /private-/);
   assert.equal((await invoke({ action: 'connect-board', targetId: 'w1' })).isError, true);
   assert.equal(
