@@ -17,6 +17,51 @@ SECTION_TYPES = {
 }
 MAX_SECTIONS = 8
 
+# Learner-tunable reward knobs. Defaults are the validated 2026-11-11 reward
+# shaping; overrides must stay inside these safety bounds.
+REWARD_TUNING_LIMITS = {
+    "weightShiftTargetM": (0.02, 0.06),
+    "weightShiftToleranceM": (0.008, 0.04),
+    "squatDepthM": (0.02, 0.07),
+    "squatToleranceM": (0.008, 0.04),
+    "settleStillnessWeight": (1.0, 4.0),
+    "workPenalty": (0.2, 1.5),
+    "squatWorkPenalty": (0.05, 1.0),
+    "tiltPenalty": (1.0, 6.0),
+}
+DEFAULT_REWARD_TUNING = {
+    "weightShiftTargetM": 0.036,
+    "weightShiftToleranceM": 0.016,
+    "squatDepthM": 0.042,
+    "squatToleranceM": 0.018,
+    "settleStillnessWeight": 2.6,
+    "workPenalty": 0.8,
+    "squatWorkPenalty": 0.35,
+    "tiltPenalty": 3.0,
+}
+
+
+def validate_reward_tuning(value):
+    """Validate optional learner reward overrides; {} means engine defaults."""
+    if value is None:
+        return {}
+    if not isinstance(value, dict):
+        raise ValueError("originmanDance.rewardTuning must be an object of reward overrides")
+    unknown = set(value) - set(REWARD_TUNING_LIMITS)
+    if unknown:
+        raise ValueError(
+            "originmanDance.rewardTuning contains unsupported fields: " + ", ".join(sorted(unknown))
+        )
+    overrides = {}
+    for key, raw in value.items():
+        if isinstance(raw, bool) or not isinstance(raw, (int, float)) or not math.isfinite(raw):
+            raise ValueError(f"originmanDance.rewardTuning.{key} must be a finite number")
+        low, high = REWARD_TUNING_LIMITS[key]
+        if not low <= raw <= high:
+            raise ValueError(f"originmanDance.rewardTuning.{key} must be in [{low}, {high}]")
+        overrides[key] = float(raw)
+    return overrides
+
 
 def alternating_arm_targets(local_beat, intensity):
     """Position extrema land on beats; velocity peaks when arms swap halfway.
@@ -33,7 +78,7 @@ def alternating_arm_targets(local_beat, intensity):
 def validate_dance_config(value: dict) -> dict:
     if not isinstance(value, dict) or value.get("schemaVersion") != 1:
         raise ValueError("task.originmanDance must be a schemaVersion 1 object")
-    allowed = {"schemaVersion", "title", "bpm", "sections", "seed", "trainingSteps", "totalBeats"}
+    allowed = {"schemaVersion", "title", "bpm", "sections", "seed", "trainingSteps", "totalBeats", "rewardTuning"}
     if set(value) - allowed:
         raise ValueError("task.originmanDance contains unknown fields")
     bpm = value.get("bpm")
@@ -67,7 +112,8 @@ def validate_dance_config(value: dict) -> dict:
     steps = value.get("trainingSteps", 500_000)
     if isinstance(steps, bool) or not isinstance(steps, int) or not 8192 <= steps <= 2_000_000:
         raise ValueError("originmanDance.trainingSteps must be an integer in [8192, 2000000]")
-    return {
+    reward_overrides = validate_reward_tuning(value.get("rewardTuning"))
+    result = {
         "schemaVersion": 1,
         "title": str(value.get("title", "OriginMan dance"))[:80],
         "bpm": float(bpm),
@@ -76,6 +122,9 @@ def validate_dance_config(value: dict) -> dict:
         "seed": seed,
         "trainingSteps": steps,
     }
+    if reward_overrides:
+        result["rewardTuning"] = reward_overrides
+    return result
 
 
 class ConfigurableChoreography(Dance):
@@ -83,6 +132,7 @@ class ConfigurableChoreography(Dance):
 
     def __init__(self, bundle, dance_config, training=False):
         self.dance_config = validate_dance_config(dance_config)
+        self.reward = {**DEFAULT_REWARD_TUNING, **self.dance_config.get("rewardTuning", {})}
         self.sections = self.dance_config["sections"]
         self.starts = np.cumsum([0] + [item["beats"] for item in self.sections[:-1]]).astype(float)
         self.ends = self.starts + np.asarray([item["beats"] for item in self.sections], dtype=float)
@@ -154,16 +204,16 @@ class ConfigurableChoreography(Dance):
                 + 1.5 * math.exp(-((info["armSpeed"] - (0.15 + 1.8 * pulse)) / 0.65) ** 2)
             )
         elif section["type"] == "weight-shift":
-            target = 0.026 * slow
+            target = self.reward["weightShiftTargetM"] * slow
             style = intensity * (
-                3.4 * math.exp(-((lateral - target) / 0.013) ** 2)
-                + 0.8 * np.clip(slow * lateral / 0.026, -1, 1)
+                3.4 * math.exp(-((lateral - target) / self.reward["weightShiftToleranceM"]) ** 2)
+                + 0.8 * np.clip(slow * lateral / self.reward["weightShiftTargetM"], -1, 1)
                 + 0.55 * accent
             )
         elif section["type"] == "squat-rise":
-            target = self.robot.base_height - 0.009 - 0.034 * (0.5 - 0.5 * slow)
+            target = self.robot.base_height - 0.009 - self.reward["squatDepthM"] * (0.5 - 0.5 * slow)
             style = intensity * (
-                3.5 * math.exp(-((height - target) / 0.012) ** 2)
+                3.5 * math.exp(-((height - target) / self.reward["squatToleranceM"]) ** 2)
                 + 1.10 * np.clip(-slow * arm_forward / 0.13, -1, 1)
                 + 0.4 * accent
             )
@@ -172,12 +222,20 @@ class ConfigurableChoreography(Dance):
             open_arms = np.clip((spread - 0.18) / 0.17, 0, 1.4)
             style = intensity * (
                 (1 - settle) * (accent + 0.85 * open_arms)
-                + settle * (2.5 * open_arms + 1.85 * math.exp(-2.4 * speed**2))
+                + settle * (2.5 * open_arms + self.reward["settleStillnessWeight"] * math.exp(-2.2 * speed**2))
             )
         tilt = math.radians(info["tiltDeg"])
         work = info["mechanicalWorkJ"] - getattr(self, "previous_work", 0.0) if self.ticks > 1 else info["mechanicalWorkJ"]
         self.previous_work = info["mechanicalWorkJ"]
-        reward = 1.0 + style - 3.0 * tilt**2 - 8.0 * float(root[0])**2 - 2.0 * lateral**2 - 0.8 * work - 13.0 * float(failed)
+        work_cost = self.reward["squatWorkPenalty"] if section["type"] == "squat-rise" else self.reward["workPenalty"]
+        reward = (
+            1.0 + style
+            - self.reward["tiltPenalty"] * tilt**2
+            - 8.0 * float(root[0])**2
+            - 2.0 * lateral**2
+            - work_cost * work
+            - 13.0 * float(failed)
+        )
         complete = self.start_beat + self.beat() >= self.end_beat and not failed
         info.update(
             pulse=pulse,

@@ -18,6 +18,17 @@ from stable_baselines3.common.callbacks import BaseCallback
 from stable_baselines3.common.vec_env import SubprocVecEnv
 
 from body import DT
+
+
+def _json_default(value):
+    # ndarray/numpy scalars must never abort a finished training run.
+    if isinstance(value, np.ndarray):
+        return value.tolist()
+    if isinstance(value, np.bool_):
+        return bool(value)
+    if isinstance(value, (np.integer, np.floating)):
+        return value.item()
+    raise TypeError(f"Object of type {type(value).__name__} is not JSON serializable")
 from dance_env import ConfigurableChoreography
 
 
@@ -48,20 +59,6 @@ class WorkerProgress(BaseCallback):
 
 
 ENGINE_ID = "originman-dance-ppo"
-
-
-def _json_default(value):
-    # 评测字典会混进 numpy 标量/数组（如 np.int64、float32 帧）；标准 json
-    # 只认内置类型，没有这个兜底时一次类型不匹配就会把整轮训练判成失败。
-    if isinstance(value, np.ndarray):
-        return value.tolist()
-    if isinstance(value, np.bool_):
-        return bool(value)
-    if isinstance(value, np.integer):
-        return int(value)
-    if isinstance(value, np.floating):
-        return float(value)
-    raise TypeError(f"Object of type {type(value).__name__} is not JSON serializable")
 
 
 def _corr(left, right):
@@ -163,12 +160,13 @@ def evaluate(env, actor, bpm, *, trace=False):
     return report
 
 
-def train(*, bundle: Path, output: Path, dance_config: dict, num_envs: int):
-    dance = ConfigurableChoreography(bundle, dance_config, training=False)
+def train(*, bundle: Path, output: Path, dance_config: dict, num_envs: int,
+          environment_class=ConfigurableChoreography):
+    dance = environment_class(bundle, dance_config, training=False)
     contract = {
         "observationSize": int(dance.observation_space.shape[0]),
         "actionSize": int(dance.action_space.shape[0]),
-        "observationAdapterId": "originman-dance-phase-v1",
+        "observationAdapterId": getattr(dance, "observation_adapter_id", "originman-dance-phase-v1"),
         "actionAdapterId": "originman-20d-joint-offset-v1",
         "controlHz": 50,
         "physicsTimestepSeconds": 0.001,
@@ -177,7 +175,7 @@ def train(*, bundle: Path, output: Path, dance_config: dict, num_envs: int):
     }
     torch.set_num_threads(1)
     env_fns = [
-        (lambda rank=rank: ConfigurableChoreography(bundle, dance_config, training=True))
+        (lambda rank=rank: environment_class(bundle, dance_config, training=True))
         for rank in range(num_envs)
     ]
     vector = SubprocVecEnv(env_fns, start_method="fork") if num_envs > 1 else None
@@ -189,7 +187,10 @@ def train(*, bundle: Path, output: Path, dance_config: dict, num_envs: int):
     model = PPO(
         "MlpPolicy",
         train_env,
-        device="auto",
+        # MLP PPO on a 78->18 policy is kernel-launch bound on CUDA; SB3 warns
+        # GPU is a net loss here. CPU is faster and removes CUDA init as a
+        # failure source (health reports cuda:null cannot verify the device).
+        device="cpu",
         seed=dance_config["seed"],
         n_steps=256,
         batch_size=128,
@@ -204,11 +205,12 @@ def train(*, bundle: Path, output: Path, dance_config: dict, num_envs: int):
     try:
         model.learn(total_timesteps=total_timesteps, callback=callback, progress_bar=False)
         model.save(output / "final")
+        nominal_bpm = dance_config["bpm"]
         bpms = sorted(
             {
-                max(80.0, dance_config["bpm"] * 0.95),
-                dance_config["bpm"],
-                min(140.0, dance_config["bpm"] * 1.05),
+                max(80.0, nominal_bpm * 0.95),
+                nominal_bpm,
+                min(140.0, nominal_bpm * 1.05),
             }
         )
         evaluations = [
@@ -216,14 +218,11 @@ def train(*, bundle: Path, output: Path, dance_config: dict, num_envs: int):
                 dance,
                 lambda obs: model.predict(obs, deterministic=True)[0],
                 bpm,
-                trace=(index == 1),
+                trace=(bpm == nominal_bpm),
             )
-            for index, bpm in enumerate(bpms)
+            for bpm in bpms
         ]
-        # trace 落在 enumerate 的 index==1 上，但 bpms 经 80/140 钳位去重后
-        # 配置 BPM 不一定还在 index 1；按“谁带 qpos 谁是 trace”取，避免
-        # ndarray 残留进 evaluation.json 导致序列化崩溃。
-        trace = next((item for item in evaluations if "qpos" in item), evaluations[-1] if evaluations else {})
+        trace = evaluations[bpms.index(nominal_bpm)]
         replay = None
         if "qpos" in trace:
             replay_path = output / "dance-replay.npz"
@@ -268,7 +267,7 @@ def train(*, bundle: Path, output: Path, dance_config: dict, num_envs: int):
             "replay": replay,
             "qualityGate": {
                 "passed": bool(evaluations and all(item["allSectionsPassed"] for item in evaluations)),
-                "criteria": "every configured section passes its style and fall-free completion checks at all three BPMs",
+                "criteria": "every configured section passes its style and fall-free completion checks at every evaluated BPM",
             },
             "physicsBackend": "cpu-mujoco",
             "hardwareEligible": False,

@@ -9,6 +9,7 @@ import os
 from pathlib import Path
 import re
 import sys
+import subprocess
 import traceback
 
 import mujoco
@@ -17,8 +18,9 @@ import onnx
 import torch
 
 from dance_env import ConfigurableChoreography, validate_dance_config
+from dance_env_v2 import ExplicitAlternationChoreography
 from asset_provenance import verified_sha256, verify_joint_names
-from train import train, _json_default
+from train import train
 
 ENGINE_ID = "originman-dance-ppo"
 
@@ -26,6 +28,17 @@ ENGINE_ID = "originman-dance-ppo"
 def fail(message):
     print(f"[{ENGINE_ID}] REFUSED: {message}", file=sys.stderr, flush=True)
     raise SystemExit(3)
+
+
+def environment_for_contract(contract):
+    environments = {
+        "custom-policy-originman-dance-v1": ConfigurableChoreography,
+        "custom-policy-originman-dance-v2": ExplicitAlternationChoreography,
+    }
+    selected = environments.get(contract.get("id"))
+    if selected is None:
+        fail("unsupported dance observation contract; no implicit version fallback")
+    return selected
 
 
 def read_request():
@@ -197,6 +210,7 @@ def main():
     if isinstance(num_envs, bool) or not isinstance(num_envs, int) or not 1 <= num_envs <= 16:
         fail("training.numEnvs must be an integer from 1 to 16")
     contract = request.get("contract") if isinstance(request.get("contract"), dict) else {}
+    environment_class = environment_for_contract(contract)
     expected_observation_size = 78
     if (contract.get("observationSize"), contract.get("actionSize")) != (expected_observation_size, 18):
         fail(
@@ -211,9 +225,31 @@ def main():
     if not output.is_absolute() or not result_path.is_absolute() or not output.is_dir():
         fail("worker output paths must be absolute and the job directory must exist")
 
-    report = train(bundle=bundle, output=output, dance_config=dance_config, num_envs=num_envs)
+    report = train(bundle=bundle, output=output, dance_config=dance_config, num_envs=num_envs,
+                   environment_class=environment_class)
+    report["engineSourceSha256"] = {
+        name: hashlib.sha256(Path(__file__).with_name(name).read_bytes()).hexdigest()
+        for name in ["adapter.py", "body.py", "env.py", "train.py", "dance_env.py", "dance_env_v2.py", "render_replay.py"]
+    }
     onnx_path = output / "policy.onnx"
     policy_sha = write_onnx(output / "final.zip", onnx_path, expected_observation_size)
+    if training.get("video") is True and report.get("replay"):
+        video_path = output / "dance-replay.mp4"
+        try:
+            subprocess.run([
+                sys.executable, str(Path(__file__).with_name("render_replay.py")),
+                "--scene", str(bundle / "model/scene.xml"),
+                "--replay", str(output / "dance-replay.npz"), "--output", str(video_path),
+            ], check=True, timeout=120)
+            receipt = json.loads(video_path.with_suffix(".receipt.json").read_text())
+            report["video"] = {
+                "file": "dance-replay.mp4", "sha256": receipt["videoSha256"],
+                "sizeBytes": video_path.stat().st_size, "fps": receipt["fps"],
+                "durationSeconds": receipt["durationSeconds"],
+                "sourceReplaySha256": receipt["replaySha256"], "policySha256": policy_sha,
+            }
+        except (OSError, subprocess.SubprocessError, ValueError, KeyError):
+            report["videoError"] = "replay rendering failed; trained policy and quality results are preserved"
     report["policySha256"] = policy_sha
     report["modelBundle"] = {
         "sceneSha256": model_bundle["sceneSha256"],
@@ -223,9 +259,7 @@ def main():
         "verifiedMeshCount": model_bundle["verifiedMeshCount"],
         "hardwareEligible": False,
     }
-    (output / "training-summary.json").write_text(
-        json.dumps(report, indent=2, allow_nan=False, default=_json_default) + "\n"
-    )
+    (output / "training-summary.json").write_text(json.dumps(report, indent=2, allow_nan=False) + "\n")
 
     run_id = os.environ.get("RDK_SIM2REAL_JOB_ID", "originman-dance-run")
     quality = report["qualityGate"]
@@ -305,6 +339,7 @@ def main():
                 "qualityGatePassed": quality["passed"],
                 "evaluations": dance_evaluations,
                 "replay": report.get("replay"),
+                **({"video": report["video"]} if report.get("video") else {}),
                 "sceneProvenance": {
                     "sceneSha256": model_bundle["sceneSha256"],
                     "manifestSourceSceneSha256": model_manifest["sourceSceneSha256"],
@@ -318,9 +353,7 @@ def main():
         },
     }
     write_manifest(output)
-    result_path.write_text(
-        json.dumps(result, indent=2, allow_nan=False, default=_json_default) + "\n"
-    )
+    result_path.write_text(json.dumps(result, indent=2, allow_nan=False) + "\n")
     print(
         json.dumps(
             {

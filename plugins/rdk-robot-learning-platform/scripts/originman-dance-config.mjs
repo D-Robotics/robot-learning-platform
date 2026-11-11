@@ -2,6 +2,16 @@ const SECTION_TYPES = new Set(['alternating-arms', 'weight-shift', 'squat-rise',
 const MIN_BPM = 80;
 const MAX_BPM = 140;
 const MAX_SECTIONS = 8;
+export const REWARD_TUNING_LIMITS = {
+  weightShiftTargetM: { min: 0.02, max: 0.06 },
+  weightShiftToleranceM: { min: 0.008, max: 0.04 },
+  squatDepthM: { min: 0.02, max: 0.07 },
+  squatToleranceM: { min: 0.008, max: 0.04 },
+  settleStillnessWeight: { min: 1.0, max: 4.0 },
+  workPenalty: { min: 0.2, max: 1.5 },
+  squatWorkPenalty: { min: 0.05, max: 1.0 },
+  tiltPenalty: { min: 1.0, max: 6.0 },
+};
 
 function fail(message) {
   const error = new Error(`OriginMan dance config: ${message}`);
@@ -34,7 +44,15 @@ function finite(value, label, min, max) {
  */
 export function resolveOriginmanDanceConfig(input) {
   if (!input || typeof input !== 'object' || Array.isArray(input)) fail('expected an object');
-  const allowed = new Set(['schemaVersion', 'title', 'bpm', 'sections', 'seed', 'trainingSteps']);
+  const allowed = new Set([
+    'schemaVersion',
+    'title',
+    'bpm',
+    'sections',
+    'seed',
+    'trainingSteps',
+    'rewardTuning',
+  ]);
   for (const key of Object.keys(input)) if (!allowed.has(key)) fail(`unknown field ${key}`);
   if (input.schemaVersion !== 1) fail('schemaVersion must be 1');
   if (typeof input.title !== 'string' || !input.title.trim() || input.title.length > 80)
@@ -65,6 +83,20 @@ export function resolveOriginmanDanceConfig(input) {
   const trainingSteps = input.trainingSteps ?? 500_000;
   if (!Number.isSafeInteger(trainingSteps) || trainingSteps < 8192 || trainingSteps > 2_000_000)
     fail('trainingSteps must be an integer in [8192, 2000000]');
+  const rewardTuning = {};
+  if (input.rewardTuning !== undefined) {
+    if (
+      !input.rewardTuning ||
+      typeof input.rewardTuning !== 'object' ||
+      Array.isArray(input.rewardTuning)
+    )
+      fail('rewardTuning must be an object of reward overrides');
+    for (const [key, value] of Object.entries(input.rewardTuning)) {
+      const bounds = REWARD_TUNING_LIMITS[key];
+      if (!bounds) fail(`rewardTuning has unknown field ${key}`);
+      rewardTuning[key] = finite(value, `rewardTuning.${key}`, bounds.min, bounds.max);
+    }
+  }
   return {
     schemaVersion: 1,
     kind: 'originman-dance-draft',
@@ -74,6 +106,7 @@ export function resolveOriginmanDanceConfig(input) {
     sections,
     seed,
     trainingSteps,
+    ...(Object.keys(rewardTuning).length ? { rewardTuning } : {}),
     scope: 'configuration-only; no training run, quality claim, or hardware authorization',
   };
 }
