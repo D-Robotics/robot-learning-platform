@@ -76,7 +76,13 @@ export interface Sim2RealRunMetrics {
     qualityGatePassed?: boolean;
     evaluations: {
       bpm: number;
-      sections: { type: string; passed?: boolean; measurements: Record<string, number> }[];
+      sections: {
+        type: string;
+        passed?: boolean;
+        clean?: boolean;
+        stylePassed?: boolean;
+        measurements: Record<string, number>;
+      }[];
     }[];
     replay?: { sha256: string };
     video?: {

@@ -54,7 +54,15 @@ test('dance Run detail selects the exact account-scoped record and visualizes it
     metrics: {
       originmanDance: {
         qualityGatePassed: false,
-        sectionMetrics: [{ type: 'alternating-arms', alternationRatio: 0.4 }],
+        evaluations: [
+          {
+            bpm: 128,
+            sections: [
+              { type: 'alternating-arms', passed: false, clean: true, stylePassed: false },
+              { type: 'weight-shift', passed: true },
+            ],
+          },
+        ],
         replay: { sha256: replay },
         video: {
           file: 'dance-replay.mp4',
@@ -88,6 +96,9 @@ test('dance Run detail selects the exact account-scoped record and visualizes it
   assert.match(f.document.getElementById('dance-meta').textContent, /128 BPM · 16 拍 · 2 段/);
   assert.equal(f.document.querySelectorAll('#dance-sections tr').length, 2);
   assert.equal(f.document.getElementById('quality-status').textContent, '风格门未通过');
+  const qualityRows = f.document.querySelectorAll('#quality-body tr');
+  assert.match(qualityRows[0].textContent, /完整完成 · 风格未达标/);
+  assert.match(qualityRows[1].textContent, /达标/);
   assert.equal(f.document.getElementById('reward-chart').hasAttribute('hidden'), false);
   assert.equal(f.document.getElementById('run-video').hidden, false);
   assert.match(
@@ -99,6 +110,23 @@ test('dance Run detail selects the exact account-scoped record and visualizes it
     /\/api\/v1\/duck\/runs\/run_42\/dance-video$/,
   );
   assert.equal(f.document.getElementById('run-video').hasAttribute('autoplay'), false);
+  const video = f.document.getElementById('run-video');
+  let sourceWrites = 0;
+  const sourceChanges = new f.dom.window.MutationObserver((records) => {
+    sourceWrites += records.length;
+  });
+  sourceChanges.observe(video, { attributes: true, attributeFilter: ['src'] });
+  t.after(() => sourceChanges.disconnect());
+  Object.defineProperty(video, 'paused', { value: false });
+  video.dispatchEvent(new f.dom.window.Event('playing'));
+  assert.equal(f.document.getElementById('replay-status').textContent, '正在播放本次仿真回放');
+  Object.defineProperty(video, 'ended', { value: true });
+  video.dispatchEvent(new f.dom.window.Event('ended'));
+  f.document.getElementById('refresh-run').click();
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(requests.length, 2);
+  assert.equal(sourceWrites + sourceChanges.takeRecords().length, 0);
+  assert.equal(f.document.getElementById('replay-status').textContent, '本次仿真回放已播完');
   page.dispose();
 });
 

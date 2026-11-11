@@ -42,13 +42,19 @@ function danceEvidenceFor(run) {
 function metricRows(evidence) {
   if (Array.isArray(evidence?.evaluations)) {
     return evidence.evaluations.flatMap(({ bpm, sections }) =>
-      (Array.isArray(sections) ? sections : []).map(({ type, passed, measurements }, index) => [
-        `${bpm} BPM · ${index + 1}. ${SECTION_LABELS[type] ?? type}`,
-        [passed === true ? '达标' : passed === false ? '未达标' : '待核对',
-          ...Object.entries(measurements ?? {})
-            .filter(([, value]) => typeof value === 'number' && Number.isFinite(value))
-            .map(([key, value]) => `${key}：${Number(value.toFixed(4))}`)].join(' · '),
-      ]),
+      (Array.isArray(sections) ? sections : []).map(({ type, passed, clean, stylePassed, measurements }, index) => {
+        const statuses = [];
+        if (typeof clean === 'boolean') statuses.push(clean ? '完整完成' : '未完整完成');
+        if (typeof stylePassed === 'boolean') statuses.push(stylePassed ? '风格达标' : '风格未达标');
+        if (!statuses.length) statuses.push(passed === true ? '达标' : passed === false ? '未达标' : '待核对');
+        const values = Object.entries(measurements ?? {})
+          .filter(([, value]) => typeof value === 'number' && Number.isFinite(value))
+          .map(([key, value]) => `${key}：${Number(value.toFixed(4))}`);
+        return [
+          `${typeof bpm === 'number' ? Number(bpm.toFixed(2)) : bpm} BPM · ${index + 1}. ${SECTION_LABELS[type] ?? type}`,
+          [...statuses, ...values].join(' · '),
+        ];
+      }),
     );
   }
   const rows = evidence?.sections ?? evidence?.sectionMetrics ?? evidence?.segments;
@@ -192,8 +198,8 @@ function verifiedDanceVideo(run) {
 }
 
 function danceVideoUrl(location, run, runId) {
-  const candidate = new URLSearchParams(location.search).get('videoUrl') ??
-    run.links?.danceVideo ?? danceEvidenceFor(run)?.video?.url;
+  const candidate = run.links?.danceVideo ?? danceEvidenceFor(run)?.video?.url ??
+    new URLSearchParams(location.search).get('videoUrl');
   if (typeof candidate !== 'string' || candidate.length > 2048) return null;
   try {
     const href = new URL(candidate, location.href);
@@ -205,12 +211,24 @@ function danceVideoUrl(location, run, runId) {
       href.password ||
       href.search ||
       href.hash ||
-      !href.pathname.endsWith(expectedSuffix)
+      href.pathname !== new URL(`.${expectedSuffix}`, location.href).pathname
     ) return null;
     return href;
   } catch {
     return null;
   }
+}
+
+function showPlaybackStatus(document, video) {
+  if (video.hidden) return;
+  const message = video.error
+    ? '视频加载失败，请确认平台登录后刷新'
+    : video.ended
+      ? '本次仿真回放已播完'
+      : video.paused
+        ? '本次视频摘要已核对 · 点击播放'
+        : '正在播放本次仿真回放';
+  text(document, 'replay-status', message);
 }
 
 function renderVideo(document, location, run, runId) {
@@ -220,17 +238,20 @@ function renderVideo(document, location, run, runId) {
   if (!video || !empty) return;
   const href = danceVideoUrl(location, run, runId);
   if (valid && href) {
-    video.src = href.toString();
+    if (video.getAttribute('src') !== href.href) video.src = href.href;
+    else if (video.error) video.load();
     video.hidden = false;
     empty.hidden = true;
-    text(document, 'replay-status', '本次视频摘要已核对 · 点击播放');
+    showPlaybackStatus(document, video);
     text(document, 'run-step-replay', '播放本次仿真回放');
     return;
   }
-  video.pause();
-  video.removeAttribute('src');
-  video.load();
   video.hidden = true;
+  if (video.hasAttribute('src')) {
+    video.pause();
+    video.removeAttribute('src');
+    video.load();
+  }
   empty.hidden = false;
   const evidence = danceEvidenceFor(run);
   const metadataValid = verifiedDanceVideo(run);
@@ -318,6 +339,7 @@ export async function startRunDetail({
   let timer = null;
   let disposed = false;
   let loaded = false;
+  let active = false;
   const fail = (message) => {
     if (error) {
       error.textContent = message;
@@ -332,9 +354,13 @@ export async function startRunDetail({
   }
   text(document, 'run-id-label', `Run ${runId}`);
   text(document, 'run-id-detail', runId);
+  const video = document.getElementById('run-video');
+  const playbackEvents = ['playing', 'pause', 'ended', 'error'];
+  const onPlayback = () => showPlaybackStatus(document, video);
+  for (const event of playbackEvents) video?.addEventListener(event, onPlayback);
   const requestUrl = new URL(`./api/v1/duck/runs/${encodeURIComponent(runId)}`, location.href).toString();
   const schedule = () => {
-    if (disposed || timer !== null || document.visibilityState === 'hidden') return;
+    if (disposed || !active || timer !== null || document.visibilityState === 'hidden') return;
     timer = setTimeoutImpl(() => {
       timer = null;
       void loadRun(true);
@@ -362,9 +388,10 @@ export async function startRunDetail({
       const run = payload?.run;
       if (!run || run.id !== runId) throw new Error('平台返回的运行记录与链接中的 Run ID 不一致。');
       loaded = true;
+      active = ['queued', 'running', 'ready'].includes(run.status);
       if (error) error.hidden = true;
       renderRun(document, location, run, runId);
-      if (['queued', 'running', 'ready'].includes(run.status)) schedule();
+      schedule();
     } catch (cause) {
       if (!quiet || !loaded) fail(cause instanceof Error ? cause.message : '运行读取失败。');
       else text(document, 'run-connection-status', '状态刷新失败 · 显示最近一次已读取结果');
@@ -391,6 +418,7 @@ export async function startRunDetail({
       if (timer !== null) clearTimeoutImpl(timer);
       timer = null;
       document.removeEventListener('visibilitychange', onVisibility);
+      for (const event of playbackEvents) video?.removeEventListener(event, onPlayback);
     },
   };
 }

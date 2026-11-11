@@ -466,6 +466,10 @@ function safeDanceMetrics(value: unknown): Sim2RealRunMetrics['originmanDance'] 
           {
             type: section.type,
             ...(typeof section.passed === 'boolean' ? { passed: section.passed } : {}),
+            ...(typeof section.clean === 'boolean' ? { clean: section.clean } : {}),
+            ...(typeof section.stylePassed === 'boolean'
+              ? { stylePassed: section.stylePassed }
+              : {}),
             measurements,
           },
         ];
