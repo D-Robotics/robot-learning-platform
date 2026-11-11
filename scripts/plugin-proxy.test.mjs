@@ -178,3 +178,35 @@ test('board connect and Workshop creation use the account that selected the targ
     ['/robotics-learning/api/v1/duck/workshop-sessions', 'POST'],
   ]);
 });
+
+test('board connection failures distinguish SSH reachability, authentication and agent health without exposing endpoints', async (t) => {
+  let message;
+  const f = await fixture(t, async () => Response.json({ ok: false, message }, { status: 502 }));
+  for (const [upstream, expected] of [
+    [
+      'SSH 连接失败：ssh: connect to host 192.168.1.8 port 22: Connection timed out',
+      'BOARD_SSH_TIMEOUT',
+    ],
+    [
+      'SSH 连接失败：root@192.168.1.8: Permission denied (publickey,password)',
+      'BOARD_SSH_AUTH_FAILED',
+    ],
+    ['板端 agent 健康检查失败', 'BOARD_AGENT_UNAVAILABLE'],
+    ['unexpected raw internal details', 'DEVELOPMENT_TARGET_UNAVAILABLE'],
+  ]) {
+    message = upstream;
+    await assert.rejects(
+      f.core.developmentTarget('connect-board', { accountId: 'alice', targetId: 'b1' }),
+      (error) => {
+        assert.equal(error.code, expected);
+        assert.equal(error.httpStatus, 502);
+        assert.equal(error.needsLogin, false);
+        assert.doesNotMatch(
+          error.message + (error.nextAction ?? ''),
+          /192\.168|root@|internal details/,
+        );
+        return true;
+      },
+    );
+  }
+});

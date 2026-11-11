@@ -17,6 +17,53 @@ export function proxyRequestHeaders(input, body, cookie) {
     if (typeof input[name] === 'string') headers[name] = input[name];
   return headers;
 }
+
+async function boardConnectionError(response, fallback) {
+  let message = '';
+  const reader = response.body?.getReader();
+  if (reader) {
+    const chunks = [];
+    let size = 0;
+    try {
+      for (;;) {
+        const { value, done } = await reader.read();
+        if (done) {
+          const payload = JSON.parse(Buffer.concat(chunks).toString('utf8'));
+          if (typeof payload.message === 'string') message = payload.message;
+          break;
+        }
+        size += value.byteLength;
+        if (size > 4096) break;
+        chunks.push(Buffer.from(value));
+      }
+    } catch {
+      // An unreadable response still yields the generic public error.
+    } finally {
+      await reader.cancel().catch(() => {});
+    }
+  }
+  const options = { httpStatus: response.status, retryable: response.status >= 500 };
+  // Use fixed public messages. An SSH error can contain private endpoints or user names.
+  if (/connection timed out|operation timed out|连接超时/i.test(message))
+    return new PluginRequestError('BOARD_SSH_TIMEOUT', '平台连不到板卡的 SSH 端口。', {
+      ...options,
+      nextAction:
+        '如果板卡在局域网或 Type-C 网络，请在与板卡相连的 Studio 中检查设备连接。云平台需使用能访问板卡的连接。',
+    });
+  if (/permission denied|authentication failed|认证失败/i.test(message))
+    return new PluginRequestError('BOARD_SSH_AUTH_FAILED', '平台到板卡的 SSH 认证失败。', {
+      ...options,
+      retryable: false,
+      nextAction: '在 Studio 的设备连接设置里核对板端账号和认证方式。学习平台的登录无需重做。',
+    });
+  if (/board.?agent|板端\s*agent/i.test(message))
+    return new PluginRequestError('BOARD_AGENT_UNAVAILABLE', '板端服务探测未通过。', {
+      ...options,
+      nextAction: '在 Studio 设备详情检查 BoardAgent 状态，再测试连接。',
+    });
+  return new PluginRequestError('DEVELOPMENT_TARGET_UNAVAILABLE', fallback, options);
+}
+
 /** The retained core receives only a secret loopback credential; real cookies stay in this owner. */
 export async function connectAuthenticatedCore({
   env = process.env,
@@ -268,6 +315,8 @@ export async function connectAuthenticatedCore({
       const message = write
         ? '平台未能完成设备连接检查，请到学习平台查看该设备的状态。'
         : '当前账号暂时无法读取这类设备。';
+      if (!response.ok && operation === 'connect-board')
+        throw await boardConnectionError(response, message);
       if (!response.ok)
         throw new PluginRequestError('DEVELOPMENT_TARGET_UNAVAILABLE', message, {
           httpStatus: response.status,
