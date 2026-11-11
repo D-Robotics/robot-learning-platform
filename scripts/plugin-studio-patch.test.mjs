@@ -85,7 +85,12 @@ test('installation writes a reversible backup; an incompatible app is untouched'
   const target = path.join(dir, 'app.asar'),
     f = fixture();
   fs.writeFileSync(target, f.input);
-  const r = installStudioLoginPatch({ appPath: target, patch: f.patch });
+  const r = installStudioLoginPatch({
+    appPath: target,
+    patch: f.patch,
+    platform: 'darwin',
+    isRunning: () => false,
+  });
   assert.equal(r.backupCreated, true);
   const backup = fs.readdirSync(dir).find((x) => x.includes('.before-learning-'));
   assert.ok(fs.readFileSync(path.join(dir, backup)).equals(f.input));
