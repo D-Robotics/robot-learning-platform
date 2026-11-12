@@ -11,6 +11,7 @@ export function embedUiAssets(template, css, source) {
   const script = source.replace(/<\/script/gi, '<\\/script');
   const shell = template
     .replace(/<link rel="stylesheet"[^>]+>/g, '')
+    .replace(/^[ \t]+$/gm, '')
     .replace(
       '<script type="module" src="./experiment-page.mjs"></script>',
       '__RDK_APP_BOOTSTRAP__',

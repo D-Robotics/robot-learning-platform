@@ -42,7 +42,6 @@ import {
   wrapAsync,
 } from '../sim2real/http-helpers.js';
 import { createSim2RealLogger } from '../sim2real/observability.js';
-import { readRetainedDanceVideo } from '../sim2real/retained-dance-video.js';
 import { computeResearchLoopMetrics } from '../sim2real/research-loop-metrics.js';
 import {
   DemonstrationInputError,
@@ -104,6 +103,8 @@ import {
   claimSim2RealRunRelay,
   storeSim2RealRelayArtifact,
   readSim2RealRelayArtifact,
+  readSim2RealDanceVideo,
+  storeSim2RealDanceVideo,
   updateSim2RealRunForReconcile,
   updateSim2RealDeployment,
   decideSim2RealDeploymentApproval,
@@ -2311,6 +2312,59 @@ export function createSim2RealRouter(
       resolveRunRunner(computeResourceId, owner),
     );
 
+  const loadDanceVideo = async (
+    run: Sim2RealRunRecord,
+    video: NonNullable<ReturnType<typeof verifiedDanceVideoReceipt>>,
+    owner: string | undefined,
+    accountId: string,
+    timeoutMs?: number,
+  ): Promise<Buffer | 'runner-missing' | null> => {
+    const retained = await readSim2RealDanceVideo(video.sha256, video.sizeBytes);
+    if (retained) return retained;
+    const resource = run.computeResourceId
+      ? await getSim2RealComputeResourceSecret(run.computeResourceId, owner)
+      : null;
+    if (run.computeResourceId && !resource) return 'runner-missing';
+    if (!accountId) return null;
+    const fetched = await fetchLocalRunArtifact({
+      accountId,
+      externalRunId: video.externalRunId,
+      kind: 'dance-video',
+      timeoutMs,
+      ...(resource
+        ? {
+            runnerUrl: resource.resource.runnerUrl,
+            runnerToken: resource.runnerToken ?? '',
+          }
+        : {}),
+    });
+    if (!fetched || fetched.sha256 !== video.sha256 || fetched.bytes.length !== video.sizeBytes)
+      return null;
+    try {
+      await storeSim2RealDanceVideo(video.sha256, fetched.bytes);
+    } catch (error) {
+      console.warn('[sim2real] unable to retain verified dance video', redactInternalError(error));
+    }
+    return fetched.bytes;
+  };
+
+  const retainCompletedDanceVideo = async (
+    run: Sim2RealRunRecord,
+    owner: string | undefined,
+    accountId: string,
+  ) => {
+    const video = verifiedDanceVideoReceipt(run);
+    if (!video) return;
+    try {
+      await loadDanceVideo(run, video, owner, accountId, 10_000);
+    } catch (error) {
+      console.warn(
+        '[sim2real] unable to archive completed dance video',
+        redactInternalError(error),
+      );
+    }
+  };
+
   // One shared guard covers every route registered below, including both the
   // core handlers and the telemetry/device sub-routers.
   router.use((request, response, next) => {
@@ -3411,7 +3465,10 @@ export function createSim2RealRouter(
             // pull the engine's evaluation telemetry into the replay pipeline
             // so the run page can render it without manual re-recording.
             if (current.status === 'completed') {
-              await attachEvalTelemetryForRun(current, owner);
+              await Promise.all([
+                attachEvalTelemetryForRun(current, owner),
+                retainCompletedDanceVideo(current, owner, accountId),
+              ]);
             }
           } catch (error) {
             if (isSim2RealRunnerNotFound(error)) {
@@ -3472,9 +3529,10 @@ export function createSim2RealRouter(
         }
       }
       const video = verifiedDanceVideoReceipt(current);
+      const available = video && (await readSim2RealDanceVideo(video.sha256, video.sizeBytes));
       response.json({
         ok: true,
-        run: video
+        run: available
           ? {
               ...current,
               links: {
@@ -3504,36 +3562,18 @@ export function createSim2RealRouter(
         );
         return;
       }
-      const resource = run.computeResourceId
-        ? await getSim2RealComputeResourceSecret(run.computeResourceId, owner)
-        : null;
-      if (run.computeResourceId && !resource) {
+      const accountId =
+        auth.resolvePrincipal(request)?.accountId ??
+        owner ??
+        (!auth.isMultiUserDeployment() ? 'local-dev' : '');
+      const bytes = await loadDanceVideo(run, video, owner, accountId);
+      if (bytes === 'runner-missing') {
         sendApiError(response, 409, 'SIM2REAL_DANCE_VIDEO_RUNNER_MISSING', '原训练资源不可用。', {
           retryable: false,
         });
         return;
       }
-      const accountId =
-        auth.resolvePrincipal(request)?.accountId ??
-        owner ??
-        (!auth.isMultiUserDeployment() ? 'local-dev' : '');
-      const retained = await readRetainedDanceVideo(video.sha256, video.sizeBytes);
-      const fetched =
-        retained ??
-        (accountId
-          ? await fetchLocalRunArtifact({
-              accountId,
-              externalRunId: video.externalRunId,
-              kind: 'dance-video',
-              ...(resource
-                ? {
-                    runnerUrl: resource.resource.runnerUrl,
-                    runnerToken: resource.runnerToken ?? '',
-                  }
-                : {}),
-            })
-          : null);
-      if (!fetched || fetched.sha256 !== video.sha256 || fetched.bytes.length !== video.sizeBytes) {
+      if (!bytes) {
         sendApiError(
           response,
           502,
@@ -3556,11 +3596,11 @@ export function createSim2RealRouter(
         const { start, end } = range[0];
         response.setHeader('Content-Range', `bytes ${start}-${end}/${video.sizeBytes}`);
         response.setHeader('Content-Length', end - start + 1);
-        response.status(206).end(fetched.bytes.subarray(start, end + 1));
+        response.status(206).end(bytes.subarray(start, end + 1));
         return;
       }
       response.setHeader('Content-Length', video.sizeBytes);
-      response.end(fetched.bytes);
+      response.end(bytes);
     }),
   );
 
@@ -4543,6 +4583,13 @@ export function createSim2RealRouter(
               { idempotencyKey, requestFingerprint },
             );
         if (!run) throw new Sim2RealError('sim2real_run_reservation_lost');
+        await retainCompletedDanceVideo(
+          run,
+          owner,
+          auth.resolvePrincipal(request)?.accountId ??
+            owner ??
+            (!auth.isMultiUserDeployment() ? 'local-dev' : ''),
+        );
         if (idempotencyKey) response.setHeader('Idempotency-Key', idempotencyKey);
         response.status(201).json({ ok: true, run });
       } catch (error) {

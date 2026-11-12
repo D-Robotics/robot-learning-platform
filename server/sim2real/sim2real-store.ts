@@ -3046,6 +3046,58 @@ export async function readSim2RealRelayArtifact(sha256: string): Promise<Buffer 
   return bytes;
 }
 
+function danceVideoPath(sha256: string): string | null {
+  return /^[a-f0-9]{64}$/.test(sha256)
+    ? path.join(path.dirname(ledgerPath()), 'dance-videos', `${sha256}.mp4`)
+    : null;
+}
+
+export async function readSim2RealDanceVideo(
+  sha256: string,
+  sizeBytes: number,
+): Promise<Buffer | null> {
+  const file = danceVideoPath(sha256);
+  if (!file || !Number.isSafeInteger(sizeBytes) || sizeBytes < 1 || sizeBytes > 50 * 1024 * 1024)
+    return null;
+  try {
+    const info = await fs.lstat(file);
+    if (!info.isFile() || info.size !== sizeBytes) return null;
+    const bytes = await fs.readFile(file);
+    return bytes.length === sizeBytes && createHash('sha256').update(bytes).digest('hex') === sha256
+      ? bytes
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+export async function storeSim2RealDanceVideo(sha256: string, bytes: Buffer): Promise<void> {
+  const file = danceVideoPath(sha256);
+  if (
+    !file ||
+    bytes.length < 1 ||
+    bytes.length > 50 * 1024 * 1024 ||
+    createHash('sha256').update(bytes).digest('hex') !== sha256
+  )
+    throw new TypeError('Dance video bytes do not match the recorded digest');
+  ensureWritable();
+  const directory = path.dirname(file);
+  await fs.mkdir(directory, { recursive: true, mode: 0o700 });
+  const temporary = path.join(directory, `${randomUUID()}.tmp`);
+  try {
+    const handle = await fs.open(temporary, 'wx', 0o600);
+    try {
+      await handle.writeFile(bytes);
+      await handle.sync();
+    } finally {
+      await handle.close();
+    }
+    await fs.rename(temporary, file);
+  } finally {
+    await fs.rm(temporary, { force: true }).catch(() => undefined);
+  }
+}
+
 export interface Sim2RealRunEvaluationContext {
   /** A public copy of the run being evaluated; private ledger fields are omitted. */
   run: Sim2RealRunRecord;

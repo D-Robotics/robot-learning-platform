@@ -334,13 +334,13 @@ describe('Sim2Real HTTP routes', () => {
     const status = await invoke(router, 'get', '/api/sim2real/runs/:id', {
       params: { id: run.id },
     });
-    expect(status.body).toMatchObject({
-      run: { links: { danceVideo: `./api/v1/duck/runs/${run.id}/dance-video` } },
-    });
+    expect(status.body).not.toHaveProperty('run.links.danceVideo');
     const originalFetch = globalThis.fetch;
-    let corrupt = false;
+    let corrupt = true;
+    let reads = 0;
     globalThis.fetch = (async (url) => {
       expect(String(url)).toBe('http://127.0.0.1:18202/runs/dance-worker-run/dance-video');
+      reads++;
       const body = corrupt ? Buffer.alloc(bytes.length) : bytes;
       return new Response(new Uint8Array(body), {
         headers: {
@@ -356,23 +356,32 @@ describe('Sim2Real HTTP routes', () => {
         headers: { range: 'bytes=0-2' },
         range: () => Object.assign([{ start: 0, end: 2 }], { type: 'bytes' }),
       } as Partial<Request>;
-      const response = await invoke(router, 'get', '/api/sim2real/runs/:id/dance-video', request);
+      const getVideo = () => invoke(router, 'get', '/api/sim2real/runs/:id/dance-video', request);
+      expect((await getVideo()).statusCode).toBe(502);
+      corrupt = false;
+      const response = await getVideo();
       expect(response.statusCode).toBe(206);
       expect(response.body).toEqual(bytes.subarray(0, 3));
+      const retained = path.join(
+        process.env.RDK_SIM2REAL_STORAGE_DIR!,
+        'dance-videos',
+        `${digest}.mp4`,
+      );
+      expect(await fs.readFile(retained)).toEqual(bytes);
+      const available = await invoke(router, 'get', '/api/sim2real/runs/:id', {
+        params: { id: run.id },
+      });
+      expect(available.body).toMatchObject({
+        run: { links: { danceVideo: `./api/v1/duck/runs/${run.id}/dance-video` } },
+      });
       corrupt = true;
-      const rejected = await invoke(router, 'get', '/api/sim2real/runs/:id/dance-video', request);
-      expect(rejected.statusCode).toBe(502);
-      const retainedDir = path.join(process.env.RDK_SIM2REAL_STORAGE_DIR!, 'retained-dance-videos');
-      await fs.mkdir(retainedDir);
-      const retainedPath = path.join(retainedDir, `${digest}.mp4`);
-      await fs.writeFile(retainedPath, Buffer.alloc(bytes.length));
-      expect(
-        (await invoke(router, 'get', '/api/sim2real/runs/:id/dance-video', request)).statusCode,
-      ).toBe(502);
-      await fs.writeFile(retainedPath, bytes);
-      const restored = await invoke(router, 'get', '/api/sim2real/runs/:id/dance-video', request);
-      expect(restored.statusCode).toBe(206);
-      expect(restored.body).toEqual(bytes.subarray(0, 3));
+      const cached = await getVideo();
+      expect(cached.statusCode).toBe(206);
+      expect(cached.body).toEqual(bytes.subarray(0, 3));
+      expect(reads).toBe(2);
+      await fs.writeFile(retained, Buffer.alloc(bytes.length));
+      expect((await getVideo()).statusCode).toBe(502);
+      expect(reads).toBe(3);
     } finally {
       globalThis.fetch = originalFetch;
     }

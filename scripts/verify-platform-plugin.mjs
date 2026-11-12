@@ -4,10 +4,12 @@
 import assert from 'node:assert/strict';
 import { execFileSync, spawn, spawnSync } from 'node:child_process';
 import fs from 'node:fs';
+import { createHash } from 'node:crypto';
 import os from 'node:os';
 import path from 'node:path';
 import { createRequire } from 'node:module';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import { createMcpConfiguration } from '../plugins/rdk-robot-learning-platform/configure.mjs';
 import { EXPERIENCE_TOOLS } from '../plugins/rdk-robot-learning-platform/scripts/experience-mcp.mjs';
 import { isDirectInvocation } from '../plugins/rdk-robot-learning-platform/scripts/experience.mjs';
 
@@ -16,27 +18,6 @@ const pluginRelative = 'plugins/rdk-robot-learning-platform';
 const pluginRoot = path.join(repositoryRoot, pluginRelative);
 const rootVariable = 'RDK_ROBOT_LEARNING_PLATFORM_ROOT';
 const require = createRequire(import.meta.url);
-
-function expectedCourseHint(name) {
-  const exact = {
-    rdk_training_submit:
-      'OriginMan课程优先rdk_originman_train显式选择预算，再rdk_originman_evaluate同源评测；不手拼SAC大小写、环境数、sourceRunId或groupId。\n',
-    rdk_artifact_promote:
-      '这是制品发布生命周期晋升，不是保存或下载文件。OriginMan保存评测记录使用links.experiment页面的保存按钮；不要因用户说保存、导出或回放而调用晋升。\n',
-    rdk_runs_replay:
-      'OriginMan评测视频不依赖本工具的通用遥测样本；样本为0不能判定视频不存在。请恢复原评测引用并读取workshop视频回执。\n',
-    rdk_simulator_open:
-      'OriginMan参考演示与本组回放不同：打开course.links.simulation，在页面内启动并观察基础PD；entryUrl不是已运行证明。不直接导航WebM，参考不需要先训练。\n',
-    rdk_golden_path:
-      'OriginMan仅仿真课程：此全局平台摘要不能作为本课完成比例，不用其他实验或部署状态替代本次结果。\n',
-  };
-  return (
-    exact[name] ??
-    (/^rdk_(deployment_|board_|physical_evaluation|replay_video)/.test(name)
-      ? 'OriginMan本课仅仿真：此通用硬件能力不属于本课下一步，不因本课仿真完成自动调用；仅在用户独立明确要求对应硬件工作时使用。\n'
-      : '')
-  );
-}
 
 function readJson(file) {
   return JSON.parse(fs.readFileSync(file, 'utf8'));
@@ -123,9 +104,18 @@ function inspectResources(skillRoots, files) {
       /(?:\/Users\/|\/home\/)[^\s/]+|[A-Z]:\\Users\\/i,
       `${file} contains a personal path`,
     );
+    const isRetainedBundle = path.relative(pluginRoot, file) === path.join('mcp', 'bundle.mjs');
     for (const match of text.matchAll(/\b(?:\d{1,3}\.){3}\d{1,3}\b/g)) {
+      // The retained bundle embeds quoted network ranges and a numbered docs title.
+      const bundleLiteral = isRetainedBundle ? text.slice(match.index - 1, match.index + 22) : '';
+      const knownBundleMetadata =
+        /^"(?:169\.254\.0\.0\/16|10\.0\.0\.0\/8|172\.16\.0\.0\/12|192\.168\.0\.0\/16)"/.test(
+          bundleLiteral,
+        ) ||
+        (bundleLiteral.startsWith('"3.3.2.2 GPIO ') &&
+          text.slice(match.index - 7, match.index) === 'title:"');
       assert.ok(
-        match[0].startsWith('127.') || match[0] === '0.0.0.0',
+        match[0].startsWith('127.') || match[0] === '0.0.0.0' || knownBundleMetadata,
         `${file} contains a device address: ${match[0]}`,
       );
     }
@@ -200,7 +190,7 @@ function cleanEnvironment(configFile) {
   return env;
 }
 
-async function probeMcp(invocation, cwd) {
+async function probeMcp(invocation, cwd, { name = 'duck-lab-mcp', version } = {}) {
   const child = spawn(invocation.command, invocation.args, {
     cwd,
     env: invocation.env,
@@ -276,7 +266,8 @@ async function probeMcp(invocation, cwd) {
       capabilities: {},
       clientInfo: { name: 'platform-plugin-verifier', version: '1.0.0' },
     });
-    assert.equal(initialization.serverInfo.name, 'duck-lab-mcp');
+    assert.equal(initialization.serverInfo.name, name);
+    if (version !== undefined) assert.equal(initialization.serverInfo.version, version);
     assert.equal(initialization.protocolVersion, '2025-06-18');
     child.stdin.write(
       `${JSON.stringify({ jsonrpc: '2.0', method: 'notifications/initialized' })}\n`,
@@ -396,7 +387,25 @@ function verifyPack(files) {
   );
 }
 
-async function main() {
+function verifyInventory(root, digest) {
+  const manifestPath = path.join(root, 'FILES.sha256');
+  const files = filesIn(root).filter((file) => file !== manifestPath);
+  const entries = new Map();
+  for (const line of fs.readFileSync(manifestPath, 'utf8').trimEnd().split(/\r?\n/)) {
+    const match = /^([a-f0-9]{64}) {2}(.+)$/.exec(line);
+    assert.ok(match, 'Invalid distribution inventory row');
+    const [, hash, name] = match;
+    assert.ok(!entries.has(name), `Duplicate inventory entry: ${name}`);
+    entries.set(name, hash);
+  }
+  assert.equal(entries.size, files.length, 'Inventory must cover every distribution file');
+  for (const file of files) {
+    const name = path.relative(root, file).split(path.sep).join('/');
+    assert.equal(entries.get(name), digest(name), `Distribution inventory mismatch: ${name}`);
+  }
+}
+
+async function main(distribution) {
   const portable = validateManifest(path.join(pluginRoot, 'plugin.json'));
   const compat = validateManifest(path.join(pluginRoot, '.codex-plugin/plugin.json'));
   assert.deepEqual(
@@ -431,73 +440,117 @@ async function main() {
   const temporary = fs.mkdtempSync(path.join(os.tmpdir(), 'rdk-platform-plugin-'));
   try {
     const installedRoot = path.join(temporary, 'installed-plugin');
+    const runtimeRoot = distribution ? path.join(temporary, 'distribution') : installedRoot;
     const foreignCwd = path.join(temporary, 'unrelated-cwd');
     const unconfiguredFile = path.join(temporary, 'missing-binding.json');
     fs.cpSync(pluginRoot, installedRoot, { recursive: true });
+    if (distribution) {
+      filesIn(distribution);
+      fs.cpSync(distribution, runtimeRoot, { recursive: true });
+      for (const host of ['.codex-plugin', '.qoder-plugin', '.rdstudio-plugin']) {
+        const manifest = readJson(path.join(runtimeRoot, host, 'plugin.json'));
+        assert.equal(manifest.name, portable.manifest.name);
+        assert.equal(manifest.version, portable.manifest.version);
+      }
+    }
     fs.mkdirSync(foreignCwd);
-    const extendedTools = await probeMcp(
+    // A source checkout has no workstation-specific Studio connection. The
+    // installer generates the actual launch command for a relocated copy.
+    assert.deepEqual(readJson(compat.mcpFile).mcpServers, {});
+    const manifest = createMcpConfiguration({
+      root: runtimeRoot,
+      nodePath: process.execPath,
+      platformUrl: 'http://127.0.0.1:1',
+    });
+    const server = manifest.mcpServers['rdk-learning-platform'];
+    const environment = { ...cleanEnvironment(unconfiguredFile), ...server.env };
+    const provenance = readJson(path.join(runtimeRoot, 'provenance.json'));
+    const digest = (name) =>
+      createHash('sha256')
+        .update(fs.readFileSync(path.join(runtimeRoot, name)))
+        .digest('hex');
+    verifyInventory(runtimeRoot, digest);
+    assert.equal(digest('mcp/bundle.mjs'), provenance.coreBundleSha256);
+    for (const [name, hash] of Object.entries(provenance.wrapperSources)) {
+      contained(runtimeRoot, name, 'Wrapper provenance file');
+      assert.equal(digest(name), hash, `Wrapper provenance mismatch: ${name}`);
+    }
+    const bundled = await probeMcp(
       {
-        command: process.execPath,
-        args: [path.join(installedRoot, 'scripts/experience-mcp.mjs')],
-        env: {
-          ...cleanEnvironment(unconfiguredFile),
-          [rootVariable]: repositoryRoot,
-          RDK_ROBOT_LEARNING_PLATFORM_MCP_MODE: 'source',
-        },
+        command: server.command,
+        args: [path.join(runtimeRoot, 'scripts/start-core-mcp.mjs')],
+        env: environment,
       },
       foreignCwd,
     );
-    const coreTools = extendedTools.slice(0, expected.tools.length);
-    assert.equal(coreTools.length, expected.tools.length);
-    for (let i = 0; i < coreTools.length; i++) {
-      const actual = coreTools[i],
-        original = expected.tools[i];
-      if (original.name === 'rdk_replay_video') {
-        // This deliberate applicability note fixes the workshop/board replay confusion.
-        // Every schema, permission, name and other core field remains exact.
-        assert.equal(
-          actual.description,
-          '仅用于真机遥测视频渲染；OriginMan短训评测的视频已随评测Run生成，不能用本工具。请rdk_experiment_resume优先获取links.experiment；旧平台使用links.workbench并在页面内选择本次Run、打开播放器。\n' +
-            original.description,
-        );
-        assert.deepEqual({ ...actual, description: original.description }, original);
-      } else if (expectedCourseHint(original.name)) {
-        assert.equal(actual.description, expectedCourseHint(original.name) + original.description);
-        assert.deepEqual({ ...actual, description: original.description }, original);
-      } else assert.deepEqual(actual, original);
+    const extendedTools = await probeMcp(
+      { command: server.command, args: server.args, env: environment },
+      foreignCwd,
+      { name: portable.manifest.name, version: portable.manifest.version },
+    );
+    const forwarded = bundled.filter((tool) => tool.name !== 'rdk_learning_guide');
+    const coreTools = extendedTools.slice(0, forwarded.length);
+    assert.equal(coreTools.length, forwarded.length);
+    for (let i = 0; i < forwarded.length; i++) {
+      const { description, ...contract } = coreTools[i];
+      const { description: originalDescription, ...originalContract } = forwarded[i];
+      assert.deepEqual(
+        contract,
+        originalContract,
+        `Forwarded contract changed for ${contract.name}`,
+      );
+      assert.ok(
+        description.endsWith(originalDescription),
+        `Upstream description missing for ${contract.name}`,
+      );
     }
-    const optionalTools = extendedTools.slice(expected.tools.length);
+    const optionalTools = extendedTools.slice(forwarded.length);
     assert.deepEqual(
       optionalTools,
       EXPERIENCE_TOOLS,
       'Optional entry must expose its real descriptors',
     );
     assert.equal(new Set(extendedTools.map((tool) => tool.name)).size, extendedTools.length);
+    const mutations = new Set([
+      'rdk_workshop',
+      'rdk_development_targets',
+      'rdk_experiment_remember',
+      'rdk_auth_login',
+      'rdk_auth_switch_account',
+      'rdk_auth_logout',
+      'rdk_originman_train',
+      'rdk_originman_dance_train',
+      'rdk_originman_evaluate',
+      'rdk_originman_short_train',
+      'rdk_originman_short_evaluate',
+    ]);
     for (const tool of optionalTools) {
-      const mutations = new Set([
-        'rdk_workshop',
-        'rdk_development_targets',
-        'rdk_experiment_remember',
-        'rdk_auth_login',
-        'rdk_auth_switch_account',
-        'rdk_auth_logout',
-        'rdk_originman_train',
-        'rdk_originman_evaluate',
-        'rdk_originman_short_train',
-        'rdk_originman_short_evaluate',
-      ]);
-      assert.equal(tool.annotations?.readOnlyHint, !mutations.has(tool.name));
-      assert.equal(tool.annotations?.destructiveHint, false);
+      assert.equal(tool.annotations?.readOnlyHint, !mutations.has(tool.name), tool.name);
+      assert.equal(tool.annotations?.destructiveHint, false, tool.name);
     }
-    for (const config of [portable, compat]) {
-      const installedConfig = path.join(installedRoot, path.relative(pluginRoot, config.mcpFile));
-      const invocation = mcpInvocation(installedConfig, installedRoot, {
+    for (const tool of coreTools) {
+      assert.equal(typeof tool.annotations?.readOnlyHint, 'boolean', tool.name);
+      assert.equal(typeof tool.annotations?.destructiveHint, 'boolean', tool.name);
+      assert.ok(!(tool.annotations.readOnlyHint && tool.annotations.destructiveHint), tool.name);
+    }
+    const developmentNames = new Set(expected.tools.map((tool) => tool.name));
+    for (const name of developmentNames) {
+      assert.ok(
+        extendedTools.some((tool) => tool.name === name),
+        `Missing shipped tool: ${name}`,
+      );
+    }
+    const shippedExtras = extendedTools.filter((tool) => !developmentNames.has(tool.name));
+    const invocation = mcpInvocation(
+      path.join(installedRoot, path.relative(pluginRoot, portable.mcpFile)),
+      installedRoot,
+      {
         ...cleanEnvironment(unconfiguredFile),
         [rootVariable]: repositoryRoot,
         RDK_ROBOT_LEARNING_PLATFORM_MCP_MODE: 'source',
-      });
-      verifyTools(await probeMcp(invocation, foreignCwd), expected, documentedTools, optionalTools);
-    }
+      },
+    );
+    verifyTools(await probeMcp(invocation, foreignCwd), expected, documentedTools, shippedExtras);
     verifyTools(
       await probeMcp(
         {
@@ -509,7 +562,7 @@ async function main() {
       ),
       expected,
       documentedTools,
-      optionalTools,
+      shippedExtras,
     );
     for (const badRoot of [undefined, path.join(temporary, 'missing-root'), foreignCwd]) {
       const env = cleanEnvironment(unconfiguredFile);
@@ -548,7 +601,7 @@ async function main() {
       ),
       expected,
       documentedTools,
-      optionalTools,
+      shippedExtras,
     );
     const malformedBinding = path.join(temporary, 'malformed-binding.json');
     fs.writeFileSync(malformedBinding, '{invalid json');
@@ -608,22 +661,31 @@ async function main() {
         ),
         expected,
         documentedTools,
-        optionalTools,
+        shippedExtras,
       );
       console.log('[platform-plugin] compiled-only repository entry passed');
     } else {
       console.log('[platform-plugin] compiled entry not checked; run npm run build to include it');
     }
     console.log(
-      `[platform-plugin] ${skillCount} skills, ${expected.tools.length} platform + ${optionalTools.length} optional MCP tools, portable/compat discovery, root/local-binding cases and npm pack resources passed`,
+      `[platform-plugin] ${skillCount} skills, ${expected.tools.length} development MCP tools, ${extendedTools.length} installed MCP tools, provenance, root/local-binding cases and npm pack resources passed`,
     );
   } finally {
     fs.rmSync(temporary, { recursive: true, force: true });
   }
 }
 
-if (isDirectInvocation(import.meta.url))
-  main().catch((error) => {
-    console.error(`[platform-plugin] ${error instanceof Error ? error.message : error}`);
-    process.exitCode = 1;
-  });
+if (isDirectInvocation(import.meta.url)) {
+  const args = process.argv.slice(2);
+  if (args.length && (args.length !== 2 || args[0] !== '--distribution' || !args[1])) {
+    console.error(
+      'Usage: node scripts/verify-platform-plugin.mjs [--distribution <extracted-plugin-directory>]',
+    );
+    process.exitCode = 2;
+  } else {
+    main(args[1] ? path.resolve(args[1]) : undefined).catch((error) => {
+      console.error(`[platform-plugin] ${error instanceof Error ? error.message : error}`);
+      process.exitCode = 1;
+    });
+  }
+}

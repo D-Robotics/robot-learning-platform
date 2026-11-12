@@ -130,6 +130,8 @@ node scripts/probe-sim2real.mjs \
 
 ## 存储备份
 
+OriginMan 舞蹈回放通过 Run 摘要校验后保存在 `dance-videos/<sha256>.mp4`，随台账一起备份和恢复。已有 Run 第一次成功读取回放时也会补存。没有副本的历史 Run 需要原训练 Worker 或与 Run 摘要一致的原视频文件。
+
 文件型台账由 `sim2real.json` 和 `telemetry/*.jsonl` 组成；`sim2real.json` 的 `artifacts`、`evaluations` 数组与 ledger 一起按字节校验。审计中间件另写 `audit.ndjson`（轮转段为 `audit.ndjson.1`），这两段也会被纳入快照。备份工具会校验 ledger 结构、逐行校验遥测和审计 JSON、写入 SHA-256 manifest，并且不复制 `writer-lease.json`（租约是进程状态，恢复旧租约会错误阻塞新实例）。默认发现活跃 writer 后停止，避免得到半份证据：
 
 ```bash
