@@ -47,17 +47,23 @@ async function loadBrowser() {
   throw error;
 }
 
-export async function verifyBrowserJourney({ trainBC = false, defaultOutput } = {}) {
+export async function verifyBrowserJourney({
+  trainBC = false,
+  defaultOutput,
+  args = process.argv.slice(2),
+} = {}) {
   const { output, help } = parseJourneyArguments(
-    process.argv.slice(2),
+    args,
     defaultOutput ?? path.join(repositoryRoot, 'dist/plugins/platform-plugin-browser.json'),
   );
   if (help) {
     console.log(
-      `Usage: node scripts/${trainBC ? 'verify-demonstration-training' : 'verify-platform-plugin-browser'}.mjs [--output FILE]\nRuns actual browser MuJoCo/ONNX simulation, six recorder episodes, workbench upload and platform evidence reads using isolated temporary storage.${trainBC ? ' Also submits real recorded-data BC through the workbench and a tuned Agent run; requires Python numpy/onnx/onnxruntime (RDK_OFFLINE_BC_PYTHON).' : ''} Requires RDK_PLUGIN_JOURNEY_MICRODUCK_ROOT plus Playwright/Chromium; use RDK_PLAYWRIGHT_MODULE and RDK_CHROMIUM_PATH for explicit installations. Missing dependencies exit 2; no synthetic fallback or motor actions. --help starts no browser/services and writes no evidence.`,
+      'Usage: npm run verify:plugin:browser -- [--train-bc] [--output FILE]\nRuns actual browser MuJoCo/ONNX simulation, six recorder episodes, workbench upload and platform evidence reads using isolated temporary storage. --train-bc also submits real recorded-data BC through the workbench and a tuned Agent run; requires Python numpy/onnx/onnxruntime (RDK_OFFLINE_BC_PYTHON). Requires RDK_PLUGIN_JOURNEY_MICRODUCK_ROOT plus Playwright/Chromium; use RDK_PLAYWRIGHT_MODULE and RDK_CHROMIUM_PATH for explicit installations. Missing dependencies exit 2; no synthetic fallback or motor actions. --help starts no browser/services and writes no evidence.',
     );
     return;
   }
+  await fs.mkdir(path.dirname(output), { recursive: true });
+  const evidenceDirectory = await fs.mkdtemp(path.join(path.dirname(output), 'browser-evidence-'));
   const started = Date.now();
   const report = {
     schemaVersion: 1,
@@ -65,6 +71,7 @@ export async function verifyBrowserJourney({ trainBC = false, defaultOutput } = 
     startedAt: new Date().toISOString(),
     status: 'running',
     exitCode: 1,
+    evidenceDirectory: path.basename(evidenceDirectory),
     scope: {
       simulation: 'Real browser MuJoCo WASM physics and ONNX reference policy',
       recording:
@@ -114,7 +121,7 @@ export async function verifyBrowserJourney({ trainBC = false, defaultOutput } = 
         await Promise.all(
           [
             'engines/offline-bc/train_bc.py',
-            'server/sim2real/training-demonstrations.ts',
+            'server/sim2real/demonstrations.ts',
             'server/routes/sim2real-routes.ts',
             'server/sim2real/robogo-runner.ts',
             'server/sim2real/sim2real-store.ts',
@@ -417,7 +424,7 @@ export async function verifyBrowserJourney({ trainBC = false, defaultOutput } = 
       );
       await fs.mkdir(path.dirname(output), { recursive: true });
       await page.screenshot({
-        path: path.join(path.dirname(output), 'platform-plugin-browser-simulation.png'),
+        path: path.join(evidenceDirectory, 'platform-plugin-browser-simulation.png'),
         fullPage: false,
       });
       return {
@@ -584,7 +591,7 @@ export async function verifyBrowserJourney({ trainBC = false, defaultOutput } = 
           { timeout: 10000 },
         );
         await page.screenshot({
-          path: path.join(path.dirname(output), 'platform-plugin-browser-simulation.png'),
+          path: path.join(evidenceDirectory, 'platform-plugin-browser-simulation.png'),
           fullPage: false,
         });
         return firstEpisode.evidence;
@@ -596,7 +603,7 @@ export async function verifyBrowserJourney({ trainBC = false, defaultOutput } = 
       'B08.real-command-coverage',
       'six reset recorder episodes combined for workbench import',
       async () => {
-        const directory = path.join(path.dirname(output), 'browser-episodes');
+        const directory = path.join(evidenceDirectory, 'browser-episodes');
         await fs.mkdir(directory, { recursive: true });
         const recordings = reusedRecording ? [] : [firstEpisode];
         if (!reusedRecording)
@@ -628,7 +635,7 @@ export async function verifyBrowserJourney({ trainBC = false, defaultOutput } = 
           sha256: createHash('sha256').update(uploadedTrajectory).digest('hex'),
         };
         await fs.writeFile(
-          path.join(path.dirname(output), 'platform-plugin-browser-trajectory.jsonl'),
+          path.join(evidenceDirectory, 'platform-plugin-browser-trajectory.jsonl'),
           uploadedTrajectory,
           { flag: 'wx' },
         );
@@ -804,7 +811,7 @@ export async function verifyBrowserJourney({ trainBC = false, defaultOutput } = 
         workerData: learning.workerData,
         workerPython: learning.python,
         step,
-        output,
+        output: path.join(evidenceDirectory, path.basename(output)),
       });
       report.scope.training =
         'Actual recorded vectors through workbench BC and tuned MCP run; retained ONNX and fresh reference/BC/zero policy episodes';
@@ -890,8 +897,13 @@ export async function verifyBrowserJourney({ trainBC = false, defaultOutput } = 
   process.exitCode = report.exitCode;
 }
 
-if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url))
-  verifyBrowserJourney().catch((error) => {
-    console.error(`[plugin-browser] ${scrubEvidence(error.message)}`);
-    process.exitCode = error.exitCode ?? 1;
-  });
+if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  const args = process.argv.slice(2);
+  const trainBC = args.includes('--train-bc');
+  verifyBrowserJourney({ trainBC, args: args.filter((arg) => arg !== '--train-bc') }).catch(
+    (error) => {
+      console.error(`[plugin-browser] ${scrubEvidence(error.message)}`);
+      process.exitCode = error.exitCode ?? 1;
+    },
+  );
+}

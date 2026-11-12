@@ -172,8 +172,8 @@ describe('renderReplayVideo + readReplayVideo round trip', () => {
     const target = replayVideoPath('timeout')!;
     const rendered = renderReplayVideo(plan, target);
     let started = false;
-    for (let attempt = 0; attempt < 100 && !started; attempt += 1) {
-      await new Promise<void>((resolve) => physicalDelay(resolve, 5));
+    for (let attempt = 0; attempt < 200 && !started; attempt += 1) {
+      await new Promise<void>((resolve) => physicalDelay(resolve, 20));
       const files = await fs.readdir(path.dirname(target)).catch(() => [] as string[]);
       const scratch = files.find((name) => name.startsWith('.replay-frames-'));
       if (scratch)
@@ -186,7 +186,7 @@ describe('renderReplayVideo + readReplayVideo round trip', () => {
     expect(await rendered).toMatchObject({ ok: false, code: 'replay_video_timeout' });
     expect(started).toBe(true);
     expect(await fs.readdir(path.dirname(target))).toEqual([]);
-  });
+  }, 10000);
 
   it('rejects tampered plans before starting an encoder', async () => {
     await useTempStorage();

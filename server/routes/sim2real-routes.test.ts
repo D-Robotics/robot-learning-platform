@@ -269,6 +269,7 @@ async function invoke(
       params: {},
       query: {},
       headers: {},
+      is: () => false,
       ...input,
     } as unknown as Request;
     routeHandler(router, method, routePath)(request, response, ((error?: unknown) => {
@@ -2025,6 +2026,99 @@ describe('Sim2Real HTTP routes', () => {
     });
     expect(response.statusCode).toBe(404);
     expect(response.body).toMatchObject({ code: 'SIM2REAL_RUN_NOT_FOUND' });
+  });
+
+  it('downloads the exact relayed policy from platform storage without contacting a worker', async () => {
+    const router = await fixture();
+    const bytes = Buffer.from('browser relay ONNX');
+    const sha256 = createHash('sha256').update(bytes).digest('hex');
+    const run = await createSim2RealRun({
+      modelId: BUILTIN_MICRODUCK_MODEL.id,
+      backend: 'local',
+      status: 'completed',
+      mock: false,
+      summary: 'Browser relay fixture',
+      externalRunId: 'browser-relay-1',
+      relayAgentUrl: 'http://127.0.0.1:19190/proxy',
+      artifact: {
+        artifactId: 'browser-relay-policy',
+        artifactRef: 'artifact://local/browser-relay-1/policy.onnx',
+        format: 'onnx',
+        kind: 'source',
+        sha256,
+        deployable: false,
+      },
+    });
+    const params = { id: run.id };
+    const originalFetch = globalThis.fetch;
+    let workerRequests = 0;
+    globalThis.fetch = (async () => {
+      workerRequests += 1;
+      return new Response('{}', { status: 404 });
+    }) as typeof fetch;
+    try {
+      const pending = await invoke(router, 'get', '/api/sim2real/runs/:id/artifact', { params });
+      expect(pending.body).toMatchObject({
+        code: 'SIM2REAL_RELAY_ARTIFACT_PENDING',
+        retryable: true,
+      });
+      const unrelated = Buffer.from('unrelated ONNX');
+      const unrelatedDigest = createHash('sha256').update(unrelated).digest('hex');
+      const mismatch = await invoke(router, 'post', '/api/sim2real/runs/:id/relay/artifact', {
+        params,
+        body: { sha256: unrelatedDigest, bytesBase64: unrelated.toString('base64') },
+      });
+      expect(mismatch.statusCode).toBe(409);
+      const uploaded = await invoke(router, 'post', '/api/sim2real/runs/:id/relay/artifact', {
+        params,
+        body: { sha256, bytesBase64: bytes.toString('base64') },
+      });
+      expect(uploaded.statusCode).toBe(200);
+      const downloaded = await invoke(router, 'get', '/api/sim2real/runs/:id/artifact', { params });
+      expect(downloaded.statusCode).toBe(200);
+      expect(downloaded.headers['x-artifact-sha256']).toBe(sha256);
+      expect(downloaded.body).toEqual(bytes);
+      expect(workerRequests).toBe(0);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it('does not fall back to the global runner when a run’s compute resource is gone', async () => {
+    const router = await fixture();
+    process.env.RDK_SIM2REAL_LOCAL_RUNNER_URL = 'http://127.0.0.1:18203/train';
+    const run = await createSim2RealRun({
+      modelId: BUILTIN_MICRODUCK_MODEL.id,
+      backend: 'local',
+      status: 'completed',
+      mock: false,
+      summary: 'Deleted resource fixture',
+      externalRunId: 'previous-resource-1',
+      computeResourceId: 'missing-resource',
+      artifact: {
+        artifactId: 'previous-resource-policy',
+        artifactRef: 'artifact://local/previous-resource-1/policy.onnx',
+        format: 'onnx',
+        kind: 'source',
+        sha256: 'a'.repeat(64),
+        deployable: false,
+      },
+    });
+    const originalFetch = globalThis.fetch;
+    let workerRequests = 0;
+    globalThis.fetch = (async () => {
+      workerRequests += 1;
+      return new Response('{}', { status: 404 });
+    }) as typeof fetch;
+    try {
+      const response = await invoke(router, 'get', '/api/sim2real/runs/:id/artifact', {
+        params: { id: run.id },
+      });
+      expect(response.body).toMatchObject({ code: 'SIM2REAL_ARTIFACT_WORKER_UNAVAILABLE' });
+      expect(workerRequests).toBe(0);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
   });
 
   it('runs a local training worker without consulting the RoboGo endpoint', async () => {

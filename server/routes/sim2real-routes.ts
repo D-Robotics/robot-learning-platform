@@ -2238,6 +2238,14 @@ function verifiedDanceVideoReceipt(run: Sim2RealRunRecord) {
   return { sha256: video.sha256, sizeBytes: video.sizeBytes, externalRunId: run.externalRunId };
 }
 
+function sendRunPolicy(response: Response, runId: string, sha256: string, bytes: Buffer) {
+  response.setHeader('Content-Type', 'application/octet-stream');
+  response.setHeader('X-Artifact-Sha256', sha256);
+  response.setHeader('Cache-Control', 'no-store');
+  response.setHeader('Content-Disposition', `attachment; filename="policy-${runId}.onnx"`);
+  response.end(bytes);
+}
+
 export function createSim2RealRouter(
   deps: { runOnDevice?: RunOnDevice; auth?: Sim2RealAuthPort } = {},
   options: Sim2RealRouterOptions = {},
@@ -3711,10 +3719,8 @@ export function createSim2RealRouter(
         return;
       }
       const artifact = run.artifact;
-      if (
-        artifact?.format?.toLowerCase() !== 'onnx' ||
-        !/^[a-f0-9]{64}$/.test(artifact.sha256 ?? '')
-      ) {
+      const sha256 = artifact?.sha256;
+      if (artifact?.format?.toLowerCase() !== 'onnx' || !sha256 || !/^[a-f0-9]{64}$/.test(sha256)) {
         sendApiError(
           response,
           409,
@@ -3724,9 +3730,34 @@ export function createSim2RealRouter(
         );
         return;
       }
+      if (run.relayAgentUrl) {
+        const bytes = await readSim2RealRelayArtifact(sha256);
+        if (!bytes) {
+          sendApiError(
+            response,
+            409,
+            'SIM2REAL_RELAY_ARTIFACT_PENDING',
+            '平台尚未收到可校验的策略文件。请在提交训练的浏览器中检查制品回传。',
+            { retryable: true },
+          );
+          return;
+        }
+        sendRunPolicy(response, run.id, sha256, bytes);
+        return;
+      }
       const selectedResource = run.computeResourceId
         ? await getSim2RealComputeResourceSecret(run.computeResourceId, owner)
         : null;
+      if (run.computeResourceId && !selectedResource) {
+        sendApiError(
+          response,
+          409,
+          'SIM2REAL_ARTIFACT_WORKER_UNAVAILABLE',
+          '本次运行绑定的训练资源已不可用。',
+          { retryable: false },
+        );
+        return;
+      }
       const accountId = String(
         auth.resolvePrincipal(request)?.accountId ??
           owner ??
@@ -3760,7 +3791,7 @@ export function createSim2RealRouter(
         );
         return;
       }
-      if (fetched.sha256 !== artifact.sha256) {
+      if (fetched.sha256 !== sha256) {
         sendApiError(
           response,
           409,
@@ -3770,11 +3801,7 @@ export function createSim2RealRouter(
         );
         return;
       }
-      response.setHeader('Content-Type', 'application/octet-stream');
-      response.setHeader('X-Artifact-Sha256', fetched.sha256);
-      response.setHeader('Cache-Control', 'no-store');
-      response.setHeader('Content-Disposition', `attachment; filename="policy-${run.id}.onnx"`);
-      response.end(fetched.bytes);
+      sendRunPolicy(response, run.id, sha256, fetched.bytes);
     }),
   );
 
@@ -3802,6 +3829,21 @@ export function createSim2RealRouter(
         sendApiError(response, 400, 'SIM2REAL_RELAY_ARTIFACT_INVALID', '中继制品数据无效。', {
           retryable: false,
         });
+        return;
+      }
+      if (
+        run.status !== 'completed' ||
+        run.mock ||
+        run.artifact?.format?.toLowerCase() !== 'onnx' ||
+        run.artifact.sha256 !== sha256
+      ) {
+        sendApiError(
+          response,
+          409,
+          'SIM2REAL_RELAY_ARTIFACT_RUN_MISMATCH',
+          '回传制品必须与本次已完成运行的策略记录一致。',
+          { retryable: false },
+        );
         return;
       }
       let bytes: Buffer;

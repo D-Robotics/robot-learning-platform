@@ -3022,10 +3022,14 @@ function relayArtifactPath(sha256: string): string | null {
  */
 export async function storeSim2RealRelayArtifact(sha256: string, bytes: Buffer): Promise<void> {
   const file = relayArtifactPath(sha256);
-  if (!file) throw new Sim2RealError('sim2real_relay_artifact_digest_invalid');
-  ensureWritable();
-  await fs.mkdir(relayArtifactDir(), { recursive: true });
-  await fs.writeFile(file, bytes, { mode: 0o600 });
+  if (
+    !file ||
+    bytes.length < 1 ||
+    bytes.length > 50 * 1024 * 1024 ||
+    createHash('sha256').update(bytes).digest('hex') !== sha256
+  )
+    throw new Sim2RealError('sim2real_relay_artifact_digest_invalid');
+  await writePrivateArtifact(file, bytes);
 }
 
 /**
@@ -3038,6 +3042,8 @@ export async function readSim2RealRelayArtifact(sha256: string): Promise<Buffer 
   if (!file) return null;
   let bytes: Buffer;
   try {
+    const info = await fs.lstat(file);
+    if (!info.isFile() || info.size < 1 || info.size > 50 * 1024 * 1024) return null;
     bytes = await fs.readFile(file);
   } catch {
     return null;
@@ -3080,6 +3086,10 @@ export async function storeSim2RealDanceVideo(sha256: string, bytes: Buffer): Pr
     createHash('sha256').update(bytes).digest('hex') !== sha256
   )
     throw new TypeError('Dance video bytes do not match the recorded digest');
+  await writePrivateArtifact(file, bytes);
+}
+
+async function writePrivateArtifact(file: string, bytes: Buffer): Promise<void> {
   ensureWritable();
   const directory = path.dirname(file);
   await fs.mkdir(directory, { recursive: true, mode: 0o700 });

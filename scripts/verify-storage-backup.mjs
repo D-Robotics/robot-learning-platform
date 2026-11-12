@@ -60,12 +60,23 @@ try {
   const videoPath = path.join('dance-videos', `${digest}.mp4`);
   await mkdir(path.join(storage, 'dance-videos'), { mode: 0o700 });
   await writeFile(path.join(storage, videoPath), video, { mode: 0o600 });
+  const policy = Buffer.from('verified browser-relayed ONNX fixture');
+  const policyDigest = createHash('sha256').update(policy).digest('hex');
+  const policyPath = path.join('relay-artifacts', `${policyDigest}.onnx`);
+  await mkdir(path.join(storage, 'relay-artifacts'), { mode: 0o700 });
+  await writeFile(path.join(storage, policyPath), policy, { mode: 0o600 });
   const first = await createBackup({ storageDir: storage, output: snapshot });
   assert.equal(first.manifest.consistency, 'quiesced');
   const verified = await verifySnapshot(snapshot);
-  assert.equal(verified.files, 5);
+  assert.equal(verified.files, 6);
   assert.ok(
     verified.manifest.files.some((file) => file.path === videoPath && file.sha256 === digest),
+  );
+  assert.ok(
+    verified.manifest.files.some(
+      (file) =>
+        file.path === policyPath && file.sha256 === policyDigest && file.kind === 'relay-artifact',
+    ),
   );
   assert.equal(verified.telemetryRows, 1);
   assert.equal(verified.auditRows, 2);
@@ -94,6 +105,7 @@ try {
   const result = await restoreBackup({ snapshotDir: snapshot, storageDir: restored, yes: true });
   assert.equal(result.restoredTo, restored);
   assert.deepEqual(await readFile(path.join(restored, videoPath)), video);
+  assert.deepEqual(await readFile(path.join(restored, policyPath)), policy);
   assert.equal(JSON.parse(await readFile(path.join(restored, 'sim2real.json'), 'utf8')).version, 1);
   const restoredLedger = JSON.parse(await readFile(path.join(restored, 'sim2real.json'), 'utf8'));
   assert.equal(restoredLedger.artifacts[0].id, 'artifact-1');

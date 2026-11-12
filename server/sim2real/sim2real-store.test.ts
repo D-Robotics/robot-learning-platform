@@ -1392,7 +1392,13 @@ describe('Sim2Real browser relay runs', () => {
     const root = await useTempStorage();
     const bytes = Buffer.from('fake-onnx-bytes-for-relay-test');
     const digest = createHash('sha256').update(bytes).digest('hex');
-    await storeSim2RealRelayArtifact(digest, bytes);
+    await expect(
+      storeSim2RealRelayArtifact(digest, Buffer.from('different bytes')),
+    ).rejects.toThrow('sim2real_relay_artifact_digest_invalid');
+    await Promise.all([
+      storeSim2RealRelayArtifact(digest, bytes),
+      storeSim2RealRelayArtifact(digest, bytes),
+    ]);
     const artifactPath = path.join(root, 'relay-artifacts', `${digest}.onnx`);
     expect((await fs.stat(artifactPath)).size).toBe(bytes.length);
 

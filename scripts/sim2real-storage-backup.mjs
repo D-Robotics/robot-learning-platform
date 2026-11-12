@@ -40,7 +40,6 @@ import { fileURLToPath } from 'node:url';
 export const BACKUP_SCHEMA_VERSION = 1;
 export const LEDGER_FILE_NAME = 'sim2real.json';
 export const TELEMETRY_DIR_NAME = 'telemetry';
-const DANCE_VIDEO_DIR_NAME = 'dance-videos';
 export const WRITER_LEASE_FILE_NAME = 'writer-lease.json';
 /**
  * The audit stream is intentionally kept outside the JSON ledger so an
@@ -78,8 +77,21 @@ const REQUIRED_LEDGER_ARRAYS = [
 ];
 
 const AUDIT_PATH_PATTERN = /^(?:audit\.ndjson(?:\.1)?)$/;
-const DANCE_VIDEO_PATH_PATTERN = /^dance-videos\/([a-f0-9]{64})\.mp4$/;
-const DANCE_VIDEO_STAGING_PATTERN = /^[a-f0-9-]{36}\.tmp$/;
+const ARTIFACT_DIRECTORIES = new Map([
+  ['dance-videos', { pattern: /^dance-videos\/([a-f0-9]{64})\.mp4$/, kind: 'dance-video' }],
+  [
+    'relay-artifacts',
+    { pattern: /^relay-artifacts\/([a-f0-9]{64})\.onnx$/, kind: 'relay-artifact' },
+  ],
+]);
+const ARTIFACT_STAGING_PATTERN = /^[a-f0-9-]{36}\.tmp$/;
+
+function artifactFile(relativePath) {
+  const descriptor = ARTIFACT_DIRECTORIES.get(relativePath.split('/')[0]);
+  const digest = descriptor?.pattern.exec(relativePath)?.[1];
+  return digest ? { digest, kind: descriptor.kind } : null;
+}
+
 const TELEMETRY_PATH_PATTERN = /^telemetry\/[\w-]{1,128}\.jsonl$/;
 const PRIVATE_DIRECTORY_MODE = 0o700;
 
@@ -389,29 +401,32 @@ export async function inspectStorage(storageDir, options = {}) {
       bytes: info.size,
     });
   }
-  const danceVideoDir = path.join(root, DANCE_VIDEO_DIR_NAME);
-  let danceVideos = [];
-  try {
-    await safeDirectory(danceVideoDir, DANCE_VIDEO_DIR_NAME);
-    danceVideos = await readdir(danceVideoDir, { withFileTypes: true });
-  } catch (error) {
-    if (error?.code !== 'STORAGE_BACKUP_SOURCE_MISSING') throw error;
-  }
-  for (const entry of danceVideos) {
-    if (entry.isFile() && DANCE_VIDEO_STAGING_PATTERN.test(entry.name)) continue;
-    const relativePath = `${DANCE_VIDEO_DIR_NAME}/${entry.name}`;
-    const expectedDigest = DANCE_VIDEO_PATH_PATTERN.exec(relativePath)?.[1];
-    if (!entry.isFile() || !expectedDigest)
-      fail(`非法舞蹈回放路径 ${relativePath}`, 'STORAGE_BACKUP_SOURCE_INVALID');
-    const absolutePath = path.join(danceVideoDir, entry.name);
-    const info = await regularFile(absolutePath, relativePath);
-    if (
-      !info.size ||
-      info.size > 50 * 1024 * 1024 ||
-      (await sha256(absolutePath)) !== expectedDigest
-    )
-      fail(`${relativePath} 回放摘要或大小无效`, 'STORAGE_BACKUP_DIGEST_MISMATCH');
-    files.push({ relativePath, absolutePath, kind: 'dance-video', bytes: info.size });
+  for (const name of ARTIFACT_DIRECTORIES.keys()) {
+    const directory = path.join(root, name);
+    let entries;
+    try {
+      await safeDirectory(directory, name);
+      entries = await readdir(directory, { withFileTypes: true });
+    } catch (error) {
+      if (error?.code === 'STORAGE_BACKUP_SOURCE_MISSING') continue;
+      throw error;
+    }
+    for (const entry of entries) {
+      if (entry.isFile() && ARTIFACT_STAGING_PATTERN.test(entry.name)) continue;
+      const relativePath = `${name}/${entry.name}`;
+      const artifact = artifactFile(relativePath);
+      if (!entry.isFile() || !artifact)
+        fail(`非法制品路径 ${relativePath}`, 'STORAGE_BACKUP_SOURCE_INVALID');
+      const absolutePath = path.join(directory, entry.name);
+      const info = await regularFile(absolutePath, relativePath);
+      if (
+        !info.size ||
+        info.size > 50 * 1024 * 1024 ||
+        (await sha256(absolutePath)) !== artifact.digest
+      )
+        fail(`${relativePath} 制品摘要或大小无效`, 'STORAGE_BACKUP_DIGEST_MISMATCH');
+      files.push({ relativePath, absolutePath, kind: artifact.kind, bytes: info.size });
+    }
   }
   for (const name of EXTRA_ROOT_FILES) {
     const absolutePath = path.join(root, name);
@@ -450,7 +465,7 @@ export async function inspectStorage(storageDir, options = {}) {
     if (
       entry.name === LEDGER_FILE_NAME ||
       entry.name === TELEMETRY_DIR_NAME ||
-      entry.name === DANCE_VIDEO_DIR_NAME ||
+      ARTIFACT_DIRECTORIES.has(entry.name) ||
       entry.name === WRITER_LEASE_FILE_NAME ||
       auditRootNames.has(entry.name) ||
       EXTRA_ROOT_FILES.has(entry.name) ||
@@ -581,13 +596,14 @@ export async function verifySnapshot(snapshotDir) {
   }
   const expected = new Map();
   for (const item of manifest.files) {
+    const artifact = typeof item?.path === 'string' ? artifactFile(item.path) : null;
     const validPath =
       isRecord(item) &&
       typeof item.path === 'string' &&
       (item.path === LEDGER_FILE_NAME ||
         EXTRA_ROOT_FILES.has(item.path) ||
         TELEMETRY_PATH_PATTERN.test(item.path) ||
-        DANCE_VIDEO_PATH_PATTERN.test(item.path) ||
+        artifact ||
         AUDIT_PATH_PATTERN.test(item.path));
     if (
       !validPath ||
@@ -604,9 +620,7 @@ export async function verifySnapshot(snapshotDir) {
           ? 'state'
           : TELEMETRY_PATH_PATTERN.test(item.path)
             ? 'telemetry'
-            : DANCE_VIDEO_PATH_PATTERN.test(item.path)
-              ? 'dance-video'
-              : 'audit';
+            : (artifact?.kind ?? 'audit');
     if (item.kind !== undefined && item.kind !== expectedKind) {
       fail(
         `backup-manifest.json 文件类型与路径不一致：${item.path}`,
@@ -634,14 +648,12 @@ export async function verifySnapshot(snapshotDir) {
       }
       continue;
     }
-    if (entry.name === DANCE_VIDEO_DIR_NAME) {
-      if (!entry.isDirectory()) fail('备份舞蹈回放路径不是目录', 'STORAGE_BACKUP_SOURCE_INVALID');
-      for (const video of await readdir(path.join(root, DANCE_VIDEO_DIR_NAME), {
-        withFileTypes: true,
-      })) {
-        const relativePath = `${DANCE_VIDEO_DIR_NAME}/${video.name}`;
-        if (!video.isFile() || !DANCE_VIDEO_PATH_PATTERN.test(relativePath))
-          fail(`备份舞蹈回放路径 ${relativePath} 非法`, 'STORAGE_BACKUP_SOURCE_INVALID');
+    if (ARTIFACT_DIRECTORIES.has(entry.name)) {
+      if (!entry.isDirectory()) fail('备份制品路径不是目录', 'STORAGE_BACKUP_SOURCE_INVALID');
+      for (const file of await readdir(path.join(root, entry.name), { withFileTypes: true })) {
+        const relativePath = `${entry.name}/${file.name}`;
+        if (!file.isFile() || !artifactFile(relativePath))
+          fail(`备份制品路径 ${relativePath} 非法`, 'STORAGE_BACKUP_SOURCE_INVALID');
         actual.push(relativePath);
       }
       continue;
@@ -658,9 +670,9 @@ export async function verifySnapshot(snapshotDir) {
     const info = await regularFile(file, item.path);
     if (info.size !== item.bytes || (await sha256(file)) !== item.sha256)
       fail(`${item.path} SHA-256 或大小不匹配`, 'STORAGE_BACKUP_DIGEST_MISMATCH');
-    const danceDigest = DANCE_VIDEO_PATH_PATTERN.exec(item.path)?.[1];
-    if (danceDigest && (item.sha256 !== danceDigest || !info.size || info.size > 50 * 1024 * 1024))
-      fail(`${item.path} 回放摘要或大小无效`, 'STORAGE_BACKUP_DIGEST_MISMATCH');
+    const artifact = artifactFile(item.path);
+    if (artifact && (item.sha256 !== artifact.digest || !info.size || info.size > 50 * 1024 * 1024))
+      fail(`${item.path} 制品摘要或大小无效`, 'STORAGE_BACKUP_DIGEST_MISMATCH');
     if (TELEMETRY_PATH_PATTERN.test(item.path))
       telemetryRows += await validateTelemetry(file, item.path);
     if (AUDIT_PATH_PATTERN.test(item.path)) auditRows += await validateAudit(file, item.path);
