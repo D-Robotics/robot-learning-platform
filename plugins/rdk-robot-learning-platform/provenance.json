@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "name": "rdk-robot-learning-platform",
-  "version": "0.6.42",
+  "version": "0.6.43",
   "description": "通用机器人学习插件，支持按机型和任务进入仿真与录制、强化学习与模仿学习、Sim2Real 评测与回放、制品管理和受控部署。OriginMan 舞蹈和受扰恢复是可选任务。",
   "composition": "retained-core-with-host-neutral-workflow-extension",
   "coreBundleSha256": "fe7e5f440cbc357b47de476bee5b8b15facc7940d7bbcc7a8975adbd4e1bfca5",
@@ -17,7 +17,7 @@
     "scripts/robot-onboarding.mjs": "c8ac06adf47bed664194b513332226249c5c6a33d7646f94dff7af994c2c6421",
     "scripts/qoder-install.mjs": "76a8bc2e2383f31d81e32ff6e8c5ca0316d9baa14e02778bed551d2768d8ef07",
     "scripts/experience.mjs": "40a2a503e20845f4df670572cdb63a3278a79a83080e6ef244e401250ae51184",
-    "scripts/experience-mcp.mjs": "1933382ce78c9d7d02ec0094d03b7be3137eb73d61e60eb8607c6fb38edb7239",
+    "scripts/experience-mcp.mjs": "322c4259af5ba75a399b2fe5076ddc617a7aff0e94feb4cfb5d6efa280812ef4",
     "scripts/workflow-inspection.mjs": "5dc21d5d4cb934144854b287acfea97d60bfda2c1c0013bf6eb35f3239cbab96",
     "scripts/experiment-context.mjs": "84abd0ff781f66f6b0907d43dd71d16f6ccc98ca7b1c9d407d451b927995357e",
     "scripts/short-training.mjs": "0b7d41d3e9260e47e823cf51da5a54ee1b029d62736eadb70c33b8ddfaf29f81",
@@ -39,7 +39,7 @@
     "setup-qoder-macos.command": "93df7254bf6dcc25ff206ebdc3d135333fb4b1528f340cfc2544da34b2ef7516",
     "setup-qoder-windows.cmd": "d4046e68bd62a40bf919c4755411fd294a483758f8ddcf493073863b4a3f834b",
     "runtime-downloads.json": "73ac7276ca81776aa1680cfdb94a817c4c33ecb3e41c024aeaf27663e281f999",
-    "ui/experiment.html": "9a7a0045e34f469dacc29e9363cbd1e6a18f19b72fbcf6e9774c3fb4c4aa061a",
+    "ui/experiment.html": "6863be7b8c1ccfced0ab8b707627fadb9e2f3307ffad41835f5d9c82c97e7924",
     "ui/licenses.json": "a599a96d9a7c8019ff6aa53694023adf50221e4d878542e3437799cdaac3cdd5"
   },
   "uiBuild": {
@@ -52,7 +52,7 @@
     "inputs": {
       "node_modules/@modelcontextprotocol/ext-apps/dist/src/app-with-deps.js": "d24b6ae50dbc989539db8287e217f41f0833f2b0a81ac4c6dbde444715ef5cd0",
       "services/sim2real-web/public/experiment-view.mjs": "7aa3fe5db61dadac270b99be9b964db3f5890cf2d72b5e2040b761dd7616ed0f",
-      "plugins/rdk-robot-learning-platform/plugin.json": "431df25bc35e8a81cb739667eb47ea286884643eee768bd55062484baed18ebb",
+      "plugins/rdk-robot-learning-platform/plugin.json": "eda70ed62c3fbe1609c43203628b326a0888a3672d9cf165d790e0ebfcefe551",
       "plugins/rdk-robot-learning-platform/ui/experiment-app.mjs": "d735263c46f20143ec8fee49c5f50a0129685e7ae522a32d11390b00fe2a2996",
       "services/sim2real-web/public/tokens.css": "3ad5ee94306710d01bc41e0802c360a779e3c173d11d5d8958ed685b79703e86",
       "services/sim2real-web/public/experiment.css": "400f00c7d2e86d0f71362c2e6ccded0a5f143058ade9267fd6887ef06e4d6bea",

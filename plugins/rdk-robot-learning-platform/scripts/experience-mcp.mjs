@@ -182,7 +182,14 @@ function attachRunVisualization(payload, runId, baseUrl) {
   const metrics = payload.run?.metrics ?? payload.metrics;
   const dance = metrics?.originmanDance;
   let studentReply = payload.studentReply || `本轮训练${status}。`;
-  if (metrics?.trainingDevice) studentReply += `实际训练设备：${metrics.trainingDevice}。`;
+  const device = metrics?.trainingDevice;
+  if (typeof device === 'string' && /^(cpu|mps|cuda(:[0-9]{1,3})?)$/.test(device)) {
+    const deviceName = metrics.trainingDeviceName;
+    const validName =
+      typeof deviceName === 'string' && /^[a-zA-Z0-9][a-zA-Z0-9 ._()+-]{0,95}$/.test(deviceName);
+    const deviceLabel = validName && deviceName !== device ? `${deviceName} (${device})` : device;
+    studentReply += `实际训练设备：${deviceLabel}。`;
+  }
   if (rawStatus === 'completed' && dance) {
     const passed = dance.qualityGatePassed;
     studentReply +=

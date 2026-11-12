@@ -929,6 +929,8 @@ test('legacy replay is linked only after verifying bytes for the exact Run', asy
     mock: false,
     artifact: { sha256: sha },
     metrics: {
+      trainingDevice: 'cuda',
+      trainingDeviceName: 'NVIDIA GeForce RTX 4090',
       originmanDance: {
         replay: { sha256: replay },
         video: {
@@ -966,12 +968,17 @@ test('legacy replay is linked only after verifying bytes for the exact Run', asy
   const unavailable = await guide();
   assert.equal(unavailable.links.danceVideo, undefined);
   assert.match(unavailable.studentReply, /有本轮视频记录，当前未能核验播放入口/);
+  assert.match(unavailable.studentReply, /NVIDIA GeForce RTX 4090 \(cuda\)/);
   allow = true;
   assert.equal(
     (await guide()).links.danceVideo,
     'https://platform.test/robotics-learning/api/v1/duck/runs/legacy-dance/dance-video',
   );
+  run.metrics.trainingDeviceName = '<untrusted>';
   run.artifact.sha256 = 'd'.repeat(64);
-  assert.equal((await guide()).links.danceVideo, undefined);
+  const rejected = await guide();
+  assert.equal(rejected.links.danceVideo, undefined);
+  assert.match(rejected.studentReply, /实际训练设备：cuda。/);
+  assert.doesNotMatch(rejected.studentReply, /untrusted/);
   assert.equal(checked, 2);
 });
