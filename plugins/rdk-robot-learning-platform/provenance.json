@@ -39,8 +39,8 @@
     "setup-qoder-macos.command": "93df7254bf6dcc25ff206ebdc3d135333fb4b1528f340cfc2544da34b2ef7516",
     "setup-qoder-windows.cmd": "d4046e68bd62a40bf919c4755411fd294a483758f8ddcf493073863b4a3f834b",
     "runtime-downloads.json": "73ac7276ca81776aa1680cfdb94a817c4c33ecb3e41c024aeaf27663e281f999",
-    "ui/experiment.html": "c3c3404484cbff572843120bccb1af05b51a091729ed5b45410991929e6bbbee",
-    "ui/licenses.json": "8af98ad6f65dccf3ffa893ee30863a659fd068db069ff453d742905c6b5c54f3"
+    "ui/experiment.html": "c36329721af27cd7007ce002c2cd4833e13443bcd60ef449768bfc1363ed887c",
+    "ui/licenses.json": "5b346db60419187360087793bc32069bc14b86fe9ffe041583bc4527a6b17fa5"
   },
   "uiBuild": {
     "bundler": "esbuild",
