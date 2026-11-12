@@ -1187,6 +1187,7 @@ def export_onnx(model, normalization, schedule, path, x_check, seed=0):
                 "chunk_actions": {0: "batch"},
             },
             opset_version=ONNX_OPSET,
+            dynamo=False,
         )
     data = pathlib.Path(path).read_bytes()
 
@@ -1357,6 +1358,7 @@ def measure_edge_feasibility(model, normalization, schedule, x_rows, seed=0,
                     "chunk_actions": {0: "batch"},
                 },
                 opset_version=ONNX_OPSET,
+                dynamo=False,
             )
         session = ort.InferenceSession(
             probe.as_posix(), providers=["CPUExecutionProvider"]

@@ -444,6 +444,7 @@ def export_actor_onnx(runner, obs_size, act_size, path):
             output_names=["action"],
             dynamic_axes={"observation": {0: "batch"}, "action": {0: "batch"}},
             opset_version=13,
+            dynamo=False,
         )
     return os.path.getsize(path)
 

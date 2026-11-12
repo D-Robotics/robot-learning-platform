@@ -158,6 +158,7 @@ def self_test(tmp_dir: Path) -> None:
         output_names=["actions"],
         dynamic_axes={"obs": {0: "batch"}, "actions": {0: "batch"}},
         opset_version=17,
+        dynamo=False,
     )
     report = check_parity(checkpoint_path, onnx_path, samples=16)
     assert report["verdict"] == "pass" and report["parityMaxAbsError"] < 1e-4, report

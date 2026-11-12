@@ -1154,6 +1154,7 @@ def export_onnx(model, normalization, path, x_check, image_shape=None, images_ch
             output_names=["chunk_actions"],
             dynamic_axes=dynamic,
             opset_version=17,
+            dynamo=False,
         )
     data = pathlib.Path(path).read_bytes()
 
@@ -1247,6 +1248,7 @@ def export_ensembled_onnx(model, normalization, path, windows_check, m=DEFAULT_E
                 "action": {0: "batch"},
             },
             opset_version=17,
+            dynamo=False,
         )
     data = pathlib.Path(path).read_bytes()
 
@@ -1347,7 +1349,7 @@ def measure_edge_feasibility(model, normalization, x_rows, m=DEFAULT_ENSEMBLE_M,
                               output_names=["chunk_actions"],
                               dynamic_axes={"observation": {0: "batch"},
                                             "chunk_actions": {0: "batch"}},
-                              opset_version=17)
+                              opset_version=17, dynamo=False)
         session = ort.InferenceSession(probe.as_posix(), providers=["CPUExecutionProvider"])
         session.run(["chunk_actions"], {"observation": batch})  # warmup
         start = time.perf_counter()
