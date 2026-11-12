@@ -141,11 +141,19 @@ function readProductPreference() {
     if (params.get('demo') === '1') return 'microduck';
     const requested = params.get('robot');
     if (Object.hasOwn(PRODUCT_PROFILES, requested)) return requested;
+    if (params.get('workshop') === 'originman') return 'originman';
     const value = window.localStorage?.getItem('rdk-duck-lab-product');
     return value && PRODUCT_PROFILES[value] ? value : 'microduck';
   } catch {
     return 'microduck';
   }
+}
+
+function clearProductLinkOverride() {
+  const url = new URL(location.href);
+  if (Object.hasOwn(PRODUCT_PROFILES, url.searchParams.get('robot'))) url.searchParams.delete('robot');
+  if (url.searchParams.get('workshop') === 'originman') url.searchParams.delete('workshop');
+  if (url.href !== location.href) history.replaceState(history.state, '', url);
 }
 
 function readNotifyPreference() {
@@ -11922,6 +11930,7 @@ function wireEvents() {
   $('product-select')?.addEventListener('change', async (event) => {
     const next = event.target.value;
     if (!PRODUCT_PROFILES[next]) return;
+    clearProductLinkOverride();
     state.productId = next;
     state.selectedModelId = '';
     // A project can span several robot profiles. Keep it only when it links a
@@ -11950,14 +11959,14 @@ function wireEvents() {
     }
     renderAll();
     await loadOverview({ quiet: true });
+    if (state.productId !== next) return;
     loadManifestTemplate();
-    const nextProfile = PRODUCT_PROFILES[next];
     showToast(
       next === 'rdk-duck'
         ? '已切换到 RDK Duck；请导入或填写真实契约 manifest'
         : next === 'originbot'
           ? '已切换到 OriginBot；默认模板可直接开始仿真和训练'
-          : '已切换到 MicroDuck 官方参考',
+          : '已切换到 ' + PRODUCT_PROFILES[next].displayName,
       'success',
     );
   });
@@ -12397,12 +12406,7 @@ trainingPlans = window.TrainingPlans?.mount({
     state.selectedModelId = modelId;
     state.selectedComputeResourceId = config.computeResourceId || '';
     if ($('product-select')) $('product-select').value = product;
-    if (productChanged) {
-      const url = new URL(location.href);
-      url.searchParams.delete('robot');
-      url.searchParams.delete('workshop');
-      history.replaceState(history.state, '', url);
-    }
+    if (productChanged) clearProductLinkOverride();
   },
   refreshControls() {
     state.trainingProfile = $('training-profile')?.value || '';

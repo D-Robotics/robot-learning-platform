@@ -173,6 +173,25 @@ for (const section of SECTIONS) {
   );
 }
 
+for (const key of ['robot', 'workshop']) {
+  const link = new URL(BASE);
+  link.searchParams.set(key, 'originman');
+  link.searchParams.set('ref', 'plugin');
+  link.hash = 'train/prepare';
+  await page.goto(link.href, { waitUntil: 'domcontentloaded' });
+  const product = page.locator('#product-select');
+  record(`${key} bookmark opens OriginMan`, (await product.inputValue()) === 'originman');
+  await product.selectOption('microduck');
+  const updated = new URL(page.url());
+  await page.reload({ waitUntil: 'domcontentloaded' });
+  record(
+    `manual robot choice survives a reload from the ${key} bookmark`,
+    !updated.searchParams.has(key) &&
+      updated.searchParams.get('ref') === 'plugin' &&
+      (await product.inputValue()) === 'microduck',
+  );
+}
+
 record(
   'no uncaught script errors during the walk',
   pageErrors.length === 0,
