@@ -343,6 +343,8 @@
   const recorder = {
     active: false,
     startedAt: 0,
+    timeOffset: 0,
+    episodeStart: 0,
     samples: [],
     events: [],
     last: null,
@@ -414,7 +416,7 @@
         const sample =
           observation?.length === 61
             ? {
-                time: Number(((performance.now() - recorder.startedAt) / 1000).toFixed(4)),
+                time: recorderTime(),
                 observation,
                 command: observation.slice(48, 61),
                 mode: typeof current.mode === 'string' ? current.mode : null,
@@ -459,6 +461,7 @@
       controlHz: 50,
       createdAt: new Date().toISOString(),
       sampleCount: recorder.samples.length,
+      episodes: recorder.samples.filter((sample) => sample.done).length,
       durationSeconds: recorder.samples.length ? recorder.samples.at(-1).time : 0,
       events: recorder.events.slice(0, 2000),
     };
@@ -516,6 +519,9 @@
     recorder.samples = [];
     recorder.events = [];
     recorder.last = null;
+    const panel = document.getElementById(RECORDER_PANEL_ID);
+    for (const action of ['append', 'export', 'clear'])
+      panel?.querySelector(`[data-recorder-${action}]`)?.setAttribute('disabled', '');
   }
 
   function stopRecording(reason = '已停止') {
@@ -525,14 +531,22 @@
     if (recorder.timer) clearInterval(recorder.timer);
     recorder.timer = null;
     unhookRecorderSessions();
+    const episodeRecorded = recorder.samples.length > recorder.episodeStart;
+    if (episodeRecorded) recorder.samples.at(-1).done = true;
     recorder.last = recorder.samples.length ? recordingHeader() : null;
-    notifyParentRecordingReady();
+    if (episodeRecorded) notifyParentRecordingReady();
     const panel = document.getElementById(RECORDER_PANEL_ID);
     panel
       ?.querySelector('[data-recorder-status]')
       ?.replaceChildren(document.createTextNode(reason));
     panel?.classList.remove('is-recording');
     panel?.querySelector('[data-recorder-start]')?.removeAttribute('disabled');
+    panel
+      ?.querySelector('[data-recorder-append]')
+      ?.toggleAttribute(
+        'disabled',
+        !recorder.samples.length || recorder.samples.length >= RECORDER_MAX_STEPS,
+      );
     panel?.querySelector('[data-recorder-stop]')?.setAttribute('disabled', '');
     panel
       ?.querySelector('[data-recorder-export]')
@@ -549,12 +563,20 @@
       );
   }
 
-  function startRecording() {
+  function startRecording(append = false) {
     if (!recorderReady()) return false;
     if (recorder.active) return true;
+    if (append && (!recorder.samples.length || recorder.samples.length >= RECORDER_MAX_STEPS))
+      return false;
     if (!hookRecorderSessions()) return false;
-    recorder.samples = [];
-    recorder.events = [];
+    if (!append) {
+      recorder.samples = [];
+      recorder.events = [];
+    }
+    recorder.episodeStart = recorder.samples.length;
+    recorder.timeOffset = append
+      ? Math.max(recorder.samples.at(-1).time, recorder.events.at(-1)?.time ?? 0) + 0.02
+      : 0;
     recorder.last = null;
     recorder.active = true;
     recorder.generation += 1;
@@ -566,10 +588,17 @@
       ?.querySelector('[data-recorder-status]')
       ?.replaceChildren(document.createTextNode('录制中'));
     panel?.querySelector('[data-recorder-start]')?.setAttribute('disabled', '');
+    panel?.querySelector('[data-recorder-append]')?.setAttribute('disabled', '');
     panel?.querySelector('[data-recorder-stop]')?.removeAttribute('disabled');
     panel?.querySelector('[data-recorder-export]')?.setAttribute('disabled', '');
     panel?.querySelector('[data-recorder-clear]')?.setAttribute('disabled', '');
     return true;
+  }
+
+  function recorderTime() {
+    return Number(
+      (recorder.timeOffset + (performance.now() - recorder.startedAt) / 1000).toFixed(4),
+    );
   }
 
   function recordInputEvent(type, event) {
@@ -579,7 +608,7 @@
     recorder.events.push({
       type,
       code,
-      time: Number(((performance.now() - recorder.startedAt) / 1000).toFixed(4)),
+      time: recorderTime(),
     });
   }
 
@@ -630,11 +659,12 @@
     panel.setAttribute('aria-label', 'MicroDuck 动作录制');
     panel.innerHTML = `
       <div class="rdk-recorder-head"><strong>动作录制</strong><span class="rdk-recorder-status" data-recorder-status>等待仿真引擎</span></div>
-      <p class="rdk-recorder-note">记录真实 61D 观测 + 14D 动作，不只是按键。可导出给模仿学习或奖励设计。</p>
+      <p class="rdk-recorder-note">记录真实 61D 观测和 14D 动作。停止后可重置仿真并追加回合。</p>
       <span class="rdk-recorder-count" data-recorder-count>0 帧 · 0.0 秒</span>
       <div class="rdk-recorder-actions">
         <button type="button" data-recorder-start disabled>开始录制</button>
         <button type="button" data-recorder-stop disabled>停止</button>
+        <button type="button" data-recorder-append disabled>追加回合</button>
         <button type="button" data-recorder-export disabled>导出 JSONL</button>
         <button type="button" data-recorder-clear disabled>清空</button>
       </div>
@@ -642,6 +672,7 @@
     document.body.append(panel);
     const start = panel.querySelector('[data-recorder-start]');
     const stop = panel.querySelector('[data-recorder-stop]');
+    const append = panel.querySelector('[data-recorder-append]');
     const exportButton = panel.querySelector('[data-recorder-export]');
     const clear = panel.querySelector('[data-recorder-clear]');
     start.addEventListener('click', () => {
@@ -649,10 +680,12 @@
         panel.querySelector('[data-recorder-status]').textContent = '等待仿真引擎';
     });
     stop.addEventListener('click', () => stopRecording());
+    append.addEventListener('click', () => startRecording(true));
     exportButton.addEventListener('click', downloadRecording);
     clear.addEventListener('click', clearRecording);
     window.__microduckRecorder = {
       start: startRecording,
+      append: () => startRecording(true),
       stop: stopRecording,
       clear: clearRecording,
       download: downloadRecording,
@@ -682,6 +715,8 @@
       panel.hidden = isLanding();
       if (!recorder.active) {
         start.disabled = !ready;
+        append.disabled =
+          !ready || !recorder.samples.length || recorder.samples.length >= RECORDER_MAX_STEPS;
         stop.disabled = true;
         if (ready && panel.querySelector('[data-recorder-status]').textContent === '等待仿真引擎') {
           panel.querySelector('[data-recorder-status]').textContent = '已就绪';

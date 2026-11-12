@@ -240,7 +240,7 @@ try {
     (error) => error?.code === 'STORAGE_BACKUP_DIGEST_MISMATCH',
   );
   console.log(
-    '[storage-backup] PASS — ledger artifacts/evaluations, telemetry, dance videos, audit rotation, active-writer gate, atomic external-audit rollback, missing-audit fail-closed, restore and digest tamper check verified',
+    '[storage-backup] PASS — ledger artifacts/evaluations, telemetry, dance videos, relayed ONNX, audit rotation, active-writer gate, atomic external-audit rollback, missing-audit fail-closed, restore and digest tamper check verified',
   );
 } finally {
   await rm(root, { recursive: true, force: true });

@@ -47,18 +47,14 @@ async function loadBrowser() {
   throw error;
 }
 
-export async function verifyBrowserJourney({
-  trainBC = false,
-  defaultOutput,
-  args = process.argv.slice(2),
-} = {}) {
+export async function verifyBrowserJourney({ trainBC = false, defaultOutput } = {}) {
   const { output, help } = parseJourneyArguments(
-    args,
+    process.argv.slice(2),
     defaultOutput ?? path.join(repositoryRoot, 'dist/plugins/platform-plugin-browser.json'),
   );
   if (help) {
     console.log(
-      'Usage: npm run verify:plugin:browser -- [--train-bc] [--output FILE]\nRuns actual browser MuJoCo/ONNX simulation, six recorder episodes, workbench upload and platform evidence reads using isolated temporary storage. --train-bc also submits real recorded-data BC through the workbench and a tuned Agent run; requires Python numpy/onnx/onnxruntime (RDK_OFFLINE_BC_PYTHON). Requires RDK_PLUGIN_JOURNEY_MICRODUCK_ROOT plus Playwright/Chromium; use RDK_PLAYWRIGHT_MODULE and RDK_CHROMIUM_PATH for explicit installations. Missing dependencies exit 2; no synthetic fallback or motor actions. --help starts no browser/services and writes no evidence.',
+      'Usage: npm run verify:plugin:browser -- [--output FILE]\nRuns actual browser MuJoCo/ONNX simulation, six recorder episodes, workbench upload and platform evidence reads using isolated temporary storage. Requires RDK_PLUGIN_JOURNEY_MICRODUCK_ROOT plus Playwright/Chromium; use RDK_PLAYWRIGHT_MODULE and RDK_CHROMIUM_PATH for explicit installations. Missing dependencies exit 2; no synthetic fallback or motor actions. --help starts no browser/services and writes no evidence.',
     );
     return;
   }
@@ -898,12 +894,8 @@ export async function verifyBrowserJourney({
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
-  const args = process.argv.slice(2);
-  const trainBC = args.includes('--train-bc');
-  verifyBrowserJourney({ trainBC, args: args.filter((arg) => arg !== '--train-bc') }).catch(
-    (error) => {
-      console.error(`[plugin-browser] ${scrubEvidence(error.message)}`);
-      process.exitCode = error.exitCode ?? 1;
-    },
-  );
+  verifyBrowserJourney().catch((error) => {
+    console.error(`[plugin-browser] ${scrubEvidence(error.message)}`);
+    process.exitCode = error.exitCode ?? 1;
+  });
 }

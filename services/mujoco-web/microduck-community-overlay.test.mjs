@@ -56,6 +56,7 @@ test('recorder pairs immutable pre-inference observation with that inference act
     assert.equal(recorder.sampleCount, 1, 'One completed inference must produce exactly one pair');
     const [header, sample] = recorder.getText().trim().split('\n').map(JSON.parse);
     assert.equal(header.pairing, 'policy-inference-v1');
+    assert.equal(sample.done, true, 'Stopping closes the recorded episode');
     assert.equal(sample.observation[0], 3, 'The tensor must be copied before inference awaits');
     assert.ok(Math.abs(sample.observation[34] - 0.1) < 1e-7);
     assert.ok(Math.abs(sample.action[0] - 0.2) < 1e-7);
@@ -146,6 +147,20 @@ test('browser recorder captures contract observations and actions from window.rl
   assert.equal(recorder.lastHeader.contractId, 'microduck-policy-v1');
   assert.equal(recorder.lastHeader.observationSize, 61);
   assert.equal(recorder.lastHeader.actionSize, 14);
+  const append = window.document.querySelector('[data-recorder-append]');
+  assert.equal(append.disabled, false);
+  append.click();
+  await session.run({ observation: { data: window.rl.buildObs() } });
+  await session.run({ observation: { data: window.rl.buildObs() } });
+  recorder.stop();
+  const [header, ...samples] = recorder.getText().trim().split('\n').map(JSON.parse);
+  assert.equal(header.episodes, 2);
+  assert.equal(samples.length, 4);
+  assert.deepEqual(
+    samples.map((sample) => sample.done === true),
+    [false, true, false, true],
+  );
+  assert.ok(samples[2].time > samples[1].time, 'Appended episode keeps a monotonic replay clock');
 
   // The upstream keyboard source has no B binding.  The overlay owns B as a
   // desktop convenience and must route it through the controller action bus
