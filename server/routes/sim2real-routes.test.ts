@@ -362,6 +362,17 @@ describe('Sim2Real HTTP routes', () => {
       corrupt = true;
       const rejected = await invoke(router, 'get', '/api/sim2real/runs/:id/dance-video', request);
       expect(rejected.statusCode).toBe(502);
+      const retainedDir = path.join(process.env.RDK_SIM2REAL_STORAGE_DIR!, 'retained-dance-videos');
+      await fs.mkdir(retainedDir);
+      const retainedPath = path.join(retainedDir, `${digest}.mp4`);
+      await fs.writeFile(retainedPath, Buffer.alloc(bytes.length));
+      expect(
+        (await invoke(router, 'get', '/api/sim2real/runs/:id/dance-video', request)).statusCode,
+      ).toBe(502);
+      await fs.writeFile(retainedPath, bytes);
+      const restored = await invoke(router, 'get', '/api/sim2real/runs/:id/dance-video', request);
+      expect(restored.statusCode).toBe(206);
+      expect(restored.body).toEqual(bytes.subarray(0, 3));
     } finally {
       globalThis.fetch = originalFetch;
     }

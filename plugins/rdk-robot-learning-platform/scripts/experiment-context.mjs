@@ -275,14 +275,15 @@ export async function experimentContext(
     // Some platform versions return null workshop metrics in the status summary.
     // Resolve only the requested Run, with matching identity and state; never use
     // the model's other historical Runs or deployment records in lineage.
-    if (
-      result.metrics?.originmanWorkshop === null ||
-      result.metrics?.originmanWorkshop === undefined ||
-      (requireParent &&
-        !evidence(result)?.sourceRunId &&
-        !result.sourceRunId &&
-        !result.training?.originmanWorkshop?.sourceRunId)
-    ) {
+    const workshop = evidence(result);
+    const parent =
+      workshop?.sourceRunId ??
+      result.sourceRunId ??
+      result.training?.originmanWorkshop?.sourceRunId;
+    const needsLineage = requireParent
+      ? !parent || (result.status === 'completed' && !workshop?.policySha256)
+      : workshop == null;
+    if (needsLineage) {
       const full = (await call('rdk_lineage_get', { runId: id }))?.lineage?.run;
       if (
         !full ||

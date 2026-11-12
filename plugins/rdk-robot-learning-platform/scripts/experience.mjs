@@ -137,11 +137,15 @@ export async function prepareExperience(profile, call, { baseUrl, tools, action 
       ...(profile.policy.source === 'trained' ? { runId: profile.policy.runId } : {}),
     });
   } catch (error) {
+    const missingRoute =
+      error.platformCode === 'SIM2REAL_API_NOT_FOUND' && error.httpStatus === 404;
+    if (profile.robot === 'originman' && missingRoute) {
+      blocked('robot', '当前平台没有提供 OriginMan 仿真入口。请核对平台版本后重试。');
+      return { status: 'blocked', profileId: profile.id, checks };
+    }
     if (
-      profile.robot === 'originman' ||
       profile.policy.source !== 'reference' ||
-      error.platformCode !== 'SIM2REAL_API_NOT_FOUND' ||
-      error.httpStatus !== 404 ||
+      !missingRoute ||
       !tools.includes('rdk_workspace_overview')
     )
       throw error;

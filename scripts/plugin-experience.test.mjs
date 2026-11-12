@@ -94,20 +94,21 @@ test('OriginMan never accepts a MicroDuck entry or legacy fallback', async () =>
     assert.equal(result.status, 'blocked');
     assert.deepEqual(calls[1], ['rdk_simulator_open', { robot: 'originman' }]);
   }
-  await assert.rejects(
-    prepareExperience(
-      origin,
-      async (name) => {
-        if (name === 'rdk_platform_status') return ready;
-        throw Object.assign(new Error('old server'), {
-          platformCode: 'SIM2REAL_API_NOT_FOUND',
-          httpStatus: 404,
-        });
-      },
-      { tools: [...tools, 'rdk_workspace_overview'], baseUrl: 'https://platform.test/' },
-    ),
-    /old server/,
+  const missing = await prepareExperience(
+    origin,
+    async (name) => {
+      if (name === 'rdk_platform_status') return ready;
+      assert.equal(name, 'rdk_simulator_open');
+      throw Object.assign(new Error('old server'), {
+        platformCode: 'SIM2REAL_API_NOT_FOUND',
+        httpStatus: 404,
+      });
+    },
+    { tools: [...tools, 'rdk_workspace_overview'], baseUrl: 'https://platform.test/' },
   );
+  assert.equal(missing.status, 'blocked');
+  assert.equal(missing.entryUrl, undefined);
+  assert.ok(missing.checks.some((check) => check.id === 'robot' && check.status === 'blocked'));
 });
 
 test('OriginMan preparation preserves product and reverse proxy mount', async () => {
@@ -838,6 +839,20 @@ test('guide reads the exact Run and keeps confirmed retry idempotent', async (t)
   const guide = (args) => call('rdk_learning_guide', args);
   const result = await guide({ intent: 'results', runId: previous.id });
   assert.match(result.studentReply, /mps.*未达标.*暂无可播放/s);
+  assert.doesNotMatch(result.studentReply, /标称/);
+  const evaluated = previous.metrics.originmanDance;
+  evaluated.evaluations = [
+    { bpm: 95, sections: dance.sections.map(({ type }) => ({ type, passed: false })) },
+    {
+      bpm: 100,
+      sections: dance.sections.map(({ type }, index) => ({ type, passed: index === 1 })),
+    },
+  ];
+  const measured = await guide({ intent: 'results', runId: previous.id });
+  assert.match(measured.studentReply, /标称 100 BPM 下，1\/2 段达标/);
+  evaluated.evaluations[1].sections.pop();
+  const partial = await guide({ intent: 'results', runId: previous.id });
+  assert.doesNotMatch(partial.studentReply, /标称/);
   previous.training.video = false;
   const videoDisabled = await guide({ intent: 'results', runId: previous.id });
   assert.match(videoDisabled.studentReply, /提交时关闭了视频生成/);
@@ -948,7 +963,9 @@ test('legacy replay is linked only after verifying bytes for the exact Run', asy
         arguments: { intent: 'results', runId: run.id },
       })
     ).structuredContent;
-  assert.equal((await guide()).links.danceVideo, undefined);
+  const unavailable = await guide();
+  assert.equal(unavailable.links.danceVideo, undefined);
+  assert.match(unavailable.studentReply, /有本轮视频记录，当前未能核验播放入口/);
   allow = true;
   assert.equal(
     (await guide()).links.danceVideo,

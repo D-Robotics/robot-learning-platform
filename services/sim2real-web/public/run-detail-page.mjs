@@ -17,6 +17,28 @@ const SECTION_LABELS = Object.freeze({
   'open-pose': '展开定格',
 });
 
+const DANCE_MEASUREMENTS = Object.freeze({
+  armAsymmetryRangeM: ['双臂前后差幅度', 1000, ' mm'],
+  alternatingArmFraction: ['摆臂交替命中率', 100, '%'],
+  armBeatCorrelation: ['摆臂节奏相关性', 1, ''],
+  lateralRangeM: ['横向移动幅度', 1000, ' mm'],
+  lateralTrackingFraction: ['换重心方向命中率', 100, '%'],
+  heightRangeM: ['高度变化幅度', 1000, ' mm'],
+  riseAndDipCorrelation: ['下蹲起身节奏相关性', 1, ''],
+  squatDescentM: ['下蹲行程', 1000, ' mm'],
+  squatAscentM: ['起身行程', 1000, ' mm'],
+  armSweepM: ['双臂前摆幅度', 1000, ' mm'],
+  holdStillFraction: ['定格静止比例', 100, '%'],
+  meanHoldHandSpanM: ['定格平均手间距', 1000, ' mm'],
+  holdPeakTiltDeg: ['定格最大倾角', 1, '°'],
+});
+
+function formatDanceMeasurement(key, value) {
+  if (!Object.hasOwn(DANCE_MEASUREMENTS, key)) return `${key}：${Number(value.toFixed(4))}`;
+  const [name, multiplier, unit] = DANCE_MEASUREMENTS[key];
+  return `${name}：${Number((value * multiplier).toFixed(2))}${unit}`;
+}
+
 const text = (document, id, value) => {
   const element = document.getElementById(id);
   if (element) element.textContent = value == null || value === '' ? '—' : String(value);
@@ -49,7 +71,7 @@ function metricRows(evidence) {
         if (!statuses.length) statuses.push(passed === true ? '达标' : passed === false ? '未达标' : '待核对');
         const values = Object.entries(measurements ?? {})
           .filter(([, value]) => typeof value === 'number' && Number.isFinite(value))
-          .map(([key, value]) => `${key}：${Number(value.toFixed(4))}`);
+          .map(([key, value]) => formatDanceMeasurement(key, value));
         return [
           `${typeof bpm === 'number' ? Number(bpm.toFixed(2)) : bpm} BPM · ${index + 1}. ${SECTION_LABELS[type] ?? type}`,
           [...statuses, ...values].join(' · '),
@@ -222,7 +244,7 @@ function danceVideoUrl(location, run, runId) {
 function showPlaybackStatus(document, video) {
   if (video.hidden) return;
   const message = video.error
-    ? '视频加载失败，请确认平台登录后刷新'
+    ? '暂时无法加载回放。可刷新重试，持续失败请联系管理员检查原训练资源。'
     : video.ended
       ? '本次仿真回放已播完'
       : video.paused
@@ -283,6 +305,16 @@ function renderRun(document, location, run, runId) {
   text(document, 'run-id-detail', runId);
   text(document, 'run-model-id', run.modelId);
   text(document, 'run-policy-sha', run.artifact?.sha256 ?? '尚未生成策略摘要');
+  const download = document.getElementById('run-policy-download');
+  const canDownload = run.status === 'completed' && run.backend === 'local' && !run.mock &&
+    run.externalRunId && run.artifact?.format?.toLowerCase() === 'onnx' &&
+    SHA256_PATTERN.test(run.artifact.sha256 ?? '');
+  if (canDownload) {
+    download.href = new URL(`./api/sim2real/runs/${encodeURIComponent(runId)}/artifact`, location.href).href;
+  } else {
+    download.removeAttribute('href');
+  }
+  download.hidden = !canDownload;
   text(document, 'run-summary', run.summary ?? '平台未提供本次运行摘要。');
   const replayUrl = isDance ? danceVideoUrl(location, run, runId) : null;
   const replayVerified = isDance && verifiedDanceVideo(run);

@@ -42,6 +42,7 @@ import {
   wrapAsync,
 } from '../sim2real/http-helpers.js';
 import { createSim2RealLogger } from '../sim2real/observability.js';
+import { readRetainedDanceVideo } from '../sim2real/retained-dance-video.js';
 import { computeResearchLoopMetrics } from '../sim2real/research-loop-metrics.js';
 import {
   DemonstrationInputError,
@@ -3516,19 +3517,22 @@ export function createSim2RealRouter(
         auth.resolvePrincipal(request)?.accountId ??
         owner ??
         (!auth.isMultiUserDeployment() ? 'local-dev' : '');
-      const fetched = accountId
-        ? await fetchLocalRunArtifact({
-            accountId,
-            externalRunId: video.externalRunId,
-            kind: 'dance-video',
-            ...(resource
-              ? {
-                  runnerUrl: resource.resource.runnerUrl,
-                  runnerToken: resource.runnerToken ?? '',
-                }
-              : {}),
-          })
-        : null;
+      const retained = await readRetainedDanceVideo(video.sha256, video.sizeBytes);
+      const fetched =
+        retained ??
+        (accountId
+          ? await fetchLocalRunArtifact({
+              accountId,
+              externalRunId: video.externalRunId,
+              kind: 'dance-video',
+              ...(resource
+                ? {
+                    runnerUrl: resource.resource.runnerUrl,
+                    runnerToken: resource.runnerToken ?? '',
+                  }
+                : {}),
+            })
+          : null);
       if (!fetched || fetched.sha256 !== video.sha256 || fetched.bytes.length !== video.sizeBytes) {
         sendApiError(
           response,

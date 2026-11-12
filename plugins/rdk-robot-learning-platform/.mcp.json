@@ -1,15 +1,8 @@
 {
   "mcpServers": {
     "rdk-learning-platform": {
-      "type": "stdio",
-      "command": "/Users/d-robotics/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin/node",
-      "args": [
-        "/Users/d-robotics/.qoder/plugins/cache/local/rdk-robot-learning-platform/0.6.22/scripts/experience-mcp.mjs"
-      ],
-      "env": {
-        "RDK_STUDIO_INHERIT_LOGIN": "0",
-        "RDK_SIM2REAL_MCP_BASE_URL": "https://rdkstudio.d-robotics.cc/robotics-learning"
-      }
+      "command": "node",
+      "args": ["--input-type=module", "-e", "throw new Error(\"请先运行插件安装入口\")"]
     }
   }
 }
