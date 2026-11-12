@@ -39,6 +39,11 @@ const invariantSummary = assertStyleInvariants(path.join(here, 'public'));
 const liveGuards = assertGuardsAreLive(path.join(here, 'public'), os.tmpdir());
 const markupSummary = assertMarkupInvariants(html);
 
+assert.match(html, /<option value="dance" selected>舞蹈编排 · PPO（默认）<\/option>/);
+assert.match(html, /<option value="originman">OriginMan · 人形机器人<\/option>/);
+assert.match(html, /<option value="originman-dance" selected>舞蹈编排 · PPO（默认）<\/option>/);
+assert.match(app, /OriginMan 模板尚未载入。请先选择「舞蹈编排 · PPO」/);
+
 // ---- accessibility anchors ----
 // Every labelled region must resolve to a real heading. A stale aria-labelledby
 // silently removes the region from a screen reader's landmark tree, so keep the

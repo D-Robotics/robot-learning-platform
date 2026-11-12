@@ -134,6 +134,7 @@
             <select id="product-select" aria-label="选择产品线">
                 <option value="microduck">MicroDuck · 官方参考</option>
                 <option value="originbot">OriginBot · X5 真机</option>
+                <option value="originman">OriginMan · 人形机器人</option>
                 <option value="rdk-duck">RDK Duck · X5 产品</option>
                 <option value="custom">通用 RDK 设备 · 自定义契约</option>
             </select>
@@ -731,6 +732,21 @@
                 <span class="overview-environment-toggle" aria-hidden="true">展开 <i>⌄</i></span>
               </summary>
               <article class="panel manifest-panel">
+              <section id="originman-default-contracts" aria-label="OriginMan 机器人本体" hidden>
+                <div class="panel-heading panel-heading-lean"><h2>OriginMan · 机器人本体</h2></div>
+                <p class="small-note" id="originman-body-profile">人形机器人 · 本体资料</p>
+                <p class="small-note">准备训练时，再按任务选择观测、动作和控制频率。训练生成的权重在对应 Run 中查看。</p>
+                <div class="model-actions">
+                  <label class="field-label" for="originman-contract-template">任务</label>
+                  <select id="originman-contract-template" aria-label="选择训练任务契约">
+                    <option value="dance" selected>舞蹈编排 · PPO（默认）</option>
+                    <option value="">请选择其他任务</option>
+                    <option value="recovery">受扰恢复 · SAC</option>
+                  </select>
+                  <button class="button button-primary button-small" id="originman-use-contract" type="button" disabled>使用所选任务契约</button>
+                </div>
+                <p class="small-note" id="originman-contract-status" role="status"></p>
+              </section>
                 <div class="panel-heading panel-heading-lean"><h2>登记模型版本</h2>
                   <small class="panel-tip" id="contract-panel-tip">推荐：载入当前产品模板 → 登记版本</small>
                 </div>
@@ -820,7 +836,7 @@
             </details>
             <div class="train-layout" data-train-active-module="run">
               <article class="panel model-panel" id="train-module-run-model" data-train-module="run" role="tabpanel" aria-labelledby="train-tab-run">
-                <div class="panel-heading panel-heading-lean"><h2>模型版本</h2>
+                <div class="panel-heading panel-heading-lean"><h2>训练输入契约</h2>
                   <div class="model-panel-select">
                     <select id="model-select" aria-label="选择模型"></select>
                     <button
@@ -836,8 +852,8 @@
                   <summary>
                     <span class="overview-environment-toggle" aria-hidden="true"><i>⌄</i></span>
                     <span>
-                      <strong>模型契约与制品</strong>
-                      <small>查看策略说明、制品清单与板卡兼容性</small>
+                      <strong>契约与参考制品</strong>
+                      <small>查看输入输出和兼容性；训练权重在对应 Run 中查看</small>
                     </span>
                   </summary>
                   <div class="model-details-body">
@@ -848,6 +864,20 @@
                     <div class="compatibility-list" id="compatibility-list"></div>
                   </div>
                 </details>
+                <section id="originman-run-actions" aria-label="OriginMan 训练与运行记录" hidden>
+                  <div class="model-actions">
+                    <button class="button button-primary button-small" id="originman-configure-training" type="button">准备训练配置</button>
+                    <button class="button button-primary button-small" id="originman-submit-dance" type="button" hidden>提交本轮舞蹈训练</button>
+                    <button class="button button-ghost button-small" id="originman-recovery-class" type="button" hidden>打开受扰恢复课堂</button>
+                  </div>
+                  <p class="small-note" id="originman-run-action-hint" role="status"></p>
+                  <div class="model-actions">
+                    <label class="field-label" for="originman-run-select">选择训练 Run</label>
+                    <select id="originman-run-select"><option value="">请选择 Run</option></select>
+                    <a class="button button-ghost button-small" id="originman-run-open" hidden>查看本轮评测、制品与回放</a>
+                  </div>
+                  <p class="small-note" id="originman-run-selection-hint" role="status"></p>
+                </section>
                 <div class="model-actions">
                   <button class="button button-ghost" id="browser-run-button" type="button">
                     浏览器回放</button
@@ -923,6 +953,54 @@
                 <details class="training-controls" id="train-module-config" data-train-module="config" role="tabpanel" aria-labelledby="train-tab-config">
                   <summary>训练参数与续训</summary>
                   <div class="panel-heading panel-heading-lean config-module-heading"><h2>训练配置</h2><small class="panel-tip">选算法、档位与算力；提交后在「Run 与进度」看曲线和日志</small></div>
+                  <section class="training-plans dance-goal" id="originman-goal-editor" aria-label="训练目标" hidden>
+                    <label class="field-label" for="originman-training-goal">训练目标</label>
+                    <select id="originman-training-goal">
+                      <option value="originman-dance" selected>舞蹈编排 · PPO（默认）</option>
+                      <option value="">请选择目标</option>
+                    </select>
+                    <div id="originman-dance-fields" hidden>
+                      <div class="dance-goal-fields">
+                        <label>舞段名称 <input id="originman-dance-title" maxlength="80" value="左右交替摆臂"></label>
+                        <label>节奏（BPM） <input id="originman-dance-bpm" type="number" min="80" max="140" step="any" value="100"></label>
+                        <label>训练步数 <input id="originman-dance-steps" type="number" min="8192" max="2000000" step="1" value="8192" aria-describedby="originman-dance-budget-help"></label>
+                        <label>并行环境 <input id="originman-dance-num-envs" type="number" min="1" max="16" step="1" value="8"></label>
+                        <label>随机种子 <input id="originman-dance-seed" type="number" min="0" max="2147483647" step="1" value="7"></label>
+                      </div>
+                      <p class="small-note" id="originman-dance-budget-help">8192 步用于快检。可以用 500000 步做正式训练，动作表现以评测为准。</p>
+                      <div id="originman-dance-sections"></div>
+                      <button class="button button-ghost button-small" id="originman-dance-add" type="button">添加舞段</button>
+                      <p class="small-note" id="originman-dance-error" aria-live="polite"></p>
+                      <p class="small-note">下方选择支持舞蹈训练的算力。设好后可保存方案，或到「Run 与进度」确认提交。</p>
+                    </div>
+                  </section>
+                  <section class="training-plans" id="training-plans" aria-label="训练方案">
+                    <div class="training-plans-actions">
+                      <div class="training-plans-picker">
+                        <label class="field-label" for="training-plan-select">训练方案</label>
+                        <select id="training-plan-select"><option value="">选择已保存方案</option></select>
+                      </div>
+                      <button class="button button-ghost button-small" id="training-plan-load" type="button" disabled>加载</button>
+                      <button class="button button-primary button-small" id="training-plan-save" type="button">保存为新方案</button>
+                      <button class="button button-ghost button-small" id="training-plan-copy" type="button" disabled>另存为</button>
+                      <button class="button button-ghost button-small" id="training-plan-new" type="button" hidden>取消选中</button>
+                    </div>
+                    <p class="small-note training-plans-status" id="training-plan-status" role="status">保存后可在工作台和 Studio 对话中加载。</p>
+                    <dialog class="training-plans-dialog" id="training-plan-dialog" aria-labelledby="training-plan-dialog-title">
+                      <form id="training-plan-form">
+                        <h2 id="training-plan-dialog-title">保存训练方案</h2>
+                        <label class="field-label" for="training-plan-name">方案名称</label>
+                        <input class="training-plans-name" id="training-plan-name" type="text" maxlength="64" required autofocus placeholder="例如 PPO 快检">
+                        <p class="small-note">只保存当前参数。开始训练需单独提交。</p>
+                        <p id="training-plan-form-error" role="alert"></p>
+                        <div class="training-plans-actions">
+                          <button class="button button-ghost button-small" id="training-plan-cancel" type="button">取消</button>
+                          <button class="button button-primary button-small" id="training-plan-confirm" type="submit">确认保存</button>
+                        </div>
+                      </form>
+                    </dialog>
+                  </section>
+
                   <div class="training-grid"><div class="training-field-group" role="group" aria-labelledby="training-group-basic">
                       <div class="training-group-title" id="training-group-basic">训练设置</div>
                       <label class="field-label" for="training-profile">训练档位<small class="profile-pref-note" data-training-profile-note hidden>已按你上次的选择预选</small></label
@@ -2204,7 +2282,8 @@
     <script defer src="./telemetry-core.js?v=duck-lab-32"></script>
     <script defer src="./run-inspector-core.js?v=2"></script>
     <script defer src="./run-inspector.js?v=3"></script>
-    <script defer src="./app.js?v=duck-lab-73"></script>
+    <script defer src="./training-plans.js?v=3"></script>
+    <script defer src="./app.js?v=duck-lab-74"></script>
     <script defer src="./visualization-enhancements.js?v=viz-1"></script>
     <script defer src="./capability-workbench.js?v=1"></script>
     <script defer src="./agent-chat.js?v=agent-19"></script>

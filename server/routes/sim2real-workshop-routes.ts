@@ -1,3 +1,4 @@
+import originManDanceManifest from '../../plugins/rdk-robot-learning-platform/references/originman-dance-manifest.json' with { type: 'json' };
 import { isDeepStrictEqual } from 'node:util';
 import originManManifest from '../../plugins/rdk-robot-learning-platform/references/originman-manifest.json' with { type: 'json' };
 import { validateSim2RealManifest } from '../../shared/sim2real.js';
@@ -55,6 +56,15 @@ export function registerSim2RealWorkshopRoutes(
         else sendApiError(s, 503, 'WORKSHOP_UNAVAILABLE', '课程暂不可用，保留原实验，不重新提交。');
       }
     });
+  router.get(
+    options.prefix + '/model-templates/originman',
+    handle(async () => ({
+      templates: [
+        { id: 'recovery', name: '受扰恢复', algorithm: 'SAC', manifest: originManManifest },
+        { id: 'dance', name: '舞蹈编排', algorithm: 'PPO', manifest: originManDanceManifest },
+      ],
+    })),
+  );
   router.get(
     api(''),
     handle(async (_r, owner) => ({

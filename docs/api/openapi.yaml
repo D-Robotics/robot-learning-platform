@@ -246,6 +246,63 @@ paths:
       responses:
         "200": { description: Audit health, content: { application/json: { schema: { $ref: "#/components/schemas/AuditHealthResponse" } } } }
         "401": { $ref: "#/components/responses/AuthRequired" }
+  /api/v1/duck/model-templates/originman:
+    get:
+      tags: [workspace]
+      operationId: listOriginManModelTemplates
+      summary: Read the platform-provided OriginMan training input contracts
+      responses:
+        "200": { description: Available manifests for recovery and dance }
+        "401": { description: Sign in required }
+  /api/v1/duck/training-plans:
+    get:
+      tags: [workspace]
+      operationId: listTrainingPlans
+      summary: List named training plans for the authenticated account
+      responses:
+        "200": { description: Plan summaries }
+        "401": { description: Sign in required }
+    post:
+      tags: [workspace]
+      operationId: createTrainingPlan
+      summary: Save a named training plan without creating a run
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/TrainingPlanWrite" }
+      responses:
+        "200": { description: Saved plan and trainingSubmitted false }
+        "409": { description: Name already exists or plan limit reached }
+  /api/v1/duck/training-plans/{id}:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+    get:
+      tags: [workspace]
+      operationId: readTrainingPlan
+      summary: Load one training plan from the authenticated account
+      responses:
+        "200": { description: Saved plan with configuration and revision }
+        "404": { description: Plan missing in this account }
+    put:
+      tags: [workspace]
+      operationId: updateTrainingPlan
+      summary: Save changes to one plan using its current revision
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              allOf:
+                - { $ref: "#/components/schemas/TrainingPlanWrite" }
+                - { type: object, required: [revision] }
+      responses:
+        "200": { description: Updated plan and trainingSubmitted false }
+        "404": { description: Plan missing in this account }
+        "409": { description: Revision conflict or duplicate name }
   /api/v1/duck/projects:
     get:
       tags: [workspace]
@@ -3178,6 +3235,94 @@ components:
       description: Resource is not visible to this account.
       content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } }
   schemas:
+    TrainingPlanWrite:
+      type: object
+      required: [name, config]
+      properties:
+        name: { type: string, minLength: 1, maxLength: 64 }
+        revision: { type: integer, minimum: 1 }
+        config:
+          type: object
+          required: [training]
+          properties:
+            productId: { type: string }
+            projectId: { type: string }
+            taskId: { type: string }
+            modelId: { type: string }
+            computeResourceId: { type: string }
+            demonstrationRunId: { type: string }
+            training: { type: object }
+            resumeFrom: { type: object }
+    ComputeResourceCreateInput:
+      type: object
+      required: [name, runnerUrl]
+      properties:
+        name: { type: string, minLength: 1, maxLength: 120 }
+        runnerUrl: { type: string, format: uri, maxLength: 2048, description: HTTP(S) worker endpoint ending in /train; local-agent URLs must resolve to loopback. }
+        runnerToken: { type: string, maxLength: 4096, writeOnly: true, description: Stored server-side and never returned. Required by production or non-loopback Runner endpoints. }
+        source: { type: string, enum: [server-runner, local-agent], default: server-runner }
+        maxConcurrentJobs: { type: integer, minimum: 1, maximum: 32, default: 1 }
+    ComputeResource:
+      type: object
+      description: Account-owned worker metadata. Runner tokens are deliberately never returned.
+      required: [id, name, kind, runnerUrl, tokenConfigured, status, createdAt, updatedAt]
+      properties:
+        id: { type: string }
+        name: { type: string, maxLength: 120 }
+        kind: { type: string, const: local-gpu }
+        source: { type: string, enum: [server-runner, local-agent] }
+        runnerUrl: { type: string, format: uri }
+        tokenConfigured: { type: boolean }
+        status: { type: string, enum: [online, offline, unknown] }
+        gpuName: { type: string }
+        cuda: { type: boolean }
+        vramMb: { type: integer, minimum: 0 }
+        maxConcurrentJobs: { type: integer, minimum: 1 }
+        engines:
+          type: array
+          items: { type: string }
+          description: Engines reported by the most recent worker health probe; absent or empty means capability is unverified.
+        mock: { type: boolean, description: Present only when the worker health contract identifies a mock worker. }
+        message: { type: string }
+        lastCheckedAt: { type: string, format: date-time }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+    OriginManWorkshopTraining:
+      type: object
+      additionalProperties: false
+      description: Bounded recovery-course recipe. Evaluation requires sourceRunId; training forbids it.
+      required: [phase, timesteps, seed, pushMaxForce]
+      properties:
+        phase: { type: string, enum: [train, evaluate] }
+        timesteps: { type: integer, minimum: 4096, maximum: 1000000 }
+        seed: { type: integer, minimum: 0, maximum: 1000000 }
+        pushMaxForce: { type: number, minimum: 6.4, maximum: 9 }
+        groupId: { type: string, pattern: '^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$' }
+        device: { type: string, enum: [cpu, cuda] }
+        sourceRunId: { type: string, maxLength: 200, pattern: '^[A-Za-z0-9][A-Za-z0-9._-]{0,199}$', description: Required for evaluate and omitted for train. }
+    OriginManDanceSection:
+      type: object
+      additionalProperties: false
+      required: [type, beats, intensity]
+      properties:
+        type: { type: string, enum: [alternating-arms, weight-shift, squat-rise, open-pose] }
+        beats: { type: integer, enum: [4, 8, 16] }
+        intensity: { type: number, minimum: 0.25, maximum: 1 }
+    OriginManDanceTraining:
+      type: object
+      additionalProperties: false
+      required: [schemaVersion, title, bpm, sections]
+      properties:
+        schemaVersion: { type: integer, const: 1 }
+        title: { type: string, minLength: 1, maxLength: 80 }
+        bpm: { type: number, minimum: 80, maximum: 140 }
+        sections:
+          type: array
+          minItems: 1
+          maxItems: 8
+          items: { $ref: "#/components/schemas/OriginManDanceSection" }
+        seed: { type: integer, minimum: 0, maximum: 2147483647 }
+        trainingSteps: { type: integer, minimum: 8192, maximum: 2000000 }
     Project:
       type: object
       required: [id, name, slug, modelIds, datasetIds, createdAt, updatedAt]
