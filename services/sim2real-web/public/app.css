@@ -9812,7 +9812,6 @@ body #train-module-run-model .run-progress-card {
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, .04);
 }
 body #train-module-run-model .run-progress-track {
-  height: 8px;
   border-radius: 999px;
   background: color-mix(in srgb, var(--line-strong) 62%, transparent);
 }
