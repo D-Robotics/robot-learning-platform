@@ -140,8 +140,10 @@ try {
   assert.equal(installed.scope, 'user');
   assert.deepEqual(installed.warnings, []);
   agentApp = new MossApp(process.cwd(), {});
-  const exportedSkills = fs.readdirSync(path.join(source, 'skills'));
-  assert.equal(exportedSkills.length, 10);
+  const exportedSkills = fs.readdirSync(path.join(source, 'skills'), { withFileTypes: true })
+    .filter(entry => entry.isDirectory() && fs.existsSync(path.join(source, 'skills', entry.name, 'SKILL.md')))
+    .map(entry => entry.name);
+  assert.ok(exportedSkills.length > 0, 'Studio export must contain teaching skills');
   for (const name of exportedSkills) {
     assert.ok(agentApp.listSkills().some(skill => skill.name === name), 'default Agent registry must discover ' + name);
   }

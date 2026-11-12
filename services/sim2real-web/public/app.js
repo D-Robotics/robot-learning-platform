@@ -12367,9 +12367,10 @@ renderAll();
 // Seed the editor silently on first paint; a toast here would obscure the
 // landing view before the operator has taken an action.
 loadManifestTemplate({ notify: false });
+const initialOverview = loadOverview();
 trainingPlans = window.TrainingPlans?.mount({
   request,
-  ready: loadOverview(),
+  ready: initialOverview,
   onDraftChange() {
     renderSelects();
     renderOriginmanTrainingWorkbench();
