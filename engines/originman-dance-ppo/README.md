@@ -87,3 +87,24 @@ probe set and misaligned the index, leaving the ndarray in the report), and
 all three JSON write sites (`evaluation.json`, `training-summary.json`,
 `result.json`) serialize through `_json_default`, which converts numpy types
 to built-ins while `allow_nan=False` keeps failing closed on NaN.
+
+## Rehearse the four-motif choreography
+
+The isolated 112 BPM rehearsal uses simulated trajectory demonstrations to
+initialize the policy and then performs 8,192 PPO steps. It evaluates the
+exported ONNX bytes in MuJoCo at 106.4, 112, and 117.6 BPM using the engine's
+existing per-section quality gates. It requires ONNX Runtime in the rehearsal
+environment. It was verified with ONNX Runtime 1.23.2.
+
+```sh
+OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 python \
+  engines/originman-dance-ppo/verify_mixed_choreography.py \
+  --bundle /absolute/originman-bundle --output /absolute/new-rehearsal-directory
+```
+
+The output directory contains the checkpoint, `policy.onnx`, an exact
+nominal-tempo replay and `evaluation.json` with the full results and hashes.
+A failed quality gate makes the command exit nonzero. The rehearsal contract
+uses wider simulated pitch and knee action offsets. Its report records those
+offsets and marks the policy as ineligible for hardware deployment. Standard
+Worker policies retain their own action contract.
