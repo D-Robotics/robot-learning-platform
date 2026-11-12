@@ -59,7 +59,16 @@ test('dance Run detail selects the exact account-scoped record and visualizes it
             bpm: 128,
             sections: [
               { type: 'alternating-arms', passed: false, clean: true, stylePassed: false },
-              { type: 'weight-shift', passed: true },
+              {
+                type: 'weight-shift',
+                passed: true,
+                measurements: { lateralTrackingFraction: 0.63 },
+              },
+              {
+                type: 'squat-rise',
+                passed: false,
+                measurements: { squatDescentM: 0.031, squatAscentM: 0.01653 },
+              },
             ],
           },
         ],
@@ -98,7 +107,8 @@ test('dance Run detail selects the exact account-scoped record and visualizes it
   assert.equal(f.document.getElementById('quality-status').textContent, '风格门未通过');
   const qualityRows = f.document.querySelectorAll('#quality-body tr');
   assert.match(qualityRows[0].textContent, /完整完成 · 风格未达标/);
-  assert.match(qualityRows[1].textContent, /达标/);
+  assert.match(qualityRows[1].textContent, /达标.*换重心方向命中率：63%/);
+  assert.match(qualityRows[2].textContent, /下蹲行程：31 mm.*起身行程：16.53 mm/);
   assert.equal(f.document.getElementById('reward-chart').hasAttribute('hidden'), false);
   assert.equal(f.document.getElementById('run-video').hidden, false);
   assert.match(
@@ -127,6 +137,12 @@ test('dance Run detail selects the exact account-scoped record and visualizes it
   assert.equal(requests.length, 2);
   assert.equal(sourceWrites + sourceChanges.takeRecords().length, 0);
   assert.equal(f.document.getElementById('replay-status').textContent, '本次仿真回放已播完');
+  Object.defineProperty(video, 'error', { value: { code: 4 } });
+  video.dispatchEvent(new f.dom.window.Event('error'));
+  assert.match(
+    f.document.getElementById('replay-status').textContent,
+    /暂时无法加载回放.*检查原训练资源/,
+  );
   page.dispose();
 });
 

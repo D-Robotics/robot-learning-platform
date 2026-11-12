@@ -145,6 +145,26 @@ function runFailureDetail(payload) {
   return parts.length || cause ? { code: parts.join(' '), cause } : null;
 }
 
+function nominalDanceScore(training, dance) {
+  const config = training?.originmanDance;
+  if (!Number.isFinite(config?.bpm) || !Array.isArray(config.sections) || !config.sections.length)
+    return '';
+  const sections = Array.isArray(dance.evaluations)
+    ? dance.evaluations.find((row) => row?.bpm === config.bpm)?.sections
+    : null;
+  if (
+    !Array.isArray(sections) ||
+    sections.length !== config.sections.length ||
+    !sections.every(
+      (section, index) =>
+        typeof section?.passed === 'boolean' && section.type === config.sections[index]?.type,
+    )
+  )
+    return '';
+  const passed = sections.filter((section) => section.passed).length;
+  return `标称 ${config.bpm} BPM 下，${passed}/${sections.length} 段达标。`;
+}
+
 function attachRunVisualization(payload, runId, baseUrl) {
   const url = runVisualizationLink(baseUrl, runId, payload.links?.danceVideo);
   if (!url) return payload;
@@ -171,9 +191,13 @@ function attachRunVisualization(payload, runId, baseUrl) {
         : passed === false
           ? '本轮仿真风格未达标。'
           : '本轮风格质量待核对。';
+    studentReply += nominalDanceScore(payload.run?.training ?? payload.training, dance);
     if (payload.links?.danceVideo) studentReply += '打开本轮详情即可查看仿真回放。';
     else if ((payload.run?.training ?? payload.training)?.video === false)
       studentReply += '本轮提交时关闭了视频生成，可以查看曲线和分段结果。';
+    else if (dance.video?.file === 'dance-replay.mp4')
+      studentReply +=
+        '平台有本轮视频记录，当前未能核验播放入口。可以在本轮详情查看曲线和分段结果。';
     else studentReply += '本轮暂无可播放的视频，可以先看曲线和分段结果。';
   }
   if (failureDetail)
