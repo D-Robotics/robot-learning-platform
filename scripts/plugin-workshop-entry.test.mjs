@@ -12,7 +12,7 @@ const status = {
   session: { authenticated: true, accountId: 'alice' },
 };
 test('short continue/results use shared current without scanning runs or writing submissions', async () => {
-  for (const intent of ['continue', 'results', 'start']) {
+  for (const intent of ['continue', 'results']) {
     const calls = [];
     const result = await workshopEntry(
       { intent },
@@ -230,26 +230,31 @@ test('cold Workshop previews offline and only surfaces an already requested auth
   await assert.rejects(workshopEntry({}, noCourse, options), /重试原请求/);
 });
 
-test('new Workshop needs a fresh resource choice and start preserves an existing completed run', async () => {
+test('starting Workshop opens a fresh preview even when the current experiment has results', async () => {
   for (const [intent, current, stage] of [
     ['start', null, 'choose-compute'],
     ['new', { contextId: 'previous', stage: 'results' }, 'choose-compute'],
-    ['start', { contextId: 'previous', stage: 'results' }, 'results'],
+    ['start', { contextId: 'previous', stage: 'results' }, 'choose-compute'],
+    [undefined, { contextId: 'previous', stage: 'results' }, 'choose-compute'],
   ]) {
     const result = await workshopEntry(
-      { intent },
+      intent === undefined ? {} : { intent },
       async (name) => {
         assert.equal(name, 'rdk_platform_status');
         return status;
       },
       {
-        remote: async (op) => {
-          assert.equal(op, 'list');
+        remote: async () => {
+          assert.fail(
+            `Fresh entry must not read the current experiment (${current?.contextId ?? 'none'})`,
+          );
           return { current };
         },
       },
     );
     assert.equal(result.stage, stage);
+    assert.equal(result.contextId, null);
+    assert.match(result.links.workshop, /workshop\.html\?start=1$/);
     assert.equal(result.submission.training, false);
   }
 });

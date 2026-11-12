@@ -7,7 +7,7 @@ export const WORKSHOP_TOOLS = [
   {
     name: 'rdk_workshop',
     description:
-      '“带我开始 Workshop”“继续”“看看效果”的统一入口。自动使用当前账号已选课程实验，不让学员填写ID；新实验只准备工作台，由页面按钮选择预算后训练及同源评测。本工具不提交训练，不等待外部浏览器连接器。正常立即展示studentReply中的课程入口供学员点击，不调用浏览器工具等待导航；明确要求替我打开时才按qoderNavigation执行，，不再调用旧指南、预算问答或训练工具。高级训练工具仍可自由使用。',
+      '“带我开始 Workshop”打开新实验准备页；“继续”和“看看效果”使用当前账号已选实验。学员在页面选择算力和预算。本工具不提交训练。立即展示 studentReply 中的入口；只有明确要求替我打开时才按 qoderNavigation 操作。',
     inputSchema: {
       type: 'object',
       properties: {
@@ -135,13 +135,15 @@ export async function workshopEntry(
   )
     throw Error('平台地址无效。');
   const accountId = status.session.accountId;
+  const intent = args.intent ?? 'start';
+  if (!args.contextId && !args.computeResourceId && ['start', 'new'].includes(intent))
+    return previewEntry(base.toString(), 'choose-compute');
   const list = await remote('list', {}, accountId);
   let selectedComputeName;
   let session = list.current;
   if (args.contextId)
     session = (await remote('select', { contextId: args.contextId }, accountId)).session;
-  else if (args.intent === 'new' || ((args.intent ?? 'start') === 'start' && !session)) {
-    if (!args.computeResourceId) return previewEntry(base.toString(), 'choose-compute');
+  else if (args.computeResourceId) {
     const manifest = JSON.parse(
       fs.readFileSync(new URL('../references/originman-manifest.json', import.meta.url), 'utf8'),
     );

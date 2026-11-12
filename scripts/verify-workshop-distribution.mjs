@@ -182,6 +182,24 @@ try {
           connected: true,
           computeResource: { id: 'worker-fixture', status: 'online', cuda: true },
         });
+      if (
+        route === '/api/v1/duck/compute-resources/worker-fixture/preflight' &&
+        req.method === 'POST'
+      ) {
+        assert.deepEqual(body, { taskId: 'originman-recovery', device: 'cuda' });
+        return json({
+          computeResourceId: 'worker-fixture',
+          trainingSubmitted: false,
+          report: {
+            schemaVersion: 1,
+            readyForSmokeTraining: true,
+            trainingPerformed: false,
+            device: 'cuda',
+            engine: 'originman-recovery-reflect',
+            taskId: 'originman-recovery',
+          },
+        });
+      }
       if (route === '/api/v1/duck/runs' && req.method === 'GET') {
         state.historyRequests++;
         return json({ runs: [] });
@@ -326,7 +344,11 @@ try {
   });
   assert.equal(board.tunnelActive, true);
   assert.equal(board.agentReady, true);
-  const continued = await call('rdk_workshop', { intent: 'start' });
+  const fresh = await call('rdk_workshop', { intent: 'start' });
+  assert.equal(fresh.contextId, null);
+  assert.match(fresh.links.workshop, /workshop\.html\?start=1$/);
+  assert.equal(fresh.submission.training, false);
+  const continued = await call('rdk_workshop', { intent: 'continue' });
   assert.equal(continued.contextId, 'ws-owned-fixture');
   assert.equal(continued.submission.training, false);
   assert.equal(state.writes.length, 0);
