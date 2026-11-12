@@ -452,9 +452,11 @@ def _main(scratch):
             ff_stacked = os.path.join(joint_scratch, "ff-183.onnx")
             ff_single = os.path.join(joint_scratch, "ff-61.onnx")
             torch.onnx.export(_FF(183).eval(), (torch.zeros((1, 183)),), ff_stacked,
-                              input_names=["obs"], output_names=["actions"], opset_version=13)
+                              input_names=["obs"], output_names=["actions"], opset_version=13,
+                              dynamo=False)
             torch.onnx.export(_FF(61).eval(), (torch.zeros((1, 61)),), ff_single,
-                              input_names=["obs"], output_names=["actions"], opset_version=13)
+                              input_names=["obs"], output_names=["actions"], opset_version=13,
+                              dynamo=False)
 
             os.environ["RDK_SIM2REAL_ADAPTER_CONFIG"] = os.path.join(
                 REPO, "adapters/microduck-leg-history3.json"

@@ -81,12 +81,10 @@ jobs:
       - name: Install Python training stacks (CPU)
         # Engine gates used to SKIP on CI (numpy only); a real training round
         # per engine is worth the wheel download. CPU wheels keep it small.
-        # Versions are pinned to the combination verified on the dev machine
-        # (torch 2.9's new exporter needs onnxscript; 2.8 + onnx 1.19 uses
-        # the legacy exporter these engines' proofs were validated with).
-        # dm_control pulls torchvision, which pulls a newer torch unless
-        # torchvision is pinned to its matching 0.23.x release and the
-        # follow-up install re-states the torch constraint.
+        # The engine and board contract checks select the TorchScript ONNX
+        # exporter explicitly to preserve their validated graph contracts.
+        # Keep torchvision 0.24 aligned with torch 2.9 when dm_control
+        # pulls torchvision in the follow-up install.
         # JAX 0.11 needs numpy>=2.1; use the MJX input pin explicitly rather
         # than letting the final install silently upgrade an older NumPy.
         run: |
