@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { mkdtemp, readdir, rm, symlink, writeFile } from 'node:fs/promises';
+import { mkdtemp, readdir, readFile, rm, symlink, writeFile } from 'node:fs/promises';
 import { createServer } from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
@@ -182,6 +182,34 @@ try {
   const healthBody = await health.json();
   assert.equal(healthBody.maxConcurrentJobs, 1);
   assert.equal(healthBody.activeJobs, 0);
+
+  try {
+    for (const [version, output, expected] of [
+      [
+        '3.10',
+        '{"cuda":true,"gpuName":"Fixture GPU","vramMb":24576}',
+        [true, 'Fixture GPU', 24576],
+      ],
+      ['3.11', '{"cuda":false,"gpuName":null,"vramMb":null}', [false, null, null]],
+      ['3.12', 'invalid CUDA probe result', [null, null, null]],
+    ]) {
+      const probe = path.join(fixtureDir, `python${version}`);
+      await writeFile(
+        probe,
+        `#!/bin/sh\n[ "$1" = "-c" ] && [ -z "$RDK_SIM2REAL_LOCAL_RUNNER_TOKEN" ] || exit 1\nprintf '%s\\n' '${output}'\n`,
+        { mode: 0o700 },
+      );
+      process.env.RDK_SIM2REAL_TRAIN_EXECUTABLE = probe;
+      const responses = await Promise.all([fetch(`${base}/healthz`), fetch(`${base}/healthz`)]);
+      for (const response of responses) {
+        assert.equal(response.status, 200);
+        const { cuda, gpuName, vramMb } = await response.json();
+        assert.deepEqual([cuda, gpuName, vramMb], expected);
+      }
+    }
+  } finally {
+    process.env.RDK_SIM2REAL_TRAIN_EXECUTABLE = process.execPath;
+  }
 
   const brokenExecutable = path.join(fixtureDir, 'broken-python');
   await symlink(path.join(fixtureDir, 'missing-python'), brokenExecutable);
@@ -663,6 +691,11 @@ await writeFile(process.env.RDK_SIM2REAL_RESULT_FILE, JSON.stringify({ artifact:
   server.closeIdleConnections?.();
   server.closeAllConnections?.();
   await new Promise((resolve) => server.close(resolve));
+  const saved = JSON.parse(
+    await readFile(path.join(fixtureDir, launched.runId, 'job.json'), 'utf8'),
+  );
+  assert.equal(saved.status, 'completed');
+  assert.equal(Object.hasOwn(saved, 'timeout'), false);
   const reloaded = await import(`./local-training-worker.mjs?restart=${Date.now()}`);
   const recoveredServer = reloaded.createLocalTrainingWorkerServer();
   serverToClose = recoveredServer;

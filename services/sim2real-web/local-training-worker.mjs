@@ -15,9 +15,9 @@
 
 import { createHash, randomUUID } from 'node:crypto';
 import { createServer } from 'node:http';
-import { mkdir, open, readdir, readFile, stat, writeFile } from 'node:fs/promises';
+import { mkdir, open, readdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
 import { accessSync, constants, createReadStream, realpathSync, statSync } from 'node:fs';
-import { spawn } from 'node:child_process';
+import { execFile, spawn } from 'node:child_process';
 import path from 'node:path';
 import process from 'node:process';
 import { fileURLToPath } from 'node:url';
@@ -619,7 +619,7 @@ function publicJob(job) {
   return visible;
 }
 
-function childEnvironment(job) {
+function engineEnvironment() {
   const environment = { ...process.env };
   // The worker is allowed to inherit operational settings (for example
   // CUDA_VISIBLE_DEVICES when a deployment explicitly grants one), but the
@@ -634,8 +634,12 @@ function childEnvironment(job) {
       delete environment[key];
     }
   }
+  return environment;
+}
+
+function childEnvironment(job) {
   return {
-    ...environment,
+    ...engineEnvironment(),
     RDK_SIM2REAL_JOB_ID: job.runId,
     RDK_SIM2REAL_JOB_DIR: job.dir,
     RDK_SIM2REAL_REQUEST_FILE: path.join(job.dir, 'request.json'),
@@ -643,6 +647,71 @@ function childEnvironment(job) {
     RDK_SIM2REAL_CONTRACT_ID: job.contractId,
     RDK_SIM2REAL_TRAIN_PROFILE: job.profile,
   };
+}
+
+const unknownGpuHealth = { cuda: null, gpuName: null, vramMb: null };
+const CUDA_PROBE = `
+import json
+import torch
+
+cuda = bool(torch.cuda.is_available())
+gpu = torch.cuda.get_device_properties(0) if cuda else None
+print(json.dumps({
+    "cuda": cuda,
+    "gpuName": gpu.name if gpu else None,
+    "vramMb": gpu.total_memory // (1024 * 1024) if gpu else None,
+}, allow_nan=False))
+`;
+let gpuHealthCache;
+
+function workerGpuHealth(readyEngines) {
+  // Check the same Python and device mask used by the training subprocess.
+  const python = readyEngines.find(({ executable }) =>
+    /^python(?:3(?:\.\d+)?)?(?:\.exe)?$/i.test(path.basename(executable)),
+  )?.executable;
+  if (!python) return unknownGpuHealth;
+  const key = JSON.stringify([
+    python,
+    process.env.CUDA_VISIBLE_DEVICES,
+    process.env.NVIDIA_VISIBLE_DEVICES,
+  ]);
+  if (gpuHealthCache?.key === key && Date.now() < gpuHealthCache.expiresAt) {
+    return gpuHealthCache.result;
+  }
+  const entry = { key, expiresAt: Infinity };
+  entry.result = new Promise((resolve) => {
+    execFile(
+      python,
+      ['-c', CUDA_PROBE],
+      { env: engineEnvironment(), timeout: 2500, killSignal: 'SIGKILL', maxBuffer: 4096 },
+      (error, stdout) => {
+        let health = unknownGpuHealth;
+        if (!error) {
+          try {
+            const { cuda, gpuName, vramMb } = JSON.parse(stdout);
+            if (cuda === false) {
+              health = { ...unknownGpuHealth, cuda };
+            } else if (
+              cuda === true &&
+              typeof gpuName === 'string' &&
+              gpuName.trim() &&
+              Number.isSafeInteger(vramMb) &&
+              vramMb > 0 &&
+              vramMb <= 2_000_000
+            ) {
+              health = { cuda, gpuName: gpuName.trim().slice(0, 160), vramMb };
+            }
+          } catch {
+            // Diagnostic failure must leave CPU training and status available.
+          }
+        }
+        entry.expiresAt = Date.now() + (health.cuda === null ? 5_000 : 30_000);
+        resolve(health);
+      },
+    );
+  });
+  gpuHealthCache = entry;
+  return entry.result;
 }
 
 async function restorePersistedJobs() {
@@ -932,14 +1001,16 @@ async function launch(job, config) {
     Math.max(Number(process.env.RDK_SIM2REAL_TRAIN_TIMEOUT_MS || 86_400_000), 1000),
     7 * 86_400_000,
   );
-  job.timeout = setTimeout(() => child.kill('SIGTERM'), timeoutMs);
+  const timeout = setTimeout(() => child.kill('SIGTERM'), timeoutMs);
   child.once('error', (error) => {
+    clearTimeout(timeout);
     feedLogStream(job, 'stderr', error.message + '\n');
     return finish(job, 1, stdout, `${stderr}\n${error.message}`);
   });
-  child.once('exit', (code, signal) =>
-    finish(job, code ?? 1, stdout, `${stderr}${signal ? `\nterminated:${signal}` : ''}`),
-  );
+  child.once('exit', (code, signal) => {
+    clearTimeout(timeout);
+    return finish(job, code ?? 1, stdout, `${stderr}${signal ? `\nterminated:${signal}` : ''}`);
+  });
 }
 
 async function finish(job, code, stdout, stderr) {
@@ -952,13 +1023,11 @@ async function finish(job, code, stdout, stderr) {
     if (partial) appendLogLine(job, stream, partial);
   }
   job.logPartials = undefined;
-  if (job.timeout) clearTimeout(job.timeout);
   const childPid = job.pid;
   for (const child of activeChildren) {
     if (childPid != null && child.pid === childPid) activeChildren.delete(child);
   }
   activeJobs.delete(job);
-  job.timeout = undefined;
   job.finishedAt = new Date().toISOString();
   job.pid = undefined;
   try {
@@ -1089,9 +1158,15 @@ async function persist(job) {
   // Timeout handles are process-local and circular; never serialize runtime
   // state into the durable job snapshot exposed to status readers.
   const { timeout: _timeout, ...snapshot } = job;
-  await writeFile(path.join(job.dir, 'job.json'), JSON.stringify(snapshot, null, 2), {
-    mode: 0o600,
-  });
+  const encoded = JSON.stringify(snapshot, null, 2);
+  const temporary = path.join(job.dir, `.job-${randomUUID()}.tmp`);
+  try {
+    await writeFile(temporary, encoded, { mode: 0o600, flag: 'wx' });
+    await rename(temporary, path.join(job.dir, 'job.json'));
+  } catch (error) {
+    await rm(temporary, { force: true }).catch(() => undefined);
+    throw error;
+  }
 }
 
 async function handleTrain(request, response) {
@@ -1495,15 +1570,15 @@ export function createLocalTrainingWorkerServer() {
     try {
       if (request.method === 'GET' && request.url === '/healthz') {
         let configured = false;
-        let engineIds = [];
+        let readyEngines = [];
+        let concurrency;
         try {
           const engines = workerEngines();
           configured = engines.size > 0;
-          engineIds = [...engines.values()]
-            .filter((engine) => engineExecutableReady(engine.executable))
-            .map((engine) => engine.id)
-            .sort();
-          maxConcurrentJobs();
+          readyEngines = [...engines.values()].filter((engine) =>
+            engineExecutableReady(engine.executable),
+          );
+          concurrency = maxConcurrentJobs();
         } catch (error) {
           json(response, 503, {
             ok: false,
@@ -1512,7 +1587,7 @@ export function createLocalTrainingWorkerServer() {
             configured: false,
             error: error?.errorCode || 'worker_configuration_invalid',
             message: text(error?.message) || '训练引擎配置无效。',
-            cuda: null,
+            ...unknownGpuHealth,
             contracts: ['microduck-policy-v1', 'rdk-duck-policy-v1', 'originbot-policy-v1'],
           });
           return;
@@ -1521,25 +1596,26 @@ export function createLocalTrainingWorkerServer() {
         const tokenConfigured = Boolean(tokenValue);
         const tokenUsable = runnerTokenUsable(tokenValue);
         const authReady = !runnerTokenRequired() || tokenUsable;
-        const ready = engineIds.length > 0 && authReady;
+        const ready = readyEngines.length > 0 && authReady;
+        const gpu = ready ? await workerGpuHealth(readyEngines) : unknownGpuHealth;
         json(response, ready ? 200 : 503, {
           ok: ready,
           worker: 'sim2real-local',
           mode: 'external-engine',
           configured,
-          engines: engineIds,
+          engines: readyEngines.map((engine) => engine.id).sort(),
           mock: false,
           authConfigured: tokenConfigured,
           authTokenUsable: tokenUsable,
           ...(!authReady
             ? { error: 'worker_auth_not_configured' }
-            : configured && !engineIds.length
+            : configured && !readyEngines.length
               ? { error: 'engine_executable_unavailable' }
               : {}),
-          maxConcurrentJobs: maxConcurrentJobs(),
-          activeJobs: activeJobs.size,
+          maxConcurrentJobs: concurrency,
+          activeJobs: activeJobs.size + finalizingJobs.size,
           queuedJobs: queuedJobs.length,
-          cuda: null,
+          ...gpu,
           contracts: ['microduck-policy-v1', 'rdk-duck-policy-v1', 'originbot-policy-v1'],
         });
         return;
