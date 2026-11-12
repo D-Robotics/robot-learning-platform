@@ -1,3 +1,4 @@
+import { registerResimulatedDanceVideoRoute } from './resimulated-dance-video-routes.js';
 import { registerSim2RealTrainingPlanRoutes } from './sim2real-training-plan-routes.js';
 import { Router, type Request, type Response } from 'express';
 import { readFileSync } from 'node:fs';
@@ -3543,6 +3544,12 @@ export function createSim2RealRouter(
       });
     }),
   );
+
+  registerResimulatedDanceVideoRoute(router, {
+    prefix,
+    requestOwner: (request, response) => requestOwner(request, response, auth),
+    getRun: getSim2RealRun,
+  });
 
   router.get(
     api('/runs/:id/dance-video'),

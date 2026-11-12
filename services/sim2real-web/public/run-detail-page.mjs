@@ -382,6 +382,23 @@ function renderRun(document, location, run, runId) {
   text(document, 'run-connection-status', '已连接并定位到本次 Run');
 }
 
+async function showResimulatedReplay(document, location, fetchImpl, run) {
+  const panel = document.getElementById('resimulated-replay');
+  const video = document.getElementById('resimulated-video');
+  if (!panel || !video || run.status !== 'completed' || run.mock !== false ||
+      run.taskId !== 'originman-dance' || !danceEvidenceFor(run)?.replay) return;
+  const url = new URL(`./api/v1/duck/runs/${encodeURIComponent(run.id)}/resimulated-dance-video`, location.href);
+  const response = await fetchImpl(url.toString(), {
+    method: 'HEAD', credentials: 'same-origin', cache: 'no-store',
+  }).catch(() => null);
+  if (!response?.ok || response.headers.get('x-replay-source') !== 'resimulated-onnx') return;
+  if (video.getAttribute('src') !== url.toString()) video.src = url.toString();
+  panel.hidden = false;
+  if (!run.links?.danceVideo) {
+    text(document, 'run-next-action', '可观看下方重新仿真回放。原 Run 的训练与评测结果仍可在本页查看。');
+  }
+}
+
 export async function startRunDetail({
   document,
   location,
@@ -446,6 +463,7 @@ export async function startRunDetail({
       active = ['queued', 'running', 'ready'].includes(run.status);
       if (error) error.hidden = true;
       renderRun(document, location, run, runId);
+      void showResimulatedReplay(document, location, fetchImpl, run);
       schedule();
     } catch (cause) {
       if (!quiet || !loaded) fail(cause instanceof Error ? cause.message : '运行读取失败。');
