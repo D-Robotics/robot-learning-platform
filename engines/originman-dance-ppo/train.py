@@ -19,6 +19,7 @@ from stable_baselines3.common.callbacks import BaseCallback
 from stable_baselines3.common.vec_env import SubprocVecEnv
 
 from body import DT
+from dance_env import ConfigurableChoreography, squat_rise_phase
 
 
 def _json_default(value):
@@ -30,7 +31,6 @@ def _json_default(value):
     if isinstance(value, (np.integer, np.floating)):
         return value.item()
     raise TypeError(f"Object of type {type(value).__name__} is not JSON serializable")
-from dance_env import ConfigurableChoreography
 
 
 def resolve_training_device(requested: str) -> str:
@@ -124,15 +124,21 @@ def evaluate(env, actor, bpm, *, trace=False):
             }
             passes = metrics["lateralRangeM"] >= 0.035 and metrics["lateralTrackingFraction"] >= 0.62
         elif spec["type"] == "squat-rise":
-            height, slow = value("heightM"), value("slow")
-            arm_forward = value("armForwardM")
+            height = value("heightM")
+            progress = value("sectionProgress")
+            target = [squat_rise_phase(point) for point in progress]
+            start = height[progress <= 0.20]
+            bottom = height[(progress >= 0.40) & (progress <= 0.60)]
+            end = height[progress >= 0.80]
             metrics = {
                 "heightRangeM": float(np.ptp(height)),
-                "riseAndDipCorrelation": _corr(height, slow),
-                "armSweepM": float(np.ptp(arm_forward)),
+                "riseAndDipCorrelation": _corr(height, target),
+                "squatDescentM": float(np.mean(start) - np.mean(bottom)) if start.size and bottom.size else 0.0,
+                "squatAscentM": float(np.mean(end) - np.mean(bottom)) if end.size and bottom.size else 0.0,
+                "armSweepM": float(np.ptp(value("armForwardM"))),
             }
             passes = (
-                metrics["heightRangeM"] >= 0.024
+                min(metrics["squatDescentM"], metrics["squatAscentM"]) >= 0.024
                 and metrics["riseAndDipCorrelation"] >= 0.55
                 and metrics["armSweepM"] >= 0.06
             )
@@ -277,7 +283,7 @@ def train(*, bundle: Path, output: Path, dance_config: dict, num_envs: int,
             "replay": replay,
             "qualityGate": {
                 "passed": bool(evaluations and all(item["allSectionsPassed"] for item in evaluations)),
-                "criteria": "every configured section passes its style and fall-free completion checks at every evaluated BPM",
+                "criteria": "every section passes style and fall-free completion at every evaluated BPM; squat-rise requires both descent and ascent",
             },
             "physicsBackend": "cpu-mujoco",
             "hardwareEligible": False,

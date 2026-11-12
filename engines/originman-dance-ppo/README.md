@@ -17,7 +17,10 @@ separate requirements.
 
 `body.py`, `env.py`, `dance_env.py`, and `train.py` provide the simulator,
 learner-configurable choreography, PPO training, three-BPM style evaluation,
-and a nominal-BPM replay trace. `adapter.py` implements the local worker's
+and a nominal-BPM replay trace. For `squat-rise`, the target reaches its lowest
+point in the middle of the section and returns to the starting height at the
+end. The evaluation reports `squatDescentM` and `squatAscentM` separately and
+requires at least 24 mm in each direction. `adapter.py` implements the local worker's
 file protocol and emits a checked ONNX policy. The platform run contract carries
 the choreography under `training.originmanDance` and the worker receives it as
 `task.originmanDance`.

@@ -1,8 +1,18 @@
 import math
 import unittest
+from types import SimpleNamespace
 
-from dance_env import DEFAULT_REWARD_TUNING, REWARD_TUNING_LIMITS, alternating_arm_targets, validate_dance_config
+import numpy as np
+
+from dance_env import (
+    DEFAULT_REWARD_TUNING,
+    REWARD_TUNING_LIMITS,
+    alternating_arm_targets,
+    squat_rise_phase,
+    validate_dance_config,
+)
 from dance_env_v2 import section_phase_features
+from train import evaluate
 
 
 class AlternatingArmRewardTests(unittest.TestCase):
@@ -34,6 +44,55 @@ class AlternatingArmRewardTests(unittest.TestCase):
             self.assertAlmostEqual(pulse, next_pulse)
             self.assertTrue(math.isfinite(position) and 0 <= pulse <= 1)
         self.assertGreater(alternating_arm_targets(0, 1)[0], alternating_arm_targets(0, 0.25)[0])
+
+
+class SquatRiseTests(unittest.TestCase):
+    def test_target_returns_to_starting_height(self):
+        self.assertAlmostEqual(squat_rise_phase(0), 1)
+        self.assertAlmostEqual(squat_rise_phase(0.5), -1)
+        self.assertAlmostEqual(squat_rise_phase(1), 1)
+
+    def evaluate_height(self, height_at):
+        class Rollout:
+            sections = [{"type": "squat-rise", "beats": 4}]
+            data = SimpleNamespace(qpos=np.zeros(1))
+
+            def reset(self, *, options):
+                self.tick = 0
+                return None, {}
+
+            def step(self, action):
+                self.tick += 1
+                progress = self.tick / 100
+                info = {
+                    "section": 0,
+                    "sectionProgress": progress,
+                    "heightM": height_at(progress),
+                    "armForwardM": 0.1 * math.sin(math.pi * progress),
+                    "slow": math.cos(math.pi * progress),
+                    "tiltDeg": 0.0,
+                    "fallContacts": [],
+                }
+                return None, 0.0, False, self.tick == 100, info
+
+        return evaluate(Rollout(), lambda _: None, 120)["sectionResults"][0]
+
+    def test_complete_squat_and_rise_passes(self):
+        result = self.evaluate_height(lambda p: 0.6 + 0.025 * math.cos(2 * math.pi * p))
+        self.assertTrue(result["passed"])
+        self.assertGreater(result["squatDescentM"], 0.024)
+        self.assertGreater(result["squatAscentM"], 0.024)
+
+    def test_standing_and_one_way_movements_fail(self):
+        for height_at in (
+            lambda _: 0.6,
+            lambda p: 0.64 - 0.08 * min(p, 0.5),
+            lambda p: 0.6 + 0.08 * max(p - 0.5, 0),
+        ):
+            with self.subTest(height_at=height_at):
+                result = self.evaluate_height(height_at)
+                self.assertTrue(result["clean"])
+                self.assertFalse(result["stylePassed"])
 
 
 class RewardTuningValidationTests(unittest.TestCase):

@@ -85,6 +85,11 @@ def alternating_arm_targets(local_beat, intensity):
     return (0.075 + 0.055 * intensity) * wave, pulse
 
 
+def squat_rise_phase(progress):
+    """Start upright, reach the lowest point halfway through, then rise."""
+    return math.cos(2 * math.pi * progress)
+
+
 def validate_dance_config(value: dict) -> dict:
     if not isinstance(value, dict) or value.get("schemaVersion") != 1:
         raise ValueError("task.originmanDance must be a schemaVersion 1 object")
@@ -221,10 +226,11 @@ class ConfigurableChoreography(Dance):
                 + 0.55 * accent
             )
         elif section["type"] == "squat-rise":
-            target = self.robot.base_height - 0.009 - self.reward["squatDepthM"] * (0.5 - 0.5 * slow)
+            squat_phase = squat_rise_phase(progress)
+            target = self.robot.base_height - 0.009 - self.reward["squatDepthM"] * (0.5 - 0.5 * squat_phase)
             style = intensity * (
                 self.reward["squatWeight"] * math.exp(-((height - target) / self.reward["squatToleranceM"]) ** 2)
-                + 1.10 * np.clip(-slow * arm_forward / 0.13, -1, 1)
+                + 1.10 * np.clip(-squat_phase * arm_forward / 0.13, -1, 1)
                 + 0.4 * accent
             )
         else:
