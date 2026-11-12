@@ -2,6 +2,7 @@
 
 /** Deterministic rehearsal for the production storage backup workflow. */
 import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
 import { chmod, mkdtemp, mkdir, readFile, rm, symlink, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
@@ -54,10 +55,18 @@ try {
     { mode: 0o600 },
   );
 
+  const video = Buffer.from('verified dance fixture');
+  const digest = createHash('sha256').update(video).digest('hex');
+  const videoPath = path.join('dance-videos', `${digest}.mp4`);
+  await mkdir(path.join(storage, 'dance-videos'), { mode: 0o700 });
+  await writeFile(path.join(storage, videoPath), video, { mode: 0o600 });
   const first = await createBackup({ storageDir: storage, output: snapshot });
   assert.equal(first.manifest.consistency, 'quiesced');
   const verified = await verifySnapshot(snapshot);
-  assert.equal(verified.files, 4);
+  assert.equal(verified.files, 5);
+  assert.ok(
+    verified.manifest.files.some((file) => file.path === videoPath && file.sha256 === digest),
+  );
   assert.equal(verified.telemetryRows, 1);
   assert.equal(verified.auditRows, 2);
   assert.equal(verified.ledger.artifacts[0].id, 'artifact-1');
@@ -84,6 +93,7 @@ try {
 
   const result = await restoreBackup({ snapshotDir: snapshot, storageDir: restored, yes: true });
   assert.equal(result.restoredTo, restored);
+  assert.deepEqual(await readFile(path.join(restored, videoPath)), video);
   assert.equal(JSON.parse(await readFile(path.join(restored, 'sim2real.json'), 'utf8')).version, 1);
   const restoredLedger = JSON.parse(await readFile(path.join(restored, 'sim2real.json'), 'utf8'));
   assert.equal(restoredLedger.artifacts[0].id, 'artifact-1');
@@ -218,7 +228,7 @@ try {
     (error) => error?.code === 'STORAGE_BACKUP_DIGEST_MISMATCH',
   );
   console.log(
-    '[storage-backup] PASS — ledger artifacts/evaluations, telemetry, audit rotation, active-writer gate, atomic external-audit rollback, missing-audit fail-closed, restore and digest tamper check verified',
+    '[storage-backup] PASS — ledger artifacts/evaluations, telemetry, dance videos, audit rotation, active-writer gate, atomic external-audit rollback, missing-audit fail-closed, restore and digest tamper check verified',
   );
 } finally {
   await rm(root, { recursive: true, force: true });
