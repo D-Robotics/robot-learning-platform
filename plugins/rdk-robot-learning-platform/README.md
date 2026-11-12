@@ -1,4 +1,4 @@
-# RDK Robot Learning 插件（Qoder / Studio） 0.6.39
+# RDK Robot Learning 插件（Qoder / Studio） 0.6.40
 
 这是 **通用机器人学习插件**，在 Studio、Qoder 和支持 MCP 的宿主里连接同一套学习平台。可以按机型和任务做仿真、录制、强化学习、模仿学习、评测、回放与部署预检。OriginMan 舞蹈和受扰恢复是可选任务。机型、引擎和设备能力以当前平台的可用适配器为准。
 
@@ -9,6 +9,7 @@ Studio 用户：解压到最终目录后，Windows 双击 setup-windows.cmd，ma
 不需要平台源码、npm install、手写密码或 Cookie。其他宿主导入生成的 .mcp.json。
 完整插件使用说明见 [references/user-guide.md](references/user-guide.md)；Workshop 页面教程见 references/workshop-first-run.md。
 
+0.6.40：修复从标准输入导入安装辅助模块时的异常，源码仓库不再用机器本地路径覆盖 Studio 已配置的插件连接。
 0.6.39：查询舞蹈结果时，若平台提供完整分段评分，会显示标称 BPM 下的达标段数。
 0.6.38：开始 Workshop 会打开新实验准备页；继续和查看结果会接续当前实验。
 0.6.37：配合新版平台读取录制与回放摘要，长轨迹不必经聊天传输原始帧。保留独立部署的 MicroDuck 参考仿真入口。

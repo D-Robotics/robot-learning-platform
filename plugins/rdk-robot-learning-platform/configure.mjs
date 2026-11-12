@@ -93,6 +93,7 @@ export function configurePlugin({
 }
 if (
   process.argv[1] &&
+  fs.existsSync(process.argv[1]) &&
   fs.realpathSync(process.argv[1]) === fs.realpathSync(fileURLToPath(import.meta.url))
 ) {
   try {

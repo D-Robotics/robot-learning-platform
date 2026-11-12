@@ -35,6 +35,28 @@ test('Windows and macOS produce direct workflow launchers with Unicode paths and
     }),
   );
 });
+test('the source checkout leaves Studio MCP binding to the installer', () => {
+  const root = new URL('../plugins/rdk-robot-learning-platform/', import.meta.url);
+  const read = (file) => JSON.parse(fs.readFileSync(new URL(file, root), 'utf8'));
+  assert.deepEqual(read('.mcp.json').mcpServers, {});
+  const { version } = read('plugin.json');
+  for (const host of ['codex', 'qoder', 'rdstudio'])
+    assert.equal(read(`.${host}-plugin/plugin.json`).version, version);
+});
+
+test('setup modules can be imported by a Node program running from stdin', async () => {
+  const { spawnSync } = await import('node:child_process');
+  const modules = ['configure.mjs', 'scripts/studio-login-patch.mjs'].map(
+    (file) => new URL('../plugins/rdk-robot-learning-platform/' + file, import.meta.url).href,
+  );
+  const child = spawnSync(process.execPath, ['--input-type=module', '-'], {
+    input: modules.map((url) => `import ${JSON.stringify(url)};`).join('\n'),
+    encoding: 'utf8',
+  });
+  assert.equal(child.status, 0, child.stderr);
+  assert.equal(child.stdout, '');
+});
+
 test('runtime selection respects the shipped minimum versions', () => {
   for (const v of ['22.22.2', '22.23.0', '24.15.0', '24.22.1', '26.0.0'])
     assert.equal(supportedNode(v), true, v);

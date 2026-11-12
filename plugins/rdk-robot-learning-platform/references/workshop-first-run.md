@@ -1,4 +1,4 @@
-# OriginMan 受扰恢复 Workshop 教程 · 0.6.39
+# OriginMan 受扰恢复 Workshop 教程 · 0.6.40
 
 本页介绍一门示例课程。通用仿真、训练、评测和部署入口见[插件使用说明](user-guide.md)。
 
