@@ -75,6 +75,7 @@ function metricRows(evidence) {
         return [
           `${typeof bpm === 'number' ? Number(bpm.toFixed(2)) : bpm} BPM · ${index + 1}. ${SECTION_LABELS[type] ?? type}`,
           [...statuses, ...values].join(' · '),
+          { bpm, index, section: { type, passed } },
         ];
       }),
     );
@@ -170,7 +171,7 @@ function renderDance(document, run) {
   text(document, 'run-kind', 'OriginMan · PPO 舞蹈仿真');
 }
 
-function renderQuality(document, run) {
+function renderQuality(document, location, run) {
   const evidence = danceEvidenceFor(run);
   const gate = evidence?.qualityGate;
   const passed = typeof evidence?.qualityGatePassed === 'boolean'
@@ -190,22 +191,110 @@ function renderQuality(document, run) {
           ? '运行已结束，但没有可核验的舞蹈质量门结果。'
           : '运行终态后再读取本次舞蹈质量门结果。');
   const rows = metricRows(evidence);
+  const config = danceConfigFor(run);
+  const failedLinks = document.getElementById('run-failed-sections');
+  failedLinks?.replaceChildren();
   const table = document.getElementById('quality-table');
   const body = document.getElementById('quality-body');
   if (table && body) {
     body.replaceChildren();
     table.hidden = rows.length === 0;
-    for (const [name, value] of rows) {
+    for (const [name, value, timing] of rows) {
       const row = document.createElement('tr');
       const nameCell = document.createElement('td');
       const valueCell = document.createElement('td');
       nameCell.textContent = name;
       valueCell.textContent = value;
+      if (timing && timing.bpm === config?.bpm &&
+          config.sections?.[timing.index]?.type === timing.section.type) {
+        row.id = `dance-section-${timing.index + 1}`;
+        row.tabIndex = -1;
+        if (timing.section.passed === false) {
+          const link = document.createElement('a');
+          link.href = `#${row.id}`;
+          link.textContent = `第 ${timing.index + 1} 段 · ${SECTION_LABELS[timing.section.type] ?? '舞段'}`;
+          const item = document.createElement('li');
+          item.append(link);
+          failedLinks?.append(item);
+        }
+        const replayWindow = danceReplayWindow(run, timing.index);
+        if (replayWindow && danceVideoUrl(location, run, run.id)) {
+          const button = document.createElement('button');
+          button.type = 'button';
+          button.textContent = `播放第 ${timing.index + 1} 段回放`;
+          button.setAttribute('aria-controls', 'run-video');
+          button.addEventListener('click', () => playDanceSection(document, timing.index + 1, replayWindow));
+          valueCell.append(document.createElement('br'), button);
+        }
+      }
       row.append(nameCell, valueCell);
       body.append(row);
     }
   }
+  if (failedLinks) failedLinks.hidden = !failedLinks.children.length;
   text(document, 'run-step-quality', passed === true ? '质量门已通过' : passed === false ? '质量门未通过' : '质量证据待核验');
+}
+
+// The original dance trace is captured at nominal BPM, beginning at beat zero.
+export function danceReplayWindow(run, index) {
+  const config = danceConfigFor(run);
+  const duration = danceEvidenceFor(run)?.video?.durationSeconds;
+  if (!verifiedDanceVideo(run) || !Number.isFinite(duration) || duration <= 0 ||
+      !Number.isFinite(config?.bpm) || config.bpm <= 0 ||
+      !Array.isArray(config.sections) || !config.sections[index] ||
+      !config.sections.every(({ beats }) => Number.isInteger(beats) && beats > 0)) return null;
+  const secondsPerBeat = 60 / config.bpm;
+  const start = config.sections.slice(0, index).reduce((sum, { beats }) => sum + beats, 0) * secondsPerBeat;
+  const end = Math.min(duration, start + config.sections[index].beats * secondsPerBeat);
+  return end > start ? { start, end } : null;
+}
+
+const sectionPlayback = new WeakMap();
+
+function playDanceSection(document, number, { start, end }) {
+  const video = document.getElementById('run-video');
+  if (!video || video.hidden || !video.getAttribute('src')) return;
+  sectionPlayback.get(video)?.abort();
+  const playback = new document.defaultView.AbortController();
+  const options = { signal: playback.signal };
+  sectionPlayback.set(video, playback);
+  const setStatus = (message) => text(document, 'replay-section-status', message);
+  const stop = () => {
+    if (video.currentTime < Math.min(end, video.duration) && !video.ended) return;
+    video.pause();
+    playback.abort();
+    setStatus(`第 ${number} 段回放已播完`);
+  };
+  const startPlayback = () => {
+    video.addEventListener('timeupdate', stop, options);
+    video.addEventListener('ended', stop, options);
+    video.play().catch(() => {
+      if (!playback.signal.aborted) setStatus(`第 ${number} 段已定位，请使用播放器的播放按钮`);
+    });
+  };
+  const seek = () => {
+    if (!Number.isFinite(video.duration) || start >= video.duration) {
+      playback.abort();
+      video.pause();
+      setStatus(`原回放没有录到第 ${number} 段`);
+      return;
+    }
+    setStatus(`第 ${number} 段回放`);
+    if (Math.abs(video.currentTime - start) < 0.001 && !video.seeking) {
+      startPlayback();
+    } else {
+      video.addEventListener('seeked', startPlayback, { ...options, once: true });
+      video.currentTime = start;
+    }
+  };
+  video.pause();
+  video.scrollIntoView?.({ block: 'nearest' });
+  video.focus();
+  if (video.readyState >= 1) seek();
+  else {
+    video.addEventListener('loadedmetadata', seek, { ...options, once: true });
+    video.load();
+  }
 }
 
 function verifiedDanceVideo(run) {
@@ -376,7 +465,7 @@ function renderRun(document, location, run, runId) {
     }
   }
   renderDance(document, run);
-  renderQuality(document, run);
+  renderQuality(document, location, run);
   drawCurve(document, run);
   renderVideo(document, location, run, runId);
   text(document, 'run-connection-status', '已连接并定位到本次 Run');
@@ -446,6 +535,11 @@ export async function startRunDetail({
       active = ['queued', 'running', 'ready'].includes(run.status);
       if (error) error.hidden = true;
       renderRun(document, location, run, runId);
+      if (!quiet && /^#dance-section-[1-9]$/.test(location.hash ?? '')) {
+        const target = document.getElementById(location.hash.slice(1));
+        target?.focus();
+        target?.scrollIntoView?.({ block: 'center' });
+      }
       schedule();
     } catch (cause) {
       if (!quiet || !loaded) fail(cause instanceof Error ? cause.message : '运行读取失败。');

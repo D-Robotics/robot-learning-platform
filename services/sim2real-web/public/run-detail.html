@@ -25,6 +25,7 @@
           <li id="run-step-replay">查看本次回放</li>
         </ol>
         <p id="run-next-action" aria-live="polite">正在按链接中的 Run ID 读取详情。</p>
+        <ul id="run-failed-sections" aria-label="标称节拍未达标舞段" hidden></ul>
         <button id="refresh-run" type="button">刷新本次运行</button>
         <p><a id="run-platform-home" href="./">返回学习平台</a></p>
       </aside>
@@ -96,6 +97,7 @@
             <h2 id="replay-heading">本次仿真回放</h2>
             <span id="replay-status">尚未核验</span>
           </div>
+          <p id="replay-section-status" role="status"></p>
           <video id="run-video" controls playsinline preload="none" hidden aria-label="本次训练生成的仿真舞蹈视频"></video>
           <p id="replay-empty" class="empty-state">回放生成后会校验策略与轨迹摘要，再显示本次视频。</p>
         </section>

@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import test from 'node:test';
 import { JSDOM } from 'jsdom';
-import { startRunDetail } from './public/run-detail-page.mjs';
+import { danceReplayWindow, startRunDetail } from './public/run-detail-page.mjs';
 
 const markup = fs.readFileSync(new URL('./public/run-detail.html', import.meta.url), 'utf8');
 const digest = (char) => char.repeat(64);
@@ -80,6 +80,7 @@ test('dance Run detail selects the exact account-scoped record and visualizes it
           sha256: digest('c'),
           policySha256: policy,
           sourceReplaySha256: replay,
+          durationSeconds: 7.2,
         },
       },
     },
@@ -115,6 +116,19 @@ test('dance Run detail selects the exact account-scoped record and visualizes it
   assert.equal(f.document.getElementById('quality-status').textContent, '风格门未通过');
   const qualityRows = f.document.querySelectorAll('#quality-body tr');
   assert.match(qualityRows[0].textContent, /完整完成 · 风格未达标/);
+  assert.equal(
+    f.document.querySelector('#run-failed-sections a').getAttribute('href'),
+    '#dance-section-1',
+  );
+  assert.equal(f.document.querySelectorAll('#run-failed-sections a').length, 1);
+  assert.equal(qualityRows[0].querySelector('button').textContent, '播放第 1 段回放');
+  assert.equal(qualityRows[2].querySelector('button'), null);
+  assert.deepEqual(danceReplayWindow(run, 1), { start: 3.75, end: 7.2 });
+  assert.equal(danceReplayWindow(run, 2), null);
+  const shortened = structuredClone(run);
+  shortened.metrics.originmanDance.video.durationSeconds = 2;
+  assert.equal(danceReplayWindow(shortened, 1), null);
+
   assert.match(qualityRows[1].textContent, /达标.*换重心方向命中率：63%/);
   assert.match(qualityRows[2].textContent, /下蹲行程：31 mm.*起身行程：16.53 mm/);
   assert.equal(f.document.getElementById('reward-chart').hasAttribute('hidden'), false);
