@@ -8476,10 +8476,14 @@ function renderRunProgressLiveChart(run) {
   wrap.hidden = !show;
   if (!show) return;
   const isDance = run.training?.engine === 'originman-dance-ppo';
-  const rateLabel = isDance ? '近期完成率' : '近期成功率';
+  const rateLabel = isDance ? '近期回合完成率' : '近期成功率';
   canvas.setAttribute('aria-label', `训练奖励与${rateLabel}曲线`);
+  const hasRate = points.some((point) => point.recentSuccess != null && Number.isFinite(Number(point.recentSuccess)));
+  const rateLegend = $('run-progress-rate-legend');
+  if (rateLegend) rateLegend.hidden = !hasRate;
+  setText('run-progress-rate-label', rateLabel);
   setText('run-progress-live-note', isDance
-    ? '完成率来自训练回合或单段练习。舞蹈风格结果在本次 Run 结束后查看。'
+    ? '每轮采样结束上报。完成率统计最近最多 50 个已结束训练回合，包含单段练习。按时完成且未跌倒计为完成。舞段风格达标情况见训练后评测。'
     : '数据来自引擎回报的均值奖励与近期成功率。');
   const caption = $('run-progress-live-caption');
   if (caption) {
@@ -8494,37 +8498,43 @@ function renderRunProgressLiveChart(run) {
   drawRunProgressChart(canvas, points);
 }
 
-// Use a worker-reported iteration pair, or a checkpoint with a known target.
+// Prefer reported rollout progress; use checkpoint progress as a fallback.
 function renderRunProgressTrack(run) {
   const track = $('run-progress-track');
   const fill = $('run-progress-fill');
   const note = $('run-progress-track-note');
-  if (!track || !fill || !note) return;
-  const active = run.mock !== true && (run.status === 'queued' || run.status === 'running');
-  track.hidden = note.hidden = !active;
-  if (!active) {
+  if (!track || !fill) return;
+  const lastPoint = runProgressPoints(run).at(-1);
+  const iteration = Number(lastPoint?.iteration);
+  const total = Number(lastPoint?.totalIterations);
+  const hasRollout = Number.isFinite(iteration) && iteration >= 0 && Number.isFinite(total) && total > 0;
+  const active = ['queued', 'running', 'cancelling'].includes(run.status);
+  const show = run.mock !== true && (active || (run.status === 'completed' && hasRollout));
+  track.hidden = !show;
+  if (note) note.hidden = !show;
+  if (!show) {
     track.removeAttribute('aria-valuenow');
+    track.removeAttribute('aria-valuetext');
     return;
   }
-  const lastPoint = runProgressPoints(run).at(-1);
-  const reportedTarget = Number(lastPoint?.totalIterations);
-  const hasLiveProgress = Number.isFinite(reportedTarget) && reportedTarget > 0;
-  const target = hasLiveProgress ? reportedTarget : Number(run.training?.targetIterations) || 0;
-  const done = hasLiveProgress ? Number(lastPoint.iteration) : Number(run.checkpoint?.iteration) || 0;
+  const target = hasRollout ? total : Number(run.training?.targetIterations) || 0;
+  const done = hasRollout ? iteration : Number(run.checkpoint?.iteration) || 0;
+  const label = target > 0
+    ? `${hasRollout ? '训练进度' : '检查点'} · 第 ${done} / ${target} 轮`
+    : run.status === 'queued'
+      ? '排队中 · 等待算力机接单'
+      : done > 0 ? `运行中 · 已到第 ${done} 轮检查点` : '运行中 · 等待首条进度';
   track.classList.toggle('is-indeterminate', target <= 0);
+  if (note) note.textContent = label;
   if (target > 0) {
-    const percent = Math.max(0, Math.min(100, Math.round((done / target) * 100)));
+    const percent = Math.max(0, Math.min(100, Math.round(done / target * 100)));
     fill.style.width = percent + '%';
     track.setAttribute('aria-valuenow', String(percent));
-    note.textContent = hasLiveProgress ? `训练进度 · 第 ${done} / ${target} 轮` : `检查点 · 第 ${done} / ${target} 轮`;
+    track.setAttribute('aria-valuetext', label);
   } else {
     fill.style.width = '';
     track.removeAttribute('aria-valuenow');
-    note.textContent = done > 0
-      ? `运行中 · 已到第 ${done} 轮检查点`
-      : run.status === 'queued'
-        ? '排队中 · 等待算力机接单'
-        : '运行中 · 等待首条进度';
+    track.removeAttribute('aria-valuetext');
   }
 }
 

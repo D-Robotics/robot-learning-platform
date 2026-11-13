@@ -918,11 +918,13 @@
                       id="run-progress-live-canvas"
                       width="720"
                       height="200"
-                      aria-label="训练中实时奖励与成功率曲线"
+                      aria-label="实时训练曲线"
                     ></canvas>
-                    <p class="small-note" id="run-progress-live-note">
-                      引擎每个 checkpoint 间隔回报一次均值奖励与近期成功率；数据来自 worker 解析的引擎 stdout。
-                    </p>
+                    <ul class="small-note" aria-label="训练曲线图例">
+                      <li>绿线 · 平均奖励（左轴）</li>
+                      <li id="run-progress-rate-legend" hidden>蓝线 · <span id="run-progress-rate-label"></span>（右轴）</li>
+                    </ul>
+                    <p class="small-note" id="run-progress-live-note"></p>
                   </div>
                   <div class="run-progress-logs" id="run-progress-logs" hidden>
                     <div class="run-progress-logs-heading">
@@ -969,26 +971,35 @@
                         <label>随机种子 <input id="originman-dance-seed" type="number" min="0" max="2147483647" step="1" value="7"></label>
                       </div>
                       <p class="small-note" id="originman-dance-budget-help">8192 步用于快检。可以用 500000 步做正式训练，动作表现以评测为准。</p>
+                      <details id="originman-dance-intensity-guide">
+                        <summary>各动作的幅度含义</summary>
+                        <ul>
+                          <li>交替摆臂：幅度决定左右手前后差的目标峰值，公式为 0.075 + 0.055 × 幅度（米）。</li>
+                          <li>左右换重心：幅度缩放本段风格奖励。横向目标由换重心目标距离控制。</li>
+                          <li>下蹲起身：幅度缩放本段风格奖励。下蹲目标由下蹲目标深度控制。</li>
+                          <li>展开定格：幅度缩放本段的节拍、展臂和定格奖励。</li>
+                        </ul>
+                      </details>
                       <div id="originman-dance-sections"></div>
                       <button class="button button-ghost button-small" id="originman-dance-add" type="button">添加舞段</button>
                       <button class="button button-ghost button-small" id="originman-dance-four-sections" type="button">载入四段示例</button>
                       <details id="originman-dance-rewards">
                         <summary>自定义奖励参数</summary>
-                        <p class="small-note">留空使用引擎默认值。小数距离以米为单位。</p>
+                        <p class="small-note">留空使用输入框提示的引擎默认值。调奖励会改变训练目标，评测门槛固定。</p>
                         <div class="dance-goal-fields">
-                          <label>换重心目标距离（米） <input data-dance-reward="weightShiftTargetM" type="number" min="0.02" max="0.06" step="any" placeholder="0.036"></label>
-                          <label>换重心容差（米） <input data-dance-reward="weightShiftToleranceM" type="number" min="0.008" max="0.04" step="any" placeholder="0.016"></label>
-                          <label>下蹲目标深度（米） <input data-dance-reward="squatDepthM" type="number" min="0.02" max="0.07" step="any" placeholder="0.042"></label>
-                          <label>下蹲容差（米） <input data-dance-reward="squatToleranceM" type="number" min="0.008" max="0.04" step="any" placeholder="0.018"></label>
-                          <label>摆臂幅度权重 <input data-dance-reward="armSwingWeight" type="number" min="1" max="8" step="any" placeholder="4"></label>
-                          <label>摆臂速度权重 <input data-dance-reward="armSpeedWeight" type="number" min="0.2" max="4" step="any" placeholder="1.5"></label>
-                          <label>换重心权重 <input data-dance-reward="weightShiftWeight" type="number" min="1" max="8" step="any" placeholder="3.4"></label>
-                          <label>下蹲起身权重 <input data-dance-reward="squatWeight" type="number" min="1" max="8" step="any" placeholder="3.5"></label>
-                          <label>定格稳定权重 <input data-dance-reward="settleStillnessWeight" type="number" min="1" max="4" step="any" placeholder="2.6"></label>
-                          <label>定格展臂权重 <input data-dance-reward="settleArmsWeight" type="number" min="0.2" max="6" step="any" placeholder="2.5"></label>
-                          <label>能耗惩罚 <input data-dance-reward="workPenalty" type="number" min="0.2" max="1.5" step="any" placeholder="0.8"></label>
-                          <label>下蹲能耗惩罚 <input data-dance-reward="squatWorkPenalty" type="number" min="0.05" max="1" step="any" placeholder="0.35"></label>
-                          <label>倾斜惩罚 <input data-dance-reward="tiltPenalty" type="number" min="1" max="6" step="any" placeholder="3"></label>
+                          <label>换重心目标距离（米） <input data-dance-reward="weightShiftTargetM" type="number" min="0.02" max="0.06" step="any" placeholder="0.036"><small>躯干左右移动参考曲线的峰值。</small></label>
+                          <label>换重心容差（米） <input data-dance-reward="weightShiftToleranceM" type="number" min="0.008" max="0.04" step="any" placeholder="0.016"><small>横向偏差越大，跟踪奖励越低。此值越小，奖励衰减越快。</small></label>
+                          <label>下蹲目标深度（米） <input data-dance-reward="squatDepthM" type="number" min="0.02" max="0.07" step="any" placeholder="0.042"><small>下蹲最低点相对段初目标的深度。</small></label>
+                          <label>下蹲容差（米） <input data-dance-reward="squatToleranceM" type="number" min="0.008" max="0.04" step="any" placeholder="0.018"><small>高度偏差越大，跟踪奖励越低。此值越小，奖励衰减越快。</small></label>
+                          <label>摆臂幅度权重 <input data-dance-reward="armSwingWeight" type="number" min="1" max="8" step="any" placeholder="4"><small>奖励左右手前后差贴合目标。</small></label>
+                          <label>摆臂速度权重 <input data-dance-reward="armSpeedWeight" type="number" min="0.2" max="4" step="any" placeholder="1.5"><small>奖励手臂速度跟随参考脉冲。</small></label>
+                          <label>换重心权重 <input data-dance-reward="weightShiftWeight" type="number" min="1" max="8" step="any" placeholder="3.4"><small>横向位置贴合目标的奖励权重。</small></label>
+                          <label>下蹲起身权重 <input data-dance-reward="squatWeight" type="number" min="1" max="8" step="any" placeholder="3.5"><small>躯干高度贴合下蹲参考曲线的奖励权重。</small></label>
+                          <label>定格稳定权重 <input data-dance-reward="settleStillnessWeight" type="number" min="1" max="4" step="any" placeholder="2.6"><small>定格末段奖励手臂和腿减速。</small></label>
+                          <label>定格展臂权重 <input data-dance-reward="settleArmsWeight" type="number" min="0.2" max="6" step="any" placeholder="2.5"><small>定格末段奖励双手向两侧展开。</small></label>
+                          <label>能耗惩罚 <input data-dance-reward="workPenalty" type="number" min="0.2" max="1.5" step="any" placeholder="0.8"><small>非下蹲段对每步机械做功的惩罚系数。</small></label>
+                          <label>下蹲能耗惩罚 <input data-dance-reward="squatWorkPenalty" type="number" min="0.05" max="1" step="any" placeholder="0.35"><small>下蹲段使用的每步机械做功惩罚系数。</small></label>
+                          <label>倾斜惩罚 <input data-dance-reward="tiltPenalty" type="number" min="1" max="6" step="any" placeholder="3"><small>身体倾角（弧度）平方的惩罚系数。</small></label>
                         </div>
                         <button class="button button-ghost button-small" id="originman-dance-reset-rewards" type="button">恢复奖励默认值</button>
                       </details>

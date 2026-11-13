@@ -83,6 +83,17 @@
             <span id="quality-status">待核对</span>
           </div>
           <p id="quality-summary" class="empty-state">本次运行完成后读取实际质量证据。</p>
+          <details id="dance-quality-guide" hidden>
+            <summary>舞段指标与达标门槛</summary>
+            <p>每段须采到至少 95% 的预期帧且无跌倒接触，再同时满足该动作的风格门槛。</p>
+            <ul>
+              <li>交替摆臂：左右手前后差的峰谷跨度 ≥90 mm；预期方向乘手位差超过 15 mm 的帧占比 ≥65%；手臂速度与参考脉冲相关性 ≥0.20。</li>
+              <li>左右换重心：躯干横向坐标峰谷跨度 ≥35 mm；横向坐标与参考方向相乘超过 6 mm 的帧占比 ≥62%。</li>
+              <li>下蹲起身：下蹲深度和起身高度各 ≥24 mm；躯干高度与参考曲线相关性 ≥0.55；双手平均前后位置的峰谷跨度 ≥60 mm。下蹲和起身分别用前 20%、后 20% 的平均高度减去中间 40%–60% 的平均高度。</li>
+              <li>展开定格：仅统计本段最后四分之一。手臂和腿速度之和小于 0.26 的帧占比 ≥83%；平均双手横向间距 ≥320 mm；最大倾角 &lt;9°。</li>
+            </ul>
+            <p>高度峰谷差和整次评测最大倾角用于诊断。训练完成率在训练过程中统计，总质量门要求所有评测节拍的整套舞蹈完成，且每段达标。</p>
+          </details>
           <div class="comparison-scroll">
             <table id="quality-table" hidden>
               <caption>本次 Run 返回的分段测量</caption>

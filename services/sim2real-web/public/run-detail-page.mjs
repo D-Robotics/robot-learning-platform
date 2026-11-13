@@ -190,6 +190,8 @@ function renderQuality(document, location, run) {
         : run.status === 'completed'
           ? '运行已结束，但没有可核验的舞蹈质量门结果。'
           : '运行终态后再读取本次舞蹈质量门结果。');
+  const guide = document.getElementById('dance-quality-guide');
+  if (guide) guide.hidden = !isDance;
   const rows = metricRows(evidence);
   const config = danceConfigFor(run);
   const failedLinks = document.getElementById('run-failed-sections');
