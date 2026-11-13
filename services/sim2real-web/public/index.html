@@ -966,11 +966,11 @@
                       <div class="dance-goal-fields">
                         <label>舞段名称 <input id="originman-dance-title" maxlength="80" value="左右交替摆臂"></label>
                         <label>节奏（BPM） <input id="originman-dance-bpm" type="number" min="80" max="140" step="any" value="100"></label>
-                        <label>训练步数 <input id="originman-dance-steps" type="number" min="8192" max="2000000" step="1" value="8192" aria-describedby="originman-dance-budget-help"></label>
+                        <label>训练步数 <input id="originman-dance-steps" type="number" min="8192" max="2000000" step="1" value="500000" aria-describedby="originman-dance-budget-help"></label>
                         <label>并行环境 <input id="originman-dance-num-envs" type="number" min="1" max="16" step="1" value="8"></label>
                         <label>随机种子 <input id="originman-dance-seed" type="number" min="0" max="2147483647" step="1" value="7"></label>
                       </div>
-                      <p class="small-note" id="originman-dance-budget-help">8192 步用于快检。可以用 500000 步做正式训练，动作表现以评测为准。</p>
+                      <p class="small-note" id="originman-dance-budget-help">新建配方默认 500000 步。手动改为 8192 步可做流程快检；8 个并行环境时，快检通常只上报 4 轮采样。</p>
                       <details id="originman-dance-intensity-guide">
                         <summary>各动作的幅度含义</summary>
                         <ul>

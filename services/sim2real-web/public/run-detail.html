@@ -62,7 +62,11 @@
           <p id="run-training-progress-note" role="status"></p>
           <p id="run-dance-next" hidden><a id="run-dance-next-link">准备下一阶段 →</a></p>
           <p id="run-dance-next-note" hidden>本轮已达标。此浏览器没有本轮递进草稿，可在下方用本轮参数准备下一轮。</p>
-          <svg id="reward-chart" viewBox="0 0 720 240" role="img" aria-label="本次训练真实上报的奖励曲线" hidden></svg>
+          <ul id="run-chart-legend" class="run-chart-legend" aria-label="训练曲线图例" hidden>
+            <li class="run-chart-reward">绿线 · 平均奖励（左轴）</li>
+            <li id="run-chart-rate-legend" class="run-chart-rate" hidden>蓝线 · <span id="run-chart-rate-label"></span>（右轴）</li>
+          </ul>
+          <svg id="reward-chart" viewBox="0 0 720 240" role="img" aria-label="本轮平均奖励与近期回合数据曲线" hidden></svg>
           <p id="curve-empty" class="empty-state">暂无可展示的训练曲线；不会用其他 Run 或示例曲线代替。</p>
         </section>
 

@@ -58,3 +58,9 @@ video { width: 100%; max-height: 480px; background: var(--bg-deep); border-radiu
 .workshop-embedded > .skip-link,
 .workshop-embedded .experiment-layout > aside { display: none; }
 .workshop-embedded .experiment-layout { display: block; padding: 8px 0; }
+
+.run-chart-legend { display: flex; flex-wrap: wrap; gap: 4px 20px; list-style: none; padding: 0; }
+.run-chart-reward { color: var(--green-text); }
+.run-chart-rate { color: var(--blue); }
+#reward-chart path.run-chart-reward, #reward-chart path.run-chart-rate { stroke: currentColor; stroke-width: 2; fill: none; }
+#reward-chart .run-chart-point { fill: currentColor; }

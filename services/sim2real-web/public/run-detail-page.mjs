@@ -137,45 +137,70 @@ function drawCurve(document, run) {
   const svg = document.getElementById('reward-chart');
   const empty = document.getElementById('curve-empty');
   if (!svg || !empty) return;
+  const points = (Array.isArray(run.progress) ? run.progress : []).filter((point) =>
+    Number.isFinite(point.iteration) && Number.isFinite(point.meanReward),
+  );
   svg.replaceChildren();
-  const raw = Array.isArray(run.progress) ? run.progress : [];
-  const points = raw.map((point, index) => ({
-    x: Number(point.iteration ?? point.step ?? point.trainingStep ?? index + 1),
-    y: Number(point.meanReward ?? point.reward ?? point.mean_reward),
-  })).filter((point) => Number.isFinite(point.x) && Number.isFinite(point.y));
+  svg.toggleAttribute('hidden', points.length === 0);
+  empty.hidden = points.length > 0;
+  const rateLegend = document.getElementById('run-chart-rate-legend');
+  const hasRate = points.some((point) => Number.isFinite(point.recentSuccess));
+  if (rateLegend) rateLegend.hidden = !hasRate;
+  const rateLabel = run.taskId === 'originman-dance' ? '近期回合完成率' : '近期成功率';
+  text(document, 'run-chart-rate-label', rateLabel);
+  const legend = document.getElementById('run-chart-legend');
+  if (legend) legend.hidden = points.length === 0;
   if (!points.length) {
-    svg.setAttribute('hidden', '');
-    empty.hidden = false;
-    text(document, 'curve-caption', '本次 Run 未返回曲线采样');
+    text(document, 'curve-caption', '等待本轮采样数据');
     return;
   }
-  const namespace = 'http://www.w3.org/2000/svg';
-  const xMin = Math.min(...points.map((point) => point.x));
-  const xMax = Math.max(...points.map((point) => point.x));
-  const yMin = Math.min(...points.map((point) => point.y));
-  const yMax = Math.max(...points.map((point) => point.y));
-  const xRange = xMax - xMin || 1;
-  const yRange = yMax - yMin || 1;
-  const coordinates = points.map((point) => {
-    const x = 56 + ((point.x - xMin) / xRange) * 630;
-    const y = 204 - ((point.y - yMin) / yRange) * 168;
-    return `${x},${y}`;
-  }).join(' ');
-  const axis = document.createElementNS(namespace, 'path');
-  axis.setAttribute('d', 'M56 24V204H686');
-  axis.setAttribute('class', 'reward-axis');
-  const line = document.createElementNS(namespace, 'polyline');
-  line.setAttribute('points', coordinates);
-  line.setAttribute('class', 'reward-line');
-  const label = document.createElementNS(namespace, 'text');
-  label.setAttribute('x', '60');
-  label.setAttribute('y', '18');
-  label.setAttribute('class', 'reward-label');
-  label.textContent = `${points.length} 个本次采样点 · ${yMin.toFixed(3)} 至 ${yMax.toFixed(3)}`;
-  svg.append(axis, line, label);
-  svg.removeAttribute('hidden');
-  empty.hidden = true;
-  text(document, 'curve-caption', '仅显示本次 Run 上报的数据');
+
+  const last = points.at(-1);
+  const total = Math.max(1, last.totalIterations || last.iteration, last.iteration);
+  const rewards = points.map((point) => point.meanReward);
+  const low = Math.min(0, ...rewards);
+  const high = Math.max(0, ...rewards);
+  const padding = (high - low || 1) * 0.08;
+  const min = low - padding;
+  const max = high + padding;
+  const x = (iteration) => 58 + iteration / total * 602;
+  const rateY = (rate) => 202 - Math.max(0, Math.min(1, rate)) * 174;
+  const rewardY = (reward) => rateY((reward - min) / (max - min));
+  function element(tag, attributes, content) {
+    const node = document.createElementNS('http://www.w3.org/2000/svg', tag);
+    for (const [name, value] of Object.entries(attributes)) node.setAttribute(name, String(value));
+    if (content !== undefined) node.textContent = content;
+    svg.append(node);
+  }
+  for (const fraction of [0, 0.5, 1]) {
+    const y = rateY(fraction);
+    element('path', { d: `M58 ${y}H660`, class: 'reward-axis' });
+    element('text', { x: 51, y: y + 4, 'text-anchor': 'end', class: 'reward-label' }, (min + fraction * (max - min)).toFixed(2));
+    if (hasRate)
+      element('text', { x: 668, y: y + 4, class: 'reward-label' }, `${fraction * 100}%`);
+  }
+  element('text', { x: 58, y: 226, class: 'reward-label' }, '0 轮');
+  element('text', { x: 660, y: 226, 'text-anchor': 'end', class: 'reward-label' }, `${total} 轮`);
+
+  function series(key, y, className) {
+    let penDown = false;
+    const path = [];
+    for (const point of points) {
+      if (!Number.isFinite(point[key])) {
+        penDown = false;
+        continue;
+      }
+      const cx = x(point.iteration), cy = y(point[key]);
+      path.push(`${penDown ? 'L' : 'M'}${cx} ${cy}`);
+      if (points.length <= 12)
+        element('circle', { cx, cy, r: 3, class: `${className} run-chart-point` });
+      penDown = true;
+    }
+    if (path.length) element('path', { d: path.join(' '), class: className });
+  }
+  series('meanReward', rewardY, 'run-chart-reward');
+  if (hasRate) series('recentSuccess', rateY, 'run-chart-rate');
+  text(document, 'curve-caption', `${points.length} 个实测采样点`);
 }
 
 function renderDance(document, run) {
@@ -488,7 +513,7 @@ function renderRun(document, location, run, runId) {
     ['实际训练步数', run.metrics?.trainingSteps],
     ['实际训练设备', run.metrics?.trainingDeviceName ?? run.metrics?.trainingDevice],
     ['并行环境', config.numEnvs],
-    ['计划轮数', config.maxIterations],
+    ['计划采样轮数', config.maxIterations],
     ['算力资源', run.computeResourceId],
     ['开始时间', formatDate(run.createdAt)],
     ['结束时间', formatDate(run.finishedAt)],
