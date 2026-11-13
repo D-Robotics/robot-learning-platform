@@ -2039,6 +2039,7 @@ describe('Sim2Real HTTP routes', () => {
       mock: false,
       summary: 'Browser relay fixture',
       externalRunId: 'browser-relay-1',
+      computeResourceId: 'removed-browser-agent',
       relayAgentUrl: 'http://127.0.0.1:19190/proxy',
       artifact: {
         artifactId: 'browser-relay-policy',
@@ -2078,6 +2079,12 @@ describe('Sim2Real HTTP routes', () => {
       expect(downloaded.statusCode).toBe(200);
       expect(downloaded.headers['x-artifact-sha256']).toBe(sha256);
       expect(downloaded.body).toEqual(bytes);
+      const trialDownload = await invoke(router, 'get', '/api/sim2real/runs/:id/policy.onnx', {
+        params,
+      });
+      expect(trialDownload.statusCode).toBe(200);
+      expect(trialDownload.headers['x-artifact-sha256']).toBe(sha256);
+      expect(trialDownload.body).toEqual(bytes);
       expect(workerRequests).toBe(0);
     } finally {
       globalThis.fetch = originalFetch;

@@ -59,6 +59,8 @@ const EXTRA_ROOT_FILES = new Set(['devices.json', 'device-connections.json']);
 // intentionally ephemeral and may contain files with an application-owned
 // layout, so the ledger backup must not fail just because the cache exists.
 const EPHEMERAL_ROOT_DIRECTORIES = new Set(['dsh-sessions']);
+// The SSH home contains credentials and host trust state, outside the portable backup.
+const EXCLUDED_ROOT_DIRECTORIES = new Set(['ssh-home']);
 const MANIFEST_FILE_NAME = 'backup-manifest.json';
 const DEFAULT_STALE_SECONDS = 300;
 const REQUIRED_LEDGER_ARRAYS = [
@@ -77,19 +79,71 @@ const REQUIRED_LEDGER_ARRAYS = [
 ];
 
 const AUDIT_PATH_PATTERN = /^(?:audit\.ndjson(?:\.1)?)$/;
-const ARTIFACT_DIRECTORIES = new Map([
-  ['dance-videos', { pattern: /^dance-videos\/([a-f0-9]{64})\.mp4$/, kind: 'dance-video' }],
+const DIGEST = /^[a-f0-9]{64}$/;
+const UUID = /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/;
+const SESSION_FILE = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,95}\.json$/;
+const STAGING_FILE = /(?:^|\.)([a-f0-9-]{36})\.tmp$/;
+const MAX_ARTIFACT_BYTES = 50 * 1024 * 1024;
+const MANAGED_DIRECTORIES = new Map([
+  ['dance-videos', { kind: 'dance-video', digestExtensions: ['mp4'] }],
+  ['retained-dance-videos', { kind: 'dance-video', digestExtensions: ['mp4'] }],
   [
-    'relay-artifacts',
-    { pattern: /^relay-artifacts\/([a-f0-9]{64})\.onnx$/, kind: 'relay-artifact' },
+    'resimulated-dance-videos',
+    { kind: 'dance-resimulation', digestExtensions: ['mp4', 'npz'], jsonId: UUID },
+  ],
+  ['dance-trajectories', { kind: 'dance-trajectory', digestExtensions: ['npz'] }],
+  ['relay-artifacts', { kind: 'relay-artifact', digestExtensions: ['onnx'] }],
+  ['policy-artifacts', { kind: 'policy-artifact', depth: 1, digestExtensions: ['onnx'] }],
+  ['experiment-sessions', { kind: 'experiment-session', depth: 1, file: SESSION_FILE }],
+  ['workshop-sessions', { kind: 'workshop-session', depth: 1, file: SESSION_FILE }],
+  ['training-plans', { kind: 'training-plan', jsonId: DIGEST }],
+  [
+    'state-recordings',
+    { kind: 'state-recording', depth: 2, file: /^(?:manifest\.json|\d+\.jsonl)$/ },
   ],
 ]);
-const ARTIFACT_STAGING_PATTERN = /^[a-f0-9-]{36}\.tmp$/;
 
-function artifactFile(relativePath) {
-  const descriptor = ARTIFACT_DIRECTORIES.get(relativePath.split('/')[0]);
-  const digest = descriptor?.pattern.exec(relativePath)?.[1];
-  return digest ? { digest, kind: descriptor.kind } : null;
+function managedFile(relativePath) {
+  const [directory, ...parts] = relativePath.split('/');
+  const descriptor = MANAGED_DIRECTORIES.get(directory);
+  const name = parts.pop();
+  if (
+    !descriptor ||
+    !name ||
+    parts.length !== (descriptor.depth ?? 0) ||
+    !parts.every((part) => DIGEST.test(part))
+  )
+    return null;
+  const { kind, digestExtensions, jsonId, file } = descriptor;
+  const extension = path.extname(name);
+  const stem = path.basename(name, extension);
+  if (DIGEST.test(stem) && digestExtensions?.includes(extension.slice(1)))
+    return { kind, digest: stem };
+  if (file?.test(name) || (extension === '.json' && jsonId?.test(stem))) return { kind };
+  return null;
+}
+
+async function walkManagedFiles(root, directory, depth, { source = false } = {}) {
+  const files = [];
+  for (const entry of await readdir(path.join(root, directory), { withFileTypes: true })) {
+    const relativePath = `${directory}/${entry.name}`;
+    if (entry.isSymbolicLink()) fail(`${relativePath} 不能是符号链接`, 'STORAGE_BACKUP_SYMLINK');
+    if (depth > 0 && entry.isDirectory() && DIGEST.test(entry.name)) {
+      files.push(...(await walkManagedFiles(root, relativePath, depth - 1, { source })));
+      continue;
+    }
+    const temporaryId = STAGING_FILE.exec(entry.name)?.[1];
+    if (source && entry.isFile() && temporaryId && UUID.test(temporaryId)) continue;
+    if (depth !== 0 || !entry.isFile() || !managedFile(relativePath))
+      fail(`非法备份路径 ${relativePath}`, 'STORAGE_BACKUP_SOURCE_INVALID');
+    files.push(relativePath);
+  }
+  return files;
+}
+
+function validateManagedDigest(relativePath, descriptor, bytes, digest) {
+  if (descriptor?.digest && (!bytes || bytes > MAX_ARTIFACT_BYTES || digest !== descriptor.digest))
+    fail(`${relativePath} 制品摘要或大小无效`, 'STORAGE_BACKUP_DIGEST_MISMATCH');
 }
 
 const TELEMETRY_PATH_PATTERN = /^telemetry\/[\w-]{1,128}\.jsonl$/;
@@ -213,7 +267,7 @@ async function ensureSecureAuditParent(file, label) {
 
 async function sha256(file) {
   const hash = createHash('sha256');
-  const handle = await open(file, 'r');
+  const handle = await open(file, fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW);
   try {
     const buffer = Buffer.allocUnsafe(1024 * 1024);
     for (;;) {
@@ -401,31 +455,19 @@ export async function inspectStorage(storageDir, options = {}) {
       bytes: info.size,
     });
   }
-  for (const name of ARTIFACT_DIRECTORIES.keys()) {
-    const directory = path.join(root, name);
-    let entries;
+  for (const [name, descriptor] of MANAGED_DIRECTORIES) {
     try {
-      await safeDirectory(directory, name);
-      entries = await readdir(directory, { withFileTypes: true });
+      await safeDirectory(path.join(root, name), name);
     } catch (error) {
       if (error?.code === 'STORAGE_BACKUP_SOURCE_MISSING') continue;
       throw error;
     }
-    for (const entry of entries) {
-      if (entry.isFile() && ARTIFACT_STAGING_PATTERN.test(entry.name)) continue;
-      const relativePath = `${name}/${entry.name}`;
-      const artifact = artifactFile(relativePath);
-      if (!entry.isFile() || !artifact)
-        fail(`非法制品路径 ${relativePath}`, 'STORAGE_BACKUP_SOURCE_INVALID');
-      const absolutePath = path.join(directory, entry.name);
+    for (const relativePath of await walkManagedFiles(root, name, descriptor.depth ?? 0, {
+      source: true,
+    })) {
+      const absolutePath = path.join(root, relativePath);
       const info = await regularFile(absolutePath, relativePath);
-      if (
-        !info.size ||
-        info.size > 50 * 1024 * 1024 ||
-        (await sha256(absolutePath)) !== artifact.digest
-      )
-        fail(`${relativePath} 制品摘要或大小无效`, 'STORAGE_BACKUP_DIGEST_MISMATCH');
-      files.push({ relativePath, absolutePath, kind: artifact.kind, bytes: info.size });
+      files.push({ relativePath, absolutePath, kind: descriptor.kind, bytes: info.size });
     }
   }
   for (const name of EXTRA_ROOT_FILES) {
@@ -465,11 +507,12 @@ export async function inspectStorage(storageDir, options = {}) {
     if (
       entry.name === LEDGER_FILE_NAME ||
       entry.name === TELEMETRY_DIR_NAME ||
-      ARTIFACT_DIRECTORIES.has(entry.name) ||
+      MANAGED_DIRECTORIES.has(entry.name) ||
       entry.name === WRITER_LEASE_FILE_NAME ||
       auditRootNames.has(entry.name) ||
       EXTRA_ROOT_FILES.has(entry.name) ||
-      EPHEMERAL_ROOT_DIRECTORIES.has(entry.name)
+      EPHEMERAL_ROOT_DIRECTORIES.has(entry.name) ||
+      EXCLUDED_ROOT_DIRECTORIES.has(entry.name)
     )
       continue;
     // Operator-created ledger snapshots are immutable historical inputs, not
@@ -557,6 +600,7 @@ async function copyPayload(destination, files) {
   for (const file of files) {
     const before = await stat(file.absolutePath);
     const digest = await sha256(file.absolutePath);
+    validateManagedDigest(file.relativePath, managedFile(file.relativePath), before.size, digest);
     const target = path.join(destination, file.relativePath);
     await mkdir(path.dirname(target), { recursive: true, mode: 0o700 });
     await copyFile(file.absolutePath, target);
@@ -596,7 +640,7 @@ export async function verifySnapshot(snapshotDir) {
   }
   const expected = new Map();
   for (const item of manifest.files) {
-    const artifact = typeof item?.path === 'string' ? artifactFile(item.path) : null;
+    const artifact = typeof item?.path === 'string' ? managedFile(item.path) : null;
     const validPath =
       isRecord(item) &&
       typeof item.path === 'string' &&
@@ -648,14 +692,10 @@ export async function verifySnapshot(snapshotDir) {
       }
       continue;
     }
-    if (ARTIFACT_DIRECTORIES.has(entry.name)) {
-      if (!entry.isDirectory()) fail('备份制品路径不是目录', 'STORAGE_BACKUP_SOURCE_INVALID');
-      for (const file of await readdir(path.join(root, entry.name), { withFileTypes: true })) {
-        const relativePath = `${entry.name}/${file.name}`;
-        if (!file.isFile() || !artifactFile(relativePath))
-          fail(`备份制品路径 ${relativePath} 非法`, 'STORAGE_BACKUP_SOURCE_INVALID');
-        actual.push(relativePath);
-      }
+    const managed = MANAGED_DIRECTORIES.get(entry.name);
+    if (managed) {
+      if (!entry.isDirectory()) fail('备份状态路径不是目录', 'STORAGE_BACKUP_SOURCE_INVALID');
+      actual.push(...(await walkManagedFiles(root, entry.name, managed.depth ?? 0)));
       continue;
     }
     if (!entry.isFile()) fail(`备份包含未声明条目 ${entry.name}`, 'STORAGE_BACKUP_SOURCE_INVALID');
@@ -670,9 +710,7 @@ export async function verifySnapshot(snapshotDir) {
     const info = await regularFile(file, item.path);
     if (info.size !== item.bytes || (await sha256(file)) !== item.sha256)
       fail(`${item.path} SHA-256 或大小不匹配`, 'STORAGE_BACKUP_DIGEST_MISMATCH');
-    const artifact = artifactFile(item.path);
-    if (artifact && (item.sha256 !== artifact.digest || !info.size || info.size > 50 * 1024 * 1024))
-      fail(`${item.path} 制品摘要或大小无效`, 'STORAGE_BACKUP_DIGEST_MISMATCH');
+    validateManagedDigest(item.path, managedFile(item.path), info.size, item.sha256);
     if (TELEMETRY_PATH_PATTERN.test(item.path))
       telemetryRows += await validateTelemetry(file, item.path);
     if (AUDIT_PATH_PATTERN.test(item.path)) auditRows += await validateAudit(file, item.path);

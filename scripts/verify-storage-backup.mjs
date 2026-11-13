@@ -65,10 +65,46 @@ try {
   const policyPath = path.join('relay-artifacts', `${policyDigest}.onnx`);
   await mkdir(path.join(storage, 'relay-artifacts'), { mode: 0o700 });
   await writeFile(path.join(storage, policyPath), policy, { mode: 0o600 });
+  const owner = 'a'.repeat(64);
+  const directPolicyPath = path.join('policy-artifacts', owner, `${policyDigest}.onnx`);
+  const experimentPath = path.join('experiment-sessions', owner, 'run.1.json');
+  const recordingPath = path.join('state-recordings', owner, 'b'.repeat(64), '0.jsonl');
+  const experiment = '{"schemaVersion":1,"events":[]}';
+  for (const [name, bytes] of [
+    [directPolicyPath, policy],
+    [experimentPath, experiment],
+    [recordingPath, '{"type":"snapshot"}\n'],
+    ['ssh-home/.ssh/id_fixture', 'private credential fixture'],
+  ]) {
+    const destination = path.join(storage, name);
+    await mkdir(path.dirname(destination), { recursive: true, mode: 0o700 });
+    await writeFile(destination, bytes, { mode: 0o600 });
+  }
+  const malicious = path.join(storage, 'experiment-sessions', owner, 'linked.json');
+  await symlink(path.join(storage, 'sim2real.json'), malicious);
+  await assert.rejects(
+    () => createBackup({ storageDir: storage, output: snapshot }),
+    (error) => error?.code === 'STORAGE_BACKUP_SYMLINK',
+  );
+  await rm(malicious);
   const first = await createBackup({ storageDir: storage, output: snapshot });
   assert.equal(first.manifest.consistency, 'quiesced');
   const verified = await verifySnapshot(snapshot);
-  assert.equal(verified.files, 6);
+  assert.equal(verified.files, 9);
+  assert.ok(
+    verified.manifest.files.some(
+      (file) => file.path === experimentPath && file.kind === 'experiment-session',
+    ),
+  );
+  assert.ok(
+    verified.manifest.files.some(
+      (file) =>
+        file.path === directPolicyPath &&
+        file.sha256 === policyDigest &&
+        file.kind === 'policy-artifact',
+    ),
+  );
+  assert.ok(!verified.manifest.files.some((file) => file.path.startsWith('ssh-home/')));
   assert.ok(
     verified.manifest.files.some((file) => file.path === videoPath && file.sha256 === digest),
   );
@@ -106,6 +142,9 @@ try {
   assert.equal(result.restoredTo, restored);
   assert.deepEqual(await readFile(path.join(restored, videoPath)), video);
   assert.deepEqual(await readFile(path.join(restored, policyPath)), policy);
+  assert.deepEqual(await readFile(path.join(restored, directPolicyPath)), policy);
+  assert.equal(await readFile(path.join(restored, experimentPath), 'utf8'), experiment);
+  assert.equal(await readFile(path.join(restored, recordingPath), 'utf8'), '{"type":"snapshot"}\n');
   assert.equal(JSON.parse(await readFile(path.join(restored, 'sim2real.json'), 'utf8')).version, 1);
   const restoredLedger = JSON.parse(await readFile(path.join(restored, 'sim2real.json'), 'utf8'));
   assert.equal(restoredLedger.artifacts[0].id, 'artifact-1');
@@ -240,7 +279,7 @@ try {
     (error) => error?.code === 'STORAGE_BACKUP_DIGEST_MISMATCH',
   );
   console.log(
-    '[storage-backup] PASS — ledger artifacts/evaluations, telemetry, dance videos, relayed ONNX, audit rotation, active-writer gate, atomic external-audit rollback, missing-audit fail-closed, restore and digest tamper check verified',
+    '[storage-backup] PASS — ledger artifacts/evaluations, telemetry, dance videos, experiment sessions, direct and relayed ONNX, audit rotation, active-writer gate, atomic external-audit rollback, missing-audit fail-closed, restore and digest tamper check verified',
   );
 } finally {
   await rm(root, { recursive: true, force: true });

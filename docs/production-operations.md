@@ -132,6 +132,8 @@ node scripts/probe-sim2real.mjs \
 
 OriginMan 舞蹈回放通过 Run 摘要校验后保存在 `dance-videos/<sha256>.mp4`，随台账一起备份和恢复。已有 Run 第一次成功读取回放时也会补存。没有副本的历史 Run 需要原训练 Worker 或与 Run 摘要一致的原视频文件。
 
+快照还包括 `experiment-sessions`、`workshop-sessions`、训练方案、状态录制和平台留存的 ONNX。服务端 Worker 制品位于 `policy-artifacts/<owner-sha256>/<sha256>.onnx`，浏览器中继制品位于 `relay-artifacts/<sha256>.onnx`。两种 ONNX 都会校验文件名中的 SHA-256 与实际字节。SSH 主目录和 DSH 会话缓存不进入快照。
+
 文件型台账由 `sim2real.json` 和 `telemetry/*.jsonl` 组成；`sim2real.json` 的 `artifacts`、`evaluations` 数组与 ledger 一起按字节校验。审计中间件另写 `audit.ndjson`（轮转段为 `audit.ndjson.1`），这两段也会被纳入快照。备份工具会校验 ledger 结构、逐行校验遥测和审计 JSON、写入 SHA-256 manifest，并且不复制 `writer-lease.json`（租约是进程状态，恢复旧租约会错误阻塞新实例）。默认发现活跃 writer 后停止，避免得到半份证据：
 
 ```bash

@@ -4034,12 +4034,39 @@ export function createSim2RealRouter(
         });
         return;
       }
-      const runner = await resolveRunRunner(run.computeResourceId, owner);
-      const artifact = await fetchLocalRunArtifact({
-        accountId: workerAccount,
-        externalRunId: run.externalRunId,
-        ...(runner ? { runnerUrl: runner.runnerUrl, runnerToken: runner.runnerToken } : {}),
-      });
+      let artifact;
+      if (run.relayAgentUrl) {
+        const sha256 = run.artifact?.sha256;
+        const bytes = sha256 ? await readSim2RealRelayArtifact(sha256) : null;
+        if (!bytes || !sha256) {
+          sendApiError(
+            response,
+            409,
+            'SIM2REAL_RELAY_ARTIFACT_PENDING',
+            '平台尚未收到可校验的策略文件。请在提交训练的浏览器中检查制品回传。',
+            { retryable: true },
+          );
+          return;
+        }
+        artifact = { bytes, sha256 };
+      } else {
+        const runner = await resolveRunRunner(run.computeResourceId, owner);
+        if (run.computeResourceId && !runner) {
+          sendApiError(
+            response,
+            409,
+            'SIM2REAL_POLICY_TRIAL_RESOURCE_UNAVAILABLE',
+            '原训练资源已删除或不可访问，无法读取策略。',
+            { retryable: false },
+          );
+          return;
+        }
+        artifact = await fetchLocalRunArtifact({
+          accountId: workerAccount,
+          externalRunId: run.externalRunId,
+          ...(runner ? { runnerUrl: runner.runnerUrl, runnerToken: runner.runnerToken } : {}),
+        });
+      }
       if (!artifact) {
         sendApiError(
           response,
