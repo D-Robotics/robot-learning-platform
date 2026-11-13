@@ -1,0 +1,38 @@
+.dance-results {
+  max-width: 1050px;
+  margin: auto;
+  padding: 24px clamp(16px, 4vw, 40px);
+}
+
+.dance-results section {
+  margin-block: 24px;
+  min-width: 0;
+}
+
+.dance-results .comparison-scroll {
+  overflow-x: auto;
+}
+
+.dance-results table {
+  width: 100%;
+}
+
+.dance-results th,
+.dance-results td {
+  text-align: left;
+  vertical-align: top;
+  border-bottom: 1px solid var(--line);
+  padding: 8px;
+}
+
+.dance-results-replays {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 320px), 1fr));
+  gap: 16px;
+}
+
+.dance-results video {
+  display: block;
+  width: 100%;
+  margin-block: 8px;
+}

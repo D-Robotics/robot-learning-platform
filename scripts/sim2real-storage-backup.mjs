@@ -58,7 +58,7 @@ const EXTRA_ROOT_FILES = new Set(['devices.json', 'device-connections.json']);
 // DSH keeps resumable conversation fragments in this cache directory. It is
 // intentionally ephemeral and may contain files with an application-owned
 // layout, so the ledger backup must not fail just because the cache exists.
-const EPHEMERAL_ROOT_DIRECTORIES = new Set(['dsh-sessions']);
+const EPHEMERAL_ROOT_DIRECTORIES = new Set(['dsh-sessions', 'dance-evaluation-staging']);
 // The SSH home contains credentials and host trust state, outside the portable backup.
 const EXCLUDED_ROOT_DIRECTORIES = new Set(['ssh-home']);
 const MANIFEST_FILE_NAME = 'backup-manifest.json';
@@ -90,6 +90,15 @@ const MANAGED_DIRECTORIES = new Map([
   [
     'resimulated-dance-videos',
     { kind: 'dance-resimulation', digestExtensions: ['mp4', 'npz'], jsonId: UUID },
+  ],
+  [
+    'dance-evaluations',
+    {
+      kind: 'dance-evaluation',
+      depth: 1,
+      file: /^report\.json$/,
+      digestExtensions: ['mp4', 'npz'],
+    },
   ],
   ['dance-trajectories', { kind: 'dance-trajectory', digestExtensions: ['npz'] }],
   ['relay-artifacts', { kind: 'relay-artifact', digestExtensions: ['onnx'] }],

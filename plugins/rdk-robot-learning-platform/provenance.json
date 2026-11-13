@@ -17,12 +17,12 @@
     "scripts/robot-onboarding.mjs": "c8ac06adf47bed664194b513332226249c5c6a33d7646f94dff7af994c2c6421",
     "scripts/qoder-install.mjs": "76a8bc2e2383f31d81e32ff6e8c5ca0316d9baa14e02778bed551d2768d8ef07",
     "scripts/experience.mjs": "40a2a503e20845f4df670572cdb63a3278a79a83080e6ef244e401250ae51184",
-    "scripts/experience-mcp.mjs": "322c4259af5ba75a399b2fe5076ddc617a7aff0e94feb4cfb5d6efa280812ef4",
+    "scripts/experience-mcp.mjs": "a0783483e566c65a4ac647ce1c64c1f99c355ce7742b5b6f7f91f9da11d0af02",
     "scripts/workflow-inspection.mjs": "5dc21d5d4cb934144854b287acfea97d60bfda2c1c0013bf6eb35f3239cbab96",
     "scripts/experiment-context.mjs": "84abd0ff781f66f6b0907d43dd71d16f6ccc98ca7b1c9d407d451b927995357e",
     "scripts/short-training.mjs": "0b7d41d3e9260e47e823cf51da5a54ee1b029d62736eadb70c33b8ddfaf29f81",
     "scripts/plugin-auth.mjs": "85f82a796cd443c691634052af27d230f0e46bff650f5c3861a82751e8b8ccd5",
-    "scripts/authenticated-core.mjs": "64c2729ee98d3a6b2a4914f02840c7aa97051486979200fcb617dc662baf2ab7",
+    "scripts/authenticated-core.mjs": "5741dcee8f3091512dbe90403690b1dbecb4c717daaa45a65a755c6fddd5b8c1",
     "scripts/plugin-errors.mjs": "e9838bb69684dece6ecbdedbf4acc7354695c998f26a9e8291886c26cc8e06f0",
     "scripts/course-setup.mjs": "5b3606ed3d38c930213260a0103a3fd76db680af435fb96f735f3bee32014fb9",
     "scripts/originman-dance-config.mjs": "de53eeb16314374152b8bd7bcc2fd3c64de7b448b32c109b0ae86d3a46e834b7",
@@ -40,7 +40,8 @@
     "setup-qoder-windows.cmd": "d4046e68bd62a40bf919c4755411fd294a483758f8ddcf493073863b4a3f834b",
     "runtime-downloads.json": "73ac7276ca81776aa1680cfdb94a817c4c33ecb3e41c024aeaf27663e281f999",
     "ui/experiment.html": "6863be7b8c1ccfced0ab8b707627fadb9e2f3307ffad41835f5d9c82c97e7924",
-    "ui/licenses.json": "a599a96d9a7c8019ff6aa53694023adf50221e4d878542e3437799cdaac3cdd5"
+    "ui/licenses.json": "a599a96d9a7c8019ff6aa53694023adf50221e4d878542e3437799cdaac3cdd5",
+    "scripts/dance-evaluation.mjs": "f7d65715c3b1d3e0f8e1b733793833a59b0381c3a20385451cdde5aa7e521b0e"
   },
   "uiBuild": {
     "bundler": "esbuild",

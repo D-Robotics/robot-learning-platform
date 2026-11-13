@@ -1,3 +1,4 @@
+import { registerSim2RealDanceEvaluationRoutes } from './sim2real-dance-evaluation-routes.js';
 import { registerSim2RealTrainingPlanRoutes } from './sim2real-training-plan-routes.js';
 import { Router, type Request, type Response } from 'express';
 import { readFileSync } from 'node:fs';
@@ -2311,6 +2312,31 @@ export function createSim2RealRouter(
       runnerToken: selectedResource.runnerToken ?? '',
     };
   };
+
+  registerSim2RealDanceEvaluationRoutes(router, {
+    prefix,
+    requestOwner: (request, response) => requestOwner(request, response, auth),
+    getRun: getSim2RealRun,
+    fetchArtifact: async (run, owner) => {
+      const sha = run.artifact?.sha256;
+      if (!sha || run.backend !== 'local' || !run.externalRunId) return null;
+      if (run.relayAgentUrl) {
+        const bytes = await readSim2RealRelayArtifact(sha);
+        return bytes ? { bytes } : null;
+      }
+      const runner = await resolveRunRunner(run.computeResourceId, owner);
+      if (run.computeResourceId && !runner) return null;
+      const accountId = owner ?? (auth.isMultiUserDeployment() ? '' : 'local-dev');
+      return accountId
+        ? fetchLocalRunArtifact({
+            accountId,
+            externalRunId: run.externalRunId,
+            ...runner,
+            timeoutMs: 10_000,
+          })
+        : null;
+    },
+  });
 
   // Auto-attach the engine's own evaluation telemetry when a run first
   // reaches a terminal state through this router's status paths. Idempotent

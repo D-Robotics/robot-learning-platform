@@ -21,6 +21,12 @@ assert.match(experimentPage, /<summary>技术详情<\/summary>/);
 assert.match(experimentPage, /src="\.\/experiment-page.mjs"/);
 assert.doesNotMatch(experimentPage, /\son\w+\s*=|javascript:/i);
 
+const danceResultsPage = fs.readFileSync(path.join(here, 'public', 'dance-results.html'), 'utf8');
+assert.match(danceResultsPage, /id="dance-results-sections"/);
+assert.match(danceResultsPage, /id="dance-results-replays"/);
+assert.match(danceResultsPage, /src="\.\/dance-results.mjs"/);
+assert.doesNotMatch(danceResultsPage, /\son\w+\s*=|javascript:/i);
+
 import {
   assertStyleInvariants,
   assertMarkupInvariants,

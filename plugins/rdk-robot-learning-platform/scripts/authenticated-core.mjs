@@ -262,6 +262,26 @@ export async function connectAuthenticatedCore({
         throw Error('当前账号无法读取这条 Run，请核对原运行链接。');
       return value.run;
     },
+    async evaluateDanceRun(runId, { signal } = {}) {
+      if (typeof runId !== 'string' || !/^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,119}$/.test(runId))
+        throw Error('原舞蹈训练标识无效。');
+      const response = await fetchPlatform(
+        '/api/v1/duck/runs/' + encodeURIComponent(runId) + '/dance-evaluation',
+        {
+          method: 'POST',
+          headers: { accept: 'application/json' },
+          signal,
+        },
+      );
+      const value = await response.json().catch(() => null);
+      if (!response.ok || value?.ok !== true)
+        throw new PluginRequestError(
+          'DANCE_EVALUATION_UNAVAILABLE',
+          value?.message || '平台暂时无法生成独立舞蹈评测。',
+          { httpStatus: response.status },
+        );
+      return value.evaluation;
+    },
     async verifyLegacyDanceVideo(runId, receipt, { signal } = {}) {
       if (
         typeof runId !== 'string' ||

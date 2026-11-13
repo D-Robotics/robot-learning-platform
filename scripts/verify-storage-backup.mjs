@@ -67,11 +67,16 @@ try {
   await writeFile(path.join(storage, policyPath), policy, { mode: 0o600 });
   const owner = 'a'.repeat(64);
   const directPolicyPath = path.join('policy-artifacts', owner, `${policyDigest}.onnx`);
+  const danceEvaluationDirectory = path.join('dance-evaluations', 'c'.repeat(64));
+  const danceEvaluationReport = path.join(danceEvaluationDirectory, 'report.json');
+  const danceEvaluationVideo = path.join(danceEvaluationDirectory, `${digest}.mp4`);
   const experimentPath = path.join('experiment-sessions', owner, 'run.1.json');
   const recordingPath = path.join('state-recordings', owner, 'b'.repeat(64), '0.jsonl');
   const experiment = '{"schemaVersion":1,"events":[]}';
   for (const [name, bytes] of [
     [directPolicyPath, policy],
+    [danceEvaluationReport, '{"source":{"runId":"run-1"}}'],
+    [danceEvaluationVideo, video],
     [experimentPath, experiment],
     [recordingPath, '{"type":"snapshot"}\n'],
     ['ssh-home/.ssh/id_fixture', 'private credential fixture'],
@@ -90,7 +95,7 @@ try {
   const first = await createBackup({ storageDir: storage, output: snapshot });
   assert.equal(first.manifest.consistency, 'quiesced');
   const verified = await verifySnapshot(snapshot);
-  assert.equal(verified.files, 9);
+  assert.equal(verified.files, 11);
   assert.ok(
     verified.manifest.files.some(
       (file) => file.path === experimentPath && file.kind === 'experiment-session',
@@ -141,6 +146,11 @@ try {
   const result = await restoreBackup({ snapshotDir: snapshot, storageDir: restored, yes: true });
   assert.equal(result.restoredTo, restored);
   assert.deepEqual(await readFile(path.join(restored, videoPath)), video);
+  assert.deepEqual(await readFile(path.join(restored, danceEvaluationVideo)), video);
+  assert.equal(
+    JSON.parse(await readFile(path.join(restored, danceEvaluationReport), 'utf8')).source.runId,
+    'run-1',
+  );
   assert.deepEqual(await readFile(path.join(restored, policyPath)), policy);
   assert.deepEqual(await readFile(path.join(restored, directPolicyPath)), policy);
   assert.equal(await readFile(path.join(restored, experimentPath), 'utf8'), experiment);

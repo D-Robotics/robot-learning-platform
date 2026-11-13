@@ -55,6 +55,7 @@ const sources = {};
 for (const name of [
   'workshop-course.mjs',
   'dance-training.mjs',
+  'dance-evaluation.mjs',
   'originman-dance-config.mjs',
   'workshop-entry.mjs',
   'development-targets.mjs',

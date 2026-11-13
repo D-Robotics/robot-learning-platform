@@ -48,6 +48,7 @@ import { ROBOT_ONBOARDING_TOOLS, onboardingGuide, assessOnboarding } from './rob
 import { CLASSROOM_TOOLS, classroomGuide } from './classroom-guide.mjs';
 import { WORKSHOP_TOOLS, workshopEntry } from './workshop-entry.mjs';
 import { DEVELOPMENT_TARGET_TOOL, developmentTargets } from './development-targets.mjs';
+import { DANCE_EVALUATION_TOOLS, danceEvaluation } from './dance-evaluation.mjs';
 import { DANCE_TRAINING_TOOLS, trainOriginmanDance } from './dance-training.mjs';
 
 /** Learner text uses the same verified facts; full diagnostics remain structured. */
@@ -275,6 +276,7 @@ const loadedSources = Object.fromEntries(
     'workshop-course.mjs',
     'originman-dance-config.mjs',
     'dance-training.mjs',
+    'dance-evaluation.mjs',
     'workshop-entry.mjs',
     'development-targets.mjs',
     'playback-plan.mjs',
@@ -328,6 +330,7 @@ export const EXPERIENCE_TOOLS = [
   LEARNING_GUIDE_TOOL,
   ORIGINMAN_DANCE_DRAFT_TOOL,
   ...DANCE_TRAINING_TOOLS,
+  ...DANCE_EVALUATION_TOOLS,
   ...WORKSHOP_TOOLS,
   DEVELOPMENT_TARGET_TOOL,
   ...CLASSROOM_TOOLS,
@@ -617,6 +620,7 @@ export function experienceProxy(
           '\n任务意图优先：当前对话已明确OriginMan强化学习跳舞时，“带我开始/重新开始Workshop”沿 danceTraining 流程取得新 contextId并继续已确认编舞；不得展示旧实验结果或调用rdk_workshop、rdk_originman_train等受扰恢复链路。舞蹈继续/看看效果只查询原Run。提交、等待和状态查询回执的qoderNavigation/visualization必须打开并聚焦到本轮Run；宿主不支持导航时给可点击链接。' +
           '\n简短咨询预算用途、计数单位或流程/效果/回放完成标准：优先rdk_originman_course_brief，逐字展示studentReply两句即结束，不加载整份指南和历史证据。实际成绩另读原评测；明确问依据才按需读引用。不编造计数倍率。' +
           '\n交互约定：默认简短中文，按“当前进度→本次结果→下一步”回答。认证、版本、契约和资源校验在后台完成，正常时不逐项播报。只在阶段变化、阻断或需要用户选择时更新；不重复播报running，不展示内部推理。UUID、工具名、摘要和错误码仅在用户查看诊断时展开。正常结果优先给曲线、对比图和回放入口；宿主能打开工作台则在工作台展示，否则给可点击链接。没有实际渲染能力不伪装交互卡片，没有播放器观测不称已播放。' +
+          '\n舞蹈专项：用户明确要求用已训练策略重新评测时调用 rdk_originman_dance_evaluate。对比两条训练记录时调用 rdk_originman_dance_compare。两种工具返回后立即按 studioNavigation 打开主站对应页面。' +
           '\n高级独立训练才使用预算选择与原子训练工具：按用户已选预算执行，不重复问。已选择恢复课程后用rdk_workshop打开按钮工作台，在页面选择预算并自动接续；只咨询或先不要开始时不提交。高级手动提交仍核对当前账号、完整manifest、同源父Run与权重，失败不改标识重交。' +
           '\n等待：沿用同一Run及nextPollArguments，正常等待窗口结束继续读；不启动shell sleep。失败或stopWorkflow=true停止所有自动提交，不换标识、资源或参数重交；仍可只读查询原Run、日志及恢复已有引用。SUBMISSION_REFERENCE_SAVE_FAILED表示任务已经提交，保留回执并恢复，绝不能说尚未提交。' +
           '\n实验接续：通用流程提交后用明确contextId保存训练及同源评测引用；专用短训工具已保存，无需重复。跨聊天或软件继续时使用明确实验标识调用experiment_resume，并重新验证当前平台和账号；不选择全局最新Run，不扫描其他账号。本机引用不等于跨机器同步。404、网络失败和断线不触发重交。新实验使用新contextId，调参须用户明确提出。' +
@@ -758,6 +762,12 @@ export function experienceProxy(
               ? `当前实际运行插件 ${runtime.version}，加载源码核对一致。此项未验证平台连接或实机效果。`
               : '当前进程与分发记录未核对通过，请刷新插件连接后再检查；暂不执行训练或实体操作。',
           };
+        } else if (DANCE_EVALUATION_TOOLS.some((tool) => tool.name === params.name)) {
+          payload = await danceEvaluation(params.name, params.arguments ?? {}, {
+            upstream,
+            baseUrl,
+            signal,
+          });
         } else if (params.name === DEVELOPMENT_TARGET_TOOL.name) {
           payload = await developmentTargets(params.arguments ?? {}, {
             authentication,

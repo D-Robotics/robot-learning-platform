@@ -520,6 +520,47 @@ paths:
         "409": { description: The original compute resource is no longer available. }
         "416": { description: Requested byte range is unsatisfiable. }
         "502": { description: The worker cannot return the recorded video bytes. }
+  /api/v1/duck/runs/{runId}/dance-evaluation:
+    parameters:
+      - $ref: "#/components/parameters/RunId"
+    get:
+      tags: [runs]
+      summary: Read the independent dance evaluation for the selected Run and gate version
+      operationId: getIndependentDanceEvaluation
+      responses:
+        "200": { description: Evaluation with source policy and scene digests and per-tempo results. }
+        "401": { $ref: "#/components/responses/AuthRequired" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { description: The source Run does not qualify for an independent evaluation. }
+    post:
+      tags: [runs]
+      summary: Simulate an existing OriginMan dance policy with its original choreography
+      description: Uses verified ONNX bytes and scene. Concurrent requests share work and subsequent requests return the stored evaluation for the same source and gate.
+      operationId: createIndependentDanceEvaluation
+      responses:
+        "200": { description: The newly completed or previously stored independent evaluation. }
+        "401": { $ref: "#/components/responses/AuthRequired" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { description: Source or digest-verified policy unavailable. }
+        "429": { description: The independent evaluation slots are occupied. }
+        "502": { description: Simulation or replay rendering failed. }
+        "503": { description: Independent evaluation is not configured on this deployment. }
+  /api/v1/duck/runs/{runId}/dance-evaluation/replay:
+    parameters:
+      - $ref: "#/components/parameters/RunId"
+    get:
+      tags: [runs]
+      summary: Play the verified MP4 produced by the independent dance evaluation
+      operationId: getIndependentDanceEvaluationReplay
+      responses:
+        "200":
+          description: MP4 with a digest matching the independent evaluation.
+          content: { video/mp4: { schema: { type: string, format: binary } } }
+        "206": { description: Requested byte range of the verified MP4. }
+        "401": { $ref: "#/components/responses/AuthRequired" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { description: The source Run does not qualify for an independent evaluation. }
+        "416": { description: Requested byte range is unsatisfiable. }
   /api/v1/duck/runs/{runId}/reconcile:
     post:
       tags: [runs]
