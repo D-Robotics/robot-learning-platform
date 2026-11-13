@@ -145,6 +145,7 @@ window.TrainingPlans = (() => {
         const count = progressive ? Math.min(prefixLength, full.sections.length) : full.sections.length;
         return { progressive, full, count, dance: { ...full, sections: full.sections.slice(0, count) } };
       },
+      useFullRecipe() { mode.value = 'full'; refresh(); onChange(); },
       restoreProgress(run, saved, advance) {
         const prior = run.training.originmanDance;
         if (!Array.isArray(saved?.full?.sections) || !Number.isInteger(saved.count) || saved.count !== prior.sections.length ||
@@ -411,13 +412,17 @@ window.TrainingPlans = (() => {
           }, { fromRun: true });
           if (params.get('danceNext') === '1') {
             let saved;
-            try { saved = JSON.parse(sessionStorage.getItem('rdk-dance-stage:' + run.id)); } catch { /* Missing or unreadable draft. */ }
+            try { saved = JSON.parse(sessionStorage.getItem('rdk-dance-stage:' + run.id) ??
+              localStorage.getItem('rdk-dance-stage:' + run.id)); } catch { /* Missing or unreadable draft. */ }
             if (danceEditor.restoreProgress(run, saved, true)) {
               setStatus('已按本轮结果准备递进编排。请核对本轮舞段，再确认提交。');
               return;
             }
           }
-          setStatus('已复制本轮参数。可修改并保存为新方案，再到「Run 与进度」提交。');
+          danceEditor.useFullRecipe();
+          setStatus(params.get('danceNext') === '1'
+            ? '此浏览器未找到匹配的递进草稿。已复制原 Run 的全部舞段，请核对后再提交。'
+            : '已复制本轮全部舞段。可修改并保存为新方案，再到「Run 与进度」提交。');
         });
       } else if (byId('train-module-config').open) {
         void list().catch((error) => setStatus(errorMessage(error)));

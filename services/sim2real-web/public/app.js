@@ -8159,9 +8159,10 @@ async function submitOriginmanDance() {
     if (!payload.run?.id) throw Error('未收到 Run 回执。可用同一配置重查提交结果。');
     originmanRunState.attempt = null;
     if (stage.progressive && stage.count < stage.full.sections.length) {
-      try {
-        sessionStorage.setItem('rdk-dance-stage:' + payload.run.id, JSON.stringify({ full: stage.full, count: stage.count }));
-      } catch { /* Storage can be unavailable in a restricted browser. */ }
+      const key = 'rdk-dance-stage:' + payload.run.id;
+      const draft = JSON.stringify({ full: stage.full, count: stage.count });
+      try { sessionStorage.setItem(key, draft); } catch { /* Restricted browser storage. */ }
+      try { localStorage.setItem(key, draft); } catch { /* Restricted browser storage. */ }
     }
     const detail = new URL('./run-detail.html', location.href);
     detail.searchParams.set('runId', payload.run.id);

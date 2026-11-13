@@ -116,10 +116,15 @@ function renderTrainingProgress(document, location, run) {
   const link = document.getElementById('run-dance-next-link');
   if (!row || !link) return;
   let draft;
-  try { draft = JSON.parse(document.defaultView.sessionStorage.getItem('rdk-dance-stage:' + run.id)); } catch { /* Missing or unreadable draft. */ }
+  try { draft = JSON.parse(document.defaultView.sessionStorage.getItem('rdk-dance-stage:' + run.id) ??
+    document.defaultView.localStorage.getItem('rdk-dance-stage:' + run.id)); } catch { /* Missing or unreadable draft. */ }
   row.hidden = !isDance || run.status !== 'completed' ||
     danceEvidenceFor(run)?.qualityGatePassed !== true || !Number.isInteger(draft?.count) || !Array.isArray(draft.full?.sections) ||
     draft.count >= draft.full.sections.length;
+  const notice = document.getElementById('run-dance-next-note');
+  if (notice) {
+    notice.hidden = !isDance || run.status !== 'completed' || danceEvidenceFor(run)?.qualityGatePassed !== true || !row.hidden || !!draft;
+  }
   if (!row.hidden) {
     const url = new URL('./?robot=originman#train/configure', location.href);
     url.searchParams.set('fromRun', run.id);
