@@ -331,6 +331,7 @@ async function boot(options: BootOptions = {}) {
   };
   window.cancelAnimationFrame = () => undefined;
   window.eval(telemetrySource);
+  window.eval(await readFile(path.join(root, 'run-progress-chart.js'), 'utf8'));
   window.eval(appSource);
 
   for (let attempt = 0; attempt < 50; attempt += 1) {

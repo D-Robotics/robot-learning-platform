@@ -9,6 +9,7 @@ const digest = (char) => char.repeat(64);
 
 function fixture(url = 'https://platform.test/robotics-learning/run-detail.html?runId=run_42') {
   const dom = new JSDOM(markup, { url });
+  dom.window.HTMLCanvasElement.prototype.getContext = () => null;
   dom.window.HTMLMediaElement.prototype.pause = () => {};
   dom.window.HTMLMediaElement.prototype.load = () => {};
   return {

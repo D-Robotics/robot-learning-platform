@@ -1,3 +1,5 @@
+import './run-progress-chart.js';
+
 const RUN_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,119}$/;
 const SHA256_PATTERN = /^[a-f0-9]{64}$/;
 const STATUS_LABELS = Object.freeze({
@@ -134,73 +136,20 @@ function renderTrainingProgress(document, location, run) {
 }
 
 function drawCurve(document, run) {
-  const svg = document.getElementById('reward-chart');
+  const canvas = document.getElementById('reward-chart');
   const empty = document.getElementById('curve-empty');
-  if (!svg || !empty) return;
-  const points = (Array.isArray(run.progress) ? run.progress : []).filter((point) =>
-    Number.isFinite(point.iteration) && Number.isFinite(point.meanReward),
-  );
-  svg.replaceChildren();
-  svg.toggleAttribute('hidden', points.length === 0);
-  empty.hidden = points.length > 0;
-  const rateLegend = document.getElementById('run-chart-rate-legend');
-  const hasRate = points.some((point) => Number.isFinite(point.recentSuccess));
-  if (rateLegend) rateLegend.hidden = !hasRate;
+  if (!canvas || !empty) return;
+  const points = globalThis.RunProgressChart.points(run);
+  const hasRate = points.some((point) => point.recentSuccess != null && Number.isFinite(Number(point.recentSuccess)));
+  canvas.hidden = !points.length;
+  empty.hidden = Boolean(points.length);
+  document.getElementById('run-chart-legend').hidden = !points.length;
+  document.getElementById('run-chart-rate-legend').hidden = !hasRate;
   const rateLabel = run.taskId === 'originman-dance' ? '近期回合完成率' : '近期成功率';
   text(document, 'run-chart-rate-label', rateLabel);
-  const legend = document.getElementById('run-chart-legend');
-  if (legend) legend.hidden = points.length === 0;
-  if (!points.length) {
-    text(document, 'curve-caption', '等待本轮采样数据');
-    return;
-  }
-
-  const last = points.at(-1);
-  const total = Math.max(1, last.totalIterations || last.iteration, last.iteration);
-  const rewards = points.map((point) => point.meanReward);
-  const low = Math.min(0, ...rewards);
-  const high = Math.max(0, ...rewards);
-  const padding = (high - low || 1) * 0.08;
-  const min = low - padding;
-  const max = high + padding;
-  const x = (iteration) => 58 + iteration / total * 602;
-  const rateY = (rate) => 202 - Math.max(0, Math.min(1, rate)) * 174;
-  const rewardY = (reward) => rateY((reward - min) / (max - min));
-  function element(tag, attributes, content) {
-    const node = document.createElementNS('http://www.w3.org/2000/svg', tag);
-    for (const [name, value] of Object.entries(attributes)) node.setAttribute(name, String(value));
-    if (content !== undefined) node.textContent = content;
-    svg.append(node);
-  }
-  for (const fraction of [0, 0.5, 1]) {
-    const y = rateY(fraction);
-    element('path', { d: `M58 ${y}H660`, class: 'reward-axis' });
-    element('text', { x: 51, y: y + 4, 'text-anchor': 'end', class: 'reward-label' }, (min + fraction * (max - min)).toFixed(2));
-    if (hasRate)
-      element('text', { x: 668, y: y + 4, class: 'reward-label' }, `${fraction * 100}%`);
-  }
-  element('text', { x: 58, y: 226, class: 'reward-label' }, '0 轮');
-  element('text', { x: 660, y: 226, 'text-anchor': 'end', class: 'reward-label' }, `${total} 轮`);
-
-  function series(key, y, className) {
-    let penDown = false;
-    const path = [];
-    for (const point of points) {
-      if (!Number.isFinite(point[key])) {
-        penDown = false;
-        continue;
-      }
-      const cx = x(point.iteration), cy = y(point[key]);
-      path.push(`${penDown ? 'L' : 'M'}${cx} ${cy}`);
-      if (points.length <= 12)
-        element('circle', { cx, cy, r: 3, class: `${className} run-chart-point` });
-      penDown = true;
-    }
-    if (path.length) element('path', { d: path.join(' '), class: className });
-  }
-  series('meanReward', rewardY, 'run-chart-reward');
-  if (hasRate) series('recentSuccess', rateY, 'run-chart-rate');
-  text(document, 'curve-caption', `${points.length} 个实测采样点`);
+  canvas.setAttribute('aria-label', hasRate ? `平均奖励与${rateLabel}曲线` : '平均奖励曲线');
+  text(document, 'curve-caption', points.length ? `${points.length} 个实测采样点` : '等待本轮采样数据');
+  if (points.length) globalThis.RunProgressChart.draw(canvas, points);
 }
 
 function renderDance(document, run) {
