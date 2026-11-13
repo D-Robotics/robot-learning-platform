@@ -504,6 +504,7 @@ export async function startRunDetail({
 } = {}) {
   const runId = new URLSearchParams(location?.search ?? '').get('runId') ?? '';
   const error = document?.getElementById('run-error');
+  const login = document?.getElementById('run-login');
   let timer = null;
   let disposed = false;
   let loaded = false;
@@ -538,6 +539,7 @@ export async function startRunDetail({
     if (disposed) return;
     if (!quiet) {
       if (error) error.hidden = true;
+      if (login) login.hidden = true;
       text(document, 'run-connection-status', '正在读取本次运行');
     }
     try {
@@ -549,7 +551,16 @@ export async function startRunDetail({
       });
       const payload = await response.json().catch(() => null);
       if (!response.ok) {
-        if (response.status === 401) throw new Error('当前浏览器尚未登录学习平台。请先登录，再回到此页点“刷新本次运行”。');
+        if (response.status === 401) {
+          if (login) {
+            const current = new URL(location.href);
+            const destination = new URL('./login', current);
+            destination.searchParams.set('returnTo', current.pathname + current.search + current.hash);
+            login.href = destination.href;
+            login.hidden = false;
+          }
+          throw new Error('当前工作台尚未登录。登录后将继续查看本次运行。');
+        }
         if (response.status === 404) throw new Error('当前账号无权查看这条 Run，或该记录不存在。链接不会切换账号，也不会改看其他实验。');
         throw new Error('平台暂时无法读取这条 Run。请保留原链接，稍后刷新本页。');
       }
@@ -558,6 +569,7 @@ export async function startRunDetail({
       loaded = true;
       active = ['queued', 'running', 'ready', 'cancelling'].includes(run.status);
       if (error) error.hidden = true;
+      if (login) login.hidden = true;
       renderRun(document, location, run, runId);
       if (!quiet && /^#dance-section-[1-9]$/.test(location.hash ?? '')) {
         const target = document.getElementById(location.hash.slice(1));

@@ -1628,8 +1628,12 @@ function safeLoginUrl(value) {
 function withLocalReturnTo(loginUrl) {
   try {
     const parsed = new URL(loginUrl, window.location.origin);
-    if (parsed.origin === window.location.origin) return loginUrl;
-    const returnHere = window.location.origin + BASE_PATH + '/';
+    const here = window.location.pathname + window.location.search + window.location.hash;
+    if (parsed.origin === window.location.origin) {
+      if (parsed.pathname === BASE_PATH + '/login') parsed.searchParams.set('returnTo', here);
+      return parsed.pathname + parsed.search + parsed.hash;
+    }
+    const returnHere = window.location.origin + here;
     const redirectRaw = parsed.searchParams.get('redirectUrl');
     if (redirectRaw) {
       const redirect = new URL(redirectRaw, window.location.origin);
@@ -8685,7 +8689,7 @@ function agentSuggestionSet() {
     return {
       headline: '登录后开始你的 Sim2Real 迭代',
       summary: '助手会在工作区加载后，把模型、训练、评测和板卡状态串起来。',
-      actions: [{ label: '登录工作区', view: null, href: state.publicHealth?.ssoLoginUrl || '/rdkstudio/' }],
+      actions: [{ label: '登录工作区', view: null, href: withLocalReturnTo(safeLoginUrl(state.publicHealth?.ssoLoginUrl || '/rdkstudio/')) }],
     };
   }
   const model = selectedModel();
@@ -8778,7 +8782,6 @@ function renderAgentPanel() {
       control.textContent = item.label + '  →';
       if (item.href) {
         control.href = item.href;
-        control.target = '_blank';
         control.rel = 'noreferrer';
       } else {
         control.type = 'button';
@@ -11561,6 +11564,16 @@ function wireEvents() {
   wireCommandPalette();
   $('robogo-refresh-button')?.addEventListener('click', () => loadOverview());
   $('auth-retry-button')?.addEventListener('click', () => loadOverview());
+  for (const id of ['auth-login-button', 'login-link', 'auth-gate-banner-login']) {
+    $(id)?.addEventListener('click', (event) => {
+      event.preventDefault();
+      const fallback = event.currentTarget?.href || '/rdkstudio/';
+      void fetchPublicHealth().then(() => {
+        const login = safeLoginUrl(state.publicHealth?.ssoLoginUrl || fallback);
+        window.location.assign(withLocalReturnTo(login));
+      });
+    });
+  }
   // Guest banner expand/collapse: the login form is opt-in, never forced.
   $('auth-gate-toggle')?.addEventListener('click', () => {
     const panel = $('auth-gate-panel');
@@ -12063,7 +12076,7 @@ const COMMANDS = [
   { id: 'records', label: '查看证据与记录', hint: `搜索 Run、部署与遥测 · ${shortcutHint(7)}`, view: 'records' },
   { id: 'station', label: '打开设备工作台', hint: `查看 X5 连接与只读诊断 · ${shortcutHint(8)}`, view: 'station' },
   { id: 'refresh', label: '刷新工作区', hint: '重新加载项目状态与设备信息', action: () => loadOverview() },
-  { id: 'login', label: '登录工作区', hint: '登录以解锁训练记录与真机部署', action: () => window.open(state.publicHealth?.ssoLoginUrl || '/rdkstudio/', '_blank', 'noopener') },
+  { id: 'login', label: '登录工作区', hint: '登录以解锁训练记录与真机部署', action: () => window.location.assign(withLocalReturnTo(safeLoginUrl(state.publicHealth?.ssoLoginUrl || '/rdkstudio/'))) },
   { id: 'agent', label: '呼出 Agent 助手', hint: '按当前阻塞项生成下一步计划', action: () => { if (typeof window.setAgentDrawerOpen === 'function') window.setAgentDrawerOpen(true); } },
   { id: 'onboarding', label: '重看新手指引', hint: '12 步走完整个平台', action: () => $('onboarding-help-button')?.click() },
 ];

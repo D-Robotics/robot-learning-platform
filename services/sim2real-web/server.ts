@@ -895,6 +895,7 @@ export function createSim2RealWebApp(): Express {
             configuredPublicBasePath(),
             String(request.query.loggedOut ?? '') === '1' ? '已退出登录。' : undefined,
             request.query.workshop,
+            request.query.returnTo,
           ),
         );
     });
@@ -1011,7 +1012,10 @@ export function createSim2RealWebApp(): Express {
       // user-center 模式下发给登录页/登录按钮的平台自有登录入口。挂在反向
       // 代理前缀下时（web-cloud）必须带前缀，否则浏览器会落到站点根 404。
       ssoLoginUrl: (() => {
-        const loginPath = ssoLoginUrlForDeployment();
+        const loginPath =
+          studioSsoAdapterMode() === 'studio-cookie' && studioSsoAdapterConfigured()
+            ? '/login'
+            : ssoLoginUrlForDeployment();
         return loginPath ? publicPath(loginPath) : undefined;
       })(),
       authRequired,

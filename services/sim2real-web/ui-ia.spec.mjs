@@ -50,6 +50,12 @@ assert.match(html, /<option value="originman">OriginMan · 人形机器人<\/opt
 assert.match(html, /<option value="originman-dance" selected>舞蹈编排 · PPO（默认）<\/option>/);
 assert.match(app, /OriginMan 模板尚未载入。请先选择「舞蹈编排 · PPO」/);
 
+for (const id of ['login-link', 'auth-gate-banner-login', 'auth-login-button']) {
+  const entry = html.match(new RegExp(`<a\\b[^>]*id="${id}"[^>]*>`))?.[0];
+  assert.ok(entry, `Missing workbench login link ${id}`);
+  assert.doesNotMatch(entry, /target=["']_blank/);
+}
+
 // ---- accessibility anchors ----
 // Every labelled region must resolve to a real heading. A stale aria-labelledby
 // silently removes the region from a screen reader's landmark tree, so keep the

@@ -63,7 +63,15 @@ function makeApp(
   app.get('/login', (req, res) => {
     res
       .type('html')
-      .send(renderStudioDirectLoginPage('invalid', basePath, undefined, req.query.workshop));
+      .send(
+        renderStudioDirectLoginPage(
+          'invalid',
+          basePath,
+          undefined,
+          req.query.workshop,
+          req.query.returnTo,
+        ),
+      );
   });
   return app;
 }
@@ -85,6 +93,43 @@ function configuredEnv(): Record<string, string> {
 }
 
 describe('studio direct-login relay', () => {
+  it('preserves the workbench view and Run through login and a failed attempt', async () => {
+    setTestEnv(configuredEnv());
+    const app = makeApp(
+      async (_url, body) =>
+        JSON.parse(body).password === 'ok'
+          ? studioResponse({ setCookie: ['rdk_sso_web_session=v1.a.b.c; Path=/; HttpOnly'] })
+          : studioResponse({ status: 401 }),
+      'form',
+      '/robotics-learning',
+    );
+    const base = await listen(app);
+    const returnTo = '/robotics-learning/?robot=originman&trainingRun=run-original#train/submit';
+    const form = (target: string, password = 'ok') =>
+      fetch(`${base}/api/sim2real/auth/studio-direct/login`, {
+        method: 'POST',
+        redirect: 'manual',
+        body: new URLSearchParams({ userName: 'user', password, returnTo: target }),
+      });
+    const html = await (
+      await fetch(`${base}/login?returnTo=${encodeURIComponent(returnTo)}`)
+    ).text();
+    expect(html).toContain(
+      'name="returnTo" value="/robotics-learning/?robot=originman&amp;trainingRun=run-original#train/submit"',
+    );
+    const rejected = new URL((await form(returnTo, 'wrong')).headers.get('location')!, base);
+    expect(rejected.searchParams.get('returnTo')).toBe(returnTo);
+    expect((await form(returnTo)).headers.get('location')).toBe(returnTo);
+    for (const target of [
+      '//evil.example/',
+      '/robotics-learning/api/logout',
+      '/outside',
+      '/robotics-learning/%2e%2e/',
+    ]) {
+      expect((await form(target)).headers.get('location')).toBe('/robotics-learning/');
+    }
+  }, 20_000);
+
   it('returns to Workshop in the same tab and ignores untrusted redirect targets', async () => {
     setTestEnv(configuredEnv());
     const app = makeApp(
