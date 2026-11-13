@@ -759,7 +759,26 @@ assert.ok(
   'capability workbench loads before Agent integration',
 );
 
+assert.match(html, /id="originman-dance-four-sections"/);
+assert.match(html, /id="originman-dance-rewards"/);
+const danceContract = fs.readFileSync(
+  path.join(here, '../../shared/originman-dance-training.ts'),
+  'utf8',
+);
+const limits = [
+  ...danceContract.split('} as const;')[0].matchAll(/^ {2}(\w+): \[([\d.]+), ([\d.]+)\],$/gm),
+];
+assert.equal(limits.length, 13);
+assert.equal([...html.matchAll(/data-dance-reward="/g)].length, limits.length);
+for (const [, key, min, max] of limits) {
+  assert.ok(
+    html.includes(`data-dance-reward="${key}" type="number" min="${min}" max="${max}"`),
+    key,
+  );
+}
 const workshopPage = fs.readFileSync(path.join(here, 'public/workshop.html'), 'utf8');
+assert.match(workshopPage, /受扰恢复课堂/);
+assert.match(workshopPage, /robot=originman#train\/configure/);
 assert.match(workshopPage, /<nav class="workshop-progress" aria-label="课程进度">/);
 for (const stage of ['reference', 'budget', 'execution', 'result'])
   assert.match(workshopPage, new RegExp('id="workshop-step-' + stage + '"'));

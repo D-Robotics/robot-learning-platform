@@ -960,6 +960,7 @@
                       <option value="">请选择目标</option>
                     </select>
                     <div id="originman-dance-fields" hidden>
+                      <p class="small-note">为每段选择动作、拍数和幅度，再设置节奏、训练步数、并行环境、种子和算力。</p>
                       <div class="dance-goal-fields">
                         <label>舞段名称 <input id="originman-dance-title" maxlength="80" value="左右交替摆臂"></label>
                         <label>节奏（BPM） <input id="originman-dance-bpm" type="number" min="80" max="140" step="any" value="100"></label>
@@ -970,6 +971,27 @@
                       <p class="small-note" id="originman-dance-budget-help">8192 步用于快检。可以用 500000 步做正式训练，动作表现以评测为准。</p>
                       <div id="originman-dance-sections"></div>
                       <button class="button button-ghost button-small" id="originman-dance-add" type="button">添加舞段</button>
+                      <button class="button button-ghost button-small" id="originman-dance-four-sections" type="button">载入四段示例</button>
+                      <details id="originman-dance-rewards">
+                        <summary>自定义奖励参数</summary>
+                        <p class="small-note">留空使用引擎默认值。小数距离以米为单位。</p>
+                        <div class="dance-goal-fields">
+                          <label>换重心目标距离（米） <input data-dance-reward="weightShiftTargetM" type="number" min="0.02" max="0.06" step="any" placeholder="0.036"></label>
+                          <label>换重心容差（米） <input data-dance-reward="weightShiftToleranceM" type="number" min="0.008" max="0.04" step="any" placeholder="0.016"></label>
+                          <label>下蹲目标深度（米） <input data-dance-reward="squatDepthM" type="number" min="0.02" max="0.07" step="any" placeholder="0.042"></label>
+                          <label>下蹲容差（米） <input data-dance-reward="squatToleranceM" type="number" min="0.008" max="0.04" step="any" placeholder="0.018"></label>
+                          <label>摆臂幅度权重 <input data-dance-reward="armSwingWeight" type="number" min="1" max="8" step="any" placeholder="4"></label>
+                          <label>摆臂速度权重 <input data-dance-reward="armSpeedWeight" type="number" min="0.2" max="4" step="any" placeholder="1.5"></label>
+                          <label>换重心权重 <input data-dance-reward="weightShiftWeight" type="number" min="1" max="8" step="any" placeholder="3.4"></label>
+                          <label>下蹲起身权重 <input data-dance-reward="squatWeight" type="number" min="1" max="8" step="any" placeholder="3.5"></label>
+                          <label>定格稳定权重 <input data-dance-reward="settleStillnessWeight" type="number" min="1" max="4" step="any" placeholder="2.6"></label>
+                          <label>定格展臂权重 <input data-dance-reward="settleArmsWeight" type="number" min="0.2" max="6" step="any" placeholder="2.5"></label>
+                          <label>能耗惩罚 <input data-dance-reward="workPenalty" type="number" min="0.2" max="1.5" step="any" placeholder="0.8"></label>
+                          <label>下蹲能耗惩罚 <input data-dance-reward="squatWorkPenalty" type="number" min="0.05" max="1" step="any" placeholder="0.35"></label>
+                          <label>倾斜惩罚 <input data-dance-reward="tiltPenalty" type="number" min="1" max="6" step="any" placeholder="3"></label>
+                        </div>
+                        <button class="button button-ghost button-small" id="originman-dance-reset-rewards" type="button">恢复奖励默认值</button>
+                      </details>
                       <p class="small-note" id="originman-dance-error" aria-live="polite"></p>
                       <p class="small-note">下方选择支持舞蹈训练的算力。设好后可保存方案，或到「Run 与进度」确认提交。</p>
                     </div>

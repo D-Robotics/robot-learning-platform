@@ -28,17 +28,30 @@ window.TrainingPlans = (() => {
     const numEnvs = byId('originman-dance-num-envs');
     const defaultSection = { type: 'alternating-arms', beats: 8, intensity: 0.25 };
     const configPanel = byId('train-module-config');
-    let rewardTuning;
+    const rewards = [...byId('originman-dance-rewards').querySelectorAll('[data-dance-reward]')];
+    byId('originman-dance-four-sections').addEventListener('click', () => {
+      sections.replaceChildren();
+      for (const type of Object.keys(names)) append({ type, beats: 8, intensity: 0.5 });
+      changed();
+      sections.querySelector('select').focus();
+    });
+    byId('originman-dance-reset-rewards').addEventListener('click', () => {
+      for (const control of rewards) control.value = '';
+      changed();
+    });
     const number = (input) => input.value !== '' && input.validity.valid ? Number(input.value) : NaN;
     const enabled = () => !root.hidden && goal.value === 'originman-dance';
 
     function read() {
       if (!enabled()) return null;
+      const rewardTuning = Object.fromEntries(rewards.filter((input) => input.value !== '')
+        .map((input) => [input.dataset.danceReward, number(input)]));
       const recipe = {
         schemaVersion: 1, title: title.value.trim(), bpm: number(bpm),
         trainingSteps: number(steps),
         ...(seed.value !== '' ? { seed: number(seed) } : {}),
-        ...(rewardTuning ? { rewardTuning } : {}),
+        ...(Object.keys(rewardTuning).length ? { rewardTuning } : {}),
+
         sections: Array.from(sections.children, (row) => ({
           type: row.querySelector('[data-dance-type]').value,
           beats: Number(row.querySelector('[data-dance-beats]').value),
@@ -47,6 +60,7 @@ window.TrainingPlans = (() => {
       };
       if (!recipe.title || !Number.isFinite(recipe.bpm) || !Number.isFinite(recipe.trainingSteps) || !Number.isFinite(number(numEnvs)) ||
           ('seed' in recipe && !Number.isFinite(recipe.seed)) ||
+          Object.values(rewardTuning).some((value) => !Number.isFinite(value)) ||
           recipe.sections.some((section) => !Number.isFinite(section.intensity))) return null;
       return recipe;
     }
@@ -60,7 +74,7 @@ window.TrainingPlans = (() => {
         row.querySelector('button').disabled = sections.childElementCount === 1;
       });
       error.textContent = enabled() && !read()
-        ? '请填写舞段名称，并检查节奏、步数、并行环境、种子和动作强度的范围。' : '';
+        ? '请填写舞段名称，并检查节奏、步数、并行环境、种子、动作强度和奖励参数的范围。' : '';
     }
 
     function append(section) {
@@ -110,7 +124,7 @@ window.TrainingPlans = (() => {
       },
       load(recipe, count) {
         goal.value = recipe ? 'originman-dance' : '';
-        rewardTuning = recipe?.rewardTuning;
+        for (const input of rewards) input.value = recipe?.rewardTuning?.[input.dataset.danceReward] ?? '';
         if (recipe) {
           title.value = recipe.title;
           bpm.value = recipe.bpm;
