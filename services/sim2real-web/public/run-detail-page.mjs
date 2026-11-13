@@ -228,7 +228,13 @@ function renderQuality(document, location, run) {
         row.tabIndex = -1;
         if (timing.section.passed === false) {
           const link = document.createElement('a');
-          link.href = `#${row.id}`;
+          if (document.getElementById('run-evidence')) {
+            const url = new URL(location.href);
+            url.searchParams.set('trainingRun', run.id);
+            url.searchParams.set('runSection', row.id);
+            url.hash = 'train/submit';
+            link.href = url.href;
+          } else link.href = `#${row.id}`;
           link.textContent = `第 ${timing.index + 1} 段 · ${SECTION_LABELS[timing.section.type] ?? '舞段'}`;
           const item = document.createElement('li');
           item.append(link);
@@ -356,7 +362,7 @@ function showPlaybackStatus(document, video) {
       : video.paused
         ? '本次视频摘要已核对 · 点击播放'
         : '正在播放本次仿真回放';
-  text(document, 'replay-status', message);
+  text(document, document.getElementById('run-evidence') ? 'run-video-status' : 'replay-status', message);
 }
 
 function renderVideo(document, location, run, runId) {
@@ -383,12 +389,12 @@ function renderVideo(document, location, run, runId) {
   empty.hidden = false;
   const evidence = danceEvidenceFor(run);
   if (!evidence?.video && run.status === 'completed' && run.training?.video === false) {
-    text(document, 'replay-status', '提交时关闭了视频生成');
+    text(document, document.getElementById('run-evidence') ? 'run-video-status' : 'replay-status', '提交时关闭了视频生成');
     text(document, 'replay-empty', '本次 Run 未生成视频。仍可查看训练曲线和分段评测。');
     return;
   }
   const metadataValid = valid;
-  text(document, 'replay-status', !evidence?.video
+  text(document, document.getElementById('run-evidence') ? 'run-video-status' : 'replay-status', !evidence?.video
     ? '尚无可核验视频'
     : metadataValid
       ? '视频摘要已核验 · 平台未提供本次视频链接'
@@ -400,7 +406,7 @@ function renderVideo(document, location, run, runId) {
       : '回放生成后会校验策略与轨迹摘要，再显示本次视频。');
 }
 
-function renderRun(document, location, run, runId) {
+function renderRun(document, location, run, runId, { embedded = false } = {}) {
   const isDance = run.taskId === 'originman-dance' || Boolean(danceConfigFor(run) || danceEvidenceFor(run));
   const status = STATUS_LABELS[run.status] ?? '状态待核对';
   text(document, 'run-title', isDance ? 'OriginMan · 本次舞蹈训练' : '本次训练运行');
@@ -484,7 +490,7 @@ function renderRun(document, location, run, runId) {
   renderDance(document, run);
   renderQuality(document, location, run);
   renderTrainingProgress(document, location, run);
-  drawCurve(document, run);
+  if (!embedded) drawCurve(document, run);
   renderVideo(document, location, run, runId);
   text(document, 'run-connection-status', '已连接并定位到本次 Run');
 }
@@ -590,7 +596,110 @@ export async function startRunDetail({
   };
 }
 
-const start = () => { void startRunDetail({ document, location: window.location }); };
+export function legacyRunDestination(location) {
+  const current = new URL(location.href);
+  const runId = current.searchParams.get('runId') ?? '';
+  if (!RUN_ID_PATTERN.test(runId)) return null;
+  const destination = new URL('./', current);
+  destination.searchParams.set('trainingRun', runId);
+  for (const key of ['robot', 'deviceId', 'videoUrl']) {
+    if (current.searchParams.has(key)) destination.searchParams.set(key, current.searchParams.get(key));
+  }
+  const anchor = current.hash.slice(1);
+  if (isRunSection(anchor)) destination.searchParams.set('runSection', anchor);
+  destination.hash = 'train/submit';
+  return destination;
+}
+
+function isRunSection(anchor) {
+  return /^(?:dance-section(?:-[1-9]\d*)?|curve-heading|quality-heading|replay-heading|resimulated-heading|run-overview-heading|run-handoff)$/.test(anchor);
+}
+
+export function mountRunEvidence(document, location) {
+  const panel = document.getElementById('run-evidence');
+  const win = document.defaultView;
+  const video = document.getElementById('run-video');
+  let lastRecord = '';
+  let lastAnchor = '';
+  for (const event of ['playing', 'pause', 'ended', 'error'])
+    video?.addEventListener(event, () => { if (!panel.hidden) showPlaybackStatus(document, video); });
+
+  function showAnchor(runId, anchor) {
+    if (!isRunSection(anchor) || win.location.hash !== '#train/submit') return;
+    const id = {
+      'curve-heading': 'run-progress-card',
+      'run-overview-heading': 'run-technical-evidence',
+    }[anchor] ?? anchor;
+    const target = document.getElementById(id);
+    if (!target || target.hidden || target.closest('[hidden]')) return;
+    if (target.matches('details')) target.open = true;
+    if (target.closest('#run-technical-evidence')) document.getElementById('run-technical-evidence').open = true;
+    lastAnchor = runId + ':' + anchor;
+    target.tabIndex = -1;
+    target.focus({ preventScroll: true });
+    target.scrollIntoView?.({ block: 'start' });
+  }
+
+  panel.addEventListener('click', (event) => {
+    const link = event.target.closest('#run-failed-sections a');
+    if (!link || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+    event.preventDefault();
+    const url = new URL(location.href);
+    url.searchParams.set('trainingRun', panel.dataset.runId);
+    const anchor = new URL(link.href).searchParams.get('runSection');
+    url.searchParams.set('runSection', anchor);
+    win.history.replaceState(win.history.state, '', url);
+    if (win.location.hash !== '#train/submit') {
+      win.location.assign(link.href);
+      return;
+    }
+    showAnchor(panel.dataset.runId, anchor);
+  });
+
+  function update(run) {
+    const finished = run && ['completed', 'failed', 'blocked', 'cancelled', 'canceled'].includes(run.status);
+    const record = finished ? [run.id, run.status, run.finishedAt].join(':') : '';
+    if (record !== lastRecord) {
+      lastRecord = record;
+      document.getElementById('run-technical-evidence').open = false;
+      sectionPlayback.get(video)?.abort();
+      if (video?.hasAttribute('src')) {
+        video.pause();
+        video.removeAttribute('src');
+        video.load();
+      }
+      text(document, 'replay-section-status', '');
+      panel.hidden = !finished;
+      panel.dataset.runId = finished ? run.id : '';
+      if (finished) {
+        const dance = run.taskId === 'originman-dance' || Boolean(danceConfigFor(run) || danceEvidenceFor(run));
+        document.getElementById('run-dance-results').hidden = !dance;
+        renderRun(document, location, run, run.id, { embedded: true });
+      }
+    }
+    const params = new URL(location.href).searchParams;
+    const anchor = params.get('runSection') ?? '';
+    if (!run || params.get('trainingRun') !== run.id) lastAnchor = '';
+    else if (lastAnchor !== run.id + ':' + anchor) showAnchor(run.id, anchor);
+  }
+  win.addEventListener('rdk-run-selected', (event) => update(event.detail));
+  win.dispatchEvent(new win.Event('rdk-run-evidence-ready'));
+}
+
+const start = () => {
+  if (document.getElementById('run-evidence')) {
+    mountRunEvidence(document, window.location);
+    return;
+  }
+  if (window.location.pathname.endsWith('/run-detail.html')) {
+    const destination = legacyRunDestination(window.location);
+    if (destination) {
+      window.location.replace(destination.href);
+      return;
+    }
+  }
+  void startRunDetail({ document, location: window.location });
+};
 if (typeof document !== 'undefined') {
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', start, { once: true });
   else start();

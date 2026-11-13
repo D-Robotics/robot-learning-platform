@@ -2369,6 +2369,75 @@ h2 {
   background: rgba(220, 38, 38, 0.1);
 }
 
+.run-evidence {
+  display: grid;
+  gap: 12px;
+  margin-top: 16px;
+  min-width: 0;
+}
+
+.run-evidence section + section {
+  margin-top: 16px;
+}
+
+.run-evidence .section-heading {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.run-evidence details {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 10px 12px;
+}
+
+.run-evidence summary {
+  cursor: pointer;
+  font-weight: 600;
+}
+
+.run-evidence .comparison-scroll {
+  overflow-x: auto;
+}
+
+.run-evidence table {
+  width: 100%;
+  border-collapse: collapse;
+  text-align: left;
+}
+
+.run-evidence caption {
+  color: var(--muted);
+  padding: 8px 0;
+  text-align: left;
+}
+
+.run-evidence :is(th, td) {
+  border-bottom: 1px solid var(--line);
+  padding: 8px;
+  vertical-align: top;
+}
+
+.run-evidence video {
+  display: block;
+  max-width: 100%;
+  max-height: min(60vh, 560px);
+  width: 100%;
+}
+
+.run-evidence dd {
+  margin-inline-start: 0;
+  overflow-wrap: anywhere;
+}
+
+.run-evidence tr[tabindex]:focus {
+  outline: 2px solid currentColor;
+  outline-offset: -2px;
+}
+
 .run-progress-card {
   display: grid;
   gap: 10px;

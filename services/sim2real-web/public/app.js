@@ -1353,8 +1353,9 @@ const overviewPoll = createScopedPoll({
   name: 'overview',
   resume: 'refresh',
   nextDelay: () => {
-    const hasActiveRun = runsForCurrentModel().some((run) =>
-      ['queued', 'running'].includes(String(run.status || '').toLowerCase()),
+    const linked = originmanRunState.linkedRun;
+    const hasActiveRun = [...runsForCurrentModel(), ...(linked ? [linked] : [])].some((run) =>
+      ['queued', 'running', 'cancelling'].includes(String(run.status || '').toLowerCase()),
     );
     const backoffActive = runStatusBackoffUntil > Date.now();
     return hasActiveRun ? (backoffActive ? Math.max(30_000, runStatusBackoffUntil - Date.now()) : 5_000) : 30_000;
@@ -1881,6 +1882,8 @@ async function logoutAccount() {
   } catch {
     // Even if the logout call fails, drop back to the login gate locally.
   }
+  originmanRunState.linkedRun = null;
+  originmanRunState.linkUnavailable = false;
   state.overview = null;
   setAuthGate(null);
   renderAll();
@@ -7944,17 +7947,57 @@ function originmanContractType(model = selectedModel()) {
   return '';
 }
 
+function trainingRunUrl(id, section = '') {
+  const url = new URL('./', location.href);
+  url.searchParams.set('trainingRun', id);
+  if (section) url.searchParams.set('runSection', section);
+  url.hash = 'train/submit';
+  return url;
+}
+
+async function loadLinkedTrainingRun() {
+  const { id, linkedRun, linkUnavailable } = originmanRunState;
+  if (!id || linkedRun?.id === id || linkUnavailable) return;
+  if (!/^[A-Za-z0-9][A-Za-z0-9_.-]{0,119}$/.test(id)) {
+    originmanRunState.linkUnavailable = true;
+    return;
+  }
+  try {
+    const { run } = await request('/sim2real/runs/' + encodeURIComponent(id));
+    if (id !== originmanRunState.id) return;
+    if (run?.id !== id) {
+      originmanRunState.linkUnavailable = true;
+      return;
+    }
+    originmanRunState.linkedRun = run;
+    const product = run.taskId?.startsWith('originman-') ? 'originman' : run.productId;
+    if (Object.hasOwn(PRODUCT_PROFILES, product) && !new URL(location.href).searchParams.has('robot'))
+      state.productId = product;
+  } catch (error) {
+    if (id === originmanRunState.id && error instanceof ApiError && [403, 404].includes(error.status))
+      originmanRunState.linkUnavailable = true;
+  }
+}
+
 function originmanTrainingRuns() {
-  return runsForCurrentModel().filter((run) =>
+  const runs = runsForCurrentModel();
+  const linked = originmanRunState.linkedRun;
+  if (linked && (linked.productId === 'originman' || linked.taskId?.startsWith('originman-')) &&
+      !runs.some((run) => run.id === linked.id)) runs.push(linked);
+  return runs.filter((run) =>
     ['local', 'robogo'].includes(run.backend) && run.training?.originmanWorkshop?.phase !== 'evaluate',
   ).sort((a, b) => String(b.createdAt || '').localeCompare(String(a.createdAt || '')));
 }
 
 function selectOriginmanRun(id) {
   originmanRunState.id = id || '';
+  originmanRunState.linkedRun = null;
+  originmanRunState.linkUnavailable = false;
   const url = new URL(location.href);
   if (id) url.searchParams.set('trainingRun', id);
   else url.searchParams.delete('trainingRun');
+  url.searchParams.delete('runSection');
+  url.searchParams.delete('videoUrl');
   history.replaceState(history.state, '', url);
   renderOriginmanTrainingWorkbench();
   renderRunProgress();
@@ -7993,13 +8036,6 @@ function renderOriginmanTrainingWorkbench() {
         statusLabel(item.status), formatDate(item.createdAt), item.id.slice(0, 8)].join(' · '),
     })),
   ], run?.id || '');
-  const open = $('originman-run-open');
-  open.hidden = !run;
-  if (run) {
-    const href = new URL('./run-detail.html', location.href);
-    href.searchParams.set('runId', run.id);
-    open.href = href.href;
-  } else open.removeAttribute('href');
   setText('originman-run-selection-hint', run
     ? '进度、权重、评测和回放均按该 Run 查询。'
     : originmanRunState.id && state.overview ? '当前项目或账号没有这条 Run。请选择列表中的记录。'
@@ -8164,9 +8200,9 @@ async function submitOriginmanDance() {
       try { sessionStorage.setItem(key, draft); } catch { /* Restricted browser storage. */ }
       try { localStorage.setItem(key, draft); } catch { /* Restricted browser storage. */ }
     }
-    const detail = new URL('./run-detail.html', location.href);
-    detail.searchParams.set('runId', payload.run.id);
-    location.assign(detail);
+    const progressUrl = trainingRunUrl(payload.run.id, 'curve-heading');
+    progressUrl.searchParams.set('robot', 'originman');
+    location.assign(progressUrl);
   } catch (error) {
     showToast(friendlyError(error, '舞蹈训练提交失败'), 'error');
   } finally {
@@ -8176,6 +8212,7 @@ async function submitOriginmanDance() {
 }
 
 function bindOriginmanTrainingWorkbench() {
+  window.addEventListener('rdk-run-evidence-ready', renderRunProgress);
   $('originman-run-select')?.addEventListener('change', (event) => selectOriginmanRun(event.target.value));
   $('originman-configure-training')?.addEventListener('click', () => {
     const dance = trainingPlans?.dance?.();
@@ -8205,12 +8242,19 @@ function renderRunProgress() {
   const runs = [...runsForCurrentModel()].sort((a, b) =>
     String(b.createdAt || '').localeCompare(String(a.createdAt || '')),
   );
-  const latest = state.productId === 'originman'
-    ? originmanTrainingRuns().find((run) => run.id === originmanRunState.id)
-    : runs[0];
+  const { id, linkedRun, linkUnavailable } = originmanRunState;
+  const selected = id ? linkedRun || (!linkUnavailable && runs.find((run) => run.id === id)) : null;
+  const latest = state.authRequired ? null : id || state.productId === 'originman' ? selected : runs[0];
+  const notice = $('run-link-notice');
+  if (notice) {
+    notice.hidden = Boolean(latest) || !id || state.authRequired;
+    notice.textContent = linkUnavailable ? '当前账号无法读取链接中的训练 Run。'
+      : state.overview ? '正在查询链接中的训练 Run。' : '等待工作区连接后读取训练 Run。';
+  }
   if (!latest) {
     card.hidden = true;
     state.selectedRecord = null;
+    window.dispatchEvent(new CustomEvent('rdk-run-selected'));
     return;
   }
   card.hidden = false;
@@ -8251,6 +8295,7 @@ function renderRunProgress() {
   renderRunProgressTrack(latest);
   renderRunProgressLiveChart(latest);
   renderRunProgressLogsPanel(latest);
+  window.dispatchEvent(new CustomEvent('rdk-run-selected', { detail: latest }));
 }
 
 // Engine log stream: the worker captures stdout/stderr line by line and the
@@ -8877,7 +8922,7 @@ async function loadModelDetails(modelId = state.selectedModelId) {
 
 async function refreshActiveRuns() {
   const overview = state.overview;
-  if (!overview?.runs?.length) return;
+  if (!overview) return;
   const now = Date.now();
   for (const [deadRunId, deadUntil] of runStatusDeadUntil) {
     if (deadUntil <= now) {
@@ -8886,8 +8931,11 @@ async function refreshActiveRuns() {
       runStatusFailures.delete(deadRunId);
     }
   }
-  const active = runsForCurrentModel().filter((run) =>
-    ['queued', 'running'].includes(String(run.status || '').toLowerCase()),
+  const linked = originmanRunState.linkedRun;
+  const runs = runsForCurrentModel().filter((run) => run.id !== linked?.id);
+  if (linked) runs.unshift(linked);
+  const active = runs.filter((run) =>
+    ['queued', 'running', 'cancelling'].includes(String(run.status || '').toLowerCase()),
   ).filter((run) => !runStatusDeadUntil.has(run.id));
   if (!active.length) return;
   const updates = await Promise.all(
@@ -8897,7 +8945,8 @@ async function refreshActiveRuns() {
         runStatusFailures.delete(run.id);
         runStatusDeadUntil.delete(run.id);
         runStatusDeadNotified.delete(run.id);
-        return payload.run || null;      } catch (error) {
+        return payload.run?.id === run.id ? payload.run : null;
+      } catch (error) {
         // The API keeps the last known state and returns a retryable 503 when
         // the external runner is unavailable. Back off after repeated errors
         // so a dead runner cannot create a tight polling loop. After the
@@ -8926,6 +8975,8 @@ async function refreshActiveRuns() {
   );
   const byId = new Map(updates.filter(Boolean).map((run) => [run.id, run]));
   if (!byId.size || !state.overview) return;
+  if (linked && linked.id === originmanRunState.id && byId.has(linked.id))
+    originmanRunState.linkedRun = byId.get(linked.id);
   const previousRuns = state.overview.runs;
   state.overview = {
     ...state.overview,
@@ -9065,6 +9116,7 @@ async function loadOverview({ quiet = false, silent = false } = {}) {
     setWorkspaceStatus('loading', '正在连接工作区', '正在读取项目、模型和设备状态…');
   }
   try {
+    await loadLinkedTrainingRun();
     const payload = await request(
       '/sim2real/overview?productId=' + encodeURIComponent(state.productId),
     );
@@ -11845,9 +11897,6 @@ function wireEvents() {
   $('evaluation-empty-import')?.addEventListener('click', () => {
     $('telemetry-file-input')?.click();
   });
-  $('run-progress-detail')?.addEventListener('click', () => {
-    if (state.selectedRecord) openRecordDetails(state.selectedRecord);
-  });
   $('run-detail-close')?.addEventListener('click', () => {
     const dialog = $('run-detail-dialog');
     if (dialog?.open && typeof dialog.close === 'function') dialog.close();
@@ -11856,6 +11905,7 @@ function wireEvents() {
   $('product-select')?.addEventListener('change', async (event) => {
     const next = event.target.value;
     if (!PRODUCT_PROFILES[next]) return;
+    selectOriginmanRun('');
     clearProductLinkOverride();
     const url = new URL(location.href);
     if (next !== 'originman' && url.searchParams.has('fromRun')) {

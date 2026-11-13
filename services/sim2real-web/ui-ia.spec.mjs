@@ -74,6 +74,12 @@ assert.match(
 );
 assert.match(
   html,
+  /id="train-module-run-model"[\s\S]*?id="run-progress-card"[\s\S]*?id="run-evidence"[\s\S]*?id="train-module-config"/,
+  'training progress and evidence must share the Run tab',
+);
+assert.doesNotMatch(html, /id="(?:run-progress-detail|originman-run-open)"/);
+assert.match(
+  html,
   /role="menuitemcheckbox"[^>]*aria-checked="false"/,
   'notification menu item must expose the checkbox state with aria-checked',
 );

@@ -21,6 +21,7 @@
          for the guards that keep new overrides from re-introducing layering. -->
     <link rel="stylesheet" href="./tokens.css?v=3" />
     <link rel="stylesheet" href="./app.css?v=57" />
+      <script type="module" src="./run-detail-page.mjs?v=3"></script>
   </head>
   <body>
     <a class="skip-link" href="#main-content">跳到主要内容</a>
@@ -874,7 +875,7 @@
                   <div class="model-actions">
                     <label class="field-label" for="originman-run-select">选择训练 Run</label>
                     <select id="originman-run-select"><option value="">请选择 Run</option></select>
-                    <a class="button button-ghost button-small" id="originman-run-open" hidden>查看本轮评测、制品与回放</a>
+
                   </div>
                   <p class="small-note" id="originman-run-selection-hint" role="status"></p>
                 </section>
@@ -944,14 +945,80 @@
                   <div class="run-progress-warning" id="run-progress-warning" hidden>
                     Mock 只验证协议和台账，不会生成可部署模型。
                   </div>
-                  <button
-                    class="button button-ghost button-small"
-                    id="run-progress-detail"
-                    type="button"
-                  >
-                    查看运行详情 →
-                  </button>
                 </div>
+                <p class="small-note" id="run-link-notice" role="status" hidden></p>
+                <section class="run-evidence" id="run-evidence" aria-label="本轮评测、回放与制品" hidden>
+                  <div id="run-dance-results" hidden>
+                    <section aria-labelledby="quality-heading">
+                      <div class="section-heading">
+                        <h2 id="quality-heading">训练结果与质量门</h2>
+                        <span id="quality-status">待核对</span>
+                      </div>
+                      <p id="quality-summary" class="empty-state">本次运行完成后读取实际质量证据。</p>
+                      <ul id="run-failed-sections" aria-label="标称节拍未达标舞段" hidden></ul>
+                      <details id="dance-quality-guide" hidden>
+                        <summary>舞段指标与达标门槛</summary>
+                        <p>每段须采到至少 95% 的预期帧且无跌倒接触，再同时满足该动作的风格门槛。</p>
+                        <ul>
+                          <li>交替摆臂：左右手前后差的峰谷跨度 ≥90 mm；预期方向乘手位差超过 15 mm 的帧占比 ≥65%；手臂速度与参考脉冲相关性 ≥0.20。</li>
+                          <li>左右换重心：躯干横向坐标峰谷跨度 ≥35 mm；横向坐标与参考方向相乘超过 6 mm 的帧占比 ≥62%。</li>
+                          <li>下蹲起身：下蹲深度和起身高度各 ≥24 mm；躯干高度与参考曲线相关性 ≥0.55；双手平均前后位置的峰谷跨度 ≥60 mm。下蹲和起身分别用前 20%、后 20% 的平均高度减去中间 40%–60% 的平均高度。</li>
+                          <li>展开定格：仅统计本段最后四分之一。手臂和腿速度之和小于 0.26 的帧占比 ≥83%；平均双手横向间距 ≥320 mm；最大倾角 &lt;9°。</li>
+                        </ul>
+                        <p>高度峰谷差和整次评测最大倾角用于诊断。训练完成率在训练过程中统计，总质量门要求所有评测节拍的整套舞蹈完成，且每段达标。</p>
+                      </details>
+                      <div class="comparison-scroll">
+                        <table id="quality-table" hidden>
+                          <caption>本次 Run 返回的分段测量</caption>
+                          <thead><tr><th scope="col">舞段</th><th scope="col">实测结果</th></tr></thead>
+                          <tbody id="quality-body"></tbody>
+                        </table>
+                      </div>
+                    </section>
+                    <section aria-labelledby="replay-heading">
+                      <div class="section-heading">
+                        <h2 id="replay-heading">本次仿真回放</h2>
+                        <span id="run-video-status">尚未核验</span>
+                      </div>
+                      <p id="replay-section-status" role="status"></p>
+                      <video id="run-video" controls playsinline preload="none" hidden aria-label="本次训练生成的仿真舞蹈视频"></video>
+                      <p id="replay-empty" class="empty-state">回放生成后会校验策略与轨迹摘要，再显示本次视频。</p>
+                    </section>
+                    <p id="run-hardware-readiness" hidden></p>
+                    <p id="run-dance-next" hidden><a id="run-dance-next-link">准备下一阶段 →</a></p>
+                    <p id="run-dance-next-note" hidden>本轮已达标。此浏览器没有本轮递进草稿，可用本轮参数准备下一轮。</p>
+                    <p><a id="run-copy-config" hidden>用本轮参数准备下一轮</a></p>
+                  </div>
+                  <details id="run-technical-evidence">
+                    <summary>运行配置与制品</summary>
+                    <div class="comparison-scroll">
+                      <table id="run-config-table" hidden>
+                        <caption>平台记录的训练配置</caption>
+                        <tbody id="run-config-body"></tbody>
+                      </table>
+                    </div>
+                    <section aria-labelledby="dance-heading" id="dance-section" hidden>
+                      <div class="section-heading">
+                        <h2 id="dance-heading">舞段编排</h2>
+                        <span id="dance-title">—</span>
+                      </div>
+                      <p id="dance-meta"></p>
+                      <div class="comparison-scroll">
+                        <table>
+                          <caption>本次提交的动作段</caption>
+                          <thead><tr><th scope="col">顺序</th><th scope="col">动作</th><th scope="col">拍数</th><th scope="col">强度</th></tr></thead>
+                          <tbody id="dance-sections"></tbody>
+                        </table>
+                      </div>
+                    </section>
+                    <dl>
+                      <dt>Run ID</dt><dd id="run-id-detail">—</dd>
+                      <dt>模型 ID</dt><dd id="run-model-id">—</dd>
+                      <dt>策略 SHA-256</dt><dd id="run-policy-sha">—</dd>
+                    </dl>
+                    <a id="run-policy-download" download hidden>下载本次 ONNX 策略</a>
+                  </details>
+                </section>
                 <details class="training-controls" id="train-module-config" data-train-module="config" role="tabpanel" aria-labelledby="train-tab-config">
                   <summary>训练参数与续训</summary>
                   <div class="panel-heading panel-heading-lean config-module-heading"><h2>训练配置</h2><small class="panel-tip">选算法、档位与算力；提交后在「Run 与进度」看曲线和日志</small></div>
@@ -2324,7 +2391,7 @@
     <script defer src="./run-inspector.js?v=3"></script>
     <script defer src="./training-plans.js?v=4"></script>
     <script defer src="./run-progress-chart.js"></script>
-    <script defer src="./app.js?v=duck-lab-76"></script>
+    <script defer src="./app.js?v=duck-lab-77"></script>
     <script defer src="./visualization-enhancements.js?v=viz-1"></script>
     <script defer src="./capability-workbench.js?v=1"></script>
     <script defer src="./agent-chat.js?v=agent-19"></script>

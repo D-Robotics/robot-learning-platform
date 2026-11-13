@@ -2,7 +2,12 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import test from 'node:test';
 import { JSDOM } from 'jsdom';
-import { danceReplayWindow, startRunDetail } from './public/run-detail-page.mjs';
+import {
+  danceReplayWindow,
+  legacyRunDestination,
+  mountRunEvidence,
+  startRunDetail,
+} from './public/run-detail-page.mjs';
 
 const markup = fs.readFileSync(new URL('./public/run-detail.html', import.meta.url), 'utf8');
 const digest = (char) => char.repeat(64);
@@ -19,6 +24,49 @@ function fixture(url = 'https://platform.test/robotics-learning/run-detail.html?
     close: () => dom.window.close(),
   };
 }
+
+test('legacy Run links preserve the exact record, mount and dance section', () => {
+  const destination = legacyRunDestination(
+    new URL('https://platform.test/robotics-learning/run-detail.html?runId=run_42#dance-section-3'),
+  );
+  assert.equal(
+    destination.href,
+    'https://platform.test/robotics-learning/?trainingRun=run_42&runSection=dance-section-3#train/submit',
+  );
+  assert.equal(
+    legacyRunDestination(new URL('https://platform.test/run-detail.html?runId=%2F')),
+    null,
+  );
+});
+
+test('Run evidence follows the selected record through completion and clears on selection change', (t) => {
+  const dom = new JSDOM(fs.readFileSync(new URL('./public/index.html', import.meta.url), 'utf8'), {
+    url: 'https://platform.test/sim2real/?trainingRun=run_42#train/submit',
+  });
+  t.after(() => dom.window.close());
+  const { document, location, CustomEvent } = dom.window;
+  mountRunEvidence(document, location);
+  const select = (run) =>
+    dom.window.dispatchEvent(new CustomEvent('rdk-run-selected', { detail: run }));
+  const panel = document.getElementById('run-evidence');
+  select({ id: 'run_42', status: 'running' });
+  assert.equal(panel.hidden, true);
+  select({
+    id: 'run_42',
+    status: 'completed',
+    taskId: 'originman-dance',
+    metrics: {
+      originmanDance: { qualityGatePassed: false },
+    },
+  });
+  assert.equal(panel.hidden, false);
+  assert.equal(panel.dataset.runId, 'run_42');
+  assert.equal(document.getElementById('quality-status').textContent, '风格门未通过');
+  assert.equal(document.getElementById('reward-chart'), null);
+  select({ id: 'run_43', status: 'running' });
+  assert.equal(panel.hidden, true);
+  assert.equal(panel.dataset.runId, '');
+});
 
 test('dance Run detail selects the exact account-scoped record and visualizes its own evidence', async (t) => {
   const f = fixture();
