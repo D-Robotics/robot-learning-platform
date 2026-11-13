@@ -28,8 +28,19 @@ window.TrainingPlans = (() => {
     const numEnvs = byId('originman-dance-num-envs');
     const defaultSection = { type: 'alternating-arms', beats: 8, intensity: 0.25 };
     const configPanel = byId('train-module-config');
+    const mode = byId('originman-dance-mode');
+    const stageNote = byId('originman-dance-stage-note');
+    let prefixLength = 1;
+    const sameRecipe = (left, right) => {
+      const stable = (value) => JSON.stringify(Object.entries(value ?? {}).sort());
+      return ['title', 'bpm', 'trainingSteps', 'seed'].every((key) => left[key] === right[key]) &&
+        stable(left.rewardTuning) === stable(right.rewardTuning) &&
+        left.sections.length === right.sections.length &&
+        left.sections.every((item, index) => stable(item) === stable(right.sections[index]));
+    };
     const rewards = [...byId('originman-dance-rewards').querySelectorAll('[data-dance-reward]')];
     byId('originman-dance-four-sections').addEventListener('click', () => {
+      prefixLength = 1;
       sections.replaceChildren();
       for (const type of Object.keys(names)) append({ type, beats: 8, intensity: 0.5 });
       changed();
@@ -37,6 +48,7 @@ window.TrainingPlans = (() => {
     });
     byId('originman-dance-reset-rewards').addEventListener('click', () => {
       for (const control of rewards) control.value = '';
+      prefixLength = 1;
       changed();
     });
     const number = (input) => input.value !== '' && input.validity.valid ? Number(input.value) : NaN;
@@ -67,6 +79,11 @@ window.TrainingPlans = (() => {
 
     function refresh() {
       fields.hidden = !enabled();
+      const total = sections.childElementCount;
+      const count = mode.value === 'full' ? total : Math.min(prefixLength, total);
+      stageNote.textContent = mode.value === 'full'
+        ? `本轮一次训练全部 ${total} 段，共用一个策略。`
+        : `本轮训练前 ${count} / ${total} 段，共用一个策略。当前 Run 通过质量门后，可从详情页准备下一阶段。每阶段重新训练并单独确认。`;
       configPanel.classList.toggle('is-dance-goal', enabled());
       add.disabled = sections.childElementCount >= 8;
       Array.from(sections.children).forEach((row, index) => {
@@ -93,6 +110,7 @@ window.TrainingPlans = (() => {
       beats.value = section.beats;
       row.querySelector('[data-dance-intensity]').value = section.intensity;
       row.querySelector('button').addEventListener('click', () => {
+        prefixLength = 1;
         row.remove();
         changed();
         add.focus();
@@ -106,7 +124,10 @@ window.TrainingPlans = (() => {
       onChange();
     }
 
-    root.addEventListener('input', changed);
+    root.addEventListener('input', (event) => {
+      if (event.target !== mode) prefixLength = 1;
+      changed();
+    });
     add.addEventListener('click', () => {
       if (sections.childElementCount >= 8) return;
       const type = append(defaultSection);
@@ -117,12 +138,33 @@ window.TrainingPlans = (() => {
     return {
       enabled,
       read,
+      submission() {
+        const full = read();
+        if (!full) return null;
+        const progressive = mode.value === 'progressive';
+        const count = progressive ? Math.min(prefixLength, full.sections.length) : full.sections.length;
+        return { progressive, full, count, dance: { ...full, sections: full.sections.slice(0, count) } };
+      },
+      restoreProgress(run, saved, advance) {
+        const prior = run.training.originmanDance;
+        if (!Array.isArray(saved?.full?.sections) || !Number.isInteger(saved.count) || saved.count !== prior.sections.length ||
+            saved.count >= saved.full.sections?.length ||
+            !sameRecipe(prior, { ...saved.full, sections: saved.full.sections.slice(0, saved.count) })) return false;
+        mode.value = 'progressive';
+        this.load(saved.full, run.training.numEnvs);
+        prefixLength = saved.count + (advance && run.status === 'completed' &&
+          run.metrics?.originmanDance?.qualityGatePassed === true ? 1 : 0);
+        refresh();
+        onChange();
+        return true;
+      },
       numEnvs: () => number(numEnvs),
       syncProduct(product) {
         root.hidden = product !== 'originman';
         refresh();
       },
       load(recipe, count) {
+        prefixLength = 1;
         goal.value = recipe ? 'originman-dance' : '';
         for (const input of rewards) input.value = recipe?.rewardTuning?.[input.dataset.danceReward] ?? '';
         if (recipe) {
@@ -367,6 +409,14 @@ window.TrainingPlans = (() => {
             computeResourceId: run.computeResourceId, projectId: run.projectId,
             training: run.training,
           }, { fromRun: true });
+          if (params.get('danceNext') === '1') {
+            let saved;
+            try { saved = JSON.parse(sessionStorage.getItem('rdk-dance-stage:' + run.id)); } catch { /* Missing or unreadable draft. */ }
+            if (danceEditor.restoreProgress(run, saved, true)) {
+              setStatus('已按本轮结果准备递进编排。请核对本轮舞段，再确认提交。');
+              return;
+            }
+          }
           setStatus('已复制本轮参数。可修改并保存为新方案，再到「Run 与进度」提交。');
         });
       } else if (byId('train-module-config').open) {
@@ -377,7 +427,7 @@ window.TrainingPlans = (() => {
     byId('train-module-config').addEventListener('toggle', () => {
       if (byId('train-module-config').open) void list().catch((error) => setStatus(errorMessage(error)));
     });
-    return { hasDance: danceEditor.enabled, dance: danceEditor.read, danceNumEnvs: danceEditor.numEnvs, syncProduct: danceEditor.syncProduct, video: () => current?.config.training.video };
+    return { hasDance: danceEditor.enabled, dance: danceEditor.read, danceSubmission: danceEditor.submission, danceNumEnvs: danceEditor.numEnvs, syncProduct: danceEditor.syncProduct, video: () => current?.config.training.video };
   }
   return { mount };
 })();

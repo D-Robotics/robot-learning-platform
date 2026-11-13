@@ -92,6 +92,42 @@ function metricRows(evidence) {
   });
 }
 
+function renderTrainingProgress(document, location, run) {
+  const progress = document.getElementById('run-training-progress');
+  const point = [...(run.progress ?? [])].reverse().find(({ iteration, totalIterations }) =>
+    Number.isInteger(iteration) && iteration >= 0 && Number.isInteger(totalIterations) && totalIterations > 0);
+  const active = ['queued', 'running', 'cancelling'].includes(run.status);
+  if (progress) {
+    progress.hidden = !active && !point;
+    if (point) {
+      progress.max = point.totalIterations;
+      progress.value = point.iteration;
+    } else progress.removeAttribute('value');
+  }
+  const isDance = run.taskId === 'originman-dance';
+  const rate = isDance && Number.isFinite(point?.recentSuccess)
+    ? ` · 近期回合完成率 ${Math.round(100 * point.recentSuccess)}%`
+    : '';
+  text(document, 'run-training-progress-note', point
+    ? `第 ${point.iteration} / ${point.totalIterations} 轮${Number.isFinite(point.meanReward) ? ` · 平均奖励 ${point.meanReward.toFixed(3)}` : ''}${rate}`
+    : run.status === 'queued' ? '排队中 · 等待算力机接单'
+      : active ? '等待 Worker 上报首条训练进度' : '');
+  const row = document.getElementById('run-dance-next');
+  const link = document.getElementById('run-dance-next-link');
+  if (!row || !link) return;
+  let draft;
+  try { draft = JSON.parse(document.defaultView.sessionStorage.getItem('rdk-dance-stage:' + run.id)); } catch { /* Missing or unreadable draft. */ }
+  row.hidden = !isDance || run.status !== 'completed' ||
+    danceEvidenceFor(run)?.qualityGatePassed !== true || !Number.isInteger(draft?.count) || !Array.isArray(draft.full?.sections) ||
+    draft.count >= draft.full.sections.length;
+  if (!row.hidden) {
+    const url = new URL('./?robot=originman#train/configure', location.href);
+    url.searchParams.set('fromRun', run.id);
+    url.searchParams.set('danceNext', '1');
+    link.href = url.href;
+  }
+}
+
 function drawCurve(document, run) {
   const svg = document.getElementById('reward-chart');
   const empty = document.getElementById('curve-empty');
@@ -468,6 +504,7 @@ function renderRun(document, location, run, runId) {
   }
   renderDance(document, run);
   renderQuality(document, location, run);
+  renderTrainingProgress(document, location, run);
   drawCurve(document, run);
   renderVideo(document, location, run, runId);
   text(document, 'run-connection-status', '已连接并定位到本次 Run');
@@ -534,7 +571,7 @@ export async function startRunDetail({
       const run = payload?.run;
       if (!run || run.id !== runId) throw new Error('平台返回的运行记录与链接中的 Run ID 不一致。');
       loaded = true;
-      active = ['queued', 'running', 'ready'].includes(run.status);
+      active = ['queued', 'running', 'ready', 'cancelling'].includes(run.status);
       if (error) error.hidden = true;
       renderRun(document, location, run, runId);
       if (!quiet && /^#dance-section-[1-9]$/.test(location.hash ?? '')) {

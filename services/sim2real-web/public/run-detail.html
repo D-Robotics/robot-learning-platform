@@ -53,6 +53,18 @@
           </div>
         </section>
 
+        <section aria-labelledby="curve-heading">
+          <div class="section-heading">
+            <h2 id="curve-heading">训练过程曲线</h2>
+            <span id="curve-caption" role="status">等待本次 Run 的采样点</span>
+          </div>
+          <progress id="run-training-progress" aria-label="训练轮次进度" hidden></progress>
+          <p id="run-training-progress-note" role="status"></p>
+          <p id="run-dance-next" hidden><a id="run-dance-next-link">准备下一阶段 →</a></p>
+          <svg id="reward-chart" viewBox="0 0 720 240" role="img" aria-label="本次训练真实上报的奖励曲线" hidden></svg>
+          <p id="curve-empty" class="empty-state">暂无可展示的训练曲线；不会用其他 Run 或示例曲线代替。</p>
+        </section>
+
         <section aria-labelledby="dance-heading" id="dance-section" hidden>
           <div class="section-heading">
             <h2 id="dance-heading">舞段编排</h2>
@@ -66,15 +78,6 @@
               <tbody id="dance-sections"></tbody>
             </table>
           </div>
-        </section>
-
-        <section aria-labelledby="curve-heading">
-          <div class="section-heading">
-            <h2 id="curve-heading">训练过程曲线</h2>
-            <span id="curve-caption">等待本次 Run 的采样点</span>
-          </div>
-          <svg id="reward-chart" viewBox="0 0 720 240" role="img" aria-label="本次训练真实上报的奖励曲线" hidden></svg>
-          <p id="curve-empty" class="empty-state">暂无可展示的训练曲线；不会用其他 Run 或示例曲线代替。</p>
         </section>
 
         <section aria-labelledby="quality-heading">

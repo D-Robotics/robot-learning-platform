@@ -8118,7 +8118,8 @@ function supportsOriginmanDance(resource) {
 
 async function submitOriginmanDance() {
   const model = selectedModel();
-  const dance = typeof trainingPlans !== 'undefined' && trainingPlans?.dance?.();
+  const stage = trainingPlans?.danceSubmission();
+  const dance = stage?.dance;
   if (state.runSubmitting || state.productId !== 'originman' || originmanContractType(model) !== 'dance' || !dance) return;
   const resource = (state.overview?.computeResources || []).find((item) => item.id === state.selectedComputeResourceId);
   if (!supportsOriginmanDance(resource)) {
@@ -8141,7 +8142,7 @@ async function submitOriginmanDance() {
     if (!await confirmAction({
       title: '确认提交舞蹈仿真训练', approveLabel: '提交训练',
       note: '提交后将创建一条新的 Run 并使用所选算力。',
-      details: [{ label: '舞段', value: dance.title }, { label: '速度', value: dance.bpm + ' BPM' },
+      details: [{ label: '舞段', value: `${dance.title} · 本轮 ${stage.count}/${stage.full.sections.length} 段` }, { label: '速度', value: dance.bpm + ' BPM' },
         { label: '步数', value: String(steps) }, { label: '算力', value: resource.name }],
     })) return;
     const tested = await request('/sim2real/compute-resources/' + encodeURIComponent(resource.id) + '/test', { method: 'POST', body: '{}' });
@@ -8157,9 +8158,14 @@ async function submitOriginmanDance() {
     });
     if (!payload.run?.id) throw Error('未收到 Run 回执。可用同一配置重查提交结果。');
     originmanRunState.attempt = null;
-    selectOriginmanRun(payload.run.id);
-    await loadOverview({ quiet: true });
-    showToast(payload.run.status === 'blocked' ? '本轮已阻断，请查看该 Run 的原因。' : '本轮 Run 已创建。', payload.run.status === 'blocked' ? 'error' : 'success');
+    if (stage.progressive && stage.count < stage.full.sections.length) {
+      try {
+        sessionStorage.setItem('rdk-dance-stage:' + payload.run.id, JSON.stringify({ full: stage.full, count: stage.count }));
+      } catch { /* Storage can be unavailable in a restricted browser. */ }
+    }
+    const detail = new URL('./run-detail.html', location.href);
+    detail.searchParams.set('runId', payload.run.id);
+    location.assign(detail);
   } catch (error) {
     showToast(friendlyError(error, '舞蹈训练提交失败'), 'error');
   } finally {

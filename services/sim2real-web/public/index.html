@@ -980,6 +980,13 @@
                           <li>展开定格：幅度缩放本段的节拍、展臂和定格奖励。</li>
                         </ul>
                       </details>
+                      <label>训练方式
+                        <select id="originman-dance-mode">
+                          <option value="progressive" selected>逐段递进（默认）</option>
+                          <option value="full">一次训练完整编排</option>
+                        </select>
+                      </label>
+                      <p id="originman-dance-stage-note" class="small-note" role="status"></p>
                       <div id="originman-dance-sections"></div>
                       <button class="button button-ghost button-small" id="originman-dance-add" type="button">添加舞段</button>
                       <button class="button button-ghost button-small" id="originman-dance-four-sections" type="button">载入四段示例</button>
