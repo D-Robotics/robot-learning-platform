@@ -3,11 +3,20 @@ import fs from 'node:fs';
 import { selectCourseAssets, registerCourseModel } from './course-setup.mjs';
 import { prepareTraining } from './workflow-inspection.mjs';
 import { requireConnected } from './short-training.mjs';
+
+export const STUDIO_WORKSHOP_NAVIGATION =
+  '在 RDK Studio 开始、继续或查看 Workshop 结果时，先调用 studio_open_url，使用 studioNavigation.arguments.url 打开右侧工作台。不再询问是否打开。用户只要链接或明确指定其他打开方式时，按用户要求执行。工具缺失或调用失败时直接给可点击链接。';
+
+const WORKSHOP_PAGE_DELIVERY =
+  STUDIO_WORKSHOP_NAVIGATION +
+  ' Qoder 默认展示可点击链接，用户要求直接打开时按 qoderNavigation 在内置浏览器依次导航、列出页面并选择完整 URL 匹配的真实 pageId。页面负责预算确认和提交。';
 export const WORKSHOP_TOOLS = [
   {
     name: 'rdk_workshop',
     description:
-      '用户说“带我开启/开始 OriginMan Workshop”时直接调用本工具 intent=new；默认舞蹈准备页，明确受扰恢复传 course=recovery。回执提供当前平台完整链接。“继续”和“看看效果”使用当前账号已选实验。学员在页面选择算力和预算。本工具不提交训练。立即展示 studentReply 中的入口；只有明确要求替我打开时才按 qoderNavigation 操作。',
+      '用户说“带我开启/开始 OriginMan Workshop”时直接调用本工具 intent=new；默认舞蹈准备页，明确受扰恢复传 course=recovery。回执提供当前平台完整页面。“继续”和“看看效果”使用当前账号原实验并返回已核对的效果结论。学员在页面选择算力和预算。本工具不提交训练。' +
+      STUDIO_WORKSHOP_NAVIGATION +
+      ' Qoder 按回执操作。',
     inputSchema: {
       type: 'object',
       properties: {
@@ -25,18 +34,23 @@ const noSubmission = () => ({ training: false, evaluation: false });
 const signedIn = (status) =>
   status.session?.authenticated === true && Boolean(status.session.accountId);
 
-const qoderNavigation = (url) => ({
-  surface: '内置 browser-use MCP，非外部 Chrome Connector',
-  steps: [
-    { tool: 'navigate_page', arguments: { url } },
-    { tool: 'list_pages', arguments: {} },
-    {
-      tool: 'select_page',
-      argumentsFrom:
-        '从 list_pages 中按完整 URL 精确匹配取得 pageId，传 {pageId, bringToFront:true}；navigate_page 只返回成功文字，不提供 pageId。',
+export function workshopPageNavigation(url) {
+  return {
+    studioNavigation: { tool: 'studio_open_url', arguments: { url } },
+    qoderNavigation: {
+      surface: 'Qoder 内置浏览器',
+      steps: [
+        { tool: 'navigate_page', arguments: { url } },
+        { tool: 'list_pages', arguments: {} },
+        {
+          tool: 'select_page',
+          argumentsFrom: '按完整 URL 匹配刚打开的页面，使用实际 pageId 并传 bringToFront:true。',
+        },
+      ],
     },
-  ],
-});
+    delivery: WORKSHOP_PAGE_DELIVERY,
+  };
+}
 export function workshopPreview(base, course = 'dance', stage = 'preview', resource) {
   const url = new URL(base.replace(/\/+$/, '') + '/workshop.html');
   if (
@@ -65,10 +79,7 @@ export function workshopPreview(base, course = 'dance', stage = 'preview', resou
     studentReply: resource
       ? `[打开 ${label}](${href})。本轮选择 ${resource.name || '指定的算力机'}，提交前会核对连接与课程能力。`
       : `[打开 ${label}](${href})。${firstStep}`,
-    studioNavigation: { tool: 'studio_open_url', arguments: { url: href } },
-    qoderNavigation: qoderNavigation(href),
-    delivery:
-      '立即展示 studentReply 中的链接供学员点击；普通入口不调用浏览器工具等待导航。进入页面后由用户点击开始实操和选择算力，不主动发起授权。',
+    ...workshopPageNavigation(href),
   };
 }
 
@@ -77,6 +88,7 @@ export async function workshopEntry(
   call,
   {
     remote,
+    readResult,
     readModels,
     courseReadiness,
     toolNames = [],
@@ -231,6 +243,9 @@ export async function workshopEntry(
     ).session;
     if (args.computeResourceId) selectedComputeName = selected.resource.name;
   }
+  const stage = session?.stage ?? 'choose';
+  const result = stage === 'results' ? await readResult?.(session.contextId) : undefined;
+  signal?.throwIfAborted();
   const finalIdentity = await call('rdk_platform_status', {});
   if (
     finalIdentity.baseUrl !== status.baseUrl ||
@@ -243,7 +258,6 @@ export async function workshopEntry(
     root +
     '/workshop.html?course=recovery' +
     (session ? '&context=' + encodeURIComponent(session.contextId) : '');
-  const stage = session?.stage ?? 'choose';
   const [message, linkLabel] = {
     choose: ['选择要继续的实验。', '打开实验列表'],
     ready:
@@ -260,23 +274,22 @@ export async function workshopEntry(
     unknown: ['这轮提交状态待核对，打开页面接续原请求。', '恢复当前实验'],
   }[stage] ?? ['查看当前实验的进度与下一步。', '打开当前实验'];
   return {
+    ...result,
     contextId: session?.contextId ?? null,
     stage,
     course,
     session,
-    links: { workshop: url },
+    links: { ...result?.links, workshop: url },
     submission: noSubmission(),
     studentReply:
+      result?.studentReply ??
       (selectedComputeName ? '本轮算力机：' + selectedComputeName + '。' : '') +
-      message +
-      '\n[' +
-      linkLabel +
-      '](' +
-      url +
-      ')',
-    studioNavigation: { tool: 'studio_open_url', arguments: { url } },
-    qoderNavigation: qoderNavigation(url),
-    delivery:
-      '普通入口立即展示studentReply中的链接供学员点击，不调用浏览器工具等待导航。只有用户明确要求替我打开页面才按以下导航规则执行。不添加“我来加载”“我在打开”等过程说明。Qoder依次执行qoderNavigation三个步骤：navigate_page→list_pages→select_page({pageId:真实页面编号,bringToFront:true})，禁止省略pageId或把URL当编号。成功后结束，保持面板展示，不重复截图或询问预算。内置工具不可用时直接给一次链接；不启动外部Browser Connector。其余工具仅在用户明确要求高级操作时使用。',
+        message +
+        '\n[' +
+        linkLabel +
+        '](' +
+        url +
+        ')',
+    ...workshopPageNavigation(result?.links?.experiment ?? url),
   };
 }

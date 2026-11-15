@@ -32,7 +32,7 @@ export const EXPERIMENT_TOOLS = [
   {
     name: 'rdk_experiment_resume',
     description:
-      '按明确实验标识恢复原训练和评测，重验账号、状态与来源。恢复后优先展示studentReply并打开links.experiment：页面已有本次训练曲线、对比、播放器和保存评测记录按钮。保存是导出JSON，不是artifact_promote；回放不依赖通用telemetry或runs_replay，不用其0帧结论覆盖训练曲线。正常接续无需扫描runs/evaluations或重复remember；需要技术明细时再读取原Run。不重新提交或操作设备，不把完成当作效果达标。',
+      '用 contextId 恢复原实验并核对训练与评测的真实 Run ID。回答是否达标时读 quality.clearGain，查细节用 detailRead.arguments.runId。Studio 优先按 studioNavigation 打开右侧工作台，再展示 studentReply。保存是导出JSON，不是artifact_promote；回放不依赖通用telemetry或runs_replay，不用其0帧结论覆盖训练曲线。正常接续无需扫描runs/evaluations或重复remember；需要技术明细时再读取原Run。不重新提交或操作设备，不把完成当作效果达标。',
     inputSchema: {
       type: 'object',
       required: ['contextId'],

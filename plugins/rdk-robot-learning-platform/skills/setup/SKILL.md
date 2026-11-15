@@ -5,7 +5,7 @@ description: 连接当前机器人学习平台，确认正式身份与明确模�
 
 连接诊断以当前 RDK Robot Learning Platform 插件的 rdk_platform_status 回执为准。先核对返回的 baseUrl、health.ready、session.authenticated 和 canAccessWorkspace；需要版本时调用 rdk_plugin_status。工具目录和旧技能只说明入口，不能证明平台故障。仅在用户明确选择本机部署时检查本机端口或运行旧 CLI。云端连接下，本机 18102 无监听与平台状态无关。若宿主未暴露这些工具，说明当前对话未加载此连接，指引启用或重连插件；不要用旧技能、旧 MCP 或 shell 探针代替已配置的云端连接。仅咨询插件能力时给可用入口，具体工具数量以当前目录为准。
 
-用户说「带我开启 OriginMan Workshop」时调用 `rdk_workshop({intent:'new'})`，直接展示完整课程链接。明确受扰恢复时加 `course:'recovery'`。课程入口的地址使用当前平台配置。
+用户说「带我开启 OriginMan Workshop」时调用 `rdk_workshop({intent:'new'})`。Studio 调用 `studio_open_url` 打开右侧工作台，再展示回执里的课程链接。明确受扰恢复时加 `course:'recovery'`。课程入口的地址使用当前平台配置。
 
 这是通用机器人学习插件。首次按用户任务选择仿真与录制、强化学习、模仿学习、评测、回放或部署预检，优先调用 `rdk_learning_guide`。沿用已明确的机型和任务。明确提到 OriginMan Workshop 时用 `rdk_workshop`。继续或看看效果时沿用原 Run 或实验标识。没有原引用时先提供当前账号近期运行的名称、时间和状态，由用户选择。
 

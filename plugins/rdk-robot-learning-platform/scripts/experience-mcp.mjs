@@ -50,7 +50,13 @@ import {
 
 import { ROBOT_ONBOARDING_TOOLS, onboardingGuide, assessOnboarding } from './robot-onboarding.mjs';
 import { CLASSROOM_TOOLS, classroomGuide } from './classroom-guide.mjs';
-import { WORKSHOP_TOOLS, workshopEntry, workshopPreview } from './workshop-entry.mjs';
+import {
+  STUDIO_WORKSHOP_NAVIGATION,
+  WORKSHOP_TOOLS,
+  workshopEntry,
+  workshopPageNavigation,
+  workshopPreview,
+} from './workshop-entry.mjs';
 import { DEVELOPMENT_TARGET_TOOL, developmentTargets } from './development-targets.mjs';
 import { DANCE_EVALUATION_TOOLS, danceEvaluation } from './dance-evaluation.mjs';
 import { DANCE_TRAINING_TOOLS, trainOriginmanDance } from './dance-training.mjs';
@@ -404,6 +410,10 @@ export function experimentModelResult(payload) {
     },
     playback: { state: payload.playback?.state, verifiedInPlayer: false },
     playbackPlan: payload.playbackPlan,
+    detailRead: payload.detailRead,
+    studioNavigation: payload.studioNavigation,
+    qoderNavigation: payload.qoderNavigation,
+    delivery: payload.delivery,
     links: payload.links,
     persistence: payload.persistence,
     view: payload.view,
@@ -868,7 +878,7 @@ export function experienceProxy(
           (result.instructions ?? '').replace(/[（(]Duck Lab[）)]/gi, '') +
           '\n连接诊断以当前 RDK Robot Learning Platform 插件的 rdk_platform_status 回执为准。先核对返回的 baseUrl、health.ready、session.authenticated 和 canAccessWorkspace；需要版本时调用 rdk_plugin_status。工具目录和旧技能只说明入口，不能证明平台故障。仅在用户明确选择本机部署时检查本机端口或运行旧 CLI。云端连接下，本机 18102 无监听与平台状态无关。若宿主未暴露这些工具，说明当前对话未加载此连接，指引启用或重连插件；不要用旧技能、旧 MCP 或 shell 探针代替已配置的云端连接。仅咨询插件能力时给可用入口，具体工具数量以当前目录为准。' +
           '\n面向用户统一称为 RDK Robot Learning Platform（RDK 机器人学习平台）。介绍能力时先给课程、训练、评测与回放入口；仅在用户追问时展开底层服务、协议与部署细节。' +
-          '\n用户说“带我开启/开始 OriginMan Workshop”时，直接调用 rdk_workshop({intent:"new"}) 并展示 studentReply。明确受扰恢复时增加 course:"recovery"。如果只拿到旧课程目录，使用回执的绝对链接。127.0.0.1 可能是 MCP 内部转发地址，诊断网页必须依据插件配置的平台 URL。' +
+          '\n用户说“带我开启/开始 OriginMan Workshop”时，直接调用 rdk_workshop({intent:"new"})。明确受扰恢复时增加 course:"recovery"。按回执导航，再展示 studentReply。如果只拿到旧课程目录，使用回执的绝对链接。127.0.0.1 可能是 MCP 内部转发地址，诊断网页必须依据插件配置的平台 URL。' +
           '\n用户问插件能做什么时，调用 rdk_platform_status 后直接使用 studentReply；仅在追问时展开工具名、数量、接口地址或设备门槛。' +
           '\n这是通用机器人学习插件。先按用户的机型与目标使用 rdk_learning_guide；打开工作台传 task:overview，强化学习或模仿学习有通用入口，只有明确选择课程时才使用 OriginMan 专用工具。开始新实验传 intent:new；查看结果传 intent:results 和原 Run；改参传 intent:retry、原 Run 与 changes，等确认再使用 nextArguments。Studio 优先用 studio_open_url 打开已验证的工作台链接，仍保留可点击地址。已打开不表示已播放。' +
           '\n版本检查分别报告插件实际加载版本、宿主登记与平台连接；工具不可用、读失败和已确认空列表分别报告。舞蹈仿真通过不具备部署资格。部署预检被拒绝或设备工具缺失时保留阻断，不使用终端、SSH 或设备执行工具替代受控部署。' +
@@ -876,7 +886,9 @@ export function experienceProxy(
           '\n用户明确要求独立舞蹈评测时调用 rdk_originman_dance_evaluate；比较两条舞蹈训练记录用 rdk_originman_dance_compare。返回后立即按 studioNavigation 打开主站结果页。' +
           WORKSPACE_EVIDENCE_INSTRUCTIONS +
           '\n用户要上传、下载或管理托管数据集时，调用 rdk_learning_guide({intent:"start",task:"datasets"})，展示证据与记录入口。上传走「上传数据集」，下载走数据集详情中的「下载托管文件」。rdk_dataset_register 只登记元数据。' +
-          '\n已明确选择受扰恢复Workshop时：直接调用rdk_workshop并传course:"recovery"，不加载指南、不预先询问预算。普通入口立即展示studentReply里的链接供学员点击，不调用浏览器工具等待导航；明确要求替我打开时再导航。工具间不输出旁白或内部推理。页面负责阶段进度与预算授权。' +
+          '\n' +
+          STUDIO_WORKSHOP_NAVIGATION +
+          ' 已明确选择受扰恢复 Workshop 时用 rdk_workshop 传 course:"recovery"。预算由页面确认。纯咨询用课程说明。' +
           '\n课堂新学员或新机离线准备：rdk_classroom_guide携带已知answers，只展示studentReply，每次一个中文问题，不重复问已知项。要求依据才detail=full。阶段标准读robot_onboarding_guide，证据读robot_acceptance_assess；needs-input不是通过。离线知识不要求平台登录，不因离线准备启动训练。' +
           '\n默认离线可了解课程，不主动授权、测试算力或连接板卡。需要账号才能继续时，提示“连接学习平台”，等用户明确要求连接才调用rdk_auth_login，浏览器确认后用rdk_auth_status。只在宿主已显式配置绑定账号时复用该身份，不索取密码或Cookie。' +
           '\n换学习平台账号用rdk_auth_switch_account。查看开发机先用rdk_development_targets list。用户明确选算力机开始Workshop时，按唯一名称匹配算力机ID，传rdk_workshop intent:new、当前课程和computeResourceId。未指定课程的新 Workshop 默认舞蹈；仅用户明确受扰恢复时传recovery。用户明确要求连接某台板卡时才按板卡列表匹配ID并用connect-board。名称有歧义时让用户选择，不在聊天收集凭据。' +
@@ -892,7 +904,7 @@ export function experienceProxy(
           '。宿主接口缺失时不要要求已经在桌面中的用户重复“去桌面操作”；用指南中的 clientContext 说明实际缺口。' +
           ORIGINMAN_COURSE_INSTRUCTIONS +
           '\n用户明确要求助手自动播放已有结果时，保留0.5.5能力：按experiment_resume.playbackPlan使用内置页面工具，list_pages取实际pageId，select_page({pageId,bringToFront:true})，核对可见性与本次来源后只执行startScript一次，再观察真实时间推进与ended。计划不等于执行；禁止seek、伪造进度、改安全设置或重交任务。默认按钮课程仍由页面推进，不主动调用此高级计划。' +
-          '\n已选择的受扰恢复课程仍由rdk_workshop({intent:start|continue|results})打开按钮工作台；但当前任务明确是OriginMan跳舞时，必须走独立danceTraining流程，不能让默认入口覆盖用户已说明的课程。恢复课不要先调用旧预算问答或experience_guide；预算和后续步骤改在页面按钮选择。打开返回links.workshop，Qoder静默执行内置navigate_page→list_pages，按完整URL匹配真实pageId，再select_page({pageId,bringToFront:true})显示工作面，不能漏pageId；仅当用户要求替他打开时执行导航，必要时提示产出→网页查阅，避免外部Browser Connector。保留高级工具，自由问答与用户明确的自定义训练不受本入口限制。' +
+          '\n受扰恢复用 rdk_workshop 的 continue 或 results 接续原实验。已有 contextId 时，它是实验标识。需要评测明细时，从恢复结果的 detailRead 或 evaluation.runId 读取实际 Run ID。先报告 quality.clearGain，再展示本轮页面。Qoder 按返回的 qoderNavigation 操作。舞蹈继续用原舞蹈 Run。' +
           '\n普通Workshop回执：优先使用工具studentReply，默认入口不播报加载和打开过程，导航后仅一句中文加一个实验页链接。页面已显示曲线和对比时不重复抄技术表；账号、UUID、英文套件名、摘要、video字节和部署细节按用户明确要求再展开。明确要求播放才尝试播放器操作；没有播放观察时说明回放待播放。只报告完成的四个主阶段；单变量调参是可选后续，不算本轮未完成项。',
       };
     }
@@ -1128,6 +1140,14 @@ export function experienceProxy(
                   signal,
                   accountId,
                 })),
+            readResult: async (contextId) =>
+              readToolResult(
+                await dispatch(
+                  'tools/call',
+                  { name: 'rdk_experiment_resume', arguments: { contextId } },
+                  signal,
+                ),
+              ),
             readModels: upstream.readModels && (() => upstream.readModels({ signal })),
             courseReadiness:
               upstream.courseReadiness && ((args) => upstream.courseReadiness({ ...args, signal })),
@@ -1506,6 +1526,9 @@ export function experienceProxy(
                   ((operation, input) => upstream.experimentSession(operation, input, { signal })),
               },
             );
+            if (params.name === 'rdk_experiment_resume' && payload.links?.experiment) {
+              payload = { ...payload, ...workshopPageNavigation(payload.links.experiment) };
+            }
           } else {
             const catalog = await readCatalog(signal);
             const status = await call('rdk_platform_status', {});
@@ -1665,6 +1688,9 @@ export function experienceProxy(
                         ? experimentModelResult(payload)
                         : params.name === 'rdk_workshop'
                           ? {
+                              ...(payload.training ? experimentModelResult(payload) : {}),
+                              contextId: payload.contextId,
+                              course: payload.course,
                               studentReply: payload.studentReply,
                               links: payload.links,
                               stage: payload.stage,

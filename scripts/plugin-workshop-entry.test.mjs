@@ -337,3 +337,94 @@ test('new workshops select the correct page without calling a backend or allocat
     assert.match(result.studentReply, course === 'dance' ? /配置舞段/ : /先看参考/);
   }
 });
+
+test('Studio gets the right-pane action for starting or continuing without another question', async () => {
+  const proxy = experienceProxy(
+    {
+      request: async (method) =>
+        method === 'initialize'
+          ? {}
+          : { content: [{ type: 'text', text: JSON.stringify(status) }] },
+      workshopSession: async () => ({ current }),
+    },
+    { authentication: { audience: status.baseUrl, status: async () => status.session } },
+  );
+  const initialized = await proxy('initialize', { clientInfo: { name: 'RDK Studio' } });
+  assert.match(initialized.instructions, /Studio.*先调用 studio_open_url.*右侧工作台/);
+  for (const intent of ['new', 'continue']) {
+    const result = await proxy('tools/call', {
+      name: 'rdk_workshop',
+      arguments: { intent },
+    });
+    const compact = JSON.parse(result.content[0].text);
+    assert.match(compact.delivery, /先调用 studio_open_url.*右侧工作台/);
+    assert.match(compact.delivery, /不再询问/);
+    assert.equal(compact.studioNavigation.arguments.url, compact.links.workshop);
+    assert.equal(compact.submission.training, false);
+  }
+});
+
+test('recovery results resolve experiment ID to the verified training and evaluation Runs', async () => {
+  const contextId = 'recovery-lesson';
+  const calls = [];
+  const platform = { ok: true, ...status };
+  const proxy = experienceProxy({
+    request: async (method, input) => {
+      assert.equal(method, 'tools/call');
+      calls.push([input.name, input.arguments]);
+      if (input.name === 'rdk_platform_status') return { structuredContent: platform };
+      assert.equal(input.name, 'rdk_training_status');
+      const runId = input.arguments.runId;
+      assert.ok(['training-run', 'evaluation-run'].includes(runId));
+      const evaluation = runId === 'evaluation-run';
+      return {
+        structuredContent: {
+          runId,
+          modelId: 'originman-recovery',
+          status: 'completed',
+          metrics: {
+            originmanWorkshop: {
+              phase: evaluation ? 'evaluate' : 'train',
+              ...(evaluation && { sourceRunId: 'training-run', clearGain: false }),
+              policySha256: 'a'.repeat(64),
+            },
+          },
+        },
+      };
+    },
+    workshopSession: async (operation) => {
+      assert.equal(operation, 'list');
+      return { current: { contextId, stage: 'results' } };
+    },
+    experimentSession: async (operation, input) => {
+      if (operation === 'capabilities') return { supported: true };
+      assert.equal(operation, 'resume');
+      assert.deepEqual(input, { contextId });
+      return {
+        view: {
+          contextId,
+          training: { runId: 'training-run' },
+          evaluation: { runId: 'evaluation-run' },
+        },
+      };
+    },
+  });
+  const result = await proxy('tools/call', {
+    name: 'rdk_workshop',
+    arguments: { intent: 'results', course: 'recovery' },
+  });
+  assert.equal(result.isError, undefined, result.content[0].text);
+  const compact = JSON.parse(result.content[0].text);
+  assert.equal(compact.contextId, contextId);
+  assert.equal(compact.stage, 'results');
+  assert.equal(compact.quality.clearGain, false);
+  assert.match(compact.studentReply, /未达到收益判据/);
+  assert.deepEqual(compact.submission, { training: false, evaluation: false });
+  assert.equal(compact.links.experiment, status.baseUrl + '/experiment.html?context=' + contextId);
+  assert.equal(compact.studioNavigation.arguments.url, compact.links.experiment);
+  assert.deepEqual(compact.detailRead.arguments, { runId: 'evaluation-run' });
+  assert.deepEqual(
+    calls.filter(([name]) => name === 'rdk_training_status').map(([, args]) => args.runId),
+    ['training-run', 'evaluation-run'],
+  );
+});
