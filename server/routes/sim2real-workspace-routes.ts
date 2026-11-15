@@ -747,20 +747,25 @@ export function registerSim2RealWorkspaceRoutes(
       ].sort(
         (a, b) => Date.parse(b.updatedAt ?? b.createdAt) - Date.parse(a.updatedAt ?? a.createdAt),
       );
-      const artifacts = all
-        .filter(
-          (item) =>
-            (!type || item.type === type) &&
-            (!modelId || item.modelId?.toLowerCase() === modelId) &&
-            (!runId || item.runId?.toLowerCase() === runId) &&
-            (!projectId || item.projectId?.toLowerCase() === projectId) &&
-            (!taskId || item.taskId?.toLowerCase() === taskId) &&
-            (!statuses.length || statuses.includes(item.status.toLowerCase())) &&
-            (!search ||
-              `${item.name} ${item.id} ${item.format ?? ''}`.toLowerCase().includes(search)),
-        )
-        .slice(0, limit);
-      response.json({ ok: true, artifacts, total: artifacts.length, available: all.length });
+      const matches = all.filter(
+        (item) =>
+          (!type || item.type === type) &&
+          (!modelId || item.modelId?.toLowerCase() === modelId) &&
+          (!runId || item.runId?.toLowerCase() === runId) &&
+          (!projectId || item.projectId?.toLowerCase() === projectId) &&
+          (!taskId || item.taskId?.toLowerCase() === taskId) &&
+          (!statuses.length || statuses.includes(item.status.toLowerCase())) &&
+          (!search ||
+            `${item.name} ${item.id} ${item.format ?? ''}`.toLowerCase().includes(search)),
+      );
+      const artifacts = matches.slice(0, limit);
+      response.json({
+        ok: true,
+        artifacts,
+        total: all.length,
+        available: matches.length,
+        returned: artifacts.length,
+      });
     }),
   );
 

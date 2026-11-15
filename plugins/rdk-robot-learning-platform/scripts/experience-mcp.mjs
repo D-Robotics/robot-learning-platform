@@ -18,6 +18,7 @@ import {
   prepareTraining,
   readOriginmanEvaluation,
 } from './workflow-inspection.mjs';
+import { enrichToolError } from './plugin-errors.mjs';
 import { AUTH_TOOLS } from './plugin-auth.mjs';
 import { SHORT_TRAINING_TOOLS, shortTraining } from './short-training.mjs';
 import { EXPERIMENT_TOOLS, experimentContext } from './experiment-context.mjs';
@@ -38,6 +39,7 @@ import {
   ORIGINMAN_DANCE_DRAFT_TOOL,
   originmanDanceDraft,
   learningGuide,
+  validateLearningGuideArgs,
   trainingChoice,
   ORIGINMAN_COURSE,
   ORIGINMAN_COURSE_INSTRUCTIONS,
@@ -1718,11 +1720,14 @@ export function experienceProxy(
               : {}),
           },
         };
-        return {
-          isError: true,
-          content: [{ type: 'text', text: JSON.stringify(payload) }],
-          structuredContent: payload,
-        };
+        return enrichToolError(
+          {
+            isError: true,
+            content: [{ type: 'text', text: JSON.stringify(payload) }],
+            structuredContent: payload,
+          },
+          params.name,
+        );
       }
     }
     if (
@@ -1866,11 +1871,13 @@ export function experienceProxy(
           content: [{ type: 'text', text: JSON.stringify(value) }],
         };
     }
-    return response;
+    return method === 'tools/call' ? enrichToolError(response, params.name) : response;
   };
 }
 
 export async function main() {
+  const { assertSupportedNode } = await import('../runtime-guard.mjs');
+  assertSupportedNode();
   const { connectAuthenticatedCore } = await import('./authenticated-core.mjs');
   const upstream = await connectAuthenticatedCore();
   const dispatch = experienceProxy(upstream, {

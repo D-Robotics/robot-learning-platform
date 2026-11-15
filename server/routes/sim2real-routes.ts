@@ -1,3 +1,4 @@
+import { probeComputeWorker, safeComputeHealthText } from '../sim2real/compute-worker-health.js';
 import { registerResimulatedDanceVideoRoute } from './resimulated-dance-video-routes.js';
 import { registerSim2RealTrainingPlanRoutes } from './sim2real-training-plan-routes.js';
 import { Router, type Request, type Response } from 'express';
@@ -131,7 +132,7 @@ import {
   isSim2RealRunnerOutcomeUnknown,
   requestRobogoTraining,
   requestRobogoTrainingStatus,
-  normalizeRunnerUrl,
+  normalizeComputeRunnerUrl,
   resolvedTaskPack,
 } from '../sim2real/robogo-runner.js';
 import { LOCAL_SIM2REAL_AUTH, type Sim2RealAuthPort } from '../sim2real/sim2real-auth.js';
@@ -195,22 +196,8 @@ function queryText(value: unknown, max = 160): string {
     .toLowerCase();
 }
 
-const COMPUTE_HEALTH_RESPONSE_MAX_BYTES = 32 * 1024;
-
 // task-pack 种子资产内容不可变（构建期随产物拷贝），进程内缓存首次读取。
 let goalNavigationFailureSeed: Record<string, unknown> | undefined;
-
-/** Keep operator-visible worker fields bounded and free of terminal controls. */
-function safeComputeHealthText(value: unknown, max = 160): string {
-  if (typeof value !== 'string') return '';
-  let output = '';
-  for (const character of value) {
-    const code = character.codePointAt(0) ?? 0;
-    output += code >= 0 && code <= 0x1f ? ' ' : code === 0x7f ? ' ' : character;
-    if (output.length >= max) break;
-  }
-  return output.trim().slice(0, max);
-}
 
 /**
  * Compute resources are user-owned outbound credentials.  A loopback worker
@@ -228,47 +215,6 @@ function computeRunnerTokenError(runnerUrl: string, runnerToken: string): string
     return '生产或非本机 Runner 必须配置至少 32 字节的随机 bearer token。';
   }
   return null;
-}
-
-/**
- * Read a health response without allowing a remote worker to make this web
- * process buffer an unbounded body.  A content-length hint is checked before
- * streaming, then the stream is bounded again for chunked responses.
- */
-async function boundedComputeHealthText(response: globalThis.Response): Promise<string> {
-  const declared = response.headers.get('content-length');
-  if (declared != null) {
-    const normalized = declared.trim();
-    const length = /^\d+$/.test(normalized) ? Number(normalized) : Number.NaN;
-    if (!Number.isSafeInteger(length) || length < 0 || length > COMPUTE_HEALTH_RESPONSE_MAX_BYTES) {
-      throw new Error('compute_health_response_too_large');
-    }
-  }
-  if (!response.body) {
-    const text = await response.text();
-    if (Buffer.byteLength(text, 'utf8') > COMPUTE_HEALTH_RESPONSE_MAX_BYTES) {
-      throw new Error('compute_health_response_too_large');
-    }
-    return text;
-  }
-  const reader = response.body.getReader();
-  const chunks: Uint8Array[] = [];
-  let total = 0;
-  try {
-    while (true) {
-      const next = await reader.read();
-      if (next.done) break;
-      total += next.value.byteLength;
-      if (total > COMPUTE_HEALTH_RESPONSE_MAX_BYTES) {
-        await reader.cancel().catch(() => undefined);
-        throw new Error('compute_health_response_too_large');
-      }
-      chunks.push(next.value);
-    }
-  } finally {
-    reader.releaseLock();
-  }
-  return new TextDecoder().decode(Buffer.concat(chunks.map((chunk) => Buffer.from(chunk))));
 }
 
 /**
@@ -639,58 +585,6 @@ function studioConnectRequestBody(value: unknown): Record<string, unknown> | nul
   if (source.bridgeId == null) return {};
   const bridgeId = studioSafeId(source.bridgeId);
   return bridgeId ? { bridgeId } : null;
-}
-
-interface ComputeHealthPayload {
-  engines?: string[];
-  mock?: boolean;
-  cuda?: boolean;
-  gpuName?: string;
-  vramMb?: number;
-  maxConcurrentJobs?: number;
-}
-
-/** Accept only the small, explicit health contract used by the worker. */
-function parseComputeHealthPayload(text: string): ComputeHealthPayload | null {
-  let parsed: unknown;
-  try {
-    parsed = text ? JSON.parse(text) : null;
-  } catch {
-    return null;
-  }
-  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return null;
-  const source = parsed as Record<string, unknown>;
-  // HTTP 200 alone is not proof that a worker is configured or ready.  The
-  // worker's explicit boolean is the source of truth for readiness.
-  if (source.ok !== true) return null;
-  const boundedInteger = (key: string, min: number, max: number): number | undefined => {
-    if (source[key] == null) return undefined;
-    const value = Number(source[key]);
-    return Number.isSafeInteger(value) && value >= min && value <= max ? value : undefined;
-  };
-  const maxConcurrentJobs = boundedInteger('maxConcurrentJobs', 1, 32);
-  const vramMb = boundedInteger('vramMb', 0, 2_000_000);
-  // If a worker sends a field, reject malformed values rather than silently
-  // storing a misleading partial health record.
-  if (source.maxConcurrentJobs != null && maxConcurrentJobs == null) return null;
-  if (source.vramMb != null && vramMb == null) return null;
-  const gpuName = safeComputeHealthText(source.gpuName, 160);
-  const engines = Array.isArray(source.engines)
-    ? source.engines
-        .filter(
-          (engine): engine is string =>
-            typeof engine === 'string' && /^[a-z][a-z0-9-]{1,31}$/.test(engine),
-        )
-        .slice(0, 64)
-    : undefined;
-  return {
-    ...(engines ? { engines } : {}),
-    ...(typeof source.mock === 'boolean' ? { mock: source.mock } : {}),
-    ...(typeof source.cuda === 'boolean' ? { cuda: source.cuda } : {}),
-    ...(gpuName ? { gpuName } : {}),
-    ...(vramMb == null ? {} : { vramMb }),
-    ...(maxConcurrentJobs == null ? {} : { maxConcurrentJobs }),
-  };
 }
 
 function computeResourceHealthFailure(
@@ -2741,27 +2635,14 @@ export function createSim2RealRouter(
       }
       let runnerUrl: string;
       try {
-        runnerUrl = normalizeRunnerUrl(runnerUrlRaw, { localHttp: true });
-        const parsedUrl = new URL(runnerUrl);
-        const pathname = parsedUrl.pathname.replace(/\/+$/, '');
-        if (source === 'local-agent' && pathname === '/proxy') {
-          parsedUrl.pathname = '/proxy/train';
-          runnerUrl = parsedUrl.toString();
-        } else if (!pathname.endsWith('/train'))
-          throw new Error('runner path must end with /train');
-        if (
-          source === 'local-agent' &&
-          !['127.0.0.1', 'localhost', '::1'].includes(parsedUrl.hostname.replace(/^\[|\]$/g, ''))
-        ) {
-          throw new Error('local-agent must use a loopback URL');
-        }
-      } catch {
+        runnerUrl = normalizeComputeRunnerUrl(runnerUrlRaw, source);
+      } catch (error) {
         sendApiError(
           response,
           400,
           'SIM2REAL_INVALID_COMPUTE_RESOURCE_URL',
-          'Runner 地址必须是合法的 HTTP(S) /train 地址。',
-          { retryable: false },
+          error instanceof Error ? error.message : 'Runner 地址无效。',
+          { retryable: false, nextAction: '按提示修正地址后重新登记，并测试 GET /healthz。' },
         );
         return;
       }
@@ -2863,22 +2744,7 @@ export function createSim2RealRouter(
           );
           return;
         }
-        try {
-          const normalized = normalizeRunnerUrl(runnerUrlRaw, { localHttp: true });
-          const parsedUrl = new URL(normalized);
-          const pathname = parsedUrl.pathname.replace(/\/+$/, '');
-          if (!pathname.endsWith('/train')) throw new Error('runner path must end with /train');
-          patch.runnerUrl = normalized;
-        } catch {
-          sendApiError(
-            response,
-            400,
-            'SIM2REAL_INVALID_COMPUTE_RESOURCE_URL',
-            'Runner 地址无效。',
-            { retryable: false },
-          );
-          return;
-        }
+        patch.runnerUrl = runnerUrlRaw;
       }
       if (body.maxConcurrentJobs !== undefined) {
         const maxConcurrentJobs = Number(body.maxConcurrentJobs);
@@ -2925,28 +2791,31 @@ export function createSim2RealRouter(
         response.status(404).json({ ok: false, error: 'SIM2REAL_COMPUTE_RESOURCE_NOT_FOUND' });
         return;
       }
-      const effectiveUrl = String(patch.runnerUrl ?? existing.resource.runnerUrl);
+      let effectiveUrl = String(patch.runnerUrl ?? existing.resource.runnerUrl);
       const effectiveToken =
         patch.runnerToken !== undefined
           ? String(patch.runnerToken)
           : String(existing.runnerToken ?? '');
-      const effectiveSource = String(patch.source ?? existing.resource.source ?? 'server-runner');
-      if (effectiveSource === 'local-agent') {
+      const effectiveSource = patch.source ?? existing.resource.source ?? 'server-runner';
+      if (
+        patch.runnerUrl !== undefined ||
+        patch.source !== undefined ||
+        effectiveSource === 'local-agent'
+      ) {
         try {
-          const parsed = new URL(effectiveUrl);
-          const pathName = parsed.pathname.replace(/\/+$/, '');
-          if (
-            !['127.0.0.1', 'localhost', '::1'].includes(parsed.hostname.replace(/^\[|\]$/g, '')) ||
-            pathName !== '/proxy/train'
-          )
-            throw new Error('invalid local agent');
-        } catch {
+          effectiveUrl = normalizeComputeRunnerUrl(
+            effectiveUrl,
+            effectiveSource === 'local-agent' ? 'local-agent' : 'server-runner',
+          );
+          if (patch.runnerUrl !== undefined || patch.source !== undefined)
+            patch.runnerUrl = effectiveUrl;
+        } catch (error) {
           sendApiError(
             response,
             400,
             'SIM2REAL_INVALID_COMPUTE_RESOURCE_URL',
-            '本地 Agent 必须使用 loopback /proxy/train 地址。',
-            { retryable: false },
+            error instanceof Error ? error.message : 'Runner 地址无效。',
+            { retryable: false, nextAction: '按提示修正地址，再运行 rdk_compute_resource_test。' },
           );
           return;
         }
@@ -2996,11 +2865,6 @@ export function createSim2RealRouter(
         return;
       }
       const checkedAt = new Date().toISOString();
-      let patch: Record<string, unknown> = {
-        status: 'offline',
-        message: '尚未完成 Worker 健康检查。',
-        lastCheckedAt: checkedAt,
-      };
       const runnerUrl = String(secret.resource.runnerUrl);
       const runnerToken = String(secret.runnerToken ?? '').trim();
       if (secret.resource.source === 'local-agent') {
@@ -3017,81 +2881,30 @@ export function createSim2RealRouter(
         return;
       }
       const tokenError = computeRunnerTokenError(runnerUrl, runnerToken);
-      if (tokenError) {
-        // Persist the failed state so the UI cannot mistake a configured but
-        // unauthenticated resource for an available GPU.  Crucially, do not
-        // make a network request with a missing/weak credential.
-        patch = {
-          status: 'offline',
-          message: tokenError,
-          lastCheckedAt: checkedAt,
-        };
-      } else {
-        try {
-          const parsed = new URL(normalizeRunnerUrl(runnerUrl, { localHttp: true }));
-          const pathName = parsed.pathname.replace(/\/+$/, '');
-          if (!pathName.endsWith('/train')) throw new Error('runner path must end with /train');
-          parsed.pathname = pathName.slice(0, -'/train'.length) + '/healthz';
-          parsed.search = '';
-          parsed.hash = '';
-          const headers: Record<string, string> = { accept: 'application/json' };
-          if (runnerToken) headers.authorization = `Bearer ${runnerToken}`;
-          const controller = new AbortController();
-          const timer = setTimeout(() => controller.abort(), 5_000);
-          try {
-            const result = await fetch(parsed, {
-              headers,
-              redirect: 'error',
-              signal: controller.signal,
-            });
-            let bodyText: string;
-            let bodyReadable = true;
-            try {
-              bodyText = await boundedComputeHealthText(result);
-            } catch {
-              bodyReadable = false;
-              bodyText = '';
-              patch = {
-                status: 'offline',
-                message: 'Worker 健康响应过大或无法读取，已拒绝。',
-                lastCheckedAt: checkedAt,
-              };
-            }
-            if (bodyReadable) {
-              const payload = result.ok ? parseComputeHealthPayload(bodyText) : null;
-              const healthy = result.ok && payload !== null;
-              patch = {
-                status: healthy ? 'online' : 'offline',
-                message: healthy
-                  ? 'GPU Worker 连接正常。'
-                  : result.ok
-                    ? 'Worker 返回无效健康响应。'
-                    : `Worker 返回 HTTP ${result.status}。`,
-                lastCheckedAt: checkedAt,
-                engines: payload?.engines ?? [],
-                mock: payload?.mock,
-                ...(payload?.cuda == null ? {} : { cuda: payload.cuda }),
-                ...(payload?.gpuName ? { gpuName: payload.gpuName } : {}),
-                ...(payload?.vramMb == null ? {} : { vramMb: payload.vramMb }),
-                ...(payload?.maxConcurrentJobs == null
-                  ? {}
-                  : { maxConcurrentJobs: payload.maxConcurrentJobs }),
-              };
-            }
-          } finally {
-            clearTimeout(timer);
+      const checked = tokenError
+        ? {
+            diagnostic: {
+              code: 'WORKER_TOKEN_REQUIRED',
+              message: tokenError,
+              recovery: '在当前算力资源配置中更新 bearer token，再测试连接。',
+            },
+            payload: null,
           }
-        } catch (error) {
-          patch = {
-            status: 'offline',
-            message:
-              error instanceof Error && error.name === 'AbortError'
-                ? '连接超时：Worker 未在 5 秒内响应。'
-                : '连接失败：Worker 不可达或健康响应无效。',
-            lastCheckedAt: checkedAt,
-          };
-        }
-      }
+        : await probeComputeWorker(runnerUrl, runnerToken);
+      const { diagnostic, payload } = checked;
+      const patch = {
+        status: payload ? 'online' : 'offline',
+        message: diagnostic.message,
+        lastCheckedAt: checkedAt,
+        engines: payload?.engines ?? [],
+        mock: payload?.mock,
+        ...(payload?.cuda == null ? {} : { cuda: payload.cuda }),
+        ...(payload?.gpuName ? { gpuName: payload.gpuName } : {}),
+        ...(payload?.vramMb == null ? {} : { vramMb: payload.vramMb }),
+        ...(payload?.maxConcurrentJobs == null
+          ? {}
+          : { maxConcurrentJobs: payload.maxConcurrentJobs }),
+      };
       const updated = await updateSim2RealComputeResource(
         secret.resource.id,
         patch as never,
@@ -3101,6 +2914,7 @@ export function createSim2RealRouter(
         ok: true,
         computeResource: updated,
         connected: updated?.status === 'online',
+        diagnostic,
         ...(updated?.status === 'online' ? { engines: updated.engines, mock: updated.mock } : {}),
       });
     }),

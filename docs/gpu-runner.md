@@ -1,5 +1,7 @@
 # GPU 训练机接入指南
 
+第三方自建 Worker 请先核对 [Worker 接入协议](../plugins/rdk-robot-learning-platform/references/runner-contract.md) 里的健康响应、训练请求和状态路由。
+
 一台 GPU 机器（如 RTX 5090 开发机）接入本平台只需部署两个文件：`local-training-worker.mjs`（受控训练 worker）和 `engines/starter-ppo/runner.py`（真实 PPO 引擎）。平台 Web 服务器通过内网/SSH 隧道调用 worker，不要求 GPU 机器暴露公网。
 
 ## 一键部署

@@ -56,7 +56,7 @@ function validateManifest(file) {
   );
   const mcpFile = contained(
     pluginRoot,
-    manifest.mcpServers ?? './mcp.json',
+    manifest.mcpServers ?? './mcp/source-checkout.example.json',
     `${path.basename(file)} mcpServers`,
   );
   if (manifest.extensions?.['com.openai']?.onboardingSkill) {
@@ -104,7 +104,8 @@ function inspectResources(skillRoots, files) {
       /(?:\/Users\/|\/home\/)[^\s/]+|[A-Z]:\\Users\\/i,
       `${file} contains a personal path`,
     );
-    const isRetainedBundle = path.relative(pluginRoot, file) === path.join('mcp', 'bundle.mjs');
+    const isRetainedBundle =
+      path.relative(pluginRoot, file) === path.join('mcp', 'retained-core.mjs');
     for (const match of text.matchAll(/\b(?:\d{1,3}\.){3}\d{1,3}\b/g)) {
       // The retained bundle embeds quoted network ranges and a numbered docs title.
       const bundleLiteral = isRetainedBundle ? text.slice(match.index - 1, match.index + 22) : '';
@@ -470,7 +471,7 @@ async function main(distribution) {
         .update(fs.readFileSync(path.join(runtimeRoot, name)))
         .digest('hex');
     verifyInventory(runtimeRoot, digest);
-    assert.equal(digest('mcp/bundle.mjs'), provenance.coreBundleSha256);
+    assert.equal(digest('mcp/retained-core.mjs'), provenance.coreBundleSha256);
     for (const [name, hash] of Object.entries(provenance.wrapperSources)) {
       contained(runtimeRoot, name, 'Wrapper provenance file');
       assert.equal(digest(name), hash, `Wrapper provenance mismatch: ${name}`);

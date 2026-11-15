@@ -123,10 +123,15 @@ export async function connectAuthenticatedCore({
       { httpStatus: session.httpStatus ?? 503, nextAction: session.nextAction },
     );
   }
-  async function readWorkspaceJson(route, signal, accountId) {
+  async function readWorkspaceJson(route, signal, accountId, request = {}) {
     const response = await fetchPlatform(
       '/api/v1/duck' + route,
-      { method: 'GET', headers: { accept: 'application/json' }, signal },
+      {
+        method: 'GET',
+        ...request,
+        headers: { accept: 'application/json', ...request.headers },
+        signal,
+      },
       accountId,
     );
     const chunks = [];
@@ -154,11 +159,172 @@ export async function connectAuthenticatedCore({
         typeof code === 'string' && /^[A-Z][A-Z0-9_]{1,100}$/.test(code)
           ? code
           : 'WORKSPACE_READ_FAILED',
-        '平台未能完成这项工作区查询。',
-        { httpStatus: response.ok ? 502 : response.status },
+        request.method && typeof value?.message === 'string'
+          ? value.message.slice(0, 500)
+          : '平台未能完成这项工作区查询。',
+        {
+          httpStatus: response.ok ? 502 : response.status,
+          ...(typeof value?.nextAction === 'string' && {
+            nextAction: value.nextAction.slice(0, 500),
+          }),
+        },
       );
     }
     return value;
+  }
+  const apiResult = (value, isError = false) => ({
+    ...(isError && { isError }),
+    structuredContent: value,
+    content: [{ type: 'text', text: JSON.stringify(value) }],
+  });
+  async function computeTool(name, args, signal) {
+    const validId =
+      typeof args.computeResourceId === 'string' &&
+      args.computeResourceId.trim().length > 0 &&
+      args.computeResourceId.trim().length <= 160;
+    const registering = name === 'rdk_compute_resource_register';
+    const testing = name === 'rdk_compute_resource_test';
+    if (!registering && !validId)
+      throw new PluginRequestError('DSH_CAPABILITY_REJECTED', '请提供有效的 computeResourceId。', {
+        httpStatus: 400,
+        nextAction: '调用 rdk_compute_resources_list，使用当前账号下的完整资源 ID。',
+      });
+    const key = args.idempotencyKey;
+    if (
+      key !== undefined &&
+      (typeof key !== 'string' || !/^[A-Za-z0-9._:-]{1,128}$/.test(key.trim()))
+    )
+      throw new PluginRequestError(
+        'DSH_CAPABILITY_REJECTED',
+        'idempotencyKey 必须为 1–128 字符的稳定键。',
+        { httpStatus: 400 },
+      );
+    const json = {};
+    for (const field of ['name', 'runnerUrl', 'runnerToken', 'source', 'maxConcurrentJobs']) {
+      if (!testing && args[field] !== undefined) {
+        const expected = field === 'maxConcurrentJobs' ? 'number' : 'string';
+        if (
+          typeof args[field] !== expected ||
+          (expected === 'number' && !Number.isInteger(args[field]))
+        )
+          throw new PluginRequestError('DSH_CAPABILITY_REJECTED', field + ' 类型不正确。', {
+            httpStatus: 400,
+          });
+        json[field] = args[field];
+      }
+    }
+    if (registering && (!json.name?.trim() || !json.runnerUrl?.trim()))
+      throw new PluginRequestError('DSH_CAPABILITY_REJECTED', 'name 和 runnerUrl 必填。', {
+        httpStatus: 400,
+      });
+    if (json.source !== undefined && !['local-agent', 'server-runner'].includes(json.source))
+      throw new PluginRequestError(
+        'DSH_CAPABILITY_REJECTED',
+        'source 可选 server-runner 或 local-agent。',
+        { httpStatus: 400 },
+      );
+    const accountId = await verifiedWorkspaceAccount();
+    if (registering && key) json.idempotencyKey = key.trim();
+    const id = registering ? '' : args.computeResourceId.trim();
+    const value = await readWorkspaceJson(
+      '/compute-resources' + (id ? '/' + encodeURIComponent(id) : '') + (testing ? '/test' : ''),
+      signal,
+      accountId,
+      {
+        method: registering || testing ? 'POST' : 'PATCH',
+        headers: {
+          'content-type': 'application/json',
+          ...(key && { 'idempotency-key': key.trim() }),
+        },
+        body: JSON.stringify(json),
+      },
+    );
+    const resource = value.computeResource ?? value.resource;
+    if (!resource?.id || (id && resource.id !== id))
+      throw new PluginRequestError('WORKSPACE_INVALID_RESPONSE', '平台未确认当前算力资源的标识。', {
+        httpStatus: 502,
+      });
+    if (!testing) return { computeResource: resource, nextTool: 'rdk_compute_resource_test' };
+    return {
+      id,
+      ok: true,
+      connected: value.connected === true,
+      browserRelay: value.browserRelay === true,
+      status: resource.status,
+      message: resource.message ?? value.message,
+      health: resource.health ?? value.health,
+      lastCheckedAt: resource.lastCheckedAt,
+      cuda: resource.cuda,
+      gpuName: resource.gpuName,
+      vramMb: resource.vramMb,
+      mock: resource.mock,
+      engines: resource.engines ?? value.engines,
+      ...(value.diagnostic && {
+        diagnostic: value.diagnostic,
+        recovery: value.diagnostic.recovery,
+      }),
+    };
+  }
+  async function listArtifacts(args, signal) {
+    const query = new URLSearchParams();
+    for (const field of ['type', 'modelId', 'runId', 'projectId', 'taskId', 'status', 'query']) {
+      if (typeof args[field] === 'string' && args[field].trim())
+        query.set(field === 'query' ? 'q' : field, args[field].trim().slice(0, 200));
+    }
+    const filtered = query.size > 0;
+    const limit = Number.isFinite(args.limit)
+      ? Math.max(1, Math.min(500, Math.trunc(args.limit)))
+      : 50;
+    query.set('limit', String(limit));
+    const value = await readWorkspaceJson(
+      '/artifacts?' + query,
+      signal,
+      await verifiedWorkspaceAccount(),
+    );
+    if (!Array.isArray(value.artifacts))
+      throw new PluginRequestError('WORKSPACE_INVALID_RESPONSE', '平台未返回制品列表。', {
+        httpStatus: 502,
+      });
+    const returned = value.artifacts.length;
+    const modern = value.returned === returned;
+    const total = modern ? value.total : value.available;
+    const available = modern
+      ? value.available
+      : !filtered
+        ? total
+        : returned < limit
+          ? returned
+          : null;
+    if (
+      !Number.isSafeInteger(total) ||
+      total < returned ||
+      (available !== null &&
+        (!Number.isSafeInteger(available) || available < returned || available > total))
+    )
+      throw new PluginRequestError('WORKSPACE_INVALID_RESPONSE', '平台返回的制品计数无效。', {
+        httpStatus: 502,
+      });
+    const fields = [
+      'id',
+      'name',
+      'type',
+      'status',
+      'format',
+      'modelId',
+      'runId',
+      'uri',
+      'sampleCount',
+    ];
+    return {
+      total,
+      available,
+      returned,
+      artifacts: value.artifacts.map((item) =>
+        Object.fromEntries(
+          fields.filter((key) => item?.[key] !== undefined).map((key) => [key, item[key]]),
+        ),
+      ),
+    };
   }
   const server = http.createServer(async (req, res) => {
     try {
@@ -665,6 +831,27 @@ export async function connectAuthenticatedCore({
       return upstream.notify(method, params);
     },
     async request(method, params, options) {
+      if (
+        method === 'tools/call' &&
+        ([
+          'rdk_compute_resource_register',
+          'rdk_compute_resource_update',
+          'rdk_compute_resource_test',
+        ].includes(params.name) ||
+          params.name === 'rdk_artifacts_list')
+      ) {
+        try {
+          const args = params.arguments ?? {};
+          const value =
+            params.name === 'rdk_artifacts_list'
+              ? await listArtifacts(args, options?.signal)
+              : await computeTool(params.name, args, options?.signal);
+          return apiResult(value);
+        } catch (error) {
+          options?.signal?.throwIfAborted();
+          return apiResult(publicFailure(error), true);
+        }
+      }
       const result = await upstream.request(method, params, options);
       // Older retained cores omit the platform's structured pre-engine diagnostic.
       // Enrich only failed empty logs through the same owner-authorized read API.
@@ -756,12 +943,13 @@ export async function connectAuthenticatedCore({
             value.health?.ready === true &&
             value.session?.authenticated === false &&
             value.authentication?.needsLogin === true;
-          if (readyForLogin) {
+          if (readyForLogin || value.connection?.state === 'authentication-required') {
             value.ok = true;
             value.canAccessWorkspace = false;
             value.connection = {
               state: 'authentication-required',
-              recovery: '平台可用。要查看自己的资源和实验，请连接学习平台。',
+              recovery:
+                '调用 rdk_auth_login 并在浏览器授权；Studio 使用账号继承时请先在账户菜单登录。',
             };
           }
           return {

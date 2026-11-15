@@ -71,10 +71,28 @@ try {
       ? (await import('./scripts/qoder-install.mjs')).createQoderImportZip(root)
       : null;
   const pluginVersion = JSON.parse(fs.readFileSync(path.join(root, 'plugin.json'), 'utf8')).version;
+  const installationState =
+    installed.installed && !installed.wasDisabled
+      ? 'installed'
+      : installed.needsHostImport || installed.needsSelection || installed.wasDisabled
+        ? 'requires-action'
+        : 'failed';
+  const nextAction =
+    installationState === 'installed'
+      ? '新建对话，调用 rdk_plugin_status 核对实际版本。'
+      : installed.wasDisabled
+        ? '在 Studio 设置中启用机器人学习平台连接。'
+        : installed.needsSelection
+          ? '用 --connection-name 指定要更新的 Studio 连接。'
+          : qoderImport
+            ? '在 Qoder 的扩展页面上传本机导入包。'
+            : (installed.reason ?? '在宿主中导入安装后生成的 .mcp.json。');
   console.log(
     JSON.stringify({
+      installationState,
+      nextAction,
       pluginVersion,
-      ok: installed.installed === true || Boolean(qoderImport) || options['--host'] === 'other',
+      ok: installationState !== 'failed',
       configured: true,
       ...installed,
       credentialsStored: false,
@@ -117,6 +135,9 @@ try {
         '配置已生成。导入完整插件目录即可使用本地知识；需要平台数据时再按浏览器提示登录。',
     );
 } catch (error) {
+  console.error(
+    JSON.stringify({ installationState: 'failed', ok: false, nextAction: error.message }),
+  );
   console.error('安装配置未完成：' + error.message);
   process.exitCode = 1;
 }

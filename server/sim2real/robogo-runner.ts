@@ -243,6 +243,53 @@ export function normalizeRunnerUrl(
   return parsed.toString().replace(/\/+$/, '');
 }
 
+/** Present the existing URL policy using actionable validation errors. */
+export function normalizeComputeRunnerUrl(
+  value: string,
+  source: 'local-agent' | 'server-runner',
+): string {
+  let parsed: URL;
+  try {
+    parsed = new URL(value);
+  } catch {
+    throw new Error(
+      'Runner 地址格式无效，请填写完整的 URL，例如 https://worker.example.com/train。',
+    );
+  }
+  if (parsed.username || parsed.password || parsed.search || parsed.hash)
+    throw new Error('Runner 地址不能包含账号、密码、查询参数或片段。请在 token 字段填写凭据。');
+  const host = parsed.hostname.replace(/^\[|\]$/g, '');
+  const loopback = ['127.0.0.1', 'localhost', '::1'].includes(host);
+  let path = parsed.pathname.replace(/\/+$/, '');
+  if (source === 'local-agent') {
+    if (!loopback)
+      throw new Error('本地 Agent 必须使用回环地址，例如 http://127.0.0.1:19091/proxy/train。');
+    if (path === '/proxy') path = '/proxy/train';
+    if (path !== '/proxy/train') throw new Error('本地 Agent 的路径必须为 /proxy/train。');
+  } else {
+    if (
+      parsed.protocol === 'https:' &&
+      isPrivateNetworkHost(host) &&
+      !privateHttpsHostAllowed(host)
+    )
+      throw new Error(
+        '服务端 Worker 不允许使用未获准的回环、私网或保留地址。请使用公网 HTTPS 域名。',
+      );
+    if (parsed.protocol !== 'https:' && !(parsed.protocol === 'http:' && isPrivateHttpHost(host)))
+      throw new Error('公网 Worker 必须使用 HTTPS。受支持的本地 Worker 才可使用 HTTP。');
+    if (!path.endsWith('/train'))
+      throw new Error('Runner 地址的路径必须以 /train 结尾，例如 /worker/train。');
+  }
+  if (parsed.protocol !== 'https:' && parsed.protocol !== 'http:')
+    throw new Error('Runner 地址必须使用 HTTPS 或受支持的本地 HTTP。');
+  if (parsed.protocol === 'https:' && isPrivateNetworkHost(host) && !privateHttpsHostAllowed(host))
+    throw new Error(
+      '此 HTTPS 回环地址没有配置允许项。请使用本地 Agent 的 HTTP /proxy/train 地址。',
+    );
+  parsed.pathname = path;
+  return normalizeRunnerUrl(parsed.href, { localHttp: true });
+}
+
 function runnerUrl(raw?: string): string {
   return normalizeRunnerUrl(raw);
 }

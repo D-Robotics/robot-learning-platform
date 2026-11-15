@@ -557,9 +557,26 @@ export function createMcpService(
         structuredContent: payload,
       };
     } catch (error) {
+      const message = formatToolError(error);
+      const detail = error as { code?: string; httpStatus?: number; recovery?: string };
       return {
         isError: true,
-        content: [{ type: 'text', text: formatToolError(error) }],
+        content: [{ type: 'text', text: message }],
+        ...(detail?.code && {
+          structuredContent: {
+            ok: false,
+            error: {
+              platformCode: detail.code,
+              message: error instanceof Error ? error.message : message,
+              ...(detail.httpStatus && { httpStatus: detail.httpStatus }),
+              recovery:
+                detail.recovery ??
+                (detail.code === 'DSH_CAPABILITY_REJECTED'
+                  ? '按错误说明检查 ' + name + ' 的参数。'
+                  : '检查 ' + name + ' 的服务状态和配置。'),
+            },
+          },
+        }),
       };
     }
   }

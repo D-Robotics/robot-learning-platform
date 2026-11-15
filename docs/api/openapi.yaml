@@ -196,6 +196,7 @@ paths:
       description: >-
         Returns one account-scoped read model for task selection, dataset
         readiness, training, evaluation, RDK deployment and board feedback.
+        Contract validation is reported separately in contractValidation.
         The response is read-only and safe to poll while a worker is running.
       parameters:
         - in: query
@@ -2462,7 +2463,33 @@ paths:
       summary: Probe a GPU worker health endpoint
       operationId: testComputeResource
       responses:
-        "200": { description: Probe result returned. }
+        "200":
+          description: Probe result, including diagnostics for both healthy and unhealthy server workers.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [ok, connected]
+                properties:
+                  ok: { const: true }
+                  connected: { type: boolean }
+                  browserRelay: { type: boolean }
+                  computeResource: { type: object }
+                  diagnostic:
+                    type: object
+                    required: [code, message, recovery]
+                    properties:
+                      code: { type: string }
+                      message: { type: string }
+                      recovery: { type: string }
+                      httpStatus: { type: integer }
+                      endpoint:
+                        type: object
+                        properties:
+                          host: { type: string }
+                          port: { type: integer }
+                          path: { type: string }
+                          resolvedAddresses: { type: array, items: { type: string } }
         "404": { $ref: "#/components/responses/NotFound" }
   /api/v1/duck/datasets/upload:
     post:
@@ -3561,12 +3588,13 @@ components:
         metadata: { type: object, additionalProperties: true }
     ArtifactsResponse:
       type: object
-      required: [ok, artifacts, total, available]
+      required: [ok, artifacts, total, available, returned]
       properties:
         ok: { const: true }
         artifacts: { type: array, items: { $ref: "#/components/schemas/ArtifactCatalogEntry" } }
-        total: { type: integer, minimum: 0 }
-        available: { type: integer, minimum: 0 }
+        total: { type: integer, minimum: 0, description: All catalog entries visible to this account. }
+        available: { type: integer, minimum: 0, description: Entries matching the filters before the limit. }
+        returned: { type: integer, minimum: 0, description: Entries included in this response. }
     ArtifactRecordResponse:
       type: object
       required: [ok, artifact]

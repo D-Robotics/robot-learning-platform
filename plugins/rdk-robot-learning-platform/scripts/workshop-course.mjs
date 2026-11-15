@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import { DANCE_TRAINING_TOOLS } from './dance-training.mjs';
 import { resolveOriginmanDanceConfig } from './originman-dance-config.mjs';
 import { rewardChangeText } from './dance-coaching.mjs';
+import { PluginRequestError } from './plugin-errors.mjs';
 
 export const ORIGINMAN_DANCE_DRAFT_TOOL = {
   name: 'rdk_originman_dance_draft',
@@ -133,6 +134,11 @@ const learningFields = {
     ],
   },
   robot: { type: 'string', minLength: 1, maxLength: 120 },
+  productId: {
+    type: 'string',
+    enum: Object.keys(knownRobotNames),
+    description: '工作台机型 ID。也可用 robot 提供机型名称。',
+  },
   engine: { type: 'string', enum: learningEngines },
   runId: runIdField,
   section: { type: 'integer', minimum: 1, maximum: 8 },
@@ -170,9 +176,14 @@ export const LEARNING_GUIDE_TOOL = {
   annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
 };
 
-export function learningGuide(answers = {}, { operationId, previous } = {}) {
+export function validateLearningGuideArgs(answers = {}) {
+  const invalid = (message, nextAction) =>
+    new PluginRequestError('INVALID_LEARNING_GUIDE_ARGUMENT', message, {
+      httpStatus: 400,
+      nextAction,
+    });
   if (!answers || typeof answers !== 'object' || Array.isArray(answers))
-    throw Error('请传入学员已确认的选项。');
+    throw invalid('请传入对象形式的课程选项。', '使用 rdk_learning_guide 的参数表重新调用。');
   for (const [key, value] of Object.entries(answers)) {
     const rule = Object.hasOwn(learningFields, key) ? learningFields[key] : null;
     const type = rule?.type === 'integer' ? 'number' : rule?.type;
@@ -191,9 +202,33 @@ export function learningGuide(answers = {}, { operationId, previous } = {}) {
         (!value.trim() ||
           value.length > (rule.maxLength ?? 160) ||
           (rule.pattern && !new RegExp(rule.pattern).test(value))))
-    )
-      throw Error('选项不符合课程范围：' + key);
+    ) {
+      const allowed = rule?.enum ?? (key === 'taskId' ? learningFields.task.enum : null);
+      const field = key === 'taskId' ? 'task' : key;
+      throw invalid(
+        key === 'taskId' ? '课程引导使用 task 字段选择目标。' : '选项不符合课程范围：' + key,
+        allowed
+          ? `请传入 ${field}，可选值：${allowed.join('、')}。`
+          : '按 rdk_learning_guide 的参数表检查字段名称、格式和范围。',
+      );
+    }
   }
+  if (!answers.productId) return answers;
+  const robotId = answers.robot?.trim().toLowerCase().replace(/\s+/g, '-');
+  if (
+    robotId &&
+    robotId !== answers.productId &&
+    answers.robot?.trim() !== knownRobotNames[answers.productId]
+  )
+    throw invalid(
+      'productId 和 robot 指向不同机型。',
+      '只传 productId 或使用同一机型的 robot 名称。',
+    );
+  return { ...answers, robot: answers.productId };
+}
+
+export function learningGuide(answers = {}, { operationId, previous } = {}) {
+  answers = validateLearningGuideArgs(answers);
   const progress = (stage, studentReply, extra = {}) => ({
     stage,
     studentReply,

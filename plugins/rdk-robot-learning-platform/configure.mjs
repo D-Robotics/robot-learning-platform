@@ -4,22 +4,11 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { randomBytes } from 'node:crypto';
+import { assertSupportedNode } from './runtime-guard.mjs';
 
 export const LEARNING_CONNECTION_NAME = 'rdk-robot-learning-platform';
 
-export function supportedNode(version, range = '^22.22.2 || ^24.15.0 || >=26.0.0') {
-  const actual = String(version).replace(/^v/, '').split('.').map(Number);
-  return range.split('||').some((clause) => {
-    const match = /^(\^|>=)(\d+)\.(\d+)\.(\d+)$/.exec(clause.trim());
-    if (!match) return false;
-    const floor = match.slice(2).map(Number);
-    const atLeast =
-      actual[0] > floor[0] ||
-      (actual[0] === floor[0] &&
-        (actual[1] > floor[1] || (actual[1] === floor[1] && actual[2] >= floor[2])));
-    return atLeast && (match[1] === '>=' || actual[0] === floor[0]);
-  });
-}
+export { supportedNode } from './runtime-guard.mjs';
 export function createMcpConfiguration({
   root,
   nodePath,
@@ -71,8 +60,7 @@ export function configurePlugin({
   const required = JSON.parse(
     fs.readFileSync(path.join(root, 'runtime-requirements.json'), 'utf8'),
   ).node;
-  if (!supportedNode(nodeVersion, required))
-    throw Error('当前Node版本不支持，请双击本系统的setup安装入口，自动准备兼容运行时。');
+  assertSupportedNode(nodeVersion, required);
   for (const name of ['mcp/bundle.mjs', 'scripts/experience-mcp.mjs'])
     if (!fs.statSync(path.join(root, name)).isFile()) throw Error('请从完整插件目录运行安装配置。');
   const manifest = createMcpConfiguration({

@@ -694,9 +694,7 @@ describe('duck-lab-mcp tools over the live platform', () => {
       arguments: { runId: 'no-such-run' },
     })) as { result?: { isError?: boolean; content?: Array<{ text?: string }> } };
     expect(missingRun.result?.isError).toBe(true);
-    expect(String(missingRun.result?.content?.[0]?.text ?? '')).toContain(
-      'DSH_CAPABILITY_REJECTED',
-    );
+    expect(String(missingRun.result?.content?.[0]?.text ?? '')).toContain('SIM2REAL_RUN_NOT_FOUND');
 
     const badLineage = (await call('tools/call', {
       name: 'rdk_lineage_get',

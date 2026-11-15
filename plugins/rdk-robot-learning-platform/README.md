@@ -1,4 +1,11 @@
-# RDK Robot Learning 插件（Qoder / Studio） 0.6.60
+# RDK Robot Learning 插件（Qoder / Studio） 0.6.61
+
+**安装先运行对应的 setup。** 根目录的 `.mcp.json` 在安装前是待配置入口，安装后导入该文件。通用 MCP/DSH 宿主可复制它的命令、参数和平台地址。`mcp/source-checkout.example.json` 是平台源码开发者使用的示例。旧版 0.6.33 的传输诊断有限，遇到 `fetch failed` 请升级并调用 `rdk_platform_status` 核对平台地址、健康和登录状态。
+
+自建算力请看 [Worker 接入协议](references/runner-contract.md)，包括 `GET /healthz` 和 `POST /train`。
+
+
+0.6.61 补齐 Worker 协议和诊断，修复引导参数、主链路训练证据与制品计数，明确安装和启动状态。
 
 0.6.60 通过专用接口读取设备列表，并在训练结果和数据集查询中直接给出状态与下载入口。
 

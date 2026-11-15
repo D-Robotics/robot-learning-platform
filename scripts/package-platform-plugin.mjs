@@ -41,7 +41,7 @@ const files = collect(pluginRoot).sort();
 for (const relative of [
   '.codex-plugin/plugin.json',
   '.mcp.json',
-  'mcp.json',
+  'mcp/source-checkout.example.json',
   'skills/setup/SKILL.md',
   'scripts/start-mcp.mjs',
 ]) {

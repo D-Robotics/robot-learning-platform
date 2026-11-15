@@ -390,8 +390,14 @@ test('the packaged tool can open the standalone MicroDuck reference without the 
     available: true,
     entryUrl: '/mujoco/microduck/',
   });
-  assert.equal(await open({ robot: 'originman' }), missing);
-  assert.equal(await open({ runId: 'run-42' }), missing);
+  assert.equal(
+    (await open({ robot: 'originman' })).structuredContent.error.platformCode,
+    'SIM2REAL_API_NOT_FOUND',
+  );
+  assert.equal(
+    (await open({ runId: 'run-42' })).structuredContent.error.platformCode,
+    'SIM2REAL_API_NOT_FOUND',
+  );
   assert.deepEqual(calls, [
     'rdk_simulator_open',
     'rdk_workspace_overview',

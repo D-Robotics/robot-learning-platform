@@ -136,4 +136,45 @@ describe('RDK Golden Path', () => {
     expect(result.stages.find((item) => item.key === 'feedback')?.state).toBe('pending');
     expect(result.nextAction?.stage).toBe('deploy');
   });
+  it('reports completed contract validation separately and never masks an actual training run', () => {
+    const check = {
+      id: 'contract-1',
+      modelId: 'model-1',
+      taskId: 'walk',
+      backend: 'contract',
+      status: 'completed',
+      summary: '模型契约校验完成',
+      createdAt: '2026-01-02T00:00:00.000Z',
+      updatedAt: '2026-01-02T00:00:00.000Z',
+    } as const;
+    const input = { datasets: [], evaluations: [], deployments: [], runs: [check], taskId: 'walk' };
+    const validated = deriveRdkGoldenPath(input);
+    expect(validated.contractValidation).toEqual({
+      state: 'succeeded',
+      runId: check.id,
+      summary: check.summary,
+    });
+    expect(validated.stages.find((item) => item.key === 'train')).toMatchObject({
+      state: 'ready',
+      refs: [],
+    });
+    expect(validated.progress).toEqual({ completed: 1, total: 6, percent: 17 });
+    const trained = deriveRdkGoldenPath({
+      ...input,
+      runs: [
+        check,
+        {
+          ...check,
+          backend: 'local',
+          id: 'train-1',
+          createdAt: '2026-01-01T00:00:00.000Z',
+          updatedAt: '2026-01-01T00:00:00.000Z',
+        },
+      ],
+    });
+    expect(trained.stages.find((item) => item.key === 'train')).toMatchObject({
+      state: 'succeeded',
+      refs: ['train-1'],
+    });
+  });
 });

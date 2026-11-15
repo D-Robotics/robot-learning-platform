@@ -129,6 +129,8 @@ class CapabilityError extends Error {
   constructor(
     readonly code: string,
     message: string,
+    readonly httpStatus?: number,
+    readonly recovery?: string,
   ) {
     super(message);
     this.name = 'CapabilityError';
@@ -137,10 +139,24 @@ class CapabilityError extends Error {
 
 function fail(status: number, body: Record<string, unknown>, fallback: string): never {
   const routeMessage = typeof body.message === 'string' ? body.message.trim() : '';
-  throw new CapabilityError(
-    status >= 400 && status < 500 ? 'DSH_CAPABILITY_REJECTED' : 'DSH_CAPABILITY_FAILED',
-    routeMessage || fallback,
-  );
+  const routeCode = body.code ?? body.error;
+  const code = typeof routeCode === 'string' && /^[A-Z][A-Z0-9_]{1,100}$/.test(routeCode)
+    ? routeCode
+    : status === 401 ? 'AUTH_REQUIRED'
+    : status === 403 ? 'PERMISSION_DENIED'
+    : status === 404 ? 'RESOURCE_NOT_FOUND'
+    : status === 409 ? 'DSH_STATE_CONFLICT'
+    : status >= 400 && status < 500 ? 'DSH_CAPABILITY_REJECTED'
+    : 'DSH_CAPABILITY_FAILED';
+  const recovery = status === 401
+    ? '调用 rdk_auth_login 并在浏览器授权；Studio 账号继承请通过账户菜单登录。'
+    : typeof body.nextAction === 'string' ? body.nextAction
+    : status === 403 ? '核对当前账号和目标资源的权限。'
+    : status === 404 ? '使用当前账号的列表查询，核对目标记录的完整 ID。'
+    : status === 409 ? '先检查原记录的当前状态或版本，再按提示操作。'
+    : status >= 500 ? '调用 rdk_platform_status 核对服务状态，并检查能力配置。'
+    : '按错误说明检查当前工具的参数和允许值。';
+  throw new CapabilityError(code, routeMessage || fallback, status, recovery);
 }
 
 function argsRecord(args: unknown): Record<string, unknown> {
@@ -695,6 +711,7 @@ export function createDshCapabilityHandlers(
       return {
         total: defined(result.body.total),
         available: defined(result.body.available),
+        returned: defined(result.body.returned),
         artifacts: compactRecords(result.body.artifacts, [
           'id',
           'name',
@@ -791,7 +808,8 @@ export function createDshCapabilityHandlers(
         ...(Array.isArray(resource.engines) ? { engines: resource.engines } : {}),
         ...(typeof resource.mock === 'boolean' ? { mock: resource.mock } : {}),
         health: defined(resource.health ?? result.body.health),
-        message: str(result.body.message),
+        message: str(resource.message ?? result.body.message),
+        ...(result.body.diagnostic ? { diagnostic: result.body.diagnostic } : {}),
       };
     },
 

@@ -409,3 +409,157 @@ test('完成训练才核对同一 Run 的部署资格、回放及 ONNX 下载', 
   assert.equal(second.links.policyDownload, undefined);
   assert.match(second.studentReply, /仍需通过目标设备预检/);
 });
+
+test('learning guide validates and dispatches the public productId and task values before any platform call', async () => {
+  const proxy = experienceProxy(
+    {
+      request: () => {
+        throw Error('Unexpected platform call');
+      },
+    },
+    { env: { RDK_SIM2REAL_MCP_BASE_URL: 'https://fixture.example/learning' } },
+  );
+  const call = (arguments_) =>
+    proxy('tools/call', { name: 'rdk_learning_guide', arguments: arguments_ });
+  const outcome = await call({ productId: 'originman', task: 'simulation' });
+  assert.match(outcome.structuredContent.links.workbench, /robot=originman/);
+  const invalid = await call({ taskId: 'walk' });
+  assert.equal(invalid.structuredContent.error.platformCode, 'INVALID_LEARNING_GUIDE_ARGUMENT');
+  assert.equal(invalid.structuredContent.error.category, 'invalid-arguments');
+  assert.match(invalid.structuredContent.recovery, /simulation.+reinforcement.+dance/);
+  const conflict = await call({ productId: 'originman', robot: 'OriginBot' });
+  assert.match(conflict.structuredContent.error.message, /不同机型/);
+  const typo = await call({ productId: 'origin-man', task: 'simulation' });
+  assert.match(typo.structuredContent.recovery, /originman/);
+});
+
+test('retained core does not drop compute diagnostics or confuse artifact counts across platform versions', async (t) => {
+  let legacy = false;
+  let replyStatus = 200;
+  const calls = [];
+  const auth = {
+    audience: 'https://fixture.example',
+    status: async () => ({ authenticated: true, accountId: 'owner-a' }),
+    cookie: async () => 'session=fixture',
+    invalidate: async () => {},
+  };
+  const upstream = await connectAuthenticatedCore({
+    authentication: auth,
+    fetchImpl: async (url, options) => {
+      const path = new URL(url).pathname;
+      calls.push({ path, method: options.method });
+      assert.equal(options.headers.cookie, 'session=fixture');
+      if (path.endsWith('/artifacts')) {
+        const artifacts = Array.from({ length: 10 }, (_, i) => ({ id: String(i), type: 'model' }));
+        return Response.json(
+          legacy
+            ? { ok: true, total: 10, available: 12, artifacts }
+            : { ok: true, total: 12, available: 11, returned: 10, artifacts },
+        );
+      }
+      if (path.endsWith('/test')) {
+        assert.equal(options.method, 'POST');
+        if (replyStatus !== 200)
+          return Response.json({ error: 'AUTH_REQUIRED' }, { status: replyStatus });
+        return Response.json({
+          ok: true,
+          connected: false,
+          computeResource: { id: 'gpu-a', status: 'offline' },
+          diagnostic: {
+            code: 'WORKER_HTTP_ERROR',
+            httpStatus: 404,
+            endpoint: {
+              host: 'worker.example.com',
+              port: 443,
+              path: '/rl/healthz',
+              resolvedAddresses: [],
+            },
+            recovery: '检查 /rl/healthz。',
+          },
+        });
+      }
+      assert.equal(path, '/api/v1/duck/compute-resources');
+      assert.equal(options.headers['idempotency-key'], 'same-resource');
+      return Response.json(
+        {
+          error: 'SIM2REAL_INVALID_COMPUTE_RESOURCE_URL',
+          message: '公网 Worker 必须使用 HTTPS。',
+          nextAction: '请改用 HTTPS 后重试。',
+        },
+        { status: 400 },
+      );
+    },
+    connect: () => ({
+      close: async () => {},
+      request: async (_method, params) => {
+        if (params.name === 'rdk_platform_status')
+          return {
+            structuredContent: {
+              health: { ready: true },
+              session: { authenticated: false },
+              connection: { state: 'authentication-required', recovery: '核对当前账号的认证配置' },
+            },
+          };
+        throw Error('Unexpected retained tool call');
+      },
+    }),
+  });
+  t.after(() => upstream.close());
+  const proxy = experienceProxy(upstream, { authentication: auth });
+  const call = (name, arguments_) => proxy('tools/call', { name, arguments: arguments_ });
+  assert.deepEqual((await call('rdk_artifacts_list', { limit: 10 })).structuredContent, {
+    total: 12,
+    available: 11,
+    returned: 10,
+    artifacts: Array.from({ length: 10 }, (_, i) => ({ id: String(i), type: 'model' })),
+  });
+  legacy = true;
+  const filtered = (await call('rdk_artifacts_list', { runId: 'sample', limit: 10 }))
+    .structuredContent;
+  assert.equal(filtered.total, 12);
+  assert.equal(filtered.returned, 10);
+  assert.equal(filtered.available, null);
+  const health = (await call('rdk_compute_resource_test', { computeResourceId: 'gpu-a' }))
+    .structuredContent;
+  assert.equal(health.connected, false);
+  assert.equal(health.diagnostic.code, 'WORKER_HTTP_ERROR');
+  assert.match(health.recovery, /healthz/);
+  const invalid = await call('rdk_compute_resource_register', {
+    name: 'external',
+    runnerUrl: 'http://worker.example.com/train',
+    idempotencyKey: 'same-resource',
+  });
+  assert.equal(
+    invalid.structuredContent.error.platformCode,
+    'SIM2REAL_INVALID_COMPUTE_RESOURCE_URL',
+  );
+  assert.equal(invalid.structuredContent.error.httpStatus, 400);
+  assert.match(invalid.structuredContent.recovery, /HTTPS/);
+  replyStatus = 401;
+  const missing = await call('rdk_compute_resource_test', { computeResourceId: 'gpu-a' });
+  assert.equal(missing.structuredContent.error.category, 'authentication');
+  assert.match(missing.structuredContent.recovery, /rdk_auth_login/);
+  const status = await call('rdk_platform_status');
+  assert.match(status.structuredContent.connection.recovery, /rdk_auth_login/);
+  assert.equal(calls.filter((call) => call.method === 'POST').length, 3);
+});
+
+test('legacy connector errors distinguish input from an unavailable platform capability', async () => {
+  const proxy = experienceProxy({
+    request: async (_method, { name }) => {
+      const prefix =
+        name === 'rdk_models_list' ? 'DSH_CAPABILITY_FAILED' : 'DSH_CAPABILITY_REJECTED';
+      return { isError: true, content: [{ type: 'text', text: '[' + prefix + '] 失败' }] };
+    },
+  });
+  const call = (name) => proxy('tools/call', { name, arguments: {} });
+  assert.equal(
+    (await call('rdk_models_list')).structuredContent.error.category,
+    'platform-configuration',
+  );
+  assert.equal(
+    (await call('rdk_models_register')).structuredContent.error.category,
+    'invalid-arguments',
+  );
+  assert.match((await call('rdk_models_register')).structuredContent.recovery, /参数/);
+});

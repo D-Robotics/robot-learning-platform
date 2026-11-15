@@ -276,7 +276,7 @@ describe('DSH capability handlers', () => {
     expect(result.devices).toEqual([{ id: 'device-x5', profile: 'rdk-x5', status: 'online' }]);
   });
 
-  it('surfaces the route message and a rejected code on 4xx', async () => {
+  it('preserves the HTTP status and recovery for a permission error', async () => {
     const { fetchImpl } = fakeLoopback([
       () => ({ status: 200, body: overviewPayload }),
       () => ({ status: 403, body: { ok: false, message: '当前账号没有智能体执行权限。' } }),
@@ -287,7 +287,9 @@ describe('DSH capability handlers', () => {
       handlers.rdk_training_submit({}, { signal: new AbortController().signal } as never),
     ).rejects.toMatchObject({
       name: 'CapabilityError',
-      code: 'DSH_CAPABILITY_REJECTED',
+      code: 'PERMISSION_DENIED',
+      httpStatus: 403,
+      recovery: expect.stringContaining('权限'),
       message: expect.stringContaining('智能体执行权限'),
     });
   });

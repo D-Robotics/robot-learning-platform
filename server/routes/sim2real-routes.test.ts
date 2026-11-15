@@ -2253,6 +2253,15 @@ describe('Sim2Real HTTP routes', () => {
       expect(invalidHealth.body).toMatchObject({
         connected: false,
         computeResource: { status: 'offline', message: 'Worker 返回无效健康响应。' },
+        diagnostic: {
+          code: 'WORKER_HEALTH_PAYLOAD_INVALID',
+          endpoint: {
+            host: '127.0.0.1',
+            port: 19091,
+            path: '/healthz',
+            resolvedAddresses: ['127.0.0.1'],
+          },
+        },
       });
 
       const oversizedHealth = await invoke(
@@ -2266,7 +2275,7 @@ describe('Sim2Real HTTP routes', () => {
         connected: false,
         computeResource: {
           status: 'offline',
-          message: 'Worker 健康响应过大或无法读取，已拒绝。',
+          message: 'Worker 健康响应过大，已拒绝。',
         },
       });
       expect(calls).toBe(2);

@@ -64,3 +64,117 @@ export function publicFailure(error) {
     ...(e.nextAction ? { nextAction: e.nextAction } : {}),
   };
 }
+
+const specificRecovery = {
+  SIM2REAL_API_NOT_FOUND: '确认当前平台版本已经提供这项接口，或在工作台打开相应页面。',
+  SIM2REAL_INVALID_COMPUTE_RESOURCE_URL:
+    '按错误说明修正协议、主机和 /train 路径，再登记或更新算力。',
+  SIM2REAL_INVALID_COMPUTE_RESOURCE_TOKEN:
+    '在算力配置中填写和 Worker 一致的 bearer token，再测试连接。',
+  SIM2REAL_COMPUTE_RESOURCE_NOT_FOUND:
+    '先调用 rdk_compute_resources_list，从当前账号复制有效的 computeResourceId。',
+  SIM2REAL_RUN_NOT_FOUND: '在运行列表核对完整 Run ID 和当前账号，再查询原 Run。',
+  SIM2REAL_PREFLIGHT_NOT_SUPPORTED: '请平台管理员核对 Worker 的任务和预检能力，再选择支持的资源。',
+};
+
+export function toolFailureDetails(
+  { code, httpStatus, message, recovery, nextAction, needsLogin },
+  name,
+) {
+  code = typeof code === 'string' && /^[A-Z][A-Z0-9_]+$/.test(code) ? code : 'MCP_TOOL_FAILED';
+  let category = 'unknown';
+  let action = Object.hasOwn(specificRecovery, code) ? specificRecovery[code] : undefined;
+  if (needsLogin || httpStatus === 401 || /LOGIN_REQUIRED|AUTH_REQUIRED|AUTH_EXPIRED/.test(code)) {
+    category = 'authentication';
+    action = '调用 rdk_auth_login 并在浏览器完成授权。Studio 使用账号继承时，请先在账户菜单登录。';
+  } else if (httpStatus === 403 || code === 'PERMISSION_DENIED') {
+    category = 'permission';
+    action = '核对当前账号对目标记录的访问权限，或请资源所有者确认授权。';
+  } else if (httpStatus === 404 || code?.endsWith('_NOT_FOUND')) {
+    category = 'not-found';
+    action ??= '先列表查询当前账号的记录，再使用完整 ID 重试查询。';
+  } else if (httpStatus === 409 || code === 'DSH_STATE_CONFLICT') {
+    category = 'state-conflict';
+    action = '检查原记录的状态和版本；提交类操作先按原标识查询结果。';
+  } else if (
+    /NETWORK|TRANSPORT|TIMEOUT|FETCH_FAILED/.test(code) ||
+    code === 'DSH_TRANSPORT_FAILED'
+  ) {
+    category = 'transport';
+    action = '检查插件配置的平台地址、网络和代理，再调用 rdk_platform_status 检查连接。';
+  } else if (
+    code === 'DSH_CAPABILITY_REJECTED' ||
+    /INVALID|REJECTED/.test(code) ||
+    httpStatus === 400 ||
+    httpStatus === 422
+  ) {
+    category = 'invalid-arguments';
+    action ??= '按错误说明和 ' + name + ' 的参数表修正输入后再试。';
+  } else if (code === 'DSH_CAPABILITY_FAILED' || httpStatus >= 500) {
+    category = 'platform-configuration';
+    action ??= '调用 rdk_platform_status 核对平台；若服务可用，请维护者检查这项能力的配置。';
+  }
+  const legacyPlaceholder = '保留返回的实体 ID，检查平台状态、日志与前置条件。';
+  const provided =
+    typeof nextAction === 'string' && nextAction.trim()
+      ? nextAction
+      : typeof recovery === 'string' && recovery.trim() !== legacyPlaceholder
+        ? recovery.trim()
+        : null;
+  return {
+    platformCode: code || 'MCP_TOOL_FAILED',
+    message,
+    ...(Number.isInteger(httpStatus) && { httpStatus }),
+    category,
+    recovery:
+      category === 'authentication'
+        ? action
+        : provided ||
+          action ||
+          '根据错误说明检查 ' + name + ' 的前置条件；涉及提交时先查询原任务状态。',
+  };
+}
+
+export function enrichToolError(result, name) {
+  if (!result.isError) return result;
+  const text = result.content?.find((item) => item.type === 'text')?.text;
+  let data = result.structuredContent;
+  if (!data && text) {
+    try {
+      data = JSON.parse(text);
+    } catch {
+      /* older retained core uses a text envelope */
+    }
+  }
+  const nested = data?.error && typeof data.error === 'object' ? data.error : {};
+  const match = /^\[([A-Z][A-Z0-9_]+)\]\s+([\s\S]*)$/.exec(text ?? '');
+  const code =
+    nested.platformCode ??
+    nested.code ??
+    data?.platformCode ??
+    data?.code ??
+    (typeof data?.error === 'string' ? data.error : match?.[1]);
+  const message = nested.message ?? data?.message ?? match?.[2] ?? text ?? '工具调用失败。';
+  const error = toolFailureDetails(
+    {
+      code,
+      message,
+      httpStatus: nested.httpStatus ?? data?.httpStatus,
+      nextAction: nested.nextAction ?? data?.nextAction,
+      recovery: nested.recovery ?? (typeof data?.recovery === 'string' ? data.recovery : undefined),
+      needsLogin: nested.needsLogin ?? data?.needsLogin,
+    },
+    name,
+  );
+  const payload = {
+    ...data,
+    ok: false,
+    recovery: data?.recovery && typeof data.recovery === 'object' ? data.recovery : error.recovery,
+    error: { ...nested, ...error },
+  };
+  return {
+    ...result,
+    structuredContent: payload,
+    content: [{ type: 'text', text: JSON.stringify(payload) }],
+  };
+}

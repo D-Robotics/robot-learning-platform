@@ -30,6 +30,7 @@ export interface RdkGoldenPathSnapshot {
     taskId?: string;
   };
   stages: RdkGoldenPathStage[];
+  contractValidation: { state: RdkGoldenPathStageState; runId?: string; summary: string };
   progress: { completed: number; total: number; percent: number };
   nextAction: { stage: RdkGoldenPathStageKey; label: string; reason: string } | null;
   readyForRdkPreflight: boolean;
@@ -101,7 +102,20 @@ export function deriveRdkGoldenPath(input: Inputs): RdkGoldenPathSnapshot {
     (deployment) => !modelId || deployment.modelId === modelId,
   );
 
-  const latestRun = newest(runs);
+  const contractRun = newest(runs.filter((run) => run.backend === 'contract'));
+  const contractState = {
+    ready: 'ready',
+    queued: 'running',
+    running: 'running',
+    completed: 'succeeded',
+    blocked: 'blocked',
+    failed: 'failed',
+  } as const;
+  const latestRun = newest(
+    runs.filter(
+      (run) => (run.backend === 'local' || run.backend === 'robogo') && run.mock !== true,
+    ),
+  );
   const latestEvaluation = newest(evaluations);
   const latestDeployment = newest(deployments);
   const datasetRefs = datasets.map((item) => item.id);
@@ -125,7 +139,14 @@ export function deriveRdkGoldenPath(input: Inputs): RdkGoldenPathSnapshot {
   }
 
   let trainStage: RdkGoldenPathStage;
-  if (!latestRun) trainStage = stage('train', 'ready', '启动本地/GPU 训练，或接入已有模型');
+  if (!latestRun)
+    trainStage = stage(
+      'train',
+      'ready',
+      contractRun?.status === 'completed'
+        ? '模型契约已校验，下一步启动本地/GPU 训练或接入已有模型'
+        : '启动本地/GPU 训练，或接入已有模型',
+    );
   else if (latestRun.status === 'running' || latestRun.status === 'queued') {
     trainStage = stage('train', 'running', '训练正在运行，等待制品生成', [latestRun.id]);
   } else if (latestRun.status === 'completed') {
@@ -210,6 +231,13 @@ export function deriveRdkGoldenPath(input: Inputs): RdkGoldenPathSnapshot {
       ...(taskId ? { taskId } : {}),
     },
     stages,
+    contractValidation: contractRun
+      ? {
+          state: contractState[contractRun.status],
+          runId: contractRun.id,
+          summary: contractRun.summary,
+        }
+      : { state: 'pending', summary: '尚未进行模型契约校验' },
     progress: {
       completed,
       total: stages.length,

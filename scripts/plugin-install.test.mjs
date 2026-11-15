@@ -167,6 +167,10 @@ test('configuration invoked through a directory alias actually runs instead of s
   const source = path.join(dir, 'real'),
     alias = path.join(dir, 'alias');
   fs.mkdirSync(source);
+  fs.copyFileSync(
+    new URL('../plugins/rdk-robot-learning-platform/runtime-guard.mjs', import.meta.url),
+    path.join(source, 'runtime-guard.mjs'),
+  );
   fs.mkdirSync(path.join(source, 'mcp'));
   fs.mkdirSync(path.join(source, 'scripts'));
   fs.copyFileSync(

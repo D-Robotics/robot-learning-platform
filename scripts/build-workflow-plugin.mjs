@@ -24,7 +24,11 @@ const provenance = JSON.parse(fs.readFileSync(path.join(base, 'provenance.json')
 const coreProvenance = provenance.coreBundleSha256
   ? JSON.parse(fs.readFileSync(path.join(base, 'upstream-provenance.json'), 'utf8'))
   : provenance;
-const bundle = fs.readFileSync(path.join(base, 'mcp/bundle.mjs'));
+const retainedCore = 'mcp/retained-core.mjs';
+const retainedInput = fs.existsSync(path.join(base, retainedCore))
+  ? retainedCore
+  : 'mcp/bundle.mjs';
+const bundle = fs.readFileSync(path.join(base, retainedInput));
 const repoPlugin = path.join(root, 'plugins/rdk-robot-learning-platform');
 const repoProvenance = JSON.parse(
   fs.readFileSync(path.join(repoPlugin, 'provenance.json'), 'utf8'),
@@ -35,11 +39,16 @@ const matchesUpstream =
   (!provenance.coreBundleSha256 || bundleSha === provenance.coreBundleSha256);
 const matchesRepository =
   bundleSha === repoProvenance.coreBundleSha256 &&
-  bundleSha === sha(fs.readFileSync(path.join(repoPlugin, 'mcp/bundle.mjs')));
+  bundleSha === sha(fs.readFileSync(path.join(repoPlugin, retainedCore)));
 if (!matchesUpstream && !matchesRepository)
   throw new Error('Base bundle does not match retained provenance.');
 const baseConfig = fs.readFileSync(path.join(base, '.mcp.json'), 'utf8');
-if (!baseConfig.includes('throw new Error') || baseConfig.includes('credentials-file'))
+const baseServers = JSON.parse(baseConfig).mcpServers;
+const isUnconfigured = baseServers && Object.keys(baseServers).length === 0;
+if (
+  !isUnconfigured &&
+  (!baseConfig.includes('throw new Error') || baseConfig.includes('credentials-file'))
+)
   throw new Error('Use an unconfigured distribution, never a privately configured installation.');
 fs.mkdirSync(out, { recursive: false });
 fs.cpSync(base, out, {
@@ -50,6 +59,9 @@ fs.cpSync(base, out, {
     return !['.local', 'node_modules', '.DS_Store'].includes(path.basename(file));
   },
 });
+fs.rmSync(path.join(out, 'mcp.json'), { force: true });
+fs.writeFileSync(path.join(out, '.mcp.json'), '{\n  "mcpServers": {}\n}\n');
+fs.writeFileSync(path.join(out, retainedCore), bundle);
 fs.mkdirSync(path.join(out, 'scripts'), { recursive: true });
 const sources = {};
 for (const name of [
@@ -96,12 +108,13 @@ const windowsSetup = fs.readFileSync(
 );
 fs.writeFileSync(path.join(out, 'setup-windows.cmd'), windowsSetup);
 sources['setup-windows.cmd'] = sha(windowsSetup);
-fs.writeFileSync(
-  path.join(out, 'scripts/start-core-mcp.mjs'),
-  `import { main } from '../mcp/bundle.mjs';await main();\n`,
-);
+
 for (const name of [
   'configure.mjs',
+  'runtime-guard.mjs',
+  'mcp/bundle.mjs',
+  'mcp/source-checkout.example.json',
+  'scripts/start-core-mcp.mjs',
   'setup.mjs',
   'setup-windows.ps1',
   'setup-macos.command',

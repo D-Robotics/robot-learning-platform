@@ -35,6 +35,7 @@ export function readToolResult(result) {
     throw Object.assign(new Error(message), {
       platformCode: detail.platformCode ?? payload?.platformCode,
       httpStatus: detail.httpStatus ?? payload?.httpStatus,
+      nextAction: detail.nextAction ?? detail.recovery ?? payload?.nextAction,
     });
   }
   return payload;
