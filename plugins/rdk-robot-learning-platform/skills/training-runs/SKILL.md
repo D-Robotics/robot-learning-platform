@@ -12,7 +12,7 @@ description: 在 RDK 学习平台选择任务、训练引擎与执行资源，�
 
 当当前任务已经是舞蹈时，即使用户只说“带我开始/重新开始 Workshop”，也保持舞蹈意图：新一轮先取得新 `contextId`，沿用当前对话确认过的编舞；有已知活动 Run 时“继续/看看效果”只读查询原 Run，不展示旧结果冒充新一轮，也不重复提交。提交回执、`rdk_training_wait` 和 `rdk_training_status` 都应附带并打开该 Run 的只读详情页；页面按 Run ID 请求平台记录，账号无权查看时明确显示原因，不回退到全局最新记录。
 
-跨聊天没有原标识时，先用 `rdk_learning_guide` 的 `intent:"results"` 提供近期记录，按名称、时间和状态让学员选一次。明确给出实验标识时，使用同一入口的 `contextId` 恢复原训练和评测。风格门未通过时，先说明有证据支持的段号和检查项，再给出本轮分段结果入口。
+跨聊天没有原标识时，先用 `rdk_learning_guide` 的 `intent:"results"` 提供近期记录，按名称、时间和状态让学员选一次。已知舞蹈 Run 时传 `intent:"results"` 和原 `runId`，沿同一条 Run 读取舞蹈独立评测、播放回放，并在详情页使用「下载策略文件（ONNX）」。`rdk_experiment_remember` 的评测关联不用于舞蹈独立评测。风格门未通过时，先说明有证据支持的段号和检查项，再给出本轮分段结果入口。
 
 训练参数结构如下，数值必须保留用户要求；此例只说明字段名：
 
@@ -63,6 +63,8 @@ description: 在 RDK 学习平台选择任务、训练引擎与执行资源，�
 4. 用 `rdk_training_status(runId)` 查状态、`rdk_run_logs(runId, after)` 增量读日志。等待间隔随耗时调整，不为查进度再次 submit。结束后查 `rdk_artifacts_list`、`rdk_lineage_get`；再用 `rdk_retraining_advice` 辅助诊断。
 
 ## 实验接续（有扩展工具时）
+
+OriginMan 舞蹈使用本页舞蹈分支的 Run 详情恢复独立评测。
 
 提交成功后，为本次训练选择一个新的明确 `contextId`（ASCII字母数字、点、下划线或短横线），调用 `rdk_experiment_remember({contextId, runId})`。它只保存当前平台和正式账号下的任务引用，不提交训练。新训练必须使用新标识，不能覆盖旧训练。
 

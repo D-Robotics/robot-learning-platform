@@ -9,6 +9,8 @@ description: 用户说“带我开始 Workshop”“继续”“看看效果”�
 
 “继续”或“看看效果”用 `rdk_learning_guide({intent:"results",runId})` 读原 Run，展示本轮链接；同一会话内也可沿用已绑定的舞蹈 Run。明确提出改参重训时传 `intent:"retry"`、原 `runId` 和用户指定的 `changes`，展示改动，等确认再传 `confirmed:true`，按工具返回的 `nextArguments` 提交。已有 Run 的查进度与新一轮提交是两个步骤。
 
+舞蹈独立评测、回放和策略下载从本轮 Run 详情进入。独立评测的来源由舞蹈结果页核对，`rdk_experiment_remember` 的评测关联仅用于具备该实验协议回执的任务。
+
 
 明确选择恢复课程后，使用 `rdk_workshop({intent:"start"})`，继续、结果和新实验分别用 `continue`、`results`、`new`。已完成实验的回执包含核验过的质量结论。已知实验标识传 `contextId`，评测明细用回执里的评测 Run 标识。算力和预算在恢复课程页面选择。
 

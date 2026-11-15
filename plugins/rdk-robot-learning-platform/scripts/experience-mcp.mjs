@@ -255,7 +255,9 @@ function attachRunVisualization(payload, runId, baseUrl, section) {
     payload.run?.taskId === 'originman-dance' ||
     payload.run?.training?.engine === 'originman-dance-ppo' ||
     payload.training?.engine === 'originman-dance-ppo' ||
-    Boolean(payload.dance);
+    Boolean(
+      payload.run?.training?.originmanDance || payload.training?.originmanDance || payload.dance,
+    );
   const isActive = ['queued', 'running', 'cancelling'].includes(rawStatus);
   const progress = danceRun && isActive ? new URL(baseUrl) : null;
   if (progress) {
@@ -381,6 +383,9 @@ function attachRunVisualization(payload, runId, baseUrl, section) {
     studentReply: `${studentReply}\n[在机器人学习平台查看本轮运行](${url})`,
     delivery:
       'Studio 可用 studio_open_url 时按 studioNavigation 打开右侧工作台；Qoder 按 qoderNavigation 打开并置前。工具不可用时展示可点击链接。打开页面后仍按实际观察区分页面打开、媒体可用和视频已经播放。' +
+      (danceRun
+        ? '舞蹈独立评测和回放沿本次原 Run 读取。打开 links.runDetail 里的「下载策略文件（ONNX）」供学员下载。不要调用 rdk_experiment_remember 关联舞蹈评测。'
+        : '') +
       (recommendation?.previewArguments
         ? '说明指标和对照目标。用户要求采用建议时，用 recommendation.previewArguments 调用 rdk_learning_guide 预览；等用户明确确认当前预览并要求开始后才进入提交。'
         : ''),

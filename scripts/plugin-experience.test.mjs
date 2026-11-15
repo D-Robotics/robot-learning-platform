@@ -887,6 +887,8 @@ test('guide reads the exact Run and keeps confirmed retry idempotent', async (t)
     tool: 'studio_open_url',
     arguments: { url: result.links.runDetail },
   });
+  assert.match(result.delivery, /舞蹈独立评测.*原 Run/);
+  assert.match(result.delivery, /不要调用 rdk_experiment_remember 关联舞蹈评测/);
   const retry = { intent: 'retry', runId: previous.id, changes: { trainingSteps: 500000 } };
   const preview = await guide(retry);
   assert.equal(preview.stage, 'retry-confirm');
