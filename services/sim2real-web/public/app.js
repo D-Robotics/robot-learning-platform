@@ -12367,9 +12367,11 @@ renderAll();
 // Seed the editor silently on first paint; a toast here would obscure the
 // landing view before the operator has taken an action.
 loadManifestTemplate({ notify: false });
+// Workspace data is required even if the optional training-plan script cannot load.
+const workspaceReady = loadOverview();
 trainingPlans = window.TrainingPlans?.mount({
   request,
-  ready: loadOverview(),
+  ready: workspaceReady,
   onDraftChange() {
     renderSelects();
     renderOriginmanTrainingWorkbench();
