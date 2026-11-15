@@ -15,3 +15,6 @@ mujoco==3.13.0
 mujoco-mjx==3.13.0
 optax==0.2.8
 onnx==1.22.0
+
+# Retain the tested MuJoCo MJX dependency when resolving from scratch.
+trimesh==5.2.0

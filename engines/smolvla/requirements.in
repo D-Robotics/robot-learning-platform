@@ -37,3 +37,6 @@ pyarrow==21.0.0
 # lock a *reproducible* function of this file instead of a snapshot of one
 # resolve. Kept identical to engines/act so the two locks agree on the overlap.
 filelock==3.32.7
+
+# Retain the LeRobot dependency selected by the existing lock.
+sentry-sdk==2.74.0
