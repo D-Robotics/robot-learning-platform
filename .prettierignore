@@ -40,3 +40,6 @@ services/sim2real-web/ui-layout-invariants.mjs
 # Vendored minified MCP core bundle shipped inside the plugin distribution;
 # formatting it would bloat the artifact without touching its semantics.
 plugins/rdk-robot-learning-platform/mcp/retained-core.mjs
+
+# Generated MCP App HTML embeds the exact bundled JS and is checksum-verified.
+plugins/rdk-robot-learning-platform/ui/experiment.html

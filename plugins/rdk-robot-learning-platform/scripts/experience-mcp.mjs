@@ -88,14 +88,12 @@ export function experimentStudentReply(payload) {
     return '任务已结束，来源尚待核对。暂不展示效果结论。';
   const quality =
     result.quality?.clearGain === true
-      ? '本次仿真评测达到收益判据；未验证真机。'
+      ? '本轮仿真达到改善标准。'
       : result.quality?.clearGain === false
-        ? '本次未达到收益判据。先在对比表找与基线差距最大的条件组，再决定下一轮改什么。'
-        : '效果尚待验证。';
+        ? '本轮仿真未达到改善标准。先在对比表看同样被推时，机器人成功站稳了几次。'
+        : '当前评测还无法判断策略是否改善。';
   return (
-    (result.trainingBudget === 8192
-      ? '8192步快检流程已完成，不代表正式效果验收通过。'
-      : '训练与评测流程已完成。') +
+    (result.trainingBudget === 8192 ? '8,192 步快检已完成。' : '训练与评测流程已完成。') +
     quality +
     '\n' +
     (result.links?.experiment

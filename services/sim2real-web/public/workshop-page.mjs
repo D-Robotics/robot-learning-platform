@@ -69,7 +69,7 @@ export async function startWorkshop({
     }
     if (r.status === 401)
       throw Object.assign(Error(entryPreview && !contextId
-        ? '登录学习平台后，回到这里选算力机。'
+        ? '用课堂账号登录后，就能选择训练电脑。'
         : '登录学习平台后，回到这里继续原实验。'), { status: 401 });
     let value;
     try {
@@ -91,7 +91,6 @@ export async function startWorkshop({
     $('workshop-error-message').textContent = e.message ?? '课程暂不可用。';
     $('workshop-error').hidden = false;
     const login = $('workshop-login');
-    login.hidden = !loginNeeded;
     const destination = new URL('login', root);
     if (entryPreview && !contextId) destination.searchParams.set('workshop', 'start');
     else if (/^ws-[a-f0-9]{20}$/.test(contextId ?? ''))
@@ -310,14 +309,14 @@ export async function startWorkshop({
     } else if (preview && !halted) {
       guide = setupReady
         ? $('workshop-setup-form').hidden
-          ? ['选择本轮算力机', '当前没有可选算力机。', '刷新算力列表', 'start-setup']
-          : ['选择本轮算力机', '检查课程环境后进入预算页。']
-        : ['先看看，再动手', '用仿真训练一个受扰恢复策略，比较恢复次数并看回放。', '开始实操', 'start-setup'];
+          ? ['选择用来训练的电脑', '当前没有可用于本课程的训练电脑。', '刷新算力列表', 'start-setup']
+          : ['选择用来训练的电脑', '检查课程环境后进入预算页。']
+        : ['先看看，再动手', '可以先播放讲师参考。准备练习时，点「开始实操」。', '开始实操', 'start-setup'];
     } else if (halted) {
       guide = loginNeeded && preview
-        ? ['登录后选算力机', '登录后会直接进入选算力页。', '登录学习平台', 'workshop-login']
+        ? ['登录后选训练电脑', '登录后会回到这门课。', '登录学习平台', 'workshop-login']
         : loginNeeded
-        ? ['先登录学习平台', '请使用原实验所在的学习平台账号。', '去登录', 'workshop-login']
+        ? ['登录后继续原实验', '请使用原实验所在的学习平台账号。', '登录学习平台', 'workshop-login']
         : reconnectNeeded
           ? ['连接暂时中断', '网络恢复后会核对原实验，无需重新开始。', '查看恢复方式', 'workshop-error']
           : ['当前步骤需要处理', '原实验和已经提交的任务会保留，可先重试读取状态。', '查看原因', 'workshop-error'];
@@ -328,7 +327,7 @@ export async function startWorkshop({
         guide = ['修改上一轮配方', '可以直接选步数加倍，或只改一项自定义参数。确认后才会开训。', '选择要改的参数', 'budget-section'];
       } else {
         guide = reference
-          ? ['选择这轮怎么训练', '第一次可以选快速体验。开始后会用同一策略自动评测。', '选择训练预算', 'budget-section']
+          ? ['选择这轮怎么训练', '第一次可以选快检。点击「开始快检训练」后，会训练并自动评测本轮策略。', '选择训练预算', 'budget-section']
           : ['先看看机器人怎样恢复站稳', '播放一段讲师参考，或跳过后直接选训练预算。', '看参考或跳过', 'reference-section'];
       }
     } else if (phase === 'results') {
@@ -355,9 +354,11 @@ export async function startWorkshop({
     if ($('workshop-status').textContent !== description)
       $('workshop-status').textContent = description;
     const primary = $('workshop-primary');
-    primary.hidden = !label;
+    const needsLoginAction = target === 'workshop-login';
+    $('workshop-login').hidden = !needsLoginAction;
+    primary.hidden = !label || needsLoginAction;
     primary.disabled = busy || selecting;
-    primary.textContent = label ?? '';
+    primary.textContent = needsLoginAction ? '' : label ?? '';
     primaryAction = target;
     $('workshop-diagnostics').textContent = JSON.stringify(session, null, 2);
     $('connection-status').textContent =
@@ -454,8 +455,7 @@ export async function startWorkshop({
       });
       return;
     }
-    if (primaryAction === 'workshop-login') $('workshop-login').click();
-    else reveal(primaryAction);
+    reveal(primaryAction);
   });
   const claimAndSubmit = async (phase, recipe = {}) => {
     // A draft can outlive the resource health TTL; probe before consuming its
@@ -760,11 +760,27 @@ export async function startWorkshop({
     $('workshop-compute-check').textContent = '';
     $('workshop-setup-confirm').textContent = '检查这台算力机并继续';
   };
+  const connectionHint = (health) => {
+    const diagnostic = health.diagnostic;
+    if (diagnostic?.code === 'WORKER_HTTP_ERROR') {
+      if (diagnostic.httpStatus === 401 || diagnostic.httpStatus === 403)
+        return '这台训练电脑拒绝连接。请让课程管理员在训练资源设置中核对连接凭据，或换一台电脑。';
+      if (diagnostic.httpStatus === 404)
+        return '这台训练电脑有响应，但找不到健康检查页面。请让课程管理员核对训练地址和同级的 /healthz，或换一台电脑。';
+    }
+    if (diagnostic?.code === 'WORKER_DNS_FAILED')
+      return '找不到这台训练电脑的网络地址。请让课程管理员核对域名，或换一台电脑。';
+    if (diagnostic?.code === 'WORKER_TIMEOUT')
+      return '这台训练电脑没能及时响应。可以重新检查，或换一台电脑。';
+    return '这台训练电脑暂时连不上。可以重新检查，或换一台电脑。';
+  };
   const checkCompute = async (id) => {
     const resource = 'compute-resources/' + encodeURIComponent(id);
     const health = await json(resource + '/test', {});
-    if (health.connected !== true || health.computeResource?.status !== 'online')
+    if (health.connected !== true || health.computeResource?.status !== 'online') {
+      $('workshop-compute-check').textContent = connectionHint(health);
       return 'offline';
+    }
     // CUDA preflight exercises the base engine. The Workshop claim uses the
     // reflect variant, which must also be registered on this worker.
     const engines = health.computeResource.engines;
@@ -812,19 +828,28 @@ export async function startWorkshop({
       setupAccount = data.accountId;
       resetComputeCheck();
       const select = $('workshop-compute');
-      const placeholder = new document.defaultView.Option('请选择一台算力机', '', true, true);
+      const placeholder = new document.defaultView.Option('请选择一台训练电脑', '', true, true);
       placeholder.disabled = true;
       select.replaceChildren(placeholder);
-      for (const resource of data.resources) {
-        const status = { online: '上次检查可用', offline: '上次检查离线', unknown: '待检查' }[resource.status] ?? '待检查';
-        const option = new document.defaultView.Option(resource.name + ' · ' + status, resource.id);
-        select.add(option);
+      const resources = data.resources.filter((resource) =>
+        validId(resource?.id) && typeof resource.name === 'string' && resource.name.trim() &&
+        resource.mock !== true && resource.status !== 'offline' &&
+        (!Array.isArray(resource.engines) || resource.engines.includes(WORKSHOP_ENGINE)));
+      const recommended = resources.filter((resource) =>
+        resource.cuda === true && resource.mock === false && Array.isArray(resource.engines) && resource.engines.includes(WORKSHOP_ENGINE));
+      for (const resource of resources) {
+        const status = resource.status === 'online' ? '上次检查可用' : '待检查';
+        const kind = recommended.includes(resource) ? ' · 支持本课程' : ' · 课程兼容性待检查';
+        select.add(new document.defaultView.Option(resource.name + ' · ' + status + kind, resource.id));
       }
-      const available = data.resources.length > 0;
+      if (recommended.length === 1) select.value = recommended[0].id;
+      const available = resources.length > 0;
       $('workshop-setup-form').hidden = !available;
-      $('workshop-setup-status').textContent = available
-        ? (setupAccount ? '当前账号：' + setupAccount + '。' : '') + '选择一台算力机后再选预算。'
-        : '当前账号没有可选算力机。请联系课程管理员分配算力，再刷新列表。';
+      $('workshop-setup-status').textContent = !available
+        ? '当前账号没有兼容本课程的训练电脑。请联系课程管理员分配，再刷新列表。'
+        : recommended.length === 1
+          ? '已选一台支持本课程的电脑。点「检查这台算力机并继续」后选择训练时长。'
+          : '先选一台训练电脑，再检查连接和课程环境。';
       $('workshop-error').hidden = true;
       setupReady = true;
       halted = false;
@@ -861,10 +886,10 @@ export async function startWorkshop({
             checkStatus.textContent = '暂时无法完成算力检查。可以重新检查这台机器，或另选一台。';
             return;
           }
+          if (result === 'offline') return;
           if (result !== 'ready') {
             checkStatus.textContent = {
               invalid: '平台返回的检查结果无法与本次选机对应。请重新检查，或联系课程管理员。',
-              offline: '这台算力机暂时连不上。可以重新检查，或另选一台。',
               engine: '这台算力机缺少本课程的训练引擎。请选择另一台。',
               busy: '课程环境检查正忙。稍后重新检查，或另选一台。',
               blocked: '连接正常，但课程运行环境未通过检查。请选择另一台，或联系课程管理员。',

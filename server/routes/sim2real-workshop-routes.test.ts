@@ -81,13 +81,28 @@ it('workshop routes use normal authentication, viewer mutation denial and isolat
         runnerUrl: 'http://127.0.0.1:12345/train',
         runnerToken: 'private',
         status: 'unknown',
+        engines: ['originman-recovery-reflect'],
+        cuda: true,
+        mock: false,
       },
       'A',
     );
     const headers = { 'content-type': 'application/json', 'x-owner': 'A' };
     const options = await (await fetch(setup, { headers })).json();
     expect(options).toMatchObject({ accountId: 'A', resources: [{ id: gpu.id, name: gpu.name }] });
-    expect(Object.keys(options.resources[0]).sort()).toEqual(['id', 'name', 'status']);
+    expect(options.resources[0]).toMatchObject({
+      engines: ['originman-recovery-reflect'],
+      cuda: true,
+      mock: false,
+    });
+    expect(Object.keys(options.resources[0]).sort()).toEqual([
+      'cuda',
+      'engines',
+      'id',
+      'mock',
+      'name',
+      'status',
+    ]);
     const select = (accountId: string, owner: string) =>
       fetch(setup, {
         method: 'POST',

@@ -218,7 +218,7 @@ test('cold Workshop previews offline and only surfaces an already requested auth
   const preview = await workshopEntry({}, noCourse, options);
   assert.equal(preview.stage, 'preview');
   assert.match(preview.links.workshop, /workshop\.html\?course=dance&start=1$/);
-  assert.match(preview.studentReply, /配置舞段/);
+  assert.match(preview.studentReply, /8,192 步快检/);
   assert.equal(preview.submission.training, false);
   // A fresh 'new' preview intentionally reads no account data; authorization is
   // only requested when the learner resumes or actually starts practice.
@@ -334,7 +334,7 @@ test('new workshops select the correct page without calling a backend or allocat
     assert.equal(url.searchParams.get('course'), course);
     assert.equal(result.studioNavigation.arguments.url, url.href);
     assert.deepEqual(result.submission, { training: false, evaluation: false });
-    assert.match(result.studentReply, course === 'dance' ? /配置舞段/ : /先看参考/);
+    assert.match(result.studentReply, course === 'dance' ? /8,192 步快检/ : /播放讲师参考/);
   }
 });
 
@@ -418,7 +418,7 @@ test('recovery results resolve experiment ID to the verified training and evalua
   assert.equal(compact.contextId, contextId);
   assert.equal(compact.stage, 'results');
   assert.equal(compact.quality.clearGain, false);
-  assert.match(compact.studentReply, /未达到收益判据/);
+  assert.match(compact.studentReply, /未达到改善标准/);
   assert.deepEqual(compact.submission, { training: false, evaluation: false });
   assert.equal(compact.links.experiment, status.baseUrl + '/experiment.html?context=' + contextId);
   assert.equal(compact.studioNavigation.arguments.url, compact.links.experiment);

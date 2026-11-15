@@ -206,9 +206,9 @@ def main():
     except Exception as exc:
         fail(str(exc))
     training = request.get("training") if isinstance(request.get("training"), dict) else {}
-    num_envs = training.get("numEnvs", 4)
-    if isinstance(num_envs, bool) or not isinstance(num_envs, int) or not 1 <= num_envs <= 16:
-        fail("training.numEnvs must be an integer from 1 to 16")
+    num_envs = training.get("numEnvs", 64)
+    if isinstance(num_envs, bool) or not isinstance(num_envs, int) or not 1 <= num_envs <= 64:
+        fail("training.numEnvs must be an integer from 1 to 64")
     contract = request.get("contract") if isinstance(request.get("contract"), dict) else {}
     environment_class = environment_for_contract(contract)
     expected_observation_size = 78
@@ -227,7 +227,7 @@ def main():
 
     report = train(bundle=bundle, output=output, dance_config=dance_config, num_envs=num_envs,
                    environment_class=environment_class,
-                   device=os.environ.get("RDK_ORIGINMAN_DANCE_DEVICE", "cpu").strip().lower())
+                   device=os.environ.get("RDK_ORIGINMAN_DANCE_DEVICE", "auto").strip().lower())
     report["engineSourceSha256"] = {
         name: hashlib.sha256(Path(__file__).with_name(name).read_bytes()).hexdigest()
         for name in ["adapter.py", "body.py", "env.py", "train.py", "dance_env.py", "dance_env_v2.py", "render_replay.py"]

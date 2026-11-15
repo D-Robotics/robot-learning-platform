@@ -9,18 +9,42 @@ export function comparisonRows(run) {
   const suites = run?.metrics?.originmanWorkshop?.feedbackComparison?.suites;
   if (!Array.isArray(suites)) return [];
   return suites.slice(0, 10).flatMap(s => {
-    const count = Array.isArray(s.cases) ? s.cases.length : null;
-    const values = [s.originalRecovered, s.tunedRecovered, s.rlRecovered];
-    if (!count || !values.every(v => Number.isInteger(v) && v >= 0 && v <= count)) return [];
-    return [{ label: s.id === 'historical' ? '公开条件组' : s.id === 'additional' ? '补充条件组' : '评测条件组', count, values }];
+    if (!Array.isArray(s.cases) || !s.cases.length || s.cases.some(c =>
+      !Number.isFinite(c.force) || !['original', 'tuned', 'rl'].every(k => typeof c[k] === 'boolean'))) return [];
+    const pushed = s.cases.filter(c => c.force !== 0);
+    const standing = s.cases.filter(c => c.force === 0);
+    const counts = cases => ['original', 'tuned', 'rl'].map(k => cases.filter(c => c[k]).length);
+    if (!pushed.length) return [];
+    return [{ label: s.id === 'historical' ? '公开条件组' : s.id === 'additional' ? '补充条件组' : '评测条件组',
+      count: pushed.length, values: counts(pushed), standing: { count: standing.length, values: counts(standing) } }];
   });
+}
+
+export function experimentFilename(contextId, extension) {
+  if (!idPattern.test(contextId ?? '') || !['json', 'webm', 'mp4'].includes(extension)) throw Error('实验文件标识无效');
+  return `OriginMan-${contextId}-evaluation.${extension}`;
 }
 
 export async function startExperimentView({ document, location, fetchImpl = fetch, EventSourceImpl = globalThis.EventSource, onExport, openPlayback } = {}) {
   const $ = id => document.getElementById(id);
   const playButton = $('play-experiment-video');
   const contextId = new URL(location.href).searchParams.get('context');
+  const validContext = idPattern.test(contextId ?? '');
   const base = new URL('./api/v1/duck/', location.href);
+  const back = $('return-workshop');
+  if (back) {
+    const destination = new URL('./workshop.html', location.href);
+    destination.searchParams.set('course', 'recovery');
+    if (validContext) destination.searchParams.set('context', contextId);
+    back.href = destination.href;
+  }
+  if (validContext) {
+    const login = new URL('./login', location.href);
+    const returnTo = new URL('./experiment.html', location.href);
+    returnTo.searchParams.set('context', contextId);
+    login.searchParams.set('returnTo', returnTo.pathname + returnTo.search);
+    $('login-platform').href = login.href;
+  }
   let view = null, stream = null, active = false, pending = false, disposed = false, generation = 0, refreshTimer = null;
   let trainingId = null, evaluationId = null, latestRecord = null, curvePoints = [], curveUnit = '训练步';
   const terminal = () => view && (['failed', 'blocked', 'cancelled', 'canceled'].includes(view.training?.status) ||
@@ -30,8 +54,12 @@ export async function startExperimentView({ document, location, fetchImpl = fetc
   const clearResults = () => {
     $('reward-chart').replaceChildren(); $('reward-chart').setAttribute('hidden', ''); $('curve-empty').hidden = false;
     $('curve-reading').hidden = true;
-    $('comparison-reading').hidden = true;
     $('comparison-body').replaceChildren(); $('comparison-table').hidden = true; $('comparison-empty').hidden = false;
+    $('recovery-summary').replaceChildren();
+    $('recovery-summary').hidden = true;
+    $('comparison-details').hidden = true;
+    $('comparison-details').open = false;
+    $('replay-shortcut').hidden = true;
     $('experiment-video').hidden = true; $('experiment-video').removeAttribute('src');
     if (playButton) {
       playButton.hidden = true;
@@ -42,18 +70,43 @@ export async function startExperimentView({ document, location, fetchImpl = fetc
     $('video-empty').hidden = false; $('playback-status').textContent = '尚未播放';
     $('curve-caption').textContent = '等待真实训练数据'; latestRecord = null;curvePoints=[];$('curve-inspector').hidden=true;
   };
+  const refreshButton = $('refresh-experiment');
   const fail = error => {
     clearResults();
+    $('experiment-data').hidden = true;
     $('experiment-error').hidden = false; $('experiment-error').textContent = error.message;
-    $('connection-status').textContent = '连接需处理';
+    const recovery = !validContext
+      ? { status: '请先选实验', next: '返回课程，从实验历史中选一轮。' }
+      : {
+          401: { status: '需要登录', next: '用原账号登录，登录后自动返回本次实验。' },
+          403: { status: '无法访问此实验', next: '确认当前账号有权查看原实验。可从课程的实验历史中重新选择。' },
+          404: { status: '找不到此实验', next: '返回课程，从当前账号的实验历史重新打开原实验。' },
+        }[error.status] ?? { status: '结果暂不可读', next: '点「重试读取本次实验」，重新读取原结果。' };
+    $('connection-status').textContent = recovery.status;
+    $('next-action').textContent = recovery.next;
     $('login-platform').hidden = error.status !== 401;
+    refreshButton.hidden = !validContext || [401, 403, 404].includes(error.status);
+    refreshButton.textContent = '重试读取本次实验';
+    $('experiment-diagnostics').textContent = '当前未取得可核对的实验结果。';
     $('association-status').textContent = '待验证';
     $('training-status').textContent = '待验证'; $('evaluation-status').textContent = '待验证';
     $('quality-status').textContent = '效果尚未验证';
   };
   const json = async suffix => {
-    const response = await fetchImpl(new URL(suffix, base), { credentials: 'same-origin', headers: { accept: 'application/json' }, redirect: 'error' });
-    if (!response.ok) throw Object.assign(Error(response.status === 401 ? '请先在学习平台登录同一账号，再恢复本次实验。' : response.status === 404 ? '当前账号下未找到此实验，保留原任务，不自动选择其他实验。' : '本次实验暂不可读，请稍后刷新原实验。'), { status: response.status });
+    let response;
+    try {
+      response = await fetchImpl(new URL(suffix, base), { credentials: 'same-origin', headers: { accept: 'application/json' }, redirect: 'error' });
+    } catch {
+      throw Error('暂时无法连接学习平台。');
+    }
+    if (!response.ok) {
+      const message = {
+        401: '登录已失效，请用原账号重新登录。',
+        403: '当前账号没有权限读取此实验。',
+        404: '当前账号下找不到此实验。',
+      }[response.status] ?? '暂时无法读取本次实验。';
+      throw Object.assign(Error(message), { status: response.status });
+    }
     return response.json();
   };
   const applyView = candidate => {
@@ -73,7 +126,6 @@ export async function startExperimentView({ document, location, fetchImpl = fetc
       if (phase === view.stage) $('step-' + phase).setAttribute('aria-current', 'step');
       else $('step-' + phase).removeAttribute('aria-current');
     }
-    $('quality-status').textContent = view.clearGain === true ? '本次达到收益判据' : view.clearGain === false ? '本次未达到收益判据' : '效果尚未验证';
     $('experiment-diagnostics').textContent = JSON.stringify(view, null, 2);
   };
   const inspectCurve = () => {const point=curvePoints[Number($('curve-sample').value)];if(point)$('curve-value').textContent=`${point.iteration} ${curveUnit} · 平均奖励 ${point.meanReward.toFixed(3)}`;};
@@ -108,22 +160,34 @@ export async function startExperimentView({ document, location, fetchImpl = fetc
       ? `最后一个采样点在 ${latest.iteration} ${curveUnit}，平均奖励从上一点的 ${previous.meanReward.toFixed(3)} 变为 ${latest.meanReward.toFixed(3)}。本轮已显示的峰值是 ${high.toFixed(3)}。`
       : `目前只采到一笔，平均奖励是 ${latest.meanReward.toFixed(3)}。`;
     reading.textContent = summary + (points.length <= 5 ? ' 采样较少，先别据此判断趋势。' : '') +
-      ' 奖励反映训练过程。遇到侧推能恢复几次，要看下方同条件评测。';
+      ' 奖励反映训练过程。遇到侧推能恢复几次，要看上方同条件评测。';
     $('curve-caption').textContent = (view.evidence === 'fixture' ? '测试数据 · ' : '引擎记录 · ') + points.length + ' 个采样点';
   };
   const drawComparison = run => {
     const rows = view.associationVerified ? comparisonRows(run) : [];
     $('comparison-body').replaceChildren(); $('comparison-table').hidden = !rows.length; $('comparison-empty').hidden = Boolean(rows.length);
-    const reading = $('comparison-reading');
-    reading.hidden = !rows.length;
-    if (rows.length) reading.textContent = rows.map(({ label, count, values }) => {
-      const [original, tuned, trained] = values;
-      const difference = trained - tuned;
-      const relative = difference === 0 ? '与调参反馈持平'
-        : `比调参反馈${difference > 0 ? '多' : '少'}恢复 ${Math.abs(difference)} 次`;
-      return `${label}里，本轮恢复 ${trained} / ${count} 次，原 PD 恢复 ${original} 次，${relative}。`;
-    }).join(' ');
+    $('recovery-summary').replaceChildren();
+    $('recovery-summary').hidden = !rows.length;
+    $('comparison-details').hidden = !rows.length;
+    $('quality-status').textContent =
+      !rows.length || view.clearGain == null ? '效果尚未验证' :
+        view.clearGain ? '本轮达到改善标准' : '本轮未达到改善标准';
+    const describeDifference = (name, difference) =>
+      difference === 0 ? `与${name}持平` :
+        `比${name}${difference > 0 ? '多' : '少'}恢复 ${Math.abs(difference)} 次`;
     for (const row of rows) {
+      const [original, tuned, recovered] = row.values;
+      const item = document.createElement('li');
+      const headline = document.createElement('strong');
+      headline.textContent = `${row.label}受扰恢复 ${recovered} / ${row.count} 次`;
+      item.append(
+        headline,
+        `，${row.count - recovered} 个条件未恢复。` +
+          `${describeDifference('原 PD', recovered - original)}，` +
+          `${describeDifference('调参反馈', recovered - tuned)}。`,
+      );
+      if (row.standing.count) item.append(` 无扰站立：原 PD ${row.standing.values[0]}、调参反馈 ${row.standing.values[1]}、本次 RL ${row.standing.values[2]} / ${row.standing.count}（不计入受扰恢复）。`);
+      $('recovery-summary').append(item);
       const tr = document.createElement('tr');
       for (const value of [row.label, ...row.values.map(v => `${v} / ${row.count}`)]) {
         const td = document.createElement('td'); td.textContent = value; tr.append(td);
@@ -132,10 +196,10 @@ export async function startExperimentView({ document, location, fetchImpl = fetc
     }
   };
   const refresh = async () => {
-    if (disposed || !idPattern.test(contextId ?? '')) return;
+    if (disposed || !validContext) return;
     if (active) { pending = true; return; }
     clearTimeout(refreshTimer);
-    active = true; const current = ++generation;
+    active = true; refreshButton.disabled = true; const current = ++generation;
     try {
       const state = await json('experiments/' + encodeURIComponent(contextId));
       if (disposed || current !== generation) return;
@@ -160,20 +224,28 @@ export async function startExperimentView({ document, location, fetchImpl = fetc
         const url = new URL('runs/' + encodeURIComponent(evaluation.id) + '/workshop-video?format=webm', base).href;
         if ($('experiment-video').getAttribute('src') !== url) $('experiment-video').setAttribute('src', url);
         $('experiment-video').hidden = false; $('video-empty').hidden = true;
-        $('download-video').href = url; $('download-video').hidden = false;
+        $('download-video').href = url; $('download-video').download = experimentFilename(contextId, 'webm'); $('download-video').hidden = false;
       } else { $('experiment-video').hidden = true; $('experiment-video').removeAttribute('src'); $('download-video').hidden = true; $('video-empty').hidden = false; }
       latestRecord = { schemaVersion: 1, observedAt: new Date().toISOString(), experiment: view, training, evaluation, comparison: comparisonRows(evaluation) };
       if (playButton) playButton.hidden = $('experiment-video').hidden;
+      $('replay-shortcut').hidden = $('experiment-video').hidden && $('open-playback-page').hidden;
       $('export-experiment').disabled = false;
       $('experiment-error').hidden = true; $('login-platform').hidden = true;
+      $('experiment-data').hidden = false;
       $('connection-status').textContent = '已连接本次实验';
+      refreshButton.textContent = '刷新本次实验';
+      refreshButton.hidden = false;
       if (terminal()) { stream?.close(); stream = null; }
       // Worker adapters currently refresh on exact Run reads. Keep this in the view,
       // rather than spending a model turn narrating each poll. Terminal views stop.
       if (['queued', 'running'].includes(view.training.status) || ['queued', 'running'].includes(view.evaluation?.status))
         refreshTimer = setTimeout(() => { void refresh(); }, 5000);
     } catch (error) { if (!disposed) fail(error); }
-    finally { active = false; if (pending && !disposed) { pending = false; void refresh(); } }
+    finally {
+      active = false;
+      refreshButton.disabled = false;
+      if (pending && !disposed) { pending = false; void refresh(); }
+    }
   };
   if (playButton) listen('play-experiment-video', 'click', () => {
     const video = $('experiment-video');
@@ -206,9 +278,9 @@ export async function startExperimentView({ document, location, fetchImpl = fetc
     if (!latestRecord) return;
     if (onExport) { onExport(latestRecord); return; }
     const url = URL.createObjectURL(new Blob([JSON.stringify(latestRecord, null, 2)], { type: 'application/json' }));
-    const a = document.createElement('a'); a.href = url; a.download = 'OriginMan-本次实验.json'; a.click(); URL.revokeObjectURL(url);
+    const a = document.createElement('a'); a.href = url; a.download = experimentFilename(contextId, 'json'); a.click(); URL.revokeObjectURL(url);
   });
-  if (!idPattern.test(contextId ?? '')) fail(Error('需要通过插件打开明确实验，不会自动选择最近任务。'));
+  if (!validContext) fail(Error('请从 Studio 对话或课程历史打开明确实验。'));
   else {
     await refresh();
     if (view && EventSourceImpl && !terminal()) {

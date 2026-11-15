@@ -8113,7 +8113,7 @@ async function validateSelectedTrainingContract() {
 }
 
 function supportsOriginmanDance(resource) {
-  return Boolean(resource && resource.mock !== true && resource.source !== 'local-agent' && resource.engines?.includes(originmanEngine));
+  return Boolean(resource && resource.status !== 'offline' && resource.mock !== true && resource.source !== 'local-agent' && resource.engines?.includes(originmanEngine));
 }
 
 async function submitOriginmanDance() {
@@ -8133,7 +8133,7 @@ async function submitOriginmanDance() {
     ...(state.projectId ? { projectId: state.projectId } : {}),
     label: dance.title,
     training: { profile: 'standard', engine: originmanEngine, algorithm: 'ppo', numEnvs: count,
-      maxIterations: Math.ceil(steps / (count * 256)), video: true, originmanDance: dance },
+      maxIterations: window.TrainingPlans.danceIterations(steps, count), video: true, originmanDance: dance },
   };
   state.runSubmitting = true;
   renderOriginmanTrainingWorkbench();
@@ -8180,7 +8180,7 @@ function bindOriginmanTrainingWorkbench() {
   });
   $('originman-recovery-class')?.addEventListener('click', () => {
     if (document.querySelector('[data-view-section="classroom"]')) setView('classroom');
-    else location.assign(new URL('./workshop.html', location.href));
+    else location.assign(new URL('./workshop.html?course=recovery', location.href));
   });
   $('originman-contract-template')?.addEventListener('change', () => {
     const editor = $('manifest-editor');
@@ -12372,6 +12372,20 @@ const workspaceReady = loadOverview();
 trainingPlans = window.TrainingPlans?.mount({
   request,
   ready: workspaceReady,
+  selectWorkshopResource(requestedId) {
+    const resources = state.overview?.computeResources || [];
+    const eligible = resources.filter(supportsOriginmanDance);
+    if (requestedId) {
+      const chosen = eligible.find((resource) => resource.id === requestedId);
+      state.selectedComputeResourceId = chosen?.id || '';
+      if (!chosen && state.overview) showToast('课程链接中指定的训练电脑当前不可用，请在配置页重新选择。', 'error');
+    } else if (!eligible.some((resource) => resource.id === state.selectedComputeResourceId)) {
+      const onlineGpu = eligible.filter((resource) => resource.status === 'online' && resource.cuda === true && resource.mock === false);
+      state.selectedComputeResourceId = onlineGpu.length === 1 ? onlineGpu[0].id : '';
+    }
+    renderSelects();
+    renderOriginmanTrainingWorkbench();
+  },
   onDraftChange() {
     renderSelects();
     renderOriginmanTrainingWorkbench();

@@ -24,7 +24,7 @@ describe('OriginMan dance platform contract', () => {
     });
     expect(normalized.errors).toEqual([]);
     expect(normalized.spec).toMatchObject({
-      numEnvs: 8,
+      numEnvs: 64,
       originmanDance: { ...dance, seed: 7, trainingSteps: 500_000, rewardTuning },
     });
   });
@@ -39,7 +39,7 @@ describe('OriginMan dance platform contract', () => {
         engine: 'originman-dance-ppo',
         algorithm: 'ppo',
         originmanDance: dance,
-        numEnvs: 17,
+        numEnvs: 65,
       }).spec,
     ).toBeUndefined();
     expect(

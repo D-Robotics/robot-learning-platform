@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import { JSDOM } from 'jsdom';
 import { startWorkshop } from './public/workshop-page.mjs';
+import { showWorkshopEntry } from './public/workshop-entry-page.mjs';
 const html = await fs.readFile(new URL('./public/workshop.html', import.meta.url), 'utf8');
 const settle = () => new Promise((r) => setTimeout(r, 25));
 function fixture({
@@ -16,6 +17,7 @@ function fixture({
   const dom = new JSDOM(html, {
     url: 'https://platform.test/course/workshop.html?context=ws-test',
   });
+  showWorkshopEntry(dom.window.document, dom.window.location.href);
   const state = {
     contextId: 'ws-test',
     modelId: 'm',
@@ -692,7 +694,8 @@ test('expired login gives one sign-in action and restores the same experiment wi
     c.dispose();
     f.dom.window.close();
   });
-  assert.equal($('workshop-primary').textContent, '去登录');
+  assert.equal($('workshop-primary').hidden, true);
+  assert.equal($('workshop-login').textContent, '登录学习平台');
   assert.equal($('workshop-login').hidden, false);
   assert.equal($('workshop-retry').textContent, '登录后接续原实验');
   signedIn = true;
@@ -753,7 +756,9 @@ test('preview stays offline until Start and login opens in the same tab', async 
   assert.deepEqual(calls, []);
   $('workshop-primary').click();
   await settle();
-  assert.equal($('workshop-primary').textContent, '登录学习平台');
+  assert.equal($('workshop-primary').hidden, true);
+  assert.equal($('workshop-login').hidden, false);
+  assert.equal($('workshop-login').textContent, '登录学习平台');
   assert.equal($('workshop-login').href, 'https://platform.test/course/login?workshop=start');
   assert.equal($('workshop-login').target, '');
 });
@@ -794,11 +799,33 @@ for (const outcome of [
         if (route === 'workshop-sessions/setup' && !body)
           return ok({
             accountId: 'learner',
-            resources: [{ id: 'worker', name: 'Course GPU', status: 'online' }],
+            resources: [
+              {
+                id: 'worker',
+                name: 'Course GPU',
+                status: 'online',
+                ...(outcome === 'ready' && {
+                  cuda: true,
+                  mock: false,
+                  engines: ['originman-recovery-reflect'],
+                }),
+              },
+              { id: 'offline', name: 'Offline computer', status: 'offline' },
+              { id: 'mock', name: 'Sample computer', status: 'online', mock: true },
+              {
+                id: 'wrong',
+                name: 'Wrong engine',
+                status: 'online',
+                engines: ['originman-dance-ppo'],
+              },
+            ],
           });
         if (route === 'compute-resources/worker/test')
           return ok({
             connected: outcome !== 'offline',
+            ...(outcome === 'offline' && {
+              diagnostic: { code: 'WORKER_HTTP_ERROR', httpStatus: 404 },
+            }),
             computeResource: {
               status: outcome === 'offline' ? 'offline' : 'online',
               engines: [
@@ -862,8 +889,16 @@ for (const outcome of [
     });
     const $ = (id) => dom.window.document.getElementById(id);
     assert.equal($('workshop-setup').hidden, false);
-    assert.equal($('workshop-compute').value, '');
-    assert.equal($('workshop-setup-confirm').disabled, true);
+    assert.deepEqual(
+      [...$('workshop-compute').options].map((option) => option.value),
+      ['', 'worker'],
+    );
+    assert.equal($('workshop-compute').value, outcome === 'ready' ? 'worker' : '');
+    assert.equal($('workshop-setup-confirm').disabled, outcome !== 'ready');
+    assert.deepEqual(
+      calls.map(({ route }) => route),
+      ['workshop-sessions/setup'],
+    );
     $('workshop-compute').value = 'worker';
     $('workshop-compute').dispatchEvent(new dom.window.Event('change'));
     $('workshop-setup-confirm').click();
@@ -871,7 +906,7 @@ for (const outcome of [
     const blockedMessage = {
       blocked: /CUDA 检查未通过/,
       mismatched: /无法与本次选机对应/,
-      offline: /暂时连不上/,
+      offline: /有响应.*找不到健康检查页面.*\/healthz/,
       'wrong-engine': /缺少本课程的训练引擎/,
     }[outcome];
     if (blockedMessage) {
@@ -915,3 +950,23 @@ for (const outcome of [
     );
   });
 }
+
+test('public Workshop routes default to dance and preserve an explicitly selected Worker', async (t) => {
+  const base = 'https://platform.test/learning/workshop.html';
+  const dance = new JSDOM(html, { url: base });
+  const recovery = new JSDOM(html, { url: base });
+  t.after(() => {
+    dance.window.close();
+    recovery.window.close();
+  });
+  const d = dance.window.document;
+  assert.equal(showWorkshopEntry(d, base + '?computeResourceId=worker-1'), false);
+  assert.equal(d.getElementById('dance-workshop-main').hidden, false);
+  assert.equal(d.getElementById('workshop-main').hidden, true);
+  const quick = new URL(d.getElementById('dance-budget-quick').href);
+  assert.equal(quick.searchParams.get('computeResourceId'), 'worker-1');
+  assert.equal(quick.hash, '#train/configure');
+  assert.equal(showWorkshopEntry(recovery.window.document, base + '?context=lesson-1'), true);
+  assert.equal(recovery.window.document.getElementById('workshop-main').hidden, false);
+  assert.equal(recovery.window.document.getElementById('dance-workshop-main').hidden, true);
+});

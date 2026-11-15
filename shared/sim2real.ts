@@ -1060,7 +1060,7 @@ export function normalizeTrainingSpec(value: unknown): {
   const numEnvs =
     source.numEnvs == null
       ? source.engine === 'originman-dance-ppo'
-        ? 8
+        ? 64
         : defaults.numEnvs
       : Number(source.numEnvs);
   const maxIterations =
@@ -1106,8 +1106,8 @@ export function normalizeTrainingSpec(value: unknown): {
     errors.push('training.originmanDance must match the bounded OriginMan dance schema');
   if (originmanDance && (engine !== 'originman-dance-ppo' || algorithm !== 'ppo'))
     errors.push('training.originmanDance requires engine originman-dance-ppo and algorithm ppo');
-  if (engine === 'originman-dance-ppo' && (!originmanDance || numEnvs > 16))
-    errors.push('originman-dance-ppo requires a dance recipe and 1–16 parallel environments');
+  if (engine === 'originman-dance-ppo' && (!originmanDance || numEnvs > 64))
+    errors.push('originman-dance-ppo requires a dance recipe and 1–64 parallel environments');
   if (errors.length) return { errors };
   return {
     errors,

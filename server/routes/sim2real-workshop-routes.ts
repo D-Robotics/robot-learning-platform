@@ -103,7 +103,14 @@ export function registerSim2RealWorkshopRoutes(
       accountId: owner ?? null,
       resources: (await listSim2RealComputeResources(owner))
         .filter((resource) => resource.source !== 'local-agent')
-        .map(({ id, name, status }) => ({ id, name, status })),
+        .map(({ id, name, status, engines, cuda, mock }) => ({
+          id,
+          name,
+          status,
+          ...(Array.isArray(engines) ? { engines } : {}),
+          ...(typeof cuda === 'boolean' ? { cuda } : {}),
+          ...(typeof mock === 'boolean' ? { mock } : {}),
+        })),
     })),
   );
   router.post(

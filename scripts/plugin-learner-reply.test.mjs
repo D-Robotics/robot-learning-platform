@@ -14,7 +14,7 @@ const record = {
 test('normal result stays concise and does not leak diagnostics or claim playback', () => {
   const reply = experimentStudentReply(record);
   assert.ok(reply.length < 140);
-  assert.match(reply, /未达到收益判据/);
+  assert.match(reply, /未达到改善标准/);
   assert.match(reply, /experiment.html/);
   assert.doesNotMatch(reply, /PRIVATE-RUN|已播放|已提升|真机通过/);
   assert.equal(experimentStudentReply({ experiment: record }), reply);
@@ -34,7 +34,7 @@ test('failed, unknown and pending tasks never become a successful result', () =>
     /训练进行中/,
   );
   assert.match(experimentStudentReply({ ...record, stopWorkflow: true }), /暂停/);
-  assert.match(experimentStudentReply({ ...record, quality: {} }), /效果尚待验证/);
+  assert.match(experimentStudentReply({ ...record, quality: {} }), /还无法判断策略是否改善/);
   assert.equal(experimentStudentReply({}), null);
 });
 

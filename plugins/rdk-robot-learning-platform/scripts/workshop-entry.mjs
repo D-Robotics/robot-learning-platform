@@ -9,7 +9,7 @@ export const STUDIO_WORKSHOP_NAVIGATION =
 
 const WORKSHOP_PAGE_DELIVERY =
   STUDIO_WORKSHOP_NAVIGATION +
-  ' Qoder 默认展示可点击链接，用户要求直接打开时按 qoderNavigation 在内置浏览器依次导航、列出页面并选择完整 URL 匹配的真实 pageId。页面负责预算确认和提交。';
+  ' 打开后告诉学员当前页面和一个可以马上做的动作。默认沿用 studentReply 的用语，技术字段在学员追问时再解释。Qoder 默认展示可点击链接，用户要求直接打开时按 qoderNavigation 在内置浏览器依次导航、列出页面并选择完整 URL 匹配的真实 pageId。页面负责预算确认和提交。';
 export const WORKSHOP_TOOLS = [
   {
     name: 'rdk_workshop',
@@ -66,8 +66,8 @@ export function workshopPreview(base, course = 'dance', stage = 'preview', resou
   const href = url.href;
   const firstStep =
     course === 'recovery'
-      ? '先看参考，再准备本轮实验。'
-      : '先配置舞段、节拍和训练预算，再核对算力。';
+      ? '先点「播放讲师参考」，看看机器人被推后怎样站稳。'
+      : '第一次来，先点「播放动作示意」。准备练习时，选 8,192 步快检。';
   const label = course === 'recovery' ? 'OriginMan 受扰恢复 Workshop' : 'OriginMan 舞蹈 Workshop';
   return {
     contextId: null,

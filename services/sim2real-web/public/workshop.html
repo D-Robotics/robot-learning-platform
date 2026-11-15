@@ -7,17 +7,53 @@
     <link rel="stylesheet" href="./tokens.css" />
     <link rel="stylesheet" href="./experiment.css" />
     <link rel="stylesheet" href="./workshop.css" />
-    <script type="module" src="./workshop-page.mjs"></script>
+    <script type="module" src="./workshop-entry-page.mjs"></script>
   </head>
   <body>
-    <a class="skip-link" href="#workshop-main">跳到课程</a>
+    <a class="skip-link" id="workshop-skip" href="#dance-workshop-main">跳到 Workshop 内容</a>
     <header class="experiment-header">
-      <a href="./">RDK Robot Learning</a><span>OriginMan Workshop · 仅仿真</span
-      ><span id="connection-status" role="status">正在打开课程</span>
+      <a href="./">RDK Robot Learning</a>
+      <span id="recovery-workshop-label" hidden>OriginMan 受扰恢复课程 · 仅仿真</span>
+      <span id="connection-status" role="status" hidden>正在打开课程</span>
     </header>
-    <main id="workshop-main" class="workshop-shell">
+    <main id="dance-workshop-main" class="workshop-shell">
+      <h1>OriginMan 舞蹈 Workshop</h1>
+      <p>第一次来？先看摆臂示意，再去配置快检。</p>
+      <section id="dance-reference" aria-labelledby="dance-reference-title">
+        <h2 id="dance-reference-title">看一段交替摆臂</h2>
+        <figure>
+          <canvas id="dance-reference-canvas" width="640" height="260" hidden role="img" aria-label="交替摆臂动作示意。左、右手轮流向前。"></canvas>
+          <figcaption>动作示意 · 100 BPM · 8 拍。每拍左右手交换一次。此处展示编排目标，实际动作可在训练回放中查看。</figcaption>
+        </figure>
+        <button id="dance-reference-play" type="button" hidden>播放动作示意</button>
+        <button id="dance-reference-stop" type="button" hidden>停止示意</button>
+        <p id="dance-reference-status" role="status"></p>
+      </section>
+      <section aria-labelledby="dance-budget-title">
+        <h2 id="dance-budget-title">选这轮训练多久</h2>
+        <div class="workshop-current">
+          <div>
+            <h3>快检 · 8,192 步</h3>
+            <p>第一次选这档。练习从提交训练到看回放、下载策略。</p>
+            <a id="dance-budget-quick" class="workshop-action-primary" href="./?robot=originman&amp;danceBudget=quick#train/configure">配置快检</a>
+          </div>
+          <div>
+            <h3>正式实验 · 50 万步</h3>
+            <p>想比较不同舞段或参数的效果时选这档。效果看本轮评测。</p>
+            <a id="dance-budget-formal" href="./?robot=originman&amp;danceBudget=formal#train/configure">配置正式实验</a>
+          </div>
+        </div>
+        <p>选择一档会打开训练配置页。两档默认同时运行 64 个仿真场景。到提交页确认后才会开始训练。</p>
+        <div class="workshop-actions">
+          <a href="./?robot=originman#train/submit">查看训练记录</a>
+          <a href="./workshop.html?course=recovery">打开受扰恢复课程</a>
+        </div>
+      </section>
+    </main>
+    <main id="workshop-main" class="workshop-shell" hidden>
       <div class="section-heading workshop-title">
-        <h1>OriginMan Workshop</h1>
+        <h1>OriginMan 受扰恢复课程</h1>
+        <p><a href="./?robot=originman#train/configure">前往舞蹈编排与训练 →</a></p>
       </div>
       <nav class="workshop-progress" aria-label="课程进度">
         <button id="workshop-step-reference" type="button" disabled>1 · 看参考</button>
@@ -32,13 +68,14 @@
           <p id="workshop-status" role="status">正在准备页面。</p>
         </div>
         <button id="workshop-primary" type="button" hidden></button>
+        <a id="workshop-login" class="workshop-action-primary" href="./login" hidden>登录学习平台</a>
       </div>
       <details class="workshop-extras">
         <summary>实验管理与自由探索</summary>
         <div class="workshop-actions">
           <button id="new-experiment" type="button" disabled>沿用本轮算力开新实验</button>
           <button id="history-toggle" type="button" aria-expanded="false" aria-controls="history">切换实验</button>
-          <a href="./workshop.html?start=1">换算力开新实验</a>
+          <a href="./workshop.html?course=recovery&amp;start=1">换算力开新实验</a>
           <a href="./#station/devices">连接设备</a>
           <a id="open-interactive-simulation" href="./?robot=originman#simulate">打开交互仿真</a>
         </div>
@@ -47,15 +84,14 @@
       <div id="workshop-error" class="experiment-error" hidden>
         <p id="workshop-error-message" role="alert"></p>
         <div class="workshop-actions">
-          <a id="workshop-login" href="./login" hidden>打开平台登录</a>
           <button id="workshop-retry" type="button">重试读取本轮</button>
         </div>
       </div>
       <section id="workshop-setup" hidden aria-labelledby="workshop-setup-title">
-        <h2 id="workshop-setup-title">选择本轮算力机</h2>
+        <h2 id="workshop-setup-title">选择用来训练的电脑</h2>
         <p id="workshop-setup-status" role="status"></p>
         <form id="workshop-setup-form" class="workshop-fields" hidden>
-          <label>训练算力机
+          <label>训练电脑（算力机）
             <select id="workshop-compute" required></select>
           </label>
           <button id="workshop-setup-confirm" type="submit">检查这台算力机并继续</button>
@@ -99,10 +135,10 @@
         <div id="budget-presets">
           <p>第一次用，选<strong>快速体验</strong>。两档训练完成后都会评测本轮策略。</p>
           <div class="workshop-actions">
-            <button id="start-quick" type="button">开始快速体验 · 8192 步</button>
+            <button id="start-quick" type="button">开始快检训练 · 8,192 步</button>
             <button id="start-formal" type="button">选择正式效果实验 · 50 万步</button>
           </div>
-          <p>快速体验用来练流程，恢复次数可能比原 PD 低。正式预算用于判断策略效果，需要更久，点选后会先核对配方。</p>
+          <p>点「开始快检训练」会提交一次训练，完成后自动评测。正式训练和自定义训练会先让你确认方案。</p>
         </div>
         <p id="comparison-recipe-help" hidden>
           已带入上一轮参数。只改一项，再比较两轮在相同条件下的恢复次数。
@@ -167,7 +203,7 @@
           <div class="workshop-actions">
             <button id="refresh-original-workshop" type="button">刷新原实验</button>
             <a id="workshop-recovery-records" href="./?robot=originman#train/runs" target="_blank" rel="noopener">查看运行记录</a>
-            <a id="workshop-recovery-new" href="./workshop.html?start=1" hidden>另开实验并选算力</a>
+            <a id="workshop-recovery-new" href="./workshop.html?course=recovery&amp;start=1" hidden>另开实验并选算力</a>
           </div>
         </div>
         <div class="workshop-actions">

@@ -52,7 +52,7 @@ test('dance training tool exposes a bounded numEnvs argument', async () => {
   const numEnvs = tool.inputSchema.properties.numEnvs;
   assert.equal(numEnvs.type, 'integer');
   assert.equal(numEnvs.minimum, 1);
-  assert.equal(numEnvs.maximum, 16);
-  assert.equal(numEnvs.default, 8);
-  assert.ok(tool.description.includes('numEnvs'));
+  assert.equal(numEnvs.maximum, 64);
+  assert.equal(numEnvs.default, 64);
+  assert.match(tool.description, /64 个并行环境/);
 });

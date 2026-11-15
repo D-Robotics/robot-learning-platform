@@ -89,7 +89,7 @@ export async function buildPluginUi(output) {
     fs.copyFileSync(path.join(directory, license), path.join(target, 'LICENSE'));
     packages.push({ name, version: metadata.version, license: metadata.license });
   }
-  fs.writeFileSync(path.join(output, 'ui/licenses.json'), JSON.stringify(packages, null, 2));
+  fs.writeFileSync(path.join(output, 'ui/licenses.json'), JSON.stringify(packages, null, 2) + '\n');
   const inputs = {};
   for (const file of [
     ...Object.keys(result.metafile.inputs),

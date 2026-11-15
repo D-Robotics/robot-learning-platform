@@ -121,6 +121,14 @@ function workshopContinuation(value: unknown): string | undefined {
     : undefined;
 }
 
+function experimentContinuation(value: unknown, basePath: string): string | undefined {
+  if (typeof value !== 'string' || !value.startsWith(`${basePath}/`)) return undefined;
+  const match = /^\/experiment\.html\?context=[A-Za-z0-9][A-Za-z0-9_.-]{0,95}$/.exec(
+    value.slice(basePath.length),
+  );
+  return match ? `${basePath}${match[0]}` : undefined;
+}
+
 /** 结构化最小响应类型：兼容全局 fetch Response，避免解析成 express Response。 */
 type UpstreamResponse = {
   ok: boolean;
@@ -138,10 +146,11 @@ export type RelayOutcome = {
 
 export function createStudioDirectRelay(deps: StudioDirectRelayDeps = {}) {
   const basePath = normalizeRelayBasePath(deps.basePath);
-  const loginRedirect = (error?: string, workshop?: string) => {
+  const loginRedirect = (error?: string, workshop?: string, returnTo?: string) => {
     const query = new URLSearchParams();
     if (error) query.set('error', error);
     if (workshop) query.set('workshop', workshop);
+    if (returnTo) query.set('returnTo', returnTo);
     return `${basePath}/login${query.size ? '?' + query : ''}`;
   };
   const post =
@@ -271,8 +280,9 @@ export function createStudioDirectRelay(deps: StudioDirectRelayDeps = {}) {
     /** 表单形态（无 JS 的 HTML 登录页）：成功/失败一律重定向。 */
     async handleForm(request: Request, response: Response): Promise<void> {
       const workshop = workshopContinuation(request.body?.workshop);
+      const returnTo = experimentContinuation(request.body?.returnTo, basePath);
       if (!studioDirectRelayAvailable()) {
-        response.redirect(302, loginRedirect('unavailable', workshop));
+        response.redirect(302, loginRedirect('unavailable', workshop, returnTo));
         return;
       }
       const userName = String(request.body?.userName ?? '')
@@ -280,17 +290,22 @@ export function createStudioDirectRelay(deps: StudioDirectRelayDeps = {}) {
         .slice(0, 160);
       const password = String(request.body?.password ?? '').slice(0, 256);
       if (!userName || !password) {
-        response.redirect(302, loginRedirect('missing', workshop));
+        response.redirect(302, loginRedirect('missing', workshop, returnTo));
         return;
       }
       const outcome = await runWithGuards(request, userName, password);
       applyCookies(response, outcome);
-      const destination = workshop
-        ? outcome.status === 200
-          ? `${basePath}/workshop.html?${workshop === 'start' ? 'start=1&setup=1' : 'context=' + workshop}`
-          : loginRedirect(outcome.status === 401 ? 'invalid' : 'unavailable', workshop)
-        : (outcome.redirect ?? `${basePath}/`);
-      response.redirect(302, destination);
+      if ((workshop || returnTo) && outcome.status !== 200) {
+        response.redirect(
+          302,
+          loginRedirect(outcome.status === 401 ? 'invalid' : 'unavailable', workshop, returnTo),
+        );
+        return;
+      }
+      const workshopPage = workshop
+        ? `${basePath}/workshop.html?${workshop === 'start' ? 'start=1&setup=1' : 'context=' + workshop}`
+        : undefined;
+      response.redirect(302, returnTo ?? workshopPage ?? outcome.redirect ?? `${basePath}/`);
     },
   };
 }
@@ -301,9 +316,11 @@ export function renderStudioDirectLoginPage(
   basePath?: string,
   notice?: string,
   workshopInput?: unknown,
+  returnToInput?: unknown,
 ): string {
   const workshop = workshopContinuation(workshopInput);
   const base = normalizeRelayBasePath(basePath);
+  const returnTo = experimentContinuation(returnToInput, base);
   const messages: Record<string, string> = {
     missing: '请输入账号与密码。',
     invalid: '账号或密码不正确。',
@@ -343,6 +360,7 @@ export function renderStudioDirectLoginPage(
   ${noticeHtml}
   <form method="post" action="${base}/api/sim2real/auth/studio-direct/login">
     ${workshop ? `<input type="hidden" name="workshop" value="${workshop}"/>` : ''}
+    ${returnTo ? `<input type="hidden" name="returnTo" value="${returnTo}"/>` : ''}
     <label for="userName">账号</label>
     <input id="userName" name="userName" autocomplete="username" required/>
     <label for="password">密码</label>

@@ -116,7 +116,7 @@ window.TrainingPlans = (() => {
           bpm.value = recipe.bpm;
           steps.value = recipe.trainingSteps ?? 500000;
           seed.value = recipe.seed ?? '';
-          numEnvs.value = count ?? 8;
+          numEnvs.value = count ?? 64;
           sections.replaceChildren();
           recipe.sections.forEach(append);
         }
@@ -125,7 +125,7 @@ window.TrainingPlans = (() => {
     };
   }
 
-  function mount({ request, readContext, applyContext, refreshControls, ready, onDraftChange, hasDanceContract }) {
+  function mount({ request, readContext, applyContext, refreshControls, ready, onDraftChange, hasDanceContract, selectWorkshopResource }) {
     const root = byId('training-plans');
     if (!root) return null;
     const select = byId('training-plan-select');
@@ -215,7 +215,7 @@ window.TrainingPlans = (() => {
         delete config.demonstrationRunId;
         return { ...config, training: {
           profile: 'standard', algorithm: 'ppo', engine: 'originman-dance-ppo',
-          numEnvs, maxIterations: Math.ceil(dance.trainingSteps / (numEnvs * 256)),
+          numEnvs, maxIterations: danceIterations(dance.trainingSteps, numEnvs),
           originmanDance: dance, video: true,
         } };
       }
@@ -334,7 +334,21 @@ window.TrainingPlans = (() => {
     const params = new URL(location.href).searchParams;
     const linked = params.get('trainingPlan');
     const sourceRunId = params.get('fromRun');
+    const preset = params.get('danceBudget');
+    const useWorkshopPreset = !linked && !sourceRunId && readContext().productId === 'originman' &&
+      (preset === 'quick' || preset === 'formal');
+    if (useWorkshopPreset) {
+      byId('originman-training-goal').value = 'originman-dance';
+      byId('originman-dance-steps').value = preset === 'quick' ? 8192 : 500000;
+      byId('originman-dance-budget-help').textContent = preset === 'quick'
+        ? '已填入快检的步数，可以修改。先练习提交和查看结果。'
+        : '已填入正式实验的步数，可以修改。动作效果以本轮评测为准。';
+      danceEditor.syncProduct('originman');
+    }
     const begin = () => {
+      if (useWorkshopPreset && readContext().productId === 'originman') {
+        selectWorkshopResource?.(params.get('computeResourceId'));
+      }
       if (linked && idValid(linked)) {
         void action(async () => {
           await list();
@@ -365,5 +379,9 @@ window.TrainingPlans = (() => {
     });
     return { hasDance: danceEditor.enabled, dance: danceEditor.read, danceNumEnvs: danceEditor.numEnvs, syncProduct: danceEditor.syncProduct, video: () => current?.config.training.video };
   }
-  return { mount };
+  function danceIterations(steps, numEnvs) {
+    const stepsPerEnvironment = Math.min(256, Math.floor(4096 / numEnvs));
+    return Math.ceil(steps / (numEnvs * stepsPerEnvironment));
+  }
+  return { mount, danceIterations };
 })();

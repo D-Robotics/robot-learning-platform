@@ -109,3 +109,26 @@
 #round-comparison { margin: 16px 0; }
 #round-comparison-table { min-width: 640px; }
 #round-comparison-picker select { max-width: 100%; }
+
+
+.workshop-action-primary {
+  display: inline-block;
+  padding: 8px 16px;
+  border: 1px solid var(--accent);
+  border-radius: 8px;
+  background: var(--accent-soft);
+  color: var(--accent-text);
+  font-weight: 700;
+  text-decoration: none;
+}
+
+#dance-reference figure { margin-inline: 0; }
+#dance-reference canvas {
+  display: block;
+  max-width: 100%;
+  height: auto;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+}
+#dance-reference canvas[hidden] { display: none; }

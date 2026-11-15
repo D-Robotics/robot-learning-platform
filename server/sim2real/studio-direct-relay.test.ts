@@ -63,7 +63,15 @@ function makeApp(
   app.get('/login', (req, res) => {
     res
       .type('html')
-      .send(renderStudioDirectLoginPage('invalid', basePath, undefined, req.query.workshop));
+      .send(
+        renderStudioDirectLoginPage(
+          'invalid',
+          basePath,
+          undefined,
+          req.query.workshop,
+          req.query.returnTo,
+        ),
+      );
   });
   return app;
 }
@@ -85,6 +93,41 @@ function configuredEnv(): Record<string, string> {
 }
 
 describe('studio direct-login relay', () => {
+  it('resumes only the exact local experiment after successful login and preserves it after failure', async () => {
+    setTestEnv(configuredEnv());
+    const prefix = '/robotics-learning';
+    const result = `${prefix}/experiment.html?context=ws-0123456789abcdef0123`;
+    const app = makeApp(
+      async (_url, body) =>
+        JSON.parse(body).password === 'ok'
+          ? studioResponse({ setCookie: ['rdk_sso_web_session=v1.a.b.c'] })
+          : studioResponse({ status: 401 }),
+      'form',
+      prefix,
+    );
+    const base = await listen(app);
+    const href = (returnTo: string) => `${base}/login?${new URLSearchParams({ returnTo })}`;
+    const form = (returnTo: string, password = 'ok', userName = 'learner') =>
+      fetch(`${base}/api/sim2real/auth/studio-direct/login`, {
+        method: 'POST',
+        redirect: 'manual',
+        body: new URLSearchParams({ userName, password, returnTo }),
+      });
+    const html = await (await fetch(href(result))).text();
+    expect(html).toContain(`name="returnTo" value="${result}"`);
+    const missing = (await form(result, '', '')).headers.get('location');
+    const denied = (await form(result, 'wrong')).headers.get('location');
+    expect(new URL(missing!, base).searchParams.get('returnTo')).toBe(result);
+    expect(new URL(denied!, base).searchParams.get('returnTo')).toBe(result);
+    expect((await form(result)).headers.get('location')).toBe(result);
+    const unsafe = `//other.example${result}`;
+    expect(await (await fetch(href(unsafe))).text()).not.toContain('name="returnTo"');
+    expect((await form(unsafe)).headers.get('location')).toBe(`${prefix}/`);
+    expect(await (await fetch(href(`${result}&redirect=//other.example`))).text()).not.toContain(
+      'name="returnTo"',
+    );
+  });
+
   it('returns to Workshop in the same tab and ignores untrusted redirect targets', async () => {
     setTestEnv(configuredEnv());
     const app = makeApp(

@@ -1,14 +1,14 @@
 {
   "schemaVersion": 1,
   "name": "rdk-robot-learning-platform",
-  "version": "0.6.62",
+  "version": "0.6.63",
   "description": "通用机器人学习插件，支持按机型和任务进入仿真与录制、强化学习与模仿学习、Sim2Real 评测与回放、制品管理和受控部署。OriginMan 舞蹈和受扰恢复是可选任务。",
   "composition": "retained-core-with-host-neutral-workflow-extension",
   "coreBundleSha256": "fe7e5f440cbc357b47de476bee5b8b15facc7940d7bbcc7a8975adbd4e1bfca5",
   "coreVersion": "0.1.0",
   "wrapperSources": {
     "scripts/workshop-course.mjs": "8e51aedbae2655f2a570c4ab576402a1899339329e6dba1721843660d2edc2df",
-    "scripts/workshop-entry.mjs": "fd7ce0ab70820985bf46386c89ca7f12363211554920eea1da7363271b6aa16d",
+    "scripts/workshop-entry.mjs": "7d5053e5bcfaf54e2008f13e2b0b57ae3e714a1c8d26b4f0450a89bef801bad1",
     "scripts/development-targets.mjs": "8ed5870185c22115c8e7a1817305bee449f2b7abb61f149d5b5cab28e6626731",
     "scripts/playback-plan.mjs": "b0919d889277826d784d6755aaf5d108df4850f7697315b87668ba7a241ae786",
     "scripts/mcp-app-resource.mjs": "a1f9433dedc7dddd783534a021bb413201a2fe2bbfa80141dcbfd0b321632868",
@@ -17,7 +17,7 @@
     "scripts/robot-onboarding.mjs": "c8ac06adf47bed664194b513332226249c5c6a33d7646f94dff7af994c2c6421",
     "scripts/qoder-install.mjs": "76a8bc2e2383f31d81e32ff6e8c5ca0316d9baa14e02778bed551d2768d8ef07",
     "scripts/experience.mjs": "b8c9531415d202ce167e026020a7521bb941e2e4c192539ba5990fa195ad2d1e",
-    "scripts/experience-mcp.mjs": "3d36c7b79aca2342cf0d5836b1171fd7d64ac4d1c86317edd50599575513c793",
+    "scripts/experience-mcp.mjs": "eba2fee27a200fa02ec5135154e8681926376a36e90726f2f11eafbc082a43d9",
     "scripts/workflow-inspection.mjs": "e0b17b6039d55e49d693e01d069ce79f5439ddefab6144f38108fca15dd34493",
     "scripts/experiment-context.mjs": "59bd3dc740d3229c6c8a1567f3275bc8bfa1a9af8b40a616a7fc1027bd25ce87",
     "scripts/short-training.mjs": "0a67b7cba1f056da9b80ce608002fe8b17ee0e3797229b3eb5321dda6f5ba32b",
@@ -39,7 +39,7 @@
     "setup-qoder-macos.command": "93df7254bf6dcc25ff206ebdc3d135333fb4b1528f340cfc2544da34b2ef7516",
     "setup-qoder-windows.cmd": "d4046e68bd62a40bf919c4755411fd294a483758f8ddcf493073863b4a3f834b",
     "runtime-downloads.json": "73ac7276ca81776aa1680cfdb94a817c4c33ecb3e41c024aeaf27663e281f999",
-    "ui/experiment.html": "15476c8267b8778e6e9a66a6b4a681c6676f1fc0b5845418ae6d0d11fb18a252",
+    "ui/experiment.html": "d02a5ad4bc776faab2d50360d03b4c0f077a1a61e843c5d67ef3be0ad0f210f9",
     "ui/licenses.json": "a599a96d9a7c8019ff6aa53694023adf50221e4d878542e3437799cdaac3cdd5",
     "scripts/workspace-evidence.mjs": "8ba4be78b4a0e427112f4861962528065e9be004e8014734716b165811c495b9",
     "scripts/dance-coaching.mjs": "58c74a01c57e3254405bb9b3b1a7ee060ae0257b83708711d3f8366bca216359",
@@ -58,12 +58,12 @@
     },
     "inputs": {
       "node_modules/@modelcontextprotocol/ext-apps/dist/src/app-with-deps.js": "d24b6ae50dbc989539db8287e217f41f0833f2b0a81ac4c6dbde444715ef5cd0",
-      "services/sim2real-web/public/experiment-view.mjs": "7aa3fe5db61dadac270b99be9b964db3f5890cf2d72b5e2040b761dd7616ed0f",
-      "plugins/rdk-robot-learning-platform/plugin.json": "eda70ed62c3fbe1609c43203628b326a0888a3672d9cf165d790e0ebfcefe551",
+      "services/sim2real-web/public/experiment-view.mjs": "7cac7223d9281df768fab7d8e8100a9e62fe57a265b6ed00eeaccba6417d7868",
+      "plugins/rdk-robot-learning-platform/plugin.json": "c50d5384bfb0466f58f7af8c1071b33bf344c3078e58fbda17fc0878adceaa92",
       "plugins/rdk-robot-learning-platform/ui/experiment-app.mjs": "d735263c46f20143ec8fee49c5f50a0129685e7ae522a32d11390b00fe2a2996",
       "services/sim2real-web/public/tokens.css": "3ad5ee94306710d01bc41e0802c360a779e3c173d11d5d8958ed685b79703e86",
       "services/sim2real-web/public/experiment.css": "400f00c7d2e86d0f71362c2e6ccded0a5f143058ade9267fd6887ef06e4d6bea",
-      "services/sim2real-web/public/experiment.html": "e6c93dfdb6fb659df275c90479d5a39fac5b29584d1f55293903a8ab11359c22"
+      "services/sim2real-web/public/experiment.html": "2aaac0d4c3ea647744ed84da4ceaabdc3df3f62598bef7a56a76c636d0f9989f"
     }
   },
   "studioHostPatchIncluded": false

@@ -315,3 +315,46 @@ test('copying a dance Run prepares its exact parameters without submitting or sa
     '保存为新方案',
   );
 });
+
+test('dance Workshop links fill the requested draft without submitting or saving', async (t) => {
+  for (const [preset, steps] of [
+    ['quick', 8192],
+    ['formal', 500000],
+  ]) {
+    const workspace = new JSDOM(
+      fs.readFileSync(new URL('./public/index.html', import.meta.url), 'utf8'),
+      {
+        url: `https://platform.test/robotics-learning/?robot=originman&danceBudget=${preset}&computeResourceId=course-worker#train/configure`,
+        runScripts: 'outside-only',
+      },
+    );
+    t.after(() => workspace.window.close());
+    workspace.window.eval(
+      fs.readFileSync(new URL('./public/training-plans.js', import.meta.url), 'utf8'),
+    );
+    const selected = [];
+    const planner = workspace.window.TrainingPlans.mount({
+      request: async (route, options) => {
+        assert.equal(options, undefined, 'opening a draft must only read');
+        assert.equal(route, '/v1/duck/training-plans');
+        return { plans: [] };
+      },
+      readContext: () => ({ productId: 'originman' }),
+      applyContext() {},
+      refreshControls() {},
+      onDraftChange() {},
+      selectWorkshopResource: (id) => {
+        selected.push(id);
+      },
+      hasDanceContract: () => true,
+    });
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(planner.dance().trainingSteps, steps);
+    assert.equal(planner.danceNumEnvs(), 64);
+    assert.equal(
+      workspace.window.TrainingPlans.danceIterations(steps, 64),
+      preset === 'quick' ? 2 : 123,
+    );
+    assert.deepEqual(selected, ['course-worker']);
+  }
+});

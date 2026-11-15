@@ -2,7 +2,12 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import test from 'node:test';
 import { JSDOM } from 'jsdom';
-import { startExperimentView, rewardPoints } from './public/experiment-view.mjs';
+import {
+  startExperimentView,
+  rewardPoints,
+  comparisonRows,
+  experimentFilename,
+} from './public/experiment-view.mjs';
 
 const markup = fs.readFileSync(new URL('./public/experiment.html', import.meta.url), 'utf8');
 async function fixture(
@@ -10,6 +15,7 @@ async function fixture(
   {
     context = 'lesson',
     failed = false,
+    initialHttpStatus = null,
     pagePlayback = false,
     eventSource = null,
     pendingEvaluation = false,
@@ -50,7 +56,11 @@ async function fixture(
           suites: [
             {
               id: 'historical',
-              cases: [{}, {}, {}],
+              cases: [
+                { force: -8, original: true, tuned: true, rl: true },
+                { force: 8, original: true, tuned: true, rl: false },
+                { force: 4, original: false, tuned: false, rl: false },
+              ],
               originalRecovered: 2,
               tunedRecovered: 2,
               rlRecovered: 1,
@@ -67,14 +77,14 @@ async function fixture(
   const calls = [],
     exports = [];
   const opened = [];
-  let unauthorized = failed;
+  let status = initialHttpStatus ?? (failed ? 401 : null);
   const instance = await startExperimentView({
     document: dom.window.document,
     location: dom.window.location,
     EventSourceImpl: eventSource,
     fetchImpl: async (url) => {
       calls.push(String(url));
-      if (unauthorized) return Response.json({}, { status: 401 });
+      if (status) return Response.json({}, { status });
       const pathname = new URL(url).pathname;
       return Response.json(
         pathname.endsWith('/experiments/lesson')
@@ -99,8 +109,11 @@ async function fixture(
     opened,
     instance,
     $: (id) => dom.window.document.getElementById(id),
+    recover: () => {
+      status = null;
+    },
     failAuth: () => {
-      unauthorized = true;
+      status = 401;
     },
   };
 }
@@ -108,10 +121,14 @@ test('explicit experiment displays real curve, comparison and media under the sa
   const f = await fixture(t);
   assert.equal(f.$('reward-chart').hasAttribute('hidden'), false);
   assert.match(f.$('curve-reading').textContent, /-2\.000.*4\.000.*采样较少/);
-  assert.match(f.$('comparison-reading').textContent, /恢复 1 \/ 3 次.*比调参反馈少恢复 1 次/);
+  assert.match(f.$('recovery-summary').textContent, /恢复 1 \/ 3 次.*比调参反馈少恢复 1 次/);
   assert.equal(f.$('comparison-table').hidden, false);
+  const returnLink = new URL(f.$('return-workshop').href);
+  assert.equal(returnLink.searchParams.get('course'), 'recovery');
+  assert.equal(returnLink.searchParams.get('context'), 'lesson');
+  assert.equal(f.$('download-video').download, 'OriginMan-lesson-evaluation.webm');
   assert.match(f.$('comparison-body').textContent, /2 \/ 3.*2 \/ 3.*1 \/ 3/);
-  assert.equal(f.$('quality-status').textContent, '本次未达到收益判据');
+  assert.equal(f.$('quality-status').textContent, '本轮未达到改善标准');
   assert.equal(
     f.$('experiment-video').getAttribute('src'),
     'https://platform.test/learning/api/v1/duck/runs/eval/workshop-video?format=webm',
@@ -136,7 +153,7 @@ test('another Run or policy in a later reply clears stale results and cannot be 
   assert.match(f.$('experiment-error').textContent, /父任务或权重摘要/);
   assert.equal(f.$('comparison-table').hidden, true);
   assert.equal(f.$('curve-reading').hidden, true);
-  assert.equal(f.$('comparison-reading').hidden, true);
+  assert.equal(f.$('recovery-summary').hidden, true);
   assert.equal(f.$('experiment-video').hasAttribute('src'), false);
   assert.equal(f.$('export-experiment').disabled, true);
   assert.equal(f.$('playback-status').textContent, '尚未播放');
@@ -146,6 +163,7 @@ test('expired authentication removes the previous success and offers the platfor
   f.failAuth();
   await f.instance.refresh();
   assert.equal(f.$('login-platform').hidden, false);
+  assert.equal(f.$('experiment-data').hidden, true);
   assert.equal(f.$('training-status').textContent, '待验证');
   assert.equal(f.$('comparison-table').hidden, true);
   assert.equal(f.$('experiment-video').hidden, true);
@@ -230,4 +248,69 @@ test('manual pause is reported as paused rather than continuing to claim playbac
   video.dispatchEvent(new f.dom.window.Event('playing'));
   video.dispatchEvent(new f.dom.window.Event('pause'));
   assert.equal(f.dom.window.document.getElementById('playback-status').textContent, '已暂停回放');
+});
+
+test('sign-in returns directly to the same experiment under the platform mount', async (t) => {
+  const f = await fixture(t, { failed: true });
+  const login = new URL(f.$('login-platform').href);
+  assert.equal(login.pathname, '/learning/login');
+  assert.equal(login.searchParams.get('returnTo'), '/learning/experiment.html?context=lesson');
+  assert.match(f.$('next-action').textContent, /登录.*本次实验/);
+});
+
+test('a temporary result failure explains the retry and recovers only the original experiment', async (t) => {
+  const f = await fixture(t, { initialHttpStatus: 503 });
+  assert.match(f.$('next-action').textContent, /重试读取本次实验/);
+  assert.equal(f.$('refresh-experiment').textContent, '重试读取本次实验');
+  assert.equal(f.$('experiment-data').hidden, true);
+  assert.equal(f.$('reward-chart').hasAttribute('hidden'), true);
+  f.recover();
+  await f.instance.refresh();
+  assert.equal(f.$('experiment-error').hidden, true);
+  assert.equal(f.$('experiment-data').hidden, false);
+  assert.ok(f.calls.every((url) => /experiments\/lesson$|runs\/(train|eval)$/.test(url)));
+  assert.equal(f.$('export-experiment').disabled, false);
+});
+test('recovery excludes the zero-force standing control and refuses incomplete case evidence', () => {
+  const run = (cases) => ({
+    metrics: {
+      originmanWorkshop: {
+        feedbackComparison: {
+          suites: [
+            { id: 'historical', cases, originalRecovered: 2, tunedRecovered: 2, rlRecovered: 1 },
+          ],
+        },
+      },
+    },
+  });
+  const cases = [
+    { force: -8, original: true, tuned: true, rl: false },
+    { force: 8, original: false, tuned: false, rl: false },
+    { force: 0, original: true, tuned: true, rl: true },
+  ];
+  assert.deepEqual(comparisonRows(run(cases))[0], {
+    label: '公开条件组',
+    count: 2,
+    values: [1, 1, 0],
+    standing: { count: 1, values: [1, 1, 1] },
+  });
+  assert.equal(comparisonRows(run([{}])).length, 0);
+  assert.equal(experimentFilename('ws-test', 'json'), 'OriginMan-ws-test-evaluation.json');
+});
+
+test('an unavailable experiment offers course history without switching Runs', async (t) => {
+  for (const [status, title] of [
+    [403, '无法访问此实验'],
+    [404, '找不到此实验'],
+  ]) {
+    const f = await fixture(t, { initialHttpStatus: status });
+    assert.equal(f.$('connection-status').textContent, title);
+    assert.match(f.$('next-action').textContent, /实验历史/);
+    assert.equal(f.$('login-platform').hidden, true);
+    assert.equal(f.$('export-experiment').disabled, true);
+    assert.deepEqual(
+      f.calls.map((url) => new URL(url).pathname),
+      ['/learning/api/v1/duck/experiments/lesson'],
+    );
+  }
 });

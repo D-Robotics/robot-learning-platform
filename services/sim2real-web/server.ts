@@ -895,6 +895,7 @@ export function createSim2RealWebApp(): Express {
             configuredPublicBasePath(),
             String(request.query.loggedOut ?? '') === '1' ? '已退出登录。' : undefined,
             request.query.workshop,
+            request.query.returnTo,
           ),
         );
     });

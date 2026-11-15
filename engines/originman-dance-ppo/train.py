@@ -34,8 +34,10 @@ def _json_default(value):
 
 
 def resolve_training_device(requested: str) -> str:
+    if requested == "auto":
+        return "cuda" if torch.cuda.is_available() else "cpu"
     if requested not in {"cpu", "cuda", "mps"}:
-        raise ValueError("RDK_ORIGINMAN_DANCE_DEVICE must be cpu, cuda, or mps")
+        raise ValueError("RDK_ORIGINMAN_DANCE_DEVICE must be auto, cpu, cuda, or mps")
     if requested == "cuda" and not torch.cuda.is_available():
         raise ValueError("CUDA was requested but is unavailable in this Worker")
     if requested == "mps" and not torch.backends.mps.is_available():
@@ -178,7 +180,7 @@ def evaluate(env, actor, bpm, *, trace=False):
 
 
 def train(*, bundle: Path, output: Path, dance_config: dict, num_envs: int,
-          environment_class=ConfigurableChoreography, device: str = "cpu"):
+          environment_class=ConfigurableChoreography, device: str = "auto"):
     device = resolve_training_device(device)
     dance = environment_class(bundle, dance_config, training=False)
     contract = {
@@ -201,7 +203,8 @@ def train(*, bundle: Path, output: Path, dance_config: dict, num_envs: int,
     train_env = vector or env_fns[0]()
     started = time.monotonic()
     total_timesteps = dance_config["trainingSteps"]
-    rollout_size = num_envs * 256
+    steps_per_environment = min(256, 4096 // num_envs)
+    rollout_size = num_envs * steps_per_environment
     callback = WorkerProgress(total_timesteps, rollout_size)
     try:
         model = PPO(
@@ -209,7 +212,7 @@ def train(*, bundle: Path, output: Path, dance_config: dict, num_envs: int,
             train_env,
             device=device,
             seed=dance_config["seed"],
-            n_steps=256,
+            n_steps=steps_per_environment,
             batch_size=128,
             n_epochs=4,
             learning_rate=3e-4,
