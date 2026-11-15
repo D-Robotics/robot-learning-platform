@@ -152,7 +152,7 @@ test(
     assert.equal(unzip.status, 0, unzip.stderr);
     const importedRoot = path.join(extracted, 'rdk-robot-learning-platform');
     const config = JSON.parse(fs.readFileSync(path.join(importedRoot, '.mcp.json'), 'utf8'));
-    const entry = config.mcpServers['rdk-learning-platform'];
+    const entry = config.mcpServers['rdk-robot-learning-platform'];
     assert.equal(entry.args[0], path.join(root, 'scripts/experience-mcp.mjs'));
     assert.equal(entry.env.RDK_STUDIO_INHERIT_LOGIN, '0');
     assert.ok(!JSON.stringify(entry).includes('RDK_SIM2REAL_MCP_COOKIE'));

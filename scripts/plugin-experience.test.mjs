@@ -635,6 +635,7 @@ test('runtime version requires matching loaded source hashes and rejects a stale
     'experience-mcp.mjs',
     'experience.mjs',
     'workflow-inspection.mjs',
+    'workspace-evidence.mjs',
     'experiment-context.mjs',
     'short-training.mjs',
     'plugin-auth.mjs',
@@ -645,6 +646,8 @@ test('runtime version requires matching loaded source hashes and rejects a stale
     'workshop-course.mjs',
     'originman-dance-config.mjs',
     'dance-training.mjs',
+    'dance-coaching.mjs',
+    'dance-evaluation.mjs',
     'workshop-entry.mjs',
     'development-targets.mjs',
     'playback-plan.mjs',
@@ -671,6 +674,7 @@ test('runtime version requires matching loaded source hashes and rejects a stale
             'experience-mcp.mjs',
             'experience.mjs',
             'workflow-inspection.mjs',
+            'workspace-evidence.mjs',
             'experiment-context.mjs',
             'short-training.mjs',
             'plugin-auth.mjs',
@@ -681,6 +685,8 @@ test('runtime version requires matching loaded source hashes and rejects a stale
             'workshop-course.mjs',
             'originman-dance-config.mjs',
             'dance-training.mjs',
+            'dance-coaching.mjs',
+            'dance-evaluation.mjs',
             'workshop-entry.mjs',
             'development-targets.mjs',
             'playback-plan.mjs',
@@ -729,20 +735,33 @@ test('beginner guide starts fresh and routes known tasks without reading old Run
   assert.equal((await guide({ intent: 'new', task: 'dance' })).stage, 'movement');
   assert.deepEqual((await guide({ intent: 'new', task: 'recovery' })).nextArguments, {
     intent: 'new',
+    course: 'recovery',
   });
   assert.equal(
     (await guide({ task: 'imitation' })).links.workbench,
-    'https://platform.test/robotics-learning/#train',
+    'https://platform.test/robotics-learning/?learningMode=imitation#overview',
   );
   const otherRobot = await guide({ task: 'reinforcement', robot: 'MicroDuck' });
   assert.match(otherRobot.studentReply, /MicroDuck/);
   assert.doesNotMatch(otherRobot.studentReply, /OriginMan/);
+  assert.equal(
+    otherRobot.links.workbench,
+    'https://platform.test/robotics-learning/?robot=microduck&learningMode=reinforcement#train/configure',
+  );
+  assert.equal(
+    (await guide({ task: 'simulation', robot: 'OriginBot' })).links.workbench,
+    'https://platform.test/robotics-learning/?robot=originbot#simulate',
+  );
+  assert.equal(
+    (await guide({ task: 'evaluation', robot: 'my custom robot' })).links.workbench,
+    'https://platform.test/robotics-learning/?robot=custom#train/prepare',
+  );
   for (const [task, page] of [
     ['overview', 'overview'],
     ['simulation', 'simulate'],
     ['evaluation', 'evaluate'],
     ['replay', 'records'],
-    ['deployment', 'deploy'],
+    ['deployment', 'deploy/preflight'],
   ]) {
     const next = await guide({ task });
     assert.equal(next.links.workbench, 'https://platform.test/robotics-learning/#' + page);

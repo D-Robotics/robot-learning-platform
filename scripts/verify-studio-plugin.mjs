@@ -122,7 +122,7 @@ platformApp.use(createSim2RealRouter({ auth }, { prefix: '/api/v1/duck' }));
 const platform = platformApp.listen(0, '127.0.0.1');
 await new Promise(resolve => platform.once('listening', resolve));
 const configured = JSON.parse(fs.readFileSync(path.join(source, '.mcp.json'), 'utf8'));
-configured.mcpServers['rdk-learning-platform'].env.RDK_SIM2REAL_MCP_BASE_URL = 'http://127.0.0.1:' + platform.address().port;
+configured.mcpServers['rdk-robot-learning-platform'].env.RDK_SIM2REAL_MCP_BASE_URL = 'http://127.0.0.1:' + platform.address().port;
 fs.writeFileSync(path.join(source, '.mcp.json'), JSON.stringify(configured));
 fs.mkdirSync(path.join(process.cwd(), 'plugins/sentinel/.rdstudio-plugin'), { recursive: true });
 fs.writeFileSync(path.join(process.cwd(), 'plugins/sentinel/.rdstudio-plugin/plugin.json'), JSON.stringify({ name: 'test-sentinel', description: 'isolated bundled scan root', defaultEnabled: false }));
@@ -140,8 +140,13 @@ try {
   assert.equal(installed.scope, 'user');
   assert.deepEqual(installed.warnings, []);
   agentApp = new MossApp(process.cwd(), {});
-  const exportedSkills = fs.readdirSync(path.join(source, 'skills'));
-  assert.equal(exportedSkills.length, 10);
+  const exportedSkills = fs.readdirSync(path.join(source, 'skills')).sort();
+  const skillSource = path.join(learning, 'plugins/rdk-robot-learning-platform/skills');
+  const expectedSkills = fs.readdirSync(skillSource)
+    .filter(name => fs.existsSync(path.join(skillSource, name, 'SKILL.md')))
+    .map(name => name.startsWith('rdk-platform-') ? name : 'rdk-platform-' + name)
+    .sort();
+  assert.deepEqual(exportedSkills, expectedSkills, 'native export must include every declared plugin skill');
   for (const name of exportedSkills) {
     assert.ok(agentApp.listSkills().some(skill => skill.name === name), 'default Agent registry must discover ' + name);
   }
@@ -151,10 +156,10 @@ try {
     assert.ok(String(result).includes('<skill name="' + name + '"'), String(result));
     assert.ok(String(result).includes('rdk_'), 'load_skill must return the actual teaching instructions');
   }
-  const resolved = resolvePluginMcpServers({ cwd: process.cwd() }).find(item => item.name === 'rdk-learning-platform');
+  const resolved = resolvePluginMcpServers({ cwd: process.cwd() }).find(item => item.name === 'rdk-robot-learning-platform');
   assert.ok(resolved, 'enabled native plugin must expose its MCP config');
-  const exported = JSON.parse(fs.readFileSync(path.join(source, '.mcp.json'), 'utf8')).mcpServers['rdk-learning-platform'];
-  assert.deepEqual(resolved, { name: 'rdk-learning-platform', ...exported });
+  const exported = JSON.parse(fs.readFileSync(path.join(source, '.mcp.json'), 'utf8')).mcpServers['rdk-robot-learning-platform'];
+  assert.deepEqual(resolved, { name: 'rdk-robot-learning-platform', ...exported });
   const unauthenticated = await fetch('http://127.0.0.1:' + platform.address().port + '/api/v1/duck/projects');
   assert.equal(unauthenticated.status, 401, 'real platform route must require fixture identity');
   const loaded = await loadStudioMcpTools({ ownerKey: 'local:plugin-fixture', networkPolicy: { enabled: true }, includeUserConfigured: true });
@@ -235,7 +240,7 @@ export async function verifyStudioPlugin({ studioRoot = process.env.RDK_STUDIO_S
     assert.equal(manifest.name, 'rdk-robot-learning-platform');
     assert.equal(manifest.mcpServers, './.mcp.json');
     const config = JSON.parse(fs.readFileSync(path.join(output, '.mcp.json'), 'utf8')).mcpServers[
-      'rdk-learning-platform'
+      'rdk-robot-learning-platform'
     ];
     assert.ok(path.isAbsolute(config.command));
     assert.ok(path.isAbsolute(config.args[0]));

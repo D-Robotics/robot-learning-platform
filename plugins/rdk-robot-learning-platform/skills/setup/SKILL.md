@@ -3,9 +3,19 @@ name: setup
 description: 连接当前机器人学习平台，确认正式身份与明确模型，再按真实工具能力执行训练与评测。
 ---
 
-这是通用机器人学习插件。首次按用户任务选择仿真与录制、强化学习、模仿学习、评测、回放或部署预检，优先调用 `rdk_learning_guide`。沿用已明确的机型和任务。只有明确选择受扰恢复课时才用 `rdk_workshop`。继续或看看效果时读取用户指定或已绑定的 Run，找不到原引用时请用户选择。
+连接诊断以当前 RDK Robot Learning Platform 插件的 rdk_platform_status 回执为准。先核对返回的 baseUrl、health.ready、session.authenticated 和 canAccessWorkspace；需要版本时调用 rdk_plugin_status。工具目录和旧技能只说明入口，不能证明平台故障。仅在用户明确选择本机部署时检查本机端口或运行旧 CLI。云端连接下，本机 18102 无监听与平台状态无关。若宿主未暴露这些工具，说明当前对话未加载此连接，指引启用或重连插件；不要用旧技能、旧 MCP 或 shell 探针代替已配置的云端连接。仅咨询插件能力时给可用入口，具体工具数量以当前目录为准。
+
+用户说「带我开启 OriginMan Workshop」时调用 `rdk_workshop({intent:'new'})`，直接展示完整课程链接。明确受扰恢复时加 `course:'recovery'`。课程入口的地址使用当前平台配置。
+
+这是通用机器人学习插件。首次按用户任务选择仿真与录制、强化学习、模仿学习、评测、回放或部署预检，优先调用 `rdk_learning_guide`。沿用已明确的机型和任务。明确提到 OriginMan Workshop 时用 `rdk_workshop`。继续或看看效果时沿用原 Run 或实验标识。没有原引用时先提供当前账号近期运行的名称、时间和状态，由用户选择。
+
+用户问 OriginMan 舞蹈“下一轮怎么调”时，用 `rdk_learning_guide` 的 `intent:results` 读取原 `runId`，指定第几段时传 `section`。展示对应节拍、实测指标、门槛和建议。只有回执提供 `recommendation.previewArguments` 且用户要求采用时，才用原参数生成改动预览。等待用户确认该预览并要求开始后，再提交新 Run。前后比较同一节拍、同一舞段，并复查其他舞段是否退步。
+
+OriginMan 跳舞与受扰恢复是两门不同的仿真实训。默认打开跳舞课程；受扰恢复须由用户明确选择，或沿用已绑定的受扰恢复会话。用户只说「训练吧」或只确认预算时，先保留当前课程和 Run。课程目录中的参考课、模型或同名 Worker 不替代用户已选课程。受扰恢复的预检读取同一 Worker 的 CUDA 证据和正式训练引擎登记，预检完成后仍须按已确认的预算提交。
 
 插件安装、自然语言入口、全部 Skill 与 MCP 工具的用户说明见[插件使用手册](../../references/user-guide.md)。
+
+查询账号资产、运行、算力、设备或历史部署时用 `rdk_workspace_inspect`，按[工作区技能](../workspace-data/SKILL.md)选查询范围并说明数据口径。查询具体对象时沿用原 ID。
 
 
 只咨询预算用途、计数单位或完成标准时，直接调用 `rdk_originman_course_brief`，逐字展示返回的两句 `studentReply` 后结束，不再读指南、目录或历史证据；用户明确追问依据再按需读引用。不能推算或编造计数倍率。

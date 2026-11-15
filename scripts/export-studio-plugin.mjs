@@ -61,7 +61,7 @@ export function exportStudioPlugin({
   manifest.skills = './skills';
   const mcp = {
     mcpServers: {
-      'rdk-learning-platform': {
+      'rdk-robot-learning-platform': {
         transport: 'stdio',
         command: nodePath,
         args: [launcher],
@@ -74,7 +74,8 @@ export function exportStudioPlugin({
     readStudioPluginCredentialEnv(credentialPath);
     if (credentialPath === destination || credentialPath.startsWith(destination + path.sep))
       throw new Error('Credentials file must remain outside the exported plugin directory.');
-    mcp.mcpServers['rdk-learning-platform'].env.RDK_SIM2REAL_MCP_CREDENTIALS_FILE = credentialPath;
+    mcp.mcpServers['rdk-robot-learning-platform'].env.RDK_SIM2REAL_MCP_CREDENTIALS_FILE =
+      credentialPath;
   }
   fs.mkdirSync(path.join(destination, '.rdstudio-plugin'), { recursive: true });
   fs.writeFileSync(
@@ -119,7 +120,7 @@ export function exportStudioPlugin({
   return {
     pluginDirectory: destination,
     pluginName: manifest.name,
-    mcpServerName: 'rdk-learning-platform',
+    mcpServerName: 'rdk-robot-learning-platform',
   };
 }
 

@@ -5,6 +5,8 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { randomBytes } from 'node:crypto';
 
+export const LEARNING_CONNECTION_NAME = 'rdk-robot-learning-platform';
+
 export function supportedNode(version, range = '^22.22.2 || ^24.15.0 || >=26.0.0') {
   const actual = String(version).replace(/^v/, '').split('.').map(Number);
   return range.split('||').some((clause) => {
@@ -44,7 +46,7 @@ export function createMcpConfiguration({
     throw Error('平台地址必须为HTTPS学习平台地址；本机测试可用HTTP回环地址。');
   return {
     mcpServers: {
-      'rdk-learning-platform': {
+      [LEARNING_CONNECTION_NAME]: {
         type: 'stdio',
         command: nodePath,
         args: [paths.join(root, 'scripts', 'experience-mcp.mjs')],

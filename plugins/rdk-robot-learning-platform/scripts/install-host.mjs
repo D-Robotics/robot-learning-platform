@@ -3,11 +3,13 @@ import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import { randomBytes } from 'node:crypto';
+import { LEARNING_CONNECTION_NAME } from '../configure.mjs';
 
-const knownNames = [
-  'rdk-learning-platform',
-  'rdk-learning-repaired',
-  'rdk-robot-learning-platform',
+const knownNames = ['rdk-learning-platform', 'rdk-learning-repaired', LEARNING_CONNECTION_NAME];
+const preservedEnv = [
+  'RDK_SIM2REAL_MCP_BASE_URL',
+  'RDK_WORKSHOP_COMPUTE_RESOURCE_ID',
+  'RDK_STUDIO_INHERIT_LOGIN',
 ];
 export function studioDataDirectory({
   platform = process.platform,
@@ -22,7 +24,11 @@ export function studioDataDirectory({
     return paths.join(home, 'Library', 'Application Support', 'rdk-studio', 'data');
   return paths.join(home, '.config', 'rdk-studio', 'data');
 }
-export function mergeStudioConnection(current, connection, { connectionName } = {}) {
+export function mergeStudioConnection(
+  current,
+  connection,
+  { connectionName, configuredEnv = [] } = {},
+) {
   if (!current || typeof current !== 'object' || Array.isArray(current))
     throw Error('Studio MCP配置格式无效；未修改原文件。');
   const servers = current.mcpServers ?? {};
@@ -30,23 +36,46 @@ export function mergeStudioConnection(current, connection, { connectionName } = 
     throw Error('Studio MCP服务器配置格式无效；未修改原文件。');
   const existing = knownNames.filter((name) => Object.hasOwn(servers, name));
   if (!connectionName && existing.length > 1) return { needsSelection: true, choices: existing };
-  const name = connectionName ?? existing[0] ?? 'rdk-learning-platform';
-  if (!knownNames.includes(name)) throw Error('请明确选择学习平台连接；不会覆盖其他MCP服务器。');
+  const selected = connectionName ?? existing[0] ?? LEARNING_CONNECTION_NAME;
+  if (!knownNames.includes(selected))
+    throw Error('请明确选择学习平台连接；不会覆盖其他MCP服务器。');
+  const name =
+    selected !== LEARNING_CONNECTION_NAME && !Object.hasOwn(servers, LEARNING_CONNECTION_NAME)
+      ? LEARNING_CONNECTION_NAME
+      : selected;
+  const previous = servers[selected] ?? {};
+  const env = { ...connection.env };
+  for (const key of preservedEnv) {
+    if (!configuredEnv.includes(key) && typeof previous.env?.[key] === 'string')
+      env[key] = previous.env[key];
+  }
+  const mcpServers = { ...servers };
+  if (name !== selected) delete mcpServers[selected];
+  const disabled = Array.isArray(current.disabled)
+    ? [...new Set(current.disabled.map((item) => (item === selected ? name : item)))]
+    : null;
   return {
     name,
     configuration: {
       ...current,
+      ...(disabled && { disabled }),
       mcpServers: {
-        ...servers,
-        [name]: { ...connection, managedPlugin: 'rdk-robot-learning-platform' },
+        ...mcpServers,
+        [name]: {
+          ...connection,
+          env,
+          ...(previous.permissions && { permissions: previous.permissions }),
+          managedPlugin: LEARNING_CONNECTION_NAME,
+        },
       },
     },
-    wasDisabled: Array.isArray(current.disabled) && current.disabled.includes(name),
+    ...(name !== selected && { migratedFrom: selected }),
+    wasDisabled: disabled?.includes(name) === true,
   };
 }
 export function installStudioConnection(
   connection,
-  { directory = studioDataDirectory(), connectionName, pluginRoot } = {},
+  { directory = studioDataDirectory(), connectionName, pluginRoot, configuredEnv } = {},
 ) {
   if (!fs.existsSync(directory))
     return {
@@ -87,7 +116,7 @@ export function installStudioConnection(
     existing = fs.readFileSync(target);
     current = JSON.parse(existing.toString('utf8'));
   }
-  const result = mergeStudioConnection(current, connection, { connectionName });
+  const result = mergeStudioConnection(current, connection, { connectionName, configuredEnv });
   if (result.needsSelection) return { installed: false, ...result };
   const output = JSON.stringify(result.configuration, null, 2) + '\n';
   if (existing?.toString('utf8') === output)
@@ -114,6 +143,7 @@ export function installStudioConnection(
   return {
     installed: true,
     name: result.name,
+    ...(result.migratedFrom && { migratedFrom: result.migratedFrom }),
     wasDisabled: result.wasDisabled,
     ...(backup ? { backupCreated: true } : {}),
   };

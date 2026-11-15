@@ -7,11 +7,12 @@ export const WORKSHOP_TOOLS = [
   {
     name: 'rdk_workshop',
     description:
-      '“带我开始 Workshop”打开新实验准备页；“继续”和“看看效果”使用当前账号已选实验。学员在页面选择算力和预算。本工具不提交训练。立即展示 studentReply 中的入口；只有明确要求替我打开时才按 qoderNavigation 操作。',
+      '用户说“带我开启/开始 OriginMan Workshop”时直接调用本工具 intent=new；默认舞蹈准备页，明确受扰恢复传 course=recovery。回执提供当前平台完整链接。“继续”和“看看效果”使用当前账号已选实验。学员在页面选择算力和预算。本工具不提交训练。立即展示 studentReply 中的入口；只有明确要求替我打开时才按 qoderNavigation 操作。',
     inputSchema: {
       type: 'object',
       properties: {
         intent: { type: 'string', enum: ['start', 'new', 'continue', 'results'], default: 'start' },
+        course: { type: 'string', enum: ['dance', 'recovery'] },
         computeResourceId: { type: 'string', minLength: 1, maxLength: 160 },
         contextId: { type: 'string', pattern: '^[A-Za-z0-9][A-Za-z0-9_.-]{0,95}$' },
       },
@@ -36,19 +37,40 @@ const qoderNavigation = (url) => ({
     },
   ],
 });
-const previewEntry = (base, stage) => {
-  const url = base.replace(/\/+$/, '') + '/workshop.html?start=1';
+export function workshopPreview(base, course = 'dance', stage = 'preview', resource) {
+  const url = new URL(base.replace(/\/+$/, '') + '/workshop.html');
+  if (
+    !['http:', 'https:'].includes(url.protocol) ||
+    url.username ||
+    url.password ||
+    !url.pathname.endsWith('/workshop.html')
+  )
+    throw Error('当前平台地址无效，无法生成 Workshop 入口。');
+  url.searchParams.set('course', course);
+  url.searchParams.set('start', '1');
+  if (resource) url.searchParams.set('computeResourceId', resource.id);
+  const href = url.href;
+  const firstStep =
+    course === 'recovery'
+      ? '先看参考，再准备本轮实验。'
+      : '先配置舞段、节拍和训练预算，再核对算力。';
+  const label = course === 'recovery' ? 'OriginMan 受扰恢复 Workshop' : 'OriginMan 舞蹈 Workshop';
   return {
     contextId: null,
     stage,
-    links: { workshop: url },
+    course,
+    entryUrl: href,
+    links: { workshop: href },
     submission: noSubmission(),
-    studentReply: `[打开 Workshop](${url})。先看参考，准备好后点「开始实操」。`,
-    qoderNavigation: qoderNavigation(url),
+    studentReply: resource
+      ? `[打开 ${label}](${href})。本轮选择 ${resource.name || '指定的算力机'}，提交前会核对连接与课程能力。`
+      : `[打开 ${label}](${href})。${firstStep}`,
+    studioNavigation: { tool: 'studio_open_url', arguments: { url: href } },
+    qoderNavigation: qoderNavigation(href),
     delivery:
       '立即展示 studentReply 中的链接供学员点击；普通入口不调用浏览器工具等待导航。进入页面后由用户点击开始实操和选择算力，不主动发起授权。',
   };
-};
+}
 
 export async function workshopEntry(
   args = {},
@@ -66,8 +88,11 @@ export async function workshopEntry(
   if (
     !args ||
     Array.isArray(args) ||
-    Object.keys(args).some((k) => !['intent', 'contextId', 'computeResourceId'].includes(k)) ||
+    Object.keys(args).some(
+      (k) => !['intent', 'course', 'contextId', 'computeResourceId'].includes(k),
+    ) ||
     !['start', 'new', 'continue', 'results'].includes(args.intent ?? 'start') ||
+    (args.course !== undefined && !['dance', 'recovery'].includes(args.course)) ||
     (args.contextId !== undefined && !/^[A-Za-z0-9][A-Za-z0-9_.-]{0,95}$/.test(args.contextId))
   )
     throw Error('请使用开始、继续或查看效果。');
@@ -83,16 +108,22 @@ export async function workshopEntry(
     if (defaultResourceId && args.computeResourceId !== defaultResourceId)
       throw Error('本课堂已固定算力机。如需更换，请联系教师。');
   }
-  if (!remote) throw Error('当前连接尚不支持按钮工作台，请更新完整插件。');
+  const intent = args.intent ?? 'start';
+  const startsNew = ['start', 'new'].includes(intent) && !args.contextId;
+  const course = args.course ?? (startsNew ? 'dance' : 'recovery');
+  if (course === 'dance' && !startsNew)
+    throw Error('舞蹈训练和结果请使用原 Run 的进度或结果入口。');
+  if (course === 'recovery' && !remote && (!startsNew || args.computeResourceId))
+    throw Error('当前连接尚不支持实验接续，请更新完整插件。');
   // A fresh preview reads no account data and allocates no experiment. Account and
   // resource checks happen when the learner explicitly starts practice.
   if (
-    args.intent === 'new' &&
+    ['start', 'new'].includes(args.intent ?? 'start') &&
     !args.contextId &&
     !args.computeResourceId &&
     authentication?.audience
   )
-    return previewEntry(authentication.audience, 'preview');
+    return workshopPreview(authentication.audience, course);
   // An explicit login may already be pending. Merely opening Workshop never starts one.
   const identity = await authentication?.status();
   if (identity && identity.authenticated !== true) {
@@ -101,7 +132,7 @@ export async function workshopEntry(
     const login = identity.verificationUrl;
     const preview = (args.intent ?? 'start') === 'start' && !args.contextId;
     if (preview && !login && !identity.accountSelectionRequired && authentication.audience)
-      return previewEntry(authentication.audience, 'preview');
+      return workshopPreview(authentication.audience, course);
     return {
       contextId: null,
       stage: preview && !login ? 'preview' : 'authorize',
@@ -135,9 +166,23 @@ export async function workshopEntry(
   )
     throw Error('平台地址无效。');
   const accountId = status.session.accountId;
-  const intent = args.intent ?? 'start';
-  if (!args.contextId && !args.computeResourceId && ['start', 'new'].includes(intent))
-    return previewEntry(base.toString(), 'choose-compute');
+  if (startsNew && !args.computeResourceId)
+    return workshopPreview(base.toString(), course, 'choose-compute');
+  if (course === 'dance') {
+    const value = await call('rdk_compute_resources_list', {});
+    const resource = value.computeResources?.find((item) => item.id === args.computeResourceId);
+    if (!resource) throw Error('当前账号看不到指定算力机，请重新选择。');
+    if (resource.mock === true || resource.source === 'local-agent')
+      throw Error('舞蹈训练需要平台可访问的真实 Worker，请选择其他算力机。');
+    const current = await call('rdk_platform_status', {});
+    if (
+      !signedIn(current) ||
+      current.baseUrl !== status.baseUrl ||
+      current.session.accountId !== accountId
+    )
+      throw Error('账号或平台已变化，请重新选择算力机。');
+    return workshopPreview(base.toString(), course, 'choose-compute', resource);
+  }
   const list = await remote('list', {}, accountId);
   let selectedComputeName;
   let session = list.current;
@@ -195,7 +240,9 @@ export async function workshopEntry(
     throw Error('账号或平台已变化，请在当前账号重新接续。');
   const root = base.toString().replace(/\/+$/, '');
   const url =
-    root + '/workshop.html' + (session ? '?context=' + encodeURIComponent(session.contextId) : '');
+    root +
+    '/workshop.html?course=recovery' +
+    (session ? '&context=' + encodeURIComponent(session.contextId) : '');
   const stage = session?.stage ?? 'choose';
   const [message, linkLabel] = {
     choose: ['选择要继续的实验。', '打开实验列表'],
@@ -215,6 +262,7 @@ export async function workshopEntry(
   return {
     contextId: session?.contextId ?? null,
     stage,
+    course,
     session,
     links: { workshop: url },
     submission: noSubmission(),
@@ -226,6 +274,7 @@ export async function workshopEntry(
       '](' +
       url +
       ')',
+    studioNavigation: { tool: 'studio_open_url', arguments: { url } },
     qoderNavigation: qoderNavigation(url),
     delivery:
       '普通入口立即展示studentReply中的链接供学员点击，不调用浏览器工具等待导航。只有用户明确要求替我打开页面才按以下导航规则执行。不添加“我来加载”“我在打开”等过程说明。Qoder依次执行qoderNavigation三个步骤：navigate_page→list_pages→select_page({pageId:真实页面编号,bringToFront:true})，禁止省略pageId或把URL当编号。成功后结束，保持面板展示，不重复截图或询问预算。内置工具不可用时直接给一次链接；不启动外部Browser Connector。其余工具仅在用户明确要求高级操作时使用。',

@@ -82,7 +82,7 @@ test('classroom binding is public configuration and invalid bindings are rejecte
     nodePath: '/runtime/node',
     courseResourceId: '12345678-abcd-4321-abcd-123456789abc',
   };
-  const env = createMcpConfiguration(options).mcpServers['rdk-learning-platform'].env;
+  const env = createMcpConfiguration(options).mcpServers['rdk-robot-learning-platform'].env;
   assert.equal(env.RDK_WORKSHOP_COMPUTE_RESOURCE_ID, options.courseResourceId);
   assert.equal(env.RDK_STUDIO_INHERIT_LOGIN, '0');
   assert.throws(

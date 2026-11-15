@@ -41,6 +41,8 @@ import {
   updateSim2RealEvaluation,
   updateSim2RealProject,
 } from '../sim2real/sim2real-store.js';
+import { registerHostedDatasetRoutes } from './sim2real-hosted-dataset-routes.js';
+import { HOSTED_DATASET_SCHEME } from '../sim2real/hosted-dataset.js';
 import { sendApiError, wrapAsync } from '../sim2real/http-helpers.js';
 import { deriveRdkGoldenPath } from '../../shared/rdk-golden-path.js';
 
@@ -471,6 +473,7 @@ export function registerSim2RealWorkspaceRoutes(
   options: { prefix: string },
 ): void {
   const api = (suffix: string) => `${options.prefix}${suffix}`;
+  registerHostedDatasetRoutes(router, deps, options.prefix, datasetPayload);
   router.get(
     api('/projects'),
     wrapAsync(async (request, response) => {
@@ -1271,6 +1274,10 @@ export function registerSim2RealWorkspaceRoutes(
         request.body && typeof request.body === 'object'
           ? (request.body as Record<string, unknown>)
           : {};
+      if (cleanText(body.uri, 2_048).toLowerCase().startsWith(HOSTED_DATASET_SCHEME)) {
+        sendApiError(response, 400, 'SIM2REAL_INVALID_DATASET', '托管文件请使用上传入口登记。');
+        return;
+      }
       const parsed = datasetPayload(body);
       if ('error' in parsed) {
         sendApiError(response, 400, 'SIM2REAL_INVALID_DATASET', parsed.error, { retryable: false });

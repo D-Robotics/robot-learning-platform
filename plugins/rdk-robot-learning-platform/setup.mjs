@@ -2,7 +2,7 @@
 import path from 'node:path';
 import fs from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { configurePlugin } from './configure.mjs';
+import { configurePlugin, LEARNING_CONNECTION_NAME } from './configure.mjs';
 import { installStudioConnection, detectStudioApp } from './scripts/install-host.mjs';
 
 import { installStudioLoginPatch } from './scripts/studio-login-patch.mjs';
@@ -43,10 +43,15 @@ try {
   });
   const installed = ['other', 'qoder'].includes(options['--host'])
     ? { installed: false, needsHostImport: true }
-    : installStudioConnection(configured.manifest.mcpServers['rdk-learning-platform'], {
+    : installStudioConnection(configured.manifest.mcpServers[LEARNING_CONNECTION_NAME], {
         directory: options['--studio-data-dir'],
         connectionName: options['--connection-name'],
         pluginRoot: root,
+        configuredEnv: [
+          ...(options['--platform-url'] ? ['RDK_SIM2REAL_MCP_BASE_URL'] : []),
+          ...(options['--resource-id'] ? ['RDK_WORKSHOP_COMPUTE_RESOURCE_ID'] : []),
+          ...(options['--studio-login'] ? ['RDK_STUDIO_INHERIT_LOGIN'] : []),
+        ],
       });
   let loginInheritance;
   const patchFile = path.join(root, 'host', 'host-patch.json');
@@ -69,7 +74,7 @@ try {
   console.log(
     JSON.stringify({
       pluginVersion,
-      ok: true,
+      ok: installed.installed === true || Boolean(qoderImport) || options['--host'] === 'other',
       configured: true,
       ...installed,
       credentialsStored: false,

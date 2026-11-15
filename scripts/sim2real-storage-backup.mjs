@@ -41,6 +41,8 @@ export const BACKUP_SCHEMA_VERSION = 1;
 export const LEDGER_FILE_NAME = 'sim2real.json';
 export const TELEMETRY_DIR_NAME = 'telemetry';
 const DANCE_VIDEO_DIR_NAME = 'dance-videos';
+const HOSTED_DATASET_DIR = 'hosted-datasets';
+const HOSTED_DATASET_PATH = /^hosted-datasets\/[a-f0-9]{64}\/([a-f0-9]{64})\.bin$/;
 export const WRITER_LEASE_FILE_NAME = 'writer-lease.json';
 /**
  * The audit stream is intentionally kept outside the JSON ledger so an
@@ -82,6 +84,34 @@ const DANCE_VIDEO_PATH_PATTERN = /^dance-videos\/([a-f0-9]{64})\.mp4$/;
 const DANCE_VIDEO_STAGING_PATTERN = /^[a-f0-9-]{36}\.tmp$/;
 const TELEMETRY_PATH_PATTERN = /^telemetry\/[\w-]{1,128}\.jsonl$/;
 const PRIVATE_DIRECTORY_MODE = 0o700;
+
+async function hostedDatasetFiles(root, allowStaging) {
+  const directory = path.join(root, HOSTED_DATASET_DIR);
+  try {
+    await safeDirectory(directory, HOSTED_DATASET_DIR);
+  } catch (error) {
+    if (error?.code === 'STORAGE_BACKUP_SOURCE_MISSING') return [];
+    throw error;
+  }
+  const files = [];
+  for (const owner of await readdir(directory, { withFileTypes: true })) {
+    if (!owner.isDirectory() || !/^[a-f0-9]{64}$/.test(owner.name))
+      fail('托管数据集账号目录无效', 'STORAGE_BACKUP_SOURCE_INVALID');
+    for (const entry of await readdir(path.join(directory, owner.name), { withFileTypes: true })) {
+      if (allowStaging && entry.isFile() && DANCE_VIDEO_STAGING_PATTERN.test(entry.name)) continue;
+      const relativePath = HOSTED_DATASET_DIR + '/' + owner.name + '/' + entry.name;
+      const digest = HOSTED_DATASET_PATH.exec(relativePath)?.[1];
+      if (!entry.isFile() || !digest)
+        fail('非法托管数据集文件路径', 'STORAGE_BACKUP_SOURCE_INVALID');
+      const absolutePath = path.join(root, relativePath);
+      const info = await regularFile(absolutePath, relativePath);
+      if (!info.size || info.size > 50 * 1024 * 1024 || (await sha256(absolutePath)) !== digest)
+        fail(`${relativePath} 数据集摘要或大小无效`, 'STORAGE_BACKUP_DIGEST_MISMATCH');
+      files.push({ relativePath, absolutePath, kind: 'hosted-dataset', bytes: info.size });
+    }
+  }
+  return files;
+}
 
 function fail(message, code = 'STORAGE_BACKUP_FAILED') {
   const error = new Error(message);
@@ -413,6 +443,7 @@ export async function inspectStorage(storageDir, options = {}) {
       fail(`${relativePath} 回放摘要或大小无效`, 'STORAGE_BACKUP_DIGEST_MISMATCH');
     files.push({ relativePath, absolutePath, kind: 'dance-video', bytes: info.size });
   }
+  files.push(...(await hostedDatasetFiles(root, true)));
   for (const name of EXTRA_ROOT_FILES) {
     const absolutePath = path.join(root, name);
     let info;
@@ -451,6 +482,7 @@ export async function inspectStorage(storageDir, options = {}) {
       entry.name === LEDGER_FILE_NAME ||
       entry.name === TELEMETRY_DIR_NAME ||
       entry.name === DANCE_VIDEO_DIR_NAME ||
+      entry.name === HOSTED_DATASET_DIR ||
       entry.name === WRITER_LEASE_FILE_NAME ||
       auditRootNames.has(entry.name) ||
       EXTRA_ROOT_FILES.has(entry.name) ||
@@ -588,6 +620,7 @@ export async function verifySnapshot(snapshotDir) {
         EXTRA_ROOT_FILES.has(item.path) ||
         TELEMETRY_PATH_PATTERN.test(item.path) ||
         DANCE_VIDEO_PATH_PATTERN.test(item.path) ||
+        HOSTED_DATASET_PATH.test(item.path) ||
         AUDIT_PATH_PATTERN.test(item.path));
     if (
       !validPath ||
@@ -606,7 +639,9 @@ export async function verifySnapshot(snapshotDir) {
             ? 'telemetry'
             : DANCE_VIDEO_PATH_PATTERN.test(item.path)
               ? 'dance-video'
-              : 'audit';
+              : HOSTED_DATASET_PATH.test(item.path)
+                ? 'hosted-dataset'
+                : 'audit';
     if (item.kind !== undefined && item.kind !== expectedKind) {
       fail(
         `backup-manifest.json 文件类型与路径不一致：${item.path}`,
@@ -644,6 +679,10 @@ export async function verifySnapshot(snapshotDir) {
           fail(`备份舞蹈回放路径 ${relativePath} 非法`, 'STORAGE_BACKUP_SOURCE_INVALID');
         actual.push(relativePath);
       }
+      continue;
+    }
+    if (entry.name === HOSTED_DATASET_DIR) {
+      actual.push(...(await hostedDatasetFiles(root, false)).map((item) => item.relativePath));
       continue;
     }
     if (!entry.isFile()) fail(`备份包含未声明条目 ${entry.name}`, 'STORAGE_BACKUP_SOURCE_INVALID');

@@ -570,6 +570,69 @@ function cell(value) {
     .replace(/[\r\n]/g, ' ');
 }
 
+const RECOVERY_ENGINE = 'originman-recovery-reflect';
+
+function recoveryPreflightFailure(preflight, resource, { dedicated }) {
+  const report = preflight?.report;
+  if (
+    preflight?.computeResourceId !== resource.id ||
+    report?.taskId !== 'originman-recovery' ||
+    (report?.engine !== RECOVERY_ENGINE && report?.engine !== 'originman-recovery')
+  ) {
+    return ['ORIGINMAN_RECOVERY_PREFLIGHT_MISMATCH', '课程预检回执与原算力机、任务或引擎不匹配。'];
+  }
+  if (report.readyForSmokeTraining !== true) {
+    return [
+      'ORIGINMAN_RECOVERY_ENVIRONMENT_BLOCKED',
+      '受扰恢复环境检查未通过，请查看预检中的待处理项。',
+    ];
+  }
+  if (report.engine === RECOVERY_ENGINE) {
+    return report.device === 'cuda' &&
+      (!dedicated ||
+        (preflight.trainingSubmitted === false &&
+          report.schemaVersion === 1 &&
+          report.trainingPerformed === false))
+      ? null
+      : ['ORIGINMAN_RECOVERY_CUDA_UNVERIFIED', '课程预检未核实 CUDA 环境。'];
+  }
+  if (!Array.isArray(resource.engines) || !resource.engines.includes(RECOVERY_ENGINE)) {
+    return ['ORIGINMAN_RECOVERY_ENGINE_UNVERIFIED', '原算力机未证明已登记受扰恢复正式训练引擎。'];
+  }
+  if (
+    preflight.ok !== true ||
+    report.schemaVersion !== 1 ||
+    report.trainingPerformed !== false ||
+    report.hardwareEligible !== false ||
+    !Array.isArray(report.checks)
+  ) {
+    return ['ORIGINMAN_RECOVERY_PREFLIGHT_MISMATCH', '基础引擎预检回执缺少课程所需的验证字段。'];
+  }
+  const device = report.checks.find(({ id }) => id === 'training-device');
+  if (resource.cuda !== false && device?.status === 'passed') {
+    try {
+      if (JSON.parse(device.detail)?.resolvedDevice === 'cuda') return null;
+    } catch {
+      // Older or incomplete reports may lack machine-readable CUDA evidence.
+    }
+  }
+  return ['ORIGINMAN_RECOVERY_CUDA_UNVERIFIED', '基础引擎预检未核实 CUDA 环境。'];
+}
+
+function recoveryPreparationFailure(failure, resource, preflight) {
+  const [platformCode, reason] = failure;
+  return {
+    status: 'blocked',
+    platformCode,
+    reason,
+    computeResourceId: resource.id,
+    resource,
+    preflight,
+    trainingSubmitted: false,
+    taskEnvironmentVerified: false,
+  };
+}
+
 export async function prepareTraining(input, call, toolNames, { courseReadiness } = {}) {
   if (
     !input ||
@@ -605,23 +668,16 @@ export async function prepareTraining(input, call, toolNames, { courseReadiness 
       device: 'cuda',
     });
     if (preflight.supported !== false) {
-      const ready =
-        preflight.computeResourceId === input.computeResourceId &&
-        preflight.trainingSubmitted === false &&
-        preflight.report?.readyForSmokeTraining === true &&
-        preflight.report?.schemaVersion === 1 &&
-        preflight.report?.trainingPerformed === false &&
-        preflight.report?.device === 'cuda' &&
-        preflight.report?.engine === 'originman-recovery-reflect' &&
-        preflight.report?.taskId === 'originman-recovery';
+      const failure = recoveryPreflightFailure(preflight, resource, { dedicated: true });
+      if (failure) return recoveryPreparationFailure(failure, resource, preflight);
       return {
-        status: ready ? 'prepared' : 'blocked',
+        status: 'prepared',
         computeResourceId: input.computeResourceId,
         resource,
         preflight,
         trainingSubmitted: false,
-        taskEnvironmentVerified: ready,
-        reason: ready ? '课程预检通过。' : '课程引擎、依赖或容量未就绪，尚未提交。',
+        taskEnvironmentVerified: true,
+        reason: '课程预检通过。',
       };
     }
   }
@@ -668,13 +724,14 @@ export async function prepareTraining(input, call, toolNames, { courseReadiness 
       nextAction: '等待同一资源空闲后再继续本实验，不换机器或改参数重试。',
     };
   }
+  if (originman) {
+    const failure = recoveryPreflightFailure(preflight, resource, { dedicated: false });
+    if (failure) return recoveryPreparationFailure(failure, resource, preflight);
+  }
   if (
-    preflight.computeResourceId !== input.computeResourceId ||
-    preflight.report?.readyForSmokeTraining !== true ||
-    (originman &&
-      (preflight.report?.taskId !== 'originman-recovery' ||
-        preflight.report?.engine !== 'originman-recovery-reflect' ||
-        preflight.report?.device !== 'cuda'))
+    !originman &&
+    (preflight.computeResourceId !== input.computeResourceId ||
+      preflight.report?.readyForSmokeTraining !== true)
   )
     return {
       status: 'blocked',
@@ -695,7 +752,7 @@ export async function prepareTraining(input, call, toolNames, { courseReadiness 
         computeResourceId: input.computeResourceId,
         taskId: input.taskId ?? (originman ? 'originman-recovery' : 'walk'),
         backend: 'local',
-        engine: originman ? 'originman-recovery' : 'microduck-rl',
+        engine: originman ? RECOVERY_ENGINE : 'microduck-rl',
         algorithm: originman ? 'sac' : 'ppo',
         ...(originman
           ? {

@@ -462,7 +462,7 @@ async function main(distribution) {
       nodePath: process.execPath,
       platformUrl: 'http://127.0.0.1:1',
     });
-    const server = manifest.mcpServers['rdk-learning-platform'];
+    const server = manifest.mcpServers['rdk-robot-learning-platform'];
     const environment = { ...cleanEnvironment(unconfiguredFile), ...server.env };
     const provenance = readJson(path.join(runtimeRoot, 'provenance.json'));
     const digest = (name) =>
@@ -520,6 +520,7 @@ async function main(distribution) {
       'rdk_auth_logout',
       'rdk_originman_train',
       'rdk_originman_dance_train',
+      'rdk_originman_dance_evaluate',
       'rdk_originman_evaluate',
       'rdk_originman_short_train',
       'rdk_originman_short_evaluate',

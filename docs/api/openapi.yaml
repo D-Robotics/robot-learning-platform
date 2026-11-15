@@ -520,6 +520,21 @@ paths:
         "409": { description: The original compute resource is no longer available. }
         "416": { description: Requested byte range is unsatisfiable. }
         "502": { description: The worker cannot return the recorded video bytes. }
+  /api/v1/duck/runs/{runId}/resimulated-dance-video:
+    parameters:
+      - $ref: "#/components/parameters/RunId"
+    get:
+      tags: [runs]
+      summary: Read a labeled resimulation of an archived OriginMan dance policy
+      operationId: getResimulatedDanceRunVideo
+      responses:
+        "200":
+          description: MP4 generated in simulation from the saved ONNX policy.
+          content: { video/mp4: { schema: { type: string, format: binary } } }
+        "206": { description: Requested byte range of the resimulated MP4. }
+        "401": { $ref: "#/components/responses/AuthRequired" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "416": { description: Requested byte range is unsatisfiable. }
   /api/v1/duck/runs/{runId}/reconcile:
     post:
       tags: [runs]
@@ -2448,6 +2463,50 @@ paths:
       operationId: testComputeResource
       responses:
         "200": { description: Probe result returned. }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /api/v1/duck/datasets/upload:
+    post:
+      tags: [workspace]
+      summary: Upload and register an account-scoped dataset file
+      operationId: uploadDataset
+      parameters:
+        - { in: query, name: name, required: true, schema: { type: string, maxLength: 160 } }
+        - { in: query, name: version, required: true, schema: { type: string, maxLength: 64 } }
+        - { in: query, name: filename, required: true, schema: { type: string, maxLength: 180 } }
+        - { in: query, name: format, schema: { type: string } }
+        - { in: query, name: contractId, schema: { type: string } }
+        - { in: query, name: sourceRunId, schema: { type: string } }
+        - { in: query, name: sampleCount, schema: { type: integer, minimum: 0 } }
+      requestBody:
+        required: true
+        content:
+          application/octet-stream:
+            schema: { type: string, format: binary }
+      responses:
+        "200": { description: Matching registration already exists, content: { application/json: { schema: { $ref: "#/components/schemas/DatasetResponse" } } } }
+        "201": { description: Created, content: { application/json: { schema: { $ref: "#/components/schemas/DatasetResponse" } } } }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/AuthRequired" }
+        "409": { description: Name and version identify a different file or metadata }
+        "413": { description: File exceeds 50 MiB }
+        "415": { description: Expected an unencoded octet-stream request }
+  /api/v1/duck/datasets/{id}/file:
+    get:
+      tags: [workspace]
+      summary: Download an account-scoped hosted dataset file
+      operationId: downloadDataset
+      parameters:
+        - { in: path, name: id, required: true, schema: { type: string } }
+      responses:
+        "200":
+          description: Hosted dataset with its SHA-256 digest
+          headers:
+            X-Dataset-Sha256:
+              schema: { type: string, pattern: '^[a-f0-9]{64}$' }
+          content:
+            application/octet-stream:
+              schema: { type: string, format: binary }
+        "401": { $ref: "#/components/responses/AuthRequired" }
         "404": { $ref: "#/components/responses/NotFound" }
   /api/v1/duck/datasets/{id}:
     parameters:

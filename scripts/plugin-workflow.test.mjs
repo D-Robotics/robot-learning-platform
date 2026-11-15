@@ -175,7 +175,7 @@ test('OriginMan preparation never previews PPO or accepts another task', async (
         };
   };
   const r = await prepareTraining({ productId: 'originman', computeResourceId: 'cpu' }, call);
-  assert.equal(r.preview.arguments.engine, 'originman-recovery');
+  assert.equal(r.preview.arguments.engine, 'originman-recovery-reflect');
   assert.equal(r.preview.arguments.algorithm, 'sac');
   assert.equal(r.preview.arguments.originmanWorkshop.timesteps, 500000);
   assert.equal(calls[1][1].taskId, 'originman-recovery');

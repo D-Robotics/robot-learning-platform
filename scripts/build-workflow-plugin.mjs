@@ -55,6 +55,8 @@ const sources = {};
 for (const name of [
   'workshop-course.mjs',
   'dance-training.mjs',
+  'dance-coaching.mjs',
+  'dance-evaluation.mjs',
   'originman-dance-config.mjs',
   'workshop-entry.mjs',
   'development-targets.mjs',
@@ -67,6 +69,7 @@ for (const name of [
   'experience.mjs',
   'experience-mcp.mjs',
   'workflow-inspection.mjs',
+  'workspace-evidence.mjs',
   'experiment-context.mjs',
   'short-training.mjs',
   'plugin-auth.mjs',

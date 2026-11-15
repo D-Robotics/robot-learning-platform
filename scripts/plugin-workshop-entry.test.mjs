@@ -42,7 +42,10 @@ test('ambiguous history offers page selection and never guesses latest', async (
     remote: async () => ({ current: null, sessions: [{ contextId: 'one' }, { contextId: 'two' }] }),
   });
   assert.equal(result.contextId, null);
-  assert.equal(result.links.workshop, 'https://platform.test/learning/workshop.html');
+  assert.equal(
+    result.links.workshop,
+    'https://platform.test/learning/workshop.html?course=recovery',
+  );
   assert.match(result.studentReply, /选择/);
 });
 test('explicit selection belongs to the current authenticated platform; arbitrary args and unauthed calls stop', async () => {
@@ -132,7 +135,7 @@ test('new draft reuses selected course assets among multiple resources, after ow
   const calls = [];
   const invoke = async (
     visible = true,
-    args = { intent: 'new', computeResourceId: 'chosen-resource' },
+    args = { intent: 'new', course: 'recovery', computeResourceId: 'chosen-resource' },
     chosen = 'chosen-resource',
   ) =>
     workshopEntry(
@@ -192,7 +195,11 @@ test('new draft reuses selected course assets among multiple resources, after ow
         c.name === 'rdk_compute_resource_test' && c.args.computeResourceId === 'chosen-resource',
     ),
   );
-  const changed = await invoke(true, { intent: 'new', computeResourceId: 'other' }, 'other');
+  const changed = await invoke(
+    true,
+    { intent: 'new', course: 'recovery', computeResourceId: 'other' },
+    'other',
+  );
   assert.equal(changed.session.computeResourceId, 'other');
   assert.match(changed.studentReply, /OriginMan other/);
   await assert.rejects(
@@ -210,8 +217,8 @@ test('cold Workshop previews offline and only surfaces an already requested auth
   const options = { authentication, remote: noCourse };
   const preview = await workshopEntry({}, noCourse, options);
   assert.equal(preview.stage, 'preview');
-  assert.match(preview.links.workshop, /workshop\.html\?start=1$/);
-  assert.match(preview.studentReply, /开始实操/);
+  assert.match(preview.links.workshop, /workshop\.html\?course=dance&start=1$/);
+  assert.match(preview.studentReply, /配置舞段/);
   assert.equal(preview.submission.training, false);
   // A fresh 'new' preview intentionally reads no account data; authorization is
   // only requested when the learner resumes or actually starts practice.
@@ -225,9 +232,11 @@ test('cold Workshop previews offline and only surfaces an already requested auth
   assert.equal(requiresLogin.stage, 'authorize');
   assert.deepEqual(requiresLogin.links, {});
   state = { ...state, verificationUrl: login };
-  assert.deepEqual((await workshopEntry({}, noCourse, options)).links, { login });
+  assert.deepEqual((await workshopEntry({ intent: 'continue' }, noCourse, options)).links, {
+    login,
+  });
   state = { authenticated: null, needsLogin: false, nextAction: '稍后重试原请求。' };
-  await assert.rejects(workshopEntry({}, noCourse, options), /重试原请求/);
+  await assert.rejects(workshopEntry({ intent: 'continue' }, noCourse, options), /重试原请求/);
 });
 
 test('starting Workshop opens a fresh preview even when the current experiment has results', async () => {
@@ -254,7 +263,7 @@ test('starting Workshop opens a fresh preview even when the current experiment h
     );
     assert.equal(result.stage, stage);
     assert.equal(result.contextId, null);
-    assert.match(result.links.workshop, /workshop\.html\?start=1$/);
+    assert.match(result.links.workshop, /workshop\.html\?course=dance&start=1$/);
     assert.equal(result.submission.training, false);
   }
 });
@@ -301,4 +310,30 @@ test('development target entry separates workers from boards, keeps scope and re
   const before = calls.length;
   assert.equal((await invoke({})).isError, true);
   assert.equal(calls.length, before);
+});
+
+test('new workshops select the correct page without calling a backend or allocating a session', async () => {
+  const proxy = experienceProxy(
+    {
+      request() {
+        assert.fail('preview should not call the backend');
+      },
+    },
+    {
+      authentication: { audience: 'https://platform.test/learning' },
+    },
+  );
+  for (const course of ['dance', 'recovery']) {
+    const result = (
+      await proxy('tools/call', {
+        name: 'rdk_workshop',
+        arguments: { intent: 'new', course },
+      })
+    ).structuredContent;
+    const url = new URL(result.links.workshop);
+    assert.equal(url.searchParams.get('course'), course);
+    assert.equal(result.studioNavigation.arguments.url, url.href);
+    assert.deepEqual(result.submission, { training: false, evaluation: false });
+    assert.match(result.studentReply, course === 'dance' ? /配置舞段/ : /先看参考/);
+  }
 });

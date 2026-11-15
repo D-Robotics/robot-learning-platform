@@ -1,11 +1,12 @@
 import { createHash } from 'node:crypto';
 import { DANCE_TRAINING_TOOLS } from './dance-training.mjs';
 import { resolveOriginmanDanceConfig } from './originman-dance-config.mjs';
+import { rewardChangeText } from './dance-coaching.mjs';
 
 export const ORIGINMAN_DANCE_DRAFT_TOOL = {
   name: 'rdk_originman_dance_draft',
   description:
-    '把学员确认过的简单舞蹈编排整理成有界草案：节奏80–140 BPM，每段4/8/16拍，舞段限交替摆臂、左右换重心、下蹲起身、展开定格，强度0.25–1，训练预算默认50万步（8192步可显式用于链路快检）。此工具只回显配置；学员明确要训练时，另用rdk_originman_dance_train检查当前模型、资源和Worker引擎并提交仿真Run。草案自身不训练、不声称效果，也不授权真机动作。',
+    '仅在学员要求整理编舞草案时使用。算力离线、询问下一步、开始训练或改参时，用rdk_learning_guide。草案支持80–140 BPM、每段4/8/16拍、交替摆臂/换重心/下蹲起身/展开定格和0.25–1幅度，默认50万步，8192步用于流程快检。草案只回显配置。',
   inputSchema: {
     type: 'object',
     properties: {
@@ -43,12 +44,84 @@ const danceFields = ORIGINMAN_DANCE_DRAFT_TOOL.inputSchema.properties;
 const sectionFields = danceFields.sections.items.properties;
 const danceSchema = DANCE_TRAINING_TOOLS[0].inputSchema.properties.dance;
 const runIdField = { type: 'string', pattern: '^[A-Za-z0-9][A-Za-z0-9_.-]{0,119}$' };
+const knownRobotNames = {
+  microduck: 'MicroDuck',
+  originbot: 'OriginBot',
+  originman: 'OriginMan',
+  'rdk-duck': 'RDK Duck',
+  custom: '通用 RDK 设备',
+};
+const trainingModes = ['reinforcement', 'imitation'];
+const learningEngines = ['starter-ppo', 'act', 'diffusion-policy'];
+
+function genericTraining(answers, robotId) {
+  const mode = answers.task;
+  const imitation = mode === 'imitation';
+  const label = imitation ? '模仿学习' : '强化学习';
+  const recipe = { mode, readiness: 'unverified' };
+  const target = robotId ?? (answers.robot ? 'custom' : null);
+  if (answers.target === 'hardware')
+    return {
+      platformView: 'deploy/preflight',
+      robotId: target,
+      studentReply: '训练和真机部署需要分别核对。先选择设备和已发布的策略文件，进行只读部署预检。',
+    };
+  if (!target)
+    return {
+      platformView: 'overview',
+      recipe,
+      studentReply: `先在工作台选择要做${label}的机器人。确认机型后，可查看适配的任务、训练引擎和算力。`,
+    };
+  if (target === 'custom' || target === 'rdk-duck' || target === 'originman')
+    return {
+      platformView: 'train/prepare',
+      robotId: target,
+      recipe,
+      studentReply:
+        target === 'originman' && !imitation
+          ? 'OriginMan 有舞蹈和受扰恢复两个仿真课程。先选择目标并核对对应策略契约，进入相应课程后再选算力。'
+          : `先在${knownRobotNames[target]}的「模型与契约」核对观测、动作和频率，再确认${label}的任务、数据与 Worker 支持。当前适配和资源状态待检查。`,
+    };
+  if (imitation) {
+    const engine = answers.engine ?? 'act';
+    if (!['act', 'diffusion-policy'].includes(engine))
+      throw Error('模仿学习的此入口支持 ACT 或 Diffusion Policy。请选择与示教数据匹配的引擎。');
+    const engineLabel = engine === 'act' ? 'ACT' : 'Diffusion Policy';
+    return {
+      platformView: 'train/configure',
+      robotId: target,
+      recipe: {
+        ...recipe,
+        engine,
+        requirements: {
+          demonstrations: true,
+          minimumEpisodes: 8,
+          minimumFramesPerEpisode: 4,
+          serverWorker: true,
+        },
+      },
+      studentReply: `${knownRobotNames[target]}模仿学习可用 ${engineLabel} 做向量示教训练。先选择与模型契约和项目一致的原始示教 Run。至少 8 个完整回合，每回合至少 4 帧，包含观测、动作和回合结束标记。数据和服务端 Worker 的可用性待检查。`,
+    };
+  }
+  const engine = target === 'originbot' ? 'starter-ppo' : null;
+  return {
+    platformView: 'train/configure',
+    robotId: target,
+    recipe: { ...recipe, ...(engine && { engine, taskId: 'goal-navigation' }) },
+    studentReply:
+      target === 'originbot'
+        ? 'OriginBot 可从目标导航的 Starter PPO 开始。训练用仿真采样，先核对导航策略契约、训练引擎和可用 Worker。'
+        : 'MicroDuck 强化学习先选任务和仿真环境。步态入门与真实物理训练所需的引擎和算力不同，请在训练配置中核对可用 Worker。',
+  };
+}
+
 const learningFields = {
   intent: { type: 'string', enum: ['start', 'new', 'results', 'retry'] },
   task: {
     type: 'string',
     enum: [
       'overview',
+      'datasets',
       'simulation',
       'reinforcement',
       'imitation',
@@ -60,10 +133,25 @@ const learningFields = {
     ],
   },
   robot: { type: 'string', minLength: 1, maxLength: 120 },
+  engine: { type: 'string', enum: learningEngines },
   runId: runIdField,
+  section: { type: 'integer', minimum: 1, maximum: 8 },
+  contextId: runIdField,
+  modelId: { type: 'string', minLength: 1, maxLength: 160 },
   dance: danceSchema,
   changes: { ...danceSchema, required: [] },
-  numEnvs: { type: 'integer', minimum: 1, maximum: 16 },
+  sectionEdits: {
+    type: 'array',
+    minItems: 1,
+    maxItems: 8,
+    items: {
+      type: 'object',
+      properties: { section: { type: 'integer', minimum: 1, maximum: 8 }, ...sectionFields },
+      required: ['section'],
+      additionalProperties: false,
+    },
+  },
+  numEnvs: { type: 'integer', minimum: 1, maximum: 64 },
   target: { type: 'string', enum: ['simulation', 'hardware'] },
   movement: sectionFields.type,
   bpm: danceFields.bpm,
@@ -77,7 +165,7 @@ const learningFields = {
 export const LEARNING_GUIDE_TOOL = {
   name: 'rdk_learning_guide',
   description:
-    '机器人学习的默认引导。重新开始用 intent:new，继续或看看效果用 intent:results 和原 runId；改参重训用 intent:retry、原 runId 和 changes（只传明确修改的舞蹈字段），可传 numEnvs 或 computeResourceId。保留已确定的任务和编舞，多段用 dance，每次只补一个缺项。仅在用户确认当前配方并要求开始时传 confirmed:true。此工具只读，返回下一步所需的工具和参数。',
+    '看舞蹈结果、问下一轮怎么调或指定第几段时，用 intent:results、原 runId 和可选 section。按逐段评测给出单变量建议，用户要求采用时才预览。机器人学习的默认引导。通用强化学习、模仿学习请传已知机型；明确选择 ACT 或扩散策略时传 engine。重新开始用 intent:new；继续或看看效果用 intent:results，有实验标识传 contextId，有运行标识传 runId，均未知时提供账号内最近记录供选择。舞蹈改参用 intent:retry 和原 runId，changes 只传要改的字段，单段用 sectionEdits（段号从1开始），支持 modelId、numEnvs、computeResourceId。每次只补一个缺项；仅在用户确认当前配方并要求开始时传 confirmed:true。此工具只读。',
   inputSchema: { type: 'object', properties: learningFields, additionalProperties: false },
   annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
 };
@@ -90,9 +178,10 @@ export function learningGuide(answers = {}, { operationId, previous } = {}) {
     const type = rule?.type === 'integer' ? 'number' : rule?.type;
     if (
       !rule ||
-      typeof value !== type ||
+      (type === 'array' ? !Array.isArray(value) : typeof value !== type) ||
       (rule.enum && !rule.enum.includes(value)) ||
       (type === 'object' && (!value || Array.isArray(value))) ||
+      (type === 'array' && (value.length < 1 || value.length > 8)) ||
       (type === 'number' &&
         (!Number.isFinite(value) ||
           value < rule.minimum ||
@@ -113,6 +202,16 @@ export function learningGuide(answers = {}, { operationId, previous } = {}) {
     motionAuthorized: false,
     ...extra,
   });
+  if (answers.sectionEdits && answers.intent !== 'retry')
+    throw Error('逐段修改需要指定原舞蹈 Run。');
+  if ((answers.task === 'dance' || answers.intent === 'retry') && answers.target === 'hardware')
+    return progress(
+      'hardware-dance-unavailable',
+      '当前舞蹈课程支持仿真。若要检查真机接入，请先打开部署工作台查看板卡和策略契约。',
+      {
+        platformView: 'deploy',
+      },
+    );
   if (answers.intent === 'retry') {
     if (!previous?.dance || !previous.computeResourceId || !previous.numEnvs)
       return progress(
@@ -121,20 +220,28 @@ export function learningGuide(answers = {}, { operationId, previous } = {}) {
       );
     const before = danceInput(previous.dance);
     const changes = answers.changes ?? {};
+    if (answers.sectionEdits && changes.sections)
+      throw Error('请在逐段修改和替换完整舞段之间选一种。');
+    const sections = answers.sectionEdits
+      ? editDanceSections(before.sections, answers.sectionEdits)
+      : changes.sections;
     const after = danceInput({
       ...before,
       ...changes,
+      ...(sections && { sections }),
       ...(changes.rewardTuning
         ? { rewardTuning: { ...before.rewardTuning, ...changes.rewardTuning } }
         : {}),
     });
     const computeResourceId = answers.computeResourceId ?? previous.computeResourceId;
     const numEnvs = answers.numEnvs ?? previous.numEnvs;
+    const modelId = answers.modelId ?? previous.modelId;
     const changed = Object.keys(after).filter(
       (key) => JSON.stringify(after[key]) !== JSON.stringify(before[key]),
     );
     if (numEnvs !== previous.numEnvs) changed.push('numEnvs');
     if (computeResourceId !== previous.computeResourceId) changed.push('computeResourceId');
+    if (modelId !== previous.modelId) changed.push('modelId');
     if (!changed.length)
       return progress('retry-change', '这一轮想改哪一项？例如训练步数、动作幅度或并行环境数。');
     const labels = {
@@ -146,14 +253,21 @@ export function learningGuide(answers = {}, { operationId, previous } = {}) {
       rewardTuning: '奖励配置',
       numEnvs: '并行环境数',
       computeResourceId: '算力机',
+      modelId: '模型',
     };
     const from = {
       ...before,
       computeResourceId: previous.computeResourceId,
       numEnvs: previous.numEnvs,
+      modelId: previous.modelId,
     };
-    const to = { ...after, computeResourceId, numEnvs };
+    const to = { ...after, computeResourceId, numEnvs, modelId };
     const delta = changed.map((key) => ({ label: labels[key], before: from[key], after: to[key] }));
+    const unchangedSections = answers.sectionEdits
+      ? before.sections.filter(
+          (item, index) => JSON.stringify(item) === JSON.stringify(after.sections[index]),
+        ).length
+      : null;
     const sectionsText = (sections) =>
       sections
         .map(
@@ -162,21 +276,37 @@ export function learningGuide(answers = {}, { operationId, previous } = {}) {
         .join('、');
     const summary = delta
       .map(({ label, before, after }) => {
+        if (label === '舞段' && answers.sectionEdits)
+          return answers.sectionEdits
+            .filter(
+              ({ section }) =>
+                JSON.stringify(before[section - 1]) !== JSON.stringify(after[section - 1]),
+            )
+            .map(
+              ({ section }) =>
+                `第 ${section} 段 ${sectionsText([before[section - 1]])} → ${sectionsText([after[section - 1]])}`,
+            )
+            .join('、');
         if (label === '舞段') return `舞段由 ${sectionsText(before)} 改为 ${sectionsText(after)}`;
         if (label === '奖励配置')
           return Object.keys(after ?? {})
             .filter((key) => before?.[key] !== after[key])
-            .map((key) => `${key} ${before?.[key] ?? '默认'} → ${after[key]}`)
+            .map((key) => rewardChangeText(key, before?.[key], after[key]))
             .join('、');
-        if (label === '算力机') return '更换为本轮选定的算力机';
+        if (label === '算力机' || label === '模型')
+          return `${label} ${before ?? '未指定'} → ${after}`;
         return `${label} ${before} → ${after}`;
       })
       .join('、');
     if (!answers.confirmed)
       return progress(
         'retry-confirm',
-        `本轮调整：${summary}。确认后将开始一条新 Run，可以和原 Run 对比。`,
-        { changes: delta },
+        `本轮调整：${summary}。${unchangedSections === null ? '' : `其余 ${unchangedSections} 段保持原样。`}请核对这项改动。确认开始后会新建一条 Run，保留原 Run 供对照。`,
+        {
+          changes: delta,
+          ...(unchangedSections !== null && { unchangedSections }),
+          delivery: '展示 studentReply 中的原值、新值和保留项，然后等用户确认。',
+        },
       );
     const contextId =
       'om-' +
@@ -193,7 +323,7 @@ export function learningGuide(answers = {}, { operationId, previous } = {}) {
         numEnvs,
         dance: after,
         previousRunId: answers.runId,
-        ...(previous.modelId ? { modelId: previous.modelId } : {}),
+        ...(modelId ? { modelId } : {}),
       },
     });
   }
@@ -202,29 +332,50 @@ export function learningGuide(answers = {}, { operationId, previous } = {}) {
       'task',
       '你想从哪一步开始？可以试仿真和录制、训练策略、评测和回放，或做真机部署预检。',
     );
+  const robotKey = answers.robot?.trim().toLowerCase().replace(/\s+/g, '-');
+  const robotId = Object.hasOwn(knownRobotNames, robotKey) ? robotKey : null;
+  if (trainingModes.includes(answers.task)) {
+    const { studentReply, ...context } = genericTraining(answers, robotId);
+    return progress('platform-training', studentReply, {
+      ...context,
+      robot: answers.robot ?? null,
+    });
+  }
   const platformTasks = {
+    datasets: [
+      'records',
+      '在「证据与记录」选择上传数据集，或在数据集详情下载已托管文件。平台文件需要登录后操作。',
+    ],
     overview: ['overview', '打开工作台后，可以按机型和任务选择仿真、训练或评测。'],
     simulation: ['simulate', '在仿真工作台选择机器人和场景，可以试玩或录制动作。'],
     evaluation: ['evaluate', '在评测工作台选定策略和评测条件，再查看本轮结果。'],
     replay: ['records', '在记录工作台选择要查看的轨迹或运行。'],
-    deployment: ['deploy', '先在部署工作台核对设备、策略制品和部署预检。'],
+    deployment: [
+      'deploy/preflight',
+      '先核对指定设备、板端服务与已发布策略的兼容性，再做只读部署预检。真机是否就绪以现场回执为准。',
+    ],
   };
   if (Object.hasOwn(platformTasks, answers.task)) {
     const [platformView, reply] = platformTasks[answers.task];
-    return progress('platform-task', reply, { platformView });
+    if (answers.robot && !robotId && !['overview', 'deployment', 'datasets'].includes(answers.task))
+      return progress(
+        'platform-task',
+        '这台机器人需要先核对自定义策略契约和适配器，再继续选择仿真、评测或回放。',
+        {
+          platformView: 'train/prepare',
+          robotId: 'custom',
+        },
+      );
+    return progress('platform-task', reply, {
+      platformView,
+      robotId: robotId ?? (answers.robot ? 'custom' : null),
+      robot: answers.robot ?? null,
+    });
   }
-  if (['reinforcement', 'imitation'].includes(answers.task))
-    return progress(
-      'platform-training',
-      answers.robot
-        ? `先在训练工作台选择 ${answers.robot} 对应的模型和任务，再检查${answers.task === 'imitation' ? '示教数据和算力' : '训练引擎和算力'}。`
-        : '先在训练工作台选择机器人和任务，再检查模型、数据和算力。',
-      { platformView: 'train', robot: answers.robot ?? null },
-    );
   if (answers.task === 'recovery')
     return progress('recovery', '先打开受扰恢复课程，看看参考动作。', {
       nextTool: 'rdk_workshop',
-      nextArguments: { intent: answers.intent === 'new' ? 'new' : 'start' },
+      nextArguments: { intent: answers.intent === 'new' ? 'new' : 'start', course: 'recovery' },
     });
   if (!answers.dance && !answers.movement)
     return progress('movement', '第一段舞想做什么？可以从左右交替摆臂开始。');
@@ -238,9 +389,13 @@ export function learningGuide(answers = {}, { operationId, previous } = {}) {
     return progress('compute', '接下来你想用哪台支持舞蹈训练的算力机？', {
       nextTool: 'rdk_development_targets',
       nextArguments: { action: 'list-compute', engine: 'originman-dance-ppo' },
+      resumeArguments: { ...answers, confirmed: false },
     });
   if (answers.trainingSteps === undefined && answers.dance?.trainingSteps === undefined)
-    return progress('budget', '这轮先做 8192 步流程快检，还是做 50 万步正式效果实验？');
+    return progress(
+      'budget',
+      '你想先用 8192 步检查流程能否跑通，还是用 50 万步训练后再看舞蹈效果？',
+    );
 
   const dance = danceInput({
     schemaVersion: 1,
@@ -251,7 +406,8 @@ export function learningGuide(answers = {}, { operationId, previous } = {}) {
     }),
     trainingSteps: answers.trainingSteps ?? answers.dance?.trainingSteps,
   });
-  const recipe = `${dance.title}，${dance.bpm} BPM，${dance.sections.map(({ type, beats, intensity }) => `${sectionTitles[type]} ${beats} 拍（幅度 ${intensity}）`).join('、')}，${dance.trainingSteps.toLocaleString('zh-CN')} 步 PPO`;
+  const numEnvs = answers.numEnvs ?? 64;
+  const recipe = `${dance.title}，${dance.bpm} BPM，${dance.sections.map(({ type, beats, intensity }) => `${sectionTitles[type]} ${beats} 拍（幅度 ${intensity}）`).join('、')}，${dance.trainingSteps.toLocaleString('zh-CN')} 步 PPO，${numEnvs} 个并行环境`;
   if (!answers.confirmed)
     return progress('confirm', `本轮配方是${recipe}。现在开始训练吗？`, { dance });
   return progress('ready', `已确认${recipe}。接下来检查你选的算力并启动本轮仿真训练。`, {
@@ -259,7 +415,8 @@ export function learningGuide(answers = {}, { operationId, previous } = {}) {
     nextArguments: {
       contextId: operationId,
       computeResourceId: answers.computeResourceId,
-      numEnvs: answers.numEnvs ?? 8,
+      ...(answers.modelId ? { modelId: answers.modelId } : {}),
+      numEnvs,
       dance,
     },
     dance,
@@ -267,12 +424,33 @@ export function learningGuide(answers = {}, { operationId, previous } = {}) {
   });
 }
 
-const sectionTitles = {
+export const sectionTitles = {
   'alternating-arms': '左右交替摆臂',
   'weight-shift': '左右换重心',
   'squat-rise': '下蹲起身',
   'open-pose': '展开定格',
 };
+
+function editDanceSections(sections, edits) {
+  const updated = sections.slice();
+  const seen = new Set();
+  for (const edit of edits) {
+    const { section, ...fields } = edit ?? {};
+    const keys = Object.keys(fields);
+    if (
+      !Number.isSafeInteger(section) ||
+      section < 1 ||
+      section > updated.length ||
+      seen.has(section) ||
+      !keys.length ||
+      keys.some((key) => !Object.hasOwn(sectionFields, key))
+    )
+      throw Error('逐段修改需指定不重复的有效段号，并传要改的动作、拍数或幅度。');
+    seen.add(section);
+    updated[section - 1] = { ...updated[section - 1], ...fields };
+  }
+  return updated;
+}
 
 function danceInput(value) {
   const { kind, scope, totalBeats, ...input } = resolveOriginmanDanceConfig(value);
@@ -412,7 +590,7 @@ export const ORIGINMAN_COURSE = {
     '预算用途、计数单位、完成标准等简短咨询优先rdk_originman_course_brief，仅逐字展示studentReply两句；不再读指南和证据全文。明确追问依据才按需展开；不能编造倍率或把历史成绩当本组结果。',
     '没有实际播放时，只能说训练与评测完成、回放待验证，不能说完整Workshop或全流程通过。Qoder提示外部Browser Connector未连接时保留原实验，不重训；学员可点任务右侧产出中的网页查询，打开内置实验页后手动播放。人工点击验收与模型自动播放分别记录，不要求为阅读已有结果重新登录CLI。',
 
-    '舞蹈训练默认50万训练步、8个并行环境；每轮采样为8×256步，预算按整轮取整，50万请求实际可达501760步。8192仅用于明确要求的链路快检（4轮采样）。训练步、PPO迭代、梯度更新分别报告，不相互换算冒充。',
+    '舞蹈训练默认50万训练步、64个并行环境；每个环境每轮最多采256步，并行数超过16时缩短每环境采样长度，使每轮总采样量最多为4096步，预算按整轮向上取整。默认并行数下，50万步预算对应123轮、503808步，8192步快检对应2轮。训练步、PPO迭代、梯度更新分别报告，不相互换算冒充。',
 
     '训练预算必须由学员明确选择。默认Workshop在rdk_workshop页面点预算按钮，不在聊天重复询问。只有高级手动流程才调用rdk_originman_training_choice；已有明确短训、8192、正式或50万时传已知choice，不重复问。未知只说明并暂停，不提交。用户只咨询不开始训练。',
     '分别报告流程执行、仿真效果、实体效果。快检完成只算流程通过；正式训练completed也不算效果通过，须本轮同源评测sourceVerified和clearGain=true，并展示两组实际基线与RL恢复数；未评测待验证、未提升明确未达标、来源不符停止结论。回放只展示其中一个条件，不代替62条件评测。',
@@ -421,8 +599,8 @@ export const ORIGINMAN_COURSE = {
     '结果与导出页用course.links.comparison；不要猜#compare。页面打开不保证选中本次Run；先核对训练和评测选择器再播放或点课程内置导出。离线HTML须含真实视频字节，0字节或引用不存在的视频文件不能算保存成功。',
     '结果计数相同不能证明评测条件相同；必须逐条核对条件及两种基线。同一父Run的重复评测不是独立训练样本。',
     'Worker端口是平台侧地址，127.0.0.1不证明GPU与平台同机，也不证明两条在线资源是独立GPU；并发槽不能直接当课堂GPU容量。Worker在线不等于SSH可用。',
-    '学员问插件或平台能做什么时，先介绍本课五步和第一步参考观察；平台通用硬件能力仅在用户追问时另述，不把历史部署失败插入课程回答。',
-    'OriginMan自定义舞蹈与受扰恢复是两条独立课程链路。用户只要整理舞段时调用rdk_originman_dance_draft；明确要求训练时，按rdk_experience_guide拿到operation.contextId后调用rdk_originman_dance_train，保留学员描述的节奏和动作段。该工具先验证专用78→18模型契约、当前账号资源与Worker已注册originman-dance-ppo，再用同一幂等键提交一次。默认50万训练步、8个并行环境；只有学员明确选择快检时才传8192步。提交后以原Run调用rdk_training_wait至终态，读取本次qualityGate、SHA、舞蹈回放和来源；训练完成不等于风格通过。若资源未证明引擎可用，停止并返回明确原因，不切到恢复任务。舞蹈策略仍仅仿真；模型场景来源、网格摘要、授权、真机关节标定和现场安全验收分别核实，不声称可以部署。',
+    '用户询问本课程能做什么时，介绍本课程步骤和首个动作；插件通用能力使用学习平台能力概览。',
+    'OriginMan自定义舞蹈与受扰恢复是两条独立课程链路。用户只要整理舞段时调用rdk_originman_dance_draft；明确要求训练时，按rdk_experience_guide拿到operation.contextId后调用rdk_originman_dance_train，保留学员描述的节奏和动作段。该工具先验证专用78→18模型契约、当前账号资源与Worker已注册originman-dance-ppo，再用同一幂等键提交一次。默认50万训练步、64个并行环境；只有学员明确选择快检时才传8192步。提交后以原Run调用rdk_training_wait至终态，读取本次qualityGate、SHA、舞蹈回放和来源；训练完成不等于风格通过。若资源未证明引擎可用，停止并返回明确原因，不切到恢复任务。舞蹈策略仍仅仿真；模型场景来源、网格摘要、授权、真机关节标定和现场安全验收分别核实，不声称可以部署。',
     '默认只说当前进度、本次结果、下一步；UUID、工具名、manifest和错误码放技术详情，学员不用抄标识。',
     '按每条Run的phase区分训练与评测，Run总数不是训练成功数；只描述已核对且绑定本次实验的状态。',
     '参考结果、历史结果、本组本轮结果必须分开标注；全局golden_path不能作为本课完成比例。',

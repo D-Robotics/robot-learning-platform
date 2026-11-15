@@ -6,6 +6,7 @@ import { fileURLToPath } from 'node:url';
 import { connectMcp } from './experience.mjs';
 import { createPluginAuth } from './plugin-auth.mjs';
 import { PluginRequestError, loginRequired, publicFailure } from './plugin-errors.mjs';
+import { datasetEvidenceList, inspectWorkspace } from './workspace-evidence.mjs';
 
 export function proxyRequestHeaders(input, body, cookie) {
   const headers = {
@@ -88,7 +89,15 @@ export async function connectAuthenticatedCore({
     res.end(JSON.stringify(value));
   };
   const fetchPlatform = async (pathname, options = {}, accountId) => {
-    const cookie = pathname === '/healthz' ? null : await auth.cookie({ accountId });
+    const sessionProbe = pathname === '/api/sim2real/auth/session' && options.method === 'GET';
+    let cookie = null;
+    if (pathname !== '/healthz') {
+      try {
+        cookie = await auth.cookie({ accountId });
+      } catch (error) {
+        if (!sessionProbe || error.needsLogin !== true) throw error;
+      }
+    }
     const response = await fetchImpl(auth.audience + pathname, {
       ...options,
       headers: { ...options.headers, ...(cookie ? { cookie } : {}) },
@@ -104,6 +113,53 @@ export async function connectAuthenticatedCore({
     }
     return response;
   };
+  async function verifiedWorkspaceAccount() {
+    const session = await auth.status();
+    if (session.authenticated === true && session.accountId) return session.accountId;
+    if (session.needsLogin === true) throw loginRequired();
+    throw new PluginRequestError(
+      session.error ?? 'WORKSPACE_ACCOUNT_UNVERIFIED',
+      session.message ?? '当前账号尚未验证，无法读取工作区。',
+      { httpStatus: session.httpStatus ?? 503, nextAction: session.nextAction },
+    );
+  }
+  async function readWorkspaceJson(route, signal, accountId) {
+    const response = await fetchPlatform(
+      '/api/v1/duck' + route,
+      { method: 'GET', headers: { accept: 'application/json' }, signal },
+      accountId,
+    );
+    const chunks = [];
+    let size = 0;
+    for await (const chunk of response.body ?? []) {
+      size += chunk.byteLength;
+      if (size > 4 * 1024 * 1024)
+        throw new PluginRequestError('WORKSPACE_RESPONSE_TOO_LARGE', '平台响应超过读取上限。', {
+          httpStatus: 502,
+        });
+      chunks.push(Buffer.from(chunk));
+    }
+    let value;
+    try {
+      value = JSON.parse(Buffer.concat(chunks).toString('utf8'));
+    } catch {
+      if (response.ok)
+        throw new PluginRequestError('WORKSPACE_INVALID_RESPONSE', '平台未返回有效的工作区证据。', {
+          httpStatus: 502,
+        });
+    }
+    if (!response.ok || value?.ok !== true) {
+      const code = value?.error ?? value?.code;
+      throw new PluginRequestError(
+        typeof code === 'string' && /^[A-Z][A-Z0-9_]{1,100}$/.test(code)
+          ? code
+          : 'WORKSPACE_READ_FAILED',
+        '平台未能完成这项工作区查询。',
+        { httpStatus: response.ok ? 502 : response.status },
+      );
+    }
+    return value;
+  }
   const server = http.createServer(async (req, res) => {
     try {
       const presented = String(req.headers.cookie ?? '');
@@ -178,6 +234,59 @@ export async function connectAuthenticatedCore({
   let closed = false;
   return {
     authentication: auth,
+    async inspectWorkspace(args, { signal } = {}) {
+      const accountId = await verifiedWorkspaceAccount();
+      return inspectWorkspace(args, (route) => readWorkspaceJson(route, signal, accountId), {
+        signal,
+        baseUrl: auth.audience,
+      });
+    },
+    async readDatasets({ signal } = {}) {
+      const accountId = await verifiedWorkspaceAccount();
+      const value = await readWorkspaceJson('/datasets', signal, accountId);
+      const { items: datasets, studentReply } = datasetEvidenceList(
+        value,
+        auth.audience,
+        undefined,
+        Infinity,
+      );
+      return { datasets, studentReply };
+    },
+    async verifyPolicyDownload(runId, sha256, { signal } = {}) {
+      const response = await fetchPlatform(
+        '/api/v1/duck/runs/' + encodeURIComponent(runId) + '/artifact',
+        {
+          method: 'HEAD',
+          signal: AbortSignal.any([AbortSignal.timeout(8000), ...(signal ? [signal] : [])]),
+        },
+      );
+      return (
+        response.ok &&
+        response.headers.get('x-artifact-sha256') === sha256 &&
+        /^attachment\b/i.test(response.headers.get('content-disposition') ?? '')
+      );
+    },
+    async readLearningRuns({ danceOnly = false, signal } = {}) {
+      const accountId = await verifiedWorkspaceAccount();
+      const route = '/runs?limit=12' + (danceOnly ? '&taskId=originman-dance' : '');
+      const { runs } = await readWorkspaceJson(route, signal, accountId);
+      if (!Array.isArray(runs))
+        throw new PluginRequestError('WORKSPACE_INVALID_RESPONSE', '平台未返回近期运行列表。', {
+          httpStatus: 502,
+        });
+      return runs
+        .filter(
+          (run) => typeof run?.id === 'string' && (!danceOnly || run.taskId === 'originman-dance'),
+        )
+        .slice(0, 6)
+        .map(({ id, label, taskId, status, createdAt, training }) => ({
+          id,
+          label: label ?? training?.originmanDance?.title,
+          taskId,
+          status,
+          createdAt,
+        }));
+    },
     async readTelemetrySummary(name, args, { signal } = {}) {
       const { runId, limit = 50 } = args;
       const list = name === 'rdk_telemetry_list';
@@ -261,6 +370,26 @@ export async function connectAuthenticatedCore({
       if (!response.ok || value.run?.id !== runId)
         throw Error('当前账号无法读取这条 Run，请核对原运行链接。');
       return value.run;
+    },
+    async evaluateDanceRun(runId, { signal } = {}) {
+      if (typeof runId !== 'string' || !/^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,119}$/.test(runId))
+        throw Error('原舞蹈训练标识无效。');
+      const response = await fetchPlatform(
+        '/api/v1/duck/runs/' + encodeURIComponent(runId) + '/dance-evaluation',
+        {
+          method: 'POST',
+          headers: { accept: 'application/json' },
+          signal,
+        },
+      );
+      const value = await response.json().catch(() => null);
+      if (!response.ok || value?.ok !== true)
+        throw new PluginRequestError(
+          'DANCE_EVALUATION_UNAVAILABLE',
+          value?.message || '平台暂时无法生成独立舞蹈评测。',
+          { httpStatus: response.status },
+        );
+      return value.evaluation;
     },
     async verifyLegacyDanceVideo(runId, receipt, { signal } = {}) {
       if (
@@ -613,18 +742,31 @@ export async function connectAuthenticatedCore({
           }
         }
       }
-      if (method === 'tools/call' && params.name === 'rdk_platform_status' && !result.isError) {
+      if (method === 'tools/call' && params.name === 'rdk_platform_status') {
         let value = result.structuredContent;
         if (!value) {
           try {
             value = JSON.parse(result.content?.find((c) => c.type === 'text')?.text);
           } catch {}
         }
-        if (value) {
+        if (value && typeof value === 'object') {
           value = { ...value, baseUrl: auth.audience, authMode: auth.mode };
           if (value.session?.authenticated !== true) value.authentication = await auth.status();
+          const readyForLogin =
+            value.health?.ready === true &&
+            value.session?.authenticated === false &&
+            value.authentication?.needsLogin === true;
+          if (readyForLogin) {
+            value.ok = true;
+            value.canAccessWorkspace = false;
+            value.connection = {
+              state: 'authentication-required',
+              recovery: '平台可用。要查看自己的资源和实验，请连接学习平台。',
+            };
+          }
           return {
             ...result,
+            ...(readyForLogin && { isError: false }),
             structuredContent: value,
             content: [{ type: 'text', text: JSON.stringify(value) }],
           };

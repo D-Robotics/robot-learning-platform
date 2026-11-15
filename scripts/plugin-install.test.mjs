@@ -20,7 +20,7 @@ test('Windows and macOS produce direct workflow launchers with Unicode paths and
     ['darwin', '/tmp/课程 插件', '/tmp/Node Runtime/node'],
   ]) {
     const c = createMcpConfiguration({ platform, root, nodePath });
-    const entry = c.mcpServers['rdk-learning-platform'];
+    const entry = c.mcpServers['rdk-robot-learning-platform'];
     assert.equal(entry.command, nodePath);
     assert.equal(entry.args.length, 1);
     assert.ok(entry.args[0].endsWith('experience-mcp.mjs'));
@@ -107,11 +107,18 @@ test('installation preserves unrelated MCP entries, permissions, disable state, 
   assert.equal(result.wasDisabled, true);
   const after = JSON.parse(fs.readFileSync(target));
   assert.deepEqual(after.mcpServers.sentinel, current.mcpServers.sentinel);
-  assert.deepEqual(after.disabled, current.disabled);
+  assert.deepEqual(after.disabled, ['rdk-robot-learning-platform']);
   assert.deepEqual(after.otherSetting, current.otherSetting);
-  assert.equal(after.mcpServers['rdk-learning-repaired'].command, '/runtime/node');
+  assert.equal(after.mcpServers['rdk-robot-learning-platform'].command, '/runtime/node');
+  assert.equal(result.migratedFrom, 'rdk-learning-repaired');
+  assert.equal(after.mcpServers['rdk-learning-repaired'], undefined);
   const backup = fs.readdirSync(dir).find((n) => n.includes('.before-learning-'));
   assert.equal(fs.readFileSync(path.join(dir, backup), 'utf8'), before);
+});
+test('fresh Studio installs use the connection name recognized by its learning tool router', () => {
+  const connection = { command: '/runtime/node', args: ['/plugin/experience-mcp.mjs'] };
+  const result = mergeStudioConnection({}, connection);
+  assert.equal(result.name, 'rdk-robot-learning-platform');
 });
 test('multiple learning connections require a choice; invalid config and missing host are not overwritten', (t) => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'plugin-install-'));

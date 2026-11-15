@@ -281,7 +281,7 @@ try {
   );
   assert.equal(setup.status, 0, setup.stderr);
   const config = JSON.parse(fs.readFileSync(path.join(root, '.mcp.json'))).mcpServers[
-    'rdk-learning-platform'
+    'rdk-robot-learning-platform'
   ];
   const open = () =>
     connectMcp({
@@ -310,7 +310,7 @@ try {
   const initial = await call('rdk_workshop', { intent: 'start' });
   assert.equal(initial.stage, 'preview');
   assert.equal(initial.submission.training, false);
-  assert.match(initial.links.workshop, /workshop\.html\?start=1$/);
+  assert.match(initial.links.workshop, /workshop\.html\?course=dance&start=1$/);
   assert.equal(state.authStarts, 0);
   const explicit = await call('rdk_auth_login', { openBrowser: false });
   assert.match(explicit.verificationUrl, /\/api\/sso\/plugin\/authorize\?id=/);
@@ -346,10 +346,11 @@ try {
   assert.equal(board.agentReady, true);
   const fresh = await call('rdk_workshop', { intent: 'start' });
   assert.equal(fresh.contextId, null);
-  assert.match(fresh.links.workshop, /workshop\.html\?start=1$/);
+  assert.match(fresh.links.workshop, /workshop\.html\?course=dance&start=1$/);
   assert.equal(fresh.submission.training, false);
   const continued = await call('rdk_workshop', { intent: 'continue' });
   assert.equal(continued.contextId, 'ws-owned-fixture');
+  assert.equal(new URL(continued.links.workshop).searchParams.get('course'), 'recovery');
   assert.equal(continued.submission.training, false);
   assert.equal(state.writes.length, 0);
   const guide = await call('rdk_experience_guide');
@@ -360,16 +361,24 @@ try {
   });
   assert.equal(train.submission.runId, 'train-fixture');
   assert.equal(train.recipeSource.newModelRegistered, true);
-  await assert.rejects(
-    call('rdk_originman_short_train', { contextId: 'invented-new-experiment' }),
-    /绑定原Run/,
-  );
-  await assert.rejects(call('rdk_training_submit', {}), /绑定原Run/);
   assert.equal(state.writes.length, 1);
   assert.equal(state.historyRequests, 0);
   assert.equal(state.models.length, 1);
   if (failureCase) {
-    assert.equal(train.stopWorkflow, true);
+    const failed = await call('rdk_training_wait', { runId: train.submission.runId });
+    assert.equal(failed.status, 'failed');
+    assert.equal(failed.stopWorkflow, true);
+    await assert.rejects(
+      call('rdk_originman_short_train', {
+        contextId,
+        computeResourceId: 'worker-fixture',
+      }),
+      /绑定原Run/,
+    );
+    await assert.rejects(
+      call('rdk_training_submit', { sourceRunId: train.submission.runId }),
+      /绑定原Run/,
+    );
     await assert.rejects(call('rdk_originman_short_evaluate', { contextId }), /绑定原Run/);
     assert.equal(state.writes.length, 1);
     console.log(
@@ -379,7 +388,7 @@ try {
         failureGuardPassed: true,
         trainingSubmissions: 1,
         evaluationSubmissions: 0,
-        newContextAndRawSubmitBlocked: true,
+        failedContextAndBoundRawSubmitBlocked: true,
       }),
     );
   } else {
@@ -391,7 +400,10 @@ try {
     client = open();
     await init();
     assert.equal((await call('rdk_auth_status')).authenticated, true);
-    const repeated = await call('rdk_originman_short_train', { contextId });
+    const repeated = await call('rdk_originman_short_train', {
+      contextId,
+      computeResourceId: 'worker-fixture',
+    });
     assert.equal(repeated.alreadySubmitted, true);
     assert.equal(state.writes.length, 1);
     const evaluation = await call('rdk_originman_short_evaluate', { contextId });

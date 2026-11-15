@@ -50,7 +50,7 @@ export const SHORT_TRAINING_TOOLS = [
   {
     name: 'rdk_originman_train',
     description:
-      'OriginMan课程可选预算训练。用户明确选择训练预算后使用，支持正式500000步和单变量新实验；自动冻结SAC、4环境、CUDA、模型与课程资源。相同contextId只提交一次，改变预算或侧推须新实验；不承诺质量改善。',
+      'OriginMan 受扰恢复课程专用训练（14→2、SAC）。OriginMan 跳舞使用 rdk_originman_dance_train。用户明确选择训练预算后使用，支持正式500000步和单变量新实验；自动冻结SAC、4环境、CUDA、模型与课程资源。相同contextId只提交一次，改变预算或侧推须新实验；不承诺质量改善。',
     inputSchema: formalSchema,
     annotations: { readOnlyHint: false, destructiveHint: false },
   },
@@ -64,7 +64,7 @@ export const SHORT_TRAINING_TOOLS = [
   {
     name: 'rdk_originman_short_train',
     description:
-      '学员要求OriginMan短训练时使用；完整Workshop先按experience_guide实际观察基础PD参考，再调用此训练步骤。自动核对完整manifest、当前账号的课程模型和明确资源；首次会在资源就绪后登记课程模型，固定8192步SAC+CUDA配方并提交一次，保存实验引用。相同contextId复用幂等键；拒绝/失败不改参数不换资源重试。仅仿真。',
+      '仅用于明确选择 OriginMan 受扰恢复课程的 8192 步短训练；完整Workshop先按experience_guide实际观察基础PD参考，再调用此训练步骤。自动核对完整manifest、当前账号的课程模型和明确资源；首次会在资源就绪后登记课程模型，固定8192步SAC+CUDA配方并提交一次，保存实验引用。相同contextId复用幂等键；拒绝/失败不改参数不换资源重试。仅仿真。',
     inputSchema: trainSchema,
     annotations: { readOnlyHint: false, destructiveHint: false },
   },
@@ -385,6 +385,12 @@ export function requireConnected(p) {
         computeResourceId: p.computeResourceId,
         trainingSubmitted: false,
       },
+    });
+  if (p.status === 'blocked' && p.platformCode?.startsWith('ORIGINMAN_RECOVERY_'))
+    throw Object.assign(new Error(p.reason), {
+      platformCode: p.platformCode,
+      stopWorkflow: true,
+      details: { computeResourceId: p.computeResourceId, trainingSubmitted: false },
     });
   if (p.resource?.cuda === false)
     throw Error('所选资源不支持本轮GPU短训练；尚未提交，不自动降级CPU。');

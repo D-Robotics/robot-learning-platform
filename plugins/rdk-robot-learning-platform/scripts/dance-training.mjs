@@ -17,8 +17,8 @@ const schema = {
     numEnvs: {
       type: 'integer',
       minimum: 1,
-      maximum: 16,
-      default: 8,
+      maximum: 64,
+      default: 64,
       description: '并行仿真环境数。影响采样批大小与训练耗时；实际步数按完整采样批次取整',
     },
     dance: {
@@ -80,7 +80,7 @@ export const DANCE_TRAINING_TOOLS = [
   {
     name: 'rdk_originman_dance_train',
     description:
-      '提交已确认的 OriginMan 舞蹈 PPO 仿真配方。可选算力、模型、并行环境数（1–16），可改舞段、节拍、拍数、幅度、seed、训练预算及参数表列出的奖励项。默认 50 万步和 8 个并行环境；8192 步只用于流程快检。新手或改参重训优先调用 rdk_learning_guide，按其 nextArguments 提交；同一 contextId 用于重试或查原 Run。提交前重新检查指定 Worker。舞蹈仅仿真',
+      '提交已确认的 OriginMan 舞蹈 PPO 仿真配方。可选算力、模型、并行环境数（1–64），可改舞段、节拍、拍数、幅度、seed、训练预算及参数表列出的奖励项。默认 50 万步和 64 个并行环境；8192 步只用于流程快检。新手或改参重训优先调用 rdk_learning_guide，按其 nextArguments 提交；同一 contextId 用于重试或查原 Run。提交前重新检查指定 Worker。舞蹈仅仿真',
     inputSchema: schema,
     annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: true },
   },
@@ -113,9 +113,9 @@ function requireInput(args) {
   )
     throw new Error('用于对比的原 Run 标识无效。');
   const dance = resolveOriginmanDanceConfig(args.dance);
-  const numEnvs = args.numEnvs ?? 8;
-  if (!Number.isSafeInteger(numEnvs) || numEnvs < 1 || numEnvs > 16)
-    throw new Error('numEnvs 必须是 1 到 16 的整数；缺省 8。');
+  const numEnvs = args.numEnvs ?? 64;
+  if (!Number.isSafeInteger(numEnvs) || numEnvs < 1 || numEnvs > 64)
+    throw new Error('numEnvs 必须是 1 到 64 的整数；缺省 64。');
   return {
     contextId: args.contextId,
     numEnvs,
@@ -190,12 +190,14 @@ export async function trainOriginmanDance(
     throw Object.assign(new Error('指定算力资源未通过真实连接检查；未提交舞蹈训练。'), {
       platformCode: 'ORIGINMAN_DANCE_RESOURCE_NOT_READY',
       details: { tested, trainingSubmitted: false },
+      nextAction: '在执行资源页检查这台算力机，或选择另一台可用算力。保留当前编舞和预算。',
     });
   const engines = tested.engines ?? tested.health?.engines;
   if (!Array.isArray(engines) || !engines.includes('originman-dance-ppo'))
     throw Object.assign(new Error('指定Worker未证明已注册originman-dance-ppo；未提交舞蹈训练。'), {
       platformCode: 'ORIGINMAN_DANCE_ENGINE_NOT_REGISTERED',
       details: { tested, trainingSubmitted: false },
+      nextAction: '重新列出支持舞蹈引擎的算力机，由学员选择后再确认本轮配方。',
     });
   const model = selected.model ?? (await registerCourseModel(manifest, call));
   const steps = input.dance.trainingSteps;
@@ -215,7 +217,9 @@ export async function trainOriginmanDance(
         engine: 'originman-dance-ppo',
         algorithm: 'ppo',
         numEnvs: input.numEnvs,
-        maxIterations: Math.ceil(steps / (input.numEnvs * 256)),
+        maxIterations: Math.ceil(
+          steps / (input.numEnvs * Math.min(256, Math.floor(4096 / input.numEnvs))),
+        ),
         video: true,
         originmanDance: input.dance,
         idempotencyKey: input.contextId + '-train',

@@ -41,6 +41,11 @@ export async function developmentTargets(args, { authentication, request, baseUr
       throw Error('当前账号已变化，请重新查看开发机。');
   };
   const delivery = '只展示 studentReply。使用列表中对应类别的唯一目标，名称重复时请用户选择。';
+  const computeStatus = (status) =>
+    ({ online: '在线', offline: '离线', unknown: '未检查' })[status] ?? '状态未知';
+  const resourceLink = baseUrl
+    ? `[打开执行资源](${new URL(baseUrl.replace(/\/+$/, '') + '/#resources').href})`
+    : null;
   const list = async (kind) => {
     const body = await request(kind, { accountId });
     const records = kind === 'compute' ? body.computeResources : body.connections;
@@ -53,6 +58,7 @@ export async function developmentTargets(args, { authentication, request, baseUr
         ...(kind === 'compute'
           ? {
               status: record.status,
+              lastCheckedAt: record.lastCheckedAt ?? null,
               engines: Array.isArray(record.engines) ? record.engines : [],
               mock: record.mock === true,
               ...(action === 'list-compute'
@@ -64,7 +70,9 @@ export async function developmentTargets(args, { authentication, request, baseUr
                   }
                 : {}),
             }
-          : { tunnelActive: record.tunnelActive === true }),
+          : {
+              tunnelActive: typeof record.tunnelActive === 'boolean' ? record.tunnelActive : null,
+            }),
       }));
   };
   if (action === 'list-compute') {
@@ -115,18 +123,16 @@ export async function developmentTargets(args, { authentication, request, baseUr
         : result.value
             .map((target) =>
               label === '训练算力机'
-                ? `${target.name}（${target.status || '状态未知'}；引擎：${target.engines.join('、') || '待测试'}${target.mock ? '；Mock' : ''}）`
-                : target.name,
+                ? `${target.name}（${computeStatus(target.status)}，${target.engines.length ? '引擎 ' + target.engines.join('、') : '引擎待检查'}${target.mock ? '，模拟 Worker' : ''}）`
+                : `${target.name}（${target.tunnelActive === true ? 'SSH 隧道已建立，板端服务待检查' : target.tunnelActive === false ? 'SSH 隧道未建立' : '连接状态未知'}）`,
             )
             .join('、') || '当前账号还没有登记');
     return {
       compute: compute.status === 'fulfilled' ? compute.value : null,
       boards: boards.status === 'fulfilled' ? boards.value : null,
-      studentReply: [
-        describe('训练算力机', compute),
-        describe('RDK 板卡', boards),
-        '舞蹈训练请选择已报告支持 originman-dance-ppo 且非 Mock 的算力机；状态或能力未知时，先测试连接刷新。',
-      ].join('\n'),
+      studentReply: [describe('训练算力机', compute), describe('RDK 板卡', boards), resourceLink]
+        .filter(Boolean)
+        .join('\n'),
       delivery,
     };
   }
@@ -138,16 +144,28 @@ export async function developmentTargets(args, { authentication, request, baseUr
   if (compute) {
     if (result.computeResource?.id !== targetId) throw Error('平台未确认这台算力机的检查结果。');
     const connected = result.connected === true;
+    const checked = result.computeResource;
+    const engines = Array.isArray(checked.engines) ? checked.engines : [];
+    const reason =
+      typeof checked.message === 'string' &&
+      checked.message.length <= 180 &&
+      !/https?:|[a-f0-9]{32,}/i.test(checked.message)
+        ? checked.message
+        : null;
+    const summary = connected
+      ? `连接通过。${engines.length ? '支持引擎 ' + engines.join('、') + '。' : '引擎能力待核对。'}`
+      : result.browserRelay
+        ? '这台算力机通过本地 Agent 接入，请在工作台网页重新检查。'
+        : reason || '连接检查未通过，请在执行资源页查看当前状态。';
     return {
-      target,
+      target: {
+        ...target,
+        status: checked.status,
+        lastCheckedAt: checked.lastCheckedAt ?? null,
+        engines,
+      },
       connected,
-      studentReply:
-        target.name +
-        (connected
-          ? '可连接。选它新建 Workshop 实验后，再选训练预算。'
-          : result.browserRelay
-            ? '通过本地 Agent 接入，请在学习平台网页检查连接。'
-            : '当前连接检查未通过，请在学习平台查看资源状态。'),
+      studentReply: [target.name + '：' + summary, resourceLink].filter(Boolean).join('\n'),
       delivery,
     };
   }
