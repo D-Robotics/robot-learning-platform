@@ -38,5 +38,6 @@ pyarrow==21.0.0
 # resolve. Kept identical to engines/act so the two locks agree on the overlap.
 filelock==3.32.7
 
-# Retain the LeRobot dependency selected by the existing lock.
+# Retain the LeRobot dependencies selected by the existing lock.
+regex==2026.11.9
 sentry-sdk==2.74.0
