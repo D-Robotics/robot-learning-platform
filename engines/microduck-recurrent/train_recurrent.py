@@ -315,6 +315,8 @@ def export_onnx(policy: RecurrentActorCritic, path: str) -> dict:
             "c_out": {1: "batch"},
         },
         opset_version=17,
+        # Keep dynamic axes for the observation and LSTM states.
+        dynamo=False,
     )
     report = verify_export(policy, path)
     if not report["ok"]:
