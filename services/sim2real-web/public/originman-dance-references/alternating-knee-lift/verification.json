@@ -1,0 +1,108 @@
+{
+  "action": "alternating-knee-lift",
+  "simulationOnly": true,
+  "method": "optimization in MuJoCo followed by phase-table ONNX export",
+  "contractId": "custom-policy-originman-dance-v2",
+  "config": {
+    "schemaVersion": 1,
+    "title": "alternating-knee-lift",
+    "bpm": 105,
+    "seed": 7,
+    "trainingSteps": 8192,
+    "sections": [
+      {
+        "type": "alternating-knee-lift",
+        "beats": 4,
+        "intensity": 0.25
+      }
+    ]
+  },
+  "sceneSha256": "eac60475eb622c2731b36d9957a0c0445f8b00d4d588de7b1b4f25d518a56ad4",
+  "policySha256": "4ba540430c37fd804b30baa80519373e99b820f2a885c6878442b7f60ce5a51a",
+  "replaySha256": "3559f32fdb7b02d68d766339440347ee2104e30b8bf225e84274ebd03d4432d5",
+  "evaluations": [
+    {
+      "bpm": 99.75,
+      "completed": true,
+      "failed": false,
+      "reward": 608.1975627379062,
+      "sectionResults": [
+        {
+          "index": 0,
+          "type": "alternating-knee-lift",
+          "beats": 4,
+          "clean": true,
+          "stylePassed": true,
+          "passed": true,
+          "activePoseTracking": 0.7852567274240665,
+          "activeSupportFraction": 0.8947368421052632
+        }
+      ],
+      "allSectionsPassed": true,
+      "maxTiltDeg": 20.890000454890547,
+      "fallContacts": [],
+      "steps": 121
+    },
+    {
+      "bpm": 105.0,
+      "completed": true,
+      "failed": false,
+      "reward": 560.2517612242831,
+      "sectionResults": [
+        {
+          "index": 0,
+          "type": "alternating-knee-lift",
+          "beats": 4,
+          "clean": true,
+          "stylePassed": true,
+          "passed": true,
+          "activePoseTracking": 0.7824013062217349,
+          "activeSupportFraction": 0.8679245283018868
+        }
+      ],
+      "allSectionsPassed": true,
+      "maxTiltDeg": 31.933697111959468,
+      "fallContacts": [],
+      "steps": 115
+    },
+    {
+      "bpm": 110.25,
+      "completed": true,
+      "failed": false,
+      "reward": 505.53016154589744,
+      "sectionResults": [
+        {
+          "index": 0,
+          "type": "alternating-knee-lift",
+          "beats": 4,
+          "clean": true,
+          "stylePassed": true,
+          "passed": true,
+          "activePoseTracking": 0.808443578763882,
+          "activeSupportFraction": 0.9607843137254902
+        }
+      ],
+      "allSectionsPassed": true,
+      "maxTiltDeg": 24.395748831025706,
+      "fallContacts": [],
+      "steps": 109
+    }
+  ],
+  "videoReceipt": {
+    "source": "recorded-simulation-qpos",
+    "physicalRobot": false,
+    "sceneSha256": "eac60475eb622c2731b36d9957a0c0445f8b00d4d588de7b1b4f25d518a56ad4",
+    "replaySha256": "3559f32fdb7b02d68d766339440347ee2104e30b8bf225e84274ebd03d4432d5",
+    "videoSha256": "b26a72470646258529b51ad0ce35caf7db7f1d7fe131a324158ecb5fcb8e4b9d",
+    "frames": 116,
+    "fps": 50,
+    "durationSeconds": 2.32,
+    "renderSettings": {
+      "cameraAzimuth": 135,
+      "cameraElevation": -12,
+      "cameraDistance": 1.25,
+      "headlightAmbient": 0.4,
+      "headlightDiffuse": 0.8
+    }
+  }
+}

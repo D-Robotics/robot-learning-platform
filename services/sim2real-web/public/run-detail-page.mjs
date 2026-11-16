@@ -1,3 +1,5 @@
+import { renderDanceReferenceLinks } from './dance-reference-links.mjs';
+
 const RUN_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,119}$/;
 const SHA256_PATTERN = /^[a-f0-9]{64}$/;
 const STATUS_LABELS = Object.freeze({
@@ -385,6 +387,7 @@ function renderRun(document, location, run, runId) {
   }
   renderDance(document, run);
   renderQuality(document, run);
+  renderDanceReferenceLinks(document, run, SECTION_LABELS);
   drawCurve(document, run);
   renderVideo(document, location, run, runId);
   text(document, 'run-connection-status', '已连接并定位到本次 Run');

@@ -1,0 +1,111 @@
+{
+  "action": "open-pose",
+  "simulationOnly": true,
+  "method": "optimization in MuJoCo followed by phase-table ONNX export",
+  "contractId": "custom-policy-originman-dance-v2",
+  "config": {
+    "schemaVersion": 1,
+    "title": "open-pose",
+    "bpm": 100.0,
+    "seed": 7,
+    "trainingSteps": 8192,
+    "sections": [
+      {
+        "type": "open-pose",
+        "beats": 4,
+        "intensity": 0.6
+      }
+    ]
+  },
+  "sceneSha256": "eac60475eb622c2731b36d9957a0c0445f8b00d4d588de7b1b4f25d518a56ad4",
+  "policySha256": "409c5e454a01d3407c5fed5ed8919c9011ba8eed512aafce14ea06b3e334f9d8",
+  "replaySha256": "f59f78200ec8655c82b2589bd5f9ac8a9057af6290380e1d64b2e4e96323cc29",
+  "evaluations": [
+    {
+      "bpm": 95.0,
+      "completed": true,
+      "failed": false,
+      "reward": 261.089577945725,
+      "sectionResults": [
+        {
+          "index": 0,
+          "type": "open-pose",
+          "beats": 4,
+          "clean": true,
+          "stylePassed": true,
+          "passed": true,
+          "holdStillFraction": 1.0,
+          "meanHoldHandSpanM": 0.3407090142352284,
+          "holdPeakTiltDeg": 0.3320450258445556
+        }
+      ],
+      "allSectionsPassed": true,
+      "maxTiltDeg": 0.9449172256066113,
+      "fallContacts": [],
+      "steps": 127
+    },
+    {
+      "bpm": 100.0,
+      "completed": true,
+      "failed": false,
+      "reward": 246.05711358204297,
+      "sectionResults": [
+        {
+          "index": 0,
+          "type": "open-pose",
+          "beats": 4,
+          "clean": true,
+          "stylePassed": true,
+          "passed": true,
+          "holdStillFraction": 1.0,
+          "meanHoldHandSpanM": 0.3407080181524305,
+          "holdPeakTiltDeg": 0.34214656168080915
+        }
+      ],
+      "allSectionsPassed": true,
+      "maxTiltDeg": 0.9381336315524925,
+      "fallContacts": [],
+      "steps": 120
+    },
+    {
+      "bpm": 105.0,
+      "completed": true,
+      "failed": false,
+      "reward": 236.27617929337887,
+      "sectionResults": [
+        {
+          "index": 0,
+          "type": "open-pose",
+          "beats": 4,
+          "clean": true,
+          "stylePassed": true,
+          "passed": true,
+          "holdStillFraction": 1.0,
+          "meanHoldHandSpanM": 0.34070803454665344,
+          "holdPeakTiltDeg": 0.3312458773658331
+        }
+      ],
+      "allSectionsPassed": true,
+      "maxTiltDeg": 0.9312602789286688,
+      "fallContacts": [],
+      "steps": 115
+    }
+  ],
+  "videoReceipt": {
+    "source": "recorded-simulation-qpos",
+    "physicalRobot": false,
+    "sceneSha256": "eac60475eb622c2731b36d9957a0c0445f8b00d4d588de7b1b4f25d518a56ad4",
+    "replaySha256": "f59f78200ec8655c82b2589bd5f9ac8a9057af6290380e1d64b2e4e96323cc29",
+    "videoSha256": "df03f408730926540922bb32246395479ca00fcfc485d67a6d1213567215cbfb",
+    "frames": 121,
+    "fps": 50,
+    "durationSeconds": 2.42,
+    "renderSettings": {
+      "cameraAzimuth": 135,
+      "cameraElevation": -12,
+      "cameraDistance": 1.25,
+      "headlightAmbient": 0.4,
+      "headlightDiffuse": 0.8
+    }
+  }
+}

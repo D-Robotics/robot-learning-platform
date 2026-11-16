@@ -98,6 +98,13 @@ test('dance Run detail selects the exact account-scoped record and visualizes it
   });
 
   assert.equal(page.runId, 'run_42');
+  assert.deepEqual(
+    [...f.document.querySelectorAll('#dance-reference-links a')].map((a) => a.getAttribute('href')),
+    [
+      './originman-dance-references/index.html#alternating-arms',
+      './originman-dance-references/index.html#squat-rise',
+    ],
+  );
   assert.equal(requests.length, 1);
   assert.match(requests[0].url, /\/api\/v1\/duck\/runs\/run_42$/);
   assert.equal(requests[0].options.credentials, 'same-origin');
