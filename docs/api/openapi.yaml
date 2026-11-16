@@ -813,10 +813,10 @@ paths:
         stdout/stderr, newest 600 lines / 64 KiB) for a local-backend run.
         Lines carry worker-assigned sequence numbers; the `after` query
         parameter is a cursor so a poll returns only the new tail. Any job
-        status may be read — queued runs have no lines yet and terminal runs
-        keep their final log for post-mortem inspection. RoboGo or mock runs
-        answer 409: there is no log channel to serve, and the platform never
-        fabricates one.
+        status may be read. Queued runs have no lines yet and terminal runs
+        keep their final log for post-mortem inspection. Runs with a compute
+        resource always query that resource, even after its health check
+        expires.
       parameters:
         - $ref: "#/components/parameters/RunId"
         - name: after
@@ -853,7 +853,9 @@ paths:
         "401": { $ref: "#/components/responses/AuthRequired" }
         "404": { $ref: "#/components/responses/NotFound" }
         "409":
-          description: No log channel (remote runner, mock run, or no external run id).
+          description: >-
+            No log channel (remote runner, mock run, no external run id,
+            or browser-relayed run), or the run's compute resource is missing.
         "503":
           description: Worker temporarily unreachable; retryable.
   /api/v1/duck/runs/{runId}/replay-video:

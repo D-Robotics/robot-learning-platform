@@ -290,6 +290,97 @@ function vector(size: number, value: number): number[] {
 }
 
 describe('Sim2Real HTTP routes', () => {
+  it('reads saved logs from the selected worker when its training health lease is stale', async () => {
+    const router = await fixture();
+    process.env.RDK_SIM2REAL_LOCAL_RUNNER_URL = 'http://127.0.0.1:18202/train';
+    process.env.RDK_SIM2REAL_COMPUTE_HEALTH_TTL_SECONDS = '30';
+    const created = await invoke(router, 'post', '/api/sim2real/compute-resources', {
+      body: { name: 'original-gpu', runnerUrl: 'http://127.0.0.1:19091/train' },
+    });
+    expect(created.statusCode).toBe(201);
+    const computeResourceId = created.body.computeResource.id;
+    await updateSim2RealComputeResource(
+      computeResourceId,
+      { status: 'online', lastCheckedAt: new Date(Date.now() - 31_000).toISOString() },
+      undefined,
+    );
+    const run = await createSim2RealRun({
+      modelId: BUILTIN_MICRODUCK_MODEL.id,
+      backend: 'local',
+      computeResourceId,
+      externalRunId: 'retained-worker-run',
+      status: 'completed',
+      summary: 'fixture',
+    });
+    const originalFetch = globalThis.fetch;
+    const calls: string[] = [];
+    const lines = [{ n: 2, stream: 'stdout', text: 'Training completed' }];
+    globalThis.fetch = (async (url, init) => {
+      calls.push(String(url));
+      expect(new Headers(init?.headers).get('x-sim2real-account')).toBe('local-dev');
+      return Response.json({ total: 2, retainedFrom: 1, lines });
+    }) as typeof fetch;
+    try {
+      const logs = await invoke(router, 'get', '/api/sim2real/runs/:id/logs', {
+        params: { id: run.id },
+        query: { after: '1' },
+      });
+      expect(logs.statusCode).toBe(200);
+      expect(logs.body).toMatchObject({ status: 'completed', total: 2, lines });
+      expect(calls).toEqual(['http://127.0.0.1:19091/runs/retained-worker-run/logs?after=1']);
+
+      await invoke(router, 'delete', '/api/sim2real/compute-resources/:id', {
+        params: { id: computeResourceId },
+      });
+      const missing = await invoke(router, 'get', '/api/sim2real/runs/:id/logs', {
+        params: { id: run.id },
+      });
+      expect(missing.statusCode).toBe(409);
+      expect(missing.body).toMatchObject({ code: 'SIM2REAL_RUN_LOGS_RESOURCE_UNAVAILABLE' });
+      expect(calls).toHaveLength(1);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it('does not send log requests to the server loopback for a relayed run', async () => {
+    const router = await fixture();
+    process.env.RDK_SIM2REAL_LOCAL_RUNNER_URL = 'http://127.0.0.1:18202/train';
+    const created = await invoke(router, 'post', '/api/sim2real/compute-resources', {
+      body: {
+        name: 'browser-training-agent',
+        source: 'local-agent',
+        runnerUrl: 'http://127.0.0.1:19190/proxy',
+      },
+    });
+    expect(created.statusCode).toBe(201);
+    const run = await createSim2RealRun({
+      modelId: BUILTIN_MICRODUCK_MODEL.id,
+      backend: 'local',
+      computeResourceId: created.body.computeResource.id,
+      relayAgentUrl: 'http://127.0.0.1:19190/proxy',
+      externalRunId: 'relayed-worker-run',
+      status: 'completed',
+      summary: 'fixture',
+    });
+    const originalFetch = globalThis.fetch;
+    let calls = 0;
+    globalThis.fetch = (() => {
+      calls += 1;
+      throw new Error('the server cannot reach the browser loopback');
+    }) as typeof fetch;
+    try {
+      const response = await invoke(router, 'get', '/api/sim2real/runs/:id/logs', {
+        params: { id: run.id },
+      });
+      expect(response.statusCode).toBe(409);
+      expect(response.body).toMatchObject({ code: 'SIM2REAL_RUN_LOGS_NOT_AVAILABLE' });
+      expect(calls).toBe(0);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
   it('serves only bytes tied to the exact completed dance Run and its recorded digests', async () => {
     const router = await fixture();
     process.env.RDK_SIM2REAL_LOCAL_RUNNER_URL = 'http://127.0.0.1:18202/train';
