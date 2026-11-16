@@ -689,6 +689,8 @@ export function courseToolHint(name) {
     return '这是制品发布生命周期晋升，不是保存或下载文件。OriginMan保存评测记录使用links.experiment页面的保存按钮；不要因用户说保存、导出或回放而调用晋升。\n';
   if (name === 'rdk_runs_replay')
     return '查询通用遥测帧。查看原 Run 的已有仿真视频、ONNX 留存或策略下载链接时，优先选择 rdk_training_wait。通用遥测为零时仍可能有仿真视频。\n';
+  if (name === 'rdk_training_status')
+    return '基础训练状态查询。用户给出原 Run 并要 ONNX 留存、下载链接或仿真回放时，先发现并调用 rdk_training_wait。\n';
   if (name === 'rdk_lineage_get' || name === 'rdk_artifacts_list')
     return '查询血缘或登记记录。按原 Run 查询 ONNX 留存状态及可点击下载链接，应调用 rdk_training_wait。\n';
   if (name === 'rdk_simulator_open')

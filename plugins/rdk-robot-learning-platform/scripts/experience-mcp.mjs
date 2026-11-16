@@ -565,6 +565,7 @@ export const EXPERIENCE_TOOLS = [
   ...SHORT_TRAINING_TOOLS,
   {
     name: 'rdk_training_wait',
+    title: '查看已有训练 Run 的留存、下载和回放',
     description:
       '查询指定训练 Run 的状态、ONNX 策略留存/保留/归档、模型制品下载链接、已有仿真回放。这是查看或下载已有结果的首选只读工具。必传原 runId。仍在运行时最多等 20 秒，沿 nextPollArguments 续查。此工具不启动训练或评测。',
     inputSchema: {
@@ -759,6 +760,32 @@ export function experienceProxy(
     if ((value.run?.id ?? value.run?.runId ?? value.runId) !== runId)
       throw Error('平台未确认这条 Run。请重新打开原运行链接确认账号与记录。');
     return value;
+  };
+  const addStoredSimulationReplay = async (summary, runId, signal) => {
+    if (summary?.frameCount !== 0 || summary.runId !== runId || typeof runId !== 'string')
+      return summary;
+    try {
+      const status = await readRun(runId, signal);
+      const run =
+        status.run?.artifact?.sha256 || !upstream.readTrainingRun
+          ? (status.run ?? status)
+          : await upstream.readTrainingRun(runId, { signal });
+      if ((run?.id ?? run?.runId) !== runId) return summary;
+      const preview = await verifiedPreview({ ...status, run }, runId, signal);
+      const danceVideo = preview.links?.danceVideo;
+      if (!danceVideo) return summary;
+      const playback = new URL(runVisualizationLink(baseUrl, runId, danceVideo));
+      playback.hash = 'replay-heading';
+      return {
+        ...summary,
+        replayKind: 'simulation',
+        links: { ...summary.links, danceVideo, replay: playback.href },
+        studentReply: `暂无通用遥测帧。[打开本轮仿真回放](${playback.href})`,
+      };
+    } catch {
+      signal?.throwIfAborted();
+      return summary;
+    }
   };
   const readDanceReplay = async (args, signal) => {
     if (
@@ -2102,34 +2129,10 @@ export function experienceProxy(
           signal,
         });
         if (summary) {
-          let value = summary;
-          const runId = params.arguments?.runId;
-          if (
-            params.name === 'rdk_runs_replay' &&
-            summary.frameCount === 0 &&
-            summary.runId === runId &&
-            upstream.readTrainingRun
-          ) {
-            try {
-              const run = await upstream.readTrainingRun(runId, { signal });
-              if (run?.id === runId) {
-                const preview = await verifiedPreview({ run }, runId, signal);
-                const danceVideo = preview.links?.danceVideo;
-                if (danceVideo) {
-                  const playback = new URL(runVisualizationLink(baseUrl, runId, danceVideo));
-                  playback.hash = 'replay-heading';
-                  value = {
-                    ...summary,
-                    replayKind: 'simulation',
-                    links: { ...summary.links, danceVideo, replay: playback.href },
-                    studentReply: `暂无通用遥测帧。[打开本轮仿真回放](${playback.href})`,
-                  };
-                }
-              }
-            } catch {
-              signal?.throwIfAborted();
-            }
-          }
+          const value =
+            params.name === 'rdk_runs_replay'
+              ? await addStoredSimulationReplay(summary, params.arguments?.runId, signal)
+              : summary;
           return {
             structuredContent: value,
             content: [{ type: 'text', text: JSON.stringify(value) }],
@@ -2140,6 +2143,20 @@ export function experienceProxy(
       }
     }
     const response = await upstream.request(method, params, { signal });
+    if (method === 'tools/call' && params.name === 'rdk_runs_replay' && !response.isError) {
+      try {
+        const original = readToolResult(response);
+        const value = await addStoredSimulationReplay(original, params.arguments?.runId, signal);
+        if (value !== original)
+          return {
+            ...response,
+            structuredContent: value,
+            content: [{ type: 'text', text: JSON.stringify(value) }],
+          };
+      } catch {
+        signal?.throwIfAborted();
+      }
+    }
     if (
       method === 'tools/call' &&
       params.name === 'rdk_platform_status' &&
