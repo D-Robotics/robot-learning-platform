@@ -4,6 +4,7 @@ import { readFileSync } from 'node:fs';
 import { createHash, randomUUID } from 'node:crypto';
 import { createInterface } from 'node:readline';
 import { isDeepStrictEqual } from 'node:util';
+import { DANCE_SECTION_TYPES } from './originman-dance-config.mjs';
 import { danceCoaching } from './dance-coaching.mjs';
 import {
   connectMcp,
@@ -1205,6 +1206,7 @@ export function experienceProxy(
           '\n' +
           '\n提交 OriginMan 舞蹈或收到一键仿真验收请求后，沿原 runId 调用 rdk_originman_dance_acceptance。每次待运行回执继续传 nextArguments，终态自动同源评测；验收出判定后按 studioNavigation 打开 Studio 右侧。比较两条记录用 rdk_originman_dance_compare。' +
           WORKSPACE_EVIDENCE_INSTRUCTIONS +
+          '\nOriginMan 舞蹈 PPO 使用 Worker 预置的模型资产和用户编舞，无需导入工作区数据集。通用黄金路径的数据集提示不是本课程的训练前置。' +
           '\n用户要上传、下载或管理托管数据集时，调用 rdk_learning_guide({intent:"start",task:"datasets"})，展示证据与记录入口。上传走「上传数据集」，下载走数据集详情中的「下载托管文件」。rdk_dataset_register 只登记元数据。' +
           '\n' +
           STUDIO_WORKSHOP_NAVIGATION +
@@ -1255,8 +1257,16 @@ export function experienceProxy(
     }
     if (method === 'tools/list') {
       const result = validateCatalogPage(await upstream.request(method, params, { signal }));
-      const forUi = (tool) =>
-        uiEnabled && tool.annotations?.readOnlyHint !== true
+      const forUi = (tool) => {
+        const danceType = (schema) =>
+          schema?.properties?.originmanDance?.properties?.sections?.items?.properties?.type;
+        if (tool.name === 'rdk_training_submit' && danceType(tool.inputSchema)?.enum) {
+          // The retained core forwards this config to the platform, but its advertised enum is older.
+          const inputSchema = structuredClone(tool.inputSchema);
+          danceType(inputSchema).enum = DANCE_SECTION_TYPES;
+          tool = { ...tool, inputSchema };
+        }
+        return uiEnabled && tool.annotations?.readOnlyHint !== true
           ? {
               ...tool,
               _meta: {
@@ -1265,6 +1275,7 @@ export function experienceProxy(
               },
             }
           : tool;
+      };
       // Preserve upstream paging; advertise the extension exactly once, on the final page.
       return result.nextCursor === undefined
         ? {
@@ -1797,7 +1808,7 @@ export function experienceProxy(
               parameters: {
                 defaultTrainingSteps: 500000,
                 bpmRange: [80, 140],
-                sectionTypes: ['alternating-arms', 'weight-shift', 'squat-rise', 'open-pose'],
+                sectionTypes: DANCE_SECTION_TYPES,
                 beatsPerSection: [4, 8, 16],
                 maxSections: 8,
                 intensityRange: [0.25, 1],

@@ -1,4 +1,17 @@
-const SECTION_TYPES = new Set(['alternating-arms', 'weight-shift', 'squat-rise', 'open-pose']);
+export const DANCE_SECTION_LABELS = Object.freeze({
+  'alternating-arms': '左右交替摆臂',
+  'weight-shift': '左右换重心',
+  'squat-rise': '下蹲起身',
+  'open-pose': '展开定格',
+  'single-arm-wave': '单臂挥手',
+  'arms-overhead': '双臂上举',
+  'cross-and-open': '胸前交叉展开',
+  'side-lean': '左右侧身',
+  'alternating-knee-lift': '交替抬膝',
+  'side-tap': '侧点步收回',
+});
+export const DANCE_SECTION_TYPES = Object.freeze(Object.keys(DANCE_SECTION_LABELS));
+const SECTION_TYPES = new Set(DANCE_SECTION_TYPES);
 const MIN_BPM = 80;
 const MAX_BPM = 140;
 const MAX_SECTIONS = 8;

@@ -14,8 +14,19 @@ export const DANCE_REWARD_LIMITS = {
   settleArmsWeight: [0.2, 6],
 } as const;
 
-const sectionTypes = ['alternating-arms', 'weight-shift', 'squat-rise', 'open-pose'] as const;
-type SectionType = (typeof sectionTypes)[number];
+export const ORIGINMAN_DANCE_SECTION_TYPES = [
+  'alternating-arms',
+  'weight-shift',
+  'squat-rise',
+  'open-pose',
+  'single-arm-wave',
+  'arms-overhead',
+  'cross-and-open',
+  'side-lean',
+  'alternating-knee-lift',
+  'side-tap',
+] as const;
+type SectionType = (typeof ORIGINMAN_DANCE_SECTION_TYPES)[number];
 export interface OriginmanDanceTraining {
   schemaVersion: 1;
   title: string;
@@ -70,7 +81,7 @@ export function normalizeOriginmanDanceTraining(value: unknown): OriginmanDanceT
     if (
       !object(section) ||
       Object.keys(section).some((key) => !['type', 'beats', 'intensity'].includes(key)) ||
-      !sectionTypes.includes(section.type as SectionType) ||
+      !ORIGINMAN_DANCE_SECTION_TYPES.includes(section.type as SectionType) ||
       (section.beats !== 4 && section.beats !== 8 && section.beats !== 16) ||
       !within(section.intensity, 0.25, 1)
     )

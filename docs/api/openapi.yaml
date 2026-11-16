@@ -3467,7 +3467,7 @@ components:
       additionalProperties: false
       required: [type, beats, intensity]
       properties:
-        type: { type: string, enum: [alternating-arms, weight-shift, squat-rise, open-pose] }
+        type: { type: string, enum: [alternating-arms, weight-shift, squat-rise, open-pose, single-arm-wave, arms-overhead, cross-and-open, side-lean, alternating-knee-lift, side-tap] }
         beats: { type: integer, enum: [4, 8, 16] }
         intensity: { type: number, minimum: 0.25, maximum: 1 }
     OriginManDanceTraining:
@@ -4182,7 +4182,7 @@ components:
                 type: object
                 required: [type, beats, intensity]
                 properties:
-                  type: { type: string, enum: [alternating-arms, weight-shift, squat-rise, open-pose] }
+                  type: { type: string, enum: [alternating-arms, weight-shift, squat-rise, open-pose, single-arm-wave, arms-overhead, cross-and-open, side-lean, alternating-knee-lift, side-tap] }
                   beats: { type: integer, enum: [4, 8, 16] }
                   intensity: { type: number, minimum: 0.25, maximum: 1 }
             rewardTuning: { type: object, additionalProperties: { type: number } }

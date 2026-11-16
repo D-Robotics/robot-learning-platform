@@ -9,7 +9,18 @@ window.TrainingPlans = (() => {
     ppo: { learningRate: 'training-ppo-learning-rate', entropyCoefficient: 'training-ppo-entropy', clipParameter: 'training-ppo-clip' },
     taskTuning: { trackLinearVelocityWeight: 'training-reward-linear', trackAngularVelocityWeight: 'training-reward-angular', headPoseTrackingWeight: 'training-reward-head' },
   };
-  const names = { 'alternating-arms': '左右交替摆臂', 'weight-shift': '左右换重心', 'squat-rise': '下蹲起身', 'open-pose': '展开定格' };
+  const names = {
+    'alternating-arms': '左右交替摆臂',
+    'weight-shift': '左右换重心',
+    'squat-rise': '下蹲起身',
+    'open-pose': '展开定格',
+    'single-arm-wave': '单臂挥手',
+    'arms-overhead': '双臂上举',
+    'cross-and-open': '胸前交叉展开',
+    'side-lean': '左右侧身',
+    'alternating-knee-lift': '交替抬膝',
+    'side-tap': '侧点步收回',
+  };
   const byId = (id) => document.getElementById(id);
   const field = (id) => byId(id)?.value.trim() || '';
   const idValid = (id) => /^[a-f0-9-]{36}$/.test(id);

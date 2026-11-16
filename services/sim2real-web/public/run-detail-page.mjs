@@ -15,6 +15,12 @@ const SECTION_LABELS = Object.freeze({
   'weight-shift': '左右换重心',
   'squat-rise': '下蹲起身',
   'open-pose': '展开定格',
+  'single-arm-wave': '单臂挥手',
+  'arms-overhead': '双臂上举',
+  'cross-and-open': '胸前交叉展开',
+  'side-lean': '左右侧身',
+  'alternating-knee-lift': '交替抬膝',
+  'side-tap': '侧点步收回',
 });
 
 const DANCE_MEASUREMENTS = Object.freeze({
@@ -31,6 +37,8 @@ const DANCE_MEASUREMENTS = Object.freeze({
   holdStillFraction: ['定格静止比例', 100, '%'],
   meanHoldHandSpanM: ['定格平均手间距', 1000, ' mm'],
   holdPeakTiltDeg: ['定格最大倾角', 1, '°'],
+  activePoseTracking: ['动作关键拍姿态跟踪得分', 100, '%'],
+  activeSupportFraction: ['动作关键拍触地符合率', 100, '%'],
 });
 
 function formatDanceMeasurement(key, value) {

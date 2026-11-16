@@ -22,7 +22,7 @@ description: 在 RDK 学习平台选择任务、训练引擎与执行资源，�
 {"contextId":"来自本轮guide","computeResourceId":"已确认资源","dance":{"schemaVersion":1,"title":"简单摆臂","bpm":100,"sections":[{"type":"alternating-arms","beats":8,"intensity":0.25}],"seed":7,"trainingSteps":500000}}
 ```
 
-舞段类型为 `alternating-arms`、`weight-shift`、`squat-rise`、`open-pose`；每段 `beats` 为 4/8/16，`intensity` 为 0.25–1。预算字段是 `trainingSteps`；draft 接收 `dance` 内的配置对象，不接收外层引用或返回草案的派生字段。工具参数校验失败时按错误中的结构修正，不能反复猜字段。提交取得 Run 后仅对原 Run 使用 `rdk_training_wait`、`rdk_training_status`，失败或引用未知时不换 contextId 重交。
+舞段类型为 `alternating-arms`、`weight-shift`、`squat-rise`、`open-pose`、`single-arm-wave`、`arms-overhead`、`cross-and-open`、`side-lean`、`alternating-knee-lift`、`side-tap`。OriginMan 舞蹈 PPO 使用 Worker 内置仿真资产和编舞配置，无需导入工作区数据集；每段 `beats` 为 4/8/16，`intensity` 为 0.25–1。预算字段是 `trainingSteps`；draft 接收 `dance` 内的配置对象，不接收外层引用或返回草案的派生字段。工具参数校验失败时按错误中的结构修正，不能反复猜字段。提交取得 Run 后仅对原 Run 使用 `rdk_training_wait`、`rdk_training_status`，失败或引用未知时不换 contextId 重交。
 
 结果核对本轮 `metrics.originmanDance.qualityGatePassed` 与各 BPM 的舞段成绩。出现平台返回的同源 `links.danceVideo` 时用宿主播放器打开本次仿真视频；实际播放和训练、风格达标分别报告。没有媒体链接时保留原结果，不构造未验证的媒体地址，也不为补回放重新训练。舞蹈仿真通过不授权真机部署。
 

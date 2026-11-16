@@ -26,6 +26,30 @@ describe('RDK Golden Path', () => {
     expect(result.nextAction?.label).not.toBe('准备数据');
   });
 
+  it('does not send dance learners to import registered or revoked workspace datasets', () => {
+    for (const status of ['registered', 'revoked'] as const) {
+      const result = deriveRdkGoldenPath({
+        ...base,
+        taskId: 'originman-dance',
+        datasets: [
+          {
+            id: 'dataset-1',
+            name: '另一个任务的数据',
+            status,
+            createdAt: '2026-01-01T00:00:00.000Z',
+            updatedAt: '2026-01-01T00:00:00.000Z',
+          },
+        ],
+      });
+      expect(result.stages.find((item) => item.key === 'dataset')).toMatchObject({
+        state: 'succeeded',
+        summary: expect.stringContaining('无需导入工作区数据集'),
+        refs: [],
+      });
+      expect(result.nextAction?.stage).toBe('train');
+    }
+  });
+
   it('still routes the next action to a genuinely actionable dataset stage', () => {
     const result = deriveRdkGoldenPath({
       ...base,

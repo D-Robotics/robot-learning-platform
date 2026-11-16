@@ -10,6 +10,7 @@ import path from 'node:path';
 import { createRequire } from 'node:module';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { createMcpConfiguration } from '../plugins/rdk-robot-learning-platform/configure.mjs';
+import { DANCE_SECTION_TYPES } from '../plugins/rdk-robot-learning-platform/scripts/originman-dance-config.mjs';
 import { EXPERIENCE_TOOLS } from '../plugins/rdk-robot-learning-platform/scripts/experience-mcp.mjs';
 import { isDirectInvocation } from '../plugins/rdk-robot-learning-platform/scripts/experience.mjs';
 
@@ -495,6 +496,13 @@ async function main(distribution) {
     for (let i = 0; i < forwarded.length; i++) {
       const { description, ...contract } = coreTools[i];
       const { description: originalDescription, ...originalContract } = forwarded[i];
+      if (contract.name === 'rdk_training_submit') {
+        // The wrapper updates only the retained choreography enum.
+        const originalSchema = structuredClone(originalContract.inputSchema);
+        originalSchema.properties.originmanDance.properties.sections.items.properties.type.enum =
+          DANCE_SECTION_TYPES;
+        originalContract.inputSchema = originalSchema;
+      }
       assert.deepEqual(
         contract,
         originalContract,

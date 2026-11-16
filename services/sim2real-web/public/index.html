@@ -967,7 +967,7 @@
                         <label>并行仿真环境 <input id="originman-dance-num-envs" type="number" min="1" max="64" step="1" value="64"></label>
                         <label>随机种子 <input id="originman-dance-seed" type="number" min="0" max="2147483647" step="1" value="7"></label>
                       </div>
-                      <p class="small-note" id="originman-dance-budget-help">8192 步用于快检。可以用 500000 步做正式训练，动作表现以评测为准。</p>
+                      <p class="small-note" id="originman-dance-budget-help">8192 步用于快检。可以用 500000 步做正式训练，动作表现以评测为准。舞蹈 PPO 直接在仿真中采样，无需导入数据集。</p>
                       <div id="originman-dance-sections"></div>
                       <button class="button button-ghost button-small" id="originman-dance-add" type="button">添加舞段</button>
                       <p class="small-note" id="originman-dance-error" aria-live="polite"></p>
@@ -2282,8 +2282,8 @@
     <script defer src="./telemetry-core.js?v=duck-lab-32"></script>
     <script defer src="./run-inspector-core.js?v=2"></script>
     <script defer src="./run-inspector.js?v=3"></script>
-    <script defer src="./training-plans.js?v=5"></script>
-    <script defer src="./app.js?v=duck-lab-81"></script>
+    <script defer src="./training-plans.js?v=6"></script>
+    <script defer src="./app.js?v=duck-lab-82"></script>
     <script defer src="./visualization-enhancements.js?v=viz-1"></script>
     <script defer src="./capability-workbench.js?v=1"></script>
     <script defer src="./agent-chat.js?v=agent-19"></script>

@@ -9159,7 +9159,9 @@ async function loadOverview({ quiet = false, silent = false } = {}) {
           request('/sim2real/golden-path?' + new URLSearchParams({
             ...(state.projectId ? { projectId: state.projectId } : {}),
             ...(state.selectedModelId ? { modelId: state.selectedModelId } : {}),
-            ...(state.taskId ? { taskId: state.taskId } : {}),
+            ...(state.productId === 'originman' && $('originman-training-goal')?.value === 'originman-dance'
+              ? { taskId: 'originman-dance' }
+              : state.taskId ? { taskId: state.taskId } : {}),
           }).toString()),
           request('/sim2real/research-loop/summary?days=30'),
         ]);

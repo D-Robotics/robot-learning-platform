@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import {
   resolveOriginmanDanceConfig,
   REWARD_TUNING_LIMITS,
+  DANCE_SECTION_TYPES,
 } from '../plugins/rdk-robot-learning-platform/scripts/originman-dance-config.mjs';
 
 const base = {
@@ -55,4 +56,22 @@ test('dance training tool exposes a bounded numEnvs argument', async () => {
   assert.equal(numEnvs.maximum, 64);
   assert.equal(numEnvs.default, 64);
   assert.match(tool.description, /64 个并行环境/);
+});
+
+test('dance draft and submission expose the same ten actions', async () => {
+  const { ORIGINMAN_DANCE_DRAFT_TOOL } =
+    await import('../plugins/rdk-robot-learning-platform/scripts/workshop-course.mjs');
+  const { DANCE_TRAINING_TOOLS } =
+    await import('../plugins/rdk-robot-learning-platform/scripts/dance-training.mjs');
+  const submit = DANCE_TRAINING_TOOLS.find((tool) => tool.name === 'rdk_originman_dance_train');
+  const allowed = (schema) => schema.properties.sections.items.properties.type.enum;
+  assert.equal(DANCE_SECTION_TYPES.length, 10);
+  assert.deepEqual(allowed(ORIGINMAN_DANCE_DRAFT_TOOL.inputSchema), DANCE_SECTION_TYPES);
+  assert.deepEqual(allowed(submit.inputSchema.properties.dance), DANCE_SECTION_TYPES);
+  for (const type of DANCE_SECTION_TYPES) {
+    const section = { type, beats: 4, intensity: 0.6 };
+    assert.deepEqual(resolveOriginmanDanceConfig({ ...base, sections: [section] }).sections, [
+      section,
+    ]);
+  }
 });

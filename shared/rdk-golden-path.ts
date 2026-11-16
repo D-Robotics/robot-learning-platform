@@ -128,7 +128,13 @@ export function deriveRdkGoldenPath(input: Inputs): RdkGoldenPathSnapshot {
   // 没有数据集不等于被阻塞：starter 仿真闭环（录制→训练→评测→预检）不消费
   // 数据集，把空台账标成 blocked 会让"准备数据"抢占全局下一步，与上手
   // 清单的第一步（在仿真中验证）互相矛盾。数据集是模仿学习路径的可选前置。
-  if (!datasets.length) {
+  if (taskId === 'originman-dance') {
+    datasetStage = stage(
+      'dataset',
+      'succeeded',
+      'OriginMan 舞蹈 PPO 使用 Worker 的仿真资产和编舞配置，无需导入工作区数据集。',
+    );
+  } else if (!datasets.length) {
     datasetStage = stage('dataset', 'pending', '仿真闭环不需要数据集；接入模仿学习数据时再导入');
   } else if (datasets.some((item) => item.status === 'revoked')) {
     datasetStage = stage('dataset', 'blocked', '数据集已撤销，请选择仍有效的版本', datasetRefs);

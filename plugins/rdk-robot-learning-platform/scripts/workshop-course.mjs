@@ -1,13 +1,17 @@
 import { createHash } from 'node:crypto';
 import { DANCE_TRAINING_TOOLS } from './dance-training.mjs';
-import { resolveOriginmanDanceConfig } from './originman-dance-config.mjs';
+import {
+  DANCE_SECTION_TYPES,
+  DANCE_SECTION_LABELS,
+  resolveOriginmanDanceConfig,
+} from './originman-dance-config.mjs';
 import { rewardChangeText } from './dance-coaching.mjs';
 import { PluginRequestError } from './plugin-errors.mjs';
 
 export const ORIGINMAN_DANCE_DRAFT_TOOL = {
   name: 'rdk_originman_dance_draft',
   description:
-    '仅在学员要求整理编舞草案时使用。算力离线、询问下一步、开始训练或改参时，用rdk_learning_guide。草案支持80–140 BPM、每段4/8/16拍、交替摆臂/换重心/下蹲起身/展开定格和0.25–1幅度，默认50万步，8192步用于流程快检。草案只回显配置。',
+    '仅在学员要求整理编舞草案时使用。算力离线、询问下一步、开始训练或改参时，用rdk_learning_guide。草案支持80–140 BPM、每段4/8/16拍、动作库中的10种动作和0.25–1幅度，默认50万步，8192步用于流程快检。草案只回显配置。',
   inputSchema: {
     type: 'object',
     properties: {
@@ -23,7 +27,7 @@ export const ORIGINMAN_DANCE_DRAFT_TOOL = {
           properties: {
             type: {
               type: 'string',
-              enum: ['alternating-arms', 'weight-shift', 'squat-rise', 'open-pose'],
+              enum: DANCE_SECTION_TYPES,
             },
             beats: { type: 'integer', enum: [4, 8, 16] },
             intensity: { type: 'number', minimum: 0.25, maximum: 1 },
@@ -474,12 +478,7 @@ export function learningGuide(answers = {}, { operationId, previous } = {}) {
   });
 }
 
-export const sectionTitles = {
-  'alternating-arms': '左右交替摆臂',
-  'weight-shift': '左右换重心',
-  'squat-rise': '下蹲起身',
-  'open-pose': '展开定格',
-};
+export const sectionTitles = DANCE_SECTION_LABELS;
 
 function editDanceSections(sections, edits) {
   const updated = sections.slice();
