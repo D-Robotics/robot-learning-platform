@@ -426,6 +426,9 @@ test('experience MCP preserves upstream tools, results and errors and exposes gu
   const init = await proxy('initialize');
   assert.equal(init.serverInfo.name, 'original');
   assert.ok(init.instructions.startsWith('original'));
+  assert.match(init.instructions, /每轮按需登记/);
+  assert.match(init.instructions, /mcp__rdk-robot-learning-platform__rdk_training_wait/);
+  assert.match(init.instructions, /artifactRetention、links.policyDownload/);
   assert.match(init.instructions, /当前进度→本次结果→下一步/);
   assert.match(init.instructions, /仍可只读查询原Run/);
   assert.doesNotMatch(
@@ -1064,10 +1067,16 @@ test('legacy replay is linked only after verifying bytes for the exact Run', asy
   };
   let allow = false;
   let checked = 0;
+  let compactTelemetry = true;
+  const emptySummary = { runId: run.id, frameCount: 0, sampleCount: 0 };
   const route = './api/v1/duck/runs/legacy-dance/dance-video';
   const dispatch = experienceProxy(
     {
       readTrainingRun: async () => run,
+      readTelemetrySummary: async () => (compactTelemetry ? emptySummary : null),
+      request: async (_method, params) => ({
+        structuredContent: params.name === 'rdk_runs_replay' ? emptySummary : { run },
+      }),
       async verifyLegacyDanceVideo(runId, receipt) {
         assert.equal(runId, run.id);
         assert.equal(receipt, run.metrics.originmanDance.video);
@@ -1093,13 +1102,27 @@ test('legacy replay is linked only after verifying bytes for the exact Run', asy
     (await guide()).links.danceVideo,
     'https://platform.test/robotics-learning/api/v1/duck/runs/legacy-dance/dance-video',
   );
+  const readTelemetry = async () =>
+    (
+      await dispatch('tools/call', {
+        name: 'rdk_runs_replay',
+        arguments: { runId: run.id },
+      })
+    ).structuredContent;
+  const telemetry = await readTelemetry();
+  assert.equal(telemetry.frameCount, 0);
+  assert.equal(telemetry.replayKind, 'simulation');
+  assert.equal(new URL(telemetry.links.replay).hash, '#replay-heading');
+  assert.match(telemetry.studentReply, /暂无通用遥测帧.*本轮仿真回放/s);
+  compactTelemetry = false;
+  assert.deepEqual(await readTelemetry(), telemetry);
   run.metrics.trainingDeviceName = '<untrusted>';
   run.artifact.sha256 = 'd'.repeat(64);
   const rejected = await guide();
   assert.equal(rejected.links.danceVideo, undefined);
   assert.match(rejected.studentReply, /实际训练设备：cuda。/);
   assert.doesNotMatch(rejected.studentReply, /untrusted/);
-  assert.equal(checked, 2);
+  assert.equal(checked, 4);
 });
 
 test('OriginMan auto iteration raises quick-check budget, preserves the Run chain and stops on pass', async () => {
