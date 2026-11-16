@@ -1450,3 +1450,62 @@ test('Studio returns a short continuation during slow work and keeps the exact g
   );
   assert.equal(calls, 1);
 });
+
+test('an independent evaluation timeout polls the identical Run until its report is ready', async () => {
+  const { createDanceEvaluationReader } =
+    await import('../plugins/rdk-robot-learning-platform/scripts/dance-evaluation.mjs');
+  const calls = [];
+  const report = { source: { runId: 'original' } };
+  let ready = false;
+  const read = createDanceEvaluationReader({
+    async readDanceEvaluationRun(id) {
+      calls.push(['GET', id]);
+      return ready ? report : null;
+    },
+    async evaluateDanceRun(id) {
+      calls.push(['POST', id]);
+      throw new DOMException('Timed out', 'TimeoutError');
+    },
+  });
+  await assert.rejects(read('original'), { code: 'DANCE_EVALUATION_PENDING' });
+  await assert.rejects(read('original'), { code: 'DANCE_EVALUATION_PENDING' });
+  ready = true;
+  assert.equal(await read('original'), report);
+  assert.deepEqual(calls, [
+    ['GET', 'original'],
+    ['POST', 'original'],
+    ['GET', 'original'],
+    ['GET', 'original'],
+  ]);
+});
+
+test('Studio protects the automatic scope even after invalid arguments, and rejects ordinary fallback', async () => {
+  const { experienceProxy } =
+    await import('../plugins/rdk-robot-learning-platform/scripts/experience-mcp.mjs');
+  const calls = [];
+  const dispatch = experienceProxy(
+    {
+      async request(method, params) {
+        calls.push([method, params]);
+        throw Error('No training operation should reach the upstream connection');
+      },
+    },
+    { env: { RDK_STUDIO_INHERIT_LOGIN: '1' } },
+  );
+  const call = (name, args) => dispatch('tools/call', { name, arguments: args });
+  const early = await call('rdk_originman_dance_train', { contextId: 'fallback' });
+  assert.equal(early.structuredContent.error.platformCode, 'DANCE_ROUTE_REQUIRED');
+  assert.equal(early.structuredContent.nextTool, 'rdk_originman_dance_iterate');
+  const invalid = await call('rdk_originman_dance_iterate', {
+    goal: 'invalid',
+    totalSteps: 524288,
+  });
+  assert.equal(invalid.isError, true);
+  assert.equal(invalid.structuredContent.nextTool, 'rdk_originman_dance_iterate');
+  const changed = await call('rdk_training_submit', {
+    engine: 'originman-dance-ppo',
+    contextId: 'new',
+  });
+  assert.equal(changed.structuredContent.error.platformCode, 'DANCE_GOAL_RESERVED');
+  assert.equal(calls.length, 0);
+});

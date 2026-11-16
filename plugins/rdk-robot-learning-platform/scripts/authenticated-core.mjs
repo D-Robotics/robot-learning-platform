@@ -537,6 +537,42 @@ export async function connectAuthenticatedCore({
         throw Error('当前账号无法读取这条 Run，请核对原运行链接。');
       return value.run;
     },
+    async readDanceTrajectoryVerification(runId, expectedSha256, { signal } = {}) {
+      const accountId = await verifiedWorkspaceAccount();
+      const value = await readWorkspaceJson(
+        '/runs/' + encodeURIComponent(runId) + '/dance-trajectory',
+        AbortSignal.any([AbortSignal.timeout(17000), ...(signal ? [signal] : [])]),
+        accountId,
+      );
+      const proof = value.verification;
+      if (
+        value.ok !== true ||
+        value.runId !== runId ||
+        proof?.trajectorySha256 !== expectedSha256 ||
+        !Number.isSafeInteger(proof.controlSteps) ||
+        proof.controlSteps < 1 ||
+        proof.poseFrames !== proof.controlSteps + 1 ||
+        proof.controlHz !== 50
+      )
+        throw new Error('Worker 步序回执未与所选 Run 绑定。');
+      return proof;
+    },
+    async readDanceEvaluationRun(runId, { signal } = {}) {
+      if (typeof runId !== 'string' || !/^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,119}$/.test(runId))
+        throw Error('原舞蹈训练标识无效。');
+      const response = await fetchPlatform(
+        '/api/v1/duck/runs/' + encodeURIComponent(runId) + '/dance-evaluation',
+        { method: 'GET', headers: { accept: 'application/json' }, signal },
+      );
+      const value = await response.json().catch(() => null);
+      if (response.status === 404 && value?.ok === false) return null;
+      if (response.ok && value?.ok === true && value.evaluation) return value.evaluation;
+      throw new PluginRequestError(
+        'DANCE_EVALUATION_UNAVAILABLE',
+        value?.message || '平台暂时无法查询原 Run 的独立舞蹈评测。',
+        { httpStatus: response.status },
+      );
+    },
     async evaluateDanceRun(runId, { signal } = {}) {
       if (typeof runId !== 'string' || !/^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,119}$/.test(runId))
         throw Error('原舞蹈训练标识无效。');
