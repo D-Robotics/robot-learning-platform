@@ -25,7 +25,7 @@ const { trainingSteps: _steps, ...goalChoreography } = DANCE_CONFIG_SCHEMA.prope
 export const DANCE_ITERATION_TOOL = {
   name: 'rdk_originman_dance_iterate',
   description:
-    '一次授权后从零完成 OriginMan 舞蹈仿真训练：用户给出目标和总步数，先把目标整理为编舞，使用同一个 contextId、RTX 4090 Worker 和 64 并行。训练、独立评测、对比各节拍并自动调整一个奖励或预算后重训，达标或预算耗尽时交付。已有 Run 也可接续。有 nextArguments 时连续调用，按 studioNavigation 在右侧展示。仅仿真。',
+    '一次授权后从零完成 OriginMan 舞蹈仿真训练：用户给出目标和总步数，先把目标整理为编舞，使用同一个 contextId、RTX 4090 Worker 和 64 并行。训练、独立评测、对比各节拍，在总预算允许时优先做同等步数的奖励对照，依据实测选奖励或步数继续重训，达标或预算耗尽时交付。已有 Run 也可接续。有 nextArguments 时连续调用，按 studioNavigation 在右侧展示。仅仿真。',
   inputSchema: {
     type: 'object',
     additionalProperties: false,
@@ -141,16 +141,16 @@ function renderIteration(result, args, baseUrl) {
   const url = new URL('./dance-iterations.html', baseUrl.replace(/\/+$/, '') + '/');
   url.hash = new URLSearchParams({ iteration: JSON.stringify(body) }).toString();
   return {
-    iteration: body,
-    links: { iteration: url.href },
-    studioNavigation: { tool: 'studio_open_url', arguments: { url: url.href } },
     ...(result.state === 'waiting' && {
       nextTool: DANCE_ITERATION_TOOL.name,
       nextArguments: args,
     }),
+    iteration: body,
+    links: { iteration: url.href },
+    studioNavigation: { tool: 'studio_open_url', arguments: { url: url.href } },
     studentReply: result.reason,
     delivery:
-      '首次按 studioNavigation 在右侧打开逐轮结果，后续回执更新同一个结果页面。如有 nextArguments，自动接续本组目标和预算。终态汇报逐轮改动和结果。',
+      '首次按 studioNavigation 在右侧打开逐轮结果，后续回执更新同一个结果页面。如有 nextArguments，自动接续本组目标和预算。等待或超时仍用同一 nextArguments，保持 contextId、预算和舞蹈草案完全一致。工具会选择该轮参数。终态汇报逐轮改动和结果。',
   };
 }
 
@@ -200,25 +200,8 @@ function compareTrials(left, right) {
   return left.unstable - right.unstable || right.passed - left.passed || left.gap - right.gap;
 }
 
-function nextGoalTrial(history, remaining, batchSize) {
-  const available = Math.floor(remaining / batchSize) * batchSize;
-  if (available < 8192) return { state: 'budget-exhausted', reason: '剩余预算不足一次训练。' };
-  const last = history.at(-1).run;
-  const incumbent = [...history].sort(compareTrials)[0];
-  if (last.training.originmanDance.trainingSteps < formalSteps)
-    return {
-      ...chooseChange(last, available, batchSize),
-      parentRunId: last.id,
-      bestRunId: incumbent.run.id,
-    };
+function rewardTrial(incumbent, history, trainingSteps) {
   const original = incumbent.run.training.originmanDance;
-  const trainingSteps = Math.max(formalSteps, original.trainingSteps);
-  if (available < Math.ceil(trainingSteps / batchSize) * batchSize)
-    return {
-      state: 'budget-exhausted',
-      reason: '剩余预算不足一轮同等训练量的参数对照。',
-      bestRunId: incumbent.run.id,
-    };
   const strengths = [...incumbent.deficits.entries()].sort((a, b) => b[1] - a[1]);
   const keys = strengths.map(([key]) => key);
   if (incumbent.unstable) keys.unshift('tiltPenalty');
@@ -251,11 +234,42 @@ function nextGoalTrial(history, remaining, batchSize) {
       };
     }
   }
-  return {
-    state: 'blocked',
-    reason: '现有证据支持的单参数候选均已试过或到达范围边界。',
-    bestRunId: incumbent.run.id,
-  };
+  return null;
+}
+
+function nextGoalTrial(history, remaining, batchSize) {
+  const available = Math.floor(remaining / batchSize) * batchSize;
+  if (available < 8192) return { state: 'budget-exhausted', reason: '剩余预算不足一次训练。' };
+  const incumbent = [...history].sort(compareTrials)[0];
+  const last = history.at(-1).run;
+  const lastBudget = last.training.originmanDance.trainingSteps;
+  if (lastBudget < formalSteps) {
+    const formalReservation = Math.ceil(formalSteps / batchSize) * batchSize;
+    if (history.length === 1 && lastBudget === 8192 && available >= formalReservation + 8192) {
+      const calibration = rewardTrial(incumbent, history, lastBudget);
+      if (calibration) return calibration;
+    }
+    return {
+      ...chooseChange(incumbent.run, available, batchSize),
+      parentRunId: incumbent.run.id,
+      bestRunId: incumbent.run.id,
+    };
+  }
+  const original = incumbent.run.training.originmanDance;
+  const trainingSteps = Math.max(formalSteps, original.trainingSteps);
+  if (available < Math.ceil(trainingSteps / batchSize) * batchSize)
+    return {
+      state: 'budget-exhausted',
+      reason: '剩余预算不足一轮同等训练量的参数对照。',
+      bestRunId: incumbent.run.id,
+    };
+  return (
+    rewardTrial(incumbent, history, trainingSteps) ?? {
+      state: 'blocked',
+      reason: '现有证据支持的单参数候选均已试过或到达范围边界。',
+      bestRunId: incumbent.run.id,
+    }
+  );
 }
 
 function firstGoalTrial(args, batchSize) {

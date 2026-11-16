@@ -111,4 +111,4 @@ MCP 无训练取消/续训专用工具。用户取消时停止继续提交和轮
 
 普通课堂结果优先使用工具 `studentReply`，详细数据在实验页查看；用户要求技术明细时再展开，不默认输出参数、摘要和英文套件表。
 
-用户明确要求给定目标后自动训练时，先把目标整理为 OriginMan 舞蹈编舞，复用引导确认 RTX 4090 Worker 和本组总步数。用同一 `contextId` 调用 `rdk_originman_dance_iterate`，传 `goal: "dance-quality-gate"`、`dance`、`computeResourceId` 和 `totalSteps`，从零提交首轮。无需学员提供已有 Run。已有 Run 续训仍支持 `goal: "original-quality-gate"`、`runId` 和 `additionalSteps`。两种模式均使用 64 并行，按真实采样批次计入预算；用每次回执的 `nextArguments` 自动接续，不逐轮要求确认。独立评测核对原策略与各节拍门槛，后续实验以既有成绩最好的配置为基线尝试单个奖励改动；达标、预算不足或证据阻塞时停止。按 `studioNavigation` 在右侧显示每轮参数、独立评测、回放和策略下载。Studio 对话停止后，用同一实验标识和预算恢复，避免重交。此模式只执行仿真。
+用户明确要求给定目标后自动训练时，先把目标整理为 OriginMan 舞蹈编舞，复用引导确认 RTX 4090 Worker 和本组总步数。用同一 `contextId` 调用 `rdk_originman_dance_iterate`，传 `goal: "dance-quality-gate"`、`dance`、`computeResourceId` 和 `totalSteps`，从零提交首轮。无需学员提供已有 Run。已有 Run 续训仍支持 `goal: "original-quality-gate"`、`runId` 和 `additionalSteps`。两种模式均使用 64 并行，按真实采样批次计入预算；用每次回执的 `nextArguments` 自动接续，不逐轮要求确认。独立评测核对原策略与各节拍门槛，首轮快检未达标且预算足够时，先在同等步数下做单个奖励参数对照。后续以既有成绩最好的配置为基线，再分配步数或试新的奖励参数；达标、预算不足或证据阻塞时停止。按 `studioNavigation` 在右侧显示每轮参数、独立评测、回放和策略下载。Studio 对话停止后，用同一实验标识和预算恢复，避免重交。此模式只执行仿真。

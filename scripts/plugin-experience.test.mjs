@@ -1292,7 +1292,7 @@ test('an OriginMan goal starts with no Run, abandons a worse parameter trial and
     contextId: 'fresh-dance-goal',
     goal: 'dance-quality-gate',
     computeResourceId: 'isolated-4090',
-    totalSteps: 8192 + 3 * 503808,
+    totalSteps: 2 * 8192 + 3 * 503808,
     dance: {
       schemaVersion: 1,
       title: '交替摆臂',
@@ -1316,9 +1316,10 @@ test('an OriginMan goal starts with no Run, abandons a worse parameter trial and
     accept: async (id) => {
       const i = Number(id.split('-').pop()) - 1;
       const plan = recipes[i];
-      const passed = i === 3;
+      const passed = i === 4;
       const measurements = [
         [0.01485, 0, 0.14],
+        [0.01, 0, 0.12],
         [0.07, 0.6, 0.16],
         [0.04, 0.4, 0.05],
         [0.12, 0.72, 0.23],
@@ -1373,13 +1374,16 @@ test('an OriginMan goal starts with no Run, abandons a worse parameter trial and
   await assert.rejects(() => create()({ ...args, totalSteps: args.totalSteps + 4096 }), /已绑定/);
   while (iteration.nextArguments) iteration = await create()(iteration.nextArguments);
   assert.equal(iteration.iteration.state, 'passed');
-  assert.equal(iteration.iteration.bestRunId, 'trial-4');
+  assert.equal(iteration.iteration.bestRunId, 'trial-5');
   assert.equal(iteration.iteration.spentSteps, args.totalSteps);
-  assert.equal(recipes.length, 4);
-  assert.equal(recipes[1].dance.trainingSteps, 500000);
-  assert.deepEqual(recipes[2].dance.rewardTuning, { armSwingWeight: 4.5 });
-  assert.equal(recipes[3].previousRunId, 'trial-2');
-  assert.deepEqual(recipes[3].dance.rewardTuning, { armSpeedWeight: 1.7 });
+  assert.equal(recipes.length, 5);
+  assert.equal(recipes[1].dance.trainingSteps, 8192);
+  assert.deepEqual(recipes[1].dance.rewardTuning, { armSwingWeight: 4.5 });
+  assert.equal(recipes[2].dance.trainingSteps, 500000);
+  assert.equal(recipes[2].previousRunId, 'trial-1');
+  assert.deepEqual(recipes[3].dance.rewardTuning, { armSwingWeight: 4.5 });
+  assert.equal(recipes[4].previousRunId, 'trial-3');
+  assert.deepEqual(recipes[4].dance.rewardTuning, { armSpeedWeight: 1.7 });
   assert.equal((await create()(args)).iteration.state, 'passed');
-  assert.equal(recipes.length, 4);
+  assert.equal(recipes.length, 5);
 });

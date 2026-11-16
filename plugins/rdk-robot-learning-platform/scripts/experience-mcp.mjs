@@ -745,7 +745,7 @@ export function experienceProxy(
     verified: false,
   };
   const pollCursors = new Map();
-  const waitForRun = async (args, signal, tool = 'rdk_training_wait') => {
+  const waitForRun = async (args, signal, tool = 'rdk_training_wait', budget = waitBudgetMs) => {
     if (
       typeof args.runId !== 'string' ||
       !/^[A-Za-z0-9][A-Za-z0-9_.-]{0,119}$/.test(args.runId) ||
@@ -759,7 +759,7 @@ export function experienceProxy(
         Error('续查游标不属于当前 Run 或已更新；重连后可省略游标重新查询同一 Run。'),
         { platformCode: 'WAIT_CURSOR_MISMATCH' },
       );
-    const deadline = Date.now() + Math.max(1, Math.min(20000, waitBudgetMs));
+    const deadline = Date.now() + Math.max(1, Math.min(20000, budget));
     for (;;) {
       signal?.throwIfAborted();
       const value = await readRun(args.runId, signal);
@@ -793,8 +793,11 @@ export function experienceProxy(
       });
     }
   };
-  const completeDanceAcceptance = async (args, signal) => {
-    const value = observe(await waitForRun(args, signal, DANCE_ACCEPTANCE_TOOL.name), args.runId);
+  const completeDanceAcceptance = async (args, signal, budget) => {
+    const value = observe(
+      await waitForRun(args, signal, DANCE_ACCEPTANCE_TOOL.name, budget),
+      args.runId,
+    );
     const task = value.run?.taskId ?? value.taskId;
     if (task && task !== 'originman-dance') throw Error('请选择一条 OriginMan 舞蹈 Run。');
     const detail = runVisualizationLink(baseUrl, args.runId);
@@ -945,7 +948,8 @@ export function experienceProxy(
       const status = await authentication?.status();
       return status?.authenticated === true ? status.accountId : null;
     },
-    accept: (runId, signal) => completeDanceAcceptance({ runId }, signal),
+    accept: (runId, signal) =>
+      completeDanceAcceptance({ runId }, signal, Math.min(waitBudgetMs, 4000)),
     recover: (contextId) => recoverDanceSubmission(contextId, contextDirectory),
     submit: (args, signal) => submitDance(args, signal, matchesDanceIterationGpu),
   });
