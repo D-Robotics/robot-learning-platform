@@ -58,7 +58,12 @@ import {
   workshopPreview,
 } from './workshop-entry.mjs';
 import { DEVELOPMENT_TARGET_TOOL, developmentTargets } from './development-targets.mjs';
-import { DANCE_EVALUATION_TOOLS, danceEvaluation } from './dance-evaluation.mjs';
+import {
+  DANCE_ACCEPTANCE_TOOL,
+  DANCE_EVALUATION_TOOLS,
+  acceptDanceSimulation,
+  danceEvaluation,
+} from './dance-evaluation.mjs';
 import { DANCE_TRAINING_TOOLS, trainOriginmanDance } from './dance-training.mjs';
 import {
   WORKSPACE_EVIDENCE_INSTRUCTIONS,
@@ -517,6 +522,7 @@ export const EXPERIENCE_TOOLS = [
   ORIGINMAN_DANCE_DRAFT_TOOL,
   ...DANCE_TRAINING_TOOLS,
   ...DANCE_EVALUATION_TOOLS,
+  DANCE_ACCEPTANCE_TOOL,
   ...WORKSHOP_TOOLS,
   DEVELOPMENT_TARGET_TOOL,
   ...CLASSROOM_TOOLS,
@@ -728,6 +734,103 @@ export function experienceProxy(
     verified: false,
   };
   const pollCursors = new Map();
+  const waitForRun = async (args, signal, tool = 'rdk_training_wait') => {
+    if (
+      typeof args.runId !== 'string' ||
+      !/^[A-Za-z0-9][A-Za-z0-9_.-]{0,119}$/.test(args.runId) ||
+      Object.keys(args).some((key) => !['runId', 'pollCursor'].includes(key)) ||
+      (args.pollCursor !== undefined && !/^[a-f0-9-]{36}$/.test(args.pollCursor))
+    )
+      throw Error('请使用原 Run 及上一条回执提供的续查参数。');
+    const key = tool + ':' + args.runId;
+    if (args.pollCursor && pollCursors.get(key) !== args.pollCursor)
+      throw Object.assign(
+        Error('续查游标不属于当前 Run 或已更新；重连后可省略游标重新查询同一 Run。'),
+        { platformCode: 'WAIT_CURSOR_MISMATCH' },
+      );
+    const deadline = Date.now() + Math.max(1, Math.min(20000, waitBudgetMs));
+    for (;;) {
+      signal?.throwIfAborted();
+      const value = await readRun(args.runId, signal);
+      if (!['queued', 'running', 'pending'].includes(value.run?.status ?? value.status)) {
+        pollCursors.delete(key);
+        return value;
+      }
+      if (Date.now() >= deadline) {
+        const cursor = randomUUID();
+        pollCursors.set(key, cursor);
+        if (pollCursors.size > 32) pollCursors.delete(pollCursors.keys().next().value);
+        return {
+          ...value,
+          waiting: true,
+          observedAt: new Date().toISOString(),
+          nextPollArguments: { runId: args.runId, pollCursor: cursor },
+          nextAction: '同一 Run 仍在运行。使用 nextPollArguments 接续查询。',
+        };
+      }
+      await new Promise((resolve, reject) => {
+        const done = () => {
+          signal?.removeEventListener('abort', aborted);
+          resolve();
+        };
+        const aborted = () => {
+          clearTimeout(timer);
+          reject(signal.reason ?? Error('Aborted'));
+        };
+        const timer = setTimeout(done, Math.min(4000, deadline - Date.now()));
+        signal?.addEventListener('abort', aborted, { once: true });
+      });
+    }
+  };
+  const completeDanceAcceptance = async (args, signal) => {
+    const value = observe(await waitForRun(args, signal, DANCE_ACCEPTANCE_TOOL.name), args.runId);
+    const task = value.run?.taskId ?? value.taskId;
+    if (task && task !== 'originman-dance') throw Error('请选择一条 OriginMan 舞蹈 Run。');
+    const detail = runVisualizationLink(baseUrl, args.runId);
+    const status = value.run?.status ?? value.status;
+    if (status !== 'completed') {
+      const result = attachRunVisualization(value, args.runId, baseUrl);
+      return {
+        ...result,
+        simulationAcceptance: { state: value.waiting ? 'waiting' : 'not-evaluated' },
+        ...(value.waiting && {
+          nextTool: DANCE_ACCEPTANCE_TOOL.name,
+          nextArguments: value.nextPollArguments,
+          delivery:
+            '按 studioNavigation 显示本轮进度，继续调用 nextTool 和 nextArguments，完成后自动评测。',
+        }),
+      };
+    }
+    try {
+      const run = await upstream.readTrainingRun?.(args.runId, { signal });
+      if (run?.id !== args.runId) throw Error('当前连接未确认这条原 Run。');
+      const simulationAcceptance = await acceptDanceSimulation(run, {
+        upstream,
+        signal: AbortSignal.any([AbortSignal.timeout(15000), ...(signal ? [signal] : [])]),
+      });
+      const result = attachRunVisualization(
+        await runResults({ run }, args.runId, signal),
+        args.runId,
+        baseUrl,
+      );
+      return {
+        ...result,
+        simulationAcceptance,
+        delivery:
+          '立即按 studioNavigation 打开 Studio 右侧的本轮结果。页面有判定、分段检查、回放和策略下载。报告实际可用的入口。',
+      };
+    } catch (error) {
+      signal?.throwIfAborted();
+      return {
+        runId: args.runId,
+        status,
+        simulationAcceptance: { state: 'unverified', reason: error.message },
+        ...(detail && { links: { runDetail: detail } }),
+        studentReply: '本轮训练已完成，独立仿真验收待核对。' + error.message,
+        delivery: '展示待核对原因。恢复时对同一个 Run 再验收。',
+      };
+    }
+  };
   const stoppedResult = () => {
     const value = {
       ok: false,
@@ -886,7 +989,7 @@ export function experienceProxy(
           '\n这是通用机器人学习插件。先按用户的机型与目标使用 rdk_learning_guide；打开工作台传 task:overview，强化学习或模仿学习有通用入口，只有明确选择课程时才使用 OriginMan 专用工具。开始新实验传 intent:new；查看结果传 intent:results 和原 Run；改参传 intent:retry、原 Run 与 changes，等确认再使用 nextArguments。Studio 优先用 studio_open_url 打开已验证的工作台链接，仍保留可点击地址。已打开不表示已播放。' +
           '\n版本检查分别报告插件实际加载版本、宿主登记与平台连接；工具不可用、读失败和已确认空列表分别报告。舞蹈仿真通过不具备部署资格。部署预检被拒绝或设备工具缺失时保留阻断，不使用终端、SSH 或设备执行工具替代受控部署。' +
           '\n' +
-          '\n用户明确要求独立舞蹈评测时调用 rdk_originman_dance_evaluate；比较两条舞蹈训练记录用 rdk_originman_dance_compare。返回后立即按 studioNavigation 打开主站结果页。' +
+          '\n提交 OriginMan 舞蹈或收到一键仿真验收请求后，沿原 runId 调用 rdk_originman_dance_acceptance。每次待运行回执继续传 nextArguments，终态自动同源评测；验收出判定后按 studioNavigation 打开 Studio 右侧。比较两条记录用 rdk_originman_dance_compare。' +
           WORKSPACE_EVIDENCE_INSTRUCTIONS +
           '\n用户要上传、下载或管理托管数据集时，调用 rdk_learning_guide({intent:"start",task:"datasets"})，展示证据与记录入口。上传走「上传数据集」，下载走数据集详情中的「下载托管文件」。rdk_dataset_register 只登记元数据。' +
           '\n' +
@@ -1044,7 +1147,9 @@ export function experienceProxy(
       try {
         let payload;
         const operationId = 'om-' + randomUUID().replaceAll('-', '').slice(0, 20);
-        if (DANCE_EVALUATION_TOOLS.some((tool) => tool.name === params.name)) {
+        if (params.name === DANCE_ACCEPTANCE_TOOL.name) {
+          payload = await completeDanceAcceptance(params.arguments ?? {}, signal);
+        } else if (DANCE_EVALUATION_TOOLS.some((tool) => tool.name === params.name)) {
           payload = await danceEvaluation(params.name, params.arguments ?? {}, {
             upstream,
             baseUrl,
@@ -1334,65 +1439,7 @@ export function experienceProxy(
             payload.delivery = '只展示 studentReply。授权后用 rdk_auth_status 确认账号。';
           }
         } else if (params.name === 'rdk_training_wait') {
-          const args = params.arguments ?? {};
-          if (
-            typeof args.runId !== 'string' ||
-            !args.runId.trim() ||
-            Object.keys(args).some((k) => !['runId', 'pollCursor'].includes(k)) ||
-            (args.pollCursor !== undefined && !/^[a-f0-9-]{36}$/.test(args.pollCursor))
-          )
-            throw new Error('请使用原Run及上一条回执提供的续查参数。');
-          if (args.pollCursor && pollCursors.get(args.runId) !== args.pollCursor)
-            throw Object.assign(
-              new Error(
-                '续查游标不属于当前Run或已更新，请使用最新nextPollArguments；重连后可省略游标重新查询同一Run。',
-              ),
-              { platformCode: 'WAIT_CURSOR_MISMATCH' },
-            );
-          const deadline = Date.now() + Math.max(1, Math.min(20000, waitBudgetMs));
-          do {
-            signal?.throwIfAborted();
-            payload = readToolResult(
-              await upstream.request(
-                'tools/call',
-                {
-                  name: 'rdk_training_status',
-                  arguments: { runId: args.runId },
-                },
-                { signal },
-              ),
-            );
-            const state = payload?.run?.status ?? payload?.status;
-            if (!['queued', 'running', 'pending'].includes(state) || Date.now() >= deadline) break;
-            await new Promise((resolve, reject) => {
-              const done = () => {
-                clearTimeout(timer);
-                signal?.removeEventListener('abort', aborted);
-                resolve();
-              };
-              const aborted = () => {
-                clearTimeout(timer);
-                signal?.removeEventListener('abort', aborted);
-                reject(signal.reason ?? new Error('Aborted'));
-              };
-              const timer = setTimeout(done, Math.min(4000, deadline - Date.now()));
-              signal?.addEventListener('abort', aborted, { once: true });
-            });
-          } while (true);
-          const state = payload?.run?.status ?? payload?.status;
-          if (['queued', 'running'].includes(state)) {
-            const cursor = randomUUID();
-            pollCursors.set(args.runId, cursor);
-            if (pollCursors.size > 32) pollCursors.delete(pollCursors.keys().next().value);
-            payload = {
-              ...payload,
-              waiting: true,
-              observedAt: new Date().toISOString(),
-              nextPollArguments: { runId: args.runId, pollCursor: cursor },
-              nextAction:
-                '本次等待窗口正常结束，同一Run仍在运行；下次使用nextPollArguments接续查询，不重新提交或改查其他实验。',
-            };
-          }
+          payload = await waitForRun(params.arguments ?? {}, signal);
         } else if (params.name === 'rdk_experience_guide')
           payload = {
             trainingChoice: trainingChoice(),
@@ -1628,6 +1675,11 @@ export function experienceProxy(
               runId,
               authentication?.audience ?? env.RDK_SIM2REAL_MCP_BASE_URL,
             );
+            payload.nextTool = DANCE_ACCEPTANCE_TOOL.name;
+            payload.nextArguments = { runId };
+            payload.nextAction = '使用 nextTool 和 nextArguments 等待本轮结束并自动验收。';
+            payload.delivery =
+              '按 studioNavigation 打开本轮进度；继续执行 nextTool，直到结果页显示独立仿真验收。';
             const previous = runVisualizationLink(baseUrl, params.arguments.previousRunId);
             if (previous && params.arguments.previousRunId !== runId) {
               payload.links = { ...payload.links, previousRun: previous };

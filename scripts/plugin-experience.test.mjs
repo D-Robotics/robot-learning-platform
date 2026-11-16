@@ -12,6 +12,88 @@ import {
   readToolResult,
 } from '../plugins/rdk-robot-learning-platform/scripts/experience.mjs';
 
+test('OriginMan one-step acceptance follows the same Run, verifies one evaluation, and opens its result', async () => {
+  const { experienceProxy } =
+    await import('../plugins/rdk-robot-learning-platform/scripts/experience-mcp.mjs');
+  const sha = 'a'.repeat(64);
+  const scene = 'b'.repeat(64);
+  const run = {
+    id: 'dance-test',
+    status: 'running',
+    taskId: 'originman-dance',
+    mock: false,
+    contractId: 'custom-policy-originman-dance-v2',
+    artifact: { format: 'onnx', sha256: sha, deployable: false },
+    training: {
+      engine: 'originman-dance-ppo',
+      originmanDance: { bpm: 100, sections: [{ type: 'alternating-arms' }] },
+    },
+    metrics: {
+      originmanDance: {
+        qualityGatePassed: false,
+        sceneProvenance: { sceneSha256: scene },
+      },
+    },
+  };
+  let evaluationCount = 0;
+  let resultScene = scene;
+  const checks = [{ type: 'alternating-arms', clean: true, passed: false }];
+  const proxy = experienceProxy(
+    {
+      async request(method, { name, arguments: args }) {
+        assert.equal(method, 'tools/call');
+        assert.equal(name, 'rdk_training_status');
+        assert.equal(args.runId, run.id);
+        return { structuredContent: { runId: run.id, status: run.status, taskId: run.taskId } };
+      },
+      readTrainingRun: async (id) => {
+        assert.equal(id, run.id);
+        return run;
+      },
+      verifyPolicyDownload: async () => true,
+      evaluateDanceRun: async (id) => {
+        assert.equal(id, run.id);
+        evaluationCount++;
+        return {
+          source: {
+            runId: run.id,
+            policySha256: sha,
+            sceneSha256: resultScene,
+            contractId: run.contractId,
+          },
+          qualityGatePassed: false,
+          evaluations: [{ bpm: 100, sections: checks }],
+        };
+      },
+    },
+    { env: { RDK_SIM2REAL_MCP_BASE_URL: 'https://platform.test/learning' }, waitBudgetMs: 1 },
+  );
+  const call = async (name, args = { runId: run.id }) =>
+    (await proxy('tools/call', { name, arguments: args })).structuredContent;
+  const accept = 'rdk_originman_dance_acceptance';
+  const waiting = await call(accept);
+  assert.equal(waiting.nextTool, accept);
+  assert.equal(waiting.simulationAcceptance.state, 'waiting');
+  assert.equal(evaluationCount, 0);
+  run.status = 'completed';
+  await call('rdk_training_wait');
+  assert.equal(evaluationCount, 0);
+  const final = await call(accept, waiting.nextArguments);
+  assert.equal(final.simulationAcceptance.state, 'failed');
+  assert.deepEqual(final.simulationAcceptance.sections, checks);
+  assert.match(final.studentReply, /未达标/);
+  assert.equal(new URL(final.studioNavigation.arguments.url).searchParams.get('runId'), run.id);
+  assert.match(final.links.policyDownload, /dance-test\/artifact$/);
+  assert.equal(evaluationCount, 1);
+  resultScene = 'c'.repeat(64);
+  const stale = await call(accept);
+  assert.equal(stale.simulationAcceptance.state, 'unverified');
+  assert.equal(stale.studioNavigation, undefined);
+  run.status = 'failed';
+  assert.equal((await call(accept)).simulationAcceptance.state, 'not-evaluated');
+  assert.equal(evaluationCount, 2);
+});
+
 test('MCP business failures retain flat, nested and textual diagnostics', () => {
   for (const [result, message, code, status] of [
     [
@@ -900,6 +982,8 @@ test('guide reads the exact Run and keeps confirmed retry idempotent', async (t)
   const submitted = await call(first.nextTool, first.nextArguments);
   assert.equal(new URL(submitted.links.runDetail).searchParams.get('runId'), 'run-new');
   assert.equal(new URL(submitted.links.previousRun).searchParams.get('runId'), previous.id);
+  assert.equal(submitted.nextTool, 'rdk_originman_dance_acceptance');
+  assert.deepEqual(submitted.nextArguments, { runId: 'run-new' });
   const duplicate = await call(first.nextTool, first.nextArguments);
   assert.equal(duplicate.alreadySubmitted, true);
   assert.equal(writes, 1);

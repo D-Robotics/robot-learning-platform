@@ -11,6 +11,8 @@ description: 用户说“带我开始 Workshop”“继续”“看看效果”�
 
 舞蹈独立评测、回放和策略下载从本轮 Run 详情进入。独立评测的来源由舞蹈结果页核对，`rdk_experiment_remember` 的评测关联仅用于具备该实验协议回执的任务。
 
+舞蹈训练提交后沿回执的 `nextTool` 和 `nextArguments` 自动完成仿真验收。用户对已知舞蹈 Run 要求一键验收时，直接调用 `rdk_originman_dance_acceptance`，达标、未达标或待核对分别按回执说明。有 `studioNavigation` 时直接在 Studio 右侧打开本轮。
+
 
 明确选择恢复课程后，使用 `rdk_workshop({intent:"start"})`，继续、结果和新实验分别用 `continue`、`results`、`new`。已完成实验的回执包含核验过的质量结论。已知实验标识传 `contextId`，评测明细用回执里的评测 Run 标识。算力和预算在恢复课程页面选择。
 

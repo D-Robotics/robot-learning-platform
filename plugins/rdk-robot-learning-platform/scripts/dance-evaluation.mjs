@@ -8,6 +8,24 @@ const object = (properties, required) => ({
   additionalProperties: false,
 });
 
+export const DANCE_ACCEPTANCE_TOOL = {
+  name: 'rdk_originman_dance_acceptance',
+  description:
+    '一键验收明确的 OriginMan 舞蹈 Run。沿同一 Run 等待训练完成，自动用本轮 ONNX 做独立仿真评测并核对场景与契约。按 studioNavigation 在右侧显示判定、未通过项、回放和策略下载。只涉及仿真评测。',
+  inputSchema: object(
+    {
+      runId,
+      pollCursor: {
+        type: 'string',
+        pattern: '^[a-f0-9-]{36}$',
+        description: '训练仍在运行时，使用回执 nextArguments 的游标。',
+      },
+    },
+    ['runId'],
+  ),
+  annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true },
+};
+
 export const DANCE_EVALUATION_TOOLS = [
   {
     name: 'rdk_originman_dance_evaluate',
@@ -42,6 +60,49 @@ function nominal(run, report) {
   )
     throw Error('标称节拍评测与原舞段不一致。');
   return { bpm: dance.bpm, qualityGatePassed: report.qualityGatePassed, sections: value.sections };
+}
+
+async function independentDanceReport(run, upstream, signal) {
+  const result = await upstream.evaluateDanceRun(run.id, { signal });
+  if (!result) throw Error('平台未返回独立评测结果。');
+  if (result.source?.runId !== run.id || result.source?.policySha256 !== run.artifact.sha256)
+    throw Error('独立评测回执与原策略不一致。');
+  return result;
+}
+
+export async function acceptDanceSimulation(run, { upstream, signal }) {
+  if (
+    run.status !== 'completed' ||
+    run.mock !== false ||
+    run.taskId !== 'originman-dance' ||
+    run.artifact?.format !== 'onnx' ||
+    !shaPattern.test(run.artifact.sha256 ?? '')
+  )
+    throw Error('一键仿真验收需要一条已完成且有可核验 ONNX 的真实 OriginMan 舞蹈 Run。');
+  const recorded = run.metrics?.originmanDance;
+  const scene = recorded?.sceneProvenance?.sceneSha256;
+  if (
+    !upstream.evaluateDanceRun ||
+    typeof recorded?.qualityGatePassed !== 'boolean' ||
+    !shaPattern.test(scene ?? '') ||
+    !run.contractId
+  )
+    throw Error('本轮场景、契约或质量记录尚不完整。');
+  const result = await independentDanceReport(run, upstream, signal);
+  if (
+    result.source.sceneSha256 !== scene ||
+    result.source.contractId !== run.contractId ||
+    result.qualityGatePassed !== recorded.qualityGatePassed
+  )
+    throw Error('独立仿真与原 Run 的场景、契约或质量结论不一致。');
+  return {
+    ...nominal(run, result),
+    state: result.qualityGatePassed ? 'passed' : 'failed',
+    policySha256: result.source.policySha256,
+    sceneSha256: scene,
+    contractId: run.contractId,
+    evaluatedAt: result.evaluatedAt,
+  };
 }
 
 export async function danceEvaluation(name, args, { upstream, baseUrl, signal }) {
@@ -88,14 +149,9 @@ export async function danceEvaluation(name, args, { upstream, baseUrl, signal })
       return run;
     }),
   );
-  const independent = comparison ? null : await upstream.evaluateDanceRun(ids[0], { signal });
-  if (
-    independent &&
-    (independent.source?.runId !== ids[0] ||
-      independent.source?.policySha256 !== records[0].artifact.sha256)
-  )
-    throw Error('独立评测回执与原策略不一致。');
-  if (!comparison && !independent) throw Error('平台未返回独立评测结果。');
+  const independent = comparison
+    ? null
+    : await independentDanceReport(records[0], upstream, signal);
   const reports = records.map((run) => ({
     runId: run.id,
     numEnvs: run.training.numEnvs,

@@ -10,6 +10,8 @@ description: 在 RDK 学习平台选择任务、训练引擎与执行资源，�
 
 舞蹈新手先调用 `rdk_learning_guide`，每轮只收集一个缺项。算力未选时展示当前账号的可选算力和执行资源入口，按 `resumeArguments` 保留已有编舞和预算。明确确认编舞、算力和预算后，将引导返回的 `nextArguments` 原样传给 `rdk_originman_dance_train`。改参重训用 `intent:"retry"` 和原 Run。只改一段时传 `sectionEdits`，段号从 1 开始。学员可明确选择模型或算力，确认前先展示变化。`modelId` 可省略，工具按专用契约查找或登记。
 
+提交舞蹈后立即接续回执提供的 `rdk_originman_dance_acceptance`。学员也可以对一条已有的舞蹈 Run 说「一键仿真验收」。工具按同一 Run 等待，每次仍在训练时用 `nextArguments` 继续。训练完成后自动用原 ONNX 做独立评测，核对策略、场景和契约。取得判定后按 `studioNavigation` 打开右侧，在同一页看达标判定、逐项检查、回放和策略下载。只查状态仍可用 `rdk_training_wait`。
+
 当当前任务已经是舞蹈时，即使用户只说“带我开始/重新开始 Workshop”，也保持舞蹈意图：新一轮先取得新 `contextId`，沿用当前对话确认过的编舞；有已知活动 Run 时“继续/看看效果”只读查询原 Run，不展示旧结果冒充新一轮，也不重复提交。提交回执、`rdk_training_wait` 和 `rdk_training_status` 都应附带并打开该 Run 的只读详情页；页面按 Run ID 请求平台记录，账号无权查看时明确显示原因，不回退到全局最新记录。
 
 跨聊天没有原标识时，先用 `rdk_learning_guide` 的 `intent:"results"` 提供近期记录，按名称、时间和状态让学员选一次。已知舞蹈 Run 时传 `intent:"results"` 和原 `runId`，沿同一条 Run 读取舞蹈独立评测、播放回放，并在详情页使用「下载策略文件（ONNX）」。`rdk_experiment_remember` 的评测关联不用于舞蹈独立评测。风格门未通过时，先说明有证据支持的段号和检查项，再给出本轮分段结果入口。
