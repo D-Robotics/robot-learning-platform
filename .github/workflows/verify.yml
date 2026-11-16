@@ -83,9 +83,8 @@ jobs:
       - name: Install Python training stacks (CPU)
         # Engine gates used to SKIP on CI (numpy only); a real training round
         # per engine is worth the wheel download. CPU wheels keep it small.
-        # Versions are pinned to the combination verified on the dev machine
-        # (torch 2.9's new exporter needs onnxscript; 2.8 + onnx 1.19 uses
-        # the legacy exporter these engines' proofs were validated with).
+        # Torch 2.9 uses the Dynamo ONNX exporter by default. Install the
+        # ONNX Script version from PyTorch 2.9's own CI requirements.
         # dm_control pulls torchvision, which pulls a newer torch unless
         # torchvision is pinned to its matching 0.23.x release and the
         # follow-up install re-states the torch constraint.
@@ -98,7 +97,7 @@ jobs:
             torch==2.9.0 torchvision==0.24.0
           python3 -m pip install --disable-pip-version-check --no-cache-dir --only-binary=labmaze \
             "torch==2.9.0" "torchvision==0.24.0" \
-            onnx==1.23.2 onnxruntime==1.30.0 "jax[cpu]==0.11.1" \
+            onnx==1.23.2 onnxruntime==1.30.0 onnxscript==0.4.0 "jax[cpu]==0.11.1" \
             "mujoco==3.13.0" "mujoco-mjx==3.13.0" "optax==0.2.8" \
             "dm_control==1.0.46" rsl-rl-lib==2.2.3 pytest
       - name: Engine gates
