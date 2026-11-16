@@ -523,6 +523,7 @@ async function main(distribution) {
       'rdk_originman_dance_train',
       'rdk_originman_dance_evaluate',
       'rdk_originman_dance_acceptance',
+      'rdk_originman_dance_cpu_rehearse',
       'rdk_originman_dance_iterate',
       'rdk_originman_evaluate',
       'rdk_originman_short_train',

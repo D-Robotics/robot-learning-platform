@@ -533,6 +533,22 @@ const DANCE_REPLAY_READ_TOOL = {
   annotations: { readOnlyHint: true, destructiveHint: false },
 };
 
+const DANCE_CPU_REHEARSAL_TOOL = {
+  name: 'rdk_originman_dance_cpu_rehearse',
+  description:
+    '对指定 OriginMan 舞蹈 v2 Run 和已连接 RDK X5 执行零致动 CPU 验收。原始 ONNX 临时暂存、校验 SHA-256、加载并运行 50 Hz 合成观测循环。报告仿真动作顺序和实际推理耗时。执行后清理临时文件，不写舵机指令。',
+  inputSchema: {
+    type: 'object',
+    properties: {
+      runId: { type: 'string', description: '本次 OriginMan 舞蹈训练 Run 的完整 ID' },
+      deviceId: { type: 'string', description: '用户指定的已登记 X5 设备 ID' },
+    },
+    required: ['runId', 'deviceId'],
+    additionalProperties: false,
+  },
+  annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: true },
+};
+
 export const EXPERIENCE_TOOLS = [
   {
     name: 'rdk_plugin_status',
@@ -556,6 +572,7 @@ export const EXPERIENCE_TOOLS = [
   ...DANCE_TRAINING_TOOLS,
   ...DANCE_EVALUATION_TOOLS,
   DANCE_ACCEPTANCE_TOOL,
+  DANCE_CPU_REHEARSAL_TOOL,
   DANCE_REPLAY_READ_TOOL,
   ...WORKSHOP_TOOLS,
   DEVELOPMENT_TARGET_TOOL,
@@ -1402,6 +1419,30 @@ export function experienceProxy(
         const operationId = 'om-' + randomUUID().replaceAll('-', '').slice(0, 20);
         if (params.name === DANCE_ACCEPTANCE_TOOL.name) {
           payload = await completeDanceAcceptance(params.arguments ?? {}, signal);
+        } else if (params.name === DANCE_CPU_REHEARSAL_TOOL.name) {
+          if (
+            typeof input.runId !== 'string' ||
+            !/^[\w.-]{1,120}$/.test(input.runId) ||
+            typeof input.deviceId !== 'string' ||
+            !input.deviceId.trim() ||
+            input.deviceId.length > 200 ||
+            Object.keys(input).some((key) => key !== 'deviceId' && key !== 'runId')
+          )
+            throw Error('请选择 OriginMan 舞蹈的完整 Run ID 和已连接的 X5 设备 ID。');
+          if (!upstream.rehearseOriginmanDanceCpu)
+            throw Error('请先连接机器人学习平台，再执行 X5 CPU 验收。');
+          payload = await upstream.rehearseOriginmanDanceCpu(
+            { runId: input.runId, deviceId: input.deviceId.trim() },
+            { signal },
+          );
+          const cadence =
+            payload.timing?.syntheticCyclePassed === true
+              ? '本次合成观测循环按 50 Hz 完成。'
+              : '本次合成观测循环未守住 50 Hz，请看时序明细。';
+          payload.studentReply =
+            '原始 ONNX 已在 X5 CPU 暂存、校验并加载，完成 78 维输入到 18 路动作输出的零致动推理。' +
+            cadence +
+            '真实 IMU、舵机映射和整机控制周期仍待验证。';
         } else if (params.name === DANCE_REPLAY_READ_TOOL.name) {
           payload = await readDanceReplay(params.arguments ?? {}, signal);
         } else if (params.name === DANCE_ITERATION_TOOL.name) {

@@ -1863,6 +1863,42 @@ paths:
                         bytes: { type: integer, minimum: 0 }
         "401": { $ref: "#/components/responses/AuthRequired" }
         "502": { description: Board agent unreachable. }
+  /api/v1/duck/board-station/originman-dance-cpu-rehearsal:
+    post:
+      tags: [board-station]
+      summary: Rehearse an OriginMan Dance v2 ONNX on the selected X5 CPU
+      description: >-
+        Retrieves and verifies the original ONNX, sends it via the selected
+        device tunnel, and runs a disposable CPU session against synthetic
+        observations at a 50 Hz cadence. Returns action order and software
+        timing. No physical sensors, actuators, or active policy are used.
+      operationId: rehearseOriginManDanceCpu
+      parameters:
+        - in: query
+          name: deviceId
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [runId]
+              properties:
+                runId: { type: string }
+      responses:
+        "200":
+          description: >-
+            Digest, stage/load results, observation and action layouts,
+            synthetic-cycle timing, and motion disallowed. A result may
+            record missed deadlines.
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/AuthRequired" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { description: Run, X5, artifact or board runtime is incompatible. }
+        "502": { description: Artifact source, board agent or receipt unavailable. }
+        "503": { description: No active tunnel for the selected X5. }
   /api/v1/duck/board-station/policy/stage:
     post:
       tags: [board-station]

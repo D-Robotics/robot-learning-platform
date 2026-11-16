@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { type Request, type Response, type Router } from 'express';
 
 import { sendApiError, wrapAsync } from '../sim2real/http-helpers.js';
@@ -1435,6 +1436,173 @@ export function registerSim2RealBoardStationRoutes(
         return;
       }
       response.status(agent.status).json(agent.payload);
+    }),
+  );
+
+  // The rehearsal has its own scratch file and session. It never changes
+  // the selected policy or shares a runtime with the live start endpoint.
+  router.post(
+    api('/board-station/originman-dance-cpu-rehearsal'),
+    wrapAsync(async (request, response) => {
+      noStore(response);
+      const { runId } = request.body ?? {};
+      const deviceId = request.query.deviceId;
+      const reject = (status: number, code: string, message: string, retryable = false) =>
+        sendApiError(response, status, code, message, { retryable });
+      if (
+        typeof runId !== 'string' ||
+        !/^[\w.-]{1,120}$/.test(runId) ||
+        typeof deviceId !== 'string' ||
+        !deviceId.trim()
+      ) {
+        reject(
+          400,
+          'ORIGINMAN_DANCE_REHEARSAL_TARGET_REQUIRED',
+          '请选择明确的训练 Run 和 X5 设备。',
+        );
+        return;
+      }
+      const station = await resolveStation(request, response);
+      if (!station || !requirePermission(request, response, 'edit-or-operate')) return;
+      if (station.device.boardPlatform !== 'rdk-x5') {
+        reject(409, 'ORIGINMAN_DANCE_REHEARSAL_X5_REQUIRED', '请选择已识别为 RDK X5 的设备。');
+        return;
+      }
+      const options = stationOptions(request, { deviceTunnelOnly: true });
+      if (!options.baseUrl) {
+        reject(
+          503,
+          'ORIGINMAN_DANCE_REHEARSAL_TUNNEL_REQUIRED',
+          '请先在设备管理连接所选 X5。',
+          true,
+        );
+        return;
+      }
+      if (!deps.getRun || !deps.fetchRunArtifact) {
+        reject(501, 'ORIGINMAN_DANCE_REHEARSAL_UNAVAILABLE', '当前平台未接入训练制品来源。');
+        return;
+      }
+      const run = await deps.getRun(runId, station.owner);
+      if (!run) {
+        reject(404, 'SIM2REAL_RUN_NOT_FOUND', '训练运行不存在，或不属于当前账号。');
+        return;
+      }
+      const digest = run.artifact?.sha256;
+      const sceneSha256 = run.metrics?.originmanDance?.sceneProvenance?.sceneSha256;
+      const contractId = 'custom-policy-originman-dance-v2';
+      const supportedScene = 'eac60475eb622c2731b36d9957a0c0445f8b00d4d588de7b1b4f25d518a56ad4';
+      if (
+        run.contractId !== contractId ||
+        run.training?.engine !== 'originman-dance-ppo' ||
+        run.status !== 'completed' ||
+        run.mock === true ||
+        run.metrics?.contractValid !== true ||
+        run.metrics.observationSize !== 78 ||
+        run.metrics.actionSize !== 18 ||
+        sceneSha256 !== supportedScene ||
+        run.artifact?.format !== 'onnx' ||
+        !digest ||
+        !/^[a-f0-9]{64}$/.test(digest)
+      ) {
+        reject(
+          409,
+          'ORIGINMAN_DANCE_REHEARSAL_RUN_INCOMPATIBLE',
+          '需要真实完成、契约和仿真场景可核对的 OriginMan 舞蹈 v2 原始 ONNX。',
+        );
+        return;
+      }
+      const artifact = await deps.fetchRunArtifact(run, station.owner);
+      if (!artifact) {
+        reject(
+          502,
+          'ORIGINMAN_DANCE_REHEARSAL_ARTIFACT_UNAVAILABLE',
+          '无法取回该 Run 的原始 ONNX。',
+          true,
+        );
+        return;
+      }
+      const { bytes, sha256 } = artifact;
+      if (
+        bytes.length === 0 ||
+        bytes.length > 512 * 1024 ||
+        sha256 !== digest ||
+        createHash('sha256').update(bytes).digest('hex') !== digest
+      ) {
+        reject(
+          409,
+          'ORIGINMAN_DANCE_REHEARSAL_ARTIFACT_MISMATCH',
+          '原始 ONNX 的大小或 SHA-256 校验失败。',
+        );
+        return;
+      }
+      const agent = await stationAgentFetchWithStatus('/v1/station/originman-dance-cpu-rehearsal', {
+        ...options,
+        method: 'POST',
+        timeoutMs: 12_000,
+        body: JSON.stringify({
+          contractId,
+          sceneSha256,
+          sha256,
+          bytesBase64: bytes.toString('base64'),
+        }),
+      });
+      if (!agent) {
+        reject(
+          502,
+          'ORIGINMAN_DANCE_REHEARSAL_BOARD_UNREACHABLE',
+          '所选 X5 的 BoardAgent 暂不可达。',
+          true,
+        );
+        return;
+      }
+      if (agent.status === 404) {
+        reject(
+          409,
+          'ORIGINMAN_DANCE_REHEARSAL_AGENT_UPGRADE_REQUIRED',
+          '所选 X5 的 BoardAgent 需要升级后才能执行舞蹈 ONNX 零致动验收。',
+        );
+        return;
+      }
+      if (!agent.payload.ok || agent.status !== 200) {
+        const code = String(agent.payload.error ?? '');
+        const reason =
+          {
+            ORIGINMAN_DANCE_REHEARSAL_ONNXRUNTIME_UNAVAILABLE:
+              '所选 X5 的 BoardAgent Python 缺少 ONNX Runtime 或 NumPy。',
+            ORIGINMAN_DANCE_REHEARSAL_BOARD_BUSY: '所选 X5 正在运行板端策略或驱动，请等它空闲。',
+            ORIGINMAN_DANCE_REHEARSAL_BUSY: '所选 X5 正在执行另一轮 CPU 验收，请稍后重试。',
+            ORIGINMAN_DANCE_REHEARSAL_X5_REQUIRED: '所选设备的硬件型号未识别为 RDK X5。',
+            ORIGINMAN_DANCE_REHEARSAL_LOAD_FAILED:
+              '原始 ONNX 加载或推理失败，请核对板端运行时和策略契约。',
+          }[code] ?? '板端未完成 OriginMan CPU 验收。';
+        reject(
+          409,
+          /^ORIGINMAN_DANCE_REHEARSAL_[A-Z_]+$/.test(code)
+            ? code
+            : 'ORIGINMAN_DANCE_REHEARSAL_BOARD_FAILED',
+          reason,
+        );
+        return;
+      }
+      if (
+        agent.payload.sha256 !== sha256 ||
+        agent.payload.sceneSha256 !== sceneSha256 ||
+        agent.payload.contractId !== contractId ||
+        agent.payload.bytes !== bytes.length ||
+        agent.payload.staged !== true ||
+        agent.payload.loaded !== true ||
+        agent.payload.temporaryArtifactRemoved !== true ||
+        agent.payload.motionAuthorized !== false ||
+        agent.payload.authorizesDeployment !== false
+      ) {
+        reject(
+          502,
+          'ORIGINMAN_DANCE_REHEARSAL_RECEIPT_MISMATCH',
+          '板端回执与本次 Run 和制品不一致。',
+        );
+        return;
+      }
+      response.json({ ...agent.payload, runId, deviceId: station.device.id });
     }),
   );
 
