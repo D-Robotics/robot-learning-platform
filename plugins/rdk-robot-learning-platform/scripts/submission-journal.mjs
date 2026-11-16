@@ -2,7 +2,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 
 function privatePath(file, directory = false) {
   const stat = fs.lstatSync(file);
@@ -59,6 +59,56 @@ export function bindTrainingGoal({
     if (fs.readFileSync(file, 'utf8') !== goalDigest)
       throw Error('这个实验标识已绑定另一份目标或预算。请按原参数继续。');
   }
+}
+
+export function openTrainingGoalJournal({
+  account,
+  audience,
+  contextId,
+  directory = defaultDirectory(),
+}) {
+  fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
+  privatePath(directory, true);
+  const key = createHash('sha256')
+    .update(JSON.stringify([account, audience, contextId]))
+    .digest('hex');
+  const draft = path.join(directory, key + '.goal-plan.json');
+  const progress = path.join(directory, key + '.goal-progress.json');
+  const read = (file) => {
+    if (!fs.existsSync(file)) return null;
+    privatePath(file);
+    return JSON.parse(fs.readFileSync(file, 'utf8'));
+  };
+  const write = (file, value, exclusive) => {
+    const temp = file + '.' + randomUUID() + '.tmp';
+    try {
+      fs.writeFileSync(temp, JSON.stringify(value), { flag: 'wx', mode: 0o600 });
+      if (exclusive) {
+        try {
+          fs.linkSync(temp, file);
+        } catch (error) {
+          if (error.code !== 'EEXIST') throw error;
+        }
+      } else fs.renameSync(temp, file);
+    } finally {
+      fs.rmSync(temp, { force: true });
+    }
+  };
+  return {
+    register(args) {
+      write(draft, args, true);
+      return read(draft);
+    },
+    plan: () => read(draft),
+    progress: () => read(progress),
+    save(value) {
+      const previous = read(progress);
+      if (previous && (previous.state !== 'waiting' || previous.spentSteps > value.spentSteps))
+        return previous;
+      write(progress, value, false);
+      return value;
+    },
+  };
 }
 
 export async function recoverSubmission({

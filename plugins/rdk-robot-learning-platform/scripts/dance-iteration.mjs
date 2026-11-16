@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import { isDeepStrictEqual } from 'node:util';
+import { setTimeout as delay } from 'node:timers/promises';
 import {
   DANCE_REWARDS,
   danceCoaching,
@@ -12,7 +13,7 @@ import {
   danceTrainingBatchSize,
 } from './dance-training.mjs';
 import { REWARD_TUNING_LIMITS } from './originman-dance-config.mjs';
-import { bindTrainingGoal } from './submission-journal.mjs';
+import { bindTrainingGoal, openTrainingGoalJournal } from './submission-journal.mjs';
 
 const runIdPattern = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,95}$/;
 const formalSteps = 500_000;
@@ -29,10 +30,11 @@ export const DANCE_ITERATION_TOOL = {
   inputSchema: {
     type: 'object',
     additionalProperties: false,
-    required: ['goal'],
     properties: {
       goal: { type: 'string', enum: ['dance-quality-gate', 'original-quality-gate'] },
       contextId: { type: 'string', pattern: '^[A-Za-z0-9][A-Za-z0-9_-]{0,23}$' },
+      resumeContextId: { type: 'string', pattern: '^[A-Za-z0-9][A-Za-z0-9_-]{0,23}$' },
+      pollAfter: { type: 'integer', minimum: 0 },
       computeResourceId: { type: 'string', minLength: 1, maxLength: 160 },
       modelId: { type: 'string', minLength: 1, maxLength: 160 },
       dance: { ...DANCE_CONFIG_SCHEMA, properties: goalChoreography },
@@ -41,8 +43,9 @@ export const DANCE_ITERATION_TOOL = {
       additionalSteps: { ...stepBudgetSchema, minimum: 0 },
     },
     oneOf: [
-      { required: ['contextId', 'computeResourceId', 'dance', 'totalSteps'] },
-      { required: ['runId', 'additionalSteps'] },
+      { required: ['goal', 'contextId', 'computeResourceId', 'dance', 'totalSteps'] },
+      { required: ['goal', 'runId', 'additionalSteps'] },
+      { required: ['resumeContextId'] },
     ],
   },
   annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true },
@@ -137,7 +140,8 @@ function matchesIterationRun(run, baseline, plan, reservation, profile) {
 }
 
 function renderIteration(result, args, baseUrl) {
-  const body = { ...result, additionalSteps: args.additionalSteps ?? args.totalSteps };
+  const total = args.additionalSteps ?? args.totalSteps;
+  const body = { ...result, additionalSteps: total, remainingSteps: total - result.spentSteps };
   const url = new URL('./dance-iterations.html', baseUrl.replace(/\/+$/, '') + '/');
   url.hash = new URLSearchParams({ iteration: JSON.stringify(body) }).toString();
   return {
@@ -146,11 +150,13 @@ function renderIteration(result, args, baseUrl) {
       nextArguments: args,
     }),
     iteration: body,
-    links: { iteration: url.href },
-    studioNavigation: { tool: 'studio_open_url', arguments: { url: url.href } },
+    ...(result.rounds.length && {
+      links: { iteration: url.href },
+      studioNavigation: { tool: 'studio_open_url', arguments: { url: url.href } },
+    }),
     studentReply: result.reason,
     delivery:
-      '首次按 studioNavigation 在右侧打开逐轮结果，后续回执更新同一个结果页面。如有 nextArguments，自动接续本组目标和预算。等待或超时仍用同一 nextArguments，保持 contextId、预算和舞蹈草案完全一致。工具会选择该轮参数。终态汇报逐轮改动和结果。',
+      '结果未结束时立即原样接续 nextArguments；有短续跑回执时只传 resumeContextId 和 pollAfter。不要重建目标或等待用户输入。等最终获得达标、预算不足或阻塞结果，再按 studioNavigation 在右侧打开最终逐轮页面。',
   };
 }
 
@@ -472,5 +478,104 @@ export function createDanceIteration({
       const pending = await enqueue(index + 1);
       if (pending) return pending;
     }
+  };
+}
+
+/** Host calls only register/read progress. Training and independent evaluation run separately. */
+export function createDanceGoalContinuation({
+  baseUrl,
+  account,
+  contextDirectory,
+  iterate,
+  pollMs = 6000,
+  pauseMs = 2500,
+}) {
+  const flights = new Map();
+  const initialStatus = (reason = '正在准备首轮训练。') => ({
+    state: 'waiting',
+    reason,
+    rounds: [],
+    spentSteps: 0,
+    accelerator: 'RTX 4090',
+    numEnvs: 64,
+  });
+  const drive = async (journal, args, owner) => {
+    let transientErrors = 0;
+    for (;;) {
+      let current;
+      try {
+        if ((await account()) !== owner) throw Error('平台账号已改变，已停在本轮记录。');
+        const step = await iterate(args, AbortSignal.timeout(85000));
+        if (
+          step.iteration.state === 'blocked' &&
+          /上次提交结果尚待确认/.test(step.iteration.reason) &&
+          transientErrors < 4
+        ) {
+          transientErrors++;
+          await delay(pauseMs);
+          continue;
+        }
+        current = step.iteration;
+      } catch (error) {
+        if (['TimeoutError', 'AbortError'].includes(error?.name) && transientErrors < 4) {
+          transientErrors++;
+          await delay(pauseMs);
+          continue;
+        }
+        current = {
+          ...(journal.progress() ?? initialStatus()),
+          state: 'blocked',
+          reason: error.message,
+        };
+      }
+      transientErrors = 0;
+      const saved = journal.save(current);
+      if (saved.state !== 'waiting') return;
+      await delay(pauseMs);
+    }
+  };
+  return async (input, signal) => {
+    const resume = Object.hasOwn(input, 'resumeContextId');
+    if (!resume && input.goal !== 'dance-quality-gate') return iterate(input, signal);
+    if (
+      resume &&
+      (typeof input.resumeContextId !== 'string' ||
+        !/^[A-Za-z0-9][A-Za-z0-9_-]{0,23}$/.test(input.resumeContextId) ||
+        Object.keys(input).some((key) => !['resumeContextId', 'pollAfter'].includes(key)))
+    )
+      throw Error('请用原实验的续跑标识继续。');
+    if (!resume) {
+      checkArgs(input);
+      canonicalDanceConfig(input.dance);
+    }
+    const owner = await account();
+    if (!owner) throw Error('请先核对 Studio 当前学习平台账号。');
+    const contextId = resume ? input.resumeContextId : input.contextId;
+    const journal = openTrainingGoalJournal({
+      account: owner,
+      audience: baseUrl,
+      contextId,
+      directory: contextDirectory,
+    });
+    const args = resume ? journal.plan() : journal.register(input);
+    if (!args) throw Error('当前账号未找到该组训练目标。');
+    if (!resume && !isDeepStrictEqual(args, input))
+      throw Error('本组训练已绑定原目标及预算，请使用续跑标识。');
+    const key = JSON.stringify([owner, contextId]);
+    const previous = journal.progress() ?? initialStatus();
+    if (previous.state === 'waiting') {
+      let running = flights.get(key);
+      if (!running) {
+        running = drive(journal, args, owner).finally(() => flights.delete(key));
+        flights.set(key, running);
+        // The caller may disconnect while the work is still in progress.
+        running.catch(() => {});
+      }
+      await Promise.race([running, delay(pollMs, undefined, { signal })]);
+    }
+    const result = renderIteration(journal.progress() ?? previous, args, baseUrl);
+    if (result.nextArguments)
+      result.nextArguments = { resumeContextId: contextId, pollAfter: Date.now() };
+    return result;
   };
 }

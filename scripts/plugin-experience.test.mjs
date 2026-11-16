@@ -1387,3 +1387,66 @@ test('an OriginMan goal starts with no Run, abandons a worse parameter trial and
   assert.equal((await create()(args)).iteration.state, 'passed');
   assert.equal(recipes.length, 5);
 });
+
+test('Studio returns a short continuation during slow work and keeps the exact goal and budget', async (t) => {
+  const { createDanceGoalContinuation } =
+    await import('../plugins/rdk-robot-learning-platform/scripts/dance-iteration.mjs');
+  const contextDirectory = fs.mkdtempSync(path.join(os.tmpdir(), 'goal-continue-'));
+  t.after(() => fs.rmSync(contextDirectory, { recursive: true, force: true }));
+  const draft = {
+    goal: 'dance-quality-gate',
+    contextId: 'background-dance',
+    computeResourceId: 'the-worker',
+    totalSteps: 1024000,
+    dance: {
+      schemaVersion: 1,
+      title: '摆臂',
+      bpm: 100,
+      sections: [{ type: 'alternating-arms', beats: 8, intensity: 0.5 }],
+    },
+  };
+  let calls = 0;
+  let finish;
+  const hold = new Promise((resolve) => {
+    finish = resolve;
+  });
+  const body = {
+    state: 'passed',
+    spentSteps: 520192,
+    reason: '已达标',
+    rounds: [{ runId: 'real-run', state: 'passed' }],
+  };
+  const create = () =>
+    createDanceGoalContinuation({
+      baseUrl: 'https://platform.example.test/learning',
+      pollMs: 10,
+      pauseMs: 1,
+      contextDirectory,
+      account: async () => 'operator',
+      iterate: async (args) => {
+        assert.deepEqual(args, draft);
+        calls++;
+        await hold;
+        return { iteration: body };
+      },
+    });
+  const api = create();
+  const first = await api(draft);
+  assert.equal(first.iteration.state, 'waiting');
+  assert.deepEqual(Object.keys(first.nextArguments), ['resumeContextId', 'pollAfter']);
+  assert.equal(first.nextArguments.resumeContextId, draft.contextId);
+  const second = await api(first.nextArguments);
+  assert.equal(second.nextArguments.resumeContextId, draft.contextId);
+  assert.equal(calls, 1);
+  await assert.rejects(() => api({ ...draft, totalSteps: 2000000 }), /绑定原目标/);
+  finish();
+  const terminal = await api(second.nextArguments);
+  assert.equal(terminal.nextArguments, undefined);
+  assert.equal(terminal.iteration.remainingSteps, 503808);
+  assert.match(terminal.studioNavigation.arguments.url, /dance-iterations.html/);
+  assert.deepEqual(
+    (await create()({ resumeContextId: draft.contextId })).iteration,
+    terminal.iteration,
+  );
+  assert.equal(calls, 1);
+});

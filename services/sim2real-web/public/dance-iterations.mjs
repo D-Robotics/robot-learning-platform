@@ -31,6 +31,8 @@ function parseIteration(hash) {
     !Number.isSafeInteger(value.additionalSteps) ||
     value.spentSteps < 0 ||
     value.spentSteps > value.additionalSteps ||
+    (value.remainingSteps !== undefined &&
+      value.remainingSteps !== value.additionalSteps - value.spentSteps) ||
     !Array.isArray(value.rounds) ||
     (value.rounds.length === 0 && value.state !== 'blocked') ||
     value.rounds.length > 6 ||
@@ -146,7 +148,7 @@ export async function showDanceIterations({ document, location, fetchImpl = fetc
       compute.textContent =
         String(value.accelerator).slice(0, 80) + ' · ' + value.numEnvs + ' 并行环境';
     document.getElementById('iteration-budget').textContent =
-      `已计入 ${format(value.spentSteps)} 步／授权 ${format(value.additionalSteps)} 步`;
+      `已计入 ${format(value.spentSteps)} 步 · 剩余 ${format(value.additionalSteps - value.spentSteps)} 步 · 总预算 ${format(value.additionalSteps)} 步`;
     rounds.replaceChildren();
     const verified = await Promise.all(
       value.rounds.map((snapshot) =>

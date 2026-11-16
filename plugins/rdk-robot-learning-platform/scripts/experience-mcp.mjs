@@ -71,6 +71,7 @@ import {
 } from './dance-training.mjs';
 import {
   createDanceIteration,
+  createDanceGoalContinuation,
   DANCE_ITERATION_TOOL,
   matchesDanceIterationGpu,
 } from './dance-iteration.mjs';
@@ -511,6 +512,18 @@ export function pluginRuntimeIdentity() {
   }
 }
 
+const DANCE_REPLAY_READ_TOOL = {
+  name: 'rdk_originman_dance_replay_read',
+  description:
+    '只读核对当前账号最新的 OriginMan 舞蹈训练及已有仿真回放，也可指定原 Run。返回原详情页入口。',
+  inputSchema: {
+    type: 'object',
+    properties: { runId: { type: 'string', pattern: '^[A-Za-z0-9][A-Za-z0-9_.-]{0,119}$' } },
+    additionalProperties: false,
+  },
+  annotations: { readOnlyHint: true, destructiveHint: false },
+};
+
 export const EXPERIENCE_TOOLS = [
   {
     name: 'rdk_plugin_status',
@@ -534,6 +547,7 @@ export const EXPERIENCE_TOOLS = [
   ...DANCE_EVALUATION_TOOLS,
   DANCE_ACCEPTANCE_TOOL,
   DANCE_ITERATION_TOOL,
+  DANCE_REPLAY_READ_TOOL,
   ...WORKSHOP_TOOLS,
   DEVELOPMENT_TARGET_TOOL,
   ...CLASSROOM_TOOLS,
@@ -735,6 +749,56 @@ export function experienceProxy(
     if ((value.run?.id ?? value.run?.runId ?? value.runId) !== runId)
       throw Error('平台未确认这条 Run。请重新打开原运行链接确认账号与记录。');
     return value;
+  };
+  const readDanceReplay = async (args, signal) => {
+    if (
+      Object.keys(args).some((key) => key !== 'runId') ||
+      (args.runId !== undefined &&
+        (typeof args.runId !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9_.-]{0,119}$/.test(args.runId)))
+    )
+      throw Error('请提供有效的原 Run ID，或留空以查询最新舞蹈训练。');
+
+    let runId = args.runId;
+    if (!runId) {
+      const candidates = await upstream.readLearningRuns({ danceOnly: true, signal });
+      const latest = candidates
+        .filter(
+          (run) => run.taskId === 'originman-dance' && Number.isFinite(Date.parse(run.createdAt)),
+        )
+        .sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt))[0];
+      if (!latest)
+        return {
+          ok: true,
+          found: false,
+          studentReply: '当前账号暂无可定位的 OriginMan 舞蹈训练。',
+        };
+      runId = latest.id;
+    }
+    const run = await upstream.readTrainingRun(runId, { signal });
+    if (run.id !== runId || run.taskId !== 'originman-dance')
+      throw Error('平台未确认这是一条当前账号可见的 OriginMan 舞蹈 Run。');
+
+    const preview = await verifiedPreview({ run }, runId, signal);
+    const videoUrl = preview.links?.danceVideo ?? null;
+    const replay = run.metrics?.originmanDance?.replay;
+    const trajectorySha256 = /^[a-f0-9]{64}$/.test(replay?.sha256 ?? '') ? replay.sha256 : null;
+    const url = runVisualizationLink(baseUrl, runId, videoUrl);
+    return {
+      ok: true,
+      found: true,
+      run: {
+        id: runId,
+        taskId: run.taskId,
+        createdAt: run.createdAt,
+        status: run.status,
+        label: run.label,
+      },
+      replay: { videoUrl, trajectorySha256, frameContinuity: 'unverified' },
+      ...(url && {
+        links: { runDetail: url },
+        studioNavigation: { tool: 'studio_open_url', arguments: { url } },
+      }),
+    };
   };
   let uiEnabled = false,
     upstreamResources = false;
@@ -941,17 +1005,24 @@ export function experienceProxy(
       acceptWorker,
     });
   };
-  const iterateDance = createDanceIteration({
+  const danceAccount = async () => {
+    const status = await authentication?.status();
+    return status?.authenticated === true ? status.accountId : null;
+  };
+  const stepDance = createDanceIteration({
     baseUrl,
     contextDirectory,
-    account: async () => {
-      const status = await authentication?.status();
-      return status?.authenticated === true ? status.accountId : null;
-    },
+    account: danceAccount,
     accept: (runId, signal) =>
       completeDanceAcceptance({ runId }, signal, Math.min(waitBudgetMs, 4000)),
     recover: (contextId) => recoverDanceSubmission(contextId, contextDirectory),
     submit: (args, signal) => submitDance(args, signal, matchesDanceIterationGpu),
+  });
+  const iterateDance = createDanceGoalContinuation({
+    baseUrl,
+    account: danceAccount,
+    contextDirectory,
+    iterate: stepDance,
   });
   const clientContext = () => {
     const configured = [
@@ -1025,7 +1096,7 @@ export function experienceProxy(
           '\n用户说“带我开启/开始 OriginMan Workshop”时，直接调用 rdk_workshop({intent:"new"})。明确受扰恢复时增加 course:"recovery"。按回执导航，再展示 studentReply。如果只拿到旧课程目录，使用回执的绝对链接。127.0.0.1 可能是 MCP 内部转发地址，诊断网页必须依据插件配置的平台 URL。' +
           '\n用户问插件能做什么时，调用 rdk_platform_status 后直接使用 studentReply；仅在追问时展开工具名、数量、接口地址或设备门槛。' +
           '\n这是通用机器人学习插件。先按用户的机型与目标使用 rdk_learning_guide；打开工作台传 task:overview，强化学习或模仿学习有通用入口，只有明确选择课程时才使用 OriginMan 专用工具。开始新实验传 intent:new；查看结果传 intent:results 和原 Run；改参传 intent:retry、原 Run 与 changes，等确认再使用 nextArguments。Studio 优先用 studio_open_url 打开已验证的工作台链接，仍保留可点击地址。已打开不表示已播放。' +
-          '\n用户明确要求根据目标自动训练时，根据目标整理舞蹈配方，沿学习引导选择 RTX 4090 后确定本组总步数，使用 rdk_originman_dance_iterate 的 dance-quality-gate 从首轮开始；已有 Run 使用 original-quality-gate。一次确认后按 nextArguments 持续接续，按回执打开右侧。其他训练沿用单轮验收。' +
+          '\n用户明确要求根据目标自动训练时，根据目标整理舞蹈配方，沿学习引导选择 RTX 4090 后确定本组总步数，使用 rdk_originman_dance_iterate 的 dance-quality-gate 从首轮开始；已有 Run 使用 original-quality-gate。一次确认后立即原样持续接续 nextArguments（只传 resumeContextId 和 pollAfter），达标或停止后按回执打开右侧最终逐轮页面。其他训练沿用单轮验收。' +
           '\n版本检查分别报告插件实际加载版本、宿主登记与平台连接；工具不可用、读失败和已确认空列表分别报告。舞蹈仿真通过不具备部署资格。部署预检被拒绝或设备工具缺失时保留阻断，不使用终端、SSH 或设备执行工具替代受控部署。' +
           '\n' +
           '\n提交 OriginMan 舞蹈或收到一键仿真验收请求后，沿原 runId 调用 rdk_originman_dance_acceptance。每次待运行回执继续传 nextArguments，终态自动同源评测；验收出判定后按 studioNavigation 打开 Studio 右侧。比较两条记录用 rdk_originman_dance_compare。' +
@@ -1188,6 +1259,8 @@ export function experienceProxy(
         const operationId = 'om-' + randomUUID().replaceAll('-', '').slice(0, 20);
         if (params.name === DANCE_ACCEPTANCE_TOOL.name) {
           payload = await completeDanceAcceptance(params.arguments ?? {}, signal);
+        } else if (params.name === DANCE_REPLAY_READ_TOOL.name) {
+          payload = await readDanceReplay(params.arguments ?? {}, signal);
         } else if (params.name === DANCE_ITERATION_TOOL.name) {
           payload = await iterateDance(params.arguments ?? {}, signal);
         } else if (DANCE_EVALUATION_TOOLS.some((tool) => tool.name === params.name)) {
