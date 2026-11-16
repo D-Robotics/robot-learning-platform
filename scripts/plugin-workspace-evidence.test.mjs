@@ -370,9 +370,16 @@ test('完成训练才核对同一 Run 的部署资格、回放及 ONNX 下载', 
   const sha256 = 'a'.repeat(64);
   let deployable = false;
   let matchingChecksum = true;
+  let retentionState = 'not-retained';
   const dispatch = experienceProxy(
     {
-      request: async () => ({ structuredContent: { runId, status: 'completed' } }),
+      request: async () => ({
+        structuredContent: {
+          runId,
+          status: 'completed',
+          artifactRetention: { state: retentionState, sha256 },
+        },
+      }),
       readTrainingRun: async (id) => ({
         id,
         status: 'completed',
@@ -401,13 +408,23 @@ test('完成训练才核对同一 Run 的部署资格、回放及 ONNX 下载', 
   );
   assert.match(first.studentReply, /不可部署到真机/);
   assert.match(first.studentReply, /查看本轮遥测回放数据/);
+  assert.match(first.studentReply, /下载本轮策略（ONNX）/);
+  assert.match(first.studentReply, /平台尚未留存 ONNX 副本/);
+  assert.equal(first.artifactRetention.state, 'not-retained');
   deployable = true;
+  retentionState = 'unavailable';
   matchingChecksum = false;
   const second = (await call()).structuredContent;
   assert.equal(second.runDelivery.deployment, 'eligible');
   assert.equal(second.runDelivery.policy, 'unavailable');
   assert.equal(second.links.policyDownload, undefined);
   assert.match(second.studentReply, /仍需通过目标设备预检/);
+  assert.match(second.studentReply, /平台暂未确认 ONNX 留存状态/);
+  assert.doesNotMatch(second.studentReply, /下载本轮策略（ONNX）/);
+  retentionState = 'retained';
+  const third = (await call()).structuredContent;
+  assert.match(third.studentReply, /平台已留存 ONNX 副本/);
+  assert.equal(third.runDelivery.policy, 'unavailable');
 });
 
 test('learning guide validates and dispatches the public productId and task values before any platform call', async () => {
