@@ -3732,12 +3732,41 @@ export function createSim2RealRouter(
       }
       const afterRaw = Number(request.query.after);
       const after = Number.isSafeInteger(afterRaw) && afterRaw >= 0 ? afterRaw : 0;
-      const runner = await resolveRunRunner(run.computeResourceId, owner);
+      // Historical reads use the run's own worker even when its launch health
+      // lease has expired. Only unbound runs may use the deployment default.
+      const selectedResource = run.computeResourceId
+        ? await getSim2RealComputeResourceSecret(run.computeResourceId, owner)
+        : null;
+      if (run.computeResourceId && !selectedResource) {
+        sendApiError(
+          response,
+          409,
+          'SIM2REAL_RUN_LOGS_RESOURCE_UNAVAILABLE',
+          '原训练资源已删除或不可访问，无法读取日志；不会切换到默认 Worker。',
+          { retryable: false },
+        );
+        return;
+      }
+      if (run.relayAgentUrl || selectedResource?.resource.source === 'local-agent') {
+        sendApiError(
+          response,
+          409,
+          'SIM2REAL_RUN_LOGS_NOT_AVAILABLE',
+          '该运行通过浏览器中继执行，Worker 日志需在原训练电脑上查看。',
+          { retryable: false, details: { runId: run.id } },
+        );
+        return;
+      }
       const logs = await fetchLocalRunLogs({
         accountId: workerAccount,
         externalRunId: run.externalRunId,
         after,
-        ...(runner ? { runnerUrl: runner.runnerUrl, runnerToken: runner.runnerToken } : {}),
+        ...(selectedResource
+          ? {
+              runnerUrl: selectedResource.resource.runnerUrl,
+              runnerToken: selectedResource.runnerToken ?? '',
+            }
+          : {}),
       });
       if (!logs) {
         sendApiError(
