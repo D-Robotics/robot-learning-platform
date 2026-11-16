@@ -12,7 +12,7 @@ node scripts/verify-plugin-auth-release.mjs --plugin-dir <便携插件目录>
 
 此门禁用于阻止候选分支遗漏已交付的 0.3.2 修复。合并新功能前应继承 main 的相关修复，版本号增加不能替代行为回归。平台和 Worker 的配套更新仍须按各自发布门禁独立部署。
 
-## Studio 直接导入包
+## Studio 自带运行时安装包
 
 为每个桌面目标选择 `plugins/rdk-robot-learning-platform/runtime-downloads.json` 锁定的 Node 归档。构建器会核对归档摘要并从中提取运行时和许可证。
 
@@ -20,6 +20,6 @@ node scripts/verify-plugin-auth-release.mjs --plugin-dir <便携插件目录>
 npm run package:plugin -- --out-dir <制品目录> --studio-target darwin-arm64 --studio-runtime <Node归档>
 ```
 
-`-studio-<目标>.zip` 供支持插件相对路径的 Studio 使用。解压后从扩展中心导入插件目录即可。包内记录所带 Node 的平台、版本和摘要，并保留浏览器登录流程。通用 ZIP 和 Qoder 安装流程沿用各自的 setup。
+解压 `-studio-<目标>.zip` 后，在 Studio 扩展中心导入并启用该目录，再运行解压目录里的 `setup-studio-macos.command` 或 `setup-studio-windows.cmd`。安装器核对导入副本并配置机器人学习 MCP，使用包内校验过的 Node。首次连接按浏览器提示登录。通用 ZIP 和 Qoder 安装流程沿用各自的 setup。
 
-发布前应在空白 Studio 配置中验证导入，在操作系统 PATH 不含 Node 的条件下确认捆绑 MCP 数量为 1、连接工具可发现、首次认证状态正确。再移动安装来源并复核解析到的是导入目录内的 Node 和脚本。macOS 与 Windows 的签名、权限和实际运行分别验收。
+发布前在空白的正式版 Studio 配置中完成导入和安装，然后移走解压来源。在 PATH 不含 Node 的条件下核对捆绑 MCP 数量为 1、实际启动文件属于 Studio 的导入副本、MCP 工具可用、首次认证状态正确。macOS 与 Windows 分别验证。

@@ -22,6 +22,16 @@ function fixture(testContext, target) {
   testContext.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const builder = path.join(root, 'scripts', 'package-platform-plugin.mjs');
   write(builder, fs.readFileSync(source));
+  for (const installer of [
+    'portable-studio-setup.mjs',
+    'portable-studio-setup-macos.command',
+    'portable-studio-setup-windows.cmd',
+  ]) {
+    write(
+      path.join(root, 'scripts', installer),
+      fs.readFileSync(new URL(installer, import.meta.url)),
+    );
+  }
   const plugin = path.join(root, 'plugins', name);
   write(path.join(plugin, 'plugin.json'), JSON.stringify({ name, version: '1.2.3' }));
   for (const file of [
@@ -87,7 +97,7 @@ else:
 }
 
 for (const target of ['darwin-arm64', 'win32-x64']) {
-  test(`exports a relative self-contained Studio ${target} ZIP and retains a generic ZIP`, (t) => {
+  test(`exports a self-contained stock Studio ${target} ZIP and retains a generic ZIP`, (t) => {
     const { args, output } = fixture(t, target);
     const report = JSON.parse(execFileSync(process.execPath, args, { encoding: 'utf8' }));
     assert.equal(report.archives.length, 3);
@@ -104,10 +114,11 @@ with zipfile.ZipFile(generic) as archive:
     assert json.loads(archive.read(root + '.mcp.json')) == {'mcpServers': {}}
     assert root + binary not in archive.namelist()
 with zipfile.ZipFile(portable) as archive:
-    server, = json.loads(archive.read(root + '.mcp.json'))['mcpServers'].values()
-    macro = '$' + '{PLUGIN_ROOT}/'
-    assert server['command'] == macro + binary
-    assert server['args'] == [macro + 'scripts/experience-mcp.mjs']
+    assert json.loads(archive.read(root + '.mcp.json')) == {'mcpServers': {}}
+    launcher = 'setup-studio-windows.cmd' if binary.endswith('.exe') else 'setup-studio-macos.command'
+    assert root + launcher in archive.namelist()
+    assert root + 'setup-studio.mjs' in archive.namelist()
+    assert launcher in archive.read(root + 'STUDIO-SETUP.md').decode()
     assert archive.getinfo(root + binary).external_attr >> 16 & 0o111 == 0o111
     assert archive.read(root + binary) == b'executable fixture'
     assert archive.read(root + 'mcp/runtime/LICENSE') == b'license fixture'

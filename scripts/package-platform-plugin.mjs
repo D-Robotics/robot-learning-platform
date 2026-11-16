@@ -10,7 +10,7 @@ const repositoryRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url))
 const args = process.argv.slice(2);
 if (args.includes('--help')) {
   console.log(
-    'Usage: node scripts/package-platform-plugin.mjs [--out-dir DIR] [--studio-target OS-ARCH --studio-runtime ARCHIVE]\nExports plugin and marketplace ZIPs plus SHA256SUMS.\nPass --studio-target <os-arch> --studio-runtime <official Node archive> to include a self-contained Studio import ZIP.\nRequires Python 3 (PYTHON override).\nRun npm run verify:plugin before distributing a candidate.',
+    'Usage: node scripts/package-platform-plugin.mjs [--out-dir DIR] [--studio-target OS-ARCH --studio-runtime ARCHIVE]\nExports plugin and marketplace ZIPs plus SHA256SUMS.\nPass --studio-target <os-arch> --studio-runtime <official Node archive> to include a self-contained Studio setup ZIP.\nRequires Python 3 (PYTHON override).\nRun npm run verify:plugin before distributing a candidate.',
   );
   process.exit(0);
 }
@@ -100,10 +100,26 @@ if (studioTarget) {
     Object.hasOwn(runtimeManifest.targets, studioTarget) && runtimeManifest.targets[studioTarget];
   if (!runtime) throw new Error(`Unsupported Studio target: ${studioTarget}`);
   const studioArchive = `${manifest.name}-${manifest.version}-studio-${studioTarget}.zip`;
-  const binary = studioTarget.startsWith('win32-') ? 'node.exe' : 'node';
+  const windows = studioTarget.startsWith('win32-');
+  const binary = windows ? 'node.exe' : 'node';
+  const launcher = windows ? 'setup-studio-windows.cmd' : 'setup-studio-macos.command';
+  const launcherSource = windows
+    ? 'portable-studio-setup-windows.cmd'
+    : 'portable-studio-setup-macos.command';
   instructions.push({
     output: path.join(outputDirectory, studioArchive),
-    entries: instructions[0].entries,
+    entries: [
+      ...instructions[0].entries,
+      {
+        source: path.join(repositoryRoot, 'scripts/portable-studio-setup.mjs'),
+        name: `${manifest.name}/setup-studio.mjs`,
+      },
+      {
+        source: path.join(repositoryRoot, 'scripts', launcherSource),
+        name: `${manifest.name}/${launcher}`,
+        mode: 0o100755,
+      },
+    ],
     studio: {
       name: manifest.name,
       target: studioTarget,
@@ -115,6 +131,7 @@ if (studioTarget) {
       binaryMember: `${runtime.folder}/${runtime.binary}`,
       licenseMember: `${runtime.folder}/LICENSE`,
       binary,
+      launcher,
     },
   });
   archiveNames.push(studioArchive);
@@ -167,24 +184,17 @@ def studio_payloads(studio, payloads, runtime):
         'archiveSha256': studio['sha256'],
         'binarySha256': checksum(binary),
     }), 0o100644)
-    macro = '$' + '{PLUGIN_ROOT}/'
-    payloads[root + '.mcp.json'] = (json_bytes({'mcpServers': {studio['name']: {
-        'type': 'stdio',
-        'command': macro + binary_path,
-        'args': [macro + 'scripts/experience-mcp.mjs'],
-        'env': {
-            'RDK_SIM2REAL_MCP_BASE_URL': 'https://rdkstudio.d-robotics.cc/robotics-learning',
-            'RDK_STUDIO_INHERIT_LOGIN': '0',
-        },
-    }}}), 0o100644)
     guide = (
-        '# Studio 直接导入\n\n'
-        '此包适用于 ' + studio['target'] + '，须使用支持插件相对路径的 Studio。'
-        '解压后在 Studio 扩展中心选择「添加 → 导入工具目录」，选中解压后的插件目录。'
-        '此包已包含 Node 运行时，无需运行 setup。\n\n'
-        '打开新对话，请 Agent 查看学习平台登录状态。首次连接按浏览器提示登录。\n'
+        '# Studio 安装\n\n'
+        '此包适用于 ' + studio['target'] + '，已包含 Node.js 运行时。\n\n'
+        '1. 解压 ZIP，打开 Studio。\n'
+        '2. 在扩展中心选择「添加 → 导入工具目录」，选中解压后的插件目录并启用插件。\n'
+        '3. 双击解压目录中的 ' + studio['launcher'] + '。安装器将配置 Studio 已导入的副本。\n'
+        '4. 新建对话检查学习平台状态。首次连接按浏览器提示登录。\n\n'
+        '安装完成后，启动文件位于 Studio 的插件安装目录。解压来源可移走。'
+        '如需停用此插件，也在 Studio 的 MCP 设置中停用机器人学习连接。\n'
     ).encode()
-    payloads[root + 'STUDIO-DIRECT-IMPORT.md'] = (guide, 0o100644)
+    payloads[root + 'STUDIO-SETUP.md'] = (guide, 0o100644)
     inventory = ''.join(
         checksum(payload) + '  ' + name[len(root):] + '\n'
         for name, (payload, _) in sorted(payloads.items()) if name != root + 'FILES.sha256'
@@ -200,12 +210,13 @@ for archive in archives:
     payloads = {}
     for entry in archive['entries']:
         source = Path(entry['source'])
-        payloads[entry['name']] = (source.read_bytes(), source.stat().st_mode)
+        payloads[entry['name']] = (source.read_bytes(), entry.get('mode', source.stat().st_mode))
     if 'studio' in archive:
         studio_payloads(archive['studio'], payloads, verified_runtimes[archive['output']])
     with zipfile.ZipFile(archive['output'], 'w', zipfile.ZIP_DEFLATED, compresslevel=9) as target:
         for name, (data, mode) in payloads.items():
             info = zipfile.ZipInfo(name, (1980, 1, 1, 0, 0, 0))
+            info.create_system = 3
             info.external_attr = (mode & 0xffff) << 16
             info.compress_type = zipfile.ZIP_DEFLATED
             target.writestr(info, data)
