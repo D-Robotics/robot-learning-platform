@@ -1982,7 +1982,10 @@ function mutationAccess(request: Request): MutationAccess {
   }
   // Loading/staging changes the selected policy but does not enable motion;
   // either an editor or an operator may perform that preparation step.
-  if (/\/board-station\/policy\/(?:load|stage)$/.test(pathname)) {
+  if (
+    /\/board-station\/policy\/(?:load|stage)$/.test(pathname) ||
+    pathname.endsWith('/board-station/originman-dance-cpu-rehearsal')
+  ) {
     return 'edit-or-operate';
   }
   // These paths can reach a board, a runner, or a deployment target.

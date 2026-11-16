@@ -17,6 +17,7 @@ Wire contract (identical to services/sim2real-web/local-board-agent.mjs):
   GET  /v1/station/policy                policy-runtime state (honest, always)
   GET  /v1/station/policy/files          list staged policies (name/size)
   POST /v1/station/policy/upload         stage one SHA-256-verified ONNX (gated)
+  POST /v1/station/originman-dance-cpu-rehearsal  isolated OriginMan ONNX inference
   POST /v1/station/policy/load           load a policies/ ONNX (gated)
   POST /v1/station/policy/start          begin policy-driven motion (gated)
   POST /v1/station/policy/reset          clear a sticky fault (gated)
@@ -2420,6 +2421,23 @@ class Handler(BaseHTTPRequestHandler):
                                                                          "state": None}
             self._json(200 if res.get("ok") else 409, {"ok": res.get("ok", True),
                                                         "policy": policy_status()})
+            return
+        if path == "/v1/station/originman-dance-cpu-rehearsal":
+            from board_originman_dance_cpu import MAX_REQUEST_BYTES, rehearse
+
+            payload = self._read_json_bounded(MAX_REQUEST_BYTES)
+            if payload is None:
+                self._json(400, {"ok": False, "error": "BOARD_AGENT_INVALID_JSON"})
+                return
+            model = read_file("/proc/device-tree/model").replace("\x00", "").strip()
+            if not re.search(r"\bRDK\s*X5\b", model, re.IGNORECASE):
+                self._json(409, {"ok": False, "error": "ORIGINMAN_DANCE_REHEARSAL_X5_REQUIRED"})
+                return
+            if _policy_runtime_alive() or drive_status().get("active"):
+                self._json(409, {"ok": False, "error": "ORIGINMAN_DANCE_REHEARSAL_BOARD_BUSY"})
+                return
+            result = rehearse(payload)
+            self._json(200 if result.get("ok") else 409, {**result, "boardModel": model})
             return
         if path == "/v1/station/policy/upload":
             # Bounded body (a whole base64'd ONNX), token-gated, and verified

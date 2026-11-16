@@ -65,6 +65,7 @@ esac
 for file in \
   "$repo_root/services/sim2real-web/board-agent-x5.py" \
   "$repo_root/services/sim2real-web/board_ipc.py" \
+  "$repo_root/services/sim2real-web/board_originman_dance_cpu.py" \
   "$repo_root/services/sim2real-web/board-drive-publisher.py" \
   "$repo_root/services/sim2real-web/board-telemetry-node.py" \
   "$repo_root/services/sim2real-web/board-policy-runtime.py" \
@@ -95,6 +96,7 @@ trap cleanup_stage EXIT
 scp \
   "$repo_root/services/sim2real-web/board-agent-x5.py" \
   "$repo_root/services/sim2real-web/board_ipc.py" \
+  "$repo_root/services/sim2real-web/board_originman_dance_cpu.py" \
   "$repo_root/services/sim2real-web/board-drive-publisher.py" \
   "$repo_root/services/sim2real-web/board-telemetry-node.py" \
   "$repo_root/services/sim2real-web/board-policy-runtime.py" \
@@ -117,7 +119,7 @@ case "$profile_name" in
 esac
 root=/opt/rdk-board-agent
 backup=$(mktemp -d "$root/.backup.XXXXXX")
-files="board-agent-x5.py board_ipc.py board-drive-publisher.py board-telemetry-node.py board-policy-runtime.py board-joint-policy-runtime.py board-telemetry-uploader.py"
+files="board-agent-x5.py board_ipc.py board_originman_dance_cpu.py board-drive-publisher.py board-telemetry-node.py board-policy-runtime.py board-joint-policy-runtime.py board-telemetry-uploader.py"
 agent_was_active=0
 uploader_was_active=0
 # This command is update-only for the reviewed systemd installation. Refuse

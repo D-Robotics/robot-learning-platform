@@ -418,6 +418,19 @@ export async function connectAuthenticatedCore({
       );
       return { datasets, studentReply };
     },
+    async rehearseOriginmanDanceCpu({ runId, deviceId }, { signal } = {}) {
+      const accountId = await verifiedWorkspaceAccount();
+      return readWorkspaceJson(
+        '/board-station/originman-dance-cpu-rehearsal?' + new URLSearchParams({ deviceId }),
+        AbortSignal.any([AbortSignal.timeout(30_000), ...(signal ? [signal] : [])]),
+        accountId,
+        {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ runId }),
+        },
+      );
+    },
     async verifyPolicyDownload(runId, sha256, { signal } = {}) {
       const response = await fetchPlatform(
         '/api/v1/duck/runs/' + encodeURIComponent(runId) + '/artifact',

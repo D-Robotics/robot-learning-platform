@@ -1509,3 +1509,44 @@ test('Studio protects the automatic scope even after invalid arguments, and reje
   assert.equal(changed.structuredContent.error.platformCode, 'DANCE_GOAL_RESERVED');
   assert.equal(calls.length, 0);
 });
+
+test('Studio and Qoder expose and use the same non-actuating OriginMan CPU tool', async () => {
+  const { experienceProxy } =
+    await import('../plugins/rdk-robot-learning-platform/scripts/experience-mcp.mjs');
+  const tool = 'rdk_originman_dance_cpu_rehearse';
+  const args = { runId: 'dance-run-v2', deviceId: 'x5-real-001' };
+  for (const host of ['RDK Studio', 'Qoder']) {
+    const requests = [];
+    const proxy = experienceProxy({
+      async request(method) {
+        if (method === 'initialize') return { capabilities: {}, serverInfo: { name: 'fixture' } };
+        assert.equal(method, 'tools/list');
+        return { tools: [] };
+      },
+      async rehearseOriginmanDanceCpu(args) {
+        requests.push(args);
+        return {
+          staged: true,
+          loaded: true,
+          motionAuthorized: false,
+          timing: { syntheticCyclePassed: true },
+        };
+      },
+    });
+    await proxy('initialize', { clientInfo: { name: host, version: '1.0' } });
+    const catalog = await proxy('tools/list');
+    const descriptor = catalog.tools.find(({ name }) => name === tool);
+    assert.deepEqual(descriptor.inputSchema.required, ['runId', 'deviceId']);
+    assert.equal(descriptor.annotations.destructiveHint, false);
+    const missing = await proxy('tools/call', { name: tool, arguments: { runId: args.runId } });
+    assert.equal(missing.isError, true);
+    assert.deepEqual(requests, []);
+    const measured = await proxy('tools/call', { name: tool, arguments: args });
+    assert.deepEqual(requests, [args]);
+    assert.equal(measured.structuredContent.motionAuthorized, false);
+    assert.match(
+      measured.structuredContent.studentReply,
+      /真实 IMU、舵机映射和整机控制周期仍待验证/,
+    );
+  }
+});

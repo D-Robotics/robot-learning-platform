@@ -77,6 +77,8 @@ export interface StationAgentFetchOptions {
   baseUrl?: string;
   /** Cancellation of the owning Studio bridge stream. */
   signal?: AbortSignal;
+  /** Bind a mutation to the selected device tunnel, without a bridge/global fallback. */
+  deviceTunnelOnly?: boolean;
 }
 
 /**
@@ -190,7 +192,9 @@ async function stationAgentJson(
   pathname: string,
   options: StationAgentFetchOptions = {},
 ): Promise<StationAgentJson | null> {
-  const baseUrl = loopbackBaseUrlOverride(options.baseUrl) ?? boardAgentUrl();
+  const tunnel = loopbackBaseUrlOverride(options.baseUrl);
+  if (options.deviceTunnelOnly && !tunnel) return null;
+  const baseUrl = tunnel ?? boardAgentUrl();
   if (!/^\/[A-Za-z0-9._/-]+$/.test(pathname)) return null;
   // A static BoardAgent is a service-to-service boundary.  In production or
   // web-cloud mode an omitted/weak bearer must make the call unavailable
@@ -214,7 +218,9 @@ async function stationAgentJson(
     const result = await direct;
     if (result) return result;
   }
-  return studioBridgeAgentJson(pathname, options, token, timeoutMs);
+  return options.deviceTunnelOnly
+    ? null
+    : studioBridgeAgentJson(pathname, options, token, timeoutMs);
 }
 
 function stationAgentDirectUrl(
