@@ -1525,7 +1525,18 @@ test('Studio and Qoder expose and use the same non-actuating OriginMan CPU tool'
       },
       async rehearseOriginmanDanceCpu(args) {
         requests.push(args);
+        const evidence = { runId: args.runId, run: { trainingSteps: 503808 } };
+        if (!args.deviceId)
+          return {
+            ...evidence,
+            phase: 'preflight',
+            stopWorkflow: true,
+            blocker: 'x5-not-connected',
+            nextAction: '当前没有已接通的 RDK X5。',
+          };
         return {
+          ...evidence,
+          phase: 'rehearsal',
           staged: true,
           loaded: true,
           motionAuthorized: false,
@@ -1536,13 +1547,18 @@ test('Studio and Qoder expose and use the same non-actuating OriginMan CPU tool'
     await proxy('initialize', { clientInfo: { name: host, version: '1.0' } });
     const catalog = await proxy('tools/list');
     const descriptor = catalog.tools.find(({ name }) => name === tool);
-    assert.deepEqual(descriptor.inputSchema.required, ['runId', 'deviceId']);
+    assert.deepEqual(descriptor.inputSchema.required, ['runId']);
     assert.equal(descriptor.annotations.destructiveHint, false);
     const missing = await proxy('tools/call', { name: tool, arguments: { runId: args.runId } });
-    assert.equal(missing.isError, true);
-    assert.deepEqual(requests, []);
+    assert.equal(missing.isError, undefined);
+    assert.equal(missing.structuredContent.stopWorkflow, true);
+    assert.match(
+      missing.structuredContent.studentReply,
+      /实际采样 503,808 步.*没有已接通的 RDK X5/,
+    );
+    assert.deepEqual(requests, [{ runId: args.runId }]);
     const measured = await proxy('tools/call', { name: tool, arguments: args });
-    assert.deepEqual(requests, [args]);
+    assert.deepEqual(requests, [{ runId: args.runId }, args]);
     assert.equal(measured.structuredContent.motionAuthorized, false);
     assert.match(
       measured.structuredContent.studentReply,
