@@ -371,6 +371,14 @@ function attachRunVisualization(payload, runId, baseUrl, section) {
       (policy === 'available'
         ? `[下载本轮策略（ONNX）](${payload.links?.policyDownload})`
         : '当前没有已核验的 ONNX 策略下载入口。');
+    const retentionState = (payload.run?.artifactRetention ?? payload.artifactRetention)?.state;
+    const retentionText = {
+      retained: '平台已留存 ONNX 副本。',
+      'not-retained': '平台尚未留存 ONNX 副本。',
+      unavailable: '平台暂未确认 ONNX 留存状态。',
+    };
+    if (Object.hasOwn(retentionText, retentionState))
+      studentReply += '\n' + retentionText[retentionState];
   }
   const { failureDetail: _stale, ...rest } = payload;
   return {
