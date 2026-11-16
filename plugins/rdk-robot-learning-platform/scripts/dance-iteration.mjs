@@ -26,7 +26,7 @@ const { trainingSteps: _steps, ...goalChoreography } = DANCE_CONFIG_SCHEMA.prope
 export const DANCE_ITERATION_TOOL = {
   name: 'rdk_originman_dance_iterate',
   description:
-    '一次授权后从零完成 OriginMan 舞蹈仿真训练：用户给出目标和总步数，先把目标整理为编舞，使用同一个 contextId、RTX 4090 Worker 和 64 并行。训练、独立评测、对比各节拍，在总预算允许时优先做同等步数的奖励对照，依据实测选奖励或步数继续重训，达标或预算耗尽时交付。已有 Run 也可接续。有 nextArguments 时连续调用，按 studioNavigation 在右侧展示。仅仿真。',
+    'OriginMan 舞蹈自动迭代的首选入口。用户给目标和总预算、未达标自动调奖励或达标/预算用完停止时直接调用。首次只需 totalSteps 和 dance（bpm、sections，每段 type/beats/intensity），插件选择 RTX 4090、64 并行并保存实验。立即原样接续 nextArguments。请勿改用普通训练。最后在右侧展示每轮改动、评测、回放和 ONNX。仅仿真。',
   inputSchema: {
     type: 'object',
     additionalProperties: false,
@@ -37,13 +37,17 @@ export const DANCE_ITERATION_TOOL = {
       pollAfter: { type: 'integer', minimum: 0 },
       computeResourceId: { type: 'string', minLength: 1, maxLength: 160 },
       modelId: { type: 'string', minLength: 1, maxLength: 160 },
-      dance: { ...DANCE_CONFIG_SCHEMA, properties: goalChoreography },
+      dance: {
+        ...DANCE_CONFIG_SCHEMA,
+        required: ['bpm', 'sections'],
+        properties: goalChoreography,
+      },
       totalSteps: { ...stepBudgetSchema, minimum: 8192 },
       runId: { type: 'string', pattern: runIdPattern.source },
       additionalSteps: { ...stepBudgetSchema, minimum: 0 },
     },
     oneOf: [
-      { required: ['goal', 'contextId', 'computeResourceId', 'dance', 'totalSteps'] },
+      { required: ['dance', 'totalSteps'] },
       { required: ['goal', 'runId', 'additionalSteps'] },
       { required: ['resumeContextId'] },
     ],
@@ -145,6 +149,7 @@ function renderIteration(result, args, baseUrl) {
   const url = new URL('./dance-iterations.html', baseUrl.replace(/\/+$/, '') + '/');
   url.hash = new URLSearchParams({ iteration: JSON.stringify(body) }).toString();
   return {
+    ...(result.state !== 'waiting' && { stopWorkflow: true }),
     ...(result.state === 'waiting' && {
       nextTool: DANCE_ITERATION_TOOL.name,
       nextArguments: args,
@@ -156,16 +161,15 @@ function renderIteration(result, args, baseUrl) {
     }),
     studentReply: result.reason,
     delivery:
-      '结果未结束时立即原样接续 nextArguments；有短续跑回执时只传 resumeContextId 和 pollAfter。不要重建目标或等待用户输入。等最终获得达标、预算不足或阻塞结果，再按 studioNavigation 在右侧打开最终逐轮页面。',
+      '立即原样接续 nextArguments。训练完成但评测仍在生成时，只续查同一条 Run。遇到停止回执就按 studioNavigation 打开右侧，严禁改走普通训练或新建实验。',
   };
 }
 
 const planKey = (dance) =>
   JSON.stringify([dance.trainingSteps, Object.entries(dance.rewardTuning ?? {}).sort()]);
 
-function assessRun(run) {
+function assessRun(run, evaluations = run.metrics.originmanDance?.evaluations) {
   const dance = run.training.originmanDance;
-  const evaluations = run.metrics.originmanDance?.evaluations;
   const bpms = [
     ...new Set([Math.max(80, dance.bpm * 0.95), dance.bpm, Math.min(140, dance.bpm * 1.05)]),
   ];
@@ -443,7 +447,8 @@ export function createDanceIteration({
         replay: runDelivery?.replay === 'simulation',
         policy: runDelivery?.policy === 'available',
       });
-      if (state === 'waiting') return finish('waiting', '正在等待本轮训练和仿真评测。');
+      if (state === 'waiting')
+        return finish('waiting', simulationAcceptance.reason ?? '正在等待本轮训练和仿真评测。');
       if (!['passed', 'failed'].includes(state))
         return finish('blocked', simulationAcceptance?.reason ?? '本轮未取得可核验的仿真评测。');
       if (fromGoal && simulationAcceptance.allTemposVerified !== true) {
@@ -466,7 +471,7 @@ export function createDanceIteration({
       }
 
       if (fromGoal) {
-        const trial = assessRun(run);
+        const trial = assessRun(run, simulationAcceptance.evaluations);
         if (!trial) return finish('blocked', '各节拍的分项评测不完整，无法比较调参效果。');
         history.push(trial);
         plan = nextGoalTrial(history, args.totalSteps - spentSteps, batchSize);

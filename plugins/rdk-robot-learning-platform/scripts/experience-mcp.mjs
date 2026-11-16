@@ -62,6 +62,7 @@ import {
   DANCE_ACCEPTANCE_TOOL,
   DANCE_EVALUATION_TOOLS,
   acceptDanceSimulation,
+  createDanceEvaluationReader,
   danceEvaluation,
 } from './dance-evaluation.mjs';
 import {
@@ -543,10 +544,10 @@ export const EXPERIENCE_TOOLS = [
   TRAINING_CHOICE_TOOL,
   LEARNING_GUIDE_TOOL,
   ORIGINMAN_DANCE_DRAFT_TOOL,
+  DANCE_ITERATION_TOOL,
   ...DANCE_TRAINING_TOOLS,
   ...DANCE_EVALUATION_TOOLS,
   DANCE_ACCEPTANCE_TOOL,
-  DANCE_ITERATION_TOOL,
   DANCE_REPLAY_READ_TOOL,
   ...WORKSHOP_TOOLS,
   DEVELOPMENT_TARGET_TOOL,
@@ -645,6 +646,7 @@ export function experienceProxy(
   } = {},
 ) {
   let workflow = null;
+  let danceFlow = null;
   const confirmedDancePlans = new Map();
   const baseUrl = authentication?.audience ?? env.RDK_SIM2REAL_MCP_BASE_URL;
   const verifiedPreview = async (payload, runId, signal) => {
@@ -782,7 +784,20 @@ export function experienceProxy(
     const videoUrl = preview.links?.danceVideo ?? null;
     const replay = run.metrics?.originmanDance?.replay;
     const trajectorySha256 = /^[a-f0-9]{64}$/.test(replay?.sha256 ?? '') ? replay.sha256 : null;
-    const url = runVisualizationLink(baseUrl, runId, videoUrl);
+    let trajectoryVerification = null;
+    if (trajectorySha256 && upstream.readDanceTrajectoryVerification) {
+      try {
+        trajectoryVerification = await upstream.readDanceTrajectoryVerification(
+          runId,
+          trajectorySha256,
+          { signal },
+        );
+      } catch (error) {
+        signal?.throwIfAborted();
+        if (error.needsLogin) throw error;
+      }
+    }
+    const url = runVisualizationLink(baseUrl, runId);
     return {
       ok: true,
       found: true,
@@ -793,7 +808,12 @@ export function experienceProxy(
         status: run.status,
         label: run.label,
       },
-      replay: { videoUrl, trajectorySha256, frameContinuity: 'unverified' },
+      replay: {
+        videoUrl,
+        trajectorySha256,
+        frameContinuity: trajectoryVerification ? 'verified' : 'unverified',
+        ...(trajectoryVerification ? { trajectoryVerification } : {}),
+      },
       ...(url && {
         links: { runDetail: url },
         studioNavigation: { tool: 'studio_open_url', arguments: { url } },
@@ -857,6 +877,7 @@ export function experienceProxy(
       });
     }
   };
+  const evaluationReader = createDanceEvaluationReader(upstream);
   const completeDanceAcceptance = async (args, signal, budget) => {
     const value = observe(
       await waitForRun(args, signal, DANCE_ACCEPTANCE_TOOL.name, budget),
@@ -883,8 +904,8 @@ export function experienceProxy(
       const run = await upstream.readTrainingRun?.(args.runId, { signal });
       if (run?.id !== args.runId) throw Error('当前连接未确认这条原 Run。');
       const simulationAcceptance = await acceptDanceSimulation(run, {
-        upstream,
-        signal: AbortSignal.any([AbortSignal.timeout(15000), ...(signal ? [signal] : [])]),
+        upstream: upstream.evaluateDanceRun ? { evaluateDanceRun: evaluationReader } : upstream,
+        signal,
       });
       const result = attachRunVisualization(
         await runResults({ run }, args.runId, signal),
@@ -899,6 +920,16 @@ export function experienceProxy(
       };
     } catch (error) {
       signal?.throwIfAborted();
+      if (error.code === 'DANCE_EVALUATION_PENDING')
+        return {
+          runId: args.runId,
+          status,
+          simulationAcceptance: { state: 'waiting', reason: error.message },
+          nextTool: DANCE_ACCEPTANCE_TOOL.name,
+          nextArguments: { runId: args.runId },
+          studentReply: error.message,
+          delivery: '仅续查原 Run 的评测。不要改提训练。',
+        };
       return {
         runId: args.runId,
         status,
@@ -1024,6 +1055,61 @@ export function experienceProxy(
     contextDirectory,
     iterate: stepDance,
   });
+  const automaticDanceInput = async (input, signal) => {
+    if (input.resumeContextId || input.goal === 'original-quality-gate') return input;
+    if (!input.dance || !Number.isSafeInteger(input.totalSteps)) return input;
+    const dance = { schemaVersion: 1, title: 'OriginMan 舞蹈目标', ...input.dance };
+    if (dance.trainingSteps === input.totalSteps) delete dance.trainingSteps;
+    let computeResourceId = input.computeResourceId ?? env.RDK_WORKSHOP_COMPUTE_RESOURCE_ID;
+    if (!computeResourceId) {
+      const reply = await upstream.request(
+        'tools/call',
+        { name: 'rdk_compute_resources_list', arguments: {} },
+        { signal },
+      );
+      const resources = readToolResult(reply).computeResources ?? [];
+      const matching = resources.filter(
+        (resource) =>
+          resource.mock === false &&
+          resource.status === 'online' &&
+          resource.engines?.includes('originman-dance-ppo') &&
+          matchesDanceIterationGpu(resource),
+      );
+      if (matching.length !== 1)
+        throw Error('请选择一台已连接且支持 OriginMan 舞蹈的 RTX 4090 Worker。');
+      computeResourceId = matching[0].id;
+    }
+    const contextId =
+      input.contextId ??
+      (danceFlow?.input &&
+      isDeepStrictEqual(danceFlow.input.dance, dance) &&
+      danceFlow.input.totalSteps === input.totalSteps
+        ? danceFlow.input.contextId
+        : 'om-' + randomUUID().replaceAll('-', '').slice(0, 20));
+    return {
+      ...input,
+      goal: input.goal ?? 'dance-quality-gate',
+      contextId,
+      computeResourceId,
+      dance,
+    };
+  };
+  const danceRouteFeedback = (code, message, continuation) => {
+    const value = {
+      ok: false,
+      error: { platformCode: code, message },
+      ...(continuation ?? {
+        nextTool: DANCE_ITERATION_TOOL.name,
+        nextAction:
+          '自动调参用 rdk_originman_dance_iterate。首次只传 totalSteps 和 dance（bpm、sections 每段含 type、beats、intensity）。单轮训练先经 rdk_learning_guide 确认单轮配方。',
+      }),
+    };
+    return {
+      isError: true,
+      structuredContent: value,
+      content: [{ type: 'text', text: JSON.stringify(value) }],
+    };
+  };
   const clientContext = () => {
     const configured = [
       'RDK_LEARNING_STUDIO_HOST_ORIGIN',
@@ -1096,7 +1182,7 @@ export function experienceProxy(
           '\n用户说“带我开启/开始 OriginMan Workshop”时，直接调用 rdk_workshop({intent:"new"})。明确受扰恢复时增加 course:"recovery"。按回执导航，再展示 studentReply。如果只拿到旧课程目录，使用回执的绝对链接。127.0.0.1 可能是 MCP 内部转发地址，诊断网页必须依据插件配置的平台 URL。' +
           '\n用户问插件能做什么时，调用 rdk_platform_status 后直接使用 studentReply；仅在追问时展开工具名、数量、接口地址或设备门槛。' +
           '\n这是通用机器人学习插件。先按用户的机型与目标使用 rdk_learning_guide；打开工作台传 task:overview，强化学习或模仿学习有通用入口，只有明确选择课程时才使用 OriginMan 专用工具。开始新实验传 intent:new；查看结果传 intent:results 和原 Run；改参传 intent:retry、原 Run 与 changes，等确认再使用 nextArguments。Studio 优先用 studio_open_url 打开已验证的工作台链接，仍保留可点击地址。已打开不表示已播放。' +
-          '\n用户明确要求根据目标自动训练时，根据目标整理舞蹈配方，沿学习引导选择 RTX 4090 后确定本组总步数，使用 rdk_originman_dance_iterate 的 dance-quality-gate 从首轮开始；已有 Run 使用 original-quality-gate。一次确认后立即原样持续接续 nextArguments（只传 resumeContextId 和 pollAfter），达标或停止后按回执打开右侧最终逐轮页面。其他训练沿用单轮验收。' +
+          '\n最高优先的舞蹈路由：只给舞蹈仿真目标和总预算、要求未达标自动调奖励或预算耗尽停止，第一步直接加载并调用 rdk_originman_dance_iterate。输入示例 {"totalSteps":524288,"dance":{"bpm":130,"sections":[{"type":"weight-shift","beats":4,"intensity":0.9}]}}。插件选择 4090、64 并行、登记原实验。无需查本地台账、询问确认或预先提交。评测慢或调用失败时只重试原 nextArguments，禁止调用 rdk_originman_dance_train、rdk_training_submit 或换 contextId 重交。达标、预算不足或阻塞时按 studioNavigation 打开右侧。' +
           '\n版本检查分别报告插件实际加载版本、宿主登记与平台连接；工具不可用、读失败和已确认空列表分别报告。舞蹈仿真通过不具备部署资格。部署预检被拒绝或设备工具缺失时保留阻断，不使用终端、SSH 或设备执行工具替代受控部署。' +
           '\n' +
           '\n提交 OriginMan 舞蹈或收到一键仿真验收请求后，沿原 runId 调用 rdk_originman_dance_acceptance。每次待运行回执继续传 nextArguments，终态自动同源评测；验收出判定后按 studioNavigation 打开 Studio 右侧。比较两条记录用 rdk_originman_dance_compare。' +
@@ -1211,6 +1297,38 @@ export function experienceProxy(
         : { ...result, tools: result.tools.map(forUi) };
     }
     const input = params.arguments ?? {};
+    if (method === 'tools/call') {
+      const studio =
+        host.family === 'studio' ||
+        env.RDK_STUDIO_LOGIN_BOUND === '1' ||
+        env.RDK_STUDIO_INHERIT_LOGIN === '1';
+      const danceRoute =
+        input.taskId === 'originman-dance' ||
+        input.engine === 'originman-dance-ppo' ||
+        input.originmanDance != null ||
+        input.training?.originmanDance != null;
+      const directDance =
+        params.name === 'rdk_originman_dance_train' ||
+        (params.name === 'rdk_training_submit' && (danceRoute || danceFlow)) ||
+        (danceFlow && ['rdk_originman_train', 'rdk_originman_short_train'].includes(params.name));
+      if (
+        (params.name === 'rdk_training_prepare' && danceRoute) ||
+        (directDance && (danceFlow || (studio && !confirmedDancePlans.has(input.contextId))))
+      ) {
+        const result = danceFlow?.result;
+        return danceRouteFeedback(
+          danceFlow ? 'DANCE_GOAL_RESERVED' : 'DANCE_ROUTE_REQUIRED',
+          danceFlow
+            ? '本次预算属于原自动迭代实验。普通训练没有提交，请继续查原实验。'
+            : '当前调用没有已确认的单轮配方，训练未提交。自动迭代请走自动入口。',
+          result?.nextArguments
+            ? { nextTool: DANCE_ITERATION_TOOL.name, nextArguments: result.nextArguments }
+            : result
+              ? { ...result, stopWorkflow: true }
+              : null,
+        );
+      }
+    }
     const sameContext =
       workflow && typeof input.contextId === 'string' && input.contextId === workflow.contextId;
     const sameRun =
@@ -1262,7 +1380,17 @@ export function experienceProxy(
         } else if (params.name === DANCE_REPLAY_READ_TOOL.name) {
           payload = await readDanceReplay(params.arguments ?? {}, signal);
         } else if (params.name === DANCE_ITERATION_TOOL.name) {
-          payload = await iterateDance(params.arguments ?? {}, signal);
+          danceFlow ??= {};
+          const draft = await automaticDanceInput(input, signal);
+          const active = danceFlow.result?.nextArguments;
+          if (active && !draft.resumeContextId && draft.contextId !== active.resumeContextId)
+            return danceRouteFeedback('DANCE_GOAL_RESERVED', '继续原实验，预算已保存。', {
+              nextTool: DANCE_ITERATION_TOOL.name,
+              nextArguments: active,
+            });
+          if (!draft.resumeContextId) danceFlow.input = draft;
+          payload = await iterateDance(draft, signal);
+          danceFlow.result = payload;
         } else if (DANCE_EVALUATION_TOOLS.some((tool) => tool.name === params.name)) {
           payload = await danceEvaluation(params.name, params.arguments ?? {}, {
             upstream,
@@ -1533,6 +1661,7 @@ export function experienceProxy(
           payload = await authentication.call(params.name, params.arguments);
           if (params.name === 'rdk_auth_switch_account' || params.name === 'rdk_auth_logout') {
             workflow = null;
+            danceFlow = null;
             confirmedDancePlans.clear();
           }
           if (params.name === 'rdk_auth_switch_account') {
@@ -1890,6 +2019,11 @@ export function experienceProxy(
                 },
               }
             : {}),
+          ...(params.name === DANCE_ITERATION_TOOL.name && {
+            nextTool: DANCE_ITERATION_TOOL.name,
+            nextAction:
+              '修正自动迭代入口的参数后接续原实验。若尚无续跑标识，首次输入 totalSteps 和 dance（bpm、sections）。禁止改用普通训练。',
+          }),
           error: {
             message: error.message,
             platformCode: error.platformCode ?? error.code ?? null,
