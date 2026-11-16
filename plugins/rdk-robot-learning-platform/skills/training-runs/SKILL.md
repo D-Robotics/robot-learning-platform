@@ -1,7 +1,11 @@
 ---
 name: training-runs
-description: 在 RDK 学习平台选择任务、训练引擎与执行资源，提交训练并跟踪 Run、日志和重训建议；也支持仓库已有的模仿学习和强化学习 CLI。
+description: 查询指定 Run 的训练状态、ONNX 策略留存与下载、已有仿真回放；也用于训练准备、提交和进度跟踪。
 ---
+
+## 只读查询原 Run
+
+已知 Run ID，用户问「留存和下载」「ONNX 在不在」「策略文件在哪里」或要查看已有仿真回放时，先调用 `rdk_training_wait` 并传原 `runId`。Studio 当前轮尚未加载工具时，先用 `load_tools` 登记目录中的完整工具名，默认 `mcp__rdk-robot-learning-platform__rdk_training_wait`，登记后直接调用。用回执的 `artifactRetention`、`links.policyDownload` 和 `links.replay` 回答。查询已有结果仅用此只读路径。
 
 只咨询预算用途、计数单位或完成标准时，直接调用 `rdk_originman_course_brief`，逐字展示返回的两句 `studentReply` 后结束，不再读指南、目录或历史证据；用户明确追问依据再按需读引用。不能推算或编造计数倍率。
 
