@@ -10,7 +10,7 @@ const repositoryRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url))
 const args = process.argv.slice(2);
 if (args.includes('--help')) {
   console.log(
-    'Usage: node scripts/package-platform-plugin.mjs [--out-dir DIR] [--studio-target OS-ARCH --studio-runtime ARCHIVE]\nExports plugin and marketplace ZIPs plus SHA256SUMS.\nPass --studio-target <os-arch> --studio-runtime <official Node archive> to include a self-contained Studio setup ZIP.\nRequires Python 3 (PYTHON override).\nRun npm run verify:plugin before distributing a candidate.',
+    'Usage: node scripts/package-platform-plugin.mjs [--out-dir DIR] [--plugin-dir DIR] [--studio-target OS-ARCH --studio-runtime ARCHIVE]\nExports plugin and marketplace ZIPs plus SHA256SUMS.\nPass --studio-target <os-arch> --studio-runtime <official Node archive> to include a self-contained Studio setup ZIP.\nRequires Python 3 (PYTHON override).\nRun npm run verify:plugin before distributing a candidate.',
   );
   process.exit(0);
 }
@@ -19,7 +19,7 @@ for (let index = 0; index < args.length; index += 2) {
   const option = args[index];
   const value = args[index + 1];
   if (
-    !['--out-dir', '--studio-target', '--studio-runtime'].includes(option) ||
+    !['--out-dir', '--plugin-dir', '--studio-target', '--studio-runtime'].includes(option) ||
     !value ||
     value.startsWith('--') ||
     options.has(option)
@@ -36,7 +36,10 @@ const studioRuntime = options.get('--studio-runtime');
 if (Boolean(studioTarget) !== Boolean(studioRuntime)) {
   throw new Error('Specify --studio-target and --studio-runtime together.');
 }
-const pluginRoot = path.join(repositoryRoot, 'plugins', 'rdk-robot-learning-platform');
+const pluginRoot = path.resolve(
+  options.get('--plugin-dir') ??
+    path.join(repositoryRoot, 'plugins', 'rdk-robot-learning-platform'),
+);
 const manifest = JSON.parse(fs.readFileSync(path.join(pluginRoot, 'plugin.json'), 'utf8'));
 if (!/^[a-z][a-z0-9-]+$/.test(manifest.name) || !/^\d+\.\d+\.\d+$/.test(manifest.version)) {
   throw new Error('Invalid plugin archive identity.');
@@ -92,6 +95,12 @@ const archiveNames = [pluginArchive, marketplaceArchive];
 if (studioTarget) {
   if (!files.includes(path.join(pluginRoot, 'scripts/experience-mcp.mjs'))) {
     throw new Error('Required Studio MCP launcher missing.');
+  }
+  const studioManifest = JSON.parse(
+    fs.readFileSync(path.join(pluginRoot, '.rdstudio-plugin/plugin.json'), 'utf8'),
+  );
+  if (studioManifest.mcpServers !== './.mcp.json' || studioManifest.defaultEnabled !== true) {
+    throw new Error('The Studio manifest must declare the bundled MCP and enable it on import.');
   }
   const runtimeManifest = JSON.parse(
     fs.readFileSync(path.join(pluginRoot, 'runtime-downloads.json'), 'utf8'),
@@ -184,15 +193,29 @@ def studio_payloads(studio, payloads, runtime):
         'archiveSha256': studio['sha256'],
         'binarySha256': checksum(binary),
     }), 0o100644)
+    plugin_root = '$' + '{PLUGIN_ROOT}/'
+    payloads[root + '.mcp.json'] = (json_bytes({
+        'mcpServers': {
+            studio['name']: {
+                'transport': 'stdio',
+                'command': plugin_root + binary_path,
+                'args': [plugin_root + 'scripts/experience-mcp.mjs'],
+                'env': {
+                    'RDK_SIM2REAL_MCP_BASE_URL': 'https://rdkstudio.d-robotics.cc/robotics-learning',
+                    'RDK_STUDIO_INHERIT_LOGIN': '1',
+                },
+            }
+        },
+    }), 0o100644)
     guide = (
         '# Studio 安装\n\n'
         '此包适用于 ' + studio['target'] + '，已包含 Node.js 运行时。\n\n'
         '1. 解压 ZIP，打开 Studio。\n'
         '2. 在扩展中心选择「添加 → 导入工具目录」，选中解压后的插件目录并启用插件。\n'
-        '3. 双击解压目录中的 ' + studio['launcher'] + '。安装器将配置 Studio 已导入的副本。\n'
-        '4. 新建对话检查学习平台状态。首次连接按浏览器提示登录。\n\n'
+        '3. 在扩展中心的插件详情核对「打包的 MCP」显示 1 项。新建对话检查学习平台状态。\n'
+        '需要账号数据时，按 Studio 或平台的登录提示连接。\n\n'
         '安装完成后，启动文件位于 Studio 的插件安装目录。解压来源可移走。'
-        '如需停用此插件，也在 Studio 的 MCP 设置中停用机器人学习连接。\n'
+        '如需停用此插件，可在扩展中心停用。旧安装单独登记的同名连接可在 MCP 设置中管理。\n'
     ).encode()
     payloads[root + 'STUDIO-SETUP.md'] = (guide, 0o100644)
     inventory = ''.join(

@@ -42,6 +42,10 @@ function fixture(testContext, target) {
     'scripts/experience-mcp.mjs',
   ])
     write(path.join(plugin, file), 'fixture file');
+  write(
+    path.join(plugin, '.rdstudio-plugin/plugin.json'),
+    JSON.stringify({ name, version: '1.2.3', mcpServers: './.mcp.json', defaultEnabled: true }),
+  );
   write(path.join(plugin, '.mcp.json'), '{"mcpServers":{}}');
   write(path.join(root, '.agents/plugins/marketplace.json'), '{}');
 
@@ -114,11 +118,20 @@ with zipfile.ZipFile(generic) as archive:
     assert json.loads(archive.read(root + '.mcp.json')) == {'mcpServers': {}}
     assert root + binary not in archive.namelist()
 with zipfile.ZipFile(portable) as archive:
-    assert json.loads(archive.read(root + '.mcp.json')) == {'mcpServers': {}}
+    config = json.loads(archive.read(root + '.mcp.json'))['mcpServers']
+    assert list(config) == [root.rstrip('/')]
+    server = config[root.rstrip('/')]
+    assert server['transport'] == 'stdio'
+    assert server['command'] == '$' + '{PLUGIN_ROOT}/' + binary
+    assert server['args'] == ['$' + '{PLUGIN_ROOT}/scripts/experience-mcp.mjs']
+    assert server['env'] == {
+        'RDK_SIM2REAL_MCP_BASE_URL': 'https://rdkstudio.d-robotics.cc/robotics-learning',
+        'RDK_STUDIO_INHERIT_LOGIN': '1',
+    }
     launcher = 'setup-studio-windows.cmd' if binary.endswith('.exe') else 'setup-studio-macos.command'
     assert root + launcher in archive.namelist()
     assert root + 'setup-studio.mjs' in archive.namelist()
-    assert launcher in archive.read(root + 'STUDIO-SETUP.md').decode()
+    assert '打包的 MCP' in archive.read(root + 'STUDIO-SETUP.md').decode()
     assert archive.getinfo(root + binary).external_attr >> 16 & 0o111 == 0o111
     assert archive.read(root + binary) == b'executable fixture'
     assert archive.read(root + 'mcp/runtime/LICENSE') == b'license fixture'
