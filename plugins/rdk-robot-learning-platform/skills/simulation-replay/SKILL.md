@@ -1,11 +1,20 @@
 ---
 name: simulation-replay
-description: 在 RDK 学习平台打开浏览器仿真、录制轨迹、检查遥测和板端会话、回放运行并生成有证据的回放视频。
+description: 在 RDK 学习平台查阅已有仿真回放和训练详情，或按用户明确要求录制轨迹、检查遥测与板端会话。
 ---
 
 # 仿真、轨迹与回放
 
 交付实际仿真入口、可检查的轨迹或 Run 回放。参数见 [工具目录](../../references/tool-catalog.md)，连接边界见 [连接契约](../../references/connection-contract.md)。
+
+## 只读核对已有舞蹈回放
+
+- 查询最新 OriginMan 舞蹈训练时调用 `rdk_originman_dance_replay_read({})`，有明确 Run ID 时传入 `runId`。它按当前账号、`taskId=originman-dance` 和创建时间选定原 Run。课程名称和完成状态都不能代替该筛选。
+- 查看工具返回的原 Run、已核验视频入口和轨迹摘要。板端遥测可以为空，独立的仿真回放仍可能存在。有 `trajectoryVerification` 时报告与原始轨迹摘要绑定的姿态帧数、控制步数和频率。只有摘要时，逐帧与步数连续性待核验。
+- 用户要求在 Studio 打开详情时，调用 `studioNavigation` 指定的 `studio_open_url`，核对右侧页面的 Run ID 和登录状态。工具延迟加载时用 `load_tools` 点名。
+- 只读查询只使用已有记录。跳过 Workshop、舞蹈一键验收、重新仿真和视频生成。无需板端设备或板端项目目录。
+
+## 其他仿真与遥测
 
 - `rdk_simulator_open` 显式选择 robot；OriginMan 返回受扰恢复工作台，MicroDuck 返回鸭子仿真。返回 `entryUrl` 不代表已经操作页面。相对路径保留平台挂载前缀。OriginMan 用课程目录、真实训练及父 Run 评测生成本次回放，不使用下述 MicroDuck 录制协议；不能把机器鸭录制结果作为 OriginMan 证据。MCP 没有键盘驱动或通用仿真控制工具。
 - WebGL 不可用时报告真实错误，可继续使用轨迹页；不得用静态截图证明仿真运行。浏览器参考策略是仿真证据，不是当前模型已训练或真机成功。
