@@ -30,7 +30,7 @@ export const DANCE_EVALUATION_TOOLS = [
   {
     name: 'rdk_originman_dance_evaluate',
     description:
-      '用一条已完成舞蹈 Run（训练记录）的原 ONNX（策略文件）做独立仿真评测。仅在用户明确要求重新评测时调用。结果打开主站评测页，可看逐段实测、达标门槛与对应回放。',
+      '运行新的独立仿真评测，须由用户明确要求运行评测。用一条已完成舞蹈 Run（训练记录）的原 ONNX（策略文件）做独立仿真评测。 查看原 Run 的留存、下载、已有记录或回放时用 rdk_training_wait。仅在用户明确要求重新评测时调用。结果打开主站评测页，可看逐段实测、达标门槛与对应回放。',
     inputSchema: object({ runId }, ['runId']),
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true },
   },
