@@ -95,8 +95,22 @@ export async function acceptDanceSimulation(run, { upstream, signal }) {
     result.qualityGatePassed !== recorded.qualityGatePassed
   )
     throw Error('独立仿真与原 Run 的场景、契约或质量结论不一致。');
+  const original = nominal(run, recorded);
+  const acceptance = nominal(run, result);
+  if (
+    acceptance.sections.some((section, index) => {
+      const previous = original.sections[index];
+      return (
+        typeof section.passed !== 'boolean' ||
+        previous.passed !== section.passed ||
+        previous.clean !== section.clean ||
+        previous.stylePassed !== section.stylePassed
+      );
+    })
+  )
+    throw Error('独立仿真与原 Run 的逐段判定不一致。');
   return {
-    ...nominal(run, result),
+    ...acceptance,
     state: result.qualityGatePassed ? 'passed' : 'failed',
     policySha256: result.source.policySha256,
     sceneSha256: scene,

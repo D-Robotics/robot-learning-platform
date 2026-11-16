@@ -43,7 +43,7 @@
     "ui/licenses.json": "a599a96d9a7c8019ff6aa53694023adf50221e4d878542e3437799cdaac3cdd5",
     "scripts/workspace-evidence.mjs": "8ba4be78b4a0e427112f4861962528065e9be004e8014734716b165811c495b9",
     "scripts/dance-coaching.mjs": "58c74a01c57e3254405bb9b3b1a7ee060ae0257b83708711d3f8366bca216359",
-    "scripts/dance-evaluation.mjs": "5b77db2f411d982936bf6a732043ec5f2aa5cb4bda870e8c2d8e9822a33346f1",
+    "scripts/dance-evaluation.mjs": "40c2d3d06c017e3cc164d4b291824df80f52e7f544a1cb7495f406f0058c6ef9",
     "runtime-guard.mjs": "ab7eb9380ae81c59197f120a92c084355ad9ca0985263d8301fd8849c0cd19a4",
     "mcp/bundle.mjs": "512c385b487a2e2baef3cb9b0a690b9b4ee7c2521984dd876309beff16da606c",
     "mcp/source-checkout.example.json": "cd8a9a7c47436adec2dff557c059c982bbcea560683bf6de828b99dd8680e63d",

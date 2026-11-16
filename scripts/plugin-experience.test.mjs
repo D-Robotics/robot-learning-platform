@@ -17,6 +17,7 @@ test('OriginMan one-step acceptance follows the same Run, verifies one evaluatio
     await import('../plugins/rdk-robot-learning-platform/scripts/experience-mcp.mjs');
   const sha = 'a'.repeat(64);
   const scene = 'b'.repeat(64);
+  const checks = [{ type: 'alternating-arms', clean: true, passed: false }];
   const run = {
     id: 'dance-test',
     status: 'running',
@@ -32,12 +33,12 @@ test('OriginMan one-step acceptance follows the same Run, verifies one evaluatio
       originmanDance: {
         qualityGatePassed: false,
         sceneProvenance: { sceneSha256: scene },
+        evaluations: [{ bpm: 100, sections: structuredClone(checks) }],
       },
     },
   };
   let evaluationCount = 0;
   let resultScene = scene;
-  const checks = [{ type: 'alternating-arms', clean: true, passed: false }];
   const proxy = experienceProxy(
     {
       async request(method, { name, arguments: args }) {
@@ -89,9 +90,14 @@ test('OriginMan one-step acceptance follows the same Run, verifies one evaluatio
   const stale = await call(accept);
   assert.equal(stale.simulationAcceptance.state, 'unverified');
   assert.equal(stale.studioNavigation, undefined);
+  resultScene = scene;
+  checks[0].passed = true;
+  const inconsistent = await call(accept);
+  assert.equal(inconsistent.simulationAcceptance.state, 'unverified');
+  assert.equal(inconsistent.studioNavigation, undefined);
   run.status = 'failed';
   assert.equal((await call(accept)).simulationAcceptance.state, 'not-evaluated');
-  assert.equal(evaluationCount, 2);
+  assert.equal(evaluationCount, 3);
 });
 
 test('MCP business failures retain flat, nested and textual diagnostics', () => {
