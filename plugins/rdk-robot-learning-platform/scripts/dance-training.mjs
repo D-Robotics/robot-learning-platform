@@ -82,7 +82,7 @@ export const DANCE_TRAINING_TOOLS = [
   {
     name: 'rdk_originman_dance_train',
     description:
-      '提交已确认的 OriginMan 舞蹈 PPO 仿真配方。可选算力、模型、并行环境数（1–64），可改舞段、节拍、拍数、幅度、seed、训练预算及参数表列出的奖励项。默认 50 万步和 64 个并行环境；8192 步只用于流程快检。新手或改参重训优先调用 rdk_learning_guide，按其 nextArguments 提交；同一 contextId 用于重试或查原 Run。提交前重新检查指定 Worker。舞蹈仅仿真',
+      '仅当用户明确要求单轮时提交已确认的 OriginMan 舞蹈 PPO 仿真配方。按目标和总预算自动调奖励，请直接调用 rdk_originman_dance_iterate。可选算力、模型、并行环境数（1–64），可改舞段、节拍、拍数、幅度、seed、训练预算及参数表列出的奖励项。默认 50 万步和 64 个并行环境；8192 步只用于流程快检。新手或改参重训优先调用 rdk_learning_guide，按其 nextArguments 提交；同一 contextId 用于重试或查原 Run。提交前重新检查指定 Worker。舞蹈仅仿真',
     inputSchema: schema,
     annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: true },
   },

@@ -62,6 +62,57 @@ function nominal(run, report) {
   return { bpm: dance.bpm, qualityGatePassed: report.qualityGatePassed, sections: value.sections };
 }
 
+export function createDanceEvaluationReader(
+  upstream,
+  { requestMs = 10_000, staleMs = 115_000, attemptsLimit = 3, now = Date.now } = {},
+) {
+  const attempts = new Map();
+  const pending = () =>
+    Object.assign(Error('训练已完成，正在续查同一条 Run 的独立评测。'), {
+      code: 'DANCE_EVALUATION_PENDING',
+    });
+  const retryable = (error) =>
+    error?.name === 'TimeoutError' ||
+    error?.name === 'AbortError' ||
+    error instanceof TypeError ||
+    [429, 500, 502, 503, 504].includes(error?.httpStatus);
+  const request = (signal) =>
+    AbortSignal.any([AbortSignal.timeout(requestMs), ...(signal ? [signal] : [])]);
+
+  return async (runId, { signal } = {}) => {
+    const previous = attempts.get(runId);
+    if (upstream.readDanceEvaluationRun) {
+      try {
+        const result = await upstream.readDanceEvaluationRun(runId, { signal: request(signal) });
+        if (result) {
+          attempts.delete(runId);
+          return result;
+        }
+      } catch (error) {
+        signal?.throwIfAborted();
+        if (!retryable(error)) throw error;
+        // Preserve the same Run even when the status read itself times out.
+        if (previous && now() - previous.started < staleMs) throw pending();
+      }
+      if (previous && now() - previous.started < staleMs) throw pending();
+    }
+    if ((previous?.count ?? 0) >= attemptsLimit)
+      throw Error('原 Run 的独立评测长时间未返回。已保留原实验和预算，请稍后续查本轮。');
+    attempts.set(runId, { started: now(), count: (previous?.count ?? 0) + 1 });
+    if (attempts.size > 32) attempts.delete(attempts.keys().next().value);
+    try {
+      const result = await upstream.evaluateDanceRun(runId, { signal: request(signal) });
+      attempts.delete(runId);
+      return result;
+    } catch (error) {
+      signal?.throwIfAborted();
+      if (retryable(error)) throw pending();
+      attempts.delete(runId);
+      throw error;
+    }
+  };
+}
+
 async function independentDanceReport(run, upstream, signal) {
   const result = await upstream.evaluateDanceRun(run.id, { signal });
   if (!result) throw Error('平台未返回独立评测结果。');
@@ -136,6 +187,7 @@ export async function acceptDanceSimulation(run, { upstream, signal }) {
   return {
     ...acceptance,
     allTemposVerified,
+    evaluations: checkedRows,
     state: result.qualityGatePassed ? 'passed' : 'failed',
     policySha256: result.source.policySha256,
     sceneSha256: scene,
