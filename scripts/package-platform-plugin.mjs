@@ -193,29 +193,45 @@ def studio_payloads(studio, payloads, runtime):
         'archiveSha256': studio['sha256'],
         'binarySha256': checksum(binary),
     }), 0o100644)
-    plugin_root = '$' + '{PLUGIN_ROOT}/'
-    payloads[root + '.mcp.json'] = (json_bytes({
-        'mcpServers': {
-            studio['name']: {
-                'transport': 'stdio',
-                'command': plugin_root + binary_path,
-                'args': [plugin_root + 'scripts/experience-mcp.mjs'],
-                'env': {
-                    'RDK_SIM2REAL_MCP_BASE_URL': 'https://rdkstudio.d-robotics.cc/robotics-learning',
-                    'RDK_STUDIO_INHERIT_LOGIN': '1',
-                },
-            }
-        },
-    }), 0o100644)
+    if studio['target'].startswith('darwin-'):
+        # Studio 1.5.x passes the command through literally rather than resolving a plugin token.
+        launcher = (
+            'config="$RDK_STUDIO_HOME"; '
+            'case "$config" in /*) ;; *) '
+            'base="$HOME/.rdkstudio"; '
+            'if [ "$RDK_STUDIO_CHANNEL" = test ]; then base="$HOME/.rdkstudio-preview"; fi; '
+            'if [ "$RDK_STUDIO_SMOKE_MODE" = 1 ] && [ -n "$RDK_STUDIO_PROFILE_DIR" ]; then '
+            'base="$RDK_STUDIO_PROFILE_DIR/studio-config"; fi; '
+            'config=$(/usr/bin/plutil -extract configDir raw -o - "$base/storage-location-settings.json" 2>/dev/null) || config=""; '
+            'case "$config" in /*) ;; *) config="$base";; esac;; esac; '
+            'plugin="$config/plugins/rdk-robot-learning-platform"; '
+            'exec "$plugin/' + binary_path + '" "$plugin/scripts/experience-mcp.mjs"'
+        )
+        payloads[root + '.mcp.json'] = (json_bytes({
+            'mcpServers': {
+                studio['name']: {
+                    'transport': 'stdio',
+                    'command': '/bin/sh',
+                    'args': ['-c', launcher],
+                    'env': {
+                        'RDK_SIM2REAL_MCP_BASE_URL': 'https://rdkstudio.d-robotics.cc/robotics-learning',
+                        'RDK_STUDIO_INHERIT_LOGIN': '1',
+                    },
+                }
+            },
+        }), 0o100644)
+        completion = '3. 在扩展中心的插件详情核对「打包的 MCP」显示 1 项。新建对话检查学习平台状态。\n'
+    else:
+        completion = '3. 双击解压目录中的 ' + studio['launcher'] + '，配置 Studio 已导入的副本。\n'
     guide = (
         '# Studio 安装\n\n'
         '此包适用于 ' + studio['target'] + '，已包含 Node.js 运行时。\n\n'
         '1. 解压 ZIP，打开 Studio。\n'
         '2. 在扩展中心选择「添加 → 导入工具目录」，选中解压后的插件目录并启用插件。\n'
-        '3. 在扩展中心的插件详情核对「打包的 MCP」显示 1 项。新建对话检查学习平台状态。\n'
+        + completion +
         '需要账号数据时，按 Studio 或平台的登录提示连接。\n\n'
         '安装完成后，启动文件位于 Studio 的插件安装目录。解压来源可移走。'
-        '如需停用此插件，可在扩展中心停用。旧安装单独登记的同名连接可在 MCP 设置中管理。\n'
+        '如需停用此插件，可在扩展中心停用。单独登记的同名连接可在 MCP 设置中管理。\n'
     ).encode()
     payloads[root + 'STUDIO-SETUP.md'] = (guide, 0o100644)
     inventory = ''.join(

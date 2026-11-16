@@ -119,19 +119,23 @@ with zipfile.ZipFile(generic) as archive:
     assert root + binary not in archive.namelist()
 with zipfile.ZipFile(portable) as archive:
     config = json.loads(archive.read(root + '.mcp.json'))['mcpServers']
-    assert list(config) == [root.rstrip('/')]
-    server = config[root.rstrip('/')]
-    assert server['transport'] == 'stdio'
-    assert server['command'] == '$' + '{PLUGIN_ROOT}/' + binary
-    assert server['args'] == ['$' + '{PLUGIN_ROOT}/scripts/experience-mcp.mjs']
-    assert server['env'] == {
-        'RDK_SIM2REAL_MCP_BASE_URL': 'https://rdkstudio.d-robotics.cc/robotics-learning',
-        'RDK_STUDIO_INHERIT_LOGIN': '1',
-    }
+    if binary.endswith('.exe'):
+        assert config == {}
+    else:
+        assert list(config) == [root.rstrip('/')]
+        server = config[root.rstrip('/')]
+        assert server['transport'] == 'stdio'
+        assert server['command'] == '/bin/sh'
+        assert server['args'][0] == '-c'
+        assert 'exec "$plugin/' + binary + '" "$plugin/scripts/experience-mcp.mjs"' in server['args'][1]
+        assert server['env'] == {
+            'RDK_SIM2REAL_MCP_BASE_URL': 'https://rdkstudio.d-robotics.cc/robotics-learning',
+            'RDK_STUDIO_INHERIT_LOGIN': '1',
+        }
     launcher = 'setup-studio-windows.cmd' if binary.endswith('.exe') else 'setup-studio-macos.command'
     assert root + launcher in archive.namelist()
     assert root + 'setup-studio.mjs' in archive.namelist()
-    assert '打包的 MCP' in archive.read(root + 'STUDIO-SETUP.md').decode()
+    assert (launcher if binary.endswith('.exe') else '打包的 MCP') in archive.read(root + 'STUDIO-SETUP.md').decode()
     assert archive.getinfo(root + binary).external_attr >> 16 & 0o111 == 0o111
     assert archive.read(root + binary) == b'executable fixture'
     assert archive.read(root + 'mcp/runtime/LICENSE') == b'license fixture'
