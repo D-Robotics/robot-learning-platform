@@ -109,8 +109,33 @@ export async function acceptDanceSimulation(run, { upstream, signal }) {
     })
   )
     throw Error('独立仿真与原 Run 的逐段判定不一致。');
+  const recordedRows = recorded.evaluations;
+  const checkedRows = result.evaluations;
+  const bpm = acceptance.bpm;
+  const tempos = [...new Set([Math.max(80, bpm * 0.95), bpm, Math.min(140, bpm * 1.05)])];
+  const allTemposVerified =
+    recordedRows.length === tempos.length &&
+    checkedRows.length === tempos.length &&
+    tempos.every((tempo) => recordedRows.some((row) => Math.abs(row.bpm - tempo) < 0.001)) &&
+    recordedRows.every((row) => {
+      const matched = checkedRows.filter((item) => item.bpm === row.bpm);
+      return (
+        matched.length === 1 &&
+        matched[0].sections?.length === row.sections?.length &&
+        matched[0].sections.every((section, index) => {
+          const previous = row.sections[index];
+          return (
+            previous.type === section.type &&
+            previous.clean === section.clean &&
+            previous.stylePassed === section.stylePassed &&
+            previous.passed === section.passed
+          );
+        })
+      );
+    });
   return {
     ...acceptance,
+    allTemposVerified,
     state: result.qualityGatePassed ? 'passed' : 'failed',
     policySha256: result.source.policySha256,
     sceneSha256: scene,

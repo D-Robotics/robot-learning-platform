@@ -2,7 +2,8 @@ import { REWARD_TUNING_LIMITS, resolveOriginmanDanceConfig } from './originman-d
 
 // OriginMan dance simulation reward defaults and quality thresholds from dance_env.py and train.py.
 // Override values from the original run take precedence. The engine contract is checked in tests.
-const rewards = {
+export const DANCE_REWARDS = {
+  tiltPenalty: { label: '倾斜惩罚', defaultValue: 3, increment: 0.4 },
   armSwingWeight: { label: '摆臂跟踪权重', defaultValue: 4, increment: 0.5 },
   armSpeedWeight: { label: '摆臂速度跟拍权重', defaultValue: 1.5, increment: 0.2 },
   weightShiftWeight: { label: '换重心跟踪权重', defaultValue: 3.4, increment: 0.4 },
@@ -36,7 +37,7 @@ const sections = {
 };
 
 export function rewardChangeText(key, before, after) {
-  const reward = rewards[key];
+  const reward = DANCE_REWARDS[key];
   const previous = before ?? (reward ? `引擎默认 ${reward.defaultValue}` : '默认');
   return `${reward?.label ?? key} ${previous} → ${after}`;
 }
@@ -47,13 +48,15 @@ function metricText(value, unit) {
   return `${formatted}${unit === 'm' ? ' cm' : unit}`;
 }
 
-function inspectMetrics(section) {
-  return sections[section.type].map(([key, label, threshold, unit, reward, operator = '≥']) => {
-    const value = section.measurements?.[key];
-    const present = Number.isFinite(value);
-    const met = present && (operator === '<' ? value < threshold : value >= threshold);
-    return { key, label, threshold, unit, operator, reward, ...(present && { value, met }) };
-  });
+export function inspectDanceMetrics(section) {
+  return (sections[section.type] ?? []).map(
+    ([key, label, threshold, unit, reward, operator = '≥']) => {
+      const value = section.measurements?.[key];
+      const present = Number.isFinite(value);
+      const met = present && (operator === '<' ? value < threshold : value >= threshold);
+      return { key, label, threshold, unit, operator, reward, ...(present && { value, met }) };
+    },
+  );
 }
 
 export function danceCoaching(run, runId, requestedSection) {
@@ -137,7 +140,7 @@ export function danceCoaching(run, runId, requestedSection) {
   }
   if (dance.qualityGatePassed !== false) return missing;
   const section = row.sections[sectionNumber - 1];
-  const checks = inspectMetrics(section);
+  const checks = inspectDanceMetrics(section);
   const failed = checks.filter(({ met }) => met === false);
   const missingChecks = checks.filter(({ met }) => met === undefined).map(({ label }) => label);
   const details = {
@@ -184,7 +187,7 @@ export function danceCoaching(run, runId, requestedSection) {
       details,
     );
 
-  const reward = rewards[rewardKey];
+  const reward = DANCE_REWARDS[rewardKey];
   const override = config.rewardTuning?.[rewardKey];
   const before = override ?? reward.defaultValue;
   const after = Math.min(

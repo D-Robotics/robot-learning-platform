@@ -38,6 +38,29 @@ function pathsFor(scope, contextId, phase, directory) {
 }
 const defaultDirectory = () =>
   path.join(os.homedir(), '.config', 'rdk-robot-learning-platform', 'experiments');
+export function bindTrainingGoal({
+  account,
+  audience,
+  contextId,
+  goalDigest,
+  directory = defaultDirectory(),
+}) {
+  fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
+  privatePath(directory, true);
+  const stem = createHash('sha256')
+    .update(JSON.stringify([account, audience, contextId]))
+    .digest('hex');
+  const file = path.join(directory, stem + '.goal.sha256');
+  try {
+    fs.writeFileSync(file, goalDigest, { flag: 'wx', mode: 0o600 });
+  } catch (error) {
+    if (error.code !== 'EEXIST') throw error;
+    privatePath(file);
+    if (fs.readFileSync(file, 'utf8') !== goalDigest)
+      throw Error('这个实验标识已绑定另一份目标或预算。请按原参数继续。');
+  }
+}
+
 export async function recoverSubmission({
   scope,
   contextId,

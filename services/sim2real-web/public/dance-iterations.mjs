@@ -32,7 +32,7 @@ function parseIteration(hash) {
     value.spentSteps < 0 ||
     value.spentSteps > value.additionalSteps ||
     !Array.isArray(value.rounds) ||
-    value.rounds.length < 1 ||
+    (value.rounds.length === 0 && value.state !== 'blocked') ||
     value.rounds.length > 6 ||
     new Set(value.rounds.map((round) => round.runId)).size !== value.rounds.length ||
     value.rounds.some((round) => !runIdPattern.test(round.runId))
@@ -72,9 +72,10 @@ function showFailedMeasures(turn, evidence) {
   }
 }
 
-async function renderRound(turn, snapshot, location, fetchImpl) {
+async function renderRound(turn, snapshot, parent, location, fetchImpl) {
   const id = encodeURIComponent(snapshot.runId);
   add(turn, 'h2', typeof snapshot.change === 'string' ? snapshot.change.slice(0, 240) : '查看本轮');
+  if (parent >= 0) add(turn, 'p', `以第 ${parent + 1} 轮为基线`);
   const status = add(turn, 'p', '正在核对本轮 Run');
   const endpoint = new URL(`./api/v1/duck/runs/${id}`, location.href);
   const detail = new URL('./run-detail.html', location.href);
@@ -126,7 +127,7 @@ async function renderRound(turn, snapshot, location, fetchImpl) {
       add(actions, 'span', ' · ');
     }
     link(actions, '查看本轮详情', detail);
-    return verified && passed;
+    return verified ? passed : null;
   } catch (error) {
     status.textContent = error.message;
     link(turn, '打开本轮详情核对', detail);
@@ -140,17 +141,37 @@ export async function showDanceIterations({ document, location, fetchImpl = fetc
     const hash = location.hash;
     const value = parseIteration(hash);
     status.textContent = '正在核对本组 Run';
+    const compute = document.getElementById('iteration-compute');
+    if (value.accelerator && Number.isInteger(value.numEnvs))
+      compute.textContent =
+        String(value.accelerator).slice(0, 80) + ' · ' + value.numEnvs + ' 并行环境';
     document.getElementById('iteration-budget').textContent =
       `已计入 ${format(value.spentSteps)} 步／授权 ${format(value.additionalSteps)} 步`;
     rounds.replaceChildren();
     const verified = await Promise.all(
-      value.rounds.map((snapshot) => renderRound(add(rounds, 'li'), snapshot, location, fetchImpl)),
+      value.rounds.map((snapshot) =>
+        renderRound(
+          add(rounds, 'li'),
+          snapshot,
+          value.rounds.findIndex((round) => round.runId === snapshot.parentRunId),
+          location,
+          fetchImpl,
+        ),
+      ),
     );
-    if (location.hash === hash)
-      status.textContent =
-        value.state === 'passed' && verified.at(-1) !== true
-          ? '待核对最终 Run 的评测记录。'
-          : states[value.state] + '。' + String(value.reason ?? '').slice(0, 340);
+    if (location.hash !== hash) return;
+    status.textContent =
+      value.state === 'passed' && verified.at(-1) !== true
+        ? '待核对最终 Run 的评测记录。'
+        : states[value.state] + '。' + String(value.reason ?? '').slice(0, 340);
+    const best = document.getElementById('iteration-best');
+    best.replaceChildren();
+    const bestIndex = value.rounds.findIndex((round) => round.runId === value.bestRunId);
+    if (typeof verified[bestIndex] === 'boolean') {
+      const detail = new URL('./run-detail.html', location.href);
+      detail.searchParams.set('runId', value.bestRunId);
+      link(best, '打开当前最佳 Run', detail);
+    }
   } catch (error) {
     status.textContent = error.message;
   }

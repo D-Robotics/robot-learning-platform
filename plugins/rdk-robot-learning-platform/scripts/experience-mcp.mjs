@@ -940,6 +940,7 @@ export function experienceProxy(
   };
   const iterateDance = createDanceIteration({
     baseUrl,
+    contextDirectory,
     account: async () => {
       const status = await authentication?.status();
       return status?.authenticated === true ? status.accountId : null;
@@ -1020,7 +1021,7 @@ export function experienceProxy(
           '\n用户说“带我开启/开始 OriginMan Workshop”时，直接调用 rdk_workshop({intent:"new"})。明确受扰恢复时增加 course:"recovery"。按回执导航，再展示 studentReply。如果只拿到旧课程目录，使用回执的绝对链接。127.0.0.1 可能是 MCP 内部转发地址，诊断网页必须依据插件配置的平台 URL。' +
           '\n用户问插件能做什么时，调用 rdk_platform_status 后直接使用 studentReply；仅在追问时展开工具名、数量、接口地址或设备门槛。' +
           '\n这是通用机器人学习插件。先按用户的机型与目标使用 rdk_learning_guide；打开工作台传 task:overview，强化学习或模仿学习有通用入口，只有明确选择课程时才使用 OriginMan 专用工具。开始新实验传 intent:new；查看结果传 intent:results 和原 Run；改参传 intent:retry、原 Run 与 changes，等确认再使用 nextArguments。Studio 优先用 studio_open_url 打开已验证的工作台链接，仍保留可点击地址。已打开不表示已播放。' +
-          '\nOriginMan 舞蹈自动迭代须先有用户明确授权的新增训练总步数以及原 Run ID；用 rdk_originman_dance_iterate，按 nextArguments 原样接续，无需逐轮确认。按回执在右侧显示逐轮结果。其他训练沿用单轮验收。' +
+          '\n用户明确要求根据目标自动训练时，根据目标整理舞蹈配方，沿学习引导选择 RTX 4090 后确定本组总步数，使用 rdk_originman_dance_iterate 的 dance-quality-gate 从首轮开始；已有 Run 使用 original-quality-gate。一次确认后按 nextArguments 持续接续，按回执打开右侧。其他训练沿用单轮验收。' +
           '\n版本检查分别报告插件实际加载版本、宿主登记与平台连接；工具不可用、读失败和已确认空列表分别报告。舞蹈仿真通过不具备部署资格。部署预检被拒绝或设备工具缺失时保留阻断，不使用终端、SSH 或设备执行工具替代受控部署。' +
           '\n' +
           '\n提交 OriginMan 舞蹈或收到一键仿真验收请求后，沿原 runId 调用 rdk_originman_dance_acceptance。每次待运行回执继续传 nextArguments，终态自动同源评测；验收出判定后按 studioNavigation 打开 Studio 右侧。比较两条记录用 rdk_originman_dance_compare。' +

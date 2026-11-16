@@ -1280,3 +1280,106 @@ test('auto iteration tunes exactly one reward at 64 envs after a verified formal
   assert.equal(matchesDanceIterationGpu({ cuda: false, gpuName: 'RTX 4090' }), false);
   assert.equal(matchesDanceIterationGpu({ cuda: true, gpuName: 'RTX 3090' }), false);
 });
+
+test('an OriginMan goal starts with no Run, abandons a worse parameter trial and stops on success', async (t) => {
+  const { createDanceIteration } =
+    await import('../plugins/rdk-robot-learning-platform/scripts/dance-iteration.mjs');
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'dance-goal-test-'));
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
+  const jobs = new Map();
+  const recipes = [];
+  const args = {
+    contextId: 'fresh-dance-goal',
+    goal: 'dance-quality-gate',
+    computeResourceId: 'isolated-4090',
+    totalSteps: 8192 + 3 * 503808,
+    dance: {
+      schemaVersion: 1,
+      title: '交替摆臂',
+      bpm: 100,
+      seed: 7,
+      sections: [{ type: 'alternating-arms', beats: 8, intensity: 0.5 }],
+    },
+  };
+  const source = {
+    async account() {
+      return 'fixture-account';
+    },
+    recover: async (id) => jobs.get(id),
+    submit: async (input) => {
+      const runId = 'trial-' + (jobs.size + 1);
+      const receipt = { submission: { runId } };
+      recipes.push(input);
+      jobs.set(input.contextId, receipt);
+      return receipt;
+    },
+    accept: async (id) => {
+      const i = Number(id.split('-').pop()) - 1;
+      const plan = recipes[i];
+      const passed = i === 3;
+      const measurements = [
+        [0.01485, 0, 0.14],
+        [0.07, 0.6, 0.16],
+        [0.04, 0.4, 0.05],
+        [0.12, 0.72, 0.23],
+      ][i];
+      return {
+        simulationAcceptance: { state: passed ? 'passed' : 'failed', allTemposVerified: true },
+        runDelivery: { policy: 'available', replay: 'simulation' },
+        run: {
+          id,
+          taskId: 'originman-dance',
+          mock: false,
+          contractId: 'dance-v2',
+          modelId: 'model',
+          computeResourceId: args.computeResourceId,
+          training: { engine: 'originman-dance-ppo', numEnvs: 64, originmanDance: plan.dance },
+          metrics: {
+            trainingDevice: 'cuda',
+            trainingDeviceName: 'NVIDIA RTX 4090',
+            trainingSteps: Math.ceil(plan.dance.trainingSteps / 4096) * 4096,
+            originmanDance: {
+              sceneProvenance: { sceneSha256: 'a'.repeat(64) },
+              evaluations: [95, 100, 105].map((bpm) => ({
+                bpm,
+                sections: [
+                  {
+                    type: 'alternating-arms',
+                    clean: true,
+                    passed,
+                    measurements: {
+                      armAsymmetryRangeM: measurements[0],
+                      alternatingArmFraction: measurements[1],
+                      armBeatCorrelation: measurements[2],
+                    },
+                  },
+                ],
+              })),
+            },
+          },
+        },
+      };
+    },
+  };
+  const create = () =>
+    createDanceIteration({
+      ...source,
+      contextDirectory: directory,
+      baseUrl: 'https://fixture.test/learning',
+    });
+  let iteration = await create()(args);
+  assert.equal(recipes[0].dance.trainingSteps, 8192);
+  assert.equal(recipes[0].previousRunId, undefined);
+  await assert.rejects(() => create()({ ...args, totalSteps: args.totalSteps + 4096 }), /已绑定/);
+  while (iteration.nextArguments) iteration = await create()(iteration.nextArguments);
+  assert.equal(iteration.iteration.state, 'passed');
+  assert.equal(iteration.iteration.bestRunId, 'trial-4');
+  assert.equal(iteration.iteration.spentSteps, args.totalSteps);
+  assert.equal(recipes.length, 4);
+  assert.equal(recipes[1].dance.trainingSteps, 500000);
+  assert.deepEqual(recipes[2].dance.rewardTuning, { armSwingWeight: 4.5 });
+  assert.equal(recipes[3].previousRunId, 'trial-2');
+  assert.deepEqual(recipes[3].dance.rewardTuning, { armSpeedWeight: 1.7 });
+  assert.equal((await create()(args)).iteration.state, 'passed');
+  assert.equal(recipes.length, 4);
+});

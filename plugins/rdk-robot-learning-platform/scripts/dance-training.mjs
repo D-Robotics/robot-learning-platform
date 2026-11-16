@@ -76,6 +76,8 @@ const schema = {
   additionalProperties: false,
 };
 
+export const DANCE_CONFIG_SCHEMA = schema.properties.dance;
+
 export const DANCE_TRAINING_TOOLS = [
   {
     name: 'rdk_originman_dance_train',
@@ -112,7 +114,7 @@ function requireInput(args) {
       !/^[A-Za-z0-9][A-Za-z0-9_.-]{0,119}$/.test(args.previousRunId))
   )
     throw new Error('用于对比的原 Run 标识无效。');
-  const dance = resolveOriginmanDanceConfig(args.dance);
+  const dance = canonicalDanceConfig(args.dance);
   const numEnvs = args.numEnvs ?? 64;
   if (!Number.isSafeInteger(numEnvs) || numEnvs < 1 || numEnvs > 64)
     throw new Error('numEnvs 必须是 1 到 64 的整数；缺省 64。');
@@ -121,15 +123,21 @@ function requireInput(args) {
     numEnvs,
     ...(args.modelId ? { modelId: args.modelId } : {}),
     ...(args.computeResourceId ? { computeResourceId: args.computeResourceId } : {}),
-    dance: {
-      schemaVersion: 1,
-      title: dance.title,
-      bpm: dance.bpm,
-      sections: dance.sections,
-      seed: dance.seed,
-      trainingSteps: dance.trainingSteps,
-      ...(dance.rewardTuning ? { rewardTuning: dance.rewardTuning } : {}),
-    },
+    dance,
+  };
+}
+
+export function canonicalDanceConfig(config) {
+  const { schemaVersion, title, bpm, sections, seed, trainingSteps, rewardTuning } =
+    resolveOriginmanDanceConfig(config);
+  return {
+    schemaVersion,
+    title,
+    bpm,
+    sections,
+    seed,
+    trainingSteps,
+    ...(rewardTuning && { rewardTuning: Object.fromEntries(Object.entries(rewardTuning).sort()) }),
   };
 }
 
