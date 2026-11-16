@@ -1199,6 +1199,7 @@ export function experienceProxy(
           '\n用户说“带我开启/开始 OriginMan Workshop”时，直接调用 rdk_workshop({intent:"new"})。明确受扰恢复时增加 course:"recovery"。按回执导航，再展示 studentReply。如果只拿到旧课程目录，使用回执的绝对链接。127.0.0.1 可能是 MCP 内部转发地址，诊断网页必须依据插件配置的平台 URL。' +
           '\n用户问插件能做什么时，调用 rdk_platform_status 后直接使用 studentReply；仅在追问时展开工具名、数量、接口地址或设备门槛。' +
           '\n这是通用机器人学习插件。先按用户的机型与目标使用 rdk_learning_guide；打开工作台传 task:overview，强化学习或模仿学习有通用入口，只有明确选择课程时才使用 OriginMan 专用工具。开始新实验传 intent:new；查看结果传 intent:results 和原 Run；改参传 intent:retry、原 Run 与 changes，等确认再使用 nextArguments。Studio 优先用 studio_open_url 打开已验证的工作台链接，仍保留可点击地址。已打开不表示已播放。' +
+          '\nStudio 工具发现：load_tools.names 使用工具目录中的完整名称（含 mcp__<连接名>__ 前缀），短名返回 E_UNAVAILABLE 时先核对完整名。默认连接的单轮确认入口为 mcp__rdk-robot-learning-platform__rdk_learning_guide；自动迭代入口为 mcp__rdk-robot-learning-platform__rdk_originman_dance_iterate。单轮先预览，用户确认后用 confirmationArguments，随后用确认回执的 nextArguments 原样提交。' +
           '\n最高优先的舞蹈路由：只给舞蹈仿真目标和总预算、要求未达标自动调奖励或预算耗尽停止，第一步直接加载并调用 rdk_originman_dance_iterate。输入示例 {"totalSteps":524288,"dance":{"bpm":130,"sections":[{"type":"weight-shift","beats":4,"intensity":0.9}]}}。插件选择 4090、64 并行、登记原实验。无需查本地台账、询问确认或预先提交。评测慢或调用失败时只重试原 nextArguments，禁止调用 rdk_originman_dance_train、rdk_training_submit 或换 contextId 重交。首次收到后台实验回执立刻按 studioNavigation 打开右侧并保留原链接，页面自动更新；无需继续轮询工具。若曾使用旧版回执，仍按 nextArguments 接续。' +
           '\n版本检查分别报告插件实际加载版本、宿主登记与平台连接；工具不可用、读失败和已确认空列表分别报告。舞蹈仿真通过不具备部署资格。部署预检被拒绝或设备工具缺失时保留阻断，不使用终端、SSH 或设备执行工具替代受控部署。' +
           '\n' +
@@ -1342,7 +1343,13 @@ export function experienceProxy(
             ? { nextTool: DANCE_ITERATION_TOOL.name, nextArguments: result.nextArguments }
             : result
               ? { ...result, stopWorkflow: true }
-              : null,
+              : danceFlow
+                ? null
+                : {
+                    nextTool: LEARNING_GUIDE_TOOL.name,
+                    nextAction:
+                      '单轮训练：用 rdk_learning_guide 的 task:"dance" 预览并确认当前配方，再原样提交它返回的 nextArguments。Studio 的 load_tools.names 使用本轮工具目录显示的完整名称；默认连接名下是 mcp__rdk-robot-learning-platform__rdk_learning_guide。',
+                  },
         );
       }
     }

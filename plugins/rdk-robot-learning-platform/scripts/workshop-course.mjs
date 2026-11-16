@@ -444,7 +444,22 @@ export function learningGuide(answers = {}, { operationId, previous } = {}) {
   const numEnvs = answers.numEnvs ?? 64;
   const recipe = `${dance.title}，${dance.bpm} BPM，${dance.sections.map(({ type, beats, intensity }) => `${sectionTitles[type]} ${beats} 拍（幅度 ${intensity}）`).join('、')}，${dance.trainingSteps.toLocaleString('zh-CN')} 步 PPO，${numEnvs} 个并行环境`;
   if (!answers.confirmed)
-    return progress('confirm', `本轮配方是${recipe}。现在开始训练吗？`, { dance });
+    return progress('confirm', `本轮配方是${recipe}。现在开始训练吗？`, {
+      dance,
+      confirmationTool: LEARNING_GUIDE_TOOL.name,
+      confirmationArguments: {
+        intent: answers.intent ?? 'start',
+        task: 'dance',
+        target: 'simulation',
+        computeResourceId: answers.computeResourceId,
+        ...(answers.modelId ? { modelId: answers.modelId } : {}),
+        numEnvs,
+        dance,
+        confirmed: true,
+      },
+      delivery:
+        '展示 studentReply。用户明确确认开始后，再以 confirmationArguments 调用 confirmationTool。',
+    });
   return progress('ready', `已确认${recipe}。接下来检查你选的算力并启动本轮仿真训练。`, {
     nextTool: 'rdk_originman_dance_train',
     nextArguments: {

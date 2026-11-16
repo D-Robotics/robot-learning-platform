@@ -1495,7 +1495,11 @@ test('Studio protects the automatic scope even after invalid arguments, and reje
   const call = (name, args) => dispatch('tools/call', { name, arguments: args });
   const early = await call('rdk_originman_dance_train', { contextId: 'fallback' });
   assert.equal(early.structuredContent.error.platformCode, 'DANCE_ROUTE_REQUIRED');
-  assert.equal(early.structuredContent.nextTool, 'rdk_originman_dance_iterate');
+  assert.equal(early.structuredContent.nextTool, 'rdk_learning_guide');
+  assert.match(
+    early.structuredContent.nextAction,
+    /mcp__rdk-robot-learning-platform__rdk_learning_guide/,
+  );
   const invalid = await call('rdk_originman_dance_iterate', {
     goal: 'invalid',
     totalSteps: 524288,
@@ -1508,4 +1512,45 @@ test('Studio protects the automatic scope even after invalid arguments, and reje
   });
   assert.equal(changed.structuredContent.error.platformCode, 'DANCE_GOAL_RESERVED');
   assert.equal(calls.length, 0);
+});
+
+test('Studio single-round dance preview returns an exact confirmation request, without writing', async () => {
+  const { experienceProxy } =
+    await import('../plugins/rdk-robot-learning-platform/scripts/experience-mcp.mjs');
+  const proxy = experienceProxy(
+    {
+      async request() {
+        assert.fail('Confirmation must not write to the platform');
+      },
+    },
+    { env: { RDK_STUDIO_INHERIT_LOGIN: '1' } },
+  );
+  const guide = async (args) =>
+    (await proxy('tools/call', { name: 'rdk_learning_guide', arguments: args })).structuredContent;
+  const dance = {
+    schemaVersion: 1,
+    title: '高能律动六段',
+    bpm: 140,
+    trainingSteps: 8192,
+    seed: 7,
+    sections: [
+      { type: 'alternating-arms', beats: 8, intensity: 0.9 },
+      { type: 'weight-shift', beats: 8, intensity: 0.85 },
+      { type: 'squat-rise', beats: 8, intensity: 0.8 },
+      { type: 'alternating-arms', beats: 8, intensity: 0.9 },
+      { type: 'weight-shift', beats: 8, intensity: 0.85 },
+      { type: 'open-pose', beats: 16, intensity: 0.95 },
+    ],
+    rewardTuning: { armSwingWeight: 6 },
+  };
+  const preview = await guide({ task: 'dance', computeResourceId: 'worker', numEnvs: 64, dance });
+  assert.equal(preview.stage, 'confirm');
+  assert.equal(preview.trainingSubmitted, false);
+  assert.equal(preview.confirmationTool, 'rdk_learning_guide');
+  assert.deepEqual(preview.confirmationArguments.dance, dance);
+  const confirmed = await guide(preview.confirmationArguments);
+  assert.equal(confirmed.stage, 'ready');
+  assert.equal(confirmed.nextTool, 'rdk_originman_dance_train');
+  assert.deepEqual(confirmed.nextArguments.dance, dance);
+  assert.equal(confirmed.nextArguments.computeResourceId, 'worker');
 });
