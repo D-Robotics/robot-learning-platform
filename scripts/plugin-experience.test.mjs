@@ -742,6 +742,7 @@ test('runtime version requires matching loaded source hashes and rejects a stale
     'dance-training.mjs',
     'dance-coaching.mjs',
     'dance-evaluation.mjs',
+    'dance-iteration.mjs',
     'workshop-entry.mjs',
     'development-targets.mjs',
     'playback-plan.mjs',
@@ -781,6 +782,7 @@ test('runtime version requires matching loaded source hashes and rejects a stale
             'dance-training.mjs',
             'dance-coaching.mjs',
             'dance-evaluation.mjs',
+            'dance-iteration.mjs',
             'workshop-entry.mjs',
             'development-targets.mjs',
             'playback-plan.mjs',
@@ -1098,4 +1100,183 @@ test('legacy replay is linked only after verifying bytes for the exact Run', asy
   assert.match(rejected.studentReply, /实际训练设备：cuda。/);
   assert.doesNotMatch(rejected.studentReply, /untrusted/);
   assert.equal(checked, 2);
+});
+
+test('OriginMan auto iteration raises quick-check budget, preserves the Run chain and stops on pass', async () => {
+  const { createDanceIteration } =
+    await import('../plugins/rdk-robot-learning-platform/scripts/dance-iteration.mjs');
+  const { submitOnce, recoverSubmission } =
+    await import('../plugins/rdk-robot-learning-platform/scripts/submission-journal.mjs');
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'dance-iteration-test-'));
+  const run = {
+    id: 'quick',
+    taskId: 'originman-dance',
+    contractId: 'dance',
+    computeResourceId: 'worker-4090',
+    modelId: 'dance-ppo',
+    mock: false,
+    training: {
+      engine: 'originman-dance-ppo',
+      numEnvs: 64,
+      originmanDance: {
+        schemaVersion: 1,
+        title: 'Original',
+        bpm: 100,
+        seed: 7,
+        trainingSteps: 8192,
+        sections: [{ type: 'alternating-arms', beats: 8, intensity: 0.5 }],
+      },
+    },
+    metrics: {
+      trainingDevice: 'cuda',
+      trainingDeviceName: 'NVIDIA GeForce RTX 4090',
+      trainingSteps: 8192,
+      originmanDance: { sceneProvenance: { sceneSha256: 'a'.repeat(64) } },
+    },
+  };
+  let formal;
+  let submissions = 0;
+  const accepted = (run, state) => ({
+    run,
+    simulationAcceptance: { state },
+    runDelivery: { policy: 'available', replay: 'simulation' },
+  });
+  const journal = (contextId) => ({
+    contextId,
+    scope: 'dance-test',
+    phase: 'train',
+    directory,
+    remember: async (runId) => ({ runId }),
+  });
+  const create = () =>
+    createDanceIteration({
+      baseUrl: 'https://fixture.test/learning',
+      account: async () => 'owner',
+      accept: async (id) => (id === run.id ? accepted(run, 'failed') : accepted(formal, 'passed')),
+      recover: (contextId) => recoverSubmission(journal(contextId)),
+      submit: (args) =>
+        submitOnce({
+          ...journal(args.contextId),
+          submit: async () => {
+            submissions++;
+            assert.equal(args.numEnvs, 64);
+            assert.equal(args.computeResourceId, run.computeResourceId);
+            assert.equal(args.modelId, run.modelId);
+            assert.deepEqual(args.dance.sections, run.training.originmanDance.sections);
+            const steps = Math.ceil(args.dance.trainingSteps / 4096) * 4096;
+            formal = {
+              ...run,
+              id: 'formal',
+              training: { ...run.training, originmanDance: args.dance },
+              metrics: { ...run.metrics, trainingSteps: steps },
+            };
+            return { runId: formal.id };
+          },
+        }),
+    });
+  const args = { runId: run.id, goal: 'original-quality-gate', additionalSteps: 503808 };
+  try {
+    const low = await create()({ ...args, additionalSteps: 8192 });
+    assert.equal(low.iteration.state, 'budget-exhausted');
+    assert.equal(submissions, 0);
+    const started = await create()(args);
+    assert.deepEqual(started.nextArguments, args);
+    assert.equal(started.iteration.spentSteps, 503808);
+    assert.equal(formal.training.originmanDance.trainingSteps, 500000);
+    assert.equal(started.iteration.state, 'waiting');
+    const done = await create()(started.nextArguments);
+    assert.equal(submissions, 1);
+    assert.equal(done.nextArguments, undefined);
+    assert.equal(done.iteration.state, 'passed');
+    assert.deepEqual(
+      done.iteration.rounds.map((row) => [row.runId, row.state]),
+      [
+        ['quick', 'failed'],
+        ['formal', 'passed'],
+      ],
+    );
+    assert.match(done.iteration.rounds[1].change, /8,192 → 500,000/);
+    assert.equal(
+      new URL(done.studioNavigation.arguments.url).pathname,
+      '/learning/dance-iterations.html',
+    );
+  } finally {
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test('auto iteration tunes exactly one reward at 64 envs after a verified formal failure', async () => {
+  const { createDanceIteration, matchesDanceIterationGpu } =
+    await import('../plugins/rdk-robot-learning-platform/scripts/dance-iteration.mjs');
+  const config = {
+    schemaVersion: 1,
+    title: 'Original',
+    bpm: 100,
+    seed: 7,
+    trainingSteps: 500000,
+    sections: [{ type: 'alternating-arms', beats: 8, intensity: 0.5 }],
+  };
+  const run = {
+    id: 'formal-miss',
+    taskId: 'originman-dance',
+    status: 'completed',
+    modelId: 'model',
+    computeResourceId: 'worker-4090',
+    mock: false,
+    training: { engine: 'originman-dance-ppo', numEnvs: 64, originmanDance: config },
+    metrics: {
+      trainingDevice: 'cuda',
+      trainingDeviceName: 'NVIDIA GeForce RTX 4090',
+      trainingSteps: 503808,
+      originmanDance: {
+        qualityGatePassed: false,
+        evaluations: [
+          {
+            bpm: 100,
+            failed: false,
+            completed: true,
+            sections: [
+              {
+                type: 'alternating-arms',
+                beats: 8,
+                clean: true,
+                stylePassed: false,
+                passed: false,
+                measurements: {
+                  alternatingArmFraction: 0.5,
+                  armBeatCorrelation: 0.15,
+                  armAsymmetryRangeM: 0.07,
+                },
+              },
+            ],
+          },
+        ],
+      },
+    },
+  };
+  let submitted;
+  const iterate = createDanceIteration({
+    baseUrl: 'https://fixture.test',
+    account: async () => 'owner',
+    accept: async () => ({ run, simulationAcceptance: { state: 'failed' } }),
+    recover: async () => null,
+    submit: async (args) => {
+      submitted = args;
+      return { submission: { runId: 'reward-round' } };
+    },
+  });
+  const args = { runId: run.id, goal: 'original-quality-gate', additionalSteps: 503808 };
+  assert.equal(
+    (await iterate({ ...args, additionalSteps: 500000 })).iteration.state,
+    'budget-exhausted',
+  );
+  assert.equal(submitted, undefined);
+  assert.equal((await iterate(args)).iteration.state, 'waiting');
+  const { title, rewardTuning, ...retained } = submitted.dance;
+  const { title: _originalTitle, ...original } = config;
+  assert.deepEqual(retained, original);
+  assert.deepEqual(rewardTuning, { armSpeedWeight: 1.7 });
+  assert.equal(matchesDanceIterationGpu({ cuda: true, gpuName: 'RTX 4090' }), true);
+  assert.equal(matchesDanceIterationGpu({ cuda: false, gpuName: 'RTX 4090' }), false);
+  assert.equal(matchesDanceIterationGpu({ cuda: true, gpuName: 'RTX 3090' }), false);
 });

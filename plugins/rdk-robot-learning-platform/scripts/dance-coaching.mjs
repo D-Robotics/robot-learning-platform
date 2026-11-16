@@ -161,7 +161,7 @@ export function danceCoaching(run, runId, requestedSection) {
       details,
     );
 
-  const rewardKey = failed[0].reward;
+  const rewardKey = failed.find(({ reward }) => reward)?.reward;
   if (!rewardKey)
     return reply(
       'inspect-replay',
@@ -174,7 +174,7 @@ export function danceCoaching(run, runId, requestedSection) {
     !run.modelId ||
     !Number.isInteger(numEnvs) ||
     numEnvs < 1 ||
-    numEnvs > 16 ||
+    numEnvs > 64 ||
     !Number.isInteger(rawConfig.seed) ||
     !Number.isInteger(rawConfig.trainingSteps)
   )

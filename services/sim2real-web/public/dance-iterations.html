@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>OriginMan 仿真自动迭代</title>
+    <link rel="stylesheet" href="./tokens.css" />
+    <link rel="stylesheet" href="./experiment.css" />
+    <script type="module" src="./dance-iterations.mjs"></script>
+  </head>
+  <body>
+    <a class="skip-link" href="#iteration-main">跳到迭代结果</a>
+    <header class="experiment-header">
+      <a href="./">机器人学习平台</a>
+      <span>OriginMan 仿真</span>
+    </header>
+    <main id="iteration-main" tabindex="-1" class="experiment-content">
+      <h1>自动迭代</h1>
+      <p id="iteration-status" role="status" aria-live="polite">正在读取本组 Run</p>
+      <dl>
+        <dt>算力</dt>
+        <dd>RTX 4090 · 64 并行环境</dd>
+        <dt>目标</dt>
+        <dd>通过原舞蹈仿真质量门</dd>
+        <dt>新增训练预算</dt>
+        <dd id="iteration-budget">—</dd>
+      </dl>
+      <ol id="iteration-rounds" aria-label="逐轮仿真结果"></ol>
+    </main>
+  </body>
+</html>

@@ -69,6 +69,7 @@ for (const name of [
   'dance-training.mjs',
   'dance-coaching.mjs',
   'dance-evaluation.mjs',
+  'dance-iteration.mjs',
   'originman-dance-config.mjs',
   'workshop-entry.mjs',
   'development-targets.mjs',

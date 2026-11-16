@@ -133,19 +133,25 @@ function requireInput(args) {
   };
 }
 
-export async function trainOriginmanDance(
-  args,
-  call,
-  { directory, defaultResourceId, readModels, toolNames },
-) {
-  const input = requireInput(args);
-  const existing = await recoverSubmission({
-    scope: 'originman-dance-workshop',
-    contextId: input.contextId,
+export const danceTrainingBatchSize = (numEnvs) =>
+  numEnvs * Math.min(256, Math.floor(4096 / numEnvs));
+const scope = 'originman-dance-workshop';
+export const recoverDanceSubmission = (contextId, directory) =>
+  recoverSubmission({
+    scope,
+    contextId,
     phase: 'train',
     directory,
     remember: async (runId) => ({ runId }),
   });
+
+export async function trainOriginmanDance(
+  args,
+  call,
+  { directory, defaultResourceId, readModels, toolNames, acceptWorker },
+) {
+  const input = requireInput(args);
+  const existing = await recoverDanceSubmission(input.contextId, directory);
   if (existing)
     return {
       stage: 'training',
@@ -199,10 +205,12 @@ export async function trainOriginmanDance(
       details: { tested, trainingSubmitted: false },
       nextAction: '重新列出支持舞蹈引擎的算力机，由学员选择后再确认本轮配方。',
     });
+  if (acceptWorker && !acceptWorker(tested))
+    throw new Error('该 Worker 未确认 CUDA RTX 4090，自动迭代已暂停。');
   const model = selected.model ?? (await registerCourseModel(manifest, call));
   const steps = input.dance.trainingSteps;
   const submission = await submitOnce({
-    scope: 'originman-dance-workshop',
+    scope,
     contextId: input.contextId,
     phase: 'train',
     directory,
@@ -217,9 +225,7 @@ export async function trainOriginmanDance(
         engine: 'originman-dance-ppo',
         algorithm: 'ppo',
         numEnvs: input.numEnvs,
-        maxIterations: Math.ceil(
-          steps / (input.numEnvs * Math.min(256, Math.floor(4096 / input.numEnvs))),
-        ),
+        maxIterations: Math.ceil(steps / danceTrainingBatchSize(input.numEnvs)),
         video: true,
         originmanDance: input.dance,
         idempotencyKey: input.contextId + '-train',

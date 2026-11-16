@@ -358,3 +358,49 @@ test('dance Workshop links fill the requested draft without submitting or saving
     assert.deepEqual(selected, ['course-worker']);
   }
 });
+
+test('auto iteration confirms a claimed pass only after reading the exact final Run', async (t) => {
+  const { showDanceIterations } = await import('./public/dance-iterations.mjs');
+  const snapshot = {
+    state: 'passed',
+    reason: '已达到目标',
+    spentSteps: 503808,
+    additionalSteps: 503808,
+    rounds: [{ runId: 'run-final', state: 'passed', change: '提高训练预算', policy: true }],
+  };
+  const url = new URL('https://platform.test/learning/dance-iterations.html');
+  url.hash = new URLSearchParams({ iteration: JSON.stringify(snapshot) }).toString();
+  const html = fs.readFileSync(new URL('./public/dance-iterations.html', import.meta.url), 'utf8');
+  const dom = new JSDOM(html, { url: url.href });
+  t.after(() => dom.window.close());
+  const { document, location } = dom.window;
+  const load = (runId) =>
+    showDanceIterations({
+      document,
+      location,
+      fetchImpl: async (endpoint) => {
+        assert.equal(endpoint, 'https://platform.test/learning/api/v1/duck/runs/run-final');
+        return new Response(
+          JSON.stringify({
+            run: {
+              id: runId,
+              taskId: 'originman-dance',
+              status: 'completed',
+              artifact: { format: 'onnx', sha256: digest('a') },
+              metrics: { trainingSteps: 503808, originmanDance: { qualityGatePassed: true } },
+            },
+          }),
+        );
+      },
+    });
+  await load('another-run');
+  assert.match(document.querySelector('#iteration-status').textContent, /待核对/);
+  assert.equal(document.querySelector('#iteration-rounds a[href$="/artifact"]'), null);
+  await load('run-final');
+  assert.match(document.querySelector('#iteration-status').textContent, /已达标/);
+  assert.match(document.querySelector('#iteration-rounds').textContent, /提高训练预算.*503,808/s);
+  assert.equal(
+    document.querySelector('#iteration-rounds a[href$="/artifact"]').href,
+    'https://platform.test/learning/api/v1/duck/runs/run-final/artifact',
+  );
+});
