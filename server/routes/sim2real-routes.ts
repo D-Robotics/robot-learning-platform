@@ -1,3 +1,5 @@
+import { registerSim2RealDanceEvaluationRoutes } from './sim2real-dance-evaluation-routes.js';
+import { setupDanceGoals } from '../sim2real/dance-goals.mjs';
 import { probeComputeWorker, safeComputeHealthText } from '../sim2real/compute-worker-health.js';
 import { registerResimulatedDanceVideoRoute } from './resimulated-dance-video-routes.js';
 import { registerSim2RealTrainingPlanRoutes } from './sim2real-training-plan-routes.js';
@@ -1994,7 +1996,7 @@ function mutationAccess(request: Request): MutationAccess {
   // Training, cancellation, reconciliation and evaluation are operational
   // actions; permit either the editor or operator role to keep the workspace
   // useful while still excluding a read-only viewer.
-  if (/\/(?:runs|training-plans)(?:\/|$)/.test(pathname)) return 'edit-or-operate';
+  if (/\/(?:runs|training-plans|dance-goals)(?:\/|$)/.test(pathname)) return 'edit-or-operate';
   return SIM2REAL_PERMISSIONS.edit;
 }
 
@@ -2174,7 +2176,15 @@ export function createSim2RealRouter(
       }
     }),
   );
-  const auth = deps.auth ?? LOCAL_SIM2REAL_AUTH;
+  const callerAuth = deps.auth ?? LOCAL_SIM2REAL_AUTH;
+  const danceGoals = setupDanceGoals({
+    callerAuth,
+    prefix: SIM2REAL_VERSIONED_API_PREFIX,
+    defaultPort: Number(process.env.RDK_SIM2REAL_PORT) || 18102,
+    storageDirectory: process.env.RDK_SIM2REAL_STORAGE_DIR || path.resolve('.data'),
+    findRun: findSim2RealRunByIdempotency,
+  });
+  const auth = danceGoals.auth;
   const visibleDevicesForAuth = (owner?: string) =>
     visibleDevices(owner, auth.isMultiUserDeployment());
 
@@ -2264,6 +2274,36 @@ export function createSim2RealRouter(
   // core handlers and the telemetry/device sub-routers.
   router.use((request, response, next) => {
     if (enforceMutationAccess(request, response, auth)) next();
+  });
+  danceGoals.register(
+    router,
+    (request, response) => requestOwner(request, response, auth),
+    wrapAsync,
+    prefix,
+  );
+  registerSim2RealDanceEvaluationRoutes(router, {
+    prefix,
+    requestOwner: (request, response) => requestOwner(request, response, auth),
+    getRun: getSim2RealRun,
+    fetchArtifact: async (run, owner) => {
+      const sha = run.artifact?.sha256;
+      if (!sha || run.backend !== 'local' || !run.externalRunId) return null;
+      if (run.relayAgentUrl) {
+        const bytes = await readSim2RealRelayArtifact(sha);
+        return bytes ? { bytes } : null;
+      }
+      const runner = await resolveRunRunner(run.computeResourceId, owner);
+      if (run.computeResourceId && !runner) return null;
+      const accountId = owner ?? (auth.isMultiUserDeployment() ? '' : 'local-dev');
+      return accountId
+        ? fetchLocalRunArtifact({
+            accountId,
+            externalRunId: run.externalRunId,
+            ...runner,
+            timeoutMs: 10_000,
+          })
+        : null;
+    },
   });
 
   router.get(

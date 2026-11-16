@@ -438,6 +438,52 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/ModelResponse" }
         "404": { $ref: "#/components/responses/NotFound" }
+  /api/v1/duck/dance-goals:
+    get:
+      tags: [runs]
+      summary: List the current account’s recent platform-owned dance goals
+      operationId: listDanceGoals
+      responses:
+        "200": { description: Recent goals with live rounds and budgets. }
+        "401": { $ref: "#/components/responses/AuthRequired" }
+    post:
+      tags: [runs]
+      summary: Start or retrieve an idempotent OriginMan background simulation experiment
+      operationId: startDanceGoal
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [contextId, computeResourceId, totalSteps, dance]
+              properties:
+                contextId: { type: string, pattern: "^[a-zA-Z0-9][a-zA-Z0-9_-]{0,23}$" }
+                computeResourceId: { type: string }
+                modelId: { type: string }
+                totalSteps: { type: integer, minimum: 8192, maximum: 2000000 }
+                dance: { type: object, description: OriginMan choreography including BPM and sections. }
+      responses:
+        "202": { description: Goal persisted and accepted by the platform scheduler. }
+        "200": { description: Original goal reused after a retry. }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/AuthRequired" }
+        "409": { description: The given context is already bound to a different goal or budget. }
+  /api/v1/duck/dance-goals/{id}:
+    get:
+      tags: [runs]
+      summary: Read the original account-owned dance goal and per-round budget
+      operationId: getDanceGoal
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        "200": { description: Latest goal snapshot. }
+        "401": { $ref: "#/components/responses/AuthRequired" }
+        "404": { $ref: "#/components/responses/NotFound" }
   /api/v1/duck/runs:
     get:
       tags: [runs]
@@ -476,6 +522,36 @@ paths:
         "400": { $ref: "#/components/responses/BadRequest" }
         "401": { $ref: "#/components/responses/AuthRequired" }
         "429": { description: Per-account active-run quota reached. }
+  /api/v1/duck/runs/{runId}/dance-evaluation:
+    parameters:
+      - $ref: "#/components/parameters/RunId"
+    get:
+      tags: [runs]
+      summary: Read an existing independent OriginMan dance evaluation report
+      operationId: readOriginManDanceEvaluation
+      responses:
+        "200": { description: Verified report for the original Run. }
+        "404": { description: Run or report unavailable to the current account. }
+    post:
+      tags: [runs]
+      summary: Generate or retrieve an independent report for the exact original ONNX policy
+      operationId: startOriginManDanceEvaluation
+      responses:
+        "200": { description: Verified report for the original Run. }
+        "404": { description: Run unavailable to the current account. }
+        "409": { description: Run or policy evidence is incomplete. }
+        "429": { description: Evaluation workers are busy. }
+  /api/v1/duck/runs/{runId}/dance-evaluation/replay:
+    get:
+      parameters:
+        - $ref: "#/components/parameters/RunId"
+      tags: [runs]
+      summary: Stream the verified MP4 from an independent dance evaluation
+      operationId: getOriginManDanceEvaluationVideo
+      responses:
+        "200": { description: Verified MP4 video. }
+        "206": { description: Partial MP4 byte range. }
+        "404": { description: Replay is unavailable to the current account. }
   /api/v1/duck/runs/{runId}:
     parameters:
       - $ref: "#/components/parameters/RunId"

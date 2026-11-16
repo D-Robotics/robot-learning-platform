@@ -557,6 +557,39 @@ export async function connectAuthenticatedCore({
         throw new Error('Worker 步序回执未与所选 Run 绑定。');
       return proof;
     },
+    async startDanceGoal(args, { signal } = {}) {
+      const response = await fetchPlatform('/api/v1/duck/dance-goals', {
+        method: 'POST',
+        headers: { accept: 'application/json', 'content-type': 'application/json' },
+        body: JSON.stringify(args),
+        signal,
+      });
+      const value = await response.json().catch(() => null);
+      if (!response.ok || value?.ok !== true || !value.goal?.id)
+        throw new PluginRequestError(
+          'DANCE_GOAL_UNAVAILABLE',
+          value?.message ?? '平台暂时无法接收后台舞蹈实验，未确认新训练。',
+          { httpStatus: response.status },
+        );
+      return value.goal;
+    },
+    async readDanceGoal(id, { signal } = {}) {
+      if (!/^[a-zA-Z0-9][a-zA-Z0-9_-]{0,23}$/.test(id ?? '')) throw Error('原实验标识无效。');
+      const response = await fetchPlatform('/api/v1/duck/dance-goals/' + encodeURIComponent(id), {
+        method: 'GET',
+        headers: { accept: 'application/json' },
+        signal,
+      });
+      const value = await response.json().catch(() => null);
+      if (response.status === 404) return null;
+      if (!response.ok || value?.ok !== true || value.goal?.id !== id)
+        throw new PluginRequestError(
+          'DANCE_GOAL_UNAVAILABLE',
+          value?.message ?? '暂时无法读取原后台实验。',
+          { httpStatus: response.status },
+        );
+      return value.goal;
+    },
     async readDanceEvaluationRun(runId, { signal } = {}) {
       if (typeof runId !== 'string' || !/^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,119}$/.test(runId))
         throw Error('原舞蹈训练标识无效。');

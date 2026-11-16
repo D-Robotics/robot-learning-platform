@@ -105,6 +105,23 @@ try {
     );
   }
 
+  // Share the portable dance state machine with the platform background worker.
+  for (const file of [
+    'server/sim2real/dance-goals.mjs',
+    ...[
+      'course-setup',
+      'dance-coaching',
+      'dance-evaluation',
+      'dance-iteration',
+      'dance-training',
+      'originman-dance-config',
+      'submission-journal',
+    ].map((name) => 'plugins/rdk-robot-learning-platform/scripts/' + name + '.mjs'),
+    'plugins/rdk-robot-learning-platform/references/originman-dance-manifest.json',
+  ]) {
+    copyFile(file, path.join('dist-server', file));
+  }
+
   // The standalone service only needs its browser assets. Keep this copier safe
   // to run after an incremental build by replacing the destination atomically.
   copyTreeFiltered(

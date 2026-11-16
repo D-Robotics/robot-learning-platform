@@ -24,7 +24,10 @@ const format = (value) => value.toLocaleString('zh-CN', { maximumFractionDigits:
 function parseIteration(hash) {
   const raw = new URLSearchParams(hash.slice(1)).get('iteration');
   if (!raw || raw.length > 10000) throw Error('请从 Studio 对话打开本组迭代结果。');
-  const value = JSON.parse(raw);
+  return validateIteration(JSON.parse(raw));
+}
+
+function validateIteration(value) {
   if (
     !Object.hasOwn(states, value.state) ||
     !Number.isSafeInteger(value.spentSteps) ||
@@ -34,7 +37,7 @@ function parseIteration(hash) {
     (value.remainingSteps !== undefined &&
       value.remainingSteps !== value.additionalSteps - value.spentSteps) ||
     !Array.isArray(value.rounds) ||
-    (value.rounds.length === 0 && value.state !== 'blocked') ||
+    (value.rounds.length === 0 && !['waiting', 'blocked'].includes(value.state)) ||
     value.rounds.length > 6 ||
     new Set(value.rounds.map((round) => round.runId)).size !== value.rounds.length ||
     value.rounds.some((round) => !runIdPattern.test(round.runId))
@@ -101,9 +104,23 @@ async function renderRound(turn, snapshot, parent, location, fetchImpl) {
         : '仿真验收未达标'
       : run.status === 'failed'
         ? '训练执行失败'
-        : '等待核验本轮评测';
+        : run.status === 'running'
+          ? '训练中'
+          : run.status === 'queued'
+            ? '等待算力'
+            : '正在独立评测';
     if (Number.isSafeInteger(run.metrics?.trainingSteps))
       add(turn, 'p', `实际训练 ${format(run.metrics.trainingSteps)} 步`);
+    else if (run.status === 'running') {
+      const iteration = run.progress?.at(-1)?.iteration ?? run.checkpoint?.iteration;
+      if (Number.isInteger(iteration) && Number.isInteger(run.training?.maxIterations)) {
+        const progress = add(turn, 'progress');
+        progress.setAttribute('aria-label', '本轮训练进度');
+        progress.max = run.training.maxIterations;
+        progress.value = iteration;
+        add(turn, 'p', `训练迭代 ${iteration} / ${progress.max}`);
+      }
+    }
     if (passed === false && evidence?.qualityGatePassed === false)
       showFailedMeasures(turn, evidence);
     const actions = add(turn, 'p');
@@ -136,46 +153,80 @@ async function renderRound(turn, snapshot, parent, location, fetchImpl) {
   }
 }
 
-export async function showDanceIterations({ document, location, fetchImpl = fetch }) {
+async function renderIterationPage({ document, location, fetchImpl, value }) {
   const status = document.getElementById('iteration-status');
   const rounds = document.getElementById('iteration-rounds');
-  try {
-    const hash = location.hash;
-    const value = parseIteration(hash);
-    status.textContent = '正在核对本组 Run';
-    const compute = document.getElementById('iteration-compute');
-    if (value.accelerator && Number.isInteger(value.numEnvs))
-      compute.textContent =
-        String(value.accelerator).slice(0, 80) + ' · ' + value.numEnvs + ' 并行环境';
-    document.getElementById('iteration-budget').textContent =
-      `已计入 ${format(value.spentSteps)} 步 · 剩余 ${format(value.additionalSteps - value.spentSteps)} 步 · 总预算 ${format(value.additionalSteps)} 步`;
-    rounds.replaceChildren();
-    const verified = await Promise.all(
-      value.rounds.map((snapshot) =>
-        renderRound(
-          add(rounds, 'li'),
-          snapshot,
-          value.rounds.findIndex((round) => round.runId === snapshot.parentRunId),
-          location,
-          fetchImpl,
-        ),
+  const compute = document.getElementById('iteration-compute');
+  if (value.accelerator && Number.isInteger(value.numEnvs))
+    compute.textContent =
+      String(value.accelerator).slice(0, 80) + ' · ' + value.numEnvs + ' 并行环境';
+  document.getElementById('iteration-budget').textContent =
+    `已计入 ${format(value.spentSteps)} 步 · 剩余 ${format(value.additionalSteps - value.spentSteps)} 步 · 总预算 ${format(value.additionalSteps)} 步`;
+  const goal = document.getElementById('iteration-goal');
+  if (goal && typeof value.goal?.title === 'string')
+    goal.textContent = value.goal.title.slice(0, 80) + ' · ' + value.goal.bpm + ' BPM';
+  const batch = document.createDocumentFragment();
+  const verified = await Promise.all(
+    value.rounds.map((snapshot) =>
+      renderRound(
+        add(batch, 'li'),
+        snapshot,
+        value.rounds.findIndex((round) => round.runId === snapshot.parentRunId),
+        location,
+        fetchImpl,
       ),
-    );
-    if (location.hash !== hash) return;
-    status.textContent =
-      value.state === 'passed' && verified.at(-1) !== true
-        ? '待核对最终 Run 的评测记录。'
+    ),
+  );
+  // Keep existing controls and keyboard focus while a poll returns the same round snapshot.
+  const signature = JSON.stringify([value.rounds, batch.textContent]);
+  if (rounds.dataset.snapshot !== signature) {
+    rounds.replaceChildren(batch);
+    rounds.dataset.snapshot = signature;
+  }
+  const statusText =
+    value.state === 'passed' && verified.at(-1) !== true
+      ? '待核对最终 Run 的评测记录。'
+      : value.state === 'budget-exhausted'
+        ? String(value.reason ?? states[value.state]).slice(0, 340)
         : states[value.state] + '。' + String(value.reason ?? '').slice(0, 340);
-    const best = document.getElementById('iteration-best');
+  if (status.textContent !== statusText) status.textContent = statusText;
+  const best = document.getElementById('iteration-best');
+  const bestIndex = value.rounds.findIndex((round) => round.runId === value.bestRunId);
+  if (typeof verified[bestIndex] === 'boolean' && best.dataset.runId !== value.bestRunId) {
+    const detail = new URL('./run-detail.html', location.href);
+    detail.searchParams.set('runId', value.bestRunId);
     best.replaceChildren();
-    const bestIndex = value.rounds.findIndex((round) => round.runId === value.bestRunId);
-    if (typeof verified[bestIndex] === 'boolean') {
-      const detail = new URL('./run-detail.html', location.href);
-      detail.searchParams.set('runId', value.bestRunId);
-      link(best, '打开当前最佳 Run', detail);
-    }
+    best.dataset.runId = value.bestRunId;
+    link(best, '打开当前最佳 Run', detail);
+  }
+}
+
+async function liveIteration(location, fetchImpl) {
+  const id = new URL(location.href).searchParams.get('goal');
+  if (id && !/^[A-Za-z0-9][A-Za-z0-9_-]{0,23}$/.test(id))
+    throw Error('实验标识无效。');
+  const endpoint = new URL('./api/v1/duck/dance-goals' + (id ? '/' + encodeURIComponent(id) : ''), location.href);
+  const response = await fetchImpl(endpoint.href, { credentials: 'same-origin', cache: 'no-store' });
+  if (response.status === 401 || response.status === 403) throw Error('请用发起该实验的账号登录。');
+  if (!response.ok) throw Error('暂时无法读取原实验，正在重连。');
+  const payload = await response.json();
+  const value = id ? payload.goal : payload.goals?.find((goal) => goal.state === 'waiting') ?? payload.goals?.[0];
+  if (!value) throw Error('当前账号还没有后台仿真实验。');
+  if (id && value.id !== id) throw Error('平台未确认原实验。');
+  return validateIteration(value);
+}
+
+export async function showDanceIterations({ document, location, fetchImpl = fetch }) {
+  const status = document.getElementById('iteration-status');
+  status.textContent = '正在读取本组 Run';
+  try {
+    const live = !new URLSearchParams(location.hash.slice(1)).has('iteration');
+    const value = live ? await liveIteration(location, fetchImpl) : parseIteration(location.hash);
+    await renderIterationPage({ document, location, fetchImpl, value });
+    return live && value.state === 'waiting';
   } catch (error) {
     status.textContent = error.message;
+    return /正在重连|Failed to fetch/.test(error.message);
   }
 }
 
@@ -184,7 +235,31 @@ if (typeof window !== 'undefined') {
     event.preventDefault();
     document.getElementById('iteration-main').focus();
   });
-  const start = () => showDanceIterations({ document, location });
+  let generation = 0;
+  let timer;
+  const start = () => {
+    const generationAtStart = ++generation;
+    clearTimeout(timer);
+    const poll = async (initial = false) => {
+      if (generationAtStart !== generation) return;
+      let retry;
+      if (initial) retry = await showDanceIterations({ document, location });
+      else {
+        try {
+          const value = await liveIteration(location, fetch);
+          if (generationAtStart !== generation) return;
+          await renderIterationPage({ document, location, fetchImpl: fetch, value });
+          retry = value.state === 'waiting';
+        } catch (error) {
+          document.getElementById('iteration-status').textContent = error.message;
+          retry = /正在重连|Failed to fetch/.test(error.message);
+        }
+      }
+      if (retry && generationAtStart === generation) timer = setTimeout(poll, 2500);
+    };
+    void poll(true);
+  };
   window.addEventListener('hashchange', start);
-  void start();
+  window.addEventListener('pagehide', () => { ++generation; clearTimeout(timer); });
+  start();
 }

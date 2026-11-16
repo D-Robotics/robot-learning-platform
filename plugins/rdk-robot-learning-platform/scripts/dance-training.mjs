@@ -156,10 +156,12 @@ export const recoverDanceSubmission = (contextId, directory) =>
 export async function trainOriginmanDance(
   args,
   call,
-  { directory, defaultResourceId, readModels, toolNames, acceptWorker },
+  { directory, defaultResourceId, readModels, toolNames, acceptWorker, serverIdempotency = false },
 ) {
   const input = requireInput(args);
-  const existing = await recoverDanceSubmission(input.contextId, directory);
+  const existing = serverIdempotency
+    ? null
+    : await recoverDanceSubmission(input.contextId, directory);
   if (existing)
     return {
       stage: 'training',
@@ -217,31 +219,34 @@ export async function trainOriginmanDance(
     throw new Error('该 Worker 未确认 CUDA RTX 4090，自动迭代已暂停。');
   const model = selected.model ?? (await registerCourseModel(manifest, call));
   const steps = input.dance.trainingSteps;
-  const submission = await submitOnce({
-    scope,
-    contextId: input.contextId,
-    phase: 'train',
-    directory,
-    remember: async (runId) => ({ runId }),
-    submit: () =>
-      call('rdk_training_submit', {
-        modelId: model.id,
-        computeResourceId: selected.resource.id,
-        backend: 'local',
-        taskId: 'originman-dance',
-        profile: 'standard',
-        engine: 'originman-dance-ppo',
-        algorithm: 'ppo',
-        numEnvs: input.numEnvs,
-        maxIterations: Math.ceil(steps / danceTrainingBatchSize(input.numEnvs)),
-        video: true,
-        originmanDance: input.dance,
-        idempotencyKey: input.contextId + '-train',
-        label: input.dance.title,
-        runName: input.contextId,
-        experimentId: input.contextId,
-      }),
-  });
+  const submit = () =>
+    call('rdk_training_submit', {
+      modelId: model.id,
+      computeResourceId: selected.resource.id,
+      backend: 'local',
+      taskId: 'originman-dance',
+      profile: 'standard',
+      engine: 'originman-dance-ppo',
+      algorithm: 'ppo',
+      numEnvs: input.numEnvs,
+      maxIterations: Math.ceil(steps / danceTrainingBatchSize(input.numEnvs)),
+      video: true,
+      originmanDance: input.dance,
+      idempotencyKey: input.contextId + '-train',
+      label: input.dance.title,
+      runName: input.contextId,
+      experimentId: input.contextId,
+    });
+  const submission = serverIdempotency
+    ? { submission: await submit() }
+    : await submitOnce({
+        scope,
+        contextId: input.contextId,
+        phase: 'train',
+        directory,
+        remember: async (runId) => ({ runId }),
+        submit,
+      });
   return {
     stage: 'training',
     submission: submission.submission,

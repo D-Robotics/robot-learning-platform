@@ -1094,6 +1094,23 @@ export function experienceProxy(
       dance,
     };
   };
+  const backgroundDanceResult = (goal) => {
+    const url = new URL('./dance-iterations.html', baseUrl.replace(/\/+$/, '') + '/');
+    url.searchParams.set('goal', goal.id);
+    return {
+      background: true,
+      iteration: goal,
+      ...(goal.state !== 'waiting' && { stopWorkflow: true }),
+      links: { iteration: url.href },
+      studioNavigation: { tool: 'studio_open_url', arguments: { url: url.href } },
+      studentReply:
+        goal.state === 'waiting'
+          ? '平台已接管这组仿真实验。右侧会自动更新训练、评测和预算。'
+          : goal.reason,
+      delivery:
+        '立即按 studioNavigation 在 Studio 右侧打开同一实验，并在回复保留此链接。平台独立运行，不需要继续调用训练或轮询工具。关闭 Studio 后，可从同一链接进入继续查看。',
+    };
+  };
   const danceRouteFeedback = (code, message, continuation) => {
     const value = {
       ok: false,
@@ -1182,7 +1199,7 @@ export function experienceProxy(
           '\n用户说“带我开启/开始 OriginMan Workshop”时，直接调用 rdk_workshop({intent:"new"})。明确受扰恢复时增加 course:"recovery"。按回执导航，再展示 studentReply。如果只拿到旧课程目录，使用回执的绝对链接。127.0.0.1 可能是 MCP 内部转发地址，诊断网页必须依据插件配置的平台 URL。' +
           '\n用户问插件能做什么时，调用 rdk_platform_status 后直接使用 studentReply；仅在追问时展开工具名、数量、接口地址或设备门槛。' +
           '\n这是通用机器人学习插件。先按用户的机型与目标使用 rdk_learning_guide；打开工作台传 task:overview，强化学习或模仿学习有通用入口，只有明确选择课程时才使用 OriginMan 专用工具。开始新实验传 intent:new；查看结果传 intent:results 和原 Run；改参传 intent:retry、原 Run 与 changes，等确认再使用 nextArguments。Studio 优先用 studio_open_url 打开已验证的工作台链接，仍保留可点击地址。已打开不表示已播放。' +
-          '\n最高优先的舞蹈路由：只给舞蹈仿真目标和总预算、要求未达标自动调奖励或预算耗尽停止，第一步直接加载并调用 rdk_originman_dance_iterate。输入示例 {"totalSteps":524288,"dance":{"bpm":130,"sections":[{"type":"weight-shift","beats":4,"intensity":0.9}]}}。插件选择 4090、64 并行、登记原实验。无需查本地台账、询问确认或预先提交。评测慢或调用失败时只重试原 nextArguments，禁止调用 rdk_originman_dance_train、rdk_training_submit 或换 contextId 重交。达标、预算不足或阻塞时按 studioNavigation 打开右侧。' +
+          '\n最高优先的舞蹈路由：只给舞蹈仿真目标和总预算、要求未达标自动调奖励或预算耗尽停止，第一步直接加载并调用 rdk_originman_dance_iterate。输入示例 {"totalSteps":524288,"dance":{"bpm":130,"sections":[{"type":"weight-shift","beats":4,"intensity":0.9}]}}。插件选择 4090、64 并行、登记原实验。无需查本地台账、询问确认或预先提交。评测慢或调用失败时只重试原 nextArguments，禁止调用 rdk_originman_dance_train、rdk_training_submit 或换 contextId 重交。首次收到后台实验回执立刻按 studioNavigation 打开右侧并保留原链接，页面自动更新；无需继续轮询工具。若曾使用旧版回执，仍按 nextArguments 接续。' +
           '\n版本检查分别报告插件实际加载版本、宿主登记与平台连接；工具不可用、读失败和已确认空列表分别报告。舞蹈仿真通过不具备部署资格。部署预检被拒绝或设备工具缺失时保留阻断，不使用终端、SSH 或设备执行工具替代受控部署。' +
           '\n' +
           '\n提交 OriginMan 舞蹈或收到一键仿真验收请求后，沿原 runId 调用 rdk_originman_dance_acceptance。每次待运行回执继续传 nextArguments，终态自动同源评测；验收出判定后按 studioNavigation 打开 Studio 右侧。比较两条记录用 rdk_originman_dance_compare。' +
@@ -1388,8 +1405,25 @@ export function experienceProxy(
               nextTool: DANCE_ITERATION_TOOL.name,
               nextArguments: active,
             });
-          if (!draft.resumeContextId) danceFlow.input = draft;
-          payload = await iterateDance(draft, signal);
+          const previousGoal = danceFlow.result?.background && danceFlow.result.iteration.id;
+          if (!draft.resumeContextId && !previousGoal) danceFlow.input = draft;
+          const goalId = draft.resumeContextId || previousGoal;
+          const goal = goalId
+            ? await upstream.readDanceGoal?.(goalId, { signal })
+            : draft.goal === 'dance-quality-gate' && upstream.startDanceGoal
+              ? await upstream.startDanceGoal(
+                  {
+                    contextId: draft.contextId,
+                    dance: draft.dance,
+                    computeResourceId: draft.computeResourceId,
+                    ...(draft.modelId && { modelId: draft.modelId }),
+                    totalSteps: draft.totalSteps,
+                  },
+                  { signal },
+                )
+              : null;
+          if (previousGoal && !goal) throw Error('当前连接未找到原后台实验。');
+          payload = goal ? backgroundDanceResult(goal) : await iterateDance(draft, signal);
           danceFlow.result = payload;
         } else if (DANCE_EVALUATION_TOOLS.some((tool) => tool.name === params.name)) {
           payload = await danceEvaluation(params.name, params.arguments ?? {}, {

@@ -26,7 +26,7 @@ const { trainingSteps: _steps, ...goalChoreography } = DANCE_CONFIG_SCHEMA.prope
 export const DANCE_ITERATION_TOOL = {
   name: 'rdk_originman_dance_iterate',
   description:
-    'OriginMan 舞蹈自动迭代的首选入口。用户给目标和总预算、未达标自动调奖励或达标/预算用完停止时直接调用。首次只需 totalSteps 和 dance（bpm、sections，每段 type/beats/intensity），插件选择 RTX 4090、64 并行并保存实验。立即原样接续 nextArguments。请勿改用普通训练。最后在右侧展示每轮改动、评测、回放和 ONNX。仅仿真。',
+    'OriginMan 舞蹈自动迭代的首选入口。用户给目标和总预算、未达标自动调奖励或达标/预算用完停止时直接调用。首次只需 totalSteps 和 dance（bpm、sections，每段 type/beats/intensity），插件选择 RTX 4090、64 并行并保存实验。平台后台回执收到后立即在右侧打开原实验，页面自动更新每轮改动、评测、回放和 ONNX。遇到旧版续查回执原样接续 nextArguments。请勿改用普通训练。仅仿真。',
   inputSchema: {
     type: 'object',
     additionalProperties: false,
