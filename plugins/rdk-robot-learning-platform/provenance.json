@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "name": "rdk-robot-learning-platform",
-  "version": "0.6.76",
+  "version": "0.6.77",
   "description": "通用机器人学习插件，支持按机型和任务进入仿真与录制、强化学习与模仿学习、Sim2Real 评测与回放、制品管理和受控部署。OriginMan 舞蹈和受扰恢复是可选任务。",
   "composition": "retained-core-with-host-neutral-workflow-extension",
   "coreBundleSha256": "fe7e5f440cbc357b47de476bee5b8b15facc7940d7bbcc7a8975adbd4e1bfca5",
@@ -17,7 +17,7 @@
     "scripts/robot-onboarding.mjs": "c8ac06adf47bed664194b513332226249c5c6a33d7646f94dff7af994c2c6421",
     "scripts/qoder-install.mjs": "76a8bc2e2383f31d81e32ff6e8c5ca0316d9baa14e02778bed551d2768d8ef07",
     "scripts/experience.mjs": "b8c9531415d202ce167e026020a7521bb941e2e4c192539ba5990fa195ad2d1e",
-    "scripts/experience-mcp.mjs": "01aa1dcb19e40bb1bdc563f87a669fe047aa8301a1c0302c5ce025b544b68762",
+    "scripts/experience-mcp.mjs": "a17a32df5e8ad3ef1d895cfc366c5cf0e1f1a4fa8ba5b6c21f8fe464677c6ed0",
     "scripts/workflow-inspection.mjs": "e0b17b6039d55e49d693e01d069ce79f5439ddefab6144f38108fca15dd34493",
     "scripts/experiment-context.mjs": "59bd3dc740d3229c6c8a1567f3275bc8bfa1a9af8b40a616a7fc1027bd25ce87",
     "scripts/short-training.mjs": "0a67b7cba1f056da9b80ce608002fe8b17ee0e3797229b3eb5321dda6f5ba32b",
@@ -60,7 +60,7 @@
     "inputs": {
       "node_modules/@modelcontextprotocol/ext-apps/dist/src/app-with-deps.js": "d24b6ae50dbc989539db8287e217f41f0833f2b0a81ac4c6dbde444715ef5cd0",
       "services/sim2real-web/public/experiment-view.mjs": "7cac7223d9281df768fab7d8e8100a9e62fe57a265b6ed00eeaccba6417d7868",
-      "plugins/rdk-robot-learning-platform/plugin.json": "c50d5384bfb0466f58f7af8c1071b33bf344c3078e58fbda17fc0878adceaa92",
+      "plugins/rdk-robot-learning-platform/plugin.json": "361fa0f3cc6edd2e4c7ad9d6e48e28675e690c200395452dd0725d188edecf69",
       "plugins/rdk-robot-learning-platform/ui/experiment-app.mjs": "d735263c46f20143ec8fee49c5f50a0129685e7ae522a32d11390b00fe2a2996",
       "services/sim2real-web/public/tokens.css": "3ad5ee94306710d01bc41e0802c360a779e3c173d11d5d8958ed685b79703e86",
       "services/sim2real-web/public/experiment.css": "400f00c7d2e86d0f71362c2e6ccded0a5f143058ade9267fd6887ef06e4d6bea",

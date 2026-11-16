@@ -4,7 +4,7 @@ import { readFileSync } from 'node:fs';
 import { createHash, randomUUID } from 'node:crypto';
 import { createInterface } from 'node:readline';
 import { isDeepStrictEqual } from 'node:util';
-import { DANCE_SECTION_TYPES } from './originman-dance-config.mjs';
+import { DANCE_SECTION_LABELS, DANCE_SECTION_TYPES } from './originman-dance-config.mjs';
 import { danceCoaching } from './dance-coaching.mjs';
 import {
   connectMcp,
@@ -264,6 +264,32 @@ function nominalDanceEvidence(training, dance) {
   };
 }
 
+const OFFICIAL_DANCE_REFERENCES = {
+  url: 'https://rdkstudio.d-robotics.cc/robotics-learning/originman-dance-references/index.html',
+  simulationOnly: true,
+};
+
+function failedDanceReferences(dance) {
+  const types = new Set();
+  for (const evaluation of Array.isArray(dance?.evaluations) ? dance.evaluations : []) {
+    for (const section of Array.isArray(evaluation?.sections) ? evaluation.sections : []) {
+      if (
+        (section?.passed === false || section?.stylePassed === false || section?.clean === false) &&
+        Object.hasOwn(DANCE_SECTION_LABELS, section.type)
+      )
+        types.add(section.type);
+    }
+  }
+  return {
+    ...OFFICIAL_DANCE_REFERENCES,
+    actions: [...types].map((type) => ({
+      type,
+      label: DANCE_SECTION_LABELS[type],
+      url: OFFICIAL_DANCE_REFERENCES.url + '#' + encodeURIComponent(type),
+    })),
+  };
+}
+
 function attachRunVisualization(payload, runId, baseUrl, section) {
   const detail = runVisualizationLink(baseUrl, runId, payload.links?.danceVideo);
   if (!detail) return payload;
@@ -297,6 +323,10 @@ function attachRunVisualization(payload, runId, baseUrl, section) {
   const metrics = payload.run?.metrics ?? payload.metrics;
   const dance = metrics?.originmanDance;
   let learningEvidence;
+  const officialDanceReferences =
+    danceRun && rawStatus === 'completed' && dance?.qualityGatePassed === false
+      ? failedDanceReferences(dance)
+      : undefined;
   let nextStep;
   let studentReply = payload.studentReply || `本轮训练${status}。`;
   const device = metrics?.trainingDevice;
@@ -373,6 +403,13 @@ function attachRunVisualization(payload, runId, baseUrl, section) {
         ? `[下载本轮策略（ONNX）](${payload.links?.policyDownload})`
         : '当前没有已核验的 ONNX 策略下载入口。');
   }
+  if (officialDanceReferences) {
+    const { url: referenceUrl, actions } = officialDanceReferences;
+    studentReply += `\n[官方参考回放（仅仿真）](${referenceUrl})`;
+    if (actions.length) {
+      studentReply += ' · ' + actions.map(({ label, url }) => `[${label}](${url})`).join(' · ');
+    }
+  }
   const { failureDetail: _stale, ...rest } = payload;
   return {
     ...rest,
@@ -383,7 +420,13 @@ function attachRunVisualization(payload, runId, baseUrl, section) {
       recommendation: { ...recommendation, ...(sectionUrl && { sectionUrl: sectionUrl.href }) },
       nextStep: recommendation.text,
     }),
-    links: { ...payload.links, runDetail: detail, workbench: url },
+    ...(officialDanceReferences && { officialDanceReferences }),
+    links: {
+      ...payload.links,
+      runDetail: detail,
+      workbench: url,
+      ...(officialDanceReferences && { officialDanceReferences: officialDanceReferences.url }),
+    },
     visualization: { runId, url, exactRunSelected: true },
     studioNavigation: { tool: 'studio_open_url', arguments: { url } },
     qoderNavigation: {
@@ -1205,6 +1248,7 @@ export function experienceProxy(
           '\n版本检查分别报告插件实际加载版本、宿主登记与平台连接；工具不可用、读失败和已确认空列表分别报告。舞蹈仿真通过不具备部署资格。部署预检被拒绝或设备工具缺失时保留阻断，不使用终端、SSH 或设备执行工具替代受控部署。' +
           '\n' +
           '\n提交 OriginMan 舞蹈或收到一键仿真验收请求后，沿原 runId 调用 rdk_originman_dance_acceptance。每次待运行回执继续传 nextArguments，终态自动同源评测；验收出判定后按 studioNavigation 打开 Studio 右侧。比较两条记录用 rdk_originman_dance_compare。' +
+          '\n用户问 OriginMan 官方参考动作或兜底回放时，调用 rdk_experience_guide，使用 danceTraining.officialReferences.url。学员舞蹈评测未达标时，保留原 Run 结果并给出 officialDanceReferences 里的官方仿真参考和对应动作链接。' +
           WORKSPACE_EVIDENCE_INSTRUCTIONS +
           '\nOriginMan 舞蹈 PPO 使用 Worker 预置的模型资产和用户编舞，无需导入工作区数据集。通用黄金路径的数据集提示不是本课程的训练前置。' +
           '\n用户要上传、下载或管理托管数据集时，调用 rdk_learning_guide({intent:"start",task:"datasets"})，展示证据与记录入口。上传走「上传数据集」，下载走数据集详情中的「下载托管文件」。rdk_dataset_register 只登记元数据。' +
@@ -1795,6 +1839,7 @@ export function experienceProxy(
               ],
             },
             danceTraining: {
+              officialReferences: OFFICIAL_DANCE_REFERENCES,
               intent:
                 '学员明确要训练自定义舞蹈时，使用独立OriginMan dance PPO入口；不复用恢复课合同。',
               manifestSource:

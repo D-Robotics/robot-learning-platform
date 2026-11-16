@@ -1,11 +1,11 @@
-# RDK Robot Learning 插件（Qoder / Studio） 0.6.76
+# RDK Robot Learning 插件（Qoder / Studio） 0.6.77
 
 **安装先运行对应的 setup。** 根目录的 `.mcp.json` 在安装前是待配置入口，安装后导入该文件。通用 MCP/DSH 宿主可复制它的命令、参数和平台地址。`mcp/source-checkout.example.json` 是平台源码开发者使用的示例。旧版 0.6.33 的传输诊断有限，遇到 `fetch failed` 请升级并调用 `rdk_platform_status` 核对平台地址、健康和登录状态。
 
 自建算力请看 [Worker 接入协议](references/runner-contract.md)，包括 `GET /healthz` 和 `POST /train`。
 
 
-0.6.76 OriginMan 舞蹈自动迭代使用目标和总预算启动。平台后台负责训练、独立评测和预算。Studio 自首轮起在右侧实时展示进度、每轮改动、回放和 ONNX；关闭 Studio 后，原实验仍由平台接续。
+0.6.77 OriginMan 舞蹈自动迭代使用目标和总预算启动。平台后台负责训练、独立评测和预算。Studio 自首轮起在右侧实时展示进度、每轮改动、回放和 ONNX；关闭 Studio 后，原实验仍由平台接续。
 
 0.6.63 简化 Workshop 的首次指引，补全训练电脑选择、原实验恢复与结果解释。
 

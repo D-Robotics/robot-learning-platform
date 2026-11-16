@@ -82,6 +82,10 @@ test('OriginMan one-step acceptance follows the same Run, verifies one evaluatio
   const final = await call(accept, waiting.nextArguments);
   assert.equal(final.simulationAcceptance.state, 'failed');
   assert.deepEqual(final.simulationAcceptance.sections, checks);
+  assert.deepEqual(
+    final.officialDanceReferences.actions.map(({ type }) => type),
+    ['alternating-arms'],
+  );
   assert.match(final.studentReply, /未达标/);
   assert.equal(new URL(final.studioNavigation.arguments.url).searchParams.get('runId'), run.id);
   assert.match(final.links.policyDownload, /dance-test\/artifact$/);
@@ -442,6 +446,10 @@ test('experience MCP preserves upstream tools, results and errors and exposes gu
   assert.equal(guide.structuredContent.learnerInterface.entryPrompt, '带我开始 Workshop');
   assert.equal(guide.structuredContent.learnerInterface.inlineAppAvailable, false);
   assert.equal(guide.structuredContent.learnerInterface.diagnostics, 'on-demand');
+  assert.deepEqual(guide.structuredContent.danceTraining.officialReferences, {
+    url: 'https://rdkstudio.d-robotics.cc/robotics-learning/originman-dance-references/index.html',
+    simulationOnly: true,
+  });
   const passthrough = await proxy('tools/call', {
     name: 'existing_write_tool',
     arguments: { x: 1 },
@@ -955,6 +963,13 @@ test('guide reads the exact Run and keeps confirmed retry idempotent', async (t)
   const result = await guide({ intent: 'results', runId: previous.id });
   assert.match(result.studentReply, /mps.*未达标.*暂无可播放/s);
   assert.doesNotMatch(result.studentReply, /标称/);
+  const referenceUrl =
+    'https://rdkstudio.d-robotics.cc/robotics-learning/originman-dance-references/index.html';
+  assert.deepEqual(result.officialDanceReferences, {
+    url: referenceUrl,
+    simulationOnly: true,
+    actions: [],
+  });
   const evaluated = previous.metrics.originmanDance;
   evaluated.evaluations = [
     { bpm: 95, sections: dance.sections.map(({ type }) => ({ type, passed: false })) },
@@ -965,6 +980,17 @@ test('guide reads the exact Run and keeps confirmed retry idempotent', async (t)
   ];
   const measured = await guide({ intent: 'results', runId: previous.id });
   assert.match(measured.studentReply, /标称 100 BPM 下，1\/2 段达标/);
+  assert.equal(measured.links.officialDanceReferences, referenceUrl);
+  assert.equal(measured.links.runDetail, result.links.runDetail);
+  assert.deepEqual(
+    measured.officialDanceReferences.actions.map(({ type, url }) => [type, url]),
+    dance.sections.map(({ type }) => [type, referenceUrl + '#' + type]),
+  );
+  assert.ok(measured.studentReply.includes(referenceUrl + '#alternating-arms'));
+  evaluated.qualityGatePassed = true;
+  const passedResult = await guide({ intent: 'results', runId: previous.id });
+  assert.equal(passedResult.officialDanceReferences, undefined);
+  evaluated.qualityGatePassed = false;
   evaluated.evaluations[1].sections.pop();
   const partial = await guide({ intent: 'results', runId: previous.id });
   assert.doesNotMatch(partial.studentReply, /标称/);
