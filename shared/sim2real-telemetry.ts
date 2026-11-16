@@ -76,6 +76,7 @@ export interface Sim2RealRunMetrics {
   trainingDeviceName?: string;
   originmanDance?: {
     qualityGatePassed?: boolean;
+    sceneProvenance?: { sceneSha256?: string };
     evaluations: {
       bpm: number;
       sections: {

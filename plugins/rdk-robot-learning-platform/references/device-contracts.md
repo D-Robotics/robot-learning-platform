@@ -16,6 +16,12 @@
 
 `rdk_board_policy_start` 必需数值 direction，可附 goalX/goalY。三层/多重开关的具体组合从当前平台与板端代码读取；插件不假设开启一个开关即可。运动前的范围、现场授权与设备装配不得由软件 preflight 代替。
 
+## OriginMan 舞蹈 CPU 验收
+
+在 Studio 或 Qoder 指定 OriginMan 舞蹈 v2 的完整 Run ID，以及设备管理中已接通的 X5 设备 ID，调用 `rdk_originman_dance_cpu_rehearse({runId, deviceId})`。平台按 Run 读取原始 ONNX，只向指定设备的隧道发送 SHA-256 已核验的字节。板端需要新版 BoardAgent 以及其 Python 中的 NumPy 和 ONNX Runtime。
+
+回执包含 78 维观测布局、18 路仿真关节输出顺序、50 Hz 合成观测循环的推理耗时和超期次数。暂存文件和推理会话随本次调用清理。实体传感器布局、舵机映射和完整控制周期均需另行验收，发布资格沿用原有门禁。
+
 ## D6A 机械臂
 
 先读取 arm status 真实 capability、当前位姿和 workspace。move 的 x/y/z 单位为 mm，speedMmPerS 为速度；gripper action 只能 open/close，value 为正数（open=宽度 mm、close=力）。平台与板端都钳制并门控，不将“钳制后成功”报告为完全执行用户越界要求。

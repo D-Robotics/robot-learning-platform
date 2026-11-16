@@ -1,5 +1,6 @@
 import type { Request, Response, Router } from 'express';
 
+import { createHash } from 'node:crypto';
 import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -40,6 +41,7 @@ function routeHandler(router: Router, method: 'get' | 'post', path: string): Han
 function buildRouter(
   deps: {
     getRun?: (runId: string, owner?: string) => Promise<unknown>;
+    resolveDeviceAgentUrl?: (deviceId: string, owner?: string) => string | null;
     fetchRunArtifact?: (
       run: unknown,
       owner?: string,
@@ -70,6 +72,7 @@ function buildRouter(
     auth: { isMultiUserDeployment: () => false } as never,
     requestOwner: () => 'local-dev',
     visibleDevices: async () => [device],
+    resolveDeviceAgentUrl: deps.resolveDeviceAgentUrl,
     ...(deps.getRun ? { getRun: deps.getRun as never } : {}),
     ...(deps.fetchRunArtifact ? { fetchRunArtifact: deps.fetchRunArtifact as never } : {}),
   });
@@ -751,6 +754,114 @@ describe('board-station policy runtime proxy', () => {
         'http://127.0.0.1:19100/v1/station/policy/load',
         expect.objectContaining({ method: 'POST' }),
       );
+    });
+  });
+});
+
+describe('OriginMan dance CPU rehearsal', () => {
+  const path = '/api/sim2real/board-station/originman-dance-cpu-rehearsal';
+  const bytes = Buffer.from('run-bound-model-fixture');
+  const sha256 = createHash('sha256').update(bytes).digest('hex');
+  const contractId = 'custom-policy-originman-dance-v2';
+  const sceneSha256 = 'eac60475eb622c2731b36d9957a0c0445f8b00d4d588de7b1b4f25d518a56ad4';
+  const run = {
+    id: 'dance-run',
+    status: 'completed',
+    taskId: 'originman-dance',
+    contractId,
+    training: { engine: 'originman-dance-ppo' },
+    artifact: { format: 'onnx', sha256, deployable: false },
+    metrics: {
+      contractValid: true,
+      observationSize: 78,
+      actionSize: 18,
+      originmanDance: { sceneProvenance: { sceneSha256 } },
+    },
+  };
+  const input = { method: 'POST', query: { deviceId: 'x5-real-001' }, body: { runId: run.id } };
+  const linked = () => 'http://127.0.0.1:19101';
+  const boardReceipt = {
+    ok: true,
+    contractId,
+    sceneSha256,
+    sha256,
+    bytes: bytes.length,
+    staged: true,
+    loaded: true,
+    temporaryArtifactRemoved: true,
+    authorizesDeployment: false,
+    motionAuthorized: false,
+  };
+
+  it('sends the original bytes only to the selected tunnel and leaves live staging gated', async () => {
+    const board = mockAgent(200, boardReceipt);
+    const getRun = vi.fn(async () => run);
+    const router = buildRouter({
+      getRun,
+      fetchRunArtifact: async () => ({ bytes, sha256 }),
+      resolveDeviceAgentUrl: linked,
+    });
+    const res = await call(routeHandler(router, 'post', path), input);
+    expect(res.statusCode).toBe(200);
+    expect(res.body).toMatchObject({
+      ...boardReceipt,
+      runId: run.id,
+      deviceId: input.query.deviceId,
+    });
+    expect(getRun).toHaveBeenCalledWith(run.id, 'local-dev');
+    expect(board).toHaveBeenCalledExactlyOnceWith(
+      'http://127.0.0.1:19101/v1/station/originman-dance-cpu-rehearsal',
+      expect.objectContaining({
+        method: 'POST',
+        body: JSON.stringify({
+          contractId,
+          sceneSha256,
+          sha256,
+          bytesBase64: bytes.toString('base64'),
+        }),
+      }),
+    );
+    process.env.RDK_SIM2REAL_STATION_POLICY_ENABLED = '1';
+    const live = await call(
+      routeHandler(router, 'post', '/api/sim2real/board-station/policy/stage'),
+      input,
+    );
+    expect(live.statusCode).toBe(409);
+    expect(board).toHaveBeenCalledTimes(1);
+  });
+
+  it('requires an explicit device and refuses global fallback without a device tunnel', async () => {
+    const board = vi.spyOn(globalThis, 'fetch');
+    const getRun = vi.fn(async () => run);
+    const handler = routeHandler(buildRouter({ getRun }), 'post', path);
+    const omitted = await call(handler, { ...input, query: {} });
+    expect(omitted.statusCode).toBe(400);
+    await expect(call(handler, input)).resolves.toMatchObject({
+      statusCode: 503,
+      body: { error: 'ORIGINMAN_DANCE_REHEARSAL_TUNNEL_REQUIRED' },
+    });
+    expect(getRun).not.toHaveBeenCalled();
+    expect(board).not.toHaveBeenCalled();
+  });
+
+  it('rejects wrong bytes before contacting the board and rejects a mismatched receipt', async () => {
+    const board = mockAgent(200, { ...boardReceipt, sha256: DIGEST });
+    const router = (artifactBytes: Buffer) =>
+      buildRouter({
+        getRun: async () => run,
+        fetchRunArtifact: async () => ({ bytes: artifactBytes, sha256 }),
+        resolveDeviceAgentUrl: linked,
+      });
+    await expect(
+      call(routeHandler(router(Buffer.from('wrong')), 'post', path), input),
+    ).resolves.toMatchObject({
+      statusCode: 409,
+      body: { error: 'ORIGINMAN_DANCE_REHEARSAL_ARTIFACT_MISMATCH' },
+    });
+    expect(board).not.toHaveBeenCalled();
+    await expect(call(routeHandler(router(bytes), 'post', path), input)).resolves.toMatchObject({
+      statusCode: 502,
+      body: { error: 'ORIGINMAN_DANCE_REHEARSAL_RECEIPT_MISMATCH' },
     });
   });
 });

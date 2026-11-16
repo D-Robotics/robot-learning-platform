@@ -590,7 +590,7 @@ assert.match(
 );
 assert.match(
   deployX5Source,
-  /files="board-agent-x5\.py board_ipc\.py board-drive-publisher\.py/,
+  /files="board-agent-x5\.py board_ipc\.py board_originman_dance_cpu\.py board-drive-publisher\.py/,
   'X5 rollback must include every IPC process asset',
 );
 assert.match(
