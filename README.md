@@ -27,6 +27,8 @@
 
 ## 先看懂平台
 
+第一次使用，打开工作台顶栏的 **使用指引**，或按 [使用手册](docs/user-guide.md) 完成一段仿真录制、提交训练、回放评测或执行设备只读预检。
+
 | 你想做什么           | 从哪里开始        | 结果是什么                           |
 | -------------------- | ----------------- | ------------------------------------ |
 | 亲手演示一个动作     | **仿真与录制**    | 浏览器轨迹 JSON / JSONL              |
@@ -298,7 +300,7 @@ MicroDuck 浏览器资源的上游 commit、仓库和许可证边界记录在 [`
 更多说明：
 
 - [`docs/README.md`](docs/README.md)（文档索引）
-- [`docs/user-guide.md`](docs/user-guide.md)（使用手册与最佳实践）
+- [`docs/user-guide.md`](docs/user-guide.md)（仿真录制、训练、评测和设备预检）
 - [`docs/operations.md`](docs/operations.md)（生产环境变量、限流、CSP、日志与指标）
 - [`docs/duck-lab-mcp.md`](docs/duck-lab-mcp.md)（外部 Agent 的 MCP 接入、工具目录与认证）
 - [`docs/scalability.md`](docs/scalability.md)（存储容量边界与扩容路径）

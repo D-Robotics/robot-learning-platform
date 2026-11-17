@@ -5512,49 +5512,189 @@ html.theme-dark .agent-assistant-health { max-width: 150px; }
 /* ======================== onboarding.css — 新手指引浮层 ======================== */
 
 .onboarding-overlay[hidden] { display: none; }
-.onboarding-overlay { position: fixed; inset: 0; z-index: var(--z-tour); color: var(--text); }
-.onboarding-scrim { position: absolute; inset: 0; background: rgba(3, 8, 14, .72); backdrop-filter: blur(2px); }
-.onboarding-spotlight { position: fixed; z-index: 1; pointer-events: none; border: 2px solid rgba(255, 145, 65, .95); border-radius: 10px; box-shadow: 0 0 0 5px rgba(255, 121, 24, .18), 0 0 34px rgba(255, 121, 24, .35); animation: onboarding-pulse 1.8s ease-in-out infinite; transition: left .22s ease, top .22s ease, width .22s ease, height .22s ease; }
-.onboarding-card { position: fixed; z-index: 2; width: min(390px, calc(100vw - 32px)); padding: 20px 20px 16px; border: 1px solid rgba(255, 145, 65, .52); border-radius: 14px; background: linear-gradient(145deg, rgba(25, 35, 56, .98), rgba(12, 20, 34, .98)); box-shadow: 0 18px 60px rgba(0,0,0,.45), 0 0 0 1px rgba(255,255,255,.04) inset; animation: onboarding-card-in .22s ease both; }
-.onboarding-card.is-centered { inset: 50% auto auto 50%; transform: translate(-50%, -50%); }
-.onboarding-card-top, .onboarding-card-foot, .onboarding-actions, .onboarding-progress { display: flex; align-items: center; }
-.onboarding-card-top { justify-content: space-between; }
-/* The tour card keeps a deliberately dark surface in BOTH themes (it sits on a
-   dark scrim), so its text colours are pinned to light values instead of
-   inheriting var(--text)/var(--muted). Previously the surface was hardcoded
-   dark while the text followed the theme, so light theme rendered #1b1b18 on
-   the dark gradient — the title and footer were unreadable. */
-.onboarding-card { color: var(--ice, var(--orange-200)); }
-.onboarding-kicker { color: var(--accent-pale, var(--orange-200)); font: 12px ui-monospace, SFMono-Regular, Menlo, monospace; letter-spacing: .13em; }
-.onboarding-close { width: 28px; height: 28px; border: 1px solid rgba(214, 224, 255, .3); border-radius: 7px; color: var(--mist-deep, var(--orange-200)); background: transparent; font-size: 19px; line-height: 1; cursor: pointer; }
-.onboarding-close:hover { color: var(--ice-soft, var(--orange-200)); border-color: var(--accent); }
-.onboarding-progress { gap: 10px; margin-top: 16px; color: var(--muted-cool-soft, var(--orange-200)); font-size:var(--fs-meta); }
-.onboarding-progress-label { white-space: nowrap; }
-.onboarding-progress-track { flex: 1; height: 4px; overflow: hidden; border-radius: 99px; background: rgba(255,255,255,.14); }
-.onboarding-progress-track i { display: block; height: 100%; border-radius: inherit; background: linear-gradient(90deg, var(--accent), var(--gold-glow)); transition: width .25s ease; }
-.onboarding-card h2 { margin: 16px 0 8px; color: var(--ice-soft, var(--orange-200)); font-size: 20px; letter-spacing: -.025em; }
-.onboarding-body { margin: 0; color: var(--mist-soft, var(--orange-200)); font-size:var(--fs-body); line-height: 1.7; }
-.onboarding-best { display: grid; grid-template-columns: auto 1fr; gap: 8px; margin-top: 12px; padding: 10px 10px; border: 1px solid rgba(255, 121, 24, .3); border-radius: 8px; background: rgba(255, 121, 24, .12); }
-.onboarding-best span { color: var(--accent-pale, var(--orange-200)); font-size:var(--fs-meta); font-weight: 650; white-space: nowrap; }
-.onboarding-best p { margin: 0; color: var(--mist-soft, var(--orange-200)); font-size: var(--fs-body); line-height: 1.55; }
-.onboarding-card-foot { justify-content: space-between; gap: 12px; margin-top: 16px; }
-.onboarding-time { color: var(--muted-cool-soft, var(--orange-200)); font-size:var(--fs-meta); }
-.onboarding-actions { gap: 6px; }
-.onboarding-actions .button { min-height: 31px; }
-/* Secondary tour buttons must read as light chips on the dark card in both
-   themes, instead of following the light/dark .button surface. */
-.onboarding-actions .button:not(.button-primary) { color: var(--ice, var(--orange-200)); border-color: rgba(214, 224, 255, .3); background: rgba(255, 255, 255, .08); }
-.onboarding-actions .button:not(.button-primary):hover { color: var(--white); background: rgba(255, 255, 255, .16); }
-.onboarding-actions .button-primary { min-width: 88px; }
-body.onboarding-open { overflow: hidden; }
+.onboarding-card {
+  width: min(760px, calc(100% - 32px));
+  max-height: calc(100dvh - 32px);
+  overflow: auto;
+  padding: 24px;
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  background: var(--panel);
+  color: var(--text);
+  box-shadow: var(--shadow-strong);
+}
 
-/* Keep the tour readable when a browser still serves an older token sheet
-   without the cool-palette aliases. The current tokens win; the orange
-   accent is the compatibility fallback for the intentionally dark card. */
-@keyframes onboarding-pulse { 0%, 100% { opacity: .78; } 50% { opacity: 1; } }
-@keyframes onboarding-card-in { from { opacity: 0; } to { opacity: 1; } }
-@media (max-width: 560px) { .onboarding-card { padding: 16px; } .onboarding-card h2 { font-size: 18px; } .onboarding-body { font-size: var(--fs-body); } .onboarding-card-foot { align-items: flex-end; } .onboarding-time { max-width: 65px; line-height: 1.35; } .onboarding-actions .button { padding-inline: 8px; font-size:var(--fs-meta); } }
-@media (prefers-reduced-motion: reduce) { .onboarding-spotlight, .onboarding-card { animation: none; transition: none; } .onboarding-progress-track i { transition: none; } }
+.onboarding-card::backdrop {
+  background: color-mix(in srgb, var(--black) 58%, transparent);
+}
+
+.onboarding-card-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.onboarding-card-top h2,
+.usage-guide-task h3 {
+  margin: 0;
+}
+
+#usage-guide-intro,
+.usage-guide-task p {
+  color: var(--muted-strong);
+  line-height: 1.6;
+}
+
+.usage-guide-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.usage-guide-task {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  padding: 16px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--surface-1);
+}
+
+.usage-guide-task p {
+  margin: 8px 0 0;
+}
+
+.usage-guide-task p a {
+  color: var(--accent-text);
+}
+
+.usage-guide-task > .button {
+  margin-block-start: auto;
+  align-self: stretch;
+}
+
+.usage-guide-task p:last-of-type {
+  margin-block-end: 12px;
+}
+
+.usage-manual-open { margin-bottom: 16px; }
+
+.usage-manual:not([hidden]) {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  color: var(--text);
+  background: var(--panel);
+  border: 1px solid var(--line);
+}
+
+.usage-manual-header,
+.usage-manual-tools,
+.usage-manual-scroll {
+  padding: 12px 16px;
+}
+
+.usage-manual-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  border-bottom: 1px solid var(--line);
+}
+
+.usage-manual-header h2 {
+  margin: 0;
+  font-size: var(--fs-body);
+}
+
+.usage-manual-tools {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  gap: 8px;
+  background: var(--surface-1);
+  font-size: var(--fs-meta);
+}
+
+.usage-manual-actions {
+  display: flex;
+  flex-wrap: wrap;
+  grid-column: 1 / -1;
+  gap: 8px 12px;
+}
+
+.usage-manual a { color: var(--accent-text); }
+
+.usage-manual-scroll {
+  min-height: 0;
+  overflow: auto;
+  overscroll-behavior: contain;
+  overflow-wrap: anywhere;
+  line-height: 1.65;
+}
+
+.usage-manual-scroll h2 {
+  margin: 24px 0 8px;
+  padding-block-start: 16px;
+  border-top: 1px solid var(--line);
+}
+
+.usage-manual-scroll h2,
+.usage-manual-scroll h3 { font-size: var(--fs-body); }
+
+.usage-manual-scroll img {
+  max-width: 100%;
+  height: auto;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+
+.usage-manual-scroll table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--fs-meta);
+}
+
+.usage-manual-scroll th,
+.usage-manual-scroll td {
+  padding: 6px;
+  border: 1px solid var(--line);
+  text-align: start;
+  vertical-align: top;
+}
+
+@media (min-width: 1281px) {
+  .shell-layout:has(.usage-manual:not([hidden])) {
+    grid-template-columns: 248px minmax(0, 1fr) clamp(332px, 28vw, 460px);
+  }
+
+  .usage-manual {
+    position: sticky;
+    top: 76px;
+    height: calc(100dvh - 76px);
+    align-self: start;
+    border-block: 0;
+  }
+}
+
+@media (max-width: 1280px) {
+  .usage-manual {
+    position: fixed;
+    z-index: var(--z-tour);
+    inset: auto 0 0 auto;
+    width: min(480px, 100%);
+    height: 70dvh;
+    border-radius: 16px 16px 0 0;
+    box-shadow: var(--shadow-strong);
+  }
+}
+
+@media (max-width: 720px) {
+  .onboarding-card { padding: 16px; }
+  .usage-guide-grid { grid-template-columns: 1fr; }
+}
 
 /* ======================== refactor-ia.css — 信息架构：context strip 与模块折叠 ======================== */
 

@@ -20,7 +20,7 @@
          theme x view screenshots). See services/sim2real-web/ui-layout-invariants.mjs
          for the guards that keep new overrides from re-introducing layering. -->
     <link rel="stylesheet" href="./tokens.css?v=3" />
-    <link rel="stylesheet" href="./app.css?v=57" />
+    <link rel="stylesheet" href="./app.css?v=58" />
   </head>
   <body>
     <a class="skip-link" href="#main-content">跳到主要内容</a>
@@ -85,10 +85,9 @@
             <kbd>⌘K</kbd><span>命令</span>
           </button>
           <button class="button button-ghost" id="theme-toggle" type="button" aria-label="切换主题" title="切换主题"><span aria-hidden="true">◐</span></button>
-          <button class="button button-ghost" id="onboarding-help-button" type="button" title="重新打开新手指引">新手指引</button>
           <div class="top-menu" data-top-menu>
             <button
-              class="button button-ghost"
+              class="button"
               id="top-menu-button"
               type="button"
               aria-haspopup="menu"
@@ -104,6 +103,7 @@
               <button class="top-menu-item" type="button" role="menuitem" id="refresh-button">
                 刷新工作区
               </button>
+              <button class="top-menu-item" id="onboarding-help-button" type="button" role="menuitem" aria-haspopup="dialog" aria-controls="usage-guide">使用指引</button>
               <div class="top-menu-item top-menu-account" id="account-menu-item" hidden>
                 <span class="top-menu-account-k">账号</span>
                 <span id="account-name" class="top-menu-account-name"></span>
@@ -744,6 +744,7 @@
                     <option value="recovery">受扰恢复 · SAC</option>
                   </select>
                   <button class="button button-primary button-small" id="originman-use-contract" type="button" disabled>使用所选任务契约</button>
+                  <button class="button button-ghost button-small" id="originman-recovery-class" type="button" hidden>打开受扰恢复课堂</button>
                 </div>
                 <p class="small-note" id="originman-contract-status" role="status"></p>
                 <p class="small-note"><a href="./originman-reference.html">查看关节与舵机标定，或打开参考轨迹跟跳</a></p>
@@ -869,7 +870,6 @@
                   <div class="model-actions">
                     <button class="button button-primary button-small" id="originman-configure-training" type="button">准备训练配置</button>
                     <button class="button button-primary button-small" id="originman-submit-dance" type="button" hidden>提交本轮舞蹈训练</button>
-                    <button class="button button-ghost button-small" id="originman-recovery-class" type="button" hidden>打开受扰恢复课堂</button>
                   </div>
                   <p class="small-note" id="originman-run-action-hint" role="status"></p>
                   <div class="model-actions">
@@ -2164,6 +2164,32 @@
             </div>
           </section>
         </main>
+        <aside class="usage-manual" id="usage-manual" aria-labelledby="usage-manual-title" hidden>
+          <header class="usage-manual-header">
+            <h2 id="usage-manual-title" tabindex="-1">图文使用手册</h2>
+            <button class="button button-ghost button-small" id="usage-manual-close" type="button">收起</button>
+          </header>
+          <div class="usage-manual-tools">
+            <label for="usage-manual-chapter">跳到章节</label>
+            <select id="usage-manual-chapter" disabled>
+              <option value="">选择章节</option>
+            </select>
+            <div class="usage-manual-actions" role="group" aria-label="前往工作台页面">
+              <a href="#simulate/simulate">仿真与录制</a>
+              <a href="#train/prepare">模型与契约</a>
+              <a href="#train/configure">训练配置</a>
+              <a href="#train/submit">Run 与进度</a>
+              <a href="#evaluate/evaluation-run">发起评测</a>
+              <a href="#station/devices">设备管理</a>
+              <a href="#deploy/preflight">预检与发布</a>
+            </div>
+          </div>
+          <div class="usage-manual-scroll" id="usage-manual-scroll">
+            <p id="usage-manual-status" role="status" hidden></p>
+            <button class="button button-ghost button-small" id="usage-manual-retry" type="button" hidden>重新加载</button>
+            <article id="usage-manual-content"></article>
+          </div>
+        </aside>
       </div>
       <footer class="footer">
         <span>RDK Robot Learning Platform · Robot Learning Workbench</span
@@ -2267,6 +2293,89 @@
       <span class="agent-floating-pulse" aria-hidden="true"></span>
     </button>
     <div class="agent-chat-backdrop" id="agent-chat-backdrop" hidden></div>
+    <dialog class="onboarding-card" id="usage-guide" aria-labelledby="usage-guide-title" aria-describedby="usage-guide-intro">
+      <header class="onboarding-card-top">
+        <h2 id="usage-guide-title" tabindex="-1" autofocus>使用指引</h2>
+        <form method="dialog">
+          <button class="button button-ghost button-small" type="submit">关闭</button>
+        </form>
+      </header>
+      <p id="usage-guide-intro">先在左侧选择机器人产品线和项目。可以从仿真、已有模型、已有轨迹或设备预检开始。</p>
+      <button class="button button-ghost button-small usage-manual-open" id="usage-manual-open" type="button" aria-controls="usage-manual">打开图文使用手册</button>
+      <div class="usage-guide-grid">
+        <section class="usage-guide-task">
+          <h3>准备仿真或轨迹</h3>
+          <p>选择当前产品线的任务。仿真可用时，在画面中运行任务并录制一段轨迹。已有外部仿真或设备轨迹时，到评测页<strong>导入遥测 JSONL</strong>。</p>
+          <p>以评测页的来源和帧数确认轨迹已读入。没有浏览器适配器时，可使用外部仿真或已采集的轨迹。</p>
+          <a class="button button-primary button-small" href="#simulate/simulate">打开仿真与录制</a>
+        </section>
+        <section class="usage-guide-task">
+          <h3>提交一次训练</h3>
+          <p>在「模型与契约」导入自己的 <strong>manifest JSON</strong>，或载入当前产品的模板。点<strong>校验清单</strong>和<strong>登记版本</strong>。在「训练配置」选可用引擎和算力，再到「Run 与进度」提交。</p>
+          <p>Run 会显示排队、运行和结果。没有可用算力时，先去<a href="#resources">执行资源</a>；带「协议演示」标记的 Run 用于验证任务流程。</p>
+          <a class="button button-ghost button-small" href="#train/prepare">打开模型与契约</a>
+        </section>
+        <section class="usage-guide-task">
+          <h3>回放轨迹或检查评测</h3>
+          <p>在「发起评测」查看当前训练 Run 的指标。要回放动作，展开<strong>遥测回放与证据</strong>，查看刚录的帧，或点<strong>导入遥测 JSONL</strong>。</p>
+          <p>检查轨迹来源和帧数。虚实对比需要同一策略、同一任务的仿真和受信板端记录。</p>
+          <a class="button button-ghost button-small" href="#evaluate/evaluation-run">打开评测与回放</a>
+        </section>
+        <section class="usage-guide-task">
+          <h3>执行设备只读预检</h3>
+          <p>先在<a href="#station/devices">设备管理</a>登记并连接板卡。回到「预检与发布」，选择目标板卡，点<strong>生成预检计划</strong>，再点<strong>执行只读预检</strong>。</p>
+          <p>查看预检状态和阻塞项。此步骤读取设备信息，电机保持停用；正式发布由上线闸门控制。</p>
+          <a class="button button-ghost button-small" href="#deploy/preflight">打开预检与发布</a>
+        </section>
+      </div>
+    </dialog>
+
+    <dialog class="onboarding-card" id="originman-course-guide" aria-labelledby="originman-course-guide-title">
+      <header class="onboarding-card-top">
+        <h2 id="originman-course-guide-title">OriginMan 课程指引</h2>
+        <form method="dialog">
+          <button class="button button-ghost button-small" type="submit">关闭</button>
+        </form>
+      </header>
+      <p id="originman-course-progress" role="status">第 1 / 8 步</p>
+      <section data-course-step>
+        <h3 tabindex="-1" autofocus>确认账号与本组编号</h3>
+        <p>登录自己的账号，按讲师要求记录本组编号。小组编号用于区分课程实验，实验访问权限由账号控制。先观看讲师参考，确认机器人受推后的恢复目标。</p>
+      </section>
+      <section data-course-step hidden>
+        <h3 tabindex="-1">配置本次 SAC 训练</h3>
+        <p>在课堂中选择支持受扰恢复的执行资源，再选训练预算。主实验为 50 万步，短训练用于检查流程。需要调整训练步数、随机种子或训练侧推上限时，在自定义训练参数中配置。</p>
+      </section>
+      <section data-course-step hidden>
+        <h3 tabindex="-1">提交一次，保留原 Run</h3>
+        <p>先确认本轮算力和配方，再提交训练。保留 Run，查看实际步数、奖励和日志。提交响应不明确时，使用课程页面恢复原请求，避免重复训练。</p>
+      </section>
+      <section data-course-step hidden>
+        <h3 tabindex="-1">评测所选训练权重</h3>
+        <p>查看本轮同源评测，核对来源 Run、策略摘要与评测条件。在执行资源支持时，比较原 PD、调参后反馈、冻结输出与实时强化学习策略在固定条件下的表现。</p>
+      </section>
+      <section data-course-step hidden>
+        <h3 tabindex="-1">检查收益、退化和回放</h3>
+        <p>查看固定条件的恢复数、逐条件退化、身体倾角与髋踝修正，再播放本轮视频。保留未达标结果。导出后在本机打开，核对曲线与视频。</p>
+      </section>
+      <section data-course-step hidden>
+        <h3 tabindex="-1">从原实验复制参数，在新组复训</h3>
+        <p>先查看退化条件，再从本轮开启参数对照。一次只改一个训练变量，确认配方差异后提交。原实验和原权重可继续查阅。</p>
+      </section>
+      <section data-course-step hidden>
+        <h3 tabindex="-1">对同条件复评的两轮结果逐项比较</h3>
+        <p>选择原训练和复训各自的评测，核对模型契约、策略 SHA 和评测协议，再查看恢复数、改善与退化。缺少协议摘要时，对两轮原权重各复评一次。</p>
+      </section>
+      <section data-course-step hidden>
+        <h3 tabindex="-1">需要时切换课前验收结果</h3>
+        <p>训练未完成或效果不足时，可以回看课堂的讲师参考。留存本组 Run 与失败原因，并核对参考实验的来源。</p>
+      </section>
+      <div class="model-actions">
+        <button class="button button-ghost button-small" id="originman-course-previous" type="button" disabled>上一步</button>
+        <button class="button button-primary button-small" id="originman-course-next" type="button">下一步</button>
+      </div>
+    </dialog>
+
     <!--
       Keep these as classic scripts instead of ES modules.  The standalone
       artifact is also opened directly from file:// during demos/review.  A
@@ -2284,10 +2393,10 @@
     <script defer src="./run-inspector-core.js?v=2"></script>
     <script defer src="./run-inspector.js?v=3"></script>
     <script defer src="./training-plans.js?v=5"></script>
-    <script defer src="./app.js?v=duck-lab-81"></script>
+    <script defer src="./app.js?v=duck-lab-82"></script>
     <script defer src="./visualization-enhancements.js?v=viz-1"></script>
     <script defer src="./capability-workbench.js?v=1"></script>
     <script defer src="./agent-chat.js?v=agent-19"></script>
-    <script defer src="./onboarding.js?v=onboarding-7"></script>
+    <script defer src="./onboarding.js?v=onboarding-10"></script>
   </body>
 </html>

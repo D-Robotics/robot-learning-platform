@@ -116,6 +116,8 @@ import {
   resolveSim2RealWebEnv,
 } from './runtime-config.js';
 
+import { createUsageManualRouter } from './usage-manual.js';
+
 export { redactInternalError } from '../../server/sim2real/http-helpers.js';
 export { normalizeMicroduckRedirect } from './runtime-config.js';
 
@@ -1760,6 +1762,8 @@ export function createSim2RealWebApp(): Express {
       .type('text/plain')
       .send(gpuAgentInstallScript(origin, agentUrl));
   });
+
+  app.use('/help', createUsageManualRouter(path.resolve(SERVICE_ROOT, '../../docs'), publicPath));
 
   app.use(
     express.static(PUBLIC_ROOT, {

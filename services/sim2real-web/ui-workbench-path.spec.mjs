@@ -121,13 +121,6 @@ page.on('response', async (response) => {
   serverErrors.push(short);
 });
 
-await page.addInitScript(() => {
-  try {
-    localStorage.setItem('rdk-duck-lab-onboarding-v1', 'done');
-  } catch {
-    /* private mode: the tour simply opens, which the sweep tolerates */
-  }
-});
 await page.goto(BASE, { waitUntil: 'domcontentloaded' });
 // Never wait for networkidle: the workspace polls on a timer, so "idle" never
 // arrives and every page load would pay the full timeout.
@@ -146,6 +139,99 @@ record(
   await page.evaluate(() =>
     Boolean(document.querySelector('[data-view-section]:not([hidden])')?.textContent.trim().length),
   ),
+);
+
+const guide = page.getByRole('dialog', { name: '使用指引' });
+const topMenu = page.locator('#top-menu-button');
+const guideButton = page.getByRole('menuitem', { name: '使用指引', exact: true });
+async function openGuide() {
+  await topMenu.click();
+  await guideButton.click();
+}
+record('usage guide leaves the first view interactive', !(await guide.isVisible()));
+await topMenu.click();
+record(
+  'the global menu has no recovery classroom shortcut',
+  (await page.getByRole('menuitem', { name: '受扰恢复课堂', exact: true }).count()) === 0,
+);
+await guideButton.focus();
+await page.keyboard.press('Enter');
+await guide.waitFor({ state: 'visible' });
+await page.keyboard.press('Escape');
+await guide.waitFor({ state: 'hidden' });
+record(
+  'Escape returns focus to the global menu button',
+  await topMenu.evaluate((button) => button === document.activeElement),
+);
+
+for (const [label, view, child, target] of [
+  ['打开仿真与录制', 'simulate', 'simulate', '#simulator-title'],
+  ['打开模型与契约', 'train', 'prepare', '#template-button'],
+  ['打开评测与回放', 'evaluate', 'evaluation-run', '#telemetry-title'],
+  ['打开预检与发布', 'deploy', 'preflight', '#plan-button'],
+]) {
+  await openGuide();
+  await guide.getByRole('link', { name: label, exact: true }).click();
+  await guide.waitFor({ state: 'hidden' });
+  await page.waitForFunction(
+    ([view, child]) =>
+      document.body.dataset.activeView === view && document.body.dataset.flowChild === child,
+    [view, child],
+  );
+  record(`usage guide opens ${view}/${child}`, await page.locator(target).isVisible());
+}
+
+await openGuide();
+record(
+  'the general guide has no OriginMan course link',
+  (await guide.getByText('OriginMan 课程指引', { exact: true }).count()) === 0,
+);
+await guide.getByRole('button', { name: '打开图文使用手册', exact: true }).click();
+const manual = page.getByRole('complementary', { name: '图文使用手册' });
+const chapter = manual.getByLabel('跳到章节');
+await chapter.locator('option').nth(1).waitFor({ state: 'attached' });
+record(
+  'illustrated manual opens alongside the workbench',
+  (await manual.isVisible()) && !(await guide.isVisible()),
+);
+const firstImage = manual.locator('article img').first();
+await firstImage.scrollIntoViewIfNeeded();
+await firstImage.evaluate((img) => img.decode());
+record('illustrated manual loads screenshots', (await manual.locator('article img').count()) > 0);
+await chapter.selectOption({ label: 'OriginMan 课程' });
+record(
+  'manual chapter navigation scrolls within the manual',
+  await manual.locator('#usage-manual-scroll').evaluate((scroll) => scroll.scrollTop > 0),
+);
+const originmanCourseLink = manual.getByRole('link', { name: 'OriginMan 课程指引', exact: true });
+await originmanCourseLink.click();
+const courseGuide = page.getByRole('dialog', { name: 'OriginMan 课程指引', exact: true });
+await courseGuide.waitFor({ state: 'visible' });
+record(
+  'the OriginMan chapter opens the interactive course on step one',
+  (await courseGuide.getByRole('heading', { name: '确认账号与本组编号' }).isVisible()) &&
+    (await courseGuide.getByRole('status').textContent()) === '第 1 / 8 步',
+);
+await courseGuide.getByRole('button', { name: '下一步' }).click();
+record(
+  'the course advances to the SAC configuration instructions',
+  (await courseGuide.getByRole('heading', { name: '配置本次 SAC 训练' }).isVisible()) &&
+    (await courseGuide.getByRole('status').textContent()) === '第 2 / 8 步',
+);
+for (let step = 3; step <= 8; step++) {
+  await courseGuide.getByRole('button', { name: '下一步' }).click();
+  assert.equal(await courseGuide.getByRole('status').textContent(), `第 ${step} / 8 步`);
+}
+await courseGuide.getByRole('button', { name: '完成' }).click();
+record('all eight course steps are reachable and return to the manual', await manual.isVisible());
+await manual.getByRole('link', { name: '训练配置', exact: true }).click();
+await page.waitForFunction(() => document.body.dataset.flowChild === 'configure');
+record('manual stays open while the workbench navigates', await manual.isVisible());
+await manual.getByRole('button', { name: '收起', exact: true }).click();
+record(
+  'closing the manual returns focus to the global menu button',
+  !(await manual.isVisible()) &&
+    (await topMenu.evaluate((button) => button === document.activeElement)),
 );
 
 for (const section of SECTIONS) {
@@ -191,6 +277,34 @@ for (const key of ['robot', 'workshop']) {
       (await product.inputValue()) === 'microduck',
   );
 }
+
+const originmanTaskPage = new URL('?robot=originman#train/prepare', BASE);
+await page.goto(originmanTaskPage.href, { waitUntil: 'domcontentloaded' });
+await page.locator('#originman-default-contracts').waitFor({ state: 'visible' });
+const task = page.getByRole('combobox', { name: '选择训练任务契约' });
+const classroom = page.getByRole('button', { name: '打开受扰恢复课堂', exact: true });
+record('the dance task has no recovery classroom shortcut', !(await classroom.isVisible()));
+await task.selectOption('recovery');
+await classroom.waitFor({ state: 'visible' });
+await task.selectOption('dance');
+record('switching back to dance hides the recovery shortcut', !(await classroom.isVisible()));
+await task.selectOption('recovery');
+await classroom.click();
+await page.waitForURL('**/workshop.html?course=recovery');
+record(
+  'the OriginMan recovery task opens the existing classroom',
+  await page.getByRole('heading', { name: 'OriginMan 受扰恢复课程', exact: true }).isVisible(),
+);
+
+await page.setViewportSize({ width: 390, height: 844 });
+await page.goto(BASE, { waitUntil: 'domcontentloaded' });
+await openGuide();
+await guide.getByRole('button', { name: '打开图文使用手册', exact: true }).click();
+await originmanCourseLink.click();
+record(
+  'the mobile menu also reaches the interactive OriginMan course through the manual',
+  await courseGuide.getByRole('heading', { name: '确认账号与本组编号' }).isVisible(),
+);
 
 record(
   'no uncaught script errors during the walk',
