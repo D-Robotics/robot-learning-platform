@@ -1637,3 +1637,77 @@ test('reference track opens the correct platform mount and keeps result navigati
   assert.equal((await call({ runId: '../ref-run' })).isError, true);
   assert.deepEqual(read, ['ref-run', 'other-task']);
 });
+
+test('follow-up lookup verifies the same replay and ONNX even via the general Run status and old dance tool', async () => {
+  const { experienceProxy } =
+    await import('../plugins/rdk-robot-learning-platform/scripts/experience-mcp.mjs');
+  const runId = 'reference-result';
+  const policySha256 = 'a'.repeat(64),
+    replaySha256 = 'b'.repeat(64);
+  const run = {
+    id: runId,
+    taskId: 'originman-reference-track',
+    status: 'completed',
+    mock: false,
+    artifact: { format: 'onnx', sha256: policySha256, deployable: false },
+    metrics: {
+      originmanReference: {
+        qualityGatePassed: true,
+        framesExpected: 200,
+        framesEvaluated: 200,
+        replay: { sha256: replaySha256 },
+        video: {
+          file: 'dance-replay.mp4',
+          sha256: 'c'.repeat(64),
+          policySha256,
+          sourceReplaySha256: replaySha256,
+        },
+      },
+    },
+  };
+  const domain = 'https://platform.test/robotics-learning';
+  const checked = [];
+  const proxy = experienceProxy(
+    {
+      async request(method, { name, arguments: args }) {
+        assert.equal(method, 'tools/call');
+        assert.equal(name, 'rdk_training_status');
+        assert.equal(args.runId, runId);
+        return { structuredContent: { runId, status: 'completed', taskId: run.taskId } };
+      },
+      async readTrainingRun(id) {
+        assert.equal(id, runId);
+        return run;
+      },
+      async verifyLegacyDanceVideo(id, receipt) {
+        assert.equal(id, runId);
+        checked.push(receipt.sha256);
+        return `./api/v1/duck/runs/${id}/dance-video`;
+      },
+      async verifyPolicyDownload(id, sha) {
+        assert.equal(id, runId);
+        assert.equal(sha, policySha256);
+        return true;
+      },
+      async readTelemetrySummary() {
+        throw Error('Physical telemetry cannot replace the reference replay');
+      },
+    },
+    { env: { RDK_SIM2REAL_MCP_BASE_URL: domain } },
+  );
+  for (const name of [
+    'rdk_training_status',
+    'rdk_training_wait',
+    'rdk_originman_dance_replay_read',
+  ]) {
+    const reply = await proxy('tools/call', { name, arguments: { runId } });
+    assert.ok(!reply.isError, JSON.stringify(reply));
+    const model = reply.structuredContent;
+    assert.equal(model.runDelivery.replay, 'simulation');
+    assert.equal(model.runDelivery.policy, 'available');
+    assert.match(model.links.replay, /\/originman-reference-run\.html\?.+#replay-heading$/);
+    assert.match(model.studioNavigation.arguments.url, /\/originman-reference-run\.html\?/);
+    assert.match(model.studentReply, /跟跳评测通过.*200\/200 帧/);
+  }
+  assert.deepEqual(checked, ['c'.repeat(64), 'c'.repeat(64), 'c'.repeat(64)]);
+});
