@@ -8,7 +8,11 @@
   };
 
   const helpButton = document.getElementById('onboarding-help-button');
-  helpButton?.addEventListener('click', open);
+  const topMenuButton = document.getElementById('top-menu-button');
+  helpButton?.addEventListener('click', () => {
+    topMenuButton?.focus({ preventScroll: true });
+    open();
+  });
 
   const manual = document.getElementById('usage-manual');
   const manualTitle = document.getElementById('usage-manual-title');
@@ -52,7 +56,7 @@
 
   function hideManual({ restoreFocus = true } = {}) {
     manual.hidden = true;
-    if (restoreFocus) helpButton?.focus({ preventScroll: true });
+    if (restoreFocus) topMenuButton?.focus({ preventScroll: true });
   }
 
   document.getElementById('usage-manual-open').addEventListener('click', () => {
@@ -78,6 +82,35 @@
       hideManual({ restoreFocus: false });
       document.getElementById('main-content')?.focus({ preventScroll: true });
     }
+  });
+
+  const courseGuide = document.getElementById('originman-course-guide');
+  const courseSteps = [...courseGuide.querySelectorAll('[data-course-step]')];
+  const courseProgress = document.getElementById('originman-course-progress');
+  const previousStep = document.getElementById('originman-course-previous');
+  const nextStep = document.getElementById('originman-course-next');
+  let courseIndex = 0;
+
+  function showCourseStep(index) {
+    courseIndex = index;
+    courseSteps.forEach((step, position) => { step.hidden = position !== index; });
+    courseProgress.textContent = `第 ${index + 1} / ${courseSteps.length} 步`;
+    previousStep.disabled = index === 0;
+    nextStep.textContent = index === courseSteps.length - 1 ? '完成' : '下一步';
+    if (courseGuide.open) courseSteps[index].querySelector('h3').focus();
+  }
+
+  previousStep.addEventListener('click', () => showCourseStep(courseIndex - 1));
+  nextStep.addEventListener('click', () => {
+    if (courseIndex === courseSteps.length - 1) courseGuide.close();
+    else showCourseStep(courseIndex + 1);
+  });
+  manualContent.addEventListener('click', (event) => {
+    if (!event.target.closest('a[data-originman-course-guide]') || event.button !== 0 ||
+        event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+    event.preventDefault();
+    showCourseStep(0);
+    courseGuide.showModal();
   });
 
   guide.addEventListener('click', (event) => {

@@ -2,7 +2,7 @@
 
 在同一个工作台准备机器人任务和数据、训练或导入策略、检查评测，再对目标设备做只读预检。可以从任一已有输入开始，例如已有遥测就直接回放，已有模型就先导入契约。
 
-打开工作台，点顶栏的 **使用指引 → 打开图文使用手册**。用「跳到章节」找步骤，用手册顶部的页面链接进入工作台。宽屏下手册保留在右侧，小屏下点页面链接会收起手册。重新打开可继续阅读。
+打开工作台，点右上角的 **更多 → 使用指引 → 打开图文使用手册**。用「跳到章节」找步骤，用手册顶部的页面链接进入工作台。宽屏下手册保留在右侧，小屏下点页面链接会收起手册。重新打开可继续阅读。
 
 ![使用指引弹窗，包含仿真或轨迹、训练、评测回放和只读预检四个入口](assets/user-guide/01-usage-guide.png)
 
@@ -28,7 +28,7 @@
 
 选择 **OriginMan → 模型与契约**，在「登记模型」内选择 **受扰恢复 · SAC**，再点 **打开受扰恢复课堂**。在课堂里先看参考，选择算力和预算，确认后开始训练，随后查看同一策略的仿真评测与回放。
 
-- [OriginMan 课程指引](../plugins/rdk-robot-learning-platform/references/user-guide.md#workshop受扰恢复课程)介绍受扰恢复实验的步骤和结果。
+- [OriginMan 课程指引](../plugins/rdk-robot-learning-platform/references/user-guide.md#workshop受扰恢复课程)在工作台内打开八步交互指引，可按步查看训练、评测、回放和对照方法。
 - [OriginMan 强化学习跳舞](../plugins/rdk-robot-learning-platform/references/user-guide.md#originman-强化学习跳舞)介绍舞段编排、算力和 PPO 训练。
 
 ## 准备数据或试跑仿真
