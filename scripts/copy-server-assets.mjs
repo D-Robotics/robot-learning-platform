@@ -1,3 +1,4 @@
+import { build } from 'esbuild';
 /** Copy standalone runtime assets next to a compiled server output. */
 import fs from 'node:fs';
 import path from 'node:path';
@@ -131,6 +132,19 @@ try {
     path.join('dist-server', 'services', 'sim2real-web', 'public'),
   );
 
+  await build({
+    entryPoints: ['services/sim2real-web/originman-webgl-source.mjs'],
+    outfile: 'dist-server/services/sim2real-web/public/originman-webgl.js',
+    bundle: true,
+    format: 'iife',
+    globalName: 'OriginmanWebGL',
+    target: ['chrome100', 'safari16'],
+    legalComments: 'eof',
+  });
+  copyFile(
+    'server/sim2real/originman-teleop-rehearsal.mjs',
+    'dist-server/server/sim2real/originman-teleop-rehearsal.mjs',
+  );
   copyFile(path.join('docs', 'user-guide.md'), path.join('dist-server', 'docs', 'user-guide.md'));
   copyTreeFiltered(
     path.join('docs', 'assets', 'user-guide'),

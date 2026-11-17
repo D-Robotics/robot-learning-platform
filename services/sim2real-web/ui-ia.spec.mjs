@@ -176,12 +176,12 @@ assert.deepEqual(
 );
 assert.deepEqual(
   [...sections].sort(),
-  [...viewNames].sort(),
-  'each workflow view must have a rendered section',
+  [...viewNames, 'classroom'].sort(),
+  'workflow views and the contextual classroom must have rendered sections',
 );
 assert.deepEqual(
   [...new Set(targets)].sort(),
-  [...viewNames].sort(),
+  [...viewNames, 'classroom'].sort(),
   'navigation targets must resolve to a workflow view',
 );
 
@@ -400,6 +400,11 @@ assert.match(
   html,
   /id="originman-default-contracts"[\s\S]*?id="originman-contract-template"[\s\S]*?id="originman-recovery-class"[^>]*hidden[\s\S]*?<\/section>/,
   'the classroom shortcut belongs to the OriginMan task selector',
+);
+assert.match(
+  html,
+  /data-view-section="classroom"[\s\S]*?id="originman-classroom-slot"[\s\S]*?id="originman-sim-canvas"[\s\S]*?id="originman-round-comparison"/,
+  'the in-workbench classroom ships with its native simulator and evidence panel',
 );
 for (const destination of [
   'simulate/simulate',

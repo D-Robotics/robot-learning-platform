@@ -3,8 +3,8 @@
 #
 # 背景：2026-09-22 前的手工部署曾漏掉 release 根级的 mock-local-worker.mjs
 # 且未重启 worker 服务——问题潜伏到下一次重启才爆发。本脚本把部署固化为
-# 不可跳过的机器步骤：构建 → 组包（含补齐 linux/x64 原生可选依赖）→ 上传
-# → 服务端解压（继承 Linux engines 依赖环境，再覆盖本次干净引擎源码）→
+# 不可跳过的机器步骤：构建 → 组包 → 上传
+# → 服务端解压（安装 Linux 原生依赖，继承引擎环境并覆盖本次干净引擎源码）→
 # **按 systemd ExecStart 逐一校验新 release 的入口文件** → 切软链 → 重启服务
 # → 健康检查，失败自动回滚。已安装的真实 CPU worker 自动纳入同一预检、
 # 重启与回滚事务。
@@ -125,10 +125,7 @@ pack_engine_sources "$STAGING/dist-server/engines" "$STAGING/engine-source.tar.g
 # 本地 engines 不作为依赖环境上传（含历史中断构建的 engines.*.tmp 残留）。
 rm -rf "$STAGING/dist-server/engines" "$STAGING"/dist-server/engines.*.tmp
 cp package.json package-lock.json "$STAGING/"
-npm ci --omit=dev --no-audit --no-fund --prefix "$STAGING" >/dev/null 2>&1
-# mac 上的 npm ci 只装 darwin 平台变体；linux 运行时原生依赖（DSH flock、
-# ripgrep、sharp）不补齐则生产端 require 直接失败（2026-10-10 事故）。
-node scripts/reify-deployment-optional-deps.mjs --target "$STAGING"
+# Linux 原生依赖由生产服务器根据 lockfile 安装；上传包不含本机 node_modules。
 # 服务单元的入口文件（如 worker 的根级 mock-local-worker.mjs）来自构建
 # 产物的 services/sim2real-web/，必须提升到 release 根目录。
 for entry in "$STAGING"/dist-server/services/sim2real-web/*.mjs; do
@@ -156,6 +153,12 @@ fi
 rm -rf "$REL" && mkdir -p "$REL"
 # 包内含顶层 release 目录，strip 掉再解到目标路径。
 tar xzf "/tmp/$TARBALL" -C "$REL" --strip-components=1 2>/dev/null
+# Older production units resolve the instructor-approved scene preview through
+# current. Preserve that data file while the regular build supplies the UI.
+PREVIEW="$BASE/current/originman-model.png"
+if [[ -f "$PREVIEW" && ! -L "$PREVIEW" ]]; then
+  cp -- "$PREVIEW" "$REL/originman-model.png"
+fi
 # Linux venv 只能由服务端历代继承；本次源码包不含这些环境目录。
 # current 未必含 engines（历史断链/被剔 Release），因此从「最新含
 # dist-server/engines 的 release」拷贝，而不是只盯 current。
@@ -252,6 +255,35 @@ remote_bash "$BASE" "$RELEASE" "${DEPLOY_UNITS[@]}" <<'REMOTE'
 set -euo pipefail
 BASE=$1; RELEASE=$2; shift 2; UNITS=("$@")
 MISSING=0
+public=dist-server/services/sim2real-web/public
+current_index="$BASE/current/$public/index.html"
+candidate_public="$BASE/releases/$RELEASE/$public"
+# The existing native classroom has its own simulator and evidence modules.
+# A source build that only embeds the Workshop would drop those controls.
+if [[ -f "$current_index" ]] && grep -Fq 'id="originman-classroom-slot"' "$current_index"; then
+  if ! grep -Fq 'id="originman-classroom-slot"' "$candidate_public/index.html"; then
+    echo "FATAL: 候选缺少现网 OriginMan 原课堂视图；停止切换 release。" >&2
+    exit 1
+  fi
+  for module in workshop simulator round-comparison; do
+    asset=$(grep -oE "src=\"\\./originman-${module}(\\.[a-z0-9]+)?\\.js(\"|\\?v=[a-z0-9-]+\")" "$candidate_public/index.html" | head -n 1 || true)
+    asset=${asset#src=\"./}
+    asset=${asset%\"}
+    asset=${asset%%\?*}
+    if [[ -z "$asset" || ! -f "$candidate_public/$asset" ]]; then
+      echo "FATAL: 候选缺少现网 OriginMan 课堂模块 originman-$module；停止切换 release。" >&2
+      exit 1
+    fi
+  done
+  for entry in server/routes/originman-classroom-routes.js server/routes/originman-simulator-routes.js \
+    server/sim2real/originman-teleop-rehearsal.mjs engines/originman-straight/interactive_sim.py \
+    engines/originman-straight/experiments/standing-residual.json; do
+    if [[ ! -f "$BASE/releases/$RELEASE/dist-server/$entry" ]]; then
+      echo "FATAL: 候选缺少 OriginMan 课堂运行文件 $entry；停止切换 release。" >&2
+      exit 1
+    fi
+  done
+fi
 for unit in "${UNITS[@]}"; do
   exec_start=$(systemctl cat "$unit" | sed -n 's/^ExecStart=//p' | head -1)
   # ExecStart 形如 "/opt/node.../node /opt/sim2real-web/current/<script> [args]"。

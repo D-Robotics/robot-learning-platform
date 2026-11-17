@@ -290,10 +290,28 @@ await task.selectOption('dance');
 record('switching back to dance hides the recovery shortcut', !(await classroom.isVisible()));
 await task.selectOption('recovery');
 await classroom.click();
-await page.waitForURL('**/workshop.html?course=recovery');
+await page.waitForURL(/#classroom$/);
+const recoveryHeading = page.getByRole('heading', {
+  name: 'OriginMan · 受扰恢复课堂',
+  exact: true,
+});
+await recoveryHeading.waitFor({ state: 'visible' });
 record(
-  'the OriginMan recovery task opens the existing classroom',
-  await page.getByRole('heading', { name: 'OriginMan 受扰恢复课程', exact: true }).isVisible(),
+  'the recovery task opens the native simulator and recovery evidence in the workbench',
+  (await page.locator('#originman-sim-canvas').count()) === 1 &&
+    (await page.locator('#originman-round-comparison').count()) === 1 &&
+    (await page.locator('[data-view-section="classroom"] iframe').count()) === 0,
+);
+await page.goBack({ waitUntil: 'domcontentloaded' });
+record(
+  'leaving the classroom restores the OriginMan model panel',
+  (await task.isVisible()) && !(await recoveryHeading.isVisible()),
+);
+await page.goto(new URL('#classroom', BASE).href, { waitUntil: 'domcontentloaded' });
+await recoveryHeading.waitFor({ state: 'visible' });
+record(
+  'a standalone classroom bookmark restores OriginMan and the native classroom',
+  (await page.locator('#product-select').inputValue()) === 'originman',
 );
 
 await page.setViewportSize({ width: 390, height: 844 });
@@ -304,6 +322,14 @@ await originmanCourseLink.click();
 record(
   'the mobile menu also reaches the interactive OriginMan course through the manual',
   await courseGuide.getByRole('heading', { name: '确认账号与本组编号' }).isVisible(),
+);
+await page.goto(originmanTaskPage.href, { waitUntil: 'domcontentloaded' });
+await task.selectOption('recovery');
+await classroom.click();
+await recoveryHeading.waitFor({ state: 'visible' });
+record(
+  'the mobile classroom opens the native simulation panel within the workbench',
+  await page.getByRole('heading', { name: 'OriginMan 仿真场', exact: true }).isVisible(),
 );
 
 record(

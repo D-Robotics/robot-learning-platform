@@ -13,6 +13,11 @@ import type {
 } from './model-artifacts.js';
 import type { RdkPlatform } from './board-types.js';
 import {
+  isOriginmanWorkshopEngine,
+  normalizeOriginmanWorkshop,
+  type OriginmanWorkshopConfig,
+} from './originman-workshop.js';
+import {
   normalizeOriginmanDanceTraining,
   type OriginmanDanceTraining,
 } from './originman-dance-training.js';
@@ -247,6 +252,8 @@ export type Sim2RealTrainingEngine =
   | 'smolvla'
   | 'isaac-lab'
   | 'originman-dance-ppo'
+  | 'originman-recovery'
+  | 'originman-recovery-reflect'
   | typeof ORIGINMAN_REFERENCE_ENGINE;
 
 export interface Sim2RealTrainingSpec {
@@ -259,6 +266,7 @@ export interface Sim2RealTrainingSpec {
   algorithm?: Sim2RealTrainingAlgorithm;
   /** Engine the worker must route to; omitted keeps the platform default. */
   engine?: Sim2RealTrainingEngine;
+  originmanWorkshop?: OriginmanWorkshopConfig;
   /** Owner/project-scoped Run whose recorded episodes are used for imitation. */
   demonstrationRunId?: string;
   /** Set by the platform from the accepted source bytes, never from client paths. */
@@ -904,6 +912,8 @@ const ALLOWED_TRAINING_ENGINES = new Set<Sim2RealTrainingEngine>([
   'smolvla',
   'isaac-lab',
   'originman-dance-ppo',
+  'originman-recovery',
+  'originman-recovery-reflect',
   ORIGINMAN_REFERENCE_ENGINE,
 ]);
 const SAFE_ID = /^[a-z][a-z0-9-]{1,63}$/;
@@ -1094,6 +1104,16 @@ export function normalizeTrainingSpec(value: unknown): {
   if (engine && !ALLOWED_TRAINING_ENGINES.has(engine as Sim2RealTrainingEngine)) {
     errors.push('training.engine must be one of ' + [...ALLOWED_TRAINING_ENGINES].join(', '));
   }
+  let originmanWorkshop: OriginmanWorkshopConfig | undefined;
+  if (source.originmanWorkshop !== undefined || isOriginmanWorkshopEngine(engine)) {
+    try {
+      originmanWorkshop = normalizeOriginmanWorkshop(source.originmanWorkshop);
+      if (!isOriginmanWorkshopEngine(engine) || algorithm !== 'sac' || numEnvs !== 4)
+        errors.push('OriginMan Workshop requires a recovery engine, SAC and 4 environments');
+    } catch (error) {
+      errors.push(error instanceof Error ? error.message : 'Workshop 配置无效');
+    }
+  }
   const demonstrationRunId = safeText(source.demonstrationRunId, 200);
   if (
     source.demonstrationRunId !== undefined &&
@@ -1148,6 +1168,7 @@ export function normalizeTrainingSpec(value: unknown): {
       ...(runName ? { runName } : {}),
       ...(algorithm ? { algorithm: algorithm as Sim2RealTrainingAlgorithm } : {}),
       ...(engine ? { engine: engine as Sim2RealTrainingEngine } : {}),
+      ...(originmanWorkshop ? { originmanWorkshop } : {}),
       ...(demonstrationRunId ? { demonstrationRunId } : {}),
       ...(source.syntheticSmoke === true ? { syntheticSmoke: true } : {}),
       ...(originmanDance ? { originmanDance } : {}),

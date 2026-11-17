@@ -1,4 +1,10 @@
 import { isDeepStrictEqual } from 'node:util';
+import {
+  isOriginmanWorkshopEngine,
+  matchesOriginmanWorkshopContract,
+} from '../../shared/originman-workshop.js';
+import { registerOriginmanClassroomRoutes } from './originman-classroom-routes.js';
+import { registerOriginmanSimulatorRoutes } from './originman-simulator-routes.js';
 import referenceManifest from '../../plugins/rdk-robot-learning-platform/references/originman-reference-manifest.json' with { type: 'json' };
 import {
   ORIGINMAN_REFERENCE_ENGINE,
@@ -660,7 +666,20 @@ function requestOwner(
   response: Response,
   auth: Sim2RealAuthPort,
 ): string | undefined | null {
-  if (!auth.isMultiUserDeployment()) return undefined;
+  const expectedIdentity = request.headers?.['x-rdk-expected-identity'];
+  const matchesIdentity = (identity: string) => {
+    if (expectedIdentity === undefined || expectedIdentity === encodeURIComponent(identity))
+      return true;
+    noStore(response);
+    sendApiError(
+      response,
+      409,
+      'SIM2REAL_IDENTITY_CHANGED',
+      '当前账号已改变，请重新检查本组实验。',
+    );
+    return false;
+  };
+  if (!auth.isMultiUserDeployment()) return matchesIdentity('local') ? undefined : null;
   const principal = auth.resolvePrincipal(request);
   const id = String(principal?.accountId ?? '').trim();
   if (id && (!/^[^\u0000-\u001f\u007f]{1,160}$/.test(id) || id.includes('/'))) {
@@ -701,7 +720,7 @@ function requestOwner(
     );
     return null;
   }
-  return id;
+  return matchesIdentity('account:' + id) ? id : null;
 }
 
 const SAFE_IDEMPOTENCY_KEY = /^[\x21-\x7e]{1,128}$/;
@@ -1377,6 +1396,21 @@ function parseRunRequest(
       };
     }
     training = trainingResult.spec;
+    if (
+      (taskId === 'originman-recovery' || training.originmanWorkshop) &&
+      (taskId !== 'originman-recovery' ||
+        !training.originmanWorkshop ||
+        backend !== 'local' ||
+        body.resumeFrom != null)
+    ) {
+      return {
+        apiError: {
+          status: 400,
+          code: 'SIM2REAL_INVALID_TRAINING',
+          message: 'OriginMan 受扰恢复要求本地 Worker 和课堂配方。续训权重由课堂评测来源绑定。',
+        },
+      };
+    }
     if (
       (taskId === 'originman-dance' || training.originmanDance) &&
       (taskId !== 'originman-dance' || !training.originmanDance || backend !== 'local')
@@ -2395,6 +2429,8 @@ export function createSim2RealRouter(
               ...(principal.email ? { email: principal.email } : {}),
             }
           : null,
+        identityPrecondition: true,
+        identityScope: auth.isMultiUserDeployment() ? 'account' : 'local',
         productProfiles: Object.values(SIM2REAL_PRODUCT_PROFILES),
         selectedProductId,
         selectedContract,
@@ -2496,6 +2532,62 @@ export function createSim2RealRouter(
     { requestOwner: (request, response) => requestOwner(request, response, auth) },
     { prefix },
   );
+  const classroomOwner = (request: Request, response: Response) =>
+    requestOwner(request, response, auth);
+  const fetchClassroomArtifact = async (
+    run: Sim2RealRunRecord,
+    owner: string | undefined,
+    kind?: 'workshop-video',
+  ) => {
+    if (!run.externalRunId || run.relayAgentUrl) return null;
+    const resource = run.computeResourceId
+      ? await getSim2RealComputeResourceSecret(run.computeResourceId, owner)
+      : null;
+    if (run.computeResourceId && !resource) return null;
+    return fetchLocalRunArtifact({
+      accountId: owner ?? 'local-dev',
+      externalRunId: run.externalRunId,
+      ...(kind ? { kind } : {}),
+      ...(resource
+        ? { runnerUrl: resource.resource.runnerUrl, runnerToken: resource.runnerToken ?? '' }
+        : {}),
+    });
+  };
+  registerOriginmanClassroomRoutes(router, {
+    api,
+    owner: classroomOwner,
+    run: getSim2RealRun,
+    video: (run, owner) => fetchClassroomArtifact(run, owner, 'workshop-video'),
+  });
+  registerOriginmanSimulatorRoutes(router, {
+    api,
+    owner: classroomOwner,
+    policy: async (runId, owner) => {
+      const run = await getSim2RealRun(runId, owner);
+      if (
+        !run ||
+        run.status !== 'completed' ||
+        run.backend !== 'local' ||
+        run.mock !== false ||
+        run.taskId !== 'originman-recovery' ||
+        !isOriginmanWorkshopEngine(run.training?.engine) ||
+        run.training?.originmanWorkshop?.phase !== 'train' ||
+        !run.artifact?.sha256 ||
+        run.metrics?.originmanWorkshop?.policySha256 !== run.artifact.sha256
+      )
+        return null;
+      const model = await getSim2RealModel(run.modelId, owner);
+      if (!model || !matchesOriginmanWorkshopContract(model.manifest.contract)) return null;
+      const artifact = await fetchClassroomArtifact(run, owner);
+      if (
+        !artifact ||
+        artifact.sha256 !== run.artifact.sha256 ||
+        artifact.bytes.length !== run.artifact.sizeBytes
+      )
+        return null;
+      return { ...artifact, sourceRunId: run.id };
+    },
+  });
   registerSim2RealExperimentRoutes(
     router,
     {
@@ -4326,6 +4418,60 @@ export function createSim2RealRouter(
           message: '项目不存在，或不属于当前账号。',
         });
         return;
+      }
+      const classroom = training?.originmanWorkshop;
+      if (classroom && training) {
+        const resource =
+          computeResourceId && (await getSim2RealComputeResource(computeResourceId, owner));
+        if (
+          !matchesOriginmanWorkshopContract(model.manifest.contract) ||
+          !resource ||
+          resource.source === 'local-agent' ||
+          resource.mock !== false ||
+          !training.engine ||
+          !resource.engines?.includes(training.engine)
+        ) {
+          sendApiError(
+            response,
+            409,
+            'SIM2REAL_ORIGINMAN_WORKER_MISMATCH',
+            '课堂需要匹配的受扰恢复契约和真实 Worker。',
+          );
+          return;
+        }
+        if (classroom.phase === 'evaluate') {
+          const source =
+            classroom.sourceRunId && (await getSim2RealRun(classroom.sourceRunId, owner));
+          const parent = source && source.training?.originmanWorkshop;
+          if (
+            !source ||
+            !parent ||
+            parent.phase !== 'train' ||
+            source.status !== 'completed' ||
+            source.taskId !== 'originman-recovery' ||
+            source.mock !== false ||
+            source.backend !== 'local' ||
+            source.computeResourceId !== computeResourceId ||
+            source.modelId !== modelId ||
+            source.training?.engine !== training.engine ||
+            !source.externalRunId ||
+            !source.artifact?.sha256 ||
+            source.metrics?.originmanWorkshop?.policySha256 !== source.artifact.sha256 ||
+            parent.timesteps !== classroom.timesteps ||
+            parent.seed !== classroom.seed ||
+            parent.pushMaxForce !== classroom.pushMaxForce ||
+            parent.groupId !== classroom.groupId
+          ) {
+            sendApiError(
+              response,
+              409,
+              'SIM2REAL_WORKSHOP_SOURCE_INVALID',
+              '请使用同一模型与 Worker 上已校验的原训练。',
+            );
+            return;
+          }
+          classroom.sourceExternalRunId = source.externalRunId;
+        }
       }
       if (taskId === ORIGINMAN_REFERENCE_TASK) {
         if (

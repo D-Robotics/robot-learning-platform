@@ -33,9 +33,6 @@ it('workshop routes use normal authentication, viewer mutation denial and isolat
       { prefix: '/api/v1/duck' },
     ),
   );
-  app.get('/api/v1/duck/workshops/originman', (_r, s) =>
-    s.json({ ok: true, course: 'existing-course' }),
-  );
   const server = await new Promise<http.Server>((resolve) => {
     const s = app.listen(0, '127.0.0.1', () => resolve(s));
   });
@@ -45,13 +42,25 @@ it('workshop routes use normal authentication, viewer mutation denial and isolat
     '/api/v1/duck/workshop-sessions';
   try {
     expect((await fetch(base)).status).toBe(401);
+    const catalog = base.replace('/workshop-sessions', '/workshops/originman');
+    expect((await fetch(catalog)).status).toBe(401);
+    expect(
+      (
+        await fetch(catalog, {
+          headers: { 'x-owner': 'A', 'x-rdk-expected-identity': encodeURIComponent('account:B') },
+        })
+      ).status,
+    ).toBe(409);
     expect(
       await (
-        await fetch(base.replace('/workshop-sessions', '/workshops/originman'), {
+        await fetch(catalog, {
           headers: { 'x-owner': 'A' },
         })
       ).json(),
-    ).toMatchObject({ course: 'existing-course' });
+    ).toMatchObject({
+      simulationOnly: true,
+      manifest: { contract: { id: 'custom-policy-originman-recovery-v1', jointCount: 20 } },
+    });
     for (const suffix of [
       '',
       '/setup',

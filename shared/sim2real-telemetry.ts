@@ -1,3 +1,4 @@
+import type { OriginmanWorkshopResult } from './originman-workshop.js';
 import type { LatencyMeasurementStage } from './board-rehearsal.js';
 import type {
   ModelArtifactFormat,
@@ -35,6 +36,7 @@ export interface SimulationReplayEvidence {
 }
 
 export interface Sim2RealRunMetrics {
+  originmanWorkshop?: OriginmanWorkshopResult;
   trainChunkMse?: number;
   validationChunkMse?: number;
   demonstrationSourceRunId?: string;

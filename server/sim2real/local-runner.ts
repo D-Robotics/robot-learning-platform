@@ -182,7 +182,7 @@ export async function fetchLocalRunArtifact(input: {
   runnerUrl?: string;
   runnerToken?: string;
   timeoutMs?: number;
-  kind?: 'dance-video';
+  kind?: 'dance-video' | 'workshop-video';
 }): Promise<{ bytes: Buffer; sha256: string } | null> {
   const accountId = safeAccountId(input.accountId);
   let runnerUrl: string;
@@ -216,7 +216,7 @@ export async function fetchLocalRunArtifact(input: {
       {
         method: 'GET',
         headers: {
-          accept: input.kind === 'dance-video' ? 'video/mp4' : 'application/octet-stream',
+          accept: input.kind ? 'video/mp4' : 'application/octet-stream',
           'x-sim2real-account': accountId,
           ...(token ? { authorization: `Bearer ${token}` } : {}),
         },
@@ -224,10 +224,7 @@ export async function fetchLocalRunArtifact(input: {
         signal: controller.signal,
       },
     );
-    if (
-      !response.ok ||
-      (input.kind === 'dance-video' && response.headers.get('content-type') !== 'video/mp4')
-    )
+    if (!response.ok || (input.kind && response.headers.get('content-type') !== 'video/mp4'))
       return null;
     const declared = Number(response.headers.get('content-length') || 0);
     // Same ceiling the worker enforces (50 MB). A lie or an absent header is

@@ -141,7 +141,7 @@ function readProductPreference() {
     if (params.get('demo') === '1') return 'microduck';
     const requested = params.get('robot');
     if (Object.hasOwn(PRODUCT_PROFILES, requested)) return requested;
-    if (params.get('workshop') === 'originman') return 'originman';
+    if (params.get('workshop') === 'originman' || window.location.hash === '#classroom') return 'originman';
     const value = window.localStorage?.getItem('rdk-duck-lab-product');
     return value && PRODUCT_PROFILES[value] ? value : 'microduck';
   } catch {
@@ -1531,6 +1531,7 @@ const VIEW_ANNOUNCEMENTS = {
   deploy: '部署与反馈',
   records: '证据与记录',
   station: '设备控制台',
+  classroom: 'OriginMan 受扰恢复课堂',
 };
 
 // One polite live region for view-switch announcements: nav buttons keep
@@ -2167,6 +2168,7 @@ const VIEW_STAGE_LABELS = {
   deploy: '设备与发布',
   records: '证据与记录',
   station: '设备与发布',
+  classroom: '课堂实验',
 };
 
 // Sidebar child entries are real workflow nodes. A node may share a top-level
@@ -2189,6 +2191,11 @@ const FLOW_CHILD_CONTEXTS = {
 // 无侧栏子项的落地位置（从进度条、对象链或深链直接进入视图）复用的横幅文案。
 // 名称与侧边栏入口保持一致，避免同一视图出现多套叫法。
 const VIEW_BANNERS = {
+  classroom: {
+    kicker: '课程 · OriginMan',
+    title: '课堂实验',
+    description: '在同一课堂查看受扰恢复仿真、训练记录、评测与回放。',
+  },
   simulate: { kicker: '01 · 数据与仿真', title: '仿真与录制', description: '先把动作任务跑通并录下可复用轨迹，训练、评测和部署都从这份证据继续。' },
   records: { kicker: '证据中心', title: '证据与记录', description: '轨迹、训练 Run、评测证据、模型制品和部署记录统一管理；点击一条记录可继续回放或查看详情。' },
   resources: { kicker: '证据中心', title: '执行资源', description: '管理本机 Agent、远程 GPU 和云端算力；训练页只选资源，不混入训练配置。' },
@@ -2208,7 +2215,7 @@ function parseHashLocation() {
   const raw = decodeURIComponent(window.location.hash.slice(1));
   const [view, child] = raw.split('/');
   return {
-    view: WORKFLOW_VIEWS.includes(view) ? view : 'overview',
+    view: view === 'classroom' || WORKFLOW_VIEWS.includes(view) ? view : 'overview',
     child: child && FLOW_CHILD_CONTEXTS[child] ? child : '',
   };
 }
@@ -2269,8 +2276,11 @@ function renderFlowBanner() {
   setText('flow-context-description', ctx.description);
 }
 
+let originmanClassroom;
+
 function setView(view, { updateHash = true, scroll = true, focus = true } = {}) {
-  const wanted = WORKFLOW_VIEWS.includes(view) ? view : 'overview';
+  const enteringClassroom = view === 'classroom' && state.productId === 'originman';
+  const wanted = enteringClassroom || WORKFLOW_VIEWS.includes(view) ? view : 'overview';
   clearFlowChild();
   const changed = document.body.dataset.activeView !== wanted;
   document.body.dataset.activeView = wanted;
@@ -2280,6 +2290,22 @@ function setView(view, { updateHash = true, scroll = true, focus = true } = {}) 
   document.querySelectorAll('[data-view-section]').forEach((section) => {
     section.hidden = section.dataset.viewSection !== wanted;
   });
+  const classroomPanel = $('originman-workshop');
+  if (classroomPanel) {
+    classroomPanel.dataset.originmanView = wanted;
+    classroomPanel.hidden = !enteringClassroom;
+    if (enteringClassroom) {
+      originmanClassroom ??= window.OriginmanWorkshop?.mount({
+        request,
+        apiPath,
+        onConfigure: () => showTrainStep('configure'),
+        onPreview: (runId) => void originmanClassroom?.preview(runId),
+        onSubmitted: () => void loadOverview({ quiet: true }),
+      });
+      classroomPanel.open = true;
+      if (!changed) void originmanClassroom?.refresh();
+    }
+  }
   // 子界面分割默认值：进入多模块视图而未指定子项时落到第一个模块，
   // 保证「一次只看到一个子项的内容」（D-002）。
   applySubinterfacePartition(wanted, document.body.dataset.flowChild || '');
@@ -2350,7 +2376,8 @@ function setView(view, { updateHash = true, scroll = true, focus = true } = {}) 
   // while focus already lives in the main content (e.g. deep link boot).
   if (changed && focus) {
     const main = $('main-content');
-    if (main && !main.contains(document.activeElement)) main.focus({ preventScroll: true });
+    if (enteringClassroom) $('originman-classroom-title')?.focus({ preventScroll: true });
+    else if (main && !main.contains(document.activeElement)) main.focus({ preventScroll: true });
     announce(`已切换到：${VIEW_ANNOUNCEMENTS[wanted] || wanted}`);
   }
   // 视图内轮询统一由注册表收发：进入视图启动（评估页立即刷一帧），离开即停，
@@ -8178,10 +8205,7 @@ function bindOriginmanTrainingWorkbench() {
       void refreshOriginmanContract();
     } else showTrainStep('configure');
   });
-  $('originman-recovery-class')?.addEventListener('click', () => {
-    if (document.querySelector('[data-view-section="classroom"]')) setView('classroom');
-    else location.assign(new URL('./workshop.html?course=recovery', location.href));
-  });
+  $('originman-recovery-class')?.addEventListener('click', () => setView('classroom'));
   $('originman-contract-template')?.addEventListener('change', () => {
     const editor = $('manifest-editor');
     if (originmanRunState.templateText === editor?.value) editor.value = '';
@@ -11937,6 +11961,7 @@ function wireEvents() {
       history.replaceState(history.state, '', url);
     }
     state.productId = next;
+    if (next !== 'originman' && document.body.dataset.activeView === 'classroom') setView('overview');
     state.selectedModelId = '';
     // A project can span several robot profiles. Keep it only when it links a
     // model for the newly selected product; otherwise return to the account
