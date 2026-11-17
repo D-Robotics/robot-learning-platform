@@ -1641,7 +1641,8 @@ test('reference track opens the correct platform mount and keeps result navigati
 test('follow-up lookup verifies the same replay and ONNX even via the general Run status and old dance tool', async () => {
   const { experienceProxy } =
     await import('../plugins/rdk-robot-learning-platform/scripts/experience-mcp.mjs');
-  const runId = 'reference-result';
+  const runId = '6a526fe7-5802-4655-a1bf-74a68d748a17';
+  const prefix = '6a526fe7';
   const policySha256 = 'a'.repeat(64),
     replaySha256 = 'b'.repeat(64);
   const run = {
@@ -1672,11 +1673,12 @@ test('follow-up lookup verifies the same replay and ONNX even via the general Ru
       async request(method, { name, arguments: args }) {
         assert.equal(method, 'tools/call');
         assert.equal(name, 'rdk_training_status');
-        assert.equal(args.runId, runId);
+        assert.ok([prefix, runId].includes(args.runId));
         return { structuredContent: { runId, status: 'completed', taskId: run.taskId } };
       },
-      async readTrainingRun(id) {
-        assert.equal(id, runId);
+      async readTrainingRun(id, options) {
+        if (id === prefix) assert.equal(options.allowPrefix, true);
+        else assert.equal(id, runId);
         return run;
       },
       async verifyLegacyDanceVideo(id, receipt) {
@@ -1709,5 +1711,77 @@ test('follow-up lookup verifies the same replay and ONNX even via the general Ru
     assert.match(model.studioNavigation.arguments.url, /\/originman-reference-run\.html\?/);
     assert.match(model.studentReply, /跟跳评测通过.*200\/200 帧/);
   }
-  assert.deepEqual(checked, ['c'.repeat(64), 'c'.repeat(64), 'c'.repeat(64)]);
+  for (const name of [
+    'rdk_training_status',
+    'rdk_originman_dance_replay_read',
+    'rdk_originman_reference_track',
+  ]) {
+    const model = (await proxy('tools/call', { name, arguments: { runId: prefix } }))
+      .structuredContent;
+    const url = new URL(model.studioNavigation.arguments.url);
+    assert.equal(url.searchParams.get('runId'), runId);
+    if (name !== 'rdk_originman_reference_track') {
+      assert.equal(model.runDelivery.replay, 'simulation');
+      assert.equal(model.runDelivery.policy, 'available');
+      assert.match(model.links.policyDownload, new RegExp(runId));
+    }
+  }
+  assert.deepEqual(checked, Array(5).fill('c'.repeat(64)));
+});
+
+test('explicit Run lookups stop on no match, ambiguity or an unrelated platform result', async () => {
+  const { experienceProxy } =
+    await import('../plugins/rdk-robot-learning-platform/scripts/experience-mcp.mjs');
+  const { PluginRequestError } =
+    await import('../plugins/rdk-robot-learning-platform/scripts/plugin-errors.mjs');
+  for (const [code, status, expected] of [
+    ['SIM2REAL_RUN_NOT_FOUND', 404, /没有匹配/],
+    ['SIM2REAL_RUN_ID_AMBIGUOUS', 409, /匹配多条/],
+    ['WORKSPACE_RUN_MISMATCH', 502, /未确认原 Run/],
+  ]) {
+    const wrongRun = { id: '1c372c20-915c-4547-8a7c-a4e0b8add2f4', status: 'completed' };
+    const proxy = experienceProxy(
+      {
+        async request(method, { name, arguments: args }) {
+          assert.equal(name, 'rdk_training_status');
+          assert.equal(args.runId, '6a526fe7');
+          if (status === 502) return { structuredContent: { runId: wrongRun.id } };
+          return {
+            isError: true,
+            content: [
+              {
+                type: 'text',
+                text: JSON.stringify({ error: { platformCode: code, httpStatus: status } }),
+              },
+            ],
+          };
+        },
+        async readTrainingRun(id, options) {
+          assert.equal(id, '6a526fe7');
+          assert.equal(options.allowPrefix, true);
+          if (status === 502) return wrongRun;
+          throw new PluginRequestError(code, 'lookup failed', { httpStatus: status });
+        },
+        async readLearningRuns() {
+          assert.fail('A specific Run lookup may not fall back to latest');
+        },
+      },
+      { env: { RDK_SIM2REAL_MCP_BASE_URL: 'https://platform.test/robotics-learning' } },
+    );
+    for (const name of [
+      'rdk_training_status',
+      'rdk_originman_dance_replay_read',
+      'rdk_originman_reference_track',
+    ]) {
+      const result = await proxy('tools/call', { name, arguments: { runId: '6a526fe7' } });
+      assert.equal(result.isError, true);
+      const value = result.structuredContent;
+      assert.equal(value.error.platformCode, code);
+      assert.equal(value.error.httpStatus, status);
+      assert.equal(value.stopWorkflow, true);
+      assert.match(value.studentReply, expected);
+      assert.equal(value.studioNavigation, undefined);
+      assert.equal(value.links, undefined);
+    }
+  }
 });

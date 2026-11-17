@@ -5,7 +5,9 @@ description: 查询指定 Run 的训练状态、ONNX 策略留存与下载、已
 
 ## 只读查询原 Run
 
-已知 Run ID，用户问「留存和下载」「ONNX 在不在」「策略文件在哪里」或要查看已有仿真回放时，先调用 `rdk_training_wait` 并传原 `runId`。Studio 当前轮尚未加载工具时，先用 `load_tools` 登记目录中的完整工具名，默认 `mcp__rdk-robot-learning-platform__rdk_training_wait`，登记后直接调用。用回执的 `artifactRetention`、`links.policyDownload` 和 `links.replay` 回答。查询已有结果仅用此只读路径。
+用户只发 Run ID，或明确要查一个 Run（支持至少 8 位的 ID 前缀）时，用 `rdk_training_status` 并原样传入 `runId`。Studio 用 `load_tools` 搜索工具短名，从目录取得实际完整名后调用。唯一匹配才按 `studioNavigation` 在右侧打开对应的完整 Run。若 `stopWorkflow=true`，展示 `studentReply` 就结束，不改查最新记录。
+
+用回执的 `artifactRetention`、`links.policyDownload` 和 `links.replay` 说明当前留存与下载状态。只有用户明确要求等正在运行的任务完成时，才用 `rdk_training_wait` 跟踪已确认的完整 Run ID。
 
 只咨询预算用途、计数单位或完成标准时，直接调用 `rdk_originman_course_brief`，逐字展示返回的两句 `studentReply` 后结束，不再读指南、目录或历史证据；用户明确追问依据再按需读引用。不能推算或编造计数倍率。
 

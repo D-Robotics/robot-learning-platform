@@ -603,13 +603,19 @@ paths:
       - $ref: "#/components/parameters/RunId"
     get:
       tags: [runs]
-      summary: Read a run and refresh remote status when applicable
+      summary: Read an exact Run or a uniquely matching Run ID prefix
+      description: >-
+        Accepts a full Run ID or a case-insensitive hexadecimal Run ID prefix of
+        at least eight characters. Prefix resolution uses the current account's
+        full run ledger. The response includes the canonical run.id for replay
+        and artifact requests. Refreshes remote status when applicable.
       operationId: getRun
       responses:
         "200":
           description: Run.
           content: { application/json: { schema: { $ref: "#/components/schemas/RunResponse" } } }
         "404": { $ref: "#/components/responses/NotFound" }
+        "409": { description: The prefix matches several Runs. Returns SIM2REAL_RUN_ID_AMBIGUOUS. }
         "503": { description: Status lookup is retryable; last known state is preserved. }
   /api/v1/duck/runs/{runId}/artifact:
     parameters:

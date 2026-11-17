@@ -2656,6 +2656,31 @@ export async function getSim2RealRun(
   return found ? copy(withoutRunPrivate(found)) : null;
 }
 
+export async function lookupSim2RealRun(
+  identifier: string,
+  owner?: string,
+): Promise<{ run: Sim2RealRunRecord | null; ambiguous: boolean }> {
+  const wanted = identifier.trim();
+  const ledger = await readLedger();
+  const exact = ledger.runs.find((item) => item.id === wanted && ownerMatches(item, owner));
+  if (exact) return { run: copy(withoutRunPrivate(exact)), ambiguous: false };
+  if (!/^[a-f0-9][a-f0-9-]{7,34}$/i.test(wanted)) return { run: null, ambiguous: false };
+
+  const prefix = wanted.toLowerCase();
+  let matched: StoredRun | undefined;
+  for (const item of ledger.runs) {
+    if (
+      !ownerMatches(item, owner) ||
+      typeof item.id !== 'string' ||
+      !item.id.toLowerCase().startsWith(prefix)
+    )
+      continue;
+    if (matched) return { run: null, ambiguous: true };
+    matched = item;
+  }
+  return { run: matched ? copy(withoutRunPrivate(matched)) : null, ambiguous: false };
+}
+
 export interface Sim2RealRunIdempotencyMatch {
   run: Sim2RealRunRecord;
   /** Internal fingerprint used by the route to reject key reuse for another request. */

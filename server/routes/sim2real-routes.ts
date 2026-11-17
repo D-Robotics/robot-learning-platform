@@ -89,6 +89,7 @@ import {
   findSim2RealRunByIdempotency,
   reserveSim2RealRun,
   getSim2RealRun,
+  lookupSim2RealRun,
   getSim2RealArtifact,
   getSim2RealEvaluation,
   getSim2RealDeployment,
@@ -3259,7 +3260,17 @@ export function createSim2RealRouter(
       const owner = requestOwner(request, response, auth);
       if (owner === null) return;
       noStore(response);
-      const run = await getSim2RealRun(String(request.params.id || ''), owner);
+      const { run, ambiguous } = await lookupSim2RealRun(String(request.params.id || ''), owner);
+      if (ambiguous) {
+        sendApiError(
+          response,
+          409,
+          'SIM2REAL_RUN_ID_AMBIGUOUS',
+          '这个 Run 短 ID 匹配当前账号的多条记录，请提供更长的前缀或完整 ID。',
+          { retryable: false },
+        );
+        return;
+      }
       if (!run) {
         response.status(404).json({
           ok: false,

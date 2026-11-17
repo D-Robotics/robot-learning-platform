@@ -6,7 +6,11 @@ import { fileURLToPath } from 'node:url';
 import { connectMcp } from './experience.mjs';
 import { createPluginAuth } from './plugin-auth.mjs';
 import { PluginRequestError, loginRequired, publicFailure } from './plugin-errors.mjs';
-import { datasetEvidenceList, inspectWorkspace } from './workspace-evidence.mjs';
+import {
+  datasetEvidenceList,
+  inspectWorkspace,
+  matchesRunIdentifier,
+} from './workspace-evidence.mjs';
 
 export function proxyRequestHeaders(input, body, cookie) {
   const headers = {
@@ -622,7 +626,7 @@ export async function connectAuthenticatedCore({
         ),
       };
     },
-    async readTrainingRun(runId, { signal } = {}) {
+    async readTrainingRun(runId, { signal, allowPrefix = false } = {}) {
       if (typeof runId !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9_.-]{0,119}$/.test(runId))
         throw Error('原 Run 标识无效。');
       const response = await fetchPlatform('/api/v1/duck/runs/' + encodeURIComponent(runId), {
@@ -630,7 +634,16 @@ export async function connectAuthenticatedCore({
         signal,
       });
       const value = await response.json();
-      if (!response.ok || value.run?.id !== runId)
+      const code = value?.code ?? value?.error;
+      if (
+        (response.status === 404 && code === 'SIM2REAL_RUN_NOT_FOUND') ||
+        (response.status === 409 && code === 'SIM2REAL_RUN_ID_AMBIGUOUS')
+      )
+        throw new PluginRequestError(code, value.message, { httpStatus: response.status });
+      if (
+        !response.ok ||
+        !(allowPrefix ? matchesRunIdentifier(runId, value.run?.id) : value.run?.id === runId)
+      )
         throw Error('当前账号无法读取这条 Run，请核对原运行链接。');
       return value.run;
     },

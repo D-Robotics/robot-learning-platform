@@ -80,6 +80,7 @@ import {
 import {
   WORKSPACE_EVIDENCE_INSTRUCTIONS,
   WORKSPACE_EVIDENCE_TOOL,
+  matchesRunIdentifier,
   workspaceLink,
 } from './workspace-evidence.mjs';
 
@@ -543,10 +544,38 @@ export function pluginRuntimeIdentity() {
   }
 }
 
+const RUN_LOOKUP_INSTRUCTIONS =
+  '收到完整 Run ID 或至少 8 位的 Run ID 前缀（包括用户只发一个 ID）时，直接用 rdk_training_status({runId}) 查询原记录。Studio 尚未加载时，用 load_tools 按短名 rdk_training_status 搜索，调用工具目录返回的完整名称。唯一匹配时只用回执的完整 Run ID 和 studioNavigation 在右侧打开原结果。回执 stopWorkflow=true 时展示 studentReply 后结束，不查最新 Run、不列近期记录、不改查其他任务。';
+
+function runLookupFailure(identifier, code, httpStatus) {
+  const messages = {
+    SIM2REAL_RUN_NOT_FOUND: '当前账号下没有匹配的 Run。请核对 ID 或提供完整 Run ID。',
+    SIM2REAL_RUN_ID_AMBIGUOUS: '这个短 ID 匹配多条 Run。请提供更长的前缀或完整 Run ID。',
+    WORKSPACE_RUN_MISMATCH: '平台回执未确认原 Run。请核对完整 Run ID 后再查。',
+  };
+  if (!Object.hasOwn(messages, code)) return null;
+  const studentReply = messages[code];
+  const structuredContent = {
+    ok: false,
+    found: false,
+    requestedRunId: identifier,
+    stopWorkflow: true,
+    retryAllowed: false,
+    studentReply,
+    instructions: '直接展示 studentReply 并结束本轮，不改查最新 Run 或其他任务，不打开其他记录。',
+    error: { platformCode: code, httpStatus, message: studentReply, nextAction: studentReply },
+  };
+  return {
+    isError: true,
+    structuredContent,
+    content: [{ type: 'text', text: JSON.stringify(structuredContent) }],
+  };
+}
+
 const DANCE_REPLAY_READ_TOOL = {
   name: 'rdk_originman_dance_replay_read',
   description:
-    '只读核对当前账号最新的 OriginMan 舞蹈训练及已有仿真回放，也可指定原 Run。返回原详情页入口。',
+    '只读核对指定 OriginMan 舞蹈或跟跳 Run 及已有回放，接受完整 ID 或至少 8 位前缀。仅在用户明确要看最新舞蹈时才省略 runId。指定 ID 无匹配或有歧义时停止。',
   inputSchema: {
     type: 'object',
     properties: { runId: { type: 'string', pattern: '^[A-Za-z0-9][A-Za-z0-9_.-]{0,119}$' } },
@@ -578,7 +607,7 @@ const ORIGINMAN_REFERENCE_TOOL = {
   name: 'rdk_originman_reference_track',
   title: 'OriginMan · 参考轨迹跟跳',
   description:
-    '在 Studio 右侧打开独立跟跳任务。支持导入 50 Hz NPZ/JSON、校验、仿真训练、评测、回放和 ONNX 下载。查看已有结果时传完整 runId。',
+    '在 Studio 右侧打开独立跟跳任务。支持导入 50 Hz NPZ/JSON、校验、仿真训练、评测、回放和 ONNX 下载。查看已有结果时传完整 Run ID 或至少 8 位前缀，唯一匹配才打开。',
   inputSchema: {
     type: 'object',
     properties: { runId: { type: 'string', pattern: '^[A-Za-z0-9][A-Za-z0-9_.-]{0,119}$' } },
@@ -873,12 +902,18 @@ export function experienceProxy(
         };
       runId = latest.id;
     }
-    const run = await upstream.readTrainingRun(runId, { signal });
-    if (run.id === runId && run.taskId === REFERENCE_TRACKING_TASK) {
+    const run = await upstream.readTrainingRun(runId, { signal, allowPrefix: true });
+    if (!matchesRunIdentifier(runId, run.id))
+      throw Object.assign(Error('平台未确认原 Run。'), {
+        platformCode: 'WORKSPACE_RUN_MISMATCH',
+        httpStatus: 502,
+      });
+    runId = run.id;
+    if (run.taskId === REFERENCE_TRACKING_TASK) {
       const result = await runResults({ run }, runId, signal);
       return attachRunVisualization({ ...result, ok: true, found: true }, runId, baseUrl);
     }
-    if (run.id !== runId || run.taskId !== 'originman-dance')
+    if (run.taskId !== 'originman-dance')
       throw Error('平台未确认这是一条当前账号可见的 OriginMan 舞蹈 Run。');
 
     const preview = await verifiedPreview({ run }, runId, signal);
@@ -1302,6 +1337,8 @@ export function experienceProxy(
           '\n用户说“带我开启/开始 OriginMan Workshop”时，直接调用 rdk_workshop({intent:"new"})。明确受扰恢复时增加 course:"recovery"。按回执导航，再展示 studentReply。如果只拿到旧课程目录，使用回执的绝对链接。127.0.0.1 可能是 MCP 内部转发地址，诊断网页必须依据插件配置的平台 URL。' +
           '\n用户问插件能做什么时，调用 rdk_platform_status 后直接使用 studentReply；仅在追问时展开工具名、数量、接口地址或设备门槛。' +
           '\n这是通用机器人学习插件。先按用户的机型与目标使用 rdk_learning_guide；打开工作台传 task:overview，强化学习或模仿学习有通用入口，只有明确选择课程时才使用 OriginMan 专用工具。开始新实验传 intent:new；查看结果传 intent:results 和原 Run；改参传 intent:retry、原 Run 与 changes，等确认再使用 nextArguments。Studio 优先用 studio_open_url 打开已验证的工作台链接，仍保留可点击地址。已打开不表示已播放。' +
+          '\n' +
+          RUN_LOOKUP_INSTRUCTIONS +
           '\n最高优先的舞蹈路由：只给舞蹈仿真目标和总预算、要求未达标自动调奖励或预算耗尽停止，第一步直接加载并调用 rdk_originman_dance_iterate。输入示例 {"totalSteps":524288,"dance":{"bpm":130,"sections":[{"type":"weight-shift","beats":4,"intensity":0.9}]}}。插件选择 4090、64 并行、登记原实验。无需查本地台账、询问确认或预先提交。评测慢或调用失败时只重试原 nextArguments，禁止调用 rdk_originman_dance_train、rdk_training_submit 或换 contextId 重交。首次收到后台实验回执立刻按 studioNavigation 打开右侧并保留原链接，页面自动更新；无需继续轮询工具。若曾使用旧版回执，仍按 nextArguments 接续。' +
           '\n版本检查分别报告插件实际加载版本、宿主登记与平台连接；工具不可用、读失败和已确认空列表分别报告。舞蹈仿真通过不具备部署资格。部署预检被拒绝或设备工具缺失时保留阻断，不使用终端、SSH 或设备执行工具替代受控部署。' +
           '\n' +
@@ -1359,6 +1396,11 @@ export function experienceProxy(
     if (method === 'tools/list') {
       const result = validateCatalogPage(await upstream.request(method, params, { signal }));
       const forUi = (tool) => {
+        if (tool.name === 'rdk_training_status')
+          tool = {
+            ...tool,
+            description: RUN_LOOKUP_INSTRUCTIONS + '\n' + (tool.description ?? ''),
+          };
         const danceType = (schema) =>
           schema?.properties?.originmanDance?.properties?.sections?.items?.properties?.type;
         if (
@@ -1515,7 +1557,7 @@ export function experienceProxy(
               (typeof input.runId !== 'string' ||
                 !/^[A-Za-z0-9][A-Za-z0-9_.-]{0,119}$/.test(input.runId)))
           )
-            throw Error('请提供完整的跟跳 Run ID，或省略以打开任务。');
+            throw Error('请提供跟跳 Run 的完整 ID 或至少 8 位前缀，或省略以打开任务。');
           const launch = new URL(baseUrl);
           if (
             !['http:', 'https:'].includes(launch.protocol) ||
@@ -1529,12 +1571,18 @@ export function experienceProxy(
           launch.pathname = root + '/originman-reference.html';
           if (input.runId) {
             const run = upstream.readTrainingRun
-              ? await upstream.readTrainingRun(input.runId, { signal })
+              ? await upstream.readTrainingRun(input.runId, { signal, allowPrefix: true })
               : (await readRun(input.runId, signal)).run;
-            if (run?.id !== input.runId || run.taskId !== REFERENCE_TRACKING_TASK)
-              throw Error('当前账号下没有匹配的 OriginMan 参考轨迹跟跳 Run。');
+            if (
+              !matchesRunIdentifier(input.runId, run?.id) ||
+              run.taskId !== REFERENCE_TRACKING_TASK
+            )
+              throw Object.assign(Error('当前账号下没有匹配的 OriginMan 参考轨迹跟跳 Run。'), {
+                platformCode: 'WORKSPACE_RUN_MISMATCH',
+                httpStatus: 502,
+              });
             launch.pathname = root + '/originman-reference-run.html';
-            launch.searchParams.set('runId', input.runId);
+            launch.searchParams.set('runId', run.id);
           }
           const url = launch.href;
           payload = {
@@ -2217,6 +2265,13 @@ export function experienceProxy(
         };
       } catch (error) {
         const code = error.platformCode ?? error.code ?? '';
+        if (
+          input.runId &&
+          [ORIGINMAN_REFERENCE_TOOL.name, DANCE_REPLAY_READ_TOOL.name].includes(params.name)
+        ) {
+          const failure = runLookupFailure(input.runId, code, error.httpStatus);
+          if (failure) return failure;
+        }
         const stop =
           error.stopWorkflow ??
           (SHORT_TRAINING_TOOLS.some((t) => t.name === params.name) &&
@@ -2412,15 +2467,22 @@ export function experienceProxy(
           content: [{ type: 'text', text: JSON.stringify(attached) }],
         };
     }
+    if (method === 'tools/call' && params.name === 'rdk_training_status' && response.isError) {
+      const enriched = enrichToolError(response, params.name);
+      const { platformCode, httpStatus } = enriched.structuredContent.error;
+      return runLookupFailure(input.runId, platformCode, httpStatus) ?? enriched;
+    }
     if (method === 'tools/call' && params.name === 'rdk_training_status' && !response.isError) {
-      let value = await runResults(
-        observe(readToolResult(response), params.arguments.runId),
-        params.arguments.runId,
-        signal,
-      );
+      const original = readToolResult(response);
+      const runId = original.run?.id ?? original.run?.runId ?? original.runId;
+      if (!matchesRunIdentifier(input.runId, runId))
+        return runLookupFailure(input.runId, 'WORKSPACE_RUN_MISMATCH', 502);
+      const resolved =
+        runId === input.runId ? original : { ...original, requestedRunId: input.runId };
+      let value = await runResults(observe(resolved, runId), runId, signal);
       value = attachRunVisualization(
         value,
-        params.arguments.runId,
+        runId,
         authentication?.audience ?? env.RDK_SIM2REAL_MCP_BASE_URL,
       );
       if (value.stopWorkflow || value.links?.danceVideo || value.visualization)

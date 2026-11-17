@@ -1040,16 +1040,8 @@ export function createDshCapabilityHandlers(
       const input = argsRecord(args);
       const runId = argString(input, 'runId');
       if (!runId) throw new CapabilityError('DSH_CAPABILITY_REJECTED', '请提供 runId。');
-      let target = runId;
-      if (!target) {
-        const overview = await run(exec.signal).fetch('/api/sim2real/overview', { method: 'GET' });
-        const runs = overview.ok && Array.isArray(overview.body.runs) ? overview.body.runs : [];
-        target = String(((runs[0] ?? {}) as Record<string, unknown>).id ?? '');
-      }
-      if (!target)
-        throw new CapabilityError('DSH_CAPABILITY_REJECTED', '当前没有可查询的训练任务。');
       const result = await run(exec.signal).fetch(
-        `/api/sim2real/runs/${encodeURIComponent(target)}`,
+        `/api/sim2real/runs/${encodeURIComponent(runId)}`,
         { method: 'GET' },
       );
       if (!result.ok) fail(result.status, result.body, '训练状态查询失败');
