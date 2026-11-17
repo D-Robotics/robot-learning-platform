@@ -141,7 +141,15 @@ function sameOriginDanceVideoUrl(baseUrl, candidate, runId) {
   }
 }
 
-export function runVisualizationLink(baseUrl, runId, danceVideoUrl) {
+const REFERENCE_TRACKING_TASK = 'originman-reference-track';
+
+function simulationReplayEvidence(run) {
+  return run?.taskId === REFERENCE_TRACKING_TASK
+    ? run.metrics?.originmanReference
+    : run?.metrics?.originmanDance;
+}
+
+export function runVisualizationLink(baseUrl, runId, danceVideoUrl, taskId) {
   if (typeof runId !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9_.-]{0,119}$/.test(runId)) return null;
   let base;
   try {
@@ -157,7 +165,9 @@ export function runVisualizationLink(baseUrl, runId, danceVideoUrl) {
     base.hash
   )
     return null;
-  base.pathname = base.pathname.replace(/\/+$/, '') + '/run-detail.html';
+  base.pathname =
+    base.pathname.replace(/\/+$/, '') +
+    (taskId === REFERENCE_TRACKING_TASK ? '/originman-reference-run.html' : '/run-detail.html');
   base.searchParams.set('runId', runId);
   const video = sameOriginDanceVideoUrl(baseUrl, danceVideoUrl, runId);
   if (video) base.searchParams.set('videoUrl', video.href);
@@ -265,7 +275,9 @@ function nominalDanceEvidence(training, dance) {
 }
 
 function attachRunVisualization(payload, runId, baseUrl, section) {
-  const detail = runVisualizationLink(baseUrl, runId, payload.links?.danceVideo);
+  const taskId = payload.run?.taskId ?? payload.taskId;
+  const tracking = taskId === REFERENCE_TRACKING_TASK;
+  const detail = runVisualizationLink(baseUrl, runId, payload.links?.danceVideo, taskId);
   if (!detail) return payload;
   const rawStatus = payload.run?.status ?? payload.status ?? payload.submission?.status;
   const danceRun =
@@ -306,6 +318,14 @@ function attachRunVisualization(payload, runId, baseUrl, section) {
       typeof deviceName === 'string' && /^[a-zA-Z0-9][a-zA-Z0-9 ._()+-]{0,95}$/.test(deviceName);
     const deviceLabel = validName && deviceName !== device ? `${deviceName} (${device})` : device;
     studentReply += `实际训练设备：${deviceLabel}。`;
+  }
+  if (rawStatus === 'completed' && tracking) {
+    const evidence = metrics?.originmanReference;
+    if (typeof evidence?.qualityGatePassed === 'boolean') {
+      studentReply += evidence.qualityGatePassed ? '跟跳评测通过。' : '跟跳评测未通过。';
+      if (Number.isInteger(evidence.framesEvaluated) && Number.isInteger(evidence.framesExpected))
+        studentReply += `完成 ${evidence.framesEvaluated}/${evidence.framesExpected} 帧。`;
+    }
   }
   if (rawStatus === 'completed' && dance) {
     const passed = dance.qualityGatePassed;
@@ -393,6 +413,7 @@ function attachRunVisualization(payload, runId, baseUrl, section) {
     }),
     links: { ...payload.links, runDetail: detail, workbench: url },
     visualization: { runId, url, exactRunSelected: true },
+    ...(tracking && { studioNavigation: { tool: 'studio_open_url', arguments: { url } } }),
     studioNavigation: { tool: 'studio_open_url', arguments: { url } },
     qoderNavigation: {
       surface: 'Qoder 内置浏览器',
@@ -651,7 +672,8 @@ export const EXPERIENCE_TOOLS = [
 export function withDancePreview(payload, audience) {
   const run = payload?.run ?? payload;
   const runId = run?.id ?? run?.runId ?? payload?.runId;
-  const video = run?.metrics?.originmanDance?.video;
+  const evidence = simulationReplayEvidence(run);
+  const video = evidence?.video;
   const { danceVideo: _unverifiedDanceVideo, ...otherLinks } = payload?.links ?? {};
   const withoutUnverifiedDanceVideo = payload?.links
     ? { ...payload, links: otherLinks }
@@ -666,7 +688,7 @@ export function withDancePreview(payload, audience) {
     !/^[a-f0-9]{64}$/.test(video.policySha256 || '') ||
     !/^[a-f0-9]{64}$/.test(video.sourceReplaySha256 || '') ||
     video.policySha256 !== run.artifact?.sha256 ||
-    video.sourceReplaySha256 !== run.metrics.originmanDance.replay?.sha256
+    video.sourceReplaySha256 !== evidence.replay?.sha256
   )
     return withoutUnverifiedDanceVideo;
   const candidate = payload.links?.danceVideo ?? run.links?.danceVideo ?? video.url;
@@ -702,7 +724,7 @@ export function experienceProxy(
       baseUrl,
     );
     if (!expected.links?.danceVideo) return value;
-    const receipt = (payload.run ?? payload).metrics.originmanDance.video;
+    const receipt = simulationReplayEvidence(payload.run ?? payload).video;
     const verified = await upstream.verifyLegacyDanceVideo(runId, receipt, {
       signal,
     });
@@ -722,7 +744,12 @@ export function experienceProxy(
         return null;
       }
     };
-    if (!payload.run?.artifact?.sha256 && upstream.readTrainingRun) {
+    if (
+      upstream.readTrainingRun &&
+      (!payload.run?.artifact?.sha256 ||
+        ((payload.run?.taskId ?? payload.taskId) === REFERENCE_TRACKING_TASK &&
+          !payload.run?.metrics?.originmanReference))
+    ) {
       const exact = await optional(() => upstream.readTrainingRun(runId, { signal }));
       if (exact?.id === runId && exact.status === 'completed') payload = { ...payload, run: exact };
     }
@@ -746,7 +773,7 @@ export function experienceProxy(
     delete links.policyDownload;
     let replay = 'unavailable';
     if (links.danceVideo) {
-      const playback = new URL(runVisualizationLink(baseUrl, runId, links.danceVideo));
+      const playback = new URL(runVisualizationLink(baseUrl, runId, links.danceVideo, run.taskId));
       playback.hash = 'replay-heading';
       links.replay = playback.href;
       replay = 'simulation';
@@ -802,14 +829,14 @@ export function experienceProxy(
     try {
       const status = await readRun(runId, signal);
       const run =
-        status.run?.artifact?.sha256 || !upstream.readTrainingRun
+        simulationReplayEvidence(status.run ?? status) || !upstream.readTrainingRun
           ? (status.run ?? status)
           : await upstream.readTrainingRun(runId, { signal });
       if ((run?.id ?? run?.runId) !== runId) return summary;
       const preview = await verifiedPreview({ ...status, run }, runId, signal);
       const danceVideo = preview.links?.danceVideo;
       if (!danceVideo) return summary;
-      const playback = new URL(runVisualizationLink(baseUrl, runId, danceVideo));
+      const playback = new URL(runVisualizationLink(baseUrl, runId, danceVideo, run.taskId));
       playback.hash = 'replay-heading';
       return {
         ...summary,
@@ -847,6 +874,10 @@ export function experienceProxy(
       runId = latest.id;
     }
     const run = await upstream.readTrainingRun(runId, { signal });
+    if (run.id === runId && run.taskId === REFERENCE_TRACKING_TASK) {
+      const result = await runResults({ run }, runId, signal);
+      return attachRunVisualization({ ...result, ok: true, found: true }, runId, baseUrl);
+    }
     if (run.id !== runId || run.taskId !== 'originman-dance')
       throw Error('平台未确认这是一条当前账号可见的 OriginMan 舞蹈 Run。');
 
@@ -1264,11 +1295,11 @@ export function experienceProxy(
           : {}),
         instructions:
           (result.instructions ?? '').replace(/[（(]Duck Lab[）)]/gi, '') +
-          '\n已知 Run ID，用户要查询留存、归档、ONNX/策略下载、制品可用性或已有回放时，第一步只发现并调用 rdk_training_wait，传原 runId，展示 artifactRetention、links.policyDownload 和已核验的 links.replay。Studio 的外部工具每轮按需登记，当前轮先用 load_tools.names 传目录中的 mcp__<连接名>__rdk_training_wait，默认 mcp__rdk-robot-learning-platform__rdk_training_wait；登记后调用该工具。已有结果查询不调用独立评测、验收、训练或渲染工具。\n' +
+          '\n用户明确提到 OriginMan「参考轨迹跟跳」、导入 NPZ、跟跳的标定或原 Run 回放时调用 rdk_originman_reference_track。在 Studio 中先从当前工具目录用 load_tools query 查找，并调用实际返回的完整工具名。查结果传原 runId，按 studioNavigation 打开 Studio 右侧。查询只读。' +
+          '\n其他已知 Run ID 的场景，用户要查询留存、归档、ONNX/策略下载、制品可用性或已有回放时，第一步只发现并调用 rdk_training_wait，传原 runId，展示 artifactRetention、links.policyDownload 和已核验的 links.replay。Studio 的外部工具每轮按需登记，当前轮先用 load_tools.names 传目录中的 mcp__<连接名>__rdk_training_wait，默认 mcp__rdk-robot-learning-platform__rdk_training_wait；登记后调用该工具。已有结果查询不调用独立评测、验收、训练或渲染工具。\n' +
           '\n连接诊断以当前 RDK Robot Learning Platform 插件的 rdk_platform_status 回执为准。先核对返回的 baseUrl、health.ready、session.authenticated 和 canAccessWorkspace；需要版本时调用 rdk_plugin_status。工具目录和旧技能只说明入口，不能证明平台故障。仅在用户明确选择本机部署时检查本机端口或运行旧 CLI。云端连接下，本机 18102 无监听与平台状态无关。若宿主未暴露这些工具，说明当前对话未加载此连接，指引启用或重连插件；不要用旧技能、旧 MCP 或 shell 探针代替已配置的云端连接。仅咨询插件能力时给可用入口，具体工具数量以当前目录为准。' +
           '\n面向用户统一称为 RDK Robot Learning Platform（RDK 机器人学习平台）。介绍能力时先给课程、训练、评测与回放入口；仅在用户追问时展开底层服务、协议与部署细节。' +
           '\n用户说“带我开启/开始 OriginMan Workshop”时，直接调用 rdk_workshop({intent:"new"})。明确受扰恢复时增加 course:"recovery"。按回执导航，再展示 studentReply。如果只拿到旧课程目录，使用回执的绝对链接。127.0.0.1 可能是 MCP 内部转发地址，诊断网页必须依据插件配置的平台 URL。' +
-          '\n用户要 OriginMan 参考轨迹跟跳、导入 NPZ、或查看该任务的标定时，用 rdk_originman_reference_track。查看已有跟跳结果传完整 runId。使用当前工具目录中的完整工具名，按 studioNavigation 立即打开右侧。训练在页面确认。\n' +
           '\n用户问插件能做什么时，调用 rdk_platform_status 后直接使用 studentReply；仅在追问时展开工具名、数量、接口地址或设备门槛。' +
           '\n这是通用机器人学习插件。先按用户的机型与目标使用 rdk_learning_guide；打开工作台传 task:overview，强化学习或模仿学习有通用入口，只有明确选择课程时才使用 OriginMan 专用工具。开始新实验传 intent:new；查看结果传 intent:results 和原 Run；改参传 intent:retry、原 Run 与 changes，等确认再使用 nextArguments。Studio 优先用 studio_open_url 打开已验证的工作台链接，仍保留可点击地址。已打开不表示已播放。' +
           '\n最高优先的舞蹈路由：只给舞蹈仿真目标和总预算、要求未达标自动调奖励或预算耗尽停止，第一步直接加载并调用 rdk_originman_dance_iterate。输入示例 {"totalSteps":524288,"dance":{"bpm":130,"sections":[{"type":"weight-shift","beats":4,"intensity":0.9}]}}。插件选择 4090、64 并行、登记原实验。无需查本地台账、询问确认或预先提交。评测慢或调用失败时只重试原 nextArguments，禁止调用 rdk_originman_dance_train、rdk_training_submit 或换 contextId 重交。首次收到后台实验回执立刻按 studioNavigation 打开右侧并保留原链接，页面自动更新；无需继续轮询工具。若曾使用旧版回执，仍按 nextArguments 接续。' +
@@ -1500,14 +1531,14 @@ export function experienceProxy(
             const run = upstream.readTrainingRun
               ? await upstream.readTrainingRun(input.runId, { signal })
               : (await readRun(input.runId, signal)).run;
-            if (run?.id !== input.runId || run.taskId !== 'originman-reference-track')
+            if (run?.id !== input.runId || run.taskId !== REFERENCE_TRACKING_TASK)
               throw Error('当前账号下没有匹配的 OriginMan 参考轨迹跟跳 Run。');
             launch.pathname = root + '/originman-reference-run.html';
             launch.searchParams.set('runId', input.runId);
           }
           const url = launch.href;
           payload = {
-            taskId: 'originman-reference-track',
+            taskId: REFERENCE_TRACKING_TASK,
             links: { workbench: url },
             studioNavigation: { tool: 'studio_open_url', arguments: { url } },
             studentReply: input.runId
