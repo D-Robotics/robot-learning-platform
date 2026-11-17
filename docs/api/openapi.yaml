@@ -149,7 +149,9 @@ paths:
       operationId: getWorkspaceSummary
       description: >-
         Returns account-scoped counts and the latest run/deployment projection
-        for dashboards and assistants. It intentionally omits model manifests,
+        for dashboards and assistants. Run and active-run counts cover the
+        account's full ledger, including runs outside the recent runs list.
+        It intentionally omits model manifests,
         telemetry layouts and integration probes so it is safe to poll often.
       responses:
         "200":
@@ -4525,18 +4527,31 @@ components:
           properties: { runId: { type: string } }
     WorkspaceSummaryResponse:
       type: object
-      required: [ok, schemaVersion, generatedAt, counts, latest]
+      required: [ok, schemaVersion, generatedAt, runCountScope, runStatuses, counts, latest]
       properties:
         ok: { const: true }
         schemaVersion: { type: integer, const: 1 }
         generatedAt: { type: string, format: date-time }
+        runCountScope: { type: string, const: owner-ledger }
+        runStatuses:
+          type: object
+          required: [ready, queued, running, completed, blocked, failed]
+          properties:
+            ready: { type: integer, minimum: 0 }
+            queued: { type: integer, minimum: 0 }
+            running: { type: integer, minimum: 0 }
+            completed: { type: integer, minimum: 0 }
+            blocked: { type: integer, minimum: 0 }
+            failed: { type: integer, minimum: 0 }
         counts:
           type: object
-          required: [models, runs, activeRuns, deployments, activeDeployments, devices, connectedDevices, detectedDevices, projects, datasets]
+          required: [models, runs, activeRuns, registeredArtifacts, evaluations, deployments, activeDeployments, devices, connectedDevices, detectedDevices, projects, datasets]
           properties:
             models: { type: integer, minimum: 0 }
             runs: { type: integer, minimum: 0 }
             activeRuns: { type: integer, minimum: 0 }
+            registeredArtifacts: { type: integer, minimum: 0 }
+            evaluations: { type: integer, minimum: 0 }
             deployments: { type: integer, minimum: 0 }
             activeDeployments: { type: integer, minimum: 0 }
             devices: { type: integer, minimum: 0 }

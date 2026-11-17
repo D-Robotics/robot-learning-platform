@@ -509,6 +509,8 @@ export function createDshCapabilityHandlers(
       if (!result.ok) fail(result.status, result.body, '工作区摘要读取失败');
       return {
         generatedAt: str(result.body.generatedAt),
+        runCountScope: result.body.runCountScope === 'owner-ledger' ? 'owner-ledger' : 'recent-window',
+        runStatuses: objectValue(result.body.runStatuses),
         counts: objectValue(result.body.counts),
         latest: objectValue(result.body.latest),
       };

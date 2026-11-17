@@ -90,6 +90,7 @@ import {
   listSim2RealDeployments,
   listSim2RealModels,
   listSim2RealRuns,
+  summarizeSim2RealWorkspaceRuns,
   getSim2RealProject,
   listSim2RealProjects,
   listSim2RealDatasets,
@@ -2409,31 +2410,33 @@ export function createSim2RealRouter(
       const owner = requestOwner(request, response, auth);
       if (owner === null) return;
       noStore(response);
-      const [models, runs, deployments, devices, projects, datasets] = await Promise.all([
+      const [models, runSummary, deployments, devices, projects, datasets] = await Promise.all([
         listSim2RealModels(owner),
-        listSim2RealRuns(owner),
+        summarizeSim2RealWorkspaceRuns(owner),
         listSim2RealDeployments(owner),
         visibleDevicesForAuth(owner),
         listSim2RealProjects(owner),
         listSim2RealDatasets(owner),
       ]);
-      const activeRunStatuses: readonly Sim2RealRunStatus[] = ['queued', 'running'];
       const activeDeploymentStatuses: readonly Sim2RealDeploymentRecord['status'][] = [
         'planned',
         'running',
       ];
-      const latestRun = latestByTimestamp(runs, (run) => run.createdAt);
       const latestDeployment = latestByTimestamp(deployments, (deployment) => deployment.updatedAt);
       response.json({
         ok: true,
         schemaVersion: SIM2REAL_SCHEMA_VERSION,
         generatedAt: new Date().toISOString(),
+        runCountScope: 'owner-ledger',
+        runStatuses: runSummary.statuses,
         counts: {
           models: models.length,
           projects: projects.length,
           datasets: datasets.length,
-          runs: runs.length,
-          activeRuns: runs.filter((run) => activeRunStatuses.includes(run.status)).length,
+          runs: runSummary.runs,
+          activeRuns: runSummary.activeRuns,
+          registeredArtifacts: runSummary.registeredArtifacts,
+          evaluations: runSummary.evaluations,
           deployments: deployments.length,
           activeDeployments: deployments.filter((deployment) =>
             activeDeploymentStatuses.includes(deployment.status),
@@ -2443,7 +2446,7 @@ export function createSim2RealRouter(
           detectedDevices: devices.filter((device) => Boolean(device.boardPlatform)).length,
         },
         latest: {
-          run: workspaceLatestRun(latestRun),
+          run: workspaceLatestRun(runSummary.latest),
           deployment: workspaceLatestDeployment(latestDeployment),
         },
       });

@@ -31,7 +31,7 @@ export const WORKSPACE_EVIDENCE_INSTRUCTIONS =
   '账号资产全貌、运行数、最近训练效果、Worker 可用性、设备状态或历史部署失败，先用 rdk_workspace_inspect，按用户范围选 scope。' +
   '设备列表用 scope=devices；仅用户询问指定设备的 BoardAgent 状态时传 deviceId。数据集用 scope=datasets 或 rdk_datasets_list，并展示 studentReply 中的托管状态和下载链接。Run 结果展示部署资格、回放和策略下载，按同一 Run 的回执报告。' +
   '按用户指定范围读完证据再回答；全貌给统计时间、范围、最近 Run 的指标/评测/制品和最近失败部署的步骤。' +
-  'runCountScope=recent-window 只限定 runs 和 activeRuns。保留关键记录完整 ID 与时间。' +
+  'runCountScope=owner-ledger 时说明 Run 数和进行中数量覆盖当前账号的全部台账，按 runStatuses 给状态分布。runCountScope=recent-window 时把 Run 数和进行中数量标为近期列表统计。保留关键记录完整 ID 与时间。' +
   '列表有上限时给返回数和查询范围；counts 缺字段、部分查询失败、空列表分别说明。旧平台缺少制品或评测总数时直接说明总数未知，同时给已关联的记录。' +
   '区分训练完成、评测通过、制品发布、部署通过。成功率为 0 仅说明本项指标为 0；效果结论依据质量门与适用的评测。缺少指标时说明未知。区分设备连接状态、已识别板型和 BoardAgent 探测。' +
   'Worker 只据记录的 status、lastCheckedAt、message、engines 描述；并发上限不表示空闲槽位，回环地址不能判定隧道或进程状态。' +
