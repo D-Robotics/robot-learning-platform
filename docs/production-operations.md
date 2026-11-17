@@ -49,13 +49,11 @@ sudoedit /etc/sim2real-web-runner.env
 ## 一键部署（生产服务器）
 
 `scripts/deploy-sim2real-production.sh` 把发布固化为不可跳过的机器步骤：
-构建 → 组包（dist-server 剔除 engines 与 `engines.*.tmp` 残留 + 全新
-`npm ci --omit=dev` + `reify-deployment-optional-deps.mjs` 补齐 linux/x64
-原生可选依赖——mac 的 npm ci 只装 darwin 变体，缺失会导致 DSH 聊天等
-运行时 require 直接失败，2026-10-10 事故）→ 上传 → 服务端解压并从当前
-release 拷贝 engines（Linux venv 只存在于服务端，绝不能被本地构建覆盖）
-→ **按 systemd ExecStart 逐一预检新 release 的入口文件**（该预检可直接
-拦截"漏 mock-local-worker.mjs"这类事故）→ 切 `current` 软链 → 重启
+构建 → 组包（单独打包引擎源码，上传包不含本机 `node_modules`）→ 上传
+→ 服务端解压，从当前 release 拷贝 engines 并覆盖候选引擎源码。服务端按
+lockfile 执行 `npm ci --omit=dev --include=optional`，再验证 DSH 原生锁模块。
+接下来**按 systemd ExecStart 逐一预检新 release 的入口文件**，然后切换
+`current` 软链并重启
 `sim2real-web` 与 `sim2real-mock-worker` → 健康检查，失败自动回滚到
 上一 release。
 
@@ -67,6 +65,23 @@ scripts/deploy-sim2real-production.sh --skip-build   # 复用已有构建
 目标主机可用 `DEPLOY_HOST` 覆盖。回滚：把
 `/opt/sim2real-web/current` 软链切回上一
 `releases/robot-learning-*` 并重启两个服务（脚本失败时已自动执行）。
+
+标准构建包含工作台内的 `#classroom` 原生课堂。选择 OriginMan 的受扰恢复任务可打开课堂；通用使用指引经图文手册的 OriginMan 章节打开八步课程。浏览器回归覆盖两个入口、课堂书签和两个窗口尺寸。
+
+课堂的 JS、WebGL 渲染器、MuJoCo 子进程和服务端接口由标准构建打包。发布服务器在切换前检查原生课堂节点、前端模块和运行代码。场景、教师参考和账号制品放在独立的运行数据目录。
+
+| 配置 | 取值 |
+| --- | --- |
+| `RDK_ORIGINMAN_SIM_PYTHON` | 隔离 Python 环境的解释器绝对路径，按 `engines/originman-straight/requirements-classroom.txt` 安装 |
+| `RDK_ORIGINMAN_SCENE_PATH` | 已校验课堂资产的 `scene/scene.xml` |
+| `RDK_ORIGINMAN_SIM_GL` | 服务端 JPEG 备选渲染使用的 MuJoCo 后端，例如 Linux EGL |
+| `RDK_ORIGINMAN_PREVIEW_PATH` | 同一场景的可选静态 PNG |
+| `ORIGINMAN_REFERENCE_DIR` | 已校验课堂资产的 `reference/` |
+| `RDK_VIDEO_FFMPEG` | 可选的 FFmpeg 路径，浏览器 WebM 兼容回放需要 libvpx |
+
+安装场景和课前媒体后，运行 `python3 engines/originman-straight/verify_classroom_assets.py <资产根目录>` 核对场景、网格和参考视频的 SHA-256。训练 Worker 通过 `RDK_SIM2REAL_TRAIN_ENGINES_JSON` 注册 `originman-recovery`，入口为打包后的 `engines/originman-straight/workshop_adapter.py`，场景使用 `ORIGINMAN_SCENE`。训练环境还需安装与 Worker 执行设备匹配的 PyTorch、Stable Baselines3、ONNX 和 FFmpeg。
+
+发布验收使用隔离台账和 Worker 目录。点击两个入口后，在课堂加载一条已完成的受扰恢复 Run，核对 Run ID 与策略摘要，实际施加扰动并播放同源回放至结束。可用 `scripts/verify-originman-classroom.mjs` 重跑真实服务端链路。通过 `RDK_CLASSROOM_URL`、`RDK_CLASSROOM_TRAIN_RUN`、`RDK_CLASSROOM_EVAL_RUN`、`RDK_CLASSROOM_POLICY_SHA256` 和 `RDK_CLASSROOM_VIDEO_SHA256` 提供隔离实例及已校验的实验凭据。
 
 ## 认证配置（studio-cookie 嫁接 · web-cloud 部署）
 

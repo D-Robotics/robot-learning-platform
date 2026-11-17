@@ -3048,6 +3048,104 @@ paths:
         second source of truth that can drift. Accessible without a session.
       responses:
         "200": { description: Current notices, content: { application/json: { schema: { type: object } } } }
+  /api/v1/duck/workshops/originman:
+    get:
+      tags: [workspace]
+      summary: Read the OriginMan classroom contract and reference availability
+      operationId: getOriginmanClassroom
+      responses:
+        "200": { description: Simulation-only classroom catalog, content: { application/json: { schema: { type: object } } } }
+        "401": { $ref: "#/components/responses/AuthRequired" }
+  /api/v1/duck/workshops/originman/model-preview:
+    get:
+      tags: [workspace]
+      summary: Read the configured classroom scene preview
+      operationId: getOriginmanClassroomPreview
+      responses:
+        "200": { description: Scene PNG, content: { image/png: { schema: { type: string, format: binary } } } }
+        "409": { description: Preview unavailable }
+  /api/v1/duck/workshops/originman/reference-video:
+    get:
+      tags: [workspace]
+      summary: Read the digest-verified instructor reference video
+      operationId: getOriginmanClassroomReferenceVideo
+      parameters:
+        - { name: format, in: query, schema: { type: string, enum: [mp4, webm] } }
+      responses:
+        "200": { description: Verified instructor reference media }
+        "409": { description: Reference unavailable or digest mismatch }
+  /api/v1/duck/workshops/originman/sessions:
+    post:
+      tags: [workspace]
+      summary: Open an account-scoped OriginMan MuJoCo session
+      operationId: createOriginmanClassroomSimulation
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              properties:
+                sourceRunId: { type: string, description: Completed recovery training owned by the caller }
+                renderMode: { type: string, enum: [jpeg, webgl], default: jpeg }
+      responses:
+        "201": { description: Session ID, simulation state, and policy provenance }
+        "409": { description: Specified policy is unavailable or fails lineage validation }
+        "429": { description: Simulation session quota }
+  /api/v1/duck/workshops/originman/sessions/{id}/command:
+    parameters:
+      - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+    post:
+      tags: [workspace]
+      summary: Advance, reset, or perturb the caller's simulation
+      operationId: commandOriginmanClassroomSimulation
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [command]
+              properties:
+                command: { type: string, enum: [step, reset, push, camera, motion] }
+      responses:
+        "200": { description: Current simulation state }
+        "400": { description: Invalid bounded command }
+        "404": { description: Session unavailable to caller }
+  /api/v1/duck/workshops/originman/sessions/{id}/teleop-rehearsal:
+    parameters:
+      - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+    post:
+      tags: [workspace]
+      summary: Rehearse remote-control link behavior inside a simulation session
+      operationId: rehearseOriginmanClassroomTeleop
+      responses:
+        "200": { description: Dry-run link state and counters }
+        "404": { description: Session unavailable to caller }
+  /api/v1/duck/workshops/originman/sessions/{id}:
+    parameters:
+      - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+    delete:
+      tags: [workspace]
+      summary: Release the caller's simulation session
+      operationId: closeOriginmanClassroomSimulation
+      responses:
+        "200": { description: Session closed }
+        "404": { description: Session unavailable to caller }
+  /api/v1/duck/runs/{runId}/workshop-video:
+    parameters:
+      - { name: runId, in: path, required: true, schema: { type: string } }
+    get:
+      tags: [workspace]
+      summary: Read an evaluation replay verified against its original training policy
+      operationId: getOriginmanClassroomReplay
+      parameters:
+        - { name: format, in: query, schema: { type: string, enum: [mp4, webm] } }
+      responses:
+        "200": { description: Verified replay with source and presentation digest headers }
+        "404": { description: Run unavailable to caller }
+        "409": { description: Original training policy or replay lineage could not be verified }
   /api/v1/duck/workshop-sessions:
     get:
       tags: [workspace]

@@ -1293,47 +1293,60 @@ async function handleArtifact(request, response) {
   stream.pipe(response);
 }
 
-async function handleDanceVideo(request, response) {
+async function handleRunVideo(request, response, kind) {
   await ensureJobsLoaded();
-  const runId = decodeURIComponent(request.url.slice('/runs/'.length, -'/dance-video'.length));
+  const runId = decodeURIComponent(request.url.slice('/runs/'.length, -(kind.length + 1)));
   const job = jobs.get(runId);
   if (!job || job.accountId !== accountId(request, {})) {
     json(response, 404, { ok: false, error: 'run_not_found' });
     return;
   }
-  const taskId = job.request?.task?.id;
-  const evidence =
-    taskId === 'originman-reference-track'
-      ? job.metrics?.originmanReference
-      : taskId === 'originman-dance'
-        ? job.metrics?.originmanDance
-        : undefined;
+  const taskId = job.request?.task?.id ?? job.request?.taskId;
+  const errorPrefix = kind === 'workshop-video' ? 'workshop_video' : 'dance_video';
+  const workshop = kind === 'workshop-video' && taskId === 'originman-recovery';
+  const evidence = workshop
+    ? job.metrics?.originmanWorkshop
+    : kind !== 'dance-video'
+      ? undefined
+      : taskId === 'originman-reference-track'
+        ? job.metrics?.originmanReference
+        : taskId === 'originman-dance'
+          ? job.metrics?.originmanDance
+          : undefined;
   const video = evidence?.video;
+  const size = workshop ? video?.bytes : video?.sizeBytes;
+  const validSha = (value) => /^[a-f0-9]{64}$/.test(value ?? '');
+  const authentic = workshop
+    ? evidence?.phase === 'evaluate' &&
+      validSha(evidence.policySha256) &&
+      ['originman-recovery', 'originman-recovery-reflect'].includes(job.engine)
+    : video?.file === 'dance-replay.mp4' &&
+      validSha(video.policySha256) &&
+      validSha(video.sourceReplaySha256) &&
+      video.policySha256 === job.artifact?.sha256 &&
+      video.sourceReplaySha256 === evidence.replay?.sha256;
   if (
     job.status !== 'completed' ||
     job.mock !== false ||
-    video?.file !== 'dance-replay.mp4' ||
-    ![video.sha256, video.policySha256, video.sourceReplaySha256].every((value) =>
-      /^[a-f0-9]{64}$/.test(value ?? ''),
-    ) ||
-    video.policySha256 !== job.artifact?.sha256 ||
-    video.sourceReplaySha256 !== evidence.replay?.sha256 ||
-    !Number.isSafeInteger(video.sizeBytes) ||
-    video.sizeBytes < 1 ||
-    video.sizeBytes > MAX_DANCE_VIDEO_BYTES
+    !validSha(video?.sha256) ||
+    !authentic ||
+    !Number.isSafeInteger(size) ||
+    size < 1 ||
+    size > MAX_DANCE_VIDEO_BYTES
   ) {
-    json(response, 409, { ok: false, error: 'dance_video_unavailable' });
+    json(response, 409, { ok: false, error: errorPrefix + '_unavailable' });
     return;
   }
-  const handle = await open(path.join(job.dir, 'dance-replay.mp4'), 'r').catch(() => null);
+  const file = workshop ? 'comparison.mp4' : 'dance-replay.mp4';
+  const handle = await open(path.join(job.dir, file), 'r').catch(() => null);
   if (!handle) {
-    json(response, 404, { ok: false, error: 'dance_video_missing' });
+    json(response, 404, { ok: false, error: errorPrefix + '_missing' });
     return;
   }
   try {
     const info = await handle.stat();
-    if (!info.isFile() || info.size !== video.sizeBytes) {
-      json(response, 409, { ok: false, error: 'dance_video_size_mismatch' });
+    if (!info.isFile() || info.size !== size) {
+      json(response, 409, { ok: false, error: errorPrefix + '_size_mismatch' });
       return;
     }
     const bytes = Buffer.alloc(info.size + 1);
@@ -1343,7 +1356,7 @@ async function handleDanceVideo(request, response) {
       bytesRead !== info.size ||
       createHash('sha256').update(body).digest('hex') !== video.sha256
     ) {
-      json(response, 409, { ok: false, error: 'dance_video_digest_mismatch' });
+      json(response, 409, { ok: false, error: errorPrefix + '_digest_mismatch' });
       return;
     }
     response.writeHead(200, {
@@ -1557,8 +1570,9 @@ export function createLocalTrainingWorkerServer() {
         await handleTrain(request, response);
         return;
       }
-      if (request.method === 'GET' && /^\/runs\/[^/]+\/dance-video$/.test(request.url ?? '')) {
-        await handleDanceVideo(request, response);
+      const videoRoute = /^\/runs\/[^/]+\/(dance-video|workshop-video)$/.exec(request.url ?? '');
+      if (request.method === 'GET' && videoRoute) {
+        await handleRunVideo(request, response, videoRoute[1]);
         return;
       }
       if (

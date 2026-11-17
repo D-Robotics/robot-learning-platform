@@ -1,0 +1,24 @@
+{
+  "environment": {
+    "stride": 0,
+    "lift": 0,
+    "sway": 0,
+    "episode_seconds": 6,
+    "control_dt": 0.02,
+    "residual_scale": 0.3,
+    "kp": 8,
+    "kv": 0.18,
+    "effort": 1.5,
+    "push_max_force": 8.1,
+    "push_min_force": 6.4,
+    "push_start_min": 1.5,
+    "push_start_max": 3,
+    "heading_weight": 0,
+    "lateral_weight": 0,
+    "progress_weight": 0,
+    "recovery_roll_threshold": 0
+  },
+  "training": {
+    "note": "Continuous SAC correction experiment. Frozen baseline, observation encoding and correction bounds are declared in residual_env.CONTROLLER. Optimizer settings are in residual_trial.py and standing_sac.py. These physical values are simulation assumptions, not hardware specifications."
+  }
+}

@@ -1,0 +1,8 @@
+# Versions used by the production classroom. This environment serves physics
+# and policy inference; training Worker environments can add their own extras.
+gymnasium==1.2.2
+mujoco==3.3.7
+numpy==2.2.6
+onnxruntime==1.23.2
+pillow==13.0.0
+scipy==1.16.2
