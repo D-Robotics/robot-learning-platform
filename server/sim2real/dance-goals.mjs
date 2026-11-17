@@ -265,11 +265,12 @@ function createDanceGoals({ callerAuth, prefix, storageDirectory, defaultPort, f
       })
       .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
   };
-  const snapshot = (record) => ({
-    id: record.args.contextId,
-    createdAt: record.createdAt,
-    goal: record.args.dance,
-    ...(journalFor(record).progress() ?? {
+  const snapshot = (record) => {
+    const {
+      continuedAfter: _continuedAfter,
+      automaticAfter,
+      ...progress
+    } = journalFor(record).progress() ?? {
       state: 'waiting',
       reason: '正在准备首轮训练。',
       rounds: [],
@@ -278,8 +279,17 @@ function createDanceGoals({ callerAuth, prefix, storageDirectory, defaultPort, f
       remainingSteps: record.args.totalSteps,
       accelerator: 'RTX 4090',
       numEnvs: 64,
-    }),
-  });
+    };
+    return {
+      id: record.args.contextId,
+      createdAt: record.createdAt,
+      goal: record.args.dance,
+      ...progress,
+      automatic: Boolean(automaticAfter),
+      canContinue:
+        progress.state === 'budget-exhausted' && progress.rounds.at(-1)?.state === 'failed',
+    };
+  };
   const start = (record) => {
     const { principal, args } = record;
     const key = keyFor(principal.accountId, args.contextId);
@@ -318,7 +328,11 @@ function createDanceGoals({ callerAuth, prefix, storageDirectory, defaultPort, f
       pollMs: 0,
     });
     const tick = async () => {
+      let journal;
+      let revision;
       try {
+        journal = journalFor(record);
+        revision = journal.progress()?.continuedAfter?.length ?? 0;
         const result = await drive({ resumeContextId: args.contextId });
         if (result.iteration.state !== 'waiting') {
           clearInterval(timer);
@@ -327,11 +341,22 @@ function createDanceGoals({ callerAuth, prefix, storageDirectory, defaultPort, f
       } catch {
         clearInterval(timer);
         drivers.delete(key);
-        journalFor(record).save({
-          ...snapshot(record),
-          state: 'blocked',
-          reason: '平台暂时无法继续原实验。已保留训练记录和预算。',
-        });
+        if (revision === undefined) {
+          console.warn('[dance-goals] stopped unreadable goal progress');
+          return;
+        }
+        try {
+          journal.save(
+            {
+              ...snapshot(record),
+              state: 'blocked',
+              reason: '平台暂时无法继续原实验。已保留训练记录和预算。',
+            },
+            revision,
+          );
+        } catch {
+          console.warn('[dance-goals] could not save blocked goal progress');
+        }
       }
     };
     journalFor(record).register(args);
@@ -417,9 +442,48 @@ function createDanceGoals({ callerAuth, prefix, storageDirectory, defaultPort, f
           return res.json({ ok: true, goal: snapshot(record) });
         }),
       );
+      router.post(
+        endpoint + '/:id/continue',
+        wrap(async (req, res) => {
+          res.setHeader('Cache-Control', 'no-store');
+          const owner = readOwner(req, res);
+          if (owner === null) return;
+          const record =
+            safeId.test(req.params.id) &&
+            records(owner ?? 'local-dev').find((item) => item.args.contextId === req.params.id);
+          if (!record)
+            return res.status(404).json({ ok: false, message: '当前账号找不到这组自动迭代。' });
+          const { afterRunId, automatic } = req.body ?? {};
+          if (
+            typeof afterRunId !== 'string' ||
+            !/^[A-Za-z0-9][A-Za-z0-9_.-]{0,95}$/.test(afterRunId) ||
+            (automatic !== undefined && typeof automatic !== 'boolean') ||
+            !Object.keys(req.body).every((key) => ['afterRunId', 'automatic'].includes(key))
+          )
+            return res.status(400).json({ ok: false, message: '请指定原实验最后一轮 Run。' });
+          const continuation = journalFor(record).continueAfter(afterRunId, { automatic });
+          if (continuation === 'conflict')
+            return res.status(409).json({ ok: false, message: '实验状态已更新，请刷新后查看。' });
+          if (req.socket.localPort) listeningPort = req.socket.localPort;
+          start(record);
+          return res
+            .status(continuation === 'started' ? 202 : 200)
+            .json({ ok: true, goal: snapshot(record) });
+        }),
+      );
       if (!recoveryScheduled) {
         recoveryScheduled = true;
-        const recover = () => records().forEach(start);
+        const recover = () => {
+          for (const record of records()) {
+            try {
+              start(record);
+            } catch {
+              // An unreadable record may need recovery, but must not restart the service
+              // or re-submit a goal whose progress we cannot verify.
+              console.warn('[dance-goals] skipped unreadable goal progress');
+            }
+          }
+        };
         // The HTTP listener may still be binding when the router is constructed.
         setTimeout(recover, 4000).unref();
       }

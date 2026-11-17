@@ -4,7 +4,11 @@ import path from 'node:path';
 import os from 'node:os';
 import { createHash, randomUUID } from 'node:crypto';
 
-function privatePath(file, directory = false) {
+const MAX_RECEIPT_BYTES = 4 * 1024;
+// Progress accumulates round evidence. Historical production records already exceed the receipt budget.
+const MAX_GOAL_PROGRESS_BYTES = 2 * 1024 * 1024;
+
+function privatePath(file, directory = false, maxBytes = MAX_RECEIPT_BYTES) {
   const stat = fs.lstatSync(file);
   if (
     stat.isSymbolicLink() ||
@@ -13,7 +17,7 @@ function privatePath(file, directory = false) {
       (stat.mode & 0o077 || (process.getuid && stat.uid !== process.getuid())))
   )
     throw Error('提交记录必须保存在当前用户的私有常规路径。');
-  if (!directory && stat.size > 4096) throw Error('提交记录超出读取预算。');
+  if (!directory && stat.size > maxBytes) throw Error('提交记录超出读取预算。');
 }
 function readReceipt(file) {
   if (!fs.existsSync(file)) return null;
@@ -76,13 +80,16 @@ export function openTrainingGoalJournal({
   const progress = path.join(directory, key + '.goal-progress.json');
   const read = (file) => {
     if (!fs.existsSync(file)) return null;
-    privatePath(file);
+    privatePath(file, false, file === progress ? MAX_GOAL_PROGRESS_BYTES : MAX_RECEIPT_BYTES);
     return JSON.parse(fs.readFileSync(file, 'utf8'));
   };
   const write = (file, value, exclusive) => {
+    const contents = JSON.stringify(value);
+    const maxBytes = file === progress ? MAX_GOAL_PROGRESS_BYTES : MAX_RECEIPT_BYTES;
+    if (Buffer.byteLength(contents) > maxBytes) throw Error('提交记录超出写入预算。');
     const temp = file + '.' + randomUUID() + '.tmp';
     try {
-      fs.writeFileSync(temp, JSON.stringify(value), { flag: 'wx', mode: 0o600 });
+      fs.writeFileSync(temp, contents, { flag: 'wx', mode: 0o600 });
       if (exclusive) {
         try {
           fs.linkSync(temp, file);
@@ -101,12 +108,48 @@ export function openTrainingGoalJournal({
     },
     plan: () => read(draft),
     progress: () => read(progress),
-    save(value) {
+    continueAfter(runId, { automatic = false } = {}) {
       const previous = read(progress);
-      if (previous && (previous.state !== 'waiting' || previous.spentSteps > value.spentSteps))
+      const continuedAfter = previous?.continuedAfter ?? [];
+      if (continuedAfter.includes(runId))
+        return !automatic || previous.automaticAfter === runId ? 'reused' : 'conflict';
+      const last = previous?.rounds.at(-1);
+      if (
+        previous?.state !== 'budget-exhausted' ||
+        last?.runId !== runId ||
+        last.state !== 'failed'
+      )
+        return 'conflict';
+      write(
+        progress,
+        {
+          ...previous,
+          state: 'waiting',
+          reason: automatic ? '已开启自动续跑，正在准备下一轮。' : '正在准备下一轮训练。',
+          continuedAfter: [...continuedAfter, runId],
+          ...(automatic && { automaticAfter: runId }),
+        },
+        false,
+      );
+      return 'started';
+    },
+    save(value, revision = 0) {
+      const previous = read(progress);
+      const continuedAfter = previous?.continuedAfter ?? [];
+      if (
+        previous &&
+        (previous.state !== 'waiting' ||
+          previous.spentSteps > value.spentSteps ||
+          continuedAfter.length !== revision)
+      )
         return previous;
-      write(progress, value, false);
-      return value;
+      const next = {
+        ...value,
+        ...(continuedAfter.length && { continuedAfter }),
+        ...(previous?.automaticAfter && { automaticAfter: previous.automaticAfter }),
+      };
+      write(progress, next, false);
+      return next;
     },
   };
 }

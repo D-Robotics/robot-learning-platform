@@ -1,13 +1,14 @@
 import { once } from 'node:events';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { createHash } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import express from 'express';
 import { expect, it } from 'vitest';
 import { setupDanceGoals } from './dance-goals.mjs';
 import { wrapAsync } from './http-helpers.js';
+import { openTrainingGoalJournal } from '../../plugins/rdk-robot-learning-platform/scripts/submission-journal.mjs';
 import type { Sim2RealRunRecord } from '../../shared/sim2real.js';
-import { readFile } from 'node:fs/promises';
 
 it('keeps driving without a client, starts each round once, and isolates experiments by account', async () => {
   const directory = await mkdtemp(path.join(tmpdir(), 'dance-goals-test-'));
@@ -209,3 +210,83 @@ it('keeps driving without a client, starts each round once, and isolates experim
     await rm(directory, { recursive: true, force: true });
   }
 }, 24000);
+
+it('recovers production-sized terminal progress and quarantines unreadable records at startup', async () => {
+  const storageDirectory = await mkdtemp(path.join(tmpdir(), 'dance-goals-recovery-'));
+  const drafts = path.join(storageDirectory, 'dance-goals', 'drafts');
+  const progress = path.join(storageDirectory, 'dance-goals', 'progress');
+  await mkdir(drafts, { recursive: true, mode: 0o700 });
+  const prefix = '/api/v1/duck';
+  const principal = { accountId: 'owner' };
+  const audience = 'http://127.0.0.1';
+  const hash = (values: string[]) =>
+    createHash('sha256').update(JSON.stringify(values)).digest('hex');
+  const contextIds = ['existing-goal', 'broken-goal'];
+  for (const contextId of contextIds) {
+    await writeFile(
+      path.join(drafts, hash([principal.accountId, contextId]) + '.json'),
+      JSON.stringify({
+        principal,
+        createdAt: new Date().toISOString(),
+        args: { contextId, totalSteps: 8192 },
+      }),
+      { mode: 0o600 },
+    );
+  }
+  const journal = openTrainingGoalJournal({
+    account: principal.accountId,
+    audience,
+    contextId: contextIds[0],
+    directory: progress,
+  });
+  const rounds = Array.from({ length: 16 }, (_, index) => ({
+    runId: `prior-${index}`,
+    state: 'passed',
+    evidence: 'e'.repeat(480),
+  }));
+  const terminal = { state: 'passed', spentSteps: 8192, rounds };
+  expect(Buffer.byteLength(JSON.stringify(terminal))).toBeGreaterThan(7387);
+  journal.save(terminal);
+  await writeFile(
+    path.join(
+      progress,
+      hash([principal.accountId, audience, contextIds[1]]) + '.goal-progress.json',
+    ),
+    'invalid json',
+    { mode: 0o600 },
+  );
+  const callerAuth = {
+    isMultiUserDeployment: () => true,
+    resolvePrincipal: () => principal,
+    resolveAccessToken: () => null,
+  };
+  const { register } = setupDanceGoals({
+    callerAuth,
+    prefix,
+    storageDirectory,
+    defaultPort: 18102,
+    async findRun() {
+      throw Error('Terminal recovery must not re-submit');
+    },
+  });
+  const app = express();
+  const router = express.Router();
+  register(router, () => principal.accountId, wrapAsync);
+  app.use(router);
+  const server = app.listen(0, '127.0.0.1');
+  await once(server, 'listening');
+  try {
+    await new Promise((resolve) => setTimeout(resolve, 4250));
+    const address = server.address();
+    if (!address || typeof address === 'string') throw Error('Unexpected server address');
+    const response = await fetch(
+      `http://127.0.0.1:${address.port}${prefix}/dance-goals/existing-goal`,
+    );
+    expect(response.status).toBe(200);
+    expect((await response.json()).goal).toMatchObject(terminal);
+  } finally {
+    server.closeAllConnections();
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+    await rm(storageDirectory, { recursive: true, force: true });
+  }
+});

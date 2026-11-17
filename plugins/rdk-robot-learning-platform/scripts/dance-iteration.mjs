@@ -144,7 +144,7 @@ function matchesIterationRun(run, baseline, plan, reservation, profile) {
 }
 
 function renderIteration(result, args, baseUrl) {
-  const total = args.additionalSteps ?? args.totalSteps;
+  const total = result.additionalSteps ?? args.additionalSteps ?? args.totalSteps;
   const body = { ...result, additionalSteps: total, remainingSteps: total - result.spentSteps };
   const url = new URL('./dance-iterations.html', baseUrl.replace(/\/+$/, '') + '/');
   url.hash = new URLSearchParams({ iteration: JSON.stringify(body) }).toString();
@@ -249,8 +249,13 @@ function rewardTrial(incumbent, history, trainingSteps) {
 
 function nextGoalTrial(history, remaining, batchSize) {
   const available = Math.floor(remaining / batchSize) * batchSize;
-  if (available < 8192) return { state: 'budget-exhausted', reason: '剩余预算不足一次训练。' };
   const incumbent = [...history].sort(compareTrials)[0];
+  if (available < 8192)
+    return {
+      state: 'budget-exhausted',
+      reason: '剩余预算不足一次训练。',
+      bestRunId: incumbent.run.id,
+    };
   const last = history.at(-1).run;
   const lastBudget = last.training.originmanDance.trainingSteps;
   if (lastBudget < formalSteps) {
@@ -339,7 +344,7 @@ export function createDanceIteration({
 }) {
   const batchSize = danceTrainingBatchSize(profile.numEnvs);
   const completed = new Map();
-  return async (args, signal) => {
+  return async (args, signal, continuedAfter = [], automaticAfter) => {
     const fromGoal = checkArgs(args);
     const owner = await account();
     if (!owner) throw Error('请先核对 Studio 当前学习平台账号。');
@@ -361,6 +366,8 @@ export function createDanceIteration({
     const rounds = [];
     const history = [];
     let spentSteps = 0;
+    let availableSteps = args.additionalSteps ?? args.totalSteps;
+    let automaticallyContinuing = false;
     let runId = args.runId;
     let baseline;
     let bestRunId;
@@ -373,6 +380,7 @@ export function createDanceIteration({
           reason,
           rounds,
           spentSteps,
+          additionalSteps: availableSteps,
           bestRunId,
           accelerator: profile.label,
           numEnvs: profile.numEnvs,
@@ -474,7 +482,26 @@ export function createDanceIteration({
         const trial = assessRun(run, simulationAcceptance.evaluations);
         if (!trial) return finish('blocked', '各节拍的分项评测不完整，无法比较调参效果。');
         history.push(trial);
-        plan = nextGoalTrial(history, args.totalSteps - spentSteps, batchSize);
+        plan = nextGoalTrial(history, availableSteps - spentSteps, batchSize);
+        automaticallyContinuing ||= runId === automaticAfter;
+        if (
+          plan.state === 'budget-exhausted' &&
+          (automaticallyContinuing || continuedAfter.includes(runId))
+        ) {
+          if (automaticallyContinuing) {
+            const next = rewardTrial(trial, history, run.training.originmanDance.trainingSteps);
+            plan = {
+              ...(next ?? {
+                state: 'blocked',
+                reason: '上一轮评测支持的单参数候选均已试过或到达范围边界。',
+              }),
+              bestRunId: plan.bestRunId,
+            };
+          } else plan = nextGoalTrial(history, Infinity, batchSize);
+          if (plan.dance)
+            availableSteps =
+              spentSteps + Math.ceil(plan.dance.trainingSteps / batchSize) * batchSize;
+        }
         bestRunId = plan.bestRunId;
       } else {
         plan = chooseChange(run, args.additionalSteps - spentSteps, batchSize);
@@ -505,12 +532,18 @@ export function createDanceGoalContinuation({
     numEnvs: 64,
   });
   const drive = async (journal, args, owner) => {
+    const { continuedAfter = [], automaticAfter } = journal.progress() ?? {};
     let transientErrors = 0;
     for (;;) {
       let current;
       try {
         if ((await account()) !== owner) throw Error('平台账号已改变，已停在本轮记录。');
-        const step = await iterate(args, AbortSignal.timeout(85000));
+        const step = await iterate(
+          args,
+          AbortSignal.timeout(85000),
+          continuedAfter,
+          automaticAfter,
+        );
         if (
           step.iteration.state === 'blocked' &&
           /上次提交结果尚待确认/.test(step.iteration.reason) &&
@@ -534,7 +567,8 @@ export function createDanceGoalContinuation({
         };
       }
       transientErrors = 0;
-      const saved = journal.save(current);
+      const saved = journal.save(current, continuedAfter.length);
+      if ((saved.continuedAfter?.length ?? 0) !== continuedAfter.length) return;
       if (saved.state !== 'waiting') return;
       await delay(pauseMs);
     }
