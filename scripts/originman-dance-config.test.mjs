@@ -8,8 +8,10 @@ import {
 } from '../plugins/rdk-robot-learning-platform/scripts/originman-dance-config.mjs';
 import {
   learningGuide,
+  ORIGINMAN_DANCE_DRAFT_TOOL,
   originmanDanceDraft,
 } from '../plugins/rdk-robot-learning-platform/scripts/workshop-course.mjs';
+import { experienceProxy } from '../plugins/rdk-robot-learning-platform/scripts/experience-mcp.mjs';
 
 const base = {
   schemaVersion: 1,
@@ -107,4 +109,41 @@ test('the action list and preview preserve supported moves, order, beats and bud
     () => originmanDanceDraft({ ...base, sections: [{ ...sections[0], type: 'backflip' }] }),
     /type/,
   );
+});
+
+test('the read-only dance preview fills an omitted schema version on its first MCP call', async () => {
+  const input = {
+    title: '动作配方验收',
+    bpm: 108,
+    sections: [
+      { type: 'single-arm-wave', beats: 8, intensity: 0.5 },
+      { type: 'alternating-knee-lift', beats: 4, intensity: 0.6 },
+      { type: 'side-tap', beats: 4, intensity: 0.5 },
+    ],
+    trainingSteps: 8192,
+  };
+  const dispatch = experienceProxy({
+    request() {
+      assert.fail('A dance preview must not call an upstream tool');
+    },
+  });
+  const result = await dispatch('tools/call', {
+    name: ORIGINMAN_DANCE_DRAFT_TOOL.name,
+    arguments: input,
+  });
+  assert.notEqual(result.isError, true, result.content?.[0]?.text);
+  const preview = result.structuredContent;
+  assert.equal(preview.draft.schemaVersion, 1);
+  assert.equal(preview.draft.totalBeats, 16);
+  assert.deepEqual(preview.draft.sections, input.sections);
+  assert.equal(preview.draft.trainingSteps, 8192);
+  assert.equal(preview.trainingSubmitted, false);
+  assert.equal(preview.motionAuthorized, false);
+  assert.equal(ORIGINMAN_DANCE_DRAFT_TOOL.inputSchema.properties.schemaVersion.default, 1);
+  assert.equal(ORIGINMAN_DANCE_DRAFT_TOOL.inputSchema.required.includes('schemaVersion'), false);
+  assert.deepEqual(originmanDanceDraft({ ...input, schemaVersion: 1 }).draft, preview.draft);
+  assert.throws(() => originmanDanceDraft({ ...input, schemaVersion: 2 }), /schemaVersion/);
+  assert.throws(() => originmanDanceDraft({ ...input, schemaVersion: null }), /schemaVersion/);
+  assert.throws(() => originmanDanceDraft([input]), /expected an object/);
+  assert.throws(() => resolveOriginmanDanceConfig(input), /schemaVersion/);
 });
