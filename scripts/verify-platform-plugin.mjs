@@ -304,12 +304,13 @@ function expectedCatalog() {
     import { listDshCapabilityCatalog } from ${moduleUrl('server/agent-runtime/dsh-capability-tools.ts')};
     import { createDshCapabilityHandlers } from ${moduleUrl('server/agent-runtime/dsh-capability-handlers.ts')};
     import { createMcpService } from ${moduleUrl('services/duck-lab-mcp/server.ts')};
+    import { ORIGINMAN_DANCE_SECTION_TYPES } from ${moduleUrl('shared/originman-dance-training.ts')};
     const fetchImpl = async () => { throw new Error('Catalog discovery must not request HTTP'); };
     const handlers = createDshCapabilityHandlers({ fetchImpl });
     const catalog = listDshCapabilityCatalog(handlers).filter(item => item.bound);
     const service = createMcpService({ baseUrl: 'http://127.0.0.1:1', apiPrefix: '/api/v1/duck', timeoutMs: 1000 }, {}, { handlers });
     const { tools } = await service.methods['tools/list']();
-    process.stdout.write(JSON.stringify({ catalog, tools }));
+    process.stdout.write(JSON.stringify({ catalog, tools, danceActions: ORIGINMAN_DANCE_SECTION_TYPES }));
   `;
   return JSON.parse(
     execFileSync(
@@ -495,6 +496,23 @@ async function main(distribution) {
     for (let i = 0; i < forwarded.length; i++) {
       const { description, ...contract } = coreTools[i];
       const { description: originalDescription, ...originalContract } = forwarded[i];
+      if (originalContract.name === 'rdk_training_submit') {
+        // Only this enum may differ from the retained schema. Use the platform
+        // validator's list to catch regressions in the wrapper or the archive.
+        const typeField = (schema) =>
+          schema?.properties?.originmanDance?.properties?.sections?.items?.properties?.type;
+        const originalType = typeField(originalContract.inputSchema);
+        assert.ok(
+          Array.isArray(originalType?.enum),
+          'Retained training tool must declare dance actions',
+        );
+        assert.ok(
+          originalType.enum.every((type) => expected.danceActions.includes(type)),
+          'Retained training tool advertises unsupported dance actions',
+        );
+        originalContract.inputSchema = structuredClone(originalContract.inputSchema);
+        typeField(originalContract.inputSchema).enum = expected.danceActions;
+      }
       assert.deepEqual(
         contract,
         originalContract,
@@ -511,6 +529,25 @@ async function main(distribution) {
       EXPERIENCE_TOOLS,
       'Optional entry must expose its real descriptors',
     );
+    const schema = (name) => optionalTools.find((tool) => tool.name === name)?.inputSchema;
+    const sectionsEnum = (properties) => properties?.sections?.items?.properties?.type?.enum;
+    const guide = schema('rdk_learning_guide')?.properties;
+    for (const [name, actions] of [
+      ['dance draft', sectionsEnum(schema('rdk_originman_dance_draft')?.properties)],
+      [
+        'dance training',
+        sectionsEnum(schema('rdk_originman_dance_train')?.properties.dance.properties),
+      ],
+      ['dance preview', sectionsEnum(guide?.dance.properties)],
+      ['single movement', guide?.movement.enum],
+      ['section edit', guide?.sectionEdits.items.properties.type.enum],
+    ]) {
+      assert.deepEqual(
+        actions,
+        expected.danceActions,
+        `${name} must match the platform's dance actions`,
+      );
+    }
     assert.equal(new Set(extendedTools.map((tool) => tool.name)).size, extendedTools.length);
     const mutations = new Set([
       'rdk_workshop',

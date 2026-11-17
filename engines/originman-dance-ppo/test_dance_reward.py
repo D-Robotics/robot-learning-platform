@@ -9,6 +9,7 @@ from dance_env import (
     REWARD_TUNING_LIMITS,
     alternating_arm_targets,
     squat_rise_phase,
+    tracked_style,
     validate_dance_config,
 )
 from dance_env_v2 import section_phase_features
@@ -93,6 +94,25 @@ class SquatRiseTests(unittest.TestCase):
                 result = self.evaluate_height(height_at)
                 self.assertTrue(result["clean"])
                 self.assertFalse(result["stylePassed"])
+
+
+class FootworkRewardTests(unittest.TestCase):
+    def test_knee_lift_requires_opposite_support_and_alternates(self):
+        feet = np.array([[0.065, 0.0, 0.075], [0.0, 0.0, 0.0]])
+        left = tracked_style("alternating-knee-lift", 1, 1, None, None, feet, [False, True])
+        self.assertEqual(left, (1.0, True, True))
+        same_foot = tracked_style("alternating-knee-lift", 3, 1, None, None, feet, [False, True])
+        self.assertLess(same_foot[0], 0.62)
+        self.assertFalse(same_foot[2])
+
+    def test_side_tap_rewards_outward_placement_and_touchdown(self):
+        feet = np.array([[0.0, 0.097, 0.0], [0.0, 0.0, 0.0]])
+        tap = tracked_style("side-tap", 1, 1, None, None, feet, [True, True])
+        self.assertEqual(tap, (1.0, True, True))
+        hovering = tracked_style("side-tap", 1, 1, None, None, feet, [False, True])
+        self.assertFalse(hovering[2])
+        wrong_direction = tracked_style("side-tap", 1, 1, None, None, -feet, [True, True])
+        self.assertLess(wrong_direction[0], 0.62)
 
 
 class RewardTuningValidationTests(unittest.TestCase):

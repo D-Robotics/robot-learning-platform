@@ -2,7 +2,7 @@
 import fs from 'node:fs';
 import { selectCourseAssets, registerCourseModel } from './course-setup.mjs';
 import { submitOnce, recoverSubmission } from './submission-journal.mjs';
-import { resolveOriginmanDanceConfig } from './originman-dance-config.mjs';
+import { DANCE_SECTION_TYPES, resolveOriginmanDanceConfig } from './originman-dance-config.mjs';
 
 const manifest = JSON.parse(
   fs.readFileSync(new URL('../references/originman-dance-manifest.json', import.meta.url), 'utf8'),
@@ -40,7 +40,7 @@ const schema = {
             properties: {
               type: {
                 type: 'string',
-                enum: ['alternating-arms', 'weight-shift', 'squat-rise', 'open-pose'],
+                enum: DANCE_SECTION_TYPES,
               },
               beats: { type: 'integer', enum: [4, 8, 16] },
               intensity: { type: 'number', minimum: 0.25, maximum: 1 },

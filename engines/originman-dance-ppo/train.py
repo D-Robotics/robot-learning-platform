@@ -19,7 +19,9 @@ from stable_baselines3.common.callbacks import BaseCallback
 from stable_baselines3.common.vec_env import SubprocVecEnv
 
 from body import DT
-from dance_env import ConfigurableChoreography, squat_rise_phase
+from dance_env import (
+    ConfigurableChoreography, FOOT_SECTION_TYPES, TRACKED_SECTION_TYPES, squat_rise_phase,
+)
 
 
 def _json_default(value):
@@ -144,13 +146,24 @@ def evaluate(env, actor, bpm, *, trace=False):
                 and metrics["riseAndDipCorrelation"] >= 0.55
                 and metrics["armSweepM"] >= 0.06
             )
-        else:
+        elif spec["type"] == "open-pose":
             hold = [row for row in batch if row["sectionProgress"] >= 0.75]
             still = float(np.mean([row["armSpeed"] + row["legSpeed"] < 0.26 for row in hold])) if hold else 0.0
             span = float(np.mean([row["handSpanM"] for row in hold])) if hold else 0.0
             peak_tilt = max((row["tiltDeg"] for row in hold), default=999.0)
             metrics = {"holdStillFraction": still, "meanHoldHandSpanM": span, "holdPeakTiltDeg": peak_tilt}
             passes = still >= 0.83 and span >= 0.32 and peak_tilt < 9.0
+        elif spec["type"] in TRACKED_SECTION_TYPES:
+            active = [row for row in batch if row["styleActive"]]
+            tracking = float(np.mean([row["styleTracking"] for row in active])) if active else 0.0
+            metrics = {"activePoseTracking": tracking}
+            passes = tracking >= 0.62
+            if spec["type"] in FOOT_SECTION_TYPES:
+                contact = float(np.mean([row["styleContactMatches"] for row in active])) if active else 0.0
+                metrics["activeSupportFraction"] = contact
+                passes = passes and contact >= 0.8
+        else:
+            raise ValueError(f"Unknown dance section: {spec['type']}")
         sections.append(
             {
                 "index": index,
