@@ -11,11 +11,11 @@ import { PluginRequestError } from './plugin-errors.mjs';
 export const ORIGINMAN_DANCE_DRAFT_TOOL = {
   name: 'rdk_originman_dance_draft',
   description:
-    '仅在学员要求整理编舞草案时使用。算力离线、询问下一步、开始训练或改参时，用rdk_learning_guide。草案支持80–140 BPM、每段4/8/16拍、动作库中的10种动作和0.25–1幅度，默认50万步，8192步用于流程快检。草案只回显配置。',
+    '学员只想预览舞蹈训练配方或整理编舞草案时使用。算力离线、询问下一步、开始训练或改参时，用rdk_learning_guide。草案支持80–140 BPM、每段4/8/16拍、动作库中的10种动作和0.25–1幅度，默认50万步，8192步用于流程快检。草案只回显配置。',
   inputSchema: {
     type: 'object',
     properties: {
-      schemaVersion: { type: 'integer', const: 1 },
+      schemaVersion: { type: 'integer', const: 1, default: 1 },
       title: { type: 'string', minLength: 1, maxLength: 80 },
       bpm: { type: 'number', minimum: 80, maximum: 140 },
       sections: {
@@ -39,7 +39,7 @@ export const ORIGINMAN_DANCE_DRAFT_TOOL = {
       seed: { type: 'integer', minimum: 0, maximum: 2147483647 },
       trainingSteps: { type: 'integer', minimum: 8192, maximum: 2000000, default: 500000 },
     },
-    required: ['schemaVersion', 'title', 'bpm', 'sections'],
+    required: ['title', 'bpm', 'sections'],
     additionalProperties: false,
   },
   annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
@@ -501,7 +501,11 @@ function danceInput(value) {
 }
 
 export function originmanDanceDraft(args = {}) {
-  const draft = resolveOriginmanDanceConfig(args);
+  const config =
+    args && typeof args === 'object' && !Array.isArray(args) && args.schemaVersion === undefined
+      ? { ...args, schemaVersion: danceFields.schemaVersion.default }
+      : args;
+  const draft = resolveOriginmanDanceConfig(config);
   const sections = draft.sections
     .map(({ type, beats, intensity }) => `${sectionTitles[type]} ${beats} 拍（幅度 ${intensity}）`)
     .join('、');
