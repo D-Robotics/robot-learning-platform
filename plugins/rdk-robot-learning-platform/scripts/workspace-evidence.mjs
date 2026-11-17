@@ -61,6 +61,18 @@ function collection(value, key) {
   });
 }
 
+function isShortRunId(identifier) {
+  return typeof identifier === 'string' && /^[a-f0-9][a-f0-9-]{7,34}$/i.test(identifier);
+}
+
+export function matchesRunIdentifier(identifier, runId) {
+  return (
+    typeof runId === 'string' &&
+    (runId === identifier ||
+      (isShortRunId(identifier) && runId.toLowerCase().startsWith(identifier.toLowerCase())))
+  );
+}
+
 export function workspaceLink(baseUrl, route) {
   try {
     const url = new URL(baseUrl);

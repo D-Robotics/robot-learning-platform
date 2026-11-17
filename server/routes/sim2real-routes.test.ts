@@ -770,6 +770,62 @@ describe('Sim2Real HTTP routes', () => {
     expect(list.body).toMatchObject({ available: 200 });
   });
 
+  it('resolves a Run prefix across the owner ledger without guessing when ambiguous or absent', async () => {
+    await fixture();
+    const auth: Sim2RealAuthPort = {
+      isMultiUserDeployment: () => true,
+      resolvePrincipal: (request) => {
+        const accountId = String(request.headers['x-test-account'] || '');
+        return accountId ? { accountId } : null;
+      },
+      resolveAccessToken: () => null,
+    };
+    const router = createSim2RealRouter({ auth });
+    const seed = await createSim2RealRun(
+      {
+        modelId: BUILTIN_MICRODUCK_MODEL.id,
+        backend: 'contract',
+        status: 'completed',
+        summary: 'seed',
+      },
+      'alice',
+    );
+    const file = path.join(process.env.RDK_SIM2REAL_STORAGE_DIR!, 'sim2real.json');
+    const ledger = JSON.parse(await fs.readFile(file, 'utf8'));
+    const oldRun = '6a526fe7-5802-4655-a1bf-74a68d748a17';
+    const otherOwner = '6a526fe7-1111-4111-8111-111111111111';
+    const lookup = (id: string, account = 'alice') =>
+      invoke(router, 'get', '/api/sim2real/runs/:id', {
+        params: { id },
+        headers: { 'x-test-account': account },
+      });
+    ledger.runs = [
+      { ...seed, id: otherOwner, owner: 'bob' },
+      ...Array.from({ length: 200 }, (_, i) => ({ ...seed, id: 'recent-' + i, owner: 'alice' })),
+      { ...seed, id: oldRun, owner: 'alice' },
+    ];
+    await fs.writeFile(file, JSON.stringify(ledger));
+
+    const unique = await lookup('6A526FE7');
+    expect(unique.statusCode).toBe(200);
+    expect(unique.body).toMatchObject({ run: { id: oldRun } });
+    expect((await lookup('6a526fe7', 'bob')).body).toMatchObject({ run: { id: otherOwner } });
+    const missing = await lookup('6a526fe7', 'charlie');
+    expect(missing.statusCode).toBe(404);
+    expect(missing.body).toMatchObject({ error: 'SIM2REAL_RUN_NOT_FOUND' });
+    expect((await lookup('6a526fe')).statusCode).toBe(404);
+
+    const collision = '6a526fe7-5888-4888-8888-888888888888';
+    ledger.runs.unshift({ ...seed, id: collision, owner: 'alice' });
+    await fs.writeFile(file, JSON.stringify(ledger));
+    const ambiguous = await lookup('6a526fe7');
+    expect(ambiguous.statusCode).toBe(409);
+    expect(ambiguous.body).toMatchObject({ error: 'SIM2REAL_RUN_ID_AMBIGUOUS' });
+    expect(ambiguous.body.run).toBeUndefined();
+    expect((await lookup('6a526fe7-580')).body).toMatchObject({ run: { id: oldRun } });
+    expect((await lookup(oldRun)).body).toMatchObject({ run: { id: oldRun } });
+  });
+
   it('validates and registers metadata, then records a contract-only run', async () => {
     const router = await fixture();
     const manifest = userManifest();
