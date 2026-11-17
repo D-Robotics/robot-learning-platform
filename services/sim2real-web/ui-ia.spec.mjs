@@ -377,30 +377,47 @@ assert.match(
 assert.match(html, /id="agent-chat-close"/, 'Agent drawer must expose an explicit close action');
 assert.match(html, /id="agent-chat-backdrop"/, 'Agent drawer must expose a dismissible backdrop');
 
-// ---- onboarding ----
-assert.match(html, /onboarding\.js/, 'workspace must load the guided onboarding layer');
-assert.match(onboarding, /const steps = \[/, 'onboarding must define guided steps');
-assert.match(onboarding, /最佳实践/, 'onboarding must include practical guidance');
-assert.match(onboarding, /localStorage/, 'onboarding completion must persist locally');
+// ---- usage guide ----
+assert.match(html, /onboarding\.js/, 'workspace must load the usage guide');
+const usageGuide = html.match(/<dialog[^>]*id="usage-guide"[^>]*>[\s\S]*?<\/dialog>/)?.[0] || '';
 assert.match(
-  onboarding,
-  /在左侧产品选择器选择要使用的机器人、仿真器或硬件适配器/,
-  'onboarding step 01 must explain generic product selection',
+  usageGuide,
+  /aria-labelledby="usage-guide-title"/,
+  'usage guide has an accessible name',
+);
+assert.match(usageGuide, /method="dialog"/, 'usage guide has an explicit native close action');
+assert.doesNotMatch(
+  usageGuide,
+  /OriginMan|originman|workshop\.html/,
+  'the general guide contains shared workflows',
+);
+assert.doesNotMatch(
+  html.match(/<div[^>]*id="top-menu-list"[^>]*>[\s\S]*?<\/a>\s*<\/div>/)?.[0] || '',
+  /受扰恢复课堂|workshop\.html/,
+  'the global menu has no classroom shortcut',
 );
 assert.match(
-  onboarding,
-  /view: 'station', kicker: '02/,
-  'onboarding step 02 must open the station page for server and device setup',
+  html,
+  /id="originman-default-contracts"[\s\S]*?id="originman-contract-template"[\s\S]*?id="originman-recovery-class"[^>]*hidden[\s\S]*?<\/section>/,
+  'the classroom shortcut belongs to the OriginMan task selector',
 );
+for (const destination of [
+  'simulate/simulate',
+  'train/prepare',
+  'evaluate/evaluation-run',
+  'station/devices',
+  'deploy/preflight',
+  'resources',
+]) {
+  assert.ok(
+    usageGuide.includes(`href="#${destination}"`),
+    `usage guide links directly to ${destination}`,
+  );
+}
 assert.match(
   onboarding,
-  /view: 'simulate', kicker: '03/,
-  'onboarding step 03 must open the simulate page for the OriginBot task',
-);
-assert.match(
-  onboarding,
-  /view: 'simulate', kicker: '04/,
-  'onboarding step 04 must open the simulate page for recording',
+  /guide\.showModal\(\)/,
+  'the modal guide uses native focus and background handling',
 );
 
 // ---- a11y baseline ----

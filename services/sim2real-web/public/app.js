@@ -8004,7 +8004,6 @@ function renderOriginmanTrainingWorkbench() {
     ? '进度、权重、评测和回放均按该 Run 查询。'
     : originmanRunState.id && state.overview ? '当前项目或账号没有这条 Run。请选择列表中的记录。'
       : '先选择一条已提交的 Run，再查看本轮结果。');
-  $('originman-recovery-class').hidden = danceGoal || contractType !== 'recovery';
   const submit = $('originman-submit-dance');
   const showDance = danceGoal || contractType === 'dance';
   const resource = (state.overview?.computeResources || []).find((item) => item.id === state.selectedComputeResourceId);
@@ -8020,7 +8019,7 @@ function renderOriginmanTrainingWorkbench() {
     else if (!supportsOriginmanDance(resource)) hint = '请在「训练配置」中选择支持舞蹈的训练资源。';
     else hint = '确认本轮舞段和算力后提交。每次提交会生成独立 Run。';
   } else if (contractType === 'recovery') {
-    hint = '受扰恢复的专用参数、训练与同源评测都在课堂入口。';
+    hint = '受扰恢复课堂入口在「模型与契约 → 受扰恢复 · SAC」。';
   }
   setText('originman-run-action-hint', hint);
 }
@@ -8037,6 +8036,7 @@ async function refreshOriginmanContract() {
   if (state.productId !== 'originman' || !$('originman-contract-template')) return;
   const select = $('originman-contract-template');
   const selected = select.value;
+  $('originman-recovery-class').hidden = selected !== 'recovery';
   $('originman-use-contract').disabled = !selected || originmanRunState.choosingContract;
   setText('originman-contract-status', selected ? '正在读取任务契约…' : '尚未选择训练任务。');
   try {
@@ -12089,7 +12089,7 @@ const COMMANDS = [
   { id: 'refresh', label: '刷新工作区', hint: '重新加载项目状态与设备信息', action: () => loadOverview() },
   { id: 'login', label: '登录工作区', hint: '登录以解锁训练记录与真机部署', action: () => window.open(state.publicHealth?.ssoLoginUrl || '/rdkstudio/', '_blank', 'noopener') },
   { id: 'agent', label: '呼出 Agent 助手', hint: '按当前阻塞项生成下一步计划', action: () => { if (typeof window.setAgentDrawerOpen === 'function') window.setAgentDrawerOpen(true); } },
-  { id: 'onboarding', label: '重看新手指引', hint: '12 步走完整个平台', action: () => $('onboarding-help-button')?.click() },
+  { id: 'onboarding', label: '使用指引', hint: '仿真录制、训练、评测和设备预检', action: () => $('onboarding-help-button')?.click() },
 ];
 
 // 窄屏侧栏抽屉。

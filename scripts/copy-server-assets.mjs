@@ -131,6 +131,12 @@ try {
     path.join('dist-server', 'services', 'sim2real-web', 'public'),
   );
 
+  copyFile(path.join('docs', 'user-guide.md'), path.join('dist-server', 'docs', 'user-guide.md'));
+  copyTreeFiltered(
+    path.join('docs', 'assets', 'user-guide'),
+    path.join('dist-server', 'docs', 'assets', 'user-guide'),
+  );
+
   // The mock worker is a deliberate no-CUDA smoke dependency of the systemd
   // example. TypeScript does not emit .mjs files, so copy it beside the compiled
   // server instead of making the release unit depend on the source checkout.
